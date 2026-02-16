@@ -1,0 +1,67 @@
+option(
+    'dev_mode',
+    type: 'boolean',
+    value: false,
+    description: 'Sets the N00B_DEV define; this is primarily to enable some diagnostic routines in the compiler for printing during debugging, etc.',
+)
+
+option(
+    'enable_lto',
+    type: 'boolean',
+    value: false,
+    description: 'Enable link-time optimizations',
+)
+
+option(
+    'show_gc_stats',
+    type: 'feature',
+    value: 'auto',
+    description: 'Print basic stats after collections',
+)
+
+option(
+    'use_memcheck',
+    type: 'combo',
+    choices: ['off', 'on', 'strict'],
+    value: 'off',
+    description: 'Enable internal lightweight heap checks',
+)
+
+option(
+    'use_asan',
+    type: 'feature',
+    value: 'auto',
+    description: 'Use address sanitizer',
+)
+
+option(
+    'use_ubsan',
+    type: 'feature',
+    value: 'auto',
+    description: 'Use undefined behavior sanitizer',
+)
+
+option(
+    'enable_debug',
+    type: 'boolean',
+    value: false,
+    description: 'Enable debug logging, setting N00B_DEBUG. Any debug logging option is ignored if this is false.'
+    )
+    
+option('vcpkg_lib',
+        type: 'string',
+        value: '',
+        description: 'vcpkg lib path')
+
+option('vcpkg_inc',
+        type: 'string',
+        value: '',
+        description: 'vcpkg include path')
+
+option('using_musl',
+    type: 'boolean',
+    value: false)
+
+option('using_build_script',
+    type: 'boolean',
+    value: false)

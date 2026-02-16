@@ -1,0 +1,55 @@
+# ── Build artifacts ───────────────────────────────────────────────────────────
+# All meson builds go in the top-level build/ directory.
+# Per-project standalone builds also use build/ inside each project.
+**/build*/
+
+
+**/bin/
+**/lib/
+
+# Compiled objects (shouldn't appear outside build/ but just in case)
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+*.lib
+*.exe
+
+# ── IDE / Editor ─────────────────────────────────────────────────────────────
+**/.cache/
+**/.vscode/
+**/.idea/
+*.swp
+*.swo
+*~
+*.kate-swp
+.clangd/
+**/.clangd/
+compile_commands.json
+**/compile_commands.json
+
+# ── OS ───────────────────────────────────────────────────────────────────────
+.DS_Store
+**/.DS_Store
+Thumbs.db
+Desktop.ini
+
+# ── VCS ──────────────────────────────────────────────────────────────────────
+# jujutsu internals (the .jj dirs)
+**/.jj/
+
+# Python
+**/__pycache__/
+*.pyc
+
+# Unicode data cache
+.unicode_cache/
+
+# Coverage / profiling
+*.gcda
+*.gcno
+*.gcov
+*.profraw
+*.profdata
+

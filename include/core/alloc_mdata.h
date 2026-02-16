@@ -1,0 +1,116 @@
+// This is the common memory layout for managed memory, whether static
+// or dynamic. It includes out-of-heap accounting.
+
+#pragma once
+#include "n00b.h"
+#include "core/align.h"
+
+#define N00B_FORCED_ALIGNMENT N00B_ALIGN
+
+// We're going to use the C type for the type info, full stop.
+
+typedef char *n00b_alloc_type_info_t;
+
+#define n00b_core_alloc_info_fields                                                            \
+    n00b_alloc_type_info_t tinfo;                                                              \
+    uint32_t               alloc_len;                                                          \
+    uint32_t               ptr_words       : 20;                                               \
+    uint32_t               is_array        : 1;                                                \
+    uint32_t               no_scan         : 1;                                                \
+    uint32_t               mem_debug       : 1;                                                \
+    uint32_t               mem_debug_taint : 1;                                                \
+    uint32_t               moved           : 1;                                                \
+    n00b_uint128_t         cached_hash
+
+// The header is inline with allocations, and is used when we don't
+// have a dynamic record, such as when unmarshaling or for static
+// data.
+struct n00b_alloc_info_t {
+    uint64_t guard;
+    n00b_core_alloc_info_fields;
+    alignas(N00B_FORCED_ALIGNMENT) uint64_t data[0];
+};
+
+// The dynamic record, which is kept out of band for safety, and thus
+// is the prefered source of info when available.
+struct n00b_alloc_metadata_t {
+    void *user_ptr;               // Pointer to the user-returned value.
+    n00b_core_alloc_info_fields;  // Authoritative data.
+    n00b_alloc_info_t *hcur;      // Pointer to the guard / inline info.
+    char              *file_name; // file and line info.
+};
+
+// "\xcc400b1e\xcc" on little endian machines (byte swapped on on big endian)
+#define N00B_STATIC_MAGIC 0xcc653162303034ccUL
+
+struct n00b_static_header_t {
+    // We need to have the static magic be the same as starting from the guard
+    // of n00b_alloc_info_t, so there will generally be an extra word of
+    // padding after alloc_loc, since we align to 16 byte boundaries.
+    char    *alloc_loc;
+    void    *padding;
+    uint64_t static_magic;
+    n00b_core_alloc_info_fields;
+    char data[0];
+};
+
+#define N00B_ALLOC_HDR_SZ ((sizeof(n00b_alloc_info_t) + N00B_ALIGN - 1) & ~(N00B_ALIGN - 1))
+
+#define N00B_STATIC_BASE(name, c_type, stored_type, n00b_type_val, ...)                        \
+    struct {                                                                                   \
+        n00b_static_header_t hdr;                                                              \
+        c_type               obj;                                                              \
+    } __##name = {                                                         \
+        .hdr = {                                                           \
+            .alloc_loc       = N00B_LOC_STRING(),                          \
+            .static_magic    = N00B_STATIC_MAGIC,                          \
+            .tinfo.n00b_type = stored_type,                                \
+            .alloc_len       = sizeof(n00b_alloc_info_t) + sizeof(c_type), \
+            .ptr_words       = 0,                                          \
+            .n00b_type       = n00b_type_val,                              \
+            .no_scan         = false,                                      \
+            .mem_debug       = false,                                      \
+            .mem_debug_taint = false,                                      \
+            .moved           = false,                                      \
+            .cached_hash     = 0,                                          \
+        },                                                                 \
+        .obj = (c_type)__VA_ARGS__};                   \
+    c_type *const name = &__##name.obj
+
+#define N00B_STR_DECL(name, value)                                                             \
+    N00B_STATIC_BASE(name,                                                                     \
+                     n00b_string_t,                                                            \
+                     N00B_T_STRING,                                                            \
+                     true,                                                                     \
+                     {                                                                         \
+                         .data       = (value),                                                \
+                         .u32_data   = nullptr,                                                \
+                         .styling    = nullptr,                                                \
+                         .codepoints = (sizeof(value) - 1),                                    \
+                         .u8_bytes   = (sizeof(value) - 1),                                    \
+                     })
+
+// Here, we're going to reuse the previous macro. That will produce
+// the "wrong" answer in terms of number of codepoints.
+//
+// However, ncpp should, when it sees this macro, either:
+//
+// 1. Add initialization code to fix the value; or
+// 2. Rewrite the contents of the macro to declare the thing
+//    statically, but with the right number of codepoints.
+
+// Neither of these things are done yet; this is just a placeholder.
+// Note: #2 is the preferable route, since it does not require startup
+// code, and making sure it gets called in time.
+//
+// The startup cost might be minimal, but it prevents us from labeling
+// such variables as non-mutable (`const`).
+
+// Ideally, this will work even with rich strings, by having ncpp use
+// libn00b to parse, and then write out the correct data structure
+// directly. I'd like to do that with string literals too, probably by
+// adding an 'r' prefix before the opening quotation mark.
+
+// I might do this over xmas break.
+
+#define N00B_U8_DECL(name, value) N00B_STR_DECL(name, value)
