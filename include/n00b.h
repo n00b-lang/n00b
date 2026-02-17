@@ -1,5 +1,11 @@
 #pragma once
 
+// Current N00b version info.
+#define N00B_VERS_MAJOR   0x00
+#define N00B_VERS_MINOR   0x03
+#define N00B_VERS_PATCH   0x00
+#define N00B_VERS_PREVIEW 0x00
+
 #include <assert.h> // IWYU pragma: export
 #include <stdint.h> // IWYU pragma: export
 #include <stdlib.h> // IWYU pragma: export

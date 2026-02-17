@@ -129,3 +129,18 @@ extern void n00b_load_static_ranges(void);
 #if defined(N00B_SHOW_ARENAS_ON_GC)
 extern void n00b_debug_memory_info(bool);
 #endif
+
+#if 0 // TODO
+
+static inline n00b_alloc_metadata_t *
+n00b_to_mem_metadata_record(n00b_alloc_info_t *info)
+{
+    if (!info || (info->guard & 1)) {
+        return nullptr;
+    }
+
+    return (n00b_alloc_metadata_t *)info;
+}
+#endif
+
+// n00b_get_arena_addr_type is defined in arena.h (needs full n00b_arena_t definition)

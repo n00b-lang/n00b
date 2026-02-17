@@ -24,20 +24,22 @@ struct n00b_gc_root_t {
     char    *location;
 };
 
-// 1st arg is the allocator object.
-// 1st char * is the base type.
-// 2nd char * is the location string.
-// Both of these can be null.
 // void * is an opaque pointer specific to the allocator; untyped.
-typedef void *(*n00b_calloc_fn)(void *, size_t, size_t, const char *, const char *, void *);
-typedef void (*n00b_free_fn)(void *, void *);
+typedef void *(*n00b_calloc_fn)(n00b_allocator_t *, size_t, void *);
+typedef void (*n00b_free_fn)(n00b_allocator_t *, void *);
 typedef void (*n00b_allocator_destroy_fn)(n00b_allocator_t *);
 
 struct n00b_base_allocator_t {
     n00b_calloc_fn            zero_alloc;
     n00b_free_fn              free;
-    const char               *debug_name;
     n00b_allocator_destroy_fn destroy;
+    const char               *debug_name;
+    uint8_t                   add_inline_header : 1;
+    uint8_t                   __system          : 1; // no STW check
+    uint8_t                   __md_arena        : 1; // Special for metadata arenas.
+    uint8_t                   hidden            : 1; // GC must consider it data.
+    n00b_allocator_t         *metadata_arena;
+    n00b_dict_untyped_t      *metadata;
 };
 
 struct n00b_runtime_t {

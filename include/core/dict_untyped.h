@@ -2,7 +2,7 @@
 
 #include <stdint.h>
 #include "n00b.h"
-#include "core/allocator.h"
+#include "core/alloc.h"
 #include "core/hash.h"
 
 #define N00B_DICT_UNTYPED_MIN_SIZE_LOG 4

@@ -11,10 +11,11 @@
 #include "core/runtime.h"
 #include "core/thread.h"
 #include "core/mmaps.h"
-#include "core/allocator.h"
 #include "core/alloc.h"
+#include "core/random.h"
 
-size_t n00b_page_size = 0;
+size_t   n00b_page_size = 0;
+uint64_t n00b_gc_guard  = 0;
 
 typedef n00b_option_t(n00b_runtime_t *) opt_rt_t;
 opt_rt_t n00b_default_runtime = n00b_option_none(n00b_runtime_t *);
@@ -70,17 +71,10 @@ setup_threads(n00b_runtime_t *rt, unsigned int max_threads)
     n00b_thread_init(.runtime = rt);
 }
 
-void *
-n00b_slab_alloc(n00b_allocator_t *self,
-                uint32_t          n,
-                uint32_t          sz,
-                char             *t,
-                char             *file,
-                void             *ignore)
+static void *
+n00b_slab_alloc(n00b_allocator_t *self, uint32_t sz, void *ignore)
 {
-    uint64_t request = n * sz;
-
-    return _n00b_mmap(sz, file, .arena = self);
+    return n00b_mmap(sz, .allocator = self);
 }
 
 void
@@ -92,11 +86,14 @@ n00b_slab_free(n00b_allocator_t *self, void *ptr)
 static inline void
 setup_slab_allocator(n00b_runtime_t *rt)
 {
-    rt->slab_allocator = (n00b_base_allocator_t){
-        .zero_alloc = (n00b_calloc_fn)n00b_slab_alloc,
-        .free       = (n00b_free_fn)n00b_slab_free,
-        .debug_name = "slab_allocator",
-    };
+    n00b_allocator_setup((n00b_allocator_t *)&rt->slab_allocator,
+                         (n00b_calloc_fn)n00b_slab_alloc,
+                         .free              = (n00b_free_fn)n00b_slab_free,
+                         .name              = "slab_allocator",
+                         .inline_headers    = false,
+                         .external_metadata = false,
+                         .hidden            = true,
+                         .__system          = true);
 }
 
 void
@@ -109,6 +106,10 @@ n00b_init(n00b_runtime_t *rt, int argc, char *argv[]) _kargs
 }
 {
     n00b_page_size = sysconf(_SC_PAGESIZE);
+
+    if (!n00b_gc_guard) {
+        n00b_gc_guard = n00b_rand64();
+    }
 
     assert(rt);
 
@@ -123,7 +124,7 @@ n00b_init(n00b_runtime_t *rt, int argc, char *argv[]) _kargs
     setup_envp(rt, envp);
     setup_fd_limit(rt, fd_limit);
 
-    n00b_mmaps_initialize(rt);
+    n00b_mmaps_initialize(&rt->mmaps);
     setup_slab_allocator(rt);
 
     setup_threads(rt, max_threads);

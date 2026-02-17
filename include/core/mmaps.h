@@ -150,9 +150,9 @@ n00b_mmap_is_managed(n00b_mmap_info_t *map)
 extern void *
 _n00b_mmap(size_t sz, char *loc) _kargs
 {
-    n00b_arena_t        *arena = nullptr;
-    n00b_mmap_rec_kind_t kind  = n00b_mmap_api_mmap;
-    char                *name  = nullptr;
+    n00b_allocator_t    *allocator = nullptr;
+    n00b_mmap_rec_kind_t kind      = n00b_mmap_api_mmap;
+    char                *name      = nullptr;
 };
 
 extern void n00b_munmap(void *addr);

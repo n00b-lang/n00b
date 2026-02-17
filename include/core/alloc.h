@@ -2,12 +2,32 @@
 #include <alloca.h>
 
 #include "n00b.h"
-#include "core/allocator.h"
 #include "core/alloc_mdata.h"
 #include "core/mmaps.h"
 #include "core/macros.h"
 #include "core/align.h"
 #include "core/atomic.h"
+#include "runtime.h"
+
+struct n00b_allocator_t {
+    n00b_calloc_fn            zero_alloc;
+    n00b_free_fn              free;
+    n00b_allocator_destroy_fn destroy;
+    const char               *debug_name;
+    uint8_t                   add_inline_header : 1;
+    uint8_t                   __system          : 1; // no STW check
+    uint8_t                   __md_arena        : 1; // Special for metadata arenas.
+    uint8_t                   hidden            : 1; // GC must consider it data.
+    n00b_allocator_t         *metadata_arena;
+    n00b_dict_untyped_t      *metadata;
+    void                     *opaque[];
+};
+
+static inline void
+n00b_allocator_destroy(n00b_allocator_t *allocator)
+{
+    (*allocator->destroy)(allocator);
+}
 
 typedef uint64_t (*n00b_obj_size_helper)(void *);
 
@@ -18,53 +38,43 @@ extern uint64_t n00b_gc_guard;
         allocator_var = n00b_atomic_load(&n00b_get_runtime()->default_allocator);              \
         assert(allocator_var);                                                                 \
     }
-static inline void *
-_n00b_alloc_raw(size_t n, size_t sz, const char *base_type, const char *location) _kargs
+
+extern void *
+_n00b_alloc_raw(size_t n, size_t sz, char *base_type, const char *location) _kargs
 {
-    n00b_allocator_t *allocator = nullptr;
-    void             *aparams   = nullptr; // Marking for debug, cleanup, etc.
-    void             *iparams   = nullptr; // To be sent to an object instance (TODO)
-}
+    n00b_allocator_t *allocator   = nullptr;
+    void             *aparams     = nullptr; // Marking for debug, cleanup, etc.
+    void             *iparams     = nullptr; // To be sent to an object instance (TODO)
+    bool              no_scan     = false;
+    bool              mem_debug   = false;
+    bool              debug_taint = false;
+};
+
+extern void n00b_free(void *ptr);
+
+extern void *
+n00b_find_alloc_info(void *addr) _kargs
 {
-    void *r;
+    n00b_allocator_t *allocator       = nullptr;
+    bool              scan_for_header = false;
+};
 
-    n00b_ensure_allocator(allocator);
-    r = (*allocator->zero_alloc)(allocator, n, n00b_align(sz), base_type, location, aparams);
-    // TODO: Add object info lookup, iff instance_params.
-
-    return r;
-}
-
-static inline void
-n00b_free(void *ptr)
+extern void
+n00b_allocator_setup(n00b_allocator_t *allocator, n00b_calloc_fn alloc) _kargs
 {
-    n00b_allocator_t *allocator = n00b_mem_get_allocator(ptr);
-    assert(allocator);
-
-    if (allocator->free) {
-        (*allocator->free)(allocator, ptr);
-    }
-}
-
-#define n00b_alloc_size(n, sz, ...)                                                            \
-    _n00b_alloc_raw(n, sz, nullptr, N00B_LOC_STRING() __VA_OPT__(, __VA_ARGS__))
-#define n00b_alloc(T, ...)                                                                     \
-    _n00b_alloc_raw(1,                                                                         \
-                    sizeof(T),                                                                 \
-                    N00B_TO_STRING(T),                                                         \
-                    N00B_LOC_STRING() __VA_OPT__(, __VA_ARGS__))
-#define n00b_alloc_array(T, N, ...)                                                            \
-    _n00b_alloc_raw((N),                                                                       \
-                    sizeof(T),                                                                 \
-                    N00B_TO_STRING(T),                                                         \
-                    N00B_LOC_STRING() __VA_OPT__(, __VA_ARGS__))
-#define n00b_alloc_flex(T1, T2, N2, ...)                                                       \
-    _n00b_alloc_raw(1,                                                                         \
-                    (sizeof(T1) + sizeof(T2) * (N2)),                                          \
-                    N00B_TO_STRING(T1),                                                        \
-                    N00B_LOC_STRING() __VA_OPT__(, __VA_ARGS__))
-
-extern uint64_t n00b_gc_guard;
+    n00b_free_fn              free              = nullptr;
+    n00b_allocator_destroy_fn destroy           = nullptr;
+    char                     *name              = nullptr;
+    bool                      inline_headers    = true;
+    bool                      external_metadata = true;
+    // RISKY for custom allocators. Hides from GC.
+    bool                      hidden            = false;
+    // DO NOT USE for custom allocators. Skips mmaps.
+    bool                      __nomap           = false;
+    // DO NOT USE for custom allocators. Skips STW check.
+    bool                      __system          = false;
+    bool                      __is_md_arena     = false;
+};
 
 static inline n00b_alloc_info_t *
 n00b_inline_alloc_header(void *p)
@@ -92,12 +102,23 @@ n00b_inline_alloc_header(void *p)
     return nullptr;
 }
 
-extern void *
-n00b_find_alloc_info(void *addr) _kargs
-{
-    n00b_allocator_t *allocator       = nullptr;
-    bool              scan_for_header = false;
-};
+#define n00b_alloc_size(n, sz, ...)                                                            \
+    _n00b_alloc_raw(n, sz, nullptr, N00B_LOC_STRING() __VA_OPT__(, __VA_ARGS__))
+#define n00b_alloc(T, ...)                                                                     \
+    _n00b_alloc_raw(1,                                                                         \
+                    sizeof(T),                                                                 \
+                    N00B_TO_STRING(T),                                                         \
+                    N00B_LOC_STRING() __VA_OPT__(, __VA_ARGS__))
+#define n00b_alloc_array(T, N, ...)                                                            \
+    _n00b_alloc_raw((N),                                                                       \
+                    sizeof(T),                                                                 \
+                    N00B_TO_STRING(T),                                                         \
+                    N00B_LOC_STRING() __VA_OPT__(, __VA_ARGS__))
+#define n00b_alloc_flex(T1, T2, N2, ...)                                                       \
+    _n00b_alloc_raw(1,                                                                         \
+                    (sizeof(T1) + sizeof(T2) * (N2)),                                          \
+                    N00B_TO_STRING(T1),                                                        \
+                    N00B_LOC_STRING() __VA_OPT__(, __VA_ARGS__))
 
 static inline n00b_alloc_info_t *
 n00b_get_object_header(void *p)

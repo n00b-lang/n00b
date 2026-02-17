@@ -4,7 +4,7 @@
 #include "core/alloc_mdata.h"
 #include "core/mmaps.h"
 #include "core/align.h"
-#include "core/allocator.h"
+#include "core/alloc.h"
 #include "core/dict_untyped.h"
 
 #define N00B_MPROT (PROT_READ | PROT_WRITE)
@@ -24,15 +24,8 @@ struct n00b_arena_t {
     _Atomic(n00b_segment_t *) current_segment;
     // TODO: add these back in.
     // n00b_list_t(n00b_finalizer_t) finalizers;
-    n00b_dict_untyped_t      *alloc_metadata;
-    // MUST be either the metadata arena, or, if this arena is
-    // a metadata arena, the arena we're the metadata for.
-    n00b_arena_t             *linked_arena;
     _Atomic uint32_t          mutex;
     _Atomic uint32_t          alloc_count;
-    uint64_t                  pad; // Keep the layout identical to the pool.
-    // This has to be a boolean for a static offset test.
-    uint32_t                  overhead;
     // If collection_enabled is off, when a heap / arena runs out of
     // memory, we just tack on a new segment of at least the same size
     // as the prior one.
@@ -63,11 +56,6 @@ struct n00b_arena_t {
     // is used directly or indirectly by the garbage collector itself.
 
     uint32_t collection_enabled : 1; // GC'd heap.
-    uint32_t system_arena       : 1;
-    uint32_t array_arena        : 1;
-    uint32_t no_inline_headers  : 1;
-    uint32_t hidden             : 1;
-    uint32_t startup_arena      : 1; // skip checkins. Manually set.
 
 #if defined(N00B_GC_STATS)
     struct timespec collect_start_time;
@@ -75,28 +63,26 @@ struct n00b_arena_t {
 #endif
 };
 
-extern n00b_arena_t *
-n00b_new_arena(uint64_t user_size) _kargs
+static inline n00b_mmap_rec_kind_t
+n00b_get_arena_addr_type(n00b_arena_t *arena, void *addr)
 {
-    bool        pool     = false;
-    bool        use_gc   = false;
-    bool        system   = false;
-    bool        no_map   = false;
-    bool        hidden   = false;
-    size_t      overhead = N00B_ALLOC_HDR_SZ;
-    const char *name     = nullptr;
-};
+    if (addr && (void *)arena == addr) {
+        return n00b_mmap_arena;
+    }
+    return arena->vtable.__system ? n00b_mmap_sys_segment : n00b_mmap_managed_segment;
+}
 
 extern void
 n00b_initialize_arena(n00b_arena_t *arena) _kargs
 {
-    uint64_t    size     = N00B_DEFAULT_SCRATCH_ARENA_SIZE;
-    bool        use_gc   = true;
-    bool        system   = false;
-    bool        no_map   = false;
-    bool        hidden   = false;
-    size_t      overhead = N00B_ALLOC_HDR_SZ;
-    const char *name     = nullptr;
+    uint64_t    size           = N00B_DEFAULT_SCRATCH_ARENA_SIZE;
+    bool        use_gc         = true;
+    bool        no_map         = false;
+    bool        hidden         = false;
+    bool        __system       = false;
+    bool        __is_md_arena  = false;
+    bool        inline_headers = true;
+    char       *name           = "arena";
 };
 
 extern void n00b_add_finalizer(void *obj, n00b_finalizer_t fn);
@@ -106,25 +92,6 @@ struct n00b_finalizer_info_t {
     n00b_alloc_info_t *alloc_info;
     void              *user_ptr;
 };
-
-static inline n00b_alloc_metadata_t *
-n00b_to_mem_metadata_record(n00b_alloc_info_t *info)
-{
-    if (!info || (info->guard & 1)) {
-        return nullptr;
-    }
-
-    return (n00b_alloc_metadata_t *)info;
-}
-
-static inline n00b_mmap_rec_kind_t
-n00b_get_arena_addr_type(n00b_arena_t *arena, void *addr)
-{
-    if (addr && arena == addr) {
-        return n00b_mmap_arena;
-    }
-    return arena->system_arena ? n00b_mmap_sys_segment : n00b_mmap_managed_segment;
-}
 
 #define n00b_new_arena(...)                                                                    \
     ({                                                                                         \

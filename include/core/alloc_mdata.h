@@ -37,7 +37,7 @@ struct n00b_alloc_metadata_t {
     void *user_ptr;               // Pointer to the user-returned value.
     n00b_core_alloc_info_fields;  // Authoritative data.
     n00b_alloc_info_t *hcur;      // Pointer to the guard / inline info.
-    char              *file_name; // file and line info.
+    const char        *file_name; // file and line info.
 };
 
 // "\xcc400b1e\xcc" on little endian machines (byte swapped on on big endian)
@@ -89,28 +89,3 @@ struct n00b_static_header_t {
                          .codepoints = (sizeof(value) - 1),                                    \
                          .u8_bytes   = (sizeof(value) - 1),                                    \
                      })
-
-// Here, we're going to reuse the previous macro. That will produce
-// the "wrong" answer in terms of number of codepoints.
-//
-// However, ncpp should, when it sees this macro, either:
-//
-// 1. Add initialization code to fix the value; or
-// 2. Rewrite the contents of the macro to declare the thing
-//    statically, but with the right number of codepoints.
-
-// Neither of these things are done yet; this is just a placeholder.
-// Note: #2 is the preferable route, since it does not require startup
-// code, and making sure it gets called in time.
-//
-// The startup cost might be minimal, but it prevents us from labeling
-// such variables as non-mutable (`const`).
-
-// Ideally, this will work even with rich strings, by having ncpp use
-// libn00b to parse, and then write out the correct data structure
-// directly. I'd like to do that with string literals too, probably by
-// adding an 'r' prefix before the opening quotation mark.
-
-// I might do this over xmas break.
-
-#define N00B_U8_DECL(name, value) N00B_STR_DECL(name, value)

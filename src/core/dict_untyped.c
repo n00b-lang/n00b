@@ -4,11 +4,21 @@
  *  Author:         John Viega, john@crashoverride.com
  *
  */
+
+#if !defined(N00B_DICT_MIN_SIZE_LOG)
+#define N00B_DICT_MIN_SIZE_LOG 4
+#endif
+
+#if defined(N00B_DICT_MIN_SIZE)
+#undef N00B_DICT_MIN_SIZE
+#endif
+
+#define N00B_DICT_MIN_SIZE (1 << N00B_DICT_MIN_SIZE_LOG)
+
 #define N00B_USE_INTERNAL_API
 #include <stdatomic.h>
 
 #include "n00b.h"
-#include "core/allocator.h"
 #include "core/alloc.h"
 #include "core/align.h"
 #include "core/dict_untyped.h"
@@ -213,4 +223,370 @@ n00b_dict_untyped_migrate(n00b_dict_untyped_t *d)
     n00b_free(olds);
 
     dict_untyped_unlock_post_migrate(d, news);
+}
+
+// Gives us the correct bucket if and only if the key is found in the
+// table already. It can return a bucket where the item has been deleted,
+// so the value needs to be checked.
+
+static inline n00b_dict_untyped_bucket_t *
+n00b_acquire_if_present(n00b_dict_untyped_t *d, n00b_dict_untyped_store_t *store, __int128_t hv)
+{
+    uint32_t                    last_slot;
+    uint32_t                    bix;
+    uint32_t                    flags;
+    n00b_dict_untyped_bucket_t *cur;
+    bool                        miss = false;
+
+    do {
+        last_slot = store->last_slot;
+        bix       = hv & last_slot;
+
+        for (uint32_t i = 0; i <= last_slot; i++) {
+            cur = &store->buckets[bix];
+
+            do {
+                flags = n00b_atomic_or(&cur->flags, N00B_HT_FLAG_MUTEX);
+                if (flags & N00B_HT_FLAG_MOVING) {
+                    goto try_again;
+                }
+            } while (flags & N00B_HT_FLAG_MUTEX);
+
+            if (cur->hv == hv) {
+                // Keep it locked.
+                // Note: We don't check for deletion here.
+                return cur;
+            }
+            if (!bucket_reserved(cur)) {
+                miss = true;
+            }
+
+            bix   = (bix + 1) & last_slot;
+            flags = n00b_atomic_and(&cur->flags, ~N00B_HT_FLAG_MUTEX);
+
+            if (miss) {
+                return nullptr;
+            }
+        }
+
+        return nullptr;
+
+try_again:
+        n00b_futex_wait_for_value(&d->futex, 0);
+        store = n00b_atomic_load(&d->store);
+    } while (true);
+}
+
+static inline n00b_dict_untyped_bucket_t *
+n00b_acquire_or_add(n00b_dict_untyped_t *d, n00b_dict_untyped_store_t *store, __int128_t hv)
+{
+    uint32_t                    last_slot;
+    uint32_t                    bix;
+    uint32_t                    flags;
+    n00b_dict_untyped_bucket_t *cur;
+
+    do {
+        last_slot = store->last_slot;
+        bix       = hv & last_slot;
+
+        for (uint32_t i = 0; i <= last_slot; i++) {
+            cur = &store->buckets[bix];
+
+            do {
+                flags = n00b_atomic_or(&cur->flags, N00B_HT_FLAG_MUTEX);
+                if (flags & (N00B_HT_FLAG_COPYING)) {
+                    goto try_again;
+                }
+            } while (flags & N00B_HT_FLAG_MUTEX);
+
+            if (cur->hv == hv || !bucket_reserved(cur)) {
+                // Keep it locked.
+                //
+                // We don't add in the hash value if it's not present;
+                // that way the caller will know to do whatever
+                // accounting needs to be done.
+
+                return cur;
+            }
+
+            bix   = (bix + 1) & last_slot;
+            flags = n00b_atomic_and(&cur->flags, ~N00B_HT_FLAG_MUTEX);
+        }
+
+        return nullptr;
+
+try_again:
+        n00b_futex_wait_for_value(&d->futex, 0);
+        store = n00b_atomic_load(&d->store);
+    } while (true);
+}
+
+static inline void
+unlock_bucket(n00b_dict_untyped_bucket_t *b)
+{
+    n00b_atomic_and(&b->flags, ~N00B_HT_FLAG_MUTEX);
+}
+
+// Returns the old value if found, nullptr otherwise.
+void *
+_n00b_dict_untyped_put(n00b_dict_untyped_t *d, void *key, void *value)
+{
+    __int128_t                 hv     = compute_hash(d, key);
+    n00b_dict_untyped_store_t *store  = n00b_atomic_load(&d->store);
+    void                      *result = nullptr;
+try_again:
+    n00b_dict_untyped_bucket_t *bucket      = n00b_acquire_or_add(d, store, hv);
+    bool                        reset_epoch = false;
+
+    if (!bucket->hv) {
+        if (n00b_atomic_add(&store->used_count, 1) >= store->threshold) {
+            unlock_bucket(bucket);
+            n00b_dict_untyped_migrate(d);
+            store = n00b_atomic_load(&d->store);
+            goto try_again;
+        }
+        reset_epoch = true;
+        bucket->hv  = hv;
+    }
+    else {
+        if (bucket_deleted(bucket)) {
+            reset_epoch = true;
+            bucket->flags &= ~N00B_HT_FLAG_DELETED;
+        }
+        else {
+            result = bucket->value;
+        }
+    }
+
+    if (reset_epoch) {
+        bucket->insert_order = (uint32_t)n00b_atomic_add(&store->used_count, 1);
+        n00b_atomic_add(&d->length, 1);
+    }
+
+    bucket->key   = key;
+    bucket->value = value;
+    unlock_bucket(bucket);
+
+    return result;
+}
+
+void *
+_n00b_dict_untyped_get(n00b_dict_untyped_t *d, void *key, bool *found)
+{
+    __int128_t                  hv    = compute_hash(d, key);
+    n00b_dict_untyped_store_t  *store = n00b_atomic_load(&d->store);
+    n00b_dict_untyped_bucket_t *b     = n00b_acquire_if_present(d, store, hv);
+    void                       *result;
+
+    if (!b) {
+        if (found) {
+            *found = false;
+        }
+
+        return nullptr;
+    }
+    if (bucket_deleted(b)) {
+        if (found) {
+            *found = false;
+        }
+        unlock_bucket(b);
+        return nullptr;
+    }
+
+    if (found) {
+        *found = true;
+    }
+
+    result = b->value;
+
+    unlock_bucket(b);
+
+    return result;
+}
+
+bool
+_n00b_dict_untyped_replace(n00b_dict_untyped_t *d, void *key, void *value)
+{
+    __int128_t                  hv    = compute_hash(d, key);
+    n00b_dict_untyped_store_t  *store = n00b_atomic_load(&d->store);
+    n00b_dict_untyped_bucket_t *b     = n00b_acquire_if_present(d, store, hv);
+
+    if (!b) {
+        return false;
+    }
+    if (!bucket_reserved(b) || bucket_deleted(b)) {
+        unlock_bucket(b);
+        return false;
+    }
+
+    b->value = value;
+    unlock_bucket(b);
+    return true;
+}
+
+bool
+_n00b_dict_untyped_add(n00b_dict_untyped_t *d, void *key, void *value)
+{
+    __int128_t                 hv    = compute_hash(d, key);
+    n00b_dict_untyped_store_t *store = n00b_atomic_load(&d->store);
+try_again:
+    n00b_dict_untyped_bucket_t *bucket = n00b_acquire_or_add(d, store, hv);
+    uint64_t                    order  = -1;
+
+    if (!bucket->hv) {
+        order = n00b_atomic_add(&store->used_count, 1);
+        if (order >= store->threshold) {
+            unlock_bucket(bucket);
+            n00b_dict_untyped_migrate(d);
+            store = n00b_atomic_load(&d->store);
+            goto try_again;
+        }
+        bucket->hv           = hv;
+        bucket->insert_order = order;
+    }
+    else {
+        if (bucket_deleted(bucket)) {
+            bucket->flags &= ~N00B_HT_FLAG_DELETED;
+        }
+        else {
+            unlock_bucket(bucket);
+            return false;
+        }
+    }
+
+    bucket->key   = key;
+    bucket->value = value;
+
+    n00b_atomic_add(&d->length, 1);
+    unlock_bucket(bucket);
+
+    return true;
+}
+
+bool
+_n00b_dict_untyped_remove(n00b_dict_untyped_t *d, void *key)
+{
+    __int128_t                  hv    = compute_hash(d, key);
+    n00b_dict_untyped_store_t  *store = n00b_atomic_load(&d->store);
+    n00b_dict_untyped_bucket_t *b     = n00b_acquire_if_present(d, store, hv);
+
+    if (!b) {
+        return false;
+    }
+    if (!bucket_reserved(b) || bucket_deleted(b)) {
+        unlock_bucket(b);
+        return false;
+    }
+
+    b->value = nullptr;
+    b->flags |= N00B_HT_FLAG_DELETED;
+    n00b_atomic_add(&d->length, -1);
+    unlock_bucket(b);
+
+    return true;
+}
+
+bool
+_n00b_dict_untyped_cas(n00b_dict_untyped_t *d,
+                       void                *key,
+                       void               **old_item_ptr,
+                       void                *new_item,
+                       bool                 null_old_means_absence,
+                       bool                 null_new_means_delete)
+{
+    __int128_t                  hv           = compute_hash(d, key);
+    n00b_dict_untyped_store_t  *store        = n00b_atomic_load(&d->store);
+    void                       *old_item     = old_item_ptr ? *old_item_ptr : nullptr;
+    bool                        expect_empty = !old_item && null_old_means_absence;
+    bool                        delete_it    = !new_item && null_new_means_delete;
+    n00b_dict_untyped_bucket_t *b;
+
+    if (expect_empty) {
+try_again:
+        b = n00b_acquire_or_add(d, store, hv);
+        if (bucket_reserved(b) && !bucket_deleted(b)) {
+            if (old_item_ptr) {
+                *old_item_ptr = b->value;
+            }
+            unlock_bucket(b);
+            return false;
+        }
+
+        if (!bucket_deleted(b)) {
+            if (n00b_atomic_add(&store->used_count, 1) >= store->threshold) {
+                unlock_bucket(b);
+                n00b_dict_untyped_migrate(d);
+                store = n00b_atomic_load(&d->store);
+                goto try_again;
+            }
+        }
+
+        b->hv = hv;
+        b->flags &= ~N00B_HT_FLAG_DELETED;
+        b->value        = new_item;
+        b->insert_order = (uint32_t)n00b_atomic_add(&store->used_count, 1);
+        n00b_atomic_add(&d->length, 1);
+        unlock_bucket(b);
+
+        return true;
+    }
+    else {
+        b = n00b_acquire_if_present(d, store, hv);
+
+        if (!b) {
+            return false;
+        }
+        if (b->value != old_item) {
+            *old_item_ptr = b->value;
+            unlock_bucket(b);
+            return false;
+        }
+
+        if (delete_it) {
+            b->value = nullptr;
+            b->flags |= N00B_HT_FLAG_DELETED;
+            n00b_atomic_add(&d->length, -1);
+        }
+        else {
+            b->value = new_item;
+        }
+        unlock_bucket(b);
+        return true;
+    }
+}
+
+extern void
+n00b_dict_untyped_init(n00b_dict_untyped_t *dict) _kargs
+{
+    uint32_t                start_capacity = N00B_DICT_MIN_SIZE;
+    const n00b_allocator_t *allocator      = nullptr;
+    n00b_hash_fn            hash           = nullptr;
+    bool                    skip_obj_hash  = false;
+}
+{
+    // This is also the set initializer now.
+
+    if (start_capacity < N00B_DICT_MIN_SIZE) {
+        start_capacity = N00B_DICT_MIN_SIZE;
+    }
+
+    start_capacity = n00b_align_closest_pow2_ceil(start_capacity);
+
+    *dict = (n00b_dict_untyped_t){
+        .fn              = hash,
+        .allocator       = allocator,
+        .insertion_epoch = 0,
+        .wait_ct         = 0,
+        .length          = 0,
+        .futex           = 0,
+        .skip_obj_hash   = skip_obj_hash,
+    };
+
+    dict->store = new_dict_untyped_store(dict, start_capacity);
+}
+
+n00b_size_t
+n00b_dict_untyped_len(n00b_dict_untyped_t *d)
+{
+    return n00b_atomic_load(&d->length);
 }

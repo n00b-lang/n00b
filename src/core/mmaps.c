@@ -718,16 +718,16 @@ n00b_mmaps_slow_rm_arena_segments(n00b_arena_t *arena)
 void *
 _n00b_mmap(size_t sz, char *loc) _kargs
 {
-    n00b_arena_t        *arena = nullptr;
-    n00b_mmap_rec_kind_t kind  = n00b_mmap_api_mmap;
-    char                *name  = nullptr;
+    n00b_allocator_t    *allocator = nullptr;
+    n00b_mmap_rec_kind_t kind      = n00b_mmap_api_mmap;
+    char                *name      = nullptr;
 }
 {
     if (name) {
         loc = name;
     }
 
-    if (arena) {
+    if (allocator) {
         kind = n00b_mmap_pool;
         sz   = n00b_page_align(sz);
     }
@@ -746,15 +746,7 @@ _n00b_mmap(size_t sz, char *loc) _kargs
 
     assert(result != MAP_FAILED);
 
-    n00b_register_mmap(result,
-                       ((char *)result) + sz,
-                       loc,
-                       (n00b_allocator_t *)arena,
-                       0,
-                       0,
-                       kind,
-                       0,
-                       true);
+    n00b_register_mmap(result, ((char *)result) + sz, loc, allocator, 0, 0, kind, 0, true);
 
     return result;
 }
