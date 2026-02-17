@@ -27,15 +27,16 @@
 #define N00B_DEFAULT_SCRATCH_ARENA_SIZE (1 << 18) // 256K
 #endif
 
-n00b_mmap_info_t *
-n00b_register_arena_segment(const void   *start,
-                            const void   *end,
-                            n00b_arena_t *arena,
-                            const char   *file)
+static inline n00b_mmap_info_t *
+n00b_register_arena_segment(void *start, void *end, n00b_arena_t *arena, const char *file)
 {
     n00b_mmap_rec_kind_t kind = n00b_get_arena_addr_type(arena, (void *)start);
 
-    return n00b_register_mmap(start, end, file, (n00b_allocator_t *)arena, 0, 0, kind, 0, true);
+    return n00b_mmap_register(start,
+                              end,
+                              kind,
+                              .file      = file,
+                              .allocator = (n00b_allocator_t *)arena);
 }
 
 static void
@@ -155,18 +156,10 @@ n00b_arena_delete(n00b_arena_t *arena)
 {
     n00b_segment_t      *segment = n00b_atomic_load(&arena->current_segment);
     n00b_segment_t      *next;
-    n00b_mmap_rec_kind_t kind  = n00b_get_arena_addr_type(arena, nullptr);
-    bool                 unreg = (!arena->vtable.hidden);
-
-    if (arena->vtable.metadata_arena) {
-        n00b_arena_delete((n00b_arena_t *)arena->vtable.metadata_arena);
-    }
+    n00b_mmap_rec_kind_t kind = n00b_get_arena_addr_type(arena, nullptr);
 
     while (segment) {
         next = segment->next_segment;
-        if (unreg) {
-            n00b_unregister_mmap(segment);
-        }
         munmap(segment, segment->size);
         segment = next;
     }
@@ -197,14 +190,14 @@ n00b_arena_delete(n00b_arena_t *arena)
 void
 n00b_initialize_arena(n00b_arena_t *arena) _kargs
 {
-    uint64_t    size           = N00B_DEFAULT_SCRATCH_ARENA_SIZE;
-    bool        use_gc         = true;
-    bool        no_map         = false;
-    bool        hidden         = false;
-    bool        __system       = false;
-    bool        __is_md_arena  = false;
-    bool        inline_headers = true;
-    char       *name           = "arena";
+    uint64_t size           = N00B_DEFAULT_SCRATCH_ARENA_SIZE;
+    bool     use_gc         = true;
+    bool     no_map         = false;
+    bool     hidden         = false;
+    bool     __system       = false;
+    bool     __is_md_arena  = false;
+    bool     inline_headers = true;
+    char    *name           = "arena";
 }
 {
     n00b_atomic_store(&arena->next_alloc, nullptr);

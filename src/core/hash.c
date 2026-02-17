@@ -31,16 +31,18 @@ n00b_xxh_convert(XXH128_hash_t hv)
 n00b_uint128_t
 n00b_hash(void *obj, n00b_hash_fn fn)
 {
-    bool               cache;
-    n00b_hash_fn       obj_fn = n00b_hash_word;
-    n00b_alloc_info_t *alloc  = n00b_get_object_header(obj);
+// TODO -- new vtables
+// TODO -- convert to new n00b_object_header
+#if 0
+    bool                          cache  = false;
+    [[maybe_unused]] n00b_hash_fn obj_fn = n00b_hash_word;
+    n00b_inline_hdr_t            *alloc  = n00b_get_object_header(obj);
 
     if (alloc && alloc->cached_hash) {
         return alloc->cached_hash;
     }
 
-// TODO -- new vtables
-#if 0
+
     if (alloc) {
         if (alloc->n00b_type) {
             n00b_vtable_t *vt = n00b_vtable_from_alloc(alloc);
@@ -69,9 +71,11 @@ n00b_hash(void *obj, n00b_hash_fn fn)
 #endif
     n00b_uint128_t hv = (*fn)(obj);
 
+#if 0
     if (cache) {
         alloc->cached_hash = hv;
-    }
+
+#endif
 
     return hv;
 }

@@ -17,6 +17,8 @@
 size_t   n00b_page_size = 0;
 uint64_t n00b_gc_guard  = 0;
 
+extern void n00b_mmaps_initialize(n00b_mmap_ctx_t *ctx);
+
 typedef n00b_option_t(n00b_runtime_t *) opt_rt_t;
 opt_rt_t n00b_default_runtime = n00b_option_none(n00b_runtime_t *);
 
@@ -112,6 +114,7 @@ n00b_init(n00b_runtime_t *rt, int argc, char *argv[]) _kargs
     }
 
     assert(rt);
+    *rt = (n00b_runtime_t){};
 
     if (!n00b_option_is_set(n00b_default_runtime)) {
         n00b_default_runtime = n00b_option_set(n00b_runtime_t *, rt);
@@ -124,10 +127,13 @@ n00b_init(n00b_runtime_t *rt, int argc, char *argv[]) _kargs
     setup_envp(rt, envp);
     setup_fd_limit(rt, fd_limit);
 
-    n00b_mmaps_initialize(&rt->mmaps);
     setup_slab_allocator(rt);
+    n00b_mmaps_initialize(&rt->mmaps);
 
     setup_threads(rt, max_threads);
+
+    // Temporary until we hook up the GC here.
+    rt->default_allocator = &rt->slab_allocator;
 
     rt->startup_complete = true;
 }

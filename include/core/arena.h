@@ -89,7 +89,7 @@ extern void n00b_add_finalizer(void *obj, n00b_finalizer_t fn);
 
 struct n00b_finalizer_info_t {
     n00b_finalizer_t   funcptr;
-    n00b_alloc_info_t *alloc_info;
+    n00b_inline_hdr_t *alloc_info;
     void              *user_ptr;
 };
 

@@ -2,11 +2,14 @@
 
 #include "n00b.h"
 #include "core/mmaps.h"
-#include "core/memory_info.h"
 #include "core/alloc_mdata.h"
+#include "core/alloc.h"
 #include "core/atomic.h"
 #include "core/futex.h"
 #include "core/align.h"
+#include "core/pool.h"
+#include "core/thread.h"
+
 // TODO: fix this
 // #include "io/print.h"
 #include <stdio.h>
@@ -377,18 +380,10 @@ mmaps_insert_raw(n00b_mmap_ctx_t     *ctx,
                  uint64_t             binary_offset)
 {
     n00b_mmap_node_t *n;
-    n00b_mmap_free_t *fl    = n00b_atomic_load(&ctx->free_nodes);
     uint64_t          start = (uint64_t)startp;
     uint64_t          end   = start + blen;
 
-    if (fl) {
-        n = (n00b_mmap_node_t *)fl;
-        n00b_atomic_store(&ctx->free_nodes, n00b_atomic_load(&fl->next));
-    }
-    else {
-        n = ctx->current_pool->next_node;
-        ctx->current_pool->next_node++;
-    }
+    n = n00b_alloc(n00b_mmap_node_t, .allocator = (n00b_allocator_t *)&ctx->pool);
 
     *n = (n00b_mmap_node_t){
         .subtree_min   = start,
@@ -407,23 +402,24 @@ mmaps_insert_raw(n00b_mmap_ctx_t     *ctx,
     return n;
 }
 
-static inline bool
-pool_at_end(n00b_mmap_pool_t *pool)
-{
-    return pool->next_node + sizeof(n00b_mmap_node_t) > pool->end;
-}
-
 static inline void
 mmap_lock(n00b_mmap_ctx_t *ctx)
 {
-    while (n00b_atomic_or(&ctx->lock, 1))
-        ;
+    int64_t tid      = n00b_thread_unique_id();
+    int64_t expected = -1;
+
+    do {
+        if (expected == tid) {
+            break;
+        }
+        expected = -1;
+    } while (!n00b_cas(&ctx->tid_lock, &expected, tid));
 }
 
 static inline void
 mmap_unlock(n00b_mmap_ctx_t *ctx)
 {
-    n00b_atomic_store(&ctx->lock, 0);
+    n00b_atomic_store(&ctx->tid_lock, -1);
 }
 
 // Might convert to a rw lock, but for now just a spin lock.
@@ -457,7 +453,7 @@ lookup_under_node(n00b_mmap_node_t *n, uint64_t addr)
 }
 
 n00b_mmap_node_t *
-n00b_mmaps_lookup(n00b_mmap_ctx_t *ctx, void *addr)
+n00b_mmap_lookup(n00b_mmap_ctx_t *ctx, void *addr)
 {
     n00b_mmap_node_t *result;
 
@@ -468,65 +464,14 @@ n00b_mmaps_lookup(n00b_mmap_ctx_t *ctx, void *addr)
     return result;
 }
 
-static inline n00b_mmap_pool_t *
-alloc_mmap_pool(n00b_mmap_ctx_t *ctx)
-{
-    uint32_t          len = n00b_page_size * ctx->next_pool_sz;
-    n00b_mmap_pool_t *pool;
-
-    ctx->next_pool_sz <<= 1;
-
-    pool = mmap(nullptr, len, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0);
-
-    assert(pool != MAP_FAILED);
-
-    pool->next_node   = &pool->nodes[0];
-    pool->end         = (n00b_mmap_node_t *)(((char *)pool) + len);
-    pool->prev_pool   = ctx->current_pool;
-    ctx->current_pool = pool;
-
-    mmaps_insert_raw(ctx, pool, len, n00b_mmap_internal, 0);
-    return pool;
-}
-
-n00b_mmap_node_t *
-n00b_mmaps_register_mem_map(n00b_mmap_ctx_t     *ctx,
-                            void                *start,
-                            uint64_t             blen,
-                            uint64_t             binary_offset,
-                            n00b_mmap_rec_kind_t kind,
-                            bool                 definitely_unique)
-{
-    n00b_mmap_node_t *result;
-
-    mmap_write_lock(ctx);
-
-    if (!ctx->free_nodes && pool_at_end(ctx->current_pool)) {
-        alloc_mmap_pool(ctx);
-    }
-
-    if (!definitely_unique) {
-        result = lookup_under_node(&ctx->root, (uint64_t)start);
-        if (result) {
-            mmap_write_unlock(ctx);
-            return result;
-        }
-    }
-
-    result = mmaps_insert_raw(ctx, start, blen, kind, binary_offset);
-
-    mmap_write_unlock(ctx);
-
-    return result;
-}
+// In memory_info.h
+extern void n00b_load_static_ranges();
 
 void
 n00b_mmaps_initialize(n00b_mmap_ctx_t *ctx)
 {
     *ctx = (n00b_mmap_ctx_t){
-        .initial_pool = nullptr,
-        .current_pool = nullptr,
-        .free_nodes   = nullptr,
+        .pool = {},
         .root         = {
                     .subtree_min = ~0,
                     .subtree_max = 0,
@@ -535,32 +480,22 @@ n00b_mmaps_initialize(n00b_mmap_ctx_t *ctx)
                     .priority    = UINT32_MAX,
                     .kind        = n00b_mmap_root,
         },
-        .lock         = 0,
-        .next_pool_sz = N00B_MMAPS_START_PAGES,
+        .tid_lock     = -1,
         .treap_seed   = N00B_MMAPS_PTR_SEED ^ (uint32_t)(uintptr_t)ctx,
     };
 
-    alloc_mmap_pool(ctx);
-    ctx->initial_pool = ctx->current_pool;
+    n00b_pool_init(&ctx->pool, .__system = true, .hidden = true, .name = "mmaps");
     n00b_load_static_ranges();
-}
-
-void
-n00b_mmaps_destroy(n00b_mmap_ctx_t *ctx)
-{
-    n00b_mmap_pool_t *p = ctx->initial_pool;
-
-    while (p) {
-        n00b_mmap_pool_t *next = p->prev_pool;
-        munmap(p, ((uint64_t)p->end) - (uint64_t)p);
-        p = next;
-    }
 }
 
 static void
 n00b_mmaps_remove_base(n00b_mmap_ctx_t *ctx, n00b_mmap_node_t *node)
 {
     assert(node->kind != n00b_mmap_root);
+
+    if (node->allocator->hidden) {
+        return;
+    }
 
     while (n00b_atomic_load(&node->left) || n00b_atomic_load(&node->right)) {
         n00b_mmap_node_t *l = n00b_atomic_load(&node->left);
@@ -580,8 +515,7 @@ n00b_mmaps_remove_base(n00b_mmap_ctx_t *ctx, n00b_mmap_node_t *node)
         }
     }
 
-    n00b_mmap_node_t *parent  = n00b_atomic_load(&node->parent);
-    n00b_mmap_free_t *fl_item = (void *)node;
+    n00b_mmap_node_t *parent = n00b_atomic_load(&node->parent);
 
     if (parent) {
         if (n00b_atomic_load(&parent->left) == node) {
@@ -593,12 +527,10 @@ n00b_mmaps_remove_base(n00b_mmap_ctx_t *ctx, n00b_mmap_node_t *node)
         propagate_bounds_up(parent);
     }
 
-    memset(node, 0, sizeof(n00b_mmap_node_t));
-    n00b_atomic_store(&fl_item->next, n00b_atomic_load(&ctx->free_nodes));
-    n00b_atomic_store(&ctx->free_nodes, fl_item);
+    n00b_free(node);
 }
 
-void
+static inline void
 n00b_mmaps_remove(n00b_mmap_ctx_t *ctx, n00b_mmap_node_t *node)
 {
     mmap_write_lock(ctx);
@@ -606,113 +538,52 @@ n00b_mmaps_remove(n00b_mmap_ctx_t *ctx, n00b_mmap_node_t *node)
     mmap_write_unlock(ctx);
 }
 
-bool
-n00b_mmap_is_arena_segment(n00b_mmap_info_t *map)
-{
-    switch (map->kind) {
-    case n00b_mmap_managed_segment:
-    case n00b_mmap_sys_segment:
-        return true;
-    default:
-        return false;
-    }
-}
-
-bool
-n00b_mmap_is_arena(n00b_mmap_info_t *map)
-{
-    switch (map->kind) {
-    case n00b_mmap_arena:
-        return true;
-    default:
-        return false;
-    }
-}
-
-n00b_mmap_rec_kind_t
-n00b_mmap_get_kind(n00b_mmap_info_t *map)
-{
-    return map->kind;
-}
-
-n00b_mmap_ctx_t n00b_global_mem_maps;
-
 n00b_mmap_info_t *
-n00b_mmap_by_address(void *addr)
+n00b_mmap_register(void *startp, void *endp, n00b_mmap_rec_kind_t kind) _kargs
 {
-    return n00b_mmaps_lookup(&n00b_global_mem_maps, addr);
+    n00b_runtime_t   *runtime           = n00b_get_runtime();
+    const char       *file              = nullptr;
+    n00b_allocator_t *allocator         = nullptr;
+    uint64_t          binary_offset     = 0;
+    intptr_t          slide             = 0;
+    uint64_t          order_id          = 0;
+    bool              definitely_unique = true;
 }
-
-// Register a memory map in the global registry, as opposed to using the
-// underlying data structure.
-n00b_mmap_info_t *
-n00b_register_mmap(const void          *startp,
-                   const void          *endp,
-                   const char          *file,
-                   n00b_allocator_t    *allocator,
-                   uint64_t             binary_offset,
-                   intptr_t             slide,
-                   n00b_mmap_rec_kind_t kind,
-                   uint64_t             order_id,
-                   bool                 definitely_unique)
 {
+    if (allocator && allocator->hidden) {
+        return nullptr;
+    }
+
     n00b_mmap_info_t *result;
+    n00b_mmap_ctx_t  *ctx   = n00b_global_mem_map(runtime);
     uint64_t          start = (uint64_t)startp;
     uint64_t          end   = (uint64_t)endp;
+    uint64_t          blen  = end - start;
 
-    result = n00b_mmaps_register_mem_map(&n00b_global_mem_maps,
-                                         (void *)start,
-                                         end - start,
-                                         binary_offset,
-                                         kind,
-                                         definitely_unique);
+    assert(ctx);
 
-    if (!result->allocator) {
-        assert(allocator);
-        result->allocator = allocator;
-        result->file      = (char *)file;
-        result->slide     = slide;
-    }
-    else {
-        if (allocator) {
-            assert(allocator == result->allocator);
+    assert(end > start);
+
+    mmap_write_lock(ctx);
+
+    if (!definitely_unique) {
+        result = lookup_under_node(&ctx->root, (uint64_t)start);
+        if (result) {
+            assert(allocator == result->allocator || !allocator);
+            mmap_write_unlock(ctx);
+            return result;
         }
     }
 
-    result->order_id = order_id;
+    result            = mmaps_insert_raw(ctx, startp, blen, kind, binary_offset);
+    result->allocator = allocator;
+    result->file      = file;
+    result->slide     = slide;
+    result->order_id  = order_id;
+
+    mmap_write_unlock(ctx);
 
     return result;
-}
-
-void
-n00b_unregister_mmap(void *start)
-{
-    n00b_mmap_info_t *map = n00b_mmap_by_address(start);
-
-    assert(map);
-    n00b_mmaps_remove(&n00b_global_mem_maps, map);
-}
-
-static void
-remove_arena_segments(n00b_mmap_node_t *n, n00b_arena_t *arena)
-{
-    if (!n) {
-        return;
-    }
-    remove_arena_segments(n->left, arena);
-    remove_arena_segments(n->right, arena);
-}
-
-// This needs to be done better, so we don't risk blowing the stack.
-// When we add and remove, we don't have to keep backtracking
-// state. When we walk, we do!
-void
-n00b_mmaps_slow_rm_arena_segments(n00b_arena_t *arena)
-{
-    assert(arena);
-    mmap_lock(&n00b_global_mem_maps);
-    remove_arena_segments(&n00b_global_mem_maps.root, arena);
-    mmap_unlock(&n00b_global_mem_maps);
 }
 
 void *
@@ -728,8 +599,7 @@ _n00b_mmap(size_t sz, char *loc) _kargs
     }
 
     if (allocator) {
-        kind = n00b_mmap_pool;
-        sz   = n00b_page_align(sz);
+        sz = n00b_page_align(sz);
     }
     else {
         assert(kind == n00b_mmap_api_mmap || kind == n00b_mmap_arena);
@@ -746,18 +616,51 @@ _n00b_mmap(size_t sz, char *loc) _kargs
 
     assert(result != MAP_FAILED);
 
-    n00b_register_mmap(result, ((char *)result) + sz, loc, allocator, 0, 0, kind, 0, true);
+    n00b_mmap_register(result,
+                       ((char *)result) + sz,
+                       kind,
+                       .file      = loc,
+                       .allocator = allocator);
 
     return result;
 }
 
 void
-n00b_munmap(void *addr)
+n00b_munmap(void *addr) _kargs
 {
-    n00b_mmap_info_t *mm    = n00b_mmap_by_address(addr);
-    void             *start = (void *)mm->start;
-    size_t            len   = mm->end - mm->start;
+    n00b_runtime_t *runtime = n00b_get_runtime();
+}
+{
+    n00b_mmap_info_t *map = n00b_mmap_by_address(addr, .runtime = runtime);
 
-    n00b_mmaps_remove(&n00b_global_mem_maps, mm);
+    assert(map);
+
+    void  *start = (void *)map->start;
+    size_t len   = map->end - map->start;
+
+    n00b_mmaps_remove(n00b_global_mem_map(runtime), map);
     munmap(start, len);
+}
+
+n00b_mmap_info_t *
+n00b_mmap_by_address(void *addr) _kargs
+{
+    n00b_runtime_t *runtime = n00b_get_runtime();
+}
+{
+    return n00b_mmap_lookup(n00b_global_mem_map(runtime), addr);
+}
+
+n00b_allocator_opt_t
+n00b_mem_get_allocator(void *addr) _kargs
+{
+    n00b_runtime_t *runtime = n00b_get_runtime();
+}
+{
+    n00b_mmap_info_t *mmap = n00b_mmap_lookup(n00b_global_mem_map(runtime), addr);
+
+    if (!mmap || !mmap->allocator) {
+        return n00b_option_none(n00b_allocator_t *);
+    }
+    return n00b_option_set(n00b_allocator_t *, n00b_atomic_load(&mmap->allocator));
 }

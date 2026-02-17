@@ -9,7 +9,6 @@
 #include "n00b.h"
 #include "core/array.h"
 #include "core/option.h"
-#include "core/mmaps.h"
 
 typedef struct n00b_runtime_t n00b_runtime_t;
 
@@ -40,6 +39,51 @@ struct n00b_base_allocator_t {
     uint8_t                   hidden            : 1; // GC must consider it data.
     n00b_allocator_t         *metadata_arena;
     n00b_dict_untyped_t      *metadata;
+};
+
+// Need to forward declare the mmaps data structures to be in the runtime.
+typedef struct n00b_mmap_node_t   n00b_mmap_node_t;
+typedef enum n00b_mmap_rec_kind_t n00b_mmap_rec_kind_t;
+
+enum n00b_mmap_rec_kind_t {
+    n00b_mmap_root            = 0,
+    n00b_mmap_static          = 1,
+    n00b_mmap_arena           = 2,
+    n00b_mmap_managed_segment = 4,
+    n00b_mmap_sys_segment     = 8,
+    n00b_mmap_zero_page       = 16,
+    n00b_mmap_unmanaged       = 32,
+    n00b_mmap_stack           = 64,
+    n00b_mmap_internal        = 128,
+    n00b_mmap_pool            = 256,
+    n00b_mmap_api_mmap        = 512,
+    n00b_mmap_type_mask       = 1023,
+};
+
+struct n00b_mmap_node_t {
+    uint64_t                    subtree_min;
+    uint64_t                    subtree_max;
+    uint64_t                    start;
+    uint64_t                    end;
+    uint64_t                    binary_offset;
+    uint64_t                    order_id;
+    uint32_t                    priority;
+    _Atomic(n00b_mmap_node_t *) left;
+    _Atomic(n00b_mmap_node_t *) right;
+    _Atomic(n00b_mmap_node_t *) parent;
+    _Atomic(n00b_allocator_t *) allocator;
+    intptr_t                    slide; // The slide for ASLR
+    const char                 *file;
+    n00b_mmap_rec_kind_t        kind;
+};
+
+#include "core/pool.h"
+
+struct n00b_mmap_ctx_t {
+    n00b_mmap_node_t root;
+    _Atomic int64_t  tid_lock;
+    uint32_t         treap_seed;
+    n00b_pool_t      pool;
 };
 
 struct n00b_runtime_t {

@@ -115,15 +115,14 @@ n00b_on_lib_load(const struct mach_header *hdr, intptr_t slide)
         uint64_t seg_end   = seg_start + command->vmsize;
 
         if (command->cmd == LC_SEGMENT_64) {
-            n00b_register_mmap((void *)seg_start,
+            n00b_mmap_register((void *)seg_start,
                                (void *)seg_end,
-                               (char *)info.dli_fname,
-                               nullptr,
-                               command->fileoff,
-                               -slide,
                                seg_start ? n00b_mmap_static : n00b_mmap_zero_page,
-                               n00b_atomic_add(&static_order_id, 1),
-                               true);
+                               .file              = (char *)info.dli_fname,
+                               .binary_offset     = command->fileoff,
+                               .slide             = -slide,
+                               .order_id          = n00b_atomic_add(&static_order_id, 1),
+                               .definitely_unique = false);
             assert(static_order_id != 1);
         }
 
@@ -161,13 +160,10 @@ n00b_check_kernel_page_map(const void *addr)
     }
 
     // Register just this one page.
-    return n00b_mmaps_register_mem_map(&n00b_global_mem_maps,
-                                       start,
-                                       n00b_page_size,
-                                       0,
-                                       start ? n00b_mmap_unmanaged : n00b_mmap_zero_page,
-
-                                       false);
+    return n00b_mmap_register(start,
+                              start + n00b_page_size,
+                              start ? n00b_mmap_unmanaged : n00b_mmap_zero_page,
+                              .definitely_unique = false);
 }
 
 // This only gets called when lookup fails.
@@ -481,14 +477,14 @@ show_mem_info(n00b_mmap_info_t *n, bool all, unsigned int *lenp)
         abort();
     }
 
-    n00b_arena_t *a    = (n00b_arena_t *)n->allocator;
-    char         *file = "(no file)";
+    n00b_allocator_t *a    = n->allocator;
+    const char       *file = "(no file)";
     if (n->file) {
         file = n->file;
     }
 
     if (aseg) {
-        if (a->alloc_metadata || !a->linked_arena) {
+        if (!a->metadata) {
             n00b_fprintf(stderr,
                          "%s %s %p-%p (%'llu bytes, %'zu pages) arena @ %p (%s)\n",
                          kind_str,
@@ -501,8 +497,7 @@ show_mem_info(n00b_mmap_info_t *n, bool all, unsigned int *lenp)
                          n->file ? n->file : "*no name*");
         }
         else {
-            n00b_arena_t     *link = a->linked_arena;
-            n00b_allocator_t *al   = (n00b_allocator_t *)link;
+            n00b_allocator_t *link = a->metadata_arena;
 
             n00b_fprintf(stderr,
                          "%s %s %p-%p (%'llu bytes, %'zu pages) arena @ "
@@ -514,7 +509,7 @@ show_mem_info(n00b_mmap_info_t *n, bool all, unsigned int *lenp)
                          (unsigned long long)(n->end - n->start),
                          (unsigned int)(n->end - n->start) / n00b_page_size,
                          a,
-                         al->debug_name ? al->debug_name : "*no name*",
+                         link->debug_name ? link->debug_name : "*no name*",
                          link);
         }
     }
@@ -538,7 +533,7 @@ n00b_debug_memory_info(bool all)
 {
     unsigned int len = 0;
 
-    n00b_mmap_info_t *n = &n00b_global_mem_maps.root;
+    n00b_mmap_info_t *n = &n00b_global_mem_map(n00b_get_runtime())->root;
     show_mem_info(n->left, all, &len);
     show_mem_info(n->right, all, &len);
     n00b_fprintf(stderr,

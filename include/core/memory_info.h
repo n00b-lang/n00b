@@ -71,8 +71,6 @@ n00b_memory_is_readable(void *ptr)
 
 extern n00b_mmap_info_t *n00b_mmap_info_lookup(const void *addr);
 
-n00b_option_decl(n00b_allocator_t *);
-
 extern n00b_option_t(n00b_allocator_t *) n00b_find_allocator(void *val);
 // Find all global mmap entries with an exact name match.
 // TODO: replace
@@ -116,7 +114,7 @@ n00b_in_heap(void *ptr)
 extern uint64_t n00b_gc_guard;
 
 static inline bool
-n00b_is_mem_metadata_record(n00b_alloc_info_t *h)
+n00b_is_mem_metadata_record(n00b_inline_hdr_t *h)
 {
     return !(h->guard & 1);
 }
@@ -132,14 +130,14 @@ extern void n00b_debug_memory_info(bool);
 
 #if 0 // TODO
 
-static inline n00b_alloc_metadata_t *
-n00b_to_mem_metadata_record(n00b_alloc_info_t *info)
+static inline n00b_oob_hdr_t *
+n00b_to_mem_metadata_record(n00b_inline_hdr_t *info)
 {
     if (!info || (info->guard & 1)) {
         return nullptr;
     }
 
-    return (n00b_alloc_metadata_t *)info;
+    return (n00b_oob_hdr_t *)info;
 }
 #endif
 

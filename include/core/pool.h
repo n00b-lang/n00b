@@ -31,7 +31,6 @@ typedef struct n00b_pool_t n00b_pool_t;
 extern n00b_allocator_t *
 n00b_pool_init(n00b_pool_t *pool) _kargs
 {
-    uint32_t    headers           = true;
     bool        __system          = false;
     bool        inline_headers    = false;
     bool        external_metadata = false;

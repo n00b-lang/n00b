@@ -30,13 +30,20 @@ pool_unlock(n00b_pool_t *pool)
 }
 
 static inline void *
-new_page_entry(n00b_pool_t *pool, uint64_t sz)
+new_page_entry(n00b_pool_t *pool, uint64_t *sz_ptr)
 {
-    sz += sizeof(n00b_pool_page_t);
+    uint64_t sz     = *sz_ptr;
+    uint64_t hdr_sz = n00b_align(sizeof(n00b_pool_page_t));
+    sz += hdr_sz;
+
     char             *name = (char *)(((n00b_allocator_t *)pool)->debug_name);
-    n00b_pool_page_t *cur
-        = n00b_mmap(n00b_page_align(sz), .allocator = (n00b_allocator_t *)pool, .name = name);
-    void *res = (void *)cur + (sizeof(n00b_pool_page_t) / sizeof(void *));
+    n00b_pool_page_t *cur  = n00b_mmap(n00b_page_align(sz),
+                                       .allocator = (n00b_allocator_t *)pool,
+                                       .name      = name,
+                                       .kind      = n00b_mmap_pool);
+
+    *sz_ptr   = n00b_page_align(sz) - hdr_sz;
+    void *res = (void *)cur + hdr_sz;
 
     pool_lock(pool);
     cur->next = pool->page_table;
@@ -53,7 +60,7 @@ new_page_entry(n00b_pool_t *pool, uint64_t sz)
 static inline n00b_pool_entry_t *
 big_mmap(n00b_pool_t *pool, uint64_t sz)
 {
-    n00b_pool_entry_t *entry = new_page_entry(pool, sz);
+    n00b_pool_entry_t *entry = new_page_entry(pool, &sz);
     entry->list_index        = N00B_NUM_FREE_LISTS;
 
     return entry;
@@ -84,15 +91,18 @@ add_page_to_list(n00b_pool_t *pool, uint64_t sz, n00b_stack_t *stack)
 {
     // Return one, and push the others to the free list.
     // Yes, we could pre-link the extras, but that's a PITA.
-    uint64_t alloc_sz = n00b_page_size - sizeof(n00b_pool_page_t);
-    void    *res      = new_page_entry(pool, alloc_sz);
-    char    *p        = ((char *)res) + sz;
-    uint32_t n        = (alloc_sz / sz);
+    uint64_t alloc_sz = n00b_page_size - n00b_align(sizeof(n00b_pool_page_t));
+    void    *res      = new_page_entry(pool, &alloc_sz);
+
+    assert(!(((uint64_t)sz) & 15));
+
+    char    *p = ((char *)res) + n00b_align(sz);
+    uint32_t n = (alloc_sz / n00b_align(sz));
 
     for (uint32_t i = 1; i < n; i++) {
         // Yes, we end up having to cast.
         n00b_stack_node_t *node = (n00b_stack_node_t *)p;
-        p += sz;
+        p += n00b_align(sz);
         n00b_stack_push(stack, node);
     }
 
@@ -115,7 +125,7 @@ pool_destroy(n00b_pool_t *pool)
 static void
 pool_free(n00b_pool_t *pool, void *ptr)
 {
-    n00b_pool_entry_t *entry = (n00b_pool_entry_t *)(ptr - N00B_ALIGN);
+    n00b_pool_entry_t *entry = (n00b_pool_entry_t *)(ptr - N00B_ALIGN / sizeof(void *));
     assert(entry->list_index <= N00B_NUM_FREE_LISTS);
 
     if (entry->list_index == N00B_NUM_FREE_LISTS) {
@@ -160,6 +170,7 @@ pool_alloc(n00b_pool_t *pool, uint64_t request, void *ignore)
     entry->list_index = ix;
     void *p           = (void *)(((char *)entry) + N00B_ALIGN);
 
+    assert(!(((uint64_t)p) & (N00B_ALIGN - 1)));
     return p;
 }
 

@@ -13,9 +13,9 @@ main(int argc, char **argv)
 
     n00b_linked_list_t(char *) ll;
     n00b_linked_list_zero(ll);
-    n00b_linked_list_append(&ll, "hello,");
+    n00b_linked_list_append(&ll, "Hello,");
     n00b_linked_list_append(&ll, "(cruel)");
-    n00b_linked_list_append(&ll, "world");
+    n00b_linked_list_append(&ll, "world!");
     auto cur = n00b_linked_list_first(&ll);
     while (cur) {
         printf("%s ", n00b_linked_list_node_contents(cur));

@@ -75,10 +75,10 @@ extern bool  _n00b_dict_untyped_cas(n00b_dict_untyped_t *d,
 extern void
 n00b_dict_untyped_init(n00b_dict_untyped_t *dict) _kargs
 {
-    uint32_t                start_capacity = N00B_DICT_MIN_SIZE;
-    const n00b_allocator_t *allocator      = nullptr;
-    n00b_hash_fn            hash           = nullptr;
-    bool                    skip_obj_hash  = false;
+    uint32_t          start_capacity = N00B_DICT_MIN_SIZE;
+    n00b_allocator_t *allocator      = nullptr;
+    n00b_hash_fn      hash           = nullptr;
+    bool              skip_obj_hash  = false;
 };
 
 static inline bool

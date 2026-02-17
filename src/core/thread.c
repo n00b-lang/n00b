@@ -113,6 +113,5 @@ n00b_capture_stack_base(n00b_thread_t *thread, n00b_runtime_t *runtime)
     }
 
     thread->stack_base = highest;
-    thread->stack_map
-        = n00b_register_mmap(lowest, highest, nullptr, nullptr, 0, 0, n00b_mmap_stack, 0, true);
+    thread->stack_map  = n00b_mmap_register(lowest, highest, n00b_mmap_stack);
 }

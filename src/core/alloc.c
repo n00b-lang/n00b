@@ -3,6 +3,8 @@
 #include "core/arena.h"
 #include "core/alloc_mdata.h"
 #include "core/dict_untyped.h"
+#include "core/mmaps.h"
+#include "core/memory_info.h"
 
 #ifndef N00B_METADATA_START_ENTRIES
 #define N00B_METADATA_START_ENTRIES 1 << 12
@@ -11,7 +13,7 @@
 extern uint64_t n00b_gc_guard;
 
 static inline void
-n00b_alloc_add_inline_header(n00b_alloc_info_t **hdrp,
+n00b_alloc_add_inline_header(n00b_inline_hdr_t **hdrp,
                              size_t              alloc_len,
                              char               *type,
                              bool                is_array,
@@ -19,10 +21,10 @@ n00b_alloc_add_inline_header(n00b_alloc_info_t **hdrp,
                              bool                mem_debug,
                              bool                mem_debug_taint)
 {
-    n00b_alloc_info_t *hdr = *hdrp;
-    assert(alloc_len >= sizeof(n00b_alloc_info_t));
+    n00b_inline_hdr_t *hdr = *hdrp;
+    assert(alloc_len >= sizeof(n00b_inline_hdr_t));
 
-    *hdr = (n00b_alloc_info_t){
+    *hdr = (n00b_inline_hdr_t){
         .guard           = n00b_gc_guard,
         .tinfo           = type,
         .alloc_len       = alloc_len,
@@ -48,7 +50,7 @@ _n00b_alloc_raw(size_t n, size_t sz, char *base_type, const char *location) _kar
     bool              debug_taint = false;
 }
 {
-    n00b_alloc_info_t *hdr = nullptr;
+    n00b_inline_hdr_t *hdr = nullptr;
     n00b_ensure_allocator(allocator);
 
     if (!allocator->__system) {
@@ -58,12 +60,13 @@ _n00b_alloc_raw(size_t n, size_t sz, char *base_type, const char *location) _kar
     if (allocator->add_inline_header) {
         sz += N00B_ALLOC_HDR_SZ;
     }
+
     uint64_t request = n * sz;
+    void    *r;
+
     if (!request) {
         request = 1;
     }
-
-    void *r;
 
     request = n00b_align(request);
 
@@ -72,7 +75,7 @@ _n00b_alloc_raw(size_t n, size_t sz, char *base_type, const char *location) _kar
     if (allocator->add_inline_header) {
         hdr = r;
 
-        n00b_alloc_add_inline_header((n00b_alloc_info_t **)&r,
+        n00b_alloc_add_inline_header((n00b_inline_hdr_t **)&r,
                                      request,
                                      base_type,
                                      n > 1,
@@ -83,15 +86,15 @@ _n00b_alloc_raw(size_t n, size_t sz, char *base_type, const char *location) _kar
 
     if (allocator->metadata_arena != nullptr) {
         // clang-format off
-        n00b_alloc_metadata_t *map_item = _n00b_alloc_raw(
+        n00b_oob_hdr_t *map_item = _n00b_alloc_raw(
 	    1,
-	    sizeof(n00b_alloc_metadata_t),
+	    sizeof(n00b_oob_hdr_t),
 	    nullptr,
 	    nullptr,
 	    .allocator = allocator->metadata_arena);
         // clang-format on
 
-        *map_item = (n00b_alloc_metadata_t){
+        *map_item = (n00b_oob_hdr_t){
             .user_ptr        = r,
             .tinfo           = base_type,
             .alloc_len       = request,
@@ -159,8 +162,9 @@ n00b_allocator_setup(n00b_allocator_t *allocator, n00b_calloc_fn alloc) _kargs
 void
 n00b_free(void *ptr)
 {
-    n00b_allocator_t *allocator = n00b_mem_get_allocator(ptr);
-    assert(allocator);
+    n00b_allocator_opt_t alloc_opt = n00b_mem_get_allocator(ptr);
+    assert(n00b_option_is_set(alloc_opt));
+    n00b_allocator_t *allocator = n00b_option_get(alloc_opt);
 
     if (!allocator->free) {
         return;
@@ -195,7 +199,7 @@ n00b_add_finalizer(void *obj, n00b_finalizer_t fn)
     }
 
     n00b_finalizer_info_t *info = n00b_alloc(n00b_finalizer_info_t, .allocator = (void *)arena);
-    n00b_alloc_info_t *hdr = n00b_get_object_header(obj);
+    n00b_inline_hdr_t *hdr = n00b_object_header(obj);
 
     assert(hdr);
 
@@ -208,15 +212,28 @@ n00b_add_finalizer(void *obj, n00b_finalizer_t fn)
     n00b_list_append(arena->finalizers, info);
 }
 
-n00b_alloc_info_t *
-n00b_find_user_start_address(void *user_ptr, const void *start_ptr)
+#endif
+
+void
+n00b_allocator_destroy(n00b_allocator_t *allocator)
 {
-    uint64_t *start = (uint64_t *)start_ptr;
-    uint64_t *p     = (uint64_t *)n00b_align_floor((uint64_t)user_ptr, sizeof(void *));
+    if (allocator->metadata_arena) {
+        n00b_allocator_destroy(allocator->metadata_arena);
+    }
+
+    (*allocator->destroy)(allocator);
+}
+
+#define find_sentinal(p, s) _find_sentinal(((uint64_t)p), ((uint64_t *)s))
+
+static inline char *
+_find_sentinal(uint64_t p_num, uint64_t *start)
+{
+    uint64_t *p = (uint64_t *)n00b_align_floor(p_num, sizeof(void *));
 
     while (p >= start) {
         if (*p == n00b_gc_guard) {
-            return (n00b_alloc_info_t *)p;
+            return (char *)p;
         }
         p--;
     }
@@ -224,46 +241,34 @@ n00b_find_user_start_address(void *user_ptr, const void *start_ptr)
     return nullptr;
 }
 
-void *
-_n00b_find_alloc_info(void *addr) _kargs
+// Returns the most authoritative header, unless prefer_inline is set,
+// in which case it'll return the inline header.
+//
+// If you need to know if it's an out-of-heap pointer so you can cast it,
+// then provide is_metadata_header.
+//
+// Returns nullptr if not found. This obviously should all change to
+// return a variant, once I revisit variants.
+
+void
+_n00b_find_alloc_info(void *addr, n00b_alloc_info_t *result) _kargs
 {
-    n00b_mmap_info_t *info            = nullptr;
-    bool              scan_for_header = false;
+    bool scan_for_header = false;
 }
 {
-    // We expect to be handed the user pointer in most cases. If
-    // `scan_for_header` is true, then we can be anywhere in the user
-    // alloc though, but only for dynamically managed GC-able memory,
-    // until we better track object ranges for static objects.
-
-    if (!addr) {
-        return nullptr;
-    }
-
-    if (!info) {
-        info = n00b_mmap_by_address(addr);
-    }
-
-    if (!info) {
-        return nullptr;
-    }
-
-    char *p = (char *)addr;
-    void *result;
-    char *scan_ptr;
-
-    switch (info->kind) {
+    n00b_mmap_info_t *mmap = n00b_mmap_by_address(addr);
+    char             *p    = (char *)addr;
+    n00b_allocator_t *al   = mmap->allocator;
+    switch (mmap->kind) {
     case n00b_mmap_static:
-
-        // This should change to not require a pointer to the object start.
         if (n00b_check_memory_perms(p) == n00b_mmap_perms_no_access) {
-            return nullptr;
+            break;
         }
 
         p -= sizeof(n00b_static_header_t);
-
-        if (((uint64_t)p) < info->start) {
-            return nullptr;
+        if (((uint64_t)p) < mmap->start) {
+            *result = (n00b_alloc_info_t){.kind = n00b_alloc_none};
+            break;
         }
         n00b_static_header_t *sh = (n00b_static_header_t *)p;
 
@@ -271,71 +276,74 @@ _n00b_find_alloc_info(void *addr) _kargs
         // for the stack.
 
         if (sh->static_magic != N00B_STATIC_MAGIC && sh->static_magic != n00b_gc_guard) {
-            return nullptr;
+            break;
         }
 
-        return (void *)&sh->static_magic;
+        *result = (n00b_alloc_info_t){
+            .kind        = n00b_alloc_inline,
+            .hdr.in_line = (n00b_inline_hdr_t *)&sh->static_magic,
+        };
+        return;
     case n00b_mmap_pool:
-
-        // TODO: put back pool.
-        /*
-        if (scan_for_header) {
-            // Returns the user pointer.
-            scan_ptr = (char *)n00b_find_user_start_address(p, (void *)info->start);
-
-            if (scan_ptr) {
-                p = scan_ptr + arena->overhead;
-            }
-            else {
-                return nullptr;
-            }
-        }
-        p                      = p - arena->overhead;
-        n00b_alloc_info_t *hdr = (n00b_alloc_info_t *)p;
-
-        if (((uint64_t)p) < info->start || hdr->guard != n00b_gc_guard) {
-            return nullptr;
-        }
-        */
-        return p;
     case n00b_mmap_managed_segment:
     case n00b_mmap_sys_segment:
 
-        n00b_arena_t *arena = (n00b_arena_t *)info->allocator;
+        if (al->add_inline_header) {
+            p -= N00B_ALLOC_HDR_SZ;
+        }
 
-        if (scan_for_header) {
-            // Returns the user pointer.
-            scan_ptr = (char *)n00b_find_user_start_address(p, (void *)info->start);
+        if (scan_for_header && al->add_inline_header) {
+            char *scan_ptr = find_sentinal(p, (char *)mmap->start);
 
-            if (scan_ptr) {
-                p = scan_ptr + arena->overhead;
-            }
-            else {
-                return nullptr;
+            if (!scan_ptr) {
+                break;
             }
         }
 
-        if (arena->metadata) {
-            // This is keyed from the user pointer.
-            result = n00b_dict_untyped_get(arena->metadata, p, nullptr);
-
-            if (!result) {
-                return nullptr;
+        if (al->metadata) {
+            n00b_oob_hdr_t *oob = n00b_dict_untyped_get(al->metadata, p, nullptr);
+            if (!oob) {
+                *result = (n00b_alloc_info_t){.kind = n00b_alloc_err};
+                return;
             }
-        }
-        else {
-            p                      = p - arena->overhead;
-            n00b_alloc_info_t *hdr = (n00b_alloc_info_t *)p;
-
-            if (((uint64_t)p) < info->start || hdr->guard != n00b_gc_guard) {
-                return nullptr;
-            }
-            result = p;
+            *result = (n00b_alloc_info_t){
+                .kind    = n00b_alloc_oob,
+                .hdr.oob = oob,
+            };
+            return;
         }
 
-        return result;
+        n00b_inline_hdr_t *hdr = (n00b_inline_hdr_t *)p;
+
+        if (((uint64_t)p) < mmap->start || hdr->guard != n00b_gc_guard) {
+            *result = (n00b_alloc_info_t){.kind = n00b_alloc_err};
+            return;
+        }
+        *result = (n00b_alloc_info_t){
+            .kind        = n00b_alloc_inline,
+            .hdr.in_line = hdr,
+        };
+        return;
+
     default:
-        return nullptr;
+        break;
     }
+    *result = (n00b_alloc_info_t){.kind = n00b_alloc_none};
+    return;
 }
-#endif
+
+n00b_inline_hdr_opt_t
+n00b_object_header(void *p)
+{
+    n00b_alloc_info_t info = n00b_find_alloc_info(p);
+
+    if (!n00b_alloc_info_is_oob(info)) {
+        return n00b_alloc_info_inline(info);
+    }
+
+    n00b_oob_hdr_t *oob = info.hdr.oob;
+    if (!oob->hcur) {
+        return n00b_option_none(n00b_inline_hdr_t *);
+    }
+    return n00b_option_set(n00b_inline_hdr_t *, oob->hcur);
+}

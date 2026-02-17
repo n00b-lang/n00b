@@ -679,10 +679,85 @@ build_opaque_kargs_param(int line)
 }
 
 /**
- * @brief Build extraction declaration: type name = kargs->name;
+ * @brief Wrap a postfix_expression up through logical_OR_expression.
+ * Used to build the condition part of a ternary expression.
  */
 static tnode_t *
-build_extraction_decl(ncc_buf_t *input, tnode_t *kw_param, int line)
+wrap_to_lor(tnode_t *inner, int line)
+{
+    (void)line;
+
+    tnode_t *unary = synth_nonterminal("unary_expression_9");
+    unary->nt_id   = NT_unary_expression;
+    unary->branch  = 9;
+    add_child(unary, inner);
+
+    tnode_t *cast = synth_nonterminal("cast_expression_1");
+    cast->nt_id   = NT_cast_expression;
+    cast->branch  = 1;
+    add_child(cast, unary);
+
+    tnode_t *mult = synth_nonterminal("multiplicative_expression_3");
+    mult->nt_id   = NT_multiplicative_expression;
+    mult->branch  = 3;
+    add_child(mult, cast);
+
+    tnode_t *add = synth_nonterminal("additive_expression_2");
+    add->nt_id   = NT_additive_expression;
+    add->branch  = 2;
+    add_child(add, mult);
+
+    tnode_t *shift = synth_nonterminal("shift_expression_2");
+    shift->nt_id   = NT_shift_expression;
+    shift->branch  = 2;
+    add_child(shift, add);
+
+    tnode_t *rel = synth_nonterminal("relational_expression_4");
+    rel->nt_id   = NT_relational_expression;
+    rel->branch  = 4;
+    add_child(rel, shift);
+
+    tnode_t *eq = synth_nonterminal("equality_expression_2");
+    eq->nt_id   = NT_equality_expression;
+    eq->branch  = 2;
+    add_child(eq, rel);
+
+    tnode_t *and_ = synth_nonterminal("AND_expression_1");
+    and_->nt_id   = NT_AND_expression;
+    and_->branch  = 1;
+    add_child(and_, eq);
+
+    tnode_t *xor_ = synth_nonterminal("exclusive_OR_expression_1");
+    xor_->nt_id   = NT_exclusive_OR_expression;
+    xor_->branch  = 1;
+    add_child(xor_, and_);
+
+    tnode_t *or_ = synth_nonterminal("inclusive_OR_expression_1");
+    or_->nt_id   = NT_inclusive_OR_expression;
+    or_->branch  = 1;
+    add_child(or_, xor_);
+
+    tnode_t *land = synth_nonterminal("logical_AND_expression_1");
+    land->nt_id   = NT_logical_AND_expression;
+    land->branch  = 1;
+    add_child(land, or_);
+
+    tnode_t *lor = synth_nonterminal("logical_OR_expression_1");
+    lor->nt_id   = NT_logical_OR_expression;
+    lor->branch  = 1;
+    add_child(lor, land);
+
+    return lor;
+}
+
+/**
+ * @brief Build extraction declaration: type name = kargs->name;
+ * When default_init is non-NULL, generates:
+ *   type name = kargs->_has_name ? kargs->name : (default_value);
+ */
+static tnode_t *
+build_extraction_decl(ncc_buf_t *input, tnode_t *kw_param,
+                      tnode_t *default_init, int line)
 {
     tnode_t *decl_specs = find_child(kw_param, NT_declaration_specifiers);
     tnode_t *declarator = find_child(kw_param, NT_declarator);
@@ -722,13 +797,103 @@ build_extraction_decl(ncc_buf_t *input, tnode_t *kw_param, int line)
 
     add_child(init_decl, synth_terminal("=", TT_PUNCT, line));
 
-    // initializer: kargs->name
+    // initializer
     tnode_t *init = synth_nonterminal("initializer_1");
     init->nt_id   = NT_initializer;
     init->branch  = 1;
 
-    tnode_t *access = build_arrow_access("kargs", name, line);
-    add_child(init, wrap_in_expr_hierarchy(access, line));
+    if (default_init) {
+        // Build: kargs->_has_name ? kargs->name : (default_value)
+        //
+        // conditional_expression_0:
+        //   logical_OR_expression   (condition: kargs->_has_name)
+        //   "?"
+        //   expression              (true: kargs->name)
+        //   ":"
+        //   conditional_expression  (false: default_value)
+
+        // Condition: kargs->_has_name
+        char has_name[256];
+        snprintf(has_name, sizeof(has_name), "_has_%s", name);
+        tnode_t *cond_access = build_arrow_access("kargs", has_name, line);
+        tnode_t *cond_lor = wrap_to_lor(cond_access, line);
+
+        // True branch: kargs->name wrapped in expression
+        tnode_t *true_access = build_arrow_access("kargs", name, line);
+        tnode_t *true_assign = wrap_in_expr_hierarchy(true_access, line);
+
+        tnode_t *true_expr = synth_nonterminal("expression_0");
+        true_expr->nt_id   = NT_expression;
+        true_expr->branch  = 0;
+        add_child(true_expr, true_assign);
+
+        // False branch: default value wrapped in conditional_expression
+        // The default_init is an NT_initializer node (branch 1) containing
+        // an assignment_expression. We need the assignment_expression's
+        // inner conditional_expression for the false branch.
+        // Simplest: copy the initializer's child (assignment_expression),
+        // then extract the conditional from it, or just re-wrap the
+        // default expression.
+        //
+        // Since the default_init (branch 1) contains an assignment_expression,
+        // and assignment_expression (branch 1) contains a conditional_expression,
+        // we can copy the whole initializer's child and extract appropriately.
+        // But it's safest to just copy the entire default expression tree and
+        // wrap it in a fresh conditional_expression_1 (pass-through).
+        tnode_t *default_copy = copy_tree(default_init);
+        // default_copy is an NT_initializer; its first child is assignment_expression
+        tnode_t *default_assign = tnode_get_kid(default_copy, 0);
+
+        tnode_t *false_cond;
+        if (default_assign && default_assign->nt_id == NT_assignment_expression) {
+            // assignment_expression (branch 1) -> conditional_expression
+            tnode_t *inner_cond = tnode_get_kid(default_assign, 0);
+            if (inner_cond && inner_cond->nt_id == NT_conditional_expression) {
+                false_cond = inner_cond;
+            }
+            else {
+                // Wrap the whole default in a fresh conditional
+                false_cond = synth_nonterminal("conditional_expression_1");
+                false_cond->nt_id = NT_conditional_expression;
+                false_cond->branch = 1;
+                tnode_t *def_lor = wrap_to_lor(default_assign, line);
+                add_child(false_cond, def_lor);
+            }
+        }
+        else {
+            // Fallback: wrap default_copy's first child
+            false_cond = synth_nonterminal("conditional_expression_1");
+            false_cond->nt_id = NT_conditional_expression;
+            false_cond->branch = 1;
+            tnode_t *fallback = default_copy->num_kids > 0
+                              ? tnode_get_kid(default_copy, 0) : default_copy;
+            tnode_t *def_lor = wrap_to_lor(fallback, line);
+            add_child(false_cond, def_lor);
+        }
+
+        // Build the ternary: conditional_expression_0
+        tnode_t *ternary = synth_nonterminal("conditional_expression_0");
+        ternary->nt_id   = NT_conditional_expression;
+        ternary->branch  = 0;
+        add_child(ternary, cond_lor);
+        add_child(ternary, synth_terminal("?", TT_PUNCT, line));
+        add_child(ternary, true_expr);
+        add_child(ternary, synth_terminal(":", TT_PUNCT, line));
+        add_child(ternary, false_cond);
+
+        // Wrap ternary in assignment_expression
+        tnode_t *assign = synth_nonterminal("assignment_expression_1");
+        assign->nt_id   = NT_assignment_expression;
+        assign->branch  = 1;
+        add_child(assign, ternary);
+
+        add_child(init, assign);
+    }
+    else {
+        // No default: unconditional load from kargs->name
+        tnode_t *access = build_arrow_access("kargs", name, line);
+        add_child(init, wrap_in_expr_hierarchy(access, line));
+    }
 
     add_child(init_decl, init);
     add_child(init_decl_list, init_decl);
@@ -909,7 +1074,8 @@ xform_kw_definition(xform_ctx_t *ctx, tnode_t *node)
                     int insert_idx = 0;
                     for (int i = 0; i < param_count; i++) {
                         tnode_t *param = list_get(params, i);
-                        tnode_t *extract_item = build_extraction_decl(ctx->input, param, line);
+                        tnode_t *default_init = find_child(param, NT_initializer);
+                        tnode_t *extract_item = build_extraction_decl(ctx->input, param, default_init, line);
                         if (extract_item) {
                             insert_child_at(block_list, insert_idx++, extract_item);
                         }

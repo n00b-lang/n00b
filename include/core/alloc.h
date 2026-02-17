@@ -23,12 +23,6 @@ struct n00b_allocator_t {
     void                     *opaque[];
 };
 
-static inline void
-n00b_allocator_destroy(n00b_allocator_t *allocator)
-{
-    (*allocator->destroy)(allocator);
-}
-
 typedef uint64_t (*n00b_obj_size_helper)(void *);
 
 extern uint64_t n00b_gc_guard;
@@ -51,13 +45,22 @@ _n00b_alloc_raw(size_t n, size_t sz, char *base_type, const char *location) _kar
 };
 
 extern void n00b_free(void *ptr);
+extern void n00b_allocator_destroy(n00b_allocator_t *allocator);
 
-extern void *
-n00b_find_alloc_info(void *addr) _kargs
+extern void
+_n00b_find_alloc_info(void *addr, n00b_alloc_info_t *result) _kargs
 {
     n00b_allocator_t *allocator       = nullptr;
     bool              scan_for_header = false;
 };
+
+// Get this in the caller's frame.
+#define n00b_find_alloc_info(addr, ...)                                                        \
+    ({                                                                                         \
+        n00b_alloc_info_t _info;                                                               \
+        _n00b_find_alloc_info((addr), &_info __VA_OPT__(, __VA_ARGS__));                       \
+        _info;                                                                                 \
+    })
 
 extern void
 n00b_allocator_setup(n00b_allocator_t *allocator, n00b_calloc_fn alloc) _kargs
@@ -76,7 +79,7 @@ n00b_allocator_setup(n00b_allocator_t *allocator, n00b_calloc_fn alloc) _kargs
     bool                      __is_md_arena     = false;
 };
 
-static inline n00b_alloc_info_t *
+static inline n00b_inline_hdr_t *
 n00b_inline_alloc_header(void *p)
 {
     if (!p) {
@@ -93,7 +96,7 @@ n00b_inline_alloc_header(void *p)
         return nullptr;
     }
 
-    n00b_alloc_info_t *hdr = (n00b_alloc_info_t *)(uptr - N00B_ALLOC_HDR_SZ);
+    n00b_inline_hdr_t *hdr = (n00b_inline_hdr_t *)(uptr - N00B_ALLOC_HDR_SZ);
 
     if (hdr->guard == n00b_gc_guard) {
         return hdr;
@@ -120,44 +123,4 @@ n00b_inline_alloc_header(void *p)
                     N00B_TO_STRING(T1),                                                        \
                     N00B_LOC_STRING() __VA_OPT__(, __VA_ARGS__))
 
-static inline n00b_alloc_info_t *
-n00b_get_object_header(void *p)
-{
-    return n00b_find_alloc_info(p, nullptr);
-}
-
-static inline n00b_alloc_info_t *
-n00b_get_unsafe_alloc_header(n00b_alloc_info_t *h)
-{
-    // Given a header that may or may not be the inline one, get the
-    // inline one, if available.
-    if (!h || h->guard == n00b_gc_guard || h->guard == N00B_STATIC_MAGIC) {
-        return h;
-    }
-
-    return ((n00b_alloc_metadata_t *)h)->hcur;
-}
-
-static inline bool
-n00b_is_unsafe_alloc_header(n00b_alloc_info_t *h)
-{
-    if (!h || h->guard == n00b_gc_guard || h->guard == N00B_STATIC_MAGIC) {
-        return true;
-    }
-    return false;
-}
-
-static inline n00b_alloc_info_t *
-n00b_get_unsafe_header_for_addr(void *p)
-{
-    // Only return the header if it's inline.
-    n00b_alloc_info_t *hdr = n00b_get_object_header(p);
-    if (hdr) {
-        hdr = n00b_get_unsafe_alloc_header(hdr);
-        if (hdr->guard != n00b_gc_guard) {
-            return nullptr;
-        }
-    }
-
-    return hdr;
-}
+extern n00b_inline_hdr_opt_t n00b_object_header(void *p);
