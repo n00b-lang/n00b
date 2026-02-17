@@ -209,3 +209,9 @@ n00b = static_library('n00b',
     link_args: link_args,
     install: true,
 )
+
+test = executable('testie',
+    ['src/test/main.c'],
+    include_directories: incdir,
+    c_args: exe_c_args,    
+    link_with: [n00b])

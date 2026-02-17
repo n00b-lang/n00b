@@ -16,7 +16,8 @@
 
 size_t n00b_page_size = 0;
 
-static n00b_option_t(n00b_runtime_t *) default_runtime = n00b_option_none(n00b_runtime_t *);
+typedef n00b_option_t(n00b_runtime_t *) opt_rt_t;
+opt_rt_t n00b_default_runtime = n00b_option_none(n00b_runtime_t *);
 
 static inline void
 setup_envp(n00b_runtime_t *rt, char *envp[])
@@ -111,8 +112,8 @@ n00b_init(n00b_runtime_t *rt, int argc, char *argv[]) _kargs
 
     assert(rt);
 
-    if (!n00b_option_is_set(default_runtime)) {
-        default_runtime = n00b_option_set(n00b_runtime_t *, rt);
+    if (!n00b_option_is_set(n00b_default_runtime)) {
+        n00b_default_runtime = n00b_option_set(n00b_runtime_t *, rt);
     }
 
     if (numeric_locale) {

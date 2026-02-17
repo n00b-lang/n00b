@@ -443,6 +443,35 @@ tnode_last_tok(tnode_t *node)
     return nullptr;
 }
 
+// Collect leaf-token text from a tnode subtree into a buffer,
+// separated by spaces.  Handles both source and synthetic tokens
+// via tok_text_ptr().
+static inline ncc_buf_t *
+_collect_tnode_text(tnode_t *node, ncc_buf_t *input, ncc_buf_t *acc,
+                    bool *need_space)
+{
+    if (!node) {
+        return acc;
+    }
+    if (node->tptr) {
+        int   tlen;
+        const char *txt = tok_text_ptr(input, node->tptr, &tlen);
+        if (tlen > 0) {
+            if (*need_space) {
+                acc = ncc_buf_concat(acc, " ", 1);
+            }
+            acc          = ncc_buf_concat(acc, (char *)txt, tlen);
+            *need_space  = true;
+        }
+        return acc;
+    }
+    for (int i = 0; i < node->num_kids; i++) {
+        acc = _collect_tnode_text(tnode_get_kid(node, i), input, acc,
+                                 need_space);
+    }
+    return acc;
+}
+
 static inline char *
 normalize_type_node(tnode_t *node, ncc_buf_t *input)
 {
@@ -453,6 +482,25 @@ normalize_type_node(tnode_t *node, ncc_buf_t *input)
     tok_t *last  = tnode_last_tok(node);
     if (!first || !last) {
         return nullptr;
+    }
+
+    // If any leaf token is synthetic (has replacement text), we can't
+    // use the offset-based fast path because synthetic tokens don't
+    // reference the source buffer.  Walk the subtree instead.
+    if (first->replacement || last->replacement) {
+        ncc_buf_t *acc  = ncc_buf_alloc(0);
+        bool need_space  = false;
+        acc              = _collect_tnode_text(node, input, acc, &need_space);
+
+        // Null-terminate for get_munged_identifier.
+        char *type_str = base_alloc(acc->len + 1);
+        memcpy(type_str, acc->data, acc->len);
+        type_str[acc->len] = '\0';
+        base_dealloc(acc);
+
+        char *result = get_munged_identifier(type_str);
+        base_dealloc(type_str);
+        return result;
     }
 
     int start = first->offset;

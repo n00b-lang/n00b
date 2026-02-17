@@ -27,7 +27,7 @@
 // Type definition
 // ============================================================================
 
-#define n00b_list_tag(T) typeid("n00b_list", T)
+#define n00b_list_tid(T) typeid("n00b_list", T)
 /**
  * @brief Declare a list type for element type @p T.
  * @param T  Element type.
