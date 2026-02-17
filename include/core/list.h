@@ -2,7 +2,7 @@
  * @file list.h
  * @brief Type-safe dynamic array (growable list).
  *
- * @c base_list_t(T) provides a growable array that automatically resizes.
+ * @c n00b_list_t(T) provides a growable array that automatically resizes.
  * Type safety is enforced through ncc's @c typeid().
  *
  * All macros take lvalues directly (value semantics). They mutate
@@ -20,8 +20,7 @@
 
 #include <assert.h>
 
-#include "alloc.h"
-#include "macros.h"
+#include "core/alloc.h"
 
 // ============================================================================
 // Type definition
@@ -34,33 +33,34 @@
  *
  * Struct layout: @c { T *data; size_t len; size_t cap; }
  */
-#define base_list_t(T)                                                                         \
+#define n00b_list_t(T)                                                                         \
     struct n00b_list_tag(T) {                                                                  \
-        T     *data;                                                                           \
-        size_t len;                                                                            \
-        size_t cap;                                                                            \
+        T                *data;                                                                \
+        size_t            len;                                                                 \
+        size_t            cap;                                                                 \
+        n00b_allocator_t *allocator;                                                           \
     }
 
-/** @brief Tag-only reference — use after @c base_list_t(T) has defined the struct. */
-#define base_list_tag(T) struct n00b_list_tag(T)
+/** @brief Tag-only reference — use after @c n00b_list_t(T) has defined the struct. */
+#define n00b_list_tag(T) struct n00b_list_tag(T)
 
 // ============================================================================
 // Internal helpers
 // ============================================================================
 
-#define BASE_LIST_DEFAULT 16
+#define N00B_LIST_DEFAULT 16
 
 /** @brief Grow the backing storage by 2x. Internal helper. */
-#define base_list_grow(x)                                                                      \
+#define n00b_list_grow(x)                                                                      \
     ({                                                                                         \
-        size_t    _bl_newcap = (x).cap ? (x).cap * 2 : BASE_LIST_DEFAULT;                      \
+        size_t    _bl_newcap = (x).cap ? (x).cap * 2 : N00B_LIST_DEFAULT;                      \
         typeof(x) _bl_bigger = (typeof(x)){                                                    \
             .len  = (x).len,                                                                   \
             .cap  = _bl_newcap,                                                                \
-            .data = base_alloc(_bl_newcap * sizeof((x).data[0])),                              \
+            .data = n00b_alloc(_bl_newcap * sizeof((x).data[0]), .allocator = (x)->allocator), \
         };                                                                                     \
         memcpy(_bl_bigger.data, (x).data, (x).len * sizeof((x).data[0]));                      \
-        base_dealloc((x).data);                                                                \
+        n00b_free((x).data);                                                                   \
         _bl_bigger;                                                                            \
     })
 
@@ -68,30 +68,50 @@
 // Construction / destruction
 // ============================================================================
 
+#define n00b_list_set_allocator(lst, a)  ((lst)->allocator = (a);
+
 /**
- * @brief Create a new list with optional initial capacity.
+ * @brief Initialize a list with optional initial capacity, using the default allocator.
  * @param T     Element type.
  * @param ...   Optional initial capacity (default 16).
  */
-#define base_list_new(T, ...)                                                                  \
+#define n00b_list_init(T, ...)                                                                 \
     ({                                                                                         \
-        size_t _bl_max = BASE_FIRST(__VA_ARGS__ __VA_OPT__(, ) BASE_LIST_DEFAULT);             \
-        (base_list_tag(T)){                                                                    \
+        size_t _bl_max = N00B_FIRST(__VA_ARGS__ __VA_OPT__(, ) N00B_LIST_DEFAULT);             \
+        (n00b_list_tag(T)){                                                                    \
             .len  = 0,                                                                         \
             .cap  = _bl_max,                                                                   \
-            .data = base_alloc(_bl_max * sizeof(T)),                                           \
+            .data = n00b_alloc(_bl_max * sizeof(T)),                                           \
+        };                                                                                     \
+    })
+
+#define n00b_list_init_w_alloc(T, a, ...)                                                      \
+    ({                                                                                         \
+        size_t _bl_max = N00B_FIRST(__VA_ARGS__ __VA_OPT__(, ) N00B_LIST_DEFAULT);             \
+        (n00b_list_tag(T)){                                                                    \
+            .len       = 0,                                                                    \
+            .cap       = _bl_max,                                                              \
+            .data      = n00b_alloc(_bl_max * sizeof(T), .allocator = a),                      \
+            .allocator = a,                                                                    \
         };                                                                                     \
     })
 
 /**
- * @brief Heap-allocate a list (returns pointer).
+ * @brief Heap-allocate a list with the default allocator (returns pointer).
  * @param T     Element type.
  * @param ...   Optional initial capacity.
  */
-#define base_list_ptr(T, ...)                                                                  \
+#define n00b_list_ptr(T, ...)                                                                  \
     ({                                                                                         \
-        base_list_tag(T) *_bl_res = base_alloc(sizeof(base_list_tag(T)));                      \
-        *_bl_res                  = base_list_new(T __VA_OPT__(, ) __VA_ARGS__);               \
+        n00b_list_tag(T) *_bl_res = n00b_alloc(sizeof(n00b_list_tag(T)));                      \
+        *_bl_res                  = n00b_list_new(T __VA_OPT__(, ) __VA_ARGS__);               \
+        _bl_res;                                                                               \
+    })
+
+#define n00b_list_ptr_w_alloc(T, a, ...)                                                       \
+    ({                                                                                         \
+        n00b_list_tag(T) *_bl_res = n00b_alloc(sizeof(n00b_list_tag(T)));                      \
+        *_bl_res                  = n00b_list_new_w_alloc(T, a __VA_OPT__(, ) __VA_ARGS__);    \
         _bl_res;                                                                               \
     })
 
@@ -99,7 +119,7 @@
  * @brief Free the backing storage of a list.
  * @param x  List (lvalue).
  */
-#define base_list_free(x) base_dealloc((x).data)
+#define n00b_list_free(x) n00b_dealloc((x).data)
 
 // ============================================================================
 // Access
@@ -110,7 +130,7 @@
  * @param x  List (lvalue).
  * @param i  Index.
  */
-#define base_list_get(x, i)                                                                    \
+#define n00b_list_get(x, i)                                                                    \
     (*(({                                                                                      \
         size_t _bl_i = (i);                                                                    \
         if (_bl_i >= (x).len) {                                                                \
@@ -125,7 +145,7 @@
  * @param i    Index.
  * @param val  Value to assign.
  */
-#define base_list_set(x, i, val)                                                               \
+#define n00b_list_set(x, i, val)                                                               \
     ({                                                                                         \
         size_t _bl_i = (i);                                                                    \
         if (_bl_i >= (x).len) {                                                                \
@@ -143,10 +163,10 @@
  * @param x    List (lvalue, mutated in-place).
  * @param val  Value to append.
  */
-#define base_list_push(x, val)                                                                 \
+#define n00b_list_push(x, val)                                                                 \
     do {                                                                                       \
         if ((x).len == (x).cap) {                                                              \
-            (x) = base_list_grow((x));                                                         \
+            (x) = n00b_list_grow((x));                                                         \
         }                                                                                      \
         (x).data[(x).len++] = (val);                                                           \
     } while (0)
@@ -156,7 +176,7 @@
  * @param x  List (lvalue, mutated in-place).
  * @return The removed element.
  */
-#define base_list_pop(x)                                                                       \
+#define n00b_list_pop(x)                                                                       \
     ({                                                                                         \
         assert((x).len);                                                                       \
         (x).data[--(x).len];                                                                   \
@@ -168,7 +188,7 @@
  * @param i  Index to remove.
  * @return The removed element.
  */
-#define base_list_remove(x, i)                                                                 \
+#define n00b_list_remove(x, i)                                                                 \
     ({                                                                                         \
         size_t _bl_ri = (i);                                                                   \
         assert(_bl_ri < (x).len);                                                              \
@@ -187,7 +207,7 @@
  * @param x  List (lvalue, mutated in-place).
  * @return The removed element.
  */
-#define base_list_dequeue(x) base_list_remove(x, 0)
+#define n00b_list_dequeue(x) n00b_list_remove(x, 0)
 
 /**
  * @brief Insert an element at index, shifting existing elements right.
@@ -195,12 +215,12 @@
  * @param i    Index to insert at (0 <= i <= len).
  * @param val  Value to insert.
  */
-#define base_list_insert(x, i, val)                                                            \
+#define n00b_list_insert(x, i, val)                                                            \
     do {                                                                                       \
         size_t _bl_ii = (i);                                                                   \
         assert(_bl_ii <= (x).len);                                                             \
         if ((x).len == (x).cap) {                                                              \
-            (x) = base_list_grow((x));                                                         \
+            (x) = n00b_list_grow((x));                                                         \
         }                                                                                      \
         if (_bl_ii < (x).len) {                                                                \
             memmove(&(x).data[_bl_ii + 1],                                                     \
@@ -215,17 +235,17 @@
  * @brief Clear the list (reset length to 0, keep capacity).
  * @param x  List (lvalue).
  */
-#define base_list_clear(x) ((x).len = 0)
+#define n00b_list_clear(x) ((x).len = 0)
 
 // ============================================================================
 // Query
 // ============================================================================
 
 /** @brief Number of elements in the list. */
-#define base_list_len(x) ((x).len)
+#define n00b_list_len(x) ((x).len)
 
 /** @brief Allocated capacity. */
-#define base_list_cap(x) ((x).cap)
+#define n00b_list_cap(x) ((x).cap)
 
 /**
  * @brief Linear search for a value.
@@ -233,7 +253,7 @@
  * @param val  Value to find (compared with ==).
  * @return Index of first match, or @c (size_t)-1 if not found.
  */
-#define base_list_find(x, val)                                                                 \
+#define n00b_list_find(x, val)                                                                 \
     ({                                                                                         \
         size_t              _bl_found  = (size_t)-1;                                           \
         typeof((x).data[0]) _bl_needle = (val);                                                \
@@ -255,12 +275,12 @@
  * @param x  List (lvalue).
  * @return A new list with copied data.
  */
-#define base_list_clone(x)                                                                     \
+#define n00b_list_clone(x)                                                                     \
     ({                                                                                         \
         typeof(x) _bl_copy = (typeof(x)){                                                      \
             .len  = (x).len,                                                                   \
             .cap  = (x).cap,                                                                   \
-            .data = base_alloc((x).cap * sizeof((x).data[0])),                                 \
+            .data = n00b_alloc((x).cap * sizeof((x).data[0])),                                 \
         };                                                                                     \
         memcpy(_bl_copy.data, (x).data, (x).len * sizeof((x).data[0]));                        \
         _bl_copy;                                                                              \
@@ -271,10 +291,10 @@
  * @param dst  Destination list (lvalue, mutated).
  * @param src  Source list (lvalue).
  */
-#define base_list_extend(dst, src)                                                             \
+#define n00b_list_extend(dst, src)                                                             \
     do {                                                                                       \
         for (size_t _bl_ei = 0; _bl_ei < (src).len; _bl_ei++) {                                \
-            base_list_push((dst), (src).data[_bl_ei]);                                         \
+            n00b_list_push((dst), (src).data[_bl_ei]);                                         \
         }                                                                                      \
     } while (0)
 
@@ -283,7 +303,7 @@
  * @param x    List (lvalue).
  * @param cmp  Comparison function (same signature as qsort's compar).
  */
-#define base_list_sort(x, cmp) qsort((x).data, (x).len, sizeof((x).data[0]), (cmp))
+#define n00b_list_sort(x, cmp) qsort((x).data, (x).len, sizeof((x).data[0]), (cmp))
 
 // ============================================================================
 // Iteration
@@ -296,39 +316,10 @@
  *
  * Example:
  * @code
- *     base_list_foreach(lst, p) {
+ *     n00b_list_foreach(lst, p) {
  *         printf("%d\n", *p);
  *     }
  * @endcode
  */
-#define base_list_foreach(lst, var)                                                            \
+#define n00b_list_foreach(lst, var)                                                            \
     for (typeof((lst).data) var = (lst).data; (var) < (lst).data + (lst).len; ++(var))
-
-// ============================================================================
-// Compat aliases (unprefixed short names)
-// ============================================================================
-
-#define list_t(T)              base_list_t(T)
-#define list_tag(T)            base_list_tag(T)
-#define list_new(T, ...)       base_list_new(T __VA_OPT__(, ) __VA_ARGS__)
-#define list_push(x, val)      base_list_push(x, val)
-#define list_pop(x)            base_list_pop(x)
-#define list_at(x, i)          base_list_get(x, i)
-#define list_get(x, i)         base_list_get(x, i)
-#define list_set(x, i, val)    base_list_set(x, i, val)
-#define list_len(x)            base_list_len(x)
-#define list_cap(x)            base_list_cap(x)
-#define list_clear(x)          base_list_clear(x)
-#define list_free(x)           base_list_free(x)
-#define list_clone(x)          base_list_clone(x)
-#define list_foreach(x, var)   base_list_foreach(x, var)
-#define list_remove(x, i)      base_list_remove(x, i)
-#define list_dequeue(x)        base_list_dequeue(x)
-#define list_insert(x, i, val) base_list_insert(x, i, val)
-#define list_find(x, val)      base_list_find(x, val)
-#define list_sort(x, cmp)      base_list_sort(x, cmp)
-#define list_extend(dst, src)  base_list_extend(dst, src)
-#define list_ptr(T, ...)       base_list_ptr(T __VA_OPT__(, ) __VA_ARGS__)
-
-/** @brief No-op, kept for backward compatibility. */
-#define BASE_LIST_IMPL(...) /* no-op */

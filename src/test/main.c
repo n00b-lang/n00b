@@ -6,8 +6,11 @@
 n00b_linked_list_decl(char *);
 
 int
-main()
+main(int argc, char **argv)
 {
+    n00b_runtime_t runtime;
+    n00b_init(&runtime, argc, argv);
+
     n00b_linked_list_t(char *) ll;
     n00b_linked_list_zero(ll);
     n00b_linked_list_append(&ll, "hello,");

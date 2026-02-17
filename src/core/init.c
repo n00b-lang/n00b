@@ -37,7 +37,7 @@ setup_envp(n00b_runtime_t *rt, char *envp[])
 }
 
 static inline void
-setup_fd_limit(n00b_runtime_t *rt, int fd_limit)
+setup_fd_limit(n00b_runtime_t *rt, rlim_t fd_limit)
 {
     struct rlimit limits;
 

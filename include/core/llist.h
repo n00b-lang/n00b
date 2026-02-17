@@ -53,7 +53,7 @@
     }
 
 #define n00b_linked_list_append(lptr, item)                                                    \
-    ({                                                                                         \
+    {                                                                                          \
         auto                 _l = (lptr);                                                      \
         typeof(*(_l->head)) *nodep                                                             \
             = n00b_alloc(typeof(*(_l->head)), .allocator = _l->allocator);                     \
@@ -67,8 +67,7 @@
             _l->head = nodep;                                                                  \
         }                                                                                      \
         _l->tail = nodep;                                                                      \
-        lptr;                                                                                  \
-    })
+    }
 
 #define n00b_linked_list_first(lptr)                                                           \
     ({                                                                                         \
