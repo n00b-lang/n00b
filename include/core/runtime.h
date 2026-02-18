@@ -98,6 +98,8 @@ struct n00b_runtime_t {
     _Atomic(n00b_thread_t *)    thread_list[N00B_THREADS_MAX];
     uint32_t                    thread_generations[N00B_THREADS_MAX];
     n00b_base_allocator_t       slab_allocator;
+    n00b_futex_t                stw;
+    uint32_t                    stw_nesting;
 };
 
 extern void

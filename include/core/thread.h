@@ -31,12 +31,13 @@ struct n00b_thread_t {
         uint64_t unique_id;
     } id_info;
 
-    void             *stack_base;
-    void             *stack_top;
-    n00b_mmap_info_t *stack_map;
-    pthread_t         pthread_id;
-    n00b_option_t(pthread_attr_t) pthread_attrs;
+    void               *stack_base;
+    void               *stack_top;
+    n00b_mmap_info_t   *stack_map;
+    pthread_t           pthread_id;
     n00b_memperm_pipe_t memperm_pipe;
+    n00b_futex_t        self_lock;
+    n00b_option_t(pthread_attr_t) pthread_attrs;
 
 #if 0
     // Stuff to support the locking subsystem:
@@ -103,5 +104,3 @@ n00b_thread_init() _kargs
 extern void n00b_capture_stack_base(n00b_thread_t *, n00b_runtime_t *runtime);
 
 #endif
-
-#define n00b_thread_checkin()

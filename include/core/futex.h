@@ -94,8 +94,6 @@ n00b_futex_init(n00b_futex_t *futex)
     n00b_atomic_store(futex, 0);
 }
 
-#define n00b_thread_checkin()
-
 static inline int
 n00b_futex_wait(n00b_futex_t *futex, uint32_t v32, uint64_t nsec)
 {

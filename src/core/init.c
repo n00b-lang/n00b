@@ -13,6 +13,7 @@
 #include "core/mmaps.h"
 #include "core/alloc.h"
 #include "core/random.h"
+#include "core/stw.h"
 
 size_t   n00b_page_size = 0;
 uint64_t n00b_gc_guard  = 0;
@@ -114,7 +115,10 @@ n00b_init(n00b_runtime_t *rt, int argc, char *argv[]) _kargs
     }
 
     assert(rt);
-    *rt = (n00b_runtime_t){};
+    *rt = (n00b_runtime_t){
+        .stw         = N00B_NO_OWNER,
+        .stw_nesting = 0,
+    };
 
     if (!n00b_option_is_set(n00b_default_runtime)) {
         n00b_default_runtime = n00b_option_set(n00b_runtime_t *, rt);

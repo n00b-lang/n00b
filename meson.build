@@ -199,6 +199,7 @@ n00b_core = [
     'src/core/memory_info.c',
     'src/core/hash.c',
     'src/core/dict_untyped.c',
+    'src/core/stw.c',
 ]
 
 n00b_dll_src = n00b_core
