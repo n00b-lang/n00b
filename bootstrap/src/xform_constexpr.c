@@ -97,7 +97,7 @@ get_callee_name(xform_ctx_t *ctx, tnode_t *node)
 /**
  * @brief Emit a subtree to a dynamically allocated string.
  */
-static char *
+char *
 emit_node_to_string(xform_ctx_t *ctx, tnode_t *node)
 {
     char  *output = nullptr;
@@ -119,7 +119,7 @@ emit_node_to_string(xform_ctx_t *ctx, tnode_t *node)
  * The emitter inserts #line directives which would confuse the temporary
  * compilation. We remove them here.
  */
-static char *
+char *
 strip_line_directives(const char *src)
 {
     char  *out = nullptr;
@@ -290,7 +290,7 @@ is_from_system_header(lex_t *lex, tnode_t *node)
  *                   that is an ancestor of this node is skipped to avoid
  *                   emitting the still-untransformed containing declaration.
  */
-static char *
+char *
 emit_declarations(xform_ctx_t *ctx, tnode_t *call_node)
 {
     if (!ctx->symtab) {
@@ -390,7 +390,7 @@ emit_declarations(xform_ctx_t *ctx, tnode_t *call_node)
  *                   with temp file paths stripped. Caller must free.
  * @return Dynamically allocated string with program output, or nullptr on failure
  */
-static char *
+char *
 compile_and_run(const char *compiler, const char *source, char **err_out)
 {
     if (err_out) {

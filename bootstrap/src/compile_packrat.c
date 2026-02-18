@@ -148,6 +148,7 @@ extern void register_flatten_xform(xform_registry_t *reg);
 extern void register_vargs_xform(xform_registry_t *reg);
 extern void register_package_xform(xform_registry_t *reg);
 extern void register_constexpr_xform(xform_registry_t *reg);
+extern void register_constexpr_paste_xform(xform_registry_t *reg);
 
 // Find the source filename for a token position by scanning backward
 // for the most recent #line directive. Returns in_file if none found.
@@ -253,18 +254,6 @@ show_error_context(lex_t *lex, int tok_pos)
             fputc('~', stderr);
         }
         fputc('\n', stderr);
-    }
-
-    int textlen = toklen > 50 ? 50 : toklen;
-
-    bool        is_common_keyword = false;
-    const char *hint_keywords[]   = {"typedef", "struct", "extern", "static", "inline", "enum", "union", "__attribute__", nullptr};
-    for (const char **kw = hint_keywords; *kw; kw++) {
-        int kwlen = strlen(*kw);
-        if (textlen == kwlen && strncmp(tok_text, *kw, kwlen) == 0) {
-            is_common_keyword = true;
-            break;
-        }
     }
 
     fprintf(stderr,
@@ -607,6 +596,7 @@ compile_file(ncc_argv_t *argv_ctx)
     register_kw_call_xform(&xform_reg);
     register_bang_xform(&xform_reg);
     register_constexpr_xform(&xform_reg);
+    register_constexpr_paste_xform(&xform_reg);
 
     xform_ctx_t xform_ctx;
     xform_ctx_init(&xform_ctx, &ctx.lex_state, &st, ctx.tree);

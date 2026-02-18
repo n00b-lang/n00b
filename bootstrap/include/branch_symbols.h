@@ -76,6 +76,7 @@
     X(parameter_type_list, PARAM_LIST_ONLY, 5, 5)          \
     /* primary_expression branches */                 \
     X(synthetic_identifier, TYPEID, 0, 0)             \
+    X(synthetic_identifier, CONSTEXPR_PASTE, 1, 1)    \
     X(synthetic_string_literal, TYPESTR, 0, 0)        \
     /* selection_statement branches */                \
     X(selection_statement, IF_ELSE, 0, 0)             \

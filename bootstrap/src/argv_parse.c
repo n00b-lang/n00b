@@ -172,6 +172,10 @@ ncc_argv_parse(ncc_argv_t *ctx, int argc, char **argv)
         .has_no_ncc           = false,
         .has_help             = false,
         .has_c23              = false,
+        .has_dep_flags        = false,
+        .dep_file             = nullptr,
+        .dep_target_q         = nullptr,
+        .dep_target           = nullptr,
         .passthrough_only     = false,
         .has_stdin            = false,
         .filename_in_same_arg = false,
@@ -321,6 +325,57 @@ ncc_argv_parse(ncc_argv_t *ctx, int argc, char **argv)
             ctx->has_c        = true;
             ctx->flag_c_index = i;
             continue;
+        }
+
+        // Dependency generation flags (-MD/-MMD/-MF/-MQ/-MT)
+        if (!strcmp(arg, "-MD") || !strcmp(arg, "-MMD")) {
+            ctx->has_dep_flags = true;
+            continue;
+        }
+
+        {
+            bool  matched;
+            char *value = parse_flag_value(arg,
+                                           "-MF",
+                                           argc,
+                                           &i,
+                                           argv,
+                                           &matched);
+            if (matched) {
+                ctx->has_dep_flags = true;
+                ctx->dep_file      = value;
+                continue;
+            }
+        }
+
+        {
+            bool  matched;
+            char *value = parse_flag_value(arg,
+                                           "-MQ",
+                                           argc,
+                                           &i,
+                                           argv,
+                                           &matched);
+            if (matched) {
+                ctx->has_dep_flags = true;
+                ctx->dep_target_q  = value;
+                continue;
+            }
+        }
+
+        {
+            bool  matched;
+            char *value = parse_flag_value(arg,
+                                           "-MT",
+                                           argc,
+                                           &i,
+                                           argv,
+                                           &matched);
+            if (matched) {
+                ctx->has_dep_flags = true;
+                ctx->dep_target    = value;
+                continue;
+            }
         }
 
         // Handle -o flag (output file)

@@ -53,6 +53,112 @@ emit_to_stream(compile_ctx_t *ctx, FILE *out)
 }
 
 /**
+ * @brief Generate a proper dependency file from the original source.
+ *
+ * ncc preprocesses source before compiling, so the normal -MD/-MF/-MQ
+ * flags produce empty dep files (clang sees preprocessed code via stdin
+ * with no `#include` directives).  This runs a separate `-M` pass on the
+ * original source to capture real header dependencies.
+ *
+ * @param ctx Compilation context (must have valid compiler and argv).
+ */
+static void
+generate_depfile(compile_ctx_t *ctx)
+{
+    ncc_argv_t *argv = ctx->argv;
+
+    if (!argv->has_dep_flags || !argv->dep_file || !argv->num_sources) {
+        return;
+    }
+
+    int   max_args = argv->argc + 10;
+    char *dep_argv[max_args];
+    int   j = 0;
+
+    dep_argv[j++] = ctx->compiler;
+    dep_argv[j++] = "-M";
+    dep_argv[j++] = "-MF";
+    dep_argv[j++] = argv->dep_file;
+    dep_argv[j++] = "-fno-blocks";
+
+    if (argv->dep_target_q) {
+        dep_argv[j++] = "-MQ";
+        dep_argv[j++] = argv->dep_target_q;
+    }
+
+    if (argv->dep_target) {
+        dep_argv[j++] = "-MT";
+        dep_argv[j++] = argv->dep_target;
+    }
+
+    if (!argv->has_c23) {
+        dep_argv[j++] = "-std=c23";
+    }
+
+    for (int i = 1; i < argv->argc; i++) {
+        char *arg = argv->argv[i];
+
+        // Skip the source file (added explicitly at the end).
+        if (i == argv->source_indices[0]) {
+            continue;
+        }
+
+        // Skip compilation/output/dep flags we handle ourselves.
+        if (!strcmp(arg, "-c") || !strcmp(arg, "-MD") || !strcmp(arg, "-MMD")) {
+            continue;
+        }
+
+        if (i == argv->flag_o_index) {
+            if (!argv->filename_in_same_arg && i + 1 < argv->argc) {
+                i++;
+            }
+            continue;
+        }
+
+        if (strncmp(arg, "-MF", 3) == 0) {
+            if (strlen(arg) == 3 && i + 1 < argv->argc) {
+                i++;
+            }
+            continue;
+        }
+
+        if (strncmp(arg, "-MQ", 3) == 0) {
+            if (strlen(arg) == 3 && i + 1 < argv->argc) {
+                i++;
+            }
+            continue;
+        }
+
+        if (strncmp(arg, "-MT", 3) == 0) {
+            if (strlen(arg) == 3 && i + 1 < argv->argc) {
+                i++;
+            }
+            continue;
+        }
+
+        dep_argv[j++] = arg;
+    }
+
+    // Use the real source file so the preprocessor sees actual #includes.
+    dep_argv[j++] = argv->sources[0];
+    dep_argv[j]   = nullptr;
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        // Non-fatal: deps won't be tracked but compilation proceeds.
+        return;
+    }
+
+    if (pid == 0) {
+        execvp(ctx->compiler, dep_argv);
+        _exit(127);
+    }
+
+    int status;
+    waitpid(pid, &status, 0);
+}
+
+/**
  * @brief Invoke the compiler with transformed source on stdin.
  *
  * Builds a new argv that:
@@ -68,6 +174,10 @@ static void
 invoke_compiler(compile_ctx_t *ctx)
 {
     ncc_argv_t *argv = ctx->argv;
+
+    // Generate proper dependency file before compilation.
+    // Must run first since the main compilation strips dep flags.
+    generate_depfile(ctx);
 
     // Determine if we need to inject -std=c23:
     // - ncc implies C23 code, so always use C23
@@ -150,6 +260,30 @@ invoke_compiler(compile_ctx_t *ctx)
             // If no transforms, preserve the caller's -std flag.
             if (need_c23 && strncmp(arg, "-std=", 5) == 0) {
                 continue;
+            }
+            // Skip dependency flags (already handled by generate_depfile).
+            if (argv->has_dep_flags) {
+                if (!strcmp(arg, "-MD") || !strcmp(arg, "-MMD")) {
+                    continue;
+                }
+                if (strncmp(arg, "-MF", 3) == 0) {
+                    if (strlen(arg) == 3 && i + 1 < argv->argc) {
+                        i++;
+                    }
+                    continue;
+                }
+                if (strncmp(arg, "-MQ", 3) == 0) {
+                    if (strlen(arg) == 3 && i + 1 < argv->argc) {
+                        i++;
+                    }
+                    continue;
+                }
+                if (strncmp(arg, "-MT", 3) == 0) {
+                    if (strlen(arg) == 3 && i + 1 < argv->argc) {
+                        i++;
+                    }
+                    continue;
+                }
             }
             new_argv[j++] = arg;
         }

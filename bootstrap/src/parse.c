@@ -138,7 +138,7 @@
 #include "parse_internal.h"
 
 declare_nt(identifier, 2);
-declare_nt(synthetic_identifier, 1);
+declare_nt(synthetic_identifier, 2);
 declare_nt(typeid_atom, 2);
 declare_nt(typeid_continuation, 2);
 declare_nt(synthetic_string_literal, 2);
@@ -279,6 +279,21 @@ nt_branch(synthetic_identifier, 0)
     required_op("(");
     required_nt(typeid_atom);
     optional_nt(typeid_continuation);
+    required_op(")");
+    end_nt();
+}
+
+// [EXTENSION: NCC] constexpr_paste("prefix", expr) - produces identifier
+// by concatenating a string prefix with an integer expression result.
+// Example: constexpr_paste("item_", 3) -> item_3
+nt_branch(synthetic_identifier, 1)
+{
+    start_nt();
+    required_named_identifier(kw_constexpr_paste);
+    required_op("(");
+    required_nt(string_literal);
+    required_op(",");
+    required_nt(assignment_expression);
     required_op(")");
     end_nt();
 }

@@ -1096,9 +1096,11 @@ encoding_from_normalized_type_tree(norm_node_t *node)
 {
     char *long_str = encoding_long_from_normalized_type_tree(node);
 
-    uint8_t digest[SHA2_BLOCK_SIZE];
+    ncc_sha256_digest_t digest;
 
-    ncc_sha256_hash(long_str, strlen(long_str), (ncc_sha256_digest_t*)digest);
+    ncc_sha256_hash(long_str, strlen(long_str), digest);
+
+    uint8_t *dbytes = (uint8_t *)digest;
 
     // Tons of extra space in case everything hashes to 63 or 64.
     // We don't bother with the last 2 bytes either.
@@ -1108,9 +1110,9 @@ encoding_from_normalized_type_tree(norm_node_t *node)
     *p++      = '_';
 
     for (int i = 0; i < 30;) {
-        int c = digest[i++];
-        int d = digest[i++];
-        int e = digest[i++];
+        int c = dbytes[i++];
+        int d = dbytes[i++];
+        int e = dbytes[i++];
         int tmp;
 
         p   = map_one(c >> 2, p);
@@ -1575,8 +1577,10 @@ normalize_type_tokens(char *type_as_string)
 static char *
 hash_normalized_string(const char *normalized_str)
 {
-    uint8_t digest[SHA2_BLOCK_SIZE];
-    ncc_sha256_hash((void *)normalized_str, strlen(normalized_str), (ncc_sha256_digest_t *)digest);
+    ncc_sha256_digest_t digest;
+    ncc_sha256_hash((void *)normalized_str, strlen(normalized_str), digest);
+
+    uint8_t *dbytes = (uint8_t *)digest;
 
     char *res = base_calloc(96, sizeof(char));
     char *p   = res;
@@ -1584,9 +1588,9 @@ hash_normalized_string(const char *normalized_str)
     *p++      = '_';
 
     for (int i = 0; i < 30;) {
-        int c = digest[i++];
-        int d = digest[i++];
-        int e = digest[i++];
+        int c = dbytes[i++];
+        int d = dbytes[i++];
+        int e = dbytes[i++];
         int tmp;
 
         p   = map_one(c >> 2, p);

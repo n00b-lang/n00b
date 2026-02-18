@@ -43,6 +43,14 @@ typedef struct {
     bool has_c23; /**< True if -std=c23/c2y/gnu23/gnu2y specified */
     /** @} */
 
+    /** @name Dependency generation flags */
+    /** @{ */
+    bool  has_dep_flags; /**< True if -MD or -MMD present (dep generation requested) */
+    char *dep_file;      /**< Dependency output file from -MF (nullptr if absent) */
+    char *dep_target_q;  /**< Dependency target from -MQ, make-quoted (nullptr if absent) */
+    char *dep_target;    /**< Dependency target from -MT, unquoted (nullptr if absent) */
+    /** @} */
+
     /** @name Input sources */
     /** @{ */
     bool   has_stdin;      /**< True if "-" found as source (stdin input) */
