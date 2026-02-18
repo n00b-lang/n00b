@@ -3,7 +3,6 @@
 # Per-project standalone builds also use build/ inside each project.
 **/build*/
 
-
 **/bin/
 **/lib/
 

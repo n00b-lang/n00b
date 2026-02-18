@@ -1,0 +1,60 @@
+# Doxyfile.in — configured by Meson's configure_file().
+# Run:  meson compile -C build_debug docs
+
+PROJECT_NAME           = "@PROJECT_NAME@"
+PROJECT_NUMBER         = @PROJECT_VERSION@
+PROJECT_BRIEF          = "Type-safe runtime library with GC, allocators, and generic containers"
+OUTPUT_DIRECTORY       = @TOP_BUILDDIR@/docs
+STRIP_FROM_PATH        = @TOP_SRCDIR@/include
+
+# ---------------------------------------------------------------------------
+# Input
+# ---------------------------------------------------------------------------
+INPUT                  = @TOP_SRCDIR@/include
+RECURSIVE              = YES
+FILE_PATTERNS          = *.h
+EXCLUDE_PATTERNS       = */vendor/*
+
+# ---------------------------------------------------------------------------
+# Parsing
+# ---------------------------------------------------------------------------
+OPTIMIZE_OUTPUT_FOR_C  = YES
+TYPEDEF_HIDES_STRUCT   = YES
+EXTRACT_ALL            = NO
+EXTRACT_STATIC         = YES
+SORT_MEMBER_DOCS       = NO
+
+# Enable macro expansion so Doxygen can see through our macro layers.
+MACRO_EXPANSION        = YES
+EXPAND_ONLY_PREDEF     = YES
+
+# NCC extensions — expand to stubs so Doxygen doesn't choke.
+# _kargs blocks become empty (the keyword-arg block is invisible to Doxygen).
+# typeid / typestr / constexpr_* produce placeholder identifiers.
+PREDEFINED             = _kargs= \
+                         "typeid(...)=_doxy_id" \
+                         "typestr(...)=\"\"" \
+                         "constexpr_eval(...)=0" \
+                         "constexpr_paste(...)=_doxy_paste" \
+                         "constexpr_max(...)=0" \
+                         "constexpr_min(...)=0" \
+                         "N00B_MAP(macro, ...)=" \
+                         "N00B_MAP_COUNT(macro, count, ...)="
+
+# ---------------------------------------------------------------------------
+# Output
+# ---------------------------------------------------------------------------
+GENERATE_HTML          = YES
+HTML_OUTPUT            = html
+HTML_COLORSTYLE        = LIGHT
+GENERATE_LATEX         = NO
+GENERATE_MAN           = NO
+
+# Cross-referencing
+SOURCE_BROWSER         = YES
+REFERENCED_BY_RELATION = YES
+REFERENCES_RELATION    = YES
+
+# Warnings
+WARN_IF_UNDOCUMENTED   = NO
+WARN_NO_PARAMDOC       = NO

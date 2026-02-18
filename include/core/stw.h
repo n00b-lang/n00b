@@ -1,11 +1,16 @@
-// Current stop-the-world infrastructure.
-
+/**
+ * @file stw.h
+ * @brief Stop-the-world (STW) synchronization infrastructure.
+ *
+ * Provides thread suspension/resumption primitives used by the garbage
+ * collector to achieve a consistent snapshot of all thread stacks.
+ */
 #pragma once
 
 #include <setjmp.h>
 
 #include "n00b.h"
-#include "core/alloc.h"
+#include "core/thread.h"
 #include "core/macros.h"
 #include "core/runtime.h"
 
@@ -15,11 +20,30 @@
 #define N00B_RUNNING  0x00000000U
 #define N00B_NO_OWNER -1
 
-extern void _n00b_stop_the_world(char *);
-extern void _n00b_restart_the_world(char *);
-extern void _n00b_thread_suspend(char *);
-extern void _n00b_thread_resume(char *);
+/**
+ * @brief Halt all threads for GC.  Use the n00b_stop_the_world() macro.
+ * @pre  Runtime must be initialized; caller must be a registered thread.
+ * @post All other threads are suspended at safe points.
+ */
+extern void _n00b_stop_the_world(char *loc);
+
+/**
+ * @brief Resume all threads after GC.  Use the n00b_restart_the_world() macro.
+ * @pre  The calling thread holds the STW lock (via _n00b_stop_the_world).
+ * @post All suspended threads are resumed.
+ */
+extern void _n00b_restart_the_world(char *loc);
+
+/** @brief Suspend the calling thread (for blocking ops during STW). */
+extern void _n00b_thread_suspend(char *loc);
+
+/** @brief Resume the calling thread after a blocking suspension. */
+extern void _n00b_thread_resume(char *loc);
+
+/** @brief Check in with the STW subsystem (called after futex waits). */
 extern void n00b_thread_checkin(void);
+
+/** @brief Register the calling thread with the STW subsystem. */
 extern void n00b_thread_start(void);
 
 #define n00b_stop_the_world()    _n00b_stop_the_world(N00B_LOC_STRING())
@@ -80,6 +104,7 @@ typedef struct {
         }                                                                                      \
     }
 
+/** @pre Runtime must be initialized. */
 static inline bool
 n00b_world_is_stopped(void)
 {

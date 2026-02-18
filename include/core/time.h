@@ -1,3 +1,11 @@
+/**
+ * @file time.h
+ * @brief Time capture and comparison utilities.
+ *
+ * Provides nanosecond and microsecond timestamp helpers, duration
+ * arithmetic, and timespec comparison used by futex waits and GC
+ * statistics.
+ */
 #pragma once
 
 #include <time.h> // IWYU pragma: keep
@@ -8,6 +16,10 @@
 #define N00B_MS_PER_SEC   1000
 #define N00B_NS_PER_MS    1000000
 
+/**
+ * @brief Capture the current wall-clock time.
+ * @param output Duration structure to fill.
+ */
 static inline void
 n00b_capture_timestamp(n00b_duration_t *output)
 {
@@ -15,12 +27,23 @@ n00b_capture_timestamp(n00b_duration_t *output)
     output->tv_nsec *= N00B_NS_PER_US;
 }
 
+/**
+ * @brief Convert a duration to nanoseconds.
+ * @param d Duration to convert.
+ * @return  Total nanoseconds.
+ */
 static inline int64_t
 n00b_ns_from_duration(n00b_duration_t *d)
 {
     return d->tv_sec * N00B_NS_PER_SEC + d->tv_nsec;
 }
 
+/**
+ * @brief Compute the nanosecond difference between two durations.
+ * @param d1 First duration.
+ * @param d2 Second duration.
+ * @return   d1 - d2 in nanoseconds.
+ */
 static inline int64_t
 n00b_ns_minus(n00b_duration_t *d1, n00b_duration_t *d2)
 {
@@ -30,6 +53,10 @@ n00b_ns_minus(n00b_duration_t *d1, n00b_duration_t *d2)
     return ns1 - ns2;
 }
 
+/**
+ * @brief Get a monotonic nanosecond timestamp.
+ * @return Current monotonic time in nanoseconds.
+ */
 static inline int64_t
 n00b_ns_timestamp(void)
 {
@@ -40,6 +67,10 @@ n00b_ns_timestamp(void)
     return n00b_ns_from_duration(&d);
 }
 
+/**
+ * @brief Get a wall-clock microsecond timestamp.
+ * @return Current time in microseconds since the epoch.
+ */
 static inline int64_t
 n00b_us_timestamp(void)
 {
@@ -49,6 +80,12 @@ n00b_us_timestamp(void)
     return tv.tv_sec * N00B_USEC_PER_SEC * tv.tv_usec;
 }
 
+/**
+ * @brief Return true if @p t1 is strictly later than @p t2.
+ * @param t1 First timespec.
+ * @param t2 Second timespec.
+ * @return   true if t1 > t2.
+ */
 static inline bool
 n00b_timestamp_gt(struct timespec *t1,
                   struct timespec *t2)
@@ -63,6 +100,12 @@ n00b_timestamp_gt(struct timespec *t1,
     return t1->tv_nsec > t2->tv_nsec;
 }
 
+/**
+ * @brief Compute the absolute difference between two timespecs.
+ * @param t1     First timespec.
+ * @param t2     Second timespec.
+ * @param result Output: |t1 - t2|.
+ */
 static inline void
 n00b_timestamp_diff(struct timespec *t1,
                     struct timespec *t2,

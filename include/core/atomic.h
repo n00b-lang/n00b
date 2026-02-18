@@ -1,3 +1,10 @@
+/**
+ * @file atomic.h
+ * @brief Convenience wrappers around C11 atomics.
+ *
+ * All wrappers use explicit memory orderings (acquire/release or acq_rel)
+ * to avoid the overhead of sequential consistency where it is not needed.
+ */
 #pragma once
 
 #include <stdatomic.h> // IWYU pragma: export

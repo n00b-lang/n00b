@@ -16,6 +16,8 @@
 #include "core/atomic.h"
 #include "core/thread.h"
 #include "core/arena.h"
+#include "core/runtime.h"
+#include "core/interval_tree.h"
 
 // TODO
 // #include "core/stw.h"
@@ -76,7 +78,7 @@ n00b_extract_lib_info(struct dl_phdr_info *info, size_t size, void *unused)
 }
 
 #if defined(N00B_ALWAYS_RECHECK_STATIC_POINTERS)
-static inline n00b_mmap_info_t *
+static inline n00b_mmap_opt_t
 n00b_check_static_maps(void *addr)
 {
     dl_iterate_phdr(n00b_extract_lib_info, nullptr);
@@ -115,14 +117,14 @@ n00b_on_lib_load(const struct mach_header *hdr, intptr_t slide)
         uint64_t seg_end   = seg_start + command->vmsize;
 
         if (command->cmd == LC_SEGMENT_64) {
-            n00b_mmap_register((void *)seg_start,
-                               (void *)seg_end,
-                               seg_start ? n00b_mmap_static : n00b_mmap_zero_page,
-                               .file              = (char *)info.dli_fname,
-                               .binary_offset     = command->fileoff,
-                               .slide             = -slide,
-                               .order_id          = n00b_atomic_add(&static_order_id, 1),
-                               .definitely_unique = false);
+            (void)n00b_mmap_register((void *)seg_start,
+                                     (void *)seg_end,
+                                     seg_start ? n00b_mmap_static : n00b_mmap_zero_page,
+                                     .file              = (char *)info.dli_fname,
+                                     .binary_offset     = command->fileoff,
+                                     .slide             = -slide,
+                                     .order_id          = n00b_atomic_add(&static_order_id, 1),
+                                     .definitely_unique = false);
             assert(static_order_id != 1);
         }
 
@@ -140,23 +142,23 @@ n00b_load_static_ranges(void)
 #error "Unsupported OS"
 #endif
 
-static n00b_mmap_info_t *
+static n00b_mmap_opt_t
 n00b_check_kernel_page_map(const void *addr)
 {
     char *start = n00b_align_to_page_start((void *)addr);
     char  status[1];
 
     if (!start) {
-        return nullptr;
+        return n00b_option_none(n00b_mmap_info_t *);
     }
 
     // This cast is crucial due to different signatures across
     // mac + linux (signed vs. unsigned.
     if (mincore(start, n00b_page_size, (void *)status)) {
-        return nullptr;
+        return n00b_option_none(n00b_mmap_info_t *);
     }
     if (!(status[0] & MINCORE_TEST_BIT)) {
-        return nullptr;
+        return n00b_option_none(n00b_mmap_info_t *);
     }
 
     // Register just this one page.
@@ -167,10 +169,10 @@ n00b_check_kernel_page_map(const void *addr)
 }
 
 // This only gets called when lookup fails.
-static inline n00b_mmap_info_t *
+static inline n00b_mmap_opt_t
 n00b_check_for_unmanaged_map(const void *addr)
 {
-    n00b_mmap_info_t *result;
+    n00b_mmap_opt_t result;
     // On MacOS, we register for dynamic events, so don't need to make a
     // dynamic call; it would have been in the static list (minux some
     // race condition, where we'll just accept returning that an address
@@ -182,7 +184,7 @@ n00b_check_for_unmanaged_map(const void *addr)
 
 #if defined(__linux__) && defined(N00B_ALWAYS_RECHECK_STATIC_POINTERS)
     result = n00b_check_static_maps(addr);
-    if (result) {
+    if (n00b_option_is_set(result)) {
         return result;
     }
 #endif
@@ -192,14 +194,14 @@ n00b_check_for_unmanaged_map(const void *addr)
     return result;
 }
 
-n00b_mmap_info_t *
+n00b_mmap_opt_t
 n00b_mmap_info_lookup(const void *addr)
 {
-    n00b_mmap_info_t *result = n00b_mmap_by_address((void *)addr);
+    auto result = n00b_mmap_by_address((void *)addr);
 
-    if (result) {
-        if (result->kind == n00b_mmap_zero_page) {
-            return nullptr;
+    if (n00b_option_is_set(result)) {
+        if (n00b_option_get(result)->kind == n00b_mmap_zero_page) {
+            return n00b_option_none(n00b_mmap_info_t *);
         }
         return result;
     }
@@ -211,12 +213,13 @@ n00b_mmap_info_lookup(const void *addr)
 n00b_option_t(n00b_allocator_t *)
 n00b_find_allocator(void *val)
 {
-    n00b_mmap_info_t *mmap = n00b_mmap_info_lookup(val);
+    auto mmap_opt = n00b_mmap_info_lookup(val);
 
-    if (!mmap) {
+    if (!n00b_option_is_set(mmap_opt)) {
         return n00b_option_none(n00b_allocator_t *);
     }
 
+    n00b_mmap_info_t *mmap = n00b_option_get(mmap_opt);
     return n00b_option_from_nullable(n00b_allocator_t *, atomic_load(&mmap->allocator));
 }
 // clang-format on
@@ -386,13 +389,16 @@ n00b_memory_scan_next(n00b_memory_scan_t   *ctx,
     n00b_mmap_info_t *mmap   = nullptr;
 
     while (!result && (ctx->cur < ctx->end)) {
-        void *val = (void *)*ctx->cur;
-        mmap      = n00b_mmap_info_lookup(val);
+        void *val     = (void *)*ctx->cur;
+        auto  mmap_opt = n00b_mmap_info_lookup(val);
 
-        if (mmap && (mmap->kind & ctx->flags)) {
-            result   = (void *)ctx->cur;
-            ctx->cur = ctx->cur + 1;
-            break;
+        if (n00b_option_is_set(mmap_opt)) {
+            mmap = n00b_option_get(mmap_opt);
+            if (mmap->kind & ctx->flags) {
+                result   = (void *)ctx->cur;
+                ctx->cur = ctx->cur + 1;
+                break;
+            }
         }
         mmap     = nullptr;
         ctx->cur = ctx->cur + 1;
@@ -403,7 +409,7 @@ n00b_memory_scan_next(n00b_memory_scan_t   *ctx,
     }
 
     if (perms) {
-        *perms = mmap ? n00b_check_memory_perms(ctx->cur) : n00b_mmap_perms_data_not_addr;
+        *perms = n00b_check_memory_perms(ctx->cur);
     }
 
     if (tinfo) {
@@ -423,12 +429,9 @@ show_mem_info(n00b_mmap_info_t *n, bool all, unsigned int *lenp)
         return;
     }
 
-    show_mem_info(n->left, all, lenp);
-
     switch (n->kind) {
     case n00b_mmap_static:
         if (!all) {
-            show_mem_info(n->right, all, lenp);
             return;
         }
         else {
@@ -472,8 +475,7 @@ show_mem_info(n00b_mmap_info_t *n, bool all, unsigned int *lenp)
         kind_str = "n00b_mmap()    ";
         *lenp += (n->end - n->start);
         break;
-    case n00b_mmap_root: // Should have been explicitly skipped.
-    default:             // Should also be unreachable.
+    default:
         abort();
     }
 
@@ -497,7 +499,7 @@ show_mem_info(n00b_mmap_info_t *n, bool all, unsigned int *lenp)
                          n->file ? n->file : "*no name*");
         }
         else {
-            n00b_allocator_t *link = a->metadata_arena;
+            n00b_allocator_t *link = a->metadata_pool;
 
             n00b_fprintf(stderr,
                          "%s %s %p-%p (%'llu bytes, %'zu pages) arena @ "
@@ -523,19 +525,24 @@ show_mem_info(n00b_mmap_info_t *n, bool all, unsigned int *lenp)
                      (unsigned long long)(n->end - n->start),
                      (unsigned int)(n->end - n->start) / n00b_page_size);
     }
-
-    show_mem_info(n->right, all, lenp);
-    return;
 }
 
 void
 n00b_debug_memory_info(bool all)
 {
-    unsigned int len = 0;
+    unsigned int     len = 0;
+    n00b_mmap_ctx_t *ctx = n00b_global_mem_map(n00b_get_runtime());
 
-    n00b_mmap_info_t *n = &n00b_global_mem_map(n00b_get_runtime())->root;
-    show_mem_info(n->left, all, &len);
-    show_mem_info(n->right, all, &len);
+    n00b_allocator_t *alloc = (n00b_allocator_t *)&ctx->pool;
+    n00b_stack_t(void *) results = n00b_stack_new(void *, alloc);
+
+    (void)n00b_interval_search_ordered(ctx->mmap_tree, 0, UINT64_MAX, &results);
+
+    for (size_t i = 0; i < n00b_stack_len(results); i++) {
+        n00b_interval_node_t *node = results.data[i];
+        show_mem_info((n00b_mmap_info_t *)node->data, all, &len);
+    }
+
     n00b_fprintf(stderr,
                  "\nTotal heap usage: %'u bytes (%'zu pages)\n",
                  len,

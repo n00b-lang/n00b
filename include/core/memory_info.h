@@ -1,3 +1,11 @@
+/**
+ * @file memory_info.h
+ * @brief Memory introspection API.
+ *
+ * Provides tools for querying memory permissions, scanning address
+ * ranges for pointers, looking up allocator ownership, and classifying
+ * addresses as heap, static, or unmanaged.
+ */
 #pragma once
 
 #include "n00b.h"
@@ -5,58 +13,70 @@
 #include "core/mmaps.h"
 #include "core/option.h"
 
-// This API is got getting info about memory, whether or not it is
-// managed.
-//
-// For known managed memory, alloc_structs.h contains the core accounting
-// structures for managed allocations.
-
 typedef struct n00b_memory_scan_t {
     uint64_t *cur;
     uint64_t *end;
     uint32_t  flags;
 } n00b_memory_scan_t;
 
-// Returns the length of a "likely string". A likely string currently
-// is a C-style string with a null terminator, compatable with UTF-8 encoding.
+/**
+ * @brief Test whether @p addr points to a probable UTF-8 C string.
+ * @param addr    Address to test.
+ * @param bytelen Output: byte length of the string (if found).
+ * @param min_len Minimum codepoint count to qualify.
+ * @return        Number of codepoints, or 0 if not a likely string.
+ */
 extern size_t n00b_address_is_probable_cstring(void *addr, size_t *bytelen, size_t min_len);
 
-// Sets up a scan for a range of memory, to look for pointers.  The
-// initializor aligns memory, and checks the first and last page to
-// see if they're readable. It returns true if initialization is
-// successful, and false if not (either because it's not memory, or
-// the memory is not currently readable).
-//
-// The cat_flags field should be an OR-ing of:
-//  - n00b_static_addr
-//  - n00b_managed_heap_addr
-//  - n00b_unmanaged_heap_addr
-//
-// Passing anything else sets all 3 flags.
-//
-// The user is expected to ensure the pages don't go away or change
-// perms in their lifetime. Note that we do not currently bother
-// checking intermediate pages.
+/**
+ * @brief Initialize a pointer-scanning context over a memory range.
+ *
+ * Aligns memory and checks the first and last pages for readability.
+ * The @p cat_flags field should be an OR of:
+ *  - n00b_static_addr
+ *  - n00b_managed_heap_addr
+ *  - n00b_unmanaged_heap_addr
+ * Passing anything else sets all three flags.
+ *
+ * @param ctx       Scan context to initialize.
+ * @param s         Start of the range.
+ * @param len       Length in bytes.
+ * @param cat_flags Category flags for filtering.
+ * @return          true on success, false if memory is unreadable.
+ * @pre @p s + @p len does not overflow.
+ * @post On success, @p ctx is ready for iteration via n00b_memory_scan_next().
+ */
 extern bool
 n00b_memory_scan_init(n00b_memory_scan_t *ctx, void *s, size_t len, uint8_t cat_flags);
 
-// The actual scanner returns nullptr when it has run out of pointers of
-// the specified kind.
-//
-// The second argument may be null, but if provided, it will return
-// one of the three above flags depending on the type of memory, or
-//  n00b_data_not_addr if no more pointers are in the range.
-
+/**
+ * @brief Advance the scanner to the next pointer in the range.
+ * @param ctx   Scan context.
+ * @param tinfo Output: kind of memory the pointer points to (may be NULL).
+ * @param perms Output: permissions of the target page (may be NULL).
+ * @return      Next pointer found, or NULL when exhausted.
+ */
 extern void *n00b_memory_scan_next(n00b_memory_scan_t   *ctx,
                                    n00b_mmap_rec_kind_t *tinfo,
                                    n00b_mmap_perms_t    *perms);
 
+/**
+ * @brief Check the memory permissions for the page containing @p ptr.
+ * @param ptr Address to check.
+ * @return    Permission category.
+ */
 extern n00b_mmap_perms_t n00b_check_memory_perms(void *ptr);
 
 #if defined(N00B_MEM_INTERNAL_API)
+/** @brief Initialize the per-thread memperm pipe cache (internal). */
 extern void n00b_init_memperm_pipe_cache(void);
 #endif
 
+/**
+ * @brief Check whether the page at @p ptr is readable.
+ * @param ptr Address to check.
+ * @return    true if the page has read or read-write permissions.
+ */
 static inline bool
 n00b_memory_is_readable(void *ptr)
 {
@@ -69,36 +89,64 @@ n00b_memory_is_readable(void *ptr)
     }
 }
 
-extern n00b_mmap_info_t *n00b_mmap_info_lookup(const void *addr);
+/**
+ * @brief Look up mmap info for an address.
+ * @param addr Address to look up.
+ * @return     Optional mmap info record.
+ */
+extern n00b_mmap_opt_t n00b_mmap_info_lookup(const void *addr);
 
+/**
+ * @brief Find the allocator responsible for an address.
+ * @param val Address to look up.
+ * @return    Optional allocator pointer.
+ */
 extern n00b_option_t(n00b_allocator_t *) n00b_find_allocator(void *val);
 // Find all global mmap entries with an exact name match.
 // TODO: replace
 // extern n00b_list_t      *n00b_mmaps_by_file(char *);
 
+/**
+ * @brief Check whether @p ptr is a data value (not a valid pointer into a mapping).
+ * @param ptr Value to check.
+ * @return    true if @p ptr is not a recognized pointer.
+ */
 static inline bool
 n00b_value_is_data(void *ptr)
 {
-    n00b_mmap_info_t *mmap = n00b_mmap_by_address(ptr);
+    auto mmap_opt = n00b_mmap_by_address(ptr);
 
-    return (!mmap || n00b_check_memory_perms(ptr) == n00b_mmap_perms_no_access);
+    return (!n00b_option_is_set(mmap_opt)
+            || n00b_check_memory_perms(ptr) == n00b_mmap_perms_no_access);
 }
 
+/**
+ * @brief Check whether @p ptr is likely a valid pointer.
+ * @param ptr Value to check.
+ * @return    true if @p ptr points into a known mapping.
+ */
 static inline bool
 n00b_value_is_likely_pointer(void *ptr)
 {
     return !n00b_value_is_data(ptr);
 }
 
-// We don't consider direct calls to mmap to be in-heap. They need to
-// use our arena interface.
+/**
+ * @brief Check whether @p ptr is inside a GC-managed heap region.
+ *
+ * Direct mmap calls are not considered in-heap; only allocations
+ * through the arena interface qualify.
+ *
+ * @param ptr Address to check.
+ * @return    true if inside a managed segment or pool.
+ */
 static inline bool
 n00b_in_heap(void *ptr)
 {
-    n00b_mmap_info_t *mmap = n00b_mmap_by_address(ptr);
+    auto mmap_opt = n00b_mmap_by_address(ptr);
 
-    if (mmap) {
-        switch (mmap->kind) {
+    if (n00b_option_is_set(mmap_opt)) {
+        switch (n00b_option_get(mmap_opt)->kind) {
         case n00b_mmap_managed_segment:
         case n00b_mmap_sys_segment:
         case n00b_mmap_pool:
@@ -113,6 +161,11 @@ n00b_in_heap(void *ptr)
 #if defined(N00B_USE_INTERNAL_API)
 extern uint64_t n00b_gc_guard;
 
+/**
+ * @brief Check whether an inline header is a metadata record.
+ * @param h Inline header to check.
+ * @return  true if the guard's low bit is clear (metadata record).
+ */
 static inline bool
 n00b_is_mem_metadata_record(n00b_inline_hdr_t *h)
 {
@@ -121,15 +174,28 @@ n00b_is_mem_metadata_record(n00b_inline_hdr_t *h)
 #endif
 
 #if !defined(N00B_MEM_INTERNAL_API)
+/** @brief Register the process's static data segments in the mmap registry. */
 extern void n00b_load_static_ranges(void);
 #endif
 
 #if defined(N00B_SHOW_ARENAS_ON_GC)
-extern void n00b_debug_memory_info(bool);
+/**
+ * @brief Dump arena memory info for debugging.
+ * @param all If true, print all arenas; otherwise only active ones.
+ */
+extern void n00b_debug_memory_info(bool all);
 #endif
 
-#if 0 // TODO
-
+#if defined(N00B_USE_INTERNAL_API) || defined(N00B_MEM_INTERNAL_API)
+/**
+ * @brief Cast an inline header to the out-of-band metadata record.
+ *
+ * Returns @c nullptr if @p info is null or has the inline guard bit set
+ * (meaning it is a true inline header, not an aliased OOB record).
+ *
+ * @param info  Pointer to an inline header (may actually be OOB).
+ * @return      The OOB record, or @c nullptr.
+ */
 static inline n00b_oob_hdr_t *
 n00b_to_mem_metadata_record(n00b_inline_hdr_t *info)
 {

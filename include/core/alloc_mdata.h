@@ -1,6 +1,11 @@
-// This is the common memory layout for managed memory, whether static
-// or dynamic. It includes out-of-heap accounting.
-
+/**
+ * @file alloc_mdata.h
+ * @brief Allocation metadata structures.
+ *
+ * Common memory layout for managed memory, whether static or dynamic.
+ * Includes inline headers, out-of-band headers, allocation info queries,
+ * and static-data declaration macros.
+ */
 #pragma once
 #include "n00b.h"
 #include "core/align.h"
@@ -60,6 +65,11 @@ typedef struct n00b_alloc_info_t {
 typedef n00b_option_decl(n00b_oob_hdr_t *) n00b_oob_hdr_opt_t;
 typedef n00b_option_decl(n00b_inline_hdr_t *) n00b_inline_hdr_opt_t;
 
+/**
+ * @brief Extract the out-of-band header from an alloc info, if present.
+ * @param info Allocation info to query.
+ * @return     Optional OOB header pointer.
+ */
 static inline n00b_oob_hdr_opt_t
 n00b_alloc_info_oob(n00b_alloc_info_t info)
 {
@@ -69,6 +79,11 @@ n00b_alloc_info_oob(n00b_alloc_info_t info)
     return n00b_option_set(n00b_oob_hdr_t *, info.hdr.oob);
 }
 
+/**
+ * @brief Extract the inline header from an alloc info, if present.
+ * @param info Allocation info to query.
+ * @return     Optional inline header pointer.
+ */
 static inline n00b_inline_hdr_opt_t
 n00b_alloc_info_inline(n00b_alloc_info_t info)
 {

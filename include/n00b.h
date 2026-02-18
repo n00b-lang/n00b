@@ -1,3 +1,10 @@
+/**
+ * @file n00b.h
+ * @brief Central header for the n00b runtime library.
+ *
+ * Provides core typedefs, forward declarations, and common macros used
+ * throughout the n00b project.  Every other n00b header includes this.
+ */
 #pragma once
 
 // Current N00b version info.
@@ -35,7 +42,7 @@ typedef void (*n00b_system_finalizer_fn)(void *);
 
 typedef struct n00b_runtime_t        n00b_runtime_t;
 typedef struct n00b_segment_t        n00b_segment_t;
-typedef struct n00b_mmap_node_t      n00b_mmap_info_t;
+typedef struct n00b_mmap_info_t       n00b_mmap_info_t;
 typedef struct n00b_arena_t          n00b_arena_t;
 typedef char                        *n00b_alloc_type_info_t;
 typedef struct n00b_inline_hdr_t     n00b_inline_hdr_t;

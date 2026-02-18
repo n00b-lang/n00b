@@ -200,6 +200,8 @@ n00b_core = [
     'src/core/hash.c',
     'src/core/dict_untyped.c',
     'src/core/stw.c',
+    'src/core/gc.c',
+    'src/core/interval_tree.c',
 ]
 
 n00b_dll_src = n00b_core
@@ -213,8 +215,128 @@ n00b = static_library('n00b',
     install: true,
 )
 
-test = executable('testie',
+test_common_kwargs = {
+    'include_directories': incdir,
+    'c_args': exe_c_args,
+    'link_with': [n00b],
+}
+
+testie = executable('testie',
     ['src/test/main.c'],
-    include_directories: incdir,
-    c_args: exe_c_args,    
-    link_with: [n00b])
+    kwargs: test_common_kwargs,
+)
+
+list_test = executable('test_list',
+    ['test/unit/test_list.c'],
+    kwargs: test_common_kwargs,
+)
+test('list', list_test, suite: 'unit')
+
+stack_test = executable('test_stack',
+    ['test/unit/test_stack.c'],
+    kwargs: test_common_kwargs,
+)
+test('stack', stack_test, suite: 'unit')
+
+result_test = executable('test_result',
+    ['test/unit/test_result.c'],
+    kwargs: test_common_kwargs,
+)
+test('result', result_test, suite: 'unit')
+
+variant_test = executable('test_variant',
+    ['test/unit/test_variant.c'],
+    kwargs: test_common_kwargs,
+)
+test('variant', variant_test, suite: 'unit')
+
+tuple_test = executable('test_tuple',
+    ['test/unit/test_tuple.c'],
+    kwargs: test_common_kwargs,
+)
+test('tuple', tuple_test, suite: 'unit')
+
+tree_test = executable('test_tree',
+    ['test/unit/test_tree.c'],
+    kwargs: test_common_kwargs,
+)
+test('tree', tree_test, suite: 'unit')
+
+gc_test = executable('test_gc',
+    ['test/unit/test_gc.c'],
+    kwargs: test_common_kwargs,
+)
+test('gc', gc_test, suite: 'unit')
+
+# ============================================================================
+# Integration tests
+# ============================================================================
+
+hash_test = executable('test_hash',
+    ['test/integration/test_hash.c'],
+    kwargs: test_common_kwargs,
+)
+test('hash', hash_test, suite: 'integration')
+
+interval_tree_test = executable('test_interval_tree',
+    ['test/integration/test_interval_tree.c'],
+    kwargs: test_common_kwargs,
+)
+test('interval_tree', interval_tree_test, suite: 'integration')
+
+dict_untyped_test = executable('test_dict_untyped',
+    ['test/integration/test_dict_untyped.c'],
+    kwargs: test_common_kwargs,
+)
+test('dict_untyped', dict_untyped_test, suite: 'integration')
+
+arena_alloc_test = executable('test_arena_alloc',
+    ['test/integration/test_arena_alloc.c'],
+    kwargs: test_common_kwargs,
+)
+test('arena_alloc', arena_alloc_test, suite: 'integration')
+
+pool_alloc_test = executable('test_pool_alloc',
+    ['test/integration/test_pool_alloc.c'],
+    kwargs: test_common_kwargs,
+)
+test('pool_alloc', pool_alloc_test, suite: 'integration')
+
+mmaps_test = executable('test_mmaps',
+    ['test/integration/test_mmaps.c'],
+    kwargs: test_common_kwargs,
+)
+test('mmaps', mmaps_test, suite: 'integration')
+
+alloc_metadata_test = executable('test_alloc_metadata',
+    ['test/integration/test_alloc_metadata.c'],
+    kwargs: test_common_kwargs,
+)
+test('alloc_metadata', alloc_metadata_test, suite: 'integration')
+
+# ============================================================================
+# Documentation (Doxygen)
+# ============================================================================
+
+doxygen = find_program('doxygen', required: false)
+
+if doxygen.found()
+  doxyfile = configure_file(
+    input: 'Doxyfile.in',
+    output: 'Doxyfile',
+    configuration: {
+      'PROJECT_NAME': meson.project_name(),
+      'PROJECT_VERSION': meson.project_version(),
+      'TOP_SRCDIR': meson.project_source_root(),
+      'TOP_BUILDDIR': meson.project_build_root(),
+    },
+  )
+
+  custom_target('docs',
+    input: doxyfile,
+    output: 'html',
+    command: [doxygen, '@INPUT@'],
+    build_by_default: false,
+    install: false,
+  )
+endif

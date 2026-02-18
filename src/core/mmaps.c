@@ -9,6 +9,7 @@
 #include "core/align.h"
 #include "core/pool.h"
 #include "core/thread.h"
+#include "core/interval_tree.h"
 
 // TODO: fix this
 // #include "io/print.h"
@@ -17,390 +18,15 @@
 
 #include <sys/mman.h>
 #include <unistd.h>
-
-#define N00B_MMAPS_PTR_SEED 0xdeadbeefu
+#include <errno.h>
 
 #if !defined(N00B_MMAPS_START_PAGES)
 #define N00B_MMAPS_START_PAGES 16
 #endif
 
-static n00b_mmap_node_t *mmaps_insert_raw(n00b_mmap_ctx_t     *ctx,
-                                          void                *startp,
-                                          uint64_t             blen,
-                                          n00b_mmap_rec_kind_t kind,
-                                          uint64_t             binary_offset);
-
-static inline bool
-overlaps(n00b_mmap_node_t *ancestor, n00b_mmap_node_t *n)
-{
-    if (n->end <= ancestor->start) {
-        return false;
-    }
-
-    if (n->start >= ancestor->end) {
-        return false;
-    }
-
-    return true;
-}
-
-static inline uint32_t
-treap_next_priority(n00b_mmap_ctx_t *ctx)
-{
-    uint32_t x = ctx->treap_seed;
-    x ^= x << 13;
-    x ^= x >> 17;
-    x ^= x << 5;
-    if (!x) {
-        x = 0x9e3779b9u;
-    }
-    ctx->treap_seed = x;
-    return x;
-}
-
-static inline void
-recompute_bounds(n00b_mmap_node_t *n)
-{
-    n00b_mmap_node_t *l   = n00b_atomic_load(&n->left);
-    n00b_mmap_node_t *r   = n00b_atomic_load(&n->right);
-    uint64_t          min = n->start;
-    uint64_t          max = n->end;
-
-    if (l) {
-        if (l->subtree_min < min) {
-            min = l->subtree_min;
-        }
-        if (l->subtree_max > max) {
-            max = l->subtree_max;
-        }
-    }
-
-    if (r) {
-        if (r->subtree_min < min) {
-            min = r->subtree_min;
-        }
-        if (r->subtree_max > max) {
-            max = r->subtree_max;
-        }
-    }
-
-    n->subtree_min = min;
-    n->subtree_max = max;
-}
-
-static inline void
-propagate_bounds_up(n00b_mmap_node_t *n)
-{
-    while (n) {
-        recompute_bounds(n);
-        n = n00b_atomic_load(&n->parent);
-    }
-}
-
-static inline n00b_mmap_node_t *
-find_overlap(n00b_mmap_node_t *root, n00b_mmap_node_t *needle)
-{
-    while (root) {
-        if (overlaps(root, needle)) {
-            return root;
-        }
-
-        n00b_mmap_node_t *l = n00b_atomic_load(&root->left);
-        if (l && l->subtree_max > needle->start) {
-            root = l;
-            continue;
-        }
-
-        root = n00b_atomic_load(&root->right);
-    }
-
-    return NULL;
-}
-
-static n00b_mmap_node_t *
-rotate_left(n00b_mmap_node_t *x)
-{
-    n00b_mmap_node_t *y = n00b_atomic_load(&x->right);
-    n00b_mmap_node_t *p = n00b_atomic_load(&x->parent);
-    n00b_mmap_node_t *b = y ? n00b_atomic_load(&y->left) : NULL;
-
-    assert(y);
-
-    n00b_atomic_store(&x->right, b);
-    if (b) {
-        n00b_atomic_store(&b->parent, x);
-    }
-
-    n00b_atomic_store(&y->left, x);
-    n00b_atomic_store(&x->parent, y);
-
-    if (p) {
-        if (n00b_atomic_load(&p->left) == x) {
-            n00b_atomic_store(&p->left, y);
-        }
-        else {
-            n00b_atomic_store(&p->right, y);
-        }
-    }
-    n00b_atomic_store(&y->parent, p);
-
-    recompute_bounds(x);
-    recompute_bounds(y);
-    return y;
-}
-
-static n00b_mmap_node_t *
-rotate_right(n00b_mmap_node_t *y)
-{
-    n00b_mmap_node_t *x = n00b_atomic_load(&y->left);
-    n00b_mmap_node_t *p = n00b_atomic_load(&y->parent);
-    n00b_mmap_node_t *b = x ? n00b_atomic_load(&x->right) : NULL;
-
-    assert(x);
-
-    n00b_atomic_store(&y->left, b);
-    if (b) {
-        n00b_atomic_store(&b->parent, y);
-    }
-
-    n00b_atomic_store(&x->right, y);
-    n00b_atomic_store(&y->parent, x);
-
-    if (p) {
-        if (n00b_atomic_load(&p->left) == y) {
-            n00b_atomic_store(&p->left, x);
-        }
-        else {
-            n00b_atomic_store(&p->right, x);
-        }
-    }
-    n00b_atomic_store(&x->parent, p);
-
-    recompute_bounds(y);
-    recompute_bounds(x);
-    return x;
-}
-
-void
-n00b_print_mmap_tree(n00b_mmap_node_t *node, int level)
-{
-    char *name;
-
-    if (!node) {
-        return;
-    }
-
-    switch (node->kind) {
-    case n00b_mmap_root:
-        name = "Root    ";
-        break;
-    case n00b_mmap_static:
-        name = "Static  ";
-        break;
-    case n00b_mmap_arena:
-        name = "Arena   ";
-        break;
-    case n00b_mmap_managed_segment:
-        name = "Managed ";
-        break;
-    case n00b_mmap_sys_segment:
-        name = "System  ";
-        break;
-    case n00b_mmap_zero_page:
-        name = "No-map  ";
-        break;
-    case n00b_mmap_unmanaged:
-        name = "mmap()  ";
-        break;
-    case n00b_mmap_stack:
-        name = "\e[31;1;4mStack   \e[0m";
-        break;
-    case n00b_mmap_internal:
-        name = "Internal";
-        break;
-    case n00b_mmap_pool:
-        name = "Pool    ";
-        break;
-    case n00b_mmap_api_mmap:
-        name = "Direct  ";
-        break;
-    default:
-        abort();
-    }
-
-    for (int i = 0; i < level; i++) {
-        fputc(' ', stderr);
-    }
-
-    n00b_fprintf(stderr,
-                 "%s %p (span: %p-%p) ",
-                 name,
-                 node,
-                 (void *)node->subtree_min,
-                 (void *)node->subtree_max);
-
-    if (node->kind != n00b_mmap_root) {
-        n00b_fprintf(stderr, "%p-%p %s", (void *)node->start, (void *)node->end, node->file);
-    }
-
-    fputc('\n', stdout);
-    n00b_print_mmap_tree(node->left, level + 1);
-    n00b_print_mmap_tree(node->right, level + 1);
-}
-
-#if 0
-static void
-sanity_check(n00b_mmap_node_t *n)
-{
-    if (!n) {
-        return;
-    }
-
-    n00b_mmap_node_t *l = n00b_atomic_load(&n->left);
-    n00b_mmap_node_t *r = n00b_atomic_load(&n->right);
-
-    if (n->kind == n00b_mmap_root) {
-        sanity_check(l);
-        sanity_check(r);
-        return;
-    }
-
-    assert(n->start < n->end);
-
-    if (!l) {
-        assert(n->start == n->subtree_min);
-    }
-    else {
-        assert(l->parent == n);
-        assert(n->subtree_min == l->subtree_min);
-        assert(l->subtree_max <= n->start);
-        assert(n->start > n->subtree_min);
-        sanity_check(l);
-    }
-
-    if (!r) {
-        if (n->end != n->subtree_max) {
-            n00b_print_mmap_tree(n, 0);
-        }
-        assert(n->end == n->subtree_max);
-    }
-    else {
-        assert(r->parent == n);
-        assert(n->subtree_max == r->subtree_max);
-        assert(r->subtree_min >= n->end);
-        assert(n->end < n->subtree_max);
-        sanity_check(r);
-    }
-}
-#else
-#define sanity_check(x)
-#endif
-
-static void n00b_mmaps_remove_base(n00b_mmap_ctx_t *ctx, n00b_mmap_node_t *node);
-
-static void
-insert_under_node(n00b_mmap_ctx_t *ctx, n00b_mmap_node_t *ancestor, n00b_mmap_node_t *n)
-{
-    // This handles the first non-root node.
-    n00b_mmap_node_t *cur;
-
-    cur = n00b_atomic_load(&ancestor->left);
-    if (!cur) {
-        n00b_atomic_store(&n->parent, ancestor);
-        n00b_atomic_store(&ancestor->left, n);
-        ancestor->subtree_min = n->start;
-        ancestor->subtree_max = n->end;
-        n->parent             = ancestor;
-        return;
-    }
-
-    while (true) {
-        n00b_mmap_node_t *hit = find_overlap(cur, n);
-        if (!hit) {
-            break;
-        }
-        n00b_mmaps_remove_base(ctx, hit);
-        cur = n00b_atomic_load(&ancestor->left);
-        if (!cur) {
-            n00b_atomic_store(&n->parent, ancestor);
-            n00b_atomic_store(&ancestor->left, n);
-            ancestor->subtree_min = n->start;
-            ancestor->subtree_max = n->end;
-            return;
-        }
-    }
-
-    while (true) {
-        if (n->start < cur->start) {
-            n00b_mmap_node_t *l = n00b_atomic_load(&cur->left);
-            if (l) {
-                cur = l;
-                continue;
-            }
-            n00b_atomic_store(&cur->left, n);
-            break;
-        }
-        else {
-            n00b_mmap_node_t *r = n00b_atomic_load(&cur->right);
-            if (r) {
-                cur = r;
-                continue;
-            }
-            n00b_atomic_store(&cur->right, n);
-            break;
-        }
-    }
-
-    n00b_atomic_store(&n->parent, cur);
-
-    while (true) {
-        n00b_mmap_node_t *p = n00b_atomic_load(&n->parent);
-        if (p->kind == n00b_mmap_root) {
-            break;
-        }
-        if (p->priority >= n->priority) {
-            break;
-        }
-        if (n00b_atomic_load(&p->right) == n) {
-            n = rotate_left(p);
-        }
-        else {
-            n = rotate_right(p);
-        }
-    }
-
-    propagate_bounds_up(n);
-}
-
-static n00b_mmap_node_t *
-mmaps_insert_raw(n00b_mmap_ctx_t     *ctx,
-                 void                *startp,
-                 uint64_t             blen,
-                 n00b_mmap_rec_kind_t kind,
-                 uint64_t             binary_offset)
-{
-    n00b_mmap_node_t *n;
-    uint64_t          start = (uint64_t)startp;
-    uint64_t          end   = start + blen;
-
-    n = n00b_alloc(n00b_mmap_node_t, .allocator = (n00b_allocator_t *)&ctx->pool);
-
-    *n = (n00b_mmap_node_t){
-        .subtree_min   = start,
-        .subtree_max   = end,
-        .start         = start,
-        .end           = end,
-        .priority      = treap_next_priority(ctx),
-        .kind          = kind,
-        .binary_offset = binary_offset,
-    };
-
-    insert_under_node(ctx, &ctx->root, n);
-
-    sanity_check(&ctx->root);
-
-    return n;
-}
+// ============================================================================
+// Locking (reentrant TID-based spinlock, unchanged from treap version)
+// ============================================================================
 
 static inline void
 mmap_lock(n00b_mmap_ctx_t *ctx)
@@ -422,123 +48,153 @@ mmap_unlock(n00b_mmap_ctx_t *ctx)
     n00b_atomic_store(&ctx->tid_lock, -1);
 }
 
-// Might convert to a rw lock, but for now just a spin lock.
 #define mmap_write_lock(ctx)   mmap_lock(ctx)
 #define mmap_read_lock(ctx)    mmap_lock(ctx)
 #define mmap_write_unlock(ctx) mmap_unlock(ctx)
 #define mmap_read_unlock(ctx)  mmap_unlock(ctx)
 
-static inline n00b_mmap_node_t *
-lookup_under_node(n00b_mmap_node_t *n, uint64_t addr)
+// ============================================================================
+// Internal helpers
+// ============================================================================
+
+static n00b_mmap_info_t *
+mmaps_insert_raw(n00b_mmap_ctx_t     *ctx,
+                 void                *startp,
+                 uint64_t             blen,
+                 n00b_mmap_rec_kind_t kind,
+                 uint64_t             binary_offset)
 {
-    while (true) {
-        n00b_mmap_node_t *kid;
+    n00b_allocator_t *alloc = (n00b_allocator_t *)&ctx->pool;
+    n00b_mmap_info_t *info  = n00b_alloc(n00b_mmap_info_t, .allocator = alloc);
+    uint64_t          start = (uint64_t)startp;
+    uint64_t          end   = start + blen;
 
-        if (addr < n->subtree_min || addr >= n->subtree_max) {
-            return nullptr;
-        }
+    *info = (n00b_mmap_info_t){
+        .start         = start,
+        .end           = end,
+        .kind          = kind,
+        .binary_offset = binary_offset,
+    };
 
-        if (addr >= n->start && addr < n->end) {
-            return n;
-        }
+    info->tree_node = n00b_result_get(
+        n00b_interval_insert(ctx->mmap_tree, start, end, info));
 
-        if (addr < n->start) {
-            kid = n00b_atomic_load(&n->left);
-        }
-        else {
-            kid = n00b_atomic_load(&n->right);
-        }
-        n = kid;
-    }
+    return info;
 }
 
-n00b_mmap_node_t *
+static void
+n00b_mmaps_remove_base(n00b_mmap_ctx_t *ctx, n00b_mmap_info_t *info)
+{
+    if (info->allocator && info->allocator->hidden) {
+        return;
+    }
+
+    (void)n00b_interval_delete(ctx->mmap_tree, info->tree_node);
+    n00b_free(info);
+}
+
+static inline void
+n00b_mmaps_remove(n00b_mmap_ctx_t *ctx, n00b_mmap_info_t *info)
+{
+    mmap_write_lock(ctx);
+    n00b_mmaps_remove_base(ctx, info);
+    mmap_write_unlock(ctx);
+}
+
+// ============================================================================
+// Lookup
+// ============================================================================
+
+n00b_mmap_opt_t
 n00b_mmap_lookup(n00b_mmap_ctx_t *ctx, void *addr)
 {
-    n00b_mmap_node_t *result;
-
     mmap_read_lock(ctx);
-    result = lookup_under_node(&ctx->root, (uint64_t)addr);
+    n00b_interval_node_t *node = n00b_result_get(
+        n00b_interval_search_any(ctx->mmap_tree, (uint64_t)addr, (uint64_t)addr + 1));
     mmap_read_unlock(ctx);
 
-    return result;
+    return n00b_option_from_nullable(n00b_mmap_info_t *,
+                                     node ? (n00b_mmap_info_t *)node->data : NULL);
 }
 
-// In memory_info.h
+// ============================================================================
+// Initialization
+// ============================================================================
+
+// In memory_info.c
 extern void n00b_load_static_ranges();
 
 void
 n00b_mmaps_initialize(n00b_mmap_ctx_t *ctx)
 {
-    *ctx = (n00b_mmap_ctx_t){
-        .pool = {},
-        .root         = {
-                    .subtree_min = ~0,
-                    .subtree_max = 0,
-                    .start       = ~0,
-                    .end         = 0,
-                    .priority    = UINT32_MAX,
-                    .kind        = n00b_mmap_root,
-        },
-        .tid_lock     = -1,
-        .treap_seed   = N00B_MMAPS_PTR_SEED ^ (uint32_t)(uintptr_t)ctx,
-    };
+    *ctx = (n00b_mmap_ctx_t){ .tid_lock = -1 };
 
     n00b_pool_init(&ctx->pool, .__system = true, .hidden = true, .name = "mmaps");
+
+    n00b_allocator_t *alloc = (n00b_allocator_t *)&ctx->pool;
+    ctx->mmap_tree  = n00b_new_interval_tree(alloc);
+    ctx->range_tree = n00b_new_interval_tree(alloc);
+
     n00b_load_static_ranges();
 }
 
-static void
-n00b_mmaps_remove_base(n00b_mmap_ctx_t *ctx, n00b_mmap_node_t *node)
+// ============================================================================
+// Sub-range tracking
+// ============================================================================
+
+void
+n00b_mmap_delete_ranges(n00b_mmap_ctx_t *ctx, uint64_t start, uint64_t end)
 {
-    assert(node->kind != n00b_mmap_root);
+    n00b_allocator_t *alloc = (n00b_allocator_t *)&ctx->pool;
+    n00b_stack_t(void *) hits = n00b_stack_new(void *, alloc);
 
-    if (node->allocator->hidden) {
-        return;
+    (void)n00b_interval_search(ctx->range_tree, start, end, &hits);
+
+    while (n00b_stack_len(hits) > 0) {
+        n00b_interval_node_t *node = n00b_stack_pop(hits);
+        n00b_mmap_info_t     *info = (n00b_mmap_info_t *)node->data;
+        (void)n00b_interval_delete(ctx->range_tree, node);
+        n00b_free(info);
     }
-
-    while (n00b_atomic_load(&node->left) || n00b_atomic_load(&node->right)) {
-        n00b_mmap_node_t *l = n00b_atomic_load(&node->left);
-        n00b_mmap_node_t *r = n00b_atomic_load(&node->right);
-
-        if (!l) {
-            rotate_left(node);
-        }
-        else if (!r) {
-            rotate_right(node);
-        }
-        else if (l->priority > r->priority) {
-            rotate_right(node);
-        }
-        else {
-            rotate_left(node);
-        }
-    }
-
-    n00b_mmap_node_t *parent = n00b_atomic_load(&node->parent);
-
-    if (parent) {
-        if (n00b_atomic_load(&parent->left) == node) {
-            n00b_atomic_store(&parent->left, NULL);
-        }
-        else {
-            n00b_atomic_store(&parent->right, NULL);
-        }
-        propagate_bounds_up(parent);
-    }
-
-    n00b_free(node);
-}
-
-static inline void
-n00b_mmaps_remove(n00b_mmap_ctx_t *ctx, n00b_mmap_node_t *node)
-{
-    mmap_write_lock(ctx);
-    n00b_mmaps_remove_base(ctx, node);
-    mmap_write_unlock(ctx);
 }
 
 n00b_mmap_info_t *
+n00b_mmap_register_range(void *startp, void *endp, n00b_mmap_rec_kind_t kind) _kargs
+{
+    n00b_allocator_t *allocator = nullptr;
+    const char       *file      = nullptr;
+}
+{
+    n00b_runtime_t  *rt  = n00b_get_runtime();
+    n00b_mmap_ctx_t *ctx = n00b_global_mem_map(rt);
+
+    n00b_allocator_t *alloc = (n00b_allocator_t *)&ctx->pool;
+    n00b_mmap_info_t *info  = n00b_alloc(n00b_mmap_info_t, .allocator = alloc);
+    uint64_t          start = (uint64_t)startp;
+    uint64_t          end   = (uint64_t)endp;
+
+    *info = (n00b_mmap_info_t){
+        .start     = start,
+        .end       = end,
+        .kind      = kind,
+        .allocator = allocator,
+        .file      = file,
+    };
+
+    mmap_write_lock(ctx);
+    info->tree_node = n00b_result_get(
+        n00b_interval_insert(ctx->range_tree, start, end, info));
+    mmap_write_unlock(ctx);
+
+    return info;
+}
+
+// ============================================================================
+// Registration / unregistration
+// ============================================================================
+
+// clang-format off
+n00b_mmap_opt_t
 n00b_mmap_register(void *startp, void *endp, n00b_mmap_rec_kind_t kind) _kargs
 {
     n00b_runtime_t   *runtime           = n00b_get_runtime();
@@ -549,9 +205,10 @@ n00b_mmap_register(void *startp, void *endp, n00b_mmap_rec_kind_t kind) _kargs
     uint64_t          order_id          = 0;
     bool              definitely_unique = true;
 }
+// clang-format on
 {
     if (allocator && allocator->hidden) {
-        return nullptr;
+        return n00b_option_none(n00b_mmap_info_t *);
     }
 
     n00b_mmap_info_t *result;
@@ -561,17 +218,18 @@ n00b_mmap_register(void *startp, void *endp, n00b_mmap_rec_kind_t kind) _kargs
     uint64_t          blen  = end - start;
 
     assert(ctx);
-
     assert(end > start);
 
     mmap_write_lock(ctx);
 
     if (!definitely_unique) {
-        result = lookup_under_node(&ctx->root, (uint64_t)start);
-        if (result) {
+        n00b_interval_node_t *existing = n00b_result_get(
+            n00b_interval_search_any(ctx->mmap_tree, start, start + 1));
+        if (existing) {
+            result = (n00b_mmap_info_t *)existing->data;
             assert(allocator == result->allocator || !allocator);
             mmap_write_unlock(ctx);
-            return result;
+            return n00b_option_set(n00b_mmap_info_t *, result);
         }
     }
 
@@ -583,16 +241,18 @@ n00b_mmap_register(void *startp, void *endp, n00b_mmap_rec_kind_t kind) _kargs
 
     mmap_write_unlock(ctx);
 
-    return result;
+    return n00b_option_set(n00b_mmap_info_t *, result);
 }
 
-void *
+// clang-format off
+n00b_result_t(void *)
 _n00b_mmap(size_t sz, char *loc) _kargs
 {
     n00b_allocator_t    *allocator = nullptr;
     n00b_mmap_rec_kind_t kind      = n00b_mmap_api_mmap;
     char                *name      = nullptr;
 }
+// clang-format on
 {
     if (name) {
         loc = name;
@@ -612,41 +272,59 @@ _n00b_mmap(size_t sz, char *loc) _kargs
         }
     }
 
-    void *result = mmap(nullptr, sz, N00B_MPROT, N00B_MFLAG, -1, 0);
+    auto mmap_r = n00b_check_mmap(nullptr, sz, N00B_MPROT, N00B_MFLAG, -1, 0);
 
-    assert(result != MAP_FAILED);
+    if (n00b_result_is_err(mmap_r)) {
+        return n00b_result_err(void *, n00b_result_get_err(mmap_r));
+    }
 
-    n00b_mmap_register(result,
-                       ((char *)result) + sz,
-                       kind,
-                       .file      = loc,
-                       .allocator = allocator);
+    void *result = n00b_result_get(mmap_r);
 
-    return result;
+    (void)n00b_mmap_register(result,
+                            ((char *)result) + sz,
+                            kind,
+                            .file      = loc,
+                            .allocator = allocator);
+
+    return n00b_result_ok(void *, result);
 }
 
-void
+// clang-format off
+n00b_result_t(int)
 n00b_munmap(void *addr) _kargs
 {
     n00b_runtime_t *runtime = n00b_get_runtime();
 }
+// clang-format on
 {
-    n00b_mmap_info_t *map = n00b_mmap_by_address(addr, .runtime = runtime);
+    auto map_opt = n00b_mmap_by_address(addr, .runtime = runtime);
 
-    assert(map);
+    if (!n00b_option_is_set(map_opt)) {
+        return n00b_result_err(int, EINVAL);
+    }
 
-    void  *start = (void *)map->start;
-    size_t len   = map->end - map->start;
+    n00b_mmap_info_t *map   = n00b_option_get(map_opt);
+    void             *start = (void *)map->start;
+    size_t            len   = map->end - map->start;
 
-    n00b_mmaps_remove(n00b_global_mem_map(runtime), map);
+    n00b_mmap_ctx_t *ctx = n00b_global_mem_map(runtime);
+
+    mmap_write_lock(ctx);
+    n00b_mmap_delete_ranges(ctx, map->start, map->end);
+    n00b_mmaps_remove_base(ctx, map);
+    mmap_write_unlock(ctx);
+
     munmap(start, len);
+    return n00b_result_ok(int, 0);
 }
 
-n00b_mmap_info_t *
+// clang-format off
+n00b_mmap_opt_t
 n00b_mmap_by_address(void *addr) _kargs
 {
     n00b_runtime_t *runtime = n00b_get_runtime();
 }
+// clang-format on
 {
     return n00b_mmap_lookup(n00b_global_mem_map(runtime), addr);
 }
@@ -657,10 +335,81 @@ n00b_mem_get_allocator(void *addr) _kargs
     n00b_runtime_t *runtime = n00b_get_runtime();
 }
 {
-    n00b_mmap_info_t *mmap = n00b_mmap_lookup(n00b_global_mem_map(runtime), addr);
+    auto mmap_opt = n00b_mmap_lookup(n00b_global_mem_map(runtime), addr);
 
-    if (!mmap || !mmap->allocator) {
+    if (!n00b_option_is_set(mmap_opt)) {
+        return n00b_option_none(n00b_allocator_t *);
+    }
+
+    n00b_mmap_info_t *mmap = n00b_option_get(mmap_opt);
+
+    if (!mmap->allocator) {
         return n00b_option_none(n00b_allocator_t *);
     }
     return n00b_option_set(n00b_allocator_t *, n00b_atomic_load(&mmap->allocator));
+}
+
+// ============================================================================
+// Debug printing
+// ============================================================================
+
+void
+n00b_print_mmap_tree(void)
+{
+    n00b_runtime_t  *rt  = n00b_get_runtime();
+    n00b_mmap_ctx_t *ctx = n00b_global_mem_map(rt);
+
+    n00b_allocator_t *alloc = (n00b_allocator_t *)&ctx->pool;
+    n00b_stack_t(void *) results = n00b_stack_new(void *, alloc);
+
+    (void)n00b_interval_search_ordered(ctx->mmap_tree, 0, UINT64_MAX, &results);
+
+    for (size_t i = 0; i < n00b_stack_len(results); i++) {
+        n00b_interval_node_t *node = results.data[i];
+        n00b_mmap_info_t     *info = (n00b_mmap_info_t *)node->data;
+        char                 *name;
+
+        switch (info->kind) {
+        case n00b_mmap_static:
+            name = "Static  ";
+            break;
+        case n00b_mmap_arena:
+            name = "Arena   ";
+            break;
+        case n00b_mmap_managed_segment:
+            name = "Managed ";
+            break;
+        case n00b_mmap_sys_segment:
+            name = "System  ";
+            break;
+        case n00b_mmap_zero_page:
+            name = "No-map  ";
+            break;
+        case n00b_mmap_unmanaged:
+            name = "mmap()  ";
+            break;
+        case n00b_mmap_stack:
+            name = "\e[31;1;4mStack   \e[0m";
+            break;
+        case n00b_mmap_internal:
+            name = "Internal";
+            break;
+        case n00b_mmap_pool:
+            name = "Pool    ";
+            break;
+        case n00b_mmap_api_mmap:
+            name = "Direct  ";
+            break;
+        default:
+            name = "Unknown ";
+            break;
+        }
+
+        n00b_fprintf(stderr,
+                     "%s %p-%p %s\n",
+                     name,
+                     (void *)info->start,
+                     (void *)info->end,
+                     info->file ? info->file : "(no file)");
+    }
 }

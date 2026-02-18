@@ -1,3 +1,11 @@
+/**
+ * @file random.h
+ * @brief Cryptographic-quality pseudo-random number generation.
+ *
+ * On Linux, uses the getrandom(2) system call.  On macOS/BSD, uses
+ * arc4random_buf().  Convenience typed wrappers (n00b_rand8 .. n00b_rand64)
+ * are generated via macro.
+ */
 #pragma once
 
 #include <stdint.h>

@@ -2,6 +2,7 @@
 #include "n00b.h"
 #include "core/llist.h"
 #include "core/alloc.h"
+#include "core/runtime.h"
 
 n00b_linked_list_decl(char *);
 

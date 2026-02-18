@@ -1,6 +1,6 @@
 /**
- * @file locking_dict_typed.h
- * @brief Type-safe wrapper for base_ldict_t.
+ * @file dict.h
+ * @brief Type-safe wrapper for the untyped dictionary.
  *
  * Provides @c ldict_t(K, V) — a thread-safe concurrent dictionary with
  * compile-time type safety. Uses typeid() for unique struct names and
@@ -10,8 +10,6 @@
  *
  * Usage:
  * @code
- *     #include <base/locking_dict_typed.h>
- *
  *     BASE_LDICT_IMPL(int, int, my_int_hash)
  *
  *     ldict_t(int, int) d = ldict_new(int, int);

@@ -11,7 +11,7 @@
 #include "core/memory_info.h"
 #include "core/mmaps.h"
 #include "core/atomic.h"
-#include "core/stack.h"
+#include "core/llstack.h"
 #include "core/align.h"
 #include "core/pool.h"
 #include "util/math.h"
@@ -36,11 +36,13 @@ new_page_entry(n00b_pool_t *pool, uint64_t *sz_ptr)
     uint64_t hdr_sz = n00b_align(sizeof(n00b_pool_page_t));
     sz += hdr_sz;
 
-    char             *name = (char *)(((n00b_allocator_t *)pool)->debug_name);
-    n00b_pool_page_t *cur  = n00b_mmap(n00b_page_align(sz),
-                                       .allocator = (n00b_allocator_t *)pool,
-                                       .name      = name,
-                                       .kind      = n00b_mmap_pool);
+    char *name    = (char *)(((n00b_allocator_t *)pool)->debug_name);
+    auto  mmap_r  = n00b_mmap(n00b_page_align(sz),
+                              .allocator = (n00b_allocator_t *)pool,
+                              .name      = name,
+                              .kind      = n00b_mmap_pool);
+    assert(n00b_result_is_ok(mmap_r));
+    n00b_pool_page_t *cur = n00b_result_get(mmap_r);
 
     *sz_ptr   = n00b_page_align(sz) - hdr_sz;
     void *res = (void *)cur + hdr_sz;
@@ -87,7 +89,7 @@ delete_one_page_entry(n00b_pool_t *pool, n00b_pool_page_t *entry)
 }
 
 static inline void *
-add_page_to_list(n00b_pool_t *pool, uint64_t sz, n00b_stack_t *stack)
+add_page_to_list(n00b_pool_t *pool, uint64_t sz, n00b_llstack_t *stack)
 {
     // Return one, and push the others to the free list.
     // Yes, we could pre-link the extras, but that's a PITA.
@@ -101,9 +103,9 @@ add_page_to_list(n00b_pool_t *pool, uint64_t sz, n00b_stack_t *stack)
 
     for (uint32_t i = 1; i < n; i++) {
         // Yes, we end up having to cast.
-        n00b_stack_node_t *node = (n00b_stack_node_t *)p;
+        n00b_llstack_node_t *node = (n00b_llstack_node_t *)p;
         p += n00b_align(sz);
-        n00b_stack_push(stack, node);
+        n00b_llstack_push_node(stack, node);
     }
 
     return res;
@@ -117,7 +119,7 @@ pool_destroy(n00b_pool_t *pool)
 
     while (entry) {
         next = entry->next;
-        n00b_munmap(entry);
+        n00b_safe_munmap(entry, n00b_page_size);
         entry = next;
     }
 }
@@ -125,7 +127,7 @@ pool_destroy(n00b_pool_t *pool)
 static void
 pool_free(n00b_pool_t *pool, void *ptr)
 {
-    n00b_pool_entry_t *entry = (n00b_pool_entry_t *)(ptr - N00B_ALIGN / sizeof(void *));
+    n00b_pool_entry_t *entry = (n00b_pool_entry_t *)((char *)ptr - N00B_ALIGN);
     assert(entry->list_index <= N00B_NUM_FREE_LISTS);
 
     if (entry->list_index == N00B_NUM_FREE_LISTS) {
@@ -136,9 +138,9 @@ pool_free(n00b_pool_t *pool, void *ptr)
 
     unsigned int ix = entry->list_index;
     memset(entry, 0, ix << N00B_POST_ROUND_SHIFT);
-    n00b_stack_node_t *node_ptr = (n00b_stack_node_t *)entry;
+    n00b_llstack_node_t *node_ptr = (n00b_llstack_node_t *)entry;
 
-    n00b_stack_push(&pool->free_lists[ix], node_ptr);
+    n00b_llstack_push_node(&pool->free_lists[ix], node_ptr);
 }
 
 static void *
@@ -156,8 +158,8 @@ pool_alloc(n00b_pool_t *pool, uint64_t request, void *ignore)
         ix    = N00B_NUM_FREE_LISTS;
     }
     else {
-        n00b_stack_t      *stack = &pool->free_lists[ix];
-        n00b_stack_node_t *nptr  = n00b_stack_pop(stack);
+        n00b_llstack_t      *stack = &pool->free_lists[ix];
+        n00b_llstack_node_t *nptr  = n00b_llstack_pop_node(stack);
 
         if (nptr) {
             entry = (n00b_pool_entry_t *)nptr;
@@ -198,7 +200,7 @@ n00b_pool_init(n00b_pool_t *pool) _kargs
     pool->page_table = nullptr;
 
     for (int i = 0; i < N00B_NUM_FREE_LISTS; i++) {
-        n00b_stack_init(&pool->free_lists[i]);
+        n00b_llstack_init(&pool->free_lists[i]);
     }
 
     return (n00b_allocator_t *)pool;

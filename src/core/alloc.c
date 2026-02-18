@@ -5,6 +5,8 @@
 #include "core/dict_untyped.h"
 #include "core/mmaps.h"
 #include "core/memory_info.h"
+#include "core/stw.h"
+#include "core/pool.h"
 
 #ifndef N00B_METADATA_START_ENTRIES
 #define N00B_METADATA_START_ENTRIES 1 << 12
@@ -36,8 +38,6 @@ n00b_alloc_add_inline_header(n00b_inline_hdr_t **hdrp,
 
     *hdrp = ++hdr;
 }
-
-#define n00b_thread_checkin() // TODO: port
 
 void *
 _n00b_alloc_raw(size_t n, size_t sz, char *base_type, const char *location) _kargs
@@ -84,15 +84,9 @@ _n00b_alloc_raw(size_t n, size_t sz, char *base_type, const char *location) _kar
                                      debug_taint);
     }
 
-    if (allocator->metadata_arena != nullptr) {
-        // clang-format off
-        n00b_oob_hdr_t *map_item = _n00b_alloc_raw(
-	    1,
-	    sizeof(n00b_oob_hdr_t),
-	    nullptr,
-	    nullptr,
-	    .allocator = allocator->metadata_arena);
-        // clang-format on
+    if (allocator->metadata_pool != nullptr) {
+        n00b_oob_hdr_t *map_item = n00b_alloc(n00b_oob_hdr_t,
+                                              .allocator = allocator->metadata_pool);
 
         *map_item = (n00b_oob_hdr_t){
             .user_ptr        = r,
@@ -126,15 +120,28 @@ n00b_allocator_setup(n00b_allocator_t *allocator, n00b_calloc_fn alloc) _kargs
     bool                      external_metadata = true;
     // RISKY for custom allocators. Hides from GC.
     bool                      hidden            = false;
+    // DO NOT USE for custom allocators. Skips mmaps.
+    bool                      __nomap           = false;
     // DO NOT USE for custom allocators. Skips STW check.
     bool                      __system          = false;
-    bool                      __is_md_arena     = false;
+    bool                      __is_md_pool      = false;
 }
 {
-    n00b_allocator_t *mda = nullptr;
+    n00b_allocator_t *md_pool = nullptr;
 
     if (external_metadata) {
-        mda = (n00b_allocator_t *)n00b_new_arena(.__is_md_arena = true, .name = "alloc_md");
+        md_pool = (n00b_allocator_t *)n00b_new_arena(.no_map         = true,
+                                                      .__system       = true,
+                                                      .hidden         = true,
+                                                      .use_gc         = false,
+                                                      .inline_headers = false,
+                                                      .name           = "md_pool");
+    }
+
+    n00b_dict_untyped_t *md = nullptr;
+
+    if (external_metadata) {
+        md = n00b_alloc(n00b_dict_untyped_t, .allocator = md_pool);
     }
 
     *allocator = (n00b_allocator_t){
@@ -144,16 +151,16 @@ n00b_allocator_setup(n00b_allocator_t *allocator, n00b_calloc_fn alloc) _kargs
         .debug_name        = name,
         .add_inline_header = inline_headers,
         .__system          = __system,
-        .__md_arena        = __is_md_arena,
+        .__md_pool         = __is_md_pool,
         .hidden            = hidden,
-        .metadata_arena    = mda,
-        .metadata          = {},
+        .metadata_pool     = md_pool,
+        .metadata          = md,
     };
 
     if (external_metadata) {
         n00b_dict_untyped_init(allocator->metadata,
                                .start_capacity = N00B_METADATA_START_ENTRIES,
-                               .allocator      = allocator->metadata_arena,
+                               .allocator      = allocator->metadata_pool,
                                .hash           = n00b_hash_word,
                                .skip_obj_hash  = true);
     }
@@ -163,7 +170,11 @@ void
 n00b_free(void *ptr)
 {
     n00b_allocator_opt_t alloc_opt = n00b_mem_get_allocator(ptr);
-    assert(n00b_option_is_set(alloc_opt));
+
+    if (!n00b_option_is_set(alloc_opt)) {
+        return;
+    }
+
     n00b_allocator_t *allocator = n00b_option_get(alloc_opt);
 
     if (!allocator->free) {
@@ -171,7 +182,7 @@ n00b_free(void *ptr)
     }
 
     if (allocator->add_inline_header) {
-        ptr -= (N00B_ALLOC_HDR_SZ / sizeof(void *));
+        ptr = (char *)ptr - N00B_ALLOC_HDR_SZ;
     }
 
     (*allocator->free)(allocator, ptr);
@@ -217,8 +228,14 @@ n00b_add_finalizer(void *obj, n00b_finalizer_t fn)
 void
 n00b_allocator_destroy(n00b_allocator_t *allocator)
 {
-    if (allocator->metadata_arena) {
-        n00b_allocator_destroy(allocator->metadata_arena);
+    if (allocator->metadata_pool) {
+        n00b_allocator_destroy(allocator->metadata_pool);
+        // Only free the pool struct if it was heap-allocated (i.e.,
+        // it's a real pool, not an arena whose struct lives in mmap).
+        if (allocator->metadata_pool->__md_pool) {
+            free(allocator->metadata_pool);
+        }
+        allocator->metadata_pool = nullptr;
     }
 
     (*allocator->destroy)(allocator);
@@ -256,8 +273,15 @@ _n00b_find_alloc_info(void *addr, n00b_alloc_info_t *result) _kargs
     bool scan_for_header = false;
 }
 {
-    n00b_mmap_info_t *mmap = n00b_mmap_by_address(addr);
-    char             *p    = (char *)addr;
+    auto              mmap_opt = n00b_mmap_by_address(addr);
+    char             *p        = (char *)addr;
+
+    if (!n00b_option_is_set(mmap_opt)) {
+        *result = (n00b_alloc_info_t){.kind = n00b_alloc_none};
+        return;
+    }
+
+    n00b_mmap_info_t *mmap = n00b_option_get(mmap_opt);
     n00b_allocator_t *al   = mmap->allocator;
     switch (mmap->kind) {
     case n00b_mmap_static:
@@ -301,7 +325,9 @@ _n00b_find_alloc_info(void *addr, n00b_alloc_info_t *result) _kargs
         }
 
         if (al->metadata) {
-            n00b_oob_hdr_t *oob = n00b_dict_untyped_get(al->metadata, p, nullptr);
+            // Metadata dict is keyed by user pointer (addr), not by the
+            // adjusted header pointer (p).
+            n00b_oob_hdr_t *oob = n00b_dict_untyped_get(al->metadata, addr, nullptr);
             if (!oob) {
                 *result = (n00b_alloc_info_t){.kind = n00b_alloc_err};
                 return;

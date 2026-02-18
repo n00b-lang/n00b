@@ -1,3 +1,11 @@
+/**
+ * @file dict_untyped.h
+ * @brief Lock-free, untyped hash table (dictionary).
+ *
+ * An open-addressing hash table with robin-hood probing, lock-free
+ * reads, and a single-writer migration scheme.  Stores void* keys
+ * and values.  Type-safe wrappers are built on top of this.
+ */
 #pragma once
 
 #include <stdint.h>
@@ -42,11 +50,44 @@ struct n00b_dict_untyped_item_t {
     uint64_t order;
 };
 
+/**
+ * @brief Insert or update a key/value pair.
+ * @param d     Dictionary to update.
+ * @param key   Key to insert.
+ * @param value Value to associate with the key.
+ * @return The previous value, or NULL if newly inserted.
+ * @pre @p d has been initialized via n00b_dict_untyped_init().
+ */
 extern void *_n00b_dict_untyped_put(n00b_dict_untyped_t *d, void *key, void *value);
+
+/**
+ * @brief Look up a key.
+ * @param d     Dictionary to search.
+ * @param key   Key to look up.
+ * @param found Set to true if found, false otherwise.
+ * @return      The value, or NULL if not found.
+ */
 extern void *_n00b_dict_untyped_get(n00b_dict_untyped_t *d, void *key, bool *found);
+
+/** @brief Replace an existing key's value.  @return false if key absent. */
 extern bool  _n00b_dict_untyped_replace(n00b_dict_untyped_t *d, void *key, void *value);
+
+/** @brief Insert only if key is absent.  @return false if key exists. */
 extern bool  _n00b_dict_untyped_add(n00b_dict_untyped_t *d, void *key, void *value);
+
+/** @brief Remove a key.  @return false if key not found. */
 extern bool  _n00b_dict_untyped_remove(n00b_dict_untyped_t *d, void *key);
+
+/**
+ * @brief Compare-and-swap on a dictionary entry.
+ * @param d              Dictionary.
+ * @param key            Key to operate on.
+ * @param old_item_ptr   Pointer to expected old value (updated on failure).
+ * @param new_item       New value to store.
+ * @param expect_empty   If true, expect the slot to be empty.
+ * @param delete_existing If true, delete the existing entry on match.
+ * @return               true on success.
+ */
 extern bool  _n00b_dict_untyped_cas(n00b_dict_untyped_t *d,
                                     void                *key,
                                     void               **old_item_ptr,
@@ -72,6 +113,15 @@ extern bool  _n00b_dict_untyped_cas(n00b_dict_untyped_t *d,
                            b1,                                                                 \
                            b2)
 
+/**
+ * @brief Initialize an untyped dictionary.
+ * @param dict Dictionary to initialize.
+ *
+ * @kw start_capacity Initial bucket count (default N00B_DICT_MIN_SIZE).
+ * @kw allocator      Allocator for internal storage (nullptr = runtime default).
+ * @kw hash           Hash function for keys (nullptr = n00b_hash_word).
+ * @kw skip_obj_hash  If true, use the raw key bits instead of calling the hash function.
+ */
 extern void
 n00b_dict_untyped_init(n00b_dict_untyped_t *dict) _kargs
 {
@@ -81,6 +131,12 @@ n00b_dict_untyped_init(n00b_dict_untyped_t *dict) _kargs
     bool              skip_obj_hash  = false;
 };
 
+/**
+ * @brief Check whether a key exists in the dictionary.
+ * @param d Dictionary to search.
+ * @param v Key to look for.
+ * @return  true if the key is present.
+ */
 static inline bool
 n00b_dict_untyped_contains(n00b_dict_untyped_t *d, void *v)
 {
@@ -92,7 +148,16 @@ n00b_dict_untyped_contains(n00b_dict_untyped_t *d, void *v)
 }
 
 #ifdef N00B_USE_INTERNAL_API
+/**
+ * @brief Acquire the dictionary's migration mutex.
+ * @param d     Dictionary to lock.
+ * @param try   If true, return immediately on failure.
+ * @param count Output: migration epoch when lock was acquired.
+ * @return      true if lock was acquired.
+ */
 extern bool n00b_dict_untyped_lock(n00b_dict_untyped_t *d, bool try, uint32_t *count);
+
+/** @brief Unlock the dictionary after a store migration. */
 extern void n00b_dict_untyped_unlock_post_copy(n00b_dict_untyped_t *d);
 
 #define N00B_HT_FLAG_MUTEX   1

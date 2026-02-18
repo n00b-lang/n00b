@@ -23,7 +23,7 @@
 #define N00B_TREE_INITIAL_CAPACITY 4
 #endif
 
-#define n00b_tree_tid(T) typeid("tree", T)
+#define n00b_tree_tid(N, L) typeid("tree", N, "_", L)
 // ============================================================================
 // Type definition
 // ============================================================================
@@ -68,12 +68,12 @@
  */
 #define n00b_tree_node(N, L, val, ...)                                                         \
     ({                                                                                         \
-        n00b_tree_t(N, L) *_bt = n00b_alloc(sizeof(n00b_tree_t(N, L)));                        \
+        n00b_tree_t(N, L) *_bt = n00b_alloc_size(1, sizeof(n00b_tree_t(N, L)));                \
         if (_bt) {                                                                             \
             _bt->is_leaf    = false;                                                           \
             _bt->node.value = (val);                                                           \
             _bt->node.children                                                                 \
-                = n00b_alloc(N00B_TREE_INITIAL_CAPACITY * sizeof(n00b_tree_t(N, L) *));        \
+                = n00b_alloc_size(N00B_TREE_INITIAL_CAPACITY, sizeof(n00b_tree_t(N, L) *));    \
             _bt->node.num_children = 0;                                                        \
             _bt->node.capacity     = N00B_TREE_INITIAL_CAPACITY;                               \
         }                                                                                      \
@@ -89,13 +89,31 @@
  */
 #define n00b_tree_leaf(N, L, val)                                                              \
     ({                                                                                         \
-        n00b_tree_t(N, L) *_bt = n00b_alloc(sizeof(n00b_tree_t(N, L)));                        \
+        n00b_tree_t(N, L) *_bt = n00b_alloc_size(1, sizeof(n00b_tree_t(N, L)));                \
         if (_bt) {                                                                             \
             _bt->is_leaf = true;                                                               \
             _bt->leaf    = (val);                                                              \
         }                                                                                      \
         _bt;                                                                                   \
     })
+
+// ============================================================================
+// Internal: grow children array
+// ============================================================================
+
+/** @internal Grow a node's children array to @p new_cap entries. */
+#define _n00b_tree_grow_children(_ptr, _new_cap)                                               \
+    do {                                                                                       \
+        size_t _old_n   = (_ptr)->node.num_children;                                           \
+        size_t _elem_sz = sizeof(*(_ptr)->node.children);                                      \
+        void  *_new_buf = n00b_alloc_size((_new_cap), _elem_sz);                               \
+        if (_old_n > 0) {                                                                      \
+            memcpy(_new_buf, (_ptr)->node.children, _old_n * _elem_sz);                        \
+        }                                                                                      \
+        n00b_free((_ptr)->node.children);                                                      \
+        (_ptr)->node.children = _new_buf;                                                      \
+        (_ptr)->node.capacity = (_new_cap);                                                    \
+    } while (0)
 
 // ============================================================================
 // Child addition
@@ -119,9 +137,7 @@
             if (_p->node.num_children >= _p->node.capacity) {                                  \
                 size_t _nc                                                                     \
                     = _p->node.capacity ? _p->node.capacity * 2 : N00B_TREE_INITIAL_CAPACITY;  \
-                _p->node.children                                                              \
-                    = n00b_realloc(_p->node.children, _nc * sizeof(*_p->node.children));       \
-                _p->node.capacity = _nc;                                                       \
+                _n00b_tree_grow_children(_p, _nc);                                             \
             }                                                                                  \
             _p->node.children[_p->node.num_children++] = _c;                                   \
             _ok                                        = true;                                 \
@@ -141,8 +157,8 @@
     ({                                                                                         \
         n00b_tree_t(N, L) *_an = n00b_tree_node(N, L, val);                                    \
         if (_an && !n00b_tree_add_child(parent, _an)) {                                        \
-            n00b_dealloc(_an->node.children);                                                  \
-            n00b_dealloc(_an);                                                                 \
+            n00b_free(_an->node.children);                                                     \
+            n00b_free(_an);                                                                    \
             _an = nullptr;                                                                     \
         }                                                                                      \
         _an;                                                                                   \
@@ -160,7 +176,7 @@
     ({                                                                                         \
         n00b_tree_t(N, L) *_al = n00b_tree_leaf(N, L, val);                                    \
         if (_al && !n00b_tree_add_child(parent, _al)) {                                        \
-            n00b_dealloc(_al);                                                                 \
+            n00b_free(_al);                                                                    \
             _al = nullptr;                                                                     \
         }                                                                                      \
         _al;                                                                                   \
@@ -176,7 +192,7 @@
  * Does not free the old child — the caller is responsible for it.
  *
  * @param t      Pointer to the parent node.
- * @param i      Zero-n00bd child index.
+ * @param i      Zero-based child index.
  * @param child  New child to place at index @p i.
  * @return @c true on success, @c false if @p t is null/leaf or index is out of bounds.
  */
@@ -198,7 +214,7 @@
  * Does not free the removed child — the caller owns it.
  *
  * @param t  Pointer to the parent node.
- * @param i  Zero-n00bd child index.
+ * @param i  Zero-based child index.
  * @return Pointer to the removed child, or @c nullptr if invalid.
  */
 #define n00b_tree_remove_child(t, i)                                                           \
@@ -237,11 +253,9 @@
         bool   _ic_ok = false;                                                                 \
         if (_ic_p && !_ic_p->is_leaf && _ic_c && _ic_i <= _ic_p->node.num_children) {          \
             if (_ic_p->node.num_children >= _ic_p->node.capacity) {                            \
-                size_t _ic_nc        = _ic_p->node.capacity ? _ic_p->node.capacity * 2         \
-                                                            : N00B_TREE_INITIAL_CAPACITY;      \
-                _ic_p->node.children = n00b_realloc(_ic_p->node.children,                      \
-                                                    _ic_nc * sizeof(*_ic_p->node.children));   \
-                _ic_p->node.capacity = _ic_nc;                                                 \
+                size_t _ic_nc = _ic_p->node.capacity ? _ic_p->node.capacity * 2                \
+                                                     : N00B_TREE_INITIAL_CAPACITY;             \
+                _n00b_tree_grow_children(_ic_p, _ic_nc);                                       \
             }                                                                                  \
             size_t _ic_shift = _ic_p->node.num_children - _ic_i;                               \
             if (_ic_shift > 0) {                                                               \
@@ -317,7 +331,7 @@
 /**
  * @brief Get the child at index @p i.
  * @param t  Pointer to an internal node.
- * @param i  Zero-n00bd child index.
+ * @param i  Zero-based child index.
  * @return Pointer to the child node.
  */
 #define n00b_tree_child(t, i) ((t)->node.children[i])
@@ -344,7 +358,7 @@
 #define n00b_tree_free_node(t)                                                                 \
     do {                                                                                       \
         if ((t) && !(t)->is_leaf) {                                                            \
-            n00b_dealloc((t)->node.children);                                                  \
+            n00b_free((t)->node.children);                                                     \
         }                                                                                      \
-        n00b_dealloc(t);                                                                       \
+        n00b_free(t);                                                                          \
     } while (0)

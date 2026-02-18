@@ -1,8 +1,15 @@
+/**
+ * @file pool.h
+ * @brief Fixed-size slab pool allocator.
+ *
+ * Provides fast allocation of small, fixed-size objects using
+ * power-of-two size classes with lock-free free lists.
+ */
 #pragma once
 
 #include "n00b.h"
-#include "core/arena.h"
-#include "core/stack.h"
+#include "core/alloc_base.h"
+#include "core/llstack.h"
 #include "core/align.h"
 
 #define N00B_POST_ROUND_SHIFT 6
@@ -21,13 +28,27 @@ static_assert(sizeof(n00b_pool_entry_t) <= N00B_ALIGN);
 
 struct n00b_pool_t {
     n00b_base_allocator_t vtable;
-    n00b_stack_t          free_lists[N00B_NUM_FREE_LISTS];
+    n00b_llstack_t        free_lists[N00B_NUM_FREE_LISTS];
     n00b_pool_page_t     *page_table;
     _Atomic uint32_t      lock;
 };
 
 typedef struct n00b_pool_t n00b_pool_t;
 
+/**
+ * @brief Initialize a pool allocator.
+ * @param pool Pool structure to initialize.
+ * @return     Allocator interface pointer for the pool.
+ *
+ * @kw __system          System pool — skip STW checks (internal only).
+ * @kw inline_headers    Prepend inline headers to allocations.
+ * @kw external_metadata Keep OOB metadata in a separate arena.
+ * @kw hidden            Hide from GC.
+ * @kw name              Debug name for the pool.
+ *
+ * @pre @p pool points to zeroed or uninitialized memory.
+ * @post The returned allocator is ready for use.
+ */
 extern n00b_allocator_t *
 n00b_pool_init(n00b_pool_t *pool) _kargs
 {

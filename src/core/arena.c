@@ -16,27 +16,22 @@
 #include "core/thread.h"
 #include "core/random.h"
 #include "core/dict_untyped.h"
-// #include "core/stw.h"
-// TODO: put back stw
-#define n00b_stop_the_world()
-#define n00b_restart_the_world()
-// TODO: collect
-#define n00b_collect(...)
+#include "core/stw.h"
 
 #ifndef N00B_DEFAULT_SCRATCH_ARENA_SIZE
 #define N00B_DEFAULT_SCRATCH_ARENA_SIZE (1 << 18) // 256K
 #endif
 
-static inline n00b_mmap_info_t *
+void
 n00b_register_arena_segment(void *start, void *end, n00b_arena_t *arena, const char *file)
 {
     n00b_mmap_rec_kind_t kind = n00b_get_arena_addr_type(arena, (void *)start);
 
-    return n00b_mmap_register(start,
-                              end,
-                              kind,
-                              .file      = file,
-                              .allocator = (n00b_allocator_t *)arena);
+    (void)n00b_mmap_register(start,
+                             end,
+                             kind,
+                             .file      = file,
+                             .allocator = (n00b_allocator_t *)arena);
 }
 
 static void
@@ -74,12 +69,14 @@ n00b_add_arena_segment(n00b_arena_t *arena, uint64_t request_len)
         size = needed;
     }
 
-    size    = n00b_page_align(size);
-    segment = mmap(nullptr, size, N00B_MPROT, N00B_MFLAG, -1, 0);
+    size         = n00b_page_align(size);
+    auto seg_r   = n00b_check_mmap(nullptr, size, N00B_MPROT, N00B_MFLAG, -1, 0);
 
-    if (segment == MAP_FAILED) {
+    if (n00b_result_is_err(seg_r)) {
         abort(); // out of memory.
     }
+
+    segment = n00b_result_get(seg_r);
 
     // Save this info off for GC reporting and any sanity checking.
     if (old_segment) {
@@ -160,19 +157,20 @@ n00b_arena_delete(n00b_arena_t *arena)
 
     while (segment) {
         next = segment->next_segment;
-        munmap(segment, segment->size);
+        n00b_safe_munmap(segment, segment->size);
         segment = next;
     }
 
-    n00b_mmap_info_t *arena_map = n00b_mmap_by_address(arena);
-    if (arena_map && arena_map->kind == n00b_mmap_arena) {
-        n00b_munmap(arena);
+    auto arena_map_opt = n00b_mmap_by_address(arena);
+    if (n00b_option_is_set(arena_map_opt)
+        && n00b_option_get(arena_map_opt)->kind == n00b_mmap_arena) {
+        (void)n00b_munmap(arena);
         return;
     }
 
     switch (kind) {
     case n00b_mmap_arena:
-        n00b_munmap(arena);
+        (void)n00b_munmap(arena);
         break;
     case n00b_mmap_static:
         memset(arena, 0, sizeof(n00b_arena_t));
@@ -195,7 +193,6 @@ n00b_initialize_arena(n00b_arena_t *arena) _kargs
     bool     no_map         = false;
     bool     hidden         = false;
     bool     __system       = false;
-    bool     __is_md_arena  = false;
     bool     inline_headers = true;
     char    *name           = "arena";
 }
@@ -203,13 +200,6 @@ n00b_initialize_arena(n00b_arena_t *arena) _kargs
     n00b_atomic_store(&arena->next_alloc, nullptr);
     n00b_atomic_store(&arena->mutex, 0);
 
-    if (__is_md_arena) {
-        __system       = true;
-        hidden         = true;
-        no_map         = true;
-        use_gc         = false;
-        inline_headers = false;
-    }
     *arena = (n00b_arena_t){
         .segment_end        = nullptr,
         .current_segment    = nullptr,
@@ -231,8 +221,7 @@ n00b_initialize_arena(n00b_arena_t *arena) _kargs
 	.inline_headers    = inline_headers,
 	.external_metadata = !no_map,
 	.hidden            = hidden,
-	.__system          = __system,
-	.__is_md_arena     = __is_md_arena);
+	.__system          = __system);
     // clang-format on
 
     n00b_add_arena_segment(arena, size);

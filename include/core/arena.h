@@ -1,11 +1,18 @@
+/**
+ * @file arena.h
+ * @brief Bump-pointer arena allocator.
+ *
+ * Arenas provide fast, sequential allocation with optional garbage
+ * collection.  When collection is enabled and the arena runs out of
+ * space, a copying GC pass is triggered.
+ */
 #pragma once
 
 #include "n00b.h"
+#include "core/alloc_base.h"
 #include "core/alloc_mdata.h"
 #include "core/mmaps.h"
 #include "core/align.h"
-#include "core/alloc.h"
-#include "core/dict_untyped.h"
 
 #define N00B_MPROT (PROT_READ | PROT_WRITE)
 #define N00B_MFLAG (MAP_PRIVATE | MAP_ANON)
@@ -63,6 +70,12 @@ struct n00b_arena_t {
 #endif
 };
 
+/**
+ * @brief Determine the mmap record kind for an address within an arena.
+ * @param arena Arena to query.
+ * @param addr  Address to classify.
+ * @return      The mmap record kind.
+ */
 static inline n00b_mmap_rec_kind_t
 n00b_get_arena_addr_type(n00b_arena_t *arena, void *addr)
 {
@@ -72,6 +85,21 @@ n00b_get_arena_addr_type(n00b_arena_t *arena, void *addr)
     return arena->vtable.__system ? n00b_mmap_sys_segment : n00b_mmap_managed_segment;
 }
 
+/**
+ * @brief Initialize an arena allocator.
+ * @param arena Arena to initialize.
+ *
+ * @kw size           Initial segment size in bytes.
+ * @kw use_gc         Enable garbage collection on this arena.
+ * @kw no_map         Skip mmap registration.
+ * @kw hidden         Hide from GC (GC treats contents as opaque data).
+ * @kw __system       System arena — never traced by GC, not returned by n00b_in_heap().
+ * @kw inline_headers Prepend inline headers to allocations.
+ * @kw name           Debug name for the arena.
+ *
+ * @pre @p arena points to mmap'd memory of at least `sizeof(n00b_arena_t)` bytes.
+ * @post Arena is ready for allocation via its vtable.
+ */
 extern void
 n00b_initialize_arena(n00b_arena_t *arena) _kargs
 {
@@ -80,11 +108,16 @@ n00b_initialize_arena(n00b_arena_t *arena) _kargs
     bool        no_map         = false;
     bool        hidden         = false;
     bool        __system       = false;
-    bool        __is_md_arena  = false;
     bool        inline_headers = true;
     char       *name           = "arena";
 };
 
+/**
+ * @brief Register a finalizer to run when @p obj is collected.
+ * @param obj Object to attach the finalizer to.
+ * @param fn  Finalizer callback.
+ * @pre @p obj must be a managed heap allocation.
+ */
 extern void n00b_add_finalizer(void *obj, n00b_finalizer_t fn);
 
 struct n00b_finalizer_info_t {
@@ -95,11 +128,29 @@ struct n00b_finalizer_info_t {
 
 #define n00b_new_arena(...)                                                                    \
     ({                                                                                         \
-        uint64_t      _sz    = n00b_page_align(sizeof(n00b_arena_t));                          \
-        n00b_arena_t *result = n00b_mmap(_sz, .kind = n00b_mmap_arena);                        \
+        uint64_t _sz     = n00b_page_align(sizeof(n00b_arena_t));                              \
+        auto     _mmap_r = n00b_mmap(_sz, .kind = n00b_mmap_arena);                            \
+        assert(n00b_result_is_ok(_mmap_r));                                                    \
+        n00b_arena_t *result = n00b_result_get(_mmap_r);                                       \
         n00b_initialize_arena(result __VA_OPT__(, __VA_ARGS__));                               \
         result;                                                                                \
     })
+
+/**
+ * @brief Register an arena segment with the mmap tracking subsystem.
+ *
+ * Called by arena.c after adding a new segment, and by gc.c after
+ * swapping in the to-space segment during collection cleanup.
+ *
+ * @param start  Start address of the segment.
+ * @param end    End address of the segment.
+ * @param arena  Owning arena.
+ * @param file   Debug name / source file (may be NULL).
+ */
+extern void n00b_register_arena_segment(void         *start,
+                                        void         *end,
+                                        n00b_arena_t *arena,
+                                        const char   *file);
 
 typedef struct n00b_arena_alloc_param_t {
     bool no_scan;

@@ -1,6 +1,8 @@
 N00B_BUILD_TYPE=${N00B_BUILD_TYPE:-debug}
 N00B_ROOT=$(realpath ${BASH_SOURCE[0]}/..)
 N00B_CLEAN=${N00B_CLEAN:-0}
+N00B_TEST=${N00B_TEST:-0}
+N00B_DOCS=${N00B_DOCS:-0}
 
 
 function ensure_bootstrap {
@@ -92,6 +94,23 @@ function build_n00b {
    fi
 
    meson compile -C ${build_dir}
+
+   if [[ ${N00B_TEST} -ne 0 ]] ; then
+       meson test -C ${build_dir} --print-errorlogs
+       if [[ $? -ne 0 ]] ; then
+           echo "Tests failed."
+           exit 1
+       fi
+   fi
+
+   if [[ ${N00B_DOCS} -ne 0 ]] ; then
+       meson compile -C ${build_dir} docs
+       if [[ $? -ne 0 ]] ; then
+           echo "Documentation generation failed."
+           exit 1
+       fi
+       echo "Documentation generated in ${build_dir}/docs/html/"
+   fi
 }
 
 ensure_bootstrap

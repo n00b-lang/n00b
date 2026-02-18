@@ -1,17 +1,20 @@
 /**
  * @file llist.h
- * @brief Type-safe doubly linked list. NOT thread safe.
+ * @brief Type-safe doubly linked list (NOT thread-safe).
  *
- * Unfortunately, unless I build basically a whole lot more of a C
- * compiler, being able to nest typeid() inside a typeof() isn't going
- * to work, so the only way I can come up with to do this is to still
- * use nullable items (I was trying to stick them in an option).
+ * Provides `n00b_linked_list_t(T)` — an intrusive doubly linked list
+ * with head/tail tracking.  Elements are nullable (wrapping in
+ * `n00b_option_t` is not currently supported due to ncc limitations
+ * with nested `typeid()` inside `typeof()`).
  *
- * If you want to stick an option inside manually, you should be able
- * to do it, just by using a typedef.
- *
- * I probably can rig ncc to provide a work-around w/o too much fuss, but not important right
- * now.
+ * Usage:
+ * @code
+ *     n00b_linked_list_decl(int);
+ *     n00b_linked_list_t(int) list = {};
+ *     n00b_linked_list_append(&list, 42);
+ *     auto node = n00b_linked_list_first(&list);
+ *     int val   = n00b_linked_list_node_contents(node);
+ * @endcode
  */
 #pragma once
 

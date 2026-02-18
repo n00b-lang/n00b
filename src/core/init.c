@@ -12,8 +12,10 @@
 #include "core/thread.h"
 #include "core/mmaps.h"
 #include "core/alloc.h"
+#include "core/arena.h"
 #include "core/random.h"
 #include "core/stw.h"
+#include "core/gc.h"
 
 size_t   n00b_page_size = 0;
 uint64_t n00b_gc_guard  = 0;
@@ -77,13 +79,15 @@ setup_threads(n00b_runtime_t *rt, unsigned int max_threads)
 static void *
 n00b_slab_alloc(n00b_allocator_t *self, uint32_t sz, void *ignore)
 {
-    return n00b_mmap(sz, .allocator = self);
+    auto r = n00b_mmap(sz, .allocator = self);
+    assert(n00b_result_is_ok(r));
+    return n00b_result_get(r);
 }
 
 void
 n00b_slab_free(n00b_allocator_t *self, void *ptr)
 {
-    n00b_munmap(ptr);
+    (void)n00b_munmap(ptr);
 }
 
 static inline void
@@ -102,10 +106,11 @@ setup_slab_allocator(n00b_runtime_t *rt)
 void
 n00b_init(n00b_runtime_t *rt, int argc, char *argv[]) _kargs
 {
-    char       **envp           = nullptr;
-    char        *numeric_locale = "";
-    int          fd_limit       = 0;
-    unsigned int max_threads    = N00B_THREADS_MAX;
+    n00b_allocator_t *allocator       = nullptr;
+    char             **envp           = nullptr;
+    char              *numeric_locale = "";
+    int                fd_limit       = 0;
+    unsigned int       max_threads    = N00B_THREADS_MAX;
 }
 {
     n00b_page_size = sysconf(_SC_PAGESIZE);
@@ -134,10 +139,28 @@ n00b_init(n00b_runtime_t *rt, int argc, char *argv[]) _kargs
     setup_slab_allocator(rt);
     n00b_mmaps_initialize(&rt->mmaps);
 
+    // Initialize the GC root pool and root list.  The pool is a
+    // system-level allocator (hidden from GC, no STW checks) used to
+    // back the root list so that the collector can read it safely.
+    n00b_pool_init(&rt->gc_root_pool,
+                   .__system = true,
+                   .hidden   = true,
+                   .name     = "gc_roots");
+
+    n00b_allocator_t *rpool = (n00b_allocator_t *)&rt->gc_root_pool;
+    rt->gc_roots            = n00b_list_new(n00b_gc_root_t, rpool);
+
     setup_threads(rt, max_threads);
 
-    // Temporary until we hook up the GC here.
-    rt->default_allocator = &rt->slab_allocator;
+    if (allocator) {
+        rt->default_allocator = allocator;
+        rt->default_arena     = nullptr;
+    }
+    else {
+        rt->default_arena     = n00b_new_arena(.use_gc = true,
+                                                .name   = "default");
+        rt->default_allocator = (n00b_allocator_t *)rt->default_arena;
+    }
 
     rt->startup_complete = true;
 }

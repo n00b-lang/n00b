@@ -1,3 +1,11 @@
+/**
+ * @file macros.h
+ * @brief Core metaprogramming macros.
+ *
+ * Provides token-pasting, deferred expansion, recursive MAP macros,
+ * counted iteration (MAP_COUNT), and variadic argument helpers used by
+ * the type-safe generic data structures.
+ */
 #pragma once
 
 #define N00B_TO_STRING_BASE(x) #x

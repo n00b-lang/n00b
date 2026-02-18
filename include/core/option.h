@@ -26,16 +26,16 @@
         .value     = {},                                                                       \
     })
 #define n00b_option_get(x)                                                                     \
-    (*({                                                                                       \
-        auto p = &(x);                                                                         \
-        p->has_value ? &p->value : (void *)0;                                                  \
-    }))
+    ({                                                                                         \
+        auto _bl_o = (x);                                                                      \
+        *(_bl_o.has_value ? &_bl_o.value : (void *)0);                                          \
+    })
 #define n00b_option_is_set(x) ((x).has_value)
 #define n00b_option_get_or_else(x, y)                                                          \
-    (*({                                                                                       \
-        auto p = &(x);                                                                         \
-        p->has_value ? &p->value : &(y);                                                       \
-    }))
+    ({                                                                                         \
+        auto _bl_o = (x);                                                                      \
+        _bl_o.has_value ? _bl_o.value : (y);                                                    \
+    })
 #define n00b_option_match(x, set, none) ((x).has_value ? (set) : (none))
 
 /**
