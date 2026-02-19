@@ -202,6 +202,7 @@ n00b_core = [
     'src/core/stw.c',
     'src/core/gc.c',
     'src/core/interval_tree.c',
+    'src/core/buffer.c',
 ]
 
 n00b_dll_src = n00b_core
@@ -267,6 +268,12 @@ gc_test = executable('test_gc',
     kwargs: test_common_kwargs,
 )
 test('gc', gc_test, suite: 'unit')
+
+buffer_test = executable('test_buffer',
+    ['test/unit/test_buffer.c'],
+    kwargs: test_common_kwargs,
+)
+test('buffer', buffer_test, suite: 'unit')
 
 # ============================================================================
 # Integration tests
