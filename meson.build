@@ -22,7 +22,7 @@ cc = meson.get_compiler('c')
 vcpkg_inc = get_option('vcpkg_inc')
 vcpkg_lib = get_option('vcpkg_lib')
 
-incdir = [include_directories('include'), include_directories(vcpkg_inc)]
+incdir = [include_directories('include'), include_directories('include/internal'), include_directories(vcpkg_inc)]
 using_macos = host_machine.system() == 'darwin'
 
 conf_release_build = get_option('buildtype') == 'release'
@@ -203,9 +203,55 @@ n00b_core = [
     'src/core/gc.c',
     'src/core/interval_tree.c',
     'src/core/buffer.c',
+    'src/core/string.c',
 ]
 
-n00b_dll_src = n00b_core
+n00b_unicode_generated = [
+    'src/unicode/generated/gen_age.c',
+    'src/unicode/generated/gen_bidi_brackets.c',
+    'src/unicode/generated/gen_bidi_class.c',
+    'src/unicode/generated/gen_blocks.c',
+    'src/unicode/generated/gen_casemap.c',
+    'src/unicode/generated/gen_categories.c',
+    'src/unicode/generated/gen_collation.c',
+    'src/unicode/generated/gen_combining.c',
+    'src/unicode/generated/gen_composition.c',
+    'src/unicode/generated/gen_confusables.c',
+    'src/unicode/generated/gen_decomposition.c',
+    'src/unicode/generated/gen_eaw.c',
+    'src/unicode/generated/gen_emoji.c',
+    'src/unicode/generated/gen_grapheme.c',
+    'src/unicode/generated/gen_identifiers.c',
+    'src/unicode/generated/gen_idna.c',
+    'src/unicode/generated/gen_joining.c',
+    'src/unicode/generated/gen_linebreak.c',
+    'src/unicode/generated/gen_normprops.c',
+    'src/unicode/generated/gen_numeric.c',
+    'src/unicode/generated/gen_proplist.c',
+    'src/unicode/generated/gen_script_extensions.c',
+    'src/unicode/generated/gen_scripts.c',
+    'src/unicode/generated/gen_sentbreak.c',
+    'src/unicode/generated/gen_wordbreak.c',
+]
+
+n00b_unicode = [
+    'src/unicode/encoding.c',
+    'src/unicode/properties.c',
+    'src/unicode/casemap.c',
+    'src/unicode/normalization.c',
+    'src/unicode/segmentation.c',
+    'src/unicode/string_ops.c',
+    'src/unicode/linebreak.c',
+    'src/unicode/bidi.c',
+    'src/unicode/collation.c',
+    'src/unicode/identifiers.c',
+    'src/unicode/security.c',
+    'src/unicode/idna.c',
+    'src/unicode/emoji.c',
+    'src/unicode/query.c',
+]
+
+n00b_dll_src = n00b_core + n00b_unicode_generated + n00b_unicode
 
 n00b = static_library('n00b',
     n00b_dll_src,
@@ -320,6 +366,30 @@ alloc_metadata_test = executable('test_alloc_metadata',
     kwargs: test_common_kwargs,
 )
 test('alloc_metadata', alloc_metadata_test, suite: 'integration')
+
+# ============================================================================
+# Unicode tests
+# ============================================================================
+
+unicode_test_kwargs = {
+    'include_directories': incdir + [include_directories('test/unit')],
+    'c_args': exe_c_args,
+    'link_with': [n00b],
+}
+
+unicode_test_names = [
+    'bidi', 'casemap', 'collation', 'emoji', 'encoding',
+    'identifiers', 'idna', 'iter', 'linebreak', 'normalization',
+    'properties', 'security', 'segmentation', 'string_ops',
+]
+
+foreach name : unicode_test_names
+    exe = executable('test_unicode_' + name,
+        'test/unit/test_unicode_' + name + '.c',
+        kwargs: unicode_test_kwargs,
+    )
+    test('unicode_' + name, exe, suite: 'unit')
+endforeach
 
 # ============================================================================
 # Documentation (Doxygen)

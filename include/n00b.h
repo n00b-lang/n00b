@@ -112,6 +112,14 @@ typedef struct n00b_sys_list_t               n00b_sys_list_t;
 typedef struct n00b_allocator_t              n00b_allocator_t;
 typedef struct n00b_base_allocator_t         n00b_base_allocator_t;
 typedef struct n00b_mmap_ctx_t               n00b_mmap_ctx_t;
+typedef struct n00b_vargs_t                  n00b_vargs_t;
+
+// Unicode module forward declarations.
+typedef struct n00b_unicode_break_iter_s     n00b_unicode_break_iter_t;
+typedef struct n00b_unicode_normalizer_s     n00b_unicode_normalizer_t;
+typedef struct n00b_unicode_idna_result_t    n00b_unicode_idna_result_t;
+typedef struct n00b_unicode_bidi_para_s      n00b_unicode_bidi_para_t;
+typedef struct n00b_cp_filter_t              n00b_cp_filter_t;
 
 typedef n00b_hash_value_t (*n00b_hash_fn)(void *);
 typedef n00b_string_t *(*n00b_repr_fn)(void *);

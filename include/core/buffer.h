@@ -293,7 +293,7 @@ extern char *n00b_buffer_to_c(n00b_buffer_t *buf, int64_t *len_ptr);
  * @param buf Buffer to convert.
  * @return    New string with the buffer data.
  */
-extern n00b_string_t *n00b_buffer_to_string(n00b_buffer_t *buf);
+extern n00b_string_t n00b_buffer_to_string(n00b_buffer_t *buf);
 
 /**
  * @brief Hex-encode the buffer contents into a string.
@@ -301,7 +301,7 @@ extern n00b_string_t *n00b_buffer_to_string(n00b_buffer_t *buf);
  * @param buf Buffer to encode.
  * @return    New string with lowercase hex digits ("deadbeef").
  */
-extern n00b_string_t *n00b_buffer_to_hex_str(n00b_buffer_t *buf);
+extern n00b_string_t n00b_buffer_to_hex_str(n00b_buffer_t *buf);
 
 /**
  * @brief Join an array of buffers with a separator.
