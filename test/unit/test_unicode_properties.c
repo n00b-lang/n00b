@@ -25,7 +25,7 @@ TEST(test_script)
     n00b_unicode_script_t latin = n00b_unicode_script('A');
     ASSERT(latin != 0); // Should not be Unknown/Common for Latin letter
     const char *name = n00b_unicode_script_name(latin);
-    ASSERT(name != NULL);
+    ASSERT(name != nullptr);
     ASSERT_STR_EQ(name, "Latin");
 
     n00b_unicode_script_t han = n00b_unicode_script(0x4E16);

@@ -35,6 +35,8 @@
 
 #include "unicode/types_ext.h"
 #include "unicode/properties.h"
+#include "core/array.h"
+#include "unicode/encoding.h"  // for n00b_array_decl(n00b_codepoint_t)
 
 // ===========================================================================
 // Filter objects
@@ -86,18 +88,16 @@ n00b_cp_filter_t n00b_filter_eaw(n00b_unicode_eaw_t eaw);
  *  @kw range_start  Start of codepoint range to search (default 0).
  *  @kw range_end    End of codepoint range to search (default 0x10FFFF).
  *  @kw max_results  Maximum results (0 = unlimited).
- *  @kw out_count    Pointer to receive result count.
  *  @kw allocator    Allocator for results.
  *
- *  @return Array of matching codepoints (caller frees).
+ *  @return An array of matching codepoints.
  */
-n00b_codepoint_t *
+n00b_array_t(n00b_codepoint_t)
 n00b_cp_query_n(const n00b_cp_filter_t *filters, int nfilters) _kargs
 {
     n00b_codepoint_t  range_start = 0;
     n00b_codepoint_t  range_end   = 0x10FFFF;
     size_t            max_results = 0;
-    uint32_t         *out_count   = nullptr;
     n00b_allocator_t *allocator   = nullptr;
 };
 
@@ -109,18 +109,16 @@ n00b_cp_query_n(const n00b_cp_filter_t *filters, int nfilters) _kargs
  *  @kw range_start  Start of codepoint range to search (default 0).
  *  @kw range_end    End of codepoint range to search (default 0x10FFFF).
  *  @kw max_results  Maximum results (0 = unlimited).
- *  @kw out_count    Pointer to receive result count.
  *  @kw allocator    Allocator for results.
  *
- *  @return Array of matching codepoints (caller frees).
+ *  @return An array of matching codepoints.
  */
-n00b_codepoint_t *
+n00b_array_t(n00b_codepoint_t)
 n00b_cp_query_any_n(const n00b_cp_filter_t *filters, int nfilters) _kargs
 {
     n00b_codepoint_t  range_start = 0;
     n00b_codepoint_t  range_end   = 0x10FFFF;
     size_t            max_results = 0;
-    uint32_t         *out_count   = nullptr;
     n00b_allocator_t *allocator   = nullptr;
 };
 
@@ -153,7 +151,7 @@ n00b_cp_query_any_n(const n00b_cp_filter_t *filters, int nfilters) _kargs
 
 /** @brief Look up a codepoint's Unicode name.
  *  @param cp  The codepoint.
- *  @return    Static string with the name, or NULL if unknown.
+ *  @return    Static string with the name, or nullptr if unknown.
  */
 const char *n00b_unicode_cp_name(n00b_codepoint_t cp);
 

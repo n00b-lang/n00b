@@ -1,22 +1,30 @@
-// Declarative C2Y Grammar Parser
-//
-// This parser implements the complete C2Y grammar (ISO/IEC 9899:202y N3783 Annex A)
-// using a declarative style where production branches directly mirror the grammar.
-//
-// DECLARATIVE INTERFACE
-//
-// Production branches use these macros to match grammar elements:
-//
-//     required_nt(name)       - Match a required non-terminal
-//     optional_nt(name)       - Match an optional non-terminal
-//     required_op("x")        - Match a required operator/punctuation
-//     optional_op("x")        - Match an optional operator
-//     required_keyword(list)  - Match a required keyword from a list
-//     optional_keyword(list)  - Match an optional keyword
-//
-// Branch bodies contain NO conditionals - they are pure sequences of these macros.
-// All failure handling is encapsulated in the macro implementations.
-//
+/**
+ * @file parse.c
+ * @brief Declarative packrat parser for the C2Y grammar with NCC extensions.
+ *
+ * Implements the complete C2Y grammar (ISO/IEC 9899:202y N3783 Annex A)
+ * using a declarative style where production branches directly mirror the
+ * grammar specification.  NCC extensions (`_kargs`, `once`, `package`,
+ * variadic `+`, postfix `!`, `typeid()`, etc.) are woven into the
+ * appropriate productions.
+ *
+ * ## Declarative Interface
+ *
+ * Branch bodies use these macros to match grammar elements:
+ *
+ * | Macro | Purpose |
+ * |-------|---------|
+ * | `required_nt(name)` | Match a required non-terminal |
+ * | `optional_nt(name)` | Match an optional non-terminal |
+ * | `required_op("x")` | Match a required operator/punctuation |
+ * | `optional_op("x")` | Match an optional operator |
+ * | `required_keyword(list)` | Match a required keyword from a list |
+ * | `optional_keyword(list)` | Match an optional keyword |
+ *
+ * Branch bodies contain **no conditionals** — they are pure sequences
+ * of these macros.  All failure handling is encapsulated in the macro
+ * implementations.
+ */
 // PRODUCTION STRUCTURE
 //
 // Grammar productions without recursion are declared with:
@@ -2936,6 +2944,29 @@ parse_declaration_st(lex_t *state, int *position, symtab_t *st)
 tnode_t *
 parse_translation_unit_st(lex_t *state, int *position, symtab_t *st)
 {
+    // NTs where profiling shows near-zero memo hit rates.
+    // These are expression-hierarchy wrappers and initializer-related
+    // NTs that get stored ~440K times but retrieved ~0 times on files
+    // with large initializer lists.  Skipping them reduces heap copies
+    // from ~36M nodes to a fraction of that.
+    static const nt_set_t skip_memo =
+        NT_BIT(NT_compound_literal)
+        | NT_BIT(NT_primary_expression)
+        | NT_BIT(NT_unary_operator)
+        | NT_BIT(NT_conditional_expression)
+        | NT_BIT(NT_assignment_expression)
+        | NT_BIT(NT_assignment_operator)
+        | NT_BIT(NT_constant_expression)
+        | NT_BIT(NT_designation)
+        | NT_BIT(NT_initializer)
+        | NT_BIT(NT_braced_initializer)
+        | NT_BIT(NT_designator)
+        | NT_BIT(NT_synthetic_identifier)
+        | NT_BIT(NT_synthetic_string_literal)
+        | NT_BIT(NT_static_assert_declaration)
+        | NT_BIT(NT_generic_selection)
+        | NT_BIT(NT_identifier);
+
     parser_t parser = {
         .input          = state->input,
         .lex            = state,
@@ -2948,6 +2979,7 @@ parse_translation_unit_st(lex_t *state, int *position, symtab_t *st)
         .label_table    = nullptr,
         .memo           = nullptr,
         .memo_size      = 0,
+        .no_memo        = skip_memo,
     };
 
     memo_init(&parser);

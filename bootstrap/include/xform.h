@@ -25,7 +25,7 @@ typedef struct kw_use_ctx_t {
 /**
  * @brief Transform context for processing token streams.
  */
-struct xform_t {
+struct tok_xform_t {
     ncc_buf_t    *input;            /**< Source buffer */
     tok_t        *toks;             /**< Token array */
     char         *in_file;          /**< Input filename */
@@ -55,7 +55,7 @@ extern bool apply_transforms(lex_t *state);
  * @param ctx Transform context
  * @param success Whether rewrite succeeded
  */
-extern void finish_rewrite(xform_t *ctx, bool success);
+extern void finish_rewrite(tok_xform_t *ctx, bool success);
 
 /**
  * @brief Extract the line containing a token.
@@ -63,7 +63,7 @@ extern void finish_rewrite(xform_t *ctx, bool success);
  * @param t Token to extract line for
  * @return Newly allocated string containing the line
  */
-extern char *extract_line(xform_t *ctx, tok_t *t);
+extern char *extract_line(tok_xform_t *ctx, tok_t *t);
 
 /**
  * @brief Extract a range of tokens as text.
@@ -72,7 +72,7 @@ extern char *extract_line(xform_t *ctx, tok_t *t);
  * @param end_ix End token index
  * @return Newly allocated string containing the range
  */
-extern char *extract_range(xform_t *ctx, int start_ix, int end_ix);
+extern char *extract_range(tok_xform_t *ctx, int start_ix, int end_ix);
 
 /**
  * @brief Skip forward to a specific punctuation character.
@@ -80,7 +80,7 @@ extern char *extract_range(xform_t *ctx, int start_ix, int end_ix);
  * @param punc Punctuation character to find
  * @return Token at the punctuation, or nullptr
  */
-extern tok_t *skip_forward_to_punct(xform_t *ctx, char punc);
+extern tok_t *skip_forward_to_punct(tok_xform_t *ctx, char punc);
 
 /** @} */
 
@@ -94,14 +94,14 @@ extern tok_t *skip_forward_to_punct(xform_t *ctx, char punc);
  * @param t Current token
  * @return true if transform was applied
  */
-extern bool keyword_xform(xform_t *ctx, tok_t *t);
+extern bool keyword_xform(tok_xform_t *ctx, tok_t *t);
 
 /**
  * @brief Track keyword usage for context.
  * @param ctx Transform context
  * @param t Current token
  */
-extern void kw_tracking(xform_t *ctx, tok_t *t);
+extern void kw_tracking(tok_xform_t *ctx, tok_t *t);
 
 /** @} */
 

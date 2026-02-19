@@ -86,7 +86,7 @@
  * @brief Free the backing storage of an array (only use if _new'd).
  * @param x  Array (lvalue).
  */
-#define n00b_array_free(x) n00b_dealloc((x).data)
+#define n00b_array_free(x) n00b_free((x).data)
 
 // ============================================================================
 // Access

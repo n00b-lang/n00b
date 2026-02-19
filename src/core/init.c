@@ -16,6 +16,8 @@
 #include "core/random.h"
 #include "core/stw.h"
 #include "core/gc.h"
+#include "strings/style_registry.h"
+#include "strings/theme.h"
 
 size_t   n00b_page_size = 0;
 uint64_t n00b_gc_guard  = 0;
@@ -161,6 +163,9 @@ n00b_init(n00b_runtime_t *rt, int argc, char *argv[]) _kargs
                                                 .name   = "default");
         rt->default_allocator = (n00b_allocator_t *)rt->default_arena;
     }
+
+    n00b_str_registry_init();
+    n00b_theme_init();
 
     rt->startup_complete = true;
 }

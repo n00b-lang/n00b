@@ -1,3 +1,12 @@
+/**
+ * @file argv_parse.c
+ * @brief Command-line argument parser for NCC.
+ *
+ * Classifies compiler flags (`-c`, `-E`, `-o`, `-M*`, etc.),
+ * identifies source files by extension, detects NCC-specific
+ * flags (`--no-ncc`, `--dump-tokens`, `--modernize`), and
+ * populates `ncc_argv_t` for downstream pipeline decisions.
+ */
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>

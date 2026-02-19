@@ -20,6 +20,7 @@ typedef struct n00b_unicode_break_iter_s n00b_unicode_break_iter_t;
 // Encoding
 // ===========================================================================
 
+bool n00b_unicode_utf8_validate(const char *src, uint32_t len);
 int64_t n00b_unicode_utf8_count_codepoints_raw(const char *src, uint32_t len);
 
 // ===========================================================================
@@ -80,7 +81,9 @@ uint32_t n00b_unicode_grapheme_count_raw(const char *data, int64_t len);
 void n00b_unicode_linebreaks_raw(const char *data, int64_t len,
                                  n00b_unicode_lb_action_t *out);
 uint32_t *n00b_unicode_linebreak_wrap_raw(const char *data, int64_t len,
-                                          int width, uint32_t *num_breaks);
+                                          int width, int hang,
+                                          bool no_hard_wrap,
+                                          uint32_t *num_breaks);
 
 // ===========================================================================
 // String ops (used internally by string_ops.c and others)

@@ -98,24 +98,6 @@ ncc_buf_read_stream(FILE *f)
     return result;
 }
 
-bool
-ncc_buf_write(ncc_buf_t *buf, FILE *f)
-{
-    char   *p   = buf->data;
-    int64_t len = buf->len;
-
-    while (len > 0) {
-        size_t written = fwrite(p, 1, len, f);
-        if (written == 0) {
-            return false;
-        }
-        p += written;
-        len -= written;
-    }
-
-    return true;
-}
-
 ncc_buf_t *
 ncc_buf_from_str(const char *str)
 {

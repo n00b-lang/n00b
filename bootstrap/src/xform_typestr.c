@@ -3,7 +3,6 @@
  * @brief Transforms `typestr(type)` into a string literal containing encoded type ID.
  */
 
-#include <ctype.h>
 #include "base_alloc_shim.h"
 
 #include "branch_symbols.h"
@@ -18,7 +17,7 @@
 // typestr(type_name|string [, typename|string_literal]*) -> "encoded_type_id"
 
 static void
-extract_atom(xform_ctx_t *ctx, tnode_t *node, list_t **l)
+extract_atom(tree_xform_t *ctx, tnode_t *node, ncc_list_t **l)
 {
     char *text;
 
@@ -42,7 +41,7 @@ extract_atom(xform_ctx_t *ctx, tnode_t *node, list_t **l)
             num_toks = 1;
         }
 
-        list_t *parts   = list_alloc(0);
+        ncc_list_t *parts   = ncc_list_alloc(0);
         tok_t  *cur_tok = node->tptr;
         int     found   = 0;
         while (found < num_toks) {
@@ -53,7 +52,7 @@ extract_atom(xform_ctx_t *ctx, tnode_t *node, list_t **l)
                     memmove(part, part + 1, slen - 2);
                     part[slen - 2] = '\0';
                 }
-                parts = list_append(parts, part);
+                parts = ncc_list_append(parts, part);
                 found++;
             }
             cur_tok++;
@@ -61,17 +60,17 @@ extract_atom(xform_ctx_t *ctx, tnode_t *node, list_t **l)
         text = join(parts, "");
         base_dealloc(parts);
     }
-    *l = list_append(*l, text);
+    *l = ncc_list_append(*l, text);
 }
 
 static tnode_t *
-xform_typestr(xform_ctx_t *ctx, tnode_t *node)
+xform_typestr(tree_xform_t *ctx, tnode_t *node)
 {
     if (node->branch != BRANCH(synthetic_string_literal, TYPESTR)) {
         return nullptr;
     }
     // kids: [0]=typestr [1]=( [2]=typeid_atom [3]=opt(continuation) [4]=)
-    list_t *flattened = list_alloc(0);
+    ncc_list_t *flattened = ncc_list_alloc(0);
 
     extract_atom(ctx, tnode_get_kid(node, 2), &flattened);
 
@@ -85,8 +84,9 @@ xform_typestr(xform_ctx_t *ctx, tnode_t *node)
     char *type_id = join(flattened, "");
 
     // Wrap in quotes to make it a string literal token
-    char *quoted = base_alloc(strlen(type_id) + 3);
-    sprintf(quoted, "\"%s\"", type_id);
+    size_t qlen  = strlen(type_id) + 3;
+    char  *quoted = base_alloc(qlen);
+    snprintf(quoted, qlen, "\"%s\"", type_id);
     base_dealloc(type_id);
 
     tnode_t *str_node = synth_terminal(quoted, TT_STR, get_node_line(node));

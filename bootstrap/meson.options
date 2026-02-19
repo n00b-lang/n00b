@@ -1,6 +1,6 @@
 option('extensions',
        type : 'array',
-       value : ['c', 'nc'])
+       value : ['c', 'nc', 'h'])
 option('coverage',
        type: 'boolean',
        value: false,

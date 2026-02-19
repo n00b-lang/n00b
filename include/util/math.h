@@ -8,6 +8,22 @@
 #pragma once
 #include <stdint.h>
 
+#if __has_include(<stdbit.h>)
+#include <stdbit.h>
+#else
+#define stdc_leading_zeros(x) _Generic((x), \
+    unsigned long long: __builtin_clzll, \
+    unsigned long: __builtin_clzl, \
+    default: __builtin_clz)(x)
+#define stdc_trailing_zeros(x) _Generic((x), \
+    unsigned long long: __builtin_ctzll, \
+    unsigned long: __builtin_ctzl, \
+    default: __builtin_ctz)(x)
+#define stdc_count_ones(x) _Generic((x), \
+    unsigned long long: __builtin_popcountll, \
+    unsigned long: __builtin_popcountl, \
+    default: __builtin_popcount)(x)
+#endif
 /** @brief Count leading zeros in a 64-bit value. */
 extern uint64_t n00b_clz(uint64_t value);
 
@@ -20,7 +36,7 @@ extern uint64_t n00b_clz(uint64_t value);
 static inline uint64_t
 n00b_int_log2(uint64_t n)
 {
-    return 63 - __builtin_clzll(n);
+    return 63 - stdc_leading_zeros(n);
 }
 
 /**
@@ -82,6 +98,6 @@ n00b_count_ones(uint64_t n)
 static inline unsigned int
 n00b_count_ones(uint64_t n)
 {
-    return __builtin_popcountll((unsigned long long)n);
+    return stdc_count_ones((unsigned long long)n);
 }
 #endif

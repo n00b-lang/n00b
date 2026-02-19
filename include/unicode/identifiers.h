@@ -1,4 +1,5 @@
 #pragma once
+
 /** @file identifiers.h
  *  @brief Unicode identifier character classification and validation.
  *

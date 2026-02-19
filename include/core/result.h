@@ -83,7 +83,7 @@ n00b_result_decl(uint64_t);
 
 /**
  * @brief Wrap an mmap() call — returns MAP_FAILED on error.
- * Usage: n00b_result_t(void *) r = n00b_check_mmap(NULL, sz, ...);
+ * Usage: n00b_result_t(void *) r = n00b_check_mmap(nullptr, sz, ...);
  */
 #define n00b_check_mmap(...)                                                                   \
     ({                                                                                         \

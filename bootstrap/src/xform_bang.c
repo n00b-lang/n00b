@@ -27,7 +27,7 @@
 
 #include "branch_symbols.h"
 #include "transform.h"
-#include "rewrite.h"
+#include "xform_helpers.h"
 #include "types.h"
 #include "nt_types.h"
 
@@ -35,9 +35,9 @@
 #include <stdlib.h>
 #include "base_alloc_shim.h"
 #include <string.h>
+#include "ncc_limits.h"
 
-// Maximum length for generated variable names
-#define VAR_NAME_SIZE 32
+// VAR_NAME_SIZE replaced by NCC_INTSTR_BUF from ncc_limits.h
 
 // ---------------------------------------------------------------------------
 // Node Validation
@@ -123,32 +123,6 @@ extract_declarator_name(ncc_buf_t *input, tnode_t *node)
 // ---------------------------------------------------------------------------
 
 /**
- * @brief Build an identifier node.
- */
-static tnode_t *
-build_identifier(const char *name, int line)
-{
-    tnode_t *id = synth_nonterminal("identifier");
-    id->nt_id   = NT_identifier;
-    add_child(id, synth_terminal(name, TT_ID, line));
-    return id;
-}
-
-/**
- * @brief Build a simple primary_expression containing an identifier.
- * primary_expression_7 -> identifier
- */
-static tnode_t *
-build_primary_id(const char *name, int line)
-{
-    tnode_t *primary = synth_nonterminal("primary_expression_7");
-    primary->nt_id   = NT_primary_expression;
-    primary->branch  = 7;
-    add_child(primary, build_identifier(name, line));
-    return primary;
-}
-
-/**
  * @brief Build a parenthesized expression.
  * primary_expression_3 -> ( expression )
  */
@@ -218,89 +192,6 @@ build_unary_not(tnode_t *operand, int line)
     add_child(unary, cast);
 
     return unary;
-}
-
-/**
- * @brief Wrap an expression in the full expression hierarchy up to assignment_expression.
- * This is needed because many places in the grammar expect assignment_expression.
- */
-static tnode_t *
-wrap_in_expr_hierarchy(tnode_t *inner, int line)
-{
-    (void)line;
-
-    // Build chain: unary -> cast -> mult -> add -> shift -> rel -> eq -> and -> xor -> or -> land -> lor -> cond -> assign
-    tnode_t *unary = synth_nonterminal("unary_expression_9");
-    unary->nt_id   = NT_unary_expression;
-    unary->branch  = 9;
-    add_child(unary, inner);
-
-    tnode_t *cast = synth_nonterminal("cast_expression_1");
-    cast->nt_id   = NT_cast_expression;
-    cast->branch  = 1;
-    add_child(cast, unary);
-
-    tnode_t *mult = synth_nonterminal("multiplicative_expression_3");
-    mult->nt_id   = NT_multiplicative_expression;
-    mult->branch  = 3;
-    add_child(mult, cast);
-
-    tnode_t *add = synth_nonterminal("additive_expression_2");
-    add->nt_id   = NT_additive_expression;
-    add->branch  = 2;
-    add_child(add, mult);
-
-    tnode_t *shift = synth_nonterminal("shift_expression_2");
-    shift->nt_id   = NT_shift_expression;
-    shift->branch  = 2;
-    add_child(shift, add);
-
-    tnode_t *rel = synth_nonterminal("relational_expression_4");
-    rel->nt_id   = NT_relational_expression;
-    rel->branch  = 4;
-    add_child(rel, shift);
-
-    tnode_t *eq = synth_nonterminal("equality_expression_2");
-    eq->nt_id   = NT_equality_expression;
-    eq->branch  = 2;
-    add_child(eq, rel);
-
-    tnode_t *and_ = synth_nonterminal("AND_expression_1");
-    and_->nt_id   = NT_AND_expression;
-    and_->branch  = 1;
-    add_child(and_, eq);
-
-    tnode_t *xor_ = synth_nonterminal("exclusive_OR_expression_1");
-    xor_->nt_id   = NT_exclusive_OR_expression;
-    xor_->branch  = 1;
-    add_child(xor_, and_);
-
-    tnode_t *or_ = synth_nonterminal("inclusive_OR_expression_1");
-    or_->nt_id   = NT_inclusive_OR_expression;
-    or_->branch  = 1;
-    add_child(or_, xor_);
-
-    tnode_t *land = synth_nonterminal("logical_AND_expression_1");
-    land->nt_id   = NT_logical_AND_expression;
-    land->branch  = 1;
-    add_child(land, or_);
-
-    tnode_t *lor = synth_nonterminal("logical_OR_expression_1");
-    lor->nt_id   = NT_logical_OR_expression;
-    lor->branch  = 1;
-    add_child(lor, land);
-
-    tnode_t *cond = synth_nonterminal("conditional_expression_1");
-    cond->nt_id   = NT_conditional_expression;
-    cond->branch  = 1;
-    add_child(cond, lor);
-
-    tnode_t *assign = synth_nonterminal("assignment_expression_1");
-    assign->nt_id   = NT_assignment_expression;
-    assign->branch  = 1;
-    add_child(assign, cond);
-
-    return assign;
 }
 
 /**
@@ -717,7 +608,7 @@ build_primary_block_selection(tnode_t *sel_stmt)
  * @return Replacement node, or nullptr if not a `!` branch
  */
 static tnode_t *
-xform_postfix_bang(xform_ctx_t *ctx, tnode_t *node)
+xform_postfix_bang(tree_xform_t *ctx, tnode_t *node)
 {
     if (node->branch != BRANCH(postfix_expression, BANG)) {
         return nullptr;
@@ -757,8 +648,9 @@ xform_postfix_bang(xform_ctx_t *ctx, tnode_t *node)
         exit(1);
     }
 
-    char varname[VAR_NAME_SIZE];
-    snprintf(varname, VAR_NAME_SIZE, "_ncc_try_%d", node->id);
+    char varname[NCC_INTSTR_BUF];
+    int  vret = snprintf(varname, sizeof(varname), "_ncc_try_%d", node->id);
+    NCC_CHECK_SNPRINTF(vret, varname);
 
     // Build the statement expression tree structure
     // primary_expression_6 -> ( compound_statement )

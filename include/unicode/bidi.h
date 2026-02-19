@@ -1,4 +1,5 @@
 #pragma once
+
 /** @file bidi.h
  *  @brief Unicode Bidirectional Algorithm (UAX #9).
  *
@@ -7,6 +8,10 @@
  */
 
 #include "unicode/types_ext.h"
+#include "core/array.h"
+
+n00b_array_decl(uint8_t);
+n00b_array_decl(int32_t);
 
 /** @brief Opaque handle for a resolved bidirectional paragraph. */
 typedef struct n00b_unicode_bidi_para_s n00b_unicode_bidi_para_t;
@@ -17,31 +22,29 @@ typedef struct n00b_unicode_bidi_para_s n00b_unicode_bidi_para_t;
  *  @return A resolved bidi paragraph; caller must call
  *          n00b_unicode_bidi_free().
  */
-n00b_unicode_bidi_para_t *n00b_unicode_bidi_open(n00b_string_t s)
-    _kargs { n00b_allocator_t *allocator = nullptr; };
+n00b_unicode_bidi_para_t *
+n00b_unicode_bidi_open(n00b_string_t s) _kargs
+{
+    n00b_allocator_t *allocator = nullptr;
+};
 
 /** @brief Return the resolved paragraph embedding level.
  *  @param p  The bidi paragraph.
  *  @return 0 for LTR, 1 for RTL.
  */
-uint8_t n00b_unicode_bidi_paragraph_level(
-    const n00b_unicode_bidi_para_t *p);
+uint8_t n00b_unicode_bidi_paragraph_level(const n00b_unicode_bidi_para_t *p);
 
-/** @brief Return the per-character resolved embedding levels.
+/** @brief Return a copy of the per-character resolved embedding levels.
  *  @param p    The bidi paragraph.
- *  @param len  Out: number of levels returned.
- *  @return Pointer to an array of embedding levels (one per codepoint).
+ *  @return An array of embedding levels (one per codepoint).
  */
-const uint8_t *n00b_unicode_bidi_levels(
-    const n00b_unicode_bidi_para_t *p, uint32_t *len);
+n00b_array_t(uint8_t) n00b_unicode_bidi_levels(const n00b_unicode_bidi_para_t *p);
 
 /** @brief Compute a visual reordering map from resolved levels.
- *  @param p           The bidi paragraph.
- *  @param visual_map  Output array (caller-allocated, one entry per
- *                     codepoint). `visual_map[visual_pos] = logical_pos`.
+ *  @param p  The bidi paragraph.
+ *  @return An array where `result.data[visual_pos] = logical_pos`.
  */
-void n00b_unicode_bidi_reorder_visual(const n00b_unicode_bidi_para_t *p,
-                                      int32_t *visual_map);
+n00b_array_t(int32_t) n00b_unicode_bidi_reorder_visual(const n00b_unicode_bidi_para_t *p);
 
 /** @brief Free a bidi paragraph handle.
  *  @param p  The paragraph to free.

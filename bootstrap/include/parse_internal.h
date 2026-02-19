@@ -63,6 +63,7 @@ struct parser_t {
     int            pos;
     memo_entry_t **memo;      /**< Memo table: memo[pos][nt_id] */
     int            memo_size; /**< Number of token positions in memo */
+    nt_set_t       no_memo;   /**< NTs that skip memoization */
 #if defined(PDEBUG)
     pdebug_t *debug_root;
     pdebug_t *debug_cur;

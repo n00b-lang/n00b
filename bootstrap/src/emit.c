@@ -6,6 +6,7 @@
 #include <stdbool.h>
 #include <string.h>
 #include "base_alloc_shim.h"
+#include "ncc_limits.h"
 #include "emit.h"
 #include "nt_types.h"
 #include "token.h"

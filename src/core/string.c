@@ -7,7 +7,7 @@ n00b_string_t
 n00b_string_from_raw(n00b_allocator_t *allocator, const char *src,
                      int64_t byte_len, int64_t cp_count)
 {
-    n00b_string_t result = {0};
+    n00b_string_t result = {};
 
     n00b_ensure_allocator(allocator);
     result.data = n00b_alloc_array(char, (size_t)byte_len + 1,

@@ -52,9 +52,9 @@ n00b_memory_scan_init(n00b_memory_scan_t *ctx, void *s, size_t len, uint8_t cat_
 /**
  * @brief Advance the scanner to the next pointer in the range.
  * @param ctx   Scan context.
- * @param tinfo Output: kind of memory the pointer points to (may be NULL).
- * @param perms Output: permissions of the target page (may be NULL).
- * @return      Next pointer found, or NULL when exhausted.
+ * @param tinfo Output: kind of memory the pointer points to (may be nullptr).
+ * @param perms Output: permissions of the target page (may be nullptr).
+ * @return      Next pointer found, or nullptr when exhausted.
  */
 extern void *n00b_memory_scan_next(n00b_memory_scan_t   *ctx,
                                    n00b_mmap_rec_kind_t *tinfo,

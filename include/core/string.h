@@ -15,26 +15,24 @@
  * @brief Immutable UTF-8 string with optional styling.
  *
  * @c data points to the raw UTF-8 bytes (not necessarily NUL-terminated).
- * @c u32_data is a lazily-computed UTF-32 expansion (may be NULL).
  * @c styling is reserved for rich-text formatting metadata (TBD).
  */
 struct n00b_string_t {
-    int64_t           u8_bytes;
-    char             *data;
-    int64_t           codepoints;
-    n00b_codepoint_t *u32_data;
-    void             *styling;
+    int64_t  u8_bytes;
+    char    *data;
+    int64_t  codepoints;
+    void    *styling;
 };
 
 /**
  * @brief Construct an `n00b_string_t` by value from raw UTF-8 data.
  *
  * Allocates a copy of @p src (plus NUL terminator) using @p allocator
- * and returns a populated string struct.  If @p src is NULL or
+ * and returns a populated string struct.  If @p src is nullptr or
  * @p byte_len is 0, returns an empty string.
  *
- * @param allocator  Allocator to use (NULL = runtime default).
- * @param src        Source UTF-8 bytes (may be NULL if byte_len == 0).
+ * @param allocator  Allocator to use (nullptr = runtime default).
+ * @param src        Source UTF-8 bytes (may be nullptr if byte_len == 0).
  * @param byte_len   Number of bytes to copy.
  * @param cp_count   Number of codepoints in the string.
  * @return           A populated `n00b_string_t` (by value).
@@ -49,7 +47,7 @@ n00b_string_from_raw(n00b_allocator_t *allocator, const char *src,
 /**
  * @brief Return an empty `n00b_string_t`.
  *
- * @param allocator  Allocator (NULL = runtime default).
+ * @param allocator  Allocator (nullptr = runtime default).
  * @return           An empty string (0 bytes, 0 codepoints).
  */
 extern n00b_string_t

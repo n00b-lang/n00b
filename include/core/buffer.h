@@ -140,7 +140,7 @@ struct n00b_buffer_t {
  * @kw ptr       Adopt an existing data pointer (no copy).
  * @kw allocator Allocator to use for internal allocations.
  *
- * @pre @p buf is non-NULL and uninitialized.
+ * @pre @p buf is non-nullptr and uninitialized.
  * @post @p buf is ready for use; lock is initialized.
  */
 extern void
@@ -156,7 +156,7 @@ n00b_buffer_init(n00b_buffer_t *buf) _kargs
 /**
  * @brief Concatenate two buffers, returning a new buffer.
  *
- * If either argument is NULL, returns the other (or NULL if both are NULL).
+ * If either argument is nullptr, returns the other (or nullptr if both are nullptr).
  *
  * @param b1 First buffer.
  * @param b2 Second buffer.
@@ -186,7 +186,7 @@ extern n00b_size_t n00b_buffer_len(n00b_buffer_t *buf);
  * @param buf    Buffer to resize.
  * @param new_sz New byte length.
  *
- * @pre @p buf is non-NULL.
+ * @pre @p buf is non-nullptr.
  * @post `n00b_buffer_len(buf) == new_sz`.
  */
 extern void n00b_buffer_resize(n00b_buffer_t *buf, uint64_t new_sz);
@@ -252,7 +252,7 @@ n00b_buffer_get_slice(n00b_buffer_t *buf, int64_t start, int64_t end) _kargs
  * @param buf   Buffer to modify.
  * @param start Start byte index of the region to replace.
  * @param end   End byte index (exclusive) of the region to replace.
- * @param val   Replacement buffer (may be NULL to just delete).
+ * @param val   Replacement buffer (may be nullptr to just delete).
  * @return      `n00b_result_t(bool)` -- ok(true) on success, or err on OOB.
  */
 extern n00b_result_t(bool)
@@ -276,7 +276,7 @@ n00b_buffer_copy(n00b_buffer_t *buf) _kargs
  * @brief Get a raw C pointer to the buffer data.
  *
  * @param buf     Buffer to access.
- * @param len_ptr If non-NULL, receives the byte length.
+ * @param len_ptr If non-nullptr, receives the byte length.
  * @return        Pointer to the internal data (not a copy).
  *
  * @pre The caller ensures no concurrent mutation.
@@ -308,7 +308,7 @@ extern n00b_string_t n00b_buffer_to_hex_str(n00b_buffer_t *buf);
  *
  * @param items  Array of buffer pointers.
  * @param count  Number of elements in @p items.
- * @param joiner Separator buffer (may be NULL for no separator).
+ * @param joiner Separator buffer (may be nullptr for no separator).
  * @return       New buffer with all items joined.
  *
  * @pre @p count > 0 and @p items[0..count-1] are valid.
@@ -336,7 +336,7 @@ n00b_buffer_from_codepoint(n00b_codepoint_t cp) _kargs
  * @brief Free a buffer's data and zero the struct.
  *
  * @param buf Buffer to free.
- * @post @p buf->data is NULL, @p buf->byte_len is 0.
+ * @post @p buf->data is nullptr, @p buf->byte_len is 0.
  */
 extern void n00b_buffer_free(n00b_buffer_t *buf);
 
@@ -372,7 +372,7 @@ n00b_buffer_empty() _kargs
  *
  * @kw allocator Allocator for the buffer (nullptr = runtime default).
  *
- * @pre @p bytes is non-NULL when @p len > 0.
+ * @pre @p bytes is non-nullptr when @p len > 0.
  */
 static inline n00b_buffer_t *
 n00b_buffer_from_bytes(char *bytes, int64_t len) _kargs

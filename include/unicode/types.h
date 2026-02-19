@@ -9,7 +9,6 @@
  *  IDNA errors, script restriction levels, and break iterator types.
  */
 
-#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>

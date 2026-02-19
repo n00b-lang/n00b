@@ -283,7 +283,6 @@ test_hex_init(void)
         .u8_bytes   = 8,
         .codepoints = 8,
         .styling    = nullptr,
-        .u32_data   = nullptr,
     };
 
     n00b_buffer_t *buf = n00b_alloc(n00b_buffer_t);

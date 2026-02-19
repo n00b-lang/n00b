@@ -1,3 +1,11 @@
+/**
+ * @file xforms.c
+ * @brief Token-level transform dispatch for the NCC compile pipeline.
+ *
+ * Walks the token array and dispatches to per-token-type transform
+ * handlers. Currently a thin passthrough — the real work happens in
+ * the tree transforms (xform_*.c) after parsing.
+ */
 #include <stdlib.h>
 #include "base_alloc_shim.h"
 #include <string.h>
@@ -5,7 +13,7 @@
 #include "xform.h"
 
 static inline bool
-try_id_xforms(xform_t *ctx)
+try_id_xforms(tok_xform_t *ctx)
 {
     ctx->ix++;
     return true;
@@ -14,7 +22,7 @@ try_id_xforms(xform_t *ctx)
 bool
 apply_transforms(lex_t *state)
 {
-    xform_t ctx = {
+    tok_xform_t ctx = {
         .input   = state->input,
         .toks    = state->toks,
         .ix      = 0,
@@ -39,7 +47,7 @@ apply_transforms(lex_t *state)
 }
 
 void
-finish_rewrite(xform_t *ctx, bool include_comments)
+finish_rewrite(tok_xform_t *ctx, bool include_comments)
 {
     for (int i = ctx->rewrite_start_ix; i < ctx->ix; i++) {
         if (!include_comments || ctx->toks[i].type != TT_COMMENT) {
@@ -49,7 +57,7 @@ finish_rewrite(xform_t *ctx, bool include_comments)
 }
 
 char *
-extract_line(xform_t *ctx, tok_t *t)
+extract_line(tok_xform_t *ctx, tok_t *t)
 {
     char *start = ctx->input->data + t->offset;
     char *end   = ctx->input->data + ctx->input->len;
@@ -68,7 +76,7 @@ extract_line(xform_t *ctx, tok_t *t)
 }
 
 char *
-extract_range(xform_t *ctx, int start_ix, int end_ix)
+extract_range(tok_xform_t *ctx, int start_ix, int end_ix)
 {
     int    start_offset;
     int    end_offset;
@@ -92,7 +100,7 @@ extract_range(xform_t *ctx, int start_ix, int end_ix)
 }
 
 tok_t *
-skip_forward_to_punct(xform_t *ctx, char punc)
+skip_forward_to_punct(tok_xform_t *ctx, char punc)
 {
     tok_t *t = advance(ctx, true);
     while (t) {

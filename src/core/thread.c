@@ -97,12 +97,12 @@ n00b_capture_stack_base(n00b_thread_t *thread, n00b_runtime_t *runtime)
         // Pthreads reports the lowest address, not the highest.
         pthread_attr_getstack(&thread->pthread_attrs, (void **)&lowest, &size);
         highest = lowest + size;
-#elif defined(__APPLE__)
+#elifdef __APPLE__
         pthread_t ptid = pthread_self();
         highest        = pthread_get_stackaddr_np(ptid);
         size           = pthread_get_stacksize_np(ptid);
         lowest         = highest - size;
-#elif defined(__FreeBSD__)
+#elifdef __FreeBSD__
         pthread_attr_get_np(pthread_self(), &thread->pthread_attrs);
         pthread_attr_getstackaddr(&thread->pthread_attrs, (void **)&lowest);
         pthread_attr_getstacksize(&thread->pthread_attrs, &size);

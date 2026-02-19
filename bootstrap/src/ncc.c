@@ -1,3 +1,12 @@
+/**
+ * @file ncc.c
+ * @brief NCC entry point: argument parsing, preprocessor invocation, dispatch.
+ *
+ * Parses the command line, decides whether to pass through to the
+ * underlying compiler or invoke the NCC pipeline, and provides
+ * `ncc_invoke_preprocessor()` which forks clang with `-E` and
+ * shuttles data through pipes using `poll()`.
+ */
 #include <stdio.h>
 #include <stdlib.h>
 #include <signal.h>
@@ -5,14 +14,14 @@
 #include <unistd.h>
 #include <assert.h>
 #include <errno.h>
-#include <fcntl.h>
-#include <poll.h>
+
+#include "ncc_limits.h"
 
 static void
 crash_handler(int sig)
 {
-    void *bt[200];
-    int   n = backtrace(bt, 200);
+    void *bt[NCC_BACKTRACE_DEPTH];
+    int   n = backtrace(bt, NCC_BACKTRACE_DEPTH);
     fprintf(stderr, "\n=== SIGNAL %d ===\n", sig);
     backtrace_symbols_fd(bt, n, STDERR_FILENO);
     _exit(1);
@@ -21,6 +30,7 @@ crash_handler(int sig)
 #include "argv_parse.h"
 #include "compile.h"
 #include "modernize.h"
+#include "pipe_io.h"
 
 #ifdef NCC_HAS_TRASHHEAP
 extern void th_init(void);
@@ -108,21 +118,28 @@ ncc_invoke_preprocessor(ncc_argv_t *ctx, char *compiler, ncc_buf_t *input)
 
     // Prepend a line marker so the CPP attributes its output to the original
     // source file instead of "<stdin>".
-    if (!ctx->has_stdin && ctx->sources[0]) {
-        char       line_marker[4096];
-        int        n        = snprintf(line_marker, sizeof(line_marker), "# 1 \"%s\"\n", ctx->sources[0]);
-        ncc_buf_t *prefixed = ncc_buf_alloc(n + input->len);
-        memcpy(prefixed->data, line_marker, n);
-        memcpy(prefixed->data + n, input->data, input->len);
-        prefixed->len = n + input->len;
-        base_dealloc(input);
-        input = prefixed;
+    {
+        char  line_marker[NCC_LINE_MARKER_BUF];
+        int   lm_len = 0;
+
+        if (!ctx->has_stdin && ctx->sources[0]) {
+            lm_len = snprintf(line_marker, sizeof(line_marker),
+                              "# 1 \"%s\"\n", ctx->sources[0]);
+        }
+
+        if (lm_len > 0) {
+            ncc_buf_t *prefixed = ncc_buf_alloc(lm_len + input->len);
+            memcpy(prefixed->data, line_marker, lm_len);
+            memcpy(prefixed->data + lm_len, input->data, input->len);
+            prefixed->len = lm_len + input->len;
+            base_dealloc(input);
+            input = prefixed;
+        }
     }
 
-    // The number is the child's fd; the parent should write to pipe0,
-    // and read from pipe1.
-    int pipe0[2];
-    int pipe1[2];
+    // Fork preprocessor: parent writes input to stdin, reads stdout.
+    int pipe0[2]; // parent→child stdin
+    int pipe1[2]; // child stdout→parent
 
     if (pipe(pipe0) || pipe(pipe1)) {
 sys_err:
@@ -139,7 +156,6 @@ sys_err:
     if (!pid) {
         close(pipe0[1]);
         close(pipe1[0]);
-        // Always redirect stdin - we pass our wrapped input through stdin
         dup2(pipe0[0], STDIN_FILENO);
         close(pipe0[0]);
         dup2(pipe1[1], STDOUT_FILENO);
@@ -149,97 +165,10 @@ sys_err:
     close(pipe0[0]);
     close(pipe1[1]);
 
-    // Ignore SIGPIPE so we can handle write errors ourselves
-    signal(SIGPIPE, SIG_IGN);
+    ncc_buf_t *preproc_output = ncc_pipe_io(pipe0[1], pipe1[0],
+                                            input->data, input->len,
+                                            preproc_argv[0]);
 
-    ncc_buf_t *preproc_output = ncc_buf_alloc(0);
-
-    // Always write our (possibly wrapped) input to the preprocessor's stdin
-    {
-        // Set both pipe ends to non-blocking to avoid deadlock with large files
-        int flags0 = fcntl(pipe0[1], F_GETFL, 0);
-        int flags1 = fcntl(pipe1[0], F_GETFL, 0);
-        fcntl(pipe0[1], F_SETFL, flags0 | O_NONBLOCK);
-        fcntl(pipe1[0], F_SETFL, flags1 | O_NONBLOCK);
-
-        // Use poll() to handle concurrent read/write to avoid deadlock
-        // when both input and output exceed pipe buffer sizes
-        const char *write_ptr    = (const char *)input->data;
-        size_t      write_remain = input->len;
-
-        struct pollfd fds[2];
-        fds[0].fd     = pipe0[1]; // write to child stdin
-        fds[0].events = POLLOUT;
-        fds[1].fd     = pipe1[0]; // read from child stdout
-        fds[1].events = POLLIN;
-
-        int write_fd_open = 1;
-        int read_fd_open  = 1;
-
-        while (write_fd_open || read_fd_open) {
-            fds[0].events  = write_fd_open ? POLLOUT : 0;
-            fds[1].events  = read_fd_open ? POLLIN : 0;
-            fds[0].revents = 0;
-            fds[1].revents = 0;
-
-            int ret = poll(fds, 2, -1);
-            if (ret < 0) {
-                if (errno == EINTR) {
-                    continue;
-                }
-                fprintf(stderr, "%s: poll error: %s\n", preproc_argv[0], strerror(errno));
-                abort();
-            }
-
-            // Handle writes to child stdin
-            if (write_fd_open && (fds[0].revents & (POLLOUT | POLLERR | POLLHUP))) {
-                if (write_remain > 0) {
-                    ssize_t written = write(pipe0[1], write_ptr, write_remain);
-                    if (written > 0) {
-                        write_ptr += written;
-                        write_remain -= written;
-                    }
-                    else if (written < 0) {
-                        if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                            // Try again later
-                        }
-                        else if (errno == EPIPE) {
-                            // Child closed stdin, stop writing
-                            close(pipe0[1]);
-                            write_fd_open = 0;
-                        }
-                        else {
-                            fprintf(stderr, "%s: write error: %s\n", preproc_argv[0], strerror(errno));
-                            abort();
-                        }
-                    }
-                }
-                if (write_fd_open && write_remain == 0) {
-                    close(pipe0[1]); // Signal EOF to child
-                    write_fd_open = 0;
-                }
-            }
-
-            // Handle reads from child stdout
-            if (read_fd_open && (fds[1].revents & (POLLIN | POLLERR | POLLHUP))) {
-                char    read_buf[8192];
-                ssize_t n = read(pipe1[0], read_buf, sizeof(read_buf));
-                if (n > 0) {
-                    preproc_output = ncc_buf_concat(preproc_output, read_buf, n);
-                }
-                else if (n == 0) {
-                    close(pipe1[0]);
-                    read_fd_open = 0;
-                }
-                else if (errno != EAGAIN && errno != EWOULDBLOCK) {
-                    fprintf(stderr, "%s: read error: %s\n", preproc_argv[0], strerror(errno));
-                    abort();
-                }
-            }
-        }
-    }
-
-    // Wait for child to finish
     int status;
     waitpid(pid, &status, 0);
 
@@ -275,6 +204,12 @@ main(int argc, char *argv[], [[maybe_unused]] char *envp[])
     // --no-ncc: explicit opt-out, passthrough to compiler
     if (ctx.has_no_ncc) {
         compiler_passthrough(&ctx);
+    }
+
+    // --modernize / --modernize-overflow: transform source, no compile
+    if (ctx.has_modernize) {
+        modernize_file(&ctx);
+        exit(0);
     }
 
     // --dump-tokens implies -E (need to preprocess+lex, but not compile)

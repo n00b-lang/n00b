@@ -9,6 +9,7 @@
 #include "unicode/types.h"
 #include "n00b.h"
 #include "core/option.h"
+#include "core/result.h"
 #include "core/string.h"
 
 // ===========================================================================
@@ -21,6 +22,12 @@ n00b_option_decl(n00b_codepoint_t);
 
 /** @brief Optional int32_t result (used by find/rfind, digit_value, etc.) */
 typedef n00b_option_t(int32_t) n00b_unicode_opt_i32_t;
+
+// ===========================================================================
+// Result types for string operations
+// ===========================================================================
+
+n00b_result_decl(n00b_string_t);
 
 // ===========================================================================
 // Result types

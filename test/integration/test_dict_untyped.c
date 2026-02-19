@@ -83,7 +83,7 @@ test_not_found(void)
     bool  found;
     void *val = n00b_dict_untyped_get(&dict, 999, &found);
     assert(!found);
-    assert(val == NULL);
+    assert(val == nullptr);
 
     printf("  [PASS] not_found\n");
 }

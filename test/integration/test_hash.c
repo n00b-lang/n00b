@@ -105,7 +105,7 @@ test_distribution(void)
 {
     const int num_values  = 1000;
     const int num_buckets = 64;
-    int       buckets[64] = {0};
+    int       buckets[64] = {};
 
     for (int i = 0; i < num_values; i++) {
         n00b_uint128_t h   = n00b_hash_word((void *)(uintptr_t)i);

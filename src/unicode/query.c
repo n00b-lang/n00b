@@ -12,8 +12,7 @@
 static bool
 _pred_gc(n00b_codepoint_t cp, void *ctx)
 {
-    return n00b_unicode_general_category(cp)
-           == (n00b_unicode_gc_t)(uintptr_t)ctx;
+    return n00b_unicode_general_category(cp) == (n00b_unicode_gc_t)(uintptr_t)ctx;
 }
 
 static bool
@@ -25,16 +24,13 @@ _pred_script(n00b_codepoint_t cp, void *ctx)
 static bool
 _pred_bidi(n00b_codepoint_t cp, void *ctx)
 {
-    return n00b_unicode_bidi_class(cp)
-           == (n00b_unicode_bidi_class_t)(uintptr_t)ctx;
+    return n00b_unicode_bidi_class(cp) == (n00b_unicode_bidi_class_t)(uintptr_t)ctx;
 }
 
 static bool
 _pred_property(n00b_codepoint_t cp, void *ctx)
 {
-    return n00b_unicode_has_property(
-        cp,
-        (n00b_unicode_property_t)(uintptr_t)ctx);
+    return n00b_unicode_has_property(cp, (n00b_unicode_property_t)(uintptr_t)ctx);
 }
 
 typedef struct {
@@ -52,15 +48,13 @@ _pred_range(n00b_codepoint_t cp, void *ctx)
 static bool
 _pred_block(n00b_codepoint_t cp, void *ctx)
 {
-    return n00b_unicode_block(cp)
-           == (n00b_unicode_block_t)(uintptr_t)ctx;
+    return n00b_unicode_block(cp) == (n00b_unicode_block_t)(uintptr_t)ctx;
 }
 
 static bool
 _pred_eaw(n00b_codepoint_t cp, void *ctx)
 {
-    return n00b_unicode_east_asian_width(cp)
-           == (n00b_unicode_eaw_t)(uintptr_t)ctx;
+    return n00b_unicode_east_asian_width(cp) == (n00b_unicode_eaw_t)(uintptr_t)ctx;
 }
 
 // ===========================================================================
@@ -141,13 +135,12 @@ n00b_filter_eaw(n00b_unicode_eaw_t eaw)
 // Query implementation
 // ===========================================================================
 
-n00b_codepoint_t *
+n00b_array_t(n00b_codepoint_t)
 n00b_cp_query_n(const n00b_cp_filter_t *filters, int nfilters) _kargs
 {
     n00b_codepoint_t  range_start = 0;
     n00b_codepoint_t  range_end   = 0x10FFFF;
     size_t            max_results = 0;
-    uint32_t         *out_count   = nullptr;
     n00b_allocator_t *allocator   = nullptr;
 }
 {
@@ -155,8 +148,7 @@ n00b_cp_query_n(const n00b_cp_filter_t *filters, int nfilters) _kargs
 
     size_t            cap     = 256;
     size_t            count   = 0;
-    n00b_codepoint_t *results = n00b_alloc_array(n00b_codepoint_t, cap,
-                                                 .allocator = allocator);
+    n00b_codepoint_t *results = n00b_alloc_array(n00b_codepoint_t, cap, .allocator = allocator);
 
     for (n00b_codepoint_t cp = range_start; cp <= range_end; cp++) {
         if (cp >= 0xD800 && cp <= 0xDFFF) {
@@ -174,13 +166,10 @@ n00b_cp_query_n(const n00b_cp_filter_t *filters, int nfilters) _kargs
 
         if (match) {
             if (count >= cap) {
-                size_t            new_cap     = cap * 2;
-                n00b_codepoint_t *new_results = n00b_alloc_array(
-                    n00b_codepoint_t,
-                    new_cap,
-                    .allocator = allocator);
-                memcpy(new_results, results,
-                       count * sizeof(n00b_codepoint_t));
+                size_t            new_cap = cap * 2;
+                n00b_codepoint_t *new_results
+                    = n00b_alloc_array(n00b_codepoint_t, new_cap, .allocator = allocator);
+                memcpy(new_results, results, count * sizeof(n00b_codepoint_t));
                 n00b_free(results);
                 results = new_results;
                 cap     = new_cap;
@@ -193,20 +182,18 @@ n00b_cp_query_n(const n00b_cp_filter_t *filters, int nfilters) _kargs
         }
     }
 
-    if (out_count) {
-        *out_count = (uint32_t)count;
-    }
-
-    return results;
+    n00b_array_t(n00b_codepoint_t) result = n00b_array_checked_ptr(n00b_codepoint_t,
+                                                                    cap, results);
+    result.len = count;
+    return result;
 }
 
-n00b_codepoint_t *
+n00b_array_t(n00b_codepoint_t)
 n00b_cp_query_any_n(const n00b_cp_filter_t *filters, int nfilters) _kargs
 {
     n00b_codepoint_t  range_start = 0;
     n00b_codepoint_t  range_end   = 0x10FFFF;
     size_t            max_results = 0;
-    uint32_t         *out_count   = nullptr;
     n00b_allocator_t *allocator   = nullptr;
 }
 {
@@ -214,8 +201,7 @@ n00b_cp_query_any_n(const n00b_cp_filter_t *filters, int nfilters) _kargs
 
     size_t            cap     = 256;
     size_t            count   = 0;
-    n00b_codepoint_t *results = n00b_alloc_array(n00b_codepoint_t, cap,
-                                                 .allocator = allocator);
+    n00b_codepoint_t *results = n00b_alloc_array(n00b_codepoint_t, cap, .allocator = allocator);
 
     for (n00b_codepoint_t cp = range_start; cp <= range_end; cp++) {
         if (cp >= 0xD800 && cp <= 0xDFFF) {
@@ -233,13 +219,10 @@ n00b_cp_query_any_n(const n00b_cp_filter_t *filters, int nfilters) _kargs
 
         if (match) {
             if (count >= cap) {
-                size_t            new_cap     = cap * 2;
-                n00b_codepoint_t *new_results = n00b_alloc_array(
-                    n00b_codepoint_t,
-                    new_cap,
-                    .allocator = allocator);
-                memcpy(new_results, results,
-                       count * sizeof(n00b_codepoint_t));
+                size_t            new_cap = cap * 2;
+                n00b_codepoint_t *new_results
+                    = n00b_alloc_array(n00b_codepoint_t, new_cap, .allocator = allocator);
+                memcpy(new_results, results, count * sizeof(n00b_codepoint_t));
                 n00b_free(results);
                 results = new_results;
                 cap     = new_cap;
@@ -252,11 +235,10 @@ n00b_cp_query_any_n(const n00b_cp_filter_t *filters, int nfilters) _kargs
         }
     }
 
-    if (out_count) {
-        *out_count = (uint32_t)count;
-    }
-
-    return results;
+    n00b_array_t(n00b_codepoint_t) result = n00b_array_checked_ptr(n00b_codepoint_t,
+                                                                    cap, results);
+    result.len = count;
+    return result;
 }
 
 // ===========================================================================
@@ -271,8 +253,7 @@ n00b_unicode_cp_name(n00b_codepoint_t cp)
     return nullptr;
 }
 
-n00b_option_t(n00b_codepoint_t)
-n00b_unicode_cp_from_name(const char *name)
+n00b_option_t(n00b_codepoint_t) n00b_unicode_cp_from_name(const char *name)
 {
     (void)name;
     // TODO: Implement when gen_names.c is generated by gen_tables.py.

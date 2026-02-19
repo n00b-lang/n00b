@@ -9,6 +9,7 @@
 
 #include "branch_symbols.h"
 #include "compile.h"
+#include "ncc_limits.h"
 #include "transform.h"
 #include "rewrite.h"
 #include "types.h"
@@ -26,14 +27,14 @@
 #include <string.h>
 
 // Helpers from xform_constexpr.c (made non-static for reuse)
-extern char *emit_node_to_string(xform_ctx_t *ctx, tnode_t *node);
+extern char *emit_node_to_string(tree_xform_t *ctx, tnode_t *node);
 extern char *strip_line_directives(const char *src);
 extern char *compile_and_run(const char *compiler, const char *source,
                              char **err_out);
-extern char *emit_declarations(xform_ctx_t *ctx, tnode_t *call_node);
+extern char *emit_declarations(tree_xform_t *ctx, tnode_t *call_node);
 
 static tnode_t *
-xform_constexpr_paste(xform_ctx_t *ctx, tnode_t *node)
+xform_constexpr_paste(tree_xform_t *ctx, tnode_t *node)
 {
     if (node->branch != BRANCH(synthetic_identifier, CONSTEXPR_PASTE)) {
         return nullptr;
@@ -198,8 +199,9 @@ xform_constexpr_paste(xform_ctx_t *ctx, tnode_t *node)
     base_dealloc(clean_expr);
 
     // --- Concatenate prefix + value ---
-    char id_buf[256];
-    snprintf(id_buf, sizeof(id_buf), "%s%lld", raw_str, value);
+    char id_buf[NCC_IDENT_BUF];
+    int  iret = snprintf(id_buf, sizeof(id_buf), "%s%lld", raw_str, value);
+    NCC_CHECK_SNPRINTF(iret, id_buf);
     base_dealloc(raw_str);
 
     // --- Produce synthetic identifier and replace ---

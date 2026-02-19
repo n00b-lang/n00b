@@ -34,7 +34,7 @@
  * @code
  * // Define a post-order transformer for iteration statements
  * static tnode_t *
- * xform_foreach_expand(xform_ctx_t *ctx, tnode_t *node)
+ * xform_foreach_expand(tree_xform_t *ctx, tnode_t *node)
  * {
  *     if (node->branch != FOREACH_BRANCH) {
  *         return nullptr;  // Not foreach, no change
@@ -53,7 +53,7 @@
  * xform_registry_init(&reg);
  * xform_register_post(&reg, NT_iteration_statement, xform_foreach_expand, "foreach");
  *
- * xform_ctx_t ctx;
+ * tree_xform_t ctx;
  * xform_ctx_init(&ctx, input_buf, nullptr, parse_tree);
  * tnode_t *result = xform_apply(&reg, &ctx);
  * @endcode
@@ -81,7 +81,7 @@
 
 typedef struct lex_t            lex_t;
 typedef struct xform_registry_t xform_registry_t;
-typedef struct xform_ctx_t      xform_ctx_t;
+typedef struct tree_xform_t      tree_xform_t;
 
 /** @} */
 
@@ -118,7 +118,7 @@ typedef enum {
  * @note The returned node replaces the input node in the tree.
  *       Use replace_node() from rewrite.h to set up origin tracking.
  */
-typedef tnode_t *(*xform_fn_t)(xform_ctx_t *ctx, tnode_t *node);
+typedef tnode_t *(*xform_fn_t)(tree_xform_t *ctx, tnode_t *node);
 
 /**
  * @brief Pre-order transformer function signature.
@@ -134,7 +134,7 @@ typedef tnode_t *(*xform_fn_t)(xform_ctx_t *ctx, tnode_t *node);
  * @note When returning a replacement and setting XFORM_SKIP_CHILDREN,
  *       the replacement's children will NOT be walked.
  */
-typedef tnode_t *(*xform_pre_fn_t)(xform_ctx_t *ctx, tnode_t *node, xform_control_t *control);
+typedef tnode_t *(*xform_pre_fn_t)(tree_xform_t *ctx, tnode_t *node, xform_control_t *control);
 
 /** @} */
 
@@ -165,21 +165,21 @@ typedef struct {
  *
  * Provides O(1) lookup of transformers by nt_type_t enum value.
  * Supports unlimited transformers per node type (executed in registration order).
- * Uses list_t for dynamic storage with no arbitrary limits.
+ * Uses ncc_list_t for dynamic storage with no arbitrary limits.
  * Wildcard transformers (NT_NONE) match all nodes.
  */
 struct xform_registry_t {
     /** Pre-order transformers indexed by NT enum (list of xform_entry_t*) */
-    list_t *pre_order[NT_COUNT];
+    ncc_list_t *pre_order[NT_COUNT];
 
     /** Post-order transformers indexed by NT enum (list of xform_entry_t*) */
-    list_t *post_order[NT_COUNT];
+    ncc_list_t *post_order[NT_COUNT];
 
     /** Wildcard pre-order transformers (list of xform_entry_t*) */
-    list_t *wildcard_pre;
+    ncc_list_t *wildcard_pre;
 
     /** Wildcard post-order transformers (list of xform_entry_t*) */
-    list_t *wildcard_post;
+    ncc_list_t *wildcard_post;
 };
 
 /** @} */
@@ -194,7 +194,7 @@ struct xform_registry_t {
  * Contains input buffer, symbol table, tree root, and statistics.
  * Created fresh for each xform_apply() call.
  */
-struct xform_ctx_t {
+struct tree_xform_t {
     ncc_buf_t *input;           /**< Source buffer for token extraction */
     lex_t    *lex;              /**< Lexer state (for ncc_off range checks) */
     symtab_t *symtab;           /**< Symbol table (may be nullptr) */
@@ -289,7 +289,7 @@ extern int xform_count(xform_registry_t *reg, nt_type_t nt_id, bool pre);
  * @param symtab Symbol table (may be nullptr)
  * @param root   Root of tree to transform
  */
-extern void xform_ctx_init(xform_ctx_t *ctx, lex_t *lex, symtab_t *symtab, tnode_t *root);
+extern void xform_ctx_init(tree_xform_t *ctx, lex_t *lex, symtab_t *symtab, tnode_t *root);
 
 /** @} */
 
@@ -316,7 +316,7 @@ extern void xform_ctx_init(xform_ctx_t *ctx, lex_t *lex, symtab_t *symtab, tnode
  * @note Replacement nodes are NOT re-walked in the same pass.
  *       Use xform_apply_multi() for iterative transformation.
  */
-extern tnode_t *xform_apply(xform_registry_t *reg, xform_ctx_t *ctx);
+extern tnode_t *xform_apply(xform_registry_t *reg, tree_xform_t *ctx);
 
 /**
  * @brief Apply transformers repeatedly until no changes (multi-pass).
@@ -330,7 +330,7 @@ extern tnode_t *xform_apply(xform_registry_t *reg, xform_ctx_t *ctx);
  * @param max_passes Maximum number of passes (0 for XFORM_DEFAULT_MAX_PASSES)
  * @return Transformed tree root after fixed point or max passes
  */
-extern tnode_t *xform_apply_multi(xform_registry_t *reg, xform_ctx_t *ctx, int max_passes);
+extern tnode_t *xform_apply_multi(xform_registry_t *reg, tree_xform_t *ctx, int max_passes);
 
 /** @} */
 
@@ -344,7 +344,7 @@ extern tnode_t *xform_apply_multi(xform_registry_t *reg, xform_ctx_t *ctx, int m
  * @return Node visit count
  */
 static inline int
-xform_nodes_visited(xform_ctx_t *ctx)
+xform_nodes_visited(tree_xform_t *ctx)
 {
     return ctx->nodes_visited;
 }
@@ -355,7 +355,7 @@ xform_nodes_visited(xform_ctx_t *ctx)
  * @return Node replacement count
  */
 static inline int
-xform_nodes_replaced(xform_ctx_t *ctx)
+xform_nodes_replaced(tree_xform_t *ctx)
 {
     return ctx->nodes_replaced;
 }
@@ -366,7 +366,7 @@ xform_nodes_replaced(xform_ctx_t *ctx)
  * @return Pass number (0-based)
  */
 static inline int
-xform_current_pass(xform_ctx_t *ctx)
+xform_current_pass(tree_xform_t *ctx)
 {
     return ctx->pass;
 }

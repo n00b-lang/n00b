@@ -34,20 +34,20 @@ TEST(test_casefold_simple)
 
 TEST(test_full_uppercase)
 {
-    n00b_string_t upper = n00b_unicode_toupper(STR("hello"), .allocator = NULL);
+    n00b_string_t upper = n00b_unicode_toupper(STR("hello"), .allocator = nullptr);
     ASSERT_STR_EQ(upper.data, "HELLO");
 }
 
 TEST(test_full_lowercase)
 {
-    n00b_string_t lower = n00b_unicode_tolower(STR("HELLO"), .allocator = NULL);
+    n00b_string_t lower = n00b_unicode_tolower(STR("HELLO"), .allocator = nullptr);
     ASSERT_STR_EQ(lower.data, "hello");
 }
 
 TEST(test_full_casefold)
 {
     n00b_string_t folded
-        = n00b_unicode_casefold(STR("Hello World"), .allocator = NULL);
+        = n00b_unicode_casefold(STR("Hello World"), .allocator = nullptr);
     ASSERT_STR_EQ(folded.data, "hello world");
 }
 
@@ -60,7 +60,7 @@ TEST(test_casecmp)
 TEST(test_sharp_s_uppercase)
 {
     // ß (U+00DF) → "SS" when uppercased
-    n00b_string_t upper = n00b_unicode_toupper(STR("\xC3\x9F"), .allocator = NULL);
+    n00b_string_t upper = n00b_unicode_toupper(STR("\xC3\x9F"), .allocator = nullptr);
     ASSERT_STR_EQ(upper.data, "SS");
 }
 

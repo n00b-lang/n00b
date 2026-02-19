@@ -114,12 +114,23 @@ typedef struct n00b_base_allocator_t         n00b_base_allocator_t;
 typedef struct n00b_mmap_ctx_t               n00b_mmap_ctx_t;
 typedef struct n00b_vargs_t                  n00b_vargs_t;
 
+// Style system forward declarations.
+typedef struct n00b_text_style_t             n00b_text_style_t;
+typedef struct n00b_style_record_t           n00b_style_record_t;
+typedef struct n00b_string_style_info_t      n00b_string_style_info_t;
+
 // Unicode module forward declarations.
 typedef struct n00b_unicode_break_iter_s     n00b_unicode_break_iter_t;
 typedef struct n00b_unicode_normalizer_s     n00b_unicode_normalizer_t;
 typedef struct n00b_unicode_idna_result_t    n00b_unicode_idna_result_t;
 typedef struct n00b_unicode_bidi_para_s      n00b_unicode_bidi_para_t;
 typedef struct n00b_cp_filter_t              n00b_cp_filter_t;
+
+// Table module forward declarations.
+typedef struct n00b_table_t                  n00b_table_t;
+typedef struct n00b_table_cell_t             n00b_table_cell_t;
+typedef struct n00b_table_row_t              n00b_table_row_t;
+typedef struct n00b_table_col_spec_t         n00b_table_col_spec_t;
 
 typedef n00b_hash_value_t (*n00b_hash_fn)(void *);
 typedef n00b_string_t *(*n00b_repr_fn)(void *);

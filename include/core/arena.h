@@ -21,7 +21,7 @@ struct n00b_segment_t {
     uint64_t        size;
     n00b_segment_t *next_segment;
     char           *last_addr;
-    _Alignas(N00B_ALIGN) char mem[];
+    alignas(N00B_ALIGN) char mem[];
 };
 
 struct n00b_arena_t {
@@ -145,7 +145,7 @@ struct n00b_finalizer_info_t {
  * @param start  Start address of the segment.
  * @param end    End address of the segment.
  * @param arena  Owning arena.
- * @param file   Debug name / source file (may be NULL).
+ * @param file   Debug name / source file (may be nullptr).
  */
 extern void n00b_register_arena_segment(void         *start,
                                         void         *end,

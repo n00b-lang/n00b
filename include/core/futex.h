@@ -31,7 +31,7 @@ extern void n00b_thread_exit(int);
  * @brief Wait on a futex word (Linux implementation).
  * @param futex Futex address.
  * @param v32   Expected value.
- * @param tptr  Timeout (may be NULL for indefinite).
+ * @param tptr  Timeout (may be nullptr for indefinite).
  * @return      0 on success, errno on error.
  */
 static inline int
@@ -71,7 +71,7 @@ n00b_futex_should_continue(int err)
     return !err || err == EAGAIN;
 }
 
-#elif defined(__APPLE__)
+#elifdef __APPLE__
 extern int __ulock_wait2(uint32_t, void *, uint64_t, uint64_t, uint64_t);
 extern int __ulock_wake(uint32_t, void *, uint64_t);
 
@@ -94,7 +94,7 @@ extern int __ulock_wake(uint32_t, void *, uint64_t);
  * @brief Wait on a futex word (macOS implementation via __ulock_wait2).
  * @param futex Futex address.
  * @param v32   Expected value.
- * @param tout  Timeout (may be NULL for indefinite).
+ * @param tout  Timeout (may be nullptr for indefinite).
  * @return      0 on success, negative errno on error.
  */
 static inline int

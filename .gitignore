@@ -42,8 +42,9 @@ Desktop.ini
 **/__pycache__/
 *.pyc
 
-# Unicode data cache
+# Unicode data cache + generated tables
 .unicode_cache/
+src/unicode/generated/
 
 # Coverage / profiling
 *.gcda

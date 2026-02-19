@@ -35,6 +35,23 @@
 #include <stdbool.h>
 #include "types.h"
 
+/** @name Cleanup
+ * @{
+ */
+
+/**
+ * @brief Free all heap allocations made by rewrite operations.
+ *
+ * Synthetic tokens, replacement buffers, origin structs, and strdup'd
+ * strings are heap-allocated but embedded in arena-managed tnode_t's.
+ * Call this **before** `parse_arena_destroy()` to avoid leaking them.
+ *
+ * @post All deferred pointers are freed; counters are reset.
+ */
+extern void synth_cleanup(void);
+
+/** @} */
+
 /** @name Synthetic Token Creation
  * @{
  */

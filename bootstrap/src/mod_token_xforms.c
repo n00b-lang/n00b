@@ -11,6 +11,7 @@
 #include <string.h>
 #include <ctype.h>
 
+#include "ncc_limits.h"
 #include "lex.h"
 #include "token.h"
 #include "buf.h"
@@ -158,16 +159,149 @@ xform_keyword_replacements(lex_t *state)
 // Tier 1: Include removal (#include <stdbool.h> etc.)
 // ============================================================
 
+/**
+ * @brief Check if a preproc token is `#if __has_include(<header>)`.
+ */
+static bool
+preproc_is_has_include(ncc_buf_t *input, tok_t *tok)
+{
+    int         len;
+    const char *text = tok_text_ptr(input, tok, &len);
+    const char *p    = text;
+    const char *end  = text + len;
+
+    if (p >= end || *p != '#') {
+        return false;
+    }
+    p++;
+    while (p < end && (*p == ' ' || *p == '\t')) {
+        p++;
+    }
+    // Match "#if" (but not "#ifdef" or "#ifndef")
+    if (p + 2 > end || strncmp(p, "if", 2) != 0) {
+        return false;
+    }
+    p += 2;
+    if (p < end && (isalnum((unsigned char)*p) || *p == '_')) {
+        return false; // #ifdef, #ifndef, etc.
+    }
+    // Look for __has_include anywhere in the rest
+    while (p + 15 <= end) {
+        if (strncmp(p, "__has_include", 13) == 0) {
+            return true;
+        }
+        p++;
+    }
+    return false;
+}
+
+/**
+ * @brief Check if a preproc token is `#else` or `#elif`.
+ */
+static bool
+preproc_is_else_or_elif(ncc_buf_t *input, tok_t *tok)
+{
+    int         len;
+    const char *text = tok_text_ptr(input, tok, &len);
+    const char *p    = text;
+    const char *end  = text + len;
+
+    if (p >= end || *p != '#') {
+        return false;
+    }
+    p++;
+    while (p < end && (*p == ' ' || *p == '\t')) {
+        p++;
+    }
+    if (p + 4 <= end && strncmp(p, "else", 4) == 0) {
+        char next = (p + 4 < end) ? p[4] : '\0';
+        if (next == '\n' || next == '\0' || next == ' ' || next == '\t') {
+            return true;
+        }
+    }
+    if (p + 4 <= end && strncmp(p, "elif", 4) == 0) {
+        return true;
+    }
+    return false;
+}
+
+/**
+ * @brief Check if a preproc token is `#endif`.
+ */
+static bool
+preproc_is_endif_simple(ncc_buf_t *input, tok_t *tok)
+{
+    int         len;
+    const char *text = tok_text_ptr(input, tok, &len);
+    const char *p    = text;
+    const char *end  = text + len;
+
+    if (p >= end || *p != '#') {
+        return false;
+    }
+    p++;
+    while (p < end && (*p == ' ' || *p == '\t')) {
+        p++;
+    }
+    return (p + 5 <= end && strncmp(p, "endif", 5) == 0);
+}
+
 static void
 xform_include_removal(lex_t *state, header_state_t *headers, bool skip_removal)
 {
     ncc_buf_t *input = state->input;
+
+    // Track whether we're inside a #if __has_include(...) block.
+    // If so, any #include inside is conditional and shouldn't be counted
+    // as "header already present".
+    bool inside_has_include_block = false;
+    int  has_include_depth        = 0;
 
     for (int i = 0; i < state->num_toks; i++) {
         tok_t *tok = &state->toks[i];
 
         if (tok->type != TT_PREPROC) {
             continue;
+        }
+
+        // Track #if __has_include nesting
+        if (preproc_is_has_include(input, tok)) {
+            if (!inside_has_include_block) {
+                inside_has_include_block = true;
+                has_include_depth        = 1;
+            }
+            else {
+                has_include_depth++;
+            }
+        }
+        else if (inside_has_include_block) {
+            if (preproc_is_endif_simple(input, tok)) {
+                has_include_depth--;
+                if (has_include_depth == 0) {
+                    inside_has_include_block = false;
+                }
+            }
+            else if (preproc_is_else_or_elif(input, tok)) {
+                // #else / #elif at our nesting level — still inside block
+            }
+            else {
+                // Check for any #if/#ifdef/#ifndef to track nesting
+                int         plen;
+                const char *ptext = tok_text_ptr(input, tok, &plen);
+                const char *pp    = ptext;
+                const char *pend  = ptext + plen;
+                if (pp < pend && *pp == '#') {
+                    pp++;
+                    while (pp < pend && (*pp == ' ' || *pp == '\t')) {
+                        pp++;
+                    }
+                    if ((pp + 2 <= pend && strncmp(pp, "if", 2) == 0)
+                        && (pp[2] == ' ' || pp[2] == '\t' || pp[2] == '\n'
+                            || pp[2] == 'd' /* ifdef */ || pp[2] == 'n' /* ifndef */)) {
+                        has_include_depth++;
+                    }
+                }
+            }
         }
 
         if (!skip_removal) {
@@ -192,15 +326,24 @@ xform_include_removal(lex_t *state, header_state_t *headers, bool skip_removal)
             }
         }
 
-        // Track existing headers for later insertion decisions
+        // Track existing headers for later insertion decisions.
+        // Only count an #include as "present" if it's unconditional.
+        // A conditional include (e.g., inside #if __has_include(<stdbit.h>))
+        // means the header might not be available, so we still need the shim.
         if (preproc_is_include(input, tok, "stddef.h")) {
-            headers->has_stddef = true;
+            if (!inside_has_include_block) {
+                headers->has_stddef = true;
+            }
         }
         else if (preproc_is_include(input, tok, "stdbit.h")) {
-            headers->has_stdbit = true;
+            if (!inside_has_include_block) {
+                headers->has_stdbit = true;
+            }
         }
         else if (preproc_is_include(input, tok, "stdckdint.h")) {
-            headers->has_stdckdint = true;
+            if (!inside_has_include_block) {
+                headers->has_stdckdint = true;
+            }
         }
     }
 }
@@ -304,7 +447,7 @@ xform_elifdef(lex_t *state)
 
         // Build replacement: #elifdef X\n or #elifndef X\n
         // Include trailing newline since the original preproc token includes it
-        char  buf[256];
+        char  buf[NCC_IDENT_BUF];
         int   rlen;
         if (negated) {
             rlen = snprintf(buf, sizeof(buf), "#elifndef %.*s\n", name_len, name_start);
@@ -408,7 +551,7 @@ xform_attributes(lex_t *state)
                                 // Build [[deprecated("msg")]]
                                 int         slen;
                                 const char *stext = tok_text_ptr(input, &state->toks[str_ix], &slen);
-                                char        buf[512];
+                                char        buf[NCC_ATTR_BUF];
                                 int rlen = snprintf(buf, sizeof(buf),
                                                     "[[deprecated(%.*s)]]", slen, stext);
                                 if (rlen > 0 && rlen < (int)sizeof(buf)) {
@@ -461,7 +604,11 @@ xform_attributes(lex_t *state)
 }
 
 // ============================================================
-// Tier 2: __builtin_* replacements
+// Tier 2: __builtin_* replacements (--modernize only)
+//
+// Most __builtin_* identifiers pass through as TT_ID unchanged.
+// This transform rewrites a handful of GCC builtins to their
+// C23 equivalents for the --modernize pipeline.
 // ============================================================
 
 /**
@@ -644,7 +791,7 @@ xform_builtins(lex_t *state, header_state_t *headers)
             char *r_text = extract_token_range(state, r_start, r_end);
 
             // Build replacement: ckd_xxx(&r, a, b)
-            char buf[1024];
+            char buf[NCC_DIRECTIVE_BUF];
             int  rlen = snprintf(buf, sizeof(buf), "%s(%s, %s, %s)",
                                  ckd_name, r_text, a_text, b_text);
 
@@ -842,13 +989,52 @@ compute_needed_headers(lex_t *state, header_state_t *headers)
         return;
     }
 
-    // Find the last #include directive
-    int last_include_ix = -1;
+    // Find the last unconditional #include directive.
+    // Skip includes that are inside #if __has_include(...) blocks.
+    int  last_include_ix           = -1;
+    bool in_has_include            = false;
+    int  has_include_nesting_depth = 0;
 
     for (int i = 0; i < state->num_toks; i++) {
         tok_t *tok = &state->toks[i];
         if (tok->type != TT_PREPROC) {
             continue;
+        }
+
+        // Track conditional nesting for __has_include blocks
+        if (preproc_is_has_include(state->input, tok)) {
+            if (!in_has_include) {
+                in_has_include            = true;
+                has_include_nesting_depth = 1;
+            }
+            else {
+                has_include_nesting_depth++;
+            }
+        }
+        else if (in_has_include) {
+            if (preproc_is_endif_simple(state->input, tok)) {
+                has_include_nesting_depth--;
+                if (has_include_nesting_depth == 0) {
+                    in_has_include = false;
+                }
+            }
+            else {
+                int         plen;
+                const char *ptext = tok_text_ptr(state->input, tok, &plen);
+                const char *pp    = ptext;
+                const char *pend  = ptext + plen;
+                if (pp < pend && *pp == '#') {
+                    pp++;
+                    while (pp < pend && (*pp == ' ' || *pp == '\t')) {
+                        pp++;
+                    }
+                    if ((pp + 2 <= pend && strncmp(pp, "if", 2) == 0)
+                        && (pp[2] == ' ' || pp[2] == '\t' || pp[2] == '\n'
+                            || pp[2] == 'd' || pp[2] == 'n')) {
+                        has_include_nesting_depth++;
+                    }
+                }
+            }
         }
 
         int         len;
@@ -860,7 +1046,9 @@ compute_needed_headers(lex_t *state, header_state_t *headers)
             p++;
         }
         if (p + 7 <= end && strncmp(p, "include", 7) == 0) {
-            last_include_ix = i;
+            if (!in_has_include) {
+                last_include_ix = i;
+            }
         }
     }
 
@@ -900,10 +1088,37 @@ build_header_text(header_state_t *headers)
         result = ncc_buf_concat(result, "#include <stddef.h>\n", 20);
     }
     if (headers->need_stdbit && !headers->has_stdbit) {
-        result = ncc_buf_concat(result, "#include <stdbit.h>\n", 20);
+        static const char stdbit_shim[] =
+            "#if __has_include(<stdbit.h>)\n"
+            "#include <stdbit.h>\n"
+            "#else\n"
+            "#define stdc_leading_zeros(x) _Generic((x), \\\n"
+            "    unsigned long long: __builtin_clzll, \\\n"
+            "    unsigned long: __builtin_clzl, \\\n"
+            "    default: __builtin_clz)(x)\n"
+            "#define stdc_trailing_zeros(x) _Generic((x), \\\n"
+            "    unsigned long long: __builtin_ctzll, \\\n"
+            "    unsigned long: __builtin_ctzl, \\\n"
+            "    default: __builtin_ctz)(x)\n"
+            "#define stdc_count_ones(x) _Generic((x), \\\n"
+            "    unsigned long long: __builtin_popcountll, \\\n"
+            "    unsigned long: __builtin_popcountl, \\\n"
+            "    default: __builtin_popcount)(x)\n"
+            "#endif\n";
+        result = ncc_buf_concat(result, (char *)stdbit_shim,
+                                sizeof(stdbit_shim) - 1);
     }
     if (headers->need_stdckdint && !headers->has_stdckdint) {
-        result = ncc_buf_concat(result, "#include <stdckdint.h>\n", 23);
+        static const char stdckdint_shim[] =
+            "#if __has_include(<stdckdint.h>)\n"
+            "#include <stdckdint.h>\n"
+            "#else\n"
+            "#define ckd_add(r, a, b) __builtin_add_overflow((a), (b), (r))\n"
+            "#define ckd_sub(r, a, b) __builtin_sub_overflow((a), (b), (r))\n"
+            "#define ckd_mul(r, a, b) __builtin_mul_overflow((a), (b), (r))\n"
+            "#endif\n";
+        result = ncc_buf_concat(result, (char *)stdckdint_shim,
+                                sizeof(stdckdint_shim) - 1);
     }
 
     if (result->len == 0) {
@@ -1614,7 +1829,7 @@ xform_overflow_checks(lex_t *state, header_state_t *headers, bool conservative)
 
         if (conservative) {
             // Insert a comment before the if statement
-            char comment[512];
+            char comment[NCC_ATTR_BUF];
             snprintf(comment, sizeof(comment),
                      "/* modernize: consider %s(&%s, %s, %s) */\n",
                      ckd_name, r_text, a_text, b_text);
@@ -1660,7 +1875,7 @@ xform_overflow_checks(lex_t *state, header_state_t *headers, bool conservative)
                                                       result_last);
 
                 // Build: "type result;\nif (ckd_OP(&result, a, b))"
-                char new_cond[1024];
+                char new_cond[NCC_DIRECTIVE_BUF];
                 int  nclen = snprintf(new_cond, sizeof(new_cond),
                                       "%s;\n%sif (%s(&%s, %s, %s))",
                                       decl_text,
@@ -1686,7 +1901,7 @@ xform_overflow_checks(lex_t *state, header_state_t *headers, bool conservative)
             }
             else {
                 // Bare `result = a + b;` -> replace if condition, remove assignment
-                char new_cond[1024];
+                char new_cond[NCC_DIRECTIVE_BUF];
                 int  nclen = snprintf(new_cond, sizeof(new_cond),
                                       "if (%s(&%s, %s, %s))",
                                       ckd_name, r_text, a_text, b_text);
@@ -1961,7 +2176,7 @@ xform_pragma_once(lex_t *state)
     }
 
     // 1. First preproc must be #ifndef GUARD or #if !defined(GUARD)
-    char guard_name[256];
+    char guard_name[NCC_IDENT_BUF];
     if (!preproc_extract_guard(input, &state->toks[first_preproc],
                                guard_name, sizeof(guard_name))) {
         return;
@@ -2072,3 +2287,4 @@ mod_token_xforms(lex_t *state, int *insert_after_ix, char **header_text,
     *insert_after_ix = headers.insert_after_ix;
     *header_text     = build_header_text(&headers);
 }
+

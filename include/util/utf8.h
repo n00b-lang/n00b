@@ -21,7 +21,7 @@
  * @param out  Output buffer (at least 4 bytes).
  * @return     Number of bytes written (1--4), or 0 if @p cp is invalid.
  *
- * @pre @p out is non-NULL and points to at least 4 writable bytes.
+ * @pre @p out is non-nullptr and points to at least 4 writable bytes.
  */
 static inline int
 n00b_utf8_encode_codepoint(n00b_codepoint_t cp, uint8_t *out)

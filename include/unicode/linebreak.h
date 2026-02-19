@@ -7,6 +7,8 @@
  */
 
 #include "unicode/types_ext.h"
+#include "core/array.h"
+#include "core/runtime.h" // for n00b_array_decl(uint32_t)
 
 /** @brief Compute line break actions for each codepoint in a string.
  *
@@ -19,11 +21,22 @@
 void n00b_unicode_linebreaks(n00b_string_t s, n00b_unicode_lb_action_t *out);
 
 /** @brief Wrap a string to a given column width using Unicode line break rules.
+ *
+ *  The first line uses the full @p width; subsequent lines use
+ *  `width - hang` to support hanging indentation.
+ *
+ *  When no valid soft-break exists before the column limit, the text is
+ *  hard-wrapped (forced break mid-word) unless @p no_hard_wrap is set.
+ *
  *  @param s           The input string.
- *  @param num_breaks  Out: number of break offsets returned.
- *  @kw width      Target line width in columns (default: 80).
- *  @kw allocator  Optional allocator (defaults to the runtime allocator).
- *  @return Allocated array of byte offsets where lines break; caller frees.
+ *  @kw width         Target line width in columns (default: 80).
+ *  @kw hang          Hanging indent in columns for continuation lines
+ *                    (default: 0).
+ *  @kw no_hard_wrap  If true, never force-break inside a word (default:
+ *                    false).
+ *  @kw allocator     Optional allocator (defaults to the runtime allocator).
+ *  @return An array of byte offsets where lines break.
  */
-uint32_t *n00b_unicode_linebreak_wrap(n00b_string_t s, uint32_t *num_breaks)
-    _kargs { int width = 80; n00b_allocator_t *allocator = nullptr; };
+n00b_array_t(uint32_t) n00b_unicode_linebreak_wrap(n00b_string_t s)
+    _kargs { int width = 80; int hang = 0; bool no_hard_wrap = false;
+             n00b_allocator_t *allocator = nullptr; };

@@ -77,6 +77,27 @@ st_init(symtab_t *st)
 }
 
 void
+st_free(symtab_t *st)
+{
+    // Pop all remaining scopes (frees scope_t objects).
+    while (st->current_scope) {
+        st_pop_scope(st);
+    }
+
+    ncc_dict_free(&st->symbols);
+    ncc_dict_free(&st->tags);
+
+    if (st->package_name) {
+        base_dealloc(st->package_name);
+        st->package_name = nullptr;
+    }
+    if (st->package_prefix) {
+        base_dealloc(st->package_prefix);
+        st->package_prefix = nullptr;
+    }
+}
+
+void
 st_push_scope(symtab_t *st, tnode_t *scope_node)
 {
     st->depth++;
@@ -111,6 +132,7 @@ st_pop_scope(symtab_t *st)
     // Pop the scope
     st->current_scope = scope->parent;
     st->depth         = scope->parent ? scope->parent->depth : 0;
+    base_dealloc(scope);
 }
 
 tnode_t *

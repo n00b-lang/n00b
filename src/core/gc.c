@@ -16,7 +16,6 @@
 #include <assert.h>
 #include <setjmp.h>
 #include <stddef.h>
-#include <stdbool.h>
 #include <stdint.h>
 
 #include "n00b.h"

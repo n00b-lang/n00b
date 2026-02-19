@@ -1,17 +1,27 @@
+/**
+ * @file modernize.c
+ * @brief `--modernize` pipeline: upgrade C11/C17 source to C23.
+ *
+ * Orchestrates a two-phase transformation:
+ *   - **Phase A** (`mod_token_xforms.c`): token-level rewrites on original source
+ *   - **Phase B** (`mod_tree_xforms.c`): tree-level rewrites on preprocessed source
+ *
+ * After transforms, reconstructs the source text and optionally pipes it
+ * through `clang-format`.
+ */
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include "base_alloc_shim.h"
 #include <string.h>
 #include <unistd.h>
-#include <fcntl.h>
-#include <poll.h>
-#include <signal.h>
 #include <sys/wait.h>
 
+#include "ncc_limits.h"
 #include "modernize.h"
 #include "buf.h"
 #include "lex.h"
+#include "pipe_io.h"
 #include "token.h"
 
 // Phase A token transforms (from mod_token_xforms.c)
@@ -100,7 +110,7 @@ run_clang_format(ncc_buf_t *input, const char *source_file)
 
         const char *style_env = getenv("NCC_CLANG_FORMAT_STYLE");
         if (style_env) {
-            char style_arg[512];
+            char style_arg[NCC_ATTR_BUF];
             snprintf(style_arg, sizeof(style_arg), "--style=%s", style_env);
             execlp("clang-format", "clang-format", style_arg, (char *)nullptr);
         }
@@ -120,75 +130,9 @@ run_clang_format(ncc_buf_t *input, const char *source_file)
     close(pipe_in[0]);
     close(pipe_out[1]);
 
-    signal(SIGPIPE, SIG_IGN);
-
-    // Non-blocking I/O to avoid deadlock
-    int flags0 = fcntl(pipe_in[1], F_GETFL, 0);
-    int flags1 = fcntl(pipe_out[0], F_GETFL, 0);
-    fcntl(pipe_in[1], F_SETFL, flags0 | O_NONBLOCK);
-    fcntl(pipe_out[0], F_SETFL, flags1 | O_NONBLOCK);
-
-    ncc_buf_t  *result       = ncc_buf_alloc(input->len + 256);
-    const char *write_ptr    = input->data;
-    size_t      write_remain = input->len;
-
-    struct pollfd fds[2];
-    fds[0].fd     = pipe_in[1];
-    fds[0].events = POLLOUT;
-    fds[1].fd     = pipe_out[0];
-    fds[1].events = POLLIN;
-
-    int write_open = 1;
-    int read_open  = 1;
-
-    while (write_open || read_open) {
-        fds[0].events  = write_open ? POLLOUT : 0;
-        fds[1].events  = read_open ? POLLIN : 0;
-        fds[0].revents = 0;
-        fds[1].revents = 0;
-
-        int ret = poll(fds, 2, -1);
-        if (ret < 0) {
-            if (errno == EINTR) {
-                continue;
-            }
-            break;
-        }
-
-        if (write_open && (fds[0].revents & (POLLOUT | POLLERR | POLLHUP))) {
-            if (write_remain > 0) {
-                ssize_t written = write(pipe_in[1], write_ptr, write_remain);
-                if (written > 0) {
-                    write_ptr += written;
-                    write_remain -= written;
-                }
-                else if (written < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
-                    close(pipe_in[1]);
-                    write_open = 0;
-                }
-            }
-            if (write_open && write_remain == 0) {
-                close(pipe_in[1]);
-                write_open = 0;
-            }
-        }
-
-        if (read_open && (fds[1].revents & (POLLIN | POLLERR | POLLHUP))) {
-            char    buf[8192];
-            ssize_t n = read(pipe_out[0], buf, sizeof(buf));
-            if (n > 0) {
-                result = ncc_buf_concat(result, buf, n);
-            }
-            else if (n == 0) {
-                close(pipe_out[0]);
-                read_open = 0;
-            }
-            else if (errno != EAGAIN && errno != EWOULDBLOCK) {
-                close(pipe_out[0]);
-                read_open = 0;
-            }
-        }
-    }
+    ncc_buf_t *result = ncc_pipe_io(pipe_in[1], pipe_out[0],
+                                    input->data, input->len,
+                                    "clang-format");
 
     int status;
     waitpid(pid, &status, 0);

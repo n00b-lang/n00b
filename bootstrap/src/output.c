@@ -1,7 +1,12 @@
+/**
+ * @file output.c
+ * @brief Final pipeline stage: emit transformed C to the underlying compiler.
+ *
+ * Walks the transformed parse tree via `emit_tree()`, pipes the result
+ * to the real compiler (`clang`), and generates Meson-compatible `.d`
+ * dependency files when `-MD`/`-MF`/`-MQ` flags are present.
+ */
 #include <errno.h>
-#include <fcntl.h>
-#include <poll.h>
-#include <signal.h>
 #include <stdlib.h>
 #include "base_alloc_shim.h"
 #include <string.h>
@@ -10,6 +15,7 @@
 
 #include "compile.h"
 #include "emit.h"
+#include "pipe_io.h"
 
 /**
  * @brief Get the output filename from command-line arguments.
@@ -323,58 +329,9 @@ invoke_compiler(compile_ctx_t *ctx)
         _exit(127);
     }
 
-    // Parent: write buffered code to pipe using non-blocking I/O
+    // Parent: write buffered code to pipe, no read-back needed
     close(pipefd[0]);
-
-    // Ignore SIGPIPE so we can handle write errors ourselves
-    signal(SIGPIPE, SIG_IGN);
-
-    // Set pipe to non-blocking
-    int flags = fcntl(pipefd[1], F_GETFL, 0);
-    fcntl(pipefd[1], F_SETFL, flags | O_NONBLOCK);
-
-    const char *write_ptr    = buf;
-    size_t      write_remain = buf_len;
-
-    struct pollfd pfd = {
-        .fd     = pipefd[1],
-        .events = POLLOUT,
-    };
-
-    while (write_remain > 0) {
-        pfd.revents = 0;
-
-        int ret = poll(&pfd, 1, -1);
-        if (ret < 0) {
-            if (errno == EINTR) {
-                continue;
-            }
-            // Poll error - give up writing, wait for compiler
-            break;
-        }
-
-        if (pfd.revents & (POLLERR | POLLHUP)) {
-            // Pipe closed or error - compiler stopped reading
-            break;
-        }
-
-        if (pfd.revents & POLLOUT) {
-            ssize_t written = write(pipefd[1], write_ptr, write_remain);
-            if (written > 0) {
-                write_ptr += written;
-                write_remain -= written;
-            }
-            else if (written < 0) {
-                if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                    continue;
-                }
-                // EPIPE or other error - compiler stopped reading
-                break;
-            }
-        }
-    }
-
-    close(pipefd[1]);
+    ncc_pipe_io(pipefd[1], -1, buf, buf_len, argv->argv[0]);
     base_dealloc(buf);
 
     // Wait for compiler to finish

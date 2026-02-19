@@ -19,7 +19,7 @@ test_init(void)
     n00b_pool_t      pool;
     n00b_allocator_t *alloc = n00b_pool_init(&pool, .name = "test_pool");
 
-    assert(alloc != NULL);
+    assert(alloc != nullptr);
     assert(strcmp(alloc->debug_name, "test_pool") == 0);
 
     printf("  [PASS] init\n");
@@ -37,7 +37,7 @@ test_small_alloc(void)
 
     void *p = n00b_alloc_size(1, 32, .allocator = alloc);
 
-    assert(p != NULL);
+    assert(p != nullptr);
     assert(((uintptr_t)p & (N00B_ALIGN - 1)) == 0);
 
     // Write and read back
@@ -63,7 +63,7 @@ test_size_classes(void)
 
     for (int i = 0; i < 4; i++) {
         void *p = n00b_alloc_size(1, sizes[i], .allocator = alloc);
-        assert(p != NULL);
+        assert(p != nullptr);
         assert(((uintptr_t)p & (N00B_ALIGN - 1)) == 0);
 
         // Verify usable by writing
@@ -88,12 +88,12 @@ test_free_recycle(void)
     n00b_allocator_t *alloc = n00b_pool_init(&pool);
 
     void *p1 = n00b_alloc_size(1, 64, .allocator = alloc);
-    assert(p1 != NULL);
+    assert(p1 != nullptr);
 
     n00b_free(p1);
 
     void *p2 = n00b_alloc_size(1, 64, .allocator = alloc);
-    assert(p2 != NULL);
+    assert(p2 != nullptr);
 
     // The second allocation should be valid regardless of whether
     // it reused the same slot
@@ -118,7 +118,7 @@ test_many_allocs(void)
 
     for (int i = 0; i < 100; i++) {
         ptrs[i] = n00b_alloc_size(1, 64, .allocator = alloc);
-        assert(ptrs[i] != NULL);
+        assert(ptrs[i] != nullptr);
     }
 
     // All should be distinct
@@ -146,7 +146,7 @@ test_inline_header(void)
     n00b_allocator_t *alloc = n00b_pool_init(&pool, .inline_headers = true);
 
     void *p = n00b_alloc_size(1, 64, .allocator = alloc);
-    assert(p != NULL);
+    assert(p != nullptr);
 
     n00b_inline_hdr_opt_t opt = n00b_inline_alloc_header(p);
     assert(n00b_option_is_set(opt));
@@ -170,7 +170,7 @@ test_alignment(void)
 
     for (int i = 0; i < 50; i++) {
         void *p = n00b_alloc_size(1, 48 + i, .allocator = alloc);
-        assert(p != NULL);
+        assert(p != nullptr);
         assert(((uintptr_t)p & (N00B_ALIGN - 1)) == 0);
         n00b_free(p);
     }

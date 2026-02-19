@@ -6,6 +6,7 @@
 #include <assert.h>
 #include <stdlib.h>
 #include "base_alloc_shim.h"
+#include "ncc_limits.h"
 #include <string.h>
 
 #include "rewrite.h"
@@ -29,21 +30,76 @@ static int synth_sequence = 0;
 static int synth_node_id = 1000000;
 
 /* ========================================================================
+ * Deferred Free List
+ *
+ * Synthetic tokens, replacement buffers, origin structs, strdup'd strings,
+ * and kids lists are all heap-allocated but embedded in arena-managed
+ * tnode_t's.  When parse_arena_destroy() runs, the tnode_t's vanish but
+ * these heap pointers leak.  We track them here and free them all at once
+ * via synth_cleanup().
+ * ======================================================================== */
+
+static void **deferred_ptrs = nullptr;
+static int    deferred_count = 0;
+static int    deferred_cap   = 0;
+
+static void
+synth_defer_free(void *ptr)
+{
+    if (!ptr) {
+        return;
+    }
+    if (deferred_count >= deferred_cap) {
+        int new_cap = deferred_cap ? deferred_cap * 2 : 256;
+        void **new_ptrs = base_realloc(deferred_ptrs, new_cap * sizeof(void *));
+        if (!new_ptrs) {
+            return; // Leak one pointer rather than crash
+        }
+        deferred_ptrs = new_ptrs;
+        deferred_cap  = new_cap;
+    }
+    deferred_ptrs[deferred_count++] = ptr;
+}
+
+void
+synth_cleanup(void)
+{
+    for (int i = 0; i < deferred_count; i++) {
+        base_dealloc(deferred_ptrs[i]);
+    }
+    base_dealloc(deferred_ptrs);
+    deferred_ptrs  = nullptr;
+    deferred_count = 0;
+    deferred_cap   = 0;
+    synth_sequence = 0;
+    synth_node_id  = 1000000;
+}
+
+/* ========================================================================
  * Synthetic Token Creation
  * ======================================================================== */
 
 tok_t *
 synth_token(const char *text, ttype_t type, int source_line)
 {
-    assert(text != nullptr);
+    if (!text) {
+        return nullptr;
+    }
 
     tok_t *tok = base_calloc(1, sizeof(tok_t));
-    assert(tok != nullptr);
+    if (!tok) {
+        return nullptr;
+    }
+    synth_defer_free(tok);
 
     // Create replacement buffer with the text
     int        len = strlen(text);
     ncc_buf_t *rep = ncc_buf_alloc(len + 1);
-    assert(rep != nullptr);
+    if (!rep) {
+        base_dealloc(tok);
+        return nullptr;
+    }
+    synth_defer_free(rep);
     rep->len = len;
     memcpy(rep->data, text, len);
     rep->data[len] = '\0';
@@ -69,9 +125,14 @@ tnode_t *
 synth_terminal(const char *text, ttype_t type, int source_line)
 {
     tok_t *tok = synth_token(text, type, source_line);
+    if (!tok) {
+        return nullptr;
+    }
 
     tnode_t *node = alloc_tnode();
-    assert(node != nullptr);
+    if (!node) {
+        return nullptr;
+    }
 
     // For terminals, nt is the token text (from the replacement buffer)
     *node = (tnode_t){
@@ -90,14 +151,21 @@ synth_terminal(const char *text, ttype_t type, int source_line)
 tnode_t *
 synth_nonterminal(const char *nt)
 {
-    assert(nt != nullptr);
+    if (!nt) {
+        return nullptr;
+    }
 
     tnode_t *node = alloc_tnode();
-    assert(node != nullptr);
+    if (!node) {
+        return nullptr;
+    }
 
     // Copy the nt string so we own it
     char *nt_copy = base_strdup(nt);
-    assert(nt_copy != nullptr);
+    if (!nt_copy) {
+        return nullptr;
+    }
+    synth_defer_free(nt_copy);
 
     *node = (tnode_t){
         .nt       = nt_copy,
@@ -124,6 +192,7 @@ create_origin(tnode_t *original, const char *rewrite_name)
 {
     rewrite_origin_t *origin = base_calloc(1, sizeof(rewrite_origin_t));
     assert(origin != nullptr);
+    synth_defer_free(origin);
 
     int start_line = -1;
     int end_line   = -1;
@@ -132,7 +201,11 @@ create_origin(tnode_t *original, const char *rewrite_name)
     origin->original_node       = original;
     origin->original_start_line = start_line;
     origin->original_end_line   = end_line;
-    origin->rewrite_name        = rewrite_name ? base_strdup(rewrite_name) : nullptr;
+    if (rewrite_name) {
+        char *name_copy      = base_strdup(rewrite_name);
+        origin->rewrite_name = name_copy;
+        synth_defer_free(name_copy);
+    }
 
     return origin;
 }
@@ -214,7 +287,7 @@ add_child(tnode_t *parent, tnode_t *child)
     int new_count = old_count + 1;
 
     // Grow the kids list
-    list_t *new_kids = list_alloc(new_count);
+    ncc_list_t *new_kids = ncc_list_alloc(new_count);
     assert(new_kids != nullptr);
 
     // Copy existing children
@@ -259,7 +332,7 @@ copy_tree(tnode_t *node)
     }
 
     // Allocate work stack
-    int           stack_cap = 64;
+    int           stack_cap = NCC_CAP_LARGE;
     int           stack_top = 0;
     copy_frame_t *stack     = base_alloc(stack_cap * sizeof(copy_frame_t));
     assert(stack != nullptr);
@@ -281,13 +354,16 @@ copy_tree(tnode_t *node)
     if (node->origin != nullptr) {
         root_copy->origin = base_calloc(1, sizeof(rewrite_origin_t));
         assert(root_copy->origin != nullptr);
+        synth_defer_free(root_copy->origin);
         *root_copy->origin = *node->origin;
         if (node->origin->rewrite_name) {
-            root_copy->origin->rewrite_name = base_strdup(node->origin->rewrite_name);
+            char *name_copy                 = base_strdup(node->origin->rewrite_name);
+            root_copy->origin->rewrite_name = name_copy;
+            synth_defer_free(name_copy);
         }
     }
     if (node->num_kids > 0) {
-        root_copy->kids = list_alloc(node->num_kids);
+        root_copy->kids = ncc_list_alloc(node->num_kids);
     }
 
     // Push root frame
@@ -331,16 +407,19 @@ copy_tree(tnode_t *node)
         if (child->origin != nullptr) {
             child_copy->origin = base_calloc(1, sizeof(rewrite_origin_t));
             assert(child_copy->origin != nullptr);
+            synth_defer_free(child_copy->origin);
             *child_copy->origin = *child->origin;
             if (child->origin->rewrite_name) {
-                child_copy->origin->rewrite_name = base_strdup(child->origin->rewrite_name);
+                char *name_copy                  = base_strdup(child->origin->rewrite_name);
+                child_copy->origin->rewrite_name = name_copy;
+                synth_defer_free(name_copy);
             }
         }
         f->dst->kids->items[ci] = child_copy;
 
         // If child has children, allocate kids list and push frame
         if (child->num_kids > 0) {
-            child_copy->kids = list_alloc(child->num_kids);
+            child_copy->kids = ncc_list_alloc(child->num_kids);
 
             // Grow stack if needed
             if (stack_top >= stack_cap) {
@@ -367,7 +446,7 @@ get_node_line(tnode_t *node)
 {
     // Iterative DFS to find first node with a line number.
     // Avoids deep recursion on large parse trees.
-    int      stack_cap = 32;
+    int      stack_cap = NCC_CAP_MEDIUM;
     int      stack_top = 0;
     tnode_t **stack    = base_alloc(stack_cap * sizeof(tnode_t *));
     if (!stack) {

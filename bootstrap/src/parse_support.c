@@ -1,17 +1,54 @@
-// Parser support functions and data
-//
-// This file contains the non-declarative infrastructure for the parser:
-// - Global data (keyword lists, sentinel nodes)
-// - Terminal matching functions
-// - State management functions
-// - Left-recursion support
-// - Parse node arena allocator
+/**
+ * @file parse_support.c
+ * @brief Parser infrastructure: arena allocator, terminal matchers, keywords.
+ *
+ * Contains the non-declarative support for the packrat parser:
+ * - Parse node arena allocator (bump-pointer with mark/reset for backtracking)
+ * - Terminal matching functions (identifiers, keywords, operators, literals)
+ * - Keyword registration (C keywords, NCC extensions)
+ * - Left-recursion support
+ * - Memoization cache management
+ */
 
 #include "parse_internal.h"
 #include "base_alloc_shim.h"
+#include "ncc_limits.h"
 
 // Global grammar selection flag (defined in branch_symbols.h)
 bool ncc_use_reference_grammar = false;
+
+// =============================================================================
+// PARSER STATISTICS (compile with -DNCC_PARSER_STATS to enable)
+// =============================================================================
+#ifdef NCC_PARSER_STATS
+
+static int64_t memo_store_count;
+static int64_t memo_hit_count;
+static int64_t memo_miss_count;
+static int64_t heap_copy_nodes;
+static int64_t arena_copy_nodes;
+static int64_t per_nt_stores[128];
+static int64_t per_nt_hits[128];
+
+void
+parser_dump_stats(void)
+{
+    fprintf(stderr, "[ncc-stats] memo stores:  %lld\n", (long long)memo_store_count);
+    fprintf(stderr, "[ncc-stats] memo hits:    %lld\n", (long long)memo_hit_count);
+    fprintf(stderr, "[ncc-stats] memo misses:  %lld\n", (long long)memo_miss_count);
+    fprintf(stderr, "[ncc-stats] heap nodes:   %lld\n", (long long)heap_copy_nodes);
+    fprintf(stderr, "[ncc-stats] arena nodes:  %lld\n", (long long)arena_copy_nodes);
+    fprintf(stderr, "[ncc-stats] Per-NT breakdown (stores / hits):\n");
+    for (int i = 0; i < 128; i++) {
+        if (per_nt_stores[i] || per_nt_hits[i]) {
+            fprintf(stderr, "[ncc-stats]   NT %3d: %8lld stores, %8lld hits\n",
+                    i, (long long)per_nt_stores[i], (long long)per_nt_hits[i]);
+        }
+    }
+}
+
+#endif /* NCC_PARSER_STATS */
+
 
 // =============================================================================
 // PARSE NODE ARENA ALLOCATOR
@@ -142,9 +179,12 @@ copy_tree_to_heap(tnode_t *root)
 
     typedef struct { tnode_t *src; tnode_t *dst; int kid; } frame_t;
 
-    int      cap   = 64;
+    int      cap   = NCC_CAP_LARGE;
     frame_t *stack = base_alloc(cap * sizeof(frame_t));
     int      sp    = 0;
+#ifdef NCC_PARSER_STATS
+    int64_t  local_nodes = 0;
+#endif
 
     // Allocate root copy.
     tnode_t *root_copy = base_calloc(1, sizeof(tnode_t));
@@ -154,8 +194,11 @@ copy_tree_to_heap(tnode_t *root)
         .num_toks = root->num_toks, .id = root->id,
     };
     if (root->num_kids > 0 && root->kids) {
-        root_copy->kids = list_alloc(root->num_kids);
+        root_copy->kids = ncc_list_alloc(root->num_kids);
     }
+#ifdef NCC_PARSER_STATS
+    local_nodes++;
+#endif
 
     stack[sp++] = (frame_t){.src = root, .dst = root_copy, .kid = 0};
 
@@ -186,9 +229,12 @@ copy_tree_to_heap(tnode_t *root)
             .parent = f->dst,
         };
         if (child->num_kids > 0 && child->kids) {
-            cc->kids = list_alloc(child->num_kids);
+            cc->kids = ncc_list_alloc(child->num_kids);
         }
         f->dst->kids->items[ci] = cc;
+#ifdef NCC_PARSER_STATS
+        local_nodes++;
+#endif
 
         if (child->num_kids > 0) {
             if (sp >= cap) {
@@ -200,6 +246,9 @@ copy_tree_to_heap(tnode_t *root)
     }
 
     base_dealloc(stack);
+#ifdef NCC_PARSER_STATS
+    heap_copy_nodes += local_nodes;
+#endif
     return root_copy;
 }
 
@@ -211,9 +260,12 @@ copy_tree_to_arena(tnode_t *root)
 
     typedef struct { tnode_t *src; tnode_t *dst; int kid; } frame_t;
 
-    int      cap   = 64;
+    int      cap   = NCC_CAP_LARGE;
     frame_t *stack = base_alloc(cap * sizeof(frame_t));
     int      sp    = 0;
+#ifdef NCC_PARSER_STATS
+    int64_t  local_nodes = 0;
+#endif
 
     tnode_t *root_copy = alloc_tnode();
     *root_copy = (tnode_t){
@@ -222,8 +274,11 @@ copy_tree_to_arena(tnode_t *root)
         .num_toks = root->num_toks, .id = root->id,
     };
     if (root->num_kids > 0 && root->kids) {
-        root_copy->kids = list_alloc(root->num_kids);
+        root_copy->kids = ncc_list_alloc(root->num_kids);
     }
+#ifdef NCC_PARSER_STATS
+    local_nodes++;
+#endif
 
     stack[sp++] = (frame_t){.src = root, .dst = root_copy, .kid = 0};
 
@@ -254,9 +309,12 @@ copy_tree_to_arena(tnode_t *root)
             .parent = f->dst,
         };
         if (child->num_kids > 0 && child->kids) {
-            cc->kids = list_alloc(child->num_kids);
+            cc->kids = ncc_list_alloc(child->num_kids);
         }
         f->dst->kids->items[ci] = cc;
+#ifdef NCC_PARSER_STATS
+        local_nodes++;
+#endif
 
         if (child->num_kids > 0) {
             if (sp >= cap) {
@@ -268,6 +326,9 @@ copy_tree_to_arena(tnode_t *root)
     }
 
     base_dealloc(stack);
+#ifdef NCC_PARSER_STATS
+    arena_copy_nodes += local_nodes;
+#endif
     return root_copy;
 }
 
@@ -277,7 +338,7 @@ free_heap_tree(tnode_t *root)
 {
     if (!root) return;
 
-    int       cap   = 64;
+    int       cap   = NCC_CAP_LARGE;
     tnode_t **stack  = base_alloc(cap * sizeof(tnode_t *));
     int       sp     = 0;
 
@@ -343,6 +404,9 @@ memo_free(parser_t *ctx)
 bool
 memo_check(parser_t *ctx, nt_type_t nt_id, tnode_t **result)
 {
+    if (NT_IN_SET(nt_id, ctx->no_memo)) {
+        return false;
+    }
     if (!ctx->memo || ctx->pos >= ctx->memo_size || !ctx->memo[ctx->pos]) {
         return false;
     }
@@ -350,14 +414,25 @@ memo_check(parser_t *ctx, nt_type_t nt_id, tnode_t **result)
     memo_entry_t *entry = &ctx->memo[ctx->pos][nt_id];
 
     if (entry->end_pos == MEMO_EMPTY && entry->result == nullptr) {
+#ifdef NCC_PARSER_STATS
+        memo_miss_count++;
+#endif
         return false;
     }
 
     if (entry->end_pos == MEMO_FAIL) {
+#ifdef NCC_PARSER_STATS
+        memo_hit_count++;
+        if (nt_id > 0 && nt_id < 128) per_nt_hits[nt_id]++;
+#endif
         *result = nullptr;
         return true;
     }
 
+#ifdef NCC_PARSER_STATS
+    memo_hit_count++;
+    if (nt_id > 0 && nt_id < 128) per_nt_hits[nt_id]++;
+#endif
     *result  = copy_tree_to_arena(entry->result);
     ctx->pos = entry->end_pos;
     return true;
@@ -377,6 +452,13 @@ memo_store(parser_t *ctx, int start_pos, nt_type_t nt_id, tnode_t *result)
         free_heap_tree(entry->result);
     }
 
+    if (NT_IN_SET(nt_id, ctx->no_memo)) {
+        return;
+    }
+#ifdef NCC_PARSER_STATS
+    memo_store_count++;
+    if (nt_id > 0 && nt_id < 128) per_nt_stores[nt_id]++;
+#endif
     if (result) {
         entry->result  = copy_tree_to_heap(result);
         entry->end_pos = ctx->pos;
@@ -560,7 +642,7 @@ add_kid(tnode_t *parent, tnode_t *kid)
     int new_count = old_count + 1;
 
     // Grow the kids list
-    list_t *new_kids = list_alloc(new_count);
+    ncc_list_t *new_kids = ncc_list_alloc(new_count);
     assert(new_kids != nullptr);
 
     // Copy existing children

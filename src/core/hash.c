@@ -15,6 +15,8 @@
 #include <string.h> // IWYU pragma: keep ; for strlen
 #include "core/alloc.h"
 #include "core/hash.h"
+#include "core/string.h"
+#include "core/buffer.h"
 #include "vendor/xxhash.h"
 
 static inline n00b_uint128_t
@@ -96,19 +98,18 @@ n00b_hash_cstring(void *value)
     return n00b_xxh_convert(XXH3_128bits(s, strlen(s)));
 }
 
-#if 0 // TODO
 n00b_uint128_t
-n00b_string_hash(n00b_string_t *s)
+n00b_string_hash(n00b_string_t s)
 {
-    if (!s || !s->u8_bytes) {
+    if (!s.u8_bytes || !s.data) {
         return n00b_hash_word(0ULL);
     }
 
-    return n00b_xxh_convert(XXH3_128bits(s->data, s->u8_bytes));
+    return n00b_xxh_convert(XXH3_128bits(s.data, s.u8_bytes));
 }
 
 n00b_uint128_t
-n00b_buffer_hash(n00b_buf_t *b)
+n00b_buffer_hash(n00b_buffer_t *b)
 {
     if (!b || !b->byte_len) {
         return n00b_hash_word(0ULL);
@@ -116,5 +117,3 @@ n00b_buffer_hash(n00b_buf_t *b)
 
     return n00b_xxh_convert(XXH3_128bits(b->data, b->byte_len));
 }
-
-#endif

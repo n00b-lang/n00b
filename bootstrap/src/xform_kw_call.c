@@ -20,8 +20,9 @@
 #include <string.h>
 
 #include "branch_symbols.h"
+#include "ncc_limits.h"
 #include "transform.h"
-#include "rewrite.h"
+#include "xform_helpers.h"
 #include "types.h"
 #include "nt_types.h"
 #include "st.h"
@@ -47,19 +48,6 @@ typedef struct {
 // ---------------------------------------------------------------------------
 // Helper: Node Navigation
 // ---------------------------------------------------------------------------
-
-/**
- * @brief Replace a child at given index.
- */
-static void
-replace_child_at(tnode_t *parent, int idx, tnode_t *new_child)
-{
-    if (!parent || !parent->kids || !new_child || idx < 0 || idx >= parent->num_kids) {
-        return;
-    }
-    parent->kids->items[idx] = new_child;
-    new_child->parent        = parent;
-}
 
 /**
  * @brief Find the function name from a postfix_expression (the callee).
@@ -196,7 +184,7 @@ has_kw_args(tnode_t *arg_list)
         return true;
     }
 
-    int       cap = 16;
+    int       cap = NCC_CAP_SMALL;
     int       top = 0;
     tnode_t **stk = base_alloc(cap * sizeof(tnode_t *));
     if (!stk) {
@@ -268,18 +256,18 @@ count_regular_args(tnode_t *arg_list)
 
 /**
  * @brief Collect regular (non-keyword) arguments into a list.
- * @note list_append frees the old list and returns a new one,
+ * @note ncc_list_append frees the old list and returns a new one,
  *       so we take a pointer-to-pointer to update the caller's list.
  */
 static void
-collect_regular_args(tnode_t *node, list_t **args_ptr)
+collect_regular_args(tnode_t *node, ncc_list_t **args_ptr)
 {
     if (!node) {
         return;
     }
 
     if (node->nt_id == NT_assignment_expression) {
-        *args_ptr = list_append(*args_ptr, node);
+        *args_ptr = ncc_list_append(*args_ptr, node);
         return;
     }
 
@@ -297,99 +285,6 @@ collect_regular_args(tnode_t *node, list_t **args_ptr)
 // ---------------------------------------------------------------------------
 // Helper: Tree Building
 // ---------------------------------------------------------------------------
-
-/**
- * @brief Build an identifier node.
- */
-static tnode_t *
-build_identifier(const char *name, int line)
-{
-    tnode_t *id = synth_nonterminal("identifier");
-    id->nt_id   = NT_identifier;
-    add_child(id, synth_terminal(name, TT_ID, line));
-    return id;
-}
-
-/**
- * @brief Wrap an expression in the full expression hierarchy.
- */
-static tnode_t *
-wrap_in_expr_hierarchy(tnode_t *inner, int line)
-{
-    (void)line;
-
-    tnode_t *unary = synth_nonterminal("unary_expression_9");
-    unary->nt_id   = NT_unary_expression;
-    unary->branch  = 9;
-    add_child(unary, inner);
-
-    tnode_t *cast = synth_nonterminal("cast_expression_1");
-    cast->nt_id   = NT_cast_expression;
-    cast->branch  = 1;
-    add_child(cast, unary);
-
-    tnode_t *mult = synth_nonterminal("multiplicative_expression_3");
-    mult->nt_id   = NT_multiplicative_expression;
-    mult->branch  = 3;
-    add_child(mult, cast);
-
-    tnode_t *add = synth_nonterminal("additive_expression_2");
-    add->nt_id   = NT_additive_expression;
-    add->branch  = 2;
-    add_child(add, mult);
-
-    tnode_t *shift = synth_nonterminal("shift_expression_2");
-    shift->nt_id   = NT_shift_expression;
-    shift->branch  = 2;
-    add_child(shift, add);
-
-    tnode_t *rel = synth_nonterminal("relational_expression_4");
-    rel->nt_id   = NT_relational_expression;
-    rel->branch  = 4;
-    add_child(rel, shift);
-
-    tnode_t *eq = synth_nonterminal("equality_expression_2");
-    eq->nt_id   = NT_equality_expression;
-    eq->branch  = 2;
-    add_child(eq, rel);
-
-    tnode_t *and_ = synth_nonterminal("AND_expression_1");
-    and_->nt_id   = NT_AND_expression;
-    and_->branch  = 1;
-    add_child(and_, eq);
-
-    tnode_t *xor_ = synth_nonterminal("exclusive_OR_expression_1");
-    xor_->nt_id   = NT_exclusive_OR_expression;
-    xor_->branch  = 1;
-    add_child(xor_, and_);
-
-    tnode_t *or_ = synth_nonterminal("inclusive_OR_expression_1");
-    or_->nt_id   = NT_inclusive_OR_expression;
-    or_->branch  = 1;
-    add_child(or_, xor_);
-
-    tnode_t *land = synth_nonterminal("logical_AND_expression_1");
-    land->nt_id   = NT_logical_AND_expression;
-    land->branch  = 1;
-    add_child(land, or_);
-
-    tnode_t *lor = synth_nonterminal("logical_OR_expression_1");
-    lor->nt_id   = NT_logical_OR_expression;
-    lor->branch  = 1;
-    add_child(lor, land);
-
-    tnode_t *cond = synth_nonterminal("conditional_expression_1");
-    cond->nt_id   = NT_conditional_expression;
-    cond->branch  = 1;
-    add_child(cond, lor);
-
-    tnode_t *assign = synth_nonterminal("assignment_expression_1");
-    assign->nt_id   = NT_assignment_expression;
-    assign->branch  = 1;
-    add_child(assign, cond);
-
-    return assign;
-}
 
 /**
  * @brief Build a designation for designated initializer: .member =
@@ -423,7 +318,7 @@ build_designation(const char *member, int line)
 static tnode_t *
 build_int_initializer(int value, int line)
 {
-    char val_str[16];
+    char val_str[NCC_INTSTR_BUF];
     snprintf(val_str, sizeof(val_str), "%d", value);
 
     tnode_t *init = synth_nonterminal("initializer_1");
@@ -496,8 +391,9 @@ build_address_of(tnode_t *operand, int line)
 static tnode_t *
 build_kargs_compound_literal(const char *func_name, kw_arg_collector_t *kw_args, int line)
 {
-    char struct_name[256];
-    snprintf(struct_name, sizeof(struct_name), "_%s__kargs", func_name);
+    char struct_name[NCC_IDENT_BUF];
+    int  sret = snprintf(struct_name, sizeof(struct_name), "_%s__kargs", func_name);
+    NCC_CHECK_SNPRINTF(sret, struct_name);
 
     tnode_t *literal = synth_nonterminal("compound_literal_0");
     literal->nt_id   = NT_compound_literal;
@@ -562,8 +458,9 @@ build_kargs_compound_literal(const char *func_name, kw_arg_collector_t *kw_args,
         }
 
         // ._has_name = 1
-        char has_name[256];
-        snprintf(has_name, sizeof(has_name), "_has_%s", arg->name);
+        char has_name[NCC_IDENT_BUF];
+        int  hret = snprintf(has_name, sizeof(has_name), "_has_%s", arg->name);
+        NCC_CHECK_SNPRINTF(hret, has_name);
         add_child(init_list, build_designation(has_name, line));
         add_child(init_list, build_int_initializer(1, line));
 
@@ -591,7 +488,7 @@ build_kargs_compound_literal(const char *func_name, kw_arg_collector_t *kw_args,
  * postfix_expression branch 1: postfix_expression '(' argument_expression_list? ')'
  */
 static tnode_t *
-xform_kw_call(xform_ctx_t *ctx, tnode_t *node)
+xform_kw_call(tree_xform_t *ctx, tnode_t *node)
 {
     // Only handle function calls
     if (node->branch != BRANCH(postfix_expression, CALL)) {
@@ -690,13 +587,25 @@ xform_kw_call(xform_ctx_t *ctx, tnode_t *node)
             for (int i = node->num_kids - 1; i >= 0; i--) {
                 tnode_t *kid = tnode_get_kid(node, i);
                 if (kid && kid->tptr && kid->nt && strcmp(kid->nt, ")") == 0) {
-                    // Insert before closing paren
-                    for (int j = node->num_kids; j > i; j--) {
+                    // Grow kids array to make room for the new child
+                    int         old_count = node->num_kids;
+                    int         new_count = old_count + 1;
+                    ncc_list_t *new_kids  = ncc_list_alloc(new_count);
+
+                    for (int k = 0; k < old_count; k++) {
+                        new_kids->items[k] = node->kids->items[k];
+                    }
+
+                    base_dealloc(node->kids);
+                    node->kids = new_kids;
+
+                    // Shift children right to make room at position i
+                    for (int j = old_count; j > i; j--) {
                         node->kids->items[j] = node->kids->items[j - 1];
                     }
                     node->kids->items[i] = new_arg_list;
-                    node->num_kids++;
-                    new_arg_list->parent = node;
+                    node->num_kids       = new_count;
+                    new_arg_list->parent  = node;
                     break;
                 }
             }
@@ -713,9 +622,9 @@ xform_kw_call(xform_ctx_t *ctx, tnode_t *node)
     }
 
     // Collect regular (non-keyword) arguments
-    list_t *regular_args = nullptr;
+    ncc_list_t *regular_args = nullptr;
     collect_regular_args(arg_list, &regular_args);
-    int regular_count = list_len(regular_args);
+    int regular_count = ncc_list_len(regular_args);
 
     // Build the kargs compound literal with address-of
     tnode_t *literal       = build_kargs_compound_literal(func_name, &kw_args, line);
@@ -735,7 +644,7 @@ xform_kw_call(xform_ctx_t *ctx, tnode_t *node)
         if (i > 0) {
             add_child(new_arg_list, synth_terminal(",", TT_PUNCT, line));
         }
-        tnode_t *arg = list_get(regular_args, i);
+        tnode_t *arg = ncc_list_get(regular_args, i);
         add_child(new_arg_list, arg);
     }
 
@@ -830,7 +739,7 @@ find_first_regular_arg(tnode_t *arg_list)
  * This replaces the entire postfix_expression.
  */
 static tnode_t *
-xform_kw_func(xform_ctx_t *ctx, tnode_t *node)
+xform_kw_func(tree_xform_t *ctx, tnode_t *node)
 {
     // Only handle function calls
     if (node->branch != BRANCH(postfix_expression, CALL)) {

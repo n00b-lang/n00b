@@ -15,6 +15,7 @@
 
 #include "branch_symbols.h"
 #include "compile.h"
+#include "ncc_limits.h"
 #include "transform.h"
 #include "rewrite.h"
 #include "types.h"
@@ -79,7 +80,7 @@ find_identifier_tok(tnode_t *node)
 }
 
 static char *
-get_callee_name(xform_ctx_t *ctx, tnode_t *node)
+get_callee_name(tree_xform_t *ctx, tnode_t *node)
 {
     tnode_t *callee = tnode_get_kid(node, 0);
     if (!callee) {
@@ -98,7 +99,7 @@ get_callee_name(xform_ctx_t *ctx, tnode_t *node)
  * @brief Emit a subtree to a dynamically allocated string.
  */
 char *
-emit_node_to_string(xform_ctx_t *ctx, tnode_t *node)
+emit_node_to_string(tree_xform_t *ctx, tnode_t *node)
 {
     char  *output = nullptr;
     size_t size;
@@ -185,7 +186,7 @@ tree_contains_id(tnode_t *root, int target_id)
         return true;
     }
 
-    int       cap = 32;
+    int       cap = NCC_CAP_MEDIUM;
     int       top = 0;
     tnode_t **stk = base_alloc(cap * sizeof(tnode_t *));
     if (!stk) {
@@ -230,7 +231,7 @@ find_first_token(tnode_t *node)
         return node->tptr;
     }
 
-    int       cap = 32;
+    int       cap = NCC_CAP_MEDIUM;
     int       top = 0;
     tnode_t **stk = base_alloc(cap * sizeof(tnode_t *));
     if (!stk) {
@@ -291,7 +292,7 @@ is_from_system_header(lex_t *lex, tnode_t *node)
  *                   emitting the still-untransformed containing declaration.
  */
 char *
-emit_declarations(xform_ctx_t *ctx, tnode_t *call_node)
+emit_declarations(tree_xform_t *ctx, tnode_t *call_node)
 {
     if (!ctx->symtab) {
         return base_strdup("");
@@ -309,7 +310,7 @@ emit_declarations(xform_ctx_t *ctx, tnode_t *call_node)
 
     // Collect symbols into an array so we can reverse them
     // (scope chain is in reverse insertion order)
-    int           capacity = 64;
+    int           capacity = NCC_CAP_LARGE;
     int           count    = 0;
     sym_entry_t **syms     = base_alloc(capacity * sizeof(sym_entry_t *));
     if (!syms) {
@@ -569,7 +570,7 @@ build_numeric_literal(const char *value_str, int line)
 // ---------------------------------------------------------------------------
 
 static tnode_t *
-xform_constexpr(xform_ctx_t *ctx, tnode_t *node)
+xform_constexpr(tree_xform_t *ctx, tnode_t *node)
 {
     if (node->branch != BRANCH(postfix_expression, CALL)) {
         return nullptr;
@@ -639,7 +640,7 @@ xform_constexpr(xform_ctx_t *ctx, tnode_t *node)
     //   kid[1]=",", kid[2]=assignment_expression (left-recursive).
     // Unflattened: argument_expression_list_1 has kid[0]=assignment_expression.
     // Flattened: direct children are all assignment_expression nodes.
-    int       arg_capacity = 8;
+    int       arg_capacity = NCC_CAP_SMALL;
     int       nargs        = 0;
     tnode_t **args         = base_alloc(arg_capacity * sizeof(tnode_t *));
     if (!args) {
@@ -654,7 +655,7 @@ xform_constexpr(xform_ctx_t *ctx, tnode_t *node)
         // Iteratively unwrap left-recursive argument_expression_list_0 nodes
         // until we reach argument_expression_list_1 (a single expression)
         // Stack for unwinding the left-recursive list
-        int       stack_cap = 16;
+        int       stack_cap = NCC_CAP_SMALL;
         int       stack_len = 0;
         tnode_t **stack     = base_alloc(stack_cap * sizeof(tnode_t *));
         if (!stack) {
@@ -944,7 +945,7 @@ xform_constexpr(xform_ctx_t *ctx, tnode_t *node)
     base_dealloc(output);
 
     // Format as literal with LL suffix
-    char result_str[32];
+    char result_str[NCC_INTSTR_BUF];
     snprintf(result_str, sizeof(result_str), "%lldLL", value);
 
     tnode_t *replacement = build_numeric_literal(result_str, line);

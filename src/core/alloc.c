@@ -65,7 +65,9 @@ _n00b_alloc_raw(size_t n, size_t sz, char *base_type, const char *location) _kar
     void    *r;
 
     if (!request) {
-        request = 1;
+        request = allocator->add_inline_header
+                      ? sizeof(n00b_inline_hdr_t)
+                      : 1;
     }
 
     request = n00b_align(request);

@@ -1,10 +1,16 @@
-// Symbol Table Registration
-//
-// Functions for registering symbols from parse tree nodes.
-// Separated from st.c for clarity.
+/**
+ * @file st_register.c
+ * @brief Symbol table registration from parse tree nodes.
+ *
+ * Extracts function signatures, keyword argument metadata, and
+ * variadic parameter info from the parsed AST and registers them
+ * in the symbol table for use by semantic transforms.  Separated
+ * from st.c for clarity.
+ */
 
 #include <stdlib.h>
 #include "base_alloc_shim.h"
+#include "ncc_limits.h"
 #include <string.h>
 
 #include "branch_symbols.h"
@@ -35,7 +41,7 @@ find_first_token_recursive(tnode_t *node)
         return node->tptr;
     }
 
-    int       cap = 32;
+    int       cap = NCC_CAP_MEDIUM;
     int       top = 0;
     tnode_t **stk = base_alloc(cap * sizeof(tnode_t *));
     if (!stk) {
@@ -129,105 +135,6 @@ count_positional_params(tnode_t *declarator)
 #define for_each_valid_kid(node, kid, i)       \
     for (int i = 0; i < (node)->num_kids; i++) \
         if ((kid = tnode_get_kid((node), i)), is_valid_node(kid))
-
-// Helper to check a single parameter_declaration for n00b_vargs_t *
-// Searches within declaration_specifiers for the type identifier
-static bool
-check_param_for_vargs(ncc_buf_t *input, tnode_t *param_decl)
-{
-    // Find declaration_specifiers to search for the type identifier
-    tnode_t *decl_specs = find_node(param_decl, NT_declaration_specifiers);
-    if (!decl_specs) {
-        return false;
-    }
-
-    // Check for typedef_name which may contain the identifier
-    tnode_t *typedef_name = find_node(decl_specs, NT_typedef_name);
-    if (typedef_name) {
-        // Get text from typedef_name's first kid (which holds the actual token)
-        tnode_t *type_tok_node = tnode_get_kid(typedef_name, 0);
-        if (type_tok_node && type_tok_node->tptr) {
-            char *type_text = extract(input, type_tok_node->tptr);
-            if (type_text && strcmp(type_text, "n00b_vargs_t") == 0) {
-                tnode_t *pointer = find_node(param_decl, NT_pointer);
-                base_dealloc(type_text);
-                return pointer != nullptr;
-            }
-            base_dealloc(type_text);
-        }
-    }
-
-    // Also try identifier directly in declaration_specifiers
-    tnode_t *type_node = find_node(decl_specs, NT_identifier);
-
-    tok_t *type_tok = type_node ? identifier_tok(type_node) : nullptr;
-    if (type_tok) {
-        char *type_text = extract(input, type_tok);
-        if (type_text && strcmp(type_text, "n00b_vargs_t") == 0) {
-            tnode_t *pointer = find_node(param_decl, NT_pointer);
-            base_dealloc(type_text);
-            return pointer != nullptr;
-        }
-        base_dealloc(type_text);
-    }
-    return false;
-}
-
-// Recursively count parameters and find vargs param
-// current_idx tracks position, vargs_idx is set if n00b_vargs_t * found
-// Returns total parameter count
-static int
-count_params_recursive(ncc_buf_t *input, tnode_t *node, int *current_idx, int *vargs_idx)
-{
-    if (!is_valid_node(node)) {
-        return 0;
-    }
-
-    // Check if this is a parameter_declaration
-    if (node->nt_id == NT_parameter_declaration) {
-        int idx = (*current_idx)++;
-        if (check_param_for_vargs(input, node)) {
-            *vargs_idx = idx;
-        }
-        return 1;
-    }
-
-    // Recurse into parameter_list
-    if (node->nt_id == NT_parameter_list) {
-        int total = 0;
-        for (int i = 0; i < node->num_kids; i++) {
-            tnode_t *kid = tnode_get_kid(node, i);
-            total += count_params_recursive(input, kid, current_idx, vargs_idx);
-        }
-        return total;
-    }
-
-    return 0;
-}
-
-// Check if a parameter has n00b_vargs_t * type AND is the last parameter
-// Returns the 0-based index of the parameter, or -1 if not found or not last
-static int
-find_vargs_param_index(ncc_buf_t *input, tnode_t *param_list)
-{
-    if (!param_list) {
-        return -1;
-    }
-
-    int current_idx  = 0;
-    int vargs_idx    = -1;
-    int total_params = count_params_recursive(input, param_list, &current_idx, &vargs_idx);
-
-    // Only valid if vargs is the LAST parameter
-    // This prevents transforming internal functions like:
-    //   _n00b_vargs_oneshot_setup(n00b_vargs_t *va, unsigned int count)
-    // where n00b_vargs_t * is NOT the last param
-    if (vargs_idx >= 0 && vargs_idx == total_params - 1) {
-        return vargs_idx;
-    }
-
-    return -1;
-}
 
 // Detect variadic arguments in a function declarator
 // Returns a newly allocated vargs_info_t, or nullptr if no vargs
@@ -420,20 +327,7 @@ detect_vargs(ncc_buf_t *input, lex_t *lex, tnode_t *declarator)
         break;
 
     case BRANCH_REF(parameter_type_list, PARAM_LIST_ONLY):
-        // parameter_list -> check for explicit n00b_vargs_t * as LAST parameter
-        {
-            tnode_t *param_list = find_node(param_type_list, NT_parameter_list);
-            int      vargs_idx  = find_vargs_param_index(input, param_list);
-            if (vargs_idx >= 0) {
-                info = base_calloc(1, sizeof(vargs_info_t));
-                if (!info) {
-                    return nullptr;
-                }
-                info->style             = VARGS_N00B;
-                info->positional_before = vargs_idx;
-                break;
-            }
-        }
+        // Plain parameter list — no varargs.
         return nullptr;
 
     default:
@@ -454,7 +348,7 @@ find_node(tnode_t *node, nt_type_t nt_id)
         return node;
     }
 
-    int       cap = 32;
+    int       cap = NCC_CAP_MEDIUM;
     int       top = 0;
     tnode_t **stk = base_alloc(cap * sizeof(tnode_t *));
     if (!stk) {
@@ -495,7 +389,7 @@ extract_declarator_name(st_reg_ctx_t *ctx, tnode_t *node)
         return nullptr;
     }
 
-    int       cap = 16;
+    int       cap = NCC_CAP_SMALL;
     int       top = 0;
     tnode_t **stk = base_alloc(cap * sizeof(tnode_t *));
     if (!stk) {
@@ -542,7 +436,7 @@ has_storage_class(st_reg_ctx_t *ctx, tnode_t *node, const char *keyword)
         return false;
     }
 
-    int       cap = 16;
+    int       cap = NCC_CAP_SMALL;
     int       top = 0;
     tnode_t **stk = base_alloc(cap * sizeof(tnode_t *));
     if (!stk) {
@@ -593,7 +487,7 @@ extract_tag_name(st_reg_ctx_t *ctx, tnode_t *node)
         return nullptr;
     }
 
-    int       cap = 16;
+    int       cap = NCC_CAP_SMALL;
     int       top = 0;
     tnode_t **stk = base_alloc(cap * sizeof(tnode_t *));
     if (!stk) {
@@ -640,7 +534,7 @@ has_tag_body(tnode_t *node)
         return false;
     }
 
-    int       cap = 16;
+    int       cap = NCC_CAP_SMALL;
     int       top = 0;
     tnode_t **stk = base_alloc(cap * sizeof(tnode_t *));
     if (!stk) {
@@ -836,7 +730,7 @@ find_and_register_enum_constants(st_reg_ctx_t *ctx, tnode_t *node)
         return;
     }
 
-    int       cap = 16;
+    int       cap = NCC_CAP_SMALL;
     int       top = 0;
     tnode_t **stk = base_alloc(cap * sizeof(tnode_t *));
     if (!stk) {
@@ -977,14 +871,14 @@ register_function_parameters(st_reg_ctx_t *ctx, tnode_t *node, tnode_t *func_def
 }
 
 // Recursively collect keyword_param nodes from a keyword_param_list into a dynamic list
-static list_t *
-collect_keyword_params(tnode_t *node, list_t *params)
+static ncc_list_t *
+collect_keyword_params(tnode_t *node, ncc_list_t *params)
 {
     if (!is_valid_node(node)) {
         return params;
     }
     if (node->nt_id == NT_keyword_param) {
-        return list_append(params, node);
+        return ncc_list_append(params, node);
     }
     if (node->nt_id == NT_keyword_param_list) {
         for (int i = 0; i < node->num_kids; i++) {
@@ -1026,22 +920,22 @@ extract_keyword_info(st_reg_ctx_t *ctx, tnode_t *kw_clause, tnode_t *declarator,
     }
 
     // Collect all keyword_param nodes into a temporary list
-    list_t *param_nodes = nullptr;
+    ncc_list_t *param_nodes = nullptr;
     param_nodes         = collect_keyword_params(param_list, param_nodes);
 
-    int num_params = list_len(param_nodes);
+    int num_params = ncc_list_len(param_nodes);
     if (num_params == 0) {
         base_dealloc(param_nodes);
         base_dealloc(info);
         return nullptr;
     }
 
-    // Initialize params list (will be built via list_append)
+    // Initialize params list (will be built via ncc_list_append)
     info->params = nullptr;
 
     // Extract info from each keyword_param
     for (int i = 0; i < num_params; i++) {
-        tnode_t *param = list_get(param_nodes, i);
+        tnode_t *param = ncc_list_get(param_nodes, i);
 
         kw_param_info_t *kw_param = base_calloc(1, sizeof(kw_param_info_t));
         if (!kw_param) {
@@ -1093,7 +987,7 @@ extract_keyword_info(st_reg_ctx_t *ctx, tnode_t *kw_clause, tnode_t *declarator,
             info->defaults_set = true;
         }
 
-        info->params = list_append(info->params, kw_param);
+        info->params = ncc_list_append(info->params, kw_param);
     }
 
     base_dealloc(param_nodes);

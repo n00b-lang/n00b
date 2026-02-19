@@ -107,17 +107,17 @@
 typedef struct {
     int   nitems;  /**< Number of items in the list */
     void *items[]; /**< Flexible array of item pointers */
-} list_t;
+} ncc_list_t;
 
 /**
  * @brief Allocate a list with space for elements.
  * @param nitems Number of elements to allocate space for
  * @return Newly allocated list, or nullptr on allocation failure
  */
-static inline list_t *
-list_alloc(int nitems)
+static inline ncc_list_t*
+ncc_list_alloc(int nitems)
 {
-    list_t *result = base_calloc(1, sizeof(list_t) + sizeof(void *) * nitems);
+    ncc_list_t*result = base_calloc(1, sizeof(ncc_list_t) + sizeof(void *) * nitems);
     result->nitems = nitems;
 
     return result;
@@ -127,7 +127,7 @@ list_alloc(int nitems)
  * @brief Get the number of items in a list.
  */
 static inline int
-list_len(list_t *list)
+ncc_list_len(ncc_list_t*list)
 {
     return list ? list->nitems : 0;
 }
@@ -136,7 +136,7 @@ list_len(list_t *list)
  * @brief Get an item from a list by index.
  */
 static inline void *
-list_get(list_t *list, int index)
+ncc_list_get(ncc_list_t*list, int index)
 {
     if (!list || index < 0 || index >= list->nitems) {
         return nullptr;
@@ -151,13 +151,13 @@ list_get(list_t *list, int index)
  * @return New list containing all old items plus the new item
  * @note The old list is freed. Caller must use returned pointer.
  */
-static inline list_t *
-list_append(list_t *old_list, void *item)
+static inline ncc_list_t*
+ncc_list_append(ncc_list_t*old_list, void *item)
 {
     int old_count = old_list ? old_list->nitems : 0;
     int new_count = old_count + 1;
 
-    list_t *new_list = list_alloc(new_count);
+    ncc_list_t*new_list = ncc_list_alloc(new_count);
     if (!new_list) {
         return old_list;
     }
@@ -233,7 +233,7 @@ struct tnode_t {
     tnode_t          *parent;   /**< Parent node (nullptr for root) */
     rewrite_origin_t *origin;   /**< Origin info for synthetic nodes (nullptr for original) */
     scope_t          *scope;    /**< Scope where this node was created (for symbol lookups) */
-    list_t           *kids;     /**< Child nodes (dynamic list of tnode_t*) */
+    ncc_list_t          *kids;     /**< Child nodes (dynamic list of tnode_t*) */
     int               id;       /**< Unique node ID for debugging */
     int               num_kids; /**< Number of children (mirrors kids->nitems) */
     int               num_toks; /**< For passthrough text (internal use) */
@@ -342,7 +342,7 @@ extern int count_newlines(lex_t *state, tok_t *tok);
  * @param end End index
  * @return List of actual parameters
  */
-extern list_t *get_wrapper_actuals(xform_t *ctx, int start, int end);
+extern ncc_list_t*get_wrapper_actuals(tok_xform_t *ctx, int start, int end);
 
 /**
  * @brief Join list items with a separator string.
@@ -350,7 +350,7 @@ extern list_t *get_wrapper_actuals(xform_t *ctx, int start, int end);
  * @param sep Separator string
  * @return Newly allocated joined string
  */
-extern char *join(list_t *list, char *sep);
+extern char *join(ncc_list_t*list, char *sep);
 
 /** @} */
 
@@ -638,14 +638,5 @@ void parse_arena_reset(parse_arena_mark_t mark);
  * Use parse_arena_mark()/parse_arena_reset() around speculative parsing.
  */
 tnode_t *alloc_tnode(void);
-
-/**
- * @brief Convert all kids lists in a tree from arena to heap allocation.
- *
- * After parsing completes, the final tree has kids lists in the kids arena.
- * Transforms may base_dealloc() kids lists, so this must be called before
- * any transform pass.
- */
-void tree_kids_to_heap(tnode_t *root);
 
 /** @} */

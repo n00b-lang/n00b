@@ -56,7 +56,7 @@ n00b_llstack_push_node(n00b_llstack_t *llstack, n00b_llstack_node_t *item)
 /**
  * @brief Pop a node from the lock-free stack.
  * @param llstack Stack to pop from.
- * @return        Popped node, or NULL if empty.
+ * @return        Popped node, or nullptr if empty.
  *
  * @kw found Pointer to bool; set to false if the stack was empty (may be nullptr).
  */

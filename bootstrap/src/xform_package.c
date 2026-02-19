@@ -14,11 +14,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "base_alloc_shim.h"
+#include "ncc_limits.h"
 #include <string.h>
 
 #include "branch_symbols.h"
 #include "transform.h"
-#include "rewrite.h"
+#include "xform_helpers.h"
 #include "nt_types.h"
 
 // ---------------------------------------------------------------------------
@@ -50,19 +51,6 @@ build_prefixed_name(const char *prefix, const char *name)
     }
     snprintf(buf, len, "%s_%s", prefix, name);
     return buf;
-}
-
-// ---------------------------------------------------------------------------
-// Helper: Build an identifier node
-// ---------------------------------------------------------------------------
-
-static tnode_t *
-build_identifier(const char *name, int line)
-{
-    tnode_t *id = synth_nonterminal("identifier");
-    id->nt_id   = NT_identifier;
-    add_child(id, synth_terminal(name, TT_ID, line));
-    return id;
 }
 
 // ---------------------------------------------------------------------------
@@ -111,7 +99,7 @@ find_node(tnode_t *node, nt_type_t nt_id)
         return node;
     }
 
-    int       cap = 32;
+    int       cap = NCC_CAP_MEDIUM;
     int       top = 0;
     tnode_t **stk = base_alloc(cap * sizeof(tnode_t *));
     if (!stk) {
@@ -248,7 +236,7 @@ has_storage_class(ncc_buf_t *input, tnode_t *node, const char *keyword)
 // ---------------------------------------------------------------------------
 
 static tnode_t *
-xform_package_statement(xform_ctx_t *ctx [[maybe_unused]], tnode_t *node)
+xform_package_statement(tree_xform_t *ctx [[maybe_unused]], tnode_t *node)
 {
     // Only match external_declaration branch 3 (package statement)
     if (node->branch != BRANCH(external_declaration, PACKAGE)) {
@@ -266,7 +254,7 @@ xform_package_statement(xform_ctx_t *ctx [[maybe_unused]], tnode_t *node)
 // ---------------------------------------------------------------------------
 
 static tnode_t *
-xform_package_func_def(xform_ctx_t *ctx, tnode_t *node)
+xform_package_func_def(tree_xform_t *ctx, tnode_t *node)
 {
     if (!ctx->symtab || !ctx->symtab->package_prefix) {
         return nullptr;
@@ -332,7 +320,7 @@ xform_package_func_def(xform_ctx_t *ctx, tnode_t *node)
 // ---------------------------------------------------------------------------
 
 static tnode_t *
-xform_package_declaration(xform_ctx_t *ctx, tnode_t *node)
+xform_package_declaration(tree_xform_t *ctx, tnode_t *node)
 {
     if (!ctx->symtab || !ctx->symtab->package_prefix) {
         return nullptr;
@@ -419,7 +407,7 @@ xform_package_declaration(xform_ctx_t *ctx, tnode_t *node)
 // ---------------------------------------------------------------------------
 
 static tnode_t *
-xform_package_primary_expr(xform_ctx_t *ctx, tnode_t *node)
+xform_package_primary_expr(tree_xform_t *ctx, tnode_t *node)
 {
     if (!ctx->symtab || !ctx->symtab->package_prefix) {
         return nullptr;
@@ -479,7 +467,7 @@ xform_package_primary_expr(xform_ctx_t *ctx, tnode_t *node)
 // ---------------------------------------------------------------------------
 
 static tnode_t *
-xform_package_tag_specifier(xform_ctx_t *ctx, tnode_t *node)
+xform_package_tag_specifier(tree_xform_t *ctx, tnode_t *node)
 {
     if (!ctx->symtab || !ctx->symtab->package_prefix) {
         return nullptr;
@@ -523,7 +511,7 @@ xform_package_tag_specifier(xform_ctx_t *ctx, tnode_t *node)
 // ---------------------------------------------------------------------------
 
 static tnode_t *
-xform_package_typedef_name(xform_ctx_t *ctx, tnode_t *node)
+xform_package_typedef_name(tree_xform_t *ctx, tnode_t *node)
 {
     if (!ctx->symtab || !ctx->symtab->package_prefix) {
         return nullptr;
@@ -570,7 +558,7 @@ xform_package_typedef_name(xform_ctx_t *ctx, tnode_t *node)
 // ---------------------------------------------------------------------------
 
 static tnode_t *
-xform_package_enum_const(xform_ctx_t *ctx, tnode_t *node)
+xform_package_enum_const(tree_xform_t *ctx, tnode_t *node)
 {
     if (!ctx->symtab || !ctx->symtab->package_prefix) {
         return nullptr;

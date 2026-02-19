@@ -18,6 +18,8 @@
 #include "core/arena.h"
 #include "core/runtime.h"
 #include "core/interval_tree.h"
+#include "unicode/encoding.h"
+#include "unicode/properties.h"
 
 // TODO
 // #include "core/stw.h"
@@ -92,7 +94,7 @@ n00b_load_static_ranges(void)
     dl_iterate_phdr(n00b_extract_lib_info, nullptr);
 }
 
-#elif defined(__APPLE__)
+#elifdef __APPLE__
 #include <dlfcn.h>         // for dladdr, Dl_info
 #include <mach-o/dyld.h>   // for _dyld_register_func_for_add_image
 #include <mach-o/loader.h> // for segment_command_64, mach_header_64, LC_...
@@ -303,58 +305,81 @@ n00b_check_memory_perms(void *ptr)
     return n00b_mmap_perms_rw;
 }
 
+static inline bool
+codepoint_is_printable(int32_t cp)
+{
+    switch (n00b_unicode_general_category((n00b_codepoint_t)cp)) {
+    case N00B_UNICODE_GC_CC: // Control
+    case N00B_UNICODE_GC_CF: // Format
+    case N00B_UNICODE_GC_CS: // Surrogate
+        return false;
+    default:
+        // Reject whitespace other than plain space.
+        if (cp != ' ') {
+            n00b_unicode_gc_t gc = n00b_unicode_general_category((n00b_codepoint_t)cp);
+            if (gc == N00B_UNICODE_GC_ZS || gc == N00B_UNICODE_GC_ZL
+                || gc == N00B_UNICODE_GC_ZP) {
+                return false;
+            }
+        }
+        return true;
+    }
+}
+
 size_t
 n00b_address_is_probable_cstring(void *addr, size_t *bytelen, size_t min_len)
 {
-// Looks for UTF-8 AND null termination.
-// TODO: hook up unicode.
-#if 0
-    uint32_t blen = 0;
-    uint32_t clen = 0;
-    int32_t  cp;
-    char    *page_end;
-    char    *p          = (char *)addr;
-    char    *page_start = (char *)addr;
+    // Looks for valid UTF-8 with null termination and printable content.
+    // Returns the codepoint count (0 if not a plausible string).
+
+    char *base      = (char *)addr;
+    char *page_end;
+    char *p         = base;
 
     if (n00b_value_is_data(p)) {
         return 0;
     }
 
-    page_end = n00b_align_to_page_start(p) + n00b_page_size;
+    page_end = (char *)n00b_align_to_page_start(p) + n00b_page_size;
+
+    // We decode one page at a time; within each page we use the new
+    // n00b_unicode_utf8_decode() which takes (base, len, &pos).
+    uint32_t total_bytes = 0;
+    uint32_t total_cp    = 0;
 
     while (true) {
-        while (p < page_end) {
-            cp = n00b_u8_decode_character(&p, page_end);
+        uint32_t chunk_len = (uint32_t)(page_end - p);
+        uint32_t pos       = 0;
+
+        while (pos < chunk_len) {
+            // Check for NUL terminator before decoding.
+            if (p[pos] == '\0') {
+                uint32_t blen = total_bytes + pos;
+                if (total_cp < min_len) {
+                    return 0;
+                }
+                *bytelen = blen;
+                return total_cp;
+            }
+
+            int32_t cp = n00b_unicode_utf8_decode(p, chunk_len, &pos);
             if (cp < 0) {
                 return 0;
             }
-            else {
-                if (!cp) {
-                    if (clen < min_len) {
-                        return 0;
-                    }
-                    blen += p - page_start - 1;
-                    *bytelen = blen;
-                    return clen;
-                }
-                if (!n00b_codepoint_is_printable(cp)) {
-                    return 0;
-                }
-                clen++;
+            if (!codepoint_is_printable(cp)) {
+                return 0;
             }
+            total_cp++;
         }
-        blen += p - page_start;
-        page_start = p;
+
+        total_bytes += chunk_len;
+        p = page_end;
         page_end += n00b_page_size;
 
-        // If this returns true, there's nothing in static or heap memory.
         if (n00b_value_is_data(p)) {
             return 0;
         }
     }
-#else
-    return 0;
-#endif
 }
 
 bool

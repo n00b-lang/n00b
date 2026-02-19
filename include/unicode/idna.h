@@ -1,4 +1,5 @@
 #pragma once
+
 /** @file idna.h
  *  @brief Internationalized Domain Names in Applications (IDNA / UTS #46).
  *
@@ -18,8 +19,11 @@
  *  @kw allocator  Optional allocator (defaults to the runtime allocator).
  *  @return A result containing the ACE domain string and an error code.
  */
-n00b_unicode_idna_result_t n00b_unicode_idna_to_ascii(n00b_string_t domain)
-    _kargs { n00b_allocator_t *allocator = nullptr; };
+n00b_unicode_idna_result_t
+n00b_unicode_idna_to_ascii(n00b_string_t domain) _kargs
+{
+    n00b_allocator_t *allocator = nullptr;
+};
 
 /** @brief Convert an ACE domain name back to its Unicode form.
  *
@@ -29,5 +33,8 @@ n00b_unicode_idna_result_t n00b_unicode_idna_to_ascii(n00b_string_t domain)
  *  @kw allocator  Optional allocator (defaults to the runtime allocator).
  *  @return A result containing the Unicode domain string and an error code.
  */
-n00b_unicode_idna_result_t n00b_unicode_idna_to_unicode(n00b_string_t domain)
-    _kargs { n00b_allocator_t *allocator = nullptr; };
+n00b_unicode_idna_result_t
+n00b_unicode_idna_to_unicode(n00b_string_t domain) _kargs
+{
+    n00b_allocator_t *allocator = nullptr;
+};

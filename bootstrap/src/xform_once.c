@@ -13,10 +13,11 @@
 #include <stdlib.h>
 #include "base_alloc_shim.h"
 #include <string.h>
+#include "ncc_limits.h"
 
 #include "branch_symbols.h"
 #include "transform.h"
-#include "rewrite.h"
+#include "xform_helpers.h"
 #include "nt_types.h"
 
 // ---------------------------------------------------------------------------
@@ -73,69 +74,6 @@ find_once_specifier(ncc_buf_t *input, tnode_t *decl_specs)
     }
 
     return nullptr;
-}
-
-/**
- * @brief Find index of child in parent.
- */
-static int
-find_child_index(tnode_t *parent, tnode_t *child)
-{
-    if (!parent || !child) {
-        return -1;
-    }
-    for (int i = 0; i < parent->num_kids; i++) {
-        if (tnode_get_kid(parent, i) == child) {
-            return i;
-        }
-    }
-    return -1;
-}
-
-/**
- * @brief Remove a child from parent at given index.
- */
-static void
-remove_child_at(tnode_t *parent, int idx)
-{
-    if (!parent || !parent->kids || idx < 0 || idx >= parent->num_kids) {
-        return;
-    }
-    for (int i = idx; i < parent->num_kids - 1; i++) {
-        parent->kids->items[i] = parent->kids->items[i + 1];
-    }
-    parent->num_kids--;
-}
-
-/**
- * @brief Insert child at given index in parent.
- */
-static void
-insert_child_at(tnode_t *parent, int idx, tnode_t *child)
-{
-    if (!parent || !child || idx < 0 || idx > parent->num_kids) {
-        return;
-    }
-
-    int      old_count = parent->num_kids;
-    int      new_count = old_count + 1;
-    list_t  *new_kids  = list_alloc(new_count);
-
-    // Copy children before insertion point
-    for (int i = 0; i < idx; i++) {
-        new_kids->items[i] = parent->kids ? parent->kids->items[i] : nullptr;
-    }
-    // Insert new child
-    new_kids->items[idx] = child;
-    // Copy children after insertion point
-    for (int i = idx; i < old_count; i++) {
-        new_kids->items[i + 1] = parent->kids ? parent->kids->items[i] : nullptr;
-    }
-
-    base_dealloc(parent->kids);
-    parent->kids     = new_kids;
-    parent->num_kids = new_count;
-    child->parent    = parent;
 }
 
 /**
@@ -262,31 +200,6 @@ find_name_direct_declarator(tnode_t *node)
 // ---------------------------------------------------------------------------
 
 /**
- * @brief Build an identifier node.
- */
-static tnode_t *
-build_identifier(const char *name, int line)
-{
-    tnode_t *id = synth_nonterminal("identifier");
-    id->nt_id   = NT_identifier;
-    add_child(id, synth_terminal(name, TT_ID, line));
-    return id;
-}
-
-/**
- * @brief Build a simple primary_expression containing an identifier.
- */
-static tnode_t *
-build_primary_id(const char *name, int line)
-{
-    tnode_t *primary = synth_nonterminal("primary_expression_7");
-    primary->nt_id   = NT_primary_expression;
-    primary->branch  = 7;
-    add_child(primary, build_identifier(name, line));
-    return primary;
-}
-
-/**
  * @brief Build a constant primary expression.
  */
 static tnode_t *
@@ -305,99 +218,10 @@ build_constant(const char *value, int line)
 }
 
 /**
- * @brief Wrap a primary/postfix expression up to assignment_expression level.
- */
-static tnode_t *
-wrap_in_expr_hierarchy(tnode_t *inner, int line)
-{
-    (void)line;
-
-    tnode_t *postfix = inner;
-    if (inner->nt_id == NT_primary_expression) {
-        postfix          = synth_nonterminal("postfix_expression_9");
-        postfix->nt_id   = NT_postfix_expression;
-        postfix->branch  = 9;
-        add_child(postfix, inner);
-    }
-
-    tnode_t *unary = synth_nonterminal("unary_expression_9");
-    unary->nt_id   = NT_unary_expression;
-    unary->branch  = 9;
-    add_child(unary, postfix);
-
-    tnode_t *cast = synth_nonterminal("cast_expression_1");
-    cast->nt_id   = NT_cast_expression;
-    cast->branch  = 1;
-    add_child(cast, unary);
-
-    tnode_t *mult = synth_nonterminal("multiplicative_expression_3");
-    mult->nt_id   = NT_multiplicative_expression;
-    mult->branch  = 3;
-    add_child(mult, cast);
-
-    tnode_t *add = synth_nonterminal("additive_expression_2");
-    add->nt_id   = NT_additive_expression;
-    add->branch  = 2;
-    add_child(add, mult);
-
-    tnode_t *shift = synth_nonterminal("shift_expression_2");
-    shift->nt_id   = NT_shift_expression;
-    shift->branch  = 2;
-    add_child(shift, add);
-
-    tnode_t *rel = synth_nonterminal("relational_expression_4");
-    rel->nt_id   = NT_relational_expression;
-    rel->branch  = 4;
-    add_child(rel, shift);
-
-    tnode_t *eq = synth_nonterminal("equality_expression_2");
-    eq->nt_id   = NT_equality_expression;
-    eq->branch  = 2;
-    add_child(eq, rel);
-
-    tnode_t *and_ = synth_nonterminal("AND_expression_1");
-    and_->nt_id   = NT_AND_expression;
-    and_->branch  = 1;
-    add_child(and_, eq);
-
-    tnode_t *xor_ = synth_nonterminal("exclusive_OR_expression_1");
-    xor_->nt_id   = NT_exclusive_OR_expression;
-    xor_->branch  = 1;
-    add_child(xor_, and_);
-
-    tnode_t *or_ = synth_nonterminal("inclusive_OR_expression_1");
-    or_->nt_id   = NT_inclusive_OR_expression;
-    or_->branch  = 1;
-    add_child(or_, xor_);
-
-    tnode_t *land = synth_nonterminal("logical_AND_expression_1");
-    land->nt_id   = NT_logical_AND_expression;
-    land->branch  = 1;
-    add_child(land, or_);
-
-    tnode_t *lor = synth_nonterminal("logical_OR_expression_1");
-    lor->nt_id   = NT_logical_OR_expression;
-    lor->branch  = 1;
-    add_child(lor, land);
-
-    tnode_t *cond = synth_nonterminal("conditional_expression_1");
-    cond->nt_id   = NT_conditional_expression;
-    cond->branch  = 1;
-    add_child(cond, lor);
-
-    tnode_t *assign = synth_nonterminal("assignment_expression_1");
-    assign->nt_id   = NT_assignment_expression;
-    assign->branch  = 1;
-    add_child(assign, cond);
-
-    return assign;
-}
-
-/**
  * @brief Build a function call expression: func(args...).
  */
 static tnode_t *
-build_function_call(const char *func_name, list_t *args, int line)
+build_function_call(const char *func_name, ncc_list_t *args, int line)
 {
     tnode_t *primary = build_primary_id(func_name, line);
 
@@ -412,16 +236,16 @@ build_function_call(const char *func_name, list_t *args, int line)
     add_child(call, postfix);
     add_child(call, synth_terminal("(", TT_PUNCT, line));
 
-    if (args && list_len(args) > 0) {
+    if (args && ncc_list_len(args) > 0) {
         tnode_t *arg_list = synth_nonterminal("argument_expression_list");
         arg_list->nt_id   = NT_argument_expression_list;
 
-        int count = list_len(args);
+        int count = ncc_list_len(args);
         for (int i = 0; i < count; i++) {
             if (i > 0) {
                 add_child(arg_list, synth_terminal(",", TT_PUNCT, line));
             }
-            tnode_t *arg = list_get(args, i);
+            tnode_t *arg = ncc_list_get(args, i);
             add_child(arg_list, arg);
         }
         add_child(call, arg_list);
@@ -855,7 +679,7 @@ remove_once_specifier(tnode_t *once_node)
  * @brief Transform a declaration (prototype) with `once` specifier.
  */
 static tnode_t *
-xform_once_declaration(xform_ctx_t *ctx, tnode_t *node)
+xform_once_declaration(tree_xform_t *ctx, tnode_t *node)
 {
     tnode_t *decl_specs = nullptr;
     for (int i = 0; i < node->num_kids; i++) {
@@ -892,13 +716,15 @@ build_wrapper_body(const char *func_name, const char *impl_name, tnode_t *param_
     tnode_t *switch_body_list = synth_nonterminal("block_item_list");
     switch_body_list->nt_id   = NT_block_item_list;
 
-    char lock_name[256];
-    char cached_name[256];
-    snprintf(lock_name, sizeof(lock_name), "__n00b_%s_once_lock", func_name);
-    snprintf(cached_name, sizeof(cached_name), "__n00b_%s_cached_result", func_name);
+    char lock_name[NCC_IDENT_BUF];
+    char cached_name[NCC_IDENT_BUF];
+    int  lret = snprintf(lock_name, sizeof(lock_name), "__n00b_%s_once_lock", func_name);
+    NCC_CHECK_SNPRINTF(lret, lock_name);
+    int  cret = snprintf(cached_name, sizeof(cached_name), "__n00b_%s_cached_result", func_name);
+    NCC_CHECK_SNPRINTF(cret, cached_name);
 
     // Collect parameter names for calling the implementation
-    list_t *call_args = list_alloc(0);
+    ncc_list_t *call_args = ncc_list_alloc(0);
     if (param_list) {
         for (int i = 0; i < param_list->num_kids; i++) {
             tnode_t *kid = tnode_get_kid(param_list, i);
@@ -926,7 +752,7 @@ build_wrapper_body(const char *func_name, const char *impl_name, tnode_t *param_
                         }
                         if (id) {
                             tnode_t *arg = wrap_in_expr_hierarchy(copy_tree(id), line);
-                            call_args = list_append(call_args, arg);
+                            call_args = ncc_list_append(call_args, arg);
                         }
                         break;
                     }
@@ -963,7 +789,7 @@ build_wrapper_body(const char *func_name, const char *impl_name, tnode_t *param_
     // Atomic store and wake
     {
         // __atomic_store_n(&lock, ~0, __ATOMIC_RELEASE)
-        list_t *store_args = list_alloc(3);
+        ncc_list_t *store_args = ncc_list_alloc(3);
         tnode_t *lock_addr = build_address_of(build_primary_id(lock_name, line), line);
         store_args->items[0] = wrap_in_expr_hierarchy(lock_addr, line);
         store_args->items[1] = wrap_in_expr_hierarchy(build_constant("0xFFFFFFFF", line), line);
@@ -973,7 +799,7 @@ build_wrapper_body(const char *func_name, const char *impl_name, tnode_t *param_
         base_dealloc(store_args);
 
         // base_futex_wake
-        list_t *wake_args = list_alloc(2);
+        ncc_list_t *wake_args = ncc_list_alloc(2);
         tnode_t *futex_addr = build_address_of(build_primary_id(lock_name, line), line);
         // Cast to base_futex_t*
         tnode_t *futex_cast = build_cast("base_futex_t", wrap_in_expr_hierarchy(futex_addr, line), line);
@@ -1030,7 +856,7 @@ build_wrapper_body(const char *func_name, const char *impl_name, tnode_t *param_
     add_child(switch_stmt, synth_terminal("(", TT_PUNCT, line));
 
     // Switch expression: __atomic_fetch_or(&lock, 1, __ATOMIC_ACQ_REL)
-    list_t *fetch_args = list_alloc(3);
+    ncc_list_t *fetch_args = ncc_list_alloc(3);
     tnode_t *lock_addr = build_address_of(build_primary_id(lock_name, line), line);
     fetch_args->items[0] = wrap_in_expr_hierarchy(lock_addr, line);
     fetch_args->items[1] = wrap_in_expr_hierarchy(build_constant("1", line), line);
@@ -1121,7 +947,7 @@ build_wrapper_body(const char *func_name, const char *impl_name, tnode_t *param_
  * @brief Transform a function definition with `once` specifier.
  */
 static tnode_t *
-xform_once_definition(xform_ctx_t *ctx, tnode_t *node)
+xform_once_definition(tree_xform_t *ctx, tnode_t *node)
 {
     // Find children
     tnode_t *decl_specs = nullptr;
@@ -1164,12 +990,15 @@ xform_once_definition(xform_ctx_t *ctx, tnode_t *node)
     }
 
     // Build names for generated code
-    char impl_name[256];
-    char lock_name[256];
-    char cached_name[256];
-    snprintf(impl_name, sizeof(impl_name), "__n00b_once_func_%s", func_name);
-    snprintf(lock_name, sizeof(lock_name), "__n00b_%s_once_lock", func_name);
-    snprintf(cached_name, sizeof(cached_name), "__n00b_%s_cached_result", func_name);
+    char impl_name[NCC_IDENT_BUF];
+    char lock_name[NCC_IDENT_BUF];
+    char cached_name[NCC_IDENT_BUF];
+    int  iret = snprintf(impl_name, sizeof(impl_name), "__n00b_once_func_%s", func_name);
+    NCC_CHECK_SNPRINTF(iret, impl_name);
+    int  lret = snprintf(lock_name, sizeof(lock_name), "__n00b_%s_once_lock", func_name);
+    NCC_CHECK_SNPRINTF(lret, lock_name);
+    int  cret = snprintf(cached_name, sizeof(cached_name), "__n00b_%s_cached_result", func_name);
+    NCC_CHECK_SNPRINTF(cret, cached_name);
 
     // Find the translation_unit (grandparent of function_definition)
     tnode_t *ext_decl = node->parent;

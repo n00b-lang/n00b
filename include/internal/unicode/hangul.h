@@ -7,7 +7,6 @@
  */
 
 #include <stdint.h>
-#include <stdbool.h>
 #include "unicode/types.h"
 
 #define N00B_UNICODE_HANGUL_S_BASE  0xAC00

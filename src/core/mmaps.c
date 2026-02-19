@@ -114,7 +114,7 @@ n00b_mmap_lookup(n00b_mmap_ctx_t *ctx, void *addr)
     mmap_read_unlock(ctx);
 
     return n00b_option_from_nullable(n00b_mmap_info_t *,
-                                     node ? (n00b_mmap_info_t *)node->data : NULL);
+                                     node ? (n00b_mmap_info_t *)node->data : nullptr);
 }
 
 // ============================================================================

@@ -1,4 +1,5 @@
 #pragma once
+
 /** @file encoding.h
  *  @brief UTF-8/16/32 encoding, decoding, validation, and BOM detection.
  *
@@ -8,6 +9,10 @@
  */
 
 #include "unicode/types_ext.h"
+#include "core/array.h"
+
+n00b_array_decl(uint16_t);
+n00b_array_decl(n00b_codepoint_t);
 
 // ===========================================================================
 // Low-level UTF-8 operations (raw byte buffers)
@@ -19,8 +24,7 @@
  *  @param pos  In/out byte offset; advanced past the decoded codepoint.
  *  @return The decoded codepoint, or a negative value on error.
  */
-int32_t n00b_unicode_utf8_decode(const char *src, uint32_t len,
-                                 uint32_t *pos);
+int32_t n00b_unicode_utf8_decode(const char *src, uint32_t len, uint32_t *pos);
 
 /** @brief Encode a single codepoint as UTF-8.
  *  @param cp   The codepoint to encode.
@@ -42,8 +46,7 @@ bool n00b_unicode_utf8_validate(const char *src, uint32_t len);
  *  @param bom_len  Out: number of bytes consumed by the BOM (0 if none).
  *  @return The detected BOM type, or N00B_UNICODE_BOM_NONE.
  */
-n00b_unicode_bom_t n00b_unicode_detect_bom(const char *data, uint32_t len,
-                                            uint32_t *bom_len);
+n00b_unicode_bom_t n00b_unicode_detect_bom(const char *data, uint32_t len, uint32_t *bom_len);
 
 // ===========================================================================
 // String-level operations
@@ -65,23 +68,27 @@ bool n00b_unicode_str_validate(n00b_string_t s);
 // Transcoding
 // ===========================================================================
 
-/** @brief Convert a UTF-8 string to a newly allocated UTF-16 array.
+/** @brief Convert a UTF-8 string to a UTF-16 array.
  *  @param s        The source UTF-8 string.
- *  @param out_len  Out: number of uint16_t code units written.
  *  @kw allocator   Optional allocator (defaults to the runtime allocator).
- *  @return Allocated UTF-16 array; caller frees.
+ *  @return An array of uint16_t code units.
  */
-uint16_t *n00b_unicode_to_utf16(n00b_string_t s, uint32_t *out_len)
-    _kargs { n00b_allocator_t *allocator = nullptr; };
+n00b_array_t(uint16_t)
+n00b_unicode_to_utf16(n00b_string_t s) _kargs
+{
+    n00b_allocator_t *allocator = nullptr;
+};
 
-/** @brief Convert a UTF-8 string to a newly allocated UTF-32 codepoint array.
+/** @brief Convert a UTF-8 string to a UTF-32 codepoint array.
  *  @param s        The source UTF-8 string.
- *  @param out_len  Out: number of codepoints written.
  *  @kw allocator   Optional allocator (defaults to the runtime allocator).
- *  @return Allocated codepoint array; caller frees.
+ *  @return An array of codepoints.
  */
-n00b_codepoint_t *n00b_unicode_to_utf32(n00b_string_t s, uint32_t *out_len)
-    _kargs { n00b_allocator_t *allocator = nullptr; };
+n00b_array_t(n00b_codepoint_t)
+n00b_unicode_to_utf32(n00b_string_t s) _kargs
+{
+    n00b_allocator_t *allocator = nullptr;
+};
 
 /** @brief Convert a UTF-16 array to a new UTF-8 n00b_string_t.
  *  @param src  Source UTF-16 code units.
@@ -89,8 +96,11 @@ n00b_codepoint_t *n00b_unicode_to_utf32(n00b_string_t s, uint32_t *out_len)
  *  @kw allocator  Optional allocator (defaults to the runtime allocator).
  *  @return A new n00b_string_t containing the UTF-8 representation.
  */
-n00b_string_t n00b_unicode_from_utf16(const uint16_t *src, uint32_t len)
-    _kargs { n00b_allocator_t *allocator = nullptr; };
+n00b_string_t
+n00b_unicode_from_utf16(const uint16_t *src, uint32_t len) _kargs
+{
+    n00b_allocator_t *allocator = nullptr;
+};
 
 /** @brief Convert a UTF-32 codepoint array to a new UTF-8 n00b_string_t.
  *  @param src  Source codepoint array.
@@ -98,6 +108,8 @@ n00b_string_t n00b_unicode_from_utf16(const uint16_t *src, uint32_t len)
  *  @kw allocator  Optional allocator (defaults to the runtime allocator).
  *  @return A new n00b_string_t containing the UTF-8 representation.
  */
-n00b_string_t n00b_unicode_from_utf32(const n00b_codepoint_t *src,
-                                      uint32_t len)
-    _kargs { n00b_allocator_t *allocator = nullptr; };
+n00b_string_t
+n00b_unicode_from_utf32(const n00b_codepoint_t *src, uint32_t len) _kargs
+{
+    n00b_allocator_t *allocator = nullptr;
+};

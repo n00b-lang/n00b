@@ -441,66 +441,6 @@ ncc_dict_get(ncc_dict_t *d, void *key, bool *found)
 }
 
 bool
-ncc_dict_replace(ncc_dict_t *d, void *key, void *value)
-{
-    ncc_hash_t         hv    = compute_hash(d, key);
-    ncc_dict_store_t  *store = atomic_load_acq(&d->store);
-    ncc_dict_bucket_t *b     = acquire_if_present(d, store, hv);
-
-    if (!b) {
-        return false;
-    }
-    if (!bucket_reserved(b) || bucket_deleted(b)) {
-        unlock_bucket(b);
-        return false;
-    }
-
-    b->value = value;
-    unlock_bucket(b);
-    return true;
-}
-
-bool
-ncc_dict_add(ncc_dict_t *d, void *key, void *value)
-{
-    ncc_hash_t        hv    = compute_hash(d, key);
-    ncc_dict_store_t *store = atomic_load_acq(&d->store);
-
-try_again:;
-    ncc_dict_bucket_t *bucket = acquire_or_add(d, store, hv);
-    uint64_t                order  = -1;
-
-    if (!bucket->hv) {
-        order = atomic_add(&store->used_count, 1);
-        if (order >= store->threshold) {
-            unlock_bucket(bucket);
-            dict_migrate(d);
-            store = atomic_load_acq(&d->store);
-            goto try_again;
-        }
-        bucket->hv           = hv;
-        bucket->insert_order = order;
-    }
-    else {
-        if (bucket_deleted(bucket)) {
-            bucket->flags &= ~FLAG_DELETED;
-        }
-        else {
-            unlock_bucket(bucket);
-            return false;
-        }
-    }
-
-    bucket->key   = key;
-    bucket->value = value;
-
-    atomic_add(&d->length, 1);
-    unlock_bucket(bucket);
-
-    return true;
-}
-
-bool
 ncc_dict_remove(ncc_dict_t *d, void *key)
 {
     ncc_hash_t         hv    = compute_hash(d, key);
@@ -523,16 +463,3 @@ ncc_dict_remove(ncc_dict_t *d, void *key)
     return true;
 }
 
-bool
-ncc_dict_contains(ncc_dict_t *d, void *key)
-{
-    bool found;
-    (void)ncc_dict_get(d, key, &found);
-    return found;
-}
-
-int64_t
-ncc_dict_len(ncc_dict_t *d)
-{
-    return atomic_load_acq(&d->length);
-}

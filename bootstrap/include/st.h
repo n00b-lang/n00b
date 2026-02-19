@@ -182,7 +182,7 @@ typedef struct {
  * @brief Collection of keyword parameters for a function.
  */
 typedef struct kw_info_t {
-    list_t *params;                /**< Dynamic list of kw_param_info_t* */
+    ncc_list_t *params;                /**< Dynamic list of kw_param_info_t* */
     int     num_positional_params; /**< Number of positional (non-keyword) parameters */
     bool    defaults_set;          /**< Have defaults been specified? */
     bool    struct_emitted;        /**< Has the kargs struct been emitted? */
@@ -324,6 +324,17 @@ typedef struct {
  * @param st Symbol table to initialize
  */
 extern void st_init(symtab_t *st);
+
+/**
+ * @brief Free all resources held by a symbol table.
+ *
+ * Pops all remaining scopes and releases the underlying hash tables.
+ * The symtab_t itself is not freed (it may be stack-allocated).
+ *
+ * @param st Symbol table to free
+ * @pre st was previously initialized via st_init()
+ */
+extern void st_free(symtab_t *st);
 
 /** @} */
 

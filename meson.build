@@ -129,6 +129,28 @@ if not cc.compiles(posix_check)
   c_args = c_args + ['-DPOSIX_C_SOURCE=200112L']
 endif
 
+# Detect __attribute__((aligned(N))) for word-at-a-time UTF-8 fast paths.
+aligned_attr_check = '''
+int test(void) {
+  __attribute__((aligned(8))) char buf[16];
+  return buf[0];
+}
+'''
+if cc.compiles(aligned_attr_check, name: '__attribute__((aligned))')
+  c_args = c_args + ['-DN00B_HAVE_ALIGNED_ATTR']
+endif
+
+vector_builtins_check = '''
+typedef unsigned char v16u8 __attribute__((vector_size(16)));
+int main(void) {
+  v16u8 a = {0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15};
+  return a[0];
+}
+'''
+if cc.compiles(vector_builtins_check, name: 'vector_size(16)')
+  c_args = c_args + ['-DN00B_HAVE_VECTOR_BUILTINS']
+endif
+
 exe_link_args = link_args
 exe_c_args = c_args + [
   '-DN00B_HOST_OS=' + host_machine.system(),
@@ -206,33 +228,47 @@ n00b_core = [
     'src/core/string.c',
 ]
 
-n00b_unicode_generated = [
-    'src/unicode/generated/gen_age.c',
-    'src/unicode/generated/gen_bidi_brackets.c',
-    'src/unicode/generated/gen_bidi_class.c',
-    'src/unicode/generated/gen_blocks.c',
-    'src/unicode/generated/gen_casemap.c',
-    'src/unicode/generated/gen_categories.c',
-    'src/unicode/generated/gen_collation.c',
-    'src/unicode/generated/gen_combining.c',
-    'src/unicode/generated/gen_composition.c',
-    'src/unicode/generated/gen_confusables.c',
-    'src/unicode/generated/gen_decomposition.c',
-    'src/unicode/generated/gen_eaw.c',
-    'src/unicode/generated/gen_emoji.c',
-    'src/unicode/generated/gen_grapheme.c',
-    'src/unicode/generated/gen_identifiers.c',
-    'src/unicode/generated/gen_idna.c',
-    'src/unicode/generated/gen_joining.c',
-    'src/unicode/generated/gen_linebreak.c',
-    'src/unicode/generated/gen_normprops.c',
-    'src/unicode/generated/gen_numeric.c',
-    'src/unicode/generated/gen_proplist.c',
-    'src/unicode/generated/gen_script_extensions.c',
-    'src/unicode/generated/gen_scripts.c',
-    'src/unicode/generated/gen_sentbreak.c',
-    'src/unicode/generated/gen_wordbreak.c',
+python3 = find_program('python3')
+
+gen_unicode_file_names = [
+    'gen_age.c',
+    'gen_bidi_brackets.c',
+    'gen_bidi_class.c',
+    'gen_blocks.c',
+    'gen_casemap.c',
+    'gen_categories.c',
+    'gen_collation.c',
+    'gen_combining.c',
+    'gen_composition.c',
+    'gen_confusables.c',
+    'gen_decomposition.c',
+    'gen_eaw.c',
+    'gen_emoji.c',
+    'gen_grapheme.c',
+    'gen_identifiers.c',
+    'gen_idna.c',
+    'gen_joining.c',
+    'gen_linebreak.c',
+    'gen_normprops.c',
+    'gen_numeric.c',
+    'gen_proplist.c',
+    'gen_script_extensions.c',
+    'gen_scripts.c',
+    'gen_sentbreak.c',
+    'gen_wordbreak.c',
 ]
+
+gen_unicode_tables = custom_target('gen_unicode_tables',
+    output: gen_unicode_file_names,
+    command: [
+        python3,
+        meson.project_source_root() / 'src' / 'unicode' / 'tools' / 'gen_tables.py',
+        '--out-dir', '@OUTDIR@',
+        '--cache-dir', meson.project_source_root() / 'src' / 'unicode' / '.unicode_cache',
+        '--test-data-dir', meson.project_source_root() / 'test' / 'data',
+    ],
+    depend_files: files('src/unicode/tools/gen_tables.py'),
+)
 
 n00b_unicode = [
     'src/unicode/encoding.c',
@@ -240,7 +276,6 @@ n00b_unicode = [
     'src/unicode/casemap.c',
     'src/unicode/normalization.c',
     'src/unicode/segmentation.c',
-    'src/unicode/string_ops.c',
     'src/unicode/linebreak.c',
     'src/unicode/bidi.c',
     'src/unicode/collation.c',
@@ -251,14 +286,66 @@ n00b_unicode = [
     'src/unicode/query.c',
 ]
 
-n00b_dll_src = n00b_core + n00b_unicode_generated + n00b_unicode
+n00b_strings = [
+    'src/strings/string_ops.c',
+    'src/strings/string_convert.c',
+    'src/strings/fptostr.c',
+    'src/strings/fmt_numbers.c',
+    'src/strings/ansi.c',
+    'src/strings/markdown.c',
+    'src/strings/style_ops.c',
+    'src/strings/string_style.c',
+    'src/strings/style_registry.c',
+    'src/strings/rich_desc.c',
+    'src/strings/format_spec.c',
+    'src/strings/format.c',
+    'src/strings/md_render.c',
+    'src/strings/md_lines.c',
+    'src/strings/theme.c',
+]
+
+n00b_render = [
+    'src/core/layout.c',
+    'src/render/cell.c',
+    'src/render/border_themes.c',
+    'src/render/plane.c',
+    'src/render/box.c',
+    'src/render/composite.c',
+    'src/render/canvas.c',
+    'src/render/backend_stream.c',
+    'src/render/backend_ansi.c',
+    'src/render/backend_ansi_inline.c',
+    'src/render/backend_dumb.c',
+    'src/render/backend_registry.c',
+]
+
+n00b_table = [
+    'src/table/table.c',
+    'src/table/table_layout.c',
+    'src/table/table_render.c',
+    'src/table/table_styles.c',
+]
+
+libdl_dep = cc.find_library('dl', required: false)
+
+n00b_dll_src = n00b_core + n00b_unicode + n00b_strings + n00b_render + n00b_table
+
+# Build generated unicode tables with --no-ncc (they are pure data,
+# no ncc extensions, and parsing them is extremely expensive).
+gen_unicode_lib = static_library('n00b_gen_unicode',
+    gen_unicode_tables,
+    include_directories: incdir,
+    c_args: exe_c_args + ['--no-ncc'],
+    link_args: link_args,
+)
 
 n00b = static_library('n00b',
     n00b_dll_src,
     include_directories: incdir,
-    dependencies: deps,
+    dependencies: deps + [libdl_dep],
     c_args: exe_c_args,
     link_args: link_args,
+    link_whole: [gen_unicode_lib],
     install: true,
 )
 
@@ -268,10 +355,6 @@ test_common_kwargs = {
     'link_with': [n00b],
 }
 
-testie = executable('testie',
-    ['src/test/main.c'],
-    kwargs: test_common_kwargs,
-)
 
 list_test = executable('test_list',
     ['test/unit/test_list.c'],
@@ -320,6 +403,78 @@ buffer_test = executable('test_buffer',
     kwargs: test_common_kwargs,
 )
 test('buffer', buffer_test, suite: 'unit')
+
+# ============================================================================
+# Render / layout tests
+# ============================================================================
+
+layout_test = executable('test_layout',
+    ['test/unit/test_layout.c'],
+    kwargs: test_common_kwargs,
+)
+test('layout', layout_test, suite: 'unit')
+
+render_cell_test = executable('test_render_cell',
+    ['test/unit/test_render_cell.c'],
+    kwargs: test_common_kwargs,
+)
+test('render_cell', render_cell_test, suite: 'unit')
+
+render_plane_test = executable('test_render_plane',
+    ['test/unit/test_render_plane.c'],
+    kwargs: test_common_kwargs,
+)
+test('render_plane', render_plane_test, suite: 'unit')
+
+render_box_test = executable('test_render_box',
+    ['test/unit/test_render_box.c'],
+    kwargs: test_common_kwargs,
+)
+test('render_box', render_box_test, suite: 'unit')
+
+render_canvas_test = executable('test_render_canvas',
+    ['test/unit/test_render_canvas.c'],
+    kwargs: test_common_kwargs,
+)
+test('render_canvas', render_canvas_test, suite: 'unit')
+
+render_ansi_test = executable('test_render_ansi',
+    ['test/unit/test_render_ansi.c'],
+    kwargs: test_common_kwargs,
+)
+test('render_ansi', render_ansi_test, suite: 'unit')
+
+# Table tests
+table_build_test = executable('test_table_build',
+    ['test/unit/test_table_build.c'],
+    kwargs: test_common_kwargs,
+)
+test('table_build', table_build_test, suite: 'unit')
+
+table_layout_test = executable('test_table_layout',
+    ['test/unit/test_table_layout.c'],
+    kwargs: test_common_kwargs,
+)
+test('table_layout', table_layout_test, suite: 'unit')
+
+table_render_test = executable('test_table_render',
+    ['test/unit/test_table_render.c'],
+    kwargs: test_common_kwargs,
+)
+test('table_render', table_render_test, suite: 'unit')
+
+table_stream_test = executable('test_table_stream',
+    ['test/unit/test_table_stream.c'],
+    kwargs: test_common_kwargs,
+)
+test('table_stream', table_stream_test, suite: 'unit')
+
+# Table CLI tool
+table_tool = executable('n00b_table',
+    ['src/tools/table.c'],
+    kwargs: test_common_kwargs,
+    install: true,
+)
 
 # ============================================================================
 # Integration tests
@@ -380,7 +535,7 @@ unicode_test_kwargs = {
 unicode_test_names = [
     'bidi', 'casemap', 'collation', 'emoji', 'encoding',
     'identifiers', 'idna', 'iter', 'linebreak', 'normalization',
-    'properties', 'security', 'segmentation', 'string_ops',
+    'properties', 'security', 'segmentation',
 ]
 
 foreach name : unicode_test_names
@@ -389,6 +544,31 @@ foreach name : unicode_test_names
         kwargs: unicode_test_kwargs,
     )
     test('unicode_' + name, exe, suite: 'unit')
+endforeach
+
+# ============================================================================
+# String tests
+# ============================================================================
+
+str_test_kwargs = {
+    'include_directories': incdir + [include_directories('test/unit')],
+    'c_args': exe_c_args,
+    'link_with': [n00b],
+}
+
+str_test_names = [
+    'string_ops', 'string_convert', 'fptostr', 'fmt_numbers',
+    'ansi', 'markdown', 'style_ops', 'string_style',
+    'style_registry', 'rich_desc', 'format_spec',
+    'format', 'md_render', 'md_lines',
+]
+
+foreach name : str_test_names
+    exe = executable('test_str_' + name,
+        'test/unit/test_str_' + name + '.c',
+        kwargs: str_test_kwargs,
+    )
+    test('str_' + name, exe, suite: 'unit')
 endforeach
 
 # ============================================================================

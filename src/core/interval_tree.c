@@ -16,7 +16,7 @@ n00b_new_interval_tree(n00b_allocator_t *allocator)
 int
 n00b_init_interval_tree(n00b_interval_tree_t *tree, n00b_allocator_t *allocator)
 {
-    tree->root      = NULL;
+    tree->root      = nullptr;
     tree->stack     = n00b_stack_new(void *, allocator);
     tree->allocator = allocator;
     return 0;
@@ -25,7 +25,7 @@ n00b_init_interval_tree(n00b_interval_tree_t *tree, n00b_allocator_t *allocator)
 static inline int64_t
 _n00b_get_height(n00b_interval_node_t *node)
 {
-    if (NULL == node) {
+    if (nullptr == node) {
         return 0;
     }
     return node->height;
@@ -34,7 +34,7 @@ _n00b_get_height(n00b_interval_node_t *node)
 static void
 _n00b_update_node(n00b_interval_node_t *node)
 {
-    if (NULL == node) {
+    if (nullptr == node) {
         return;
     }
 
@@ -50,7 +50,7 @@ _n00b_update_node(n00b_interval_node_t *node)
     node->minimum = node->low;
     node->maximum = node->high;
 
-    if (NULL != node->left) {
+    if (nullptr != node->left) {
         n00b_interval_node_t *left = node->left;
         if (left->maximum > node->maximum) {
             node->maximum = left->maximum;
@@ -60,7 +60,7 @@ _n00b_update_node(n00b_interval_node_t *node)
         }
     }
 
-    if (NULL != node->right) {
+    if (nullptr != node->right) {
         n00b_interval_node_t *right = node->right;
         if (right->maximum > node->maximum) {
             node->maximum = right->maximum;
@@ -96,7 +96,7 @@ _n00b_avl_rotate_right(n00b_interval_node_t *node)
 static inline int64_t
 _n00b_avl_balance_factor(n00b_interval_node_t *node)
 {
-    if (NULL == node) {
+    if (nullptr == node) {
         return 0;
     }
     return _n00b_get_height(node->left) - _n00b_get_height(node->right);
@@ -150,7 +150,7 @@ n00b_interval_insert(n00b_interval_tree_t *tree,
     node->height  = 1;
     node->data    = data;
 
-    if (NULL == tree->root) {
+    if (nullptr == tree->root) {
         tree->root = node;
         return n00b_result_ok(n00b_interval_node_t *, node);
     }
@@ -158,17 +158,17 @@ n00b_interval_insert(n00b_interval_tree_t *tree,
     n00b_interval_node_t *current = tree->root;
     n00b_stack_clear(tree->stack);
 
-    while (NULL != current) {
+    while (nullptr != current) {
         n00b_stack_push(tree->stack, (void *)current);
         if (low < current->low) {
-            if (NULL == current->left) {
+            if (nullptr == current->left) {
                 current->left = node;
                 break;
             }
             current = current->left;
         }
         else {
-            if (NULL == current->right) {
+            if (nullptr == current->right) {
                 current->right = node;
                 break;
             }
@@ -199,7 +199,7 @@ n00b_result_t(uint64_t)
 n00b_interval_max(n00b_interval_tree_t *tree)
 // clang-format on
 {
-    if (NULL == tree->root) {
+    if (nullptr == tree->root) {
         return n00b_result_err(uint64_t, 1);
     }
 
@@ -211,7 +211,7 @@ n00b_result_t(uint64_t)
 n00b_interval_min(n00b_interval_tree_t *tree)
 // clang-format on
 {
-    if (NULL == tree->root) {
+    if (nullptr == tree->root) {
         return n00b_result_err(uint64_t, 1);
     }
 
@@ -229,8 +229,8 @@ n00b_interval_search_any(n00b_interval_tree_t *tree,
         return n00b_result_err(n00b_interval_node_t *, N00B_INTERVAL_ERR_INVALID);
     }
 
-    if (NULL == tree->root) {
-        return n00b_result_ok(n00b_interval_node_t *, NULL);
+    if (nullptr == tree->root) {
+        return n00b_result_ok(n00b_interval_node_t *, nullptr);
     }
 
     n00b_stack_clear(tree->stack);
@@ -243,17 +243,17 @@ n00b_interval_search_any(n00b_interval_tree_t *tree,
         }
 
         n00b_interval_node_t *left = node->left;
-        if (NULL != left && left->maximum > low && left->minimum < high) {
+        if (nullptr != left && left->maximum > low && left->minimum < high) {
             n00b_stack_push(tree->stack, left);
         }
 
         n00b_interval_node_t *right = node->right;
-        if (NULL != right && right->maximum > low && right->minimum < high) {
+        if (nullptr != right && right->maximum > low && right->minimum < high) {
             n00b_stack_push(tree->stack, right);
         }
     }
 
-    return n00b_result_ok(n00b_interval_node_t *, NULL);
+    return n00b_result_ok(n00b_interval_node_t *, nullptr);
 }
 
 // clang-format off
@@ -262,20 +262,20 @@ n00b_interval_next_low(n00b_interval_tree_t *tree,
                        uint64_t              point)
 // clang-format on
 {
-    if (NULL == tree->root) {
-        return n00b_result_ok(n00b_interval_node_t *, NULL);
+    if (nullptr == tree->root) {
+        return n00b_result_ok(n00b_interval_node_t *, nullptr);
     }
 
     n00b_interval_node_t *node = tree->root;
-    n00b_interval_node_t *prev = NULL;
+    n00b_interval_node_t *prev = nullptr;
 
-    while (NULL != node) {
+    while (nullptr != node) {
         if (point == node->low) {
             return n00b_result_ok(n00b_interval_node_t *, node);
         }
 
         if (point < node->low) {
-            if (NULL != node->left) {
+            if (nullptr != node->left) {
                 prev = node;
                 node = node->left;
                 continue;
@@ -284,14 +284,14 @@ n00b_interval_next_low(n00b_interval_tree_t *tree,
             return n00b_result_ok(n00b_interval_node_t *, node);
         }
 
-        if (NULL == node->right) {
+        if (nullptr == node->right) {
             return n00b_result_ok(n00b_interval_node_t *, prev);
         }
 
         node = node->right;
     }
 
-    return n00b_result_ok(n00b_interval_node_t *, NULL);
+    return n00b_result_ok(n00b_interval_node_t *, nullptr);
 }
 
 static void
@@ -318,7 +318,7 @@ n00b_interval_search_ordered(n00b_interval_tree_t *tree,
     }
 
     n00b_interval_node_t *node = tree->root;
-    if (NULL == node) {
+    if (nullptr == node) {
         return n00b_result_ok(int, 0);
     }
 
@@ -327,7 +327,7 @@ n00b_interval_search_ordered(n00b_interval_tree_t *tree,
     int searching = 1;
     while (searching) {
         if (node->maximum > low && node->minimum < high) {
-            if (NULL != node->left) {
+            if (nullptr != node->left) {
                 n00b_stack_push(tree->stack, node);
                 node = node->left;
                 continue;
@@ -335,7 +335,7 @@ n00b_interval_search_ordered(n00b_interval_tree_t *tree,
 
             _n00b_record_if_match(low, high, node, intersections);
 
-            if (NULL != node->right) {
+            if (nullptr != node->right) {
                 node = node->right;
                 continue;
             }
@@ -345,7 +345,7 @@ n00b_interval_search_ordered(n00b_interval_tree_t *tree,
             node = n00b_stack_pop(tree->stack);
             _n00b_record_if_match(low, high, node, intersections);
 
-            if (NULL != node->right) {
+            if (nullptr != node->right) {
                 node = node->right;
                 break;
             }
@@ -360,7 +360,7 @@ n00b_result_t(int)
 n00b_interval_delete(n00b_interval_tree_t *tree, n00b_interval_node_t *target)
 // clang-format on
 {
-    if (NULL == tree || NULL == target || NULL == tree->root) {
+    if (nullptr == tree || nullptr == target || nullptr == tree->root) {
         return n00b_result_err(int, N00B_INTERVAL_ERR_NOT_FOUND);
     }
 
@@ -373,7 +373,7 @@ n00b_interval_delete(n00b_interval_tree_t *tree, n00b_interval_node_t *target)
     n00b_interval_node_t *current = tree->root;
 
     while (current != target) {
-        if (NULL == current) {
+        if (nullptr == current) {
             int retrying = 0;
             while (n00b_stack_len(tree->stack) > 0) {
                 void *top = n00b_stack_pop(tree->stack);
@@ -409,11 +409,11 @@ n00b_interval_delete(n00b_interval_tree_t *tree, n00b_interval_node_t *target)
     // current == target.  Determine the node to physically remove.
     n00b_interval_node_t *to_remove = target;
 
-    if (NULL != target->left && NULL != target->right) {
+    if (nullptr != target->left && nullptr != target->right) {
         // Two children: find in-order successor (leftmost in right subtree).
         n00b_stack_push(tree->stack, target);
         n00b_interval_node_t *successor = target->right;
-        while (NULL != successor->left) {
+        while (nullptr != successor->left) {
             n00b_stack_push(tree->stack, successor);
             successor = successor->left;
         }
@@ -473,7 +473,7 @@ n00b_interval_delete(n00b_interval_tree_t *tree, n00b_interval_node_t *target)
 
     // Zero or one child: simple removal.
     n00b_interval_node_t *child;
-    if (NULL != to_remove->left) {
+    if (nullptr != to_remove->left) {
         child = to_remove->left;
     }
     else {
@@ -513,7 +513,7 @@ n00b_interval_search(n00b_interval_tree_t *tree,
         return n00b_result_err(int, N00B_INTERVAL_ERR_INVALID);
     }
 
-    if (NULL == tree->root) {
+    if (nullptr == tree->root) {
         return n00b_result_ok(int, 0);
     }
 
@@ -526,12 +526,12 @@ n00b_interval_search(n00b_interval_tree_t *tree,
         _n00b_record_if_match(low, high, node, intersections);
 
         n00b_interval_node_t *left = node->left;
-        if (NULL != left && left->maximum > low && left->minimum < high) {
+        if (nullptr != left && left->maximum > low && left->minimum < high) {
             n00b_stack_push(tree->stack, left);
         }
 
         n00b_interval_node_t *right = node->right;
-        if (NULL != right && right->maximum > low && right->minimum < high) {
+        if (nullptr != right && right->maximum > low && right->minimum < high) {
             n00b_stack_push(tree->stack, right);
         }
     }

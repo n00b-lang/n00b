@@ -12,13 +12,13 @@
     ((stage2)[(uint32_t)(stage1)[(cp) >> 8] * 256u + ((cp) & 0xFF)])
 
 // Binary search in sorted sparse mapping arrays.
-// Returns data pointer or NULL if not found.
+// Returns data pointer or nullptr if not found.
 static inline const uint32_t *
 n00b_unicode_sparse_lookup(const uint32_t index[][2], uint32_t index_len,
                       const uint32_t *data, n00b_codepoint_t cp)
 {
     if (index_len == 0) {
-        return NULL;
+        return nullptr;
     }
 
     uint32_t lo = 0;
@@ -37,5 +37,5 @@ n00b_unicode_sparse_lookup(const uint32_t index[][2], uint32_t index_len,
         }
     }
 
-    return NULL;
+    return nullptr;
 }

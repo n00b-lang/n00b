@@ -49,7 +49,7 @@ extern uint64_t n00b_gc_guard;
  * abstraction.  Allocator authors only need to set `hidden = true`
  * in their allocator setup; the rest is automatic.
  *
- * @param map Mmap info to check (must not be NULL).
+ * @param map Mmap info to check (must not be nullptr).
  * @return    true if the region should be scanned by the GC.
  */
 static inline bool

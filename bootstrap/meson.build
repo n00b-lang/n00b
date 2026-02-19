@@ -27,6 +27,7 @@ bootstrap_files = [
   'src/compile_common.c',
   'src/lex.c',
   'src/output.c',
+  'src/pipe_io.c',
   'src/sha256.c',
   'src/dict.c',
   'src/st.c',
@@ -43,6 +44,7 @@ bootstrap_files = [
   'src/prefix_xform.c',
   'src/compile_packrat.c',
   'src/transform.c',
+  'src/xform_helpers.c',
   'src/xforms.c',
   'src/xform_typeid.c',
   'src/xform_typestr.c',
@@ -53,6 +55,7 @@ bootstrap_files = [
   'src/xform_flatten.c',
   'src/xform_vargs.c',
   'src/xform_package.c',
+  'src/xform_rstr.c',
   'src/xform_constexpr.c',
   'src/xform_constexpr_paste.c',
 ]
@@ -108,3 +111,26 @@ ncc_exe = executable(
   dependencies: [],
   install : true,
 )
+
+# ── Bootstrap smoke tests ──────────────────────────────────────────────
+test_runner = find_program('test/run_test.sh')
+test_dir    = meson.current_source_dir() / 'test'
+
+bootstrap_tests = {
+  'passthrough':  ['compile_run',  test_dir / 't_passthrough.c'],
+  'preprocess':   ['preprocess',   test_dir / 't_preprocess.c'],
+  'typeid':       ['compile_run',  test_dir / 't_typeid.c'],
+  'constexpr':    ['compile_run',  test_dir / 't_constexpr.c'],
+  'kw_args':      ['compile_run',  test_dir / 't_kw_args.c'],
+  'rstr':         ['compile_run',  test_dir / 't_rstr.c'],
+  'no_ncc':       ['no_ncc',       test_dir / 't_no_ncc.c'],
+  'error':        ['expect_error', test_dir / 't_error.c'],
+}
+
+foreach name, params : bootstrap_tests
+  test('ncc_' + name, test_runner,
+    args: [ncc_exe, params[0], params[1]],
+    suite: 'bootstrap',
+    depends: ncc_exe,
+  )
+endforeach

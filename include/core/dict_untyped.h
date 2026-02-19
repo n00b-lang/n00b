@@ -55,7 +55,7 @@ struct n00b_dict_untyped_item_t {
  * @param d     Dictionary to update.
  * @param key   Key to insert.
  * @param value Value to associate with the key.
- * @return The previous value, or NULL if newly inserted.
+ * @return The previous value, or nullptr if newly inserted.
  * @pre @p d has been initialized via n00b_dict_untyped_init().
  */
 extern void *_n00b_dict_untyped_put(n00b_dict_untyped_t *d, void *key, void *value);
@@ -65,7 +65,7 @@ extern void *_n00b_dict_untyped_put(n00b_dict_untyped_t *d, void *key, void *val
  * @param d     Dictionary to search.
  * @param key   Key to look up.
  * @param found Set to true if found, false otherwise.
- * @return      The value, or NULL if not found.
+ * @return      The value, or nullptr if not found.
  */
 extern void *_n00b_dict_untyped_get(n00b_dict_untyped_t *d, void *key, bool *found);
 

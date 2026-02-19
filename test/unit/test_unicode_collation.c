@@ -9,7 +9,7 @@
 TEST(test_sort_key)
 {
     n00b_unicode_sort_key_t key = n00b_unicode_sort_key(STR("hello"));
-    ASSERT(key.data != NULL);
+    ASSERT(key.data != nullptr);
     ASSERT(key.len > 0);
     n00b_unicode_sort_key_free(&key);
 }
@@ -48,7 +48,7 @@ run_collation_conformance(void)
     int total = 0, passed_count = 0, fail_count = 0;
 
     bool have_prev = false;
-    n00b_string_t prev = {0};
+    n00b_string_t prev = {};
 
     while (fgets(line, sizeof(line), f)) {
         if (line[0] == '#' || line[0] == '\n' || line[0] == '\r') continue;

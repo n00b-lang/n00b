@@ -1,4 +1,5 @@
 #pragma once
+
 /** @file casemap.h
  *  @brief Unicode case mapping and case-insensitive comparison.
  *
@@ -45,42 +46,54 @@ n00b_codepoint_t n00b_unicode_casefold_cp(n00b_codepoint_t cp);
  *  @param s  The input string.
  *  @kw allocator  Optional allocator (defaults to the runtime allocator).
  *  @kw locale     Locale string for context-sensitive mappings (e.g. "tr"),
- *                 or NULL for default behavior.
+ *                 or nullptr for default behavior.
  *  @return A new uppercased string.
  */
-n00b_string_t n00b_unicode_toupper(n00b_string_t s)
-    _kargs { n00b_allocator_t *allocator = nullptr;
-             char *locale = nullptr; };
+n00b_string_t
+n00b_unicode_toupper(n00b_string_t s) _kargs
+{
+    n00b_allocator_t *allocator = nullptr;
+    char             *locale    = nullptr;
+};
 
 /** @brief Full string-level lowercase conversion (locale-aware).
  *  @param s  The input string.
  *  @kw allocator  Optional allocator (defaults to the runtime allocator).
  *  @kw locale     Locale string for context-sensitive mappings (e.g. "tr"),
- *                 or NULL for default behavior.
+ *                 or nullptr for default behavior.
  *  @return A new lowercased string.
  */
-n00b_string_t n00b_unicode_tolower(n00b_string_t s)
-    _kargs { n00b_allocator_t *allocator = nullptr;
-             char *locale = nullptr; };
+n00b_string_t
+n00b_unicode_tolower(n00b_string_t s) _kargs
+{
+    n00b_allocator_t *allocator = nullptr;
+    char             *locale    = nullptr;
+};
 
 /** @brief Full string-level titlecase conversion (locale-aware).
  *  @param s  The input string.
  *  @kw allocator  Optional allocator (defaults to the runtime allocator).
  *  @kw locale     Locale string for context-sensitive mappings (e.g. "tr"),
- *                 or NULL for default behavior.
+ *                 or nullptr for default behavior.
  *  @return A new titlecased string.
  */
-n00b_string_t n00b_unicode_totitle(n00b_string_t s)
-    _kargs { n00b_allocator_t *allocator = nullptr;
-             char *locale = nullptr; };
+n00b_string_t
+n00b_unicode_totitle(n00b_string_t s) _kargs
+{
+    n00b_allocator_t *allocator = nullptr;
+    char             *locale    = nullptr;
+};
 
 /** @brief Full string-level case fold (locale-independent).
  *  @param s  The input string.
  *  @kw allocator  Optional allocator (defaults to the runtime allocator).
  *  @return A new case-folded string.
  */
-n00b_string_t n00b_unicode_casefold(n00b_string_t s)
-    _kargs { n00b_allocator_t *allocator = nullptr; };
+n00b_string_t
+n00b_unicode_casefold(n00b_string_t s) _kargs
+{
+    n00b_allocator_t *allocator = nullptr;
+};
 
 /** @brief Case-insensitive string comparison using Unicode case folding.
  *  @param a  First string.

@@ -17,7 +17,7 @@ static void
 test_inline_guard(void)
 {
     uint64_t *p = n00b_alloc(uint64_t);
-    assert(p != NULL);
+    assert(p != nullptr);
 
     n00b_inline_hdr_opt_t opt = n00b_inline_alloc_header(p);
     assert(n00b_option_is_set(opt));
@@ -36,7 +36,7 @@ static void
 test_inline_fields(void)
 {
     uint64_t *p = n00b_alloc(uint64_t);
-    assert(p != NULL);
+    assert(p != nullptr);
 
     n00b_inline_hdr_opt_t opt = n00b_inline_alloc_header(p);
     assert(n00b_option_is_set(opt));
@@ -57,7 +57,7 @@ static void
 test_oob_lookup(void)
 {
     uint64_t *p = n00b_alloc(uint64_t);
-    assert(p != NULL);
+    assert(p != nullptr);
 
     n00b_alloc_info_t info = n00b_find_alloc_info(p);
 
@@ -69,7 +69,7 @@ test_oob_lookup(void)
         assert(n00b_option_is_set(oob_opt));
 
         n00b_oob_hdr_t *oob = n00b_option_get(oob_opt);
-        assert(oob != NULL);
+        assert(oob != nullptr);
     }
 
     printf("  [PASS] oob_lookup\n");
@@ -89,7 +89,7 @@ test_oob_user_ptr(void)
     n00b_allocator_t *alloc = (n00b_allocator_t *)arena;
 
     uint64_t *p = n00b_alloc(uint64_t, .allocator = alloc);
-    assert(p != NULL);
+    assert(p != nullptr);
 
     n00b_alloc_info_t info = n00b_find_alloc_info(p);
 
@@ -109,7 +109,7 @@ static void
 test_find_alloc_info_kind(void)
 {
     uint64_t *p = n00b_alloc(uint64_t);
-    assert(p != NULL);
+    assert(p != nullptr);
 
     n00b_alloc_info_t info = n00b_find_alloc_info(p);
 
@@ -128,7 +128,7 @@ static void
 test_mmap_managed(void)
 {
     uint64_t *p = n00b_alloc(uint64_t);
-    assert(p != NULL);
+    assert(p != nullptr);
 
     n00b_mmap_opt_t opt = n00b_mmap_by_address(p);
     assert(n00b_option_is_set(opt));

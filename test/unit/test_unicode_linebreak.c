@@ -31,10 +31,8 @@ TEST(test_space_break)
 
 TEST(test_wrap)
 {
-    uint32_t num_breaks;
-    uint32_t *breaks = n00b_unicode_linebreak_wrap(STR("hello world test"), &num_breaks, .width = 10);
-    ASSERT(num_breaks >= 1);
-    n00b_free(breaks);
+    n00b_array_t(uint32_t) breaks = n00b_unicode_linebreak_wrap(STR("hello world test"), .width = 10);
+    ASSERT(breaks.len >= 1);
 }
 
 // ---------------------------------------------------------------------------

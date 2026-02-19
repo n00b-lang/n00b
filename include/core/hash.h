@@ -30,6 +30,17 @@ extern n00b_uint128_t n00b_hash_cstring(void *value);
  * @return    128-bit hash value.
  */
 extern n00b_uint128_t n00b_hash(void *obj, n00b_hash_fn fn);
-// TODO: replace
-// extern n00b_uint128_t n00b_string_hash(n00b_string_t *s);
-// extern n00b_uint128_t n00b_buffer_hash(n00b_buf_t *b);
+
+/**
+ * @brief Hash an `n00b_string_t` (by its UTF-8 content).
+ * @param s  The string to hash.
+ * @return   128-bit hash value.
+ */
+extern n00b_uint128_t n00b_string_hash(n00b_string_t s);
+
+/**
+ * @brief Hash an `n00b_buffer_t` (by its raw byte content).
+ * @param b  Pointer to the buffer to hash.
+ * @return   128-bit hash value.
+ */
+extern n00b_uint128_t n00b_buffer_hash(n00b_buffer_t *b);

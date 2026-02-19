@@ -11,11 +11,10 @@ TEST(test_ltr_text)
     n00b_unicode_bidi_para_t *p = n00b_unicode_bidi_open(STR("Hello"));
     ASSERT_EQ(n00b_unicode_bidi_paragraph_level(p), 0);
 
-    uint32_t len;
-    const uint8_t *levels = n00b_unicode_bidi_levels(p, &len);
-    ASSERT_EQ(len, 5);
-    for (uint32_t i = 0; i < len; i++) {
-        ASSERT_EQ(levels[i], 0);
+    n00b_array_t(uint8_t) levels = n00b_unicode_bidi_levels(p);
+    ASSERT_EQ(levels.len, 5);
+    for (uint32_t i = 0; i < levels.len; i++) {
+        ASSERT_EQ(levels.data[i], 0);
     }
 
     n00b_unicode_bidi_free(p);
@@ -26,11 +25,10 @@ TEST(test_rtl_arabic)
     n00b_unicode_bidi_para_t *p = n00b_unicode_bidi_open(STR("\xD9\x85\xD8\xB1\xD8\xAD\xD8\xA8\xD8\xA7"));
     ASSERT_EQ(n00b_unicode_bidi_paragraph_level(p), 1);
 
-    uint32_t len;
-    const uint8_t *levels = n00b_unicode_bidi_levels(p, &len);
-    ASSERT_EQ(len, 5);
-    for (uint32_t i = 0; i < len; i++) {
-        ASSERT_EQ(levels[i], 1);
+    n00b_array_t(uint8_t) levels = n00b_unicode_bidi_levels(p);
+    ASSERT_EQ(levels.len, 5);
+    for (uint32_t i = 0; i < levels.len; i++) {
+        ASSERT_EQ(levels.data[i], 1);
     }
 
     n00b_unicode_bidi_free(p);
@@ -40,10 +38,10 @@ TEST(test_visual_reorder)
 {
     n00b_unicode_bidi_para_t *p = n00b_unicode_bidi_open(STR("Hello"));
 
-    int32_t map[5];
-    n00b_unicode_bidi_reorder_visual(p, map);
+    n00b_array_t(int32_t) map = n00b_unicode_bidi_reorder_visual(p);
+    ASSERT_EQ(map.len, 5);
     for (int i = 0; i < 5; i++) {
-        ASSERT_EQ(map[i], i);
+        ASSERT_EQ(map.data[i], i);
     }
 
     n00b_unicode_bidi_free(p);
@@ -69,7 +67,7 @@ run_bidi_conformance(void)
         if (line[0] == '#' || line[0] == '\n' || line[0] == '\r') continue;
 
         // Parse 5 semicolon-separated fields
-        char *fields[5] = {NULL};
+        char *fields[5] = {nullptr};
         char *p = line;
         for (int i = 0; i < 5; i++) {
             fields[i] = p;
@@ -118,7 +116,7 @@ run_bidi_conformance(void)
                     expected_levels[n_levels] = (uint8_t)atoi(tok);
                 }
                 n_levels++;
-                tok = strtok(NULL, " \t\n");
+                tok = strtok(nullptr, " \t\n");
             }
         }
 
@@ -134,15 +132,15 @@ run_bidi_conformance(void)
         }
 
         // Check resolved levels
-        uint32_t actual_len;
-        const uint8_t *actual_levels = n00b_unicode_bidi_levels(bidi, &actual_len);
+        n00b_array_t(uint8_t) actual_levels = n00b_unicode_bidi_levels(bidi);
+        uint32_t actual_len = (uint32_t)actual_levels.len;
 
         if (actual_len != n_levels) {
             ok = false;
         } else {
             for (uint32_t i = 0; i < n_levels; i++) {
                 if (level_is_x[i]) continue; // X9-removed chars, skip
-                if (actual_levels[i] != expected_levels[i]) {
+                if (actual_levels.data[i] != expected_levels[i]) {
                     ok = false;
                     break;
                 }
@@ -169,7 +167,7 @@ run_bidi_conformance(void)
                 }
                 printf("\n      got_levels:");
                 for (uint32_t i = 0; i < actual_len; i++) {
-                    printf(" %d", actual_levels[i]);
+                    printf(" %d", actual_levels.data[i]);
                 }
                 printf("\n");
             }

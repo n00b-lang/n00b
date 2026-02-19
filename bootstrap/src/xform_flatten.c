@@ -27,6 +27,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "base_alloc_shim.h"
+#include "ncc_limits.h"
 #include <string.h>
 
 #include "transform.h"
@@ -119,7 +120,7 @@ collect_chain_nodes(tnode_t *node, nt_type_t root_type,
                     tnode_t ***out_nodes, int *out_cap)
 {
     int       cnt = 0;
-    int       cap = 64;
+    int       cap = NCC_CAP_LARGE;
     tnode_t **arr = base_alloc(cap * sizeof(tnode_t *));
     if (!arr) {
         *out_nodes = nullptr;
@@ -128,7 +129,7 @@ collect_chain_nodes(tnode_t *node, nt_type_t root_type,
 
     // Use a stack to DFS through same-type children, pushing in reverse
     // so leftmost is popped first.
-    int       stk_cap = 64;
+    int       stk_cap = NCC_CAP_LARGE;
     int       stk_top = 0;
     tnode_t **stk     = base_alloc(stk_cap * sizeof(tnode_t *));
     if (!stk) {
@@ -295,7 +296,7 @@ get_base_nt_name(const char *nt)
  * Separator tokens (commas) are removed; the emitter will re-insert them.
  */
 static tnode_t *
-xform_flatten_recursive(xform_ctx_t *ctx, tnode_t *node)
+xform_flatten_recursive(tree_xform_t *ctx, tnode_t *node)
 {
     // Only process nodes that have same-type children
     if (!has_same_type_child(node)) {
@@ -312,7 +313,7 @@ xform_flatten_recursive(xform_ctx_t *ctx, tnode_t *node)
     }
 
     // Allocate list for collecting children
-    list_t *children = list_alloc(total);
+    ncc_list_t *children = ncc_list_alloc(total);
     if (!children) {
         return nullptr;
     }
@@ -330,7 +331,7 @@ xform_flatten_recursive(xform_ctx_t *ctx, tnode_t *node)
 
     // Pre-allocate kids list and add all collected children in one go
     // (avoids repeated reallocation from add_child loop)
-    flat->kids     = list_alloc(collected);
+    flat->kids     = ncc_list_alloc(collected);
     flat->num_kids = collected;
     for (int i = 0; i < collected; i++) {
         tnode_t *child         = (tnode_t *)children->items[i];

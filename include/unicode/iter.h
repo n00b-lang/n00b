@@ -1,4 +1,5 @@
 #pragma once
+
 /** @file iter.h
  *  @brief Iteration macros for codepoints, grapheme clusters, words,
  *         sentences, and lines.
@@ -29,7 +30,7 @@
 //   s is n00b_string_t *. cp is int32_t.
 // ---------------------------------------------------------------------------
 
-/** @brief Iterate over each codepoint in a UTF-8 string.
+/** @brief Iterate over each codepoint in a raw (C) UTF-8 string.
  *
  *  Usage:
  *  @code
@@ -41,21 +42,21 @@
  *  @param s   An `n00b_string_t *` pointer to the string.
  *  @param cp  Loop variable name (declared as `int32_t` in the loop body).
  */
-#define n00b_unicode_foreach_cp(s, cp)                                      \
-    for (struct { uint32_t pos; int32_t val; int brk; }                     \
-             _n00b_uni_i_##cp = { .pos = 0, .val = 0, .brk = 0 };          \
-         !_n00b_uni_i_##cp.brk                                              \
-             && _n00b_uni_i_##cp.pos < (uint32_t)(s)->u8_bytes              \
-             && (_n00b_uni_i_##cp.val                                       \
-                 = n00b_unicode_utf8_decode(                                 \
-                       (s)->data,                                            \
-                       (uint32_t)(s)->u8_bytes,                              \
-                       &_n00b_uni_i_##cp.pos))                              \
-                    >= 0;                                                    \
-         (void)0)                                                           \
-        for (int32_t cp = (_n00b_uni_i_##cp.brk = 1,                       \
-                           _n00b_uni_i_##cp.val);                           \
-             _n00b_uni_i_##cp.brk;                                          \
+#define n00b_unicode_foreach_cp(s, cp)                                                         \
+    for (struct {                                                                              \
+             uint32_t pos;                                                                     \
+             int32_t  val;                                                                     \
+             int      brk;                                                                     \
+         } _n00b_uni_i_##cp                                                                    \
+         = {.pos = 0, .val = 0, .brk = 0};                                                     \
+         !_n00b_uni_i_##cp.brk && _n00b_uni_i_##cp.pos < (uint32_t)(s)->u8_bytes               \
+         && (_n00b_uni_i_##cp.val = n00b_unicode_utf8_decode((s)->data,                        \
+                                                             (uint32_t)(s)->u8_bytes,          \
+                                                             &_n00b_uni_i_##cp.pos))           \
+                >= 0;                                                                          \
+         (void)0)                                                                              \
+        for (int32_t cp = (_n00b_uni_i_##cp.brk = 1, _n00b_uni_i_##cp.val);                    \
+             _n00b_uni_i_##cp.brk;                                                             \
              _n00b_uni_i_##cp.brk = 0)
 
 // ---------------------------------------------------------------------------
@@ -82,8 +83,7 @@ typedef struct {
  *  @return An initialized segment iterator state.
  */
 static inline n00b_unicode_seg_iter_t
-n00b_unicode_seg_iter_init(n00b_string_t *s,
-                           n00b_unicode_break_iter_t *it)
+n00b_unicode_seg_iter_init(n00b_string_t *s, n00b_unicode_break_iter_t *it)
 {
     return (n00b_unicode_seg_iter_t){
         .it   = it,
@@ -116,12 +116,12 @@ n00b_unicode_seg_iter_cleanup(n00b_unicode_seg_iter_t *si)
  *  @return true if a segment was produced, false if iteration is complete.
  */
 static inline bool
-n00b_unicode_seg_iter_advance(n00b_unicode_seg_iter_t *si,
-                              n00b_string_t *out)
+n00b_unicode_seg_iter_advance(n00b_unicode_seg_iter_t *si, n00b_string_t *out)
 {
-    if (si->done || si->brk) return false;
+    if (si->done || si->brk)
+        return false;
 
-    si->prev = si->cur;
+    si->prev  = si->cur;
     int32_t b = n00b_unicode_break_next(si->it);
 
     if (b >= 0) {
@@ -134,30 +134,26 @@ n00b_unicode_seg_iter_advance(n00b_unicode_seg_iter_t *si,
 
     if (si->cur > si->prev) {
         uint32_t seg_len = si->cur - si->prev;
-        int64_t  ncp     = n00b_unicode_utf8_count_codepoints_raw(
-            si->data + si->prev, seg_len);
-        *out = (n00b_string_t){
-            .u8_bytes   = seg_len,
-            .data       = (char *)(si->data + si->prev),
-            .codepoints = ncp >= 0 ? ncp : 0,
-            .u32_data   = nullptr,
-            .styling    = nullptr,
+        int64_t  ncp     = n00b_unicode_utf8_count_codepoints_raw(si->data + si->prev, seg_len);
+        *out             = (n00b_string_t){
+                        .u8_bytes   = seg_len,
+                        .data       = (char *)(si->data + si->prev),
+                        .codepoints = ncp >= 0 ? ncp : 0,
+                        .styling    = nullptr,
         };
         return true;
     }
     return false;
 }
 
-#define _N00B_UNICODE_FOREACH_BREAK(s, var, iter_fn)                        \
-    for (n00b_unicode_seg_iter_t _n00b_uni_si_##var                         \
-             __attribute__((cleanup(n00b_unicode_seg_iter_cleanup))) =       \
-                 n00b_unicode_seg_iter_init(                                 \
-                     (s), iter_fn((s)->data, (s)->u8_bytes));               \
-         !_n00b_uni_si_##var.done && !_n00b_uni_si_##var.brk;              \
-         (void)0)                                                           \
-        for (n00b_string_t var = {0};                                       \
-             n00b_unicode_seg_iter_advance(&_n00b_uni_si_##var, &var)       \
-                 && (_n00b_uni_si_##var.brk = 1);                           \
+#define _N00B_UNICODE_FOREACH_BREAK(s, var, iter_fn)                                           \
+    for (n00b_unicode_seg_iter_t _n00b_uni_si_##var                                            \
+         __attribute__((cleanup(n00b_unicode_seg_iter_cleanup)))                               \
+         = n00b_unicode_seg_iter_init((s), iter_fn((s)->data, (s)->u8_bytes));                 \
+         !_n00b_uni_si_##var.done && !_n00b_uni_si_##var.brk;                                  \
+         (void)0)                                                                              \
+        for (n00b_string_t var = {0}; n00b_unicode_seg_iter_advance(&_n00b_uni_si_##var, &var) \
+                                      && (_n00b_uni_si_##var.brk = 1);                         \
              _n00b_uni_si_##var.brk = 0)
 
 /** @brief Iterate over each grapheme cluster in a string.
@@ -172,7 +168,7 @@ n00b_unicode_seg_iter_advance(n00b_unicode_seg_iter_t *si,
  *  @param s  An `n00b_string_t *` pointer to the string.
  *  @param g  Loop variable name (declared as `n00b_string_t` in the body).
  */
-#define n00b_unicode_foreach_grapheme(s, g) \
+#define n00b_unicode_foreach_grapheme(s, g)                                                    \
     _N00B_UNICODE_FOREACH_BREAK(s, g, n00b_unicode_grapheme_iter_raw)
 
 /** @brief Iterate over each word in a string (UAX #29 word boundaries).
@@ -187,7 +183,7 @@ n00b_unicode_seg_iter_advance(n00b_unicode_seg_iter_t *si,
  *  @param s  An `n00b_string_t *` pointer to the string.
  *  @param w  Loop variable name (declared as `n00b_string_t` in the body).
  */
-#define n00b_unicode_foreach_word(s, w) \
+#define n00b_unicode_foreach_word(s, w)                                                        \
     _N00B_UNICODE_FOREACH_BREAK(s, w, n00b_unicode_word_iter_raw)
 
 /** @brief Iterate over each sentence in a string (UAX #29 sentence
@@ -204,7 +200,7 @@ n00b_unicode_seg_iter_advance(n00b_unicode_seg_iter_t *si,
  *  @param sent  Loop variable name (declared as `n00b_string_t` in the
  *               body).
  */
-#define n00b_unicode_foreach_sentence(s, sent) \
+#define n00b_unicode_foreach_sentence(s, sent)                                                 \
     _N00B_UNICODE_FOREACH_BREAK(s, sent, n00b_unicode_sentence_iter_raw)
 
 // ---------------------------------------------------------------------------
@@ -245,10 +241,10 @@ n00b_unicode_line_iter_init(n00b_string_t *s)
  *  @return true if a line was produced, false if iteration is complete.
  */
 static inline bool
-n00b_unicode_line_iter_next(n00b_unicode_line_iter_t *li,
-                            n00b_string_t *out)
+n00b_unicode_line_iter_next(n00b_unicode_line_iter_t *li, n00b_string_t *out)
 {
-    if (li->done || li->brk) return false;
+    if (li->done || li->brk)
+        return false;
 
     uint32_t    start = li->pos;
     const char *d     = li->data;
@@ -259,14 +255,12 @@ n00b_unicode_line_iter_next(n00b_unicode_line_iter_t *li,
     }
 
     uint32_t seg_len = li->pos - start;
-    int64_t  ncp     = n00b_unicode_utf8_count_codepoints_raw(
-        d + start, seg_len);
-    *out = (n00b_string_t){
-        .u8_bytes   = seg_len,
-        .data       = (char *)(d + start),
-        .codepoints = ncp >= 0 ? ncp : 0,
-        .u32_data   = nullptr,
-        .styling    = nullptr,
+    int64_t  ncp     = n00b_unicode_utf8_count_codepoints_raw(d + start, seg_len);
+    *out             = (n00b_string_t){
+                    .u8_bytes   = seg_len,
+                    .data       = (char *)(d + start),
+                    .codepoints = ncp >= 0 ? ncp : 0,
+                    .styling    = nullptr,
     };
 
     if (li->pos < ulen) {
@@ -300,12 +294,11 @@ n00b_unicode_line_iter_next(n00b_unicode_line_iter_t *li,
  *  @param line  Loop variable name (declared as `n00b_string_t` in the
  *               body).
  */
-#define n00b_unicode_foreach_line(s, line)                                  \
-    for (n00b_unicode_line_iter_t _n00b_uni_li_##line =                     \
-             n00b_unicode_line_iter_init(s);                                \
-         !_n00b_uni_li_##line.done && !_n00b_uni_li_##line.brk;            \
-         (void)0)                                                           \
-        for (n00b_string_t line = {0};                                      \
-             n00b_unicode_line_iter_next(&_n00b_uni_li_##line, &line)       \
-                 && (_n00b_uni_li_##line.brk = 1);                          \
+#define n00b_unicode_foreach_line(s, line)                                                     \
+    for (n00b_unicode_line_iter_t _n00b_uni_li_##line = n00b_unicode_line_iter_init(s);        \
+         !_n00b_uni_li_##line.done && !_n00b_uni_li_##line.brk;                                \
+         (void)0)                                                                              \
+        for (n00b_string_t line = {0};                                                         \
+             n00b_unicode_line_iter_next(&_n00b_uni_li_##line, &line)                          \
+             && (_n00b_uni_li_##line.brk = 1);                                                 \
              _n00b_uni_li_##line.brk = 0)

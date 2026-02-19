@@ -47,7 +47,7 @@ typedef struct lex_t {
 } lex_t;
 
 /** @brief Forward declaration for transform context */
-typedef struct xform_t xform_t;
+typedef struct tok_xform_t tok_xform_t;
 
 /**
  * @brief Initialize lexer state.
@@ -103,7 +103,7 @@ extern bool lex_tok_is_ncc_off(lex_t *state, tok_t *tok);
  * @param skip_ws If true, also skip whitespace tokens
  * @return Next token, or nullptr at end
  */
-extern tok_t *advance(xform_t *ctx, bool skip_ws);
+extern tok_t *advance(tok_xform_t *ctx, bool skip_ws);
 
 /**
  * @brief Move back to previous non-comment token.
@@ -111,7 +111,7 @@ extern tok_t *advance(xform_t *ctx, bool skip_ws);
  * @param skip_ws If true, also skip whitespace tokens
  * @return Previous token, or nullptr at start
  */
-extern tok_t *backup(xform_t *ctx, bool skip_ws);
+extern tok_t *backup(tok_xform_t *ctx, bool skip_ws);
 
 /**
  * @brief Check if a token matches an identifier string.
@@ -132,49 +132,6 @@ extern bool id_check(char *to_match, ncc_buf_t *input, int offset, int len);
 extern char *extract(ncc_buf_t *input, tok_t *tok);
 
 /**
- * @brief Scan backwards for a matching token.
- * @param ctx Transform context
- * @param tok_ix Starting token index
- * @param type Token type to match
- * @param match Text to match
- * @return Index of matching token, or -1 if not found
- */
-extern int scan_back(xform_t *ctx, int tok_ix, ttype_t type, char *match);
-
-/**
- * @brief Scan forwards for a matching token.
- * @param ctx Transform context
- * @param tok_ix Starting token index
- * @param type Token type to match
- * @param match Text to match
- * @return Index of matching token, or -1 if not found
- */
-extern int scan_forward(xform_t *ctx, int tok_ix, ttype_t type, char *match);
-
-/**
- * @brief Get current token.
- * @param ctx Transform context
- * @return Current token, or nullptr if past end
- */
-extern tok_t *cur_tok(xform_t *ctx);
-
-/**
- * @brief Look ahead without advancing position.
- * @param ctx Transform context
- * @param num Number of tokens to look ahead
- * @return Token at lookahead position, or nullptr
- */
-extern tok_t *lookahead(xform_t *ctx, int num);
-
-/**
- * @brief Look behind without changing position.
- * @param ctx Transform context
- * @param num Number of tokens to look behind
- * @return Token at lookbehind position, or nullptr
- */
-extern tok_t *lookbehind(xform_t *ctx, int num);
-
-/**
  * @brief Check if token is a name (identifier or keyword).
  *
  * Many transforms need to check if a token represents a name, which
@@ -189,55 +146,3 @@ tok_is_name(tok_t *t)
     return t && (t->type == TT_ID || t->type == TT_KEYWORD);
 }
 
-/**
- * @brief Remove a span of tokens from the token array.
- *
- * Removes tokens from start_ix to end_ix (inclusive), shifting
- * remaining tokens down to fill the gap.
- *
- * @param state    Lexer state
- * @param start_ix First token to remove
- * @param end_ix   Last token to remove (inclusive)
- */
-extern void lex_remove_span(lex_t *state, int start_ix, int end_ix);
-
-/**
- * @brief Insert tokens at a position in the token array.
- *
- * Inserts new_count tokens at position ix, shifting existing tokens
- * to make room.
- *
- * @param state     Lexer state
- * @param ix        Position to insert at
- * @param new_toks  Array of tokens to insert
- * @param new_count Number of tokens to insert
- */
-extern void lex_insert_tokens(lex_t *state, int ix, tok_t *new_toks, int new_count);
-
-/**
- * @brief Replace a span of tokens with new tokens.
- *
- * Convenience function that removes tokens from start_ix to end_ix
- * and inserts new_toks at start_ix.
- *
- * @param state     Lexer state
- * @param start_ix  First token to replace
- * @param end_ix    Last token to replace (inclusive)
- * @param new_toks  Array of replacement tokens
- * @param new_count Number of replacement tokens
- */
-extern void lex_replace_span(lex_t *state, int start_ix, int end_ix,
-                             tok_t *new_toks, int new_count);
-
-/**
- * @brief Create a synthetic token with the given text.
- *
- * Creates a token that doesn't reference the source buffer but
- * instead has its own replacement text.
- *
- * @param type    Token type (TT_ID, TT_PUNCT, etc.)
- * @param text    Token text (will be copied)
- * @param line_no Line number for error messages
- * @return Initialized synthetic token
- */
-extern tok_t lex_make_synthetic(ttype_t type, const char *text, int line_no);

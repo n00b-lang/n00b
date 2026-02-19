@@ -62,11 +62,7 @@ extern void ncc_dict_init(ncc_dict_t *d, uint32_t start_capacity, ncc_hash_fn ha
 extern void ncc_dict_free(ncc_dict_t *d);
 extern void *ncc_dict_put(ncc_dict_t *d, void *key, void *value);
 [[nodiscard]] extern void *ncc_dict_get(ncc_dict_t *d, void *key, bool *found);
-extern bool ncc_dict_replace(ncc_dict_t *d, void *key, void *value);
-extern bool ncc_dict_add(ncc_dict_t *d, void *key, void *value);
 extern bool ncc_dict_remove(ncc_dict_t *d, void *key);
-[[nodiscard]] extern bool ncc_dict_contains(ncc_dict_t *d, void *key);
-extern int64_t ncc_dict_len(ncc_dict_t *d);
 
 /** Hash function for C strings */
 extern ncc_hash_t ncc_hash_cstring(void *s);

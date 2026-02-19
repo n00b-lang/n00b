@@ -18,8 +18,9 @@
 #include <string.h>
 
 #include "branch_symbols.h"
+#include "ncc_limits.h"
 #include "transform.h"
-#include "rewrite.h"
+#include "xform_helpers.h"
 #include "types.h"
 #include "nt_types.h"
 #include "st.h"
@@ -32,14 +33,14 @@
  * @brief Collect keyword_param nodes from keyword_param_list.
  * After flattening, keyword_param nodes are direct children.
  */
-static list_t *
-collect_params(tnode_t *node, list_t *params)
+static ncc_list_t *
+collect_params(tnode_t *node, ncc_list_t *params)
 {
     if (!node) {
         return params;
     }
     if (node->nt_id == NT_keyword_param) {
-        return list_append(params, node);
+        return ncc_list_append(params, node);
     }
     if (node->nt_id == NT_keyword_param_list) {
         for (int i = 0; i < node->num_kids; i++) {
@@ -47,46 +48,6 @@ collect_params(tnode_t *node, list_t *params)
         }
     }
     return params;
-}
-
-/**
- * @brief Find identifier node in a declarator subtree.
- */
-static tnode_t *
-find_identifier_node(tnode_t *node)
-{
-    if (!node) {
-        return nullptr;
-    }
-    if (node->nt_id == NT_identifier && identifier_tok(node)) {
-        return node;
-    }
-    for (int i = 0; i < node->num_kids; i++) {
-        tnode_t *found = find_identifier_node(tnode_get_kid(node, i));
-        if (found) {
-            return found;
-        }
-    }
-    return nullptr;
-}
-
-/**
- * @brief Get identifier text from a declarator.
- */
-static const char *
-get_identifier_text(ncc_buf_t *input, tnode_t *declarator)
-{
-    tnode_t *id_node = find_identifier_node(declarator);
-    if (id_node) {
-        tok_t *tok = identifier_tok(id_node);
-        if (tok) {
-            if (tok->replacement) {
-                return tok->replacement->data;
-            }
-            return extract(input, tok);
-        }
-    }
-    return nullptr;
 }
 
 /**
@@ -129,189 +90,9 @@ find_param_list(tnode_t *func_decl)
     return nullptr;
 }
 
-/**
- * @brief Remove a child from parent at given index.
- */
-static void
-remove_child_at(tnode_t *parent, int idx)
-{
-    if (!parent || !parent->kids || idx < 0 || idx >= parent->num_kids) {
-        return;
-    }
-    // Shift children down
-    for (int i = idx; i < parent->num_kids - 1; i++) {
-        parent->kids->items[i] = parent->kids->items[i + 1];
-    }
-    parent->num_kids--;
-}
-
-/**
- * @brief Find index of child in parent.
- */
-static int
-find_child_index(tnode_t *parent, tnode_t *child)
-{
-    if (!parent || !child) {
-        return -1;
-    }
-    for (int i = 0; i < parent->num_kids; i++) {
-        if (tnode_get_kid(parent, i) == child) {
-            return i;
-        }
-    }
-    return -1;
-}
-
-/**
- * @brief Insert child at given index in parent.
- */
-static void
-insert_child_at(tnode_t *parent, int idx, tnode_t *child)
-{
-    if (!parent || !child || idx < 0 || idx > parent->num_kids) {
-        return;
-    }
-
-    int old_count = parent->num_kids;
-    int new_count = old_count + 1;
-
-    // Allocate new kids array with room for the new child
-    list_t *new_kids = list_alloc(new_count);
-    assert(new_kids != nullptr);
-
-    // Copy children before insertion point
-    for (int i = 0; i < idx; i++) {
-        new_kids->items[i] = parent->kids ? parent->kids->items[i] : nullptr;
-    }
-
-    // Insert new child
-    new_kids->items[idx] = child;
-
-    // Copy children after insertion point
-    for (int i = idx; i < old_count; i++) {
-        new_kids->items[i + 1] = parent->kids ? parent->kids->items[i] : nullptr;
-    }
-
-    if (parent->kids) {
-        base_dealloc(parent->kids);
-    }
-    parent->kids     = new_kids;
-    parent->num_kids = new_count;
-
-    if (!IS_ELIDED(child)) {
-        child->parent = parent;
-    }
-}
-
 // ---------------------------------------------------------------------------
-// Helper: Tree Building
+// Helper: Tree Building (keyword-specific)
 // ---------------------------------------------------------------------------
-
-/**
- * @brief Build an identifier node.
- */
-static tnode_t *
-build_identifier(const char *name, int line)
-{
-    tnode_t *id = synth_nonterminal("identifier");
-    id->nt_id   = NT_identifier;
-    add_child(id, synth_terminal(name, TT_ID, line));
-    return id;
-}
-
-/**
- * @brief Build a simple primary_expression containing an identifier.
- */
-static tnode_t *
-build_primary_id(const char *name, int line)
-{
-    tnode_t *primary = synth_nonterminal("primary_expression_7");
-    primary->nt_id   = NT_primary_expression;
-    primary->branch  = 7;
-    add_child(primary, build_identifier(name, line));
-    return primary;
-}
-
-/**
- * @brief Wrap an expression in the full expression hierarchy.
- */
-static tnode_t *
-wrap_in_expr_hierarchy(tnode_t *inner, int line)
-{
-    (void)line;
-
-    tnode_t *unary = synth_nonterminal("unary_expression_9");
-    unary->nt_id   = NT_unary_expression;
-    unary->branch  = 9;
-    add_child(unary, inner);
-
-    tnode_t *cast = synth_nonterminal("cast_expression_1");
-    cast->nt_id   = NT_cast_expression;
-    cast->branch  = 1;
-    add_child(cast, unary);
-
-    tnode_t *mult = synth_nonterminal("multiplicative_expression_3");
-    mult->nt_id   = NT_multiplicative_expression;
-    mult->branch  = 3;
-    add_child(mult, cast);
-
-    tnode_t *add = synth_nonterminal("additive_expression_2");
-    add->nt_id   = NT_additive_expression;
-    add->branch  = 2;
-    add_child(add, mult);
-
-    tnode_t *shift = synth_nonterminal("shift_expression_2");
-    shift->nt_id   = NT_shift_expression;
-    shift->branch  = 2;
-    add_child(shift, add);
-
-    tnode_t *rel = synth_nonterminal("relational_expression_4");
-    rel->nt_id   = NT_relational_expression;
-    rel->branch  = 4;
-    add_child(rel, shift);
-
-    tnode_t *eq = synth_nonterminal("equality_expression_2");
-    eq->nt_id   = NT_equality_expression;
-    eq->branch  = 2;
-    add_child(eq, rel);
-
-    tnode_t *and_ = synth_nonterminal("AND_expression_1");
-    and_->nt_id   = NT_AND_expression;
-    and_->branch  = 1;
-    add_child(and_, eq);
-
-    tnode_t *xor_ = synth_nonterminal("exclusive_OR_expression_1");
-    xor_->nt_id   = NT_exclusive_OR_expression;
-    xor_->branch  = 1;
-    add_child(xor_, and_);
-
-    tnode_t *or_ = synth_nonterminal("inclusive_OR_expression_1");
-    or_->nt_id   = NT_inclusive_OR_expression;
-    or_->branch  = 1;
-    add_child(or_, xor_);
-
-    tnode_t *land = synth_nonterminal("logical_AND_expression_1");
-    land->nt_id   = NT_logical_AND_expression;
-    land->branch  = 1;
-    add_child(land, or_);
-
-    tnode_t *lor = synth_nonterminal("logical_OR_expression_1");
-    lor->nt_id   = NT_logical_OR_expression;
-    lor->branch  = 1;
-    add_child(lor, land);
-
-    tnode_t *cond = synth_nonterminal("conditional_expression_1");
-    cond->nt_id   = NT_conditional_expression;
-    cond->branch  = 1;
-    add_child(cond, lor);
-
-    tnode_t *assign = synth_nonterminal("assignment_expression_1");
-    assign->nt_id   = NT_assignment_expression;
-    assign->branch  = 1;
-    add_child(assign, cond);
-
-    return assign;
-}
 
 /**
  * @brief Build member access: base->member
@@ -338,8 +119,9 @@ build_arrow_access(const char *base_name, const char *member, int line)
 static tnode_t *
 build_bitfield_member(const char *field_name, int line)
 {
-    char has_name[256];
-    snprintf(has_name, sizeof(has_name), "_has_%s", field_name);
+    char has_name[NCC_IDENT_BUF];
+    int  ret = snprintf(has_name, sizeof(has_name), "_has_%s", field_name);
+    NCC_CHECK_SNPRINTF(ret, has_name);
 
     tnode_t *member = synth_nonterminal("member_declaration_0");
     member->nt_id   = NT_member_declaration;
@@ -475,10 +257,11 @@ build_field_member(tnode_t *kw_param, int line)
  * struct _funcname__kargs { unsigned _has_x:1; type x; ... };
  */
 static tnode_t *
-build_kargs_struct(ncc_buf_t *input, const char *func_name, list_t *params, int line)
+build_kargs_struct(ncc_buf_t *input, const char *func_name, ncc_list_t *params, int line)
 {
-    char struct_name[256];
-    snprintf(struct_name, sizeof(struct_name), "_%s__kargs", func_name);
+    char struct_name[NCC_IDENT_BUF];
+    int  ret = snprintf(struct_name, sizeof(struct_name), "_%s__kargs", func_name);
+    NCC_CHECK_SNPRINTF(ret, struct_name);
 
     // external_declaration_1 -> declaration_1
     tnode_t *ext_decl = synth_nonterminal("external_declaration_1");
@@ -519,11 +302,11 @@ build_kargs_struct(ncc_buf_t *input, const char *func_name, list_t *params, int 
     tnode_t *member_list = synth_nonterminal("member_declaration_list");
     member_list->nt_id   = NT_member_declaration_list;
 
-    int count = list_len(params);
+    int count = ncc_list_len(params);
 
     // First: bitfields for _has_X
     for (int i = 0; i < count; i++) {
-        tnode_t *param = list_get(params, i);
+        tnode_t *param = ncc_list_get(params, i);
         tnode_t *param_declarator = find_child(param, NT_declarator);
         const char *name = get_identifier_text(input, param_declarator);
         if (name) {
@@ -533,7 +316,7 @@ build_kargs_struct(ncc_buf_t *input, const char *func_name, list_t *params, int 
 
     // Second: actual fields
     for (int i = 0; i < count; i++) {
-        tnode_t *param = list_get(params, i);
+        tnode_t *param = ncc_list_get(params, i);
         tnode_t *field = build_field_member(param, line);
         if (field) {
             add_child(member_list, field);
@@ -562,8 +345,9 @@ build_kargs_struct(ncc_buf_t *input, const char *func_name, list_t *params, int 
 static tnode_t *
 build_kargs_param(const char *func_name, int line)
 {
-    char struct_name[256];
-    snprintf(struct_name, sizeof(struct_name), "_%s__kargs", func_name);
+    char struct_name[NCC_IDENT_BUF];
+    int  ret = snprintf(struct_name, sizeof(struct_name), "_%s__kargs", func_name);
+    NCC_CHECK_SNPRINTF(ret, struct_name);
 
     tnode_t *param_decl = synth_nonterminal("parameter_declaration_0");
     param_decl->nt_id   = NT_parameter_declaration;
@@ -813,8 +597,9 @@ build_extraction_decl(ncc_buf_t *input, tnode_t *kw_param,
         //   conditional_expression  (false: default_value)
 
         // Condition: kargs->_has_name
-        char has_name[256];
-        snprintf(has_name, sizeof(has_name), "_has_%s", name);
+        char has_name[NCC_IDENT_BUF];
+        int  hret = snprintf(has_name, sizeof(has_name), "_has_%s", name);
+        NCC_CHECK_SNPRINTF(hret, has_name);
         tnode_t *cond_access = build_arrow_access("kargs", has_name, line);
         tnode_t *cond_lor = wrap_to_lor(cond_access, line);
 
@@ -966,7 +751,7 @@ add_kargs_to_func(tnode_t *func_decl, tnode_t *kargs_param, int line)
  * @brief Transform function_definition with keyword_clause.
  */
 static tnode_t *
-xform_kw_definition(xform_ctx_t *ctx, tnode_t *node)
+xform_kw_definition(tree_xform_t *ctx, tnode_t *node)
 {
     if (node->branch != BRANCH(function_definition, WITH_KEYWORDS)) {
         return nullptr;
@@ -1015,10 +800,10 @@ xform_kw_definition(xform_ctx_t *ctx, tnode_t *node)
             param_list = kw_clause;
         }
 
-        list_t *params = nullptr;
+        ncc_list_t *params = nullptr;
         params = collect_params(param_list, params);
 
-        int param_count = list_len(params);
+        int param_count = ncc_list_len(params);
         if (param_count == 0) {
             base_dealloc(params);
             // Remove keyword_clause and change branch
@@ -1073,7 +858,7 @@ xform_kw_definition(xform_ctx_t *ctx, tnode_t *node)
                     // Insert extraction declarations at the beginning
                     int insert_idx = 0;
                     for (int i = 0; i < param_count; i++) {
-                        tnode_t *param = list_get(params, i);
+                        tnode_t *param = ncc_list_get(params, i);
                         tnode_t *default_init = find_child(param, NT_initializer);
                         tnode_t *extract_item = build_extraction_decl(ctx->input, param, default_init, line);
                         if (extract_item) {
@@ -1103,7 +888,7 @@ xform_kw_definition(xform_ctx_t *ctx, tnode_t *node)
  * @brief Transform declaration with keyword_clause.
  */
 static tnode_t *
-xform_kw_declaration(xform_ctx_t *ctx, tnode_t *node)
+xform_kw_declaration(tree_xform_t *ctx, tnode_t *node)
 {
     if (node->branch != BRANCH(declaration, WITH_KEYWORDS)) {
         return nullptr;
@@ -1152,10 +937,10 @@ xform_kw_declaration(xform_ctx_t *ctx, tnode_t *node)
             param_list = kw_clause;
         }
 
-        list_t *params = nullptr;
+        ncc_list_t *params = nullptr;
         params = collect_params(param_list, params);
 
-        int param_count = list_len(params);
+        int param_count = ncc_list_len(params);
         if (param_count == 0) {
             base_dealloc(params);
             // Remove keyword_clause and change branch

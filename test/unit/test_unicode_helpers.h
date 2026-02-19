@@ -19,7 +19,7 @@
 
 /** @brief Create an n00b_string_t from a C string literal (default allocator). */
 #define STR(lit)                                                               \
-    n00b_string_from_raw(NULL, (lit), (int64_t)strlen(lit),                    \
+    n00b_string_from_raw(nullptr, (lit), (int64_t)strlen(lit),                    \
                          n00b_unicode_utf8_count_codepoints_raw(               \
                              (lit), (uint32_t)strlen(lit)))
 
@@ -112,7 +112,7 @@ static int test_failed = 0;
 static inline uint32_t
 parse_hex_cp(const char *s)
 {
-    return (uint32_t)strtoul(s, NULL, 16);
+    return (uint32_t)strtoul(s, nullptr, 16);
 }
 
 /**
@@ -127,7 +127,7 @@ parse_codepoints(char *str, n00b_codepoint_t *cps, uint32_t max_cps)
     char    *tok = strtok(str, " \t");
     while (tok && n < max_cps) {
         cps[n++] = parse_hex_cp(tok);
-        tok      = strtok(NULL, " \t");
+        tok      = strtok(nullptr, " \t");
     }
     return n;
 }
@@ -146,7 +146,7 @@ cps_to_str(const n00b_codepoint_t *cps, uint32_t count)
     }
     buf[pos] = '\0';
     int64_t ncp = n00b_unicode_utf8_count_codepoints_raw(buf, pos);
-    return n00b_string_from_raw(NULL, buf, pos, ncp >= 0 ? ncp : 0);
+    return n00b_string_from_raw(nullptr, buf, pos, ncp >= 0 ? ncp : 0);
 }
 
 /**

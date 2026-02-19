@@ -1,3 +1,11 @@
+/**
+ * @file utils.c
+ * @brief Shared utilities: token allocation, compiler discovery, diagnostics.
+ *
+ * Provides `alloc_tokens()` (mmap-backed token array), `ncc_find_compiler()`
+ * (searches `NCC_COMPILER` / `CC` / fallback), newline counting, and
+ * diagnostic helpers (`ncc_error`, `ncc_warning`).
+ */
 #include <stdio.h>
 #include <stdlib.h>
 #include "base_alloc_shim.h"
@@ -78,12 +86,12 @@ count_newlines(lex_t *state, tok_t *t)
 //
 // We otherwise ignore stuff we don't understand.
 
-list_t *
-get_wrapper_actuals(xform_t *state, int lparen_ix, int rparen_ix)
+ncc_list_t *
+get_wrapper_actuals(tok_xform_t *state, int lparen_ix, int rparen_ix)
 {
     int     arg_count = 0;
     bool    found_arg = false;
-    list_t *result;
+    ncc_list_t *result;
     int     i;
     tok_t  *t;
 
@@ -121,7 +129,7 @@ get_wrapper_actuals(xform_t *state, int lparen_ix, int rparen_ix)
         }
     }
 
-    result    = list_alloc(arg_count);
+    result    = ncc_list_alloc(arg_count);
     found_arg = false;
 
     while (arg_count && i > lparen_ix) {
@@ -166,7 +174,7 @@ missing_name:
 }
 
 char *
-join(list_t *str_list, char *joiner)
+join(ncc_list_t *str_list, char *joiner)
 {
     if (!str_list->nitems) {
         return base_calloc(1, 1);

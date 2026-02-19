@@ -22,7 +22,7 @@ static const char n00b_hex_map_lower[16] = {
 
 /**
  * Create a new buffer with the given byte length, using the specified
- * allocator (or runtime default if NULL).
+ * allocator (or runtime default if nullptr).
  */
 static n00b_buffer_t *
 _buffer_create(int64_t length, n00b_allocator_t *allocator)
@@ -472,7 +472,7 @@ n00b_buffer_to_string(n00b_buffer_t *buffer)
     defer_on();
     n00b_buffer_acquire_r(buffer);
 
-    n00b_string_t result = {0};
+    n00b_string_t result = {};
     int64_t       nbytes = (int64_t)buffer->byte_len;
 
     result.data = n00b_alloc_array(char, nbytes + 1);
@@ -481,7 +481,6 @@ n00b_buffer_to_string(n00b_buffer_t *buffer)
     result.u8_bytes     = nbytes;
     result.codepoints   = nbytes; // Placeholder: assume ASCII / 1:1.
     result.styling      = nullptr;
-    result.u32_data     = nullptr;
 
     Return result;
     defer_func_end();
@@ -498,7 +497,7 @@ n00b_buffer_to_hex_str(n00b_buffer_t *buf)
     n00b_buffer_acquire_r(buf);
 
     int64_t       hex_len = (int64_t)buf->byte_len * 2;
-    n00b_string_t result  = {0};
+    n00b_string_t result  = {};
 
     result.data = n00b_alloc_array(char, hex_len + 1);
     char *p     = result.data;
@@ -513,7 +512,6 @@ n00b_buffer_to_hex_str(n00b_buffer_t *buf)
     result.codepoints = hex_len;
     result.u8_bytes   = hex_len;
     result.styling    = nullptr;
-    result.u32_data   = nullptr;
 
     Return result;
     defer_func_end();

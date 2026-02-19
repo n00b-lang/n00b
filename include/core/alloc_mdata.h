@@ -149,7 +149,6 @@ struct n00b_static_header_t {
                      true,                                                                     \
                      {                                                                         \
                          .data       = (value),                                                \
-                         .u32_data   = nullptr,                                                \
                          .styling    = nullptr,                                                \
                          .codepoints = (sizeof(value) - 1),                                    \
                          .u8_bytes   = (sizeof(value) - 1),                                    \

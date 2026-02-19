@@ -18,7 +18,7 @@ test_basic_alloc(void)
 {
     uint64_t *p = n00b_alloc(uint64_t);
 
-    assert(p != NULL);
+    assert(p != nullptr);
     assert(((uintptr_t)p & (N00B_ALIGN - 1)) == 0);
 
     printf("  [PASS] basic_alloc\n");
@@ -33,7 +33,7 @@ test_zero_filled(void)
 {
     uint64_t *p = n00b_alloc_array(uint64_t, 16);
 
-    assert(p != NULL);
+    assert(p != nullptr);
 
     for (int i = 0; i < 16; i++) {
         assert(p[i] == 0);
@@ -51,7 +51,7 @@ test_array_alloc(void)
 {
     int *arr = n00b_alloc_array(int, 100);
 
-    assert(arr != NULL);
+    assert(arr != nullptr);
 
     for (int i = 0; i < 100; i++) {
         arr[i] = i * 7;
@@ -73,7 +73,7 @@ test_inline_header(void)
 {
     uint64_t *p = n00b_alloc(uint64_t);
 
-    assert(p != NULL);
+    assert(p != nullptr);
 
     n00b_inline_hdr_opt_t opt = n00b_inline_alloc_header(p);
     assert(n00b_option_is_set(opt));
@@ -93,7 +93,7 @@ test_alloc_info(void)
 {
     uint64_t *p = n00b_alloc(uint64_t);
 
-    assert(p != NULL);
+    assert(p != nullptr);
 
     n00b_alloc_info_t info = n00b_find_alloc_info(p);
     assert(info.kind != n00b_alloc_none);
@@ -112,7 +112,7 @@ test_multiple_allocs(void)
 
     for (int i = 0; i < 50; i++) {
         ptrs[i] = n00b_alloc(uint64_t);
-        assert(ptrs[i] != NULL);
+        assert(ptrs[i] != nullptr);
     }
 
     // All pointers should be distinct
@@ -134,13 +134,13 @@ test_arena_metrics(void)
 {
     // Create a fresh non-GC arena to get clean metrics
     n00b_arena_t *arena = n00b_new_arena(.use_gc = false, .inline_headers = true);
-    assert(arena != NULL);
+    assert(arena != nullptr);
 
     n00b_allocator_t *alloc = (n00b_allocator_t *)arena;
 
     // Allocate some data through the arena
     void *p = n00b_alloc(uint64_t, .allocator = alloc);
-    assert(p != NULL);
+    assert(p != nullptr);
 
     // The arena should have some used space
     n00b_segment_t *seg  = n00b_atomic_load(&arena->current_segment);
@@ -167,7 +167,7 @@ test_large_alloc(void)
     // Allocate a large array (64 KB)
     char *p = n00b_alloc_array(char, 64 * 1024, .allocator = alloc);
 
-    assert(p != NULL);
+    assert(p != nullptr);
     assert(((uintptr_t)p & (N00B_ALIGN - 1)) == 0);
 
     // Write to first and last byte to verify the range is usable
@@ -197,7 +197,7 @@ test_flex_alloc(void)
 {
     flex_header_t *p = n00b_alloc_flex(flex_header_t, flex_item_t, 10);
 
-    assert(p != NULL);
+    assert(p != nullptr);
 
     p->count = 10;
     p->flags = 0xFF;

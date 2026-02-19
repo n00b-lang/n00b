@@ -1,3 +1,13 @@
+/**
+ * @file lex.c
+ * @brief C tokenizer for the NCC bootstrap compiler.
+ *
+ * Tokenizes preprocessed C source into a `tok_t[]` array, handling
+ * identifiers, keywords, numbers, strings, character literals,
+ * punctuation, whitespace, comments, and preprocessor directives.
+ * Tracks `#line` directives for accurate source locations and
+ * manages `ncc off`/`ncc on` pragma ranges.
+ */
 #include <assert.h>
 #include <ctype.h>
 #include <stdlib.h>
@@ -990,49 +1000,8 @@ extract(ncc_buf_t *input, tok_t *tok)
     return result;
 }
 
-int
-scan_back(xform_t *ctx, int tok_ix, ttype_t type, char *match)
-{
-    while (tok_ix--) {
-        tok_t *t = &ctx->toks[tok_ix];
-
-        if (t->type != type) {
-            continue;
-        }
-
-        char *part = extract(ctx->input, t);
-        if (!strcmp(part, match)) {
-            return tok_ix;
-        }
-    }
-
-    return -1;
-}
-
-int
-scan_forward(xform_t *ctx, int tok_ix, ttype_t type, char *match)
-{
-    while (tok_ix < ctx->max) {
-        tok_t *t = &ctx->toks[tok_ix];
-
-        if (t->type != type) {
-            tok_ix++;
-            continue;
-        }
-
-        char *part = extract(ctx->input, t);
-        if (!strcmp(part, match)) {
-            return tok_ix;
-        }
-
-        tok_ix++;
-    }
-
-    return -1;
-}
-
 tok_t *
-advance(xform_t *ctx, bool skip_ws)
+advance(tok_xform_t *ctx, bool skip_ws)
 {
     tok_t *t;
 
@@ -1055,7 +1024,7 @@ advance(xform_t *ctx, bool skip_ws)
 }
 
 tok_t *
-backup(xform_t *ctx, bool skip_ws)
+backup(tok_xform_t *ctx, bool skip_ws)
 {
     tok_t *t;
 
@@ -1075,186 +1044,9 @@ backup(xform_t *ctx, bool skip_ws)
     }
 }
 
-tok_t *
-cur_tok(xform_t *ctx)
-{
-    if (ctx->ix >= ctx->max) {
-        return nullptr;
-    }
-    return &ctx->toks[ctx->ix];
-}
-
-tok_t *
-lookahead(xform_t *ctx, int num)
-{
-    int    saved_ix = ctx->ix;
-    tok_t *t        = nullptr;
-
-    for (int i = 0; i < num; i++) {
-        t = advance(ctx, true);
-    }
-
-    ctx->ix = saved_ix;
-
-    return t;
-}
-
-tok_t *
-lookbehind(xform_t *ctx, int num)
-{
-    int    saved_ix = ctx->ix;
-    tok_t *t        = nullptr;
-
-    for (int i = 0; i < num; i++) {
-        t = backup(ctx, true);
-    }
-
-    ctx->ix = saved_ix;
-
-    return t;
-}
-
 /* ============================================================================
- * Token Array Manipulation
+ * NCC-off range checking
  * ============================================================================ */
-
-/*
- * Grow the token array to hold new_total tokens.  The token array may
- * have been allocated with mmap (by alloc_tokens); realloc cannot be
- * used on mmap'd memory, so the first grow allocates a heap buffer,
- * copies the existing tokens, and munmaps the original.
- */
-static void
-lex_grow_toks(lex_t *state, int new_total)
-{
-    size_t new_bytes = (size_t)new_total * sizeof(tok_t);
-
-    if (state->toks_on_heap) {
-        state->toks = base_realloc(state->toks, new_bytes);
-    } else {
-        tok_t *heap = base_alloc(new_bytes);
-        memcpy(heap, state->toks, (size_t)state->num_toks * sizeof(tok_t));
-        munmap(state->toks, (size_t)state->toks_mmap_len);
-        state->toks        = heap;
-        state->toks_on_heap = true;
-    }
-}
-
-void
-lex_remove_span(lex_t *state, int start_ix, int end_ix)
-{
-    if (start_ix < 0 || end_ix >= state->num_toks || start_ix > end_ix) {
-        return;
-    }
-
-    int remove_count = end_ix - start_ix + 1;
-    int shift_count  = state->num_toks - end_ix - 1;
-
-    if (shift_count > 0) {
-        memmove(&state->toks[start_ix],
-                &state->toks[end_ix + 1],
-                shift_count * sizeof(tok_t));
-    }
-
-    state->num_toks -= remove_count;
-}
-
-void
-lex_insert_tokens(lex_t *state, int ix, tok_t *new_toks, int new_count)
-{
-    if (ix < 0 || ix > state->num_toks || new_count <= 0) {
-        return;
-    }
-
-    // Grow token array
-    int new_total = state->num_toks + new_count;
-    lex_grow_toks(state, new_total);
-
-    // Shift existing tokens to make room
-    int shift_count = state->num_toks - ix;
-    if (shift_count > 0) {
-        memmove(&state->toks[ix + new_count],
-                &state->toks[ix],
-                shift_count * sizeof(tok_t));
-    }
-
-    // Copy new tokens into the gap
-    memcpy(&state->toks[ix], new_toks, new_count * sizeof(tok_t));
-
-    state->num_toks = new_total;
-}
-
-void
-lex_replace_span(lex_t *state, int start_ix, int end_ix,
-                 tok_t *new_toks, int new_count)
-{
-    if (start_ix < 0 || end_ix >= state->num_toks || start_ix > end_ix) {
-        return;
-    }
-
-    int old_count = end_ix - start_ix + 1;
-    int diff      = new_count - old_count;
-
-    if (diff == 0) {
-        // Same size - just copy in place
-        memcpy(&state->toks[start_ix], new_toks, new_count * sizeof(tok_t));
-    }
-    else if (diff < 0) {
-        // Shrinking - copy then shift remaining tokens down
-        memcpy(&state->toks[start_ix], new_toks, new_count * sizeof(tok_t));
-        int shift_start = end_ix + 1;
-        int shift_count = state->num_toks - shift_start;
-        if (shift_count > 0) {
-            memmove(&state->toks[start_ix + new_count],
-                    &state->toks[shift_start],
-                    shift_count * sizeof(tok_t));
-        }
-        state->num_toks += diff;
-    }
-    else {
-        // Growing - grow array, shift, then copy
-        int new_total = state->num_toks + diff;
-        lex_grow_toks(state, new_total);
-
-        int shift_start = end_ix + 1;
-        int shift_count = state->num_toks - shift_start;
-        if (shift_count > 0) {
-            memmove(&state->toks[start_ix + new_count],
-                    &state->toks[shift_start],
-                    shift_count * sizeof(tok_t));
-        }
-        memcpy(&state->toks[start_ix], new_toks, new_count * sizeof(tok_t));
-        state->num_toks = new_total;
-    }
-}
-
-tok_t
-lex_make_synthetic(ttype_t type, const char *text, int line_no)
-{
-    static int synth_seq = 0;
-
-    int        len = strlen(text);
-    ncc_buf_t *buf = ncc_buf_alloc(len);
-    memcpy(buf->data, text, len);
-    buf->data[len] = '\0';
-    buf->len       = len;
-
-    // Auto-classify: if caller said TT_ID but the text is a keyword,
-    // promote to TT_KEYWORD so the parser matches it correctly.
-    if (type == TT_ID
-        && bsearch(&text, c_keywords, NUM_KEYWORDS, sizeof(char *), keyword_cmp)) {
-        type = TT_KEYWORD;
-    }
-
-    return (tok_t){
-        .type        = type,
-        .replacement = buf,
-        .offset      = SYNTHETIC_OFFSET_BASE + synth_seq++,
-        .len         = len,
-        .line_no     = line_no,
-        .synthetic   = 1,
-    };
-}
 
 bool
 lex_is_ncc_off(lex_t *state, int tok_ix)

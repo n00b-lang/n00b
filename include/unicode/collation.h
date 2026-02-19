@@ -1,4 +1,5 @@
 #pragma once
+
 /** @file collation.h
  *  @brief Unicode collation (sort keys and locale-independent comparison).
  *
@@ -19,8 +20,11 @@ typedef struct {
  *  @kw allocator  Optional allocator (defaults to the runtime allocator).
  *  @return A sort key; free with n00b_unicode_sort_key_free().
  */
-n00b_unicode_sort_key_t n00b_unicode_sort_key(n00b_string_t s)
-    _kargs { n00b_allocator_t *allocator = nullptr; };
+n00b_unicode_sort_key_t
+n00b_unicode_sort_key(n00b_string_t s) _kargs
+{
+    n00b_allocator_t *allocator = nullptr;
+};
 
 /** @brief Compare two strings using Unicode collation order.
  *  @param a  First string.

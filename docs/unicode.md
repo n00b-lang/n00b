@@ -11,14 +11,12 @@ breaking, emoji detection, identifier validation, IDNA/Punycode, and security an
 
 - **Value-type strings.** `n00b_string_t` is a 40-byte struct passed by value &mdash; no
   heap indirection for the descriptor itself, no reference counting.
-- **Grapheme-aware by default.** String operations like slicing, indexing, padding,
-  and reversal work on grapheme clusters, not bytes or codepoints.
 - **Keyword arguments.** Most functions that allocate accept an optional `.allocator`
   parameter (and sometimes `.locale`, `.fill`, `.width`, etc.) via ncc's `_kargs`
   extension.
 - **Option/Result types.** Fallible lookups return `n00b_option_t(T)` rather than
   sentinel values.
-- **Two-tier API.** Every public function has an internal `_raw` counterpart that
+- **Two-tier API.** Many public functions have an internal `_raw` counterpart that
   operates on `(const char *data, int64_t len)` pairs. The public API wraps these
   with `n00b_string_t`.
 
@@ -30,11 +28,10 @@ Defined in `include/core/string.h`:
 
 ```c
 typedef struct {
-    int64_t           u8_bytes;   // byte length of UTF-8 data
-    char             *data;       // UTF-8 bytes (not guaranteed NUL-terminated)
-    int64_t           codepoints; // codepoint count (0 if not yet computed)
-    n00b_codepoint_t *u32_data;   // lazily-expanded UTF-32 (may be NULL)
-    void             *styling;    // reserved for rich-text metadata
+    int64_t  u8_bytes;   // byte length of UTF-8 data
+    char    *data;       // UTF-8 bytes (not guaranteed NUL-terminated)
+    int64_t  codepoints; // codepoint count (0 if not yet computed)
+    void    *styling;    // reserved for rich-text metadata
 } n00b_string_t;
 ```
 
@@ -503,115 +500,7 @@ if (level > N00B_UNICODE_RESTRICTION_SINGLE_SCRIPT) {
 }
 ```
 
-### 16. String operations &mdash; `unicode/string_ops.h`
-
-The largest module. Full suite of Unicode-aware string manipulation, all
-grapheme-cluster-aware where relevant.
-
-#### Concatenation and joining
-
-```c
-n00b_string_t  n00b_unicode_str_cat(n00b_string_t a, n00b_string_t b, ...);
-n00b_string_t  n00b_unicode_str_cat_many(n00b_string_t *parts, uint32_t count, ...);
-n00b_string_t  n00b_unicode_str_join(n00b_string_t sep, n00b_string_t *parts,
-                                     uint32_t count, ...);
-```
-
-#### Slicing (grapheme-indexed, negative indices supported)
-
-```c
-n00b_string_t n00b_unicode_str_slice(n00b_string_t s, int32_t start, int32_t end, ...);
-n00b_string_t n00b_unicode_str_grapheme_at(n00b_string_t s, int32_t index, ...);
-n00b_string_t n00b_unicode_str_slice_bytes(n00b_string_t s,
-                                            uint32_t byte_start, uint32_t byte_end, ...);
-```
-
-#### Search
-
-```c
-n00b_unicode_opt_i32_t n00b_unicode_str_find(n00b_string_t haystack,
-                                              n00b_string_t needle);
-n00b_unicode_opt_i32_t n00b_unicode_str_rfind(n00b_string_t haystack,
-                                               n00b_string_t needle);
-bool n00b_unicode_str_contains(n00b_string_t haystack, n00b_string_t needle);
-bool n00b_unicode_str_starts_with(n00b_string_t s, n00b_string_t prefix);
-bool n00b_unicode_str_ends_with(n00b_string_t s, n00b_string_t suffix);
-```
-
-#### Replace
-
-```c
-n00b_string_t n00b_unicode_str_replace(n00b_string_t s, n00b_string_t old_s,
-                                       n00b_string_t new_s, ...);
-n00b_string_t n00b_unicode_str_replace_all(n00b_string_t s, n00b_string_t old_s,
-                                           n00b_string_t new_s, ...);
-```
-
-#### Split (returns caller-freed array + count)
-
-```c
-n00b_string_t *n00b_unicode_str_split(n00b_string_t s, n00b_string_t sep,
-                                      uint32_t *count, ...);
-n00b_string_t *n00b_unicode_str_split_words(n00b_string_t s, uint32_t *count, ...);
-n00b_string_t *n00b_unicode_str_split_graphemes(n00b_string_t s, uint32_t *count, ...);
-n00b_string_t *n00b_unicode_str_split_lines(n00b_string_t s, uint32_t *count, ...);
-```
-
-#### Trim
-
-```c
-n00b_string_t n00b_unicode_str_trim(n00b_string_t s, ...);
-n00b_string_t n00b_unicode_str_trim_left(n00b_string_t s, ...);
-n00b_string_t n00b_unicode_str_trim_right(n00b_string_t s, ...);
-```
-
-#### Comparison
-
-```c
-int  n00b_unicode_str_cmp(n00b_string_t a, n00b_string_t b);
-bool n00b_unicode_str_eq(n00b_string_t a, n00b_string_t b);
-bool n00b_unicode_str_eq_nfc(n00b_string_t a, n00b_string_t b);
-bool n00b_unicode_str_eq_casefold(n00b_string_t a, n00b_string_t b);
-```
-
-#### Width-aware padding and truncation
-
-```c
-n00b_string_t n00b_unicode_str_pad_left(n00b_string_t s, int32_t width, ...);
-    // keyword args: .allocator, .fill = ' '
-n00b_string_t n00b_unicode_str_pad_right(n00b_string_t s, int32_t width, ...);
-n00b_string_t n00b_unicode_str_center(n00b_string_t s, int32_t width, ...);
-n00b_string_t n00b_unicode_str_truncate(n00b_string_t s, int32_t max_width, ...);
-    // keyword args: .allocator, .ellipsis = "..."
-```
-
-#### Repeat and reverse (grapheme-aware)
-
-```c
-n00b_string_t n00b_unicode_str_repeat(n00b_string_t s, uint32_t count, ...);
-n00b_string_t n00b_unicode_str_reverse(n00b_string_t s, ...);
-```
-
-**Example:**
-
-```c
-n00b_string_t hello = n00b_string_from_raw(alloc, "Hello", 5, 0);
-n00b_string_t world = n00b_string_from_raw(alloc, "World", 5, 0);
-
-// Concatenate:
-n00b_string_t hw = n00b_unicode_str_cat(hello, world);
-
-// Grapheme-aware slice (negative index = from end):
-n00b_string_t last3 = n00b_unicode_str_slice(s, -3, -1);
-
-// Width-aware truncation with custom ellipsis:
-n00b_string_t t = n00b_unicode_str_truncate(s, 20, .ellipsis = "\xe2\x80\xa6");
-
-// Grapheme-aware reverse (keeps combining marks with base):
-n00b_string_t r = n00b_unicode_str_reverse(s);
-```
-
-### 17. Composable queries &mdash; `unicode/query.h`
+### 16. Composable queries &mdash; `unicode/query.h`
 
 Filter-based codepoint search across the entire Unicode range. Filters are
 composable predicates; queries combine them with AND or OR logic.
@@ -691,7 +580,7 @@ automatically. The most common keyword argument is `.allocator`; when `nullptr`
 
 - Functions returning `n00b_string_t` return a new string by value.
   The caller owns `s.data` and must eventually free it.
-- Functions returning arrays (split, query, transcoding) return caller-owned
+- Functions returning arrays (query, transcoding) return caller-owned
   heap allocations that must be freed.
 - Sort keys must be freed with `n00b_unicode_sort_key_free()`.
 - Opaque handles (normalizer, break iterator, bidi paragraph) must be freed
@@ -701,7 +590,7 @@ automatically. The most common keyword argument is `.allocator`; when `nullptr`
 
 ### Internal `_raw` API
 
-Every public string-level function has an internal counterpart in
+Many public functions have an internal counterpart in
 `include/internal/unicode/raw.h` that operates on `(const char *data, int64_t len)`
 pairs instead of `n00b_string_t`. These are prefixed `n00b_unicode_*_raw` and are
 intended for use within the library itself, not by application code.
@@ -721,9 +610,6 @@ intended for use within the library itself, not by application code.
 | Locale-aware sort | `n00b_unicode_collate(a, b)` |
 | Iterate graphemes | `n00b_unicode_foreach_grapheme(&s, g) { ... }` |
 | Iterate words | `n00b_unicode_foreach_word(&s, w) { ... }` |
-| Grapheme-aware slice | `n00b_unicode_str_slice(s, start, end)` |
-| Search | `n00b_unicode_str_find(haystack, needle)` |
-| Split on separator | `n00b_unicode_str_split(s, sep, &count)` |
 | Wrap to width | `n00b_unicode_linebreak_wrap(s, &num, .width = 80)` |
 | Detect emoji sequence | `n00b_unicode_emoji_scan(s, byte_pos)` |
 | Validate identifier | `n00b_unicode_is_valid_identifier(s)` |
@@ -733,5 +619,3 @@ intended for use within the library itself, not by application code.
 | Bidi reorder | `n00b_unicode_bidi_open(s)` / `bidi_reorder_visual` |
 | Codepoint name | `n00b_unicode_cp_name(cp)` |
 | Query by property | `n00b_cp_query(n00b_filter_gc(...), ...)` |
-| Pad to width | `n00b_unicode_str_pad_right(s, width)` |
-| Reverse (grapheme-safe) | `n00b_unicode_str_reverse(s)` |

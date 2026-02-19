@@ -31,6 +31,7 @@
 #include "core/macros.h"
 #include "core/atomic.h"
 #include "core/align.h"
+#include "core/array.h"
 
 // ============================================================================
 // Constants
@@ -550,3 +551,37 @@
  */
 #define n00b_list_foreach(x, var)                                                              \
     for (typeof((x).data) var = (x).data; (var) < (x).data + (x).len; ++(var))
+
+// ============================================================================
+// Conversion
+// ============================================================================
+
+/**
+ * @brief Move a list's data into an `n00b_array_t` of the same element type.
+ *
+ * The list is consumed: its data pointer is transferred to the array
+ * and the list is zeroed.
+ *
+ * @param T  Element type (must match the list's element type).
+ * @param x  List (lvalue) — will be zeroed after conversion.
+ * @return An `n00b_array_t(T)` owning the former list data.
+ *
+ * @pre  No other thread holds the list lock.
+ * @post @p x has len/cap 0 and a nullptr data pointer.
+ */
+#define n00b_list_to_array(T, x)                                                                   \
+    ({                                                                                             \
+        auto _bl_lp = &(x);                                                                        \
+        n00b_array_t(T) _bl_arr = {                                                                \
+            .data      = _bl_lp->data,                                                             \
+            .len       = _bl_lp->len,                                                              \
+            .cap       = _bl_lp->cap,                                                              \
+            .allocator = _bl_lp->allocator,                                                        \
+        };                                                                                         \
+        _bl_lp->data      = nullptr;                                                               \
+        _bl_lp->len       = 0;                                                                     \
+        _bl_lp->cap       = 0;                                                                     \
+        _bl_lp->lock      = 0;                                                                     \
+        _bl_lp->allocator = nullptr;                                                               \
+        _bl_arr;                                                                                   \
+    })

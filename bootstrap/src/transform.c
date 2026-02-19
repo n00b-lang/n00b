@@ -17,7 +17,7 @@
  * @param list List to free (may be nullptr)
  */
 static void
-list_free_entries(list_t *list)
+ncc_list_free_entries(ncc_list_t *list)
 {
     if (!list) {
         return;
@@ -49,19 +49,19 @@ xform_registry_free(xform_registry_t *reg)
 
     // Free all pre-order lists
     for (int i = 0; i < NT_COUNT; i++) {
-        list_free_entries(reg->pre_order[i]);
+        ncc_list_free_entries(reg->pre_order[i]);
         reg->pre_order[i] = nullptr;
     }
 
     // Free all post-order lists
     for (int i = 0; i < NT_COUNT; i++) {
-        list_free_entries(reg->post_order[i]);
+        ncc_list_free_entries(reg->post_order[i]);
         reg->post_order[i] = nullptr;
     }
 
     // Free wildcard lists
-    list_free_entries(reg->wildcard_pre);
-    list_free_entries(reg->wildcard_post);
+    ncc_list_free_entries(reg->wildcard_pre);
+    ncc_list_free_entries(reg->wildcard_post);
     reg->wildcard_pre  = nullptr;
     reg->wildcard_post = nullptr;
 }
@@ -88,7 +88,7 @@ xform_register_post(xform_registry_t *reg, nt_type_t nt_id, xform_fn_t fn, const
 
     // Handle wildcard registration (NT_NONE matches all nodes)
     if (nt_id == NT_NONE) {
-        reg->wildcard_post = list_append(reg->wildcard_post, entry);
+        reg->wildcard_post = ncc_list_append(reg->wildcard_post, entry);
         return true;
     }
 
@@ -98,7 +98,7 @@ xform_register_post(xform_registry_t *reg, nt_type_t nt_id, xform_fn_t fn, const
         return false;
     }
 
-    reg->post_order[nt_id] = list_append(reg->post_order[nt_id], entry);
+    reg->post_order[nt_id] = ncc_list_append(reg->post_order[nt_id], entry);
     return true;
 }
 
@@ -120,7 +120,7 @@ xform_register_pre(xform_registry_t *reg, nt_type_t nt_id, xform_pre_fn_t fn, co
 
     // Handle wildcard registration (NT_NONE matches all nodes)
     if (nt_id == NT_NONE) {
-        reg->wildcard_pre = list_append(reg->wildcard_pre, entry);
+        reg->wildcard_pre = ncc_list_append(reg->wildcard_pre, entry);
         return true;
     }
 
@@ -130,7 +130,7 @@ xform_register_pre(xform_registry_t *reg, nt_type_t nt_id, xform_pre_fn_t fn, co
         return false;
     }
 
-    reg->pre_order[nt_id] = list_append(reg->pre_order[nt_id], entry);
+    reg->pre_order[nt_id] = ncc_list_append(reg->pre_order[nt_id], entry);
     return true;
 }
 
@@ -141,7 +141,7 @@ xform_count(xform_registry_t *reg, nt_type_t nt_id, bool pre)
         return 0;
     }
 
-    list_t *list;
+    ncc_list_t *list;
 
     if (nt_id == NT_NONE) {
         list = pre ? reg->wildcard_pre : reg->wildcard_post;
@@ -161,11 +161,11 @@ xform_count(xform_registry_t *reg, nt_type_t nt_id, bool pre)
  * ======================================================================== */
 
 void
-xform_ctx_init(xform_ctx_t *ctx, lex_t *lex, symtab_t *symtab, tnode_t *root)
+xform_ctx_init(tree_xform_t *ctx, lex_t *lex, symtab_t *symtab, tnode_t *root)
 {
     assert(ctx != nullptr);
 
-    *ctx = (xform_ctx_t){
+    *ctx = (tree_xform_t){
         .input            = lex ? lex->input : nullptr,
         .lex              = lex,
         .symtab           = symtab,
@@ -193,7 +193,7 @@ xform_ctx_init(xform_ctx_t *ctx, lex_t *lex, symtab_t *symtab, tnode_t *root)
  * @return Replacement node, or nullptr if no change
  */
 static tnode_t *
-apply_pre_transformers(xform_registry_t *reg, xform_ctx_t *ctx, tnode_t *node, xform_control_t *control)
+apply_pre_transformers(xform_registry_t *reg, tree_xform_t *ctx, tnode_t *node, xform_control_t *control)
 {
     *control        = XFORM_CONTINUE;
     tnode_t *result = nullptr;
@@ -201,7 +201,7 @@ apply_pre_transformers(xform_registry_t *reg, xform_ctx_t *ctx, tnode_t *node, x
     // Apply type-specific pre-order transformers
     nt_type_t nt_id = node->nt_id;
     if (nt_id > NT_NONE && nt_id < NT_COUNT) {
-        list_t *list = reg->pre_order[nt_id];
+        ncc_list_t *list = reg->pre_order[nt_id];
         if (list) {
             for (int i = 0; i < list->nitems; i++) {
                 xform_entry_t  *entry    = list->items[i];
@@ -220,7 +220,7 @@ apply_pre_transformers(xform_registry_t *reg, xform_ctx_t *ctx, tnode_t *node, x
     }
 
     // Apply wildcard pre-order transformers
-    list_t *wildcard = reg->wildcard_pre;
+    ncc_list_t *wildcard = reg->wildcard_pre;
     if (wildcard) {
         for (int i = 0; i < wildcard->nitems; i++) {
             xform_entry_t  *entry    = wildcard->items[i];
@@ -249,7 +249,7 @@ apply_pre_transformers(xform_registry_t *reg, xform_ctx_t *ctx, tnode_t *node, x
  * @return Replacement node, or nullptr if no change
  */
 static tnode_t *
-apply_post_transformers(xform_registry_t *reg, xform_ctx_t *ctx, tnode_t *node)
+apply_post_transformers(xform_registry_t *reg, tree_xform_t *ctx, tnode_t *node)
 {
     if (!node) return nullptr;
 
@@ -258,7 +258,7 @@ apply_post_transformers(xform_registry_t *reg, xform_ctx_t *ctx, tnode_t *node)
     // Apply type-specific post-order transformers
     nt_type_t nt_id = node->nt_id;
     if (nt_id > NT_NONE && nt_id < NT_COUNT) {
-        list_t *list = reg->post_order[nt_id];
+        ncc_list_t *list = reg->post_order[nt_id];
         if (list) {
             for (int i = 0; i < list->nitems; i++) {
                 xform_entry_t *entry    = list->items[i];
@@ -273,7 +273,7 @@ apply_post_transformers(xform_registry_t *reg, xform_ctx_t *ctx, tnode_t *node)
     }
 
     // Apply wildcard post-order transformers
-    list_t *wildcard = reg->wildcard_post;
+    ncc_list_t *wildcard = reg->wildcard_post;
     if (wildcard) {
         for (int i = 0; i < wildcard->nitems; i++) {
             xform_entry_t *entry    = wildcard->items[i];
@@ -328,7 +328,7 @@ typedef struct walk_item_t {
  * @return Transformed root (original, replacement, or nullptr)
  */
 static tnode_t *
-walk_node(xform_registry_t *reg, xform_ctx_t *ctx, tnode_t *root)
+walk_node(xform_registry_t *reg, tree_xform_t *ctx, tnode_t *root)
 {
     if (root == nullptr) {
         return nullptr;
@@ -485,7 +485,7 @@ walk_node(xform_registry_t *reg, xform_ctx_t *ctx, tnode_t *root)
  * ======================================================================== */
 
 tnode_t *
-xform_apply(xform_registry_t *reg, xform_ctx_t *ctx)
+xform_apply(xform_registry_t *reg, tree_xform_t *ctx)
 {
     assert(reg != nullptr);
     assert(ctx != nullptr);
@@ -511,7 +511,7 @@ xform_apply(xform_registry_t *reg, xform_ctx_t *ctx)
 }
 
 tnode_t *
-xform_apply_multi(xform_registry_t *reg, xform_ctx_t *ctx, int max_passes)
+xform_apply_multi(xform_registry_t *reg, tree_xform_t *ctx, int max_passes)
 {
     assert(reg != nullptr);
     assert(ctx != nullptr);

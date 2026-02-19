@@ -18,7 +18,7 @@
 // typeid(type_name|string [, typename|string_literal]*) -> encoded identifier
 
 static void
-extract_atom(xform_ctx_t *ctx, tnode_t *node, list_t **l)
+extract_atom(tree_xform_t *ctx, tnode_t *node, ncc_list_t **l)
 {
     char *text;
 
@@ -46,7 +46,7 @@ extract_atom(xform_ctx_t *ctx, tnode_t *node, list_t **l)
 
         // Extract and concatenate all adjacent string tokens, stripping quotes.
         // Tokens may not be contiguous in the array (whitespace tokens between).
-        list_t *parts   = list_alloc(0);
+        ncc_list_t *parts   = ncc_list_alloc(0);
         tok_t  *cur_tok = node->tptr;
         int     found   = 0;
         while (found < num_toks) {
@@ -57,7 +57,7 @@ extract_atom(xform_ctx_t *ctx, tnode_t *node, list_t **l)
                     memmove(part, part + 1, slen - 2);
                     part[slen - 2] = '\0';
                 }
-                parts = list_append(parts, part);
+                parts = ncc_list_append(parts, part);
                 found++;
             }
             cur_tok++;
@@ -78,18 +78,18 @@ extract_atom(xform_ctx_t *ctx, tnode_t *node, list_t **l)
             }
         }
     }
-    *l = list_append(*l, text);
+    *l = ncc_list_append(*l, text);
 }
 
 static tnode_t *
-xform_typeid(xform_ctx_t *ctx, tnode_t *node)
+xform_typeid(tree_xform_t *ctx, tnode_t *node)
 {
     // We're going to get a synthetic typeid node.
     if (node->branch != BRANCH(synthetic_identifier, TYPEID)) {
         return nullptr;
     }
     // kids: [0]=typeid [1]=( [2]=typeid_atom [3]=opt(continuation) [4]=)
-    list_t *flattened = list_alloc(0);
+    ncc_list_t *flattened = ncc_list_alloc(0);
 
     extract_atom(ctx, tnode_get_kid(node, 2), &flattened);
 

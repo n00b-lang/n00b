@@ -1,33 +1,14 @@
-// The idea here is to normalize the type tree we got out of
-// type_parse. We had to parse the types so we can ensure we properly
-// convert things to compatable strings that have a one-to-one
-// mapping.
-//
-// As part of that, we need to worry about when items are added in a
-// way where they can appear in any order.
-//
-// In C that includes qualifier lists and attribute lists. Parameters
-// and members must appear in order (including in enums).
-//
-// To handle those, we sort the tokens in those lists in lexigraphic
-// order.
-//
-// Our process is to first 'simplify' the tree. We really only need
-// the core tokens in tree-order, but with lists normalized when
-// necessary.
-//
-// So we construct a new, simpler tree, where each level pretty much
-// only needs to keep track of whether its items are ordered or
-// not. We can then fold stuff up to normalize the tokens into a
-// single list, and then convert each token via a straightforward
-// algorithm to generate a unique id for the type.
-//
-// We could definitely skip "encoding" the whole tree, and just spit
-// back out a normalized version of the type that we then
-// hash. However, this function is to be used at compile time, where
-// it will be relatively cheap, so unless some reason emerges in the
-// future, I'd prefer the more explicit normalization; it does match
-// the C grammar exactly.
+/**
+ * @file type_normalize.c
+ * @brief Type tree normalization for `typeid()` / `typestr()`.
+ *
+ * Normalizes the parse tree produced by `type_parse` into a canonical
+ * form suitable for hashing.  Unordered elements (qualifier lists,
+ * attribute lists) are sorted lexicographically; ordered elements
+ * (parameters, struct members) are preserved in declaration order.
+ * The result is a simplified tree that folds into a unique token
+ * sequence, which is then hashed to produce a stable type identifier.
+ */
 
 #include <assert.h>
 #include <ctype.h>
@@ -36,6 +17,7 @@
 
 #include "sha256.h"
 #include "base_alloc_shim.h"
+#include "ncc_limits.h"
 
 #include "st.h"
 #include "types.h"
@@ -214,7 +196,7 @@ struct norm_node_t {
     tok_t       *leaf;
     norm_node_t *parent;
     char        *_private;
-    list_t      *kids;
+    ncc_list_t      *kids;
     int          num_kids;
 };
 
@@ -229,7 +211,7 @@ norm_alloc(nt_type_t nt_id)
 {
     norm_node_t *result = base_calloc(1, sizeof(norm_node_t));
     result->nt_id       = nt_id;
-    result->kids        = list_alloc(INITIAL_KIDS_CAPACITY);
+    result->kids        = ncc_list_alloc(INITIAL_KIDS_CAPACITY);
     result->num_kids    = 0;
 
     return result;
@@ -243,7 +225,7 @@ add_sub(norm_node_t *parent, norm_node_t *kid)
     // Grow the list if needed
     if (parent->num_kids >= parent->kids->nitems) {
         int     new_cap  = parent->kids->nitems * 2;
-        list_t *new_kids = list_alloc(new_cap);
+        ncc_list_t *new_kids = ncc_list_alloc(new_cap);
         for (int i = 0; i < parent->num_kids; i++) {
             new_kids->items[i] = parent->kids->items[i];
         }
@@ -427,7 +409,7 @@ collapse_lists(norm_node_t *n)
         return;
     }
 
-    int           cap = 64;
+    int           cap = NCC_CAP_LARGE;
     int           top = 0;
     norm_frame_t *stk = base_alloc(cap * sizeof(norm_frame_t));
     if (!stk) {
@@ -528,7 +510,7 @@ filter_type_elements(norm_node_t *n)
         return;
     }
 
-    int           cap = 64;
+    int           cap = NCC_CAP_LARGE;
     int           top = 0;
     norm_frame_t *stk = base_alloc(cap * sizeof(norm_frame_t));
     if (!stk) {
@@ -622,7 +604,7 @@ collapse_filtered_tree(norm_node_t *n)
         return nullptr;
     }
 
-    int               cap = 64;
+    int               cap = NCC_CAP_LARGE;
     int               top = 0;
     collapse_frame_t *stk = base_alloc(cap * sizeof(collapse_frame_t));
     if (!stk) {
@@ -750,7 +732,7 @@ normalize_lists(norm_node_t *root)
     }
 
     // Pre-order iterative: sort at each node, then push children.
-    int           cap = 64;
+    int           cap = NCC_CAP_LARGE;
     int           top = 0;
     norm_node_t **stk = base_alloc(cap * sizeof(norm_node_t *));
     if (!stk) {
@@ -969,7 +951,7 @@ cache_encodings(norm_node_t *root, int so_far)
         return so_far;
     }
 
-    int           cap = 64;
+    int           cap = NCC_CAP_LARGE;
     int           top = 0;
     norm_node_t **stk = base_alloc(cap * sizeof(norm_node_t *));
     if (!stk) {
@@ -1006,7 +988,7 @@ populate_id(norm_node_t *root, char *p)
         return p;
     }
 
-    int           cap = 64;
+    int           cap = NCC_CAP_LARGE;
     int           top = 0;
     norm_node_t **stk = base_alloc(cap * sizeof(norm_node_t *));
     if (!stk) {
@@ -1017,8 +999,8 @@ populate_id(norm_node_t *root, char *p)
 
     while (top > 0) {
         norm_node_t *n = stk[--top];
-        int          l = strlen(n->_private);
-        strcpy(p, n->_private);
+        int l = strlen(n->_private);
+        memcpy(p, n->_private, l);
         p += l;
 
         for (int i = n->num_kids - 1; i >= 0; i--) {
@@ -1153,8 +1135,9 @@ emit_leaf_to_type_string(norm_node_t *n, char *start, char *p)
         }
     }
 
-    strcpy(p, n->value);
-    p += strlen(n->value);
+    int vlen = strlen(n->value);
+    memcpy(p, n->value, vlen);
+    p += vlen;
 
     switch (n->value[0]) {
     case ',':
@@ -1190,7 +1173,7 @@ node_to_type_string(norm_node_t *root, char *start, char *p)
         return p;
     }
 
-    int           cap = 64;
+    int           cap = NCC_CAP_LARGE;
     int           top = 0;
     norm_node_t **stk = base_alloc(cap * sizeof(norm_node_t *));
     if (!stk) {
@@ -1231,7 +1214,7 @@ approximate_output_len(norm_node_t *root)
     }
 
     int           result = 0;
-    int           cap    = 64;
+    int           cap    = NCC_CAP_LARGE;
     int           top    = 0;
     norm_node_t **stk    = base_alloc(cap * sizeof(norm_node_t *));
     if (!stk) {

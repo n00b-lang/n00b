@@ -8,8 +8,6 @@
 #pragma once
 
 #include <stdint.h>
-#include <stdbool.h>
-
 // ============================================================================
 // Platform detection
 // ============================================================================
@@ -18,7 +16,7 @@
 #define BASE_PLATFORM_WINDOWS 1  /**< Defined when targeting Windows. */
 #elif defined(__APPLE__) && defined(__MACH__)
 #define BASE_PLATFORM_MACOS   1  /**< Defined when targeting macOS. */
-#elif defined(__linux__)
+#elifdef __linux__
 #define BASE_PLATFORM_LINUX   1  /**< Defined when targeting Linux. */
 #else
 #error "Unsupported platform"
@@ -65,7 +63,7 @@ typedef DWORD base_tls_key_t;
  * @brief Retrieve the value stored in a TLS slot.
  *
  * @param key  TLS key created by the platform TLS API.
- * @return Pointer to the thread-local value, or @c NULL if not set.
+ * @return Pointer to the thread-local value, or @c nullptr if not set.
  */
 static inline void *
 base_tls_get(base_tls_key_t key)
@@ -173,7 +171,7 @@ typedef pthread_key_t base_tls_key_t;
  * @brief Retrieve the value stored in a TLS slot.
  *
  * @param key  TLS key created via @c pthread_key_create.
- * @return Pointer to the thread-local value, or @c NULL if not set.
+ * @return Pointer to the thread-local value, or @c nullptr if not set.
  */
 static inline void *
 base_tls_get(base_tls_key_t key)

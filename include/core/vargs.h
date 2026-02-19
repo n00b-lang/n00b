@@ -94,7 +94,7 @@ n00b_remaining_vargs(n00b_vargs_t *va_ctx)
 /** @brief Get the next variadic argument, advancing the cursor.
  *  @param va_ctx  Vargs context.
  *  @param err     Optional error flag (set true on exhaustion or null ctx).
- *  @return The next argument as `void *`, or NULL on error.
+ *  @return The next argument as `void *`, or nullptr on error.
  */
 static inline void *
 _n00b_vargs_next(n00b_vargs_t *va_ctx, bool *err)
@@ -134,7 +134,7 @@ n00b_vargs_advance(n00b_vargs_t *va_ctx)
 /** @brief Peek at the current argument without advancing.
  *  @param va_ctx  Vargs context.
  *  @param err     Optional error flag.
- *  @return The current argument as `void *`, or NULL on error.
+ *  @return The current argument as `void *`, or nullptr on error.
  */
 static inline void *
 _n00b_vargs_peek(n00b_vargs_t *va_ctx, bool *err)
@@ -296,7 +296,7 @@ _n00b_vargs_va_populate(n00b_vargs_t *va_ctx,
                         ...)
 {
     va_list ap;
-    va_start(ap, nargs);
+    va_start(ap);
     _n00b_vargs_va_list_populate(va_ctx, nargs, ap);
     va_end(ap);
     return va_ctx;

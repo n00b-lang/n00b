@@ -4,7 +4,7 @@
 
 TEST(test_skeleton)
 {
-    n00b_string_t skel = n00b_unicode_skeleton(STR("hello"), .allocator = NULL);
+    n00b_string_t skel = n00b_unicode_skeleton(STR("hello"), .allocator = nullptr);
     ASSERT(skel.data != nullptr);
     ASSERT(skel.u8_bytes > 0);
 }

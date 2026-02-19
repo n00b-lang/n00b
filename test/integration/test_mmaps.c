@@ -21,7 +21,7 @@ test_mmap_basic(void)
     assert(n00b_result_is_ok(r));
 
     void *addr = n00b_result_get(r);
-    assert(addr != NULL);
+    assert(addr != nullptr);
 
     // Must be page-aligned
     long page_size = sysconf(_SC_PAGESIZE);
@@ -47,7 +47,7 @@ test_lookup(void)
     assert(n00b_option_is_set(opt));
 
     n00b_mmap_info_t *info = n00b_option_get(opt);
-    assert(info != NULL);
+    assert(info != nullptr);
     assert((void *)info->start == addr || info->start <= (uint64_t)addr);
 
     n00b_munmap(addr);
@@ -121,7 +121,7 @@ test_register_range(void)
 
     n00b_mmap_info_t *range_info = n00b_mmap_register_range(sub_start, sub_end,
                                                              n00b_mmap_internal);
-    assert(range_info != NULL);
+    assert(range_info != nullptr);
 
     n00b_munmap(addr);
     printf("  [PASS] register_range\n");
@@ -162,13 +162,13 @@ test_allocator_lookup(void)
 {
     // Allocate through the default allocator
     uint64_t *p = n00b_alloc(uint64_t);
-    assert(p != NULL);
+    assert(p != nullptr);
 
     n00b_allocator_opt_t opt = n00b_mem_get_allocator(p);
     assert(n00b_option_is_set(opt));
 
     n00b_allocator_t *alloc = n00b_option_get(opt);
-    assert(alloc != NULL);
+    assert(alloc != nullptr);
 
     n00b_free(p);
     printf("  [PASS] allocator_lookup\n");
