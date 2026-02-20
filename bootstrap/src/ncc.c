@@ -14,6 +14,7 @@
 #include <unistd.h>
 #include <assert.h>
 #include <errno.h>
+#include <sys/wait.h>
 
 #include "ncc_limits.h"
 
@@ -43,9 +44,19 @@ static void print_ncc_help(void);
 static inline void
 signal_setup(void)
 {
-    static char      altstack[SIGSTKSZ];
-    static stack_t   ss = {.ss_sp = altstack, .ss_size = SIGSTKSZ};
-    struct sigaction sa = {.sa_handler = crash_handler, .sa_flags = SA_ONSTACK};
+    static char        *altstack = NULL;
+    static const size_t alt_sz   = 64 * 1024;
+    static stack_t      ss;
+    struct sigaction    sa = {.sa_handler = crash_handler, .sa_flags = SA_ONSTACK};
+
+    if (altstack == NULL) {
+        altstack = malloc(alt_sz);
+        if (altstack == NULL) {
+            abort();
+        }
+        ss = (stack_t){.ss_sp = altstack, .ss_size = alt_sz};
+    }
+
     sigaltstack(&ss, NULL);
     sigaction(SIGSEGV, &sa, NULL);
     sigaction(SIGBUS, &sa, NULL);
@@ -243,9 +254,7 @@ main(int argc, char *argv[], [[maybe_unused]] char *envp[])
     }
 
     if (ctx.has_E && ctx.has_c) {
-        fprintf(stderr,
-                "%s:warning: passthrough: -E and -c both invoked.\n",
-                argv[0]);
+        fprintf(stderr, "%s:warning: passthrough: -E and -c both invoked.\n", argv[0]);
         compiler_passthrough(&ctx);
     }
 

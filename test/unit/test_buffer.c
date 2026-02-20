@@ -15,7 +15,7 @@ static void
 test_construction(void)
 {
     // Empty buffer.
-    n00b_buffer_t *empty = n00b_buffer_empty();
+    n00b_buffer_t *empty = n00b_buffer_from_bytes(nullptr, 0);
     assert(empty != nullptr);
     assert(n00b_buffer_len(empty) == 0);
     assert(empty->alloc_len >= N00B_EMPTY_BUFFER_ALLOC);
@@ -29,8 +29,8 @@ test_construction(void)
     n00b_buffer_free(sized);
 
     // From bytes.
-    char data[] = "hello";
-    n00b_buffer_t *from = n00b_buffer_from_bytes(data, 5);
+    char           data[] = "hello";
+    n00b_buffer_t *from   = n00b_buffer_from_bytes(data, 5);
     assert(n00b_buffer_len(from) == 5);
     assert(memcmp(from->data, "hello", 5) == 0);
     n00b_buffer_free(from);
@@ -49,7 +49,7 @@ test_len(void)
     assert(n00b_buffer_len(buf) == 6);
     n00b_buffer_free(buf);
 
-    n00b_buffer_t *empty = n00b_buffer_empty();
+    n00b_buffer_t *empty = n00b_buffer_from_bytes(nullptr, 0);
     assert(n00b_buffer_len(empty) == 0);
     n00b_buffer_free(empty);
 
@@ -190,7 +190,7 @@ test_get_set_slice(void)
     n00b_buffer_free(s);
 
     // Set slice: replace "bcd" with "XY"
-    n00b_buffer_t *repl = n00b_buffer_from_bytes("XY", 2);
+    n00b_buffer_t *repl   = n00b_buffer_from_bytes("XY", 2);
     n00b_result_t(bool) r = n00b_buffer_set_slice(buf, 1, 4, repl);
     assert(n00b_result_is_ok(r));
     // Now buf = "aXYef" (5 bytes)
@@ -219,20 +219,20 @@ test_find(void)
 
     // Not found.
     n00b_buffer_t *missing = n00b_buffer_from_bytes("xyz", 3);
-    r = n00b_buffer_find(buf, missing);
+    r                      = n00b_buffer_find(buf, missing);
     assert(!n00b_option_is_set(r));
     n00b_buffer_free(missing);
 
     // With start offset.
     n00b_buffer_t *hello = n00b_buffer_from_bytes("hello", 5);
-    r = n00b_buffer_find(buf, hello, .start = n00b_option_set(size_t, 1));
+    r                    = n00b_buffer_find(buf, hello, .start = n00b_option_set(size_t, 1));
     assert(n00b_option_is_set(r));
     assert(n00b_option_get(r) == 12);
     n00b_buffer_free(hello);
 
     // Empty sub always found at start.
-    n00b_buffer_t *empty = n00b_buffer_empty();
-    r = n00b_buffer_find(buf, empty);
+    n00b_buffer_t *empty = n00b_buffer_from_bytes(nullptr, 0);
+    r                    = n00b_buffer_find(buf, empty);
     assert(n00b_option_is_set(r));
     assert(n00b_option_get(r) == 0);
     n00b_buffer_free(empty);
@@ -306,8 +306,8 @@ test_hex_init(void)
 static void
 test_to_hex_str(void)
 {
-    char bytes[] = { (char)0xde, (char)0xad, (char)0xbe, (char)0xef };
-    n00b_buffer_t *buf = n00b_buffer_from_bytes(bytes, 4);
+    char           bytes[] = {(char)0xde, (char)0xad, (char)0xbe, (char)0xef};
+    n00b_buffer_t *buf     = n00b_buffer_from_bytes(bytes, 4);
 
     n00b_string_t hex = n00b_buffer_to_hex_str(buf);
     assert(hex.u8_bytes == 8);
@@ -327,7 +327,7 @@ static void
 test_to_string(void)
 {
     n00b_buffer_t *buf = n00b_buffer_from_bytes("test string", 11);
-    n00b_string_t s = n00b_buffer_to_string(buf);
+    n00b_string_t  s   = n00b_buffer_to_string(buf);
 
     assert(s.u8_bytes == 11);
     assert(memcmp(s.data, "test string", 11) == 0);
@@ -377,13 +377,13 @@ test_from_codepoint(void)
 static void
 test_join(void)
 {
-    n00b_buffer_t *a = n00b_buffer_from_bytes("one", 3);
-    n00b_buffer_t *b = n00b_buffer_from_bytes("two", 3);
-    n00b_buffer_t *c = n00b_buffer_from_bytes("three", 5);
+    n00b_buffer_t *a   = n00b_buffer_from_bytes("one", 3);
+    n00b_buffer_t *b   = n00b_buffer_from_bytes("two", 3);
+    n00b_buffer_t *c   = n00b_buffer_from_bytes("three", 5);
     n00b_buffer_t *sep = n00b_buffer_from_bytes(",", 1);
 
-    n00b_buffer_t *items[] = { a, b, c };
-    n00b_buffer_t *result = n00b_buffer_join(items, 3, sep);
+    n00b_buffer_t *items[] = {a, b, c};
+    n00b_buffer_t *result  = n00b_buffer_join(items, 3, sep);
 
     assert(n00b_buffer_len(result) == 13); // "one,two,three"
     assert(memcmp(result->data, "one,two,three", 13) == 0);

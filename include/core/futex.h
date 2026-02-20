@@ -11,6 +11,7 @@
 // IWYU pragma: no_include <sys/errno.h>
 
 #include <errno.h> // IWYU pragma: keep
+#include <limits.h>
 #include <time.h>
 #include "n00b.h"
 #include "core/atomic.h"

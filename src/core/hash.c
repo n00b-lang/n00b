@@ -1,6 +1,7 @@
 // IWYU pragma: no_include <sys/_endian.h>
 
 #define XXH_INLINE_ALL
+#define XXH_NO_XXH3
 #define N00B_HASH_INTERNAL
 
 #include "n00b.h"
@@ -20,14 +21,12 @@
 #include "vendor/xxhash.h"
 
 static inline n00b_uint128_t
-n00b_xxh_convert(XXH128_hash_t hv)
+n00b_xxh64_pair(const void *data, size_t len)
 {
-    union {
-        XXH128_hash_t  xxh;
-        n00b_uint128_t n00b;
-    } u = {.xxh = hv};
+    uint64_t low  = XXH64(data, len, 0);
+    uint64_t high = XXH64(data, len, 0x9E3779B185EBCA87ULL);
 
-    return u.n00b;
+    return ((n00b_uint128_t)high << 64) | (n00b_uint128_t)low;
 }
 
 n00b_uint128_t
@@ -87,7 +86,7 @@ n00b_hash_word(void *value)
 {
     n00b_word_t w = (n00b_word_t)value;
 
-    return n00b_xxh_convert(XXH3_128bits(&w, sizeof(n00b_word_t)));
+    return n00b_xxh64_pair(&w, sizeof(n00b_word_t));
 }
 
 n00b_uint128_t
@@ -95,7 +94,7 @@ n00b_hash_cstring(void *value)
 {
     char *s = (char *)value;
 
-    return n00b_xxh_convert(XXH3_128bits(s, strlen(s)));
+    return n00b_xxh64_pair(s, strlen(s));
 }
 
 n00b_uint128_t

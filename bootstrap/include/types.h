@@ -248,7 +248,12 @@ struct tnode_t {
 static inline tnode_t *
 tnode_get_kid(tnode_t *node, int idx)
 {
-    if (!node || !node->kids || idx < 0 || idx >= node->num_kids) {
+    if (!node || !node->kids || idx < 0) {
+        return nullptr;
+    }
+    // num_kids is intended to mirror kids->nitems, but some transform paths
+    // can transiently desynchronize them. Guard on the backing list bounds.
+    if (idx >= node->kids->nitems || idx >= node->num_kids) {
         return nullptr;
     }
     return (tnode_t *)node->kids->items[idx];
@@ -447,27 +452,25 @@ tnode_last_tok(tnode_t *node)
 // separated by spaces.  Handles both source and synthetic tokens
 // via tok_text_ptr().
 static inline ncc_buf_t *
-_collect_tnode_text(tnode_t *node, ncc_buf_t *input, ncc_buf_t *acc,
-                    bool *need_space)
+_collect_tnode_text(tnode_t *node, ncc_buf_t *input, ncc_buf_t *acc, bool *need_space)
 {
     if (!node) {
         return acc;
     }
     if (node->tptr) {
-        int   tlen;
+        int         tlen;
         const char *txt = tok_text_ptr(input, node->tptr, &tlen);
         if (tlen > 0) {
             if (*need_space) {
                 acc = ncc_buf_concat(acc, " ", 1);
             }
-            acc          = ncc_buf_concat(acc, (char *)txt, tlen);
-            *need_space  = true;
+            acc         = ncc_buf_concat(acc, (char *)txt, tlen);
+            *need_space = true;
         }
         return acc;
     }
     for (int i = 0; i < node->num_kids; i++) {
-        acc = _collect_tnode_text(tnode_get_kid(node, i), input, acc,
-                                 need_space);
+        acc = _collect_tnode_text(tnode_get_kid(node, i), input, acc, need_space);
     }
     return acc;
 }
@@ -488,9 +491,9 @@ normalize_type_node(tnode_t *node, ncc_buf_t *input)
     // use the offset-based fast path because synthetic tokens don't
     // reference the source buffer.  Walk the subtree instead.
     if (first->replacement || last->replacement) {
-        ncc_buf_t *acc  = ncc_buf_alloc(0);
-        bool need_space  = false;
-        acc              = _collect_tnode_text(node, input, acc, &need_space);
+        ncc_buf_t *acc        = ncc_buf_alloc(0);
+        bool       need_space = false;
+        acc                   = _collect_tnode_text(node, input, acc, &need_space);
 
         // Null-terminate for get_munged_identifier.
         char *type_str = base_alloc(acc->len + 1);
@@ -566,8 +569,8 @@ normalize_type_node(tnode_t *node, ncc_buf_t *input)
 /** @brief Arena chunk containing parse nodes */
 typedef struct parse_arena_chunk_t parse_arena_chunk_t;
 struct parse_arena_chunk_t {
-    parse_arena_chunk_t *next;                          /**< Next chunk in list */
-    int                  used;                          /**< Number of nodes used in this chunk */
+    parse_arena_chunk_t *next; /**< Next chunk in list */
+    int                  used; /**< Number of nodes used in this chunk */
     tnode_t              nodes[PARSE_ARENA_CHUNK_SIZE]; /**< Node storage */
 };
 

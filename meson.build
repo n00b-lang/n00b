@@ -125,7 +125,10 @@ if conf_gc_stats
   ]
 endif
 
-if not cc.compiles(posix_check)
+if target_os == 'linux'
+  # Linux sources rely on GNU and modern POSIX APIs (e.g. syscall, dl_iterate_phdr).
+  c_args = c_args + ['-D_GNU_SOURCE', '-D_POSIX_C_SOURCE=200809L']
+elif not cc.compiles(posix_check)
   c_args = c_args + ['-DPOSIX_C_SOURCE=200112L']
 endif
 
