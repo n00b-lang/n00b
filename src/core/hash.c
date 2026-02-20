@@ -6,11 +6,21 @@
 
 #include "n00b.h"
 
-#if defined __linux__
-#include <byteswap.h>
-#define n00b_bswap64(x) bswap_64(x)
-#else
-#define n00b_bswap64(x) htonll(x)
+#if defined(__has_builtin)
+#if __has_builtin(__builtin_bswap64)
+#define n00b_bswap64(x) __builtin_bswap64((uint64_t)(x))
+#endif
+#endif
+
+#if !defined(n00b_bswap64)
+static inline uint64_t
+n00b_bswap64(uint64_t x)
+{
+    return ((x & 0x00000000000000FFULL) << 56) | ((x & 0x000000000000FF00ULL) << 40)
+         | ((x & 0x0000000000FF0000ULL) << 24) | ((x & 0x00000000FF000000ULL) << 8)
+         | ((x & 0x000000FF00000000ULL) >> 8) | ((x & 0x0000FF0000000000ULL) >> 24)
+         | ((x & 0x00FF000000000000ULL) >> 40) | ((x & 0xFF00000000000000ULL) >> 56);
+}
 #endif
 
 #include <string.h> // IWYU pragma: keep ; for strlen

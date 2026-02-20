@@ -25,6 +25,36 @@
 extern char *ncc_find_compiler(void);
 
 /**
+ * @brief Execute the underlying compiler with corrected argv[0].
+ *
+ * Some compiler drivers (notably GCC cross toolchains) rely on argv[0]
+ * to locate internal binaries. This helper forces argv[0] to the actual
+ * compiler path before exec.
+ *
+ * @param compiler Path to compiler binary.
+ * @param argv     Mutable argv vector for execvp.
+ */
+extern void ncc_exec_compiler(char *compiler, char **argv);
+
+/**
+ * @brief Whether the backend compiler supports `-fno-blocks`.
+ *
+ * `-fno-blocks` is Clang-specific; GCC rejects it.
+ *
+ * @param compiler Path or name of compiler.
+ * @return true when the compiler appears to be Clang.
+ */
+extern bool ncc_compiler_supports_no_blocks(char *compiler);
+
+/**
+ * @brief Return the default C language-standard flag for the backend compiler.
+ *
+ * @param compiler Path or name of compiler.
+ * @return Compiler flag string (for example "-std=c23" or "-std=c2x").
+ */
+extern char *ncc_default_c_std_flag(char *compiler);
+
+/**
  * @brief Invoke the C preprocessor on the given input.
  *
  * Forks the underlying compiler with -E, feeds it the input on stdin,

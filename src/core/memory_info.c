@@ -8,6 +8,8 @@
 #include <fcntl.h>
 #include <errno.h>
 
+#include "n00b_build_config.h"
+
 #include "n00b.h"
 #include "core/mmaps.h"
 #include "core/alloc_mdata.h"
@@ -47,7 +49,7 @@ extern void n00b_debug_memory_info(bool);
 
 #define MINCORE_TEST_BIT 1
 
-#if defined(__linux__)
+#if N00B_HAVE_DL_ITERATE_PHDR
 #include <link.h>
 
 static int
@@ -140,7 +142,12 @@ n00b_load_static_ranges(void)
     _dyld_register_func_for_add_image(n00b_on_lib_load);
 }
 #else
-#error "Unsupported OS"
+void
+n00b_load_static_ranges(void)
+{
+    // No loader callback capability detected; pointer classification
+    // falls back to on-demand kernel page checks.
+}
 #endif
 
 static n00b_mmap_opt_t
@@ -183,7 +190,7 @@ n00b_check_for_unmanaged_map(const void *addr)
     // expose the ability to manually re-run (call
     // n00b_reload_static_ranges() yourself).
 
-#if defined(__linux__) && defined(N00B_ALWAYS_RECHECK_STATIC_POINTERS)
+#if N00B_HAVE_DL_ITERATE_PHDR && defined(N00B_ALWAYS_RECHECK_STATIC_POINTERS)
     result = n00b_check_static_maps(addr);
     if (n00b_option_is_set(result)) {
         return result;

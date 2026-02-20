@@ -8,13 +8,37 @@
  */
 #pragma once
 
+#include <stddef.h>
 #include <stdint.h>
+
+#if defined(__has_include)
+#if __has_include("n00b_build_config.h")
+#include "n00b_build_config.h"
+#endif
+#endif
+
+#if !defined(N00B_HAVE_GETRANDOM)
+#if defined(__linux__)
+#define N00B_HAVE_GETRANDOM 1
+#else
+#define N00B_HAVE_GETRANDOM 0
+#endif
+#endif
+
+#if !defined(N00B_HAVE_ARC4RANDOM_BUF)
+#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__)  \
+    || defined(__DragonFly__)
+#define N00B_HAVE_ARC4RANDOM_BUF 1
+#else
+#define N00B_HAVE_ARC4RANDOM_BUF 0
+#endif
+#endif
 
 // On Linux we are best off using the low-level interface to the
 // system PRNG.  On other Unix systems, we fall back to
 // `arc4random_buf()` which is widely available.
 
-#if defined(__linux__)
+#if N00B_HAVE_GETRANDOM
 #include <sys/random.h>
 #include <stdlib.h> // for abort
 
@@ -25,7 +49,7 @@ n00b_random_bytes(char *bufptr, size_t len)
         abort();
     }
 }
-#elif defined(__APPLE__) || defined(BSD)
+#elif N00B_HAVE_ARC4RANDOM_BUF
 
 // IWYU Picks this up on the mac, but isn't wanted.
 // IWYU pragma: no_include <_stdlib.h>
@@ -33,7 +57,7 @@ n00b_random_bytes(char *bufptr, size_t len)
 #include <stdlib.h> // IWYU pragma: keep
 #define n00b_random_bytes(bufptr, len) arc4random_buf(bufptr, len)
 #else
-#error "Unsupported platform."
+#error "No supported random source available."
 #endif
 
 // clang-format off

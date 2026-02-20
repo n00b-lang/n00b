@@ -22,8 +22,27 @@
 #include <sys/mman.h>
 #include <assert.h>
 
+#if defined(__has_include)
+#if __has_include("n00b_build_config.h")
+#include "n00b_build_config.h"
+#endif
+#endif
+
 #define N00B_MPROT (PROT_READ | PROT_WRITE)
-#define N00B_MFLAG (MAP_PRIVATE | MAP_ANON)
+
+#if defined(N00B_HAVE_MAP_ANONYMOUS) && N00B_HAVE_MAP_ANONYMOUS
+#define N00B_MAP_ANON_FLAG MAP_ANONYMOUS
+#elif defined(N00B_HAVE_MAP_ANON) && N00B_HAVE_MAP_ANON
+#define N00B_MAP_ANON_FLAG MAP_ANON
+#elif defined(MAP_ANONYMOUS)
+#define N00B_MAP_ANON_FLAG MAP_ANONYMOUS
+#elif defined(MAP_ANON)
+#define N00B_MAP_ANON_FLAG MAP_ANON
+#else
+#error "No anonymous mmap flag was detected."
+#endif
+
+#define N00B_MFLAG (MAP_PRIVATE | N00B_MAP_ANON_FLAG)
 
 enum n00b_mmap_perms_t : uint8_t {
     n00b_mmap_perms_data_not_addr = 0,

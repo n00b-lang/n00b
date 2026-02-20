@@ -3,6 +3,8 @@
 #include <sys/resource.h>
 #include <unistd.h>
 
+#include "n00b_build_config.h"
+
 #define __N00B_THREAD_INTERNAL
 
 #include "n00b.h"
@@ -167,23 +169,23 @@ n00b_capture_stack_base(n00b_thread_t *thread, n00b_runtime_t *runtime)
         lowest  = highest - size;
     }
     else {
-#if defined(__linux__)
+#if N00B_HAVE_PTHREAD_GETATTR_NP
         pthread_getattr_np(thread->pthread_id, &thread->pthread_attrs);
         // Pthreads reports the lowest address, not the highest.
         pthread_attr_getstack(&thread->pthread_attrs, (void **)&lowest, &size);
         highest = lowest + size;
-#elifdef __APPLE__
+#elif N00B_HAVE_PTHREAD_GET_STACKADDR_NP && N00B_HAVE_PTHREAD_GET_STACKSIZE_NP
         pthread_t ptid = pthread_self();
         highest        = pthread_get_stackaddr_np(ptid);
         size           = pthread_get_stacksize_np(ptid);
         lowest         = highest - size;
-#elifdef __FreeBSD__
+#elif N00B_HAVE_PTHREAD_ATTR_GET_NP
         pthread_attr_get_np(pthread_self(), &thread->pthread_attrs);
         pthread_attr_getstackaddr(&thread->pthread_attrs, (void **)&lowest);
         pthread_attr_getstacksize(&thread->pthread_attrs, &size);
         highest = lowest + size;
 #else
-#error "Don't know how to find pthread stack bounds on this platform"
+#error "No supported pthread stack-bound API was detected."
 #endif
     }
 

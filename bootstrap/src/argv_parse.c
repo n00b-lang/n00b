@@ -34,8 +34,7 @@ extract_extensions(char *str)
 
     if (*p != '.') {
 err:
-        fprintf(stderr,
-                "Extension lists must be dot-separated alpha-numeric values.\n");
+        fprintf(stderr, "Extension lists must be dot-separated alpha-numeric values.\n");
         exit(-1);
     }
 
@@ -287,10 +286,10 @@ ncc_argv_parse(ncc_argv_t *ctx, int argc, char **argv)
         }
 
         if (strncmp(arg, "--ncc-constexpr-include=", 24) == 0) {
-            const char *header     = arg + 24;
-            ctx->constexpr_headers = base_realloc(
-                ctx->constexpr_headers,
-                (ctx->num_constexpr_headers + 1) * sizeof(const char *));
+            const char *header = arg + 24;
+            ctx->constexpr_headers
+                = base_realloc(ctx->constexpr_headers,
+                               (ctx->num_constexpr_headers + 1) * sizeof(const char *));
             ctx->constexpr_headers[ctx->num_constexpr_headers++] = header;
             for (int k = i; k < argc - 1; k++) {
                 argv[k] = argv[k + 1];
@@ -344,12 +343,7 @@ ncc_argv_parse(ncc_argv_t *ctx, int argc, char **argv)
 
         {
             bool  matched;
-            char *value = parse_flag_value(arg,
-                                           "-MF",
-                                           argc,
-                                           &i,
-                                           argv,
-                                           &matched);
+            char *value = parse_flag_value(arg, "-MF", argc, &i, argv, &matched);
             if (matched) {
                 ctx->has_dep_flags = true;
                 ctx->dep_file      = value;
@@ -359,12 +353,7 @@ ncc_argv_parse(ncc_argv_t *ctx, int argc, char **argv)
 
         {
             bool  matched;
-            char *value = parse_flag_value(arg,
-                                           "-MQ",
-                                           argc,
-                                           &i,
-                                           argv,
-                                           &matched);
+            char *value = parse_flag_value(arg, "-MQ", argc, &i, argv, &matched);
             if (matched) {
                 ctx->has_dep_flags = true;
                 ctx->dep_target_q  = value;
@@ -374,12 +363,7 @@ ncc_argv_parse(ncc_argv_t *ctx, int argc, char **argv)
 
         {
             bool  matched;
-            char *value = parse_flag_value(arg,
-                                           "-MT",
-                                           argc,
-                                           &i,
-                                           argv,
-                                           &matched);
+            char *value = parse_flag_value(arg, "-MT", argc, &i, argv, &matched);
             if (matched) {
                 ctx->has_dep_flags = true;
                 ctx->dep_target    = value;
@@ -391,12 +375,7 @@ ncc_argv_parse(ncc_argv_t *ctx, int argc, char **argv)
         {
             bool  matched;
             int   saved_i = i;
-            char *value   = parse_flag_value(arg,
-                                             "-o",
-                                             argc,
-                                             &i,
-                                             argv,
-                                             &matched);
+            char *value   = parse_flag_value(arg, "-o", argc, &i, argv, &matched);
             if (matched) {
                 ctx->flag_o_index         = saved_i;
                 ctx->filename_in_same_arg = (i == saved_i) && value;
@@ -407,12 +386,7 @@ ncc_argv_parse(ncc_argv_t *ctx, int argc, char **argv)
         // Handle -x flag (language)
         {
             bool  matched;
-            char *value = parse_flag_value(arg,
-                                           "-x",
-                                           argc,
-                                           &i,
-                                           argv,
-                                           &matched);
+            char *value = parse_flag_value(arg, "-x", argc, &i, argv, &matched);
             if (matched) {
                 ctx->language = value;
                 continue;
@@ -422,24 +396,13 @@ ncc_argv_parse(ncc_argv_t *ctx, int argc, char **argv)
         // Handle -std flag (C standard version)
         {
             bool  matched;
-            char *value = parse_flag_value(arg,
-                                           "-std=",
-                                           argc,
-                                           &i,
-                                           argv,
-                                           &matched);
+            char *value = parse_flag_value(arg, "-std=", argc, &i, argv, &matched);
             if (!matched) {
-                value = parse_flag_value(arg,
-                                         "-std",
-                                         argc,
-                                         &i,
-                                         argv,
-                                         &matched);
+                value = parse_flag_value(arg, "-std", argc, &i, argv, &matched);
             }
             if (matched && value) {
-                if (!strcmp(value, "c23")
-                    || !strcmp(value, "gnu23")
-                    || !strcmp(value, "c2y")
+                if (!strcmp(value, "c23") || !strcmp(value, "gnu23") || !strcmp(value, "c2x")
+                    || !strcmp(value, "gnu2x") || !strcmp(value, "c2y")
                     || !strcmp(value, "gnu2y")) {
                     ctx->has_c23 = true;
                 }

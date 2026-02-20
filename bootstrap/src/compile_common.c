@@ -85,3 +85,45 @@ ncc_find_compiler(void)
 
     return result;
 }
+
+void
+ncc_exec_compiler(char *compiler, char **argv)
+{
+    if (!compiler || !argv) {
+        errno = EINVAL;
+        return;
+    }
+
+    argv[0] = compiler;
+    execvp(compiler, argv);
+}
+
+bool
+ncc_compiler_supports_no_blocks(char *compiler)
+{
+    if (!compiler) {
+        return false;
+    }
+
+    const char *base = strrchr(compiler, '/');
+    base             = base ? base + 1 : compiler;
+
+    return strstr(base, "clang") != nullptr;
+}
+
+char *
+ncc_default_c_std_flag(char *compiler)
+{
+    if (!compiler) {
+        return "-std=c23";
+    }
+
+    const char *base = strrchr(compiler, '/');
+    base             = base ? base + 1 : compiler;
+
+    if (strstr(base, "gcc") != nullptr || strstr(base, "g++") != nullptr) {
+        return "-std=c2x";
+    }
+
+    return "-std=c23";
+}

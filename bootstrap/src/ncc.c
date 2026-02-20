@@ -67,15 +67,17 @@ compiler_passthrough(ncc_argv_t *ctx)
 {
     char *exe = ncc_find_compiler();
 
-    execvp(exe, ctx->argv);
+    ncc_exec_compiler(exe, ctx->argv);
     abort();
 }
 
 ncc_buf_t *
 ncc_invoke_preprocessor(ncc_argv_t *ctx, char *compiler, ncc_buf_t *input)
 {
-    // We need space for original args + "-E" + "-fno-blocks" + null terminator
-    int   nargs = ctx->argc + 3;
+    bool use_no_blocks = ncc_compiler_supports_no_blocks(compiler);
+
+    // We need space for original args + "-E" + optional "-fno-blocks" + null terminator
+    int   nargs = ctx->argc + 2 + (use_no_blocks ? 1 : 0);
     char *preproc_argv[nargs + 1];
 
     for (int i = 0; i < nargs + 1; i++) {
@@ -95,8 +97,10 @@ ncc_invoke_preprocessor(ncc_argv_t *ctx, char *compiler, ncc_buf_t *input)
         preproc_argv[tail++] = (char *)"-E";
     }
 
-    // Add -fno-blocks to disable block syntax in headers
-    preproc_argv[tail++] = "-fno-blocks";
+    // Add -fno-blocks to disable block syntax in headers (clang only)
+    if (use_no_blocks) {
+        preproc_argv[tail++] = "-fno-blocks";
+    }
 
     int outspec_index = ctx->source_indices[0];
 
@@ -170,7 +174,7 @@ sys_err:
         dup2(pipe0[0], STDIN_FILENO);
         close(pipe0[0]);
         dup2(pipe1[1], STDOUT_FILENO);
-        execvp(compiler, preproc_argv);
+        ncc_exec_compiler(compiler, preproc_argv);
         goto sys_err;
     }
     close(pipe0[0]);
