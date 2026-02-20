@@ -77,7 +77,7 @@ typedef struct {
     if (!t) {                                                                                  \
         exit(-1);                                                                              \
     }                                                                                          \
-    if (n00b_atomic_load(&n00b_get_runtime()->stw) != t->thread_id) {                          \
+    if (n00b_atomic_load(&n00b_get_runtime()->stw) != t->id_info.parts.id) {                    \
         ctx.jmp_target = nullptr;                                                              \
         if (!setjmp((void *)ctx.save_state)) {                                                 \
             n00b_capture_stack_top(n00b_thread_self());                                        \
@@ -94,7 +94,7 @@ typedef struct {
         if (!t) {                                                                              \
             exit(-1);                                                                          \
         }                                                                                      \
-        if (n00b_atomic_load(&n00b_get_runtime()->stw) != t->thread_id) {                      \
+        if (n00b_atomic_load(&n00b_get_runtime()->stw) != t->id_info.parts.id) {                      \
             ctx.jmp_target = &&n00b_jmp_label(__LINE__);                                       \
                                                                                                \
             _n00b_thread_resume(N00B_LOC_STRING());                                            \

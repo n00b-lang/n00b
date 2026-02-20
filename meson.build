@@ -226,6 +226,10 @@ n00b_core = [
     'src/core/interval_tree.c',
     'src/core/buffer.c',
     'src/core/string.c',
+    'src/core/lock_accounting.c',
+    'src/core/mutex.c',
+    'src/core/rwlock.c',
+    'src/core/condition.c',
 ]
 
 python3 = find_program('python3')
@@ -403,6 +407,24 @@ buffer_test = executable('test_buffer',
     kwargs: test_common_kwargs,
 )
 test('buffer', buffer_test, suite: 'unit')
+
+mutex_test = executable('test_mutex',
+    ['test/unit/test_mutex.c'],
+    kwargs: test_common_kwargs,
+)
+test('mutex', mutex_test, suite: 'unit')
+
+rwlock_test = executable('test_rwlock',
+    ['test/unit/test_rwlock.c'],
+    kwargs: test_common_kwargs,
+)
+test('rwlock', rwlock_test, suite: 'unit')
+
+condition_test = executable('test_condition',
+    ['test/unit/test_condition.c'],
+    kwargs: test_common_kwargs,
+)
+test('condition', condition_test, suite: 'unit')
 
 # ============================================================================
 # Render / layout tests

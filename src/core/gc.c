@@ -531,7 +531,7 @@ n00b_scan_thread_stacks(n00b_collect_t *ctx)
     n00b_runtime_t         *rt = n00b_get_runtime();
 
     for (volatile int i = 0; i < N00B_THREADS_MAX; i++) {
-        t = n00b_atomic_load(&rt->thread_list[i]);
+        t = n00b_atomic_load(&rt->threads[i].thread);
 
         if (!t) {
             continue;

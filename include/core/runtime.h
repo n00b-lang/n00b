@@ -16,6 +16,7 @@
 #include "n00b.h"
 #include "core/alloc_base.h"
 #include "core/rt_access.h"
+#include "core/thread.h"
 #include "core/array.h"
 #include "core/list.h"
 #include "core/option.h"
@@ -24,7 +25,6 @@
 typedef struct n00b_runtime_t n00b_runtime_t;
 
 n00b_array_decl(char *);
-n00b_array_decl(n00b_thread_t *);
 n00b_array_decl(uint32_t);
 
 n00b_list_decl(n00b_gc_root_t);
@@ -48,10 +48,9 @@ struct n00b_runtime_t {
     _Atomic bool                startup_complete;
     _Atomic(n00b_allocator_t *) default_allocator;
     n00b_arena_t               *default_arena; // GC'd arena (when using default allocator)
-    n00b_pool_t                 gc_root_pool;  // System pool for root list storage.
+    n00b_pool_t                 system_pool;   // System pool for root list & lock records.
     n00b_list_t(n00b_gc_root_t) gc_roots;      // User-registered GC roots.
-    _Atomic(n00b_thread_t *)    thread_list[N00B_THREADS_MAX];
-    uint32_t                    thread_generations[N00B_THREADS_MAX];
+    n00b_thread_record_t        threads[N00B_THREADS_MAX];
     n00b_base_allocator_t       slab_allocator;
     n00b_futex_t                stw;
     uint32_t                    stw_nesting;

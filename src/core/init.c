@@ -141,15 +141,16 @@ n00b_init(n00b_runtime_t *rt, int argc, char *argv[]) _kargs
     setup_slab_allocator(rt);
     n00b_mmaps_initialize(&rt->mmaps);
 
-    // Initialize the GC root pool and root list.  The pool is a
-    // system-level allocator (hidden from GC, no STW checks) used to
-    // back the root list so that the collector can read it safely.
-    n00b_pool_init(&rt->gc_root_pool,
+    // Initialize the system pool.  This is a system-level allocator
+    // (hidden from GC, no STW checks) used to back the root list and
+    // lock accounting records so that the collector and other threads
+    // can read them safely.
+    n00b_pool_init(&rt->system_pool,
                    .__system = true,
                    .hidden   = true,
-                   .name     = "gc_roots");
+                   .name     = "system_pool");
 
-    n00b_allocator_t *rpool = (n00b_allocator_t *)&rt->gc_root_pool;
+    n00b_allocator_t *rpool = (n00b_allocator_t *)&rt->system_pool;
     rt->gc_roots            = n00b_list_new(n00b_gc_root_t, rpool);
 
     setup_threads(rt, max_threads);

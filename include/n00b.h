@@ -104,6 +104,7 @@ typedef struct n00b_dict_raw_item_t          n00b_dict_raw_item_t;
 typedef struct n00b_buffer_t                 n00b_buffer_t;
 typedef struct n00b_string_t                 n00b_string_t;
 typedef struct n00b_thread_t                 n00b_thread_t;
+typedef struct n00b_thread_record_t          n00b_thread_record_t;
 typedef struct n00b_lock_atomic_core_t       n00b_lock_atomic_core_t;
 typedef struct n00b_lock_log_t               n00b_lock_log_t;
 typedef struct n00b_thread_read_log_t        n00b_thread_read_log_t;
@@ -172,7 +173,6 @@ typedef void (*n00b_signal_handler_t)(int, siginfo_t *, void *);
 #define n00b_likely(x)   __builtin_expect(!!(x), 1)
 #define n00b_unlikely(x) __builtin_expect(!!(x), 0)
 
-extern bool n00b_startup_complete;
 extern bool n00b_gc_inited;
 
 #define N00B_US_PER_SEC 1000000

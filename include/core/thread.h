@@ -33,6 +33,39 @@ typedef struct {
     uint8_t ready;
 } n00b_memperm_pipe_t;
 
+/**
+ * @brief Per-thread state for condition variable waits.
+ *
+ * Defined here (rather than in condition.h) so that
+ * `n00b_thread_record_t` can embed it by value without a
+ * circular include dependency.
+ */
+struct n00b_condition_thread_state_t {
+    n00b_condition_t *current_cv;
+    uint64_t          wait_predicate;
+    void             *thread_param;
+    char             *wait_loc;
+};
+
+/**
+ * @brief Per-thread shared record allocated from the system pool.
+ *
+ * Lives in `rt->threads[]` so that *other* threads can walk lock
+ * chains on crash or thread-exit cleanup.  The owning thread
+ * accesses this through `n00b_thread_t::record`.
+ */
+struct n00b_thread_record_t {
+    _Atomic(n00b_thread_t *)          thread;          ///< Back-pointer to TLS thread_t.
+    uint32_t                          generation;      ///< Generation counter for slot reuse.
+    _Atomic(n00b_lock_base_t *)       exclusive_locks; ///< Head of exclusive-lock chain.
+    _Atomic(n00b_thread_read_log_t *) read_locks;      ///< Head of read-lock chain.
+    _Atomic(n00b_thread_read_log_t *) log_alloc_cache; ///< Cached freed read-log entries.
+    n00b_condition_thread_state_t     cv_info;         ///< Condition-variable wait state.
+    n00b_lock_base_t                 *lock_wait_target;///< Lock we are currently blocked on.
+    char                             *lock_wait_loc;   ///< Source location of the wait.
+    char                             *lock_wait_trace; ///< Backtrace at wait (debug).
+};
+
 struct n00b_thread_t {
     union {
         struct {
@@ -42,34 +75,14 @@ struct n00b_thread_t {
         uint64_t unique_id;
     } id_info;
 
-    void               *stack_base;
-    void               *stack_top;
-    n00b_mmap_info_t   *stack_map;
-    pthread_t           pthread_id;
-    n00b_memperm_pipe_t memperm_pipe;
-    n00b_futex_t        self_lock;
+    void                 *stack_base;
+    void                 *stack_top;
+    n00b_mmap_info_t     *stack_map;
+    pthread_t             pthread_id;
+    n00b_memperm_pipe_t   memperm_pipe;
+    n00b_futex_t          self_lock;
+    n00b_thread_record_t *record;       ///< Pointer into rt->threads[slot].
     n00b_option_t(pthread_attr_t) pthread_attrs;
-
-#if 0
-    // Stuff to support the locking subsystem:
-
-    // These two are used to ensure we can clean up lock state to
-    // be consistent, when a thread exits while holding locks.
-    //
-    // The read-locks list also tracks nesting information.
-    _Atomic(n00b_lock_base_t *)       exclusive_locks;
-    _Atomic(n00b_thread_read_log_t *) read_locks;
-    _Atomic(n00b_thread_read_log_t *) log_alloc_cache;
-    // This supports the Global Interpreter Lock.
-    n00b_futex_t                      self_lock;
-    // State associated with any condition variable we are waiting on.
-    n00b_condition_thread_state_t     cv_info;
-    n00b_lock_base_t                 *lock_wait_target;
-    char                             *lock_wait_loc;
-    n00b_arena_t                     *thread_arena;
-    n00b_arena_t                     *pre_error_arena;
-    char                             *lock_wait_trace;
-#endif
 };
 
 /**
@@ -131,6 +144,17 @@ n00b_thread_init() _kargs
     n00b_option_t(pthread_attr_t) attrs = n00b_option_none(pthread_attr_t);
     uint32_t acquired_slot              = 0;
 };
+
+/**
+ * @brief Tear down the calling thread's n00b_thread_t.
+ *
+ * Releases any locks still held, clears the thread record, and
+ * decrements `live_threads`.
+ *
+ * @pre  The calling thread was previously initialized via n00b_thread_init().
+ * @post The thread slot is available for reuse.
+ */
+extern void n00b_thread_destroy(void);
 
 /**
  * @brief Record the stack base address for a thread.

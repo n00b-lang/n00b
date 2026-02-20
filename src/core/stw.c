@@ -101,7 +101,7 @@ _n00b_stop_the_world(char *loc)
     n00b_thread_t *t;
 
     while (n--) {
-        t = n00b_atomic_load(&rt->thread_list[n]);
+        t = n00b_atomic_load(&rt->threads[n].thread);
         if (!t || t == n00b_thread_self()) {
             continue;
         }
@@ -137,7 +137,7 @@ _n00b_restart_the_world(char *loc)
     n00b_thread_t *t;
 
     while (n--) {
-        t = n00b_atomic_load(&rt->thread_list[n]);
+        t = n00b_atomic_load(&rt->threads[n].thread);
         if (!t || t == n00b_thread_self()) {
             continue;
         }

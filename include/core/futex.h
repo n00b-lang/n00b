@@ -101,7 +101,7 @@ static inline int
 n00b_futex_wait_timespec(n00b_futex_t *futex, uint32_t v32, struct timespec *tout)
 {
     return __ulock_wait2(N00B_LOCK_COMPARE_AND_WAIT,
-                         &futex,
+                         futex,
                          (uint64_t)v32,
                          tout ? tout->tv_nsec : 0,
                          0);
@@ -116,7 +116,11 @@ n00b_futex_wait_timespec(n00b_futex_t *futex, uint32_t v32, struct timespec *tou
 static inline int
 n00b_futex_wake(n00b_futex_t *futex, bool all)
 {
-    return __ulock_wake(all ? N00B_WAKE_ALL : N00B_WAKE_THREAD, futex, 0ULL);
+    uint32_t op = N00B_LOCK_COMPARE_AND_WAIT;
+    if (all) {
+        op |= N00B_LOCK_WAKE_ALL;
+    }
+    return __ulock_wake(op, futex, 0ULL);
 }
 
 /**
