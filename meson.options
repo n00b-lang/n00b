@@ -62,6 +62,13 @@ option('using_musl',
     type: 'boolean',
     value: false)
 
+option(
+    'toolchain_target',
+    type: 'string',
+    value: '',
+    description: 'Optional compiler target triple (clang only), e.g. aarch64-linux-gnu',
+)
+
 option('using_build_script',
     type: 'boolean',
     value: false)

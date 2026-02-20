@@ -79,7 +79,9 @@ generate_depfile(compile_ctx_t *ctx)
     dep_argv[j++] = "-M";
     dep_argv[j++] = "-MF";
     dep_argv[j++] = argv->dep_file;
-    dep_argv[j++] = "-fno-blocks";
+    if (ncc_compiler_supports_no_blocks(ctx->compiler)) {
+        dep_argv[j++] = "-fno-blocks";
+    }
 
     if (argv->dep_target_q) {
         dep_argv[j++] = "-MQ";
@@ -92,7 +94,7 @@ generate_depfile(compile_ctx_t *ctx)
     }
 
     if (!argv->has_c23) {
-        dep_argv[j++] = "-std=c23";
+        dep_argv[j++] = ncc_default_c_std_flag(ctx->compiler);
     }
 
     for (int i = 1; i < argv->argc; i++) {
@@ -150,7 +152,7 @@ generate_depfile(compile_ctx_t *ctx)
     }
 
     if (pid == 0) {
-        execvp(ctx->compiler, dep_argv);
+        ncc_exec_compiler(ctx->compiler, dep_argv);
         _exit(127);
     }
 
@@ -179,11 +181,12 @@ invoke_compiler(compile_ctx_t *ctx)
     // Must run first since the main compilation strips dep flags.
     generate_depfile(ctx);
 
-    // Determine if we need to inject -std=c23:
+    // Determine if we need to inject a C23-equivalent standard flag:
     // - ncc implies C23 code, so always use C23
     // - This covers both ncc transformations and C23 features in the codebase
     // - Only inject if the caller didn't already specify a C23 compatible standard
-    bool need_c23 = !argv->has_c23;
+    bool  need_c23 = !argv->has_c23;
+    char *std_flag = ncc_default_c_std_flag(ctx->compiler);
 
     // Check if we need to inject -o flag (when -c is used but no -o specified)
     // Since we're using stdin, the compiler would create "-.o" otherwise
@@ -211,12 +214,13 @@ invoke_compiler(compile_ctx_t *ctx)
     }
 
     // Build new argv: compiler + original args with source replaced by "-x c -"
-    // We need space for: original args + "-x" + "c" + possibly "-std=c23" + possibly "-o <file>"
+    // We need space for: original args + "-x" + "c" + optional standard flag + possibly "-o
+    // <file>"
     // + "-Wno-odr" (always added to suppress spurious ODR warnings from alignas)
     // The source file slot will become "-"
     int extra_args = 3; // -x c -Wno-odr
     if (need_c23) {
-        extra_args += 1; // -std=c23
+        extra_args += 1;
     }
     if (need_output_flag && output_name) {
         extra_args += 2; // -o <file>
@@ -224,16 +228,16 @@ invoke_compiler(compile_ctx_t *ctx)
     int   nargs = argv->argc + extra_args;
     char *new_argv[nargs + 1];
 
-    int j = 0;
+    int j         = 0;
     new_argv[j++] = ctx->compiler;
 
     // Suppress ODR warnings that fire on structs with alignas attributes
     // when #line directives point to the same source location
     new_argv[j++] = "-Wno-odr";
 
-    // Inject -std=c23 only if ncc transformations require it
+    // Inject standard flag only if ncc transformations require it
     if (need_c23) {
-        new_argv[j++] = "-std=c23";
+        new_argv[j++] = std_flag;
     }
 
     for (int i = 1; i < argv->argc; i++) {
@@ -255,7 +259,7 @@ invoke_compiler(compile_ctx_t *ctx)
             if (strcmp(arg, "-save-temps") == 0 || strncmp(arg, "-save-temps=", 12) == 0) {
                 continue;
             }
-            // Skip any -std= flags only if we're injecting -std=c23 for transforms.
+            // Skip any -std= flags only if we're injecting our own standard flag.
             // This prevents original -std=c11 etc. from overriding our injected flag.
             // If no transforms, preserve the caller's -std flag.
             if (need_c23 && strncmp(arg, "-std=", 5) == 0) {
@@ -318,8 +322,9 @@ invoke_compiler(compile_ctx_t *ctx)
         close(pipefd[1]);
         dup2(pipefd[0], STDIN_FILENO);
         close(pipefd[0]);
-        execvp(ctx->compiler, new_argv);
-        (void)fprintf(stderr, "%s: exec %s: %s\n", argv->argv[0], ctx->compiler, strerror(errno));
+        ncc_exec_compiler(ctx->compiler, new_argv);
+        (void)
+            fprintf(stderr, "%s: exec %s: %s\n", argv->argv[0], ctx->compiler, strerror(errno));
         _exit(127);
     }
 
@@ -408,11 +413,7 @@ final_output(compile_ctx_t *ctx)
     if (outfile) {
         out = fopen(outfile, "w");
         if (!out) {
-            (void)fprintf(stderr,
-                          "%s: %s: %s\n",
-                          argv->argv[0],
-                          outfile,
-                          strerror(errno));
+            (void)fprintf(stderr, "%s: %s: %s\n", argv->argv[0], outfile, strerror(errno));
             abort();
         }
     }

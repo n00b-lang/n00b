@@ -22,8 +22,20 @@ cc = meson.get_compiler('c')
 vcpkg_inc = get_option('vcpkg_inc')
 vcpkg_lib = get_option('vcpkg_lib')
 
-incdir = [include_directories('include'), include_directories('include/internal'), include_directories(vcpkg_inc)]
-using_macos = host_machine.system() == 'darwin'
+default_c_std_flag = '-std=c23'
+if not cc.has_argument(default_c_std_flag)
+  if cc.has_argument('-std=c2x')
+    default_c_std_flag = '-std=c2x'
+  else
+    error('Compiler must support -std=c23 or -std=c2x.')
+  endif
+endif
+
+incdir = [include_directories('.'), include_directories('include'), include_directories('include/internal')]
+if vcpkg_inc != ''
+  incdir += [include_directories(vcpkg_inc)]
+endif
+using_macos = target_os == 'darwin'
 
 conf_release_build = get_option('buildtype') == 'release'
 conf_asan = get_option('use_asan').enabled()
@@ -33,163 +45,228 @@ conf_gc_stats = get_option('show_gc_stats').enabled()
 conf_lto = get_option('enable_lto')
 conf_dev_mode = get_option('dev_mode')
 conf_debug = get_option('enable_debug')
+toolchain_target = get_option('toolchain_target').strip()
 
-glibc_check = '''
-#include <stdio.h>
-#ifndef __GLIBC__
-#error NO GLIBC
-#endif
-'''
-
-if cc.compiles(glibc_check)
-  using_glibc = true
-else
-  using_glibc = false
-endif
-
-posix_check = '''
-#include <sys/mman.h>
-
-int
-test(void)
-{
-  return getpagesize() + MAP_ANON;
-}
-'''
-
-c_args = [
+project_c_args = [
   '-Wextra',
   '-g',
-  '-std=c23',
+  default_c_std_flag,
   '-Wno-unused-parameter',
   '-Wno-unused-function',
   '-Wno-cast-function-type',
   '-fno-omit-frame-pointer',
   '-ffunction-sections',
   '-fPIC',
-  # TODO only needed for musl
-  # '-target', target_arch + '-' + target_os,
 ]
 
-link_args = ['-target', target_arch + '-' + target_os]
+project_link_args = []
+compile_defines = []
 
 if target_os == 'darwin'
-  c_args = c_args + ['-Wno-atomic-alignment']
+  project_c_args += ['-Wno-atomic-alignment']
 endif
 
 if conf_dev_mode
-  c_args = c_args + ['-DN00B_DEV']
+  compile_defines += ['N00B_DEV']
 endif
 
 if conf_debug
-  c_args = c_args + ['-DN00B_DEBUG']
+  compile_defines += ['N00B_DEBUG']
 endif
 
 if conf_asan
-  c_args = c_args + [
+  project_c_args += [
     '-fsanitize=address',
     '-fsanitize-recover=all',
-    '-DN00B_ASAN',
   ]
-  link_args = link_args + [
+  compile_defines += ['N00B_ASAN']
+  project_link_args += [
     '-fsanitize=address',
     '-fsanitize-recover=all',
   ]
   if using_macos
-    c_args = c_args + ['-fsanitize-blacklist=../.sanitize_ignore']
+    project_c_args += ['-fsanitize-blacklist=../.sanitize_ignore']
   endif
 endif
 
 if conf_ubsan
-  c_args = c_args + [
+  project_c_args += [
     '-fsanitize=undefined',
     '-fno-sanitize=function',
     '-fsanitize-recover=all',
-    '-DN00B_UBSAN',
   ]
-  link_args = link_args + [
+  compile_defines += ['N00B_UBSAN']
+  project_link_args += [
     '-fsanitize=undefined',
     '-fsanitize-recover=all',
   ]
 endif
 
 if (conf_memcheck)
-  c_args = c_args + [
-    '-DN00B_AUTO_MEMCHECK=3',
-  ]
+  compile_defines += ['N00B_AUTO_MEMCHECK=3']
 endif
 
 if conf_gc_stats
-  c_args = c_args + [
-    '-DN00B_GC_STATS',
-  ]
+  compile_defines += ['N00B_GC_STATS']
 endif
 
 if target_os == 'linux'
   # Linux sources rely on GNU and modern POSIX APIs (e.g. syscall, dl_iterate_phdr).
-  c_args = c_args + ['-D_GNU_SOURCE', '-D_POSIX_C_SOURCE=200809L']
-elif not cc.compiles(posix_check)
-  c_args = c_args + ['-DPOSIX_C_SOURCE=200112L']
+  compile_defines += ['_GNU_SOURCE', '_POSIX_C_SOURCE=200809L']
 endif
 
-exe_link_args = link_args
-exe_c_args = c_args + [
-  '-DN00B_HOST_OS=' + host_machine.system(),
-  '-DN00B_HOST_CPU=' + host_machine.cpu_family(),
-]
-
 if conf_lto
-  exe_c_args = exe_c_args + ['-flto', '-DN00B_LTO_ENABLED']
-  exe_link_args = exe_link_args + ['-flto']
+  project_c_args += ['-flto']
+  project_link_args += ['-flto']
+  compile_defines += ['N00B_LTO_ENABLED']
 endif
 
 if conf_release_build
-  exe_c_args = exe_c_args + ['-O3', '-ffast-math', '-flto']
-  exe_link_args = exe_link_args + ['-flto']
+  project_c_args += ['-O3', '-ffast-math']
+  project_link_args += ['-flto']
 endif
 
-pt_attr_np_code = '''
-#include <pthread.h>
-
-int main(void) {
-  pthread_attr_t attrs;
-  pthread_getattr_np(pthread_self(), &attrs);
-  return 0;
-}
-'''
-
-if cc.compiles(pt_attr_np_code)
-  c_args = c_args + '-DN00B_HAVE_PT_GETATTR_NP'
+if toolchain_target != ''
+  target_arg = '--target=' + toolchain_target
+  if cc.get_id() == 'clang'
+    if not cc.compiles('int main(void) { return 0; }', args: [target_arg], name: 'toolchain target support check')
+      error('Compiler does not accept ' + target_arg + '; clear -Dtoolchain_target or use a matching toolchain.')
+    endif
+    project_c_args += [target_arg]
+    project_link_args += [target_arg]
+  else
+    warning('toolchain_target is currently only supported for clang; ignoring option for ' + cc.get_id())
+  endif
 endif
 
-fpty_code = '''
-#include <stddef.h>
-#include <pty.h>
+compile_define_args = []
+foreach define : compile_defines
+  compile_define_args += ['-D' + define]
+endforeach
 
-int main(void) { forkpty(nullptr, nullptr, nullptr, nullptr); return 0; }
-'''
-
-if cc.links(fpty_code, name: 'forkpty_check')
-  exe_c_args = exe_c_args + ['-DHAVE_PTY_H']
-endif
-
-exe_link_args = exe_link_args + ['-w']
+probe_args = project_c_args + compile_define_args
+project_compile_args = probe_args
+project_link_args += ['-w']
 
 libatomic_dep = cc.find_library('atomic', required: false)
 libmath_dep = cc.find_library('m', required: false)
 libthreads_dep = dependency('threads', required: true)
+libutil_dep = cc.find_library('util', required: false)
 
 deps = [
   libmath_dep,
   libthreads_dep,
 ]
-
-libatomic_dep = cc.find_library('atomic', required: false)
-libmath_dep = cc.find_library('m', required: false)
-libthreads_dep = dependency('threads', required: true)
 if libatomic_dep.found()
-  deps = deps + [libatomic_dep]
+  deps += [libatomic_dep]
 endif
+
+have_pthread_getattr_np = cc.has_function(
+  'pthread_getattr_np',
+  prefix: '#include <pthread.h>',
+  args: probe_args,
+  dependencies: [libthreads_dep],
+)
+have_pthread_attr_get_np = cc.has_function(
+  'pthread_attr_get_np',
+  prefix: '#include <pthread.h>',
+  args: probe_args,
+  dependencies: [libthreads_dep],
+)
+have_pthread_get_stackaddr_np = cc.has_function(
+  'pthread_get_stackaddr_np',
+  prefix: '#include <pthread.h>',
+  args: probe_args,
+  dependencies: [libthreads_dep],
+)
+have_pthread_get_stacksize_np = cc.has_function(
+  'pthread_get_stacksize_np',
+  prefix: '#include <pthread.h>',
+  args: probe_args,
+  dependencies: [libthreads_dep],
+)
+have_pty_h = cc.has_header('pty.h', args: probe_args)
+
+forkpty_deps = []
+if libutil_dep.found()
+  forkpty_deps += [libutil_dep]
+endif
+have_forkpty = false
+if have_pty_h
+  have_forkpty = cc.has_function(
+    'forkpty',
+    prefix: '#include <pty.h>',
+    args: probe_args,
+    dependencies: forkpty_deps,
+  )
+endif
+
+have_dl_iterate_phdr = cc.has_function(
+  'dl_iterate_phdr',
+  prefix: '#include <link.h>',
+  args: probe_args,
+)
+have_arc4random_buf = cc.has_function(
+  'arc4random_buf',
+  prefix: '#include <stdlib.h>',
+  args: probe_args,
+)
+have_getrandom = cc.has_function(
+  'getrandom',
+  prefix: '#include <sys/random.h>',
+  args: probe_args,
+)
+
+have_map_anonymous = cc.compiles(
+  '''
+  #include <sys/mman.h>
+  int main(void) { return MAP_ANONYMOUS == 0; }
+  ''',
+  args: probe_args,
+  name: 'MAP_ANONYMOUS availability',
+)
+
+have_map_anon = cc.compiles(
+  '''
+  #include <sys/mman.h>
+  int main(void) { return MAP_ANON == 0; }
+  ''',
+  args: probe_args,
+  name: 'MAP_ANON availability',
+)
+
+if not have_map_anonymous and not have_map_anon
+  error('Platform must provide MAP_ANONYMOUS or MAP_ANON.')
+endif
+
+if not have_getrandom and not have_arc4random_buf
+  error('Platform must provide getrandom() or arc4random_buf().')
+endif
+
+if not have_pthread_getattr_np and not have_pthread_attr_get_np and not (have_pthread_get_stackaddr_np and have_pthread_get_stacksize_np)
+  error('No supported pthread stack-introspection API found for stack bound discovery.')
+endif
+
+build_conf = configuration_data()
+build_conf.set_quoted('N00B_HOST_OS', target_os)
+build_conf.set_quoted('N00B_HOST_CPU', target_arch)
+build_conf.set10('N00B_HAVE_PTHREAD_GETATTR_NP', have_pthread_getattr_np)
+build_conf.set10('N00B_HAVE_PTHREAD_ATTR_GET_NP', have_pthread_attr_get_np)
+build_conf.set10('N00B_HAVE_PTHREAD_GET_STACKADDR_NP', have_pthread_get_stackaddr_np)
+build_conf.set10('N00B_HAVE_PTHREAD_GET_STACKSIZE_NP', have_pthread_get_stacksize_np)
+build_conf.set10('N00B_HAVE_PTY_H', have_pty_h)
+build_conf.set10('N00B_HAVE_FORKPTY', have_forkpty)
+build_conf.set10('N00B_HAVE_DL_ITERATE_PHDR', have_dl_iterate_phdr)
+build_conf.set10('N00B_HAVE_ARC4RANDOM_BUF', have_arc4random_buf)
+build_conf.set10('N00B_HAVE_GETRANDOM', have_getrandom)
+build_conf.set10('N00B_HAVE_MAP_ANONYMOUS', have_map_anonymous)
+build_conf.set10('N00B_HAVE_MAP_ANON', have_map_anon)
+
+configure_file(
+  input: 'include/internal/n00b_build_config.h.in',
+  output: 'n00b_build_config.h',
+  configuration: build_conf,
+)
 
 
 n00b_core = [
@@ -260,14 +337,15 @@ n00b = static_library('n00b',
     n00b_dll_src,
     include_directories: incdir,
     dependencies: deps,
-    c_args: exe_c_args,
-    link_args: link_args,
+    c_args: project_compile_args,
+    link_args: project_link_args,
     install: true,
 )
 
 test_common_kwargs = {
     'include_directories': incdir,
-    'c_args': exe_c_args,
+    'c_args': project_compile_args,
+    'link_args': project_link_args,
     'link_with': [n00b],
 }
 
@@ -376,7 +454,8 @@ test('alloc_metadata', alloc_metadata_test, suite: 'integration')
 
 unicode_test_kwargs = {
     'include_directories': incdir + [include_directories('test/unit')],
-    'c_args': exe_c_args,
+    'c_args': project_compile_args,
+    'link_args': project_link_args,
     'link_with': [n00b],
 }
 

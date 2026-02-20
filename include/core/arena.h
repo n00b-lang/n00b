@@ -14,8 +14,13 @@
 #include "core/mmaps.h"
 #include "core/align.h"
 
+#ifndef N00B_MPROT
 #define N00B_MPROT (PROT_READ | PROT_WRITE)
-#define N00B_MFLAG (MAP_PRIVATE | MAP_ANON)
+#endif
+
+#ifndef N00B_MFLAG
+#define N00B_MFLAG (MAP_PRIVATE | N00B_MAP_ANON_FLAG)
+#endif
 
 struct n00b_segment_t {
     uint64_t        size;
@@ -103,13 +108,13 @@ n00b_get_arena_addr_type(n00b_arena_t *arena, void *addr)
 extern void
 n00b_initialize_arena(n00b_arena_t *arena) _kargs
 {
-    uint64_t    size           = N00B_DEFAULT_SCRATCH_ARENA_SIZE;
-    bool        use_gc         = true;
-    bool        no_map         = false;
-    bool        hidden         = false;
-    bool        __system       = false;
-    bool        inline_headers = true;
-    char       *name           = "arena";
+    uint64_t size           = N00B_DEFAULT_SCRATCH_ARENA_SIZE;
+    bool     use_gc         = true;
+    bool     no_map         = false;
+    bool     hidden         = false;
+    bool     __system       = false;
+    bool     inline_headers = true;
+    char    *name           = "arena";
 };
 
 /**
@@ -147,10 +152,8 @@ struct n00b_finalizer_info_t {
  * @param arena  Owning arena.
  * @param file   Debug name / source file (may be NULL).
  */
-extern void n00b_register_arena_segment(void         *start,
-                                        void         *end,
-                                        n00b_arena_t *arena,
-                                        const char   *file);
+extern void
+n00b_register_arena_segment(void *start, void *end, n00b_arena_t *arena, const char *file);
 
 typedef struct n00b_arena_alloc_param_t {
     bool no_scan;
