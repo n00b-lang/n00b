@@ -1,8 +1,6 @@
 #define N00B_MEM_INTERNAL_API
 #define N00B_USE_INTERNAL_API
 
-#include <sys/mman.h>
-#include <unistd.h>
 #include <assert.h>
 
 #include "n00b.h"

@@ -2,9 +2,9 @@
  * @file futex.h
  * @brief Futex (fast userspace mutex) abstraction.
  *
- * Provides a cross-platform futex API using Linux futex(2) or macOS
- * __ulock_wait2/__ulock_wake, with spin-wait, timed-wait, and
- * mask-based wait helpers.
+ * Provides a cross-platform futex API using Linux futex(2), Windows
+ * WaitOnAddress/WakeByAddress*, or macOS __ulock_wait2/__ulock_wake,
+ * with spin-wait, timed-wait, and mask-based wait helpers.
  */
 #pragma once
 
@@ -72,7 +72,92 @@ n00b_futex_should_continue(int err)
     return !err || err == EAGAIN;
 }
 
-#elifdef __APPLE__
+#elif defined(_WIN32)
+#include "n00b_windows_compat.h"
+
+#define n00b_mac_barrier()
+
+static inline DWORD
+n00b_futex_timeout_ms(const struct timespec *tptr)
+{
+    if (!tptr) {
+        return INFINITE;
+    }
+
+    if (tptr->tv_sec < 0 || tptr->tv_nsec < 0) {
+        return 0;
+    }
+
+    uint64_t msec = ((uint64_t)tptr->tv_sec * 1000ULL)
+                    + (((uint64_t)tptr->tv_nsec + 999999ULL) / 1000000ULL);
+
+    if (msec >= (uint64_t)INFINITE) {
+        return INFINITE - 1;
+    }
+
+    return (DWORD)msec;
+}
+
+/**
+ * @brief Wait on a futex word (Windows implementation via WaitOnAddress).
+ * @param futex Futex address.
+ * @param v32   Expected value.
+ * @param tptr  Timeout (may be NULL for indefinite).
+ * @return      0 on success, errno-style error code on failure.
+ */
+static inline int
+n00b_futex_wait_timespec(n00b_futex_t *futex, uint32_t v32, struct timespec *tptr)
+{
+    DWORD timeout = n00b_futex_timeout_ms(tptr);
+    BOOL  ok      = WaitOnAddress((volatile void *)futex, &v32, sizeof(v32), timeout);
+
+    if (ok) {
+        return 0;
+    }
+
+    DWORD err = GetLastError();
+
+    if (err == ERROR_TIMEOUT) {
+        return ETIMEDOUT;
+    }
+    if (err == ERROR_INVALID_PARAMETER) {
+        return EINVAL;
+    }
+
+    return EAGAIN;
+}
+
+/**
+ * @brief Wake one or all waiters on a futex (Windows implementation).
+ * @param futex Futex address.
+ * @param all   If true, wake all waiters; otherwise wake one.
+ * @return      0.
+ */
+static inline int
+n00b_futex_wake(n00b_futex_t *futex, bool all)
+{
+    if (all) {
+        WakeByAddressAll((void *)futex);
+    }
+    else {
+        WakeByAddressSingle((void *)futex);
+    }
+
+    return 0;
+}
+
+/**
+ * @brief Check whether a futex wait should retry (Windows).
+ * @param err Error code from futex_wait_timespec.
+ * @return    true if the wait should continue.
+ */
+static inline bool
+n00b_futex_should_continue(int err)
+{
+    return !err || err == EAGAIN || err == EINTR;
+}
+
+#elif defined(__APPLE__)
 extern int __ulock_wait2(uint32_t, void *, uint64_t, uint64_t, uint64_t);
 extern int __ulock_wake(uint32_t, void *, uint64_t);
 

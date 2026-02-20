@@ -50,3 +50,24 @@ COPY --chmod=0755 docker/run-build.sh /usr/local/bin/run-build.sh
 COPY . /workdir
 
 RUN /usr/local/bin/run-build.sh
+
+FROM toolchain AS verify-windows-cross
+
+ARG TARGETPLATFORM
+ARG TARGETARCH
+
+ENV TARGETPLATFORM=${TARGETPLATFORM}
+ENV TARGETARCH=${TARGETARCH}
+
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends \
+        binutils-mingw-w64-x86-64 \
+        gcc-mingw-w64-x86-64 \
+        g++-mingw-w64-x86-64 \
+        wine64 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --chmod=0755 docker/run-build-windows.sh /usr/local/bin/run-build-windows.sh
+COPY . /workdir
+
+RUN /usr/local/bin/run-build-windows.sh

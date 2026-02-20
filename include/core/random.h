@@ -34,6 +34,14 @@
 #endif
 #endif
 
+#if !defined(N00B_HAVE_BCRYPT_GEN_RANDOM)
+#if defined(_WIN32)
+#define N00B_HAVE_BCRYPT_GEN_RANDOM 1
+#else
+#define N00B_HAVE_BCRYPT_GEN_RANDOM 0
+#endif
+#endif
+
 // On Linux we are best off using the low-level interface to the
 // system PRNG.  On other Unix systems, we fall back to
 // `arc4random_buf()` which is widely available.
@@ -56,6 +64,28 @@ n00b_random_bytes(char *bufptr, size_t len)
 // for arc4random_buf
 #include <stdlib.h> // IWYU pragma: keep
 #define n00b_random_bytes(bufptr, len) arc4random_buf(bufptr, len)
+#elif N00B_HAVE_BCRYPT_GEN_RANDOM
+#include "n00b_windows_compat.h"
+#include <stdlib.h> // for abort
+
+static inline void
+n00b_random_bytes(char *bufptr, size_t len)
+{
+    while (len) {
+        ULONG chunk = len > UINT32_MAX ? UINT32_MAX : (ULONG)len;
+        NTSTATUS rc = BCryptGenRandom(nullptr,
+                                      (PUCHAR)bufptr,
+                                      chunk,
+                                      BCRYPT_USE_SYSTEM_PREFERRED_RNG);
+
+        if (rc != 0) {
+            abort();
+        }
+
+        bufptr += chunk;
+        len -= chunk;
+    }
+}
 #else
 #error "No supported random source available."
 #endif

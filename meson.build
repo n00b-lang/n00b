@@ -36,6 +36,7 @@ if vcpkg_inc != ''
   incdir += [include_directories(vcpkg_inc)]
 endif
 using_macos = target_os == 'darwin'
+using_windows = target_os == 'windows'
 
 conf_release_build = get_option('buildtype') == 'release'
 conf_asan = get_option('use_asan').enabled()
@@ -56,7 +57,6 @@ project_c_args = [
   '-Wno-cast-function-type',
   '-fno-omit-frame-pointer',
   '-ffunction-sections',
-  '-fPIC',
 ]
 
 project_link_args = []
@@ -136,6 +136,32 @@ int main(void) {
 if cc.compiles(vector_builtins_check, args: project_c_args, name: 'vector_size(16)')
   compile_defines += ['N00B_HAVE_VECTOR_BUILTINS']
 endif
+
+if using_windows
+  compile_defines += [
+    '_WIN32_WINNT=0x0602',
+    'WIN32_LEAN_AND_MEAN',
+    'NOMINMAX',
+    '__cdecl=',
+    '__stdcall=',
+    '__fastcall=',
+    '__thiscall=',
+    '__vectorcall=',
+  ]
+  # Emit Windows-native CodeView debug records when clang is the backend.
+  # This gives WinDbg/CDB better symbol and line correlation than DWARF-only data.
+  if cc.get_id() == 'clang' and cc.has_argument('-gcodeview')
+    project_c_args += ['-gcodeview']
+  endif
+  # Avoid loader-relocated TLS local-exec addressing in PE binaries. Emulated TLS
+  # keeps thread-local access stable under ASLR for the MinGW cross toolchain.
+  if cc.has_argument('-femulated-tls')
+    project_c_args += ['-femulated-tls']
+  endif
+  project_link_args += ['-static', '-mconsole']
+else
+  project_c_args += ['-fPIC']
+endif
 if conf_lto
   project_c_args += ['-flto']
   project_link_args += ['-flto']
@@ -173,99 +199,140 @@ libatomic_dep = cc.find_library('atomic', required: false)
 libmath_dep = cc.find_library('m', required: false)
 libthreads_dep = dependency('threads', required: true)
 libutil_dep = cc.find_library('util', required: false)
+libbcrypt_dep = cc.find_library('bcrypt', required: false)
+libpsapi_dep = cc.find_library('psapi', required: false)
+libws2_32_dep = cc.find_library('ws2_32', required: false)
 
-deps = [
-  libmath_dep,
-  libthreads_dep,
-]
+deps = [libthreads_dep]
+if libmath_dep.found()
+  deps += [libmath_dep]
+endif
 if libatomic_dep.found()
   deps += [libatomic_dep]
 endif
-
-have_pthread_getattr_np = cc.has_function(
-  'pthread_getattr_np',
-  prefix: '#include <pthread.h>',
-  args: probe_args,
-  dependencies: [libthreads_dep],
-)
-have_pthread_attr_get_np = cc.has_function(
-  'pthread_attr_get_np',
-  prefix: '#include <pthread.h>',
-  args: probe_args,
-  dependencies: [libthreads_dep],
-)
-have_pthread_get_stackaddr_np = cc.has_function(
-  'pthread_get_stackaddr_np',
-  prefix: '#include <pthread.h>',
-  args: probe_args,
-  dependencies: [libthreads_dep],
-)
-have_pthread_get_stacksize_np = cc.has_function(
-  'pthread_get_stacksize_np',
-  prefix: '#include <pthread.h>',
-  args: probe_args,
-  dependencies: [libthreads_dep],
-)
-have_pty_h = cc.has_header('pty.h', args: probe_args)
-
-forkpty_deps = []
-if libutil_dep.found()
-  forkpty_deps += [libutil_dep]
+if using_windows
+  # Prefer explicit MinGW import libs for clang cross-linking.
+  project_link_args += ['-lbcrypt', '-lpsapi', '-lsynchronization', '-lws2_32']
+elif libws2_32_dep.found()
+  deps += [libws2_32_dep]
 endif
+
+have_pthread_getattr_np = false
+have_pthread_attr_get_np = false
+have_pthread_get_stackaddr_np = false
+have_pthread_get_stacksize_np = false
+have_pty_h = false
 have_forkpty = false
-if have_pty_h
-  have_forkpty = cc.has_function(
-    'forkpty',
-    prefix: '#include <pty.h>',
+have_dl_iterate_phdr = false
+have_arc4random_buf = false
+have_getrandom = false
+have_map_anonymous = false
+have_map_anon = false
+
+have_wait_on_address = false
+have_wake_by_address_all = false
+have_wake_by_address_single = false
+have_virtual_query = false
+have_get_current_thread_stack_limits = false
+have_bcrypt_gen_random = false
+have_enum_process_modules = false
+
+if using_windows
+  # NCC cannot parse MinGW system headers inside Meson probe snippets.
+  # We treat these as target-contract capabilities and validate via
+  # actual source compilation/linking in the cross build.
+  have_wait_on_address = true
+  have_wake_by_address_all = true
+  have_wake_by_address_single = true
+  have_virtual_query = true
+  have_get_current_thread_stack_limits = true
+  have_bcrypt_gen_random = true
+  have_enum_process_modules = true
+else
+  have_pthread_getattr_np = cc.has_function(
+    'pthread_getattr_np',
+    prefix: '#include <pthread.h>',
     args: probe_args,
-    dependencies: forkpty_deps,
+    dependencies: [libthreads_dep],
   )
-endif
+  have_pthread_attr_get_np = cc.has_function(
+    'pthread_attr_get_np',
+    prefix: '#include <pthread.h>',
+    args: probe_args,
+    dependencies: [libthreads_dep],
+  )
+  have_pthread_get_stackaddr_np = cc.has_function(
+    'pthread_get_stackaddr_np',
+    prefix: '#include <pthread.h>',
+    args: probe_args,
+    dependencies: [libthreads_dep],
+  )
+  have_pthread_get_stacksize_np = cc.has_function(
+    'pthread_get_stacksize_np',
+    prefix: '#include <pthread.h>',
+    args: probe_args,
+    dependencies: [libthreads_dep],
+  )
+  have_pty_h = cc.has_header('pty.h', args: probe_args)
 
-have_dl_iterate_phdr = cc.has_function(
-  'dl_iterate_phdr',
-  prefix: '#include <link.h>',
-  args: probe_args,
-)
-have_arc4random_buf = cc.has_function(
-  'arc4random_buf',
-  prefix: '#include <stdlib.h>',
-  args: probe_args,
-)
-have_getrandom = cc.has_function(
-  'getrandom',
-  prefix: '#include <sys/random.h>',
-  args: probe_args,
-)
+  forkpty_deps = []
+  if libutil_dep.found()
+    forkpty_deps += [libutil_dep]
+  endif
+  if have_pty_h
+    have_forkpty = cc.has_function(
+      'forkpty',
+      prefix: '#include <pty.h>',
+      args: probe_args,
+      dependencies: forkpty_deps,
+    )
+  endif
 
-have_map_anonymous = cc.compiles(
-  '''
-  #include <sys/mman.h>
-  int main(void) { return MAP_ANONYMOUS == 0; }
-  ''',
-  args: probe_args,
-  name: 'MAP_ANONYMOUS availability',
-)
+  have_dl_iterate_phdr = cc.has_function(
+    'dl_iterate_phdr',
+    prefix: '#include <link.h>',
+    args: probe_args,
+  )
+  have_arc4random_buf = cc.has_function(
+    'arc4random_buf',
+    prefix: '#include <stdlib.h>',
+    args: probe_args,
+  )
+  have_getrandom = cc.has_function(
+    'getrandom',
+    prefix: '#include <sys/random.h>',
+    args: probe_args,
+  )
 
-have_map_anon = cc.compiles(
-  '''
-  #include <sys/mman.h>
-  int main(void) { return MAP_ANON == 0; }
-  ''',
-  args: probe_args,
-  name: 'MAP_ANON availability',
-)
+  have_map_anonymous = cc.compiles(
+    '''
+    #include <sys/mman.h>
+    int main(void) { return MAP_ANONYMOUS == 0; }
+    ''',
+    args: probe_args,
+    name: 'MAP_ANONYMOUS availability',
+  )
 
-if not have_map_anonymous and not have_map_anon
-  error('Platform must provide MAP_ANONYMOUS or MAP_ANON.')
-endif
+  have_map_anon = cc.compiles(
+    '''
+    #include <sys/mman.h>
+    int main(void) { return MAP_ANON == 0; }
+    ''',
+    args: probe_args,
+    name: 'MAP_ANON availability',
+  )
 
-if not have_getrandom and not have_arc4random_buf
-  error('Platform must provide getrandom() or arc4random_buf().')
-endif
+  if not have_map_anonymous and not have_map_anon
+    error('Platform must provide MAP_ANONYMOUS or MAP_ANON.')
+  endif
 
-if not have_pthread_getattr_np and not have_pthread_attr_get_np and not (have_pthread_get_stackaddr_np and have_pthread_get_stacksize_np)
-  error('No supported pthread stack-introspection API found for stack bound discovery.')
+  if not have_getrandom and not have_arc4random_buf
+    error('Platform must provide getrandom() or arc4random_buf().')
+  endif
+
+  if not have_pthread_getattr_np and not have_pthread_attr_get_np and not (have_pthread_get_stackaddr_np and have_pthread_get_stacksize_np)
+    error('No supported pthread stack-introspection API found for stack bound discovery.')
+  endif
 endif
 
 build_conf = configuration_data()
@@ -282,6 +349,13 @@ build_conf.set10('N00B_HAVE_ARC4RANDOM_BUF', have_arc4random_buf)
 build_conf.set10('N00B_HAVE_GETRANDOM', have_getrandom)
 build_conf.set10('N00B_HAVE_MAP_ANONYMOUS', have_map_anonymous)
 build_conf.set10('N00B_HAVE_MAP_ANON', have_map_anon)
+build_conf.set10('N00B_HAVE_WAIT_ON_ADDRESS', have_wait_on_address)
+build_conf.set10('N00B_HAVE_WAKE_BY_ADDRESS_ALL', have_wake_by_address_all)
+build_conf.set10('N00B_HAVE_WAKE_BY_ADDRESS_SINGLE', have_wake_by_address_single)
+build_conf.set10('N00B_HAVE_VIRTUAL_QUERY', have_virtual_query)
+build_conf.set10('N00B_HAVE_GET_CURRENT_THREAD_STACK_LIMITS', have_get_current_thread_stack_limits)
+build_conf.set10('N00B_HAVE_BCRYPT_GEN_RANDOM', have_bcrypt_gen_random)
+build_conf.set10('N00B_HAVE_ENUM_PROCESS_MODULES', have_enum_process_modules)
 
 configure_file(
   input: 'include/internal/n00b_build_config.h.in',

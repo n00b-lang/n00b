@@ -1,7 +1,12 @@
 #include <stdio.h> // perror
 #include <locale.h>
+
+#if !defined(_WIN32)
 #include <unistd.h>
 #include <sys/resource.h>
+#else
+#include "n00b_windows_compat.h"
+#endif
 
 #define __N00B_THREAD_INTERNAL
 
@@ -45,10 +50,15 @@ setup_envp(n00b_runtime_t *rt, char *envp[])
 }
 
 static inline void
-setup_fd_limit(n00b_runtime_t *rt, rlim_t fd_limit)
+setup_fd_limit(n00b_runtime_t *rt, int fd_limit)
 {
+#if !defined(_WIN32)
     struct rlimit limits;
+#endif
 
+    (void)rt;
+
+#if !defined(_WIN32)
     if (fd_limit < 0) {
         return;
     }
@@ -67,6 +77,22 @@ setup_fd_limit(n00b_runtime_t *rt, rlim_t fd_limit)
         perror(__func__);
         exit(1);
     }
+#else
+    (void)fd_limit;
+#endif
+}
+
+static inline size_t
+n00b_detect_page_size(void)
+{
+#if defined(_WIN32)
+    SYSTEM_INFO sys_info = {0};
+    GetSystemInfo(&sys_info);
+
+    return (size_t)sys_info.dwPageSize;
+#else
+    return (size_t)sysconf(_SC_PAGESIZE);
+#endif
 }
 
 static inline void
@@ -115,7 +141,7 @@ n00b_init(n00b_runtime_t *rt, int argc, char *argv[]) _kargs
     unsigned int       max_threads    = N00B_THREADS_MAX;
 }
 {
-    n00b_page_size = sysconf(_SC_PAGESIZE);
+    n00b_page_size = n00b_detect_page_size();
 
     if (!n00b_gc_guard) {
         n00b_gc_guard = n00b_rand64();

@@ -1,9 +1,9 @@
 #include <stdio.h>
 #include <assert.h>
-#include <unistd.h>
 
 #include "n00b.h"
 #include "core/alloc.h"
+#include "core/align.h"
 #include "core/runtime.h"
 #include "core/mmaps.h"
 #include "core/option.h"
@@ -24,7 +24,7 @@ test_mmap_basic(void)
     assert(addr != nullptr);
 
     // Must be page-aligned
-    long page_size = sysconf(_SC_PAGESIZE);
+    size_t page_size = n00b_page_size;
     assert(((uintptr_t)addr & (page_size - 1)) == 0);
 
     n00b_munmap(addr);

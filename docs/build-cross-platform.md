@@ -1,7 +1,8 @@
 # Meson Cross-Platform Builds
 
 This repository uses `./build.sh` as the only supported top-level build entrypoint.
-These commands cover Linux/macOS native validation and Linux arm64 cross-compilation.
+These commands cover Linux/macOS native validation plus Linux arm64 and Windows x86_64
+cross-compilation.
 
 ## Prerequisites
 
@@ -12,6 +13,11 @@ These commands cover Linux/macOS native validation and Linux arm64 cross-compila
   - `gcc-aarch64-linux-gnu`
   - `binutils-aarch64-linux-gnu`
   - `meson`, `ninja`, `python3`
+- Windows x86_64 cross lane:
+  - `gcc-mingw-w64-x86-64`
+  - `binutils-mingw-w64-x86-64`
+  - `meson`, `ninja`, `python3`
+  - optional smoke runner: `wine64`
 
 ## Native Validation (Linux or macOS)
 
@@ -41,6 +47,29 @@ Expected outcome: Meson configures as a cross build and all targets compile for 
 
 Optional test execution requires an `exe_wrapper` in the cross file (for example `qemu-aarch64`).
 Without a wrapper, cross-built tests are compile-only.
+
+## Windows x86_64 Cross-Compilation
+
+Use the checked-in cross file:
+
+```bash
+N00B_MESON_CROSS_FILE=meson/cross/windows-x86_64.ini \
+N00B_NCC_COMPILER=clang \
+N00B_TOOLCHAIN_TARGET=x86_64-w64-windows-gnu \
+N00B_CLEAN=1 ./build.sh build_cross_windows_x86_64
+meson compile -C build_cross_windows_x86_64
+```
+
+Expected outcome: Meson configures as a cross build and all targets compile for
+`x86_64-w64-windows-gnu`.
+
+Optional smoke execution under Wine:
+
+```bash
+meson test -C build_cross_windows_x86_64 --print-errorlogs --wrapper wine64 list tuple
+```
+
+If `wine64` is not available, keep the lane compile-only.
 
 ## Optional Meson File Plumbing
 

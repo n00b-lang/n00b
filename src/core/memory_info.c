@@ -1,12 +1,16 @@
 #define N00B_MEM_INTERNAL_API
 #define N00B_USE_INTERNAL_API
 
+#if defined(_WIN32)
+#include "n00b_windows_compat.h"
+#else
 #include <signal.h>
 #include <sys/mman.h>
 #include <unistd.h>
 #include <poll.h>
 #include <fcntl.h>
 #include <errno.h>
+#endif
 
 #include "n00b_build_config.h"
 
@@ -35,7 +39,11 @@ _Atomic uint64_t static_order_id = 1;
 static n00b_memperm_pipe_t *
 n00b_memperm_pipe_get(void)
 {
+#if defined(_WIN32)
+    return nullptr;
+#else
     return &n00b_thread_self()->memperm_pipe;
+#endif
 }
 
 extern void n00b_debug_memory_info(bool);
@@ -49,7 +57,47 @@ extern void n00b_debug_memory_info(bool);
 
 #define MINCORE_TEST_BIT 1
 
-#if N00B_HAVE_DL_ITERATE_PHDR
+#if defined(_WIN32)
+void
+n00b_load_static_ranges(void)
+{
+#if N00B_HAVE_ENUM_PROCESS_MODULES
+    HMODULE modules[512];
+    DWORD   needed = 0;
+    HANDLE  proc   = GetCurrentProcess();
+
+    if (!EnumProcessModules(proc, modules, sizeof(modules), &needed)) {
+        return;
+    }
+
+    uint32_t count = (uint32_t)(needed / sizeof(HMODULE));
+    if (count > (uint32_t)(sizeof(modules) / sizeof(modules[0]))) {
+        count = (uint32_t)(sizeof(modules) / sizeof(modules[0]));
+    }
+
+    for (uint32_t i = 0; i < count; i++) {
+        MODULEINFO modinfo = {};
+
+        if (!GetModuleInformation(proc, modules[i], &modinfo, sizeof(modinfo))) {
+            continue;
+        }
+
+        char *start = (char *)modinfo.lpBaseOfDll;
+        char *end   = start + modinfo.SizeOfImage;
+
+        if (start == end) {
+            continue;
+        }
+
+        (void)n00b_mmap_register(start,
+                                 end,
+                                 start ? n00b_mmap_static : n00b_mmap_zero_page,
+                                 .order_id          = n00b_atomic_add(&static_order_id, 1),
+                                 .definitely_unique = false);
+    }
+#endif
+}
+#elif N00B_HAVE_DL_ITERATE_PHDR
 #include <link.h>
 
 static int
@@ -153,6 +201,25 @@ n00b_load_static_ranges(void)
 static n00b_mmap_opt_t
 n00b_check_kernel_page_map(const void *addr)
 {
+#if defined(_WIN32)
+    MEMORY_BASIC_INFORMATION mbi = {};
+
+    if (!VirtualQuery(addr, &mbi, sizeof(mbi))) {
+        return n00b_option_none(n00b_mmap_info_t *);
+    }
+
+    if (mbi.State != MEM_COMMIT) {
+        return n00b_option_none(n00b_mmap_info_t *);
+    }
+
+    char *start = (char *)mbi.BaseAddress;
+    char *end   = start + mbi.RegionSize;
+
+    return n00b_mmap_register(start,
+                              end,
+                              start ? n00b_mmap_unmanaged : n00b_mmap_zero_page,
+                              .definitely_unique = false);
+#else
     char *start = n00b_align_to_page_start((void *)addr);
     char  status[1];
 
@@ -174,6 +241,7 @@ n00b_check_kernel_page_map(const void *addr)
                               start + n00b_page_size,
                               start ? n00b_mmap_unmanaged : n00b_mmap_zero_page,
                               .definitely_unique = false);
+#endif
 }
 
 // This only gets called when lookup fails.
@@ -235,6 +303,36 @@ n00b_find_allocator(void *val)
 n00b_mmap_perms_t
 n00b_check_memory_perms(void *ptr)
 {
+#if defined(_WIN32)
+    MEMORY_BASIC_INFORMATION mbi = {};
+
+    if (!VirtualQuery(ptr, &mbi, sizeof(mbi))) {
+        return n00b_mmap_perms_no_access;
+    }
+
+    if (mbi.State != MEM_COMMIT) {
+        return n00b_mmap_perms_no_access;
+    }
+
+    DWORD protect = mbi.Protect;
+
+    if ((protect & PAGE_GUARD) || (protect & PAGE_NOACCESS)) {
+        return n00b_mmap_perms_no_access;
+    }
+
+    switch (protect & 0xff) {
+    case PAGE_READWRITE:
+    case PAGE_WRITECOPY:
+    case PAGE_EXECUTE_READWRITE:
+    case PAGE_EXECUTE_WRITECOPY:
+        return n00b_mmap_perms_rw;
+    case PAGE_READONLY:
+    case PAGE_EXECUTE_READ:
+        return n00b_mmap_perms_ro;
+    default:
+        return n00b_mmap_perms_no_access;
+    }
+#else
     bool cannot_write = false;
     bool cannot_read  = false;
 
@@ -309,6 +407,7 @@ n00b_check_memory_perms(void *ptr)
     }
 
     return n00b_mmap_perms_rw;
+#endif
 }
 
 static inline bool

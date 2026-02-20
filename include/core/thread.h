@@ -7,13 +7,17 @@
  */
 #pragma once
 
+#if !defined(_WIN32)
 #include <pthread.h>
+#endif
 
 #include "n00b.h"
 #include "core/rt_access.h"
 #include "core/option.h"
 
+#if !defined(_WIN32)
 n00b_option_decl(pthread_attr_t);
+#endif
 
 /** @brief Thread-local storage for the current thread's n00b_thread_t. */
 extern thread_local n00b_thread_t __n00b_thread_self;
@@ -29,8 +33,12 @@ n00b_thread_self(void)
 }
 
 typedef struct {
+#if defined(_WIN32)
+    uint8_t ready;
+#else
     int     fds[2]; // 0 is read end, 1 is write end
     uint8_t ready;
+#endif
 } n00b_memperm_pipe_t;
 
 /**
@@ -75,14 +83,18 @@ struct n00b_thread_t {
         uint64_t unique_id;
     } id_info;
 
-    void                 *stack_base;
-    void                 *stack_top;
-    n00b_mmap_info_t     *stack_map;
+    void               *stack_base;
+    void               *stack_top;
+    n00b_mmap_info_t   *stack_map;
+    n00b_memperm_pipe_t memperm_pipe;
+#if defined(_WIN32)
+    uint32_t            os_thread_id;
+#else
     pthread_t             pthread_id;
-    n00b_memperm_pipe_t   memperm_pipe;
-    n00b_futex_t          self_lock;
-    n00b_thread_record_t *record;       ///< Pointer into rt->threads[slot].
     n00b_option_t(pthread_attr_t) pthread_attrs;
+#endif
+    n00b_futex_t        self_lock;
+    n00b_thread_record_t *record; ///< Pointer into rt->threads[slot].
 };
 
 /**
@@ -141,7 +153,9 @@ void
 n00b_thread_init() _kargs
 {
     n00b_runtime_t *runtime             = n00b_get_runtime();
+#if !defined(_WIN32)
     n00b_option_t(pthread_attr_t) attrs = n00b_option_none(pthread_attr_t);
+#endif
     uint32_t acquired_slot              = 0;
 };
 

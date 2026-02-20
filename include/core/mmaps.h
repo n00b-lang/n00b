@@ -19,8 +19,13 @@
 #include "core/atomic.h"
 #include "core/macros.h"
 
-#include <sys/mman.h>
 #include <assert.h>
+
+#if defined(_WIN32)
+#include "n00b_windows_compat.h"
+#else
+#include <sys/mman.h>
+#endif
 
 #if defined(__has_include)
 #if __has_include("n00b_build_config.h")
@@ -28,6 +33,34 @@
 #endif
 #endif
 
+#if defined(_WIN32)
+#define N00B_MPROT 0
+#define N00B_MFLAG 0
+
+static inline n00b_result_t(void *)
+n00b_platform_map_anon(size_t sz)
+{
+    void *p = VirtualAlloc(nullptr, sz, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+
+    if (!p) {
+        return n00b_result_err(void *, (int)GetLastError());
+    }
+
+    return n00b_result_ok(void *, p);
+}
+
+static inline n00b_result_t(int)
+n00b_platform_unmap(void *addr, size_t size)
+{
+    (void)size;
+
+    if (!VirtualFree(addr, 0, MEM_RELEASE)) {
+        return n00b_result_err(int, (int)GetLastError());
+    }
+
+    return n00b_result_ok(int, 0);
+}
+#else
 #define N00B_MPROT (PROT_READ | PROT_WRITE)
 
 #if defined(N00B_HAVE_MAP_ANONYMOUS) && N00B_HAVE_MAP_ANONYMOUS
@@ -43,6 +76,19 @@
 #endif
 
 #define N00B_MFLAG (MAP_PRIVATE | N00B_MAP_ANON_FLAG)
+
+static inline n00b_result_t(void *)
+n00b_platform_map_anon(size_t sz)
+{
+    return n00b_check_mmap(nullptr, sz, N00B_MPROT, N00B_MFLAG, -1, 0);
+}
+
+static inline n00b_result_t(int)
+n00b_platform_unmap(void *addr, size_t size)
+{
+    return munmap(addr, size) ? n00b_result_err(int, errno) : n00b_result_ok(int, 0);
+}
+#endif
 
 enum n00b_mmap_perms_t : uint8_t {
     n00b_mmap_perms_data_not_addr = 0,
@@ -251,7 +297,7 @@ n00b_safe_munmap(void *addr, size_t size)
     auto r = n00b_munmap(addr);
 
     if (n00b_result_is_err(r)) {
-        munmap(addr, size);
+        (void)n00b_platform_unmap(addr, size);
     }
 }
 

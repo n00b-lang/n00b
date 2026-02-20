@@ -1,7 +1,13 @@
+#if defined(_WIN32)
+#include "n00b_windows_compat.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#else
 #include <pthread.h>
-#include <sys/mman.h>
 #include <sys/resource.h>
 #include <unistd.h>
+#endif
 
 #include "n00b_build_config.h"
 
@@ -18,6 +24,39 @@
 #include "core/lock_common.h"
 #include "core/mutex.h"
 #include "core/rwlock.h"
+
+#if defined(_WIN32)
+static int n00b_win_thread_debug_state = -1;
+
+static bool
+n00b_win_thread_debug_enabled(void)
+{
+    if (n00b_win_thread_debug_state == -1) {
+        char *env = getenv("N00B_WIN_THREAD_DEBUG");
+
+        n00b_win_thread_debug_state = (env && *env && strcmp(env, "0") != 0) ? 1 : 0;
+    }
+
+    return n00b_win_thread_debug_state == 1;
+}
+
+static void
+n00b_win_thread_debug_log(const char *stage, n00b_runtime_t *runtime, uint32_t slot, n00b_thread_t *self)
+{
+    if (!n00b_win_thread_debug_enabled()) {
+        return;
+    }
+
+    fprintf(stderr,
+            "[n00b-win-thread] %s tid=%lu runtime=%p self=%p slot=%u\n",
+            stage,
+            (unsigned long)GetCurrentThreadId(),
+            (void *)runtime,
+            (void *)self,
+            slot);
+    fflush(stderr);
+}
+#endif
 
 thread_local n00b_thread_t __n00b_thread_self;
 
@@ -40,29 +79,48 @@ void
 n00b_thread_init() _kargs
 {
     n00b_runtime_t *runtime             = n00b_get_runtime();
+#if !defined(_WIN32)
     n00b_option_t(pthread_attr_t) attrs = n00b_option_none(pthread_attr_t);
+#endif
     uint32_t acquired_slot              = 0;
 }
 {
+    n00b_thread_t *self = n00b_thread_self();
+
+#if defined(_WIN32)
+    n00b_win_thread_debug_log("entry", runtime, acquired_slot, self);
+#endif
+
     if (!acquired_slot) {
-        acquired_slot = n00b_thread_slot_acquire(runtime, n00b_thread_self());
+        acquired_slot = n00b_thread_slot_acquire(runtime, self);
     }
 
     n00b_thread_record_t *rec = &runtime->threads[acquired_slot];
     uint32_t gen = rec->generation++;
+#if defined(_WIN32)
+    n00b_win_thread_debug_log("pre-assign", runtime, acquired_slot, self);
+#endif
 
-    __n00b_thread_self = (n00b_thread_t){
-	.pthread_id    = pthread_self(),
-	.pthread_attrs = attrs,
-	.record        = rec,
-	.id_info.parts = {
-	    .id         = acquired_slot,
-	    .generation = gen,
-	},
+    *self = (n00b_thread_t){
+#if defined(_WIN32)
+        .os_thread_id = GetCurrentThreadId(),
+#else
+        .pthread_id    = pthread_self(),
+        .pthread_attrs = attrs,
+#endif
+        .record = rec,
+        .id_info.parts = {
+            .id         = acquired_slot,
+            .generation = gen,
+        },
     };
 
-    n00b_capture_stack_base(&__n00b_thread_self, runtime);
-    n00b_capture_stack_top(&__n00b_thread_self);
+#if defined(_WIN32)
+    n00b_win_thread_debug_log("post-assign", runtime, acquired_slot, self);
+#endif
+
+    n00b_capture_stack_base(self, runtime);
+    n00b_capture_stack_top(self);
 
     n00b_atomic_add(&runtime->live_threads, 1);
     n00b_futex_wake((n00b_futex_t *)&rec->thread, true);
@@ -133,11 +191,12 @@ n00b_thread_destroy(void)
         n00b_release_locks_on_thread_exit(rec);
         n00b_atomic_store(&rec->thread, nullptr);
     }
-
+#if !defined(_WIN32)
     if (__n00b_thread_self.memperm_pipe.ready) {
         close(__n00b_thread_self.memperm_pipe.fds[0]);
         close(__n00b_thread_self.memperm_pipe.fds[1]);
     }
+#endif
 
     n00b_runtime_t *rt = n00b_get_runtime();
     if (rt) {
@@ -148,10 +207,35 @@ n00b_thread_destroy(void)
 void
 n00b_capture_stack_base(n00b_thread_t *thread, n00b_runtime_t *runtime)
 {
+#if !defined(_WIN32)
     size_t size;
+#endif
     char  *highest;
     char  *lowest;
 
+#if defined(_WIN32)
+    (void)runtime;
+
+#if N00B_HAVE_GET_CURRENT_THREAD_STACK_LIMITS
+    ULONG_PTR low_limit;
+    ULONG_PTR high_limit;
+
+    GetCurrentThreadStackLimits(&low_limit, &high_limit);
+
+    lowest  = (char *)low_limit;
+    highest = (char *)high_limit;
+#else
+    MEMORY_BASIC_INFORMATION mbi = {};
+    int                     marker;
+
+    if (!VirtualQuery(&marker, &mbi, sizeof(mbi))) {
+        abort();
+    }
+
+    lowest  = (char *)mbi.AllocationBase;
+    highest = lowest + mbi.RegionSize;
+#endif
+#else
     if (!n00b_atomic_load(&runtime->live_threads)) {
         struct rlimit rlimit;
         getrlimit(RLIMIT_STACK, &rlimit);
@@ -188,6 +272,7 @@ n00b_capture_stack_base(n00b_thread_t *thread, n00b_runtime_t *runtime)
 #error "No supported pthread stack-bound API was detected."
 #endif
     }
+#endif
 
     thread->stack_base = highest;
     thread->stack_map  = n00b_option_get(
