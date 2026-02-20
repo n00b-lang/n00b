@@ -37,12 +37,15 @@ canvas_alloc_frames(n00b_canvas_t *c)
         n00b_free(c->prev_frame);
     }
 
-    c->frame      = n00b_alloc_array(n00b_rcell_t, total,
-                                       .allocator = c->allocator,
-                                       .no_scan   = true);
-    c->prev_frame = n00b_alloc_array(n00b_rcell_t, total,
-                                       .allocator = c->allocator,
-                                       .no_scan   = true);
+    // clang-format off
+    c->frame      = n00b_alloc_array(n00b_rcell_t,
+				     total,
+				     .allocator = c->allocator,
+				     .no_scan = true);
+    c->prev_frame = n00b_alloc_array(n00b_rcell_t,
+				     total,
+				     .allocator = c->allocator,
+				     .no_scan = true);
 }
 
 // -------------------------------------------------------------------
@@ -53,7 +56,6 @@ n00b_canvas_t *
 n00b_canvas_new(const n00b_renderer_vtable_t *vtable) _kargs
 {
     n00b_allocator_t *allocator = nullptr;
-    int               fd        = 1;
 }
 {
     assert(vtable);
@@ -69,8 +71,8 @@ n00b_canvas_new(const n00b_renderer_vtable_t *vtable) _kargs
 
     // Get initial size from backend.
     n00b_render_size_t sz = vtable->get_size(c->backend_ctx);
-    c->frame_rows = sz.rows;
-    c->frame_cols = sz.cols;
+    c->frame_rows         = sz.rows;
+    c->frame_cols         = sz.cols;
 
     if (c->frame_rows > 0 && c->frame_cols > 0) {
         canvas_alloc_frames(c);
@@ -115,12 +117,11 @@ n00b_canvas_add_plane(n00b_canvas_t *c, n00b_plane_t *p)
     canvas_lock(c);
 
     if (c->num_planes >= c->planes_cap) {
-        n00b_isize_t new_cap = c->planes_cap ? c->planes_cap * 2 : 8;
-        n00b_plane_t **new_arr = n00b_alloc_array(n00b_plane_t *, new_cap,
-                                                    .allocator = c->allocator);
+        n00b_isize_t   new_cap = c->planes_cap ? c->planes_cap * 2 : 8;
+        n00b_plane_t **new_arr
+            = n00b_alloc_array(n00b_plane_t *, new_cap, .allocator = c->allocator);
         if (c->planes) {
-            memcpy(new_arr, c->planes,
-                   c->num_planes * sizeof(n00b_plane_t *));
+            memcpy(new_arr, c->planes, c->num_planes * sizeof(n00b_plane_t *));
             n00b_free(c->planes);
         }
         c->planes     = new_arr;
@@ -162,13 +163,16 @@ n00b_canvas_render(n00b_canvas_t *c)
 {
     canvas_lock(c);
 
-    // Refresh size from backend.
-    n00b_render_size_t sz = c->vtable->get_size(c->backend_ctx);
-    if (sz.rows != c->frame_rows || sz.cols != c->frame_cols) {
-        c->frame_rows = sz.rows;
-        c->frame_cols = sz.cols;
-        canvas_alloc_frames(c);
-        c->needs_full_redraw = true;
+    // Refresh size from backend, unless the caller has set an explicit
+    // size via canvas_resize() (size_set == true).
+    if (!c->size_set) {
+        n00b_render_size_t sz = c->vtable->get_size(c->backend_ctx);
+        if (sz.rows != c->frame_rows || sz.cols != c->frame_cols) {
+            c->frame_rows = sz.rows;
+            c->frame_cols = sz.cols;
+            canvas_alloc_frames(c);
+            c->needs_full_redraw = true;
+        }
     }
 
     if (c->frame_rows == 0 || c->frame_cols == 0 || !c->frame) {
@@ -182,13 +186,16 @@ n00b_canvas_render(n00b_canvas_t *c)
     }
 
     // Flatten plane hierarchy.
-    n00b_array_t(n00b_composite_entry_t) flat = n00b_composite_flatten(
-        c->planes, c->num_planes);
+    n00b_array_t(n00b_composite_entry_t) flat
+        = n00b_composite_flatten(c->planes, c->num_planes);
 
     // Composite into frame.
-    n00b_composite_render(flat.data, (n00b_isize_t)flat.len, c->frame,
-                           c->frame_rows, c->frame_cols,
-                           c->default_style);
+    n00b_composite_render(flat.data,
+                          (n00b_isize_t)flat.len,
+                          c->frame,
+                          c->frame_rows,
+                          c->frame_cols,
+                          c->default_style);
 
     // Degrade based on capabilities.
     n00b_composite_degrade(c->frame, c->frame_rows, c->frame_cols, c->caps);
@@ -199,8 +206,7 @@ n00b_canvas_render(n00b_canvas_t *c)
         prev = c->prev_frame;
     }
 
-    c->vtable->render_frame(c->backend_ctx, c->frame,
-                             c->frame_rows, c->frame_cols, prev);
+    c->vtable->render_frame(c->backend_ctx, c->frame, c->frame_rows, c->frame_cols, prev);
     c->vtable->flush(c->backend_ctx);
 
     // Swap frames.
@@ -228,6 +234,7 @@ n00b_canvas_resize(n00b_canvas_t *c, n00b_isize_t rows, n00b_isize_t cols)
 
     c->frame_rows = rows;
     c->frame_cols = cols;
+    c->size_set   = true;
     canvas_alloc_frames(c);
     c->needs_full_redraw = true;
 

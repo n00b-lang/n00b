@@ -15,6 +15,7 @@
 
 #include "n00b.h"
 #include "core/layout.h"
+#include "core/list.h"
 #include "render/types.h"
 #include "strings/text_style.h"
 
@@ -60,13 +61,13 @@ typedef struct n00b_table_cell_t {
 // Table row
 // ====================================================================
 
+n00b_list_decl(n00b_table_cell_t);
+
 /**
  * @brief A completed row of cells.
  */
 typedef struct n00b_table_row_t {
-    n00b_table_cell_t *cells;
-    n00b_isize_t       num_cells;
-    n00b_isize_t       cells_cap;
+    n00b_list_t(n00b_table_cell_t) cells;
 } n00b_table_row_t;
 
 // ====================================================================
@@ -104,3 +105,6 @@ typedef struct n00b_table_style_t {
     n00b_box_props_t *header_props;
     n00b_box_props_t *alt_cell_props;
 } n00b_table_style_t;
+
+n00b_list_decl(n00b_table_row_t);
+n00b_list_decl(n00b_table_col_spec_t);

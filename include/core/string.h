@@ -18,10 +18,10 @@
  * @c styling is reserved for rich-text formatting metadata (TBD).
  */
 struct n00b_string_t {
-    int64_t  u8_bytes;
-    char    *data;
-    int64_t  codepoints;
-    void    *styling;
+    char  *data;
+    size_t u8_bytes;
+    size_t codepoints;
+    void  *styling;
 };
 
 /**
@@ -40,9 +40,10 @@ struct n00b_string_t {
  * @pre @p byte_len >= 0.
  * @post Returned string's data is NUL-terminated.
  */
-extern n00b_string_t
-n00b_string_from_raw(n00b_allocator_t *allocator, const char *src,
-                     int64_t byte_len, int64_t cp_count);
+extern n00b_string_t n00b_string_from_raw(n00b_allocator_t *allocator,
+                                          const char       *src,
+                                          int64_t           byte_len,
+                                          int64_t           cp_count);
 
 /**
  * @brief Return an empty `n00b_string_t`.
@@ -50,5 +51,4 @@ n00b_string_from_raw(n00b_allocator_t *allocator, const char *src,
  * @param allocator  Allocator (nullptr = runtime default).
  * @return           An empty string (0 bytes, 0 codepoints).
  */
-extern n00b_string_t
-n00b_string_empty(n00b_allocator_t *allocator);
+extern n00b_string_t n00b_string_empty(n00b_allocator_t *allocator);

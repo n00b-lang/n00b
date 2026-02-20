@@ -23,16 +23,14 @@ n00b_unicode_str_from_int(int64_t n) _kargs
         allocator = nullptr;
 
     char  buf[21]; // enough for INT64_MIN
-    char *p    = buf + 20;
-    buf[20]    = '\0';
-    bool  neg  = false;
+    char *p = buf + 20;
+    buf[20] = '\0';
 
     if (n == 0) {
         return n00b_string_from_raw(allocator, "0", 1, 1);
     }
 
     if (n < 0) {
-        neg = true;
         // Work with positive magnitude using unsigned to avoid UB at INT64_MIN.
         uint64_t mag = (uint64_t)(-(n + 1)) + 1;
         while (mag > 0) {
@@ -75,9 +73,9 @@ n00b_unicode_str_to_hex(n00b_string_t s, bool upper) _kargs
     const char *map = upper ? hex_upper_tbl : hex_lower_tbl;
 
     for (uint32_t i = 0; i < len; i++) {
-        uint8_t c       = (uint8_t)s.data[i];
-        buf[i * 2]      = map[c >> 4];
-        buf[i * 2 + 1]  = map[c & 0x0f];
+        uint8_t c      = (uint8_t)s.data[i];
+        buf[i * 2]     = map[c >> 4];
+        buf[i * 2 + 1] = map[c & 0x0f];
     }
     buf[out] = '\0';
 
@@ -129,10 +127,9 @@ n00b_unicode_str_to_literal(n00b_string_t s) _kargs
     buf[0] = '"';
     memcpy(buf + 1, escaped.data, elen);
     buf[total - 1] = '"';
-    buf[total]      = '\0';
+    buf[total]     = '\0';
 
-    n00b_string_t result = n00b_string_from_raw(allocator, buf, total,
-                                                 escaped.codepoints + 2);
+    n00b_string_t result = n00b_string_from_raw(allocator, buf, total, escaped.codepoints + 2);
     n00b_free(buf);
     return result;
 }
@@ -164,8 +161,7 @@ n00b_unicode_str_from_codepoint(n00b_codepoint_t cp) _kargs
 // File I/O
 // ---------------------------------------------------------------------------
 
-n00b_result_t(n00b_string_t)
-n00b_unicode_str_from_file(const char *path) _kargs
+n00b_result_t(n00b_string_t) n00b_unicode_str_from_file(const char *path) _kargs
 {
     n00b_allocator_t *allocator = nullptr;
 }
@@ -192,8 +188,8 @@ n00b_unicode_str_from_file(const char *path) _kargs
         return n00b_result_ok(n00b_string_t, empty);
     }
 
-    char    *buf        = n00b_alloc_array(char, (size_t)file_size + 1);
-    ssize_t  total_read = 0;
+    char   *buf        = n00b_alloc_array(char, (size_t)file_size + 1);
+    ssize_t total_read = 0;
 
     while (total_read < file_size) {
         ssize_t n = read(fd, buf + total_read, (size_t)(file_size - total_read));
@@ -218,7 +214,7 @@ n00b_unicode_str_from_file(const char *path) _kargs
         return n00b_result_err(n00b_string_t, N00B_ERR_STR_INVALID_ESCAPE);
     }
 
-    int64_t cps = n00b_unicode_utf8_count_codepoints_raw(buf, (uint32_t)total_read);
+    int64_t       cps    = n00b_unicode_utf8_count_codepoints_raw(buf, (uint32_t)total_read);
     n00b_string_t result = n00b_string_from_raw(allocator, buf, total_read, cps);
     n00b_free(buf);
     return n00b_result_ok(n00b_string_t, result);
@@ -228,8 +224,7 @@ n00b_unicode_str_from_file(const char *path) _kargs
 // C string array
 // ---------------------------------------------------------------------------
 
-n00b_array_t(n00b_cstr_t)
-n00b_unicode_make_cstr_array(n00b_array_t(n00b_string_t) parts) _kargs
+n00b_array_t(n00b_cstr_t) n00b_unicode_make_cstr_array(n00b_array_t(n00b_string_t) parts) _kargs
 {
     n00b_allocator_t *allocator = nullptr;
 }
@@ -237,7 +232,7 @@ n00b_unicode_make_cstr_array(n00b_array_t(n00b_string_t) parts) _kargs
     if (!allocator)
         allocator = nullptr;
 
-    uint32_t count = (uint32_t)parts.len;
+    uint32_t count                   = (uint32_t)parts.len;
     n00b_array_t(n00b_cstr_t) result = n00b_array_new(n00b_cstr_t, count);
     for (uint32_t i = 0; i < count; i++) {
         result.data[i] = n00b_unicode_str_to_cstr(parts.data[i], .allocator = allocator);

@@ -15,12 +15,15 @@
 // ====================================================================
 
 static n00b_text_style_t *
-make_text_style(n00b_palette_ix_t fg_ix, bool bold, n00b_text_case_t text_case)
+make_text_style(n00b_palette_ix_t fg_ix,
+                n00b_palette_ix_t bg_ix,
+                bool bold,
+                n00b_text_case_t text_case)
 {
     n00b_text_style_t *s = n00b_str_style_new();
 
     s->fg_palette_ix = fg_ix;
-    s->bg_palette_ix = N00B_PAL_UNSET;
+    s->bg_palette_ix = bg_ix;
 
     if (bold) {
         s->bold = N00B_TRI_YES;
@@ -52,6 +55,7 @@ n00b_table_style_default(void)
             .theme        = &n00b_border_rounded,
             .borders      = N00B_BORDER_ALL,
             .border_style = make_text_style(N00B_PAL_BORDER_LIGHT,
+                                            N00B_PAL_SURFACE,
                                             false, N00B_TEXT_CASE_NONE)),
         .cell_props = n00b_box_props_new(
             .borders    = N00B_BORDER_NONE,
@@ -59,6 +63,7 @@ n00b_table_style_default(void)
             .pad_right  = 1,
             .alignment  = N00B_ALIGN_TOP_LEFT,
             .text_style = make_text_style(N00B_PAL_TEXT_PRIMARY,
+                                          N00B_PAL_UNSET,
                                           false, N00B_TEXT_CASE_NONE),
             .fill_style = make_fill_style(N00B_PAL_SURFACE)),
         .header_props = n00b_box_props_new(
@@ -67,6 +72,7 @@ n00b_table_style_default(void)
             .pad_right  = 1,
             .alignment  = N00B_ALIGN_TOP_CENTER,
             .text_style = make_text_style(N00B_PAL_TEXT_INVERSE,
+                                          N00B_PAL_UNSET,
                                           true, N00B_TEXT_CASE_UPPER),
             .fill_style = make_fill_style(N00B_PAL_PRIMARY)),
         .alt_cell_props = n00b_box_props_new(
@@ -75,6 +81,7 @@ n00b_table_style_default(void)
             .pad_right  = 1,
             .alignment  = N00B_ALIGN_TOP_LEFT,
             .text_style = make_text_style(N00B_PAL_TEXT_PRIMARY,
+                                          N00B_PAL_UNSET,
                                           false, N00B_TEXT_CASE_NONE),
             .fill_style = make_fill_style(N00B_PAL_SURFACE_DARK)),
     };
@@ -90,6 +97,7 @@ n00b_table_style_simple(void)
                                                 | N00B_BORDER_BOTTOM
                                                 | N00B_BORDER_INTERIOR_H),
             .border_style = make_text_style(N00B_PAL_BORDER,
+                                            N00B_PAL_UNSET,
                                             false, N00B_TEXT_CASE_NONE)),
         .cell_props = n00b_box_props_new(
             .borders    = N00B_BORDER_NONE,
@@ -97,6 +105,7 @@ n00b_table_style_simple(void)
             .pad_right  = 1,
             .alignment  = N00B_ALIGN_TOP_LEFT,
             .text_style = make_text_style(N00B_PAL_TEXT_PRIMARY,
+                                          N00B_PAL_UNSET,
                                           false, N00B_TEXT_CASE_NONE)),
         .header_props = n00b_box_props_new(
             .borders    = N00B_BORDER_NONE,
@@ -104,6 +113,7 @@ n00b_table_style_simple(void)
             .pad_right  = 1,
             .alignment  = N00B_ALIGN_TOP_CENTER,
             .text_style = make_text_style(N00B_PAL_PRIMARY,
+                                          N00B_PAL_UNSET,
                                           true, N00B_TEXT_CASE_NONE)),
         .alt_cell_props = nullptr,
     };
@@ -117,6 +127,7 @@ n00b_table_style_ornate(void)
             .theme        = &n00b_border_double,
             .borders      = N00B_BORDER_ALL,
             .border_style = make_text_style(N00B_PAL_BORDER_LIGHT,
+                                            N00B_PAL_SURFACE,
                                             false, N00B_TEXT_CASE_NONE)),
         .cell_props = n00b_box_props_new(
             .borders    = N00B_BORDER_NONE,
@@ -124,6 +135,7 @@ n00b_table_style_ornate(void)
             .pad_right  = 1,
             .alignment  = N00B_ALIGN_TOP_LEFT,
             .text_style = make_text_style(N00B_PAL_TEXT_PRIMARY,
+                                          N00B_PAL_UNSET,
                                           false, N00B_TEXT_CASE_NONE),
             .fill_style = make_fill_style(N00B_PAL_SURFACE)),
         .header_props = n00b_box_props_new(
@@ -132,6 +144,7 @@ n00b_table_style_ornate(void)
             .pad_right  = 1,
             .alignment  = N00B_ALIGN_TOP_CENTER,
             .text_style = make_text_style(N00B_PAL_TEXT_INVERSE,
+                                          N00B_PAL_UNSET,
                                           true, N00B_TEXT_CASE_UPPER),
             .fill_style = make_fill_style(N00B_PAL_PRIMARY)),
         .alt_cell_props = n00b_box_props_new(
@@ -140,6 +153,7 @@ n00b_table_style_ornate(void)
             .pad_right  = 1,
             .alignment  = N00B_ALIGN_TOP_LEFT,
             .text_style = make_text_style(N00B_PAL_TEXT_PRIMARY,
+                                          N00B_PAL_UNSET,
                                           false, N00B_TEXT_CASE_NONE),
             .fill_style = make_fill_style(N00B_PAL_SURFACE_DARK)),
     };
@@ -162,6 +176,7 @@ n00b_table_style_minimal(void)
             .pad_right  = 1,
             .alignment  = N00B_ALIGN_TOP_CENTER,
             .text_style = make_text_style(N00B_PAL_UNSET,
+                                          N00B_PAL_UNSET,
                                           true, N00B_TEXT_CASE_NONE)),
         .alt_cell_props = nullptr,
     };
@@ -175,6 +190,7 @@ n00b_table_style_ascii(void)
             .theme        = &n00b_border_ascii,
             .borders      = N00B_BORDER_ALL,
             .border_style = make_text_style(N00B_PAL_BORDER,
+                                            N00B_PAL_UNSET,
                                             false, N00B_TEXT_CASE_NONE)),
         .cell_props = n00b_box_props_new(
             .borders   = N00B_BORDER_NONE,
@@ -187,6 +203,7 @@ n00b_table_style_ascii(void)
             .pad_right  = 1,
             .alignment  = N00B_ALIGN_TOP_CENTER,
             .text_style = make_text_style(N00B_PAL_UNSET,
+                                          N00B_PAL_UNSET,
                                           true, N00B_TEXT_CASE_NONE)),
         .alt_cell_props = nullptr,
     };

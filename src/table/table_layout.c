@@ -142,16 +142,16 @@ visible_row(n00b_table_t *table, n00b_isize_t vis_idx)
 {
     if (table->max_rows > 0) {
         n00b_isize_t actual = (table->ring_base + vis_idx) % table->max_rows;
-        return &table->rows[actual];
+        return &table->rows.data[actual];
     }
 
-    return &table->rows[vis_idx];
+    return &table->rows.data[vis_idx];
 }
 
 static inline n00b_isize_t
 visible_row_count(n00b_table_t *table)
 {
-    return table->num_rows;
+    return (n00b_isize_t)table->rows.len;
 }
 
 // ====================================================================
@@ -166,10 +166,11 @@ scan_column_preferences(n00b_table_t *table, int64_t width)
 
     int32_t lr_pad = cell_lpad + cell_rpad;
 
-    n00b_isize_t n_rows = visible_row_count(table);
+    n00b_isize_t n_rows  = visible_row_count(table);
+    n00b_isize_t n_cols  = (n00b_isize_t)table->col_specs.len;
 
-    for (n00b_isize_t col = 0; col < table->num_cols; col++) {
-        n00b_table_col_spec_t *spec = &table->col_specs[col];
+    for (n00b_isize_t col = 0; col < n_cols; col++) {
+        n00b_table_col_spec_t *spec = &table->col_specs.data[col];
 
         // Only scan content for FIT columns that don't already have pref set.
         if (spec->mode != N00B_COL_FIT || spec->pref.value.i > 0) {
@@ -185,8 +186,8 @@ scan_column_preferences(n00b_table_t *table, int64_t width)
             // Find the cell that covers this column.
             n00b_isize_t cell_col = 0;
 
-            for (n00b_isize_t ci = 0; ci < row->num_cells; ci++) {
-                n00b_table_cell_t *cell = &row->cells[ci];
+            for (size_t ci = 0; ci < row->cells.len; ci++) {
+                n00b_table_cell_t *cell = &row->cells.data[ci];
                 int32_t            span = cell->col_span;
 
                 if (span <= 0) {
@@ -253,7 +254,7 @@ scan_column_preferences(n00b_table_t *table, int64_t width)
             }
         }
         else {
-            int64_t share = width / (int64_t)table->num_cols;
+            int64_t share = width / (int64_t)n_cols;
             int64_t p     = col_longest_word > share ? col_longest_word : share;
             spec->pref    = (n00b_layout_dim_t){ .value.i = p };
         }
@@ -269,8 +270,10 @@ build_layout_items(n00b_table_t     *table,
                     n00b_layout_t    *items,
                     int64_t           width)
 {
-    for (n00b_isize_t i = 0; i < table->num_cols; i++) {
-        n00b_table_col_spec_t *spec = &table->col_specs[i];
+    n00b_isize_t n_cols = (n00b_isize_t)table->col_specs.len;
+
+    for (n00b_isize_t i = 0; i < n_cols; i++) {
+        n00b_table_col_spec_t *spec = &table->col_specs.data[i];
 
         items[i] = (n00b_layout_t){
             .min           = spec->min,
@@ -296,8 +299,10 @@ compute_row_heights(n00b_table_t *table)
         int64_t           max_h  = 1; // At least 1 line.
         n00b_isize_t      col_ix = 0;
 
-        for (n00b_isize_t ci = 0; ci < row->num_cells; ci++) {
-            n00b_table_cell_t *cell = &row->cells[ci];
+        n00b_isize_t num_cols = (n00b_isize_t)table->col_specs.len;
+
+        for (size_t ci = 0; ci < row->cells.len; ci++) {
+            n00b_table_cell_t *cell = &row->cells.data[ci];
 
             // Compute the actual cell width from column results.
             int32_t span = cell->col_span;
@@ -306,7 +311,7 @@ compute_row_heights(n00b_table_t *table)
             }
 
             int64_t cell_width = 0;
-            for (int32_t s = 0; s < span && (col_ix + s) < table->num_cols; s++) {
+            for (int32_t s = 0; s < span && (col_ix + s) < num_cols; s++) {
                 cell_width += table->col_results[col_ix + s].size;
             }
 
@@ -373,16 +378,12 @@ compute_row_heights(n00b_table_t *table)
 void
 _n00b_table_compute_layout(n00b_table_t *table, int64_t width)
 {
-    if (table->num_rows == 0) {
+    if (table->rows.len == 0) {
         table->layout_valid = true;
         return;
     }
 
-    // Ensure col_specs are created for all columns.
-    while (table->num_cols < table->cols_cap) {
-        // Already allocated; stop if we have enough.
-        break;
-    }
+    n00b_isize_t num_cols = (n00b_isize_t)table->col_specs.len;
 
     // Compute available width for columns.
     n00b_isize_t outer_left = 0, outer_right = 0;
@@ -398,11 +399,11 @@ _n00b_table_compute_layout(n00b_table_t *table, int64_t width)
         table->table_props
         && (table->table_props->borders & N00B_BORDER_INTERIOR_V);
 
-    int64_t interior_v_total = has_interior_v ? (table->num_cols - 1) : 0;
+    int64_t interior_v_total = has_interior_v ? (num_cols - 1) : 0;
     int64_t avail = width - outer_left - outer_right - interior_v_total;
 
-    if (avail < (int64_t)table->num_cols) {
-        avail = (int64_t)table->num_cols;
+    if (avail < (int64_t)num_cols) {
+        avail = (int64_t)num_cols;
     }
 
     // Phase 1: scan content for FIT columns.
@@ -410,7 +411,7 @@ _n00b_table_compute_layout(n00b_table_t *table, int64_t width)
 
     // Phase 2: build layout items.
     n00b_layout_t *items =
-        n00b_alloc_array(n00b_layout_t, table->num_cols,
+        n00b_alloc_array(n00b_layout_t, num_cols,
                           .allocator = table->allocator);
 
     build_layout_items(table, items, avail);
@@ -421,11 +422,11 @@ _n00b_table_compute_layout(n00b_table_t *table, int64_t width)
     }
 
     table->col_results =
-        n00b_alloc_array(n00b_layout_result_t, table->num_cols,
+        n00b_alloc_array(n00b_layout_result_t, num_cols,
                           .allocator = table->allocator);
 
     n00b_layout_calculate(items, table->col_results,
-                           table->num_cols, avail);
+                           num_cols, avail);
 
     n00b_free(items);
 

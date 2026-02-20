@@ -35,7 +35,7 @@ dumb_init(void)
 {
     dumb_ctx_t *ctx = n00b_alloc(dumb_ctx_t, .no_scan = true);
     ctx->fd   = STDOUT_FILENO;
-    ctx->rows = DUMB_DEFAULT_ROWS;
+    ctx->rows = 0;
     ctx->cols = DUMB_DEFAULT_COLS;
     return ctx;
 }

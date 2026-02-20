@@ -182,12 +182,14 @@ ansi_inline_init(void)
 
     if (ioctl(ctx->fd, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0) {
         ctx->cols = ws.ws_col;
-        ctx->rows = ws.ws_row;
     }
     else {
         ctx->cols = 80;
-        ctx->rows = 25;
     }
+
+    // Inline backend does not own the screen — leave rows = 0 so the
+    // canvas knows it must be sized explicitly via canvas_resize().
+    ctx->rows = 0;
 
     return ctx;
 }
@@ -227,11 +229,12 @@ ansi_inline_get_size(void *vctx)
 {
     ansi_inline_ctx_t *ctx = vctx;
 
+    // Only refresh column width from the terminal.  Row count is
+    // left at whatever was set externally (0 by default).
     struct winsize ws;
 
     if (ioctl(ctx->fd, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0) {
         ctx->cols = ws.ws_col;
-        ctx->rows = ws.ws_row;
     }
 
     return (n00b_render_size_t){
@@ -310,6 +313,22 @@ ansi_inline_flush(void *vctx)
         write(ctx->fd, ctx->buf, ctx->buf_used);
         ctx->buf_used = 0;
     }
+}
+
+// -------------------------------------------------------------------
+// Inline-specific helpers
+// -------------------------------------------------------------------
+
+/**
+ * Set the virtual terminal size for the inline backend.
+ * Only valid when the backend is ansi_inline.
+ */
+void
+n00b_ansi_inline_set_size(void *ctx, n00b_isize_t rows, n00b_isize_t cols)
+{
+    ansi_inline_ctx_t *ictx = ctx;
+    ictx->rows = rows;
+    ictx->cols = cols;
 }
 
 // -------------------------------------------------------------------

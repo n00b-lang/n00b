@@ -12,8 +12,22 @@
 // ============================================================================
 
 static const char n00b_hex_map_lower[16] = {
-    '0', '1', '2', '3', '4', '5', '6', '7',
-    '8', '9', 'a', 'b', 'c', 'd', 'e', 'f',
+    '0',
+    '1',
+    '2',
+    '3',
+    '4',
+    '5',
+    '6',
+    '7',
+    '8',
+    '9',
+    'a',
+    'b',
+    'c',
+    'd',
+    'e',
+    'f',
 };
 
 // ============================================================================
@@ -67,8 +81,7 @@ n00b_buffer_init(n00b_buffer_t *obj) _kargs
 
     if (length == 0) {
         obj->alloc_len = N00B_EMPTY_BUFFER_ALLOC;
-        obj->data      = n00b_alloc_array(char, obj->alloc_len,
-                                          .allocator = obj->allocator);
+        obj->data      = n00b_alloc_array(char, obj->alloc_len, .allocator = obj->allocator);
         obj->byte_len  = 0;
         return;
     }
@@ -76,8 +89,7 @@ n00b_buffer_init(n00b_buffer_t *obj) _kargs
     if (length > 0 && ptr == nullptr) {
         int64_t alloc_len = n00b_align_closest_pow2_ceil(length);
 
-        obj->data      = n00b_alloc_array(char, alloc_len,
-                                          .allocator = obj->allocator);
+        obj->data      = n00b_alloc_array(char, alloc_len, .allocator = obj->allocator);
         obj->alloc_len = alloc_len;
     }
 
@@ -99,7 +111,7 @@ n00b_buffer_init(n00b_buffer_t *obj) _kargs
         uint8_t cur         = 0;
         int     valid_count = 0;
 
-        for (int64_t i = 0; i < hex->u8_bytes; i++) {
+        for (size_t i = 0; i < hex->u8_bytes; i++) {
             uint8_t byte = (uint8_t)hex->data[i];
 
             if (byte >= '0' && byte <= '9') {
@@ -165,8 +177,7 @@ n00b_buffer_resize(n00b_buffer_t *buffer, uint64_t new_sz)
     }
 
     uint64_t new_alloc_sz = n00b_align_closest_pow2_ceil(new_sz);
-    char    *new_data     = n00b_alloc_array(char, new_alloc_sz,
-                                             .allocator = buffer->allocator);
+    char    *new_data = n00b_alloc_array(char, new_alloc_sz, .allocator = buffer->allocator);
 
     memcpy(new_data, buffer->data, buffer->byte_len);
 
@@ -223,8 +234,7 @@ n00b_buffer_add(n00b_buffer_t *b1, n00b_buffer_t *b2) _kargs
 // Find
 // ============================================================================
 
-n00b_option_t(int64_t)
-n00b_buffer_find(n00b_buffer_t *b, n00b_buffer_t *sub) _kargs
+n00b_option_t(int64_t) n00b_buffer_find(n00b_buffer_t *b, n00b_buffer_t *sub) _kargs
 {
     n00b_option_t(size_t) start = n00b_option_set(size_t, 0);
     n00b_option_t(size_t) end   = n00b_option_none(size_t);
@@ -275,8 +285,7 @@ n00b_buffer_find(n00b_buffer_t *b, n00b_buffer_t *sub) _kargs
 // Index get / set
 // ============================================================================
 
-n00b_result_t(uint8_t)
-n00b_buffer_get_index(n00b_buffer_t *b, int64_t n)
+n00b_result_t(uint8_t) n00b_buffer_get_index(n00b_buffer_t *b, int64_t n)
 {
     defer_on();
     n00b_buffer_acquire_r(b);
@@ -292,12 +301,11 @@ n00b_buffer_get_index(n00b_buffer_t *b, int64_t n)
     }
 
     uint8_t result = (uint8_t)b->data[n];
-    Return n00b_result_ok(uint8_t, result);
+    Return  n00b_result_ok(uint8_t, result);
     defer_func_end();
 }
 
-n00b_result_t(bool)
-n00b_buffer_set_index(n00b_buffer_t *b, int64_t n, uint8_t c)
+n00b_result_t(bool) n00b_buffer_set_index(n00b_buffer_t *b, int64_t n, uint8_t c)
 {
     defer_on();
     n00b_buffer_acquire_w(b);
@@ -358,8 +366,7 @@ n00b_buffer_get_slice(n00b_buffer_t *b, int64_t start, int64_t end) _kargs
 }
 
 n00b_result_t(bool)
-n00b_buffer_set_slice(n00b_buffer_t *b, int64_t start, int64_t end,
-                      n00b_buffer_t *val)
+    n00b_buffer_set_slice(n00b_buffer_t *b, int64_t start, int64_t end, n00b_buffer_t *val)
 {
     defer_on();
     n00b_buffer_acquire_w(b);
@@ -396,14 +403,11 @@ n00b_buffer_set_slice(n00b_buffer_t *b, int64_t start, int64_t end,
             memcpy(b->data + start, val->data, replace_len);
         }
         if (end < (int64_t)b->byte_len) {
-            memmove(b->data + start + replace_len,
-                    b->data + end,
-                    b->byte_len - end);
+            memmove(b->data + start + replace_len, b->data + end, b->byte_len - end);
         }
     }
     else {
-        char *new_buf = n00b_alloc_array(char, new_len,
-                                         .allocator = b->allocator);
+        char *new_buf = n00b_alloc_array(char, new_len, .allocator = b->allocator);
         if (start > 0) {
             memcpy(new_buf, b->data, start);
         }
@@ -411,9 +415,7 @@ n00b_buffer_set_slice(n00b_buffer_t *b, int64_t start, int64_t end,
             memcpy(new_buf + start, val->data, replace_len);
         }
         if (end < (int64_t)b->byte_len) {
-            memcpy(new_buf + start + replace_len,
-                   b->data + end,
-                   b->byte_len - end);
+            memcpy(new_buf + start + replace_len, b->data + end, b->byte_len - end);
         }
         if (b->data) {
             n00b_free(b->data);
@@ -522,8 +524,7 @@ n00b_buffer_to_hex_str(n00b_buffer_t *buf)
 // ============================================================================
 
 n00b_buffer_t *
-n00b_buffer_join(n00b_buffer_t **items, size_t count,
-                 n00b_buffer_t *joiner) _kargs
+n00b_buffer_join(n00b_buffer_t **items, size_t count, n00b_buffer_t *joiner) _kargs
 {
     n00b_allocator_t *allocator = nullptr;
 }

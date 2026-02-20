@@ -9,14 +9,6 @@
 #include "table/table.h"
 
 // ====================================================================
-// Internal constants
-// ====================================================================
-
-#define INITIAL_ROW_CAP  16
-#define INITIAL_CELL_CAP 8
-#define INITIAL_COL_CAP  8
-
-// ====================================================================
 // Internal: default box props (fallback for style cascade)
 // ====================================================================
 
@@ -28,92 +20,12 @@ static n00b_box_props_t _default_cell_props = {
     .pad_right    = 1,
 };
 
-// ====================================================================
-// Internal: grow helpers
-// ====================================================================
-
-static void
-grow_rows(n00b_table_t *table)
-{
-    n00b_isize_t new_cap = table->rows_cap * 2;
-
-    if (new_cap < INITIAL_ROW_CAP) {
-        new_cap = INITIAL_ROW_CAP;
-    }
-
-    n00b_table_row_t *new_rows =
-        n00b_alloc_array(n00b_table_row_t, new_cap,
-                          .allocator = table->allocator);
-
-    if (table->rows && table->num_rows > 0) {
-        memcpy(new_rows, table->rows,
-               table->num_rows * sizeof(n00b_table_row_t));
-        n00b_free(table->rows);
-    }
-
-    table->rows     = new_rows;
-    table->rows_cap = new_cap;
-}
-
-static void
-grow_current_row(n00b_table_t *table)
-{
-    n00b_table_row_t *row     = &table->current_row;
-    n00b_isize_t      new_cap = row->cells_cap * 2;
-
-    if (new_cap < INITIAL_CELL_CAP) {
-        new_cap = INITIAL_CELL_CAP;
-    }
-
-    n00b_table_cell_t *new_cells =
-        n00b_alloc_array(n00b_table_cell_t, new_cap,
-                          .allocator = table->allocator);
-
-    if (row->cells && row->num_cells > 0) {
-        memcpy(new_cells, row->cells,
-               row->num_cells * sizeof(n00b_table_cell_t));
-        n00b_free(row->cells);
-    }
-
-    row->cells     = new_cells;
-    row->cells_cap = new_cap;
-}
-
-static void
-grow_col_specs(n00b_table_t *table)
-{
-    n00b_isize_t new_cap = table->cols_cap * 2;
-
-    if (new_cap < INITIAL_COL_CAP) {
-        new_cap = INITIAL_COL_CAP;
-    }
-
-    n00b_table_col_spec_t *new_specs =
-        n00b_alloc_array(n00b_table_col_spec_t, new_cap,
-                          .allocator = table->allocator);
-
-    if (table->col_specs && table->num_cols > 0) {
-        memcpy(new_specs, table->col_specs,
-               table->num_cols * sizeof(n00b_table_col_spec_t));
-        n00b_free(table->col_specs);
-    }
-
-    table->col_specs = new_specs;
-    table->cols_cap  = new_cap;
-}
-
 static n00b_isize_t
 add_col_spec(n00b_table_t *table, n00b_table_col_spec_t spec)
 {
-    if (table->num_cols >= table->cols_cap) {
-        grow_col_specs(table);
-    }
+    n00b_list_push(table->col_specs, spec);
 
-    n00b_isize_t idx           = table->num_cols;
-    table->col_specs[idx]      = spec;
-    table->num_cols++;
-
-    return idx;
+    return (n00b_isize_t)table->col_specs.len - 1;
 }
 
 // Count how many logical columns the current row's cells consume.
@@ -121,9 +33,10 @@ static n00b_isize_t
 current_row_col_count(n00b_table_t *table)
 {
     n00b_isize_t count = 0;
+    size_t       n     = table->current_row.cells.len;
 
-    for (n00b_isize_t i = 0; i < table->current_row.num_cells; i++) {
-        int32_t span = table->current_row.cells[i].col_span;
+    for (size_t i = 0; i < n; i++) {
+        int32_t span = table->current_row.cells.data[i].col_span;
         count += (span > 0) ? (n00b_isize_t)span : 1;
     }
 
@@ -173,23 +86,27 @@ n00b_table_new() _kargs
         table->caption = n00b_string_empty(allocator);
     }
 
+    // Initialize lists.
+    table->rows         = n00b_list_new(n00b_table_row_t, allocator);
+    table->col_specs    = n00b_list_new(n00b_table_col_spec_t, allocator);
+    table->current_row.cells = n00b_list_new(n00b_table_cell_t, allocator);
+
     if (num_cols > 0) {
-        table->cols_cap  = (n00b_isize_t)num_cols;
-        table->col_specs = n00b_alloc_array(n00b_table_col_spec_t,
-                                             num_cols,
-                                             .allocator = allocator);
         // Default all columns to FIT mode.
         for (n00b_isize_t i = 0; i < num_cols; i++) {
-            table->col_specs[i].mode          = N00B_COL_FIT;
-            table->col_specs[i].flex_multiple = 1;
+            n00b_table_col_spec_t spec = {
+                .mode          = N00B_COL_FIT,
+                .flex_multiple = 1,
+            };
+            n00b_list_push(table->col_specs, spec);
         }
-        table->num_cols = num_cols;
     }
 
     if (max_rows > 0) {
-        table->rows_cap = max_rows;
-        table->rows     = n00b_alloc_array(n00b_table_row_t, max_rows,
-                                            .allocator = allocator);
+        // Pre-allocate capacity for ring buffer (but don't fill yet).
+        n00b_list_free(table->rows);
+        table->rows = n00b_list_new_cap(n00b_table_row_t, max_rows,
+                                         allocator);
     }
 
     return table;
@@ -202,20 +119,14 @@ n00b_table_destroy(n00b_table_t *table)
         return;
     }
 
-    // Free each row's cell array.
-    for (n00b_isize_t i = 0; i < table->num_rows; i++) {
-        if (table->rows[i].cells) {
-            n00b_free(table->rows[i].cells);
-        }
+    // Free each row's cell list.
+    for (size_t i = 0; i < table->rows.len; i++) {
+        n00b_list_free(table->rows.data[i].cells);
     }
 
-    if (table->rows) {
-        n00b_free(table->rows);
-    }
-
-    if (table->col_specs) {
-        n00b_free(table->col_specs);
-    }
+    n00b_list_free(table->rows);
+    n00b_list_free(table->col_specs);
+    n00b_list_free(table->current_row.cells);
 
     if (table->col_results) {
         n00b_free(table->col_results);
@@ -223,10 +134,6 @@ n00b_table_destroy(n00b_table_t *table)
 
     if (table->row_heights) {
         n00b_free(table->row_heights);
-    }
-
-    if (table->current_row.cells) {
-        n00b_free(table->current_row.cells);
     }
 
     n00b_free(table);
@@ -247,19 +154,15 @@ n00b_table_add_cell(n00b_table_t *table, n00b_string_t content) _kargs
 {
     assert(row_span == 1 && "multi-row spanning not yet supported");
 
-    if (table->current_row.num_cells >= table->current_row.cells_cap) {
-        grow_current_row(table);
-    }
+    n00b_table_cell_t cell_val = {
+        .content    = content,
+        .cell_props = cell_props,
+        .col_span   = col_span,
+        .row_span   = row_span,
+        .wrap       = wrap,
+    };
 
-    n00b_table_cell_t *cell = &table->current_row.cells[table->current_row.num_cells];
-
-    cell->content    = content;
-    cell->cell_props = cell_props;
-    cell->col_span   = col_span;
-    cell->row_span   = row_span;
-    cell->wrap       = wrap;
-
-    table->current_row.num_cells++;
+    n00b_list_push(table->current_row.cells, cell_val);
 }
 
 void
@@ -275,23 +178,26 @@ n00b_table_end_row(n00b_table_t *table)
 {
     n00b_table_row_t *row = &table->current_row;
 
-    if (row->num_cells == 0) {
+    if (row->cells.len == 0) {
         return;
     }
+
+    n00b_isize_t num_cols = (n00b_isize_t)table->col_specs.len;
 
     // First row: auto-detect column count if not set.
     if (!table->cols_locked) {
         n00b_isize_t row_cols = current_row_col_count(table);
 
-        if (table->num_cols == 0) {
+        if (num_cols == 0) {
             // Auto-detect: create default FIT specs.
-            while (table->num_cols < row_cols) {
+            while ((n00b_isize_t)table->col_specs.len < row_cols) {
                 n00b_table_col_spec_t spec = {
                     .mode          = N00B_COL_FIT,
                     .flex_multiple = 1,
                 };
                 add_col_spec(table, spec);
             }
+            num_cols = (n00b_isize_t)table->col_specs.len;
         }
 
         table->cols_locked = true;
@@ -300,48 +206,42 @@ n00b_table_end_row(n00b_table_t *table)
     // Resolve span-all (-1) cells: replace with actual span.
     n00b_isize_t used_cols = 0;
 
-    for (n00b_isize_t i = 0; i < row->num_cells; i++) {
-        if (row->cells[i].col_span == -1) {
-            int32_t remaining = (int32_t)(table->num_cols - used_cols);
-            row->cells[i].col_span = (remaining > 0) ? remaining : 1;
+    for (size_t i = 0; i < row->cells.len; i++) {
+        if (row->cells.data[i].col_span == -1) {
+            int32_t remaining = (int32_t)(num_cols - used_cols);
+            row->cells.data[i].col_span = (remaining > 0) ? remaining : 1;
         }
-        used_cols += (n00b_isize_t)row->cells[i].col_span;
+        used_cols += (n00b_isize_t)row->cells.data[i].col_span;
     }
 
     // Commit the row.
     if (table->max_rows > 0) {
         // Ring buffer mode.
-        n00b_isize_t slot = table->total_added % table->max_rows;
+        n00b_isize_t slot   = table->total_added % table->max_rows;
+        size_t       n_rows = table->rows.len;
 
-        // Free old row's cells if we're overwriting a full ring.
-        if (table->num_rows >= table->max_rows && table->rows[slot].cells) {
-            n00b_free(table->rows[slot].cells);
-        }
-
-        table->rows[slot] = *row;
-
-        if (table->num_rows < table->max_rows) {
-            table->num_rows++;
+        if ((n00b_isize_t)n_rows < table->max_rows) {
+            // Still filling up the ring buffer.
+            n00b_list_push(table->rows, *row);
         }
         else {
+            // Overwriting oldest row in the ring.
+            n00b_list_free(table->rows.data[slot].cells);
+            table->rows.data[slot] = *row;
             table->ring_base = (table->total_added + 1) % table->max_rows;
         }
     }
     else {
-        // Unlimited mode: grow array as needed.
-        if (table->num_rows >= table->rows_cap) {
-            grow_rows(table);
-        }
-
-        table->rows[table->num_rows] = *row;
-        table->num_rows++;
+        // Unlimited mode.
+        n00b_list_push(table->rows, *row);
     }
 
     table->total_added++;
     table->layout_valid = false;
 
-    // Reset current row (don't free the cells — they've been moved to rows[]).
-    table->current_row = (n00b_table_row_t){};
+    // Reset current row (cells have been moved to rows[]).
+    table->current_row.cells = n00b_list_new(n00b_table_cell_t,
+                                              table->allocator);
 }
 
 void
@@ -357,7 +257,7 @@ n00b_table_add_row(n00b_table_t *table, n00b_string_t *cells, n00b_isize_t n)
 void
 n00b_table_end(n00b_table_t *table)
 {
-    if (table->current_row.num_cells > 0) {
+    if (table->current_row.cells.len > 0) {
         n00b_table_end_row(table);
     }
 }
@@ -431,16 +331,16 @@ void
 n00b_table_set_col_priority(n00b_table_t *table, n00b_isize_t col,
                               int64_t priority)
 {
-    assert(col < table->num_cols);
-    table->col_specs[col].priority = priority;
+    assert((size_t)col < table->col_specs.len);
+    table->col_specs.data[col].priority = priority;
 }
 
 void
 n00b_table_set_col_props(n00b_table_t *table, n00b_isize_t col,
                            n00b_box_props_t *col_props)
 {
-    assert(col < table->num_cols);
-    table->col_specs[col].col_props = col_props;
+    assert((size_t)col < table->col_specs.len);
+    table->col_specs.data[col].col_props = col_props;
 }
 
 // ====================================================================
@@ -469,8 +369,9 @@ _n00b_table_resolve_cell_props(const n00b_table_t      *table,
     }
 
     // 2. Per-column style.
-    if (col_idx < table->num_cols && table->col_specs[col_idx].col_props) {
-        return table->col_specs[col_idx].col_props;
+    if ((size_t)col_idx < table->col_specs.len
+        && table->col_specs.data[col_idx].col_props) {
+        return table->col_specs.data[col_idx].col_props;
     }
 
     // 3. Row-based: header (row 0), alternating odd rows.

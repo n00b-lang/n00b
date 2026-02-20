@@ -22,7 +22,7 @@ col_total(n00b_table_t *t)
 {
     int64_t sum = 0;
 
-    for (n00b_isize_t i = 0; i < t->num_cols; i++) {
+    for (n00b_isize_t i = 0; i < (n00b_isize_t)t->col_specs.len; i++) {
         sum += t->col_results[i].size;
     }
 

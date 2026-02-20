@@ -28,8 +28,8 @@ test_create_empty(void)
     n00b_table_t *t = n00b_table_new();
 
     assert(t != nullptr);
-    assert(t->num_rows == 0);
-    assert(t->num_cols == 0);
+    assert(t->rows.len == 0);
+    assert(t->col_specs.len == 0);
 
     n00b_table_destroy(t);
     printf("  [PASS] create empty table\n");
@@ -41,7 +41,7 @@ test_create_with_cols(void)
     n00b_table_t *t = n00b_table_new(.num_cols = 3);
 
     assert(t != nullptr);
-    assert(t->num_cols == 3);
+    assert(t->col_specs.len == 3);
 
     n00b_table_destroy(t);
     printf("  [PASS] create table with preset columns\n");
@@ -57,8 +57,8 @@ test_add_single_row(void)
     n00b_table_add_cell(t, make_str("C"));
     n00b_table_end_row(t);
 
-    assert(t->num_rows == 1);
-    assert(t->num_cols == 3); // Auto-detected.
+    assert(t->rows.len == 1);
+    assert(t->col_specs.len == 3); // Auto-detected.
     assert(t->cols_locked);
 
     n00b_table_destroy(t);
@@ -78,8 +78,8 @@ test_add_multiple_rows(void)
     n00b_table_add_cell(t, make_str("R1C1"));
     n00b_table_end_row(t);
 
-    assert(t->num_rows == 2);
-    assert(t->num_cols == 2);
+    assert(t->rows.len == 2);
+    assert(t->col_specs.len == 2);
 
     n00b_table_destroy(t);
     printf("  [PASS] add multiple rows\n");
@@ -95,9 +95,9 @@ test_empty_cell(void)
     n00b_table_add_cell(t, make_str("C"));
     n00b_table_end_row(t);
 
-    assert(t->num_rows == 1);
-    assert(t->rows[0].num_cells == 3);
-    assert(t->rows[0].cells[1].content.u8_bytes == 0);
+    assert(t->rows.len == 1);
+    assert(t->rows.data[0].cells.len == 3);
+    assert(t->rows.data[0].cells.data[1].content.u8_bytes == 0);
 
     n00b_table_destroy(t);
     printf("  [PASS] empty cell\n");
@@ -112,9 +112,9 @@ test_col_span(void)
     n00b_table_add_cell(t, make_str("one col"));
     n00b_table_end_row(t);
 
-    assert(t->num_rows == 1);
-    assert(t->rows[0].cells[0].col_span == 2);
-    assert(t->rows[0].cells[1].col_span == 1);
+    assert(t->rows.len == 1);
+    assert(t->rows.data[0].cells.data[0].col_span == 2);
+    assert(t->rows.data[0].cells.data[1].col_span == 1);
 
     n00b_table_destroy(t);
     printf("  [PASS] column span\n");
@@ -135,8 +135,8 @@ test_span_all(void)
     n00b_table_add_cell(t, make_str("full width"), .col_span = -1);
     n00b_table_end_row(t);
 
-    assert(t->num_rows == 2);
-    assert(t->rows[1].cells[0].col_span == 4);
+    assert(t->rows.len == 2);
+    assert(t->rows.data[1].cells.data[0].col_span == 4);
 
     n00b_table_destroy(t);
     printf("  [PASS] span-all (-1)\n");
@@ -155,8 +155,8 @@ test_add_row_convenience(void)
 
     n00b_table_add_row(t, cells, 3);
 
-    assert(t->num_rows == 1);
-    assert(t->rows[0].num_cells == 3);
+    assert(t->rows.len == 1);
+    assert(t->rows.data[0].cells.len == 3);
 
     n00b_table_destroy(t);
     printf("  [PASS] add_row convenience\n");
@@ -172,7 +172,7 @@ test_table_end_flushes(void)
     // Don't call end_row — let end() flush it.
     n00b_table_end(t);
 
-    assert(t->num_rows == 1);
+    assert(t->rows.len == 1);
 
     n00b_table_destroy(t);
     printf("  [PASS] table_end flushes partial row\n");
@@ -186,8 +186,8 @@ test_col_spec_fit(void)
     n00b_isize_t idx = n00b_table_col_fit(t);
 
     assert(idx == 0);
-    assert(t->num_cols == 1);
-    assert(t->col_specs[0].mode == N00B_COL_FIT);
+    assert(t->col_specs.len == 1);
+    assert(t->col_specs.data[0].mode == N00B_COL_FIT);
 
     n00b_table_destroy(t);
     printf("  [PASS] col_fit\n");
@@ -200,9 +200,9 @@ test_col_spec_flex(void)
 
     n00b_table_col_flex(t, 3);
 
-    assert(t->num_cols == 1);
-    assert(t->col_specs[0].mode == N00B_COL_FLEX);
-    assert(t->col_specs[0].flex_multiple == 3);
+    assert(t->col_specs.len == 1);
+    assert(t->col_specs.data[0].mode == N00B_COL_FLEX);
+    assert(t->col_specs.data[0].flex_multiple == 3);
 
     n00b_table_destroy(t);
     printf("  [PASS] col_flex\n");
@@ -215,11 +215,11 @@ test_col_spec_fixed(void)
 
     n00b_table_col_fixed(t, 20);
 
-    assert(t->num_cols == 1);
-    assert(t->col_specs[0].mode == N00B_COL_FIXED);
-    assert(t->col_specs[0].pref.value.i == 20);
-    assert(t->col_specs[0].min.value.i == 20);
-    assert(t->col_specs[0].max.value.i == 20);
+    assert(t->col_specs.len == 1);
+    assert(t->col_specs.data[0].mode == N00B_COL_FIXED);
+    assert(t->col_specs.data[0].pref.value.i == 20);
+    assert(t->col_specs.data[0].min.value.i == 20);
+    assert(t->col_specs.data[0].max.value.i == 20);
 
     n00b_table_destroy(t);
     printf("  [PASS] col_fixed\n");
@@ -232,8 +232,8 @@ test_col_spec_range(void)
 
     n00b_table_col_range(t, 5, 30);
 
-    assert(t->col_specs[0].min.value.i == 5);
-    assert(t->col_specs[0].max.value.i == 30);
+    assert(t->col_specs.data[0].min.value.i == 5);
+    assert(t->col_specs.data[0].max.value.i == 30);
 
     n00b_table_destroy(t);
     printf("  [PASS] col_range\n");
@@ -246,8 +246,8 @@ test_col_spec_pct(void)
 
     n00b_table_col_pct(t, 0.1, 0.5);
 
-    assert(t->col_specs[0].min.pct == true);
-    assert(t->col_specs[0].max.pct == true);
+    assert(t->col_specs.data[0].min.pct == true);
+    assert(t->col_specs.data[0].max.pct == true);
 
     n00b_table_destroy(t);
     printf("  [PASS] col_pct\n");
@@ -261,8 +261,8 @@ test_set_col_priority(void)
     n00b_table_set_col_priority(t, 0, 10);
     n00b_table_set_col_priority(t, 1, 5);
 
-    assert(t->col_specs[0].priority == 10);
-    assert(t->col_specs[1].priority == 5);
+    assert(t->col_specs.data[0].priority == 10);
+    assert(t->col_specs.data[1].priority == 5);
 
     n00b_table_destroy(t);
     printf("  [PASS] set_col_priority\n");
@@ -290,17 +290,20 @@ test_style_cascade(void)
 
     // Row 0, col 0: header_props wins (row 0 special).
     const n00b_box_props_t *p0 =
-        _n00b_table_resolve_cell_props(t, 0, 0, &t->rows[0].cells[0]);
+        _n00b_table_resolve_cell_props(t, 0, 0,
+                                        &t->rows.data[0].cells.data[0]);
     assert(p0 == hdr_style);
 
     // Row 0, col 1: per-cell override wins.
     const n00b_box_props_t *p1 =
-        _n00b_table_resolve_cell_props(t, 0, 1, &t->rows[0].cells[1]);
+        _n00b_table_resolve_cell_props(t, 0, 1,
+                                        &t->rows.data[0].cells.data[1]);
     assert(p1 == per_cell);
 
     // Row 1, col 0: default cell_props.
     const n00b_box_props_t *p2 =
-        _n00b_table_resolve_cell_props(t, 1, 0, &t->rows[1].cells[0]);
+        _n00b_table_resolve_cell_props(t, 1, 0,
+                                        &t->rows.data[1].cells.data[0]);
     assert(p2 == cell_style);
 
     n00b_table_destroy(t);

@@ -61,10 +61,10 @@ render_visible_row(n00b_table_t *table, n00b_isize_t vis_idx)
 {
     if (table->max_rows > 0) {
         n00b_isize_t actual = (table->ring_base + vis_idx) % table->max_rows;
-        return &table->rows[actual];
+        return &table->rows.data[actual];
     }
 
-    return &table->rows[vis_idx];
+    return &table->rows.data[vis_idx];
 }
 
 // ====================================================================
@@ -111,17 +111,19 @@ compute_dimensions(n00b_table_t *table)
                          &outer_left, &outer_right);
     }
 
+    n00b_isize_t num_cols = (n00b_isize_t)table->col_specs.len;
+
     // Sum column widths.
     int64_t col_sum = 0;
-    for (n00b_isize_t i = 0; i < table->num_cols; i++) {
+    for (n00b_isize_t i = 0; i < num_cols; i++) {
         col_sum += table->col_results[i].size;
     }
 
     // Interior vertical borders.
-    n00b_isize_t int_v_total = d.has_int_v ? (table->num_cols - 1) : 0;
+    n00b_isize_t int_v_total = d.has_int_v ? (num_cols - 1) : 0;
 
     // Sum row heights.
-    n00b_isize_t n_rows = table->num_rows;
+    n00b_isize_t n_rows = (n00b_isize_t)table->rows.len;
     int64_t row_sum = 0;
 
     for (n00b_isize_t i = 0; i < n_rows; i++) {
@@ -217,14 +219,15 @@ render_interior_borders(n00b_table_t *table, n00b_plane_t *plane,
 {
     const n00b_box_props_t    *tp    = table->table_props;
     const n00b_border_theme_t *theme = tp ? tp->border_theme : nullptr;
-    n00b_text_style_t         *bstyle = tp ? tp->border_style : nullptr;
-    n00b_isize_t               grid_w = plane->total_cols;
-    n00b_rcell_t              *grid   = plane->grid;
-    n00b_isize_t               n_rows = table->num_rows;
+    n00b_text_style_t         *bstyle  = tp ? tp->border_style : nullptr;
+    n00b_isize_t               grid_w  = plane->total_cols;
+    n00b_rcell_t              *grid    = plane->grid;
+    n00b_isize_t               n_rows  = (n00b_isize_t)table->rows.len;
+    n00b_isize_t               n_cols  = (n00b_isize_t)table->col_specs.len;
 
     // Interior vertical lines.
     if (d->has_int_v && theme) {
-        for (n00b_isize_t col = 1; col < table->num_cols; col++) {
+        for (n00b_isize_t col = 1; col < n_cols; col++) {
             n00b_isize_t x = col_start_x(table, col, true, d->content_x) - 1;
 
             // Draw from top of data to bottom of data.
@@ -250,9 +253,9 @@ render_interior_borders(n00b_table_t *table, n00b_plane_t *plane,
             n00b_isize_t x_start = d->content_x;
             n00b_isize_t x_end   = d->content_x;
 
-            for (n00b_isize_t c = 0; c < table->num_cols; c++) {
+            for (n00b_isize_t c = 0; c < n_cols; c++) {
                 x_end += (n00b_isize_t)table->col_results[c].size;
-                if (d->has_int_v && c < table->num_cols - 1) {
+                if (d->has_int_v && c < n_cols - 1) {
                     x_end++;
                 }
             }
@@ -264,7 +267,7 @@ render_interior_borders(n00b_table_t *table, n00b_plane_t *plane,
 
             // Crosses at column intersections.
             if (d->has_int_v) {
-                for (n00b_isize_t col = 1; col < table->num_cols; col++) {
+                for (n00b_isize_t col = 1; col < n_cols; col++) {
                     n00b_isize_t cx = col_start_x(table, col, true,
                                                     d->content_x) - 1;
                     stamp_border(grid_at(grid, grid_w, y, cx),
@@ -292,7 +295,7 @@ render_interior_borders(n00b_table_t *table, n00b_plane_t *plane,
 
     // T-junctions along top and bottom borders for interior vertical lines.
     if (d->has_int_v && theme) {
-        for (n00b_isize_t col = 1; col < table->num_cols; col++) {
+        for (n00b_isize_t col = 1; col < n_cols; col++) {
             n00b_isize_t x = col_start_x(table, col, true, d->content_x) - 1;
 
             if (d->has_top) {
@@ -315,7 +318,8 @@ static void
 render_cell_content(n00b_table_t *table, n00b_plane_t *plane,
                       render_dims_t *d)
 {
-    n00b_isize_t n_rows = table->num_rows;
+    n00b_isize_t n_rows = (n00b_isize_t)table->rows.len;
+    n00b_isize_t n_cols = (n00b_isize_t)table->col_specs.len;
 
     for (n00b_isize_t r = 0; r < n_rows; r++) {
         n00b_table_row_t *row = render_visible_row(table, r);
@@ -323,8 +327,8 @@ render_cell_content(n00b_table_t *table, n00b_plane_t *plane,
         n00b_isize_t      rh  = (n00b_isize_t)table->row_heights[r];
         n00b_isize_t      col_ix = 0;
 
-        for (n00b_isize_t ci = 0; ci < row->num_cells; ci++) {
-            n00b_table_cell_t *cell = &row->cells[ci];
+        for (size_t ci = 0; ci < row->cells.len; ci++) {
+            n00b_table_cell_t *cell = &row->cells.data[ci];
             int32_t            span = cell->col_span;
 
             if (span <= 0) {
@@ -336,7 +340,7 @@ render_cell_content(n00b_table_t *table, n00b_plane_t *plane,
                                             d->content_x);
 
             int64_t cell_w = 0;
-            for (int32_t s = 0; s < span && (col_ix + s) < table->num_cols; s++) {
+            for (int32_t s = 0; s < span && (col_ix + s) < n_cols; s++) {
                 cell_w += table->col_results[col_ix + s].size;
             }
             if (d->has_int_v && span > 1) {
@@ -528,7 +532,7 @@ n00b_table_render(n00b_table_t *table, int64_t width) _kargs
     bool force = false;
 }
 {
-    if (table->num_rows == 0) {
+    if (table->rows.len == 0) {
         return nullptr;
     }
 

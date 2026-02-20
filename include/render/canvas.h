@@ -41,6 +41,7 @@ typedef struct n00b_canvas_t {
 
     n00b_text_style_t            *default_style;
     bool                          needs_full_redraw;
+    bool                          size_set;
     n00b_spin_lock_t              lock;
     n00b_allocator_t             *allocator;
 } n00b_canvas_t;
@@ -54,7 +55,6 @@ typedef struct n00b_canvas_t {
  * @param vtable Renderer vtable (must not be nullptr).
  *
  * @kw allocator Allocator to use (nullptr = runtime default).
- * @kw fd       File descriptor for output (default: 1 = stdout).
  *
  * @post Canvas is ready; backend is initialized.
  */
@@ -62,7 +62,6 @@ extern n00b_canvas_t *
 n00b_canvas_new(const n00b_renderer_vtable_t *vtable) _kargs
 {
     n00b_allocator_t *allocator = nullptr;
-    int               fd        = 1;
 };
 
 /**

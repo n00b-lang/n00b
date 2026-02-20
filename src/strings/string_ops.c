@@ -652,27 +652,24 @@ n00b_unicode_str_split_raw(n00b_allocator_t *allocator,
     return arr;
 }
 
-n00b_array_t(n00b_string_t)
-n00b_unicode_str_split(n00b_string_t s, n00b_string_t sep) _kargs
+n00b_array_t(n00b_string_t) n00b_unicode_str_split(n00b_string_t s, n00b_string_t sep) _kargs
 {
     n00b_allocator_t *allocator = nullptr;
 }
 {
-    uint32_t count;
-    n00b_string_t *raw = n00b_unicode_str_split_raw(allocator,
-                                                     s.data,
-                                                     s.u8_bytes,
-                                                     sep.data,
-                                                     sep.u8_bytes,
-                                                     &count);
-    n00b_array_t(n00b_string_t) result
-        = n00b_array_checked_ptr(n00b_string_t, count, raw);
-    result.len = count;
+    uint32_t       count;
+    n00b_string_t *raw                 = n00b_unicode_str_split_raw(allocator,
+                                                                    s.data,
+                                                                    s.u8_bytes,
+                                                                    sep.data,
+                                                                    sep.u8_bytes,
+                                                                    &count);
+    n00b_array_t(n00b_string_t) result = n00b_array_checked_ptr(n00b_string_t, count, raw);
+    result.len                         = count;
     return result;
 }
 
-n00b_array_t(n00b_string_t)
-n00b_unicode_str_split_words(n00b_string_t s) _kargs
+n00b_array_t(n00b_string_t) n00b_unicode_str_split_words(n00b_string_t s) _kargs
 {
     n00b_allocator_t *allocator = nullptr;
 }
@@ -738,12 +735,11 @@ n00b_unicode_str_split_words(n00b_string_t s) _kargs
     n00b_free(ranges);
 
     n00b_array_t(n00b_string_t) result = n00b_array_checked_ptr(n00b_string_t, n, arr);
-    result.len = n;
+    result.len                         = n;
     return result;
 }
 
-n00b_array_t(n00b_string_t)
-n00b_unicode_str_split_graphemes(n00b_string_t s) _kargs
+n00b_array_t(n00b_string_t) n00b_unicode_str_split_graphemes(n00b_string_t s) _kargs
 {
     n00b_allocator_t *allocator = nullptr;
 }
@@ -804,12 +800,11 @@ n00b_unicode_str_split_graphemes(n00b_string_t s) _kargs
     n00b_free(ranges);
 
     n00b_array_t(n00b_string_t) result = n00b_array_checked_ptr(n00b_string_t, n, arr);
-    result.len = n;
+    result.len                         = n;
     return result;
 }
 
-n00b_array_t(n00b_string_t)
-n00b_unicode_str_split_lines(n00b_string_t s) _kargs
+n00b_array_t(n00b_string_t) n00b_unicode_str_split_lines(n00b_string_t s) _kargs
 {
     n00b_allocator_t *allocator = nullptr;
 }
@@ -868,7 +863,7 @@ n00b_unicode_str_split_lines(n00b_string_t s) _kargs
     n00b_free(ranges);
 
     n00b_array_t(n00b_string_t) result = n00b_array_checked_ptr(n00b_string_t, n, arr);
-    result.len = n;
+    result.len                         = n;
     return result;
 }
 
@@ -1340,9 +1335,7 @@ static bool
 is_printable_cp(n00b_codepoint_t cp)
 {
     n00b_unicode_gc_t gc = n00b_unicode_general_category(cp);
-    return gc != N00B_UNICODE_GC_CC
-        && gc != N00B_UNICODE_GC_CS
-        && gc != N00B_UNICODE_GC_CN;
+    return gc != N00B_UNICODE_GC_CC && gc != N00B_UNICODE_GC_CS && gc != N00B_UNICODE_GC_CN;
 }
 
 static bool
@@ -1390,18 +1383,26 @@ n00b_unicode_str_escape(n00b_string_t s) _kargs
             uint32_t orig_bytes = pos - save;
             uint32_t esc_bytes;
             switch (cp) {
-            case '\\': case '"': case '\'':
-            case '\a': case '\b': case '\e': case '\f':
-            case '\n': case '\r': case '\t': case '\v':
+            case '\\':
+            case '"':
+            case '\'':
+            case '\a':
+            case '\b':
+            case '\e':
+            case '\f':
+            case '\n':
+            case '\r':
+            case '\t':
+            case '\v':
                 esc_bytes = 2;
                 break;
             default:
                 if (cp <= 0x7f)
-                    esc_bytes = 4;   // \xHH
+                    esc_bytes = 4;  // \xHH
                 else if (cp < 0x10000)
-                    esc_bytes = 6;   // \uHHHH
+                    esc_bytes = 6;  // \uHHHH
                 else
-                    esc_bytes = 10;  // \UHHHHHHHH
+                    esc_bytes = 10; // \UHHHHHHHH
                 break;
             }
             if (esc_bytes > orig_bytes)
@@ -1437,17 +1438,39 @@ n00b_unicode_str_escape(n00b_string_t s) _kargs
 
         *q++ = '\\';
         switch (cp) {
-        case '\\': *q++ = '\\'; continue;
-        case '"':  *q++ = '"';  continue;
-        case '\'': *q++ = '\''; continue;
-        case '\a': *q++ = 'a';  continue;
-        case '\b': *q++ = 'b';  continue;
-        case '\e': *q++ = 'e';  continue;
-        case '\f': *q++ = 'f';  continue;
-        case '\n': *q++ = 'n';  continue;
-        case '\r': *q++ = 'r';  continue;
-        case '\t': *q++ = 't';  continue;
-        case '\v': *q++ = 'v';  continue;
+        case '\\':
+            *q++ = '\\';
+            continue;
+        case '"':
+            *q++ = '"';
+            continue;
+        case '\'':
+            *q++ = '\'';
+            continue;
+        case '\a':
+            *q++ = 'a';
+            continue;
+        case '\b':
+            *q++ = 'b';
+            continue;
+        case '\e':
+            *q++ = 'e';
+            continue;
+        case '\f':
+            *q++ = 'f';
+            continue;
+        case '\n':
+            *q++ = 'n';
+            continue;
+        case '\r':
+            *q++ = 'r';
+            continue;
+        case '\t':
+            *q++ = 't';
+            continue;
+        case '\v':
+            *q++ = 'v';
+            continue;
         default:
             if (cp <= 0x7f) {
                 *q++ = 'x';
@@ -1487,22 +1510,17 @@ n00b_unicode_str_escape(n00b_string_t s) _kargs
 
 // Inverse hex lookup: maps ASCII byte to 0-15, or 0xFF if invalid.
 static const uint8_t inv_hex[256] = {
-    ['0'] = 0x00, ['1'] = 0x01, ['2'] = 0x02, ['3'] = 0x03,
-    ['4'] = 0x04, ['5'] = 0x05, ['6'] = 0x06, ['7'] = 0x07,
-    ['8'] = 0x08, ['9'] = 0x09,
-    ['a'] = 0x0a, ['b'] = 0x0b, ['c'] = 0x0c,
-    ['d'] = 0x0d, ['e'] = 0x0e, ['f'] = 0x0f,
-    ['A'] = 0x0a, ['B'] = 0x0b, ['C'] = 0x0c,
-    ['D'] = 0x0d, ['E'] = 0x0e, ['F'] = 0x0f,
+    ['0'] = 0x00, ['1'] = 0x01, ['2'] = 0x02, ['3'] = 0x03, ['4'] = 0x04, ['5'] = 0x05,
+    ['6'] = 0x06, ['7'] = 0x07, ['8'] = 0x08, ['9'] = 0x09, ['a'] = 0x0a, ['b'] = 0x0b,
+    ['c'] = 0x0c, ['d'] = 0x0d, ['e'] = 0x0e, ['f'] = 0x0f, ['A'] = 0x0a, ['B'] = 0x0b,
+    ['C'] = 0x0c, ['D'] = 0x0d, ['E'] = 0x0e, ['F'] = 0x0f,
 };
 // Sentinel: default-initialized entries are 0, which conflicts with '0'.
 // Use a separate validity check.
 static bool
 is_hex_digit(uint8_t c)
 {
-    return (c >= '0' && c <= '9')
-        || (c >= 'a' && c <= 'f')
-        || (c >= 'A' && c <= 'F');
+    return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
 }
 
 static uint8_t
@@ -1511,8 +1529,7 @@ hex_val(uint8_t c)
     return inv_hex[c];
 }
 
-n00b_result_t(n00b_string_t)
-n00b_unicode_str_unescape(n00b_string_t s) _kargs
+n00b_result_t(n00b_string_t) n00b_unicode_str_unescape(n00b_string_t s) _kargs
 {
     n00b_allocator_t *allocator = nullptr;
 }
@@ -1551,20 +1568,52 @@ n00b_unicode_str_unescape(n00b_string_t s) _kargs
         }
 
         n00b_codepoint_t cp;
-        uint8_t          n;
 
         switch (*p) {
-        case 'a':  *q++ = '\a'; p++; continue;
-        case 'b':  *q++ = '\b'; p++; continue;
-        case 'e':  *q++ = '\e'; p++; continue;
-        case 'f':  *q++ = '\f'; p++; continue;
-        case 'n':  *q++ = '\n'; p++; continue;
-        case 'r':  *q++ = '\r'; p++; continue;
-        case 't':  *q++ = '\t'; p++; continue;
-        case 'v':  *q++ = '\v'; p++; continue;
-        case '\\': *q++ = '\\'; p++; continue;
-        case '"':  *q++ = '"';  p++; continue;
-        case '\'': *q++ = '\''; p++; continue;
+        case 'a':
+            *q++ = '\a';
+            p++;
+            continue;
+        case 'b':
+            *q++ = '\b';
+            p++;
+            continue;
+        case 'e':
+            *q++ = '\e';
+            p++;
+            continue;
+        case 'f':
+            *q++ = '\f';
+            p++;
+            continue;
+        case 'n':
+            *q++ = '\n';
+            p++;
+            continue;
+        case 'r':
+            *q++ = '\r';
+            p++;
+            continue;
+        case 't':
+            *q++ = '\t';
+            p++;
+            continue;
+        case 'v':
+            *q++ = '\v';
+            p++;
+            continue;
+        case '\\':
+            *q++ = '\\';
+            p++;
+            continue;
+        case '"':
+            *q++ = '"';
+            p++;
+            continue;
+        case '\'':
+            *q++ = '\'';
+            p++;
+            continue;
 
         case 'x':
         case 'X':
@@ -1584,7 +1633,8 @@ n00b_unicode_str_unescape(n00b_string_t s) _kargs
 
         case 'u':
             p++;
-            if (*p == '+') p++; // optional U+ prefix
+            if (*p == '+')
+                p++; // optional U+ prefix
             if ((uint32_t)(end - p) < 4) {
                 n00b_free(buf);
                 return n00b_result_err(n00b_string_t, N00B_ERR_STR_ESCAPE_EOS);
@@ -1603,7 +1653,8 @@ n00b_unicode_str_unescape(n00b_string_t s) _kargs
 
         case 'U':
             p++;
-            if (*p == '+') p++;
+            if (*p == '+')
+                p++;
             if ((uint32_t)(end - p) < 6) {
                 n00b_free(buf);
                 return n00b_result_err(n00b_string_t, N00B_ERR_STR_ESCAPE_EOS);
@@ -1640,8 +1691,7 @@ n00b_unicode_str_unescape(n00b_string_t s) _kargs
 // Codepoint access
 // ---------------------------------------------------------------------------
 
-n00b_option_t(n00b_codepoint_t)
-n00b_unicode_str_codepoint_at(n00b_string_t s, int64_t index)
+n00b_option_t(n00b_codepoint_t) n00b_unicode_str_codepoint_at(n00b_string_t s, int64_t index)
 {
     int64_t num_cps = s.codepoints;
 
@@ -1692,8 +1742,7 @@ n00b_unicode_str_copy(n00b_string_t s) _kargs
 // ---------------------------------------------------------------------------
 
 n00b_array_t(n00b_string_t)
-n00b_unicode_str_split_and_crop(n00b_string_t s, n00b_string_t sep,
-                                int32_t width) _kargs
+    n00b_unicode_str_split_and_crop(n00b_string_t s, n00b_string_t sep, int32_t width) _kargs
 {
     n00b_allocator_t *allocator = nullptr;
 }
@@ -1701,11 +1750,9 @@ n00b_unicode_str_split_and_crop(n00b_string_t s, n00b_string_t sep,
     if (!allocator)
         allocator = nullptr;
 
-    n00b_array_t(n00b_string_t) parts = n00b_unicode_str_split(s, sep,
-                                                                .allocator = allocator);
+    n00b_array_t(n00b_string_t) parts = n00b_unicode_str_split(s, sep, .allocator = allocator);
     for (size_t i = 0; i < parts.len; i++) {
-        parts.data[i] = n00b_unicode_str_truncate(parts.data[i], width,
-                                                   .allocator = allocator);
+        parts.data[i] = n00b_unicode_str_truncate(parts.data[i], width, .allocator = allocator);
     }
     return parts;
 }
@@ -1714,8 +1761,7 @@ n00b_unicode_str_split_and_crop(n00b_string_t s, n00b_string_t sep,
 // Text wrapping
 // ---------------------------------------------------------------------------
 
-n00b_array_t(n00b_string_t)
-n00b_unicode_str_wrap(n00b_string_t s) _kargs
+n00b_array_t(n00b_string_t) n00b_unicode_str_wrap(n00b_string_t s) _kargs
 {
     int32_t           width        = 80;
     int32_t           hang         = 0;
@@ -1731,31 +1777,30 @@ n00b_unicode_str_wrap(n00b_string_t s) _kargs
     }
 
     n00b_array_t(uint32_t) breaks = n00b_unicode_linebreak_wrap(s,
-                                                        .width        = width,
-                                                        .hang         = hang,
-                                                        .no_hard_wrap = no_hard_wrap,
-                                                        .allocator    = allocator);
+                                                                .width        = width,
+                                                                .hang         = hang,
+                                                                .no_hard_wrap = no_hard_wrap,
+                                                                .allocator    = allocator);
 
     if (breaks.len == 0) {
         n00b_array_t(n00b_string_t) result = n00b_array_new(n00b_string_t, 1, allocator);
-        result.data[0] = n00b_unicode_str_copy(s, .allocator = allocator);
-        result.len     = 1;
+        result.data[0]                     = n00b_unicode_str_copy(s, .allocator = allocator);
+        result.len                         = 1;
         return result;
     }
 
-    uint32_t n_lines = (uint32_t)breaks.len + 1;
+    uint32_t n_lines                   = (uint32_t)breaks.len + 1;
     n00b_array_t(n00b_string_t) result = n00b_array_new(n00b_string_t, n_lines, allocator);
-    uint32_t prev = 0;
+    uint32_t prev                      = 0;
 
     for (size_t i = 0; i < breaks.len; i++) {
-        result.data[i] = n00b_unicode_str_slice_bytes(s, prev, breaks.data[i],
-                                                       .allocator = allocator);
+        result.data[i]
+            = n00b_unicode_str_slice_bytes(s, prev, breaks.data[i], .allocator = allocator);
         prev = breaks.data[i];
     }
 
-    result.data[breaks.len] = n00b_unicode_str_slice_bytes(s, prev,
-                                                            (uint32_t)s.u8_bytes,
-                                                            .allocator = allocator);
+    result.data[breaks.len]
+        = n00b_unicode_str_slice_bytes(s, prev, (uint32_t)s.u8_bytes, .allocator = allocator);
     result.len = n_lines;
 
     return result;

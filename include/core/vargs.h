@@ -36,7 +36,7 @@ ckd_add(unsigned int *result, unsigned int a, unsigned int b)
 #include <stdlib.h>
 #include <string.h>
 #include <alloca.h>
-#include "core/va_macros.h"
+#include "core/macros.h"
 
 typedef struct n00b_vargs_t n00b_vargs_t;
 
@@ -54,9 +54,9 @@ static_assert(sizeof(void *) == 8, "Implementation expects 64-bit pointers.");
  * ```
  */
 struct n00b_vargs_t {
-    unsigned int  nargs;  /**< Total number of variadic arguments. */
-    unsigned int  cur_ix; /**< Current iteration index. */
-    void        **args;   /**< Array of arguments (as void pointers). */
+    unsigned int nargs;  /**< Total number of variadic arguments. */
+    unsigned int cur_ix; /**< Current iteration index. */
+    void       **args;   /**< Array of arguments (as void pointers). */
 };
 
 // ===========================================================================
@@ -238,29 +238,28 @@ n00b_vargs_peek_forward_address(n00b_vargs_t *va_ctx, unsigned int n)
 // ===========================================================================
 
 /** @brief Construct a stack-allocated vargs with inline arguments. */
-#define _n00b_vargs_vla_static(count, ...)              \
-    (n00b_vargs_t[1])                                   \
-    {                                                   \
+#define _n00b_vargs_vla_static(count, ...)                                                     \
+    (n00b_vargs_t[1])                                                                          \
+    {                                                                                          \
         {                                               \
             .nargs  = (count),                          \
             .cur_ix = 0,                                \
             .args   = (void **)(void *[]){              \
                 N00B_VA_VOID_STAR_CONVERT(__VA_ARGS__), \
             },                                          \
-        },                                              \
+        },                                      \
     }
 
 /** @brief Construct a stack-allocated vargs with a dynamic count. */
-#define _n00b_vargs_vla_dynamic(count)                        \
-    (n00b_vargs_t[1])                                         \
-    {                                                         \
-        {                                                     \
-            .nargs  = (count),                                \
-            .cur_ix = 0,                                      \
-            .args   = _n00b_vargs_zero_varg_array(            \
-                ((void **)alloca(sizeof(void *) * (count))),  \
-                (count)),                                     \
-        },                                                    \
+#define _n00b_vargs_vla_dynamic(count)                                                         \
+    (n00b_vargs_t[1])                                                                          \
+    {                                                                                          \
+        {                                                                                      \
+            .nargs  = (count),                                                                 \
+            .cur_ix = 0,                                                                       \
+            .args   = _n00b_vargs_zero_varg_array(((void **)alloca(sizeof(void *) * (count))), \
+                                                  (count)),                                    \
+        },                                                                                     \
     }
 
 #define n00b_vargs_empty_vla(nitems) _n00b_vargs_vla_dynamic(nitems)
@@ -270,9 +269,7 @@ n00b_vargs_peek_forward_address(n00b_vargs_t *va_ctx, unsigned int n)
 // ===========================================================================
 
 static inline n00b_vargs_t *
-_n00b_vargs_va_list_populate(n00b_vargs_t *va_ctx,
-                             unsigned int  nargs,
-                             va_list       user_va_list)
+_n00b_vargs_va_list_populate(n00b_vargs_t *va_ctx, unsigned int nargs, va_list user_va_list)
 {
     va_list ap;
     va_copy(ap, user_va_list);
@@ -291,9 +288,7 @@ _n00b_vargs_va_list_populate(n00b_vargs_t *va_ctx,
 }
 
 static inline n00b_vargs_t *
-_n00b_vargs_va_populate(n00b_vargs_t *va_ctx,
-                        unsigned int  nargs,
-                        ...)
+_n00b_vargs_va_populate(n00b_vargs_t *va_ctx, unsigned int nargs, ...)
 {
     va_list ap;
     va_start(ap);
@@ -355,21 +350,19 @@ _n00b_vargs_copy(n00b_vargs_t *dst, n00b_vargs_t *src)
 // High-level stack-allocated construction macros
 // ===========================================================================
 
-#define _n00b_vargs_base(allocated, ...)                \
-    _n00b_vargs_va_populate(allocated,                  \
-                            N00B_VA_COUNT(__VA_ARGS__), \
+#define _n00b_vargs_base(allocated, ...)                                                       \
+    _n00b_vargs_va_populate(allocated,                                                         \
+                            N00B_VA_COUNT(__VA_ARGS__),                                        \
                             N00B_VA_VOID_STAR_CONVERT(__VA_ARGS__))
 
-#define _n00b_vargs_from_va_list_base(allocated, count, ap) \
+#define _n00b_vargs_from_va_list_base(allocated, count, ap)                                    \
     _n00b_vargs_va_list_populate(allocated, count, ap)
 
-#define _n00b_vargs_from_array_base(allocated, count, ptr) \
+#define _n00b_vargs_from_array_base(allocated, count, ptr)                                     \
     n00b_vargs_array_populate((allocated), sizeof(ptr[0]), (count), (ptr))
 
 static inline n00b_vargs_t *
-_n00b_vargs_from_array_ref_base(n00b_vargs_t *allocated,
-                                unsigned int  count,
-                                void         *ptr)
+_n00b_vargs_from_array_ref_base(n00b_vargs_t *allocated, unsigned int count, void *ptr)
 {
     *allocated = (n00b_vargs_t){
         .nargs  = count,
@@ -380,35 +373,27 @@ _n00b_vargs_from_array_ref_base(n00b_vargs_t *allocated,
 }
 
 /** @brief Construct a vargs from inline arguments (stack-allocated). */
-#define _n00b_vargs_args(...)                           \
-    _n00b_vargs_vla_static(N00B_VA_COUNT(__VA_ARGS__), \
-                           N00B_VA_VOID_STAR_CONVERT(__VA_ARGS__))
+#define _n00b_vargs_args(...)                                                                  \
+    _n00b_vargs_vla_static(N00B_VA_COUNT(__VA_ARGS__), N00B_VA_VOID_STAR_CONVERT(__VA_ARGS__))
 
-#define _n00b_vargs_empty(...) \
-    n00b_vargs_zero_init(&((n00b_vargs_t[1]){0}[0]))
+#define _n00b_vargs_empty(...) n00b_vargs_zero_init(&((n00b_vargs_t[1]){0}[0]))
 
-#define n00b_vargs(...)                                        \
-    N00B_CONCAT_INDIRECT(_n00b_vargs_,                         \
-                         N00B_FIRST(__VA_OPT__(args, ) empty)) \
+#define n00b_vargs(...)                                                                        \
+    N00B_CONCAT_INDIRECT(_n00b_vargs_, N00B_FIRST(__VA_OPT__(args, ) empty))                   \
     (__VA_ARGS__)
 
-#define n00b_vargs_checked(typename, ...) \
-    n00b_vargs(N00B_VA_TYPE_ENSURE(typename, __VA_ARGS__))
+#define n00b_vargs_checked(typename, ...) n00b_vargs(N00B_VA_TYPE_ENSURE(typename, __VA_ARGS__))
 
-#define n00b_vargs_from_va_list(count, ap) \
+#define n00b_vargs_from_va_list(count, ap)                                                     \
     _n00b_vargs_from_va_list_base(_n00b_vargs_vla_dynamic(count), count, ap)
 
-#define n00b_vargs_from_array(count, ptr)                       \
-    _n00b_vargs_from_array_base(_n00b_vargs_vla_dynamic(count), \
-                                (count),                        \
-                                (ptr))
+#define n00b_vargs_from_array(count, ptr)                                                      \
+    _n00b_vargs_from_array_base(_n00b_vargs_vla_dynamic(count), (count), (ptr))
 
-#define n00b_vargs_from_reference(count, ptr)                       \
-    _n00b_vargs_from_array_ref_base(_n00b_vargs_vla_dynamic(count), \
-                                    (count),                        \
-                                    (ptr))
+#define n00b_vargs_from_reference(count, ptr)                                                  \
+    _n00b_vargs_from_array_ref_base(_n00b_vargs_vla_dynamic(count), (count), (ptr))
 
-#define n00b_vargs_copy(src_ctx) \
+#define n00b_vargs_copy(src_ctx)                                                               \
     _n00b_vargs_copy(_n00b_vargs_vla_dynamic(src_ctx->nargs), src_ctx)
 
 // ===========================================================================
@@ -431,54 +416,38 @@ _n00b_vargs_alloc_custom(n00b_vargs_alloc_fn alloc, unsigned int nargs)
     return result;
 }
 
-#define _n00b_vargs_malloc(nargs) \
-    _n00b_vargs_alloc_custom(malloc, nargs)
+#define _n00b_vargs_malloc(nargs) _n00b_vargs_alloc_custom(malloc, nargs)
 
-#define n00b_vargs_dynamic(...)                                               \
-    _n00b_vargs_va_populate(_n00b_vargs_malloc(N00B_VA_COUNT(__VA_ARGS__)),  \
-                            N00B_VA_COUNT(__VA_ARGS__),                      \
+#define n00b_vargs_dynamic(...)                                                                \
+    _n00b_vargs_va_populate(_n00b_vargs_malloc(N00B_VA_COUNT(__VA_ARGS__)),                    \
+                            N00B_VA_COUNT(__VA_ARGS__),                                        \
                             N00B_VA_VOID_STAR_CONVERT(__VA_ARGS__))
 
-#define n00b_vargs_dynamic_from_va_list(count, ap) \
-    _n00b_vargs_from_va_list_base(                 \
-        _n00b_vargs_malloc(count),                 \
-        count,                                     \
-        ap)
+#define n00b_vargs_dynamic_from_va_list(count, ap)                                             \
+    _n00b_vargs_from_va_list_base(_n00b_vargs_malloc(count), count, ap)
 
-#define n00b_vargs_dynamic_from_array(count, ptr) \
-    _n00b_vargs_from_array_base(                  \
-        _n00b_vargs_malloc(count),                \
-        (count),                                  \
-        (ptr))
+#define n00b_vargs_dynamic_from_array(count, ptr)                                              \
+    _n00b_vargs_from_array_base(_n00b_vargs_malloc(count), (count), (ptr))
 
-#define n00b_vargs_dynamic_copy(src_ctx) \
+#define n00b_vargs_dynamic_copy(src_ctx)                                                       \
     _n00b_vargs_copy(_n00b_vargs_malloc(src_ctx->nargs), src_ctx)
 
-#define n00b_vargs_dynamic_empty(count) \
-    _n00b_vargs_alloc_custom(malloc, count)
+#define n00b_vargs_dynamic_empty(count) _n00b_vargs_alloc_custom(malloc, count)
 
 // Custom allocator variants.
-#define n00b_vargs_custom_allocator(alloc, ...)               \
-    _n00b_vargs_va_populate(                                  \
-        _n00b_vargs_alloc_custom(alloc,                       \
-                                 N00B_VA_COUNT(__VA_ARGS__)), \
-        N00B_VA_COUNT(__VA_ARGS__),                           \
-        N00B_VA_VOID_STAR_CONVERT(__VA_ARGS__))
+#define n00b_vargs_custom_allocator(alloc, ...)                                                \
+    _n00b_vargs_va_populate(_n00b_vargs_alloc_custom(alloc, N00B_VA_COUNT(__VA_ARGS__)),       \
+                            N00B_VA_COUNT(__VA_ARGS__),                                        \
+                            N00B_VA_VOID_STAR_CONVERT(__VA_ARGS__))
 
-#define n00b_vargs_custom_allocator_from_va_list(alloc, count, ap) \
-    _n00b_vargs_from_va_list_base(                                 \
-        _n00b_vargs_alloc_custom(alloc, count),                    \
-        (count),                                                   \
-        (ap))
+#define n00b_vargs_custom_allocator_from_va_list(alloc, count, ap)                             \
+    _n00b_vargs_from_va_list_base(_n00b_vargs_alloc_custom(alloc, count), (count), (ap))
 
-#define n00b_vargs_custom_allocator_from_array(alloc, count, ptr) \
-    _n00b_vargs_from_array_base(                                  \
-        _n00b_vargs_alloc_custom(alloc, count),                   \
-        (count),                                                  \
-        (ptr))
+#define n00b_vargs_custom_allocator_from_array(alloc, count, ptr)                              \
+    _n00b_vargs_from_array_base(_n00b_vargs_alloc_custom(alloc, count), (count), (ptr))
 
-#define n00b_vargs_custom_allocator_copy(alloc, src_ctx) \
+#define n00b_vargs_custom_allocator_copy(alloc, src_ctx)                                       \
     _n00b_vargs_copy(_n00b_vargs_alloc_custom(alloc, src_ctx->nargs), src_ctx)
 
-#define n00b_vargs_custom_allocator_empty(allocator, count) \
+#define n00b_vargs_custom_allocator_empty(allocator, count)                                    \
     _n00b_vargs_alloc_custom(allocator, count)

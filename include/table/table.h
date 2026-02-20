@@ -58,16 +58,12 @@
 
 typedef struct n00b_table_t {
     // --- Content ---
-    n00b_table_row_t     *rows;
-    n00b_isize_t          num_rows;
-    n00b_isize_t          rows_cap;
-    n00b_table_row_t      current_row;  /**< Row being built. */
+    n00b_list_t(n00b_table_row_t)      rows;
+    n00b_table_row_t                   current_row;  /**< Row being built. */
 
     // --- Columns ---
-    n00b_table_col_spec_t *col_specs;
-    n00b_isize_t           num_cols;
-    n00b_isize_t           cols_cap;
-    bool                   cols_locked; /**< After first row finalized. */
+    n00b_list_t(n00b_table_col_spec_t) col_specs;
+    bool                               cols_locked; /**< After first row finalized. */
 
     // --- Styling ---
     n00b_box_props_t      *table_props;       /**< Outer box. */
@@ -255,7 +251,7 @@ extern n00b_isize_t n00b_table_col_fixed(n00b_table_t *table, int64_t width);
  * @param col      Column index.
  * @param priority Higher = kept during shrinking.
  *
- * @pre `col < table->num_cols`.
+ * @pre `col < n00b_list_len(table->col_specs)`.
  */
 extern void n00b_table_set_col_priority(n00b_table_t *table,
                                           n00b_isize_t col, int64_t priority);
@@ -266,7 +262,7 @@ extern void n00b_table_set_col_priority(n00b_table_t *table,
  * @param col       Column index.
  * @param col_props Style to apply (nullptr to clear).
  *
- * @pre `col < table->num_cols`.
+ * @pre `col < n00b_list_len(table->col_specs)`.
  */
 extern void n00b_table_set_col_props(n00b_table_t *table,
                                        n00b_isize_t col,

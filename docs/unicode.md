@@ -194,6 +194,29 @@ n00b_codepoint_t *u32 = n00b_unicode_to_utf32(s, &u32_len);
 
 ### 5. Normalization &mdash; `unicode/normalization.h`
 
+Few people really understand normalization or how to use it. So here's
+a reminder:
+
+- NFC — The default choice for display, file names, and
+         interchange. It's not lossy.
+  
+- NFKC — Lossy; it's meant for searching text. It works by turning
+         characters that are "the same" from a meaning perspective,
+         but visually different, into the same thing. So you don't
+         want to print it. But unicode identifiers for languages, and
+         things like that should use it.
+          
+- NFD — Not lossy, but decomposed; the accent gets separated from the
+         letter, and composed emojis split apart. Generally though,
+         this is an expert move only-- if you want to strip accents
+         for search matching, you probably want to use NFKD. It's
+         really just a power move.
+
+- NFKD — It's a good choice for search matching, because it lets you
+       strip out combining characters easily AND it collapses variants
+       of a character, so you get better matching.
+
+
 NFC, NFD, NFKC, NFKD normalization with quick-check predicates and a streaming
 normalizer for incremental processing.
 

@@ -34,7 +34,7 @@ test_ring_buffer_basic(void)
     n00b_table_add_cell(t, make_str("Row 2"));
     n00b_table_end_row(t);
 
-    assert(t->num_rows == 3);
+    assert(t->rows.len == 3);
     assert(t->total_added == 3);
 
     n00b_table_destroy(t);
@@ -54,7 +54,7 @@ test_ring_buffer_eviction(void)
         n00b_table_end_row(t);
     }
 
-    assert(t->num_rows == 3);
+    assert(t->rows.len == 3);
     assert(t->total_added == 5);
     // Ring should contain rows 2, 3, 4 (most recent 3).
 
@@ -78,7 +78,7 @@ test_ring_buffer_render(void)
     n00b_plane_t *p = n00b_table_render(t, 40);
 
     assert(p != nullptr);
-    assert(t->num_rows == 2);
+    assert(t->rows.len == 2);
 
     n00b_table_destroy(t);
     printf("  [PASS] ring buffer: render after eviction\n");
@@ -119,7 +119,7 @@ test_unlimited_mode(void)
         n00b_table_end_row(t);
     }
 
-    assert(t->num_rows == 100);
+    assert(t->rows.len == 100);
     assert(t->max_rows == 0);
 
     n00b_table_destroy(t);
