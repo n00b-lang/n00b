@@ -1,5 +1,8 @@
+#!/usr/bin/env bash
+
 N00B_BUILD_TYPE=${N00B_BUILD_TYPE:-debug}
-N00B_ROOT=$(realpath ${BASH_SOURCE[0]}/..)
+N00B_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
+CC=${CC:-clang}
 N00B_CLEAN=${N00B_CLEAN:-0}
 N00B_TEST=${N00B_TEST:-0}
 N00B_DOCS=${N00B_DOCS:-0}

@@ -34,9 +34,8 @@ n00b_thread_slot_acquire(n00b_runtime_t *rt, n00b_thread_t *ptr)
 void
 n00b_thread_init() _kargs
 {
-    n00b_runtime_t *runtime             = n00b_get_runtime();
-    n00b_option_t(pthread_attr_t) attrs = n00b_option_none(pthread_attr_t);
-    uint32_t acquired_slot              = 0;
+    n00b_runtime_t *runtime       = n00b_get_runtime();
+    uint32_t        acquired_slot = 0;
 }
 {
     if (!acquired_slot) {
@@ -44,12 +43,11 @@ n00b_thread_init() _kargs
     }
 
     __n00b_thread_self = (n00b_thread_t){
-	.pthread_id    = pthread_self(),
-	.pthread_attrs = attrs,
-	.id_info.parts = {
-	    .id         = acquired_slot,
-	    .generation = runtime->thread_generations[acquired_slot]++,
-	},
+        .pthread_id = pthread_self(),
+        .id_info.parts = {
+            .id         = acquired_slot,
+            .generation = runtime->thread_generations[acquired_slot]++,
+        },
     };
 
     n00b_capture_stack_base(&__n00b_thread_self, runtime);
@@ -113,6 +111,5 @@ n00b_capture_stack_base(n00b_thread_t *thread, n00b_runtime_t *runtime)
     }
 
     thread->stack_base = highest;
-    thread->stack_map  = n00b_option_get(
-        n00b_mmap_register(lowest, highest, n00b_mmap_stack));
+    thread->stack_map  = n00b_option_get(n00b_mmap_register(lowest, highest, n00b_mmap_stack));
 }

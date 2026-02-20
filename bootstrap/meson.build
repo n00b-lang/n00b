@@ -81,7 +81,13 @@ endforeach
 fs = import('fs')
 
 cc = meson.get_compiler('c')
-default_compiler_path = cc.cmd_array()[0]
+cc_path_opt = get_option('cc_path')
+
+if cc_path_opt != ''
+  default_compiler_path = cc_path_opt
+else
+  default_compiler_path = cc.cmd_array()[0]
+endif
 
 if not cc.compiles('int main(void) { return 0; }', args: ['-std=c23'], name: 'C23 support check')
   error('Compiler does not support -std=c23. Use clang 22+ (/usr/local/bin/clang).')
@@ -90,6 +96,8 @@ endif
 
 c_args = [
   '-std=c23',
+  '-D_GNU_SOURCE',
+  '-D_POSIX_C_SOURCE=200809L',
   '-DNCC_DEFAULT_CC="' + default_compiler_path + '"',
   '-DNCC_INTERNAL',  # Enable internal aliases for library types
   x_flag

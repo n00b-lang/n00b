@@ -64,15 +64,14 @@ n00b_extract_lib_info(struct dl_phdr_info *info, size_t size, void *unused)
         if (startp == endp) {
             continue;
         }
-        n00b_register_mmap(startp,
+        n00b_mmap_register(startp,
                            endp,
-                           (char *)info->dlpi_name,
-                           nullptr,
-                           info->dlpi_phdr[i].p_offset,
-                           (intptr_t)info->dlpi_addr,
                            startp ? n00b_mmap_static : n00b_mmap_zero_page,
-                           n00b_atomic_add(&static_order_id, 1),
-                           false);
+                           .file              = (char *)info->dlpi_name,
+                           .binary_offset     = info->dlpi_phdr[i].p_offset,
+                           .slide             = (intptr_t)info->dlpi_addr,
+                           .order_id          = n00b_atomic_add(&static_order_id, 1),
+                           .definitely_unique = false);
     }
     return 0;
 }
@@ -268,11 +267,11 @@ n00b_check_memory_perms(void *ptr)
 
     struct pollfd pollset = {
         .fd     = pipe_fds[0],
-        .events = POLL_IN,
+        .events = POLLIN,
     };
 
     int prc = poll(&pollset, 1, 0);
-    if (prc <= 0 || !(pollset.revents & POLL_IN)) {
+    if (prc <= 0 || !(pollset.revents & POLLIN)) {
         cannot_read = true;
         char drain;
         (void)read(pipe_fds[0], &drain, 1);
@@ -389,7 +388,7 @@ n00b_memory_scan_next(n00b_memory_scan_t   *ctx,
     n00b_mmap_info_t *mmap   = nullptr;
 
     while (!result && (ctx->cur < ctx->end)) {
-        void *val     = (void *)*ctx->cur;
+        void *val      = (void *)*ctx->cur;
         auto  mmap_opt = n00b_mmap_info_lookup(val);
 
         if (n00b_option_is_set(mmap_opt)) {
@@ -533,7 +532,7 @@ n00b_debug_memory_info(bool all)
     unsigned int     len = 0;
     n00b_mmap_ctx_t *ctx = n00b_global_mem_map(n00b_get_runtime());
 
-    n00b_allocator_t *alloc = (n00b_allocator_t *)&ctx->pool;
+    n00b_allocator_t *alloc      = (n00b_allocator_t *)&ctx->pool;
     n00b_stack_t(void *) results = n00b_stack_new(void *, alloc);
 
     (void)n00b_interval_search_ordered(ctx->mmap_tree, 0, UINT64_MAX, &results);

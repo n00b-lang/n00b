@@ -7,6 +7,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <sys/wait.h>
 
 static void
 crash_handler(int sig)
@@ -33,9 +34,19 @@ static void print_ncc_help(void);
 static inline void
 signal_setup(void)
 {
-    static char      altstack[SIGSTKSZ];
-    static stack_t   ss = {.ss_sp = altstack, .ss_size = SIGSTKSZ};
-    struct sigaction sa = {.sa_handler = crash_handler, .sa_flags = SA_ONSTACK};
+    static char        *altstack = NULL;
+    static const size_t alt_sz   = 64 * 1024;
+    static stack_t      ss;
+    struct sigaction    sa = {.sa_handler = crash_handler, .sa_flags = SA_ONSTACK};
+
+    if (altstack == NULL) {
+        altstack = malloc(alt_sz);
+        if (altstack == NULL) {
+            abort();
+        }
+        ss = (stack_t){.ss_sp = altstack, .ss_size = alt_sz};
+    }
+
     sigaltstack(&ss, NULL);
     sigaction(SIGSEGV, &sa, NULL);
     sigaction(SIGBUS, &sa, NULL);
@@ -109,8 +120,8 @@ ncc_invoke_preprocessor(ncc_argv_t *ctx, char *compiler, ncc_buf_t *input)
     // Prepend a line marker so the CPP attributes its output to the original
     // source file instead of "<stdin>".
     if (!ctx->has_stdin && ctx->sources[0]) {
-        char       line_marker[4096];
-        int        n        = snprintf(line_marker, sizeof(line_marker), "# 1 \"%s\"\n", ctx->sources[0]);
+        char line_marker[4096];
+        int  n = snprintf(line_marker, sizeof(line_marker), "# 1 \"%s\"\n", ctx->sources[0]);
         ncc_buf_t *prefixed = ncc_buf_alloc(n + input->len);
         memcpy(prefixed->data, line_marker, n);
         memcpy(prefixed->data + n, input->data, input->len);
@@ -209,7 +220,10 @@ sys_err:
                             write_fd_open = 0;
                         }
                         else {
-                            fprintf(stderr, "%s: write error: %s\n", preproc_argv[0], strerror(errno));
+                            fprintf(stderr,
+                                    "%s: write error: %s\n",
+                                    preproc_argv[0],
+                                    strerror(errno));
                             abort();
                         }
                     }
@@ -308,9 +322,7 @@ main(int argc, char *argv[], [[maybe_unused]] char *envp[])
     }
 
     if (ctx.has_E && ctx.has_c) {
-        fprintf(stderr,
-                "%s:warning: passthrough: -E and -c both invoked.\n",
-                argv[0]);
+        fprintf(stderr, "%s:warning: passthrough: -E and -c both invoked.\n", argv[0]);
         compiler_passthrough(&ctx);
     }
 

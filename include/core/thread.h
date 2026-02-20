@@ -48,7 +48,7 @@ struct n00b_thread_t {
     pthread_t           pthread_id;
     n00b_memperm_pipe_t memperm_pipe;
     n00b_futex_t        self_lock;
-    n00b_option_t(pthread_attr_t) pthread_attrs;
+    pthread_attr_t      pthread_attrs;
 
 #if 0
     // Stuff to support the locking subsystem:
@@ -127,9 +127,8 @@ n00b_thread_generation(void)
 void
 n00b_thread_init() _kargs
 {
-    n00b_runtime_t *runtime             = n00b_get_runtime();
-    n00b_option_t(pthread_attr_t) attrs = n00b_option_none(pthread_attr_t);
-    uint32_t acquired_slot              = 0;
+    n00b_runtime_t *runtime       = n00b_get_runtime();
+    uint32_t        acquired_slot = 0;
 };
 
 /**
