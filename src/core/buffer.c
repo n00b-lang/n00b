@@ -5,6 +5,8 @@
 #include "n00b.h"
 #include "core/alloc.h"
 #include "core/buffer.h"
+#include "core/data_lock.h"
+#include "core/arena.h"
 #include "util/defer.h"
 
 // ============================================================================
@@ -59,10 +61,15 @@ n00b_buffer_init(n00b_buffer_t *obj) _kargs
     n00b_string_t    *hex       = nullptr;
     char             *ptr       = nullptr;
     n00b_allocator_t *allocator = nullptr;
+    bool              no_lock   = false;
 }
 {
-    obj->lock      = 0;
+    obj->lock      = no_lock ? nullptr : n00b_data_lock_new();
     obj->allocator = allocator;
+
+    if (obj->lock) {
+        n00b_add_finalizer(obj, n00b_finalize_data_lock, obj->lock);
+    }
 
     if (raw == nullptr && hex == nullptr && ptr == nullptr) {
         if (length < 0) {
@@ -609,5 +616,5 @@ n00b_buffer_free(n00b_buffer_t *buf)
     buf->byte_len  = 0;
     buf->alloc_len = 0;
     buf->flags     = 0;
-    buf->lock      = 0;
+    buf->lock      = nullptr;
 }

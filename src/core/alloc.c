@@ -7,12 +7,15 @@
 #include "core/memory_info.h"
 #include "core/stw.h"
 #include "core/pool.h"
+#include "core/runtime.h"
 
 #ifndef N00B_METADATA_START_ENTRIES
 #define N00B_METADATA_START_ENTRIES 1 << 12
 #endif
 
 extern uint64_t n00b_gc_guard;
+
+static void n00b_run_and_remove_finalizers(void *ptr);
 
 static inline void
 n00b_alloc_add_inline_header(n00b_inline_hdr_t **hdrp,
@@ -42,15 +45,19 @@ n00b_alloc_add_inline_header(n00b_inline_hdr_t **hdrp,
 void *
 _n00b_alloc_raw(size_t n, size_t sz, char *base_type, const char *location) _kargs
 {
-    n00b_allocator_t *allocator   = nullptr;
-    void             *aparams     = nullptr; // Marking for debug, cleanup, etc.
-    void             *iparams     = nullptr; // To be sent to an object instance (TODO)
-    bool              no_scan     = false;
-    bool              mem_debug   = false;
-    bool              debug_taint = false;
+    n00b_allocator_t *allocator      = nullptr;
+    void             *aparams        = nullptr; // Marking for debug, cleanup, etc.
+    void             *iparams        = nullptr; // To be sent to an object instance (TODO)
+    bool              no_scan        = false;
+    bool              mem_debug      = false;
+    bool              debug_taint    = false;
+    n00b_finalizer_t  finalizer      = nullptr;
+    void             *finalizer_data = nullptr;
 }
 {
-    n00b_inline_hdr_t *hdr = nullptr;
+    n00b_inline_hdr_t *hdr      = nullptr;
+    n00b_oob_hdr_t    *map_item = nullptr;
+
     n00b_ensure_allocator(allocator);
 
     if (!allocator->__system) {
@@ -87,8 +94,8 @@ _n00b_alloc_raw(size_t n, size_t sz, char *base_type, const char *location) _kar
     }
 
     if (allocator->metadata_pool != nullptr) {
-        n00b_oob_hdr_t *map_item = n00b_alloc(n00b_oob_hdr_t,
-                                              .allocator = allocator->metadata_pool);
+        map_item = n00b_alloc(n00b_oob_hdr_t,
+                              .allocator = allocator->metadata_pool);
 
         *map_item = (n00b_oob_hdr_t){
             .user_ptr        = r,
@@ -108,6 +115,28 @@ _n00b_alloc_raw(size_t n, size_t sz, char *base_type, const char *location) _kar
 
     assert(!(((uint64_t)r) & (N00B_ALIGN - 1)));
     // TODO: Add object info lookup, iff instance_params.
+
+    if (finalizer) {
+        n00b_runtime_t *rt = n00b_get_runtime();
+        if (rt) {
+            // The raw header key must match what the GC uses in ctx->memos:
+            // - OOB arenas: (n00b_inline_hdr_t *)map_item (the OOB record)
+            // - Inline-only: hdr (the actual inline header)
+            n00b_inline_hdr_t *alloc_key = (allocator->metadata_pool != nullptr)
+                                               ? (n00b_inline_hdr_t *)map_item
+                                               : hdr;
+
+            n00b_allocator_t      *sp   = (n00b_allocator_t *)&rt->system_pool;
+            n00b_finalizer_info_t *info = n00b_alloc(n00b_finalizer_info_t,
+                                                      .allocator = sp);
+            *info = (n00b_finalizer_info_t){
+                .funcptr    = finalizer,
+                .alloc_info = alloc_key,
+                .user_ptr   = finalizer_data,
+            };
+            n00b_list_push(rt->finalizers, info);
+        }
+    }
 
     return r;
 }
@@ -171,6 +200,8 @@ n00b_allocator_setup(n00b_allocator_t *allocator, n00b_calloc_fn alloc) _kargs
 void
 n00b_free(void *ptr)
 {
+    n00b_run_and_remove_finalizers(ptr);
+
     n00b_allocator_opt_t alloc_opt = n00b_mem_get_allocator(ptr);
 
     if (!n00b_option_is_set(alloc_opt)) {
@@ -190,42 +221,69 @@ n00b_free(void *ptr)
     (*allocator->free)(allocator, ptr);
 }
 
-#if 0
-
 void
-n00b_add_finalizer(void *obj, n00b_finalizer_t fn)
+n00b_add_finalizer(void *obj, n00b_finalizer_t fn, void *user_data)
 {
-    n00b_mmap_info_t *obj_mmap = n00b_mmap_by_address(obj);
-    assert(n00b_mmap_is_managed(obj_mmap));
+    n00b_runtime_t *rt = n00b_get_runtime();
+    assert(rt);
 
-    n00b_arena_t *arena = (n00b_arena_t *)n00b_atomic_load(&obj_mmap->allocator);
-    if (!arena->finalizers) {
-        while (n00b_atomic_or(&arena->mutex, 1))
-            /* No body */;
-        if (!arena->finalizers) {
-            // Use the TSI arena for now, since, if this is the system
-            // arena we're GCing, we don't want to depend on ourselves
-            // for the list.
-            arena->finalizers = n00b_list_from_arena(N00B_T_REF, &n00b_tsi_arena);
-        }
-        atomic_store(&arena->mutex, 0);
-    }
+    // Use the same raw header key that the GC stores in its memos dict.
+    // For OOB arenas, this is the n00b_oob_hdr_t* cast to n00b_inline_hdr_t*.
+    // For inline-only arenas, it's the actual inline header.
+    n00b_alloc_info_t ainfo = n00b_find_alloc_info(obj);
+    assert(ainfo.kind == n00b_alloc_oob || ainfo.kind == n00b_alloc_inline);
 
-    n00b_finalizer_info_t *info = n00b_alloc(n00b_finalizer_info_t, .allocator = (void *)arena);
-    n00b_inline_hdr_t *hdr = n00b_object_header(obj);
+    n00b_inline_hdr_t *hdr = (ainfo.kind == n00b_alloc_oob)
+                                  ? (n00b_inline_hdr_t *)ainfo.hdr.oob
+                                  : ainfo.hdr.in_line;
 
-    assert(hdr);
+    n00b_allocator_t      *sp   = (n00b_allocator_t *)&rt->system_pool;
+    n00b_finalizer_info_t *info = n00b_alloc(n00b_finalizer_info_t, .allocator = sp);
 
     *info = (n00b_finalizer_info_t){
         .funcptr    = fn,
         .alloc_info = hdr,
-        .user_ptr   = obj,
+        .user_ptr   = user_data,
     };
 
-    n00b_list_append(arena->finalizers, info);
+    n00b_list_push(rt->finalizers, info);
 }
 
-#endif
+static void
+n00b_run_and_remove_finalizers(void *ptr)
+{
+    if (!n00b_option_is_set(n00b_default_runtime)) {
+        return;
+    }
+
+    n00b_runtime_t *rt = n00b_get_runtime();
+    if (!rt || !rt->finalizers.data) {
+        return;
+    }
+
+    // Use the same raw header lookup as n00b_add_finalizer.
+    n00b_alloc_info_t ainfo = n00b_find_alloc_info(ptr);
+    if (ainfo.kind != n00b_alloc_oob && ainfo.kind != n00b_alloc_inline) {
+        return;
+    }
+
+    n00b_inline_hdr_t *hdr = (ainfo.kind == n00b_alloc_oob)
+                                  ? (n00b_inline_hdr_t *)ainfo.hdr.oob
+                                  : ainfo.hdr.in_line;
+
+    // Walk backwards for safe removal via n00b_list_delete.
+    size_t len = n00b_list_len(rt->finalizers);
+
+    for (size_t i = len; i > 0; i--) {
+        n00b_finalizer_info_t *entry = n00b_list_get(rt->finalizers, i - 1);
+
+        if (entry->alloc_info == hdr) {
+            entry->funcptr(entry->user_ptr);
+            (void)n00b_list_delete(rt->finalizers, i - 1);
+            n00b_free(entry);
+        }
+    }
+}
 
 void
 n00b_allocator_destroy(n00b_allocator_t *allocator)

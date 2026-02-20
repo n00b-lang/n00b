@@ -22,6 +22,7 @@
 #include <assert.h>
 
 #include "macros.h"
+#include "core/data_lock.h"
 
 // ============================================================================
 // Type definition
@@ -41,6 +42,7 @@
         T                *data;                                                                \
         size_t            len;                                                                 \
         size_t            cap;                                                                 \
+        n00b_rwlock_t    *lock;                                                                \
         n00b_allocator_t *allocator;                                                           \
     }
 
@@ -64,6 +66,24 @@
             .cap  = N,                                                                         \
             .data = n00b_alloc(N * sizeof(T)                                                   \
                         __VA_OPT__(, .allocator = __VA_ARGS__)),                                \
+            .lock = nullptr,                                                                   \
+            __VA_OPT__(.allocator = __VA_ARGS__,)                                              \
+        };                                                                                     \
+    })
+
+/**
+ * @brief Create a new locked array with the given capacity.
+ * @param T     Element type.
+ * @param N     Initial capacity.
+ */
+#define n00b_array_new_locked(T, N, ...)                                                       \
+    ({                                                                                         \
+        (n00b_array_t(T)){                                                                     \
+            .len  = 0,                                                                         \
+            .cap  = N,                                                                         \
+            .data = n00b_alloc(N * sizeof(T)                                                   \
+                        __VA_OPT__(, .allocator = __VA_ARGS__)),                                \
+            .lock = n00b_data_lock_new(),                                                      \
             __VA_OPT__(.allocator = __VA_ARGS__,)                                              \
         };                                                                                     \
     })
@@ -79,6 +99,7 @@
             .len  = 0,                                                                         \
             .cap  = N,                                                                         \
             .data = P,                                                                         \
+            .lock = nullptr,                                                                   \
         };                                                                                     \
     })
 
@@ -99,13 +120,18 @@
  * @pre @p i < array length.
  */
 #define n00b_array_get(x, i)                                                                   \
-    (*(({                                                                                      \
+    ({                                                                                         \
+        auto _bl_ap = &(x);                                                                    \
+        n00b_data_read_lock(_bl_ap->lock);                                                     \
         size_t _bl_i = (i);                                                                    \
-        if (_bl_i >= (x).len) {                                                                \
+        if (_bl_i >= _bl_ap->len) {                                                            \
+            n00b_data_unlock(_bl_ap->lock);                                                    \
             abort();                                                                           \
         }                                                                                      \
-        &(x).data[_bl_i];                                                                      \
-    })))
+        typeof(*_bl_ap->data) _bl_r = _bl_ap->data[_bl_i];                                     \
+        n00b_data_unlock(_bl_ap->lock);                                                        \
+        _bl_r;                                                                                 \
+    })
 
 /**
  * @brief Set element at index (bounds-checked, aborts on OOB).
@@ -116,21 +142,39 @@
  */
 #define n00b_array_set(x, i, val)                                                              \
     ({                                                                                         \
+        auto _bl_ap = &(x);                                                                    \
+        n00b_data_write_lock(_bl_ap->lock);                                                    \
         size_t _bl_i = (i);                                                                    \
-        if (_bl_i >= (x).cap) {                                                                \
+        if (_bl_i >= _bl_ap->cap) {                                                            \
+            n00b_data_unlock(_bl_ap->lock);                                                    \
             abort();                                                                           \
         }                                                                                      \
-        if (_bl_i >= (x).len) {                                                                \
-            (x).len = _bl_i;                                                                   \
+        if (_bl_i >= _bl_ap->len) {                                                            \
+            _bl_ap->len = _bl_i;                                                               \
         }                                                                                      \
-        (x).data[_bl_i] = (val);                                                               \
+        _bl_ap->data[_bl_i] = (val);                                                           \
+        n00b_data_unlock(_bl_ap->lock);                                                        \
     })
 
 /** @brief Number of elements in the array. */
-#define n00b_array_len(x) ((x).len)
+#define n00b_array_len(x)                                                                      \
+    ({                                                                                         \
+        auto _bl_ap = &(x);                                                                    \
+        n00b_data_read_lock(_bl_ap->lock);                                                     \
+        size_t _bl_r = _bl_ap->len;                                                            \
+        n00b_data_unlock(_bl_ap->lock);                                                        \
+        _bl_r;                                                                                 \
+    })
 
 /** @brief Allocated capacity. */
-#define n00b_array_cap(x) ((x).cap)
+#define n00b_array_cap(x)                                                                      \
+    ({                                                                                         \
+        auto _bl_ap = &(x);                                                                    \
+        n00b_data_read_lock(_bl_ap->lock);                                                     \
+        size_t _bl_r = _bl_ap->cap;                                                            \
+        n00b_data_unlock(_bl_ap->lock);                                                        \
+        _bl_r;                                                                                 \
+    })
 
 /**
  * @brief Clone an array (deep copy of data buffer).
@@ -139,14 +183,16 @@
  */
 #define n00b_array_clone(x)                                                                    \
     ({                                                                                         \
+        auto _bl_sp = &(x);                                                                    \
         typeof(x) _bl_copy = (typeof(x)){                                                      \
-            .len       = (x).len,                                                              \
-            .cap       = (x).cap,                                                              \
-            .data      = n00b_alloc((x).cap * sizeof((x).data[0]),                             \
-                             .allocator = (x).allocator),                                      \
-            .allocator = (x).allocator,                                                        \
+            .len       = _bl_sp->len,                                                          \
+            .cap       = _bl_sp->cap,                                                          \
+            .data      = n00b_alloc(_bl_sp->cap * sizeof(_bl_sp->data[0]),                     \
+                             .allocator = _bl_sp->allocator),                                  \
+            .lock      = _bl_sp->lock ? n00b_data_lock_new() : nullptr,                        \
+            .allocator = _bl_sp->allocator,                                                    \
         };                                                                                     \
-        memcpy(_bl_copy.data, (x).data, (x).len * sizeof((x).data[0]));                        \
+        memcpy(_bl_copy.data, _bl_sp->data, _bl_sp->len * sizeof(_bl_sp->data[0]));            \
         _bl_copy;                                                                              \
     })
 

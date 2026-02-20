@@ -88,7 +88,7 @@ typedef struct n00b_plane_t {
     n00b_widget_state_t  widget_state;
     uint16_t             flags;
 
-    n00b_spin_lock_t     lock;
+    n00b_rwlock_t       *lock;
     n00b_allocator_t    *allocator;
 } n00b_plane_t;
 

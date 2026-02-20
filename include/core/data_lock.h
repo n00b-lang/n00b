@@ -1,0 +1,69 @@
+/**
+ * @file data_lock.h
+ * @brief Conditional locking helpers for mutable data structures.
+ *
+ * Every mutable container stores an `n00b_rwlock_t *lock` field.
+ * When non-null, the helpers acquire/release the rwlock; when null
+ * (private / single-threaded), they are no-ops.
+ *
+ * `n00b_data_lock_new()` allocates and initializes a fresh rwlock.
+ */
+#pragma once
+
+#include "n00b.h"
+#include "core/macros.h"
+
+// Extern rwlock API (declared in core/rwlock.h, but we avoid including
+// it here to prevent a circular dependency through futex.h → stw.h).
+extern void _n00b_rw_init(n00b_rwlock_t *, char *);
+extern int  _n00b_rw_write_lock(n00b_rwlock_t *, char *);
+extern void _n00b_rw_read_lock(n00b_rwlock_t *, char *);
+extern bool _n00b_rw_unlock(n00b_rwlock_t *, char *);
+
+/**
+ * @brief Allocate and initialize a new rwlock for a data structure.
+ * @return Initialized rwlock pointer, or nullptr during early init.
+ */
+extern n00b_rwlock_t *n00b_data_lock_new(void);
+
+/**
+ * @brief Finalizer callback that frees a data-structure rwlock.
+ * @param lock_ptr Pointer to the `n00b_rwlock_t` to free.
+ */
+extern void n00b_finalize_data_lock(void *lock_ptr);
+
+/**
+ * @brief Acquire a shared (read) lock, if the lock pointer is non-null.
+ * @param lock Lock pointer (may be null).
+ */
+static inline void
+n00b_data_read_lock(n00b_rwlock_t *lock)
+{
+    if (lock) {
+        _n00b_rw_read_lock(lock, N00B_LOC_STRING());
+    }
+}
+
+/**
+ * @brief Acquire an exclusive (write) lock, if the lock pointer is non-null.
+ * @param lock Lock pointer (may be null).
+ */
+static inline void
+n00b_data_write_lock(n00b_rwlock_t *lock)
+{
+    if (lock) {
+        _n00b_rw_write_lock(lock, N00B_LOC_STRING());
+    }
+}
+
+/**
+ * @brief Release a read or write lock, if the lock pointer is non-null.
+ * @param lock Lock pointer (may be null).
+ */
+static inline void
+n00b_data_unlock(n00b_rwlock_t *lock)
+{
+    if (lock) {
+        _n00b_rw_unlock(lock, N00B_LOC_STRING());
+    }
+}

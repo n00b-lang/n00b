@@ -5,6 +5,8 @@
 #include "n00b.h"
 #include "core/alloc.h"
 #include "core/string.h"
+#include "core/data_lock.h"
+#include "core/arena.h"
 #include "strings/string_ops.h"
 #include "table/table.h"
 
@@ -64,7 +66,12 @@ n00b_table_new() _kargs
 {
     n00b_table_t *table = n00b_alloc(n00b_table_t, .allocator = allocator);
 
+    table->lock               = n00b_data_lock_new();
     table->allocator          = allocator;
+
+    if (table->lock) {
+        n00b_add_finalizer(table, n00b_finalize_data_lock, table->lock);
+    }
     table->table_props        = table_props;
     table->default_cell_props = cell_props;
     table->header_props       = header_props;

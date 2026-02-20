@@ -13,6 +13,7 @@
 #include "core/alloc.h"
 #include "core/stack.h"
 #include "core/result.h"
+#include "core/data_lock.h"
 
 // ============================================================================
 // Error codes
@@ -47,7 +48,7 @@ typedef struct n00b_interval_tree_t {
     n00b_interval_node_t *root;
     n00b_stack_t(void *)  stack;
     n00b_allocator_t     *allocator;
-    n00b_spin_lock_t      mutex;
+    n00b_rwlock_t        *lock;
 } n00b_interval_tree_t;
 
 // ============================================================================

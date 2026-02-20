@@ -4,7 +4,8 @@
 
 #include "n00b.h"
 #include "core/alloc.h"
-#include "core/atomic.h"
+#include "core/data_lock.h"
+#include "core/arena.h"
 #include "render/canvas.h"
 #include "render/composite.h"
 
@@ -15,14 +16,13 @@
 static inline void
 canvas_lock(n00b_canvas_t *c)
 {
-    while (n00b_atomic_or(&c->lock, 1) != 0)
-        ;
+    n00b_data_write_lock(c->lock);
 }
 
 static inline void
 canvas_unlock(n00b_canvas_t *c)
 {
-    n00b_atomic_store(&c->lock, 0);
+    n00b_data_unlock(c->lock);
 }
 
 static void
@@ -62,8 +62,13 @@ n00b_canvas_new(const n00b_renderer_vtable_t *vtable) _kargs
 
     n00b_canvas_t *c = n00b_alloc(n00b_canvas_t, .allocator = allocator);
 
+    c->lock      = n00b_data_lock_new();
     c->vtable    = vtable;
     c->allocator = allocator;
+
+    if (c->lock) {
+        n00b_add_finalizer(c, n00b_finalize_data_lock, c->lock);
+    }
 
     // Initialize backend.
     c->backend_ctx = vtable->init();

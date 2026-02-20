@@ -37,6 +37,7 @@
 #include "core/option.h"
 #include "core/result.h"
 #include "core/string.h"
+#include "core/data_lock.h"
 #include "util/utf8.h"
 
 // ============================================================================
@@ -85,7 +86,7 @@ struct n00b_buffer_t {
     char             *data;
     size_t            byte_len;
     size_t            alloc_len;
-    n00b_spin_lock_t  lock;
+    n00b_rwlock_t    *lock;
     n00b_allocator_t *allocator;
     int32_t           flags;
 };
@@ -94,13 +95,14 @@ struct n00b_buffer_t {
 // Lock macros (internal)
 // ============================================================================
 
-/** @internal Acquire spinlock (busy-wait). */
-#define _n00b_buffer_lock(b)                                                                   \
-    while (n00b_atomic_or(&(b)->lock, 1) != 0)                                                 \
-        ;
+/** @internal Acquire exclusive (write) lock. */
+#define _n00b_buffer_lock(b)   n00b_data_write_lock((b)->lock)
 
-/** @internal Release spinlock. */
-#define _n00b_buffer_unlock(b) n00b_atomic_store(&(b)->lock, 0)
+/** @internal Acquire shared (read) lock. */
+#define _n00b_buffer_rlock(b)  n00b_data_read_lock((b)->lock)
+
+/** @internal Release lock. */
+#define _n00b_buffer_unlock(b) n00b_data_unlock((b)->lock)
 
 /**
  * @internal Acquire write lock with automatic release via defer.
@@ -118,7 +120,7 @@ struct n00b_buffer_t {
  */
 #define n00b_buffer_acquire_r(b)                                                               \
     {                                                                                          \
-        _n00b_buffer_lock(b);                                                                  \
+        _n00b_buffer_rlock(b);                                                                 \
         n00b_defer(_n00b_buffer_unlock(b));                                                    \
     }
 
@@ -151,6 +153,7 @@ n00b_buffer_init(n00b_buffer_t *buf) _kargs
     n00b_string_t    *hex       = nullptr;
     char             *ptr       = nullptr;
     n00b_allocator_t *allocator = nullptr;
+    bool              no_lock   = false;
 };
 
 /**

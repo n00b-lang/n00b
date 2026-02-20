@@ -225,6 +225,7 @@ n00b_core = [
     'src/core/gc.c',
     'src/core/interval_tree.c',
     'src/core/buffer.c',
+    'src/core/data_lock.c',
     'src/core/string.c',
     'src/core/lock_accounting.c',
     'src/core/mutex.c',
@@ -401,6 +402,12 @@ gc_test = executable('test_gc',
     kwargs: test_common_kwargs,
 )
 test('gc', gc_test, suite: 'unit')
+
+finalizer_test = executable('test_finalizer',
+    ['test/unit/test_finalizer.c'],
+    kwargs: test_common_kwargs,
+)
+test('finalizer', finalizer_test, suite: 'unit')
 
 buffer_test = executable('test_buffer',
     ['test/unit/test_buffer.c'],

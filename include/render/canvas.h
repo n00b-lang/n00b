@@ -42,7 +42,7 @@ typedef struct n00b_canvas_t {
     n00b_text_style_t            *default_style;
     bool                          needs_full_redraw;
     bool                          size_set;
-    n00b_spin_lock_t              lock;
+    n00b_rwlock_t                *lock;
     n00b_allocator_t             *allocator;
 } n00b_canvas_t;
 

@@ -646,13 +646,71 @@ _n00b_gc_unregister_root(void *addr)
 // Finalizer processing
 // ============================================================================
 
+static inline bool
+n00b_addr_in_arena(void *addr, n00b_arena_t *arena)
+{
+    n00b_segment_t *seg = arena->current_segment;
+
+    while (seg) {
+        char *start = (char *)&seg->mem[0];
+        char *end   = start + (seg->size - sizeof(n00b_segment_t));
+
+        if ((char *)addr >= start && (char *)addr < end) {
+            return true;
+        }
+        seg = seg->next_segment;
+    }
+    return false;
+}
+
+// Check if a finalizer entry's object was in the from_space being collected.
+// For OOB arenas, the alloc_info is an OOB record (in the metadata pool,
+// NOT in from_space), so we check the OOB record's user_ptr instead.
+// For inline-only arenas, the alloc_info IS the inline header in from_space.
+static inline bool
+n00b_finalizer_in_from_space(n00b_finalizer_info_t *entry, n00b_collect_t *ctx)
+{
+    if (ctx->from_space->vtable.metadata_pool) {
+        // OOB arena: alloc_info is n00b_oob_hdr_t*, check user_ptr.
+        n00b_oob_hdr_t *oob = (n00b_oob_hdr_t *)entry->alloc_info;
+        return n00b_addr_in_arena(oob->user_ptr, ctx->from_space);
+    }
+    // Inline-only: alloc_info is the inline header in the segment.
+    return n00b_addr_in_arena(entry->alloc_info, ctx->from_space);
+}
+
 static void
 n00b_process_finalizers(n00b_collect_t *ctx)
 {
-    // Finalizers are currently disabled (#if 0 in alloc.c).
-    // When re-enabled, this function will walk from_space->finalizers
-    // and either migrate (if the alloc was moved) or run (if garbage).
-    (void)ctx;
+    n00b_runtime_t *rt = n00b_get_runtime();
+
+    if (!rt || !rt->finalizers.data) {
+        return;
+    }
+
+    size_t len = n00b_list_len(rt->finalizers);
+
+    for (size_t i = len; i > 0; i--) {
+        n00b_finalizer_info_t *entry = n00b_list_get(rt->finalizers, i - 1);
+        bool                   found;
+        n00b_inline_hdr_t     *fw;
+
+        fw = n00b_dict_untyped_get(&ctx->memos, entry->alloc_info, &found);
+
+        if (found) {
+            // Object survived — update alloc_info to the forwarded header.
+            entry->alloc_info = fw;
+            // user_ptr typically points outside the collected arena
+            // (e.g., a lock in system_pool), so no update needed.
+        }
+        else if (n00b_finalizer_in_from_space(entry, ctx)) {
+            // Object is dead — run finalizer and remove entry.
+            entry->funcptr(entry->user_ptr);
+            (void)n00b_list_delete(rt->finalizers, i - 1);
+            n00b_free(entry);
+        }
+        // else: object in a different arena, leave alone.
+    }
 }
 
 // ============================================================================

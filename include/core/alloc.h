@@ -74,12 +74,16 @@ n00b_mmap_is_gc_scannable(n00b_mmap_info_t *map)
  * @param base_type Stringified C type name (for debugging).
  * @param location  Source location string (auto-filled by macro).
  *
- * @kw allocator   Allocator to use (nullptr = runtime default).
- * @kw aparams     Opaque allocator params for debug/cleanup marking.
- * @kw iparams     Opaque params to send to the object instance (TODO).
- * @kw no_scan     If true, GC will not scan this allocation for pointers.
- * @kw mem_debug   Enable memory debugging for this allocation.
- * @kw debug_taint Taint freed memory with a debug pattern.
+ * @kw allocator      Allocator to use (nullptr = runtime default).
+ * @kw aparams        Opaque allocator params for debug/cleanup marking.
+ * @kw iparams        Opaque params to send to the object instance (TODO).
+ * @kw no_scan        If true, GC will not scan this allocation for pointers.
+ * @kw mem_debug      Enable memory debugging for this allocation.
+ * @kw debug_taint    Taint freed memory with a debug pattern.
+ * @kw finalizer      Finalizer callback to run when the object is collected
+ *                    or freed. Registered at allocation time, avoiding the
+ *                    header lookup that n00b_add_finalizer() requires.
+ * @kw finalizer_data Opaque pointer passed to @p finalizer when invoked.
  *
  * @pre Runtime must be initialized (or an explicit allocator must be provided).
  * @post Returned pointer is zero-filled and aligned to `N00B_ALIGN`.
@@ -87,12 +91,14 @@ n00b_mmap_is_gc_scannable(n00b_mmap_info_t *map)
 extern void *
 _n00b_alloc_raw(size_t n, size_t sz, char *base_type, const char *location) _kargs
 {
-    n00b_allocator_t *allocator   = nullptr;
-    void             *aparams     = nullptr; // Marking for debug, cleanup, etc.
-    void             *iparams     = nullptr; // To be sent to an object instance (TODO)
-    bool              no_scan     = false;
-    bool              mem_debug   = false;
-    bool              debug_taint = false;
+    n00b_allocator_t *allocator      = nullptr;
+    void             *aparams        = nullptr; // Marking for debug, cleanup, etc.
+    void             *iparams        = nullptr; // To be sent to an object instance (TODO)
+    bool              no_scan        = false;
+    bool              mem_debug      = false;
+    bool              debug_taint    = false;
+    n00b_finalizer_t  finalizer      = nullptr;
+    void             *finalizer_data = nullptr;
 };
 
 /**

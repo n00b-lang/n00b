@@ -152,6 +152,7 @@ n00b_init(n00b_runtime_t *rt, int argc, char *argv[]) _kargs
 
     n00b_allocator_t *rpool = (n00b_allocator_t *)&rt->system_pool;
     rt->gc_roots            = n00b_list_new(n00b_gc_root_t, rpool);
+    rt->finalizers          = n00b_list_new_private(n00b_finalizer_info_t *, rpool);
 
     setup_threads(rt, max_threads);
 

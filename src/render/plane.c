@@ -4,7 +4,8 @@
 
 #include "n00b.h"
 #include "core/alloc.h"
-#include "core/atomic.h"
+#include "core/data_lock.h"
+#include "core/arena.h"
 #include "core/string.h"
 #include "render/plane.h"
 #include "strings/string_style.h"
@@ -35,14 +36,13 @@ plane_cell(n00b_plane_t *p, n00b_isize_t row, n00b_isize_t col)
 static inline void
 plane_lock(n00b_plane_t *p)
 {
-    while (n00b_atomic_or(&p->lock, 1) != 0)
-        ;
+    n00b_data_write_lock(p->lock);
 }
 
 static inline void
 plane_unlock(n00b_plane_t *p)
 {
-    n00b_atomic_store(&p->lock, 0);
+    n00b_data_unlock(p->lock);
 }
 
 static inline void
@@ -134,6 +134,12 @@ n00b_plane_new(n00b_isize_t cols, n00b_isize_t rows) _kargs
 }
 {
     n00b_plane_t *p = n00b_alloc(n00b_plane_t, .allocator = allocator);
+
+    p->lock       = n00b_data_lock_new();
+
+    if (p->lock) {
+        n00b_add_finalizer(p, n00b_finalize_data_lock, p->lock);
+    }
 
     p->total_cols = cols;
     p->total_rows = rows;

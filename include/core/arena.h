@@ -29,8 +29,6 @@ struct n00b_arena_t {
     char                     *segment_end;
     _Atomic(char *)           next_alloc;
     _Atomic(n00b_segment_t *) current_segment;
-    // TODO: add these back in.
-    // n00b_list_t(n00b_finalizer_t) finalizers;
     _Atomic uint32_t          mutex;
     _Atomic uint32_t          alloc_count;
     // If collection_enabled is off, when a heap / arena runs out of
@@ -113,12 +111,13 @@ n00b_initialize_arena(n00b_arena_t *arena) _kargs
 };
 
 /**
- * @brief Register a finalizer to run when @p obj is collected.
- * @param obj Object to attach the finalizer to.
- * @param fn  Finalizer callback.
+ * @brief Register a finalizer to run when @p obj is collected or freed.
+ * @param obj       Object to attach the finalizer to.
+ * @param fn        Finalizer callback.
+ * @param user_data Opaque pointer passed to @p fn when invoked.
  * @pre @p obj must be a managed heap allocation.
  */
-extern void n00b_add_finalizer(void *obj, n00b_finalizer_t fn);
+extern void n00b_add_finalizer(void *obj, n00b_finalizer_t fn, void *user_data);
 
 struct n00b_finalizer_info_t {
     n00b_finalizer_t   funcptr;

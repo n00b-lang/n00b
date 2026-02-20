@@ -1,9 +1,9 @@
 /**
  * @file stack.h
- * @brief Type-safe dynamic stack (LIFO, thread-safe).
+ * @brief Type-safe dynamic stack (LIFO, optionally thread-safe).
  *
  * @c n00b_stack_t(T) provides a growable LIFO stack backed by a linear
- * buffer, with an atomic spinlock for thread safety.
+ * buffer, with an optional rwlock for thread safety.
  *
  * Type safety is enforced through ncc's @c typeid().
  *
@@ -27,6 +27,7 @@
 #include "core/macros.h"
 #include "core/atomic.h"
 #include "core/align.h"
+#include "core/data_lock.h"
 
 // ============================================================================
 // Constants
@@ -47,7 +48,7 @@
         T                *data;                                                                    \
         size_t            len;                                                                     \
         size_t            cap;                                                                     \
-        n00b_spin_lock_t  lock;                                                                    \
+        n00b_rwlock_t    *lock;                                                                    \
         n00b_allocator_t *allocator;                                                               \
     }
 
@@ -55,11 +56,11 @@
 // Internal helpers  (not part of public API)
 // ============================================================================
 
-#define _n00b_stack_lock(xptr)                                                                     \
-    while (n00b_atomic_or(&(xptr)->lock, 1) != 0)                                                  \
-        ;
+/** @internal Acquire exclusive (write) lock. All stack ops are exclusive. */
+#define _n00b_stack_lock(xptr)   n00b_data_write_lock((xptr)->lock)
 
-#define _n00b_stack_unlock(xptr) n00b_atomic_store(&(xptr)->lock, 0)
+/** @internal Release lock. */
+#define _n00b_stack_unlock(xptr) n00b_data_unlock((xptr)->lock)
 
 #define _n00b_stack_ensure_cap(xptr, needed)                                                       \
     do {                                                                                           \
@@ -83,6 +84,7 @@
 // Construction / destruction
 // ============================================================================
 
+/** @brief Create a new thread-safe stack with default capacity. */
 #define n00b_stack_new(T, ...)                                                                      \
     ({                                                                                             \
         (n00b_stack_t(T)){                                                                         \
@@ -90,7 +92,20 @@
                         __VA_OPT__(, .allocator = __VA_ARGS__)),                                   \
             .len  = 0,                                                                             \
             .cap  = N00B_DEFAULT_STACK_SZ,                                                         \
-            .lock = 0,                                                                             \
+            .lock = n00b_data_lock_new(),                                                          \
+            __VA_OPT__(.allocator = __VA_ARGS__,)                                                  \
+        };                                                                                         \
+    })
+
+/** @brief Create a new private (unlocked) stack with default capacity. */
+#define n00b_stack_new_private(T, ...)                                                              \
+    ({                                                                                             \
+        (n00b_stack_t(T)){                                                                         \
+            .data = n00b_alloc_array(T, N00B_DEFAULT_STACK_SZ                                      \
+                        __VA_OPT__(, .allocator = __VA_ARGS__)),                                   \
+            .len  = 0,                                                                             \
+            .cap  = N00B_DEFAULT_STACK_SZ,                                                         \
+            .lock = nullptr,                                                                       \
             __VA_OPT__(.allocator = __VA_ARGS__,)                                                  \
         };                                                                                         \
     })
@@ -103,7 +118,7 @@
                         __VA_OPT__(, .allocator = __VA_ARGS__)),                                   \
             .len  = 0,                                                                             \
             .cap  = _bl_rc,                                                                        \
-            .lock = 0,                                                                             \
+            .lock = n00b_data_lock_new(),                                                          \
             __VA_OPT__(.allocator = __VA_ARGS__,)                                                  \
         };                                                                                         \
     })
@@ -118,7 +133,7 @@
     })
 
 // ============================================================================
-// Core operations  (all locked)
+// Core operations  (all write-locked)
 // ============================================================================
 
 /** @brief Push a value onto the top of the stack. */
@@ -154,7 +169,7 @@
     })
 
 // ============================================================================
-// Query  (locked)
+// Query  (write-locked since all stack ops are exclusive)
 // ============================================================================
 
 /** @brief Number of elements on the stack. */

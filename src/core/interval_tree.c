@@ -1,6 +1,8 @@
 // AVL interval tree from Dr. Raid, ported to n00b stack/allocator.
 
 #include "core/interval_tree.h"
+#include "core/arena.h"
+#include "core/data_lock.h"
 
 n00b_interval_tree_t *
 n00b_new_interval_tree(n00b_allocator_t *allocator)
@@ -8,8 +10,14 @@ n00b_new_interval_tree(n00b_allocator_t *allocator)
     n00b_interval_tree_t *tree = n00b_alloc(n00b_interval_tree_t,
                                             .allocator = allocator);
 
-    tree->stack     = n00b_stack_new(void *, allocator);
+    tree->stack     = n00b_stack_new_private(void *, allocator);
     tree->allocator = allocator;
+    tree->lock      = n00b_data_lock_new();
+
+    if (tree->lock) {
+        n00b_add_finalizer(tree, n00b_finalize_data_lock, tree->lock);
+    }
+
     return tree;
 }
 
@@ -17,8 +25,14 @@ int
 n00b_init_interval_tree(n00b_interval_tree_t *tree, n00b_allocator_t *allocator)
 {
     tree->root      = nullptr;
-    tree->stack     = n00b_stack_new(void *, allocator);
+    tree->stack     = n00b_stack_new_private(void *, allocator);
     tree->allocator = allocator;
+    tree->lock      = n00b_data_lock_new();
+
+    if (tree->lock) {
+        n00b_add_finalizer(tree, n00b_finalize_data_lock, tree->lock);
+    }
+
     return 0;
 }
 
@@ -140,6 +154,8 @@ n00b_interval_insert(n00b_interval_tree_t *tree,
         return n00b_result_err(n00b_interval_node_t *, N00B_INTERVAL_ERR_INVALID);
     }
 
+    n00b_data_write_lock(tree->lock);
+
     n00b_interval_node_t *node = n00b_alloc(n00b_interval_node_t,
                                             .allocator = tree->allocator);
 
@@ -152,6 +168,7 @@ n00b_interval_insert(n00b_interval_tree_t *tree,
 
     if (nullptr == tree->root) {
         tree->root = node;
+        n00b_data_unlock(tree->lock);
         return n00b_result_ok(n00b_interval_node_t *, node);
     }
 
@@ -191,6 +208,7 @@ n00b_interval_insert(n00b_interval_tree_t *tree,
     }
 
     tree->root = _n00b_avl_balance_node(node);
+    n00b_data_unlock(tree->lock);
     return n00b_result_ok(n00b_interval_node_t *, inserted);
 }
 
@@ -199,11 +217,16 @@ n00b_result_t(uint64_t)
 n00b_interval_max(n00b_interval_tree_t *tree)
 // clang-format on
 {
+    n00b_data_read_lock(tree->lock);
+
     if (nullptr == tree->root) {
+        n00b_data_unlock(tree->lock);
         return n00b_result_err(uint64_t, 1);
     }
 
-    return n00b_result_ok(uint64_t, tree->root->maximum);
+    uint64_t result = tree->root->maximum;
+    n00b_data_unlock(tree->lock);
+    return n00b_result_ok(uint64_t, result);
 }
 
 // clang-format off
@@ -211,11 +234,16 @@ n00b_result_t(uint64_t)
 n00b_interval_min(n00b_interval_tree_t *tree)
 // clang-format on
 {
+    n00b_data_read_lock(tree->lock);
+
     if (nullptr == tree->root) {
+        n00b_data_unlock(tree->lock);
         return n00b_result_err(uint64_t, 1);
     }
 
-    return n00b_result_ok(uint64_t, tree->root->minimum);
+    uint64_t result = tree->root->minimum;
+    n00b_data_unlock(tree->lock);
+    return n00b_result_ok(uint64_t, result);
 }
 
 // clang-format off
@@ -229,7 +257,10 @@ n00b_interval_search_any(n00b_interval_tree_t *tree,
         return n00b_result_err(n00b_interval_node_t *, N00B_INTERVAL_ERR_INVALID);
     }
 
+    n00b_data_read_lock(tree->lock);
+
     if (nullptr == tree->root) {
+        n00b_data_unlock(tree->lock);
         return n00b_result_ok(n00b_interval_node_t *, nullptr);
     }
 
@@ -239,6 +270,7 @@ n00b_interval_search_any(n00b_interval_tree_t *tree,
     while (0 != n00b_stack_len(tree->stack)) {
         n00b_interval_node_t *node = n00b_stack_pop(tree->stack);
         if (node->low < high && low < node->high) {
+            n00b_data_unlock(tree->lock);
             return n00b_result_ok(n00b_interval_node_t *, node);
         }
 
@@ -253,6 +285,7 @@ n00b_interval_search_any(n00b_interval_tree_t *tree,
         }
     }
 
+    n00b_data_unlock(tree->lock);
     return n00b_result_ok(n00b_interval_node_t *, nullptr);
 }
 
@@ -262,7 +295,10 @@ n00b_interval_next_low(n00b_interval_tree_t *tree,
                        uint64_t              point)
 // clang-format on
 {
+    n00b_data_read_lock(tree->lock);
+
     if (nullptr == tree->root) {
+        n00b_data_unlock(tree->lock);
         return n00b_result_ok(n00b_interval_node_t *, nullptr);
     }
 
@@ -271,6 +307,7 @@ n00b_interval_next_low(n00b_interval_tree_t *tree,
 
     while (nullptr != node) {
         if (point == node->low) {
+            n00b_data_unlock(tree->lock);
             return n00b_result_ok(n00b_interval_node_t *, node);
         }
 
@@ -281,16 +318,19 @@ n00b_interval_next_low(n00b_interval_tree_t *tree,
                 continue;
             }
 
+            n00b_data_unlock(tree->lock);
             return n00b_result_ok(n00b_interval_node_t *, node);
         }
 
         if (nullptr == node->right) {
+            n00b_data_unlock(tree->lock);
             return n00b_result_ok(n00b_interval_node_t *, prev);
         }
 
         node = node->right;
     }
 
+    n00b_data_unlock(tree->lock);
     return n00b_result_ok(n00b_interval_node_t *, nullptr);
 }
 
@@ -317,8 +357,11 @@ n00b_interval_search_ordered(n00b_interval_tree_t *tree,
         return n00b_result_err(int, N00B_INTERVAL_ERR_INVALID);
     }
 
+    n00b_data_read_lock(tree->lock);
+
     n00b_interval_node_t *node = tree->root;
     if (nullptr == node) {
+        n00b_data_unlock(tree->lock);
         return n00b_result_ok(int, 0);
     }
 
@@ -352,6 +395,7 @@ n00b_interval_search_ordered(n00b_interval_tree_t *tree,
         }
     }
 
+    n00b_data_unlock(tree->lock);
     return n00b_result_ok(int, 0);
 }
 
@@ -364,6 +408,7 @@ n00b_interval_delete(n00b_interval_tree_t *tree, n00b_interval_node_t *target)
         return n00b_result_err(int, N00B_INTERVAL_ERR_NOT_FOUND);
     }
 
+    n00b_data_write_lock(tree->lock);
     n00b_stack_clear(tree->stack);
 
     // Walk the BST to find the target by pointer identity.
@@ -386,6 +431,7 @@ n00b_interval_delete(n00b_interval_tree_t *tree, n00b_interval_node_t *target)
                 }
             }
             if (!retrying) {
+                n00b_data_unlock(tree->lock);
                 return n00b_result_err(int, N00B_INTERVAL_ERR_NOT_FOUND);
             }
             continue;
@@ -468,6 +514,7 @@ n00b_interval_delete(n00b_interval_tree_t *tree, n00b_interval_node_t *target)
         }
 
         tree->root = subtree;
+        n00b_data_unlock(tree->lock);
         return n00b_result_ok(int, 0);
     }
 
@@ -498,6 +545,7 @@ n00b_interval_delete(n00b_interval_tree_t *tree, n00b_interval_node_t *target)
     }
 
     tree->root = subtree;
+    n00b_data_unlock(tree->lock);
     return n00b_result_ok(int, 0);
 }
 
@@ -513,7 +561,10 @@ n00b_interval_search(n00b_interval_tree_t *tree,
         return n00b_result_err(int, N00B_INTERVAL_ERR_INVALID);
     }
 
+    n00b_data_read_lock(tree->lock);
+
     if (nullptr == tree->root) {
+        n00b_data_unlock(tree->lock);
         return n00b_result_ok(int, 0);
     }
 
@@ -536,5 +587,6 @@ n00b_interval_search(n00b_interval_tree_t *tree,
         }
     }
 
+    n00b_data_unlock(tree->lock);
     return n00b_result_ok(int, 0);
 }

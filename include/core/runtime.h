@@ -28,6 +28,7 @@ n00b_array_decl(char *);
 n00b_array_decl(uint32_t);
 
 n00b_list_decl(n00b_gc_root_t);
+n00b_list_decl(n00b_finalizer_info_t *);
 
 // Forward declaration to avoid including interval_tree.h.
 typedef struct n00b_interval_tree_t n00b_interval_tree_t;
@@ -50,6 +51,7 @@ struct n00b_runtime_t {
     n00b_arena_t               *default_arena; // GC'd arena (when using default allocator)
     n00b_pool_t                 system_pool;   // System pool for root list & lock records.
     n00b_list_t(n00b_gc_root_t) gc_roots;      // User-registered GC roots.
+    n00b_list_t(n00b_finalizer_info_t *) finalizers; // Global finalizer list (system_pool-backed).
     n00b_thread_record_t        threads[N00B_THREADS_MAX];
     n00b_base_allocator_t       slab_allocator;
     n00b_futex_t                stw;

@@ -89,7 +89,7 @@ typedef struct n00b_table_t {
     // --- Output ---
     n00b_plane_t          *plane; /**< Owned, created on render. */
 
-    n00b_spin_lock_t       lock;
+    n00b_rwlock_t         *lock;
     n00b_allocator_t      *allocator;
 } n00b_table_t;
 
