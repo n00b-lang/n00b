@@ -31,7 +31,7 @@ n00b_text_style_t *
 n00b_str_style_new()
     _kargs { n00b_allocator_t *allocator = nullptr; }
 {
-    n00b_text_style_t *s = n00b_alloc(n00b_text_style_t, .allocator = allocator);
+    n00b_text_style_t *s = n00b_alloc_with_opts(n00b_text_style_t, &(n00b_alloc_opts_t){.allocator = allocator});
 
     s->bold             = N00B_TRI_UNSPECIFIED;
     s->italic           = N00B_TRI_UNSPECIFIED;
@@ -62,7 +62,7 @@ n00b_str_style_merge(const n00b_text_style_t *base,
                       const n00b_text_style_t *overlay)
     _kargs { n00b_allocator_t *allocator = nullptr; }
 {
-    n00b_text_style_t *r = n00b_alloc(n00b_text_style_t, .allocator = allocator);
+    n00b_text_style_t *r = n00b_alloc_with_opts(n00b_text_style_t, &(n00b_alloc_opts_t){.allocator = allocator});
 
     r->bold             = merge_tri(base->bold, overlay->bold);
     r->italic           = merge_tri(base->italic, overlay->italic);
@@ -126,8 +126,8 @@ n00b_text_style_t *
 n00b_str_style_copy(const n00b_text_style_t *src)
     _kargs { n00b_allocator_t *allocator = nullptr; }
 {
-    n00b_text_style_t *dst = n00b_alloc(n00b_text_style_t,
-                                         .allocator = allocator);
+    n00b_text_style_t *dst = n00b_alloc_with_opts(n00b_text_style_t,
+                                                   &(n00b_alloc_opts_t){.allocator = allocator});
     *dst = *src;
     return dst;
 }

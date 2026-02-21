@@ -389,7 +389,7 @@ test_join(void)
     assert(memcmp(result->data, "one,two,three", 13) == 0);
 
     // Without separator.
-    n00b_buffer_t *no_sep = n00b_buffer_join(items, 3, nullptr);
+    n00b_buffer_t *no_sep = n00b_buffer_join(items, nullptr);
     assert(n00b_buffer_len(no_sep) == 11); // "onetwothree"
     assert(memcmp(no_sep->data, "onetwothree", 11) == 0);
 
@@ -450,6 +450,26 @@ test_to_c(void)
 }
 
 // ============================================================================
+// 16. From C string -- convenience wrapper
+// ============================================================================
+
+static void
+test_from_cstr(void)
+{
+    n00b_buffer_t *buf = n00b_buffer_from_cstr("hello world");
+    assert(n00b_buffer_len(buf) == 11);
+    assert(memcmp(buf->data, "hello world", 11) == 0);
+
+    n00b_buffer_t *empty = n00b_buffer_from_cstr("");
+    assert(n00b_buffer_len(empty) == 0);
+
+    n00b_buffer_free(buf);
+    n00b_buffer_free(empty);
+
+    printf("  [PASS] from_cstr\n");
+}
+
+// ============================================================================
 // Main
 // ============================================================================
 
@@ -476,7 +496,9 @@ main(int argc, char **argv)
     test_join();
     test_free();
     test_to_c();
+    test_from_cstr();
 
     printf("All buffer tests passed.\n");
+    n00b_shutdown();
     return 0;
 }

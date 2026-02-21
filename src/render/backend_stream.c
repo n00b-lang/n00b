@@ -1,4 +1,4 @@
-/**
+/*
  * Stream renderer backend: writes plain text to a buffer or FILE *.
  *
  * This is the simplest backend — no terminal capabilities, no cursor
@@ -13,6 +13,8 @@
 #include <string.h>
 #include "n00b.h"
 #include "core/alloc.h"
+#include "core/string.h"
+#include "core/buffer.h"
 #include "render/backend.h"
 
 // -------------------------------------------------------------------
@@ -36,13 +38,14 @@ typedef struct {
 // -------------------------------------------------------------------
 
 static void *
-stream_init(void)
+stream_init(n00b_conduit_topic_t(n00b_buffer_t *) *output)
 {
-    stream_ctx_t *ctx = n00b_alloc(stream_ctx_t, .no_scan = true);
+    (void)output;
+    stream_ctx_t *ctx = n00b_alloc_with_opts(stream_ctx_t, &(n00b_alloc_opts_t){.no_scan = true});
     ctx->rows     = STREAM_DEFAULT_ROWS;
     ctx->cols     = STREAM_DEFAULT_COLS;
     ctx->buf_size = STREAM_INITIAL_BUF;
-    ctx->buffer   = n00b_alloc_size(1, STREAM_INITIAL_BUF, .no_scan = true);
+    ctx->buffer   = n00b_alloc_array_with_opts(char, STREAM_INITIAL_BUF, &(n00b_alloc_opts_t){.no_scan = true});
     ctx->buf_used = 0;
     return ctx;
 }
@@ -85,7 +88,7 @@ stream_ensure_space(stream_ctx_t *ctx, size_t needed)
         ctx->buf_size *= 2;
     }
 
-    char *new_buf = n00b_alloc_size(1, ctx->buf_size, .no_scan = true);
+    char *new_buf = n00b_alloc_array_with_opts(char, ctx->buf_size, &(n00b_alloc_opts_t){.no_scan = true});
     memcpy(new_buf, ctx->buffer, ctx->buf_used);
     n00b_free(ctx->buffer);
     ctx->buffer = new_buf;
@@ -173,18 +176,18 @@ const n00b_renderer_vtable_t n00b_renderer_stream = {
 // Stream-specific helpers (for testing)
 // -------------------------------------------------------------------
 
-/**
- * Get the stream backend's internal buffer.
+/*
+ * Get the stream backend's internal buffer as a string.
  * Only valid when the backend is the stream backend.
  */
-const char *
+n00b_string_t
 n00b_stream_backend_get_buffer(void *ctx)
 {
     stream_ctx_t *sctx = ctx;
-    return sctx->buffer;
+    return n00b_string_from_raw(sctx->buffer, (int64_t)sctx->buf_used);
 }
 
-/**
+/*
  * Get the byte count of the stream backend's buffer.
  */
 size_t
@@ -194,7 +197,7 @@ n00b_stream_backend_get_length(void *ctx)
     return sctx->buf_used;
 }
 
-/**
+/*
  * Set the virtual terminal size for the stream backend.
  */
 void

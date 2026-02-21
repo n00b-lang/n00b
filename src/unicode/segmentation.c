@@ -5,6 +5,7 @@
 #include "core/alloc.h"
 #include "internal/unicode/tables.h"
 #include <string.h>
+#include <assert.h>
 
 // External generated tables
 extern const uint16_t n00b_unicode_gcb_stage1[];
@@ -179,6 +180,7 @@ n00b_unicode_grapheme_iter(n00b_string_t s) _kargs
 int32_t
 n00b_unicode_break_next(n00b_unicode_break_iter_t *it)
 {
+    assert(it);
     if (it->byte_pos >= (uint32_t)it->len)
         return -1;
 
@@ -776,6 +778,7 @@ wb_no_break:
 int32_t
 n00b_unicode_break_prev(n00b_unicode_break_iter_t *it)
 {
+    assert(it);
     if (it->byte_pos == 0)
         return -1;
 

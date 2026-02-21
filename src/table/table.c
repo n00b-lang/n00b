@@ -1,4 +1,4 @@
-/**
+/*
  * Table construction, destruction, cell/row insertion, and column spec API.
  */
 
@@ -10,6 +10,8 @@
 #include "core/arena.h"
 #include "strings/string_ops.h"
 #include "table/table.h"
+
+#include <assert.h>
 
 // ====================================================================
 // Internal: default box props (fallback for style cascade)
@@ -26,6 +28,9 @@ static n00b_box_props_t _default_cell_props = {
 static n00b_isize_t
 add_col_spec(n00b_table_t *table, n00b_table_col_spec_t spec)
 {
+    assert(!table->cols_locked
+           && "cannot add column specs after first row");
+
     n00b_list_push(table->col_specs, spec);
 
     return (n00b_isize_t)table->col_specs.len - 1;
@@ -50,29 +55,40 @@ current_row_col_count(n00b_table_t *table)
 // Construction / destruction
 // ====================================================================
 
-n00b_table_t *
-n00b_table_new() _kargs
+void
+n00b_table_init(n00b_table_t *table) _kargs
 {
-    n00b_isize_t       num_cols     = 0;
-    n00b_box_props_t  *table_props  = nullptr;
-    n00b_box_props_t  *cell_props   = nullptr;
-    n00b_box_props_t  *header_props = nullptr;
-    n00b_box_props_t  *alt_props    = nullptr;
-    n00b_string_t     *title        = nullptr;
-    n00b_string_t     *caption      = nullptr;
-    n00b_isize_t       max_rows     = 0;
-    bool               wrap         = true;
-    n00b_allocator_t  *allocator    = nullptr;
+    n00b_isize_t        num_cols     = 0;
+    n00b_table_style_t *style        = nullptr;
+    n00b_box_props_t   *table_props  = nullptr;
+    n00b_box_props_t   *cell_props   = nullptr;
+    n00b_box_props_t   *header_props = nullptr;
+    n00b_box_props_t   *alt_props    = nullptr;
+    n00b_string_t      *title        = nullptr;
+    n00b_string_t      *caption      = nullptr;
+    n00b_isize_t        max_rows     = 0;
+    bool                wrap         = true;
+    n00b_allocator_t   *allocator    = nullptr;
 }
 {
-    n00b_table_t *table = n00b_alloc(n00b_table_t, .allocator = allocator);
+    // Apply style preset as defaults; explicit kargs override.
+    if (style) {
+        if (!table_props) {
+            table_props = style->table_props;
+        }
+        if (!cell_props) {
+            cell_props = style->cell_props;
+        }
+        if (!header_props) {
+            header_props = style->header_props;
+        }
+        if (!alt_props) {
+            alt_props = style->alt_cell_props;
+        }
+    }
 
     table->lock               = n00b_data_lock_new();
     table->allocator          = allocator;
-
-    if (table->lock) {
-        n00b_add_finalizer(table, n00b_finalize_data_lock, table->lock);
-    }
     table->table_props        = table_props;
     table->default_cell_props = cell_props;
     table->header_props       = header_props;
@@ -84,14 +100,14 @@ n00b_table_new() _kargs
         table->title = *title;
     }
     else {
-        table->title = n00b_string_empty(allocator);
+        table->title = n00b_string_empty(.allocator = allocator);
     }
 
     if (caption) {
         table->caption = *caption;
     }
     else {
-        table->caption = n00b_string_empty(allocator);
+        table->caption = n00b_string_empty(.allocator = allocator);
     }
 
     // Initialize lists.
@@ -116,8 +132,6 @@ n00b_table_new() _kargs
         table->rows = n00b_list_new_cap(n00b_table_row_t, max_rows,
                                          allocator);
     }
-
-    return table;
 }
 
 void
@@ -160,6 +174,7 @@ n00b_table_add_cell(n00b_table_t *table, n00b_string_t content) _kargs
     n00b_tristate_t   wrap       = N00B_TRI_UNSPECIFIED;
 }
 {
+    assert(table);
     assert(row_span == 1 && "multi-row spanning not yet supported");
 
     n00b_table_cell_t cell_val = {
@@ -176,7 +191,8 @@ n00b_table_add_cell(n00b_table_t *table, n00b_string_t content) _kargs
 void
 n00b_table_empty_cell(n00b_table_t *table)
 {
-    n00b_string_t empty = n00b_string_empty(table->allocator);
+    assert(table);
+    n00b_string_t empty = n00b_string_empty(.allocator = table->allocator);
 
     n00b_table_add_cell(table, empty);
 }
@@ -261,6 +277,9 @@ n00b_table_end_row(n00b_table_t *table)
 void
 n00b_table_add_row(n00b_table_t *table, n00b_string_t *cells, n00b_isize_t n)
 {
+    assert(table);
+    assert(!n || cells);
+
     for (n00b_isize_t i = 0; i < n; i++) {
         n00b_table_add_cell(table, cells[i]);
     }
@@ -271,6 +290,8 @@ n00b_table_add_row(n00b_table_t *table, n00b_string_t *cells, n00b_isize_t n)
 void
 n00b_table_end(n00b_table_t *table)
 {
+    assert(table);
+
     if (table->current_row.cells.len > 0) {
         n00b_table_end_row(table);
     }
@@ -283,6 +304,8 @@ n00b_table_end(n00b_table_t *table)
 n00b_isize_t
 n00b_table_col_fit(n00b_table_t *table)
 {
+    assert(table);
+
     n00b_table_col_spec_t spec = {
         .mode          = N00B_COL_FIT,
         .flex_multiple = 1,
@@ -294,6 +317,8 @@ n00b_table_col_fit(n00b_table_t *table)
 n00b_isize_t
 n00b_table_col_flex(n00b_table_t *table, int64_t factor)
 {
+    assert(table);
+
     n00b_table_col_spec_t spec = {
         .mode          = N00B_COL_FLEX,
         .flex_multiple = factor > 0 ? factor : 1,
@@ -305,6 +330,8 @@ n00b_table_col_flex(n00b_table_t *table, int64_t factor)
 n00b_isize_t
 n00b_table_col_range(n00b_table_t *table, int64_t min, int64_t max)
 {
+    assert(table);
+
     n00b_table_col_spec_t spec = {
         .mode          = N00B_COL_FIT,
         .min           = { .value.i = min },
@@ -318,6 +345,8 @@ n00b_table_col_range(n00b_table_t *table, int64_t min, int64_t max)
 n00b_isize_t
 n00b_table_col_pct(n00b_table_t *table, double min, double max)
 {
+    assert(table);
+
     n00b_table_col_spec_t spec = {
         .mode          = N00B_COL_FIT,
         .min           = { .value.d = min, .pct = true },
@@ -331,6 +360,8 @@ n00b_table_col_pct(n00b_table_t *table, double min, double max)
 n00b_isize_t
 n00b_table_col_fixed(n00b_table_t *table, int64_t width)
 {
+    assert(table);
+
     n00b_table_col_spec_t spec = {
         .mode = N00B_COL_FIXED,
         .min  = { .value.i = width },
@@ -345,16 +376,20 @@ void
 n00b_table_set_col_priority(n00b_table_t *table, n00b_isize_t col,
                               int64_t priority)
 {
+    assert(table);
     assert((size_t)col < table->col_specs.len);
     table->col_specs.data[col].priority = priority;
+    table->layout_valid = false;
 }
 
 void
 n00b_table_set_col_props(n00b_table_t *table, n00b_isize_t col,
                            n00b_box_props_t *col_props)
 {
+    assert(table);
     assert((size_t)col < table->col_specs.len);
     table->col_specs.data[col].col_props = col_props;
+    table->layout_valid = false;
 }
 
 // ====================================================================
@@ -364,6 +399,7 @@ n00b_table_set_col_props(n00b_table_t *table, n00b_isize_t col,
 void
 n00b_table_invalidate(n00b_table_t *table)
 {
+    assert(table);
     table->layout_valid = false;
 }
 
@@ -418,7 +454,7 @@ n00b_table_from_string(n00b_string_t s) _kargs
     n00b_box_props_t *cell_props   = nullptr;
     n00b_box_props_t *header_props = nullptr;
     n00b_box_props_t *alt_props    = nullptr;
-    n00b_bool32_t     no_stripe    = 0;
+    bool              no_stripe    = false;
     n00b_allocator_t *allocator    = nullptr;
 }
 {
@@ -426,17 +462,17 @@ n00b_table_from_string(n00b_string_t s) _kargs
         alt_props = nullptr;
     }
 
-    n00b_string_t default_row_sep = n00b_string_from_raw(allocator,
-                                                          "\n", 1, 1);
-    n00b_string_t default_col_sep = n00b_string_from_raw(allocator,
-                                                          ",", 1, 1);
+    n00b_string_t default_row_sep = n00b_string_from_raw("\n", 1,
+                                                          .allocator = allocator);
+    n00b_string_t default_col_sep = n00b_string_from_raw(",", 1,
+                                                          .allocator = allocator);
 
     n00b_string_t rsep = row_sep ? *row_sep : default_row_sep;
     n00b_string_t csep = col_sep ? *col_sep : default_col_sep;
 
     n00b_array_t(n00b_string_t) rows = n00b_unicode_str_split(s, rsep);
 
-    n00b_table_t *table = n00b_table_new(
+    n00b_table_t *table = n00b_new_kargs(n00b_table_t, table,
         .table_props  = table_props,
         .cell_props   = cell_props,
         .header_props = header_props,

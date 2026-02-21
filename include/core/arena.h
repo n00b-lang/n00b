@@ -22,6 +22,10 @@
 #define N00B_MFLAG (MAP_PRIVATE | N00B_MAP_ANON_FLAG)
 #endif
 
+#ifndef N00B_DEFAULT_SCRATCH_ARENA_SIZE
+#define N00B_DEFAULT_SCRATCH_ARENA_SIZE (1 << 25) // 32M
+#endif
+
 struct n00b_segment_t {
     uint64_t        size;
     n00b_segment_t *next_segment;

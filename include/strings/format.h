@@ -56,3 +56,11 @@ n00b_string_t n00b_format(n00b_string_t desc, +);
  *  @return A styled `n00b_string_t` (by value).
  */
 n00b_string_t n00b_cformat(const char *desc, +);
+
+// ===================================================================
+// Internal API (used by n00b_printf to forward vargs)
+// ===================================================================
+
+extern n00b_string_t _n00b_format_impl(const char   *desc_data,
+                                        int32_t       desc_len,
+                                        n00b_vargs_t *vargs);

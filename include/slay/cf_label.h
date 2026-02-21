@@ -1,0 +1,107 @@
+#pragma once
+
+/**
+ * @file cf_label.h
+ * @brief Control flow labels produced by the annotation walk.
+ *
+ * The annotation walk can produce control flow labels for tree nodes
+ * annotated with `@branch`, `@loop`, `@switch`, `@jump`, `@capture`,
+ * or `@assigns`. Each label records the kind and the resolved child
+ * subtrees (condition, body, else, etc.).
+ *
+ * Labels are stored in an `n00b_dict_untyped_t` keyed by parse tree
+ * node pointer. Use `n00b_cf_label_lookup()` to query.
+ */
+
+#include "slay/types.h"
+#include "slay/parse_tree.h"
+#include "slay/symtab.h"
+#include "core/dict_untyped.h"
+
+// ============================================================================
+// Control flow label kind
+// ============================================================================
+
+/** @brief Kind of control flow label. */
+typedef enum {
+    N00B_CF_BRANCH,  /**< if/else, ternary */
+    N00B_CF_LOOP,    /**< while, for, do-while */
+    N00B_CF_SWITCH,  /**< switch */
+    N00B_CF_JUMP,    /**< break, continue, return, goto */
+    N00B_CF_CAPTURE, /**< try/catch/finally */
+    N00B_CF_ASSIGNS, /**< assignment (name = value) */
+} n00b_cf_kind_t;
+
+// ============================================================================
+// Control flow label
+// ============================================================================
+
+/**
+ * @brief A control flow label attached to a parse tree node.
+ *
+ * Unused fields are zero/NULL for kinds that don't need them.
+ */
+typedef struct {
+    n00b_cf_kind_t     kind;
+    n00b_parse_tree_t *self;      /**< The annotated tree node. */
+    n00b_parse_tree_t *cond;      /**< Condition subtree (branch, loop, switch). */
+    n00b_parse_tree_t *then_body; /**< Then/body subtree. */
+    n00b_parse_tree_t *else_body; /**< Else subtree (branch only, may be NULL). */
+    n00b_string_t      jump_kind; /**< "break", "continue", "return", "goto". */
+    n00b_string_t      tag;       /**< Capture tag or jump target. */
+    bool               capture_by_tag;
+} n00b_cf_label_t;
+
+// ============================================================================
+// Walk result
+// ============================================================================
+
+/**
+ * @brief Result of a full annotation walk (symtab + control flow labels).
+ */
+typedef struct {
+    n00b_symtab_t       *symtab;
+    n00b_dict_untyped_t *cf_labels; /**< `n00b_parse_tree_t *` -> `n00b_cf_label_t *` */
+} n00b_annot_result_t;
+
+// ============================================================================
+// Query
+// ============================================================================
+
+/**
+ * @brief Look up a control flow label for a parse tree node.
+ *
+ * @param labels  The cf_labels dict from an `n00b_annot_result_t`.
+ * @param node    The parse tree node to look up.
+ * @return The label, or NULL if no label exists for this node.
+ */
+static inline n00b_cf_label_t *
+n00b_cf_label_lookup(n00b_dict_untyped_t *labels, n00b_parse_tree_t *node)
+{
+    if (!labels || !node) {
+        return NULL;
+    }
+
+    bool found = false;
+    void *val  = _n00b_dict_untyped_get(labels, node, &found);
+
+    return found ? (n00b_cf_label_t *)val : NULL;
+}
+
+// ============================================================================
+// Accessors
+// ============================================================================
+
+/** @brief Get the symtab from an annotation walk result. */
+static inline n00b_symtab_t *
+n00b_annot_result_symtab(n00b_annot_result_t *r)
+{
+    return r ? r->symtab : NULL;
+}
+
+/** @brief Get the control flow labels from an annotation walk result. */
+static inline n00b_dict_untyped_t *
+n00b_annot_result_cf_labels(n00b_annot_result_t *r)
+{
+    return r ? r->cf_labels : NULL;
+}

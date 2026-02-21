@@ -212,6 +212,7 @@ norm_alloc(nt_type_t nt_id)
     norm_node_t *result = base_calloc(1, sizeof(norm_node_t));
     result->nt_id       = nt_id;
     result->kids        = ncc_list_alloc(INITIAL_KIDS_CAPACITY);
+    result->kids->len   = 0;
     result->num_kids    = 0;
 
     return result;
@@ -222,18 +223,9 @@ add_sub(norm_node_t *parent, norm_node_t *kid)
 {
     kid->parent = parent;
 
-    // Grow the list if needed
-    if (parent->num_kids >= parent->kids->nitems) {
-        int     new_cap  = parent->kids->nitems * 2;
-        ncc_list_t *new_kids = ncc_list_alloc(new_cap);
-        for (int i = 0; i < parent->num_kids; i++) {
-            new_kids->items[i] = parent->kids->items[i];
-        }
-        base_dealloc(parent->kids);
-        parent->kids = new_kids;
-    }
-
-    parent->kids->items[parent->num_kids++] = kid;
+    ncc_list_ensure_cap(parent->kids, parent->num_kids + 1);
+    parent->kids->data[parent->num_kids++] = kid;
+    parent->kids->len = parent->num_kids;
 }
 
 typedef struct {
@@ -318,7 +310,7 @@ initial_simplify(norm_ctx *ctx)
             case 0:
                 assert(false);
             case 1:
-                ret = r->kids->items[0];
+                ret = r->kids->data[0];
                 break;
             default:
                 ret = r;
@@ -377,7 +369,7 @@ collapse_lists_postorder(norm_node_t *n)
         int pivot = -1;
 
         for (int i = 0; i < n->parent->num_kids; i++) {
-            if (n->parent->kids->items[i] == n) {
+            if (n->parent->kids->data[i] == n) {
                 pivot = i;
                 break;
             }
@@ -386,13 +378,14 @@ collapse_lists_postorder(norm_node_t *n)
         assert(pivot != -1);
 
         for (int i = pivot + 1; i < n->parent->num_kids; i++) {
-            add_sub(n, n->parent->kids->items[i]);
+            add_sub(n, n->parent->kids->data[i]);
         }
 
-        n->parent->num_kids = pivot;
+        n->parent->num_kids    = pivot;
+        n->parent->kids->len  = pivot;
 
         for (int i = 0; i < n->num_kids; i++) {
-            add_sub(n->parent, n->kids->items[i]);
+            add_sub(n->parent, n->kids->data[i]);
         }
     }
 }
@@ -423,7 +416,7 @@ collapse_lists(norm_node_t *n)
         norm_frame_t *f = &stk[top - 1];
 
         if (f->child_idx >= 0) {
-            norm_node_t *child = f->node->kids->items[f->child_idx];
+            norm_node_t *child = f->node->kids->data[f->child_idx];
             f->child_idx--;
 
             if (child && child->num_kids > 0) {
@@ -490,16 +483,17 @@ filter_type_elements_postorder(norm_node_t *n)
 {
     int write = 0;
     for (int i = 0; i < n->num_kids; i++) {
-        norm_node_t *c = n->kids->items[i];
+        norm_node_t *c = n->kids->data[i];
         if (is_attr_nt(c->nt_id)) {
             continue;
         }
         if (is_qualifier_list_nt(n->nt_id) && c->leaf && c->value && in_list(c->value, quals_to_drop)) {
             continue;
         }
-        n->kids->items[write++] = c;
+        n->kids->data[write++] = c;
     }
-    n->num_kids = write;
+    n->num_kids    = write;
+    n->kids->len   = write;
 }
 
 // Remove unwanted attributes and qualifiers from the tree (iterative post-order).
@@ -523,7 +517,7 @@ filter_type_elements(norm_node_t *n)
         norm_frame_t *f = &stk[top - 1];
 
         if (f->child_idx < f->node->num_kids) {
-            norm_node_t *child = f->node->kids->items[f->child_idx];
+            norm_node_t *child = f->node->kids->data[f->child_idx];
             f->child_idx++;
 
             if (child && child->num_kids > 0) {
@@ -552,7 +546,7 @@ pointer_only_stars(norm_node_t *n)
         return false;
     }
     for (int i = 0; i < n->num_kids; i++) {
-        norm_node_t *c = n->kids->items[i];
+        norm_node_t *c = n->kids->data[i];
         if (c->nt_id == NT_pointer) {
             continue;
         }
@@ -570,25 +564,26 @@ collapse_node_postorder(norm_node_t *n)
 {
     int write = 0;
     for (int i = 0; i < n->num_kids; i++) {
-        norm_node_t *c = n->kids->items[i];
+        norm_node_t *c = n->kids->data[i];
         if (!c->leaf && c->num_kids == 0) {
             continue;
         }
         if (!c->leaf && c->num_kids == 1 && is_collapsible_container(c->nt_id)) {
-            c         = c->kids->items[0];
+            c         = c->kids->data[0];
             c->parent = n;
         }
         if (pointer_only_stars(c)) {
             for (int j = 0; j < c->num_kids; j++) {
-                norm_node_t *pc         = c->kids->items[j];
+                norm_node_t *pc         = c->kids->data[j];
                 pc->parent              = n;
-                n->kids->items[write++] = pc;
+                n->kids->data[write++] = pc;
             }
             continue;
         }
-        n->kids->items[write++] = c;
+        n->kids->data[write++] = c;
     }
-    n->num_kids = write;
+    n->num_kids    = write;
+    n->kids->len   = write;
 }
 
 // Collapse empty nodes, single-child containers, and pointer-only-stars (iterative).
@@ -617,7 +612,7 @@ collapse_filtered_tree(norm_node_t *n)
         collapse_frame_t *f = &stk[top - 1];
 
         if (f->child_idx < f->node->num_kids) {
-            norm_node_t *child = f->node->kids->items[f->child_idx];
+            norm_node_t *child = f->node->kids->data[f->child_idx];
             f->child_idx++;
 
             if (!child) {
@@ -645,7 +640,7 @@ collapse_filtered_tree(norm_node_t *n)
 
     // Final collapse of root if single-child container
     if (!n->leaf && n->num_kids == 1 && is_collapsible_container(n->nt_id)) {
-        norm_node_t *child = n->kids->items[0];
+        norm_node_t *child = n->kids->data[0];
         child->parent      = n->parent;
         return child;
     }
@@ -670,8 +665,8 @@ is_qual_leaf(const norm_node_t *n)
 static int
 cmp_attr_spec(const norm_node_t **left, const norm_node_t **right)
 {
-    const norm_node_t *kleft  = (*left)->kids->items[2];
-    const norm_node_t *kright = (*right)->kids->items[2];
+    const norm_node_t *kleft  = (*left)->kids->data[2];
+    const norm_node_t *kright = (*right)->kids->data[2];
 
     if (!kleft || !kright) {
         return 0;
@@ -761,14 +756,14 @@ normalize_lists(norm_node_t *root)
         }
 
         if (cmp) {
-            qsort(&n->kids->items[0],
+            qsort(&n->kids->data[0],
                   n->num_kids,
-                  sizeof(n->kids->items[0]),
+                  sizeof(n->kids->data[0]),
                   cmp);
 
             if (trim) {
                 while (n->num_kids) {
-                    norm_node_t *sub = n->kids->items[n->num_kids - 1];
+                    norm_node_t *sub = n->kids->data[n->num_kids - 1];
                     if (sub->value && !strcmp(sub->value, ",")) {
                         n->num_kids--;
                     }
@@ -776,11 +771,12 @@ normalize_lists(norm_node_t *root)
                         break;
                     }
                 }
+                n->kids->len = n->num_kids;
             }
         }
 
         for (int i = n->num_kids - 1; i >= 0; i--) {
-            norm_node_t *kid = n->kids->items[i];
+            norm_node_t *kid = n->kids->data[i];
             if (kid) {
                 if (top >= cap) {
                     cap *= 2;
@@ -821,7 +817,7 @@ print_normalized_type_tree(norm_node_t *n, int level)
         fprintf(stderr, "◆ %s\n", nt_name_for_debug(n->nt_id));
     }
     for (int i = 0; i < n->num_kids; i++) {
-        print_normalized_type_tree(n->kids->items[i], level + 2);
+        print_normalized_type_tree(n->kids->data[i], level + 2);
     }
 }
 
@@ -966,7 +962,7 @@ cache_encodings(norm_node_t *root, int so_far)
         so_far += strlen(n->_private);
 
         for (int i = n->num_kids - 1; i >= 0; i--) {
-            norm_node_t *kid = n->kids->items[i];
+            norm_node_t *kid = n->kids->data[i];
             if (kid) {
                 if (top >= cap) {
                     cap *= 2;
@@ -1004,7 +1000,7 @@ populate_id(norm_node_t *root, char *p)
         p += l;
 
         for (int i = n->num_kids - 1; i >= 0; i--) {
-            norm_node_t *kid = n->kids->items[i];
+            norm_node_t *kid = n->kids->data[i];
             if (kid) {
                 if (top >= cap) {
                     cap *= 2;
@@ -1150,7 +1146,7 @@ emit_leaf_to_type_string(norm_node_t *n, char *start, char *p)
     }
 
     if (parent && parent->nt_id == NT_attribute_list) {
-        if (parent->kids->items[parent->num_kids - 1] != n) {
+        if (parent->kids->data[parent->num_kids - 1] != n) {
             *p++ = ',';
             *p++ = ' ';
         }
@@ -1197,7 +1193,7 @@ node_to_type_string(norm_node_t *root, char *start, char *p)
                     cap *= 2;
                     stk = base_realloc(stk, cap * sizeof(norm_node_t *));
                 }
-                stk[top++] = n->kids->items[i];
+                stk[top++] = n->kids->data[i];
             }
         }
     }
@@ -1234,7 +1230,7 @@ approximate_output_len(norm_node_t *root)
                     cap *= 2;
                     stk = base_realloc(stk, cap * sizeof(norm_node_t *));
                 }
-                stk[top++] = n->kids->items[i];
+                stk[top++] = n->kids->data[i];
             }
         }
     }

@@ -43,9 +43,10 @@ remove_child_at(tnode_t *parent, int idx)
         return;
     }
     for (int i = idx; i < parent->num_kids - 1; i++) {
-        parent->kids->items[i] = parent->kids->items[i + 1];
+        parent->kids->data[i] = parent->kids->data[i + 1];
     }
     parent->num_kids--;
+    parent->kids->len = parent->num_kids;
 }
 
 void
@@ -56,23 +57,17 @@ insert_child_at(tnode_t *parent, int idx, tnode_t *child)
     }
 
     // Grow the kids list if at capacity (or if it doesn't exist yet).
-    if (!parent->kids || parent->num_kids >= parent->kids->nitems) {
-        int         new_cap  = parent->num_kids + 4;
-        ncc_list_t *new_kids = ncc_list_alloc(new_cap);
-        if (parent->kids) {
-            for (int i = 0; i < parent->num_kids; i++) {
-                new_kids->items[i] = parent->kids->items[i];
-            }
-            base_dealloc(parent->kids);
-        }
-        parent->kids = new_kids;
+    if (!parent->kids) {
+        parent->kids = ncc_list_alloc(0);
     }
+    ncc_list_ensure_cap(parent->kids, parent->num_kids + 1);
 
     for (int i = parent->num_kids; i > idx; i--) {
-        parent->kids->items[i] = parent->kids->items[i - 1];
+        parent->kids->data[i] = parent->kids->data[i - 1];
     }
-    parent->kids->items[idx] = child;
+    parent->kids->data[idx] = child;
     parent->num_kids++;
+    parent->kids->len = parent->num_kids;
     child->parent = parent;
 }
 
@@ -83,7 +78,7 @@ replace_child_at(tnode_t *parent, int idx, tnode_t *new_child)
         || idx >= parent->num_kids) {
         return;
     }
-    parent->kids->items[idx] = new_child;
+    parent->kids->data[idx] = new_child;
     new_child->parent        = parent;
 }
 

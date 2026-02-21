@@ -1,4 +1,4 @@
-/**
+/*
  * Render cell utility functions.
  */
 

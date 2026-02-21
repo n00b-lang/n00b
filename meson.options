@@ -73,4 +73,3 @@ option('using_build_script',
     type: 'boolean',
     value: false)
 
-

@@ -11,6 +11,7 @@
 #include "types.h"
 #include "branch_symbols.h"
 #include "nt_types.h"
+#include "dict.h"
 
 typedef struct parser_t     parser_t;
 typedef struct strlist_t    strlist_t;
@@ -19,20 +20,15 @@ typedef struct memo_entry_t memo_entry_t;
 typedef tnode_t *(*nt_fn)(parser_t *ctx);
 
 /**
- * @brief Memo table entry for Packrat parsing.
+ * @brief Memo table entry for Packrat parsing (success case only).
  *
- * Caches the result of parsing a nonterminal at a position.
- * - end_pos == MEMO_EMPTY: not yet computed
- * - end_pos == MEMO_FAIL: parsing failed
- * - end_pos >= 0: parsing succeeded with given result
+ * Stored in the memo_success dict for successful parses.
+ * Failures are tracked in the memo_fail bitmap (1 bit each).
  */
 struct memo_entry_t {
-    tnode_t *result;  /**< Parse result (heap copy; nullptr for FAIL/EMPTY) */
-    int      end_pos; /**< Token position after match (-1=FAIL, 0=EMPTY) */
+    tnode_t *result;  /**< Parse result (heap copy) */
+    int      end_pos; /**< Token position after match */
 };
-
-#define MEMO_EMPTY 0
-#define MEMO_FAIL  -1
 
 #if defined(PDEBUG)
 typedef struct pdebug_t pdebug_t;
@@ -61,9 +57,13 @@ struct parser_t {
     label_table_t  func_lt;
     label_table_t *saved_lt;
     int            pos;
-    memo_entry_t **memo;      /**< Memo table: memo[pos][nt_id] */
-    int            memo_size; /**< Number of token positions in memo */
-    nt_set_t       no_memo;   /**< NTs that skip memoization */
+    ncc_dict_t  memo_fail;    /**< Fail dict: packed (pos,nt) key -> sentinel */
+    int         memo_num_pos; /**< Number of token positions */
+    ncc_dict_t  memo_success; /**< Success entries: packed key -> memo_entry_t* */
+    int         memo_success_count; /**< Number of success entries stored */
+    int         memo_success_cap;   /**< Max success entries (0 = unlimited) */
+    nt_set_t    no_memo;      /**< NTs that skip all memoization */
+    nt_set_t    no_memo_success; /**< NTs that skip success memoization (fail-only) */
 #if defined(PDEBUG)
     pdebug_t *debug_root;
     pdebug_t *debug_cur;
@@ -119,6 +119,7 @@ extern tnode_t *constant(parser_t *ctx);
 extern tnode_t *string_literal(parser_t *ctx);
 extern tnode_t *typedef_name_terminal(parser_t *ctx);
 extern tnode_t *non_bracket_token(parser_t *ctx);
+extern tnode_t *compiler_builtin(parser_t *ctx);
 
 // Keyword lists from parse_support.c
 extern strlist_t *kw_type_alignment;
@@ -145,8 +146,8 @@ extern strlist_t *kw_countof;
 extern strlist_t *kw_generic;
 extern strlist_t *kw_default;
 extern strlist_t *kw_true_false_nullptr;
-extern strlist_t *kw_builtin_va_arg;
-extern strlist_t *kw_builtin_types_compatible_p;
+// kw_builtin_va_arg and kw_builtin_types_compatible_p removed:
+// all __builtin_* calls are now handled generically via compiler_builtin.
 extern strlist_t *kw_opaque;
 extern strlist_t *kw_package;
 extern strlist_t *kw_if;

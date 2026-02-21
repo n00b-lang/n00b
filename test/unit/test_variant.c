@@ -9,11 +9,11 @@
 #include "core/variant.h"
 
 // Declare variant types via typedef at file scope.
-typedef n00b_variant_struct_decl(int, double, char *) variant_idc_t;
-typedef n00b_variant_struct_decl(int, double) variant_id_t;
-typedef n00b_variant_struct_decl(int, char *) variant_ic_t;
-typedef n00b_variant_struct_decl(char, int, double) variant_cid_t;
-typedef n00b_variant_struct_decl(char *, int) variant_ci_t;
+typedef n00b_variant_decl(int, double, char *) variant_idc_t;
+typedef n00b_variant_decl(int, double) variant_id_t;
+typedef n00b_variant_decl(int, char *) variant_ic_t;
+typedef n00b_variant_decl(char, int, double) variant_cid_t;
+typedef n00b_variant_decl(char *, int) variant_ci_t;
 
 // ============================================================================
 // 1. Construction via n00b_variant_set (by value)
@@ -22,10 +22,9 @@ typedef n00b_variant_struct_decl(char *, int) variant_ci_t;
 static void
 test_set_by_value(void)
 {
-    variant_idc_t v = n00b_variant_set(
-        n00b_variant_empty(variant_idc_t),
-        int,
-        42);
+    variant_idc_t v;
+
+    v = n00b_variant_set(typeof(v), int, 42);
 
     assert(n00b_variant_is_set(v));
     assert(n00b_variant_is_type(v, int));
@@ -47,7 +46,7 @@ test_set_by_pointer(void)
 
     assert(!n00b_variant_is_set(v));
 
-    n00b_variant_set(v, double, 3.14);
+    _n00b_variant_set_ptr(&v, double, 3.14);
 
     assert(n00b_variant_is_set(v));
     assert(n00b_variant_is_type(v, double));
@@ -80,23 +79,14 @@ test_empty(void)
 static void
 test_get(void)
 {
-    variant_idc_t vi = n00b_variant_set(
-        n00b_variant_empty(variant_idc_t),
-        int,
-        99);
+    variant_idc_t vi = n00b_variant_set(typeof(variant_idc_t), int, 99);
     assert(n00b_variant_get(vi, int) == 99);
 
-    variant_idc_t vd = n00b_variant_set(
-        n00b_variant_empty(variant_idc_t),
-        double,
-        1.5);
+    variant_idc_t vd = n00b_variant_set(typeof(variant_idc_t), double, 1.5);
     assert(n00b_variant_get(vd, double) == 1.5);
 
-    char *msg = "world";
-    variant_idc_t vs = n00b_variant_set(
-        n00b_variant_empty(variant_idc_t),
-        char *,
-        msg);
+    char         *msg = "world";
+    variant_idc_t vs  = n00b_variant_set(typeof(variant_idc_t), char *, msg);
     assert(n00b_variant_get(vs, char *) == msg);
     assert(strcmp(n00b_variant_get(vs, char *), "world") == 0);
 
@@ -110,10 +100,7 @@ test_get(void)
 static void
 test_get_or_else(void)
 {
-    variant_id_t v = n00b_variant_set(
-        n00b_variant_empty(variant_id_t),
-        int,
-        100);
+    variant_id_t v = n00b_variant_set(typeof(variant_id_t), int, 100);
 
     // Correct type -> value
     assert(n00b_variant_get_or_else(v, int, -1) == 100);
@@ -136,20 +123,17 @@ test_get_or_else(void)
 static void
 test_mutation(void)
 {
-    variant_id_t v = n00b_variant_set(
-        n00b_variant_empty(variant_id_t),
-        int,
-        10);
+    variant_id_t v = n00b_variant_set(typeof(variant_id_t), int, 10);
     assert(n00b_variant_get(v, int) == 10);
 
     // Mutate to hold a double
-    n00b_variant_set(v, double, 3.14);
+    v = n00b_variant_set(typeof(v), double, 3.14);
     assert(n00b_variant_is_type(v, double));
     assert(!n00b_variant_is_type(v, int));
     assert(n00b_variant_get(v, double) == 3.14);
 
     // Mutate back to int
-    n00b_variant_set(v, int, 999);
+    v = n00b_variant_set(typeof(v), int, 999);
     assert(n00b_variant_is_type(v, int));
     assert(n00b_variant_get(v, int) == 999);
 
@@ -166,18 +150,15 @@ test_pointer_variant(void)
     char *hello = "hello";
     char *world = "world";
 
-    variant_ic_t v = n00b_variant_set(
-        n00b_variant_empty(variant_ic_t),
-        char *,
-        hello);
+    variant_ic_t v = n00b_variant_set(typeof(n00b_variant_empty(variant_ic_t)), char *, hello);
     assert(n00b_variant_is_type(v, char *));
     assert(n00b_variant_get(v, char *) == hello);
 
-    n00b_variant_set(v, int, 42);
+    v = n00b_variant_set(typeof(v), int, 42);
     assert(n00b_variant_is_type(v, int));
     assert(n00b_variant_get(v, int) == 42);
 
-    n00b_variant_set(v, char *, world);
+    v = n00b_variant_set(typeof(v), char *, world);
     assert(n00b_variant_get(v, char *) == world);
     assert(strcmp(n00b_variant_get(v, char *), "world") == 0);
 
@@ -191,18 +172,12 @@ test_pointer_variant(void)
 static void
 test_data_sizing(void)
 {
-    variant_cid_t v = n00b_variant_set(
-        n00b_variant_empty(variant_cid_t),
-        double,
-        1.23);
+    variant_cid_t v = n00b_variant_set(variant_cid_t, double, 1.23);
     assert(sizeof(v.value) >= sizeof(double));
     assert(n00b_variant_get(v, double) == 1.23);
 
     // Store a char in the same variant type
-    variant_cid_t v2 = n00b_variant_set(
-        n00b_variant_empty(variant_cid_t),
-        char,
-        'A');
+    variant_cid_t v2 = n00b_variant_set(variant_cid_t, char, 'A');
     assert(n00b_variant_get(v2, char) == 'A');
 
     printf("  [PASS] data sizing\n");
@@ -215,20 +190,15 @@ test_data_sizing(void)
 static void
 test_independent_variants(void)
 {
-    variant_id_t v1 = n00b_variant_set(
-        n00b_variant_empty(variant_id_t),
-        int,
-        10);
-    variant_ci_t v2 = n00b_variant_set(
-        n00b_variant_empty(variant_ci_t),
-        char *,
-        "test");
+    variant_id_t v1 = n00b_variant_set(typeof(n00b_variant_empty(variant_id_t)), int, 10);
+    variant_ci_t v2
+        = n00b_variant_set(typeof(n00b_variant_empty(variant_ci_t)), char *, "test");
 
     assert(n00b_variant_get(v1, int) == 10);
     assert(strcmp(n00b_variant_get(v2, char *), "test") == 0);
 
     // Mutating one doesn't affect the other
-    n00b_variant_set(v1, double, 5.0);
+    v1 = n00b_variant_set(typeof(v1), double, 5.0);
     assert(strcmp(n00b_variant_get(v2, char *), "test") == 0);
 
     printf("  [PASS] independent variants\n");
@@ -241,10 +211,7 @@ test_independent_variants(void)
 static void
 test_get_or_else_ptr(void)
 {
-    variant_id_t v = n00b_variant_set(
-        n00b_variant_empty(variant_id_t),
-        int,
-        77);
+    variant_id_t v = n00b_variant_set(typeof(n00b_variant_empty(variant_id_t)), int, 77);
 
     // Same as by value — macro always takes address internally
     assert(n00b_variant_get_or_else(v, int, -1) == 77);
@@ -279,5 +246,6 @@ main(int argc, char **argv)
     test_get_or_else_ptr();
 
     printf("All variant tests passed.\n");
+    n00b_shutdown();
     return 0;
 }

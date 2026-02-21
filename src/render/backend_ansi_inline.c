@@ -1,4 +1,4 @@
-/**
+/*
  * Inline ANSI terminal renderer backend.
  *
  * Outputs styled text line-by-line with SGR escape sequences but
@@ -21,6 +21,7 @@
 #include "n00b.h"
 #include "core/alloc.h"
 #include "render/backend.h"
+#include "conduit/write.h"
 #include "strings/text_style.h"
 #include "strings/theme.h"
 
@@ -29,12 +30,12 @@
 // -------------------------------------------------------------------
 
 typedef struct {
-    char        *buf;
-    size_t       buf_size;
-    size_t       buf_used;
-    int          fd;
-    n00b_isize_t rows;
-    n00b_isize_t cols;
+    char                                   *buf;
+    size_t                                  buf_size;
+    size_t                                  buf_used;
+    n00b_conduit_topic_t(n00b_buffer_t *)  *output;
+    n00b_isize_t                            rows;
+    n00b_isize_t                            cols;
 } ansi_inline_ctx_t;
 
 #define INLINE_INITIAL_BUF 16384
@@ -106,7 +107,7 @@ inline_ensure(ansi_inline_ctx_t *ctx, size_t needed)
         ctx->buf_size *= 2;
     }
 
-    char *new_buf = n00b_alloc_size(1, ctx->buf_size, .no_scan = true);
+    char *new_buf = n00b_alloc_array_with_opts(char, ctx->buf_size, &(n00b_alloc_opts_t){.no_scan = true});
     memcpy(new_buf, ctx->buf, ctx->buf_used);
     n00b_free(ctx->buf);
     ctx->buf = new_buf;
@@ -225,13 +226,13 @@ inline_emit_style(ansi_inline_ctx_t *ctx, const n00b_text_style_t *style)
 // -------------------------------------------------------------------
 
 static void *
-ansi_inline_init(void)
+ansi_inline_init(n00b_conduit_topic_t(n00b_buffer_t *) *output)
 {
-    ansi_inline_ctx_t *ctx = n00b_alloc(ansi_inline_ctx_t, .no_scan = true);
+    ansi_inline_ctx_t *ctx = n00b_alloc(ansi_inline_ctx_t);
 
-    ctx->fd       = STDOUT_FILENO;
+    ctx->output   = output;
     ctx->buf_size = INLINE_INITIAL_BUF;
-    ctx->buf      = n00b_alloc_size(1, INLINE_INITIAL_BUF, .no_scan = true);
+    ctx->buf      = n00b_alloc_array_with_opts(char, INLINE_INITIAL_BUF, &(n00b_alloc_opts_t){.no_scan = true});
     ctx->buf_used = 0;
 
     n00b_isize_t rows;
@@ -362,13 +363,20 @@ ansi_inline_flush(void *vctx)
         n00b_os_write(ctx->fd, ctx->buf, ctx->buf_used);
         ctx->buf_used = 0;
     }
+
+    if (ctx->output) {
+        n00b_buffer_t *buf = n00b_buffer_from_bytes(ctx->buf, (int64_t)ctx->buf_used);
+        n00b_write(n00b_buffer_t *, ctx->output, buf);
+    }
+
+    ctx->buf_used = 0;
 }
 
 // -------------------------------------------------------------------
 // Inline-specific helpers
 // -------------------------------------------------------------------
 
-/**
+/*
  * Set the virtual terminal size for the inline backend.
  * Only valid when the backend is ansi_inline.
  */

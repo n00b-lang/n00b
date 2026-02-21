@@ -8,6 +8,7 @@
 #include <ctype.h>
 #include <stdio.h>
 #include <math.h>
+#include <assert.h>
 
 // ===================================================================
 // Parser
@@ -59,6 +60,7 @@ n00b_format_spec_parse(const char *spec, int spec_len)
             w = w * 10 + (spec[i] - '0');
             i++;
         }
+        if (w > INT16_MAX) w = INT16_MAX;
         fs.width = (int16_t)w;
     }
 
@@ -70,6 +72,7 @@ n00b_format_spec_parse(const char *spec, int spec_len)
             p = p * 10 + (spec[i] - '0');
             i++;
         }
+        if (p > INT16_MAX) p = INT16_MAX;
         fs.precision = (int16_t)p;
     }
 
@@ -106,14 +109,14 @@ pad_string(const char *raw, int raw_len, int raw_cps,
 {
     int width = spec->width;
     if (width <= 0 || raw_cps >= width) {
-        return n00b_string_from_raw(allocator, raw, raw_len, raw_cps);
+        return n00b_string_from_raw(raw, raw_len, .allocator = allocator);
     }
 
     int  pad_count = width - raw_cps;
     char pad_char  = (spec->zero_pad && !spec->left_align) ? '0' : ' ';
 
-    int  total_len = raw_len + pad_count;
-    char buf[total_len + 1];
+    int   total_len = raw_len + pad_count;
+    char *buf       = n00b_alloc_array(char, total_len + 1);
 
     if (spec->left_align) {
         memcpy(buf, raw, raw_len);
@@ -134,7 +137,9 @@ pad_string(const char *raw, int raw_len, int raw_cps,
     }
     buf[total_len] = '\0';
 
-    return n00b_string_from_raw(allocator, buf, total_len, width);
+    n00b_string_t result = n00b_string_from_raw(buf, total_len, .allocator = allocator);
+    n00b_free(buf);
+    return result;
 }
 
 // ===================================================================
@@ -192,7 +197,7 @@ n00b_str_fmt_int_ex(int64_t value, const n00b_format_spec_t *spec)
     }
     else {
         // Decimal.
-        n00b_string_t s = n00b_fmt_int(value, commas, .allocator = allocator);
+        n00b_string_t s = n00b_fmt_int(value, .commas = commas, .allocator = allocator);
         // Apply sign flags.
         if (value >= 0 && spec->sign_plus) {
             char tmp[80];
@@ -244,7 +249,7 @@ n00b_str_fmt_float_ex(double value, const n00b_format_spec_t *spec)
         }
         else {
             // Use Grisu2 via existing function.
-            n00b_string_t s = n00b_fmt_float(value, 0, false,
+            n00b_string_t s = n00b_fmt_float(value,
                                               .allocator = allocator);
             return pad_string(s.data, (int)s.u8_bytes,
                               (int)s.codepoints, spec, allocator);

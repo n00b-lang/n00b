@@ -23,8 +23,8 @@ ncc_list_free_entries(ncc_list_t *list)
         return;
     }
 
-    for (int i = 0; i < list->nitems; i++) {
-        base_dealloc(list->items[i]);
+    for (int i = 0; i < list->len; i++) {
+        base_dealloc(list->data[i]);
     }
     base_dealloc(list);
 }
@@ -153,7 +153,7 @@ xform_count(xform_registry_t *reg, nt_type_t nt_id, bool pre)
         return 0;
     }
 
-    return list ? list->nitems : 0;
+    return list ? list->len : 0;
 }
 
 /* ========================================================================
@@ -203,8 +203,8 @@ apply_pre_transformers(xform_registry_t *reg, tree_xform_t *ctx, tnode_t *node, 
     if (nt_id > NT_NONE && nt_id < NT_COUNT) {
         ncc_list_t *list = reg->pre_order[nt_id];
         if (list) {
-            for (int i = 0; i < list->nitems; i++) {
-                xform_entry_t  *entry    = list->items[i];
+            for (int i = 0; i < list->len; i++) {
+                xform_entry_t  *entry    = list->data[i];
                 xform_control_t ctrl     = XFORM_CONTINUE;
                 tnode_t        *replaced = entry->pre_fn(ctx, result ? result : node, &ctrl);
 
@@ -222,8 +222,8 @@ apply_pre_transformers(xform_registry_t *reg, tree_xform_t *ctx, tnode_t *node, 
     // Apply wildcard pre-order transformers
     ncc_list_t *wildcard = reg->wildcard_pre;
     if (wildcard) {
-        for (int i = 0; i < wildcard->nitems; i++) {
-            xform_entry_t  *entry    = wildcard->items[i];
+        for (int i = 0; i < wildcard->len; i++) {
+            xform_entry_t  *entry    = wildcard->data[i];
             xform_control_t ctrl     = XFORM_CONTINUE;
             tnode_t        *replaced = entry->pre_fn(ctx, result ? result : node, &ctrl);
 
@@ -260,8 +260,8 @@ apply_post_transformers(xform_registry_t *reg, tree_xform_t *ctx, tnode_t *node)
     if (nt_id > NT_NONE && nt_id < NT_COUNT) {
         ncc_list_t *list = reg->post_order[nt_id];
         if (list) {
-            for (int i = 0; i < list->nitems; i++) {
-                xform_entry_t *entry    = list->items[i];
+            for (int i = 0; i < list->len; i++) {
+                xform_entry_t *entry    = list->data[i];
                 tnode_t       *replaced = entry->post_fn(ctx, result ? result : node);
 
                 if (replaced != nullptr) {
@@ -275,8 +275,8 @@ apply_post_transformers(xform_registry_t *reg, tree_xform_t *ctx, tnode_t *node)
     // Apply wildcard post-order transformers
     ncc_list_t *wildcard = reg->wildcard_post;
     if (wildcard) {
-        for (int i = 0; i < wildcard->nitems; i++) {
-            xform_entry_t *entry    = wildcard->items[i];
+        for (int i = 0; i < wildcard->len; i++) {
+            xform_entry_t *entry    = wildcard->data[i];
             tnode_t       *replaced = entry->post_fn(ctx, result ? result : node);
 
             if (replaced != nullptr) {

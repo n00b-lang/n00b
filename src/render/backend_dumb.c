@@ -1,4 +1,4 @@
-/**
+/*
  * Dumb terminal renderer backend.
  *
  * Outputs line-by-line plain text with no cursor movement, no colors,
@@ -11,6 +11,7 @@
 #include <unistd.h>
 #include "n00b.h"
 #include "core/alloc.h"
+#include "core/buffer.h"
 #include "render/backend.h"
 
 // -------------------------------------------------------------------
@@ -31,9 +32,11 @@ typedef struct {
 // -------------------------------------------------------------------
 
 static void *
-dumb_init(void)
+dumb_init(n00b_conduit_topic_t(n00b_buffer_t *) *output)
 {
-    dumb_ctx_t *ctx = n00b_alloc(dumb_ctx_t, .no_scan = true);
+    (void)output;
+    dumb_ctx_t *ctx = n00b_alloc_with_opts(dumb_ctx_t,
+                                          &(n00b_alloc_opts_t){.no_scan = true});
     ctx->fd   = STDOUT_FILENO;
     ctx->rows = 0;
     ctx->cols = DUMB_DEFAULT_COLS;

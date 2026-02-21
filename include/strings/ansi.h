@@ -45,10 +45,14 @@ typedef enum {
 // ANSI control detail
 // ===================================================================
 
-/** @brief Detail fields for CSI and private control sequences. */
+/** @brief Detail fields for CSI and private control sequences.
+ *
+ *  @c pstart and @c istart are borrowed pointers into the input
+ *  buffer — same lifetime rules as @c n00b_ansi_node_t.
+ */
 typedef struct {
-    char   *pstart;    /**< Start of parameter bytes */
-    char   *istart;    /**< Start of intermediate bytes */
+    char   *pstart;    /**< Start of parameter bytes (borrowed) */
+    char   *istart;    /**< Start of intermediate bytes (borrowed) */
     int     plen;      /**< Length of parameter bytes */
     int     ilen;      /**< Length of intermediate bytes */
     uint8_t ppi;       /**< Private parameter indicator (only for private) */
@@ -59,16 +63,25 @@ typedef struct {
 // ANSI node
 // ===================================================================
 
-/** @brief A single parsed ANSI element (text run or escape sequence). */
+/**
+ * @brief A single parsed ANSI element (text run or escape sequence).
+ *
+ * **Lifetime:** @c start and @c end are raw pointers into the input
+ * buffer passed to @c n00b_ansi_parse.  They remain valid only as
+ * long as the original buffer is alive and unmodified.  Callers that
+ * need persistent data must copy the bytes or use
+ * @c n00b_ansi_nodes_to_string before releasing the buffer.
+ */
 typedef struct {
-    char            *start;  /**< Start of this node's raw bytes */
-    char            *end;    /**< One past the last byte */
+    char            *start;  /**< Start of this node's raw bytes (borrowed) */
+    char            *end;    /**< One past the last byte (borrowed) */
     n00b_ansi_ctrl_t ctrl;   /**< Control details (valid for control nodes) */
     n00b_ansi_kind   kind;   /**< Classification of this node */
 } n00b_ansi_node_t;
 
-// Declare the typed list for ANSI node pointers.
+// Declare the typed list and option for ANSI node pointers.
 n00b_list_decl(n00b_ansi_node_t *);
+n00b_option_decl(n00b_ansi_node_t *);
 
 // ===================================================================
 // Parser context
@@ -79,9 +92,10 @@ n00b_list_decl(n00b_ansi_node_t *);
  *  Created with `n00b_ansi_parser_create()`, fed with `n00b_ansi_parse()`.
  */
 typedef struct {
-    char                              *cur;     /**< Current parse position */
-    char                              *end;     /**< End of current buffer */
-    n00b_list_t(n00b_ansi_node_t *)    results; /**< Parsed node list */
+    char                              *cur;       /**< Current parse position */
+    char                              *end;       /**< End of current buffer */
+    char                              *buf_start; /**< Start of current buffer data */
+    n00b_list_t(n00b_ansi_node_t *)    results;   /**< Parsed node list */
 } n00b_ansi_ctx;
 
 // ===================================================================

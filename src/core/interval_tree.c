@@ -4,36 +4,16 @@
 #include "core/arena.h"
 #include "core/data_lock.h"
 
-n00b_interval_tree_t *
-n00b_new_interval_tree(n00b_allocator_t *allocator)
+void
+n00b_interval_tree_init(n00b_interval_tree_t *tree) _kargs
 {
-    n00b_interval_tree_t *tree = n00b_alloc(n00b_interval_tree_t,
-                                            .allocator = allocator);
-
-    tree->stack     = n00b_stack_new_private(void *, allocator);
-    tree->allocator = allocator;
-    tree->lock      = n00b_data_lock_new();
-
-    if (tree->lock) {
-        n00b_add_finalizer(tree, n00b_finalize_data_lock, tree->lock);
-    }
-
-    return tree;
+    n00b_allocator_t *allocator = nullptr;
 }
-
-int
-n00b_init_interval_tree(n00b_interval_tree_t *tree, n00b_allocator_t *allocator)
 {
     tree->root      = nullptr;
     tree->stack     = n00b_stack_new_private(void *, allocator);
     tree->allocator = allocator;
     tree->lock      = n00b_data_lock_new();
-
-    if (tree->lock) {
-        n00b_add_finalizer(tree, n00b_finalize_data_lock, tree->lock);
-    }
-
-    return 0;
 }
 
 static inline int64_t
@@ -156,8 +136,8 @@ n00b_interval_insert(n00b_interval_tree_t *tree,
 
     n00b_data_write_lock(tree->lock);
 
-    n00b_interval_node_t *node = n00b_alloc(n00b_interval_node_t,
-                                            .allocator = tree->allocator);
+    n00b_interval_node_t *node = n00b_alloc_with_opts(n00b_interval_node_t,
+                                                      &(n00b_alloc_opts_t){.allocator = tree->allocator});
 
     node->low     = low;
     node->high    = high;
@@ -197,7 +177,7 @@ n00b_interval_insert(n00b_interval_tree_t *tree,
     n00b_interval_node_t *parent;
     size_t                count;
     for (count = n00b_stack_len(tree->stack); count > 0; count--) {
-        parent = (n00b_interval_node_t *)n00b_stack_pop(tree->stack);
+        parent = (n00b_interval_node_t *)n00b_option_get(n00b_stack_pop(void *, tree->stack));
         if (parent->left == node) {
             parent->left = _n00b_avl_balance_node(node);
         }
@@ -268,7 +248,7 @@ n00b_interval_search_any(n00b_interval_tree_t *tree,
     n00b_stack_push(tree->stack, tree->root);
 
     while (0 != n00b_stack_len(tree->stack)) {
-        n00b_interval_node_t *node = n00b_stack_pop(tree->stack);
+        n00b_interval_node_t *node = n00b_option_get(n00b_stack_pop(void *, tree->stack));
         if (node->low < high && low < node->high) {
             n00b_data_unlock(tree->lock);
             return n00b_result_ok(n00b_interval_node_t *, node);
@@ -385,7 +365,7 @@ n00b_interval_search_ordered(n00b_interval_tree_t *tree,
         }
 
         while ((searching = !!n00b_stack_len(tree->stack))) {
-            node = n00b_stack_pop(tree->stack);
+            node = n00b_option_get(n00b_stack_pop(void *, tree->stack));
             _n00b_record_if_match(low, high, node, intersections);
 
             if (nullptr != node->right) {
@@ -421,7 +401,7 @@ n00b_interval_delete(n00b_interval_tree_t *tree, n00b_interval_node_t *target)
         if (nullptr == current) {
             int retrying = 0;
             while (n00b_stack_len(tree->stack) > 0) {
-                void *top = n00b_stack_pop(tree->stack);
+                void *top = n00b_option_get(n00b_stack_pop(void *, tree->stack));
                 if ((uintptr_t)top & 1) {
                     current = (n00b_interval_node_t *)((uintptr_t)top & ~(uintptr_t)1);
                     n00b_stack_push(tree->stack, current);
@@ -473,8 +453,8 @@ n00b_interval_delete(n00b_interval_tree_t *tree, n00b_interval_node_t *target)
         n00b_interval_node_t *parent;
 
         while (n00b_stack_len(tree->stack) > 0) {
-            parent = (n00b_interval_node_t *)((uintptr_t)n00b_stack_pop(tree->stack)
-                                              & ~(uintptr_t)1);
+            parent = (n00b_interval_node_t *)((uintptr_t)n00b_option_get(
+                          n00b_stack_pop(void *, tree->stack)) & ~(uintptr_t)1);
             if (parent == target) {
                 n00b_stack_push(tree->stack, target);
                 break;
@@ -498,11 +478,11 @@ n00b_interval_delete(n00b_interval_tree_t *tree, n00b_interval_node_t *target)
         old_node = target;
 
         // Pop target itself off the stack.
-        (void)n00b_stack_pop(tree->stack);
+        (void)n00b_stack_pop(void *, tree->stack);
 
         while (n00b_stack_len(tree->stack) > 0) {
-            parent = (n00b_interval_node_t *)((uintptr_t)n00b_stack_pop(tree->stack)
-                                              & ~(uintptr_t)1);
+            parent = (n00b_interval_node_t *)((uintptr_t)n00b_option_get(
+                          n00b_stack_pop(void *, tree->stack)) & ~(uintptr_t)1);
             if (parent->left == old_node) {
                 parent->left = subtree;
             }
@@ -532,8 +512,8 @@ n00b_interval_delete(n00b_interval_tree_t *tree, n00b_interval_node_t *target)
 
     while (n00b_stack_len(tree->stack) > 0) {
         n00b_interval_node_t *parent;
-        parent = (n00b_interval_node_t *)((uintptr_t)n00b_stack_pop(tree->stack)
-                                          & ~(uintptr_t)1);
+        parent = (n00b_interval_node_t *)((uintptr_t)n00b_option_get(
+                      n00b_stack_pop(void *, tree->stack)) & ~(uintptr_t)1);
         if (parent->left == old_node) {
             parent->left = subtree;
         }
@@ -572,7 +552,7 @@ n00b_interval_search(n00b_interval_tree_t *tree,
     n00b_stack_push(tree->stack, tree->root);
 
     while (0 != n00b_stack_len(tree->stack)) {
-        n00b_interval_node_t *node = n00b_stack_pop(tree->stack);
+        n00b_interval_node_t *node = n00b_option_get(n00b_stack_pop(void *, tree->stack));
 
         _n00b_record_if_match(low, high, node, intersections);
 

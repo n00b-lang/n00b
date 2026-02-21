@@ -296,12 +296,10 @@ emit_terminal(emit_ctx_t *ctx, tnode_t *node, emit_prev_t *prev)
         return;
     }
 
-    int tok_index = -1;
-    for (int i = 0; i < ctx->num_tokens; i++) {
-        if (&ctx->tokens[i] == node->tptr) {
-            tok_index = i;
-            break;
-        }
+    // Pointer arithmetic: tptr points into ctx->tokens array.
+    int tok_index = (int)(node->tptr - ctx->tokens);
+    if (tok_index < 0 || tok_index >= ctx->num_tokens) {
+        tok_index = -1;
     }
 
     int emitted = 0;
@@ -482,6 +480,12 @@ emit_tree_iterative(emit_ctx_t *ctx, tnode_t *root, emit_prev_t *prev)
 
         if (sp >= cap) {
             cap *= 2;
+            if (cap > (1 << 20)) {
+                fprintf(stderr, "emit: tree walk exceeded %d nodes "
+                        "(likely cycle from corrupt tree)\n", 1 << 20);
+                base_dealloc(stack);
+                return;
+            }
             stack = base_realloc(stack, cap * sizeof(emit_frame_t));
         }
         stack[sp++] = (emit_frame_t){.node = kid, .kid_index = -1};

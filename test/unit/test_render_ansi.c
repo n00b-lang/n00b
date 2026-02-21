@@ -19,7 +19,7 @@
 static void
 test_ansi_capabilities(void)
 {
-    void *ctx = n00b_renderer_ansi.init();
+    void *ctx = n00b_renderer_ansi.init(nullptr);
     n00b_render_cap_t caps = n00b_renderer_ansi.capabilities(ctx);
 
     assert(caps & N00B_RCAP_COLOR_BASIC);
@@ -39,7 +39,7 @@ test_ansi_capabilities(void)
 static void
 test_ansi_get_size(void)
 {
-    void *ctx = n00b_renderer_ansi.init();
+    void *ctx = n00b_renderer_ansi.init(nullptr);
     n00b_render_size_t sz = n00b_renderer_ansi.get_size(ctx);
 
     assert(sz.rows > 0);
@@ -52,7 +52,7 @@ test_ansi_get_size(void)
 static void
 test_ansi_render_frame(void)
 {
-    void *ctx = n00b_renderer_ansi.init();
+    void *ctx = n00b_renderer_ansi.init(nullptr);
 
     // Create a small frame.
     n00b_rcell_t frame[3 * 5]; // 3 rows x 5 cols
@@ -74,7 +74,7 @@ test_ansi_render_frame(void)
 static void
 test_ansi_diff_render(void)
 {
-    void *ctx = n00b_renderer_ansi.init();
+    void *ctx = n00b_renderer_ansi.init(nullptr);
 
     n00b_rcell_t frame[2 * 3];
     n00b_rcell_t prev[2 * 3];
@@ -98,7 +98,7 @@ test_ansi_diff_render(void)
 static void
 test_dumb_capabilities(void)
 {
-    void *ctx = n00b_renderer_dumb.init();
+    void *ctx = n00b_renderer_dumb.init(nullptr);
     n00b_render_cap_t caps = n00b_renderer_dumb.capabilities(ctx);
 
     assert(caps == N00B_RCAP_NONE);
@@ -111,7 +111,7 @@ static void
 test_stream_round_trip(void)
 {
     // Already thoroughly tested in test_render_canvas, but verify basics.
-    void *ctx = n00b_renderer_stream.init();
+    void *ctx = n00b_renderer_stream.init(nullptr);
 
     n00b_render_size_t sz = n00b_renderer_stream.get_size(ctx);
     assert(sz.rows > 0);
@@ -144,5 +144,6 @@ main(int argc, char **argv)
     test_stream_round_trip();
 
     printf("All render ANSI/backend tests passed.\n");
+    n00b_shutdown();
     return 0;
 }

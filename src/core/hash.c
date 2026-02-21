@@ -25,7 +25,9 @@ n00b_bswap64(uint64_t x)
 
 #include <string.h> // IWYU pragma: keep ; for strlen
 #include "core/alloc.h"
+#include "core/alloc_mdata.h"
 #include "core/hash.h"
+#include "core/type_info.h"
 #include "core/string.h"
 #include "core/buffer.h"
 #include "vendor/xxhash.h"
@@ -42,51 +44,50 @@ n00b_xxh64_pair(const void *data, size_t len)
 n00b_uint128_t
 n00b_hash(void *obj, n00b_hash_fn fn)
 {
-// TODO -- new vtables
-// TODO -- convert to new n00b_object_header
-#if 0
-    bool                          cache  = false;
-    [[maybe_unused]] n00b_hash_fn obj_fn = n00b_hash_word;
-    n00b_inline_hdr_t            *alloc  = n00b_get_object_header(obj);
+    n00b_alloc_info_t ainfo = n00b_find_alloc_info(obj);
+    bool              managed = (ainfo.kind == n00b_alloc_oob
+                                 || ainfo.kind == n00b_alloc_inline);
 
-    if (alloc && alloc->cached_hash) {
-        return alloc->cached_hash;
-    }
+    if (managed) {
+        // Check cached hash.
+        n00b_uint128_t cached = 0;
 
-
-    if (alloc) {
-        if (alloc->n00b_type) {
-            n00b_vtable_t *vt = n00b_vtable_from_alloc(alloc);
-
-            if (vt && vt->methods[N00B_BI_HASH]) {
-                obj_fn = (n00b_hash_fn)vt->methods[N00B_BI_HASH];
-            }
-            if (!fn) {
-                fn = obj_fn;
-            }
+        if (ainfo.kind == n00b_alloc_inline) {
+            cached = ainfo.hdr.in_line->cached_hash;
+        }
+        else {
+            cached = ainfo.hdr.oob->cached_hash;
         }
 
+        if (cached) {
+            return cached;
+        }
+
+        // If the caller didn't supply a hash function, try the vtable.
         if (!fn) {
-            fn = obj_fn;
-        }
+            n00b_vtable_entry vt_fn = n00b_obj_core_method(obj, N00B_BI_HASH);
 
-        cache = obj_fn == fn;
-    }
-    else {
-        cache = false;
-
-        if (!fn) {
-            fn = obj_fn;
+            if (vt_fn) {
+                fn = (n00b_hash_fn)vt_fn;
+            }
         }
     }
-#endif
+
+    if (!fn) {
+        fn = n00b_hash_word;
+    }
+
     n00b_uint128_t hv = (*fn)(obj);
 
-#if 0
-    if (cache) {
-        alloc->cached_hash = hv;
-
-#endif
+    // Cache the result for managed objects.
+    if (managed) {
+        if (ainfo.kind == n00b_alloc_inline) {
+            ainfo.hdr.in_line->cached_hash = hv;
+        }
+        else {
+            ainfo.hdr.oob->cached_hash = hv;
+        }
+    }
 
     return hv;
 }
@@ -105,6 +106,12 @@ n00b_hash_cstring(void *value)
     char *s = (char *)value;
 
     return n00b_xxh64_pair(s, strlen(s));
+}
+
+n00b_uint128_t
+n00b_hash_raw(const void *data, size_t len)
+{
+    return n00b_xxh_convert(XXH3_128bits(data, len));
 }
 
 n00b_uint128_t

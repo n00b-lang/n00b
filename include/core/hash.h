@@ -32,6 +32,14 @@ extern n00b_uint128_t n00b_hash_cstring(void *value);
 extern n00b_uint128_t n00b_hash(void *obj, n00b_hash_fn fn);
 
 /**
+ * @brief Hash a raw byte buffer of known length.
+ * @param data Pointer to the bytes.
+ * @param len  Number of bytes to hash.
+ * @return     128-bit hash value.
+ */
+extern n00b_uint128_t n00b_hash_raw(const void *data, size_t len);
+
+/**
  * @brief Hash an `n00b_string_t` (by its UTF-8 content).
  * @param s  The string to hash.
  * @return   128-bit hash value.

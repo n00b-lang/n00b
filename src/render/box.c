@@ -1,4 +1,4 @@
-/**
+/*
  * Box decoration: creation and stamping.
  */
 

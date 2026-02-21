@@ -13,7 +13,6 @@
 #include <stdlib.h>
 #include "base_alloc_shim.h"
 #include <string.h>
-#include <sys/mman.h>
 #include <unistd.h>
 
 #include "types.h"
@@ -29,7 +28,8 @@
 static inline void
 tok_punct(lex_t *state, int len)
 {
-    state->line_start              = false;
+    state->line_start = false;
+    lex_ensure_tok_space(state);
     state->toks[state->num_toks++] = (tok_t){
         .type     = TT_PUNCT,
         .src_file = state->cur_src_file,
@@ -63,10 +63,12 @@ tok_literal(lex_t *state, char terminator, ttype_t type)
             // Don't increment num_toks - we're reusing this slot
         }
         else {
+            lex_ensure_tok_space(state);
             t = &state->toks[state->num_toks++];
         }
     }
     else {
+        lex_ensure_tok_space(state);
         t = &state->toks[state->num_toks++];
     }
 
@@ -224,8 +226,8 @@ static const char *c_keywords[] = {
     "thread_local",
     "true",
     "typedef",
-    "typeof",
     "typehash",
+    "typeof",
     "typeof_unqual",
     "union",
     "unsigned",
@@ -240,6 +242,27 @@ static int
 keyword_cmp(const void *a, const void *b)
 {
     return strcmp(*(const char **)a, *(const char **)b);
+}
+
+static void
+ensure_keywords_sorted(void)
+{
+    static bool done = false;
+    if (done) {
+        return;
+    }
+    done = true;
+
+    for (size_t i = 1; i < NUM_KEYWORDS; i++) {
+        if (strcmp(c_keywords[i - 1], c_keywords[i]) >= 0) {
+            fprintf(stderr,
+                    "FATAL: c_keywords out of order: \"%s\" >= \"%s\" at [%zu]\n",
+                    c_keywords[i - 1],
+                    c_keywords[i],
+                    i);
+            abort();
+        }
+    }
 }
 
 static inline bool
@@ -279,6 +302,7 @@ static inline void
 tok_id_or_num(lex_t *state, bool num)
 {
     state->line_start = false;
+    lex_ensure_tok_space(state);
     tok_t *t          = &state->toks[state->num_toks++];
     char  *p          = state->cur;
 
@@ -324,6 +348,7 @@ tok_id_or_num(lex_t *state, bool num)
 static inline void
 tok_ws(lex_t *state)
 {
+    lex_ensure_tok_space(state);
     tok_t *t = &state->toks[state->num_toks++];
     char  *p = state->cur;
 
@@ -564,6 +589,7 @@ parse_pragma_ncc(lex_t *state, char *start, char *end)
 static inline void
 tok_preproc(lex_t *state)
 {
+    lex_ensure_tok_space(state);
     tok_t *t     = &state->toks[state->num_toks++];
     char  *p     = state->cur;
     char  *start = p;
@@ -606,6 +632,7 @@ tok_preproc(lex_t *state)
 static inline void
 line_comment(lex_t *state)
 {
+    lex_ensure_tok_space(state);
     tok_t *t = &state->toks[state->num_toks++];
     char  *p = state->cur;
 
@@ -630,6 +657,7 @@ line_comment(lex_t *state)
 static inline void
 match_comment(lex_t *state)
 {
+    lex_ensure_tok_space(state);
     tok_t *t = &state->toks[state->num_toks++];
     char  *p = state->cur;
 
@@ -905,14 +933,36 @@ lex(lex_t *state)
                 tok_t *prev = &state->toks[state->num_toks - 1];
                 if (prev->type == TT_ID
                     && prev->offset + prev->len == state->offset) {
-                    // Merge: identifier becomes prefix, token becomes '{'
-                    prev->prefix_len = prev->len;
-                    prev->type       = TT_PUNCT;
-                    prev->len += 1; // Include the '{'
-                    state->offset++;
-                    state->cur++;
-                    state->line_start = false;
-                    continue;
+                    // Don't merge if preceded by struct/union/enum —
+                    // the identifier is a tag name, not a brace prefix.
+                    bool after_struct = false;
+                    for (int si = state->num_toks - 2; si >= 0; si--) {
+                        tok_t *pt = &state->toks[si];
+                        if (pt->type == TT_WS || pt->type == TT_COMMENT) {
+                            continue;
+                        }
+                        if (pt->type == TT_KEYWORD) {
+                            int         kl;
+                            const char *kt = tok_text_ptr(state->input,
+                                                          pt, &kl);
+                            if ((kl == 6 && !memcmp(kt, "struct", 6))
+                                || (kl == 5 && !memcmp(kt, "union", 5))
+                                || (kl == 4 && !memcmp(kt, "enum", 4))) {
+                                after_struct = true;
+                            }
+                        }
+                        break;
+                    }
+                    if (!after_struct) {
+                        // Merge: identifier becomes prefix, token becomes '{'
+                        prev->prefix_len = prev->len;
+                        prev->type       = TT_PUNCT;
+                        prev->len += 1; // Include the '{'
+                        state->offset++;
+                        state->cur++;
+                        state->line_start = false;
+                        continue;
+                    }
                 }
             }
             tok_punct(state, 1);
@@ -939,17 +989,13 @@ void
 lex_init(lex_t *ctx, ncc_buf_t *input, char *in_file)
 {
     assert(input);
+    ensure_keywords_sorted();
 
-    /* Compute mmap size for token array (must match alloc_tokens). */
-    int mmap_len = (int)(sizeof(tok_t) * input->len);
-    int ps       = getpagesize();
-    if (mmap_len % ps) {
-        mmap_len = ((mmap_len / ps) + 1) * ps;
-    }
+    int toks_cap = 0;
 
     *ctx = (lex_t){
         .input          = input,
-        .toks           = alloc_tokens(input),
+        .toks           = alloc_tokens(input, &toks_cap),
         .ncc_off_ranges = nullptr,
         .cur            = input->data,
         .end            = input->data + input->len,
@@ -957,12 +1003,11 @@ lex_init(lex_t *ctx, ncc_buf_t *input, char *in_file)
         .out_file       = nullptr,
         .cur_src_file   = in_file,
         .num_toks       = 0,
+        .toks_cap       = toks_cap,
         .num_ranges     = 0,
         .offset         = 0,
         .line_no        = 1,
         .line_start     = true,
-        .toks_on_heap   = false,
-        .toks_mmap_len  = mmap_len,
     };
 }
 

@@ -20,7 +20,7 @@ static void
 test_basic_rw(void)
 {
     n00b_rwlock_t rw = {0};
-    n00b_rw_lock_init(&rw);
+    n00b_rw_init(&rw);
 
     // Write lock/unlock.
     n00b_rw_write_lock(&rw);
@@ -41,7 +41,7 @@ static void
 test_write_nesting(void)
 {
     n00b_rwlock_t rw = {0};
-    n00b_rw_lock_init(&rw);
+    n00b_rw_init(&rw);
 
     n00b_rw_write_lock(&rw);
     n00b_rw_write_lock(&rw); // nested
@@ -59,7 +59,7 @@ static void
 test_read_nesting(void)
 {
     n00b_rwlock_t rw = {0};
-    n00b_rw_lock_init(&rw);
+    n00b_rw_init(&rw);
 
     n00b_rw_read_lock(&rw);
     n00b_rw_read_lock(&rw);  // nested read
@@ -77,7 +77,7 @@ static void
 test_read_inside_write(void)
 {
     n00b_rwlock_t rw = {0};
-    n00b_rw_lock_init(&rw);
+    n00b_rw_init(&rw);
 
     n00b_rw_write_lock(&rw);
     // Acquiring a read lock while holding the write lock should be
@@ -111,7 +111,7 @@ reader_worker(void *arg)
         // Track max concurrent readers.
         int prev_max = n00b_atomic_load(&max_readers_seen);
         while (cur > prev_max) {
-            if (n00b_cas(&max_readers_seen, (uint32_t *)&prev_max, cur)) {
+            if (n00b_cas(&max_readers_seen, &prev_max, cur)) {
                 break;
             }
         }
@@ -128,7 +128,7 @@ static void
 test_concurrent_readers(void)
 {
     memset(&reader_rw, 0, sizeof(reader_rw));
-    n00b_rw_lock_init(&reader_rw);
+    n00b_rw_init(&reader_rw);
     atomic_store(&reader_active, 0);
     atomic_store(&max_readers_seen, 0);
 
@@ -171,7 +171,7 @@ static void
 test_writer_exclusion(void)
 {
     memset(&excl_rw, 0, sizeof(excl_rw));
-    n00b_rw_lock_init(&excl_rw);
+    n00b_rw_init(&excl_rw);
     atomic_store(&excl_counter, 0);
 
     pthread_t t1, t2;
@@ -195,8 +195,8 @@ test_lock_chain(void)
 {
     n00b_rwlock_t rw1 = {0};
     n00b_rwlock_t rw2 = {0};
-    n00b_rw_lock_init(&rw1);
-    n00b_rw_lock_init(&rw2);
+    n00b_rw_init(&rw1);
+    n00b_rw_init(&rw2);
 
     n00b_lock_set_debug_name(&rw1, "rw1");
     n00b_lock_set_debug_name(&rw2, "rw2");
@@ -245,5 +245,6 @@ main(int argc, char *argv[])
     test_lock_chain();
 
     printf("All rwlock tests passed.\n");
+    n00b_shutdown();
     return 0;
 }

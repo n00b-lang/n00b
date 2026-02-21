@@ -75,6 +75,11 @@ n00b_string_t n00b_str_fmt_int_ex(int64_t value,
     _kargs { n00b_allocator_t *allocator = nullptr; };
 
 /** @brief Format a double according to a spec (fixed-point).
+ *
+ *  @details For `e`/`E` and `g`/`G` format types, delegates to C stdlib
+ *           `snprintf`.  For `f` without explicit precision, uses Grisu2
+ *           via `n00b_fmt_float()`.
+ *
  *  @param value  The double to format.
  *  @param spec   Parsed format specifier (precision, width, padding, etc.).
  *  @kw allocator Optional allocator.

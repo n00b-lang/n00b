@@ -13,7 +13,7 @@
 // Hex map for encoding
 // ============================================================================
 
-static const char n00b_hex_map_lower[16] = {
+const char n00b_hex_map_lower[16] = {
     '0',
     '1',
     '2',
@@ -36,14 +36,14 @@ static const char n00b_hex_map_lower[16] = {
 // Internal helpers
 // ============================================================================
 
-/**
+/*
  * Create a new buffer with the given byte length, using the specified
  * allocator (or runtime default if nullptr).
  */
 static n00b_buffer_t *
 _buffer_create(int64_t length, n00b_allocator_t *allocator)
 {
-    n00b_buffer_t *buf = n00b_alloc(n00b_buffer_t, .allocator = allocator);
+    n00b_buffer_t *buf = n00b_alloc_with_opts(n00b_buffer_t, &(n00b_alloc_opts_t){.allocator = allocator});
 
     n00b_buffer_init(buf, .length = length, .allocator = allocator);
     return buf;
@@ -67,10 +67,6 @@ n00b_buffer_init(n00b_buffer_t *obj) _kargs
     obj->lock      = no_lock ? nullptr : n00b_data_lock_new();
     obj->allocator = allocator;
 
-    if (obj->lock) {
-        n00b_add_finalizer(obj, n00b_finalize_data_lock, obj->lock);
-    }
-
     if (raw == nullptr && hex == nullptr && ptr == nullptr) {
         if (length < 0) {
             return;
@@ -88,7 +84,7 @@ n00b_buffer_init(n00b_buffer_t *obj) _kargs
 
     if (length == 0) {
         obj->alloc_len = N00B_EMPTY_BUFFER_ALLOC;
-        obj->data      = n00b_alloc_array(char, obj->alloc_len, .allocator = obj->allocator);
+        obj->data      = n00b_alloc_array_with_opts(char, obj->alloc_len, &(n00b_alloc_opts_t){.allocator = obj->allocator});
         obj->byte_len  = 0;
         return;
     }
@@ -96,7 +92,7 @@ n00b_buffer_init(n00b_buffer_t *obj) _kargs
     if (length > 0 && ptr == nullptr) {
         int64_t alloc_len = n00b_align_closest_pow2_ceil(length);
 
-        obj->data      = n00b_alloc_array(char, alloc_len, .allocator = obj->allocator);
+        obj->data      = n00b_alloc_array_with_opts(char, alloc_len, &(n00b_alloc_opts_t){.allocator = obj->allocator});
         obj->alloc_len = alloc_len;
     }
 
@@ -184,7 +180,7 @@ n00b_buffer_resize(n00b_buffer_t *buffer, uint64_t new_sz)
     }
 
     uint64_t new_alloc_sz = n00b_align_closest_pow2_ceil(new_sz);
-    char    *new_data = n00b_alloc_array(char, new_alloc_sz, .allocator = buffer->allocator);
+    char    *new_data = n00b_alloc_array_with_opts(char, new_alloc_sz, &(n00b_alloc_opts_t){.allocator = buffer->allocator});
 
     memcpy(new_data, buffer->data, buffer->byte_len);
 
@@ -234,6 +230,63 @@ n00b_buffer_add(n00b_buffer_t *b1, n00b_buffer_t *b2) _kargs
     }
 
     Return result;
+    defer_func_end();
+}
+
+// ============================================================================
+// Concat (in-place append)
+// ============================================================================
+
+void
+n00b_buffer_concat(n00b_buffer_t *dst, n00b_buffer_t *src) _kargs
+{
+    bool to_front = false;
+}
+{
+    if (!dst || !src || src->byte_len == 0) {
+        return;
+    }
+
+    defer_on();
+    n00b_buffer_acquire_w(dst);
+    n00b_buffer_acquire_r(src);
+
+    size_t   old_len = dst->byte_len;
+    uint64_t needed  = old_len + src->byte_len;
+
+    if (needed > dst->alloc_len) {
+        uint64_t new_alloc = n00b_align_closest_pow2_ceil(needed);
+        char    *new_data  = n00b_alloc_array_with_opts(
+            char, new_alloc,
+            &(n00b_alloc_opts_t){.allocator = dst->allocator});
+
+        if (to_front) {
+            memcpy(new_data, src->data, src->byte_len);
+            memcpy(new_data + src->byte_len, dst->data, old_len);
+        }
+        else {
+            memcpy(new_data, dst->data, old_len);
+            memcpy(new_data + old_len, src->data, src->byte_len);
+        }
+
+        if (dst->data) {
+            n00b_free(dst->data);
+        }
+
+        dst->data      = new_data;
+        dst->alloc_len = new_alloc;
+    }
+    else if (to_front) {
+        memmove(dst->data + src->byte_len, dst->data, old_len);
+        memcpy(dst->data, src->data, src->byte_len);
+    }
+    else {
+        memcpy(dst->data + old_len, src->data, src->byte_len);
+    }
+
+    dst->byte_len = needed;
+
+    Return;
     defer_func_end();
 }
 
@@ -373,7 +426,10 @@ n00b_buffer_get_slice(n00b_buffer_t *b, int64_t start, int64_t end) _kargs
 }
 
 n00b_result_t(bool)
-    n00b_buffer_set_slice(n00b_buffer_t *b, int64_t start, int64_t end, n00b_buffer_t *val)
+    n00b_buffer_set_slice(n00b_buffer_t *b, int64_t start, int64_t end) _kargs
+{
+    n00b_buffer_t *val = nullptr;
+}
 {
     defer_on();
     n00b_buffer_acquire_w(b);
@@ -414,7 +470,7 @@ n00b_result_t(bool)
         }
     }
     else {
-        char *new_buf = n00b_alloc_array(char, new_len, .allocator = b->allocator);
+        char *new_buf = n00b_alloc_array_with_opts(char, new_len, &(n00b_alloc_opts_t){.allocator = b->allocator});
         if (start > 0) {
             memcpy(new_buf, b->data, start);
         }
@@ -531,22 +587,23 @@ n00b_buffer_to_hex_str(n00b_buffer_t *buf)
 // ============================================================================
 
 n00b_buffer_t *
-n00b_buffer_join(n00b_buffer_t **items, size_t count, n00b_buffer_t *joiner) _kargs
+n00b_buffer_join(n00b_array_t(n00b_buffer_t *) items,
+                 n00b_buffer_t *joiner) _kargs
 {
     n00b_allocator_t *allocator = nullptr;
 }
 {
+    size_t count = items.len;
+
     if (count == 0) {
         return _buffer_create(0, allocator);
     }
-
-    defer_on();
 
     int64_t new_len = 0;
     int64_t jlen    = 0;
 
     for (size_t i = 0; i < count; i++) {
-        new_len += (int64_t)items[i]->byte_len;
+        new_len += (int64_t)items.data[i]->byte_len;
     }
 
     if (joiner != nullptr) {
@@ -557,8 +614,8 @@ n00b_buffer_join(n00b_buffer_t **items, size_t count, n00b_buffer_t *joiner) _ka
     n00b_buffer_t *result = _buffer_create(new_len, allocator);
     char          *p      = result->data;
 
-    int64_t clen = (int64_t)items[0]->byte_len;
-    memcpy(p, items[0]->data, clen);
+    int64_t clen = (int64_t)items.data[0]->byte_len;
+    memcpy(p, items.data[0]->data, clen);
 
     for (size_t i = 1; i < count; i++) {
         p += clen;
@@ -566,12 +623,11 @@ n00b_buffer_join(n00b_buffer_t **items, size_t count, n00b_buffer_t *joiner) _ka
             memcpy(p, joiner->data, jlen);
             p += jlen;
         }
-        clen = (int64_t)items[i]->byte_len;
-        memcpy(p, items[i]->data, clen);
+        clen = (int64_t)items.data[i]->byte_len;
+        memcpy(p, items.data[i]->data, clen);
     }
 
-    Return result;
-    defer_func_end();
+    return result;
 }
 
 // ============================================================================

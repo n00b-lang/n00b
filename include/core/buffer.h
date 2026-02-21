@@ -2,6 +2,10 @@
  * @file buffer.h
  * @brief Mutable growable byte buffer with thread-safe access.
  *
+ * `n00b_buffer_t` is a **heap type** (always passed by pointer).
+ * This contrasts with `n00b_string_t`, which is a **value type**
+ * (40 bytes, passed/returned by value).
+ *
  * `n00b_buffer_t` is a length-prefixed mutable buffer for building data.
  * Supports concatenation, slicing, searching, hex encoding/decoding,
  * and conversion to `n00b_string_t`.
@@ -38,6 +42,7 @@
 #include "core/result.h"
 #include "core/string.h"
 #include "core/data_lock.h"
+#include "core/array.h"
 #include "util/utf8.h"
 
 // ============================================================================
@@ -49,6 +54,13 @@
 
 // ============================================================================
 // Error codes
+//
+// Buffer operations return n00b_result_t with these domain-specific error
+// codes (negative to avoid collision with errno).  Use n00b_result_is_err()
+// and n00b_result_get_err() to inspect, e.g.:
+//
+//     auto r = n00b_buffer_get_index(buf, ix);
+//     if (n00b_result_is_err(r) && n00b_result_get_err(r) == N00B_ERR_BUFFER_INDEX_OOB) ...
 // ============================================================================
 
 /** @brief Buffer index out of bounds. */
@@ -64,10 +76,8 @@
 // Type declarations for option/result returns
 // ============================================================================
 
-n00b_option_decl(int64_t);
-n00b_option_decl(size_t);
-n00b_result_decl(uint8_t);
-n00b_result_decl(bool);
+// int64_t and size_t option types declared in core/option.h.
+// n00b_result_decl(uint8_t) and n00b_result_decl(bool) are in core/result.h.
 
 // ============================================================================
 // Struct definition
@@ -90,6 +100,9 @@ struct n00b_buffer_t {
     n00b_allocator_t *allocator;
     int32_t           flags;
 };
+
+/** @brief Array of buffer pointers (for n00b_buffer_join). */
+n00b_array_decl(n00b_buffer_t *);
 
 // ============================================================================
 // Lock macros (internal)
@@ -144,6 +157,8 @@ struct n00b_buffer_t {
  *
  * @pre @p buf is non-nullptr and uninitialized.
  * @post @p buf is ready for use; lock is initialized.
+ * @post If `.ptr` was given, the buffer **owns** the pointer — the
+ *       caller must not free it or use it independently afterwards.
  */
 extern void
 n00b_buffer_init(n00b_buffer_t *buf) _kargs
@@ -172,6 +187,26 @@ n00b_buffer_add(n00b_buffer_t *b1, n00b_buffer_t *b2) _kargs
 {
     n00b_allocator_t *allocator = nullptr;
 };
+
+/**
+ * @brief Concatenate @p src into @p dst in place.
+ *
+ * By default appends @p src after @p dst's existing data.
+ * With `.to_front = true`, prepends @p src before existing data.
+ * Grows @p dst if necessary.  @p src is not modified.
+ *
+ * @param dst Buffer to modify.
+ * @param src Buffer whose contents are inserted.
+ *
+ * @kw to_front  Prepend instead of append (default: false).
+ *
+ * @pre  Both @p dst and @p src are non-nullptr.
+ * @post `n00b_buffer_len(dst)` increases by `n00b_buffer_len(src)`.
+ */
+extern void n00b_buffer_concat(n00b_buffer_t *dst, n00b_buffer_t *src)
+    _kargs {
+        bool to_front = false;
+    };
 
 /**
  * @brief Return the number of valid bytes.
@@ -259,7 +294,10 @@ n00b_buffer_get_slice(n00b_buffer_t *buf, int64_t start, int64_t end) _kargs
  * @return      `n00b_result_t(bool)` -- ok(true) on success, or err on OOB.
  */
 extern n00b_result_t(bool)
-n00b_buffer_set_slice(n00b_buffer_t *buf, int64_t start, int64_t end, n00b_buffer_t *val);
+n00b_buffer_set_slice(n00b_buffer_t *buf, int64_t start, int64_t end) _kargs
+{
+    n00b_buffer_t *val = nullptr;
+};
 
 /**
  * @brief Deep-copy a buffer.
@@ -278,11 +316,17 @@ n00b_buffer_copy(n00b_buffer_t *buf) _kargs
 /**
  * @brief Get a raw C pointer to the buffer data.
  *
+ * Returns a **borrowed** pointer into the buffer's internal storage.
+ * The pointer is invalidated by any mutation of the buffer (resize,
+ * append, set_slice, etc.).  The caller must not free the pointer.
+ *
  * @param buf     Buffer to access.
  * @param len_ptr If non-nullptr, receives the byte length.
  * @return        Pointer to the internal data (not a copy).
  *
  * @pre The caller ensures no concurrent mutation.
+ * @post The returned pointer is valid only until the next mutation
+ *       of @p buf.
  */
 extern char *n00b_buffer_to_c(n00b_buffer_t *buf, int64_t *len_ptr);
 
@@ -306,18 +350,20 @@ extern n00b_string_t n00b_buffer_to_string(n00b_buffer_t *buf);
  */
 extern n00b_string_t n00b_buffer_to_hex_str(n00b_buffer_t *buf);
 
+/** @brief Shared lowercase hex digit lookup table ("0123456789abcdef"). */
+extern const char n00b_hex_map_lower[16];
+
 /**
  * @brief Join an array of buffers with a separator.
  *
  * @param items  Array of buffer pointers.
- * @param count  Number of elements in @p items.
  * @param joiner Separator buffer (may be nullptr for no separator).
  * @return       New buffer with all items joined.
  *
- * @pre @p count > 0 and @p items[0..count-1] are valid.
+ * @pre @p items has at least one element (empty array returns empty buffer).
  */
 extern n00b_buffer_t *
-n00b_buffer_join(n00b_buffer_t **items, size_t count,
+n00b_buffer_join(n00b_array_t(n00b_buffer_t *) items,
                  n00b_buffer_t *joiner) _kargs
 {
     n00b_allocator_t *allocator = nullptr;
@@ -360,9 +406,32 @@ n00b_buffer_empty() _kargs
     n00b_allocator_t *allocator = nullptr;
 }
 {
-    n00b_buffer_t *buf = n00b_alloc(n00b_buffer_t, .allocator = allocator);
+    n00b_buffer_t *buf = n00b_alloc(n00b_buffer_t);
 
     n00b_buffer_init(buf, .length = 0, .allocator = allocator);
+    return buf;
+}
+
+/**
+ * @brief Allocate an empty buffer with preallocated capacity.
+ *
+ * @param capacity  Minimum capacity in bytes (rounded up to power of 2).
+ * @return New buffer with `byte_len == 0` and at least @p capacity allocated.
+ *
+ * @kw allocator Allocator for the buffer (nullptr = runtime default).
+ */
+static inline n00b_buffer_t *
+n00b_buffer_new(int64_t capacity) _kargs
+{
+    n00b_allocator_t *allocator = nullptr;
+}
+{
+    n00b_buffer_t *buf = n00b_alloc_with_opts(n00b_buffer_t,
+                                              &(n00b_alloc_opts_t){
+                                                  .allocator = allocator,
+                                              });
+
+    n00b_buffer_init(buf, .length = capacity, .allocator = allocator);
     return buf;
 }
 
@@ -383,8 +452,26 @@ n00b_buffer_from_bytes(char *bytes, int64_t len) _kargs
     n00b_allocator_t *allocator = nullptr;
 }
 {
-    n00b_buffer_t *buf = n00b_alloc(n00b_buffer_t, .allocator = allocator);
+    n00b_buffer_t *buf = n00b_alloc_with_opts(n00b_buffer_t,
+                                              &(n00b_alloc_opts_t){
+                                                  .allocator = allocator,
+                                              });
 
     n00b_buffer_init(buf, .raw = bytes, .length = len, .allocator = allocator);
     return buf;
+}
+
+/**
+ * @brief Create a buffer from a NUL-terminated C string.
+ *
+ * Convenience wrapper around @c n00b_buffer_from_bytes that calls
+ * @c strlen for the length.
+ *
+ * @param s  NUL-terminated C string.
+ * @return   New buffer with the string data (not including NUL).
+ */
+static inline n00b_buffer_t *
+n00b_buffer_from_cstr(const char *s)
+{
+    return n00b_buffer_from_bytes((char *)s, (int64_t)strlen(s));
 }

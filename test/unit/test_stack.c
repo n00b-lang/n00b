@@ -6,9 +6,11 @@
 #include "core/alloc.h"
 #include "core/runtime.h"
 #include "core/stack.h"
+#include "core/array.h"
 
 n00b_stack_decl(int);
 n00b_stack_decl(char *);
+n00b_array_decl(int);
 
 // ============================================================================
 // 1. Construction
@@ -43,9 +45,9 @@ test_push_pop(void)
     n00b_stack_push(s, 30);
     assert(n00b_stack_len(s) == 3);
 
-    assert(n00b_stack_pop(s) == 30);
-    assert(n00b_stack_pop(s) == 20);
-    assert(n00b_stack_pop(s) == 10);
+    assert(n00b_option_get(n00b_stack_pop(int, s)) == 30);
+    assert(n00b_option_get(n00b_stack_pop(int, s)) == 20);
+    assert(n00b_option_get(n00b_stack_pop(int, s)) == 10);
     assert(n00b_stack_is_empty(s));
 
     n00b_stack_free(s);
@@ -67,7 +69,7 @@ test_peek(void)
     assert(n00b_stack_peek(s) == 99);
     assert(n00b_stack_len(s) == 2); // peek doesn't remove
 
-    (void)n00b_stack_pop(s);
+    (void)n00b_stack_pop(int, s);
     assert(n00b_stack_peek(s) == 42);
 
     n00b_stack_free(s);
@@ -93,7 +95,7 @@ test_clear(void)
 
     // Can reuse after clear
     n00b_stack_push(s, 99);
-    assert(n00b_stack_pop(s) == 99);
+    assert(n00b_option_get(n00b_stack_pop(int, s)) == 99);
 
     n00b_stack_free(s);
     printf("  [PASS] clear\n");
@@ -116,7 +118,7 @@ test_dynamic_growth(void)
 
     // Pop in reverse order
     for (int i = 999; i >= 0; i--) {
-        assert(n00b_stack_pop(s) == i);
+        assert(n00b_option_get(n00b_stack_pop(int, s)) == i);
     }
 
     assert(n00b_stack_is_empty(s));
@@ -169,11 +171,51 @@ test_pointer_type(void)
     n00b_stack_push(s, b);
 
     assert(n00b_stack_peek(s) == b);
-    assert(strcmp(n00b_stack_pop(s), "world") == 0);
-    assert(strcmp(n00b_stack_pop(s), "hello") == 0);
+    assert(strcmp(n00b_option_get(n00b_stack_pop(char *, s)), "world") == 0);
+    assert(strcmp(n00b_option_get(n00b_stack_pop(char *, s)), "hello") == 0);
 
     n00b_stack_free(s);
     printf("  [PASS] pointer type\n");
+}
+
+// ============================================================================
+// 8. Pop empty returns none
+// ============================================================================
+
+static void
+test_pop_empty(void)
+{
+    n00b_stack_t(int) s = n00b_stack_new(int);
+    assert(!n00b_option_is_set(n00b_stack_pop(int, s)));
+    n00b_stack_free(s);
+    printf("  [PASS] pop empty\n");
+}
+
+// ============================================================================
+// 9. Stack to array -- conversion
+// ============================================================================
+
+static void
+test_to_array(void)
+{
+    n00b_stack_t(int) s = n00b_stack_new(int);
+    n00b_stack_push(s, 10);
+    n00b_stack_push(s, 20);
+    n00b_stack_push(s, 30);
+
+    n00b_array_t(int) arr = n00b_stack_to_array(int, s);
+
+    assert(n00b_array_len(arr) == 3);
+    assert(n00b_array_get(arr, 0) == 10);
+    assert(n00b_array_get(arr, 1) == 20);
+    assert(n00b_array_get(arr, 2) == 30);
+
+    // Stack should be empty after conversion.
+    assert(s.data == nullptr);
+    assert(s.len == 0);
+
+    n00b_array_free(arr);
+    printf("  [PASS] to_array\n");
 }
 
 // ============================================================================
@@ -190,12 +232,15 @@ main(int argc, char **argv)
 
     test_construction();
     test_push_pop();
+    test_pop_empty();
     test_peek();
     test_clear();
     test_dynamic_growth();
     test_foreach();
     test_pointer_type();
+    test_to_array();
 
     printf("All stack tests passed.\n");
+    n00b_shutdown();
     return 0;
 }

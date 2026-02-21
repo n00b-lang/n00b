@@ -97,6 +97,13 @@ if not cc.compiles('int main(void) { return 0; }', args: ['-std=c23'], name: 'C2
   error('Compiler does not support -std=c23. Use clang 22+ (/usr/local/bin/clang).')
 endif
 
+glibc_check = '''
+#include <stdio.h>
+#ifndef __GLIBC__
+#error NO GLIBC
+#endif
+'''
+using_glibc = cc.compiles(glibc_check, name: 'glibc check')
 
 c_args = [
   '-std=c23',
@@ -106,6 +113,10 @@ c_args = [
   '-DNCC_INTERNAL',  # Enable internal aliases for library types
   x_flag
 ]
+
+if using_glibc
+  c_args = c_args + ['-D_GNU_SOURCE']
+endif
 
 if (host_machine.cpu_family() == 'x86_64' and cc.get_id() == 'clang')
   c_args = c_args + ['-Wno-atomic-alignment']

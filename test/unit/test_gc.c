@@ -18,8 +18,9 @@ typedef struct {
     void    *next;
 } test_obj_t;
 
-// Convenience macro: cast arena pointer to allocator for n00b_alloc().
-#define ARENA_ALLOC(a) .allocator = (n00b_allocator_t *)(a)
+// Convenience macro: cast arena pointer to allocator for n00b_alloc_with_opts().
+#define ARENA_OPTS(a) &(n00b_alloc_opts_t){.allocator = (n00b_allocator_t *)(a)}
+#define ARENA_OPTS_NOSCAN(a) &(n00b_alloc_opts_t){.allocator = (n00b_allocator_t *)(a), .no_scan = true}
 
 // ============================================================================
 // 1. Arena metrics
@@ -38,7 +39,7 @@ test_arena_metrics(void)
     assert(initial_used < 256);
 
     for (int i = 0; i < 10; i++) {
-        test_obj_t *obj = n00b_alloc(test_obj_t, ARENA_ALLOC(arena));
+        test_obj_t *obj = n00b_alloc_with_opts(test_obj_t, ARENA_OPTS(arena));
         obj->value      = i;
     }
 
@@ -63,7 +64,7 @@ test_basic_collection(void)
     bool     collected  = false;
 
     for (int i = 0; i < 10000; i++) {
-        test_obj_t *obj = n00b_alloc(test_obj_t, ARENA_ALLOC(arena));
+        test_obj_t *obj = n00b_alloc_with_opts(test_obj_t, ARENA_OPTS(arena));
         obj->value      = i;
 
         uint32_t cur = n00b_atomic_load(&arena->alloc_count);
@@ -94,7 +95,7 @@ test_object_survival(void)
     test_obj_t *objs[SURVIVAL_COUNT];
 
     for (int i = 0; i < SURVIVAL_COUNT; i++) {
-        objs[i]        = n00b_alloc(test_obj_t, ARENA_ALLOC(arena));
+        objs[i]        = n00b_alloc_with_opts(test_obj_t, ARENA_OPTS(arena));
         objs[i]->value = 0xDEAD0000ULL + (uint64_t)i;
         objs[i]->next  = nullptr;
     }
@@ -121,9 +122,9 @@ test_pointer_chain(void)
 {
     n00b_arena_t *arena = n00b_new_arena(.size = 4096, .use_gc = true);
 
-    test_obj_t *a = n00b_alloc(test_obj_t, ARENA_ALLOC(arena));
-    test_obj_t *b = n00b_alloc(test_obj_t, ARENA_ALLOC(arena));
-    test_obj_t *c = n00b_alloc(test_obj_t, ARENA_ALLOC(arena));
+    test_obj_t *a = n00b_alloc_with_opts(test_obj_t, ARENA_OPTS(arena));
+    test_obj_t *b = n00b_alloc_with_opts(test_obj_t, ARENA_OPTS(arena));
+    test_obj_t *c = n00b_alloc_with_opts(test_obj_t, ARENA_OPTS(arena));
 
     a->value = 0xAAAA;
     b->value = 0xBBBB;
@@ -167,7 +168,7 @@ allocate_waste(n00b_arena_t *arena, int count)
     test_obj_t *last = nullptr;
 
     for (int i = 0; i < count; i++) {
-        last        = n00b_alloc(test_obj_t, ARENA_ALLOC(arena));
+        last        = n00b_alloc_with_opts(test_obj_t, ARENA_OPTS(arena));
         last->value = (uint64_t)i;
         last->next  = nullptr;
     }
@@ -216,7 +217,7 @@ test_multiple_collections(void)
         test_obj_t *objs[MULTI_COUNT];
 
         for (int i = 0; i < MULTI_COUNT; i++) {
-            objs[i]        = n00b_alloc(test_obj_t, ARENA_ALLOC(arena));
+            objs[i]        = n00b_alloc_with_opts(test_obj_t, ARENA_OPTS(arena));
             objs[i]->value = (uint64_t)(round * 1000 + i);
         }
 
@@ -241,7 +242,7 @@ test_manual_collect(void)
 {
     n00b_arena_t *arena = n00b_new_arena(.size = 4096, .use_gc = true);
 
-    test_obj_t *obj = n00b_alloc(test_obj_t, ARENA_ALLOC(arena));
+    test_obj_t *obj = n00b_alloc_with_opts(test_obj_t, ARENA_OPTS(arena));
     obj->value      = 0x12345678DEADBEEFULL;
     obj->next       = nullptr;
 
@@ -269,7 +270,7 @@ test_noscan_survival(void)
     test_obj_t *objs[NOSCAN_COUNT];
 
     for (int i = 0; i < NOSCAN_COUNT; i++) {
-        objs[i]        = n00b_alloc(test_obj_t, ARENA_ALLOC(arena), .no_scan = true);
+        objs[i]        = n00b_alloc_with_opts(test_obj_t, ARENA_OPTS_NOSCAN(arena));
         objs[i]->value = 0xCAFE0000ULL + (uint64_t)i;
         objs[i]->next  = nullptr;
     }
@@ -294,7 +295,7 @@ test_alloc_after_collection(void)
 {
     n00b_arena_t *arena = n00b_new_arena(.size = 4096, .use_gc = true);
 
-    test_obj_t *pre = n00b_alloc(test_obj_t, ARENA_ALLOC(arena));
+    test_obj_t *pre = n00b_alloc_with_opts(test_obj_t, ARENA_OPTS(arena));
     pre->value      = 0x1111;
 
     n00b_stop_the_world();
@@ -305,7 +306,7 @@ test_alloc_after_collection(void)
     test_obj_t *post[10];
 
     for (int i = 0; i < 10; i++) {
-        post[i] = n00b_alloc(test_obj_t, ARENA_ALLOC(arena));
+        post[i] = n00b_alloc_with_opts(test_obj_t, ARENA_OPTS(arena));
         assert(post[i] != nullptr);
         post[i]->value = 0x2000ULL + (uint64_t)i;
     }
@@ -335,7 +336,7 @@ test_large_linked_list(void)
     test_obj_t *prev = nullptr;
 
     for (int i = 0; i < LIST_LENGTH; i++) {
-        test_obj_t *node = n00b_alloc(test_obj_t, ARENA_ALLOC(arena));
+        test_obj_t *node = n00b_alloc_with_opts(test_obj_t, ARENA_OPTS(arena));
         node->value      = (uint64_t)i;
         node->next       = nullptr;
 
@@ -387,5 +388,6 @@ main(int argc, char **argv)
     test_large_linked_list();
 
     printf("All GC tests passed.\n");
+    n00b_shutdown();
     return 0;
 }

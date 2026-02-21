@@ -22,6 +22,10 @@
 #include <errno.h>  // IWYU pragma: export
 #include <signal.h>
 
+#if defined(_WIN32) && !defined(__CYGWIN__)
+typedef struct { int si_signo; int si_status; int si_pid; } siginfo_t;
+#endif
+
 // This is to shut up IWYU on a mac.
 #if defined __APPLE__ && defined(N00B_IWYU_PROBE)
 #include <_time.h>     // IWYU pragma: export
@@ -44,7 +48,7 @@ typedef struct n00b_runtime_t        n00b_runtime_t;
 typedef struct n00b_segment_t        n00b_segment_t;
 typedef struct n00b_mmap_info_t       n00b_mmap_info_t;
 typedef struct n00b_arena_t          n00b_arena_t;
-typedef char                        *n00b_alloc_type_info_t;
+typedef uint64_t                     n00b_alloc_type_info_t;
 typedef struct n00b_inline_hdr_t     n00b_inline_hdr_t;
 typedef struct n00b_oob_hdr_t n00b_oob_hdr_t;
 typedef struct n00b_static_header_t  n00b_static_header_t;
@@ -114,6 +118,9 @@ typedef struct n00b_allocator_t              n00b_allocator_t;
 typedef struct n00b_base_allocator_t         n00b_base_allocator_t;
 typedef struct n00b_mmap_ctx_t               n00b_mmap_ctx_t;
 typedef struct n00b_vargs_t                  n00b_vargs_t;
+typedef struct n00b_method_param_t           n00b_method_param_t;
+typedef struct n00b_method_t                 n00b_method_t;
+typedef struct n00b_type_info_t              n00b_type_info_t;
 
 // Style system forward declarations.
 typedef struct n00b_text_style_t             n00b_text_style_t;
@@ -132,6 +139,17 @@ typedef struct n00b_table_t                  n00b_table_t;
 typedef struct n00b_table_cell_t             n00b_table_cell_t;
 typedef struct n00b_table_row_t              n00b_table_row_t;
 typedef struct n00b_table_col_spec_t         n00b_table_col_spec_t;
+
+// Render module forward declarations.
+typedef struct n00b_canvas_t                 n00b_canvas_t;
+typedef struct n00b_plane_t                  n00b_plane_t;
+
+// IO module forward declarations.
+typedef struct n00b_subproc                  n00b_subproc_t;
+
+// Type checker forward declarations.
+typedef struct n00b_tc_type_s                n00b_tc_type_t;
+typedef struct n00b_tc_ctx_s                 n00b_tc_ctx_t;
 
 typedef n00b_hash_value_t (*n00b_hash_fn)(void *);
 typedef n00b_string_t *(*n00b_repr_fn)(void *);
@@ -155,6 +173,14 @@ typedef void (*n00b_signal_handler_t)(int, siginfo_t *, void *);
     })
 
 #define n00b_barrier() atomic_thread_fence(memory_order_seq_cst)
+
+#if !defined(BYTE_ORDER)
+#if defined(_WIN32) || defined(__LITTLE_ENDIAN__)
+#define BYTE_ORDER    1234
+#define LITTLE_ENDIAN 1234
+#define BIG_ENDIAN    4321
+#endif
+#endif
 
 #if BYTE_ORDER == LITTLE_ENDIAN
 #define n00b_little_64(x)

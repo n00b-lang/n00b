@@ -106,7 +106,7 @@ _n00b_stop_the_world(char *loc)
             continue;
         }
 
-        n00b_atomic_or(&__n00b_thread_self.self_lock, N00B_STW);
+        n00b_atomic_or(&t->self_lock, N00B_STW);
     }
 
     rt->stw_nesting = 1;

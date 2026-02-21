@@ -218,5 +218,6 @@ main(int argc, char **argv)
     test_edge_values();
 
     printf("All tuple tests passed.\n");
+    n00b_shutdown();
     return 0;
 }

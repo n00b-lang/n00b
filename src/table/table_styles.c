@@ -1,4 +1,4 @@
-/**
+/*
  * Named style presets and convenience constructors for tables.
  */
 
@@ -214,12 +214,12 @@ n00b_table_style_ascii(void)
 // ====================================================================
 
 n00b_table_t *
-n00b_callout(n00b_string_t *content)
+n00b_table_callout(n00b_string_t content)
 {
     n00b_table_style_t style = n00b_table_style_default();
-    n00b_table_t      *table = n00b_table_new(
+    n00b_table_t      *table = n00b_new_kargs(n00b_table_t, table,
         .num_cols    = 1,
-        .table_props = style.table_props,
+        .style       = &style,
         .cell_props  = n00b_box_props_new(
             .borders    = N00B_BORDER_NONE,
             .pad_left   = 2,
@@ -228,20 +228,17 @@ n00b_callout(n00b_string_t *content)
             .pad_bottom = 1,
             .alignment  = N00B_ALIGN_TOP_LEFT));
 
-    n00b_table_add_cell(table, *content);
+    n00b_table_add_cell(table, content);
     n00b_table_end_row(table);
 
     return table;
 }
 
 n00b_table_t *
-n00b_flow(n00b_string_t *items, n00b_isize_t n)
+n00b_table_flow(n00b_string_t *items, n00b_isize_t n)
 {
     n00b_table_style_t style = n00b_table_style_minimal();
-    n00b_table_t      *table = n00b_table_new(
-        .num_cols    = n,
-        .table_props = style.table_props,
-        .cell_props  = style.cell_props);
+    n00b_table_t      *table = n00b_new_kargs(n00b_table_t, table, .style = &style);
 
     for (n00b_isize_t i = 0; i < n; i++) {
         n00b_table_col_flex(table, 1);

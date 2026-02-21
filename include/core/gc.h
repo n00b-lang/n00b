@@ -121,6 +121,7 @@ typedef struct {
 } n00b_gc_wl_item_t;
 
 n00b_list_decl(n00b_gc_wl_item_t *);
+n00b_option_decl(n00b_gc_wl_item_t *);
 
 /**
  * @brief Per-collection state, stack-allocated by the collector entry point.

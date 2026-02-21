@@ -1,8 +1,10 @@
-#include <stdio.h> // perror
+#include <stdio.h>
+#include <stdlib.h>
 #include <locale.h>
 
 #if !defined(_WIN32)
 #include <unistd.h>
+#include <termios.h>
 #include <sys/resource.h>
 #else
 #include "n00b_windows_compat.h"
@@ -21,8 +23,16 @@
 #include "core/random.h"
 #include "core/stw.h"
 #include "core/gc.h"
+#include "core/type_info.h"
 #include "strings/style_registry.h"
 #include "strings/theme.h"
+#include "core/string.h"
+#include "core/buffer.h"
+#include "conduit/conduit.h"
+#include "conduit/service.h"
+#include "conduit/fd_managed.h"
+#include "conduit/fd_writer.h"
+#include "conduit/io.h"
 
 size_t   n00b_page_size = 0;
 uint64_t n00b_gc_guard  = 0;
@@ -49,6 +59,14 @@ setup_envp(n00b_runtime_t *rt, char *envp[])
     rt->envp = n00b_array_checked_ptr(char *, i, envp);
 }
 
+#ifdef _WIN32
+static inline void
+setup_fd_limit(n00b_runtime_t *rt, int fd_limit)
+{
+    (void)rt;
+    (void)fd_limit;
+}
+#else
 static inline void
 setup_fd_limit(n00b_runtime_t *rt, int fd_limit)
 {
@@ -94,6 +112,7 @@ n00b_detect_page_size(void)
     return (size_t)sysconf(_SC_PAGESIZE);
 #endif
 }
+#endif
 
 static inline void
 setup_threads(n00b_runtime_t *rt, unsigned int max_threads)
@@ -129,6 +148,44 @@ setup_slab_allocator(n00b_runtime_t *rt)
                          .external_metadata = false,
                          .hidden            = true,
                          .__system          = true);
+}
+
+void
+n00b_shutdown(void)
+{
+    n00b_runtime_t *rt = n00b_get_runtime();
+    if (!rt) return;
+
+    n00b_conduit_t *c = rt->default_conduit;
+    if (c) {
+        n00b_atomic_store(&c->shutdown, true);
+
+        n00b_list_foreach(c->io_backends, p) {
+            n00b_conduit_io_backend_t *io = *p;
+            if (io) {
+                n00b_conduit_io_shutdown(io);
+            }
+        }
+    }
+
+    n00b_stop_the_world();
+    n00b_restart_the_world();
+
+    while (n00b_atomic_load(&rt->live_threads) > 1) {
+        n00b_futex_wait((n00b_futex_t *)&rt->live_threads,
+                         n00b_atomic_load(&rt->live_threads),
+                         50000000);
+    }
+
+    // Drain any remaining output on tty file descriptors.
+#ifndef _WIN32
+    if (isatty(STDOUT_FILENO)) {
+        tcdrain(STDOUT_FILENO);
+    }
+    if (isatty(STDERR_FILENO)) {
+        tcdrain(STDERR_FILENO);
+    }
+#endif
 }
 
 void
@@ -192,8 +249,80 @@ n00b_init(n00b_runtime_t *rt, int argc, char *argv[]) _kargs
         rt->default_allocator = (n00b_allocator_t *)rt->default_arena;
     }
 
+    n00b_type_registry_init();
+
+    // Conduit infrastructure pool: non-hidden so the GC scans its
+    // pages for heap pointers, keeping subscription objects alive.
+    // Not __system so STW checks apply normally.
+    n00b_allocator_t *cpool = n00b_pool_init(&rt->conduit_pool,
+                                              .name = "conduit_pool");
+
+    rt->sub_map = n00b_alloc_with_opts(n00b_dict_untyped_t, &(n00b_alloc_opts_t){.allocator = cpool});
+    n00b_dict_untyped_init(rt->sub_map,
+                           .allocator     = cpool,
+                           .skip_obj_hash = true);
+
+    n00b_gc_register_root(rt->sub_map);
+
     n00b_str_registry_init();
     n00b_theme_init();
+
+    // Create default conduit + service for IO (stdout/stderr, signals).
+    n00b_result_t(n00b_conduit_t *) cond_r = n00b_conduit_new();
+    if (n00b_result_is_ok(cond_r)) {
+        rt->default_conduit = n00b_result_get(cond_r);
+
+        n00b_result_t(n00b_conduit_service_t *) svc_r =
+            n00b_conduit_service_new(rt->default_conduit);
+
+        if (n00b_result_is_ok(svc_r)) {
+            rt->default_service = n00b_result_get(svc_r);
+            n00b_conduit_service_start(rt->default_service);
+
+            // Get the default IO thread's backend for fd management.
+            auto io_opt = n00b_conduit_service_default_io(rt->default_service);
+
+            if (n00b_option_is_set(io_opt)) {
+                n00b_conduit_svc_thread_t *svc_thread = n00b_option_get(io_opt);
+
+                auto out_r = n00b_conduit_fd_manage(
+                    rt->default_conduit, svc_thread->io, 1, false);
+                if (n00b_result_is_ok(out_r)) {
+                    rt->stdout_owner = n00b_result_get(out_r);
+                }
+
+                auto err_r = n00b_conduit_fd_manage(
+                    rt->default_conduit, svc_thread->io, 2, false);
+                if (n00b_result_is_ok(err_r)) {
+                    rt->stderr_owner = n00b_result_get(err_r);
+                }
+            }
+
+            // Create typed stdout/stderr buffer topics and wire
+            // fd-writer sinks that do the actual kernel write().
+            auto *out_typed = n00b_conduit_topic_init(
+                n00b_buffer_t *,
+                rt->default_conduit,
+                n00b_conduit_str_uri(N00B_STRING_STATIC("stdout")));
+
+            if (out_typed) {
+                rt->stdout_topic = (n00b_conduit_topic_base_t *)out_typed;
+                n00b_conduit_fd_writer_new(rt->default_conduit,
+                                            out_typed, 1);
+            }
+
+            auto *err_typed = n00b_conduit_topic_init(
+                n00b_buffer_t *,
+                rt->default_conduit,
+                n00b_conduit_str_uri(N00B_STRING_STATIC("stderr")));
+
+            if (err_typed) {
+                rt->stderr_topic = (n00b_conduit_topic_base_t *)err_typed;
+                n00b_conduit_fd_writer_new(rt->default_conduit,
+                                            err_typed, 2);
+            }
+        }
+    }
 
     rt->startup_complete = true;
 }

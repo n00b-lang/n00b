@@ -386,10 +386,17 @@ build_address_of(tnode_t *operand, int line)
 
 /**
  * @brief Build a compound literal for keyword arguments.
- * (struct _funcname__kargs){._has_name=1, .name=value, ...}
+ *
+ * Generates:
+ *   (struct _funcname__kargs){.p1=default1, .p2=default2, ...,
+ *                             ._has_name=1, .name=value, ...}
+ *
+ * Defaults are emitted first so that user-provided values override them
+ * via C's last-writer-wins semantics for duplicate designators.
  */
 static tnode_t *
-build_kargs_compound_literal(const char *func_name, kw_arg_collector_t *kw_args, int line)
+build_kargs_compound_literal(const char *func_name, kw_arg_collector_t *kw_args,
+                             kw_info_t *kw_info, int line)
 {
     char struct_name[NCC_IDENT_BUF];
     int  sret = snprintf(struct_name, sizeof(struct_name), "_%s__kargs", func_name);
@@ -441,10 +448,37 @@ build_kargs_compound_literal(const char *func_name, kw_arg_collector_t *kw_args,
 
     add_child(braced, synth_terminal("{", TT_PUNCT, line));
 
-    // Build initializer_list with ._has_name=1, .name=value pairs
+    // Build initializer_list.
+    // Phase 1: emit .name = default for every param that has a default.
+    // Phase 2: emit ._has_name = 1, .name = value for user-provided args.
+    // C's last-writer-wins means user values override the defaults.
     tnode_t *init_list = synth_nonterminal("initializer_list");
     init_list->nt_id   = NT_initializer_list;
 
+    bool need_comma = false;
+
+    // Phase 1: defaults from kw_info
+    if (kw_info && kw_info->params) {
+        int nparams = ncc_list_len(kw_info->params);
+        for (int i = 0; i < nparams; i++) {
+            kw_param_info_t *p = ncc_list_get(kw_info->params, i);
+            if (!p || !p->name || !p->default_val) {
+                continue;
+            }
+
+            if (need_comma) {
+                add_child(init_list, synth_terminal(",", TT_PUNCT, line));
+            }
+
+            // .name = default_value
+            add_child(init_list, build_designation(p->name, line));
+            // default_val is an NT_initializer; copy it for the compound literal
+            add_child(init_list, copy_tree(p->default_val));
+            need_comma = true;
+        }
+    }
+
+    // Phase 2: user-provided keyword arguments (override defaults)
     for (int i = 0; i < kw_args->count; i++) {
         kw_arg_t *arg = &kw_args->args[i];
 
@@ -452,8 +486,7 @@ build_kargs_compound_literal(const char *func_name, kw_arg_collector_t *kw_args,
             continue;
         }
 
-        // Add comma separator (except for first item)
-        if (i > 0) {
+        if (need_comma) {
             add_child(init_list, synth_terminal(",", TT_PUNCT, line));
         }
 
@@ -466,9 +499,10 @@ build_kargs_compound_literal(const char *func_name, kw_arg_collector_t *kw_args,
 
         add_child(init_list, synth_terminal(",", TT_PUNCT, line));
 
-        // .name = value (reparent the value expression)
+        // .name = value (copy the value expression to avoid dual-parenting)
         add_child(init_list, build_designation(arg->name, line));
-        add_child(init_list, build_expr_initializer(arg->value_node, line));
+        add_child(init_list, build_expr_initializer(copy_tree(arg->value_node), line));
+        need_comma = true;
     }
 
     add_child(braced, init_list);
@@ -554,9 +588,9 @@ xform_kw_call(tree_xform_t *ctx, tnode_t *node)
             return nullptr;
         }
 
-        // Build &(struct _funcname__kargs){} — zero-initialized compound literal
+        // Build &(struct _funcname__kargs){defaults...} — defaults-initialized compound literal
         kw_arg_collector_t empty_kw = {0};
-        tnode_t *literal       = build_kargs_compound_literal(func_name, &empty_kw, line);
+        tnode_t *literal       = build_kargs_compound_literal(func_name, &empty_kw, kw_info, line);
         tnode_t *addr_of       = build_address_of(literal, line);
         tnode_t *postfix       = synth_nonterminal("postfix_expression_9");
         postfix->nt_id         = NT_postfix_expression;
@@ -587,24 +621,14 @@ xform_kw_call(tree_xform_t *ctx, tnode_t *node)
             for (int i = node->num_kids - 1; i >= 0; i--) {
                 tnode_t *kid = tnode_get_kid(node, i);
                 if (kid && kid->tptr && kid->nt && strcmp(kid->nt, ")") == 0) {
-                    // Grow kids array to make room for the new child
-                    int         old_count = node->num_kids;
-                    int         new_count = old_count + 1;
-                    ncc_list_t *new_kids  = ncc_list_alloc(new_count);
-
-                    for (int k = 0; k < old_count; k++) {
-                        new_kids->items[k] = node->kids->items[k];
+                    // Grow kids array and insert at position i
+                    ncc_list_ensure_cap(node->kids, node->num_kids + 1);
+                    for (int j = node->num_kids; j > i; j--) {
+                        node->kids->data[j] = node->kids->data[j - 1];
                     }
-
-                    base_dealloc(node->kids);
-                    node->kids = new_kids;
-
-                    // Shift children right to make room at position i
-                    for (int j = old_count; j > i; j--) {
-                        node->kids->items[j] = node->kids->items[j - 1];
-                    }
-                    node->kids->items[i] = new_arg_list;
-                    node->num_kids       = new_count;
+                    node->kids->data[i] = new_arg_list;
+                    node->num_kids++;
+                    node->kids->len = node->num_kids;
                     new_arg_list->parent  = node;
                     break;
                 }
@@ -627,7 +651,7 @@ xform_kw_call(tree_xform_t *ctx, tnode_t *node)
     int regular_count = ncc_list_len(regular_args);
 
     // Build the kargs compound literal with address-of
-    tnode_t *literal       = build_kargs_compound_literal(func_name, &kw_args, line);
+    tnode_t *literal       = build_kargs_compound_literal(func_name, &kw_args, kw_info, line);
     tnode_t *addr_of       = build_address_of(literal, line);
     tnode_t *postfix       = synth_nonterminal("postfix_expression_9");
     postfix->nt_id         = NT_postfix_expression;
@@ -645,7 +669,7 @@ xform_kw_call(tree_xform_t *ctx, tnode_t *node)
             add_child(new_arg_list, synth_terminal(",", TT_PUNCT, line));
         }
         tnode_t *arg = ncc_list_get(regular_args, i);
-        add_child(new_arg_list, arg);
+        add_child(new_arg_list, copy_tree(arg));
     }
 
     // Add comma and kargs struct
@@ -786,20 +810,29 @@ xform_kw_func(tree_xform_t *ctx, tnode_t *node)
     kw_arg_collector_t kw_args = {0};
     collect_kw_args(ctx->input, arg_list, &kw_args);
 
-    if (kw_args.count == 0) {
+    int line = get_node_line(node);
+
+    // Look up kw_info for the target function to get defaults
+    kw_info_t *kw_info = nullptr;
+    if (ctx->symtab) {
+        kw_info = st_get_kw_info(ctx->symtab, (char *)target_name);
+    }
+
+    // If no kw args and no kw_info (no defaults), nothing to produce
+    if (kw_args.count == 0 && !kw_info) {
         return nullptr;
     }
 
-    int line = get_node_line(node);
-
     // Build the kargs compound literal with address-of
-    tnode_t *literal = build_kargs_compound_literal(target_name, &kw_args, line);
+    // (even with 0 user-provided kw args, defaults are emitted)
+    tnode_t *literal = build_kargs_compound_literal(target_name, &kw_args, kw_info, line);
     tnode_t *addr_of = build_address_of(literal, line);
 
     // Wrap in postfix_expression_9 (to match expression level)
     tnode_t *postfix = synth_nonterminal("postfix_expression_9");
-    postfix->nt_id   = NT_postfix_expression;
-    postfix->branch  = 9;
+    postfix->nt_id       = NT_postfix_expression;
+    postfix->branch      = 9;
+    postfix->kw_func_result = true;
     add_child(postfix, addr_of);
 
     // Replace the entire kw_func(...) call with the struct expression

@@ -5,6 +5,7 @@
 #include "internal/unicode/raw.h"
 #include "core/alloc.h"
 #include <string.h>
+#include <assert.h>
 
 // ===================================================================
 // Style stack
@@ -20,9 +21,8 @@ typedef struct {
 static void
 style_push(style_stack_t *ss, n00b_text_style_t *s)
 {
-    if (ss->depth < MAX_STYLE_DEPTH) {
-        ss->styles[ss->depth++] = s;
-    }
+    assert(ss->depth < MAX_STYLE_DEPTH);
+    ss->styles[ss->depth++] = s;
 }
 
 static void
@@ -160,9 +160,9 @@ append_text_with_style(outbuf_t *ob, rec_list_t *rl,
     }
 }
 
-static n00b_string_t
-do_format(const char *desc_data, int32_t desc_len,
-          n00b_vargs_t *vargs)
+n00b_string_t
+_n00b_format_impl(const char *desc_data, int32_t desc_len,
+                  n00b_vargs_t *vargs)
 {
     n00b_rich_desc_t *parsed = n00b_rich_desc_parse(desc_data, desc_len);
 
@@ -180,9 +180,9 @@ do_format(const char *desc_data, int32_t desc_len,
             break;
 
         case N00B_RICH_STYLE_ON: {
-            n00b_text_style_t *s = n00b_str_style_lookup(seg->tag);
-            if (s) {
-                style_push(&ss, s);
+            auto s_opt = n00b_str_style_lookup(seg->tag);
+            if (n00b_option_is_set(s_opt)) {
+                style_push(&ss, n00b_option_get(s_opt));
             }
             break;
         }
@@ -210,9 +210,9 @@ do_format(const char *desc_data, int32_t desc_len,
             break;
 
         case N00B_RICH_ROLE_ON: {
-            n00b_text_style_t *rs = n00b_str_role_lookup(seg->tag);
-            if (rs) {
-                style_push(&ss, rs);
+            auto rs_opt = n00b_str_role_lookup(seg->tag);
+            if (n00b_option_is_set(rs_opt)) {
+                style_push(&ss, n00b_option_get(rs_opt));
             }
             break;
         }
@@ -272,12 +272,14 @@ do_format(const char *desc_data, int32_t desc_len,
                 }
                 case 'b': {
                     sub_str = n00b_fmt_bool((bool)(uintptr_t)arg,
-                                            fs.upper, fs.word, fs.yn);
+                                            .upper = fs.upper,
+                                            .word  = fs.word,
+                                            .yn    = fs.yn);
                     have_str = true;
                     break;
                 }
                 case 'p': {
-                    sub_str  = n00b_fmt_pointer(arg, fs.upper);
+                    sub_str  = n00b_fmt_pointer(arg, .caps = fs.upper);
                     have_str = true;
                     break;
                 }
@@ -326,8 +328,7 @@ do_format(const char *desc_data, int32_t desc_len,
     if (total_cps < 0) {
         total_cps = 0;
     }
-    n00b_string_t result = n00b_string_from_raw(nullptr, ob.buf, ob.len,
-                                                 total_cps);
+    n00b_string_t result = n00b_string_from_raw(ob.buf, ob.len);
 
     // Attach style info if we have records.
     if (rl.count > 0) {
@@ -357,12 +358,12 @@ do_format(const char *desc_data, int32_t desc_len,
 n00b_string_t
 n00b_format(n00b_string_t desc, +)
 {
-    return do_format(desc.data, (int32_t)desc.u8_bytes, vargs);
+    return _n00b_format_impl(desc.data, (int32_t)desc.u8_bytes, vargs);
 }
 
 n00b_string_t
 n00b_cformat(const char *desc, +)
 {
     int32_t len = (int32_t)strlen(desc);
-    return do_format(desc, len, vargs);
+    return _n00b_format_impl(desc, len, vargs);
 }

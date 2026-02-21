@@ -319,7 +319,7 @@ xform_flatten_recursive(tree_xform_t *ctx, tnode_t *node)
     }
 
     // Collect all payload children in order (excluding separators)
-    int collected = collect_payload_children(node, root_type, (tnode_t **)children->items, 0, input);
+    int collected = collect_payload_children(node, root_type, (tnode_t **)children->data, 0, input);
 
     // Create new flattened node
     char    *base_name = get_base_nt_name(node->nt);
@@ -333,9 +333,10 @@ xform_flatten_recursive(tree_xform_t *ctx, tnode_t *node)
     // (avoids repeated reallocation from add_child loop)
     flat->kids     = ncc_list_alloc(collected);
     flat->num_kids = collected;
+    // ncc_list_alloc already sets len = collected, so kids->len is in sync
     for (int i = 0; i < collected; i++) {
-        tnode_t *child         = (tnode_t *)children->items[i];
-        flat->kids->items[i]   = child;
+        tnode_t *child         = (tnode_t *)children->data[i];
+        flat->kids->data[i]    = child;
         if (child) {
             child->parent = flat;
         }

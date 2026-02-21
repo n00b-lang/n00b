@@ -4,20 +4,22 @@
 
 The n00b core library provides the foundational runtime infrastructure:
 memory allocation with garbage collection, type-safe generic containers,
-threading and synchronization primitives, and algebraic data types.
+threading and synchronization primitives, algebraic data types, and a
+runtime type registry.
 
-The library is organized into six layers:
+The library is organized into seven layers:
 
 1. **Platform** &mdash; cross-platform types, TLS, atomics, futex.
 2. **Memory** &mdash; allocation hierarchy (raw &rarr; arena &rarr;
-   pool), mmap registry, GC, stop-the-world synchronization.
+   pool), mmap registry, GC, finalizers, stop-the-world synchronization.
 3. **Containers** &mdash; type-safe generic list, stack, array, linked
    list, dictionary, tree, and interval tree.
 4. **Algebraic types** &mdash; option, result, variant, tuple.
-5. **Utilities** &mdash; hashing, layout solver, buffer, string,
-   random, time, alignment, variadic support.
-6. **Runtime** &mdash; initialization, thread management, per-thread
-   state.
+5. **Synchronization** &mdash; mutex, reader-writer lock, condition
+   variable, data-structure locking, lock accounting.
+6. **Type system** &mdash; type registry, vtable, per-type metadata.
+7. **Runtime** &mdash; initialization, thread management, per-thread
+   state, utilities.
 
 ### Design principles
 
@@ -29,8 +31,11 @@ The library is organized into six layers:
 - **Public APIs never return bare pointers.** Fallible operations return
   `n00b_result_t(T)`, optional values return `n00b_option_t(T)`, arrays
   return `n00b_array_t(T)`.
-- **Minimal locking.** Spinlocks for hot paths, futex for thread
-  synchronization, lock-free reads on dictionaries.
+- **Error propagation via `!`.** ncc's postfix `!` operator unwraps a
+  `n00b_result_t` on success or returns early with the error &mdash;
+  like Rust's `?`.
+- **Minimal locking.** Reader-writer locks for containers, futex for
+  thread synchronization, lock-free reads on dictionaries.
 - **Keyword arguments.** Functions that allocate accept `.allocator` and
   other options via ncc's `_kargs` extension.
 
@@ -109,6 +114,8 @@ All allocation macros accept keyword arguments:
 |---------|---------|---------|
 | `.allocator` | `nullptr` | Use specific allocator (nullptr = runtime default) |
 | `.no_scan` | `false` | Don't scan this allocation for GC pointers |
+| `.finalizer` | `nullptr` | Finalizer callback registered at alloc time |
+| `.finalizer_data` | `nullptr` | Opaque pointer passed to the finalizer |
 | `.mem_debug` | `false` | Enable memory debug tracking |
 | `.debug_taint` | `false` | Enable taint tracking |
 
@@ -128,6 +135,11 @@ char *buf = n00b_alloc_array(char, 4096, .allocator = my_arena);
 
 // Flexible array member:
 my_flex_t *f = n00b_alloc_flex(my_flex_t, int, 50);
+
+// Allocate with a finalizer:
+resource_t *r = n00b_alloc(resource_t,
+                           .finalizer      = my_cleanup,
+                           .finalizer_data = extra_info);
 ```
 
 ### Allocator interface &mdash; `core/alloc_base.h`
@@ -249,13 +261,37 @@ void _n00b_gc_unregister_root(void *addr);
    all pointer fields.  A memo table (old&rarr;new) prevents
    double-copying.
 4. **Swap** &mdash; replace the from-space segments with to-space.
-5. **Cleanup** &mdash; unmap old segments.
+5. **Finalizers** &mdash; process the global finalizer list; run
+   callbacks for objects not found in the memo table (i.e., dead).
+6. **Cleanup** &mdash; unmap old segments.
 
 ### Root sources
 
 1. User-registered roots (`n00b_gc_register_root()`)
 2. All registered thread stacks
 3. `n00b_runtime_t::argv` and `envp`
+
+### Finalizers
+
+Objects that hold external resources (locks, file descriptors, etc.)
+register finalizers that run when the object is collected or freed:
+
+```c
+// Post-allocation registration:
+n00b_add_finalizer(obj, my_cleanup_fn, user_data);
+
+// At allocation time (avoids a lookup):
+my_type_t *obj = n00b_alloc(my_type_t,
+                            .finalizer      = my_cleanup_fn,
+                            .finalizer_data = user_data);
+```
+
+`n00b_free()` calls `n00b_run_and_remove_finalizers()` before
+deallocation.  The GC calls `n00b_process_finalizers()` during
+collection for objects that did not survive.
+
+Finalizer info is stored in `n00b_runtime_t::finalizers`, a list
+backed by the system pool (not GC-managed).
 
 ---
 
@@ -294,27 +330,304 @@ suspended (GC-safe) while blocked.
 
 ---
 
+## Synchronization
+
+### Lock infrastructure &mdash; `core/lock_common.h`
+
+All lock types (mutex, rwlock, condition variable) share a common base
+via the `N00B_COMMON_LOCK_BASE` macro:
+
+```c
+struct n00b_lock_base_t {
+    _Atomic(n00b_lock_base_t *) next_thread_lock;   // Per-thread chain
+    _Atomic(n00b_lock_base_t *) prev_thread_lock;
+    char                       *debug_name;
+    _Atomic n00b_core_lock_info_t data;              // Owner, nesting, type
+    n00b_alloc_info_t            allocation;
+    n00b_lock_log_t             *logs;               // Debug log
+    char                        *creation_loc;
+    uint32_t                     inited : 1;
+    uint32_t                     no_log : 1;
+};
+```
+
+Every lock operation records source location (`N00B_LOC_STRING()`) for
+crash debugging.  The per-thread lock chain (threaded through
+`n00b_thread_record_t::exclusive_locks`) allows inspecting held locks
+on crash or thread-exit cleanup:
+
+```c
+n00b_debug_thread_locks(thread, stderr);   // Dump one thread's locks
+n00b_debug_all_locks("lockdump.txt");      // Dump all threads' locks
+```
+
+### Mutex &mdash; `core/mutex.h`
+
+Futex-based mutex with spin-then-block, recursive locking, and lock
+accounting:
+
+```c
+n00b_mutex_t lock;
+n00b_mutex_init(&lock);
+
+n00b_mutex_lock(&lock);    // Blocks if contended
+n00b_mutex_unlock(&lock);  // Returns true if fully unlocked
+
+// System mutexes skip lock logging (for internal infrastructure):
+n00b_sys_mutex_init(&lock);
+```
+
+### Reader-writer lock &mdash; `core/rwlock.h`
+
+Futex-based reader-writer lock supporting multiple concurrent readers,
+exclusive writers, reader-to-writer upgrade, and nesting:
+
+```c
+n00b_rwlock_t rw;
+n00b_rw_init(&rw);
+
+n00b_rw_read_lock(&rw);     // Shared access
+// ... read data ...
+n00b_rw_unlock(&rw);
+
+n00b_rw_write_lock(&rw);    // Exclusive access
+// ... modify data ...
+n00b_rw_unlock(&rw);
+```
+
+### Condition variable &mdash; `core/condition.h`
+
+Enhanced condition variable with built-in mutex, epoch-based
+synchronization, selective wake via predicates, and value passing from
+notifier to waiters:
+
+```c
+n00b_condition_t cv;
+n00b_condition_init(&cv);
+
+// Waiter:
+n00b_condition_lock(&cv);
+void *result = n00b_condition_wait(&cv, .timeout = 5000000000);  // 5s
+n00b_condition_unlock(&cv);
+
+// Notifier:
+n00b_condition_lock(&cv);
+n00b_condition_notify(&cv, .value = my_data, .all = true);
+n00b_condition_unlock(&cv);
+```
+
+**Selective wake** &mdash; waiters specify a predicate value; the
+notifier sets a predicate and only matching waiters are woken:
+
+```c
+// Waiter: only wake for predicate 42
+void *r = n00b_condition_wait(&cv, .predicate = 42);
+
+// Notifier: wake waiters matching predicate 42
+n00b_condition_notify(&cv, .predicate = 42, .value = payload);
+```
+
+A custom predicate callback can be installed for complex matching:
+
+```c
+n00b_condition_set_callback(&cv, my_predicate_fn, cv_param);
+```
+
+**Epoch handshake** ensures the notify operation is atomic from the
+caller's perspective: notifier wakes waiters, all waiters process
+their predicates, then a two-phase epoch bump ensures consistent
+completion before anyone proceeds.
+
+**Keyword arguments for `n00b_condition_wait`:**
+
+| Keyword | Default | Purpose |
+|---------|---------|---------|
+| `.predicate` | `~0LL` (match any) | Predicate value to match |
+| `.timeout` | `0` (forever) | Timeout in nanoseconds |
+| `.auto_unlock` | `false` | Unlock CV after waking |
+| `.wake_param` | `nullptr` | Per-thread parameter for predicate callback |
+
+**Keyword arguments for `n00b_condition_notify`:**
+
+| Keyword | Default | Purpose |
+|---------|---------|---------|
+| `.predicate` | `0` | Predicate value for selective wake |
+| `.max` | `1` | Maximum waiters to wake |
+| `.value` | `nullptr` | Output value passed to woken waiters |
+| `.all` | `false` | Wake all matching waiters |
+| `.auto_unlock` | `false` | Unlock CV after notify completes |
+
+Convenience macros:
+
+```c
+n00b_condition_notify_one(cv)    // Wake one waiter
+n00b_condition_notify_all(cv)    // Wake all waiters
+```
+
+### Data-structure locking &mdash; `core/data_lock.h`
+
+Every mutable container stores an `n00b_rwlock_t *lock` field.  The
+data-lock helpers provide null-safe wrappers &mdash; when the lock
+pointer is non-null they acquire/release the rwlock; when null (for
+private or single-threaded use) they are no-ops:
+
+```c
+n00b_rwlock_t *lock = n00b_data_lock_new();  // nullptr during early init
+
+n00b_data_read_lock(lock);     // Shared access (no-op if lock is null)
+// ... read data ...
+n00b_data_unlock(lock);
+
+n00b_data_write_lock(lock);    // Exclusive access (no-op if lock is null)
+// ... modify data ...
+n00b_data_unlock(lock);
+```
+
+Default container constructors (`n00b_list_new`, `n00b_stack_new`) call
+`n00b_data_lock_new()` automatically.  Pass `false` as the locked
+parameter (e.g. `n00b_list_new(int, false)`) to create an unlocked
+container for single-threaded use.  Deprecated `_new_private` compat
+macros are still available.
+
+`n00b_finalize_data_lock()` is the finalizer callback that frees
+data-structure rwlocks when their owner is collected.
+
+---
+
+## Type system
+
+### Type registry &mdash; `core/type_info.h`
+
+The type registry maps `typehash(T)` (a compile-time 64-bit hash of
+the normalized type) to `n00b_type_info_t` metadata.  It is
+initialized during `n00b_init()` and stored on the runtime.
+
+```c
+typedef struct n00b_type_info_t {
+    const char              *name;
+    n00b_vtable_entry        core_vtable[N00B_BI_NUM_FUNCS];
+    n00b_ext_vtable_opt_t    ext_vtable;      // option: extension methods
+    uint32_t                 alloc_len;
+    n00b_option_t(uint32_t)  lock_offset;     // byte offset of rwlock field
+    n00b_literal_kind_t      literal_kind;
+    const char              *literal_modifier;
+} n00b_type_info_t;
+```
+
+**Registry API:**
+
+```c
+// Register a type:
+bool n00b_type_register(uint64_t type_hash, const n00b_type_info_t *info);
+
+// Look up by typehash:
+n00b_option_t(n00b_type_info_t *) n00b_type_lookup(uint64_t type_hash);
+
+// Look up by object pointer (reads typehash from allocation header):
+n00b_option_t(n00b_type_info_t *) n00b_type_info_for(void *obj);
+
+// Add an extension method to a registered type:
+bool n00b_type_add_method(uint64_t type_hash, const n00b_method_t *method);
+```
+
+Both lookup functions return `n00b_option_t` &mdash; absent means the
+type is not registered:
+
+```c
+auto info_opt = n00b_type_lookup(typehash(my_type_t));
+
+if (n00b_option_is_set(info_opt)) {
+    n00b_type_info_t *info = n00b_option_get(info_opt);
+    printf("Type: %s, size: %u\n", info->name, info->alloc_len);
+}
+```
+
+**Registration macros** simplify declaring built-in types:
+
+```c
+N00B_TYPE_REGISTER(my_type_t,
+    N00B_CORE_METHOD(N00B_BI_CONSTRUCTOR, my_ctor),
+    N00B_CORE_METHOD(N00B_BI_FINALIZER,   my_dtor),
+    N00B_LOCK_FIELD(my_type_t, lock),          // auto-finalize rwlock
+);
+```
+
+`N00B_LOCK_FIELD` sets `lock_offset` so the central finalizer can free
+the type's rwlock without per-object finalizer registration.
+
+### Vtable &mdash; `core/vtable.h`
+
+Defines the core vtable slot enumeration and extension method types.
+
+**Core vtable** &mdash; a fixed-size array of bare function pointers
+indexed by `n00b_builtin_type_fn`:
+
+| Slot | Purpose |
+|------|---------|
+| `N00B_BI_CONSTRUCTOR` | Object constructor |
+| `N00B_BI_FINALIZER` | Object finalizer |
+| `N00B_BI_TO_STRING` | Convert to string |
+| `N00B_BI_FORMAT` | Format for display |
+| `N00B_BI_COPY` / `N00B_BI_SHALLOW_COPY` | Deep/shallow copy |
+| `N00B_BI_EQ` / `N00B_BI_LT` / `N00B_BI_GT` | Comparison |
+| `N00B_BI_ADD` / `N00B_BI_SUB` / `N00B_BI_MUL` / `N00B_BI_DIV` / `N00B_BI_MOD` | Arithmetic |
+| `N00B_BI_LEN` | Length |
+| `N00B_BI_INDEX_GET` / `N00B_BI_INDEX_SET` | Indexing |
+| `N00B_BI_SLICE_GET` / `N00B_BI_SLICE_SET` | Slicing |
+| `N00B_BI_HASH` | Hashing |
+| `N00B_BI_RENDER` | Render to canvas |
+| `N00B_BI_GC_MAP` | GC pointer map |
+
+**Extension vtable** &mdash; an optional array of `n00b_method_t`,
+where each method carries full signature metadata:
+
+```c
+typedef struct n00b_method_t {
+    n00b_vtable_entry                  fn;          // Function pointer
+    const char                        *name;        // Method name
+    n00b_method_param_t                return_type; // Return type info
+    n00b_array_t(n00b_method_param_t)  params;      // Parameter type info
+} n00b_method_t;
+```
+
+To look up a core vtable entry for a managed object:
+
+```c
+n00b_vtable_entry fn = n00b_obj_core_method(obj, N00B_BI_TO_STRING);
+if (fn) {
+    // Call the to_string method
+}
+```
+
+---
+
 ## Thread management &mdash; `core/thread.h`
 
 ### Per-thread state
 
 ```c
-typedef struct n00b_thread_t {
+struct n00b_thread_t {
     union {
         struct { int32_t id; int32_t generation; } parts;
         uint64_t unique_id;
     } id_info;
 
-    void              *stack_base;
-    void              *stack_top;
-    n00b_mmap_info_t  *stack_map;
-    pthread_t          pthread_id;
-    n00b_futex_t       self_lock;
-    // ...
-} n00b_thread_t;
+    void                 *stack_base;
+    void                 *stack_top;
+    n00b_mmap_info_t     *stack_map;
+    pthread_t             pthread_id;
+    n00b_futex_t          self_lock;
+    n00b_futex_t          cv_wake;          // Per-thread futex for CV notification
+    n00b_thread_record_t *record;           // Pointer into rt->threads[slot]
+    n00b_option_t(pthread_attr_t) pthread_attrs;
+};
 
 extern thread_local n00b_thread_t __n00b_thread_self;
 ```
+
+The `n00b_thread_record_t` (in `rt->threads[]`) holds state visible
+to other threads: lock chains, condition-variable wait info, and
+generation counters for slot reuse.
 
 ### Thread-local access
 
@@ -322,7 +635,31 @@ extern thread_local n00b_thread_t __n00b_thread_self;
 n00b_thread_t *n00b_thread_self(void);
 int64_t        n00b_thread_unique_id(void);   // (slot << 32) | generation
 int32_t        n00b_thread_id(void);           // Slot index
+int32_t        n00b_thread_generation(void);   // Generation counter
 ```
+
+### Spawning threads
+
+`n00b_thread_spawn` returns `n00b_result_t` &mdash; the spawned
+thread on success, or an error code on failure:
+
+```c
+n00b_result_t(n00b_thread_t *) r = n00b_thread_spawn(my_fn, my_arg);
+
+if (n00b_result_is_ok(r)) {
+    n00b_thread_t *thread = n00b_result_get(r);
+    void *retval = n00b_thread_join(thread);
+}
+
+// Or with the ! operator for automatic error propagation:
+n00b_thread_t *thread = n00b_thread_spawn(my_fn, my_arg)!;
+```
+
+Possible error codes: `ENXIO` (runtime not initialized), `ENOMEM`
+(no thread slot available), or the `pthread_create` failure code.
+
+Spawned threads automatically participate in GC stop-the-world,
+register their stacks for scanning, and clean up locks on exit.
 
 ### Stack tracking
 
@@ -352,7 +689,7 @@ combination gets its own struct definition.
 
 ### List &mdash; `core/list.h`
 
-Growable dynamic array with spinlock:
+Growable dynamic array with reader-writer lock:
 
 ```c
 n00b_list_t(T)   x  = n00b_list_new(T);
@@ -373,13 +710,14 @@ n00b_list_sort(x, cmp);               // qsort
 n00b_list_remove_all(x, val);
 n00b_list_clear(x);
 
-n00b_list_foreach(x, var) { ... }     // Unlocked iteration
+n00b_list_foreach(x, var) { ... }     // Lock-aware iteration (no-op when unlocked)
 
 n00b_array_t(T) a = n00b_list_to_array(T, x);  // Move to fixed array
 ```
 
-All mutating operations acquire the spinlock.  `foreach` is explicitly
-unlocked &mdash; the caller must ensure exclusive access.
+All mutating operations acquire the write lock; reads acquire the
+read lock.  `foreach` is explicitly unlocked &mdash; the caller must
+ensure exclusive access.
 
 **Example:**
 
@@ -417,7 +755,8 @@ n00b_stack_foreach(s, var) { ... }
 
 ### Array &mdash; `core/array.h`
 
-Fixed-capacity, no lock:
+Fixed-capacity, no lock by default (pass `true` as third arg to
+`n00b_array_new` for thread-safe access):
 
 ```c
 n00b_array_t(T) a = n00b_array_new(T, 100);
@@ -501,12 +840,15 @@ n00b_interval_delete(t, target);
 
 ### Option &mdash; `core/option.h`
 
+Represents a value that may or may not be present (absence is not an
+error):
+
 ```c
 n00b_option_t(T)  opt = n00b_option_set(T, value);     // Some(value)
 n00b_option_t(T)  opt = n00b_option_none(T);            // None
 
 bool has = n00b_option_is_set(opt);
-T    val = n00b_option_get(opt);                         // UB if none
+T    val = n00b_option_get(opt);                         // Crashes if none
 T    val = n00b_option_get_or_else(opt, fallback);
 
 n00b_option_match(opt, set_expr, none_expr);
@@ -514,7 +856,28 @@ n00b_option_match(opt, set_expr, none_expr);
 n00b_option_t(T)  opt = n00b_option_from_nullable(T, ptr);  // nullptr → none
 ```
 
+Each unique `T` requires a prior `n00b_option_decl(T)`.  Common
+declarations (primitives, `void *`, `const char *`, and
+forward-declared core types) are centralized in `option.h`.
+
+**Example:**
+
+```c
+n00b_option_t(n00b_type_info_t *) info_opt = n00b_type_lookup(typehash(my_t));
+
+if (n00b_option_is_set(info_opt)) {
+    n00b_type_info_t *info = n00b_option_get(info_opt);
+    printf("Found type: %s\n", info->name);
+}
+else {
+    printf("Type not registered\n");
+}
+```
+
 ### Result &mdash; `core/result.h`
+
+Represents a value on success or an `n00b_err_t` (int, typically
+`errno`) on failure:
 
 ```c
 n00b_result_t(T)  r = n00b_result_ok(T, value);
@@ -522,12 +885,36 @@ n00b_result_t(T)  r = n00b_result_err(T, errno_val);
 
 bool ok  = n00b_result_is_ok(r);
 bool err = n00b_result_is_err(r);
-T    val = n00b_result_get(r);                // UB if err
-int  e   = n00b_result_get_err(r);            // UB if ok
+T    val = n00b_result_get(r);                // Crashes if err
+int  e   = n00b_result_get_err(r);            // Crashes if ok
 T    val = n00b_result_get_or_else(r, fallback);
 
 n00b_result_match(r, ok_expr, err_expr);
 ```
+
+Each unique `T` requires a prior `n00b_result_decl(T)`.  Common
+declarations (`int`, `void *`, `uint64_t`) are in `result.h`.
+
+#### Error propagation (`!`)
+
+ncc's postfix `!` operator works like Rust's `?` &mdash; it unwraps a
+result on success or returns early with the error:
+
+```c
+n00b_result_t(my_output_t)
+process_data(const char *path)
+{
+    // If thread_spawn fails, this function returns its error immediately.
+    n00b_thread_t *t = n00b_thread_spawn(worker_fn, work)!;
+
+    // Only reached on success.
+    return n00b_result_ok(my_output_t, do_work(t));
+}
+```
+
+The `!` operator requires the enclosing function to also return a
+`n00b_result_t` (with a compatible error type).  It only works with
+`n00b_result_t`, not `n00b_option_t`.
 
 #### POSIX wrappers
 
@@ -537,19 +924,31 @@ n00b_result_t(void*) r = n00b_check_mmap(mmap(...));
 n00b_result_t(long)  r = n00b_check_sysconf(_SC_PAGESIZE);
 ```
 
+#### When to use option vs result
+
+| Situation | Type |
+|-----------|------|
+| Value might be absent (lookup miss, not found) | `n00b_option_t(T)` |
+| Operation can fail (I/O error, invalid input) | `n00b_result_t(T)` |
+| Feature might not be available on this platform | `n00b_result_t` with `ENOTSUP` |
+| Bare pointer that is always valid (borrow/ownership) | `T *` |
+
 ### Variant &mdash; `core/variant.h`
 
-Tagged union with compile-time type checking:
+Tagged union with compile-time type checking.  The selector uses
+`typehash(T)` for O(1) integer comparison:
 
 ```c
 n00b_variant_decl(int, double, char *);
 
-n00b_variant_t(int, double, char *) v = n00b_variant_ctor(0, int, 42);
+n00b_variant_t(int, double, char *) v = n00b_variant_set(
+    n00b_variant_t(int, double, char *), int, 42);
 
-bool is_int = n00b_variant_is(v, 0);
-int  val    = n00b_variant_get(v, int);
+bool is_int  = n00b_variant_is_type(v, int);
+int  val     = n00b_variant_get(v, int);          // Asserts correct type
+int  val_alt = n00b_variant_get_or_else(v, int, 0);
 
-n00b_variant_match(v, handler);
+bool any_set = n00b_variant_is_set(v);            // selector != 0
 ```
 
 ### Tuple &mdash; `core/tuple.h`
@@ -594,7 +993,7 @@ See [docs/strings.md](strings.md) for the full string operations library.
 
 ### Buffer &mdash; `core/buffer.h`
 
-Mutable growable byte buffer with spinlock:
+Mutable growable byte buffer with reader-writer lock:
 
 ```c
 n00b_buffer_t *n00b_buffer_empty(void);
@@ -683,26 +1082,40 @@ See the [ncc documentation](ncc.md) for details on the `+` extension.
 ## Runtime initialization &mdash; `core/runtime.h`
 
 ```c
-typedef struct n00b_runtime_t {
-    n00b_array_t(char *)    argv, envp;
-    n00b_mmap_ctx_t         mmaps;
-    _Atomic(n00b_allocator_t *) default_allocator;
-    n00b_arena_t           *default_arena;
-    n00b_pool_t             gc_root_pool;
-    n00b_list_t(n00b_gc_root_t) gc_roots;
-    _Atomic(n00b_thread_t *) thread_list[N00B_THREADS_MAX];
-    n00b_futex_t            stw;
-    // ...
-} n00b_runtime_t;
+struct n00b_runtime_t {
+    n00b_array_t(char *)                argv, envp;
+    n00b_mmap_ctx_t                     mmaps;
+    _Atomic uint32_t                    next_thread_slot;
+    _Atomic uint32_t                    live_threads;
+    _Atomic bool                        startup_complete;
+    _Atomic(n00b_allocator_t *)         default_allocator;
+    n00b_arena_t                       *default_arena;
+    n00b_pool_t                         system_pool;
+    n00b_list_t(n00b_gc_root_t)         gc_roots;
+    n00b_list_t(n00b_finalizer_info_t *) finalizers;
+    n00b_dict_untyped_t                *type_registry;
+    n00b_thread_record_t                threads[N00B_THREADS_MAX];
+    n00b_base_allocator_t               slab_allocator;
+    n00b_futex_t                        stw;
+    uint32_t                            stw_nesting;
+};
+```
 
-void n00b_init(n00b_runtime_t *rt, int argc, char *argv[], +);
-    // keyword args:
-    //   .allocator      = nullptr  (nullptr = GC'd arena)
-    //   .envp           = nullptr
-    //   .numeric_locale = ""
-    //   .fd_limit       = 0
-    //   .max_threads    = N00B_THREADS_MAX
+```c
+void n00b_init(n00b_runtime_t *rt, int argc, char *argv[], ...);
+```
 
+**Keyword arguments:**
+
+| Keyword | Default | Purpose |
+|---------|---------|---------|
+| `.allocator` | `nullptr` | Allocator (nullptr = GC'd arena) |
+| `.envp` | `nullptr` | Environment pointer (nullptr = inherit) |
+| `.numeric_locale` | `""` | Numeric locale string |
+| `.fd_limit` | `0` | File descriptor limit (0 = don't change) |
+| `.max_threads` | `N00B_THREADS_MAX` | Maximum thread count |
+
+```c
 n00b_allocator_t *n00b_default_allocator(void);
 n00b_allocator_t *n00b_slab_allocator(void);
 ```
@@ -712,9 +1125,10 @@ n00b_allocator_t *n00b_slab_allocator(void);
 1. Cache page size, generate GC guard value.
 2. Initialize mmap registry with interval tree.
 3. Set up slab allocator (hidden system pool for metadata).
-4. Initialize GC root pool.
+4. Initialize GC root pool and finalizer list.
 5. Register main thread (capture stack base).
 6. Create default arena (GC-enabled) or use provided allocator.
+7. Initialize the type registry and register built-in types.
 
 **Example:**
 
@@ -725,7 +1139,7 @@ main(int argc, char **argv)
     n00b_runtime_t runtime;
     n00b_init(&runtime, argc, argv);
 
-    // Runtime is now live: allocator, GC, threading all ready.
+    // Runtime is now live: allocator, GC, threading, type registry all ready.
     // ...
 
     return 0;
@@ -812,6 +1226,26 @@ The `*_decl()` macro expands a struct with a `typeid()`-based tag.
 Each unique type combination gets its own struct &mdash; this is how
 type safety is enforced without language-level generics.
 
+### Error handling pattern
+
+Functions follow a strict convention based on their failure mode:
+
+```c
+// Fallible (can fail with an error code):
+n00b_result_t(n00b_thread_t *) r = n00b_thread_spawn(fn, arg);
+if (n00b_result_is_err(r)) { /* handle error */ }
+
+// Or propagate with !:
+n00b_thread_t *t = n00b_thread_spawn(fn, arg)!;
+
+// Optional (value may be absent, not an error):
+n00b_option_t(n00b_type_info_t *) info = n00b_type_lookup(hash);
+if (n00b_option_is_set(info)) { /* use it */ }
+
+// Infallible (always succeeds, returns bare pointer):
+n00b_thread_t *self = n00b_thread_self();
+```
+
 ### Keyword arguments
 
 Most functions that allocate accept optional keyword arguments:
@@ -820,20 +1254,24 @@ Most functions that allocate accept optional keyword arguments:
 n00b_alloc(my_struct_t, .allocator = arena, .no_scan = true)
 n00b_list_new_cap(int, 256, .allocator = my_alloc)
 n00b_init(&rt, argc, argv, .fd_limit = 1024)
+n00b_condition_wait(&cv, .timeout = 5000000000, .predicate = 42)
 ```
 
 ### Thread safety summary
 
 | Component | Mechanism |
 |-----------|-----------|
-| List, stack | Spinlock (mutating ops only) |
-| Array | No lock (caller-managed) |
+| List, stack | Reader-writer lock (auto-created, null-safe) |
+| Array | No lock by default (use `_new_locked` variant) |
+| Buffer | Reader-writer lock |
 | Linked list | No lock |
 | Dictionary | Lock-free reads, futex for migration |
+| Interval tree | Reader-writer lock |
 | Pool free list | Lock-free Treiber stack |
 | Arena | Atomic bump pointer, spinlock for segments |
 | Mmap registry | TID-based reentrant spinlock |
 | GC | Stop-the-world (futex-based) |
+| Type registry | Lock-free reads (dict-backed) |
 
 ---
 
@@ -845,18 +1283,29 @@ n00b_init(&rt, argc, argv, .fd_limit = 1024)
 | Allocate object | `n00b_alloc(T)` |
 | Allocate array | `n00b_alloc_array(T, N)` |
 | Free allocation | `n00b_free(ptr)` |
+| Register finalizer | `n00b_add_finalizer(obj, fn, data)` |
 | Register GC root | `n00b_gc_register_root(var)` |
 | Trigger collection | `n00b_collect(arena)` |
 | Stop the world | `n00b_stop_the_world()` |
+| Spawn thread | `n00b_thread_spawn(fn, arg)` |
+| Join thread | `n00b_thread_join(thread)` |
+| Get thread self | `n00b_thread_self()` |
 | Create list | `n00b_list_new(T)` |
 | Push to list | `n00b_list_push(list, val)` |
 | Create stack | `n00b_stack_new(T)` |
 | Create array | `n00b_array_new(T, N)` |
 | Create option | `n00b_option_set(T, val)` / `n00b_option_none(T)` |
 | Create result | `n00b_result_ok(T, val)` / `n00b_result_err(T, e)` |
+| Propagate error | `val = fallible_call()!` |
 | POSIX call check | `n00b_check_posix(syscall())` |
+| Look up type | `n00b_type_lookup(typehash(T))` |
+| Register type | `N00B_TYPE_REGISTER(T, ...)` |
+| Lock mutex | `n00b_mutex_lock(&m)` |
+| RW read lock | `n00b_rw_read_lock(&rw)` |
+| RW write lock | `n00b_rw_write_lock(&rw)` |
+| Wait on CV | `n00b_condition_wait(&cv, ...)` |
+| Notify CV | `n00b_condition_notify(&cv, ...)` |
 | Hash string | `n00b_string_hash(s)` |
 | Hash buffer | `n00b_buffer_hash(b)` |
 | Layout solve | `n00b_layout_calculate(items, results, n, avail)` |
-| Get thread self | `n00b_thread_self()` |
 | Default allocator | `n00b_default_allocator()` |

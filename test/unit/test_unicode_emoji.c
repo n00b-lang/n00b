@@ -18,7 +18,7 @@ TEST(test_is_emoji_presentation)
 
 TEST(test_emoji_scan_basic)
 {
-    n00b_string_t s = STR("\xF0\x9F\x98\x80"); // 😀
+    n00b_string_t s = *r"\xF0\x9F\x98\x80"; // 😀
     n00b_unicode_emoji_scan_result_t r = n00b_unicode_emoji_scan(s, 0);
     ASSERT(r.type != N00B_UNICODE_EMOJI_NONE);
     ASSERT_EQ(r.seq_bytes, 4);
@@ -27,7 +27,7 @@ TEST(test_emoji_scan_basic)
 TEST(test_emoji_scan_flag)
 {
     // 🇺🇸 = U+1F1FA U+1F1F8
-    n00b_string_t s = STR("\xF0\x9F\x87\xBA\xF0\x9F\x87\xB8");
+    n00b_string_t s = *r"\xF0\x9F\x87\xBA\xF0\x9F\x87\xB8";
     n00b_unicode_emoji_scan_result_t r = n00b_unicode_emoji_scan(s, 0);
     ASSERT_EQ(r.type, N00B_UNICODE_EMOJI_FLAG);
     ASSERT_EQ(r.seq_bytes, 8);
@@ -35,7 +35,7 @@ TEST(test_emoji_scan_flag)
 
 TEST(test_emoji_scan_not_emoji)
 {
-    n00b_string_t s = STR("Hello");
+    n00b_string_t s = *r"Hello";
     n00b_unicode_emoji_scan_result_t r = n00b_unicode_emoji_scan(s, 0);
     ASSERT_EQ(r.type, N00B_UNICODE_EMOJI_NONE);
     ASSERT_EQ(r.seq_bytes, 0);

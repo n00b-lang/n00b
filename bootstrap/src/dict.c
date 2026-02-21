@@ -376,19 +376,22 @@ try_again:;
     bool                    reset_epoch = false;
 
     if (!bucket->hv) {
-        if (atomic_add(&store->used_count, 1) >= store->threshold) {
+        uint32_t prev_used = atomic_add(&store->used_count, 1);
+        if (prev_used >= store->threshold) {
             unlock_bucket(bucket);
             dict_migrate(d);
             store = atomic_load_acq(&d->store);
             goto try_again;
         }
-        reset_epoch = true;
-        bucket->hv  = hv;
+        reset_epoch          = true;
+        bucket->hv           = hv;
+        bucket->insert_order = prev_used;
     }
     else {
         if (bucket_deleted(bucket)) {
-            reset_epoch = true;
-            bucket->flags &= ~FLAG_DELETED;
+            reset_epoch          = true;
+            bucket->insert_order = (uint32_t)atomic_load_acq(&store->used_count);
+            bucket->flags       &= ~FLAG_DELETED;
         }
         else {
             result = bucket->value;
@@ -396,7 +399,6 @@ try_again:;
     }
 
     if (reset_epoch) {
-        bucket->insert_order = (uint32_t)atomic_add(&store->used_count, 1);
         atomic_add(&d->length, 1);
     }
 

@@ -87,7 +87,7 @@
 //       Used in init_declarator branches 0 and 1
 //
 //   ({ ... })             - Statement expressions (compound literals with statements)
-//       primary_expression branch 6
+//       primary_expression branch 5
 //       Parses: int x = ({ int a = 1; a + 1; });
 //
 //   __extension__         - Suppress warnings for extensions
@@ -405,49 +405,50 @@ nt_branch(primary_expression, 5)
     end_nt();
 }
 
-// Plain identifier
+// [EXTENSION: GCC/Clang] __builtin_*(...) — compiler builtin function call.
+// Builtins may take types, expressions, or other non-standard arguments
+// Compiler builtin call with normal expression arguments.
+// Tries argument_expression_list first so inner ncc keywords (typehash, etc.)
+// are properly parsed and transformable.
 nt_branch(primary_expression, 6)
+{
+    start_nt();
+    required_nt(compiler_builtin);
+    required_op("(");
+    optional_nt(argument_expression_list);
+    required_op(")");
+    end_nt();
+}
+
+// Compiler builtin call with type arguments or other non-expression syntax
+// (e.g. __builtin_bit_cast(type, expr), __builtin_va_arg(ap, type)).
+// Falls back to balanced_token_sequence when argument_expression_list fails.
+nt_branch(primary_expression, 7)
+{
+    start_nt();
+    required_nt(compiler_builtin);
+    required_op("(");
+    optional_nt(balanced_token_sequence);
+    required_op(")");
+    end_nt();
+}
+
+// Plain identifier (also accepts __builtin_* in non-call positions)
+nt_branch(primary_expression, 8)
 {
     start_nt();
     required_nt(identifier);
     end_nt();
 }
 
-// [EXTENSION: GCC] __builtin_va_arg(ap, type) - extract value from va_list
-// Takes an expression and a type name as arguments.
-nt_branch(primary_expression, 7)
-{
-    start_nt();
-    required_keyword(kw_builtin_va_arg);
-    required_op("(");
-    required_nt(assignment_expression);
-    required_op(",");
-    required_nt(type_name);
-    required_op(")");
-    end_nt();
-}
-
-// [EXTENSION: GCC] __builtin_types_compatible_p(type1, type2) - check type compatibility
-// Takes two type names as arguments, returns 1 if compatible, 0 otherwise.
-nt_branch(primary_expression, 8)
-{
-    start_nt();
-    required_keyword(kw_builtin_types_compatible_p);
-    required_op("(");
-    required_nt(type_name);
-    required_op(",");
-    required_nt(type_name);
-    required_op(")");
-    end_nt();
-}
-
 // [EXTENSION: GCC] __extension__ expr - suppress warnings for GCC extensions
-// Just passes through to the following expression.
+// Accepts cast_expression to handle __extension__ (type)(compound_literal)
+// patterns common in intrinsic headers.
 nt_branch(primary_expression, 9)
 {
     start_nt();
     required_keyword(kw_gcc_extension);
-    required_nt(primary_expression);
+    required_nt(cast_expression);
     end_nt();
 }
 
@@ -1250,11 +1251,14 @@ nt_branch(direct_abstract_declarator, 1)
     end_nt();
 }
 
+// [EXTENSION: GCC/Windows] Allow __attribute__ inside parenthesized abstract declarators
+// e.g. void (__attribute__((__cdecl__)) *)(void) in function parameters
 nt_branch(direct_abstract_declarator, 2)
 {
     start_nt();
     base_case_only();
     required_op("(");
+    optional_nt(attribute_specifier_sequence);
     required_nt(abstract_declarator);
     required_op(")");
     end_nt();
@@ -1898,11 +1902,14 @@ nt_branch(declaration_specifier, 2)
     end_nt();
 }
 
+// [EXTENSION: GCC/Windows] Allow __attribute__ inside parenthesized declarators
+// e.g. typedef void (__attribute__((__cdecl__)) * _PHNDLR)(int);
 nt_branch(direct_declarator, 0)
 {
     start_nt();
     base_case_only();
     required_op("(");
+    optional_nt(attribute_specifier_sequence);
     required_nt(declarator);
     required_op(")");
     end_nt();
@@ -2981,19 +2988,53 @@ parse_translation_unit_st(lex_t *state, int *position, symtab_t *st)
         | NT_BIT(NT_generic_selection)
         | NT_BIT(NT_identifier);
 
+    // NTs where profiling shows success entries are stored but never
+    // retrieved as success hits.  These still benefit from fail memoization
+    // (bitmap), so we only skip the expensive heap-copy success path.
+    // Profiled on 655K-token Windows preprocessed headers (init.c).
+    static const nt_set_t skip_success_memo =
+        NT_BIT(NT_balanced_token)
+        | NT_BIT(NT_type_specifier_qualifier)
+        | NT_BIT(NT_type_specifier)
+        | NT_BIT(NT_typedef_name)
+        | NT_BIT(NT_attribute_specifier)
+        | NT_BIT(NT_external_declaration)
+        | NT_BIT(NT_parameter_type_list)
+        | NT_BIT(NT_init_declarator)
+        | NT_BIT(NT_declaration)
+        | NT_BIT(NT_member_declarator)
+        | NT_BIT(NT_unlabeled_statement)
+        | NT_BIT(NT_compound_statement)
+        | NT_BIT(NT_function_definition)
+        | NT_BIT(NT_function_body)
+        | NT_BIT(NT_function_specifier)
+        | NT_BIT(NT_jump_statement)
+        | NT_BIT(NT_struct_or_union_specifier)
+        | NT_BIT(NT_function_declarator)
+        | NT_BIT(NT_storage_class_specifier)
+        | NT_BIT(NT_block_item)
+        | NT_BIT(NT_member_declaration)
+        | NT_BIT(NT_primary_block)
+        | NT_BIT(NT_selection_statement)
+        | NT_BIT(NT_iteration_statement)
+        | NT_BIT(NT_expression_statement)
+        | NT_BIT(NT_label)
+        | NT_BIT(NT_labeled_statement);
+
     parser_t parser = {
-        .input          = state->input,
-        .lex            = state,
-        .tokens         = state->toks,
-        .num_tokens     = state->num_toks,
-        .pos            = *position,
-        .cur_node       = nullptr,
-        .recursive_node = nullptr,
-        .symtab         = st,
-        .label_table    = nullptr,
-        .memo           = nullptr,
-        .memo_size      = 0,
-        .no_memo        = skip_memo,
+        .input            = state->input,
+        .lex              = state,
+        .tokens           = state->toks,
+        .num_tokens       = state->num_toks,
+        .pos              = *position,
+        .cur_node         = nullptr,
+        .recursive_node   = nullptr,
+        .symtab           = st,
+        .label_table      = nullptr,
+        .memo_fail        = {0},
+        .memo_num_pos     = 0,
+        .no_memo          = skip_memo,
+        .no_memo_success  = skip_success_memo,
     };
 
     memo_init(&parser);

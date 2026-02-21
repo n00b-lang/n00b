@@ -235,24 +235,24 @@ n00b_unicode_numeric_value(n00b_codepoint_t cp)
     return result;
 }
 
-n00b_unicode_opt_i32_t
+n00b_option_t(int32_t)
 n00b_unicode_digit_value(n00b_codepoint_t cp)
 {
     if (cp >= 0x110000)
-        return (n00b_unicode_opt_i32_t){.has_value = false};
+        return n00b_option_none(int32_t);
     const uint32_t *entry = n00b_unicode_sparse_lookup(n00b_unicode_numeric_index,
                                                        n00b_unicode_numeric_index_len,
                                                        n00b_unicode_numeric_data,
                                                        cp);
     if (!entry)
-        return (n00b_unicode_opt_i32_t){.has_value = false};
+        return n00b_option_none(int32_t);
     uint32_t type = entry[1];
     if (type != 1 && type != 2)
-        return (n00b_unicode_opt_i32_t){.has_value = false}; // Only Decimal and Digit
+        return n00b_option_none(int32_t); // Only Decimal and Digit
     int32_t val = (int32_t)entry[2];
     if (val < 0 || val > 9)
-        return (n00b_unicode_opt_i32_t){.has_value = false};
-    return (n00b_unicode_opt_i32_t){.has_value = true, .value = val};
+        return n00b_option_none(int32_t);
+    return n00b_option_set(int32_t, val);
 }
 
 int32_t

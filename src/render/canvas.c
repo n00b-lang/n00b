@@ -1,4 +1,4 @@
-/**
+/*
  * Canvas: compositing surface with pluggable renderer backend.
  */
 
@@ -38,40 +38,36 @@ canvas_alloc_frames(n00b_canvas_t *c)
     }
 
     // clang-format off
-    c->frame      = n00b_alloc_array(n00b_rcell_t,
+    c->frame      = n00b_alloc_array_with_opts(n00b_rcell_t,
 				     total,
-				     .allocator = c->allocator,
-				     .no_scan = true);
-    c->prev_frame = n00b_alloc_array(n00b_rcell_t,
+				     &(n00b_alloc_opts_t){.allocator = c->allocator,
+				                          .no_scan = true});
+    c->prev_frame = n00b_alloc_array_with_opts(n00b_rcell_t,
 				     total,
-				     .allocator = c->allocator,
-				     .no_scan = true);
+				     &(n00b_alloc_opts_t){.allocator = c->allocator,
+				                          .no_scan = true});
 }
 
 // -------------------------------------------------------------------
 // Lifecycle
 // -------------------------------------------------------------------
 
-n00b_canvas_t *
-n00b_canvas_new(const n00b_renderer_vtable_t *vtable) _kargs
+void
+n00b_canvas_init(n00b_canvas_t *c) _kargs
 {
-    n00b_allocator_t *allocator = nullptr;
+    const n00b_renderer_vtable_t           *vtable    = nullptr;
+    n00b_allocator_t                       *allocator = nullptr;
+    n00b_conduit_topic_t(n00b_buffer_t *)  *output    = nullptr;
 }
 {
     assert(vtable);
-
-    n00b_canvas_t *c = n00b_alloc(n00b_canvas_t, .allocator = allocator);
 
     c->lock      = n00b_data_lock_new();
     c->vtable    = vtable;
     c->allocator = allocator;
 
-    if (c->lock) {
-        n00b_add_finalizer(c, n00b_finalize_data_lock, c->lock);
-    }
-
-    // Initialize backend.
-    c->backend_ctx = vtable->init();
+    // Initialize backend, passing the output topic.
+    c->backend_ctx = vtable->init(output);
     c->caps        = vtable->capabilities(c->backend_ctx);
 
     // Get initial size from backend.
@@ -84,8 +80,6 @@ n00b_canvas_new(const n00b_renderer_vtable_t *vtable) _kargs
     }
 
     c->needs_full_redraw = true;
-
-    return c;
 }
 
 void
@@ -105,8 +99,8 @@ n00b_canvas_destroy(n00b_canvas_t *c)
     if (c->prev_frame) {
         n00b_free(c->prev_frame);
     }
-    if (c->planes) {
-        n00b_free(c->planes);
+    if (c->planes.data) {
+        n00b_list_free(c->planes);
     }
 
     n00b_free(c);
@@ -121,19 +115,11 @@ n00b_canvas_add_plane(n00b_canvas_t *c, n00b_plane_t *p)
 {
     canvas_lock(c);
 
-    if (c->num_planes >= c->planes_cap) {
-        n00b_isize_t   new_cap = c->planes_cap ? c->planes_cap * 2 : 8;
-        n00b_plane_t **new_arr
-            = n00b_alloc_array(n00b_plane_t *, new_cap, .allocator = c->allocator);
-        if (c->planes) {
-            memcpy(new_arr, c->planes, c->num_planes * sizeof(n00b_plane_t *));
-            n00b_free(c->planes);
-        }
-        c->planes     = new_arr;
-        c->planes_cap = new_cap;
+    if (!c->planes.data) {
+        c->planes = n00b_list_new(n00b_plane_ptr_t);
     }
 
-    c->planes[c->num_planes++] = p;
+    n00b_list_push(c->planes, p);
 
     canvas_unlock(c);
 }
@@ -143,13 +129,10 @@ n00b_canvas_remove_plane(n00b_canvas_t *c, n00b_plane_t *p)
 {
     canvas_lock(c);
 
-    for (n00b_isize_t i = 0; i < c->num_planes; i++) {
-        if (c->planes[i] == p) {
-            // Shift remaining.
-            for (n00b_isize_t j = i; j + 1 < c->num_planes; j++) {
-                c->planes[j] = c->planes[j + 1];
-            }
-            c->num_planes--;
+    size_t n = c->planes.len;
+    for (size_t i = 0; i < n; i++) {
+        if (n00b_list_get(c->planes, i) == p) {
+            (void)n00b_list_delete(c->planes, i);
             canvas_unlock(c);
             return true;
         }
@@ -186,13 +169,15 @@ n00b_canvas_render(n00b_canvas_t *c)
     }
 
     // GUI prepare hook.
-    if (c->vtable->prepare_gui && c->num_planes > 0) {
-        c->vtable->prepare_gui(c->backend_ctx, c->planes, c->num_planes);
+    n00b_isize_t n_planes = (n00b_isize_t)c->planes.len;
+
+    if (c->vtable->prepare_gui && n_planes > 0) {
+        c->vtable->prepare_gui(c->backend_ctx, c->planes.data, n_planes);
     }
 
     // Flatten plane hierarchy.
     n00b_array_t(n00b_composite_entry_t) flat
-        = n00b_composite_flatten(c->planes, c->num_planes);
+        = n00b_composite_flatten(c->planes.data, n_planes);
 
     // Composite into frame.
     n00b_composite_render(flat.data,

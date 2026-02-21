@@ -1,0 +1,13 @@
+[constants]
+toolchain = '/usr/local/osxcross'
+
+[binaries]
+c = toolchain / 'bin/arm64-apple-darwin-clang'
+ar = toolchain / 'bin/arm64-apple-darwin-ar'
+strip = toolchain / 'bin/arm64-apple-darwin-strip'
+
+[host_machine]
+system = 'darwin'
+cpu_family = 'aarch64'
+cpu = 'arm64'
+endian = 'little'

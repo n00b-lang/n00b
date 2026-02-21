@@ -14,6 +14,7 @@
 #include "n00b.h"
 #include "core/rt_access.h"
 #include "core/option.h"
+#include "core/result.h"
 
 #if !defined(_WIN32)
 n00b_option_decl(pthread_attr_t);
@@ -136,6 +137,29 @@ n00b_thread_generation(void)
 {
     return __n00b_thread_self.id_info.parts.generation;
 }
+
+/**
+ * @brief Spawn a new thread with full n00b lifecycle.
+ *
+ * Reserves a thread slot, creates a pthread wrapped in the n00b
+ * launcher (GC registration, STW participation, lock cleanup on exit).
+ *
+ * @param fn   Thread entry point.
+ * @param arg  Argument passed to @p fn.
+ * @return     The spawned thread, or an error code (ENXIO, ENOMEM, or
+ *             the pthread_create failure code).
+ *
+ * @pre  Runtime must be initialized.
+ * @post The new thread participates in GC stop-the-world.
+ */
+extern n00b_result_t(n00b_thread_t *) n00b_thread_spawn(void *(*fn)(void *), void *arg);
+
+/**
+ * @brief Join a spawned thread.
+ * @param thread  Thread to join (from n00b_thread_spawn).
+ * @return        Thread return value.
+ */
+extern void *n00b_thread_join(n00b_thread_t *thread);
 
 #if defined __N00B_THREAD_INTERNAL
 /**

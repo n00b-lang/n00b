@@ -314,7 +314,7 @@ n00b_unicode_idna_to_ascii_raw(n00b_allocator_t          *allocator,
             if (err)
                 *err = N00B_UNICODE_IDNA_DISALLOWED;
             n00b_free(mapped);
-            return n00b_string_empty(allocator);
+            return n00b_string_empty(.allocator = allocator);
         }
     }
     mapped[map_pos] = '\0';
@@ -381,7 +381,7 @@ n00b_unicode_idna_to_ascii_raw(n00b_allocator_t          *allocator,
                 if (!validate_label_context(label_cps, label_cp_count, err)) {
                     n00b_free(label_cps);
                     n00b_free(result);
-                    return n00b_string_empty(allocator);
+                    return n00b_string_empty(.allocator = allocator);
                 }
 
                 // Add ACE prefix
@@ -415,12 +415,11 @@ n00b_unicode_idna_to_ascii_raw(n00b_allocator_t          *allocator,
         if (err)
             *err = N00B_UNICODE_IDNA_DOMAIN_TOO_LONG;
         n00b_free(result);
-        return n00b_string_empty(allocator);
+        return n00b_string_empty(.allocator = allocator);
     }
 
-    int64_t       cp_count = n00b_unicode_utf8_count_codepoints_raw(result, res_pos);
     n00b_string_t out
-        = n00b_string_from_raw(allocator, result, res_pos, cp_count >= 0 ? cp_count : 0);
+        = n00b_string_from_raw(result, res_pos, .allocator = allocator);
     n00b_free(result);
     return out;
 }

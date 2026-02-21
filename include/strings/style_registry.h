@@ -19,6 +19,9 @@
 
 #include "strings/style_ops.h"
 #include "core/dict_untyped.h"
+#include "core/option.h"
+
+n00b_option_decl(n00b_text_style_t *);
 
 // ===================================================================
 // Initialization
@@ -43,16 +46,16 @@ void n00b_str_registry_init(void);
 /** @brief Register a named style.
  *  @param name   NUL-terminated name (e.g., `"em"`).
  *  @param style  Style to associate (copied into registry).
- *  @pre Registry has been initialized.
+ *  @pre `n00b_str_registry_init()` has been called.
  */
 void n00b_str_style_register(const char *name,
                               const n00b_text_style_t *style);
 
 /** @brief Look up a named style.
  *  @param name  NUL-terminated name.
- *  @return The style pointer, or nullptr if not found.
+ *  @return The style, or none if not found.
  */
-n00b_text_style_t *n00b_str_style_lookup(const char *name);
+n00b_option_t(n00b_text_style_t *) n00b_str_style_lookup(const char *name);
 
 // ===================================================================
 // Text roles
@@ -61,12 +64,13 @@ n00b_text_style_t *n00b_str_style_lookup(const char *name);
 /** @brief Register a text role.
  *  @param name   NUL-terminated role name (e.g., `"@code"`).
  *  @param style  Style to associate (copied into registry).
+ *  @pre `n00b_str_registry_init()` has been called.
  */
 void n00b_str_role_register(const char *name,
                              const n00b_text_style_t *style);
 
 /** @brief Look up a text role.
  *  @param name  NUL-terminated role name.
- *  @return The style pointer, or nullptr if not found.
+ *  @return The style, or none if not found.
  */
-n00b_text_style_t *n00b_str_role_lookup(const char *name);
+n00b_option_t(n00b_text_style_t *) n00b_str_role_lookup(const char *name);

@@ -22,6 +22,7 @@
  */
 typedef struct {
     int64_t len;    /**< Length of data in bytes */
+    int64_t cap;    /**< Allocated capacity of data[] (0 = exact allocation, len==cap) */
     char    data[]; /**< Flexible array member containing the data */
 } ncc_buf_t;
 

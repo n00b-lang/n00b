@@ -43,6 +43,7 @@
 #pragma once
 
 #include "n00b.h"
+#include "core/array.h"
 
 // ====================================================================
 // Layout dimension
@@ -100,6 +101,11 @@ typedef struct {
     int64_t size;          /**< **Output**: final computed size. */
 } n00b_layout_result_t;
 
+/** @brief Array of layout constraint descriptors. */
+n00b_array_decl(n00b_layout_t);
+/** @brief Array of layout result slots. */
+n00b_array_decl(n00b_layout_result_t);
+
 // ====================================================================
 // API
 // ====================================================================
@@ -121,19 +127,18 @@ n00b_layout_resolve_dim(const n00b_layout_dim_t *dim, int64_t available)
 }
 
 /**
- * @brief Calculate 1D layout for `n` items within `available` space.
+ * @brief Calculate 1D layout for items within `available` space.
  *
- * @param items     Array of `n` constraint descriptors (read-only).
- * @param results   Array of `n` result slots (written on output).
- * @param n         Number of items.
+ * @param items     Array of constraint descriptors (read-only).
+ * @param results   Array of result slots (written on output).
+ *                  Must have the same length as @p items.
  * @param available Total space to distribute among items.
  *
- * @pre  `items` and `results` point to arrays of at least `n` elements.
- * @post `results[i].size` holds the final allocation for each item.
- *       The sum of all sizes equals `available` (or less if all items
- *       hit their maximums).
+ * @pre  @p items.len == @p results.len.
+ * @post `n00b_array_get(results, i).size` holds the final allocation
+ *       for each item.  The sum of all sizes equals `available` (or
+ *       less if all items hit their maximums).
  */
-extern void n00b_layout_calculate(const n00b_layout_t  *items,
-                                   n00b_layout_result_t *results,
-                                   n00b_isize_t          n,
-                                   int64_t               available);
+extern void n00b_layout_calculate(n00b_array_t(n00b_layout_t)        items,
+                                   n00b_array_t(n00b_layout_result_t) results,
+                                   int64_t                            available);

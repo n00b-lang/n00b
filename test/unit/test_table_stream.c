@@ -25,7 +25,7 @@ make_str(const char *s)
 static void
 test_ring_buffer_basic(void)
 {
-    n00b_table_t *t = n00b_table_new(.num_cols = 1, .max_rows = 3);
+    n00b_table_t *t = n00b_new_kargs(n00b_table_t, table, .num_cols = 1, .max_rows = 3);
 
     // Add 3 rows — should all fit.
     n00b_table_add_cell(t, make_str("Row 0"));
@@ -45,7 +45,7 @@ test_ring_buffer_basic(void)
 static void
 test_ring_buffer_eviction(void)
 {
-    n00b_table_t *t = n00b_table_new(.num_cols = 1, .max_rows = 3);
+    n00b_table_t *t = n00b_new_kargs(n00b_table_t, table, .num_cols = 1, .max_rows = 3);
 
     // Add 5 rows — first two should be evicted.
     for (int i = 0; i < 5; i++) {
@@ -66,7 +66,7 @@ test_ring_buffer_eviction(void)
 static void
 test_ring_buffer_render(void)
 {
-    n00b_table_t *t = n00b_table_new(.num_cols = 1, .max_rows = 2);
+    n00b_table_t *t = n00b_new_kargs(n00b_table_t, table, .num_cols = 1, .max_rows = 2);
 
     // Add 4 rows; only last 2 should be visible.
     for (int i = 0; i < 4; i++) {
@@ -76,7 +76,7 @@ test_ring_buffer_render(void)
         n00b_table_end_row(t);
     }
 
-    n00b_plane_t *p = n00b_table_render(t, 40);
+    n00b_plane_t *p = n00b_table_render(t, .width = 40);
 
     assert(p != nullptr);
     assert(t->rows.len == 2);
@@ -88,13 +88,13 @@ test_ring_buffer_render(void)
 static void
 test_ring_buffer_invalidation(void)
 {
-    n00b_table_t *t = n00b_table_new(.num_cols = 1, .max_rows = 3);
+    n00b_table_t *t = n00b_new_kargs(n00b_table_t, table, .num_cols = 1, .max_rows = 3);
 
     n00b_table_add_cell(t, make_str("Row 0"));
     n00b_table_end_row(t);
 
     // Render to cache layout.
-    n00b_table_render(t, 40);
+    n00b_table_render(t, .width = 40);
     assert(t->layout_valid);
 
     // Add another row — should invalidate.
@@ -110,7 +110,7 @@ test_ring_buffer_invalidation(void)
 static void
 test_unlimited_mode(void)
 {
-    n00b_table_t *t = n00b_table_new(.num_cols = 1);
+    n00b_table_t *t = n00b_new_kargs(n00b_table_t, table, .num_cols = 1);
 
     // max_rows = 0 means unlimited.
     for (int i = 0; i < 100; i++) {
@@ -215,5 +215,6 @@ main(int argc, char **argv)
     test_unlimited_mode_gc_stress();
 
     printf("All table streaming tests passed.\n");
+    n00b_shutdown();
     return 0;
 }

@@ -1,0 +1,13 @@
+[constants]
+toolchain = '/usr'
+
+[binaries]
+c = toolchain / 'bin/aarch64-linux-gnu-gcc'
+ar = toolchain / 'bin/aarch64-linux-gnu-ar'
+strip = toolchain / 'bin/aarch64-linux-gnu-strip'
+
+[host_machine]
+system = 'linux'
+cpu_family = 'aarch64'
+cpu = 'aarch64'
+endian = 'little'

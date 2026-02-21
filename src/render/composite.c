@@ -1,4 +1,4 @@
-/**
+/*
  * Compositing pipeline: flatten, z-sort, composite, degrade.
  */
 
@@ -22,8 +22,9 @@ static void
 flatten_grow(flatten_ctx_t *ctx)
 {
     n00b_isize_t new_cap = ctx->capacity ? ctx->capacity * 2 : 16;
-    n00b_composite_entry_t *new_arr = n00b_alloc_array(
-        n00b_composite_entry_t, new_cap, .no_scan = true);
+    n00b_composite_entry_t *new_arr = n00b_alloc_array_with_opts(
+        n00b_composite_entry_t, new_cap,
+        &(n00b_alloc_opts_t){.no_scan = true});
 
     if (ctx->entries) {
         memcpy(new_arr, ctx->entries,
@@ -97,8 +98,8 @@ flatten_recurse(flatten_ctx_t *ctx, n00b_plane_t *p,
         .clip_h = my_clip_h,
     };
 
-    for (n00b_isize_t i = 0; i < p->num_children; i++) {
-        flatten_recurse(ctx, p->children[i], abs_x, abs_y, abs_z,
+    for (size_t i = 0; i < p->children.len; i++) {
+        flatten_recurse(ctx, p->children.data[i], abs_x, abs_y, abs_z,
                         my_clip_x, my_clip_y, my_clip_w, my_clip_h);
     }
 }

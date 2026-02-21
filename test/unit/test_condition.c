@@ -198,10 +198,15 @@ main(int argc, char *argv[])
     n00b_init(&rt, argc, argv);
 
     printf("test_condition:\n");
+    fflush(stdout);
     test_basic_wait_notify();
+    fflush(stdout);
     test_predicate_wake();
+    fflush(stdout);
     test_timeout();
+    fflush(stdout);
 
     printf("All condition variable tests passed.\n");
+    n00b_shutdown();
     return 0;
 }

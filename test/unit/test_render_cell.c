@@ -185,5 +185,6 @@ main(int argc, char **argv)
     test_cell_size();
 
     printf("All render cell tests passed.\n");
+    n00b_shutdown();
     return 0;
 }

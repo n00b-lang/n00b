@@ -1,4 +1,4 @@
-/**
+/*
  * Backend registry: static registration, name lookup, dynamic loading.
  */
 
@@ -11,6 +11,10 @@
 #include <dlfcn.h>
 #endif
 #include "n00b.h"
+#include "core/alloc.h"
+#include "core/string.h"
+#include "core/list.h"
+#include "strings/string_ops.h"
 #include "render/backend_registry.h"
 
 #if defined(_WIN32)
@@ -86,7 +90,7 @@ n00b_dlerror(void)
 #define MAX_BACKENDS 32
 
 typedef struct {
-    const char                   *name;
+    n00b_string_t                 name;
     const n00b_renderer_vtable_t *vtable;
 } registry_entry_t;
 
@@ -99,16 +103,16 @@ static bool              registry_initialized = false;
 // -------------------------------------------------------------------
 
 void
-n00b_renderer_register(const char                   *name,
+n00b_renderer_register(n00b_string_t                 name,
                         const n00b_renderer_vtable_t *vtable)
 {
-    if (!name || !vtable) {
+    if (!name.data || !vtable) {
         return;
     }
 
     // Check for duplicate.
     for (n00b_isize_t i = 0; i < registry_count; i++) {
-        if (strcmp(registry[i].name, name) == 0) {
+        if (n00b_unicode_str_eq(registry[i].name, name)) {
             // Update existing.
             registry[i].vtable = vtable;
             return;
@@ -126,14 +130,14 @@ n00b_renderer_register(const char                   *name,
 }
 
 n00b_option_t(n00b_renderer_vtable_ptr_t)
-n00b_renderer_find(const char *name)
+n00b_renderer_find(n00b_string_t name)
 {
-    if (!name) {
+    if (!name.data) {
         return n00b_option_none(n00b_renderer_vtable_ptr_t);
     }
 
     for (n00b_isize_t i = 0; i < registry_count; i++) {
-        if (strcmp(registry[i].name, name) == 0) {
+        if (n00b_unicode_str_eq(registry[i].name, name)) {
             return n00b_option_set(n00b_renderer_vtable_ptr_t,
                                     registry[i].vtable);
         }
@@ -142,21 +146,16 @@ n00b_renderer_find(const char *name)
     return n00b_option_none(n00b_renderer_vtable_ptr_t);
 }
 
-void
-n00b_renderer_list(const char ***out_names, n00b_isize_t *out_count)
+n00b_list_t(n00b_string_t)
+n00b_renderer_list(void)
 {
-    static const char *names[MAX_BACKENDS];
+    n00b_list_t(n00b_string_t) result = n00b_list_new(n00b_string_t);
 
     for (n00b_isize_t i = 0; i < registry_count; i++) {
-        names[i] = registry[i].name;
+        n00b_list_push(result, registry[i].name);
     }
 
-    if (out_names) {
-        *out_names = names;
-    }
-    if (out_count) {
-        *out_count = registry_count;
-    }
+    return result;
 }
 
 // -------------------------------------------------------------------
@@ -164,9 +163,9 @@ n00b_renderer_list(const char ***out_names, n00b_isize_t *out_count)
 // -------------------------------------------------------------------
 
 n00b_result_t(n00b_renderer_vtable_ptr_t)
-n00b_renderer_load(const char *path)
+n00b_renderer_load(n00b_string_t path)
 {
-    if (!path) {
+    if (!path.data) {
         return n00b_result_err(n00b_renderer_vtable_ptr_t, EINVAL);
     }
 
@@ -201,16 +200,18 @@ n00b_renderer_load(const char *path)
         return n00b_result_err(n00b_renderer_vtable_ptr_t, EINVAL);
     }
 
-    n00b_renderer_register(plugin->name, plugin->vtable);
+    n00b_renderer_register(n00b_string_from_cstr(plugin->name),
+                            plugin->vtable);
 
     // Don't dlclose — the vtable is still in use.
     return n00b_result_ok(n00b_renderer_vtable_ptr_t, plugin->vtable);
+#endif
 }
 
 n00b_result_t(n00b_renderer_vtable_ptr_t)
-n00b_renderer_load_by_name(const char *name)
+n00b_renderer_load_by_name(n00b_string_t name)
 {
-    if (!name) {
+    if (!name.data) {
         return n00b_result_err(n00b_renderer_vtable_ptr_t, EINVAL);
     }
 
@@ -227,6 +228,8 @@ n00b_renderer_load_by_name(const char *name)
     const char *ext = "dll";
 #elif defined(__APPLE__)
     const char *ext = "dylib";
+#elif defined(_WIN32)
+    const char *ext = "dll";
 #else
     const char *ext = "so";
 #endif
@@ -253,10 +256,10 @@ n00b_renderer_load_by_name(const char *name)
             }
 
             snprintf(path_buf, sizeof(path_buf),
-                     "%s/libn00b_render_%s.%s", dir, name, ext);
+                     "%s/libn00b_render_%s.%s", dir, name.data, ext);
 
             n00b_result_t(n00b_renderer_vtable_ptr_t) res =
-                n00b_renderer_load(path_buf);
+                n00b_renderer_load(n00b_string_from_cstr(path_buf));
 
             if (n00b_result_is_ok(res)) {
                 return res;
@@ -269,10 +272,10 @@ n00b_renderer_load_by_name(const char *name)
     const char *home = getenv("HOME");
     if (home) {
         snprintf(path_buf, sizeof(path_buf),
-                 "%s/.n00b/renderers/libn00b_render_%s.%s", home, name, ext);
+                 "%s/.n00b/renderers/libn00b_render_%s.%s", home, name.data, ext);
 
         n00b_result_t(n00b_renderer_vtable_ptr_t) res =
-            n00b_renderer_load(path_buf);
+            n00b_renderer_load(n00b_string_from_cstr(path_buf));
 
         if (n00b_result_is_ok(res)) {
             return res;
@@ -281,10 +284,10 @@ n00b_renderer_load_by_name(const char *name)
 
     // Search 3: /usr/local/lib/n00b/renderers/.
     snprintf(path_buf, sizeof(path_buf),
-             "/usr/local/lib/n00b/renderers/libn00b_render_%s.%s", name, ext);
+             "/usr/local/lib/n00b/renderers/libn00b_render_%s.%s", name.data, ext);
 
     n00b_result_t(n00b_renderer_vtable_ptr_t) res =
-        n00b_renderer_load(path_buf);
+        n00b_renderer_load(n00b_string_from_cstr(path_buf));
 
     if (n00b_result_is_ok(res)) {
         return res;
@@ -305,7 +308,7 @@ n00b_renderer_registry_init(void)
     }
     registry_initialized = true;
 
-    n00b_renderer_register("stream", &n00b_renderer_stream);
-    n00b_renderer_register("ansi",   &n00b_renderer_ansi);
-    n00b_renderer_register("dumb",   &n00b_renderer_dumb);
+    n00b_renderer_register(*r"stream", &n00b_renderer_stream);
+    n00b_renderer_register(*r"ansi",   &n00b_renderer_ansi);
+    n00b_renderer_register(*r"dumb",   &n00b_renderer_dumb);
 }

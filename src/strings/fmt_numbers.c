@@ -25,8 +25,9 @@ static const char hex_upper[] = "0123456789ABCDEF";
 // ===================================================================
 
 n00b_string_t
-n00b_fmt_hex(uint64_t value, bool caps) _kargs
+n00b_fmt_hex(uint64_t value) _kargs
 {
+    bool              caps      = false;
     n00b_allocator_t *allocator = nullptr;
 }
 {
@@ -34,7 +35,7 @@ n00b_fmt_hex(uint64_t value, bool caps) _kargs
         allocator = nullptr;
 
     if (!value) {
-        return n00b_string_from_raw(allocator, "0", 1, 1);
+        return n00b_string_from_raw("0", 1, .allocator = allocator);
     }
 
     const char *map               = caps ? hex_upper : hex_lower;
@@ -47,7 +48,7 @@ n00b_fmt_hex(uint64_t value, bool caps) _kargs
     }
 
     int len = MAX_INT_LEN - 1 - n;
-    return n00b_string_from_raw(allocator, repr + n, len, len);
+    return n00b_string_from_raw(repr + n, len, .allocator = allocator);
 }
 
 // ===================================================================
@@ -55,8 +56,9 @@ n00b_fmt_hex(uint64_t value, bool caps) _kargs
 // ===================================================================
 
 n00b_string_t
-n00b_fmt_int(int64_t value, bool commas) _kargs
+n00b_fmt_int(int64_t value) _kargs
 {
+    bool              commas    = false;
     n00b_allocator_t *allocator = nullptr;
 }
 {
@@ -64,7 +66,7 @@ n00b_fmt_int(int64_t value, bool commas) _kargs
         allocator = nullptr;
 
     if (!value) {
-        return n00b_string_from_raw(allocator, "0", 1, 1);
+        return n00b_string_from_raw("0", 1, .allocator = allocator);
     }
 
     bool     neg                = false;
@@ -105,12 +107,13 @@ n00b_fmt_int(int64_t value, bool commas) _kargs
     }
 
     int len = MAX_INT_LEN - 1 - n;
-    return n00b_string_from_raw(allocator, repr + n, len, len);
+    return n00b_string_from_raw(repr + n, len, .allocator = allocator);
 }
 
 n00b_string_t
-n00b_fmt_uint(uint64_t value, bool commas) _kargs
+n00b_fmt_uint(uint64_t value) _kargs
 {
+    bool              commas    = false;
     n00b_allocator_t *allocator = nullptr;
 }
 {
@@ -118,7 +121,7 @@ n00b_fmt_uint(uint64_t value, bool commas) _kargs
         allocator = nullptr;
 
     if (!value) {
-        return n00b_string_from_raw(allocator, "0", 1, 1);
+        return n00b_string_from_raw("0", 1, .allocator = allocator);
     }
 
     int  n                 = MAX_INT_LEN - 1;
@@ -144,7 +147,7 @@ n00b_fmt_uint(uint64_t value, bool commas) _kargs
     }
 
     int len = MAX_INT_LEN - 1 - n;
-    return n00b_string_from_raw(allocator, repr + n, len, len);
+    return n00b_string_from_raw(repr + n, len, .allocator = allocator);
 }
 
 // ===================================================================
@@ -152,8 +155,10 @@ n00b_fmt_uint(uint64_t value, bool commas) _kargs
 // ===================================================================
 
 n00b_string_t
-n00b_fmt_float(double value, int width, bool fill) _kargs
+n00b_fmt_float(double value) _kargs
 {
+    int               width     = 0;
+    bool              fill      = false;
     n00b_allocator_t *allocator = nullptr;
 }
 {
@@ -186,11 +191,11 @@ n00b_fmt_float(double value, int width, bool fill) _kargs
             memcpy(padded + p, fprepr + n, slen);
             p += slen;
 
-            return n00b_string_from_raw(allocator, padded, p, p);
+            return n00b_string_from_raw(padded, p, .allocator = allocator);
         }
     }
 
-    return n00b_string_from_raw(allocator, fprepr + n, slen, slen);
+    return n00b_string_from_raw(fprepr + n, slen, .allocator = allocator);
 }
 
 // ===================================================================
@@ -198,8 +203,11 @@ n00b_fmt_float(double value, int width, bool fill) _kargs
 // ===================================================================
 
 n00b_string_t
-n00b_fmt_bool(bool value, bool upper, bool word, bool yn) _kargs
+n00b_fmt_bool(bool value) _kargs
 {
+    bool              upper     = false;
+    bool              word      = false;
+    bool              yn        = false;
     n00b_allocator_t *allocator = nullptr;
 }
 {
@@ -241,7 +249,7 @@ n00b_fmt_bool(bool value, bool upper, bool word, bool yn) _kargs
     default: unreachable();
     }
 
-    return n00b_string_from_raw(allocator, s, len, len);
+    return n00b_string_from_raw(s, len, .allocator = allocator);
 }
 
 // ===================================================================
@@ -293,7 +301,7 @@ n00b_fmt_codepoint(n00b_codepoint_t cp) _kargs
         buf[i++] = hex_upper[extract];
         buf[i]   = 0;
 
-        return n00b_string_from_raw(allocator, buf, i, i);
+        return n00b_string_from_raw(buf, i, .allocator = allocator);
     }
     default:
         return n00b_unicode_str_from_codepoint(cp, .allocator = allocator);
@@ -305,8 +313,9 @@ n00b_fmt_codepoint(n00b_codepoint_t cp) _kargs
 // ===================================================================
 
 n00b_string_t
-n00b_fmt_pointer(void *ptr, bool caps) _kargs
+n00b_fmt_pointer(void *ptr) _kargs
 {
+    bool              caps      = false;
     n00b_allocator_t *allocator = nullptr;
 }
 {
@@ -353,5 +362,5 @@ n00b_fmt_pointer(void *ptr, bool caps) _kargs
     buf[16] = map[extract];
     buf[17] = 0;
 
-    return n00b_string_from_raw(allocator, buf, 17, 17);
+    return n00b_string_from_raw(buf, 17, .allocator = allocator);
 }

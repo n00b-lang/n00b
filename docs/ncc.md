@@ -168,6 +168,39 @@ Type-safe named optional parameters with defaults. The transform generates:
 This replaces the older `keywords { ... }` block syntax found in some ported
 code. During migration, `keywords` blocks should be converted to `_kargs`.
 
+#### Type Safety with `_kargs: opaque` and Generic APIs
+
+`_kargs: opaque` declares a function that receives `void *kargs` &mdash; the
+compiler does not generate a struct on the declaration side. The call site
+still generates a `_<funcname>__kargs` struct, but the callee has no way to
+know which concrete type was passed.
+
+**This means opaque kargs cannot carry type-dependent fields.** If a generic
+API (like conduit's read/write) must dispatch differently based on a payload
+type `T`, use the **macro dispatch pattern** instead:
+
+```c
+// 1. Generate per-type functions via a macro:
+#define MY_API_IMPL(T)                                      \
+    static inline n00b_result_t(T)                          \
+    _MY_API_FN(read, T)(my_topic_t(T) *topic)               \
+        _kargs { int timeout_ms = 0; }                      \
+    { /* type-safe implementation using T */ }
+
+// 2. User-facing macro dispatches by type:
+#define my_api_read(T, topic, ...) \
+    _MY_API_FN(read, T)(topic, ##__VA_ARGS__)
+```
+
+Each `MY_API_IMPL(T)` instantiation gets its own `_kargs` struct (named by
+the mangled function name), so the compiler sees the full type. The user
+writes `my_api_read(my_payload_t, topic, .timeout_ms = 100)` and gets
+compile-time type checking on both the topic and the keyword arguments.
+
+This pattern is used throughout conduit: `N00B_CONDUIT_INBOX_IMPL(T)`,
+`N00B_CONDUIT_SUBSCRIPTION_IMPL(T)`, `N00B_CONDUIT_TOPIC_IMPL(T)`,
+`N00B_CONDUIT_RW_IMPL(T)`.
+
 ### Variadic `+` &mdash; Checked Variadics
 
 **Status: Complete, heavily used throughout the codebase.**

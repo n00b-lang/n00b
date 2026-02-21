@@ -63,6 +63,23 @@ bool n00b_unicode_is_nfc(n00b_string_t s);
 bool n00b_unicode_is_nfd(n00b_string_t s);
 
 // ===========================================================================
+// Mark stripping
+// ===========================================================================
+
+/** @brief Strip combining marks (accents, diacritics, etc.) from a string.
+ *
+ *  Performs NFD decomposition, removes all codepoints with General_Category
+ *  Mark (Mn, Mc, Me), then recomposes to NFC.  This turns e.g. "cafe\u0301"
+ *  and "caf\u00e9" into "cafe".
+ *
+ *  @param s  The input string.
+ *  @kw allocator  Optional allocator (defaults to the runtime allocator).
+ *  @return A new string with combining marks removed.
+ */
+n00b_string_t n00b_unicode_strip_marks(n00b_string_t s)
+    _kargs { n00b_allocator_t *allocator = nullptr; };
+
+// ===========================================================================
 // Streaming normalizer
 // ===========================================================================
 

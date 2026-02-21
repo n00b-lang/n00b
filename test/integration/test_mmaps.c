@@ -43,7 +43,7 @@ test_lookup(void)
 
     void *addr = n00b_result_get(r);
 
-    n00b_mmap_opt_t opt = n00b_mmap_by_address(addr);
+    n00b_option_t(n00b_mmap_info_t *) opt = n00b_mmap_by_address(addr);
     assert(n00b_option_is_set(opt));
 
     n00b_mmap_info_t *info = n00b_option_get(opt);
@@ -66,7 +66,7 @@ test_kind(void)
 
     void *addr = n00b_result_get(r);
 
-    n00b_mmap_opt_t opt = n00b_mmap_by_address(addr);
+    n00b_option_t(n00b_mmap_info_t *) opt = n00b_mmap_by_address(addr);
     assert(n00b_option_is_set(opt));
 
     n00b_mmap_info_t *info = n00b_option_get(opt);
@@ -89,7 +89,7 @@ test_munmap(void)
     void *addr = n00b_result_get(r);
 
     // Verify it's there
-    n00b_mmap_opt_t opt = n00b_mmap_by_address(addr);
+    n00b_option_t(n00b_mmap_info_t *) opt = n00b_mmap_by_address(addr);
     assert(n00b_option_is_set(opt));
 
     // Unmap

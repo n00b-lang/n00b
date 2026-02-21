@@ -497,9 +497,10 @@ n00b_ansi_parse_internal(n00b_ansi_ctx *ctx)
 static inline n00b_buffer_t *
 combine_partial(n00b_ansi_ctx *ctx, n00b_buffer_t *b)
 {
-    n00b_ansi_node_t *n = n00b_list_pop(ctx->results);
+    n00b_ansi_node_t *n = n00b_option_get(n00b_list_pop(n00b_ansi_node_t *, ctx->results));
 
-    while (*n->start != '\x1b') {
+    char *lower = ctx->buf_start;
+    while (n->start > lower && *n->start != '\x1b') {
         --n->start;
     }
 
@@ -534,7 +535,7 @@ n00b_ansi_parser_create() _kargs
     if (!allocator)
         allocator = nullptr;
 
-    n00b_ansi_ctx *result = n00b_alloc(n00b_ansi_ctx, .allocator = allocator);
+    n00b_ansi_ctx *result = n00b_alloc_with_opts(n00b_ansi_ctx, &(n00b_alloc_opts_t){.allocator = allocator});
     result->results       = n00b_list_new(n00b_ansi_node_t *, allocator);
 
     return result;
@@ -553,8 +554,9 @@ n00b_ansi_parse(n00b_ansi_ctx *ctx, n00b_buffer_t *b)
         }
     }
 
-    ctx->cur = b->data;
-    ctx->end = b->data + b->byte_len;
+    ctx->buf_start = b->data;
+    ctx->cur       = b->data;
+    ctx->end       = b->data + b->byte_len;
 
     n00b_ansi_parse_internal(ctx);
 }
@@ -572,7 +574,7 @@ n00b_ansi_parser_results(n00b_ansi_ctx *ctx)
     if (len) {
         n00b_ansi_node_t *n = n00b_list_get(result, len - 1);
         if (n->kind == N00B_ANSI_PARTIAL) {
-            (void)n00b_list_pop(result);
+            (void)n00b_list_pop(n00b_ansi_node_t *, result);
             n00b_list_push(ctx->results, n);
         }
     }
@@ -606,7 +608,7 @@ one_node_to_string(n00b_ansi_node_t *node)
     case N00B_ANSI_C0_CODE:
     case N00B_ANSI_C1_CODE:
         if (node->ctrl.ctrl_byte == '\r') {
-            return n00b_string_from_raw(nullptr, "", 0, 0);
+            return n00b_string_from_raw("", 0);
         }
         return n00b_unicode_str_from_codepoint(node->ctrl.ctrl_byte);
     default:
@@ -615,11 +617,10 @@ one_node_to_string(n00b_ansi_node_t *node)
 
     int len = (int)(end - p);
     if (len <= 0) {
-        return n00b_string_from_raw(nullptr, "", 0, 0);
+        return n00b_string_from_raw("", 0);
     }
 
-    int64_t cps = n00b_unicode_utf8_count_codepoints_raw(p, (uint32_t)len);
-    return n00b_string_from_raw(nullptr, p, len, cps >= 0 ? cps : 0);
+    return n00b_string_from_raw(p, len);
 }
 
 n00b_string_t
@@ -633,7 +634,7 @@ n00b_ansi_nodes_to_string(
         allocator = nullptr;
 
     size_t        num = n00b_list_len(nodes);
-    n00b_string_t acc = n00b_string_from_raw(allocator, "", 0, 0);
+    n00b_string_t acc = n00b_string_from_raw("", 0, .allocator = allocator);
 
     for (size_t i = 0; i < num; i++) {
         n00b_ansi_node_t *node = n00b_list_get(nodes, i);
@@ -650,10 +651,10 @@ n00b_ansi_nodes_to_string(
             case N00B_ANSI_C0_CODE:
                 switch (node->ctrl.ctrl_byte) {
                 case '\n':
-                    piece = n00b_string_from_raw(allocator, "\n", 1, 1);
+                    piece = n00b_string_from_raw("\n", 1, .allocator = allocator);
                     break;
                 case '\t':
-                    piece = n00b_string_from_raw(allocator, "\t", 1, 1);
+                    piece = n00b_string_from_raw("\t", 1, .allocator = allocator);
                     break;
                 default:
                     continue;

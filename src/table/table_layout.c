@@ -1,4 +1,4 @@
-/**
+/*
  * Table layout engine: content scanning, column width computation,
  * and row height calculation.
  */
@@ -16,7 +16,7 @@
 // Internal: content metrics
 // ====================================================================
 
-/**
+/*
  * Compute the display width of the longest line in a string.
  * Lines are split on CR/LF/CRLF boundaries.
  */
@@ -43,7 +43,7 @@ longest_line_width(n00b_string_t s)
     return max_w;
 }
 
-/**
+/*
  * Compute the display width of the longest word in a string.
  * Words are delimited by spaces.
  */
@@ -54,7 +54,7 @@ longest_word_width(n00b_string_t s)
         return 0;
     }
 
-    n00b_string_t space = n00b_string_from_raw(nullptr, " ", 1, 1);
+    n00b_string_t space = n00b_string_from_raw(" ", 1);
 
     n00b_array_t(n00b_string_t) lines = n00b_unicode_str_split_lines(s);
     int32_t max_w = 0;
@@ -410,11 +410,11 @@ _n00b_table_compute_layout(n00b_table_t *table, int64_t width)
     scan_column_preferences(table, avail);
 
     // Phase 2: build layout items.
-    n00b_layout_t *items =
-        n00b_alloc_array(n00b_layout_t, num_cols,
-                          .allocator = table->allocator);
+    n00b_layout_t *raw_items =
+        n00b_alloc_array_with_opts(n00b_layout_t, num_cols,
+                                   &(n00b_alloc_opts_t){.allocator = table->allocator});
 
-    build_layout_items(table, items, avail);
+    build_layout_items(table, raw_items, avail);
 
     // Phase 3: run layout solver.
     if (table->col_results) {
@@ -422,13 +422,21 @@ _n00b_table_compute_layout(n00b_table_t *table, int64_t width)
     }
 
     table->col_results =
-        n00b_alloc_array(n00b_layout_result_t, num_cols,
-                          .allocator = table->allocator);
+        n00b_alloc_array_with_opts(n00b_layout_result_t, num_cols,
+                                   &(n00b_alloc_opts_t){.allocator = table->allocator});
 
-    n00b_layout_calculate(items, table->col_results,
-                           num_cols, avail);
+    n00b_array_t(n00b_layout_t) items_arr =
+        n00b_array_checked_ptr(n00b_layout_t, num_cols, raw_items);
+    items_arr.len = num_cols;
 
-    n00b_free(items);
+    n00b_array_t(n00b_layout_result_t) results_arr =
+        n00b_array_checked_ptr(n00b_layout_result_t, num_cols,
+                                table->col_results);
+    results_arr.len = num_cols;
+
+    n00b_layout_calculate(items_arr, results_arr, avail);
+
+    n00b_free(raw_items);
 
     // Phase 4: compute row heights.
     n00b_isize_t n_rows = visible_row_count(table);
@@ -438,8 +446,8 @@ _n00b_table_compute_layout(n00b_table_t *table, int64_t width)
     }
 
     table->row_heights =
-        n00b_alloc_array(int64_t, n_rows,
-                          .allocator = table->allocator);
+        n00b_alloc_array_with_opts(int64_t, n_rows,
+                                   &(n00b_alloc_opts_t){.allocator = table->allocator});
 
     compute_row_heights(table);
 

@@ -14,8 +14,7 @@
 static n00b_string_t
 make_str(const char *s)
 {
-    return n00b_string_from_raw(nullptr, s, (int64_t)strlen(s),
-                                 (int64_t)strlen(s));
+    return n00b_string_from_raw(s, (int64_t)strlen(s));
 }
 
 // ====================================================================
@@ -25,7 +24,7 @@ make_str(const char *s)
 static void
 test_create_empty(void)
 {
-    n00b_table_t *t = n00b_table_new();
+    n00b_table_t *t = n00b_new_kargs(n00b_table_t, table);
 
     assert(t != nullptr);
     assert(t->rows.len == 0);
@@ -38,7 +37,7 @@ test_create_empty(void)
 static void
 test_create_with_cols(void)
 {
-    n00b_table_t *t = n00b_table_new(.num_cols = 3);
+    n00b_table_t *t = n00b_new_kargs(n00b_table_t, table, .num_cols = 3);
 
     assert(t != nullptr);
     assert(t->col_specs.len == 3);
@@ -50,7 +49,7 @@ test_create_with_cols(void)
 static void
 test_add_single_row(void)
 {
-    n00b_table_t *t = n00b_table_new();
+    n00b_table_t *t = n00b_new_kargs(n00b_table_t, table);
 
     n00b_table_add_cell(t, make_str("A"));
     n00b_table_add_cell(t, make_str("B"));
@@ -68,7 +67,7 @@ test_add_single_row(void)
 static void
 test_add_multiple_rows(void)
 {
-    n00b_table_t *t = n00b_table_new(.num_cols = 2);
+    n00b_table_t *t = n00b_new_kargs(n00b_table_t, table, .num_cols = 2);
 
     n00b_table_add_cell(t, make_str("R0C0"));
     n00b_table_add_cell(t, make_str("R0C1"));
@@ -88,7 +87,7 @@ test_add_multiple_rows(void)
 static void
 test_empty_cell(void)
 {
-    n00b_table_t *t = n00b_table_new(.num_cols = 3);
+    n00b_table_t *t = n00b_new_kargs(n00b_table_t, table, .num_cols = 3);
 
     n00b_table_add_cell(t, make_str("A"));
     n00b_table_empty_cell(t);
@@ -106,7 +105,7 @@ test_empty_cell(void)
 static void
 test_col_span(void)
 {
-    n00b_table_t *t = n00b_table_new(.num_cols = 3);
+    n00b_table_t *t = n00b_new_kargs(n00b_table_t, table, .num_cols = 3);
 
     n00b_table_add_cell(t, make_str("spans two"), .col_span = 2);
     n00b_table_add_cell(t, make_str("one col"));
@@ -123,7 +122,7 @@ test_col_span(void)
 static void
 test_span_all(void)
 {
-    n00b_table_t *t = n00b_table_new(.num_cols = 4);
+    n00b_table_t *t = n00b_new_kargs(n00b_table_t, table, .num_cols = 4);
 
     // First row establishes column count.
     for (int i = 0; i < 4; i++) {
@@ -145,7 +144,7 @@ test_span_all(void)
 static void
 test_add_row_convenience(void)
 {
-    n00b_table_t *t = n00b_table_new(.num_cols = 3);
+    n00b_table_t *t = n00b_new_kargs(n00b_table_t, table, .num_cols = 3);
 
     n00b_string_t cells[3] = {
         make_str("X"),
@@ -165,7 +164,7 @@ test_add_row_convenience(void)
 static void
 test_table_end_flushes(void)
 {
-    n00b_table_t *t = n00b_table_new(.num_cols = 2);
+    n00b_table_t *t = n00b_new_kargs(n00b_table_t, table, .num_cols = 2);
 
     n00b_table_add_cell(t, make_str("A"));
     n00b_table_add_cell(t, make_str("B"));
@@ -181,7 +180,7 @@ test_table_end_flushes(void)
 static void
 test_col_spec_fit(void)
 {
-    n00b_table_t *t = n00b_table_new();
+    n00b_table_t *t = n00b_new_kargs(n00b_table_t, table);
 
     n00b_isize_t idx = n00b_table_col_fit(t);
 
@@ -196,7 +195,7 @@ test_col_spec_fit(void)
 static void
 test_col_spec_flex(void)
 {
-    n00b_table_t *t = n00b_table_new();
+    n00b_table_t *t = n00b_new_kargs(n00b_table_t, table);
 
     n00b_table_col_flex(t, 3);
 
@@ -211,7 +210,7 @@ test_col_spec_flex(void)
 static void
 test_col_spec_fixed(void)
 {
-    n00b_table_t *t = n00b_table_new();
+    n00b_table_t *t = n00b_new_kargs(n00b_table_t, table);
 
     n00b_table_col_fixed(t, 20);
 
@@ -228,7 +227,7 @@ test_col_spec_fixed(void)
 static void
 test_col_spec_range(void)
 {
-    n00b_table_t *t = n00b_table_new();
+    n00b_table_t *t = n00b_new_kargs(n00b_table_t, table);
 
     n00b_table_col_range(t, 5, 30);
 
@@ -242,7 +241,7 @@ test_col_spec_range(void)
 static void
 test_col_spec_pct(void)
 {
-    n00b_table_t *t = n00b_table_new();
+    n00b_table_t *t = n00b_new_kargs(n00b_table_t, table);
 
     n00b_table_col_pct(t, 0.1, 0.5);
 
@@ -256,7 +255,7 @@ test_col_spec_pct(void)
 static void
 test_set_col_priority(void)
 {
-    n00b_table_t *t = n00b_table_new(.num_cols = 2);
+    n00b_table_t *t = n00b_new_kargs(n00b_table_t, table, .num_cols = 2);
 
     n00b_table_set_col_priority(t, 0, 10);
     n00b_table_set_col_priority(t, 1, 5);
@@ -275,7 +274,7 @@ test_style_cascade(void)
     n00b_box_props_t *hdr_style  = n00b_box_props_new(.pad_left = 3);
     n00b_box_props_t *per_cell   = n00b_box_props_new(.pad_left = 4);
 
-    n00b_table_t *t = n00b_table_new(
+    n00b_table_t *t = n00b_new_kargs(n00b_table_t, table,
         .num_cols     = 2,
         .cell_props   = cell_style,
         .header_props = hdr_style);
@@ -340,5 +339,6 @@ main(int argc, char **argv)
     test_style_cascade();
 
     printf("All table build tests passed.\n");
+    n00b_shutdown();
     return 0;
 }

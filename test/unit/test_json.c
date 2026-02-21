@@ -1,0 +1,250 @@
+/*
+ * test_json.c — Tests for JSON value types, parser, and encoder.
+ */
+
+#include <stdio.h>
+#include <assert.h>
+#include <string.h>
+#include <math.h>
+
+#include "n00b.h"
+#include "parsers/json.h"
+#include "core/runtime.h"
+#include "core/list.h"
+#include "core/dict_untyped.h"
+
+// ============================================================================
+// Helpers
+// ============================================================================
+
+static n00b_json_node_t *
+json_obj_get(n00b_json_node_t *obj, const char *key)
+{
+    bool found = false;
+    void *val = n00b_dict_untyped_get(obj->object, key, &found);
+    return found ? (n00b_json_node_t *)val : nullptr;
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+static void
+test_json_parse_object(void)
+{
+    const char *json = "{\"name\":\"test\",\"value\":42}";
+    const char *err  = nullptr;
+    n00b_json_node_t *root = n00b_json_parse(json, strlen(json), &err);
+
+    assert(root != nullptr);
+    assert(err == nullptr);
+    assert(n00b_json_is_object(root));
+    assert(n00b_json_length(root) == 2);
+
+    // Check "name" key.
+    n00b_json_node_t *name_val = json_obj_get(root, "name");
+    assert(name_val != nullptr);
+    assert(n00b_json_is_string(name_val));
+    assert(strcmp(name_val->string, "test") == 0);
+
+    // Check "value" key.
+    n00b_json_node_t *value_val = json_obj_get(root, "value");
+    assert(value_val != nullptr);
+    assert(n00b_json_is_int(value_val));
+    assert(value_val->integer == 42);
+
+    printf("  [PASS] json parse object\n");
+}
+
+static void
+test_json_parse_array(void)
+{
+    const char *json = "[1, \"two\", true, null, 3.14]";
+    const char *err  = nullptr;
+    n00b_json_node_t *root = n00b_json_parse(json, strlen(json), &err);
+
+    assert(root != nullptr);
+    assert(err == nullptr);
+    assert(n00b_json_is_array(root));
+    assert(n00b_json_length(root) == 5);
+
+    // Element 0: integer 1
+    n00b_json_node_t *e0 = n00b_list_get(root->array, 0);
+    assert(n00b_json_is_int(e0));
+    assert(e0->integer == 1);
+
+    // Element 1: string "two"
+    n00b_json_node_t *e1 = n00b_list_get(root->array, 1);
+    assert(n00b_json_is_string(e1));
+    assert(strcmp(e1->string, "two") == 0);
+
+    // Element 2: true
+    n00b_json_node_t *e2 = n00b_list_get(root->array, 2);
+    assert(n00b_json_is_bool(e2));
+    assert(e2->boolean == true);
+
+    // Element 3: null
+    n00b_json_node_t *e3 = n00b_list_get(root->array, 3);
+    assert(n00b_json_is_null(e3));
+
+    // Element 4: double 3.14
+    n00b_json_node_t *e4 = n00b_list_get(root->array, 4);
+    assert(n00b_json_is_double(e4));
+    assert(fabs(e4->number - 3.14) < 0.001);
+
+    printf("  [PASS] json parse array\n");
+}
+
+static void
+test_json_parse_nested(void)
+{
+    const char *json = "{\"a\":{\"b\":[1,2,3]}}";
+    const char *err  = nullptr;
+    n00b_json_node_t *root = n00b_json_parse(json, strlen(json), &err);
+
+    assert(root != nullptr);
+    assert(n00b_json_is_object(root));
+
+    n00b_json_node_t *a = json_obj_get(root, "a");
+    assert(a != nullptr);
+    assert(n00b_json_is_object(a));
+
+    n00b_json_node_t *b = json_obj_get(a, "b");
+    assert(b != nullptr);
+    assert(n00b_json_is_array(b));
+    assert(n00b_json_length(b) == 3);
+
+    n00b_json_node_t *b0 = n00b_list_get(b->array, 0);
+    assert(n00b_json_is_int(b0));
+    assert(b0->integer == 1);
+
+    n00b_json_node_t *b2 = n00b_list_get(b->array, 2);
+    assert(n00b_json_is_int(b2));
+    assert(b2->integer == 3);
+
+    printf("  [PASS] json parse nested\n");
+}
+
+static void
+test_json_parse_unicode(void)
+{
+    // \u0048\u0065 = "He"
+    const char *json = "{\"s\":\"\\u0048\\u0065\"}";
+    const char *err  = nullptr;
+    n00b_json_node_t *root = n00b_json_parse(json, strlen(json), &err);
+
+    assert(root != nullptr);
+    assert(n00b_json_is_object(root));
+
+    n00b_json_node_t *s = json_obj_get(root, "s");
+    assert(s != nullptr);
+    assert(n00b_json_is_string(s));
+    assert(strcmp(s->string, "He") == 0);
+
+    printf("  [PASS] json parse unicode escapes\n");
+}
+
+static void
+test_json_parse_errors(void)
+{
+    const char *err = nullptr;
+
+    // Empty input.
+    assert(n00b_json_parse("", 0, &err) == nullptr);
+
+    // Truncated object.
+    assert(n00b_json_parse("{\"key\":", 7, &err) == nullptr);
+
+    // Trailing content.
+    assert(n00b_json_parse("123 456", 7, &err) == nullptr);
+
+    // Leading zeros.
+    assert(n00b_json_parse("01", 2, &err) == nullptr);
+
+    // Invalid literal.
+    assert(n00b_json_parse("tru", 3, &err) == nullptr);
+
+    printf("  [PASS] json parse errors\n");
+}
+
+static void
+test_json_encode_roundtrip(void)
+{
+    const char *json = "{\"key\":\"value\",\"num\":42,\"arr\":[1,true,null]}";
+    const char *err  = nullptr;
+    n00b_json_node_t *root = n00b_json_parse(json, strlen(json), &err);
+    assert(root != nullptr);
+
+    // Encode back.
+    char *encoded = n00b_json_encode(root);
+    assert(encoded != nullptr);
+
+    // Re-parse the encoded output.
+    n00b_json_node_t *root2 = n00b_json_parse(encoded, strlen(encoded), &err);
+    assert(root2 != nullptr);
+    assert(n00b_json_is_object(root2));
+
+    // Verify a key from the roundtrip.
+    n00b_json_node_t *key_val = json_obj_get(root2, "key");
+    assert(key_val != nullptr);
+    assert(n00b_json_is_string(key_val));
+    assert(strcmp(key_val->string, "value") == 0);
+
+    n00b_json_node_t *num_val = json_obj_get(root2, "num");
+    assert(num_val != nullptr);
+    assert(n00b_json_is_int(num_val));
+    assert(num_val->integer == 42);
+
+    printf("  [PASS] json encode roundtrip\n");
+}
+
+static void
+test_json_encode_pretty(void)
+{
+    n00b_json_node_t *obj = n00b_json_object_new();
+    n00b_json_object_put(obj, "a", n00b_json_int_new(1));
+    n00b_json_object_put(obj, "b", n00b_json_bool_new(true));
+
+    char *compact = n00b_json_encode(obj);
+    assert(compact != nullptr);
+    // Compact should not contain newlines.
+    assert(strchr(compact, '\n') == nullptr);
+
+    char *pretty = n00b_json_encode(obj, .pretty = true, .indent = 2);
+    assert(pretty != nullptr);
+    // Pretty should contain newlines.
+    assert(strchr(pretty, '\n') != nullptr);
+
+    // Both should be valid JSON.
+    const char *err = nullptr;
+    assert(n00b_json_parse(compact, strlen(compact), &err) != nullptr);
+    assert(n00b_json_parse(pretty, strlen(pretty), &err) != nullptr);
+
+    printf("  [PASS] json encode pretty\n");
+}
+
+// ============================================================================
+// main
+// ============================================================================
+
+int
+main(int argc, char *argv[])
+{
+    n00b_runtime_t rt;
+    n00b_init(&rt, argc, argv);
+
+    printf("test_json:\n");
+    fflush(stdout);
+
+    test_json_parse_object();    fflush(stdout);
+    test_json_parse_array();     fflush(stdout);
+    test_json_parse_nested();    fflush(stdout);
+    test_json_parse_unicode();   fflush(stdout);
+    test_json_parse_errors();    fflush(stdout);
+    test_json_encode_roundtrip(); fflush(stdout);
+    test_json_encode_pretty();   fflush(stdout);
+
+    printf("All json tests passed.\n");
+    n00b_shutdown();
+    return 0;
+}

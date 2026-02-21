@@ -103,6 +103,8 @@ static bool
 try_eval_integer(tree_xform_t *ctx, const char *expr, const char *file,
                  int line, long long *out)
 {
+    (void)file;
+    (void)line;
     char     *endptr;
     long long value;
 

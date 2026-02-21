@@ -23,7 +23,7 @@
  * // ... more rows ...
  * n00b_table_end(t);
  *
- * n00b_plane_t *p = n00b_table_render(t, 80);
+ * n00b_plane_t *p = n00b_table_render(t);
  * ```
  *
  * ### Style cascade
@@ -98,9 +98,13 @@ typedef struct n00b_table_t {
 // ====================================================================
 
 /**
- * @brief Create a new table.
+ * @brief Initialize a pre-allocated table.
+ *
+ * @param table Table to initialize.
  *
  * @kw num_cols    Number of columns (0 = auto-detect from first row).
+ * @kw style       Style preset (overrides individual `*_props` kargs
+ *                 when set; individual kargs still override the preset).
  * @kw table_props Outer box style (nullptr = no outer border).
  * @kw cell_props  Default cell style (nullptr = no decoration).
  * @kw header_props Row 0 style override.
@@ -109,23 +113,24 @@ typedef struct n00b_table_t {
  * @kw caption     Table caption (nullptr = none).
  * @kw max_rows    Max retained rows (0 = unlimited; >0 = ring buffer).
  * @kw wrap        Table-level wrap default (true = word-wrap cell content).
- * @kw allocator   Allocator to use (nullptr = runtime default).
+ * @kw allocator   Allocator for internal allocations (nullptr = runtime default).
  *
- * @post Returned table is ready for cell insertion.
+ * @post Table is ready for cell insertion.
  */
-extern n00b_table_t *
-n00b_table_new() _kargs
+extern void
+n00b_table_init(n00b_table_t *table) _kargs
 {
-    n00b_isize_t       num_cols    = 0;
-    n00b_box_props_t  *table_props = nullptr;
-    n00b_box_props_t  *cell_props  = nullptr;
-    n00b_box_props_t  *header_props = nullptr;
-    n00b_box_props_t  *alt_props   = nullptr;
-    n00b_string_t     *title       = nullptr;
-    n00b_string_t     *caption     = nullptr;
-    n00b_isize_t       max_rows    = 0;
-    bool               wrap        = true;
-    n00b_allocator_t  *allocator   = nullptr;
+    n00b_isize_t        num_cols    = 0;
+    n00b_table_style_t *style       = nullptr;
+    n00b_box_props_t   *table_props = nullptr;
+    n00b_box_props_t   *cell_props  = nullptr;
+    n00b_box_props_t   *header_props = nullptr;
+    n00b_box_props_t   *alt_props   = nullptr;
+    n00b_string_t      *title       = nullptr;
+    n00b_string_t      *caption     = nullptr;
+    n00b_isize_t        max_rows    = 0;
+    bool                wrap        = true;
+    n00b_allocator_t   *allocator   = nullptr;
 };
 
 /**
@@ -206,6 +211,9 @@ extern void n00b_table_end(n00b_table_t *table);
  * @brief Add a FIT column (sized from content).
  * @param table Table.
  * @return Index of the new column.
+ *
+ * @pre Must be called before the first row is finalized (i.e., before
+ *      the first `n00b_table_end_row()` call).
  */
 extern n00b_isize_t n00b_table_col_fit(n00b_table_t *table);
 
@@ -214,6 +222,9 @@ extern n00b_isize_t n00b_table_col_fit(n00b_table_t *table);
  * @param table  Table.
  * @param factor Flex multiple (1 = 1 share, 2 = 2 shares, etc.).
  * @return Index of the new column.
+ *
+ * @pre Must be called before the first row is finalized (i.e., before
+ *      the first `n00b_table_end_row()` call).
  */
 extern n00b_isize_t n00b_table_col_flex(n00b_table_t *table, int64_t factor);
 
@@ -223,6 +234,9 @@ extern n00b_isize_t n00b_table_col_flex(n00b_table_t *table, int64_t factor);
  * @param min   Minimum width in cells.
  * @param max   Maximum width in cells.
  * @return Index of the new column.
+ *
+ * @pre Must be called before the first row is finalized (i.e., before
+ *      the first `n00b_table_end_row()` call).
  */
 extern n00b_isize_t n00b_table_col_range(n00b_table_t *table,
                                            int64_t min, int64_t max);
@@ -233,6 +247,9 @@ extern n00b_isize_t n00b_table_col_range(n00b_table_t *table,
  * @param min   Minimum as fraction of table width (0.0–1.0).
  * @param max   Maximum as fraction of table width (0.0–1.0).
  * @return Index of the new column.
+ *
+ * @pre Must be called before the first row is finalized (i.e., before
+ *      the first `n00b_table_end_row()` call).
  */
 extern n00b_isize_t n00b_table_col_pct(n00b_table_t *table,
                                          double min, double max);
@@ -242,6 +259,9 @@ extern n00b_isize_t n00b_table_col_pct(n00b_table_t *table,
  * @param table Table.
  * @param width Exact width in cells.
  * @return Index of the new column.
+ *
+ * @pre Must be called before the first row is finalized (i.e., before
+ *      the first `n00b_table_end_row()` call).
  */
 extern n00b_isize_t n00b_table_col_fixed(n00b_table_t *table, int64_t width);
 
@@ -252,6 +272,7 @@ extern n00b_isize_t n00b_table_col_fixed(n00b_table_t *table, int64_t width);
  * @param priority Higher = kept during shrinking.
  *
  * @pre `col < n00b_list_len(table->col_specs)`.
+ * @post Layout is invalidated.
  */
 extern void n00b_table_set_col_priority(n00b_table_t *table,
                                           n00b_isize_t col, int64_t priority);
@@ -263,6 +284,7 @@ extern void n00b_table_set_col_priority(n00b_table_t *table,
  * @param col_props Style to apply (nullptr to clear).
  *
  * @pre `col < n00b_list_len(table->col_specs)`.
+ * @post Layout is invalidated.
  */
 extern void n00b_table_set_col_props(n00b_table_t *table,
                                        n00b_isize_t col,
@@ -279,16 +301,19 @@ extern void n00b_table_set_col_props(n00b_table_t *table,
  * table: outer border, interior borders, cell content, title, and caption.
  *
  * @param table Table to render.
- * @param width Available width in cells.
  *
+ * @kw width Available width in cells (default: 80).
  * @kw force If true, re-render even if layout is cached.
  *
  * @return Plane owned by the table (do not destroy separately).
+ *         The same plane is reused across renders — previous return
+ *         values become stale after a subsequent call to this function.
  */
 extern n00b_plane_t *
-n00b_table_render(n00b_table_t *table, int64_t width) _kargs
+n00b_table_render(n00b_table_t *table) _kargs
 {
-    bool force = false;
+    int64_t width = 80;
+    bool    force = false;
 };
 
 /**
@@ -350,6 +375,9 @@ extern n00b_table_style_t n00b_table_style_ascii(void);
  *
  * @return A fully populated table, ready for `n00b_table_render()`.
  *
+ * @note If @p s is empty, the resulting table has 0 rows and
+ *       `n00b_table_render()` will return nullptr.
+ *
  * @post The table has been finalized via `n00b_table_end()`.
  */
 extern n00b_table_t *
@@ -361,7 +389,7 @@ n00b_table_from_string(n00b_string_t s) _kargs
     n00b_box_props_t *cell_props   = nullptr;
     n00b_box_props_t *header_props = nullptr;
     n00b_box_props_t *alt_props    = nullptr;
-    n00b_bool32_t     no_stripe    = 0;
+    bool              no_stripe    = false;
     n00b_allocator_t *allocator    = nullptr;
 };
 
@@ -370,7 +398,7 @@ n00b_table_from_string(n00b_string_t s) _kargs
  * @param content The callout text.
  * @return A ready-to-render table.
  */
-extern n00b_table_t *n00b_callout(n00b_string_t *content);
+extern n00b_table_t *n00b_table_callout(n00b_string_t content);
 
 /**
  * @brief Create a single-row horizontal flow of items.
@@ -378,7 +406,7 @@ extern n00b_table_t *n00b_callout(n00b_string_t *content);
  * @param n      Number of items.
  * @return A ready-to-render table.
  */
-extern n00b_table_t *n00b_flow(n00b_string_t *items, n00b_isize_t n);
+extern n00b_table_t *n00b_table_flow(n00b_string_t *items, n00b_isize_t n);
 
 // ====================================================================
 // Internal (cross-module) entry points

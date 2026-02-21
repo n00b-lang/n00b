@@ -1,4 +1,4 @@
-/**
+/*
  * One-dimensional constraint-based layout engine.
  *
  * Ported from ~/n00b-old/src/text/layout.nc into a flat-array API
@@ -7,6 +7,7 @@
  */
 
 #include "n00b.h"
+#include "core/alloc.h"
 #include "core/layout.h"
 
 // -------------------------------------------------------------------
@@ -307,11 +308,14 @@ crop_by_priority(layout_item_t *sorted, int64_t count, int64_t deficit)
 // -------------------------------------------------------------------
 
 void
-n00b_layout_calculate(const n00b_layout_t  *items,
-                       n00b_layout_result_t *results,
-                       n00b_isize_t          n,
-                       int64_t               available)
+n00b_layout_calculate(n00b_array_t(n00b_layout_t)        items_arr,
+                       n00b_array_t(n00b_layout_result_t) results_arr,
+                       int64_t                            available)
 {
+    n00b_isize_t              n       = (n00b_isize_t)items_arr.len;
+    const n00b_layout_t      *items   = items_arr.data;
+    n00b_layout_result_t     *results = results_arr.data;
+
     if (n == 0) {
         return;
     }
@@ -324,7 +328,7 @@ n00b_layout_calculate(const n00b_layout_t  *items,
         work = stack_buf;
     }
     else {
-        work = (layout_item_t *)calloc(n, sizeof(layout_item_t));
+        work = n00b_alloc_array(layout_item_t, n);
     }
 
     // Phase 1: Resolve dimensions and set initial sizes.
@@ -413,6 +417,6 @@ n00b_layout_calculate(const n00b_layout_t  *items,
     }
 
     if (n > 32) {
-        free(work);
+        n00b_free(work);
     }
 }

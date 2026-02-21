@@ -111,7 +111,7 @@ n00b_unicode_numeric_value_t n00b_unicode_numeric_value(n00b_codepoint_t cp);
  *  @param cp  The codepoint to query.
  *  @return An option containing the digit value, or none.
  */
-n00b_unicode_opt_i32_t n00b_unicode_digit_value(n00b_codepoint_t cp);
+n00b_option_t(int32_t) n00b_unicode_digit_value(n00b_codepoint_t cp);
 
 // ===========================================================================
 // String-level display width

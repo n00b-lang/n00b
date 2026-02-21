@@ -22,6 +22,7 @@
 
 #include "n00b.h"
 #include "strings/text_style.h"
+#include "core/option.h"
 
 // ====================================================================
 // Palette indices
@@ -80,6 +81,8 @@ typedef struct n00b_theme_t {
     n00b_color_t  palette[N00B_PAL_SIZE];
 } n00b_theme_t;
 
+n00b_option_decl(const n00b_theme_t *);
+
 // ====================================================================
 // API
 // ====================================================================
@@ -101,9 +104,9 @@ extern void n00b_theme_register(const n00b_theme_t *theme);
 
 /** @brief Look up a registered theme by name.
  *  @param name  NUL-terminated theme name.
- *  @return Theme pointer, or nullptr if not found.
+ *  @return The theme, or none if not found.
  */
-extern const n00b_theme_t *n00b_theme_lookup(const char *name);
+extern n00b_option_t(const n00b_theme_t *) n00b_theme_lookup(const char *name);
 
 /** @brief Set the current theme and update the style registry.
  *  @param name  Theme name (must be registered).
@@ -118,7 +121,9 @@ extern const n00b_theme_t *n00b_theme_get_current(void);
 
 /** @brief Resolve a palette index to a concrete color via the current theme.
  *  @param ix  Palette slot index.
- *  @return Resolved color with the valid bit set, or 0 if out of range.
+ *  @return Resolved color with `N00B_COLOR_VALID_BIT` set, or 0 (without
+ *          the valid bit) if @p ix is out of range.  Use `n00b_color_is_set()`
+ *          to distinguish from valid black.
  */
 extern n00b_color_t n00b_theme_resolve_color(n00b_palette_ix_t ix);
 

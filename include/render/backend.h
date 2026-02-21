@@ -15,6 +15,8 @@
 
 #include "n00b.h"
 #include "render/cell.h"
+#include "conduit/rw.h"
+#include "core/buffer.h"
 
 // ====================================================================
 // Renderer capabilities
@@ -97,7 +99,7 @@ typedef struct n00b_renderer_vtable_t {
     uint32_t    version;
 
     // Required.
-    void             *(*init)(void);
+    void             *(*init)(n00b_conduit_topic_t(n00b_buffer_t *) *output);
     void              (*destroy)(void *ctx);
     n00b_render_cap_t (*capabilities)(void *ctx);
     n00b_render_size_t (*get_size)(void *ctx);

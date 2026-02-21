@@ -8,6 +8,7 @@
 #include "internal/unicode/raw.h"
 #include "core/alloc.h"
 #include <string.h>
+#include <assert.h>
 
 // ---------------------------------------------------------------------------
 // Concatenation
@@ -20,14 +21,14 @@ n00b_unicode_str_cat_raw(n00b_allocator_t *allocator,
                          const char       *b,
                          int64_t           b_len)
 {
+    assert((uint64_t)a_len + (uint64_t)b_len <= UINT32_MAX);
     uint32_t total = (uint32_t)a_len + (uint32_t)b_len;
     char    *buf   = n00b_alloc_array(char, total + 1);
     memcpy(buf, a, (size_t)a_len);
     memcpy(buf + a_len, b, (size_t)b_len);
     buf[total] = '\0';
 
-    int64_t       cps    = n00b_unicode_utf8_count_codepoints_raw(buf, total);
-    n00b_string_t result = n00b_string_from_raw(allocator, buf, total, cps);
+    n00b_string_t result = n00b_string_from_raw(buf, total, .allocator = allocator);
     n00b_free(buf);
     return result;
 }
@@ -53,14 +54,12 @@ n00b_unicode_str_cat_many(n00b_array_t(n00b_string_t) parts) _kargs
         allocator = nullptr;
 
     if (parts.len == 0) {
-        return n00b_string_from_raw(allocator, "", 0, 0);
+        return n00b_string_from_raw("", 0, .allocator = allocator);
     }
 
     uint32_t total_bytes = 0;
-    int64_t  total_cps   = 0;
     for (size_t i = 0; i < parts.len; i++) {
         total_bytes += (uint32_t)parts.data[i].u8_bytes;
-        total_cps += parts.data[i].codepoints;
     }
 
     char    *buf = n00b_alloc_array(char, total_bytes + 1);
@@ -71,7 +70,7 @@ n00b_unicode_str_cat_many(n00b_array_t(n00b_string_t) parts) _kargs
     }
     buf[total_bytes] = '\0';
 
-    n00b_string_t result = n00b_string_from_raw(allocator, buf, total_bytes, total_cps);
+    n00b_string_t result = n00b_string_from_raw(buf, total_bytes, .allocator = allocator);
     n00b_free(buf);
     return result;
 }
@@ -93,8 +92,7 @@ cat_many_raw(n00b_allocator_t *allocator, const char **parts, int64_t *lengths, 
     }
     buf[total_bytes] = '\0';
 
-    int64_t       cps    = n00b_unicode_utf8_count_codepoints_raw(buf, total_bytes);
-    n00b_string_t result = n00b_string_from_raw(allocator, buf, total_bytes, cps);
+    n00b_string_t result = n00b_string_from_raw(buf, total_bytes, .allocator = allocator);
     n00b_free(buf);
     return result;
 }
@@ -109,7 +107,7 @@ n00b_unicode_str_join(n00b_string_t sep, n00b_array_t(n00b_string_t) parts) _kar
         allocator = nullptr;
 
     if (parts.len == 0) {
-        return n00b_string_from_raw(allocator, "", 0, 0);
+        return n00b_string_from_raw("", 0, .allocator = allocator);
     }
 
     const char *sep_data = sep.data;
@@ -136,8 +134,7 @@ n00b_unicode_str_join(n00b_string_t sep, n00b_array_t(n00b_string_t) parts) _kar
     }
     buf[total_bytes] = '\0';
 
-    int64_t       cps    = n00b_unicode_utf8_count_codepoints_raw(buf, total_bytes);
-    n00b_string_t result = n00b_string_from_raw(allocator, buf, total_bytes, cps);
+    n00b_string_t result = n00b_string_from_raw(buf, total_bytes, .allocator = allocator);
     n00b_free(buf);
     return result;
 }
@@ -214,7 +211,7 @@ n00b_unicode_str_slice_raw(n00b_allocator_t *allocator,
                            int32_t           end)
 {
     if (len == 0) {
-        return n00b_string_from_raw(allocator, "", 0, 0);
+        return n00b_string_from_raw("", 0, .allocator = allocator);
     }
 
     uint32_t *offsets;
@@ -225,14 +222,13 @@ n00b_unicode_str_slice_raw(n00b_allocator_t *allocator,
 
     n00b_string_t result;
     if (start >= end) {
-        result = n00b_string_from_raw(allocator, "", 0, 0);
+        result = n00b_string_from_raw("", 0, .allocator = allocator);
     }
     else {
         uint32_t byte_start = offsets[start];
         uint32_t byte_end   = offsets[end];
         uint32_t slice_len  = byte_end - byte_start;
-        int64_t  cps = n00b_unicode_utf8_count_codepoints_raw(data + byte_start, slice_len);
-        result       = n00b_string_from_raw(allocator, data + byte_start, slice_len, cps);
+        result       = n00b_string_from_raw(data + byte_start, slice_len, .allocator = allocator);
     }
 
     n00b_free(offsets);
@@ -263,7 +259,7 @@ n00b_unicode_str_grapheme_at(n00b_string_t s, int32_t index) _kargs
     int64_t     len  = s.u8_bytes;
 
     if (len == 0) {
-        return n00b_string_from_raw(allocator, "", 0, 0);
+        return n00b_string_from_raw("", 0, .allocator = allocator);
     }
 
     uint32_t *offsets;
@@ -273,14 +269,13 @@ n00b_unicode_str_grapheme_at(n00b_string_t s, int32_t index) _kargs
 
     n00b_string_t result;
     if ((uint32_t)index >= n) {
-        result = n00b_string_from_raw(allocator, "", 0, 0);
+        result = n00b_string_from_raw("", 0, .allocator = allocator);
     }
     else {
         uint32_t byte_start = offsets[index];
         uint32_t byte_end   = offsets[index + 1];
         uint32_t seg_len    = byte_end - byte_start;
-        int64_t  cps = n00b_unicode_utf8_count_codepoints_raw(data + byte_start, seg_len);
-        result       = n00b_string_from_raw(allocator, data + byte_start, seg_len, cps);
+        result       = n00b_string_from_raw(data + byte_start, seg_len, .allocator = allocator);
     }
 
     n00b_free(offsets);
@@ -308,11 +303,10 @@ n00b_unicode_str_slice_bytes(n00b_string_t s, uint32_t byte_start, uint32_t byte
     if (byte_end > (uint32_t)len)
         byte_end = (uint32_t)len;
     if (byte_start >= byte_end)
-        return n00b_string_from_raw(allocator, "", 0, 0);
+        return n00b_string_from_raw("", 0, .allocator = allocator);
 
     uint32_t slice_len = byte_end - byte_start;
-    int64_t  cps       = n00b_unicode_utf8_count_codepoints_raw(data + byte_start, slice_len);
-    return n00b_string_from_raw(allocator, data + byte_start, slice_len, cps);
+    return n00b_string_from_raw(data + byte_start, slice_len, .allocator = allocator);
 }
 
 // ---------------------------------------------------------------------------
@@ -363,16 +357,47 @@ n00b_unicode_str_find_raw(const char *haystack,
     return p ? (int32_t)(p - haystack) : -1;
 }
 
-n00b_unicode_opt_i32_t
-n00b_unicode_str_find(n00b_string_t haystack, n00b_string_t needle)
+static inline n00b_string_t
+_str_search_prep(n00b_string_t s, bool normalize, bool case_sensitive, bool strip_marks)
 {
-    int32_t r = n00b_unicode_str_find_raw(haystack.data,
-                                          haystack.u8_bytes,
-                                          needle.data,
-                                          needle.u8_bytes);
+    n00b_string_t r = s;
+
+    if (normalize)
+        r = n00b_unicode_nfc(r);
+    if (strip_marks)
+        r = n00b_unicode_strip_marks(r);
+    if (!case_sensitive)
+        r = n00b_unicode_casefold(r);
+
+    return r;
+}
+
+n00b_option_t(int32_t)
+n00b_unicode_str_find(n00b_string_t haystack, n00b_string_t needle) _kargs
+{
+    bool reverse         = false;
+    bool normalize       = true;
+    bool case_sensitive  = true;
+    bool strip_marks     = false;
+}
+{
+    n00b_string_t h = _str_search_prep(haystack, normalize, case_sensitive, strip_marks);
+    n00b_string_t n = _str_search_prep(needle, normalize, case_sensitive, strip_marks);
+
+    int32_t r;
+
+    if (reverse) {
+        r = n00b_unicode_str_rfind_raw(h.data, h.u8_bytes,
+                                       n.data, n.u8_bytes);
+    }
+    else {
+        r = n00b_unicode_str_find_raw(h.data, h.u8_bytes,
+                                      n.data, n.u8_bytes);
+    }
+
     if (r < 0)
-        return (n00b_unicode_opt_i32_t){.has_value = false};
-    return (n00b_unicode_opt_i32_t){.has_value = true, .value = r};
+        return n00b_option_none(int32_t);
+    return n00b_option_set(int32_t, r);
 }
 
 int32_t
@@ -385,18 +410,6 @@ n00b_unicode_str_rfind_raw(const char *haystack,
     return p ? (int32_t)(p - haystack) : -1;
 }
 
-n00b_unicode_opt_i32_t
-n00b_unicode_str_rfind(n00b_string_t haystack, n00b_string_t needle)
-{
-    int32_t r = n00b_unicode_str_rfind_raw(haystack.data,
-                                           haystack.u8_bytes,
-                                           needle.data,
-                                           needle.u8_bytes);
-    if (r < 0)
-        return (n00b_unicode_opt_i32_t){.has_value = false};
-    return (n00b_unicode_opt_i32_t){.has_value = true, .value = r};
-}
-
 bool
 n00b_unicode_str_contains_raw(const char *haystack,
                               int64_t     h_len,
@@ -404,15 +417,6 @@ n00b_unicode_str_contains_raw(const char *haystack,
                               int64_t     n_len)
 {
     return n00b_unicode_str_find_raw(haystack, h_len, needle, n_len) >= 0;
-}
-
-bool
-n00b_unicode_str_contains(n00b_string_t haystack, n00b_string_t needle)
-{
-    return n00b_unicode_str_contains_raw(haystack.data,
-                                         haystack.u8_bytes,
-                                         needle.data,
-                                         needle.u8_bytes);
 }
 
 bool
@@ -464,8 +468,7 @@ n00b_unicode_str_replace_raw(n00b_allocator_t *allocator,
 {
     int32_t pos = n00b_unicode_str_find_raw(data, len, old_s, old_len);
     if (pos < 0) {
-        int64_t cps = n00b_unicode_utf8_count_codepoints_raw(data, (uint32_t)len);
-        return n00b_string_from_raw(allocator, data, len, cps);
+        return n00b_string_from_raw(data, len, .allocator = allocator);
     }
 
     uint32_t result_len = (uint32_t)len - (uint32_t)old_len + (uint32_t)new_len;
@@ -475,8 +478,7 @@ n00b_unicode_str_replace_raw(n00b_allocator_t *allocator,
     memcpy(buf + pos + new_len, data + pos + old_len, (size_t)(len - pos - old_len));
     buf[result_len] = '\0';
 
-    int64_t       cps    = n00b_unicode_utf8_count_codepoints_raw(buf, result_len);
-    n00b_string_t result = n00b_string_from_raw(allocator, buf, result_len, cps);
+    n00b_string_t result = n00b_string_from_raw(buf, result_len, .allocator = allocator);
     n00b_free(buf);
     return result;
 }
@@ -508,8 +510,7 @@ n00b_unicode_str_replace_all_raw(n00b_allocator_t *allocator,
                                  int64_t           new_len)
 {
     if (old_len == 0) {
-        int64_t cps = n00b_unicode_utf8_count_codepoints_raw(data, (uint32_t)len);
-        return n00b_string_from_raw(allocator, data, len, cps);
+        return n00b_string_from_raw(data, len, .allocator = allocator);
     }
 
     // Count occurrences
@@ -527,12 +528,13 @@ n00b_unicode_str_replace_all_raw(n00b_allocator_t *allocator,
     }
 
     if (count == 0) {
-        int64_t cps = n00b_unicode_utf8_count_codepoints_raw(data, (uint32_t)len);
-        return n00b_string_from_raw(allocator, data, len, cps);
+        return n00b_string_from_raw(data, len, .allocator = allocator);
     }
 
     uint32_t result_len;
     if ((uint32_t)new_len >= (uint32_t)old_len) {
+        assert((uint64_t)count * ((uint64_t)new_len - (uint64_t)old_len)
+               <= UINT32_MAX - (uint64_t)len);
         result_len = (uint32_t)len + count * ((uint32_t)new_len - (uint32_t)old_len);
     }
     else {
@@ -561,8 +563,7 @@ n00b_unicode_str_replace_all_raw(n00b_allocator_t *allocator,
     out_pos += remaining;
     buf[out_pos] = '\0';
 
-    int64_t       cps    = n00b_unicode_utf8_count_codepoints_raw(buf, out_pos);
-    n00b_string_t result = n00b_string_from_raw(allocator, buf, out_pos, cps);
+    n00b_string_t result = n00b_string_from_raw(buf, out_pos, .allocator = allocator);
     n00b_free(buf);
     return result;
 }
@@ -610,8 +611,7 @@ n00b_unicode_str_split_raw(n00b_allocator_t *allocator,
             uint32_t start = pos;
             n00b_unicode_utf8_decode(data, (uint32_t)len, &pos);
             uint32_t cp_len = pos - start;
-            int64_t  cps    = n00b_unicode_utf8_count_codepoints_raw(data + start, cp_len);
-            arr[idx++]      = n00b_string_from_raw(allocator, data + start, cp_len, cps);
+            arr[idx++]      = n00b_string_from_raw(data + start, cp_len, .allocator = allocator);
         }
         *count = idx;
         return arr;
@@ -641,13 +641,11 @@ n00b_unicode_str_split_raw(n00b_allocator_t *allocator,
         if (!found)
             break;
         uint32_t seg_len = (uint32_t)(found - p);
-        int64_t  cps     = n00b_unicode_utf8_count_codepoints_raw(p, seg_len);
-        arr[idx++]       = n00b_string_from_raw(allocator, p, seg_len, cps);
+        arr[idx++]       = n00b_string_from_raw(p, seg_len, .allocator = allocator);
         p                = found + sep_len;
         remaining        = (uint32_t)len - (uint32_t)(p - data);
     }
-    int64_t cps = n00b_unicode_utf8_count_codepoints_raw(p, remaining);
-    arr[idx++]  = n00b_string_from_raw(allocator, p, remaining, cps);
+    arr[idx++]  = n00b_string_from_raw(p, remaining, .allocator = allocator);
     *count      = idx;
     return arr;
 }
@@ -728,8 +726,7 @@ n00b_array_t(n00b_string_t) n00b_unicode_str_split_words(n00b_string_t s) _kargs
     for (uint32_t i = 0; i < n; i++) {
         uint32_t start   = ranges[i * 2];
         uint32_t seg_len = ranges[i * 2 + 1];
-        int64_t  cps     = n00b_unicode_utf8_count_codepoints_raw(data + start, seg_len);
-        arr[i]           = n00b_string_from_raw(allocator, data + start, seg_len, cps);
+        arr[i]           = n00b_string_from_raw(data + start, seg_len, .allocator = allocator);
     }
 
     n00b_free(ranges);
@@ -793,8 +790,7 @@ n00b_array_t(n00b_string_t) n00b_unicode_str_split_graphemes(n00b_string_t s) _k
     for (uint32_t i = 0; i < n; i++) {
         uint32_t start   = ranges[i * 2];
         uint32_t seg_len = ranges[i * 2 + 1];
-        int64_t  cps     = n00b_unicode_utf8_count_codepoints_raw(data + start, seg_len);
-        arr[i]           = n00b_string_from_raw(allocator, data + start, seg_len, cps);
+        arr[i]           = n00b_string_from_raw(data + start, seg_len, .allocator = allocator);
     }
 
     n00b_free(ranges);
@@ -856,8 +852,7 @@ n00b_array_t(n00b_string_t) n00b_unicode_str_split_lines(n00b_string_t s) _kargs
     for (uint32_t i = 0; i < n; i++) {
         uint32_t seg_start = ranges[i * 2];
         uint32_t seg_len   = ranges[i * 2 + 1];
-        int64_t  cps       = n00b_unicode_utf8_count_codepoints_raw(data + seg_start, seg_len);
-        arr[i]             = n00b_string_from_raw(allocator, data + seg_start, seg_len, cps);
+        arr[i]             = n00b_string_from_raw(data + seg_start, seg_len, .allocator = allocator);
     }
 
     n00b_free(ranges);
@@ -878,65 +873,10 @@ is_whitespace_cp(n00b_codepoint_t cp)
 }
 
 n00b_string_t
-n00b_unicode_str_trim_left(n00b_string_t s) _kargs
-{
-    n00b_allocator_t *allocator = nullptr;
-}
-{
-    if (!allocator)
-        allocator = nullptr;
-
-    const char *data = s.data;
-    int64_t     len  = s.u8_bytes;
-
-    uint32_t pos = 0;
-    while (pos < (uint32_t)len) {
-        uint32_t save = pos;
-        int32_t  cp   = n00b_unicode_utf8_decode(data, (uint32_t)len, &pos);
-        if (cp < 0 || !is_whitespace_cp((n00b_codepoint_t)cp)) {
-            pos = save;
-            break;
-        }
-    }
-    uint32_t result_len = (uint32_t)len - pos;
-    int64_t  cps        = n00b_unicode_utf8_count_codepoints_raw(data + pos, result_len);
-    return n00b_string_from_raw(allocator, data + pos, result_len, cps);
-}
-
-n00b_string_t
-n00b_unicode_str_trim_right(n00b_string_t s) _kargs
-{
-    n00b_allocator_t *allocator = nullptr;
-}
-{
-    if (!allocator)
-        allocator = nullptr;
-
-    const char *data = s.data;
-    int64_t     len  = s.u8_bytes;
-
-    // Scan from end: find last non-whitespace byte boundary
-    uint32_t end = (uint32_t)len;
-
-    while (end > 0) {
-        // Find start of last codepoint
-        uint32_t prev = end - 1;
-        while (prev > 0 && ((uint8_t)data[prev] & 0xC0) == 0x80) {
-            prev--;
-        }
-        uint32_t tmp = prev;
-        int32_t  cp  = n00b_unicode_utf8_decode(data, (uint32_t)len, &tmp);
-        if (cp < 0 || !is_whitespace_cp((n00b_codepoint_t)cp))
-            break;
-        end = prev;
-    }
-    int64_t cps = n00b_unicode_utf8_count_codepoints_raw(data, end);
-    return n00b_string_from_raw(allocator, data, end, cps);
-}
-
-n00b_string_t
 n00b_unicode_str_trim(n00b_string_t s) _kargs
 {
+    bool              left      = true;
+    bool              right     = true;
     n00b_allocator_t *allocator = nullptr;
 }
 {
@@ -948,32 +888,35 @@ n00b_unicode_str_trim(n00b_string_t s) _kargs
 
     // Trim left
     uint32_t lpos = 0;
-    while (lpos < (uint32_t)len) {
-        uint32_t save = lpos;
-        int32_t  cp   = n00b_unicode_utf8_decode(data, (uint32_t)len, &lpos);
-        if (cp < 0 || !is_whitespace_cp((n00b_codepoint_t)cp)) {
-            lpos = save;
-            break;
+    if (left) {
+        while (lpos < (uint32_t)len) {
+            uint32_t save = lpos;
+            int32_t  cp   = n00b_unicode_utf8_decode(data, (uint32_t)len, &lpos);
+            if (cp < 0 || !is_whitespace_cp((n00b_codepoint_t)cp)) {
+                lpos = save;
+                break;
+            }
         }
     }
 
     // Trim right
     uint32_t end = (uint32_t)len;
-    while (end > lpos) {
-        uint32_t prev = end - 1;
-        while (prev > lpos && ((uint8_t)data[prev] & 0xC0) == 0x80) {
-            prev--;
+    if (right) {
+        while (end > lpos) {
+            uint32_t prev = end - 1;
+            while (prev > lpos && ((uint8_t)data[prev] & 0xC0) == 0x80) {
+                prev--;
+            }
+            uint32_t tmp = prev;
+            int32_t  cp  = n00b_unicode_utf8_decode(data, (uint32_t)len, &tmp);
+            if (cp < 0 || !is_whitespace_cp((n00b_codepoint_t)cp))
+                break;
+            end = prev;
         }
-        uint32_t tmp = prev;
-        int32_t  cp  = n00b_unicode_utf8_decode(data, (uint32_t)len, &tmp);
-        if (cp < 0 || !is_whitespace_cp((n00b_codepoint_t)cp))
-            break;
-        end = prev;
     }
 
     uint32_t result_len = end - lpos;
-    int64_t  cps        = n00b_unicode_utf8_count_codepoints_raw(data + lpos, result_len);
-    return n00b_string_from_raw(allocator, data + lpos, result_len, cps);
+    return n00b_string_from_raw(data + lpos, result_len, .allocator = allocator);
 }
 
 // ---------------------------------------------------------------------------
@@ -995,9 +938,17 @@ n00b_unicode_str_cmp_raw(const char *a, int64_t a_len, const char *b, int64_t b_
 }
 
 int
-n00b_unicode_str_cmp(n00b_string_t a, n00b_string_t b)
+n00b_unicode_str_cmp(n00b_string_t a, n00b_string_t b) _kargs
 {
-    return n00b_unicode_str_cmp_raw(a.data, a.u8_bytes, b.data, b.u8_bytes);
+    bool normalize      = false;
+    bool case_sensitive  = true;
+    bool strip_marks     = false;
+}
+{
+    n00b_string_t pa = _str_search_prep(a, normalize, case_sensitive, strip_marks);
+    n00b_string_t pb = _str_search_prep(b, normalize, case_sensitive, strip_marks);
+
+    return n00b_unicode_str_cmp_raw(pa.data, pa.u8_bytes, pb.data, pb.u8_bytes);
 }
 
 bool
@@ -1007,43 +958,17 @@ n00b_unicode_str_eq_raw(const char *a, int64_t a_len, const char *b, int64_t b_l
 }
 
 bool
-n00b_unicode_str_eq(n00b_string_t a, n00b_string_t b)
+n00b_unicode_str_eq(n00b_string_t a, n00b_string_t b) _kargs
 {
-    return n00b_unicode_str_eq_raw(a.data, a.u8_bytes, b.data, b.u8_bytes);
+    bool normalize      = false;
+    bool case_sensitive  = true;
+    bool strip_marks     = false;
 }
-
-bool
-n00b_unicode_str_eq_nfc_raw(const char *a, int64_t a_len, const char *b, int64_t b_len)
 {
-    n00b_string_t na = n00b_unicode_nfc_raw(nullptr, a, a_len);
-    n00b_string_t nb = n00b_unicode_nfc_raw(nullptr, b, b_len);
-    bool          eq = n00b_unicode_str_eq_raw(na.data, na.u8_bytes, nb.data, nb.u8_bytes);
-    n00b_free(na.data);
-    n00b_free(nb.data);
-    return eq;
-}
+    n00b_string_t pa = _str_search_prep(a, normalize, case_sensitive, strip_marks);
+    n00b_string_t pb = _str_search_prep(b, normalize, case_sensitive, strip_marks);
 
-bool
-n00b_unicode_str_eq_nfc(n00b_string_t a, n00b_string_t b)
-{
-    return n00b_unicode_str_eq_nfc_raw(a.data, a.u8_bytes, b.data, b.u8_bytes);
-}
-
-bool
-n00b_unicode_str_eq_casefold_raw(const char *a, int64_t a_len, const char *b, int64_t b_len)
-{
-    n00b_string_t fa = n00b_unicode_casefold_raw(nullptr, a, a_len);
-    n00b_string_t fb = n00b_unicode_casefold_raw(nullptr, b, b_len);
-    bool          eq = n00b_unicode_str_eq_raw(fa.data, fa.u8_bytes, fb.data, fb.u8_bytes);
-    n00b_free(fa.data);
-    n00b_free(fb.data);
-    return eq;
-}
-
-bool
-n00b_unicode_str_eq_casefold(n00b_string_t a, n00b_string_t b)
-{
-    return n00b_unicode_str_eq_casefold_raw(a.data, a.u8_bytes, b.data, b.u8_bytes);
+    return n00b_unicode_str_eq_raw(pa.data, pa.u8_bytes, pb.data, pb.u8_bytes);
 }
 
 // ---------------------------------------------------------------------------
@@ -1081,8 +1006,9 @@ encode_fill(n00b_codepoint_t fill_cp,
 }
 
 n00b_string_t
-n00b_unicode_str_pad_right(n00b_string_t s, int32_t width) _kargs
+n00b_unicode_str_pad(n00b_string_t s, int32_t width) _kargs
 {
+    int              align     = N00B_STR_ALIGN_LEFT;
     n00b_allocator_t *allocator = nullptr;
     n00b_codepoint_t  fill      = ' ';
 }
@@ -1095,110 +1021,52 @@ n00b_unicode_str_pad_right(n00b_string_t s, int32_t width) _kargs
 
     int32_t cur = n00b_unicode_display_width_raw(data, len);
     if (cur >= width) {
-        int64_t cps = n00b_unicode_utf8_count_codepoints_raw(data, (uint32_t)len);
-        return n00b_string_from_raw(allocator, data, len, cps);
-    }
-
-    int32_t fill_w = n00b_unicode_char_width(fill);
-    if (fill_w <= 0)
-        fill_w = 1;
-    int32_t need = (width - cur) / fill_w;
-
-    char    *pad_buf;
-    uint32_t pad_bytes, pad_cps;
-    encode_fill(fill, need, &pad_buf, &pad_bytes, &pad_cps);
-
-    uint32_t total = (uint32_t)len + pad_bytes;
-    char    *buf   = n00b_alloc_array(char, total + 1);
-    memcpy(buf, data, (size_t)len);
-    memcpy(buf + len, pad_buf, pad_bytes);
-    buf[total] = '\0';
-    n00b_free(pad_buf);
-
-    int64_t       cps    = n00b_unicode_utf8_count_codepoints_raw(buf, total);
-    n00b_string_t result = n00b_string_from_raw(allocator, buf, total, cps);
-    n00b_free(buf);
-    return result;
-}
-
-n00b_string_t
-n00b_unicode_str_pad_left(n00b_string_t s, int32_t width) _kargs
-{
-    n00b_allocator_t *allocator = nullptr;
-    n00b_codepoint_t  fill      = ' ';
-}
-{
-    if (!allocator)
-        allocator = nullptr;
-
-    const char *data = s.data;
-    int64_t     len  = s.u8_bytes;
-
-    int32_t cur = n00b_unicode_display_width_raw(data, len);
-    if (cur >= width) {
-        int64_t cps = n00b_unicode_utf8_count_codepoints_raw(data, (uint32_t)len);
-        return n00b_string_from_raw(allocator, data, len, cps);
-    }
-
-    int32_t fill_w = n00b_unicode_char_width(fill);
-    if (fill_w <= 0)
-        fill_w = 1;
-    int32_t need = (width - cur) / fill_w;
-
-    char    *pad_buf;
-    uint32_t pad_bytes, pad_cps;
-    encode_fill(fill, need, &pad_buf, &pad_bytes, &pad_cps);
-
-    uint32_t total = pad_bytes + (uint32_t)len;
-    char    *buf   = n00b_alloc_array(char, total + 1);
-    memcpy(buf, pad_buf, pad_bytes);
-    memcpy(buf + pad_bytes, data, (size_t)len);
-    buf[total] = '\0';
-    n00b_free(pad_buf);
-
-    int64_t       cps    = n00b_unicode_utf8_count_codepoints_raw(buf, total);
-    n00b_string_t result = n00b_string_from_raw(allocator, buf, total, cps);
-    n00b_free(buf);
-    return result;
-}
-
-n00b_string_t
-n00b_unicode_str_center(n00b_string_t s, int32_t width) _kargs
-{
-    n00b_allocator_t *allocator = nullptr;
-    n00b_codepoint_t  fill      = ' ';
-}
-{
-    if (!allocator)
-        allocator = nullptr;
-
-    const char *data = s.data;
-    int64_t     len  = s.u8_bytes;
-
-    int32_t cur = n00b_unicode_display_width_raw(data, len);
-    if (cur >= width) {
-        int64_t cps = n00b_unicode_utf8_count_codepoints_raw(data, (uint32_t)len);
-        return n00b_string_from_raw(allocator, data, len, cps);
+        return n00b_string_from_raw(data, len, .allocator = allocator);
     }
 
     int32_t fill_w = n00b_unicode_char_width(fill);
     if (fill_w <= 0)
         fill_w = 1;
     int32_t total_fill = (width - cur) / fill_w;
-    int32_t left       = total_fill / 2;
-    int32_t right      = total_fill - left;
 
-    char    *lpad_buf, *rpad_buf;
-    uint32_t lpad_bytes, lpad_cps, rpad_bytes, rpad_cps;
-    encode_fill(fill, left, &lpad_buf, &lpad_bytes, &lpad_cps);
-    encode_fill(fill, right, &rpad_buf, &rpad_bytes, &rpad_cps);
+    if (align == N00B_STR_ALIGN_CENTER) {
+        int32_t left_n  = total_fill / 2;
+        int32_t right_n = total_fill - left_n;
 
-    const char   *parts[3]   = {lpad_buf, data, rpad_buf};
-    int64_t       lengths[3] = {lpad_bytes, len, rpad_bytes};
-    n00b_string_t result     = cat_many_raw(allocator, parts, lengths, 3);
+        char    *lpad_buf, *rpad_buf;
+        uint32_t lpad_bytes, lpad_cps, rpad_bytes, rpad_cps;
+        encode_fill(fill, left_n, &lpad_buf, &lpad_bytes, &lpad_cps);
+        encode_fill(fill, right_n, &rpad_buf, &rpad_bytes, &rpad_cps);
 
-    n00b_free(lpad_buf);
-    n00b_free(rpad_buf);
+        const char   *parts[3]   = {lpad_buf, data, rpad_buf};
+        int64_t       lengths[3] = {lpad_bytes, len, rpad_bytes};
+        n00b_string_t result     = cat_many_raw(allocator, parts, lengths, 3);
+
+        n00b_free(lpad_buf);
+        n00b_free(rpad_buf);
+        return result;
+    }
+
+    char    *pad_buf;
+    uint32_t pad_bytes, pad_cps;
+    encode_fill(fill, total_fill, &pad_buf, &pad_bytes, &pad_cps);
+
+    uint32_t total = (uint32_t)len + pad_bytes;
+    char    *buf   = n00b_alloc_array(char, total + 1);
+
+    if (align == N00B_STR_ALIGN_RIGHT) {
+        memcpy(buf, pad_buf, pad_bytes);
+        memcpy(buf + pad_bytes, data, (size_t)len);
+    }
+    else {
+        memcpy(buf, data, (size_t)len);
+        memcpy(buf + len, pad_buf, pad_bytes);
+    }
+    buf[total] = '\0';
+    n00b_free(pad_buf);
+
+    n00b_string_t result = n00b_string_from_raw(buf, total, .allocator = allocator);
+    n00b_free(buf);
     return result;
 }
 
@@ -1218,8 +1086,7 @@ n00b_unicode_str_truncate(n00b_string_t s, int32_t max_width) _kargs
 
     int32_t cur = n00b_unicode_display_width_raw(data, len);
     if (cur <= max_width) {
-        int64_t cps = n00b_unicode_utf8_count_codepoints_raw(data, (uint32_t)len);
-        return n00b_string_from_raw(allocator, data, len, cps);
+        return n00b_string_from_raw(data, len, .allocator = allocator);
     }
 
     int32_t ellip_w = n00b_unicode_display_width_raw(ellipsis, ellipsis_len);
@@ -1264,7 +1131,7 @@ n00b_unicode_str_repeat(n00b_string_t s, uint32_t count) _kargs
     int64_t     len  = s.u8_bytes;
 
     if (count == 0 || len == 0) {
-        return n00b_string_from_raw(allocator, "", 0, 0);
+        return n00b_string_from_raw("", 0, .allocator = allocator);
     }
 
     uint32_t total = (uint32_t)len * count;
@@ -1275,8 +1142,7 @@ n00b_unicode_str_repeat(n00b_string_t s, uint32_t count) _kargs
     }
     buf[total] = '\0';
 
-    int64_t       cps    = n00b_unicode_utf8_count_codepoints_raw(data, (uint32_t)len) * count;
-    n00b_string_t result = n00b_string_from_raw(allocator, buf, total, cps);
+    n00b_string_t result = n00b_string_from_raw(buf, total, .allocator = allocator);
     n00b_free(buf);
     return result;
 }
@@ -1298,7 +1164,7 @@ n00b_unicode_str_reverse(n00b_string_t s) _kargs
     int64_t     len  = s.u8_bytes;
 
     if (len == 0) {
-        return n00b_string_from_raw(allocator, "", 0, 0);
+        return n00b_string_from_raw("", 0, .allocator = allocator);
     }
 
     // Get grapheme cluster boundaries
@@ -1319,8 +1185,7 @@ n00b_unicode_str_reverse(n00b_string_t s) _kargs
 
     n00b_free(offsets);
 
-    int64_t       cps    = n00b_unicode_utf8_count_codepoints_raw(buf, out_pos);
-    n00b_string_t result = n00b_string_from_raw(allocator, buf, out_pos, cps);
+    n00b_string_t result = n00b_string_from_raw(buf, out_pos, .allocator = allocator);
     n00b_free(buf);
     return result;
 }
@@ -1414,8 +1279,7 @@ n00b_unicode_str_escape(n00b_string_t s) _kargs
 
     if (num_escape == 0) {
         // No escapes needed; return a copy.
-        int64_t cps = n00b_unicode_utf8_count_codepoints_raw(data, len);
-        return n00b_string_from_raw(allocator, data, len, cps);
+        return n00b_string_from_raw(data, len, .allocator = allocator);
     }
 
     // Pass 2: build the escaped string.
@@ -1502,8 +1366,7 @@ n00b_unicode_str_escape(n00b_string_t s) _kargs
     uint32_t actual_len = (uint32_t)(q - buf);
     buf[actual_len]     = '\0';
 
-    int64_t       out_cps = n00b_unicode_utf8_count_codepoints_raw(buf, actual_len);
-    n00b_string_t result  = n00b_string_from_raw(allocator, buf, actual_len, out_cps);
+    n00b_string_t result  = n00b_string_from_raw(buf, actual_len, .allocator = allocator);
     n00b_free(buf);
     return result;
 }
@@ -1681,8 +1544,7 @@ n00b_result_t(n00b_string_t) n00b_unicode_str_unescape(n00b_string_t s) _kargs
     uint32_t actual_len = (uint32_t)(q - buf);
     buf[actual_len]     = '\0';
 
-    int64_t       out_cps = n00b_unicode_utf8_count_codepoints_raw(buf, actual_len);
-    n00b_string_t result  = n00b_string_from_raw(allocator, buf, actual_len, out_cps);
+    n00b_string_t result  = n00b_string_from_raw(buf, actual_len, .allocator = allocator);
     n00b_free(buf);
     return n00b_result_ok(n00b_string_t, result);
 }
@@ -1734,7 +1596,7 @@ n00b_unicode_str_copy(n00b_string_t s) _kargs
     if (!allocator)
         allocator = nullptr;
 
-    return n00b_string_from_raw(allocator, s.data, s.u8_bytes, s.codepoints);
+    return n00b_string_from_raw(s.data, s.u8_bytes, .allocator = allocator);
 }
 
 // ---------------------------------------------------------------------------

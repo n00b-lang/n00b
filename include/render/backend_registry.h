@@ -31,6 +31,8 @@
 #include "core/option.h"
 #include "core/result.h"
 #include "core/array.h"
+#include "core/string.h"
+#include "core/list.h"
 #include "render/backend.h"
 
 // Type-safe wrappers for registry return types.
@@ -69,7 +71,7 @@ typedef struct n00b_renderer_plugin_t {
  *
  * @pre `name` and `vtable` are non-null.
  */
-extern void n00b_renderer_register(const char                   *name,
+extern void n00b_renderer_register(n00b_string_t                 name,
                                     const n00b_renderer_vtable_t *vtable);
 
 /**
@@ -78,17 +80,13 @@ extern void n00b_renderer_register(const char                   *name,
  * @return     Option containing vtable pointer, or none if not found.
  */
 extern n00b_option_t(n00b_renderer_vtable_ptr_t)
-    n00b_renderer_find(const char *name);
+    n00b_renderer_find(n00b_string_t name);
 
 /**
  * @brief List all registered backend names.
- * @param out_names  Output: array of name strings (do not free elements).
- * @param out_count  Output: number of names.
- *
- * @post `out_names` points to static storage; do not free.
+ * @return List of backend name strings.
  */
-extern void n00b_renderer_list(const char ***out_names,
-                                n00b_isize_t *out_count);
+extern n00b_list_t(n00b_string_t) n00b_renderer_list(void);
 
 // ====================================================================
 // Dynamic loading
@@ -104,7 +102,7 @@ extern void n00b_renderer_list(const char ***out_names,
  * @return     Result containing vtable pointer on success, or error code.
  */
 extern n00b_result_t(n00b_renderer_vtable_ptr_t)
-    n00b_renderer_load(const char *path);
+    n00b_renderer_load(n00b_string_t path);
 
 /**
  * @brief Search standard paths for a backend named `name`.
@@ -116,7 +114,7 @@ extern n00b_result_t(n00b_renderer_vtable_ptr_t)
  * @return     Result containing vtable pointer, or error code if not found.
  */
 extern n00b_result_t(n00b_renderer_vtable_ptr_t)
-    n00b_renderer_load_by_name(const char *name);
+    n00b_renderer_load_by_name(n00b_string_t name);
 
 /**
  * @brief Initialize the backend registry with built-in backends.

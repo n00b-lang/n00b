@@ -4,10 +4,17 @@
 #include "internal/unicode/raw.h"
 #include "core/alloc.h"
 #include <string.h>
+#include <errno.h>
+
+#ifdef _WIN32
+#include <io.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#else
 #include <fcntl.h>
 #include <unistd.h>
-#include <errno.h>
 #include <sys/stat.h>
+#endif
 
 // ---------------------------------------------------------------------------
 // Integer → string
@@ -27,7 +34,7 @@ n00b_unicode_str_from_int(int64_t n) _kargs
     buf[20] = '\0';
 
     if (n == 0) {
-        return n00b_string_from_raw(allocator, "0", 1, 1);
+        return n00b_string_from_raw("0", 1, .allocator = allocator);
     }
 
     if (n < 0) {
@@ -48,7 +55,7 @@ n00b_unicode_str_from_int(int64_t n) _kargs
     }
 
     uint32_t len = (uint32_t)(buf + 20 - p);
-    return n00b_string_from_raw(allocator, p, len, len); // all ASCII
+    return n00b_string_from_raw(p, len, .allocator = allocator); // all ASCII
 }
 
 // ---------------------------------------------------------------------------
@@ -59,8 +66,9 @@ static const char hex_lower_tbl[16] = "0123456789abcdef";
 static const char hex_upper_tbl[16] = "0123456789ABCDEF";
 
 n00b_string_t
-n00b_unicode_str_to_hex(n00b_string_t s, bool upper) _kargs
+n00b_unicode_str_to_hex(n00b_string_t s) _kargs
 {
+    bool              upper     = false;
     n00b_allocator_t *allocator = nullptr;
 }
 {
@@ -79,7 +87,7 @@ n00b_unicode_str_to_hex(n00b_string_t s, bool upper) _kargs
     }
     buf[out] = '\0';
 
-    n00b_string_t result = n00b_string_from_raw(allocator, buf, out, out);
+    n00b_string_t result = n00b_string_from_raw(buf, out, .allocator = allocator);
     n00b_free(buf);
     return result;
 }
@@ -129,7 +137,7 @@ n00b_unicode_str_to_literal(n00b_string_t s) _kargs
     buf[total - 1] = '"';
     buf[total]     = '\0';
 
-    n00b_string_t result = n00b_string_from_raw(allocator, buf, total, escaped.codepoints + 2);
+    n00b_string_t result = n00b_string_from_raw(buf, total, .allocator = allocator);
     n00b_free(buf);
     return result;
 }
@@ -149,12 +157,12 @@ n00b_unicode_str_from_codepoint(n00b_codepoint_t cp) _kargs
 
     // Validate codepoint.
     if (cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF)) {
-        return n00b_string_from_raw(allocator, "", 0, 0);
+        return n00b_string_from_raw("", 0, .allocator = allocator);
     }
 
     char     enc[4];
     uint32_t enc_len = n00b_unicode_utf8_encode(cp, enc);
-    return n00b_string_from_raw(allocator, enc, enc_len, 1);
+    return n00b_string_from_raw(enc, enc_len, .allocator = allocator);
 }
 
 // ---------------------------------------------------------------------------
@@ -184,7 +192,7 @@ n00b_result_t(n00b_string_t) n00b_unicode_str_from_file(const char *path) _kargs
     off_t file_size = st.st_size;
     if (file_size == 0) {
         close(fd);
-        n00b_string_t empty = n00b_string_from_raw(allocator, "", 0, 0);
+        n00b_string_t empty = n00b_string_from_raw("", 0, .allocator = allocator);
         return n00b_result_ok(n00b_string_t, empty);
     }
 
@@ -214,8 +222,7 @@ n00b_result_t(n00b_string_t) n00b_unicode_str_from_file(const char *path) _kargs
         return n00b_result_err(n00b_string_t, N00B_ERR_STR_INVALID_ESCAPE);
     }
 
-    int64_t       cps    = n00b_unicode_utf8_count_codepoints_raw(buf, (uint32_t)total_read);
-    n00b_string_t result = n00b_string_from_raw(allocator, buf, total_read, cps);
+    n00b_string_t result = n00b_string_from_raw(buf, total_read, .allocator = allocator);
     n00b_free(buf);
     return n00b_result_ok(n00b_string_t, result);
 }

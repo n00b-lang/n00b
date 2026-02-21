@@ -205,6 +205,41 @@ wrap_in_parens(tnode_t *assign_expr, int line)
 }
 
 /**
+ * @brief Check if a type_name AST subtree is a pointer type.
+ *
+ * Pointer types have an abstract_declarator or declarator containing
+ * a pointer node ('*'). If the type_name has only specifier_qualifier_list
+ * with no pointer, it's a non-pointer (struct, scalar, etc.) type.
+ */
+static bool
+type_is_pointer(tnode_t *type_node)
+{
+    if (!type_node) {
+        return false;
+    }
+
+    // Look for NT_pointer anywhere in the type tree
+    for (int i = 0; i < type_node->num_kids; i++) {
+        tnode_t *kid = tnode_get_kid(type_node, i);
+        if (!kid) {
+            continue;
+        }
+        if (kid->nt_id == NT_pointer) {
+            return true;
+        }
+        if (kid->nt_id == NT_abstract_declarator
+            || kid->nt_id == NT_declarator
+            || kid->nt_id == NT_direct_abstract_declarator
+            || kid->nt_id == NT_direct_declarator) {
+            if (type_is_pointer(kid)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+/**
  * @brief Build a cast expression: (void *)(expr)
  * Takes an assignment_expression and wraps it in parentheses, then casts to void*.
  */
@@ -371,12 +406,80 @@ build_address_of(tnode_t *operand, int line)
 }
 
 /**
+ * @brief Build: (void*)(&(T[]){expr}[0]) — pass a struct-typed expr by reference.
+ *
+ * Uses an array compound literal so that the struct expression initializes
+ * the first (and only) element via copy-initialization. Then takes the address
+ * of that element and casts to void*.
+ */
+static tnode_t *
+build_voidptr_by_ref(tnode_t *assign_expr, tnode_t *type_node, int line)
+{
+    // Build compound literal: (T[]){expr}
+    tnode_t *cl = synth_nonterminal("compound_literal_1");
+    cl->nt_id   = NT_compound_literal;
+    cl->branch  = 1;
+
+    add_child(cl, synth_terminal("(", TT_PUNCT, line));
+
+    // Build type_name: T[]
+    tnode_t *arr_type = copy_tree(type_node);
+
+    // Append [] abstract declarator to make it an array type
+    tnode_t *abs_decl = synth_nonterminal("abstract_declarator_0");
+    abs_decl->nt_id   = NT_abstract_declarator;
+    abs_decl->branch  = 0;
+
+    tnode_t *dabs = synth_nonterminal("direct_abstract_declarator_1");
+    dabs->nt_id   = NT_direct_abstract_declarator;
+    dabs->branch  = 1;
+
+    tnode_t *array_abs = synth_nonterminal("array_abstract_declarator_0");
+    array_abs->nt_id   = NT_array_abstract_declarator;
+    array_abs->branch  = 0;
+    add_child(array_abs, synth_terminal("[", TT_PUNCT, line));
+    add_child(array_abs, synth_terminal("]", TT_PUNCT, line));
+
+    add_child(dabs, array_abs);
+    add_child(abs_decl, dabs);
+    add_child(arr_type, abs_decl);
+
+    add_child(cl, arr_type);
+    add_child(cl, synth_terminal(")", TT_PUNCT, line));
+
+    // Braced initializer: {expr}
+    tnode_t *braced = synth_nonterminal("braced_initializer_0");
+    braced->nt_id   = NT_braced_initializer;
+    braced->branch  = 0;
+
+    add_child(braced, synth_terminal("{", TT_PUNCT, line));
+
+    tnode_t *init_list = synth_nonterminal("initializer_list");
+    init_list->nt_id   = NT_initializer_list;
+
+    tnode_t *init = synth_nonterminal("initializer_1");
+    init->nt_id   = NT_initializer;
+    init->branch  = 1;
+    add_child(init, assign_expr);
+    add_child(init_list, init);
+
+    add_child(braced, init_list);
+    add_child(braced, synth_terminal("}", TT_PUNCT, line));
+    add_child(cl, braced);
+
+    // Cast compound literal to void*
+    // (T[]){expr} decays to T*, and (void*)(T*) is valid
+    return build_void_ptr_cast(cl, line);
+}
+
+/**
  * @brief Build a compound literal for vargs.
  * (n00b_vargs_t){.nargs=N, .cur_ix=0, .args=(void*[]){...}}
  */
 static tnode_t *
-build_vargs_compound_literal(ncc_list_t *varg_exprs, int line)
+build_vargs_compound_literal(ncc_list_t *varg_exprs, tnode_t *type_node, int line)
 {
+    bool pass_by_ref = type_node && !type_is_pointer(type_node);
     int nargs = ncc_list_len(varg_exprs);
 
     tnode_t *literal = synth_nonterminal("compound_literal_1");
@@ -539,13 +642,19 @@ build_vargs_compound_literal(ncc_list_t *varg_exprs, int line)
     inner_init_list->nt_id   = NT_initializer_list;
 
     // Add each variadic argument, cast to (void*)
+    // For non-pointer types (structs), pass by reference: (void*)(&(T){expr})
     for (int i = 0; i < nargs; i++) {
         if (i > 0) {
             add_child(inner_init_list, synth_terminal(",", TT_PUNCT, line));
         }
         tnode_t *arg = ncc_list_get(varg_exprs, i);
-        // Cast the argument to (void*) for storage in the void*[] array
-        tnode_t *casted_arg = build_void_ptr_cast(arg, line);
+        tnode_t *casted_arg;
+        if (pass_by_ref) {
+            casted_arg = build_voidptr_by_ref(arg, type_node, line);
+        }
+        else {
+            casted_arg = build_void_ptr_cast(arg, line);
+        }
         tnode_t *arg_init = synth_nonterminal("initializer_1");
         arg_init->nt_id   = NT_initializer;
         arg_init->branch  = 1;
@@ -729,10 +838,10 @@ build_static_assert_type_check(tnode_t *arg_expr, tnode_t *type_node, int line)
     add_child(sa, synth_terminal("_Static_assert", TT_KEYWORD, line));
     add_child(sa, synth_terminal("(", TT_PUNCT, line));
 
-    // primary_expression_8: __builtin_types_compatible_p ( type_name , type_name )
-    tnode_t *compat = synth_nonterminal("primary_expression_8");
+    // primary_expression_7: compiler_builtin ( balanced_token_sequence )
+    tnode_t *compat = synth_nonterminal("primary_expression_7");
     compat->nt_id   = NT_primary_expression;
-    compat->branch  = 8;
+    compat->branch  = BRANCH(primary_expression, COMPILER_BUILTIN_BAL);
 
     add_child(compat, synth_terminal("__builtin_types_compatible_p", TT_ID, line));
     add_child(compat, synth_terminal("(", TT_PUNCT, line));
@@ -994,8 +1103,51 @@ contains_kw_func_call(ncc_buf_t *input, tnode_t *node)
 }
 
 /**
+ * @brief Check if a node is a kw_func() result (the kargs struct expression).
+ *
+ * The flag is set on the postfix_expression produced by xform_kw_func,
+ * but it may be wrapped in expression hierarchy nodes (assignment_expression,
+ * conditional_expression, etc.) by the time it appears in an argument list.
+ *
+ * Only follows single-child expression hierarchy chains. Does NOT recurse
+ * into function call argument lists — a kw_func_result flag on an arg
+ * of an inner call does not make the outer call expression a kw_func result.
+ */
+static bool
+is_kw_func_result(tnode_t *node)
+{
+    while (node) {
+        if (node->kw_func_result) {
+            return true;
+        }
+        // Stop at function calls — don't look inside argument lists
+        if (node->nt_id == NT_postfix_expression
+            && node->branch == BRANCH(postfix_expression, CALL)) {
+            return false;
+        }
+        // Follow single-child expression hierarchy chains
+        if (node->num_kids == 1) {
+            node = tnode_get_kid(node, 0);
+            continue;
+        }
+        // For multi-child nodes in the expression hierarchy,
+        // follow the first child (the actual expression)
+        if (node->num_kids > 1) {
+            tnode_t *first = tnode_get_kid(node, 0);
+            if (first && first->nt_id != NT_NONE
+                && first->nt_id != NT_argument_expression_list) {
+                node = first;
+                continue;
+            }
+        }
+        return false;
+    }
+    return false;
+}
+
+/**
  * @brief Count total arguments in an argument_expression_list.
- * Does not count keyword arguments or kw_func() calls.
+ * Does not count keyword arguments, kw_func() calls, or kw_func results.
  */
 static int
 count_args(ncc_buf_t *input, tnode_t *arg_list)
@@ -1007,6 +1159,10 @@ count_args(ncc_buf_t *input, tnode_t *arg_list)
     if (arg_list->nt_id == NT_assignment_expression) {
         // Don't count if this expression contains a kw_func() call
         if (contains_kw_func_call(input, arg_list)) {
+            return 0;
+        }
+        // Don't count already-transformed kw_func results
+        if (is_kw_func_result(arg_list)) {
             return 0;
         }
         return 1;
@@ -1032,7 +1188,7 @@ count_args(ncc_buf_t *input, tnode_t *arg_list)
 
 /**
  * @brief Collect variadic arguments into a list.
- * Stops when it hits a keyword argument or kw_func() call.
+ * Stops when it hits a keyword argument, kw_func() call, or kw_func result.
  * @note ncc_list_append frees the old list and returns a new one,
  *       so we take a pointer-to-pointer to update the caller's list.
  */
@@ -1046,6 +1202,11 @@ collect_vargs(ncc_buf_t *input, tnode_t *node, int *arg_index, int positional_co
     if (node->nt_id == NT_assignment_expression) {
         // Check if this is a kw_func() call - treat like keyword argument
         if (contains_kw_func_call(input, node)) {
+            *hit_keyword = true;
+            return;
+        }
+        // Check if this is an already-transformed kw_func result
+        if (is_kw_func_result(node)) {
             *hit_keyword = true;
             return;
         }
@@ -1075,7 +1236,7 @@ collect_vargs(ncc_buf_t *input, tnode_t *node, int *arg_index, int positional_co
  * @brief Collect keyword arguments into a list.
  */
 static void
-collect_kw_args(tnode_t *node, ncc_list_t **kw_args_ptr)
+collect_kw_args(ncc_buf_t *input, tnode_t *node, ncc_list_t **kw_args_ptr)
 {
     if (!node) {
         return;
@@ -1088,7 +1249,22 @@ collect_kw_args(tnode_t *node, ncc_list_t **kw_args_ptr)
 
     if (node->nt_id == NT_argument_expression_list) {
         for (int i = 0; i < node->num_kids; i++) {
-            collect_kw_args(tnode_get_kid(node, i), kw_args_ptr);
+            collect_kw_args(input, tnode_get_kid(node, i), kw_args_ptr);
+        }
+        return;
+    }
+
+    // Treat already-transformed kw_func() results (flagged by xform_kw_func)
+    // and un-transformed kw_func() calls the same as keyword arguments —
+    // they produce a kargs struct and must be preserved for the kw_call transform.
+    if (is_kw_func_result(node)) {
+        *kw_args_ptr = ncc_list_append(*kw_args_ptr, node);
+        return;
+    }
+    if (node->nt_id == NT_assignment_expression) {
+        if (contains_kw_func_call(input, node)) {
+            *kw_args_ptr = ncc_list_append(*kw_args_ptr, node);
+            return;
         }
     }
 }
@@ -1100,6 +1276,10 @@ static tnode_t *
 xform_vargs_call(tree_xform_t *ctx, tnode_t *node)
 {
     if (node->branch != BRANCH(postfix_expression, CALL)) {
+        return nullptr;
+    }
+
+    if (node->vargs_done) {
         return nullptr;
     }
 
@@ -1198,29 +1378,20 @@ xform_vargs_call(tree_xform_t *ctx, tnode_t *node)
             for (int i = node->num_kids - 1; i >= 0; i--) {
                 tnode_t *kid = tnode_get_kid(node, i);
                 if (kid && kid->tptr && kid->nt && strcmp(kid->nt, ")") == 0) {
-                    // Grow kids array to make room for the new child
-                    int         old_count = node->num_kids;
-                    int         new_count = old_count + 1;
-                    ncc_list_t *new_kids  = ncc_list_alloc(new_count);
-
-                    for (int k = 0; k < old_count; k++) {
-                        new_kids->items[k] = node->kids->items[k];
+                    // Grow kids array and insert at position i
+                    ncc_list_ensure_cap(node->kids, node->num_kids + 1);
+                    for (int j = node->num_kids; j > i; j--) {
+                        node->kids->data[j] = node->kids->data[j - 1];
                     }
-
-                    base_dealloc(node->kids);
-                    node->kids = new_kids;
-
-                    // Shift children right to make room at position i
-                    for (int j = old_count; j > i; j--) {
-                        node->kids->items[j] = node->kids->items[j - 1];
-                    }
-                    node->kids->items[i] = new_arg_list;
-                    node->num_kids       = new_count;
+                    node->kids->data[i] = new_arg_list;
+                    node->num_kids++;
+                    node->kids->len = node->num_kids;
                     new_arg_list->parent  = node;
                     break;
                 }
             }
         }
+        node->vargs_done = true;
         return nullptr;
     }
 
@@ -1230,9 +1401,9 @@ xform_vargs_call(tree_xform_t *ctx, tnode_t *node)
     int arg_idx = 0;
     collect_vargs(ctx->input, arg_list, &arg_idx, positional_args, &vargs, &hit_keyword);
 
-    // Collect keyword arguments (preserved for keyword transform)
+    // Collect keyword arguments and kw_func() calls (preserved for keyword transform)
     ncc_list_t *kw_args = nullptr;
-    collect_kw_args(arg_list, &kw_args);
+    collect_kw_args(ctx->input, arg_list, &kw_args);
 
     if (ncc_list_len(vargs) == 0) {
         base_dealloc(vargs);
@@ -1252,7 +1423,7 @@ xform_vargs_call(tree_xform_t *ctx, tnode_t *node)
     }
 
     // Build the vargs compound literal with address-of
-    tnode_t *literal = build_vargs_compound_literal(vargs, line);
+    tnode_t *literal = build_vargs_compound_literal(vargs, vargs_info->type_node, line);
     tnode_t *addr_of = build_address_of(literal, line);
     tnode_t *vargs_assign = wrap_in_expr_hierarchy(addr_of, line);
 
@@ -1283,7 +1454,7 @@ xform_vargs_call(tree_xform_t *ctx, tnode_t *node)
             add_child(new_arg_list, synth_terminal(",", TT_PUNCT, line));
         }
         tnode_t *arg = ncc_list_get(pos_args, i);
-        add_child(new_arg_list, arg);
+        add_child(new_arg_list, copy_tree(arg));
     }
 
     // Add comma and vargs struct
@@ -1297,7 +1468,7 @@ xform_vargs_call(tree_xform_t *ctx, tnode_t *node)
     for (int i = 0; i < kw_count; i++) {
         add_child(new_arg_list, synth_terminal(",", TT_PUNCT, line));
         tnode_t *kw_arg = ncc_list_get(kw_args, i);
-        add_child(new_arg_list, kw_arg);
+        add_child(new_arg_list, copy_tree(kw_arg));
     }
 
     // If function has opaque kargs but no keyword arguments in call, add nullptr
@@ -1319,6 +1490,8 @@ xform_vargs_call(tree_xform_t *ctx, tnode_t *node)
     base_dealloc(pos_args);
     base_dealloc(vargs);
     base_dealloc(kw_args);
+
+    node->vargs_done = true;
 
     // For typed varargs, wrap the call in a statement expression with
     // _Static_assert checks for each variadic argument's type

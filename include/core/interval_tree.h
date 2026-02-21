@@ -62,20 +62,16 @@ n00b_result_decl(n00b_interval_node_t *);
 // ============================================================================
 
 /**
- * @brief Allocate and initialize a new interval tree.
- * @param allocator Allocator to use for node storage.
- * @return          New interval tree.
+ * @brief Initialize an interval tree structure.
+ * @param tree Tree to initialize.
+ *
+ * @kw allocator Allocator for internal node storage (nullptr = runtime default).
  */
-n00b_interval_tree_t *n00b_new_interval_tree(n00b_allocator_t *allocator);
-
-/**
- * @brief Initialize an existing interval tree structure.
- * @param tree      Tree to initialize.
- * @param allocator Allocator to use for node storage.
- * @return          0 on success.
- */
-int                   n00b_init_interval_tree(n00b_interval_tree_t *tree,
-                                              n00b_allocator_t     *allocator);
+extern void
+n00b_interval_tree_init(n00b_interval_tree_t *tree) _kargs
+{
+    n00b_allocator_t *allocator = nullptr;
+};
 
 /**
  * @brief Insert an interval [low, high] with associated data.

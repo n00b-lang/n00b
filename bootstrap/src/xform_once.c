@@ -791,9 +791,9 @@ build_wrapper_body(const char *func_name, const char *impl_name, tnode_t *param_
         // __atomic_store_n(&lock, ~0, __ATOMIC_RELEASE)
         ncc_list_t *store_args = ncc_list_alloc(3);
         tnode_t *lock_addr = build_address_of(build_primary_id(lock_name, line), line);
-        store_args->items[0] = wrap_in_expr_hierarchy(lock_addr, line);
-        store_args->items[1] = wrap_in_expr_hierarchy(build_constant("0xFFFFFFFF", line), line);
-        store_args->items[2] = wrap_in_expr_hierarchy(build_primary_id("__ATOMIC_RELEASE", line), line);
+        store_args->data[0] = wrap_in_expr_hierarchy(lock_addr, line);
+        store_args->data[1] = wrap_in_expr_hierarchy(build_constant("0xFFFFFFFF", line), line);
+        store_args->data[2] = wrap_in_expr_hierarchy(build_primary_id("__ATOMIC_RELEASE", line), line);
         tnode_t *store_call = build_function_call("__atomic_store_n", store_args, line);
         add_child(switch_body_list, build_stmt_block_item(build_expr_stmt(wrap_in_expr_hierarchy(store_call, line), line)));
         base_dealloc(store_args);
@@ -803,8 +803,8 @@ build_wrapper_body(const char *func_name, const char *impl_name, tnode_t *param_
         tnode_t *futex_addr = build_address_of(build_primary_id(lock_name, line), line);
         // Cast to base_futex_t*
         tnode_t *futex_cast = build_cast("base_futex_t", wrap_in_expr_hierarchy(futex_addr, line), line);
-        wake_args->items[0] = wrap_in_expr_hierarchy(futex_cast, line);
-        wake_args->items[1] = wrap_in_expr_hierarchy(build_primary_id("true", line), line);
+        wake_args->data[0] = wrap_in_expr_hierarchy(futex_cast, line);
+        wake_args->data[1] = wrap_in_expr_hierarchy(build_primary_id("true", line), line);
         tnode_t *wake_call = build_function_call("base_futex_wake", wake_args, line);
         add_child(switch_body_list, build_stmt_block_item(build_expr_stmt(wrap_in_expr_hierarchy(wake_call, line), line)));
         base_dealloc(wake_args);
@@ -858,9 +858,9 @@ build_wrapper_body(const char *func_name, const char *impl_name, tnode_t *param_
     // Switch expression: __atomic_fetch_or(&lock, 1, __ATOMIC_ACQ_REL)
     ncc_list_t *fetch_args = ncc_list_alloc(3);
     tnode_t *lock_addr = build_address_of(build_primary_id(lock_name, line), line);
-    fetch_args->items[0] = wrap_in_expr_hierarchy(lock_addr, line);
-    fetch_args->items[1] = wrap_in_expr_hierarchy(build_constant("1", line), line);
-    fetch_args->items[2] = wrap_in_expr_hierarchy(build_primary_id("__ATOMIC_ACQ_REL", line), line);
+    fetch_args->data[0] = wrap_in_expr_hierarchy(lock_addr, line);
+    fetch_args->data[1] = wrap_in_expr_hierarchy(build_constant("1", line), line);
+    fetch_args->data[2] = wrap_in_expr_hierarchy(build_primary_id("__ATOMIC_ACQ_REL", line), line);
     tnode_t *fetch_call = build_function_call("__atomic_fetch_or", fetch_args, line);
 
     tnode_t *sel_header = synth_nonterminal("selection_header_2");
@@ -1074,7 +1074,7 @@ xform_once_definition(tree_xform_t *ctx, tnode_t *node)
             tnode_t *kid = tnode_get_kid(name_dd, i);
             if (kid && kid->nt_id == NT_identifier) {
                 // Replace with new identifier
-                name_dd->kids->items[i] = build_identifier(impl_name, line);
+                name_dd->kids->data[i] = build_identifier(impl_name, line);
                 break;
             }
         }
@@ -1082,15 +1082,16 @@ xform_once_definition(tree_xform_t *ctx, tnode_t *node)
 
     add_child(impl_def, impl_declarator);
 
-    // Reparent the original function body to the implementation
-    add_child(impl_def, func_body);
+    // Copy the function body to the implementation (don't reparent the
+    // original — it stays in `node` until replaced by wrapper_body below).
+    add_child(impl_def, copy_tree(func_body));
 
     add_child(impl_ext_decl, impl_def);
 
     // 7. Replace original function body with wrapper body
     int body_idx = find_child_index(node, func_body);
     if (body_idx >= 0) {
-        node->kids->items[body_idx] = wrapper_body;
+        node->kids->data[body_idx] = wrapper_body;
         wrapper_body->parent = node;
     }
 

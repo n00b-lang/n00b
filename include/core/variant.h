@@ -23,7 +23,7 @@
  * @brief Declare + define a variant type. Use in variable declarations.
  * @param ...  Types held inside the variant.
  */
-#define n00b_variant_struct_decl(...)                                                          \
+#define n00b_variant_decl(...)                                                                 \
     n00b_variant_t(__VA_ARGS__)                                                                \
     {                                                                                          \
         uint64_t selector;                                                                     \
@@ -43,7 +43,11 @@
          .value.N00B_VARIANT_FIELD(T) = (val),                                                 \
      })
 
-#define n00b_variant_set(v, T, val) _n00b_variant_set_ptr(&(v), T, val)
+#define n00b_variant_set(VTYPE, T, val)                                                        \
+    (VTYPE)                                                                                    \
+    {                                                                                          \
+        .selector = typehash(T), .value.N00B_VARIANT_FIELD(T) = (val),                         \
+    }
 
 #define _n00b_variant_is_set_ptr(vptr) ((vptr)->selector != 0)
 

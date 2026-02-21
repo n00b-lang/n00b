@@ -165,8 +165,9 @@ is locked).
 #### Rendering
 
 ```c
-n00b_plane_t *n00b_table_render(n00b_table_t *table, int64_t width, +);
+n00b_plane_t *n00b_table_render(n00b_table_t *table, +);
     // keyword args:
+    //   .width = 80      (available width in cells)
     //   .force = false   (true = re-render even if cached)
 ```
 
@@ -209,7 +210,7 @@ n00b_table_end_row(t);
 n00b_table_end(t);
 
 // Render to an 80-column plane
-n00b_plane_t *p = n00b_table_render(t, 80);
+n00b_plane_t *p = n00b_table_render(t);
 
 n00b_table_destroy(t);
 ```
@@ -223,19 +224,19 @@ n00b_table_t *n00b_table_from_string(n00b_string_t s, +);
     //   .col_sep     = nullptr   (",")
     //   .table_props, .cell_props, .header_props, .alt_props, .allocator
 
-n00b_table_t *n00b_callout(n00b_string_t *content);
+n00b_table_t *n00b_table_callout(n00b_string_t content);
 
-n00b_table_t *n00b_flow(n00b_string_t *items, n00b_isize_t n);
+n00b_table_t *n00b_table_flow(n00b_string_t *items, n00b_isize_t n);
 ```
 
 `n00b_table_from_string()` splits a string into rows and columns on the
 given delimiters (defaults: newline/comma).  Trailing empty rows from a
 trailing newline are skipped.
 
-`n00b_callout()` creates a single-cell bordered callout box with extra
+`n00b_table_callout()` creates a single-cell bordered callout box with extra
 padding.
 
-`n00b_flow()` creates a single-row horizontal flow layout with flex
+`n00b_table_flow()` creates a single-row horizontal flow layout with flex
 columns.
 
 **Example:**
@@ -243,7 +244,7 @@ columns.
 ```c
 n00b_string_t csv = STR("Name,Age,City\nAlice,30,NYC\nBob,25,LA");
 n00b_table_t *t = n00b_table_from_string(csv);
-n00b_plane_t *p = n00b_table_render(t, 60);
+n00b_plane_t *p = n00b_table_render(t, .width = 60);
 ```
 
 ---
@@ -384,7 +385,7 @@ ncc's `_kargs` extension:
 ```c
 n00b_table_new(.num_cols = 4, .max_rows = 50, .title = &my_title)
 n00b_table_add_cell(t, content, .col_span = -1)
-n00b_table_render(t, 120, .force = true)
+n00b_table_render(t, .width = 120, .force = true)
 ```
 
 ### Thread safety
@@ -420,11 +421,11 @@ to the row array and layout cache.
 | Table with no wrap | `n00b_table_new(.wrap = false)` |
 | Finalize row | `n00b_table_end_row(t)` |
 | Finalize table | `n00b_table_end(t)` |
-| Render to plane | `n00b_table_render(t, width)` |
-| Force re-render | `n00b_table_render(t, width, .force = true)` |
+| Render to plane | `n00b_table_render(t, .width = w)` |
+| Force re-render | `n00b_table_render(t, .width = w, .force = true)` |
 | Invalidate cache | `n00b_table_invalidate(t)` |
 | Default style | `n00b_table_style_default()` |
 | Parse CSV/delimited | `n00b_table_from_string(s)` |
-| Callout box | `n00b_callout(&content)` |
-| Horizontal flow | `n00b_flow(items, n)` |
+| Callout box | `n00b_table_callout(content)` |
+| Horizontal flow | `n00b_table_flow(items, n)` |
 | Destroy table | `n00b_table_destroy(t)` |

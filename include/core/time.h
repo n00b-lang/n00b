@@ -9,7 +9,11 @@
 #pragma once
 
 #include <time.h> // IWYU pragma: keep
+#ifndef _WIN32
 #include <sys/time.h>
+#else
+#include "core/platform.h"
+#endif
 
 #define N00B_USEC_PER_SEC 1000000
 #define N00B_NSEC_PER_SEC 1000000000
@@ -24,7 +28,6 @@ static inline void
 n00b_capture_timestamp(n00b_duration_t *output)
 {
     clock_gettime(CLOCK_REALTIME, (struct timespec *)output);
-    output->tv_nsec *= N00B_NS_PER_US;
 }
 
 /**
@@ -62,7 +65,6 @@ n00b_ns_timestamp(void)
 {
     n00b_duration_t d;
     clock_gettime(CLOCK_MONOTONIC, (void *)&d);
-    d.tv_nsec *= N00B_NS_PER_US;
 
     return n00b_ns_from_duration(&d);
 }
@@ -74,10 +76,19 @@ n00b_ns_timestamp(void)
 static inline int64_t
 n00b_us_timestamp(void)
 {
+#ifdef _WIN32
+    FILETIME ft;
+    GetSystemTimeAsFileTime(&ft);
+    uint64_t t = ((uint64_t)ft.dwHighDateTime << 32) | ft.dwLowDateTime;
+    // FILETIME is 100-ns intervals since 1601-01-01; convert to us since epoch.
+    t -= 116444736000000000ULL;
+    return (int64_t)(t / 10);
+#else
     struct timeval tv;
     gettimeofday(&tv, nullptr);
 
-    return tv.tv_sec * N00B_USEC_PER_SEC * tv.tv_usec;
+    return tv.tv_sec * N00B_USEC_PER_SEC + tv.tv_usec;
+#endif
 }
 
 /**

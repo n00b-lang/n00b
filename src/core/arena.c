@@ -15,12 +15,13 @@
 #include "core/dict_untyped.h"
 #include "core/stw.h"
 
-#ifndef N00B_DEFAULT_SCRATCH_ARENA_SIZE
-#define N00B_DEFAULT_SCRATCH_ARENA_SIZE (1 << 18) // 256K
-#endif
+// N00B_DEFAULT_SCRATCH_ARENA_SIZE now defined in arena.h
 
 void
-n00b_register_arena_segment(void *start, void *end, n00b_arena_t *arena, const char *file)
+n00b_register_arena_segment(void *start, void *end, n00b_arena_t *arena) _kargs
+{
+    const char *file = nullptr;
+}
 {
     n00b_mmap_rec_kind_t kind = n00b_get_arena_addr_type(arena, (void *)start);
 
@@ -89,7 +90,7 @@ n00b_add_arena_segment(n00b_arena_t *arena, uint64_t request_len)
     n00b_atomic_store(&arena->current_segment, segment);
 
     if (!arena->vtable.hidden) {
-        n00b_register_arena_segment(segment, arena->segment_end, arena, nullptr);
+        n00b_register_arena_segment(segment, arena->segment_end, arena);
     }
 
     // Make the lock a full thread fence so we ensure our fields are

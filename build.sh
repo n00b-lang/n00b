@@ -24,6 +24,20 @@ if [[ -n "${N00B_MESON_CROSS_FILE}" ]] ; then
     N00B_MAIN_MESON_FILE_ARGS+=(--cross-file "${N00B_MESON_CROSS_FILE}")
 fi
 
+# ── Docker cross-compilation on macOS ────────────────────────────────────────
+# On macOS, if Docker is available with an osxcross-enabled image, delegate
+# to docker/cross-build.sh for cross-compilation. Set N00B_NATIVE=1 to
+# skip this and build natively.
+if [[ "$(uname -s)" == "Darwin" ]] && \
+   [[ "${N00B_NATIVE}" == "0" ]] && \
+   command -v docker &>/dev/null && \
+   docker info &>/dev/null 2>&1 && \
+   docker image inspect n00b-linux &>/dev/null 2>&1; then
+    if docker run --rm n00b-linux test -d /usr/local/osxcross/bin 2>/dev/null; then
+        echo "=== Docker cross-compilation (N00B_NATIVE=1 to override) ==="
+        exec bash "${N00B_ROOT}/docker/cross-build.sh" macos-arm64
+    fi
+fi
 
 function ensure_bootstrap {
     if [[ ! -f bin/ncc-bootstrap ]] || [[ ${N00B_CLEAN} -ne 0 ]] ; then
@@ -175,6 +189,89 @@ function build_n00b {
        fi
        echo "Documentation generated in ${build_dir}/docs/html/"
    fi
+}
+
+# ============================================================================
+# Cross-compilation support
+#
+# N00B_CROSS=all              — cross-compile for all targets with available toolchains
+# N00B_CROSS=linux-x86_64     — cross-compile for one specific target
+# ============================================================================
+
+function cross_compile_target {
+    local cross_file=$1
+    local target_name=$(basename ${cross_file} .cross)
+    local build_dir="build_cross_${target_name}"
+
+    # Extract the C compiler path from the cross file.
+    local cross_cc=$(python3 -c "
+import configparser, pathlib, os
+p = pathlib.Path('${cross_file}')
+cp = configparser.ConfigParser()
+cp.read(p)
+tc = cp.get('constants', 'toolchain', fallback='/usr').strip().strip(\"'\")
+c_val = cp.get('binaries', 'c', fallback='').strip().strip(\"'\")
+# Handle 'toolchain / ...' path expressions
+c_val = c_val.replace('toolchain / ', tc + '/')
+print(c_val)
+" 2>/dev/null)
+
+    if [[ -z "${cross_cc}" ]] || [[ ! -x "${cross_cc}" ]] ; then
+        echo "  [SKIP] ${target_name} — cross-compiler not found: ${cross_cc:-<empty>}"
+        return 0
+    fi
+
+    echo "  [BUILD] ${target_name} (${cross_cc})"
+
+    if [[ ${N00B_CLEAN} -ne 0 ]] && [[ -d ${build_dir} ]] ; then
+        rm -rf ${build_dir}
+    fi
+
+    if [[ ! -d ${build_dir} ]] ; then
+        CC=${N00B_ROOT}/bin/ncc-bootstrap \
+        meson setup --cross-file ${cross_file} \
+            --buildtype=${N00B_BUILD_TYPE} $(all_options) ${build_dir} .
+        if [[ $? -ne 0 ]] ; then
+            echo "  [FAIL] ${target_name} — meson setup failed"
+            return 1
+        fi
+    fi
+
+    meson compile -C ${build_dir}
+    if [[ $? -ne 0 ]] ; then
+        echo "  [FAIL] ${target_name} — compile failed"
+        return 1
+    fi
+
+    echo "  [OK]   ${target_name}"
+    return 0
+}
+
+function cross_compile {
+    echo "Cross-compiling..."
+    local failed=0
+
+    if [[ "${N00B_CROSS}" == "all" ]] ; then
+        for cf in ${N00B_ROOT}/cross/*.cross ; do
+            cross_compile_target "${cf}" || failed=1
+        done
+    else
+        local cf="${N00B_ROOT}/cross/${N00B_CROSS}.cross"
+        if [[ ! -f "${cf}" ]] ; then
+            echo "Cross file not found: ${cf}"
+            echo "Available targets:"
+            ls ${N00B_ROOT}/cross/*.cross 2>/dev/null | while read f; do
+                echo "  $(basename $f .cross)"
+            done
+            exit 1
+        fi
+        cross_compile_target "${cf}" || failed=1
+    fi
+
+    if [[ ${failed} -ne 0 ]] ; then
+        echo "Some cross-compilation targets failed."
+        exit 1
+    fi
 }
 
 ensure_bootstrap

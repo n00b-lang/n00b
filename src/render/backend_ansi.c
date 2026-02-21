@@ -1,4 +1,4 @@
-/**
+/*
  * ANSI terminal renderer backend.
  *
  * Full-featured terminal backend with:
@@ -19,6 +19,7 @@
 #include "n00b.h"
 #include "core/alloc.h"
 #include "render/backend.h"
+#include "conduit/write.h"
 #include "strings/text_style.h"
 #include "strings/theme.h"
 
@@ -27,15 +28,16 @@
 // -------------------------------------------------------------------
 
 typedef struct {
-    char        *buf;
-    size_t       buf_size;
-    size_t       buf_used;
-    int          fd;
-    n00b_isize_t rows;
-    n00b_isize_t cols;
-    n00b_isize_t cursor_row;
-    n00b_isize_t cursor_col;
-    bool         cursor_visible;
+    char                                   *buf;
+    size_t                                  buf_size;
+    size_t                                  buf_used;
+    int                                     fd;
+    n00b_conduit_topic_t(n00b_buffer_t *)  *output;
+    n00b_isize_t                            rows;
+    n00b_isize_t                            cols;
+    n00b_isize_t                            cursor_row;
+    n00b_isize_t                            cursor_col;
+    bool                                    cursor_visible;
 } ansi_ctx_t;
 
 #define ANSI_INITIAL_BUF 16384
@@ -107,7 +109,7 @@ ansi_ensure(ansi_ctx_t *ctx, size_t needed)
         ctx->buf_size *= 2;
     }
 
-    char *new_buf = n00b_alloc_size(1, ctx->buf_size, .no_scan = true);
+    char *new_buf = n00b_alloc_array_with_opts(char, ctx->buf_size, &(n00b_alloc_opts_t){.no_scan = true});
     memcpy(new_buf, ctx->buf, ctx->buf_used);
     n00b_free(ctx->buf);
     ctx->buf = new_buf;
@@ -256,12 +258,13 @@ ansi_move_cursor(ansi_ctx_t *ctx, n00b_isize_t row, n00b_isize_t col)
 // -------------------------------------------------------------------
 
 static void *
-ansi_init(void)
+ansi_init(n00b_conduit_topic_t(n00b_buffer_t *) *output)
 {
-    ansi_ctx_t *ctx = n00b_alloc(ansi_ctx_t, .no_scan = true);
+    ansi_ctx_t *ctx = n00b_alloc_with_opts(ansi_ctx_t, &(n00b_alloc_opts_t){.no_scan = true});
     ctx->fd         = STDOUT_FILENO;
+    ctx->output     = output;
     ctx->buf_size   = ANSI_INITIAL_BUF;
-    ctx->buf        = n00b_alloc_size(1, ANSI_INITIAL_BUF, .no_scan = true);
+    ctx->buf        = n00b_alloc_array_with_opts(char, ANSI_INITIAL_BUF, &(n00b_alloc_opts_t){.no_scan = true});
     ctx->buf_used   = 0;
     ctx->cursor_visible = true;
 
@@ -374,6 +377,13 @@ ansi_flush(void *vctx)
         n00b_os_write(ctx->fd, ctx->buf, ctx->buf_used);
         ctx->buf_used = 0;
     }
+
+    if (ctx->output) {
+        n00b_buffer_t *buf = n00b_buffer_from_bytes(ctx->buf, (int64_t)ctx->buf_used);
+        n00b_write(n00b_buffer_t *, ctx->output, buf);
+    }
+
+    ctx->buf_used = 0;
 }
 
 static void

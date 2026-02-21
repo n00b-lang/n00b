@@ -5,6 +5,7 @@
 #include "internal/unicode/raw.h"
 #include "core/alloc.h"
 #include <string.h>
+#include <assert.h>
 
 // ===================================================================
 // Style helpers (same pattern as md_render.c)
@@ -20,9 +21,8 @@ typedef struct {
 static void
 style_push(style_stack_t *ss, n00b_text_style_t *s)
 {
-    if (ss->depth < MAX_STYLE_DEPTH) {
-        ss->styles[ss->depth++] = s;
-    }
+    assert(ss->depth < MAX_STYLE_DEPTH);
+    ss->styles[ss->depth++] = s;
 }
 
 static void
@@ -152,8 +152,7 @@ line_ctx_to_string(line_ctx_t *lc)
         }
     }
 
-    n00b_string_t result = n00b_string_from_raw(nullptr, lc->ob.buf, lc->ob.len,
-                                                 total_cps);
+    n00b_string_t result = n00b_string_from_raw(lc->ob.buf, lc->ob.len);
 
     if (lc->rl.count > 0) {
         n00b_string_style_info_t *info =
@@ -302,7 +301,7 @@ walk_block(n00b_list_t(n00b_string_t) *ll,
     }
 
     case N00B_MD_BLOCK_HR: {
-        n00b_string_t hr = n00b_string_from_raw(nullptr, "---", 3, 3);
+        n00b_string_t hr = n00b_string_from_raw("---", 3);
         n00b_list_push(*ll, hr);
         break;
     }
@@ -343,7 +342,7 @@ walk_block(n00b_list_t(n00b_string_t) *ll,
                     cps = 0;
                 }
                 n00b_string_t line_str = n00b_string_from_raw(
-                    nullptr, start, line_len, cps);
+                    start, line_len);
 
                 // Apply mono style to the entire line.
                 n00b_text_style_t *ls = n00b_str_style_new();

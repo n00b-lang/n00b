@@ -19,6 +19,15 @@ total_size(n00b_layout_result_t *results, n00b_isize_t n)
     return sum;
 }
 
+// Wrap stack-allocated C arrays into n00b_array_t for layout_calculate.
+#define LAYOUT_ARRAYS(items_var, results_var, raw_i, raw_r, count)              \
+    n00b_array_t(n00b_layout_t) items_var =                                    \
+        n00b_array_checked_ptr(n00b_layout_t, count, raw_i);                   \
+    items_var.len = count;                                                      \
+    n00b_array_t(n00b_layout_result_t) results_var =                           \
+        n00b_array_checked_ptr(n00b_layout_result_t, count, raw_r);            \
+    results_var.len = count
+
 // ====================================================================
 // Tests
 // ====================================================================
@@ -26,171 +35,183 @@ total_size(n00b_layout_result_t *results, n00b_isize_t n)
 static void
 test_single_item_gets_all_space(void)
 {
-    n00b_layout_t        items[1]   = { { .pref = { .value.i = 40 } } };
-    n00b_layout_result_t results[1] = {};
+    n00b_layout_t        raw_items[1]   = { { .pref = { .value.i = 40 } } };
+    n00b_layout_result_t raw_results[1] = {};
+    LAYOUT_ARRAYS(items, results, raw_items, raw_results, 1);
 
-    n00b_layout_calculate(items, results, 1, 80);
+    n00b_layout_calculate(items, results, 80);
 
-    assert(results[0].size == 40);
+    assert(raw_results[0].size == 40);
     printf("  [PASS] single item gets preferred size\n");
 }
 
 static void
 test_two_items_with_min(void)
 {
-    n00b_layout_t items[2] = {
+    n00b_layout_t raw_items[2] = {
         { .min = { .value.i = 10 }, .pref = { .value.i = 30 } },
         { .min = { .value.i = 10 }, .pref = { .value.i = 30 } },
     };
-    n00b_layout_result_t results[2] = {};
+    n00b_layout_result_t raw_results[2] = {};
+    LAYOUT_ARRAYS(items, results, raw_items, raw_results, 2);
 
-    n00b_layout_calculate(items, results, 2, 80);
+    n00b_layout_calculate(items, results, 80);
 
-    assert(results[0].size >= 10);
-    assert(results[1].size >= 10);
-    assert(results[0].size == 30);
-    assert(results[1].size == 30);
+    assert(raw_results[0].size >= 10);
+    assert(raw_results[1].size >= 10);
+    assert(raw_results[0].size == 30);
+    assert(raw_results[1].size == 30);
     printf("  [PASS] two items with min get preferred sizes\n");
 }
 
 static void
 test_max_constraint(void)
 {
-    n00b_layout_t items[2] = {
+    n00b_layout_t raw_items[2] = {
         { .pref = { .value.i = 20 }, .max = { .value.i = 25 } },
         { .pref = { .value.i = 20 }, .max = { .value.i = 25 } },
     };
-    n00b_layout_result_t results[2] = {};
+    n00b_layout_result_t raw_results[2] = {};
+    LAYOUT_ARRAYS(items, results, raw_items, raw_results, 2);
 
-    n00b_layout_calculate(items, results, 2, 80);
+    n00b_layout_calculate(items, results, 80);
 
-    assert(results[0].size <= 25);
-    assert(results[1].size <= 25);
+    assert(raw_results[0].size <= 25);
+    assert(raw_results[1].size <= 25);
     printf("  [PASS] max constraint respected\n");
 }
 
 static void
 test_flex_distribution(void)
 {
-    n00b_layout_t items[3] = {
+    n00b_layout_t raw_items[3] = {
         { .min = { .value.i = 10 }, .flex_multiple = 1 },
         { .min = { .value.i = 10 }, .flex_multiple = 2 },
         { .min = { .value.i = 10 }, .flex_multiple = 1 },
     };
-    n00b_layout_result_t results[3] = {};
+    n00b_layout_result_t raw_results[3] = {};
+    LAYOUT_ARRAYS(items, results, raw_items, raw_results, 3);
 
-    n00b_layout_calculate(items, results, 3, 90);
+    n00b_layout_calculate(items, results, 90);
 
     // 30 used for mins, 60 remaining.
     // Flex units: 1+2+1 = 4, so each unit = 15.
     // item0: 10 + 15 = 25, item1: 10 + 30 = 40, item2: 10 + 15 = 25
-    assert(results[0].size >= 10);
-    assert(results[1].size >= 10);
-    assert(results[2].size >= 10);
-    assert(total_size(results, 3) == 90);
+    assert(raw_results[0].size >= 10);
+    assert(raw_results[1].size >= 10);
+    assert(raw_results[2].size >= 10);
+    assert(total_size(raw_results, 3) == 90);
 
     // Item with flex=2 should be larger than item with flex=1.
-    assert(results[1].size > results[0].size);
-    assert(results[1].size > results[2].size);
+    assert(raw_results[1].size > raw_results[0].size);
+    assert(raw_results[1].size > raw_results[2].size);
     printf("  [PASS] flex distribution proportional\n");
 }
 
 static void
 test_overflow_shrink(void)
 {
-    n00b_layout_t items[3] = {
+    n00b_layout_t raw_items[3] = {
         { .min = { .value.i = 5 }, .pref = { .value.i = 30 } },
         { .min = { .value.i = 5 }, .pref = { .value.i = 30 } },
         { .min = { .value.i = 5 }, .pref = { .value.i = 30 } },
     };
-    n00b_layout_result_t results[3] = {};
+    n00b_layout_result_t raw_results[3] = {};
+    LAYOUT_ARRAYS(items, results, raw_items, raw_results, 3);
 
     // Only 50 available but 90 preferred.
-    n00b_layout_calculate(items, results, 3, 50);
+    n00b_layout_calculate(items, results, 50);
 
-    assert(total_size(results, 3) <= 50);
-    assert(results[0].size >= 5);
-    assert(results[1].size >= 5);
-    assert(results[2].size >= 5);
+    assert(total_size(raw_results, 3) <= 50);
+    assert(raw_results[0].size >= 5);
+    assert(raw_results[1].size >= 5);
+    assert(raw_results[2].size >= 5);
     printf("  [PASS] overflow shrinks items\n");
 }
 
 static void
 test_priority_cropping(void)
 {
-    n00b_layout_t items[3] = {
+    n00b_layout_t raw_items[3] = {
         { .min = { .value.i = 10 }, .pref = { .value.i = 20 }, .priority = 0 },
         { .min = { .value.i = 10 }, .pref = { .value.i = 20 }, .priority = 10 },
         { .min = { .value.i = 10 }, .pref = { .value.i = 20 }, .priority = 5 },
     };
-    n00b_layout_result_t results[3] = {};
+    n00b_layout_result_t raw_results[3] = {};
+    LAYOUT_ARRAYS(items, results, raw_items, raw_results, 3);
 
     // Only 15 available but 60 preferred, 30 min.
-    n00b_layout_calculate(items, results, 3, 15);
+    n00b_layout_calculate(items, results, 15);
 
     // High priority item (index 1, priority=10) should get the most.
-    assert(results[1].size >= results[0].size);
-    assert(results[1].size >= results[2].size);
-    assert(total_size(results, 3) <= 15);
+    assert(raw_results[1].size >= raw_results[0].size);
+    assert(raw_results[1].size >= raw_results[2].size);
+    assert(total_size(raw_results, 3) <= 15);
     printf("  [PASS] priority-based cropping\n");
 }
 
 static void
 test_percentage_dims(void)
 {
-    n00b_layout_t items[2] = {
+    n00b_layout_t raw_items[2] = {
         { .pref = { .value.d = 0.25, .pct = true } },
         { .pref = { .value.d = 0.50, .pct = true } },
     };
-    n00b_layout_result_t results[2] = {};
+    n00b_layout_result_t raw_results[2] = {};
+    LAYOUT_ARRAYS(items, results, raw_items, raw_results, 2);
 
-    n00b_layout_calculate(items, results, 2, 100);
+    n00b_layout_calculate(items, results, 100);
 
-    assert(results[0].size == 25);
-    assert(results[1].size == 50);
+    assert(raw_results[0].size == 25);
+    assert(raw_results[1].size == 50);
     printf("  [PASS] percentage dimensions\n");
 }
 
 static void
 test_zero_items(void)
 {
-    n00b_layout_calculate(nullptr, nullptr, 0, 100);
+    n00b_array_t(n00b_layout_t)        empty_items   = {};
+    n00b_array_t(n00b_layout_result_t) empty_results = {};
+
+    n00b_layout_calculate(empty_items, empty_results, 100);
     printf("  [PASS] zero items\n");
 }
 
 static void
 test_exact_fit(void)
 {
-    n00b_layout_t items[3] = {
+    n00b_layout_t raw_items[3] = {
         { .pref = { .value.i = 20 } },
         { .pref = { .value.i = 30 } },
         { .pref = { .value.i = 50 } },
     };
-    n00b_layout_result_t results[3] = {};
+    n00b_layout_result_t raw_results[3] = {};
+    LAYOUT_ARRAYS(items, results, raw_items, raw_results, 3);
 
-    n00b_layout_calculate(items, results, 3, 100);
+    n00b_layout_calculate(items, results, 100);
 
-    assert(results[0].size == 20);
-    assert(results[1].size == 30);
-    assert(results[2].size == 50);
-    assert(total_size(results, 3) == 100);
+    assert(raw_results[0].size == 20);
+    assert(raw_results[1].size == 30);
+    assert(raw_results[2].size == 50);
+    assert(total_size(raw_results, 3) == 100);
     printf("  [PASS] exact fit (sum == available)\n");
 }
 
 static void
 test_min_greater_than_available(void)
 {
-    n00b_layout_t items[2] = {
+    n00b_layout_t raw_items[2] = {
         { .min = { .value.i = 40 }, .pref = { .value.i = 40 } },
         { .min = { .value.i = 40 }, .pref = { .value.i = 40 } },
     };
-    n00b_layout_result_t results[2] = {};
+    n00b_layout_result_t raw_results[2] = {};
+    LAYOUT_ARRAYS(items, results, raw_items, raw_results, 2);
 
     // Only 50 but min totals 80.
-    n00b_layout_calculate(items, results, 2, 50);
+    n00b_layout_calculate(items, results, 50);
 
     // Priority crop should force some items to lose allocation.
-    assert(total_size(results, 2) <= 50);
+    assert(total_size(raw_results, 2) <= 50);
     printf("  [PASS] min > available triggers crop\n");
 }
 
@@ -218,5 +239,6 @@ main(int argc, char **argv)
     test_min_greater_than_available();
 
     printf("All layout tests passed.\n");
+    n00b_shutdown();
     return 0;
 }

@@ -15,6 +15,9 @@
 
 #include "strings/style_ops.h"
 #include "core/string.h"
+#include "core/option.h"
+
+n00b_option_decl(n00b_string_style_info_t *);
 
 // ===================================================================
 // Attach
@@ -39,10 +42,17 @@ n00b_string_t n00b_str_set_base_style(n00b_string_t s,
  *  The range `[start, end)` is in byte offsets.  Pass
  *  `n00b_option_none(size_t)` for @p end_opt to extend to end-of-string.
  *
+ *  If @p tag is provided (non-nullptr), the style is deferred: it will be
+ *  resolved lazily from the style registry (or role registry for tags
+ *  starting with `@`) on first access.  When @p tag is provided,
+ *  @p style may be nullptr.
+ *
  *  @param s        Source string.
- *  @param style    Style for the range (copied).
- *  @param start    Start byte offset.
- *  @param end_opt  End byte offset (exclusive), or none for open-ended.
+ *  @param style    Style for the range (copied), or nullptr when using a tag.
+ *  @param start    Start **byte** offset (not grapheme index).
+ *  @param end_opt  End **byte** offset (exclusive; not grapheme index),
+ *                  or `n00b_option_none(size_t)` to extend to end-of-string.
+ *  @kw tag         Named style tag for deferred resolution (nullptr = none).
  *  @kw allocator   Optional allocator.
  *  @return New string value with the style record appended.
  */
@@ -50,16 +60,19 @@ n00b_string_t n00b_str_add_style(n00b_string_t s,
                                   const n00b_text_style_t *style,
                                   size_t start,
                                   n00b_option_t(size_t) end_opt)
-    _kargs { n00b_allocator_t *allocator = nullptr; };
+    _kargs {
+        const char       *tag       = nullptr;
+        n00b_allocator_t *allocator = nullptr;
+    };
 
 // ===================================================================
 // Query
 // ===================================================================
 
 /** @brief Get the raw styling metadata from a string.
- *  @return Pointer to the style info, or nullptr if no styling is attached.
+ *  @return The style info, or none if no styling is attached.
  */
-n00b_string_style_info_t *n00b_str_get_style_info(n00b_string_t s);
+n00b_option_t(n00b_string_style_info_t *) n00b_str_get_style_info(n00b_string_t s);
 
 /** @brief Resolve the effective style at a byte position.
  *
