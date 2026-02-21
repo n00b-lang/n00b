@@ -1,6 +1,5 @@
 #include <stdio.h>
 #include <assert.h>
-#include <string.h>
 #include "n00b.h"
 #include "core/alloc.h"
 #include "core/option.h"
@@ -8,6 +7,7 @@
 #include "core/string.h"
 #include "render/plane.h"
 #include "render/box.h"
+#include "strings/string_ops.h"
 
 // ====================================================================
 // Tests
@@ -16,7 +16,7 @@
 static void
 test_plane_new_and_destroy(void)
 {
-    n00b_plane_t *p = n00b_plane_new(80, 25);
+    n00b_plane_t *p = n00b_new_kargs(n00b_plane_t, plane, .cols = 80, .rows = 25);
     assert(p != nullptr);
     assert(p->total_cols == 80);
     assert(p->total_rows == 25);
@@ -34,17 +34,19 @@ test_plane_new_and_destroy(void)
 static void
 test_plane_new_with_kwargs(void)
 {
-    n00b_plane_t *p = n00b_plane_new(100, 50,
+    n00b_plane_t *p = n00b_new_kargs(n00b_plane_t, plane,
+                                      .cols    = 100,
+                                      .rows    = 50,
                                       .vp_cols = 80,
                                       .vp_rows = 25,
-                                      .name    = "test-plane",
+                                      .name    = n00b_option_set(n00b_string_t, *r"test-plane"),
                                       .z       = 5);
     assert(p->total_cols == 100);
     assert(p->total_rows == 50);
     assert(p->vp_cols == 80);
     assert(p->vp_rows == 25);
     assert(p->z == 5);
-    assert(strcmp(p->name, "test-plane") == 0);
+    assert(n00b_unicode_str_eq(p->name, *r"test-plane"));
 
     n00b_plane_destroy(p);
     printf("  [PASS] plane new with kwargs\n");
@@ -53,7 +55,7 @@ test_plane_new_with_kwargs(void)
 static void
 test_plane_put_cp(void)
 {
-    n00b_plane_t *p = n00b_plane_new(10, 5);
+    n00b_plane_t *p = n00b_new_kargs(n00b_plane_t, plane, .cols = 10, .rows = 5);
 
     n00b_plane_put_cp(p, 'H');
     n00b_plane_put_cp(p, 'i');
@@ -74,7 +76,7 @@ test_plane_put_cp(void)
 static void
 test_plane_cursor_move(void)
 {
-    n00b_plane_t *p = n00b_plane_new(10, 5);
+    n00b_plane_t *p = n00b_new_kargs(n00b_plane_t, plane, .cols = 10, .rows = 5);
 
     n00b_plane_cursor_move(p, 3, 7);
     assert(p->cursor_row == 3);
@@ -92,7 +94,7 @@ test_plane_cursor_move(void)
 static void
 test_plane_clear(void)
 {
-    n00b_plane_t *p = n00b_plane_new(10, 5);
+    n00b_plane_t *p = n00b_new_kargs(n00b_plane_t, plane, .cols = 10, .rows = 5);
 
     n00b_plane_put_cp(p, 'X');
     n00b_plane_put_cp(p, 'Y');
@@ -112,7 +114,7 @@ test_plane_clear(void)
 static void
 test_plane_newline(void)
 {
-    n00b_plane_t *p = n00b_plane_new(10, 5);
+    n00b_plane_t *p = n00b_new_kargs(n00b_plane_t, plane, .cols = 10, .rows = 5);
 
     n00b_plane_put_cp(p, 'A');
     n00b_plane_newline(p);
@@ -127,7 +129,7 @@ test_plane_newline(void)
 static void
 test_plane_fill_rect(void)
 {
-    n00b_plane_t *p = n00b_plane_new(10, 5);
+    n00b_plane_t *p = n00b_new_kargs(n00b_plane_t, plane, .cols = 10, .rows = 5);
 
     n00b_plane_fill_rect(p, 1, 2, 2, 3, .cp = '#');
 
@@ -151,7 +153,7 @@ test_plane_fill_rect(void)
 static void
 test_plane_get_cell_oob(void)
 {
-    n00b_plane_t *p = n00b_plane_new(10, 5);
+    n00b_plane_t *p = n00b_new_kargs(n00b_plane_t, plane, .cols = 10, .rows = 5);
 
     assert(!n00b_option_is_set(n00b_plane_get_cell(p, 100, 100)));
     assert(n00b_option_is_set(n00b_plane_get_cell(p, 0, 0)));
@@ -163,7 +165,7 @@ test_plane_get_cell_oob(void)
 static void
 test_plane_visibility(void)
 {
-    n00b_plane_t *p = n00b_plane_new(10, 5);
+    n00b_plane_t *p = n00b_new_kargs(n00b_plane_t, plane, .cols = 10, .rows = 5);
 
     assert(p->flags & N00B_PLANE_VISIBLE);
 
@@ -180,7 +182,7 @@ test_plane_visibility(void)
 static void
 test_plane_move_and_z(void)
 {
-    n00b_plane_t *p = n00b_plane_new(10, 5);
+    n00b_plane_t *p = n00b_new_kargs(n00b_plane_t, plane, .cols = 10, .rows = 5);
 
     n00b_plane_move(p, 5, 10);
     assert(p->x == 5);
@@ -196,7 +198,7 @@ test_plane_move_and_z(void)
 static void
 test_plane_resize(void)
 {
-    n00b_plane_t *p = n00b_plane_new(10, 5);
+    n00b_plane_t *p = n00b_new_kargs(n00b_plane_t, plane, .cols = 10, .rows = 5);
 
     n00b_plane_put_cp(p, 'A');
     n00b_plane_resize(p, 3, 3);
@@ -216,7 +218,7 @@ test_plane_resize(void)
 static void
 test_plane_widget_state(void)
 {
-    n00b_plane_t *p = n00b_plane_new(10, 5);
+    n00b_plane_t *p = n00b_new_kargs(n00b_plane_t, plane, .cols = 10, .rows = 5);
 
     assert(n00b_plane_get_state(p) == N00B_WSTATE_NORMAL);
 
@@ -233,7 +235,7 @@ test_plane_widget_state(void)
 static void
 test_plane_content_size_with_box(void)
 {
-    n00b_plane_t *p = n00b_plane_new(20, 10);
+    n00b_plane_t *p = n00b_new_kargs(n00b_plane_t, plane, .cols = 20, .rows = 10);
 
     n00b_box_props_t *box = n00b_box_props_new(
         .theme     = &n00b_border_plain,
@@ -259,7 +261,9 @@ test_plane_content_size_with_box(void)
 static void
 test_plane_scroll(void)
 {
-    n00b_plane_t *p = n00b_plane_new(100, 50,
+    n00b_plane_t *p = n00b_new_kargs(n00b_plane_t, plane,
+                                      .cols    = 100,
+                                      .rows    = 50,
                                       .vp_cols = 20,
                                       .vp_rows = 10);
 
@@ -279,7 +283,9 @@ test_plane_scroll(void)
 static void
 test_plane_scroll_to(void)
 {
-    n00b_plane_t *p = n00b_plane_new(100, 50,
+    n00b_plane_t *p = n00b_new_kargs(n00b_plane_t, plane,
+                                      .cols    = 100,
+                                      .rows    = 50,
                                       .vp_cols = 20,
                                       .vp_rows = 10);
 
@@ -305,7 +311,9 @@ static void
 test_plane_auto_scroll(void)
 {
     // 5-row plane with auto-scroll ring buffer.
-    n00b_plane_t *p = n00b_plane_new(10, 5,
+    n00b_plane_t *p = n00b_new_kargs(n00b_plane_t, plane,
+                                      .cols   = 10,
+                                      .rows   = 5,
                                       .scroll = N00B_SCROLL_AUTO);
 
     // Write 7 lines — should trigger auto-scroll on lines 6 and 7.
@@ -332,7 +340,9 @@ static void
 test_plane_viewport_content(void)
 {
     // Create plane with content larger than viewport.
-    n00b_plane_t *p = n00b_plane_new(20, 10,
+    n00b_plane_t *p = n00b_new_kargs(n00b_plane_t, plane,
+                                      .cols    = 20,
+                                      .rows    = 10,
                                       .vp_cols = 10,
                                       .vp_rows = 5);
 
@@ -362,14 +372,14 @@ test_plane_viewport_content(void)
 static void
 test_plane_add_remove_child(void)
 {
-    n00b_plane_t *parent = n00b_plane_new(40, 20);
-    n00b_plane_t *child1 = n00b_plane_new(10, 5);
-    n00b_plane_t *child2 = n00b_plane_new(10, 5);
+    n00b_plane_t *parent = n00b_new_kargs(n00b_plane_t, plane, .cols = 40, .rows = 20);
+    n00b_plane_t *child1 = n00b_new_kargs(n00b_plane_t, plane, .cols = 10, .rows = 5);
+    n00b_plane_t *child2 = n00b_new_kargs(n00b_plane_t, plane, .cols = 10, .rows = 5);
 
     n00b_plane_add_child(parent, child1, 2, 3);
     n00b_plane_add_child(parent, child2, 15, 10);
 
-    assert(parent->num_children == 2);
+    assert(n00b_list_len(parent->children) == 2);
     assert(child1->parent == parent);
     assert(child2->parent == parent);
     assert(child1->x == 2);
@@ -378,9 +388,9 @@ test_plane_add_remove_child(void)
     // Remove child1.
     bool removed = n00b_plane_remove_child(parent, child1);
     assert(removed);
-    assert(parent->num_children == 1);
+    assert(n00b_list_len(parent->children) == 1);
     assert(child1->parent == nullptr);
-    assert(parent->children[0] == child2);
+    assert(n00b_list_get(parent->children, 0) == child2);
 
     // Remove non-existent.
     removed = n00b_plane_remove_child(parent, child1);
@@ -424,5 +434,6 @@ main(int argc, char **argv)
     test_plane_add_remove_child();
 
     printf("All render plane tests passed.\n");
+    n00b_shutdown();
     return 0;
 }

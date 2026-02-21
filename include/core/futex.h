@@ -11,6 +11,7 @@
 // IWYU pragma: no_include <sys/errno.h>
 
 #include <errno.h> // IWYU pragma: keep
+#include <limits.h>
 #include <time.h>
 #include "n00b.h"
 #include "core/atomic.h"
@@ -134,9 +135,61 @@ n00b_futex_should_continue(int err)
     return !err || err == -EINTR || err == -EFAULT;
 }
 
+#elifdef _WIN32
+#include "core/platform.h"
+
+#define n00b_mac_barrier()
+
+extern void n00b_thread_exit(int);
+
+static inline int
+n00b_futex_wait_timespec(n00b_futex_t *futex, uint32_t v32, struct timespec *tptr)
+{
+    DWORD ms = INFINITE;
+    if (tptr) {
+        ms = (DWORD)(tptr->tv_sec * 1000 + tptr->tv_nsec / 1000000);
+        if (ms == 0 && (tptr->tv_sec || tptr->tv_nsec)) {
+            ms = 1;
+        }
+    }
+    BOOL ok = WaitOnAddress(futex, &v32, sizeof(uint32_t), ms);
+    if (!ok) {
+        DWORD err = GetLastError();
+        if (err == ERROR_TIMEOUT) {
+            return ETIMEDOUT;
+        }
+        return EAGAIN;
+    }
+    return 0;
+}
+
+static inline int
+n00b_futex_wake(n00b_futex_t *futex, bool all)
+{
+    if (all) {
+        WakeByAddressAll(futex);
+    }
+    else {
+        WakeByAddressSingle(futex);
+    }
+    return 0;
+}
+
+static inline bool
+n00b_futex_should_continue(int err)
+{
+    return !err || err == EAGAIN;
+}
+
 #else
 #error "Unsupported platform."
 #endif
+
+/** @brief Wake a single waiter on a futex. */
+#define n00b_futex_wake_one(f) n00b_futex_wake((f), false)
+
+/** @brief Wake all waiters on a futex. */
+#define n00b_futex_wake_all(f) n00b_futex_wake((f), true)
 
 /**
  * @brief Initialize a futex to 0.

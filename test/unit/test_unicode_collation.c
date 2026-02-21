@@ -8,7 +8,7 @@
 
 TEST(test_sort_key)
 {
-    n00b_unicode_sort_key_t key = n00b_unicode_sort_key(STR("hello"));
+    n00b_unicode_sort_key_t key = n00b_unicode_sort_key(*r"hello");
     ASSERT(key.data != nullptr);
     ASSERT(key.len > 0);
     n00b_unicode_sort_key_free(&key);
@@ -16,18 +16,18 @@ TEST(test_sort_key)
 
 TEST(test_collate_same)
 {
-    ASSERT_EQ(n00b_unicode_collate(STR("hello"), STR("hello")), 0);
+    ASSERT_EQ(n00b_unicode_collate(*r"hello", *r"hello"), 0);
 }
 
 TEST(test_collate_order)
 {
-    ASSERT(n00b_unicode_collate(STR("apple"), STR("banana")) < 0);
-    ASSERT(n00b_unicode_collate(STR("banana"), STR("apple")) > 0);
+    ASSERT(n00b_unicode_collate(*r"apple", *r"banana") < 0);
+    ASSERT(n00b_unicode_collate(*r"banana", *r"apple") > 0);
 }
 
 TEST(test_collate_case)
 {
-    int result = n00b_unicode_collate(STR("a"), STR("A"));
+    int result = n00b_unicode_collate(*r"a", *r"A");
     ASSERT(result != 0);
 }
 

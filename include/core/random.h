@@ -32,6 +32,17 @@ n00b_random_bytes(char *bufptr, size_t len)
 // for arc4random_buf
 #include <stdlib.h> // IWYU pragma: keep
 #define n00b_random_bytes(bufptr, len) arc4random_buf(bufptr, len)
+#elif defined(_WIN32)
+#include "core/platform.h"
+#include <ntsecapi.h>
+
+static inline void
+n00b_random_bytes(char *bufptr, size_t len)
+{
+    if (!RtlGenRandom(bufptr, (ULONG)len)) {
+        abort();
+    }
+}
 #else
 #error "Unsupported platform."
 #endif

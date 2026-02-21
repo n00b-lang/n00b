@@ -1,4 +1,4 @@
-/**
+/*
  * Data lock allocation: creates initialized rwlock for data structures.
  */
 
@@ -18,9 +18,9 @@ n00b_data_lock_new(void)
     }
 
     n00b_allocator_t *sp   = (n00b_allocator_t *)&n00b_get_runtime()->system_pool;
-    n00b_rwlock_t    *lock = n00b_alloc(n00b_rwlock_t, .allocator = sp);
+    n00b_rwlock_t    *lock = n00b_alloc_with_opts(n00b_rwlock_t, &(n00b_alloc_opts_t){.allocator = sp});
 
-    n00b_rw_lock_init(lock);
+    n00b_rw_init(lock);
     return lock;
 }
 

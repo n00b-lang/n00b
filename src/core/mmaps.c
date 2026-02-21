@@ -16,8 +16,10 @@
 #include <stdio.h>
 #define n00b_fprintf fprintf
 
+#ifndef _WIN32
 #include <sys/mman.h>
 #include <unistd.h>
+#endif
 #include <errno.h>
 
 #if !defined(N00B_MMAPS_START_PAGES)
@@ -65,7 +67,7 @@ mmaps_insert_raw(n00b_mmap_ctx_t     *ctx,
                  uint64_t             binary_offset)
 {
     n00b_allocator_t *alloc = (n00b_allocator_t *)&ctx->pool;
-    n00b_mmap_info_t *info  = n00b_alloc(n00b_mmap_info_t, .allocator = alloc);
+    n00b_mmap_info_t *info  = n00b_alloc_with_opts(n00b_mmap_info_t, &(n00b_alloc_opts_t){.allocator = alloc});
     uint64_t          start = (uint64_t)startp;
     uint64_t          end   = start + blen;
 
@@ -76,8 +78,9 @@ mmaps_insert_raw(n00b_mmap_ctx_t     *ctx,
         .binary_offset = binary_offset,
     };
 
-    info->tree_node = n00b_result_get(
-        n00b_interval_insert(ctx->mmap_tree, start, end, info));
+    auto insert_r = n00b_interval_insert(ctx->mmap_tree, start, end, info);
+    assert(n00b_result_is_ok(insert_r));
+    info->tree_node = n00b_result_get(insert_r);
 
     return info;
 }
@@ -105,13 +108,25 @@ n00b_mmaps_remove(n00b_mmap_ctx_t *ctx, n00b_mmap_info_t *info)
 // Lookup
 // ============================================================================
 
-n00b_mmap_opt_t
+n00b_option_t(n00b_mmap_info_t *)
 n00b_mmap_lookup(n00b_mmap_ctx_t *ctx, void *addr)
 {
+    uint64_t start = (uint64_t)addr;
+    uint64_t end   = start + 1;
+
+    if (end < start) {
+        return n00b_option_none(n00b_mmap_info_t *);
+    }
+
     mmap_read_lock(ctx);
-    n00b_interval_node_t *node = n00b_result_get(
-        n00b_interval_search_any(ctx->mmap_tree, (uint64_t)addr, (uint64_t)addr + 1));
+    auto r = n00b_interval_search_any(ctx->mmap_tree, start, end);
     mmap_read_unlock(ctx);
+
+    if (n00b_result_is_err(r)) {
+        return n00b_option_none(n00b_mmap_info_t *);
+    }
+
+    n00b_interval_node_t *node = n00b_result_get(r);
 
     return n00b_option_from_nullable(n00b_mmap_info_t *,
                                      node ? (n00b_mmap_info_t *)node->data : nullptr);
@@ -131,9 +146,14 @@ n00b_mmaps_initialize(n00b_mmap_ctx_t *ctx)
 
     n00b_pool_init(&ctx->pool, .__system = true, .hidden = true, .name = "mmaps");
 
-    n00b_allocator_t *alloc = (n00b_allocator_t *)&ctx->pool;
-    ctx->mmap_tree  = n00b_new_interval_tree(alloc);
-    ctx->range_tree = n00b_new_interval_tree(alloc);
+    n00b_allocator_t  *alloc = (n00b_allocator_t *)&ctx->pool;
+    n00b_alloc_opts_t  aopts = { .allocator = alloc };
+
+    ctx->mmap_tree  = n00b_alloc_with_opts(n00b_interval_tree_t, &aopts);
+    n00b_interval_tree_init(ctx->mmap_tree, .allocator = alloc);
+
+    ctx->range_tree = n00b_alloc_with_opts(n00b_interval_tree_t, &aopts);
+    n00b_interval_tree_init(ctx->range_tree, .allocator = alloc);
 
     n00b_load_static_ranges();
 }
@@ -151,7 +171,7 @@ n00b_mmap_delete_ranges(n00b_mmap_ctx_t *ctx, uint64_t start, uint64_t end)
     (void)n00b_interval_search(ctx->range_tree, start, end, &hits);
 
     while (n00b_stack_len(hits) > 0) {
-        n00b_interval_node_t *node = n00b_stack_pop(hits);
+        n00b_interval_node_t *node = n00b_option_get(n00b_stack_pop(void *, hits));
         n00b_mmap_info_t     *info = (n00b_mmap_info_t *)node->data;
         (void)n00b_interval_delete(ctx->range_tree, node);
         n00b_free(info);
@@ -169,7 +189,7 @@ n00b_mmap_register_range(void *startp, void *endp, n00b_mmap_rec_kind_t kind) _k
     n00b_mmap_ctx_t *ctx = n00b_global_mem_map(rt);
 
     n00b_allocator_t *alloc = (n00b_allocator_t *)&ctx->pool;
-    n00b_mmap_info_t *info  = n00b_alloc(n00b_mmap_info_t, .allocator = alloc);
+    n00b_mmap_info_t *info  = n00b_alloc_with_opts(n00b_mmap_info_t, &(n00b_alloc_opts_t){.allocator = alloc});
     uint64_t          start = (uint64_t)startp;
     uint64_t          end   = (uint64_t)endp;
 
@@ -182,8 +202,9 @@ n00b_mmap_register_range(void *startp, void *endp, n00b_mmap_rec_kind_t kind) _k
     };
 
     mmap_write_lock(ctx);
-    info->tree_node = n00b_result_get(
-        n00b_interval_insert(ctx->range_tree, start, end, info));
+    auto range_r = n00b_interval_insert(ctx->range_tree, start, end, info);
+    assert(n00b_result_is_ok(range_r));
+    info->tree_node = n00b_result_get(range_r);
     mmap_write_unlock(ctx);
 
     return info;
@@ -194,7 +215,7 @@ n00b_mmap_register_range(void *startp, void *endp, n00b_mmap_rec_kind_t kind) _k
 // ============================================================================
 
 // clang-format off
-n00b_mmap_opt_t
+n00b_option_t(n00b_mmap_info_t *)
 n00b_mmap_register(void *startp, void *endp, n00b_mmap_rec_kind_t kind) _kargs
 {
     n00b_runtime_t   *runtime           = n00b_get_runtime();
@@ -314,12 +335,16 @@ n00b_munmap(void *addr) _kargs
     n00b_mmaps_remove_base(ctx, map);
     mmap_write_unlock(ctx);
 
+#ifdef _WIN32
+    VirtualFree(start, 0, MEM_RELEASE);
+#else
     munmap(start, len);
+#endif
     return n00b_result_ok(int, 0);
 }
 
 // clang-format off
-n00b_mmap_opt_t
+n00b_option_t(n00b_mmap_info_t *)
 n00b_mmap_by_address(void *addr) _kargs
 {
     n00b_runtime_t *runtime = n00b_get_runtime();

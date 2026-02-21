@@ -15,14 +15,7 @@
 // ===========================================================================
 // Option types for API functions that may fail
 // ===========================================================================
-
-n00b_option_decl(int32_t);
-n00b_option_decl(uint32_t);
-n00b_option_decl(n00b_codepoint_t);
-
-/** @brief Optional int32_t result (used by find/rfind, digit_value, etc.) */
-typedef n00b_option_t(int32_t) n00b_unicode_opt_i32_t;
-
+// n00b_option_decl(int32_t) is in core/option.h
 // ===========================================================================
 // Result types for string operations
 // ===========================================================================

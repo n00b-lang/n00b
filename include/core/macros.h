@@ -71,9 +71,9 @@
         typeof(*(EXPR)) **: 1,     \
         default: 0)
 
-#define N00B_POINTER_DISPATCH(EXPR, ptr_dispatch, concrete_dispatch) \
+#define N00B_PTR_CASE(EXPR, ptr_dispatch, concrete_dispatch) \
     _Generic(&(typeof((EXPR))){0},                                   \
         typeof(*(EXPR)) **: ptr_dispatch,                            \
-	     default: concrete_dispatch)
+	     default: (typeof(EXPR))concrete_dispatch)
 
 // clang-format on

@@ -65,19 +65,28 @@ extern bool _n00b_rw_unlock(n00b_rwlock_t *, char *);
 #define n00b_rw_write_lock(l) _n00b_rw_write_lock((l), N00B_LOC_STRING())
 #define n00b_rw_read_lock(l)  _n00b_rw_read_lock((l), N00B_LOC_STRING())
 #define n00b_rw_unlock(l)     _n00b_rw_unlock((l), N00B_LOC_STRING())
-#define n00b_rw_lock_init(l)  _n00b_rw_init((l), N00B_LOC_STRING())
+#define n00b_rw_init(l)       _n00b_rw_init((l), N00B_LOC_STRING())
+#define n00b_rw_lock_init(l)  n00b_rw_init(l) /**< @deprecated Use n00b_rw_init */
 
 #define N00B_RW_UNLOCKED 0x00000000
 #define N00B_RW_W_LOCK   0x40000000
 
 // Read-lock accounting (implemented in lock_accounting.c).
-extern void n00b_rlock_accounting(n00b_rwlock_t          *lock,
-                                  n00b_thread_read_log_t *record,
-                                  n00b_thread_t          *thread,
-                                  int                     value,
-                                  char                   *loc);
-extern void n00b_runlock_accounting(n00b_rwlock_t          *lock,
-                                    n00b_thread_read_log_t *record,
-                                    n00b_thread_t          *thread,
-                                    int                     value,
-                                    char                   *loc);
+extern void _n00b_rlock_accounting(n00b_rwlock_t          *lock,
+                                   n00b_thread_read_log_t *record,
+                                   n00b_thread_t          *thread,
+                                   int                     value,
+                                   char                   *loc);
+extern void _n00b_runlock_accounting(n00b_rwlock_t          *lock,
+                                     n00b_thread_read_log_t *record,
+                                     n00b_thread_t          *thread,
+                                     int                     value,
+                                     char                   *loc);
+
+/** @brief Read-lock accounting with automatic source location. */
+#define n00b_rlock_accounting(lock, record, thread, value) \
+    _n00b_rlock_accounting((lock), (record), (thread), (value), N00B_LOC_STRING())
+
+/** @brief Read-unlock accounting with automatic source location. */
+#define n00b_runlock_accounting(lock, record, thread, value) \
+    _n00b_runlock_accounting((lock), (record), (thread), (value), N00B_LOC_STRING())

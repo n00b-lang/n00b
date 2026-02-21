@@ -36,18 +36,20 @@ typedef int n00b_err_t;
 #define n00b_result_is_ok(x)  ((x).is_ok)
 #define n00b_result_is_err(x) (!(x).is_ok)
 
-/** @brief Extract the value.  Crashes (null deref) if the result is an error. */
+/** @brief Extract the value.  Asserts (aborts) if the result is an error. */
 #define n00b_result_get(x)                                                                     \
     ({                                                                                         \
         auto _bl_r = (x);                                                                      \
-        *(_bl_r.is_ok ? &_bl_r.ok : (void *)0);                                                \
+        assert(_bl_r.is_ok);                                                                   \
+        *(_bl_r.is_ok ? &_bl_r.ok : (typeof(_bl_r.ok) *)0);                                    \
     })
 
-/** @brief Extract the error.  Crashes (null deref) if the result is ok. */
+/** @brief Extract the error.  Asserts (aborts) if the result is ok. */
 #define n00b_result_get_err(x)                                                                 \
     ({                                                                                         \
         auto _bl_r = (x);                                                                      \
-        *(_bl_r.is_ok ? (void *)0 : &_bl_r.err);                                               \
+        assert(!_bl_r.is_ok);                                                                  \
+        *(_bl_r.is_ok ? (n00b_err_t *)0 : &_bl_r.err);                                         \
     })
 
 #define n00b_result_get_or_else(x, y)                                                          \
@@ -63,8 +65,11 @@ typedef int n00b_err_t;
 // ============================================================================
 
 n00b_result_decl(int);
+n00b_result_decl(int64_t);
 n00b_result_decl(void *);
 n00b_result_decl(uint64_t);
+n00b_result_decl(bool);
+n00b_result_decl(uint8_t);
 
 // ============================================================================
 // Stdlib wrapper macros — produce n00b_result_t values from system calls
@@ -85,12 +90,23 @@ n00b_result_decl(uint64_t);
  * @brief Wrap an mmap() call — returns MAP_FAILED on error.
  * Usage: n00b_result_t(void *) r = n00b_check_mmap(nullptr, sz, ...);
  */
+#ifdef _WIN32
+#define n00b_check_mmap(addr, sz, prot, flags, fd, offset)                                     \
+    ({                                                                                         \
+        (void)(prot); (void)(flags); (void)(fd); (void)(offset);                               \
+        void *_p = VirtualAlloc((addr), (sz),                                                  \
+                     MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);                                \
+        _p == NULL ? n00b_result_err(void *, ENOMEM)                                           \
+                   : n00b_result_ok(void *, _p);                                               \
+    })
+#else
 #define n00b_check_mmap(...)                                                                   \
     ({                                                                                         \
         void *_p = mmap(__VA_ARGS__);                                                          \
         _p == MAP_FAILED ? n00b_result_err(void *, errno)                                      \
                          : n00b_result_ok(void *, _p);                                         \
     })
+#endif
 
 /**
  * @brief Wrap a sysconf() call — returns -1 on error.

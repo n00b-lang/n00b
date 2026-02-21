@@ -8,19 +8,21 @@
 #include "core/stw.h"
 #include "core/pool.h"
 #include "core/runtime.h"
+#include "core/type_info.h"
+#include "core/data_lock.h"
 
 #ifndef N00B_METADATA_START_ENTRIES
 #define N00B_METADATA_START_ENTRIES 1 << 12
 #endif
 
-extern uint64_t n00b_gc_guard;
-
-static void n00b_run_and_remove_finalizers(void *ptr);
+extern uint64_t         n00b_gc_guard;
+const n00b_alloc_opts_t _n00b_default_alloc_opts = {};
+static void             n00b_run_and_remove_finalizers(void *ptr);
 
 static inline void
 n00b_alloc_add_inline_header(n00b_inline_hdr_t **hdrp,
                              size_t              alloc_len,
-                             char               *type,
+                             uint64_t            type_hash,
                              bool                is_array,
                              bool                no_scan,
                              bool                mem_debug,
@@ -31,7 +33,7 @@ n00b_alloc_add_inline_header(n00b_inline_hdr_t **hdrp,
 
     *hdr = (n00b_inline_hdr_t){
         .guard           = n00b_gc_guard,
-        .tinfo           = type,
+        .tinfo           = type_hash,
         .alloc_len       = alloc_len,
         .is_array        = is_array,
         .no_scan         = no_scan,
@@ -43,96 +45,153 @@ n00b_alloc_add_inline_header(n00b_inline_hdr_t **hdrp,
 }
 
 void *
-_n00b_alloc_raw(size_t n, size_t sz, char *base_type, const char *location) _kargs
-{
-    n00b_allocator_t *allocator      = nullptr;
-    void             *aparams        = nullptr; // Marking for debug, cleanup, etc.
-    void             *iparams        = nullptr; // To be sent to an object instance (TODO)
-    bool              no_scan        = false;
-    bool              mem_debug      = false;
-    bool              debug_taint    = false;
-    n00b_finalizer_t  finalizer      = nullptr;
-    void             *finalizer_data = nullptr;
-}
+_n00b_alloc_raw(size_t             n,
+                size_t             sz,
+                uint64_t           type_hash,
+                const char        *location,
+                n00b_alloc_opts_t *opts,
+                +) _kargs: opaque
 {
     n00b_inline_hdr_t *hdr      = nullptr;
     n00b_oob_hdr_t    *map_item = nullptr;
+    n00b_alloc_opts_t  local_opts;
 
-    n00b_ensure_allocator(allocator);
+    if (!opts) {
+        local_opts = _n00b_default_alloc_opts;
+        opts       = &local_opts;
+    }
 
-    if (!allocator->__system) {
+    n00b_ensure_allocator(opts->allocator);
+
+    if (!opts->allocator->__system) {
         n00b_thread_checkin();
     }
 
-    if (allocator->add_inline_header) {
-        sz += N00B_ALLOC_HDR_SZ;
-    }
+    uint64_t request  = n * sz;
+    bool     is_array = n > 1;
 
-    uint64_t request = n * sz;
-    void    *r;
+    if (opts->allocator->add_inline_header) {
+        request += N00B_ALLOC_HDR_SZ;
+    }
+    void *r;
 
     if (!request) {
-        request = allocator->add_inline_header
-                      ? sizeof(n00b_inline_hdr_t)
-                      : 1;
+        request = opts->allocator->add_inline_header ? sizeof(n00b_inline_hdr_t) : 1;
     }
 
     request = n00b_align(request);
 
-    r = (*allocator->zero_alloc)(allocator, request, aparams);
+    // Currently never pass parameters to the allocator. For future use.
+    r = (*opts->allocator->zero_alloc)(opts->allocator, request, nullptr);
 
-    if (allocator->add_inline_header) {
+    if (opts->allocator->add_inline_header) {
         hdr = r;
 
         n00b_alloc_add_inline_header((n00b_inline_hdr_t **)&r,
                                      request,
-                                     base_type,
+                                     type_hash,
                                      n > 1,
-                                     no_scan,
-                                     mem_debug,
-                                     debug_taint);
+                                     opts->no_scan,
+                                     opts->mem_debug,
+                                     opts->debug_taint);
     }
 
-    if (allocator->metadata_pool != nullptr) {
-        map_item = n00b_alloc(n00b_oob_hdr_t,
-                              .allocator = allocator->metadata_pool);
+    if (opts->allocator->metadata_pool != nullptr) {
+        n00b_alloc_opts_t md_opts = {.allocator = opts->allocator->metadata_pool};
+        map_item                  = n00b_alloc_with_opts(n00b_oob_hdr_t, &md_opts);
 
         *map_item = (n00b_oob_hdr_t){
             .user_ptr        = r,
-            .tinfo           = base_type,
+            .tinfo           = type_hash,
             .alloc_len       = request,
             .is_array        = n > 1,
-            .no_scan         = no_scan,
-            .mem_debug       = mem_debug,
-            .mem_debug_taint = debug_taint,
+            .no_scan         = opts->no_scan,
+            .mem_debug       = opts->mem_debug,
+            .mem_debug_taint = opts->debug_taint,
             .hcur            = hdr,
             .file_name       = location,
         };
 
-        n00b_dict_untyped_put(allocator->metadata, r, map_item);
-        assert(n00b_dict_untyped_get(allocator->metadata, r, nullptr) == map_item);
+        n00b_dict_untyped_put(opts->allocator->metadata, r, map_item);
+        assert(n00b_dict_untyped_get(opts->allocator->metadata, r, nullptr) == map_item);
+    }
+
+    // If the allocator has no headers and no metadata but is visible to
+    // the GC (non-hidden), register the allocation in the range tree so
+    // the collector's fallback path can discover and scan it.
+    if (!opts->allocator->hidden && !opts->allocator->add_inline_header
+        && opts->allocator->metadata_pool == nullptr
+        && n00b_option_is_set(n00b_default_runtime)) {
+        n00b_mmap_register_range(r,
+                                 (char *)r + request,
+                                 n00b_mmap_pool,
+                                 .allocator = opts->allocator);
     }
 
     assert(!(((uint64_t)r) & (N00B_ALIGN - 1)));
-    // TODO: Add object info lookup, iff instance_params.
 
-    if (finalizer) {
+    // Dispatch the vtable constructor if the type is registered.
+    // Guard on startup_complete to avoid early-init lookups.
+    //
+    // Constructor dispatch depends on type_info flags:
+    //   !ctor_takes_kargs && !ctor_takes_vargs: ctor(self)
+    //   ctor_takes_kargs  && !ctor_takes_vargs: ctor(self, kargs_ptr)
+    //   ctor_takes_vargs:                       ctor(self, vargs, kargs_ptr)
+    //
+    // For kargs/vargs constructors, the data comes from vargs packed
+    // by n00b_new_kargs / n00b_new_both.  If no vargs were provided,
+    // kargs/vargs constructors are skipped (use n00b_new_kargs to
+    // trigger construction, not bare n00b_alloc).
+    if (!is_array && type_hash && n00b_option_is_set(n00b_default_runtime)
+        && n00b_get_runtime()->startup_complete) {
+        auto tinfo_opt = n00b_type_lookup(type_hash);
+
+        if (n00b_option_is_set(tinfo_opt)) {
+            n00b_type_info_t *tinfo = n00b_option_get(tinfo_opt);
+            n00b_vtable_entry ctor  = tinfo->core_vtable[N00B_BI_CONSTRUCTOR];
+            if (ctor) {
+                bool have_vargs = vargs && vargs->nargs > 0;
+
+                if (tinfo->ctor_takes_vargs && have_vargs) {
+                    // ctor(self, vargs, kargs).
+                    // n00b_new_both packs: real_varg0, ..., kargs_ptr
+                    // kargs is always the last varg.
+                    void *ctor_kargs = vargs->args[vargs->nargs - 1];
+                    vargs->nargs--;
+                    ((void (*)(void *, n00b_vargs_t *, void *))ctor)(
+                        r, vargs, ctor_kargs);
+                }
+                else if (tinfo->ctor_takes_kargs && have_vargs) {
+                    // ctor(self, kargs).
+                    // n00b_new_kargs packs: kargs_ptr as sole varg.
+                    void *ctor_kargs = n00b_vargs_next(vargs);
+                    ((void (*)(void *, void *))ctor)(r, ctor_kargs);
+                }
+                else if (!tinfo->ctor_takes_kargs && !tinfo->ctor_takes_vargs) {
+                    // ctor(self) — always dispatched (no data needed).
+                    ((void (*)(void *))ctor)(r);
+                }
+            }
+        }
+    }
+
+    if (opts->finalizer) {
         n00b_runtime_t *rt = n00b_get_runtime();
         if (rt) {
             // The raw header key must match what the GC uses in ctx->memos:
             // - OOB arenas: (n00b_inline_hdr_t *)map_item (the OOB record)
             // - Inline-only: hdr (the actual inline header)
-            n00b_inline_hdr_t *alloc_key = (allocator->metadata_pool != nullptr)
-                                               ? (n00b_inline_hdr_t *)map_item
-                                               : hdr;
+            n00b_inline_hdr_t *alloc_key = (opts->allocator->metadata_pool != nullptr)
+                                             ? (n00b_inline_hdr_t *)map_item
+                                             : hdr;
 
-            n00b_allocator_t      *sp   = (n00b_allocator_t *)&rt->system_pool;
-            n00b_finalizer_info_t *info = n00b_alloc(n00b_finalizer_info_t,
-                                                      .allocator = sp);
+            n00b_alloc_opts_t     md_opts = {.allocator = (n00b_allocator_t *)&rt->system_pool};
+            n00b_finalizer_info_t *info  = n00b_alloc_with_opts(n00b_finalizer_info_t, &md_opts);
+
             *info = (n00b_finalizer_info_t){
-                .funcptr    = finalizer,
+                .funcptr    = opts->finalizer,
                 .alloc_info = alloc_key,
-                .user_ptr   = finalizer_data,
+                .user_ptr   = opts->finalizer_data,
             };
             n00b_list_push(rt->finalizers, info);
         }
@@ -158,21 +217,22 @@ n00b_allocator_setup(n00b_allocator_t *allocator, n00b_calloc_fn alloc) _kargs
     bool                      __is_md_pool      = false;
 }
 {
+    (void)__nomap;
     n00b_allocator_t *md_pool = nullptr;
 
     if (external_metadata) {
         md_pool = (n00b_allocator_t *)n00b_new_arena(.no_map         = true,
-                                                      .__system       = true,
-                                                      .hidden         = true,
-                                                      .use_gc         = false,
-                                                      .inline_headers = false,
-                                                      .name           = "md_pool");
+                                                     .__system       = true,
+                                                     .hidden         = true,
+                                                     .use_gc         = false,
+                                                     .inline_headers = false,
+                                                     .name           = "md_pool");
     }
 
     n00b_dict_untyped_t *md = nullptr;
 
     if (external_metadata) {
-        md = n00b_alloc(n00b_dict_untyped_t, .allocator = md_pool);
+        md = n00b_alloc_with_opts(n00b_dict_untyped_t, &(n00b_alloc_opts_t){.allocator = md_pool});
     }
 
     *allocator = (n00b_allocator_t){
@@ -214,6 +274,15 @@ n00b_free(void *ptr)
         return;
     }
 
+    // Remove the range-tree entry for headerless non-hidden allocations
+    // (the mirror of the registration in _n00b_alloc_raw).
+    if (!allocator->hidden && !allocator->add_inline_header
+        && allocator->metadata_pool == nullptr) {
+        n00b_runtime_t  *rt   = n00b_get_runtime();
+        n00b_mmap_ctx_t *mctx = n00b_global_mem_map(rt);
+        n00b_mmap_delete_ranges(mctx, (uint64_t)ptr, (uint64_t)ptr + 1);
+    }
+
     if (allocator->add_inline_header) {
         ptr = (char *)ptr - N00B_ALLOC_HDR_SZ;
     }
@@ -233,12 +302,11 @@ n00b_add_finalizer(void *obj, n00b_finalizer_t fn, void *user_data)
     n00b_alloc_info_t ainfo = n00b_find_alloc_info(obj);
     assert(ainfo.kind == n00b_alloc_oob || ainfo.kind == n00b_alloc_inline);
 
-    n00b_inline_hdr_t *hdr = (ainfo.kind == n00b_alloc_oob)
-                                  ? (n00b_inline_hdr_t *)ainfo.hdr.oob
-                                  : ainfo.hdr.in_line;
+    n00b_inline_hdr_t *hdr = (ainfo.kind == n00b_alloc_oob) ? (n00b_inline_hdr_t *)ainfo.hdr.oob
+                                                            : ainfo.hdr.in_line;
 
     n00b_allocator_t      *sp   = (n00b_allocator_t *)&rt->system_pool;
-    n00b_finalizer_info_t *info = n00b_alloc(n00b_finalizer_info_t, .allocator = sp);
+    n00b_finalizer_info_t *info = n00b_alloc_with_opts(n00b_finalizer_info_t, &(n00b_alloc_opts_t){.allocator = sp});
 
     *info = (n00b_finalizer_info_t){
         .funcptr    = fn,
@@ -258,30 +326,56 @@ n00b_run_and_remove_finalizers(void *ptr)
 
     n00b_runtime_t *rt = n00b_get_runtime();
     if (!rt || !rt->finalizers.data) {
-        return;
+        goto type_cleanup;
     }
 
     // Use the same raw header lookup as n00b_add_finalizer.
     n00b_alloc_info_t ainfo = n00b_find_alloc_info(ptr);
     if (ainfo.kind != n00b_alloc_oob && ainfo.kind != n00b_alloc_inline) {
-        return;
+        goto type_cleanup;
     }
 
-    n00b_inline_hdr_t *hdr = (ainfo.kind == n00b_alloc_oob)
-                                  ? (n00b_inline_hdr_t *)ainfo.hdr.oob
-                                  : ainfo.hdr.in_line;
+    {
+        n00b_inline_hdr_t *hdr = (ainfo.kind == n00b_alloc_oob)
+                                   ? (n00b_inline_hdr_t *)ainfo.hdr.oob
+                                   : ainfo.hdr.in_line;
 
-    // Walk backwards for safe removal via n00b_list_delete.
-    size_t len = n00b_list_len(rt->finalizers);
+        // Walk backwards for safe removal via n00b_list_delete.
+        size_t len = n00b_list_len(rt->finalizers);
 
-    for (size_t i = len; i > 0; i--) {
-        n00b_finalizer_info_t *entry = n00b_list_get(rt->finalizers, i - 1);
+        for (size_t i = len; i > 0; i--) {
+            n00b_finalizer_info_t *entry = n00b_list_get(rt->finalizers, i - 1);
 
-        if (entry->alloc_info == hdr) {
-            entry->funcptr(entry->user_ptr);
-            (void)n00b_list_delete(rt->finalizers, i - 1);
-            n00b_free(entry);
+            if (entry->alloc_info == hdr) {
+                entry->funcptr(entry->user_ptr);
+                (void)n00b_list_delete(rt->finalizers, i - 1);
+                n00b_free(entry);
+            }
         }
+    }
+
+type_cleanup:;
+    // Lock cleanup and vtable destructor via the type registry.
+    auto tinfo_opt = n00b_type_info_for(ptr);
+    if (!n00b_option_is_set(tinfo_opt)) {
+        return;
+    }
+    n00b_type_info_t *tinfo = n00b_option_get(tinfo_opt);
+
+    // Free the lock if the type has a registered lock_offset.
+    if (n00b_option_is_set(tinfo->lock_offset)) {
+        uint32_t        offset   = n00b_option_get(tinfo->lock_offset);
+        n00b_rwlock_t **lock_ptr = (n00b_rwlock_t **)((char *)ptr + offset);
+        if (*lock_ptr) {
+            n00b_free(*lock_ptr);
+            *lock_ptr = nullptr;
+        }
+    }
+
+    // Run the vtable destructor.
+    n00b_vtable_entry dtor = tinfo->core_vtable[N00B_BI_FINALIZER];
+    if (dtor) {
+        ((void (*)(void *))dtor)(ptr);
     }
 }
 
@@ -333,8 +427,8 @@ _n00b_find_alloc_info(void *addr, n00b_alloc_info_t *result) _kargs
     bool scan_for_header = false;
 }
 {
-    auto              mmap_opt = n00b_mmap_by_address(addr);
-    char             *p        = (char *)addr;
+    auto  mmap_opt = n00b_mmap_by_address(addr);
+    char *p        = (char *)addr;
 
     if (!n00b_option_is_set(mmap_opt)) {
         *result = (n00b_alloc_info_t){.kind = n00b_alloc_none};
@@ -382,11 +476,12 @@ _n00b_find_alloc_info(void *addr, n00b_alloc_info_t *result) _kargs
             if (!scan_ptr) {
                 break;
             }
+
+            p    = scan_ptr;
+            addr = scan_ptr + N00B_ALLOC_HDR_SZ;
         }
 
         if (al->metadata) {
-            // Metadata dict is keyed by user pointer (addr), not by the
-            // adjusted header pointer (p).
             n00b_oob_hdr_t *oob = n00b_dict_untyped_get(al->metadata, addr, nullptr);
             if (!oob) {
                 *result = (n00b_alloc_info_t){.kind = n00b_alloc_err};
@@ -418,8 +513,7 @@ _n00b_find_alloc_info(void *addr, n00b_alloc_info_t *result) _kargs
     return;
 }
 
-n00b_inline_hdr_opt_t
-n00b_object_header(void *p)
+n00b_option_t(n00b_inline_hdr_t *) n00b_object_header(void *p)
 {
     n00b_alloc_info_t info = n00b_find_alloc_info(p);
 

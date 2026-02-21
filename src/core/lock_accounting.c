@@ -1,4 +1,4 @@
-/**
+/*
  * Lock accounting: per-thread lock chain management and debug inspection.
  *
  * Every exclusive lock acquired is linked into the owning thread's
@@ -90,7 +90,7 @@ n00b_lock_acquire_accounting(n00b_lock_base_t *lock,
     if (!lock->no_log) {
         n00b_runtime_t   *rt  = n00b_get_runtime();
         n00b_allocator_t *sp  = (n00b_allocator_t *)&rt->system_pool;
-        n00b_lock_log_t  *log = n00b_alloc(n00b_lock_log_t, .allocator = sp);
+        n00b_lock_log_t  *log = n00b_alloc_with_opts(n00b_lock_log_t, &(n00b_alloc_opts_t){.allocator = sp});
 
         log->loc        = loc;
         log->lock_op    = true;
@@ -104,11 +104,11 @@ n00b_lock_acquire_accounting(n00b_lock_base_t *lock,
 }
 
 void
-n00b_rlock_accounting(n00b_rwlock_t          *lock,
-                      n00b_thread_read_log_t *record,
-                      n00b_thread_t          *thread,
-                      int                     value,
-                      char                   *loc)
+_n00b_rlock_accounting(n00b_rwlock_t          *lock,
+                       n00b_thread_read_log_t *record,
+                       n00b_thread_t          *thread,
+                       int                     value,
+                       char                   *loc)
 {
     // Read-lock accounting is debug-only in the old codebase.
     // Kept as a no-op unless N00B_DEBUG is defined.
@@ -120,11 +120,11 @@ n00b_rlock_accounting(n00b_rwlock_t          *lock,
 }
 
 void
-n00b_runlock_accounting(n00b_rwlock_t          *lock,
-                        n00b_thread_read_log_t *record,
-                        n00b_thread_t          *thread,
-                        int                     value,
-                        char                   *loc)
+_n00b_runlock_accounting(n00b_rwlock_t          *lock,
+                         n00b_thread_read_log_t *record,
+                         n00b_thread_t          *thread,
+                         int                     value,
+                         char                   *loc)
 {
     (void)lock;
     (void)record;
@@ -211,7 +211,7 @@ n00b_lock_release_accounting(n00b_lock_base_t *lock, char *loc)
         if (!lock->no_log) {
             n00b_runtime_t   *rt  = n00b_get_runtime();
             n00b_allocator_t *sp  = (n00b_allocator_t *)&rt->system_pool;
-            n00b_lock_log_t  *log = n00b_alloc(n00b_lock_log_t, .allocator = sp);
+            n00b_lock_log_t  *log = n00b_alloc_with_opts(n00b_lock_log_t, &(n00b_alloc_opts_t){.allocator = sp});
 
             log->obj        = lock;
             log->loc        = loc;

@@ -8,14 +8,14 @@
 
 TEST(test_nfc_composed)
 {
-    n00b_string_t nfc = n00b_unicode_nfc(STR("e\xCC\x81"), .allocator = nullptr);
+    n00b_string_t nfc = n00b_unicode_nfc(*r"e\xCC\x81", .allocator = nullptr);
     ASSERT_EQ(nfc.codepoints, 1);
     ASSERT_STR_EQ(nfc.data, "\xC3\xA9");
 }
 
 TEST(test_nfd_decomposed)
 {
-    n00b_string_t nfd = n00b_unicode_nfd(STR("\xC3\xA9"), .allocator = nullptr);
+    n00b_string_t nfd = n00b_unicode_nfd(*r"\xC3\xA9", .allocator = nullptr);
     ASSERT_EQ(nfd.codepoints, 2);
     uint32_t pos = 0;
     int32_t  cp1 = n00b_unicode_utf8_decode(nfd.data, nfd.u8_bytes, &pos);
@@ -26,26 +26,26 @@ TEST(test_nfd_decomposed)
 
 TEST(test_nfc_already_composed)
 {
-    n00b_string_t nfc = n00b_unicode_nfc(STR("Hello"), .allocator = nullptr);
+    n00b_string_t nfc = n00b_unicode_nfc(*r"Hello", .allocator = nullptr);
     ASSERT_STR_EQ(nfc.data, "Hello");
 }
 
 TEST(test_nfkc_compat)
 {
     n00b_string_t nfkc
-        = n00b_unicode_nfkc(STR("\xEF\xAC\x81"), .allocator = nullptr); // ﬁ ligature
+        = n00b_unicode_nfkc(*r"\xEF\xAC\x81", .allocator = nullptr); // ﬁ ligature
     ASSERT_STR_EQ(nfkc.data, "fi");
 }
 
 TEST(test_nfkd_compat)
 {
-    n00b_string_t nfkd = n00b_unicode_nfkd(STR("\xEF\xAC\x81"), .allocator = nullptr);
+    n00b_string_t nfkd = n00b_unicode_nfkd(*r"\xEF\xAC\x81", .allocator = nullptr);
     ASSERT_STR_EQ(nfkd.data, "fi");
 }
 
 TEST(test_hangul_decompose_compose)
 {
-    n00b_string_t nfd = n00b_unicode_nfd(STR("\xED\x95\x9C"), .allocator = nullptr);
+    n00b_string_t nfd = n00b_unicode_nfd(*r"\xED\x95\x9C", .allocator = nullptr);
     ASSERT_EQ(nfd.codepoints, 3);
 
     n00b_string_t nfc = n00b_unicode_nfc(nfd, .allocator = nullptr);
@@ -55,13 +55,13 @@ TEST(test_hangul_decompose_compose)
 
 TEST(test_is_nfc)
 {
-    ASSERT(n00b_unicode_is_nfc(STR("Hello")));
-    ASSERT(n00b_unicode_is_nfc(STR("\xC3\xA9")));
+    ASSERT(n00b_unicode_is_nfc(*r"Hello"));
+    ASSERT(n00b_unicode_is_nfc(*r"\xC3\xA9"));
 }
 
 TEST(test_canonical_ordering)
 {
-    n00b_string_t nfd = n00b_unicode_nfd(STR("e\xCC\xA7\xCC\x81"), .allocator = nullptr);
+    n00b_string_t nfd = n00b_unicode_nfd(*r"e\xCC\xA7\xCC\x81", .allocator = nullptr);
 
     uint32_t pos = 0;
     int32_t  cp1 = n00b_unicode_utf8_decode(nfd.data, nfd.u8_bytes, &pos);

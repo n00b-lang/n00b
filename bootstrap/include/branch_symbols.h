@@ -78,6 +78,9 @@
     X(synthetic_identifier, TYPEID, 0, 0)             \
     X(synthetic_identifier, CONSTEXPR_PASTE, 1, 1)    \
     X(synthetic_string_literal, TYPESTR, 0, 0)        \
+    X(primary_expression, COMPILER_BUILTIN, 6, 6)     \
+    X(primary_expression, COMPILER_BUILTIN_BAL, 7, 7) \
+    X(primary_expression, IDENTIFIER, 8, 8)           \
     X(primary_expression, TYPEHASH, 10, 10)           \
     /* selection_statement branches */                \
     X(selection_statement, IF_ELSE, 0, 0)             \

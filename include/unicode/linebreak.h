@@ -12,11 +12,14 @@
 
 /** @brief Compute line break actions for each codepoint in a string.
  *
- *  `out[i]` contains the break action BEFORE codepoint i. The caller must
- *  allocate @p out with at least num_codepoints elements.
+ *  `out[i]` contains the break action BEFORE codepoint i.
  *
  *  @param s    The input string.
  *  @param out  Output array of break actions (caller-allocated).
+ *
+ *  @pre @p out must have at least `n00b_unicode_utf8_count_codepoints(s)`
+ *       elements.  If `s.codepoints` has been computed, that value may
+ *       be used directly.
  */
 void n00b_unicode_linebreaks(n00b_string_t s, n00b_unicode_lb_action_t *out);
 

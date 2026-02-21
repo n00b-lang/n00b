@@ -1,0 +1,13 @@
+# JSON grammar
+<value>   ::= <object> | <array> | <string> | <number> | "true" | "false" | "null"
+<object>  ::= "{" <ws> "}" | "{" <members> "}"
+<members> ::= <member> | <member> "," <members>
+<member>  ::= <ws> <string> <ws> ":" <ws> <value> <ws>
+<array>   ::= "[" <ws> "]" | "[" <elements> "]"
+<elements>::= <ws> <value> <ws> | <ws> <value> <ws> "," <elements>
+<string>  ::= '"' <chars> '"'
+<chars>   ::= "" | __JSON_STR <chars> | "\\" __PRINTABLE <chars>
+<number>   ::= "-"? <int-part> ("." __DIGIT+)? <exp-part>?
+<int-part> ::= __NONZERO_DIGIT __DIGIT+ | __DIGIT
+<exp-part> ::= ("e" | "E") ("+" | "-")? __DIGIT+
+<ws>      ::= __WHITESPACE*

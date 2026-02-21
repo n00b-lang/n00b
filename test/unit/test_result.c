@@ -163,5 +163,6 @@ main(int argc, char **argv)
     test_bang_operator();
 
     printf("All result tests passed.\n");
+    n00b_shutdown();
     return 0;
 }

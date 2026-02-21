@@ -102,23 +102,30 @@
 #define MAX_TYPE_ELEMENTS 32
 
 /**
- * @brief Generic list structure for variable-length arrays.
+ * @brief Dynamic array of void pointers with doubling growth.
  */
 typedef struct {
-    int   nitems;  /**< Number of items in the list */
-    void *items[]; /**< Flexible array of item pointers */
+    void **data;  /**< Backing store */
+    int    len;   /**< Number of items in use */
+    int    cap;   /**< Allocated capacity */
 } ncc_list_t;
 
 /**
- * @brief Allocate a list with space for elements.
- * @param nitems Number of elements to allocate space for
- * @return Newly allocated list, or nullptr on allocation failure
+ * @brief Allocate a list with capacity and length both set to @p nitems.
+ *
+ * The backing store is zeroed, so all slots are nullptr.
+ * Callers that pre-populate via indexing (e.g. kids arrays) rely on
+ * len == cap == nitems immediately after allocation.
  */
-static inline ncc_list_t*
+static inline ncc_list_t *
 ncc_list_alloc(int nitems)
 {
-    ncc_list_t*result = base_calloc(1, sizeof(ncc_list_t) + sizeof(void *) * nitems);
-    result->nitems = nitems;
+    ncc_list_t *result = base_calloc(1, sizeof(ncc_list_t));
+    if (nitems > 0) {
+        result->data = base_calloc(nitems, sizeof(void *));
+    }
+    result->len = nitems;
+    result->cap = nitems;
 
     return result;
 }
@@ -127,48 +134,58 @@ ncc_list_alloc(int nitems)
  * @brief Get the number of items in a list.
  */
 static inline int
-ncc_list_len(ncc_list_t*list)
+ncc_list_len(ncc_list_t *list)
 {
-    return list ? list->nitems : 0;
+    return list ? list->len : 0;
 }
 
 /**
  * @brief Get an item from a list by index.
  */
 static inline void *
-ncc_list_get(ncc_list_t*list, int index)
+ncc_list_get(ncc_list_t *list, int index)
 {
-    if (!list || index < 0 || index >= list->nitems) {
+    if (!list || index < 0 || index >= list->len) {
         return nullptr;
     }
-    return list->items[index];
+    return list->data[index];
 }
 
 /**
- * @brief Append an item to a list, reallocating as needed.
- * @param old_list Existing list (may be nullptr)
- * @param item Item to append
- * @return New list containing all old items plus the new item
- * @note The old list is freed. Caller must use returned pointer.
+ * @brief Ensure the list can hold at least @p needed items.
  */
-static inline ncc_list_t*
-ncc_list_append(ncc_list_t*old_list, void *item)
+static inline void
+ncc_list_ensure_cap(ncc_list_t *list, int needed)
 {
-    int old_count = old_list ? old_list->nitems : 0;
-    int new_count = old_count + 1;
-
-    ncc_list_t*new_list = ncc_list_alloc(new_count);
-    if (!new_list) {
-        return old_list;
+    if (needed <= list->cap) {
+        return;
     }
-
-    for (int i = 0; i < old_count; i++) {
-        new_list->items[i] = old_list->items[i];
+    int new_cap = list->cap ? list->cap : 4;
+    while (new_cap < needed) {
+        new_cap *= 2;
     }
-    new_list->items[old_count] = item;
+    void **new_data = base_calloc(new_cap, sizeof(void *));
+    if (list->len > 0) {
+        memcpy(new_data, list->data, list->len * sizeof(void *));
+    }
+    base_dealloc(list->data);
+    list->data = new_data;
+    list->cap  = new_cap;
+}
 
-    base_dealloc(old_list);
-    return new_list;
+/**
+ * @brief Append an item, growing with doubling if needed.
+ * @return The same list pointer (stable across appends).
+ */
+static inline ncc_list_t *
+ncc_list_append(ncc_list_t *list, void *item)
+{
+    if (!list) {
+        list = ncc_list_alloc(0);
+    }
+    ncc_list_ensure_cap(list, list->len + 1);
+    list->data[list->len++] = item;
+    return list;
 }
 
 /** @} */
@@ -235,8 +252,10 @@ struct tnode_t {
     scope_t          *scope;    /**< Scope where this node was created (for symbol lookups) */
     ncc_list_t          *kids;     /**< Child nodes (dynamic list of tnode_t*) */
     int               id;       /**< Unique node ID for debugging */
-    int               num_kids; /**< Number of children (mirrors kids->nitems) */
+    int               num_kids; /**< Number of children (mirrors kids->len) */
     int               num_toks; /**< For passthrough text (internal use) */
+    bool              vargs_done;    /**< True after vargs call-site transform */
+    bool              kw_func_result; /**< True if this node is a kw_func() output */
 };
 
 /**
@@ -251,7 +270,7 @@ tnode_get_kid(tnode_t *node, int idx)
     if (!node || !node->kids || idx < 0 || idx >= node->num_kids) {
         return nullptr;
     }
-    return (tnode_t *)node->kids->items[idx];
+    return (tnode_t *)node->kids->data[idx];
 }
 
 /**
@@ -263,8 +282,8 @@ tnode_get_kid(tnode_t *node, int idx)
 static inline void
 tnode_set_kid(tnode_t *node, int idx, tnode_t *kid)
 {
-    if (node && node->kids && idx >= 0 && idx < node->kids->nitems) {
-        node->kids->items[idx] = kid;
+    if (node && node->kids && idx >= 0 && idx < node->kids->len) {
+        node->kids->data[idx] = kid;
     }
 }
 
@@ -325,7 +344,7 @@ typedef struct norm_node_t norm_node_t;
  * @param buf Buffer to allocate tokens for
  * @return Newly allocated token array
  */
-extern tok_t *alloc_tokens(ncc_buf_t *buf);
+extern tok_t *alloc_tokens(ncc_buf_t *buf, int *out_cap);
 
 /**
  * @brief Count newlines between buffer start and token position.

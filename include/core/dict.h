@@ -1,383 +1,198 @@
-/**
- * @file dict.h
- * @brief Type-safe wrapper for the untyped dictionary.
- *
- * Provides @c ldict_t(K, V) — a thread-safe concurrent dictionary with
- * compile-time type safety. Uses typeid() for unique struct names and
- * auto-boxing for types that don't fit in a @c void*.
- *
- * Requires ncc (uses typeid()).
- *
- * Usage:
- * @code
- *     BASE_LDICT_IMPL(int, int, my_int_hash)
- *
- *     ldict_t(int, int) d = ldict_new(int, int);
- *     ldict_init(int, int, &d, 0);
- *     ldict_put(int, int, &d, 42, 100);
- *     int val;
- *     if (ldict_get(int, int, &d, 42, &val)) { ... }
- *     ldict_free(int, int, &d);
- * @endcode
- */
 #pragma once
 
-#include "locking_dict.h"
-#include "generic.h"
-#include "alloc.h"
-#include <string.h>
+#include "n00b.h"
+#include "core/macros.h"
+#include "core/alloc.h"
+#include "core/hash.h"
 
-/**
- * @brief Declare a typed locking dictionary for key type @p K and value type @p V.
- * @param K  Key type.
- * @param V  Value type.
- */
-#define ldict_t(K, V) struct typeid("base_ldict_", K, "_", V)
+#include <stdint.h>
+#include <assert.h>
 
-/** @internal Function name generators for typed ldict operations. */
-#define _LDICT_BOX_K(K, V)       typeid("_ldict_box_k_", K, "_", V)
-/** @internal */
-#define _LDICT_UNBOX_K(K, V)     typeid("_ldict_unbox_k_", K, "_", V)
-/** @internal */
-#define _LDICT_BOX_V(K, V)       typeid("_ldict_box_v_", K, "_", V)
-/** @internal */
-#define _LDICT_UNBOX_V(K, V)     typeid("_ldict_unbox_v_", K, "_", V)
-/** @internal */
-#define _LDICT_FREE_K(K, V)      typeid("_ldict_free_k_", K, "_", V)
-/** @internal */
-#define _LDICT_FREE_V(K, V)      typeid("_ldict_free_v_", K, "_", V)
-/** @internal */
-#define _LDICT_HASH_WRAP(K, V)   typeid("_ldict_hash_wrap_", K, "_", V)
-/** @internal */
-#define _LDICT_INIT(K, V)        typeid("_ldict_init_", K, "_", V)
-/** @internal */
-#define _LDICT_FREE(K, V)        typeid("_ldict_free_", K, "_", V)
-/** @internal */
-#define _LDICT_PUT(K, V)         typeid("_ldict_put_", K, "_", V)
-/** @internal */
-#define _LDICT_GET(K, V)         typeid("_ldict_get_", K, "_", V)
-/** @internal */
-#define _LDICT_REMOVE(K, V)      typeid("_ldict_remove_", K, "_", V)
-/** @internal */
-#define _LDICT_CONTAINS(K, V)    typeid("_ldict_contains_", K, "_", V)
-/** @internal */
-#define _LDICT_REPLACE(K, V)     typeid("_ldict_replace_", K, "_", V)
-/** @internal */
-#define _LDICT_ADD(K, V)         typeid("_ldict_add_", K, "_", V)
+#if !defined(N00B_DICT_UNTYPED_MIN_SIZE_LOG)
+#define N00B_DICT_UNTYPED_MIN_SIZE_LOG 4
+#define N00B_DICT_UNTYPED_MIN_SIZE     (1 << N00B_DICT_UNTYPED_MIN_SIZE_LOG)
+#endif
 
-/**
- * @brief Define a typed locking dictionary for key type @p K and value type @p V.
- *
- * Generates the struct definition and all inline helper functions
- * (init, put, get, replace, add, remove, contains, free).
- *
- * Auto-boxing:
- *   - @c sizeof(T) <= @c sizeof(void*): value packed into @c void* via memcpy.
- *   - @c sizeof(T) > @c sizeof(void*): heap-allocated, pointer stored.
- *
- * @param K        Key type.
- * @param V        Value type.
- * @param hash_fn  Hash function: @c base_ldict_hash_t hash_fn(K key).
- */
-#define BASE_LDICT_IMPL(K, V, hash_fn)                                                              \
-    ldict_t(K, V)                                                                                    \
-    {                                                                                                \
-        base_ldict_t inner;                                                                          \
-    };                                                                                               \
-                                                                                                     \
-    /* Box key: pack small values into void*, heap-alloc large ones */                               \
-    static inline void *_LDICT_BOX_K(K, V)(K key)                                                   \
-    {                                                                                                \
-        void *raw = nullptr;                                                                         \
-        if (sizeof(K) <= sizeof(void *)) {                                                 \
-            memcpy(&raw, &key, sizeof(K));                                                           \
-        }                                                                                            \
-        else {                                                                                       \
-            raw = base_alloc(sizeof(K));                                                             \
-            memcpy(raw, &key, sizeof(K));                                                            \
-        }                                                                                            \
-        return raw;                                                                                  \
-    }                                                                                                \
-                                                                                                     \
-    /* Unbox key */                                                                                  \
-    static inline K _LDICT_UNBOX_K(K, V)(void *raw)                                                 \
-    {                                                                                                \
-        K key;                                                                                       \
-        if (sizeof(K) <= sizeof(void *)) {                                                 \
-            memcpy(&key, &raw, sizeof(K));                                                           \
-        }                                                                                            \
-        else {                                                                                       \
-            memcpy(&key, raw, sizeof(K));                                                            \
-        }                                                                                            \
-        return key;                                                                                  \
-    }                                                                                                \
-                                                                                                     \
-    /* Box value */                                                                                  \
-    static inline void *_LDICT_BOX_V(K, V)(V val)                                                   \
-    {                                                                                                \
-        void *raw = nullptr;                                                                         \
-        if (sizeof(V) <= sizeof(void *)) {                                                 \
-            memcpy(&raw, &val, sizeof(V));                                                           \
-        }                                                                                            \
-        else {                                                                                       \
-            raw = base_alloc(sizeof(V));                                                             \
-            memcpy(raw, &val, sizeof(V));                                                            \
-        }                                                                                            \
-        return raw;                                                                                  \
-    }                                                                                                \
-                                                                                                     \
-    /* Unbox value */                                                                                \
-    static inline V _LDICT_UNBOX_V(K, V)(void *raw)                                                 \
-    {                                                                                                \
-        V val;                                                                                       \
-        if (sizeof(V) <= sizeof(void *)) {                                                 \
-            memcpy(&val, &raw, sizeof(V));                                                           \
-        }                                                                                            \
-        else {                                                                                       \
-            memcpy(&val, raw, sizeof(V));                                                            \
-        }                                                                                            \
-        return val;                                                                                  \
-    }                                                                                                \
-                                                                                                     \
-    /* Free boxed key (no-op if inline) */                                                           \
-    static inline void _LDICT_FREE_K(K, V)(void *raw)                                               \
-    {                                                                                                \
-        if (sizeof(K) > sizeof(void *)) {                                                  \
-            base_dealloc(raw);                                                                       \
-        }                                                                                            \
-    }                                                                                                \
-                                                                                                     \
-    /* Free boxed value (no-op if inline) */                                                         \
-    static inline void _LDICT_FREE_V(K, V)(void *raw)                                               \
-    {                                                                                                \
-        if (sizeof(V) > sizeof(void *)) {                                                  \
-            base_dealloc(raw);                                                                       \
-        }                                                                                            \
-    }                                                                                                \
-                                                                                                     \
-    /* Hash wrapper: unbox key, call user hash_fn, ensure non-zero */                                \
-    static inline base_ldict_hash_t _LDICT_HASH_WRAP(K, V)(void *p)                                 \
-    {                                                                                                \
-        K key = _LDICT_UNBOX_K(K, V)(p);                                                            \
-        return (base_ldict_hash_t)hash_fn(key) | 1;                                                 \
-    }                                                                                                \
-                                                                                                     \
-    /* Init */                                                                                       \
-    static inline void _LDICT_INIT(K, V)(ldict_t(K, V) * d, uint32_t cap)                           \
-    {                                                                                                \
-        base_ldict_init(&d->inner, cap, _LDICT_HASH_WRAP(K, V));                                    \
-    }                                                                                                \
-                                                                                                     \
-    /* Put: box key+val, call base_ldict_put, free old boxed value */                                \
-    static inline void _LDICT_PUT(K, V)(ldict_t(K, V) * d, K key, V val)                            \
-    {                                                                                                \
-        void *bk  = _LDICT_BOX_K(K, V)(key);                                                        \
-        void *bv  = _LDICT_BOX_V(K, V)(val);                                                        \
-        void *old = base_ldict_put(&d->inner, bk, bv);                                              \
-        if (old) {                                                                                   \
-            _LDICT_FREE_V(K, V)(old);                                                                \
-        }                                                                                            \
-    }                                                                                                \
-                                                                                                     \
-    /* Get: returns bool, writes to *out */                                                          \
-    static inline bool _LDICT_GET(K, V)(ldict_t(K, V) * d, K key, V * out)                          \
-    {                                                                                                \
-        void *bk = _LDICT_BOX_K(K, V)(key);                                                         \
-        bool  found;                                                                                 \
-        void *raw = base_ldict_get(&d->inner, bk, &found);                                          \
-        _LDICT_FREE_K(K, V)(bk);                                                                    \
-        if (found && out) {                                                                          \
-            *out = _LDICT_UNBOX_V(K, V)(raw);                                                       \
-        }                                                                                            \
-        return found;                                                                                \
-    }                                                                                                \
-                                                                                                     \
-    /* Replace: returns true if key existed */                                                       \
-    static inline bool _LDICT_REPLACE(K, V)(ldict_t(K, V) * d, K key, V val)                        \
-    {                                                                                                \
-        void *bk = _LDICT_BOX_K(K, V)(key);                                                         \
-        void *bv = _LDICT_BOX_V(K, V)(val);                                                         \
-        bool  ok = base_ldict_replace(&d->inner, bk, bv);                                           \
-        _LDICT_FREE_K(K, V)(bk);                                                                    \
-        if (!ok) {                                                                                   \
-            _LDICT_FREE_V(K, V)(bv);                                                                \
-        }                                                                                            \
-        return ok;                                                                                   \
-    }                                                                                                \
-                                                                                                     \
-    /* Add: returns true if key was new */                                                           \
-    static inline bool _LDICT_ADD(K, V)(ldict_t(K, V) * d, K key, V val)                            \
-    {                                                                                                \
-        void *bk = _LDICT_BOX_K(K, V)(key);                                                         \
-        void *bv = _LDICT_BOX_V(K, V)(val);                                                         \
-        bool  ok = base_ldict_add(&d->inner, bk, bv);                                               \
-        if (!ok) {                                                                                   \
-            _LDICT_FREE_K(K, V)(bk);                                                                \
-            _LDICT_FREE_V(K, V)(bv);                                                                \
-        }                                                                                            \
-        return ok;                                                                                   \
-    }                                                                                                \
-                                                                                                     \
-    /* Remove: frees boxed key+value if heap-allocated */                                            \
-    static inline bool _LDICT_REMOVE(K, V)(ldict_t(K, V) * d, K key)                                \
-    {                                                                                                \
-        void *bk = _LDICT_BOX_K(K, V)(key);                                                         \
-        /* Need to retrieve boxed key/value before removing */                                       \
-        bool  found;                                                                                 \
-        void *raw_val = base_ldict_get(&d->inner, bk, &found);                                      \
-        if (!found) {                                                                                \
-            _LDICT_FREE_K(K, V)(bk);                                                                \
-            return false;                                                                            \
-        }                                                                                            \
-        bool removed = base_ldict_remove(&d->inner, bk);                                            \
-        if (removed) {                                                                               \
-            _LDICT_FREE_V(K, V)(raw_val);                                                            \
-        }                                                                                            \
-        _LDICT_FREE_K(K, V)(bk);                                                                    \
-        return removed;                                                                              \
-    }                                                                                                \
-                                                                                                     \
-    /* Contains */                                                                                   \
-    static inline bool _LDICT_CONTAINS(K, V)(ldict_t(K, V) * d, K key)                              \
-    {                                                                                                \
-        void *bk    = _LDICT_BOX_K(K, V)(key);                                                      \
-        bool  found = base_ldict_contains(&d->inner, bk);                                           \
-        _LDICT_FREE_K(K, V)(bk);                                                                    \
-        return found;                                                                                \
-    }                                                                                                \
-                                                                                                     \
-    /* Free: iterate all buckets, free boxed keys+values, then free dict */                          \
-    static inline void _LDICT_FREE(K, V)(ldict_t(K, V) * d)                                         \
-    {                                                                                                \
-        if (sizeof(K) > sizeof(void *) || sizeof(V) > sizeof(void *)) {                    \
-            base_ldict_store_t *s = atomic_load_explicit(&d->inner.store, memory_order_acquire);     \
-            if (s) {                                                                                 \
-                for (uint32_t i = 0; i <= s->last_slot; i++) {                                       \
-                    base_ldict_bucket_t *b = &s->buckets[i];                                         \
-                    if (b->hv != 0                                                                   \
-                        && !(atomic_load_explicit(&b->flags, memory_order_acquire) & 4)) {           \
-                        _LDICT_FREE_K(K, V)(b->key);                                                 \
-                        _LDICT_FREE_V(K, V)(b->value);                                               \
-                    }                                                                                \
-                }                                                                                    \
-            }                                                                                        \
-        }                                                                                            \
-        base_ldict_free(&d->inner);                                                                  \
+#if !defined(N00B_DICT_MIN_SIZE_LOG)
+#define N00B_DICT_MIN_SIZE_LOG 4
+#define N00B_DICT_MIN_SIZE     (1 << N00B_DICT_MIN_SIZE_LOG)
+#endif
+
+#define n00b_dict_store_tid(k, v) typeid("store", k, v)
+#define n00b_dict_store_t(k, v)   struct n00b_dict_store_tid(k, v)
+
+typedef struct n00b_dict_bucket_t {
+    n00b_uint128_t   hv;
+    uint32_t         insert_order;
+    _Atomic uint32_t flags; // Mutex, deleted.
+} n00b_dict_bucket_t;
+
+#define n00b_dict_store_decl(k, v)                                                             \
+    n00b_dict_store_t(k, v)                                                                    \
+    {                                                                                          \
+        uint32_t            last_slot;                                                         \
+        uint32_t            threshold;                                                         \
+        _Atomic uint32_t    used_count;                                                        \
+        n00b_dict_bucket_t *buckets;                                                           \
+        k *keys;                                                                               \
+        v *values;                                                                             \
     }
 
-/**
- * @brief Create a zero-initialized typed locking dictionary.
- * @param K  Key type.
- * @param V  Value type.
- * @return A zero-initialized dictionary.
- */
-#define ldict_new(K, V)                  ((ldict_t(K, V)){0})
+typedef struct __n00b_internal_type_erased_store_t {
+    uint32_t            last_slot;
+    uint32_t            threshold;
+    _Atomic uint32_t    used_count;
+    n00b_dict_bucket_t *buckets;
+    void              **keys;
+    void              **values;
+} __n00b_internal_type_erased_store_t;
+
+#define n00b_dict_tid(k, v) typeid("dict", k, v)
+#define n00b_dict_t(k, v)   struct n00b_dict_tid(k, v)
+
+// The futex is only for migrations.
+#define N00B_BASE_DICT_FIELDS                                                                  \
+    n00b_hash_fn         fn;                                                                   \
+    n00b_allocator_t    *allocator;                                                            \
+    _Atomic uint32_t     insertion_epoch;                                                      \
+    _Atomic n00b_isize_t wait_ct;                                                              \
+    _Atomic n00b_isize_t length;                                                               \
+    n00b_futex_t         futex;                                                                \
+    uint8_t              cache         : 1;                                                    \
+    uint8_t              lock          : 1;                                                    \
+    uint8_t              skip_obj_hash : 1;
+
+typedef struct _n00b_dict_internal_t {
+    _Atomic(void **) store;
+    N00B_BASE_DICT_FIELDS
+} _n00b_dict_internal_t;
+
+#define n00b_dict_decl_base(k, v)                                                              \
+    n00b_dict_t(k, v)                                                                          \
+    {                                                                                          \
+        _Atomic(n00b_dict_store_t(k, v) *) store;                                              \
+        N00B_BASE_DICT_FIELDS                                                                  \
+    }
+
+#define n00b_dict_decl(k, v)                                                                   \
+    n00b_dict_store_decl(k, v);                                                                \
+    n00b_dict_decl_base(k, v);                                                                 \
+    static_assert(sizeof(k) <= (1 << 15));                                                     \
+    static_assert(sizeof(v) <= (1 << 15));                                                     \
+    static_assert(sizeof(n00b_dict_t(k, v)) == sizeof(_n00b_dict_internal_t))
+
+// Structural type checking, ha!
+#define _n00b_dict_structural_check(dict_ptr)                                                  \
+    static_assert(sizeof(*(dict_ptr)) == sizeof(_n00b_dict_internal_t));                         \
+    static_assert(offsetof(typeof(*(dict_ptr)), store)                                         \
+                  == offsetof(_n00b_dict_internal_t, store));                                    \
+    static_assert(offsetof(typeof(*(dict_ptr)), fn) == offsetof(_n00b_dict_internal_t, fn));     \
+    static_assert(offsetof(typeof(*(dict_ptr)), allocator)                                     \
+                  == offsetof(_n00b_dict_internal_t, allocator));                                \
+    static_assert(offsetof(typeof(*(dict_ptr)), insertion_epoch)                               \
+                  == offsetof(_n00b_dict_internal_t, insertion_epoch));                          \
+    static_assert(offsetof(typeof(*(dict_ptr)), wait_ct)                                       \
+                  == offsetof(_n00b_dict_internal_t, wait_ct));                                  \
+    static_assert(offsetof(typeof(*(dict_ptr)), length)                                        \
+                  == offsetof(_n00b_dict_internal_t, length));                                   \
+    static_assert(offsetof(typeof(*(dict_ptr)), futex) == offsetof(_n00b_dict_internal_t, futex))
+
+#define _n00b_wrap_dict_call(opname, dict_ptr, ...)                                            \
+    ({                                                                                         \
+        _n00b_dict_structural_check(dict_ptr);                                                 \
+        _n00b_dict_internal_##opname((_n00b_dict_internal_t *)(dict_ptr),                      \
+                                     sizeof((dict_ptr)->store->keys[0]),                       \
+                                     sizeof((dict_ptr)->store->values[0])                      \
+                                         __VA_OPT__(, __VA_ARGS__));                           \
+    })
+
+#define _n00b_ditem_type(dict_ptr, field_name) typeof((dict_ptr)->store->field_name[0])
+#define n00b_dict_init(dict, ...) _n00b_wrap_dict_call(init, dict __VA_OPT__(, __VA_ARGS__))
+
+#define n00b_dict_put(dict, key, value) _n00b_wrap_dict_call(put, dict, &(key), &(value))
+#define n00b_dict_get(dict, key, found) _n00b_wrap_dict_call(get, dict, &(key), found)
+#define n00b_dict_add(dict, key, value) _n00b_wrap_dict_call(add, dict, &(key), &(value))
+#define n00b_dict_remove(dict, key)     _n00b_wrap_dict_call(remove, dict, &(key))
+#define n00b_dict_cas(dict, key, old, new, ...)                                                \
+    _n00b_wrap_dict_call(cas, dict, &(key), old, new __VA_OPT__(, __VA_ARGS__))
+
+#define n00b_dict_contains(dict, key)                                                          \
+    ({                                                                                         \
+        bool found;                                                                            \
+        (void)n00b_dict_get(dict, key, &found);                                                \
+        found;                                                                                 \
+    })
+
+// This private interface (from here, down) is untyped, and thus internal.
+extern void       _n00b_finalize_dict(_n00b_dict_internal_t *);
+extern n00b_size_t n00b_dict_internal_len(_n00b_dict_internal_t *);
 
 /**
- * @brief Initialize a typed locking dictionary.
- * @param K    Key type.
- * @param V    Value type.
- * @param d    Pointer to the dictionary.
- * @param cap  Initial capacity (0 for default).
+ * @brief Initialize an untyped dictionary.
+ * @param dict Dictionary to initialize.
+ *
+ * @kw start_capacity Initial bucket count (default N00B_DICT_MIN_SIZE).
+ * @kw allocator      Allocator for internal storage (nullptr = runtime default).
+ * @kw hash           Hash function for keys (nullptr = n00b_hash_word).
+ * @kw skip_obj_hash  If true, use the raw key bits instead of calling the hash function.
  */
-#define ldict_init(K, V, d, cap)         _LDICT_INIT(K, V)(d, cap)
+extern void
+_n00b_dict_internal_init(_n00b_dict_internal_t *, uint16_t ksz, uint16_t vsz) _kargs
+{
+    n00b_allocator_t *allocator      = nullptr;
+    uint32_t          start_capacity = N00B_DICT_MIN_SIZE;
+    n00b_hash_fn      hash           = nullptr;
+    bool              skip_obj_hash  = false;
+};
 
-/**
- * @brief Insert or update a key-value pair.
- * @param K    Key type.
- * @param V    Value type.
- * @param d    Pointer to the dictionary.
- * @param key  Key to insert.
- * @param val  Value to associate.
- */
-#define ldict_put(K, V, d, key, val)     _LDICT_PUT(K, V)(d, key, val)
+extern void *_n00b_dict_internal_put(_n00b_dict_internal_t *d,
+                                     uint32_t               ksz,
+                                     uint32_t               vsz,
+                                     void                  *key,
+                                     void                  *value);
+extern void *_n00b_dict_internal_get(_n00b_dict_internal_t *d,
+                                     uint32_t               ksz,
+                                     uint32_t               vsz,
+                                     void                  *key,
+                                     bool                  *found);
+extern bool  _n00b_dict_internal_add(_n00b_dict_internal_t *d,
+                                     uint32_t               ksz,
+                                     uint32_t               vsz,
+                                     void                  *key,
+                                     void                  *value);
+extern bool
+_n00b_dict_internal_remove(_n00b_dict_internal_t *d, uint32_t ksz, uint32_t vsz, void *key);
 
-/**
- * @brief Look up a key, writing the value to @p out.
- * @param K    Key type.
- * @param V    Value type.
- * @param d    Pointer to the dictionary.
- * @param key  Key to look up.
- * @param out  Pointer where the value is written if found.
- * @return @c true if the key was found.
- */
-#define ldict_get(K, V, d, key, out)     _LDICT_GET(K, V)(d, key, out)
+extern bool
+_n00b_dict_internal_cas(_n00b_dict_internal_t *d,
+                        uint32_t               ksz,
+                        uint32_t               vsz,
+                        void                  *key,
+                        void                 **old_item_ptr,
+                        void                  *new_item) _kargs
+{
+    bool null_old_means_absence = false;
+    bool null_new_means_delete  = false;
+};
 
+#ifdef N00B_USE_INTERNAL_API
 /**
- * @brief Replace the value for an existing key.
- * @param K    Key type.
- * @param V    Value type.
- * @param d    Pointer to the dictionary.
- * @param key  Key to update.
- * @param val  New value.
- * @return @c true if the key existed and was updated.
+ * @brief Acquire the dictionary's migration mutex.
+ * @param d     Dictionary to lock.
+ * @param try   If true, return immediately on failure.
+ * @param count Output: migration epoch when lock was acquired.
+ * @return      true if lock was acquired.
  */
-#define ldict_replace(K, V, d, key, val) _LDICT_REPLACE(K, V)(d, key, val)
+extern bool n00b_dict_internal_lock(_n00b_dict_internal_t *d,
+                                    bool                   try,
+                                    uint32_t              *count);
 
-/**
- * @brief Add a key-value pair only if the key is not present.
- * @param K    Key type.
- * @param V    Value type.
- * @param d    Pointer to the dictionary.
- * @param key  Key to add.
- * @param val  Value to associate.
- * @return @c true if the key was new and was inserted.
- */
-#define ldict_add(K, V, d, key, val)     _LDICT_ADD(K, V)(d, key, val)
+/** @brief Unlock the dictionary after a store migration. */
+extern void n00b_dict_internal_unlock_post_copy(_n00b_dict_internal_t *d);
 
-/**
- * @brief Remove a key from the dictionary.
- * @param K    Key type.
- * @param V    Value type.
- * @param d    Pointer to the dictionary.
- * @param key  Key to remove.
- * @return @c true if the key was found and removed.
- */
-#define ldict_remove(K, V, d, key)       _LDICT_REMOVE(K, V)(d, key)
+#define N00B_HT_FLAG_MUTEX   1
+#define N00B_HT_FLAG_COPYING 2
+#define N00B_HT_FLAG_DELETED 4
+#define N00B_HT_FLAG_MOVING  8
 
-/**
- * @brief Check if a key exists in the dictionary.
- * @param K    Key type.
- * @param V    Value type.
- * @param d    Pointer to the dictionary.
- * @param key  Key to check.
- * @return @c true if the key is present.
- */
-#define ldict_contains(K, V, d, key)     _LDICT_CONTAINS(K, V)(d, key)
-
-/**
- * @brief Get the number of live entries.
- * @param d  Pointer to the dictionary.
- * @return Number of entries.
- */
-#define ldict_len(d)                     base_ldict_len(&(d)->inner)
-
-/**
- * @brief Free the dictionary and all boxed keys/values.
- * @param K  Key type.
- * @param V  Value type.
- * @param d  Pointer to the dictionary.
- */
-#define ldict_free(K, V, d)              _LDICT_FREE(K, V)(d)
-
-/**
- * @name Prefixed aliases
- * @{
- */
-/** @copydoc ldict_new */
-#define base_ldict_new(K, V)                    ldict_new(K, V)
-/** @copydoc ldict_init */
-#define base_ldict_typed_init(K, V, d, cap)     ldict_init(K, V, d, cap)
-/** @copydoc ldict_put */
-#define base_ldict_typed_put(K, V, d, key, val) ldict_put(K, V, d, key, val)
-/** @copydoc ldict_get */
-#define base_ldict_typed_get(K, V, d, key, out) ldict_get(K, V, d, key, out)
-/** @copydoc ldict_remove */
-#define base_ldict_typed_remove(K, V, d, key)   ldict_remove(K, V, d, key)
-/** @copydoc ldict_contains */
-#define base_ldict_typed_contains(K, V, d, key) ldict_contains(K, V, d, key)
-/** @copydoc ldict_len */
-#define base_ldict_typed_len(d)                 ldict_len(d)
-/** @copydoc ldict_free */
-#define base_ldict_typed_free(K, V, d)          ldict_free(K, V, d)
-/** @} */
+#endif

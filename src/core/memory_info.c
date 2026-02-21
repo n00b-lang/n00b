@@ -2,11 +2,15 @@
 #define N00B_USE_INTERNAL_API
 
 #include <signal.h>
+#include <errno.h>
+#ifndef _WIN32
 #include <sys/mman.h>
 #include <unistd.h>
 #include <poll.h>
 #include <fcntl.h>
-#include <errno.h>
+#else
+#include "core/platform.h"
+#endif
 
 #include "n00b.h"
 #include "core/mmaps.h"
@@ -66,21 +70,20 @@ n00b_extract_lib_info(struct dl_phdr_info *info, size_t size, void *unused)
         if (startp == endp) {
             continue;
         }
-        n00b_register_mmap(startp,
-                           endp,
-                           (char *)info->dlpi_name,
-                           nullptr,
-                           info->dlpi_phdr[i].p_offset,
-                           (intptr_t)info->dlpi_addr,
-                           startp ? n00b_mmap_static : n00b_mmap_zero_page,
-                           n00b_atomic_add(&static_order_id, 1),
-                           false);
+        (void)n00b_mmap_register(startp,
+                                 endp,
+                                 startp ? n00b_mmap_static : n00b_mmap_zero_page,
+                                 .file              = (char *)info->dlpi_name,
+                                 .binary_offset     = info->dlpi_phdr[i].p_offset,
+                                 .slide             = -(intptr_t)info->dlpi_addr,
+                                 .order_id          = n00b_atomic_add(&static_order_id, 1),
+                                 .definitely_unique = false);
     }
     return 0;
 }
 
 #if defined(N00B_ALWAYS_RECHECK_STATIC_POINTERS)
-static inline n00b_mmap_opt_t
+static inline n00b_option_t(n00b_mmap_info_t *)
 n00b_check_static_maps(void *addr)
 {
     dl_iterate_phdr(n00b_extract_lib_info, nullptr);
@@ -140,20 +143,38 @@ n00b_load_static_ranges(void)
 {
     _dyld_register_func_for_add_image(n00b_on_lib_load);
 }
+#elifdef _WIN32
+
+void
+n00b_load_static_ranges(void)
+{
+    // TODO: Implement PE image enumeration for Windows.
+    // For now, only runtime-allocated regions are tracked.
+}
+
 #else
 #error "Unsupported OS"
 #endif
 
-static n00b_mmap_opt_t
+static n00b_option_t(n00b_mmap_info_t *)
 n00b_check_kernel_page_map(const void *addr)
 {
     char *start = n00b_align_to_page_start((void *)addr);
-    char  status[1];
 
     if (!start) {
         return n00b_option_none(n00b_mmap_info_t *);
     }
 
+#ifdef _WIN32
+    MEMORY_BASIC_INFORMATION mbi;
+    if (!VirtualQuery(start, &mbi, sizeof(mbi))) {
+        return n00b_option_none(n00b_mmap_info_t *);
+    }
+    if (mbi.State != MEM_COMMIT) {
+        return n00b_option_none(n00b_mmap_info_t *);
+    }
+#else
+    char status[1];
     // This cast is crucial due to different signatures across
     // mac + linux (signed vs. unsigned.
     if (mincore(start, n00b_page_size, (void *)status)) {
@@ -162,6 +183,7 @@ n00b_check_kernel_page_map(const void *addr)
     if (!(status[0] & MINCORE_TEST_BIT)) {
         return n00b_option_none(n00b_mmap_info_t *);
     }
+#endif
 
     // Register just this one page.
     return n00b_mmap_register(start,
@@ -171,10 +193,10 @@ n00b_check_kernel_page_map(const void *addr)
 }
 
 // This only gets called when lookup fails.
-static inline n00b_mmap_opt_t
+static inline n00b_option_t(n00b_mmap_info_t *)
 n00b_check_for_unmanaged_map(const void *addr)
 {
-    n00b_mmap_opt_t result;
+    n00b_option_t(n00b_mmap_info_t *) result;
     // On MacOS, we register for dynamic events, so don't need to make a
     // dynamic call; it would have been in the static list (minux some
     // race condition, where we'll just accept returning that an address
@@ -196,7 +218,7 @@ n00b_check_for_unmanaged_map(const void *addr)
     return result;
 }
 
-n00b_mmap_opt_t
+n00b_option_t(n00b_mmap_info_t *)
 n00b_mmap_info_lookup(const void *addr)
 {
     auto result = n00b_mmap_by_address((void *)addr);
@@ -229,6 +251,23 @@ n00b_find_allocator(void *val)
 n00b_mmap_perms_t
 n00b_check_memory_perms(void *ptr)
 {
+#ifdef _WIN32
+    MEMORY_BASIC_INFORMATION mbi;
+    if (!VirtualQuery(ptr, &mbi, sizeof(mbi))) {
+        return n00b_mmap_perms_no_access;
+    }
+    if (mbi.State != MEM_COMMIT) {
+        return n00b_mmap_perms_no_access;
+    }
+    if (mbi.Protect & (PAGE_READWRITE | PAGE_WRITECOPY
+                       | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY)) {
+        return n00b_mmap_perms_rw;
+    }
+    if (mbi.Protect & (PAGE_READONLY | PAGE_EXECUTE_READ | PAGE_EXECUTE)) {
+        return n00b_mmap_perms_ro;
+    }
+    return n00b_mmap_perms_no_access;
+#else
     bool cannot_write = false;
     bool cannot_read  = false;
 
@@ -303,6 +342,7 @@ n00b_check_memory_perms(void *ptr)
     }
 
     return n00b_mmap_perms_rw;
+#endif
 }
 
 static inline bool
@@ -383,7 +423,10 @@ n00b_address_is_probable_cstring(void *addr, size_t *bytelen, size_t min_len)
 }
 
 bool
-n00b_memory_scan_init(n00b_memory_scan_t *ctx, void *s, size_t len, uint8_t cat_flags)
+n00b_memory_scan_init(n00b_memory_scan_t *ctx, void *s, size_t len) _kargs
+{
+    uint8_t cat_flags = 0;
+}
 {
     uint64_t start = (uint64_t)s;
     uint64_t end   = start + len;
@@ -405,7 +448,7 @@ n00b_memory_scan_init(n00b_memory_scan_t *ctx, void *s, size_t len, uint8_t cat_
     return true;
 }
 
-void *
+n00b_option_t(void *)
 n00b_memory_scan_next(n00b_memory_scan_t   *ctx,
                       n00b_mmap_rec_kind_t *tinfo,
                       n00b_mmap_perms_t    *perms)
@@ -430,7 +473,7 @@ n00b_memory_scan_next(n00b_memory_scan_t   *ctx,
     }
 
     if (!mmap) {
-        return nullptr;
+        return n00b_option_none(void *);
     }
 
     if (perms) {
@@ -441,7 +484,7 @@ n00b_memory_scan_next(n00b_memory_scan_t   *ctx,
         *tinfo = mmap->kind;
     }
 
-    return result;
+    return n00b_option_set(void *, result);
 }
 
 static void

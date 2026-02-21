@@ -5,8 +5,6 @@
 #include <stdlib.h>
 #include <float.h>
 
-#define S(lit) STR(lit)
-
 // Helper: convert with fptostr and NUL-terminate for comparison.
 static int
 fptostr_buf(double d, char *buf)

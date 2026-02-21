@@ -107,5 +107,6 @@ main(int argc, char *argv[])
     test_contention();
 
     printf("All mutex tests passed.\n");
+    n00b_shutdown();
     return 0;
 }

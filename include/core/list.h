@@ -8,12 +8,14 @@
  *
  * Type safety is enforced through ncc's @c typeid().
  *
- * When the list's @c lock pointer is non-null, read operations acquire
- * a shared read lock and write operations acquire an exclusive write lock.
- * When null (private lists), locking is a no-op.
+ * **Thread safety:** Lists are **locked by default** — @c n00b_list_new
+ * creates a rwlock automatically.  Read operations acquire a shared
+ * read lock; write operations acquire an exclusive write lock.  Use
+ * private constructors (lock = nullptr) for single-threaded use.
+ * Note that @c n00b_array_t is **not** locked by default.
  *
- * @c n00b_list_foreach is explicitly unlocked — the caller must ensure
- * exclusive access.
+ * @c n00b_list_foreach acquires a **read lock** for the duration of the
+ * loop — do not modify the list inside the loop body.
  *
  * Requires @c core/alloc.h to be included by the consumer for
  * @c n00b_alloc_array / @c n00b_alloc_size / @c n00b_free.
@@ -37,6 +39,8 @@
 #include "core/align.h"
 #include "core/array.h"
 #include "core/data_lock.h"
+#include "core/option.h"
+#include "core/string.h"
 
 // ============================================================================
 // Constants
@@ -71,6 +75,11 @@
         n00b_allocator_t *allocator;                                                           \
     }
 
+// Common list types that many modules need.
+n00b_list_decl(int);
+n00b_list_decl(int32_t);
+n00b_list_decl(n00b_string_t);
+
 // ============================================================================
 // Internal helpers  (not part of public API)
 // ============================================================================
@@ -93,8 +102,9 @@
         size_t _bl_need = (needed);                                                            \
         if (_bl_need > (xptr)->cap) {                                                          \
             size_t               _bl_nc = n00b_align_closest_pow2_ceil(_bl_need);              \
-            typeof((xptr)->data) _bl_nd = n00b_alloc_size(                                    \
-                _bl_nc, sizeof(*(xptr)->data), .allocator = (xptr)->allocator);                \
+            typeof((xptr)->data) _bl_nd = n00b_alloc_size_with_opts(                           \
+                _bl_nc, sizeof(*(xptr)->data),                                                 \
+                &(n00b_alloc_opts_t){.allocator = (xptr)->allocator});                         \
             if ((xptr)->len > 0) {                                                             \
                 memcpy(_bl_nd, (xptr)->data, (xptr)->len * sizeof(*(xptr)->data));             \
             }                                                                                  \
@@ -111,69 +121,50 @@
 // ============================================================================
 
 /**
- * @brief Create a new thread-safe list with default capacity.
- * @param T  Element type.
+ * @brief Create a new list with default capacity.
+ *
+ * Lists are **locked by default**.  Pass `false` as the second argument
+ * (or use the `_private` compat macro) for an unlocked list.
+ *
+ * @param T       Element type.
+ * @param locked  Whether to create a rwlock (default: true).
+ * @param ...     Optional allocator.
  */
-#define n00b_list_new(T, ...)                                                                   \
+#define n00b_list_new(T, ...)              _n00b_list_new_sel(T, true, ##__VA_ARGS__)
+#define n00b_list_new_private(T, ...)      _n00b_list_new_sel(T, false, ##__VA_ARGS__) /**< @deprecated Use n00b_list_new(T, false) */
+
+#define _n00b_list_new_sel(T, locked, ...)                                                     \
     ({                                                                                         \
         (n00b_list_t(T)){                                                                      \
-            .data = n00b_alloc_array(T, N00B_DEFAULT_LIST_SZ                                   \
-                        __VA_OPT__(, .allocator = __VA_ARGS__)),                                \
+            .data = n00b_alloc_array_with_opts(T, N00B_DEFAULT_LIST_SZ,                        \
+                        N00B_ALLOC_OPTS(__VA_ARGS__)),                                          \
             .len  = 0,                                                                         \
             .cap  = N00B_DEFAULT_LIST_SZ,                                                      \
-            .lock = n00b_data_lock_new(),                                                      \
+            .lock = (locked) ? n00b_data_lock_new() : (n00b_rwlock_t *)nullptr,                \
             __VA_OPT__(.allocator = __VA_ARGS__,)                                              \
         };                                                                                     \
     })
 
 /**
- * @brief Create a new private (unlocked) list with default capacity.
- * @param T  Element type.
+ * @brief Create a new list with specific capacity (rounded up to pow2).
+ *
+ * @param T       Element type.
+ * @param N       Requested minimum capacity.
+ * @param locked  Whether to create a rwlock (default: true).
+ * @param ...     Optional allocator.
  */
-#define n00b_list_new_private(T, ...)                                                           \
-    ({                                                                                         \
-        (n00b_list_t(T)){                                                                      \
-            .data = n00b_alloc_array(T, N00B_DEFAULT_LIST_SZ                                   \
-                        __VA_OPT__(, .allocator = __VA_ARGS__)),                                \
-            .len  = 0,                                                                         \
-            .cap  = N00B_DEFAULT_LIST_SZ,                                                      \
-            .lock = nullptr,                                                                   \
-            __VA_OPT__(.allocator = __VA_ARGS__,)                                              \
-        };                                                                                     \
-    })
+#define n00b_list_new_cap(T, N, ...)              _n00b_list_new_cap_sel(T, N, true, ##__VA_ARGS__)
+#define n00b_list_new_cap_private(T, N, ...)      _n00b_list_new_cap_sel(T, N, false, ##__VA_ARGS__) /**< @deprecated Use n00b_list_new_cap(T, N, false) */
 
-/**
- * @brief Create a new thread-safe list with specific capacity (rounded up to pow2).
- * @param T  Element type.
- * @param N  Requested minimum capacity.
- */
-#define n00b_list_new_cap(T, N, ...)                                                            \
+#define _n00b_list_new_cap_sel(T, N, locked, ...)                                              \
     ({                                                                                         \
         size_t _bl_rc = n00b_align_closest_pow2_ceil(n00b_max((size_t)(N), (size_t)1));        \
         (n00b_list_t(T)){                                                                      \
-            .data = n00b_alloc_array(T, _bl_rc                                                 \
-                        __VA_OPT__(, .allocator = __VA_ARGS__)),                                \
+            .data = n00b_alloc_array_with_opts(T, _bl_rc,                                      \
+                        N00B_ALLOC_OPTS(__VA_ARGS__)),                                          \
             .len  = 0,                                                                         \
             .cap  = _bl_rc,                                                                    \
-            .lock = n00b_data_lock_new(),                                                      \
-            __VA_OPT__(.allocator = __VA_ARGS__,)                                              \
-        };                                                                                     \
-    })
-
-/**
- * @brief Create a new private (unlocked) list with specific capacity.
- * @param T  Element type.
- * @param N  Requested minimum capacity.
- */
-#define n00b_list_new_cap_private(T, N, ...)                                                    \
-    ({                                                                                         \
-        size_t _bl_rc = n00b_align_closest_pow2_ceil(n00b_max((size_t)(N), (size_t)1));        \
-        (n00b_list_t(T)){                                                                      \
-            .data = n00b_alloc_array(T, _bl_rc                                                 \
-                        __VA_OPT__(, .allocator = __VA_ARGS__)),                                \
-            .len  = 0,                                                                         \
-            .cap  = _bl_rc,                                                                    \
-            .lock = nullptr,                                                                   \
+            .lock = (locked) ? n00b_data_lock_new() : (n00b_rwlock_t *)nullptr,                \
             __VA_OPT__(.allocator = __VA_ARGS__,)                                              \
         };                                                                                     \
     })
@@ -272,17 +263,24 @@
     })
 
 /**
- * @brief Remove and return the last element.  Asserts non-empty.
+ * @brief Remove and return the last element as an option.
+ * @param T  Element type.
  * @param x  List (lvalue).
+ * @return   `n00b_option_t(T)` — none if the list is empty.
  */
-#define n00b_list_pop(x)                                                                       \
+#define n00b_list_pop(T, x)                                                                    \
     ({                                                                                         \
         auto _bl_lp = &(x);                                                                    \
+        n00b_option_t(T) _bl_opt;                                                              \
         _n00b_list_write_lock(_bl_lp);                                                         \
-        assert(_bl_lp->len > 0);                                                               \
-        typeof(*_bl_lp->data) _bl_r = _bl_lp->data[--_bl_lp->len];                             \
+        if (_bl_lp->len > 0) {                                                                 \
+            _bl_opt = n00b_option_set(T, _bl_lp->data[--_bl_lp->len]);                         \
+        }                                                                                      \
+        else {                                                                                 \
+            _bl_opt = n00b_option_none(T);                                                     \
+        }                                                                                      \
         _n00b_list_unlock(_bl_lp);                                                             \
-        _bl_r;                                                                                 \
+        _bl_opt;                                                                               \
     })
 
 // ============================================================================
@@ -308,21 +306,30 @@
     })
 
 /**
- * @brief Remove and return element 0, shifting left.  Asserts non-empty.
+ * @brief Remove and return element 0, shifting left.
+ * @param T  Element type.
  * @param x  List (lvalue).
+ * @return   `n00b_option_t(T)` — none if the list is empty.
  */
-#define n00b_list_pop_front(x)                                                                 \
+#define n00b_list_pop_front(T, x)                                                              \
     ({                                                                                         \
         auto _bl_lp = &(x);                                                                    \
+        n00b_option_t(T) _bl_opt;                                                              \
         _n00b_list_write_lock(_bl_lp);                                                         \
-        assert(_bl_lp->len > 0);                                                               \
-        typeof(*_bl_lp->data) _bl_r = _bl_lp->data[0];                                         \
-        _bl_lp->len--;                                                                         \
         if (_bl_lp->len > 0) {                                                                 \
-            memmove(_bl_lp->data, _bl_lp->data + 1, _bl_lp->len * sizeof(*_bl_lp->data));      \
+            T _bl_r = _bl_lp->data[0];                                                         \
+            _bl_lp->len--;                                                                     \
+            if (_bl_lp->len > 0) {                                                             \
+                memmove(_bl_lp->data, _bl_lp->data + 1,                                        \
+                        _bl_lp->len * sizeof(*_bl_lp->data));                                   \
+            }                                                                                  \
+            _bl_opt = n00b_option_set(T, _bl_r);                                               \
+        }                                                                                      \
+        else {                                                                                 \
+            _bl_opt = n00b_option_none(T);                                                     \
         }                                                                                      \
         _n00b_list_unlock(_bl_lp);                                                             \
-        _bl_r;                                                                                 \
+        _bl_opt;                                                                               \
     })
 
 // ============================================================================
@@ -446,11 +453,11 @@
         size_t    _bl_tl  = _bl_ap->len + _bl_bp->len;                                         \
         size_t    _bl_tc  = n00b_align_closest_pow2_ceil(n00b_max(_bl_tl, (size_t)1));         \
         typeof(a) _bl_new = {                                                                  \
-            .data = n00b_alloc_size(_bl_tc, sizeof(*_bl_ap->data),                             \
-                        .allocator = _bl_ap->allocator),                                       \
+            .data = n00b_alloc_size_with_opts(_bl_tc, sizeof(*_bl_ap->data),                    \
+                        &(n00b_alloc_opts_t){.allocator = _bl_ap->allocator}),                 \
             .len       = _bl_tl,                                                               \
             .cap       = _bl_tc,                                                               \
-            .lock      = _bl_ap->lock ? n00b_data_lock_new() : nullptr,                        \
+            .lock      = _bl_ap->lock ? n00b_data_lock_new() : (n00b_rwlock_t *)nullptr,                        \
             .allocator = _bl_ap->allocator,                                                    \
         };                                                                                     \
         if (_bl_ap->len > 0) {                                                                 \
@@ -469,19 +476,20 @@
 // ============================================================================
 
 /**
- * @brief Find the first index of @p val, or @c (size_t)-1 if not found.
+ * @brief Find the first index of @p val.
  * @param x    List (lvalue).
  * @param val  Value to search for (compared with @c ==).
+ * @return     @c n00b_option_t(size_t) — set if found, none otherwise.
  */
 #define n00b_list_find(x, val)                                                                 \
     ({                                                                                         \
         auto _bl_lp = &(x);                                                                    \
         _n00b_list_read_lock(_bl_lp);                                                          \
         typeof(*_bl_lp->data) _bl_v = (val);                                                   \
-        size_t                _bl_r = (size_t)-1;                                              \
+        n00b_option_t(size_t)  _bl_r = n00b_option_none(size_t);                               \
         for (size_t _bl_i = 0; _bl_i < _bl_lp->len; _bl_i++) {                                 \
             if (_bl_lp->data[_bl_i] == _bl_v) {                                                \
-                _bl_r = _bl_i;                                                                 \
+                _bl_r = n00b_option_set(size_t, _bl_i);                                        \
                 break;                                                                         \
             }                                                                                  \
         }                                                                                      \
@@ -551,11 +559,11 @@
         auto      _bl_sp  = &(x);                                                              \
         size_t    _bl_nc  = n00b_max(_bl_sp->cap, (size_t)1);                                  \
         typeof(x) _bl_new = {                                                                  \
-            .data = n00b_alloc_size(_bl_nc, sizeof(*_bl_sp->data),                             \
-                        .allocator = _bl_sp->allocator),                                       \
+            .data = n00b_alloc_size_with_opts(_bl_nc, sizeof(*_bl_sp->data),                    \
+                        &(n00b_alloc_opts_t){.allocator = _bl_sp->allocator}),                 \
             .len       = _bl_sp->len,                                                          \
             .cap       = _bl_nc,                                                               \
-            .lock      = _bl_sp->lock ? n00b_data_lock_new() : nullptr,                        \
+            .lock      = _bl_sp->lock ? n00b_data_lock_new() : (n00b_rwlock_t *)nullptr,                        \
             .allocator = _bl_sp->allocator,                                                    \
         };                                                                                     \
         if (_bl_sp->len > 0) {                                                                 \
@@ -563,6 +571,13 @@
         }                                                                                      \
         _bl_new;                                                                               \
     })
+
+/**
+ * @brief Test whether the list is empty.
+ * @param x  List (lvalue).
+ * @return true if the list has no elements.
+ */
+#define n00b_list_is_empty(x) (n00b_list_len(x) == 0)
 
 /**
  * @brief Reset len to 0, keeping allocated capacity.
@@ -577,8 +592,14 @@
     })
 
 /**
- * @brief Pointer-based iteration loop.
- *        NOT locked — caller must ensure exclusive access.
+ * @brief Pointer-based iteration loop (lock-aware).
+ *
+ * Acquires a shared read lock before iteration and releases it
+ * afterwards.  If the list has no lock (lock == nullptr), the
+ * lock/unlock calls are no-ops and the loop runs at zero overhead.
+ *
+ * Do **not** modify the list inside the loop body (that would
+ * require a write lock).
  *
  * Example:
  * @code
@@ -588,7 +609,14 @@
  * @endcode
  */
 #define n00b_list_foreach(x, var)                                                              \
-    for (typeof((x).data) var = (x).data; (var) < (x).data + (x).len; ++(var))
+    for (int _lfl_once = (n00b_data_read_lock((x).lock), 1); _lfl_once; )                     \
+        for (typeof((x).data) var = (x).data;                                                  \
+             (var) < (x).data + (x).len                                                        \
+                 ? 1                                                                            \
+                 : (n00b_data_unlock((x).lock), _lfl_once = 0);                                \
+             ++(var))
+
+#define n00b_list_foreach_locked(x, var)  n00b_list_foreach(x, var) /**< @deprecated Use n00b_list_foreach */
 
 // ============================================================================
 // Conversion
@@ -619,6 +647,9 @@
         _bl_lp->data      = nullptr;                                                               \
         _bl_lp->len       = 0;                                                                     \
         _bl_lp->cap       = 0;                                                                     \
+        if (_bl_lp->lock) {                                                                        \
+            n00b_finalize_data_lock(_bl_lp->lock);                                                 \
+        }                                                                                          \
         _bl_lp->lock      = nullptr;                                                               \
         _bl_lp->allocator = nullptr;                                                               \
         _bl_arr;                                                                                   \

@@ -707,26 +707,23 @@ add_kargs_to_func(tnode_t *func_decl, tnode_t *kargs_param, int line)
     tnode_t *func_param_list = find_param_list(func_decl);
 
     if (func_param_list) {
-        // Find the actual parameter_list inside parameter_type_list if needed
-        tnode_t *actual_list = func_param_list;
-        if (func_param_list->nt_id == NT_parameter_type_list) {
-            actual_list = find_child(func_param_list, NT_parameter_list);
-            if (!actual_list) {
-                actual_list = func_param_list;
-            }
-        }
+        // Always append kargs to the parameter_type_list (or the
+        // outermost param node) so it comes AFTER any vargs param
+        // that the vargs transform may have placed as a direct child
+        // of parameter_type_list.
+        tnode_t *append_target = func_param_list;
 
         // Check if node was flattened - emitter only adds commas for flattened nodes
-        bool was_flattened = actual_list->origin != nullptr
-                          && actual_list->origin->rewrite_name != nullptr
-                          && strcmp(actual_list->origin->rewrite_name, "flatten") == 0;
+        bool was_flattened = append_target->origin != nullptr
+                          && append_target->origin->rewrite_name != nullptr
+                          && strcmp(append_target->origin->rewrite_name, "flatten") == 0;
 
         // Add comma before kargs if there are existing params and node wasn't flattened
-        if (!was_flattened && actual_list->num_kids > 0) {
-            add_child(actual_list, synth_terminal(",", TT_PUNCT, line));
+        if (!was_flattened && append_target->num_kids > 0) {
+            add_child(append_target, synth_terminal(",", TT_PUNCT, line));
         }
 
-        add_child(actual_list, kargs_param);
+        add_child(append_target, kargs_param);
     }
     else if (func_decl) {
         // No parameter list exists (e.g., func() with no params)
@@ -820,7 +817,63 @@ xform_kw_definition(tree_xform_t *ctx, tnode_t *node)
         kw_info_t *kw_info = nullptr;
         if (ctx->symtab) {
             kw_info = st_get_kw_info(ctx->symtab, (char *)func_name);
-            if (kw_info && kw_info->struct_emitted) {
+
+            // If kw_info wasn't registered during parsing (e.g. because
+            // the function name used typeid() which hadn't been resolved
+            // yet), build and register it now.
+            if (!kw_info) {
+                kw_info = base_calloc(1, sizeof(kw_info_t));
+                kw_info->params = nullptr;
+                kw_info->defaults_set = false;
+
+                for (int i = 0; i < param_count; i++) {
+                    tnode_t *p = ncc_list_get(params, i);
+                    kw_param_info_t *kpi = base_calloc(1, sizeof(kw_param_info_t));
+
+                    tnode_t *p_decl = find_child(p, NT_declarator);
+                    if (p_decl) {
+                        kpi->name = (char *)get_identifier_text(ctx->input, p_decl);
+                    }
+                    kpi->decl_specs = find_child(p, NT_declaration_specifiers);
+                    kpi->declarator = p_decl;
+                    kpi->default_val = find_child(p, NT_initializer);
+                    if (kpi->default_val) {
+                        kw_info->defaults_set = true;
+                    }
+                    kw_info->params = ncc_list_append(kw_info->params, kpi);
+                }
+
+                // Count positional params from the function declarator
+                tnode_t *ptl = find_param_list(func_decl);
+                if (ptl) {
+                    int pos_count = 0;
+                    for (int i = 0; i < ptl->num_kids; i++) {
+                        tnode_t *kid = tnode_get_kid(ptl, i);
+                        if (kid && kid->nt_id == NT_parameter_declaration) {
+                            pos_count++;
+                        }
+                        else if (kid && kid->nt_id == NT_parameter_list) {
+                            for (int j = 0; j < kid->num_kids; j++) {
+                                tnode_t *gkid = tnode_get_kid(kid, j);
+                                if (gkid && gkid->nt_id == NT_parameter_declaration) {
+                                    pos_count++;
+                                }
+                            }
+                        }
+                    }
+                    kw_info->num_positional_params = pos_count;
+                }
+
+                // Ensure symbol entry exists (may be missing if
+                // name wasn't resolved during parsing, e.g. typeid())
+                if (!st_get_entry(ctx->symtab, (char *)func_name)) {
+                    st_add_variable(ctx->symtab, (char *)func_name,
+                                    SYM_DEFINITION, node, nullptr);
+                }
+                st_set_kw_info(ctx->symtab, (char *)func_name, kw_info);
+            }
+
+            if (kw_info->struct_emitted) {
                 need_struct = false;
             }
         }
@@ -957,7 +1010,62 @@ xform_kw_declaration(tree_xform_t *ctx, tnode_t *node)
         kw_info_t *kw_info = nullptr;
         if (ctx->symtab) {
             kw_info = st_get_kw_info(ctx->symtab, (char *)func_name);
-            if (kw_info && kw_info->struct_emitted) {
+
+            // If kw_info wasn't registered during parsing (e.g. because
+            // the function name used typeid()), build and register it now.
+            if (!kw_info) {
+                kw_info = base_calloc(1, sizeof(kw_info_t));
+                kw_info->params = nullptr;
+                kw_info->defaults_set = false;
+
+                for (int i = 0; i < param_count; i++) {
+                    tnode_t *p = ncc_list_get(params, i);
+                    kw_param_info_t *kpi = base_calloc(1, sizeof(kw_param_info_t));
+
+                    tnode_t *p_decl = find_child(p, NT_declarator);
+                    if (p_decl) {
+                        kpi->name = (char *)get_identifier_text(ctx->input, p_decl);
+                    }
+                    kpi->decl_specs = find_child(p, NT_declaration_specifiers);
+                    kpi->declarator = p_decl;
+                    kpi->default_val = find_child(p, NT_initializer);
+                    if (kpi->default_val) {
+                        kw_info->defaults_set = true;
+                    }
+                    kw_info->params = ncc_list_append(kw_info->params, kpi);
+                }
+
+                // Count positional params from the function declarator
+                tnode_t *ptl = find_param_list(func_decl);
+                if (ptl) {
+                    int pos_count = 0;
+                    for (int i = 0; i < ptl->num_kids; i++) {
+                        tnode_t *kid = tnode_get_kid(ptl, i);
+                        if (kid && kid->nt_id == NT_parameter_declaration) {
+                            pos_count++;
+                        }
+                        else if (kid && kid->nt_id == NT_parameter_list) {
+                            for (int j = 0; j < kid->num_kids; j++) {
+                                tnode_t *gkid = tnode_get_kid(kid, j);
+                                if (gkid && gkid->nt_id == NT_parameter_declaration) {
+                                    pos_count++;
+                                }
+                            }
+                        }
+                    }
+                    kw_info->num_positional_params = pos_count;
+                }
+
+                // Ensure symbol entry exists (may be missing if
+                // name wasn't resolved during parsing, e.g. typeid())
+                if (!st_get_entry(ctx->symtab, (char *)func_name)) {
+                    st_add_variable(ctx->symtab, (char *)func_name,
+                                    SYM_DEFINITION, node, nullptr);
+                }
+                st_set_kw_info(ctx->symtab, (char *)func_name, kw_info);
+            }
+
+            if (kw_info->struct_emitted) {
                 need_struct = false;
             }
         }

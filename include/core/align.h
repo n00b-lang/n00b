@@ -50,6 +50,7 @@ n00b_align_to_page_start(void *addr)
 static inline uint64_t
 n00b_align_floor(uint64_t n, uint64_t base)
 {
+    assert(base > 0);
     uint64_t mask = base - 1;
 
     assert(!(base & mask));
@@ -66,6 +67,7 @@ n00b_align_floor(uint64_t n, uint64_t base)
 static inline uint64_t
 n00b_align_ceil(uint64_t n, uint64_t base)
 {
+    assert(base > 0);
     uint64_t mask = base - 1;
 
     assert(!(base & mask));

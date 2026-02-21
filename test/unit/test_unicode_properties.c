@@ -76,8 +76,8 @@ TEST(test_id_properties)
 
 TEST(test_display_width)
 {
-    ASSERT_EQ(n00b_unicode_display_width(STR("Hello")), 5);
-    ASSERT_EQ(n00b_unicode_display_width(STR("世界")), 4);
+    ASSERT_EQ(n00b_unicode_display_width(*r"Hello"), 5);
+    ASSERT_EQ(n00b_unicode_display_width(*r"世界"), 4);
 }
 
 TEST(test_joining_type)
@@ -141,13 +141,13 @@ TEST(test_numeric_non_numeric)
 
 TEST(test_digit_value)
 {
-    n00b_unicode_opt_i32_t d5 = n00b_unicode_digit_value('5');
+    n00b_option_t(int32_t) d5 = n00b_unicode_digit_value('5');
     ASSERT(n00b_option_is_set(d5));
     ASSERT_EQ(n00b_option_get(d5), 5);
-    n00b_unicode_opt_i32_t d0 = n00b_unicode_digit_value('0');
+    n00b_option_t(int32_t) d0 = n00b_unicode_digit_value('0');
     ASSERT(n00b_option_is_set(d0));
     ASSERT_EQ(n00b_option_get(d0), 0);
-    n00b_unicode_opt_i32_t d9 = n00b_unicode_digit_value('9');
+    n00b_option_t(int32_t) d9 = n00b_unicode_digit_value('9');
     ASSERT(n00b_option_is_set(d9));
     ASSERT_EQ(n00b_option_get(d9), 9);
     ASSERT(!n00b_option_is_set(n00b_unicode_digit_value('A')));
@@ -161,7 +161,7 @@ TEST(test_numeric_superscript)
     n00b_unicode_numeric_value_t v = n00b_unicode_numeric_value(0x00B2);
     ASSERT_EQ(v.numerator, 2);
     ASSERT_EQ(v.denominator, 1);
-    n00b_unicode_opt_i32_t db2 = n00b_unicode_digit_value(0x00B2);
+    n00b_option_t(int32_t) db2 = n00b_unicode_digit_value(0x00B2);
     ASSERT(n00b_option_is_set(db2));
     ASSERT_EQ(n00b_option_get(db2), 2);
 }

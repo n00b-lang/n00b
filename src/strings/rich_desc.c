@@ -2,6 +2,7 @@
 #include "strings/rich_desc.h"
 #include "strings/text_style.h"
 #include "core/dict_untyped.h"
+#include "core/gc.h"
 #include "core/hash.h"
 #include "vendor/xxhash.h"
 #include <string.h>
@@ -22,6 +23,7 @@ n00b_rich_desc_cache_init(void)
         n00b_dict_untyped_init(rich_desc_cache,
                                 .hash           = n00b_hash_word,
                                 .skip_obj_hash  = true);
+        n00b_gc_register_root(rich_desc_cache);
     }
 }
 

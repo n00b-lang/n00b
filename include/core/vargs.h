@@ -35,7 +35,11 @@ ckd_add(unsigned int *result, unsigned int a, unsigned int b)
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef _WIN32
+#include <malloc.h>
+#else
 #include <alloca.h>
+#endif
 #include "core/macros.h"
 
 typedef struct n00b_vargs_t n00b_vargs_t;

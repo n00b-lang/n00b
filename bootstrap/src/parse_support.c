@@ -23,26 +23,41 @@ bool ncc_use_reference_grammar = false;
 #ifdef NCC_PARSER_STATS
 
 static int64_t memo_store_count;
+static int64_t memo_store_fail_count;
+static int64_t memo_store_success_count;
 static int64_t memo_hit_count;
+static int64_t memo_hit_fail_count;
+static int64_t memo_hit_success_count;
 static int64_t memo_miss_count;
 static int64_t heap_copy_nodes;
 static int64_t arena_copy_nodes;
 static int64_t per_nt_stores[128];
+static int64_t per_nt_success_stores[128];
 static int64_t per_nt_hits[128];
+static int64_t per_nt_success_hits[128];
 
 void
 parser_dump_stats(void)
 {
-    fprintf(stderr, "[ncc-stats] memo stores:  %lld\n", (long long)memo_store_count);
-    fprintf(stderr, "[ncc-stats] memo hits:    %lld\n", (long long)memo_hit_count);
+    fprintf(stderr, "[ncc-stats] memo stores:  %lld (fail: %lld, success: %lld)\n",
+            (long long)memo_store_count,
+            (long long)memo_store_fail_count,
+            (long long)memo_store_success_count);
+    fprintf(stderr, "[ncc-stats] memo hits:    %lld (fail: %lld, success: %lld)\n",
+            (long long)memo_hit_count,
+            (long long)memo_hit_fail_count,
+            (long long)memo_hit_success_count);
     fprintf(stderr, "[ncc-stats] memo misses:  %lld\n", (long long)memo_miss_count);
     fprintf(stderr, "[ncc-stats] heap nodes:   %lld\n", (long long)heap_copy_nodes);
     fprintf(stderr, "[ncc-stats] arena nodes:  %lld\n", (long long)arena_copy_nodes);
-    fprintf(stderr, "[ncc-stats] Per-NT breakdown (stores / hits):\n");
+    fprintf(stderr, "[ncc-stats] Per-NT breakdown (stores / success-stores / hits / success-hits):\n");
     for (int i = 0; i < 128; i++) {
         if (per_nt_stores[i] || per_nt_hits[i]) {
-            fprintf(stderr, "[ncc-stats]   NT %3d: %8lld stores, %8lld hits\n",
-                    i, (long long)per_nt_stores[i], (long long)per_nt_hits[i]);
+            fprintf(stderr, "[ncc-stats]   NT %3d: %8lld stores (%8lld ok), %8lld hits (%8lld ok)\n",
+                    i, (long long)per_nt_stores[i],
+                    (long long)per_nt_success_stores[i],
+                    (long long)per_nt_hits[i],
+                    (long long)per_nt_success_hits[i]);
         }
     }
 }
@@ -195,6 +210,8 @@ copy_tree_to_heap(tnode_t *root)
     };
     if (root->num_kids > 0 && root->kids) {
         root_copy->kids = ncc_list_alloc(root->num_kids);
+    } else {
+        root_copy->num_kids = 0;
     }
 #ifdef NCC_PARSER_STATS
     local_nodes++;
@@ -212,12 +229,12 @@ copy_tree_to_heap(tnode_t *root)
         int ci = f->kid++;
 
         if (!child) {
-            f->dst->kids->items[ci] = nullptr;
+            f->dst->kids->data[ci] = nullptr;
             continue;
         }
 
         if (IS_ELIDED(child)) {
-            f->dst->kids->items[ci] = (tnode_t *)&elided_node;
+            f->dst->kids->data[ci] = (tnode_t *)&elided_node;
             continue;
         }
 
@@ -230,8 +247,10 @@ copy_tree_to_heap(tnode_t *root)
         };
         if (child->num_kids > 0 && child->kids) {
             cc->kids = ncc_list_alloc(child->num_kids);
+        } else {
+            cc->num_kids = 0;
         }
-        f->dst->kids->items[ci] = cc;
+        f->dst->kids->data[ci] = cc;
 #ifdef NCC_PARSER_STATS
         local_nodes++;
 #endif
@@ -275,6 +294,8 @@ copy_tree_to_arena(tnode_t *root)
     };
     if (root->num_kids > 0 && root->kids) {
         root_copy->kids = ncc_list_alloc(root->num_kids);
+    } else {
+        root_copy->num_kids = 0;
     }
 #ifdef NCC_PARSER_STATS
     local_nodes++;
@@ -292,12 +313,12 @@ copy_tree_to_arena(tnode_t *root)
         int ci = f->kid++;
 
         if (!child) {
-            f->dst->kids->items[ci] = nullptr;
+            f->dst->kids->data[ci] = nullptr;
             continue;
         }
 
         if (IS_ELIDED(child)) {
-            f->dst->kids->items[ci] = (tnode_t *)&elided_node;
+            f->dst->kids->data[ci] = (tnode_t *)&elided_node;
             continue;
         }
 
@@ -310,8 +331,10 @@ copy_tree_to_arena(tnode_t *root)
         };
         if (child->num_kids > 0 && child->kids) {
             cc->kids = ncc_list_alloc(child->num_kids);
+        } else {
+            cc->num_kids = 0;
         }
-        f->dst->kids->items[ci] = cc;
+        f->dst->kids->data[ci] = cc;
 #ifdef NCC_PARSER_STATS
         local_nodes++;
 #endif
@@ -368,37 +391,42 @@ void
 memo_init(parser_t *ctx)
 {
     int num_positions = ctx->num_tokens + 1;
-    ctx->memo = base_calloc(num_positions, sizeof(memo_entry_t *));
-    if (!ctx->memo) {
-        ctx->memo_size = 0;
-        return;
-    }
-    ctx->memo_size = num_positions;
+    ctx->memo_num_pos = num_positions;
 
-    for (int i = 0; i < num_positions; i++) {
-        ctx->memo[i] = base_calloc(NT_COUNT, sizeof(memo_entry_t));
+    // Fail dict: sparse hash set of (pos,nt) keys that failed.
+    // Initial capacity 16K — grows on demand via ncc_dict.
+    ncc_dict_init(&ctx->memo_fail, 16384, ncc_hash_ptr);
+
+    // Success dict: stores only successful parse results.
+    ncc_dict_init(&ctx->memo_success, 4096, ncc_hash_ptr);
+    ctx->memo_success_count = 0;
+
+    // Cap success entries to limit memory on huge preprocessed files.
+    if (ctx->memo_success_cap == 0) {
+        ctx->memo_success_cap = 1;  // Effectively disable success memo for now
     }
 }
 
 void
 memo_free(parser_t *ctx)
 {
-    if (!ctx->memo) return;
-
-    for (int i = 0; i < ctx->memo_size; i++) {
-        if (ctx->memo[i]) {
-            for (int j = 0; j < NT_COUNT; j++) {
-                memo_entry_t *entry = &ctx->memo[i][j];
-                if (entry->result && entry->end_pos != MEMO_FAIL) {
+    // Free all heap trees stored in the success dict.
+    ncc_dict_store_t *store = atomic_load(&ctx->memo_success.store);
+    if (store) {
+        for (uint32_t i = 0; i <= store->last_slot; i++) {
+            ncc_dict_bucket_t *bucket = &store->buckets[i];
+            if (bucket->hv && bucket->value) {
+                memo_entry_t *entry = (memo_entry_t *)bucket->value;
+                if (entry->result) {
                     free_heap_tree(entry->result);
                 }
+                base_dealloc(entry);
             }
-            base_dealloc(ctx->memo[i]);
         }
     }
-    base_dealloc(ctx->memo);
-    ctx->memo      = nullptr;
-    ctx->memo_size = 0;
+    ncc_dict_free(&ctx->memo_success);
+    ncc_dict_free(&ctx->memo_fail);
+    ctx->memo_num_pos = 0;
 }
 
 bool
@@ -407,65 +435,109 @@ memo_check(parser_t *ctx, nt_type_t nt_id, tnode_t **result)
     if (NT_IN_SET(nt_id, ctx->no_memo)) {
         return false;
     }
-    if (!ctx->memo || ctx->pos >= ctx->memo_size || !ctx->memo[ctx->pos]) {
+
+    int pos = ctx->pos;
+    if (pos >= ctx->memo_num_pos) {
         return false;
     }
 
-    memo_entry_t *entry = &ctx->memo[ctx->pos][nt_id];
+    // Check fail dict first.
+    void *key = (void *)((uintptr_t)pos << 7 | nt_id);
+    bool  found;
 
-    if (entry->end_pos == MEMO_EMPTY && entry->result == nullptr) {
-#ifdef NCC_PARSER_STATS
-        memo_miss_count++;
-#endif
-        return false;
-    }
-
-    if (entry->end_pos == MEMO_FAIL) {
+    (void)ncc_dict_get(&ctx->memo_fail, key, &found);
+    if (found) {
 #ifdef NCC_PARSER_STATS
         memo_hit_count++;
+        memo_hit_fail_count++;
         if (nt_id > 0 && nt_id < 128) per_nt_hits[nt_id]++;
 #endif
         *result = nullptr;
         return true;
     }
 
+    // Check success dict.
+    void *val = ncc_dict_get(&ctx->memo_success, key, &found);
+
+    if (found) {
+        memo_entry_t *entry = (memo_entry_t *)val;
 #ifdef NCC_PARSER_STATS
-    memo_hit_count++;
-    if (nt_id > 0 && nt_id < 128) per_nt_hits[nt_id]++;
+        memo_hit_count++;
+        memo_hit_success_count++;
+        if (nt_id > 0 && nt_id < 128) {
+            per_nt_hits[nt_id]++;
+            per_nt_success_hits[nt_id]++;
+        }
 #endif
-    *result  = copy_tree_to_arena(entry->result);
-    ctx->pos = entry->end_pos;
-    return true;
+        *result  = copy_tree_to_arena(entry->result);
+        ctx->pos = entry->end_pos;
+        return true;
+    }
+
+#ifdef NCC_PARSER_STATS
+    memo_miss_count++;
+#endif
+    return false;
 }
 
 void
 memo_store(parser_t *ctx, int start_pos, nt_type_t nt_id, tnode_t *result)
 {
-    if (!ctx->memo || start_pos >= ctx->memo_size || !ctx->memo[start_pos]) {
-        return;
-    }
-
-    memo_entry_t *entry = &ctx->memo[start_pos][nt_id];
-
-    // Free any previously cached tree.
-    if (entry->result && entry->end_pos != MEMO_FAIL) {
-        free_heap_tree(entry->result);
-    }
-
     if (NT_IN_SET(nt_id, ctx->no_memo)) {
         return;
     }
+    if (start_pos >= ctx->memo_num_pos) {
+        return;
+    }
+
 #ifdef NCC_PARSER_STATS
     memo_store_count++;
     if (nt_id > 0 && nt_id < 128) per_nt_stores[nt_id]++;
 #endif
-    if (result) {
-        entry->result  = copy_tree_to_heap(result);
-        entry->end_pos = ctx->pos;
+
+    if (!result) {
+#ifdef NCC_PARSER_STATS
+        memo_store_fail_count++;
+#endif
+        // FAIL: store in fail dict with sentinel value.
+        void *key = (void *)((uintptr_t)start_pos << 7 | nt_id);
+        (void)ncc_dict_put(&ctx->memo_fail, key, (void *)1);
     }
     else {
-        entry->result  = nullptr;
-        entry->end_pos = MEMO_FAIL;
+#ifdef NCC_PARSER_STATS
+        memo_store_success_count++;
+        if (nt_id > 0 && nt_id < 128) per_nt_success_stores[nt_id]++;
+#endif
+        // Skip success memoization for NTs in the fail-only set,
+        // or if we've hit the success entry cap.
+        if (NT_IN_SET(nt_id, ctx->no_memo_success)) {
+            return;
+        }
+        if (ctx->memo_success_cap > 0 &&
+            ctx->memo_success_count >= ctx->memo_success_cap) {
+            return;
+        }
+        // SUCCESS: store in dict.
+        void *key = (void *)((uintptr_t)start_pos << 7 | nt_id);
+
+        // Free any previously stored entry at this key.
+        bool  found;
+        void *old_val = ncc_dict_get(&ctx->memo_success, key, &found);
+        if (found && old_val) {
+            memo_entry_t *old_entry = (memo_entry_t *)old_val;
+            if (old_entry->result) {
+                free_heap_tree(old_entry->result);
+            }
+            base_dealloc(old_entry);
+        }
+        else {
+            ctx->memo_success_count++;
+        }
+
+        memo_entry_t *entry = base_calloc(1, sizeof(memo_entry_t));
+        entry->result  = copy_tree_to_heap(result);
+        entry->end_pos = ctx->pos;
+        ncc_dict_put(&ctx->memo_success, key, entry);
     }
 }
 
@@ -514,8 +586,8 @@ str_list(kw_countof, "_Countof");
 str_list(kw_generic, "_Generic");
 str_list(kw_default, "default");
 str_list(kw_true_false_nullptr, "true", "false", "nullptr");
-str_list(kw_builtin_va_arg, "__builtin_va_arg");
-str_list(kw_builtin_types_compatible_p, "__builtin_types_compatible_p");
+// kw_builtin_va_arg and kw_builtin_types_compatible_p removed:
+// all __builtin_* calls are now handled generically via compiler_builtin.
 str_list(kw_c_va, "c_va");
 str_list(kw_opaque, "opaque");
 str_list(kw_package, "package");
@@ -639,25 +711,13 @@ parse_prime(parser_t *ctx)
 void
 add_kid(tnode_t *parent, tnode_t *kid)
 {
-    int old_count = parent->num_kids;
-    int new_count = old_count + 1;
-
-    // Grow the kids list
-    ncc_list_t *new_kids = ncc_list_alloc(new_count);
-    assert(new_kids != nullptr);
-
-    // Copy existing children
-    if (parent->kids) {
-        for (int i = 0; i < old_count; i++) {
-            new_kids->items[i] = parent->kids->items[i];
-        }
-        base_dealloc(parent->kids);
+    if (!parent->kids) {
+        parent->kids = ncc_list_alloc(0);
     }
-
-    // Add new child
-    new_kids->items[old_count] = kid;
-    parent->kids               = new_kids;
-    parent->num_kids           = new_count;
+    ncc_list_ensure_cap(parent->kids, parent->num_kids + 1);
+    parent->kids->data[parent->num_kids] = kid;
+    parent->num_kids++;
+    parent->kids->len = parent->num_kids;
 
     assert(!kid->parent);
 
@@ -863,14 +923,53 @@ provided_identifier(parser_t *ctx)
 {
     tok_t *tok = get_tok(ctx);
 
-    if (tok->type != TT_ID) {
+    if (tok->type == TT_ID) {
+        tnode_t *n = named_node(ctx);
+        n->tptr    = tok;
+        parse_advance(ctx);
+        return n;
+    }
+
+    // [EXTENSION] Accept __builtin_* keywords as identifiers so they can
+    // appear in non-call positions (e.g. as function pointers).
+    if (tok->type == TT_KEYWORD) {
+        int         tok_len;
+        const char *text = tok_text_ptr(ctx->input, tok, &tok_len);
+        if (tok_len > 10 && !memcmp(text, "__builtin_", 10)) {
+            tnode_t *n = named_node(ctx);
+            n->tptr    = tok;
+            parse_advance(ctx);
+            return n;
+        }
+    }
+
+    return nullptr;
+}
+
+// [EXTENSION] Match any __builtin_* token (keyword or identifier).
+// Used for the compiler_builtin_call production that treats the argument
+// list as a balanced_token_sequence, since builtins may take types or
+// other non-expression arguments that our grammar cannot parse.
+tnode_t *
+compiler_builtin(parser_t *ctx)
+{
+    tok_t *tok = get_tok(ctx);
+
+    if (tok->type != TT_ID && tok->type != TT_KEYWORD) {
         return nullptr;
     }
 
-    tnode_t *n = named_node(ctx);
-    n->tptr    = tok;
-    parse_advance(ctx);
-    return n;
+    int         tok_len;
+    const char *text = tok_text_ptr(ctx->input, tok, &tok_len);
+
+    if (tok_len > 10 && !memcmp(text, "__builtin_", 10)) {
+        tnode_t *n = node_alloc(ctx, "compiler_builtin");
+        n->tptr    = tok;
+        parse_advance(ctx);
+        return n;
+    }
+
+    return nullptr;
 }
 
 tnode_t *

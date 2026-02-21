@@ -16,6 +16,11 @@
 #define N00B_DICT_UNTYPED_MIN_SIZE_LOG 4
 #define N00B_DICT_UNTYPED_MIN_SIZE     (1 << N00B_DICT_UNTYPED_MIN_SIZE_LOG)
 
+#if !defined(N00B_DICT_MIN_SIZE_LOG)
+#define N00B_DICT_MIN_SIZE_LOG 4
+#endif
+#define N00B_DICT_MIN_SIZE (1 << N00B_DICT_MIN_SIZE_LOG)
+
 typedef int (*n00b_dict_sort_fn)(const void *, const void *);
 
 struct n00b_dict_untyped_bucket_t {
@@ -84,34 +89,37 @@ extern bool  _n00b_dict_untyped_remove(n00b_dict_untyped_t *d, void *key);
  * @param key            Key to operate on.
  * @param old_item_ptr   Pointer to expected old value (updated on failure).
  * @param new_item       New value to store.
- * @param expect_empty   If true, expect the slot to be empty.
- * @param delete_existing If true, delete the existing entry on match.
  * @return               true on success.
+ *
+ * @kw null_old_means_absence  If true, a nullptr old_item_ptr means "expect empty slot".
+ * @kw null_new_means_delete   If true, a nullptr new_item means "delete the entry".
  */
-extern bool  _n00b_dict_untyped_cas(n00b_dict_untyped_t *d,
-                                    void                *key,
-                                    void               **old_item_ptr,
-                                    void                *new_item,
-                                    bool                 expect_empty,
-                                    bool                 delete_existing);
+extern bool
+_n00b_dict_untyped_cas(n00b_dict_untyped_t *d,
+                       void                *key,
+                       void               **old_item_ptr,
+                       void                *new_item) _kargs
+{
+    bool null_old_means_absence = false;
+    bool null_new_means_delete  = false;
+};
 
 #define n00b_dict_untyped_put(d, k, v)                                                         \
-    _n00b_dict_untyped_put(d, ((void *)(int64_t)k), ((void *)(int64_t)v))
-#define n00b_dict_untyped_get(d, k, b) _n00b_dict_untyped_get(d, ((void *)(int64_t)k), b)
+    _n00b_dict_untyped_put(d, ((void *)(uintptr_t)k), ((void *)(uintptr_t)v))
+#define n00b_dict_untyped_get(d, k, b) _n00b_dict_untyped_get(d, ((void *)(uintptr_t)k), b)
 #define n00b_dict_untyped_replace(d, k, v)                                                     \
-    _n00b_dict_untyped_replace(d, ((void *)(int64_t)k), ((void *)(int64_t)v))
+    _n00b_dict_untyped_replace(d, ((void *)(uintptr_t)k), ((void *)(uintptr_t)v))
 #define n00b_dict_untyped_add(d, k, v)                                                         \
-    _n00b_dict_untyped_add(d, ((void *)(int64_t)k), ((void *)(int64_t)v))
+    _n00b_dict_untyped_add(d, ((void *)(uintptr_t)k), ((void *)(uintptr_t)v))
 
-#define n00b_dict_untyped_remove(d, k) _n00b_dict_untyped_remove(d, ((void *)(int64_t)k))
+#define n00b_dict_untyped_remove(d, k) _n00b_dict_untyped_remove(d, ((void *)(uintptr_t)k))
 
-#define n00b_dict_untyped_cas(d, k, o, n, b1, b2)                                              \
+#define n00b_dict_untyped_cas(d, k, o, n, ...)                                                  \
     _n00b_dict_untyped_cas(d,                                                                  \
-                           ((void *)(int64_t)k),                                               \
-                           ((void *)(int64_t)o),                                               \
-                           ((void *)(int64_t)n),                                               \
-                           b1,                                                                 \
-                           b2)
+                           ((void *)(uintptr_t)k),                                               \
+                           ((void *)(uintptr_t)o),                                               \
+                           ((void *)(uintptr_t)n)                                                \
+                           __VA_OPT__(, __VA_ARGS__))
 
 /**
  * @brief Initialize an untyped dictionary.

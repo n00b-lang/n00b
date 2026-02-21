@@ -854,10 +854,10 @@ compile_file(ncc_argv_t *argv_ctx)
 #ifdef NCC_PARSER_STATS
     {
         int ntoks = ctx.lex_state.num_toks;
-        // memo_entry_t is 16 bytes (pointer + int + padding).
-        fprintf(stderr, "[ncc-stats] Tokens: %d, memo table: %d x %d = %.1f MB\n",
-                ntoks, ntoks + 1, NT_COUNT,
-                (double)(ntoks + 1) * NT_COUNT * 16.0 / (1024.0 * 1024.0));
+        // Two-tier memo: fail bitmap (1 bit per pos*NT) + success dict.
+        double bitmap_mb = (double)(ntoks + 1) * NT_COUNT / 8.0 / (1024.0 * 1024.0);
+        fprintf(stderr, "[ncc-stats] Tokens: %d, fail bitmap: %.2f MB, success dict: dynamic\n",
+                ntoks, bitmap_mb);
         extern void parser_dump_stats(void);
         parser_dump_stats();
     }

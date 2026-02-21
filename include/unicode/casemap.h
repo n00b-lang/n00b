@@ -99,5 +99,8 @@ n00b_unicode_casefold(n00b_string_t s) _kargs
  *  @param a  First string.
  *  @param b  Second string.
  *  @return Negative, zero, or positive (like strcmp).
+ *
+ *  @note Does not normalize inputs.  For strings in different
+ *        normalization forms, normalize both to NFC first.
  */
 int n00b_unicode_casecmp(n00b_string_t a, n00b_string_t b);

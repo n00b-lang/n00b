@@ -130,18 +130,23 @@ base_monotonic_ns(void)
     return (uint64_t)((double)count.QuadPart / freq.QuadPart * 1000000000.0);
 }
 
-/** @brief Socket descriptor type (Windows SOCKET). */
-typedef SOCKET base_socket_t;
+/** @brief Socket descriptor type (matches Windows SOCKET = UINT_PTR). */
+typedef UINT_PTR base_socket_t;
 
-/** @brief Invalid socket sentinel value. */
-#define BASE_INVALID_SOCKET INVALID_SOCKET
+/** @brief Invalid socket sentinel value (matches INVALID_SOCKET). */
+#define BASE_INVALID_SOCKET ((base_socket_t)~0)
 
 /**
  * @brief Close a socket descriptor.
  *
+ * Calls the Winsock closesocket() function. Callers using sockets
+ * must link against ws2_32.
+ *
  * @param s  Socket to close.
  * @return 0 on success, or a socket error code.
  */
+int __attribute__((__stdcall__)) closesocket(base_socket_t);
+
 static inline int
 base_closesocket(base_socket_t s)
 {

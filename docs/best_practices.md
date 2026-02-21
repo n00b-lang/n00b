@@ -85,17 +85,23 @@ implementations:
 
 ```c
 // Header (declaration):
-n00b_string_t n00b_unicode_str_pad_right(n00b_string_t s, int32_t width)
-    _kargs { n00b_allocator_t *allocator = nullptr;
-             n00b_codepoint_t fill = ' '; };
+n00b_string_t n00b_unicode_str_pad(n00b_string_t s, int32_t width)
+    _kargs {
+        int              align     = N00B_STR_ALIGN_LEFT;
+        n00b_allocator_t *allocator = nullptr;
+        n00b_codepoint_t  fill      = ' ';
+    };
 
 // Implementation:
 n00b_string_t
-n00b_unicode_str_pad_right(n00b_string_t s, int32_t width)
-    _kargs { n00b_allocator_t *allocator = nullptr;
-             n00b_codepoint_t fill = ' '; }
+n00b_unicode_str_pad(n00b_string_t s, int32_t width)
+    _kargs {
+        int              align     = N00B_STR_ALIGN_LEFT;
+        n00b_allocator_t *allocator = nullptr;
+        n00b_codepoint_t  fill      = ' ';
+    }
 {
-    // `allocator` and `fill` are in scope as local variables.
+    // `align`, `allocator`, and `fill` are in scope as local variables.
     // If the caller didn't pass them, they have their default values.
     if (!allocator) {
         allocator = n00b_get_default_allocator();
@@ -111,14 +117,14 @@ Pass keyword arguments after the positional arguments using
 defaults apply:
 
 ```c
-// All defaults:
-n00b_unicode_str_pad_right(s, 40);
+// All defaults (left-aligned):
+n00b_unicode_str_pad(s, 40);
 
 // Override fill character:
-n00b_unicode_str_pad_right(s, 40, .fill = '.');
+n00b_unicode_str_pad(s, 40, .fill = '.');
 
-// Override both:
-n00b_unicode_str_pad_right(s, 40, .fill = '.', .allocator = arena);
+// Override alignment and allocator:
+n00b_unicode_str_pad(s, 40, .align = N00B_STR_ALIGN_CENTER, .allocator = arena);
 ```
 
 #### When to use keyword arguments

@@ -35,9 +35,7 @@ typedef struct n00b_canvas_t {
     n00b_isize_t                  frame_rows;
     n00b_isize_t                  frame_cols;
 
-    n00b_plane_t                **planes;
-    n00b_isize_t                  num_planes;
-    n00b_isize_t                  planes_cap;
+    n00b_list_t(n00b_plane_ptr_t) planes;
 
     n00b_text_style_t            *default_style;
     bool                          needs_full_redraw;
@@ -51,17 +49,21 @@ typedef struct n00b_canvas_t {
 // ====================================================================
 
 /**
- * @brief Create a new canvas with the given backend.
- * @param vtable Renderer vtable (must not be nullptr).
+ * @brief Initialize a pre-allocated canvas with the given backend.
+ * @param c Canvas to initialize.
  *
- * @kw allocator Allocator to use (nullptr = runtime default).
+ * @kw vtable    Renderer vtable (must not be nullptr).
+ * @kw allocator Allocator for internal allocations (nullptr = runtime default).
+ * @kw output    Output topic for the backend (nullptr = none).
  *
  * @post Canvas is ready; backend is initialized.
  */
-extern n00b_canvas_t *
-n00b_canvas_new(const n00b_renderer_vtable_t *vtable) _kargs
+extern void
+n00b_canvas_init(n00b_canvas_t *c) _kargs
 {
-    n00b_allocator_t *allocator = nullptr;
+    const n00b_renderer_vtable_t           *vtable    = nullptr;
+    n00b_allocator_t                       *allocator = nullptr;
+    n00b_conduit_topic_t(n00b_buffer_t *)  *output    = nullptr;
 };
 
 /**

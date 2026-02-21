@@ -19,7 +19,16 @@
 #include "core/atomic.h"
 #include "core/macros.h"
 
+#ifdef _WIN32
+#include "core/platform.h"
+#define PROT_READ   0x1
+#define PROT_WRITE  0x2
+#define MAP_PRIVATE 0x02
+#define MAP_ANON    0x20
+#define MAP_FAILED  ((void *)-1)
+#else
 #include <sys/mman.h>
+#endif
 #include <assert.h>
 
 #define N00B_MPROT (PROT_READ | PROT_WRITE)
@@ -35,16 +44,13 @@ enum n00b_mmap_perms_t : uint8_t {
 typedef enum n00b_mmap_rec_kind_t n00b_mmap_rec_kind_t;
 typedef enum n00b_mmap_perms_t    n00b_mmap_perms_t;
 
-n00b_option_decl(n00b_mmap_info_t *);
-typedef n00b_option_t(n00b_mmap_info_t *) n00b_mmap_opt_t;
-
 /**
  * @brief Look up an mmap record by address (internal — prefer n00b_mmap_by_address).
  * @param ctx  Mmap context to search.
  * @param addr Address to look up.
  * @return     Optional mmap info.
  */
-extern n00b_mmap_opt_t n00b_mmap_lookup(n00b_mmap_ctx_t *ctx, void *addr);
+extern n00b_option_t(n00b_mmap_info_t *) n00b_mmap_lookup(n00b_mmap_ctx_t *ctx, void *addr);
 
 /**
  * @brief Register an mmap'd region in the global registry.
@@ -60,7 +66,7 @@ extern n00b_mmap_opt_t n00b_mmap_lookup(n00b_mmap_ctx_t *ctx, void *addr);
  * @kw order_id         Insertion order identifier.
  * @kw definitely_unique If true, skip duplicate checks on insert.
  */
-extern n00b_mmap_opt_t
+extern n00b_option_t(n00b_mmap_info_t *)
 n00b_mmap_register(void *startp, void *endp, n00b_mmap_rec_kind_t kind) _kargs
 {
     n00b_runtime_t   *runtime           = n00b_get_runtime();
@@ -171,13 +177,13 @@ n00b_mmap_get_kind(n00b_mmap_info_t *map)
  *
  * @kw runtime Runtime whose mmap context to use.
  */
-extern n00b_mmap_opt_t
+extern n00b_option_t(n00b_mmap_info_t *)
 n00b_mmap_by_address(void *addr) _kargs
 {
     n00b_runtime_t *runtime = n00b_get_runtime();
 };
 
-typedef n00b_option_decl(n00b_allocator_t *) n00b_allocator_opt_t;
+typedef n00b_option_t(n00b_allocator_t *) n00b_allocator_opt_t;
 
 /**
  * @brief Find the allocator owning an address.
@@ -232,7 +238,11 @@ n00b_safe_munmap(void *addr, size_t size)
     auto r = n00b_munmap(addr);
 
     if (n00b_result_is_err(r)) {
+#ifdef _WIN32
+        VirtualFree(addr, 0, MEM_RELEASE);
+#else
         munmap(addr, size);
+#endif
     }
 }
 

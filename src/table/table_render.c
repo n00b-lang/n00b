@@ -1,4 +1,4 @@
-/**
+/*
  * Table rendering: plane creation, border stamping, cell content writing.
  */
 
@@ -14,6 +14,8 @@
 #include "strings/string_style.h"
 #include "strings/style_ops.h"
 #include "unicode/properties.h"
+
+#include <assert.h>
 
 // ====================================================================
 // Internal: grid helpers
@@ -454,7 +456,7 @@ render_cell_content(n00b_table_t *table, n00b_plane_t *plane,
                                        + (n00b_isize_t)li;
                 n00b_isize_t write_x = gx + pl;
 
-                n00b_plane_put_str_at(plane, write_y, write_x, &padded);
+                n00b_plane_put_str_at(plane, write_y, write_x, padded);
             }
 
             if (num_lines > 0) {
@@ -491,7 +493,7 @@ render_title_caption(n00b_table_t *table, n00b_plane_t *plane,
         n00b_string_t centered =
             n00b_unicode_str_center(table->title, (int32_t)title_w);
 
-        n00b_plane_put_str_at(plane, title_y, title_x, &centered);
+        n00b_plane_put_str_at(plane, title_y, title_x, centered);
     }
 
     if (table->caption.u8_bytes > 0 && d->caption_h > 0) {
@@ -518,7 +520,7 @@ render_title_caption(n00b_table_t *table, n00b_plane_t *plane,
         n00b_string_t centered =
             n00b_unicode_str_center(table->caption, (int32_t)cap_w);
 
-        n00b_plane_put_str_at(plane, cap_y, cap_x, &centered);
+        n00b_plane_put_str_at(plane, cap_y, cap_x, centered);
     }
 }
 
@@ -527,11 +529,13 @@ render_title_caption(n00b_table_t *table, n00b_plane_t *plane,
 // ====================================================================
 
 n00b_plane_t *
-n00b_table_render(n00b_table_t *table, int64_t width) _kargs
+n00b_table_render(n00b_table_t *table) _kargs
 {
-    bool force = false;
+    int64_t width = 80;
+    bool    force = false;
 }
 {
+    assert(table);
     if (table->rows.len == 0) {
         return nullptr;
     }
@@ -557,8 +561,10 @@ n00b_table_render(n00b_table_t *table, int64_t width) _kargs
         n00b_plane_clear(table->plane);
     }
     else {
-        table->plane = n00b_plane_new(d.total_w, d.total_h,
-                                       .name      = "table",
+        table->plane = n00b_new_kargs(n00b_plane_t, plane,
+                                       .cols      = d.total_w,
+                                       .rows      = d.total_h,
+                                       .name      = n00b_option_set(n00b_string_t, *r"table"),
                                        .allocator = table->allocator);
     }
 

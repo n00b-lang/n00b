@@ -1,8 +1,10 @@
 #define N00B_MEM_INTERNAL_API
 #define N00B_USE_INTERNAL_API
 
+#ifndef _WIN32
 #include <sys/mman.h>
 #include <unistd.h>
+#endif
 #include <assert.h>
 
 #include "n00b.h"

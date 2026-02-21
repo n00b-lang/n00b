@@ -5,16 +5,6 @@
  *
  */
 
-#if !defined(N00B_DICT_MIN_SIZE_LOG)
-#define N00B_DICT_MIN_SIZE_LOG 4
-#endif
-
-#if defined(N00B_DICT_MIN_SIZE)
-#undef N00B_DICT_MIN_SIZE
-#endif
-
-#define N00B_DICT_MIN_SIZE (1 << N00B_DICT_MIN_SIZE_LOG)
-
 #define N00B_USE_INTERNAL_API
 #include <stdatomic.h>
 
@@ -28,8 +18,9 @@
 static inline n00b_uint128_t
 compute_hash(n00b_dict_untyped_t *dict, void *key)
 {
-    if (dict->skip_obj_hash && dict->fn) {
-        return (*dict->fn)(key);
+    if (dict->skip_obj_hash) {
+        n00b_hash_fn fn = dict->fn ? dict->fn : n00b_hash_word;
+        return (*fn)(key);
     }
     else {
         return n00b_hash(key, dict->fn);
@@ -80,10 +71,10 @@ new_dict_untyped_store(n00b_dict_untyped_t *d, uint32_t alloc_items)
 {
     n00b_dict_untyped_store_t *result;
 
-    result            = n00b_alloc_flex(n00b_dict_untyped_store_t,
-                                        n00b_dict_untyped_bucket_t,
-                                        alloc_items,
-                                        .allocator = d->allocator);
+    result            = n00b_alloc_flex_with_opts(n00b_dict_untyped_store_t,
+                                                  n00b_dict_untyped_bucket_t,
+                                                  alloc_items,
+                                                  &(n00b_alloc_opts_t){.allocator = d->allocator});
     result->last_slot = alloc_items - 1;
     result->threshold = resize_threshold(alloc_items);
 
@@ -490,9 +481,11 @@ bool
 _n00b_dict_untyped_cas(n00b_dict_untyped_t *d,
                        void                *key,
                        void               **old_item_ptr,
-                       void                *new_item,
-                       bool                 null_old_means_absence,
-                       bool                 null_new_means_delete)
+                       void                *new_item) _kargs
+{
+    bool null_old_means_absence = false;
+    bool null_new_means_delete  = false;
+}
 {
     __int128_t                  hv           = compute_hash(d, key);
     n00b_dict_untyped_store_t  *store        = n00b_atomic_load(&d->store);

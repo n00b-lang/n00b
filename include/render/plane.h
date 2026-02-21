@@ -28,13 +28,22 @@
 
 #include "n00b.h"
 #include "core/option.h"
+#include "core/string.h"
+#include "core/list.h"
 #include "render/cell.h"
 #include "render/types.h"
 #include "strings/text_style.h"
 
+// Option type for optional string parameters.
+n00b_option_decl(n00b_string_t);
+
 // Type-safe option for cell pointer lookups.
 typedef const n00b_rcell_t *n00b_const_rcell_ptr_t;
 n00b_option_decl(n00b_const_rcell_ptr_t);
+
+// Type-safe list for child planes.
+typedef struct n00b_plane_t *n00b_plane_ptr_t;
+n00b_list_decl(n00b_plane_ptr_t);
 
 // ====================================================================
 // Plane flags
@@ -49,11 +58,9 @@ n00b_option_decl(n00b_const_rcell_ptr_t);
 
 typedef struct n00b_plane_t {
     // Identity / hierarchy
-    const char          *name;
-    struct n00b_plane_t *parent;
-    struct n00b_plane_t **children;
-    n00b_isize_t         num_children;
-    n00b_isize_t         children_cap;
+    n00b_string_t        name;
+    struct n00b_plane_t              *parent;
+    n00b_list_t(n00b_plane_ptr_t)    children;
 
     // Grid storage (row-major)
     n00b_rcell_t        *grid;
@@ -97,11 +104,12 @@ typedef struct n00b_plane_t {
 // ====================================================================
 
 /**
- * @brief Create a new plane with the given content grid dimensions.
+ * @brief Initialize a pre-allocated plane with the given dimensions.
  *
- * @param cols       Total columns in the content grid.
- * @param rows       Total rows in the content grid.
+ * @param p Plane to initialize.
  *
+ * @kw cols     Total columns in the content grid (default 80).
+ * @kw rows     Total rows in the content grid (default 25).
  * @kw vp_cols  Viewport width (0 = same as cols).
  * @kw vp_rows  Viewport height (0 = same as rows).
  * @kw name     Human-readable name for debugging.
@@ -109,16 +117,18 @@ typedef struct n00b_plane_t {
  * @kw z        Z-order for compositing.
  * @kw box      Box decoration properties.
  * @kw style    Default text style for this plane.
- * @kw allocator Allocator to use.
+ * @kw allocator Allocator for internal allocations.
  *
  * @post Plane is visible, grid is zero-filled, cursor at (0,0).
  */
-extern n00b_plane_t *
-n00b_plane_new(n00b_isize_t cols, n00b_isize_t rows) _kargs
+extern void
+n00b_plane_init(n00b_plane_t *p) _kargs
 {
+    n00b_isize_t       cols      = 80;
+    n00b_isize_t       rows      = 25;
     n00b_isize_t       vp_cols   = 0;
     n00b_isize_t       vp_rows   = 0;
-    const char        *name      = nullptr;
+    n00b_option_t(n00b_string_t) name = n00b_option_none(n00b_string_t);
     n00b_scroll_mode_t scroll    = N00B_SCROLL_NONE;
     int32_t            z         = 0;
     n00b_box_props_t  *box       = nullptr;
@@ -177,7 +187,7 @@ extern bool n00b_plane_remove_child(n00b_plane_t *parent,
  * @post Cursor advances past the written content.
  */
 extern void
-n00b_plane_put_str(n00b_plane_t *p, n00b_string_t *s) _kargs
+n00b_plane_put_str(n00b_plane_t *p, n00b_string_t s) _kargs
 {
     bool wrap = true;
 };
@@ -192,7 +202,7 @@ n00b_plane_put_str(n00b_plane_t *p, n00b_string_t *s) _kargs
 extern void n00b_plane_put_str_at(n00b_plane_t *p,
                                    n00b_isize_t  row,
                                    n00b_isize_t  col,
-                                   n00b_string_t *s);
+                                   n00b_string_t s);
 
 /**
  * @brief Write a single codepoint at the cursor.

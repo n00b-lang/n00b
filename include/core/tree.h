@@ -68,12 +68,12 @@
  */
 #define n00b_tree_node(N, L, val, ...)                                                         \
     ({                                                                                         \
-        n00b_tree_t(N, L) *_bt = n00b_alloc_size(1, sizeof(n00b_tree_t(N, L)));                \
+        n00b_tree_t(N, L) *_bt = n00b_alloc(n00b_tree_t(N, L));                                  \
         if (_bt) {                                                                             \
             _bt->is_leaf    = false;                                                           \
             _bt->node.value = (val);                                                           \
             _bt->node.children                                                                 \
-                = n00b_alloc_size(N00B_TREE_INITIAL_CAPACITY, sizeof(n00b_tree_t(N, L) *));    \
+                = n00b_alloc_array(n00b_tree_t(N, L) *, N00B_TREE_INITIAL_CAPACITY);    \
             _bt->node.num_children = 0;                                                        \
             _bt->node.capacity     = N00B_TREE_INITIAL_CAPACITY;                               \
         }                                                                                      \
@@ -89,7 +89,7 @@
  */
 #define n00b_tree_leaf(N, L, val)                                                              \
     ({                                                                                         \
-        n00b_tree_t(N, L) *_bt = n00b_alloc_size(1, sizeof(n00b_tree_t(N, L)));                \
+        n00b_tree_t(N, L) *_bt = n00b_alloc(n00b_tree_t(N, L));                                  \
         if (_bt) {                                                                             \
             _bt->is_leaf = true;                                                               \
             _bt->leaf    = (val);                                                              \

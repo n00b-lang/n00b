@@ -9,20 +9,27 @@
  * - Uses epoch-based synchronization to ensure notify completes before
  *   waiters resume
  *
- * @details The epoch protocol works as follows:
- *   1. Notifier sets `N00B_CV_NOTIFY_IN_PROGRESS` on `wait_queue`, wakes one waiter
- *   2. Each waiter checks predicate, decrements `waiters_to_process`
+ * @details Each waiter blocks on its own per-thread `self_lock` futex
+ * (already present in `n00b_thread_t`).  The notifier snapshots and
+ * clears the `waiters` list, then bumps each thread's `self_lock` to
+ * wake it.  The epoch handshake ensures the notify operation is atomic
+ * from the caller's perspective:
+ *   1. Notifier wakes all waiters by setting their `self_lock` to 1
+ *   2. Each waiter checks predicate, decrements `waiters_to_process`;
+ *      non-matching waiters re-enqueue themselves
  *   3. Last waiter increments `notify_epoch` (epoch+1), wakes notifier
  *   4. Notifier wakes, increments `notify_epoch` again (epoch+2), wakes all waiters
- *   5. Waiters see epoch+2, re-acquire lock, return
+ *   5. All waiters (waking and non-waking) see epoch+2, then proceed
  */
 #pragma once
 
 #include <stdatomic.h>
 #include "n00b.h"
+#include "core/thread.h"
 #include "core/lock_common.h"
 #include "core/futex.h"
 #include "core/macros.h"
+#include "core/list.h"
 
 /**
  * @brief Predicate callback for selective wake.
@@ -34,21 +41,28 @@
  * @param thread_param Per-thread parameter (set via the wait call).
  * @return             true if this waiter should wake.
  */
-typedef bool (*n00b_condition_predicate_fn)(uint64_t, uint64_t,
-                                            void *, void *, void *);
+typedef bool (*n00b_condition_predicate_fn)(uint64_t actual_pred,
+                                            uint64_t thread_pred,
+                                            void    *output,
+                                            void    *cv_param,
+                                            void    *thread_param);
+
+n00b_list_decl(n00b_thread_t *);
 
 struct n00b_condition_t {
     N00B_COMMON_LOCK_BASE;
-    n00b_futex_t                mutex;
-    _Atomic uint32_t            should_wake;
-    void                       *ovalue;
-    uint64_t                    pvalue;
-    n00b_condition_predicate_fn predicate;
-    void                       *cv_param;
-    n00b_futex_t                notify_epoch;
-    int32_t                     waiters_to_process;
-    int32_t                     wakes_remaining;
-    n00b_futex_t                wait_queue;
+    // These first two fields must mirror n00b_mutex_t layout:
+    // mutex_t.futex → mutex, mutex_t.should_wake → should_wake.
+    n00b_futex_t                     mutex;
+    _Atomic uint32_t                 should_wake;
+    void                            *ovalue;
+    uint64_t                         pvalue;
+    n00b_condition_predicate_fn      predicate;
+    void                            *cv_param;
+    n00b_futex_t                     notify_epoch;
+    _Atomic int32_t                  wakes_remaining;
+    _Atomic int32_t                  waiters_to_process;
+    n00b_list_t(n00b_thread_t *)     waiters;
 };
 
 // n00b_condition_thread_state_t is defined in thread.h (to break
@@ -116,8 +130,7 @@ _n00b_condition_notify(n00b_condition_t *cv, char *loc) _kargs
 #define n00b_condition_notify_one(cv) n00b_condition_notify(cv)
 #define n00b_condition_notify_all(cv) n00b_condition_notify(cv, .all = true)
 
-#define N00B_CV_NOTIFY_IN_PROGRESS 0x40000000u
-#define N00B_CV_ANY                (~0ULL)
+#define N00B_CV_ANY (~0ULL)
 
 /**
  * @brief Check whether any threads are currently waiting on a CV.
@@ -127,5 +140,5 @@ _n00b_condition_notify(n00b_condition_t *cv, char *loc) _kargs
 static inline bool
 n00b_condition_has_waiters(n00b_condition_t *t)
 {
-    return atomic_load(&t->wait_queue) != 0;
+    return n00b_list_len(t->waiters) != 0;
 }

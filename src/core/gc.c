@@ -1,4 +1,4 @@
-/**
+/*
  * @file gc.c
  * @brief Copying/compacting garbage collector for n00b arenas.
  *
@@ -116,8 +116,8 @@ n00b_forward_mdata(n00b_collect_t    *ctx,
     assert(new_user_ptr + old_map->alloc_len < ctx->to_space->segment_end);
 
     // Allocate new OOB record from the shared metadata pool.
-    map_item = n00b_alloc(n00b_oob_hdr_t,
-                          .allocator = ctx->from_space->vtable.metadata_pool);
+    map_item = n00b_alloc_with_opts(n00b_oob_hdr_t,
+                                    &(n00b_alloc_opts_t){.allocator = ctx->from_space->vtable.metadata_pool});
 
     memcpy(map_item, old_map, sizeof(n00b_oob_hdr_t));
 
@@ -296,8 +296,8 @@ n00b_add_alloc_to_worklist(n00b_inline_hdr_t *alloc, n00b_collect_t *ctx)
     n = (alloc->alloc_len - arena_overhead(ctx->from_space)) / sizeof(void *);
 #endif
 
-    entry = n00b_alloc(n00b_gc_wl_item_t,
-                       .allocator = (n00b_allocator_t *)&ctx->work_pool);
+    entry = n00b_alloc_with_opts(n00b_gc_wl_item_t,
+                                 &(n00b_alloc_opts_t){.allocator = (n00b_allocator_t *)&ctx->work_pool});
     entry->tospace_alloc = alloc;
     entry->num_words     = n;
 
@@ -313,7 +313,7 @@ n00b_process_worklist(n00b_collect_t *ctx)
     uint32_t           words;
 
     while (n00b_list_len(ctx->worklist) > 0) {
-        item    = n00b_list_pop_front(ctx->worklist);
+        item    = n00b_option_get(n00b_list_pop_front(n00b_gc_wl_item_t *, ctx->worklist));
         words   = item->num_words;
         new_hdr = item->tospace_alloc;
         p       = (char *)new_hdr + arena_overhead(ctx->from_space);
@@ -363,10 +363,6 @@ n00b_visit_possible_pointer(n00b_collect_t *ctx,
     n00b_inline_hdr_t *fw_hdr;
     n00b_inline_hdr_t *old_hdr;
     uint64_t          *word = base[i];
-
-    if (((uint64_t)word) & 0x7) {
-        return false;
-    }
 
     auto mmap_opt = n00b_mmap_by_address((void *)word);
 
@@ -699,7 +695,13 @@ n00b_process_finalizers(n00b_collect_t *ctx)
 
         if (found) {
             // Object survived — update alloc_info to the forwarded header.
-            entry->alloc_info = fw;
+            // fw is nullptr when the allocation was scanned but lives in
+            // a *different* arena (not the one being collected).  In that
+            // case, leave alloc_info alone — it still points to the
+            // original (valid) header in that other arena.
+            if (fw) {
+                entry->alloc_info = fw;
+            }
             // user_ptr typically points outside the collected arena
             // (e.g., a lock in system_pool), so no update needed.
         }
@@ -746,8 +748,8 @@ n00b_collect_setup(n00b_collect_t *ctx, n00b_arena_t *from_space)
     if (from_space->vtable.metadata_pool) {
         n00b_allocator_t *md_pool = from_space->vtable.metadata_pool;
 
-        n00b_dict_untyped_t *new_md = n00b_alloc(n00b_dict_untyped_t,
-                                                  .allocator = md_pool);
+        n00b_dict_untyped_t *new_md = n00b_alloc_with_opts(n00b_dict_untyped_t,
+                                                           &(n00b_alloc_opts_t){.allocator = md_pool});
         n00b_dict_untyped_init(new_md,
                                .start_capacity = from_space->alloc_count * 2,
                                .allocator      = md_pool,
@@ -820,7 +822,7 @@ n00b_collection_cleanup(n00b_collect_t *ctx)
     n00b_register_arena_segment(new_segment,
                                 ctx->from_space->segment_end,
                                 ctx->from_space,
-                                ctx->from_space->vtable.debug_name);
+                                .file = ctx->from_space->vtable.debug_name);
 
     n00b_allocator_destroy((n00b_allocator_t *)&ctx->work_pool);
     n00b_allocator_destroy((n00b_allocator_t *)ctx->to_space);

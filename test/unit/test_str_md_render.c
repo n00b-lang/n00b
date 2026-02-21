@@ -8,15 +8,16 @@
 
 TEST(test_plain_text)
 {
-    n00b_string_t src  = STR("hello world");
+    n00b_string_t src  = *r"hello world";
     auto          tree = n00b_parse_markdown(src);
     n00b_string_t r    = n00b_str_md_render(tree);
 
     ASSERT_STR_EQ(r.data, "hello world");
     // Plain text should have no style records (md4c wraps in <p> but
     // paragraphs don't push a style).
-    n00b_string_style_info_t *info = n00b_str_get_style_info(r);
-    if (info) {
+    auto info_opt = n00b_str_get_style_info(r);
+    if (n00b_option_is_set(info_opt)) {
+        n00b_string_style_info_t *info = n00b_option_get(info_opt);
         // Any records that exist should be empty styles.
         for (int64_t i = 0; i < info->num_styles; i++) {
             ASSERT(n00b_str_style_is_empty(info->styles[i].info));
@@ -26,13 +27,14 @@ TEST(test_plain_text)
 
 TEST(test_bold)
 {
-    n00b_string_t src  = STR("**bold**");
+    n00b_string_t src  = *r"**bold**";
     auto          tree = n00b_parse_markdown(src);
     n00b_string_t r    = n00b_str_md_render(tree);
 
     ASSERT_STR_EQ(r.data, "bold");
-    n00b_string_style_info_t *info = n00b_str_get_style_info(r);
-    ASSERT(info != nullptr);
+    auto                      info_opt = n00b_str_get_style_info(r);
+    ASSERT(n00b_option_is_set(info_opt));
+    n00b_string_style_info_t *info     = n00b_option_get(info_opt);
     ASSERT(info->num_styles >= 1);
 
     // Find the bold record.
@@ -48,13 +50,14 @@ TEST(test_bold)
 
 TEST(test_italic)
 {
-    n00b_string_t src  = STR("*italic*");
+    n00b_string_t src  = *r"*italic*";
     auto          tree = n00b_parse_markdown(src);
     n00b_string_t r    = n00b_str_md_render(tree);
 
     ASSERT_STR_EQ(r.data, "italic");
-    n00b_string_style_info_t *info = n00b_str_get_style_info(r);
-    ASSERT(info != nullptr);
+    auto                      info_opt = n00b_str_get_style_info(r);
+    ASSERT(n00b_option_is_set(info_opt));
+    n00b_string_style_info_t *info     = n00b_option_get(info_opt);
     ASSERT(info->num_styles >= 1);
 
     bool found_italic = false;
@@ -69,13 +72,14 @@ TEST(test_italic)
 
 TEST(test_inline_code)
 {
-    n00b_string_t src  = STR("`code`");
+    n00b_string_t src  = *r"`code`";
     auto          tree = n00b_parse_markdown(src);
     n00b_string_t r    = n00b_str_md_render(tree);
 
     ASSERT_STR_EQ(r.data, "code");
-    n00b_string_style_info_t *info = n00b_str_get_style_info(r);
-    ASSERT(info != nullptr);
+    auto                      info_opt = n00b_str_get_style_info(r);
+    ASSERT(n00b_option_is_set(info_opt));
+    n00b_string_style_info_t *info     = n00b_option_get(info_opt);
     ASSERT(info->num_styles >= 1);
 
     bool found_mono = false;
@@ -90,13 +94,14 @@ TEST(test_inline_code)
 
 TEST(test_strikethrough)
 {
-    n00b_string_t src  = STR("~~strike~~");
+    n00b_string_t src  = *r"~~strike~~";
     auto          tree = n00b_parse_markdown(src);
     n00b_string_t r    = n00b_str_md_render(tree);
 
     ASSERT_STR_EQ(r.data, "strike");
-    n00b_string_style_info_t *info = n00b_str_get_style_info(r);
-    ASSERT(info != nullptr);
+    auto                      info_opt = n00b_str_get_style_info(r);
+    ASSERT(n00b_option_is_set(info_opt));
+    n00b_string_style_info_t *info     = n00b_option_get(info_opt);
     ASSERT(info->num_styles >= 1);
 
     bool found_strike = false;
@@ -111,13 +116,14 @@ TEST(test_strikethrough)
 
 TEST(test_nested_bold_italic)
 {
-    n00b_string_t src  = STR("**bold *both* bold**");
+    n00b_string_t src  = *r"**bold *both* bold**";
     auto          tree = n00b_parse_markdown(src);
     n00b_string_t r    = n00b_str_md_render(tree);
 
     ASSERT_STR_EQ(r.data, "bold both bold");
-    n00b_string_style_info_t *info = n00b_str_get_style_info(r);
-    ASSERT(info != nullptr);
+    auto                      info_opt = n00b_str_get_style_info(r);
+    ASSERT(n00b_option_is_set(info_opt));
+    n00b_string_style_info_t *info     = n00b_option_get(info_opt);
     ASSERT(info->num_styles >= 1);
 
     // Should have at least one record with both bold and italic.
@@ -134,13 +140,14 @@ TEST(test_nested_bold_italic)
 
 TEST(test_heading)
 {
-    n00b_string_t src  = STR("# Heading");
+    n00b_string_t src  = *r"# Heading";
     auto          tree = n00b_parse_markdown(src);
     n00b_string_t r    = n00b_str_md_render(tree);
 
     ASSERT_STR_EQ(r.data, "Heading");
-    n00b_string_style_info_t *info = n00b_str_get_style_info(r);
-    ASSERT(info != nullptr);
+    auto                      info_opt = n00b_str_get_style_info(r);
+    ASSERT(n00b_option_is_set(info_opt));
+    n00b_string_style_info_t *info     = n00b_option_get(info_opt);
     ASSERT(info->num_styles >= 1);
 
     bool found_bold = false;
@@ -155,15 +162,16 @@ TEST(test_heading)
 
 TEST(test_code_block)
 {
-    n00b_string_t src  = STR("```\nint x;\n```");
+    n00b_string_t src  = *r"```\nint x;\n```";
     auto          tree = n00b_parse_markdown(src);
     n00b_string_t r    = n00b_str_md_render(tree);
 
     // md4c may include a trailing newline; check the code content is present.
     ASSERT(strstr(r.data, "int x;") != nullptr);
 
-    n00b_string_style_info_t *info = n00b_str_get_style_info(r);
-    ASSERT(info != nullptr);
+    auto                      info_opt = n00b_str_get_style_info(r);
+    ASSERT(n00b_option_is_set(info_opt));
+    n00b_string_style_info_t *info     = n00b_option_get(info_opt);
     ASSERT(info->num_styles >= 1);
 
     bool found_mono = false;
@@ -178,13 +186,14 @@ TEST(test_code_block)
 
 TEST(test_mixed_spans)
 {
-    n00b_string_t src  = STR("normal **bold** *italic*");
+    n00b_string_t src  = *r"normal **bold** *italic*";
     auto          tree = n00b_parse_markdown(src);
     n00b_string_t r    = n00b_str_md_render(tree);
 
     ASSERT_STR_EQ(r.data, "normal bold italic");
-    n00b_string_style_info_t *info = n00b_str_get_style_info(r);
-    ASSERT(info != nullptr);
+    auto                      info_opt = n00b_str_get_style_info(r);
+    ASSERT(n00b_option_is_set(info_opt));
+    n00b_string_style_info_t *info     = n00b_option_get(info_opt);
 
     // Should have separate bold and italic records.
     bool found_bold   = false;

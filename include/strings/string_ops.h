@@ -13,7 +13,7 @@
  *  - `strings/string_style.h` -- style attachment on `n00b_string_t`
  *  - `unicode/segmentation.h` -- grapheme cluster boundary detection
  *  - `unicode/linebreak.h` -- line break algorithm used by `n00b_unicode_str_wrap()`
- *  - `unicode/casemap.h` -- case folding for `n00b_unicode_str_eq_casefold()`
+ *  - `unicode/casemap.h` -- case folding for `n00b_unicode_str_eq()` / `n00b_unicode_str_find()`
  */
 
 #include "unicode/types_ext.h"
@@ -104,28 +104,56 @@ n00b_string_t n00b_unicode_str_slice_bytes(n00b_string_t s,
 // Search
 // ===================================================================
 
-/** @brief Find the first occurrence of @p needle in @p haystack.
- *  @param haystack  The string to search in.
- *  @param needle    The string to search for.
+/** @brief Find an occurrence of @p needle in @p haystack.
+ *
+ *  By default both strings are NFC-normalized before comparison.
+ *  Additional keyword options control direction, case folding, and
+ *  accent stripping.
+ *
+ *  When any transform is enabled, the returned byte offset is into the
+ *  **transformed** haystack (which may differ from the original byte
+ *  positions).
+ *
+ *  @param haystack    The string to search in.
+ *  @param needle      The string to search for.
+ *  @kw reverse        Search from the right (default: false).
+ *  @kw normalize      NFC-normalize before search (default: true).
+ *  @kw case_sensitive Case-sensitive match (default: true).  When false,
+ *                     both strings are Unicode case-folded.
+ *  @kw strip_marks    Strip combining marks / accents (default: false).
  *  @return An option containing the byte offset, or none if not found.
+ *
+ *  @note Defaults to `.normalize = true` (differs from `n00b_unicode_str_eq`
+ *        which defaults to false).
+ *
+ *  @post When transforms are active (normalize, case-fold, strip marks),
+ *        the byte offset refers to the internal transformed copy.  Use
+ *        `n00b_unicode_str_contains()` for presence checks with transforms,
+ *        or disable transforms when you need sliceable byte offsets.
  */
-n00b_unicode_opt_i32_t n00b_unicode_str_find(n00b_string_t haystack,
-                                             n00b_string_t needle);
-
-/** @brief Find the last occurrence of @p needle in @p haystack.
- *  @param haystack  The string to search in.
- *  @param needle    The string to search for.
- *  @return An option containing the byte offset, or none if not found.
- */
-n00b_unicode_opt_i32_t n00b_unicode_str_rfind(n00b_string_t haystack,
-                                              n00b_string_t needle);
+n00b_option_t(int32_t) n00b_unicode_str_find(n00b_string_t haystack,
+                                             n00b_string_t needle)
+    _kargs {
+        bool reverse         = false;
+        bool normalize       = true;
+        bool case_sensitive  = true;
+        bool strip_marks     = false;
+    };
 
 /** @brief Test whether @p haystack contains @p needle.
- *  @param haystack  The string to search in.
- *  @param needle    The string to search for.
+ *
+ *  Accepts the same keyword options as @c n00b_unicode_str_find.
+ *
+ *  @param haystack    The string to search in.
+ *  @param needle      The string to search for.
  *  @return true if @p needle is found in @p haystack.
  */
-bool n00b_unicode_str_contains(n00b_string_t haystack, n00b_string_t needle);
+#define n00b_unicode_str_contains(h, n, ...) \
+    n00b_option_is_set(n00b_unicode_str_find((h), (n), ##__VA_ARGS__))
+
+/** @deprecated Use `n00b_unicode_str_find(h, n, .reverse = true)`. */
+#define n00b_unicode_str_rfind(h, n, ...) \
+    n00b_unicode_str_find((h), (n), .reverse = true, ##__VA_ARGS__)
 
 /** @brief Test whether a string starts with a given prefix.
  *  @param s       The string to test.
@@ -210,98 +238,113 @@ n00b_array_t(n00b_string_t) n00b_unicode_str_split_lines(n00b_string_t s)
 // Trim
 // ===================================================================
 
-/** @brief Remove leading and trailing Unicode whitespace.
+/** @brief Remove leading and/or trailing Unicode whitespace.
  *  @param s  The string to trim.
+ *  @kw left       Trim leading whitespace (default: true).
+ *  @kw right      Trim trailing whitespace (default: true).
  *  @kw allocator  Optional allocator (defaults to the runtime allocator).
  *  @return A new trimmed string.
  */
 n00b_string_t n00b_unicode_str_trim(n00b_string_t s)
-    _kargs { n00b_allocator_t *allocator = nullptr; };
+    _kargs {
+        bool              left      = true;
+        bool              right     = true;
+        n00b_allocator_t *allocator = nullptr;
+    };
 
-/** @brief Remove leading Unicode whitespace.
- *  @param s  The string to trim.
- *  @kw allocator  Optional allocator (defaults to the runtime allocator).
- *  @return A new left-trimmed string.
- */
-n00b_string_t n00b_unicode_str_trim_left(n00b_string_t s)
-    _kargs { n00b_allocator_t *allocator = nullptr; };
+/** @deprecated Use `n00b_unicode_str_trim(s, .right = false)` */
+#define n00b_unicode_str_trim_left(s, ...) \
+    n00b_unicode_str_trim((s), .right = false, ##__VA_ARGS__)
 
-/** @brief Remove trailing Unicode whitespace.
- *  @param s  The string to trim.
- *  @kw allocator  Optional allocator (defaults to the runtime allocator).
- *  @return A new right-trimmed string.
- */
-n00b_string_t n00b_unicode_str_trim_right(n00b_string_t s)
-    _kargs { n00b_allocator_t *allocator = nullptr; };
+/** @deprecated Use `n00b_unicode_str_trim(s, .left = false)` */
+#define n00b_unicode_str_trim_right(s, ...) \
+    n00b_unicode_str_trim((s), .left = false, ##__VA_ARGS__)
 
 // ===================================================================
 // Comparison
 // ===================================================================
 
-/** @brief Compare two strings byte-by-byte (like strcmp).
+/** @brief Compare two strings (like strcmp), with optional normalization.
  *  @param a  First string.
  *  @param b  Second string.
+ *  @kw normalize       NFC-normalize before comparing (default: false).
+ *  @kw case_sensitive  Case-sensitive comparison (default: true).
+ *  @kw strip_marks     Strip combining marks before comparing (default: false).
  *  @return Negative, zero, or positive.
+ *
+ *  @note Defaults to `.normalize = false` (same as `n00b_unicode_str_eq`).
  */
-int n00b_unicode_str_cmp(n00b_string_t a, n00b_string_t b);
+int n00b_unicode_str_cmp(n00b_string_t a, n00b_string_t b)
+    _kargs {
+        bool normalize      = false;
+        bool case_sensitive  = true;
+        bool strip_marks     = false;
+    };
 
-/** @brief Test whether two strings are byte-identical.
+/** @brief Test whether two strings are equal.
  *  @param a  First string.
  *  @param b  Second string.
- *  @return true if the strings are equal.
+ *  @kw normalize       NFC-normalize before comparing (default: false).
+ *  @kw case_sensitive  Case-sensitive comparison (default: true).
+ *  @kw strip_marks     Strip combining marks before comparing (default: false).
+ *  @return true if the strings are equal under the requested options.
+ *
+ *  @note Defaults to `.normalize = false` (differs from `n00b_unicode_str_find`
+ *        which defaults to true).
  */
-bool n00b_unicode_str_eq(n00b_string_t a, n00b_string_t b);
+bool n00b_unicode_str_eq(n00b_string_t a, n00b_string_t b)
+    _kargs {
+        bool normalize      = false;
+        bool case_sensitive  = true;
+        bool strip_marks     = false;
+    };
 
-/** @brief Test whether two strings are equal after NFC normalization.
- *  @param a  First string.
- *  @param b  Second string.
- *  @return true if the strings are canonically equivalent.
- */
-bool n00b_unicode_str_eq_nfc(n00b_string_t a, n00b_string_t b);
+/** @deprecated Use `n00b_unicode_str_eq(a, b, .normalize = true)` */
+#define n00b_unicode_str_eq_nfc(a, b) \
+    n00b_unicode_str_eq((a), (b), .normalize = true)
 
-/** @brief Test whether two strings are equal under case folding.
- *  @param a  First string.
- *  @param b  Second string.
- *  @return true if the strings are case-insensitively equal.
- */
-bool n00b_unicode_str_eq_casefold(n00b_string_t a, n00b_string_t b);
+/** @deprecated Use `n00b_unicode_str_eq(a, b, .case_sensitive = false)` */
+#define n00b_unicode_str_eq_casefold(a, b) \
+    n00b_unicode_str_eq((a), (b), .case_sensitive = false)
 
 // ===================================================================
 // Width-aware padding/truncation
 // ===================================================================
 
-/** @brief Pad a string on the left to a given display width.
+/** String alignment constants for `n00b_unicode_str_pad`. */
+enum {
+    N00B_STR_ALIGN_LEFT   = 0, /**< Left-align text (pad on right). */
+    N00B_STR_ALIGN_RIGHT  = 1, /**< Right-align text (pad on left). */
+    N00B_STR_ALIGN_CENTER = 2, /**< Center text (pad both sides). */
+};
+
+/** @brief Pad/align a string within a given display width.
  *  @param s      The string to pad.
  *  @param width  Target display width in columns.
+ *  @kw align      Alignment: `N00B_STR_ALIGN_LEFT` (default), `_RIGHT`, or
+ *                 `_CENTER`.
  *  @kw allocator  Optional allocator (defaults to the runtime allocator).
  *  @kw fill       Fill codepoint (default: space U+0020).
- *  @return A new right-aligned string padded to @p width columns.
+ *  @return A new string padded to @p width columns.
  */
-n00b_string_t n00b_unicode_str_pad_left(n00b_string_t s, int32_t width)
-    _kargs { n00b_allocator_t *allocator = nullptr;
-             n00b_codepoint_t fill = ' '; };
+n00b_string_t n00b_unicode_str_pad(n00b_string_t s, int32_t width)
+    _kargs {
+        int              align     = N00B_STR_ALIGN_LEFT;
+        n00b_allocator_t *allocator = nullptr;
+        n00b_codepoint_t  fill      = ' ';
+    };
 
-/** @brief Pad a string on the right to a given display width.
- *  @param s      The string to pad.
- *  @param width  Target display width in columns.
- *  @kw allocator  Optional allocator (defaults to the runtime allocator).
- *  @kw fill       Fill codepoint (default: space U+0020).
- *  @return A new left-aligned string padded to @p width columns.
- */
-n00b_string_t n00b_unicode_str_pad_right(n00b_string_t s, int32_t width)
-    _kargs { n00b_allocator_t *allocator = nullptr;
-             n00b_codepoint_t fill = ' '; };
+/** @deprecated Use `n00b_unicode_str_pad(s, w, .align = N00B_STR_ALIGN_RIGHT)` */
+#define n00b_unicode_str_pad_left(s, w, ...) \
+    n00b_unicode_str_pad((s), (w), .align = N00B_STR_ALIGN_RIGHT, ##__VA_ARGS__)
 
-/** @brief Center a string within a given display width.
- *  @param s      The string to center.
- *  @param width  Target display width in columns.
- *  @kw allocator  Optional allocator (defaults to the runtime allocator).
- *  @kw fill       Fill codepoint (default: space U+0020).
- *  @return A new centered string padded to @p width columns.
- */
-n00b_string_t n00b_unicode_str_center(n00b_string_t s, int32_t width)
-    _kargs { n00b_allocator_t *allocator = nullptr;
-             n00b_codepoint_t fill = ' '; };
+/** @deprecated Use `n00b_unicode_str_pad(s, w)` */
+#define n00b_unicode_str_pad_right(s, w, ...) \
+    n00b_unicode_str_pad((s), (w), .align = N00B_STR_ALIGN_LEFT, ##__VA_ARGS__)
+
+/** @deprecated Use `n00b_unicode_str_pad(s, w, .align = N00B_STR_ALIGN_CENTER)` */
+#define n00b_unicode_str_center(s, w, ...) \
+    n00b_unicode_str_pad((s), (w), .align = N00B_STR_ALIGN_CENTER, ##__VA_ARGS__)
 
 /** @brief Truncate a string to fit within a maximum display width.
  *  @param s          The string to truncate.

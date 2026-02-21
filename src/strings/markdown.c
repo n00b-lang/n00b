@@ -1,5 +1,3 @@
-#define _MD4C_INLINE_IN_THIS_MODULE
-
 #include "strings/markdown.h"
 #include "core/alloc.h"
 #include "core/string.h"
@@ -155,9 +153,7 @@ md_text(MD_TEXTTYPE type, const MD_CHAR *text, MD_SIZE size, void *extra)
 
     node.node_type  = convert_text_kind(type);
 
-    int64_t cps = n00b_unicode_utf8_count_codepoints_raw(text, size);
-    node.detail.text = n00b_string_from_raw(ctx->allocator, text, size,
-                                            cps >= 0 ? cps : 0);
+    node.detail.text = n00b_string_from_raw(text, size, .allocator = ctx->allocator);
 
     // Text nodes are leaves — they never have children.
     (void)n00b_tree_add_leaf(ctx->cur, n00b_md_node_t, n00b_md_node_t, node);

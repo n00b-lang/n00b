@@ -60,11 +60,16 @@ n00b_string_t n00b_unicode_str_slice_bytes(n00b_string_t s,
 #### Search
 
 ```c
+// All search functions accept these keyword options:
+//   .reverse         = false   Search from the right (find only)
+//   .normalize       = true    NFC-normalize before comparison
+//   .case_sensitive  = true    When false, Unicode case-fold
+//   .strip_marks     = false   When true, strip accents/diacritics
+
 n00b_unicode_opt_i32_t n00b_unicode_str_find(n00b_string_t haystack,
-                                              n00b_string_t needle);
-n00b_unicode_opt_i32_t n00b_unicode_str_rfind(n00b_string_t haystack,
-                                               n00b_string_t needle);
-bool n00b_unicode_str_contains(n00b_string_t haystack, n00b_string_t needle);
+                                              n00b_string_t needle, ...);
+bool n00b_unicode_str_contains(n00b_string_t haystack,
+                                n00b_string_t needle, ...);
 bool n00b_unicode_str_starts_with(n00b_string_t s, n00b_string_t prefix);
 bool n00b_unicode_str_ends_with(n00b_string_t s, n00b_string_t suffix);
 ```
@@ -92,29 +97,35 @@ n00b_array_t(n00b_string_t) n00b_unicode_str_split_lines(n00b_string_t s, ...);
 
 ```c
 n00b_string_t n00b_unicode_str_trim(n00b_string_t s, ...);
-n00b_string_t n00b_unicode_str_trim_left(n00b_string_t s, ...);
-n00b_string_t n00b_unicode_str_trim_right(n00b_string_t s, ...);
+    // keyword args: .left = true, .right = true, .allocator
 ```
+
+Compat macros `n00b_unicode_str_trim_left` (`.right = false`) and
+`n00b_unicode_str_trim_right` (`.left = false`) are still available.
 
 #### Comparison
 
 ```c
 int  n00b_unicode_str_cmp(n00b_string_t a, n00b_string_t b);
-bool n00b_unicode_str_eq(n00b_string_t a, n00b_string_t b);
-bool n00b_unicode_str_eq_nfc(n00b_string_t a, n00b_string_t b);
-bool n00b_unicode_str_eq_casefold(n00b_string_t a, n00b_string_t b);
+bool n00b_unicode_str_eq(n00b_string_t a, n00b_string_t b, ...);
+    // keyword args: .normalize = false, .case_sensitive = true, .strip_marks = false
 ```
+
+Compat macros `n00b_unicode_str_eq_nfc` (`.normalize = true`) and
+`n00b_unicode_str_eq_casefold` (`.case_sensitive = false`) are still available.
 
 #### Width-aware padding and truncation
 
 ```c
-n00b_string_t n00b_unicode_str_pad_left(n00b_string_t s, int32_t width, ...);
-    // keyword args: .allocator, .fill = ' '
-n00b_string_t n00b_unicode_str_pad_right(n00b_string_t s, int32_t width, ...);
-n00b_string_t n00b_unicode_str_center(n00b_string_t s, int32_t width, ...);
+n00b_string_t n00b_unicode_str_pad(n00b_string_t s, int32_t width, ...);
+    // keyword args: .align = N00B_STR_ALIGN_LEFT, .fill = ' ', .allocator
 n00b_string_t n00b_unicode_str_truncate(n00b_string_t s, int32_t max_width, ...);
     // keyword args: .allocator, .ellipsis = "..."
 ```
+
+Compat macros `n00b_unicode_str_pad_left` (`.align = N00B_STR_ALIGN_RIGHT`),
+`n00b_unicode_str_pad_right` (`.align = N00B_STR_ALIGN_LEFT`), and
+`n00b_unicode_str_center` (`.align = N00B_STR_ALIGN_CENTER`) are still available.
 
 #### Repeat, reverse, and wrap
 
@@ -699,7 +710,7 @@ Most functions that allocate accept optional keyword arguments via ncc's
 `_kargs` extension:
 
 ```c
-n00b_unicode_str_pad_right(s, 40, .fill = '.', .allocator = my_alloc)
+n00b_unicode_str_pad(s, 40, .fill = '.', .allocator = my_alloc)
 n00b_unicode_str_wrap(s, .width = 72, .hang = 4)
 n00b_parse_markdown(src, .allocator = arena)
 ```
@@ -749,7 +760,7 @@ n00b_text_style_t *at = n00b_str_resolve_style_at(s, byte_offset);
 | Grapheme-aware slice | `n00b_unicode_str_slice(s, start, end)` |
 | Search | `n00b_unicode_str_find(haystack, needle)` |
 | Split on separator | `n00b_unicode_str_split(s, sep)` |
-| Pad to width | `n00b_unicode_str_pad_right(s, width)` |
+| Pad to width | `n00b_unicode_str_pad(s, width)` |
 | Wrap to width | `n00b_unicode_str_wrap(s, .width = 72)` |
 | Reverse (grapheme-safe) | `n00b_unicode_str_reverse(s)` |
 | Integer to string | `n00b_fmt_int(value, commas)` |

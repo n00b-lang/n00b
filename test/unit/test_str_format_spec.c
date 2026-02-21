@@ -151,7 +151,7 @@ TEST(test_fmt_float_scientific)
 TEST(test_fmt_string_width)
 {
     n00b_format_spec_t fs = n00b_format_spec_parse("10s", 3);
-    n00b_string_t val     = STR("hi");
+    n00b_string_t val     = *r"hi";
     n00b_string_t r       = n00b_str_fmt_string_ex(val, &fs);
     ASSERT_EQ(r.codepoints, 10);
 }
@@ -159,7 +159,7 @@ TEST(test_fmt_string_width)
 TEST(test_fmt_string_truncate)
 {
     n00b_format_spec_t fs = n00b_format_spec_parse(".3s", 3);
-    n00b_string_t val     = STR("hello");
+    n00b_string_t val     = *r"hello";
     n00b_string_t r       = n00b_str_fmt_string_ex(val, &fs);
     ASSERT_EQ(r.codepoints, 3);
 }

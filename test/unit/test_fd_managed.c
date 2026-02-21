@@ -1,0 +1,143 @@
+/*
+ * test_fd_managed.c — Tests for managed FD lifecycle.
+ *
+ * Tests use pipe pairs to exercise the managed FD owner registration,
+ * lookup, and topic accessors.
+ */
+
+#include <stdio.h>
+#include <assert.h>
+#include <unistd.h>
+#include <string.h>
+
+#include "n00b.h"
+#include "conduit/conduit.h"
+#include "conduit/io.h"
+#include "conduit/fd_managed.h"
+#include "core/alloc.h"
+#include "core/runtime.h"
+
+// ============================================================================
+// 1. Manage and lookup FD owner
+// ============================================================================
+
+static void
+test_fd_manage_lookup(void)
+{
+    n00b_result_t(n00b_conduit_t *) cr = n00b_conduit_new();
+    assert(n00b_result_is_ok(cr));
+    n00b_conduit_t *c = n00b_result_get(cr);
+
+    n00b_result_t(n00b_conduit_io_backend_t *) ir = n00b_conduit_io_new_default(c);
+    assert(n00b_result_is_ok(ir));
+    n00b_conduit_io_backend_t *io = n00b_result_get(ir);
+
+    int fds[2];
+    int rc = pipe(fds);
+    assert(rc == 0);
+
+    // Manage the read end (do NOT auto-close — we close manually).
+    auto manage_r = n00b_conduit_fd_manage(c, io, fds[0], false);
+    assert(n00b_result_is_ok(manage_r));
+    n00b_conduit_fd_owner_t *owner = n00b_result_get(manage_r);
+    assert(owner->fd == fds[0]);
+
+    // Lookup should return the same owner.
+    auto found_opt = n00b_conduit_fd_get_owner(c, fds[0]);
+    assert(n00b_option_is_set(found_opt));
+    assert(n00b_option_get(found_opt) == owner);
+
+    // Lookup for unmanaged FD returns None.
+    auto missing_opt = n00b_conduit_fd_get_owner(c, fds[1]);
+    assert(!n00b_option_is_set(missing_opt));
+
+    close(fds[0]);
+    close(fds[1]);
+    n00b_conduit_io_destroy(io);
+    n00b_conduit_destroy(c);
+    printf("  [PASS] FD manage/lookup\n");
+}
+
+// ============================================================================
+// 2. Owner exposes read/write/status topics
+// ============================================================================
+
+static void
+test_fd_owner_topics(void)
+{
+    n00b_result_t(n00b_conduit_t *) cr = n00b_conduit_new();
+    assert(n00b_result_is_ok(cr));
+    n00b_conduit_t *c = n00b_result_get(cr);
+
+    n00b_result_t(n00b_conduit_io_backend_t *) ir = n00b_conduit_io_new_default(c);
+    assert(n00b_result_is_ok(ir));
+    n00b_conduit_io_backend_t *io = n00b_result_get(ir);
+
+    int fds[2];
+    int rc = pipe(fds);
+    assert(rc == 0);
+
+    auto manage_r = n00b_conduit_fd_manage(c, io, fds[0], false);
+    assert(n00b_result_is_ok(manage_r));
+    n00b_conduit_fd_owner_t *owner = n00b_result_get(manage_r);
+
+    // Topic accessors should succeed.
+    n00b_conduit_topic_base_t *rt = n00b_result_get(n00b_conduit_fd_read_topic(owner));
+    n00b_conduit_topic_base_t *wt = n00b_result_get(n00b_conduit_fd_write_topic(owner));
+    n00b_conduit_topic_base_t *st = n00b_result_get(n00b_conduit_fd_status_topic(owner));
+
+    // They should all be distinct topics.
+    assert(rt != wt);
+    assert(rt != st);
+    assert(wt != st);
+
+    close(fds[0]);
+    close(fds[1]);
+    n00b_conduit_io_destroy(io);
+    n00b_conduit_destroy(c);
+    printf("  [PASS] FD owner topics\n");
+}
+
+// ============================================================================
+// 3. Null args
+// ============================================================================
+
+static void
+test_fd_null_args(void)
+{
+    // Null conduit or IO should return error.
+    auto manage_r = n00b_conduit_fd_manage(nullptr, nullptr, 0, false);
+    assert(n00b_result_is_err(manage_r));
+
+    // Null topic accessors should return Err.
+    assert(n00b_result_is_err(n00b_conduit_fd_read_topic(nullptr)));
+    assert(n00b_result_is_err(n00b_conduit_fd_write_topic(nullptr)));
+    assert(n00b_result_is_err(n00b_conduit_fd_status_topic(nullptr)));
+
+    printf("  [PASS] null args\n");
+}
+
+// ============================================================================
+// main
+// ============================================================================
+
+int
+main(int argc, char *argv[])
+{
+    n00b_runtime_t rt;
+    n00b_init(&rt, argc, argv);
+
+    printf("test_fd_managed:\n");
+    fflush(stdout);
+
+    test_fd_manage_lookup();
+    fflush(stdout);
+    test_fd_owner_topics();
+    fflush(stdout);
+    test_fd_null_args();
+    fflush(stdout);
+
+    printf("All fd_managed tests passed.\n");
+    n00b_shutdown();
+    return 0;
+}

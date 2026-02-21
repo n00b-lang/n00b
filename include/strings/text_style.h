@@ -126,7 +126,7 @@ typedef struct n00b_text_style_t {
 // Option type for size_t
 // ===================================================================
 
-n00b_option_decl(size_t);
+// size_t option type declared in core/option.h.
 
 // ===================================================================
 // Style record

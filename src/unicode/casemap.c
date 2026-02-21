@@ -140,7 +140,6 @@ full_case_map(n00b_allocator_t *allocator,
     char    *out      = n00b_alloc_array(char, (size_t)len * 12 + 1);
     uint32_t out_pos  = 0;
     uint32_t pos      = 0;
-    uint32_t cp_count = 0;
 
     while (pos < (uint32_t)len) {
         int32_t cp = n00b_unicode_utf8_decode(data, (uint32_t)len, &pos);
@@ -158,17 +157,10 @@ full_case_map(n00b_allocator_t *allocator,
                                  tmp);
         memcpy(out + out_pos, tmp, n);
         out_pos += n;
-
-        // Count output codepoints
-        uint32_t tpos = 0;
-        while (tpos < n) {
-            n00b_unicode_utf8_decode(tmp, n, &tpos);
-            cp_count++;
-        }
     }
 
     out[out_pos]         = '\0';
-    n00b_string_t result = n00b_string_from_raw(allocator, out, out_pos, cp_count);
+    n00b_string_t result = n00b_string_from_raw(out, out_pos, .allocator = allocator);
     n00b_free(out);
     return result;
 }
@@ -245,7 +237,6 @@ n00b_unicode_totitle_raw(n00b_allocator_t *allocator,
     char    *out      = n00b_alloc_array(char, (size_t)len * 12 + 1);
     uint32_t out_pos  = 0;
     uint32_t pos      = 0;
-    uint32_t cp_count = 0;
     bool     at_start = true;
 
     while (pos < (uint32_t)len) {
@@ -277,11 +268,10 @@ n00b_unicode_totitle_raw(n00b_allocator_t *allocator,
         }
 
         out_pos += n00b_unicode_utf8_encode(mapped, out + out_pos);
-        cp_count++;
     }
 
     out[out_pos]         = '\0';
-    n00b_string_t result = n00b_string_from_raw(allocator, out, out_pos, cp_count);
+    n00b_string_t result = n00b_string_from_raw(out, out_pos, .allocator = allocator);
     n00b_free(out);
     return result;
 }
@@ -304,7 +294,6 @@ n00b_unicode_casefold_raw(n00b_allocator_t *allocator, const char *data, int64_t
     char    *out      = n00b_alloc_array(char, (size_t)len * 12 + 1);
     uint32_t out_pos  = 0;
     uint32_t pos      = 0;
-    uint32_t cp_count = 0;
 
     while (pos < (uint32_t)len) {
         int32_t cp = n00b_unicode_utf8_decode(data, (uint32_t)len, &pos);
@@ -321,17 +310,15 @@ n00b_unicode_casefold_raw(n00b_allocator_t *allocator, const char *data, int64_t
             uint32_t count = entry[0];
             for (uint32_t i = 0; i < count; i++) {
                 out_pos += n00b_unicode_utf8_encode(entry[1 + i], out + out_pos);
-                cp_count++;
             }
         }
         else {
             out_pos += n00b_unicode_utf8_encode((n00b_codepoint_t)cp, out + out_pos);
-            cp_count++;
         }
     }
 
     out[out_pos]         = '\0';
-    n00b_string_t result = n00b_string_from_raw(allocator, out, out_pos, cp_count);
+    n00b_string_t result = n00b_string_from_raw(out, out_pos, .allocator = allocator);
     n00b_free(out);
     return result;
 }

@@ -8,6 +8,12 @@
  * All macros take lvalues directly (value semantics). They mutate
  * the struct in-place via statement expressions.
  *
+ * **Thread safety:** Arrays are **not locked by default**.  Unlike
+ * @c n00b_list_t and @c n00b_stack_t (which create a rwlock on
+ * construction), arrays are intended for single-owner or
+ * caller-managed synchronization.  Use @c n00b_array_new_locked()
+ * if the array will be shared between threads.
+ *
  * Usage:
  * @code
  *     n00b_array_decl(int);
@@ -55,35 +61,27 @@
 // ============================================================================
 
 /**
- * @brief Create a new array with optional initial capacity.
- * @param T     Element type.
- * @param ...   Optional initial capacity (default 16).
+ * @brief Create a new array with the given capacity.
+ *
+ * Arrays are **unlocked by default**.  Pass `true` as the third argument
+ * (or use the `_locked` compat macro) for a locked array.
+ *
+ * @param T       Element type.
+ * @param N       Initial capacity.
+ * @param locked  Whether to create a rwlock (default: false).
+ * @param ...     Optional allocator.
  */
-#define n00b_array_new(T, N, ...)                                                               \
-    ({                                                                                         \
-        (n00b_array_t(T)){                                                                     \
-            .len  = 0,                                                                         \
-            .cap  = N,                                                                         \
-            .data = n00b_alloc(N * sizeof(T)                                                   \
-                        __VA_OPT__(, .allocator = __VA_ARGS__)),                                \
-            .lock = nullptr,                                                                   \
-            __VA_OPT__(.allocator = __VA_ARGS__,)                                              \
-        };                                                                                     \
-    })
+#define n00b_array_new(T, N, ...)              _n00b_array_new_sel(T, N, false, ##__VA_ARGS__)
+#define n00b_array_new_locked(T, N, ...)       _n00b_array_new_sel(T, N, true, ##__VA_ARGS__) /**< @deprecated Use n00b_array_new(T, N, true) */
 
-/**
- * @brief Create a new locked array with the given capacity.
- * @param T     Element type.
- * @param N     Initial capacity.
- */
-#define n00b_array_new_locked(T, N, ...)                                                       \
+#define _n00b_array_new_sel(T, N, locked, ...)                                                 \
     ({                                                                                         \
         (n00b_array_t(T)){                                                                     \
             .len  = 0,                                                                         \
             .cap  = N,                                                                         \
-            .data = n00b_alloc(N * sizeof(T)                                                   \
-                        __VA_OPT__(, .allocator = __VA_ARGS__)),                                \
-            .lock = n00b_data_lock_new(),                                                      \
+            .data = n00b_alloc_array_with_opts(T, (N),                                         \
+                        N00B_ALLOC_OPTS(__VA_ARGS__)),                                          \
+            .lock = (locked) ? n00b_data_lock_new() : nullptr,                                 \
             __VA_OPT__(.allocator = __VA_ARGS__,)                                              \
         };                                                                                     \
     })
@@ -104,10 +102,17 @@
     })
 
 /**
- * @brief Free the backing storage of an array (only use if _new'd).
+ * @brief Free the backing storage of an array and zero the struct.
  * @param x  Array (lvalue).
  */
-#define n00b_array_free(x) n00b_free((x).data)
+#define n00b_array_free(x)                                                                     \
+    ({                                                                                         \
+        auto _bl_ap = &(x);                                                                    \
+        if (_bl_ap->data) {                                                                    \
+            n00b_free(_bl_ap->data);                                                           \
+        }                                                                                      \
+        *_bl_ap = (typeof(x)){};                                                               \
+    })
 
 // ============================================================================
 // Access
@@ -150,7 +155,7 @@
             abort();                                                                           \
         }                                                                                      \
         if (_bl_i >= _bl_ap->len) {                                                            \
-            _bl_ap->len = _bl_i;                                                               \
+            _bl_ap->len = _bl_i + 1;                                                           \
         }                                                                                      \
         _bl_ap->data[_bl_i] = (val);                                                           \
         n00b_data_unlock(_bl_ap->lock);                                                        \
@@ -187,8 +192,8 @@
         typeof(x) _bl_copy = (typeof(x)){                                                      \
             .len       = _bl_sp->len,                                                          \
             .cap       = _bl_sp->cap,                                                          \
-            .data      = n00b_alloc(_bl_sp->cap * sizeof(_bl_sp->data[0]),                     \
-                             .allocator = _bl_sp->allocator),                                  \
+            .data      = n00b_alloc_size_with_opts(_bl_sp->cap, sizeof(_bl_sp->data[0]),          \
+                             &(n00b_alloc_opts_t){.allocator = _bl_sp->allocator}),            \
             .lock      = _bl_sp->lock ? n00b_data_lock_new() : nullptr,                        \
             .allocator = _bl_sp->allocator,                                                    \
         };                                                                                     \
@@ -197,7 +202,12 @@
     })
 
 /**
- * @brief Iterate over array elements.
+ * @brief Iterate over array elements (lock-aware).
+ *
+ * Acquires a shared read lock before iteration and releases it
+ * afterwards.  If the array has no lock (lock == nullptr), the
+ * lock/unlock calls are no-ops and the loop runs at zero overhead.
+ *
  * @param arr  Array (lvalue).
  * @param var  Pointer variable name for the loop body.
  *
@@ -211,4 +221,9 @@
  * @endcode
  */
 #define n00b_array_foreach(arr, var)                                                           \
-    for (typeof((arr).data) var = (arr).data; (var) < (arr).data + (arr).len; ++(var))
+    for (int _afl_once = (n00b_data_read_lock((arr).lock), 1); _afl_once; )                   \
+        for (typeof((arr).data) var = (arr).data;                                              \
+             (var) < (arr).data + (arr).len                                                    \
+                 ? 1                                                                            \
+                 : (n00b_data_unlock((arr).lock), _afl_once = 0);                              \
+             ++(var))

@@ -283,25 +283,13 @@ add_child(tnode_t *parent, tnode_t *child)
 {
     assert(parent != nullptr);
 
-    int old_count = parent->num_kids;
-    int new_count = old_count + 1;
-
-    // Grow the kids list
-    ncc_list_t *new_kids = ncc_list_alloc(new_count);
-    assert(new_kids != nullptr);
-
-    // Copy existing children
-    if (parent->kids) {
-        for (int i = 0; i < old_count; i++) {
-            new_kids->items[i] = parent->kids->items[i];
-        }
-        base_dealloc(parent->kids);
+    if (!parent->kids) {
+        parent->kids = ncc_list_alloc(0);
     }
-
-    // Add new child
-    new_kids->items[old_count] = child;
-    parent->kids               = new_kids;
-    parent->num_kids           = new_count;
+    ncc_list_ensure_cap(parent->kids, parent->num_kids + 1);
+    parent->kids->data[parent->num_kids] = child;
+    parent->num_kids++;
+    parent->kids->len = parent->num_kids;
 
     if (child != nullptr && !IS_ELIDED(child)) {
         child->parent = parent;
@@ -381,12 +369,12 @@ copy_tree(tnode_t *node)
         tnode_t *child = tnode_get_kid(f->src, ci);
 
         if (child == nullptr) {
-            f->dst->kids->items[ci] = nullptr;
+            f->dst->kids->data[ci] = nullptr;
             continue;
         }
 
         if (IS_ELIDED(child)) {
-            f->dst->kids->items[ci] = (tnode_t *)&elided_node;
+            f->dst->kids->data[ci] = (tnode_t *)&elided_node;
             continue;
         }
 
@@ -415,7 +403,7 @@ copy_tree(tnode_t *node)
                 synth_defer_free(name_copy);
             }
         }
-        f->dst->kids->items[ci] = child_copy;
+        f->dst->kids->data[ci] = child_copy;
 
         // If child has children, allocate kids list and push frame
         if (child->num_kids > 0) {

@@ -27,6 +27,7 @@
 **/.clangd/
 compile_commands.json
 **/compile_commands.json
+**/.claude/
 
 # ── OS ───────────────────────────────────────────────────────────────────────
 .DS_Store
@@ -53,3 +54,5 @@ src/unicode/generated/
 *.profraw
 *.profdata
 
+# Docker SDK tarballs
+docker/sdk/

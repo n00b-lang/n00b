@@ -191,7 +191,7 @@ test_get_set_slice(void)
 
     // Set slice: replace "bcd" with "XY"
     n00b_buffer_t *repl = n00b_buffer_from_bytes("XY", 2);
-    n00b_result_t(bool) r = n00b_buffer_set_slice(buf, 1, 4, repl);
+    n00b_result_t(bool) r = n00b_buffer_set_slice(buf, 1, 4, .val = repl);
     assert(n00b_result_is_ok(r));
     // Now buf = "aXYef" (5 bytes)
     assert(n00b_buffer_len(buf) == 5);
@@ -382,14 +382,16 @@ test_join(void)
     n00b_buffer_t *c = n00b_buffer_from_bytes("three", 5);
     n00b_buffer_t *sep = n00b_buffer_from_bytes(",", 1);
 
-    n00b_buffer_t *items[] = { a, b, c };
-    n00b_buffer_t *result = n00b_buffer_join(items, 3, sep);
+    n00b_buffer_t *raw_items[] = { a, b, c };
+    n00b_array_t(n00b_buffer_t *) items = n00b_array_checked_ptr(n00b_buffer_t *, 3, raw_items);
+    items.len = 3;
+    n00b_buffer_t *result = n00b_buffer_join(items, sep);
 
     assert(n00b_buffer_len(result) == 13); // "one,two,three"
     assert(memcmp(result->data, "one,two,three", 13) == 0);
 
     // Without separator.
-    n00b_buffer_t *no_sep = n00b_buffer_join(items, 3, nullptr);
+    n00b_buffer_t *no_sep = n00b_buffer_join(items, nullptr);
     assert(n00b_buffer_len(no_sep) == 11); // "onetwothree"
     assert(memcmp(no_sep->data, "onetwothree", 11) == 0);
 
@@ -450,6 +452,26 @@ test_to_c(void)
 }
 
 // ============================================================================
+// 16. From C string -- convenience wrapper
+// ============================================================================
+
+static void
+test_from_cstr(void)
+{
+    n00b_buffer_t *buf = n00b_buffer_from_cstr("hello world");
+    assert(n00b_buffer_len(buf) == 11);
+    assert(memcmp(buf->data, "hello world", 11) == 0);
+
+    n00b_buffer_t *empty = n00b_buffer_from_cstr("");
+    assert(n00b_buffer_len(empty) == 0);
+
+    n00b_buffer_free(buf);
+    n00b_buffer_free(empty);
+
+    printf("  [PASS] from_cstr\n");
+}
+
+// ============================================================================
 // Main
 // ============================================================================
 
@@ -476,7 +498,9 @@ main(int argc, char **argv)
     test_join();
     test_free();
     test_to_c();
+    test_from_cstr();
 
     printf("All buffer tests passed.\n");
+    n00b_shutdown();
     return 0;
 }

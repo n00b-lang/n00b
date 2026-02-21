@@ -5,6 +5,7 @@
 #include "core/alloc.h"
 #include "internal/unicode/tables.h"
 #include <string.h>
+#include <assert.h>
 
 extern const uint16_t n00b_unicode_lb_stage1[];
 extern const uint8_t  n00b_unicode_lb_stage2[];
@@ -116,6 +117,9 @@ n00b_unicode_linebreaks_raw(const char *data, int64_t len, n00b_unicode_lb_actio
     int64_t       num_codepoints = n00b_unicode_utf8_count_codepoints(_s);
 
     if (num_codepoints <= 0)
+        return;
+
+    if (!out)
         return;
 
     n00b_codepoint_t *cps
@@ -722,6 +726,7 @@ n00b_unicode_linebreaks_raw(const char *data, int64_t len, n00b_unicode_lb_actio
 void
 n00b_unicode_linebreaks(n00b_string_t s, n00b_unicode_lb_action_t *out)
 {
+    assert(out || s.u8_bytes == 0);
     n00b_unicode_linebreaks_raw(s.data, s.u8_bytes, out);
 }
 

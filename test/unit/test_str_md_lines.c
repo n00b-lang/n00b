@@ -7,7 +7,7 @@
 
 TEST(test_single_paragraph)
 {
-    n00b_string_t src  = STR("hello world");
+    n00b_string_t src  = *r"hello world";
     auto          tree = n00b_parse_markdown(src);
 
     n00b_array_t(n00b_string_t) lines = n00b_str_md_to_lines(tree);
@@ -21,7 +21,7 @@ TEST(test_single_paragraph)
 
 TEST(test_two_paragraphs)
 {
-    n00b_string_t src  = STR("first\n\nsecond");
+    n00b_string_t src  = *r"first\n\nsecond";
     auto          tree = n00b_parse_markdown(src);
 
     n00b_array_t(n00b_string_t) lines = n00b_str_md_to_lines(tree);
@@ -37,7 +37,7 @@ TEST(test_two_paragraphs)
 
 TEST(test_heading)
 {
-    n00b_string_t src  = STR("# Title");
+    n00b_string_t src  = *r"# Title";
     auto          tree = n00b_parse_markdown(src);
 
     n00b_array_t(n00b_string_t) lines = n00b_str_md_to_lines(tree);
@@ -46,9 +46,10 @@ TEST(test_heading)
     n00b_string_t line = n00b_array_get(lines, 0);
     ASSERT_STR_EQ(line.data, "Title");
 
-    n00b_string_style_info_t *info = n00b_str_get_style_info(line);
-    ASSERT(info != nullptr);
-    bool found_bold = false;
+    auto                      info_opt = n00b_str_get_style_info(line);
+    ASSERT(n00b_option_is_set(info_opt));
+    n00b_string_style_info_t *info     = n00b_option_get(info_opt);
+    bool                      found_bold = false;
     for (int64_t i = 0; i < info->num_styles; i++) {
         if (info->styles[i].info->bold == N00B_TRI_YES) {
             found_bold = true;
@@ -61,7 +62,7 @@ TEST(test_heading)
 
 TEST(test_unordered_list)
 {
-    n00b_string_t src  = STR("- alpha\n- beta\n- gamma");
+    n00b_string_t src  = *r"- alpha\n- beta\n- gamma";
     auto          tree = n00b_parse_markdown(src);
 
     n00b_array_t(n00b_string_t) lines = n00b_str_md_to_lines(tree);
@@ -79,7 +80,7 @@ TEST(test_unordered_list)
 
 TEST(test_code_block)
 {
-    n00b_string_t src  = STR("```\nint x;\nint y;\n```");
+    n00b_string_t src  = *r"```\nint x;\nint y;\n```";
     auto          tree = n00b_parse_markdown(src);
 
     n00b_array_t(n00b_string_t) lines = n00b_str_md_to_lines(tree);
@@ -89,12 +90,13 @@ TEST(test_code_block)
     // Each line should have mono style.
     bool all_mono = true;
     for (size_t i = 0; i < n00b_array_len(lines); i++) {
-        n00b_string_t line = n00b_array_get(lines, i);
-        n00b_string_style_info_t *info = n00b_str_get_style_info(line);
-        if (!info) {
+        n00b_string_t             line     = n00b_array_get(lines, i);
+        auto                      info_opt = n00b_str_get_style_info(line);
+        if (!n00b_option_is_set(info_opt)) {
             all_mono = false;
             break;
         }
+        n00b_string_style_info_t *info = n00b_option_get(info_opt);
         bool has_mono = false;
         for (int64_t j = 0; j < info->num_styles; j++) {
             if (info->styles[j].info->font_hint == N00B_FONT_MONO) {
@@ -118,7 +120,7 @@ TEST(test_code_block)
 
 TEST(test_hr)
 {
-    n00b_string_t src  = STR("above\n\n---\n\nbelow");
+    n00b_string_t src  = *r"above\n\n---\n\nbelow";
     auto          tree = n00b_parse_markdown(src);
 
     n00b_array_t(n00b_string_t) lines = n00b_str_md_to_lines(tree);
@@ -136,7 +138,7 @@ TEST(test_hr)
 
 TEST(test_inline_styles_in_paragraph)
 {
-    n00b_string_t src  = STR("normal **bold** *italic*");
+    n00b_string_t src  = *r"normal **bold** *italic*";
     auto          tree = n00b_parse_markdown(src);
 
     n00b_array_t(n00b_string_t) lines = n00b_str_md_to_lines(tree);
@@ -145,8 +147,9 @@ TEST(test_inline_styles_in_paragraph)
     n00b_string_t line = n00b_array_get(lines, 0);
     ASSERT_STR_EQ(line.data, "normal bold italic");
 
-    n00b_string_style_info_t *info = n00b_str_get_style_info(line);
-    ASSERT(info != nullptr);
+    auto                      info_opt = n00b_str_get_style_info(line);
+    ASSERT(n00b_option_is_set(info_opt));
+    n00b_string_style_info_t *info     = n00b_option_get(info_opt);
 
     bool found_bold   = false;
     bool found_italic = false;
@@ -167,8 +170,7 @@ TEST(test_inline_styles_in_paragraph)
 TEST(test_mixed_doc)
 {
     // Heading, paragraph, list, HR, code block.
-    n00b_string_t src = STR(
-        "# Title\n\nSome text.\n\n- one\n- two\n\n---\n\n```\ncode\n```");
+    n00b_string_t src = *r"# Title\n\nSome text.\n\n- one\n- two\n\n---\n\n```\ncode\n```";
     auto tree = n00b_parse_markdown(src);
 
     n00b_array_t(n00b_string_t) lines = n00b_str_md_to_lines(tree);

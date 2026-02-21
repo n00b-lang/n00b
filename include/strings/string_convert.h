@@ -37,12 +37,15 @@ n00b_string_t n00b_unicode_str_from_int(int64_t n)
 
 /** @brief Encode the raw bytes of a string as hexadecimal.
  *  @param s      The string whose bytes to encode.
- *  @param upper  Use uppercase hex digits if true.
+ *  @kw upper      Use uppercase hex digits (default: false).
  *  @kw allocator  Optional allocator.
  *  @return A string containing two hex digits per input byte.
  */
-n00b_string_t n00b_unicode_str_to_hex(n00b_string_t s, bool upper)
-    _kargs { n00b_allocator_t *allocator = nullptr; };
+n00b_string_t n00b_unicode_str_to_hex(n00b_string_t s)
+    _kargs {
+        bool              upper     = false;
+        n00b_allocator_t *allocator = nullptr;
+    };
 
 // ===================================================================
 // C string conversion

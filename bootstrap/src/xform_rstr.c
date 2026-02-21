@@ -872,11 +872,59 @@ extract_string_content(tree_xform_t *ctx, tnode_t *arglist, int *out_len)
             continue;
         }
         if (node->tptr && node->tptr->type == TT_STR) {
-            // Extract string content (strip quotes)
+            // Extract string content (strip quotes, process C escapes)
             int         tlen;
             const char *text = tok_text_ptr(ctx->input, node->tptr, &tlen);
             if (tlen >= 2 && text[0] == '"' && text[tlen - 1] == '"') {
-                fwrite(text + 1, 1, tlen - 2, f);
+                const char *p   = text + 1;
+                const char *end = text + tlen - 1;
+                while (p < end) {
+                    if (*p == '\\' && p + 1 < end) {
+                        p++;
+                        switch (*p) {
+                        case 'n':  fputc('\n', f); p++; break;
+                        case 'r':  fputc('\r', f); p++; break;
+                        case 't':  fputc('\t', f); p++; break;
+                        case '0':  fputc('\0', f); p++; break;
+                        case '\\': fputc('\\', f); p++; break;
+                        case '"':  fputc('"', f);  p++; break;
+                        case 'a':  fputc('\a', f); p++; break;
+                        case 'b':  fputc('\b', f); p++; break;
+                        case 'f':  fputc('\f', f); p++; break;
+                        case 'v':  fputc('\v', f); p++; break;
+                        case 'x': {
+                            // Hex escape: \xNN (exactly 2 hex digits max).
+                            // Unlike standard C's greedy \x, we cap at 2
+                            // digits so that e.g. \x8Db means byte 0x8D
+                            // followed by literal 'b'.
+                            p++;
+                            unsigned int val = 0;
+                            for (int d = 0; d < 2 && p < end; d++, p++) {
+                                unsigned char c = (unsigned char)*p;
+                                if (c >= '0' && c <= '9')
+                                    val = val * 16 + (c - '0');
+                                else if (c >= 'a' && c <= 'f')
+                                    val = val * 16 + (c - 'a' + 10);
+                                else if (c >= 'A' && c <= 'F')
+                                    val = val * 16 + (c - 'A' + 10);
+                                else
+                                    break;
+                            }
+                            fputc((char)val, f);
+                            break;
+                        }
+                        default:
+                            // Unknown escape — pass through
+                            fputc('\\', f);
+                            fputc(*p, f);
+                            p++;
+                            break;
+                        }
+                    } else {
+                        fputc(*p, f);
+                        p++;
+                    }
+                }
             }
         }
         // Push children in reverse for in-order traversal
@@ -988,7 +1036,7 @@ xform_rstr(tree_xform_t *ctx, tnode_t *node)
     // Extract string content from the argument
     int   content_len;
     char *content = extract_string_content(ctx, arglist, &content_len);
-    if (!content || content_len == 0) {
+    if (!content) {
         ncc_error("%s:%d: __ncc_rstr() argument must be a string literal\n",
                   file, line);
         exit(1);

@@ -1,4 +1,4 @@
-/**
+/*
  * Unified palette theme system: 18 built-in themes, registry, and
  * palette resolution.
  *
@@ -810,31 +810,32 @@ n00b_theme_register(const n00b_theme_t *theme)
     theme_registry[theme_count++] = theme;
 }
 
-const n00b_theme_t *
+n00b_option_t(const n00b_theme_t *)
 n00b_theme_lookup(const char *name)
 {
     if (!name) {
-        return nullptr;
+        return n00b_option_none(const n00b_theme_t *);
     }
 
     for (int i = 0; i < theme_count; i++) {
         if (strcmp(theme_registry[i]->name, name) == 0) {
-            return theme_registry[i];
+            return n00b_option_set(const n00b_theme_t *, theme_registry[i]);
         }
     }
 
-    return nullptr;
+    return n00b_option_none(const n00b_theme_t *);
 }
 
 bool
 n00b_theme_set_current(const char *name)
 {
-    const n00b_theme_t *t = n00b_theme_lookup(name);
+    auto t_opt = n00b_theme_lookup(name);
 
-    if (!t) {
+    if (!n00b_option_is_set(t_opt)) {
         return false;
     }
 
+    const n00b_theme_t *t = n00b_option_get(t_opt);
     current_theme = t;
     update_named_styles(t);
     return true;

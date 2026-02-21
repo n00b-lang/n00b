@@ -24,8 +24,6 @@
  */
 #pragma once
 
-#ifdef _MD4C_INLINE_IN_THIS_MODULE
-
 #define MD4C_USE_UTF8
 #undef MD4C_USE_ASCII
 
@@ -472,6 +470,16 @@ struct MD_HTML_CALLBACKS_tag {
  * Returns 0 on success.
  */
 int md_html(const MD_CHAR *input, MD_SIZE input_size, MD_HTML_CALLBACKS callbacks, void *userdata, unsigned parser_flags, unsigned renderer_flags);
+
+#ifdef __cplusplus
+} /* extern "C" { */
+#endif
+
+#ifdef _MD4C_INLINE_IN_THIS_MODULE
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #include <stdlib.h>
 

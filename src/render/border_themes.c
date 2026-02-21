@@ -1,4 +1,4 @@
-/**
+/*
  * Predefined border theme constants.
  *
  * Migrated from ~/n00b-old/src/text/theme.nc.

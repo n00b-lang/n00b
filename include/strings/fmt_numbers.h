@@ -23,12 +23,15 @@
 
 /** @brief Format a 64-bit unsigned integer as hexadecimal (no prefix).
  *  @param value  The integer to format.
- *  @param caps   Use uppercase hex digits if true.
+ *  @kw caps       Use uppercase hex digits (default: false).
  *  @kw allocator  Optional allocator.
  *  @return A hex string (e.g. `"dead"` or `"DEAD"`), or `"0"` for zero.
  */
-n00b_string_t n00b_fmt_hex(uint64_t value, bool caps)
-    _kargs { n00b_allocator_t *allocator = nullptr; };
+n00b_string_t n00b_fmt_hex(uint64_t value)
+    _kargs {
+        bool              caps      = false;
+        n00b_allocator_t *allocator = nullptr;
+    };
 
 // ===================================================================
 // Integer formatting
@@ -36,21 +39,27 @@ n00b_string_t n00b_fmt_hex(uint64_t value, bool caps)
 
 /** @brief Format a signed 64-bit integer as decimal.
  *  @param value   The integer to format.
- *  @param commas  Insert comma thousands separators if true.
+ *  @kw commas     Insert comma thousands separators (default: false).
  *  @kw allocator  Optional allocator.
  *  @return A decimal string (e.g. `"-1,234"` or `"42"`).
  */
-n00b_string_t n00b_fmt_int(int64_t value, bool commas)
-    _kargs { n00b_allocator_t *allocator = nullptr; };
+n00b_string_t n00b_fmt_int(int64_t value)
+    _kargs {
+        bool              commas    = false;
+        n00b_allocator_t *allocator = nullptr;
+    };
 
 /** @brief Format an unsigned 64-bit integer as decimal.
  *  @param value   The integer to format.
- *  @param commas  Insert comma thousands separators if true.
+ *  @kw commas     Insert comma thousands separators (default: false).
  *  @kw allocator  Optional allocator.
  *  @return A decimal string (e.g. `"18,446,744,073,709,551,615"`).
  */
-n00b_string_t n00b_fmt_uint(uint64_t value, bool commas)
-    _kargs { n00b_allocator_t *allocator = nullptr; };
+n00b_string_t n00b_fmt_uint(uint64_t value)
+    _kargs {
+        bool              commas    = false;
+        n00b_allocator_t *allocator = nullptr;
+    };
 
 // ===================================================================
 // Float formatting
@@ -58,13 +67,18 @@ n00b_string_t n00b_fmt_uint(uint64_t value, bool commas)
 
 /** @brief Format a double using Grisu2, with optional width/zero-pad.
  *  @param value  The double to format.
- *  @param width  Minimum output width (0 = no padding).
- *  @param fill   If true and width > result length, zero-pad the left.
+ *  @kw width      Minimum output width (default: 0, no padding).
+ *  @kw fill       If true and width > result length, zero-pad the left
+ *                 (default: false).
  *  @kw allocator  Optional allocator.
  *  @return A decimal float string (e.g. `"3.14"`, `"nan"`, `"-inf"`).
  */
-n00b_string_t n00b_fmt_float(double value, int width, bool fill)
-    _kargs { n00b_allocator_t *allocator = nullptr; };
+n00b_string_t n00b_fmt_float(double value)
+    _kargs {
+        int               width     = 0;
+        bool              fill      = false;
+        n00b_allocator_t *allocator = nullptr;
+    };
 
 // ===================================================================
 // Boolean formatting
@@ -72,14 +86,21 @@ n00b_string_t n00b_fmt_float(double value, int width, bool fill)
 
 /** @brief Format a boolean with configurable output style.
  *  @param value  The boolean value.
- *  @param upper  Capitalize first letter if true.
- *  @param word   Use full word ("true"/"false") vs single letter ("t"/"f").
- *  @param yn     Use "yes"/"no" / "y"/"n" instead of "true"/"false" / "t"/"f".
+ *  @kw upper      Capitalize first letter (default: false).
+ *  @kw word       Use full word ("true"/"false") vs single letter ("t"/"f")
+ *                 (default: false).
+ *  @kw yn         Use "yes"/"no" / "y"/"n" instead of "true"/"false" / "t"/"f"
+ *                 (default: false).
  *  @kw allocator  Optional allocator.
  *  @return One of 16 possible strings (see source for table).
  */
-n00b_string_t n00b_fmt_bool(bool value, bool upper, bool word, bool yn)
-    _kargs { n00b_allocator_t *allocator = nullptr; };
+n00b_string_t n00b_fmt_bool(bool value)
+    _kargs {
+        bool              upper     = false;
+        bool              word      = false;
+        bool              yn        = false;
+        n00b_allocator_t *allocator = nullptr;
+    };
 
 // ===================================================================
 // Codepoint formatting
@@ -104,9 +125,12 @@ n00b_string_t n00b_fmt_codepoint(n00b_codepoint_t cp)
 
 /** @brief Format a pointer as `@` followed by 16 hex digits.
  *  @param ptr   The pointer to format.
- *  @param caps  Use uppercase hex digits if true.
+ *  @kw caps       Use uppercase hex digits (default: false).
  *  @kw allocator  Optional allocator.
  *  @return A 17-character string (e.g. `"@00007fff5fbffa00"`).
  */
-n00b_string_t n00b_fmt_pointer(void *ptr, bool caps)
-    _kargs { n00b_allocator_t *allocator = nullptr; };
+n00b_string_t n00b_fmt_pointer(void *ptr)
+    _kargs {
+        bool              caps      = false;
+        n00b_allocator_t *allocator = nullptr;
+    };

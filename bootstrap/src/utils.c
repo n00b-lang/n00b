@@ -2,7 +2,7 @@
  * @file utils.c
  * @brief Shared utilities: token allocation, compiler discovery, diagnostics.
  *
- * Provides `alloc_tokens()` (mmap-backed token array), `ncc_find_compiler()`
+ * Provides token array management, `ncc_find_compiler()`
  * (searches `NCC_COMPILER` / `CC` / fallback), newline counting, and
  * diagnostic helpers (`ncc_error`, `ncc_warning`).
  */
@@ -10,27 +10,33 @@
 #include <stdlib.h>
 #include "base_alloc_shim.h"
 #include <string.h>
-#include <sys/mman.h>
 #include <unistd.h>
 
 #include "xform.h"
 #include "types.h"
 
-#define MMAP_PROTS (PROT_READ | PROT_WRITE)
-#define MMAP_FLAGS (MAP_PRIVATE | MAP_ANON)
+#define INITIAL_TOK_CAP 8192
 
 tok_t *
-alloc_tokens(ncc_buf_t *b)
+alloc_tokens(ncc_buf_t *b, int *out_cap)
 {
-    int len = sizeof(tok_t) * b->len;
-    int ps  = getpagesize();
+    (void)b;
+    *out_cap = INITIAL_TOK_CAP;
+    return base_calloc(INITIAL_TOK_CAP, sizeof(tok_t));
+}
 
-    if (len % ps) {
-        int pages = (len / ps) + 1;
-        len       = pages * ps;
+void
+lex_ensure_tok_space(lex_t *state)
+{
+    if (state->num_toks < state->toks_cap) {
+        return;
     }
-
-    return mmap(nullptr, len, MMAP_PROTS, MMAP_FLAGS, -1, 0);
+    int new_cap = state->toks_cap * 2;
+    tok_t *new_toks = base_realloc(state->toks, new_cap * sizeof(tok_t));
+    memset(new_toks + state->toks_cap, 0,
+           (new_cap - state->toks_cap) * sizeof(tok_t));
+    state->toks     = new_toks;
+    state->toks_cap = new_cap;
 }
 
 int
@@ -139,12 +145,12 @@ get_wrapper_actuals(tok_xform_t *state, int lparen_ix, int rparen_ix)
         case TT_KEYWORD:
             if (!found_arg) {
                 found_arg                  = true;
-                result->items[--arg_count] = extract(state->input, t);
+                result->data[--arg_count] = extract(state->input, t);
                 // Special case `foo(void) {`
-                if (result->nitems == 1 && !strcmp(result->items[0], "void")) {
-                    base_dealloc(result->items[0]);
-                    result->items[0] = nullptr;
-                    result->nitems   = 0;
+                if (result->len == 1 && !strcmp(result->data[0], "void")) {
+                    base_dealloc(result->data[0]);
+                    result->data[0] = nullptr;
+                    result->len     = 0;
                 }
             }
             continue;
@@ -176,31 +182,31 @@ missing_name:
 char *
 join(ncc_list_t *str_list, char *joiner)
 {
-    if (!str_list->nitems) {
+    if (!str_list->len) {
         return base_calloc(1, 1);
     }
 
     int jlen   = strlen(joiner);
     int reslen = 0;
 
-    for (int i = 0; i < str_list->nitems; i++) {
-        reslen += strlen(str_list->items[i]);
+    for (int i = 0; i < str_list->len; i++) {
+        reslen += strlen(str_list->data[i]);
     }
 
-    reslen += jlen * (str_list->nitems - 1);
+    reslen += jlen * (str_list->len - 1);
 
     char *result = base_calloc(1, reslen + 1);
     char *p      = result;
 
-    for (int i = 0; i < str_list->nitems; i++) {
+    for (int i = 0; i < str_list->len; i++) {
         // Add joiner before all items except the first
         if (i > 0 && jlen) {
             memcpy(p, joiner, jlen);
             p += jlen;
         }
-        int l = strlen(str_list->items[i]);
+        int l = strlen(str_list->data[i]);
         if (l) {
-            memcpy(p, str_list->items[i], l);
+            memcpy(p, str_list->data[i], l);
             p += l;
         }
     }

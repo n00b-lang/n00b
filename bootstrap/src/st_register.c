@@ -214,6 +214,7 @@ build_type_name_from_param_decl(tnode_t *param_decl)
 static vargs_info_t *
 detect_vargs(ncc_buf_t *input, lex_t *lex, tnode_t *declarator)
 {
+    (void)input;
     if (!declarator) {
         return nullptr;
     }

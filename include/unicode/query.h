@@ -151,9 +151,9 @@ n00b_cp_query_any_n(const n00b_cp_filter_t *filters, int nfilters) _kargs
 
 /** @brief Look up a codepoint's Unicode name.
  *  @param cp  The codepoint.
- *  @return    Static string with the name, or nullptr if unknown.
+ *  @return    The name, or none if unknown.
  */
-const char *n00b_unicode_cp_name(n00b_codepoint_t cp);
+n00b_option_t(const char *) n00b_unicode_cp_name(n00b_codepoint_t cp);
 
 /** @brief Look up a codepoint by exact name (case-insensitive, ignoring
  *         medial hyphens and spaces per Unicode name matching rules).

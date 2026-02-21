@@ -1,0 +1,65 @@
+FROM ubuntu:plucky
+
+# ── Base toolchain: clang + meson + ninja ────────────────────────────────────
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential python3 python3-pip ninja-build pkg-config \
+        git wget ca-certificates gnupg lsb-release \
+    && rm -rf /var/lib/apt/lists/*
+
+# Try clang-22 from apt.llvm.org; fall back to clang-20 then clang-19.
+RUN wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key \
+        | gpg --dearmor -o /etc/apt/keyrings/llvm.gpg \
+    && echo "deb [signed-by=/etc/apt/keyrings/llvm.gpg] \
+        http://apt.llvm.org/plucky/ llvm-toolchain-plucky main" \
+        > /etc/apt/sources.list.d/llvm.list \
+    && apt-get update \
+    && if apt-get install -y --no-install-recommends clang-22 lld-22 2>/dev/null; then \
+           ln -sf /usr/bin/clang-22   /usr/bin/clang   && \
+           ln -sf /usr/bin/clang++-22 /usr/bin/clang++ ; \
+       elif apt-get install -y --no-install-recommends clang-20 lld-20 2>/dev/null; then \
+           ln -sf /usr/bin/clang-20   /usr/bin/clang   && \
+           ln -sf /usr/bin/clang++-20 /usr/bin/clang++ ; \
+       elif apt-get install -y --no-install-recommends clang-19 lld-19 2>/dev/null; then \
+           ln -sf /usr/bin/clang-19   /usr/bin/clang   && \
+           ln -sf /usr/bin/clang++-19 /usr/bin/clang++ ; \
+       else \
+           echo "ERROR: no usable clang version found" >&2 && exit 1; \
+       fi \
+    && rm -rf /var/lib/apt/lists/*
+
+# meson >= 1.6.0 (repo version may be too old)
+RUN pip3 install --break-system-packages 'meson>=1.6.0'
+
+RUN clang --version && meson --version
+
+# ── Windows cross-compiler (always available) ────────────────────────────────
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        gcc-mingw-w64-x86-64 \
+    && rm -rf /var/lib/apt/lists/*
+
+# ── macOS cross-compiler (osxcross, only if SDK tarball provided) ────────────
+#
+# To enable macOS cross-compilation:
+#   1. bash docker/prepare-sdk.sh /path/to/MacOSX15.2.sdk.tar.xz
+#   2. docker build -t n00b-linux \
+#        --build-arg MACOS_SDK=MacOSX15.2.sdk.tar.xz docker/
+#
+# When MACOS_SDK is empty (default), this section is a no-op and the image
+# still builds with Linux native + Windows cross-compilation support.
+
+ARG MACOS_SDK=""
+COPY sdk/ /tmp/sdk/
+RUN if [ -n "$MACOS_SDK" ] && [ -f "/tmp/sdk/$MACOS_SDK" ]; then \
+        apt-get update && apt-get install -y --no-install-recommends \
+            cmake libssl-dev libxml2-dev zlib1g-dev libbz2-dev patch xz-utils \
+        && rm -rf /var/lib/apt/lists/* \
+        && git clone --depth=1 https://github.com/tpoechtrager/osxcross /tmp/osxcross \
+        && cp "/tmp/sdk/$MACOS_SDK" /tmp/osxcross/tarballs/ \
+        && cd /tmp/osxcross \
+        && UNATTENDED=1 TARGET_DIR=/usr/local/osxcross ./build.sh \
+        && rm -rf /tmp/osxcross; \
+    fi \
+    && rm -rf /tmp/sdk
+
+ENV CC=clang PATH="/usr/local/osxcross/bin:${PATH}"
+WORKDIR /src

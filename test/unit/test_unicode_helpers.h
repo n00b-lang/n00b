@@ -14,16 +14,6 @@
 #include "internal/unicode/raw.h"
 
 // ---------------------------------------------------------------------------
-// String construction helpers
-// ---------------------------------------------------------------------------
-
-/** @brief Create an n00b_string_t from a C string literal (default allocator). */
-#define STR(lit)                                                               \
-    n00b_string_from_raw(nullptr, (lit), (int64_t)strlen(lit),                    \
-                         n00b_unicode_utf8_count_codepoints_raw(               \
-                             (lit), (uint32_t)strlen(lit)))
-
-// ---------------------------------------------------------------------------
 // Test harness macros
 // ---------------------------------------------------------------------------
 
@@ -85,6 +75,7 @@ static int test_failed = 0;
         if (test_failed > 0)                                                   \
             printf(", %d FAILED", test_failed);                                \
         printf("\n");                                                          \
+        n00b_shutdown();                                                        \
         return test_failed > 0 ? 1 : 0;                                       \
     }
 
@@ -145,8 +136,7 @@ cps_to_str(const n00b_codepoint_t *cps, uint32_t count)
         pos += n00b_unicode_utf8_encode(cps[i], buf + pos);
     }
     buf[pos] = '\0';
-    int64_t ncp = n00b_unicode_utf8_count_codepoints_raw(buf, pos);
-    return n00b_string_from_raw(nullptr, buf, pos, ncp >= 0 ? ncp : 0);
+    return n00b_string_from_raw(buf, pos);
 }
 
 /**

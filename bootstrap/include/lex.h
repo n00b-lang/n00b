@@ -37,13 +37,12 @@ typedef struct lex_t {
     char            *out_file;     /**< Output filename (for transforms) */
     const char      *cur_src_file; /**< Current source file (from #line directives) */
     int              num_toks;     /**< Number of tokens produced */
+    int              toks_cap;     /**< Allocated capacity of toks array */
     int              num_ranges;   /**< Number of ncc_off ranges */
     int              offset;       /**< Current byte offset */
     int              line_no;      /**< Current line number (1-based) */
     bool             line_start;       /**< True if at start of line (for preprocessor) */
     bool             in_system_header; /**< True if inside a system header (CPP flag 3) */
-    bool             toks_on_heap;    /**< True once toks has been realloc'd to heap */
-    int              toks_mmap_len;   /**< Original mmap size in bytes (for munmap) */
 } lex_t;
 
 /** @brief Forward declaration for transform context */
@@ -56,6 +55,13 @@ typedef struct tok_xform_t tok_xform_t;
  * @param in_file Input filename for error messages
  */
 extern void lex_init(lex_t *ctx, ncc_buf_t *input, char *in_file);
+
+/**
+ * @brief Ensure there is room for at least one more token.
+ *
+ * Doubles the backing array when full. Called before every token write.
+ */
+extern void lex_ensure_tok_space(lex_t *state);
 
 /**
  * @brief Tokenize the source buffer.

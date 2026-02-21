@@ -1,4 +1,4 @@
-/**
+/*
  * Futex-based mutex implementation.
  *
  * Spins briefly (N00B_SPIN_LIMIT iterations) before falling back to

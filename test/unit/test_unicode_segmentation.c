@@ -8,32 +8,32 @@
 
 TEST(test_grapheme_ascii)
 {
-    ASSERT_EQ(n00b_unicode_grapheme_count(STR("abc")), 3);
+    ASSERT_EQ(n00b_unicode_grapheme_count(*r"abc"), 3);
 }
 
 TEST(test_grapheme_combining)
 {
-    ASSERT_EQ(n00b_unicode_grapheme_count(STR("e\xCC\x81")), 1);
+    ASSERT_EQ(n00b_unicode_grapheme_count(*r"e\xCC\x81"), 1);
 }
 
 TEST(test_grapheme_crlf)
 {
-    ASSERT_EQ(n00b_unicode_grapheme_count(STR("\r\n")), 1);
+    ASSERT_EQ(n00b_unicode_grapheme_count(*r"\r\n"), 1);
 }
 
 TEST(test_grapheme_emoji_flag)
 {
-    ASSERT_EQ(n00b_unicode_grapheme_count(STR("\xF0\x9F\x87\xBA\xF0\x9F\x87\xB8")), 1);
+    ASSERT_EQ(n00b_unicode_grapheme_count(*r"\xF0\x9F\x87\xBA\xF0\x9F\x87\xB8"), 1);
 }
 
 TEST(test_grapheme_hangul)
 {
-    ASSERT_EQ(n00b_unicode_grapheme_count(STR("\xED\x95\x9C")), 1);
+    ASSERT_EQ(n00b_unicode_grapheme_count(*r"\xED\x95\x9C"), 1);
 }
 
 TEST(test_grapheme_iter)
 {
-    n00b_unicode_break_iter_t *it = n00b_unicode_grapheme_iter(STR("ab"));
+    n00b_unicode_break_iter_t *it = n00b_unicode_grapheme_iter(*r"ab");
 
     int32_t b1 = n00b_unicode_break_next(it);
     ASSERT_EQ(b1, 1);
@@ -49,7 +49,7 @@ TEST(test_grapheme_iter)
 
 TEST(test_word_iter)
 {
-    n00b_unicode_break_iter_t *it = n00b_unicode_word_iter(STR("Hello world"));
+    n00b_unicode_break_iter_t *it = n00b_unicode_word_iter(*r"Hello world");
 
     int count = 0;
     while (n00b_unicode_break_next(it) >= 0) {
@@ -61,7 +61,7 @@ TEST(test_word_iter)
 
 TEST(test_sentence_iter)
 {
-    n00b_unicode_break_iter_t *it = n00b_unicode_sentence_iter(STR("Hello. World."));
+    n00b_unicode_break_iter_t *it = n00b_unicode_sentence_iter(*r"Hello. World.");
 
     int count = 0;
     while (n00b_unicode_break_next(it) >= 0) {

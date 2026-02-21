@@ -238,7 +238,7 @@ test_replace_children(void)
     n00b_tree_t(int, char *) *new3 = n00b_tree_leaf(int, char *, "new3");
 
     n00b_tree_t(int, char *) **arr
-        = n00b_alloc_size(3, sizeof(n00b_tree_t(int, char *) *));
+        = n00b_alloc_array(n00b_tree_t(int, char *) *, 3);
     arr[0] = new1;
     arr[1] = new2;
     arr[2] = new3;
@@ -448,5 +448,6 @@ main(int argc, char **argv)
     test_free_node();
 
     printf("All tree tests passed.\n");
+    n00b_shutdown();
     return 0;
 }

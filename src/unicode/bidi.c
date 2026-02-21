@@ -5,6 +5,7 @@
 #include "core/alloc.h"
 #include "internal/unicode/tables.h"
 #include <string.h>
+#include <assert.h>
 
 extern const uint32_t n00b_unicode_bidi_bracket_index[][2];
 extern const uint32_t n00b_unicode_bidi_bracket_index_len;
@@ -733,12 +734,14 @@ n00b_unicode_bidi_open(n00b_string_t s) _kargs
 uint8_t
 n00b_unicode_bidi_paragraph_level(const n00b_unicode_bidi_para_t *p)
 {
+    assert(p);
     return p->para_level;
 }
 
 n00b_array_t(uint8_t)
 n00b_unicode_bidi_levels(const n00b_unicode_bidi_para_t *p)
 {
+    assert(p);
     n00b_array_t(uint8_t) result = n00b_array_new(uint8_t, p->len);
     memcpy(result.data, p->levels, p->len * sizeof(uint8_t));
     result.len = p->len;
@@ -748,6 +751,7 @@ n00b_unicode_bidi_levels(const n00b_unicode_bidi_para_t *p)
 n00b_array_t(int32_t)
 n00b_unicode_bidi_reorder_visual(const n00b_unicode_bidi_para_t *p)
 {
+    assert(p);
     n00b_array_t(int32_t) result = n00b_array_new(int32_t, p->len);
     int32_t *visual_map = result.data;
     result.len          = p->len;

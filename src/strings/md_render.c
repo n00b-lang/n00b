@@ -5,6 +5,7 @@
 #include "internal/unicode/raw.h"
 #include "core/alloc.h"
 #include <string.h>
+#include <assert.h>
 
 // ===================================================================
 // Style stack (same pattern as format.c)
@@ -20,9 +21,8 @@ typedef struct {
 static void
 style_push(style_stack_t *ss, n00b_text_style_t *s)
 {
-    if (ss->depth < MAX_STYLE_DEPTH) {
-        ss->styles[ss->depth++] = s;
-    }
+    assert(ss->depth < MAX_STYLE_DEPTH);
+    ss->styles[ss->depth++] = s;
 }
 
 static void
@@ -273,8 +273,7 @@ n00b_str_md_render(n00b_tree_t(n00b_md_node_t, n00b_md_node_t) *tree)
         }
     }
 
-    n00b_string_t result = n00b_string_from_raw(nullptr, ctx.ob.buf, ctx.ob.len,
-                                                 total_cps);
+    n00b_string_t result = n00b_string_from_raw(ctx.ob.buf, ctx.ob.len);
 
     // Attach style info if we have records.
     if (ctx.rl.count > 0) {

@@ -1,4 +1,4 @@
-/**
+/*
  * Render plane: cell grid, cursor, content writing, and state management.
  */
 
@@ -7,6 +7,7 @@
 #include "core/data_lock.h"
 #include "core/arena.h"
 #include "core/string.h"
+#include "core/list.h"
 #include "render/plane.h"
 #include "strings/string_style.h"
 
@@ -120,12 +121,14 @@ advance_cursor(n00b_plane_t *p, uint8_t width, bool wrap)
 // Lifecycle
 // -------------------------------------------------------------------
 
-n00b_plane_t *
-n00b_plane_new(n00b_isize_t cols, n00b_isize_t rows) _kargs
+void
+n00b_plane_init(n00b_plane_t *p) _kargs
 {
+    n00b_isize_t       cols      = 80;
+    n00b_isize_t       rows      = 25;
     n00b_isize_t       vp_cols   = 0;
     n00b_isize_t       vp_rows   = 0;
-    const char        *name      = nullptr;
+    n00b_option_t(n00b_string_t) name = n00b_option_none(n00b_string_t);
     n00b_scroll_mode_t scroll    = N00B_SCROLL_NONE;
     int32_t            z         = 0;
     n00b_box_props_t  *box       = nullptr;
@@ -133,19 +136,14 @@ n00b_plane_new(n00b_isize_t cols, n00b_isize_t rows) _kargs
     n00b_allocator_t  *allocator = nullptr;
 }
 {
-    n00b_plane_t *p = n00b_alloc(n00b_plane_t, .allocator = allocator);
-
     p->lock       = n00b_data_lock_new();
-
-    if (p->lock) {
-        n00b_add_finalizer(p, n00b_finalize_data_lock, p->lock);
-    }
-
     p->total_cols = cols;
     p->total_rows = rows;
     p->vp_cols    = vp_cols ? vp_cols : cols;
     p->vp_rows    = vp_rows ? vp_rows : rows;
-    p->name       = name;
+    if (n00b_option_is_set(name)) {
+        p->name = n00b_option_get(name);
+    }
     p->z          = z;
     p->box        = box;
     p->default_style = style;
@@ -154,11 +152,9 @@ n00b_plane_new(n00b_isize_t cols, n00b_isize_t rows) _kargs
     p->allocator     = allocator;
     p->widget_state  = N00B_WSTATE_NORMAL;
 
-    p->grid = n00b_alloc_array(n00b_rcell_t, (size_t)cols * rows,
-                                .allocator = allocator,
-                                .no_scan   = true);
-
-    return p;
+    p->grid = n00b_alloc_array_with_opts(n00b_rcell_t, (size_t)cols * rows,
+                                         &(n00b_alloc_opts_t){.allocator = allocator,
+                                                              .no_scan   = true});
 }
 
 void
@@ -173,9 +169,8 @@ n00b_plane_destroy(n00b_plane_t *p)
         p->grid = nullptr;
     }
 
-    if (p->children) {
-        n00b_free(p->children);
-        p->children = nullptr;
+    if (p->children.data) {
+        n00b_list_free(p->children);
     }
 
     n00b_free(p);
@@ -197,20 +192,11 @@ n00b_plane_add_child(n00b_plane_t *parent, n00b_plane_t *child,
 
     plane_lock(parent);
 
-    if (parent->num_children >= parent->children_cap) {
-        n00b_isize_t new_cap = parent->children_cap ? parent->children_cap * 2 : 4;
-        n00b_plane_t **new_arr = n00b_alloc_array(n00b_plane_t *, new_cap,
-                                                    .allocator = parent->allocator);
-        if (parent->children) {
-            memcpy(new_arr, parent->children,
-                   parent->num_children * sizeof(n00b_plane_t *));
-            n00b_free(parent->children);
-        }
-        parent->children     = new_arr;
-        parent->children_cap = new_cap;
+    if (!parent->children.data) {
+        parent->children = n00b_list_new(n00b_plane_ptr_t);
     }
 
-    parent->children[parent->num_children++] = child;
+    n00b_list_push(parent->children, child);
 
     plane_unlock(parent);
     plane_mark_dirty(parent);
@@ -225,13 +211,10 @@ n00b_plane_remove_child(n00b_plane_t *parent, n00b_plane_t *child)
 
     plane_lock(parent);
 
-    for (n00b_isize_t i = 0; i < parent->num_children; i++) {
-        if (parent->children[i] == child) {
-            // Shift remaining children down.
-            for (n00b_isize_t j = i; j + 1 < parent->num_children; j++) {
-                parent->children[j] = parent->children[j + 1];
-            }
-            parent->num_children--;
+    size_t n = parent->children.len;
+    for (size_t i = 0; i < n; i++) {
+        if (n00b_list_get(parent->children, i) == child) {
+            (void)n00b_list_delete(parent->children, i);
             child->parent = nullptr;
             plane_unlock(parent);
             plane_mark_dirty(parent);
@@ -248,21 +231,21 @@ n00b_plane_remove_child(n00b_plane_t *parent, n00b_plane_t *child)
 // -------------------------------------------------------------------
 
 void
-n00b_plane_put_str(n00b_plane_t *p, n00b_string_t *s) _kargs
+n00b_plane_put_str(n00b_plane_t *p, n00b_string_t s) _kargs
 {
     bool wrap = true;
 }
 {
-    if (!s || !s->data || s->u8_bytes == 0) {
+    if (!s.data || s.u8_bytes == 0) {
         return;
     }
 
     plane_lock(p);
 
-    const uint8_t *data = (const uint8_t *)s->data;
+    const uint8_t *data = (const uint8_t *)s.data;
     size_t         pos  = 0;
 
-    while (pos < s->u8_bytes) {
+    while (pos < s.u8_bytes) {
         if (p->cursor_row >= p->total_rows) {
             break;
         }
@@ -296,7 +279,7 @@ n00b_plane_put_str(n00b_plane_t *p, n00b_string_t *s) _kargs
             continue;
         }
 
-        if (pos + byte_len > s->u8_bytes) {
+        if (pos + byte_len > s.u8_bytes) {
             break;
         }
 
@@ -335,9 +318,9 @@ n00b_plane_put_str(n00b_plane_t *p, n00b_string_t *s) _kargs
         if (cell) {
             n00b_text_style_t *cell_style = p->default_style;
 
-            if (s->styling) {
+            if (s.styling) {
                 n00b_text_style_t *resolved =
-                    n00b_str_resolve_style_at(*s, pos);
+                    n00b_str_resolve_style_at(s, pos);
                 if (resolved) {
                     cell_style = resolved;
                 }
@@ -371,7 +354,7 @@ n00b_plane_put_str(n00b_plane_t *p, n00b_string_t *s) _kargs
 
 void
 n00b_plane_put_str_at(n00b_plane_t *p, n00b_isize_t row,
-                       n00b_isize_t col, n00b_string_t *s)
+                       n00b_isize_t col, n00b_string_t s)
 {
     p->cursor_row = row;
     p->cursor_col = col;
@@ -567,10 +550,10 @@ n00b_plane_resize(n00b_plane_t *p, n00b_isize_t rows, n00b_isize_t cols)
 {
     plane_lock(p);
 
-    n00b_rcell_t *new_grid = n00b_alloc_array(n00b_rcell_t,
-                                                (size_t)cols * rows,
-                                                .allocator = p->allocator,
-                                                .no_scan   = true);
+    n00b_rcell_t *new_grid = n00b_alloc_array_with_opts(n00b_rcell_t,
+                                                       (size_t)cols * rows,
+                                                       &(n00b_alloc_opts_t){.allocator = p->allocator,
+                                                                            .no_scan   = true});
 
     // Copy what fits.
     n00b_isize_t copy_rows = n00b_min(rows, p->total_rows);

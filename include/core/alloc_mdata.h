@@ -13,9 +13,7 @@
 
 #define N00B_FORCED_ALIGNMENT N00B_ALIGN
 
-// We're going to use the C type for the type info, full stop.
-
-typedef char *n00b_alloc_type_info_t;
+typedef uint64_t n00b_alloc_type_info_t;
 
 #define n00b_core_alloc_info_fields                                                            \
     n00b_alloc_type_info_t tinfo;                                                              \
@@ -62,15 +60,12 @@ typedef struct n00b_alloc_info_t {
     } hdr;
 } n00b_alloc_info_t;
 
-typedef n00b_option_decl(n00b_oob_hdr_t *) n00b_oob_hdr_opt_t;
-typedef n00b_option_decl(n00b_inline_hdr_t *) n00b_inline_hdr_opt_t;
-
 /**
  * @brief Extract the out-of-band header from an alloc info, if present.
  * @param info Allocation info to query.
  * @return     Optional OOB header pointer.
  */
-static inline n00b_oob_hdr_opt_t
+static inline n00b_option_t(n00b_oob_hdr_t *)
 n00b_alloc_info_oob(n00b_alloc_info_t info)
 {
     if (info.kind != n00b_alloc_oob) {
@@ -84,7 +79,7 @@ n00b_alloc_info_oob(n00b_alloc_info_t info)
  * @param info Allocation info to query.
  * @return     Optional inline header pointer.
  */
-static inline n00b_inline_hdr_opt_t
+static inline n00b_option_t(n00b_inline_hdr_t *)
 n00b_alloc_info_inline(n00b_alloc_info_t info)
 {
     if (info.kind != n00b_alloc_inline) {
@@ -121,7 +116,7 @@ struct n00b_static_header_t {
 
 #define N00B_ALLOC_HDR_SZ ((sizeof(n00b_inline_hdr_t) + N00B_ALIGN - 1) & ~(N00B_ALIGN - 1))
 
-#define N00B_STATIC_BASE(name, c_type, stored_type, n00b_type_val, ...)                        \
+#define N00B_STATIC_BASE(name, c_type, type_hash_val, ...)                                     \
     struct {                                                                                   \
         n00b_static_header_t hdr;                                                              \
         c_type               obj;                                                              \
@@ -129,10 +124,9 @@ struct n00b_static_header_t {
         .hdr = {                                                           \
             .alloc_loc       = N00B_LOC_STRING(),                          \
             .static_magic    = N00B_STATIC_MAGIC,                          \
-            .tinfo.n00b_type = stored_type,                                \
+            .tinfo           = type_hash_val,                              \
             .alloc_len       = sizeof(n00b_inline_hdr_t) + sizeof(c_type), \
             .ptr_words       = 0,                                          \
-            .n00b_type       = n00b_type_val,                              \
             .no_scan         = false,                                      \
             .mem_debug       = false,                                      \
             .mem_debug_taint = false,                                      \
@@ -145,8 +139,7 @@ struct n00b_static_header_t {
 #define N00B_STR_DECL(name, value)                                                             \
     N00B_STATIC_BASE(name,                                                                     \
                      n00b_string_t,                                                            \
-                     N00B_T_STRING,                                                            \
-                     true,                                                                     \
+                     typehash(n00b_string_t),                                                  \
                      {                                                                         \
                          .data       = (value),                                                \
                          .styling    = nullptr,                                                \

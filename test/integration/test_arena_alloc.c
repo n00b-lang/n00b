@@ -75,7 +75,7 @@ test_inline_header(void)
 
     assert(p != nullptr);
 
-    n00b_inline_hdr_opt_t opt = n00b_inline_alloc_header(p);
+    n00b_option_t(n00b_inline_hdr_t *) opt = n00b_inline_alloc_header(p);
     assert(n00b_option_is_set(opt));
 
     n00b_inline_hdr_t *hdr = n00b_option_get(opt);
@@ -139,7 +139,7 @@ test_arena_metrics(void)
     n00b_allocator_t *alloc = (n00b_allocator_t *)arena;
 
     // Allocate some data through the arena
-    void *p = n00b_alloc(uint64_t, .allocator = alloc);
+    void *p = n00b_alloc_with_opts(uint64_t, &(n00b_alloc_opts_t){.allocator = alloc});
     assert(p != nullptr);
 
     // The arena should have some used space
@@ -165,7 +165,7 @@ test_large_alloc(void)
     n00b_allocator_t *alloc = (n00b_allocator_t *)arena;
 
     // Allocate a large array (64 KB)
-    char *p = n00b_alloc_array(char, 64 * 1024, .allocator = alloc);
+    char *p = n00b_alloc_array_with_opts(char, 64 * 1024, &(n00b_alloc_opts_t){.allocator = alloc});
 
     assert(p != nullptr);
     assert(((uintptr_t)p & (N00B_ALIGN - 1)) == 0);

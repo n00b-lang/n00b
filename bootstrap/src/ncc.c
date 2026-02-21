@@ -12,6 +12,7 @@
 #include <signal.h>
 #include <execinfo.h>
 #include <unistd.h>
+#include <sys/wait.h>
 #include <assert.h>
 #include <errno.h>
 
@@ -40,11 +41,15 @@ extern void th_init(void);
 
 static void print_ncc_help(void);
 
+// SIGSTKSZ may not be a compile-time constant on glibc 2.34+
+// (it expands to sysconf(_SC_SIGSTKSZ)), so use a fixed 64 KiB buffer.
+#define NCC_SIGSTKSZ 65536
+
 static inline void
 signal_setup(void)
 {
-    static char      altstack[SIGSTKSZ];
-    static stack_t   ss = {.ss_sp = altstack, .ss_size = SIGSTKSZ};
+    static char      altstack[NCC_SIGSTKSZ];
+    static stack_t   ss = {.ss_sp = altstack, .ss_size = NCC_SIGSTKSZ};
     struct sigaction sa = {.sa_handler = crash_handler, .sa_flags = SA_ONSTACK};
     sigaltstack(&ss, NULL);
     sigaction(SIGSEGV, &sa, NULL);

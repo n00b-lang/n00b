@@ -16,6 +16,7 @@
 #include "core/align.h"
 #include "core/atomic.h"
 #include "core/rt_access.h"
+#include "core/vargs.h"
 
 struct n00b_allocator_t {
     n00b_calloc_fn            zero_alloc;
@@ -63,43 +64,48 @@ n00b_mmap_is_gc_scannable(n00b_mmap_info_t *map)
 
 #define n00b_ensure_allocator(allocator_var)                                                   \
     if (!(allocator_var)) {                                                                    \
-        allocator_var = n00b_atomic_load(&n00b_get_runtime()->default_allocator);              \
+        (allocator_var) = n00b_atomic_load(&n00b_get_runtime()->default_allocator);            \
         assert(allocator_var);                                                                 \
     }
+
+/*
+ * allocator      Allocator to use (nullptr = runtime default).
+ * no_scan        If true, GC will not scan this allocation for pointers.
+ * mem_debug      Enable memory debugging for this allocation.
+ * debug_taint    Taint freed memory with a debug pattern.
+ * finalizer      Finalizer callback to run when the object is collected
+ *                    or freed. Registered at allocation time, avoiding the
+ *                    header lookup that n00b_add_finalizer() requires.
+ * finalizer_data Opaque pointer passed to @p finalizer when invoked.
+ */
+
+typedef struct {
+    n00b_allocator_t *allocator;
+    bool              no_scan;
+    bool              mem_debug;
+    bool              debug_taint;
+    n00b_finalizer_t  finalizer;
+    void             *finalizer_data;
+} n00b_alloc_opts_t;
+
+extern const n00b_alloc_opts_t _n00b_default_alloc_opts;
 
 /**
  * @brief Low-level allocation.  Prefer the n00b_alloc() macro family.
  * @param n         Number of elements.
  * @param sz        Size of each element in bytes.
- * @param base_type Stringified C type name (for debugging).
+ * @param type_hash typehash(T) for the allocated type (0 = unknown).
  * @param location  Source location string (auto-filled by macro).
- *
- * @kw allocator      Allocator to use (nullptr = runtime default).
- * @kw aparams        Opaque allocator params for debug/cleanup marking.
- * @kw iparams        Opaque params to send to the object instance (TODO).
- * @kw no_scan        If true, GC will not scan this allocation for pointers.
- * @kw mem_debug      Enable memory debugging for this allocation.
- * @kw debug_taint    Taint freed memory with a debug pattern.
- * @kw finalizer      Finalizer callback to run when the object is collected
- *                    or freed. Registered at allocation time, avoiding the
- *                    header lookup that n00b_add_finalizer() requires.
- * @kw finalizer_data Opaque pointer passed to @p finalizer when invoked.
- *
+ * *
  * @pre Runtime must be initialized (or an explicit allocator must be provided).
  * @post Returned pointer is zero-filled and aligned to `N00B_ALIGN`.
  */
-extern void *
-_n00b_alloc_raw(size_t n, size_t sz, char *base_type, const char *location) _kargs
-{
-    n00b_allocator_t *allocator      = nullptr;
-    void             *aparams        = nullptr; // Marking for debug, cleanup, etc.
-    void             *iparams        = nullptr; // To be sent to an object instance (TODO)
-    bool              no_scan        = false;
-    bool              mem_debug      = false;
-    bool              debug_taint    = false;
-    n00b_finalizer_t  finalizer      = nullptr;
-    void             *finalizer_data = nullptr;
-};
+extern void *_n00b_alloc_raw(size_t             n,
+                             size_t             sz,
+                             uint64_t           type_hash,
+                             const char        *location,
+                             n00b_alloc_opts_t *opts,
+                             +) _kargs : opaque;
 
 /**
  * @brief Free a managed allocation.
@@ -180,8 +186,7 @@ n00b_allocator_setup(n00b_allocator_t *allocator, n00b_calloc_fn alloc) _kargs
  * @param p Pointer to a managed allocation.
  * @return  Optional inline header (none if @p p is not managed).
  */
-static inline n00b_inline_hdr_opt_t
-n00b_inline_alloc_header(void *p)
+static inline n00b_option_t(n00b_inline_hdr_t *) n00b_inline_alloc_header(void *p)
 {
     if (!p) {
         return n00b_option_none(n00b_inline_hdr_t *);
@@ -206,27 +211,71 @@ n00b_inline_alloc_header(void *p)
     return n00b_option_none(n00b_inline_hdr_t *);
 }
 
-#define n00b_alloc_size(n, sz, ...)                                                            \
-    _n00b_alloc_raw(n, sz, nullptr, N00B_LOC_STRING() __VA_OPT__(, __VA_ARGS__))
-#define n00b_alloc(T, ...)                                                                     \
+// Helper: N00B_ALLOC_OPTS(allocator) → &(n00b_alloc_opts_t){.allocator = X}
+//         N00B_ALLOC_OPTS()          → nullptr
+// Use in macros that optionally accept an allocator pointer.
+#define _N00B_ALLOC_OPTS_1(_alloc_ptr) &(n00b_alloc_opts_t){.allocator = (_alloc_ptr)}
+#define N00B_ALLOC_OPTS(...) N00B_FIRST(__VA_OPT__(_N00B_ALLOC_OPTS_1(__VA_ARGS__), ) nullptr)
+
+#define n00b_alloc_with_opts(T, opts, ...)                                                     \
     _n00b_alloc_raw(1,                                                                         \
                     sizeof(T),                                                                 \
-                    N00B_TO_STRING(T),                                                         \
-                    N00B_LOC_STRING() __VA_OPT__(, __VA_ARGS__))
-#define n00b_alloc_array(T, N, ...)                                                            \
+                    typehash(T),                                                               \
+                    N00B_LOC_STRING(),                                                         \
+                    opts __VA_OPT__(, __VA_ARGS__))
+
+#define n00b_alloc_array_with_opts(T, N, opts, ...)                                            \
     _n00b_alloc_raw((N),                                                                       \
                     sizeof(T),                                                                 \
-                    N00B_TO_STRING(T),                                                         \
-                    N00B_LOC_STRING() __VA_OPT__(, __VA_ARGS__))
-#define n00b_alloc_flex(T1, T2, N2, ...)                                                       \
+                    typehash(T),                                                               \
+                    N00B_LOC_STRING(),                                                         \
+                    opts __VA_OPT__(, __VA_ARGS__))
+
+#define n00b_alloc_flex_with_opts(T1, T2, N2, opts, ...)                                       \
     _n00b_alloc_raw(1,                                                                         \
                     (sizeof(T1) + sizeof(T2) * (N2)),                                          \
-                    N00B_TO_STRING(T1),                                                        \
-                    N00B_LOC_STRING() __VA_OPT__(, __VA_ARGS__))
+                    typehash(T1),                                                              \
+                    N00B_LOC_STRING(),                                                         \
+                    opts __VA_OPT__(, __VA_ARGS__))
+
+#define _n00b_kargs_name(base_name) N00B_CONCAT(N00B_CONCAT(n00b_, base_name), _init)
+#define n00b_kargs(base_name, ...)                                                             \
+    kw_func(_n00b_kargs_name(base_name) __VA_OPT__(, __VA_ARGS__))
+
+// This should only be used in implementation headers for generic
+// container types. If you're using it for anything else, you're doing
+// it wrong.
+#define n00b_alloc_size_with_opts(n, sz, opts, ...)                                            \
+    _n00b_alloc_raw(n, sz, 0, N00B_LOC_STRING(), opts __VA_OPT__(, __VA_ARGS__))
+
+#define n00b_alloc(T, ...) n00b_alloc_with_opts(T, nullptr __VA_OPT__(, __VA_ARGS__))
+
+#define n00b_new_kargs(T, base_name, ...)                                                      \
+    n00b_alloc(T, n00b_kargs(base_name __VA_OPT__(, __VA_ARGS__)))
+
+#define n00b_new_vargs(T, __vargs)                                                             \
+    n00b_alloc(T, n00b_vargs __vargs)
+
+// Caller should put vargs in parentheses, to clearly delineate, and will make the expansion a
+// function-like macro.
+#define n00b_new_both(T, base_name, __vargs, ...)                                              \
+    n00b_alloc(T, n00b_vargs __vargs, n00b_kargs(base_name __VA_OPT__(, __VA_ARGS__)))
+
+#define n00b_alloc_array(T, N, ...)                                                            \
+    n00b_alloc_array_with_opts(T, N, nullptr __VA_OPT__(, __VA_ARGS__))
+
+#define n00b_alloc_flex(T1, T2, N2, ...)                                                       \
+    n00b_alloc_flex_with_opts(T1, T2, N2, nullptr __VA_OPT__(, __VA_ARGS__))
+
+// This should only be used in implementation headers for generic
+// container types. If you're using it for anything else, you're doing
+// it wrong.
+#define n00b_alloc_size(n, sz, ...)                                                            \
+    n00b_alloc_size_with_opts(n, sz, nullptr __VA_OPT__(, __VA_ARGS__))
 
 /**
  * @brief Get the inline header for a managed object.
  * @param p Pointer to a managed object.
  * @return  Optional inline header.
  */
-extern n00b_inline_hdr_opt_t n00b_object_header(void *p);
+extern n00b_option_t(n00b_inline_hdr_t *) n00b_object_header(void *p);

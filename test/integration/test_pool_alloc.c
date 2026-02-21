@@ -35,7 +35,7 @@ test_small_alloc(void)
     n00b_pool_t      pool;
     n00b_allocator_t *alloc = n00b_pool_init(&pool);
 
-    void *p = n00b_alloc_size(1, 32, .allocator = alloc);
+    void *p = n00b_alloc_array_with_opts(uint8_t, 32, &(n00b_alloc_opts_t){.allocator = alloc});
 
     assert(p != nullptr);
     assert(((uintptr_t)p & (N00B_ALIGN - 1)) == 0);
@@ -62,7 +62,7 @@ test_size_classes(void)
     int sizes[] = {64, 128, 256, 512};
 
     for (int i = 0; i < 4; i++) {
-        void *p = n00b_alloc_size(1, sizes[i], .allocator = alloc);
+        void *p = n00b_alloc_array_with_opts(uint8_t, sizes[i], &(n00b_alloc_opts_t){.allocator = alloc});
         assert(p != nullptr);
         assert(((uintptr_t)p & (N00B_ALIGN - 1)) == 0);
 
@@ -87,12 +87,12 @@ test_free_recycle(void)
     n00b_pool_t      pool;
     n00b_allocator_t *alloc = n00b_pool_init(&pool);
 
-    void *p1 = n00b_alloc_size(1, 64, .allocator = alloc);
+    void *p1 = n00b_alloc_array_with_opts(uint8_t, 64, &(n00b_alloc_opts_t){.allocator = alloc});
     assert(p1 != nullptr);
 
     n00b_free(p1);
 
-    void *p2 = n00b_alloc_size(1, 64, .allocator = alloc);
+    void *p2 = n00b_alloc_array_with_opts(uint8_t, 64, &(n00b_alloc_opts_t){.allocator = alloc});
     assert(p2 != nullptr);
 
     // The second allocation should be valid regardless of whether
@@ -117,7 +117,7 @@ test_many_allocs(void)
     void *ptrs[100];
 
     for (int i = 0; i < 100; i++) {
-        ptrs[i] = n00b_alloc_size(1, 64, .allocator = alloc);
+        ptrs[i] = n00b_alloc_array_with_opts(uint8_t, 64, &(n00b_alloc_opts_t){.allocator = alloc});
         assert(ptrs[i] != nullptr);
     }
 
@@ -145,10 +145,10 @@ test_inline_header(void)
     n00b_pool_t      pool;
     n00b_allocator_t *alloc = n00b_pool_init(&pool, .inline_headers = true);
 
-    void *p = n00b_alloc_size(1, 64, .allocator = alloc);
+    void *p = n00b_alloc_array_with_opts(uint8_t, 64, &(n00b_alloc_opts_t){.allocator = alloc});
     assert(p != nullptr);
 
-    n00b_inline_hdr_opt_t opt = n00b_inline_alloc_header(p);
+    n00b_option_t(n00b_inline_hdr_t *) opt = n00b_inline_alloc_header(p);
     assert(n00b_option_is_set(opt));
 
     n00b_inline_hdr_t *hdr = n00b_option_get(opt);
@@ -169,7 +169,7 @@ test_alignment(void)
     n00b_allocator_t *alloc = n00b_pool_init(&pool);
 
     for (int i = 0; i < 50; i++) {
-        void *p = n00b_alloc_size(1, 48 + i, .allocator = alloc);
+        void *p = n00b_alloc_array_with_opts(uint8_t, 48 + i, &(n00b_alloc_opts_t){.allocator = alloc});
         assert(p != nullptr);
         assert(((uintptr_t)p & (N00B_ALIGN - 1)) == 0);
         n00b_free(p);

@@ -17,6 +17,10 @@
 #define N00B_MPROT (PROT_READ | PROT_WRITE)
 #define N00B_MFLAG (MAP_PRIVATE | MAP_ANON)
 
+#ifndef N00B_DEFAULT_SCRATCH_ARENA_SIZE
+#define N00B_DEFAULT_SCRATCH_ARENA_SIZE (1 << 25) // 32M
+#endif
+
 struct n00b_segment_t {
     uint64_t        size;
     n00b_segment_t *next_segment;
@@ -146,10 +150,13 @@ struct n00b_finalizer_info_t {
  * @param arena  Owning arena.
  * @param file   Debug name / source file (may be nullptr).
  */
-extern void n00b_register_arena_segment(void         *start,
-                                        void         *end,
-                                        n00b_arena_t *arena,
-                                        const char   *file);
+extern void
+n00b_register_arena_segment(void         *start,
+                            void         *end,
+                            n00b_arena_t *arena) _kargs
+{
+    const char *file = nullptr;
+};
 
 typedef struct n00b_arena_alloc_param_t {
     bool no_scan;

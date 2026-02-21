@@ -19,7 +19,7 @@ test_inline_guard(void)
     uint64_t *p = n00b_alloc(uint64_t);
     assert(p != nullptr);
 
-    n00b_inline_hdr_opt_t opt = n00b_inline_alloc_header(p);
+    n00b_option_t(n00b_inline_hdr_t *) opt = n00b_inline_alloc_header(p);
     assert(n00b_option_is_set(opt));
 
     n00b_inline_hdr_t *hdr = n00b_option_get(opt);
@@ -38,7 +38,7 @@ test_inline_fields(void)
     uint64_t *p = n00b_alloc(uint64_t);
     assert(p != nullptr);
 
-    n00b_inline_hdr_opt_t opt = n00b_inline_alloc_header(p);
+    n00b_option_t(n00b_inline_hdr_t *) opt = n00b_inline_alloc_header(p);
     assert(n00b_option_is_set(opt));
 
     n00b_inline_hdr_t *hdr = n00b_option_get(opt);
@@ -65,7 +65,7 @@ test_oob_lookup(void)
     assert(n00b_alloc_info_exists(info));
 
     if (info.kind == n00b_alloc_oob) {
-        n00b_oob_hdr_opt_t oob_opt = n00b_alloc_info_oob(info);
+        n00b_option_t(n00b_oob_hdr_t *) oob_opt = n00b_alloc_info_oob(info);
         assert(n00b_option_is_set(oob_opt));
 
         n00b_oob_hdr_t *oob = n00b_option_get(oob_opt);
@@ -88,7 +88,7 @@ test_oob_user_ptr(void)
                                           .inline_headers = false);
     n00b_allocator_t *alloc = (n00b_allocator_t *)arena;
 
-    uint64_t *p = n00b_alloc(uint64_t, .allocator = alloc);
+    uint64_t *p = n00b_alloc_with_opts(uint64_t, &(n00b_alloc_opts_t){.allocator = alloc});
     assert(p != nullptr);
 
     n00b_alloc_info_t info = n00b_find_alloc_info(p);
@@ -130,7 +130,7 @@ test_mmap_managed(void)
     uint64_t *p = n00b_alloc(uint64_t);
     assert(p != nullptr);
 
-    n00b_mmap_opt_t opt = n00b_mmap_by_address(p);
+    n00b_option_t(n00b_mmap_info_t *) opt = n00b_mmap_by_address(p);
     assert(n00b_option_is_set(opt));
 
     n00b_mmap_info_t *map = n00b_option_get(opt);

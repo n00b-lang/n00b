@@ -17,6 +17,10 @@ n00b_array_decl(int32_t);
 typedef struct n00b_unicode_bidi_para_s n00b_unicode_bidi_para_t;
 
 /** @brief Open a paragraph for bidirectional analysis.
+ *
+ *  @note The constructor/destructor pair is `_open`/`_free` (not
+ *        `_close`) because the handle owns allocated memory.
+ *
  *  @param s  The paragraph text.
  *  @kw allocator  Optional allocator (defaults to the runtime allocator).
  *  @return A resolved bidi paragraph; caller must call

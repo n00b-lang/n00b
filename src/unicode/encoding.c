@@ -1,6 +1,7 @@
 #include "unicode/encoding.h"
 #include <string.h>
 #include <stdint.h>
+#include <assert.h>
 #include "internal/unicode/raw.h"
 #include "core/alloc.h"
 
@@ -723,9 +724,9 @@ n00b_unicode_to_utf16_raw(const char       *data,
                           uint32_t         *out_len,
                           n00b_allocator_t *allocator)
 {
-    uint16_t *buf      = n00b_alloc_array(uint16_t,
-                                          (size_t)len + 1,
-                                          .allocator = allocator);
+    uint16_t *buf      = n00b_alloc_array_with_opts(uint16_t,
+                                                   (size_t)len + 1,
+                                                   &(n00b_alloc_opts_t){.allocator = allocator});
     uint32_t  idx      = 0;
     uint32_t  byte_len = (uint32_t)len;
 
@@ -801,9 +802,9 @@ n00b_unicode_to_utf32_raw(const char       *data,
                           uint32_t         *out_len,
                           n00b_allocator_t *allocator)
 {
-    n00b_codepoint_t *buf = n00b_alloc_array(n00b_codepoint_t,
-                                             (size_t)len + 1,
-                                             .allocator = allocator);
+    n00b_codepoint_t *buf = n00b_alloc_array_with_opts(n00b_codepoint_t,
+                                                      (size_t)len + 1,
+                                                      &(n00b_alloc_opts_t){.allocator = allocator});
     uint32_t idx      = 0;
     uint32_t byte_len = (uint32_t)len;
 
@@ -860,13 +861,14 @@ n00b_unicode_from_utf16(const uint16_t *src, uint32_t len) _kargs
     n00b_allocator_t *allocator = nullptr;
 }
 {
+    assert(!len || src);
+
     if (!allocator)
         allocator = nullptr;
 
     // Worst case: each code unit -> 4 UTF-8 bytes
-    char    *buf      = n00b_alloc_array(char, (size_t)len * 4 + 1);
-    uint32_t pos      = 0;
-    uint32_t cp_count = 0;
+    char    *buf = n00b_alloc_array(char, (size_t)len * 4 + 1);
+    uint32_t pos = 0;
 
     for (uint32_t i = 0; i < len; i++) {
         n00b_codepoint_t cp;
@@ -879,12 +881,11 @@ n00b_unicode_from_utf16(const uint16_t *src, uint32_t len) _kargs
             cp = src[i];
         }
         pos += n00b_unicode_utf8_encode(cp, buf + pos);
-        cp_count++;
     }
 
     buf[pos] = '\0';
 
-    n00b_string_t result = n00b_string_from_raw(allocator, buf, pos, cp_count);
+    n00b_string_t result = n00b_string_from_raw(buf, pos, .allocator = allocator);
     n00b_free(buf);
     return result;
 }
@@ -895,6 +896,8 @@ n00b_unicode_from_utf32(const n00b_codepoint_t *src, uint32_t len) _kargs
     n00b_allocator_t *allocator = nullptr;
 }
 {
+    assert(!len || src);
+
     if (!allocator)
         allocator = nullptr;
 
@@ -907,7 +910,7 @@ n00b_unicode_from_utf32(const n00b_codepoint_t *src, uint32_t len) _kargs
 
     buf[pos] = '\0';
 
-    n00b_string_t result = n00b_string_from_raw(allocator, buf, pos, len);
+    n00b_string_t result = n00b_string_from_raw(buf, pos, .allocator = allocator);
     n00b_free(buf);
     return result;
 }

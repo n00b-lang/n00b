@@ -413,8 +413,8 @@ xform_package_primary_expr(tree_xform_t *ctx, tnode_t *node)
         return nullptr;
     }
 
-    // primary_expression branch 6 is: identifier
-    if (node->branch != 6) {
+    // primary_expression: identifier
+    if (node->branch != BRANCH(primary_expression, IDENTIFIER)) {
         return nullptr;
     }
 

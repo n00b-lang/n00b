@@ -47,18 +47,21 @@ extern size_t n00b_address_is_probable_cstring(void *addr, size_t *bytelen, size
  * @post On success, @p ctx is ready for iteration via n00b_memory_scan_next().
  */
 extern bool
-n00b_memory_scan_init(n00b_memory_scan_t *ctx, void *s, size_t len, uint8_t cat_flags);
+n00b_memory_scan_init(n00b_memory_scan_t *ctx, void *s, size_t len) _kargs
+{
+    uint8_t cat_flags = 0;
+};
 
 /**
  * @brief Advance the scanner to the next pointer in the range.
  * @param ctx   Scan context.
  * @param tinfo Output: kind of memory the pointer points to (may be nullptr).
  * @param perms Output: permissions of the target page (may be nullptr).
- * @return      Next pointer found, or nullptr when exhausted.
+ * @return      Next pointer found, or none when exhausted.
  */
-extern void *n00b_memory_scan_next(n00b_memory_scan_t   *ctx,
-                                   n00b_mmap_rec_kind_t *tinfo,
-                                   n00b_mmap_perms_t    *perms);
+extern n00b_option_t(void *) n00b_memory_scan_next(n00b_memory_scan_t   *ctx,
+                                                    n00b_mmap_rec_kind_t *tinfo,
+                                                    n00b_mmap_perms_t    *perms);
 
 /**
  * @brief Check the memory permissions for the page containing @p ptr.
@@ -94,7 +97,7 @@ n00b_memory_is_readable(void *ptr)
  * @param addr Address to look up.
  * @return     Optional mmap info record.
  */
-extern n00b_mmap_opt_t n00b_mmap_info_lookup(const void *addr);
+extern n00b_option_t(n00b_mmap_info_t *) n00b_mmap_info_lookup(const void *addr);
 
 /**
  * @brief Find the allocator responsible for an address.

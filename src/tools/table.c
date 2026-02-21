@@ -1,4 +1,4 @@
-/**
+/*
  * CLI tool that reads delimited text (stdin or file) and renders it
  * as a styled table using the n00b rendering pipeline.
  *
@@ -9,8 +9,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/ioctl.h>
+#ifndef _WIN32
 #include <unistd.h>
+#include <sys/ioctl.h>
+#endif
 
 #include "n00b.h"
 #include "core/alloc.h"
@@ -29,7 +31,7 @@
 // Escape processing for separator arguments
 // ====================================================================
 
-/**
+/*
  * Process C-style escape sequences in a separator string.
  * Handles: \t \n \r \\
  * Returns a newly allocated (malloc'd) string; caller must free.
@@ -176,12 +178,17 @@ read_all(FILE *fp, size_t *out_len)
 static int
 detect_terminal_width(void)
 {
+#ifdef _WIN32
+    CONSOLE_SCREEN_BUFFER_INFO csbi;
+    if (GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &csbi)) {
+        return csbi.srWindow.Right - csbi.srWindow.Left + 1;
+    }
+#else
     struct winsize ws;
-
     if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0) {
         return ws.ws_col;
     }
-
+#endif
     return 80;
 }
 
@@ -400,8 +407,7 @@ main(int argc, char **argv)
     }
 
     // Build n00b_string_t from raw input.
-    n00b_string_t input = n00b_string_from_raw(nullptr, input_raw,
-                                                (int64_t)input_len,
+    n00b_string_t input = n00b_string_from_raw(input_raw,
                                                 (int64_t)input_len);
     free(input_raw);
 
@@ -411,8 +417,7 @@ main(int argc, char **argv)
 
     if (row_sep_raw) {
         char *processed = process_escapes(row_sep_raw);
-        rsep_val = n00b_string_from_raw(nullptr, processed,
-                                         (int64_t)strlen(processed),
+        rsep_val = n00b_string_from_raw(processed,
                                          (int64_t)strlen(processed));
         free(processed);
         rsep_ptr = &rsep_val;
@@ -423,8 +428,7 @@ main(int argc, char **argv)
 
     if (col_sep_raw) {
         char *processed = process_escapes(col_sep_raw);
-        csep_val = n00b_string_from_raw(nullptr, processed,
-                                         (int64_t)strlen(processed),
+        csep_val = n00b_string_from_raw(processed,
                                          (int64_t)strlen(processed));
         free(processed);
         csep_ptr = &csep_val;
@@ -493,7 +497,7 @@ main(int argc, char **argv)
         .cell_props   = style.cell_props,
         .header_props = style.header_props,
         .alt_props    = style.alt_cell_props,
-        .no_stripe    = no_stripe ? 1 : 0);
+        .no_stripe    = no_stripe);
 
     // Detect output width.
     if (width == 0) {
@@ -501,7 +505,7 @@ main(int argc, char **argv)
     }
 
     // Render the table into a plane.
-    n00b_plane_t *plane = n00b_table_render(table, (int64_t)width);
+    n00b_plane_t *plane = n00b_table_render(table, .width = (int64_t)width);
 
     if (!plane) {
         fprintf(stderr, "Error: table produced no output\n");
@@ -510,7 +514,11 @@ main(int argc, char **argv)
     }
 
     // Output via canvas + inline ANSI backend (no cursor positioning).
-    n00b_canvas_t *canvas = n00b_canvas_new(&n00b_renderer_ansi_inline);
+    n00b_runtime_t *rt = n00b_get_runtime();
+
+    n00b_canvas_t  *canvas = n00b_new_kargs(n00b_canvas_t, canvas,
+        .vtable = &n00b_renderer_ansi_inline,
+        .output = (n00b_conduit_topic_t(n00b_buffer_t *) *)rt->stdout_topic);
     n00b_canvas_resize(canvas, plane->total_rows, plane->total_cols);
     n00b_canvas_add_plane(canvas, plane);
     n00b_canvas_render(canvas);
@@ -518,6 +526,7 @@ main(int argc, char **argv)
 
     n00b_canvas_destroy(canvas);
     n00b_table_destroy(table);
+    n00b_shutdown();
 
     return 0;
 }

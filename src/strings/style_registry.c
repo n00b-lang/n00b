@@ -1,9 +1,11 @@
 #include "strings/style_registry.h"
 #include "strings/rich_desc.h"
 #include "core/alloc.h"
+#include "core/gc.h"
 #include "core/hash.h"
 #include "core/rt_access.h"
 #include <string.h>
+#include <assert.h>
 
 // We store two dicts in the runtime: one for named styles, one for roles.
 // Both are string-keyed (via n00b_hash_cstring) and store n00b_text_style_t *.
@@ -138,6 +140,18 @@ register_defaults(void)
     n00b_free(label);
     n00b_free(button);
     n00b_free(input);
+
+    // --- Hexdump styles ---
+    n00b_text_style_t *hd_offset = n00b_str_style_new();
+    hd_offset->dim               = N00B_TRI_YES;
+    n00b_str_style_register("hexdump.offset", hd_offset);
+
+    n00b_text_style_t *hd_ascii = n00b_str_style_new();
+    hd_ascii->bold               = N00B_TRI_YES;
+    n00b_str_style_register("hexdump.ascii", hd_ascii);
+
+    n00b_free(hd_offset);
+    n00b_free(hd_ascii);
 }
 
 // ===================================================================
@@ -149,6 +163,10 @@ n00b_str_registry_init(void)
 {
     style_dict = new_string_dict();
     role_dict  = new_string_dict();
+
+    n00b_gc_register_root(style_dict);
+    n00b_gc_register_root(role_dict);
+
     register_defaults();
     n00b_rich_desc_cache_init();
 }
@@ -156,29 +174,25 @@ n00b_str_registry_init(void)
 void
 n00b_str_style_register(const char *name, const n00b_text_style_t *style)
 {
-    if (!style_dict) {
-        return;
-    }
+    assert(style_dict && "n00b_str_registry_init() must be called first");
     register_into(style_dict, name, style);
 }
 
-n00b_text_style_t *
+n00b_option_t(n00b_text_style_t *)
 n00b_str_style_lookup(const char *name)
 {
-    return lookup_from(style_dict, name);
+    return n00b_option_from_nullable(n00b_text_style_t *, lookup_from(style_dict, name));
 }
 
 void
 n00b_str_role_register(const char *name, const n00b_text_style_t *style)
 {
-    if (!role_dict) {
-        return;
-    }
+    assert(role_dict && "n00b_str_registry_init() must be called first");
     register_into(role_dict, name, style);
 }
 
-n00b_text_style_t *
+n00b_option_t(n00b_text_style_t *)
 n00b_str_role_lookup(const char *name)
 {
-    return lookup_from(role_dict, name);
+    return n00b_option_from_nullable(n00b_text_style_t *, lookup_from(role_dict, name));
 }

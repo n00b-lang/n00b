@@ -64,14 +64,27 @@ c_args = [
   '-Wno-unused-parameter',
   '-Wno-unused-function',
   '-Wno-cast-function-type',
+  '-Wno-parentheses-equality',
+  '-Wno-initializer-overrides',
   '-fno-omit-frame-pointer',
   '-ffunction-sections',
-  '-fPIC',
   # TODO only needed for musl
   # '-target', target_arch + '-' + target_os,
 ]
 
-link_args = ['-target', target_arch + '-' + target_os]
+if target_os != 'windows'
+  c_args += '-fPIC'
+endif
+
+if using_glibc
+  c_args = c_args + ['-D_GNU_SOURCE']
+endif
+
+if target_os == 'darwin'
+    link_args = ['-target', target_arch + '-' + target_os]
+else
+    link_args = []
+endif
 
 if target_os == 'darwin'
   c_args = c_args + ['-Wno-atomic-alignment']
@@ -125,8 +138,10 @@ if conf_gc_stats
   ]
 endif
 
-if not cc.compiles(posix_check)
-  c_args = c_args + ['-DPOSIX_C_SOURCE=200112L']
+if target_os != 'windows'
+  if not cc.compiles(posix_check)
+    c_args = c_args + ['-DPOSIX_C_SOURCE=200112L']
+  endif
 endif
 
 # Detect __attribute__((aligned(N))) for word-at-a-time UTF-8 fast paths.
@@ -221,6 +236,7 @@ n00b_core = [
     'src/core/memory_info.c',
     'src/core/hash.c',
     'src/core/dict_untyped.c',
+    'src/core/dict.c',
     'src/core/stw.c',
     'src/core/gc.c',
     'src/core/interval_tree.c',
@@ -231,6 +247,8 @@ n00b_core = [
     'src/core/mutex.c',
     'src/core/rwlock.c',
     'src/core/condition.c',
+    'src/core/type_registry.c',
+    'src/core/builtin_types.c',
 ]
 
 python3 = find_program('python3')
@@ -331,14 +349,175 @@ n00b_table = [
     'src/table/table_styles.c',
 ]
 
+# ============================================================================
+# Conduit pub/sub system
+# ============================================================================
+
+n00b_conduit = [
+    'src/conduit/conduit.c',
+    'src/conduit/subscription.c',
+    'src/conduit/thread_lifecycle.c',
+    'src/conduit/service.c',
+]
+
+# IO backends (platform-conditional)
+n00b_conduit_io = [
+    'src/conduit/io.c',
+]
+
+if target_os != 'windows'
+    n00b_conduit_io += 'src/conduit/io_poll.c'
+endif
+
+if target_os == 'darwin' or target_os in ['freebsd', 'openbsd', 'netbsd']
+    n00b_conduit_io += 'src/conduit/io_kqueue.c'
+endif
+if target_os == 'linux'
+    n00b_conduit_io += 'src/conduit/io_epoll.c'
+    liburing_dep = dependency('liburing', required: false)
+    if liburing_dep.found()
+        n00b_conduit_io += 'src/conduit/io_uring.c'
+        deps += liburing_dep
+    endif
+endif
+if target_os == 'windows'
+    n00b_conduit_io += 'src/conduit/io_wsa.c'
+    ws2_dep = cc.find_library('ws2_32', required: true)
+    sync_dep = cc.find_library('synchronization', required: true)
+    deps += [ws2_dep, sync_dep]
+endif
+
+n00b_conduit += n00b_conduit_io
+
+# Managed IO (Phase 3)
+n00b_conduit_managed = [
+    'src/conduit/fd_managed.c',
+    'src/conduit/fd_writer.c',
+    'src/conduit/socket.c',
+    'src/conduit/file.c',
+    'src/conduit/timer.c',
+    'src/conduit/user_event.c',
+]
+
+if target_os != 'windows'
+    n00b_conduit_managed += 'src/conduit/signal.c'
+    n00b_conduit_managed += 'src/conduit/proc_lifecycle.c'
+    n00b_conduit_managed += 'src/conduit/file_change.c'
+endif
+
+n00b_conduit += n00b_conduit_managed
+
+# IO layer (subprocess management)
+n00b_io = []
+if target_os != 'windows'
+    n00b_io += 'src/io/subproc.c'
+endif
+
+n00b_conduit += n00b_io
+
+# Pipeline framework (Phase 4)
+n00b_conduit_pipeline = [
+    'src/conduit/xform.c',
+    'src/conduit/xform_linebuf.c',
+    'src/conduit/xform_ansi_strip.c',
+    'src/conduit/xform_render.c',
+    'src/conduit/xform_hexdump.c',
+    'src/conduit/xform_json.c',
+    'src/conduit/xform_http.c',
+]
+
+n00b_conduit += n00b_conduit_pipeline
+
+# Print API (Phase 4)
+n00b_conduit += ['src/conduit/print.c']
+
+# ============================================================================
+# Parsers
+# ============================================================================
+
+n00b_parsers = [
+    'src/parsers/ijson.c',
+    'src/parsers/json.c',
+    'src/parsers/scanner.c',
+    'src/parsers/token_stream.c',
+    'src/parsers/scan_recipes.c',
+]
+
+# ============================================================================
+# Slay grammar / parser toolkit
+# ============================================================================
+
+n00b_slay = [
+    'src/slay/token.c',
+    'src/slay/hashset.c',
+    'src/slay/annotation.c',
+    'src/slay/grammar.c',
+    'src/slay/unicode_class.c',
+    'src/slay/parse_tree.c',
+    'src/slay/parse_forest.c',
+    'src/slay/pwz.c',
+    'src/slay/bnf.c',
+    'src/slay/earley.c',
+    'src/slay/earley_forest.c',
+    'src/slay/n00b_parse.c',
+    'src/slay/commander.c',
+    'src/slay/commander_tok.c',
+    'src/slay/commander_json.c',
+    'src/slay/symtab.c',
+    'src/slay/annot_walk.c',
+    'src/slay/cfg.c',
+]
+
+# ============================================================================
+# Hexdump library
+# ============================================================================
+
+n00b_hexdump = [
+    'src/hexdump/hexdump.c',
+]
+
 libdl_dep = cc.find_library('dl', required: false)
 
-n00b_dll_src = n00b_core + n00b_unicode + n00b_strings + n00b_render + n00b_table
+# ============================================================================
+# Logic / constraint solver
+# ============================================================================
+
+n00b_logic = [
+    'src/logic/clpfd_domain.c',
+    'src/logic/clpfd_store.c',
+    'src/logic/clpfd_label.c',
+    'src/logic/asp_intern.c',
+    'src/logic/asp_relation.c',
+    'src/logic/asp_rule.c',
+    'src/logic/asp_engine.c',
+    'src/logic/logic_program.c',
+    'src/logic/logic_dsl.c',
+]
+
+# ============================================================================
+# Type checker
+# ============================================================================
+
+n00b_typecheck = [
+    'src/typecheck/construct.c',
+]
+
+n00b_dll_src = n00b_core + n00b_unicode + n00b_strings + n00b_render + n00b_table + n00b_conduit + n00b_parsers + n00b_hexdump + n00b_logic + n00b_slay + n00b_typecheck
 
 # Build generated unicode tables with --no-ncc (they are pure data,
 # no ncc extensions, and parsing them is extremely expensive).
 gen_unicode_lib = static_library('n00b_gen_unicode',
     gen_unicode_tables,
+    include_directories: incdir,
+    c_args: exe_c_args + ['--no-ncc'],
+    link_args: link_args,
+)
+
+# Build md4c vendor implementation with --no-ncc (it's 10K+ lines of
+# pure C; parsing it through ncc's packrat parser OOMs in constrained
+# environments like Docker cross-builds).
+n00b_vendor_lib = static_library('n00b_vendor',
+    ['src/vendor/md4c.c'],
     include_directories: incdir,
     c_args: exe_c_args + ['--no-ncc'],
     link_args: link_args,
@@ -350,7 +529,7 @@ n00b = static_library('n00b',
     dependencies: deps + [libdl_dep],
     c_args: exe_c_args,
     link_args: link_args,
-    link_whole: [gen_unicode_lib],
+    link_whole: [gen_unicode_lib, n00b_vendor_lib],
     install: true,
 )
 
@@ -360,6 +539,12 @@ test_common_kwargs = {
     'link_with': [n00b],
 }
 
+
+array_test = executable('test_array',
+    ['test/unit/test_array.c'],
+    kwargs: test_common_kwargs,
+)
+test('array', array_test, suite: 'unit')
 
 list_test = executable('test_list',
     ['test/unit/test_list.c'],
@@ -432,6 +617,323 @@ condition_test = executable('test_condition',
     kwargs: test_common_kwargs,
 )
 test('condition', condition_test, suite: 'unit')
+
+dict_test = executable('test_dict',
+    ['test/unit/test_dict.c'],
+    kwargs: test_common_kwargs,
+)
+test('dict', dict_test, suite: 'unit')
+
+# ============================================================================
+# Conduit tests
+# ============================================================================
+
+type_registry_test = executable('test_type_registry',
+    ['test/unit/test_type_registry.c'],
+    kwargs: test_common_kwargs,
+)
+test('type_registry', type_registry_test, suite: 'unit')
+
+conduit_test = executable('test_conduit',
+    ['test/unit/test_conduit.c'],
+    kwargs: test_common_kwargs,
+)
+test('conduit', conduit_test, suite: 'unit')
+
+publisher_test = executable('test_publisher',
+    ['test/unit/test_publisher.c'],
+    kwargs: test_common_kwargs,
+)
+test('publisher', publisher_test, suite: 'unit')
+
+subscription_test = executable('test_subscription',
+    ['test/unit/test_subscription.c'],
+    kwargs: test_common_kwargs,
+)
+test('subscription', subscription_test, suite: 'unit')
+
+io_test = executable('test_io',
+    ['test/unit/test_io.c'],
+    kwargs: test_common_kwargs,
+)
+test('io', io_test, suite: 'unit')
+
+fd_managed_test = executable('test_fd_managed',
+    ['test/unit/test_fd_managed.c'],
+    kwargs: test_common_kwargs,
+)
+test('fd_managed', fd_managed_test, suite: 'unit')
+
+socket_test = executable('test_socket',
+    ['test/unit/test_socket.c'],
+    kwargs: test_common_kwargs,
+)
+test('socket', socket_test, suite: 'unit')
+
+if target_os != 'windows'
+    signal_test = executable('test_signal',
+        ['test/unit/test_signal.c'],
+        kwargs: test_common_kwargs,
+    )
+    test('signal', signal_test, suite: 'unit')
+
+    proc_lifecycle_test = executable('test_proc_lifecycle',
+        ['test/unit/test_proc_lifecycle.c'],
+        kwargs: test_common_kwargs,
+    )
+    test('proc_lifecycle', proc_lifecycle_test, suite: 'unit')
+
+    file_change_test = executable('test_file_change',
+        ['test/unit/test_file_change.c'],
+        kwargs: test_common_kwargs,
+    )
+    test('file_change', file_change_test, suite: 'unit')
+
+    subproc_test = executable('test_subproc',
+        ['test/unit/test_subproc.c'],
+        kwargs: test_common_kwargs,
+    )
+    test('subproc', subproc_test, suite: 'unit')
+endif
+
+timer_test = executable('test_timer',
+    ['test/unit/test_timer.c'],
+    kwargs: test_common_kwargs,
+)
+test('timer', timer_test, suite: 'unit')
+
+service_test = executable('test_service',
+    ['test/unit/test_service.c'],
+    kwargs: test_common_kwargs,
+)
+test('service', service_test, suite: 'unit')
+
+conduit_e2e_test = executable('test_conduit_e2e',
+    ['test/unit/test_conduit_e2e.c'],
+    kwargs: test_common_kwargs,
+)
+test('conduit_e2e', conduit_e2e_test, suite: 'unit')
+
+dual_backend_test = executable('test_dual_backend',
+    ['test/unit/test_dual_backend.c'],
+    kwargs: test_common_kwargs,
+)
+test('dual_backend', dual_backend_test, suite: 'unit')
+
+xform_test = executable('test_xform',
+    ['test/unit/test_xform.c'],
+    kwargs: test_common_kwargs,
+)
+test('xform', xform_test, suite: 'unit')
+
+xform_linebuf_test = executable('test_xform_linebuf',
+    ['test/unit/test_xform_linebuf.c'],
+    kwargs: test_common_kwargs,
+)
+test('xform_linebuf', xform_linebuf_test, suite: 'unit')
+
+xform_ansi_test = executable('test_xform_ansi',
+    ['test/unit/test_xform_ansi.c'],
+    kwargs: test_common_kwargs,
+)
+test('xform_ansi', xform_ansi_test, suite: 'unit')
+
+xform_render_test = executable('test_xform_render',
+    ['test/unit/test_xform_render.c'],
+    kwargs: test_common_kwargs,
+)
+test('xform_render', xform_render_test, suite: 'unit')
+
+hexdump_test = executable('test_hexdump',
+    ['test/unit/test_hexdump.c'],
+    kwargs: test_common_kwargs,
+)
+test('hexdump', hexdump_test, suite: 'unit')
+
+xform_hexdump_test = executable('test_xform_hexdump',
+    ['test/unit/test_xform_hexdump.c'],
+    kwargs: test_common_kwargs,
+)
+test('xform_hexdump', xform_hexdump_test, suite: 'unit')
+
+print_test = executable('test_print',
+    ['test/unit/test_print.c'],
+    kwargs: test_common_kwargs,
+)
+test('print', print_test, suite: 'unit')
+
+# ============================================================================
+# Logic / constraint solver tests
+# ============================================================================
+
+logic_test_kwargs = {
+    'include_directories': incdir + [include_directories('test/unit')],
+    'c_args': exe_c_args,
+    'link_with': [n00b],
+}
+
+clpfd_domain_test = executable('test_clpfd_domain',
+    ['test/unit/test_clpfd_domain.c'],
+    kwargs: logic_test_kwargs,
+)
+test('clpfd_domain', clpfd_domain_test, suite: 'unit')
+
+clpfd_store_test = executable('test_clpfd_store',
+    ['test/unit/test_clpfd_store.c'],
+    kwargs: logic_test_kwargs,
+)
+test('clpfd_store', clpfd_store_test, suite: 'unit')
+
+asp_engine_test = executable('test_asp_engine',
+    ['test/unit/test_asp_engine.c'],
+    kwargs: logic_test_kwargs,
+)
+test('asp_engine', asp_engine_test, suite: 'unit')
+
+asp_relation_test = executable('test_asp_relation',
+    ['test/unit/test_asp_relation.c'],
+    kwargs: logic_test_kwargs,
+)
+test('asp_relation', asp_relation_test, suite: 'unit')
+
+logic_program_test = executable('test_logic_program',
+    ['test/unit/test_logic_program.c'],
+    kwargs: logic_test_kwargs,
+)
+test('logic_program', logic_program_test, suite: 'unit')
+
+clpfd_label_test = executable('test_clpfd_label',
+    ['test/unit/test_clpfd_label.c'],
+    kwargs: logic_test_kwargs,
+)
+test('clpfd_label', clpfd_label_test, suite: 'unit')
+
+logic_dsl_test = executable('test_logic_dsl',
+    ['test/unit/test_logic_dsl.c'],
+    kwargs: logic_test_kwargs,
+)
+test('logic_dsl', logic_dsl_test, suite: 'unit')
+
+logic_easy_test = executable('test_logic_easy',
+    ['test/unit/test_logic_easy.c'],
+    kwargs: logic_test_kwargs,
+)
+test('logic_easy', logic_easy_test, suite: 'unit')
+
+# ============================================================================
+# Parser tests
+# ============================================================================
+
+ijson_test = executable('test_ijson',
+    ['test/unit/test_ijson.c'],
+    kwargs: test_common_kwargs,
+)
+test('ijson', ijson_test, suite: 'unit')
+
+json_test = executable('test_json',
+    ['test/unit/test_json.c'],
+    kwargs: test_common_kwargs,
+)
+test('json', json_test, suite: 'unit')
+
+xform_json_test = executable('test_xform_json',
+    ['test/unit/test_xform_json.c'],
+    kwargs: test_common_kwargs,
+)
+test('xform_json', xform_json_test, suite: 'unit')
+
+xform_http_test = executable('test_xform_http',
+    ['test/unit/test_xform_http.c'],
+    kwargs: test_common_kwargs,
+)
+test('xform_http', xform_http_test, suite: 'unit')
+
+# Slay tests commented out temporarily due to in-progress header changes
+# scanner_test = executable('test_scanner',
+#     ['test/unit/test_scanner.c'],
+#     kwargs: test_common_kwargs,
+# )
+# test('scanner', scanner_test, suite: 'unit')
+#
+# ============================================================================
+# Slay grammar tests
+# ============================================================================
+
+grammar_test = executable('test_grammar',
+    ['test/unit/test_grammar.c'],
+    kwargs: test_common_kwargs,
+)
+test('grammar', grammar_test, suite: 'unit')
+
+pwz_test = executable('test_pwz',
+    ['test/unit/test_pwz.c'],
+    kwargs: test_common_kwargs,
+)
+test('pwz', pwz_test, suite: 'unit')
+
+bnf_test = executable('test_bnf',
+    ['test/unit/test_bnf.c'],
+    kwargs: test_common_kwargs,
+)
+test('bnf', bnf_test, suite: 'unit')
+
+bnf_json_test = executable('test_bnf_json',
+    ['test/unit/test_bnf_json.c'],
+    kwargs: test_common_kwargs,
+)
+test('bnf_json', bnf_json_test, suite: 'unit')
+
+earley_test = executable('test_earley',
+    ['test/unit/test_earley.c'],
+    kwargs: test_common_kwargs,
+)
+test('earley', earley_test, suite: 'unit')
+
+parse_api_test = executable('test_parse_api',
+    ['test/unit/test_parse_api.c'],
+    kwargs: test_common_kwargs,
+)
+test('parse_api', parse_api_test, suite: 'unit')
+
+commander_test = executable('test_commander',
+    ['test/unit/test_commander.c'],
+    kwargs: test_common_kwargs,
+)
+test('commander', commander_test, suite: 'unit')
+
+symtab_test = executable('test_symtab',
+    ['test/unit/test_symtab.c'],
+    kwargs: test_common_kwargs,
+)
+test('symtab', symtab_test, suite: 'unit')
+
+c_parse_test = executable('test_c_parse',
+    ['test/unit/test_c_parse.c'],
+    kwargs: test_common_kwargs,
+)
+test('c_parse', c_parse_test, suite: 'unit')
+
+cf_label_test = executable('test_cf_label',
+    ['test/unit/test_cf_label.c'],
+    kwargs: test_common_kwargs,
+)
+test('cf_label', cf_label_test, suite: 'unit')
+
+cfg_test = executable('test_cfg',
+    ['test/unit/test_cfg.c'],
+    kwargs: test_common_kwargs,
+)
+test('cfg', cfg_test, suite: 'unit')
+
+# ============================================================================
+# Type checker tests
+# ============================================================================
+
+typecheck_test = executable('test_typecheck',
+    ['test/unit/test_typecheck.c'],
+    kwargs: test_common_kwargs,
+)
+test('typecheck', typecheck_test, suite: 'unit')
 
 # ============================================================================
 # Render / layout tests

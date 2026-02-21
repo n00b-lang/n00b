@@ -112,7 +112,7 @@ n00b_tree_decl(n00b_md_node_t, n00b_md_node_t);
  *
  * @param s  The markdown source text.
  * @kw allocator  Optional allocator.
- * @return Root of the parsed AST, or nullptr on parse failure.
+ * @return Root of the parsed AST.
  *
  * @pre  `s.data` is valid UTF-8.
  * @post Returned tree is heap-allocated; caller frees with

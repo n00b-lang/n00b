@@ -6,6 +6,7 @@
 #include "core/alloc.h"
 #include "internal/unicode/tables.h"
 #include <string.h>
+#include <assert.h>
 
 // External generated tables
 extern const uint32_t n00b_unicode_canon_decomp_index[][2];
@@ -296,7 +297,7 @@ cp_buf_to_n00b_string(n00b_allocator_t *allocator, cp_buf_t *buf)
     out[pos] = '\0';
 
     n00b_string_t result
-        = n00b_string_from_raw(allocator, out, (int64_t)pos, (int64_t)buf->len);
+        = n00b_string_from_raw(out, (int64_t)pos, .allocator = allocator);
     n00b_free(out);
     return result;
 }
@@ -470,6 +471,57 @@ n00b_unicode_is_nfd(n00b_string_t s)
 }
 
 // ---------------------------------------------------------------------------
+// Mark stripping
+// ---------------------------------------------------------------------------
+
+static inline bool
+is_mark(n00b_codepoint_t cp)
+{
+    n00b_unicode_gc_t gc = n00b_unicode_general_category(cp);
+    return gc == N00B_UNICODE_GC_MN
+        || gc == N00B_UNICODE_GC_MC
+        || gc == N00B_UNICODE_GC_ME;
+}
+
+n00b_string_t
+n00b_unicode_strip_marks(n00b_string_t s) _kargs
+{
+    n00b_allocator_t *allocator = nullptr;
+}
+{
+    // NFD decompose first so precomposed characters (e.g. U+00E9 'e\u0301')
+    // become base + combining mark.
+    n00b_string_t decomposed = n00b_unicode_nfd(s, .allocator = allocator);
+
+    // Worst case: same length (nothing stripped).  Allocate output buffer.
+    char    *buf   = n00b_alloc_array_with_opts(char, decomposed.u8_bytes + 1, &(n00b_alloc_opts_t){.allocator = allocator});
+    uint32_t out   = 0;
+    uint32_t pos   = 0;
+
+    while (pos < (uint32_t)decomposed.u8_bytes) {
+        uint32_t start = pos;
+        int32_t  cp    = n00b_unicode_utf8_decode(decomposed.data, (uint32_t)decomposed.u8_bytes, &pos);
+
+        if (cp < 0)
+            break;
+
+        if (!is_mark((n00b_codepoint_t)cp)) {
+            uint32_t cplen = pos - start;
+            memcpy(buf + out, decomposed.data + start, cplen);
+            out += cplen;
+        }
+    }
+
+    buf[out] = '\0';
+
+    // Recompose to NFC for a clean result.
+    n00b_string_t stripped = n00b_string_from_raw(buf, out, .allocator = allocator);
+    n00b_free(buf);
+
+    return n00b_unicode_nfc(stripped, .allocator = allocator);
+}
+
+// ---------------------------------------------------------------------------
 // Streaming normalizer
 // ---------------------------------------------------------------------------
 
@@ -527,6 +579,7 @@ normalizer_process(n00b_unicode_normalizer_t *n)
 void
 n00b_unicode_normalizer_feed(n00b_unicode_normalizer_t *n, n00b_codepoint_t cp)
 {
+    assert(n);
     uint8_t ccc = n00b_unicode_combining_class(cp);
 
     // If this is a starter and we have pending data, process first
@@ -540,6 +593,8 @@ n00b_unicode_normalizer_feed(n00b_unicode_normalizer_t *n, n00b_codepoint_t cp)
 size_t
 n00b_unicode_normalizer_read(n00b_unicode_normalizer_t *n, n00b_codepoint_t *out, size_t max)
 {
+    assert(n);
+    assert(!max || out);
     size_t count = 0;
     while (count < max && n->read_pos < n->output.len) {
         out[count++] = n->output.data[n->read_pos++];
@@ -557,6 +612,8 @@ n00b_unicode_normalizer_read(n00b_unicode_normalizer_t *n, n00b_codepoint_t *out
 size_t
 n00b_unicode_normalizer_flush(n00b_unicode_normalizer_t *n, n00b_codepoint_t *out, size_t max)
 {
+    assert(n);
+    assert(!max || out);
     normalizer_process(n);
     return n00b_unicode_normalizer_read(n, out, max);
 }

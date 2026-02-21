@@ -1,4 +1,4 @@
-/**
+/*
  * Futex-based reader-writer lock implementation.
  *
  * The futex word encodes both the reader count (low 30 bits) and the
@@ -59,7 +59,7 @@ acquire_read_record(n00b_rwlock_t *lock, n00b_thread_t *thread)
         n00b_runtime_t   *rt = n00b_get_runtime();
         n00b_allocator_t *sp = (n00b_allocator_t *)&rt->system_pool;
 
-        log = n00b_alloc(n00b_thread_read_log_t, .allocator = sp);
+        log = n00b_alloc_with_opts(n00b_thread_read_log_t, &(n00b_alloc_opts_t){.allocator = sp});
     }
     log->obj   = lock;
     log->level = 0;
@@ -87,7 +87,7 @@ register_read(n00b_rwlock_t          *lock,
     }
 
     log->level++;
-    n00b_rlock_accounting(lock, log, thread, value, loc);
+    _n00b_rlock_accounting(lock, log, thread, value, loc);
 }
 
 void
@@ -277,7 +277,7 @@ _n00b_rw_unlock(n00b_rwlock_t *lock, char *loc)
         desired = value - 1;
     } while (!n00b_cas(&lock->futex, &value, desired));
 
-    n00b_runlock_accounting(lock, log, thread, desired, loc);
+    _n00b_runlock_accounting(lock, log, thread, desired, loc);
 
     n00b_thread_resume(stw_ctx);
 

@@ -7,7 +7,6 @@
 #include "core/runtime.h"
 #include "core/list.h"
 
-n00b_list_decl(int);
 n00b_list_decl(char *);
 
 // ============================================================================
@@ -60,9 +59,9 @@ test_push_pop_back(void)
     n00b_list_push(lst, 30);
     assert(n00b_list_len(lst) == 3);
 
-    assert(n00b_list_pop(lst) == 30);
-    assert(n00b_list_pop(lst) == 20);
-    assert(n00b_list_pop(lst) == 10);
+    assert(n00b_option_get(n00b_list_pop(int, lst)) == 30);
+    assert(n00b_option_get(n00b_list_pop(int, lst)) == 20);
+    assert(n00b_option_get(n00b_list_pop(int, lst)) == 10);
     assert(n00b_list_len(lst) == 0);
 
     n00b_list_free(lst);
@@ -111,9 +110,9 @@ test_push_pop_front(void)
     assert(n00b_list_get(lst, 1) == 2);
     assert(n00b_list_get(lst, 2) == 1);
 
-    assert(n00b_list_pop_front(lst) == 3);
-    assert(n00b_list_pop_front(lst) == 2);
-    assert(n00b_list_pop_front(lst) == 1);
+    assert(n00b_option_get(n00b_list_pop_front(int, lst)) == 3);
+    assert(n00b_option_get(n00b_list_pop_front(int, lst)) == 2);
+    assert(n00b_option_get(n00b_list_pop_front(int, lst)) == 1);
     assert(n00b_list_len(lst) == 0);
 
     n00b_list_free(lst);
@@ -248,9 +247,9 @@ test_find(void)
     n00b_list_push(lst, 20);
     n00b_list_push(lst, 30);
 
-    assert(n00b_list_find(lst, 20) == 1);
-    assert(n00b_list_find(lst, 30) == 2);
-    assert(n00b_list_find(lst, 99) == (size_t)-1);
+    assert(n00b_option_get(n00b_list_find(lst, 20)) == 1);
+    assert(n00b_option_get(n00b_list_find(lst, 30)) == 2);
+    assert(!n00b_option_is_set(n00b_list_find(lst, 99)));
 
     n00b_list_free(lst);
     printf("  [PASS] find\n");
@@ -413,8 +412,8 @@ test_string_list(void)
     assert(strcmp(n00b_list_get(lst, 0), "hello") == 0);
     assert(strcmp(n00b_list_get(lst, 1), "world") == 0);
 
-    assert(n00b_list_find(lst, hello) == 0);
-    assert(n00b_list_find(lst, world) == 1);
+    assert(n00b_option_get(n00b_list_find(lst, hello)) == 0);
+    assert(n00b_option_get(n00b_list_find(lst, world)) == 1);
 
     n00b_list_free(lst);
     printf("  [PASS] string list\n");
@@ -422,6 +421,20 @@ test_string_list(void)
 
 // ============================================================================
 // Main
+// ============================================================================
+// Pop empty returns none
+// ============================================================================
+
+static void
+test_pop_empty(void)
+{
+    n00b_list_t(int) lst = n00b_list_new(int);
+    assert(!n00b_option_is_set(n00b_list_pop(int, lst)));
+    assert(!n00b_option_is_set(n00b_list_pop_front(int, lst)));
+    n00b_list_free(lst);
+    printf("  [PASS] pop empty\n");
+}
+
 // ============================================================================
 
 int
@@ -434,6 +447,7 @@ main(int argc, char **argv)
 
     test_construction();
     test_push_pop_back();
+    test_pop_empty();
     test_get_set();
     test_push_pop_front();
     test_insert_delete_single();
@@ -449,5 +463,6 @@ main(int argc, char **argv)
     test_string_list();
 
     printf("All list tests passed.\n");
+    n00b_shutdown();
     return 0;
 }

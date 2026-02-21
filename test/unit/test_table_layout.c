@@ -13,8 +13,7 @@
 static n00b_string_t
 make_str(const char *s)
 {
-    return n00b_string_from_raw(nullptr, s, (int64_t)strlen(s),
-                                 (int64_t)strlen(s));
+    return n00b_string_from_raw(s, (int64_t)strlen(s));
 }
 
 static int64_t
@@ -36,7 +35,7 @@ col_total(n00b_table_t *t)
 static void
 test_fit_columns(void)
 {
-    n00b_table_t *t = n00b_table_new();
+    n00b_table_t *t = n00b_new_kargs(n00b_table_t, table);
 
     n00b_table_add_cell(t, make_str("short"));
     n00b_table_add_cell(t, make_str("a longer cell value"));
@@ -56,7 +55,7 @@ test_fit_columns(void)
 static void
 test_fixed_columns(void)
 {
-    n00b_table_t *t = n00b_table_new();
+    n00b_table_t *t = n00b_new_kargs(n00b_table_t, table);
 
     n00b_table_col_fixed(t, 10);
     n00b_table_col_fixed(t, 20);
@@ -77,7 +76,7 @@ test_fixed_columns(void)
 static void
 test_flex_columns(void)
 {
-    n00b_table_t *t = n00b_table_new();
+    n00b_table_t *t = n00b_new_kargs(n00b_table_t, table);
 
     n00b_table_col_flex(t, 1);
     n00b_table_col_flex(t, 2);
@@ -102,7 +101,7 @@ test_flex_columns(void)
 static void
 test_mixed_columns(void)
 {
-    n00b_table_t *t = n00b_table_new();
+    n00b_table_t *t = n00b_new_kargs(n00b_table_t, table);
 
     n00b_table_col_fixed(t, 10);
     n00b_table_col_flex(t, 1);
@@ -127,7 +126,7 @@ static void
 test_row_heights(void)
 {
     // Use a narrow table so content wraps.
-    n00b_table_t *t = n00b_table_new(.num_cols = 1);
+    n00b_table_t *t = n00b_new_kargs(n00b_table_t, table, .num_cols = 1);
 
     n00b_table_add_cell(t, make_str("This is a long string "
                                       "that should wrap across "
@@ -150,7 +149,7 @@ test_row_heights(void)
 static void
 test_pct_columns(void)
 {
-    n00b_table_t *t = n00b_table_new();
+    n00b_table_t *t = n00b_new_kargs(n00b_table_t, table);
 
     n00b_table_col_pct(t, 0.0, 0.25);
     n00b_table_col_pct(t, 0.0, 0.75);
@@ -171,7 +170,7 @@ test_pct_columns(void)
 static void
 test_narrow_table(void)
 {
-    n00b_table_t *t = n00b_table_new(.num_cols = 3);
+    n00b_table_t *t = n00b_new_kargs(n00b_table_t, table, .num_cols = 3);
 
     n00b_table_add_cell(t, make_str("AAAA"));
     n00b_table_add_cell(t, make_str("BBBB"));
@@ -210,5 +209,6 @@ main(int argc, char **argv)
     test_narrow_table();
 
     printf("All table layout tests passed.\n");
+    n00b_shutdown();
     return 0;
 }
