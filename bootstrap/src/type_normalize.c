@@ -1606,6 +1606,24 @@ get_munged_identifier(char *type_as_string)
     return get_munged_identifier_st(type_as_string, nullptr);
 }
 
+uint64_t
+get_type_hash_u64(char *type_as_string)
+{
+    char *normalized = normalize_type_tokens(type_as_string);
+
+    ncc_sha256_digest_t digest;
+    ncc_sha256_hash((void *)normalized, strlen(normalized), digest);
+    base_dealloc(normalized);
+
+    // Treat first 8 bytes of digest as a big-endian uint64_t.
+    uint8_t *b = (uint8_t *)digest;
+    uint64_t h = 0;
+    for (int i = 0; i < 8; i++) {
+        h = (h << 8) | b[i];
+    }
+    return h;
+}
+
 char *
 normalize_type(char *type_as_string)
 {

@@ -410,20 +410,22 @@ extern void register_bang_xform(xform_registry_t *);
 extern void register_rstr_xform(xform_registry_t *);
 extern void register_constexpr_xform(xform_registry_t *);
 extern void register_constexpr_paste_xform(xform_registry_t *);
+extern void register_typehash_xform(xform_registry_t *);
 
 // Semantic transforms in pipeline order (see file header for rationale).
 static const xform_register_fn semantic_xforms[] = {
     register_package_xform,        // 1: namespace rewrites (must be first)
     register_typeid_xform,         // 2: typeid() → SHA identifiers
-    register_typestr_xform,        // 3: typestr() → string literals
-    register_once_xform,           // 4: once functions → pthread_once
-    register_vargs_xform,          // 5: variadic + → compound literals
-    register_keyword_xform,        // 6: _kargs definitions (after vargs)
-    register_kw_call_xform,        // 7: keyword call sites (after keyword)
-    register_bang_xform,           // 8: expr! error propagation (after kw_call)
-    register_rstr_xform,           // 9: r"..." rich string literals
-    register_constexpr_xform,      // 10: constexpr_eval/max/min
-    register_constexpr_paste_xform, // 11: constexpr_paste
+    register_typehash_xform,       // 3: typehash() → uint64 literals
+    register_typestr_xform,        // 4: typestr() → string literals
+    register_once_xform,           // 5: once functions → pthread_once
+    register_vargs_xform,          // 6: variadic + → compound literals
+    register_keyword_xform,        // 7: _kargs definitions (after vargs)
+    register_kw_call_xform,        // 8: keyword call sites (after keyword)
+    register_bang_xform,           // 9: expr! error propagation (after kw_call)
+    register_rstr_xform,           // 10: r"..." rich string literals
+    register_constexpr_xform,      // 11: constexpr_eval/max/min
+    register_constexpr_paste_xform, // 12: constexpr_paste
 };
 
 #define NUM_SEMANTIC_XFORMS (sizeof(semantic_xforms) / sizeof(semantic_xforms[0]))

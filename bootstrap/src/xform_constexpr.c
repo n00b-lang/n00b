@@ -23,6 +23,7 @@
 #include "emit.h"
 #include "st.h"
 #include "lex.h"
+#include "xform_helpers.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -33,145 +34,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/**
- * @brief Extract the callee name from a CALL postfix_expression.
- *
- * For postfix_expression_1 (CALL):
- *   kid[0] = postfix_expression wrapping an identifier
- *   kid[1] = "("
- *   kid[2] = argument_expression_list (optional)
- *   kid[3] = ")"
- *
- * We drill into kid[0] to find the identifier token.
- */
-/**
- * @brief Recursively find an identifier token in a subtree.
- *
- * Walks into primary_expression / identifier nodes to find the
- * terminal token. Only matches simple identifier paths (not member
- * access or subscript expressions).
- */
-static tok_t *
-find_identifier_tok(tnode_t *node)
-{
-    if (!node) {
-        return nullptr;
-    }
-    if (node->tptr) {
-        return node->tptr;
-    }
-    // Only walk into: postfix_expression(PRIMARY), primary_expression(identifier),
-    // identifier, provided_identifier — to avoid matching method calls.
-    if (node->nt_id == NT_postfix_expression
-        && node->branch != BRANCH(postfix_expression, PRIMARY)) {
-        return nullptr;
-    }
-    for (int i = 0; i < node->num_kids; i++) {
-        tok_t *tok = find_identifier_tok(tnode_get_kid(node, i));
-        if (tok) {
-            return tok;
-        }
-    }
-    return nullptr;
-}
-
-static char *
-get_callee_name(tree_xform_t *ctx, tnode_t *node)
-{
-    tnode_t *callee = tnode_get_kid(node, 0);
-    if (!callee) {
-        return nullptr;
-    }
-
-    tok_t *tok = find_identifier_tok(callee);
-    if (!tok) {
-        return nullptr;
-    }
-
-    return extract(ctx->input, tok);
-}
-
-/**
- * @brief Emit a subtree to a dynamically allocated string.
- */
-char *
-emit_node_to_string(tree_xform_t *ctx, tnode_t *node)
-{
-    char  *output = nullptr;
-    size_t size;
-    FILE  *f = open_memstream(&output, &size);
-
-    emit_ctx_t ectx;
-    emit_init(&ectx, ctx->lex, f);
-    emit_tree(&ectx, node);
-    emit_finish(&ectx);
-
-    fclose(f);
-    return output;
-}
-
-/**
- * @brief Strip #line directives from emitted source text.
- *
- * The emitter inserts #line directives which would confuse the temporary
- * compilation. We remove them here.
- */
-char *
-strip_line_directives(const char *src)
-{
-    char  *out = nullptr;
-    size_t size;
-    FILE  *f = open_memstream(&out, &size);
-
-    const char *p = src;
-    while (*p) {
-        // Check for #line or # <digit> at start of line
-        if (*p == '#') {
-            const char *q = p + 1;
-            // Skip whitespace after #
-            while (*q == ' ' || *q == '\t') {
-                q++;
-            }
-            // Check for "line" keyword or digit
-            bool is_line_directive = false;
-            if (*q >= '0' && *q <= '9') {
-                is_line_directive = true;
-            }
-            else if (strncmp(q, "line", 4) == 0
-                     && (q[4] == ' ' || q[4] == '\t')) {
-                is_line_directive = true;
-            }
-
-            if (is_line_directive) {
-                // Skip entire line
-                while (*p && *p != '\n') {
-                    p++;
-                }
-                if (*p == '\n') {
-                    p++;
-                }
-                continue;
-            }
-        }
-
-        // Copy line normally
-        while (*p && *p != '\n') {
-            fputc(*p, f);
-            p++;
-        }
-        if (*p == '\n') {
-            fputc('\n', f);
-            p++;
-        }
-    }
-
-    fclose(f);
-    return out;
-}
+// Helpers moved to xform_helpers.c — see xform_helpers.h for declarations.
 
 /**
  * @brief Check if a tree contains a node with the given ID (iterative DFS).
@@ -538,31 +401,6 @@ compile_and_run(const char *compiler, const char *source, char **err_out)
     }
 
     return result;
-}
-
-/**
- * @brief Build a numeric literal replacement node.
- *
- * Creates: postfix_expression_9(primary_expression_1(constant(TT_NUM)))
- */
-static tnode_t *
-build_numeric_literal(const char *value_str, int line)
-{
-    tnode_t *const_node = synth_nonterminal("constant");
-    const_node->nt_id   = NT_constant;
-    add_child(const_node, synth_terminal(value_str, TT_NUM, line));
-
-    tnode_t *primary = synth_nonterminal("primary_expression_1");
-    primary->nt_id   = NT_primary_expression;
-    primary->branch  = 1;
-    add_child(primary, const_node);
-
-    tnode_t *postfix = synth_nonterminal("postfix_expression_9");
-    postfix->nt_id   = NT_postfix_expression;
-    postfix->branch  = BRANCH(postfix_expression, PRIMARY);
-    add_child(postfix, primary);
-
-    return postfix;
 }
 
 // ---------------------------------------------------------------------------

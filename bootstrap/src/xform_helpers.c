@@ -12,7 +12,9 @@
 #include "ncc_limits.h"
 
 #include "branch_symbols.h"
+#include "emit.h"
 #include "lex.h"
+#include "token.h"
 #include "transform.h"
 #include "xform_helpers.h"
 
@@ -273,4 +275,130 @@ wrap_in_expr_hierarchy(tnode_t *inner, int line)
     add_child(assign, cond);
 
     return assign;
+}
+
+// ====================================================================
+// Emit / callee / numeric helpers (moved from xform_constexpr.c)
+// ====================================================================
+
+tok_t *
+find_identifier_tok(tnode_t *node)
+{
+    if (!node) {
+        return nullptr;
+    }
+    if (node->tptr) {
+        return node->tptr;
+    }
+    if (node->nt_id == NT_postfix_expression
+        && node->branch != BRANCH(postfix_expression, PRIMARY)) {
+        return nullptr;
+    }
+    for (int i = 0; i < node->num_kids; i++) {
+        tok_t *tok = find_identifier_tok(tnode_get_kid(node, i));
+        if (tok) {
+            return tok;
+        }
+    }
+    return nullptr;
+}
+
+char *
+get_callee_name(tree_xform_t *ctx, tnode_t *node)
+{
+    tnode_t *callee = tnode_get_kid(node, 0);
+    if (!callee) {
+        return nullptr;
+    }
+
+    tok_t *tok = find_identifier_tok(callee);
+    if (!tok) {
+        return nullptr;
+    }
+
+    return extract(ctx->input, tok);
+}
+
+char *
+emit_node_to_string(tree_xform_t *ctx, tnode_t *node)
+{
+    char  *output = nullptr;
+    size_t size;
+    FILE  *f = open_memstream(&output, &size);
+
+    emit_ctx_t ectx;
+    emit_init(&ectx, ctx->lex, f);
+    emit_tree(&ectx, node);
+    emit_finish(&ectx);
+
+    fclose(f);
+    return output;
+}
+
+char *
+strip_line_directives(const char *src)
+{
+    char  *out = nullptr;
+    size_t size;
+    FILE  *f = open_memstream(&out, &size);
+
+    const char *p = src;
+    while (*p) {
+        if (*p == '#') {
+            const char *q = p + 1;
+            while (*q == ' ' || *q == '\t') {
+                q++;
+            }
+            bool is_line_directive = false;
+            if (*q >= '0' && *q <= '9') {
+                is_line_directive = true;
+            }
+            else if (strncmp(q, "line", 4) == 0
+                     && (q[4] == ' ' || q[4] == '\t')) {
+                is_line_directive = true;
+            }
+
+            if (is_line_directive) {
+                while (*p && *p != '\n') {
+                    p++;
+                }
+                if (*p == '\n') {
+                    p++;
+                }
+                continue;
+            }
+        }
+
+        while (*p && *p != '\n') {
+            fputc(*p, f);
+            p++;
+        }
+        if (*p == '\n') {
+            fputc('\n', f);
+            p++;
+        }
+    }
+
+    fclose(f);
+    return out;
+}
+
+tnode_t *
+build_numeric_literal(const char *value_str, int line)
+{
+    tnode_t *const_node = synth_nonterminal("constant");
+    const_node->nt_id   = NT_constant;
+    add_child(const_node, synth_terminal(value_str, TT_NUM, line));
+
+    tnode_t *primary = synth_nonterminal("primary_expression_1");
+    primary->nt_id   = NT_primary_expression;
+    primary->branch  = 1;
+    add_child(primary, const_node);
+
+    tnode_t *postfix = synth_nonterminal("postfix_expression_9");
+    postfix->nt_id   = NT_postfix_expression;
+    postfix->branch  = BRANCH(postfix_expression, PRIMARY);
+    add_child(postfix, primary);
+
+    return postfix;
 }

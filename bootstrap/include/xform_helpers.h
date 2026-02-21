@@ -12,6 +12,8 @@
 #include "types.h"
 #include "nt_types.h"
 #include "rewrite.h"
+#include "transform.h"
+#include "token.h"
 
 // ====================================================================
 // Child manipulation
@@ -95,3 +97,38 @@ extern tnode_t *build_primary_id(const char *name, int line);
  * @return The outermost `assignment_expression` node.
  */
 extern tnode_t *wrap_in_expr_hierarchy(tnode_t *inner, int line);
+
+// ====================================================================
+// Emit / callee / numeric helpers
+// ====================================================================
+
+/**
+ * @brief Recursively find an identifier token in a subtree.
+ *
+ * Only walks into primary_expression / identifier nodes (not member
+ * access or subscript expressions).
+ */
+extern tok_t *find_identifier_tok(tnode_t *node);
+
+/**
+ * @brief Extract the callee name from a CALL postfix_expression.
+ * @return Allocated string (caller must free), or nullptr.
+ */
+extern char *get_callee_name(tree_xform_t *ctx, tnode_t *node);
+
+/**
+ * @brief Emit a subtree to a dynamically allocated string.
+ */
+extern char *emit_node_to_string(tree_xform_t *ctx, tnode_t *node);
+
+/**
+ * @brief Strip #line directives from emitted source text.
+ */
+extern char *strip_line_directives(const char *src);
+
+/**
+ * @brief Build a numeric literal replacement node.
+ *
+ * Creates: `postfix_expression(PRIMARY) -> primary_expression -> constant -> TT_NUM`
+ */
+extern tnode_t *build_numeric_literal(const char *value_str, int line);
