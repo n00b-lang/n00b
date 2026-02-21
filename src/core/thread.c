@@ -106,7 +106,7 @@ n00b_thread_init() _kargs
         .os_thread_id = GetCurrentThreadId(),
 #else
         .pthread_id    = pthread_self(),
-        .pthread_attrs = attrs,
+        .pthread_attrs = {0},
 #endif
         .record = rec,
         .id_info.parts = {
@@ -114,6 +114,12 @@ n00b_thread_init() _kargs
             .generation = gen,
         },
     };
+
+#if !defined(_WIN32)
+    if (n00b_option_is_set(attrs)) {
+        self->pthread_attrs = n00b_option_get(attrs);
+    }
+#endif
 
 #if defined(_WIN32)
     n00b_win_thread_debug_log("post-assign", runtime, acquired_slot, self);

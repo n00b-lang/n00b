@@ -142,11 +142,6 @@ if using_windows
     '_WIN32_WINNT=0x0602',
     'WIN32_LEAN_AND_MEAN',
     'NOMINMAX',
-    '__cdecl=',
-    '__stdcall=',
-    '__fastcall=',
-    '__thiscall=',
-    '__vectorcall=',
   ]
   # Emit Windows-native CodeView debug records when clang is the backend.
   # This gives WinDbg/CDB better symbol and line correlation than DWARF-only data.

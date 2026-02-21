@@ -11,6 +11,7 @@ typedef unsigned long      ULONG;
 typedef long               LONG;
 typedef long               NTSTATUS;
 typedef unsigned short     WORD;
+typedef short              SHORT;
 typedef unsigned char      BYTE;
 typedef uint64_t           SIZE_T;
 typedef uint64_t           ULONG_PTR;
@@ -57,6 +58,26 @@ typedef struct {
     WORD      wProcessorRevision;
 } SYSTEM_INFO;
 
+typedef struct {
+    SHORT X;
+    SHORT Y;
+} COORD;
+
+typedef struct {
+    SHORT Left;
+    SHORT Top;
+    SHORT Right;
+    SHORT Bottom;
+} SMALL_RECT;
+
+typedef struct {
+    COORD      dwSize;
+    COORD      dwCursorPosition;
+    WORD       wAttributes;
+    SMALL_RECT srWindow;
+    COORD      dwMaximumWindowSize;
+} CONSOLE_SCREEN_BUFFER_INFO;
+
 #define INFINITE 0xffffffffUL
 
 #define ERROR_INVALID_PARAMETER 87UL
@@ -76,6 +97,7 @@ typedef struct {
 #define PAGE_GUARD             0x100UL
 
 #define BCRYPT_USE_SYSTEM_PREFERRED_RNG 0x00000002UL
+#define STD_OUTPUT_HANDLE       ((DWORD)-11)
 
 extern BOOL     WaitOnAddress(volatile void *address,
                               const void    *compare_address,
@@ -84,6 +106,12 @@ extern BOOL     WaitOnAddress(volatile void *address,
 extern void     WakeByAddressSingle(void *address);
 extern void     WakeByAddressAll(void *address);
 extern DWORD    GetLastError(void);
+extern HANDLE   GetStdHandle(DWORD std_handle);
+extern BOOL     GetConsoleScreenBufferInfo(HANDLE                       console_output,
+                                           CONSOLE_SCREEN_BUFFER_INFO *console_screen_buffer_info);
+extern HMODULE  LoadLibraryA(const char *library_name);
+extern void    *GetProcAddress(HMODULE module, const char *proc_name);
+extern BOOL     FreeLibrary(HMODULE module);
 extern DWORD    GetCurrentThreadId(void);
 extern void     GetCurrentThreadStackLimits(ULONG_PTR *low_limit, ULONG_PTR *high_limit);
 extern void     GetSystemInfo(SYSTEM_INFO *system_info);

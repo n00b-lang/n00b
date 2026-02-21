@@ -41,6 +41,49 @@ extern void th_init(void);
 
 static void print_ncc_help(void);
 
+static bool
+ncc_needs_windows_abi_shims(ncc_argv_t *ctx, char *compiler)
+{
+    if (!ctx) {
+        return false;
+    }
+
+    for (int i = 1; i < ctx->argc; i++) {
+        char *arg = ctx->argv[i];
+
+        if (!arg) {
+            continue;
+        }
+
+        if (!strncmp(arg, "--target=", 9)) {
+            char *triple = arg + 9;
+            if (strstr(triple, "windows") || strstr(triple, "mingw")) {
+                return true;
+            }
+        }
+
+        if (!strcmp(arg, "-target") && i + 1 < ctx->argc) {
+            char *triple = ctx->argv[i + 1];
+            if (triple && (strstr(triple, "windows") || strstr(triple, "mingw"))) {
+                return true;
+            }
+        }
+
+        if (!strncmp(arg, "-D_WIN32", 8) || !strncmp(arg, "-DWIN32", 7)) {
+            return true;
+        }
+    }
+
+    if (!compiler) {
+        return false;
+    }
+
+    const char *base = strrchr(compiler, '/');
+    base             = base ? base + 1 : compiler;
+
+    return strstr(base, "mingw") != nullptr;
+}
+
 static inline void
 signal_setup(void)
 {
@@ -74,10 +117,13 @@ compiler_passthrough(ncc_argv_t *ctx)
 ncc_buf_t *
 ncc_invoke_preprocessor(ncc_argv_t *ctx, char *compiler, ncc_buf_t *input)
 {
-    bool use_no_blocks = ncc_compiler_supports_no_blocks(compiler);
+    bool use_no_blocks         = ncc_compiler_supports_no_blocks(compiler);
+    bool use_windows_abi_shims = ncc_needs_windows_abi_shims(ctx, compiler);
+    int  windows_shim_argc     = use_windows_abi_shims ? 10 : 0;
 
-    // We need space for original args + "-E" + optional "-fno-blocks" + null terminator
-    int   nargs = ctx->argc + 2 + (use_no_blocks ? 1 : 0);
+    // We need space for original args + "-E" + optional "-fno-blocks" +
+    // optional Windows ABI shims + null terminator.
+    int   nargs = ctx->argc + 2 + (use_no_blocks ? 1 : 0) + windows_shim_argc;
     char *preproc_argv[nargs + 1];
 
     for (int i = 0; i < nargs + 1; i++) {
@@ -100,6 +146,22 @@ ncc_invoke_preprocessor(ncc_argv_t *ctx, char *compiler, ncc_buf_t *input)
     // Add -fno-blocks to disable block syntax in headers (clang only)
     if (use_no_blocks) {
         preproc_argv[tail++] = "-fno-blocks";
+    }
+
+    if (use_windows_abi_shims) {
+        // MinGW headers use calling-convention attributes that NCC's parser
+        // does not yet understand. Strip them only during the preprocessor
+        // stage that feeds the NCC parser.
+        preproc_argv[tail++] = "-U__cdecl";
+        preproc_argv[tail++] = "-U__stdcall";
+        preproc_argv[tail++] = "-U__fastcall";
+        preproc_argv[tail++] = "-U__thiscall";
+        preproc_argv[tail++] = "-U__vectorcall";
+        preproc_argv[tail++] = "-D__cdecl=";
+        preproc_argv[tail++] = "-D__stdcall=";
+        preproc_argv[tail++] = "-D__fastcall=";
+        preproc_argv[tail++] = "-D__thiscall=";
+        preproc_argv[tail++] = "-D__vectorcall=";
     }
 
     int outspec_index = ctx->source_indices[0];

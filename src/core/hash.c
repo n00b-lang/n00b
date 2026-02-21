@@ -114,7 +114,7 @@ n00b_string_hash(n00b_string_t s)
         return n00b_hash_word(0ULL);
     }
 
-    return n00b_xxh_convert(XXH3_128bits(s.data, s.u8_bytes));
+    return n00b_xxh64_pair(s.data, s.u8_bytes);
 }
 
 n00b_uint128_t
@@ -124,5 +124,5 @@ n00b_buffer_hash(n00b_buffer_t *b)
         return n00b_hash_word(0ULL);
     }
 
-    return n00b_xxh_convert(XXH3_128bits(b->data, b->byte_len));
+    return n00b_xxh64_pair(b->data, b->byte_len);
 }

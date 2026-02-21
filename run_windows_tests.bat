@@ -6,6 +6,7 @@ set "BIN_DIR=%ROOT%build_cross_windows_x86_64"
 set "LOG_DIR=%ROOT%windows_debug_logs"
 set "SUMMARY=%LOG_DIR%\summary.txt"
 set "OVERALL=0"
+set "TEST_COUNT=0"
 set "DBG_CMD="
 if not defined N00B_WIN_THREAD_DEBUG set "N00B_WIN_THREAD_DEBUG=1"
 
@@ -41,9 +42,19 @@ if "%ROOT:~0,2%"=="\\" (
     ) >> "%SUMMARY%"
 )
 
-call :run_test testie
-call :run_test test_list
-call :run_test test_hash
+call :run_all_tests
+
+if "%TEST_COUNT%"=="0" (
+    echo [ERROR] No test executables found in "%BIN_DIR%" matching test_*.exe
+    if "%OVERALL%"=="0" set "OVERALL=4"
+    (
+        echo [tests]
+        echo discovered: 0
+        echo pattern: %BIN_DIR%\test_*.exe
+        echo error: no matching executables found
+        echo.
+    ) >> "%SUMMARY%"
+)
 
 echo.
 echo Overall exit code: %OVERALL%
@@ -70,6 +81,24 @@ if not defined DBG_CMD (
         set "DBG_CMD=%LocalAppData%\Microsoft\WindowsApps\cdbX64.exe"
     )
 )
+exit /b 0
+
+:run_all_tests
+for /f "delims=" %%F in ('dir /b /a-d "%BIN_DIR%\test_*.exe" 2^>nul') do (
+    set /a TEST_COUNT+=1
+    call :run_test "%%~nF"
+)
+
+if "%TEST_COUNT%"=="0" (
+    exit /b 0
+)
+
+(
+    echo [tests]
+    echo discovered: %TEST_COUNT%
+    echo pattern: %BIN_DIR%\test_*.exe
+    echo.
+) >> "%SUMMARY%"
 exit /b 0
 
 :run_test

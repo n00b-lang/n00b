@@ -90,8 +90,8 @@ struct n00b_thread_t {
 #if defined(_WIN32)
     uint32_t            os_thread_id;
 #else
-    pthread_t             pthread_id;
-    n00b_option_t(pthread_attr_t) pthread_attrs;
+    pthread_t          pthread_id;
+    pthread_attr_t     pthread_attrs;
 #endif
     n00b_futex_t        self_lock;
     n00b_thread_record_t *record; ///< Pointer into rt->threads[slot].

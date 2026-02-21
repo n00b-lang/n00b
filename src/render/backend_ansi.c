@@ -10,8 +10,12 @@
 
 #include <stdio.h>
 #include <string.h>
+#if defined(_WIN32)
+#include "internal/n00b_windows_compat.h"
+#else
 #include <unistd.h>
 #include <sys/ioctl.h>
+#endif
 #include "n00b.h"
 #include "core/alloc.h"
 #include "render/backend.h"
@@ -35,6 +39,58 @@ typedef struct {
 } ansi_ctx_t;
 
 #define ANSI_INITIAL_BUF 16384
+
+static void
+n00b_os_write(int fd, const char *buf, size_t len)
+{
+#if defined(_WIN32)
+    (void)fd;
+    (void)fwrite(buf, 1, len, stdout);
+    (void)fflush(stdout);
+#else
+    (void)write(fd, buf, len);
+#endif
+}
+
+#if defined(_WIN32)
+static bool
+n00b_query_terminal_size(int fd, n00b_isize_t *rows, n00b_isize_t *cols)
+{
+    (void)fd;
+    HANDLE h = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (!h) {
+        return false;
+    }
+
+    CONSOLE_SCREEN_BUFFER_INFO info;
+    if (!GetConsoleScreenBufferInfo(h, &info)) {
+        return false;
+    }
+
+    n00b_isize_t width = (n00b_isize_t)(info.srWindow.Right - info.srWindow.Left + 1);
+    n00b_isize_t height = (n00b_isize_t)(info.srWindow.Bottom - info.srWindow.Top + 1);
+    if (width <= 0 || height <= 0) {
+        return false;
+    }
+
+    *cols = width;
+    *rows = height;
+    return true;
+}
+#else
+static bool
+n00b_query_terminal_size(int fd, n00b_isize_t *rows, n00b_isize_t *cols)
+{
+    struct winsize ws;
+    if (ioctl(fd, TIOCGWINSZ, &ws) != 0 || ws.ws_col <= 0) {
+        return false;
+    }
+
+    *cols = ws.ws_col;
+    *rows = ws.ws_row;
+    return true;
+}
+#endif
 
 // -------------------------------------------------------------------
 // Output buffer helpers
@@ -209,13 +265,7 @@ ansi_init(void)
     ctx->buf_used   = 0;
     ctx->cursor_visible = true;
 
-    // Try to get terminal size.
-    struct winsize ws;
-    if (ioctl(ctx->fd, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0) {
-        ctx->cols = ws.ws_col;
-        ctx->rows = ws.ws_row;
-    }
-    else {
+    if (!n00b_query_terminal_size(ctx->fd, &ctx->rows, &ctx->cols)) {
         ctx->cols = 80;
         ctx->rows = 25;
     }
@@ -257,12 +307,7 @@ ansi_get_size(void *vctx)
 {
     ansi_ctx_t *ctx = vctx;
 
-    // Re-query terminal size.
-    struct winsize ws;
-    if (ioctl(ctx->fd, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0) {
-        ctx->cols = ws.ws_col;
-        ctx->rows = ws.ws_row;
-    }
+    (void)n00b_query_terminal_size(ctx->fd, &ctx->rows, &ctx->cols);
 
     return (n00b_render_size_t){
         .rows = ctx->rows,
@@ -326,7 +371,7 @@ ansi_flush(void *vctx)
 {
     ansi_ctx_t *ctx = vctx;
     if (ctx->buf_used > 0) {
-        write(ctx->fd, ctx->buf, ctx->buf_used);
+        n00b_os_write(ctx->fd, ctx->buf, ctx->buf_used);
         ctx->buf_used = 0;
     }
 }

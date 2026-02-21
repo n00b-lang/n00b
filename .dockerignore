@@ -1,0 +1,5 @@
+.buildx-cache
+.buildx-cache-new
+.buildx-cache-new-*
+windows_debug_logs/
+wine.out

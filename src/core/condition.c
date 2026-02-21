@@ -172,6 +172,14 @@ base_wait(n00b_condition_t *cv,
         }
 
         n00b_barrier();
+
+        if (!waking) {
+            // A waiter that does not match the current notify round must wait
+            // for the notifier to finish before re-entering the wait loop.
+            // Otherwise it can consume `waiters_to_process` multiple times.
+            n00b_futex_wait_for_value(&cv->notify_epoch, epoch + 2);
+            waiters = n00b_atomic_load(&cv->wait_queue);
+        }
     } while (!waking);
 
     // Wait for the notifier to complete (epoch+2).
@@ -220,7 +228,9 @@ _internal_cv_notify(n00b_condition_t *cv,
 
     uint32_t epoch = n00b_atomic_load(&cv->notify_epoch);
 
-    n00b_futex_wake(&cv->wait_queue, false);
+    // Wake all queued waiters for this notify round so we cannot lose progress
+    // if one thread has not yet entered the kernel wait when notify starts.
+    n00b_futex_wake(&cv->wait_queue, true);
     _n00b_condition_unlock(cv, loc);
 
     n00b_thread_suspend(stw_ctx);

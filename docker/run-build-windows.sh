@@ -26,9 +26,6 @@ N00B_NCC_COMPILER=clang \
 N00B_TOOLCHAIN_TARGET=x86_64-w64-windows-gnu \
 N00B_CLEAN=1 ./build.sh build_cross_windows_x86_64
 
-phase "compile confirmation"
-meson compile -C build_cross_windows_x86_64
-
 phase "artifact type check"
 file build_cross_windows_x86_64/test_list.exe
 

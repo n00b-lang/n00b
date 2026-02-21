@@ -9,8 +9,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#if defined(_WIN32)
+#include "internal/n00b_windows_compat.h"
+#else
 #include <sys/ioctl.h>
 #include <unistd.h>
+#endif
 
 #include "n00b.h"
 #include "core/alloc.h"
@@ -176,11 +180,24 @@ read_all(FILE *fp, size_t *out_len)
 static int
 detect_terminal_width(void)
 {
+#if defined(_WIN32)
+    HANDLE h = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (h) {
+        CONSOLE_SCREEN_BUFFER_INFO info;
+        if (GetConsoleScreenBufferInfo(h, &info)) {
+            int width = (int)(info.srWindow.Right - info.srWindow.Left + 1);
+            if (width > 0) {
+                return width;
+            }
+        }
+    }
+#else
     struct winsize ws;
 
     if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0) {
         return ws.ws_col;
     }
+#endif
 
     return 80;
 }
