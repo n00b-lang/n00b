@@ -64,3 +64,16 @@
 
 #define N00B_REST(...)     __VA_OPT__(_N00B_REST(__VA_ARGS__))
 #define _N00B_REST(x, ...) __VA_ARGS__
+
+// clang-format off
+#define N00B_IS_POINTER(EXPR)      \
+    _Generic(&(typeof((EXPR))){0}, \
+        typeof(*(EXPR)) **: 1,     \
+        default: 0)
+
+#define N00B_POINTER_DISPATCH(EXPR, ptr_dispatch, concrete_dispatch) \
+    _Generic(&(typeof((EXPR))){0},                                   \
+        typeof(*(EXPR)) **: ptr_dispatch,                            \
+	     default: concrete_dispatch)
+
+// clang-format on

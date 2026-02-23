@@ -408,7 +408,8 @@ extern norm_node_t *normalize_tokens_to_type_tree(ncc_buf_t *input, tnode_t *nod
  * @param type_as_string Type string to mangle
  * @return Mangled identifier string
  */
-extern char *get_munged_identifier(char *type_as_string);
+extern char     *get_munged_identifier(char *type_as_string);
+extern uint64_t  get_type_hash_u64(char *type_as_string);
 
 // Find the leftmost leaf token in a tnode subtree.
 static inline tok_t *

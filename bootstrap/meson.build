@@ -58,6 +58,7 @@ bootstrap_files = [
   'src/xform_rstr.c',
   'src/xform_constexpr.c',
   'src/xform_constexpr_paste.c',
+  'src/xform_typehash.c',
 ]
 
 # Clang source-based code coverage

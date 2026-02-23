@@ -213,8 +213,8 @@ a reminder:
          really just a power move.
 
 - NFKD — It's a good choice for search matching, because it lets you
-       strip out combining characters easily AND it collapses variants
-       of a character, so you get better matching.
+         strip out combining characters easily AND it collapses
+         variants of a character, so you get better matching.
 
 
 NFC, NFD, NFKC, NFKD normalization with quick-check predicates and a streaming

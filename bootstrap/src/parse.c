@@ -150,7 +150,7 @@ declare_nt(synthetic_identifier, 2);
 declare_nt(typeid_atom, 2);
 declare_nt(typeid_continuation, 2);
 declare_nt(synthetic_string_literal, 2);
-declare_nt(primary_expression, 10);
+declare_nt(primary_expression, 11);
 declare_nt(generic_selection, 1);
 declare_nt(generic_controlling_operand, 2);
 declare_recursive(generic_assoc_list, 2);
@@ -291,15 +291,16 @@ nt_branch(synthetic_identifier, 0)
     end_nt();
 }
 
-// [EXTENSION: NCC] constexpr_paste("prefix", expr) - produces identifier
-// by concatenating a string prefix with an integer expression result.
+// [EXTENSION: NCC] constexpr_paste(expr, expr) - produces identifier
+// by concatenating two expressions' emitted text as identifier fragments.
 // Example: constexpr_paste("item_", 3) -> item_3
+// Example: constexpr_paste(field_, typeid(T)) -> field_<typeid hash>
 nt_branch(synthetic_identifier, 1)
 {
     start_nt();
     required_named_identifier(kw_constexpr_paste);
     required_op("(");
-    required_nt(string_literal);
+    required_nt(assignment_expression);
     required_op(",");
     required_nt(assignment_expression);
     required_op(")");
@@ -404,7 +405,7 @@ nt_branch(primary_expression, 5)
     end_nt();
 }
 
-// Plain identifier - must come after typeid branch (0) so typeid(...) matches first
+// Plain identifier
 nt_branch(primary_expression, 6)
 {
     start_nt();
@@ -447,6 +448,19 @@ nt_branch(primary_expression, 9)
     start_nt();
     required_keyword(kw_gcc_extension);
     required_nt(primary_expression);
+    end_nt();
+}
+
+// [EXTENSION: NCC] typehash(type) - produces a uint64 hash of the normalized type.
+// Same argument syntax as typeid(). Transform replaces with numeric literal.
+nt_branch(primary_expression, 10)
+{
+    start_nt();
+    required_keyword(kw_typehash);
+    required_op("(");
+    required_nt(typeid_atom);
+    optional_nt(typeid_continuation);
+    required_op(")");
     end_nt();
 }
 

@@ -492,6 +492,7 @@ str_list(kw_storage_class, "auto", "constexpr", "extern", "register",
 str_list(kw_typeof, "typeof", "__typeof__", "__typeof");
 str_list(kw_typeof_unqual, "typeof_unqual");
 str_list(kw_typeid, "typeid", "__typeid__", "__typeid");
+str_list(kw_typehash, "typehash", "__typehash__", "__typehash");
 str_list(kw_typestr, "typestr", "__typestr__", "__typestr");
 str_list(kw_constexpr_paste, "constexpr_paste", "__constexpr_paste__", "__constexpr_paste");
 str_list(kw_type_qualifier, "const", "restrict", "volatile", "_Atomic",

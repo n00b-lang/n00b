@@ -130,6 +130,7 @@ extern strlist_t *kw_storage_class;
 extern strlist_t *kw_typeof;
 extern strlist_t *kw_typeof_unqual;
 extern strlist_t *kw_typeid;
+extern strlist_t *kw_typehash;
 extern strlist_t *kw_typestr;
 extern strlist_t *kw_constexpr_paste;
 extern strlist_t *kw_type_qualifier;

@@ -225,6 +225,7 @@ static const char *c_keywords[] = {
     "true",
     "typedef",
     "typeof",
+    "typehash",
     "typeof_unqual",
     "union",
     "unsigned",
