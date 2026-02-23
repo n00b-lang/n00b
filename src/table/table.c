@@ -4,6 +4,7 @@
 
 #include "n00b.h"
 #include "core/alloc.h"
+#include "core/gc.h"
 #include "core/string.h"
 #include "core/data_lock.h"
 #include "core/arena.h"
@@ -183,9 +184,11 @@ n00b_table_empty_cell(n00b_table_t *table)
 void
 n00b_table_end_row(n00b_table_t *table)
 {
-    n00b_table_row_t *row = &table->current_row;
+    // Keep table reachable and updatable across GC-capable allocations.
+    n00b_gc_register_root(table);
 
-    if (row->cells.len == 0) {
+    if (table->current_row.cells.len == 0) {
+        n00b_gc_unregister_root(table);
         return;
     }
 
@@ -213,13 +216,15 @@ n00b_table_end_row(n00b_table_t *table)
     // Resolve span-all (-1) cells: replace with actual span.
     n00b_isize_t used_cols = 0;
 
-    for (size_t i = 0; i < row->cells.len; i++) {
-        if (row->cells.data[i].col_span == -1) {
-            int32_t remaining = (int32_t)(num_cols - used_cols);
-            row->cells.data[i].col_span = (remaining > 0) ? remaining : 1;
+    for (size_t i = 0; i < table->current_row.cells.len; i++) {
+        if (table->current_row.cells.data[i].col_span == -1) {
+            int32_t remaining                         = (int32_t)(num_cols - used_cols);
+            table->current_row.cells.data[i].col_span = (remaining > 0) ? remaining : 1;
         }
-        used_cols += (n00b_isize_t)row->cells.data[i].col_span;
+        used_cols += (n00b_isize_t)table->current_row.cells.data[i].col_span;
     }
+
+    n00b_table_row_t committed_row = table->current_row;
 
     // Commit the row.
     if (table->max_rows > 0) {
@@ -229,26 +234,28 @@ n00b_table_end_row(n00b_table_t *table)
 
         if ((n00b_isize_t)n_rows < table->max_rows) {
             // Still filling up the ring buffer.
-            n00b_list_push(table->rows, *row);
+            n00b_list_push(table->rows, committed_row);
         }
         else {
             // Overwriting oldest row in the ring.
             n00b_list_free(table->rows.data[slot].cells);
-            table->rows.data[slot] = *row;
-            table->ring_base = (table->total_added + 1) % table->max_rows;
+            table->rows.data[slot] = committed_row;
+            table->ring_base       = (table->total_added + 1) % table->max_rows;
         }
     }
     else {
         // Unlimited mode.
-        n00b_list_push(table->rows, *row);
+        n00b_list_push(table->rows, committed_row);
     }
 
     table->total_added++;
     table->layout_valid = false;
 
     // Reset current row (cells have been moved to rows[]).
-    table->current_row.cells = n00b_list_new(n00b_table_cell_t,
-                                              table->allocator);
+    n00b_list_t(n00b_table_cell_t) next_cells
+        = n00b_list_new(n00b_table_cell_t, table->allocator);
+    table->current_row.cells = next_cells;
+    n00b_gc_unregister_root(table);
 }
 
 void
