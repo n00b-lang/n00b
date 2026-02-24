@@ -16,8 +16,6 @@
 #include <stdio.h>
 #define n00b_fprintf fprintf
 
-#include <sys/mman.h>
-#include <unistd.h>
 #include <errno.h>
 
 #if !defined(N00B_MMAPS_START_PAGES)
@@ -31,7 +29,14 @@
 static inline void
 mmap_lock(n00b_mmap_ctx_t *ctx)
 {
-    int64_t tid      = n00b_thread_unique_id();
+    int64_t tid;
+#if defined(_WIN32)
+    // During early runtime bootstrap, thread-local n00b IDs may not be stable yet.
+    // A raw OS thread id is sufficient for this re-entrant lock owner check.
+    tid = (int64_t)(uint64_t)GetCurrentThreadId();
+#else
+    tid = n00b_thread_unique_id();
+#endif
     int64_t expected = -1;
 
     do {
@@ -272,7 +277,7 @@ _n00b_mmap(size_t sz, char *loc) _kargs
         }
     }
 
-    auto mmap_r = n00b_check_mmap(nullptr, sz, N00B_MPROT, N00B_MFLAG, -1, 0);
+    auto mmap_r = n00b_platform_map_anon(sz);
 
     if (n00b_result_is_err(mmap_r)) {
         return n00b_result_err(void *, n00b_result_get_err(mmap_r));
@@ -314,7 +319,11 @@ n00b_munmap(void *addr) _kargs
     n00b_mmaps_remove_base(ctx, map);
     mmap_write_unlock(ctx);
 
-    munmap(start, len);
+    auto unmap_r = n00b_platform_unmap(start, len);
+    if (n00b_result_is_err(unmap_r)) {
+        return unmap_r;
+    }
+
     return n00b_result_ok(int, 0);
 }
 

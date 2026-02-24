@@ -137,7 +137,11 @@ typedef n00b_hash_value_t (*n00b_hash_fn)(void *);
 typedef n00b_string_t *(*n00b_repr_fn)(void *);
 typedef void (*n00b_finalizer_t)(void *);
 typedef void (*n00b_vtable_entry)(void *, void *);
+#if defined(_WIN32)
+typedef void (*n00b_signal_handler_t)(int, void *, void *);
+#else
 typedef void (*n00b_signal_handler_t)(int, siginfo_t *, void *);
+#endif
 
 #define n00b_min(a, b)                                                                         \
     ({                                                                                         \

@@ -14,6 +14,7 @@
 #include <unistd.h>
 #include <assert.h>
 #include <errno.h>
+#include <sys/wait.h>
 
 #include "ncc_limits.h"
 
@@ -40,12 +41,65 @@ extern void th_init(void);
 
 static void print_ncc_help(void);
 
+static bool
+ncc_needs_windows_abi_shims(ncc_argv_t *ctx, char *compiler)
+{
+    if (!ctx) {
+        return false;
+    }
+
+    for (int i = 1; i < ctx->argc; i++) {
+        char *arg = ctx->argv[i];
+
+        if (!arg) {
+            continue;
+        }
+
+        if (!strncmp(arg, "--target=", 9)) {
+            char *triple = arg + 9;
+            if (strstr(triple, "windows") || strstr(triple, "mingw")) {
+                return true;
+            }
+        }
+
+        if (!strcmp(arg, "-target") && i + 1 < ctx->argc) {
+            char *triple = ctx->argv[i + 1];
+            if (triple && (strstr(triple, "windows") || strstr(triple, "mingw"))) {
+                return true;
+            }
+        }
+
+        if (!strncmp(arg, "-D_WIN32", 8) || !strncmp(arg, "-DWIN32", 7)) {
+            return true;
+        }
+    }
+
+    if (!compiler) {
+        return false;
+    }
+
+    const char *base = strrchr(compiler, '/');
+    base             = base ? base + 1 : compiler;
+
+    return strstr(base, "mingw") != nullptr;
+}
+
 static inline void
 signal_setup(void)
 {
-    static char      altstack[SIGSTKSZ];
-    static stack_t   ss = {.ss_sp = altstack, .ss_size = SIGSTKSZ};
-    struct sigaction sa = {.sa_handler = crash_handler, .sa_flags = SA_ONSTACK};
+    static char        *altstack = NULL;
+    static const size_t alt_sz   = 64 * 1024;
+    static stack_t      ss;
+    struct sigaction    sa = {.sa_handler = crash_handler, .sa_flags = SA_ONSTACK};
+
+    if (altstack == NULL) {
+        altstack = malloc(alt_sz);
+        if (altstack == NULL) {
+            abort();
+        }
+        ss = (stack_t){.ss_sp = altstack, .ss_size = alt_sz};
+    }
+
     sigaltstack(&ss, NULL);
     sigaction(SIGSEGV, &sa, NULL);
     sigaction(SIGBUS, &sa, NULL);
@@ -56,15 +110,20 @@ compiler_passthrough(ncc_argv_t *ctx)
 {
     char *exe = ncc_find_compiler();
 
-    execvp(exe, ctx->argv);
+    ncc_exec_compiler(exe, ctx->argv);
     abort();
 }
 
 ncc_buf_t *
 ncc_invoke_preprocessor(ncc_argv_t *ctx, char *compiler, ncc_buf_t *input)
 {
-    // We need space for original args + "-E" + "-fno-blocks" + null terminator
-    int   nargs = ctx->argc + 3;
+    bool use_no_blocks         = ncc_compiler_supports_no_blocks(compiler);
+    bool use_windows_abi_shims = ncc_needs_windows_abi_shims(ctx, compiler);
+    int  windows_shim_argc     = use_windows_abi_shims ? 10 : 0;
+
+    // We need space for original args + "-E" + optional "-fno-blocks" +
+    // optional Windows ABI shims + null terminator.
+    int   nargs = ctx->argc + 2 + (use_no_blocks ? 1 : 0) + windows_shim_argc;
     char *preproc_argv[nargs + 1];
 
     for (int i = 0; i < nargs + 1; i++) {
@@ -84,8 +143,26 @@ ncc_invoke_preprocessor(ncc_argv_t *ctx, char *compiler, ncc_buf_t *input)
         preproc_argv[tail++] = (char *)"-E";
     }
 
-    // Add -fno-blocks to disable block syntax in headers
-    preproc_argv[tail++] = "-fno-blocks";
+    // Add -fno-blocks to disable block syntax in headers (clang only)
+    if (use_no_blocks) {
+        preproc_argv[tail++] = "-fno-blocks";
+    }
+
+    if (use_windows_abi_shims) {
+        // MinGW headers use calling-convention attributes that NCC's parser
+        // does not yet understand. Strip them only during the preprocessor
+        // stage that feeds the NCC parser.
+        preproc_argv[tail++] = "-U__cdecl";
+        preproc_argv[tail++] = "-U__stdcall";
+        preproc_argv[tail++] = "-U__fastcall";
+        preproc_argv[tail++] = "-U__thiscall";
+        preproc_argv[tail++] = "-U__vectorcall";
+        preproc_argv[tail++] = "-D__cdecl=";
+        preproc_argv[tail++] = "-D__stdcall=";
+        preproc_argv[tail++] = "-D__fastcall=";
+        preproc_argv[tail++] = "-D__thiscall=";
+        preproc_argv[tail++] = "-D__vectorcall=";
+    }
 
     int outspec_index = ctx->source_indices[0];
 
@@ -159,7 +236,7 @@ sys_err:
         dup2(pipe0[0], STDIN_FILENO);
         close(pipe0[0]);
         dup2(pipe1[1], STDOUT_FILENO);
-        execvp(compiler, preproc_argv);
+        ncc_exec_compiler(compiler, preproc_argv);
         goto sys_err;
     }
     close(pipe0[0]);
@@ -243,9 +320,7 @@ main(int argc, char *argv[], [[maybe_unused]] char *envp[])
     }
 
     if (ctx.has_E && ctx.has_c) {
-        fprintf(stderr,
-                "%s:warning: passthrough: -E and -c both invoked.\n",
-                argv[0]);
+        fprintf(stderr, "%s:warning: passthrough: -E and -c both invoked.\n", argv[0]);
         compiler_passthrough(&ctx);
     }
 

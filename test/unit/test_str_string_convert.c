@@ -149,14 +149,19 @@ TEST(test_from_codepoint_invalid_too_large)
 
 TEST(test_from_file_missing)
 {
-    auto r = n00b_unicode_str_from_file("/nonexistent_path_12345",
-                                         .allocator = nullptr);
+    auto r = n00b_unicode_str_from_file("/nonexistent_path_12345", .allocator = nullptr);
     ASSERT(n00b_result_is_err(r));
 }
 
 TEST(test_from_file_dev_null)
 {
-    auto r = n00b_unicode_str_from_file("/dev/null", .allocator = nullptr);
+    const char *null_path =
+#if defined(_WIN32)
+        "NUL";
+#else
+        "/dev/null";
+#endif
+    auto r = n00b_unicode_str_from_file(null_path, .allocator = nullptr);
     ASSERT(n00b_result_is_ok(r));
     n00b_string_t s = n00b_result_get(r);
     ASSERT_EQ(s.u8_bytes, 0);
@@ -168,15 +173,16 @@ TEST(test_from_file_dev_null)
 
 TEST(test_make_cstr_array_basic)
 {
-    n00b_string_t raw[] = { S("one"), S("two"), S("three") };
+    n00b_string_t raw[]               = {S("one"), S("two"), S("three")};
     n00b_array_t(n00b_string_t) parts = n00b_array_checked_ptr(n00b_string_t, 3, raw);
-    parts.len = 3;
+    parts.len                         = 3;
     n00b_array_t(n00b_cstr_t) arr = n00b_unicode_make_cstr_array(parts, .allocator = nullptr);
     ASSERT_EQ(arr.len, 3);
     ASSERT_STR_EQ(arr.data[0], "one");
     ASSERT_STR_EQ(arr.data[1], "two");
     ASSERT_STR_EQ(arr.data[2], "three");
-    for (int i = 0; i < 3; i++) n00b_free(arr.data[i]);
+    for (int i = 0; i < 3; i++)
+        n00b_free(arr.data[i]);
 }
 
 TEST(test_make_cstr_array_empty)
@@ -186,7 +192,8 @@ TEST(test_make_cstr_array_empty)
     ASSERT_EQ(arr.len, 0);
 }
 
-static void run_tests(void)
+static void
+run_tests(void)
 {
     RUN_TEST(test_from_int_zero);
     RUN_TEST(test_from_int_positive);

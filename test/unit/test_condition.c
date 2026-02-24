@@ -24,6 +24,7 @@ basic_waiter(void *arg)
 {
     (void)arg;
     n00b_thread_init();
+    atomic_store(&basic_ready, 1);
 
     void *result = n00b_condition_wait(&basic_cv);
     atomic_store(&basic_result, (int)(uintptr_t)result);
@@ -31,6 +32,38 @@ basic_waiter(void *arg)
     n00b_condition_unlock(&basic_cv);
     n00b_thread_destroy();
     return nullptr;
+}
+
+static void
+wait_for_waiters(n00b_condition_t *cv, int32_t expected)
+{
+    struct timespec ts = {.tv_sec = 0, .tv_nsec = 1000000}; // 1ms
+
+    for (int i = 0; i < 5000; i++) {
+        int32_t waiters = n00b_atomic_load(&cv->wait_queue);
+        waiters &= ~N00B_CV_NOTIFY_IN_PROGRESS;
+        if (waiters >= expected) {
+            return;
+        }
+        nanosleep(&ts, nullptr);
+    }
+
+    assert(!"timed out waiting for condition waiters");
+}
+
+static void
+wait_for_flag(_Atomic int *flag)
+{
+    struct timespec ts = {.tv_sec = 0, .tv_nsec = 1000000}; // 1ms
+
+    for (int i = 0; i < 5000; i++) {
+        if (atomic_load(flag) != 0) {
+            return;
+        }
+        nanosleep(&ts, nullptr);
+    }
+
+    assert(!"timed out waiting for wake flag");
 }
 
 static void
@@ -44,9 +77,7 @@ test_basic_wait_notify(void)
     pthread_t waiter;
     pthread_create(&waiter, nullptr, basic_waiter, nullptr);
 
-    // Give the waiter time to enter wait().
-    struct timespec ts = {.tv_sec = 0, .tv_nsec = 50000000}; // 50ms
-    nanosleep(&ts, nullptr);
+    wait_for_waiters(&basic_cv, 1);
 
     n00b_condition_notify(&basic_cv, .value = (void *)42);
     n00b_condition_unlock(&basic_cv);
@@ -63,6 +94,8 @@ test_basic_wait_notify(void)
 // ============================================================================
 
 static n00b_condition_t pred_cv;
+static _Atomic int      pred_ready_1;
+static _Atomic int      pred_ready_2;
 static _Atomic int      pred_woke_1;
 static _Atomic int      pred_woke_2;
 
@@ -71,6 +104,7 @@ pred_waiter_1(void *arg)
 {
     (void)arg;
     n00b_thread_init();
+    atomic_store(&pred_ready_1, 1);
 
     void *result = n00b_condition_wait(&pred_cv, .predicate = 1);
     (void)result;
@@ -86,6 +120,7 @@ pred_waiter_2(void *arg)
 {
     (void)arg;
     n00b_thread_init();
+    atomic_store(&pred_ready_2, 1);
 
     void *result = n00b_condition_wait(&pred_cv, .predicate = 2);
     (void)result;
@@ -101,6 +136,8 @@ test_predicate_wake(void)
 {
     memset(&pred_cv, 0, sizeof(pred_cv));
     n00b_condition_init(&pred_cv);
+    atomic_store(&pred_ready_1, 0);
+    atomic_store(&pred_ready_2, 0);
     atomic_store(&pred_woke_1, 0);
     atomic_store(&pred_woke_2, 0);
 
@@ -108,17 +145,15 @@ test_predicate_wake(void)
     pthread_create(&w1, nullptr, pred_waiter_1, nullptr);
     pthread_create(&w2, nullptr, pred_waiter_2, nullptr);
 
-    struct timespec ts = {.tv_sec = 0, .tv_nsec = 50000000};
-    nanosleep(&ts, nullptr);
+    wait_for_waiters(&pred_cv, 2);
 
     // Notify only predicate=1.
     n00b_condition_notify(&pred_cv, .predicate = 1, .all = true);
     n00b_condition_unlock(&pred_cv);
 
-    nanosleep(&ts, nullptr);
-
     // Waiter 1 should have woken, waiter 2 should still be asleep.
-    assert(atomic_load(&pred_woke_1) == 1);
+    wait_for_flag(&pred_woke_1);
+    assert(atomic_load(&pred_woke_2) == 0);
 
     // Now wake waiter 2.
     n00b_condition_notify(&pred_cv, .predicate = 2, .all = true);

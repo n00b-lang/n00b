@@ -5,9 +5,79 @@
 #include <stdio.h>
 #include <string.h>
 #include <errno.h>
+#if defined(_WIN32)
+#include "internal/n00b_windows_compat.h"
+#else
 #include <dlfcn.h>
+#endif
 #include "n00b.h"
 #include "render/backend_registry.h"
+
+#if defined(_WIN32)
+typedef HMODULE n00b_dl_handle_t;
+
+static n00b_dl_handle_t
+n00b_dlopen(const char *path)
+{
+    return LoadLibraryA(path);
+}
+
+static void *
+n00b_dlsym(n00b_dl_handle_t handle, const char *symbol)
+{
+    return (void *)GetProcAddress(handle, symbol);
+}
+
+static void
+n00b_dlclose(n00b_dl_handle_t handle)
+{
+    if (handle) {
+        FreeLibrary(handle);
+    }
+}
+
+static const char *
+n00b_dlerror(void)
+{
+    static char msg[64];
+    DWORD       err = GetLastError();
+    if (!err) {
+        return "unknown loader error";
+    }
+
+    snprintf(msg, sizeof(msg), "win32 error %lu", (unsigned long)err);
+    return msg;
+}
+#else
+typedef void *n00b_dl_handle_t;
+
+static n00b_dl_handle_t
+n00b_dlopen(const char *path)
+{
+    return dlopen(path, RTLD_NOW | RTLD_LOCAL);
+}
+
+static void *
+n00b_dlsym(n00b_dl_handle_t handle, const char *symbol)
+{
+    return dlsym(handle, symbol);
+}
+
+static void
+n00b_dlclose(n00b_dl_handle_t handle)
+{
+    if (handle) {
+        dlclose(handle);
+    }
+}
+
+static const char *
+n00b_dlerror(void)
+{
+    const char *err = dlerror();
+    return err ? err : "unknown loader error";
+}
+#endif
 
 // -------------------------------------------------------------------
 // Registry storage
@@ -100,20 +170,20 @@ n00b_renderer_load(const char *path)
         return n00b_result_err(n00b_renderer_vtable_ptr_t, EINVAL);
     }
 
-    void *handle = dlopen(path, RTLD_NOW | RTLD_LOCAL);
+    n00b_dl_handle_t handle = n00b_dlopen(path);
     if (!handle) {
         fprintf(stderr, "n00b: failed to load renderer '%s': %s\n",
-                path, dlerror());
+                path, n00b_dlerror());
         return n00b_result_err(n00b_renderer_vtable_ptr_t, ENOENT);
     }
 
     const n00b_renderer_plugin_t *plugin =
-        (const n00b_renderer_plugin_t *)dlsym(handle, "n00b_renderer_plugin");
+        (const n00b_renderer_plugin_t *)n00b_dlsym(handle, "n00b_renderer_plugin");
 
     if (!plugin) {
         fprintf(stderr, "n00b: no n00b_renderer_plugin symbol in '%s': %s\n",
-                path, dlerror());
-        dlclose(handle);
+                path, n00b_dlerror());
+        n00b_dlclose(handle);
         return n00b_result_err(n00b_renderer_vtable_ptr_t, ENOENT);
     }
 
@@ -121,13 +191,13 @@ n00b_renderer_load(const char *path)
         fprintf(stderr,
                 "n00b: ABI version mismatch in '%s': expected %u, got %u\n",
                 path, N00B_RENDERER_ABI_VERSION, plugin->abi_version);
-        dlclose(handle);
+        n00b_dlclose(handle);
         return n00b_result_err(n00b_renderer_vtable_ptr_t, EPROTO);
     }
 
     if (!plugin->vtable || !plugin->name) {
         fprintf(stderr, "n00b: invalid plugin in '%s'\n", path);
-        dlclose(handle);
+        n00b_dlclose(handle);
         return n00b_result_err(n00b_renderer_vtable_ptr_t, EINVAL);
     }
 
@@ -153,7 +223,9 @@ n00b_renderer_load_by_name(const char *name)
                                n00b_option_get(found));
     }
 
-#if defined(__APPLE__)
+#if defined(_WIN32)
+    const char *ext = "dll";
+#elif defined(__APPLE__)
     const char *ext = "dylib";
 #else
     const char *ext = "so";
@@ -168,10 +240,18 @@ n00b_renderer_load_by_name(const char *name)
         strncpy(buf, search_path, sizeof(buf) - 1);
         buf[sizeof(buf) - 1] = '\0';
 
-        char *saveptr = nullptr;
-        char *dir     = strtok_r(buf, ":", &saveptr);
+        char  sep = ':';
+#if defined(_WIN32)
+        sep = ';';
+#endif
+        char *dir = buf;
 
-        while (dir) {
+        while (dir && *dir) {
+            char *next = strchr(dir, sep);
+            if (next) {
+                *next = '\0';
+            }
+
             snprintf(path_buf, sizeof(path_buf),
                      "%s/libn00b_render_%s.%s", dir, name, ext);
 
@@ -181,7 +261,7 @@ n00b_renderer_load_by_name(const char *name)
             if (n00b_result_is_ok(res)) {
                 return res;
             }
-            dir = strtok_r(nullptr, ":", &saveptr);
+            dir = next ? next + 1 : nullptr;
         }
     }
 

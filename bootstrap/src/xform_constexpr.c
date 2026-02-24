@@ -37,47 +37,17 @@
 // Helpers moved to xform_helpers.c — see xform_helpers.h for declarations.
 
 /**
- * @brief Check if a tree contains a node with the given ID (iterative DFS).
+ * @brief Check whether @p candidate is an ancestor (or self) of @p node.
  */
 static bool
-tree_contains_id(tnode_t *root, int target_id)
+node_is_ancestor_of(tnode_t *candidate, tnode_t *node)
 {
-    if (!root) {
-        return false;
-    }
-    if (root->id == target_id) {
-        return true;
-    }
-
-    int       cap = NCC_CAP_MEDIUM;
-    int       top = 0;
-    tnode_t **stk = base_alloc(cap * sizeof(tnode_t *));
-    if (!stk) {
-        return false;
-    }
-
-    stk[top++] = root;
-
-    while (top > 0) {
-        tnode_t *n = stk[--top];
-        for (int i = n->num_kids - 1; i >= 0; i--) {
-            tnode_t *kid = tnode_get_kid(n, i);
-            if (!kid) {
-                continue;
-            }
-            if (kid->id == target_id) {
-                base_dealloc(stk);
-                return true;
-            }
-            if (top >= cap) {
-                cap *= 2;
-                stk = base_realloc(stk, cap * sizeof(tnode_t *));
-            }
-            stk[top++] = kid;
+    for (tnode_t *cur = node; cur != nullptr; cur = cur->parent) {
+        if (cur == candidate) {
+            return true;
         }
     }
 
-    base_dealloc(stk);
     return false;
 }
 
@@ -215,7 +185,7 @@ emit_declarations(tree_xform_t *ctx, tnode_t *call_node)
         // currently transforming — their parse tree still has the
         // untransformed constexpr_* call in it, which would fail
         // to compile in the temp program.
-        if (call_node && tree_contains_id(node, call_node->id)) {
+        if (call_node && node_is_ancestor_of(node, call_node)) {
             continue;
         }
 
@@ -335,7 +305,7 @@ compile_and_run(const char *compiler, const char *source, char **err_out)
 
     int status;
     waitpid(pid, &status, 0);
-    unlink(src_path);  // Source no longer needed after compilation
+    unlink(src_path); // Source no longer needed after compilation
 
     if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
         unlink(bin_path);
@@ -601,18 +571,14 @@ xform_constexpr(tree_xform_t *ctx, tnode_t *node)
     if (mode == CE_EVAL) {
         char *expr_str = emit_node_to_string(ctx, args[0]);
         char *clean    = strip_line_directives(expr_str);
-        fprintf(body_f,
-                "    printf(\"%%lld\\n\", (long long)(%s));\n",
-                clean);
+        fprintf(body_f, "    printf(\"%%lld\\n\", (long long)(%s));\n", clean);
         base_dealloc(expr_str);
         base_dealloc(clean);
     }
     else if (mode == CE_STRLEN) {
         char *expr_str = emit_node_to_string(ctx, args[0]);
         char *clean    = strip_line_directives(expr_str);
-        fprintf(body_f,
-                "    printf(\"%%lld\\n\", (long long)strlen(%s));\n",
-                clean);
+        fprintf(body_f, "    printf(\"%%lld\\n\", (long long)strlen(%s));\n", clean);
         base_dealloc(expr_str);
         base_dealloc(clean);
     }
@@ -635,21 +601,14 @@ xform_constexpr(tree_xform_t *ctx, tnode_t *node)
         for (int i = 0; i < nargs; i++) {
             char *expr_str = emit_node_to_string(ctx, args[i]);
             char *clean    = strip_line_directives(expr_str);
-            fprintf(body_f,
-                    "    long long _v%d = (long long)(%s);\n",
-                    i,
-                    clean);
+            fprintf(body_f, "    long long _v%d = (long long)(%s);\n", i, clean);
             base_dealloc(expr_str);
             base_dealloc(clean);
         }
         fprintf(body_f, "    long long _result = _v0;\n");
         const char *cmp = (mode == CE_MAX) ? ">" : "<";
         for (int i = 1; i < nargs; i++) {
-            fprintf(body_f,
-                    "    if (_v%d %s _result) _result = _v%d;\n",
-                    i,
-                    cmp,
-                    i);
+            fprintf(body_f, "    if (_v%d %s _result) _result = _v%d;\n", i, cmp, i);
         }
         fprintf(body_f, "    printf(\"%%lld\\n\", _result);\n");
     }
@@ -702,9 +661,10 @@ xform_constexpr(tree_xform_t *ctx, tnode_t *node)
                     fprintf(hdr_f, "#include %s\n", tok);
                 }
                 else {
-                    ncc_error("constexpr: invalid NCC_CONSTEXPR_HEADERS "
-                              "token: '%s' (must be <...> or \"...\")\n",
-                              tok);
+                    ncc_error(
+                        "constexpr: invalid NCC_CONSTEXPR_HEADERS "
+                        "token: '%s' (must be <...> or \"...\")\n",
+                        tok);
                     exit(1);
                 }
             }
@@ -754,16 +714,11 @@ xform_constexpr(tree_xform_t *ctx, tnode_t *node)
 
     if (!output) {
         if (compile_err) {
-            ncc_error("%s:%d: constexpr: compilation failed:\n%s",
-                      file,
-                      line,
-                      compile_err);
+            ncc_error("%s:%d: constexpr: compilation failed:\n%s", file, line, compile_err);
             base_dealloc(compile_err);
         }
         else {
-            ncc_error("%s:%d: constexpr: compilation/execution failed\n",
-                      file,
-                      line);
+            ncc_error("%s:%d: constexpr: compilation/execution failed\n", file, line);
         }
         exit(1);
     }
@@ -773,10 +728,7 @@ xform_constexpr(tree_xform_t *ctx, tnode_t *node)
     char     *endptr;
     long long value = strtoll(output, &endptr, 10);
     if (endptr == output) {
-        ncc_error("%s:%d: constexpr: failed to parse result '%s'\n",
-                  file,
-                  line,
-                  output);
+        ncc_error("%s:%d: constexpr: failed to parse result '%s'\n", file, line, output);
         base_dealloc(output);
         exit(1);
     }
@@ -799,8 +751,5 @@ xform_constexpr(tree_xform_t *ctx, tnode_t *node)
 void
 register_constexpr_xform(xform_registry_t *reg)
 {
-    xform_register_post(reg,
-                        NT_postfix_expression,
-                        xform_constexpr,
-                        "constexpr");
+    xform_register_post(reg, NT_postfix_expression, xform_constexpr, "constexpr");
 }

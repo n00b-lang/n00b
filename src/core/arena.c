@@ -1,9 +1,6 @@
 #define N00B_MEM_INTERNAL_API
 #define N00B_USE_INTERNAL_API
 
-#include <sys/mman.h>
-#include <unistd.h>
-
 #include "n00b.h"
 #include "core/alloc_mdata.h"
 #include "core/alloc.h"
@@ -69,8 +66,8 @@ n00b_add_arena_segment(n00b_arena_t *arena, uint64_t request_len)
         size = needed;
     }
 
-    size         = n00b_page_align(size);
-    auto seg_r   = n00b_check_mmap(nullptr, size, N00B_MPROT, N00B_MFLAG, -1, 0);
+    size       = n00b_page_align(size);
+    auto seg_r = n00b_platform_map_anon(size);
 
     if (n00b_result_is_err(seg_r)) {
         abort(); // out of memory.
@@ -177,7 +174,7 @@ n00b_arena_delete(n00b_arena_t *arena)
         break;
     case n00b_mmap_managed_segment:
     case n00b_mmap_sys_segment:
-        munmap(arena, n00b_page_align(sizeof(n00b_arena_t)));
+        (void)n00b_platform_unmap(arena, n00b_page_align(sizeof(n00b_arena_t)));
         break;
     default:
         // Bad (invalid or unsafe) storage location for arena header.

@@ -1,12 +1,18 @@
 #define N00B_MEM_INTERNAL_API
 #define N00B_USE_INTERNAL_API
 
+#if defined(_WIN32)
+#include "n00b_windows_compat.h"
+#else
 #include <signal.h>
 #include <sys/mman.h>
 #include <unistd.h>
 #include <poll.h>
 #include <fcntl.h>
 #include <errno.h>
+#endif
+
+#include "n00b_build_config.h"
 
 #include "n00b.h"
 #include "core/mmaps.h"
@@ -33,7 +39,11 @@ _Atomic uint64_t static_order_id = 1;
 static n00b_memperm_pipe_t *
 n00b_memperm_pipe_get(void)
 {
+#if defined(_WIN32)
+    return nullptr;
+#else
     return &n00b_thread_self()->memperm_pipe;
+#endif
 }
 
 extern void n00b_debug_memory_info(bool);
@@ -47,7 +57,47 @@ extern void n00b_debug_memory_info(bool);
 
 #define MINCORE_TEST_BIT 1
 
-#if defined(__linux__)
+#if defined(_WIN32)
+void
+n00b_load_static_ranges(void)
+{
+#if N00B_HAVE_ENUM_PROCESS_MODULES
+    HMODULE modules[512];
+    DWORD   needed = 0;
+    HANDLE  proc   = GetCurrentProcess();
+
+    if (!EnumProcessModules(proc, modules, sizeof(modules), &needed)) {
+        return;
+    }
+
+    uint32_t count = (uint32_t)(needed / sizeof(HMODULE));
+    if (count > (uint32_t)(sizeof(modules) / sizeof(modules[0]))) {
+        count = (uint32_t)(sizeof(modules) / sizeof(modules[0]));
+    }
+
+    for (uint32_t i = 0; i < count; i++) {
+        MODULEINFO modinfo = {};
+
+        if (!GetModuleInformation(proc, modules[i], &modinfo, sizeof(modinfo))) {
+            continue;
+        }
+
+        char *start = (char *)modinfo.lpBaseOfDll;
+        char *end   = start + modinfo.SizeOfImage;
+
+        if (start == end) {
+            continue;
+        }
+
+        (void)n00b_mmap_register(start,
+                                 end,
+                                 start ? n00b_mmap_static : n00b_mmap_zero_page,
+                                 .order_id          = n00b_atomic_add(&static_order_id, 1),
+                                 .definitely_unique = false);
+    }
+#endif
+}
+#elif N00B_HAVE_DL_ITERATE_PHDR
 #include <link.h>
 
 static int
@@ -66,15 +116,14 @@ n00b_extract_lib_info(struct dl_phdr_info *info, size_t size, void *unused)
         if (startp == endp) {
             continue;
         }
-        n00b_register_mmap(startp,
+        n00b_mmap_register(startp,
                            endp,
-                           (char *)info->dlpi_name,
-                           nullptr,
-                           info->dlpi_phdr[i].p_offset,
-                           (intptr_t)info->dlpi_addr,
                            startp ? n00b_mmap_static : n00b_mmap_zero_page,
-                           n00b_atomic_add(&static_order_id, 1),
-                           false);
+                           .file              = (char *)info->dlpi_name,
+                           .binary_offset     = info->dlpi_phdr[i].p_offset,
+                           .slide             = (intptr_t)info->dlpi_addr,
+                           .order_id          = n00b_atomic_add(&static_order_id, 1),
+                           .definitely_unique = false);
     }
     return 0;
 }
@@ -141,12 +190,36 @@ n00b_load_static_ranges(void)
     _dyld_register_func_for_add_image(n00b_on_lib_load);
 }
 #else
-#error "Unsupported OS"
+void
+n00b_load_static_ranges(void)
+{
+    // No loader callback capability detected; pointer classification
+    // falls back to on-demand kernel page checks.
+}
 #endif
 
 static n00b_mmap_opt_t
 n00b_check_kernel_page_map(const void *addr)
 {
+#if defined(_WIN32)
+    MEMORY_BASIC_INFORMATION mbi = {};
+
+    if (!VirtualQuery(addr, &mbi, sizeof(mbi))) {
+        return n00b_option_none(n00b_mmap_info_t *);
+    }
+
+    if (mbi.State != MEM_COMMIT) {
+        return n00b_option_none(n00b_mmap_info_t *);
+    }
+
+    char *start = (char *)mbi.BaseAddress;
+    char *end   = start + mbi.RegionSize;
+
+    return n00b_mmap_register(start,
+                              end,
+                              start ? n00b_mmap_unmanaged : n00b_mmap_zero_page,
+                              .definitely_unique = false);
+#else
     char *start = n00b_align_to_page_start((void *)addr);
     char  status[1];
 
@@ -168,6 +241,7 @@ n00b_check_kernel_page_map(const void *addr)
                               start + n00b_page_size,
                               start ? n00b_mmap_unmanaged : n00b_mmap_zero_page,
                               .definitely_unique = false);
+#endif
 }
 
 // This only gets called when lookup fails.
@@ -184,7 +258,7 @@ n00b_check_for_unmanaged_map(const void *addr)
     // expose the ability to manually re-run (call
     // n00b_reload_static_ranges() yourself).
 
-#if defined(__linux__) && defined(N00B_ALWAYS_RECHECK_STATIC_POINTERS)
+#if N00B_HAVE_DL_ITERATE_PHDR && defined(N00B_ALWAYS_RECHECK_STATIC_POINTERS)
     result = n00b_check_static_maps(addr);
     if (n00b_option_is_set(result)) {
         return result;
@@ -229,6 +303,36 @@ n00b_find_allocator(void *val)
 n00b_mmap_perms_t
 n00b_check_memory_perms(void *ptr)
 {
+#if defined(_WIN32)
+    MEMORY_BASIC_INFORMATION mbi = {};
+
+    if (!VirtualQuery(ptr, &mbi, sizeof(mbi))) {
+        return n00b_mmap_perms_no_access;
+    }
+
+    if (mbi.State != MEM_COMMIT) {
+        return n00b_mmap_perms_no_access;
+    }
+
+    DWORD protect = mbi.Protect;
+
+    if ((protect & PAGE_GUARD) || (protect & PAGE_NOACCESS)) {
+        return n00b_mmap_perms_no_access;
+    }
+
+    switch (protect & 0xff) {
+    case PAGE_READWRITE:
+    case PAGE_WRITECOPY:
+    case PAGE_EXECUTE_READWRITE:
+    case PAGE_EXECUTE_WRITECOPY:
+        return n00b_mmap_perms_rw;
+    case PAGE_READONLY:
+    case PAGE_EXECUTE_READ:
+        return n00b_mmap_perms_ro;
+    default:
+        return n00b_mmap_perms_no_access;
+    }
+#else
     bool cannot_write = false;
     bool cannot_read  = false;
 
@@ -270,11 +374,11 @@ n00b_check_memory_perms(void *ptr)
 
     struct pollfd pollset = {
         .fd     = pipe_fds[0],
-        .events = POLL_IN,
+        .events = POLLIN,
     };
 
     int prc = poll(&pollset, 1, 0);
-    if (prc <= 0 || !(pollset.revents & POLL_IN)) {
+    if (prc <= 0 || !(pollset.revents & POLLIN)) {
         cannot_read = true;
         char drain;
         (void)read(pipe_fds[0], &drain, 1);
@@ -303,6 +407,7 @@ n00b_check_memory_perms(void *ptr)
     }
 
     return n00b_mmap_perms_rw;
+#endif
 }
 
 static inline bool
@@ -414,7 +519,7 @@ n00b_memory_scan_next(n00b_memory_scan_t   *ctx,
     n00b_mmap_info_t *mmap   = nullptr;
 
     while (!result && (ctx->cur < ctx->end)) {
-        void *val     = (void *)*ctx->cur;
+        void *val      = (void *)*ctx->cur;
         auto  mmap_opt = n00b_mmap_info_lookup(val);
 
         if (n00b_option_is_set(mmap_opt)) {
@@ -558,7 +663,7 @@ n00b_debug_memory_info(bool all)
     unsigned int     len = 0;
     n00b_mmap_ctx_t *ctx = n00b_global_mem_map(n00b_get_runtime());
 
-    n00b_allocator_t *alloc = (n00b_allocator_t *)&ctx->pool;
+    n00b_allocator_t *alloc      = (n00b_allocator_t *)&ctx->pool;
     n00b_stack_t(void *) results = n00b_stack_new(void *, alloc);
 
     (void)n00b_interval_search_ordered(ctx->mmap_tree, 0, UINT64_MAX, &results);

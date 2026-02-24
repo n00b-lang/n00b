@@ -10,10 +10,10 @@
  *   waiters resume
  *
  * @details The epoch protocol works as follows:
- *   1. Notifier sets `N00B_CV_NOTIFY_IN_PROGRESS` on `wait_queue`, wakes one waiter
+ *   1. Notifier sets `N00B_CV_NOTIFY_IN_PROGRESS` on `wait_queue`, wakes all queued waiters
  *   2. Each waiter checks predicate, decrements `waiters_to_process`
  *   3. Last waiter increments `notify_epoch` (epoch+1), wakes notifier
- *   4. Notifier wakes, increments `notify_epoch` again (epoch+2), wakes all waiters
+ *   4. Notifier wakes, increments `notify_epoch` again (epoch+2), releases the round
  *   5. Waiters see epoch+2, re-acquire lock, return
  */
 #pragma once
