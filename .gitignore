@@ -56,3 +56,6 @@ src/unicode/generated/
 
 # Docker SDK tarballs
 docker/sdk/
+
+# Vendored subproject sources (cloned at build time)
+/subprojects/mir/

@@ -300,6 +300,17 @@ n00b_grammar_new(void)
     g->terminal_map = n00b_alloc(n00b_dict_untyped_t);
     n00b_dict_untyped_init(g->terminal_map, .hash = n00b_hash_cstring);
 
+    g->literal_type_map = n00b_alloc(n00b_dict_untyped_t);
+    n00b_dict_untyped_init(g->literal_type_map, .hash = n00b_hash_cstring);
+
+    g->valid_tokens = n00b_alloc(n00b_dict_untyped_t);
+    n00b_dict_untyped_init(g->valid_tokens, .hash = n00b_hash_word);
+
+    g->terminal_by_id = n00b_alloc(n00b_dict_untyped_t);
+    n00b_dict_untyped_init(g->terminal_by_id, .hash = n00b_hash_word);
+
+    g->next_literal_type_id = 0;
+
     return g;
 }
 
@@ -333,6 +344,15 @@ n00b_grammar_free(n00b_grammar_t *g)
     }
     if (g->terminal_map) {
         n00b_free(g->terminal_map);
+    }
+    if (g->literal_type_map) {
+        n00b_free(g->literal_type_map);
+    }
+    if (g->valid_tokens) {
+        n00b_free(g->valid_tokens);
+    }
+    if (g->terminal_by_id) {
+        n00b_free(g->terminal_by_id);
     }
 
     if (g->left_corner_sets) {
@@ -387,6 +407,25 @@ n00b_grammar_set_max_penalty(n00b_grammar_t *g, uint32_t max)
     g->max_penalty = max;
 }
 
+void
+n00b_grammar_set_disambiguator(n00b_grammar_t *g, n00b_tree_disambig_fn_t fn)
+{
+    g->disambiguator = fn;
+}
+
+int64_t
+n00b_grammar_terminal_id(n00b_grammar_t *g, const char *name)
+{
+    if (!g || !g->terminal_map) {
+        return 0;
+    }
+
+    bool  found = false;
+    void *val   = _n00b_dict_untyped_get(g->terminal_map, (void *)name, &found);
+
+    return found ? (int64_t)(intptr_t)val : 0;
+}
+
 n00b_nonterm_t *
 n00b_nonterm(n00b_grammar_t *g, n00b_string_t name)
 {
@@ -433,23 +472,51 @@ n00b_register_terminal(n00b_grammar_t *g, n00b_string_t name)
         return (int64_t)(intptr_t)val;
     }
 
-    if (name.u8_bytes == 1) {
-        return (int64_t)(unsigned char)name.data[0];
-    }
+    // All fixed-text terminals get a hash-based ID (including single-char).
+    int64_t id = n00b_token_id_from_text(name.data, name.u8_bytes);
 
     n00b_terminal_t term = {0};
 
     term.value = name;
-    term.id    = (int64_t)g->named_terms.len + N00B_TOK_START_ID + 1;
+    term.id    = id;
 
+    int64_t ix = (int64_t)g->named_terms.len;
     n00b_list_push(g->named_terms, term);
 
-    n00b_terminal_t *stored = n00b_get_terminal(g, term.id);
+    // Forward map: name -> id
     _n00b_dict_untyped_put(g->terminal_map,
-                           (void *)stored->value.data,
-                           (void *)(intptr_t)stored->id);
+                           (void *)g->named_terms.data[ix].value.data,
+                           (void *)(intptr_t)id);
 
-    return term.id;
+    // Reverse map: id -> index in named_terms
+    _n00b_dict_untyped_put(g->terminal_by_id,
+                           (void *)(intptr_t)id,
+                           (void *)(intptr_t)ix);
+
+    return id;
+}
+
+int64_t
+n00b_register_literal_type(n00b_grammar_t *g, n00b_string_t name)
+{
+    bool  found = false;
+    void *val   = _n00b_dict_untyped_get(g->literal_type_map,
+                                          (void *)name.data, &found);
+
+    if (found) {
+        return (int64_t)(intptr_t)val;
+    }
+
+    int64_t id = g->next_literal_type_id++;
+
+    // Store in literal_type_map: name -> sequential id
+    // We need to keep the name alive; copy the string data.
+    n00b_string_t stored_name = n00b_string_from_raw(name.data, (int64_t)name.u8_bytes);
+    _n00b_dict_untyped_put(g->literal_type_map,
+                           (void *)stored_name.data,
+                           (void *)(intptr_t)id);
+
+    return id;
 }
 
 void
@@ -457,11 +524,21 @@ n00b_grammar_set_terminal_category(n00b_grammar_t *g,
                                    int64_t         terminal_id,
                                    n00b_string_t   category)
 {
-    if (terminal_id < N00B_TOK_START_ID) {
-        return; // single-char terminals self-describe
+    // With hash-based IDs, we use the terminal_by_id dict to find the
+    // index into named_terms, then store category at that index.
+    if (!g->terminal_by_id) {
+        return;
     }
 
-    int32_t ix = (int32_t)(terminal_id - N00B_TOK_START_ID);
+    bool  found = false;
+    void *val   = _n00b_dict_untyped_get(g->terminal_by_id,
+                                          (void *)(intptr_t)terminal_id,
+                                          &found);
+    if (!found) {
+        return;
+    }
+
+    int32_t ix = (int32_t)(intptr_t)val;
 
     if (!g->has_terminal_categories) {
         g->terminal_categories     = n00b_list_new_private(n00b_string_t);
@@ -925,32 +1002,52 @@ compute_left_corners(n00b_grammar_t *g)
 // LR(0) state table construction
 // ============================================================================
 
-// Encode a n00b_match_t as an int32_t symbol for GOTO keys.
-// NT -> nt_id, TERMINAL -> terminal_id (offset to avoid overlap with NTs),
-// GROUP -> -(1000+gid), ANY -> -1, EMPTY -> -2, CLASS -> -(100+class_id)
-static int32_t
+// Encode a n00b_match_t as an int64_t symbol for GOTO keys.
+// Terminal IDs are already unique (hash-based or sequential), so no
+// offset is needed. We use a high bit to distinguish terminals from NTs.
+//
+// NT        -> nt_id (always >= 0 and small)
+// TERMINAL  -> terminal_id with bit 62 set (avoids collision with small NTs)
+// GROUP     -> -(1000+gid)
+// ANY       -> INT64_MIN + 1
+// EMPTY     -> INT64_MIN + 2
+// CLASS     -> INT64_MIN + 100 + class_id
+// SET       -> INT64_MIN + 3
+//
+// The INT64_MIN + N sentinels are chosen to never collide with hash-based
+// terminal IDs (which have bit 63 set, making them negative but > INT64_MIN + 1000).
+#define LR0_SYM_ANY    (INT64_MIN + 1)
+#define LR0_SYM_EMPTY  (INT64_MIN + 2)
+#define LR0_SYM_SET    (INT64_MIN + 3)
+
+static int64_t
 lr0_symbol_of_match(n00b_match_t *m)
 {
     switch (m->kind) {
     case N00B_MATCH_NT:
-        return (int32_t)m->nt_id;
+        return m->nt_id;
     case N00B_MATCH_TERMINAL:
-        return (int32_t)m->terminal_id + 0x10000;
+        // Set bit 62 to distinguish from NT ids when terminal_id >= 0.
+        // Hash-based IDs (bit 63 set) already can't collide with NTs.
+        if (m->terminal_id >= 0) {
+            return m->terminal_id | (1LL << 62);
+        }
+        return m->terminal_id;
     case N00B_MATCH_GROUP: {
         n00b_rule_group_t *grp = (n00b_rule_group_t *)m->group;
-        return -(1000 + grp->gid);
+        return -(1000LL + grp->gid);
     }
     case N00B_MATCH_ANY:
-        return -1;
+        return LR0_SYM_ANY;
     case N00B_MATCH_EMPTY:
-        return -2;
+        return LR0_SYM_EMPTY;
     case N00B_MATCH_CLASS:
-        return -(100 + (int32_t)m->char_class);
+        return INT64_MIN + 100LL + (int64_t)m->char_class;
     case N00B_MATCH_SET:
-        return -3;
+        return LR0_SYM_SET;
     }
 
-    return -999;
+    return INT64_MIN;
 }
 
 // Build lr0_items[] and lr0_rule_item_base[].
@@ -1286,7 +1383,7 @@ build_lr0_states(n00b_grammar_t *g)
     }
 
     int32_t sym_buf_sz = g->lr0_item_count > 256 ? g->lr0_item_count : 256;
-    int32_t *sym_buf   = n00b_alloc_array(int32_t, sym_buf_sz);
+    int64_t *sym_buf   = n00b_alloc_array(int64_t, sym_buf_sz);
     int32_t *kernel    = n00b_alloc_array(int32_t, g->lr0_item_count);
 
     for (int32_t si = 0; si < b.states_count; si++) {
@@ -1304,7 +1401,7 @@ build_lr0_states(n00b_grammar_t *g)
 
             n00b_parse_rule_t *rule = n00b_get_rule(g, it->rule_ix);
             n00b_match_t      *m    = &rule->contents.data[it->dot];
-            int32_t            sym  = lr0_symbol_of_match(m);
+            int64_t            sym  = lr0_symbol_of_match(m);
 
             bool found = false;
 
@@ -1323,9 +1420,9 @@ build_lr0_states(n00b_grammar_t *g)
         b.goto_starts[si] = b.gotos_count;
 
         for (int32_t s = 0; s < n_syms; s++) {
-            int32_t sym = sym_buf[s];
+            int64_t sym = sym_buf[s];
 
-            if (sym == -2) {
+            if (sym == LR0_SYM_EMPTY) {
                 continue;
             }
 
@@ -1530,6 +1627,28 @@ n00b_grammar_finalize(n00b_grammar_t *g)
         for (size_t i = 0; i < n; i++) {
             create_one_error_rule_set(g, (int32_t)i);
         }
+    }
+
+    // Build valid_tokens set from all rules' terminal match items.
+    for (size_t ri = 0; ri < g->rules.len; ri++) {
+        n00b_parse_rule_t *r = &g->rules.data[ri];
+
+        for (size_t mi = 0; mi < r->contents.len; mi++) {
+            n00b_match_t *m = &r->contents.data[mi];
+
+            if (m->kind == N00B_MATCH_TERMINAL) {
+                _n00b_dict_untyped_put(g->valid_tokens,
+                                       (void *)(intptr_t)m->terminal_id,
+                                       (void *)(intptr_t)1);
+            }
+        }
+    }
+
+    // Also add all literal type IDs to valid_tokens.
+    for (int64_t i = 0; i < g->next_literal_type_id; i++) {
+        _n00b_dict_untyped_put(g->valid_tokens,
+                               (void *)(intptr_t)i,
+                               (void *)(intptr_t)1);
     }
 
     compute_all_first_sets(g);

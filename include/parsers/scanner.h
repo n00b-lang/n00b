@@ -17,7 +17,7 @@
  *     if (n00b_scan_at_eof(s)) return false;
  *     n00b_scan_mark(s);
  *     n00b_scan_advance(s);
- *     n00b_scan_emit_marked(s, MY_TOK);
+ *     n00b_scan_emit(s, .tid = MY_TOK);
  *     return true;
  * }
  * ```
@@ -292,24 +292,39 @@ extern size_t n00b_scan_mark_len(n00b_scanner_t *s);
 // ============================================================================
 
 /**
- * @brief Emit a token into the stream.
+ * @brief Emit a token into the stream (unified API).
  *
- * Uses mark position for start line/column, cursor position for end column.
- * After emit, the mark is automatically reset to the current cursor position.
+ * Determines the token ID in one of two ways:
  *
- * @param s     Scanner.
- * @param tid   Terminal ID for the token.
- * @param value Token text, or `n00b_option_none(n00b_string_t)`.
+ * 1. **Named literal type** (`.token_type` set): looks up the name in
+ *    the grammar's `literal_type_map` to get a small sequential ID.
+ *    Example: `n00b_scan_emit(s, .token_type = "IDENTIFIER")`.
+ *
+ * 2. **Fixed-text terminal** (`.token_type` not set): extracts text from
+ *    `.contents` or mark..cursor, hashes it via `n00b_token_id_from_text`,
+ *    and validates against the grammar's `valid_tokens` set.
+ *
+ * Token text comes from `.contents` if set, else from mark..cursor when
+ * `.use_mark` is true (default). Error if neither is available.
+ *
+ * On success, the mark is reset. On error, the mark is NOT reset (caller
+ * can retry with a different token_type).
+ *
+ * @param s  Scanner with stream attached.
+ * @return N00B_TOK_OK on success, or a negative error code.
+ *
+ * @kw contents    Explicit token text (overrides mark..cursor extraction).
+ * @kw use_mark    If true (default) and contents not set, extract from mark..cursor.
+ * @kw token_type  Named literal type (e.g. "IDENTIFIER"). If NULL, hash text.
+ * @kw tid         Explicit token ID. If non-zero, use directly (bypass lookup).
  */
-extern void n00b_scan_emit(n00b_scanner_t *s, int32_t tid,
-                            n00b_option_t(n00b_string_t) value);
-
-/**
- * @brief Emit using the text from mark to cursor as the value.
- *
- * Equivalent to: `n00b_scan_emit(s, tid, n00b_scan_extract(s))`.
- */
-extern void n00b_scan_emit_marked(n00b_scanner_t *s, int32_t tid);
+extern n00b_token_err_t
+n00b_scan_emit(n00b_scanner_t *s) _kargs {
+    n00b_option_t(n00b_string_t) contents;
+    bool                         use_mark   = true;
+    const char                  *token_type = nullptr;
+    int64_t                      tid        = 0;
+};
 
 // ============================================================================
 // Trivia helpers
@@ -354,7 +369,7 @@ extern bool n00b_scan_skip_block_comment(n00b_scanner_t *s,
 // ============================================================================
 
 /**
- * @brief Look up a terminal ID by name in the scanner's grammar.
- * @return The terminal ID, or `N00B_TOK_OTHER` if not found or no grammar.
+ * @brief Check whether a token ID is valid in the scanner's grammar.
+ * @return True if the ID is in the grammar's valid_tokens set.
  */
-extern int64_t n00b_scan_terminal_id(n00b_scanner_t *s, const char *name);
+extern bool n00b_scan_token_valid(n00b_scanner_t *s, int64_t tid);

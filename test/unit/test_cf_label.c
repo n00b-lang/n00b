@@ -31,19 +31,6 @@
 // C tokenizer (duplicated from test_c_parse.c)
 // ============================================================================
 
-static int64_t
-lookup_keyword(n00b_grammar_t *g, const char *kw)
-{
-    if (!g || !g->terminal_map) {
-        return 0;
-    }
-
-    bool  found = false;
-    void *val   = _n00b_dict_untyped_get(g->terminal_map, (void *)kw, &found);
-
-    return found ? (int64_t)(intptr_t)val : 0;
-}
-
 static bool
 c_tokenize(n00b_scanner_t *s)
 {
@@ -71,20 +58,20 @@ restart:
 
     if (cp == '"') {
         n00b_option_t(n00b_string_t) val = n00b_scan_string_double(s);
-        n00b_scan_emit(s, N00B_TOK_STRING_LIT, val);
+        n00b_scan_emit(s, .token_type = "STRING_LIT", .contents = val);
         return true;
     }
 
     if (cp == '\'') {
         n00b_option_t(n00b_string_t) val = n00b_scan_string_single(s);
-        n00b_scan_emit(s, N00B_TOK_CHAR_LIT, val);
+        n00b_scan_emit(s, .token_type = "CHAR_LIT", .contents = val);
         return true;
     }
 
     if ((cp >= '0' && cp <= '9')
         || (cp == '.' && n00b_scan_peek_byte(s, 1) >= '0'
             && n00b_scan_peek_byte(s, 1) <= '9')) {
-        bool emitted = n00b_scan_number(s, N00B_TOK_INTEGER, N00B_TOK_FLOAT);
+        bool emitted = n00b_scan_number(s, "INTEGER", "FLOAT");
 
         if (emitted) {
             return true;
@@ -95,15 +82,11 @@ restart:
         n00b_option_t(n00b_string_t) id_val = n00b_scan_identifier(s);
 
         if (n00b_option_is_set(id_val)) {
-            n00b_string_t id_str = n00b_option_get(id_val);
+            n00b_token_err_t err = n00b_scan_emit(s, .contents = id_val);
 
-            int64_t kw_id = lookup_keyword(s->grammar, id_str.data);
-
-            if (kw_id) {
-                n00b_scan_emit(s, (int32_t)kw_id, id_val);
-            }
-            else {
-                n00b_scan_emit(s, N00B_TOK_IDENTIFIER, id_val);
+            if (err == N00B_TOK_ERR_NOT_IN_GRAMMAR) {
+                n00b_scan_emit(s, .token_type = "IDENTIFIER",
+                               .contents = id_val);
             }
 
             return true;
@@ -119,13 +102,20 @@ restart:
         if (n00b_scan_peek_byte(s, 0) == (uint8_t)(*op)[0]
             && n00b_scan_peek_byte(s, 1) == (uint8_t)(*op)[1]
             && n00b_scan_peek_byte(s, 2) == (uint8_t)(*op)[2]) {
-            int64_t tid = lookup_keyword(s->grammar, *op);
+            size_t   save_cur = s->cursor;
+            uint32_t save_ln  = s->line;
+            uint32_t save_col = s->column;
 
-            if (tid) {
-                n00b_scan_advance_n(s, 3);
-                n00b_scan_emit_marked(s, (int32_t)tid);
+            n00b_scan_advance_n(s, 3);
+            n00b_token_err_t err = n00b_scan_emit(s);
+
+            if (err == N00B_TOK_OK) {
                 return true;
             }
+
+            s->cursor = save_cur;
+            s->line   = save_ln;
+            s->column = save_col;
         }
     }
 
@@ -139,18 +129,31 @@ restart:
     for (const char **op = ops2; *op; op++) {
         if (n00b_scan_peek_byte(s, 0) == (uint8_t)(*op)[0]
             && n00b_scan_peek_byte(s, 1) == (uint8_t)(*op)[1]) {
-            int64_t tid = lookup_keyword(s->grammar, *op);
+            size_t   save_cur = s->cursor;
+            uint32_t save_ln  = s->line;
+            uint32_t save_col = s->column;
 
-            if (tid) {
-                n00b_scan_advance_n(s, 2);
-                n00b_scan_emit_marked(s, (int32_t)tid);
+            n00b_scan_advance_n(s, 2);
+            n00b_token_err_t err = n00b_scan_emit(s);
+
+            if (err == N00B_TOK_OK) {
                 return true;
             }
+
+            s->cursor = save_cur;
+            s->line   = save_ln;
+            s->column = save_col;
         }
     }
 
     n00b_scan_advance(s);
-    n00b_scan_emit_marked(s, (int32_t)cp);
+
+    n00b_token_err_t err = n00b_scan_emit(s);
+
+    if (err != N00B_TOK_OK) {
+        n00b_scan_emit(s, .token_type = "OTHER");
+    }
+
     return true;
 }
 
@@ -869,6 +872,7 @@ test_union_adt(void)
     printf("  [PASS] union_adt\n");
 }
 
+// ============================================================================
 // ============================================================================
 // Test 17: Struct with typedef still works
 // ============================================================================

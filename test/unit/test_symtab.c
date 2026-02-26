@@ -308,7 +308,7 @@ test_annot_walk_scope(void)
         = n00b_tree_node(n00b_nt_node_t, n00b_token_info_t *, decl_pn);
     n00b_token_info_t tok = {0};
     tok.value = n00b_option_set(n00b_string_t, *r"x");
-    tok.tid   = N00B_TOK_IDENTIFIER;
+    tok.tid   = 1;  // Arbitrary non-sentinel ID (annotation walk uses value text).
     n00b_parse_tree_t *tok_tree
         = n00b_tree_leaf(n00b_nt_node_t, n00b_token_info_t *, &tok);
     n00b_tree_add_child(decl_tree, tok_tree);
@@ -375,7 +375,7 @@ test_annot_walk_typedef(void)
 
     n00b_token_info_t tok = {0};
     tok.value = n00b_option_set(n00b_string_t, *r"MyType");
-    tok.tid   = N00B_TOK_IDENTIFIER;
+    tok.tid   = 1;  // Arbitrary non-sentinel ID (annotation walk uses value text).
 
     n00b_parse_tree_t *tok_tree
         = n00b_tree_leaf(n00b_nt_node_t, n00b_token_info_t *, &tok);
@@ -443,7 +443,7 @@ test_scope_auto_push_pop(void)
 
     n00b_token_info_t tok = {0};
     tok.value = n00b_option_set(n00b_string_t, *r"local_var");
-    tok.tid   = N00B_TOK_IDENTIFIER;
+    tok.tid   = 1;  // Arbitrary non-sentinel ID (annotation walk uses value text).
 
     n00b_parse_tree_t *tok_tree = n00b_tree_leaf(n00b_nt_node_t, n00b_token_info_t *, &tok);
 

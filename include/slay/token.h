@@ -22,35 +22,63 @@
 // Constants
 // ============================================================================
 
-/** @brief Base token ID offset for user-registered terminals. */
-#define N00B_TOK_START_ID   0x40000000
-
-/** @brief Token ID for unrecognized input. */
-#define N00B_TOK_OTHER      (-3)
+/** @brief Token ID for unrecognized input (sentinel). */
+#define N00B_TOK_OTHER      (-3LL)
 
 /** @brief Token ID for whitespace/comments that should be skipped. */
-#define N00B_TOK_IGNORED    (-2)
+#define N00B_TOK_IGNORED    (-2LL)
 
 /** @brief Token ID indicating end of input. */
-#define N00B_TOK_EOF        (-1)
+#define N00B_TOK_EOF        (-1LL)
 
-/** @brief Default token ID for identifiers (first registered terminal). */
-#define N00B_TOK_IDENTIFIER   (N00B_TOK_START_ID + 1)
+// ============================================================================
+// Hash-based token ID helpers
+// ============================================================================
 
-/** @brief Token ID for typedef/type names (reclassified identifiers). */
-#define N00B_TOK_TYPEDEF_NAME (N00B_TOK_START_ID + 2)
+#define XXH_INLINE_ALL
+#include "vendor/xxhash.h"
 
-/** @brief Token ID for integer literals. */
-#define N00B_TOK_INTEGER      (N00B_TOK_START_ID + 3)
+/**
+ * @brief Compute a fixed-text terminal ID from its text.
+ *
+ * Uses XXH3_64bits with the MSB set so the result is always negative
+ * when interpreted as int64_t, and less than N00B_TOK_OTHER (-3).
+ *
+ * Grammar registration and scanner emission independently produce the
+ * same ID for the same text — no coordination needed.
+ */
+static inline int64_t
+n00b_token_id_from_text(const char *text, size_t len)
+{
+    return (int64_t)(XXH3_64bits(text, len) | (1ULL << 63));
+}
 
-/** @brief Token ID for floating-point literals. */
-#define N00B_TOK_FLOAT        (N00B_TOK_START_ID + 4)
+/**
+ * @brief True if a token ID is a hash-based fixed-text terminal.
+ *
+ * Fixed-text IDs are always < N00B_TOK_OTHER (-3) because the MSB
+ * is set by `n00b_token_id_from_text`.
+ */
+static inline bool
+n00b_token_id_is_fixed_text(int64_t tid)
+{
+    return tid < N00B_TOK_OTHER;
+}
 
-/** @brief Token ID for character literals. */
-#define N00B_TOK_CHAR_LIT     (N00B_TOK_START_ID + 5)
+// ============================================================================
+// Token emission error codes
+// ============================================================================
 
-/** @brief Token ID for string literals. */
-#define N00B_TOK_STRING_LIT   (N00B_TOK_START_ID + 6)
+/**
+ * @brief Error codes returned by `n00b_scan_emit()`.
+ */
+typedef enum {
+    N00B_TOK_OK                 = 0,   /**< Token emitted successfully. */
+    N00B_TOK_ERR_NO_TEXT        = -1,  /**< No text: no contents and no mark. */
+    N00B_TOK_ERR_BAD_ARGS       = -2,  /**< Invalid argument combination. */
+    N00B_TOK_ERR_NOT_IN_GRAMMAR = -3,  /**< Hashed text not in grammar. */
+    N00B_TOK_ERR_BAD_TYPE_NAME  = -4,  /**< token_type name not registered. */
+} n00b_token_err_t;
 
 // ============================================================================
 // Trivia
@@ -73,9 +101,10 @@ typedef struct n00b_token_info_t {
     void                          *user_info;       /**< User-defined data. */
     n00b_option_t(n00b_string_t)   value;           /**< Token text (optional). */
     n00b_option_t(n00b_string_t)   file;            /**< Source file path (optional). */
+    n00b_option_t(n00b_string_t)   modifier;        /**< Literal modifier (e.g., 'hex). */
     n00b_trivia_t                 *leading_trivia;  /**< Whitespace/comments before token. */
     n00b_trivia_t                 *trailing_trivia; /**< Line comment after token (same line). */
-    int32_t                        tid;             /**< Terminal ID assigned by tokenizer. */
+    int64_t                        tid;             /**< Terminal ID assigned by tokenizer. */
     int32_t                        index;           /**< Index in token array. */
     uint32_t                       line;            /**< 1-based source line. */
     uint32_t                       column;          /**< 1-based source column. */

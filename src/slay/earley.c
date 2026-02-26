@@ -7,6 +7,7 @@
 #include "slay/n00b_parse.h"
 #include "internal/slay/earley_internal.h"
 #include "internal/slay/unicode_class.h"
+#include "unicode/encoding.h"
 #include "parsers/token_stream.h"
 #include "core/string.h"
 #include "core/option.h"
@@ -1218,10 +1219,10 @@ complete_group_item(n00b_earley_parser_t *p, n00b_earley_item_t *ei)
 static inline void
 scan_terminal(n00b_earley_parser_t *p, n00b_earley_item_t *ei)
 {
-    int64_t       cp   = p->current_state->token->tid;
+    int64_t       tid  = p->current_state->token->tid;
     n00b_match_t *next = get_ei_match(ei->start_item, ei->cursor);
 
-    if (cp == next->terminal_id) {
+    if (tid == next->terminal_id) {
         terminal_scan(p, ei, true);
     }
 }
@@ -1229,10 +1230,20 @@ scan_terminal(n00b_earley_parser_t *p, n00b_earley_item_t *ei)
 static inline void
 scan_class(n00b_earley_parser_t *p, n00b_earley_item_t *ei)
 {
-    int32_t       cp   = (int32_t)p->current_state->token->tid;
-    n00b_match_t *next = get_ei_match(ei->start_item, ei->cursor);
+    n00b_token_info_t *tok  = p->current_state->token;
+    n00b_match_t      *next = get_ei_match(ei->start_item, ei->cursor);
 
-    if (n00b_codepoint_matches_class(cp, next->char_class)) {
+    if (!n00b_option_is_set(tok->value)) {
+        return;
+    }
+
+    n00b_string_t val = n00b_option_get(tok->value);
+    uint32_t      pos = 0;
+    int32_t       cp  = n00b_unicode_utf8_decode(val.data,
+                                                  (uint32_t)val.u8_bytes,
+                                                  &pos);
+
+    if (cp >= 0 && n00b_codepoint_matches_class(cp, next->char_class)) {
         terminal_scan(p, ei, true);
     }
 }

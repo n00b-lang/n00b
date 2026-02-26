@@ -12,6 +12,7 @@
 #include "core/alloc.h"
 
 #include <assert.h>
+#include <stdlib.h>
 #include <string.h>
 
 // ============================================================================
@@ -268,6 +269,78 @@ hashset_to_list(n00b_hashset_t *s)
 }
 
 // ============================================================================
+// Deterministic ordering of Earley item lists
+// ============================================================================
+
+// Compare two Earley items by stable, insertion-order-independent properties
+// for deterministic iteration over completor hashsets. Without this, hashset
+// iteration order depends on memory addresses, causing non-deterministic
+// forest construction.
+//
+// We use the start item's (estate_id, ruleset_id, rule_index) plus the
+// item's own (estate_id, cursor, penalty, cost) — all of which are
+// determined by grammar structure and input, not by processing order.
+// We avoid eitem_index since it depends on insertion order into the
+// Earley state, which itself depends on hashset iteration order.
+static int
+item_cmp(const void *a, const void *b)
+{
+    n00b_earley_item_t *ia = *(n00b_earley_item_t **)a;
+    n00b_earley_item_t *ib = *(n00b_earley_item_t **)b;
+
+    // Compare by start item's origin set.
+    int32_t sa = ia->start_item ? ia->start_item->estate_id : -1;
+    int32_t sb = ib->start_item ? ib->start_item->estate_id : -1;
+
+    if (sa != sb) {
+        return sa < sb ? -1 : 1;
+    }
+
+    // Compare by which NT / rule alternative.
+    if (ia->ruleset_id != ib->ruleset_id) {
+        return ia->ruleset_id < ib->ruleset_id ? -1 : 1;
+    }
+
+    if (ia->rule_index != ib->rule_index) {
+        return ia->rule_index < ib->rule_index ? -1 : 1;
+    }
+
+    // Compare by end position.
+    if (ia->estate_id != ib->estate_id) {
+        return ia->estate_id < ib->estate_id ? -1 : 1;
+    }
+
+    // Compare by cursor position.
+    if (ia->cursor != ib->cursor) {
+        return ia->cursor < ib->cursor ? -1 : 1;
+    }
+
+    // Compare by penalty/cost as final tiebreaker.
+    if (ia->penalty != ib->penalty) {
+        return ia->penalty < ib->penalty ? -1 : 1;
+    }
+
+    if (ia->cost != ib->cost) {
+        return ia->cost < ib->cost ? -1 : 1;
+    }
+
+    return 0;
+}
+
+// Sort a ptrlist of Earley items deterministically.
+static void
+sort_items(ptrlist_t *l)
+{
+    size_t n = ptrlist_len(l);
+
+    if (n < 2) {
+        return;
+    }
+
+    qsort(l->data, n, sizeof(void *), item_cmp);
+}
+
+// ============================================================================
 // Tree dedup via structural hashing
 // ============================================================================
 
@@ -291,7 +364,7 @@ parse_node_hash(n00b_parse_tree_t *t)
 
         if (tok) {
             MIX(tok->tid);
-            MIX(((uint64_t)(uint32_t)tok->tid << 32)
+            MIX(((uint64_t)tok->tid << 32)
                 | (uint64_t)(uint32_t)tok->index);
 
             if (n00b_option_is_set(tok->value)) {
@@ -378,6 +451,35 @@ clean_trees(ptrlist_t *l)
     ptrlist_free(l);
 
     return result;
+}
+
+// ============================================================================
+// Deterministic tree sorting via grammar disambiguator
+// ============================================================================
+
+// Sort a ptrlist of parse trees using the grammar's disambiguator.
+// Ensures deterministic forest ordering regardless of hash/iteration order.
+static void
+sort_trees(ptrlist_t *l, n00b_tree_disambig_fn_t cmp)
+{
+    size_t n = ptrlist_len(l);
+
+    if (n < 2) {
+        return;
+    }
+
+    // Simple insertion sort — forest sizes are typically very small.
+    for (size_t i = 1; i < n; i++) {
+        n00b_parse_tree_t *key = ptrlist_get(l, i);
+        size_t             j   = i;
+
+        while (j > 0 && cmp(ptrlist_get(l, j - 1), key) > 0) {
+            l->data[j] = l->data[j - 1];
+            j--;
+        }
+
+        l->data[j] = key;
+    }
 }
 
 // ============================================================================
@@ -623,6 +725,7 @@ scan_rule_items(n00b_earley_parser_t *p, nb_info_t *parent_ni,
         case N00B_MATCH_GROUP:
         default: {
             ptrlist_t *bottoms   = hashset_to_list(prev->completors);
+            sort_items(bottoms);
             size_t     n_bottoms = ptrlist_len(bottoms);
 
             for (size_t j = 0; j < n_bottoms; j++) {
@@ -650,6 +753,7 @@ scan_group_items(n00b_earley_parser_t *p, nb_info_t *group_ni,
                  n00b_earley_item_t *end)
 {
     ptrlist_t *clist  = hashset_to_list(end->completors);
+    sort_items(clist);
     size_t     n      = ptrlist_len(clist);
     uint32_t   minp   = ~0u;
     uint32_t   nitems = ~0u;
@@ -937,6 +1041,8 @@ package_single_slot_options(n00b_earley_parser_t *p, nb_info_t *ni,
 
     ptrlist_t *filtered = score_filter(clean_trees(output_opts));
 
+    sort_trees(filtered, n00b_get_disambiguator(p->grammar));
+
     return filtered;
 }
 
@@ -1061,6 +1167,7 @@ package_kid_sets(n00b_earley_parser_t *p, nb_info_t *ni,
     }
 
     ni->opts = score_filter(clean_trees(ni->opts));
+    sort_trees(ni->opts, n00b_get_disambiguator(p->grammar));
 }
 
 static ptrlist_t *
@@ -2219,6 +2326,10 @@ n00b_earley_get_forest(n00b_earley_parser_t *p)
     }
 
     forest = clean_trees(forest);
+
+    // Sort the forest deterministically so that ambiguous parses with
+    // equal penalty/cost always produce the same "best" tree at index 0.
+    sort_trees(forest, n00b_get_disambiguator(p->grammar));
 
     // Normalize group_item wrappers out of the trees so earley trees
     // structurally match PWZ trees (group_top → content NTs directly).

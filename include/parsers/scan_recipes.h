@@ -80,14 +80,14 @@ extern n00b_option_t(n00b_string_t) n00b_scan_float(n00b_scanner_t *s);
 /**
  * @brief Scan a number (integer or float) and emit appropriate token.
  *
- * @param s         Scanner.
- * @param int_tid   Terminal ID to emit for integers.
- * @param float_tid Terminal ID to emit for floats.
+ * @param s              Scanner.
+ * @param int_type_name  Token type name for integers (e.g. "INTEGER").
+ * @param float_type_name Token type name for floats (e.g. "FLOAT").
  * @return true if a number was scanned and emitted.
  */
 extern bool n00b_scan_number(n00b_scanner_t *s,
-                              int32_t int_tid,
-                              int32_t float_tid);
+                              const char *int_type_name,
+                              const char *float_type_name);
 
 // ============================================================================
 // Identifier recipe

@@ -6,6 +6,7 @@
  */
 
 #include "slay/annotation.h"
+#include "slay/parse_tree.h"
 
 // ============================================================================
 // Grammar lifecycle
@@ -29,6 +30,22 @@ n00b_nonterm_t *n00b_nonterm(n00b_grammar_t *g, n00b_string_t name);
 int64_t         n00b_nonterm_id(n00b_nonterm_t *nt);
 int64_t         n00b_register_terminal(n00b_grammar_t *g, n00b_string_t name);
 
+/**
+ * @brief Register a named literal type (e.g. "IDENTIFIER", "INTEGER").
+ *
+ * Returns a small sequential ID (starting at 0) for the type name.
+ * If the name is already registered, returns the existing ID.
+ * These IDs are used by tokenizers via `n00b_scan_emit(.token_type = ...)`.
+ */
+int64_t         n00b_register_literal_type(n00b_grammar_t *g, n00b_string_t name);
+
+/**
+ * @brief Look up a terminal ID by name.
+ *
+ * @return The terminal ID, or 0 if not found.
+ */
+int64_t         n00b_grammar_terminal_id(n00b_grammar_t *g, const char *name);
+
 // ============================================================================
 // Walk actions / user data
 // ============================================================================
@@ -39,6 +56,16 @@ void *n00b_nonterm_get_user_data(n00b_nonterm_t *nt);
 void  n00b_grammar_set_default_action(n00b_grammar_t *g, n00b_walk_action_t a);
 void  n00b_grammar_set_terminal_category(n00b_grammar_t *g, int64_t tid,
                                           n00b_string_t category);
+
+/**
+ * @brief Set a custom disambiguator for the grammar.
+ *
+ * When the parser produces multiple trees with equal penalty/cost, the
+ * disambiguator is called to choose between them. Pass NULL to restore
+ * the default structural disambiguator.
+ */
+void  n00b_grammar_set_disambiguator(n00b_grammar_t         *g,
+                                       n00b_tree_disambig_fn_t fn);
 
 // ============================================================================
 // Match macros
