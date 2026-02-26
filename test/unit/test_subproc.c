@@ -9,7 +9,6 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/wait.h>
-#include <poll.h>
 
 #include "n00b.h"
 #include "io/subproc.h"
@@ -1623,47 +1622,15 @@ test_write_stdin_after_spawn(void)
     n00b_result_t(uint64_t) wr = n00b_subproc_write_stdin(&sp, data);
     assert(n00b_result_is_ok(wr));
 
-    n00b_conduit_fd_owner_t *stdin_o = n00b_option_get(sp.stdin_owner);
-    fprintf(stderr, "  [DEBUG] write_stdin: write_active=%d wq_head=%p fd=%d io_match=%d\n",
-            n00b_atomic_load(&stdin_o->write_active),
-            (void *)stdin_o->wq_head,
-            stdin_o->fd,
-            stdin_o->io == io);
-
-    // Check if fd is actually writable via raw poll.
-    struct pollfd pfd = {.fd = stdin_o->fd, .events = POLLOUT};
-    int pret = poll(&pfd, 1, 100);
-    fprintf(stderr, "  [DEBUG] write_stdin: raw poll=%d revents=0x%x\n",
-            pret, pfd.revents);
-
-    // Manually pump io_poll and check if write drains.
-    for (int attempt = 0; attempt < 5; attempt++) {
-        n00b_result_t(int) pr = n00b_conduit_io_poll(io, 100);
-        fprintf(stderr, "  [DEBUG] write_stdin: poll[%d] returned %s, n=%d wq=%p\n",
-                attempt,
-                n00b_result_is_ok(pr) ? "ok" : "err",
-                n00b_result_is_ok(pr) ? n00b_result_get(pr) : n00b_result_get_err(pr),
-                (void *)stdin_o->wq_head);
-        if (!stdin_o->wq_head) break; // Write drained.
-    }
-
     // wait() pumps the event loop, flushing the write and reaping exit.
-    n00b_duration_t wait_timeout = {.tv_sec = 3, .tv_nsec = 0};
-    n00b_subproc_wait(&sp, .timeout = &wait_timeout);
-
-    fprintf(stderr, "  [DEBUG] write_stdin: done_flags=0x%x exited=%d timed_out=%d\n",
-            sp.done_flags, n00b_subproc_exited(&sp), sp.timed_out);
-
-    n00b_buffer_t *out = n00b_subproc_stdout(&sp);
-    fprintf(stderr, "  [DEBUG] write_stdin: stdout byte_len=%zu\n",
-            out ? out->byte_len : 0);
-
+    n00b_subproc_wait(&sp);
     assert(n00b_subproc_exited(&sp));
 
     n00b_result_t(int) ec = n00b_subproc_exit_code(&sp);
     assert(n00b_result_is_ok(ec));
     assert(n00b_result_get(ec) == 0);
 
+    n00b_buffer_t *out = n00b_subproc_stdout(&sp);
     assert(out != nullptr);
     assert(out->byte_len == 8);
     assert(memcmp(out->data, "dynamic\n", 8) == 0);
@@ -1949,10 +1916,11 @@ test_pty_nonzero_exit(void)
 
     n00b_subproc_t sp = {};
     n00b_subproc_init(&sp,
-        .cmd     = n00b_string_from_cstr("/bin/sh"),
-        .conduit = c,
-        .io      = io,
-        .pty     = true);
+        .cmd            = n00b_string_from_cstr("/bin/sh"),
+        .conduit        = c,
+        .io             = io,
+        .pty            = true,
+        .capture_stdout = true);
 
     n00b_array_t(n00b_string_t) args = n00b_array_new(n00b_string_t, 2);
     n00b_array_set(args, 0, n00b_string_from_cstr("-c"));
@@ -1999,12 +1967,13 @@ test_pty_pre_exec_hook(void)
 
     n00b_subproc_t sp = {};
     n00b_subproc_init(&sp,
-        .cmd           = n00b_string_from_cstr("/bin/echo"),
-        .conduit       = c,
-        .io            = io,
-        .pty           = true,
-        .pre_exec_hook = test_hook_fn,
-        .hook_param    = &hook_pipe[1]);
+        .cmd            = n00b_string_from_cstr("/bin/echo"),
+        .conduit        = c,
+        .io             = io,
+        .pty            = true,
+        .capture_stdout = true,
+        .pre_exec_hook  = test_hook_fn,
+        .hook_param     = &hook_pipe[1]);
 
     n00b_result_t(bool) r = n00b_subproc_spawn(&sp);
     close(hook_pipe[1]); // Close write end in parent.
@@ -2042,10 +2011,11 @@ test_pty_kill_signal(void)
 
     n00b_subproc_t sp = {};
     n00b_subproc_init(&sp,
-        .cmd     = n00b_string_from_cstr("/bin/sleep"),
-        .conduit = c,
-        .io      = io,
-        .pty     = true);
+        .cmd            = n00b_string_from_cstr("/bin/sleep"),
+        .conduit        = c,
+        .io             = io,
+        .pty            = true,
+        .capture_stdout = true);
 
     n00b_array_t(n00b_string_t) args = n00b_array_new(n00b_string_t, 1);
     n00b_array_set(args, 0, n00b_string_from_cstr("100"));
@@ -2147,9 +2117,16 @@ test_custom_done_condition(void)
     }
     assert(found_go);
 
-    // Child is still alive (sleep 100) — kill it.
+    // Child is still alive (sleep 100) — kill it and reap.
     n00b_subproc_kill(&sp);
-    n00b_subproc_wait(&sp);
+
+    // The custom done_fn already returns true (stdout has data),
+    // so wait() returns immediately without reaping.  Switch to
+    // PROC_EXIT for the reap wait.
+    sp.done_condition = N00B_SUBPROC_DONE_PROC_EXIT;
+    sp.done_flags     = 0; // Reset so PROC_EXIT isn't already set.
+    n00b_duration_t kill_timeout = {.tv_sec = 5, .tv_nsec = 0};
+    n00b_subproc_wait(&sp, .timeout = &kill_timeout);
     assert(n00b_subproc_exited(&sp));
 
     n00b_subproc_close(&sp);
