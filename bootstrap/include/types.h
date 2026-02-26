@@ -255,6 +255,7 @@ struct tnode_t {
     int               num_kids; /**< Number of children (mirrors kids->len) */
     int               num_toks; /**< For passthrough text (internal use) */
     bool              vargs_done;    /**< True after vargs call-site transform */
+    bool              kw_done;       /**< True after kw_call transform */
     bool              kw_func_result; /**< True if this node is a kw_func() output */
 };
 

@@ -33,6 +33,25 @@ extern int openpty(int *aprimary, int *areplica, char *name,
 
 static n00b_buffer_t empty_buf_sentinel = {};
 
+/// Create a pipe with both ends set to CLOEXEC atomically where possible.
+/// On Linux, uses pipe2(O_CLOEXEC) to avoid the race window between
+/// pipe() and fcntl().  On other platforms (macOS, BSD), falls back to
+/// pipe() + fcntl().
+static int
+cloexec_pipe(int fds[2])
+{
+#ifdef __linux__
+    return pipe2(fds, O_CLOEXEC);
+#else
+    if (pipe(fds) < 0) {
+        return -1;
+    }
+    fcntl(fds[0], F_SETFD, FD_CLOEXEC);
+    fcntl(fds[1], F_SETFD, FD_CLOEXEC);
+    return 0;
+#endif
+}
+
 static int
 ensure_fd_above(int fd, int min_fd)
 {
@@ -748,19 +767,17 @@ spawn_pipe_mode(n00b_subproc_t *sp)
         return n00b_result_err(bool, e);
     }
 
-    // Gate pipe.
-    if (pipe(gate_pipe) < 0) {
+    // Gate pipe (CLOEXEC).
+    if (cloexec_pipe(gate_pipe) < 0) {
         int e = errno;
         if (need_stdin)  { close(stdin_pipe[0]); close(stdin_pipe[1]); }
         if (need_stdout) { close(stdout_pipe[0]); close(stdout_pipe[1]); }
         if (need_stderr) { close(stderr_pipe[0]); close(stderr_pipe[1]); }
         return n00b_result_err(bool, e);
     }
-    fcntl(gate_pipe[0], F_SETFD, FD_CLOEXEC);
-    fcntl(gate_pipe[1], F_SETFD, FD_CLOEXEC);
 
-    // Error-report pipe for exec failure.
-    if (pipe(err_pipe) < 0) {
+    // Error-report pipe for exec failure (CLOEXEC).
+    if (cloexec_pipe(err_pipe) < 0) {
         int e = errno;
         close(gate_pipe[0]); close(gate_pipe[1]);
         if (need_stdin)  { close(stdin_pipe[0]); close(stdin_pipe[1]); }
@@ -768,8 +785,6 @@ spawn_pipe_mode(n00b_subproc_t *sp)
         if (need_stderr) { close(stderr_pipe[0]); close(stderr_pipe[1]); }
         return n00b_result_err(bool, e);
     }
-    fcntl(err_pipe[0], F_SETFD, FD_CLOEXEC);
-    fcntl(err_pipe[1], F_SETFD, FD_CLOEXEC);
 
     // Ensure parent-side FDs are >= 3.
     if (need_stdin) {
@@ -1015,6 +1030,7 @@ spawn_pty_mode(n00b_subproc_t *sp)
     if (isatty(STDIN_FILENO)) {
         ioctl(STDIN_FILENO, TIOCGWINSZ, &sp->dimensions);
         tcgetattr(STDIN_FILENO, &sp->initial_termcap);
+        sp->termcap_saved = true;
         term_ptr = sp->termcap ? sp->termcap : &sp->initial_termcap;
     }
     else {
@@ -1040,28 +1056,44 @@ spawn_pty_mode(n00b_subproc_t *sp)
         }
     }
 
-    // Gate pipe and error-report pipe (same as pipe mode).
+    // Ensure parent-side (master) FDs are >= 3 so they don't collide
+    // with stdin/stdout/stderr after the child's dup2 calls.
+    master_fd = ensure_fd_above(master_fd, 3);
+    if (master_fd < 0) {
+        int e = errno;
+        close(replica_fd);
+        if (use_aux) { close(aux_master); close(aux_replica); }
+        return n00b_result_err(bool, e);
+    }
+    if (use_aux) {
+        aux_master = ensure_fd_above(aux_master, 3);
+        if (aux_master < 0) {
+            int e = errno;
+            close(master_fd);
+            close(replica_fd);
+            close(aux_replica);
+            return n00b_result_err(bool, e);
+        }
+    }
+
+    // Gate pipe and error-report pipe (CLOEXEC, same as pipe mode).
     int gate_pipe[2] = {-1, -1};
     int err_pipe[2]  = {-1, -1};
 
-    if (pipe(gate_pipe) < 0) {
+    if (cloexec_pipe(gate_pipe) < 0) {
         int e = errno;
         close(master_fd); close(replica_fd);
         if (use_aux) { close(aux_master); close(aux_replica); }
         return n00b_result_err(bool, e);
     }
-    fcntl(gate_pipe[0], F_SETFD, FD_CLOEXEC);
-    fcntl(gate_pipe[1], F_SETFD, FD_CLOEXEC);
 
-    if (pipe(err_pipe) < 0) {
+    if (cloexec_pipe(err_pipe) < 0) {
         int e = errno;
         close(gate_pipe[0]); close(gate_pipe[1]);
         close(master_fd); close(replica_fd);
         if (use_aux) { close(aux_master); close(aux_replica); }
         return n00b_result_err(bool, e);
     }
-    fcntl(err_pipe[0], F_SETFD, FD_CLOEXEC);
-    fcntl(err_pipe[1], F_SETFD, FD_CLOEXEC);
 
     // -- Fork --
 
@@ -1190,9 +1222,6 @@ spawn_pty_mode(n00b_subproc_t *sp)
             n00b_conduit_fd_manage(sp->conduit, sp->io, master_fd, true);
         if (n00b_result_is_ok(r)) {
             n00b_conduit_fd_owner_t *owner = n00b_result_get(r);
-            // PTY master reads = child stdout.
-            // PTY master writes = child stdin.
-            // stdin and stdout share the same FD owner.
             sp->stdin_owner =
                 n00b_option_set(n00b_conduit_fd_owner_t *, owner);
 
@@ -1209,6 +1238,10 @@ spawn_pty_mode(n00b_subproc_t *sp)
                 sp->stderr_owner = sp->stdout_owner;
             }
         }
+        else {
+            // fd_manage failed — close the FD to avoid leak.
+            close(master_fd);
+        }
     }
 
     // Register aux master if using separate stderr PTY.
@@ -1216,9 +1249,12 @@ spawn_pty_mode(n00b_subproc_t *sp)
         n00b_result_t(n00b_conduit_fd_owner_t *) r =
             n00b_conduit_fd_manage(sp->conduit, sp->io, aux_master, true);
         if (n00b_result_is_ok(r)) {
-            // Aux PTY reads = child stdout.
             sp->stdout_owner =
                 n00b_option_set(n00b_conduit_fd_owner_t *, n00b_result_get(r));
+        }
+        else {
+            // fd_manage failed — close the FD to avoid leak.
+            close(aux_master);
         }
     }
 
@@ -1278,30 +1314,41 @@ spawn_pty_mode(n00b_subproc_t *sp)
     }
 
     // Close stdin if requested.
-    // In PTY mode, stdin and stdout share the same FD owner (the PTY
-    // master).  Closing the owner would kill both read and write sides.
-    // Instead, send the PTY's EOF character (VEOF, typically ^D) to
-    // signal EOF to the child's stdin, keeping the read side alive for
-    // stdout capture.
+    //
+    // PTY limitation: stdin and stdout share the same FD owner (the
+    // PTY master).  We cannot close the FD without killing stdout.
+    // Instead, we send the PTY's EOF character (VEOF, typically ^D).
+    //
+    // This only works when the child is in canonical (cooked) mode.
+    // If the child switches to raw mode, VEOF is just another byte
+    // and won't signal EOF.  For raw-mode children, callers should
+    // not set close_stdin and instead manage input completion by
+    // sending application-level EOF (e.g., "exit\n" for shells).
     if ((f & N00B_SUBPROC_CLOSE_STDIN) && n00b_option_is_set(sp->stdin_owner)) {
-        cc_t eof_char = sp->initial_termcap.c_cc[VEOF];
-        if (eof_char == 0) {
-            eof_char = 0x04; // Default ^D.
+        cc_t eof_char = 0x04; // Default ^D.
+        if (sp->termcap_saved) {
+            cc_t tc_eof = sp->initial_termcap.c_cc[VEOF];
+            if (tc_eof != 0) {
+                eof_char = tc_eof;
+            }
         }
         n00b_fd_owner_write(n00b_option_get(sp->stdin_owner),
                             &eof_char, 1);
     }
 
     // Parent terminal setup (Phase 7):
-    // Apply user's termcap to parent terminal for responsive pass-through.
-    if (sp->termcap && isatty(STDIN_FILENO)) {
-        tcsetattr(STDIN_FILENO, TCSANOW, sp->termcap);
+    // Only modify parent terminal when proxy is active — if the caller
+    // is just capturing PTY output (no proxy), we shouldn't change the
+    // parent's terminal state or buffering.
+    if (f & (N00B_SUBPROC_PROXY_STDIN | N00B_SUBPROC_PROXY_STDOUT
+             | N00B_SUBPROC_PROXY_STDERR)) {
+        if (sp->termcap && isatty(STDIN_FILENO)) {
+            tcsetattr(STDIN_FILENO, TCSANOW, sp->termcap);
+        }
+        setvbuf(stdin, nullptr, _IONBF, 0);
+        setvbuf(stdout, nullptr, _IONBF, 0);
+        setvbuf(stderr, nullptr, _IONBF, 0);
     }
-
-    // Unbuffer parent stdio for responsive interactive I/O.
-    setvbuf(stdin, nullptr, _IONBF, 0);
-    setvbuf(stdout, nullptr, _IONBF, 0);
-    setvbuf(stderr, nullptr, _IONBF, 0);
 
     // Release the gate.
     int gate_fd = n00b_option_get(sp->gate);
@@ -1588,18 +1635,33 @@ n00b_subproc_close(n00b_subproc_t *sp)
         n00b_conduit_fd_owner_close(n00b_option_get(sp->parent_stdin_owner));
         sp->parent_stdin_owner = n00b_option_none(n00b_conduit_fd_owner_t *);
     }
-    if (n00b_option_is_set(sp->stdin_owner)) {
-        n00b_conduit_fd_owner_close(n00b_option_get(sp->stdin_owner));
+
+    // In PTY mode, stdin/stdout/stderr owners may alias the same
+    // underlying owner.  Deduplicate to avoid double-close.
+    {
+        n00b_conduit_fd_owner_t *stdin_o  = n00b_option_is_set(sp->stdin_owner)
+                                          ? n00b_option_get(sp->stdin_owner)
+                                          : nullptr;
+        n00b_conduit_fd_owner_t *stdout_o = n00b_option_is_set(sp->stdout_owner)
+                                          ? n00b_option_get(sp->stdout_owner)
+                                          : nullptr;
+        n00b_conduit_fd_owner_t *stderr_o = n00b_option_is_set(sp->stderr_owner)
+                                          ? n00b_option_get(sp->stderr_owner)
+                                          : nullptr;
+
+        if (stdin_o) {
+            n00b_conduit_fd_owner_close(stdin_o);
+        }
+        if (stdout_o && stdout_o != stdin_o) {
+            n00b_conduit_fd_owner_close(stdout_o);
+        }
+        if (stderr_o && stderr_o != stdin_o && stderr_o != stdout_o) {
+            n00b_conduit_fd_owner_close(stderr_o);
+        }
     }
-    if (n00b_option_is_set(sp->stdout_owner)) {
-        n00b_conduit_fd_owner_close(n00b_option_get(sp->stdout_owner));
-    }
-    if (n00b_option_is_set(sp->stderr_owner)
-        && (!n00b_option_is_set(sp->stdout_owner)
-            || n00b_option_get(sp->stderr_owner)
-                != n00b_option_get(sp->stdout_owner))) {
-        n00b_conduit_fd_owner_close(n00b_option_get(sp->stderr_owner));
-    }
+
+    // Restore parent terminal state (PTY mode).
+    n00b_subproc_restore_terminal(sp);
 
     // Close proc topic if still active.
     if (sp->proc_topic) {
@@ -1688,6 +1750,19 @@ n00b_subproc_proxy_winsize(n00b_subproc_t *sp)
     if (ioctl(STDIN_FILENO, TIOCGWINSZ, &ws) == 0) {
         ioctl(n00b_option_get(sp->stdout_owner)->fd, TIOCSWINSZ, &ws);
         sp->dimensions = ws;
+    }
+}
+
+void
+n00b_subproc_restore_terminal(n00b_subproc_t *sp)
+{
+    if (!sp->termcap_saved) {
+        return;
+    }
+    sp->termcap_saved = false;
+
+    if (isatty(STDIN_FILENO)) {
+        tcsetattr(STDIN_FILENO, TCSANOW, &sp->initial_termcap);
     }
 }
 

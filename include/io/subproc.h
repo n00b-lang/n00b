@@ -315,6 +315,7 @@ struct n00b_subproc {
     bool                           closed;
     bool                           errored;
     bool                           timed_out;
+    bool                           termcap_saved; /**< initial_termcap is valid */
 };
 
 // ============================================================================
@@ -488,6 +489,15 @@ extern n00b_result_t(bool) n00b_subproc_kill(n00b_subproc_t *sp)
  * @brief Proxy current terminal window size to child (PTY mode only).
  */
 extern void n00b_subproc_proxy_winsize(n00b_subproc_t *sp);
+
+/**
+ * @brief Restore parent terminal to its pre-spawn state (PTY mode only).
+ *
+ * Called automatically by `n00b_subproc_close()`.  Can also be called
+ * manually if the caller needs to restore terminal state earlier (e.g.,
+ * before printing an error message after a child crash).  Idempotent.
+ */
+extern void n00b_subproc_restore_terminal(n00b_subproc_t *sp);
 
 // ============================================================================
 // Accessors

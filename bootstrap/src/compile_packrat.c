@@ -11,11 +11,12 @@
  * | 1. Read    | `ncc_buf_read_file` / `ncc_buf_read_stream` | Load source into `ncc_buf_t` |
  * | 2. CPP     | `ncc_invoke_preprocessor` (ncc.c) | Run underlying compiler with `-E` |
  * | 3. Lex     | `lex()` (lex.c) | Tokenize CPP output into `tok_t[]` |
- * | 4. Prefix  | `prefix_apply_transforms` (prefix_xform.c) | Literal modifier rewrites (e.g. `r"..."`) |
- * | 5. Parse   | `parse_translation_unit_st` (parse.c) | Packrat parse into `tnode_t` tree |
- * | 6. Flatten | `register_flatten_xform` (xform_flatten.c) | Collapse recursive-descent chains (wildcard, post-order) |
- * | 7. Xforms  | Semantic transforms (see below) | Rewrite NCC extensions to standard C |
- * | 8. Emit    | `final_output` (output.c) | Pipe transformed C to underlying compiler |
+ * | 4. Prefix  | `prefix_apply_transforms` (prefix_xform.c) | Literal modifier rewrites (e.g.
+ * `r"..."`) | | 5. Parse   | `parse_translation_unit_st` (parse.c) | Packrat parse into
+ * `tnode_t` tree | | 6. Flatten | `register_flatten_xform` (xform_flatten.c) | Collapse
+ * recursive-descent chains (wildcard, post-order) | | 7. Xforms  | Semantic transforms (see
+ * below) | Rewrite NCC extensions to standard C | | 8. Emit    | `final_output` (output.c) |
+ * Pipe transformed C to underlying compiler |
  *
  * Stages 1-2 happen in `ncc.c`; stages 3-8 happen here in `compile_file()`.
  * With `-E -E`, the pipeline stops after stage 2 (raw CPP output).
@@ -30,17 +31,25 @@
  *
  * | Order | Transform | NT targets | Rationale |
  * |-------|-----------|------------|-----------|
- * | 1 | `package` | external_declaration, function_definition, declaration, primary_expression, typedef_name, struct/union/enum specifiers, enumeration_constant | **Must run first**: rewrites identifiers that other transforms match on. |
- * | 2 | `typeid` | synthetic_identifier | Evaluates `typeid(...)` to SHA-based identifiers. No ordering deps. |
- * | 3 | `typestr` | synthetic_string_literal | Evaluates `typestr(T)` to string literals. No ordering deps. |
- * | 4 | `once` | function_definition, declaration | Wraps `once` functions in `pthread_once`. Independent of others. |
- * | 5 | `vargs` | function_definition, declaration, postfix_expression | Rewrites `+`-variadic signatures and call sites. Must run before `keyword` (which also touches function_definition/declaration). |
- * | 6 | `keyword` | function_definition, declaration | Rewrites `_kargs` definitions. Runs after `vargs` so vargs parameters are already rewritten. |
- * | 7 | `kw_call` | postfix_expression | Rewrites keyword-argument call sites (`f(.arg=val)`). Depends on `keyword` having processed definitions first. |
- * | 8 | `bang` | postfix_expression | Rewrites `expr!` error propagation. Depends on `kw_call` (the `!` may appear on a kw-rewritten call). |
- * | 9 | `rstr` | postfix_expression | Rewrites `__ncc_rstr("...")` rich string calls to static compound literals. Pre-CPP scan rewrites `r"..."` → `__ncc_rstr("...")`. |
- * | 10 | `constexpr` | postfix_expression | Evaluates `constexpr_eval()`, `constexpr_max()`, `constexpr_min()`. May appear in transform-generated code. |
- * | 11 | `constexpr_paste` | synthetic_identifier | Evaluates `constexpr_paste()`. May appear in typeid-generated code. |
+ * | 1 | `package` | external_declaration, function_definition, declaration, primary_expression,
+ * typedef_name, struct/union/enum specifiers, enumeration_constant | **Must run first**:
+ * rewrites identifiers that other transforms match on. | | 2 | `typeid` | synthetic_identifier
+ * | Evaluates `typeid(...)` to SHA-based identifiers. No ordering deps. | | 3 | `typestr` |
+ * synthetic_string_literal | Evaluates `typestr(T)` to string literals. No ordering deps. | | 4
+ * | `once` | function_definition, declaration | Wraps `once` functions in `pthread_once`.
+ * Independent of others. | | 5 | `vargs` | function_definition, declaration, postfix_expression
+ * | Rewrites `+`-variadic signatures and call sites. Must run before `keyword` (which also
+ * touches function_definition/declaration). | | 6 | `keyword` | function_definition,
+ * declaration | Rewrites `_kargs` definitions. Runs after `vargs` so vargs parameters are
+ * already rewritten. | | 7 | `kw_call` | postfix_expression | Rewrites keyword-argument call
+ * sites (`f(.arg=val)`). Depends on `keyword` having processed definitions first. | | 8 |
+ * `bang` | postfix_expression | Rewrites `expr!` error propagation. Depends on `kw_call` (the
+ * `!` may appear on a kw-rewritten call). | | 9 | `rstr` | postfix_expression | Rewrites
+ * `__ncc_rstr("...")` rich string calls to static compound literals. Pre-CPP scan rewrites
+ * `r"..."` → `__ncc_rstr("...")`. | | 10 | `constexpr` | postfix_expression | Evaluates
+ * `constexpr_eval()`, `constexpr_max()`, `constexpr_min()`. May appear in transform-generated
+ * code. | | 11 | `constexpr_paste` | synthetic_identifier | Evaluates `constexpr_paste()`. May
+ * appear in typeid-generated code. |
  *
  * Because all transforms are post-order and the tree walk is bottom-up,
  * child nodes are fully transformed before their parents.  For nodes
@@ -97,8 +106,8 @@ ncc_register_extra_prefixes(prefix_registry_t *reg)
 static bool
 is_id_char(char c)
 {
-    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
-           || (c >= '0' && c <= '9') || c == '_';
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+        || c == '_';
 }
 
 /**
@@ -130,9 +139,15 @@ rstr_prescan(ncc_buf_t *input)
     // Build output buffer with replacements.
     ncc_buf_t *out = ncc_buf_alloc(0);
 
-    enum { ST_NORMAL, ST_LINE_COMMENT, ST_BLOCK_COMMENT, ST_STRING, ST_CHAR } state = ST_NORMAL;
+    enum {
+        ST_NORMAL,
+        ST_LINE_COMMENT,
+        ST_BLOCK_COMMENT,
+        ST_STRING,
+        ST_CHAR
+    } state = ST_NORMAL;
 
-    int64_t i        = 0;
+    int64_t i          = 0;
     int64_t flush_from = 0; // start of pending un-flushed source
 
     while (i < len) {
@@ -167,8 +182,7 @@ rstr_prescan(ncc_buf_t *input)
                 if (i == 0 || !is_id_char(src[i - 1])) {
                     // Flush everything before the 'r'
                     if (i > flush_from) {
-                        out = ncc_buf_concat(out, (char *)src + flush_from,
-                                             i - flush_from);
+                        out = ncc_buf_concat(out, (char *)src + flush_from, i - flush_from);
                     }
                     // Emit __ncc_rstr( instead of r
                     out = ncc_buf_concat_str(out, "__ncc_rstr(");
@@ -178,7 +192,7 @@ rstr_prescan(ncc_buf_t *input)
                     // (including adjacent string concatenation)
                     // First: consume this string literal
                     int64_t str_start = i; // the '"'
-                    i++; // skip opening "
+                    i++;                   // skip opening "
                     while (i < len) {
                         if (src[i] == '\\' && i + 1 < len) {
                             i += 2; // skip escaped char
@@ -195,8 +209,9 @@ rstr_prescan(ncc_buf_t *input)
                     // Check for adjacent string concatenation: whitespace then "
                     while (i < len) {
                         int64_t ws = i;
-                        while (ws < len && (src[ws] == ' ' || src[ws] == '\t'
-                                            || src[ws] == '\n' || src[ws] == '\r')) {
+                        while (ws < len
+                               && (src[ws] == ' ' || src[ws] == '\t' || src[ws] == '\n'
+                                   || src[ws] == '\r')) {
                             ws++;
                         }
                         if (ws < len && src[ws] == '"') {
@@ -221,10 +236,9 @@ rstr_prescan(ncc_buf_t *input)
                     }
 
                     // Emit the string content (from str_start to i)
-                    out = ncc_buf_concat(out, (char *)src + str_start,
-                                         i - str_start);
+                    out        = ncc_buf_concat(out, (char *)src + str_start, i - str_start);
                     // Emit closing )
-                    out = ncc_buf_concat_str(out, ")");
+                    out        = ncc_buf_concat_str(out, ")");
                     flush_from = i;
                     continue;
                 }
@@ -342,7 +356,11 @@ dump_tokens(lex_t *lex)
         }
 
         if (tok->type == TT_WS) {
-            printf("%5d %-5s %4d %d ", i, token_type_name(tok->type), tok->line_no, lex_is_ncc_off(lex, i));
+            printf("%5d %-5s %4d %d ",
+                   i,
+                   token_type_name(tok->type),
+                   tok->line_no,
+                   lex_is_ncc_off(lex, i));
             for (int j = 0; j < tlen; j++) {
                 char c = text[j];
                 if (c == '\n') {
@@ -414,17 +432,17 @@ extern void register_typehash_xform(xform_registry_t *);
 
 // Semantic transforms in pipeline order (see file header for rationale).
 static const xform_register_fn semantic_xforms[] = {
-    register_package_xform,        // 1: namespace rewrites (must be first)
-    register_typeid_xform,         // 2: typeid() → SHA identifiers
-    register_typehash_xform,       // 3: typehash() → uint64 literals
-    register_typestr_xform,        // 4: typestr() → string literals
-    register_once_xform,           // 5: once functions → pthread_once
-    register_vargs_xform,          // 6: variadic + → compound literals
-    register_keyword_xform,        // 7: _kargs definitions (after vargs)
-    register_kw_call_xform,        // 8: keyword call sites (after keyword)
-    register_bang_xform,           // 9: expr! error propagation (after kw_call)
-    register_rstr_xform,           // 10: r"..." rich string literals
-    register_constexpr_xform,      // 11: constexpr_eval/max/min
+    register_package_xform,         // 1: namespace rewrites (must be first)
+    register_typeid_xform,          // 2: typeid() → SHA identifiers
+    register_typehash_xform,        // 3: typehash() → uint64 literals
+    register_typestr_xform,         // 4: typestr() → string literals
+    register_once_xform,            // 5: once functions → pthread_once
+    register_vargs_xform,           // 6: variadic + → compound literals
+    register_keyword_xform,         // 7: _kargs definitions (after vargs)
+    register_kw_call_xform,         // 8: keyword call sites (after keyword)
+    register_bang_xform,            // 9: expr! error propagation (after kw_call)
+    register_rstr_xform,            // 10: r"..." rich string literals
+    register_constexpr_xform,       // 11: constexpr_eval/max/min
     register_constexpr_paste_xform, // 12: constexpr_paste
 };
 
@@ -540,17 +558,14 @@ show_error_context(lex_t *lex, int tok_pos)
         fputc('\n', stderr);
     }
 
-    fprintf(stderr,
-            "hint: There is probably an error in the following block.\n");
-    fprintf(stderr,
-            "hint: Use 'ncc -E file.c' to inspect NCC's preprocessed output.\n");
+    fprintf(stderr, "hint: There is probably an error in the following block.\n");
+    fprintf(stderr, "hint: Use 'ncc -E file.c' to inspect NCC's preprocessed output.\n");
 }
 
 // ============================================================================
 // Debug helpers (NCC_DEBUG_BUILD only)
 // ============================================================================
 
-#ifdef NCC_DEBUG_BUILD
 typedef struct print_frame_t {
     tnode_t *node;
     int      depth;
@@ -621,13 +636,14 @@ debug_print_tree_to(tnode_t *root, int depth, ncc_buf_t *buf, FILE *out)
             f = &stack[stack_top - 1];
         }
 
-        stack[stack_top++] = (print_frame_t){.node = child, .depth = f->depth + 1, .child_idx = -1};
+        stack[stack_top++]
+            = (print_frame_t){.node = child, .depth = f->depth + 1, .child_idx = -1};
     }
 
     base_dealloc(stack);
 }
 
-static void
+void
 debug_print_tree(tnode_t *node, int depth, ncc_buf_t *buf)
 {
     debug_print_tree_to(node, depth, buf, stderr);
@@ -682,7 +698,6 @@ get_ncc_debug_level(void)
     }
     return (int)level;
 }
-#endif // NCC_DEBUG_BUILD
 
 // ============================================================================
 // Bootstrap compile_file(): complete pipeline from source to compiler output
@@ -719,8 +734,7 @@ compile_file(ncc_argv_t *argv_ctx)
     input = ncc_invoke_preprocessor(argv_ctx, ctx.compiler, input);
 
     if (!input) {
-        ncc_error("%s: No output received from C preprocessor.\n",
-                  argv_ctx->argv[0]);
+        ncc_error("%s: No output received from C preprocessor.\n", argv_ctx->argv[0]);
         abort();
     }
 
@@ -731,9 +745,7 @@ compile_file(ncc_argv_t *argv_ctx)
     }
 
     // Step 3: Tokenize with NCC's lexer
-    lex_init(&ctx.lex_state,
-             input,
-             argv_ctx->has_stdin ? "«stdin»" : argv_ctx->sources[0]);
+    lex_init(&ctx.lex_state, input, argv_ctx->has_stdin ? "«stdin»" : argv_ctx->sources[0]);
     lex(&ctx.lex_state);
 
     // Step 4: Apply prefix (literal modifier) transformations
@@ -791,9 +803,7 @@ compile_file(ncc_argv_t *argv_ctx)
         tok_t      *err_tok  = &ctx.lex_state.toks[pos];
         char       *err_file = find_source_file(&ctx.lex_state, pos);
         int         tok_len;
-        const char *tok_text = tok_text_ptr(ctx.lex_state.input,
-                                            err_tok,
-                                            &tok_len);
+        const char *tok_text = tok_text_ptr(ctx.lex_state.input, err_tok, &tok_len);
         int         show_len = tok_len > 30 ? 30 : tok_len;
         ncc_error("%s:%d: Parse error at token '%.*s'\n",
                   err_file,
@@ -818,9 +828,7 @@ compile_file(ncc_argv_t *argv_ctx)
             tok_t      *stop_tok  = &ctx.lex_state.toks[final_pos];
             char       *stop_file = find_source_file(&ctx.lex_state, final_pos);
             int         tok_len;
-            const char *tok_text = tok_text_ptr(ctx.lex_state.input,
-                                                stop_tok,
-                                                &tok_len);
+            const char *tok_text = tok_text_ptr(ctx.lex_state.input, stop_tok, &tok_len);
             int         show_len = tok_len > 50 ? 50 : tok_len;
             ncc_error(
                 "%s:%d: Parser stopped at token '%.*s' - "
@@ -834,7 +842,6 @@ compile_file(ncc_argv_t *argv_ctx)
         }
     }
 
-#ifdef NCC_DEBUG_BUILD
     int debug_level = get_ncc_debug_level();
     if (debug_level >= 0) {
         fprintf(stderr, "[NCC_DEBUG] Parse complete\n");
@@ -849,15 +856,16 @@ compile_file(ncc_argv_t *argv_ctx)
     }
 
     dump_tree_if_requested("NCC_DUMP_TREE_PRE", ctx.tree, ctx.lex_state.input);
-#endif
 
 #ifdef NCC_PARSER_STATS
     {
-        int ntoks = ctx.lex_state.num_toks;
+        int    ntoks     = ctx.lex_state.num_toks;
         // Two-tier memo: fail bitmap (1 bit per pos*NT) + success dict.
         double bitmap_mb = (double)(ntoks + 1) * NT_COUNT / 8.0 / (1024.0 * 1024.0);
-        fprintf(stderr, "[ncc-stats] Tokens: %d, fail bitmap: %.2f MB, success dict: dynamic\n",
-                ntoks, bitmap_mb);
+        fprintf(stderr,
+                "[ncc-stats] Tokens: %d, fail bitmap: %.2f MB, success dict: dynamic\n",
+                ntoks,
+                bitmap_mb);
         extern void parser_dump_stats(void);
         parser_dump_stats();
     }
@@ -910,7 +918,9 @@ compile_file(ncc_argv_t *argv_ctx)
 
 #ifdef NCC_DEBUG_BUILD
     if (debug_level >= 0) {
-        fprintf(stderr, "[NCC_DEBUG] Transformations complete (%d nodes replaced)\n", xform_ctx.nodes_replaced);
+        fprintf(stderr,
+                "[NCC_DEBUG] Transformations complete (%d nodes replaced)\n",
+                xform_ctx.nodes_replaced);
         fflush(stderr);
     }
 

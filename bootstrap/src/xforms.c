@@ -23,6 +23,7 @@ bool
 apply_transforms(lex_t *state)
 {
     tok_xform_t ctx = {
+        .lex_ctx = state,
         .input   = state->input,
         .toks    = state->toks,
         .ix      = 0,

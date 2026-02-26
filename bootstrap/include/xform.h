@@ -26,6 +26,7 @@ typedef struct kw_use_ctx_t {
  * @brief Transform context for processing token streams.
  */
 struct tok_xform_t {
+    lex_t        *lex_ctx;          // For debug printing, since Claude sucks.
     ncc_buf_t    *input;            /**< Source buffer */
     tok_t        *toks;             /**< Token array */
     char         *in_file;          /**< Input filename */
@@ -104,4 +105,3 @@ extern bool keyword_xform(tok_xform_t *ctx, tok_t *t);
 extern void kw_tracking(tok_xform_t *ctx, tok_t *t);
 
 /** @} */
-
