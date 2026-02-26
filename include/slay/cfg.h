@@ -7,7 +7,7 @@
  * Builds a CFG from a parse tree whose grammar has control flow
  * annotations (`@branch`, `@loop`, `@switch`, `@jump`).  The annotation
  * walk (`n00b_annot_walk_tree_full`) must be run first to produce the
- * `n00b_dict_untyped_t` label map consumed here.
+ * `n00b_cf_labels_t` label map consumed here.
  *
  * @see cf_label.h  for the label types
  * @see annot_walk.h  for the annotation walk
@@ -92,9 +92,9 @@ typedef struct {
  *
  * @pre `cf_labels` was produced by walking the same tree.
  */
-n00b_cfg_t *n00b_build_cfg(n00b_dict_untyped_t *cf_labels,
-                            n00b_parse_tree_t   *func_body,
-                            n00b_string_t        func_name);
+n00b_cfg_t *n00b_build_cfg(n00b_cf_labels_t  *cf_labels,
+                            n00b_parse_tree_t *func_body,
+                            n00b_string_t      func_name);
 
 // ============================================================================
 // Query

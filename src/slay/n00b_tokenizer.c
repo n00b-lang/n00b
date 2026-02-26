@@ -399,7 +399,7 @@ restart:
     if ((cp >= '0' && cp <= '9')
         || (cp == '.' && n00b_scan_peek_byte(s, 1) >= '0'
             && n00b_scan_peek_byte(s, 1) <= '9')) {
-        bool emitted = n00b_scan_number(s, "INTEGER", "FLOAT");
+        bool emitted = n00b_scan_number(s, "INT_LIT", "FLOAT_LIT");
 
         if (emitted) {
             try_scan_modifier(s);

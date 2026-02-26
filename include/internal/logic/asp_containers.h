@@ -63,7 +63,7 @@ typedef struct {
 static inline uint64_t
 _n00b_dl_str_hash(n00b_string_t s)
 {
-    return (uint64_t)n00b_string_hash(s);
+    return (uint64_t)n00b_string_hash(&s);
 }
 
 static inline void

@@ -4,7 +4,7 @@
 # (closing brace, EOF) The lexer's consume() skips whitespace and
 # comments but stops at newlines (except inside literal depth > 0).
 # This is not easily expressible in BNF, so we model <eos> as a token.
-<eos> ::= %NEWLINE | %SEMI
+<eos> ::= %NEWLINE | %";"
 
 <block-start> ::= %"{" <doc-strings> <eos>*
 <block-end> ::= <eos>* %"}"

@@ -451,7 +451,6 @@ n00b_parsers = [
 
 n00b_slay = [
     'src/slay/token.c',
-    'src/slay/hashset.c',
     'src/slay/annotation.c',
     'src/slay/grammar.c',
     'src/slay/unicode_class.c',

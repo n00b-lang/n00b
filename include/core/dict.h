@@ -123,6 +123,46 @@ typedef struct _n00b_dict_internal_t {
         found;                                                                                 \
     })
 
+/**
+ * @brief Iterate over all live entries in a typed dictionary.
+ *
+ * @param dict   Pointer to the typed dict.
+ * @param kvar   Variable name to bind each key.
+ * @param vvar   Variable name to bind each value.
+ * @param body   Statement or block to execute per entry.
+ *
+ * Example:
+ *     n00b_dict_foreach(my_dict, k, v, {
+ *         printf("key=%lld val=%d\n", (long long)k, v);
+ *     });
+ */
+#define n00b_dict_foreach(dict, kvar, vvar, body)                                                  \
+    do {                                                                                           \
+        _n00b_dict_structural_check(dict);                                                         \
+        _n00b_dict_internal_t *_df_d                                                               \
+            = (_n00b_dict_internal_t *)(dict);                                                     \
+        __n00b_internal_type_erased_store_t *_df_s                                                 \
+            = (__n00b_internal_type_erased_store_t *)atomic_load_explicit(                          \
+                  &_df_d->store, memory_order_acquire);                                            \
+        if (_df_s) {                                                                               \
+            typedef _n00b_ditem_type(dict, keys)   _df_kt;                                         \
+            typedef _n00b_ditem_type(dict, values)  _df_vt;                                        \
+            _df_kt *_df_keys = (_df_kt *)_df_s->keys;                                              \
+            _df_vt *_df_vals = (_df_vt *)_df_s->values;                                            \
+            for (uint32_t _df_i = 0; _df_i <= _df_s->last_slot; _df_i++) {                         \
+                n00b_dict_bucket_t *_df_b = &_df_s->buckets[_df_i];                                \
+                if (_df_b->hv != (n00b_uint128_t)0                                                 \
+                    && !(atomic_load_explicit(&_df_b->flags, memory_order_relaxed)                  \
+                         & N00B_HT_FLAG_DELETED)) {                                                \
+                    _df_kt kvar = _df_keys[_df_i];                                                 \
+                    _df_vt vvar = _df_vals[_df_i];                                                 \
+                    (void)vvar;                                                                    \
+                    body                                                                           \
+                }                                                                                  \
+            }                                                                                      \
+        }                                                                                          \
+    } while (0)
+
 // This private interface (from here, down) is untyped, and thus internal.
 extern void       _n00b_finalize_dict(_n00b_dict_internal_t *);
 extern n00b_size_t n00b_dict_internal_len(_n00b_dict_internal_t *);
@@ -175,6 +215,11 @@ _n00b_dict_internal_cas(_n00b_dict_internal_t *d,
     bool null_new_means_delete  = false;
 };
 
+#define N00B_HT_FLAG_MUTEX   1
+#define N00B_HT_FLAG_COPYING 2
+#define N00B_HT_FLAG_DELETED 4
+#define N00B_HT_FLAG_MOVING  8
+
 #ifdef N00B_USE_INTERNAL_API
 /**
  * @brief Acquire the dictionary's migration mutex.
@@ -189,10 +234,5 @@ extern bool n00b_dict_internal_lock(_n00b_dict_internal_t *d,
 
 /** @brief Unlock the dictionary after a store migration. */
 extern void n00b_dict_internal_unlock_post_copy(_n00b_dict_internal_t *d);
-
-#define N00B_HT_FLAG_MUTEX   1
-#define N00B_HT_FLAG_COPYING 2
-#define N00B_HT_FLAG_DELETED 4
-#define N00B_HT_FLAG_MOVING  8
 
 #endif

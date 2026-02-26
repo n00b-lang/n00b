@@ -11,7 +11,6 @@
 #include "slay/annotation.h"
 #include "internal/slay/pwz_internal.h"
 #include "internal/slay/grammar_internal.h"
-#include "internal/slay/hashset.h"
 #include "internal/slay/unicode_class.h"
 #include "unicode/encoding.h"
 #include "core/alloc.h"
@@ -474,9 +473,6 @@ reset_memos(n00b_pwz_parser_t *p)
 // Core derive: d_d, d_d_prime, d_u, d_u_prime
 // ============================================================================
 
-// Encode a terminal ID as a void* for FIRST-set lookups.
-#define TERM_TO_PTR(id) ((void *)(uintptr_t)((uint64_t)(id) + 0x100))
-
 static inline bool
 nt_first_matches(n00b_nonterm_t *nt, int64_t token_id)
 {
@@ -484,11 +480,11 @@ nt_first_matches(n00b_nonterm_t *nt, int64_t token_id)
         return true;
     }
 
-    if (!nt->first_set || nt->first_set->len == 0) {
+    if (!nt->first_set || nt->first_set->length == 0) {
         return true;
     }
 
-    return n00b_hashset_contains(nt->first_set, TERM_TO_PTR(token_id));
+    return n00b_dict_contains(nt->first_set, token_id);
 }
 
 static inline bool
@@ -498,11 +494,11 @@ rule_first_matches(n00b_parse_rule_t *rule, int64_t token_id)
         return true;
     }
 
-    if (!rule->first_set || rule->first_set->len == 0) {
+    if (!rule->first_set || rule->first_set->length == 0) {
         return true;
     }
 
-    return n00b_hashset_contains(rule->first_set, TERM_TO_PTR(token_id));
+    return n00b_dict_contains(rule->first_set, token_id);
 }
 
 // ============================================================================

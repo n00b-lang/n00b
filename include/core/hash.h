@@ -41,10 +41,14 @@ extern n00b_uint128_t n00b_hash_raw(const void *data, size_t len);
 
 /**
  * @brief Hash an `n00b_string_t` (by its UTF-8 content).
- * @param s  The string to hash.
- * @return   128-bit hash value.
+ *
+ * Signature matches `n00b_hash_fn` (`n00b_uint128_t (*)(void *)`).
+ * Expects a pointer to `n00b_string_t`, which it casts internally.
+ *
+ * @param key  Pointer to the `n00b_string_t` to hash (cast to `void *`).
+ * @return     128-bit hash value.
  */
-extern n00b_uint128_t n00b_string_hash(n00b_string_t s);
+extern n00b_uint128_t n00b_string_hash(void *key);
 
 /**
  * @brief Hash an `n00b_buffer_t` (by its raw byte content).

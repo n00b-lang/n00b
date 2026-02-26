@@ -3,6 +3,7 @@
 #include "parsers/scanner.h"
 #include "parsers/token_stream.h"
 #include "internal/slay/grammar_internal.h"
+#include "core/string.h"
 #include <assert.h>
 #include <string.h>
 
@@ -674,15 +675,17 @@ n00b_scan_emit(n00b_scanner_t *s)
                                                     strlen(token_type));
         }
         else {
-            bool  found = false;
-            void *val   = _n00b_dict_untyped_get(s->grammar->literal_type_map,
-                                                  (void *)token_type, &found);
+            n00b_string_t  tt_str = n00b_string_from_cstr(token_type);
+            n00b_string_t *tt_ptr = &tt_str;
+            bool           found  = false;
+            int64_t        val    = n00b_dict_get(s->grammar->literal_type_map,
+                                                  tt_ptr, &found);
 
             if (!found) {
                 return N00B_TOK_ERR_BAD_TYPE_NAME;
             }
 
-            resolved_tid = (int64_t)(intptr_t)val;
+            resolved_tid = val;
         }
     }
     else {
@@ -695,11 +698,7 @@ n00b_scan_emit(n00b_scanner_t *s)
 
         // Validate against grammar if present.
         if (s->grammar && s->grammar->valid_tokens) {
-            bool  found = false;
-            _n00b_dict_untyped_get(s->grammar->valid_tokens,
-                                    (void *)(intptr_t)resolved_tid, &found);
-
-            if (!found) {
+            if (!n00b_dict_contains(s->grammar->valid_tokens, resolved_tid)) {
                 return N00B_TOK_ERR_NOT_IN_GRAMMAR;
             }
         }
@@ -891,8 +890,5 @@ n00b_scan_token_valid(n00b_scanner_t *s, int64_t tid)
         return false;
     }
 
-    bool found = false;
-    _n00b_dict_untyped_get(s->grammar->valid_tokens,
-                            (void *)(intptr_t)tid, &found);
-    return found;
+    return n00b_dict_contains(s->grammar->valid_tokens, tid);
 }

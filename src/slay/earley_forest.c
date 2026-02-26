@@ -249,7 +249,7 @@ copy_nt_node(n00b_nt_node_t *in)
 // ============================================================================
 
 static ptrlist_t *
-hashset_to_list(n00b_hashset_t *s)
+item_set_to_list(n00b_item_set_t *s)
 {
     ptrlist_t *result = ptrlist_new();
 
@@ -257,13 +257,10 @@ hashset_to_list(n00b_hashset_t *s)
         return result;
     }
 
-    for (int32_t i = 0; i < s->cap; i++) {
-        void *item = s->buckets[i];
-
-        if (item && item != (void *)(uintptr_t)1) {
-            ptrlist_push(result, item);
-        }
-    }
+    n00b_dict_foreach(s, k, v, {
+        (void)v;
+        ptrlist_push(result, k);
+    });
 
     return result;
 }
@@ -273,7 +270,7 @@ hashset_to_list(n00b_hashset_t *s)
 // ============================================================================
 
 // Compare two Earley items by stable, insertion-order-independent properties
-// for deterministic iteration over completor hashsets. Without this, hashset
+// for deterministic iteration over completor item sets. Without this, dict
 // iteration order depends on memory addresses, causing non-deterministic
 // forest construction.
 //
@@ -281,7 +278,7 @@ hashset_to_list(n00b_hashset_t *s)
 // item's own (estate_id, cursor, penalty, cost) — all of which are
 // determined by grammar structure and input, not by processing order.
 // We avoid eitem_index since it depends on insertion order into the
-// Earley state, which itself depends on hashset iteration order.
+// Earley state, which itself depends on dict iteration order.
 static int
 item_cmp(const void *a, const void *b)
 {
@@ -559,7 +556,7 @@ get_node(n00b_earley_parser_t *p, n00b_earley_item_t *b)
     // Check cache on the start item.
     if (top->cache) {
         bool   found = false;
-        void  *cached = _n00b_dict_untyped_get(top->cache, b, &found);
+        void  *cached = n00b_dict_get(top->cache, b, &found);
 
         if (found && cached) {
             return (nb_info_t *)cached;
@@ -585,12 +582,13 @@ get_node(n00b_earley_parser_t *p, n00b_earley_item_t *b)
 
     // Create cache dict if needed.
     if (!top->cache) {
-        top->cache = n00b_alloc(n00b_dict_untyped_t);
-        n00b_dict_untyped_init(top->cache,
-                                .hash = n00b_hash_word);
+        top->cache = n00b_alloc(n00b_dict_t(n00b_earley_item_t *, void *));
+        n00b_dict_init(top->cache,
+                       .hash = n00b_hash_word,
+                       .skip_obj_hash = true);
     }
 
-    _n00b_dict_untyped_put(top->cache, b, result);
+    n00b_dict_put(top->cache, b, result);
 
     n00b_parse_rule_t *rule = top->rule;
 
@@ -724,7 +722,7 @@ scan_rule_items(n00b_earley_parser_t *p, nb_info_t *parent_ni,
         case N00B_MATCH_NT:
         case N00B_MATCH_GROUP:
         default: {
-            ptrlist_t *bottoms   = hashset_to_list(prev->completors);
+            ptrlist_t *bottoms   = item_set_to_list(prev->completors);
             sort_items(bottoms);
             size_t     n_bottoms = ptrlist_len(bottoms);
 
@@ -752,7 +750,7 @@ static void
 scan_group_items(n00b_earley_parser_t *p, nb_info_t *group_ni,
                  n00b_earley_item_t *end)
 {
-    ptrlist_t *clist  = hashset_to_list(end->completors);
+    ptrlist_t *clist  = item_set_to_list(end->completors);
     sort_items(clist);
     size_t     n      = ptrlist_len(clist);
     uint32_t   minp   = ~0u;
@@ -829,39 +827,33 @@ expand_leo_chain(n00b_earley_parser_t *p, n00b_earley_item_t *leo_end)
             break;
         }
 
-        n00b_hashset_t *ps = cur_parent->start_item->parent_states;
+        n00b_item_set_t *ps = cur_parent->start_item->parent_states;
 
-        if (!ps || ps->len != 1) {
+        if (!ps || ps->length != 1) {
             break;
         }
 
         n00b_earley_item_t *next = NULL;
 
-        for (int32_t k = 0; k < ps->cap; k++) {
-            void *item = ps->buckets[k];
-
-            if (item && item != (void *)(uintptr_t)1) {
-                next = (n00b_earley_item_t *)item;
-                break;
-            }
-        }
+        n00b_dict_foreach(ps, k, v, {
+            (void)v;
+            next = k;
+            break;
+        });
 
         cur_parent = next;
     }
 
     // Extract inner completing item.
     n00b_earley_item_t *inner_completor = NULL;
-    n00b_hashset_t     *inner_set       = leo_end->completors;
+    n00b_item_set_t    *inner_set       = leo_end->completors;
 
     if (inner_set) {
-        for (int32_t k = 0; k < inner_set->cap; k++) {
-            void *item = inner_set->buckets[k];
-
-            if (item && item != (void *)(uintptr_t)1) {
-                inner_completor = (n00b_earley_item_t *)item;
-                break;
-            }
-        }
+        n00b_dict_foreach(inner_set, k, v, {
+            (void)v;
+            inner_completor = k;
+            break;
+        });
     }
 
     // Build inside-out.
@@ -883,10 +875,10 @@ expand_leo_chain(n00b_earley_parser_t *p, n00b_earley_item_t *leo_end)
         virt->op            = N00B_EO_COMPLETE_N;
         virt->subtree_info  = N00B_SI_NT_RULE_END;
 
-        virt->completors = n00b_hashset_new(8);
+        virt->completors = n00b_item_set_new();
 
         if (inner_completor) {
-            n00b_hashset_put(virt->completors, inner_completor);
+            n00b_item_set_put(virt->completors, inner_completor);
         }
 
         nb_info_t *ni = get_node(p, virt);

@@ -9,7 +9,6 @@
 #include "slay/annotation.h"
 #include "internal/slay/grammar_internal.h"
 #include "core/alloc.h"
-#include "core/dict_untyped.h"
 #include "strings/string_ops.h"
 
 #include <stdio.h>
@@ -434,7 +433,7 @@ walk_node(n00b_annot_walk_ctx_t *ctx, n00b_parse_tree_t *node)
             label->cond      = resolve_child_ref(ctx->grammar, node, a->name_ref);
             label->then_body = resolve_child_ref(ctx->grammar, node, a->type_ref);
             label->else_body = resolve_child_ref(ctx->grammar, node, a->value_ref);
-            _n00b_dict_untyped_put(ctx->cf_labels, node, label);
+            n00b_dict_put(ctx->cf_labels, node, label);
             break;
         }
 
@@ -444,7 +443,7 @@ walk_node(n00b_annot_walk_ctx_t *ctx, n00b_parse_tree_t *node)
             label->self      = node;
             label->cond      = resolve_child_ref(ctx->grammar, node, a->name_ref);
             label->then_body = resolve_child_ref(ctx->grammar, node, a->type_ref);
-            _n00b_dict_untyped_put(ctx->cf_labels, node, label);
+            n00b_dict_put(ctx->cf_labels, node, label);
             break;
         }
 
@@ -454,7 +453,7 @@ walk_node(n00b_annot_walk_ctx_t *ctx, n00b_parse_tree_t *node)
             label->self      = node;
             label->cond      = resolve_child_ref(ctx->grammar, node, a->name_ref);
             label->then_body = resolve_child_ref(ctx->grammar, node, a->type_ref);
-            _n00b_dict_untyped_put(ctx->cf_labels, node, label);
+            n00b_dict_put(ctx->cf_labels, node, label);
             break;
         }
 
@@ -468,7 +467,7 @@ walk_node(n00b_annot_walk_ctx_t *ctx, n00b_parse_tree_t *node)
                 label->jump_kind = extract_first_identifier(node);
             }
 
-            _n00b_dict_untyped_put(ctx->cf_labels, node, label);
+            n00b_dict_put(ctx->cf_labels, node, label);
             break;
         }
 
@@ -478,7 +477,7 @@ walk_node(n00b_annot_walk_ctx_t *ctx, n00b_parse_tree_t *node)
             label->self           = node;
             label->tag            = a->scope_tag;
             label->capture_by_tag = a->capture_by_tag;
-            _n00b_dict_untyped_put(ctx->cf_labels, node, label);
+            n00b_dict_put(ctx->cf_labels, node, label);
             break;
         }
 
@@ -488,7 +487,7 @@ walk_node(n00b_annot_walk_ctx_t *ctx, n00b_parse_tree_t *node)
             label->self      = node;
             label->cond      = resolve_child_ref(ctx->grammar, node, a->name_ref);
             label->then_body = resolve_child_ref(ctx->grammar, node, a->value_ref);
-            _n00b_dict_untyped_put(ctx->cf_labels, node, label);
+            n00b_dict_put(ctx->cf_labels, node, label);
             break;
         }
 
@@ -523,8 +522,8 @@ n00b_annot_walk_tree_full(n00b_grammar_t *g, n00b_parse_tree_t *tree)
         return NULL;
     }
 
-    n00b_dict_untyped_t *labels = n00b_alloc(n00b_dict_untyped_t);
-    n00b_dict_untyped_init(labels, .skip_obj_hash = true);
+    n00b_cf_labels_t *labels = n00b_alloc(n00b_cf_labels_t);
+    n00b_dict_init(labels, .hash = n00b_hash_word, .skip_obj_hash = true);
 
     n00b_annot_walk_ctx_t ctx = {
         .symtab    = n00b_symtab_new(),

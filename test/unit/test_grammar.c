@@ -7,7 +7,7 @@
 #include "strings/string_ops.h"
 #include "slay/grammar.h"
 #include "internal/slay/grammar_internal.h"
-#include "internal/slay/hashset.h"
+#include "internal/slay/earley_internal.h"
 
 // ============================================================================
 // 1. Grammar construction
@@ -311,9 +311,7 @@ test_first_set(void)
 
     // term's FIRST set should contain NUM
     assert(term->first_set != NULL);
-    // FIRST sets encode terminal IDs as (void *)(uintptr_t)((uint64_t)id + 0x100)
-    void *encoded = (void *)(uintptr_t)((uint64_t)num_id + 0x100);
-    assert(n00b_hashset_contains(term->first_set, encoded));
+    assert(n00b_dict_contains(term->first_set, num_id));
 
     n00b_grammar_free(g);
     printf("  [PASS] first_set\n");
@@ -459,50 +457,50 @@ test_token_list(void)
 }
 
 // ============================================================================
-// 18. Hashset basic operations
+// 18. Item set (typed dict) basic operations
 // ============================================================================
 
 static void
-test_hashset(void)
+test_item_set(void)
 {
-    n00b_hashset_t *s = n00b_hashset_new(16);
+    n00b_item_set_t *s = n00b_item_set_new();
     assert(s != NULL);
-    assert(s->len == 0);
+    assert(s->length == 0);
 
-    // Add items (encoded pointers to avoid NULL/tombstone)
-    void *a = (void *)(uintptr_t)0x100;
-    void *b = (void *)(uintptr_t)0x200;
-    void *c = (void *)(uintptr_t)0x300;
+    // Use fake pointers as item keys (pointer-identity).
+    n00b_earley_item_t *a = (n00b_earley_item_t *)(uintptr_t)0x100;
+    n00b_earley_item_t *b = (n00b_earley_item_t *)(uintptr_t)0x200;
+    n00b_earley_item_t *c = (n00b_earley_item_t *)(uintptr_t)0x300;
 
-    assert(n00b_hashset_add(s, a) == true);   // new
-    assert(n00b_hashset_add(s, a) == false);  // duplicate
-    assert(n00b_hashset_add(s, b) == true);
-    assert(s->len == 2);
+    assert(n00b_item_set_add(s, a) == true);   // new
+    assert(n00b_item_set_add(s, a) == false);  // duplicate
+    assert(n00b_item_set_add(s, b) == true);
+    assert(s->length == 2);
 
-    assert(n00b_hashset_contains(s, a));
-    assert(n00b_hashset_contains(s, b));
-    assert(!n00b_hashset_contains(s, c));
+    assert(n00b_item_set_contains(s, a));
+    assert(n00b_item_set_contains(s, b));
+    assert(!n00b_item_set_contains(s, c));
 
     // Copy
-    n00b_hashset_t *copy = n00b_hashset_copy(s);
-    assert(copy->len == 2);
-    assert(n00b_hashset_contains(copy, a));
-    assert(n00b_hashset_contains(copy, b));
+    n00b_item_set_t *copy = n00b_item_set_copy(s);
+    assert(copy->length == 2);
+    assert(n00b_item_set_contains(copy, a));
+    assert(n00b_item_set_contains(copy, b));
 
     // Union
-    n00b_hashset_t *s2 = n00b_hashset_new(16);
-    n00b_hashset_add(s2, c);
-    n00b_hashset_t *u = n00b_hashset_union(s, s2);
-    assert(u->len == 3);
-    assert(n00b_hashset_contains(u, a));
-    assert(n00b_hashset_contains(u, b));
-    assert(n00b_hashset_contains(u, c));
+    n00b_item_set_t *s2 = n00b_item_set_new();
+    n00b_item_set_add(s2, c);
+    n00b_item_set_t *u = n00b_item_set_union(s, s2);
+    assert(u->length == 3);
+    assert(n00b_item_set_contains(u, a));
+    assert(n00b_item_set_contains(u, b));
+    assert(n00b_item_set_contains(u, c));
 
-    n00b_hashset_free(s);
-    n00b_hashset_free(copy);
-    n00b_hashset_free(s2);
-    n00b_hashset_free(u);
-    printf("  [PASS] hashset\n");
+    n00b_free(s);
+    n00b_free(copy);
+    n00b_free(s2);
+    n00b_free(u);
+    printf("  [PASS] item_set\n");
 }
 
 // ============================================================================
@@ -534,7 +532,7 @@ main(int argc, char **argv)
     test_user_data();
     test_annotation_attach();
     test_token_list();
-    test_hashset();
+    test_item_set();
 
     printf("All grammar tests passed.\n");
     n00b_shutdown();

@@ -21,10 +21,10 @@
 
 /** @brief Context carried through the annotation walk. */
 typedef struct {
-    n00b_symtab_t       *symtab;
-    n00b_grammar_t      *grammar;
-    n00b_dict_untyped_t *cf_labels;
-    int32_t              anon_counter; /**< Counter for unique anonymous ADT scope names. */
+    n00b_symtab_t    *symtab;
+    n00b_grammar_t   *grammar;
+    n00b_cf_labels_t *cf_labels;
+    int32_t           anon_counter; /**< Counter for unique anonymous ADT scope names. */
 } n00b_annot_walk_ctx_t;
 
 // ============================================================================

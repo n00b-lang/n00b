@@ -8,29 +8,24 @@
 
 #include "slay/grammar.h"
 #include "slay/parse_tree.h"
-#include "internal/slay/hashset.h"
 #include "core/list.h"
-#include "core/dict_untyped.h"
+#include "core/dict.h"
 
 // ============================================================================
 // Container declarations
 // ============================================================================
 
 n00b_list_decl(n00b_match_t);
-n00b_list_decl(n00b_terminal_t);
 n00b_list_decl(n00b_parse_rule_t);
 n00b_list_decl(n00b_nonterm_t);
 n00b_list_decl(n00b_annotation_t *);
+n00b_dict_decl(int64_t, bool);
+n00b_dict_decl(n00b_string_t *, int64_t);
+n00b_dict_decl(int64_t, n00b_string_t *);
 
 // ============================================================================
 // Internal structures
 // ============================================================================
-
-struct n00b_terminal_t {
-    n00b_string_t value;
-    void         *user_data;
-    int64_t       id;
-};
 
 struct n00b_nonterm_t {
     n00b_string_t                    name;
@@ -38,7 +33,7 @@ struct n00b_nonterm_t {
     n00b_list_t(n00b_annotation_t *) pending_annotations;
     n00b_walk_action_t               action;
     void                            *user_data;
-    n00b_hashset_t                  *first_set;
+    n00b_dict_t(int64_t, bool)      *first_set;
     int64_t                          id;
     bool                             group_nt;
     bool                             empty_is_error;
@@ -54,7 +49,7 @@ struct n00b_parse_rule_t {
     n00b_nt_id_t                          nt_id;
     n00b_list_t(n00b_match_t)             contents;
     n00b_list_t(n00b_annotation_t *)      annotations;
-    n00b_hashset_t                       *first_set;
+    n00b_dict_t(int64_t, bool)           *first_set;
     int32_t                               cost;
     int32_t                               link_ix;
     n00b_string_t                         doc;
@@ -97,18 +92,17 @@ typedef struct {
 // ============================================================================
 
 struct n00b_grammar_t {
-    n00b_list_t(n00b_terminal_t)   named_terms;
     n00b_list_t(n00b_parse_rule_t) rules;
     n00b_list_t(n00b_nonterm_t)    nt_list;
-    n00b_dict_untyped_t           *nt_map;
-    n00b_dict_untyped_t           *terminal_map;
+    n00b_dict_t(n00b_string_t *, int64_t)  *nt_map;
+    n00b_dict_t(n00b_string_t *, int64_t)  *terminal_map;
 
     /** Maps literal type name (e.g. "IDENTIFIER") → sequential int64_t ID. */
-    n00b_dict_untyped_t           *literal_type_map;
+    n00b_dict_t(n00b_string_t *, int64_t)  *literal_type_map;
     /** Set of all valid token IDs (both hashed and sequential). Built at finalize. */
-    n00b_dict_untyped_t           *valid_tokens;
-    /** Reverse lookup: hashed/sequential ID → index in named_terms. */
-    n00b_dict_untyped_t           *terminal_by_id;
+    n00b_dict_t(int64_t, bool)             *valid_tokens;
+    /** Reverse lookup: hashed/sequential ID → name string pointer. */
+    n00b_dict_t(int64_t, n00b_string_t *)  *terminal_by_id;
     /** Counter for the next literal type sequential ID (starts at 0). */
     int64_t                        next_literal_type_id;
 
@@ -141,7 +135,7 @@ struct n00b_grammar_t {
     int32_t           lr0_start_state;
     int32_t          *lr0_predict_state;
 
-    n00b_list_t(n00b_string_t) terminal_categories;
+    n00b_dict_t(int64_t, n00b_string_t *)  *terminal_categories;
     bool                      has_terminal_categories;
 };
 
@@ -158,28 +152,21 @@ n00b_get_nonterm(n00b_grammar_t *g, int64_t id)
     return &g->nt_list.data[id];
 }
 
-static inline n00b_terminal_t *
-n00b_get_terminal(n00b_grammar_t *g, int64_t id)
+static inline n00b_string_t *
+n00b_get_terminal_name(n00b_grammar_t *g, int64_t id)
 {
     if (!g->terminal_by_id) {
         return NULL;
     }
 
-    bool  found = false;
-    void *val   = _n00b_dict_untyped_get(g->terminal_by_id,
-                                          (void *)(intptr_t)id, &found);
+    bool           found = false;
+    n00b_string_t *val   = n00b_dict_get(g->terminal_by_id, id, &found);
 
     if (!found) {
         return NULL;
     }
 
-    int64_t ix = (int64_t)(intptr_t)val;
-
-    if (ix < 0 || (size_t)ix >= n00b_list_len(g->named_terms)) {
-        return NULL;
-    }
-
-    return &g->named_terms.data[ix];
+    return val;
 }
 
 static inline n00b_parse_rule_t *

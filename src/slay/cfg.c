@@ -48,7 +48,7 @@ loop_pop(loop_stack_t *ls)
 
 typedef struct {
     n00b_cfg_t          *cfg;
-    n00b_dict_untyped_t *cf_labels;
+    n00b_cf_labels_t *cf_labels;
     loop_stack_t         loops;
 } cfg_ctx_t;
 
@@ -358,7 +358,7 @@ cfg_build_stmts(cfg_ctx_t *ctx, n00b_parse_tree_t *node, int32_t cur_block)
 // ============================================================================
 
 n00b_cfg_t *
-n00b_build_cfg(n00b_dict_untyped_t *cf_labels,
+n00b_build_cfg(n00b_cf_labels_t *cf_labels,
                n00b_parse_tree_t   *func_body,
                n00b_string_t        func_name)
 {

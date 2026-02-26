@@ -15,14 +15,12 @@
 // ============================================================================
 
 typedef int64_t                    n00b_nt_id_t;
-typedef struct n00b_terminal_t     n00b_terminal_t;
 typedef struct n00b_nonterm_t      n00b_nonterm_t;
 typedef struct n00b_parse_rule_t   n00b_parse_rule_t;
 typedef struct n00b_rule_group_t   n00b_rule_group_t;
 typedef struct n00b_grammar_t      n00b_grammar_t;
 typedef struct n00b_earley_item_t  n00b_earley_item_t;
 typedef struct n00b_earley_state_t n00b_earley_state_t;
-typedef struct n00b_hashset_t      n00b_hashset_t;
 typedef struct n00b_annotation_t   n00b_annotation_t;
 typedef struct n00b_scanner_t      n00b_scanner_t;
 

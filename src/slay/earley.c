@@ -397,7 +397,7 @@ add_item(n00b_earley_parser_t  *p,
 
         if (existing->completors != new_ei->completors) {
             existing->completors
-                = n00b_hashset_union(existing->completors, new_ei->completors);
+                = n00b_item_set_union(existing->completors, new_ei->completors);
         }
 
         *newptr = existing;
@@ -496,13 +496,15 @@ bsr_emit(n00b_earley_parser_t *p,
         return;
     }
 
-    void *key = (void *)(uintptr_t)bsr_hash(slot, left, pivot, right);
+    uint64_t key = bsr_hash(slot, left, pivot, right);
 
     if (!p->bsr_dedup) {
-        p->bsr_dedup = n00b_hashset_new(256);
+        p->bsr_dedup = n00b_alloc(n00b_dict_t(uint64_t, bool));
+        n00b_dict_init(p->bsr_dedup, .hash = n00b_hash_word, .skip_obj_hash = true);
     }
 
-    if (!n00b_hashset_add(p->bsr_dedup, key)) {
+    bool true_val = true;
+    if (!n00b_dict_add(p->bsr_dedup, key, true_val)) {
         return;
     }
 
@@ -590,15 +592,15 @@ register_prediction(n00b_earley_parser_t *p,
     }
 
     if (!predictor->predictions) {
-        predictor->predictions = n00b_hashset_new(8);
+        predictor->predictions = n00b_item_set_new();
     }
 
     if (!predicted->parent_states) {
-        predicted->parent_states = n00b_hashset_new(8);
+        predicted->parent_states = n00b_item_set_new();
     }
 
-    n00b_hashset_add(predictor->predictions, predicted);
-    n00b_hashset_add(predicted->parent_states, predictor);
+    n00b_item_set_add(predictor->predictions, predicted);
+    n00b_item_set_add(predicted->parent_states, predictor);
 }
 
 // ============================================================================
@@ -646,13 +648,11 @@ nt_first_matches(n00b_nonterm_t *nt, int64_t token_id)
         return true;
     }
 
-    if (!nt->first_set || nt->first_set->len == 0) {
+    if (!nt->first_set || nt->first_set->length == 0) {
         return true;
     }
 
-    void *key = (void *)(uintptr_t)((uint64_t)token_id + 0x100);
-
-    return n00b_hashset_contains(nt->first_set, key);
+    return n00b_dict_contains(nt->first_set, token_id);
 }
 
 static inline void
@@ -819,7 +819,7 @@ add_next_group_item(n00b_earley_parser_t *p, n00b_earley_item_t *last_end)
     ei->previous_scan = last_end;
     ei->rule          = last_start->rule;
     ei->ruleset_id    = last_start->ruleset_id;
-    ei->parent_states = n00b_hashset_share(last_start->parent_states);
+    ei->parent_states = n00b_item_set_copy(last_start->parent_states);
     ei->group_top     = last_start->group_top;
     ei->match_ct      = last_end->match_ct;
     ei->group         = last_start->group;
@@ -844,10 +844,10 @@ add_next_group_item(n00b_earley_parser_t *p, n00b_earley_item_t *last_end)
     add_item(p, last_end, &ei, false);
 
     if (!ei->completors) {
-        ei->completors = n00b_hashset_new(8);
+        ei->completors = n00b_item_set_new();
     }
 
-    n00b_hashset_put(ei->completors, ei->group_top);
+    n00b_item_set_put(ei->completors, ei->group_top);
     register_prediction(p, ei->group_top, ei);
 }
 
@@ -904,15 +904,15 @@ add_one_completion(n00b_earley_parser_t *p,
         return;
     }
 
-    ei->parent_states = n00b_hashset_share(parent_ei->parent_states);
+    ei->parent_states = n00b_item_set_copy(parent_ei->parent_states);
 
     add_item(p, cur, &ei, false);
 
     if (!ei->completors) {
-        ei->completors = n00b_hashset_new(8);
+        ei->completors = n00b_item_set_new();
     }
 
-    n00b_hashset_put(ei->completors, cur);
+    n00b_item_set_put(ei->completors, cur);
     parent_ei->no_reprocessing = true;
 
     if (p->grammar->lr0_rule_item_base && !p->grammar->has_groups) {
@@ -942,7 +942,7 @@ add_group_completion(n00b_earley_parser_t *p, n00b_earley_item_t *cur)
     ei->match_ct      = cur->match_ct;
     ei->group         = gstart->group;
     ei->double_dot    = true;
-    ei->completors    = n00b_hashset_new(8);
+    ei->completors    = n00b_item_set_new();
     ei->parent_states = gstart->parent_states;
 
     calculate_group_end_penalties(ei);
@@ -951,7 +951,7 @@ add_group_completion(n00b_earley_parser_t *p, n00b_earley_item_t *cur)
 
     add_item(p, cur, &ei, false);
 
-    n00b_hashset_put(ei->completors, cur);
+    n00b_item_set_put(ei->completors, cur);
     cur->no_reprocessing = true;
 
     if (p->grammar->lr0_rule_item_base && !p->grammar->has_groups) {
@@ -1100,17 +1100,17 @@ add_leo_completion(n00b_earley_parser_t *p,
         ei->penalty = cur->penalty;
     }
 
-    ei->parent_states     = n00b_hashset_share(leo_top->parent_states);
+    ei->parent_states     = n00b_item_set_copy(leo_top->parent_states);
     ei->leo_item          = true;
     ei->leo_direct_parent = direct_parent;
 
     add_item(p, cur, &ei, false);
 
     if (!ei->completors) {
-        ei->completors = n00b_hashset_new(8);
+        ei->completors = n00b_item_set_new();
     }
 
-    n00b_hashset_put(ei->completors, cur);
+    n00b_item_set_put(ei->completors, cur);
     leo_top->no_reprocessing = true;
 
     // Emit BSR for all links in the Leo chain.
@@ -1134,22 +1134,19 @@ add_leo_completion(n00b_earley_parser_t *p,
 
             completed_nt_start = link_start->estate_id;
 
-            n00b_hashset_t *ps = link_start->parent_states;
+            n00b_item_set_t *ps = link_start->parent_states;
 
-            if (!ps || ps->len == 0) {
+            if (!ps || ps->length == 0) {
                 break;
             }
 
             n00b_earley_item_t *next_link = NULL;
 
-            for (int32_t k = 0; k < ps->cap; k++) {
-                void *item = ps->buckets[k];
-
-                if (item && item != (void *)(uintptr_t)1) {
-                    next_link = (n00b_earley_item_t *)item;
-                    break;
-                }
-            }
+            n00b_dict_foreach(ps, k, v, {
+                (void)v;
+                next_link = k;
+                break;
+            });
 
             if (!next_link) {
                 break;
@@ -1163,7 +1160,7 @@ add_leo_completion(n00b_earley_parser_t *p,
 static void
 complete(n00b_earley_parser_t *p, n00b_earley_item_t *ei)
 {
-    n00b_hashset_t *start_set = ei->start_item->parent_states;
+    n00b_item_set_t *start_set = ei->start_item->parent_states;
 
     if (!start_set) {
         return;
@@ -1173,7 +1170,7 @@ complete(n00b_earley_parser_t *p, n00b_earley_item_t *ei)
     int32_t              completed_nt = start->ruleset_id;
     n00b_earley_state_t *origin       = p->states.data[start->estate_id];
 
-    if (start_set->len == 1 && origin->leo_table
+    if (start_set->length == 1 && origin->leo_table
         && !start->double_dot && !start->group) {
         int32_t num_nts = (int32_t)n00b_list_len(p->grammar->nt_list);
 
@@ -1181,14 +1178,11 @@ complete(n00b_earley_parser_t *p, n00b_earley_item_t *ei)
             && origin->leo_table[completed_nt]) {
             n00b_earley_item_t *direct = NULL;
 
-            for (int32_t k = 0; k < start_set->cap; k++) {
-                void *item = start_set->buckets[k];
-
-                if (item && item != (void *)(uintptr_t)1) {
-                    direct = (n00b_earley_item_t *)item;
-                    break;
-                }
-            }
+            n00b_dict_foreach(start_set, k, v, {
+                (void)v;
+                direct = k;
+                break;
+            });
 
             add_leo_completion(
                 p, ei, origin->leo_table[completed_nt], direct);
@@ -1196,13 +1190,10 @@ complete(n00b_earley_parser_t *p, n00b_earley_item_t *ei)
         }
     }
 
-    for (int32_t i = 0; i < start_set->cap; i++) {
-        void *item = start_set->buckets[i];
-
-        if (item && item != (void *)(uintptr_t)1) {
-            add_one_completion(p, ei, (n00b_earley_item_t *)item);
-        }
-    }
+    n00b_dict_foreach(start_set, k, v, {
+        (void)v;
+        add_one_completion(p, ei, k);
+    });
 }
 
 static void
@@ -1461,7 +1452,8 @@ n00b_earley_new(n00b_grammar_t *g)
     p->start       = -1;
     p->bsr_cap     = 1024;
     p->bsr_set     = n00b_alloc_array(n00b_bsr_element_t, 1024);
-    p->bsr_dedup   = n00b_hashset_new(256);
+    p->bsr_dedup   = n00b_alloc(n00b_dict_t(uint64_t, bool));
+    n00b_dict_init(p->bsr_dedup, .hash = n00b_hash_word, .skip_obj_hash = true);
 
     // Initialize the first state.
     p->current_state = new_earley_state(0);
@@ -1527,10 +1519,11 @@ n00b_earley_reset(n00b_earley_parser_t *p)
     p->bsr_cap   = 1024;
 
     if (p->bsr_dedup) {
-        n00b_hashset_free(p->bsr_dedup);
+        n00b_free(p->bsr_dedup);
     }
 
-    p->bsr_dedup = n00b_hashset_new(256);
+    p->bsr_dedup = n00b_alloc(n00b_dict_t(uint64_t, bool));
+    n00b_dict_init(p->bsr_dedup, .hash = n00b_hash_word, .skip_obj_hash = true);
 
     // Initialize first state.
     p->current_state = new_earley_state(0);
@@ -1688,10 +1681,10 @@ found:
     }
 
     // Collect expected terminal IDs and descriptions from scan-ready items.
-    // Use small fixed-size dedup buffers.
-    int64_t       id_buf[256];
-    n00b_string_t desc_buf[256];
-    int32_t       count = 0;
+    size_t        nitems   = n00b_list_len(state->items);
+    int64_t      *id_buf   = n00b_alloc_array(int64_t, nitems);
+    n00b_string_t *desc_buf = n00b_alloc_array(n00b_string_t, nitems);
+    int32_t       count    = 0;
 
     for (size_t i = 0; i < n00b_list_len(state->items); i++) {
         n00b_earley_item_t *ei = state->items.data[i];
@@ -1705,10 +1698,10 @@ found:
         case N00B_EO_SCAN_TOKEN:
             if (m) {
                 tid = m->terminal_id;
-                n00b_terminal_t *term = n00b_get_terminal(g, tid);
+                n00b_string_t *name = n00b_get_terminal_name(g, tid);
 
-                if (term) {
-                    desc = term->value;
+                if (name) {
+                    desc = *name;
                 }
             }
 
@@ -1771,7 +1764,6 @@ found:
         }
 
         if (!dup) {
-            assert(count < 256);
             id_buf[count]   = tid;
             desc_buf[count] = desc;
             count++;
@@ -1786,9 +1778,12 @@ found:
         memcpy(out->expected_desc, desc_buf, count * sizeof(n00b_string_t));
     }
 
+    n00b_free(id_buf);
+    n00b_free(desc_buf);
+
     // Collect active NT context names from items in this state.
-    n00b_string_t ctx_buf[64];
-    int32_t       ctx_count = 0;
+    n00b_string_t *ctx_buf   = n00b_alloc_array(n00b_string_t, nitems);
+    int32_t        ctx_count = 0;
 
     for (size_t i = 0; i < n00b_list_len(state->items); i++) {
         n00b_earley_item_t *ei  = state->items.data[i];
@@ -1814,7 +1809,6 @@ found:
         }
 
         if (!dup) {
-            assert(ctx_count < 64);
             ctx_buf[ctx_count++] = nt->name;
         }
     }
@@ -1824,4 +1818,6 @@ found:
         out->active_ctx_count = ctx_count;
         memcpy(out->active_ctx, ctx_buf, ctx_count * sizeof(n00b_string_t));
     }
+
+    n00b_free(ctx_buf);
 }

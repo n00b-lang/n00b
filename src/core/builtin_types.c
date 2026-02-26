@@ -26,7 +26,7 @@
 static n00b_uint128_t
 vt_string_hash(n00b_string_t *self)
 {
-    return n00b_string_hash(*self);
+    return n00b_string_hash(self);
 }
 
 static n00b_string_t

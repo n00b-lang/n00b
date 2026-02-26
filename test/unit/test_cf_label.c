@@ -258,7 +258,7 @@ typedef struct {
 } label_counts_t;
 
 static void
-count_labels_walk(n00b_dict_untyped_t *cf_labels, n00b_parse_tree_t *node,
+count_labels_walk(n00b_cf_labels_t *cf_labels, n00b_parse_tree_t *node,
                   label_counts_t *out)
 {
     if (!node) {

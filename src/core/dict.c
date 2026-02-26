@@ -33,7 +33,7 @@ compute_hash(_n00b_dict_internal_t *dict, void *key, uint32_t ksz)
         return n00b_hash_raw(key, ksz);
     }
     else {
-        return n00b_hash(key, dict->fn);
+        return n00b_hash(*(void **)key, dict->fn);
     }
 }
 

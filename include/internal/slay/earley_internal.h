@@ -11,9 +11,12 @@
 
 #include "slay/parse_forest.h"
 #include "internal/slay/grammar_internal.h"
-#include "internal/slay/hashset.h"
 #include "core/list.h"
-#include "core/dict_untyped.h"
+#include "core/dict.h"
+
+n00b_dict_decl(n00b_earley_item_t *, bool);
+n00b_dict_decl(n00b_earley_item_t *, void *);
+n00b_dict_decl(uint64_t, bool);
 
 // ============================================================================
 // BSR (Binary Subtree Representation) element
@@ -49,9 +52,9 @@ struct n00b_earley_item_t {
     n00b_earley_item_t *previous_scan;  /**< Previous scan item (token link). */
 
     // Set management
-    n00b_hashset_t     *parent_states;  /**< Parent Earley states. */
-    n00b_hashset_t     *predictions;    /**< Predicted items from this item. */
-    n00b_hashset_t     *completors;     /**< Items that completed this item. */
+    n00b_dict_t(n00b_earley_item_t *, bool) *parent_states;  /**< Parent Earley states. */
+    n00b_dict_t(n00b_earley_item_t *, bool) *predictions;    /**< Predicted items from this item. */
+    n00b_dict_t(n00b_earley_item_t *, bool) *completors;     /**< Items that completed this item. */
 
     // Grammar references
     n00b_parse_rule_t  *rule;           /**< The production rule. */
@@ -59,7 +62,7 @@ struct n00b_earley_item_t {
     n00b_earley_item_t *group_top;      /**< Top-level item for the group. */
 
     // Caching
-    n00b_dict_untyped_t *cache;         /**< Memoized results for tree build. */
+    n00b_dict_t(n00b_earley_item_t *, void *) *cache; /**< Memoized results for tree build. */
 
     // Markers
     int64_t             noscan;         /**< Non-scannable marker. */
@@ -162,7 +165,7 @@ struct n00b_earley_parser_t {
     n00b_bsr_element_t *bsr_set;
     int32_t             bsr_count;
     int32_t             bsr_cap;
-    n00b_hashset_t     *bsr_dedup;
+    n00b_dict_t(uint64_t, bool)  *bsr_dedup;
 
     // Virtual items from Leo expansion (must be freed)
     void  **virt_items;
@@ -208,6 +211,96 @@ n00b_earley_cost_cmp(n00b_earley_item_t *left, n00b_earley_item_t *right)
     }
 
     return N00B_CMP_EQ;
+}
+
+// ============================================================================
+// Item-set helpers (replaces n00b_hashset_t operations)
+// ============================================================================
+
+typedef n00b_dict_t(n00b_earley_item_t *, bool) n00b_item_set_t;
+
+/**
+ * @brief Allocate a new item set (pointer-identity dict used as a set).
+ */
+static inline n00b_item_set_t *
+n00b_item_set_new(void)
+{
+    n00b_item_set_t *s = n00b_alloc(n00b_item_set_t);
+    n00b_dict_init(s, .hash = n00b_hash_word, .skip_obj_hash = true);
+    return s;
+}
+
+/**
+ * @brief Add an item to the set.  Returns true if it was newly added.
+ */
+static inline bool
+n00b_item_set_add(n00b_item_set_t *s, n00b_earley_item_t *item)
+{
+    if (!item) {
+        return false;
+    }
+    bool true_val = true;
+    return n00b_dict_add(s, item, true_val);
+}
+
+/**
+ * @brief Unconditionally insert an item into the set.
+ */
+static inline void
+n00b_item_set_put(n00b_item_set_t *s, n00b_earley_item_t *item)
+{
+    bool true_val = true;
+    n00b_dict_put(s, item, true_val);
+}
+
+/**
+ * @brief Test membership.
+ */
+static inline bool
+n00b_item_set_contains(n00b_item_set_t *s, n00b_earley_item_t *item)
+{
+    if (!s || !item) {
+        return false;
+    }
+    return n00b_dict_contains(s, item);
+}
+
+/**
+ * @brief Create a shallow copy (independent set with same contents).
+ *        Replaces n00b_hashset_share / n00b_hashset_copy.
+ */
+static inline n00b_item_set_t *
+n00b_item_set_copy(n00b_item_set_t *src)
+{
+    if (!src) {
+        return n00b_item_set_new();
+    }
+
+    n00b_item_set_t *dst = n00b_item_set_new();
+
+    n00b_dict_foreach(src, k, v, {
+        n00b_dict_put(dst, k, v);
+    });
+
+    return dst;
+}
+
+/**
+ * @brief Union: create a new set containing items from both a and b.
+ *        Replaces n00b_hashset_union.
+ */
+static inline n00b_item_set_t *
+n00b_item_set_union(n00b_item_set_t *a, n00b_item_set_t *b)
+{
+    n00b_item_set_t *result = n00b_item_set_copy(a);
+
+    if (b) {
+        n00b_dict_foreach(b, k, v, {
+            n00b_dict_put(result, k, v);
+        });
+    }
+
+    return result;
 }
 
 // ============================================================================

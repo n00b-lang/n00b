@@ -38,8 +38,7 @@ n00b_uint128_t
 n00b_hash(void *obj, n00b_hash_fn fn)
 {
     n00b_alloc_info_t ainfo = n00b_find_alloc_info(obj);
-    bool              managed = (ainfo.kind == n00b_alloc_oob
-                                 || ainfo.kind == n00b_alloc_inline);
+    bool managed            = (ainfo.kind == n00b_alloc_oob || ainfo.kind == n00b_alloc_inline);
 
     if (managed) {
         // Check cached hash.
@@ -108,13 +107,15 @@ n00b_hash_raw(const void *data, size_t len)
 }
 
 n00b_uint128_t
-n00b_string_hash(n00b_string_t s)
+n00b_string_hash(void *key)
 {
-    if (!s.u8_bytes || !s.data) {
+    n00b_string_t *s = (n00b_string_t *)key;
+
+    if (!s || !s->u8_bytes || !s->data) {
         return n00b_hash_word(0ULL);
     }
 
-    return n00b_xxh_convert(XXH3_128bits(s.data, s.u8_bytes));
+    return n00b_xxh_convert(XXH3_128bits(s->data, s->u8_bytes));
 }
 
 n00b_uint128_t

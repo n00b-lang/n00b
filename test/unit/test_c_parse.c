@@ -87,6 +87,18 @@ restart:
         bool emitted = n00b_scan_number(s, "INTEGER", "FLOAT");
 
         if (emitted) {
+            // Consume C integer suffixes (U, L, UL, ULL, LL, etc.)
+            // and float suffixes (f, F, l, L) that scan_number doesn't eat.
+            for (;;) {
+                uint8_t ch = n00b_scan_peek_byte(s, 0);
+                if (ch == 'u' || ch == 'U' || ch == 'l' || ch == 'L'
+                    || ch == 'f' || ch == 'F') {
+                    n00b_scan_advance(s);
+                }
+                else {
+                    break;
+                }
+            }
             return true;
         }
 

@@ -294,20 +294,30 @@ n00b_grammar_new(void)
     g->hide_penalty_rewrites = true;
     g->hide_groups           = true;
 
-    g->nt_map = n00b_alloc(n00b_dict_untyped_t);
-    n00b_dict_untyped_init(g->nt_map, .hash = n00b_hash_cstring);
+    g->nt_map = n00b_alloc(n00b_dict_t(n00b_string_t *, int64_t));
+    n00b_dict_init(g->nt_map,
+                   .hash = n00b_string_hash,
+                   .skip_obj_hash = true);
 
-    g->terminal_map = n00b_alloc(n00b_dict_untyped_t);
-    n00b_dict_untyped_init(g->terminal_map, .hash = n00b_hash_cstring);
+    g->terminal_map = n00b_alloc(n00b_dict_t(n00b_string_t *, int64_t));
+    n00b_dict_init(g->terminal_map,
+                   .hash = n00b_string_hash,
+                   .skip_obj_hash = true);
 
-    g->literal_type_map = n00b_alloc(n00b_dict_untyped_t);
-    n00b_dict_untyped_init(g->literal_type_map, .hash = n00b_hash_cstring);
+    g->literal_type_map = n00b_alloc(n00b_dict_t(n00b_string_t *, int64_t));
+    n00b_dict_init(g->literal_type_map,
+                   .hash = n00b_string_hash,
+                   .skip_obj_hash = true);
 
-    g->valid_tokens = n00b_alloc(n00b_dict_untyped_t);
-    n00b_dict_untyped_init(g->valid_tokens, .hash = n00b_hash_word);
+    g->valid_tokens = n00b_alloc(n00b_dict_t(int64_t, bool));
+    n00b_dict_init(g->valid_tokens,
+                   .hash = n00b_hash_word,
+                   .skip_obj_hash = true);
 
-    g->terminal_by_id = n00b_alloc(n00b_dict_untyped_t);
-    n00b_dict_untyped_init(g->terminal_by_id, .hash = n00b_hash_word);
+    g->terminal_by_id = n00b_alloc(n00b_dict_t(int64_t, n00b_string_t *));
+    n00b_dict_init(g->terminal_by_id,
+                   .hash = n00b_hash_word,
+                   .skip_obj_hash = true);
 
     g->next_literal_type_id = 0;
 
@@ -336,7 +346,6 @@ n00b_grammar_free(n00b_grammar_t *g)
     }
 
     n00b_list_free(g->nt_list);
-    n00b_list_free(g->named_terms);
 
     // The untyped dicts are GC-managed; explicit free for predictable cleanup.
     if (g->nt_map) {
@@ -378,11 +387,8 @@ n00b_grammar_free(n00b_grammar_t *g)
         n00b_free(g->lr0_predict_state);
     }
 
-    if (g->has_terminal_categories) {
-        for (size_t i = 0; i < g->terminal_categories.len; i++) {
-            n00b_free(g->terminal_categories.data[i].data);
-        }
-        n00b_list_free(g->terminal_categories);
+    if (g->has_terminal_categories && g->terminal_categories) {
+        n00b_free(g->terminal_categories);
     }
 
     n00b_free(g->tokenizer_name.data);
@@ -420,22 +426,25 @@ n00b_grammar_terminal_id(n00b_grammar_t *g, const char *name)
         return 0;
     }
 
-    bool  found = false;
-    void *val   = _n00b_dict_untyped_get(g->terminal_map, (void *)name, &found);
+    n00b_string_t  str  = n00b_string_from_cstr(name);
+    n00b_string_t *sptr = &str;
+    bool           found = false;
+    int64_t        val   = n00b_dict_get(g->terminal_map, sptr, &found);
 
-    return found ? (int64_t)(intptr_t)val : 0;
+    return found ? val : 0;
 }
 
 n00b_nonterm_t *
 n00b_nonterm(n00b_grammar_t *g, n00b_string_t name)
 {
     if (name.data) {
-        bool  found = false;
-        void *val   = _n00b_dict_untyped_get(g->nt_map, (void *)name.data, &found);
+        // Build a temporary n00b_string_t * for lookup.
+        n00b_string_t *name_ptr = &name;
+        bool           found    = false;
+        int64_t        val      = n00b_dict_get(g->nt_map, name_ptr, &found);
 
         if (found) {
-            int64_t existing = (int64_t)(intptr_t)val;
-            return n00b_get_nonterm(g, existing);
+            return n00b_get_nonterm(g, val);
         }
     }
 
@@ -447,10 +456,9 @@ n00b_nonterm(n00b_grammar_t *g, n00b_string_t name)
     n00b_list_push(g->nt_list, nt);
 
     if (name.data) {
-        n00b_nonterm_t *stored = n00b_get_nonterm(g, nt.id);
-        _n00b_dict_untyped_put(g->nt_map,
-                               (void *)stored->name.data,
-                               (void *)(intptr_t)stored->id);
+        n00b_string_t *key = &name;
+        int64_t        id  = nt.id;
+        n00b_dict_put(g->nt_map, key, id);
     }
 
     return n00b_get_nonterm(g, nt.id);
@@ -465,33 +473,25 @@ n00b_nonterm_id(n00b_nonterm_t *nt)
 int64_t
 n00b_register_terminal(n00b_grammar_t *g, n00b_string_t name)
 {
-    bool  found = false;
-    void *val   = _n00b_dict_untyped_get(g->terminal_map, (void *)name.data, &found);
+    n00b_string_t *name_ptr = &name;
+    bool           found    = false;
+    int64_t        val      = n00b_dict_get(g->terminal_map, name_ptr, &found);
 
     if (found) {
-        return (int64_t)(intptr_t)val;
+        return val;
     }
 
     // All fixed-text terminals get a hash-based ID (including single-char).
     int64_t id = n00b_token_id_from_text(name.data, name.u8_bytes);
 
-    n00b_terminal_t term = {0};
+    // Forward map: name -> id (key is hashed, stack-local is fine)
+    n00b_dict_put(g->terminal_map, name_ptr, id);
 
-    term.value = name;
-    term.id    = id;
-
-    int64_t ix = (int64_t)g->named_terms.len;
-    n00b_list_push(g->named_terms, term);
-
-    // Forward map: name -> id
-    _n00b_dict_untyped_put(g->terminal_map,
-                           (void *)g->named_terms.data[ix].value.data,
-                           (void *)(intptr_t)id);
-
-    // Reverse map: id -> index in named_terms
-    _n00b_dict_untyped_put(g->terminal_by_id,
-                           (void *)(intptr_t)id,
-                           (void *)(intptr_t)ix);
+    // Reverse map: id -> name. The value is retrieved later by
+    // n00b_get_terminal_name(), so allocate a persistent copy.
+    n00b_string_t *name_copy = n00b_alloc(n00b_string_t);
+    *name_copy = name;
+    n00b_dict_put(g->terminal_by_id, id, name_copy);
 
     return id;
 }
@@ -499,22 +499,17 @@ n00b_register_terminal(n00b_grammar_t *g, n00b_string_t name)
 int64_t
 n00b_register_literal_type(n00b_grammar_t *g, n00b_string_t name)
 {
-    bool  found = false;
-    void *val   = _n00b_dict_untyped_get(g->literal_type_map,
-                                          (void *)name.data, &found);
+    n00b_string_t *name_ptr = &name;
+    bool           found    = false;
+    int64_t        val      = n00b_dict_get(g->literal_type_map, name_ptr, &found);
 
     if (found) {
-        return (int64_t)(intptr_t)val;
+        return val;
     }
 
     int64_t id = g->next_literal_type_id++;
 
-    // Store in literal_type_map: name -> sequential id
-    // We need to keep the name alive; copy the string data.
-    n00b_string_t stored_name = n00b_string_from_raw(name.data, (int64_t)name.u8_bytes);
-    _n00b_dict_untyped_put(g->literal_type_map,
-                           (void *)stored_name.data,
-                           (void *)(intptr_t)id);
+    n00b_dict_put(g->literal_type_map, name_ptr, id);
 
     return id;
 }
@@ -524,33 +519,18 @@ n00b_grammar_set_terminal_category(n00b_grammar_t *g,
                                    int64_t         terminal_id,
                                    n00b_string_t   category)
 {
-    // With hash-based IDs, we use the terminal_by_id dict to find the
-    // index into named_terms, then store category at that index.
-    if (!g->terminal_by_id) {
-        return;
-    }
-
-    bool  found = false;
-    void *val   = _n00b_dict_untyped_get(g->terminal_by_id,
-                                          (void *)(intptr_t)terminal_id,
-                                          &found);
-    if (!found) {
-        return;
-    }
-
-    int32_t ix = (int32_t)(intptr_t)val;
-
     if (!g->has_terminal_categories) {
-        g->terminal_categories     = n00b_list_new_private(n00b_string_t);
+        g->terminal_categories = n00b_alloc(n00b_dict_t(int64_t, n00b_string_t *));
+        n00b_dict_init(g->terminal_categories,
+                       .hash = n00b_hash_word,
+                       .skip_obj_hash = true);
         g->has_terminal_categories = true;
     }
 
-    // Extend list with empty strings up to the required index.
-    while ((int32_t)g->terminal_categories.len <= ix) {
-        n00b_list_push(g->terminal_categories, (n00b_string_t){0});
-    }
-
-    n00b_list_set(g->terminal_categories, ix, category);
+    // Allocate a persistent copy of the category string.
+    n00b_string_t *cat_copy = n00b_alloc(n00b_string_t);
+    *cat_copy = category;
+    n00b_dict_put(g->terminal_categories, terminal_id, cat_copy);
 }
 
 void
@@ -665,25 +645,16 @@ n00b_add_rule_with_cost_v(n00b_grammar_t *g,
 // FIRST set computation (iterative fixed-point)
 // ============================================================================
 
-// Encode a terminal ID as a void* for use in n00b_hashset_t.
-// Offset by 0x100 to avoid NULL (0) and TOMBSTONE (1) sentinels.
-#define TERM_TO_PTR(id) ((void *)(uintptr_t)((uint64_t)(id) + 0x100))
-#define TOMBSTONE_VAL   ((void *)(uintptr_t)1)
-
 static inline void
-merge_hashset_into(n00b_hashset_t *dst, n00b_hashset_t *src)
+merge_first_set(n00b_dict_t(int64_t, bool) *dst, n00b_dict_t(int64_t, bool) *src)
 {
-    if (!src) {
+    if (!src || src->length == 0) {
         return;
     }
 
-    for (int32_t i = 0; i < src->cap; i++) {
-        void *item = src->buckets[i];
-
-        if (item && item != TOMBSTONE_VAL) {
-            n00b_hashset_add(dst, item);
-        }
-    }
+    n00b_dict_foreach(src, k, v, {
+        n00b_dict_put(dst, k, v);
+    });
 }
 
 // Check if a match can derive the empty string, using the first_nullable
@@ -725,20 +696,24 @@ static bool
 update_rule_first(n00b_grammar_t *g, n00b_parse_rule_t *rule, bool *first_nullable)
 {
     if (!rule->first_set) {
-        rule->first_set = n00b_hashset_new(8);
+        rule->first_set = n00b_alloc(n00b_dict_t(int64_t, bool));
+        n00b_dict_init(rule->first_set,
+                       .hash = n00b_hash_word,
+                       .skip_obj_hash = true);
     }
 
-    int32_t old_len     = rule->first_set->len;
-    bool    old_has_any = rule->first_has_any;
+    n00b_isize_t old_len     = rule->first_set->length;
+    bool         old_has_any = rule->first_has_any;
 
     size_t n = rule->contents.len;
+    bool   val = true;
 
     for (size_t i = 0; i < n; i++) {
         n00b_match_t *m = &rule->contents.data[i];
 
         switch (m->kind) {
         case N00B_MATCH_TERMINAL:
-            n00b_hashset_add(rule->first_set, TERM_TO_PTR(m->terminal_id));
+            n00b_dict_put(rule->first_set, m->terminal_id, val);
             goto done;
         case N00B_MATCH_ANY:
         case N00B_MATCH_CLASS:
@@ -753,7 +728,7 @@ update_rule_first(n00b_grammar_t *g, n00b_parse_rule_t *rule, bool *first_nullab
 
             if (gnt) {
                 if (gnt->first_set) {
-                    merge_hashset_into(rule->first_set, gnt->first_set);
+                    merge_first_set(rule->first_set, gnt->first_set);
                 }
 
                 if (gnt->first_has_any) {
@@ -772,7 +747,7 @@ update_rule_first(n00b_grammar_t *g, n00b_parse_rule_t *rule, bool *first_nullab
 
             if (nt) {
                 if (nt->first_set) {
-                    merge_hashset_into(rule->first_set, nt->first_set);
+                    merge_first_set(rule->first_set, nt->first_set);
                 }
 
                 if (nt->first_has_any) {
@@ -794,7 +769,7 @@ update_rule_first(n00b_grammar_t *g, n00b_parse_rule_t *rule, bool *first_nullab
     }
 
 done:
-    return rule->first_set->len != old_len || rule->first_has_any != old_has_any;
+    return rule->first_set->length != old_len || rule->first_has_any != old_has_any;
 }
 
 static void
@@ -837,14 +812,20 @@ compute_all_first_sets(n00b_grammar_t *g)
     for (size_t i = 0; i < n_nts; i++) {
         n00b_nonterm_t *nt = n00b_get_nonterm(g, (int64_t)i);
 
-        nt->first_set     = n00b_hashset_new(8);
+        nt->first_set = n00b_alloc(n00b_dict_t(int64_t, bool));
+        n00b_dict_init(nt->first_set,
+                       .hash = n00b_hash_word,
+                       .skip_obj_hash = true);
         nt->first_has_any = false;
     }
 
     for (size_t i = 0; i < n_rules; i++) {
         n00b_parse_rule_t *rule = n00b_get_rule(g, (int32_t)i);
 
-        rule->first_set     = n00b_hashset_new(8);
+        rule->first_set = n00b_alloc(n00b_dict_t(int64_t, bool));
+        n00b_dict_init(rule->first_set,
+                       .hash = n00b_hash_word,
+                       .skip_obj_hash = true);
         rule->first_has_any = false;
     }
 
@@ -865,21 +846,21 @@ compute_all_first_sets(n00b_grammar_t *g)
         // Merge rule FIRST sets into their NTs.
         for (size_t i = 0; i < n_nts; i++) {
             n00b_nonterm_t *nt      = n00b_get_nonterm(g, (int64_t)i);
-            int32_t         old_len = nt->first_set->len;
+            n00b_isize_t    old_len = nt->first_set->length;
             bool            old_any = nt->first_has_any;
 
             for (size_t j = 0; j < nt->rule_ids.len; j++) {
                 int32_t            rule_ix = nt->rule_ids.data[j];
                 n00b_parse_rule_t *rule    = n00b_get_rule(g, rule_ix);
 
-                merge_hashset_into(nt->first_set, rule->first_set);
+                merge_first_set(nt->first_set, rule->first_set);
 
                 if (rule->first_has_any) {
                     nt->first_has_any = true;
                 }
             }
 
-            if (nt->first_set->len != old_len || nt->first_has_any != old_any) {
+            if (nt->first_set->length != old_len || nt->first_has_any != old_any) {
                 changed = true;
             }
         }
@@ -1630,6 +1611,8 @@ n00b_grammar_finalize(n00b_grammar_t *g)
     }
 
     // Build valid_tokens set from all rules' terminal match items.
+    bool true_val = true;
+
     for (size_t ri = 0; ri < g->rules.len; ri++) {
         n00b_parse_rule_t *r = &g->rules.data[ri];
 
@@ -1637,18 +1620,14 @@ n00b_grammar_finalize(n00b_grammar_t *g)
             n00b_match_t *m = &r->contents.data[mi];
 
             if (m->kind == N00B_MATCH_TERMINAL) {
-                _n00b_dict_untyped_put(g->valid_tokens,
-                                       (void *)(intptr_t)m->terminal_id,
-                                       (void *)(intptr_t)1);
+                n00b_dict_put(g->valid_tokens, m->terminal_id, true_val);
             }
         }
     }
 
     // Also add all literal type IDs to valid_tokens.
     for (int64_t i = 0; i < g->next_literal_type_id; i++) {
-        _n00b_dict_untyped_put(g->valid_tokens,
-                               (void *)(intptr_t)i,
-                               (void *)(intptr_t)1);
+        n00b_dict_put(g->valid_tokens, i, true_val);
     }
 
     compute_all_first_sets(g);

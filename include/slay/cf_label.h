@@ -9,14 +9,21 @@
  * or `@assigns`. Each label records the kind and the resolved child
  * subtrees (condition, body, else, etc.).
  *
- * Labels are stored in an `n00b_dict_untyped_t` keyed by parse tree
- * node pointer. Use `n00b_cf_label_lookup()` to query.
+ * Labels are stored in a typed dict keyed by parse tree node pointer.
+ * Use `n00b_cf_label_lookup()` to query.
  */
 
 #include "slay/types.h"
 #include "slay/parse_tree.h"
 #include "slay/symtab.h"
-#include "core/dict_untyped.h"
+#include "core/dict.h"
+
+// Forward declare so the dict_decl works before the full typedef.
+typedef struct n00b_cf_label_s n00b_cf_label_t;
+
+n00b_dict_decl(n00b_parse_tree_t *, n00b_cf_label_t *);
+
+typedef n00b_dict_t(n00b_parse_tree_t *, n00b_cf_label_t *) n00b_cf_labels_t;
 
 // ============================================================================
 // Control flow label kind
@@ -41,7 +48,7 @@ typedef enum {
  *
  * Unused fields are zero/NULL for kinds that don't need them.
  */
-typedef struct {
+struct n00b_cf_label_s {
     n00b_cf_kind_t     kind;
     n00b_parse_tree_t *self;      /**< The annotated tree node. */
     n00b_parse_tree_t *cond;      /**< Condition subtree (branch, loop, switch). */
@@ -50,7 +57,7 @@ typedef struct {
     n00b_string_t      jump_kind; /**< "break", "continue", "return", "goto". */
     n00b_string_t      tag;       /**< Capture tag or jump target. */
     bool               capture_by_tag;
-} n00b_cf_label_t;
+};
 
 // ============================================================================
 // Walk result
@@ -60,8 +67,8 @@ typedef struct {
  * @brief Result of a full annotation walk (symtab + control flow labels).
  */
 typedef struct {
-    n00b_symtab_t       *symtab;
-    n00b_dict_untyped_t *cf_labels; /**< `n00b_parse_tree_t *` -> `n00b_cf_label_t *` */
+    n00b_symtab_t    *symtab;
+    n00b_cf_labels_t *cf_labels; /**< `n00b_parse_tree_t *` -> `n00b_cf_label_t *` */
 } n00b_annot_result_t;
 
 // ============================================================================
@@ -76,16 +83,16 @@ typedef struct {
  * @return The label, or NULL if no label exists for this node.
  */
 static inline n00b_cf_label_t *
-n00b_cf_label_lookup(n00b_dict_untyped_t *labels, n00b_parse_tree_t *node)
+n00b_cf_label_lookup(n00b_cf_labels_t *labels, n00b_parse_tree_t *node)
 {
     if (!labels || !node) {
         return NULL;
     }
 
-    bool found = false;
-    void *val  = _n00b_dict_untyped_get(labels, node, &found);
+    bool            found = false;
+    n00b_cf_label_t *val  = n00b_dict_get(labels, node, &found);
 
-    return found ? (n00b_cf_label_t *)val : NULL;
+    return found ? val : NULL;
 }
 
 // ============================================================================
@@ -100,7 +107,7 @@ n00b_annot_result_symtab(n00b_annot_result_t *r)
 }
 
 /** @brief Get the control flow labels from an annotation walk result. */
-static inline n00b_dict_untyped_t *
+static inline n00b_cf_labels_t *
 n00b_annot_result_cf_labels(n00b_annot_result_t *r)
 {
     return r ? r->cf_labels : NULL;

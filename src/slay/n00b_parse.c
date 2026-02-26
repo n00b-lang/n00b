@@ -283,10 +283,10 @@ n00b_parse_result_expected_string(n00b_parse_result_t *r)
             name = r->expected_desc[i];
         }
         else if (r->expected_ids) {
-            n00b_terminal_t *term = n00b_get_terminal(g, r->expected_ids[i]);
+            n00b_string_t *tname = n00b_get_terminal_name(g, r->expected_ids[i]);
 
-            if (term) {
-                name = term->value;
+            if (tname) {
+                name = *tname;
             }
             else {
                 name = n00b_fmt_int(r->expected_ids[i]);
@@ -323,11 +323,11 @@ n00b_parse_result_error_string(n00b_parse_result_t *r)
     n00b_error_location_t loc = r->error_loc;
 
     if (loc.got.data) {
-        return n00b_cformat("parse error at line {}, col {}: got '{}', expected: {}",
+        return n00b_cformat("parse error at line «#:d», col «#:d»: got '«#»', expected: «#»",
                             (uint64_t)loc.line, (uint64_t)loc.column, &loc.got, &expected);
     }
 
-    return n00b_cformat("parse error at line {}, col {}: expected: {}",
+    return n00b_cformat("parse error at line «#:d», col «#:d»: expected: «#»",
                         (uint64_t)loc.line, (uint64_t)loc.column, &expected);
 }
 

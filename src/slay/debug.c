@@ -90,11 +90,11 @@ fprint_terminal(FILE *out, n00b_grammar_t *g, int64_t id)
 {
     if (n00b_token_id_is_fixed_text(id)) {
         // Hash-based fixed-text terminal.
-        n00b_terminal_t *t = n00b_get_terminal(g, id);
+        n00b_string_t *name = n00b_get_terminal_name(g, id);
 
-        if (t && t->value.data) {
+        if (name && name->data) {
             fprintf(out, "'%.*s'",
-                    (int)t->value.u8_bytes, t->value.data);
+                    (int)name->u8_bytes, name->data);
         }
         else {
             fprintf(out, "tok#%lld", (long long)id);
@@ -106,11 +106,11 @@ fprint_terminal(FILE *out, n00b_grammar_t *g, int64_t id)
     if (id >= 0 && id < 0x7f) {
         // Small non-negative: could be a literal type ID or a codepoint.
         // Try grammar terminal lookup first.
-        n00b_terminal_t *t = n00b_get_terminal(g, id);
+        n00b_string_t *name = n00b_get_terminal_name(g, id);
 
-        if (t && t->value.data) {
+        if (name && name->data) {
             fprintf(out, "'%.*s'",
-                    (int)t->value.u8_bytes, t->value.data);
+                    (int)name->u8_bytes, name->data);
             return;
         }
 
