@@ -9,12 +9,14 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/wait.h>
+#include <poll.h>
 
 #include "n00b.h"
 #include "io/subproc.h"
 #include "conduit/conduit.h"
 #include "conduit/io.h"
 #include "conduit/xform_linebuf.h"
+#include "conduit/xform_ansi_strip.h"
 #include "core/alloc.h"
 #include "core/runtime.h"
 #include "core/buffer.h"
@@ -1245,6 +1247,918 @@ test_pty_cwd(void)
 }
 
 // ============================================================================
+// 29. Pipe stderr capture — verify stderr is captured separately
+// ============================================================================
+
+static void
+test_pipe_stderr_capture(void)
+{
+    n00b_conduit_t *c = make_conduit();
+    n00b_conduit_io_backend_t *io = make_io(c);
+
+    n00b_subproc_t sp = {};
+    n00b_subproc_init(&sp,
+        .cmd            = n00b_string_from_cstr("/bin/sh"),
+        .conduit        = c,
+        .io             = io,
+        .capture_stdout = true,
+        .capture_stderr = true,
+        .merge          = false);
+
+    n00b_array_t(n00b_string_t) args = n00b_array_new(n00b_string_t, 2);
+    n00b_array_set(args, 0, n00b_string_from_cstr("-c"));
+    n00b_array_set(args, 1,
+        n00b_string_from_cstr("echo out_msg; echo err_msg >&2"));
+    sp.args = &args;
+
+    n00b_result_t(bool) r = n00b_subproc_run(&sp);
+    if (n00b_result_is_err(r)) {
+        printf("  [SKIP] pipe stderr capture (err=%d)\n",
+               n00b_result_get_err(r));
+        n00b_conduit_io_destroy(io);
+        n00b_conduit_destroy(c);
+        return;
+    }
+
+    assert(n00b_result_is_ok(r));
+    assert(n00b_subproc_exited(&sp));
+
+    n00b_buffer_t *sout = n00b_subproc_stdout(&sp);
+    n00b_buffer_t *serr = n00b_subproc_stderr(&sp);
+    assert(sout != nullptr);
+    assert(serr != nullptr);
+
+    // stdout: "out_msg\n" = 8 bytes
+    assert(sout->byte_len == 8);
+    assert(memcmp(sout->data, "out_msg\n", 8) == 0);
+
+    // stderr: "err_msg\n" = 8 bytes
+    assert(serr->byte_len == 8);
+    assert(memcmp(serr->data, "err_msg\n", 8) == 0);
+
+    n00b_conduit_io_destroy(io);
+    n00b_conduit_destroy(c);
+    printf("  [PASS] pipe stderr capture\n");
+}
+
+// ============================================================================
+// 30. Non-zero exit code
+// ============================================================================
+
+static void
+test_nonzero_exit(void)
+{
+    n00b_conduit_t *c = make_conduit();
+    n00b_conduit_io_backend_t *io = make_io(c);
+
+    n00b_subproc_t sp = {};
+    n00b_subproc_init(&sp,
+        .cmd     = n00b_string_from_cstr("/bin/sh"),
+        .conduit = c,
+        .io      = io);
+
+    n00b_array_t(n00b_string_t) args = n00b_array_new(n00b_string_t, 2);
+    n00b_array_set(args, 0, n00b_string_from_cstr("-c"));
+    n00b_array_set(args, 1, n00b_string_from_cstr("exit 42"));
+    sp.args = &args;
+
+    n00b_result_t(bool) r = n00b_subproc_run(&sp);
+    if (n00b_result_is_err(r)) {
+        printf("  [SKIP] nonzero exit (err=%d)\n", n00b_result_get_err(r));
+        n00b_conduit_io_destroy(io);
+        n00b_conduit_destroy(c);
+        return;
+    }
+
+    assert(n00b_subproc_exited(&sp));
+
+    n00b_result_t(int) ec = n00b_subproc_exit_code(&sp);
+    assert(n00b_result_is_ok(ec));
+    assert(n00b_result_get(ec) == 42);
+
+    // Not signaled — term_signal should be Err.
+    n00b_result_t(int) ts = n00b_subproc_term_signal(&sp);
+    assert(n00b_result_is_err(ts));
+
+    n00b_conduit_io_destroy(io);
+    n00b_conduit_destroy(c);
+    printf("  [PASS] nonzero exit\n");
+}
+
+// ============================================================================
+// 31. Multi-line output
+// ============================================================================
+
+static void
+test_multiline_output(void)
+{
+    n00b_conduit_t *c = make_conduit();
+    n00b_conduit_io_backend_t *io = make_io(c);
+
+    n00b_subproc_t sp = {};
+    n00b_subproc_init(&sp,
+        .cmd            = n00b_string_from_cstr("/bin/sh"),
+        .conduit        = c,
+        .io             = io,
+        .capture_stdout = true,
+        .merge          = false);
+
+    n00b_array_t(n00b_string_t) args = n00b_array_new(n00b_string_t, 2);
+    n00b_array_set(args, 0, n00b_string_from_cstr("-c"));
+    n00b_array_set(args, 1,
+        n00b_string_from_cstr("echo line1; echo line2; echo line3"));
+    sp.args = &args;
+
+    n00b_result_t(bool) r = n00b_subproc_run(&sp);
+    if (n00b_result_is_err(r)) {
+        printf("  [SKIP] multiline output (err=%d)\n",
+               n00b_result_get_err(r));
+        n00b_conduit_io_destroy(io);
+        n00b_conduit_destroy(c);
+        return;
+    }
+
+    assert(n00b_result_is_ok(r));
+    assert(n00b_subproc_exited(&sp));
+
+    n00b_buffer_t *out = n00b_subproc_stdout(&sp);
+    assert(out != nullptr);
+    // "line1\nline2\nline3\n" = 18 bytes
+    assert(out->byte_len == 18);
+    assert(memcmp(out->data, "line1\nline2\nline3\n", 18) == 0);
+
+    n00b_conduit_io_destroy(io);
+    n00b_conduit_destroy(c);
+    printf("  [PASS] multiline output\n");
+}
+
+// ============================================================================
+// 32. Large output — stress buffering
+// ============================================================================
+
+static void
+test_large_output(void)
+{
+    n00b_conduit_t *c = make_conduit();
+    n00b_conduit_io_backend_t *io = make_io(c);
+
+    n00b_subproc_t sp = {};
+    n00b_subproc_init(&sp,
+        .cmd            = n00b_string_from_cstr("/bin/sh"),
+        .conduit        = c,
+        .io             = io,
+        .capture_stdout = true,
+        .merge          = false);
+
+    n00b_array_t(n00b_string_t) args = n00b_array_new(n00b_string_t, 2);
+    n00b_array_set(args, 0, n00b_string_from_cstr("-c"));
+    n00b_array_set(args, 1, n00b_string_from_cstr("seq 1 1000"));
+    sp.args = &args;
+
+    n00b_result_t(bool) r = n00b_subproc_run(&sp);
+    if (n00b_result_is_err(r)) {
+        printf("  [SKIP] large output (err=%d)\n", n00b_result_get_err(r));
+        n00b_conduit_io_destroy(io);
+        n00b_conduit_destroy(c);
+        return;
+    }
+
+    assert(n00b_result_is_ok(r));
+    assert(n00b_subproc_exited(&sp));
+
+    n00b_buffer_t *out = n00b_subproc_stdout(&sp);
+    assert(out != nullptr);
+    // seq 1 1000 produces ~3893 bytes.
+    assert(out->byte_len > 2000);
+
+    // Starts with "1\n2\n3\n" (6 bytes).
+    assert(out->byte_len >= 6);
+    assert(memcmp(out->data, "1\n2\n3\n", 6) == 0);
+
+    // Ends with "999\n1000\n" (9 bytes).
+    assert(out->byte_len >= 9);
+    assert(memcmp(out->data + out->byte_len - 9, "999\n1000\n", 9) == 0);
+
+    n00b_conduit_io_destroy(io);
+    n00b_conduit_destroy(c);
+    printf("  [PASS] large output\n");
+}
+
+// ============================================================================
+// 33. Interleaved stdout/stderr (pipe, no merge)
+// ============================================================================
+
+static void
+test_interleaved_stdout_stderr(void)
+{
+    n00b_conduit_t *c = make_conduit();
+    n00b_conduit_io_backend_t *io = make_io(c);
+
+    n00b_subproc_t sp = {};
+    n00b_subproc_init(&sp,
+        .cmd            = n00b_string_from_cstr("/bin/sh"),
+        .conduit        = c,
+        .io             = io,
+        .capture_stdout = true,
+        .capture_stderr = true,
+        .merge          = false);
+
+    n00b_array_t(n00b_string_t) args = n00b_array_new(n00b_string_t, 2);
+    n00b_array_set(args, 0, n00b_string_from_cstr("-c"));
+    n00b_array_set(args, 1,
+        n00b_string_from_cstr(
+            "echo O1; echo E1 >&2; echo O2; echo E2 >&2"));
+    sp.args = &args;
+
+    n00b_result_t(bool) r = n00b_subproc_run(&sp);
+    if (n00b_result_is_err(r)) {
+        printf("  [SKIP] interleaved stdout/stderr (err=%d)\n",
+               n00b_result_get_err(r));
+        n00b_conduit_io_destroy(io);
+        n00b_conduit_destroy(c);
+        return;
+    }
+
+    assert(n00b_result_is_ok(r));
+    assert(n00b_subproc_exited(&sp));
+
+    n00b_buffer_t *sout = n00b_subproc_stdout(&sp);
+    n00b_buffer_t *serr = n00b_subproc_stderr(&sp);
+    assert(sout != nullptr);
+    assert(serr != nullptr);
+
+    // Helper: search for a substring in a buffer.
+    #define buf_contains(buf, needle, nlen) ({ \
+        bool _found = false; \
+        for (size_t _i = 0; _i + (nlen) <= (buf)->byte_len; _i++) { \
+            if (memcmp((buf)->data + _i, (needle), (nlen)) == 0) { \
+                _found = true; break; \
+            } \
+        } \
+        _found; \
+    })
+
+    // Stdout contains O1 and O2.
+    assert(buf_contains(sout, "O1", 2));
+    assert(buf_contains(sout, "O2", 2));
+
+    // Stderr contains E1 and E2.
+    assert(buf_contains(serr, "E1", 2));
+    assert(buf_contains(serr, "E2", 2));
+
+    // Stdout does NOT contain E1 or E2.
+    assert(!buf_contains(sout, "E1", 2));
+    assert(!buf_contains(sout, "E2", 2));
+
+    // Stderr does NOT contain O1 or O2.
+    assert(!buf_contains(serr, "O1", 2));
+    assert(!buf_contains(serr, "O2", 2));
+
+    #undef buf_contains
+
+    n00b_conduit_io_destroy(io);
+    n00b_conduit_destroy(c);
+    printf("  [PASS] interleaved stdout/stderr\n");
+}
+
+// ============================================================================
+// 34. Merged stdout+stderr
+// ============================================================================
+
+static void
+test_merged_output(void)
+{
+    n00b_conduit_t *c = make_conduit();
+    n00b_conduit_io_backend_t *io = make_io(c);
+
+    n00b_subproc_t sp = {};
+    n00b_subproc_init(&sp,
+        .cmd            = n00b_string_from_cstr("/bin/sh"),
+        .conduit        = c,
+        .io             = io,
+        .capture_stdout = true);
+    // merge=true is the default.
+
+    n00b_array_t(n00b_string_t) args = n00b_array_new(n00b_string_t, 2);
+    n00b_array_set(args, 0, n00b_string_from_cstr("-c"));
+    n00b_array_set(args, 1,
+        n00b_string_from_cstr("echo out_merged; echo err_merged >&2"));
+    sp.args = &args;
+
+    n00b_result_t(bool) r = n00b_subproc_run(&sp);
+    if (n00b_result_is_err(r)) {
+        printf("  [SKIP] merged output (err=%d)\n", n00b_result_get_err(r));
+        n00b_conduit_io_destroy(io);
+        n00b_conduit_destroy(c);
+        return;
+    }
+
+    assert(n00b_result_is_ok(r));
+    assert(n00b_subproc_exited(&sp));
+
+    n00b_buffer_t *sout = n00b_subproc_stdout(&sp);
+    assert(sout != nullptr);
+
+    // Stdout should contain both "out_merged" and "err_merged".
+    bool found_out = false;
+    bool found_err = false;
+    for (size_t i = 0; i + 10 <= sout->byte_len; i++) {
+        if (memcmp(sout->data + i, "out_merged", 10) == 0) {
+            found_out = true;
+        }
+        if (memcmp(sout->data + i, "err_merged", 10) == 0) {
+            found_err = true;
+        }
+    }
+    assert(found_out);
+    assert(found_err);
+
+    // Stderr should be empty (merged into stdout).
+    n00b_buffer_t *serr = n00b_subproc_stderr(&sp);
+    assert(serr != nullptr);
+    assert(serr->byte_len == 0);
+
+    n00b_conduit_io_destroy(io);
+    n00b_conduit_destroy(c);
+    printf("  [PASS] merged output\n");
+}
+
+// ============================================================================
+// 35. write_stdin after spawn
+// ============================================================================
+
+static void
+test_write_stdin_after_spawn(void)
+{
+    n00b_conduit_t *c = make_conduit();
+    n00b_conduit_io_backend_t *io = make_io(c);
+
+    // head -n1 reads one line then exits — no need to close stdin.
+    // capture_stdin ensures the stdin pipe is created so write_stdin works.
+    n00b_subproc_t sp = {};
+    n00b_subproc_init(&sp,
+        .cmd            = n00b_string_from_cstr("/usr/bin/head"),
+        .conduit        = c,
+        .io             = io,
+        .capture_stdout = true,
+        .capture_stdin  = true,
+        .merge          = false);
+
+    n00b_array_t(n00b_string_t) args = n00b_array_new(n00b_string_t, 2);
+    n00b_array_set(args, 0, n00b_string_from_cstr("-n"));
+    n00b_array_set(args, 1, n00b_string_from_cstr("1"));
+    sp.args = &args;
+
+    n00b_result_t(bool) r = n00b_subproc_spawn(&sp);
+    if (n00b_result_is_err(r)) {
+        printf("  [SKIP] write_stdin after spawn (err=%d)\n",
+               n00b_result_get_err(r));
+        n00b_conduit_io_destroy(io);
+        n00b_conduit_destroy(c);
+        return;
+    }
+
+    // Write data to child stdin after spawn.
+    n00b_buffer_t *data = n00b_buffer_from_cstr("dynamic\n");
+    n00b_result_t(uint64_t) wr = n00b_subproc_write_stdin(&sp, data);
+    assert(n00b_result_is_ok(wr));
+
+    n00b_conduit_fd_owner_t *stdin_o = n00b_option_get(sp.stdin_owner);
+    fprintf(stderr, "  [DEBUG] write_stdin: write_active=%d wq_head=%p fd=%d io_match=%d\n",
+            n00b_atomic_load(&stdin_o->write_active),
+            (void *)stdin_o->wq_head,
+            stdin_o->fd,
+            stdin_o->io == io);
+
+    // Check if fd is actually writable via raw poll.
+    struct pollfd pfd = {.fd = stdin_o->fd, .events = POLLOUT};
+    int pret = poll(&pfd, 1, 100);
+    fprintf(stderr, "  [DEBUG] write_stdin: raw poll=%d revents=0x%x\n",
+            pret, pfd.revents);
+
+    // Manually pump io_poll and check if write drains.
+    for (int attempt = 0; attempt < 5; attempt++) {
+        n00b_result_t(int) pr = n00b_conduit_io_poll(io, 100);
+        fprintf(stderr, "  [DEBUG] write_stdin: poll[%d] returned %s, n=%d wq=%p\n",
+                attempt,
+                n00b_result_is_ok(pr) ? "ok" : "err",
+                n00b_result_is_ok(pr) ? n00b_result_get(pr) : n00b_result_get_err(pr),
+                (void *)stdin_o->wq_head);
+        if (!stdin_o->wq_head) break; // Write drained.
+    }
+
+    // wait() pumps the event loop, flushing the write and reaping exit.
+    n00b_duration_t wait_timeout = {.tv_sec = 3, .tv_nsec = 0};
+    n00b_subproc_wait(&sp, .timeout = &wait_timeout);
+
+    fprintf(stderr, "  [DEBUG] write_stdin: done_flags=0x%x exited=%d timed_out=%d\n",
+            sp.done_flags, n00b_subproc_exited(&sp), sp.timed_out);
+
+    n00b_buffer_t *out = n00b_subproc_stdout(&sp);
+    fprintf(stderr, "  [DEBUG] write_stdin: stdout byte_len=%zu\n",
+            out ? out->byte_len : 0);
+
+    assert(n00b_subproc_exited(&sp));
+
+    n00b_result_t(int) ec = n00b_subproc_exit_code(&sp);
+    assert(n00b_result_is_ok(ec));
+    assert(n00b_result_get(ec) == 0);
+
+    assert(out != nullptr);
+    assert(out->byte_len == 8);
+    assert(memcmp(out->data, "dynamic\n", 8) == 0);
+
+    n00b_subproc_close(&sp);
+    n00b_conduit_io_destroy(io);
+    n00b_conduit_destroy(c);
+    printf("  [PASS] write_stdin after spawn\n");
+}
+
+// ============================================================================
+// 36. Invalid cwd
+// ============================================================================
+
+static void
+test_invalid_cwd(void)
+{
+    n00b_conduit_t *c = make_conduit();
+    n00b_conduit_io_backend_t *io = make_io(c);
+
+    n00b_subproc_t sp = {};
+    n00b_subproc_init(&sp,
+        .cmd     = n00b_string_from_cstr("/bin/echo"),
+        .conduit = c,
+        .io      = io,
+        .cwd     = n00b_string_from_cstr("/nonexistent_path_xyz"));
+
+    n00b_result_t(bool) r = n00b_subproc_spawn(&sp);
+    assert(n00b_result_is_err(r));
+    assert(n00b_subproc_errored(&sp));
+
+    n00b_subproc_close(&sp);
+    n00b_conduit_io_destroy(io);
+    n00b_conduit_destroy(c);
+    printf("  [PASS] invalid cwd\n");
+}
+
+// ============================================================================
+// 37. Linebuf xform on multi-line — strips delimiters
+// ============================================================================
+
+static void
+test_linebuf_multiline(void)
+{
+    n00b_conduit_t *c = make_conduit();
+    n00b_conduit_io_backend_t *io = make_io(c);
+
+    n00b_array_t(void *) xforms = n00b_array_new(void *, 1);
+    n00b_array_set(xforms, 0,
+                   (void *)&n00b_conduit_linebuf_default_spec);
+
+    n00b_subproc_t sp = {};
+    n00b_subproc_init(&sp,
+        .cmd            = n00b_string_from_cstr("/bin/sh"),
+        .conduit        = c,
+        .io             = io,
+        .capture_stdout = true,
+        .merge          = false,
+        .stdout_xforms  = &xforms);
+
+    n00b_array_t(n00b_string_t) args = n00b_array_new(n00b_string_t, 2);
+    n00b_array_set(args, 0, n00b_string_from_cstr("-c"));
+    n00b_array_set(args, 1,
+        n00b_string_from_cstr("echo line1; echo line2; echo line3"));
+    sp.args = &args;
+
+    n00b_result_t(bool) r = n00b_subproc_run(&sp);
+    if (n00b_result_is_err(r)) {
+        printf("  [SKIP] linebuf multiline (err=%d)\n",
+               n00b_result_get_err(r));
+        n00b_conduit_io_destroy(io);
+        n00b_conduit_destroy(c);
+        return;
+    }
+
+    assert(n00b_result_is_ok(r));
+    assert(n00b_subproc_exited(&sp));
+
+    // Linebuf strips '\n' from each line, so
+    // "line1\nline2\nline3\n" → "line1" + "line2" + "line3" = 15 bytes.
+    n00b_buffer_t *out = n00b_subproc_stdout(&sp);
+    assert(out != nullptr);
+    assert(out->byte_len == 15);
+    assert(memcmp(out->data, "line1line2line3", 15) == 0);
+
+    n00b_conduit_io_destroy(io);
+    n00b_conduit_destroy(c);
+    printf("  [PASS] linebuf multiline\n");
+}
+
+// ============================================================================
+// 38. Xform chain: ansi_strip + linebuf
+// ============================================================================
+
+static void
+test_xform_chain_ansi_linebuf(void)
+{
+    n00b_conduit_t *c = make_conduit();
+    n00b_conduit_io_backend_t *io = make_io(c);
+
+    // Chain: ansi_strip first, then linebuf.
+    n00b_array_t(void *) xforms = n00b_array_new(void *, 2);
+    n00b_array_set(xforms, 0,
+                   (void *)&n00b_conduit_ansi_strip_default_spec);
+    n00b_array_set(xforms, 1,
+                   (void *)&n00b_conduit_linebuf_default_spec);
+
+    n00b_subproc_t sp = {};
+    n00b_subproc_init(&sp,
+        .cmd            = n00b_string_from_cstr("/bin/sh"),
+        .conduit        = c,
+        .io             = io,
+        .capture_stdout = true,
+        .merge          = false,
+        .stdout_xforms  = &xforms);
+
+    // printf ANSI-colored text with newlines.
+    n00b_array_t(n00b_string_t) args = n00b_array_new(n00b_string_t, 2);
+    n00b_array_set(args, 0, n00b_string_from_cstr("-c"));
+    n00b_array_set(args, 1,
+        n00b_string_from_cstr(
+            "printf '\\033[31mred\\033[0m\\n\\033[32mgreen\\033[0m\\n'"));
+    sp.args = &args;
+
+    n00b_result_t(bool) r = n00b_subproc_run(&sp);
+    if (n00b_result_is_err(r)) {
+        printf("  [SKIP] xform chain ansi+linebuf (err=%d)\n",
+               n00b_result_get_err(r));
+        n00b_conduit_io_destroy(io);
+        n00b_conduit_destroy(c);
+        return;
+    }
+
+    assert(n00b_result_is_ok(r));
+    assert(n00b_subproc_exited(&sp));
+
+    // ansi_strip removes escape sequences, linebuf strips newlines.
+    // "\033[31mred\033[0m\n\033[32mgreen\033[0m\n"
+    // → ansi_strip → "red\ngreen\n"
+    // → linebuf → "red" + "green" = "redgreen" (8 bytes)
+    n00b_buffer_t *out = n00b_subproc_stdout(&sp);
+    assert(out != nullptr);
+    assert(out->byte_len == 8);
+    assert(memcmp(out->data, "redgreen", 8) == 0);
+
+    n00b_conduit_io_destroy(io);
+    n00b_conduit_destroy(c);
+    printf("  [PASS] xform chain ansi+linebuf\n");
+}
+
+// ============================================================================
+// 39. PTY + linebuf xform
+// ============================================================================
+
+static void
+test_pty_linebuf_xform(void)
+{
+    n00b_conduit_t *c = make_conduit();
+    n00b_conduit_io_backend_t *io = make_io(c);
+
+    n00b_array_t(void *) xforms = n00b_array_new(void *, 1);
+    n00b_array_set(xforms, 0,
+                   (void *)&n00b_conduit_linebuf_default_spec);
+
+    n00b_subproc_t sp = {};
+    n00b_subproc_init(&sp,
+        .cmd            = n00b_string_from_cstr("/bin/echo"),
+        .conduit        = c,
+        .io             = io,
+        .pty            = true,
+        .capture_stdout = true,
+        .merge          = false,
+        .stdout_xforms  = &xforms);
+
+    n00b_array_t(n00b_string_t) args = n00b_array_new(n00b_string_t, 1);
+    n00b_array_set(args, 0, n00b_string_from_cstr("hello"));
+    sp.args = &args;
+
+    n00b_result_t(bool) r = n00b_subproc_run(&sp);
+    if (n00b_result_is_err(r)) {
+        printf("  [SKIP] pty linebuf xform (err=%d)\n",
+               n00b_result_get_err(r));
+        n00b_conduit_io_destroy(io);
+        n00b_conduit_destroy(c);
+        return;
+    }
+
+    assert(n00b_result_is_ok(r));
+    assert(n00b_subproc_exited(&sp));
+
+    // PTY produces "hello\r\n".  Linebuf splits on '\n' (default),
+    // strips delimiter → emits "hello\r" (6 bytes).
+    n00b_buffer_t *out = n00b_subproc_stdout(&sp);
+    assert(out != nullptr);
+    assert(out->byte_len == 6);
+    assert(memcmp(out->data, "hello\r", 6) == 0);
+
+    n00b_conduit_io_destroy(io);
+    n00b_conduit_destroy(c);
+    printf("  [PASS] pty linebuf xform\n");
+}
+
+// ============================================================================
+// 40. PTY + ansi_strip
+// ============================================================================
+
+static void
+test_pty_ansi_strip(void)
+{
+    n00b_conduit_t *c = make_conduit();
+    n00b_conduit_io_backend_t *io = make_io(c);
+
+    n00b_array_t(void *) xforms = n00b_array_new(void *, 1);
+    n00b_array_set(xforms, 0,
+                   (void *)&n00b_conduit_ansi_strip_default_spec);
+
+    n00b_subproc_t sp = {};
+    n00b_subproc_init(&sp,
+        .cmd            = n00b_string_from_cstr("/bin/sh"),
+        .conduit        = c,
+        .io             = io,
+        .pty            = true,
+        .capture_stdout = true,
+        .merge          = false,
+        .stdout_xforms  = &xforms);
+
+    n00b_array_t(n00b_string_t) args = n00b_array_new(n00b_string_t, 2);
+    n00b_array_set(args, 0, n00b_string_from_cstr("-c"));
+    n00b_array_set(args, 1,
+        n00b_string_from_cstr("printf '\\033[31mcolor\\033[0m\\n'"));
+    sp.args = &args;
+
+    n00b_result_t(bool) r = n00b_subproc_run(&sp);
+    if (n00b_result_is_err(r)) {
+        printf("  [SKIP] pty ansi_strip (err=%d)\n",
+               n00b_result_get_err(r));
+        n00b_conduit_io_destroy(io);
+        n00b_conduit_destroy(c);
+        return;
+    }
+
+    assert(n00b_result_is_ok(r));
+    assert(n00b_subproc_exited(&sp));
+
+    n00b_buffer_t *out = n00b_subproc_stdout(&sp);
+    assert(out != nullptr);
+    assert(out->byte_len > 0);
+
+    // Output should contain "color" but not ESC (\033).
+    bool found_color = false;
+    for (size_t i = 0; i + 5 <= out->byte_len; i++) {
+        if (memcmp(out->data + i, "color", 5) == 0) {
+            found_color = true;
+            break;
+        }
+    }
+    assert(found_color);
+
+    // Verify no ESC byte remains.
+    bool found_esc = false;
+    for (size_t i = 0; i < out->byte_len; i++) {
+        if (((uint8_t *)out->data)[i] == 0x1b) {
+            found_esc = true;
+            break;
+        }
+    }
+    assert(!found_esc);
+
+    n00b_conduit_io_destroy(io);
+    n00b_conduit_destroy(c);
+    printf("  [PASS] pty ansi_strip\n");
+}
+
+// ============================================================================
+// 41. PTY non-zero exit
+// ============================================================================
+
+static void
+test_pty_nonzero_exit(void)
+{
+    n00b_conduit_t *c = make_conduit();
+    n00b_conduit_io_backend_t *io = make_io(c);
+
+    n00b_subproc_t sp = {};
+    n00b_subproc_init(&sp,
+        .cmd     = n00b_string_from_cstr("/bin/sh"),
+        .conduit = c,
+        .io      = io,
+        .pty     = true);
+
+    n00b_array_t(n00b_string_t) args = n00b_array_new(n00b_string_t, 2);
+    n00b_array_set(args, 0, n00b_string_from_cstr("-c"));
+    n00b_array_set(args, 1, n00b_string_from_cstr("exit 7"));
+    sp.args = &args;
+
+    n00b_result_t(bool) r = n00b_subproc_run(&sp);
+    if (n00b_result_is_err(r)) {
+        printf("  [SKIP] pty nonzero exit (err=%d)\n",
+               n00b_result_get_err(r));
+        n00b_conduit_io_destroy(io);
+        n00b_conduit_destroy(c);
+        return;
+    }
+
+    assert(n00b_subproc_exited(&sp));
+
+    n00b_result_t(int) ec = n00b_subproc_exit_code(&sp);
+    assert(n00b_result_is_ok(ec));
+    assert(n00b_result_get(ec) == 7);
+
+    n00b_conduit_io_destroy(io);
+    n00b_conduit_destroy(c);
+    printf("  [PASS] pty nonzero exit\n");
+}
+
+// ============================================================================
+// 42. PTY pre-exec hook
+// ============================================================================
+
+static void
+test_pty_pre_exec_hook(void)
+{
+    n00b_conduit_t *c = make_conduit();
+    n00b_conduit_io_backend_t *io = make_io(c);
+
+    int hook_pipe[2];
+    if (pipe(hook_pipe) < 0) {
+        printf("  [SKIP] pty pre-exec hook (pipe failed)\n");
+        n00b_conduit_io_destroy(io);
+        n00b_conduit_destroy(c);
+        return;
+    }
+
+    n00b_subproc_t sp = {};
+    n00b_subproc_init(&sp,
+        .cmd           = n00b_string_from_cstr("/bin/echo"),
+        .conduit       = c,
+        .io            = io,
+        .pty           = true,
+        .pre_exec_hook = test_hook_fn,
+        .hook_param    = &hook_pipe[1]);
+
+    n00b_result_t(bool) r = n00b_subproc_spawn(&sp);
+    close(hook_pipe[1]); // Close write end in parent.
+
+    if (n00b_result_is_err(r)) {
+        close(hook_pipe[0]);
+        printf("  [SKIP] pty pre-exec hook (spawn failed)\n");
+        n00b_conduit_io_destroy(io);
+        n00b_conduit_destroy(c);
+        return;
+    }
+
+    // Read from hook pipe — should get 'H'.
+    char buf = 0;
+    ssize_t n = read(hook_pipe[0], &buf, 1);
+    close(hook_pipe[0]);
+    assert(n == 1 && buf == 'H');
+
+    n00b_subproc_wait(&sp);
+    n00b_subproc_close(&sp);
+    n00b_conduit_io_destroy(io);
+    n00b_conduit_destroy(c);
+    printf("  [PASS] pty pre-exec hook\n");
+}
+
+// ============================================================================
+// 43. PTY kill signal
+// ============================================================================
+
+static void
+test_pty_kill_signal(void)
+{
+    n00b_conduit_t *c = make_conduit();
+    n00b_conduit_io_backend_t *io = make_io(c);
+
+    n00b_subproc_t sp = {};
+    n00b_subproc_init(&sp,
+        .cmd     = n00b_string_from_cstr("/bin/sleep"),
+        .conduit = c,
+        .io      = io,
+        .pty     = true);
+
+    n00b_array_t(n00b_string_t) args = n00b_array_new(n00b_string_t, 1);
+    n00b_array_set(args, 0, n00b_string_from_cstr("100"));
+    sp.args = &args;
+
+    n00b_result_t(bool) r = n00b_subproc_spawn(&sp);
+    if (n00b_result_is_err(r)) {
+        printf("  [SKIP] pty kill signal (spawn failed)\n");
+        n00b_conduit_io_destroy(io);
+        n00b_conduit_destroy(c);
+        return;
+    }
+
+    // Send SIGTERM.
+    n00b_result_t(bool) kr = n00b_subproc_kill(&sp);
+    assert(n00b_result_is_ok(kr));
+
+    n00b_subproc_wait(&sp);
+    assert(n00b_subproc_exited(&sp));
+
+    n00b_result_t(int) ts = n00b_subproc_term_signal(&sp);
+    assert(n00b_result_is_ok(ts));
+    assert(n00b_result_get(ts) == SIGTERM);
+
+    n00b_subproc_close(&sp);
+    n00b_conduit_io_destroy(io);
+    n00b_conduit_destroy(c);
+    printf("  [PASS] pty kill signal\n");
+}
+
+// ============================================================================
+// 44. Custom done condition
+// ============================================================================
+
+static bool
+custom_done_check(n00b_subproc_t *sp, void *ctx)
+{
+    (void)ctx;
+    n00b_buffer_t *out = n00b_subproc_stdout(sp);
+    // Done when we've captured any stdout data.
+    return out != nullptr && out->byte_len > 0;
+}
+
+static void
+test_custom_done_condition(void)
+{
+    n00b_conduit_t *c = make_conduit();
+    n00b_conduit_io_backend_t *io = make_io(c);
+
+    n00b_subproc_t sp = {};
+    n00b_subproc_init(&sp,
+        .cmd            = n00b_string_from_cstr("/bin/sh"),
+        .conduit        = c,
+        .io             = io,
+        .capture_stdout = true,
+        .merge          = false,
+        .done_condition = N00B_SUBPROC_DONE_CUSTOM,
+        .done_fn        = custom_done_check);
+
+    // Child prints "go" then sleeps forever.
+    n00b_array_t(n00b_string_t) args = n00b_array_new(n00b_string_t, 2);
+    n00b_array_set(args, 0, n00b_string_from_cstr("-c"));
+    n00b_array_set(args, 1,
+        n00b_string_from_cstr("echo go; sleep 100"));
+    sp.args = &args;
+
+    n00b_result_t(bool) r = n00b_subproc_spawn(&sp);
+    if (n00b_result_is_err(r)) {
+        printf("  [SKIP] custom done condition (spawn failed, err=%d)\n",
+               n00b_result_get_err(r));
+        n00b_conduit_io_destroy(io);
+        n00b_conduit_destroy(c);
+        return;
+    }
+
+    // Wait with custom done — returns when stdout has data.
+    n00b_duration_t timeout = {.tv_sec = 5, .tv_nsec = 0};
+    n00b_result_t(bool) wr = n00b_subproc_wait(&sp, .timeout = &timeout);
+    if (n00b_result_is_err(wr)) {
+        printf("  [SKIP] custom done condition (wait err=%d)\n",
+               n00b_result_get_err(wr));
+        n00b_subproc_kill(&sp);
+        n00b_subproc_wait(&sp);
+        n00b_subproc_close(&sp);
+        n00b_conduit_io_destroy(io);
+        n00b_conduit_destroy(c);
+        return;
+    }
+
+    // Stdout should contain "go".
+    n00b_buffer_t *out = n00b_subproc_stdout(&sp);
+    assert(out != nullptr);
+    bool found_go = false;
+    for (size_t i = 0; i + 2 <= out->byte_len; i++) {
+        if (memcmp(out->data + i, "go", 2) == 0) {
+            found_go = true;
+            break;
+        }
+    }
+    assert(found_go);
+
+    // Child is still alive (sleep 100) — kill it.
+    n00b_subproc_kill(&sp);
+    n00b_subproc_wait(&sp);
+    assert(n00b_subproc_exited(&sp));
+
+    n00b_subproc_close(&sp);
+    n00b_conduit_io_destroy(io);
+    n00b_conduit_destroy(c);
+    printf("  [PASS] custom done condition\n");
+}
+
+// ============================================================================
 // main
 // ============================================================================
 
@@ -1312,6 +2226,38 @@ main(int argc, char *argv[])
     test_pty_close_idempotent();
     fflush(stdout);
     test_pty_cwd();
+    fflush(stdout);
+    test_pipe_stderr_capture();
+    fflush(stdout);
+    test_nonzero_exit();
+    fflush(stdout);
+    test_multiline_output();
+    fflush(stdout);
+    test_large_output();
+    fflush(stdout);
+    test_interleaved_stdout_stderr();
+    fflush(stdout);
+    test_merged_output();
+    fflush(stdout);
+    test_write_stdin_after_spawn();
+    fflush(stdout);
+    test_invalid_cwd();
+    fflush(stdout);
+    test_linebuf_multiline();
+    fflush(stdout);
+    test_xform_chain_ansi_linebuf();
+    fflush(stdout);
+    test_pty_linebuf_xform();
+    fflush(stdout);
+    test_pty_ansi_strip();
+    fflush(stdout);
+    test_pty_nonzero_exit();
+    fflush(stdout);
+    test_pty_pre_exec_hook();
+    fflush(stdout);
+    test_pty_kill_signal();
+    fflush(stdout);
+    test_custom_done_condition();
     fflush(stdout);
 
     printf("All subproc tests passed.\n");
