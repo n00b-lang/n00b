@@ -132,3 +132,16 @@ extern char *strip_line_directives(const char *src);
  * Creates: `postfix_expression(PRIMARY) -> primary_expression -> constant -> TT_NUM`
  */
 extern tnode_t *build_numeric_literal(const char *value_str, int line);
+
+/**
+ * @brief Build a nullptr primary expression.
+ */
+static inline tnode_t *
+build_nullptr_expr(int line)
+{
+    tnode_t *primary = synth_nonterminal("primary_expression_7");
+    primary->nt_id   = NT_primary_expression;
+    primary->branch  = 7;
+    add_child(primary, build_identifier("nullptr", line));
+    return primary;
+}

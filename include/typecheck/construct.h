@@ -5,9 +5,10 @@
  * @ingroup typecheck
  *
  * All constructors return `n00b_tc_type_t *`.  They allocate via `n00b_alloc`
- * and set the variant payload.  In Phase 1, constructors work without a
- * context; in Phase 2, they will take `n00b_tc_ctx_t *` as the first
- * parameter and register the type on the context's `all_types` list.
+ * and set the variant payload.  Each constructor takes `n00b_tc_ctx_t *`
+ * as its first parameter and registers the type on the context's
+ * `all_types` list.  `n00b_tc_field()` is the sole exception (it
+ * returns a small struct by value and is not a type node).
  *
  * ## Varargs conventions
  *
@@ -32,42 +33,46 @@
  * Sets `given_name` from @p name.  Generates a `display_name` from the
  * given name (e.g., "T" for a var named "T").
  *
+ * @param ctx   Type-checking context.
  * @param name  User-visible name (e.g., `*r"T"`).
  * @return      Allocated type node with Var kind.
  */
-extern n00b_tc_type_t *n00b_tc_var(n00b_string_t name);
+extern n00b_tc_type_t *n00b_tc_var(n00b_tc_ctx_t *ctx, n00b_string_t name);
 
 /**
  * @brief Create an anonymous type variable.
  *
  * `given_name` is `none`.  `display_name` is auto-generated (e.g., "t_0").
  *
+ * @param ctx  Type-checking context.
  * @return Allocated type node with Var kind.
  */
-extern n00b_tc_type_t *n00b_tc_fresh_var(void);
+extern n00b_tc_type_t *n00b_tc_fresh_var(n00b_tc_ctx_t *ctx);
 
 /**
  * @brief Create a primitive type.
  *
+ * @param ctx   Type-checking context.
  * @param name  Interned name (e.g., `*r"int"`, `*r"bool"`).
  * @return      Allocated type node with Prim kind.
  */
-extern n00b_tc_type_t *n00b_tc_prim(n00b_string_t name);
+extern n00b_tc_type_t *n00b_tc_prim(n00b_tc_ctx_t *ctx, n00b_string_t name);
 
 /**
  * @brief Create a parameterized type.
  *
+ * @param ctx   Type-checking context.
  * @param name  Constructor name (e.g., `*r"list"`, `*r"dict"`).
  * @param ...   Type parameters as `n00b_tc_type_t *` positional varargs.
  * @return      Allocated type node with Param kind.
  *
  * @par Example
  * @code
- * auto list_int = n00b_tc_param(*r"list", t_int);
- * auto dict_kv  = n00b_tc_param(*r"dict", t_string, t_int);
+ * auto list_int = n00b_tc_param(ctx, *r"list", t_int);
+ * auto dict_kv  = n00b_tc_param(ctx, *r"dict", t_string, t_int);
  * @endcode
  */
-extern n00b_tc_type_t *n00b_tc_param(n00b_string_t name, n00b_tc_type_t *+);
+extern n00b_tc_type_t *n00b_tc_param(n00b_tc_ctx_t *ctx, n00b_string_t name, n00b_tc_type_t *+);
 
 /**
  * @brief Create a function type.
@@ -75,6 +80,7 @@ extern n00b_tc_type_t *n00b_tc_param(n00b_string_t name, n00b_tc_type_t *+);
  * Positional parameters are passed as `n00b_tc_type_t *` varargs.
  * Use `_kargs` for optional components.
  *
+ * @param ctx   Type-checking context.
  * @param ...   Positional parameter types as varargs.
  *
  * @kw returns   Return type (required).
@@ -85,10 +91,11 @@ extern n00b_tc_type_t *n00b_tc_param(n00b_string_t name, n00b_tc_type_t *+);
  *
  * @par Example
  * @code
- * auto fn = n00b_tc_fn(t_int, t_string, .returns = t_bool);
+ * auto fn = n00b_tc_fn(ctx, t_int, t_string,
+ *               kw_func(n00b_tc_fn, .returns = t_bool));
  * @endcode
  */
-extern n00b_tc_type_t *n00b_tc_fn(n00b_tc_type_t *+)
+extern n00b_tc_type_t *n00b_tc_fn(n00b_tc_ctx_t *ctx, n00b_tc_type_t *+)
     _kargs {
         n00b_tc_type_t *returns  = nullptr;
         n00b_tc_type_t *variadic = nullptr;
@@ -100,15 +107,16 @@ extern n00b_tc_type_t *n00b_tc_fn(n00b_tc_type_t *+)
  *
  * Variants are flattened (no nested sums) and stored in the provided order.
  *
+ * @param ctx  Type-checking context.
  * @param ...  Variant types as `n00b_tc_type_t *` varargs.
  * @return     Allocated type node with Sum kind.
  *
  * @par Example
  * @code
- * auto nullable_int = n00b_tc_sum(t_int, t_nil);
+ * auto nullable_int = n00b_tc_sum(ctx, t_int, t_nil);
  * @endcode
  */
-extern n00b_tc_type_t *n00b_tc_sum(n00b_tc_type_t *+);
+extern n00b_tc_type_t *n00b_tc_sum(n00b_tc_ctx_t *ctx, n00b_tc_type_t *+);
 
 /**
  * @brief Create a record type.
@@ -116,6 +124,7 @@ extern n00b_tc_type_t *n00b_tc_sum(n00b_tc_type_t *+);
  * Fields are passed as `n00b_tc_field_t *` varargs (use `n00b_tc_field()`
  * to build them).
  *
+ * @param ctx   Type-checking context.
  * @param name  Record name (empty string for anonymous).
  * @param ...   Fields as `n00b_tc_field_t *` varargs.
  *
@@ -126,12 +135,12 @@ extern n00b_tc_type_t *n00b_tc_sum(n00b_tc_type_t *+);
  *
  * @par Example
  * @code
- * auto point = n00b_tc_record(*r"Point",
+ * auto point = n00b_tc_record(ctx, *r"Point",
  *     n00b_tc_field(*r"x", t_int),
  *     n00b_tc_field(*r"y", t_int));
  * @endcode
  */
-extern n00b_tc_type_t *n00b_tc_record(n00b_string_t name, n00b_tc_field_t +)
+extern n00b_tc_type_t *n00b_tc_record(n00b_tc_ctx_t *ctx, n00b_string_t name, n00b_tc_field_t +)
     _kargs {
         bool ordered = true;
         bool open    = false;
@@ -140,6 +149,7 @@ extern n00b_tc_type_t *n00b_tc_record(n00b_string_t name, n00b_tc_field_t +)
 /**
  * @brief Create a tuple type.
  *
+ * @param ctx  Type-checking context.
  * @param ...  Element types as `n00b_tc_type_t *` varargs.
  *
  * @kw open  true = open tuple (at least N elements); false = closed (default).
@@ -148,11 +158,11 @@ extern n00b_tc_type_t *n00b_tc_record(n00b_string_t name, n00b_tc_field_t +)
  *
  * @par Example
  * @code
- * auto pair = n00b_tc_tuple(t_int, t_string);
- * auto open = n00b_tc_tuple(t_int, t_string, .open = true);
+ * auto pair = n00b_tc_tuple(ctx, t_int, t_string);
+ * auto open = n00b_tc_tuple(ctx, t_int, t_string, .open = true);
  * @endcode
  */
-extern n00b_tc_type_t *n00b_tc_tuple(n00b_tc_type_t *+)
+extern n00b_tc_type_t *n00b_tc_tuple(n00b_tc_ctx_t *ctx, n00b_tc_type_t *+)
     _kargs { bool open = false; };
 
 /**

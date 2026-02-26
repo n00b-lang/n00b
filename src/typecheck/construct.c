@@ -5,25 +5,23 @@
  */
 
 #include "typecheck/construct.h"
+#include "typecheck/context.h"
 #include "core/alloc.h"
 #include "core/string.h"
 #include "core/vargs.h"
 
 #include <stdio.h>
 
-// Global counter for anonymous variable IDs.
-// Will move to n00b_tc_ctx_t in Phase 2.
-static _Atomic(uint32_t) _tc_next_var_id = 0;
-
 // ============================================================================
 // Helpers
 // ============================================================================
 
 static n00b_tc_type_t *
-tc_alloc_type(void)
+tc_alloc_type(n00b_tc_ctx_t *ctx)
 {
     n00b_tc_type_t *t = n00b_alloc(n00b_tc_type_t);
     t->forward        = nullptr;
+    n00b_tc_ctx_register(ctx, t);
     return t;
 }
 
@@ -32,12 +30,12 @@ tc_alloc_type(void)
 // ============================================================================
 
 n00b_tc_type_t *
-n00b_tc_var(n00b_string_t name)
+n00b_tc_var(n00b_tc_ctx_t *ctx, n00b_string_t name)
 {
-    n00b_tc_type_t *t = tc_alloc_type();
+    n00b_tc_type_t *t = tc_alloc_type(ctx);
 
     n00b_tc_var_t var = {
-        .id           = _tc_next_var_id++,
+        .id           = ctx->next_var_id++,
         .given_name   = n00b_option_set(n00b_string_t, name),
         .display_name = name,
         .constraints  = nullptr,
@@ -52,16 +50,16 @@ n00b_tc_var(n00b_string_t name)
 // ============================================================================
 
 n00b_tc_type_t *
-n00b_tc_fresh_var(void)
+n00b_tc_fresh_var(n00b_tc_ctx_t *ctx)
 {
-    uint32_t id = _tc_next_var_id++;
+    uint32_t id = ctx->next_var_id++;
 
     // Generate display name like "t_42".
     char buf[32];
     snprintf(buf, sizeof(buf), "t_%u", id);
     n00b_string_t display = n00b_string_from_cstr(buf);
 
-    n00b_tc_type_t *t = tc_alloc_type();
+    n00b_tc_type_t *t = tc_alloc_type(ctx);
 
     n00b_tc_var_t var = {
         .id           = id,
@@ -79,9 +77,9 @@ n00b_tc_fresh_var(void)
 // ============================================================================
 
 n00b_tc_type_t *
-n00b_tc_prim(n00b_string_t name)
+n00b_tc_prim(n00b_tc_ctx_t *ctx, n00b_string_t name)
 {
-    n00b_tc_type_t *t = tc_alloc_type();
+    n00b_tc_type_t *t = tc_alloc_type(ctx);
 
     n00b_tc_prim_t prim = {
         .name = name,
@@ -96,9 +94,9 @@ n00b_tc_prim(n00b_string_t name)
 // ============================================================================
 
 n00b_tc_type_t *
-n00b_tc_param(n00b_string_t name, n00b_tc_type_t *+)
+n00b_tc_param(n00b_tc_ctx_t *ctx, n00b_string_t name, n00b_tc_type_t *+)
 {
-    n00b_tc_type_t *t = tc_alloc_type();
+    n00b_tc_type_t *t = tc_alloc_type(ctx);
 
     n00b_list_t(n00b_tc_type_t *) params = n00b_list_new_private(n00b_tc_type_t *);
 
@@ -123,7 +121,7 @@ n00b_tc_param(n00b_string_t name, n00b_tc_type_t *+)
 // ============================================================================
 
 n00b_tc_type_t *
-n00b_tc_fn(n00b_tc_type_t *+)
+n00b_tc_fn(n00b_tc_ctx_t *ctx, n00b_tc_type_t *+)
     _kargs {
         n00b_tc_type_t *returns  = nullptr;
         n00b_tc_type_t *variadic = nullptr;
@@ -134,7 +132,7 @@ n00b_tc_fn(n00b_tc_type_t *+)
     (void)variadic;
     (void)kwonly;
 
-    n00b_tc_type_t *t = tc_alloc_type();
+    n00b_tc_type_t *t = tc_alloc_type(ctx);
 
     // Collect positional params from typed vargs.
     n00b_list_t(n00b_tc_type_t *) positional = n00b_list_new_private(n00b_tc_type_t *);
@@ -162,9 +160,9 @@ n00b_tc_fn(n00b_tc_type_t *+)
 // ============================================================================
 
 n00b_tc_type_t *
-n00b_tc_sum(n00b_tc_type_t *+)
+n00b_tc_sum(n00b_tc_ctx_t *ctx, n00b_tc_type_t *+)
 {
-    n00b_tc_type_t *t = tc_alloc_type();
+    n00b_tc_type_t *t = tc_alloc_type(ctx);
 
     n00b_list_t(n00b_tc_type_t *) variants = n00b_list_new_private(n00b_tc_type_t *);
 
@@ -205,7 +203,7 @@ n00b_tc_field(n00b_string_t name, n00b_tc_type_t *type)
 // ============================================================================
 
 n00b_tc_type_t *
-n00b_tc_record(n00b_string_t name, n00b_tc_field_t +)
+n00b_tc_record(n00b_tc_ctx_t *ctx, n00b_string_t name, n00b_tc_field_t +)
     _kargs {
         bool ordered = true;
         bool open    = false;
@@ -214,7 +212,7 @@ n00b_tc_record(n00b_string_t name, n00b_tc_field_t +)
     (void)ordered;
     (void)open;
 
-    n00b_tc_type_t *t = tc_alloc_type();
+    n00b_tc_type_t *t = tc_alloc_type(ctx);
 
     n00b_list_t(n00b_string_t)    field_names       = n00b_list_new_private(n00b_string_t);
     n00b_list_t(n00b_tc_type_t *) field_types        = n00b_list_new_private(n00b_tc_type_t *);
@@ -260,12 +258,12 @@ n00b_tc_record(n00b_string_t name, n00b_tc_field_t +)
 // ============================================================================
 
 n00b_tc_type_t *
-n00b_tc_tuple(n00b_tc_type_t *+)
+n00b_tc_tuple(n00b_tc_ctx_t *ctx, n00b_tc_type_t *+)
     _kargs { bool open = false; }
 {
     (void)open;
 
-    n00b_tc_type_t *t = tc_alloc_type();
+    n00b_tc_type_t *t = tc_alloc_type(ctx);
 
     n00b_list_t(n00b_tc_type_t *) elements = n00b_list_new_private(n00b_tc_type_t *);
 

@@ -500,6 +500,7 @@ n00b_logic = [
 
 n00b_typecheck = [
     'src/typecheck/construct.c',
+    'src/typecheck/context.c',
 ]
 
 n00b_dll_src = n00b_core + n00b_unicode + n00b_strings + n00b_render + n00b_table + n00b_conduit + n00b_parsers + n00b_hexdump + n00b_logic + n00b_slay + n00b_typecheck

@@ -59,7 +59,8 @@ acquire_read_record(n00b_rwlock_t *lock, n00b_thread_t *thread)
         n00b_runtime_t   *rt = n00b_get_runtime();
         n00b_allocator_t *sp = (n00b_allocator_t *)&rt->system_pool;
 
-        log = n00b_alloc_with_opts(n00b_thread_read_log_t, &(n00b_alloc_opts_t){.allocator = sp});
+        log = n00b_alloc_with_opts(n00b_thread_read_log_t,
+                                   &(n00b_alloc_opts_t){.allocator = sp});
     }
     log->obj   = lock;
     log->level = 0;
@@ -154,14 +155,14 @@ _n00b_rw_write_lock(n00b_rwlock_t *lock, char *loc)
 
 post_resume:
 
-    {
-        int result = n00b_lock_acquire_accounting((void *)lock, thread, loc);
+{
+    int result = n00b_lock_acquire_accounting((void *)lock, thread, loc);
 
-        info = n00b_atomic_load(&lock->data);
-        assert(info.owner == tid);
+    info = n00b_atomic_load(&lock->data);
+    assert(info.owner == tid);
 
-        return result;
-    }
+    return result;
+}
 }
 
 void

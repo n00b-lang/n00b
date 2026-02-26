@@ -395,8 +395,10 @@ build_address_of(tnode_t *operand, int line)
  * via C's last-writer-wins semantics for duplicate designators.
  */
 static tnode_t *
-build_kargs_compound_literal(const char *func_name, kw_arg_collector_t *kw_args,
-                             kw_info_t *kw_info, int line)
+build_kargs_compound_literal(const char         *func_name,
+                             kw_arg_collector_t *kw_args,
+                             kw_info_t          *kw_info,
+                             int                 line)
 {
     char struct_name[NCC_IDENT_BUF];
     int  sret = snprintf(struct_name, sizeof(struct_name), "_%s__kargs", func_name);
@@ -529,11 +531,15 @@ xform_kw_call(tree_xform_t *ctx, tnode_t *node)
         return nullptr;
     }
 
+    if (node->kw_done) {
+        return nullptr;
+    }
+
     if (node->num_kids < 3) {
         return nullptr;
     }
 
-    tnode_t *callee = tnode_get_kid(node, 0);
+    tnode_t *callee  = tnode_get_kid(node, 0);
     tnode_t *func_id = find_func_identifier(callee);
     if (!func_id) {
         return nullptr;
@@ -576,11 +582,17 @@ xform_kw_call(tree_xform_t *ctx, tnode_t *node)
 
     int line = get_node_line(node);
 
+    if (kw_info && kw_info->is_opaque) {
+        add_child(arg_list, build_nullptr_expr(line));
+        node->kw_done = true;
+        return nullptr;
+    }
+
     // If the function takes kargs but the call has no keyword arguments,
     // pass a zero-initialized kargs struct instead of nullptr so that
     // the function body can safely dereference kargs to read defaults.
     if (kw_info && !call_has_kw_args) {
-        int num_call_args      = count_regular_args(arg_list);
+        int num_call_args       = count_regular_args(arg_list);
         int expected_positional = kw_info->num_positional_params;
 
         // If the call already has all args (positional + kargs), don't add another
@@ -590,13 +602,13 @@ xform_kw_call(tree_xform_t *ctx, tnode_t *node)
 
         // Build &(struct _funcname__kargs){defaults...} — defaults-initialized compound literal
         kw_arg_collector_t empty_kw = {0};
-        tnode_t *literal       = build_kargs_compound_literal(func_name, &empty_kw, kw_info, line);
-        tnode_t *addr_of       = build_address_of(literal, line);
-        tnode_t *postfix       = synth_nonterminal("postfix_expression_9");
-        postfix->nt_id         = NT_postfix_expression;
-        postfix->branch        = 9;
+        tnode_t *literal = build_kargs_compound_literal(func_name, &empty_kw, kw_info, line);
+        tnode_t *addr_of = build_address_of(literal, line);
+        tnode_t *postfix = synth_nonterminal("postfix_expression_9");
+        postfix->nt_id   = NT_postfix_expression;
+        postfix->branch  = 9;
         add_child(postfix, addr_of);
-        tnode_t *kargs_assign  = wrap_in_expr_hierarchy(postfix, line);
+        tnode_t *kargs_assign = wrap_in_expr_hierarchy(postfix, line);
 
         if (arg_list) {
             // Check if arg_list was flattened - emitter handles commas for flattened lists
@@ -628,12 +640,13 @@ xform_kw_call(tree_xform_t *ctx, tnode_t *node)
                     }
                     node->kids->data[i] = new_arg_list;
                     node->num_kids++;
-                    node->kids->len = node->num_kids;
-                    new_arg_list->parent  = node;
+                    node->kids->len      = node->num_kids;
+                    new_arg_list->parent = node;
                     break;
                 }
             }
         }
+        node->kw_done = true;
         return nullptr;
     }
 
@@ -651,13 +664,13 @@ xform_kw_call(tree_xform_t *ctx, tnode_t *node)
     int regular_count = ncc_list_len(regular_args);
 
     // Build the kargs compound literal with address-of
-    tnode_t *literal       = build_kargs_compound_literal(func_name, &kw_args, kw_info, line);
-    tnode_t *addr_of       = build_address_of(literal, line);
-    tnode_t *postfix       = synth_nonterminal("postfix_expression_9");
-    postfix->nt_id         = NT_postfix_expression;
-    postfix->branch        = 9;
+    tnode_t *literal = build_kargs_compound_literal(func_name, &kw_args, kw_info, line);
+    tnode_t *addr_of = build_address_of(literal, line);
+    tnode_t *postfix = synth_nonterminal("postfix_expression_9");
+    postfix->nt_id   = NT_postfix_expression;
+    postfix->branch  = 9;
     add_child(postfix, addr_of);
-    tnode_t *kargs_assign  = wrap_in_expr_hierarchy(postfix, line);
+    tnode_t *kargs_assign = wrap_in_expr_hierarchy(postfix, line);
 
     // Rebuild the argument list: regular args + kargs compound literal
     tnode_t *new_arg_list = synth_nonterminal("argument_expression_list");
@@ -685,6 +698,7 @@ xform_kw_call(tree_xform_t *ctx, tnode_t *node)
 
     base_dealloc(regular_args);
 
+    node->kw_done = true;
     return nullptr;
 }
 
@@ -829,9 +843,9 @@ xform_kw_func(tree_xform_t *ctx, tnode_t *node)
     tnode_t *addr_of = build_address_of(literal, line);
 
     // Wrap in postfix_expression_9 (to match expression level)
-    tnode_t *postfix = synth_nonterminal("postfix_expression_9");
-    postfix->nt_id       = NT_postfix_expression;
-    postfix->branch      = 9;
+    tnode_t *postfix        = synth_nonterminal("postfix_expression_9");
+    postfix->nt_id          = NT_postfix_expression;
+    postfix->branch         = 9;
     postfix->kw_func_result = true;
     add_child(postfix, addr_of);
 

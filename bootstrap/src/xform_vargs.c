@@ -166,19 +166,6 @@ build_vargs_param(int line)
 }
 
 /**
- * @brief Build a nullptr primary expression.
- */
-static tnode_t *
-build_nullptr_expr(int line)
-{
-    tnode_t *primary = synth_nonterminal("primary_expression_7");
-    primary->nt_id   = NT_primary_expression;
-    primary->branch  = 7;
-    add_child(primary, build_identifier("nullptr", line));
-    return primary;
-}
-
-/**
  * @brief Wrap an assignment_expression in parentheses to make it a primary_expression.
  * This is needed when the expression needs to be used as a cast operand.
  */
@@ -1342,23 +1329,87 @@ xform_vargs_call(tree_xform_t *ctx, tnode_t *node)
                               && arg_list->origin->rewrite_name != nullptr
                               && strcmp(arg_list->origin->rewrite_name, "flatten") == 0;
 
-            // Add comma before nullptr if there are existing args and node wasn't flattened
-            // (flattened nodes get commas added by emitter between all children)
-            if (!was_flattened && arg_list->num_kids > 0) {
-                add_child(arg_list, synth_terminal(",", TT_PUNCT, line));
+            // Find insertion point: before the first kw_func result or
+            // kw_func call, or at the end if there are none.
+            int insert_before = -1;
+            for (int i = 0; i < arg_list->num_kids; i++) {
+                tnode_t *kid = tnode_get_kid(arg_list, i);
+                if (!kid || kid->nt_id != NT_assignment_expression) {
+                    continue;
+                }
+                if (contains_kw_func_call(ctx->input, kid)
+                    || is_kw_func_result(kid)) {
+                    // Back up to include the preceding comma if present.
+                    if (i > 0) {
+                        tnode_t *prev = tnode_get_kid(arg_list, i - 1);
+                        if (prev && prev->tptr && prev->nt
+                            && strcmp(prev->nt, ",") == 0) {
+                            insert_before = i - 1;
+                        }
+                        else {
+                            insert_before = i;
+                        }
+                    }
+                    else {
+                        insert_before = i;
+                    }
+                    break;
+                }
             }
-            add_child(arg_list, nullptr_assign);
 
-            // If function has opaque kargs, add nullptr for that too
-            if (has_opaque_kargs) {
-                // Only add comma if not flattened (emitter handles it otherwise)
+            // Build the nodes to insert.
+            // When there's already a kw_func result in the arg list
+            // (insert_before >= 0), it serves as the kargs value for
+            // opaque _kargs — don't add a duplicate kargs nullptr.
+            ncc_list_t *to_insert = nullptr;
+
+            if (!was_flattened && arg_list->num_kids > 0) {
+                to_insert = ncc_list_append(to_insert,
+                    synth_terminal(",", TT_PUNCT, line));
+            }
+            to_insert = ncc_list_append(to_insert, nullptr_assign);
+
+            if (has_opaque_kargs && insert_before < 0) {
                 if (!was_flattened) {
-                    add_child(arg_list, synth_terminal(",", TT_PUNCT, line));
+                    to_insert = ncc_list_append(to_insert,
+                        synth_terminal(",", TT_PUNCT, line));
                 }
                 tnode_t *kargs_nullptr = build_nullptr_expr(line);
-                tnode_t *kargs_assign = wrap_in_expr_hierarchy(kargs_nullptr, line);
-                add_child(arg_list, kargs_assign);
+                tnode_t *kargs_assign  = wrap_in_expr_hierarchy(kargs_nullptr, line);
+                to_insert = ncc_list_append(to_insert, kargs_assign);
             }
+
+            int ninsert = ncc_list_len(to_insert);
+
+            if (insert_before < 0) {
+                // No kw_func result — just append.
+                for (int i = 0; i < ninsert; i++) {
+                    add_child(arg_list, ncc_list_get(to_insert, i));
+                }
+            }
+            else {
+                // Shift existing children to make room and insert.
+                int old_count = arg_list->num_kids;
+                int new_count = old_count + ninsert;
+
+                ncc_list_ensure_cap(arg_list->kids, new_count);
+
+                // Shift [insert_before .. old_count-1] right by ninsert.
+                for (int i = old_count - 1; i >= insert_before; i--) {
+                    arg_list->kids->data[i + ninsert] = arg_list->kids->data[i];
+                }
+
+                // Place new nodes.
+                for (int i = 0; i < ninsert; i++) {
+                    arg_list->kids->data[insert_before + i] =
+                        ncc_list_get(to_insert, i);
+                }
+
+                arg_list->num_kids = new_count;
+                arg_list->kids->len = new_count;
+            }
+
+            base_dealloc(to_insert);
         } else {
             // Create new argument list with nullptr(s)
             tnode_t *new_arg_list = synth_nonterminal("argument_expression_list_1");
@@ -1392,6 +1443,9 @@ xform_vargs_call(tree_xform_t *ctx, tnode_t *node)
             }
         }
         node->vargs_done = true;
+        if (has_opaque_kargs) {
+            node->kw_done = true;
+        }
         return nullptr;
     }
 
@@ -1479,6 +1533,7 @@ xform_vargs_call(tree_xform_t *ctx, tnode_t *node)
             tnode_t *nullptr_expr = build_nullptr_expr(line);
             tnode_t *nullptr_assign = wrap_in_expr_hierarchy(nullptr_expr, line);
             add_child(new_arg_list, nullptr_assign);
+            node->kw_done = true;
         }
     }
 

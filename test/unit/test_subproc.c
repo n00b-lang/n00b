@@ -934,10 +934,8 @@ test_pty_spawn_echo(void)
     // "hello\r\n" = 7 bytes.
     n00b_buffer_t *out = n00b_subproc_stdout(&sp);
     assert(out != nullptr);
-    if (out->byte_len > 0) {
-        assert(out->byte_len == 7);
-        assert(memcmp(out->data, "hello\r\n", 7) == 0);
-    }
+    assert(out->byte_len == 7);
+    assert(memcmp(out->data, "hello\r\n", 7) == 0);
 
     n00b_conduit_io_destroy(io);
     n00b_conduit_destroy(c);
@@ -1007,12 +1005,21 @@ test_pty_cat_stdin_inject(void)
 
     // PTY echoes stdin writes back to the read side (line discipline echo).
     // Input "hi\n" → PTY echo "hi\r\n" + cat output "hi\r\n".
-    // Total captured: at least "hi\r\n" (the echo) and possibly
-    // "hi\r\n" again (cat output).  The exact amount depends on
-    // timing, so just verify we got something containing "hi".
+    // We expect at least 4 bytes ("hi\r\n") and the output must
+    // contain the "hi\r\n" pattern from the PTY line discipline.
     n00b_buffer_t *out = n00b_subproc_stdout(&sp);
     assert(out != nullptr);
     assert(out->byte_len >= 4); // At least "hi\r\n"
+
+    // Verify the captured output contains "hi\r\n" (PTY converts \n → \r\n).
+    bool found = false;
+    for (size_t i = 0; i + 3 < out->byte_len; i++) {
+        if (memcmp(out->data + i, "hi\r\n", 4) == 0) {
+            found = true;
+            break;
+        }
+    }
+    assert(found);
 
     n00b_conduit_io_destroy(io);
     n00b_conduit_destroy(c);
@@ -1072,14 +1079,169 @@ test_pty_separate_stderr(void)
     assert(sout != nullptr);
     assert(serr != nullptr);
 
-    // Verify both streams captured data (exact content depends on
-    // shell echo + PTY timing, so we check non-empty).
+    // Verify both streams captured data.
     assert(sout->byte_len > 0);
     assert(serr->byte_len > 0);
+
+    // Verify stdout contains "out_data" (PTY may add \r\n).
+    bool found_out = false;
+    for (size_t i = 0; i + 8 <= sout->byte_len; i++) {
+        if (memcmp(sout->data + i, "out_data", 8) == 0) {
+            found_out = true;
+            break;
+        }
+    }
+    assert(found_out);
+
+    // Verify stderr contains "err_data".
+    bool found_err = false;
+    for (size_t i = 0; i + 8 <= serr->byte_len; i++) {
+        if (memcmp(serr->data + i, "err_data", 8) == 0) {
+            found_err = true;
+            break;
+        }
+    }
+    assert(found_err);
 
     n00b_conduit_io_destroy(io);
     n00b_conduit_destroy(c);
     printf("  [PASS] pty separate stderr\n");
+}
+
+// ============================================================================
+// 26. PTY timeout — verify timeout + kill works through PTY
+// ============================================================================
+
+static void
+test_pty_timeout(void)
+{
+    n00b_conduit_t *c = make_conduit();
+    n00b_conduit_io_backend_t *io = make_io(c);
+
+    n00b_duration_t timeout = {.tv_sec = 0, .tv_nsec = 100000000}; // 100ms
+
+    n00b_subproc_t sp = {};
+    n00b_subproc_init(&sp,
+        .cmd            = n00b_string_from_cstr("/bin/sleep"),
+        .conduit        = c,
+        .io             = io,
+        .pty            = true,
+        .timeout        = &timeout,
+        .timeout_policy = N00B_SUBPROC_TIMEOUT_SIGTERM);
+
+    n00b_array_t(n00b_string_t) args = n00b_array_new(n00b_string_t, 1);
+    n00b_array_set(args, 0, n00b_string_from_cstr("100"));
+    sp.args = &args;
+
+    n00b_result_t(bool) r = n00b_subproc_run(&sp);
+    if (n00b_result_is_err(r)) {
+        printf("  [SKIP] pty timeout (err=%d)\n", n00b_result_get_err(r));
+        n00b_conduit_io_destroy(io);
+        n00b_conduit_destroy(c);
+        return;
+    }
+
+    assert(n00b_subproc_timed_out(&sp));
+    assert(n00b_subproc_exited(&sp));
+
+    n00b_conduit_io_destroy(io);
+    n00b_conduit_destroy(c);
+    printf("  [PASS] pty timeout\n");
+}
+
+// ============================================================================
+// 27. PTY close idempotent — shared owner deduplication doesn't crash
+// ============================================================================
+
+static void
+test_pty_close_idempotent(void)
+{
+    n00b_conduit_t *c = make_conduit();
+    n00b_conduit_io_backend_t *io = make_io(c);
+
+    n00b_subproc_t sp = {};
+    n00b_subproc_init(&sp,
+        .cmd     = n00b_string_from_cstr("/bin/echo"),
+        .conduit = c,
+        .io      = io,
+        .pty     = true,
+        .capture_stdout = true,
+        .merge   = false);
+
+    n00b_array_t(n00b_string_t) args = n00b_array_new(n00b_string_t, 1);
+    n00b_array_set(args, 0, n00b_string_from_cstr("test"));
+    sp.args = &args;
+
+    n00b_result_t(bool) r = n00b_subproc_spawn(&sp);
+    if (n00b_result_is_err(r)) {
+        printf("  [SKIP] pty close idempotent (spawn failed)\n");
+        n00b_conduit_io_destroy(io);
+        n00b_conduit_destroy(c);
+        return;
+    }
+
+    n00b_subproc_wait(&sp);
+    n00b_subproc_close(&sp);
+    n00b_subproc_close(&sp); // Second close should not crash.
+    n00b_subproc_close(&sp); // Third close should not crash.
+
+    n00b_conduit_io_destroy(io);
+    n00b_conduit_destroy(c);
+    printf("  [PASS] pty close idempotent\n");
+}
+
+// ============================================================================
+// 28. PTY with cwd — child runs in specified directory
+// ============================================================================
+
+static void
+test_pty_cwd(void)
+{
+    n00b_conduit_t *c = make_conduit();
+    n00b_conduit_io_backend_t *io = make_io(c);
+
+    n00b_subproc_t sp = {};
+    n00b_subproc_init(&sp,
+        .cmd            = n00b_string_from_cstr("/bin/pwd"),
+        .conduit        = c,
+        .io             = io,
+        .pty            = true,
+        .cwd            = n00b_string_from_cstr("/tmp"),
+        .capture_stdout = true,
+        .merge          = false);
+
+    n00b_result_t(bool) r = n00b_subproc_run(&sp);
+    if (n00b_result_is_err(r)) {
+        printf("  [SKIP] pty cwd (err=%d)\n", n00b_result_get_err(r));
+        n00b_conduit_io_destroy(io);
+        n00b_conduit_destroy(c);
+        return;
+    }
+
+    assert(n00b_result_is_ok(r));
+    assert(n00b_subproc_exited(&sp));
+
+    n00b_result_t(int) ec = n00b_subproc_exit_code(&sp);
+    assert(n00b_result_is_ok(ec));
+    assert(n00b_result_get(ec) == 0);
+
+    // Output should contain "/tmp" or "/private/tmp" (macOS resolves symlink).
+    n00b_buffer_t *out = n00b_subproc_stdout(&sp);
+    assert(out != nullptr);
+    assert(out->byte_len >= 4); // At least "/tmp"
+
+    bool found = false;
+    for (size_t i = 0; i + 4 <= out->byte_len; i++) {
+        if (memcmp(out->data + i, "/tmp", 4) == 0) {
+            found = true;
+            break;
+        }
+    }
+    assert(found);
+
+    n00b_conduit_io_destroy(io);
+    n00b_conduit_destroy(c);
+    printf("  [PASS] pty cwd\n");
 }
 
 // ============================================================================
@@ -1144,6 +1306,12 @@ main(int argc, char *argv[])
     test_pty_cat_stdin_inject();
     fflush(stdout);
     test_pty_separate_stderr();
+    fflush(stdout);
+    test_pty_timeout();
+    fflush(stdout);
+    test_pty_close_idempotent();
+    fflush(stdout);
+    test_pty_cwd();
     fflush(stdout);
 
     printf("All subproc tests passed.\n");
