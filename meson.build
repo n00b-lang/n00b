@@ -225,6 +225,8 @@ if libatomic_dep.found()
   deps = deps + [libatomic_dep]
 endif
 
+mir_proj = subproject('mir')
+mir_dep  = mir_proj.get_variable('mir_dep')
 
 n00b_core = [
     'src/core/init.c',
@@ -466,6 +468,10 @@ n00b_slay = [
     'src/slay/symtab.c',
     'src/slay/annot_walk.c',
     'src/slay/cfg.c',
+    'src/slay/debug.c',
+    'src/slay/c_tokenizer.c',
+    'src/slay/n00b_tokenizer.c',
+    'src/slay/transform.c',
 ]
 
 # ============================================================================
@@ -527,7 +533,7 @@ n00b_vendor_lib = static_library('n00b_vendor',
 n00b = static_library('n00b',
     n00b_dll_src,
     include_directories: incdir,
-    dependencies: deps + [libdl_dep],
+    dependencies: deps + [libdl_dep, mir_dep],
     c_args: exe_c_args,
     link_args: link_args,
     link_whole: [gen_unicode_lib, n00b_vendor_lib],
@@ -914,6 +920,18 @@ c_parse_test = executable('test_c_parse',
 )
 test('c_parse', c_parse_test, suite: 'unit')
 
+c_tokenizer_test = executable('test_c_tokenizer',
+    ['test/unit/test_c_tokenizer.c'],
+    kwargs: test_common_kwargs,
+)
+test('c_tokenizer', c_tokenizer_test, suite: 'unit')
+
+n00b_tokenizer_test = executable('test_n00b_tokenizer',
+    ['test/unit/test_n00b_tokenizer.c'],
+    kwargs: test_common_kwargs,
+)
+test('n00b_tokenizer', n00b_tokenizer_test, suite: 'unit')
+
 cf_label_test = executable('test_cf_label',
     ['test/unit/test_cf_label.c'],
     kwargs: test_common_kwargs,
@@ -935,6 +953,19 @@ typecheck_test = executable('test_typecheck',
     kwargs: test_common_kwargs,
 )
 test('typecheck', typecheck_test, suite: 'unit')
+
+# ============================================================================
+# MIR JIT tests
+# ============================================================================
+
+mir_test = executable('test_mir',
+    ['test/unit/test_mir.c'],
+    include_directories: incdir,
+    c_args: exe_c_args,
+    link_with: [n00b],
+    dependencies: [mir_dep],
+)
+test('mir', mir_test, suite: 'unit')
 
 # ============================================================================
 # Render / layout tests
@@ -1004,6 +1035,13 @@ test('table_stream', table_stream_test, suite: 'unit')
 # Table CLI tool
 table_tool = executable('n00b_table',
     ['src/tools/table.c'],
+    kwargs: test_common_kwargs,
+    install: true,
+)
+
+# N00b dev tool (parse + annotate n00b source files)
+n00b_dev = executable('n00b_dev',
+    ['src/tools/n00b_dev.c'],
     kwargs: test_common_kwargs,
     install: true,
 )
