@@ -442,9 +442,13 @@ fd_owner_do_reads(n00b_conduit_fd_owner_t *owner)
 // Write path (Layer 1)
 // ============================================================================
 
+static void fd_owner_do_writes(n00b_conduit_fd_owner_t *owner);
+
 /**
  * Append a write entry to the tail of the owner's write queue.
- * If the queue was empty, activate write monitoring.
+ * If the queue was empty, activate write monitoring and attempt
+ * an immediate write (kqueue EV_CLEAR may miss the initial
+ * writable edge on an already-writable fd).
  */
 static void
 wq_enqueue(n00b_conduit_fd_owner_t *owner, n00b_conduit_write_entry_t *entry)
@@ -463,6 +467,10 @@ wq_enqueue(n00b_conduit_fd_owner_t *owner, n00b_conduit_write_entry_t *entry)
     bool expected = false;
     if (n00b_atomic_cas(&owner->write_active, &expected, true)) {
         fd_owner_update_io_mask(owner);
+        // Attempt an immediate write — kqueue with EV_CLEAR may not
+        // deliver a writable event if the fd was already writable
+        // before we registered EVFILT_WRITE.
+        fd_owner_do_writes(owner);
     }
 }
 

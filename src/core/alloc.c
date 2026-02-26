@@ -161,11 +161,12 @@ _n00b_alloc_raw(size_t             n,
                     ((void (*)(void *, n00b_vargs_t *, void *))ctor)(
                         r, vargs, ctor_kargs);
                 }
-                else if (tinfo->ctor_takes_kargs && have_vargs) {
+                else if (tinfo->ctor_takes_kargs && !tinfo->ctor_takes_vargs) {
                     // ctor(self, kargs).
-                    // n00b_new_kargs packs: kargs_ptr as sole varg.
-                    void *ctor_kargs = n00b_vargs_next(vargs);
-                    ((void (*)(void *, void *))ctor)(r, ctor_kargs);
+                    // kargs comes from the opaque _kargs parameter.
+                    if (kargs) {
+                        ((void (*)(void *, void *))ctor)(r, kargs);
+                    }
                 }
                 else if (!tinfo->ctor_takes_kargs && !tinfo->ctor_takes_vargs) {
                     // ctor(self) — always dispatched (no data needed).
