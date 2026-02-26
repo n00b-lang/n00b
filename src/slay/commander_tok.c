@@ -213,7 +213,7 @@ cmdr_make_token(const char *value, int64_t tid, int32_t index)
                                       n00b_string_from_cstr(value));
     }
 
-    tok->tid    = (int32_t)tid;
+    tok->tid    = tid;
     tok->index  = index;
     tok->line   = 1;
     tok->column = 1;

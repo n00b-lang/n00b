@@ -428,7 +428,9 @@ n00b_scan_float(n00b_scanner_t *s)
 }
 
 bool
-n00b_scan_number(n00b_scanner_t *s, int32_t int_tid, int32_t float_tid)
+n00b_scan_number(n00b_scanner_t *s,
+                  const char *int_type_name,
+                  const char *float_type_name)
 {
     n00b_codepoint_t cp = n00b_scan_peek(s, 0);
 
@@ -447,7 +449,8 @@ n00b_scan_number(n00b_scanner_t *s, int32_t int_tid, int32_t float_tid)
     n00b_option_t(n00b_string_t) fval = n00b_scan_float(s);
 
     if (n00b_option_is_set(fval)) {
-        n00b_scan_emit(s, float_tid, fval);
+        n00b_scan_emit(s, .token_type = float_type_name,
+                        .contents = fval);
         return true;
     }
 
@@ -464,7 +467,8 @@ n00b_scan_number(n00b_scanner_t *s, int32_t int_tid, int32_t float_tid)
     n00b_option_t(n00b_string_t) ival = n00b_scan_integer(s);
 
     if (n00b_option_is_set(ival)) {
-        n00b_scan_emit(s, int_tid, ival);
+        n00b_scan_emit(s, .token_type = int_type_name,
+                        .contents = ival);
         return true;
     }
 

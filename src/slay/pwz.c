@@ -13,6 +13,7 @@
 #include "internal/slay/grammar_internal.h"
 #include "internal/slay/hashset.h"
 #include "internal/slay/unicode_class.h"
+#include "unicode/encoding.h"
 #include "core/alloc.h"
 #include "core/array.h"
 #include "core/list.h"
@@ -528,10 +529,20 @@ token_matches(n00b_token_info_t *tok, pwz_exp_t *exp)
 
     switch (exp->kind) {
     case PWZ_TOK:
-        return tok->tid == (int32_t)exp->tok.tid;
+        return tok->tid == exp->tok.tid;
 
     case PWZ_CLASS:
-        return n00b_codepoint_matches_class(tok->tid, exp->cls.cc);
+        if (!n00b_option_is_set(tok->value)) {
+            return false;
+        }
+        {
+            n00b_string_t val = n00b_option_get(tok->value);
+            uint32_t      pos = 0;
+            int32_t       cp  = n00b_unicode_utf8_decode(val.data,
+                                                          (uint32_t)val.u8_bytes,
+                                                          &pos);
+            return cp >= 0 && n00b_codepoint_matches_class(cp, exp->cls.cc);
+        }
 
     case PWZ_ANY:
         return true;
@@ -1072,11 +1083,41 @@ convert_exp_to_tree(n00b_pwz_parser_t *p, pwz_exp_t *exp,
     case PWZ_ALT: {
         size_t nalts = n00b_list_len(exp->alt.alts);
 
-        if (nalts > 0) {
-            return convert_exp_to_tree(p, exp->alt.alts.data[nalts - 1], st);
+        if (nalts == 0) {
+            return make_epsilon_node(st->pos);
         }
 
-        return make_epsilon_node(st->pos);
+        if (nalts == 1) {
+            return convert_exp_to_tree(p, exp->alt.alts.data[0], st);
+        }
+
+        // Multiple ambiguous alternatives — convert all and pick the best
+        // using the grammar's disambiguator.
+        n00b_tree_disambig_fn_t disambig
+            = n00b_get_disambiguator(p->grammar);
+
+        n00b_parse_tree_t *best     = NULL;
+        int32_t            best_pos = st->pos;
+
+        for (size_t i = 0; i < nalts; i++) {
+            int32_t            saved_pos = st->pos;
+            n00b_parse_tree_t *candidate
+                = convert_exp_to_tree(p, exp->alt.alts.data[i], st);
+
+            if (!best || disambig(candidate, best) < 0) {
+                best     = candidate;
+                best_pos = st->pos;
+            }
+
+            // Restore position for the next alternative.
+            if (i + 1 < nalts) {
+                st->pos = saved_pos;
+            }
+        }
+
+        st->pos = best_pos;
+
+        return best;
     }
     }
 

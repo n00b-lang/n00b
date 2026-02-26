@@ -1,0 +1,630 @@
+<module> @scope("module") ::= <doc-strings> <eos>* <other-top-stmts>?
+
+# Statements are terminated by newline, semicolon, or implicit end
+# (closing brace, EOF) The lexer's consume() skips whitespace and
+# comments but stops at newlines (except inside literal depth > 0).
+# This is not easily expressible in BNF, so we model <eos> as a token.
+<eos> ::= %NEWLINE | %SEMI
+
+<block-start> ::= %"{" <doc-strings> <eos>*
+<block-end> ::= <eos>* %"}"
+
+<other-top-stmts> ::= <top-level-stmt> (<eos>+ <top-level-stmt>)*
+<top-level-stmt> ::=  <enum-stmt>
+                   | <lock-attr-stmt>
+                   | <if-stmt>
+                   | <for-stmt>
+                   | <while-stmt>
+                   | <typeof-stmt>
+                   | <switch-stmt>
+                   | <func-def>
+                   | <variable-decl>
+                   | <labeled-for>
+                   | <labeled-while>
+                   | <labeled-typeof>
+                   | <labeled-switch>
+                   | <assert-stmt>
+                   | <use-stmt>
+                   | <parameter-block>
+                   | <extern-block>
+                   | <confspec-block>
+                   | <section-stmt>
+                   | <assign-stmt>
+                   | <binop-assign-stmt>
+                   | <expression-stmt>
+                   | <class-decl>
+
+# ============================================================================
+# Bodies and blocks
+# ============================================================================
+
+# A body is a brace-delimited sequence of statements.
+# In the parser, body() expects "{" and consumes it, then parses
+# statements until "}".
+# Bodies always create a nested scope.
+
+<body> @scope("block") ::= <block-start> <body-stmts>? <block-end>
+<body-stmts>           ::= <body-stmt> (<eos>+ <body-stmt>)*
+<body-stmt>            ::= <lock-attr-stmt>
+                         | <if-stmt>
+                         | <for-stmt>
+                         | <while-stmt>
+                         | <typeof-stmt>
+                         | <switch-stmt>
+                         | <continue-stmt>
+                         | <break-stmt>
+                         | <return-stmt>
+                         | <variable-decl> <eos>
+                         | <labeled-for>
+                         | <labeled-while>
+                         | <labeled-typeof>
+                         | <labeled-switch>
+                         | <assert-stmt>
+                         | <use-stmt>
+                         | <section-stmt>
+                         | <assign-stmt>
+                         | <binop-assign-stmt>
+                         | <expression-stmt>
+
+# ============================================================================
+# All body statements can also appear in case bodies, but
+# case bodies do not need to end in a block
+# ============================================================================
+
+<case-body> @scope("block") ::= %":" <body-stmt> (<eos>+ <body-stmt>)* <eos>*
+
+# ============================================================================
+# Doc strings
+# ============================================================================
+<doc-strings> ::= (<short-doc> <long-doc>?)?
+<short-doc>   ::= %STRING_LIT
+<long-doc>    ::= %STRING_LIT
+
+# ============================================================================
+# Labeled loops
+# ============================================================================
+
+<label> ::= %IDENTIFIER %":"
+
+<labeled-for> ::= <label> <for-stmt>
+<labeled-while> ::= <label> <while-stmt>
+<labeled-typeof> ::= <label> <typeof-stmt>
+<labeled-switch> ::= <label> <switch-stmt>
+
+# ============================================================================
+# Conditionals
+# ============================================================================
+
+<if-stmt> @scope("if") @branch($1, $2, $3) ::= %"if" <expression> <body> <elif-chain>
+
+<elif-chain> ::= <elif-clause>* <else-clause>?
+
+<elif-clause> @branch($1, $2) ::= %"elif" <expression> <body>
+<else-clause> ::= %"else" <body>
+
+# ============================================================================
+# For loop
+# ============================================================================
+#
+# for x in expr { ... }
+# for x, y in expr { ... }
+# for x in expr to expr { ... }       (range via "in")
+# for x from expr to expr { ... }     (range via "from")
+
+
+# $0=for, $1=for-var-list, $2=in, $3=for-in-target, $4=body
+<for-stmt> @scope("for") @loop($3, $4) @declares($1) ::= %"for" <for-var-list> %"in" <for-in-target> <body>
+                           | %"for" <for-var-list> %"from" <range> <body>
+
+<for-var-list>  ::= %IDENTIFIER (%"," %IDENTIFIER)*
+<for-in-target> ::= <expression> (<range-sep> <expression>)?
+
+# ============================================================================
+# While loop
+# ============================================================================
+
+# $0=while, $1=expression (condition), $2=body
+<while-stmt> @scope("while") @loop($1, $2) ::= %"while" <expression> <body>
+
+# ============================================================================
+# Member chain (dot-separated identifiers, no postfix ops)
+# ============================================================================
+
+<member-chain> ::= <member-chain> %"." %IDENTIFIER
+                 | %IDENTIFIER
+
+
+# ============================================================================
+# Typeof dispatch
+# ============================================================================
+
+# $0=typeof, $1=member-chain, $2={, $3=typeof-cases, $4=}
+<typeof-stmt> @scope("typeof") @switch($1, $3) ::= %"typeof" <member-chain> <block-start> <typeof-cases> <block-end>
+
+<typeof-cases> ::= (%"case" <typeof-case-block>)+ <case-else>?
+
+<typeof-case-block> ::= <type-spec-list> <case-body>
+                       | <type-spec-list> <body>
+
+<type-spec-list> ::= <type-spec> (%"," <type-spec>)*
+
+# ============================================================================
+# Switch statement
+# ============================================================================
+
+# $0=switch, $1=expression, $2={, $3=switch-cases, $4=}
+<switch-stmt> @scope("switch") @switch($1, $3) ::= %"switch" <expression> <block-start> <switch-cases> <block-end>
+
+<switch-cases> ::= (%"case" <switch-case-block>)+ <case-else>?
+
+<switch-case-block> ::= <case-expr-list> <case-body>
+                       | <case-expr-list> <body>
+
+<case-expr-list> ::= <case-expr-item> (%"," <case-expr-item>)*
+                   | <case-expr-item>
+
+<case-expr-item> ::= <expression> <range-sep> <expression>
+                   | <expression>
+
+<case-else> ::= %"else" <case-body>
+              | %"else" <body>
+
+# ============================================================================
+# Range
+# ============================================================================
+
+<range> ::= <expression> <range-sep> <expression>
+
+<range-sep> ::= %"to" | %"," | %":"
+
+# ============================================================================
+# Break / continue / return
+# ============================================================================
+
+<break-stmt> @jump("break") ::= %"break" %IDENTIFIER?
+<continue-stmt> @jump("continue") ::= %"continue" %IDENTIFIER?
+<return-stmt> @jump("return") ::= %"return" <expression>?
+
+# ============================================================================
+# Assert
+# ============================================================================
+
+<assert-stmt> ::= %"assert" <expression>
+
+# ============================================================================
+# Use
+# ============================================================================
+
+<use-stmt> ::= %"use" <member-chain> (%"from" %STRING_LIT)?
+
+# ============================================================================
+# Lock attribute (~)
+# ============================================================================
+
+<lock-attr-stmt> ::= %"~" <assign-or-expr>
+
+<assign-or-expr> ::= <expression> <assign-op> <expression>
+                   | <expression> <binop-assign-op> <expression>
+                   | <expression>
+
+# ============================================================================
+# Variable declarations
+# ============================================================================
+
+# Qualifiers: var, let, const, global — in any combination (semantics checked later)
+<variable-decl> ::= <decl-qualifiers> <sym-decl-list>
+
+<decl-qualifiers> ::= <decl-qualifiers> <decl-qualifier>
+                    | <decl-qualifier>
+
+<decl-qualifier> ::= %"var" | %"let" | %"const" | %"global"
+
+<sym-decl-list> ::= <sym-decl> %"," <sym-decl-list>
+                  | <sym-decl>
+
+# Typed: $0=id-list (name), $1=":", $2=type-spec, $3=optional-initializer
+# Untyped: $0=id-list (name), $1=optional-initializer
+<sym-decl> @declares($0, $2) ::= <id-list> %":" <type-spec> <optional-initializer>
+<sym-decl> @declares($0) ::= <id-list> <optional-initializer>
+
+<id-list> ::= %IDENTIFIER %"," <id-list>
+            | %IDENTIFIER
+
+<optional-initializer> ::= <assign-op> <expression>
+                          | ""
+
+<assign-op> ::= %":" | %"="
+
+# ============================================================================
+# Function definition
+# ============================================================================
+
+# $0=func-mods, $1=func-kw, $2=IDENTIFIER (name), $3=formal-list,
+# $4=opt-return-type, $5=body
+<func-def> @scope("function", $2) @declares($2) ::= <func-mod>* <func-kind> %IDENTIFIER <param-decl> <return-type>? <body>
+
+<func-kind> ::= %"func" | %"method"
+<func-mod> ::= %"private" | %"once"
+<func-kw> ::= %"func"
+
+<param-decl> ::= %"(" <formals>? %")"
+
+<formals> ::= <formal-param> (%"," <formal-param>)* (%"," <varargs-spec>)
+            | <varargs-spec>
+
+<varargs-spec> ::= <varargs-param> %"," <kw-list>
+               | <kw-list> %","?
+               | <varargs-param>?
+
+# Typed: $0=id-list (name), $1=":", $2=type-spec
+# Untyped: $0=id-list (name)
+<formal-param> @declares($0, $2) ::= <id-list> %":" <type-spec>
+<formal-param> @declares($0) ::= <id-list>
+
+# Typed: $0="*", $1=IDENTIFIER (name), $2=":", $3=type-spec
+# Untyped: $0="*", $1=IDENTIFIER (name)
+<varargs-param> @declares($1, $3) ::= %"*" %IDENTIFIER %":" <type-spec>
+<varargs-param> @declares($1) ::= %"*" %IDENTIFIER
+
+<kw-list> ::= %"**" <kw-one> (%"," <kw-one>)*
+<kw-one> @declares($0, $2) ::= %IDENTIFIER %":" <type-spec> %"=" <literal>
+<kw-one> @declares($0) ::= %IDENTIFIER %"=" <literal>
+
+<return-type> ::= %"->" <type-spec>
+
+<opt-return-type> ::= <return-type>?
+
+# ============================================================================
+# Enum
+# ============================================================================
+
+<enum-stmt> @scope("enum", $1) @type($1) ::= <enum-prefix> %IDENTIFIER? <block-start> <enum-items> <block-end>
+
+<enum-prefix> ::= %"private" %"enum"
+                | %"global" %"enum"
+                | %"enum" %"global"
+                | %"enum" %"private"
+                | %"enum"
+
+<enum-items> ::= <enum-item> (%"," <enum-item>)* %","?
+
+# $0=IDENTIFIER (member name)
+<enum-item> @declares($0) ::= %IDENTIFIER <enum-value>
+<enum-item> @declares($0) ::= %IDENTIFIER
+
+<enum-value> ::= %":" <simple-lit>
+               | %"=" <simple-lit>
+
+# ============================================================================
+# Extern block
+# ============================================================================
+
+<extern-block> @scope("extern", $1) @declares($1) ::= %"extern" %IDENTIFIER <extern-signature> <extern-body>
+
+<extern-signature> ::= %"(" <extern-params> %")" %"->" <extern-type-id>
+                      | %"(" %")" %"->" <extern-type-id>
+
+<extern-params> ::= <extern-type-id> %"," <extern-params>
+                  | <extern-type-id>
+
+<extern-type-id> ::= %IDENTIFIER
+
+<extern-body> ::= <block-start> <extern-stmts>? <block-end>
+<extern-stmts> ::= <extern-stmt> (<eos>+ <extern-stmt>)*
+<extern-stmt> ::= <extern-local>
+                | <extern-dll>
+                | <extern-box>
+                | <extern-pure>
+                | <extern-holds>
+                | <extern-allocs>
+
+<extern-local> @declares($2) ::= %"local" %":" %IDENTIFIER %"(" <local-formals> %")" <opt-return-type>
+                 | %"local" %":" %IDENTIFIER %"(" %")" <opt-return-type>
+
+<local-formals> ::= <formal-param> %"," <local-formals>
+                  | <formal-param> %"," <varargs-param>
+                  | <formal-param>
+                  | <varargs-param>
+
+<extern-dll> ::= %"dll" %":" %STRING_LIT
+
+<extern-box> ::= %"box_values" %":" <bool-lit>
+
+<extern-pure> ::= %"pure" %":" <bool-lit>
+
+<extern-holds> ::= %"holds" %":" <id-comma-list>
+
+<extern-allocs> ::= %"allocs" %":" <alloc-target-list>
+
+<id-comma-list> ::= %IDENTIFIER (%"," %IDENTIFIER)* %","?
+
+<alloc-target-list> ::= <alloc-target> (%"," <alloc-target>)* %","?
+
+<alloc-target> ::= %IDENTIFIER | %"return"
+
+# ============================================================================
+# Parameter block
+# ============================================================================
+
+# $0=parameter, $1=param-target (name), $2=param-body
+<parameter-block> @scope("parameter", $1) @declares($1) ::= %"parameter" <param-target> <param-body>
+<parameter-block> @declares($1) ::= %"parameter" <param-target>
+
+<param-target> ::= %"var" %IDENTIFIER
+                 | <member-chain>
+
+<param-body> ::= <block-start> <param-props> <block-end>
+<param-props> ::= <param-prop> (<eos>+ <param-prop>)*
+
+<param-prop> ::= %IDENTIFIER %":" <param-propname>
+<param-propname> ::= %"callback" | %"default" | %"validator"
+
+# ============================================================================
+# Config spec
+# ============================================================================
+
+<confspec-block> @scope("confspec") ::= %"confspec" <block-start> <confspec-sections> <block-end>
+
+<confspec-sections> ::= (<eos>* <section-type> <section-body>)*
+
+# named: $0=named, $1=IDENTIFIER (section name), $2=IDENTIFIER (type name)
+# singleton: $0=singleton, $1=IDENTIFIER (section name), $2=IDENTIFIER (type name)
+# root: $0=root, $1=IDENTIFIER (type name)
+<section-type> @declares($1) ::= %"named" %IDENTIFIER %IDENTIFIER
+<section-type> @declares($1) ::= %"singleton" %IDENTIFIER %IDENTIFIER
+<section-type> ::= %"root" %IDENTIFIER
+
+# root doesn't take a section name, just a type name.
+# named/singleton take: section_name type_name
+
+<section-body> @scope("section") ::= <block-start> <section-items>? <block-end>
+
+<section-items> ::= <section-item> (<eos>+ <section-item>)*
+<section-item> ::= <field-spec> | <section-property>
+
+<field-spec> @scope("field", $1) @declares($1) ::= %"field" %IDENTIFIER <field-body>
+<field-body> ::= <block-start> <eos>* <field-props>? <block-end>
+
+<field-props> ::= <field-prop> (<eos>+ <field-prop>)*
+<field-prop> ::= <field-type> | <field-default> | <field-require> | <field-choice>
+               | <field-exclusions> | <field-lock> | <field-validator> | <field-hidden> | <field-range>
+
+<field-type>        ::= %"type" %":" <type-spec>
+                     |  %"type" %":" %"->" %IDENTIFIER
+<field-default>     ::= %"default" %":" %IDENTIFIER
+                     |  %"default" %":" <literal>
+<field-require>     ::= %"require" %":" %IDENTIFIER
+                     |  %"require" %":" <bool-lit>
+<field-choice>      ::= %"choice" %":"  %IDENTIFIER
+<field-exclusions>  ::= %"exclusions" %":" %IDENTIFIER (%"," %IDENTIFIER)*
+<field-lock>        ::= %"lock" %":" %IDENTIFIER
+                     |  %"lock" %":" <bool-lit>
+<field-validator>   ::= %"validator" %":" %IDENTIFIER
+                     |  %"validator" %":" <callback-lit>
+<field-hidden>      ::= %"hidden" %":" %IDENTIFIER
+                     | %"hidden" %":" <bool-lit>
+<field-range>       ::= %"range" %":" <field-range-item> %":" <field-range-item>
+<field-range-item>  ::= %IDENTIFIER
+                      | %INT_LIT
+                      | %HEX_LIT
+
+<section-property> ::= %IDENTIFIER %":" <literal>
+                     | %IDENTIFIER %":" <id-comma-list>
+
+# Section property names: user_def_ok, allow/allowed, require/required,
+# hide/hidden, validator
+
+# ============================================================================
+# Section statement (confspec inline section)
+# ============================================================================
+
+# $0=IDENTIFIER (section type), $1=section-name, $2=body
+<section-stmt> @scope("section", $0) ::= %IDENTIFIER <section-name> <body>
+
+<section-name> ::= %IDENTIFIER
+                 | %STRING_LIT
+                 | ""
+
+# ============================================================================
+# Assignment statements
+# ============================================================================
+
+# $0=expression (lhs), $1=assign-op, $2=expression (rhs),
+<assign-stmt> @assigns($0, $2) ::= <expression> <assign-op> <expression>
+
+# $0=expression (lhs), $1=binop-assign-op, $2=expression (rhs)
+<binop-assign-stmt> @assigns($0, $2) ::= <expression> <binop-assign-op> <expression>
+
+<binop-assign-op> ::= %"+=" | %"-=" | %"*=" | %"/=" | %"%="
+                    | %"&=" | %"|=" | %"^="
+                    | %"<<=" | %">>="
+
+<expression-stmt> ::= <expression>
+
+# ============================================================================
+# Expressions
+# ============================================================================
+
+# Operator precedence (lowest to highest):
+#   or              (left-assoc)
+#   and             (left-assoc)
+#   !=              (left-assoc)
+#   |               (left-assoc)
+#   ^               (left-assoc)
+#   &               (left-assoc)
+#   == / is         (left-assoc)
+#   >=              (left-assoc)
+#   <=              (left-assoc)
+#   >               (left-assoc)
+#   <               (left-assoc)
+#   +               (left-assoc)
+#   -               (left-assoc)
+#   %               (left-assoc)
+#   *               (left-assoc)
+#   /               (left-assoc)
+#   >>              (left-assoc)
+#   <<              (left-assoc)
+#   ! (unary)       (prefix)
+#   postfix: . [] () !
+#
+# Note: "is" lexes as the same token as "==" (n00b_tt_cmp).
+#       "True"/"False" lex as the same tokens as "true"/"false".
+#       "infinity"/"NaN" lex as FLOAT_LIT.
+
+<expression> ::= (<expression> %"or")? <and-expr>
+<and-expr> ::= (<and-expr> %"and")? <ne-expr>
+<ne-expr> ::= (<ne-expr> %"!=")? <bitor-expr>
+<bitor-expr> ::= (<bitor-expr> %"|")? <bitxor-expr>
+<bitxor-expr> ::= (<bitxor-expr> %"^")? <bitand-expr>
+<bitand-expr> ::= (<bitand-expr> %"&")? <eq-expr>
+<eq-expr> ::= (<eq-expr> %"==")? <gte-expr>
+<gte-expr> ::= (<gte-expr> %">=")? <lte-expr>
+<lte-expr> ::= (<lte-expr> %"<=")? <gt-expr>
+<gt-expr> ::= (<gt-expr> %">")? <lt-expr>
+<lt-expr> ::= (<lt-expr> %"<")? <plus-expr>
+<plus-expr>  ::= (<plus-expr> %"+")? <minus-expr>
+<minus-expr> ::= (<minus-expr> %"-")? <mod-expr>
+<mod-expr> ::= (<mod-expr> %"%")? <mul-expr>
+<mul-expr> ::= (<mul-expr> %"*")? <div-expr>
+<div-expr> ::= (<div-expr> %"/")? <shr-expr>
+<shr-expr> ::= (<shr-expr> %">>")? <shl-expr>
+<shl-expr> ::= (<shl-expr> %"<<")? <unary-expr>
+
+# Unary operators are parsed in expression_start() before the
+# precedence chain. Their right-operand binding:
+#   unary !  binds at <expression> level (lowest = right-to-left)
+#   unary -  binds at <minus-expr> level
+#   unary +  binds at <lt-expr> level
+#
+# In the grammar below, we place unary ops inside <unary-expr> which
+# sits just above <postfix-expr>.
+
+<unary-expr> ::= %"!" <expression>
+               | %"-" <unary-expr>
+               | %"+" <unary-expr>
+               | <postfix-expr>
+
+<postfix-expr> ::= <postfix-expr> %"." %IDENTIFIER
+                 | <postfix-expr> %"[" <index-contents> %"]"
+                 | <postfix-expr> %"(" <call-args> %")"
+                 | <primary>
+                 | %"!"
+
+<index-contents> ::= <expression> <range-sep> <expression>
+                   | <expression> <range-sep>
+                   | %":" <expression>
+                   | %":"
+                   | <expression>
+
+<call-args> ::= <expression> (%"," <expression>)* (%"," <call-kw-arg>)*
+              | <call-kw-arg> (%"," <call-kw-arg>)*
+
+<call-kw-arg> ::= %IDENTIFIER %"=" <expression>
+
+# ============================================================================
+# Primary expressions
+# ============================================================================
+
+<primary> ::= <simple-lit>
+            | <type-spec>
+            | <callback-lit>
+            | <list-lit>
+            | <dict-or-set-lit>
+            | <tuple-or-paren>
+            | <identifier-expr>
+
+<identifier-expr> ::= %IDENTIFIER
+
+# ============================================================================
+# Literals
+# ============================================================================
+
+<simple-lit> ::= %INT_LIT
+               | %HEX_LIT
+               | %FLOAT_LIT
+               | %STRING_LIT
+               | %CHAR_LIT
+               | %"true"
+               | %"false"
+               | %"nil"
+               | %EMBED
+
+<bool-lit> ::= %"true" | %"false"
+
+<literal> ::= <simple-lit>
+            | <type-spec>
+            | <callback-lit>
+            | <list-lit>
+            | <dict-or-set-lit>
+            | <tuple-or-paren>
+
+<callback-lit> ::= %"func" %IDENTIFIER <type-spec>?
+
+# ============================================================================
+# Collection literals
+# ============================================================================
+
+<list-lit> ::= %"[" <expr-comma-list> %"]"
+             | %"[" %"]"
+
+<dict-or-set-lit> ::= %"{" <dict-entries> %"}"
+                    | %"{" <set-entries> %"}"
+                    | %"{" %"}"
+
+<dict-entries> ::= <expression> %":" <expression> %"," <dict-entries>
+                 | <expression> %":" <expression>
+
+<set-entries> ::= <expression> %"," <set-entries>
+                | <expression>
+
+<tuple-or-paren> ::= %"(" <expression> %"," <expr-comma-list> %")"
+                   | %"(" <expression> %")"
+
+<expr-comma-list> ::= <expression> %"," <expr-comma-list>
+                    | <expression>
+
+# ============================================================================
+# Type specifications
+# ============================================================================
+
+# Types are introduced with backtick (type variables), or as named
+# types (identifier), or parameterized types (identifier[...]), or
+# function types ((...) -> type).
+
+<type-spec> ::= <one-tspec>
+
+<one-tspec> ::= <tspec-tvar>
+              | %IDENTIFIER
+              | <tspec-parameterized>
+              | <tspec-func>
+
+<tspec-tvar> ::= %"`" %IDENTIFIER
+
+<tspec-parameterized> ::= %"ref" %"[" <tspec-list> %"]"
+                       | <member-chain> (%"[" <tspec-list> %"]")?
+
+<tspec-list> ::= <one-tspec> %"," <tspec-list>
+              | <one-tspec>
+
+<tspec-func> ::= %"(" <tspec-func-params> %")" <opt-return-type>
+               | %"(" %")" <opt-return-type>
+
+<tspec-func-params> ::= <one-tspec> (%"," <tspec-func-params>)* ("," <tspec-vargs>)? ("," <tspec-kargs>)?
+                       | <tspec-vargs> ("," <tspec-kargs>)?
+                       | <tspec-kargs>
+
+<tspec-field> ::= %IDENTIFIER %":" <one-tspec>
+
+<tspec-vargs> ::= %"*" <one-tspec>
+<tspec-kargs> ::= %"**" <tspec-field> (%"," <tspec-field>)*
+
+
+# ============================================================================
+# Class declaration
+# ============================================================================
+<class-decl> @scope("class", $2) @type($2) @declares($2) ::= <class-qualifiers>? %"class" %IDENTIFIER <class-body>
+<class-qualifiers> ::= %"atomic"?
+<class-body> ::= <block-start> <class-decl-spec-list> <block-end>
+<class-decl-spec-list> ::= (<class-decl-one> (<eos>+ <class-decl-one>)*)?
+<class-decl-one> @declares($0, $2) ::= %IDENTIFIER %":" <type-spec>
+<class-decl-one> @declares($0) ::= %IDENTIFIER

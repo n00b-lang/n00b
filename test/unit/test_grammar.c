@@ -78,7 +78,7 @@ test_terminal_register(void)
 
     assert(id1 != id2);
     assert(id1 == id3); // same name → same ID
-    assert(id1 > N00B_TOK_START_ID);
+    assert(n00b_token_id_is_fixed_text(id1));
 
     n00b_grammar_free(g);
     printf("  [PASS] terminal_register\n");
@@ -94,10 +94,16 @@ test_terminal_single_char(void)
     n00b_grammar_t *g = n00b_grammar_new();
 
     int64_t id = n00b_register_terminal(g, *r"+");
-    assert(id == (int64_t)'+');
+    // Single-char terminals now get hash-based IDs like all others.
+    assert(n00b_token_id_is_fixed_text(id));
 
     int64_t id2 = n00b_register_terminal(g, *r"*");
-    assert(id2 == (int64_t)'*');
+    assert(n00b_token_id_is_fixed_text(id2));
+    assert(id != id2);
+
+    // Re-registering gives the same ID.
+    int64_t id3 = n00b_register_terminal(g, *r"+");
+    assert(id3 == id);
 
     n00b_grammar_free(g);
     printf("  [PASS] terminal_single_char\n");
@@ -305,8 +311,8 @@ test_first_set(void)
 
     // term's FIRST set should contain NUM
     assert(term->first_set != NULL);
-    // FIRST sets encode terminal IDs as (void *)(uintptr_t)(id + 0x100)
-    void *encoded = (void *)(uintptr_t)(num_id + 0x100);
+    // FIRST sets encode terminal IDs as (void *)(uintptr_t)((uint64_t)id + 0x100)
+    void *encoded = (void *)(uintptr_t)((uint64_t)num_id + 0x100);
     assert(n00b_hashset_contains(term->first_set, encoded));
 
     n00b_grammar_free(g);

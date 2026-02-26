@@ -24,6 +24,10 @@ typedef struct n00b_earley_item_t  n00b_earley_item_t;
 typedef struct n00b_earley_state_t n00b_earley_state_t;
 typedef struct n00b_hashset_t      n00b_hashset_t;
 typedef struct n00b_annotation_t   n00b_annotation_t;
+typedef struct n00b_scanner_t      n00b_scanner_t;
+
+/** @brief Tokenizer callback function pointer (also defined in scanner.h). */
+typedef bool (*n00b_scan_cb_t)(n00b_scanner_t *s);
 
 // ============================================================================
 // Constants

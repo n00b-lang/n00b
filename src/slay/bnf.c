@@ -8,6 +8,7 @@
 
 #include "slay/bnf.h"
 #include "slay/pwz.h"
+#include "slay/n00b_tokenizer.h"
 #include "internal/slay/grammar_internal.h"
 #include "strings/string_ops.h"
 #include "parsers/scanner.h"
@@ -194,27 +195,28 @@ bnf_join_continuations(n00b_string_t input)
 // BNF Tokenizer
 // ============================================================================
 
-// Token IDs for the BNF meta-grammar.
+// Token IDs for the BNF meta-grammar (internal, local base).
 enum {
-    BNF_TOK_LANGLE     = N00B_TOK_START_ID + 1,   // <
-    BNF_TOK_RANGLE     = N00B_TOK_START_ID + 2,   // >
-    BNF_TOK_ASSIGN     = N00B_TOK_START_ID + 3,   // ::=
-    BNF_TOK_PIPE       = N00B_TOK_START_ID + 4,   // |
-    BNF_TOK_NEWLINE    = N00B_TOK_START_ID + 5,   // \n
-    BNF_TOK_NAME       = N00B_TOK_START_ID + 6,   // rule name
-    BNF_TOK_LITERAL    = N00B_TOK_START_ID + 7,   // quoted literal
-    BNF_TOK_CLASS      = N00B_TOK_START_ID + 8,   // __CLASS
-    BNF_TOK_TOKEN_TYPE = N00B_TOK_START_ID + 9,   // %NAME (token type)
-    BNF_TOK_TOKEN_LIT  = N00B_TOK_START_ID + 10,  // %"..." (token literal)
-    BNF_TOK_EMPTY_LIT  = N00B_TOK_START_ID + 11,  // "" (empty literal)
-    BNF_TOK_QUESTION   = N00B_TOK_START_ID + 12,  // ?
-    BNF_TOK_STAR       = N00B_TOK_START_ID + 13,  // *
-    BNF_TOK_PLUS_OP    = N00B_TOK_START_ID + 14,  // +
-    BNF_TOK_LPAREN     = N00B_TOK_START_ID + 15,  // (
-    BNF_TOK_RPAREN     = N00B_TOK_START_ID + 16,  // )
-    BNF_TOK_AT         = N00B_TOK_START_ID + 17,  // @
-    BNF_TOK_DOLLAR     = N00B_TOK_START_ID + 18,  // $N (digit in value)
-    BNF_TOK_COMMA      = N00B_TOK_START_ID + 19,  // ,
+    BNF_TOK_BASE       = 100,
+    BNF_TOK_LANGLE     = BNF_TOK_BASE + 1,   // <
+    BNF_TOK_RANGLE     = BNF_TOK_BASE + 2,   // >
+    BNF_TOK_ASSIGN     = BNF_TOK_BASE + 3,   // ::=
+    BNF_TOK_PIPE       = BNF_TOK_BASE + 4,   // |
+    BNF_TOK_NEWLINE    = BNF_TOK_BASE + 5,   // \n
+    BNF_TOK_NAME       = BNF_TOK_BASE + 6,   // rule name
+    BNF_TOK_LITERAL    = BNF_TOK_BASE + 7,   // quoted literal
+    BNF_TOK_CLASS      = BNF_TOK_BASE + 8,   // __CLASS
+    BNF_TOK_TOKEN_TYPE = BNF_TOK_BASE + 9,   // %NAME (token type)
+    BNF_TOK_TOKEN_LIT  = BNF_TOK_BASE + 10,  // %"..." (token literal)
+    BNF_TOK_EMPTY_LIT  = BNF_TOK_BASE + 11,  // "" (empty literal)
+    BNF_TOK_QUESTION   = BNF_TOK_BASE + 12,  // ?
+    BNF_TOK_STAR       = BNF_TOK_BASE + 13,  // *
+    BNF_TOK_PLUS_OP    = BNF_TOK_BASE + 14,  // +
+    BNF_TOK_LPAREN     = BNF_TOK_BASE + 15,  // (
+    BNF_TOK_RPAREN     = BNF_TOK_BASE + 16,  // )
+    BNF_TOK_AT         = BNF_TOK_BASE + 17,  // @
+    BNF_TOK_DOLLAR     = BNF_TOK_BASE + 18,  // $N (digit in value)
+    BNF_TOK_COMMA      = BNF_TOK_BASE + 19,  // ,
 };
 
 // ============================================================================
@@ -251,7 +253,7 @@ bnf_scan(n00b_scanner_t *s)
         }
 
         n00b_scan_advance(s);
-        n00b_scan_emit_marked(s, BNF_TOK_NEWLINE);
+        n00b_scan_emit(s, .tid = BNF_TOK_NEWLINE);
         return true;
     }
 
@@ -260,7 +262,7 @@ bnf_scan(n00b_scanner_t *s)
         n00b_scan_mark(s);
 
         if (n00b_scan_match_str(s, "::=")) {
-            n00b_scan_emit_marked(s, BNF_TOK_ASSIGN);
+            n00b_scan_emit(s, .tid = BNF_TOK_ASSIGN);
             return true;
         }
 
@@ -273,7 +275,7 @@ bnf_scan(n00b_scanner_t *s)
     if (ch == '<') {
         n00b_scan_mark(s);
         n00b_scan_advance(s);
-        n00b_scan_emit_marked(s, BNF_TOK_LANGLE);
+        n00b_scan_emit(s, .tid = BNF_TOK_LANGLE);
         *in_angle = true;
         return true;
     }
@@ -281,7 +283,7 @@ bnf_scan(n00b_scanner_t *s)
     if (ch == '>') {
         n00b_scan_mark(s);
         n00b_scan_advance(s);
-        n00b_scan_emit_marked(s, BNF_TOK_RANGLE);
+        n00b_scan_emit(s, .tid = BNF_TOK_RANGLE);
         *in_angle = false;
         return true;
     }
@@ -290,7 +292,7 @@ bnf_scan(n00b_scanner_t *s)
     if (ch == '|') {
         n00b_scan_mark(s);
         n00b_scan_advance(s);
-        n00b_scan_emit_marked(s, BNF_TOK_PIPE);
+        n00b_scan_emit(s, .tid = BNF_TOK_PIPE);
         return true;
     }
 
@@ -322,8 +324,8 @@ bnf_scan(n00b_scanner_t *s)
                 n00b_scan_advance(s);  // skip closing quote
             }
 
-            n00b_scan_emit(s, BNF_TOK_TOKEN_LIT,
-                           n00b_option_set(n00b_string_t, val));
+            n00b_scan_emit(s, .tid = BNF_TOK_TOKEN_LIT,
+                           .contents = n00b_option_set(n00b_string_t, val));
             return true;
         }
 
@@ -344,8 +346,8 @@ bnf_scan(n00b_scanner_t *s)
             }
 
             n00b_string_t val = n00b_scan_extract(s);
-            n00b_scan_emit(s, BNF_TOK_TOKEN_TYPE,
-                           n00b_option_set(n00b_string_t, val));
+            n00b_scan_emit(s, .tid = BNF_TOK_TOKEN_TYPE,
+                           .contents = n00b_option_set(n00b_string_t, val));
             return true;
         }
 
@@ -375,8 +377,9 @@ bnf_scan(n00b_scanner_t *s)
             n00b_scan_advance(s);  // skip closing quote
         }
 
-        int32_t tid = (val.u8_bytes == 0) ? BNF_TOK_EMPTY_LIT : BNF_TOK_LITERAL;
-        n00b_scan_emit(s, tid, n00b_option_set(n00b_string_t, val));
+        int64_t tid = (val.u8_bytes == 0) ? BNF_TOK_EMPTY_LIT : BNF_TOK_LITERAL;
+        n00b_scan_emit(s, .tid = tid,
+                       .contents = n00b_option_set(n00b_string_t, val));
         return true;
     }
 
@@ -401,8 +404,8 @@ bnf_scan(n00b_scanner_t *s)
             }
 
             n00b_string_t val = n00b_scan_extract(s);
-            n00b_scan_emit(s, BNF_TOK_CLASS,
-                           n00b_option_set(n00b_string_t, val));
+            n00b_scan_emit(s, .tid = BNF_TOK_CLASS,
+                           .contents = n00b_option_set(n00b_string_t, val));
             return true;
         }
     }
@@ -425,8 +428,8 @@ bnf_scan(n00b_scanner_t *s)
         }
 
         n00b_string_t val = n00b_scan_extract(s);
-        n00b_scan_emit(s, BNF_TOK_NAME,
-                       n00b_option_set(n00b_string_t, val));
+        n00b_scan_emit(s, .tid = BNF_TOK_NAME,
+                       .contents = n00b_option_set(n00b_string_t, val));
         return true;
     }
 
@@ -435,13 +438,13 @@ bnf_scan(n00b_scanner_t *s)
     n00b_scan_advance(s);
 
     switch (ch) {
-    case '?': n00b_scan_emit_marked(s, BNF_TOK_QUESTION); return true;
-    case '*': n00b_scan_emit_marked(s, BNF_TOK_STAR);     return true;
-    case '+': n00b_scan_emit_marked(s, BNF_TOK_PLUS_OP);  return true;
-    case '(': n00b_scan_emit_marked(s, BNF_TOK_LPAREN);   return true;
-    case ')': n00b_scan_emit_marked(s, BNF_TOK_RPAREN);   return true;
-    case '@': n00b_scan_emit_marked(s, BNF_TOK_AT);       return true;
-    case ',': n00b_scan_emit_marked(s, BNF_TOK_COMMA);    return true;
+    case '?': n00b_scan_emit(s, .tid = BNF_TOK_QUESTION); return true;
+    case '*': n00b_scan_emit(s, .tid = BNF_TOK_STAR);     return true;
+    case '+': n00b_scan_emit(s, .tid = BNF_TOK_PLUS_OP);  return true;
+    case '(': n00b_scan_emit(s, .tid = BNF_TOK_LPAREN);   return true;
+    case ')': n00b_scan_emit(s, .tid = BNF_TOK_RPAREN);   return true;
+    case '@': n00b_scan_emit(s, .tid = BNF_TOK_AT);       return true;
+    case ',': n00b_scan_emit(s, .tid = BNF_TOK_COMMA);    return true;
     default:  break;
     }
 
@@ -463,8 +466,8 @@ bnf_scan(n00b_scanner_t *s)
             }
 
             n00b_string_t val = n00b_scan_extract(s);
-            n00b_scan_emit(s, BNF_TOK_DOLLAR,
-                           n00b_option_set(n00b_string_t, val));
+            n00b_scan_emit(s, .tid = BNF_TOK_DOLLAR,
+                           .contents = n00b_option_set(n00b_string_t, val));
             return true;
         }
     }
@@ -1649,34 +1652,8 @@ reserved_to_class(n00b_string_t name, n00b_char_class_t *cc_out)
     return false;
 }
 
-// ============================================================================
-// Token type name -> terminal ID mapping (for %NAME syntax)
-// ============================================================================
-
-static int64_t
-token_type_to_id(n00b_string_t name)
-{
-    struct {
-        const char *lit;
-        int64_t     id;
-    } map[] = {
-        {"IDENTIFIER",   N00B_TOK_IDENTIFIER   },
-        {"TYPEDEF_NAME", N00B_TOK_TYPEDEF_NAME  },
-        {"INTEGER",      N00B_TOK_INTEGER       },
-        {"FLOAT",        N00B_TOK_FLOAT         },
-        {"CHAR",         N00B_TOK_CHAR_LIT      },
-        {"STRING",       N00B_TOK_STRING_LIT    },
-        {NULL,           0                     },
-    };
-
-    for (int i = 0; map[i].lit; i++) {
-        if (str_eq_lit(name, map[i].lit)) {
-            return map[i].id;
-        }
-    }
-
-    return 0;
-}
+// token_type_to_id removed — literal type IDs are now dynamic.
+// Use n00b_register_literal_type(g, name) instead.
 
 // ============================================================================
 // Convert walk results into grammar rules
@@ -1710,11 +1687,21 @@ resolve_term_to_matches(n00b_grammar_t *user_g,
         const char *p = val;
 
         while (*p) {
-            int32_t cp = utf8_decode(&p);
+            const char *start = p;
+            int32_t     cp    = utf8_decode(&p);
 
             if (cp < 0) {
                 break;
             }
+
+            // Hash the UTF-8 bytes of this codepoint to get the terminal ID.
+            size_t  cp_len = (size_t)(p - start);
+            int64_t tid    = n00b_token_id_from_text(start, cp_len);
+
+            // Register it as a terminal so valid_tokens and terminal_by_id
+            // are populated.
+            n00b_string_t cp_str = n00b_string_from_raw(start, (int64_t)cp_len);
+            n00b_register_terminal(user_g, cp_str);
 
             if (n >= cap) {
                 int old_cap = cap;
@@ -1728,7 +1715,7 @@ resolve_term_to_matches(n00b_grammar_t *user_g,
 
             items[n++] = (n00b_match_t){
                 .kind        = N00B_MATCH_TERMINAL,
-                .terminal_id = cp,
+                .terminal_id = tid,
             };
         }
 
@@ -1776,24 +1763,24 @@ resolve_term_to_matches(n00b_grammar_t *user_g,
         break;
     }
     case 'T': {
-        int64_t tok_id = token_type_to_id(val_s);
+        // Register the literal type name (e.g. "IDENTIFIER", "INTEGER")
+        // and get back its small sequential ID.
+        int64_t tok_id = n00b_register_literal_type(user_g, val_s);
 
-        if (tok_id) {
-            if (n >= cap) {
-                int old_cap = cap;
-                cap = cap ? cap * 2 : 8;
-                n00b_match_t *new_items = n00b_alloc_array(n00b_match_t, (size_t)cap);
-                if (items && old_cap > 0)
-                    memcpy(new_items, items, (size_t)old_cap * sizeof(n00b_match_t));
-                if (items) n00b_free(items);
-                items = new_items;
-            }
-
-            items[n++] = (n00b_match_t){
-                .kind        = N00B_MATCH_TERMINAL,
-                .terminal_id = tok_id,
-            };
+        if (n >= cap) {
+            int old_cap = cap;
+            cap = cap ? cap * 2 : 8;
+            n00b_match_t *new_items = n00b_alloc_array(n00b_match_t, (size_t)cap);
+            if (items && old_cap > 0)
+                memcpy(new_items, items, (size_t)old_cap * sizeof(n00b_match_t));
+            if (items) n00b_free(items);
+            items = new_items;
         }
+
+        items[n++] = (n00b_match_t){
+            .kind        = N00B_MATCH_TERMINAL,
+            .terminal_id = tok_id,
+        };
 
         break;
     }

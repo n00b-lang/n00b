@@ -2,6 +2,7 @@
 
 #include "parsers/scanner.h"
 #include "parsers/token_stream.h"
+#include "internal/slay/grammar_internal.h"
 #include <assert.h>
 #include <string.h>
 
@@ -155,6 +156,11 @@ n00b_scanner_new(n00b_buffer_t  *buf,
     s->user_state = state;
     s->grammar   = grammar;
     s->at_eof    = false;
+
+    // Cache the tokenizer in the grammar so template parsing can reuse it.
+    if (grammar && !grammar->tokenize_cb) {
+        grammar->tokenize_cb = cb;
+    }
 
     // Mark defaults to start of input.
     s->mark      = 0;
@@ -579,11 +585,11 @@ n00b_scan_mark_len(n00b_scanner_t *s)
 // Token emission
 // ============================================================================
 
-void
-n00b_scan_emit(n00b_scanner_t *s, int32_t tid, n00b_option_t(n00b_string_t) value)
+// Internal: emit a fully-resolved token into the stream.
+static void
+scan_emit_internal(n00b_scanner_t *s, int64_t resolved_tid,
+                   n00b_option_t(n00b_string_t) value)
 {
-    assert(s->stream);
-
     n00b_token_stream_t *ts = s->stream;
 
     // Grow token array if needed.
@@ -604,7 +610,7 @@ n00b_scan_emit(n00b_scanner_t *s, int32_t tid, n00b_option_t(n00b_string_t) valu
     n00b_token_info_t *tok = n00b_alloc(n00b_token_info_t);
     memset(tok, 0, sizeof(*tok));
 
-    tok->tid             = tid;
+    tok->tid             = resolved_tid;
     tok->value           = value;
     tok->file            = s->file;
     tok->line            = s->mark_line;
@@ -625,12 +631,83 @@ n00b_scan_emit(n00b_scanner_t *s, int32_t tid, n00b_option_t(n00b_string_t) valu
     s->mark_col  = s->column;
 }
 
-void
-n00b_scan_emit_marked(n00b_scanner_t *s, int32_t tid)
+n00b_token_err_t
+n00b_scan_emit(n00b_scanner_t *s)
+    _kargs
 {
-    n00b_string_t val = n00b_scan_extract(s);
+    n00b_option_t(n00b_string_t) contents;
+    bool                         use_mark   = true;
+    const char                  *token_type = nullptr;
+    int64_t                      tid        = 0;
+}
+{
+    assert(s->stream);
 
-    n00b_scan_emit(s, tid, n00b_option_set(n00b_string_t, val));
+    // 1. Get token text.
+    n00b_option_t(n00b_string_t) value = n00b_option_none(n00b_string_t);
+    n00b_string_t text = {0};
+    bool have_text = false;
+
+    if (n00b_option_is_set(contents)) {
+        text = n00b_option_get(contents);
+        value = contents;
+        have_text = true;
+    }
+    else if (use_mark && s->cursor > s->mark) {
+        text = n00b_scan_extract(s);
+        value = n00b_option_set(n00b_string_t, text);
+        have_text = true;
+    }
+
+    // 2. Determine token ID.
+    int64_t resolved_tid;
+
+    if (tid != 0) {
+        // Explicit ID provided — use directly.
+        resolved_tid = tid;
+    }
+    else if (token_type) {
+        // Named literal type: look up in grammar's literal_type_map.
+        if (!s->grammar || !s->grammar->literal_type_map) {
+            // No grammar — hash the type name as fallback ID.
+            resolved_tid = n00b_token_id_from_text(token_type,
+                                                    strlen(token_type));
+        }
+        else {
+            bool  found = false;
+            void *val   = _n00b_dict_untyped_get(s->grammar->literal_type_map,
+                                                  (void *)token_type, &found);
+
+            if (!found) {
+                return N00B_TOK_ERR_BAD_TYPE_NAME;
+            }
+
+            resolved_tid = (int64_t)(intptr_t)val;
+        }
+    }
+    else {
+        // Fixed-text terminal: hash text and optionally validate.
+        if (!have_text) {
+            return N00B_TOK_ERR_NO_TEXT;
+        }
+
+        resolved_tid = n00b_token_id_from_text(text.data, text.u8_bytes);
+
+        // Validate against grammar if present.
+        if (s->grammar && s->grammar->valid_tokens) {
+            bool  found = false;
+            _n00b_dict_untyped_get(s->grammar->valid_tokens,
+                                    (void *)(intptr_t)resolved_tid, &found);
+
+            if (!found) {
+                return N00B_TOK_ERR_NOT_IN_GRAMMAR;
+            }
+        }
+    }
+
+    // 3. Emit.
+    scan_emit_internal(s, resolved_tid, value);
+    return N00B_TOK_OK;
 }
 
 // ============================================================================
@@ -807,30 +884,15 @@ n00b_scan_skip_block_comment(n00b_scanner_t *s,
 // Grammar integration
 // ============================================================================
 
-int64_t
-n00b_scan_terminal_id(n00b_scanner_t *s, const char *name)
+bool
+n00b_scan_token_valid(n00b_scanner_t *s, int64_t tid)
 {
-    if (!s->grammar) {
-        return N00B_TOK_OTHER;
+    if (!s->grammar || !s->grammar->valid_tokens) {
+        return false;
     }
 
-    // Lazily create the terminal ID dict.
-    if (!s->terminal_ids) {
-        s->terminal_ids = n00b_alloc(n00b_dict_untyped_t);
-        n00b_dict_untyped_init(s->terminal_ids, .skip_obj_hash = true);
-    }
-
-    // Look up in cache.
-    bool found;
-    void *val = n00b_dict_untyped_get(s->terminal_ids, (void *)name, &found);
-
-    if (found) {
-        return (int64_t)(intptr_t)val;
-    }
-
-    // Not cached yet. For now, return N00B_TOK_OTHER since the grammar
-    // API doesn't yet expose a public name→id function.
-    // When grammar_get_terminal_by_name() becomes available, populate
-    // the cache here.
-    return N00B_TOK_OTHER;
+    bool found = false;
+    _n00b_dict_untyped_get(s->grammar->valid_tokens,
+                            (void *)(intptr_t)tid, &found);
+    return found;
 }

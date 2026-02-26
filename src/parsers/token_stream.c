@@ -413,14 +413,16 @@ cp_scan_cb(n00b_scanner_t *s)
         return true;
     }
 
+    uint32_t cp_byte_len = st->byte_pos - start_pos;
+
     n00b_token_info_t *tok = n00b_alloc(n00b_token_info_t);
-    tok->tid    = (int32_t)cp;
+    tok->tid    = n00b_token_id_from_text(st->data + start_pos,
+                                            (size_t)cp_byte_len);
     tok->index  = ts->next_index++;
     tok->line   = st->line;
     tok->column = st->column;
 
     // Set value to the one-codepoint string.
-    uint32_t cp_byte_len = st->byte_pos - start_pos;
     n00b_string_t val = n00b_string_from_raw(st->data + start_pos,
                                                (int64_t)cp_byte_len);
     tok->value = n00b_option_set(n00b_string_t, val);

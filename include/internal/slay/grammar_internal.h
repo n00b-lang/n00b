@@ -7,6 +7,7 @@
  */
 
 #include "slay/grammar.h"
+#include "slay/parse_tree.h"
 #include "internal/slay/hashset.h"
 #include "core/list.h"
 #include "core/dict_untyped.h"
@@ -87,7 +88,7 @@ typedef struct {
 } n00b_lr0_state_t;
 
 typedef struct {
-    int32_t symbol;
+    int64_t symbol;
     int32_t dest_state;
 } n00b_lr0_goto_t;
 
@@ -101,6 +102,16 @@ struct n00b_grammar_t {
     n00b_list_t(n00b_nonterm_t)    nt_list;
     n00b_dict_untyped_t           *nt_map;
     n00b_dict_untyped_t           *terminal_map;
+
+    /** Maps literal type name (e.g. "IDENTIFIER") → sequential int64_t ID. */
+    n00b_dict_untyped_t           *literal_type_map;
+    /** Set of all valid token IDs (both hashed and sequential). Built at finalize. */
+    n00b_dict_untyped_t           *valid_tokens;
+    /** Reverse lookup: hashed/sequential ID → index in named_terms. */
+    n00b_dict_untyped_t           *terminal_by_id;
+    /** Counter for the next literal type sequential ID (starts at 0). */
+    int64_t                        next_literal_type_id;
+
     int32_t                        default_start;
     uint32_t                       max_penalty;
     bool                           error_rules;
@@ -111,7 +122,9 @@ struct n00b_grammar_t {
     int                            suspend_penalty_hiding;
     bool                           suspend_group_hiding;
     n00b_string_t                  tokenizer_name;
+    n00b_scan_cb_t                 tokenize_cb;
     n00b_walk_action_t             default_action;
+    n00b_tree_disambig_fn_t        disambiguator;
 
     uint64_t *left_corner_sets;
     int32_t   lc_words_per_nt;
@@ -148,10 +161,24 @@ n00b_get_nonterm(n00b_grammar_t *g, int64_t id)
 static inline n00b_terminal_t *
 n00b_get_terminal(n00b_grammar_t *g, int64_t id)
 {
-    int64_t ix = id - N00B_TOK_START_ID - 1;
+    if (!g->terminal_by_id) {
+        return NULL;
+    }
+
+    bool  found = false;
+    void *val   = _n00b_dict_untyped_get(g->terminal_by_id,
+                                          (void *)(intptr_t)id, &found);
+
+    if (!found) {
+        return NULL;
+    }
+
+    int64_t ix = (int64_t)(intptr_t)val;
+
     if (ix < 0 || (size_t)ix >= n00b_list_len(g->named_terms)) {
         return NULL;
     }
+
     return &g->named_terms.data[ix];
 }
 
@@ -203,4 +230,11 @@ static inline bool
 n00b_hide_penalties(n00b_grammar_t *g)
 {
     return g->hide_penalty_rewrites && !g->suspend_penalty_hiding;
+}
+
+static inline n00b_tree_disambig_fn_t
+n00b_get_disambiguator(n00b_grammar_t *g)
+{
+    return g->disambiguator ? g->disambiguator
+                            : n00b_parse_tree_default_disambig;
 }

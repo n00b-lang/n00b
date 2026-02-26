@@ -22,7 +22,7 @@ make_token(int64_t tid, const char *text, int32_t index)
 {
     n00b_token_info_t *t = n00b_alloc(n00b_token_info_t);
 
-    t->tid   = (int32_t)tid;
+    t->tid   = tid;
     t->index = index;
     t->line  = 1;
 

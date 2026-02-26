@@ -203,7 +203,9 @@ chars_action(n00b_nt_node_t *pn, void *children, void *thunk)
         // chars -> __JSON_STR chars
         n00b_token_info_t *tok  = (n00b_token_info_t *)kids[0];
         json_value_t      *rest = (json_value_t *)kids[1];
-        char               c    = tok ? (char)tok->tid : '?';
+        char               c    = (tok && n00b_option_is_set(tok->value))
+                                      ? n00b_option_get(tok->value).data[0]
+                                      : '?';
 
         const char *rest_str = (rest && rest->type == JSON_STRING)
                                    ? rest->string
@@ -224,7 +226,9 @@ chars_action(n00b_nt_node_t *pn, void *children, void *thunk)
     // chars -> "\\" __PRINTABLE chars
     n00b_token_info_t *escaped = (n00b_token_info_t *)kids[1];
     json_value_t      *rest    = (json_value_t *)kids[2];
-    char               c       = escaped ? (char)escaped->tid : '?';
+    char               c       = (escaped && n00b_option_is_set(escaped->value))
+                                      ? n00b_option_get(escaped->value).data[0]
+                                      : '?';
 
     char actual;
     switch (c) {
@@ -503,10 +507,9 @@ char_scan(n00b_scanner_t *s)
         return false;
     }
 
-    n00b_codepoint_t cp = n00b_scan_peek(s, 0);
     n00b_scan_mark(s);
     n00b_scan_advance(s);
-    n00b_scan_emit(s, (int32_t)cp, n00b_option_none(n00b_string_t));
+    n00b_scan_emit(s);
     return true;
 }
 
