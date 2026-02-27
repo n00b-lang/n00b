@@ -53,9 +53,9 @@ test_put_get(void)
     n00b_dict_put(&dict, k, v);
 
     bool     found;
-    void    *ptr = n00b_dict_get(&dict, k, &found);
+    uint64_t val = n00b_dict_get(&dict, k, &found);
     assert(found);
-    assert(*(uint64_t *)ptr == 100);
+    assert(val == 100);
     assert(n00b_dict_internal_len((_n00b_dict_internal_t *)&dict) == 1);
 
     printf("  [PASS] put_get\n");
@@ -81,9 +81,9 @@ test_overwrite(void)
     assert(*(uint64_t *)prev == 20);
 
     bool     found;
-    void    *ptr = n00b_dict_get(&dict, k, &found);
+    uint64_t val = n00b_dict_get(&dict, k, &found);
     assert(found);
-    assert(*(uint64_t *)ptr == 20);
+    assert(val == 20);
 
     printf("  [PASS] overwrite\n");
 }
@@ -101,10 +101,10 @@ test_not_found(void)
     uint64_t k1 = 1, v1 = 10, k999 = 999;
     n00b_dict_put(&dict, k1, v1);
 
-    bool  found;
-    void *ptr = n00b_dict_get(&dict, k999, &found);
+    bool     found;
+    uint64_t val = n00b_dict_get(&dict, k999, &found);
     assert(!found);
-    (void)ptr;
+    (void)val;
 
     printf("  [PASS] not_found\n");
 }
@@ -154,10 +154,10 @@ test_add_existing(void)
     assert(!added);
 
     // Value should still be the original.
-    bool  found;
-    void *ptr = n00b_dict_get(&dict, k, &found);
+    bool     found;
+    uint64_t val = n00b_dict_get(&dict, k, &found);
     assert(found);
-    assert(*(uint64_t *)ptr == 10);
+    assert(val == 10);
 
     printf("  [PASS] add_existing\n");
 }
@@ -202,10 +202,10 @@ test_growth(void)
     assert(n00b_dict_internal_len((_n00b_dict_internal_t *)&dict) == 200);
 
     for (uint64_t i = 1; i <= 200; i++) {
-        bool  found;
-        void *ptr = n00b_dict_get(&dict, i, &found);
+        bool     found;
+        uint64_t val = n00b_dict_get(&dict, i, &found);
         assert(found);
-        assert(*(uint64_t *)ptr == i * 10);
+        assert(val == i * 10);
     }
 
     printf("  [PASS] growth\n");
@@ -228,23 +228,23 @@ test_string_keys(void)
     n00b_dict_put(&dict, key2, v2);
     n00b_dict_put(&dict, key3, v3);
 
-    bool  found;
-    void *ptr;
+    bool     found;
+    uint64_t val;
 
-    ptr = n00b_dict_get(&dict, key1, &found);
+    val = n00b_dict_get(&dict, key1, &found);
     assert(found);
-    assert(*(uint64_t *)ptr == 1);
+    assert(val == 1);
 
-    ptr = n00b_dict_get(&dict, key2, &found);
+    val = n00b_dict_get(&dict, key2, &found);
     assert(found);
-    assert(*(uint64_t *)ptr == 2);
+    assert(val == 2);
 
-    ptr = n00b_dict_get(&dict, key3, &found);
+    val = n00b_dict_get(&dict, key3, &found);
     assert(found);
-    assert(*(uint64_t *)ptr == 3);
+    assert(val == 3);
 
     char *missing = "missing";
-    ptr = n00b_dict_get(&dict, missing, &found);
+    val = n00b_dict_get(&dict, missing, &found);
     assert(!found);
 
     printf("  [PASS] string_keys\n");
@@ -268,14 +268,13 @@ test_large_values(void)
     assert(n00b_dict_internal_len((_n00b_dict_internal_t *)&dict) == 50);
 
     for (uint64_t i = 1; i <= 50; i++) {
-        bool  found;
-        void *ptr = n00b_dict_get(&dict, i, &found);
+        bool        found;
+        big_value_t bv = n00b_dict_get(&dict, i, &found);
         assert(found);
-        big_value_t *bv = (big_value_t *)ptr;
-        assert(bv->a == i);
-        assert(bv->b == i * 2);
-        assert(bv->c == i * 3);
-        assert(bv->d == i * 4);
+        assert(bv.a == i);
+        assert(bv.b == i * 2);
+        assert(bv.c == i * 3);
+        assert(bv.d == i * 4);
     }
 
     printf("  [PASS] large_values\n");
@@ -303,11 +302,11 @@ test_mixed_operations(void)
     assert(n00b_dict_internal_len((_n00b_dict_internal_t *)&dict) == 5);
 
     for (uint64_t i = 1; i <= 10; i++) {
-        bool  found;
-        void *ptr = n00b_dict_get(&dict, i, &found);
+        bool     found;
+        uint64_t val = n00b_dict_get(&dict, i, &found);
         if (i % 2 == 1) {
             assert(found);
-            assert(*(uint64_t *)ptr == i * 100);
+            assert(val == i * 100);
         }
         else {
             assert(!found);
@@ -321,14 +320,14 @@ test_mixed_operations(void)
     assert(n00b_dict_internal_len((_n00b_dict_internal_t *)&dict) == 10);
 
     for (uint64_t i = 1; i <= 10; i++) {
-        bool  found;
-        void *ptr = n00b_dict_get(&dict, i, &found);
+        bool     found;
+        uint64_t val = n00b_dict_get(&dict, i, &found);
         assert(found);
         if (i % 2 == 1) {
-            assert(*(uint64_t *)ptr == i * 100);
+            assert(val == i * 100);
         }
         else {
-            assert(*(uint64_t *)ptr == i * 200);
+            assert(val == i * 200);
         }
     }
 
@@ -353,10 +352,10 @@ test_remove_reinsert(void)
     n00b_dict_put(&dict, k, v2);
     assert(n00b_dict_internal_len((_n00b_dict_internal_t *)&dict) == 1);
 
-    bool  found;
-    void *ptr = n00b_dict_get(&dict, k, &found);
+    bool     found;
+    uint64_t val = n00b_dict_get(&dict, k, &found);
     assert(found);
-    assert(*(uint64_t *)ptr == 200);
+    assert(val == 200);
 
     printf("  [PASS] remove_reinsert\n");
 }
@@ -377,19 +376,19 @@ test_cas_insert(void)
                                      .null_old_means_absence = true);
     assert(ok);
 
-    bool  found;
-    void *ptr = n00b_dict_get(&dict, key, &found);
+    bool     found;
+    uint64_t val = n00b_dict_get(&dict, key, &found);
     assert(found);
-    assert(*(uint64_t *)ptr == 100);
+    assert(val == 100);
 
     uint64_t new_val2 = 200;
     ok = n00b_dict_cas(&dict, key, nullptr, &new_val2,
                        .null_old_means_absence = true);
     assert(!ok);
 
-    ptr = n00b_dict_get(&dict, key, &found);
+    val = n00b_dict_get(&dict, key, &found);
     assert(found);
-    assert(*(uint64_t *)ptr == 100);
+    assert(val == 100);
 
     printf("  [PASS] cas_insert\n");
 }
@@ -409,10 +408,10 @@ test_cas_update(void)
     bool     ok      = n00b_dict_cas(&dict, k, &old_ptr, &new_val);
     assert(ok);
 
-    bool  found;
-    void *ptr = n00b_dict_get(&dict, k, &found);
+    bool     found;
+    uint64_t val = n00b_dict_get(&dict, k, &found);
     assert(found);
-    assert(*(uint64_t *)ptr == 200);
+    assert(val == 200);
 
     uint64_t wrong_old = 100;
     old_ptr            = &wrong_old;
@@ -420,9 +419,9 @@ test_cas_update(void)
     ok = n00b_dict_cas(&dict, k, &old_ptr, &new_val2);
     assert(!ok);
 
-    ptr = n00b_dict_get(&dict, k, &found);
+    val = n00b_dict_get(&dict, k, &found);
     assert(found);
-    assert(*(uint64_t *)ptr == 200);
+    assert(val == 200);
 
     printf("  [PASS] cas_update\n");
 }

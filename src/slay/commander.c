@@ -599,7 +599,7 @@ cmdr_make_error_result(const char *msg)
 
     n00b_list_push(r->errors, n00b_string_from_cstr(msg));
 
-    n00b_dict_untyped_init(&r->flags, .hash = n00b_hash_cstring);
+    n00b_dict_init(&r->flags, .hash = n00b_string_hash, .skip_obj_hash = true);
 
     return r;
 }
@@ -770,11 +770,13 @@ cmdr_extract_result(n00b_cmdr_t *c, n00b_parse_tree_t *tree,
             }
 
             // Store under long name
-            n00b_dict_untyped_put(&r->flags, flag.name.data, v);
+            n00b_string_t *name_key = &flag.name;
+            n00b_dict_put(&r->flags, name_key, v);
 
             // Also store under alias
             if (flag.has_short) {
-                n00b_dict_untyped_put(&r->flags, flag.short_name.data, v);
+                n00b_string_t *short_key = &flag.short_name;
+                n00b_dict_put(&r->flags, short_key, v);
             }
 
             continue;
@@ -838,7 +840,7 @@ n00b_cmdr_parse(n00b_cmdr_t *c, int argc, const char **argv)
     r->args   = n00b_list_new_private(n00b_cmdr_arg_t);
     r->errors = n00b_list_new_private(n00b_string_t);
 
-    n00b_dict_untyped_init(&r->flags, .hash = n00b_hash_cstring);
+    n00b_dict_init(&r->flags, .hash = n00b_string_hash, .skip_obj_hash = true);
 
     if (!n00b_parse_result_ok(pr)) {
         r->ok = false;
@@ -903,7 +905,7 @@ n00b_cmdr_parse_string(n00b_cmdr_t *c, n00b_string_t cmdline)
     r->args   = n00b_list_new_private(n00b_cmdr_arg_t);
     r->errors = n00b_list_new_private(n00b_string_t);
 
-    n00b_dict_untyped_init(&r->flags, .hash = n00b_hash_cstring);
+    n00b_dict_init(&r->flags, .hash = n00b_string_hash, .skip_obj_hash = true);
 
     if (!n00b_parse_result_ok(pr)) {
         r->ok = false;
@@ -955,14 +957,8 @@ n00b_cmdr_flag_present(n00b_cmdr_result_t *r, n00b_string_t flag)
         return false;
     }
 
-    // Need null-terminated key for dict lookup
-    char *key = n00b_alloc_array(char, flag.u8_bytes + 1);
-    memcpy(key, flag.data, flag.u8_bytes);
-
-    bool result = n00b_dict_untyped_contains(&r->flags, key);
-    n00b_free(key);
-
-    return result;
+    n00b_string_t *key = &flag;
+    return n00b_dict_contains(&r->flags, key);
 }
 
 n00b_cmdr_val_t *
@@ -972,14 +968,9 @@ n00b_cmdr_flag_get(n00b_cmdr_result_t *r, n00b_string_t flag)
         return NULL;
     }
 
-    char *key = n00b_alloc_array(char, flag.u8_bytes + 1);
-    memcpy(key, flag.data, flag.u8_bytes);
-
-    bool found = false;
-    n00b_cmdr_val_t *v = (n00b_cmdr_val_t *)n00b_dict_untyped_get(&r->flags,
-                                                                     key,
-                                                                     &found);
-    n00b_free(key);
+    n00b_string_t *key   = &flag;
+    bool           found = false;
+    n00b_cmdr_val_t *v   = n00b_dict_get(&r->flags, key, &found);
 
     return found ? v : NULL;
 }

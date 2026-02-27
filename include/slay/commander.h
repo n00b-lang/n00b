@@ -24,7 +24,7 @@
 #include "slay/n00b_parse.h"
 #include "slay/parse_tree.h"
 #include "parsers/token_stream.h"
-#include "core/dict_untyped.h"
+#include "core/dict.h"
 #include "core/list.h"
 
 // ============================================================================
@@ -83,6 +83,7 @@ typedef struct n00b_cmdr_arg {
 } n00b_cmdr_arg_t;
 
 n00b_list_decl(n00b_cmdr_arg_t);
+n00b_dict_decl(n00b_string_t *, n00b_cmdr_val_t *);
 
 /**
  * @brief Specification for a single flag (e.g., --verbose, -o).
@@ -158,7 +159,7 @@ typedef struct n00b_cmdr {
  */
 typedef struct n00b_cmdr_result {
     n00b_string_t                command;  /**< Matched subcommand name, or empty. */
-    n00b_dict_untyped_t          flags;    /**< Parsed flags: string key -> n00b_cmdr_val_t *. */
+    n00b_dict_t(n00b_string_t *, n00b_cmdr_val_t *) flags; /**< Parsed flags: string key -> n00b_cmdr_val_t *. */
     n00b_list_t(n00b_cmdr_arg_t) args;     /**< Positional arguments. */
     n00b_list_t(n00b_string_t)   errors;   /**< Error messages (on failure). */
     bool                         ok;       /**< True if parsing succeeded. */

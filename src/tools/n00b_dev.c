@@ -141,8 +141,8 @@ dump_tokens(n00b_token_stream_t *ts)
             tlen = val.u8_bytes;
         }
 
-        printf("%4d  tid=%-10d L%u:C%u  \"%.*s\"\n",
-               index++, tok->tid, tok->line, tok->column,
+        printf("%4d  tid=%-20lld L%u:C%u  \"%.*s\"\n",
+               index++, (long long)tok->tid, tok->line, tok->column,
                (int)tlen, text);
     }
 }

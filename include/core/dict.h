@@ -110,7 +110,12 @@ typedef struct _n00b_dict_internal_t {
 #define n00b_dict_init(dict, ...) _n00b_wrap_dict_call(init, dict __VA_OPT__(, __VA_ARGS__))
 
 #define n00b_dict_put(dict, key, value) _n00b_wrap_dict_call(put, dict, &(key), &(value))
-#define n00b_dict_get(dict, key, found) _n00b_wrap_dict_call(get, dict, &(key), found)
+#define n00b_dict_get(dict, key, found)                                                        \
+    ({                                                                                         \
+        void *_dg_vp = _n00b_wrap_dict_call(get, dict, &(key), found);                         \
+        _n00b_ditem_type(dict, values) _dg_zero = (_n00b_ditem_type(dict, values)){0};         \
+        _dg_vp ? *(_n00b_ditem_type(dict, values) *)_dg_vp : _dg_zero;                        \
+    })
 #define n00b_dict_add(dict, key, value) _n00b_wrap_dict_call(add, dict, &(key), &(value))
 #define n00b_dict_remove(dict, key)     _n00b_wrap_dict_call(remove, dict, &(key))
 #define n00b_dict_cas(dict, key, old, new, ...)                                                \

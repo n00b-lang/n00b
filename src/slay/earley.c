@@ -414,33 +414,54 @@ add_item(n00b_earley_parser_t  *p,
 // LR(0) GOTO lookup
 // ============================================================================
 
-static inline int32_t
+// Symbol encoding — must match grammar.c exactly.
+//
+// NT        -> nt_id (always >= 0 and small)
+// TERMINAL  -> terminal_id with bit 62 set (avoids collision with small NTs)
+// GROUP     -> -(1000+gid)
+// ANY       -> INT64_MIN + 1
+// EMPTY     -> INT64_MIN + 2
+// CLASS     -> INT64_MIN + 100 + class_id
+// SET       -> INT64_MIN + 3
+//
+// The INT64_MIN + N sentinels are chosen to never collide with hash-based
+// terminal IDs (which have bit 63 set, making them negative but > INT64_MIN + 1000).
+#define LR0_SYM_ANY    (INT64_MIN + 1)
+#define LR0_SYM_EMPTY  (INT64_MIN + 2)
+#define LR0_SYM_SET    (INT64_MIN + 3)
+
+static inline int64_t
 lr0_symbol_of_match(n00b_match_t *m)
 {
     switch (m->kind) {
     case N00B_MATCH_NT:
-        return (int32_t)m->nt_id;
+        return m->nt_id;
     case N00B_MATCH_TERMINAL:
-        return (int32_t)m->terminal_id + 0x10000;
+        // Set bit 62 to distinguish from NT ids when terminal_id >= 0.
+        // Hash-based IDs (bit 63 set) already can't collide with NTs.
+        if (m->terminal_id >= 0) {
+            return m->terminal_id | (1LL << 62);
+        }
+        return m->terminal_id;
     case N00B_MATCH_GROUP: {
         n00b_rule_group_t *grp = (n00b_rule_group_t *)m->group;
-        return -(1000 + grp->gid);
+        return -(1000LL + grp->gid);
     }
     case N00B_MATCH_ANY:
-        return -1;
+        return LR0_SYM_ANY;
     case N00B_MATCH_EMPTY:
-        return -2;
+        return LR0_SYM_EMPTY;
     case N00B_MATCH_CLASS:
-        return -(100 + (int32_t)m->char_class);
+        return INT64_MIN + 100LL + (int64_t)m->char_class;
     case N00B_MATCH_SET:
-        return -3;
+        return LR0_SYM_SET;
     }
 
-    return -999;
+    return INT64_MIN;
 }
 
 static inline int32_t
-lr0_goto_lookup(n00b_grammar_t *g, int32_t state_id, int32_t symbol)
+lr0_goto_lookup(n00b_grammar_t *g, int32_t state_id, int64_t symbol)
 {
     if (state_id < 0 || state_id >= g->lr0_state_count) {
         return -1;
@@ -559,7 +580,7 @@ terminal_scan(n00b_earley_parser_t *p,
 
     if (old->lr0_state_id >= 0) {
         n00b_match_t *m   = get_ei_match(start, old->cursor);
-        int32_t       sym = lr0_symbol_of_match(m);
+        int64_t       sym = lr0_symbol_of_match(m);
 
         new_ei->lr0_state_id = lr0_goto_lookup(p->grammar, old->lr0_state_id, sym);
     }
