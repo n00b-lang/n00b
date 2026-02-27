@@ -2,6 +2,10 @@
 
 #define XXH_INLINE_ALL
 #define N00B_HASH_INTERNAL
+#define XXH_VECTOR XXH_SCALAR
+#define XXH_FORCE_SCALAR
+
+/* ncc-bootstrap cannot parse clang's x86 intrinsic headers from xxhash. */
 
 #include "n00b.h"
 

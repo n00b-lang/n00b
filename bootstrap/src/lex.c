@@ -269,6 +269,9 @@ static inline bool
 is_keyword(lex_t *state, tok_t *tok)
 {
     char *s = extract(state->input, tok);
+    if (!strncmp(s, "__builtin_", 10)) {
+        return true;
+    }
     return bsearch(&s, c_keywords, NUM_KEYWORDS, sizeof(char *), keyword_cmp) != nullptr;
 }
 

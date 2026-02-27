@@ -1,4 +1,6 @@
 #define XXH_INLINE_ALL
+#define XXH_VECTOR XXH_SCALAR
+#define XXH_FORCE_SCALAR
 #include "strings/rich_desc.h"
 #include "strings/text_style.h"
 #include "core/dict_untyped.h"

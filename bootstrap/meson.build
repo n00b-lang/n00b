@@ -132,6 +132,7 @@ bootstrap_tests = {
   'passthrough':  ['compile_run',  test_dir / 't_passthrough.c'],
   'preprocess':   ['preprocess',   test_dir / 't_preprocess.c'],
   'typeid':       ['compile_run',  test_dir / 't_typeid.c'],
+  'builtin_offsetof': ['compile_run', test_dir / 't_builtin_offsetof.c'],
   'constexpr':    ['compile_run',  test_dir / 't_constexpr.c'],
   'kw_args':      ['compile_run',  test_dir / 't_kw_args.c'],
   'rstr':         ['compile_run',  test_dir / 't_rstr.c'],

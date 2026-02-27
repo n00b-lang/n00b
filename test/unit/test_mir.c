@@ -59,11 +59,13 @@ test_mir_interp_add(void)
 
     // Interpret: add(3, 4) should yield 7.
     MIR_val_t result;
-    MIR_interp(ctx, func, &result, 2, (int64_t)3, (int64_t)4);
+    MIR_val_t args1[2] = {{.i = 3}, {.i = 4}};
+    MIR_interp_arr(ctx, func, &result, 2, args1);
     assert(result.i == 7);
 
     // Interpret: add(-10, 25) should yield 15.
-    MIR_interp(ctx, func, &result, 2, (int64_t)-10, (int64_t)25);
+    MIR_val_t args2[2] = {{.i = -10}, {.i = 25}};
+    MIR_interp_arr(ctx, func, &result, 2, args2);
     assert(result.i == 15);
 
     MIR_finish(ctx);

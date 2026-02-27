@@ -631,6 +631,12 @@ dict_test = executable('test_dict',
 )
 test('dict', dict_test, suite: 'unit')
 
+dict_typed_test = executable('test_dict_typed',
+    ['test/unit/test_dict_typed.c'],
+    kwargs: test_common_kwargs,
+)
+test('dict_typed', dict_typed_test, suite: 'unit')
+
 # ============================================================================
 # Conduit tests
 # ============================================================================

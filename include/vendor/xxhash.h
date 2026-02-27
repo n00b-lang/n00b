@@ -2920,7 +2920,7 @@ XXH64_hashFromCanonical(const XXH64_canonical_t *src)
 #define XXH_unlikely(x) (x)
 #endif
 
-#if defined(__GNUC__)
+#if defined(__GNUC__) && !defined(XXH_FORCE_SCALAR)
 #if defined(__AVX2__)
 #include <immintrin.h>
 #elif defined(__SSE2__)

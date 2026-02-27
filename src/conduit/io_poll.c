@@ -838,7 +838,20 @@ poll_process_procs(poll_ctx_t *ctx)
         int ret = syscall(SYS_waitid, P_PIDFD, pp->pidfd, &info,
                           WEXITED | WNOHANG, nullptr);
         if (ret == 0 && info.si_pid != 0) {
-            exit_status = info.si_status;
+            switch (info.si_code) {
+            case CLD_EXITED:
+                exit_status = info.si_status << 8;
+                break;
+            case CLD_KILLED:
+                exit_status = info.si_status & 0x7f;
+                break;
+            case CLD_DUMPED:
+                exit_status = (info.si_status & 0x7f) | 0x80;
+                break;
+            default:
+                exit_status = info.si_status;
+                break;
+            }
         }
 
         n00b_conduit_proc_fire(pp->watch, N00B_CONDUIT_PROC_EXIT, exit_status);

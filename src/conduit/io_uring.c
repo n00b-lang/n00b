@@ -400,7 +400,20 @@ uring_wait(void *vctx, n00b_conduit_io_event_t *events, int max_events,
                             nullptr)
                         == 0
                     && info.si_pid > 0) {
-                    exit_status = info.si_status;
+                    switch (info.si_code) {
+                    case CLD_EXITED:
+                        exit_status = info.si_status << 8;
+                        break;
+                    case CLD_KILLED:
+                        exit_status = info.si_status & 0x7f;
+                        break;
+                    case CLD_DUMPED:
+                        exit_status = (info.si_status & 0x7f) | 0x80;
+                        break;
+                    default:
+                        exit_status = info.si_status;
+                        break;
+                    }
                 }
 
                 n00b_conduit_proc_fire(entry->proc_watch,

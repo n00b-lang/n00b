@@ -36,6 +36,8 @@
 // ============================================================================
 
 #define XXH_INLINE_ALL
+#define XXH_VECTOR XXH_SCALAR
+#define XXH_FORCE_SCALAR
 #include "vendor/xxhash.h"
 
 /**
