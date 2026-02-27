@@ -18,6 +18,7 @@ test_create_empty(void)
 
     assert(tree != nullptr);
     assert(tree->root == nullptr);
+    assert(tree->allocator == alloc);
 
     printf("  [PASS] create_empty\n");
 }

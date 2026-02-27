@@ -138,10 +138,8 @@ _n00b_alloc_raw(size_t             n,
     //   ctor_takes_kargs  && !ctor_takes_vargs: ctor(self, kargs_ptr)
     //   ctor_takes_vargs:                       ctor(self, vargs, kargs_ptr)
     //
-    // For kargs/vargs constructors, the data comes from vargs packed
-    // by n00b_new_kargs / n00b_new_both.  If no vargs were provided,
-    // kargs/vargs constructors are skipped (use n00b_new_kargs to
-    // trigger construction, not bare n00b_alloc).
+    // For kargs/vargs constructors, constructor data must be supplied
+    // by the n00b_new_* constructor helper macros (not bare n00b_alloc).
     if (!is_array && type_hash && n00b_option_is_set(n00b_default_runtime)
         && n00b_get_runtime()->startup_complete) {
         auto tinfo_opt = n00b_type_lookup(type_hash);

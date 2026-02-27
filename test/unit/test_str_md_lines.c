@@ -7,7 +7,7 @@
 
 TEST(test_single_paragraph)
 {
-    n00b_string_t src  = *r"hello world";
+    n00b_string_t src  = n00b_string_from_cstr("hello world");
     auto          tree = n00b_parse_markdown(src);
 
     n00b_array_t(n00b_string_t) lines = n00b_str_md_to_lines(tree);
@@ -21,7 +21,7 @@ TEST(test_single_paragraph)
 
 TEST(test_two_paragraphs)
 {
-    n00b_string_t src  = *r"first\n\nsecond";
+    n00b_string_t src  = n00b_string_from_cstr("first\n\nsecond");
     auto          tree = n00b_parse_markdown(src);
 
     n00b_array_t(n00b_string_t) lines = n00b_str_md_to_lines(tree);
@@ -37,7 +37,7 @@ TEST(test_two_paragraphs)
 
 TEST(test_heading)
 {
-    n00b_string_t src  = *r"# Title";
+    n00b_string_t src  = n00b_string_from_cstr("# Title");
     auto          tree = n00b_parse_markdown(src);
 
     n00b_array_t(n00b_string_t) lines = n00b_str_md_to_lines(tree);
@@ -62,7 +62,7 @@ TEST(test_heading)
 
 TEST(test_unordered_list)
 {
-    n00b_string_t src  = *r"- alpha\n- beta\n- gamma";
+    n00b_string_t src  = n00b_string_from_cstr("- alpha\n- beta\n- gamma");
     auto          tree = n00b_parse_markdown(src);
 
     n00b_array_t(n00b_string_t) lines = n00b_str_md_to_lines(tree);
@@ -80,7 +80,7 @@ TEST(test_unordered_list)
 
 TEST(test_code_block)
 {
-    n00b_string_t src  = *r"```\nint x;\nint y;\n```";
+    n00b_string_t src  = n00b_string_from_cstr("```\nint x;\nint y;\n```");
     auto          tree = n00b_parse_markdown(src);
 
     n00b_array_t(n00b_string_t) lines = n00b_str_md_to_lines(tree);
@@ -120,7 +120,7 @@ TEST(test_code_block)
 
 TEST(test_hr)
 {
-    n00b_string_t src  = *r"above\n\n---\n\nbelow";
+    n00b_string_t src  = n00b_string_from_cstr("above\n\n---\n\nbelow");
     auto          tree = n00b_parse_markdown(src);
 
     n00b_array_t(n00b_string_t) lines = n00b_str_md_to_lines(tree);
@@ -138,7 +138,7 @@ TEST(test_hr)
 
 TEST(test_inline_styles_in_paragraph)
 {
-    n00b_string_t src  = *r"normal **bold** *italic*";
+    n00b_string_t src  = n00b_string_from_cstr("normal **bold** *italic*");
     auto          tree = n00b_parse_markdown(src);
 
     n00b_array_t(n00b_string_t) lines = n00b_str_md_to_lines(tree);
@@ -170,7 +170,7 @@ TEST(test_inline_styles_in_paragraph)
 TEST(test_mixed_doc)
 {
     // Heading, paragraph, list, HR, code block.
-    n00b_string_t src = *r"# Title\n\nSome text.\n\n- one\n- two\n\n---\n\n```\ncode\n```";
+    n00b_string_t src = n00b_string_from_cstr("# Title\n\nSome text.\n\n- one\n- two\n\n---\n\n```\ncode\n```");
     auto tree = n00b_parse_markdown(src);
 
     n00b_array_t(n00b_string_t) lines = n00b_str_md_to_lines(tree);

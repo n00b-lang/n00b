@@ -239,8 +239,12 @@ static inline n00b_option_t(n00b_inline_hdr_t *) n00b_inline_alloc_header(void *
                     opts __VA_OPT__(, __VA_ARGS__))
 
 #define _n00b_kargs_name(base_name) N00B_CONCAT(N00B_CONCAT(n00b_, base_name), _init)
+#define _n00b_kargs_struct_name(base_name)                                                    \
+    N00B_CONCAT(_, N00B_CONCAT(_n00b_kargs_name(base_name), __kargs))
+#define _n00b_kargs_empty(base_name) (&((struct _n00b_kargs_struct_name(base_name)){0}))
 #define n00b_kargs(base_name, ...)                                                             \
-    kw_func(_n00b_kargs_name(base_name) __VA_OPT__(, __VA_ARGS__))
+    N00B_FIRST(__VA_OPT__(kw_func(_n00b_kargs_name(base_name), __VA_ARGS__), )                \
+                   _n00b_kargs_empty(base_name))
 
 // This should only be used in implementation headers for generic
 // container types. If you're using it for anything else, you're doing

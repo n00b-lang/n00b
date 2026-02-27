@@ -29,7 +29,7 @@ TEST(test_valid_identifier)
     ASSERT(n00b_unicode_is_valid_identifier(*r"hello"));
     ASSERT(n00b_unicode_is_valid_identifier(*r"hello_world"));
     ASSERT(!n00b_unicode_is_valid_identifier(*r"123"));
-    ASSERT(!n00b_unicode_is_valid_identifier(*r""));
+    ASSERT(!n00b_unicode_is_valid_identifier(n00b_string_from_raw("", 0)));
 }
 
 TEST(test_pattern_syntax)

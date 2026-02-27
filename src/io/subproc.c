@@ -1009,6 +1009,28 @@ spawn_pipe_mode(n00b_subproc_t *sp)
     }
 
     atomic_store(&sp->spawned, true);
+    // The proc done topic can arrive before we process the proc payload.
+    // Drain once more and opportunistically reap to ensure status is latched.
+    drain_proc_inbox(sp);
+
+    if (!n00b_option_is_set(sp->exit_status)
+        && !n00b_option_is_set(sp->term_signal)
+        && n00b_option_is_set(sp->pid)) {
+        int   status = 0;
+        pid_t w      = waitpid(n00b_option_get(sp->pid), &status, WNOHANG);
+
+        if (w > 0) {
+            if (WIFEXITED(status)) {
+                sp->exit_status = n00b_option_set(int, WEXITSTATUS(status));
+            }
+            if (WIFSIGNALED(status)) {
+                sp->term_signal = n00b_option_set(int, WTERMSIG(status));
+            }
+            atomic_store(&sp->exited, true);
+            sp->done_flags |= N00B_SUBPROC_DONE_F_PROC_EXIT;
+        }
+    }
+
     return n00b_result_ok(bool, true);
 }
 
@@ -1404,10 +1426,20 @@ n00b_subproc_spawn(n00b_subproc_t *sp)
         sp->io = n00b_option_get(opt);
     }
 
+    n00b_result_t(bool) r;
     if (sp->flags & N00B_SUBPROC_USE_PTY) {
-        return spawn_pty_mode(sp);
+        r = spawn_pty_mode(sp);
     }
-    return spawn_pipe_mode(sp);
+    else {
+        r = spawn_pipe_mode(sp);
+    }
+
+    if (n00b_result_is_err(r)) {
+        sp->errored     = true;
+        sp->saved_errno = n00b_result_get_err(r);
+    }
+
+    return r;
 }
 
 n00b_result_t(bool)

@@ -47,7 +47,7 @@ TEST(test_from_int_min)
 
 TEST(test_to_hex_lower)
 {
-    n00b_string_t r = n00b_unicode_str_to_hex(*r"AB");
+    n00b_string_t r = n00b_unicode_str_to_hex(n00b_string_from_cstr("AB"));
     ASSERT_STR_EQ(r.data, "4142");
 }
 
@@ -60,7 +60,7 @@ TEST(test_to_hex_upper)
 
 TEST(test_to_hex_empty)
 {
-    n00b_string_t r = n00b_unicode_str_to_hex(*r"");
+    n00b_string_t r = n00b_unicode_str_to_hex(n00b_string_from_raw("", 0));
     ASSERT_STR_EQ(r.data, "");
     ASSERT_EQ(r.u8_bytes, 0);
 }
@@ -71,14 +71,14 @@ TEST(test_to_hex_empty)
 
 TEST(test_to_cstr_basic)
 {
-    char *cs = n00b_unicode_str_to_cstr(*r"hello", .allocator = nullptr);
+    char *cs = n00b_unicode_str_to_cstr(n00b_string_from_cstr("hello"), .allocator = nullptr);
     ASSERT_STR_EQ(cs, "hello");
     n00b_free(cs);
 }
 
 TEST(test_to_cstr_empty)
 {
-    char *cs = n00b_unicode_str_to_cstr(*r"", .allocator = nullptr);
+    char *cs = n00b_unicode_str_to_cstr(n00b_string_from_raw("", 0), .allocator = nullptr);
     ASSERT_STR_EQ(cs, "");
     n00b_free(cs);
 }
@@ -89,13 +89,13 @@ TEST(test_to_cstr_empty)
 
 TEST(test_to_literal)
 {
-    n00b_string_t r = n00b_unicode_str_to_literal(*r"hi", .allocator = nullptr);
+    n00b_string_t r = n00b_unicode_str_to_literal(n00b_string_from_cstr("hi"), .allocator = nullptr);
     ASSERT_STR_EQ(r.data, "\"hi\"");
 }
 
 TEST(test_to_literal_with_escapes)
 {
-    n00b_string_t r = n00b_unicode_str_to_literal(*r"a\nb", .allocator = nullptr);
+    n00b_string_t r = n00b_unicode_str_to_literal(n00b_string_from_cstr("a\nb"), .allocator = nullptr);
     ASSERT_STR_EQ(r.data, "\"a\\nb\"");
 }
 

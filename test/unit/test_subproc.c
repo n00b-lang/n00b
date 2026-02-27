@@ -2079,7 +2079,7 @@ test_custom_done_condition(void)
     n00b_array_t(n00b_string_t) args = n00b_array_new(n00b_string_t, 2);
     n00b_array_set(args, 0, n00b_string_from_cstr("-c"));
     n00b_array_set(args, 1,
-        n00b_string_from_cstr("echo go; sleep 100"));
+        n00b_string_from_cstr("echo go; exec sleep 100"));
     sp.args = &args;
 
     n00b_result_t(bool) r = n00b_subproc_spawn(&sp);

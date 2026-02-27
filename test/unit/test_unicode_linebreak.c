@@ -9,7 +9,7 @@
 TEST(test_mandatory_breaks)
 {
     n00b_unicode_lb_action_t actions[3];
-    n00b_unicode_linebreaks(*r"a\nb", actions);
+    n00b_unicode_linebreaks(n00b_string_from_cstr("a\nb"), actions);
     ASSERT_EQ(actions[0], N00B_UNICODE_LB_ACTION_NONE);
     ASSERT_EQ(actions[2], N00B_UNICODE_LB_ACTION_MANDATORY);
 }
@@ -17,7 +17,7 @@ TEST(test_mandatory_breaks)
 TEST(test_no_break_crlf)
 {
     n00b_unicode_lb_action_t actions[4];
-    n00b_unicode_linebreaks(*r"a\r\nb", actions);
+    n00b_unicode_linebreaks(n00b_string_from_cstr("a\r\nb"), actions);
     ASSERT_EQ(actions[2], N00B_UNICODE_LB_ACTION_NONE);
     ASSERT_EQ(actions[3], N00B_UNICODE_LB_ACTION_MANDATORY);
 }
@@ -25,13 +25,13 @@ TEST(test_no_break_crlf)
 TEST(test_space_break)
 {
     n00b_unicode_lb_action_t actions[11];
-    n00b_unicode_linebreaks(*r"hello world", actions);
+    n00b_unicode_linebreaks(n00b_string_from_cstr("hello world"), actions);
     ASSERT_EQ(actions[6], N00B_UNICODE_LB_ACTION_ALLOWED);
 }
 
 TEST(test_wrap)
 {
-    n00b_array_t(uint32_t) breaks = n00b_unicode_linebreak_wrap(*r"hello world test", .width = 10);
+    n00b_array_t(uint32_t) breaks = n00b_unicode_linebreak_wrap(n00b_string_from_cstr("hello world test"), .width = 10);
     ASSERT(breaks.len >= 1);
 }
 
