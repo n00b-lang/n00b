@@ -11,14 +11,13 @@
 // when it appears before @declares in the grammar rule.
 
 #include "internal/slay/annot_phases.h"
-#include "slay/infer.h"
 
 // Translate type_node → concrete type and unify with the symbol's type_var.
 static void
 bind_sym_type(n00b_annot_walk_ctx_t *ctx, n00b_sym_entry_t *sym)
 {
-    if (sym && sym->type_node && ctx->tc_ctx) {
-        n00b_tc_type_t *declared = n00b_tc_translate_type_spec(
+    if (sym && sym->type_node && ctx->tc_ctx && ctx->translate_type_spec) {
+        n00b_tc_type_t *declared = ctx->translate_type_spec(
             ctx->tc_ctx, ctx->grammar, sym->type_node);
 
         if (declared) {
@@ -48,15 +47,13 @@ annot_phase_symtab(n00b_annot_walk_ctx_t *ctx, annot_node_ctx_t *nc)
             if (sym_name.u8_bytes > 0) {
                 n00b_sym_kind_t sym_kind = N00B_SYM_VARIABLE;
 
-                if (nc->nt
-                    && (n00b_unicode_str_eq(nc->nt->name, *r"formal-param")
-                     || n00b_unicode_str_eq(nc->nt->name, *r"varargs-param")
-                     || n00b_unicode_str_eq(nc->nt->name, *r"kw-one"))) {
-                    sym_kind = N00B_SYM_PARAM;
-                }
-                else if (nc->nt
-                         && n00b_unicode_str_eq(nc->nt->name, *r"func-def")) {
-                    sym_kind = N00B_SYM_FUNCTION;
+                if (a->sym_kind.u8_bytes > 0) {
+                    if (n00b_unicode_str_eq(a->sym_kind, *r"param")) {
+                        sym_kind = N00B_SYM_PARAM;
+                    }
+                    else if (n00b_unicode_str_eq(a->sym_kind, *r"function")) {
+                        sym_kind = N00B_SYM_FUNCTION;
+                    }
                 }
 
                 nc->last_sym = n00b_symtab_add(ctx->symtab,
@@ -145,12 +142,12 @@ annot_phase_symtab(n00b_annot_walk_ctx_t *ctx, annot_node_ctx_t *nc)
 
                 n00b_string_t kind = a->adt_kind;
 
-                if (kind.u8_bytes > 0
-                    && n00b_unicode_str_eq(kind, *r"struct_or_union")) {
+                if (a->adt_keyword_ref.kind == N00B_ROLE_BY_INDEX
+                        ? a->adt_keyword_ref.index >= 0
+                        : a->adt_keyword_ref.name.data != NULL) {
                     n00b_parse_tree_t *kw_node
-                        = n00b_tree_find_child_by_nt_name(
-                            ctx->grammar, nc->node,
-                            *r"_kw_kw_struct_or_union");
+                        = n00b_tree_resolve_child_ref(
+                            ctx->grammar, nc->node, a->adt_keyword_ref);
 
                     if (kw_node) {
                         n00b_string_t kw
@@ -285,13 +282,16 @@ annot_phase_symtab(n00b_annot_walk_ctx_t *ctx, annot_node_ctx_t *nc)
                 lit_type = n00b_tc_lookup_prim(ctx->tc_ctx, type_name);
             }
 
-            if (ctx->tc_ctx) {
+            if (ctx->tc_ctx && ctx->translate_type_spec
+                && (a->type_ref.kind == N00B_ROLE_BY_INDEX
+                        ? a->type_ref.index >= 0
+                        : a->type_ref.name.data != NULL)) {
                 n00b_parse_tree_t *tspec
-                    = n00b_tree_find_child_by_nt_name(
-                        ctx->grammar, nc->node, *r"type-spec");
+                    = n00b_tree_resolve_child_ref(
+                        ctx->grammar, nc->node, a->type_ref);
 
                 if (tspec) {
-                    n00b_tc_type_t *mod_type = n00b_tc_translate_type_spec(
+                    n00b_tc_type_t *mod_type = ctx->translate_type_spec(
                         ctx->tc_ctx, ctx->grammar, tspec);
 
                     if (mod_type) {

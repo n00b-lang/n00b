@@ -93,6 +93,8 @@ struct n00b_annotation_t {
     n00b_string_t      visibility_spec;
     n00b_string_t      op_kind;
     n00b_child_ref_t   notrivia_ref;   /**< Child that must have no leading trivia. */
+    n00b_string_t      sym_kind;       /**< Symbol kind for @declares: "param", "function", etc. */
+    n00b_child_ref_t   adt_keyword_ref; /**< Child containing ADT keyword (struct vs union). */
 };
 
 // ============================================================================
@@ -105,7 +107,8 @@ void n00b_rule_annotate(n00b_parse_rule_t *rule, n00b_annotation_t annot);
 void n00b_nt_scope_open(n00b_nonterm_t *nt,
                          n00b_string_t scope_tag, n00b_child_ref_t name_ref);
 void n00b_nt_declares(n00b_nonterm_t *nt,
-                       n00b_child_ref_t name_ref, n00b_child_ref_t type_ref);
+                       n00b_child_ref_t name_ref, n00b_child_ref_t type_ref,
+                       n00b_string_t sym_kind);
 void n00b_nt_type_decl(n00b_nonterm_t *nt, n00b_child_ref_t name_ref);
 void n00b_nt_type(n00b_nonterm_t *nt,
                    n00b_child_ref_t name_ref, n00b_string_t type_spec);
@@ -131,7 +134,8 @@ void n00b_nt_infer(n00b_nonterm_t *nt, n00b_string_t constraint_expr);
 void n00b_nt_switch(n00b_nonterm_t *nt, n00b_child_ref_t cond_ref,
                      n00b_child_ref_t cases_ref);
 void n00b_nt_adt(n00b_nonterm_t *nt, n00b_string_t adt_kind,
-                  n00b_child_ref_t name_ref, n00b_string_t scope_tag);
+                  n00b_child_ref_t name_ref, n00b_string_t scope_tag,
+                  n00b_child_ref_t keyword_ref);
 void n00b_nt_field(n00b_nonterm_t *nt,
                     n00b_child_ref_t name_ref, n00b_child_ref_t type_ref);
 void n00b_nt_method(n00b_nonterm_t *nt,
@@ -142,7 +146,8 @@ void n00b_nt_visibility(n00b_nonterm_t *nt, n00b_string_t visibility_spec);
 void n00b_nt_static(n00b_nonterm_t *nt);
 void n00b_nt_abstract(n00b_nonterm_t *nt);
 void n00b_nt_operator(n00b_nonterm_t *nt, n00b_string_t op_str);
-void n00b_nt_literal(n00b_nonterm_t *nt, n00b_string_t lit_kind);
+void n00b_nt_literal(n00b_nonterm_t *nt, n00b_string_t lit_kind,
+                      n00b_child_ref_t type_ref);
 void n00b_nt_call(n00b_nonterm_t *nt, n00b_child_ref_t func_ref,
                    n00b_child_ref_t args_ref);
 void n00b_nt_varref(n00b_nonterm_t *nt, n00b_child_ref_t name_ref);
@@ -156,7 +161,8 @@ void n00b_rule_notrivia(n00b_parse_rule_t *rule, n00b_child_ref_t child_ref);
 void n00b_rule_scope_open(n00b_parse_rule_t *rule,
                            n00b_string_t scope_tag, n00b_child_ref_t name_ref);
 void n00b_rule_declares(n00b_parse_rule_t *rule,
-                         n00b_child_ref_t name_ref, n00b_child_ref_t type_ref);
+                         n00b_child_ref_t name_ref, n00b_child_ref_t type_ref,
+                         n00b_string_t sym_kind);
 void n00b_rule_type_decl(n00b_parse_rule_t *rule, n00b_child_ref_t name_ref);
 void n00b_rule_type(n00b_parse_rule_t *rule,
                      n00b_child_ref_t name_ref, n00b_string_t type_spec);

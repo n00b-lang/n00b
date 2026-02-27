@@ -26,7 +26,7 @@
  */
 
 #include "slay/infer_expr.h"
-#include "slay/infer.h"
+#include "slay/annot_walk.h"
 #include "slay/tree_util.h"
 #include "slay/annotation.h"
 #include "slay/cf_label.h"
@@ -45,8 +45,6 @@ extern n00b_tc_type_t *n00b_tc_fresh_var(n00b_tc_ctx_t *ctx);
 extern n00b_tc_type_t *n00b_tc_prim(n00b_tc_ctx_t *ctx, n00b_string_t name);
 extern void n00b_tc_ctx_register(n00b_tc_ctx_t *ctx, n00b_tc_type_t *type);
 
-// node_types dict type (declared in cf_label.h).
-typedef n00b_node_types_t infer_node_types_t;
 
 // ============================================================================
 // Parser state
@@ -61,11 +59,12 @@ typedef struct {
 } infer_tvar_entry_t;
 
 typedef struct {
-    n00b_tc_ctx_t     *tc_ctx;
-    n00b_symtab_t     *symtab;
-    n00b_grammar_t    *grammar;
-    n00b_parse_tree_t *node;
-    infer_node_types_t *node_types;
+    n00b_tc_ctx_t              *tc_ctx;
+    n00b_symtab_t              *symtab;
+    n00b_grammar_t             *grammar;
+    n00b_parse_tree_t          *node;
+    n00b_node_types_t          *node_types;
+    n00b_translate_type_spec_fn translate_type_spec;
 
     const char *src;    // Expression string bytes.
     int32_t     pos;    // Current position.
@@ -204,14 +203,11 @@ parse_int(infer_ctx_t *ctx)
 // Child type resolution
 // ============================================================================
 
-// get_nth_nt_child — now in tree_util.c as n00b_tree_get_nth_nt_child().
-#define get_nth_nt_child n00b_tree_get_nth_nt_child
-
 // Look up a child node's type in the node_types dict.
 static n00b_tc_type_t *
 get_child_type(infer_ctx_t *ctx, int32_t index)
 {
-    n00b_parse_tree_t *child = get_nth_nt_child(ctx->node, index);
+    n00b_parse_tree_t *child = n00b_tree_get_nth_nt_child(ctx->node, index);
 
     if (!child || !ctx->node_types) {
         return NULL;
@@ -223,10 +219,6 @@ get_child_type(infer_ctx_t *ctx, int32_t index)
 
     return found ? t : NULL;
 }
-
-// extract_ident_from_child — now in tree_util.c as
-// n00b_tree_extract_first_identifier().
-#define extract_ident_from_child n00b_tree_extract_first_identifier
 
 // ============================================================================
 // Recursive-descent parser
@@ -249,13 +241,8 @@ parse_type_primary(infer_ctx_t *ctx)
     // a function scope.
     if (match_kw(ctx, "$return")) {
         if (ctx->symtab) {
-            n00b_sym_entry_t *sym = n00b_symtab_lookup(
+            n00b_sym_entry_t *sym = n00b_symtab_lookup_any(
                 ctx->symtab, n00b_string_empty(), *r"$return");
-
-            if (!sym) {
-                sym = n00b_symtab_lookup_all(
-                    ctx->symtab, n00b_string_empty(), *r"$return");
-            }
 
             if (sym && sym->type_var) {
                 return sym->type_var;
@@ -289,7 +276,7 @@ parse_type_primary(infer_ctx_t *ctx)
                 name_child = n00b_tree_child(ctx->node, index);
             }
 
-            n00b_string_t name = extract_ident_from_child(name_child);
+            n00b_string_t name = n00b_tree_extract_first_identifier(name_child);
 
             if (name.u8_bytes == 0) {
                 ctx->error = true;
@@ -333,7 +320,7 @@ parse_type_primary(infer_ctx_t *ctx)
                     }
 
                     n00b_parse_tree_t *spread_node
-                        = get_nth_nt_child(ctx->node, spread_ix);
+                        = n00b_tree_get_nth_nt_child(ctx->node, spread_ix);
 
                     if (spread_node) {
                         size_t snc = n00b_tree_num_children(spread_node);
@@ -356,9 +343,10 @@ parse_type_primary(infer_ctx_t *ctx)
                                     n00b_parse_tree_t *gc
                                         = n00b_tree_child(sc, gi);
 
-                                    if (!n00b_tree_is_leaf(gc)) {
+                                    if (!n00b_tree_is_leaf(gc)
+                                        && ctx->translate_type_spec) {
                                         n00b_tc_type_t *gt
-                                            = n00b_tc_translate_type_spec(
+                                            = ctx->translate_type_spec(
                                                 ctx->tc_ctx,
                                                 ctx->grammar,
                                                 gc);
@@ -372,11 +360,13 @@ parse_type_primary(infer_ctx_t *ctx)
                                 continue;
                             }
 
-                            n00b_tc_type_t *st = n00b_tc_translate_type_spec(
-                                ctx->tc_ctx, ctx->grammar, sc);
+                            if (ctx->translate_type_spec) {
+                                n00b_tc_type_t *st = ctx->translate_type_spec(
+                                    ctx->tc_ctx, ctx->grammar, sc);
 
-                            if (st) {
-                                n00b_list_push(*params_ptr, st);
+                                if (st) {
+                                    n00b_list_push(*params_ptr, st);
+                                }
                             }
                         }
                     }
@@ -417,7 +407,7 @@ parse_type_primary(infer_ctx_t *ctx)
             ct = n00b_tc_fresh_var(ctx->tc_ctx);
 
             // Store it so future references get the same var.
-            n00b_parse_tree_t *child = get_nth_nt_child(ctx->node, index);
+            n00b_parse_tree_t *child = n00b_tree_get_nth_nt_child(ctx->node, index);
 
             if (child && ctx->node_types) {
                 uintptr_t key = (uintptr_t)child;
@@ -482,7 +472,7 @@ parse_type_primary(infer_ctx_t *ctx)
         }
 
         // Get the child node, extract its identifier text, look up in symtab.
-        n00b_parse_tree_t *child = get_nth_nt_child(ctx->node, index);
+        n00b_parse_tree_t *child = n00b_tree_get_nth_nt_child(ctx->node, index);
 
         if (!child) {
             // Try treating it as a direct child index (including terminals).
@@ -492,22 +482,15 @@ parse_type_primary(infer_ctx_t *ctx)
             }
         }
 
-        n00b_string_t ident = extract_ident_from_child(child);
+        n00b_string_t ident = n00b_tree_extract_first_identifier(child);
 
         if (ident.u8_bytes == 0) {
             return n00b_tc_fresh_var(ctx->tc_ctx);
         }
 
-        n00b_sym_entry_t *sym = n00b_symtab_lookup(ctx->symtab,
-                                                      n00b_string_empty(),
-                                                      ident);
-
-        if (!sym) {
-            // Try lookup_all for symbols that might be in outer scopes.
-            sym = n00b_symtab_lookup_all(ctx->symtab,
-                                           n00b_string_empty(),
-                                           ident);
-        }
+        n00b_sym_entry_t *sym = n00b_symtab_lookup_any(ctx->symtab,
+                                                       n00b_string_empty(),
+                                                       ident);
 
         if (sym && sym->type_var) {
             return sym->type_var;
@@ -680,27 +663,29 @@ parse_type_expr(infer_ctx_t *ctx)
 // ============================================================================
 
 n00b_tc_type_t *
-n00b_infer_eval(n00b_tc_ctx_t     *tc_ctx,
-                n00b_symtab_t     *symtab,
-                n00b_grammar_t    *grammar,
-                n00b_parse_tree_t *node,
-                void              *node_types,
-                n00b_string_t      expr)
+n00b_infer_eval_ex(n00b_tc_ctx_t              *tc_ctx,
+                   n00b_symtab_t              *symtab,
+                   n00b_grammar_t             *grammar,
+                   n00b_parse_tree_t          *node,
+                   n00b_node_types_t          *node_types,
+                   n00b_translate_type_spec_fn ts_fn,
+                   n00b_string_t               expr)
 {
     if (!tc_ctx || expr.u8_bytes == 0) {
         return NULL;
     }
 
     infer_ctx_t ctx = {
-        .tc_ctx     = tc_ctx,
-        .symtab     = symtab,
-        .grammar    = grammar,
-        .node       = node,
-        .node_types = (infer_node_types_t *)node_types,
-        .src        = expr.data,
-        .pos        = 0,
-        .len        = (int32_t)expr.u8_bytes,
-        .error      = false,
+        .tc_ctx              = tc_ctx,
+        .symtab              = symtab,
+        .grammar             = grammar,
+        .node                = node,
+        .node_types          = node_types,
+        .translate_type_spec = ts_fn,
+        .src                 = expr.data,
+        .pos                 = 0,
+        .len                 = (int32_t)expr.u8_bytes,
+        .error               = false,
     };
 
     n00b_tc_type_t *result = parse_type_expr(&ctx);
@@ -710,4 +695,16 @@ n00b_infer_eval(n00b_tc_ctx_t     *tc_ctx,
     }
 
     return result;
+}
+
+n00b_tc_type_t *
+n00b_infer_eval(n00b_tc_ctx_t     *tc_ctx,
+                n00b_symtab_t     *symtab,
+                n00b_grammar_t    *grammar,
+                n00b_parse_tree_t *node,
+                n00b_node_types_t *node_types,
+                n00b_string_t      expr)
+{
+    return n00b_infer_eval_ex(tc_ctx, symtab, grammar, node, node_types,
+                              NULL, expr);
 }

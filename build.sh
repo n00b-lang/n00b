@@ -7,6 +7,11 @@ N00B_CROSS=${N00B_CROSS:-}
 N00B_JOBS=${N00B_JOBS:-}
 N00B_NATIVE=${N00B_NATIVE:-0}
 
+# Default to a C23-capable compiler if CC is not set.
+if [[ -z "${CC}" ]] && [[ -x /usr/local/bin/clang ]] ; then
+    export CC=/usr/local/bin/clang
+fi
+
 # ── Docker cross-compilation on macOS ────────────────────────────────────────
 # On macOS, if Docker is available with an osxcross-enabled image, delegate
 # to docker/cross-build.sh for cross-compilation. Set N00B_NATIVE=1 to
@@ -22,36 +27,36 @@ if [[ "$(uname -s)" == "Darwin" ]] && \
     fi
 fi
 
-function ensure_bootstrap {
-    if [[ ! -f bin/ncc-bootstrap ]] || [[ ${N00B_CLEAN} -ne 0 ]] ; then
-        N00B_BUILD_BOOTSTRAP=1
+function ensure_ncc {
+    if [[ ! -f bin/ncc ]] || [[ ${N00B_CLEAN} -ne 0 ]] ; then
+        N00B_BUILD_NCC=1
     else
-        N00B_BUILD_BOOTSTRAP=${N00B_BUILD_BOOTSTRAP:-0}
+        N00B_BUILD_NCC=${N00B_BUILD_NCC:-0}
     fi
 
 
-    if [[ ${N00B_BUILD_BOOTSTRAP} -ne 0 ]] ; then
-        cd ${N00B_ROOT}/bootstrap
-        if [[ ${N00B_CLEAN} -ne 0 ]] || [[ ! -d build_bootstrap ]] ; then
-            if [[ -d build_bootstrap ]] ; then
-                echo "Removing old bootstrap dir"
-                rm -rf build_bootstrap
+    if [[ ${N00B_BUILD_NCC} -ne 0 ]] ; then
+        cd ${N00B_ROOT}/ncc
+        if [[ ${N00B_CLEAN} -ne 0 ]] || [[ ! -d build_ncc ]] ; then
+            if [[ -d build_ncc ]] ; then
+                echo "Removing old ncc build dir"
+                rm -rf build_ncc
             fi
-            meson setup --buildtype=${N00B_BUILD_TYPE} -Dcc_path=${CC} --prefix=${N00B_ROOT} --bindir=${N00B_ROOT}/bin build_bootstrap .
+            meson setup --buildtype=${N00B_BUILD_TYPE} -Dcc_path=${CC} --prefix=${N00B_ROOT} --bindir=${N00B_ROOT}/bin build_ncc .
             if [[ $? -ne 0 ]] ; then
-                echo "Bootstrap setup failed."
+                echo "NCC setup failed."
                 exit 1
             fi
         fi
 
-        meson compile -C build_bootstrap
+        meson compile -C build_ncc
         if [[ $? -ne 0 ]] ; then
-            echo "Could not build bootstrap."
+            echo "Could not build ncc."
             exit 1
         fi
-        meson install -C build_bootstrap
+        meson install -C build_ncc
         if [[ $? -ne 0 ]] ; then
-            echo "Bootstrap install failed."
+            echo "NCC install failed."
             exit 1
         fi
         cd ${N00B_ROOT}
@@ -107,7 +112,7 @@ function build_n00b {
        rm -rf ${build_dir}
    fi
    if [[ ! -d ${build_dir} ]] ; then
-       CC=${N00B_ROOT}/bin/ncc-bootstrap meson setup --buildtype=${N00B_BUILD_TYPE} $(all_options) ${build_dir} .
+       CC=${N00B_ROOT}/bin/ncc meson setup --buildtype=${N00B_BUILD_TYPE} $(all_options) ${build_dir} .
        if [[ $? -ne 0 ]] ; then
            echo "Build setup failed."
            exit 1
@@ -171,7 +176,7 @@ print(c_val)
     fi
 
     if [[ ! -d ${build_dir} ]] ; then
-        CC=${N00B_ROOT}/bin/ncc-bootstrap \
+        CC=${N00B_ROOT}/bin/ncc \
         meson setup --cross-file ${cross_file} \
             --buildtype=${N00B_BUILD_TYPE} $(all_options) ${build_dir} .
         if [[ $? -ne 0 ]] ; then
@@ -217,7 +222,7 @@ function cross_compile {
     fi
 }
 
-ensure_bootstrap
+ensure_ncc
 build_n00b $*
 
 if [[ -n "${N00B_CROSS}" ]] ; then

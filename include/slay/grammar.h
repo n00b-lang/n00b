@@ -46,6 +46,19 @@ int64_t         n00b_register_literal_type(n00b_grammar_t *g, n00b_string_t name
  */
 int64_t         n00b_grammar_terminal_id(n00b_grammar_t *g, const char *name);
 
+/**
+ * @brief Check if a string is a registered terminal/keyword in the grammar.
+ *
+ * Looks up @p text in the grammar's terminal map. This replaces hardcoded
+ * keyword tables in analysis passes — any registered terminal (keywords,
+ * operators, etc.) is not a variable reference.
+ *
+ * @param g     Grammar.
+ * @param text  Text to check.
+ * @return True if @p text matches a registered terminal name.
+ */
+bool            n00b_grammar_is_keyword(n00b_grammar_t *g, n00b_string_t text);
+
 // ============================================================================
 // Walk actions / user data
 // ============================================================================

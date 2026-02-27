@@ -17,6 +17,7 @@
 #include "parsers/scanner.h"
 #include "parsers/token_stream.h"
 #include "slay/annot_walk.h"
+#include "n00b/n00b_compile.h"
 #include "slay/bnf.h"
 #include "slay/cf_label.h"
 #include "slay/cdg.h"
@@ -35,6 +36,9 @@
 #include "internal/slay/earley_internal.h"
 #include "typecheck/types.h"
 #include "typecheck/print.h"
+
+// From n00b_repl.c.
+extern int n00b_repl_run(n00b_grammar_t *grammar);
 
 // ============================================================================
 // Grammar loading
@@ -301,6 +305,7 @@ main(int argc, char **argv)
     bool                show_symtab  = false;
     bool                run_analyze  = false;
     bool                run_typecheck = false;
+    bool                repl_mode    = false;
     bool                quiet        = false;
     n00b_parse_mode_t   mode         = N00B_PARSE_MODE_DEFAULT;
     const char         *source_file  = NULL;
@@ -357,6 +362,9 @@ main(int argc, char **argv)
             run_analyze   = true;
             run_typecheck = true;
         }
+        else if (strcmp(argv[i], "--repl") == 0) {
+            repl_mode = true;
+        }
         else if (strcmp(argv[i], "--quiet") == 0
                  || strcmp(argv[i], "-q") == 0) {
             quiet = true;
@@ -379,12 +387,12 @@ main(int argc, char **argv)
         }
     }
 
-    if (!source_file) {
+    if (!source_file && !repl_mode) {
         fprintf(stderr, "usage: n00b_dev <source-file> "
                         "[--earley|--pwz] [--tokens] [--grammar] "
                         "[--cfg] [--cdg] [--dfg] [--labels] [--symtab|-s] "
                         "[--analyze|-a] [--typecheck|-t] [--all] "
-                        "[--quiet|-q] [--grammar-file <path>]\n");
+                        "[--quiet|-q] [--repl] [--grammar-file <path>]\n");
         return 1;
     }
 
@@ -393,6 +401,13 @@ main(int argc, char **argv)
 
     if (!g) {
         return 1;
+    }
+
+    // REPL mode: enter interactive loop.
+    if (repl_mode) {
+        int rc = n00b_repl_run(g);
+        n00b_shutdown();
+        return rc;
     }
 
     if (show_grammar) {
@@ -548,7 +563,7 @@ main(int argc, char **argv)
             printf("=== Annotation Walk ===\n");
         }
 
-        n00b_annot_result_t *ar = n00b_annot_walk_tree_full(g, tree);
+        n00b_annot_result_t *ar = n00b_compile_walk(g, tree);
 
         if (!quiet) {
             if (ar && ar->symtab) {
@@ -610,7 +625,7 @@ main(int argc, char **argv)
                 n00b_dfg_t *dfg = NULL;
 
                 if (show_dfg || run_analyze) {
-                    dfg = n00b_build_dfg(cfg, ar->cf_labels, ar);
+                    dfg = n00b_build_dfg(cfg, ar->cf_labels, g, ar);
 
                     if (dfg && show_dfg) {
                         printf("=== DFG ===\n");

@@ -16,6 +16,23 @@
 #include "slay/n00b_parse.h"
 
 // ============================================================================
+// Type-spec translation callback
+// ============================================================================
+
+/**
+ * @brief Callback for translating language-specific type-spec parse subtrees.
+ *
+ * Different languages have different `<type-spec>` grammars. This callback
+ * decouples slay's annotation system from any particular grammar's type AST.
+ * When NULL, type translation is skipped (symbols get fresh type variables
+ * but no explicit type binding from parse subtrees).
+ */
+typedef n00b_tc_type_t *(*n00b_translate_type_spec_fn)(
+    n00b_tc_ctx_t     *ctx,
+    n00b_grammar_t    *g,
+    n00b_parse_tree_t *type_node);
+
+// ============================================================================
 // Walk context
 // ============================================================================
 
@@ -28,6 +45,7 @@ typedef struct {
     n00b_list_t(n00b_sym_entry_t *)  *params;            /**< Accumulated parameter symbols. */
     n00b_node_types_t                *node_types;         /**< Parse node → resolved type. */
     n00b_list_t(n00b_sym_entry_t *)  *shadowed_entries;   /**< Entries that shadow outer decls. */
+    n00b_translate_type_spec_fn       translate_type_spec; /**< Language-specific type translator (may be NULL). */
     int32_t                           anon_counter;       /**< Counter for unique anonymous ADT scope names. */
 } n00b_annot_walk_ctx_t;
 
@@ -80,3 +98,18 @@ n00b_annot_result_t *n00b_annot_walk_full(n00b_parse_result_t *result);
  */
 n00b_annot_result_t *n00b_annot_walk_tree_full(n00b_grammar_t    *g,
                                                  n00b_parse_tree_t *tree);
+
+/**
+ * @brief Walk a specific tree with a custom type-spec translator.
+ *
+ * Like `n00b_annot_walk_tree_full`, but uses @p ts_fn to translate
+ * type-spec subtrees instead of the default (no translation).
+ *
+ * @param g      Grammar with annotations.
+ * @param tree   Root of the tree to walk.
+ * @param ts_fn  Language-specific type translator (may be NULL).
+ * @return Walk result, or NULL on error. Caller owns it.
+ */
+n00b_annot_result_t *n00b_annot_walk_tree_full_ex(n00b_grammar_t             *g,
+                                                    n00b_parse_tree_t          *tree,
+                                                    n00b_translate_type_spec_fn ts_fn);

@@ -28,12 +28,8 @@
 #include "slay/parse_tree.h"
 #include "slay/grammar.h"
 #include "slay/symtab.h"
-
-typedef struct n00b_tc_type_s n00b_tc_type_t;
-typedef struct n00b_tc_ctx_s  n00b_tc_ctx_t;
-
-// Forward declare the dict type used for node_types.
-typedef struct n00b_dict_s n00b_dict_s;
+#include "slay/cf_label.h"
+#include "slay/annot_walk.h"
 
 /**
  * @brief Evaluate an `@infer` expression string.
@@ -54,5 +50,20 @@ n00b_tc_type_t *n00b_infer_eval(
     n00b_symtab_t  *symtab,
     n00b_grammar_t *grammar,
     n00b_parse_tree_t *node,
-    void           *node_types,
+    n00b_node_types_t *node_types,
     n00b_string_t   expr);
+
+/**
+ * @brief Evaluate an `@infer` expression with a custom type-spec translator.
+ *
+ * Like `n00b_infer_eval`, but uses @p ts_fn for `...$N` spread paths
+ * that translate parse subtrees into types.
+ */
+n00b_tc_type_t *n00b_infer_eval_ex(
+    n00b_tc_ctx_t              *tc_ctx,
+    n00b_symtab_t              *symtab,
+    n00b_grammar_t             *grammar,
+    n00b_parse_tree_t          *node,
+    n00b_node_types_t          *node_types,
+    n00b_translate_type_spec_fn ts_fn,
+    n00b_string_t               expr);

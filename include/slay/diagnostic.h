@@ -43,6 +43,7 @@ typedef enum {
     N00B_STAGE_TYPECHECK,
     N00B_STAGE_CFG,
     N00B_STAGE_ANALYSIS,
+    N00B_STAGE_CODEGEN,
 } n00b_diag_stage_t;
 
 // ============================================================================

@@ -4,6 +4,7 @@
 // via iterative worklist, and emits data dependence (DD) edges.
 
 #include "slay/dfg.h"
+#include "slay/grammar.h"
 #include "slay/parse_tree.h"
 #include "core/alloc.h"
 #include "strings/string_ops.h"
@@ -83,6 +84,7 @@ emit_fact(n00b_list_t(n00b_du_fact_t) *facts, n00b_string_t var_name,
 // (they're handled separately in the main extraction).
 static void
 walk_for_uses(n00b_parse_tree_t *node, n00b_cf_labels_t *cf_labels,
+              n00b_grammar_t *grammar,
               int32_t block_id, int32_t stmt_ix,
               n00b_list_t(n00b_du_fact_t) *facts)
 {
@@ -115,29 +117,11 @@ walk_for_uses(n00b_parse_tree_t *node, n00b_cf_labels_t *cf_labels,
             return;
         }
 
-        // Skip keywords: common n00b keywords that are not identifiers.
-        // This is a best-effort filter; grammars with @varref are precise.
-        static const char *keywords[] = {
-            "if", "else", "elif", "while", "for", "in", "from", "to",
-            "break", "continue", "return", "switch", "case", "typeof",
-            "var", "let", "const", "global", "func", "method", "private",
-            "once", "true", "false", "nil", "and", "or", "is", "not",
-            "ref", "assert", "use", "enum", "extern", "parameter",
-            "confspec", "class", "atomic",
-            // C keywords for the C grammar tests:
-            "void", "int", "char", "float", "double", "long", "short",
-            "unsigned", "signed", "struct", "union", "typedef", "static",
-            "auto", "register", "volatile", "inline",
-            NULL,
-        };
-
-        for (const char **kw = keywords; *kw; kw++) {
-            size_t klen = strlen(*kw);
-
-            if (val.u8_bytes == klen
-                && memcmp(val.data, *kw, klen) == 0) {
-                return;
-            }
+        // Skip keywords/terminals registered in the grammar.
+        // This is grammar-driven — any registered terminal (keywords,
+        // operators, etc.) is not a variable reference.
+        if (grammar && n00b_grammar_is_keyword(grammar, val)) {
+            return;
         }
 
         emit_fact(facts, val, node, block_id, stmt_ix, false);
@@ -154,9 +138,11 @@ walk_for_uses(n00b_parse_tree_t *node, n00b_cf_labels_t *cf_labels,
 
     // Function definitions are opaque — don't recurse into them.
     // Their internal variables belong to a separate scope.
+    // Detected via @scope("function", ...) tag from the annotation walk.
     n00b_nt_node_t *nt = &n00b_tree_node_value(node);
 
-    if (n00b_unicode_str_eq(nt->name, *r"func-def")) {
+    if (nt->scope && nt->scope->scope_tag.u8_bytes > 0
+        && n00b_unicode_str_eq(nt->scope->scope_tag, *r"function")) {
         return;
     }
 
@@ -164,7 +150,7 @@ walk_for_uses(n00b_parse_tree_t *node, n00b_cf_labels_t *cf_labels,
     size_t nc = n00b_tree_num_children(node);
 
     for (size_t i = 0; i < nc; i++) {
-        walk_for_uses(n00b_tree_child(node, i), cf_labels,
+        walk_for_uses(n00b_tree_child(node, i), cf_labels, grammar,
                       block_id, stmt_ix, facts);
     }
 }
@@ -175,6 +161,7 @@ walk_for_uses(n00b_parse_tree_t *node, n00b_cf_labels_t *cf_labels,
 
 static void
 extract_facts(n00b_cfg_t *cfg, n00b_cf_labels_t *cf_labels,
+              n00b_grammar_t *grammar,
               n00b_list_t(n00b_du_fact_t) *facts)
 {
     int32_t nb = n00b_cfg_block_count(cfg);
@@ -199,7 +186,7 @@ extract_facts(n00b_cfg_t *cfg, n00b_cf_labels_t *cf_labels,
 
                 // Walk RHS for uses.
                 if (label->then_body) {
-                    walk_for_uses(label->then_body, cf_labels,
+                    walk_for_uses(label->then_body, cf_labels, grammar,
                                   bi, (int32_t)si, facts);
                 }
             }
@@ -210,7 +197,8 @@ extract_facts(n00b_cfg_t *cfg, n00b_cf_labels_t *cf_labels,
             }
             else {
                 // No specific label — walk the whole subtree for uses.
-                walk_for_uses(stmt, cf_labels, bi, (int32_t)si, facts);
+                walk_for_uses(stmt, cf_labels, grammar,
+                              bi, (int32_t)si, facts);
             }
         }
     }
@@ -523,6 +511,7 @@ build_reaching_defs(n00b_cfg_t *cfg,
 n00b_dfg_t *
 n00b_build_dfg(n00b_cfg_t          *cfg,
                n00b_cf_labels_t    *cf_labels,
+               n00b_grammar_t      *grammar,
                n00b_annot_result_t *annot)
 {
     if (!cfg) {
@@ -556,7 +545,7 @@ n00b_build_dfg(n00b_cfg_t          *cfg,
         }
     }
 
-    extract_facts(cfg, cf_labels, &dfg->facts);
+    extract_facts(cfg, cf_labels, grammar, &dfg->facts);
     build_reaching_defs(cfg, &dfg->facts, &dfg->edges);
 
     return dfg;

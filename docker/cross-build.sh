@@ -127,31 +127,31 @@ WRAPEOF
     echo "=== Cross-compiling for ${TARGET} ==="
     echo "  Cross-compiler: ${CROSS_CC_PATH}"
 
-    # Step 1: Build ncc-bootstrap natively with Linux clang
-    echo "--- Building ncc-bootstrap (native Linux) ---"
+    # Step 1: Build ncc natively with Linux clang
+    echo "--- Building ncc (native Linux) ---"
     export CC=clang
-    cd /build/bootstrap
-    if [[ -d build_bootstrap ]]; then
-        rm -rf build_bootstrap
+    cd /build/ncc
+    if [[ -d build_ncc ]]; then
+        rm -rf build_ncc
     fi
     meson setup --buildtype="${BUILD_TYPE}" \
         -Dcc_path=clang \
         --prefix=/build --bindir=/build/bin \
-        build_bootstrap .
-    meson compile -C build_bootstrap
-    meson install -C build_bootstrap
+        build_ncc .
+    meson compile -C build_ncc
+    meson install -C build_ncc
     cd /build
 
     # Step 2: Generate cross-file
     #
-    # The key trick: meson's [binaries] c = ncc-bootstrap, but ncc-bootstrap
-    # delegates to NCC_COMPILER (the actual cross-compiler). This way ncc's
-    # AST transformations run on the Linux host, and the code generation
+    # The key trick: meson's [binaries] c = ncc, but ncc delegates to
+    # NCC_COMPILER (the actual cross-compiler). This way ncc's AST
+    # transformations run on the Linux host, and the code generation
     # targets the cross platform.
     CROSS_FILE="/tmp/cross-${TARGET}.ini"
     cat > "$CROSS_FILE" <<CROSSEOF
 [binaries]
-c = '/build/bin/ncc-bootstrap'
+c = '/build/bin/ncc'
 ar = '${CROSS_AR_PATH}'
 strip = '${CROSS_STRIP_PATH}'
 ${TARGET_EXTRA_BINARIES[$TARGET]}
@@ -183,9 +183,9 @@ CROSSEOF
         rm -rf "$BUILD_DIR"
     fi
 
-    # NCC_COMPILER tells ncc-bootstrap which actual compiler to invoke
+    # NCC_COMPILER tells ncc which actual compiler to invoke
     export NCC_COMPILER="${CROSS_CC_PATH}"
-    CC=/build/bin/ncc-bootstrap \
+    CC=/build/bin/ncc \
     meson setup \
         --cross-file "$CROSS_FILE" \
         --buildtype="${BUILD_TYPE}" \
@@ -199,9 +199,9 @@ CROSSEOF
     echo "--- Copying artifacts to /output ---"
     # Copy the whole build directory's outputs
     cp -a "$BUILD_DIR" /output/
-    # Also copy the ncc-bootstrap for reference
+    # Also copy ncc for reference
     mkdir -p /output/bin
-    cp /build/bin/ncc-bootstrap /output/bin/
+    cp /build/bin/ncc /output/bin/
 
     echo "=== Cross-build complete for ${TARGET} ==="
     exit 0

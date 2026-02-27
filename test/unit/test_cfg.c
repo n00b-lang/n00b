@@ -26,6 +26,7 @@
 #include "slay/token.h"
 #include "strings/string_ops.h"
 #include "internal/slay/grammar_internal.h"
+#include "n00b/n00b_compile.h"
 
 // ============================================================================
 // C tokenizer (duplicated from test_c_parse.c)
@@ -251,7 +252,7 @@ build_cfg_for(const char *src)
     n00b_parse_tree_t *tree = n00b_parse_result_tree(pr);
     assert(tree != NULL);
 
-    n00b_annot_result_t *ar = n00b_annot_walk_tree_full(shared_grammar, tree);
+    n00b_annot_result_t *ar = n00b_compile_walk(shared_grammar, tree);
     assert(ar != NULL);
 
     r.cfg   = n00b_build_cfg(ar->cf_labels, tree, *r"test", ar->symtab);

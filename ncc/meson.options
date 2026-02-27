@@ -1,0 +1,8 @@
+option('cc_path',
+       type: 'string',
+       value: '',
+       description: 'Location of the core C23 compiler')
+option('coverage',
+       type: 'boolean',
+       value: false,
+       description: 'Build with Clang source-based code coverage instrumentation')

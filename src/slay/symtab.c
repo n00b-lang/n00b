@@ -325,6 +325,15 @@ n00b_symtab_lookup_all(n00b_symtab_t *st, n00b_string_t ns_name,
     return NULL;
 }
 
+n00b_sym_entry_t *
+n00b_symtab_lookup_any(n00b_symtab_t *st, n00b_string_t ns_name,
+                        n00b_string_t name)
+{
+    n00b_sym_entry_t *sym = n00b_symtab_lookup(st, ns_name, name);
+
+    return sym ? sym : n00b_symtab_lookup_all(st, ns_name, name);
+}
+
 bool
 n00b_symtab_is_typedef(n00b_symtab_t *st, n00b_string_t name)
 {

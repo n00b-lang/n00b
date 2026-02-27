@@ -4,7 +4,6 @@
 // symbol↔node-type unification, and @assigns type unification.
 
 #include "internal/slay/annot_phases.h"
-#include "slay/infer.h"
 #include "slay/infer_expr.h"
 
 void
@@ -26,9 +25,10 @@ annot_phase_types_post(n00b_annot_walk_ctx_t *ctx, annot_node_ctx_t *nc)
         if (a->kind == N00B_ANNOT_INFER) {
             has_infer = true;
 
-            n00b_tc_type_t *t = n00b_infer_eval(
+            n00b_tc_type_t *t = n00b_infer_eval_ex(
                 ctx->tc_ctx, ctx->symtab, ctx->grammar,
-                nc->node, ctx->node_types, a->infer_expr);
+                nc->node, ctx->node_types,
+                ctx->translate_type_spec, a->infer_expr);
 
             if (t) {
                 uintptr_t key = (uintptr_t)nc->node;
@@ -131,13 +131,8 @@ annot_phase_types_post(n00b_annot_walk_ctx_t *ctx, annot_node_ctx_t *nc)
                 break;
             }
 
-            n00b_sym_entry_t *sym = n00b_symtab_lookup(
+            n00b_sym_entry_t *sym = n00b_symtab_lookup_any(
                 ctx->symtab, n00b_string_empty(), sym_name);
-
-            if (!sym) {
-                sym = n00b_symtab_lookup_all(
-                    ctx->symtab, n00b_string_empty(), sym_name);
-            }
 
             if (!sym || !sym->type_var) {
                 break;

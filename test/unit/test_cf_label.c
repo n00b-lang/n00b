@@ -26,6 +26,7 @@
 #include "slay/token.h"
 #include "strings/string_ops.h"
 #include "internal/slay/grammar_internal.h"
+#include "n00b/n00b_compile.h"
 
 // ============================================================================
 // C tokenizer (duplicated from test_c_parse.c)
@@ -338,7 +339,7 @@ test_simple_if(void)
     n00b_parse_tree_t *tree = n00b_parse_result_tree(r);
     assert(tree != NULL);
 
-    n00b_annot_result_t *ar = n00b_annot_walk_tree_full(shared_grammar, tree);
+    n00b_annot_result_t *ar = n00b_compile_walk(shared_grammar, tree);
     assert(ar != NULL);
 
     label_counts_t c = count_labels_from_tree(ar, tree);
@@ -372,7 +373,7 @@ test_if_else(void)
     assert(n00b_parse_result_ok(r));
 
     n00b_parse_tree_t *tree = n00b_parse_result_tree(r);
-    n00b_annot_result_t *ar = n00b_annot_walk_tree_full(shared_grammar, tree);
+    n00b_annot_result_t *ar = n00b_compile_walk(shared_grammar, tree);
     assert(ar != NULL);
 
     label_counts_t c = count_labels_from_tree(ar, tree);
@@ -408,7 +409,7 @@ test_while_loop(void)
     assert(n00b_parse_result_ok(r));
 
     n00b_parse_tree_t *tree = n00b_parse_result_tree(r);
-    n00b_annot_result_t *ar = n00b_annot_walk_tree_full(shared_grammar, tree);
+    n00b_annot_result_t *ar = n00b_compile_walk(shared_grammar, tree);
     assert(ar != NULL);
 
     label_counts_t c = count_labels_from_tree(ar, tree);
@@ -442,7 +443,7 @@ test_for_loop(void)
     assert(n00b_parse_result_ok(r));
 
     n00b_parse_tree_t *tree = n00b_parse_result_tree(r);
-    n00b_annot_result_t *ar = n00b_annot_walk_tree_full(shared_grammar, tree);
+    n00b_annot_result_t *ar = n00b_compile_walk(shared_grammar, tree);
     assert(ar != NULL);
 
     label_counts_t c = count_labels_from_tree(ar, tree);
@@ -474,7 +475,7 @@ test_do_while(void)
     assert(n00b_parse_result_ok(r));
 
     n00b_parse_tree_t *tree = n00b_parse_result_tree(r);
-    n00b_annot_result_t *ar = n00b_annot_walk_tree_full(shared_grammar, tree);
+    n00b_annot_result_t *ar = n00b_compile_walk(shared_grammar, tree);
     assert(ar != NULL);
 
     label_counts_t c = count_labels_from_tree(ar, tree);
@@ -508,7 +509,7 @@ test_switch(void)
     assert(n00b_parse_result_ok(r));
 
     n00b_parse_tree_t *tree = n00b_parse_result_tree(r);
-    n00b_annot_result_t *ar = n00b_annot_walk_tree_full(shared_grammar, tree);
+    n00b_annot_result_t *ar = n00b_compile_walk(shared_grammar, tree);
     assert(ar != NULL);
 
     label_counts_t c = count_labels_from_tree(ar, tree);
@@ -538,7 +539,7 @@ test_jump_return(void)
     assert(n00b_parse_result_ok(r));
 
     n00b_parse_tree_t *tree = n00b_parse_result_tree(r);
-    n00b_annot_result_t *ar = n00b_annot_walk_tree_full(shared_grammar, tree);
+    n00b_annot_result_t *ar = n00b_compile_walk(shared_grammar, tree);
     assert(ar != NULL);
 
     label_counts_t c = count_labels_from_tree(ar, tree);
@@ -573,7 +574,7 @@ test_jump_break_continue(void)
     assert(n00b_parse_result_ok(r));
 
     n00b_parse_tree_t *tree = n00b_parse_result_tree(r);
-    n00b_annot_result_t *ar = n00b_annot_walk_tree_full(shared_grammar, tree);
+    n00b_annot_result_t *ar = n00b_compile_walk(shared_grammar, tree);
     assert(ar != NULL);
 
     label_counts_t c = count_labels_from_tree(ar, tree);
@@ -607,7 +608,7 @@ test_ternary(void)
     assert(n00b_parse_result_ok(r));
 
     n00b_parse_tree_t *tree = n00b_parse_result_tree(r);
-    n00b_annot_result_t *ar = n00b_annot_walk_tree_full(shared_grammar, tree);
+    n00b_annot_result_t *ar = n00b_compile_walk(shared_grammar, tree);
     assert(ar != NULL);
 
     label_counts_t c = count_labels_from_tree(ar, tree);
@@ -647,7 +648,7 @@ test_nested_control_flow(void)
     assert(n00b_parse_result_ok(r));
 
     n00b_parse_tree_t *tree = n00b_parse_result_tree(r);
-    n00b_annot_result_t *ar = n00b_annot_walk_tree_full(shared_grammar, tree);
+    n00b_annot_result_t *ar = n00b_compile_walk(shared_grammar, tree);
     assert(ar != NULL);
 
     label_counts_t c = count_labels_from_tree(ar, tree);
@@ -680,7 +681,7 @@ test_symtab_preserved(void)
     assert(n00b_parse_result_ok(r));
 
     n00b_parse_tree_t *tree = n00b_parse_result_tree(r);
-    n00b_annot_result_t *ar = n00b_annot_walk_tree_full(shared_grammar, tree);
+    n00b_annot_result_t *ar = n00b_compile_walk(shared_grammar, tree);
     assert(ar != NULL);
     assert(ar->symtab != NULL);
     assert(ar->cf_labels != NULL);
@@ -712,7 +713,7 @@ test_empty_function(void)
     assert(n00b_parse_result_ok(r));
 
     n00b_parse_tree_t *tree = n00b_parse_result_tree(r);
-    n00b_annot_result_t *ar = n00b_annot_walk_tree_full(shared_grammar, tree);
+    n00b_annot_result_t *ar = n00b_compile_walk(shared_grammar, tree);
     assert(ar != NULL);
 
     label_counts_t c = count_labels_from_tree(ar, tree);
@@ -746,7 +747,7 @@ test_struct_adt(void)
     assert(n00b_parse_result_ok(r));
 
     n00b_parse_tree_t *tree = n00b_parse_result_tree(r);
-    n00b_annot_result_t *ar = n00b_annot_walk_tree_full(shared_grammar, tree);
+    n00b_annot_result_t *ar = n00b_compile_walk(shared_grammar, tree);
     assert(ar != NULL);
     assert(ar->symtab != NULL);
 
@@ -785,7 +786,7 @@ test_anonymous_struct(void)
     assert(n00b_parse_result_ok(r));
 
     n00b_parse_tree_t *tree = n00b_parse_result_tree(r);
-    n00b_annot_result_t *ar = n00b_annot_walk_tree_full(shared_grammar, tree);
+    n00b_annot_result_t *ar = n00b_compile_walk(shared_grammar, tree);
     assert(ar != NULL);
 
     // No tag name registered for anonymous struct — that's fine.
@@ -816,7 +817,7 @@ test_enum_adt(void)
     assert(n00b_parse_result_ok(r));
 
     n00b_parse_tree_t *tree = n00b_parse_result_tree(r);
-    n00b_annot_result_t *ar = n00b_annot_walk_tree_full(shared_grammar, tree);
+    n00b_annot_result_t *ar = n00b_compile_walk(shared_grammar, tree);
     assert(ar != NULL);
     assert(ar->symtab != NULL);
 
@@ -856,7 +857,7 @@ test_union_adt(void)
     assert(n00b_parse_result_ok(r));
 
     n00b_parse_tree_t *tree = n00b_parse_result_tree(r);
-    n00b_annot_result_t *ar = n00b_annot_walk_tree_full(shared_grammar, tree);
+    n00b_annot_result_t *ar = n00b_compile_walk(shared_grammar, tree);
     assert(ar != NULL);
     assert(ar->symtab != NULL);
 
@@ -892,7 +893,7 @@ test_struct_with_typedef(void)
     assert(n00b_parse_result_ok(r));
 
     n00b_parse_tree_t *tree = n00b_parse_result_tree(r);
-    n00b_annot_result_t *ar = n00b_annot_walk_tree_full(shared_grammar, tree);
+    n00b_annot_result_t *ar = n00b_compile_walk(shared_grammar, tree);
     assert(ar != NULL);
     assert(ar->symtab != NULL);
 
@@ -933,7 +934,7 @@ test_forward_struct(void)
     assert(n00b_parse_result_ok(r));
 
     n00b_parse_tree_t *tree = n00b_parse_result_tree(r);
-    n00b_annot_result_t *ar = n00b_annot_walk_tree_full(shared_grammar, tree);
+    n00b_annot_result_t *ar = n00b_compile_walk(shared_grammar, tree);
     assert(ar != NULL);
 
     // Forward declarations use the non-annotated rule — no tag symbol
@@ -1001,7 +1002,7 @@ test_earley_no_group_items(void)
     assert(!tree_has_group_item(tree));
 
     // The annotation walk should still find the tag.
-    n00b_annot_result_t *ar = n00b_annot_walk_tree_full(shared_grammar, tree);
+    n00b_annot_result_t *ar = n00b_compile_walk(shared_grammar, tree);
     assert(ar != NULL);
 
     n00b_sym_entry_t *sym = n00b_symtab_lookup(ar->symtab, *r"tag", *r"bar");

@@ -68,12 +68,14 @@ n00b_nt_scope_open(n00b_nonterm_t *nt,
 
 void
 n00b_nt_declares(n00b_nonterm_t *nt,
-                 n00b_child_ref_t name_ref, n00b_child_ref_t type_ref)
+                 n00b_child_ref_t name_ref, n00b_child_ref_t type_ref,
+                 n00b_string_t sym_kind)
 {
     n00b_annotation_t a = {0};
     a.kind     = N00B_ANNOT_DECLARES;
     a.name_ref = name_ref;
     a.type_ref = type_ref;
+    a.sym_kind = sym_kind;
     n00b_nt_annotate(nt, a);
 }
 
@@ -180,15 +182,17 @@ n00b_nt_switch(n00b_nonterm_t *nt, n00b_child_ref_t cond_ref,
 
 void
 n00b_nt_adt(n00b_nonterm_t *nt, n00b_string_t adt_kind,
-            n00b_child_ref_t name_ref, n00b_string_t scope_tag)
+            n00b_child_ref_t name_ref, n00b_string_t scope_tag,
+            n00b_child_ref_t keyword_ref)
 {
     n00b_annotation_t a = {0};
-    a.kind      = N00B_ANNOT_ADT;
-    a.adt_kind  = adt_kind;
-    a.name_ref  = name_ref;
-    a.scope_tag = scope_tag.data ? scope_tag
-                                 : (adt_kind.data ? adt_kind
-                                                  : n00b_string_empty());
+    a.kind            = N00B_ANNOT_ADT;
+    a.adt_kind        = adt_kind;
+    a.name_ref        = name_ref;
+    a.scope_tag       = scope_tag.data ? scope_tag
+                                       : (adt_kind.data ? adt_kind
+                                                        : n00b_string_empty());
+    a.adt_keyword_ref = keyword_ref;
     n00b_nt_annotate(nt, a);
 }
 
@@ -271,11 +275,13 @@ n00b_nt_operator(n00b_nonterm_t *nt, n00b_string_t op_str)
 }
 
 void
-n00b_nt_literal(n00b_nonterm_t *nt, n00b_string_t lit_kind)
+n00b_nt_literal(n00b_nonterm_t *nt, n00b_string_t lit_kind,
+                n00b_child_ref_t type_ref)
 {
     n00b_annotation_t a = {0};
-    a.kind    = N00B_ANNOT_LITERAL;
-    a.op_kind = lit_kind;
+    a.kind     = N00B_ANNOT_LITERAL;
+    a.op_kind  = lit_kind;
+    a.type_ref = type_ref;
     n00b_nt_annotate(nt, a);
 }
 
@@ -432,12 +438,14 @@ n00b_rule_scope_open(n00b_parse_rule_t *rule,
 
 void
 n00b_rule_declares(n00b_parse_rule_t *rule,
-                   n00b_child_ref_t name_ref, n00b_child_ref_t type_ref)
+                   n00b_child_ref_t name_ref, n00b_child_ref_t type_ref,
+                   n00b_string_t sym_kind)
 {
     n00b_annotation_t a = {0};
     a.kind     = N00B_ANNOT_DECLARES;
     a.name_ref = name_ref;
     a.type_ref = type_ref;
+    a.sym_kind = sym_kind;
     n00b_rule_annotate(rule, a);
 }
 

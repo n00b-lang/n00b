@@ -31,6 +31,7 @@
 #include "slay/n00b_tokenizer.h"
 #include "slay/symtab.h"
 #include "slay/annot_walk.h"
+#include "n00b/n00b_compile.h"
 #include "slay/cf_label.h"
 #include "slay/cfg.h"
 #include "slay/dfg.h"
@@ -144,7 +145,7 @@ run_pipeline(const char *src)
 
     r.parsed = true;
     r.tree   = n00b_parse_result_tree(r.pr);
-    r.annot  = n00b_annot_walk_tree_full(shared_grammar, r.tree);
+    r.annot  = n00b_compile_walk(shared_grammar, r.tree);
     r.diag   = n00b_diag_ctx_new();
 
     if (!r.annot) {
@@ -167,7 +168,8 @@ run_pipeline(const char *src)
 
     // Build DFG.
     if (r.cfg) {
-        r.dfg = n00b_build_dfg(r.cfg, r.annot->cf_labels, r.annot);
+        r.dfg = n00b_build_dfg(r.cfg, r.annot->cf_labels,
+                               shared_grammar, r.annot);
     }
 
     // Run analysis.

@@ -37,6 +37,7 @@ annot_phase_scope_open(n00b_annot_walk_ctx_t *ctx, annot_node_ctx_t *nc)
             n00b_symtab_push_scope(ctx->symtab, nc->scope_ns, scope_name);
             nc->pn->scope    = n00b_symtab_current_scope(ctx->symtab,
                                                           nc->scope_ns);
+            nc->pn->scope->scope_tag = a->scope_tag;
             nc->opened_scope = true;
 
             // For function scopes, add a "$return" symbol so that
@@ -76,12 +77,12 @@ annot_phase_scope_open(n00b_annot_walk_ctx_t *ctx, annot_node_ctx_t *nc)
 
                 n00b_string_t kind = a->adt_kind;
 
-                if (kind.u8_bytes > 0
-                    && n00b_unicode_str_eq(kind, *r"struct_or_union")) {
+                if (a->adt_keyword_ref.kind == N00B_ROLE_BY_INDEX
+                        ? a->adt_keyword_ref.index >= 0
+                        : a->adt_keyword_ref.name.data != NULL) {
                     n00b_parse_tree_t *kw_node
-                        = n00b_tree_find_child_by_nt_name(
-                            ctx->grammar, nc->node,
-                            *r"_kw_kw_struct_or_union");
+                        = n00b_tree_resolve_child_ref(
+                            ctx->grammar, nc->node, a->adt_keyword_ref);
 
                     if (kw_node) {
                         n00b_string_t kw
@@ -93,7 +94,9 @@ annot_phase_scope_open(n00b_annot_walk_ctx_t *ctx, annot_node_ctx_t *nc)
                     }
                 }
 
-                scope->adt_kind = kind;
+                scope->adt_kind  = kind;
+                scope->scope_tag = a->scope_tag.data ? a->scope_tag
+                                                     : a->adt_kind;
             }
 
             nc->opened_scope = true;

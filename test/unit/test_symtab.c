@@ -285,7 +285,7 @@ test_annot_walk_scope(void)
     n00b_nonterm_t *blk  = n00b_nonterm(g, *r"block");
 
     // "decl" declares from child 0 (at whatever scope is current).
-    n00b_nt_declares(decl, N00B_CHILD_IX(0), N00B_CHILD_NONE);
+    n00b_nt_declares(decl, N00B_CHILD_IX(0), N00B_CHILD_NONE, n00b_string_empty());
 
     // "block" opens a scope.
     n00b_nt_scope_open(blk, n00b_string_empty(), N00B_CHILD_NONE);
@@ -422,7 +422,7 @@ test_scope_auto_push_pop(void)
     n00b_nt_scope_open(func, n00b_string_empty(), N00B_CHILD_NONE);
 
     // "body" declares a variable at its first child.
-    n00b_nt_declares(body, N00B_CHILD_IX(0), N00B_CHILD_NONE);
+    n00b_nt_declares(body, N00B_CHILD_IX(0), N00B_CHILD_NONE, n00b_string_empty());
 
     // Add epsilon rules and finalize so annotations land on rules.
     int32_t prog_ri = add_epsilon_rule(g, prog);
@@ -489,13 +489,13 @@ test_pop_preserves_outer(void)
     n00b_nonterm_t *inner_decl = n00b_nonterm(g, *r"inner_decl");
 
     // "decl" declares at child 0 (outer, no scope).
-    n00b_nt_declares(decl, N00B_CHILD_IX(0), N00B_CHILD_NONE);
+    n00b_nt_declares(decl, N00B_CHILD_IX(0), N00B_CHILD_NONE, n00b_string_empty());
 
     // "block" opens a scope.
     n00b_nt_scope_open(blk, n00b_string_empty(), N00B_CHILD_NONE);
 
     // "inner_decl" declares at child 0 (inside scope).
-    n00b_nt_declares(inner_decl, N00B_CHILD_IX(0), N00B_CHILD_NONE);
+    n00b_nt_declares(inner_decl, N00B_CHILD_IX(0), N00B_CHILD_NONE, n00b_string_empty());
 
     // Add epsilon rules and finalize so annotations land on rules.
     int32_t prog_ri = add_epsilon_rule(g, prog);

@@ -15,6 +15,7 @@
 
 #include "slay/cfg.h"
 #include "slay/cf_label.h"
+#include "slay/grammar.h"
 #include "core/list.h"
 
 // ============================================================================
@@ -84,6 +85,7 @@ typedef struct {
  *
  * @param cfg        Source CFG (must not be NULL).
  * @param cf_labels  CF label map from `n00b_annot_walk_tree_full`.
+ * @param grammar    Grammar for keyword filtering (may be NULL).
  * @param annot      Annotation walk result (may be NULL).
  * @return Heap-allocated DFG, or NULL on error.
  *
@@ -92,6 +94,7 @@ typedef struct {
  */
 n00b_dfg_t *n00b_build_dfg(n00b_cfg_t          *cfg,
                              n00b_cf_labels_t    *cf_labels,
+                             n00b_grammar_t      *grammar,
                              n00b_annot_result_t *annot);
 
 // ============================================================================

@@ -34,6 +34,7 @@
 #include "slay/n00b_tokenizer.h"
 #include "slay/symtab.h"
 #include "slay/annot_walk.h"
+#include "n00b/n00b_compile.h"
 #include "slay/cf_label.h"
 #include "internal/slay/grammar_internal.h"
 
@@ -912,7 +913,7 @@ test_literal_int_type(void)
     n00b_parse_tree_t *tree = n00b_parse_result_tree(pr);
     assert(tree != NULL);
 
-    n00b_annot_result_t *ar = n00b_annot_walk_tree_full(shared_grammar, tree);
+    n00b_annot_result_t *ar = n00b_compile_walk(shared_grammar, tree);
     assert(ar != NULL);
     assert(ar->symtab != NULL);
     assert(ar->tc_ctx != NULL);
@@ -944,7 +945,7 @@ test_literal_string_type(void)
     assert(n00b_parse_result_ok(pr));
 
     n00b_parse_tree_t *tree = n00b_parse_result_tree(pr);
-    n00b_annot_result_t *ar = n00b_annot_walk_tree_full(shared_grammar, tree);
+    n00b_annot_result_t *ar = n00b_compile_walk(shared_grammar, tree);
     assert(ar != NULL);
     assert(ar->node_types != NULL);
 
@@ -972,7 +973,7 @@ test_explicit_type_annotation(void)
     assert(n00b_parse_result_ok(pr));
 
     n00b_parse_tree_t *tree = n00b_parse_result_tree(pr);
-    n00b_annot_result_t *ar = n00b_annot_walk_tree_full(shared_grammar, tree);
+    n00b_annot_result_t *ar = n00b_compile_walk(shared_grammar, tree);
     assert(ar != NULL);
 
     // Look up x.
@@ -1013,7 +1014,7 @@ test_param_type_annotation(void)
     assert(n00b_parse_result_ok(pr));
 
     n00b_parse_tree_t *tree = n00b_parse_result_tree(pr);
-    n00b_annot_result_t *ar = n00b_annot_walk_tree_full(shared_grammar, tree);
+    n00b_annot_result_t *ar = n00b_compile_walk(shared_grammar, tree);
     assert(ar != NULL);
     assert(ar->params != NULL);
 
@@ -1129,7 +1130,7 @@ test_literal_modifier_u8(void)
     n00b_parse_tree_t *tree = n00b_parse_result_tree(pr);
     assert(tree != NULL);
 
-    n00b_annot_result_t *ar = n00b_annot_walk_tree_full(shared_grammar, tree);
+    n00b_annot_result_t *ar = n00b_compile_walk(shared_grammar, tree);
     assert(ar != NULL);
     assert(ar->node_types != NULL);
 
@@ -1171,7 +1172,7 @@ test_literal_no_modifier(void)
     assert(n00b_parse_result_ok(pr));
 
     n00b_parse_tree_t *tree = n00b_parse_result_tree(pr);
-    n00b_annot_result_t *ar = n00b_annot_walk_tree_full(shared_grammar, tree);
+    n00b_annot_result_t *ar = n00b_compile_walk(shared_grammar, tree);
     assert(ar != NULL);
     assert(ar->node_types != NULL);
 
@@ -1210,7 +1211,7 @@ test_notrivia_with_space(void)
     if (n00b_parse_result_ok(pr)) {
         n00b_parse_tree_t *tree = n00b_parse_result_tree(pr);
         n00b_annot_result_t *ar
-            = n00b_annot_walk_tree_full(shared_grammar, tree);
+            = n00b_compile_walk(shared_grammar, tree);
         // The annotation walk should have printed a warning about
         // whitespace before the modifier tick. We verify it ran.
         assert(ar != NULL);
@@ -1235,7 +1236,7 @@ test_notrivia_no_space(void)
     assert(n00b_parse_result_ok(pr));
 
     n00b_parse_tree_t *tree = n00b_parse_result_tree(pr);
-    n00b_annot_result_t *ar = n00b_annot_walk_tree_full(shared_grammar, tree);
+    n00b_annot_result_t *ar = n00b_compile_walk(shared_grammar, tree);
     assert(ar != NULL);
 
     // No warning should be produced (tick has no leading trivia).

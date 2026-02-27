@@ -846,6 +846,8 @@ typedef struct {
     n00b_string_t     visibility_spec;
     n00b_string_t     op_kind;
     n00b_child_ref_t  notrivia_ref;
+    n00b_string_t     sym_kind;
+    n00b_child_ref_t  adt_keyword_ref;
     int32_t           penalty_cost;
 } bnf_annot_info_t;
 
@@ -977,12 +979,31 @@ bnf_walk_annotation(n00b_nt_node_t *pn, void *children, void *thunk)
     else if (str_eq_lit(annot_str, "declares")) {
         info->kind = N00B_ANNOT_DECLARES;
 
+        // @declares($name)
+        // @declares($name, $type)
+        // @declares($name, "kind")           — sym_kind without type
+        // @declares($name, $type, "kind")    — sym_kind with type
         if (args && args->len >= 1) {
             info->name_ref = parse_child_ref(slist_get(args, 0));
         }
 
-        if (args && args->len >= 2) {
+        if (args && args->len == 2) {
+            n00b_token_info_t *arg1 = (n00b_token_info_t *)slist_get(args, 1);
+
+            if (arg1 && arg1->tid == BNF_TOK_LITERAL) {
+                info->sym_kind = tok_str(arg1);
+            }
+            else {
+                info->type_ref = parse_child_ref(slist_get(args, 1));
+            }
+        }
+        else if (args && args->len >= 3) {
             info->type_ref = parse_child_ref(slist_get(args, 1));
+            n00b_token_info_t *arg2 = (n00b_token_info_t *)slist_get(args, 2);
+
+            if (arg2 && arg2->tid == BNF_TOK_LITERAL) {
+                info->sym_kind = tok_str(arg2);
+            }
         }
     }
     else if (str_eq_lit(annot_str, "type")) {
@@ -1158,6 +1179,7 @@ bnf_walk_annotation(n00b_nt_node_t *pn, void *children, void *thunk)
         // arg 0: LITERAL -> adt_kind ("class", "struct", "enum", "interface")
         // arg 1: child_ref -> name_ref
         // arg 2: optional LITERAL -> scope_tag (defaults to adt_kind)
+        // arg 3: optional child_ref -> adt_keyword_ref (keyword child)
         if (args && args->len >= 1) {
             n00b_token_info_t *kind_tok = (n00b_token_info_t *)slist_get(args, 0);
             info->adt_kind = tok_str(kind_tok);
@@ -1170,6 +1192,10 @@ bnf_walk_annotation(n00b_nt_node_t *pn, void *children, void *thunk)
         if (args && args->len >= 3) {
             n00b_token_info_t *tag_tok = (n00b_token_info_t *)slist_get(args, 2);
             info->scope_tag = tok_str(tag_tok);
+        }
+
+        if (args && args->len >= 4) {
+            info->adt_keyword_ref = parse_child_ref(slist_get(args, 3));
         }
     }
     else if (str_eq_lit(annot_str, "field")) {
@@ -1238,11 +1264,16 @@ bnf_walk_annotation(n00b_nt_node_t *pn, void *children, void *thunk)
         }
     }
     else if (str_eq_lit(annot_str, "literal")) {
-        // @literal("int")
+        // @literal("int")           — base type only
+        // @literal("int", $2)       — base type + type modifier child ref
         info->kind = N00B_ANNOT_LITERAL;
         if (args && args->len >= 1) {
             n00b_token_info_t *lit_tok = (n00b_token_info_t *)slist_get(args, 0);
             info->op_kind = tok_str(lit_tok);
+        }
+
+        if (args && args->len >= 2) {
+            info->type_ref = parse_child_ref(slist_get(args, 1));
         }
     }
     else if (str_eq_lit(annot_str, "call")) {
@@ -2009,9 +2040,11 @@ attach_annot_to_rule(n00b_parse_rule_t *rule_p, bnf_annot_info_t *info)
     annot.type_spec      = info->type_spec;
     annot.infer_expr     = info->infer_expr;
     annot.adt_kind       = info->adt_kind;
-    annot.visibility_spec = info->visibility_spec;
-    annot.op_kind        = info->op_kind;
-    annot.notrivia_ref   = info->notrivia_ref;
+    annot.visibility_spec  = info->visibility_spec;
+    annot.op_kind          = info->op_kind;
+    annot.notrivia_ref     = info->notrivia_ref;
+    annot.sym_kind         = info->sym_kind;
+    annot.adt_keyword_ref  = info->adt_keyword_ref;
 
     n00b_rule_annotate(rule_p, annot);
 }

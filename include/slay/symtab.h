@@ -77,6 +77,7 @@ struct n00b_scope_t {
     int32_t           depth;
     n00b_sym_entry_t *first_in_scope; /**< Head of this scope's symbol chain. */
     n00b_string_t     adt_kind;       /**< "struct", "union", "enum" if opened by @adt. */
+    n00b_string_t     scope_tag;      /**< From `@scope` annotation: "function", "for", "class", etc. */
 };
 
 // ============================================================================
@@ -205,6 +206,20 @@ n00b_sym_entry_t *n00b_symtab_lookup(n00b_symtab_t *st, n00b_string_t ns_name,
  * @return The entry, or NULL if not found in any scope.
  */
 n00b_sym_entry_t *n00b_symtab_lookup_all(n00b_symtab_t *st, n00b_string_t ns_name,
+                                            n00b_string_t name);
+
+/**
+ * @brief Look up a symbol, trying active scopes first then all scopes.
+ *
+ * Convenience wrapper: calls `n00b_symtab_lookup()` first, and on
+ * miss falls back to `n00b_symtab_lookup_all()`.
+ *
+ * @param st       Symbol table.
+ * @param ns_name  Namespace to search.
+ * @param name     Symbol name.
+ * @return The entry, or NULL if not found anywhere.
+ */
+n00b_sym_entry_t *n00b_symtab_lookup_any(n00b_symtab_t *st, n00b_string_t ns_name,
                                             n00b_string_t name);
 
 /**

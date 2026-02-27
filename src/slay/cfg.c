@@ -371,11 +371,13 @@ cfg_build_stmt(cfg_ctx_t *ctx, n00b_parse_tree_t *node, int32_t cur_block)
     }
 
     // Function definitions get their own CFG — don't inline their body
-    // into the enclosing CFG.
+    // into the enclosing CFG.  Detected via @scope("function", ...) tag
+    // stored during the annotation walk (language-independent).
     n00b_nt_node_t *nt = &n00b_tree_node_value(node);
 
-    if (n00b_unicode_str_eq(nt->name, *r"func-def")) {
-        // Find the <body> child (last NT child).
+    if (nt->scope && nt->scope->scope_tag.u8_bytes > 0
+        && n00b_unicode_str_eq(nt->scope->scope_tag, *r"function")) {
+        // Find the body child (last non-leaf NT child).
         n00b_parse_tree_t *body = NULL;
         size_t nc = n00b_tree_num_children(node);
 
@@ -383,18 +385,13 @@ cfg_build_stmt(cfg_ctx_t *ctx, n00b_parse_tree_t *node, int32_t cur_block)
             n00b_parse_tree_t *child = n00b_tree_child(node, i - 1);
 
             if (!n00b_tree_is_leaf(child)) {
-                n00b_nt_node_t *cpn = &n00b_tree_node_value(child);
-
-                if (n00b_unicode_str_eq(cpn->name, *r"body")) {
-                    body = child;
-                    break;
-                }
+                body = child;
+                break;
             }
         }
 
         // Get function name from the scope attached to this node.
-        n00b_string_t func_name = nt->scope ? nt->scope->name
-                                             : *r"<anon>";
+        n00b_string_t func_name = nt->scope->name;
 
         if (body) {
             // Build a separate CFG for the function body.

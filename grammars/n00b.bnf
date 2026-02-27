@@ -231,7 +231,7 @@
 
 # $0=func-mods, $1=opt-return-type, $2=func-kw, $3=IDENTIFIER (name),
 # $4=formal-list, $5=where-clause, $6=body
-<func-def> @scope("function", $3) @declares($3) ::= <func-mod>* <func-return-type>? <func-kind> %IDENTIFIER <param-decl> <where-clause>? <body>
+<func-def> @scope("function", $3) @declares($3, "function") ::= <func-mod>* <func-return-type>? <func-kind> %IDENTIFIER <param-decl> <where-clause>? <body>
 
 <func-kind> ::= %"func" | %"method"
 <func-mod> ::= %"private" | %"once"
@@ -248,17 +248,17 @@
 
 # Typed: $0=id-list (name), $1=":", $2=type-spec
 # Untyped: $0=id-list (name)
-<formal-param> @declares($0, $2) ::= <id-list> %":" <type-spec>
-<formal-param> @declares($0) ::= <id-list>
+<formal-param> @declares($0, $2, "param") ::= <id-list> %":" <type-spec>
+<formal-param> @declares($0, "param") ::= <id-list>
 
 # Typed: $0="*", $1=IDENTIFIER (name), $2=":", $3=type-spec
 # Untyped: $0="*", $1=IDENTIFIER (name)
-<varargs-param> @declares($1, $3) ::= %"*" %IDENTIFIER %":" <type-spec>
-<varargs-param> @declares($1) ::= %"*" %IDENTIFIER
+<varargs-param> @declares($1, $3, "param") ::= %"*" %IDENTIFIER %":" <type-spec>
+<varargs-param> @declares($1, "param") ::= %"*" %IDENTIFIER
 
 <kw-list> ::= %"**" <kw-one> (%"," <kw-one>)*
-<kw-one> @declares($0, $2) ::= %IDENTIFIER %":" <type-spec> %"=" <literal>
-<kw-one> @declares($0) ::= %IDENTIFIER %"=" <literal>
+<kw-one> @declares($0, $2, "param") ::= %IDENTIFIER %":" <type-spec> %"=" <literal>
+<kw-one> @declares($0, "param") ::= %IDENTIFIER %"=" <literal>
 
 # Return type in front position (function definitions)
 <func-return-type> ::= <union-tspec>
@@ -545,8 +545,8 @@
 
 <postfix-expr> @infer("`t")             ::= <postfix-expr> %"." %IDENTIFIER
 <postfix-expr> @infer("`t")             ::= <postfix-expr> %"[" <index-contents> %"]"
-<postfix-expr> @infer("return_of($0)")  ::= <postfix-expr> %"(" <call-args> %")"
-<postfix-expr> @infer("return_of($0)")  ::= <postfix-expr> %"(" %")"
+<postfix-expr> @infer("return_of($0)") @call($0, $2) ::= <postfix-expr> %"(" <call-args> %")"
+<postfix-expr> @infer("return_of($0)") @call($0)     ::= <postfix-expr> %"(" %")"
 <postfix-expr>                          ::= <primary>
 <postfix-expr> @operator("unwrap_result") @infer("`t") ::= <postfix-expr> %"!"
 
@@ -579,13 +579,13 @@
 # Literals
 # ============================================================================
 
-<simple-lit> @literal("int") @notrivia($1)    ::= %INT_LIT (%"'" <type-spec>)?
-<simple-lit> @literal("int") @notrivia($1)    ::= %HEX_LIT (%"'" <type-spec>)?
-<simple-lit> @literal("f64") @notrivia($1)    ::= %FLOAT_LIT (%"'" <type-spec>)?
-<simple-lit> @literal("string") @notrivia($1) ::= %STRING_LIT (%"'" <type-spec>)?
-<simple-lit> @literal("i32")                  ::= %CHAR_LIT
-<simple-lit> @literal("bool")                 ::= %"true"
-<simple-lit> @literal("bool")                 ::= %"false"
+<simple-lit> @literal("int", type-spec) @notrivia($1)    ::= %INT_LIT (%"'" <type-spec>)?
+<simple-lit> @literal("int", type-spec) @notrivia($1)    ::= %HEX_LIT (%"'" <type-spec>)?
+<simple-lit> @literal("f64", type-spec) @notrivia($1)    ::= %FLOAT_LIT (%"'" <type-spec>)?
+<simple-lit> @literal("string", type-spec) @notrivia($1) ::= %STRING_LIT (%"'" <type-spec>)?
+<simple-lit> @literal("i32")                             ::= %CHAR_LIT
+<simple-lit> @literal("bool")                            ::= %"true"
+<simple-lit> @literal("bool")                            ::= %"false"
 <simple-lit> @notrivia($1)                    ::= %EMBED (%"'" <type-spec>)?
 
 <bool-lit> @literal("bool") ::= %"true"

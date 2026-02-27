@@ -1,0 +1,190 @@
+project('ncc', 'c',
+  version : '0.1.0',
+  meson_version : '>= 1.1',
+  default_options : ['c_std=gnu23', 'warning_level=3'])
+
+cc = meson.get_compiler('c')
+
+if not cc.compiles('int main(void) { return 0; }', args: ['-std=c23'],
+                    name: 'C23 support check')
+  error('Compiler does not support -std=c23. Use clang 22+ (/usr/local/bin/clang).')
+endif
+
+add_project_arguments(
+  cc.get_supported_arguments(
+    '-Wno-gnu-statement-expression-from-macro-expansion',
+    '-Wno-gnu-zero-variadic-macro-arguments',
+  ),
+  language : 'c',
+)
+
+# Check for glibc (needed on Linux)
+glibc_check = '''
+#include <stdio.h>
+#ifndef __GLIBC__
+#error NO GLIBC
+#endif
+'''
+using_glibc = cc.compiles(glibc_check, name : 'glibc check')
+
+# Default compiler path for NCC_DEFAULT_CC
+default_compiler_path = get_option('cc_path')
+if default_compiler_path == ''
+  default_compiler_path = cc.cmd_array()[0]
+endif
+
+c_args = [
+  '-DNCC_DEFAULT_CC="' + default_compiler_path + '"',
+]
+
+if using_glibc
+  c_args += ['-D_GNU_SOURCE']
+endif
+
+if host_machine.cpu_family() == 'x86_64' and cc.get_id() == 'clang'
+  c_args += ['-Wno-atomic-alignment']
+endif
+
+# Clang source-based code coverage
+coverage_enabled = get_option('coverage')
+coverage_args = []
+coverage_link_args = []
+if coverage_enabled
+  if cc.get_id() != 'clang'
+    error('Coverage requires Clang compiler')
+  endif
+  coverage_args = ['-fprofile-instr-generate', '-fcoverage-mapping']
+  coverage_link_args = ['-fprofile-instr-generate']
+endif
+
+inc = include_directories('include')
+
+# ── Library sources ──────────────────────────────────────────────────────────
+
+src_core = files(
+  'src/core/string.c',
+  'src/core/sha256.c',
+)
+
+src_slay = files(
+  'src/slay/pwz.c',
+  'src/slay/grammar.c',
+  'src/slay/parse_tree.c',
+  'src/slay/parse_forest.c',
+  'src/slay/hashset.c',
+  'src/slay/unicode_class.c',
+  'src/slay/annotation.c',
+  'src/slay/token.c',
+  'src/slay/bnf.c',
+  'src/slay/pretty_print.c',
+  'src/slay/annot_walk.c',
+  'src/slay/transform.c',
+  'src/slay/symtab.c',
+  'src/slay/c_tokenizer.c',
+  'src/slay/pprint.c',
+  'src/slay/commander.c',
+  'src/slay/type_normalize.c',
+  'src/slay/xform_helpers.c',
+  'src/slay/xform_typeid.c',
+  'src/slay/xform_typestr.c',
+  'src/slay/xform_typehash.c',
+  'src/slay/xform_once.c',
+  'src/slay/xform_bang.c',
+  'src/slay/xform_rstr.c',
+  'src/slay/xform_constexpr.c',
+  'src/slay/xform_constexpr_paste.c',
+  'src/slay/xform_kargs_vargs.c',
+)
+
+src_parsers = files(
+  'src/parsers/token_stream.c',
+  'src/parsers/scanner.c',
+  'src/parsers/scan_recipes.c',
+)
+
+# ── Static library (available for standalone use) ────────────────────────────
+
+libncc = static_library('ncc',
+  src_core + src_slay + src_parsers,
+  include_directories : inc,
+  c_args : c_args + coverage_args,
+  link_args : coverage_link_args,
+)
+
+libncc_dep = declare_dependency(
+  link_with : libncc,
+  include_directories : inc,
+)
+
+# ── NCC executable ───────────────────────────────────────────────────────────
+
+ncc_exe = executable('ncc',
+  'src/ncc.c',
+  c_args : c_args + coverage_args,
+  link_args : coverage_link_args,
+  dependencies : libncc_dep,
+  install : true,
+)
+
+# ── Smoke tests ──────────────────────────────────────────────────────────────
+
+test_runner = find_program('test/run_test.sh')
+test_dir    = meson.current_source_dir() / 'test'
+
+# Library-level tests (link against libncc directly)
+test_pwz = executable('test_pwz',
+  'test/test_pwz.c',
+  c_args : c_args + coverage_args,
+  link_args : coverage_link_args,
+  dependencies : libncc_dep,
+)
+test('pwz_smoke', test_pwz, suite : 'ncc')
+
+test_bnf = executable('test_bnf',
+  'test/test_bnf.c',
+  c_args : c_args + coverage_args,
+  link_args : coverage_link_args,
+  dependencies : libncc_dep,
+)
+test('bnf_c_parse', test_bnf, suite : 'ncc')
+
+# Compiler-level tests (run through ncc executable)
+ncc_compile_tests = {
+  'bang':          ['compile_run',  test_dir / 'test_bang.c'],
+  'constexpr':    ['compile_run',  test_dir / 'test_constexpr.c'],
+  'kargs':        ['compile_run',  test_dir / 'test_kargs.c'],
+  'kargs_vargs':  ['compile_run',  test_dir / 'test_kargs_vargs.c'],
+  'rstr':         ['compile_run',  test_dir / 'test_rstr.c'],
+  'vargs':        ['compile_run',  test_dir / 'test_vargs.c'],
+}
+
+foreach name, params : ncc_compile_tests
+  test('ncc_' + name, test_runner,
+    args : [ncc_exe, params[0], params[1]],
+    suite : 'ncc',
+    depends : ncc_exe,
+  )
+endforeach
+
+# Error tests (expect non-zero exit)
+ncc_error_tests = {
+  'err_bang_at_file_scope':       test_dir / 'err_bang_at_file_scope.c',
+  'err_bang_missing_parens':      test_dir / 'err_bang_missing_parens.c',
+  'err_bang_void_fn':             test_dir / 'err_bang_void_fn.c',
+  'err_constexpr_bad_expr':      test_dir / 'err_constexpr_bad_expr.c',
+  'err_constexpr_min_one_arg':   test_dir / 'err_constexpr_min_one_arg.c',
+  'err_constexpr_paste_bad_frag': test_dir / 'err_constexpr_paste_bad_frag.c',
+  'err_constexpr_wrong_args':    test_dir / 'err_constexpr_wrong_args.c',
+  'err_missing_semicolon':       test_dir / 'err_missing_semicolon.c',
+  'err_once_non_function':       test_dir / 'err_once_non_function.c',
+  'err_rstr_bad_tag':            test_dir / 'err_rstr_bad_tag.c',
+  'err_typeid_no_args':          test_dir / 'err_typeid_no_args.c',
+}
+
+foreach name, src : ncc_error_tests
+  test('ncc_' + name, test_runner,
+    args : [ncc_exe, 'expect_error', src],
+    suite : 'ncc',
+    depends : ncc_exe,
+  )
+endforeach

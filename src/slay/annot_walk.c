@@ -121,7 +121,9 @@ walk_node(n00b_annot_walk_ctx_t *ctx, n00b_parse_tree_t *node)
 // ============================================================================
 
 n00b_annot_result_t *
-n00b_annot_walk_tree_full(n00b_grammar_t *g, n00b_parse_tree_t *tree)
+n00b_annot_walk_tree_full_ex(n00b_grammar_t             *g,
+                             n00b_parse_tree_t          *tree,
+                             n00b_translate_type_spec_fn ts_fn)
 {
     if (!g || !tree) {
         return NULL;
@@ -142,13 +144,14 @@ n00b_annot_walk_tree_full(n00b_grammar_t *g, n00b_parse_tree_t *tree)
     *shadowed_entries = n00b_list_new_private(n00b_sym_entry_t *);
 
     n00b_annot_walk_ctx_t ctx = {
-        .symtab           = n00b_symtab_new(),
-        .grammar          = g,
-        .cf_labels        = labels,
-        .tc_ctx           = n00b_tc_ctx_new(),
-        .params           = params,
-        .node_types       = node_types,
-        .shadowed_entries = shadowed_entries,
+        .symtab              = n00b_symtab_new(),
+        .grammar             = g,
+        .cf_labels           = labels,
+        .tc_ctx              = n00b_tc_ctx_new(),
+        .params              = params,
+        .node_types          = node_types,
+        .shadowed_entries    = shadowed_entries,
+        .translate_type_spec = ts_fn,
     };
 
     walk_node(&ctx, tree);
@@ -162,6 +165,12 @@ n00b_annot_walk_tree_full(n00b_grammar_t *g, n00b_parse_tree_t *tree)
     result->shadowed_entries = ctx.shadowed_entries;
 
     return result;
+}
+
+n00b_annot_result_t *
+n00b_annot_walk_tree_full(n00b_grammar_t *g, n00b_parse_tree_t *tree)
+{
+    return n00b_annot_walk_tree_full_ex(g, tree, NULL);
 }
 
 n00b_annot_result_t *

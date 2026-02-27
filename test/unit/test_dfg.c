@@ -16,6 +16,7 @@
 #include "parsers/scanner.h"
 #include "parsers/token_stream.h"
 #include "slay/annot_walk.h"
+#include "n00b/n00b_compile.h"
 #include "slay/bnf.h"
 #include "slay/cf_label.h"
 #include "slay/cfg.h"
@@ -130,13 +131,13 @@ build_dfg_for(const char *src)
     n00b_parse_tree_t *tree = n00b_parse_result_tree(pr);
     assert(tree != NULL);
 
-    n00b_annot_result_t *ar = n00b_annot_walk_tree_full(shared_grammar, tree);
+    n00b_annot_result_t *ar = n00b_compile_walk(shared_grammar, tree);
     assert(ar != NULL);
 
     r.cfg   = n00b_build_cfg(ar->cf_labels, tree, *r"test", ar->symtab);
     assert(r.cfg != NULL);
 
-    r.dfg   = n00b_build_dfg(r.cfg, ar->cf_labels, ar);
+    r.dfg   = n00b_build_dfg(r.cfg, ar->cf_labels, shared_grammar, ar);
     r.annot = ar;
 
     return r;
@@ -655,7 +656,8 @@ test_dfg_param_def(void)
     assert(fsym->cfg != NULL);
 
     // Build a DFG from the function's own CFG.
-    n00b_dfg_t *fdfg = n00b_build_dfg(fsym->cfg, r.annot->cf_labels, r.annot);
+    n00b_dfg_t *fdfg = n00b_build_dfg(fsym->cfg, r.annot->cf_labels,
+                                      shared_grammar, r.annot);
     assert(fdfg != NULL);
 
     // Should have a DEF of x (from parameter) and a USE of x.

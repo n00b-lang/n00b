@@ -32,6 +32,7 @@
 #include "slay/n00b_tokenizer.h"
 #include "slay/symtab.h"
 #include "slay/annot_walk.h"
+#include "n00b/n00b_compile.h"
 #include "slay/cf_label.h"
 #include "slay/infer_expr.h"
 #include "internal/slay/grammar_internal.h"
@@ -134,7 +135,7 @@ run_pipeline(const char *src)
 
     r.parsed = true;
     r.tree   = n00b_parse_result_tree(r.pr);
-    r.annot  = n00b_annot_walk_tree_full(shared_grammar, r.tree);
+    r.annot  = n00b_compile_walk(shared_grammar, r.tree);
 
     return r;
 }

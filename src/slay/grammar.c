@@ -1661,3 +1661,22 @@ n00b_grammar_finalize(n00b_grammar_t *g)
 
     g->finalized = true;
 }
+
+// ============================================================================
+// Keyword query
+// ============================================================================
+
+bool
+n00b_grammar_is_keyword(n00b_grammar_t *g, n00b_string_t text)
+{
+    if (!g || !g->terminal_map || text.u8_bytes == 0) {
+        return false;
+    }
+
+    n00b_string_t *key   = &text;
+    bool           found = false;
+
+    (void)n00b_dict_get(g->terminal_map, key, &found);
+
+    return found;
+}

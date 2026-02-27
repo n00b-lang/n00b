@@ -471,7 +471,6 @@ n00b_slay = [
     'src/slay/annot_symtab.c',
     'src/slay/annot_cf.c',
     'src/slay/annot_types.c',
-    'src/slay/infer.c',
     'src/slay/infer_expr.c',
     'src/slay/cfg.c',
     'src/slay/cdg.c',
@@ -480,8 +479,19 @@ n00b_slay = [
     'src/slay/analyze.c',
     'src/slay/debug.c',
     'src/slay/c_tokenizer.c',
-    'src/slay/n00b_tokenizer.c',
     'src/slay/transform.c',
+    'src/slay/codegen.c',
+    'src/slay/codegen_mir.c',
+]
+
+# ============================================================================
+# N00b compiler (language-specific)
+# ============================================================================
+
+n00b_compiler = [
+    'src/n00b/n00b_tokenizer.c',
+    'src/n00b/n00b_type_spec.c',
+    'src/n00b/n00b_compile.c',
 ]
 
 # ============================================================================
@@ -521,7 +531,7 @@ n00b_typecheck = [
     'src/typecheck/print.c',
 ]
 
-n00b_dll_src = n00b_core + n00b_unicode + n00b_strings + n00b_render + n00b_table + n00b_conduit + n00b_parsers + n00b_hexdump + n00b_logic + n00b_slay + n00b_typecheck
+n00b_dll_src = n00b_core + n00b_unicode + n00b_strings + n00b_render + n00b_table + n00b_conduit + n00b_parsers + n00b_hexdump + n00b_logic + n00b_slay + n00b_typecheck + n00b_compiler
 
 # Build generated unicode tables with --no-ncc (they are pure data,
 # no ncc extensions, and parsing them is extremely expensive).
@@ -536,7 +546,7 @@ gen_unicode_lib = static_library('n00b_gen_unicode',
 # pure C; parsing it through ncc's packrat parser OOMs in constrained
 # environments like Docker cross-builds).
 n00b_vendor_lib = static_library('n00b_vendor',
-    ['src/vendor/md4c.c'],
+    ['src/vendor/md4c.c', 'src/vendor/linenoise.c'],
     include_directories: incdir,
     c_args: exe_c_args + ['--no-ncc'],
     link_args: link_args,
@@ -1013,6 +1023,15 @@ mir_test = executable('test_mir',
 )
 test('mir', mir_test, suite: 'unit')
 
+codegen_test = executable('test_codegen',
+    ['test/unit/test_codegen.c'],
+    include_directories: incdir,
+    c_args: exe_c_args,
+    link_with: [n00b],
+    dependencies: [mir_dep],
+)
+test('codegen', codegen_test, suite: 'unit')
+
 # ============================================================================
 # Render / layout tests
 # ============================================================================
@@ -1085,10 +1104,13 @@ table_tool = executable('n00b_table',
     install: true,
 )
 
-# N00b dev tool (parse + annotate n00b source files)
+# N00b dev tool (parse + annotate n00b source files, REPL)
 n00b_dev = executable('n00b_dev',
-    ['src/tools/n00b_dev.c'],
-    kwargs: test_common_kwargs,
+    ['src/tools/n00b_dev.c', 'src/tools/n00b_repl.c'],
+    include_directories: incdir,
+    c_args: exe_c_args,
+    link_with: [n00b],
+    dependencies: [mir_dep],
     install: true,
 )
 
