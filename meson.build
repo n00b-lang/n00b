@@ -466,7 +466,10 @@ n00b_slay = [
     'src/slay/commander_json.c',
     'src/slay/symtab.c',
     'src/slay/annot_walk.c',
+    'src/slay/infer.c',
     'src/slay/cfg.c',
+    'src/slay/cdg.c',
+    'src/slay/dfg.c',
     'src/slay/debug.c',
     'src/slay/c_tokenizer.c',
     'src/slay/n00b_tokenizer.c',
@@ -506,6 +509,7 @@ n00b_logic = [
 n00b_typecheck = [
     'src/typecheck/construct.c',
     'src/typecheck/context.c',
+    'src/typecheck/unify.c',
 ]
 
 n00b_dll_src = n00b_core + n00b_unicode + n00b_strings + n00b_render + n00b_table + n00b_conduit + n00b_parsers + n00b_hexdump + n00b_logic + n00b_slay + n00b_typecheck
@@ -942,6 +946,18 @@ cfg_test = executable('test_cfg',
     kwargs: test_common_kwargs,
 )
 test('cfg', cfg_test, suite: 'unit')
+
+cdg_test = executable('test_cdg',
+    ['test/unit/test_cdg.c'],
+    kwargs: test_common_kwargs,
+)
+test('cdg', cdg_test, suite: 'unit')
+
+dfg_test = executable('test_dfg',
+    ['test/unit/test_dfg.c'],
+    kwargs: test_common_kwargs,
+)
+test('dfg', dfg_test, suite: 'unit')
 
 # ============================================================================
 # Type checker tests

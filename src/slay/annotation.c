@@ -381,6 +381,24 @@ n00b_nt_nospace(n00b_nonterm_t *nt, n00b_child_ref_t child_ref)
 }
 
 void
+n00b_nt_notrivia(n00b_nonterm_t *nt, n00b_child_ref_t child_ref)
+{
+    n00b_annotation_t a = {0};
+    a.kind         = N00B_ANNOT_NOTRIVIA;
+    a.notrivia_ref = child_ref;
+    n00b_nt_annotate(nt, a);
+}
+
+void
+n00b_rule_notrivia(n00b_parse_rule_t *rule, n00b_child_ref_t child_ref)
+{
+    n00b_annotation_t a = {0};
+    a.kind         = N00B_ANNOT_NOTRIVIA;
+    a.notrivia_ref = child_ref;
+    n00b_rule_annotate(rule, a);
+}
+
+void
 n00b_nt_pp_align(n00b_nonterm_t *nt, n00b_child_ref_t child_ref)
 {
     n00b_annotation_t a = {0};

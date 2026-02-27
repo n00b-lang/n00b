@@ -20,7 +20,6 @@
 #include "parsers/token_stream.h"
 
 #include <assert.h>
-#include <stdio.h>
 #include <string.h>
 
 // ============================================================================
@@ -647,7 +646,9 @@ d_d_prime(n00b_pwz_parser_t *p, int32_t pos, n00b_token_info_t *tok,
         if (tok && exp->alt.nt_id >= 0) {
             n00b_nonterm_t *nt = n00b_get_nonterm(p->grammar, exp->alt.nt_id);
 
-            if (nt && !nt->group_nt) {
+            // Don't filter by per-rule FIRST sets when the NT can derive
+            // empty (first_has_any is set for nullable NTs by finalize).
+            if (nt && !nt->group_nt && !nt->first_has_any) {
                 can_filter_alts = true;
             }
         }
@@ -896,11 +897,9 @@ run_parse(n00b_pwz_parser_t *p)
 
         int32_t complete_pos = pos + 1;
 
-        // Ensure the next token is available via lazy stream fill:
-        // d_u may derive new items that call
-        // d_d(p, complete_pos, get_token(p, complete_pos), ...),
-        // so the token at complete_pos must be available.
-        bool have_next = (n00b_stream_get(p->stream, complete_pos) != NULL);
+        // Check if there's a next token (drives the termination condition).
+        n00b_token_info_t *next_check = n00b_stream_get(p->stream, complete_pos);
+        bool have_next = (next_check != NULL);
 
         for (size_t i = 0; i < wl_len; i++) {
             pwz_zipper_t *z = &p->worklist.data[i];
@@ -908,7 +907,6 @@ run_parse(n00b_pwz_parser_t *p)
         }
 
         if (!have_next) {
-            // No more tokens — this was the last position.
             return n00b_list_len(p->tops) > 0;
         }
     }

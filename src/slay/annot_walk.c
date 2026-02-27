@@ -7,11 +7,19 @@
 
 #include "slay/annot_walk.h"
 #include "slay/annotation.h"
+#include "slay/infer.h"
 #include "internal/slay/grammar_internal.h"
 #include "core/alloc.h"
 #include "strings/string_ops.h"
 
 #include <stdio.h>
+
+// Now that n00b_option_decl(n00b_string_t) is centralized in core/string.h,
+// we can include the typecheck headers directly.
+#include "typecheck/types.h"
+#include "typecheck/construct.h"
+#include "typecheck/context.h"
+#include "typecheck/unify.h"
 
 
 // ============================================================================
@@ -131,6 +139,74 @@ extract_first_identifier(n00b_parse_tree_t *node)
 }
 
 // ============================================================================
+// Terminal + NT lookup helpers
+// ============================================================================
+
+// Find the leftmost terminal token in a subtree (recurse through groups).
+static n00b_token_info_t *
+find_first_terminal(n00b_parse_tree_t *node)
+{
+    if (!node) {
+        return NULL;
+    }
+
+    if (n00b_tree_is_leaf(node)) {
+        return n00b_tree_leaf_value(node);
+    }
+
+    size_t nc = n00b_tree_num_children(node);
+
+    for (size_t i = 0; i < nc; i++) {
+        n00b_token_info_t *tok = find_first_terminal(n00b_tree_child(node, i));
+
+        if (tok) {
+            return tok;
+        }
+    }
+
+    return NULL;
+}
+
+// Find a child NT by name, recursing through $$group nodes.
+// Duplicate of find_child_nt in infer.c, kept local to avoid coupling.
+static n00b_parse_tree_t *
+find_child_by_nt_name(n00b_grammar_t *g, n00b_parse_tree_t *parent,
+                      n00b_string_t name)
+{
+    size_t nc = n00b_tree_num_children(parent);
+
+    for (size_t i = 0; i < nc; i++) {
+        n00b_parse_tree_t *child = n00b_tree_child(parent, i);
+
+        if (n00b_tree_is_leaf(child)) {
+            continue;
+        }
+
+        n00b_nt_node_t *cpn = &n00b_tree_node_value(child);
+
+        if (cpn->group_top) {
+            n00b_parse_tree_t *found = find_child_by_nt_name(g, child, name);
+
+            if (found) {
+                return found;
+            }
+
+            continue;
+        }
+
+        if (cpn->id >= 0) {
+            n00b_nonterm_t *nt = n00b_get_nonterm(g, cpn->id);
+
+            if (nt && n00b_unicode_str_eq(nt->name, name)) {
+                return child;
+            }
+        }
+    }
+
+    return NULL;
+}
+
+// ============================================================================
 // DFS walk
 // ============================================================================
 
@@ -211,11 +287,28 @@ walk_node(n00b_annot_walk_ctx_t *ctx, n00b_parse_tree_t *node)
                             : n00b_string_empty();
 
             if (sym_name.u8_bytes > 0) {
+                // Distinguish params from variables by the NT name.
+                n00b_sym_kind_t sym_kind = N00B_SYM_VARIABLE;
+
+                if (nt && (n00b_unicode_str_eq(nt->name, *r"formal-param")
+                        || n00b_unicode_str_eq(nt->name, *r"varargs-param")
+                        || n00b_unicode_str_eq(nt->name, *r"kw-one"))) {
+                    sym_kind = N00B_SYM_PARAM;
+                }
+
                 last_sym = n00b_symtab_add(ctx->symtab,
                                             n00b_string_empty(),
                                             sym_name,
-                                            N00B_SYM_VARIABLE,
+                                            sym_kind,
                                             node);
+
+                if (ctx->tc_ctx) {
+                    last_sym->type_var = n00b_tc_fresh_var(ctx->tc_ctx);
+                }
+
+                if (sym_kind == N00B_SYM_PARAM && ctx->params) {
+                    n00b_list_push(*ctx->params, last_sym);
+                }
             }
 
             break;
@@ -234,6 +327,10 @@ walk_node(n00b_annot_walk_ctx_t *ctx, n00b_parse_tree_t *node)
                                             sym_name,
                                             N00B_SYM_TYPEDEF,
                                             node);
+
+                if (ctx->tc_ctx) {
+                    last_sym->type_var = n00b_tc_fresh_var(ctx->tc_ctx);
+                }
             }
 
             break;
@@ -275,6 +372,10 @@ walk_node(n00b_annot_walk_ctx_t *ctx, n00b_parse_tree_t *node)
 
                 sym->adt_kind = kind;
                 last_sym      = sym;
+
+                if (ctx->tc_ctx) {
+                    last_sym->type_var = n00b_tc_fresh_var(ctx->tc_ctx);
+                }
             }
 
             break;
@@ -301,6 +402,10 @@ walk_node(n00b_annot_walk_ctx_t *ctx, n00b_parse_tree_t *node)
                 sym->is_field  = true;
                 sym->type_node = type_node;
                 last_sym       = sym;
+
+                if (ctx->tc_ctx) {
+                    last_sym->type_var = n00b_tc_fresh_var(ctx->tc_ctx);
+                }
             }
 
             break;
@@ -327,6 +432,10 @@ walk_node(n00b_annot_walk_ctx_t *ctx, n00b_parse_tree_t *node)
                 sym->is_method = true;
                 sym->type_node = type_node;
                 last_sym       = sym;
+
+                if (ctx->tc_ctx) {
+                    last_sym->type_var = n00b_tc_fresh_var(ctx->tc_ctx);
+                }
             }
 
             break;
@@ -346,8 +455,57 @@ walk_node(n00b_annot_walk_ctx_t *ctx, n00b_parse_tree_t *node)
             break;
         }
 
+        case N00B_ANNOT_LITERAL: {
+            // @literal("type_name") — map this parse node to its literal type.
+            n00b_string_t type_name = a->op_kind;
+            n00b_tc_type_t *lit_type = NULL;
+
+            if (type_name.u8_bytes > 0 && ctx->tc_ctx && ctx->node_types) {
+                lit_type = n00b_tc_lookup_prim(ctx->tc_ctx, type_name);
+            }
+
+            // Check for a type modifier: look for a <type-spec> child
+            // in this node (from the optional '...<type-spec> part of
+            // the grammar rule). If present, it overrides the @literal
+            // base type.
+            if (ctx->tc_ctx) {
+                n00b_parse_tree_t *tspec = find_child_by_nt_name(
+                    ctx->grammar, node, *r"type-spec");
+
+                if (tspec) {
+                    n00b_tc_type_t *mod_type = n00b_tc_translate_type_spec(
+                        ctx->tc_ctx, ctx->grammar, tspec);
+
+                    if (mod_type) {
+                        lit_type = mod_type;
+                    }
+                }
+            }
+
+            if (lit_type && ctx->node_types) {
+                uintptr_t key = (uintptr_t)node;
+                n00b_dict_put(ctx->node_types, key, lit_type);
+            }
+
+            break;
+        }
+
         default:
             break;
+        }
+    }
+
+    // ---- Post-Loop 1: bind explicit type annotations ----
+    //
+    // When @declares($0, $2) fires, last_sym->type_node is set to the
+    // <type-spec> child. Translate it and unify with the symbol's type_var.
+
+    if (last_sym && last_sym->type_node && ctx->tc_ctx) {
+        n00b_tc_type_t *declared = n00b_tc_translate_type_spec(
+            ctx->tc_ctx, ctx->grammar, last_sym->type_node);
+
+        if (declared) {
+            n00b_tc_unify(ctx->tc_ctx, last_sym->type_var, declared);
         }
     }
 
@@ -491,6 +649,53 @@ walk_node(n00b_annot_walk_ctx_t *ctx, n00b_parse_tree_t *node)
             break;
         }
 
+        case N00B_ANNOT_VARREF: {
+            n00b_cf_label_t *label = n00b_alloc(n00b_cf_label_t);
+            label->kind = N00B_CF_VARREF;
+            label->self = node;
+            label->cond = resolve_child_ref(ctx->grammar, node, a->name_ref);
+            n00b_dict_put(ctx->cf_labels, node, label);
+            break;
+        }
+
+        case N00B_ANNOT_OPERATOR: {
+            // @operator("unwrap_result") — postfix ! on result[T].
+            if (a->op_kind.u8_bytes > 0
+                && n00b_unicode_str_eq(a->op_kind, *r"unwrap_result")) {
+                n00b_cf_label_t *label = n00b_alloc(n00b_cf_label_t);
+                label->kind = N00B_CF_UNWRAP_RESULT;
+                label->self = node;
+                n00b_dict_put(ctx->cf_labels, node, label);
+            }
+            break;
+        }
+
+        case N00B_ANNOT_NOTRIVIA: {
+            // @notrivia($N) — the terminal at child index N must have
+            // no leading trivia (whitespace/comments before it).
+            int32_t child_ix = a->notrivia_ref.index;
+
+            if (child_ix >= 0
+                && (size_t)child_ix < n00b_tree_num_children(node)) {
+                n00b_parse_tree_t *target
+                    = n00b_tree_child(node, child_ix);
+                // Drill into group nodes to find the actual terminal.
+                n00b_token_info_t *tok = find_first_terminal(target);
+
+                if (tok && tok->leading_trivia) {
+                    // Whitespace before the tick in a literal modifier.
+                    // TODO: record a proper diagnostic error once
+                    // the diagnostic subsystem is wired up.
+                    fprintf(stderr,
+                            "warning: whitespace before modifier tick "
+                            "at line %u col %u\n",
+                            tok->line, tok->column);
+                }
+            }
+
+            break;
+        }
+
         default:
             break;
         }
@@ -525,17 +730,30 @@ n00b_annot_walk_tree_full(n00b_grammar_t *g, n00b_parse_tree_t *tree)
     n00b_cf_labels_t *labels = n00b_alloc(n00b_cf_labels_t);
     n00b_dict_init(labels, .hash = n00b_hash_word, .skip_obj_hash = true);
 
+    n00b_list_t(n00b_sym_entry_t *) *params
+        = n00b_alloc(n00b_list_t(n00b_sym_entry_t *));
+    *params = n00b_list_new_private(n00b_sym_entry_t *);
+
+    n00b_node_types_t *node_types = n00b_alloc(n00b_node_types_t);
+    n00b_dict_init(node_types, .hash = n00b_hash_word, .skip_obj_hash = true);
+
     n00b_annot_walk_ctx_t ctx = {
-        .symtab    = n00b_symtab_new(),
-        .grammar   = g,
-        .cf_labels = labels,
+        .symtab     = n00b_symtab_new(),
+        .grammar    = g,
+        .cf_labels  = labels,
+        .tc_ctx     = n00b_tc_ctx_new(),
+        .params     = params,
+        .node_types = node_types,
     };
 
     walk_node(&ctx, tree);
 
     n00b_annot_result_t *result = n00b_alloc(n00b_annot_result_t);
-    result->symtab    = ctx.symtab;
-    result->cf_labels = ctx.cf_labels;
+    result->symtab     = ctx.symtab;
+    result->cf_labels  = ctx.cf_labels;
+    result->tc_ctx     = ctx.tc_ctx;
+    result->params     = ctx.params;
+    result->node_types = ctx.node_types;
 
     return result;
 }

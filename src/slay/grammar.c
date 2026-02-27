@@ -511,6 +511,11 @@ n00b_register_literal_type(n00b_grammar_t *g, n00b_string_t name)
 
     n00b_dict_put(g->literal_type_map, name_ptr, id);
 
+    // Also store reverse mapping for diagnostics/debug.
+    n00b_string_t *name_copy = n00b_alloc(n00b_string_t);
+    *name_copy = name;
+    n00b_dict_put(g->terminal_by_id, id, name_copy);
+
     return id;
 }
 

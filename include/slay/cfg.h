@@ -152,28 +152,20 @@ n00b_cfg_edge_count(n00b_cfg_t *cfg)
  *
  * @param cfg       The CFG.
  * @param block_id  Source block.
- * @param out       Caller-provided output array.
- * @param max       Size of @p out.
- * @return Number of successors written.
+ * @return List of successor edges (caller should free).
  */
-int32_t n00b_cfg_successors(n00b_cfg_t    *cfg,
-                             int32_t        block_id,
-                             n00b_cfg_edge_t *out,
-                             int32_t        max);
+n00b_list_t(n00b_cfg_edge_t)
+n00b_cfg_successors(n00b_cfg_t *cfg, int32_t block_id);
 
 /**
  * @brief Collect predecessor edges into a block.
  *
  * @param cfg       The CFG.
  * @param block_id  Destination block.
- * @param out       Caller-provided output array.
- * @param max       Size of @p out.
- * @return Number of predecessors written.
+ * @return List of predecessor edges (caller should free).
  */
-int32_t n00b_cfg_predecessors(n00b_cfg_t    *cfg,
-                               int32_t        block_id,
-                               n00b_cfg_edge_t *out,
-                               int32_t        max);
+n00b_list_t(n00b_cfg_edge_t)
+n00b_cfg_predecessors(n00b_cfg_t *cfg, int32_t block_id);
 
 // ============================================================================
 // Cleanup

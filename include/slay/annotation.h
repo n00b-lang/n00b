@@ -51,6 +51,7 @@ typedef enum {
     N00B_ANNOT_CALL,
     N00B_ANNOT_VARREF,
     N00B_ANNOT_PENALTY,
+    N00B_ANNOT_NOTRIVIA,
     N00B_ANNOT_NONE,
 } n00b_annot_kind_t;
 
@@ -90,6 +91,7 @@ struct n00b_annotation_t {
     n00b_string_t      adt_kind;
     n00b_string_t      visibility_spec;
     n00b_string_t      op_kind;
+    n00b_child_ref_t   notrivia_ref;   /**< Child that must have no leading trivia. */
 };
 
 // ============================================================================
@@ -143,6 +145,10 @@ void n00b_nt_literal(n00b_nonterm_t *nt, n00b_string_t lit_kind);
 void n00b_nt_call(n00b_nonterm_t *nt, n00b_child_ref_t func_ref,
                    n00b_child_ref_t args_ref);
 void n00b_nt_varref(n00b_nonterm_t *nt, n00b_child_ref_t name_ref);
+void n00b_nt_notrivia(n00b_nonterm_t *nt, n00b_child_ref_t child_ref);
+
+// Rule-level notrivia convenience.
+void n00b_rule_notrivia(n00b_parse_rule_t *rule, n00b_child_ref_t child_ref);
 
 // Rule-level annotation convenience functions (parallel to n00b_nt_* variants).
 void n00b_rule_scope_open(n00b_parse_rule_t *rule,

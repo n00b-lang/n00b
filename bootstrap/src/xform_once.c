@@ -677,6 +677,10 @@ remove_once_specifier(tnode_t *once_node)
 
 /**
  * @brief Transform a declaration (prototype) with `once` specifier.
+ *
+ * For function prototypes (declarations with parameter lists), silently
+ * strips the `once` specifier (the function_definition handler does the
+ * real work).  For non-function declarations (variables), emits an error.
  */
 static tnode_t *
 xform_once_declaration(tree_xform_t *ctx, tnode_t *node)
@@ -699,7 +703,21 @@ xform_once_declaration(tree_xform_t *ctx, tnode_t *node)
         return nullptr;
     }
 
-    // Remove the once specifier from the tree
+    // Check if this is a function prototype (has a parameter_type_list
+    // somewhere in its declarator).  If not, it's a variable declaration
+    // and _Once doesn't apply.
+    tnode_t *param_list = find_param_list(node);
+    if (!param_list) {
+        int         line = get_node_line(node);
+        const char *file = ctx->lex ? ctx->lex->in_file : "<unknown>";
+        ncc_error("%s:%d: '_Once' can only be applied to function "
+                  "definitions, not variable declarations\n",
+                  file,
+                  line);
+        exit(1);
+    }
+
+    // Function prototype: remove the once specifier from the tree
     remove_once_specifier(once_node);
 
     return nullptr;

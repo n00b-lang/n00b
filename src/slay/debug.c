@@ -2,6 +2,9 @@
 // Earley state tables, and LR(0) tables.
 
 #include "slay/debug.h"
+#include "slay/dfg.h"
+#include "slay/cfg.h"
+#include "slay/cf_label.h"
 #include "internal/slay/grammar_internal.h"
 #include "internal/slay/earley_internal.h"
 
@@ -703,4 +706,443 @@ n00b_lr0_print(n00b_grammar_t *g, FILE *out)
             }
         }
     }
+}
+
+// ============================================================================
+// CFG edge kind names
+// ============================================================================
+
+static const char *
+cfg_edge_kind_name(n00b_cfg_edge_kind_t kind)
+{
+    switch (kind) {
+    case N00B_CFG_FALLTHROUGH:  return "fallthrough";
+    case N00B_CFG_BRANCH_TRUE:  return "true";
+    case N00B_CFG_BRANCH_FALSE: return "false";
+    case N00B_CFG_LOOP_BACK:    return "back";
+    case N00B_CFG_LOOP_EXIT:    return "exit";
+    case N00B_CFG_JUMP:         return "jump";
+    case N00B_CFG_CASE_BRANCH:  return "case";
+    }
+
+    return "?edge?";
+}
+
+// ============================================================================
+// CF label kind names
+// ============================================================================
+
+static const char *
+cf_kind_name(n00b_cf_kind_t kind)
+{
+    switch (kind) {
+    case N00B_CF_BRANCH:  return "branch";
+    case N00B_CF_LOOP:    return "loop";
+    case N00B_CF_SWITCH:  return "switch";
+    case N00B_CF_JUMP:    return "jump";
+    case N00B_CF_CAPTURE: return "capture";
+    case N00B_CF_ASSIGNS: return "assigns";
+    case N00B_CF_VARREF:  return "varref";
+    }
+
+    return "?cf?";
+}
+
+// ============================================================================
+// Helper: print a parse node reference (one-liner)
+// ============================================================================
+
+static void
+fprint_node_ref(FILE *out, n00b_parse_tree_t *node)
+{
+    if (!node) {
+        fprintf(out, "(null)");
+        return;
+    }
+
+    n00b_string_t repr = n00b_parse_node_repr(node);
+    fprintf(out, "%.*s", (int)repr.u8_bytes, repr.data);
+}
+
+// ============================================================================
+// Helper: extract line number from a parse tree node
+// ============================================================================
+
+// Walk to the leftmost (or rightmost) leaf and return its line number,
+// or 0 if no leaf is found.
+
+static uint32_t
+node_line(n00b_parse_tree_t *node, bool last)
+{
+    if (!node) {
+        return 0;
+    }
+
+    if (n00b_tree_is_leaf(node)) {
+        n00b_token_info_t *tok = n00b_tree_leaf_value(node);
+        return tok ? tok->line : 0;
+    }
+
+    size_t nc = n00b_tree_num_children(node);
+
+    if (nc == 0) {
+        return 0;
+    }
+
+    if (last) {
+        for (size_t i = nc; i > 0; i--) {
+            uint32_t l = node_line(n00b_tree_child(node, i - 1), true);
+
+            if (l) {
+                return l;
+            }
+        }
+    }
+    else {
+        for (size_t i = 0; i < nc; i++) {
+            uint32_t l = node_line(n00b_tree_child(node, i), false);
+
+            if (l) {
+                return l;
+            }
+        }
+    }
+
+    return 0;
+}
+
+// Get (first_line, last_line) for a block from its statements.
+static void
+block_line_range(n00b_cfg_block_t *blk, uint32_t *first, uint32_t *last)
+{
+    *first = 0;
+    *last  = 0;
+
+    size_t ns = n00b_list_len(blk->stmts);
+
+    if (ns == 0) {
+        return;
+    }
+
+    // First statement, leftmost leaf.
+    *first = node_line(n00b_list_get(blk->stmts, 0), false);
+
+    // Last statement, rightmost leaf.
+    *last = node_line(n00b_list_get(blk->stmts, ns - 1), true);
+
+    if (*last == 0) {
+        *last = *first;
+    }
+}
+
+// ============================================================================
+// Public API: n00b_cfg_print
+// ============================================================================
+
+void
+n00b_cfg_print(n00b_cfg_t *cfg, n00b_grammar_t *g, FILE *out)
+{
+    (void)g;
+
+    if (!cfg) {
+        fprintf(out, "(null CFG)\n");
+        return;
+    }
+
+    int32_t nb = n00b_cfg_block_count(cfg);
+    int32_t ne = n00b_cfg_edge_count(cfg);
+
+    fprintf(out, "CFG: %.*s — %d blocks, %d edges\n",
+            (int)cfg->name.u8_bytes, cfg->name.data, nb, ne);
+    fprintf(out, "  entry=B%d  exit=B%d\n", cfg->entry_id, cfg->exit_id);
+    fprintf(out, "----------------------------------------\n");
+
+    // Blocks — with out-edges listed under each block.
+    for (int32_t i = 0; i < nb; i++) {
+        n00b_cfg_block_t *blk = &cfg->blocks.data[i];
+
+        uint32_t first_line, last_line;
+        block_line_range(blk, &first_line, &last_line);
+
+        // Block open tag.
+        fprintf(out, "\n[B%d", blk->id);
+
+        if (blk->label.data && blk->label.u8_bytes > 0) {
+            fprintf(out, " %.*s",
+                    (int)blk->label.u8_bytes, blk->label.data);
+        }
+
+        if (blk->is_entry) {
+            fprintf(out, " ENTRY");
+        }
+
+        if (blk->is_exit) {
+            fprintf(out, " EXIT");
+        }
+
+        if (first_line) {
+            fprintf(out, " L%u", first_line);
+        }
+
+        fprintf(out, "]\n");
+
+        // Statements.
+        size_t ns = n00b_list_len(blk->stmts);
+
+        for (size_t j = 0; j < ns; j++) {
+            n00b_parse_tree_t *stmt = n00b_list_get(blk->stmts, j);
+
+            fprintf(out, "    ");
+            fprint_node_ref(out, stmt);
+            fprintf(out, "\n");
+        }
+
+        // Out-edges from this block.
+        for (int32_t j = 0; j < ne; j++) {
+            n00b_cfg_edge_t *e = &cfg->edges.data[j];
+
+            if (e->from_id != blk->id) {
+                continue;
+            }
+
+            fprintf(out, "  -> B%d  [%s]",
+                    e->to_id, cfg_edge_kind_name(e->kind));
+
+            if (e->label.data && e->label.u8_bytes > 0) {
+                fprintf(out, "  \"%.*s\"",
+                        (int)e->label.u8_bytes, e->label.data);
+            }
+
+            fprintf(out, "\n");
+        }
+
+        // Block close tag.
+        fprintf(out, "[/B%d", blk->id);
+
+        if (last_line) {
+            fprintf(out, " L%u", last_line);
+        }
+
+        fprintf(out, "]\n");
+    }
+
+    fprintf(out, "\n----------------------------------------\n");
+}
+
+// ============================================================================
+// Public API: n00b_cf_labels_print
+// ============================================================================
+
+void
+n00b_cf_labels_print(n00b_cf_labels_t *labels, n00b_grammar_t *g, FILE *out)
+{
+    (void)g;
+
+    if (!labels) {
+        fprintf(out, "(no CF labels)\n");
+        return;
+    }
+
+    int count = 0;
+
+    n00b_dict_foreach(labels, node_key, label_val, {
+        n00b_cf_label_t *label = label_val;
+
+        fprintf(out, "[%d] %s: ", count, cf_kind_name(label->kind));
+        fprint_node_ref(out, label->self);
+        fprintf(out, "\n");
+
+        if (label->cond) {
+            fprintf(out, "    cond: ");
+            fprint_node_ref(out, label->cond);
+            fprintf(out, "\n");
+        }
+
+        if (label->then_body) {
+            fprintf(out, "    body: ");
+            fprint_node_ref(out, label->then_body);
+            fprintf(out, "\n");
+        }
+
+        if (label->else_body) {
+            fprintf(out, "    else: ");
+            fprint_node_ref(out, label->else_body);
+            fprintf(out, "\n");
+        }
+
+        if (label->jump_kind.data && label->jump_kind.u8_bytes > 0) {
+            fprintf(out, "    jump: %.*s\n",
+                    (int)label->jump_kind.u8_bytes, label->jump_kind.data);
+        }
+
+        if (label->tag.data && label->tag.u8_bytes > 0) {
+            fprintf(out, "    tag:  %.*s\n",
+                    (int)label->tag.u8_bytes, label->tag.data);
+        }
+
+        (void)node_key;
+        count++;
+    });
+
+    fprintf(out, "(%d CF labels total)\n", count);
+}
+
+// ============================================================================
+// Public API: n00b_cdg_print
+// ============================================================================
+
+void
+n00b_cdg_print(n00b_cdg_t *cdg, n00b_grammar_t *g, FILE *out)
+{
+    (void)g;
+
+    if (!cdg) {
+        fprintf(out, "(null CDG)\n");
+        return;
+    }
+
+    int32_t nb    = n00b_cfg_block_count(cdg->cfg);
+    int32_t n_cd  = n00b_cdg_cd_count(cdg);
+
+    fprintf(out, "CDG: %.*s — %d CD edges\n",
+            (int)cdg->name.u8_bytes, cdg->name.data, n_cd);
+    fprintf(out, "----------------------------------------\n");
+
+    // Post-dominator tree.
+    fprintf(out, "  Post-dominator tree:\n");
+
+    for (int32_t i = 0; i < nb; i++) {
+        n00b_pdom_info_t info = n00b_array_get(cdg->pdom, i);
+
+        if (info.idom < 0) {
+            fprintf(out, "    B%d  unreachable\n", i);
+        }
+        else if (info.idom == i) {
+            fprintf(out, "    B%d  exit  depth=%d\n", i, info.depth);
+        }
+        else {
+            fprintf(out, "    B%d  idom=B%d  depth=%d\n",
+                    i, info.idom, info.depth);
+        }
+    }
+
+    fprintf(out, "\n");
+
+    // Per-block control dependence info.
+    for (int32_t i = 0; i < nb; i++) {
+        n00b_cfg_block_t *blk = n00b_cfg_block(cdg->cfg, i);
+
+        if (!blk) {
+            continue;
+        }
+
+        // Collect controllers for this block.
+        n00b_list_t(n00b_cd_edge_t) cds = n00b_cdg_controllers(cdg, i);
+        int32_t                      nc  = (int32_t)n00b_list_len(cds);
+
+        if (nc == 0) {
+            n00b_list_free(cds);
+            continue;
+        }
+
+        uint32_t first_line, last_line;
+        block_line_range(blk, &first_line, &last_line);
+
+        // Block open tag.
+        fprintf(out, "[B%d", i);
+
+        if (blk->label.data && blk->label.u8_bytes > 0) {
+            fprintf(out, " %.*s",
+                    (int)blk->label.u8_bytes, blk->label.data);
+        }
+
+        if (first_line) {
+            fprintf(out, " L%u", first_line);
+        }
+
+        fprintf(out, "]\n");
+
+        // CD edges.
+        for (int32_t j = 0; j < nc; j++) {
+            fprintf(out, "  cd: B%d [%s]\n",
+                    cds.data[j].controller_id,
+                    cfg_edge_kind_name(cds.data[j].edge_kind));
+        }
+
+        n00b_list_free(cds);
+
+        // Block close tag.
+        fprintf(out, "[/B%d", i);
+
+        if (last_line) {
+            fprintf(out, " L%u", last_line);
+        }
+
+        fprintf(out, "]\n\n");
+    }
+
+    fprintf(out, "----------------------------------------\n");
+}
+
+// ============================================================================
+// Public API: n00b_dfg_print
+// ============================================================================
+
+void
+n00b_dfg_print(n00b_dfg_t *dfg, n00b_grammar_t *g, FILE *out)
+{
+    (void)g;
+
+    if (!dfg) {
+        fprintf(out, "(null DFG)\n");
+        return;
+    }
+
+    int32_t nf = n00b_dfg_fact_count(dfg);
+    int32_t ne = n00b_dfg_edge_count(dfg);
+
+    fprintf(out, "DFG: %.*s — %d facts, %d DD edges\n",
+            (int)dfg->name.u8_bytes, dfg->name.data, nf, ne);
+    fprintf(out, "----------------------------------------\n");
+
+    // Facts.
+    fprintf(out, "  Facts:\n");
+
+    for (int32_t i = 0; i < nf; i++) {
+        n00b_du_fact_t *f = &dfg->facts.data[i];
+
+        uint32_t line = node_line(f->node, false);
+
+        fprintf(out, "    [%d] %s %.*s  B%d:%d",
+                f->id,
+                f->is_def ? "DEF" : "USE",
+                (int)f->var_name.u8_bytes, f->var_name.data,
+                f->block_id, f->stmt_ix);
+
+        if (line) {
+            fprintf(out, "  L%u", line);
+        }
+
+        fprintf(out, "\n");
+    }
+
+    // Edges.
+    if (ne > 0) {
+        fprintf(out, "  Edges:\n");
+
+        for (int32_t i = 0; i < ne; i++) {
+            n00b_dd_edge_t *e = &dfg->edges.data[i];
+
+            n00b_du_fact_t *def_f = &dfg->facts.data[e->def_id];
+            n00b_du_fact_t *use_f = &dfg->facts.data[e->use_id];
+
+            fprintf(out, "    [%d] -> [%d]  (%.*s: def B%d:%d -> use B%d:%d)\n",
+                    e->def_id, e->use_id,
+                    (int)def_f->var_name.u8_bytes, def_f->var_name.data,
+                    def_f->block_id, def_f->stmt_ix,
+                    use_f->block_id, use_f->stmt_ix);
+        }
+    }
+
+    fprintf(out, "----------------------------------------\n");
 }

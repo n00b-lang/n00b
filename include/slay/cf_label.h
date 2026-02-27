@@ -17,6 +17,11 @@
 #include "slay/parse_tree.h"
 #include "slay/symtab.h"
 #include "core/dict.h"
+#include "core/list.h"
+
+typedef struct n00b_tc_ctx_s n00b_tc_ctx_t;
+
+n00b_list_decl(n00b_sym_entry_t *);
 
 // Forward declare so the dict_decl works before the full typedef.
 typedef struct n00b_cf_label_s n00b_cf_label_t;
@@ -31,12 +36,14 @@ typedef n00b_dict_t(n00b_parse_tree_t *, n00b_cf_label_t *) n00b_cf_labels_t;
 
 /** @brief Kind of control flow label. */
 typedef enum {
-    N00B_CF_BRANCH,  /**< if/else, ternary */
-    N00B_CF_LOOP,    /**< while, for, do-while */
-    N00B_CF_SWITCH,  /**< switch */
-    N00B_CF_JUMP,    /**< break, continue, return, goto */
-    N00B_CF_CAPTURE, /**< try/catch/finally */
-    N00B_CF_ASSIGNS, /**< assignment (name = value) */
+    N00B_CF_BRANCH,         /**< if/else, ternary */
+    N00B_CF_LOOP,           /**< while, for, do-while */
+    N00B_CF_SWITCH,         /**< switch */
+    N00B_CF_JUMP,           /**< break, continue, return, goto */
+    N00B_CF_CAPTURE,        /**< try/catch/finally */
+    N00B_CF_ASSIGNS,        /**< assignment (name = value) */
+    N00B_CF_VARREF,         /**< variable reference (use) */
+    N00B_CF_UNWRAP_RESULT,  /**< postfix ! (result unwrap with early return) */
 } n00b_cf_kind_t;
 
 // ============================================================================
@@ -63,12 +70,19 @@ struct n00b_cf_label_s {
 // Walk result
 // ============================================================================
 
+// Dict from parse tree node pointer → type pointer for literal/expression types.
+n00b_dict_decl(uintptr_t, n00b_tc_type_t *);
+typedef n00b_dict_t(uintptr_t, n00b_tc_type_t *) n00b_node_types_t;
+
 /**
  * @brief Result of a full annotation walk (symtab + control flow labels).
  */
 typedef struct {
-    n00b_symtab_t    *symtab;
-    n00b_cf_labels_t *cf_labels; /**< `n00b_parse_tree_t *` -> `n00b_cf_label_t *` */
+    n00b_symtab_t                    *symtab;
+    n00b_cf_labels_t                 *cf_labels;  /**< `n00b_parse_tree_t *` -> `n00b_cf_label_t *` */
+    n00b_tc_ctx_t                    *tc_ctx;     /**< Type-checking context (owns type vars). */
+    n00b_list_t(n00b_sym_entry_t *)  *params;     /**< Parameter symbols for DFG entry defs. */
+    n00b_node_types_t                *node_types;  /**< Parse node → resolved type. */
 } n00b_annot_result_t;
 
 // ============================================================================

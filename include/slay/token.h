@@ -94,7 +94,7 @@ typedef struct n00b_trivia_t {
 // Token
 // ============================================================================
 
-n00b_option_decl(n00b_string_t);
+// n00b_option_t(n00b_string_t) is declared in core/string.h (included above).
 
 /** @brief Token with position, value, trivia, and user data. */
 typedef struct n00b_token_info_t {

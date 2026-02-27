@@ -649,6 +649,7 @@ bnf_walk_atom(n00b_nt_node_t *pn, void *children, void *thunk)
     }
     else if (pn->rule_index == 4) {
         // term -> TOKEN_LIT  (%"if", %"+", etc.)
+        // Quoted after % is still as-named (hash-based ID).
         n00b_token_info_t *tok = (n00b_token_info_t *)kids[0];
         n00b_string_t      val = tok_str_or(tok, "");
         size_t             len = val.u8_bytes;
@@ -841,6 +842,7 @@ typedef struct {
     n00b_string_t     adt_kind;
     n00b_string_t     visibility_spec;
     n00b_string_t     op_kind;
+    n00b_child_ref_t  notrivia_ref;
     int32_t           penalty_cost;
 } bnf_annot_info_t;
 
@@ -1272,6 +1274,14 @@ bnf_walk_annotation(n00b_nt_node_t *pn, void *children, void *thunk)
 
         if (info->penalty_cost <= 0) {
             info->penalty_cost = 1;
+        }
+    }
+    else if (str_eq_lit(annot_str, "notrivia")) {
+        // @notrivia($1) — child at given index must have no leading trivia.
+        info->kind = N00B_ANNOT_NOTRIVIA;
+
+        if (args && args->len >= 1) {
+            info->notrivia_ref = parse_child_ref(slist_get(args, 0));
         }
     }
 
@@ -1990,6 +2000,7 @@ attach_annot_to_rule(n00b_parse_rule_t *rule_p, bnf_annot_info_t *info)
     annot.adt_kind       = info->adt_kind;
     annot.visibility_spec = info->visibility_spec;
     annot.op_kind        = info->op_kind;
+    annot.notrivia_ref   = info->notrivia_ref;
 
     n00b_rule_annotate(rule_p, annot);
 }

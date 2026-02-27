@@ -34,8 +34,7 @@
 #include "render/types.h"
 #include "strings/text_style.h"
 
-// Option type for optional string parameters.
-n00b_option_decl(n00b_string_t);
+// n00b_option_t(n00b_string_t) is declared in core/string.h.
 
 // Type-safe option for cell pointer lookups.
 typedef const n00b_rcell_t *n00b_const_rcell_ptr_t;

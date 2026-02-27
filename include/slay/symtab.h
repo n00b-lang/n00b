@@ -13,6 +13,8 @@
 #include "slay/types.h"
 #include "slay/parse_tree.h"
 
+typedef struct n00b_tc_type_s n00b_tc_type_t;
+
 // ============================================================================
 // Symbol kinds
 // ============================================================================
@@ -55,6 +57,7 @@ struct n00b_sym_entry_t {
     n00b_sym_entry_t    *shadowed;      /**< Previous entry at outer scope. */
     n00b_sym_entry_t    *next_in_scope; /**< Linked list for scope cleanup. */
     n00b_parse_tree_t   *type_node;     /**< Parse subtree for type (from @type/@field/@method). */
+    n00b_tc_type_t      *type_var;      /**< Type variable for inference. */
     n00b_string_t        adt_kind;      /**< ADT kind: "struct", "union", "enum" (from @adt). */
     bool                 is_field;      /**< True if declared via @field. */
     bool                 is_method;     /**< True if declared via @method. */

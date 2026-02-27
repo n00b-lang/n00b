@@ -730,21 +730,21 @@ xform_constexpr(tree_xform_t *ctx, tnode_t *node)
     fprintf(prog_f, "%s%s", headers, body);
     fclose(prog_f);
 
-    char *compile_err = nullptr;
-    char *output      = compile_and_run(compiler, program, &compile_err);
+    char *first_err  = nullptr;
+    char *second_err = nullptr;
+    char *output     = compile_and_run(compiler, program, &first_err);
 
     if (!output && decls && *decls) {
         // Retry with file-scope declarations (needed when constexpr
         // references user-defined types like typedefs or structs).
         base_dealloc(program);
-        base_dealloc(compile_err);
-        compile_err = nullptr;
+        program = nullptr;
 
         prog_f = open_memstream(&program, &prog_size);
         fprintf(prog_f, "%s%s\n%s", headers, decls, body);
         fclose(prog_f);
 
-        output = compile_and_run(compiler, program, &compile_err);
+        output = compile_and_run(compiler, program, &second_err);
     }
 
     base_dealloc(headers);
@@ -753,21 +753,26 @@ xform_constexpr(tree_xform_t *ctx, tnode_t *node)
     base_dealloc(decls);
 
     if (!output) {
-        if (compile_err) {
+        // Show the most relevant error: prefer second-try error (has more
+        // context from declarations), fall back to first-try error.
+        char *show_err = second_err ? second_err : first_err;
+        if (show_err) {
             ncc_error("%s:%d: constexpr: compilation failed:\n%s",
                       file,
                       line,
-                      compile_err);
-            base_dealloc(compile_err);
+                      show_err);
         }
         else {
             ncc_error("%s:%d: constexpr: compilation/execution failed\n",
                       file,
                       line);
         }
+        base_dealloc(first_err);
+        base_dealloc(second_err);
         exit(1);
     }
-    base_dealloc(compile_err);
+    base_dealloc(first_err);
+    base_dealloc(second_err);
 
     // Parse the integer result
     char     *endptr;

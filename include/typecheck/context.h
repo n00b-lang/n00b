@@ -182,3 +182,21 @@ extern bool n00b_tc_implements(n00b_tc_ctx_t *ctx,
 extern bool n00b_tc_promotes_to(n00b_tc_ctx_t *ctx,
                                   n00b_string_t from_name,
                                   n00b_string_t to_name);
+
+// ============================================================================
+// Primitive lookup
+// ============================================================================
+
+/**
+ * @brief Look up a built-in primitive type by name.
+ *
+ * Compares @p name against the 16 built-in primitive names and returns
+ * the cached type pointer if found.
+ *
+ * @param ctx   Context with built-in cache.
+ * @param name  Primitive name (e.g., `*r"int"`, `*r"bool"`).
+ * @return      The cached primitive type, or `nullptr` if not a built-in.
+ */
+extern n00b_tc_type_t *n00b_tc_lookup_prim(n00b_tc_ctx_t *ctx,
+                                              n00b_string_t name);
+

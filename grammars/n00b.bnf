@@ -1,4 +1,4 @@
-<module> @scope("module") ::= <doc-strings> <eos>* <other-top-stmts>?
+<module> @scope("module") ::= <doc-strings> <eos>* <other-top-stmts>? <eos>*
 
 # Statements are terminated by newline, semicolon, or implicit end
 # (closing brace, EOF) The lexer's consume() skips whitespace and
@@ -222,16 +222,17 @@
 <sym-decl-list> ::= <sym-decl> %"," <sym-decl-list>
                   | <sym-decl>
 
-# Typed: $0=id-list (name), $1=":", $2=type-spec, $3=optional-initializer
-# Untyped: $0=id-list (name), $1=optional-initializer
-<sym-decl> @declares($0, $2) ::= <id-list> %":" <type-spec> <optional-initializer>
-<sym-decl> @declares($0) ::= <id-list> <optional-initializer>
+# Typed with initializer: name is $0, type is $2, value is $4
+<sym-decl> @declares($0, $2) @assigns($0, $4) ::= <id-list> %":" <type-spec> <assign-op> <expression>
+# Typed without initializer:
+<sym-decl> @declares($0, $2) ::= <id-list> %":" <type-spec>
+# Untyped with initializer: name is $0, value is $2
+<sym-decl> @declares($0) @assigns($0, $2) ::= <id-list> <assign-op> <expression>
+# Untyped without initializer:
+<sym-decl> @declares($0) ::= <id-list>
 
 <id-list> ::= %IDENTIFIER %"," <id-list>
             | %IDENTIFIER
-
-<optional-initializer> ::= <assign-op> <expression>
-                          | ""
 
 <assign-op> ::= %":" | %"="
 
@@ -249,7 +250,7 @@
 
 <param-decl> ::= %"(" <formals>? %")"
 
-<formals> ::= <formal-param> (%"," <formal-param>)* (%"," <varargs-spec>)
+<formals> ::= <formal-param> (%"," <formal-param>)* (%"," <varargs-spec>)?
             | <varargs-spec>
 
 <varargs-spec> ::= <varargs-param> %"," <kw-list>
@@ -502,13 +503,14 @@
 <unary-expr> ::= %"!" <expression>
                | %"-" <unary-expr>
                | %"+" <unary-expr>
+               | %"ref" <unary-expr>
                | <postfix-expr>
 
 <postfix-expr> ::= <postfix-expr> %"." %IDENTIFIER
                  | <postfix-expr> %"[" <index-contents> %"]"
                  | <postfix-expr> %"(" <call-args> %")"
                  | <primary>
-                 | %"!"
+<postfix-expr> @operator("unwrap_result") ::= <postfix-expr> %"!"
 
 <index-contents> ::= <expression> <range-sep> <expression>
                    | <expression> <range-sep>
@@ -533,23 +535,24 @@
             | <tuple-or-paren>
             | <identifier-expr>
 
-<identifier-expr> ::= %IDENTIFIER
+<identifier-expr> @varref($0) ::= %IDENTIFIER
 
 # ============================================================================
 # Literals
 # ============================================================================
 
-<simple-lit> ::= %INT_LIT
-               | %HEX_LIT
-               | %FLOAT_LIT
-               | %STRING_LIT
-               | %CHAR_LIT
-               | %"true"
-               | %"false"
-               | %"nil"
-               | %EMBED
+<simple-lit> @literal("int") @notrivia($1)    ::= %INT_LIT (%"'" <type-spec>)?
+<simple-lit> @literal("int") @notrivia($1)    ::= %HEX_LIT (%"'" <type-spec>)?
+<simple-lit> @literal("f64") @notrivia($1)    ::= %FLOAT_LIT (%"'" <type-spec>)?
+<simple-lit> @literal("string") @notrivia($1) ::= %STRING_LIT (%"'" <type-spec>)?
+<simple-lit> @literal("i32") @notrivia($1)    ::= %CHAR_LIT (%"'" <type-spec>)?
+<simple-lit> @literal("bool")                 ::= %"true"
+<simple-lit> @literal("bool")                 ::= %"false"
+<simple-lit> @literal("nil")                  ::= %"nil"
+<simple-lit> @notrivia($1)                    ::= %EMBED (%"'" <type-spec>)?
 
-<bool-lit> ::= %"true" | %"false"
+<bool-lit> @literal("bool") ::= %"true"
+<bool-lit> @literal("bool") ::= %"false"
 
 <literal> ::= <simple-lit>
             | <type-spec>

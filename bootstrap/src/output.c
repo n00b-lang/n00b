@@ -7,6 +7,7 @@
  * dependency files when `-MD`/`-MF`/`-MQ` flags are present.
  */
 #include <errno.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include "base_alloc_shim.h"
 #include <string.h>
@@ -313,6 +314,13 @@ invoke_compiler(compile_ctx_t *ctx)
         abort();
     }
 
+    // Pipe to capture compiler stderr for post-processing.
+    int err_pipe[2];
+    if (pipe(err_pipe) < 0) {
+        (void)fprintf(stderr, "%s: pipe: %s\n", argv->argv[0], strerror(errno));
+        abort();
+    }
+
     pid_t pid = fork();
     if (pid < 0) {
         (void)fprintf(stderr, "%s: fork: %s\n", argv->argv[0], strerror(errno));
@@ -322,28 +330,81 @@ invoke_compiler(compile_ctx_t *ctx)
     if (pid == 0) {
         // Child: read from pipe, exec compiler
         close(pipefd[1]);
+        close(err_pipe[0]);
         dup2(pipefd[0], STDIN_FILENO);
         close(pipefd[0]);
+        dup2(err_pipe[1], STDERR_FILENO);
+        close(err_pipe[1]);
         execvp(ctx->compiler, new_argv);
-        (void)fprintf(stderr, "%s: exec %s: %s\n", argv->argv[0], ctx->compiler, strerror(errno));
+        // If exec fails, write to the error pipe (our stderr is the pipe now)
+        dprintf(STDERR_FILENO, "%s: exec %s: %s\n",
+                argv->argv[0], ctx->compiler, strerror(errno));
         _exit(127);
     }
 
     // Parent: write buffered code to pipe, no read-back needed
     close(pipefd[0]);
+    close(err_pipe[1]);
     ncc_pipe_io(pipefd[1], -1, buf, buf_len, argv->argv[0]);
     base_dealloc(buf);
+
+    // Read captured compiler stderr
+    char  *captured_err = nullptr;
+    size_t err_size;
+    FILE  *ef = open_memstream(&captured_err, &err_size);
+    if (ef) {
+        char    ebuf[4096];
+        ssize_t n;
+        while ((n = read(err_pipe[0], ebuf, sizeof(ebuf))) > 0) {
+            fwrite(ebuf, 1, n, ef);
+        }
+        fclose(ef);
+    }
+    close(err_pipe[0]);
 
     // Wait for compiler to finish
     int status;
     waitpid(pid, &status, 0);
 
-    if (WIFEXITED(status)) {
-        exit(WEXITSTATUS(status));
+    int exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : 1;
+
+    if (exit_code != 0 && captured_err && *captured_err) {
+        const char *source = argv->has_stdin
+            ? "<stdin>" : (argv->sources[0] ? argv->sources[0] : "<unknown>");
+
+        // Check for common patterns and add guidance
+        if (strstr(captured_err, "redefinition of")) {
+            fprintf(stderr,
+                    "ncc: note: 'redefinition' errors usually mean a type "
+                    "is defined in multiple included headers.\n"
+                    "ncc: note: use 'ncc -E' to inspect the "
+                    "transformed output.\n");
+        }
+
+        // Print clang's errors, replacing <stdin> with the source filename
+        char *p = captured_err;
+        while (*p) {
+            if (strncmp(p, "<stdin>", 7) == 0) {
+                fputs(source, stderr);
+                p += 7;
+            }
+            else {
+                fputc(*p, stderr);
+                p++;
+            }
+        }
+        // Ensure final newline
+        if (err_size > 0 && captured_err[err_size - 1] != '\n') {
+            fputc('\n', stderr);
+        }
     }
-    else {
-        exit(1);
+    else if (exit_code != 0 && captured_err) {
+        // Empty stderr but non-zero exit — just report
+        fputs(captured_err, stderr);
     }
+
+    base_dealloc(captured_err);
+    exit(exit_code);
 }
 
 void

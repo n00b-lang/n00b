@@ -44,8 +44,9 @@
 typedef struct n00b_tc_type_s  n00b_tc_type_t;
 typedef struct n00b_tc_ctx_s   n00b_tc_ctx_t;
 
-// option_t(n00b_string_t) used in n00b_tc_var_t.given_name.
-n00b_option_decl(n00b_string_t);
+// n00b_option_t(n00b_string_t) is declared in core/string.h (one canonical site).
+// Just include string.h to get it.
+#include "core/string.h"
 
 // List type declarations used throughout.
 n00b_list_decl(n00b_tc_type_t *);
@@ -313,6 +314,7 @@ n00b_list_decl(n00b_tc_error_t);
 typedef enum {
     N00B_TC_COERCE_PROMOTE,     /**< Numeric widening (i32 -> i64, f32 -> f64). */
     N00B_TC_COERCE_OPTION_WRAP, /**< T -> maybe[T] (implicit option injection). */
+    N00B_TC_COERCE_DEREF,       /**< ref[T] -> T (auto-dereference at call sites). */
     N00B_TC_COERCE_CUSTOM,      /**< Grammar-author-registered coercion. */
 } n00b_tc_coerce_kind_t;
 

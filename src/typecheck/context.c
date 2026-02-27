@@ -11,6 +11,7 @@
 #include "core/list.h"
 #include "core/string.h"
 #include "core/vargs.h"
+#include "strings/string_ops.h"
 
 // ============================================================================
 // Lifecycle
@@ -38,6 +39,43 @@ tc_install_transitive_promotion(n00b_tc_ctx_t *ctx)
 
     n00b_dl_rule_t rule = n00b_dl_rule_builder_finish(&rb);
     n00b_logic_add_rule(&ctx->logic, rule);
+}
+
+static void
+tc_register_numeric_promotions(n00b_tc_ctx_t *ctx)
+{
+    // Signed widening.
+    n00b_tc_register_promotion(ctx, *r"i8",  *r"i16");
+    n00b_tc_register_promotion(ctx, *r"i16", *r"i32");
+    n00b_tc_register_promotion(ctx, *r"i32", *r"i64");
+    n00b_tc_register_promotion(ctx, *r"i32", *r"int");
+
+    // Unsigned widening.
+    n00b_tc_register_promotion(ctx, *r"u8",  *r"u16");
+    n00b_tc_register_promotion(ctx, *r"u16", *r"u32");
+    n00b_tc_register_promotion(ctx, *r"u32", *r"u64");
+
+    // Unsigned → next-wider-signed (safe, no info loss).
+    n00b_tc_register_promotion(ctx, *r"u8",  *r"i16");
+    n00b_tc_register_promotion(ctx, *r"u16", *r"i32");
+    n00b_tc_register_promotion(ctx, *r"u32", *r"i64");
+    n00b_tc_register_promotion(ctx, *r"u32", *r"int");
+
+    // Float widening.
+    n00b_tc_register_promotion(ctx, *r"f32", *r"f64");
+
+    // Integer → float (lossy but conventional).
+    n00b_tc_register_promotion(ctx, *r"i32", *r"f64");
+    n00b_tc_register_promotion(ctx, *r"int", *r"f64");
+    n00b_tc_register_promotion(ctx, *r"i64", *r"f64");
+
+    // int ↔ i64 aliasing (bidirectional).
+    n00b_tc_register_promotion(ctx, *r"int", *r"i64");
+    n00b_tc_register_promotion(ctx, *r"i64", *r"int");
+
+    // bool → int (true=1, false=0).
+    n00b_tc_register_promotion(ctx, *r"bool", *r"int");
+    n00b_tc_register_promotion(ctx, *r"bool", *r"i64");
 }
 
 static void
@@ -101,6 +139,9 @@ n00b_tc_ctx_new(void)
 
     // Built-in primitive types.
     tc_create_builtins(ctx);
+
+    // Numeric promotion graph.
+    tc_register_numeric_promotions(ctx);
 
     return ctx;
 }
@@ -282,3 +323,42 @@ n00b_tc_promotes_to(n00b_tc_ctx_t *ctx,
     n00b_logic_query(&ctx->logic, ctx->rel_promotes, tc_pair_match_cb, &q);
     return q.found;
 }
+
+// ============================================================================
+// Primitive lookup
+// ============================================================================
+
+n00b_tc_type_t *
+n00b_tc_lookup_prim(n00b_tc_ctx_t *ctx, n00b_string_t name)
+{
+    if (!ctx || !name.data) {
+        return nullptr;
+    }
+
+    struct { n00b_string_t name; n00b_tc_type_t *type; } builtins[] = {
+        { *r"int",    ctx->t_int    },
+        { *r"i8",     ctx->t_i8     },
+        { *r"i16",    ctx->t_i16    },
+        { *r"i32",    ctx->t_i32    },
+        { *r"i64",    ctx->t_i64    },
+        { *r"u8",     ctx->t_u8     },
+        { *r"u16",    ctx->t_u16    },
+        { *r"u32",    ctx->t_u32    },
+        { *r"u64",    ctx->t_u64    },
+        { *r"f32",    ctx->t_f32    },
+        { *r"f64",    ctx->t_f64    },
+        { *r"bool",   ctx->t_bool   },
+        { *r"string", ctx->t_string },
+        { *r"nil",    ctx->t_nil    },
+        { *r"void",   ctx->t_void   },
+    };
+
+    for (size_t i = 0; i < sizeof(builtins) / sizeof(builtins[0]); i++) {
+        if (n00b_unicode_str_eq(name, builtins[i].name)) {
+            return builtins[i].type;
+        }
+    }
+
+    return nullptr;
+}
+

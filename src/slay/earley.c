@@ -1452,7 +1452,16 @@ run_parsing_mainloop(n00b_earley_parser_t *p)
     do {
         enter_next_state(p);
         process_current_state(p);
-        compute_leo_table(p);
+
+        // Leo optimization is disabled when the grammar uses EBNF groups.
+        // Groups create left-recursive alternatives (e.g., (plus-expr '+')?
+        // in plus-expr -> (plus-expr '+')? minus-expr) that need intermediate
+        // completed items to be present for the group's operator terminal to
+        // be scannable.  Leo collapses those intermediates, breaking binary
+        // operators.
+        if (!p->grammar->has_groups) {
+            compute_leo_table(p);
+        }
 
     } while (p->current_state->token->tid != N00B_TOK_EOF);
 }

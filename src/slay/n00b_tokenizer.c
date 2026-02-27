@@ -259,9 +259,6 @@ try_scan_long_literal(n00b_scanner_t *s)
                 }
             }
 
-            // Try to scan a trailing 'modifier.
-            try_scan_modifier(s);
-
             return true;
         }
 
@@ -351,22 +348,34 @@ restart:
             n00b_string_t text = n00b_scan_extract(s);
             n00b_scan_emit(s, .token_type = "STRING_LIT",
                             .contents = n00b_option_set(n00b_string_t, text));
-            try_scan_modifier(s);
             return true;
         }
 
         n00b_option_t(n00b_string_t) val = n00b_scan_string_double(s);
         n00b_scan_emit(s, .token_type = "STRING_LIT", .contents = val);
-        try_scan_modifier(s);
         return true;
     }
 
     if (cp == '\'') {
-        // Could be a char literal or single-quoted string.
+        // Could be a char literal ('x'), or a modifier tick (42'u8).
+        // Try as a char literal first; if that fails, fall through to
+        // the single-char handler which will emit ' as a standalone token.
+        size_t   save_cur = s->cursor;
+        uint32_t save_ln  = s->line;
+        uint32_t save_col = s->column;
+
         n00b_option_t(n00b_string_t) val = n00b_scan_string_single(s);
-        n00b_scan_emit(s, .token_type = "CHAR_LIT", .contents = val);
-        try_scan_modifier(s);
-        return true;
+
+        if (n00b_option_is_set(val)) {
+            n00b_scan_emit(s, .token_type = "CHAR_LIT", .contents = val);
+            return true;
+        }
+
+        // Not a char literal — restore cursor and fall through to
+        // single-char handler, which will emit ' as a tick token.
+        s->cursor = save_cur;
+        s->line   = save_ln;
+        s->column = save_col;
     }
 
     // -----------------------------------------------------------------
@@ -388,7 +397,6 @@ restart:
 
         if (n00b_option_is_set(hval)) {
             n00b_scan_emit(s, .token_type = "HEX_LIT", .contents = hval);
-            try_scan_modifier(s);
             return true;
         }
     }
@@ -402,7 +410,6 @@ restart:
         bool emitted = n00b_scan_number(s, "INT_LIT", "FLOAT_LIT");
 
         if (emitted) {
-            try_scan_modifier(s);
             return true;
         }
     }

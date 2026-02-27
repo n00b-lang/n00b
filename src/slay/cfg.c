@@ -111,6 +111,36 @@ static int32_t cfg_build_stmts(cfg_ctx_t *ctx, n00b_parse_tree_t *node,
                                 int32_t cur_block);
 
 // ============================================================================
+// Collect non-group children (flatten $$group wrappers)
+// ============================================================================
+
+#define MAX_CASE_ARMS 128
+
+static int
+collect_case_children(n00b_parse_tree_t *node, n00b_parse_tree_t **out, int max)
+{
+    if (!node || n00b_tree_is_leaf(node) || max <= 0) {
+        return 0;
+    }
+
+    int    count = 0;
+    size_t nc    = n00b_tree_num_children(node);
+
+    for (size_t i = 0; i < nc && count < max; i++) {
+        n00b_parse_tree_t *child = n00b_tree_child(node, i);
+
+        if (n00b_pt_is_group(child)) {
+            count += collect_case_children(child, out + count, max - count);
+        }
+        else if (!n00b_tree_is_leaf(child)) {
+            out[count++] = child;
+        }
+    }
+
+    return count;
+}
+
+// ============================================================================
 // Check if a block ends with a jump (used to avoid double edges)
 // ============================================================================
 
@@ -232,21 +262,28 @@ cfg_build_switch(cfg_ctx_t *ctx, n00b_cf_label_t *label, int32_t cur_block)
 
     int32_t merge = new_block(ctx, *r"switch_merge");
 
-    // The then_body is the cases container. Iterate its children as cases.
+    // The then_body is the cases container.  Flatten $$group wrappers
+    // to find the actual case-block / case-else nodes — the grammar's
+    // EBNF quantifiers (e.g. (%"case" <block>)+) wrap cases in groups.
     if (!label->then_body || n00b_tree_is_leaf(label->then_body)) {
         add_edge(ctx, cur_block, merge, N00B_CFG_FALLTHROUGH, n00b_string_empty());
         return merge;
     }
 
-    size_t nc = n00b_tree_num_children(label->then_body);
+    n00b_parse_tree_t *arms[MAX_CASE_ARMS];
+    int                narms = collect_case_children(label->then_body,
+                                                     arms, MAX_CASE_ARMS);
 
-    for (size_t i = 0; i < nc; i++) {
-        n00b_parse_tree_t *case_node = n00b_tree_child(label->then_body, i);
+    if (narms == 0) {
+        add_edge(ctx, cur_block, merge, N00B_CFG_FALLTHROUGH, n00b_string_empty());
+        return merge;
+    }
 
+    for (int i = 0; i < narms; i++) {
         int32_t case_blk = new_block(ctx, *r"case");
         add_edge(ctx, cur_block, case_blk, N00B_CFG_CASE_BRANCH, n00b_string_empty());
 
-        int32_t case_end = cfg_build_stmts(ctx, case_node, case_blk);
+        int32_t case_end = cfg_build_stmts(ctx, arms[i], case_blk);
 
         if (!block_ends_with_jump(ctx, case_end)) {
             add_edge(ctx, case_end, merge, N00B_CFG_FALLTHROUGH, n00b_string_empty());
@@ -316,6 +353,7 @@ cfg_build_stmt(cfg_ctx_t *ctx, n00b_parse_tree_t *node, int32_t cur_block)
         case N00B_CF_JUMP:
             return cfg_build_jump(ctx, label, cur_block);
         case N00B_CF_ASSIGNS:
+        case N00B_CF_VARREF:
         case N00B_CF_CAPTURE:
             // Treat as a regular statement for CFG purposes.
             block_add_stmt(ctx, cur_block, node);
@@ -399,48 +437,48 @@ n00b_build_cfg(n00b_cf_labels_t *cf_labels,
 // Public API — query
 // ============================================================================
 
-int32_t
-n00b_cfg_successors(n00b_cfg_t *cfg, int32_t block_id,
-                     n00b_cfg_edge_t *out, int32_t max)
+n00b_list_t(n00b_cfg_edge_t)
+n00b_cfg_successors(n00b_cfg_t *cfg, int32_t block_id)
 {
-    if (!cfg || !out || max <= 0) {
-        return 0;
+    n00b_list_t(n00b_cfg_edge_t) result = n00b_list_new(n00b_cfg_edge_t, false);
+
+    if (!cfg) {
+        return result;
     }
 
-    int32_t count = 0;
-    size_t  ne    = n00b_list_len(cfg->edges);
+    size_t ne = n00b_list_len(cfg->edges);
 
-    for (size_t i = 0; i < ne && count < max; i++) {
+    for (size_t i = 0; i < ne; i++) {
         n00b_cfg_edge_t *e = &cfg->edges.data[i];
 
         if (e->from_id == block_id) {
-            out[count++] = *e;
+            n00b_list_push(result, *e);
         }
     }
 
-    return count;
+    return result;
 }
 
-int32_t
-n00b_cfg_predecessors(n00b_cfg_t *cfg, int32_t block_id,
-                       n00b_cfg_edge_t *out, int32_t max)
+n00b_list_t(n00b_cfg_edge_t)
+n00b_cfg_predecessors(n00b_cfg_t *cfg, int32_t block_id)
 {
-    if (!cfg || !out || max <= 0) {
-        return 0;
+    n00b_list_t(n00b_cfg_edge_t) result = n00b_list_new(n00b_cfg_edge_t, false);
+
+    if (!cfg) {
+        return result;
     }
 
-    int32_t count = 0;
-    size_t  ne    = n00b_list_len(cfg->edges);
+    size_t ne = n00b_list_len(cfg->edges);
 
-    for (size_t i = 0; i < ne && count < max; i++) {
+    for (size_t i = 0; i < ne; i++) {
         n00b_cfg_edge_t *e = &cfg->edges.data[i];
 
         if (e->to_id == block_id) {
-            out[count++] = *e;
+            n00b_list_push(result, *e);
         }
     }
 
-    return count;
+    return result;
 }
 
 // ============================================================================

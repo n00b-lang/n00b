@@ -648,6 +648,17 @@ xform_postfix_bang(tree_xform_t *ctx, tnode_t *node)
         exit(1);
     }
 
+    // Error: '!' on an expression that isn't a function call.
+    // A function call is postfix_expression with CALL branch; anything
+    // else (bare identifier, member access, etc.) is likely a mistake.
+    if (expr->branch != BRANCH(postfix_expression, CALL)) {
+        ncc_error("%s:%d: postfix '!' requires a function call "
+                  "(did you forget parentheses?)\n",
+                  file ? file : "<unknown>",
+                  line);
+        exit(1);
+    }
+
     char varname[NCC_INTSTR_BUF];
     int  vret = snprintf(varname, sizeof(varname), "_ncc_try_%d", node->id);
     NCC_CHECK_SNPRINTF(vret, varname);

@@ -25,7 +25,7 @@
 #include "core/string.h"
 #include "strings/format.h"
 
-n00b_option_decl(n00b_string_t);
+// n00b_option_t(n00b_string_t) is declared in core/string.h (included above).
 
 /**
  * @brief Convert a managed object to its string representation.
