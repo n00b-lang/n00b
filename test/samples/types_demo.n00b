@@ -1,0 +1,10 @@
+var x = 42
+var s = "hello"
+var b = true
+var f = 3.14
+var cmp = 1 < 2
+var neg = !true
+var sum = 1 + 2
+var x2: i32 = 10
+var items = [1, 2, 3]
+var mapping = {"a": 1, "b": 2}

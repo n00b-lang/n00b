@@ -121,15 +121,16 @@ n00b_analyze_use_before_def(n00b_analyze_ctx_t *ctx)
 
         // No defs reach this use. Check if it's even declared.
         if (ctx->symtab) {
-            n00b_sym_entry_t *sym = n00b_symtab_lookup(
+            n00b_sym_entry_t *sym = n00b_symtab_lookup_all(
                 ctx->symtab, n00b_string_empty(), fact.var_name);
 
             if (!sym) {
                 continue;  // Undefined — handled by E001.
             }
 
-            if (sym->kind == N00B_SYM_PARAM) {
-                continue;  // Parameters are always defined at entry.
+            if (sym->kind == N00B_SYM_PARAM
+                || sym->kind == N00B_SYM_FUNCTION) {
+                continue;  // Parameters and functions are always defined.
             }
         }
 
@@ -186,10 +187,11 @@ n00b_analyze_unused_vars(n00b_analyze_ctx_t *ctx)
 
         // Skip if the variable is a parameter (convention).
         if (ctx->symtab) {
-            n00b_sym_entry_t *sym = n00b_symtab_lookup(
+            n00b_sym_entry_t *sym = n00b_symtab_lookup_all(
                 ctx->symtab, n00b_string_empty(), fact.var_name);
 
-            if (sym && sym->kind == N00B_SYM_PARAM) {
+            if (sym && (sym->kind == N00B_SYM_PARAM
+                        || sym->kind == N00B_SYM_FUNCTION)) {
                 continue;
             }
         }
@@ -232,7 +234,7 @@ n00b_analyze_undefined_vars(n00b_analyze_ctx_t *ctx)
         }
 
         // Look up the variable in the symtab.
-        n00b_sym_entry_t *sym = n00b_symtab_lookup(
+        n00b_sym_entry_t *sym = n00b_symtab_lookup_all(
             ctx->symtab, n00b_string_empty(), fact.var_name);
 
         if (sym) {

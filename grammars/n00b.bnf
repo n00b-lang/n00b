@@ -50,7 +50,7 @@
                          | <continue-stmt>
                          | <break-stmt>
                          | <return-stmt>
-                         | <variable-decl> <eos>
+                         | <variable-decl>
                          | <labeled-for>
                          | <labeled-while>
                          | <labeled-typeof>
@@ -130,7 +130,7 @@
 # $0=typeof, $1=member-chain, $2={, $3=typeof-cases, $4=}
 <typeof-stmt> @scope("typeof") @switch($1, $3) ::= %"typeof" <member-chain> <block-start> <typeof-cases> <block-end>
 
-<typeof-cases> ::= (%"case" <typeof-case-block>)+ <case-else>?
+<typeof-cases> ::= (<eos>* %"case" <typeof-case-block>)+ <eos>* <case-else>?
 
 <typeof-case-block> ::= <type-spec-list> <case-body>
                        | <type-spec-list> <body>
@@ -144,7 +144,7 @@
 # $0=switch, $1=expression, $2={, $3=switch-cases, $4=}
 <switch-stmt> @scope("switch") @switch($1, $3) ::= %"switch" <expression> <block-start> <switch-cases> <block-end>
 
-<switch-cases> ::= (%"case" <switch-case-block>)+ <case-else>?
+<switch-cases> ::= (<eos>* %"case" <switch-case-block>)+ <eos>* <case-else>?
 
 <switch-case-block> ::= <case-expr-list> <case-body>
                        | <case-expr-list> <body>
@@ -229,9 +229,9 @@
 # Function definition
 # ============================================================================
 
-# $0=func-mods, $1=func-kw, $2=IDENTIFIER (name), $3=formal-list,
-# $4=opt-return-type, $5=body
-<func-def> @scope("function", $2) @declares($2) ::= <func-mod>* <func-kind> %IDENTIFIER <param-decl> <return-type>? <body>
+# $0=func-mods, $1=opt-return-type, $2=func-kw, $3=IDENTIFIER (name),
+# $4=formal-list, $5=where-clause, $6=body
+<func-def> @scope("function", $3) @declares($3) ::= <func-mod>* <func-return-type>? <func-kind> %IDENTIFIER <param-decl> <where-clause>? <body>
 
 <func-kind> ::= %"func" | %"method"
 <func-mod> ::= %"private" | %"once"
@@ -260,7 +260,11 @@
 <kw-one> @declares($0, $2) ::= %IDENTIFIER %":" <type-spec> %"=" <literal>
 <kw-one> @declares($0) ::= %IDENTIFIER %"=" <literal>
 
-<return-type> ::= %"->" <type-spec>
+# Return type in front position (function definitions)
+<func-return-type> ::= <union-tspec>
+
+# Return type with arrow (function type-specs only)
+<return-type> ::= %"->" <union-tspec>
 
 <opt-return-type> ::= <return-type>?
 
@@ -268,7 +272,7 @@
 # Enum
 # ============================================================================
 
-<enum-stmt> @scope("enum", $1) @type($1) @declares($1) ::= <enum-prefix> %IDENTIFIER? <block-start> <enum-items> <block-end>
+<enum-stmt> @scope("enum", $1) @type($1) @declares($1) @exposes ::= <enum-prefix> %IDENTIFIER? <block-start> <enum-items> <block-end>
 
 <enum-prefix> ::= %"private" %"enum"
                 | %"global" %"enum"
@@ -276,7 +280,7 @@
                 | %"enum" %"private"
                 | %"enum"
 
-<enum-items> ::= <enum-item> (%"," <enum-item>)* %","?
+<enum-items> ::= <enum-item> (<eos>* %"," <eos>* <enum-item>)* (<eos>* %",")?
 
 # $0=IDENTIFIER (member name)
 <enum-item> @declares($0) ::= %IDENTIFIER <enum-value>
@@ -461,24 +465,68 @@
 #       "True"/"False" lex as the same tokens as "true"/"false".
 #       "infinity"/"NaN" lex as FLOAT_LIT.
 
-<expression> ::= (<expression> %"or")? <and-expr>
-<and-expr> ::= (<and-expr> %"and")? <ne-expr>
-<ne-expr> ::= (<ne-expr> %"!=")? <bitor-expr>
-<bitor-expr> ::= (<bitor-expr> %"|")? <bitxor-expr>
-<bitxor-expr> ::= (<bitxor-expr> %"^")? <bitand-expr>
-<bitand-expr> ::= (<bitand-expr> %"&")? <eq-expr>
-<eq-expr> ::= (<eq-expr> %"==")? <gte-expr>
-<gte-expr> ::= (<gte-expr> %">=")? <lte-expr>
-<lte-expr> ::= (<lte-expr> %"<=")? <gt-expr>
-<gt-expr> ::= (<gt-expr> %">")? <lt-expr>
-<lt-expr> ::= (<lt-expr> %"<")? <plus-expr>
-<plus-expr>  ::= (<plus-expr> %"+")? <minus-expr>
-<minus-expr> ::= (<minus-expr> %"-")? <mod-expr>
-<mod-expr> ::= (<mod-expr> %"%")? <mul-expr>
-<mul-expr> ::= (<mul-expr> %"*")? <div-expr>
-<div-expr> ::= (<div-expr> %"/")? <shr-expr>
-<shr-expr> ::= (<shr-expr> %">>")? <shl-expr>
-<shl-expr> ::= (<shl-expr> %"<<")? <unary-expr>
+# Each binary operator is split into two alternatives:
+#   - Recursive (with operator and @infer annotation)
+#   - Pass-through (auto-propagation — single NT child's type flows up)
+
+# Logical operators produce bool
+<expression> @infer("bool") ::= <expression> %"or" <and-expr>
+<expression>                ::= <and-expr>
+
+<and-expr> @infer("bool") ::= <and-expr> %"and" <ne-expr>
+<and-expr>                ::= <ne-expr>
+
+<ne-expr> @infer("bool") ::= <ne-expr> %"!=" <bitor-expr>
+<ne-expr>                ::= <bitor-expr>
+
+# Bitwise operators: result type = unify operands
+<bitor-expr> @infer("$0 unify $1") ::= <bitor-expr> %"|" <bitxor-expr>
+<bitor-expr>                       ::= <bitxor-expr>
+
+<bitxor-expr> @infer("$0 unify $1") ::= <bitxor-expr> %"^" <bitand-expr>
+<bitxor-expr>                       ::= <bitand-expr>
+
+<bitand-expr> @infer("$0 unify $1") ::= <bitand-expr> %"&" <eq-expr>
+<bitand-expr>                       ::= <eq-expr>
+
+# Comparison operators produce bool
+<eq-expr> @infer("bool") ::= <eq-expr> %"==" <gte-expr>
+<eq-expr>                ::= <gte-expr>
+
+<gte-expr> @infer("bool") ::= <gte-expr> %">=" <lte-expr>
+<gte-expr>                ::= <lte-expr>
+
+<lte-expr> @infer("bool") ::= <lte-expr> %"<=" <gt-expr>
+<lte-expr>                ::= <gt-expr>
+
+<gt-expr> @infer("bool") ::= <gt-expr> %">" <lt-expr>
+<gt-expr>                ::= <lt-expr>
+
+<lt-expr> @infer("bool") ::= <lt-expr> %"<" <plus-expr>
+<lt-expr>                ::= <plus-expr>
+
+# Arithmetic operators: result type = unify operands
+<plus-expr> @infer("$0 unify $1") ::= <plus-expr> %"+" <minus-expr>
+<plus-expr>                       ::= <minus-expr>
+
+<minus-expr> @infer("$0 unify $1") ::= <minus-expr> %"-" <mod-expr>
+<minus-expr>                       ::= <mod-expr>
+
+<mod-expr> @infer("$0 unify $1") ::= <mod-expr> %"%" <mul-expr>
+<mod-expr>                       ::= <mul-expr>
+
+<mul-expr> @infer("$0 unify $1") ::= <mul-expr> %"*" <div-expr>
+<mul-expr>                       ::= <div-expr>
+
+<div-expr> @infer("$0 unify $1") ::= <div-expr> %"/" <shr-expr>
+<div-expr>                       ::= <shr-expr>
+
+# Shift operators: result type = left operand
+<shr-expr> @infer("$0") ::= <shr-expr> %">>" <shl-expr>
+<shr-expr>              ::= <shl-expr>
+
+<shl-expr> @infer("$0") ::= <shl-expr> %"<<" <unary-expr>
+<shl-expr>              ::= <unary-expr>
 
 # Unary operators are parsed in expression_start() before the
 # precedence chain. Their right-operand binding:
@@ -489,17 +537,18 @@
 # In the grammar below, we place unary ops inside <unary-expr> which
 # sits just above <postfix-expr>.
 
-<unary-expr> ::= %"!" <expression>
-               | %"-" <unary-expr>
-               | %"+" <unary-expr>
-               | %"ref" <unary-expr>
-               | <postfix-expr>
+<unary-expr> @infer("bool")     ::= %"!" <expression>
+<unary-expr> @infer("$0")       ::= %"-" <unary-expr>
+<unary-expr> @infer("$0")       ::= %"+" <unary-expr>
+<unary-expr> @infer("ref[$0]")  ::= %"ref" <unary-expr>
+<unary-expr>                    ::= <postfix-expr>
 
-<postfix-expr> ::= <postfix-expr> %"." %IDENTIFIER
-                 | <postfix-expr> %"[" <index-contents> %"]"
-                 | <postfix-expr> %"(" <call-args> %")"
-                 | <primary>
-<postfix-expr> @operator("unwrap_result") ::= <postfix-expr> %"!"
+<postfix-expr> @infer("`t")             ::= <postfix-expr> %"." %IDENTIFIER
+<postfix-expr> @infer("`t")             ::= <postfix-expr> %"[" <index-contents> %"]"
+<postfix-expr> @infer("return_of($0)")  ::= <postfix-expr> %"(" <call-args> %")"
+<postfix-expr> @infer("return_of($0)")  ::= <postfix-expr> %"(" %")"
+<postfix-expr>                          ::= <primary>
+<postfix-expr> @operator("unwrap_result") @infer("`t") ::= <postfix-expr> %"!"
 
 <index-contents> ::= <expression> <range-sep> <expression>
                    | <expression> <range-sep>
@@ -524,7 +573,7 @@
             | <tuple-or-paren>
             | <identifier-expr>
 
-<identifier-expr> @varref($0) ::= %IDENTIFIER
+<identifier-expr> @varref($0) @infer("lookup($0)") ::= %IDENTIFIER
 
 # ============================================================================
 # Literals
@@ -534,10 +583,9 @@
 <simple-lit> @literal("int") @notrivia($1)    ::= %HEX_LIT (%"'" <type-spec>)?
 <simple-lit> @literal("f64") @notrivia($1)    ::= %FLOAT_LIT (%"'" <type-spec>)?
 <simple-lit> @literal("string") @notrivia($1) ::= %STRING_LIT (%"'" <type-spec>)?
-<simple-lit> @literal("i32") @notrivia($1)    ::= %CHAR_LIT (%"'" <type-spec>)?
+<simple-lit> @literal("i32")                  ::= %CHAR_LIT
 <simple-lit> @literal("bool")                 ::= %"true"
 <simple-lit> @literal("bool")                 ::= %"false"
-<simple-lit> @literal("nil")                  ::= %"nil"
 <simple-lit> @notrivia($1)                    ::= %EMBED (%"'" <type-spec>)?
 
 <bool-lit> @literal("bool") ::= %"true"
@@ -550,27 +598,32 @@
             | <dict-or-set-lit>
             | <tuple-or-paren>
 
-<callback-lit> ::= %"func" %IDENTIFIER <type-spec>?
+<callback-lit> @infer("`t") ::= %"func" %IDENTIFIER <type-spec>?
 
 # ============================================================================
 # Collection literals
 # ============================================================================
 
-<list-lit> ::= %"[" <expr-comma-list> %"]"
-             | %"[" %"]"
+<list-lit> @infer("$0") @notrivia($1)        ::= %"[" <list-elems> %"]" (%"'" <type-spec>)?
+<list-lit> @infer("list[`e]") @notrivia($1) ::= %"[" %"]" (%"'" <type-spec>)?
 
-<dict-or-set-lit> ::= %"{" <dict-entries> %"}"
-                    | %"{" <set-entries> %"}"
-                    | %"{" %"}"
+<list-elems> @infer("list[$0] unify $1") ::= <expression> %"," <list-elems>
+<list-elems> @infer("list[$0]")          ::= <expression>
 
-<dict-entries> ::= <expression> %":" <expression> %"," <dict-entries>
-                 | <expression> %":" <expression>
+<dict-or-set-lit> @infer("$0") @notrivia($1) ::= %"{" <dict-entries> %"}" (%"'" <type-spec>)?
+<dict-or-set-lit> @infer("$0") @notrivia($1) ::= %"{" <set-entries> %"}" (%"'" <type-spec>)?
+<dict-or-set-lit> @infer("`t") @notrivia($1) ::= %"{" %"}" (%"'" <type-spec>)?
 
-<set-entries> ::= <expression> %"," <set-entries>
-                | <expression>
+<dict-entries> @infer("$0 unify $1") ::= <dict-entry> %"," <dict-entries>
+<dict-entries>                       ::= <dict-entry>
 
-<tuple-or-paren> ::= %"(" <expression> %"," <expr-comma-list> %")"
-                   | %"(" <expression> %")"
+<dict-entry> @infer("dict[$0, $1]") ::= <expression> %":" <expression>
+
+<set-entries> @infer("set[$0] unify $1") ::= <expression> %"," <set-entries>
+<set-entries> @infer("set[$0]")          ::= <expression>
+
+<tuple-or-paren> @infer("`t")  @notrivia($1) ::= %"(" <expression> %"," <expr-comma-list> %")" (%"'" <type-spec>)?
+<tuple-or-paren>               @notrivia($1) ::= %"(" <expression> %")" (%"'" <type-spec>)?
 
 <expr-comma-list> ::= <expression> %"," <expr-comma-list>
                     | <expression>
@@ -583,39 +636,70 @@
 # types (identifier), or parameterized types (identifier[...]), or
 # function types ((...) -> type).
 
-<type-spec> ::= <one-tspec>
+# Upper tier: no | allowed.  Used in declarations (after :), as a
+# <primary> in expressions, and anywhere a single type is expected.
+# To get a union type in upper-tier position, use parens: (int | nil).
+<type-spec> ::= <one-tspec> <where-clause>?
+             | <one-tspec>
+
+# Lower tier: | allowed.  Used inside [], inside () for func type
+# params, and after -> for return types — all positions that are
+# already unambiguously type context.
+<union-tspec> ::= <one-tspec> (%"|" <one-tspec>)+
+                | <one-tspec>
 
 <one-tspec> ::= <tspec-tvar>
+              | %"nil"
               | %IDENTIFIER
               | <tspec-parameterized>
               | <tspec-func>
+              | %"(" <union-tspec> %")"
 
 <tspec-tvar> ::= %"`" %IDENTIFIER
 
 <tspec-parameterized> ::= %"ref" %"[" <tspec-list> %"]"
                        | <member-chain> (%"[" <tspec-list> %"]")?
 
-<tspec-list> ::= <one-tspec> %"," <tspec-list>
-              | <one-tspec>
+<tspec-list> ::= <union-tspec> %"," <tspec-list>
+              | <union-tspec>
 
 <tspec-func> ::= %"(" <tspec-func-params> %")" <opt-return-type>
                | %"(" %")" <opt-return-type>
 
-<tspec-func-params> ::= <one-tspec> (%"," <tspec-func-params>)* ("," <tspec-vargs>)? ("," <tspec-kargs>)?
+<tspec-func-params> ::= <union-tspec> (%"," <tspec-func-params>)* ("," <tspec-vargs>)? ("," <tspec-kargs>)?
                        | <tspec-vargs> ("," <tspec-kargs>)?
                        | <tspec-kargs>
 
-<tspec-field> ::= %IDENTIFIER %":" <one-tspec>
+<tspec-field> ::= %IDENTIFIER %":" <union-tspec>
 
-<tspec-vargs> ::= %"*" <one-tspec>
+<tspec-vargs> ::= %"*" <union-tspec>
 <tspec-kargs> ::= %"**" <tspec-field> (%"," <tspec-field>)*
+
+# ============================================================================
+# Where clauses (type constraints on type variables)
+# ============================================================================
+
+<where-clause> ::= %"where" <type-constraint> (%"," <type-constraint>)*
+
+<type-constraint> ::= %"`" %IDENTIFIER %":" <constraint-list>
+
+<constraint-list> ::= <one-constraint> (%"+" <one-constraint>)*
+
+<one-constraint> ::= %"!=" <one-tspec>
+                   | %IDENTIFIER
 
 
 # ============================================================================
 # Class declaration
 # ============================================================================
-<class-decl> @scope("class", $2) @type($2) @declares($2) ::= <class-qualifiers>? %"class" %IDENTIFIER <class-body>
+<class-decl> @scope("class", $2) @declares($2) @type($2) @exposes ::= <class-qualifiers>? %"class" <concrete-class>
+<class-decl> @scope("class", $2) @declares($2) @exposes       ::= <class-qualifiers>? %"class" <parameterized-class>
 <class-qualifiers> ::= %"atomic"?
+
+<concrete-class> ::= %IDENTIFIER <class-body>
+<parameterized-class> @infer("$0[...$0]") ::= %IDENTIFIER <type-params> <where-clause>? <class-body>
+
+<type-params> ::= %"[" <tspec-tvar> (%"," <tspec-tvar>)* %"]"
 <class-body> ::= <block-start> <class-decl-spec-list> <block-end>
 <class-decl-spec-list> ::= (<class-decl-one> (<eos>+ <class-decl-one>)*)?
 <class-decl-one> @declares($0, $2) ::= %IDENTIFIER %":" <type-spec>

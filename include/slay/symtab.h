@@ -14,6 +14,7 @@
 #include "slay/parse_tree.h"
 
 typedef struct n00b_tc_type_s n00b_tc_type_t;
+typedef struct n00b_cfg_t     n00b_cfg_t;
 
 // ============================================================================
 // Symbol kinds
@@ -59,6 +60,8 @@ struct n00b_sym_entry_t {
     n00b_parse_tree_t   *type_node;     /**< Parse subtree for type (from @type/@field/@method). */
     n00b_tc_type_t      *type_var;      /**< Type variable for inference. */
     n00b_string_t        adt_kind;      /**< ADT kind: "struct", "union", "enum" (from @adt). */
+    n00b_scope_t        *exposed_scope; /**< Scope this symbol exposes for dotted access. */
+    n00b_cfg_t          *cfg;           /**< Per-function CFG (functions only). */
     bool                 is_field;      /**< True if declared via @field. */
     bool                 is_method;     /**< True if declared via @method. */
 };
@@ -82,10 +85,13 @@ struct n00b_scope_t {
 
 /** @brief One independent namespace with its own scope stack and symbol hash. */
 struct n00b_namespace_t {
-    n00b_string_t     ns_name;  /**< "" = default, "tag", "label", etc. */
-    n00b_scope_t     *current;  /**< Current (innermost) scope. */
+    n00b_string_t     ns_name;      /**< "" = default, "tag", "label", etc. */
+    n00b_scope_t     *current;      /**< Current (innermost) scope. */
+    n00b_scope_t    **all_scopes;   /**< All scopes ever created (for cleanup). */
+    int32_t           all_count;    /**< Number of scopes in all_scopes. */
+    int32_t           all_cap;      /**< Capacity of all_scopes. */
     int32_t           depth;
-    void             *symbols;  /**< Hash table: name -> n00b_sym_entry_t*. */
+    void             *symbols;      /**< Hash table: name -> n00b_sym_entry_t*. */
 };
 
 // ============================================================================
@@ -185,6 +191,21 @@ n00b_sym_entry_t *n00b_symtab_add(n00b_symtab_t *st, n00b_string_t ns_name,
  */
 n00b_sym_entry_t *n00b_symtab_lookup(n00b_symtab_t *st, n00b_string_t ns_name,
                                        n00b_string_t name);
+
+/**
+ * @brief Look up a symbol across all scopes (including popped ones).
+ *
+ * Searches the all_scopes list for any scope containing a symbol with
+ * the given name. Returns the first match found (innermost first since
+ * scopes are tracked in push order).
+ *
+ * @param st       Symbol table.
+ * @param ns_name  Namespace to search.
+ * @param name     Symbol name.
+ * @return The entry, or NULL if not found in any scope.
+ */
+n00b_sym_entry_t *n00b_symtab_lookup_all(n00b_symtab_t *st, n00b_string_t ns_name,
+                                            n00b_string_t name);
 
 /**
  * @brief Check if a name is a typedef in the default namespace.

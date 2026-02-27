@@ -125,22 +125,25 @@ typedef struct n00b_match_t {
 // Non-terminal node (interior parse tree node)
 // ============================================================================
 
+typedef struct n00b_scope_t n00b_scope_t;
+
 /** @brief Contents of an interior (non-terminal) parse tree node. */
 typedef struct n00b_nt_node_t {
-    n00b_string_t name;
-    int64_t       noscan;
-    int64_t       id;
-    int64_t       hv;
-    int32_t       start;
-    int32_t       end;
-    int32_t       rule_index;
-    uint32_t      penalty;
-    uint32_t      cost;
-    uint16_t      penalty_location;
-    bool          group_item;
-    bool          group_top;
-    bool          missing;
-    bool          bad_prefix;
+    n00b_string_t   name;
+    n00b_scope_t   *scope;  /**< Scope opened by this node (if @scope annotation fired). */
+    int64_t         noscan;
+    int64_t         id;
+    int64_t         hv;
+    int32_t         start;
+    int32_t         end;
+    int32_t         rule_index;
+    uint32_t        penalty;
+    uint32_t        cost;
+    uint16_t        penalty_location;
+    bool            group_item;
+    bool            group_top;
+    bool            missing;
+    bool            bad_prefix;
 } n00b_nt_node_t;
 
 // ============================================================================

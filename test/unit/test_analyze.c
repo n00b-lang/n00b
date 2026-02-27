@@ -158,7 +158,7 @@ analyze_source(const char *src)
         return ctx;
     }
 
-    n00b_cfg_t *cfg = n00b_build_cfg(ar->cf_labels, tree, *r"module");
+    n00b_cfg_t *cfg = n00b_build_cfg(ar->cf_labels, tree, *r"module", ar->symtab);
 
     if (!cfg) {
         return ctx;

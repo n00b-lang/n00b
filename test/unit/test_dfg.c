@@ -133,7 +133,7 @@ build_dfg_for(const char *src)
     n00b_annot_result_t *ar = n00b_annot_walk_tree_full(shared_grammar, tree);
     assert(ar != NULL);
 
-    r.cfg   = n00b_build_cfg(ar->cf_labels, tree, *r"test");
+    r.cfg   = n00b_build_cfg(ar->cf_labels, tree, *r"test", ar->symtab);
     assert(r.cfg != NULL);
 
     r.dfg   = n00b_build_dfg(r.cfg, ar->cf_labels, ar);
@@ -643,30 +643,43 @@ test_dfg_param_def(void)
         "    var y = x\n"
         "}\n";
 
+    // Build the module-level result (func-def is opaque at module level).
     dfg_result_t r = build_dfg_for(src);
-    assert(r.dfg != NULL);
+    assert(r.annot != NULL);
+
+    // The function's own CFG is stored on its symbol entry.
+    n00b_sym_entry_t *fsym = n00b_symtab_lookup_all(
+        r.annot->symtab, n00b_string_empty(), *r"f");
+    assert(fsym != NULL);
+    assert(fsym->kind == N00B_SYM_FUNCTION);
+    assert(fsym->cfg != NULL);
+
+    // Build a DFG from the function's own CFG.
+    n00b_dfg_t *fdfg = n00b_build_dfg(fsym->cfg, r.annot->cf_labels, r.annot);
+    assert(fdfg != NULL);
 
     // Should have a DEF of x (from parameter) and a USE of x.
-    assert(count_defs(r.dfg, "x") >= 1);
-    assert(count_uses(r.dfg, "x") >= 1);
+    assert(count_defs(fdfg, "x") >= 1);
+    assert(count_uses(fdfg, "x") >= 1);
 
     // The parameter def of x should reach the use of x in `var y = x`.
-    assert(count_edges_for_var(r.dfg, "x") >= 1);
+    assert(count_edges_for_var(fdfg, "x") >= 1);
 
     // Verify the reaching def for the use of x.
-    n00b_du_fact_t *use_x = find_fact(r.dfg, "x", false, 0);
+    n00b_du_fact_t *use_x = find_fact(fdfg, "x", false, 0);
     assert(use_x != NULL);
 
-    n00b_list_t(n00b_dd_edge_t) dds = n00b_dfg_reaching_defs(r.dfg, use_x->id);
+    n00b_list_t(n00b_dd_edge_t) dds = n00b_dfg_reaching_defs(fdfg, use_x->id);
     int32_t nd = (int32_t)n00b_list_len(dds);
     assert(nd >= 1);
 
     // The reaching def should be the parameter def (stmt_ix == -1).
-    n00b_du_fact_t *def_x = &r.dfg->facts.data[dds.data[0].def_id];
+    n00b_du_fact_t *def_x = &fdfg->facts.data[dds.data[0].def_id];
     assert(def_x->is_def);
     assert(def_x->stmt_ix == -1);  // Synthetic param def.
 
     n00b_list_free(dds);
+    n00b_dfg_free(fdfg);
     free_dfg_result(&r);
     printf("  [PASS] dfg_param_def\n");
 }

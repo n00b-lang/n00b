@@ -257,7 +257,7 @@ build_cdg_for(const char *src)
     n00b_annot_result_t *ar = n00b_annot_walk_tree_full(shared_grammar, tree);
     assert(ar != NULL);
 
-    r.cfg   = n00b_build_cfg(ar->cf_labels, tree, *r"test");
+    r.cfg   = n00b_build_cfg(ar->cf_labels, tree, *r"test", ar->symtab);
     assert(r.cfg != NULL);
 
     r.cdg   = n00b_build_cdg(r.cfg);

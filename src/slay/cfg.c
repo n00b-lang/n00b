@@ -6,6 +6,7 @@
 
 #include "slay/cfg.h"
 #include "slay/cf_label.h"
+#include "slay/symtab.h"
 #include "core/alloc.h"
 #include "core/tree.h"
 #include "strings/string_ops.h"
@@ -47,9 +48,10 @@ loop_pop(loop_stack_t *ls)
 // ============================================================================
 
 typedef struct {
-    n00b_cfg_t          *cfg;
+    n00b_cfg_t       *cfg;
     n00b_cf_labels_t *cf_labels;
-    loop_stack_t         loops;
+    n00b_symtab_t    *symtab;
+    loop_stack_t      loops;
 } cfg_ctx_t;
 
 // ============================================================================
@@ -368,6 +370,53 @@ cfg_build_stmt(cfg_ctx_t *ctx, n00b_parse_tree_t *node, int32_t cur_block)
         return cur_block;
     }
 
+    // Function definitions get their own CFG — don't inline their body
+    // into the enclosing CFG.
+    n00b_nt_node_t *nt = &n00b_tree_node_value(node);
+
+    if (n00b_unicode_str_eq(nt->name, *r"func-def")) {
+        // Find the <body> child (last NT child).
+        n00b_parse_tree_t *body = NULL;
+        size_t nc = n00b_tree_num_children(node);
+
+        for (size_t i = nc; i > 0; i--) {
+            n00b_parse_tree_t *child = n00b_tree_child(node, i - 1);
+
+            if (!n00b_tree_is_leaf(child)) {
+                n00b_nt_node_t *cpn = &n00b_tree_node_value(child);
+
+                if (n00b_unicode_str_eq(cpn->name, *r"body")) {
+                    body = child;
+                    break;
+                }
+            }
+        }
+
+        // Get function name from the scope attached to this node.
+        n00b_string_t func_name = nt->scope ? nt->scope->name
+                                             : *r"<anon>";
+
+        if (body) {
+            // Build a separate CFG for the function body.
+            n00b_cfg_t *func_cfg = n00b_build_cfg(ctx->cf_labels, body,
+                                                    func_name,
+                                                    ctx->symtab);
+
+            // Store the CFG on the function's symbol entry.
+            if (func_cfg && ctx->symtab) {
+                n00b_sym_entry_t *sym = n00b_symtab_lookup_all(
+                    ctx->symtab, n00b_string_empty(), func_name);
+
+                if (sym && sym->kind == N00B_SYM_FUNCTION) {
+                    sym->cfg = func_cfg;
+                }
+            }
+        }
+
+        block_add_stmt(ctx, cur_block, node);
+        return cur_block;
+    }
+
     return cfg_build_stmts(ctx, node, cur_block);
 }
 
@@ -398,7 +447,8 @@ cfg_build_stmts(cfg_ctx_t *ctx, n00b_parse_tree_t *node, int32_t cur_block)
 n00b_cfg_t *
 n00b_build_cfg(n00b_cf_labels_t *cf_labels,
                n00b_parse_tree_t   *func_body,
-               n00b_string_t        func_name)
+               n00b_string_t        func_name,
+               n00b_symtab_t       *symtab)
 {
     if (!cf_labels || !func_body) {
         return NULL;
@@ -412,6 +462,7 @@ n00b_build_cfg(n00b_cf_labels_t *cf_labels,
     cfg_ctx_t ctx = {
         .cfg       = cfg,
         .cf_labels = cf_labels,
+        .symtab    = symtab,
         .loops     = {.top = 0},
     };
 

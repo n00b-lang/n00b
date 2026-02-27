@@ -904,7 +904,7 @@ test_struct_with_typedef(void)
     assert(n00b_unicode_str_eq(tag->adt_kind, *r"struct"));
 
     // "point_t" should be found in the default namespace via @declares.
-    n00b_sym_entry_t *td = n00b_symtab_lookup(ar->symtab, *r"", *r"point_t");
+    n00b_sym_entry_t *td = n00b_symtab_lookup_all(ar->symtab, *r"", *r"point_t");
     assert(td != NULL);
     assert(td->kind == N00B_SYM_VARIABLE);  // @declares registers as variable
 

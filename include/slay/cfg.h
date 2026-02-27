@@ -16,6 +16,8 @@
 #include "slay/cf_label.h"
 #include "core/list.h"
 
+typedef struct n00b_symtab_t n00b_symtab_t;
+
 // ============================================================================
 // Edge kinds
 // ============================================================================
@@ -70,13 +72,15 @@ typedef struct {
 n00b_list_decl(n00b_cfg_block_t);
 n00b_list_decl(n00b_cfg_edge_t);
 
-typedef struct {
+typedef struct n00b_cfg_t n00b_cfg_t;
+
+struct n00b_cfg_t {
     n00b_list_t(n00b_cfg_block_t) blocks;
     n00b_list_t(n00b_cfg_edge_t)  edges;
     int32_t                        entry_id;
     int32_t                        exit_id;
     n00b_string_t                  name;
-} n00b_cfg_t;
+};
 
 // ============================================================================
 // Construction
@@ -94,7 +98,8 @@ typedef struct {
  */
 n00b_cfg_t *n00b_build_cfg(n00b_cf_labels_t  *cf_labels,
                             n00b_parse_tree_t *func_body,
-                            n00b_string_t      func_name);
+                            n00b_string_t      func_name,
+                            n00b_symtab_t     *symtab);
 
 // ============================================================================
 // Query

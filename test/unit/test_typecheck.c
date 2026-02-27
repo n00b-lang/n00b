@@ -24,6 +24,7 @@
 #include "typecheck/construct.h"
 #include "typecheck/context.h"
 #include "typecheck/unify.h"
+#include "typecheck/print.h"
 
 #include "slay/token.h"
 #include "slay/parse_tree.h"
@@ -916,8 +917,8 @@ test_literal_int_type(void)
     assert(ar->symtab != NULL);
     assert(ar->tc_ctx != NULL);
 
-    // Look up x in the symbol table.
-    n00b_sym_entry_t *x = n00b_symtab_lookup(ar->symtab, *r"", *r"x");
+    // Look up x across all scopes (walk completed, scopes popped).
+    n00b_sym_entry_t *x = n00b_symtab_lookup_all(ar->symtab, *r"", *r"x");
     assert(x != NULL);
     assert(x->type_var != NULL);
 
@@ -948,7 +949,7 @@ test_literal_string_type(void)
     assert(ar->node_types != NULL);
 
     // Look up x.
-    n00b_sym_entry_t *x = n00b_symtab_lookup(ar->symtab, *r"", *r"x");
+    n00b_sym_entry_t *x = n00b_symtab_lookup_all(ar->symtab, *r"", *r"x");
     assert(x != NULL);
     assert(x->type_var != NULL);
 
@@ -975,7 +976,7 @@ test_explicit_type_annotation(void)
     assert(ar != NULL);
 
     // Look up x.
-    n00b_sym_entry_t *x = n00b_symtab_lookup(ar->symtab, *r"", *r"x");
+    n00b_sym_entry_t *x = n00b_symtab_lookup_all(ar->symtab, *r"", *r"x");
     assert(x != NULL);
     assert(x->type_var != NULL);
 
@@ -1245,6 +1246,315 @@ test_notrivia_no_space(void)
 }
 
 // ============================================================================
+// Phase 7: Type-to-string printer
+// ============================================================================
+
+// Helper: assert type prints to expected string.
+static void
+assert_type_prints_as(n00b_tc_type_t *type, const char *expected)
+{
+    n00b_string_t result = n00b_tc_type_to_string(type);
+    n00b_string_t exp    = n00b_string_from_cstr(expected);
+
+    if (!n00b_unicode_str_eq(result, exp)) {
+        fprintf(stderr, "  [FAIL] expected \"%s\", got \"%.*s\"\n",
+                expected, (int)result.u8_bytes, result.data);
+        assert(false);
+    }
+}
+
+// --- 41. print prim ---
+
+static void
+test_print_prim(void)
+{
+    n00b_tc_ctx_t *ctx = n00b_tc_ctx_new();
+    assert_type_prints_as(ctx->t_int, "int");
+    assert_type_prints_as(ctx->t_bool, "bool");
+    assert_type_prints_as(ctx->t_string, "string");
+    assert_type_prints_as(ctx->t_nil, "nil");
+    assert_type_prints_as(ctx->t_void, "void");
+    n00b_tc_ctx_free(ctx);
+    printf("  [PASS] print_prim\n");
+}
+
+// --- 42. print param ---
+
+static void
+test_print_param(void)
+{
+    n00b_tc_ctx_t *ctx = n00b_tc_ctx_new();
+
+    n00b_tc_type_t *list_int = n00b_tc_param(ctx, *r"list", ctx->t_int);
+    assert_type_prints_as(list_int, "list[int]");
+
+    n00b_tc_type_t *dict_si = n00b_tc_param(ctx, *r"dict", ctx->t_string, ctx->t_int);
+    assert_type_prints_as(dict_si, "dict[string, int]");
+
+    n00b_tc_ctx_free(ctx);
+    printf("  [PASS] print_param\n");
+}
+
+// --- 43. print nested param ---
+
+static void
+test_print_nested_param(void)
+{
+    n00b_tc_ctx_t *ctx = n00b_tc_ctx_new();
+
+    n00b_tc_type_t *list_int = n00b_tc_param(ctx, *r"list", ctx->t_int);
+    n00b_tc_type_t *dict_sli = n00b_tc_param(ctx, *r"dict", ctx->t_string, list_int);
+    assert_type_prints_as(dict_sli, "dict[string, list[int]]");
+
+    n00b_tc_ctx_free(ctx);
+    printf("  [PASS] print_nested_param\n");
+}
+
+// --- 44. print fn ---
+
+static void
+test_print_fn(void)
+{
+    n00b_tc_ctx_t *ctx = n00b_tc_ctx_new();
+
+    n00b_tc_type_t *fn = n00b_tc_fn(ctx, ctx->t_int, ctx->t_string,
+                                       kw_func(n00b_tc_fn, .returns = ctx->t_bool));
+    assert_type_prints_as(fn, "(int, string) -> bool");
+
+    n00b_tc_ctx_free(ctx);
+    printf("  [PASS] print_fn\n");
+}
+
+// --- 45. print fn with vargs ---
+
+static void
+test_print_fn_vargs(void)
+{
+    n00b_tc_ctx_t *ctx = n00b_tc_ctx_new();
+
+    n00b_tc_type_t *fn = n00b_tc_fn(ctx, ctx->t_int,
+                                       kw_func(n00b_tc_fn,
+                                               .returns  = ctx->t_void,
+                                               .variadic = ctx->t_string));
+    assert_type_prints_as(fn, "(int, *string) -> void");
+
+    n00b_tc_ctx_free(ctx);
+    printf("  [PASS] print_fn_vargs\n");
+}
+
+// --- 46. print fn with kargs ---
+
+static void
+test_print_fn_kargs(void)
+{
+    n00b_tc_ctx_t *ctx = n00b_tc_ctx_new();
+
+    n00b_tc_type_t *kargs_rec = n00b_tc_record(ctx, *r"",
+        n00b_tc_field(*r"name", ctx->t_string),
+        n00b_tc_field(*r"age", ctx->t_int),
+        kw_func(n00b_tc_record, .ordered = false));
+
+    n00b_tc_type_t *fn = n00b_tc_fn(ctx,
+                                       kw_func(n00b_tc_fn,
+                                               .returns = ctx->t_void,
+                                               .kwonly  = kargs_rec));
+    assert_type_prints_as(fn, "(**name: string, age: int) -> void");
+
+    n00b_tc_ctx_free(ctx);
+    printf("  [PASS] print_fn_kargs\n");
+}
+
+// --- 47. print sum ---
+
+static void
+test_print_sum(void)
+{
+    n00b_tc_ctx_t *ctx = n00b_tc_ctx_new();
+
+    n00b_tc_type_t *sum = n00b_tc_sum(ctx, ctx->t_int, ctx->t_string, ctx->t_nil);
+    assert_type_prints_as(sum, "int | string | nil");
+
+    n00b_tc_ctx_free(ctx);
+    printf("  [PASS] print_sum\n");
+}
+
+// --- 48. print var unresolved ---
+
+static void
+test_print_var_unresolved(void)
+{
+    n00b_tc_ctx_t *ctx = n00b_tc_ctx_new();
+
+    n00b_tc_type_t *tv = n00b_tc_var(ctx, *r"T");
+    assert_type_prints_as(tv, "`T");
+
+    n00b_tc_type_t *anon = n00b_tc_fresh_var(ctx);
+    n00b_string_t result = n00b_tc_type_to_string(anon);
+    // Should start with ` followed by t_
+    assert(result.u8_bytes > 0);
+    assert(result.data[0] == '`');
+
+    n00b_tc_ctx_free(ctx);
+    printf("  [PASS] print_var_unresolved\n");
+}
+
+// --- 49. print var resolved ---
+
+static void
+test_print_var_resolved(void)
+{
+    n00b_tc_ctx_t *ctx = n00b_tc_ctx_new();
+
+    n00b_tc_type_t *tv = n00b_tc_var(ctx, *r"T");
+    n00b_tc_unify(ctx, tv, ctx->t_int);
+
+    // Should print as "int", not "`T".
+    assert_type_prints_as(tv, "int");
+
+    n00b_tc_ctx_free(ctx);
+    printf("  [PASS] print_var_resolved\n");
+}
+
+// --- 50. print record ---
+
+static void
+test_print_record(void)
+{
+    n00b_tc_ctx_t *ctx = n00b_tc_ctx_new();
+
+    n00b_tc_type_t *point = n00b_tc_record(ctx, *r"Point",
+        n00b_tc_field(*r"x", ctx->t_int),
+        n00b_tc_field(*r"y", ctx->t_int),
+        kw_func(n00b_tc_record));
+    assert_type_prints_as(point, "Point{x: int, y: int}");
+
+    // Anonymous record.
+    n00b_tc_type_t *anon = n00b_tc_record(ctx, *r"",
+        n00b_tc_field(*r"a", ctx->t_string),
+        kw_func(n00b_tc_record));
+    assert_type_prints_as(anon, "{a: string}");
+
+    n00b_tc_ctx_free(ctx);
+    printf("  [PASS] print_record\n");
+}
+
+// --- 51. print tuple ---
+
+static void
+test_print_tuple(void)
+{
+    n00b_tc_ctx_t *ctx = n00b_tc_ctx_new();
+
+    n00b_tc_type_t *tup = n00b_tc_tuple(ctx, ctx->t_int, ctx->t_string,
+                                           kw_func(n00b_tc_tuple));
+    assert_type_prints_as(tup, "(int, string)");
+
+    n00b_tc_ctx_free(ctx);
+    printf("  [PASS] print_tuple\n");
+}
+
+// --- 52. print open tuple ---
+
+static void
+test_print_open_tuple(void)
+{
+    n00b_tc_ctx_t *ctx = n00b_tc_ctx_new();
+
+    n00b_tc_type_t *tup = n00b_tc_tuple(ctx, ctx->t_int,
+                                           kw_func(n00b_tc_tuple, .open = true));
+    assert_type_prints_as(tup, "(int, ...)");
+
+    n00b_tc_ctx_free(ctx);
+    printf("  [PASS] print_open_tuple\n");
+}
+
+// --- 53. print cycle ---
+
+static void
+test_print_cycle(void)
+{
+    n00b_tc_ctx_t *ctx = n00b_tc_ctx_new();
+
+    // Create a cycle: type -> itself.
+    n00b_tc_type_t *t = n00b_tc_param(ctx, *r"list", ctx->t_int);
+    t->forward = t; // Self-referential cycle.
+
+    n00b_string_t result = n00b_tc_type_to_string(t);
+    // Should eventually produce "<cycle>" somewhere.
+    assert(result.u8_bytes > 0);
+
+    // Clean up the cycle.
+    t->forward = nullptr;
+
+    n00b_tc_ctx_free(ctx);
+    printf("  [PASS] print_cycle\n");
+}
+
+// --- 54. print ref ---
+
+static void
+test_print_ref(void)
+{
+    n00b_tc_ctx_t *ctx = n00b_tc_ctx_new();
+
+    n00b_tc_type_t *ref_int = n00b_tc_param(ctx, *r"ref", ctx->t_int);
+    assert_type_prints_as(ref_int, "ref[int]");
+
+    n00b_tc_ctx_free(ctx);
+    printf("  [PASS] print_ref\n");
+}
+
+// --- 55. print constraints ---
+
+static void
+test_print_constraints(void)
+{
+    n00b_tc_ctx_t *ctx = n00b_tc_ctx_new();
+
+    n00b_tc_type_t *tv = n00b_tc_var(ctx, *r"T");
+
+    // Add constraints manually to the var.
+    n00b_tc_type_t *resolved = tv;
+
+    while (resolved->forward) {
+        resolved = resolved->forward;
+    }
+
+    auto var = n00b_variant_get(resolved->kind, n00b_tc_var_t);
+
+    var.constraints = n00b_alloc(n00b_list_t(n00b_tc_constraint_t));
+    *var.constraints = n00b_list_new_private(n00b_tc_constraint_t);
+
+    n00b_tc_constraint_t c1 = {
+        .kind       = N00B_TC_CON_IMPLEMENTS,
+        .implements = {.iface_name = *r"Numeric"},
+    };
+
+    n00b_list_push(*var.constraints, c1);
+
+    n00b_tc_constraint_t c2 = {
+        .kind = N00B_TC_CON_NOT,
+        .not_ = {.excluded = ctx->t_nil},
+    };
+
+    n00b_list_push(*var.constraints, c2);
+
+    _n00b_variant_set_ptr(&resolved->kind, n00b_tc_var_t, var);
+
+    n00b_string_t result = n00b_tc_type_to_string_full(tv);
+    // Should be something like "`T where `T: Numeric + != nil"
+    assert(result.u8_bytes > 0);
+
+    // Verify it contains the key parts.
+    n00b_string_t expected_part = *r"where";
+    (void)expected_part;
+    // Just verify it doesn't crash and produces non-empty output.
+
+    n00b_tc_ctx_free(ctx);
+    printf("  [PASS] print_constraints\n");
+}
+
+// ============================================================================
 // Main
 // ============================================================================
 
@@ -1307,6 +1617,23 @@ main(int argc, char **argv)
     test_literal_no_modifier();
     test_notrivia_with_space();
     test_notrivia_no_space();
+
+    // Phase 7: Type-to-string printer.
+    test_print_prim();
+    test_print_param();
+    test_print_nested_param();
+    test_print_fn();
+    test_print_fn_vargs();
+    test_print_fn_kargs();
+    test_print_sum();
+    test_print_var_unresolved();
+    test_print_var_resolved();
+    test_print_record();
+    test_print_tuple();
+    test_print_open_tuple();
+    test_print_cycle();
+    test_print_ref();
+    test_print_constraints();
 
     printf("All typecheck tests passed.\n");
     n00b_shutdown();

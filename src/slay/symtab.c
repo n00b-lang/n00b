@@ -75,11 +75,22 @@ n00b_symtab_free(n00b_symtab_t *st)
     for (int32_t i = 0; i < st->ns_count; i++) {
         n00b_namespace_t *ns = &st->namespaces[i];
 
-        // Pop all remaining scopes.
-        while (ns->current) {
-            n00b_scope_t *scope = ns->current;
-            ns->current = scope->parent;
+        // Free all tracked scopes and their entries.
+        for (int32_t j = 0; j < ns->all_count; j++) {
+            n00b_scope_t *scope = ns->all_scopes[j];
+            n00b_sym_entry_t *entry = scope->first_in_scope;
+
+            while (entry) {
+                n00b_sym_entry_t *next = entry->next_in_scope;
+                n00b_free(entry);
+                entry = next;
+            }
+
             n00b_free(scope);
+        }
+
+        if (ns->all_scopes) {
+            n00b_free(ns->all_scopes);
         }
 
         if (ns->symbols) {
@@ -159,6 +170,26 @@ n00b_symtab_push_scope(n00b_symtab_t *st, n00b_string_t ns_name,
 
     ns->current = scope;
     ns->depth++;
+
+    // Track scope for cleanup.
+    if (ns->all_count >= ns->all_cap) {
+        int32_t new_cap = ns->all_cap ? ns->all_cap * 2 : 8;
+        n00b_scope_t **new_arr = n00b_alloc_array(n00b_scope_t *, new_cap);
+
+        if (ns->all_count > 0) {
+            memcpy(new_arr, ns->all_scopes,
+                   ns->all_count * sizeof(n00b_scope_t *));
+        }
+
+        if (ns->all_scopes) {
+            n00b_free(ns->all_scopes);
+        }
+
+        ns->all_scopes = new_arr;
+        ns->all_cap    = new_cap;
+    }
+
+    ns->all_scopes[ns->all_count++] = scope;
 }
 
 void
@@ -173,28 +204,23 @@ n00b_symtab_pop_scope(n00b_symtab_t *st, n00b_string_t ns_name)
     n00b_scope_t *scope = ns->current;
     n00b_dict_untyped_t *ht = (n00b_dict_untyped_t *)ns->symbols;
 
-    // Walk the scope's symbol chain: restore shadowed or remove.
+    // Restore the hash table for correct lookup at the enclosing scope,
+    // but keep the scope and its entries alive (attached to the tree node).
     n00b_sym_entry_t *entry = scope->first_in_scope;
 
     while (entry) {
-        n00b_sym_entry_t *next = entry->next_in_scope;
-
         if (entry->shadowed) {
-            // Restore the shadowed entry.
             ht_put(ht, entry->name, entry->shadowed);
         }
         else {
-            // No shadowed entry — remove from hash table.
             ht_remove(ht, entry->name);
         }
 
-        n00b_free(entry);
-        entry = next;
+        entry = entry->next_in_scope;
     }
 
     ns->current = scope->parent;
     ns->depth--;
-    n00b_free(scope);
 }
 
 // ============================================================================
@@ -253,6 +279,47 @@ n00b_symtab_lookup(n00b_symtab_t *st, n00b_string_t ns_name,
         if (n00b_unicode_str_eq(st->namespaces[i].ns_name, ns_name)) {
             return ht_get((n00b_dict_untyped_t *)st->namespaces[i].symbols, name);
         }
+    }
+
+    return NULL;
+}
+
+n00b_sym_entry_t *
+n00b_symtab_lookup_all(n00b_symtab_t *st, n00b_string_t ns_name,
+                        n00b_string_t name)
+{
+    if (!st || !name.data) {
+        return NULL;
+    }
+
+    for (int32_t i = 0; i < st->ns_count; i++) {
+        if (!n00b_unicode_str_eq(st->namespaces[i].ns_name, ns_name)) {
+            continue;
+        }
+
+        n00b_namespace_t *ns = &st->namespaces[i];
+
+        // First try the live hash table (covers current scope).
+        n00b_sym_entry_t *found = ht_get((n00b_dict_untyped_t *)ns->symbols, name);
+
+        if (found) {
+            return found;
+        }
+
+        // Walk all scopes (most recent first).
+        for (int32_t j = ns->all_count - 1; j >= 0; j--) {
+            n00b_sym_entry_t *entry = ns->all_scopes[j]->first_in_scope;
+
+            while (entry) {
+                if (n00b_unicode_str_eq(entry->name, name)) {
+                    return entry;
+                }
+
+                entry = entry->next_in_scope;
+            }
+        }
+
+        return NULL;
     }
 
     return NULL;

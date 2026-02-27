@@ -52,6 +52,7 @@ typedef enum {
     N00B_ANNOT_VARREF,
     N00B_ANNOT_PENALTY,
     N00B_ANNOT_NOTRIVIA,
+    N00B_ANNOT_EXPOSES,
     N00B_ANNOT_NONE,
 } n00b_annot_kind_t;
 
@@ -146,6 +147,7 @@ void n00b_nt_call(n00b_nonterm_t *nt, n00b_child_ref_t func_ref,
                    n00b_child_ref_t args_ref);
 void n00b_nt_varref(n00b_nonterm_t *nt, n00b_child_ref_t name_ref);
 void n00b_nt_notrivia(n00b_nonterm_t *nt, n00b_child_ref_t child_ref);
+void n00b_nt_exposes(n00b_nonterm_t *nt);
 
 // Rule-level notrivia convenience.
 void n00b_rule_notrivia(n00b_parse_rule_t *rule, n00b_child_ref_t child_ref);
@@ -168,4 +170,5 @@ void n00b_rule_jump(n00b_parse_rule_t *rule, n00b_string_t jump_kind);
 void n00b_rule_switch(n00b_parse_rule_t *rule, n00b_child_ref_t cond_ref,
                        n00b_child_ref_t cases_ref);
 void n00b_rule_capture(n00b_parse_rule_t *rule, n00b_string_t tag, bool by_tag);
+void n00b_rule_exposes(n00b_parse_rule_t *rule);
 void n00b_rule_concat(n00b_parse_rule_t *rule);

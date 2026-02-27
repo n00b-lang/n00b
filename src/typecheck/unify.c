@@ -70,6 +70,10 @@ occurs_in(n00b_tc_type_t *needle, n00b_tc_type_t *haystack)
 {
     haystack = n00b_tc_find(haystack);
 
+    if (!haystack) {
+        return false;
+    }
+
     if (needle == haystack) {
         return true;
     }
@@ -304,6 +308,10 @@ n00b_tc_unify(n00b_tc_ctx_t *ctx, n00b_tc_type_t *a, n00b_tc_type_t *b)
 {
     a = n00b_tc_find(a);
     b = n00b_tc_find(b);
+
+    if (!a || !b) {
+        return false;
+    }
 
     // Same pointer → trivially unified.
     if (a == b) {

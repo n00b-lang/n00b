@@ -1,0 +1,17 @@
+class Point {
+    x: int
+    y: int
+}
+
+class Shape {
+    name: string
+}
+
+enum Color {
+    Red,
+    Green,
+    Blue
+}
+
+var p = Point()
+var c = Color.Red

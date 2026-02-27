@@ -1287,6 +1287,9 @@ bnf_walk_annotation(n00b_nt_node_t *pn, void *children, void *thunk)
             info->notrivia_ref = parse_child_ref(slist_get(args, 0));
         }
     }
+    else if (str_eq_lit(annot_str, "exposes")) {
+        info->kind = N00B_ANNOT_EXPOSES;
+    }
 
     if (args_r) {
         // Free the wrapper but not the token data inside

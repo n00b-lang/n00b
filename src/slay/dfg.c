@@ -6,6 +6,7 @@
 #include "slay/dfg.h"
 #include "slay/parse_tree.h"
 #include "core/alloc.h"
+#include "strings/string_ops.h"
 
 #include <assert.h>
 #include <string.h>
@@ -149,6 +150,14 @@ walk_for_uses(n00b_parse_tree_t *node, n00b_cf_labels_t *cf_labels,
     if (label
         && (label->kind == N00B_CF_ASSIGNS || label->kind == N00B_CF_VARREF)) {
         return;  // Will be / was handled by the main extraction.
+    }
+
+    // Function definitions are opaque — don't recurse into them.
+    // Their internal variables belong to a separate scope.
+    n00b_nt_node_t *nt = &n00b_tree_node_value(node);
+
+    if (n00b_unicode_str_eq(nt->name, *r"func-def")) {
+        return;
     }
 
     // Recurse into children.

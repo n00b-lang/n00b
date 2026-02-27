@@ -465,8 +465,14 @@ n00b_slay = [
     'src/slay/commander_tok.c',
     'src/slay/commander_json.c',
     'src/slay/symtab.c',
+    'src/slay/tree_util.c',
     'src/slay/annot_walk.c',
+    'src/slay/annot_scope.c',
+    'src/slay/annot_symtab.c',
+    'src/slay/annot_cf.c',
+    'src/slay/annot_types.c',
     'src/slay/infer.c',
+    'src/slay/infer_expr.c',
     'src/slay/cfg.c',
     'src/slay/cdg.c',
     'src/slay/dfg.c',
@@ -512,6 +518,7 @@ n00b_typecheck = [
     'src/typecheck/construct.c',
     'src/typecheck/context.c',
     'src/typecheck/unify.c',
+    'src/typecheck/print.c',
 ]
 
 n00b_dll_src = n00b_core + n00b_unicode + n00b_strings + n00b_render + n00b_table + n00b_conduit + n00b_parsers + n00b_hexdump + n00b_logic + n00b_slay + n00b_typecheck
@@ -980,6 +987,18 @@ analyze_test = executable('test_analyze',
     kwargs: test_common_kwargs,
 )
 test('analyze', analyze_test, suite: 'unit')
+
+n00b_programs_test = executable('test_n00b_programs',
+    ['test/unit/test_n00b_programs.c'],
+    kwargs: test_common_kwargs,
+)
+test('n00b_programs', n00b_programs_test, suite: 'unit')
+
+infer_expr_test = executable('test_infer_expr',
+    ['test/unit/test_infer_expr.c'],
+    kwargs: test_common_kwargs,
+)
+test('infer_expr', infer_expr_test, suite: 'unit')
 
 # ============================================================================
 # MIR JIT tests

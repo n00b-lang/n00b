@@ -399,6 +399,14 @@ n00b_rule_notrivia(n00b_parse_rule_t *rule, n00b_child_ref_t child_ref)
 }
 
 void
+n00b_nt_exposes(n00b_nonterm_t *nt)
+{
+    n00b_annotation_t a = {0};
+    a.kind = N00B_ANNOT_EXPOSES;
+    n00b_nt_annotate(nt, a);
+}
+
+void
 n00b_nt_pp_align(n00b_nonterm_t *nt, n00b_child_ref_t child_ref)
 {
     n00b_annotation_t a = {0};
@@ -514,6 +522,14 @@ n00b_rule_capture(n00b_parse_rule_t *rule, n00b_string_t tag, bool by_tag)
     a.kind           = N00B_ANNOT_CAPTURE;
     a.scope_tag      = tag;
     a.capture_by_tag = by_tag;
+    n00b_rule_annotate(rule, a);
+}
+
+void
+n00b_rule_exposes(n00b_parse_rule_t *rule)
+{
+    n00b_annotation_t a = {0};
+    a.kind = N00B_ANNOT_EXPOSES;
     n00b_rule_annotate(rule, a);
 }
 

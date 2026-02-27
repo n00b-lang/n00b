@@ -33,6 +33,8 @@
 #include "slay/diagnostic.h"
 #include "slay/analyze.h"
 #include "internal/slay/earley_internal.h"
+#include "typecheck/types.h"
+#include "typecheck/print.h"
 
 // ============================================================================
 // Grammar loading
@@ -167,6 +169,118 @@ dump_tokens(n00b_token_stream_t *ts)
 }
 
 // ============================================================================
+// Symbol table dumping
+// ============================================================================
+
+static const char *
+sym_kind_str(n00b_sym_kind_t kind)
+{
+    switch (kind) {
+    case N00B_SYM_VARIABLE:   return "var";
+    case N00B_SYM_FUNCTION:   return "func";
+    case N00B_SYM_TYPEDEF:    return "type";
+    case N00B_SYM_TAG:        return "tag";
+    case N00B_SYM_ENUM_CONST: return "enum";
+    case N00B_SYM_LABEL:      return "label";
+    case N00B_SYM_PARAM:      return "param";
+    default:                  return "?";
+    }
+}
+
+static void
+dump_symtab_recursive(n00b_parse_tree_t *t, int depth)
+{
+    if (!t || n00b_tree_is_leaf(t)) {
+        return;
+    }
+
+    n00b_nt_node_t *pn = &n00b_tree_node_value(t);
+
+    if (pn->scope) {
+        n00b_scope_t *scope = pn->scope;
+        int indent = scope->depth;
+
+        for (int i = 0; i < indent; i++) {
+            printf("  ");
+        }
+
+        if (scope->name.data && scope->name.u8_bytes > 0) {
+            printf("scope \"%.*s\" (depth %d):\n",
+                   (int)scope->name.u8_bytes, scope->name.data,
+                   scope->depth);
+        }
+        else {
+            printf("scope (depth %d):\n", scope->depth);
+        }
+
+        n00b_sym_entry_t *entry = scope->first_in_scope;
+
+        while (entry) {
+            for (int i = 0; i < indent + 1; i++) {
+                printf("  ");
+            }
+
+            uint32_t line = 0;
+
+            if (entry->decl_node) {
+                n00b_parse_tree_t *first = n00b_pt_first_token(entry->decl_node);
+
+                if (first) {
+                    n00b_token_info_t *tok = n00b_parse_node_token(first);
+
+                    if (tok) {
+                        line = tok->line;
+                    }
+                }
+            }
+
+            if (entry->type_var) {
+                n00b_string_t ts = n00b_tc_type_to_string(entry->type_var);
+                printf("%-6s %.*s : %.*s  line %u",
+                       sym_kind_str(entry->kind),
+                       (int)entry->name.u8_bytes, entry->name.data,
+                       (int)ts.u8_bytes, ts.data,
+                       line);
+            }
+            else {
+                printf("%-6s %.*s  line %u",
+                       sym_kind_str(entry->kind),
+                       (int)entry->name.u8_bytes, entry->name.data,
+                       line);
+            }
+
+            if (entry->exposed_scope) {
+                n00b_scope_t *es = entry->exposed_scope;
+
+                if (es->name.data && es->name.u8_bytes > 0) {
+                    printf("  [exposes \"%.*s\"]",
+                           (int)es->name.u8_bytes, es->name.data);
+                }
+                else {
+                    printf("  [exposes scope]");
+                }
+            }
+
+            printf("\n");
+
+            entry = entry->next_in_scope;
+        }
+    }
+
+    size_t nc = n00b_tree_num_children(t);
+
+    for (size_t i = 0; i < nc; i++) {
+        dump_symtab_recursive(n00b_tree_child(t, i), depth + 1);
+    }
+}
+
+static void
+dump_symtab(n00b_parse_tree_t *tree)
+{
+    dump_symtab_recursive(tree, 0);
+}
+
+// ============================================================================
 // Main
 // ============================================================================
 
@@ -184,6 +298,7 @@ main(int argc, char **argv)
     bool                show_cdg     = false;
     bool                show_dfg     = false;
     bool                show_labels  = false;
+    bool                show_symtab  = false;
     bool                run_analyze  = false;
     bool                run_typecheck = false;
     bool                quiet        = false;
@@ -222,6 +337,10 @@ main(int argc, char **argv)
         else if (strcmp(argv[i], "--labels") == 0) {
             show_labels = true;
         }
+        else if (strcmp(argv[i], "--symtab") == 0
+                 || strcmp(argv[i], "-s") == 0) {
+            show_symtab = true;
+        }
         else if (strcmp(argv[i], "--analyze") == 0
                  || strcmp(argv[i], "-a") == 0) {
             run_analyze = true;
@@ -234,6 +353,7 @@ main(int argc, char **argv)
             show_cfg      = true;
             show_cdg      = true;
             show_dfg      = true;
+            show_symtab   = true;
             run_analyze   = true;
             run_typecheck = true;
         }
@@ -262,7 +382,7 @@ main(int argc, char **argv)
     if (!source_file) {
         fprintf(stderr, "usage: n00b_dev <source-file> "
                         "[--earley|--pwz] [--tokens] [--grammar] "
-                        "[--cfg] [--cdg] [--dfg] [--labels] "
+                        "[--cfg] [--cdg] [--dfg] [--labels] [--symtab|-s] "
                         "[--analyze|-a] [--typecheck|-t] [--all] "
                         "[--quiet|-q] [--grammar-file <path>]\n");
         return 1;
@@ -444,8 +564,15 @@ main(int argc, char **argv)
             n00b_diag_import_tc_errors(diag_ctx, ar->tc_ctx);
         }
 
+        // Symbol table.
+        if (show_symtab) {
+            printf("\n=== Symbol Table ===\n");
+            dump_symtab(tree);
+            printf("\n");
+        }
+
         // CF labels.
-        if (show_labels && !quiet && ar && ar->cf_labels) {
+        if (show_labels && ar && ar->cf_labels) {
             printf("\n=== CF Labels ===\n");
             n00b_cf_labels_print(ar->cf_labels, g, stdout);
             printf("\n");
@@ -455,10 +582,11 @@ main(int argc, char **argv)
         bool need_graphs = show_cfg || show_cdg || show_dfg || run_analyze;
 
         if (need_graphs && ar && ar->cf_labels) {
-            n00b_cfg_t *cfg = n00b_build_cfg(ar->cf_labels, tree, *r"module");
+            n00b_cfg_t *cfg = n00b_build_cfg(ar->cf_labels, tree, *r"module",
+                                                ar->symtab);
 
             if (cfg) {
-                if (show_cfg && !quiet) {
+                if (show_cfg) {
                     printf("=== CFG ===\n");
                     n00b_cfg_print(cfg, g, stdout);
                     printf("\n");
@@ -469,12 +597,12 @@ main(int argc, char **argv)
                 if (show_cdg) {
                     cdg = n00b_build_cdg(cfg);
 
-                    if (cdg && !quiet) {
+                    if (cdg) {
                         printf("=== CDG ===\n");
                         n00b_cdg_print(cdg, g, stdout);
                         printf("\n");
                     }
-                    else if (!cdg && !quiet) {
+                    else {
                         printf("(CDG build returned NULL)\n");
                     }
                 }
@@ -484,12 +612,12 @@ main(int argc, char **argv)
                 if (show_dfg || run_analyze) {
                     dfg = n00b_build_dfg(cfg, ar->cf_labels, ar);
 
-                    if (dfg && show_dfg && !quiet) {
+                    if (dfg && show_dfg) {
                         printf("=== DFG ===\n");
                         n00b_dfg_print(dfg, g, stdout);
                         printf("\n");
                     }
-                    else if (!dfg && !quiet) {
+                    else if (!dfg) {
                         printf("(DFG build returned NULL)\n");
                     }
                 }
