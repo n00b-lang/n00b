@@ -323,8 +323,23 @@ n00b_parse_result_error_string(n00b_parse_result_t *r)
     n00b_error_location_t loc = r->error_loc;
 
     if (loc.got.data) {
+        // Escape non-visible "got" text for readability.
+        n00b_string_t got_display = loc.got;
+
+        if (got_display.u8_bytes == 1 && got_display.data[0] == '\n') {
+            got_display = N00B_STRING_STATIC("newline");
+        }
+        else if (got_display.u8_bytes == 1 && got_display.data[0] == '\t') {
+            got_display = N00B_STRING_STATIC("tab");
+        }
+        else if (got_display.u8_bytes == 2
+                 && got_display.data[0] == '\r'
+                 && got_display.data[1] == '\n') {
+            got_display = N00B_STRING_STATIC("newline");
+        }
+
         return n00b_cformat("parse error at line «#:d», col «#:d»: got '«#»', expected: «#»",
-                            (uint64_t)loc.line, (uint64_t)loc.column, &loc.got, &expected);
+                            (uint64_t)loc.line, (uint64_t)loc.column, &got_display, &expected);
     }
 
     return n00b_cformat("parse error at line «#:d», col «#:d»: expected: «#»",

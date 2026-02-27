@@ -1695,20 +1695,41 @@ found:
         return;
     }
 
-    n00b_earley_state_t *state = p->states.data[last_ok];
-    n00b_grammar_t      *g    = p->grammar;
+    n00b_grammar_t *g = p->grammar;
 
-    // Populate error location from the state's token.
-    if (state->token) {
-        out->error_loc.position = last_ok;
-        out->error_loc.line     = state->token->line;
-        out->error_loc.column   = state->token->column;
-        out->error_loc.got_id   = state->token->tid;
+    // Determine where the actual failure is.
+    //
+    // last_ok has scan items.  If last_ok+1 exists in the chart, then
+    // at least one scan at last_ok succeeded — the real failure token
+    // is at last_ok+1 (the parser couldn't continue from there).
+    // Otherwise no scan succeeded at last_ok and it IS the failure.
+    int32_t nstates  = (int32_t)n00b_list_len(p->states);
+    int32_t fail_pos = last_ok;
 
-        if (n00b_option_is_set(state->token->value)) {
-            out->error_loc.got = n00b_option_get(state->token->value);
+    if (last_ok + 1 < nstates) {
+        fail_pos = last_ok + 1;
+    }
+
+    n00b_earley_state_t *fail_state = p->states.data[fail_pos];
+    n00b_earley_state_t *scan_state = p->states.data[last_ok];
+
+    // "got" comes from the failure position's token.
+    if (fail_state->token) {
+        out->error_loc.position = fail_pos;
+        out->error_loc.line     = fail_state->token->line;
+        out->error_loc.column   = fail_state->token->column;
+        out->error_loc.got_id   = fail_state->token->tid;
+
+        if (n00b_option_is_set(fail_state->token->value)) {
+            out->error_loc.got = n00b_option_get(fail_state->token->value);
         }
     }
+
+    // "expected" comes from the scan items at last_ok — these are the
+    // terminals the parser was willing to accept.  When fail_pos ==
+    // last_ok, these are the items that didn't match.  When fail_pos
+    // == last_ok+1, these show what could have continued the parse.
+    n00b_earley_state_t *state = scan_state;
 
     // Collect expected terminal IDs and descriptions from scan-ready items.
     size_t        nitems   = n00b_list_len(state->items);
@@ -1732,6 +1753,19 @@ found:
 
                 if (name) {
                     desc = *name;
+                }
+                else if (p->stream) {
+                    // No registered name — find a token in the stream
+                    // with this tid and use its text directly.
+                    for (int32_t t = 0; t < p->stream->token_count; t++) {
+                        n00b_token_info_t *tok = p->stream->tokens[t];
+
+                        if (tok && tok->tid == tid
+                            && n00b_option_is_set(tok->value)) {
+                            desc = n00b_option_get(tok->value);
+                            break;
+                        }
+                    }
                 }
             }
 
@@ -1811,12 +1845,13 @@ found:
     n00b_free(id_buf);
     n00b_free(desc_buf);
 
-    // Collect active NT context names from items in this state.
-    n00b_string_t *ctx_buf   = n00b_alloc_array(n00b_string_t, nitems);
-    int32_t        ctx_count = 0;
+    // Collect active NT context names from items at the failure state.
+    size_t         fail_nitems = n00b_list_len(fail_state->items);
+    n00b_string_t *ctx_buf     = n00b_alloc_array(n00b_string_t, fail_nitems);
+    int32_t        ctx_count   = 0;
 
-    for (size_t i = 0; i < n00b_list_len(state->items); i++) {
-        n00b_earley_item_t *ei  = state->items.data[i];
+    for (size_t i = 0; i < fail_nitems; i++) {
+        n00b_earley_item_t *ei  = fail_state->items.data[i];
         n00b_nonterm_t     *nt  = n00b_get_nonterm(g, ei->ruleset_id);
 
         if (!nt || !nt->name.data) {

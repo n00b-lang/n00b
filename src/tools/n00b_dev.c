@@ -30,6 +30,8 @@
 #include "slay/parse_tree.h"
 #include "slay/symtab.h"
 #include "slay/token.h"
+#include "slay/diagnostic.h"
+#include "slay/analyze.h"
 #include "internal/slay/earley_internal.h"
 
 // ============================================================================
@@ -182,6 +184,9 @@ main(int argc, char **argv)
     bool                show_cdg     = false;
     bool                show_dfg     = false;
     bool                show_labels  = false;
+    bool                run_analyze  = false;
+    bool                run_typecheck = false;
+    bool                quiet        = false;
     n00b_parse_mode_t   mode         = N00B_PARSE_MODE_DEFAULT;
     const char         *source_file  = NULL;
     const char         *grammar_file = NULL;
@@ -217,6 +222,25 @@ main(int argc, char **argv)
         else if (strcmp(argv[i], "--labels") == 0) {
             show_labels = true;
         }
+        else if (strcmp(argv[i], "--analyze") == 0
+                 || strcmp(argv[i], "-a") == 0) {
+            run_analyze = true;
+        }
+        else if (strcmp(argv[i], "--typecheck") == 0
+                 || strcmp(argv[i], "-t") == 0) {
+            run_typecheck = true;
+        }
+        else if (strcmp(argv[i], "--all") == 0) {
+            show_cfg      = true;
+            show_cdg      = true;
+            show_dfg      = true;
+            run_analyze   = true;
+            run_typecheck = true;
+        }
+        else if (strcmp(argv[i], "--quiet") == 0
+                 || strcmp(argv[i], "-q") == 0) {
+            quiet = true;
+        }
         else if (strcmp(argv[i], "--grammar-file") == 0) {
             if (i + 1 < argc) {
                 grammar_file = argv[++i];
@@ -239,7 +263,8 @@ main(int argc, char **argv)
         fprintf(stderr, "usage: n00b_dev <source-file> "
                         "[--earley|--pwz] [--tokens] [--grammar] "
                         "[--cfg] [--cdg] [--dfg] [--labels] "
-                        "[--grammar-file <path>]\n");
+                        "[--analyze|-a] [--typecheck|-t] [--all] "
+                        "[--quiet|-q] [--grammar-file <path>]\n");
         return 1;
     }
 
@@ -379,86 +404,145 @@ main(int argc, char **argv)
         }
 
         int32_t tree_count = n00b_parse_result_tree_count(r);
-        printf("Parse OK — %d tree(s)%s\n\n",
-               tree_count,
-               n00b_parse_result_ambiguous(r) ? " [AMBIGUOUS]" : "");
+
+        if (!quiet) {
+            printf("Parse OK — %d tree(s)%s\n\n",
+                   tree_count,
+                   n00b_parse_result_ambiguous(r) ? " [AMBIGUOUS]" : "");
+        }
 
         // Print parse tree.
         n00b_parse_tree_t *tree = n00b_parse_result_tree(r);
 
-        printf("=== Parse Tree ===\n");
-        n00b_tree_print(tree, g, stdout);
-        printf("\n");
+        if (!quiet) {
+            printf("=== Parse Tree ===\n");
+            n00b_tree_print(tree, g, stdout);
+            printf("\n");
+        }
+
+        // Diagnostic accumulator.
+        n00b_diag_ctx_t *diag_ctx = n00b_diag_ctx_new();
 
         // Annotation walk.
-        printf("=== Annotation Walk ===\n");
+        if (!quiet) {
+            printf("=== Annotation Walk ===\n");
+        }
+
         n00b_annot_result_t *ar = n00b_annot_walk_tree_full(g, tree);
 
-        if (ar && ar->symtab) {
-            printf("Symtab populated.\n");
+        if (!quiet) {
+            if (ar && ar->symtab) {
+                printf("Symtab populated.\n");
+            }
+            else {
+                printf("(no annotations fired)\n");
+            }
         }
-        else {
-            printf("(no annotations fired)\n");
+
+        // Import type-check errors.
+        if (run_typecheck && ar && ar->tc_ctx) {
+            n00b_diag_import_tc_errors(diag_ctx, ar->tc_ctx);
         }
 
         // CF labels.
-        if (show_labels && ar && ar->cf_labels) {
+        if (show_labels && !quiet && ar && ar->cf_labels) {
             printf("\n=== CF Labels ===\n");
             n00b_cf_labels_print(ar->cf_labels, g, stdout);
             printf("\n");
         }
 
-        // CFG / CDG / DFG.
-        if ((show_cfg || show_cdg || show_dfg) && ar && ar->cf_labels) {
+        // CFG / CDG / DFG + Analysis.
+        bool need_graphs = show_cfg || show_cdg || show_dfg || run_analyze;
+
+        if (need_graphs && ar && ar->cf_labels) {
             n00b_cfg_t *cfg = n00b_build_cfg(ar->cf_labels, tree, *r"module");
 
             if (cfg) {
-                if (show_cfg) {
+                if (show_cfg && !quiet) {
                     printf("=== CFG ===\n");
                     n00b_cfg_print(cfg, g, stdout);
                     printf("\n");
                 }
 
-                if (show_cdg) {
-                    n00b_cdg_t *cdg = n00b_build_cdg(cfg);
+                n00b_cdg_t *cdg = NULL;
 
-                    if (cdg) {
+                if (show_cdg) {
+                    cdg = n00b_build_cdg(cfg);
+
+                    if (cdg && !quiet) {
                         printf("=== CDG ===\n");
                         n00b_cdg_print(cdg, g, stdout);
                         printf("\n");
-                        n00b_cdg_free(cdg);
                     }
-                    else {
+                    else if (!cdg && !quiet) {
                         printf("(CDG build returned NULL)\n");
                     }
                 }
 
-                if (show_dfg) {
-                    n00b_dfg_t *dfg = n00b_build_dfg(cfg, ar->cf_labels, ar);
+                n00b_dfg_t *dfg = NULL;
 
-                    if (dfg) {
+                if (show_dfg || run_analyze) {
+                    dfg = n00b_build_dfg(cfg, ar->cf_labels, ar);
+
+                    if (dfg && show_dfg && !quiet) {
                         printf("=== DFG ===\n");
                         n00b_dfg_print(dfg, g, stdout);
                         printf("\n");
-                        n00b_dfg_free(dfg);
                     }
-                    else {
+                    else if (!dfg && !quiet) {
                         printf("(DFG build returned NULL)\n");
                     }
                 }
 
+                // Run analysis.
+                if (run_analyze && dfg) {
+                    n00b_analyze_ctx_t actx = {
+                        .cfg       = cfg,
+                        .cdg       = cdg,
+                        .dfg       = dfg,
+                        .symtab    = ar->symtab,
+                        .cf_labels = ar->cf_labels,
+                        .annot     = ar,
+                        .grammar   = g,
+                        .diag      = diag_ctx,
+                        .func_name = *r"module",
+                    };
+
+                    n00b_analyze_all(&actx);
+                }
+
+                if (dfg) {
+                    n00b_dfg_free(dfg);
+                }
+
+                if (cdg) {
+                    n00b_cdg_free(cdg);
+                }
+
                 n00b_cfg_free(cfg);
             }
-            else {
+            else if (!quiet) {
                 printf("(CFG build returned NULL)\n");
             }
         }
+
+        // Print all collected diagnostics.
+        n00b_diag_print_all(diag_ctx, src, source_file);
+
+        int exit_code = n00b_diag_has_errors(diag_ctx) ? 1 : 0;
+
+        n00b_diag_ctx_free(diag_ctx);
 
         if (ar && ar->symtab) {
             n00b_symtab_free(ar->symtab);
         }
 
         n00b_parse_result_free(r);
+
+        free(src);
+        n00b_shutdown();
+
+        return exit_code;
     }
 
     free(src);

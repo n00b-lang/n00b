@@ -470,6 +470,8 @@ n00b_slay = [
     'src/slay/cfg.c',
     'src/slay/cdg.c',
     'src/slay/dfg.c',
+    'src/slay/diagnostic.c',
+    'src/slay/analyze.c',
     'src/slay/debug.c',
     'src/slay/c_tokenizer.c',
     'src/slay/n00b_tokenizer.c',
@@ -968,6 +970,16 @@ typecheck_test = executable('test_typecheck',
     kwargs: test_common_kwargs,
 )
 test('typecheck', typecheck_test, suite: 'unit')
+
+# ============================================================================
+# Analysis tests
+# ============================================================================
+
+analyze_test = executable('test_analyze',
+    ['test/unit/test_analyze.c'],
+    kwargs: test_common_kwargs,
+)
+test('analyze', analyze_test, suite: 'unit')
 
 # ============================================================================
 # MIR JIT tests

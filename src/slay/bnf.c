@@ -166,17 +166,20 @@ bnf_join_continuations(n00b_string_t input)
 
     for (size_t i = 0; i < len; i++) {
         if (src[i] == '\n') {
-            // Look ahead past whitespace to see if the next non-blank
-            // character is '|'.
+            // Look ahead past whitespace AND blank lines to see if the
+            // next non-blank character is '|'.
             size_t j = i + 1;
 
-            while (j < len && (src[j] == ' ' || src[j] == '\t')) {
+            while (j < len
+                   && (src[j] == ' ' || src[j] == '\t' || src[j] == '\n'
+                       || src[j] == '\r')) {
                 j++;
             }
 
             if (j < len && src[j] == '|') {
-                // Replace newline with a space; the trimmer already
-                // removed leading whitespace, but we add a separator.
+                // Replace newline (and any intervening blank lines)
+                // with a space; the trimmer already removed leading
+                // whitespace, but we add a separator.
                 result[ri++] = ' ';
                 i = j - 1;  // loop increment will advance past whitespace
                 continue;
@@ -1492,6 +1495,11 @@ build_bnf_grammar(void)
     int64_t DOLLAR     = BNF_TOK_DOLLAR;
     int64_t COMMA      = BNF_TOK_COMMA;
 
+    // Register a readable name for the newline token (non-visible).
+    n00b_string_t *nl_name = n00b_alloc(n00b_string_t);
+    *nl_name = N00B_STRING_STATIC("newline");
+    n00b_dict_put(g->terminal_by_id, NEWLINE, nl_name);
+
     // Create all non-terminals.
     n00b_string_t s_syntax      = *r"syntax";
     n00b_string_t s_rule        = *r"rule";
@@ -2005,17 +2013,47 @@ attach_annot_to_rule(n00b_parse_rule_t *rule_p, bnf_annot_info_t *info)
     n00b_rule_annotate(rule_p, annot);
 }
 
+// Helper: push a BNF diagnostic (to diag if available, always to stderr).
+static void
+bnf_diag(n00b_diag_ctx_t *diag, n00b_diag_severity_t sev,
+         n00b_string_t code, n00b_string_t msg, n00b_diag_span_t span)
+{
+    if (diag) {
+        n00b_diag_push(diag, sev, N00B_STAGE_PARSE, code, msg, span);
+    }
+
+    const char *sev_str = (sev == N00B_DIAG_ERROR)   ? "error"
+                        : (sev == N00B_DIAG_WARNING) ? "warning"
+                                                     : "note";
+    fprintf(stderr, "bnf %s[%.*s]: %.*s",
+            sev_str,
+            (int)code.u8_bytes, code.data,
+            (int)msg.u8_bytes, msg.data);
+
+    if (span.start_line > 0) {
+        fprintf(stderr, " (line %u, col %u)", span.start_line, span.start_col);
+    }
+
+    fprintf(stderr, "\n");
+}
+
 static bool
 populate_grammar(n00b_grammar_t *user_g, bnf_result_t *result,
-                 n00b_string_t start_symbol)
+                 n00b_string_t start_symbol, n00b_diag_ctx_t *diag)
 {
     if (!result || result->tag != BNF_DICT) {
+        bnf_diag(diag, N00B_DIAG_ERROR, *r"B010",
+                 *r"BNF walk result is not a rule dictionary (internal error)",
+                 (n00b_diag_span_t){0});
         return false;
     }
 
     bnf_list_t *pairs = (bnf_list_t *)result->data;
 
     if (!pairs || !pairs->len) {
+        bnf_diag(diag, N00B_DIAG_ERROR, *r"B011",
+                 *r"BNF grammar contains no rules",
+                 (n00b_diag_span_t){0});
         return false;
     }
 
@@ -2070,6 +2108,9 @@ populate_grammar(n00b_grammar_t *user_g, bnf_result_t *result,
         start_s = *first_name;
     }
     else {
+        bnf_diag(diag, N00B_DIAG_ERROR, *r"B012",
+                 *r"no start symbol specified and grammar has no rules",
+                 (n00b_diag_span_t){0});
         return false;
     }
 
@@ -2192,8 +2233,13 @@ populate_grammar(n00b_grammar_t *user_g, bnf_result_t *result,
 
         if (has_type && !has_declares) {
             n00b_nonterm_t *nt = n00b_get_nonterm(user_g, rule->nt_id);
-            fprintf(stderr, "@type requires @declares on <%s>\n",
-                    (nt && nt->name.data) ? nt->name.data : "?");
+            const char *nt_name = (nt && nt->name.data) ? nt->name.data : "?";
+            char msg_buf[256];
+            snprintf(msg_buf, sizeof(msg_buf),
+                     "@type requires @declares on <%s>", nt_name);
+            bnf_diag(diag, N00B_DIAG_ERROR, *r"B013",
+                     n00b_string_from_cstr(msg_buf),
+                     (n00b_diag_span_t){0});
             return false;
         }
     }
@@ -2296,23 +2342,21 @@ n00b_bnf_load(n00b_string_t   bnf_text,
               n00b_grammar_t *user_g) _kargs {
     n00b_parse_fn_t   parse_fn;
     n00b_parse_mode_t parse_mode = N00B_PARSE_MODE_UNSET;
+    n00b_diag_ctx_t  *diag;
 }
 {
     (void)parse_fn;
     (void)parse_mode;
+    (void)diag;
+
+    n00b_diag_ctx_t *dx = kargs->diag;
 
     if (!bnf_text.data || !user_g) {
+        bnf_diag(dx, N00B_DIAG_ERROR, *r"B000",
+                 *r"n00b_bnf_load: NULL input text or grammar",
+                 (n00b_diag_span_t){0});
         return false;
     }
-
-    // Select parser engine.
-    // If parse_fn is explicitly set, use it directly.
-    // Otherwise, if parse_mode is set, use the unified dispatch.
-    // Default: PWZ one-shot.
-    bool use_unified = !kargs->parse_fn
-                       && kargs->parse_mode != N00B_PARSE_MODE_UNSET;
-    n00b_parse_fn_t parse = kargs->parse_fn ? kargs->parse_fn
-                                             : n00b_pwz_parse_grammar;
 
     // Preprocess.
     n00b_string_t stripped = n00b_bnf_strip_comments(bnf_text);
@@ -2343,6 +2387,9 @@ n00b_bnf_load(n00b_string_t   bnf_text,
     n00b_list_t(n00b_token_info_t)    bnf_tl   = n00b_stream_collect(bnf_ts);
 
     if (n00b_list_len(bnf_tl) == 0) {
+        bnf_diag(dx, N00B_DIAG_ERROR, *r"B001",
+                 *r"BNF tokenizer produced no tokens (empty or unparseable input)",
+                 (n00b_diag_span_t){0});
         n00b_list_free(bnf_tl);
         n00b_token_stream_free(bnf_ts);
         n00b_scanner_free(bnf_sc);
@@ -2357,38 +2404,25 @@ n00b_bnf_load(n00b_string_t   bnf_text,
     n00b_token_stream_t *parse_ts
         = n00b_token_stream_from_array(raw_ptrs, bnf_n);
 
-    // Build and use the BNF meta-grammar.
+    // Build the BNF meta-grammar and parse using DEFAULT mode
+    // (PWZ fast path, Earley fallback with full diagnostics).
     n00b_grammar_t      *meta_g = build_bnf_grammar();
-    n00b_parse_forest_t  forest;
-
-    if (use_unified) {
-        n00b_parse_result_t *pr = n00b_parse(meta_g, parse_ts,
-                                              kargs->parse_mode,
+    n00b_parse_result_t *pr     = n00b_parse(meta_g, parse_ts,
+                                              N00B_PARSE_MODE_DEFAULT,
                                               (n00b_parse_opts_t){0});
 
-        if (n00b_parse_result_ok(pr)) {
-            // Build a forest from the result's trees.
-            n00b_parse_tree_t **trees = n00b_parse_result_trees(pr);
-            int32_t count = n00b_parse_result_tree_count(pr);
-            n00b_parse_tree_array_t arr = n00b_array_new(n00b_parse_tree_ptr_t,
-                                                          count);
+    if (!n00b_parse_result_ok(pr)) {
+        // Extract the rich error string from the Earley chart.
+        n00b_string_t err = n00b_parse_result_error_string(pr);
+        n00b_error_location_t loc = n00b_parse_result_error_location(pr);
+        n00b_diag_span_t span = {
+            .start_line = loc.line,
+            .start_col  = loc.column,
+        };
 
-            for (int32_t i = 0; i < count; i++) {
-                n00b_array_set(arr, i, trees[i]);
-            }
+        bnf_diag(dx, N00B_DIAG_ERROR, *r"B002", err, span);
 
-            forest = n00b_parse_forest_new(meta_g, arr);
-        }
-        else {
-            forest = n00b_parse_forest_empty(meta_g);
-        }
-    }
-    else {
-        forest = parse(meta_g, parse_ts);
-    }
-
-    if (n00b_parse_forest_count(&forest) < 1) {
-        n00b_parse_forest_free(&forest);
+        n00b_parse_result_free(pr);
         n00b_free(raw_ptrs);
         n00b_token_stream_free(parse_ts);
         n00b_list_free(bnf_tl);
@@ -2399,14 +2433,28 @@ n00b_bnf_load(n00b_string_t   bnf_text,
         return false;
     }
 
-    // Walk the first parse tree.
-    bnf_result_t *result = (bnf_result_t *)n00b_parse_forest_walk_best(
-        &forest, NULL);
+    // Walk the parse tree using BNF walk actions.
+    bnf_result_t *result = (bnf_result_t *)n00b_parse_result_walk(pr, NULL, NULL);
 
-    bool success = populate_grammar(user_g, result, start_symbol);
+    if (!result) {
+        bnf_diag(dx, N00B_DIAG_ERROR, *r"B003",
+                 *r"BNF parse succeeded but tree walk produced no result",
+                 (n00b_diag_span_t){0});
+        n00b_parse_result_free(pr);
+        n00b_free(raw_ptrs);
+        n00b_token_stream_free(parse_ts);
+        n00b_list_free(bnf_tl);
+        n00b_token_stream_free(bnf_ts);
+        n00b_scanner_free(bnf_sc);
+        n00b_buffer_free(bnf_buf);
+        n00b_grammar_free(meta_g);
+        return false;
+    }
+
+    bool success = populate_grammar(user_g, result, start_symbol, dx);
 
     free_bnf_result(result);
-    n00b_parse_forest_free(&forest);
+    n00b_parse_result_free(pr);
     n00b_free(raw_ptrs);
     n00b_token_stream_free(parse_ts);
     n00b_list_free(bnf_tl);

@@ -25,9 +25,10 @@ typedef struct {
     n00b_grammar_t                   *grammar;
     n00b_cf_labels_t                 *cf_labels;
     n00b_tc_ctx_t                    *tc_ctx;      /**< Type-checking context for fresh vars. */
-    n00b_list_t(n00b_sym_entry_t *)  *params;      /**< Accumulated parameter symbols. */
-    n00b_node_types_t                *node_types;   /**< Parse node → resolved type. */
-    int32_t                           anon_counter; /**< Counter for unique anonymous ADT scope names. */
+    n00b_list_t(n00b_sym_entry_t *)  *params;            /**< Accumulated parameter symbols. */
+    n00b_node_types_t                *node_types;         /**< Parse node → resolved type. */
+    n00b_list_t(n00b_sym_entry_t *)  *shadowed_entries;   /**< Entries that shadow outer decls. */
+    int32_t                           anon_counter;       /**< Counter for unique anonymous ADT scope names. */
 } n00b_annot_walk_ctx_t;
 
 // ============================================================================

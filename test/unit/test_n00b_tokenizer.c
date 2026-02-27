@@ -265,25 +265,27 @@ test_long_literals(void)
 
     printf("  [PASS] long literal with encoder\n");
 
-    // With modifier: [=[data]=]'sometype
+    // With modifier tick: [=[data]=]'sometype
+    // Modifier is now emitted as separate tokens: EMBED, ', IDENTIFIER.
     ts = tokenize_n00b("[=[data]=]'sometype");
     n  = drain_tokens(ts, toks, 64);
 
-    assert(n == 1);
+    assert(n == 3);
     assert(toks[0]->tid == embed_tid);
-    assert(n00b_option_is_set(toks[0]->modifier));
 
-    n00b_string_t mod = n00b_option_get(toks[0]->modifier);
+    // toks[1] is the tick (emitted as OTHER since no grammar).
+    // toks[2] is "sometype" identifier.
+    n00b_string_t mod = n00b_option_get(toks[2]->value);
     assert(mod.u8_bytes == 8);
     assert(memcmp(mod.data, "sometype", 8) == 0);
 
-    printf("  [PASS] long literal with modifier\n");
+    printf("  [PASS] long literal with modifier tick\n");
 
-    // With encoder and modifier: [=embed[path/to/file]=]'image
+    // With encoder and modifier tick: [=embed[path/to/file]=]'image
     ts = tokenize_n00b("[=embed[path/to/file]=]'image");
     n  = drain_tokens(ts, toks, 64);
 
-    assert(n == 1);
+    assert(n == 3);
     assert(toks[0]->tid == embed_tid);
 
     val = n00b_option_get(toks[0]->value);
@@ -293,11 +295,12 @@ test_long_literals(void)
     assert(enc->u8_bytes == 5);
     assert(memcmp(enc->data, "embed", 5) == 0);
 
-    mod = n00b_option_get(toks[0]->modifier);
+    // toks[2] is "image" identifier.
+    mod = n00b_option_get(toks[2]->value);
     assert(mod.u8_bytes == 5);
     assert(memcmp(mod.data, "image", 5) == 0);
 
-    printf("  [PASS] long literal with encoder + modifier\n");
+    printf("  [PASS] long literal with encoder + modifier tick\n");
 
     // Trim: leading/trailing whitespace stripped from content.
     ts = tokenize_n00b("[=[\n    line one\n    line two\n]=]");

@@ -1,4 +1,6 @@
-<module> @scope("module") ::= <doc-strings> <eos>* <other-top-stmts>? <eos>*
+@tokenizer("n00b")
+
+<module> @scope("module") ::= <other-top-stmts>? <eos>*
 
 # Statements are terminated by newline, semicolon, or implicit end
 # (closing brace, EOF) The lexer's consume() skips whitespace and
@@ -6,12 +8,12 @@
 # This is not easily expressible in BNF, so we model <eos> as a token.
 <eos> ::= %NEWLINE | %";"
 
-<block-start> ::= %"{" <doc-strings> <eos>*
+<block-start> ::= %"{" <eos>*
 <block-end> ::= <eos>* %"}"
 
-<other-top-stmts> ::= <top-level-stmt> (<eos>+ <top-level-stmt>)*
+<other-top-stmts> ::= <eos>* <top-level-stmt> (<eos>+ <top-level-stmt>)*
+
 <top-level-stmt> ::=  <enum-stmt>
-                   | <lock-attr-stmt>
                    | <if-stmt>
                    | <for-stmt>
                    | <while-stmt>
@@ -26,27 +28,21 @@
                    | <assert-stmt>
                    | <use-stmt>
                    | <parameter-block>
-                   | <extern-block>
-                   | <confspec-block>
-                   | <section-stmt>
                    | <assign-stmt>
                    | <binop-assign-stmt>
                    | <expression-stmt>
                    | <class-decl>
+#                   | <extern-block>
+#                   | <confspec-block>
+#                   | <section-stmt>
+#                   | <lock-attr-stmt>
 
-# ============================================================================
-# Bodies and blocks
-# ============================================================================
 
-# A body is a brace-delimited sequence of statements.
-# In the parser, body() expects "{" and consumes it, then parses
-# statements until "}".
-# Bodies always create a nested scope.
+# Bodies always create a nested (block) scope.
 
 <body> @scope("block") ::= <block-start> <body-stmts>? <block-end>
 <body-stmts>           ::= <body-stmt> (<eos>+ <body-stmt>)*
-<body-stmt>            ::= <lock-attr-stmt>
-                         | <if-stmt>
+<body-stmt>            ::=  <if-stmt>
                          | <for-stmt>
                          | <while-stmt>
                          | <typeof-stmt>
@@ -61,7 +57,7 @@
                          | <labeled-switch>
                          | <assert-stmt>
                          | <use-stmt>
-                         | <section-stmt>
+#                         | <section-stmt>
                          | <assign-stmt>
                          | <binop-assign-stmt>
                          | <expression-stmt>
@@ -71,14 +67,7 @@
 # case bodies do not need to end in a block
 # ============================================================================
 
-<case-body> @scope("block") ::= %":" <body-stmt> (<eos>+ <body-stmt>)* <eos>*
-
-# ============================================================================
-# Doc strings
-# ============================================================================
-<doc-strings> ::= (<short-doc> <long-doc>?)?
-<short-doc>   ::= %STRING_LIT
-<long-doc>    ::= %STRING_LIT
+<case-body> @scope("block") ::= %":" <eos>? <body-stmt> (<eos>+ <body-stmt>)* <eos>*
 
 # ============================================================================
 # Labeled loops
@@ -201,7 +190,7 @@
 # Lock attribute (~)
 # ============================================================================
 
-<lock-attr-stmt> ::= %"~" <assign-or-expr>
+# <lock-attr-stmt> ::= %"~" <assign-or-expr>
 
 <assign-or-expr> ::= <expression> <assign-op> <expression>
                    | <expression> <binop-assign-op> <expression>
@@ -279,7 +268,7 @@
 # Enum
 # ============================================================================
 
-<enum-stmt> @scope("enum", $1) @type($1) ::= <enum-prefix> %IDENTIFIER? <block-start> <enum-items> <block-end>
+<enum-stmt> @scope("enum", $1) @type($1) @declares($1) ::= <enum-prefix> %IDENTIFIER? <block-start> <enum-items> <block-end>
 
 <enum-prefix> ::= %"private" %"enum"
                 | %"global" %"enum"
@@ -296,31 +285,31 @@
 <enum-value> ::= %":" <simple-lit>
                | %"=" <simple-lit>
 
-# ============================================================================
-# Extern block
-# ============================================================================
+# # ============================================================================
+# # Extern block
+# # ============================================================================
 
-<extern-block> @scope("extern", $1) @declares($1) ::= %"extern" %IDENTIFIER <extern-signature> <extern-body>
+# <extern-block> @scope("extern", $1) @declares($1) ::= %"extern" %IDENTIFIER <extern-signature> <extern-body>
 
-<extern-signature> ::= %"(" <extern-params> %")" %"->" <extern-type-id>
-                      | %"(" %")" %"->" <extern-type-id>
+# <extern-signature> ::= %"(" <extern-params> %")" %"->" <extern-type-id>
+#                       | %"(" %")" %"->" <extern-type-id>
 
-<extern-params> ::= <extern-type-id> %"," <extern-params>
-                  | <extern-type-id>
+# <extern-params> ::= <extern-type-id> %"," <extern-params>
+#                   | <extern-type-id>
 
-<extern-type-id> ::= %IDENTIFIER
+# <extern-type-id> ::= %IDENTIFIER
 
-<extern-body> ::= <block-start> <extern-stmts>? <block-end>
-<extern-stmts> ::= <extern-stmt> (<eos>+ <extern-stmt>)*
-<extern-stmt> ::= <extern-local>
-                | <extern-dll>
-                | <extern-box>
-                | <extern-pure>
-                | <extern-holds>
-                | <extern-allocs>
+# <extern-body> ::= <block-start> <extern-stmts>? <block-end>
+# <extern-stmts> ::= <extern-stmt> (<eos>+ <extern-stmt>)*
+# <extern-stmt> ::= <extern-local>
+#                 | <extern-dll>
+#                 | <extern-box>
+#                 | <extern-pure>
+#                 | <extern-holds>
+#                 | <extern-allocs>
 
-<extern-local> @declares($2) ::= %"local" %":" %IDENTIFIER %"(" <local-formals> %")" <opt-return-type>
-                 | %"local" %":" %IDENTIFIER %"(" %")" <opt-return-type>
+# <extern-local> @declares($2) ::= %"local" %":" %IDENTIFIER %"(" <local-formals> %")" <opt-return-type>
+#                  | %"local" %":" %IDENTIFIER %"(" %")" <opt-return-type>
 
 <local-formals> ::= <formal-param> %"," <local-formals>
                   | <formal-param> %"," <varargs-param>
@@ -360,57 +349,57 @@
 <param-prop> ::= %IDENTIFIER %":" <param-propname>
 <param-propname> ::= %"callback" | %"default" | %"validator"
 
-# ============================================================================
-# Config spec
-# ============================================================================
+# # ============================================================================
+# # Config spec
+# # ============================================================================
 
-<confspec-block> @scope("confspec") ::= %"confspec" <block-start> <confspec-sections> <block-end>
+# <confspec-block> @scope("confspec") ::= %"confspec" <block-start> <confspec-sections> <block-end>
 
-<confspec-sections> ::= (<eos>* <section-type> <section-body>)*
+# <confspec-sections> ::= (<eos>* <section-type> <section-body>)*
 
-# named: $0=named, $1=IDENTIFIER (section name), $2=IDENTIFIER (type name)
-# singleton: $0=singleton, $1=IDENTIFIER (section name), $2=IDENTIFIER (type name)
-# root: $0=root, $1=IDENTIFIER (type name)
-<section-type> @declares($1) ::= %"named" %IDENTIFIER %IDENTIFIER
-<section-type> @declares($1) ::= %"singleton" %IDENTIFIER %IDENTIFIER
-<section-type> ::= %"root" %IDENTIFIER
+# # named: $0=named, $1=IDENTIFIER (section name), $2=IDENTIFIER (type name)
+# # singleton: $0=singleton, $1=IDENTIFIER (section name), $2=IDENTIFIER (type name)
+# # root: $0=root, $1=IDENTIFIER (type name)
+# <section-type> @declares($1) ::= %"named" %IDENTIFIER %IDENTIFIER
+# <section-type> @declares($1) ::= %"singleton" %IDENTIFIER %IDENTIFIER
+# <section-type> ::= %"root" %IDENTIFIER
 
-# root doesn't take a section name, just a type name.
-# named/singleton take: section_name type_name
+# # root doesn't take a section name, just a type name.
+# # named/singleton take: section_name type_name
 
-<section-body> @scope("section") ::= <block-start> <section-items>? <block-end>
+# <section-body> @scope("section") ::= <block-start> <section-items>? <block-end>
 
-<section-items> ::= <section-item> (<eos>+ <section-item>)*
-<section-item> ::= <field-spec> | <section-property>
+# <section-items> ::= <section-item> (<eos>+ <section-item>)*
+# <section-item> ::= <field-spec> | <section-property>
 
-<field-spec> @scope("field", $1) @declares($1) ::= %"field" %IDENTIFIER <field-body>
-<field-body> ::= <block-start> <eos>* <field-props>? <block-end>
+# <field-spec> @scope("field", $1) @declares($1) ::= %"field" %IDENTIFIER <field-body>
+# <field-body> ::= <block-start> <eos>* <field-props>? <block-end>
 
-<field-props> ::= <field-prop> (<eos>+ <field-prop>)*
-<field-prop> ::= <field-type> | <field-default> | <field-require> | <field-choice>
-               | <field-exclusions> | <field-lock> | <field-validator> | <field-hidden> | <field-range>
+# <field-props> ::= <field-prop> (<eos>+ <field-prop>)*
+# <field-prop> ::= <field-type> | <field-default> | <field-require> | <field-choice>
+#                | <field-exclusions> | <field-lock> | <field-validator> | <field-hidden> | <field-range>
 
-<field-type>        ::= %"type" %":" <type-spec>
-                     |  %"type" %":" %"->" %IDENTIFIER
-<field-default>     ::= %"default" %":" %IDENTIFIER
-                     |  %"default" %":" <literal>
-<field-require>     ::= %"require" %":" %IDENTIFIER
-                     |  %"require" %":" <bool-lit>
-<field-choice>      ::= %"choice" %":"  %IDENTIFIER
-<field-exclusions>  ::= %"exclusions" %":" %IDENTIFIER (%"," %IDENTIFIER)*
-<field-lock>        ::= %"lock" %":" %IDENTIFIER
-                     |  %"lock" %":" <bool-lit>
-<field-validator>   ::= %"validator" %":" %IDENTIFIER
-                     |  %"validator" %":" <callback-lit>
-<field-hidden>      ::= %"hidden" %":" %IDENTIFIER
-                     | %"hidden" %":" <bool-lit>
-<field-range>       ::= %"range" %":" <field-range-item> %":" <field-range-item>
-<field-range-item>  ::= %IDENTIFIER
-                      | %INT_LIT
-                      | %HEX_LIT
+# <field-type>        ::= %"type" %":" <type-spec>
+#                      |  %"type" %":" %"->" %IDENTIFIER
+# <field-default>     ::= %"default" %":" %IDENTIFIER
+#                      |  %"default" %":" <literal>
+# <field-require>     ::= %"require" %":" %IDENTIFIER
+#                      |  %"require" %":" <bool-lit>
+# <field-choice>      ::= %"choice" %":"  %IDENTIFIER
+# <field-exclusions>  ::= %"exclusions" %":" %IDENTIFIER (%"," %IDENTIFIER)*
+# <field-lock>        ::= %"lock" %":" %IDENTIFIER
+#                      |  %"lock" %":" <bool-lit>
+# <field-validator>   ::= %"validator" %":" %IDENTIFIER
+#                      |  %"validator" %":" <callback-lit>
+# <field-hidden>      ::= %"hidden" %":" %IDENTIFIER
+#                      | %"hidden" %":" <bool-lit>
+# <field-range>       ::= %"range" %":" <field-range-item> %":" <field-range-item>
+# <field-range-item>  ::= %IDENTIFIER
+#                       | %INT_LIT
+#                       | %HEX_LIT
 
-<section-property> ::= %IDENTIFIER %":" <literal>
-                     | %IDENTIFIER %":" <id-comma-list>
+# <section-property> ::= %IDENTIFIER %":" <literal>
+#                      | %IDENTIFIER %":" <id-comma-list>
 
 # Section property names: user_def_ok, allow/allowed, require/required,
 # hide/hidden, validator
@@ -418,13 +407,13 @@
 # ============================================================================
 # Section statement (confspec inline section)
 # ============================================================================
-
+#
 # $0=IDENTIFIER (section type), $1=section-name, $2=body
-<section-stmt> @scope("section", $0) ::= %IDENTIFIER <section-name> <body>
-
-<section-name> ::= %IDENTIFIER
-                 | %STRING_LIT
-                 | ""
+# <section-stmt> @scope("section", $0) ::= %IDENTIFIER <section-name> <body>
+#
+# <section-name> ::= %IDENTIFIER
+#                 | %STRING_LIT
+#                 | ""
 
 # ============================================================================
 # Assignment statements

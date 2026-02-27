@@ -302,6 +302,10 @@ walk_node(n00b_annot_walk_ctx_t *ctx, n00b_parse_tree_t *node)
                                             sym_kind,
                                             node);
 
+                if (last_sym->shadowed && ctx->shadowed_entries) {
+                    n00b_list_push(*ctx->shadowed_entries, last_sym);
+                }
+
                 if (ctx->tc_ctx) {
                     last_sym->type_var = n00b_tc_fresh_var(ctx->tc_ctx);
                 }
@@ -737,23 +741,29 @@ n00b_annot_walk_tree_full(n00b_grammar_t *g, n00b_parse_tree_t *tree)
     n00b_node_types_t *node_types = n00b_alloc(n00b_node_types_t);
     n00b_dict_init(node_types, .hash = n00b_hash_word, .skip_obj_hash = true);
 
+    n00b_list_t(n00b_sym_entry_t *) *shadowed_entries
+        = n00b_alloc(n00b_list_t(n00b_sym_entry_t *));
+    *shadowed_entries = n00b_list_new_private(n00b_sym_entry_t *);
+
     n00b_annot_walk_ctx_t ctx = {
-        .symtab     = n00b_symtab_new(),
-        .grammar    = g,
-        .cf_labels  = labels,
-        .tc_ctx     = n00b_tc_ctx_new(),
-        .params     = params,
-        .node_types = node_types,
+        .symtab           = n00b_symtab_new(),
+        .grammar          = g,
+        .cf_labels        = labels,
+        .tc_ctx           = n00b_tc_ctx_new(),
+        .params           = params,
+        .node_types       = node_types,
+        .shadowed_entries = shadowed_entries,
     };
 
     walk_node(&ctx, tree);
 
     n00b_annot_result_t *result = n00b_alloc(n00b_annot_result_t);
-    result->symtab     = ctx.symtab;
-    result->cf_labels  = ctx.cf_labels;
-    result->tc_ctx     = ctx.tc_ctx;
-    result->params     = ctx.params;
-    result->node_types = ctx.node_types;
+    result->symtab           = ctx.symtab;
+    result->cf_labels        = ctx.cf_labels;
+    result->tc_ctx           = ctx.tc_ctx;
+    result->params           = ctx.params;
+    result->node_types       = ctx.node_types;
+    result->shadowed_entries = ctx.shadowed_entries;
 
     return result;
 }
