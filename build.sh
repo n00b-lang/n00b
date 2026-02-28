@@ -131,8 +131,12 @@ function all_options {
 
 function build_n00b {
    local build_dir="${1:-${N00B_BUILD_DIR:-build_${N00B_BUILD_TYPE}}}"
+   local jobs_flag=""
    local -a setup_opts
    mapfile -t setup_opts < <(all_options)
+   if [[ -n "${N00B_JOBS}" ]] ; then
+       jobs_flag="-j ${N00B_JOBS}"
+   fi
 
    if [[ ${N00B_CLEAN} -ne 0 ]] && [[ -d "${build_dir}" ]] ; then
        rm -rf "${build_dir}"
@@ -160,9 +164,13 @@ function build_n00b {
    fi
 
    if [[ -n "${N00B_NCC_COMPILER}" ]] ; then
-       NCC_COMPILER="${N00B_NCC_COMPILER}" meson compile -C "${build_dir}"
+       NCC_COMPILER="${N00B_NCC_COMPILER}" meson compile -C "${build_dir}" ${jobs_flag}
    else
-       meson compile -C "${build_dir}"
+       meson compile -C "${build_dir}" ${jobs_flag}
+   fi
+   if [[ $? -ne 0 ]] ; then
+       echo "Build compile failed."
+       exit 1
    fi
 
    if [[ ${N00B_TEST} -ne 0 ]] ; then
@@ -179,9 +187,9 @@ function build_n00b {
 
    if [[ ${N00B_DOCS} -ne 0 ]] ; then
        if [[ -n "${N00B_NCC_COMPILER}" ]] ; then
-           NCC_COMPILER="${N00B_NCC_COMPILER}" meson compile -C "${build_dir}" docs
+           NCC_COMPILER="${N00B_NCC_COMPILER}" meson compile -C "${build_dir}" ${jobs_flag} docs
        else
-           meson compile -C "${build_dir}" docs
+           meson compile -C "${build_dir}" ${jobs_flag} docs
        fi
        if [[ $? -ne 0 ]] ; then
            echo "Documentation generation failed."

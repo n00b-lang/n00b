@@ -241,28 +241,32 @@ n00b_table_end_row(n00b_table_t *table)
     }
 
     n00b_table_row_t committed_row = table->current_row;
+    n00b_list_t(n00b_table_row_t) rows = table->rows;
+    n00b_gc_register_root(rows);
 
     // Commit the row.
     if (table->max_rows > 0) {
         // Ring buffer mode.
         n00b_isize_t slot   = table->total_added % table->max_rows;
-        size_t       n_rows = table->rows.len;
+        size_t       n_rows = rows.len;
 
         if ((n00b_isize_t)n_rows < table->max_rows) {
             // Still filling up the ring buffer.
-            n00b_list_push(table->rows, committed_row);
+            n00b_list_push(rows, committed_row);
         }
         else {
             // Overwriting oldest row in the ring.
-            n00b_list_free(table->rows.data[slot].cells);
-            table->rows.data[slot] = committed_row;
-            table->ring_base       = (table->total_added + 1) % table->max_rows;
+            n00b_list_free(rows.data[slot].cells);
+            rows.data[slot]  = committed_row;
+            table->ring_base = (table->total_added + 1) % table->max_rows;
         }
     }
     else {
         // Unlimited mode.
-        n00b_list_push(table->rows, committed_row);
+        n00b_list_push(rows, committed_row);
     }
+    table->rows = rows;
+    n00b_gc_unregister_root(rows);
 
     table->total_added++;
     table->layout_valid = false;

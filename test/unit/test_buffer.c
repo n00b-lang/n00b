@@ -191,7 +191,7 @@ test_get_set_slice(void)
 
     // Set slice: replace "bcd" with "XY"
     n00b_buffer_t *repl   = n00b_buffer_from_bytes("XY", 2);
-    n00b_result_t(bool) r = n00b_buffer_set_slice(buf, 1, 4, repl);
+    n00b_result_t(bool) r = n00b_buffer_set_slice(buf, 1, 4, .val = repl);
     assert(n00b_result_is_ok(r));
     // Now buf = "aXYef" (5 bytes)
     assert(n00b_buffer_len(buf) == 5);
@@ -382,8 +382,12 @@ test_join(void)
     n00b_buffer_t *c   = n00b_buffer_from_bytes("three", 5);
     n00b_buffer_t *sep = n00b_buffer_from_bytes(",", 1);
 
-    n00b_buffer_t *items[] = {a, b, c};
-    n00b_buffer_t *result  = n00b_buffer_join(items, 3, sep);
+    n00b_buffer_t            *items_data[] = {a, b, c};
+    n00b_array_t(n00b_buffer_t *) items      = {
+             .data = items_data,
+             .len  = 3,
+         };
+    n00b_buffer_t            *result      = n00b_buffer_join(items, sep);
 
     assert(n00b_buffer_len(result) == 13); // "one,two,three"
     assert(memcmp(result->data, "one,two,three", 13) == 0);

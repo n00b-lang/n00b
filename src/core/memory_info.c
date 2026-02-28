@@ -5,8 +5,6 @@
 #include "n00b_windows_compat.h"
 #else
 #include <signal.h>
-#include <errno.h>
-#ifndef _WIN32
 #include <sys/mman.h>
 #include <unistd.h>
 #include <poll.h>
@@ -191,15 +189,6 @@ n00b_load_static_ranges(void)
 {
     _dyld_register_func_for_add_image(n00b_on_lib_load);
 }
-#elifdef _WIN32
-
-void
-n00b_load_static_ranges(void)
-{
-    // TODO: Implement PE image enumeration for Windows.
-    // For now, only runtime-allocated regions are tracked.
-}
-
 #else
 void
 n00b_load_static_ranges(void)
@@ -232,21 +221,12 @@ n00b_check_kernel_page_map(const void *addr)
                               .definitely_unique = false);
 #else
     char *start = n00b_align_to_page_start((void *)addr);
+    char  status[1];
 
     if (!start) {
         return n00b_option_none(n00b_mmap_info_t *);
     }
 
-#ifdef _WIN32
-    MEMORY_BASIC_INFORMATION mbi;
-    if (!VirtualQuery(start, &mbi, sizeof(mbi))) {
-        return n00b_option_none(n00b_mmap_info_t *);
-    }
-    if (mbi.State != MEM_COMMIT) {
-        return n00b_option_none(n00b_mmap_info_t *);
-    }
-#else
-    char status[1];
     // This cast is crucial due to different signatures across
     // mac + linux (signed vs. unsigned.
     if (mincore(start, n00b_page_size, (void *)status)) {
@@ -255,7 +235,6 @@ n00b_check_kernel_page_map(const void *addr)
     if (!(status[0] & MINCORE_TEST_BIT)) {
         return n00b_option_none(n00b_mmap_info_t *);
     }
-#endif
 
     // Register just this one page.
     return n00b_mmap_register(start,
@@ -514,24 +493,27 @@ n00b_memory_scan_init(n00b_memory_scan_t *ctx, void *s, size_t len) _kargs
     uint8_t cat_flags = 0;
 }
 {
-    uint64_t start = (uint64_t)s;
-    uint64_t end   = start + len;
+    // cat_flags is optional in this branch API; default to scanning all classes.
+    {
+        uint64_t start = (uint64_t)s;
+        uint64_t end   = start + len;
 
-    ctx->cur = (uint64_t *)n00b_align_ceil(start, sizeof(void *));
-    ctx->end = (uint64_t *)n00b_align_floor(end, sizeof(void *));
+        ctx->cur = (uint64_t *)n00b_align_ceil(start, sizeof(void *));
+        ctx->end = (uint64_t *)n00b_align_floor(end, sizeof(void *));
 
-    if (n00b_value_is_data(ctx->cur) || n00b_value_is_data(ctx->end)) {
-        return false;
+        if (n00b_value_is_data(ctx->cur) || n00b_value_is_data(ctx->end)) {
+            return false;
+        }
+
+        if (!cat_flags) {
+            ctx->flags = n00b_mmap_type_mask;
+        }
+        else {
+            ctx->flags = cat_flags;
+        }
+
+        return true;
     }
-
-    if (!cat_flags) {
-        ctx->flags = n00b_mmap_type_mask;
-    }
-    else {
-        ctx->flags = cat_flags;
-    }
-
-    return true;
 }
 
 n00b_option_t(void *)

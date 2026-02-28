@@ -156,7 +156,10 @@ struct n00b_finalizer_info_t {
  * @param file   Debug name / source file (may be nullptr).
  */
 extern void
-n00b_register_arena_segment(void *start, void *end, n00b_arena_t *arena, const char *file);
+n00b_register_arena_segment(void *start, void *end, n00b_arena_t *arena) _kargs
+{
+    const char *file = nullptr;
+};
 
 typedef struct n00b_arena_alloc_param_t {
     bool no_scan;

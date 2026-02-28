@@ -82,6 +82,8 @@ struct n00b_thread_read_log_t {
     int32_t                 level;
 };
 
+#include "core/thread.h"
+
 /**
  * @brief Check whether the current thread already owns a lock.
  * @param lock Lock to check.

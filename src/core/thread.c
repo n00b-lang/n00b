@@ -24,7 +24,6 @@
 #include "core/lock_common.h"
 #include "core/mutex.h"
 #include "core/rwlock.h"
-#include "core/condition.h"
 #include "core/alloc.h"
 
 #if defined(_WIN32)
@@ -117,6 +116,9 @@ n00b_thread_init() _kargs
         },
     };
 
+    // Publish the owning TLS thread pointer for pre-acquired slots.
+    n00b_atomic_store(&rec->thread, self);
+
 #if !defined(_WIN32)
     if (n00b_option_is_set(attrs)) {
         self->pthread_attrs = n00b_option_get(attrs);
@@ -196,32 +198,19 @@ n00b_thread_destroy(void)
     n00b_thread_record_t *rec = __n00b_thread_self.record;
 
     if (rec) {
-        // If this thread is on a CV's waiters list, remove it.
-        n00b_condition_t *cv = rec->cv_info.current_cv;
-        if (cv) {
-            (void)n00b_list_remove_all(cv->waiters, &__n00b_thread_self);
-            rec->cv_info.current_cv = nullptr;
-        }
-
         n00b_release_locks_on_thread_exit(rec);
         n00b_atomic_store(&rec->thread, nullptr);
     }
 #if !defined(_WIN32)
     if (__n00b_thread_self.memperm_pipe.ready) {
-#ifdef _WIN32
-        _close(__n00b_thread_self.memperm_pipe.fds[0]);
-        _close(__n00b_thread_self.memperm_pipe.fds[1]);
-#else
         close(__n00b_thread_self.memperm_pipe.fds[0]);
         close(__n00b_thread_self.memperm_pipe.fds[1]);
-#endif
     }
 #endif
 
     n00b_runtime_t *rt = n00b_get_runtime();
     if (rt) {
         n00b_atomic_add(&rt->live_threads, -1);
-        n00b_futex_wake((n00b_futex_t *)&rt->live_threads, true);
     }
 }
 
@@ -306,12 +295,28 @@ n00b_capture_stack_base(n00b_thread_t *thread, n00b_runtime_t *runtime)
 
 typedef struct {
     void *(*fn)(void *);
-    void              *arg;
-    uint32_t           tid;     // pre-reserved slot
-    n00b_futex_t       ready;   // launcher signals "initialized"
-    void              *result;  // return value from fn
+    void        *arg;
+    uint32_t     tid;    // pre-reserved slot
+    n00b_futex_t ready;  // launcher signals "initialized"
+    void        *result; // return value from fn
 } n00b_tbundle_t;
 
+#if defined(_WIN32)
+n00b_result_t(n00b_thread_t *)
+n00b_thread_spawn(void *(*fn)(void *), void *arg)
+{
+    (void)fn;
+    (void)arg;
+    return n00b_result_err(n00b_thread_t *, ENOTSUP);
+}
+
+void *
+n00b_thread_join(n00b_thread_t *thread)
+{
+    (void)thread;
+    return nullptr;
+}
+#else
 static void *
 n00b_thread_launcher(void *raw)
 {
@@ -339,8 +344,6 @@ n00b_thread_spawn(void *(*fn)(void *), void *arg)
     if (!rt) return n00b_result_err(n00b_thread_t *, ENXIO);
 
     // Pre-acquire a thread slot so the launcher can use it directly.
-    // We use a temporary pointer that the slot_acquire CAS needs.
-    // We'll fix up the back-pointer once the child thread initializes.
     n00b_thread_t *placeholder = (n00b_thread_t *)(uintptr_t)1;
     uint32_t       slot        = n00b_thread_slot_acquire(rt, placeholder);
 
@@ -350,9 +353,9 @@ n00b_thread_spawn(void *(*fn)(void *), void *arg)
         return n00b_result_err(n00b_thread_t *, ENOMEM);
     }
 
-    bundle->fn    = fn;
-    bundle->arg   = arg;
-    bundle->tid   = slot;
+    bundle->fn  = fn;
+    bundle->arg = arg;
+    bundle->tid = slot;
     n00b_futex_init(&bundle->ready);
 
     pthread_t ptid;
@@ -367,11 +370,7 @@ n00b_thread_spawn(void *(*fn)(void *), void *arg)
         n00b_futex_wait(&bundle->ready, 0, 100000000); // 100ms
     }
 
-    // Now rt->threads[slot].thread points to the child's TLS n00b_thread_t.
     n00b_thread_t *child = n00b_atomic_load(&rt->threads[slot].thread);
-
-    // Store the pthread_t so join works even if the TLS pointer is
-    // only valid while the child is alive.
     if (child) {
         child->pthread_id = ptid;
     }
@@ -388,3 +387,4 @@ n00b_thread_join(n00b_thread_t *thread)
     pthread_join(thread->pthread_id, &retval);
     return retval;
 }
+#endif

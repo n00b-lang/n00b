@@ -190,6 +190,7 @@ endforeach
 
 probe_args = project_c_args + compile_define_args
 project_compile_args = probe_args
+exe_c_args = project_compile_args
 project_link_args += ['-w']
 
 libatomic_dep = cc.find_library('atomic', required: false)
@@ -662,7 +663,7 @@ n00b_vendor_lib = static_library('n00b_vendor',
     ['src/vendor/md4c.c'],
     include_directories: incdir,
     c_args: exe_c_args + ['--no-ncc'],
-    link_args: link_args,
+    link_args: project_link_args,
 )
 
 n00b = static_library('n00b',
@@ -671,7 +672,7 @@ n00b = static_library('n00b',
     dependencies: deps + [libdl_dep],
     c_args: project_compile_args,
     link_args: project_link_args,
-    link_whole: [gen_unicode_lib],
+    link_whole: [gen_unicode_lib, n00b_vendor_lib],
     install: true,
 )
 

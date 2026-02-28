@@ -271,9 +271,9 @@ tnode_get_kid(tnode_t *node, int idx)
     if (!node || !node->kids || idx < 0) {
         return nullptr;
     }
-    // num_kids is intended to mirror kids->nitems, but some transform paths
+    // num_kids is intended to mirror kids->len, but some transform paths
     // can transiently desynchronize them. Guard on the backing list bounds.
-    if (idx >= node->kids->nitems || idx >= node->num_kids) {
+    if (idx >= node->kids->len || idx >= node->num_kids) {
         return nullptr;
     }
     return (tnode_t *)node->kids->data[idx];

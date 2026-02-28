@@ -235,10 +235,8 @@ ansi_inline_init(n00b_conduit_topic_t(n00b_buffer_t *) *output)
     ctx->buf      = n00b_alloc_array_with_opts(char, INLINE_INITIAL_BUF, &(n00b_alloc_opts_t){.no_scan = true});
     ctx->buf_used = 0;
 
-    n00b_isize_t rows;
-    if (!n00b_query_terminal_size(ctx->fd, &rows, &ctx->cols)) {
-        ctx->cols = 80;
-    }
+    // Inline backend can operate without a terminal fd; default width.
+    ctx->cols = 80;
 
     // Inline backend does not own the screen — leave rows = 0 so the
     // canvas knows it must be sized explicitly via canvas_resize().
@@ -281,11 +279,6 @@ static n00b_render_size_t
 ansi_inline_get_size(void *vctx)
 {
     ansi_inline_ctx_t *ctx = vctx;
-
-    // Only refresh column width from the terminal.  Row count is
-    // left at whatever was set externally (0 by default).
-    n00b_isize_t rows;
-    (void)n00b_query_terminal_size(ctx->fd, &rows, &ctx->cols);
 
     return (n00b_render_size_t){
         .rows = ctx->rows,
@@ -358,11 +351,6 @@ static void
 ansi_inline_flush(void *vctx)
 {
     ansi_inline_ctx_t *ctx = vctx;
-
-    if (ctx->buf_used > 0) {
-        n00b_os_write(ctx->fd, ctx->buf, ctx->buf_used);
-        ctx->buf_used = 0;
-    }
 
     if (ctx->output) {
         n00b_buffer_t *buf = n00b_buffer_from_bytes(ctx->buf, (int64_t)ctx->buf_used);

@@ -1,18 +1,14 @@
-/*
- * Enhanced condition variable with per-thread futex wait queue.
+/**
+ * Enhanced condition variable with epoch-based synchronization.
  *
  * The CV has a built-in mutex and supports selective wake via predicate
  * callbacks or state numbers.  The epoch protocol ensures that the
  * notifier's operation completes before any waiters resume.
- *
- * Each waiter blocks on its own thread's `cv_wake` futex.  The notifier
- * snapshots and clears the waiters list, then bumps each thread's
- * `cv_wake` to wake it.  Non-matching waiters re-enqueue themselves.
- * The epoch handshake (epoch+1 from last waiter, epoch+2 from notifier)
- * serializes notification rounds.
  */
 
 #define N00B_USE_INTERNAL_API
+
+#include <setjmp.h>
 
 #include "n00b.h"
 #include "core/runtime.h"
@@ -30,15 +26,13 @@ _n00b_condition_init(n00b_condition_t *cv, char *loc)
     n00b_lock_init_accounting((void *)cv, N00B_NLT_CV, loc);
 
     n00b_futex_init(&cv->mutex);
+    n00b_futex_init(&cv->wait_queue);
     n00b_futex_init(&cv->notify_epoch);
-    cv->ovalue    = nullptr;
-    cv->predicate = nullptr;
-    cv->cv_param  = nullptr;
-    n00b_atomic_store(&cv->waiters_to_process, 0);
-    n00b_atomic_store(&cv->wakes_remaining, 0);
-
-    n00b_allocator_t *sp = (n00b_allocator_t *)&n00b_get_runtime()->system_pool;
-    cv->waiters = n00b_list_new(n00b_thread_t *, sp);
+    cv->ovalue             = nullptr;
+    cv->predicate          = nullptr;
+    cv->cv_param           = nullptr;
+    cv->waiters_to_process = 0;
+    cv->wakes_remaining    = 0;
 
     if (!n00b_in_heap(cv)) {
         _n00b_gc_register_root(&cv->cv_param, 2);
@@ -91,7 +85,7 @@ base_wait(n00b_condition_t *cv,
           bool              wake_unlocked,
           char             *loc)
 {
-    void   *result = nullptr;
+    void   *result;
     bool    want_to_wake;
     bool    waking = false;
     bool    timed;
@@ -119,11 +113,7 @@ base_wait(n00b_condition_t *cv,
 
     rec->lock_wait_loc = loc;
 
-    // Arm this thread's cv_wake futex for the wait.
-    n00b_atomic_store(&thread->cv_wake, 0);
-
-    // Enqueue ourselves on the CV's waiter list.
-    n00b_list_push(cv->waiters, thread);
+    int32_t waiters = n00b_atomic_add(&cv->wait_queue, 1);
 
     n00b_stw_suspend_ctx stw_ctx;
     uint32_t             epoch;
@@ -133,35 +123,26 @@ base_wait(n00b_condition_t *cv,
 
     _n00b_condition_unlock(cv, loc);
 
-    do {
-        // Block on our own futex until notifier sets it to 1.
-        n00b_futex_wait(&thread->cv_wake, 0, timeout);
+    n00b_futex_wait(&cv->wait_queue, waiters + 1, timeout);
+    waiters = n00b_atomic_load(&cv->wait_queue);
 
-        if (n00b_atomic_load(&thread->cv_wake) == 0) {
-            // Spurious wake or timeout — cv_wake still 0.
+    do {
+        epoch = n00b_atomic_load(&cv->notify_epoch);
+        while (!(waiters & N00B_CV_NOTIFY_IN_PROGRESS)) {
             if (timed) {
                 cur_ts = n00b_ns_timestamp();
-                int64_t elapsed = cur_ts - last_ts;
-                timeout -= elapsed;
+                timeout -= (cur_ts - last_ts);
                 last_ts = cur_ts;
 
                 if (timeout < 0) {
-                    // Timed out: remove ourselves from waiter list
-                    // (list has its own rwlock, safe outside CV mutex).
-                    (void)n00b_list_remove_all(cv->waiters, thread);
-                    n00b_wait_done(thread);
-                    n00b_thread_resume(stw_ctx);
+                    n00b_atomic_add(&cv->wait_queue, -1);
                     return (void *)~0ULL;
                 }
             }
-            // Spurious wake — loop back and re-wait.
-            continue;
+            n00b_futex_wait(&cv->wait_queue, waiters, timeout);
+            waiters = n00b_atomic_load(&cv->wait_queue);
         }
 
-        // cv_wake != 0: we were woken by a notification round.
-        epoch = n00b_atomic_load(&cv->notify_epoch);
-
-        // Check predicate match.
         if (cv->predicate) {
             want_to_wake = (*cv->predicate)(cv->pvalue,
                                             rec->cv_info.wait_predicate,
@@ -175,29 +156,17 @@ base_wait(n00b_condition_t *cv,
         }
 
         if (want_to_wake) {
-            int32_t old = n00b_atomic_add(&cv->wakes_remaining, -1);
-            if (old > 0) {
-                waking = true;
-                result = cv->ovalue;
-            }
-            else {
-                // No wake slots left — undo the decrement.
-                n00b_atomic_add(&cv->wakes_remaining, 1);
-            }
+            cv->wakes_remaining--;
+            waking = true;
+            result = cv->ovalue;
         }
 
-        if (!waking) {
-            // Reset cv_wake BEFORE re-enqueuing — once we're on the
-            // list a notifier may set cv_wake=1 at any moment.
-            n00b_atomic_store(&thread->cv_wake, 0);
-            n00b_list_push(cv->waiters, thread);
+        int32_t waiter_ct = --cv->waiters_to_process;
+
+        if (waiter_ct) {
+            n00b_futex_wake(&cv->wait_queue, false);
         }
-
-        // Signal completion of our processing in this round.
-        int32_t prev = n00b_atomic_add(&cv->waiters_to_process, -1);
-
-        if (prev == 1) {
-            // Last waiter — signal notifier (epoch+1).
+        else {
             n00b_atomic_add(&cv->notify_epoch, 1);
             n00b_futex_wake(&cv->notify_epoch, false);
         }
@@ -213,9 +182,14 @@ base_wait(n00b_condition_t *cv,
         }
     } while (!waking);
 
+    // Wait for the notifier to complete (epoch+2).
+    n00b_futex_wait_for_value(&cv->notify_epoch, epoch + 2);
     _n00b_condition_lock(cv, loc);
     n00b_wait_done(thread);
     n00b_thread_resume(stw_ctx);
+
+    int nw = n00b_atomic_add(&cv->wait_queue, -1);
+    (void)nw;
 
     if (wake_unlocked) {
         _n00b_condition_unlock(cv, loc);
@@ -234,32 +208,23 @@ _internal_cv_notify(n00b_condition_t *cv,
 {
     n00b_thread_t       *thread = n00b_thread_self();
     n00b_stw_suspend_ctx stw_ctx;
+    int32_t              result;
 
     _n00b_condition_lock(cv, loc);
+    cv->pvalue             = pvalue;
+    cv->ovalue             = ovalue;
+    cv->wakes_remaining    = max;
+    result                 = n00b_atomic_load(&cv->wait_queue);
+    cv->waiters_to_process = result & ~N00B_STW;
 
-    cv->pvalue = pvalue;
-    cv->ovalue = ovalue;
-    n00b_atomic_store(&cv->wakes_remaining, max);
-
-    int32_t nwaiters = (int32_t)n00b_list_len(cv->waiters);
-
-    if (!nwaiters) {
+    if (!cv->waiters_to_process) {
         if (unlock) {
             _n00b_condition_unlock(cv, loc);
         }
         return 0;
     }
 
-    // Snapshot all waiters into a local array, then clear the list.
-    // Non-matching waiters will re-enqueue themselves.
-    n00b_thread_t *snapshot[nwaiters];
-
-    for (int32_t i = 0; i < nwaiters; i++) {
-        snapshot[i] = n00b_list_get(cv->waiters, i);
-    }
-    n00b_list_clear(cv->waiters);
-
-    n00b_atomic_store(&cv->waiters_to_process, nwaiters);
+    n00b_atomic_or(&cv->wait_queue, N00B_CV_NOTIFY_IN_PROGRESS);
 
     uint32_t epoch = n00b_atomic_load(&cv->notify_epoch);
 
@@ -271,13 +236,13 @@ _internal_cv_notify(n00b_condition_t *cv,
     n00b_thread_suspend(stw_ctx);
     n00b_register_lock_wait(thread, cv, loc);
 
-    // Wait for all waiters to finish processing (epoch+1).
     n00b_futex_wait_for_value(&cv->notify_epoch, epoch + 1);
-
     _n00b_condition_lock(cv, loc);
+
     n00b_wait_done(thread);
 
-    // Signal all waiters that the notification round is complete (epoch+2).
+    n00b_barrier();
+    n00b_atomic_and(&cv->wait_queue, ~N00B_CV_NOTIFY_IN_PROGRESS);
     n00b_atomic_add(&cv->notify_epoch, 1);
     n00b_futex_wake(&cv->notify_epoch, true);
 
@@ -288,7 +253,7 @@ _internal_cv_notify(n00b_condition_t *cv,
     }
     n00b_mac_barrier();
 
-    return nwaiters;
+    return result;
 }
 
 void *

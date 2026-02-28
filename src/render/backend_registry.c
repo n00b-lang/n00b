@@ -169,10 +169,10 @@ n00b_renderer_load(n00b_string_t path)
         return n00b_result_err(n00b_renderer_vtable_ptr_t, EINVAL);
     }
 
-    n00b_dl_handle_t handle = n00b_dlopen(path);
+    n00b_dl_handle_t handle = n00b_dlopen(path.data);
     if (!handle) {
         fprintf(stderr, "n00b: failed to load renderer '%s': %s\n",
-                path, n00b_dlerror());
+                path.data, n00b_dlerror());
         return n00b_result_err(n00b_renderer_vtable_ptr_t, ENOENT);
     }
 
@@ -181,7 +181,7 @@ n00b_renderer_load(n00b_string_t path)
 
     if (!plugin) {
         fprintf(stderr, "n00b: no n00b_renderer_plugin symbol in '%s': %s\n",
-                path, n00b_dlerror());
+                path.data, n00b_dlerror());
         n00b_dlclose(handle);
         return n00b_result_err(n00b_renderer_vtable_ptr_t, ENOENT);
     }
@@ -189,13 +189,13 @@ n00b_renderer_load(n00b_string_t path)
     if (plugin->abi_version != N00B_RENDERER_ABI_VERSION) {
         fprintf(stderr,
                 "n00b: ABI version mismatch in '%s': expected %u, got %u\n",
-                path, N00B_RENDERER_ABI_VERSION, plugin->abi_version);
+                path.data, N00B_RENDERER_ABI_VERSION, plugin->abi_version);
         n00b_dlclose(handle);
         return n00b_result_err(n00b_renderer_vtable_ptr_t, EPROTO);
     }
 
     if (!plugin->vtable || !plugin->name) {
-        fprintf(stderr, "n00b: invalid plugin in '%s'\n", path);
+        fprintf(stderr, "n00b: invalid plugin in '%s'\n", path.data);
         n00b_dlclose(handle);
         return n00b_result_err(n00b_renderer_vtable_ptr_t, EINVAL);
     }
@@ -205,7 +205,6 @@ n00b_renderer_load(n00b_string_t path)
 
     // Don't dlclose — the vtable is still in use.
     return n00b_result_ok(n00b_renderer_vtable_ptr_t, plugin->vtable);
-#endif
 }
 
 n00b_result_t(n00b_renderer_vtable_ptr_t)
@@ -228,8 +227,6 @@ n00b_renderer_load_by_name(n00b_string_t name)
     const char *ext = "dll";
 #elif defined(__APPLE__)
     const char *ext = "dylib";
-#elif defined(_WIN32)
-    const char *ext = "dll";
 #else
     const char *ext = "so";
 #endif

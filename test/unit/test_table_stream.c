@@ -15,7 +15,7 @@
 static n00b_string_t
 make_str(const char *s)
 {
-    return n00b_string_from_raw(nullptr, s, (int64_t)strlen(s), (int64_t)strlen(s));
+    return n00b_string_from_raw(s, (int64_t)strlen(s));
 }
 
 // ====================================================================
@@ -130,11 +130,11 @@ test_unlimited_mode(void)
 static void
 test_end_row_empty_noop(void)
 {
-    n00b_table_t *t = n00b_table_new(.num_cols = 1);
+    n00b_table_t *t = n00b_new_kargs(n00b_table_t, table, .num_cols = 1);
 
     n00b_table_add_cell(t, make_str("seed"));
     n00b_table_end_row(t);
-    n00b_plane_t *p = n00b_table_render(t, 40);
+    n00b_plane_t *p = n00b_table_render(t, .width = 40);
 
     assert(p != nullptr);
     assert(t->layout_valid);
@@ -161,7 +161,7 @@ test_unlimited_mode_gc_stress(void)
 {
     n00b_arena_t     *arena = n00b_new_arena(.size = 4096, .use_gc = true);
     n00b_allocator_t *alloc = (n00b_allocator_t *)arena;
-    n00b_table_t     *t     = n00b_table_new(.num_cols = 1, .allocator = alloc);
+    n00b_table_t     *t     = n00b_new_kargs(n00b_table_t, table, .num_cols = 1);
     n00b_string_t     cell  = make_str("x");
     n00b_gc_register_root(t);
     n00b_gc_register_root(cell);
@@ -173,6 +173,8 @@ test_unlimited_mode_gc_stress(void)
     for (int i = 0; i < nrows; i++) {
         n00b_table_add_cell(t, cell);
         n00b_table_end_row(t);
+        // Drive collections in a separate GC arena while mutating the table.
+        (void)n00b_alloc_with_opts(uint64_t, &(n00b_alloc_opts_t){.allocator = alloc});
 
         uint32_t cur = n00b_atomic_load(&arena->alloc_count);
 
