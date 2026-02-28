@@ -782,7 +782,7 @@ poll_proc_add(void *vctx, n00b_conduit_proc_watch_t *watch)
     ctx->procs = pp;
 
     // Add pidfd to poll set
-    if (!poll_add(ctx, pidfd, N00B_CONDUIT_IO_READ, pp)) {
+    if (!poll_add(ctx, pidfd, N00B_CONDUIT_IO_READ, (n00b_conduit_io_target_t *)pp)) {
         close(pidfd);
         return false;
     }
@@ -1051,7 +1051,7 @@ poll_user_event_add(void *vctx, n00b_conduit_user_event_t *event)
     ctx->user_events = pe;
 
     // Add eventfd to poll set
-    if (!poll_add(ctx, efd, N00B_CONDUIT_IO_READ, pe)) {
+    if (!poll_add(ctx, efd, N00B_CONDUIT_IO_READ, (n00b_conduit_io_target_t *)pe)) {
         close(efd);
         return false;
     }
