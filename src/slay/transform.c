@@ -93,7 +93,7 @@ n00b_xform_clone(n00b_parse_tree_t *tree)
     for (size_t i = 0; i < nch; i++) {
         n00b_parse_tree_t *child_copy = n00b_xform_clone(
             n00b_tree_child(tree, i));
-        n00b_tree_add_child(copy, child_copy);
+        (void)n00b_tree_add_child(copy, child_copy);
     }
 
     return copy;
@@ -160,7 +160,7 @@ n00b_xform_make_node_with_children(n00b_grammar_t     *grammar,
 
     for (size_t i = 0; i < count; i++) {
         if (children[i]) {
-            n00b_tree_add_child(node, children[i]);
+            (void)n00b_tree_add_child(node, children[i]);
         }
     }
 
@@ -230,7 +230,6 @@ add_entry(n00b_xform_entry_t ***array, int *count, int *cap,
 {
     if (*count >= *cap) {
         int new_cap = *cap ? *cap * 2 : 4;
-        size_t new_sz = (size_t)new_cap * sizeof(n00b_xform_entry_t *);
         n00b_xform_entry_t **new_arr = n00b_alloc_size(new_cap,
                                                          sizeof(n00b_xform_entry_t *));
 
@@ -614,8 +613,8 @@ walk_tree(n00b_xform_registry_t *reg, n00b_xform_ctx_t *ctx,
                 if (child_ix >= 0
                     && (size_t)child_ix
                            < n00b_pt_num_children(parent_item->current)) {
-                    n00b_tree_set_child(parent_item->current,
-                                         (size_t)child_ix, result);
+                    (void)n00b_tree_set_child(parent_item->current,
+                                              (size_t)child_ix, result);
                 }
             }
 

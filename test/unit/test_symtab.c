@@ -311,15 +311,15 @@ test_annot_walk_scope(void)
     tok.tid   = 1;  // Arbitrary non-sentinel ID (annotation walk uses value text).
     n00b_parse_tree_t *tok_tree
         = n00b_tree_leaf(n00b_nt_node_t, n00b_token_info_t *, &tok);
-    n00b_tree_add_child(decl_tree, tok_tree);
+    (void)n00b_tree_add_child(decl_tree, tok_tree);
 
     // Empty block node.
     n00b_nt_node_t blk_pn = {.id = blk->id, .name = *r"block", .rule_index = blk_ri};
     n00b_parse_tree_t *blk_tree
         = n00b_tree_node(n00b_nt_node_t, n00b_token_info_t *, blk_pn);
 
-    n00b_tree_add_child(prog_tree, decl_tree);
-    n00b_tree_add_child(prog_tree, blk_tree);
+    (void)n00b_tree_add_child(prog_tree, decl_tree);
+    (void)n00b_tree_add_child(prog_tree, blk_tree);
 
     // Walk the tree.
     n00b_symtab_t *st = n00b_annot_walk_tree(g, prog_tree);
@@ -380,8 +380,8 @@ test_annot_walk_typedef(void)
     n00b_parse_tree_t *tok_tree
         = n00b_tree_leaf(n00b_nt_node_t, n00b_token_info_t *, &tok);
 
-    n00b_tree_add_child(decl_tree, tok_tree);
-    n00b_tree_add_child(prog_tree, decl_tree);
+    (void)n00b_tree_add_child(decl_tree, tok_tree);
+    (void)n00b_tree_add_child(prog_tree, decl_tree);
 
     // Walk.
     n00b_symtab_t *st = n00b_annot_walk_tree(g, prog_tree);
@@ -447,9 +447,9 @@ test_scope_auto_push_pop(void)
 
     n00b_parse_tree_t *tok_tree = n00b_tree_leaf(n00b_nt_node_t, n00b_token_info_t *, &tok);
 
-    n00b_tree_add_child(body_tree, tok_tree);
-    n00b_tree_add_child(func_tree, body_tree);
-    n00b_tree_add_child(prog_tree, func_tree);
+    (void)n00b_tree_add_child(body_tree, tok_tree);
+    (void)n00b_tree_add_child(func_tree, body_tree);
+    (void)n00b_tree_add_child(prog_tree, func_tree);
 
     n00b_symtab_t *st = n00b_annot_walk_tree(g, prog_tree);
     assert(st != NULL);
@@ -515,7 +515,7 @@ test_pop_preserves_outer(void)
     n00b_token_info_t tok1 = {0};
     tok1.value = n00b_option_set(n00b_string_t, *r"outer");
     n00b_parse_tree_t *tok1_tree = n00b_tree_leaf(n00b_nt_node_t, n00b_token_info_t *, &tok1);
-    n00b_tree_add_child(decl_tree, tok1_tree);
+    (void)n00b_tree_add_child(decl_tree, tok1_tree);
 
     // Block with inner decl.
     n00b_nt_node_t blk_pn = {.id = blk->id, .name = *r"block", .rule_index = blk_ri};
@@ -526,11 +526,11 @@ test_pop_preserves_outer(void)
     n00b_token_info_t tok2 = {0};
     tok2.value = n00b_option_set(n00b_string_t, *r"inner");
     n00b_parse_tree_t *tok2_tree = n00b_tree_leaf(n00b_nt_node_t, n00b_token_info_t *, &tok2);
-    n00b_tree_add_child(id_tree, tok2_tree);
-    n00b_tree_add_child(blk_tree, id_tree);
+    (void)n00b_tree_add_child(id_tree, tok2_tree);
+    (void)n00b_tree_add_child(blk_tree, id_tree);
 
-    n00b_tree_add_child(prog_tree, decl_tree);
-    n00b_tree_add_child(prog_tree, blk_tree);
+    (void)n00b_tree_add_child(prog_tree, decl_tree);
+    (void)n00b_tree_add_child(prog_tree, blk_tree);
 
     n00b_symtab_t *st = n00b_annot_walk_tree(g, prog_tree);
     assert(st != NULL);

@@ -1589,7 +1589,7 @@ n00b_grammar_finalize(n00b_grammar_t *g)
             }
 
             if (!rule->annotations.data) {
-                rule->annotations = n00b_list_new(n00b_annotation_t *, false);
+                rule->annotations = n00b_list_new_private(n00b_annotation_t *);
             }
 
             for (size_t ai = 0; ai < nannots; ai++) {

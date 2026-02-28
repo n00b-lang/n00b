@@ -33,7 +33,7 @@ n00b_nt_annotate(n00b_nonterm_t *nt, n00b_annotation_t annot)
     n00b_annotation_t *a = heap_annot(annot);
 
     if (!nt->pending_annotations.data) {
-        nt->pending_annotations = n00b_list_new(n00b_annotation_t *, false);
+        nt->pending_annotations = n00b_list_new_private(n00b_annotation_t *);
     }
 
     n00b_list_push(nt->pending_annotations, a);
@@ -45,7 +45,7 @@ n00b_rule_annotate(n00b_parse_rule_t *rule, n00b_annotation_t annot)
     n00b_annotation_t *a = heap_annot(annot);
 
     if (!rule->annotations.data) {
-        rule->annotations = n00b_list_new(n00b_annotation_t *, false);
+        rule->annotations = n00b_list_new_private(n00b_annotation_t *);
     }
 
     n00b_list_push(rule->annotations, a);

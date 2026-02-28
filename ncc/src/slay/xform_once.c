@@ -503,9 +503,8 @@ flatten_group(n00b_parse_tree_t *node, ptrvec_t *out)
 
 static n00b_parse_tree_t *
 xform_once_tu(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *tu,
-              n00b_xform_control_t *control)
+              [[maybe_unused]] n00b_xform_control_t *control)
 {
-
     // The BNF `<translation_unit> ::= <external_declaration>+` creates a
     // right-recursive chain of group wrapper nodes. Flatten them into a
     // single array so we can scan and insert siblings easily.

@@ -14,8 +14,11 @@
 #include "core/alloc.h"
 #include "core/runtime.h"
 
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wmacro-redefined"
 #include "mir.h"
 #include "mir-gen.h"
+#pragma clang diagnostic pop
 
 // ============================================================================
 // 1. Build an "add(x, y) → x + y" function via the MIR API and interpret it.

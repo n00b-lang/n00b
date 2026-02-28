@@ -742,7 +742,8 @@ cf_kind_name(n00b_cf_kind_t kind)
     case N00B_CF_JUMP:    return "jump";
     case N00B_CF_CAPTURE: return "capture";
     case N00B_CF_ASSIGNS: return "assigns";
-    case N00B_CF_VARREF:  return "varref";
+    case N00B_CF_VARREF:         return "varref";
+    case N00B_CF_UNWRAP_RESULT:  return "unwrap_result";
     }
 
     return "?cf?";

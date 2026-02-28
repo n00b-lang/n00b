@@ -425,7 +425,8 @@ _find_sentinal(uint64_t p_num, uint64_t *start)
 void
 _n00b_find_alloc_info(void *addr, n00b_alloc_info_t *result) _kargs
 {
-    bool scan_for_header = false;
+    n00b_allocator_t *allocator       = nullptr;
+    bool              scan_for_header = false;
 }
 {
     auto  mmap_opt = n00b_mmap_by_address(addr);

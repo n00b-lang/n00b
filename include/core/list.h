@@ -123,15 +123,16 @@ n00b_list_decl(n00b_string_t);
 /**
  * @brief Create a new list with default capacity.
  *
- * Lists are **locked by default**.  Pass `false` as the second argument
- * (or use the `_private` compat macro) for an unlocked list.
+ * Lists are **locked by default**.  Use `n00b_list_new_private(T)` for
+ * an unlocked list (no rwlock).
  *
- * @param T       Element type.
- * @param locked  Whether to create a rwlock (default: true).
- * @param ...     Optional allocator.
+ * @param T    Element type.
+ * @param ...  Optional allocator.
  */
 #define n00b_list_new(T, ...)              _n00b_list_new_sel(T, true, ##__VA_ARGS__)
-#define n00b_list_new_private(T, ...)      _n00b_list_new_sel(T, false, ##__VA_ARGS__) /**< @deprecated Use n00b_list_new(T, false) */
+
+/// @brief Create an unlocked (private) list — no rwlock.
+#define n00b_list_new_private(T, ...)      _n00b_list_new_sel(T, false, ##__VA_ARGS__)
 
 #define _n00b_list_new_sel(T, locked, ...)                                                     \
     ({                                                                                         \

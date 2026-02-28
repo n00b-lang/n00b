@@ -528,8 +528,8 @@ n00b_build_dfg(n00b_cfg_t          *cfg,
     dfg->cfg       = cfg;
     dfg->cf_labels = cf_labels;
     dfg->name      = cfg->name;
-    dfg->facts     = n00b_list_new(n00b_du_fact_t, false);
-    dfg->edges     = n00b_list_new(n00b_dd_edge_t, false);
+    dfg->facts     = n00b_list_new_private(n00b_du_fact_t);
+    dfg->edges     = n00b_list_new_private(n00b_dd_edge_t);
 
     // Emit synthetic DEF facts for function parameters at the entry block.
     // These go before normal block-walking facts so that parameter defs
@@ -558,7 +558,7 @@ n00b_build_dfg(n00b_cfg_t          *cfg,
 n00b_list_t(n00b_dd_edge_t)
 n00b_dfg_reaching_defs(n00b_dfg_t *dfg, int32_t use_id)
 {
-    n00b_list_t(n00b_dd_edge_t) result = n00b_list_new(n00b_dd_edge_t, false);
+    n00b_list_t(n00b_dd_edge_t) result = n00b_list_new_private(n00b_dd_edge_t);
 
     if (!dfg) {
         return result;
@@ -580,7 +580,7 @@ n00b_dfg_reaching_defs(n00b_dfg_t *dfg, int32_t use_id)
 n00b_list_t(n00b_dd_edge_t)
 n00b_dfg_reached_uses(n00b_dfg_t *dfg, int32_t def_id)
 {
-    n00b_list_t(n00b_dd_edge_t) result = n00b_list_new(n00b_dd_edge_t, false);
+    n00b_list_t(n00b_dd_edge_t) result = n00b_list_new_private(n00b_dd_edge_t);
 
     if (!dfg) {
         return result;

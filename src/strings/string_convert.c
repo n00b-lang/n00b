@@ -62,8 +62,8 @@ n00b_unicode_str_from_int(int64_t n) _kargs
 // Hex encoding
 // ---------------------------------------------------------------------------
 
-static const char hex_lower_tbl[16] = "0123456789abcdef";
-static const char hex_upper_tbl[16] = "0123456789ABCDEF";
+static const char hex_lower_tbl[16] __attribute__((nonstring)) = "0123456789abcdef";
+static const char hex_upper_tbl[16] __attribute__((nonstring)) = "0123456789ABCDEF";
 
 n00b_string_t
 n00b_unicode_str_to_hex(n00b_string_t s) _kargs

@@ -66,6 +66,7 @@ c_args = [
   '-Wno-cast-function-type',
   '-Wno-parentheses-equality',
   '-Wno-initializer-overrides',
+  '-Wno-unknown-pragmas',
   '-fno-omit-frame-pointer',
   '-ffunction-sections',
   # TODO only needed for musl

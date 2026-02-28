@@ -303,7 +303,7 @@ n00b_build_cdg(n00b_cfg_t *cfg)
     cdg->cfg      = cfg;
     cdg->name     = cfg->name;
     cdg->pdom     = n00b_array_new(n00b_pdom_info_t, nb);
-    cdg->cd_edges = n00b_list_new(n00b_cd_edge_t, false);
+    cdg->cd_edges = n00b_list_new_private(n00b_cd_edge_t);
 
     // Initialize array length to nb (all slots used).
     for (int32_t i = 0; i < nb; i++) {
@@ -323,7 +323,7 @@ n00b_build_cdg(n00b_cfg_t *cfg)
 n00b_list_t(n00b_cd_edge_t)
 n00b_cdg_controllers(n00b_cdg_t *cdg, int32_t block_id)
 {
-    n00b_list_t(n00b_cd_edge_t) result = n00b_list_new(n00b_cd_edge_t, false);
+    n00b_list_t(n00b_cd_edge_t) result = n00b_list_new_private(n00b_cd_edge_t);
 
     if (!cdg) {
         return result;
@@ -345,7 +345,7 @@ n00b_cdg_controllers(n00b_cdg_t *cdg, int32_t block_id)
 n00b_list_t(n00b_cd_edge_t)
 n00b_cdg_dependents(n00b_cdg_t *cdg, int32_t block_id)
 {
-    n00b_list_t(n00b_cd_edge_t) result = n00b_list_new(n00b_cd_edge_t, false);
+    n00b_list_t(n00b_cd_edge_t) result = n00b_list_new_private(n00b_cd_edge_t);
 
     if (!cdg) {
         return result;

@@ -328,7 +328,7 @@ n00b_conduit_unregister_backend(n00b_conduit_t *c, n00b_conduit_io_backend_t *io
 {
     if (!c || !io) return;
 
-    n00b_list_remove_all(c->io_backends, io);
+    (void)n00b_list_remove_all(c->io_backends, io);
 }
 
 n00b_option_t(n00b_conduit_io_backend_t *)

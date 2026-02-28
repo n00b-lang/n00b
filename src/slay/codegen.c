@@ -409,6 +409,9 @@ codegen_operator(n00b_codegen_t *cg, n00b_parse_tree_t *node)
         }
     }
 
+    fprintf(stderr, "[CG] codegen_operator: op=%d n_operands=%d\n",
+            (int)sem_op, n_operands);
+
     if (n_operands == 2) {
         // Check for short-circuit.
         if (sem_op == N00B_CG_OP_LOGICAL_AND || sem_op == N00B_CG_OP_LOGICAL_OR) {
@@ -417,9 +420,13 @@ codegen_operator(n00b_codegen_t *cg, n00b_parse_tree_t *node)
         }
 
         n00b_cg_val_t a = codegen_walk(cg, operands[0]);
+        fprintf(stderr, "[CG]   operand a: kind=%d\n", (int)a.kind);
         n00b_cg_val_t b = codegen_walk(cg, operands[1]);
+        fprintf(stderr, "[CG]   operand b: kind=%d\n", (int)b.kind);
 
-        return n00b_cg_emit_binop(cg, (n00b_cg_semantic_op_t)sem_op, a, b);
+        n00b_cg_val_t result = n00b_cg_emit_binop(cg, (n00b_cg_semantic_op_t)sem_op, a, b);
+        fprintf(stderr, "[CG]   binop result: kind=%d\n", (int)result.kind);
+        return result;
     }
 
     if (n_operands == 1) {
@@ -444,17 +451,29 @@ codegen_literal(n00b_codegen_t    *cg,
     // Find the token leaf for the literal value.
     n00b_parse_tree_t *tok_node = n00b_pt_first_token(node);
 
+    fprintf(stderr, "[CG] codegen_literal: tok_node=%p nchildren=%zu\n",
+            (void *)tok_node, n00b_pt_num_children(node));
+    for (size_t ci = 0; ci < n00b_pt_num_children(node); ci++) {
+        n00b_parse_tree_t *ch = n00b_pt_get_child(node, ci);
+        fprintf(stderr, "[CG]   child[%zu]: is_token=%d is_leaf=%d\n",
+                ci, n00b_pt_is_token(ch), n00b_tree_is_leaf(ch));
+    }
+
     if (!tok_node) {
+        fprintf(stderr, "[CG]   -> no token found, returning 0\n");
         return _n00b_cg_const_i64(cg, 0);
     }
 
     n00b_string_t lit_kind = annot->op_kind;
 
+    n00b_cg_val_t lit_result;
     if (cg->literal_parser) {
-        return cg->literal_parser(cg, tok_node, lit_kind, type);
+        lit_result = cg->literal_parser(cg, tok_node, lit_kind, type);
+    } else {
+        lit_result = default_literal_parser(cg, tok_node, lit_kind, type);
     }
-
-    return default_literal_parser(cg, tok_node, lit_kind, type);
+    fprintf(stderr, "[CG]   literal result: kind=%d\n", (int)lit_result.kind);
+    return lit_result;
 }
 
 // ============================================================================
@@ -744,7 +763,11 @@ codegen_children_default(n00b_codegen_t *cg, n00b_parse_tree_t *node)
 
     for (size_t i = 0; i < nc; i++) {
         n00b_parse_tree_t *child = n00b_pt_get_child(node, i);
-        result = codegen_walk(cg, child);
+        n00b_cg_val_t      val   = codegen_walk(cg, child);
+
+        if (val.kind != N00B_CG_VAL_VOID) {
+            result = val;
+        }
     }
 
     return result;
@@ -849,9 +872,11 @@ codegen_walk(n00b_codegen_t *cg, n00b_parse_tree_t *node)
     // Check rule annotations for semantic info.
     if (cg->grammar && pn->id >= 0) {
         n00b_parse_rule_t *rule = n00b_get_node_rule(cg->grammar, pn);
+        fprintf(stderr, "[CG]   rule=%p (id=%d)\n", (void *)rule, (int)pn->id);
 
         if (rule && n00b_list_len(rule->annotations) > 0) {
             size_t n_annots = n00b_list_len(rule->annotations);
+            fprintf(stderr, "[CG]   %zu annotations on rule\n", n_annots);
 
             for (size_t i = 0; i < n_annots; i++) {
                 n00b_annotation_t *a = n00b_list_get(rule->annotations, i);
@@ -919,9 +944,16 @@ codegen_walk(n00b_codegen_t *cg, n00b_parse_tree_t *node)
 
                 if (n_tok == 1) {
                     const char *text = n00b_pt_token_text(child);
+                    size_t      tlen = n00b_pt_token_text_len(child);
 
-                    if (text && n00b_cg_lookup_op(cg, text) >= 0) {
-                        has_known_op = true;
+                    if (text && tlen > 0 && tlen < sizeof(char[32])) {
+                        char buf[32];
+                        memcpy(buf, text, tlen);
+                        buf[tlen] = '\0';
+
+                        if (n00b_cg_lookup_op(cg, buf) >= 0) {
+                            has_known_op = true;
+                        }
                     }
                 }
             }
@@ -930,7 +962,11 @@ codegen_walk(n00b_codegen_t *cg, n00b_parse_tree_t *node)
             }
         }
 
+        fprintf(stderr, "[CG]   auto-detect: n_tok=%d n_nt=%d has_known_op=%d\n",
+                n_tok, n_nt, (int)has_known_op);
+
         if (has_known_op && n_tok == 1 && (n_nt == 1 || n_nt == 2)) {
+            fprintf(stderr, "[CG]   -> auto-detect operator!\n");
             return codegen_operator(cg, node);
         }
     }
@@ -1277,9 +1313,14 @@ _kargs {
                                                  .ret = N00B_CG_I64);
 
     if (!emit_ok) {
+        fprintf(stderr, "[CG] emit_func_from_tree FAILED\n");
         n00b_codegen_free(cg);
         return 0;
     }
+
+    fprintf(stderr, "[CG] --- MIR dump ---\n");
+    n00b_codegen_dump(cg, stderr);
+    fprintf(stderr, "[CG] --- end MIR dump ---\n");
 
     typedef int64_t (*eval_fn_t)(void);
 

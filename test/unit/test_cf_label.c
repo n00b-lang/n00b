@@ -256,6 +256,8 @@ typedef struct {
     int jump;
     int capture;
     int assigns;
+    int varref;
+    int unwrap_result;
 } label_counts_t;
 
 static void
@@ -275,7 +277,9 @@ count_labels_walk(n00b_cf_labels_t *cf_labels, n00b_parse_tree_t *node,
         case N00B_CF_SWITCH:  out->switch_ct++;  break;
         case N00B_CF_JUMP:    out->jump++;       break;
         case N00B_CF_CAPTURE: out->capture++;    break;
-        case N00B_CF_ASSIGNS: out->assigns++;    break;
+        case N00B_CF_ASSIGNS:       out->assigns++;        break;
+        case N00B_CF_VARREF:        out->varref++;         break;
+        case N00B_CF_UNWRAP_RESULT: out->unwrap_result++;  break;
         }
     }
 

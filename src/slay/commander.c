@@ -1024,7 +1024,7 @@ n00b_cmdr_arg_count(n00b_cmdr_result_t *r)
 n00b_string_t
 n00b_cmdr_arg_str(n00b_cmdr_result_t *r, int index)
 {
-    if (!r || index < 0 || index >= n00b_list_len(r->args)) {
+    if (!r || index < 0 || (size_t)index >= n00b_list_len(r->args)) {
         return n00b_string_empty();
     }
 
@@ -1035,7 +1035,7 @@ n00b_cmdr_arg_str(n00b_cmdr_result_t *r, int index)
 int64_t
 n00b_cmdr_arg_int(n00b_cmdr_result_t *r, int index)
 {
-    if (!r || index < 0 || index >= n00b_list_len(r->args)) {
+    if (!r || index < 0 || (size_t)index >= n00b_list_len(r->args)) {
         return 0;
     }
 
@@ -1060,7 +1060,7 @@ n00b_cmdr_error_count(n00b_cmdr_result_t *r)
 n00b_string_t
 n00b_cmdr_error_get(n00b_cmdr_result_t *r, int32_t index)
 {
-    if (!r || index < 0 || index >= n00b_list_len(r->errors)) {
+    if (!r || index < 0 || (size_t)index >= n00b_list_len(r->errors)) {
         return n00b_string_empty();
     }
 

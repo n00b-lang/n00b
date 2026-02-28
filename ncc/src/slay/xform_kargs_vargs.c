@@ -919,13 +919,13 @@ inject_kargs_body(n00b_grammar_t *g, n00b_parse_tree_t *func_body,
         char decl_src[2048];
         if (p->default_text) {
             snprintf(decl_src, sizeof(decl_src),
-                     "%s %s = kargs -> _has_%s ? kargs -> %s : ( %s ) ;",
+                     "[[maybe_unused]] %s %s = kargs -> _has_%s ? kargs -> %s : ( %s ) ;",
                      p->type_text, p->name, p->name, p->name,
                      p->default_text);
         }
         else {
             snprintf(decl_src, sizeof(decl_src),
-                     "%s %s = kargs -> %s ;",
+                     "[[maybe_unused]] %s %s = kargs -> %s ;",
                      p->type_text, p->name, p->name);
         }
 

@@ -1194,7 +1194,7 @@ n00b_unicode_str_reverse(n00b_string_t s) _kargs
 // Escape / Unescape
 // ---------------------------------------------------------------------------
 
-static const char hex_lower[16] = "0123456789abcdef";
+static const char hex_lower[16] __attribute__((nonstring)) = "0123456789abcdef";
 
 static bool
 is_printable_cp(n00b_codepoint_t cp)

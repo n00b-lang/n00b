@@ -30,8 +30,11 @@
 #include "slay/grammar.h"
 #include "slay/diagnostic.h"
 
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wmacro-redefined"
 #include "mir.h"
 #include "mir-gen.h"
+#pragma clang diagnostic pop
 
 // ============================================================================
 // Forward declarations

@@ -64,7 +64,7 @@ new_block(cfg_ctx_t *ctx, n00b_string_t label)
     n00b_cfg_block_t blk = {
         .id    = (int32_t)n00b_list_len(ctx->cfg->blocks),
         .label = label,
-        .stmts = n00b_list_new(n00b_parse_tree_ptr_t, false),
+        .stmts = n00b_list_new_private(n00b_parse_tree_ptr_t),
     };
 
     n00b_list_push(ctx->cfg->blocks, blk);
@@ -357,6 +357,7 @@ cfg_build_stmt(cfg_ctx_t *ctx, n00b_parse_tree_t *node, int32_t cur_block)
         case N00B_CF_ASSIGNS:
         case N00B_CF_VARREF:
         case N00B_CF_CAPTURE:
+        case N00B_CF_UNWRAP_RESULT:
             // Treat as a regular statement for CFG purposes.
             block_add_stmt(ctx, cur_block, node);
             return cur_block;
@@ -452,8 +453,8 @@ n00b_build_cfg(n00b_cf_labels_t *cf_labels,
     }
 
     n00b_cfg_t *cfg = n00b_alloc(n00b_cfg_t);
-    cfg->blocks = n00b_list_new(n00b_cfg_block_t, false);
-    cfg->edges  = n00b_list_new(n00b_cfg_edge_t, false);
+    cfg->blocks = n00b_list_new_private(n00b_cfg_block_t);
+    cfg->edges  = n00b_list_new_private(n00b_cfg_edge_t);
     cfg->name   = func_name;
 
     cfg_ctx_t ctx = {
@@ -488,7 +489,7 @@ n00b_build_cfg(n00b_cf_labels_t *cf_labels,
 n00b_list_t(n00b_cfg_edge_t)
 n00b_cfg_successors(n00b_cfg_t *cfg, int32_t block_id)
 {
-    n00b_list_t(n00b_cfg_edge_t) result = n00b_list_new(n00b_cfg_edge_t, false);
+    n00b_list_t(n00b_cfg_edge_t) result = n00b_list_new_private(n00b_cfg_edge_t);
 
     if (!cfg) {
         return result;
@@ -510,7 +511,7 @@ n00b_cfg_successors(n00b_cfg_t *cfg, int32_t block_id)
 n00b_list_t(n00b_cfg_edge_t)
 n00b_cfg_predecessors(n00b_cfg_t *cfg, int32_t block_id)
 {
-    n00b_list_t(n00b_cfg_edge_t) result = n00b_list_new(n00b_cfg_edge_t, false);
+    n00b_list_t(n00b_cfg_edge_t) result = n00b_list_new_private(n00b_cfg_edge_t);
 
     if (!cfg) {
         return result;
