@@ -65,15 +65,15 @@ struct n00b_condition_thread_state_t {
  * accesses this through `n00b_thread_t::record`.
  */
 struct n00b_thread_record_t {
-    _Atomic(n00b_thread_t *)          thread;          ///< Back-pointer to TLS thread_t.
-    uint32_t                          generation;      ///< Generation counter for slot reuse.
-    _Atomic(n00b_lock_base_t *)       exclusive_locks; ///< Head of exclusive-lock chain.
-    _Atomic(n00b_thread_read_log_t *) read_locks;      ///< Head of read-lock chain.
-    _Atomic(n00b_thread_read_log_t *) log_alloc_cache; ///< Cached freed read-log entries.
-    n00b_condition_thread_state_t     cv_info;         ///< Condition-variable wait state.
-    n00b_lock_base_t                 *lock_wait_target;///< Lock we are currently blocked on.
-    char                             *lock_wait_loc;   ///< Source location of the wait.
-    char                             *lock_wait_trace; ///< Backtrace at wait (debug).
+    _Atomic(n00b_thread_t *)          thread;           ///< Back-pointer to TLS thread_t.
+    uint32_t                          generation;       ///< Generation counter for slot reuse.
+    _Atomic(n00b_lock_base_t *)       exclusive_locks;  ///< Head of exclusive-lock chain.
+    _Atomic(n00b_thread_read_log_t *) read_locks;       ///< Head of read-lock chain.
+    _Atomic(n00b_thread_read_log_t *) log_alloc_cache;  ///< Cached freed read-log entries.
+    n00b_condition_thread_state_t     cv_info;          ///< Condition-variable wait state.
+    n00b_lock_base_t                 *lock_wait_target; ///< Lock we are currently blocked on.
+    char                             *lock_wait_loc;    ///< Source location of the wait.
+    char                             *lock_wait_trace;  ///< Backtrace at wait (debug).
 };
 
 struct n00b_thread_t {
@@ -90,12 +90,14 @@ struct n00b_thread_t {
     n00b_mmap_info_t   *stack_map;
     n00b_memperm_pipe_t memperm_pipe;
 #if defined(_WIN32)
-    uint32_t            os_thread_id;
+    uint32_t os_thread_id;
+    void    *os_thread_handle;
+    void    *os_thread_join_ctx;
 #else
-    pthread_t          pthread_id;
-    pthread_attr_t     pthread_attrs;
+    pthread_t      pthread_id;
+    pthread_attr_t pthread_attrs;
 #endif
-    n00b_futex_t        self_lock;
+    n00b_futex_t          self_lock;
     n00b_thread_record_t *record; ///< Pointer into rt->threads[slot].
 };
 
@@ -177,11 +179,11 @@ extern void *n00b_thread_join(n00b_thread_t *thread);
 void
 n00b_thread_init() _kargs
 {
-    n00b_runtime_t *runtime             = n00b_get_runtime();
+    n00b_runtime_t *runtime = n00b_get_runtime();
 #if !defined(_WIN32)
     n00b_option_t(pthread_attr_t) attrs = n00b_option_none(pthread_attr_t);
 #endif
-    uint32_t acquired_slot              = 0;
+    uint32_t acquired_slot = 0;
 };
 
 /**

@@ -42,7 +42,10 @@ n00b_win_thread_debug_enabled(void)
 }
 
 static void
-n00b_win_thread_debug_log(const char *stage, n00b_runtime_t *runtime, uint32_t slot, n00b_thread_t *self)
+n00b_win_thread_debug_log(const char     *stage,
+                          n00b_runtime_t *runtime,
+                          uint32_t        slot,
+                          n00b_thread_t  *self)
 {
     if (!n00b_win_thread_debug_enabled()) {
         return;
@@ -79,11 +82,11 @@ n00b_thread_slot_acquire(n00b_runtime_t *rt, n00b_thread_t *ptr)
 void
 n00b_thread_init() _kargs
 {
-    n00b_runtime_t *runtime             = n00b_get_runtime();
+    n00b_runtime_t *runtime = n00b_get_runtime();
 #if !defined(_WIN32)
     n00b_option_t(pthread_attr_t) attrs = n00b_option_none(pthread_attr_t);
 #endif
-    uint32_t acquired_slot              = 0;
+    uint32_t acquired_slot = 0;
 }
 {
     n00b_thread_t *self = n00b_thread_self();
@@ -97,14 +100,16 @@ n00b_thread_init() _kargs
     }
 
     n00b_thread_record_t *rec = &runtime->threads[acquired_slot];
-    uint32_t gen = rec->generation++;
+    uint32_t              gen = rec->generation++;
 #if defined(_WIN32)
     n00b_win_thread_debug_log("pre-assign", runtime, acquired_slot, self);
 #endif
 
     *self = (n00b_thread_t){
 #if defined(_WIN32)
-        .os_thread_id = GetCurrentThreadId(),
+        .os_thread_id       = GetCurrentThreadId(),
+        .os_thread_handle   = nullptr,
+        .os_thread_join_ctx = nullptr,
 #else
         .pthread_id    = pthread_self(),
         .pthread_attrs = {0},
@@ -143,8 +148,8 @@ n00b_release_locks_on_thread_exit(n00b_thread_record_t *rec)
     n00b_lock_base_t *lock = n00b_atomic_load(&rec->exclusive_locks);
 
     while (lock) {
-        n00b_lock_base_t      *next = n00b_atomic_load(&lock->next_thread_lock);
-        n00b_core_lock_info_t  info = n00b_atomic_load(&lock->data);
+        n00b_lock_base_t     *next = n00b_atomic_load(&lock->next_thread_lock);
+        n00b_core_lock_info_t info = n00b_atomic_load(&lock->data);
 
         info.owner   = N00B_NO_OWNER;
         info.nesting = 0;
@@ -220,8 +225,8 @@ n00b_capture_stack_base(n00b_thread_t *thread, n00b_runtime_t *runtime)
 #if !defined(_WIN32)
     size_t size;
 #endif
-    char  *highest;
-    char  *lowest;
+    char *highest;
+    char *lowest;
 
 #if defined(_WIN32)
     (void)runtime;
@@ -236,7 +241,7 @@ n00b_capture_stack_base(n00b_thread_t *thread, n00b_runtime_t *runtime)
     highest = (char *)high_limit;
 #else
     MEMORY_BASIC_INFORMATION mbi = {};
-    int                     marker;
+    int                      marker;
 
     if (!VirtualQuery(&marker, &mbi, sizeof(mbi))) {
         abort();
@@ -285,8 +290,7 @@ n00b_capture_stack_base(n00b_thread_t *thread, n00b_runtime_t *runtime)
 #endif
 
     thread->stack_base = highest;
-    thread->stack_map  = n00b_option_get(
-        n00b_mmap_register(lowest, highest, n00b_mmap_stack));
+    thread->stack_map  = n00b_option_get(n00b_mmap_register(lowest, highest, n00b_mmap_stack));
 }
 
 // ============================================================================
@@ -302,23 +306,12 @@ typedef struct {
 } n00b_tbundle_t;
 
 #if defined(_WIN32)
-n00b_result_t(n00b_thread_t *)
-n00b_thread_spawn(void *(*fn)(void *), void *arg)
-{
-    (void)fn;
-    (void)arg;
-    return n00b_result_err(n00b_thread_t *, ENOTSUP);
-}
-
-void *
-n00b_thread_join(n00b_thread_t *thread)
-{
-    (void)thread;
-    return nullptr;
-}
+static DWORD WINAPI
+n00b_thread_launcher(LPVOID raw)
 #else
 static void *
 n00b_thread_launcher(void *raw)
+#endif
 {
     n00b_tbundle_t *bundle = raw;
     n00b_runtime_t *rt     = n00b_get_runtime();
@@ -330,18 +323,101 @@ n00b_thread_launcher(void *raw)
     n00b_atomic_store(&bundle->ready, 1);
     n00b_futex_wake(&bundle->ready, true);
 
-    void *result = bundle->fn(bundle->arg);
+    void *result   = bundle->fn(bundle->arg);
     bundle->result = result;
 
     n00b_thread_destroy();
+#if defined(_WIN32)
+    return 0;
+#else
     return result;
+#endif
 }
 
-n00b_result_t(n00b_thread_t *)
-n00b_thread_spawn(void *(*fn)(void *), void *arg)
+#if defined(_WIN32)
+n00b_result_t(n00b_thread_t *) n00b_thread_spawn(void *(*fn)(void *), void *arg)
 {
     n00b_runtime_t *rt = n00b_get_runtime();
-    if (!rt) return n00b_result_err(n00b_thread_t *, ENXIO);
+    if (!rt)
+        return n00b_result_err(n00b_thread_t *, ENXIO);
+
+    // Pre-acquire a thread slot so the launcher can use it directly.
+    n00b_thread_t *placeholder = (n00b_thread_t *)(uintptr_t)1;
+    uint32_t       slot        = n00b_thread_slot_acquire(rt, placeholder);
+
+    n00b_tbundle_t *bundle = n00b_alloc(n00b_tbundle_t);
+    if (!bundle) {
+        n00b_atomic_store(&rt->threads[slot].thread, (n00b_thread_t *)nullptr);
+        return n00b_result_err(n00b_thread_t *, ENOMEM);
+    }
+
+    bundle->fn     = fn;
+    bundle->arg    = arg;
+    bundle->tid    = slot;
+    bundle->result = nullptr;
+    n00b_futex_init(&bundle->ready);
+
+    DWORD  os_tid    = 0;
+    HANDLE os_handle = CreateThread(nullptr, 0, n00b_thread_launcher, bundle, 0, &os_tid);
+
+    if (!os_handle) {
+        n00b_atomic_store(&rt->threads[slot].thread, (n00b_thread_t *)nullptr);
+        int err = (int)GetLastError();
+        if (!err) {
+            err = ENOMEM;
+        }
+        return n00b_result_err(n00b_thread_t *, err);
+    }
+
+    // Wait for the child to finish n00b_thread_init.
+    while (!n00b_atomic_load(&bundle->ready)) {
+        n00b_futex_wait(&bundle->ready, 0, 100000000); // 100ms
+    }
+
+    n00b_thread_t *child = n00b_atomic_load(&rt->threads[slot].thread);
+    if (!child) {
+        WaitForSingleObject(os_handle, INFINITE);
+        CloseHandle(os_handle);
+        return n00b_result_err(n00b_thread_t *, ENXIO);
+    }
+
+    child->os_thread_id       = os_tid;
+    child->os_thread_handle   = (void *)os_handle;
+    child->os_thread_join_ctx = bundle;
+
+    return n00b_result_ok(n00b_thread_t *, child);
+}
+
+void *
+n00b_thread_join(n00b_thread_t *thread)
+{
+    if (!thread) {
+        return nullptr;
+    }
+
+    HANDLE          os_handle = (HANDLE)thread->os_thread_handle;
+    n00b_tbundle_t *bundle    = (n00b_tbundle_t *)thread->os_thread_join_ctx;
+
+    if (os_handle) {
+        (void)WaitForSingleObject(os_handle, INFINITE);
+        CloseHandle(os_handle);
+    }
+
+    thread->os_thread_handle   = nullptr;
+    thread->os_thread_join_ctx = nullptr;
+
+    if (bundle) {
+        return bundle->result;
+    }
+
+    return nullptr;
+}
+#else
+n00b_result_t(n00b_thread_t *) n00b_thread_spawn(void *(*fn)(void *), void *arg)
+{
+    n00b_runtime_t *rt = n00b_get_runtime();
+    if (!rt)
+        return n00b_result_err(n00b_thread_t *, ENXIO);
 
     // Pre-acquire a thread slot so the launcher can use it directly.
     n00b_thread_t *placeholder = (n00b_thread_t *)(uintptr_t)1;
@@ -381,7 +457,8 @@ n00b_thread_spawn(void *(*fn)(void *), void *arg)
 void *
 n00b_thread_join(n00b_thread_t *thread)
 {
-    if (!thread) return nullptr;
+    if (!thread)
+        return nullptr;
 
     void *retval = nullptr;
     pthread_join(thread->pthread_id, &retval);
