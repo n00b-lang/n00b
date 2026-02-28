@@ -18,8 +18,8 @@
 #include "conduit/subscription.h"
 #include "conduit/publisher.h"
 #include "conduit/topic.h"
-#include "core/dict_untyped.h"
-#include "core/list.h"
+#include "adt/dict_untyped.h"
+#include "adt/list.h"
 #include "core/alloc.h"
 
 // Forward declarations

@@ -2,17 +2,17 @@
 #include <assert.h>
 #include "n00b.h"
 #include "core/alloc.h"
-#include "core/array.h"
-#include "core/list.h"
+#include "adt/array.h"
+#include "adt/list.h"
 #include "core/runtime.h"
 #include "core/string.h"
-#include "render/canvas.h"
-#include "render/plane.h"
-#include "render/box.h"
-#include "render/composite.h"
-#include "render/types.h"
-#include "strings/text_style.h"
-#include "strings/string_ops.h"
+#include "display/render/canvas.h"
+#include "display/render/plane.h"
+#include "display/render/box.h"
+#include "display/render/composite.h"
+#include "display/render/types.h"
+#include "text/strings/text_style.h"
+#include "text/strings/string_ops.h"
 
 // Stream backend test helpers (defined in backend_stream.c).
 extern n00b_string_t n00b_stream_backend_get_buffer(void *ctx);

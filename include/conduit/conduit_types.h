@@ -10,8 +10,8 @@
 
 #include <stdint.h>
 #include <stdbool.h>
-#include "core/result.h"
-#include "core/variant.h"
+#include "adt/result.h"
+#include "adt/variant.h"
 
 // ============================================================================
 // Forward declarations

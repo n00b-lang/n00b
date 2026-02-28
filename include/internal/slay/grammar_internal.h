@@ -8,8 +8,8 @@
 
 #include "slay/grammar.h"
 #include "slay/parse_tree.h"
-#include "core/list.h"
-#include "core/dict.h"
+#include "adt/list.h"
+#include "adt/dict.h"
 
 // ============================================================================
 // Container declarations

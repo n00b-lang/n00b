@@ -25,9 +25,9 @@
 
 #include "conduit/xform.h"
 #include "conduit/xform_types.h"
-#include "render/canvas.h"
-#include "render/plane.h"
-#include "render/backend.h"
+#include "display/render/canvas.h"
+#include "display/render/plane.h"
+#include "display/render/backend.h"
 
 // ============================================================================
 // Type instantiations for n00b_plane_t *

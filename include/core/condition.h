@@ -29,7 +29,7 @@
 #include "core/lock_common.h"
 #include "core/futex.h"
 #include "core/macros.h"
-#include "core/list.h"
+#include "adt/list.h"
 
 /**
  * @brief Predicate callback for selective wake.

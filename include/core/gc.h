@@ -19,8 +19,8 @@
 
 #include "n00b.h"
 #include "core/alloc_mdata.h"
-#include "core/list.h"
-#include "core/dict_untyped.h"
+#include "adt/list.h"
+#include "adt/dict_untyped.h"
 #include "core/pool.h"
 #include "core/arena.h"
 

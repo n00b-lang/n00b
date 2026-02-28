@@ -16,7 +16,7 @@
 #pragma once
 
 #include "conduit/xform_types.h"
-#include "strings/ansi.h"
+#include "text/strings/ansi.h"
 
 // ============================================================================
 // API

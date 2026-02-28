@@ -3,7 +3,7 @@
 #include "n00b.h"
 #include "core/alloc.h"
 #include "core/runtime.h"
-#include "core/layout.h"
+#include "display/layout.h"
 
 // ====================================================================
 // Helpers

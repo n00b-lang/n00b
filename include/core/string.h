@@ -30,7 +30,7 @@ struct n00b_string_t {
 
 // Declare option_t(n00b_string_t) here (next to the struct definition)
 // so any header using optional strings can rely on this single declaration.
-#include "core/option.h"
+#include "adt/option.h"
 n00b_option_decl(n00b_string_t);
 
 /**

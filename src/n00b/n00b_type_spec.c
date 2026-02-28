@@ -11,9 +11,9 @@
 #include "slay/annotation.h"
 #include "internal/slay/grammar_internal.h"
 #include "core/alloc.h"
-#include "core/list.h"
+#include "adt/list.h"
 #include "core/vargs.h"
-#include "strings/string_ops.h"
+#include "text/strings/string_ops.h"
 
 // Now that n00b_option_decl(n00b_string_t) is centralized in core/string.h,
 // we can include the typecheck headers directly without collision.

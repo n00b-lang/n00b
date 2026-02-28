@@ -1,5 +1,5 @@
 #include "test_unicode_helpers.h"
-#include "strings/rich_desc.h"
+#include "text/strings/rich_desc.h"
 
 // ===================================================================
 // Helpers

@@ -1,5 +1,5 @@
 #include "test_unicode_helpers.h"
-#include "strings/format_spec.h"
+#include "text/strings/format_spec.h"
 
 // ===================================================================
 // Spec parsing tests

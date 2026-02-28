@@ -4,7 +4,7 @@
 #include "n00b.h"
 #include "core/alloc.h"
 #include "core/runtime.h"
-#include "core/interval_tree.h"
+#include "adt/interval_tree.h"
 
 // ============================================================================
 // 1. Create empty tree

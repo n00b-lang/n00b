@@ -5,8 +5,8 @@
 #include "n00b.h"
 #include "core/alloc.h"
 #include "core/runtime.h"
-#include "core/option.h"
-#include "core/variant.h"
+#include "adt/option.h"
+#include "adt/variant.h"
 
 // Declare variant types via typedef at file scope.
 typedef n00b_variant_decl(int, double, char *) variant_idc_t;

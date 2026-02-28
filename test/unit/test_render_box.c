@@ -4,7 +4,7 @@
 #include "n00b.h"
 #include "core/alloc.h"
 #include "core/runtime.h"
-#include "render/box.h"
+#include "display/render/box.h"
 
 // ====================================================================
 // Tests

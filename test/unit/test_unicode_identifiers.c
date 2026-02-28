@@ -1,6 +1,6 @@
 #include "test_unicode_helpers.h"
-#include "unicode/identifiers.h"
-#include "unicode/encoding.h"
+#include "text/unicode/identifiers.h"
+#include "text/unicode/encoding.h"
 
 TEST(test_id_start)
 {

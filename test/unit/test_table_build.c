@@ -4,8 +4,8 @@
 #include "core/alloc.h"
 #include "core/runtime.h"
 #include "core/string.h"
-#include "table/table.h"
-#include "render/box.h"
+#include "display/table/table.h"
+#include "display/render/box.h"
 
 // ====================================================================
 // Helpers

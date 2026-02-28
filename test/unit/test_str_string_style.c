@@ -1,6 +1,6 @@
 #include "test_unicode_helpers.h"
-#include "strings/string_style.h"
-#include "strings/style_registry.h"
+#include "text/strings/string_style.h"
+#include "text/strings/style_registry.h"
 
 // ===================================================================
 // Tests

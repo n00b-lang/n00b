@@ -2,7 +2,7 @@
 
 #include "core/alloc.h"
 #include "core/string.h"
-#include "core/option.h"
+#include "adt/option.h"
 
 #include <ctype.h>
 #include <stdlib.h>

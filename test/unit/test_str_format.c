@@ -1,5 +1,5 @@
 #include "test_unicode_helpers.h"
-#include "strings/format.h"
+#include "text/strings/format.h"
 
 // ===================================================================
 // Tests

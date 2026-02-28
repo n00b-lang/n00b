@@ -13,7 +13,7 @@
 
 #include "n00b.h"
 #include "core/vtable.h"
-#include "core/option.h"
+#include "adt/option.h"
 
 /**
  * @brief Classification of literal syntax for a type.

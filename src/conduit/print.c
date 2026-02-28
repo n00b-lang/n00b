@@ -12,10 +12,10 @@
 #include "core/type_info.h"
 #include "core/string.h"
 #include "core/buffer.h"
-#include "strings/format.h"
-#include "strings/string_convert.h"
-#include "strings/string_ops.h"
-#include "strings/fmt_numbers.h"
+#include "text/strings/format.h"
+#include "text/strings/string_convert.h"
+#include "text/strings/string_ops.h"
+#include "text/strings/fmt_numbers.h"
 #include <string.h>
 #include <stdio.h>
 

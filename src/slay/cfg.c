@@ -8,8 +8,8 @@
 #include "slay/cf_label.h"
 #include "slay/symtab.h"
 #include "core/alloc.h"
-#include "core/tree.h"
-#include "strings/string_ops.h"
+#include "adt/tree.h"
+#include "text/strings/string_ops.h"
 
 #include <assert.h>
 

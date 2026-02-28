@@ -2,12 +2,12 @@
 #include <assert.h>
 #include "n00b.h"
 #include "core/alloc.h"
-#include "core/option.h"
+#include "adt/option.h"
 #include "core/runtime.h"
 #include "core/string.h"
-#include "render/plane.h"
-#include "render/box.h"
-#include "strings/string_ops.h"
+#include "display/render/plane.h"
+#include "display/render/box.h"
+#include "text/strings/string_ops.h"
 
 // ====================================================================
 // Tests

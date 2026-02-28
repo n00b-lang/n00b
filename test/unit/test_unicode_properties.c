@@ -1,6 +1,6 @@
 #include "test_unicode_helpers.h"
-#include "unicode/properties.h"
-#include "unicode/encoding.h"
+#include "text/unicode/properties.h"
+#include "text/unicode/encoding.h"
 
 
 TEST(test_general_category)

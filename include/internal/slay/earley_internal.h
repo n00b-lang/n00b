@@ -11,8 +11,8 @@
 
 #include "slay/parse_forest.h"
 #include "internal/slay/grammar_internal.h"
-#include "core/list.h"
-#include "core/dict.h"
+#include "adt/list.h"
+#include "adt/dict.h"
 
 n00b_dict_decl(n00b_earley_item_t *, bool);
 n00b_dict_decl(n00b_earley_item_t *, void *);

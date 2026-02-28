@@ -12,11 +12,11 @@
 #include "internal/slay/pwz_internal.h"
 #include "internal/slay/grammar_internal.h"
 #include "internal/slay/unicode_class.h"
-#include "unicode/encoding.h"
+#include "text/unicode/encoding.h"
 #include "core/alloc.h"
-#include "core/array.h"
-#include "core/list.h"
-#include "strings/string_ops.h"
+#include "adt/array.h"
+#include "adt/list.h"
+#include "text/strings/string_ops.h"
 #include "parsers/token_stream.h"
 
 #include <assert.h>

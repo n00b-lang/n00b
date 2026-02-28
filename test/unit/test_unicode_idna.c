@@ -1,6 +1,6 @@
 #include "test_unicode_helpers.h"
-#include "unicode/idna.h"
-#include "unicode/encoding.h"
+#include "text/unicode/idna.h"
+#include "text/unicode/encoding.h"
 
 TEST(test_ascii_passthrough)
 {

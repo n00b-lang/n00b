@@ -73,3 +73,23 @@ n00b_parse_tree_t *n00b_tree_resolve_child_ref(n00b_grammar_t    *g,
  */
 n00b_parse_tree_t *n00b_tree_get_nth_nt_child(n00b_parse_tree_t *node,
                                                 int32_t            n);
+
+/**
+ * @brief Extract the full dotted path from a left-recursive `<member-chain>`.
+ *
+ * The `<member-chain>` grammar is:
+ * ```
+ * <member-chain> ::= <member-chain> "." IDENTIFIER | IDENTIFIER
+ * ```
+ *
+ * Walks the tree recursively and joins identifiers with `.` to produce
+ * strings like `"pkg.sub.module"`.
+ *
+ * @param node  Root of the `<member-chain>` subtree.
+ * @param buf   Output buffer (caller provides, must be large enough).
+ * @param cap   Capacity of @p buf in bytes.
+ * @return Length written (excluding NUL), or -1 on error.
+ */
+int32_t n00b_tree_extract_member_chain(n00b_parse_tree_t *node,
+                                         char              *buf,
+                                         int32_t            cap);

@@ -1,5 +1,5 @@
 #include "test_unicode_helpers.h"
-#include "strings/md_lines.h"
+#include "text/strings/md_lines.h"
 
 // ===================================================================
 // Tests

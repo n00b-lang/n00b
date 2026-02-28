@@ -1,6 +1,6 @@
 #include "test_unicode_helpers.h"
-#include "unicode/normalization.h"
-#include "unicode/encoding.h"
+#include "text/unicode/normalization.h"
+#include "text/unicode/encoding.h"
 
 // ---------------------------------------------------------------------------
 // Manual unit tests

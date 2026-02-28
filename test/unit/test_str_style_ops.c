@@ -1,5 +1,5 @@
 #include "test_unicode_helpers.h"
-#include "strings/style_ops.h"
+#include "text/strings/style_ops.h"
 
 // ===================================================================
 // Tests

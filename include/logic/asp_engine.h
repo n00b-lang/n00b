@@ -24,9 +24,9 @@
 #include "logic/asp_intern.h"
 #include "logic/asp_relation.h"
 #include "logic/asp_rule.h"
-#include "core/option.h"
-#include "core/result.h"
-#include "core/list.h"
+#include "adt/option.h"
+#include "adt/result.h"
+#include "adt/list.h"
 
 n00b_option_decl(n00b_dl_rel_id_t);
 

@@ -1,6 +1,6 @@
 #include "test_unicode_helpers.h"
-#include "unicode/bidi.h"
-#include "unicode/encoding.h"
+#include "text/unicode/bidi.h"
+#include "text/unicode/encoding.h"
 
 // ---------------------------------------------------------------------------
 // Manual unit tests

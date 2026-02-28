@@ -20,10 +20,10 @@
 #pragma once
 
 #include "conduit/rw.h"
-#include "core/option.h"
+#include "adt/option.h"
 #include "core/type_info.h"
 #include "core/string.h"
-#include "strings/format.h"
+#include "text/strings/format.h"
 
 // n00b_option_t(n00b_string_t) is declared in core/string.h (included above).
 

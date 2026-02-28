@@ -4,7 +4,7 @@
 #include "n00b.h"
 #include "core/alloc.h"
 #include "core/runtime.h"
-#include "strings/string_ops.h"
+#include "text/strings/string_ops.h"
 #include "slay/grammar.h"
 #include "internal/slay/grammar_internal.h"
 #include "internal/slay/earley_internal.h"

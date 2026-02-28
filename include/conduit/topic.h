@@ -17,7 +17,7 @@
 
 #include "conduit/subscription.h"
 #include "conduit/publisher.h"
-#include "core/variant.h"
+#include "adt/variant.h"
 #include "core/string.h"
 
 // ============================================================================

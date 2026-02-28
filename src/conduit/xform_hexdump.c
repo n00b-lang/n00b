@@ -9,7 +9,7 @@
 #include "conduit/xform_hexdump.h"
 #include "core/alloc.h"
 #include "core/string.h"
-#include "strings/string_style.h"
+#include "text/strings/string_style.h"
 
 #include <string.h>
 

@@ -14,7 +14,7 @@
 #include "core/runtime.h"
 #include "core/thread.h"
 #include "core/time.h"
-#include "strings/string_ops.h"
+#include "text/strings/string_ops.h"
 #ifndef _WIN32
 #include <signal.h>
 #include <pthread.h>

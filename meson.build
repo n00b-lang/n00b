@@ -238,11 +238,8 @@ n00b_core = [
     'src/core/pool.c',
     'src/core/memory_info.c',
     'src/core/hash.c',
-    'src/core/dict_untyped.c',
-    'src/core/dict.c',
     'src/core/stw.c',
     'src/core/gc.c',
-    'src/core/interval_tree.c',
     'src/core/buffer.c',
     'src/core/data_lock.c',
     'src/core/string.c',
@@ -252,6 +249,16 @@ n00b_core = [
     'src/core/condition.c',
     'src/core/type_registry.c',
     'src/core/builtin_types.c',
+]
+
+# ============================================================================
+# Abstract data types
+# ============================================================================
+
+n00b_adt = [
+    'src/adt/dict_untyped.c',
+    'src/adt/dict.c',
+    'src/adt/interval_tree.c',
 ]
 
 python3 = find_program('python3')
@@ -288,68 +295,75 @@ gen_unicode_tables = custom_target('gen_unicode_tables',
     output: gen_unicode_file_names,
     command: [
         python3,
-        meson.project_source_root() / 'src' / 'unicode' / 'tools' / 'gen_tables.py',
+        meson.project_source_root() / 'src' / 'text' / 'unicode' / 'tools' / 'gen_tables.py',
         '--out-dir', '@OUTDIR@',
-        '--cache-dir', meson.project_source_root() / 'src' / 'unicode' / '.unicode_cache',
+        '--cache-dir', meson.project_source_root() / 'src' / 'text' / 'unicode' / '.unicode_cache',
         '--test-data-dir', meson.project_source_root() / 'test' / 'data',
     ],
-    depend_files: files('src/unicode/tools/gen_tables.py'),
+    depend_files: files('src/text/unicode/tools/gen_tables.py'),
 )
 
-n00b_unicode = [
-    'src/unicode/encoding.c',
-    'src/unicode/properties.c',
-    'src/unicode/casemap.c',
-    'src/unicode/normalization.c',
-    'src/unicode/segmentation.c',
-    'src/unicode/linebreak.c',
-    'src/unicode/bidi.c',
-    'src/unicode/collation.c',
-    'src/unicode/identifiers.c',
-    'src/unicode/security.c',
-    'src/unicode/idna.c',
-    'src/unicode/emoji.c',
-    'src/unicode/query.c',
+# ============================================================================
+# Text processing (unicode + strings)
+# ============================================================================
+
+n00b_text = [
+    # Unicode algorithms
+    'src/text/unicode/encoding.c',
+    'src/text/unicode/properties.c',
+    'src/text/unicode/casemap.c',
+    'src/text/unicode/normalization.c',
+    'src/text/unicode/segmentation.c',
+    'src/text/unicode/linebreak.c',
+    'src/text/unicode/bidi.c',
+    'src/text/unicode/collation.c',
+    'src/text/unicode/identifiers.c',
+    'src/text/unicode/security.c',
+    'src/text/unicode/idna.c',
+    'src/text/unicode/emoji.c',
+    'src/text/unicode/query.c',
+    # String formatting, styling, rendering
+    'src/text/strings/string_ops.c',
+    'src/text/strings/string_convert.c',
+    'src/text/strings/fptostr.c',
+    'src/text/strings/fmt_numbers.c',
+    'src/text/strings/ansi.c',
+    'src/text/strings/markdown.c',
+    'src/text/strings/style_ops.c',
+    'src/text/strings/string_style.c',
+    'src/text/strings/style_registry.c',
+    'src/text/strings/rich_desc.c',
+    'src/text/strings/format_spec.c',
+    'src/text/strings/format.c',
+    'src/text/strings/md_render.c',
+    'src/text/strings/md_lines.c',
+    'src/text/strings/theme.c',
 ]
 
-n00b_strings = [
-    'src/strings/string_ops.c',
-    'src/strings/string_convert.c',
-    'src/strings/fptostr.c',
-    'src/strings/fmt_numbers.c',
-    'src/strings/ansi.c',
-    'src/strings/markdown.c',
-    'src/strings/style_ops.c',
-    'src/strings/string_style.c',
-    'src/strings/style_registry.c',
-    'src/strings/rich_desc.c',
-    'src/strings/format_spec.c',
-    'src/strings/format.c',
-    'src/strings/md_render.c',
-    'src/strings/md_lines.c',
-    'src/strings/theme.c',
-]
+# ============================================================================
+# Display (render + table + layout + hexdump)
+# ============================================================================
 
-n00b_render = [
-    'src/core/layout.c',
-    'src/render/cell.c',
-    'src/render/border_themes.c',
-    'src/render/plane.c',
-    'src/render/box.c',
-    'src/render/composite.c',
-    'src/render/canvas.c',
-    'src/render/backend_stream.c',
-    'src/render/backend_ansi.c',
-    'src/render/backend_ansi_inline.c',
-    'src/render/backend_dumb.c',
-    'src/render/backend_registry.c',
-]
-
-n00b_table = [
-    'src/table/table.c',
-    'src/table/table_layout.c',
-    'src/table/table_render.c',
-    'src/table/table_styles.c',
+n00b_display = [
+    'src/display/layout.c',
+    'src/display/hexdump.c',
+    # Render engine
+    'src/display/render/cell.c',
+    'src/display/render/border_themes.c',
+    'src/display/render/plane.c',
+    'src/display/render/box.c',
+    'src/display/render/composite.c',
+    'src/display/render/canvas.c',
+    'src/display/render/backend_stream.c',
+    'src/display/render/backend_ansi.c',
+    'src/display/render/backend_ansi_inline.c',
+    'src/display/render/backend_dumb.c',
+    'src/display/render/backend_registry.c',
+    # Table
+    'src/display/table/table.c',
+    'src/display/table/table_layout.c',
+    'src/display/table/table_render.c',
+    'src/display/table/table_styles.c',
 ]
 
 # ============================================================================
@@ -361,65 +375,16 @@ n00b_conduit = [
     'src/conduit/subscription.c',
     'src/conduit/thread_lifecycle.c',
     'src/conduit/service.c',
-]
-
-# IO backends (platform-conditional)
-n00b_conduit_io = [
+    # IO core
     'src/conduit/io.c',
-]
-
-if target_os != 'windows'
-    n00b_conduit_io += 'src/conduit/io_poll.c'
-endif
-
-if target_os == 'darwin' or target_os in ['freebsd', 'openbsd', 'netbsd']
-    n00b_conduit_io += 'src/conduit/io_kqueue.c'
-endif
-if target_os == 'linux'
-    n00b_conduit_io += 'src/conduit/io_epoll.c'
-    liburing_dep = dependency('liburing', required: false)
-    if liburing_dep.found()
-        n00b_conduit_io += 'src/conduit/io_uring.c'
-        deps += liburing_dep
-    endif
-endif
-if target_os == 'windows'
-    n00b_conduit_io += 'src/conduit/io_wsa.c'
-    ws2_dep = cc.find_library('ws2_32', required: true)
-    sync_dep = cc.find_library('synchronization', required: true)
-    deps += [ws2_dep, sync_dep]
-endif
-
-n00b_conduit += n00b_conduit_io
-
-# Managed IO (Phase 3)
-n00b_conduit_managed = [
+    # Managed FDs
     'src/conduit/fd_managed.c',
     'src/conduit/fd_writer.c',
     'src/conduit/socket.c',
     'src/conduit/file.c',
     'src/conduit/timer.c',
     'src/conduit/user_event.c',
-]
-
-if target_os != 'windows'
-    n00b_conduit_managed += 'src/conduit/signal.c'
-    n00b_conduit_managed += 'src/conduit/proc_lifecycle.c'
-    n00b_conduit_managed += 'src/conduit/file_change.c'
-endif
-
-n00b_conduit += n00b_conduit_managed
-
-# IO layer (subprocess management)
-n00b_io = []
-if target_os != 'windows'
-    n00b_io += 'src/io/subproc.c'
-endif
-
-n00b_conduit += n00b_io
-
-# Pipeline framework (Phase 4)
-n00b_conduit_pipeline = [
+    # Pipeline / transforms
     'src/conduit/xform.c',
     'src/conduit/xform_linebuf.c',
     'src/conduit/xform_ansi_strip.c',
@@ -427,12 +392,38 @@ n00b_conduit_pipeline = [
     'src/conduit/xform_hexdump.c',
     'src/conduit/xform_json.c',
     'src/conduit/xform_http.c',
+    # Print API
+    'src/conduit/print.c',
 ]
 
-n00b_conduit += n00b_conduit_pipeline
+# Platform-conditional IO backends
+if target_os != 'windows'
+    n00b_conduit += [
+        'src/conduit/io_poll.c',
+        'src/conduit/signal.c',
+        'src/conduit/proc_lifecycle.c',
+        'src/conduit/file_change.c',
+        'src/conduit/subproc.c',
+    ]
+endif
 
-# Print API (Phase 4)
-n00b_conduit += ['src/conduit/print.c']
+if target_os == 'darwin' or target_os in ['freebsd', 'openbsd', 'netbsd']
+    n00b_conduit += 'src/conduit/io_kqueue.c'
+endif
+if target_os == 'linux'
+    n00b_conduit += 'src/conduit/io_epoll.c'
+    liburing_dep = dependency('liburing', required: false)
+    if liburing_dep.found()
+        n00b_conduit += 'src/conduit/io_uring.c'
+        deps += liburing_dep
+    endif
+endif
+if target_os == 'windows'
+    n00b_conduit += 'src/conduit/io_wsa.c'
+    ws2_dep = cc.find_library('ws2_32', required: true)
+    sync_dep = cc.find_library('synchronization', required: true)
+    deps += [ws2_dep, sync_dep]
+endif
 
 # ============================================================================
 # Parsers
@@ -493,14 +484,7 @@ n00b_compiler = [
     'src/n00b/n00b_tokenizer.c',
     'src/n00b/n00b_type_spec.c',
     'src/n00b/n00b_compile.c',
-]
-
-# ============================================================================
-# Hexdump library
-# ============================================================================
-
-n00b_hexdump = [
-    'src/hexdump/hexdump.c',
+    'src/n00b/n00b_module_loader.c',
 ]
 
 libdl_dep = cc.find_library('dl', required: false)
@@ -532,7 +516,7 @@ n00b_typecheck = [
     'src/typecheck/print.c',
 ]
 
-n00b_dll_src = n00b_core + n00b_unicode + n00b_strings + n00b_render + n00b_table + n00b_conduit + n00b_parsers + n00b_hexdump + n00b_logic + n00b_slay + n00b_typecheck + n00b_compiler
+n00b_dll_src = n00b_core + n00b_adt + n00b_text + n00b_display + n00b_conduit + n00b_parsers + n00b_logic + n00b_slay + n00b_typecheck + n00b_compiler
 
 # Build generated unicode tables with --no-ncc (they are pure data,
 # no ncc extensions, and parsing them is extremely expensive).

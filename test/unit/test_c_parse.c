@@ -11,7 +11,7 @@
 #include "core/alloc.h"
 #include "core/buffer.h"
 #include "core/runtime.h"
-#include "core/option.h"
+#include "adt/option.h"
 #include "parsers/scan_recipes.h"
 #include "parsers/scanner.h"
 #include "parsers/token_stream.h"
@@ -22,7 +22,7 @@
 #include "slay/parse_tree.h"
 #include "slay/symtab.h"
 #include "slay/token.h"
-#include "strings/string_ops.h"
+#include "text/strings/string_ops.h"
 #include "internal/slay/grammar_internal.h"
 
 // ============================================================================

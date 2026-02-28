@@ -10,7 +10,7 @@
 #pragma once
 
 #include "n00b.h"
-#include "core/array.h"
+#include "adt/array.h"
 
 /**
  * @brief Indices into the core vtable's bare function pointer array.

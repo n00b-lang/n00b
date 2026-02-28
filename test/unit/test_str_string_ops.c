@@ -1,8 +1,8 @@
 #include "test_unicode_helpers.h"
-#include "strings/string_ops.h"
-#include "unicode/encoding.h"
-#include "core/result.h"
-#include "core/option.h"
+#include "text/strings/string_ops.h"
+#include "text/unicode/encoding.h"
+#include "adt/result.h"
+#include "adt/option.h"
 
 TEST(test_cat)
 {

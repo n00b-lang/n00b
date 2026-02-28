@@ -4,7 +4,7 @@
 #include "n00b.h"
 #include "core/alloc.h"
 #include "core/runtime.h"
-#include "core/array.h"
+#include "adt/array.h"
 
 n00b_array_decl(int);
 

@@ -33,9 +33,9 @@
 #pragma once
 
 #include "n00b.h"
-#include "core/variant.h"
-#include "core/option.h"
-#include "core/list.h"
+#include "adt/variant.h"
+#include "adt/option.h"
+#include "adt/list.h"
 
 // ============================================================================
 // Forward declarations

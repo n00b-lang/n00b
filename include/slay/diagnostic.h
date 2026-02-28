@@ -13,7 +13,7 @@
 
 #include "typecheck/types.h"
 #include "slay/parse_tree.h"
-#include "core/list.h"
+#include "adt/list.h"
 #include "core/string.h"
 
 // ============================================================================

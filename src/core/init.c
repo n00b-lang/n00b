@@ -12,8 +12,8 @@
 #define __N00B_THREAD_INTERNAL
 
 #include "n00b.h"
-#include "core/array.h"
-#include "core/option.h"
+#include "adt/array.h"
+#include "adt/option.h"
 #include "core/runtime.h"
 #include "core/thread.h"
 #include "core/mmaps.h"
@@ -23,8 +23,8 @@
 #include "core/stw.h"
 #include "core/gc.h"
 #include "core/type_info.h"
-#include "strings/style_registry.h"
-#include "strings/theme.h"
+#include "text/strings/style_registry.h"
+#include "text/strings/theme.h"
 #include "core/string.h"
 #include "core/buffer.h"
 #include "conduit/conduit.h"

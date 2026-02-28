@@ -28,10 +28,10 @@
 #include "core/thread.h"
 #include "core/align.h"
 #include "core/mmaps.h"
-#include "core/interval_tree.h"
+#include "adt/interval_tree.h"
 #include "core/runtime.h"
 #include "core/pool.h"
-#include "core/dict_untyped.h"
+#include "adt/dict_untyped.h"
 
 // ============================================================================
 // Forward declarations

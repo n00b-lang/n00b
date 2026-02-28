@@ -14,8 +14,8 @@
 #include "core/alloc.h"
 #include "core/hash.h"
 #include "core/string.h"
-#include "core/list.h"
-#include "strings/string_ops.h"
+#include "adt/list.h"
+#include "text/strings/string_ops.h"
 
 #include <string.h>
 

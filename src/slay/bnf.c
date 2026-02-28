@@ -10,7 +10,7 @@
 #include "slay/pwz.h"
 #include "slay/n00b_tokenizer.h"
 #include "internal/slay/grammar_internal.h"
-#include "strings/string_ops.h"
+#include "text/strings/string_ops.h"
 #include "parsers/scanner.h"
 #include "parsers/scan_recipes.h"
 #include "parsers/token_stream.h"

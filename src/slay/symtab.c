@@ -6,9 +6,9 @@
 
 #include "slay/symtab.h"
 #include "core/alloc.h"
-#include "core/dict_untyped.h"
+#include "adt/dict_untyped.h"
 #include "core/hash.h"
-#include "strings/string_ops.h"
+#include "text/strings/string_ops.h"
 
 #include <string.h>
 

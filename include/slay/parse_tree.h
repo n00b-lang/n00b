@@ -10,7 +10,7 @@
  */
 
 #include "slay/types.h"
-#include "core/tree.h"
+#include "adt/tree.h"
 
 // ============================================================================
 // Parse tree type

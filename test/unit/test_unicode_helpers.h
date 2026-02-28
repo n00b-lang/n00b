@@ -10,8 +10,8 @@
 #include "core/alloc.h"
 #include "core/runtime.h"
 #include "core/string.h"
-#include "unicode/encoding.h"
-#include "internal/unicode/raw.h"
+#include "text/unicode/encoding.h"
+#include "internal/text/unicode/raw.h"
 
 // ---------------------------------------------------------------------------
 // Test harness macros

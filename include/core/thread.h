@@ -11,8 +11,8 @@
 
 #include "n00b.h"
 #include "core/rt_access.h"
-#include "core/option.h"
-#include "core/result.h"
+#include "adt/option.h"
+#include "adt/result.h"
 
 n00b_option_decl(pthread_attr_t);
 n00b_result_decl(n00b_thread_t *);

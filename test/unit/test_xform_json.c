@@ -12,7 +12,7 @@
 #include "core/alloc.h"
 #include "core/runtime.h"
 #include "core/atomic.h"
-#include "core/dict_untyped.h"
+#include "adt/dict_untyped.h"
 
 // ============================================================================
 // Helpers

@@ -32,8 +32,8 @@
 #include "slay/cf_label.h"
 #include "internal/slay/grammar_internal.h"
 #include "core/alloc.h"
-#include "core/list.h"
-#include "strings/string_ops.h"
+#include "adt/list.h"
+#include "text/strings/string_ops.h"
 
 #include "typecheck/types.h"
 #include "typecheck/context.h"

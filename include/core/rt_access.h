@@ -10,7 +10,7 @@
 #pragma once
 
 #include "n00b.h"
-#include "core/option.h"
+#include "adt/option.h"
 
 /** @brief Global optional holding the default runtime instance. */
 extern n00b_option_t(n00b_runtime_t *) n00b_default_runtime;

@@ -14,7 +14,7 @@
  */
 
 #include "slay/cf_label.h"
-#include "core/list.h"
+#include "adt/list.h"
 
 typedef struct n00b_symtab_t n00b_symtab_t;
 

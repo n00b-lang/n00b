@@ -4,6 +4,9 @@
  *
  * All direct MIR API interaction is concentrated here. The codegen
  * engine (codegen.c) calls these helpers to emit instructions.
+ *
+ * Functions access per-module state (cur_func, labels, temps) through
+ * session->active_module, and the MIR context through session->mir_ctx.
  */
 
 #include "n00b.h"
@@ -45,41 +48,42 @@ n00b_cg_mir_type(n00b_cg_type_tag_t tag)
 // ============================================================================
 
 MIR_op_t
-n00b_cg_mir_op(n00b_codegen_t *cg, n00b_cg_val_t val)
+n00b_cg_mir_op(n00b_cg_session_t *s, n00b_cg_val_t val)
 {
+    n00b_cg_module_t *m = s->active_module;
+
     switch (val.kind) {
     case N00B_CG_VAL_REG:
-        return MIR_new_reg_op(cg->mir_ctx, (MIR_reg_t)val.id);
+        return MIR_new_reg_op(s->mir_ctx, (MIR_reg_t)val.id);
 
     case N00B_CG_VAL_IMM:
         switch (val.type_tag) {
         case N00B_CG_F32: {
             float f;
             memcpy(&f, &val.aux, sizeof(float));
-            return MIR_new_float_op(cg->mir_ctx, f);
+            return MIR_new_float_op(s->mir_ctx, f);
         }
         case N00B_CG_F64: {
             double d;
             memcpy(&d, &val.aux, sizeof(double));
-            return MIR_new_double_op(cg->mir_ctx, d);
+            return MIR_new_double_op(s->mir_ctx, d);
         }
         default:
-            return MIR_new_int_op(cg->mir_ctx, (int64_t)val.aux);
+            return MIR_new_int_op(s->mir_ctx, (int64_t)val.aux);
         }
 
     case N00B_CG_VAL_LABEL:
-        return MIR_new_label_op(cg->mir_ctx, cg->labels[val.id]);
+        return MIR_new_label_op(s->mir_ctx, m->labels[val.id]);
 
     case N00B_CG_VAL_MEM: {
         MIR_type_t mt = n00b_cg_mir_type(val.type_tag);
-        return MIR_new_mem_op(cg->mir_ctx, mt, (int64_t)val.aux,
+        return MIR_new_mem_op(s->mir_ctx, mt, (int64_t)val.aux,
                               (MIR_reg_t)val.id, 0, 1);
     }
 
     case N00B_CG_VAL_VOID:
     default:
-        // Should not happen in normal usage; return zero.
-        return MIR_new_int_op(cg->mir_ctx, 0);
+        return MIR_new_int_op(s->mir_ctx, 0);
     }
 }
 
@@ -88,13 +92,15 @@ n00b_cg_mir_op(n00b_codegen_t *cg, n00b_cg_val_t val)
 // ============================================================================
 
 n00b_cg_val_t
-n00b_cg_temp(n00b_codegen_t *cg, n00b_cg_type_tag_t type)
+n00b_cg_temp(n00b_cg_session_t *s, n00b_cg_type_tag_t type)
 {
+    n00b_cg_module_t *m = s->active_module;
+
     char name[32];
-    snprintf(name, sizeof(name), "_t%d", cg->temp_counter++);
+    snprintf(name, sizeof(name), "_t%d", m->temp_counter++);
 
     MIR_type_t mt  = n00b_cg_mir_type(type);
-    MIR_reg_t  reg = MIR_new_func_reg(cg->mir_ctx, cg->cur_func->u.func,
+    MIR_reg_t  reg = MIR_new_func_reg(s->mir_ctx, m->cur_func->u.func,
                                        mt, name);
 
     return (n00b_cg_val_t){
@@ -107,9 +113,6 @@ n00b_cg_temp(n00b_codegen_t *cg, n00b_cg_type_tag_t type)
 // ============================================================================
 // Binary operation dispatch table
 // ============================================================================
-
-// Maps (semantic_op, type_tag_class) -> MIR_insn_code_t.
-// Type classes: signed int (I8..I64/BOOL), unsigned (U8..U64), F32, F64.
 
 static inline bool
 is_signed_int(n00b_cg_type_tag_t t)
@@ -209,14 +212,14 @@ binop_insn(n00b_cg_semantic_op_t op, n00b_cg_type_tag_t type)
 // ============================================================================
 
 n00b_cg_val_t
-n00b_cg_emit_binop(n00b_codegen_t       *cg,
+n00b_cg_emit_binop(n00b_cg_session_t    *s,
                     n00b_cg_semantic_op_t op,
                     n00b_cg_val_t          a,
                     n00b_cg_val_t          b)
 {
+    n00b_cg_module_t  *m = s->active_module;
     n00b_cg_type_tag_t result_type = a.type_tag;
 
-    // Comparisons always produce I64 (boolean).
     if (op >= N00B_CG_OP_EQ && op <= N00B_CG_OP_GE) {
         result_type = N00B_CG_I64;
     }
@@ -227,13 +230,13 @@ n00b_cg_emit_binop(n00b_codegen_t       *cg,
         return N00B_CG_VOID_VAL;
     }
 
-    n00b_cg_val_t dst = n00b_cg_temp(cg, result_type);
+    n00b_cg_val_t dst = n00b_cg_temp(s, result_type);
 
-    MIR_append_insn(cg->mir_ctx, cg->cur_func,
-                    MIR_new_insn(cg->mir_ctx, insn,
-                                 n00b_cg_mir_op(cg, dst),
-                                 n00b_cg_mir_op(cg, a),
-                                 n00b_cg_mir_op(cg, b)));
+    MIR_append_insn(s->mir_ctx, m->cur_func,
+                    MIR_new_insn(s->mir_ctx, insn,
+                                 n00b_cg_mir_op(s, dst),
+                                 n00b_cg_mir_op(s, a),
+                                 n00b_cg_mir_op(s, b)));
 
     return dst;
 }
@@ -243,11 +246,12 @@ n00b_cg_emit_binop(n00b_codegen_t       *cg,
 // ============================================================================
 
 n00b_cg_val_t
-n00b_cg_emit_unop(n00b_codegen_t       *cg,
+n00b_cg_emit_unop(n00b_cg_session_t    *s,
                    n00b_cg_semantic_op_t op,
                    n00b_cg_val_t          a)
 {
-    n00b_cg_val_t dst = n00b_cg_temp(cg, a.type_tag);
+    n00b_cg_module_t *m = s->active_module;
+    n00b_cg_val_t     dst = n00b_cg_temp(s, a.type_tag);
 
     MIR_insn_code_t insn;
 
@@ -264,22 +268,20 @@ n00b_cg_emit_unop(n00b_codegen_t       *cg,
 
     case N00B_CG_OP_NOT:
     case N00B_CG_OP_LOGICAL_NOT: {
-        // Bitwise NOT via XOR with -1, or logical NOT via EQ with 0.
         if (op == N00B_CG_OP_LOGICAL_NOT) {
             dst.type_tag = N00B_CG_I64;
-            MIR_append_insn(cg->mir_ctx, cg->cur_func,
-                            MIR_new_insn(cg->mir_ctx, MIR_EQ,
-                                         n00b_cg_mir_op(cg, dst),
-                                         n00b_cg_mir_op(cg, a),
-                                         MIR_new_int_op(cg->mir_ctx, 0)));
+            MIR_append_insn(s->mir_ctx, m->cur_func,
+                            MIR_new_insn(s->mir_ctx, MIR_EQ,
+                                         n00b_cg_mir_op(s, dst),
+                                         n00b_cg_mir_op(s, a),
+                                         MIR_new_int_op(s->mir_ctx, 0)));
             return dst;
         }
-        // Bitwise NOT: XOR with all-ones.
-        MIR_append_insn(cg->mir_ctx, cg->cur_func,
-                        MIR_new_insn(cg->mir_ctx, MIR_XOR,
-                                     n00b_cg_mir_op(cg, dst),
-                                     n00b_cg_mir_op(cg, a),
-                                     MIR_new_int_op(cg->mir_ctx, -1)));
+        MIR_append_insn(s->mir_ctx, m->cur_func,
+                        MIR_new_insn(s->mir_ctx, MIR_XOR,
+                                     n00b_cg_mir_op(s, dst),
+                                     n00b_cg_mir_op(s, a),
+                                     MIR_new_int_op(s->mir_ctx, -1)));
         return dst;
     }
 
@@ -287,10 +289,10 @@ n00b_cg_emit_unop(n00b_codegen_t       *cg,
         return N00B_CG_VOID_VAL;
     }
 
-    MIR_append_insn(cg->mir_ctx, cg->cur_func,
-                    MIR_new_insn(cg->mir_ctx, insn,
-                                 n00b_cg_mir_op(cg, dst),
-                                 n00b_cg_mir_op(cg, a)));
+    MIR_append_insn(s->mir_ctx, m->cur_func,
+                    MIR_new_insn(s->mir_ctx, insn,
+                                 n00b_cg_mir_op(s, dst),
+                                 n00b_cg_mir_op(s, a)));
 
     return dst;
 }
@@ -299,75 +301,76 @@ n00b_cg_emit_unop(n00b_codegen_t       *cg,
 // Public builder: Arithmetic / logic
 // ============================================================================
 
-n00b_cg_val_t n00b_cg_emit_add(n00b_codegen_t *cg, n00b_cg_val_t a, n00b_cg_val_t b)
-{ return n00b_cg_emit_binop(cg, N00B_CG_OP_ADD, a, b); }
+n00b_cg_val_t n00b_cg_emit_add(n00b_cg_session_t *s, n00b_cg_val_t a, n00b_cg_val_t b)
+{ return n00b_cg_emit_binop(s, N00B_CG_OP_ADD, a, b); }
 
-n00b_cg_val_t n00b_cg_emit_sub(n00b_codegen_t *cg, n00b_cg_val_t a, n00b_cg_val_t b)
-{ return n00b_cg_emit_binop(cg, N00B_CG_OP_SUB, a, b); }
+n00b_cg_val_t n00b_cg_emit_sub(n00b_cg_session_t *s, n00b_cg_val_t a, n00b_cg_val_t b)
+{ return n00b_cg_emit_binop(s, N00B_CG_OP_SUB, a, b); }
 
-n00b_cg_val_t n00b_cg_emit_mul(n00b_codegen_t *cg, n00b_cg_val_t a, n00b_cg_val_t b)
-{ return n00b_cg_emit_binop(cg, N00B_CG_OP_MUL, a, b); }
+n00b_cg_val_t n00b_cg_emit_mul(n00b_cg_session_t *s, n00b_cg_val_t a, n00b_cg_val_t b)
+{ return n00b_cg_emit_binop(s, N00B_CG_OP_MUL, a, b); }
 
-n00b_cg_val_t n00b_cg_emit_div(n00b_codegen_t *cg, n00b_cg_val_t a, n00b_cg_val_t b)
-{ return n00b_cg_emit_binop(cg, N00B_CG_OP_DIV, a, b); }
+n00b_cg_val_t n00b_cg_emit_div(n00b_cg_session_t *s, n00b_cg_val_t a, n00b_cg_val_t b)
+{ return n00b_cg_emit_binop(s, N00B_CG_OP_DIV, a, b); }
 
-n00b_cg_val_t n00b_cg_emit_mod(n00b_codegen_t *cg, n00b_cg_val_t a, n00b_cg_val_t b)
-{ return n00b_cg_emit_binop(cg, N00B_CG_OP_MOD, a, b); }
+n00b_cg_val_t n00b_cg_emit_mod(n00b_cg_session_t *s, n00b_cg_val_t a, n00b_cg_val_t b)
+{ return n00b_cg_emit_binop(s, N00B_CG_OP_MOD, a, b); }
 
-n00b_cg_val_t n00b_cg_emit_neg(n00b_codegen_t *cg, n00b_cg_val_t a)
-{ return n00b_cg_emit_unop(cg, N00B_CG_OP_NEG, a); }
+n00b_cg_val_t n00b_cg_emit_neg(n00b_cg_session_t *s, n00b_cg_val_t a)
+{ return n00b_cg_emit_unop(s, N00B_CG_OP_NEG, a); }
 
-n00b_cg_val_t n00b_cg_emit_and(n00b_codegen_t *cg, n00b_cg_val_t a, n00b_cg_val_t b)
-{ return n00b_cg_emit_binop(cg, N00B_CG_OP_AND, a, b); }
+n00b_cg_val_t n00b_cg_emit_and(n00b_cg_session_t *s, n00b_cg_val_t a, n00b_cg_val_t b)
+{ return n00b_cg_emit_binop(s, N00B_CG_OP_AND, a, b); }
 
-n00b_cg_val_t n00b_cg_emit_or(n00b_codegen_t *cg, n00b_cg_val_t a, n00b_cg_val_t b)
-{ return n00b_cg_emit_binop(cg, N00B_CG_OP_OR, a, b); }
+n00b_cg_val_t n00b_cg_emit_or(n00b_cg_session_t *s, n00b_cg_val_t a, n00b_cg_val_t b)
+{ return n00b_cg_emit_binop(s, N00B_CG_OP_OR, a, b); }
 
-n00b_cg_val_t n00b_cg_emit_xor(n00b_codegen_t *cg, n00b_cg_val_t a, n00b_cg_val_t b)
-{ return n00b_cg_emit_binop(cg, N00B_CG_OP_XOR, a, b); }
+n00b_cg_val_t n00b_cg_emit_xor(n00b_cg_session_t *s, n00b_cg_val_t a, n00b_cg_val_t b)
+{ return n00b_cg_emit_binop(s, N00B_CG_OP_XOR, a, b); }
 
-n00b_cg_val_t n00b_cg_emit_not(n00b_codegen_t *cg, n00b_cg_val_t a)
-{ return n00b_cg_emit_unop(cg, N00B_CG_OP_NOT, a); }
+n00b_cg_val_t n00b_cg_emit_not(n00b_cg_session_t *s, n00b_cg_val_t a)
+{ return n00b_cg_emit_unop(s, N00B_CG_OP_NOT, a); }
 
-n00b_cg_val_t n00b_cg_emit_shl(n00b_codegen_t *cg, n00b_cg_val_t a, n00b_cg_val_t b)
-{ return n00b_cg_emit_binop(cg, N00B_CG_OP_SHL, a, b); }
+n00b_cg_val_t n00b_cg_emit_shl(n00b_cg_session_t *s, n00b_cg_val_t a, n00b_cg_val_t b)
+{ return n00b_cg_emit_binop(s, N00B_CG_OP_SHL, a, b); }
 
-n00b_cg_val_t n00b_cg_emit_shr(n00b_codegen_t *cg, n00b_cg_val_t a, n00b_cg_val_t b)
-{ return n00b_cg_emit_binop(cg, N00B_CG_OP_SHR, a, b); }
+n00b_cg_val_t n00b_cg_emit_shr(n00b_cg_session_t *s, n00b_cg_val_t a, n00b_cg_val_t b)
+{ return n00b_cg_emit_binop(s, N00B_CG_OP_SHR, a, b); }
 
-n00b_cg_val_t n00b_cg_emit_eq(n00b_codegen_t *cg, n00b_cg_val_t a, n00b_cg_val_t b)
-{ return n00b_cg_emit_binop(cg, N00B_CG_OP_EQ, a, b); }
+n00b_cg_val_t n00b_cg_emit_eq(n00b_cg_session_t *s, n00b_cg_val_t a, n00b_cg_val_t b)
+{ return n00b_cg_emit_binop(s, N00B_CG_OP_EQ, a, b); }
 
-n00b_cg_val_t n00b_cg_emit_ne(n00b_codegen_t *cg, n00b_cg_val_t a, n00b_cg_val_t b)
-{ return n00b_cg_emit_binop(cg, N00B_CG_OP_NE, a, b); }
+n00b_cg_val_t n00b_cg_emit_ne(n00b_cg_session_t *s, n00b_cg_val_t a, n00b_cg_val_t b)
+{ return n00b_cg_emit_binop(s, N00B_CG_OP_NE, a, b); }
 
-n00b_cg_val_t n00b_cg_emit_lt(n00b_codegen_t *cg, n00b_cg_val_t a, n00b_cg_val_t b)
-{ return n00b_cg_emit_binop(cg, N00B_CG_OP_LT, a, b); }
+n00b_cg_val_t n00b_cg_emit_lt(n00b_cg_session_t *s, n00b_cg_val_t a, n00b_cg_val_t b)
+{ return n00b_cg_emit_binop(s, N00B_CG_OP_LT, a, b); }
 
-n00b_cg_val_t n00b_cg_emit_le(n00b_codegen_t *cg, n00b_cg_val_t a, n00b_cg_val_t b)
-{ return n00b_cg_emit_binop(cg, N00B_CG_OP_LE, a, b); }
+n00b_cg_val_t n00b_cg_emit_le(n00b_cg_session_t *s, n00b_cg_val_t a, n00b_cg_val_t b)
+{ return n00b_cg_emit_binop(s, N00B_CG_OP_LE, a, b); }
 
-n00b_cg_val_t n00b_cg_emit_gt(n00b_codegen_t *cg, n00b_cg_val_t a, n00b_cg_val_t b)
-{ return n00b_cg_emit_binop(cg, N00B_CG_OP_GT, a, b); }
+n00b_cg_val_t n00b_cg_emit_gt(n00b_cg_session_t *s, n00b_cg_val_t a, n00b_cg_val_t b)
+{ return n00b_cg_emit_binop(s, N00B_CG_OP_GT, a, b); }
 
-n00b_cg_val_t n00b_cg_emit_ge(n00b_codegen_t *cg, n00b_cg_val_t a, n00b_cg_val_t b)
-{ return n00b_cg_emit_binop(cg, N00B_CG_OP_GE, a, b); }
+n00b_cg_val_t n00b_cg_emit_ge(n00b_cg_session_t *s, n00b_cg_val_t a, n00b_cg_val_t b)
+{ return n00b_cg_emit_binop(s, N00B_CG_OP_GE, a, b); }
 
 // ============================================================================
 // Type conversion
 // ============================================================================
 
 n00b_cg_val_t
-n00b_cg_emit_convert(n00b_codegen_t    *cg,
-                      n00b_cg_val_t       src,
-                      n00b_cg_type_tag_t  dst_type)
+n00b_cg_emit_convert(n00b_cg_session_t  *s,
+                      n00b_cg_val_t        src,
+                      n00b_cg_type_tag_t   dst_type)
 {
     if (src.type_tag == dst_type) {
         return src;
     }
 
-    n00b_cg_val_t dst = n00b_cg_temp(cg, dst_type);
-    MIR_insn_code_t insn;
+    n00b_cg_module_t *m = s->active_module;
+    n00b_cg_val_t     dst = n00b_cg_temp(s, dst_type);
+    MIR_insn_code_t   insn;
 
     bool src_int = is_signed_int(src.type_tag) || is_unsigned_int(src.type_tag);
     bool dst_int = is_signed_int(dst_type) || is_unsigned_int(dst_type);
@@ -385,14 +388,13 @@ n00b_cg_emit_convert(n00b_codegen_t    *cg,
     } else if (src.type_tag == N00B_CG_F64 && dst_type == N00B_CG_F32) {
         insn = MIR_D2F;
     } else {
-        // Int-to-int: just MOV (MIR handles width).
         insn = MIR_MOV;
     }
 
-    MIR_append_insn(cg->mir_ctx, cg->cur_func,
-                    MIR_new_insn(cg->mir_ctx, insn,
-                                 n00b_cg_mir_op(cg, dst),
-                                 n00b_cg_mir_op(cg, src)));
+    MIR_append_insn(s->mir_ctx, m->cur_func,
+                    MIR_new_insn(s->mir_ctx, insn,
+                                 n00b_cg_mir_op(s, dst),
+                                 n00b_cg_mir_op(s, src)));
 
     return dst;
 }
@@ -402,9 +404,9 @@ n00b_cg_emit_convert(n00b_codegen_t    *cg,
 // ============================================================================
 
 n00b_cg_val_t
-_n00b_cg_const_i64(n00b_codegen_t *cg, int64_t v)
+_n00b_cg_const_i64(n00b_cg_session_t *s, int64_t v)
 {
-    (void)cg;
+    (void)s;
     return (n00b_cg_val_t){
         .kind     = N00B_CG_VAL_IMM,
         .type_tag = N00B_CG_I64,
@@ -413,9 +415,9 @@ _n00b_cg_const_i64(n00b_codegen_t *cg, int64_t v)
 }
 
 n00b_cg_val_t
-_n00b_cg_const_i32(n00b_codegen_t *cg, int32_t v)
+_n00b_cg_const_i32(n00b_cg_session_t *s, int32_t v)
 {
-    (void)cg;
+    (void)s;
     return (n00b_cg_val_t){
         .kind     = N00B_CG_VAL_IMM,
         .type_tag = N00B_CG_I32,
@@ -424,9 +426,9 @@ _n00b_cg_const_i32(n00b_codegen_t *cg, int32_t v)
 }
 
 n00b_cg_val_t
-_n00b_cg_const_u64(n00b_codegen_t *cg, uint64_t v)
+_n00b_cg_const_u64(n00b_cg_session_t *s, uint64_t v)
 {
-    (void)cg;
+    (void)s;
     return (n00b_cg_val_t){
         .kind     = N00B_CG_VAL_IMM,
         .type_tag = N00B_CG_U64,
@@ -435,9 +437,9 @@ _n00b_cg_const_u64(n00b_codegen_t *cg, uint64_t v)
 }
 
 n00b_cg_val_t
-_n00b_cg_const_f64(n00b_codegen_t *cg, double v)
+_n00b_cg_const_f64(n00b_cg_session_t *s, double v)
 {
-    (void)cg;
+    (void)s;
     uint64_t bits;
     memcpy(&bits, &v, sizeof(bits));
     return (n00b_cg_val_t){
@@ -448,9 +450,9 @@ _n00b_cg_const_f64(n00b_codegen_t *cg, double v)
 }
 
 n00b_cg_val_t
-_n00b_cg_const_f32(n00b_codegen_t *cg, float v)
+_n00b_cg_const_f32(n00b_cg_session_t *s, float v)
 {
-    (void)cg;
+    (void)s;
     uint64_t bits = 0;
     memcpy(&bits, &v, sizeof(float));
     return (n00b_cg_val_t){
@@ -461,9 +463,9 @@ _n00b_cg_const_f32(n00b_codegen_t *cg, float v)
 }
 
 n00b_cg_val_t
-_n00b_cg_const_bool(n00b_codegen_t *cg, bool v)
+_n00b_cg_const_bool(n00b_cg_session_t *s, bool v)
 {
-    (void)cg;
+    (void)s;
     return (n00b_cg_val_t){
         .kind     = N00B_CG_VAL_IMM,
         .type_tag = N00B_CG_BOOL,
@@ -472,9 +474,9 @@ _n00b_cg_const_bool(n00b_codegen_t *cg, bool v)
 }
 
 n00b_cg_val_t
-_n00b_cg_const_ptr(n00b_codegen_t *cg, void *v)
+_n00b_cg_const_ptr(n00b_cg_session_t *s, void *v)
 {
-    (void)cg;
+    (void)s;
     return (n00b_cg_val_t){
         .kind     = N00B_CG_VAL_IMM,
         .type_tag = N00B_CG_PTR,
@@ -487,23 +489,25 @@ _n00b_cg_const_ptr(n00b_codegen_t *cg, void *v)
 // ============================================================================
 
 n00b_cg_val_t
-n00b_cg_label_new(n00b_codegen_t *cg)
+n00b_cg_label_new(n00b_cg_session_t *s)
 {
-    if (cg->label_count >= cg->label_cap) {
-        int32_t new_cap = cg->label_cap ? cg->label_cap * 2 : 16;
+    n00b_cg_module_t *m = s->active_module;
+
+    if (m->label_count >= m->label_cap) {
+        int32_t new_cap = m->label_cap ? m->label_cap * 2 : 16;
         MIR_label_t *new_labels = n00b_alloc_array(MIR_label_t, (size_t)new_cap);
-        if (cg->labels) {
-            memcpy(new_labels, cg->labels,
-                   sizeof(MIR_label_t) * (size_t)cg->label_count);
+        if (m->labels) {
+            memcpy(new_labels, m->labels,
+                   sizeof(MIR_label_t) * (size_t)m->label_count);
         }
-        cg->labels    = new_labels;
-        cg->label_cap = new_cap;
+        m->labels    = new_labels;
+        m->label_cap = new_cap;
     }
 
-    MIR_label_t lbl = MIR_new_label(cg->mir_ctx);
-    int32_t     idx = cg->label_count++;
+    MIR_label_t lbl = MIR_new_label(s->mir_ctx);
+    int32_t     idx = m->label_count++;
 
-    cg->labels[idx] = lbl;
+    m->labels[idx] = lbl;
 
     return (n00b_cg_val_t){
         .id       = (uint32_t)idx,
@@ -513,9 +517,10 @@ n00b_cg_label_new(n00b_codegen_t *cg)
 }
 
 void
-n00b_cg_label_here(n00b_codegen_t *cg, n00b_cg_val_t label)
+n00b_cg_label_here(n00b_cg_session_t *s, n00b_cg_val_t label)
 {
-    MIR_append_insn(cg->mir_ctx, cg->cur_func, cg->labels[label.id]);
+    n00b_cg_module_t *m = s->active_module;
+    MIR_append_insn(s->mir_ctx, m->cur_func, m->labels[label.id]);
 }
 
 // ============================================================================
@@ -523,47 +528,52 @@ n00b_cg_label_here(n00b_codegen_t *cg, n00b_cg_val_t label)
 // ============================================================================
 
 void
-n00b_cg_emit_jmp(n00b_codegen_t *cg, n00b_cg_val_t label)
+n00b_cg_emit_jmp(n00b_cg_session_t *s, n00b_cg_val_t label)
 {
-    MIR_append_insn(cg->mir_ctx, cg->cur_func,
-                    MIR_new_insn(cg->mir_ctx, MIR_JMP,
-                                 MIR_new_label_op(cg->mir_ctx,
-                                                  cg->labels[label.id])));
+    n00b_cg_module_t *m = s->active_module;
+    MIR_append_insn(s->mir_ctx, m->cur_func,
+                    MIR_new_insn(s->mir_ctx, MIR_JMP,
+                                 MIR_new_label_op(s->mir_ctx,
+                                                  m->labels[label.id])));
 }
 
 void
-n00b_cg_emit_bt(n00b_codegen_t *cg, n00b_cg_val_t cond, n00b_cg_val_t label)
+n00b_cg_emit_bt(n00b_cg_session_t *s, n00b_cg_val_t cond, n00b_cg_val_t label)
 {
-    MIR_append_insn(cg->mir_ctx, cg->cur_func,
-                    MIR_new_insn(cg->mir_ctx, MIR_BT,
-                                 MIR_new_label_op(cg->mir_ctx,
-                                                  cg->labels[label.id]),
-                                 n00b_cg_mir_op(cg, cond)));
+    n00b_cg_module_t *m = s->active_module;
+    MIR_append_insn(s->mir_ctx, m->cur_func,
+                    MIR_new_insn(s->mir_ctx, MIR_BT,
+                                 MIR_new_label_op(s->mir_ctx,
+                                                  m->labels[label.id]),
+                                 n00b_cg_mir_op(s, cond)));
 }
 
 void
-n00b_cg_emit_bf(n00b_codegen_t *cg, n00b_cg_val_t cond, n00b_cg_val_t label)
+n00b_cg_emit_bf(n00b_cg_session_t *s, n00b_cg_val_t cond, n00b_cg_val_t label)
 {
-    MIR_append_insn(cg->mir_ctx, cg->cur_func,
-                    MIR_new_insn(cg->mir_ctx, MIR_BF,
-                                 MIR_new_label_op(cg->mir_ctx,
-                                                  cg->labels[label.id]),
-                                 n00b_cg_mir_op(cg, cond)));
+    n00b_cg_module_t *m = s->active_module;
+    MIR_append_insn(s->mir_ctx, m->cur_func,
+                    MIR_new_insn(s->mir_ctx, MIR_BF,
+                                 MIR_new_label_op(s->mir_ctx,
+                                                  m->labels[label.id]),
+                                 n00b_cg_mir_op(s, cond)));
 }
 
 void
-n00b_cg_emit_ret(n00b_codegen_t *cg, n00b_cg_val_t val)
+n00b_cg_emit_ret(n00b_cg_session_t *s, n00b_cg_val_t val)
 {
-    MIR_append_insn(cg->mir_ctx, cg->cur_func,
-                    MIR_new_ret_insn(cg->mir_ctx, 1,
-                                     n00b_cg_mir_op(cg, val)));
+    n00b_cg_module_t *m = s->active_module;
+    MIR_append_insn(s->mir_ctx, m->cur_func,
+                    MIR_new_ret_insn(s->mir_ctx, 1,
+                                     n00b_cg_mir_op(s, val)));
 }
 
 void
-n00b_cg_emit_ret_void(n00b_codegen_t *cg)
+n00b_cg_emit_ret_void(n00b_cg_session_t *s)
 {
-    MIR_append_insn(cg->mir_ctx, cg->cur_func,
-                    MIR_new_ret_insn(cg->mir_ctx, 0));
+    n00b_cg_module_t *m = s->active_module;
+    MIR_append_insn(s->mir_ctx, m->cur_func,
+                    MIR_new_ret_insn(s->mir_ctx, 0));
 }
 
 // ============================================================================
@@ -571,7 +581,7 @@ n00b_cg_emit_ret_void(n00b_codegen_t *cg)
 // ============================================================================
 
 void
-n00b_cg_begin_func(n00b_codegen_t *cg, const char *name)
+n00b_cg_begin_func(n00b_cg_session_t *s, const char *name)
 _kargs {
     n00b_cg_type_tag_t   ret;
     const char         **param_names;
@@ -580,18 +590,17 @@ _kargs {
     bool                 is_vararg;
 }
 {
+    n00b_cg_module_t *m = s->active_module;
+
     MIR_type_t res_type = n00b_cg_mir_type(kargs->ret);
     int        nres     = (kargs->ret == N00B_CG_VOID) ? 0 : 1;
 
-    // Build the vararg list for MIR_new_func:
-    // Each param is (MIR_type_t, const char *name).
     int32_t np = kargs->n_params;
 
     if (np == 0) {
-        cg->cur_func = MIR_new_func(cg->mir_ctx, name,
+        m->cur_func = MIR_new_func(s->mir_ctx, name,
                                      nres, &res_type, 0);
     } else {
-        // Use MIR_new_func_arr for param arrays.
         MIR_var_t *vars = n00b_alloc_array(MIR_var_t, (size_t)np);
 
         for (int32_t i = 0; i < np; i++) {
@@ -601,39 +610,36 @@ _kargs {
             vars[i].size = 0;
         }
 
-        cg->cur_func = MIR_new_func_arr(cg->mir_ctx, name,
+        m->cur_func = MIR_new_func_arr(s->mir_ctx, name,
                                           nres, &res_type, np, vars);
     }
 
-    cg->temp_counter = 0;
-    cg->label_count  = 0;
-    cg->loop_depth   = 0;
+    m->temp_counter = 0;
+    m->label_count  = 0;
+    m->loop_depth   = 0;
 }
 
 void
-n00b_cg_end_func(n00b_codegen_t *cg)
+n00b_cg_end_func(n00b_cg_session_t *s)
 {
-    MIR_finish_func(cg->mir_ctx);
+    MIR_finish_func(s->mir_ctx);
 }
 
 n00b_cg_val_t
-n00b_cg_param(n00b_codegen_t *cg, int32_t index)
+n00b_cg_param(n00b_cg_session_t *s, int32_t index)
 {
-    // MIR auto-creates registers for parameters. Their names are what
-    // we passed to MIR_new_func/MIR_new_func_arr.
-    MIR_func_t func = cg->cur_func->u.func;
+    n00b_cg_module_t *m = s->active_module;
+    MIR_func_t func = m->cur_func->u.func;
 
-    // Walk the var list to find parameter at index.
     if (index < 0 || (size_t)index >= func->nargs) {
         return N00B_CG_VOID_VAL;
     }
 
     MIR_var_t var = VARR_GET(MIR_var_t, func->vars, index);
-    MIR_reg_t reg = MIR_reg(cg->mir_ctx, var.name, func);
+    MIR_reg_t reg = MIR_reg(s->mir_ctx, var.name, func);
 
     n00b_cg_type_tag_t tag = N00B_CG_I64;
 
-    // Reverse map MIR type to our tag.
     switch (var.type) {
     case MIR_T_I8:  tag = N00B_CG_I8;  break;
     case MIR_T_I16: tag = N00B_CG_I16; break;
@@ -661,15 +667,16 @@ n00b_cg_param(n00b_codegen_t *cg, int32_t index)
 // ============================================================================
 
 n00b_cg_val_t
-n00b_cg_local(n00b_codegen_t *cg, const char *name)
+n00b_cg_local(n00b_cg_session_t *s, const char *name)
 _kargs {
     n00b_cg_type_tag_t type;
 }
 {
-    n00b_cg_type_tag_t tt  = kargs->type ? kargs->type : N00B_CG_I64;
-    MIR_type_t         mt  = n00b_cg_mir_type(tt);
-    MIR_reg_t          reg = MIR_new_func_reg(cg->mir_ctx,
-                                               cg->cur_func->u.func,
+    n00b_cg_module_t  *m  = s->active_module;
+    n00b_cg_type_tag_t tt = kargs->type ? kargs->type : N00B_CG_I64;
+    MIR_type_t         mt = n00b_cg_mir_type(tt);
+    MIR_reg_t          reg = MIR_new_func_reg(s->mir_ctx,
+                                               m->cur_func->u.func,
                                                mt, name);
 
     return (n00b_cg_val_t){
@@ -680,9 +687,10 @@ _kargs {
 }
 
 void
-n00b_cg_store(n00b_codegen_t *cg, n00b_cg_val_t dst, n00b_cg_val_t src)
+n00b_cg_store(n00b_cg_session_t *s, n00b_cg_val_t dst, n00b_cg_val_t src)
 {
-    MIR_insn_code_t mov;
+    n00b_cg_module_t *m = s->active_module;
+    MIR_insn_code_t   mov;
 
     if (dst.type_tag == N00B_CG_F64) {
         mov = MIR_DMOV;
@@ -692,22 +700,21 @@ n00b_cg_store(n00b_codegen_t *cg, n00b_cg_val_t dst, n00b_cg_val_t src)
         mov = MIR_MOV;
     }
 
-    MIR_append_insn(cg->mir_ctx, cg->cur_func,
-                    MIR_new_insn(cg->mir_ctx, mov,
-                                 n00b_cg_mir_op(cg, dst),
-                                 n00b_cg_mir_op(cg, src)));
+    MIR_append_insn(s->mir_ctx, m->cur_func,
+                    MIR_new_insn(s->mir_ctx, mov,
+                                 n00b_cg_mir_op(s, dst),
+                                 n00b_cg_mir_op(s, src)));
 }
 
 n00b_cg_val_t
-n00b_cg_load(n00b_codegen_t *cg, n00b_cg_val_t var)
+n00b_cg_load(n00b_cg_session_t *s, n00b_cg_val_t var)
 {
-    // For registers, just return the same value (no extra load needed).
     if (var.kind == N00B_CG_VAL_REG) {
         return var;
     }
 
-    // For memory, emit a MOV from memory to a temp register.
-    n00b_cg_val_t dst = n00b_cg_temp(cg, var.type_tag);
+    n00b_cg_module_t *m = s->active_module;
+    n00b_cg_val_t     dst = n00b_cg_temp(s, var.type_tag);
 
     MIR_insn_code_t mov;
 
@@ -719,10 +726,10 @@ n00b_cg_load(n00b_codegen_t *cg, n00b_cg_val_t var)
         mov = MIR_MOV;
     }
 
-    MIR_append_insn(cg->mir_ctx, cg->cur_func,
-                    MIR_new_insn(cg->mir_ctx, mov,
-                                 n00b_cg_mir_op(cg, dst),
-                                 n00b_cg_mir_op(cg, var)));
+    MIR_append_insn(s->mir_ctx, m->cur_func,
+                    MIR_new_insn(s->mir_ctx, mov,
+                                 n00b_cg_mir_op(s, dst),
+                                 n00b_cg_mir_op(s, var)));
 
     return dst;
 }
@@ -732,81 +739,87 @@ n00b_cg_load(n00b_codegen_t *cg, n00b_cg_val_t var)
 // ============================================================================
 
 n00b_cg_val_t
-n00b_cg_emit_mem_load(n00b_codegen_t    *cg,
-                       n00b_cg_val_t       addr,
-                       n00b_cg_type_tag_t  type)
+n00b_cg_emit_mem_load(n00b_cg_session_t  *s,
+                       n00b_cg_val_t        addr,
+                       n00b_cg_type_tag_t   type)
 _kargs {
     int64_t offset;
 }
 {
-    n00b_cg_val_t dst = n00b_cg_temp(cg, type);
+    n00b_cg_module_t *m = s->active_module;
+    n00b_cg_val_t     dst = n00b_cg_temp(s, type);
 
     MIR_type_t mt   = n00b_cg_mir_type(type);
-    MIR_op_t   mem  = MIR_new_mem_op(cg->mir_ctx, mt, kargs->offset,
+    MIR_op_t   mem  = MIR_new_mem_op(s->mir_ctx, mt, kargs->offset,
                                       (MIR_reg_t)addr.id, 0, 1);
 
     MIR_insn_code_t mov = (type == N00B_CG_F64) ? MIR_DMOV
                         : (type == N00B_CG_F32) ? MIR_FMOV
                                                 : MIR_MOV;
 
-    MIR_append_insn(cg->mir_ctx, cg->cur_func,
-                    MIR_new_insn(cg->mir_ctx, mov,
-                                 n00b_cg_mir_op(cg, dst), mem));
+    MIR_append_insn(s->mir_ctx, m->cur_func,
+                    MIR_new_insn(s->mir_ctx, mov,
+                                 n00b_cg_mir_op(s, dst), mem));
 
     return dst;
 }
 
 void
-n00b_cg_emit_mem_store(n00b_codegen_t *cg,
-                        n00b_cg_val_t    addr,
-                        n00b_cg_val_t    value)
+n00b_cg_emit_mem_store(n00b_cg_session_t *s,
+                        n00b_cg_val_t       addr,
+                        n00b_cg_val_t       value)
 _kargs {
     int64_t offset;
 }
 {
+    n00b_cg_module_t *m = s->active_module;
+
     MIR_type_t mt  = n00b_cg_mir_type(value.type_tag);
-    MIR_op_t   mem = MIR_new_mem_op(cg->mir_ctx, mt, kargs->offset,
+    MIR_op_t   mem = MIR_new_mem_op(s->mir_ctx, mt, kargs->offset,
                                      (MIR_reg_t)addr.id, 0, 1);
 
     MIR_insn_code_t mov = (value.type_tag == N00B_CG_F64) ? MIR_DMOV
                         : (value.type_tag == N00B_CG_F32) ? MIR_FMOV
                                                           : MIR_MOV;
 
-    MIR_append_insn(cg->mir_ctx, cg->cur_func,
-                    MIR_new_insn(cg->mir_ctx, mov,
-                                 mem, n00b_cg_mir_op(cg, value)));
+    MIR_append_insn(s->mir_ctx, m->cur_func,
+                    MIR_new_insn(s->mir_ctx, mov,
+                                 mem, n00b_cg_mir_op(s, value)));
 }
 
 n00b_cg_val_t
-n00b_cg_emit_alloca(n00b_codegen_t *cg, int64_t size)
+n00b_cg_emit_alloca(n00b_cg_session_t *s, int64_t size)
 {
-    n00b_cg_val_t dst  = n00b_cg_temp(cg, N00B_CG_PTR);
-    n00b_cg_val_t sz   = _n00b_cg_const_i64(cg, size);
+    n00b_cg_module_t *m = s->active_module;
+    n00b_cg_val_t     dst = n00b_cg_temp(s, N00B_CG_PTR);
+    n00b_cg_val_t     sz  = _n00b_cg_const_i64(s, size);
 
-    MIR_append_insn(cg->mir_ctx, cg->cur_func,
-                    MIR_new_insn(cg->mir_ctx, MIR_ALLOCA,
-                                 n00b_cg_mir_op(cg, dst),
-                                 n00b_cg_mir_op(cg, sz)));
+    MIR_append_insn(s->mir_ctx, m->cur_func,
+                    MIR_new_insn(s->mir_ctx, MIR_ALLOCA,
+                                 n00b_cg_mir_op(s, dst),
+                                 n00b_cg_mir_op(s, sz)));
 
     return dst;
 }
 
 // ============================================================================
-// Proto caching
+// Proto caching (per-module)
 // ============================================================================
 
 MIR_item_t
-n00b_cg_get_or_create_proto(n00b_codegen_t     *cg,
-                             const char          *name,
-                             n00b_cg_type_tag_t   ret,
-                             n00b_cg_type_tag_t  *param_types,
-                             int32_t              n_params,
-                             bool                 is_vararg)
+n00b_cg_get_or_create_proto(n00b_cg_session_t   *s,
+                             const char           *name,
+                             n00b_cg_type_tag_t    ret,
+                             n00b_cg_type_tag_t   *param_types,
+                             int32_t               n_params,
+                             bool                  is_vararg)
 {
-    // Check existing func protos.
-    for (int32_t i = 0; i < cg->func_proto_count; i++) {
-        if (strcmp(cg->func_names[i], name) == 0) {
-            return cg->func_protos[i];
+    n00b_cg_module_t *m = s->active_module;
+
+    // Check existing func protos in the module.
+    for (int32_t i = 0; i < m->func_proto_count; i++) {
+        if (strcmp(m->func_names[i], name) == 0) {
+            return m->func_protos[i];
         }
     }
 
@@ -829,65 +842,93 @@ n00b_cg_get_or_create_proto(n00b_codegen_t     *cg,
     char proto_name[128];
     snprintf(proto_name, sizeof(proto_name), "_proto_%s", name);
 
-    MIR_item_t proto = MIR_new_proto_arr(cg->mir_ctx, proto_name,
+    MIR_item_t proto = MIR_new_proto_arr(s->mir_ctx, proto_name,
                                           nres, &res_type, n_params, vars);
 
-    // Cache it.
-    if (cg->func_proto_count >= cg->func_proto_cap) {
-        int32_t new_cap = cg->func_proto_cap ? cg->func_proto_cap * 2 : 16;
+    // Cache it in the module.
+    if (m->func_proto_count >= m->func_proto_cap) {
+        int32_t new_cap = m->func_proto_cap ? m->func_proto_cap * 2 : 16;
         MIR_item_t  *new_protos = n00b_alloc_array(MIR_item_t, (size_t)new_cap);
         const char **new_names  = n00b_alloc_array(const char *, (size_t)new_cap);
 
-        if (cg->func_protos) {
-            memcpy(new_protos, cg->func_protos,
-                   sizeof(MIR_item_t) * (size_t)cg->func_proto_count);
-            memcpy(new_names, cg->func_names,
-                   sizeof(const char *) * (size_t)cg->func_proto_count);
+        if (m->func_protos) {
+            memcpy(new_protos, m->func_protos,
+                   sizeof(MIR_item_t) * (size_t)m->func_proto_count);
+            memcpy(new_names, m->func_names,
+                   sizeof(const char *) * (size_t)m->func_proto_count);
         }
 
-        cg->func_protos    = new_protos;
-        cg->func_names     = new_names;
-        cg->func_proto_cap = new_cap;
+        m->func_protos    = new_protos;
+        m->func_names     = new_names;
+        m->func_proto_cap = new_cap;
     }
 
-    cg->func_protos[cg->func_proto_count] = proto;
-    cg->func_names[cg->func_proto_count]  = name;
-    cg->func_proto_count++;
+    m->func_protos[m->func_proto_count] = proto;
+    m->func_names[m->func_proto_count]  = name;
+    m->func_proto_count++;
 
-    (void)is_vararg; // TODO: handle vararg protos when needed.
+    (void)is_vararg;
 
     return proto;
 }
 
 // ============================================================================
-// Import lookup
+// Import lookup (searches active module)
 // ============================================================================
 
 n00b_cg_import_t *
-n00b_cg_find_import(n00b_codegen_t *cg, const char *name)
+n00b_cg_find_import(n00b_cg_session_t *s, const char *name)
 {
-    for (int32_t i = 0; i < cg->import_count; i++) {
-        if (strcmp(cg->imports[i].name, name) == 0) {
-            return &cg->imports[i];
+    n00b_cg_module_t *m = s->active_module;
+
+    if (!m) {
+        return NULL;
+    }
+
+    for (int32_t i = 0; i < m->import_count; i++) {
+        if (strcmp(m->imports[i].name, name) == 0) {
+            return &m->imports[i];
         }
     }
+
     return NULL;
 }
 
 // ============================================================================
-// Function lookup
+// Function lookup (searches active module, then all modules)
 // ============================================================================
 
 MIR_item_t
-n00b_cg_find_func(n00b_codegen_t *cg, const char *name)
+n00b_cg_find_func(n00b_cg_session_t *s, const char *name)
 {
-    // Walk the module items looking for a func with this name.
-    for (MIR_item_t item = DLIST_HEAD (MIR_item_t, cg->mir_module->items);
-         item != NULL;
-         item = DLIST_NEXT (MIR_item_t, item)) {
-        if (item->item_type == MIR_func_item
-            && strcmp(item->u.func->name, name) == 0) {
-            return item;
+    n00b_cg_module_t *m = s->active_module;
+
+    if (m) {
+        for (MIR_item_t item = DLIST_HEAD(MIR_item_t, m->mir_module->items);
+             item != NULL;
+             item = DLIST_NEXT(MIR_item_t, item)) {
+            if (item->item_type == MIR_func_item
+                && strcmp(item->u.func->name, name) == 0) {
+                return item;
+            }
+        }
+    }
+
+    // Search all modules in the session.
+    for (int32_t i = 0; i < s->module_count; i++) {
+        n00b_cg_module_t *mod = s->modules[i];
+
+        if (mod == m) {
+            continue;
+        }
+
+        for (MIR_item_t item = DLIST_HEAD(MIR_item_t, mod->mir_module->items);
+             item != NULL;
+             item = DLIST_NEXT(MIR_item_t, item)) {
+            if (item->item_type == MIR_func_item
+                && strcmp(item->u.func->name, name) == 0) {
+                return item;
+            }
         }
     }
 
@@ -899,11 +940,11 @@ n00b_cg_find_func(n00b_codegen_t *cg, const char *name)
 // ============================================================================
 
 int32_t
-n00b_cg_lookup_op(n00b_codegen_t *cg, const char *text)
+n00b_cg_lookup_op(n00b_cg_session_t *s, const char *text)
 {
-    for (int32_t i = 0; i < cg->op_map_count; i++) {
-        if (strcmp(cg->op_map[i].text, text) == 0) {
-            return (int32_t)cg->op_map[i].op;
+    for (int32_t i = 0; i < s->op_map_count; i++) {
+        if (strcmp(s->op_map[i].text, text) == 0) {
+            return (int32_t)s->op_map[i].op;
         }
     }
     return -1;
@@ -914,33 +955,32 @@ n00b_cg_lookup_op(n00b_codegen_t *cg, const char *text)
 // ============================================================================
 
 n00b_cg_val_t
-n00b_cg_emit_call(n00b_codegen_t *cg,
-                   const char      *func_name,
-                   n00b_cg_val_t   *args,
-                   int32_t          n_args)
+n00b_cg_emit_call(n00b_cg_session_t *s,
+                   const char         *func_name,
+                   n00b_cg_val_t      *args,
+                   int32_t             n_args)
 _kargs {
     n00b_cg_type_tag_t ret;
 }
 {
+    n00b_cg_module_t  *m = s->active_module;
     n00b_cg_type_tag_t ret_type = kargs->ret;
 
-    // Find the function: either an import or a defined function.
-    n00b_cg_import_t *imp = n00b_cg_find_import(cg, func_name);
+    n00b_cg_import_t *imp = n00b_cg_find_import(s, func_name);
 
     MIR_item_t proto;
     MIR_op_t   callee_op;
 
     if (imp) {
         proto     = imp->proto;
-        callee_op = MIR_new_ref_op(cg->mir_ctx, imp->import);
+        callee_op = MIR_new_ref_op(s->mir_ctx, imp->import);
     } else {
-        MIR_item_t func_item = n00b_cg_find_func(cg, func_name);
+        MIR_item_t func_item = n00b_cg_find_func(s, func_name);
 
         if (!func_item) {
             return N00B_CG_VOID_VAL;
         }
 
-        // Build param types from the function's parameter list.
         MIR_func_t fn = func_item->u.func;
 
         n00b_cg_type_tag_t *ptypes = NULL;
@@ -958,51 +998,50 @@ _kargs {
             }
         }
 
-        proto = n00b_cg_get_or_create_proto(cg, func_name, ret_type,
+        proto = n00b_cg_get_or_create_proto(s, func_name, ret_type,
                                              ptypes, (int32_t)fn->nargs,
                                              false);
-        callee_op = MIR_new_ref_op(cg->mir_ctx, func_item);
+        callee_op = MIR_new_ref_op(s->mir_ctx, func_item);
     }
 
-    // Build the operand array: proto, callee, [result], args...
     bool     has_ret  = (ret_type != N00B_CG_VOID);
     int32_t  total    = 2 + (has_ret ? 1 : 0) + n_args;
     MIR_op_t *ops     = n00b_alloc_array(MIR_op_t, (size_t)total);
     int32_t   idx     = 0;
 
-    ops[idx++] = MIR_new_ref_op(cg->mir_ctx, proto);
+    ops[idx++] = MIR_new_ref_op(s->mir_ctx, proto);
     ops[idx++] = callee_op;
 
     n00b_cg_val_t result = N00B_CG_VOID_VAL;
 
     if (has_ret) {
-        result   = n00b_cg_temp(cg, ret_type);
-        ops[idx++] = n00b_cg_mir_op(cg, result);
+        result     = n00b_cg_temp(s, ret_type);
+        ops[idx++] = n00b_cg_mir_op(s, result);
     }
 
     for (int32_t i = 0; i < n_args; i++) {
-        ops[idx++] = n00b_cg_mir_op(cg, args[i]);
+        ops[idx++] = n00b_cg_mir_op(s, args[i]);
     }
 
-    MIR_append_insn(cg->mir_ctx, cg->cur_func,
-                    MIR_new_insn_arr(cg->mir_ctx, MIR_CALL, (size_t)total,
+    MIR_append_insn(s->mir_ctx, m->cur_func,
+                    MIR_new_insn_arr(s->mir_ctx, MIR_CALL, (size_t)total,
                                      ops));
 
     return result;
 }
 
 n00b_cg_val_t
-n00b_cg_emit_call_indirect(n00b_codegen_t *cg,
-                            n00b_cg_val_t    func_ptr,
-                            n00b_cg_val_t   *args,
-                            int32_t          n_args)
+n00b_cg_emit_call_indirect(n00b_cg_session_t *s,
+                            n00b_cg_val_t       func_ptr,
+                            n00b_cg_val_t      *args,
+                            int32_t             n_args)
 _kargs {
     n00b_cg_type_tag_t ret;
 }
 {
+    n00b_cg_module_t  *m = s->active_module;
     n00b_cg_type_tag_t ret_type = kargs->ret;
 
-    // Build param types from args.
     n00b_cg_type_tag_t *ptypes = NULL;
 
     if (n_args > 0) {
@@ -1012,7 +1051,7 @@ _kargs {
         }
     }
 
-    MIR_item_t proto = n00b_cg_get_or_create_proto(cg, "_indirect",
+    MIR_item_t proto = n00b_cg_get_or_create_proto(s, "_indirect",
                                                      ret_type, ptypes,
                                                      n_args, false);
 
@@ -1021,35 +1060,35 @@ _kargs {
     MIR_op_t *ops    = n00b_alloc_array(MIR_op_t, (size_t)total);
     int32_t   idx    = 0;
 
-    ops[idx++] = MIR_new_ref_op(cg->mir_ctx, proto);
-    ops[idx++] = n00b_cg_mir_op(cg, func_ptr);
+    ops[idx++] = MIR_new_ref_op(s->mir_ctx, proto);
+    ops[idx++] = n00b_cg_mir_op(s, func_ptr);
 
     n00b_cg_val_t result = N00B_CG_VOID_VAL;
 
     if (has_ret) {
-        result     = n00b_cg_temp(cg, ret_type);
-        ops[idx++] = n00b_cg_mir_op(cg, result);
+        result     = n00b_cg_temp(s, ret_type);
+        ops[idx++] = n00b_cg_mir_op(s, result);
     }
 
     for (int32_t i = 0; i < n_args; i++) {
-        ops[idx++] = n00b_cg_mir_op(cg, args[i]);
+        ops[idx++] = n00b_cg_mir_op(s, args[i]);
     }
 
-    MIR_append_insn(cg->mir_ctx, cg->cur_func,
-                    MIR_new_insn_arr(cg->mir_ctx, MIR_CALL, (size_t)total,
+    MIR_append_insn(s->mir_ctx, m->cur_func,
+                    MIR_new_insn_arr(s->mir_ctx, MIR_CALL, (size_t)total,
                                      ops));
 
     return result;
 }
 
 // ============================================================================
-// Imports
+// Imports (per-module)
 // ============================================================================
 
 void
-n00b_cg_import_func(n00b_codegen_t *cg,
-                     const char      *name,
-                     void            *addr)
+n00b_cg_import_func(n00b_cg_session_t *s,
+                     const char         *name,
+                     void               *addr)
 _kargs {
     n00b_cg_type_tag_t   ret;
     n00b_cg_type_tag_t  *param_types;
@@ -1057,29 +1096,31 @@ _kargs {
     bool                 is_vararg;
 }
 {
+    n00b_cg_module_t *m = s->active_module;
+
     // Create proto.
-    MIR_item_t proto = n00b_cg_get_or_create_proto(cg, name, kargs->ret,
+    MIR_item_t proto = n00b_cg_get_or_create_proto(s, name, kargs->ret,
                                                      kargs->param_types,
                                                      kargs->n_params,
                                                      kargs->is_vararg);
 
     // Create import item.
-    MIR_item_t import = MIR_new_import(cg->mir_ctx, name);
+    MIR_item_t import = MIR_new_import(s->mir_ctx, name);
 
-    // Store in imports array.
-    if (cg->import_count >= cg->import_cap) {
-        int32_t new_cap = cg->import_cap ? cg->import_cap * 2 : 16;
+    // Store in module's imports array.
+    if (m->import_count >= m->import_cap) {
+        int32_t new_cap = m->import_cap ? m->import_cap * 2 : 16;
         n00b_cg_import_t *new_imports = n00b_alloc_array(
             n00b_cg_import_t, (size_t)new_cap);
-        if (cg->imports) {
-            memcpy(new_imports, cg->imports,
-                   sizeof(n00b_cg_import_t) * (size_t)cg->import_count);
+        if (m->imports) {
+            memcpy(new_imports, m->imports,
+                   sizeof(n00b_cg_import_t) * (size_t)m->import_count);
         }
-        cg->imports    = new_imports;
-        cg->import_cap = new_cap;
+        m->imports    = new_imports;
+        m->import_cap = new_cap;
     }
 
-    cg->imports[cg->import_count++] = (n00b_cg_import_t){
+    m->imports[m->import_count++] = (n00b_cg_import_t){
         .name   = name,
         .proto  = proto,
         .import = import,

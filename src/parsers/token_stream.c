@@ -2,9 +2,9 @@
 //                   random access, and reset for re-tokenization.
 
 #include "parsers/token_stream.h"
-#include "unicode/encoding.h"
+#include "text/unicode/encoding.h"
 #include "core/string.h"
-#include "core/option.h"
+#include "adt/option.h"
 #include <assert.h>
 #include <stdlib.h>
 #include <string.h>

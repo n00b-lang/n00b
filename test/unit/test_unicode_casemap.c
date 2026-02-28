@@ -1,6 +1,6 @@
 #include "test_unicode_helpers.h"
-#include "unicode/casemap.h"
-#include "unicode/encoding.h"
+#include "text/unicode/casemap.h"
+#include "text/unicode/encoding.h"
 
 TEST(test_simple_toupper)
 {

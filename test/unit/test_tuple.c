@@ -5,7 +5,7 @@
 #include "n00b.h"
 #include "core/alloc.h"
 #include "core/runtime.h"
-#include "core/tuple.h"
+#include "adt/tuple.h"
 
 // Declare tuple types at file scope (once each).
 n00b_tuple_decl(int, double, char *);

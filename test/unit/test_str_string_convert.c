@@ -1,7 +1,7 @@
 #include "test_unicode_helpers.h"
-#include "strings/string_convert.h"
-#include "strings/string_ops.h"
-#include "unicode/encoding.h"
+#include "text/strings/string_convert.h"
+#include "text/strings/string_ops.h"
+#include "text/unicode/encoding.h"
 
 #include <limits.h>
 #include <sys/stat.h>

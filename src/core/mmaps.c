@@ -9,10 +9,10 @@
 #include "core/align.h"
 #include "core/pool.h"
 #include "core/thread.h"
-#include "core/interval_tree.h"
+#include "adt/interval_tree.h"
 
 // TODO: fix this
-// #include "io/print.h"
+// #include "conduit/print.h"
 #include <stdio.h>
 #define n00b_fprintf fprintf
 

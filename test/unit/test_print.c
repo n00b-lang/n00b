@@ -24,13 +24,13 @@
 #include "conduit/service.h"
 #include "conduit/xform_types.h"
 #include "core/alloc.h"
-#include "core/dict_untyped.h"
+#include "adt/dict_untyped.h"
 #include "core/runtime.h"
 #include "core/type_info.h"
 #include "core/string.h"
 #include "core/buffer.h"
-#include "strings/string_convert.h"
-#include "strings/fmt_numbers.h"
+#include "text/strings/string_convert.h"
+#include "text/strings/fmt_numbers.h"
 
 // Helper: create a pipe and wire a conduit topic + fd_writer to the
 // write end, so that n00b_print(.topic = tp.topic) works.

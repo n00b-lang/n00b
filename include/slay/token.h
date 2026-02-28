@@ -14,8 +14,8 @@
 #include <string.h>
 
 #include "core/alloc.h"
-#include "core/array.h"
-#include "core/list.h"
+#include "adt/array.h"
+#include "adt/list.h"
 #include "core/string.h"
 
 // ============================================================================

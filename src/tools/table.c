@@ -18,14 +18,14 @@
 #include "core/alloc.h"
 #include "core/runtime.h"
 #include "core/string.h"
-#include "strings/string_ops.h"
-#include "strings/text_style.h"
-#include "strings/style_ops.h"
-#include "strings/theme.h"
-#include "render/backend.h"
-#include "render/canvas.h"
-#include "render/plane.h"
-#include "table/table.h"
+#include "text/strings/string_ops.h"
+#include "text/strings/text_style.h"
+#include "text/strings/style_ops.h"
+#include "text/strings/theme.h"
+#include "display/render/backend.h"
+#include "display/render/canvas.h"
+#include "display/render/plane.h"
+#include "display/table/table.h"
 
 // ====================================================================
 // Escape processing for separator arguments

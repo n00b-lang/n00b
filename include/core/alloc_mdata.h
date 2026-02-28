@@ -9,7 +9,7 @@
 #pragma once
 #include "n00b.h"
 #include "core/align.h"
-#include "core/option.h"
+#include "adt/option.h"
 
 #define N00B_FORCED_ALIGNMENT N00B_ALIGN
 

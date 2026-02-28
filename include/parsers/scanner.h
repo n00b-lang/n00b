@@ -32,14 +32,14 @@
 
 #include "n00b.h"
 #include "core/buffer.h"
-#include "core/list.h"
-#include "core/dict_untyped.h"
-#include "core/result.h"
+#include "adt/list.h"
+#include "adt/dict_untyped.h"
+#include "adt/result.h"
 #include "slay/token.h"
 #include "slay/types.h"
-#include "unicode/encoding.h"
-#include "unicode/identifiers.h"
-#include "unicode/query.h"
+#include "text/unicode/encoding.h"
+#include "text/unicode/identifiers.h"
+#include "text/unicode/query.h"
 
 // ============================================================================
 // Forward declarations

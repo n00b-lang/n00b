@@ -1,6 +1,6 @@
 #include "test_unicode_helpers.h"
-#include "unicode/security.h"
-#include "unicode/encoding.h"
+#include "text/unicode/security.h"
+#include "text/unicode/encoding.h"
 
 TEST(test_skeleton)
 {

@@ -13,10 +13,10 @@
 #include "core/buffer.h"
 #include "core/gc.h"
 #include "core/runtime.h"
-#include "core/option.h"
-#include "core/list.h"
+#include "adt/option.h"
+#include "adt/list.h"
 #include "core/string.h"
-#include "strings/string_ops.h"
+#include "text/strings/string_ops.h"
 #include "parsers/scanner.h"
 #include "parsers/token_stream.h"
 

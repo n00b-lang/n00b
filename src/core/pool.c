@@ -13,7 +13,7 @@
 #include "core/memory_info.h"
 #include "core/mmaps.h"
 #include "core/atomic.h"
-#include "core/llstack.h"
+#include "adt/llstack.h"
 #include "core/align.h"
 #include "core/pool.h"
 #include "util/math.h"

@@ -1,6 +1,6 @@
 #include "test_unicode_helpers.h"
-#include "strings/fmt_numbers.h"
-#include "unicode/properties.h"
+#include "text/strings/fmt_numbers.h"
+#include "text/unicode/properties.h"
 
 #include <math.h>
 #include <limits.h>

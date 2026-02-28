@@ -4,7 +4,7 @@
 #include "core/alloc.h"
 #include "core/runtime.h"
 #include "core/string.h"
-#include "table/table.h"
+#include "display/table/table.h"
 
 // ====================================================================
 // Helpers

@@ -1,5 +1,5 @@
 #include "test_unicode_helpers.h"
-#include "strings/fptostr.h"
+#include "text/strings/fptostr.h"
 
 #include <math.h>
 #include <stdlib.h>

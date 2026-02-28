@@ -54,6 +54,9 @@ annot_phase_symtab(n00b_annot_walk_ctx_t *ctx, annot_node_ctx_t *nc)
                     else if (n00b_unicode_str_eq(a->sym_kind, *r"function")) {
                         sym_kind = N00B_SYM_FUNCTION;
                     }
+                    else if (n00b_unicode_str_eq(a->sym_kind, *r"module")) {
+                        sym_kind = N00B_SYM_MODULE;
+                    }
                 }
 
                 nc->last_sym = n00b_symtab_add(ctx->symtab,

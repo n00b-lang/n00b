@@ -10,8 +10,8 @@
 #include "n00b.h"
 #include "parsers/json.h"
 #include "core/runtime.h"
-#include "core/list.h"
-#include "core/dict_untyped.h"
+#include "adt/list.h"
+#include "adt/dict_untyped.h"
 
 // ============================================================================
 // Helpers

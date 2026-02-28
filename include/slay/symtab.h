@@ -29,6 +29,7 @@ typedef enum {
     N00B_SYM_ENUM_CONST,
     N00B_SYM_LABEL,
     N00B_SYM_PARAM,
+    N00B_SYM_MODULE,
 } n00b_sym_kind_t;
 
 // ============================================================================
@@ -62,6 +63,7 @@ struct n00b_sym_entry_t {
     n00b_string_t        adt_kind;      /**< ADT kind: "struct", "union", "enum" (from @adt). */
     n00b_scope_t        *exposed_scope; /**< Scope this symbol exposes for dotted access. */
     n00b_cfg_t          *cfg;           /**< Per-function CFG (functions only). */
+    void                *module_ptr;    /**< Resolved module (n00b_cg_module_t *) for SYM_MODULE. */
     bool                 is_field;      /**< True if declared via @field. */
     bool                 is_method;     /**< True if declared via @method. */
 };

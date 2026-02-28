@@ -6,7 +6,7 @@
 #include "core/alloc.h"
 #include "core/runtime.h"
 #include "core/string.h"
-#include "core/option.h"
+#include "adt/option.h"
 #include "slay/commander.h"
 
 // ============================================================================

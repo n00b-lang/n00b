@@ -1,7 +1,7 @@
 #include "core/string.h"
 #include "core/alloc.h"
 #include "core/runtime.h"
-#include "internal/unicode/raw.h"
+#include "internal/text/unicode/raw.h"
 #include <string.h>
 
 n00b_string_t

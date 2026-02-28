@@ -10,8 +10,8 @@
 #pragma once
 
 #include "logic/clpfd_domain.h"
-#include "core/option.h"
-#include "core/result.h"
+#include "adt/option.h"
+#include "adt/result.h"
 
 n00b_option_decl(n00b_csp_var_id_t);
 n00b_result_decl(const n00b_csp_domain_t *);

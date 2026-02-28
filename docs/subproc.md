@@ -9,7 +9,7 @@ PTY support, I/O capture and proxying via conduit pub/sub, transform
 pipeline injection points, and smart completion detection.
 
 **This is a user-facing I/O abstraction, not a conduit module.** It
-lives under `include/io/subproc.h` / `src/io/subproc.c`, but builds
+lives under `include/conduit/subproc.h` / `src/conduit/subproc.c`, but builds
 entirely on top of conduit primitives:
 
 | Old n00b concept     | Conduit building block                         |

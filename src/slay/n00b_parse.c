@@ -9,10 +9,10 @@
 #include "parsers/token_stream.h"
 #include "core/alloc.h"
 #include "core/string.h"
-#include "core/option.h"
-#include "strings/string_ops.h"
-#include "strings/format.h"
-#include "strings/fmt_numbers.h"
+#include "adt/option.h"
+#include "text/strings/string_ops.h"
+#include "text/strings/format.h"
+#include "text/strings/fmt_numbers.h"
 
 #include <string.h>
 

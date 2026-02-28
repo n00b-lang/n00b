@@ -17,7 +17,7 @@
 #include "core/gc.h"
 #include "core/thread.h"
 #include "core/random.h"
-#include "core/dict_untyped.h"
+#include "adt/dict_untyped.h"
 #include "core/stw.h"
 
 // N00B_DEFAULT_SCRATCH_ARENA_SIZE now defined in arena.h

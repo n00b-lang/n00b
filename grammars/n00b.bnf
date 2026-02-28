@@ -184,7 +184,7 @@
 # Use
 # ============================================================================
 
-<use-stmt> ::= %"use" <member-chain> (%"from" %STRING_LIT)?
+<use-stmt> @declares($1, "module") ::= %"use" <member-chain> (%"from" %STRING_LIT)?
 
 # ============================================================================
 # Lock attribute (~)

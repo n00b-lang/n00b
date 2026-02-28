@@ -12,7 +12,7 @@
 #include "conduit/conduit.h"
 #include "conduit/io.h"
 #include "core/alloc.h"
-#include "core/list.h"
+#include "adt/list.h"
 #include "core/runtime.h"
 
 // ============================================================================

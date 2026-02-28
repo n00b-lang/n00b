@@ -14,7 +14,7 @@
 #include "slay/tree_util.h"
 #include "internal/slay/grammar_internal.h"
 #include "core/alloc.h"
-#include "strings/string_ops.h"
+#include "text/strings/string_ops.h"
 
 #include "typecheck/types.h"
 #include "typecheck/construct.h"

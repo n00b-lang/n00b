@@ -5,7 +5,7 @@
 #include "n00b.h"
 #include "core/alloc.h"
 #include "core/runtime.h"
-#include "core/dict_untyped.h"
+#include "adt/dict_untyped.h"
 
 extern n00b_size_t n00b_dict_untyped_len(n00b_dict_untyped_t *d);
 

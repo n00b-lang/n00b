@@ -13,7 +13,7 @@
 #include "n00b.h"
 #include "core/runtime.h"
 #include "core/thread.h"
-#include "core/option.h"
+#include "adt/option.h"
 #include "core/atomic.h"
 #include "core/futex.h"
 #include "core/mmaps.h"

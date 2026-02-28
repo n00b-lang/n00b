@@ -14,7 +14,7 @@
 #pragma once
 
 #include "conduit/inbox.h"
-#include "core/list.h"
+#include "adt/list.h"
 
 // ============================================================================
 // Subscription handle

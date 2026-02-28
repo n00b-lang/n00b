@@ -5,14 +5,14 @@
 #include "n00b.h"
 #include "core/alloc.h"
 #include "core/runtime.h"
-#include "core/option.h"
+#include "adt/option.h"
 #include "slay/grammar.h"
 #include "slay/n00b_parse.h"
 #include "slay/parse_tree.h"
 #include "slay/parse_forest.h"
 #include "slay/bnf.h"
 #include "parsers/token_stream.h"
-#include "strings/string_ops.h"
+#include "text/strings/string_ops.h"
 
 // ============================================================================
 // Helpers

@@ -21,9 +21,9 @@
 #include "core/thread.h"
 #include "core/arena.h"
 #include "core/runtime.h"
-#include "core/interval_tree.h"
-#include "unicode/encoding.h"
-#include "unicode/properties.h"
+#include "adt/interval_tree.h"
+#include "text/unicode/encoding.h"
+#include "text/unicode/properties.h"
 
 // TODO
 // #include "core/stw.h"

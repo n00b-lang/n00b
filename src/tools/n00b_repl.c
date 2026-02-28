@@ -1,7 +1,10 @@
 // n00b_repl.c — Interactive REPL for the n00b language.
 //
 // Parses n00b expressions/statements, runs annotation walk, generates
-// MIR via the codegen API, JIT-compiles, executes, and prints results.
+// MIR via the codegen session API, JIT-compiles, executes, and prints results.
+//
+// Uses a persistent n00b_cg_session_t so functions defined in one expression
+// are visible in subsequent expressions.
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -16,6 +19,7 @@
 #include "slay/annot_walk.h"
 #include "n00b/n00b_compile.h"
 #include "n00b/n00b_tokenizer.h"
+#include "n00b/n00b_module_loader.h"
 #include "slay/codegen.h"
 #include "slay/diagnostic.h"
 #include "slay/grammar.h"
@@ -29,11 +33,12 @@
 // ============================================================================
 
 typedef struct {
-    n00b_grammar_t *grammar;
-    char           *input_buf;
-    size_t          input_len;
-    size_t          input_cap;
-    int             eval_count;
+    n00b_grammar_t      *grammar;
+    n00b_cg_session_t   *session;
+    char                *input_buf;
+    size_t               input_len;
+    size_t               input_cap;
+    int                  eval_count;
 } n00b_repl_state_t;
 
 // ============================================================================
@@ -125,7 +130,7 @@ try_parse(n00b_repl_state_t     *state,
 }
 
 // ============================================================================
-// Codegen + JIT + execute
+// Codegen + JIT + execute (uses persistent session)
 // ============================================================================
 
 static void
@@ -134,8 +139,8 @@ generate_and_run(n00b_repl_state_t   *state,
                  n00b_annot_result_t *annot)
 {
     bool    ok  = false;
-    int64_t val = n00b_codegen_eval_tree(state->grammar, tree,
-                                          .annot = annot, .ok = &ok);
+    int64_t val = n00b_cg_session_eval_tree(state->session, tree,
+                                              .annot = annot, .ok = &ok);
 
     if (ok) {
         printf("=> %lld\n", (long long)val);
@@ -192,6 +197,7 @@ n00b_repl_run(n00b_grammar_t *grammar)
 {
     n00b_repl_state_t state = {
         .grammar    = grammar,
+        .session    = n00b_cg_session_new(grammar),
         .input_buf  = NULL,
         .input_len  = 0,
         .input_cap  = 0,
@@ -288,7 +294,10 @@ n00b_repl_run(n00b_grammar_t *grammar)
             continue;
         }
 
-        // Codegen + JIT + execute.
+        // Resolve use statements (load imported modules).
+        n00b_resolve_use_stmts(state.session, grammar, tree, annot);
+
+        // Codegen + JIT + execute (reuses persistent session).
         generate_and_run(&state, tree, annot);
 
         // Cleanup.
@@ -301,6 +310,7 @@ n00b_repl_run(n00b_grammar_t *grammar)
         prompt = "n00b> ";
     }
 
+    n00b_cg_session_free(state.session);
     free(state.input_buf);
 
     return 0;

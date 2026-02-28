@@ -8,10 +8,10 @@
 #include "typecheck/construct.h"
 #include "logic/asp_rule.h"
 #include "core/alloc.h"
-#include "core/list.h"
+#include "adt/list.h"
 #include "core/string.h"
 #include "core/vargs.h"
-#include "strings/string_ops.h"
+#include "text/strings/string_ops.h"
 
 // ============================================================================
 // Lifecycle

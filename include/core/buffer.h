@@ -38,11 +38,11 @@
 #include "core/alloc.h"
 #include "core/atomic.h"
 #include "core/align.h"
-#include "core/option.h"
-#include "core/result.h"
+#include "adt/option.h"
+#include "adt/result.h"
 #include "core/string.h"
 #include "core/data_lock.h"
-#include "core/array.h"
+#include "adt/array.h"
 #include "util/utf8.h"
 
 // ============================================================================

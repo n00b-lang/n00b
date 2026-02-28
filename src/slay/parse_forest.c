@@ -2,7 +2,7 @@
 
 #include "slay/parse_forest.h"
 #include "core/alloc.h"
-#include "core/array.h"
+#include "adt/array.h"
 
 // ============================================================================
 // Construction

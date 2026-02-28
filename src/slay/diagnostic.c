@@ -6,7 +6,7 @@
 #include "slay/diagnostic.h"
 #include "typecheck/context.h"
 #include "core/alloc.h"
-#include "strings/string_ops.h"
+#include "text/strings/string_ops.h"
 
 #include <stdio.h>
 #include <string.h>

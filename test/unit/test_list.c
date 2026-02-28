@@ -5,7 +5,7 @@
 #include "n00b.h"
 #include "core/alloc.h"
 #include "core/runtime.h"
-#include "core/list.h"
+#include "adt/list.h"
 
 n00b_list_decl(char *);
 

@@ -1,6 +1,6 @@
 #include "test_unicode_helpers.h"
-#include "unicode/segmentation.h"
-#include "unicode/encoding.h"
+#include "text/unicode/segmentation.h"
+#include "text/unicode/encoding.h"
 
 // ---------------------------------------------------------------------------
 // Manual unit tests

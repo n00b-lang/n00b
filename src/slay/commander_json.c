@@ -4,7 +4,7 @@
 
 #include "core/alloc.h"
 #include "core/string.h"
-#include "core/option.h"
+#include "adt/option.h"
 #include "parsers/token_stream.h"
 
 #include <stdlib.h>

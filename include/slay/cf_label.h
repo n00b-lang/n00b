@@ -16,8 +16,8 @@
 #include "slay/types.h"
 #include "slay/parse_tree.h"
 #include "slay/symtab.h"
-#include "core/dict.h"
-#include "core/list.h"
+#include "adt/dict.h"
+#include "adt/list.h"
 
 typedef struct n00b_tc_ctx_s n00b_tc_ctx_t;
 

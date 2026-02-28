@@ -12,7 +12,7 @@
 #include "core/runtime.h"
 #include "parsers/scan_recipes.h"
 #include "parsers/token_stream.h"
-#include "strings/string_ops.h"
+#include "text/strings/string_ops.h"
 
 // ============================================================================
 // Helpers

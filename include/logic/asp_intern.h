@@ -10,8 +10,8 @@
 
 #include "logic/asp_types.h"
 #include "internal/logic/asp_containers.h"
-#include "core/option.h"
-#include "core/list.h"
+#include "adt/option.h"
+#include "adt/list.h"
 
 n00b_option_decl(n00b_dl_sym_t);
 

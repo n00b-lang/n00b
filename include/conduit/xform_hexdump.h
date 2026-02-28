@@ -22,8 +22,8 @@
 
 #include "conduit/xform_types.h"
 #include "conduit/xform_render.h"   /* N00B_CONDUIT_XFORM_IMPL(buf, plane) */
-#include "hexdump/hexdump.h"
-#include "render/plane.h"
+#include "display/hexdump.h"
+#include "display/render/plane.h"
 
 // ============================================================================
 // Hexdump xform state (stored in cookie)

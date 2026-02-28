@@ -2,7 +2,7 @@
 #include "core/alloc.h"
 #include "core/alloc_mdata.h"
 #include "core/runtime.h"
-#include "core/dict_untyped.h"
+#include "adt/dict_untyped.h"
 #include "core/type_info.h"
 #include "core/pool.h"
 

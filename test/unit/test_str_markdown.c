@@ -1,5 +1,5 @@
 #include "test_unicode_helpers.h"
-#include "strings/markdown.h"
+#include "text/strings/markdown.h"
 
 // Helper: md4c wraps all content in a BLOCK_BODY (MD_BLOCK_DOC).
 // This returns the first BLOCK_BODY child of root, or root itself

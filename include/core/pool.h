@@ -9,7 +9,7 @@
 
 #include "n00b.h"
 #include "core/alloc_base.h"
-#include "core/llstack.h"
+#include "adt/llstack.h"
 #include "core/align.h"
 
 #define N00B_POST_ROUND_SHIFT 6

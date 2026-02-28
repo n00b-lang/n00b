@@ -1,5 +1,5 @@
 #include "test_unicode_helpers.h"
-#include "strings/ansi.h"
+#include "text/strings/ansi.h"
 #include "core/buffer.h"
 
 // Helper: create a buffer from a C string literal (no NUL terminator).

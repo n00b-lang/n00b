@@ -8,9 +8,9 @@
 #include "typecheck/context.h"
 #include "typecheck/construct.h"
 #include "core/alloc.h"
-#include "core/list.h"
+#include "adt/list.h"
 #include "core/string.h"
-#include "strings/string_ops.h"
+#include "text/strings/string_ops.h"
 
 // ============================================================================
 // Union-find: find with path compression

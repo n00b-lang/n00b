@@ -29,8 +29,8 @@
 #include "core/thread.h"
 #include "core/atomic.h"
 #include "core/alloc.h"
-#include "core/option.h"
-#include "core/result.h"
+#include "adt/option.h"
+#include "adt/result.h"
 
 // ============================================================================
 // Parameterized transform types and IMPL macro

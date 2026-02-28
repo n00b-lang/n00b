@@ -4,8 +4,8 @@
 #include "n00b.h"
 #include "core/alloc.h"
 #include "core/runtime.h"
-#include "render/cell.h"
-#include "strings/text_style.h"
+#include "display/render/cell.h"
+#include "text/strings/text_style.h"
 
 // ====================================================================
 // Tests

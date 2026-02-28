@@ -12,11 +12,11 @@
 
 #include "typecheck/print.h"
 #include "typecheck/context.h"
-#include "core/variant.h"
-#include "core/option.h"
-#include "core/list.h"
+#include "adt/variant.h"
+#include "adt/option.h"
+#include "adt/list.h"
 #include "core/alloc.h"
-#include "strings/string_ops.h"
+#include "text/strings/string_ops.h"
 
 // ============================================================================
 // Visited set for cycle detection

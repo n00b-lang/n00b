@@ -10,7 +10,7 @@
 #include "core/alloc.h"
 #include "core/buffer.h"
 #include "core/runtime.h"
-#include "strings/string_ops.h"
+#include "text/strings/string_ops.h"
 #include "slay/bnf.h"
 #include "slay/grammar.h"
 #include "slay/pwz.h"

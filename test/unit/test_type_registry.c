@@ -11,8 +11,8 @@
 #include "core/type_info.h"
 #include "core/buffer.h"
 #include "core/string.h"
-#include "core/dict_untyped.h"
-#include "strings/string_convert.h"
+#include "adt/dict_untyped.h"
+#include "text/strings/string_convert.h"
 
 // A dummy type for dynamic registration tests.
 typedef struct test_widget_t {

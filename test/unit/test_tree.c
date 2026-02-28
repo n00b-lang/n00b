@@ -5,7 +5,7 @@
 #include "n00b.h"
 #include "core/alloc.h"
 #include "core/runtime.h"
-#include "core/tree.h"
+#include "adt/tree.h"
 
 n00b_tree_decl(int, char *);
 

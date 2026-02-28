@@ -11,7 +11,7 @@
 #include "n00b.h"
 #include "core/alloc_mdata.h"
 #include "core/mmaps.h"
-#include "core/option.h"
+#include "adt/option.h"
 
 typedef struct n00b_memory_scan_t {
     uint64_t *cur;

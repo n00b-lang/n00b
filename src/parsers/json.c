@@ -5,11 +5,11 @@
 #include "n00b.h"
 #include "parsers/json.h"
 #include "core/alloc.h"
-#include "core/list.h"
+#include "adt/list.h"
 #include "core/atomic.h"
 #include "core/hash.h"
 #define N00B_USE_INTERNAL_API
-#include "core/dict_untyped.h"
+#include "adt/dict_untyped.h"
 
 #include <string.h>
 #include <stdio.h>

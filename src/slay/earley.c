@@ -7,11 +7,11 @@
 #include "slay/n00b_parse.h"
 #include "internal/slay/earley_internal.h"
 #include "internal/slay/unicode_class.h"
-#include "unicode/encoding.h"
+#include "text/unicode/encoding.h"
 #include "parsers/token_stream.h"
 #include "core/string.h"
-#include "core/option.h"
-#include "strings/string_ops.h"
+#include "adt/option.h"
+#include "text/strings/string_ops.h"
 
 #include <assert.h>
 #include <string.h>

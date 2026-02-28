@@ -4,7 +4,7 @@
 #include "n00b.h"
 #include "core/alloc.h"
 #include "core/runtime.h"
-#include "core/result.h"
+#include "adt/result.h"
 
 n00b_result_decl(char *);
 

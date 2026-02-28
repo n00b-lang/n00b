@@ -1,6 +1,6 @@
 #include "test_unicode_helpers.h"
-#include "unicode/emoji.h"
-#include "unicode/encoding.h"
+#include "text/unicode/emoji.h"
+#include "text/unicode/encoding.h"
 
 TEST(test_is_emoji)
 {

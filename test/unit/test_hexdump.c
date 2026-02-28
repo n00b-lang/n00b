@@ -7,7 +7,7 @@
 #include <string.h>
 
 #include "n00b.h"
-#include "hexdump/hexdump.h"
+#include "display/hexdump.h"
 #include "core/alloc.h"
 #include "core/buffer.h"
 #include "core/runtime.h"

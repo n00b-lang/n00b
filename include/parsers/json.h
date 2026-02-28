@@ -22,9 +22,9 @@
 
 #include "n00b.h"
 #include "core/alloc.h"
-#include "core/result.h"
-#include "core/list.h"
-#include "core/dict_untyped.h"
+#include "adt/result.h"
+#include "adt/list.h"
+#include "adt/dict_untyped.h"
 
 // ============================================================================
 // JSON value type

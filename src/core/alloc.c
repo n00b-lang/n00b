@@ -2,7 +2,7 @@
 #include "core/alloc.h"
 #include "core/arena.h"
 #include "core/alloc_mdata.h"
-#include "core/dict_untyped.h"
+#include "adt/dict_untyped.h"
 #include "core/mmaps.h"
 #include "core/memory_info.h"
 #include "core/stw.h"

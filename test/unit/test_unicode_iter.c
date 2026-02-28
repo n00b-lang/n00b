@@ -1,5 +1,5 @@
 #include "test_unicode_helpers.h"
-#include "unicode/iter.h"
+#include "text/unicode/iter.h"
 
 TEST(test_foreach_cp)
 {

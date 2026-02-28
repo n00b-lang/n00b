@@ -17,7 +17,7 @@
 #include "core/runtime.h"
 #include "core/atomic.h"
 #include "core/thread.h"
-#include "core/option.h"
+#include "adt/option.h"
 #include "conduit/xform_linebuf.h"
 #include "conduit/xform_ansi_strip.h"
 

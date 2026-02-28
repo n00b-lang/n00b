@@ -4,11 +4,11 @@
 #include "core/alloc.h"
 #include "core/runtime.h"
 #include "core/string.h"
-#include "render/plane.h"
-#include "render/cell.h"
-#include "render/types.h"
-#include "render/box.h"
-#include "table/table.h"
+#include "display/render/plane.h"
+#include "display/render/cell.h"
+#include "display/render/types.h"
+#include "display/render/box.h"
+#include "display/table/table.h"
 
 // ====================================================================
 // Helpers

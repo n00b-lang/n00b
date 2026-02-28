@@ -26,7 +26,7 @@
 
 #include "slay/parse_tree.h"
 #include "parsers/scanner.h"
-#include "core/result.h"
+#include "adt/result.h"
 
 n00b_result_decl(n00b_parse_tree_t *);
 

@@ -4,9 +4,9 @@
 #include "n00b.h"
 #include "core/alloc.h"
 #include "core/runtime.h"
-#include "render/backend.h"
-#include "render/cell.h"
-#include "strings/text_style.h"
+#include "display/render/backend.h"
+#include "display/render/cell.h"
+#include "text/strings/text_style.h"
 
 // ====================================================================
 // Helpers: capture ANSI backend output to a pipe

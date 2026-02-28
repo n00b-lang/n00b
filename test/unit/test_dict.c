@@ -6,7 +6,7 @@
 #include "n00b.h"
 #include "core/alloc.h"
 #include "core/runtime.h"
-#include "core/dict.h"
+#include "adt/dict.h"
 
 typedef struct {
     uint64_t a;

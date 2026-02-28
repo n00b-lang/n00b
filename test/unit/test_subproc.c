@@ -11,7 +11,7 @@
 #include <sys/wait.h>
 
 #include "n00b.h"
-#include "io/subproc.h"
+#include "conduit/subproc.h"
 #include "conduit/conduit.h"
 #include "conduit/io.h"
 #include "conduit/xform_linebuf.h"

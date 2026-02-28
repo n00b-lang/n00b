@@ -4,9 +4,9 @@
 
 #include "core/alloc.h"
 #include "core/string.h"
-#include "core/option.h"
+#include "adt/option.h"
 #include "core/hash.h"
-#include "strings/string_ops.h"
+#include "text/strings/string_ops.h"
 
 #include <assert.h>
 #include <stdio.h>

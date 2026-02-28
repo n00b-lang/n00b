@@ -13,7 +13,7 @@
  */
 
 #include "slay/cfg.h"
-#include "core/array.h"
+#include "adt/array.h"
 
 // ============================================================================
 // Post-dominator info

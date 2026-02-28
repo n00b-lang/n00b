@@ -24,8 +24,8 @@
 #include "slay/n00b_parse.h"
 #include "slay/parse_tree.h"
 #include "parsers/token_stream.h"
-#include "core/dict.h"
-#include "core/list.h"
+#include "adt/dict.h"
+#include "adt/list.h"
 
 // ============================================================================
 // Token type indices (used as n00b_cmdr_t.tok_ids[] indices)

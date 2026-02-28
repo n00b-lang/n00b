@@ -17,9 +17,9 @@
 #include "core/alloc_base.h"
 #include "core/rt_access.h"
 #include "core/thread.h"
-#include "core/array.h"
-#include "core/list.h"
-#include "core/option.h"
+#include "adt/array.h"
+#include "adt/list.h"
+#include "adt/option.h"
 #include "core/pool.h"
 #include "conduit/conduit_types.h"
 

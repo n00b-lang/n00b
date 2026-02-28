@@ -6,8 +6,8 @@
 #include "core/alloc.h"
 #include "core/runtime.h"
 #include "core/mmaps.h"
-#include "core/option.h"
-#include "core/result.h"
+#include "adt/option.h"
+#include "adt/result.h"
 
 // ============================================================================
 // 1. mmap_basic — n00b_mmap returns ok result with page-aligned address

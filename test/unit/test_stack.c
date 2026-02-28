@@ -5,8 +5,8 @@
 #include "n00b.h"
 #include "core/alloc.h"
 #include "core/runtime.h"
-#include "core/stack.h"
-#include "core/array.h"
+#include "adt/stack.h"
+#include "adt/array.h"
 
 n00b_stack_decl(int);
 n00b_stack_decl(char *);

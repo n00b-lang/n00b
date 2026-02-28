@@ -16,7 +16,7 @@
 #include "slay/cfg.h"
 #include "slay/cf_label.h"
 #include "slay/grammar.h"
-#include "core/list.h"
+#include "adt/list.h"
 
 // ============================================================================
 // Def/use fact

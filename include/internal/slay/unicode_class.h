@@ -10,8 +10,8 @@
  */
 
 #include "slay/types.h"
-#include "unicode/identifiers.h"
-#include "unicode/properties.h"
+#include "text/unicode/identifiers.h"
+#include "text/unicode/properties.h"
 
 /**
  * @brief Test if a codepoint matches a character class.
