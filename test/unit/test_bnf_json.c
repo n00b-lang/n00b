@@ -529,26 +529,53 @@ make_json_grammar(void)
         "grammars/json.bnf",
         "../grammars/json.bnf",
         "../../grammars/json.bnf",
+        NULL,
+    };
+
+    const char *roots[] = {
+        getenv("N00B_SOURCE_ROOT"),
+        getenv("MESON_SOURCE_ROOT"),
+        NULL,
     };
 
     FILE *f = NULL;
-    for (int i = 0; i < 3; i++) {
-        f = fopen(paths[i], "r");
-        if (f) break;
-    }
-
-    if (!f) {
-        // Try from MESON_SOURCE_ROOT environment variable.
-        const char *srcroot = getenv("MESON_SOURCE_ROOT");
-        if (srcroot) {
-            char path[1024];
-            snprintf(path, sizeof(path), "%s/grammars/json.bnf", srcroot);
-            f = fopen(path, "r");
+    for (const char **p = paths; *p; p++) {
+        f = fopen(*p, "r");
+        if (f) {
+            break;
         }
     }
 
+    for (const char **r = roots; !f && *r; r++) {
+        if (!*r || !**r) {
+            continue;
+        }
+
+        char path[1024];
+        snprintf(path, sizeof(path), "%s/grammars/json.bnf", *r);
+        f = fopen(path, "r");
+    }
+
     if (!f) {
-        printf("    Could not find grammars/json.bnf\n");
+        const char *n00b_root  = getenv("N00B_SOURCE_ROOT");
+        const char *meson_root = getenv("MESON_SOURCE_ROOT");
+        fprintf(stderr, "    [FAIL] Could not find grammars/json.bnf\n");
+        fprintf(stderr,
+                "    [FAIL] N00B_SOURCE_ROOT=%s\n",
+                (n00b_root && *n00b_root) ? n00b_root : "(unset)");
+        fprintf(stderr,
+                "    [FAIL] MESON_SOURCE_ROOT=%s\n",
+                (meson_root && *meson_root) ? meson_root : "(unset)");
+        fprintf(stderr, "    [FAIL] attempted paths:\n");
+        for (const char **p = paths; *p; p++) {
+            fprintf(stderr, "      - %s\n", *p);
+        }
+        for (const char **r = roots; *r; r++) {
+            if (!*r || !**r) {
+                continue;
+            }
+            fprintf(stderr, "      - %s/grammars/json.bnf\n", *r);
+        }
         n00b_grammar_free(g);
         return NULL;
     }

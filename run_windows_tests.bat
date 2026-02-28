@@ -2,13 +2,22 @@
 setlocal EnableExtensions EnableDelayedExpansion
 
 set "ROOT=%~dp0"
-set "BIN_DIR=%ROOT%build_cross_windows_x86_64"
-set "LOG_DIR=%ROOT%windows_debug_logs"
+if "%ROOT:~-1%"=="\" set "ROOT=%ROOT:~0,-1%"
+set "BIN_DIR=%ROOT%\build_cross_windows_x86_64"
+set "LOG_DIR=%ROOT%\windows_debug_logs"
 set "SUMMARY=%LOG_DIR%\summary.txt"
 set "OVERALL=0"
 set "TEST_COUNT=0"
 set "DBG_CMD="
+set "MESON_SOURCE_ROOT=%ROOT%"
+if not defined N00B_SOURCE_ROOT set "N00B_SOURCE_ROOT=%ROOT%"
 if not defined N00B_WIN_THREAD_DEBUG set "N00B_WIN_THREAD_DEBUG=1"
+
+cd /d "%ROOT%"
+if errorlevel 1 (
+    echo [ERROR] Failed to set working directory: "%ROOT%"
+    exit /b 2
+)
 
 if not exist "%BIN_DIR%\" (
     echo [ERROR] Missing directory: "%BIN_DIR%"
@@ -23,6 +32,8 @@ call :detect_debugger
     echo n00b windows subset run
     echo root: %ROOT%
     echo bin_dir: %BIN_DIR%
+    echo MESON_SOURCE_ROOT: %MESON_SOURCE_ROOT%
+    echo N00B_SOURCE_ROOT: %N00B_SOURCE_ROOT%
     if defined DBG_CMD (
         echo debugger: %DBG_CMD%
     ) else (

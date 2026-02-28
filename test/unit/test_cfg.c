@@ -173,8 +173,12 @@ load_c_grammar(void)
         NULL,
     };
 
-    const char *srcroot = getenv("MESON_SOURCE_ROOT");
-    FILE       *f       = NULL;
+    const char *roots[] = {
+        getenv("N00B_SOURCE_ROOT"),
+        getenv("MESON_SOURCE_ROOT"),
+        NULL,
+    };
+    FILE *f = NULL;
 
     for (const char **p = paths; *p; p++) {
         f = fopen(*p, "r");
@@ -184,13 +188,36 @@ load_c_grammar(void)
         }
     }
 
-    if (!f && srcroot) {
+    for (const char **r = roots; !f && *r; r++) {
+        if (!*r || !**r) {
+            continue;
+        }
+
         char path[1024];
-        snprintf(path, sizeof(path), "%s/grammars/c_ncc.bnf", srcroot);
+        snprintf(path, sizeof(path), "%s/grammars/c_ncc.bnf", *r);
         f = fopen(path, "r");
     }
 
     if (!f) {
+        const char *n00b_root  = getenv("N00B_SOURCE_ROOT");
+        const char *meson_root = getenv("MESON_SOURCE_ROOT");
+        fprintf(stderr, "  [FAIL] Cannot find grammars/c_ncc.bnf\n");
+        fprintf(stderr,
+                "  [FAIL] N00B_SOURCE_ROOT=%s\n",
+                (n00b_root && *n00b_root) ? n00b_root : "(unset)");
+        fprintf(stderr,
+                "  [FAIL] MESON_SOURCE_ROOT=%s\n",
+                (meson_root && *meson_root) ? meson_root : "(unset)");
+        fprintf(stderr, "  [FAIL] attempted paths:\n");
+        for (const char **p = paths; *p; p++) {
+            fprintf(stderr, "    - %s\n", *p);
+        }
+        for (const char **r = roots; *r; r++) {
+            if (!*r || !**r) {
+                continue;
+            }
+            fprintf(stderr, "    - %s/grammars/c_ncc.bnf\n", *r);
+        }
         return NULL;
     }
 
