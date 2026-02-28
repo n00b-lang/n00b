@@ -284,7 +284,7 @@ decompose_str(const char *data, int64_t len, bool compat)
 // Convert codepoint buffer to n00b_string_t (allocator-allocated)
 // ---------------------------------------------------------------------------
 
-static n00b_string_t
+static n00b_string_t *
 cp_buf_to_n00b_string(n00b_allocator_t *allocator, cp_buf_t *buf)
 {
     // Worst case: 4 bytes per codepoint
@@ -296,7 +296,7 @@ cp_buf_to_n00b_string(n00b_allocator_t *allocator, cp_buf_t *buf)
     }
     out[pos] = '\0';
 
-    n00b_string_t result
+    n00b_string_t *result
         = n00b_string_from_raw(out, (int64_t)pos, .allocator = allocator);
     n00b_free(out);
     return result;
@@ -306,86 +306,86 @@ cp_buf_to_n00b_string(n00b_allocator_t *allocator, cp_buf_t *buf)
 // Public API
 // ---------------------------------------------------------------------------
 
-n00b_string_t
+n00b_string_t *
 n00b_unicode_nfd_raw(n00b_allocator_t *allocator, const char *data, int64_t len)
 {
-    cp_buf_t      buf    = decompose_str(data, len, false);
-    n00b_string_t result = cp_buf_to_n00b_string(allocator, &buf);
+    cp_buf_t       buf    = decompose_str(data, len, false);
+    n00b_string_t *result = cp_buf_to_n00b_string(allocator, &buf);
     cp_buf_free(&buf);
     return result;
 }
 
-n00b_string_t
-n00b_unicode_nfd(n00b_string_t s) _kargs
+n00b_string_t *
+n00b_unicode_nfd(n00b_string_t *s) _kargs
 {
     n00b_allocator_t *allocator = nullptr;
 }
 {
     if (!allocator)
         allocator = nullptr;
-    return n00b_unicode_nfd_raw(allocator, s.data, s.u8_bytes);
+    return n00b_unicode_nfd_raw(allocator, s->data, s->u8_bytes);
 }
 
-n00b_string_t
+n00b_string_t *
 n00b_unicode_nfkd_raw(n00b_allocator_t *allocator, const char *data, int64_t len)
 {
-    cp_buf_t      buf    = decompose_str(data, len, true);
-    n00b_string_t result = cp_buf_to_n00b_string(allocator, &buf);
+    cp_buf_t       buf    = decompose_str(data, len, true);
+    n00b_string_t *result = cp_buf_to_n00b_string(allocator, &buf);
     cp_buf_free(&buf);
     return result;
 }
 
-n00b_string_t
-n00b_unicode_nfkd(n00b_string_t s) _kargs
+n00b_string_t *
+n00b_unicode_nfkd(n00b_string_t *s) _kargs
 {
     n00b_allocator_t *allocator = nullptr;
 }
 {
     if (!allocator)
         allocator = nullptr;
-    return n00b_unicode_nfkd_raw(allocator, s.data, s.u8_bytes);
+    return n00b_unicode_nfkd_raw(allocator, s->data, s->u8_bytes);
 }
 
-n00b_string_t
+n00b_string_t *
 n00b_unicode_nfc_raw(n00b_allocator_t *allocator, const char *data, int64_t len)
 {
-    cp_buf_t buf = decompose_str(data, len, false);
+    cp_buf_t       buf = decompose_str(data, len, false);
     canonical_compose(&buf);
-    n00b_string_t result = cp_buf_to_n00b_string(allocator, &buf);
+    n00b_string_t *result = cp_buf_to_n00b_string(allocator, &buf);
     cp_buf_free(&buf);
     return result;
 }
 
-n00b_string_t
-n00b_unicode_nfc(n00b_string_t s) _kargs
+n00b_string_t *
+n00b_unicode_nfc(n00b_string_t *s) _kargs
 {
     n00b_allocator_t *allocator = nullptr;
 }
 {
     if (!allocator)
         allocator = nullptr;
-    return n00b_unicode_nfc_raw(allocator, s.data, s.u8_bytes);
+    return n00b_unicode_nfc_raw(allocator, s->data, s->u8_bytes);
 }
 
-n00b_string_t
+n00b_string_t *
 n00b_unicode_nfkc_raw(n00b_allocator_t *allocator, const char *data, int64_t len)
 {
-    cp_buf_t buf = decompose_str(data, len, true);
+    cp_buf_t       buf = decompose_str(data, len, true);
     canonical_compose(&buf);
-    n00b_string_t result = cp_buf_to_n00b_string(allocator, &buf);
+    n00b_string_t *result = cp_buf_to_n00b_string(allocator, &buf);
     cp_buf_free(&buf);
     return result;
 }
 
-n00b_string_t
-n00b_unicode_nfkc(n00b_string_t s) _kargs
+n00b_string_t *
+n00b_unicode_nfkc(n00b_string_t *s) _kargs
 {
     n00b_allocator_t *allocator = nullptr;
 }
 {
     if (!allocator)
         allocator = nullptr;
-    return n00b_unicode_nfkc_raw(allocator, s.data, s.u8_bytes);
+    return n00b_unicode_nfkc_raw(allocator, s->data, s->u8_bytes);
 }
 
 // ---------------------------------------------------------------------------
@@ -432,9 +432,9 @@ n00b_unicode_is_nfc_raw(const char *data, int64_t len)
 }
 
 bool
-n00b_unicode_is_nfc(n00b_string_t s)
+n00b_unicode_is_nfc(n00b_string_t *s)
 {
-    return n00b_unicode_is_nfc_raw(s.data, s.u8_bytes);
+    return n00b_unicode_is_nfc_raw(s->data, s->u8_bytes);
 }
 
 bool
@@ -465,9 +465,9 @@ n00b_unicode_is_nfd_raw(const char *data, int64_t len)
 }
 
 bool
-n00b_unicode_is_nfd(n00b_string_t s)
+n00b_unicode_is_nfd(n00b_string_t *s)
 {
-    return n00b_unicode_is_nfd_raw(s.data, s.u8_bytes);
+    return n00b_unicode_is_nfd_raw(s->data, s->u8_bytes);
 }
 
 // ---------------------------------------------------------------------------
@@ -483,31 +483,31 @@ is_mark(n00b_codepoint_t cp)
         || gc == N00B_UNICODE_GC_ME;
 }
 
-n00b_string_t
-n00b_unicode_strip_marks(n00b_string_t s) _kargs
+n00b_string_t *
+n00b_unicode_strip_marks(n00b_string_t *s) _kargs
 {
     n00b_allocator_t *allocator = nullptr;
 }
 {
     // NFD decompose first so precomposed characters (e.g. U+00E9 'e\u0301')
     // become base + combining mark.
-    n00b_string_t decomposed = n00b_unicode_nfd(s, .allocator = allocator);
+    n00b_string_t *decomposed = n00b_unicode_nfd(s, .allocator = allocator);
 
     // Worst case: same length (nothing stripped).  Allocate output buffer.
-    char    *buf   = n00b_alloc_array_with_opts(char, decomposed.u8_bytes + 1, &(n00b_alloc_opts_t){.allocator = allocator});
+    char    *buf   = n00b_alloc_array_with_opts(char, decomposed->u8_bytes + 1, &(n00b_alloc_opts_t){.allocator = allocator});
     uint32_t out   = 0;
     uint32_t pos   = 0;
 
-    while (pos < (uint32_t)decomposed.u8_bytes) {
+    while (pos < (uint32_t)decomposed->u8_bytes) {
         uint32_t start = pos;
-        int32_t  cp    = n00b_unicode_utf8_decode(decomposed.data, (uint32_t)decomposed.u8_bytes, &pos);
+        int32_t  cp    = n00b_unicode_utf8_decode(decomposed->data, (uint32_t)decomposed->u8_bytes, &pos);
 
         if (cp < 0)
             break;
 
         if (!is_mark((n00b_codepoint_t)cp)) {
             uint32_t cplen = pos - start;
-            memcpy(buf + out, decomposed.data + start, cplen);
+            memcpy(buf + out, decomposed->data + start, cplen);
             out += cplen;
         }
     }
@@ -515,7 +515,7 @@ n00b_unicode_strip_marks(n00b_string_t s) _kargs
     buf[out] = '\0';
 
     // Recompose to NFC for a clean result.
-    n00b_string_t stripped = n00b_string_from_raw(buf, out, .allocator = allocator);
+    n00b_string_t *stripped = n00b_string_from_raw(buf, out, .allocator = allocator);
     n00b_free(buf);
 
     return n00b_unicode_nfc(stripped, .allocator = allocator);

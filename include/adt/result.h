@@ -10,10 +10,8 @@
 typedef int n00b_err_t;
 
 #define n00b_result_tid(T) typeid("result", T)
-#define n00b_result_t(T)   struct n00b_result_tid(T)
-
-#define n00b_result_decl(T)                                                                    \
-    struct n00b_result_tid(T) {                                                                \
+#define n00b_result_t(T)                                                                       \
+    _generic_struct n00b_result_tid(T) {                                                       \
         bool is_ok;                                                                            \
         union {                                                                                \
             T          ok;                                                                     \
@@ -59,17 +57,6 @@ typedef int n00b_err_t;
     })
 
 #define n00b_result_match(x, ok_expr, err_expr) ((x).is_ok ? (ok_expr) : (err_expr))
-
-// ============================================================================
-// Common result type declarations
-// ============================================================================
-
-n00b_result_decl(int);
-n00b_result_decl(int64_t);
-n00b_result_decl(void *);
-n00b_result_decl(uint64_t);
-n00b_result_decl(bool);
-n00b_result_decl(uint8_t);
 
 // ============================================================================
 // Stdlib wrapper macros — produce n00b_result_t values from system calls

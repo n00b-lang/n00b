@@ -15,7 +15,7 @@
 #include "text/strings/string_ops.h"
 
 // Stream backend test helpers (defined in backend_stream.c).
-extern n00b_string_t n00b_stream_backend_get_buffer(void *ctx);
+extern n00b_string_t *n00b_stream_backend_get_buffer(void *ctx);
 extern size_t        n00b_stream_backend_get_length(void *ctx);
 extern void          n00b_stream_backend_set_size(void *ctx,
                                                    n00b_isize_t rows,
@@ -67,8 +67,8 @@ test_canvas_render_empty(void)
 
     n00b_canvas_render(c);
 
-    n00b_string_t buf = n00b_stream_backend_get_buffer(c->backend_ctx);
-    assert(buf.data != nullptr);
+    n00b_string_t *buf = n00b_stream_backend_get_buffer(c->backend_ctx);
+    assert(buf->data != nullptr);
     // Empty frame should produce only spaces/newlines.
 
     n00b_canvas_destroy(c);
@@ -91,11 +91,11 @@ test_canvas_render_single_plane(void)
     n00b_canvas_add_plane(c, p);
     n00b_canvas_render(c);
 
-    n00b_string_t buf = n00b_stream_backend_get_buffer(c->backend_ctx);
-    assert(buf.data != nullptr);
+    n00b_string_t *buf = n00b_stream_backend_get_buffer(c->backend_ctx);
+    assert(buf->data != nullptr);
     // First two chars of first line should be "Hi".
-    assert(buf.data[0] == 'H');
-    assert(buf.data[1] == 'i');
+    assert(buf->data[0] == 'H');
+    assert(buf->data[1] == 'i');
 
     n00b_plane_destroy(p);
     n00b_canvas_destroy(c);
@@ -121,9 +121,9 @@ test_canvas_z_order(void)
     n00b_canvas_add_plane(c, front);
     n00b_canvas_render(c);
 
-    n00b_string_t buf = n00b_stream_backend_get_buffer(c->backend_ctx);
+    n00b_string_t *buf = n00b_stream_backend_get_buffer(c->backend_ctx);
     // Front plane should overwrite back plane.
-    assert(buf.data[0] == 'F');
+    assert(buf->data[0] == 'F');
 
     n00b_plane_destroy(back);
     n00b_plane_destroy(front);
@@ -145,10 +145,10 @@ test_canvas_plane_offset(void)
     n00b_canvas_add_plane(c, p);
     n00b_canvas_render(c);
 
-    n00b_string_t buf = n00b_stream_backend_get_buffer(c->backend_ctx);
+    n00b_string_t *buf = n00b_stream_backend_get_buffer(c->backend_ctx);
     // 'X' should be at frame position (row=1, col=3).
     // Row 0 is empty, so first line in buffer is empty or spaces.
-    assert(n00b_unicode_str_contains(buf, *r"X"));
+    assert(n00b_unicode_str_contains(buf, r"X"));
 
     n00b_plane_destroy(p);
     n00b_canvas_destroy(c);
@@ -221,8 +221,8 @@ test_canvas_widget_state_styling(void)
     n00b_canvas_render(c);
 
     // Just verify it doesn't crash and produces output.
-    n00b_string_t buf = n00b_stream_backend_get_buffer(c->backend_ctx);
-    assert(buf.data != nullptr);
+    n00b_string_t *buf = n00b_stream_backend_get_buffer(c->backend_ctx);
+    assert(buf->data != nullptr);
     assert(n00b_stream_backend_get_length(c->backend_ctx) > 0);
 
     n00b_plane_destroy(p);
@@ -251,10 +251,10 @@ test_canvas_viewport_subsetting(void)
     n00b_canvas_add_plane(c, p);
     n00b_canvas_render(c);
 
-    n00b_string_t buf = n00b_stream_backend_get_buffer(c->backend_ctx);
+    n00b_string_t *buf = n00b_stream_backend_get_buffer(c->backend_ctx);
     // Default viewport at col 0 — should see 'A' but not 'B'.
-    assert(buf.data[0] == 'A');
-    assert(!n00b_unicode_str_contains(buf, *r"B"));
+    assert(buf->data[0] == 'A');
+    assert(!n00b_unicode_str_contains(buf, r"B"));
 
     // Scroll viewport to show 'B'.
     n00b_plane_scroll_to(p, 0, 10);
@@ -262,8 +262,8 @@ test_canvas_viewport_subsetting(void)
 
     buf = n00b_stream_backend_get_buffer(c->backend_ctx);
     // Now col 15 maps to viewport col 5 → frame col 5.
-    assert(n00b_unicode_str_contains(buf, *r"B"));
-    assert(!n00b_unicode_str_contains(buf, *r"A"));
+    assert(n00b_unicode_str_contains(buf, r"B"));
+    assert(!n00b_unicode_str_contains(buf, r"A"));
 
     n00b_plane_destroy(p);
     n00b_canvas_destroy(c);
@@ -290,11 +290,11 @@ test_canvas_nested_planes(void)
     n00b_canvas_add_plane(c, parent);
     n00b_canvas_render(c);
 
-    n00b_string_t buf = n00b_stream_backend_get_buffer(c->backend_ctx);
-    assert(buf.data != nullptr);
+    n00b_string_t *buf = n00b_stream_backend_get_buffer(c->backend_ctx);
+    assert(buf->data != nullptr);
     // Both 'P' and 'C' should appear.
-    assert(n00b_unicode_str_contains(buf, *r"P"));
-    assert(n00b_unicode_str_contains(buf, *r"C"));
+    assert(n00b_unicode_str_contains(buf, r"P"));
+    assert(n00b_unicode_str_contains(buf, r"C"));
 
     n00b_plane_destroy(child);
     n00b_plane_destroy(parent);
@@ -321,9 +321,9 @@ test_canvas_nested_z_order(void)
     n00b_canvas_add_plane(c, parent);
     n00b_canvas_render(c);
 
-    n00b_string_t buf = n00b_stream_backend_get_buffer(c->backend_ctx);
+    n00b_string_t *buf = n00b_stream_backend_get_buffer(c->backend_ctx);
     // Child (z=1) overwrites parent (z=0) at position (0,0).
-    assert(buf.data[0] == 'C');
+    assert(buf->data[0] == 'C');
 
     n00b_plane_destroy(child);
     n00b_plane_destroy(parent);
@@ -351,10 +351,10 @@ test_canvas_child_clipping(void)
     n00b_canvas_add_plane(c, parent);
     n00b_canvas_render(c);
 
-    n00b_string_t buf = n00b_stream_backend_get_buffer(c->backend_ctx);
+    n00b_string_t *buf = n00b_stream_backend_get_buffer(c->backend_ctx);
     // 'X' at child relative (0,0) maps to absolute (8,0).
     // Parent clip is (0,0)-(10,5), so (8,0) is in bounds.
-    assert(buf.data != nullptr);
+    assert(buf->data != nullptr);
 
     n00b_plane_destroy(child);
     n00b_plane_destroy(parent);
@@ -389,12 +389,12 @@ test_canvas_ellipsis_overflow(void)
     n00b_canvas_add_plane(c, p);
     n00b_canvas_render(c);
 
-    n00b_string_t buf = n00b_stream_backend_get_buffer(c->backend_ctx);
-    assert(buf.data != nullptr);
+    n00b_string_t *buf = n00b_stream_backend_get_buffer(c->backend_ctx);
+    assert(buf->data != nullptr);
 
     // The last visible row should show "..." (three dots).
     // Row 0 = 'A', Row 1 = 'B', Row 2 = '...'
-    assert(n00b_unicode_str_contains(buf, *r"A"));
+    assert(n00b_unicode_str_contains(buf, r"A"));
 
     n00b_plane_destroy(p);
     n00b_canvas_destroy(c);

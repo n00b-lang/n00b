@@ -24,7 +24,7 @@
 // URI type (variant of uint64_t | n00b_string_t)
 // ============================================================================
 
-typedef n00b_variant_decl(uint64_t, n00b_string_t) n00b_conduit_uri_t;
+typedef n00b_variant_t(uint64_t, n00b_string_t *) n00b_conduit_uri_t;
 
 // ============================================================================
 // Integer URI type tags (top 16 bits of 64-bit integer)
@@ -102,9 +102,9 @@ n00b_conduit_int_uri(uint16_t tag, uint64_t id)
 }
 
 static inline n00b_conduit_uri_t
-n00b_conduit_str_uri(n00b_string_t s)
+n00b_conduit_str_uri(n00b_string_t *s)
 {
-    return n00b_variant_set(n00b_conduit_uri_t, n00b_string_t, s);
+    return n00b_variant_set(n00b_conduit_uri_t, n00b_string_t *, s);
 }
 
 /** @brief Convenience: create a file descriptor URI */
@@ -416,12 +416,6 @@ n00b_conduit_topic_uri(n00b_conduit_topic_base_t *topic)
 {
     return topic->uri;
 }
-
-// ============================================================================
-// Topic result type
-// ============================================================================
-
-n00b_result_decl(n00b_conduit_topic_base_t *);
 
 // ============================================================================
 // Master instantiation macro

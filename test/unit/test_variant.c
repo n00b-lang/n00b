@@ -8,12 +8,12 @@
 #include "adt/option.h"
 #include "adt/variant.h"
 
-// Declare variant types via typedef at file scope.
-typedef n00b_variant_decl(int, double, char *) variant_idc_t;
-typedef n00b_variant_decl(int, double) variant_id_t;
-typedef n00b_variant_decl(int, char *) variant_ic_t;
-typedef n00b_variant_decl(char, int, double) variant_cid_t;
-typedef n00b_variant_decl(char *, int) variant_ci_t;
+// Variant type aliases used by the tests.
+typedef n00b_variant_t(int, double, char *) variant_idc_t;
+typedef n00b_variant_t(int, double) variant_id_t;
+typedef n00b_variant_t(int, char *) variant_ic_t;
+typedef n00b_variant_t(char, int, double) variant_cid_t;
+typedef n00b_variant_t(char *, int) variant_ci_t;
 
 // ============================================================================
 // 1. Construction via n00b_variant_set (by value)

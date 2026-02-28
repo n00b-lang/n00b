@@ -42,14 +42,14 @@ ansi_strip_transform(n00b_conduit_filter_t(n00b_buffer_t *) *xf,
         return n00b_option_none(n00b_buffer_t *);
 
     // keep_control=false strips escape sequences, preserves newlines/tabs.
-    n00b_string_t stripped = n00b_ansi_nodes_to_string(nodes, false);
+    n00b_string_t *stripped = n00b_ansi_nodes_to_string(nodes, false);
 
-    if (stripped.u8_bytes == 0)
+    if (!stripped || stripped->u8_bytes == 0)
         return n00b_option_none(n00b_buffer_t *);
 
     // Convert string to buffer for the output topic.
     n00b_buffer_t *out =
-        n00b_buffer_from_bytes(stripped.data, (int64_t)stripped.u8_bytes);
+        n00b_buffer_from_bytes(stripped->data, (int64_t)stripped->u8_bytes);
 
     return n00b_option_set(n00b_buffer_t *, out);
 }
@@ -58,9 +58,13 @@ ansi_strip_transform(n00b_conduit_filter_t(n00b_buffer_t *) *xf,
 // Ops vtable
 // ============================================================================
 
+static n00b_string_t _kind_ansi_strip = {
+    .data = "ansi_strip", .u8_bytes = 10, .codepoints = 10, .styling = nullptr
+};
+
 static const n00b_conduit_filter_ops_t(n00b_buffer_t *) ansi_strip_ops = {
     .transform = ansi_strip_transform,
-    .kind      = N00B_STRING_STATIC("ansi_strip"),
+    .kind      = &_kind_ansi_strip,
 };
 
 // ============================================================================

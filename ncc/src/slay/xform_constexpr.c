@@ -477,7 +477,7 @@ collect_decls_recursive(n00b_parse_tree_t *node,
     }
 }
 
-static char *
+char *
 collect_file_scope_declarations(n00b_xform_ctx_t  *ctx,
                                 n00b_parse_tree_t *call_node)
 {

@@ -8,7 +8,7 @@
 
 #include "text/unicode/types_ext.h"
 #include "adt/array.h"
-#include "core/runtime.h" // for n00b_array_decl(uint32_t)
+#include "core/runtime.h"
 
 /** @brief Compute line break actions for each codepoint in a string.
  *
@@ -21,7 +21,7 @@
  *       elements.  If `s.codepoints` has been computed, that value may
  *       be used directly.
  */
-void n00b_unicode_linebreaks(n00b_string_t s, n00b_unicode_lb_action_t *out);
+void n00b_unicode_linebreaks(n00b_string_t *s, n00b_unicode_lb_action_t *out);
 
 /** @brief Wrap a string to a given column width using Unicode line break rules.
  *
@@ -40,6 +40,6 @@ void n00b_unicode_linebreaks(n00b_string_t s, n00b_unicode_lb_action_t *out);
  *  @kw allocator     Optional allocator (defaults to the runtime allocator).
  *  @return An array of byte offsets where lines break.
  */
-n00b_array_t(uint32_t) n00b_unicode_linebreak_wrap(n00b_string_t s)
+n00b_array_t(uint32_t) n00b_unicode_linebreak_wrap(n00b_string_t *s)
     _kargs { int width = 80; int hang = 0; bool no_hard_wrap = false;
              n00b_allocator_t *allocator = nullptr; };

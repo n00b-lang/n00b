@@ -651,14 +651,14 @@ typedef struct {
 #### Registration API
 
 ```c
-auto k = n00b_tc_var(ctx, *r"K");
-auto v = n00b_tc_var(ctx, *r"V");
+auto k = n00b_tc_var(ctx, r"K");
+auto v = n00b_tc_var(ctx, r"V");
 
-n00b_tc_register_interface(ctx, *r"Indexable",
-    n00b_tc_iface_param(*r"key", k),
-    n00b_tc_iface_param(*r"value", v));
+n00b_tc_register_interface(ctx, r"Indexable",
+    n00b_tc_iface_param(r"key", k),
+    n00b_tc_iface_param(r"value", v));
 
-n00b_tc_impl(ctx, *r"dict", *r"Indexable", key_param, val_param);
+n00b_tc_impl(ctx, r"dict", r"Indexable", key_param, val_param);
 ```
 
 When a constraint says `'T implements Indexable`, and `'T` resolves
@@ -1203,7 +1203,7 @@ add_expr:
 **Option 3: Separate file** — loaded via the C API:
 
 ```c
-n00b_tc_load_rules(ctx, grammar, *r"my_lang.rules");
+n00b_tc_load_rules(ctx, grammar, r"my_lang.rules");
 ```
 
 **Option 4: C API only** — no rule text, build rules
@@ -1340,18 +1340,18 @@ ctx->t_f64       // f64
 // ... etc.
 
 // Named type variables — given_name is set, shown in errors.
-auto t = n00b_tc_var(ctx, *r"T");
-auto k = n00b_tc_var(ctx, *r"K");
-auto v = n00b_tc_var(ctx, *r"V");
+auto t = n00b_tc_var(ctx, r"T");
+auto k = n00b_tc_var(ctx, r"K");
+auto v = n00b_tc_var(ctx, r"V");
 
 // Anonymous type variable — given_name is none, display_name is "t_42".
 auto anon = n00b_tc_fresh_var(ctx);
 
 // Parameterized types — varargs for params.
-auto list_t = n00b_tc_param(ctx, *r"list", t);           // list[`T]
-auto dict_kv = n00b_tc_param(ctx, *r"dict", k, v);       // dict[`K, `V]
-auto ref_int = n00b_tc_param(ctx, *r"ref", ctx->t_int);  // ref[int]
-auto maybe_t = n00b_tc_param(ctx, *r"maybe", t);         // maybe[`T]
+auto list_t = n00b_tc_param(ctx, r"list", t);           // list[`T]
+auto dict_kv = n00b_tc_param(ctx, r"dict", k, v);       // dict[`K, `V]
+auto ref_int = n00b_tc_param(ctx, r"ref", ctx->t_int);  // ref[int]
+auto maybe_t = n00b_tc_param(ctx, r"maybe", t);         // maybe[`T]
 
 // Sum types — varargs for variants.
 auto int_or_str = n00b_tc_sum(ctx, ctx->t_int, ctx->t_string);
@@ -1368,9 +1368,9 @@ auto fn2 = n00b_tc_fn(ctx, ctx->t_string,
 // (string, *int) -> bool
 
 // Keywords are just an unordered record.
-auto kargs = n00b_tc_record(ctx, *r"",
-                              n00b_tc_field(*r"timeout", ctx->t_int, .has_default = true),
-                              n00b_tc_field(*r"retries", ctx->t_int, .has_default = true),
+auto kargs = n00b_tc_record(ctx, r"",
+                              n00b_tc_field(r"timeout", ctx->t_int, .has_default = true),
+                              n00b_tc_field(r"retries", ctx->t_int, .has_default = true),
                               .ordered = false);
 
 auto fn3 = n00b_tc_fn(ctx, ctx->t_string,
@@ -1379,9 +1379,9 @@ auto fn3 = n00b_tc_fn(ctx, ctx->t_string,
 // (string, **{.timeout: int, .retries: int}) -> bool
 
 // Record types — ordered by default (struct layout).
-auto point = n00b_tc_record(ctx, *r"Point",
-                             n00b_tc_field(*r"x", ctx->t_int),
-                             n00b_tc_field(*r"y", ctx->t_int));
+auto point = n00b_tc_record(ctx, r"Point",
+                             n00b_tc_field(r"x", ctx->t_int),
+                             n00b_tc_field(r"y", ctx->t_int));
 // Point{x: int, y: int} — ordered
 
 // Tuple types — varargs for elements.
@@ -1423,7 +1423,7 @@ extern n00b_tc_type_t *n00b_tc_fn(n00b_tc_ctx_t *ctx, n00b_tc_type_t *+) _kargs 
 };
 ```
 
-`n00b_tc_var` takes `n00b_string_t` — pass `*r"T"` for a named
+`n00b_tc_var` takes `n00b_string_t *` — pass `r"T"` for a named
 variable. The function wraps it in `n00b_option_set(given_name)` and
 generates a `display_name`. `n00b_tc_fresh_var` creates an anonymous
 Var with `given_name = none`.
@@ -1439,8 +1439,8 @@ field descriptor with optional `.has_default`.
 #### Constraints
 
 ```c
-n00b_tc_implements(ctx, t, *r"Numeric");       // `T:Numeric
-n00b_tc_has_field(ctx, t, *r"x", ctx->t_int);  // `T has .x: int
+n00b_tc_implements(ctx, t, r"Numeric");       // `T:Numeric
+n00b_tc_has_field(ctx, t, r"x", ctx->t_int);  // `T has .x: int
 n00b_tc_not(ctx, t, ctx->t_nil);               // `T not nil
 n00b_tc_promotes_to(ctx, t, ctx->t_f64);       // `T promotes to f64
 n00b_tc_one_of(ctx, t, ctx->t_int, ctx->t_string); // `T is int or string
@@ -1457,25 +1457,25 @@ result. The composable API uses `n00b_tc_child()` and
 
 ```c
 // Simple: int_literal → $result is int
-n00b_tc_rule(ctx, *r"int_literal",
+n00b_tc_rule(ctx, r"int_literal",
     n00b_tc_result(ctx->t_int));
 
 // Constrained: add_expr → $lhs is `T:Numeric, $rhs is `T, $result is `T
-auto t = n00b_tc_var(ctx, *r"T");
-n00b_tc_implements(ctx, t, *r"Numeric");
+auto t = n00b_tc_var(ctx, r"T");
+n00b_tc_implements(ctx, t, r"Numeric");
 
-n00b_tc_rule(ctx, *r"add_expr",
-    n00b_tc_child(*r"lhs", t),
-    n00b_tc_child(*r"rhs", t),
+n00b_tc_rule(ctx, r"add_expr",
+    n00b_tc_child(r"lhs", t),
+    n00b_tc_child(r"rhs", t),
     n00b_tc_result(t));
 
 // Destructuring: dict_index → $container is dict[`K, `V], $key is `K, $result is `V
-auto k = n00b_tc_var(ctx, *r"K");
-auto v = n00b_tc_var(ctx, *r"V");
+auto k = n00b_tc_var(ctx, r"K");
+auto v = n00b_tc_var(ctx, r"V");
 
-n00b_tc_rule(ctx, *r"dict_index",
-    n00b_tc_child(*r"container", n00b_tc_param(ctx, *r"dict", k, v)),
-    n00b_tc_child(*r"key", k),
+n00b_tc_rule(ctx, r"dict_index",
+    n00b_tc_child(r"container", n00b_tc_param(ctx, r"dict", k, v)),
+    n00b_tc_child(r"key", k),
     n00b_tc_result(v));
 ```
 
@@ -1487,32 +1487,32 @@ n00b_tc_rule(ctx, *r"dict_index",
 // binary_op:
 //   when $lhs is string and $rhs is string: $result is string
 //   when $lhs is `T:Numeric and $rhs is `T: $result is `T
-n00b_tc_rule(ctx, *r"binary_op",
+n00b_tc_rule(ctx, r"binary_op",
     n00b_tc_when(
-        n00b_tc_child(*r"lhs", ctx->t_string),
-        n00b_tc_child(*r"rhs", ctx->t_string),
+        n00b_tc_child(r"lhs", ctx->t_string),
+        n00b_tc_child(r"rhs", ctx->t_string),
         n00b_tc_result(ctx->t_string)),
     n00b_tc_when(
-        n00b_tc_child(*r"lhs", t),
-        n00b_tc_child(*r"rhs", t),
+        n00b_tc_child(r"lhs", t),
+        n00b_tc_child(r"rhs", t),
         n00b_tc_result(t)));
 
 // With value guards:
-n00b_tc_rule(ctx, *r"binary_expr",
+n00b_tc_rule(ctx, r"binary_expr",
     n00b_tc_when(
-        n00b_tc_guard(*r"op", *r"+"),
-        n00b_tc_child(*r"lhs", ctx->t_string),
-        n00b_tc_child(*r"rhs", ctx->t_string),
+        n00b_tc_guard(r"op", r"+"),
+        n00b_tc_child(r"lhs", ctx->t_string),
+        n00b_tc_child(r"rhs", ctx->t_string),
         n00b_tc_result(ctx->t_string)),
     n00b_tc_when(
-        n00b_tc_guard(*r"op", *r"+"),
-        n00b_tc_child(*r"lhs", t),
-        n00b_tc_child(*r"rhs", t),
+        n00b_tc_guard(r"op", r"+"),
+        n00b_tc_child(r"lhs", t),
+        n00b_tc_child(r"rhs", t),
         n00b_tc_result(t)),
     n00b_tc_when(
-        n00b_tc_guard(*r"op", *r"=="),
-        n00b_tc_child(*r"lhs", t),
-        n00b_tc_child(*r"rhs", t),
+        n00b_tc_guard(r"op", r"=="),
+        n00b_tc_child(r"lhs", t),
+        n00b_tc_child(r"rhs", t),
         n00b_tc_result(ctx->t_bool)));
 ```
 
@@ -1529,15 +1529,15 @@ auto key  = n00b_tc_key_of(ctx, dict_type);                   // param[0]
 auto val  = n00b_tc_value_of(ctx, dict_type);                 // param[1]
 auto ret  = n00b_tc_return_of(ctx, fn_type);                  // fn return
 auto p    = n00b_tc_param_of(ctx, type, n);                   // param[n]
-auto ft   = n00b_tc_field_of(ctx, record_type, *r"x");        // record field
+auto ft   = n00b_tc_field_of(ctx, record_type, r"x");        // record field
 auto pt   = n00b_tc_positional_of(ctx, fn_type, n);           // fn positional[n]
-auto kt   = n00b_tc_kargs_field_of(ctx, fn_type, *r"timeout"); // fn kargs field type
+auto kt   = n00b_tc_kargs_field_of(ctx, fn_type, r"timeout"); // fn kargs field type
 ```
 
 Custom extractors:
 
 ```c
-n00b_tc_register_extractor(ctx, *r"my_extractor", my_callback);
+n00b_tc_register_extractor(ctx, r"my_extractor", my_callback);
 ```
 
 ### 4.16 Core type API (standalone, no grammar)
@@ -1549,19 +1549,19 @@ This is the API for programmatic type checking:
 auto ctx = n00b_tc_ctx_new();
 
 // Create types using composable constructors (see §4.13).
-auto t      = n00b_tc_var(ctx, *r"T");
-auto list_t = n00b_tc_param(ctx, *r"list", t);
+auto t      = n00b_tc_var(ctx, r"T");
+auto list_t = n00b_tc_param(ctx, r"list", t);
 
 // Unify.
-auto r = n00b_tc_unify(ctx, list_t, n00b_tc_param(ctx, *r"list", ctx->t_int));
+auto r = n00b_tc_unify(ctx, list_t, n00b_tc_param(ctx, r"list", ctx->t_int));
 // r.ok is true, r.type is list[int]
 
 // Constrained variable.
-auto c = n00b_tc_var(ctx, *r"C");
-n00b_tc_implements(ctx, c, *r"Indexable");
+auto c = n00b_tc_var(ctx, r"C");
+n00b_tc_implements(ctx, c, r"Indexable");
 
 auto r2 = n00b_tc_unify(ctx, c,
-    n00b_tc_param(ctx, *r"dict", ctx->t_string, ctx->t_int));
+    n00b_tc_param(ctx, r"dict", ctx->t_string, ctx->t_int));
 // Succeeds: dict[string, int] implements Indexable.
 
 // Sum types and exhaustiveness.
@@ -1574,8 +1574,8 @@ remaining = n00b_tc_sum_subtract(ctx, remaining, ctx->t_string);
 // n00b_tc_sum_is_exhausted(remaining) → false; missing nil
 
 // Polymorphic types — type variables with constraints.
-auto a = n00b_tc_var(ctx, *r"A");
-n00b_tc_implements(ctx, a, *r"Comparable");
+auto a = n00b_tc_var(ctx, r"A");
+n00b_tc_implements(ctx, a, r"Comparable");
 
 auto id_type = n00b_tc_fn(ctx, a, .returns = ctx->t_bool);
 // (`A:Comparable) -> bool
@@ -2433,13 +2433,13 @@ with three Datalog relations:
 n00b_logic_init(&ctx->logic);
 
 // Relations.
-ctx->rel_implements = n00b_logic_relation(&ctx->logic, *r"implements", 2);
+ctx->rel_implements = n00b_logic_relation(&ctx->logic, r"implements", 2);
 // implements(type_name, iface_name)
 
-ctx->rel_promotes = n00b_logic_relation(&ctx->logic, *r"promotes", 2);
+ctx->rel_promotes = n00b_logic_relation(&ctx->logic, r"promotes", 2);
 // promotes(from_type, to_type)
 
-ctx->rel_iface_param = n00b_logic_relation(&ctx->logic, *r"iface_param", 3);
+ctx->rel_iface_param = n00b_logic_relation(&ctx->logic, r"iface_param", 3);
 // iface_param(iface_name, param_name, type_id)
 ```
 
@@ -2449,7 +2449,7 @@ Registering an implementation becomes a Datalog fact:
 void
 n00b_tc_impl(n00b_tc_ctx_t *ctx, n00b_string_t type, n00b_string_t iface, ...)
 {
-    n00b_logic_fact(&ctx->logic, *r"implements", &type, &iface);
+    n00b_logic_fact(&ctx->logic, r"implements", &type, &iface);
     // ... also record param bindings via iface_param facts ...
 }
 ```
@@ -2462,7 +2462,7 @@ n00b_tc_add_promotion(n00b_tc_ctx_t *ctx, n00b_tc_type_t *from, n00b_tc_type_t *
 {
     auto from_name = n00b_tc_type_name(from);
     auto to_name   = n00b_tc_type_name(to);
-    n00b_logic_fact(&ctx->logic, *r"promotes", &from_name, &to_name);
+    n00b_logic_fact(&ctx->logic, r"promotes", &from_name, &to_name);
 }
 ```
 

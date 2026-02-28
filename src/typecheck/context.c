@@ -21,9 +21,9 @@ static void
 tc_install_transitive_promotion(n00b_tc_ctx_t *ctx)
 {
     // promotes(A, C) :- promotes(A, B), promotes(B, C).
-    n00b_dl_sym_t a = n00b_logic_var(&ctx->logic, *r"A");
-    n00b_dl_sym_t b = n00b_logic_var(&ctx->logic, *r"B");
-    n00b_dl_sym_t c = n00b_logic_var(&ctx->logic, *r"C");
+    n00b_dl_sym_t a = n00b_logic_var(&ctx->logic, r"A");
+    n00b_dl_sym_t b = n00b_logic_var(&ctx->logic, r"B");
+    n00b_dl_sym_t c = n00b_logic_var(&ctx->logic, r"C");
 
     n00b_dl_rule_builder_t rb;
     n00b_dl_rule_builder_init(&rb);
@@ -45,57 +45,57 @@ static void
 tc_register_numeric_promotions(n00b_tc_ctx_t *ctx)
 {
     // Signed widening.
-    n00b_tc_register_promotion(ctx, *r"i8",  *r"i16");
-    n00b_tc_register_promotion(ctx, *r"i16", *r"i32");
-    n00b_tc_register_promotion(ctx, *r"i32", *r"i64");
-    n00b_tc_register_promotion(ctx, *r"i32", *r"int");
+    n00b_tc_register_promotion(ctx, r"i8",  r"i16");
+    n00b_tc_register_promotion(ctx, r"i16", r"i32");
+    n00b_tc_register_promotion(ctx, r"i32", r"i64");
+    n00b_tc_register_promotion(ctx, r"i32", r"int");
 
     // Unsigned widening.
-    n00b_tc_register_promotion(ctx, *r"u8",  *r"u16");
-    n00b_tc_register_promotion(ctx, *r"u16", *r"u32");
-    n00b_tc_register_promotion(ctx, *r"u32", *r"u64");
+    n00b_tc_register_promotion(ctx, r"u8",  r"u16");
+    n00b_tc_register_promotion(ctx, r"u16", r"u32");
+    n00b_tc_register_promotion(ctx, r"u32", r"u64");
 
     // Unsigned → next-wider-signed (safe, no info loss).
-    n00b_tc_register_promotion(ctx, *r"u8",  *r"i16");
-    n00b_tc_register_promotion(ctx, *r"u16", *r"i32");
-    n00b_tc_register_promotion(ctx, *r"u32", *r"i64");
-    n00b_tc_register_promotion(ctx, *r"u32", *r"int");
+    n00b_tc_register_promotion(ctx, r"u8",  r"i16");
+    n00b_tc_register_promotion(ctx, r"u16", r"i32");
+    n00b_tc_register_promotion(ctx, r"u32", r"i64");
+    n00b_tc_register_promotion(ctx, r"u32", r"int");
 
     // Float widening.
-    n00b_tc_register_promotion(ctx, *r"f32", *r"f64");
+    n00b_tc_register_promotion(ctx, r"f32", r"f64");
 
     // Integer → float (lossy but conventional).
-    n00b_tc_register_promotion(ctx, *r"i32", *r"f64");
-    n00b_tc_register_promotion(ctx, *r"int", *r"f64");
-    n00b_tc_register_promotion(ctx, *r"i64", *r"f64");
+    n00b_tc_register_promotion(ctx, r"i32", r"f64");
+    n00b_tc_register_promotion(ctx, r"int", r"f64");
+    n00b_tc_register_promotion(ctx, r"i64", r"f64");
 
     // int ↔ i64 aliasing (bidirectional).
-    n00b_tc_register_promotion(ctx, *r"int", *r"i64");
-    n00b_tc_register_promotion(ctx, *r"i64", *r"int");
+    n00b_tc_register_promotion(ctx, r"int", r"i64");
+    n00b_tc_register_promotion(ctx, r"i64", r"int");
 
     // bool → int (true=1, false=0).
-    n00b_tc_register_promotion(ctx, *r"bool", *r"int");
-    n00b_tc_register_promotion(ctx, *r"bool", *r"i64");
+    n00b_tc_register_promotion(ctx, r"bool", r"int");
+    n00b_tc_register_promotion(ctx, r"bool", r"i64");
 }
 
 static void
 tc_create_builtins(n00b_tc_ctx_t *ctx)
 {
-    ctx->t_int    = n00b_tc_prim(ctx, *r"int");
-    ctx->t_i8     = n00b_tc_prim(ctx, *r"i8");
-    ctx->t_i16    = n00b_tc_prim(ctx, *r"i16");
-    ctx->t_i32    = n00b_tc_prim(ctx, *r"i32");
-    ctx->t_i64    = n00b_tc_prim(ctx, *r"i64");
-    ctx->t_u8     = n00b_tc_prim(ctx, *r"u8");
-    ctx->t_u16    = n00b_tc_prim(ctx, *r"u16");
-    ctx->t_u32    = n00b_tc_prim(ctx, *r"u32");
-    ctx->t_u64    = n00b_tc_prim(ctx, *r"u64");
-    ctx->t_f32    = n00b_tc_prim(ctx, *r"f32");
-    ctx->t_f64    = n00b_tc_prim(ctx, *r"f64");
-    ctx->t_bool   = n00b_tc_prim(ctx, *r"bool");
-    ctx->t_string = n00b_tc_prim(ctx, *r"string");
-    ctx->t_nil    = n00b_tc_prim(ctx, *r"nil");
-    ctx->t_void   = n00b_tc_prim(ctx, *r"void");
+    ctx->t_int    = n00b_tc_prim(ctx, r"int");
+    ctx->t_i8     = n00b_tc_prim(ctx, r"i8");
+    ctx->t_i16    = n00b_tc_prim(ctx, r"i16");
+    ctx->t_i32    = n00b_tc_prim(ctx, r"i32");
+    ctx->t_i64    = n00b_tc_prim(ctx, r"i64");
+    ctx->t_u8     = n00b_tc_prim(ctx, r"u8");
+    ctx->t_u16    = n00b_tc_prim(ctx, r"u16");
+    ctx->t_u32    = n00b_tc_prim(ctx, r"u32");
+    ctx->t_u64    = n00b_tc_prim(ctx, r"u64");
+    ctx->t_f32    = n00b_tc_prim(ctx, r"f32");
+    ctx->t_f64    = n00b_tc_prim(ctx, r"f64");
+    ctx->t_bool   = n00b_tc_prim(ctx, r"bool");
+    ctx->t_string = n00b_tc_prim(ctx, r"string");
+    ctx->t_nil    = n00b_tc_prim(ctx, r"nil");
+    ctx->t_void   = n00b_tc_prim(ctx, r"void");
 }
 
 n00b_tc_ctx_t *
@@ -111,9 +111,9 @@ n00b_tc_ctx_new(void)
 
     // Datalog engine (embedded).
     n00b_logic_init(&ctx->logic);
-    ctx->rel_implements  = n00b_logic_relation(&ctx->logic, *r"implements", 2);
-    ctx->rel_promotes    = n00b_logic_relation(&ctx->logic, *r"promotes", 2);
-    ctx->rel_iface_param = n00b_logic_relation(&ctx->logic, *r"iface_param", 3);
+    ctx->rel_implements  = n00b_logic_relation(&ctx->logic, r"implements", 2);
+    ctx->rel_promotes    = n00b_logic_relation(&ctx->logic, r"promotes", 2);
+    ctx->rel_iface_param = n00b_logic_relation(&ctx->logic, r"iface_param", 3);
 
     tc_install_transitive_promotion(ctx);
 
@@ -171,7 +171,7 @@ n00b_tc_ctx_register(n00b_tc_ctx_t *ctx, n00b_tc_type_t *type)
 // ============================================================================
 
 void
-n00b_tc_register_iface(n00b_tc_ctx_t *ctx, n00b_string_t name,
+n00b_tc_register_iface(n00b_tc_ctx_t *ctx, n00b_string_t *name,
                          n00b_tc_iface_param_t +)
 {
     // Build the params list.
@@ -208,8 +208,8 @@ n00b_tc_register_iface(n00b_tc_ctx_t *ctx, n00b_string_t name,
 
 void
 n00b_tc_register_impl(n00b_tc_ctx_t *ctx,
-                        n00b_string_t type_name,
-                        n00b_string_t iface_name,
+                        n00b_string_t *type_name,
+                        n00b_string_t *iface_name,
                         n00b_tc_type_t *+)
 {
     // Collect bindings.
@@ -244,8 +244,8 @@ n00b_tc_register_impl(n00b_tc_ctx_t *ctx,
 
 void
 n00b_tc_register_promotion(n00b_tc_ctx_t *ctx,
-                             n00b_string_t from_name,
-                             n00b_string_t to_name)
+                             n00b_string_t *from_name,
+                             n00b_string_t *to_name)
 {
     n00b_dl_sym_t from_sym = n00b_logic_const(&ctx->logic, from_name);
     n00b_dl_sym_t to_sym   = n00b_logic_const(&ctx->logic, to_name);
@@ -290,8 +290,8 @@ tc_pair_match_cb(const n00b_dl_sym_t *tuple, int32_t arity, void *user)
 
 bool
 n00b_tc_implements(n00b_tc_ctx_t *ctx,
-                     n00b_string_t type_name,
-                     n00b_string_t iface_name)
+                     n00b_string_t *type_name,
+                     n00b_string_t *iface_name)
 {
     tc_ensure_datalog(ctx);
 
@@ -308,8 +308,8 @@ n00b_tc_implements(n00b_tc_ctx_t *ctx,
 
 bool
 n00b_tc_promotes_to(n00b_tc_ctx_t *ctx,
-                      n00b_string_t from_name,
-                      n00b_string_t to_name)
+                      n00b_string_t *from_name,
+                      n00b_string_t *to_name)
 {
     tc_ensure_datalog(ctx);
 
@@ -329,28 +329,28 @@ n00b_tc_promotes_to(n00b_tc_ctx_t *ctx,
 // ============================================================================
 
 n00b_tc_type_t *
-n00b_tc_lookup_prim(n00b_tc_ctx_t *ctx, n00b_string_t name)
+n00b_tc_lookup_prim(n00b_tc_ctx_t *ctx, n00b_string_t *name)
 {
-    if (!ctx || !name.data) {
+    if (!ctx || !name) {
         return nullptr;
     }
 
-    struct { n00b_string_t name; n00b_tc_type_t *type; } builtins[] = {
-        { *r"int",    ctx->t_int    },
-        { *r"i8",     ctx->t_i8     },
-        { *r"i16",    ctx->t_i16    },
-        { *r"i32",    ctx->t_i32    },
-        { *r"i64",    ctx->t_i64    },
-        { *r"u8",     ctx->t_u8     },
-        { *r"u16",    ctx->t_u16    },
-        { *r"u32",    ctx->t_u32    },
-        { *r"u64",    ctx->t_u64    },
-        { *r"f32",    ctx->t_f32    },
-        { *r"f64",    ctx->t_f64    },
-        { *r"bool",   ctx->t_bool   },
-        { *r"string", ctx->t_string },
-        { *r"nil",    ctx->t_nil    },
-        { *r"void",   ctx->t_void   },
+    struct { n00b_string_t *name; n00b_tc_type_t *type; } builtins[] = {
+        { r"int",    ctx->t_int    },
+        { r"i8",     ctx->t_i8     },
+        { r"i16",    ctx->t_i16    },
+        { r"i32",    ctx->t_i32    },
+        { r"i64",    ctx->t_i64    },
+        { r"u8",     ctx->t_u8     },
+        { r"u16",    ctx->t_u16    },
+        { r"u32",    ctx->t_u32    },
+        { r"u64",    ctx->t_u64    },
+        { r"f32",    ctx->t_f32    },
+        { r"f64",    ctx->t_f64    },
+        { r"bool",   ctx->t_bool   },
+        { r"string", ctx->t_string },
+        { r"nil",    ctx->t_nil    },
+        { r"void",   ctx->t_void   },
     };
 
     for (size_t i = 0; i < sizeof(builtins) / sizeof(builtins[0]); i++) {

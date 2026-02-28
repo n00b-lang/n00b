@@ -41,15 +41,13 @@
 // Forward declarations
 // ============================================================================
 
-typedef struct n00b_tc_type_s  n00b_tc_type_t;
-typedef struct n00b_tc_ctx_s   n00b_tc_ctx_t;
+typedef struct n00b_tc_type_s       n00b_tc_type_t;
+typedef struct n00b_tc_ctx_s        n00b_tc_ctx_t;
+typedef struct n00b_tc_constraint_s n00b_tc_constraint_t;
 
 // n00b_option_t(n00b_string_t) is declared in core/string.h (one canonical site).
 // Just include string.h to get it.
 #include "core/string.h"
-
-// List type declarations used throughout.
-n00b_list_decl(n00b_tc_type_t *);
 
 // ============================================================================
 // Kind payloads
@@ -63,8 +61,8 @@ n00b_list_decl(n00b_tc_type_t *);
  */
 typedef struct {
     uint32_t                              id;           /**< Unique within context. */
-    n00b_option_t(n00b_string_t)          given_name;   /**< User's name (if any). */
-    n00b_string_t                         display_name; /**< Shown in errors. */
+    n00b_option_t(n00b_string_t *)         given_name;   /**< User's name (if any). */
+    n00b_string_t                        *display_name; /**< Shown in errors. */
     n00b_list_t(n00b_tc_constraint_t)    *constraints;  /**< Constraints on this var. */
 } n00b_tc_var_t;
 
@@ -75,7 +73,7 @@ typedef struct {
  * on the type context.
  */
 typedef struct {
-    n00b_string_t  name; /**< Interned: "int", "f64", "bool", "nil", ... */
+    n00b_string_t *name; /**< Interned: "int", "f64", "bool", "nil", ... */
 } n00b_tc_prim_t;
 
 /**
@@ -85,7 +83,7 @@ typedef struct {
  * grammar-author-defined parameterized type.
  */
 typedef struct {
-    n00b_string_t                 name;   /**< Constructor: "list", "dict", "ref", ... */
+    n00b_string_t                *name;   /**< Constructor: "list", "dict", "ref", ... */
     n00b_list_t(n00b_tc_type_t *) *params; /**< Type parameters. */
 } n00b_tc_param_t;
 
@@ -116,12 +114,10 @@ typedef struct {
  * Small struct, returned by value from `n00b_tc_field()`.
  */
 typedef struct {
-    n00b_string_t    name;        /**< Field name. */
+    n00b_string_t   *name;        /**< Field name. */
     n00b_tc_type_t  *type;        /**< Field type. */
     bool             has_default;  /**< true = caller may omit (keyword args). */
 } n00b_tc_field_t;
-
-n00b_list_decl(n00b_tc_field_t);
 
 /**
  * @brief Record type — named fields, optional type parameters, ordered flag.
@@ -135,16 +131,14 @@ n00b_list_decl(n00b_tc_field_t);
  * - **open=false**: exactly these fields (definition site).
  */
 typedef struct {
-    n00b_string_t                   name;              /**< Record name (empty for anonymous). */
+    n00b_string_t                  *name;              /**< Record name (empty for anonymous). */
     n00b_list_t(n00b_tc_type_t *)  *type_params;       /**< May be nullptr. */
-    n00b_list_t(n00b_string_t)     *field_names;       /**< Field name per index. */
+    n00b_list_t(n00b_string_t *)   *field_names;       /**< Field name per index. */
     n00b_list_t(n00b_tc_type_t *)  *field_types;       /**< Field type per index. */
     n00b_list_t(bool)              *field_has_default;  /**< Per-field; nullptr = none have defaults. */
     bool                            open;              /**< Open row (duck typing). */
     bool                            ordered;           /**< true = struct layout; false = keyword bag. */
 } n00b_tc_record_t;
-
-n00b_list_decl(bool);
 
 /**
  * @brief Tuple type — ordered, positional product type.
@@ -164,7 +158,7 @@ typedef struct {
 /**
  * @brief Variant discriminator for the seven type kinds.
  */
-typedef n00b_variant_decl(
+typedef n00b_variant_t(
     n00b_tc_var_t,
     n00b_tc_prim_t,
     n00b_tc_param_t,
@@ -218,7 +212,7 @@ typedef enum {
  * Constraints are checked at binding time — when a variable's `forward`
  * pointer is set during unification.
  */
-typedef struct {
+struct n00b_tc_constraint_s {
     n00b_tc_con_kind_t kind;
     union {
         struct {
@@ -228,10 +222,10 @@ typedef struct {
             n00b_list_t(n00b_tc_type_t *) *types;
         } one_of;
         struct {
-            n00b_string_t iface_name;
+            n00b_string_t *iface_name;
         } implements;
         struct {
-            n00b_string_t   field_name;
+            n00b_string_t  *field_name;
             n00b_tc_type_t *field_type;
         } has_field;
         struct {
@@ -245,9 +239,7 @@ typedef struct {
             n00b_tc_type_t *excluded;
         } not_;
     };
-} n00b_tc_constraint_t;
-
-n00b_list_decl(n00b_tc_constraint_t);
+};
 
 // ============================================================================
 // Source spans (for diagnostics)
@@ -257,7 +249,7 @@ n00b_list_decl(n00b_tc_constraint_t);
  * @brief Source location span for type error diagnostics.
  */
 typedef struct {
-    n00b_option_t(n00b_string_t) file;       /**< Source file (none = stdin). */
+    n00b_option_t(n00b_string_t *) file;       /**< Source file (none = stdin). */
     uint32_t                     start_line;
     uint32_t                     start_col;
     uint32_t                     end_line;
@@ -294,15 +286,13 @@ typedef enum {
  */
 typedef struct {
     n00b_tc_err_kind_t  kind;
-    n00b_string_t       message;       /**< Human-readable error. */
+    n00b_string_t      *message;       /**< Human-readable error. */
     n00b_tc_type_t     *expected;      /**< What was expected (may be nullptr). */
     n00b_tc_type_t     *got;           /**< What was found (may be nullptr). */
-    n00b_string_t       constraint;    /**< Which constraint failed (may be empty). */
+    n00b_string_t      *constraint;    /**< Which constraint failed (may be empty). */
     n00b_tc_span_t      span;          /**< Primary source location. */
     n00b_tc_span_t      related_span;  /**< Secondary location (e.g., conflicting decl). */
 } n00b_tc_error_t;
-
-n00b_list_decl(n00b_tc_error_t);
 
 // ============================================================================
 // Coercion tracking
@@ -328,8 +318,6 @@ typedef struct {
     n00b_tc_span_t         span; /**< Where the coercion occurs. */
 } n00b_tc_coercion_t;
 
-n00b_list_decl(n00b_tc_coercion_t);
-
 // ============================================================================
 // Interface types (for registration/querying)
 // ============================================================================
@@ -338,17 +326,15 @@ n00b_list_decl(n00b_tc_coercion_t);
  * @brief A named parameter of an interface.
  */
 typedef struct {
-    n00b_string_t    name; /**< "key", "value", "element", ... */
+    n00b_string_t   *name; /**< "key", "value", "element", ... */
     n00b_tc_type_t  *type; /**< Type variable for this param. */
 } n00b_tc_iface_param_t;
-
-n00b_list_decl(n00b_tc_iface_param_t);
 
 /**
  * @brief An interface definition.
  */
 typedef struct {
-    n00b_string_t                        name;   /**< "Indexable", "Numeric", ... */
+    n00b_string_t                       *name;   /**< "Indexable", "Numeric", ... */
     n00b_list_t(n00b_tc_iface_param_t)  *params; /**< Named type parameters. */
 } n00b_tc_iface_t;
 
@@ -356,7 +342,7 @@ typedef struct {
  * @brief An implementation binding: "dict implements Indexable with [...]".
  */
 typedef struct {
-    n00b_string_t                  type_name;  /**< "dict", "list", ... */
-    n00b_string_t                  iface_name; /**< "Indexable", ... */
+    n00b_string_t                 *type_name;  /**< "dict", "list", ... */
+    n00b_string_t                 *iface_name; /**< "Indexable", ... */
     n00b_list_t(n00b_tc_type_t *) *bindings;   /**< Concrete types for each iface param. */
 } n00b_tc_impl_t;

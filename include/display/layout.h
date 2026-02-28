@@ -101,10 +101,6 @@ typedef struct {
     int64_t size;          /**< **Output**: final computed size. */
 } n00b_layout_result_t;
 
-/** @brief Array of layout constraint descriptors. */
-n00b_array_decl(n00b_layout_t);
-/** @brief Array of layout result slots. */
-n00b_array_decl(n00b_layout_result_t);
 
 // ====================================================================
 // API

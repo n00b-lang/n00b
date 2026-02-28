@@ -15,16 +15,14 @@
 #include "core/vargs.h"
 #include "text/strings/string_ops.h"
 
-// Now that n00b_option_decl(n00b_string_t) is centralized in core/string.h,
-// we can include the typecheck headers directly without collision.
 #include "typecheck/types.h"
 #include "typecheck/context.h"
 
 // Forward-declare construct functions (can't include construct.h because
 // it uses typed varargs which produce kargs structs we don't need here).
-extern n00b_tc_type_t *n00b_tc_var(n00b_tc_ctx_t *ctx, n00b_string_t name);
+extern n00b_tc_type_t *n00b_tc_var(n00b_tc_ctx_t *ctx, n00b_string_t *name);
 extern n00b_tc_type_t *n00b_tc_fresh_var(n00b_tc_ctx_t *ctx);
-extern n00b_tc_type_t *n00b_tc_prim(n00b_tc_ctx_t *ctx, n00b_string_t name);
+extern n00b_tc_type_t *n00b_tc_prim(n00b_tc_ctx_t *ctx, n00b_string_t *name);
 
 // Build param types manually (can't use the typed vargs constructors from here).
 extern void n00b_tc_ctx_register(n00b_tc_ctx_t *ctx, n00b_tc_type_t *type);
@@ -35,7 +33,7 @@ extern void n00b_tc_ctx_register(n00b_tc_ctx_t *ctx, n00b_tc_type_t *type);
 
 // Check if a non-terminal node's name matches a string.
 static bool
-nt_name_is(n00b_grammar_t *g, n00b_parse_tree_t *node, n00b_string_t name)
+nt_name_is(n00b_grammar_t *g, n00b_parse_tree_t *node, n00b_string_t *name)
 {
     if (!node || n00b_tree_is_leaf(node)) {
         return false;
@@ -84,7 +82,7 @@ translate_where_clause(n00b_tc_ctx_t *ctx, n00b_grammar_t *g,
                 n00b_parse_tree_t *gchild = n00b_tree_child(child, j);
 
                 if (!n00b_tree_is_leaf(gchild)
-                    && nt_name_is(g, gchild, *r"type-constraint")) {
+                    && nt_name_is(g, gchild, r"type-constraint")) {
                     translate_where_clause(ctx, g, gchild);
                 }
             }
@@ -92,30 +90,30 @@ translate_where_clause(n00b_tc_ctx_t *ctx, n00b_grammar_t *g,
             continue;
         }
 
-        if (!nt_name_is(g, child, *r"type-constraint")) {
+        if (!nt_name_is(g, child, r"type-constraint")) {
             continue;
         }
 
         // <type-constraint> → ` IDENTIFIER : <constraint-list>
         // Find the type variable name.
-        n00b_string_t var_name = n00b_string_empty();
+        n00b_string_t *var_name = n00b_string_empty();
         size_t cnc = n00b_tree_num_children(child);
 
         for (size_t j = 0; j < cnc; j++) {
             n00b_parse_tree_t *tcc = n00b_tree_child(child, j);
 
             if (n00b_tree_is_leaf(tcc)) {
-                n00b_string_t s = n00b_tree_extract_first_identifier(tcc);
+                n00b_string_t *s = n00b_tree_extract_first_identifier(tcc);
 
-                if (s.u8_bytes > 0 && !n00b_unicode_str_eq(s, *r"`")
-                    && !n00b_unicode_str_eq(s, *r":")) {
+                if (s->u8_bytes > 0 && !n00b_unicode_str_eq(s, r"`")
+                    && !n00b_unicode_str_eq(s, r":")) {
                     var_name = s;
                     break;
                 }
             }
         }
 
-        if (var_name.u8_bytes == 0) {
+        if (var_name->u8_bytes == 0) {
             continue;
         }
 
@@ -123,7 +121,7 @@ translate_where_clause(n00b_tc_ctx_t *ctx, n00b_grammar_t *g,
         n00b_tc_type_t *tv = n00b_tc_var(ctx, var_name);
 
         // Find the <constraint-list> child.
-        n00b_parse_tree_t *clist = n00b_tree_find_child_by_nt_name(g, child, *r"constraint-list");
+        n00b_parse_tree_t *clist = n00b_tree_find_child_by_nt_name(g, child, r"constraint-list");
 
         if (!clist) {
             continue;
@@ -147,7 +145,7 @@ translate_where_clause(n00b_tc_ctx_t *ctx, n00b_grammar_t *g,
                 for (size_t k = 0; k < gnc2; k++) {
                     n00b_parse_tree_t *gc2 = n00b_tree_child(con_node, k);
 
-                    if (nt_name_is(g, gc2, *r"one-constraint")) {
+                    if (nt_name_is(g, gc2, r"one-constraint")) {
                         con_node = gc2;
                         goto handle_constraint;
                     }
@@ -156,19 +154,19 @@ translate_where_clause(n00b_tc_ctx_t *ctx, n00b_grammar_t *g,
                 continue;
             }
 
-            if (!nt_name_is(g, con_node, *r"one-constraint")) {
+            if (!nt_name_is(g, con_node, r"one-constraint")) {
                 continue;
             }
 
 handle_constraint:;
             // Determine constraint kind.
             // Check first terminal to see if it's "!=" or an IDENTIFIER.
-            n00b_string_t first = n00b_tree_extract_first_identifier(con_node);
+            n00b_string_t *first = n00b_tree_extract_first_identifier(con_node);
 
-            if (n00b_unicode_str_eq(first, *r"!=")) {
+            if (n00b_unicode_str_eq(first, r"!=")) {
                 // Exclusion constraint: != <one-tspec>
                 n00b_parse_tree_t *excluded_node = n00b_tree_find_child_by_nt_name(g, con_node,
-                                                                    *r"one-tspec");
+                                                                    r"one-tspec");
                 n00b_tc_type_t *excluded = excluded_node
                     ? translate(ctx, g, excluded_node)
                     : nullptr;
@@ -204,7 +202,7 @@ handle_constraint:;
                     }
                 }
             }
-            else if (first.u8_bytes > 0) {
+            else if (first->u8_bytes > 0) {
                 // Interface constraint: IDENTIFIER (interface name).
                 n00b_tc_type_t *resolved = tv;
 
@@ -244,9 +242,9 @@ static n00b_tc_type_t *
 build_kargs_record(n00b_tc_ctx_t *ctx, n00b_grammar_t *g,
                    n00b_parse_tree_t *kargs_node)
 {
-    n00b_list_t(n00b_string_t) names = n00b_list_new_private(n00b_string_t);
-    n00b_list_t(n00b_string_t) *names_ptr =
-        n00b_alloc(n00b_list_t(n00b_string_t));
+    n00b_list_t(n00b_string_t *) names = n00b_list_new_private(n00b_string_t *);
+    n00b_list_t(n00b_string_t *) *names_ptr =
+        n00b_alloc(n00b_list_t(n00b_string_t *));
     *names_ptr = names;
 
     n00b_list_t(n00b_tc_type_t *) types = n00b_list_new_private(n00b_tc_type_t *);
@@ -273,16 +271,16 @@ build_kargs_record(n00b_tc_ctx_t *ctx, n00b_grammar_t *g,
             for (size_t j = 0; j < gnc; j++) {
                 n00b_parse_tree_t *gchild = n00b_tree_child(child, j);
 
-                if (nt_name_is(g, gchild, *r"tspec-field")) {
-                    n00b_string_t fname = n00b_tree_extract_first_identifier(gchild);
+                if (nt_name_is(g, gchild, r"tspec-field")) {
+                    n00b_string_t *fname = n00b_tree_extract_first_identifier(gchild);
 
-                    if (fname.u8_bytes > 0) {
+                    if (fname->u8_bytes > 0) {
                         // Find the type child of the field.
                         n00b_parse_tree_t *ft = n00b_tree_find_child_by_nt_name(g, gchild,
-                                                                 *r"type-spec-body");
+                                                                 r"type-spec-body");
 
                         if (!ft) {
-                            ft = n00b_tree_find_child_by_nt_name(g, gchild, *r"one-tspec");
+                            ft = n00b_tree_find_child_by_nt_name(g, gchild, r"one-tspec");
                         }
 
                         n00b_tc_type_t *ftype = ft ? translate(ctx, g, ft) : nullptr;
@@ -296,15 +294,15 @@ build_kargs_record(n00b_tc_ctx_t *ctx, n00b_grammar_t *g,
             continue;
         }
 
-        if (nt_name_is(g, child, *r"tspec-field")) {
-            n00b_string_t fname = n00b_tree_extract_first_identifier(child);
+        if (nt_name_is(g, child, r"tspec-field")) {
+            n00b_string_t *fname = n00b_tree_extract_first_identifier(child);
 
-            if (fname.u8_bytes > 0) {
+            if (fname->u8_bytes > 0) {
                 n00b_parse_tree_t *ft = n00b_tree_find_child_by_nt_name(g, child,
-                                                         *r"type-spec-body");
+                                                         r"type-spec-body");
 
                 if (!ft) {
-                    ft = n00b_tree_find_child_by_nt_name(g, child, *r"one-tspec");
+                    ft = n00b_tree_find_child_by_nt_name(g, child, r"one-tspec");
                 }
 
                 n00b_tc_type_t *ftype = ft ? translate(ctx, g, ft) : nullptr;
@@ -369,11 +367,11 @@ collect_tspec_list(n00b_tc_ctx_t *ctx, n00b_grammar_t *g,
         if (cpn->id >= 0) {
             n00b_nonterm_t *nt = n00b_get_nonterm(g, cpn->id);
 
-            if (nt && (n00b_unicode_str_eq(nt->name, *r"one-tspec")
-                    || n00b_unicode_str_eq(nt->name, *r"tspec-list")
-                    || n00b_unicode_str_eq(nt->name, *r"union-tspec"))) {
-                if (n00b_unicode_str_eq(nt->name, *r"tspec-list")
-                    || n00b_unicode_str_eq(nt->name, *r"union-tspec")) {
+            if (nt && (n00b_unicode_str_eq(nt->name, r"one-tspec")
+                    || n00b_unicode_str_eq(nt->name, r"tspec-list")
+                    || n00b_unicode_str_eq(nt->name, r"union-tspec"))) {
+                if (n00b_unicode_str_eq(nt->name, r"tspec-list")
+                    || n00b_unicode_str_eq(nt->name, r"union-tspec")) {
                     collect_tspec_list(ctx, g, child, out);
                 } else {
                     n00b_tc_type_t *t = translate(ctx, g, child);
@@ -401,9 +399,9 @@ translate(n00b_tc_ctx_t *ctx, n00b_grammar_t *g, n00b_parse_tree_t *node)
 
     // Leaf (terminal) — must be a bare IDENTIFIER used as a type name.
     if (n00b_tree_is_leaf(node)) {
-        n00b_string_t name = n00b_tree_extract_first_identifier(node);
+        n00b_string_t *name = n00b_tree_extract_first_identifier(node);
 
-        if (name.u8_bytes == 0) {
+        if (name->u8_bytes == 0) {
             return nullptr;
         }
 
@@ -437,7 +435,7 @@ translate(n00b_tc_ctx_t *ctx, n00b_grammar_t *g, n00b_parse_tree_t *node)
     }
 
     // <type-spec> → <one-tspec> <where-clause>?
-    if (n00b_unicode_str_eq(nt->name, *r"type-spec")) {
+    if (n00b_unicode_str_eq(nt->name, r"type-spec")) {
         // Translate the <one-tspec> child.
         n00b_tc_type_t *body_type = nullptr;
         size_t nc = n00b_tree_num_children(node);
@@ -446,7 +444,7 @@ translate(n00b_tc_ctx_t *ctx, n00b_grammar_t *g, n00b_parse_tree_t *node)
             n00b_parse_tree_t *child = n00b_tree_child(node, i);
 
             if (!n00b_tree_is_leaf(child)
-                && nt_name_is(g, child, *r"where-clause")) {
+                && nt_name_is(g, child, r"where-clause")) {
                 continue; // Handle below.
             }
 
@@ -459,7 +457,7 @@ translate(n00b_tc_ctx_t *ctx, n00b_grammar_t *g, n00b_parse_tree_t *node)
         }
 
         // Process <where-clause> if present.
-        n00b_parse_tree_t *where_node = n00b_tree_find_child_by_nt_name(g, node, *r"where-clause");
+        n00b_parse_tree_t *where_node = n00b_tree_find_child_by_nt_name(g, node, r"where-clause");
 
         if (where_node) {
             translate_where_clause(ctx, g, where_node);
@@ -469,7 +467,7 @@ translate(n00b_tc_ctx_t *ctx, n00b_grammar_t *g, n00b_parse_tree_t *node)
     }
 
     // <union-tspec> → union or single type (lower tier, | allowed).
-    if (n00b_unicode_str_eq(nt->name, *r"union-tspec")) {
+    if (n00b_unicode_str_eq(nt->name, r"union-tspec")) {
         // Collect all <one-tspec> children. If more than one, build a Sum.
         n00b_list_t(n00b_tc_type_t *) variants = n00b_list_new_private(n00b_tc_type_t *);
         n00b_list_t(n00b_tc_type_t *) *var_ptr =
@@ -540,7 +538,7 @@ translate(n00b_tc_ctx_t *ctx, n00b_grammar_t *g, n00b_parse_tree_t *node)
     }
 
     // <one-tspec> — dispatch to the child.
-    if (n00b_unicode_str_eq(nt->name, *r"one-tspec")) {
+    if (n00b_unicode_str_eq(nt->name, r"one-tspec")) {
         size_t nc = n00b_tree_num_children(node);
 
         for (size_t i = 0; i < nc; i++) {
@@ -555,25 +553,25 @@ translate(n00b_tc_ctx_t *ctx, n00b_grammar_t *g, n00b_parse_tree_t *node)
     }
 
     // <tspec-tvar> — ` IDENTIFIER → type variable.
-    if (n00b_unicode_str_eq(nt->name, *r"tspec-tvar")) {
+    if (n00b_unicode_str_eq(nt->name, r"tspec-tvar")) {
         // Children: %"`" %IDENTIFIER
-        n00b_string_t name = n00b_string_empty();
+        n00b_string_t *name = n00b_string_empty();
         size_t nc = n00b_tree_num_children(node);
 
         for (size_t i = 0; i < nc; i++) {
             n00b_parse_tree_t *child = n00b_tree_child(node, i);
 
             if (n00b_tree_is_leaf(child)) {
-                n00b_string_t s = n00b_tree_extract_first_identifier(child);
+                n00b_string_t *s = n00b_tree_extract_first_identifier(child);
 
-                if (s.u8_bytes > 0 && !n00b_unicode_str_eq(s, *r"`")) {
+                if (s->u8_bytes > 0 && !n00b_unicode_str_eq(s, r"`")) {
                     name = s;
                     break;
                 }
             }
         }
 
-        if (name.u8_bytes > 0) {
+        if (name->u8_bytes > 0) {
             return n00b_tc_var(ctx, name);
         }
 
@@ -581,36 +579,36 @@ translate(n00b_tc_ctx_t *ctx, n00b_grammar_t *g, n00b_parse_tree_t *node)
     }
 
     // <tspec-parameterized> — name [ tspec-list ] or ref [ tspec-list ]
-    if (n00b_unicode_str_eq(nt->name, *r"tspec-parameterized")) {
+    if (n00b_unicode_str_eq(nt->name, r"tspec-parameterized")) {
         // Get the constructor name from the first identifier.
-        n00b_string_t name = n00b_string_empty();
+        n00b_string_t *name = n00b_string_empty();
         size_t nc = n00b_tree_num_children(node);
 
         for (size_t i = 0; i < nc; i++) {
             n00b_parse_tree_t *child = n00b_tree_child(node, i);
 
             if (n00b_tree_is_leaf(child)) {
-                n00b_string_t s = n00b_tree_extract_first_identifier(child);
+                n00b_string_t *s = n00b_tree_extract_first_identifier(child);
 
                 // Skip punctuation.
-                if (s.u8_bytes > 0
-                    && !n00b_unicode_str_eq(s, *r"[")
-                    && !n00b_unicode_str_eq(s, *r"]")) {
-                    if (name.u8_bytes == 0) {
+                if (s->u8_bytes > 0
+                    && !n00b_unicode_str_eq(s, r"[")
+                    && !n00b_unicode_str_eq(s, r"]")) {
+                    if (name->u8_bytes == 0) {
                         name = s;
                     }
                 }
-            } else if (nt_name_is(g, child, *r"member-chain")) {
+            } else if (nt_name_is(g, child, r"member-chain")) {
                 name = n00b_tree_extract_first_identifier(child);
             }
         }
 
-        if (name.u8_bytes == 0) {
+        if (name->u8_bytes == 0) {
             return nullptr;
         }
 
         // Find the <tspec-list> child.
-        n00b_parse_tree_t *tspec_list = n00b_tree_find_child_by_nt_name(g, node, *r"tspec-list");
+        n00b_parse_tree_t *tspec_list = n00b_tree_find_child_by_nt_name(g, node, r"tspec-list");
 
         if (!tspec_list) {
             // No parameters: bare identifier (not really parameterized).
@@ -644,14 +642,14 @@ translate(n00b_tc_ctx_t *ctx, n00b_grammar_t *g, n00b_parse_tree_t *node)
     }
 
     // <tspec-func> — ( params ) -> ret
-    if (n00b_unicode_str_eq(nt->name, *r"tspec-func")) {
+    if (n00b_unicode_str_eq(nt->name, r"tspec-func")) {
         // Collect positional params from <tspec-func-params>.
         n00b_list_t(n00b_tc_type_t *) positional = n00b_list_new_private(n00b_tc_type_t *);
         n00b_list_t(n00b_tc_type_t *) *pos_ptr =
             n00b_alloc(n00b_list_t(n00b_tc_type_t *));
         *pos_ptr = positional;
 
-        n00b_parse_tree_t *func_params = n00b_tree_find_child_by_nt_name(g, node, *r"tspec-func-params");
+        n00b_parse_tree_t *func_params = n00b_tree_find_child_by_nt_name(g, node, r"tspec-func-params");
         n00b_tc_type_t    *vargs_type  = nullptr;
         n00b_tc_type_t    *kargs_type  = nullptr;
 
@@ -660,15 +658,15 @@ translate(n00b_tc_ctx_t *ctx, n00b_grammar_t *g, n00b_parse_tree_t *node)
 
             // Extract vargs: <tspec-vargs> → * <one-tspec>
             n00b_parse_tree_t *vargs_node = n00b_tree_find_child_by_nt_name(g, func_params,
-                                                             *r"tspec-vargs");
+                                                             r"tspec-vargs");
 
             if (vargs_node) {
                 // Find the <one-tspec> or <type-spec-body> child.
                 n00b_parse_tree_t *vt = n00b_tree_find_child_by_nt_name(g, vargs_node,
-                                                         *r"type-spec-body");
+                                                         r"type-spec-body");
 
                 if (!vt) {
-                    vt = n00b_tree_find_child_by_nt_name(g, vargs_node, *r"one-tspec");
+                    vt = n00b_tree_find_child_by_nt_name(g, vargs_node, r"one-tspec");
                 }
 
                 if (vt) {
@@ -682,7 +680,7 @@ translate(n00b_tc_ctx_t *ctx, n00b_grammar_t *g, n00b_parse_tree_t *node)
 
             // Extract kargs: <tspec-kargs> → ** <tspec-field>+
             n00b_parse_tree_t *kargs_node = n00b_tree_find_child_by_nt_name(g, func_params,
-                                                             *r"tspec-kargs");
+                                                             r"tspec-kargs");
 
             if (kargs_node) {
                 kargs_type = build_kargs_record(ctx, g, kargs_node);
@@ -691,17 +689,17 @@ translate(n00b_tc_ctx_t *ctx, n00b_grammar_t *g, n00b_parse_tree_t *node)
 
         // Get return type from <opt-return-type> or <return-type>.
         n00b_tc_type_t *ret_type = nullptr;
-        n00b_parse_tree_t *ret_node = n00b_tree_find_child_by_nt_name(g, node, *r"opt-return-type");
+        n00b_parse_tree_t *ret_node = n00b_tree_find_child_by_nt_name(g, node, r"opt-return-type");
 
         if (!ret_node) {
-            ret_node = n00b_tree_find_child_by_nt_name(g, node, *r"return-type");
+            ret_node = n00b_tree_find_child_by_nt_name(g, node, r"return-type");
         }
 
         if (ret_node) {
-            n00b_parse_tree_t *type_spec = n00b_tree_find_child_by_nt_name(g, ret_node, *r"type-spec");
+            n00b_parse_tree_t *type_spec = n00b_tree_find_child_by_nt_name(g, ret_node, r"type-spec");
 
             if (!type_spec) {
-                type_spec = n00b_tree_find_child_by_nt_name(g, ret_node, *r"one-tspec");
+                type_spec = n00b_tree_find_child_by_nt_name(g, ret_node, r"one-tspec");
             }
 
             if (type_spec) {
@@ -726,10 +724,10 @@ translate(n00b_tc_ctx_t *ctx, n00b_grammar_t *g, n00b_parse_tree_t *node)
     }
 
     // <member-chain> — resolve to a type name.
-    if (n00b_unicode_str_eq(nt->name, *r"member-chain")) {
-        n00b_string_t name = n00b_tree_extract_first_identifier(node);
+    if (n00b_unicode_str_eq(nt->name, r"member-chain")) {
+        n00b_string_t *name = n00b_tree_extract_first_identifier(node);
 
-        if (name.u8_bytes > 0) {
+        if (name->u8_bytes > 0) {
             n00b_tc_type_t *prim = n00b_tc_lookup_prim(ctx, name);
 
             return prim ? prim : n00b_tc_prim(ctx, name);

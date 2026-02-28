@@ -83,14 +83,14 @@ load_n00b_grammar(void)
     buf[len] = '\0';
     fclose(f);
 
-    n00b_string_t bnf_text = n00b_string_from_cstr(buf);
+    n00b_string_t *bnf_text = n00b_string_from_cstr(buf);
     free(buf);
 
     n00b_grammar_t *g = n00b_grammar_new();
     n00b_grammar_set_error_recovery(g, false);
 
     n00b_diag_ctx_t *bnf_diag = n00b_diag_ctx_new();
-    bool ok = n00b_bnf_load(bnf_text, *r"module", g, .diag = bnf_diag);
+    bool ok = n00b_bnf_load(bnf_text, r"module", g, .diag = bnf_diag);
 
     if (!ok) {
         fprintf(stderr, "  [FAIL] n00b_bnf_load failed for n00b.bnf\n");
@@ -132,7 +132,7 @@ analyze_source(const char *src)
         // Parse failure — return ctx with a parse error diagnostic.
         n00b_diag_ctx_t *ctx = n00b_diag_ctx_new();
         n00b_diag_push(ctx, N00B_DIAG_ERROR, N00B_STAGE_PARSE,
-                      *r"P001", *r"parse failed", (n00b_diag_span_t){0});
+                      r"P001", r"parse failed", (n00b_diag_span_t){0});
         return ctx;
     }
 
@@ -142,7 +142,7 @@ analyze_source(const char *src)
     if (!ar) {
         n00b_diag_ctx_t *ctx = n00b_diag_ctx_new();
         n00b_diag_push(ctx, N00B_DIAG_ERROR, N00B_STAGE_ANNOT,
-                      *r"A001", *r"annotation walk failed",
+                      r"A001", r"annotation walk failed",
                       (n00b_diag_span_t){0});
         return ctx;
     }
@@ -159,7 +159,7 @@ analyze_source(const char *src)
         return ctx;
     }
 
-    n00b_cfg_t *cfg = n00b_build_cfg(ar->cf_labels, tree, *r"module", ar->symtab);
+    n00b_cfg_t *cfg = n00b_build_cfg(ar->cf_labels, tree, r"module", ar->symtab);
 
     if (!cfg) {
         return ctx;
@@ -183,7 +183,7 @@ analyze_source(const char *src)
         .annot     = ar,
         .grammar   = shared_grammar,
         .diag      = ctx,
-        .func_name = *r"module",
+        .func_name = r"module",
     };
 
     n00b_analyze_all(&actx);
@@ -202,8 +202,8 @@ has_diag_code(n00b_diag_ctx_t *ctx, const char *code)
     for (size_t i = 0; i < count; i++) {
         n00b_diagnostic_t d = n00b_list_get(ctx->diags, i);
 
-        if (d.code.u8_bytes == strlen(code)
-            && memcmp(d.code.data, code, d.code.u8_bytes) == 0) {
+        if (d.code->u8_bytes == strlen(code)
+            && memcmp(d.code->data, code, d.code->u8_bytes) == 0) {
             return true;
         }
     }
@@ -220,8 +220,8 @@ count_diag_code(n00b_diag_ctx_t *ctx, const char *code)
     for (size_t i = 0; i < count; i++) {
         n00b_diagnostic_t d = n00b_list_get(ctx->diags, i);
 
-        if (d.code.u8_bytes == strlen(code)
-            && memcmp(d.code.data, code, d.code.u8_bytes) == 0) {
+        if (d.code->u8_bytes == strlen(code)
+            && memcmp(d.code->data, code, d.code->u8_bytes) == 0) {
             result++;
         }
     }
@@ -306,14 +306,14 @@ test_diag_ctx_lifecycle(void)
     assert(!n00b_diag_has_errors(ctx));
 
     n00b_diag_push(ctx, N00B_DIAG_WARNING, N00B_STAGE_ANALYSIS,
-                  *r"W001", *r"test warning", (n00b_diag_span_t){0});
+                  r"W001", r"test warning", (n00b_diag_span_t){0});
 
     assert(n00b_diag_count(ctx) == 1);
     assert(!n00b_diag_has_errors(ctx));
     assert(ctx->warning_count == 1);
 
     n00b_diag_push(ctx, N00B_DIAG_ERROR, N00B_STAGE_ANALYSIS,
-                  *r"E001", *r"test error", (n00b_diag_span_t){0});
+                  r"E001", r"test error", (n00b_diag_span_t){0});
 
     assert(n00b_diag_count(ctx) == 2);
     assert(n00b_diag_has_errors(ctx));
@@ -333,7 +333,7 @@ test_diag_push_related(void)
     n00b_diag_span_t related = { .start_line = 5, .start_col = 3 };
 
     n00b_diag_push_related(ctx, N00B_DIAG_WARNING, N00B_STAGE_ANALYSIS,
-                          *r"W005", *r"shadows previous",
+                          r"W005", r"shadows previous",
                           span, related);
 
     assert(n00b_diag_count(ctx) == 1);
@@ -354,13 +354,13 @@ test_diag_code_helpers(void)
     n00b_diag_ctx_t *ctx = n00b_diag_ctx_new();
 
     n00b_diag_push(ctx, N00B_DIAG_WARNING, N00B_STAGE_ANALYSIS,
-                  *r"W001", *r"dead code", (n00b_diag_span_t){0});
+                  r"W001", r"dead code", (n00b_diag_span_t){0});
     n00b_diag_push(ctx, N00B_DIAG_WARNING, N00B_STAGE_ANALYSIS,
-                  *r"W003", *r"unused 1", (n00b_diag_span_t){0});
+                  r"W003", r"unused 1", (n00b_diag_span_t){0});
     n00b_diag_push(ctx, N00B_DIAG_WARNING, N00B_STAGE_ANALYSIS,
-                  *r"W003", *r"unused 2", (n00b_diag_span_t){0});
+                  r"W003", r"unused 2", (n00b_diag_span_t){0});
     n00b_diag_push(ctx, N00B_DIAG_ERROR, N00B_STAGE_ANALYSIS,
-                  *r"E001", *r"undefined", (n00b_diag_span_t){0});
+                  r"E001", r"undefined", (n00b_diag_span_t){0});
 
     assert(has_diag_code(ctx, "W001"));
     assert(has_diag_code(ctx, "W003"));
@@ -408,7 +408,7 @@ test_tc_error_import(void)
     // Push a fake error.
     n00b_tc_error_t err = {
         .kind    = N00B_TC_ERR_UNIFY_FAIL,
-        .message = *r"cannot unify int with bool",
+        .message = r"cannot unify int with bool",
         .span    = { .start_line = 3, .start_col = 7 },
     };
 
@@ -470,11 +470,11 @@ test_diag_print(void)
     n00b_diag_span_t span = { .start_line = 1, .start_col = 5 };
 
     n00b_diag_push(ctx, N00B_DIAG_ERROR, N00B_STAGE_ANALYSIS,
-                  *r"E001", *r"undeclared 'foo'", span);
+                  r"E001", r"undeclared 'foo'", span);
     n00b_diag_push(ctx, N00B_DIAG_WARNING, N00B_STAGE_ANALYSIS,
-                  *r"W003", *r"unused 'bar'", span);
+                  r"W003", r"unused 'bar'", span);
     n00b_diag_push(ctx, N00B_DIAG_NOTE, N00B_STAGE_ANALYSIS,
-                  *r"N001", *r"consider removing", span);
+                  r"N001", r"consider removing", span);
 
     // Print with source text.
     const char *src = "var foo = 42\nvar bar = 1\n";

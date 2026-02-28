@@ -36,8 +36,6 @@ typedef enum {
 // Basic block
 // ============================================================================
 
-n00b_list_decl(n00b_parse_tree_ptr_t);
-
 /**
  * @brief A basic block in the control flow graph.
  *
@@ -46,7 +44,7 @@ n00b_list_decl(n00b_parse_tree_ptr_t);
  */
 typedef struct {
     int32_t        id;
-    n00b_string_t  label;
+    n00b_string_t *label;
     n00b_list_t(n00b_parse_tree_ptr_t) stmts;
     int32_t        start_pos;
     int32_t        end_pos;
@@ -62,15 +60,12 @@ typedef struct {
     int32_t              from_id;
     int32_t              to_id;
     n00b_cfg_edge_kind_t kind;
-    n00b_string_t        label;
+    n00b_string_t       *label;
 } n00b_cfg_edge_t;
 
 // ============================================================================
 // CFG
 // ============================================================================
-
-n00b_list_decl(n00b_cfg_block_t);
-n00b_list_decl(n00b_cfg_edge_t);
 
 typedef struct n00b_cfg_t n00b_cfg_t;
 
@@ -79,7 +74,7 @@ struct n00b_cfg_t {
     n00b_list_t(n00b_cfg_edge_t)  edges;
     int32_t                        entry_id;
     int32_t                        exit_id;
-    n00b_string_t                  name;
+    n00b_string_t                 *name;
 };
 
 // ============================================================================
@@ -98,7 +93,7 @@ struct n00b_cfg_t {
  */
 n00b_cfg_t *n00b_build_cfg(n00b_cf_labels_t  *cf_labels,
                             n00b_parse_tree_t *func_body,
-                            n00b_string_t      func_name,
+                            n00b_string_t     *func_name,
                             n00b_symtab_t     *symtab);
 
 // ============================================================================

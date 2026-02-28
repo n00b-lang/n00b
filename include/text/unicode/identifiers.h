@@ -57,4 +57,4 @@ bool n00b_unicode_is_identifier_allowed(n00b_codepoint_t cp);
  *  @param s  The string to validate.
  *  @return true if the string is a valid Unicode identifier.
  */
-bool n00b_unicode_is_valid_identifier(n00b_string_t s);
+bool n00b_unicode_is_valid_identifier(n00b_string_t *s);

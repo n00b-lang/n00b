@@ -140,7 +140,7 @@ line_emit_text(line_ctx_t *lc, const char *text, int32_t text_len)
     }
 }
 
-static n00b_string_t
+static n00b_string_t *
 line_ctx_to_string(line_ctx_t *lc)
 {
     int64_t total_cps = 0;
@@ -152,7 +152,7 @@ line_ctx_to_string(line_ctx_t *lc)
         }
     }
 
-    n00b_string_t result = n00b_string_from_raw(lc->ob.buf, lc->ob.len);
+    n00b_string_t *result = n00b_string_from_raw(lc->ob.buf, lc->ob.len);
 
     if (lc->rl.count > 0) {
         n00b_string_style_info_t *info =
@@ -161,7 +161,7 @@ line_ctx_to_string(line_ctx_t *lc)
         info->num_styles = lc->rl.count;
         memcpy(info->styles, lc->rl.records,
                lc->rl.count * sizeof(n00b_style_record_t));
-        result.styling = info;
+        result->styling = info;
     }
 
     return result;
@@ -233,8 +233,8 @@ render_inline(line_ctx_t *lc,
         n00b_md_node_t *val = &n00b_tree_leaf_value(t);
         if (val->node_type >= N00B_MD_TEXT_NORMAL
             && val->node_type <= N00B_MD_TEXT_LATEX) {
-            n00b_string_t *text = &val->detail.text;
-            if (text->data && text->u8_bytes > 0) {
+            n00b_string_t *text = val->detail.text;
+            if (text && text->data && text->u8_bytes > 0) {
                 line_emit_text(lc, text->data, (int32_t)text->u8_bytes);
             }
         }
@@ -264,7 +264,7 @@ render_inline(line_ctx_t *lc,
 // ===================================================================
 
 static void
-walk_block(n00b_list_t(n00b_string_t) *ll,
+walk_block(n00b_list_t(n00b_string_t *) *ll,
            n00b_tree_t(n00b_md_node_t, n00b_md_node_t) *t)
 {
     if (!t || n00b_tree_is_leaf(t)) {
@@ -301,7 +301,7 @@ walk_block(n00b_list_t(n00b_string_t) *ll,
     }
 
     case N00B_MD_BLOCK_HR: {
-        n00b_string_t hr = n00b_string_from_raw("---", 3);
+        n00b_string_t *hr = n00b_string_from_raw("---", 3);
         n00b_list_push(*ll, hr);
         break;
     }
@@ -341,7 +341,7 @@ walk_block(n00b_list_t(n00b_string_t) *ll,
                 if (cps < 0) {
                     cps = 0;
                 }
-                n00b_string_t line_str = n00b_string_from_raw(
+                n00b_string_t *line_str = n00b_string_from_raw(
                     start, line_len);
 
                 // Apply mono style to the entire line.
@@ -393,12 +393,12 @@ walk_block(n00b_list_t(n00b_string_t) *ll,
 // Public API
 // ===================================================================
 
-n00b_array_t(n00b_string_t)
+n00b_array_t(n00b_string_t *)
 n00b_str_md_to_lines(n00b_tree_t(n00b_md_node_t, n00b_md_node_t) *tree)
 {
-    n00b_list_t(n00b_string_t) tmp = n00b_list_new(n00b_string_t);
+    n00b_list_t(n00b_string_t *) tmp = n00b_list_new(n00b_string_t *);
 
     walk_block(&tmp, tree);
 
-    return n00b_list_to_array(n00b_string_t, tmp);
+    return n00b_list_to_array(n00b_string_t *, tmp);
 }

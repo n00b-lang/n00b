@@ -15,11 +15,6 @@ typedef struct {
     uint64_t d;
 } big_value_t;
 
-// Declare typed dict types.
-n00b_dict_decl(uint64_t, uint64_t);
-n00b_dict_decl(uint64_t, big_value_t);
-n00b_dict_decl(char *, uint64_t);
-
 typedef n00b_dict_t(uint64_t, uint64_t) u64_dict_t;
 typedef n00b_dict_t(uint64_t, big_value_t) big_dict_t;
 typedef n00b_dict_t(char *, uint64_t) str_dict_t;

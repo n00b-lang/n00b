@@ -126,12 +126,12 @@ test_literals(void)
     assert(toks[1]->tid != 0);
     assert(toks[2]->tid != 0);
 
-    n00b_string_t v0 = n00b_option_get(toks[0]->value);
-    n00b_string_t v1 = n00b_option_get(toks[1]->value);
-    n00b_string_t v2 = n00b_option_get(toks[2]->value);
-    assert(v0.u8_bytes == 4 && memcmp(v0.data, "true", 4) == 0);
-    assert(v1.u8_bytes == 5 && memcmp(v1.data, "false", 5) == 0);
-    assert(v2.u8_bytes == 3 && memcmp(v2.data, "nil", 3) == 0);
+    n00b_string_t *v0 = n00b_option_get(toks[0]->value);
+    n00b_string_t *v1 = n00b_option_get(toks[1]->value);
+    n00b_string_t *v2 = n00b_option_get(toks[2]->value);
+    assert(v0->u8_bytes == 4 && memcmp(v0->data, "true", 4) == 0);
+    assert(v1->u8_bytes == 5 && memcmp(v1->data, "false", 5) == 0);
+    assert(v2->u8_bytes == 3 && memcmp(v2->data, "nil", 3) == 0);
 
     printf("  [PASS] literals\n");
 }
@@ -179,9 +179,9 @@ test_comments(void)
     for (int i = 0; i < n; i++) {
         // Without a grammar, check by token value text rather than ID.
         if (n00b_option_is_set(toks[i]->value)) {
-            n00b_string_t v = n00b_option_get(toks[i]->value);
-            if (v.u8_bytes > 0 && ((v.data[0] >= 'a' && v.data[0] <= 'z')
-                                   || (v.data[0] >= 'A' && v.data[0] <= 'Z'))) {
+            n00b_string_t *v = n00b_option_get(toks[i]->value);
+            if (v->u8_bytes > 0 && ((v->data[0] >= 'a' && v->data[0] <= 'z')
+                                   || (v->data[0] >= 'A' && v->data[0] <= 'Z'))) {
                 id_count++;
             }
         }
@@ -227,9 +227,9 @@ test_long_literals(void)
     assert(embed_tid != 0);
     assert(n00b_option_is_set(toks[0]->value));
 
-    n00b_string_t val = n00b_option_get(toks[0]->value);
-    assert(val.u8_bytes == 11);
-    assert(memcmp(val.data, "hello world", 11) == 0);
+    n00b_string_t *val = n00b_option_get(toks[0]->value);
+    assert(val->u8_bytes == 11);
+    assert(memcmp(val->data, "hello world", 11) == 0);
     assert(!toks[0]->user_info);  // No encoder.
     assert(!n00b_option_is_set(toks[0]->modifier));
 
@@ -243,8 +243,8 @@ test_long_literals(void)
     assert(toks[0]->tid == embed_tid);
 
     val = n00b_option_get(toks[0]->value);
-    assert(val.u8_bytes == 19);
-    assert(memcmp(val.data, "contains ]=] inside", 19) == 0);
+    assert(val->u8_bytes == 19);
+    assert(memcmp(val->data, "contains ]=] inside", 19) == 0);
 
     printf("  [PASS] long literal level 2 nesting\n");
 
@@ -256,7 +256,7 @@ test_long_literals(void)
     assert(toks[0]->tid == embed_tid);
 
     val = n00b_option_get(toks[0]->value);
-    assert(memcmp(val.data, "SGVsbG8=", 8) == 0);
+    assert(memcmp(val->data, "SGVsbG8=", 8) == 0);
     assert(toks[0]->user_info != NULL);
 
     n00b_string_t *enc = (n00b_string_t *)toks[0]->user_info;
@@ -275,9 +275,9 @@ test_long_literals(void)
 
     // toks[1] is the tick (emitted as OTHER since no grammar).
     // toks[2] is "sometype" identifier.
-    n00b_string_t mod = n00b_option_get(toks[2]->value);
-    assert(mod.u8_bytes == 8);
-    assert(memcmp(mod.data, "sometype", 8) == 0);
+    n00b_string_t *mod = n00b_option_get(toks[2]->value);
+    assert(mod->u8_bytes == 8);
+    assert(memcmp(mod->data, "sometype", 8) == 0);
 
     printf("  [PASS] long literal with modifier tick\n");
 
@@ -289,7 +289,7 @@ test_long_literals(void)
     assert(toks[0]->tid == embed_tid);
 
     val = n00b_option_get(toks[0]->value);
-    assert(memcmp(val.data, "path/to/file", 12) == 0);
+    assert(memcmp(val->data, "path/to/file", 12) == 0);
 
     enc = (n00b_string_t *)toks[0]->user_info;
     assert(enc->u8_bytes == 5);
@@ -297,8 +297,8 @@ test_long_literals(void)
 
     // toks[2] is "image" identifier.
     mod = n00b_option_get(toks[2]->value);
-    assert(mod.u8_bytes == 5);
-    assert(memcmp(mod.data, "image", 5) == 0);
+    assert(mod->u8_bytes == 5);
+    assert(memcmp(mod->data, "image", 5) == 0);
 
     printf("  [PASS] long literal with encoder + modifier tick\n");
 
@@ -311,8 +311,8 @@ test_long_literals(void)
 
     val = n00b_option_get(toks[0]->value);
     // After trim: "line one\n    line two"
-    assert(memcmp(val.data, "line one\n    line two", 21) == 0);
-    assert(val.u8_bytes == 21);
+    assert(memcmp(val->data, "line one\n    line two", 21) == 0);
+    assert(val->u8_bytes == 21);
 
     printf("  [PASS] long literal trims whitespace\n");
 
@@ -322,8 +322,8 @@ test_long_literals(void)
 
     assert(n == 1);
     val = n00b_option_get(toks[0]->value);
-    assert(val.u8_bytes == 8);
-    assert(memcmp(val.data, "SGVsbG8=", 8) == 0);
+    assert(val->u8_bytes == 8);
+    assert(memcmp(val->data, "SGVsbG8=", 8) == 0);
 
     printf("  [PASS] long literal encoder trims whitespace\n");
 

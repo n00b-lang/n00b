@@ -79,10 +79,6 @@ typedef struct {
     n00b_ansi_kind   kind;   /**< Classification of this node */
 } n00b_ansi_node_t;
 
-// Declare the typed list and option for ANSI node pointers.
-n00b_list_decl(n00b_ansi_node_t *);
-n00b_option_decl(n00b_ansi_node_t *);
-
 // ===================================================================
 // Parser context
 // ===================================================================
@@ -145,7 +141,7 @@ n00b_list_t(n00b_ansi_node_t *) n00b_ansi_parser_results(n00b_ansi_ctx *ctx);
  *  @kw allocator  Optional allocator.
  *  @return The reconstituted string.
  */
-n00b_string_t n00b_ansi_nodes_to_string(
+n00b_string_t *n00b_ansi_nodes_to_string(
     n00b_list_t(n00b_ansi_node_t *) nodes, bool keep_control)
     _kargs { n00b_allocator_t *allocator = nullptr; };
 

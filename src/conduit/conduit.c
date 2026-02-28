@@ -135,8 +135,8 @@ n00b_conduit_topic_get(n00b_conduit_t *c, n00b_conduit_uri_t uri,
     }
     else {
         dict = &c->str_topics;
-        n00b_string_t s = n00b_variant_get(uri, n00b_string_t);
-        key  = (void *)s.data;
+        n00b_string_t *s = n00b_variant_get(uri, n00b_string_t *);
+        key  = (void *)s->data;
     }
 
     // Look up existing topic.
@@ -332,16 +332,16 @@ n00b_conduit_unregister_backend(n00b_conduit_t *c, n00b_conduit_io_backend_t *io
 }
 
 n00b_option_t(n00b_conduit_io_backend_t *)
-n00b_conduit_backend_by_name(n00b_conduit_t *c, n00b_string_t name)
+n00b_conduit_backend_by_name(n00b_conduit_t *c, n00b_string_t *name)
 {
-    if (!c || !name.data) {
+    if (!c || !name) {
         return n00b_option_none(n00b_conduit_io_backend_t *);
     }
 
     n00b_list_foreach(c->io_backends, p) {
         n00b_conduit_io_backend_t *io = *p;
         if (io && io->ops && io->ops->name) {
-            n00b_string_t io_name = io->ops->name();
+            n00b_string_t *io_name = io->ops->name();
             if (n00b_unicode_str_eq(io_name, name)) {
                 return n00b_option_set(n00b_conduit_io_backend_t *, io);
             }

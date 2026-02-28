@@ -19,17 +19,8 @@
 #endif
 
 #define n00b_dict_store_tid(k, v) typeid("store", k, v)
-#define n00b_dict_store_t(k, v)   struct n00b_dict_store_tid(k, v)
-
-typedef struct n00b_dict_bucket_t {
-    n00b_uint128_t   hv;
-    uint32_t         insert_order;
-    _Atomic uint32_t flags; // Mutex, deleted.
-} n00b_dict_bucket_t;
-
-#define n00b_dict_store_decl(k, v)                                                             \
-    n00b_dict_store_t(k, v)                                                                    \
-    {                                                                                          \
+#define n00b_dict_store_t(k, v)                                                                \
+    _generic_struct n00b_dict_store_tid(k, v) {                                                \
         uint32_t            last_slot;                                                         \
         uint32_t            threshold;                                                         \
         _Atomic uint32_t    used_count;                                                        \
@@ -37,6 +28,12 @@ typedef struct n00b_dict_bucket_t {
         k *keys;                                                                               \
         v *values;                                                                             \
     }
+
+typedef struct n00b_dict_bucket_t {
+    n00b_uint128_t   hv;
+    uint32_t         insert_order;
+    _Atomic uint32_t flags; // Mutex, deleted.
+} n00b_dict_bucket_t;
 
 typedef struct __n00b_internal_type_erased_store_t {
     uint32_t            last_slot;
@@ -48,7 +45,6 @@ typedef struct __n00b_internal_type_erased_store_t {
 } __n00b_internal_type_erased_store_t;
 
 #define n00b_dict_tid(k, v) typeid("dict", k, v)
-#define n00b_dict_t(k, v)   struct n00b_dict_tid(k, v)
 
 // The futex is only for migrations.
 #define N00B_BASE_DICT_FIELDS                                                                  \
@@ -67,19 +63,11 @@ typedef struct _n00b_dict_internal_t {
     N00B_BASE_DICT_FIELDS
 } _n00b_dict_internal_t;
 
-#define n00b_dict_decl_base(k, v)                                                              \
-    n00b_dict_t(k, v)                                                                          \
-    {                                                                                          \
+#define n00b_dict_t(k, v)                                                                      \
+    _generic_struct n00b_dict_tid(k, v) {                                                      \
         _Atomic(n00b_dict_store_t(k, v) *) store;                                              \
         N00B_BASE_DICT_FIELDS                                                                  \
     }
-
-#define n00b_dict_decl(k, v)                                                                   \
-    n00b_dict_store_decl(k, v);                                                                \
-    n00b_dict_decl_base(k, v);                                                                 \
-    static_assert(sizeof(k) <= (1 << 15));                                                     \
-    static_assert(sizeof(v) <= (1 << 15));                                                     \
-    static_assert(sizeof(n00b_dict_t(k, v)) == sizeof(_n00b_dict_internal_t))
 
 // Structural type checking, ha!
 #define _n00b_dict_structural_check(dict_ptr)                                                  \

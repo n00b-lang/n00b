@@ -25,31 +25,31 @@ ht_new(void)
 }
 
 static void
-ht_put(n00b_dict_untyped_t *d, n00b_string_t key, n00b_sym_entry_t *val)
+ht_put(n00b_dict_untyped_t *d, n00b_string_t *key, n00b_sym_entry_t *val)
 {
     // Use the string data pointer as the key. For lookup consistency,
     // we rely on the dict using our string hash function.
-    n00b_dict_untyped_put(d, key.data, val);
+    n00b_dict_untyped_put(d, key->data, val);
 }
 
 static n00b_sym_entry_t *
-ht_get(n00b_dict_untyped_t *d, n00b_string_t key)
+ht_get(n00b_dict_untyped_t *d, n00b_string_t *key)
 {
-    if (!d || !key.data) {
+    if (!d || !key || !key->data) {
         return NULL;
     }
 
     bool found = false;
-    void *val  = n00b_dict_untyped_get(d, key.data, &found);
+    void *val  = n00b_dict_untyped_get(d, key->data, &found);
 
     return found ? (n00b_sym_entry_t *)val : NULL;
 }
 
 static void
-ht_remove(n00b_dict_untyped_t *d, n00b_string_t key)
+ht_remove(n00b_dict_untyped_t *d, n00b_string_t *key)
 {
-    if (d && key.data) {
-        n00b_dict_untyped_remove(d, key.data);
+    if (d && key && key->data) {
+        n00b_dict_untyped_remove(d, key->data);
     }
 }
 
@@ -110,7 +110,7 @@ n00b_symtab_free(n00b_symtab_t *st)
 // ============================================================================
 
 n00b_namespace_t *
-n00b_symtab_ns(n00b_symtab_t *st, n00b_string_t ns_name)
+n00b_symtab_ns(n00b_symtab_t *st, n00b_string_t *ns_name)
 {
     if (!st) {
         return NULL;
@@ -153,8 +153,8 @@ n00b_symtab_ns(n00b_symtab_t *st, n00b_string_t ns_name)
 // ============================================================================
 
 void
-n00b_symtab_push_scope(n00b_symtab_t *st, n00b_string_t ns_name,
-                        n00b_string_t scope_name)
+n00b_symtab_push_scope(n00b_symtab_t *st, n00b_string_t *ns_name,
+                        n00b_string_t *scope_name)
 {
     n00b_namespace_t *ns = n00b_symtab_ns(st, ns_name);
 
@@ -193,7 +193,7 @@ n00b_symtab_push_scope(n00b_symtab_t *st, n00b_string_t ns_name,
 }
 
 void
-n00b_symtab_pop_scope(n00b_symtab_t *st, n00b_string_t ns_name)
+n00b_symtab_pop_scope(n00b_symtab_t *st, n00b_string_t *ns_name)
 {
     n00b_namespace_t *ns = n00b_symtab_ns(st, ns_name);
 
@@ -228,8 +228,8 @@ n00b_symtab_pop_scope(n00b_symtab_t *st, n00b_string_t ns_name)
 // ============================================================================
 
 n00b_sym_entry_t *
-n00b_symtab_add(n00b_symtab_t *st, n00b_string_t ns_name,
-                 n00b_string_t name, n00b_sym_kind_t kind,
+n00b_symtab_add(n00b_symtab_t *st, n00b_string_t *ns_name,
+                 n00b_string_t *name, n00b_sym_kind_t kind,
                  n00b_parse_tree_t *decl_node)
 {
     n00b_namespace_t *ns = n00b_symtab_ns(st, ns_name);
@@ -267,8 +267,8 @@ n00b_symtab_add(n00b_symtab_t *st, n00b_string_t ns_name,
 }
 
 n00b_sym_entry_t *
-n00b_symtab_lookup(n00b_symtab_t *st, n00b_string_t ns_name,
-                    n00b_string_t name)
+n00b_symtab_lookup(n00b_symtab_t *st, n00b_string_t *ns_name,
+                    n00b_string_t *name)
 {
     if (!st) {
         return NULL;
@@ -285,10 +285,10 @@ n00b_symtab_lookup(n00b_symtab_t *st, n00b_string_t ns_name,
 }
 
 n00b_sym_entry_t *
-n00b_symtab_lookup_all(n00b_symtab_t *st, n00b_string_t ns_name,
-                        n00b_string_t name)
+n00b_symtab_lookup_all(n00b_symtab_t *st, n00b_string_t *ns_name,
+                        n00b_string_t *name)
 {
-    if (!st || !name.data) {
+    if (!st || !name) {
         return NULL;
     }
 
@@ -326,8 +326,8 @@ n00b_symtab_lookup_all(n00b_symtab_t *st, n00b_string_t ns_name,
 }
 
 n00b_sym_entry_t *
-n00b_symtab_lookup_any(n00b_symtab_t *st, n00b_string_t ns_name,
-                        n00b_string_t name)
+n00b_symtab_lookup_any(n00b_symtab_t *st, n00b_string_t *ns_name,
+                        n00b_string_t *name)
 {
     n00b_sym_entry_t *sym = n00b_symtab_lookup(st, ns_name, name);
 
@@ -335,7 +335,7 @@ n00b_symtab_lookup_any(n00b_symtab_t *st, n00b_string_t ns_name,
 }
 
 bool
-n00b_symtab_is_typedef(n00b_symtab_t *st, n00b_string_t name)
+n00b_symtab_is_typedef(n00b_symtab_t *st, n00b_string_t *name)
 {
     n00b_sym_entry_t *entry = n00b_symtab_lookup(st, n00b_string_empty(), name);
 
@@ -343,7 +343,7 @@ n00b_symtab_is_typedef(n00b_symtab_t *st, n00b_string_t name)
 }
 
 int32_t
-n00b_symtab_depth(n00b_symtab_t *st, n00b_string_t ns_name)
+n00b_symtab_depth(n00b_symtab_t *st, n00b_string_t *ns_name)
 {
     if (!st) {
         return -1;
@@ -359,7 +359,7 @@ n00b_symtab_depth(n00b_symtab_t *st, n00b_string_t ns_name)
 }
 
 n00b_scope_t *
-n00b_symtab_current_scope(n00b_symtab_t *st, n00b_string_t ns_name)
+n00b_symtab_current_scope(n00b_symtab_t *st, n00b_string_t *ns_name)
 {
     if (!st) {
         return NULL;

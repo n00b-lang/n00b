@@ -11,8 +11,6 @@
 #include "text/unicode/types_ext.h"
 #include "adt/array.h"
 
-n00b_array_decl(uint16_t);
-n00b_array_decl(n00b_codepoint_t);
 
 // ===========================================================================
 // Low-level UTF-8 operations (raw byte buffers)
@@ -56,13 +54,13 @@ n00b_unicode_bom_t n00b_unicode_detect_bom(const char *data, uint32_t len, uint3
  *  @param s  The string to examine.
  *  @return Number of codepoints, or negative on invalid UTF-8.
  */
-int64_t n00b_unicode_utf8_count_codepoints(n00b_string_t s);
+int64_t n00b_unicode_utf8_count_codepoints(n00b_string_t *s);
 
 /** @brief Validate that an n00b_string_t contains well-formed UTF-8.
  *  @param s  The string to validate.
  *  @return true if valid UTF-8.
  */
-bool n00b_unicode_str_validate(n00b_string_t s);
+bool n00b_unicode_str_validate(n00b_string_t *s);
 
 // ===========================================================================
 // Transcoding
@@ -74,7 +72,7 @@ bool n00b_unicode_str_validate(n00b_string_t s);
  *  @return An array of uint16_t code units.
  */
 n00b_array_t(uint16_t)
-n00b_unicode_to_utf16(n00b_string_t s) _kargs
+n00b_unicode_to_utf16(n00b_string_t *s) _kargs
 {
     n00b_allocator_t *allocator = nullptr;
 };
@@ -85,7 +83,7 @@ n00b_unicode_to_utf16(n00b_string_t s) _kargs
  *  @return An array of codepoints.
  */
 n00b_array_t(n00b_codepoint_t)
-n00b_unicode_to_utf32(n00b_string_t s) _kargs
+n00b_unicode_to_utf32(n00b_string_t *s) _kargs
 {
     n00b_allocator_t *allocator = nullptr;
 };
@@ -96,7 +94,7 @@ n00b_unicode_to_utf32(n00b_string_t s) _kargs
  *  @kw allocator  Optional allocator (defaults to the runtime allocator).
  *  @return A new n00b_string_t containing the UTF-8 representation.
  */
-n00b_string_t
+n00b_string_t *
 n00b_unicode_from_utf16(const uint16_t *src, uint32_t len) _kargs
 {
     n00b_allocator_t *allocator = nullptr;
@@ -108,7 +106,7 @@ n00b_unicode_from_utf16(const uint16_t *src, uint32_t len) _kargs
  *  @kw allocator  Optional allocator (defaults to the runtime allocator).
  *  @return A new n00b_string_t containing the UTF-8 representation.
  */
-n00b_string_t
+n00b_string_t *
 n00b_unicode_from_utf32(const n00b_codepoint_t *src, uint32_t len) _kargs
 {
     n00b_allocator_t *allocator = nullptr;

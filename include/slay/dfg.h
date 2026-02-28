@@ -28,15 +28,13 @@
  * Extracted from CFG blocks by walking statements and their CF labels.
  */
 typedef struct {
-    n00b_string_t      var_name;   /**< Variable name. */
+    n00b_string_t     *var_name;   /**< Variable name. */
     n00b_parse_tree_t *node;       /**< Parse tree node of the def/use. */
     int32_t            block_id;   /**< CFG block containing this. */
     int32_t            stmt_ix;    /**< Index within block's stmts list. */
     int32_t            id;         /**< Index of this fact in dfg->facts. */
     bool               is_def;     /**< true = def, false = use. */
 } n00b_du_fact_t;
-
-n00b_list_decl(n00b_du_fact_t);
 
 // ============================================================================
 // Data dependence edge
@@ -49,8 +47,6 @@ typedef struct {
     int32_t def_id;  /**< Index into dfg->facts for the def. */
     int32_t use_id;  /**< Index into dfg->facts for the use. */
 } n00b_dd_edge_t;
-
-n00b_list_decl(n00b_dd_edge_t);
 
 // ============================================================================
 // Data flow graph
@@ -68,7 +64,7 @@ typedef struct {
     n00b_cf_labels_t            *cf_labels; /**< CF labels (not owned). */
     n00b_list_t(n00b_du_fact_t)  facts;     /**< All def/use facts. */
     n00b_list_t(n00b_dd_edge_t)  edges;     /**< All DD edges. */
-    n00b_string_t                name;      /**< Name (from CFG). */
+    n00b_string_t               *name;      /**< Name (from CFG). */
 } n00b_dfg_t;
 
 // ============================================================================

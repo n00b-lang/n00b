@@ -32,9 +32,9 @@
  * Follows union-find links.  Handles cycles via occurs check.
  *
  * @param type  Type node to render.
- * @return      String representation (by value).
+ * @return      String representation.
  */
-extern n00b_string_t n00b_tc_type_to_string(n00b_tc_type_t *type);
+extern n00b_string_t *n00b_tc_type_to_string(n00b_tc_type_t *type);
 
 /**
  * @brief Render a type with constraint annotations (where clause).
@@ -45,7 +45,7 @@ extern n00b_string_t n00b_tc_type_to_string(n00b_tc_type_t *type);
  * @param type  Type node to render.
  * @return      String representation with optional where clause.
  */
-extern n00b_string_t n00b_tc_type_to_string_full(n00b_tc_type_t *type);
+extern n00b_string_t *n00b_tc_type_to_string_full(n00b_tc_type_t *type);
 
 /**
  * @brief Render a single constraint in human-readable form.
@@ -53,4 +53,4 @@ extern n00b_string_t n00b_tc_type_to_string_full(n00b_tc_type_t *type);
  * @param con  Constraint to render.
  * @return     String representation (e.g., "Numeric", "!= nil").
  */
-extern n00b_string_t n00b_tc_constraint_to_string(n00b_tc_constraint_t *con);
+extern n00b_string_t *n00b_tc_constraint_to_string(n00b_tc_constraint_t *con);

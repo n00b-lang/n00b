@@ -485,6 +485,7 @@ n00b_compiler = [
     'src/n00b/n00b_type_spec.c',
     'src/n00b/n00b_compile.c',
     'src/n00b/n00b_module_loader.c',
+    'src/n00b/n00b_type_map.c',
 ]
 
 libdl_dep = cc.find_library('dl', required: false)

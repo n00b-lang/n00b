@@ -180,7 +180,7 @@ const n00b_renderer_vtable_t n00b_renderer_stream = {
  * Get the stream backend's internal buffer as a string.
  * Only valid when the backend is the stream backend.
  */
-n00b_string_t
+n00b_string_t *
 n00b_stream_backend_get_buffer(void *ctx)
 {
     stream_ctx_t *sctx = ctx;

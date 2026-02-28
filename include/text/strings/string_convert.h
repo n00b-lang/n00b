@@ -17,7 +17,6 @@
 #include "text/strings/string_ops.h" // for n00b_array_t(n00b_string_t)
 
 typedef char *n00b_cstr_t;
-n00b_array_decl(n00b_cstr_t);
 
 // ===================================================================
 // Integer ↔ string
@@ -28,7 +27,7 @@ n00b_array_decl(n00b_cstr_t);
  *  @kw allocator  Optional allocator.
  *  @return A string containing the decimal representation.
  */
-n00b_string_t n00b_unicode_str_from_int(int64_t n)
+n00b_string_t *n00b_unicode_str_from_int(int64_t n)
     _kargs { n00b_allocator_t *allocator = nullptr; };
 
 // ===================================================================
@@ -41,7 +40,7 @@ n00b_string_t n00b_unicode_str_from_int(int64_t n)
  *  @kw allocator  Optional allocator.
  *  @return A string containing two hex digits per input byte.
  */
-n00b_string_t n00b_unicode_str_to_hex(n00b_string_t s)
+n00b_string_t *n00b_unicode_str_to_hex(n00b_string_t *s)
     _kargs {
         bool              upper     = false;
         n00b_allocator_t *allocator = nullptr;
@@ -56,7 +55,7 @@ n00b_string_t n00b_unicode_str_to_hex(n00b_string_t s)
  *  @kw allocator  Optional allocator.
  *  @return A newly allocated NUL-terminated `char *`.
  */
-char *n00b_unicode_str_to_cstr(n00b_string_t s)
+char *n00b_unicode_str_to_cstr(n00b_string_t *s)
     _kargs { n00b_allocator_t *allocator = nullptr; };
 
 // ===================================================================
@@ -68,7 +67,7 @@ char *n00b_unicode_str_to_cstr(n00b_string_t s)
  *  @kw allocator  Optional allocator.
  *  @return A string wrapped in double quotes with contents escaped.
  */
-n00b_string_t n00b_unicode_str_to_literal(n00b_string_t s)
+n00b_string_t *n00b_unicode_str_to_literal(n00b_string_t *s)
     _kargs { n00b_allocator_t *allocator = nullptr; };
 
 // ===================================================================
@@ -83,7 +82,7 @@ n00b_string_t n00b_unicode_str_to_literal(n00b_string_t s)
  *  @kw allocator  Optional allocator.
  *  @return A string containing the UTF-8 encoding of @p cp.
  */
-n00b_string_t n00b_unicode_str_from_codepoint(n00b_codepoint_t cp)
+n00b_string_t *n00b_unicode_str_from_codepoint(n00b_codepoint_t cp)
     _kargs { n00b_allocator_t *allocator = nullptr; };
 
 // ===================================================================
@@ -98,7 +97,7 @@ n00b_string_t n00b_unicode_str_from_codepoint(n00b_codepoint_t cp)
  *  @kw allocator  Optional allocator.
  *  @return Ok(string) on success, or an error code (`errno`) on failure.
  */
-n00b_result_t(n00b_string_t) n00b_unicode_str_from_file(const char *path)
+n00b_result_t(n00b_string_t *) n00b_unicode_str_from_file(const char *path)
     _kargs { n00b_allocator_t *allocator = nullptr; };
 
 // ===================================================================
@@ -111,5 +110,5 @@ n00b_result_t(n00b_string_t) n00b_unicode_str_from_file(const char *path)
  *  @return An array of NUL-terminated C strings.
  */
 n00b_array_t(n00b_cstr_t) n00b_unicode_make_cstr_array(
-    n00b_array_t(n00b_string_t) parts)
+    n00b_array_t(n00b_string_t *) parts)
     _kargs { n00b_allocator_t *allocator = nullptr; };

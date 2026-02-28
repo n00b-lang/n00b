@@ -29,8 +29,6 @@ typedef struct {
     int32_t depth;  /**< Depth in post-dominator tree (exit = 0). */
 } n00b_pdom_info_t;
 
-n00b_array_decl(n00b_pdom_info_t);
-
 // ============================================================================
 // Control dependence edge
 // ============================================================================
@@ -48,8 +46,6 @@ typedef struct {
     n00b_cfg_edge_kind_t edge_kind;      /**< CFG edge kind (true/false/case/...). */
 } n00b_cd_edge_t;
 
-n00b_list_decl(n00b_cd_edge_t);
-
 // ============================================================================
 // CDG
 // ============================================================================
@@ -65,7 +61,7 @@ typedef struct {
     n00b_cfg_t                     *cfg;       /**< Source CFG (not owned). */
     n00b_array_t(n00b_pdom_info_t)  pdom;      /**< Indexed by block ID. */
     n00b_list_t(n00b_cd_edge_t)     cd_edges;  /**< All CD edges. */
-    n00b_string_t                   name;      /**< Name (from CFG). */
+    n00b_string_t                  *name;      /**< Name (from CFG). */
 } n00b_cdg_t;
 
 // ============================================================================

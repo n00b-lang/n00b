@@ -24,7 +24,7 @@ static const char hex_upper[] = "0123456789ABCDEF";
 // Hex formatting
 // ===================================================================
 
-n00b_string_t
+n00b_string_t *
 n00b_fmt_hex(uint64_t value) _kargs
 {
     bool              caps      = false;
@@ -55,7 +55,7 @@ n00b_fmt_hex(uint64_t value) _kargs
 // Integer formatting
 // ===================================================================
 
-n00b_string_t
+n00b_string_t *
 n00b_fmt_int(int64_t value) _kargs
 {
     bool              commas    = false;
@@ -110,7 +110,7 @@ n00b_fmt_int(int64_t value) _kargs
     return n00b_string_from_raw(repr + n, len, .allocator = allocator);
 }
 
-n00b_string_t
+n00b_string_t *
 n00b_fmt_uint(uint64_t value) _kargs
 {
     bool              commas    = false;
@@ -154,7 +154,7 @@ n00b_fmt_uint(uint64_t value) _kargs
 // Float formatting
 // ===================================================================
 
-n00b_string_t
+n00b_string_t *
 n00b_fmt_float(double value) _kargs
 {
     int               width     = 0;
@@ -202,7 +202,7 @@ n00b_fmt_float(double value) _kargs
 // Boolean formatting
 // ===================================================================
 
-n00b_string_t
+n00b_string_t *
 n00b_fmt_bool(bool value) _kargs
 {
     bool              upper     = false;
@@ -256,7 +256,7 @@ n00b_fmt_bool(bool value) _kargs
 // Codepoint formatting
 // ===================================================================
 
-n00b_string_t
+n00b_string_t *
 n00b_fmt_codepoint(n00b_codepoint_t cp) _kargs
 {
     n00b_allocator_t *allocator = nullptr;
@@ -312,7 +312,7 @@ n00b_fmt_codepoint(n00b_codepoint_t cp) _kargs
 // Pointer formatting
 // ===================================================================
 
-n00b_string_t
+n00b_string_t *
 n00b_fmt_pointer(void *ptr) _kargs
 {
     bool              caps      = false;

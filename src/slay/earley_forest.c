@@ -365,10 +365,10 @@ parse_node_hash(n00b_parse_tree_t *t)
                 | (uint64_t)(uint32_t)tok->index);
 
             if (n00b_option_is_set(tok->value)) {
-                n00b_string_t val = n00b_option_get(tok->value);
+                n00b_string_t *val = n00b_option_get(tok->value);
 
-                for (size_t i = 0; i < val.u8_bytes; i++) {
-                    MIX(val.data[i]);
+                for (size_t i = 0; i < val->u8_bytes; i++) {
+                    MIX(val->data[i]);
                 }
             }
         }
@@ -388,9 +388,9 @@ parse_node_hash(n00b_parse_tree_t *t)
 
         MIX(nc);
 
-        if (pn->name.data) {
-            for (size_t j = 0; j < pn->name.u8_bytes; j++) {
-                MIX(pn->name.data[j]);
+        if (pn->name && pn->name->data) {
+            for (size_t j = 0; j < pn->name->u8_bytes; j++) {
+                MIX(pn->name->data[j]);
             }
         }
 

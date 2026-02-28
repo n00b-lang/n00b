@@ -8,7 +8,7 @@
 
 TEST(test_ltr_text)
 {
-    n00b_unicode_bidi_para_t *p = n00b_unicode_bidi_open(*r"Hello");
+    n00b_unicode_bidi_para_t *p = n00b_unicode_bidi_open(r"Hello");
     ASSERT_EQ(n00b_unicode_bidi_paragraph_level(p), 0);
 
     n00b_array_t(uint8_t) levels = n00b_unicode_bidi_levels(p);
@@ -22,7 +22,7 @@ TEST(test_ltr_text)
 
 TEST(test_rtl_arabic)
 {
-    n00b_unicode_bidi_para_t *p = n00b_unicode_bidi_open(*r"\xD9\x85\xD8\xB1\xD8\xAD\xD8\xA8\xD8\xA7");
+    n00b_unicode_bidi_para_t *p = n00b_unicode_bidi_open(r"\xD9\x85\xD8\xB1\xD8\xAD\xD8\xA8\xD8\xA7");
     ASSERT_EQ(n00b_unicode_bidi_paragraph_level(p), 1);
 
     n00b_array_t(uint8_t) levels = n00b_unicode_bidi_levels(p);
@@ -36,7 +36,7 @@ TEST(test_rtl_arabic)
 
 TEST(test_visual_reorder)
 {
-    n00b_unicode_bidi_para_t *p = n00b_unicode_bidi_open(*r"Hello");
+    n00b_unicode_bidi_para_t *p = n00b_unicode_bidi_open(r"Hello");
 
     n00b_array_t(int32_t) map = n00b_unicode_bidi_reorder_visual(p);
     ASSERT_EQ(map.len, 5);
@@ -121,7 +121,7 @@ run_bidi_conformance(void)
         }
 
         // Build string and run bidi
-        n00b_string_t s = cps_to_str(cps, n);
+        n00b_string_t *s = cps_to_str(cps, n);
         n00b_unicode_bidi_para_t *bidi = n00b_unicode_bidi_open(s);
 
         bool ok = true;

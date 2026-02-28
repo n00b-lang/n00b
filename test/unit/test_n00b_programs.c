@@ -84,14 +84,14 @@ load_n00b_grammar(void)
     buf[len] = '\0';
     fclose(f);
 
-    n00b_string_t bnf_text = n00b_string_from_cstr(buf);
+    n00b_string_t *bnf_text = n00b_string_from_cstr(buf);
     free(buf);
 
     n00b_grammar_t *g = n00b_grammar_new();
     n00b_grammar_set_error_recovery(g, false);
 
     n00b_diag_ctx_t *bnf_diag = n00b_diag_ctx_new();
-    bool ok = n00b_bnf_load(bnf_text, *r"module", g, .diag = bnf_diag);
+    bool ok = n00b_bnf_load(bnf_text, r"module", g, .diag = bnf_diag);
 
     if (!ok) {
         fprintf(stderr, "  [FAIL] n00b_bnf_load failed for n00b.bnf\n");
@@ -139,7 +139,7 @@ run_pipeline(const char *src)
         r.parsed = false;
         r.diag   = n00b_diag_ctx_new();
         n00b_diag_push(r.diag, N00B_DIAG_ERROR, N00B_STAGE_PARSE,
-                      *r"P001", *r"parse failed", (n00b_diag_span_t){0});
+                      r"P001", r"parse failed", (n00b_diag_span_t){0});
         return r;
     }
 
@@ -150,7 +150,7 @@ run_pipeline(const char *src)
 
     if (!r.annot) {
         n00b_diag_push(r.diag, N00B_DIAG_ERROR, N00B_STAGE_ANNOT,
-                      *r"A001", *r"annotation walk failed",
+                      r"A001", r"annotation walk failed",
                       (n00b_diag_span_t){0});
         return r;
     }
@@ -162,7 +162,7 @@ run_pipeline(const char *src)
 
     // Build CFG.
     if (r.annot->cf_labels) {
-        r.cfg = n00b_build_cfg(r.annot->cf_labels, r.tree, *r"module",
+        r.cfg = n00b_build_cfg(r.annot->cf_labels, r.tree, r"module",
                                r.annot->symtab);
     }
 
@@ -183,7 +183,7 @@ run_pipeline(const char *src)
             .annot     = r.annot,
             .grammar   = shared_grammar,
             .diag      = r.diag,
-            .func_name = *r"module",
+            .func_name = r"module",
         };
 
         n00b_analyze_all(&actx);
@@ -216,8 +216,8 @@ has_diag_code(n00b_diag_ctx_t *ctx, const char *code)
     for (size_t i = 0; i < count; i++) {
         n00b_diagnostic_t d = n00b_list_get(ctx->diags, i);
 
-        if (d.code.u8_bytes == strlen(code)
-            && memcmp(d.code.data, code, d.code.u8_bytes) == 0) {
+        if (d.code->u8_bytes == strlen(code)
+            && memcmp(d.code->data, code, d.code->u8_bytes) == 0) {
             return true;
         }
     }
@@ -235,10 +235,10 @@ assert_parses(const char *src, const char *test_name)
         fprintf(stderr, "  [FAIL] %s: parse failed\n", test_name);
         fprintf(stderr, "  Source: %.60s...\n", src);
 
-        n00b_string_t err = n00b_parse_result_error_string(r.pr);
+        n00b_string_t *err = n00b_parse_result_error_string(r.pr);
 
-        if (err.data) {
-            fprintf(stderr, "  Error: %.*s\n", (int)err.u8_bytes, err.data);
+        if (err->data) {
+            fprintf(stderr, "  Error: %.*s\n", (int)err->u8_bytes, err->data);
         }
     }
 
@@ -285,7 +285,7 @@ test_var_decl_simple(void)
     pipeline_result_t r = assert_parses("var x = 42\n", "var_decl_simple");
 
     n00b_sym_entry_t *x = n00b_symtab_lookup_all(r.annot->symtab,
-                                                   *r"", *r"x");
+                                                   r"", r"x");
     assert(x != NULL);
     assert(x->kind == N00B_SYM_VARIABLE);
     pipeline_free(&r);
@@ -299,7 +299,7 @@ test_var_decl_typed(void)
     pipeline_result_t r = assert_parses("var x: int = 42\n", "var_decl_typed");
 
     n00b_sym_entry_t *x = n00b_symtab_lookup_all(r.annot->symtab,
-                                                   *r"", *r"x");
+                                                   r"", r"x");
     assert(x != NULL);
     assert(x->type_var != NULL);
     pipeline_free(&r);
@@ -313,7 +313,7 @@ test_var_decl_typed_no_init(void)
     pipeline_result_t r = assert_parses("var x: int\n", "var_decl_typed_no_init");
 
     n00b_sym_entry_t *x = n00b_symtab_lookup_all(r.annot->symtab,
-                                                   *r"", *r"x");
+                                                   r"", r"x");
     assert(x != NULL);
     pipeline_free(&r);
     printf("  [PASS] var_decl_typed_no_init\n");
@@ -373,7 +373,7 @@ test_func_simple(void)
     pipeline_result_t r = assert_parses(src, "func_simple");
 
     n00b_sym_entry_t *f = n00b_symtab_lookup_all(r.annot->symtab,
-                                                   *r"", *r"f");
+                                                   r"", r"f");
     assert(f != NULL);
     assert(f->kind == N00B_SYM_FUNCTION);
     pipeline_free(&r);
@@ -391,7 +391,7 @@ test_func_params(void)
     pipeline_result_t r = assert_parses(src, "func_params");
 
     n00b_sym_entry_t *f = n00b_symtab_lookup_all(r.annot->symtab,
-                                                   *r"", *r"add");
+                                                   r"", r"add");
     assert(f != NULL);
     assert(f->kind == N00B_SYM_FUNCTION);
 
@@ -426,7 +426,7 @@ test_func_private(void)
     pipeline_result_t r = assert_parses(src, "func_private");
 
     n00b_sym_entry_t *f = n00b_symtab_lookup_all(r.annot->symtab,
-                                                   *r"", *r"secret");
+                                                   r"", r"secret");
     assert(f != NULL);
     assert(f->kind == N00B_SYM_FUNCTION);
 
@@ -511,9 +511,9 @@ test_func_multiple(void)
     assert(!has_diag_code(r.diag, "W001"));
 
     // All three should be in the symbol table.
-    assert(n00b_symtab_lookup_all(r.annot->symtab, *r"", *r"first") != NULL);
-    assert(n00b_symtab_lookup_all(r.annot->symtab, *r"", *r"second") != NULL);
-    assert(n00b_symtab_lookup_all(r.annot->symtab, *r"", *r"third") != NULL);
+    assert(n00b_symtab_lookup_all(r.annot->symtab, r"", r"first") != NULL);
+    assert(n00b_symtab_lookup_all(r.annot->symtab, r"", r"second") != NULL);
+    assert(n00b_symtab_lookup_all(r.annot->symtab, r"", r"third") != NULL);
 
     pipeline_free(&r);
     printf("  [PASS] func_multiple\n");
@@ -1950,7 +1950,7 @@ test_nested_scopes(void)
 
     // Module-level x should exist.
     n00b_sym_entry_t *x = n00b_symtab_lookup_all(r.annot->symtab,
-                                                   *r"", *r"x");
+                                                   r"", r"x");
     assert(x != NULL);
 
     pipeline_free(&r);
@@ -1982,7 +1982,7 @@ test_complex_function(void)
     pipeline_result_t r = assert_parses(src, "complex_function");
 
     n00b_sym_entry_t *f = n00b_symtab_lookup_all(r.annot->symtab,
-                                                   *r"", *r"fibonacci");
+                                                   r"", r"fibonacci");
     assert(f != NULL);
     assert(f->kind == N00B_SYM_FUNCTION);
     assert(f->cfg != NULL);
@@ -2008,11 +2008,11 @@ test_mixed_declarations(void)
 
     pipeline_result_t r = assert_parses(src, "mixed_declarations");
 
-    assert(n00b_symtab_lookup_all(r.annot->symtab, *r"", *r"counter") != NULL);
-    assert(n00b_symtab_lookup_all(r.annot->symtab, *r"", *r"MAX") != NULL);
+    assert(n00b_symtab_lookup_all(r.annot->symtab, r"", r"counter") != NULL);
+    assert(n00b_symtab_lookup_all(r.annot->symtab, r"", r"MAX") != NULL);
     assert(n00b_symtab_lookup_all(r.annot->symtab,
-                                   *r"", *r"increment") != NULL);
-    assert(n00b_symtab_lookup_all(r.annot->symtab, *r"", *r"reset") != NULL);
+                                   r"", r"increment") != NULL);
+    assert(n00b_symtab_lookup_all(r.annot->symtab, r"", r"reset") != NULL);
 
     pipeline_free(&r);
     printf("  [PASS] mixed_declarations\n");
@@ -2259,9 +2259,9 @@ test_varref_annotation(void)
 
     // Both x and y should be in the symbol table.
     n00b_sym_entry_t *x = n00b_symtab_lookup_all(r.annot->symtab,
-                                                   *r"", *r"x");
+                                                   r"", r"x");
     n00b_sym_entry_t *y = n00b_symtab_lookup_all(r.annot->symtab,
-                                                   *r"", *r"y");
+                                                   r"", r"y");
     assert(x != NULL);
     assert(y != NULL);
 
@@ -2761,7 +2761,7 @@ test_var_decl_bare(void)
     pipeline_result_t r = assert_parses("var x\n", "var_decl_bare");
 
     n00b_sym_entry_t *x = n00b_symtab_lookup_all(r.annot->symtab,
-                                                   *r"", *r"x");
+                                                   r"", r"x");
     assert(x != NULL);
     pipeline_free(&r);
     printf("  [PASS] var_decl_bare\n");

@@ -51,15 +51,12 @@
  * The `_new` function returns `n00b_result_t` for proper error propagation.
  *
  * @pre N00B_CONDUIT_TOPIC_IMPL(T_in) and N00B_CONDUIT_TOPIC_IMPL(T_out)
- *      must have been called. n00b_option_decl(T_out) must exist.
+ *      must have been called. n00b_option_t(T_out) must be usable.
  */
 #define N00B_CONDUIT_XFORM_IMPL(T_in, T_out)                                  \
     /* Forward declarations at file scope */                                   \
     n00b_conduit_xform_t(T_in, T_out);                                         \
     n00b_conduit_xform_ops_t(T_in, T_out);                                     \
-                                                                               \
-    /* Declare the result type for this xform. */                              \
-    n00b_result_decl(n00b_conduit_xform_t(T_in, T_out) *);                     \
                                                                                \
     n00b_conduit_xform_ops_t(T_in, T_out) {                                   \
         /** Transform one input into an optional output.                      \
@@ -76,7 +73,7 @@
          *  Called by the chain API after _new(). */                           \
         void (*init_from_spec)(n00b_conduit_xform_t(T_in, T_out) *xform,      \
                                const void *spec);                              \
-        n00b_string_t kind;                                                     \
+        n00b_string_t *kind;                                                    \
     };                                                                         \
                                                                                \
     n00b_conduit_xform_t(T_in, T_out) {                                        \

@@ -29,10 +29,6 @@
 #include "typecheck/types.h"
 #include "logic/logic_program.h"
 
-// List-of-struct declarations needed for the context.
-n00b_list_decl(n00b_tc_iface_t);
-n00b_list_decl(n00b_tc_impl_t);
-
 /**
  * @brief Type-checking context.
  *
@@ -113,10 +109,10 @@ extern void n00b_tc_ctx_register(n00b_tc_ctx_t *ctx, n00b_tc_type_t *type);
  * @brief Define a new interface with named type parameters.
  *
  * @param ctx    Context.
- * @param name   Interface name (e.g., `*r"Indexable"`).
+ * @param name   Interface name (e.g., `r"Indexable"`).
  * @param ...    `n00b_tc_iface_param_t` values (struct-typed varargs).
  */
-extern void n00b_tc_register_iface(n00b_tc_ctx_t *ctx, n00b_string_t name,
+extern void n00b_tc_register_iface(n00b_tc_ctx_t *ctx, n00b_string_t *name,
                                      n00b_tc_iface_param_t +);
 
 /**
@@ -126,13 +122,13 @@ extern void n00b_tc_register_iface(n00b_tc_ctx_t *ctx, n00b_string_t name,
  * and records the concrete bindings for each interface parameter.
  *
  * @param ctx        Context.
- * @param type_name  Implementing type (e.g., `*r"dict"`).
- * @param iface_name Interface (e.g., `*r"Indexable"`).
+ * @param type_name  Implementing type (e.g., `r"dict"`).
+ * @param iface_name Interface (e.g., `r"Indexable"`).
  * @param ...        Concrete binding types as `n00b_tc_type_t *` varargs.
  */
 extern void n00b_tc_register_impl(n00b_tc_ctx_t *ctx,
-                                    n00b_string_t type_name,
-                                    n00b_string_t iface_name,
+                                    n00b_string_t *type_name,
+                                    n00b_string_t *iface_name,
                                     n00b_tc_type_t *+);
 
 /**
@@ -146,8 +142,8 @@ extern void n00b_tc_register_impl(n00b_tc_ctx_t *ctx,
  * @param to_name   Target type name.
  */
 extern void n00b_tc_register_promotion(n00b_tc_ctx_t *ctx,
-                                         n00b_string_t from_name,
-                                         n00b_string_t to_name);
+                                         n00b_string_t *from_name,
+                                         n00b_string_t *to_name);
 
 // ============================================================================
 // Queries
@@ -165,8 +161,8 @@ extern void n00b_tc_register_promotion(n00b_tc_ctx_t *ctx,
  * @return           `true` if the type implements the interface.
  */
 extern bool n00b_tc_implements(n00b_tc_ctx_t *ctx,
-                                 n00b_string_t type_name,
-                                 n00b_string_t iface_name);
+                                 n00b_string_t *type_name,
+                                 n00b_string_t *iface_name);
 
 /**
  * @brief Query whether one type promotes to another (transitively).
@@ -180,8 +176,8 @@ extern bool n00b_tc_implements(n00b_tc_ctx_t *ctx,
  * @return          `true` if promotion is possible.
  */
 extern bool n00b_tc_promotes_to(n00b_tc_ctx_t *ctx,
-                                  n00b_string_t from_name,
-                                  n00b_string_t to_name);
+                                  n00b_string_t *from_name,
+                                  n00b_string_t *to_name);
 
 // ============================================================================
 // Primitive lookup
@@ -194,9 +190,9 @@ extern bool n00b_tc_promotes_to(n00b_tc_ctx_t *ctx,
  * the cached type pointer if found.
  *
  * @param ctx   Context with built-in cache.
- * @param name  Primitive name (e.g., `*r"int"`, `*r"bool"`).
+ * @param name  Primitive name (e.g., `r"int"`, `r"bool"`).
  * @return      The cached primitive type, or `nullptr` if not a built-in.
  */
 extern n00b_tc_type_t *n00b_tc_lookup_prim(n00b_tc_ctx_t *ctx,
-                                              n00b_string_t name);
+                                              n00b_string_t *name);
 

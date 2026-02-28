@@ -29,9 +29,9 @@ struct n00b_parse_result_t {
     // Error diagnostics
     n00b_error_location_t error_loc;
     int64_t              *expected_ids;
-    n00b_string_t        *expected_desc;
+    n00b_string_t       **expected_desc;
     int32_t               expected_count;
-    n00b_string_t        *active_ctx;
+    n00b_string_t       **active_ctx;
     int32_t               active_ctx_count;
 
     // Repairs
@@ -262,31 +262,31 @@ n00b_parse_result_expected_tokens(n00b_parse_result_t *r,
     return n;
 }
 
-n00b_string_t
+n00b_string_t *
 n00b_parse_result_expected_string(n00b_parse_result_t *r)
 {
     if (!r || r->expected_count == 0) {
-        return N00B_STRING_STATIC("(none)");
+        return r"(none)";
     }
 
     // Build a comma-separated list of expected terminal names.
     n00b_grammar_t *g = r->grammar;
 
-    n00b_string_t result = N00B_STRING_STATIC("");
-    bool          first  = true;
+    n00b_string_t *result = r"";
+    bool           first  = true;
 
     for (int32_t i = 0; i < r->expected_count; i++) {
-        n00b_string_t name;
+        n00b_string_t *name;
 
         // Prefer the human-readable description when available.
-        if (r->expected_desc && r->expected_desc[i].data) {
+        if (r->expected_desc && r->expected_desc[i]) {
             name = r->expected_desc[i];
         }
         else if (r->expected_ids) {
             n00b_string_t *tname = n00b_get_terminal_name(g, r->expected_ids[i]);
 
             if (tname) {
-                name = *tname;
+                name = tname;
             }
             else {
                 name = n00b_fmt_int(r->expected_ids[i]);
@@ -297,7 +297,7 @@ n00b_parse_result_expected_string(n00b_parse_result_t *r)
         }
 
         if (!first) {
-            n00b_string_t sep = N00B_STRING_STATIC(", ");
+            n00b_string_t *sep = r", ";
             result = n00b_unicode_str_cat(result, sep);
         }
 
@@ -308,42 +308,42 @@ n00b_parse_result_expected_string(n00b_parse_result_t *r)
     return result;
 }
 
-n00b_string_t
+n00b_string_t *
 n00b_parse_result_error_string(n00b_parse_result_t *r)
 {
     if (!r) {
-        return N00B_STRING_STATIC("(no result)");
+        return r"(no result)";
     }
 
     if (r->ok) {
-        return N00B_STRING_STATIC("(no error)");
+        return r"(no error)";
     }
 
-    n00b_string_t expected = n00b_parse_result_expected_string(r);
+    n00b_string_t *expected = n00b_parse_result_expected_string(r);
     n00b_error_location_t loc = r->error_loc;
 
-    if (loc.got.data) {
+    if (loc.got) {
         // Escape non-visible "got" text for readability.
-        n00b_string_t got_display = loc.got;
+        n00b_string_t *got_display = loc.got;
 
-        if (got_display.u8_bytes == 1 && got_display.data[0] == '\n') {
-            got_display = N00B_STRING_STATIC("newline");
+        if (got_display->u8_bytes == 1 && got_display->data[0] == '\n') {
+            got_display = r"newline";
         }
-        else if (got_display.u8_bytes == 1 && got_display.data[0] == '\t') {
-            got_display = N00B_STRING_STATIC("tab");
+        else if (got_display->u8_bytes == 1 && got_display->data[0] == '\t') {
+            got_display = r"tab";
         }
-        else if (got_display.u8_bytes == 2
-                 && got_display.data[0] == '\r'
-                 && got_display.data[1] == '\n') {
-            got_display = N00B_STRING_STATIC("newline");
+        else if (got_display->u8_bytes == 2
+                 && got_display->data[0] == '\r'
+                 && got_display->data[1] == '\n') {
+            got_display = r"newline";
         }
 
         return n00b_cformat("parse error at line «#:d», col «#:d»: got '«#»', expected: «#»",
-                            (uint64_t)loc.line, (uint64_t)loc.column, &got_display, &expected);
+                            (uint64_t)loc.line, (uint64_t)loc.column, got_display, expected);
     }
 
     return n00b_cformat("parse error at line «#:d», col «#:d»: expected: «#»",
-                        (uint64_t)loc.line, (uint64_t)loc.column, &expected);
+                        (uint64_t)loc.line, (uint64_t)loc.column, expected);
 }
 
 // ============================================================================
@@ -393,7 +393,7 @@ n00b_parse_result_ambiguities(n00b_parse_result_t *r,
 
     n00b_parse_tree_t *best = n00b_parse_forest_best(&r->forest);
 
-    n00b_string_t root_name = N00B_STRING_STATIC("<root>");
+    n00b_string_t *root_name = r"<root>";
     int32_t       root_start = 0;
     int32_t       root_end   = 0;
 

@@ -33,7 +33,7 @@
  * @return Decoded string value, or none on unterminated string or if
  *         cursor is not at `"`.
  */
-extern n00b_option_t(n00b_string_t) n00b_scan_string_double(n00b_scanner_t *s);
+extern n00b_option_t(n00b_string_t *) n00b_scan_string_double(n00b_scanner_t *s);
 
 /**
  * @brief Scan a single-quoted string/char literal.
@@ -42,7 +42,7 @@ extern n00b_option_t(n00b_string_t) n00b_scan_string_double(n00b_scanner_t *s);
  *
  * @return Decoded string value, or none on error.
  */
-extern n00b_option_t(n00b_string_t) n00b_scan_string_single(n00b_scanner_t *s);
+extern n00b_option_t(n00b_string_t *) n00b_scan_string_single(n00b_scanner_t *s);
 
 /**
  * @brief Scan a raw/verbatim string (no escape processing).
@@ -51,7 +51,7 @@ extern n00b_option_t(n00b_string_t) n00b_scan_string_single(n00b_scanner_t *s);
  * @param quote The quote character (or string) that opens/closes.
  * @return Raw string value, or none on error.
  */
-extern n00b_option_t(n00b_string_t) n00b_scan_string_raw(n00b_scanner_t *s, const char *quote);
+extern n00b_option_t(n00b_string_t *) n00b_scan_string_raw(n00b_scanner_t *s, const char *quote);
 
 // ============================================================================
 // Number recipes
@@ -65,7 +65,7 @@ extern n00b_option_t(n00b_string_t) n00b_scan_string_raw(n00b_scanner_t *s, cons
  *
  * @return Extracted text, or none if no digits found.
  */
-extern n00b_option_t(n00b_string_t) n00b_scan_integer(n00b_scanner_t *s);
+extern n00b_option_t(n00b_string_t *) n00b_scan_integer(n00b_scanner_t *s);
 
 /**
  * @brief Scan a floating-point literal (with optional exponent).
@@ -75,7 +75,7 @@ extern n00b_option_t(n00b_string_t) n00b_scan_integer(n00b_scanner_t *s);
  *
  * @return Extracted text, or none if no match.
  */
-extern n00b_option_t(n00b_string_t) n00b_scan_float(n00b_scanner_t *s);
+extern n00b_option_t(n00b_string_t *) n00b_scan_float(n00b_scanner_t *s);
 
 /**
  * @brief Scan a number (integer or float) and emit appropriate token.
@@ -100,4 +100,4 @@ extern bool n00b_scan_number(n00b_scanner_t *s,
  *
  * @return Extracted text, or none if no ID_Start at cursor.
  */
-extern n00b_option_t(n00b_string_t) n00b_scan_identifier(n00b_scanner_t *s);
+extern n00b_option_t(n00b_string_t *) n00b_scan_identifier(n00b_scanner_t *s);

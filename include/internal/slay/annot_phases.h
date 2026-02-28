@@ -37,7 +37,7 @@ typedef struct {
     size_t               annot_count;
     n00b_sym_entry_t    *last_sym;    /**< Set by pass A, read by pass B. */
     bool                 opened_scope;
-    n00b_string_t        scope_ns;
+    n00b_string_t       *scope_ns;
 } annot_node_ctx_t;
 
 // ============================================================================

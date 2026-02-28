@@ -35,19 +35,19 @@ TEST(test_datalog_passthrough)
     n00b_logic_t prog;
     n00b_logic_init(&prog);
 
-    n00b_dl_rel_id_t edge = n00b_logic_relation(&prog, *r"edge", 2);
-    n00b_dl_rel_id_t path = n00b_logic_relation(&prog, *r"path", 2);
+    n00b_dl_rel_id_t edge = n00b_logic_relation(&prog, r"edge", 2);
+    n00b_dl_rel_id_t path = n00b_logic_relation(&prog, r"path", 2);
 
-    n00b_dl_sym_t a = n00b_logic_const(&prog, *r"a");
-    n00b_dl_sym_t b = n00b_logic_const(&prog, *r"b");
-    n00b_dl_sym_t c = n00b_logic_const(&prog, *r"c");
+    n00b_dl_sym_t a = n00b_logic_const(&prog, r"a");
+    n00b_dl_sym_t b = n00b_logic_const(&prog, r"b");
+    n00b_dl_sym_t c = n00b_logic_const(&prog, r"c");
 
     n00b_logic_add_fact(&prog, edge, 2, (n00b_dl_sym_t[]){a, b});
     n00b_logic_add_fact(&prog, edge, 2, (n00b_dl_sym_t[]){b, c});
 
-    n00b_dl_sym_t X = n00b_logic_var(&prog, *r"X");
-    n00b_dl_sym_t Y = n00b_logic_var(&prog, *r"Y");
-    n00b_dl_sym_t Z = n00b_logic_var(&prog, *r"Z");
+    n00b_dl_sym_t X = n00b_logic_var(&prog, r"X");
+    n00b_dl_sym_t Y = n00b_logic_var(&prog, r"Y");
+    n00b_dl_sym_t Z = n00b_logic_var(&prog, r"Z");
 
     {
         n00b_dl_rule_builder_t rb;
@@ -85,9 +85,9 @@ TEST(test_csp_passthrough)
     n00b_logic_t prog;
     n00b_logic_init(&prog);
 
-    n00b_csp_var_id_t x = n00b_logic_csp_var(&prog, *r"x",
+    n00b_csp_var_id_t x = n00b_logic_csp_var(&prog, r"x",
                                                n00b_csp_dom_range(1, 3));
-    n00b_csp_var_id_t y = n00b_logic_csp_var(&prog, *r"y",
+    n00b_csp_var_id_t y = n00b_logic_csp_var(&prog, r"y",
                                                n00b_csp_dom_range(1, 3));
 
     ASSERT(n00b_logic_csp_ne(&prog, x, y));
@@ -119,11 +119,11 @@ TEST(test_graph_coloring)
     n00b_logic_t prog;
     n00b_logic_init(&prog);
 
-    n00b_dl_rel_id_t edge = n00b_logic_relation(&prog, *r"edge", 2);
+    n00b_dl_rel_id_t edge = n00b_logic_relation(&prog, r"edge", 2);
 
-    n00b_dl_sym_t a = n00b_logic_const(&prog, *r"a");
-    n00b_dl_sym_t b = n00b_logic_const(&prog, *r"b");
-    n00b_dl_sym_t c = n00b_logic_const(&prog, *r"c");
+    n00b_dl_sym_t a = n00b_logic_const(&prog, r"a");
+    n00b_dl_sym_t b = n00b_logic_const(&prog, r"b");
+    n00b_dl_sym_t c = n00b_logic_const(&prog, r"c");
 
     n00b_logic_add_fact(&prog, edge, 2, (n00b_dl_sym_t[]){a, b});
     n00b_logic_add_fact(&prog, edge, 2, (n00b_dl_sym_t[]){b, c});
@@ -176,19 +176,19 @@ TEST(test_transitive_then_constrain)
     n00b_logic_t prog;
     n00b_logic_init(&prog);
 
-    n00b_dl_rel_id_t edge = n00b_logic_relation(&prog, *r"edge", 2);
-    n00b_dl_rel_id_t path = n00b_logic_relation(&prog, *r"path", 2);
+    n00b_dl_rel_id_t edge = n00b_logic_relation(&prog, r"edge", 2);
+    n00b_dl_rel_id_t path = n00b_logic_relation(&prog, r"path", 2);
 
-    n00b_dl_sym_t a = n00b_logic_const(&prog, *r"a");
-    n00b_dl_sym_t b = n00b_logic_const(&prog, *r"b");
-    n00b_dl_sym_t c = n00b_logic_const(&prog, *r"c");
+    n00b_dl_sym_t a = n00b_logic_const(&prog, r"a");
+    n00b_dl_sym_t b = n00b_logic_const(&prog, r"b");
+    n00b_dl_sym_t c = n00b_logic_const(&prog, r"c");
 
     n00b_logic_add_fact(&prog, edge, 2, (n00b_dl_sym_t[]){a, b});
     n00b_logic_add_fact(&prog, edge, 2, (n00b_dl_sym_t[]){b, c});
 
-    n00b_dl_sym_t X = n00b_logic_var(&prog, *r"X");
-    n00b_dl_sym_t Y = n00b_logic_var(&prog, *r"Y");
-    n00b_dl_sym_t Z = n00b_logic_var(&prog, *r"Z");
+    n00b_dl_sym_t X = n00b_logic_var(&prog, r"X");
+    n00b_dl_sym_t Y = n00b_logic_var(&prog, r"Y");
+    n00b_dl_sym_t Z = n00b_logic_var(&prog, r"Z");
 
     {
         n00b_dl_rule_builder_t rb;
@@ -236,9 +236,9 @@ TEST(test_push_pop_search)
     n00b_logic_t prog;
     n00b_logic_init(&prog);
 
-    n00b_csp_var_id_t x = n00b_logic_csp_var(&prog, *r"x",
+    n00b_csp_var_id_t x = n00b_logic_csp_var(&prog, r"x",
                                                n00b_csp_dom_range(1, 2));
-    n00b_csp_var_id_t y = n00b_logic_csp_var(&prog, *r"y",
+    n00b_csp_var_id_t y = n00b_logic_csp_var(&prog, r"y",
                                                n00b_csp_dom_range(1, 2));
 
     ASSERT(n00b_logic_csp_ne(&prog, x, y));

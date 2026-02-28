@@ -26,7 +26,7 @@ typedef struct n00b_unicode_break_iter_s n00b_unicode_break_iter_t;
  *  @return A new break iterator; caller must call
  *          n00b_unicode_break_iter_free().
  */
-n00b_unicode_break_iter_t *n00b_unicode_grapheme_iter(n00b_string_t s)
+n00b_unicode_break_iter_t *n00b_unicode_grapheme_iter(n00b_string_t *s)
     _kargs { n00b_allocator_t *allocator = nullptr; };
 
 /** @brief Create a word break iterator over a string.
@@ -35,7 +35,7 @@ n00b_unicode_break_iter_t *n00b_unicode_grapheme_iter(n00b_string_t s)
  *  @return A new break iterator; caller must call
  *          n00b_unicode_break_iter_free().
  */
-n00b_unicode_break_iter_t *n00b_unicode_word_iter(n00b_string_t s)
+n00b_unicode_break_iter_t *n00b_unicode_word_iter(n00b_string_t *s)
     _kargs { n00b_allocator_t *allocator = nullptr; };
 
 /** @brief Create a sentence break iterator over a string.
@@ -44,7 +44,7 @@ n00b_unicode_break_iter_t *n00b_unicode_word_iter(n00b_string_t s)
  *  @return A new break iterator; caller must call
  *          n00b_unicode_break_iter_free().
  */
-n00b_unicode_break_iter_t *n00b_unicode_sentence_iter(n00b_string_t s)
+n00b_unicode_break_iter_t *n00b_unicode_sentence_iter(n00b_string_t *s)
     _kargs { n00b_allocator_t *allocator = nullptr; };
 
 // ===========================================================================
@@ -76,4 +76,4 @@ void n00b_unicode_break_iter_free(n00b_unicode_break_iter_t *it);
  *  @param s  The string to examine.
  *  @return The number of grapheme clusters.
  */
-uint32_t n00b_unicode_grapheme_count(n00b_string_t s);
+uint32_t n00b_unicode_grapheme_count(n00b_string_t *s);

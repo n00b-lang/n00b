@@ -7,44 +7,44 @@
 
 TEST(test_single_paragraph)
 {
-    n00b_string_t src  = *r"hello world";
+    n00b_string_t *src = r"hello world";
     auto          tree = n00b_parse_markdown(src);
 
-    n00b_array_t(n00b_string_t) lines = n00b_str_md_to_lines(tree);
+    n00b_array_t(n00b_string_t *) lines = n00b_str_md_to_lines(tree);
     ASSERT_EQ(n00b_array_len(lines), 1);
 
-    n00b_string_t line = n00b_array_get(lines, 0);
-    ASSERT_STR_EQ(line.data, "hello world");
+    n00b_string_t *line = n00b_array_get(lines, 0);
+    ASSERT_STR_EQ(line->data, "hello world");
 
     n00b_array_free(lines);
 }
 
 TEST(test_two_paragraphs)
 {
-    n00b_string_t src  = *r"first\n\nsecond";
+    n00b_string_t *src = r"first\n\nsecond";
     auto          tree = n00b_parse_markdown(src);
 
-    n00b_array_t(n00b_string_t) lines = n00b_str_md_to_lines(tree);
+    n00b_array_t(n00b_string_t *) lines = n00b_str_md_to_lines(tree);
     ASSERT_EQ(n00b_array_len(lines), 2);
 
-    n00b_string_t l0 = n00b_array_get(lines, 0);
-    n00b_string_t l1 = n00b_array_get(lines, 1);
-    ASSERT_STR_EQ(l0.data, "first");
-    ASSERT_STR_EQ(l1.data, "second");
+    n00b_string_t *l0 = n00b_array_get(lines, 0);
+    n00b_string_t *l1 = n00b_array_get(lines, 1);
+    ASSERT_STR_EQ(l0->data, "first");
+    ASSERT_STR_EQ(l1->data, "second");
 
     n00b_array_free(lines);
 }
 
 TEST(test_heading)
 {
-    n00b_string_t src  = *r"# Title";
+    n00b_string_t *src = r"# Title";
     auto          tree = n00b_parse_markdown(src);
 
-    n00b_array_t(n00b_string_t) lines = n00b_str_md_to_lines(tree);
+    n00b_array_t(n00b_string_t *) lines = n00b_str_md_to_lines(tree);
     ASSERT_EQ(n00b_array_len(lines), 1);
 
-    n00b_string_t line = n00b_array_get(lines, 0);
-    ASSERT_STR_EQ(line.data, "Title");
+    n00b_string_t *line = n00b_array_get(lines, 0);
+    ASSERT_STR_EQ(line->data, "Title");
 
     auto                      info_opt = n00b_str_get_style_info(line);
     ASSERT(n00b_option_is_set(info_opt));
@@ -62,35 +62,35 @@ TEST(test_heading)
 
 TEST(test_unordered_list)
 {
-    n00b_string_t src  = *r"- alpha\n- beta\n- gamma";
+    n00b_string_t *src = r"- alpha\n- beta\n- gamma";
     auto          tree = n00b_parse_markdown(src);
 
-    n00b_array_t(n00b_string_t) lines = n00b_str_md_to_lines(tree);
+    n00b_array_t(n00b_string_t *) lines = n00b_str_md_to_lines(tree);
     ASSERT_EQ(n00b_array_len(lines), 3);
 
-    n00b_string_t l0 = n00b_array_get(lines, 0);
-    n00b_string_t l1 = n00b_array_get(lines, 1);
-    n00b_string_t l2 = n00b_array_get(lines, 2);
-    ASSERT_STR_EQ(l0.data, "- alpha");
-    ASSERT_STR_EQ(l1.data, "- beta");
-    ASSERT_STR_EQ(l2.data, "- gamma");
+    n00b_string_t *l0 = n00b_array_get(lines, 0);
+    n00b_string_t *l1 = n00b_array_get(lines, 1);
+    n00b_string_t *l2 = n00b_array_get(lines, 2);
+    ASSERT_STR_EQ(l0->data, "- alpha");
+    ASSERT_STR_EQ(l1->data, "- beta");
+    ASSERT_STR_EQ(l2->data, "- gamma");
 
     n00b_array_free(lines);
 }
 
 TEST(test_code_block)
 {
-    n00b_string_t src  = *r"```\nint x;\nint y;\n```";
+    n00b_string_t *src = r"```\nint x;\nint y;\n```";
     auto          tree = n00b_parse_markdown(src);
 
-    n00b_array_t(n00b_string_t) lines = n00b_str_md_to_lines(tree);
+    n00b_array_t(n00b_string_t *) lines = n00b_str_md_to_lines(tree);
     // Should have at least 2 code lines.
     ASSERT(n00b_array_len(lines) >= 2);
 
     // Each line should have mono style.
     bool all_mono = true;
     for (size_t i = 0; i < n00b_array_len(lines); i++) {
-        n00b_string_t             line     = n00b_array_get(lines, i);
+        n00b_string_t            *line     = n00b_array_get(lines, i);
         auto                      info_opt = n00b_str_get_style_info(line);
         if (!n00b_option_is_set(info_opt)) {
             all_mono = false;
@@ -110,42 +110,42 @@ TEST(test_code_block)
     ASSERT(all_mono);
 
     // Check content of first two lines.
-    n00b_string_t l0 = n00b_array_get(lines, 0);
-    n00b_string_t l1 = n00b_array_get(lines, 1);
-    ASSERT_STR_EQ(l0.data, "int x;");
-    ASSERT_STR_EQ(l1.data, "int y;");
+    n00b_string_t *l0 = n00b_array_get(lines, 0);
+    n00b_string_t *l1 = n00b_array_get(lines, 1);
+    ASSERT_STR_EQ(l0->data, "int x;");
+    ASSERT_STR_EQ(l1->data, "int y;");
 
     n00b_array_free(lines);
 }
 
 TEST(test_hr)
 {
-    n00b_string_t src  = *r"above\n\n---\n\nbelow";
+    n00b_string_t *src = r"above\n\n---\n\nbelow";
     auto          tree = n00b_parse_markdown(src);
 
-    n00b_array_t(n00b_string_t) lines = n00b_str_md_to_lines(tree);
+    n00b_array_t(n00b_string_t *) lines = n00b_str_md_to_lines(tree);
     ASSERT_EQ(n00b_array_len(lines), 3);
 
-    n00b_string_t l0 = n00b_array_get(lines, 0);
-    n00b_string_t l1 = n00b_array_get(lines, 1);
-    n00b_string_t l2 = n00b_array_get(lines, 2);
-    ASSERT_STR_EQ(l0.data, "above");
-    ASSERT_STR_EQ(l1.data, "---");
-    ASSERT_STR_EQ(l2.data, "below");
+    n00b_string_t *l0 = n00b_array_get(lines, 0);
+    n00b_string_t *l1 = n00b_array_get(lines, 1);
+    n00b_string_t *l2 = n00b_array_get(lines, 2);
+    ASSERT_STR_EQ(l0->data, "above");
+    ASSERT_STR_EQ(l1->data, "---");
+    ASSERT_STR_EQ(l2->data, "below");
 
     n00b_array_free(lines);
 }
 
 TEST(test_inline_styles_in_paragraph)
 {
-    n00b_string_t src  = *r"normal **bold** *italic*";
+    n00b_string_t *src = r"normal **bold** *italic*";
     auto          tree = n00b_parse_markdown(src);
 
-    n00b_array_t(n00b_string_t) lines = n00b_str_md_to_lines(tree);
+    n00b_array_t(n00b_string_t *) lines = n00b_str_md_to_lines(tree);
     ASSERT_EQ(n00b_array_len(lines), 1);
 
-    n00b_string_t line = n00b_array_get(lines, 0);
-    ASSERT_STR_EQ(line.data, "normal bold italic");
+    n00b_string_t *line = n00b_array_get(lines, 0);
+    ASSERT_STR_EQ(line->data, "normal bold italic");
 
     auto                      info_opt = n00b_str_get_style_info(line);
     ASSERT(n00b_option_is_set(info_opt));
@@ -170,19 +170,19 @@ TEST(test_inline_styles_in_paragraph)
 TEST(test_mixed_doc)
 {
     // Heading, paragraph, list, HR, code block.
-    n00b_string_t src = *r"# Title\n\nSome text.\n\n- one\n- two\n\n---\n\n```\ncode\n```";
+    n00b_string_t *src = r"# Title\n\nSome text.\n\n- one\n- two\n\n---\n\n```\ncode\n```";
     auto tree = n00b_parse_markdown(src);
 
-    n00b_array_t(n00b_string_t) lines = n00b_str_md_to_lines(tree);
+    n00b_array_t(n00b_string_t *) lines = n00b_str_md_to_lines(tree);
 
     // Should have: Title, Some text., - one, - two, ---, code
     ASSERT(n00b_array_len(lines) >= 6);
 
-    n00b_string_t l0 = n00b_array_get(lines, 0);
-    ASSERT_STR_EQ(l0.data, "Title");
+    n00b_string_t *l0 = n00b_array_get(lines, 0);
+    ASSERT_STR_EQ(l0->data, "Title");
 
-    n00b_string_t l1 = n00b_array_get(lines, 1);
-    ASSERT_STR_EQ(l1.data, "Some text.");
+    n00b_string_t *l1 = n00b_array_get(lines, 1);
+    ASSERT_STR_EQ(l1->data, "Some text.");
 
     n00b_array_free(lines);
 }

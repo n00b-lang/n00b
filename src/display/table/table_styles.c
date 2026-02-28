@@ -214,7 +214,7 @@ n00b_table_style_ascii(void)
 // ====================================================================
 
 n00b_table_t *
-n00b_table_callout(n00b_string_t content)
+n00b_table_callout(n00b_string_t *content)
 {
     n00b_table_style_t style = n00b_table_style_default();
     n00b_table_t      *table = n00b_new_kargs(n00b_table_t, table,
@@ -235,16 +235,18 @@ n00b_table_callout(n00b_string_t content)
 }
 
 n00b_table_t *
-n00b_table_flow(n00b_string_t *items, n00b_isize_t n)
+n00b_table_flow(n00b_array_t(n00b_string_t *) items)
 {
     n00b_table_style_t style = n00b_table_style_minimal();
     n00b_table_t      *table = n00b_new_kargs(n00b_table_t, table, .style = &style);
+
+    n00b_isize_t n = n00b_array_len(items);
 
     for (n00b_isize_t i = 0; i < n; i++) {
         n00b_table_col_flex(table, 1);
     }
 
-    n00b_table_add_row(table, items, n);
+    n00b_table_add_row(table, items);
 
     return table;
 }

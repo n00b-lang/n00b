@@ -14,10 +14,6 @@
 #include "adt/list.h"
 #include "adt/dict.h"
 
-n00b_dict_decl(n00b_earley_item_t *, bool);
-n00b_dict_decl(n00b_earley_item_t *, void *);
-n00b_dict_decl(uint64_t, bool);
-
 // ============================================================================
 // BSR (Binary Subtree Representation) element
 // ============================================================================
@@ -124,7 +120,6 @@ typedef struct {
 // ============================================================================
 
 typedef n00b_earley_item_t *n00b_earley_item_ptr_t;
-n00b_list_decl(n00b_earley_item_ptr_t);
 
 struct n00b_earley_state_t {
     n00b_token_info_t                   *token;        /**< Token at this position. */
@@ -141,7 +136,6 @@ struct n00b_earley_state_t {
 // ============================================================================
 
 typedef n00b_earley_state_t *n00b_earley_state_ptr_t;
-n00b_list_decl(n00b_earley_state_ptr_t);
 
 /**
  * @brief Full Earley parser state.

@@ -24,9 +24,6 @@
 /** @internal Designator for field item_<i>. */
 #define n00b_tuple_item(i) .constexpr_paste("item_", i)
 
-/** @internal Struct tag via typeid. */
-#define n00b_tuple_t(...) struct typeid("n00b_tuple", __VA_ARGS__)
-
 /** @internal Emit one struct field: typeof(X) item_<count>; */
 #define N00B_TUPLE_ITEM(X, count) typeof(X) constexpr_paste("item_", count);
 
@@ -38,14 +35,13 @@
 // ============================================================================
 
 /**
- * @brief Declare a tuple type with the given element types.
+ * @brief Tuple type with the given element types.
  *
- * Expands to a struct definition with one field per type.
+ * Each use auto-defines the struct via @c _generic_struct.
  * @param ...  Element types.
  */
-#define n00b_tuple_decl(...)                                                                   \
-    n00b_tuple_t(__VA_ARGS__)                                                                  \
-    {                                                                                          \
+#define n00b_tuple_t(...)                                                                      \
+    _generic_struct typeid("n00b_tuple", __VA_ARGS__) {                                        \
         N00B_MAP_COUNT(N00B_TUPLE_ITEM, 0, __VA_ARGS__)                                        \
     }
 

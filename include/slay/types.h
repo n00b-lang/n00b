@@ -129,7 +129,7 @@ typedef struct n00b_scope_t n00b_scope_t;
 
 /** @brief Contents of an interior (non-terminal) parse tree node. */
 typedef struct n00b_nt_node_t {
-    n00b_string_t   name;
+    n00b_string_t  *name;
     n00b_scope_t   *scope;  /**< Scope opened by this node (if @scope annotation fired). */
     int64_t         noscan;
     int64_t         id;

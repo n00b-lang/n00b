@@ -416,10 +416,10 @@ poll_remove(void *vctx, int fd)
 /*
  * Get backend name
  */
-static n00b_string_t
+static n00b_string_t *
 poll_name(void)
 {
-    return *r"poll";
+    return r"poll";
 }
 
 // ============================================================================

@@ -58,13 +58,13 @@ restart:
     n00b_codepoint_t cp = n00b_scan_peek(s, 0);
 
     if (cp == '"') {
-        n00b_option_t(n00b_string_t) val = n00b_scan_string_double(s);
+        n00b_option_t(n00b_string_t *) val = n00b_scan_string_double(s);
         n00b_scan_emit(s, .token_type = "STRING_LIT", .contents = val);
         return true;
     }
 
     if (cp == '\'') {
-        n00b_option_t(n00b_string_t) val = n00b_scan_string_single(s);
+        n00b_option_t(n00b_string_t *) val = n00b_scan_string_single(s);
         n00b_scan_emit(s, .token_type = "CHAR_LIT", .contents = val);
         return true;
     }
@@ -80,7 +80,7 @@ restart:
     }
 
     if ((cp >= 'a' && cp <= 'z') || (cp >= 'A' && cp <= 'Z') || cp == '_') {
-        n00b_option_t(n00b_string_t) id_val = n00b_scan_identifier(s);
+        n00b_option_t(n00b_string_t *) id_val = n00b_scan_identifier(s);
 
         if (n00b_option_is_set(id_val)) {
             n00b_token_err_t err = n00b_scan_emit(s, .contents = id_val);
@@ -186,9 +186,10 @@ load_c_grammar(void)
     }
 
     if (!f && srcroot) {
-        char path[1024];
-        snprintf(path, sizeof(path), "%s/grammars/c_ncc.bnf", srcroot);
+        char *path = nullptr;
+        (void)asprintf(&path, "%s/grammars/c_ncc.bnf", srcroot);
         f = fopen(path, "r");
+        free(path);
     }
 
     if (!f) {
@@ -204,13 +205,13 @@ load_c_grammar(void)
     buf[len] = '\0';
     fclose(f);
 
-    n00b_string_t bnf_text = n00b_string_from_cstr(buf);
+    n00b_string_t *bnf_text = n00b_string_from_cstr(buf);
     free(buf);
 
     n00b_grammar_t *g = n00b_grammar_new();
     n00b_grammar_set_error_recovery(g, false);
 
-    bool ok = n00b_bnf_load(bnf_text, *r"translation_unit", g);
+    bool ok = n00b_bnf_load(bnf_text, r"translation_unit", g);
 
     if (!ok) {
         fprintf(stderr, "  [FAIL] n00b_bnf_load failed for c_ncc.bnf\n");
@@ -255,7 +256,7 @@ build_cfg_for(const char *src)
     n00b_annot_result_t *ar = n00b_compile_walk(shared_grammar, tree);
     assert(ar != NULL);
 
-    r.cfg   = n00b_build_cfg(ar->cf_labels, tree, *r"test", ar->symtab);
+    r.cfg   = n00b_build_cfg(ar->cf_labels, tree, r"test", ar->symtab);
     r.annot = ar;
 
     return r;

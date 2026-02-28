@@ -35,9 +35,9 @@
  * `TO_STRING` slot, and `"(null)"` for nullptr.
  *
  * @param obj  Pointer to a managed allocation (or nullptr).
- * @return     String representation (by value).
+ * @return     String representation.
  */
-extern n00b_string_t n00b_to_string(void *obj);
+extern n00b_string_t *n00b_to_string(void *obj);
 
 /**
  * @brief Print an object to a file descriptor or conduit topic.
@@ -61,7 +61,7 @@ extern void
 n00b_print(void *obj) _kargs
 {
     n00b_conduit_topic_t(n00b_buffer_t *) *topic = nullptr;
-    n00b_option_t(n00b_string_t)           end   = n00b_option_none(n00b_string_t);
+    n00b_option_t(n00b_string_t *)          end   = n00b_option_none(n00b_string_t *);
     int                                    fd    = 1;
     bool                                   sync  = true;
 };
@@ -86,7 +86,7 @@ n00b_printf(const char *fmt, +) _kargs
 {
     n00b_conduit_topic_t(n00b_buffer_t *) *topic = nullptr;
     int                                    fd    = 1;
-    n00b_option_t(n00b_string_t)           end   = n00b_option_none(n00b_string_t);
+    n00b_option_t(n00b_string_t *)          end   = n00b_option_none(n00b_string_t *);
     bool                                   sync  = true;
 };
 

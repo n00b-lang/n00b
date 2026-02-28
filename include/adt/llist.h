@@ -20,7 +20,6 @@
  *
  * Usage:
  * @code
- *     n00b_linked_list_decl(int);
  *     n00b_linked_list_t(int) list = {};
  *     n00b_linked_list_append(&list, 42);
  *     n00b_linked_list_prepend(&list, 7);
@@ -45,29 +44,20 @@
 #define n00b_linked_list_node_tid(T) typeid("link_node", T)
 #define n00b_linked_list_tid(T)      typeid("linked_list", T)
 
-#define n00b_linked_list_node_t(T) struct n00b_linked_list_node_tid(T)
-#define n00b_linked_list_t(T)      struct n00b_linked_list_tid(T)
-
-#define n00b_linked_list_node_decl(T)                                                          \
-    n00b_linked_list_node_t(T)                                                                 \
-    {                                                                                          \
-        n00b_linked_list_node_t(T) * prev;                                                     \
-        n00b_linked_list_node_t(T) * next;                                                     \
+#define n00b_linked_list_node_t(T)                                                             \
+    _generic_struct n00b_linked_list_node_tid(T) {                                             \
+        struct n00b_linked_list_node_tid(T) *prev;                                             \
+        struct n00b_linked_list_node_tid(T) *next;                                             \
         T contents;                                                                            \
     }
 
-#define n00b_linked_list_head_decl(T)                                                          \
-    n00b_linked_list_t(T)                                                                      \
-    {                                                                                          \
-        n00b_linked_list_node_t(T) * head;                                                     \
-        n00b_linked_list_node_t(T) * tail;                                                     \
+#define n00b_linked_list_t(T)                                                                  \
+    _generic_struct n00b_linked_list_tid(T) {                                                  \
+        n00b_linked_list_node_t(T) *head;                                                      \
+        n00b_linked_list_node_t(T) *tail;                                                      \
         n00b_rwlock_t    *lock;                                                                \
         n00b_allocator_t *allocator;                                                           \
     }
-
-#define n00b_linked_list_decl(T)                                                               \
-    n00b_linked_list_node_decl(T);                                                             \
-    n00b_linked_list_head_decl(T)
 
 #define n00b_linked_list_zero(list)                                                            \
     {                                                                                          \

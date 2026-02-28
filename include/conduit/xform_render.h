@@ -33,7 +33,6 @@
 // Type instantiations for n00b_plane_t *
 // ============================================================================
 
-n00b_option_decl(n00b_plane_t *);
 N00B_CONDUIT_FULL_IMPL(n00b_plane_t *);
 
 // Heterogeneous: plane -> buffer

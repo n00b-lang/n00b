@@ -8,7 +8,7 @@
 // extract_first_identifier
 // ============================================================================
 
-n00b_string_t
+n00b_string_t *
 n00b_tree_extract_first_identifier(n00b_parse_tree_t *node)
 {
     if (!node) {
@@ -19,9 +19,9 @@ n00b_tree_extract_first_identifier(n00b_parse_tree_t *node)
         n00b_token_info_t *tok = n00b_tree_leaf_value(node);
 
         if (tok && n00b_option_is_set(tok->value)) {
-            n00b_string_t val = n00b_option_get(tok->value);
+            n00b_string_t *val = n00b_option_get(tok->value);
 
-            if (val.u8_bytes > 0) {
+            if (val->u8_bytes > 0) {
                 return val;
             }
         }
@@ -32,10 +32,10 @@ n00b_tree_extract_first_identifier(n00b_parse_tree_t *node)
     size_t nc = n00b_tree_num_children(node);
 
     for (size_t i = 0; i < nc; i++) {
-        n00b_string_t s = n00b_tree_extract_first_identifier(
+        n00b_string_t *s = n00b_tree_extract_first_identifier(
             n00b_tree_child(node, i));
 
-        if (s.u8_bytes > 0) {
+        if (s->u8_bytes > 0) {
             return s;
         }
     }
@@ -49,7 +49,7 @@ n00b_tree_extract_first_identifier(n00b_parse_tree_t *node)
 
 n00b_parse_tree_t *
 n00b_tree_find_child_by_nt_name(n00b_grammar_t *g, n00b_parse_tree_t *parent,
-                                n00b_string_t name)
+                                n00b_string_t *name)
 {
     size_t nc = n00b_tree_num_children(parent);
 
@@ -160,21 +160,21 @@ member_chain_recurse(n00b_parse_tree_t *node, char *buf, int32_t cap,
         n00b_token_info_t *tok = n00b_tree_leaf_value(node);
 
         if (tok && n00b_option_is_set(tok->value)) {
-            n00b_string_t val = n00b_option_get(tok->value);
+            n00b_string_t *val = n00b_option_get(tok->value);
 
-            if (val.u8_bytes > 0) {
+            if (val->u8_bytes > 0) {
                 // Add dot separator if not first identifier.
                 if (pos > 0 && pos < cap - 1) {
                     buf[pos++] = '.';
                 }
 
-                int32_t len = (int32_t)val.u8_bytes;
+                int32_t len = (int32_t)val->u8_bytes;
 
                 if (pos + len >= cap) {
                     return -1;
                 }
 
-                memcpy(buf + pos, val.data, (size_t)len);
+                memcpy(buf + pos, val->data, (size_t)len);
                 pos += len;
             }
         }
@@ -199,25 +199,25 @@ member_chain_recurse(n00b_parse_tree_t *node, char *buf, int32_t cap,
                 continue;
             }
 
-            n00b_string_t val = n00b_option_get(tok->value);
+            n00b_string_t *val = n00b_option_get(tok->value);
 
             // Skip the "." separator token.
-            if (val.u8_bytes == 1 && val.data[0] == '.') {
+            if (val->u8_bytes == 1 && val->data[0] == '.') {
                 continue;
             }
 
-            if (val.u8_bytes > 0) {
+            if (val->u8_bytes > 0) {
                 if (pos > 0 && pos < cap - 1) {
                     buf[pos++] = '.';
                 }
 
-                int32_t len = (int32_t)val.u8_bytes;
+                int32_t len = (int32_t)val->u8_bytes;
 
                 if (pos + len >= cap) {
                     return -1;
                 }
 
-                memcpy(buf + pos, val.data, (size_t)len);
+                memcpy(buf + pos, val->data, (size_t)len);
                 pos += len;
             }
         }

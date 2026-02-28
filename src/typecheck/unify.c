@@ -52,7 +52,7 @@ n00b_tc_is_prim(n00b_tc_type_t *t)
     return t && n00b_variant_is_type(t->kind, n00b_tc_prim_t);
 }
 
-n00b_string_t
+n00b_string_t *
 n00b_tc_prim_name(n00b_tc_type_t *t)
 {
     t = n00b_tc_find(t);
@@ -173,7 +173,7 @@ occurs_in(n00b_tc_type_t *needle, n00b_tc_type_t *haystack)
 static void
 push_error(n00b_tc_ctx_t *ctx, n00b_tc_err_kind_t kind,
            n00b_tc_type_t *expected, n00b_tc_type_t *got,
-           n00b_string_t message)
+           n00b_string_t *message)
 {
     n00b_tc_error_t err = {
         .kind     = kind,
@@ -209,7 +209,7 @@ check_constraints(n00b_tc_ctx_t *ctx, n00b_tc_type_t *var_node,
             if (!n00b_tc_unify(ctx, bound_to, c.unifies.target)) {
                 push_error(ctx, N00B_TC_ERR_CONSTRAINT_FAIL,
                            c.unifies.target, bound_to,
-                           *r"Constraint UNIFIES failed");
+                           r"Constraint UNIFIES failed");
                 return false;
             }
             break;
@@ -241,7 +241,7 @@ check_constraints(n00b_tc_ctx_t *ctx, n00b_tc_type_t *var_node,
             if (!matched) {
                 push_error(ctx, N00B_TC_ERR_CONSTRAINT_FAIL,
                            nullptr, bound_to,
-                           *r"Constraint ONE_OF: no alternative matched");
+                           r"Constraint ONE_OF: no alternative matched");
                 return false;
             }
             break;
@@ -253,7 +253,7 @@ check_constraints(n00b_tc_ctx_t *ctx, n00b_tc_type_t *var_node,
             if (!n00b_tc_is_prim(bound_to) || !n00b_tc_is_prim(target)) {
                 push_error(ctx, N00B_TC_ERR_CONSTRAINT_FAIL,
                            target, bound_to,
-                           *r"Constraint PROMOTES: non-primitive types");
+                           r"Constraint PROMOTES: non-primitive types");
                 return false;
             }
 
@@ -261,7 +261,7 @@ check_constraints(n00b_tc_ctx_t *ctx, n00b_tc_type_t *var_node,
                                       n00b_tc_prim_name(target))) {
                 push_error(ctx, N00B_TC_ERR_CONSTRAINT_FAIL,
                            target, bound_to,
-                           *r"Constraint PROMOTES: no promotion path");
+                           r"Constraint PROMOTES: no promotion path");
                 return false;
             }
             break;
@@ -276,13 +276,13 @@ check_constraints(n00b_tc_ctx_t *ctx, n00b_tc_type_t *var_node,
                                          n00b_tc_prim_name(excluded))) {
                     push_error(ctx, N00B_TC_ERR_CONSTRAINT_FAIL,
                                excluded, bound_to,
-                               *r"Constraint NOT: type matched excluded type");
+                               r"Constraint NOT: type matched excluded type");
                     return false;
                 }
             } else if (bt == excluded) {
                 push_error(ctx, N00B_TC_ERR_CONSTRAINT_FAIL,
                            excluded, bound_to,
-                           *r"Constraint NOT: type matched excluded type");
+                           r"Constraint NOT: type matched excluded type");
                 return false;
             }
             break;
@@ -324,7 +324,7 @@ n00b_tc_unify(n00b_tc_ctx_t *ctx, n00b_tc_type_t *a, n00b_tc_type_t *b)
         // Occurs check: a must not appear in b.
         if (occurs_in(a, b)) {
             push_error(ctx, N00B_TC_ERR_OCCURS_CHECK, a, b,
-                       *r"Infinite type: variable occurs in its own binding");
+                       r"Infinite type: variable occurs in its own binding");
             return false;
         }
 
@@ -339,7 +339,7 @@ n00b_tc_unify(n00b_tc_ctx_t *ctx, n00b_tc_type_t *a, n00b_tc_type_t *b)
     if (n00b_variant_is_type(b->kind, n00b_tc_var_t)) {
         if (occurs_in(b, a)) {
             push_error(ctx, N00B_TC_ERR_OCCURS_CHECK, b, a,
-                       *r"Infinite type: variable occurs in its own binding");
+                       r"Infinite type: variable occurs in its own binding");
             return false;
         }
 
@@ -365,7 +365,7 @@ n00b_tc_unify(n00b_tc_ctx_t *ctx, n00b_tc_type_t *a, n00b_tc_type_t *b)
         }
 
         push_error(ctx, N00B_TC_ERR_UNIFY_FAIL, a, b,
-                   *r"Cannot unify different primitive types");
+                   r"Cannot unify different primitive types");
         return false;
     }
 
@@ -377,7 +377,7 @@ n00b_tc_unify(n00b_tc_ctx_t *ctx, n00b_tc_type_t *a, n00b_tc_type_t *b)
 
         if (!n00b_unicode_str_eq(ap.name, bp.name)) {
             push_error(ctx, N00B_TC_ERR_UNIFY_FAIL, a, b,
-                       *r"Cannot unify parameterized types with different constructors");
+                       r"Cannot unify parameterized types with different constructors");
             return false;
         }
 
@@ -386,7 +386,7 @@ n00b_tc_unify(n00b_tc_ctx_t *ctx, n00b_tc_type_t *a, n00b_tc_type_t *b)
 
         if (a_len != b_len) {
             push_error(ctx, N00B_TC_ERR_PARAM_MISMATCH, a, b,
-                       *r"Parameterized types have different parameter counts");
+                       r"Parameterized types have different parameter counts");
             return false;
         }
 
@@ -413,7 +413,7 @@ n00b_tc_unify(n00b_tc_ctx_t *ctx, n00b_tc_type_t *a, n00b_tc_type_t *b)
 
         if (a_pos != b_pos) {
             push_error(ctx, N00B_TC_ERR_ARITY_MISMATCH, a, b,
-                       *r"Function types have different positional parameter counts");
+                       r"Function types have different positional parameter counts");
             return false;
         }
 
@@ -432,7 +432,7 @@ n00b_tc_unify(n00b_tc_ctx_t *ctx, n00b_tc_type_t *a, n00b_tc_type_t *b)
             }
         } else if (af.vargs_type != bf.vargs_type) {
             push_error(ctx, N00B_TC_ERR_UNIFY_FAIL, a, b,
-                       *r"Function types disagree on variadic");
+                       r"Function types disagree on variadic");
             return false;
         }
 
@@ -443,7 +443,7 @@ n00b_tc_unify(n00b_tc_ctx_t *ctx, n00b_tc_type_t *a, n00b_tc_type_t *b)
             }
         } else if (af.kargs_type != bf.kargs_type) {
             push_error(ctx, N00B_TC_ERR_UNIFY_FAIL, a, b,
-                       *r"Function types disagree on keyword arguments");
+                       r"Function types disagree on keyword arguments");
             return false;
         }
 
@@ -454,7 +454,7 @@ n00b_tc_unify(n00b_tc_ctx_t *ctx, n00b_tc_type_t *a, n00b_tc_type_t *b)
             }
         } else if (af.return_type != bf.return_type) {
             push_error(ctx, N00B_TC_ERR_UNIFY_FAIL, a, b,
-                       *r"Function types disagree on return type");
+                       r"Function types disagree on return type");
             return false;
         }
 
@@ -473,7 +473,7 @@ n00b_tc_unify(n00b_tc_ctx_t *ctx, n00b_tc_type_t *a, n00b_tc_type_t *b)
 
         if (a_len != b_len) {
             push_error(ctx, N00B_TC_ERR_UNIFY_FAIL, a, b,
-                       *r"Sum types have different variant counts");
+                       r"Sum types have different variant counts");
             return false;
         }
 
@@ -500,17 +500,17 @@ n00b_tc_unify(n00b_tc_ctx_t *ctx, n00b_tc_type_t *a, n00b_tc_type_t *b)
 
         if (a_fields != b_fields) {
             push_error(ctx, N00B_TC_ERR_UNIFY_FAIL, a, b,
-                       *r"Record types have different field counts");
+                       r"Record types have different field counts");
             return false;
         }
 
         // Match fields by name.
         for (size_t i = 0; i < a_fields; i++) {
-            n00b_string_t a_name = n00b_list_get(*ar.field_names, i);
+            n00b_string_t *a_name = n00b_list_get(*ar.field_names, i);
             bool found = false;
 
             for (size_t j = 0; j < b_fields; j++) {
-                n00b_string_t b_name = n00b_list_get(*br.field_names, j);
+                n00b_string_t *b_name = n00b_list_get(*br.field_names, j);
 
                 if (n00b_unicode_str_eq(a_name, b_name)) {
                     if (!n00b_tc_unify(ctx,
@@ -525,7 +525,7 @@ n00b_tc_unify(n00b_tc_ctx_t *ctx, n00b_tc_type_t *a, n00b_tc_type_t *b)
 
             if (!found) {
                 push_error(ctx, N00B_TC_ERR_NO_SUCH_FIELD, a, b,
-                           *r"Record field not found in other record");
+                           r"Record field not found in other record");
                 return false;
             }
         }
@@ -548,19 +548,19 @@ n00b_tc_unify(n00b_tc_ctx_t *ctx, n00b_tc_type_t *a, n00b_tc_type_t *b)
 
         if (!at.open && !bt.open && a_len != b_len) {
             push_error(ctx, N00B_TC_ERR_UNIFY_FAIL, a, b,
-                       *r"Closed tuples have different lengths");
+                       r"Closed tuples have different lengths");
             return false;
         }
 
         if (!at.open && b_len > a_len) {
             push_error(ctx, N00B_TC_ERR_UNIFY_FAIL, a, b,
-                       *r"Tuple length mismatch");
+                       r"Tuple length mismatch");
             return false;
         }
 
         if (!bt.open && a_len > b_len) {
             push_error(ctx, N00B_TC_ERR_UNIFY_FAIL, a, b,
-                       *r"Tuple length mismatch");
+                       r"Tuple length mismatch");
             return false;
         }
 
@@ -578,7 +578,7 @@ n00b_tc_unify(n00b_tc_ctx_t *ctx, n00b_tc_type_t *a, n00b_tc_type_t *b)
 
     // Kind mismatch.
     push_error(ctx, N00B_TC_ERR_UNIFY_FAIL, a, b,
-               *r"Cannot unify types of different kinds");
+               r"Cannot unify types of different kinds");
     return false;
 }
 
@@ -609,12 +609,12 @@ n00b_tc_unify_or_promote(n00b_tc_ctx_t *ctx,
 
     if (!n00b_tc_is_prim(a) || !n00b_tc_is_prim(b)) {
         push_error(ctx, N00B_TC_ERR_UNIFY_FAIL, a, b,
-                   *r"Cannot unify or promote non-primitive types");
+                   r"Cannot unify or promote non-primitive types");
         return false;
     }
 
-    n00b_string_t a_name = n00b_tc_prim_name(a);
-    n00b_string_t b_name = n00b_tc_prim_name(b);
+    n00b_string_t *a_name = n00b_tc_prim_name(a);
+    n00b_string_t *b_name = n00b_tc_prim_name(b);
 
     // Try a promotes to b.
     if (n00b_tc_promotes_to(ctx, a_name, b_name)) {
@@ -641,7 +641,7 @@ n00b_tc_unify_or_promote(n00b_tc_ctx_t *ctx,
     }
 
     push_error(ctx, N00B_TC_ERR_UNIFY_FAIL, a, b,
-               *r"Cannot unify or promote types");
+               r"Cannot unify or promote types");
     return false;
 }
 
@@ -671,8 +671,8 @@ n00b_tc_unify_with_coercion(n00b_tc_ctx_t *ctx,
     b = n00b_tc_find(b);
 
     if (n00b_tc_is_prim(a) && n00b_tc_is_prim(b)) {
-        n00b_string_t a_name = n00b_tc_prim_name(a);
-        n00b_string_t b_name = n00b_tc_prim_name(b);
+        n00b_string_t *a_name = n00b_tc_prim_name(a);
+        n00b_string_t *b_name = n00b_tc_prim_name(b);
 
         if (n00b_tc_promotes_to(ctx, a_name, b_name)) {
             n00b_tc_coercion_t coercion = {
@@ -703,7 +703,7 @@ n00b_tc_unify_with_coercion(n00b_tc_ctx_t *ctx,
     if (n00b_variant_is_type(a->kind, n00b_tc_param_t)) {
         auto ap = n00b_variant_get(a->kind, n00b_tc_param_t);
 
-        if (n00b_unicode_str_eq(ap.name, *r"ref")
+        if (n00b_unicode_str_eq(ap.name, r"ref")
             && n00b_list_len(*ap.params) == 1) {
             n00b_tc_type_t *inner = n00b_list_get(*ap.params, 0);
 
@@ -720,6 +720,6 @@ n00b_tc_unify_with_coercion(n00b_tc_ctx_t *ctx,
     }
 
     push_error(ctx, N00B_TC_ERR_UNIFY_FAIL, a, b,
-               *r"Cannot unify types with any coercion");
+               r"Cannot unify types with any coercion");
     return false;
 }

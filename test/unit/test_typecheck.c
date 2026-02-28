@@ -15,11 +15,7 @@
 #include "parsers/scanner.h"
 #include "parsers/token_stream.h"
 
-// Include typecheck/types.h FIRST so its n00b_option_decl(n00b_string_t)
-// is the one that wins. slay/token.h also declares it — whichever
-// comes first is fine, but both in the same TU is a redefinition error.
-// So we include types.h, then slay headers (token.h's decl will be skipped
-// because the struct is already defined).
+// Include typecheck/types.h before slay headers.
 #include "typecheck/types.h"
 #include "typecheck/construct.h"
 #include "typecheck/context.h"
@@ -49,10 +45,10 @@ test_construct_primitives(void)
 {
     n00b_tc_ctx_t *ctx = n00b_tc_ctx_new();
 
-    n00b_tc_type_t *t_int    = n00b_tc_prim(ctx, *r"int");
-    n00b_tc_type_t *t_bool   = n00b_tc_prim(ctx, *r"bool");
-    n00b_tc_type_t *t_string = n00b_tc_prim(ctx, *r"string");
-    n00b_tc_type_t *t_nil    = n00b_tc_prim(ctx, *r"nil");
+    n00b_tc_type_t *t_int    = n00b_tc_prim(ctx, r"int");
+    n00b_tc_type_t *t_bool   = n00b_tc_prim(ctx, r"bool");
+    n00b_tc_type_t *t_string = n00b_tc_prim(ctx, r"string");
+    n00b_tc_type_t *t_nil    = n00b_tc_prim(ctx, r"nil");
 
     // Verify each is a Prim kind.
     assert(n00b_variant_is_type(t_int->kind, n00b_tc_prim_t));
@@ -66,13 +62,13 @@ test_construct_primitives(void)
 
     // Verify names.
     auto int_prim = n00b_variant_get(t_int->kind, n00b_tc_prim_t);
-    assert(n00b_unicode_str_eq(int_prim.name, *r"int"));
+    assert(n00b_unicode_str_eq(int_prim.name, r"int"));
 
     auto bool_prim = n00b_variant_get(t_bool->kind, n00b_tc_prim_t);
-    assert(n00b_unicode_str_eq(bool_prim.name, *r"bool"));
+    assert(n00b_unicode_str_eq(bool_prim.name, r"bool"));
 
     auto nil_prim = n00b_variant_get(t_nil->kind, n00b_tc_prim_t);
-    assert(n00b_unicode_str_eq(nil_prim.name, *r"nil"));
+    assert(n00b_unicode_str_eq(nil_prim.name, r"nil"));
 
     // forward pointer should be null (root).
     assert(t_int->forward == nullptr);
@@ -88,24 +84,24 @@ test_construct_param(void)
 {
     n00b_tc_ctx_t *ctx = n00b_tc_ctx_new();
 
-    n00b_tc_type_t *t_int = n00b_tc_prim(ctx, *r"int");
-    n00b_tc_type_t *t_str = n00b_tc_prim(ctx, *r"string");
+    n00b_tc_type_t *t_int = n00b_tc_prim(ctx, r"int");
+    n00b_tc_type_t *t_str = n00b_tc_prim(ctx, r"string");
 
     // list[int]
-    n00b_tc_type_t *list_int = n00b_tc_param(ctx, *r"list", t_int);
+    n00b_tc_type_t *list_int = n00b_tc_param(ctx, r"list", t_int);
     assert(n00b_variant_is_type(list_int->kind, n00b_tc_param_t));
 
     auto p = n00b_variant_get(list_int->kind, n00b_tc_param_t);
-    assert(n00b_unicode_str_eq(p.name, *r"list"));
+    assert(n00b_unicode_str_eq(p.name, r"list"));
     assert(n00b_list_len(*p.params) == 1);
     assert(n00b_list_get(*p.params, 0) == t_int);
 
     // dict[string, int]
-    n00b_tc_type_t *dict_si = n00b_tc_param(ctx, *r"dict", t_str, t_int);
+    n00b_tc_type_t *dict_si = n00b_tc_param(ctx, r"dict", t_str, t_int);
     assert(n00b_variant_is_type(dict_si->kind, n00b_tc_param_t));
 
     auto d = n00b_variant_get(dict_si->kind, n00b_tc_param_t);
-    assert(n00b_unicode_str_eq(d.name, *r"dict"));
+    assert(n00b_unicode_str_eq(d.name, r"dict"));
     assert(n00b_list_len(*d.params) == 2);
     assert(n00b_list_get(*d.params, 0) == t_str);
     assert(n00b_list_get(*d.params, 1) == t_int);
@@ -121,9 +117,9 @@ test_construct_fn(void)
 {
     n00b_tc_ctx_t *ctx = n00b_tc_ctx_new();
 
-    n00b_tc_type_t *t_int  = n00b_tc_prim(ctx, *r"int");
-    n00b_tc_type_t *t_str  = n00b_tc_prim(ctx, *r"string");
-    n00b_tc_type_t *t_bool = n00b_tc_prim(ctx, *r"bool");
+    n00b_tc_type_t *t_int  = n00b_tc_prim(ctx, r"int");
+    n00b_tc_type_t *t_str  = n00b_tc_prim(ctx, r"string");
+    n00b_tc_type_t *t_bool = n00b_tc_prim(ctx, r"bool");
 
     // (int, string) -> bool
     n00b_tc_type_t *fn1 = n00b_tc_fn(ctx, t_int, t_str,
@@ -139,8 +135,8 @@ test_construct_fn(void)
     assert(f.kargs_type == nullptr);
 
     // (int, *int, **kargs) -> bool
-    n00b_tc_type_t *kargs_rec = n00b_tc_record(ctx, *r"",
-        n00b_tc_field(*r"timeout", t_int, kw_func(n00b_tc_field, .has_default = true)),
+    n00b_tc_type_t *kargs_rec = n00b_tc_record(ctx, r"",
+        n00b_tc_field(r"timeout", t_int, kw_func(n00b_tc_field, .has_default = true)),
         kw_func(n00b_tc_record, .ordered = false));
 
     n00b_tc_type_t *fn2 = n00b_tc_fn(ctx, t_int,
@@ -167,28 +163,28 @@ test_construct_record_ordered(void)
 {
     n00b_tc_ctx_t *ctx = n00b_tc_ctx_new();
 
-    n00b_tc_type_t *t_int = n00b_tc_prim(ctx, *r"int");
+    n00b_tc_type_t *t_int = n00b_tc_prim(ctx, r"int");
 
     // Point{x: int, y: int}
-    n00b_tc_type_t *point = n00b_tc_record(ctx, *r"Point",
-        n00b_tc_field(*r"x", t_int),
-        n00b_tc_field(*r"y", t_int),
+    n00b_tc_type_t *point = n00b_tc_record(ctx, r"Point",
+        n00b_tc_field(r"x", t_int),
+        n00b_tc_field(r"y", t_int),
         kw_func(n00b_tc_record));
 
     assert(n00b_variant_is_type(point->kind, n00b_tc_record_t));
 
     auto rec = n00b_variant_get(point->kind, n00b_tc_record_t);
-    assert(n00b_unicode_str_eq(rec.name, *r"Point"));
+    assert(n00b_unicode_str_eq(rec.name, r"Point"));
     assert(rec.ordered == true);
     assert(rec.open == false);
     assert(n00b_list_len(*rec.field_names) == 2);
     assert(n00b_list_len(*rec.field_types) == 2);
 
-    n00b_string_t name0 = n00b_list_get(*rec.field_names, 0);
-    assert(n00b_unicode_str_eq(name0, *r"x"));
+    n00b_string_t *name0 = n00b_list_get(*rec.field_names, 0);
+    assert(n00b_unicode_str_eq(name0, r"x"));
 
-    n00b_string_t name1 = n00b_list_get(*rec.field_names, 1);
-    assert(n00b_unicode_str_eq(name1, *r"y"));
+    n00b_string_t *name1 = n00b_list_get(*rec.field_names, 1);
+    assert(n00b_unicode_str_eq(name1, r"y"));
 
     assert(n00b_list_get(*rec.field_types, 0) == t_int);
     assert(n00b_list_get(*rec.field_types, 1) == t_int);
@@ -207,13 +203,13 @@ test_construct_record_unordered(void)
 {
     n00b_tc_ctx_t *ctx = n00b_tc_ctx_new();
 
-    n00b_tc_type_t *t_int  = n00b_tc_prim(ctx, *r"int");
-    n00b_tc_type_t *t_bool = n00b_tc_prim(ctx, *r"bool");
+    n00b_tc_type_t *t_int  = n00b_tc_prim(ctx, r"int");
+    n00b_tc_type_t *t_bool = n00b_tc_prim(ctx, r"bool");
 
     // {.timeout: int, .verbose: bool} with timeout having a default
-    n00b_tc_type_t *kargs = n00b_tc_record(ctx, *r"",
-        n00b_tc_field(*r"timeout", t_int, .has_default = true),
-        n00b_tc_field(*r"verbose", t_bool),
+    n00b_tc_type_t *kargs = n00b_tc_record(ctx, r"",
+        n00b_tc_field(r"timeout", t_int, .has_default = true),
+        n00b_tc_field(r"verbose", t_bool),
         kw_func(n00b_tc_record, .ordered = false));
 
     assert(n00b_variant_is_type(kargs->kind, n00b_tc_record_t));
@@ -239,9 +235,9 @@ test_construct_sum(void)
 {
     n00b_tc_ctx_t *ctx = n00b_tc_ctx_new();
 
-    n00b_tc_type_t *t_int = n00b_tc_prim(ctx, *r"int");
-    n00b_tc_type_t *t_str = n00b_tc_prim(ctx, *r"string");
-    n00b_tc_type_t *t_nil = n00b_tc_prim(ctx, *r"nil");
+    n00b_tc_type_t *t_int = n00b_tc_prim(ctx, r"int");
+    n00b_tc_type_t *t_str = n00b_tc_prim(ctx, r"string");
+    n00b_tc_type_t *t_nil = n00b_tc_prim(ctx, r"nil");
 
     // int | string | nil
     n00b_tc_type_t *sum = n00b_tc_sum(ctx, t_int, t_str, t_nil);
@@ -264,8 +260,8 @@ test_construct_tuple(void)
 {
     n00b_tc_ctx_t *ctx = n00b_tc_ctx_new();
 
-    n00b_tc_type_t *t_int = n00b_tc_prim(ctx, *r"int");
-    n00b_tc_type_t *t_str = n00b_tc_prim(ctx, *r"string");
+    n00b_tc_type_t *t_int = n00b_tc_prim(ctx, r"int");
+    n00b_tc_type_t *t_str = n00b_tc_prim(ctx, r"string");
 
     // (int, string) — closed
     n00b_tc_type_t *tup = n00b_tc_tuple(ctx, t_int, t_str,
@@ -301,13 +297,13 @@ test_construct_var(void)
     n00b_tc_ctx_t *ctx = n00b_tc_ctx_new();
 
     // Named variable.
-    n00b_tc_type_t *tv = n00b_tc_var(ctx, *r"T");
+    n00b_tc_type_t *tv = n00b_tc_var(ctx, r"T");
     assert(n00b_variant_is_type(tv->kind, n00b_tc_var_t));
 
     auto v = n00b_variant_get(tv->kind, n00b_tc_var_t);
     assert(n00b_option_is_set(v.given_name));
-    assert(n00b_unicode_str_eq(n00b_option_get(v.given_name), *r"T"));
-    assert(n00b_unicode_str_eq(v.display_name, *r"T"));
+    assert(n00b_unicode_str_eq(n00b_option_get(v.given_name), r"T"));
+    assert(n00b_unicode_str_eq(v.display_name, r"T"));
     assert(v.constraints == nullptr);
 
     // Anonymous variable.
@@ -317,8 +313,8 @@ test_construct_var(void)
     auto av = n00b_variant_get(anon->kind, n00b_tc_var_t);
     assert(!n00b_option_is_set(av.given_name));
     // display_name should be auto-generated like "t_N".
-    assert(av.display_name.data != nullptr);
-    assert(av.display_name.u8_bytes > 0);
+    assert(av.display_name->data != nullptr);
+    assert(av.display_name->u8_bytes > 0);
 
     // Two anonymous vars should have different IDs.
     n00b_tc_type_t *anon2 = n00b_tc_fresh_var(ctx);
@@ -359,7 +355,7 @@ test_context_lifecycle(void)
 
     // Verify t_int has the right name.
     auto ip = n00b_variant_get(ctx->t_int->kind, n00b_tc_prim_t);
-    assert(n00b_unicode_str_eq(ip.name, *r"int"));
+    assert(n00b_unicode_str_eq(ip.name, r"int"));
 
     // all_types should have at least 16 entries (the builtins).
     // (15 builtins: int, i8..u64, f32, f64, bool, string, nil, void)
@@ -388,22 +384,22 @@ test_register_promotion(void)
     n00b_tc_ctx_t *ctx = n00b_tc_ctx_new();
 
     // Register i32 -> i64, i64 -> f64.
-    n00b_tc_register_promotion(ctx, *r"i32", *r"i64");
-    n00b_tc_register_promotion(ctx, *r"i64", *r"f64");
+    n00b_tc_register_promotion(ctx, r"i32", r"i64");
+    n00b_tc_register_promotion(ctx, r"i64", r"f64");
 
     // Direct promotion: i32 -> i64.
-    assert(n00b_tc_promotes_to(ctx, *r"i32", *r"i64") == true);
+    assert(n00b_tc_promotes_to(ctx, r"i32", r"i64") == true);
 
     // Direct promotion: i64 -> f64.
-    assert(n00b_tc_promotes_to(ctx, *r"i64", *r"f64") == true);
+    assert(n00b_tc_promotes_to(ctx, r"i64", r"f64") == true);
 
     // Transitive: i32 -> f64 (via i64).
-    assert(n00b_tc_promotes_to(ctx, *r"i32", *r"f64") == true);
+    assert(n00b_tc_promotes_to(ctx, r"i32", r"f64") == true);
 
     // No reverse.
-    assert(n00b_tc_promotes_to(ctx, *r"i64", *r"i32") == false);
-    assert(n00b_tc_promotes_to(ctx, *r"f64", *r"i32") == false);
-    assert(n00b_tc_promotes_to(ctx, *r"f64", *r"i64") == false);
+    assert(n00b_tc_promotes_to(ctx, r"i64", r"i32") == false);
+    assert(n00b_tc_promotes_to(ctx, r"f64", r"i32") == false);
+    assert(n00b_tc_promotes_to(ctx, r"f64", r"i64") == false);
 
     n00b_tc_ctx_free(ctx);
     printf("  [PASS] register_promotion\n");
@@ -420,20 +416,20 @@ test_register_interface(void)
     n00b_tc_type_t *key_var   = n00b_tc_fresh_var(ctx);
     n00b_tc_type_t *value_var = n00b_tc_fresh_var(ctx);
 
-    n00b_tc_iface_param_t kp = { .name = *r"key",   .type = key_var };
-    n00b_tc_iface_param_t vp = { .name = *r"value", .type = value_var };
+    n00b_tc_iface_param_t kp = { .name = r"key",   .type = key_var };
+    n00b_tc_iface_param_t vp = { .name = r"value", .type = value_var };
 
-    n00b_tc_register_iface(ctx, *r"Indexable", kp, vp);
+    n00b_tc_register_iface(ctx, r"Indexable", kp, vp);
 
     // Register dict as implementing Indexable with string key, int value.
-    n00b_tc_register_impl(ctx, *r"dict", *r"Indexable",
+    n00b_tc_register_impl(ctx, r"dict", r"Indexable",
                             ctx->t_string, ctx->t_int);
 
     // Query: dict implements Indexable? -> true.
-    assert(n00b_tc_implements(ctx, *r"dict", *r"Indexable") == true);
+    assert(n00b_tc_implements(ctx, r"dict", r"Indexable") == true);
 
     // Query: list implements Indexable? -> false (not registered).
-    assert(n00b_tc_implements(ctx, *r"list", *r"Indexable") == false);
+    assert(n00b_tc_implements(ctx, r"list", r"Indexable") == false);
 
     n00b_tc_ctx_free(ctx);
     printf("  [PASS] register_interface\n");
@@ -450,7 +446,7 @@ test_find_no_forward(void)
 {
     n00b_tc_ctx_t *ctx = n00b_tc_ctx_new();
 
-    n00b_tc_type_t *t = n00b_tc_prim(ctx, *r"int");
+    n00b_tc_type_t *t = n00b_tc_prim(ctx, r"int");
     assert(t->forward == nullptr);
     assert(n00b_tc_find(t) == t);
 
@@ -468,7 +464,7 @@ test_find_path_compression(void)
     // Create chain A -> B -> C.
     n00b_tc_type_t *a = n00b_tc_fresh_var(ctx);
     n00b_tc_type_t *b = n00b_tc_fresh_var(ctx);
-    n00b_tc_type_t *c = n00b_tc_prim(ctx, *r"int");
+    n00b_tc_type_t *c = n00b_tc_prim(ctx, r"int");
 
     a->forward = b;
     b->forward = c;
@@ -501,7 +497,7 @@ test_unify_var_to_prim(void)
     assert(n00b_tc_find(v) == t_int);
     assert(!n00b_tc_is_var(v));
     assert(n00b_tc_is_prim(v));
-    assert(n00b_unicode_str_eq(n00b_tc_prim_name(v), *r"int"));
+    assert(n00b_unicode_str_eq(n00b_tc_prim_name(v), r"int"));
 
     n00b_tc_ctx_free(ctx);
     printf("  [PASS] unify_var_to_prim\n");
@@ -538,8 +534,8 @@ test_unify_prim_same(void)
 {
     n00b_tc_ctx_t *ctx = n00b_tc_ctx_new();
 
-    n00b_tc_type_t *a = n00b_tc_prim(ctx, *r"int");
-    n00b_tc_type_t *b = n00b_tc_prim(ctx, *r"int");
+    n00b_tc_type_t *a = n00b_tc_prim(ctx, r"int");
+    n00b_tc_type_t *b = n00b_tc_prim(ctx, r"int");
 
     assert(n00b_tc_unify(ctx, a, b));
     assert(n00b_list_len(*ctx->errors) == 0);
@@ -575,10 +571,10 @@ test_unify_param(void)
 
     // list[T] where T is a fresh var.
     n00b_tc_type_t *tv = n00b_tc_fresh_var(ctx);
-    n00b_tc_type_t *list_tv = n00b_tc_param(ctx, *r"list", tv);
+    n00b_tc_type_t *list_tv = n00b_tc_param(ctx, r"list", tv);
 
     // list[int]
-    n00b_tc_type_t *list_int = n00b_tc_param(ctx, *r"list", ctx->t_int);
+    n00b_tc_type_t *list_int = n00b_tc_param(ctx, r"list", ctx->t_int);
 
     assert(n00b_tc_unify(ctx, list_tv, list_int));
 
@@ -623,7 +619,7 @@ test_occurs_check(void)
 
     // T vs list[T] — should fail (infinite type).
     n00b_tc_type_t *tv = n00b_tc_fresh_var(ctx);
-    n00b_tc_type_t *list_tv = n00b_tc_param(ctx, *r"list", tv);
+    n00b_tc_type_t *list_tv = n00b_tc_param(ctx, r"list", tv);
 
     assert(!n00b_tc_unify(ctx, tv, list_tv));
     assert(n00b_list_len(*ctx->errors) > 0);
@@ -647,10 +643,10 @@ test_promotions_signed_chain(void)
     n00b_tc_ctx_t *ctx = n00b_tc_ctx_new();
 
     // i8 -> i16 -> i32 -> i64 (transitive).
-    assert(n00b_tc_promotes_to(ctx, *r"i8", *r"i16"));
-    assert(n00b_tc_promotes_to(ctx, *r"i16", *r"i32"));
-    assert(n00b_tc_promotes_to(ctx, *r"i32", *r"i64"));
-    assert(n00b_tc_promotes_to(ctx, *r"i8", *r"i64")); // transitive
+    assert(n00b_tc_promotes_to(ctx, r"i8", r"i16"));
+    assert(n00b_tc_promotes_to(ctx, r"i16", r"i32"));
+    assert(n00b_tc_promotes_to(ctx, r"i32", r"i64"));
+    assert(n00b_tc_promotes_to(ctx, r"i8", r"i64")); // transitive
 
     n00b_tc_ctx_free(ctx);
     printf("  [PASS] promotions_signed_chain\n");
@@ -663,10 +659,10 @@ test_promotions_unsigned_chain(void)
 {
     n00b_tc_ctx_t *ctx = n00b_tc_ctx_new();
 
-    assert(n00b_tc_promotes_to(ctx, *r"u8", *r"u16"));
-    assert(n00b_tc_promotes_to(ctx, *r"u16", *r"u32"));
-    assert(n00b_tc_promotes_to(ctx, *r"u32", *r"u64"));
-    assert(n00b_tc_promotes_to(ctx, *r"u8", *r"u64")); // transitive
+    assert(n00b_tc_promotes_to(ctx, r"u8", r"u16"));
+    assert(n00b_tc_promotes_to(ctx, r"u16", r"u32"));
+    assert(n00b_tc_promotes_to(ctx, r"u32", r"u64"));
+    assert(n00b_tc_promotes_to(ctx, r"u8", r"u64")); // transitive
 
     n00b_tc_ctx_free(ctx);
     printf("  [PASS] promotions_unsigned_chain\n");
@@ -680,9 +676,9 @@ test_promotions_cross_sign(void)
     n00b_tc_ctx_t *ctx = n00b_tc_ctx_new();
 
     // u8 -> i16, u16 -> i32, u32 -> i64
-    assert(n00b_tc_promotes_to(ctx, *r"u8", *r"i16"));
-    assert(n00b_tc_promotes_to(ctx, *r"u16", *r"i32"));
-    assert(n00b_tc_promotes_to(ctx, *r"u32", *r"i64"));
+    assert(n00b_tc_promotes_to(ctx, r"u8", r"i16"));
+    assert(n00b_tc_promotes_to(ctx, r"u16", r"i32"));
+    assert(n00b_tc_promotes_to(ctx, r"u32", r"i64"));
 
     n00b_tc_ctx_free(ctx);
     printf("  [PASS] promotions_cross_sign\n");
@@ -695,9 +691,9 @@ test_promotions_float(void)
 {
     n00b_tc_ctx_t *ctx = n00b_tc_ctx_new();
 
-    assert(n00b_tc_promotes_to(ctx, *r"f32", *r"f64"));
-    assert(n00b_tc_promotes_to(ctx, *r"i32", *r"f64"));
-    assert(n00b_tc_promotes_to(ctx, *r"int", *r"f64"));
+    assert(n00b_tc_promotes_to(ctx, r"f32", r"f64"));
+    assert(n00b_tc_promotes_to(ctx, r"i32", r"f64"));
+    assert(n00b_tc_promotes_to(ctx, r"int", r"f64"));
 
     n00b_tc_ctx_free(ctx);
     printf("  [PASS] promotions_float\n");
@@ -710,8 +706,8 @@ test_promotions_int_alias(void)
 {
     n00b_tc_ctx_t *ctx = n00b_tc_ctx_new();
 
-    assert(n00b_tc_promotes_to(ctx, *r"int", *r"i64"));
-    assert(n00b_tc_promotes_to(ctx, *r"i64", *r"int"));
+    assert(n00b_tc_promotes_to(ctx, r"int", r"i64"));
+    assert(n00b_tc_promotes_to(ctx, r"i64", r"int"));
 
     n00b_tc_ctx_free(ctx);
     printf("  [PASS] promotions_int_alias\n");
@@ -724,9 +720,9 @@ test_no_demotion(void)
 {
     n00b_tc_ctx_t *ctx = n00b_tc_ctx_new();
 
-    assert(!n00b_tc_promotes_to(ctx, *r"i64", *r"i32"));
-    assert(!n00b_tc_promotes_to(ctx, *r"f64", *r"f32"));
-    assert(!n00b_tc_promotes_to(ctx, *r"i32", *r"i16"));
+    assert(!n00b_tc_promotes_to(ctx, r"i64", r"i32"));
+    assert(!n00b_tc_promotes_to(ctx, r"f64", r"f32"));
+    assert(!n00b_tc_promotes_to(ctx, r"i32", r"i16"));
 
     n00b_tc_ctx_free(ctx);
     printf("  [PASS] no_demotion\n");
@@ -741,8 +737,8 @@ test_unify_or_promote_i32_i64(void)
 
     // Create separate prim nodes (not the cached builtins, since
     // unify_or_promote sets forward pointers).
-    n00b_tc_type_t *a = n00b_tc_prim(ctx, *r"i32");
-    n00b_tc_type_t *b = n00b_tc_prim(ctx, *r"i64");
+    n00b_tc_type_t *a = n00b_tc_prim(ctx, r"i32");
+    n00b_tc_type_t *b = n00b_tc_prim(ctx, r"i64");
 
     assert(n00b_tc_unify_or_promote(ctx, a, b));
 
@@ -762,17 +758,17 @@ test_lookup_prim(void)
 {
     n00b_tc_ctx_t *ctx = n00b_tc_ctx_new();
 
-    assert(n00b_tc_lookup_prim(ctx, *r"int") == ctx->t_int);
-    assert(n00b_tc_lookup_prim(ctx, *r"bool") == ctx->t_bool);
-    assert(n00b_tc_lookup_prim(ctx, *r"string") == ctx->t_string);
-    assert(n00b_tc_lookup_prim(ctx, *r"f64") == ctx->t_f64);
-    assert(n00b_tc_lookup_prim(ctx, *r"nil") == ctx->t_nil);
-    assert(n00b_tc_lookup_prim(ctx, *r"void") == ctx->t_void);
-    assert(n00b_tc_lookup_prim(ctx, *r"i8") == ctx->t_i8);
-    assert(n00b_tc_lookup_prim(ctx, *r"u64") == ctx->t_u64);
+    assert(n00b_tc_lookup_prim(ctx, r"int") == ctx->t_int);
+    assert(n00b_tc_lookup_prim(ctx, r"bool") == ctx->t_bool);
+    assert(n00b_tc_lookup_prim(ctx, r"string") == ctx->t_string);
+    assert(n00b_tc_lookup_prim(ctx, r"f64") == ctx->t_f64);
+    assert(n00b_tc_lookup_prim(ctx, r"nil") == ctx->t_nil);
+    assert(n00b_tc_lookup_prim(ctx, r"void") == ctx->t_void);
+    assert(n00b_tc_lookup_prim(ctx, r"i8") == ctx->t_i8);
+    assert(n00b_tc_lookup_prim(ctx, r"u64") == ctx->t_u64);
 
     // Unknown name returns nullptr.
-    assert(n00b_tc_lookup_prim(ctx, *r"foobar") == nullptr);
+    assert(n00b_tc_lookup_prim(ctx, r"foobar") == nullptr);
 
     n00b_tc_ctx_free(ctx);
     printf("  [PASS] lookup_prim\n");
@@ -786,8 +782,8 @@ test_ref_deref_coercion(void)
     n00b_tc_ctx_t *ctx = n00b_tc_ctx_new();
 
     // ref[int] should coerce to int via deref.
-    n00b_tc_type_t *ref_int = n00b_tc_param(ctx, *r"ref", ctx->t_int);
-    n00b_tc_type_t *target  = n00b_tc_prim(ctx, *r"int");
+    n00b_tc_type_t *ref_int = n00b_tc_param(ctx, r"ref", ctx->t_int);
+    n00b_tc_type_t *target  = n00b_tc_prim(ctx, r"int");
 
     assert(n00b_tc_unify_with_coercion(ctx, ref_int, target));
 
@@ -856,13 +852,13 @@ load_n00b_grammar(void)
     buf[len] = '\0';
     fclose(f);
 
-    n00b_string_t bnf_text = n00b_string_from_cstr(buf);
+    n00b_string_t *bnf_text = n00b_string_from_cstr(buf);
     free(buf);
 
     n00b_grammar_t *g = n00b_grammar_new();
     n00b_grammar_set_error_recovery(g, false);
 
-    bool ok = n00b_bnf_load(bnf_text, *r"module", g);
+    bool ok = n00b_bnf_load(bnf_text, r"module", g);
 
     if (!ok) {
         fprintf(stderr, "  [FAIL] n00b_bnf_load failed for n00b.bnf\n");
@@ -919,7 +915,7 @@ test_literal_int_type(void)
     assert(ar->tc_ctx != NULL);
 
     // Look up x across all scopes (walk completed, scopes popped).
-    n00b_sym_entry_t *x = n00b_symtab_lookup_all(ar->symtab, *r"", *r"x");
+    n00b_sym_entry_t *x = n00b_symtab_lookup_all(ar->symtab, r"", r"x");
     assert(x != NULL);
     assert(x->type_var != NULL);
 
@@ -950,7 +946,7 @@ test_literal_string_type(void)
     assert(ar->node_types != NULL);
 
     // Look up x.
-    n00b_sym_entry_t *x = n00b_symtab_lookup_all(ar->symtab, *r"", *r"x");
+    n00b_sym_entry_t *x = n00b_symtab_lookup_all(ar->symtab, r"", r"x");
     assert(x != NULL);
     assert(x->type_var != NULL);
 
@@ -977,7 +973,7 @@ test_explicit_type_annotation(void)
     assert(ar != NULL);
 
     // Look up x.
-    n00b_sym_entry_t *x = n00b_symtab_lookup_all(ar->symtab, *r"", *r"x");
+    n00b_sym_entry_t *x = n00b_symtab_lookup_all(ar->symtab, r"", r"x");
     assert(x != NULL);
     assert(x->type_var != NULL);
 
@@ -986,7 +982,7 @@ test_explicit_type_annotation(void)
     n00b_tc_type_t *resolved = n00b_tc_find(x->type_var);
 
     if (n00b_tc_is_prim(resolved)) {
-        assert(n00b_unicode_str_eq(n00b_tc_prim_name(resolved), *r"i32"));
+        assert(n00b_unicode_str_eq(n00b_tc_prim_name(resolved), r"i32"));
         printf("  [PASS] explicit_type_annotation\n");
     } else {
         // Type annotation binding may not have fully resolved yet
@@ -1040,8 +1036,8 @@ test_bool_promotions(void)
 {
     n00b_tc_ctx_t *ctx = n00b_tc_ctx_new();
 
-    assert(n00b_tc_promotes_to(ctx, *r"bool", *r"int"));
-    assert(n00b_tc_promotes_to(ctx, *r"bool", *r"i64"));
+    assert(n00b_tc_promotes_to(ctx, r"bool", r"int"));
+    assert(n00b_tc_promotes_to(ctx, r"bool", r"i64"));
 
     n00b_tc_ctx_free(ctx);
     printf("  [PASS] bool_promotions\n");
@@ -1142,8 +1138,8 @@ test_literal_modifier_u8(void)
     n00b_tc_type_t *resolved = n00b_tc_find(lit_type);
 
     if (n00b_tc_is_prim(resolved)) {
-        n00b_string_t name = n00b_tc_prim_name(resolved);
-        assert(n00b_unicode_str_eq(name, *r"u8"));
+        n00b_string_t *name = n00b_tc_prim_name(resolved);
+        assert(n00b_unicode_str_eq(name, r"u8"));
     }
     else {
         // Type resolution didn't fully work — still a pass if we got
@@ -1183,8 +1179,8 @@ test_literal_no_modifier(void)
     n00b_tc_type_t *resolved = n00b_tc_find(lit_type);
 
     if (n00b_tc_is_prim(resolved)) {
-        n00b_string_t name = n00b_tc_prim_name(resolved);
-        assert(n00b_unicode_str_eq(name, *r"int"));
+        n00b_string_t *name = n00b_tc_prim_name(resolved);
+        assert(n00b_unicode_str_eq(name, r"int"));
     }
 
     printf("  [PASS] literal_no_modifier\n");
@@ -1254,12 +1250,12 @@ test_notrivia_no_space(void)
 static void
 assert_type_prints_as(n00b_tc_type_t *type, const char *expected)
 {
-    n00b_string_t result = n00b_tc_type_to_string(type);
-    n00b_string_t exp    = n00b_string_from_cstr(expected);
+    n00b_string_t *result = n00b_tc_type_to_string(type);
+    n00b_string_t *exp = n00b_string_from_cstr(expected);
 
     if (!n00b_unicode_str_eq(result, exp)) {
         fprintf(stderr, "  [FAIL] expected \"%s\", got \"%.*s\"\n",
-                expected, (int)result.u8_bytes, result.data);
+                expected, (int)result->u8_bytes, result->data);
         assert(false);
     }
 }
@@ -1286,10 +1282,10 @@ test_print_param(void)
 {
     n00b_tc_ctx_t *ctx = n00b_tc_ctx_new();
 
-    n00b_tc_type_t *list_int = n00b_tc_param(ctx, *r"list", ctx->t_int);
+    n00b_tc_type_t *list_int = n00b_tc_param(ctx, r"list", ctx->t_int);
     assert_type_prints_as(list_int, "list[int]");
 
-    n00b_tc_type_t *dict_si = n00b_tc_param(ctx, *r"dict", ctx->t_string, ctx->t_int);
+    n00b_tc_type_t *dict_si = n00b_tc_param(ctx, r"dict", ctx->t_string, ctx->t_int);
     assert_type_prints_as(dict_si, "dict[string, int]");
 
     n00b_tc_ctx_free(ctx);
@@ -1303,8 +1299,8 @@ test_print_nested_param(void)
 {
     n00b_tc_ctx_t *ctx = n00b_tc_ctx_new();
 
-    n00b_tc_type_t *list_int = n00b_tc_param(ctx, *r"list", ctx->t_int);
-    n00b_tc_type_t *dict_sli = n00b_tc_param(ctx, *r"dict", ctx->t_string, list_int);
+    n00b_tc_type_t *list_int = n00b_tc_param(ctx, r"list", ctx->t_int);
+    n00b_tc_type_t *dict_sli = n00b_tc_param(ctx, r"dict", ctx->t_string, list_int);
     assert_type_prints_as(dict_sli, "dict[string, list[int]]");
 
     n00b_tc_ctx_free(ctx);
@@ -1350,9 +1346,9 @@ test_print_fn_kargs(void)
 {
     n00b_tc_ctx_t *ctx = n00b_tc_ctx_new();
 
-    n00b_tc_type_t *kargs_rec = n00b_tc_record(ctx, *r"",
-        n00b_tc_field(*r"name", ctx->t_string),
-        n00b_tc_field(*r"age", ctx->t_int),
+    n00b_tc_type_t *kargs_rec = n00b_tc_record(ctx, r"",
+        n00b_tc_field(r"name", ctx->t_string),
+        n00b_tc_field(r"age", ctx->t_int),
         kw_func(n00b_tc_record, .ordered = false));
 
     n00b_tc_type_t *fn = n00b_tc_fn(ctx,
@@ -1386,14 +1382,14 @@ test_print_var_unresolved(void)
 {
     n00b_tc_ctx_t *ctx = n00b_tc_ctx_new();
 
-    n00b_tc_type_t *tv = n00b_tc_var(ctx, *r"T");
+    n00b_tc_type_t *tv = n00b_tc_var(ctx, r"T");
     assert_type_prints_as(tv, "`T");
 
     n00b_tc_type_t *anon = n00b_tc_fresh_var(ctx);
-    n00b_string_t result = n00b_tc_type_to_string(anon);
+    n00b_string_t *result = n00b_tc_type_to_string(anon);
     // Should start with ` followed by t_
-    assert(result.u8_bytes > 0);
-    assert(result.data[0] == '`');
+    assert(result->u8_bytes > 0);
+    assert(result->data[0] == '`');
 
     n00b_tc_ctx_free(ctx);
     printf("  [PASS] print_var_unresolved\n");
@@ -1406,7 +1402,7 @@ test_print_var_resolved(void)
 {
     n00b_tc_ctx_t *ctx = n00b_tc_ctx_new();
 
-    n00b_tc_type_t *tv = n00b_tc_var(ctx, *r"T");
+    n00b_tc_type_t *tv = n00b_tc_var(ctx, r"T");
     n00b_tc_unify(ctx, tv, ctx->t_int);
 
     // Should print as "int", not "`T".
@@ -1423,15 +1419,15 @@ test_print_record(void)
 {
     n00b_tc_ctx_t *ctx = n00b_tc_ctx_new();
 
-    n00b_tc_type_t *point = n00b_tc_record(ctx, *r"Point",
-        n00b_tc_field(*r"x", ctx->t_int),
-        n00b_tc_field(*r"y", ctx->t_int),
+    n00b_tc_type_t *point = n00b_tc_record(ctx, r"Point",
+        n00b_tc_field(r"x", ctx->t_int),
+        n00b_tc_field(r"y", ctx->t_int),
         kw_func(n00b_tc_record));
     assert_type_prints_as(point, "Point{x: int, y: int}");
 
     // Anonymous record.
-    n00b_tc_type_t *anon = n00b_tc_record(ctx, *r"",
-        n00b_tc_field(*r"a", ctx->t_string),
+    n00b_tc_type_t *anon = n00b_tc_record(ctx, r"",
+        n00b_tc_field(r"a", ctx->t_string),
         kw_func(n00b_tc_record));
     assert_type_prints_as(anon, "{a: string}");
 
@@ -1477,12 +1473,12 @@ test_print_cycle(void)
     n00b_tc_ctx_t *ctx = n00b_tc_ctx_new();
 
     // Create a cycle: type -> itself.
-    n00b_tc_type_t *t = n00b_tc_param(ctx, *r"list", ctx->t_int);
+    n00b_tc_type_t *t = n00b_tc_param(ctx, r"list", ctx->t_int);
     t->forward = t; // Self-referential cycle.
 
-    n00b_string_t result = n00b_tc_type_to_string(t);
+    n00b_string_t *result = n00b_tc_type_to_string(t);
     // Should eventually produce "<cycle>" somewhere.
-    assert(result.u8_bytes > 0);
+    assert(result->u8_bytes > 0);
 
     // Clean up the cycle.
     t->forward = nullptr;
@@ -1498,7 +1494,7 @@ test_print_ref(void)
 {
     n00b_tc_ctx_t *ctx = n00b_tc_ctx_new();
 
-    n00b_tc_type_t *ref_int = n00b_tc_param(ctx, *r"ref", ctx->t_int);
+    n00b_tc_type_t *ref_int = n00b_tc_param(ctx, r"ref", ctx->t_int);
     assert_type_prints_as(ref_int, "ref[int]");
 
     n00b_tc_ctx_free(ctx);
@@ -1512,7 +1508,7 @@ test_print_constraints(void)
 {
     n00b_tc_ctx_t *ctx = n00b_tc_ctx_new();
 
-    n00b_tc_type_t *tv = n00b_tc_var(ctx, *r"T");
+    n00b_tc_type_t *tv = n00b_tc_var(ctx, r"T");
 
     // Add constraints manually to the var.
     n00b_tc_type_t *resolved = tv;
@@ -1528,7 +1524,7 @@ test_print_constraints(void)
 
     n00b_tc_constraint_t c1 = {
         .kind       = N00B_TC_CON_IMPLEMENTS,
-        .implements = {.iface_name = *r"Numeric"},
+        .implements = {.iface_name = r"Numeric"},
     };
 
     n00b_list_push(*var.constraints, c1);
@@ -1542,12 +1538,12 @@ test_print_constraints(void)
 
     _n00b_variant_set_ptr(&resolved->kind, n00b_tc_var_t, var);
 
-    n00b_string_t result = n00b_tc_type_to_string_full(tv);
+    n00b_string_t *result = n00b_tc_type_to_string_full(tv);
     // Should be something like "`T where `T: Numeric + != nil"
-    assert(result.u8_bytes > 0);
+    assert(result->u8_bytes > 0);
 
     // Verify it contains the key parts.
-    n00b_string_t expected_part = *r"where";
+    n00b_string_t *expected_part = r"where";
     (void)expected_part;
     // Just verify it doesn't crash and produces non-empty output.
 

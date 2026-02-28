@@ -68,7 +68,7 @@ ensure_fd_above(int fd, int min_fd)
 }
 
 static char **
-args_to_cstrv(n00b_array_t(n00b_string_t) *args, n00b_string_t cmd, bool raw_argv)
+args_to_cstrv(n00b_array_t(n00b_string_t *) *args, n00b_string_t *cmd, bool raw_argv)
 {
     size_t n_args = args ? args->len : 0;
     size_t offset = raw_argv ? 0 : 1;
@@ -92,7 +92,7 @@ args_to_cstrv(n00b_array_t(n00b_string_t) *args, n00b_string_t cmd, bool raw_arg
 }
 
 static char **
-env_to_cstrv(n00b_array_t(n00b_string_t) *env)
+env_to_cstrv(n00b_array_t(n00b_string_t *) *env)
 {
     if (!env) {
         return nullptr;
@@ -619,11 +619,11 @@ done_condition_met(n00b_subproc_t *sp)
 void
 n00b_subproc_init(n00b_subproc_t *sp) _kargs
 {
-    n00b_string_t                              cmd;
+    n00b_string_t                             *cmd;
     n00b_conduit_t                            *conduit         = nullptr;
     n00b_conduit_io_backend_t                 *io              = nullptr;
-    n00b_array_t(n00b_string_t)               *args            = nullptr;
-    n00b_array_t(n00b_string_t)               *env             = nullptr;
+    n00b_array_t(n00b_string_t *)               *args            = nullptr;
+    n00b_array_t(n00b_string_t *)               *env             = nullptr;
     bool                                       capture         = false;
     bool                                       capture_stdin   = false;
     bool                                       capture_stdout  = false;
@@ -639,7 +639,7 @@ n00b_subproc_init(n00b_subproc_t *sp) _kargs
     bool                                       handle_win_size = true;
     n00b_buffer_t                             *stdin_inject    = nullptr;
     bool                                       close_stdin     = false;
-    n00b_string_t                              cwd;
+    n00b_string_t                             *cwd;
     struct termios                            *termcap         = nullptr;
     n00b_duration_t                           *timeout         = nullptr;
     n00b_subproc_timeout_t                     timeout_policy  = N00B_SUBPROC_TIMEOUT_SIGTERM;
@@ -848,7 +848,7 @@ spawn_pipe_mode(n00b_subproc_t *sp)
             signal(sig, SIG_DFL);
         }
 
-        if (sp->cwd.data) {
+        if (sp->cwd) {
             const char *dir = n00b_unicode_str_to_cstr(sp->cwd);
             if (chdir(dir) < 0) {
                 int e = errno;
@@ -1161,7 +1161,7 @@ spawn_pty_mode(n00b_subproc_t *sp)
         }
 
         // chdir if requested.
-        if (sp->cwd.data) {
+        if (sp->cwd) {
             const char *dir = n00b_unicode_str_to_cstr(sp->cwd);
             if (chdir(dir) < 0) {
                 int e = errno;
@@ -1385,7 +1385,7 @@ n00b_subproc_spawn(n00b_subproc_t *sp)
 {
     assert(sp != nullptr);
 
-    if (!sp->cmd.data) {
+    if (!sp->cmd) {
         return n00b_result_err(bool, EINVAL);
     }
     if (atomic_load(&sp->spawned)) {

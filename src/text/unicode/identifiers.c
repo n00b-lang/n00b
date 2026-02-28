@@ -74,7 +74,7 @@ n00b_unicode_is_valid_identifier_raw(const char *data, int64_t len)
 }
 
 bool
-n00b_unicode_is_valid_identifier(n00b_string_t s)
+n00b_unicode_is_valid_identifier(n00b_string_t *s)
 {
-    return n00b_unicode_is_valid_identifier_raw(s.data, s.u8_bytes);
+    return n00b_unicode_is_valid_identifier_raw(s->data, s->u8_bytes);
 }

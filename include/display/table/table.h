@@ -71,8 +71,8 @@ typedef struct n00b_table_t {
     n00b_box_props_t      *header_props;       /**< Row 0 override. */
     n00b_box_props_t      *alt_cell_props;     /**< Odd-row style. */
 
-    n00b_string_t          title;   /**< Empty string if unused. */
-    n00b_string_t          caption; /**< Empty string if unused. */
+    n00b_string_t         *title;   /**< Empty string if unused. */
+    n00b_string_t         *caption; /**< Empty string if unused. */
     bool                   wrap;    /**< Table-level wrap default (true). */
 
     // --- Layout cache ---
@@ -160,7 +160,7 @@ extern void n00b_table_destroy(n00b_table_t *table);
  * @pre `row_span == 1` (asserted).
  */
 extern void
-n00b_table_add_cell(n00b_table_t *table, n00b_string_t content) _kargs
+n00b_table_add_cell(n00b_table_t *table, n00b_string_t *content) _kargs
 {
     int32_t           col_span   = 1;
     int32_t           row_span   = 1;
@@ -192,10 +192,9 @@ extern void n00b_table_end_row(n00b_table_t *table);
  * @brief Add a complete row of strings.
  * @param table Table to modify.
  * @param cells Array of content strings.
- * @param n     Number of strings in the array.
  */
 extern void n00b_table_add_row(n00b_table_t *table,
-                                n00b_string_t *cells, n00b_isize_t n);
+                                n00b_array_t(n00b_string_t *) cells);
 
 /**
  * @brief Finalize the table (flushes any partially built row).
@@ -381,7 +380,7 @@ extern n00b_table_style_t n00b_table_style_ascii(void);
  * @post The table has been finalized via `n00b_table_end()`.
  */
 extern n00b_table_t *
-n00b_table_from_string(n00b_string_t s) _kargs
+n00b_table_from_string(n00b_string_t *s) _kargs
 {
     n00b_string_t    *row_sep      = nullptr;
     n00b_string_t    *col_sep      = nullptr;
@@ -398,7 +397,7 @@ n00b_table_from_string(n00b_string_t s) _kargs
  * @param content The callout text.
  * @return A ready-to-render table.
  */
-extern n00b_table_t *n00b_table_callout(n00b_string_t content);
+extern n00b_table_t *n00b_table_callout(n00b_string_t *content);
 
 /**
  * @brief Create a single-row horizontal flow of items.
@@ -406,7 +405,7 @@ extern n00b_table_t *n00b_table_callout(n00b_string_t content);
  * @param n      Number of items.
  * @return A ready-to-render table.
  */
-extern n00b_table_t *n00b_table_flow(n00b_string_t *items, n00b_isize_t n);
+extern n00b_table_t *n00b_table_flow(n00b_array_t(n00b_string_t *) items);
 
 // ====================================================================
 // Internal (cross-module) entry points

@@ -8,9 +8,6 @@
 #include "adt/stack.h"
 #include "adt/array.h"
 
-n00b_stack_decl(int);
-n00b_stack_decl(char *);
-n00b_array_decl(int);
 
 // ============================================================================
 // 1. Construction

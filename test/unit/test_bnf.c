@@ -13,7 +13,7 @@
 
 // r"..." is a raw string (no escape processing), so \n stays literal.
 // BNF needs actual newlines, so we use n00b_string_from_cstr for BNF text.
-static n00b_string_t
+static n00b_string_t *
 bnf(const char *text)
 {
     return n00b_string_from_cstr(text);
@@ -30,7 +30,7 @@ test_simple_grammar(void)
 
     bool ok = n00b_bnf_load(
         bnf("<S> ::= %IDENTIFIER %INTEGER\n"),
-        *r"S", g);
+        r"S", g);
 
     assert(ok);
     assert(g->finalized);
@@ -38,7 +38,7 @@ test_simple_grammar(void)
 
     n00b_nonterm_t *s = n00b_get_nonterm(g, g->default_start);
     assert(s != NULL);
-    assert(n00b_unicode_str_eq(s->name, *r"S"));
+    assert(n00b_unicode_str_eq(s->name, r"S"));
 
     n00b_grammar_free(g);
     printf("  [PASS] simple_grammar\n");
@@ -55,7 +55,7 @@ test_alternatives(void)
 
     bool ok = n00b_bnf_load(
         bnf("<S> ::= %IDENTIFIER | %INTEGER\n"),
-        *r"S", g);
+        r"S", g);
 
     assert(ok);
 
@@ -80,13 +80,13 @@ test_multiple_rules(void)
     bool ok = n00b_bnf_load(
         bnf("<expr> ::= <term> | <expr> %IDENTIFIER <term>\n"
             "<term> ::= %INTEGER\n"),
-        *r"expr", g);
+        r"expr", g);
 
     assert(ok);
 
     n00b_nonterm_t *expr = n00b_get_nonterm(g, g->default_start);
     assert(expr != NULL);
-    assert(n00b_unicode_str_eq(expr->name, *r"expr"));
+    assert(n00b_unicode_str_eq(expr->name, r"expr"));
 
     n00b_grammar_free(g);
     printf("  [PASS] multiple_rules\n");
@@ -103,7 +103,7 @@ test_literal_tokens(void)
 
     bool ok = n00b_bnf_load(
         bnf("<S> ::= \"hello\" %IDENTIFIER\n"),
-        *r"S", g);
+        r"S", g);
 
     assert(ok);
     assert(g->finalized);
@@ -125,7 +125,7 @@ test_comments_and_continuations(void)
         bnf("# This is a comment\n"
             "<S> ::= %IDENTIFIER\n"
             "    | %INTEGER  # another comment\n"),
-        *r"S", g);
+        r"S", g);
 
     assert(ok);
 
@@ -146,7 +146,7 @@ test_empty_input(void)
 {
     n00b_grammar_t *g = n00b_grammar_new();
 
-    bool ok = n00b_bnf_load(bnf(""), *r"S", g);
+    bool ok = n00b_bnf_load(bnf(""), r"S", g);
     assert(!ok);
 
     n00b_grammar_free(g);
@@ -161,7 +161,7 @@ static void
 test_null_grammar(void)
 {
     bool ok = n00b_bnf_load(
-        bnf("<S> ::= %IDENTIFIER\n"), *r"S", NULL);
+        bnf("<S> ::= %IDENTIFIER\n"), r"S", NULL);
     assert(!ok);
     printf("  [PASS] null_grammar\n");
 }
@@ -177,7 +177,7 @@ test_explicit_parse_fn(void)
 
     bool ok = n00b_bnf_load(
         bnf("<S> ::= %IDENTIFIER\n"),
-        *r"S", g,
+        r"S", g,
         .parse_fn = n00b_pwz_parse_grammar);
 
     assert(ok);
@@ -198,7 +198,7 @@ test_ebnf_plus(void)
 
     bool ok = n00b_bnf_load(
         bnf("<S> ::= %IDENTIFIER+\n"),
-        *r"S", g);
+        r"S", g);
 
     assert(ok);
     assert(g->finalized);
@@ -218,7 +218,7 @@ test_char_class(void)
 
     bool ok = n00b_bnf_load(
         bnf("<S> ::= __DIGIT+\n"),
-        *r"S", g);
+        r"S", g);
 
     assert(ok);
     assert(g->finalized);

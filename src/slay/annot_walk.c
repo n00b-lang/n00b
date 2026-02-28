@@ -103,11 +103,48 @@ walk_node(n00b_annot_walk_ctx_t *ctx, n00b_parse_tree_t *node)
     annot_phase_cf(ctx, &nc_ctx);
 
     // --- Phase 5: recurse into children ---
+    //
+    // For <variable-decl>, extract the qualifier keyword from the
+    // <decl-qualifiers> subtree and set ctx->current_mutability so
+    // that child @declares handlers can stamp the symbol.
+
+    n00b_sym_mutability_t saved_mut = ctx->current_mutability;
+
+    if (nt && n00b_unicode_str_eq(nt->name, r"variable-decl")) {
+        // Default: var (mutable).
+        ctx->current_mutability = N00B_SYM_MUTABLE;
+
+        // <variable-decl> → <decl-qualifiers> <sym-decl-list>
+        // Walk <decl-qualifiers> for the last keyword token.
+        n00b_parse_tree_t *quals = n00b_tree_find_child_by_nt_name(
+            ctx->grammar, node, r"decl-qualifiers");
+
+        if (quals) {
+            n00b_token_info_t *tok = n00b_tree_find_first_terminal(quals);
+
+            if (tok && n00b_option_is_set(tok->value)) {
+                n00b_string_t *kw = n00b_option_get(tok->value);
+
+                if (n00b_unicode_str_eq(kw, r"let")) {
+                    ctx->current_mutability = N00B_SYM_IMMUTABLE;
+                }
+                else if (n00b_unicode_str_eq(kw, r"const")) {
+                    ctx->current_mutability = N00B_SYM_CONST;
+                }
+                else if (n00b_unicode_str_eq(kw, r"global")) {
+                    ctx->current_mutability = N00B_SYM_GLOBAL;
+                }
+            }
+        }
+    }
+
     size_t num_children = n00b_tree_num_children(node);
 
     for (size_t i = 0; i < num_children; i++) {
         walk_node(ctx, n00b_tree_child(node, i));
     }
+
+    ctx->current_mutability = saved_mut;
 
     // --- Phase 6: post-order types ---
     annot_phase_types_post(ctx, &nc_ctx);

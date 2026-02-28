@@ -8,65 +8,65 @@
 
 TEST(test_nfc_composed)
 {
-    n00b_string_t nfc = n00b_unicode_nfc(*r"e\xCC\x81", .allocator = nullptr);
-    ASSERT_EQ(nfc.codepoints, 1);
-    ASSERT_STR_EQ(nfc.data, "\xC3\xA9");
+    n00b_string_t *nfc = n00b_unicode_nfc(r"e\xCC\x81", .allocator = nullptr);
+    ASSERT_EQ(nfc->codepoints, 1);
+    ASSERT_STR_EQ(nfc->data, "\xC3\xA9");
 }
 
 TEST(test_nfd_decomposed)
 {
-    n00b_string_t nfd = n00b_unicode_nfd(*r"\xC3\xA9", .allocator = nullptr);
-    ASSERT_EQ(nfd.codepoints, 2);
+    n00b_string_t *nfd = n00b_unicode_nfd(r"\xC3\xA9", .allocator = nullptr);
+    ASSERT_EQ(nfd->codepoints, 2);
     uint32_t pos = 0;
-    int32_t  cp1 = n00b_unicode_utf8_decode(nfd.data, nfd.u8_bytes, &pos);
-    int32_t  cp2 = n00b_unicode_utf8_decode(nfd.data, nfd.u8_bytes, &pos);
+    int32_t  cp1 = n00b_unicode_utf8_decode(nfd->data, nfd->u8_bytes, &pos);
+    int32_t  cp2 = n00b_unicode_utf8_decode(nfd->data, nfd->u8_bytes, &pos);
     ASSERT_EQ(cp1, 'e');
     ASSERT_EQ(cp2, 0x0301);
 }
 
 TEST(test_nfc_already_composed)
 {
-    n00b_string_t nfc = n00b_unicode_nfc(*r"Hello", .allocator = nullptr);
-    ASSERT_STR_EQ(nfc.data, "Hello");
+    n00b_string_t *nfc = n00b_unicode_nfc(r"Hello", .allocator = nullptr);
+    ASSERT_STR_EQ(nfc->data, "Hello");
 }
 
 TEST(test_nfkc_compat)
 {
-    n00b_string_t nfkc
-        = n00b_unicode_nfkc(*r"\xEF\xAC\x81", .allocator = nullptr); // ﬁ ligature
-    ASSERT_STR_EQ(nfkc.data, "fi");
+    n00b_string_t *nfkc
+        = n00b_unicode_nfkc(r"\xEF\xAC\x81", .allocator = nullptr); // ﬁ ligature
+    ASSERT_STR_EQ(nfkc->data, "fi");
 }
 
 TEST(test_nfkd_compat)
 {
-    n00b_string_t nfkd = n00b_unicode_nfkd(*r"\xEF\xAC\x81", .allocator = nullptr);
-    ASSERT_STR_EQ(nfkd.data, "fi");
+    n00b_string_t *nfkd = n00b_unicode_nfkd(r"\xEF\xAC\x81", .allocator = nullptr);
+    ASSERT_STR_EQ(nfkd->data, "fi");
 }
 
 TEST(test_hangul_decompose_compose)
 {
-    n00b_string_t nfd = n00b_unicode_nfd(*r"\xED\x95\x9C", .allocator = nullptr);
-    ASSERT_EQ(nfd.codepoints, 3);
+    n00b_string_t *nfd = n00b_unicode_nfd(r"\xED\x95\x9C", .allocator = nullptr);
+    ASSERT_EQ(nfd->codepoints, 3);
 
-    n00b_string_t nfc = n00b_unicode_nfc(nfd, .allocator = nullptr);
-    ASSERT_STR_EQ(nfc.data, "\xED\x95\x9C");
-    ASSERT_EQ(nfc.codepoints, 1);
+    n00b_string_t *nfc = n00b_unicode_nfc(nfd, .allocator = nullptr);
+    ASSERT_STR_EQ(nfc->data, "\xED\x95\x9C");
+    ASSERT_EQ(nfc->codepoints, 1);
 }
 
 TEST(test_is_nfc)
 {
-    ASSERT(n00b_unicode_is_nfc(*r"Hello"));
-    ASSERT(n00b_unicode_is_nfc(*r"\xC3\xA9"));
+    ASSERT(n00b_unicode_is_nfc(r"Hello"));
+    ASSERT(n00b_unicode_is_nfc(r"\xC3\xA9"));
 }
 
 TEST(test_canonical_ordering)
 {
-    n00b_string_t nfd = n00b_unicode_nfd(*r"e\xCC\xA7\xCC\x81", .allocator = nullptr);
+    n00b_string_t *nfd = n00b_unicode_nfd(r"e\xCC\xA7\xCC\x81", .allocator = nullptr);
 
     uint32_t pos = 0;
-    int32_t  cp1 = n00b_unicode_utf8_decode(nfd.data, nfd.u8_bytes, &pos);
-    int32_t  cp2 = n00b_unicode_utf8_decode(nfd.data, nfd.u8_bytes, &pos);
-    int32_t  cp3 = n00b_unicode_utf8_decode(nfd.data, nfd.u8_bytes, &pos);
+    int32_t  cp1 = n00b_unicode_utf8_decode(nfd->data, nfd->u8_bytes, &pos);
+    int32_t  cp2 = n00b_unicode_utf8_decode(nfd->data, nfd->u8_bytes, &pos);
+    int32_t  cp3 = n00b_unicode_utf8_decode(nfd->data, nfd->u8_bytes, &pos);
     ASSERT_EQ(cp1, 'e');
     ASSERT_EQ(cp2, 0x0327);
     ASSERT_EQ(cp3, 0x0301);
@@ -97,13 +97,13 @@ TEST(test_streaming_normalizer)
 // ---------------------------------------------------------------------------
 
 static bool
-str_matches_cps(n00b_string_t s, const n00b_codepoint_t *cps, uint32_t n)
+str_matches_cps(n00b_string_t *s, const n00b_codepoint_t *cps, uint32_t n)
 {
-    if ((uint32_t)s.codepoints != n)
+    if ((uint32_t)s->codepoints != n)
         return false;
     uint32_t pos = 0;
     for (uint32_t i = 0; i < n; i++) {
-        int32_t cp = n00b_unicode_utf8_decode(s.data, s.u8_bytes, &pos);
+        int32_t cp = n00b_unicode_utf8_decode(s->data, s->u8_bytes, &pos);
         if (cp < 0 || (n00b_codepoint_t)cp != cps[i])
             return false;
     }
@@ -149,7 +149,7 @@ run_normalization_conformance(void)
         }
 
         // Build n00b_string_t for each column
-        n00b_string_t s[5];
+        n00b_string_t *s[5];
         for (int i = 0; i < 5; i++) {
             s[i] = cps_to_str(c[i], cn[i]);
         }
@@ -158,9 +158,9 @@ run_normalization_conformance(void)
 
         // NFC invariants: c2 == toNFC(c1) == toNFC(c2) == toNFC(c3)
         {
-            n00b_string_t r1 = n00b_unicode_nfc(s[0], .allocator = nullptr);
-            n00b_string_t r2 = n00b_unicode_nfc(s[1], .allocator = nullptr);
-            n00b_string_t r3 = n00b_unicode_nfc(s[2], .allocator = nullptr);
+            n00b_string_t *r1 = n00b_unicode_nfc(s[0], .allocator = nullptr);
+            n00b_string_t *r2 = n00b_unicode_nfc(s[1], .allocator = nullptr);
+            n00b_string_t *r3 = n00b_unicode_nfc(s[2], .allocator = nullptr);
             if (!str_matches_cps(r1, c[1], cn[1]))
                 ok = false;
             if (!str_matches_cps(r2, c[1], cn[1]))
@@ -171,8 +171,8 @@ run_normalization_conformance(void)
 
         // NFC: c4 == toNFC(c4) == toNFC(c5)
         {
-            n00b_string_t r4 = n00b_unicode_nfc(s[3], .allocator = nullptr);
-            n00b_string_t r5 = n00b_unicode_nfc(s[4], .allocator = nullptr);
+            n00b_string_t *r4 = n00b_unicode_nfc(s[3], .allocator = nullptr);
+            n00b_string_t *r5 = n00b_unicode_nfc(s[4], .allocator = nullptr);
             if (!str_matches_cps(r4, c[3], cn[3]))
                 ok = false;
             if (!str_matches_cps(r5, c[3], cn[3]))
@@ -181,9 +181,9 @@ run_normalization_conformance(void)
 
         // NFD invariants: c3 == toNFD(c1) == toNFD(c2) == toNFD(c3)
         {
-            n00b_string_t r1 = n00b_unicode_nfd(s[0], .allocator = nullptr);
-            n00b_string_t r2 = n00b_unicode_nfd(s[1], .allocator = nullptr);
-            n00b_string_t r3 = n00b_unicode_nfd(s[2], .allocator = nullptr);
+            n00b_string_t *r1 = n00b_unicode_nfd(s[0], .allocator = nullptr);
+            n00b_string_t *r2 = n00b_unicode_nfd(s[1], .allocator = nullptr);
+            n00b_string_t *r3 = n00b_unicode_nfd(s[2], .allocator = nullptr);
             if (!str_matches_cps(r1, c[2], cn[2]))
                 ok = false;
             if (!str_matches_cps(r2, c[2], cn[2]))
@@ -194,8 +194,8 @@ run_normalization_conformance(void)
 
         // NFD: c5 == toNFD(c4) == toNFD(c5)
         {
-            n00b_string_t r4 = n00b_unicode_nfd(s[3], .allocator = nullptr);
-            n00b_string_t r5 = n00b_unicode_nfd(s[4], .allocator = nullptr);
+            n00b_string_t *r4 = n00b_unicode_nfd(s[3], .allocator = nullptr);
+            n00b_string_t *r5 = n00b_unicode_nfd(s[4], .allocator = nullptr);
             if (!str_matches_cps(r4, c[4], cn[4]))
                 ok = false;
             if (!str_matches_cps(r5, c[4], cn[4]))
@@ -205,7 +205,7 @@ run_normalization_conformance(void)
         // NFKC: c4 == toNFKC(c1..c5)
         {
             for (int i = 0; i < 5; i++) {
-                n00b_string_t r = n00b_unicode_nfkc(s[i], .allocator = nullptr);
+                n00b_string_t *r = n00b_unicode_nfkc(s[i], .allocator = nullptr);
                 if (!str_matches_cps(r, c[3], cn[3]))
                     ok = false;
             }
@@ -214,7 +214,7 @@ run_normalization_conformance(void)
         // NFKD: c5 == toNFKD(c1..c5)
         {
             for (int i = 0; i < 5; i++) {
-                n00b_string_t r = n00b_unicode_nfkd(s[i], .allocator = nullptr);
+                n00b_string_t *r = n00b_unicode_nfkd(s[i], .allocator = nullptr);
                 if (!str_matches_cps(r, c[4], cn[4]))
                     ok = false;
             }

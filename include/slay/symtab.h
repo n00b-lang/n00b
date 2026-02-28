@@ -32,6 +32,14 @@ typedef enum {
     N00B_SYM_MODULE,
 } n00b_sym_kind_t;
 
+/** @brief Mutability qualifier for variable declarations. */
+typedef enum {
+    N00B_SYM_MUTABLE,     /**< `var` — explicit or implicit first-use. */
+    N00B_SYM_IMMUTABLE,   /**< `let` — bound once, cannot reassign. */
+    N00B_SYM_CONST,       /**< `const` — compile-time constant. */
+    N00B_SYM_GLOBAL,      /**< `global` — module-level mutable. */
+} n00b_sym_mutability_t;
+
 // ============================================================================
 // Forward declarations
 // ============================================================================
@@ -52,7 +60,7 @@ typedef struct n00b_symtab_t     n00b_symtab_t;
  * and support shadowing via the `shadowed` pointer.
  */
 struct n00b_sym_entry_t {
-    n00b_string_t        name;
+    n00b_string_t       *name;
     n00b_sym_kind_t      kind;
     int32_t              scope_depth;
     n00b_parse_tree_t   *decl_node;     /**< Parse tree node of declaration. */
@@ -60,12 +68,18 @@ struct n00b_sym_entry_t {
     n00b_sym_entry_t    *next_in_scope; /**< Linked list for scope cleanup. */
     n00b_parse_tree_t   *type_node;     /**< Parse subtree for type (from @type/@field/@method). */
     n00b_tc_type_t      *type_var;      /**< Type variable for inference. */
-    n00b_string_t        adt_kind;      /**< ADT kind: "struct", "union", "enum" (from @adt). */
+    n00b_string_t       *adt_kind;      /**< ADT kind: "struct", "union", "enum" (from @adt). */
     n00b_scope_t        *exposed_scope; /**< Scope this symbol exposes for dotted access. */
     n00b_cfg_t          *cfg;           /**< Per-function CFG (functions only). */
     void                *module_ptr;    /**< Resolved module (n00b_cg_module_t *) for SYM_MODULE. */
     bool                 is_field;      /**< True if declared via @field. */
     bool                 is_method;     /**< True if declared via @method. */
+    bool                 is_static;    /**< True if declared via @static. */
+    bool                 is_abstract;  /**< True if declared via @abstract. */
+    n00b_sym_mutability_t mutability;   /**< var/let/const/global qualifier. */
+    n00b_string_t       *visibility;   /**< "public", "private", or "protected" (from @visibility). */
+    n00b_string_t       *inherits_name; /**< Parent class name (from @inherits). */
+    n00b_list_t(n00b_string_t *) *implements; /**< Interface names (from @implements). */
 };
 
 // ============================================================================
@@ -75,11 +89,11 @@ struct n00b_sym_entry_t {
 /** @brief A single scope level within one namespace. */
 struct n00b_scope_t {
     n00b_scope_t     *parent;
-    n00b_string_t     name;           /**< Optional scope name (e.g., func name). */
+    n00b_string_t    *name;           /**< Optional scope name (e.g., func name). */
     int32_t           depth;
     n00b_sym_entry_t *first_in_scope; /**< Head of this scope's symbol chain. */
-    n00b_string_t     adt_kind;       /**< "struct", "union", "enum" if opened by @adt. */
-    n00b_string_t     scope_tag;      /**< From `@scope` annotation: "function", "for", "class", etc. */
+    n00b_string_t    *adt_kind;       /**< "struct", "union", "enum" if opened by @adt. */
+    n00b_string_t    *scope_tag;      /**< From `@scope` annotation: "function", "for", "class", etc. */
 };
 
 // ============================================================================
@@ -88,7 +102,7 @@ struct n00b_scope_t {
 
 /** @brief One independent namespace with its own scope stack and symbol hash. */
 struct n00b_namespace_t {
-    n00b_string_t     ns_name;      /**< "" = default, "tag", "label", etc. */
+    n00b_string_t    *ns_name;      /**< "" = default, "tag", "label", etc. */
     n00b_scope_t     *current;      /**< Current (innermost) scope. */
     n00b_scope_t    **all_scopes;   /**< All scopes ever created (for cleanup). */
     int32_t           all_count;    /**< Number of scopes in all_scopes. */
@@ -138,7 +152,7 @@ void n00b_symtab_free(n00b_symtab_t *st);
  * @param ns_name  Namespace name.
  * @return Pointer to the namespace (valid until next ns creation).
  */
-n00b_namespace_t *n00b_symtab_ns(n00b_symtab_t *st, n00b_string_t ns_name);
+n00b_namespace_t *n00b_symtab_ns(n00b_symtab_t *st, n00b_string_t *ns_name);
 
 // ============================================================================
 // Scope management
@@ -150,8 +164,8 @@ n00b_namespace_t *n00b_symtab_ns(n00b_symtab_t *st, n00b_string_t ns_name);
  * @param ns_name     Namespace to push in.
  * @param scope_name  Optional name for the scope (e.g., function name).
  */
-void n00b_symtab_push_scope(n00b_symtab_t *st, n00b_string_t ns_name,
-                             n00b_string_t scope_name);
+void n00b_symtab_push_scope(n00b_symtab_t *st, n00b_string_t *ns_name,
+                             n00b_string_t *scope_name);
 
 /**
  * @brief Pop the current scope from a namespace's scope stack.
@@ -162,7 +176,7 @@ void n00b_symtab_push_scope(n00b_symtab_t *st, n00b_string_t ns_name,
  * @param st       Symbol table.
  * @param ns_name  Namespace to pop from.
  */
-void n00b_symtab_pop_scope(n00b_symtab_t *st, n00b_string_t ns_name);
+void n00b_symtab_pop_scope(n00b_symtab_t *st, n00b_string_t *ns_name);
 
 // ============================================================================
 // Symbol operations
@@ -181,8 +195,8 @@ void n00b_symtab_pop_scope(n00b_symtab_t *st, n00b_string_t ns_name);
  * @param decl_node  Parse tree node of the declaration (may be NULL).
  * @return The newly created entry.
  */
-n00b_sym_entry_t *n00b_symtab_add(n00b_symtab_t *st, n00b_string_t ns_name,
-                                    n00b_string_t name, n00b_sym_kind_t kind,
+n00b_sym_entry_t *n00b_symtab_add(n00b_symtab_t *st, n00b_string_t *ns_name,
+                                    n00b_string_t *name, n00b_sym_kind_t kind,
                                     n00b_parse_tree_t *decl_node);
 
 /**
@@ -192,8 +206,8 @@ n00b_sym_entry_t *n00b_symtab_add(n00b_symtab_t *st, n00b_string_t ns_name,
  * @param name     Symbol name.
  * @return The entry, or NULL if not found.
  */
-n00b_sym_entry_t *n00b_symtab_lookup(n00b_symtab_t *st, n00b_string_t ns_name,
-                                       n00b_string_t name);
+n00b_sym_entry_t *n00b_symtab_lookup(n00b_symtab_t *st, n00b_string_t *ns_name,
+                                       n00b_string_t *name);
 
 /**
  * @brief Look up a symbol across all scopes (including popped ones).
@@ -207,8 +221,8 @@ n00b_sym_entry_t *n00b_symtab_lookup(n00b_symtab_t *st, n00b_string_t ns_name,
  * @param name     Symbol name.
  * @return The entry, or NULL if not found in any scope.
  */
-n00b_sym_entry_t *n00b_symtab_lookup_all(n00b_symtab_t *st, n00b_string_t ns_name,
-                                            n00b_string_t name);
+n00b_sym_entry_t *n00b_symtab_lookup_all(n00b_symtab_t *st, n00b_string_t *ns_name,
+                                            n00b_string_t *name);
 
 /**
  * @brief Look up a symbol, trying active scopes first then all scopes.
@@ -221,8 +235,8 @@ n00b_sym_entry_t *n00b_symtab_lookup_all(n00b_symtab_t *st, n00b_string_t ns_nam
  * @param name     Symbol name.
  * @return The entry, or NULL if not found anywhere.
  */
-n00b_sym_entry_t *n00b_symtab_lookup_any(n00b_symtab_t *st, n00b_string_t ns_name,
-                                            n00b_string_t name);
+n00b_sym_entry_t *n00b_symtab_lookup_any(n00b_symtab_t *st, n00b_string_t *ns_name,
+                                            n00b_string_t *name);
 
 /**
  * @brief Check if a name is a typedef in the default namespace.
@@ -230,7 +244,7 @@ n00b_sym_entry_t *n00b_symtab_lookup_any(n00b_symtab_t *st, n00b_string_t ns_nam
  * @param name  Name to check.
  * @return True if the name is registered as a typedef.
  */
-bool n00b_symtab_is_typedef(n00b_symtab_t *st, n00b_string_t name);
+bool n00b_symtab_is_typedef(n00b_symtab_t *st, n00b_string_t *name);
 
 /**
  * @brief Get the current scope depth of a namespace.
@@ -238,7 +252,7 @@ bool n00b_symtab_is_typedef(n00b_symtab_t *st, n00b_string_t name);
  * @param ns_name  Namespace to query.
  * @return Current depth (0 = file scope), or -1 if namespace doesn't exist.
  */
-int32_t n00b_symtab_depth(n00b_symtab_t *st, n00b_string_t ns_name);
+int32_t n00b_symtab_depth(n00b_symtab_t *st, n00b_string_t *ns_name);
 
 /**
  * @brief Get the current (innermost) scope of a namespace.
@@ -246,4 +260,4 @@ int32_t n00b_symtab_depth(n00b_symtab_t *st, n00b_string_t ns_name);
  * @param ns_name  Namespace to query (must already exist).
  * @return The current scope, or NULL if namespace doesn't exist or has no scope.
  */
-n00b_scope_t *n00b_symtab_current_scope(n00b_symtab_t *st, n00b_string_t ns_name);
+n00b_scope_t *n00b_symtab_current_scope(n00b_symtab_t *st, n00b_string_t *ns_name);

@@ -407,31 +407,27 @@ main(int argc, char **argv)
     }
 
     // Build n00b_string_t from raw input.
-    n00b_string_t input = n00b_string_from_raw(input_raw,
-                                                (int64_t)input_len);
+    n00b_string_t *input = n00b_string_from_raw(input_raw,
+                                                 (int64_t)input_len);
     free(input_raw);
 
     // Process separator arguments.
-    n00b_string_t  rsep_val;
     n00b_string_t *rsep_ptr = nullptr;
 
     if (row_sep_raw) {
         char *processed = process_escapes(row_sep_raw);
-        rsep_val = n00b_string_from_raw(processed,
+        rsep_ptr = n00b_string_from_raw(processed,
                                          (int64_t)strlen(processed));
         free(processed);
-        rsep_ptr = &rsep_val;
     }
 
-    n00b_string_t  csep_val;
     n00b_string_t *csep_ptr = nullptr;
 
     if (col_sep_raw) {
         char *processed = process_escapes(col_sep_raw);
-        csep_val = n00b_string_from_raw(processed,
+        csep_ptr = n00b_string_from_raw(processed,
                                          (int64_t)strlen(processed));
         free(processed);
-        csep_ptr = &csep_val;
     }
 
     // Look up style preset.

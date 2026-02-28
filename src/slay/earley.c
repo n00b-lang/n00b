@@ -1249,10 +1249,10 @@ scan_class(n00b_earley_parser_t *p, n00b_earley_item_t *ei)
         return;
     }
 
-    n00b_string_t val = n00b_option_get(tok->value);
-    uint32_t      pos = 0;
-    int32_t       cp  = n00b_unicode_utf8_decode(val.data,
-                                                  (uint32_t)val.u8_bytes,
+    n00b_string_t *val = n00b_option_get(tok->value);
+    uint32_t       pos = 0;
+    int32_t        cp  = n00b_unicode_utf8_decode(val->data,
+                                                   (uint32_t)val->u8_bytes,
                                                   &pos);
 
     if (cp >= 0 && n00b_codepoint_matches_class(cp, next->char_class)) {
@@ -1734,14 +1734,14 @@ found:
     // Collect expected terminal IDs and descriptions from scan-ready items.
     size_t        nitems   = n00b_list_len(state->items);
     int64_t      *id_buf   = n00b_alloc_array(int64_t, nitems);
-    n00b_string_t *desc_buf = n00b_alloc_array(n00b_string_t, nitems);
+    n00b_string_t **desc_buf = n00b_alloc_array(n00b_string_t *, nitems);
     int32_t       count    = 0;
 
     for (size_t i = 0; i < n00b_list_len(state->items); i++) {
         n00b_earley_item_t *ei = state->items.data[i];
 
         int64_t       tid  = -1;
-        n00b_string_t desc = {0};
+        n00b_string_t *desc = NULL;
 
         n00b_match_t *m = get_rule_match(ei->start_item->rule, ei->cursor);
 
@@ -1752,7 +1752,7 @@ found:
                 n00b_string_t *name = n00b_get_terminal_name(g, tid);
 
                 if (name) {
-                    desc = *name;
+                    desc = name;
                 }
                 else if (p->stream) {
                     // No registered name — find a token in the stream
@@ -1774,7 +1774,7 @@ found:
         case N00B_EO_SCAN_ANY:
             // Use a synthetic ID so it sorts uniquely.
             tid  = -100;
-            desc = N00B_STRING_STATIC("<any>");
+            desc = r"<any>";
             break;
 
         case N00B_EO_SCAN_CLASS:
@@ -1783,22 +1783,22 @@ found:
                 tid = -(200 + (int64_t)m->char_class);
 
                 switch (m->char_class) {
-                case N00B_CC_ID_START:        desc = N00B_STRING_STATIC("<id_start>");       break;
-                case N00B_CC_ID_CONTINUE:     desc = N00B_STRING_STATIC("<id_continue>");    break;
-                case N00B_CC_ASCII_DIGIT:     desc = N00B_STRING_STATIC("<digit>");          break;
-                case N00B_CC_UNICODE_DIGIT:   desc = N00B_STRING_STATIC("<unicode_digit>");  break;
-                case N00B_CC_ASCII_UPPER:     desc = N00B_STRING_STATIC("<upper>");          break;
-                case N00B_CC_ASCII_LOWER:     desc = N00B_STRING_STATIC("<lower>");          break;
-                case N00B_CC_ASCII_ALPHA:     desc = N00B_STRING_STATIC("<alpha>");          break;
-                case N00B_CC_WHITESPACE:      desc = N00B_STRING_STATIC("<whitespace>");     break;
-                case N00B_CC_HEX_DIGIT:       desc = N00B_STRING_STATIC("<hex_digit>");      break;
-                case N00B_CC_NONZERO_DIGIT:   desc = N00B_STRING_STATIC("<nonzero_digit>");  break;
-                case N00B_CC_PRINTABLE:       desc = N00B_STRING_STATIC("<printable>");      break;
-                case N00B_CC_NON_WS_PRINTABLE:   desc = N00B_STRING_STATIC("<non_ws_printable>"); break;
-                case N00B_CC_NON_NL_WS:       desc = N00B_STRING_STATIC("<non_nl_ws>");      break;
-                case N00B_CC_NON_NL_PRINTABLE:   desc = N00B_STRING_STATIC("<non_nl_printable>"); break;
-                case N00B_CC_JSON_STRING_CHAR:   desc = N00B_STRING_STATIC("<json_string_char>"); break;
-                case N00B_CC_REGEX_BODY_CHAR:    desc = N00B_STRING_STATIC("<regex_body_char>");  break;
+                case N00B_CC_ID_START:        desc = r"<id_start>";       break;
+                case N00B_CC_ID_CONTINUE:     desc = r"<id_continue>";    break;
+                case N00B_CC_ASCII_DIGIT:     desc = r"<digit>";          break;
+                case N00B_CC_UNICODE_DIGIT:   desc = r"<unicode_digit>";  break;
+                case N00B_CC_ASCII_UPPER:     desc = r"<upper>";          break;
+                case N00B_CC_ASCII_LOWER:     desc = r"<lower>";          break;
+                case N00B_CC_ASCII_ALPHA:     desc = r"<alpha>";          break;
+                case N00B_CC_WHITESPACE:      desc = r"<whitespace>";     break;
+                case N00B_CC_HEX_DIGIT:       desc = r"<hex_digit>";      break;
+                case N00B_CC_NONZERO_DIGIT:   desc = r"<nonzero_digit>";  break;
+                case N00B_CC_PRINTABLE:       desc = r"<printable>";      break;
+                case N00B_CC_NON_WS_PRINTABLE:   desc = r"<non_ws_printable>"; break;
+                case N00B_CC_NON_NL_WS:       desc = r"<non_nl_ws>";      break;
+                case N00B_CC_NON_NL_PRINTABLE:   desc = r"<non_nl_printable>"; break;
+                case N00B_CC_JSON_STRING_CHAR:   desc = r"<json_string_char>"; break;
+                case N00B_CC_REGEX_BODY_CHAR:    desc = r"<regex_body_char>";  break;
                 }
             }
 
@@ -1806,7 +1806,7 @@ found:
 
         case N00B_EO_SCAN_SET:
             tid  = -300;
-            desc = N00B_STRING_STATIC("<set>");
+            desc = r"<set>";
             break;
 
         default:
@@ -1836,25 +1836,25 @@ found:
 
     if (count > 0) {
         out->expected_ids   = n00b_alloc_array(int64_t, count);
-        out->expected_desc  = n00b_alloc_array(n00b_string_t, count);
+        out->expected_desc  = n00b_alloc_array(n00b_string_t *, count);
         out->expected_count = count;
         memcpy(out->expected_ids, id_buf, count * sizeof(int64_t));
-        memcpy(out->expected_desc, desc_buf, count * sizeof(n00b_string_t));
+        memcpy(out->expected_desc, desc_buf, count * sizeof(n00b_string_t *));
     }
 
     n00b_free(id_buf);
     n00b_free(desc_buf);
 
     // Collect active NT context names from items at the failure state.
-    size_t         fail_nitems = n00b_list_len(fail_state->items);
-    n00b_string_t *ctx_buf     = n00b_alloc_array(n00b_string_t, fail_nitems);
-    int32_t        ctx_count   = 0;
+    size_t          fail_nitems = n00b_list_len(fail_state->items);
+    n00b_string_t **ctx_buf     = n00b_alloc_array(n00b_string_t *, fail_nitems);
+    int32_t         ctx_count   = 0;
 
     for (size_t i = 0; i < fail_nitems; i++) {
         n00b_earley_item_t *ei  = fail_state->items.data[i];
         n00b_nonterm_t     *nt  = n00b_get_nonterm(g, ei->ruleset_id);
 
-        if (!nt || !nt->name.data) {
+        if (!nt || !nt->name || !nt->name->data) {
             continue;
         }
 
@@ -1867,7 +1867,7 @@ found:
         bool dup = false;
 
         for (int32_t j = 0; j < ctx_count; j++) {
-            if (ctx_buf[j].data == nt->name.data) {
+            if (ctx_buf[j] == nt->name) {
                 dup = true;
                 break;
             }
@@ -1879,9 +1879,9 @@ found:
     }
 
     if (ctx_count > 0) {
-        out->active_ctx       = n00b_alloc_array(n00b_string_t, ctx_count);
+        out->active_ctx       = n00b_alloc_array(n00b_string_t *, ctx_count);
         out->active_ctx_count = ctx_count;
-        memcpy(out->active_ctx, ctx_buf, ctx_count * sizeof(n00b_string_t));
+        memcpy(out->active_ctx, ctx_buf, ctx_count * sizeof(n00b_string_t *));
     }
 
     n00b_free(ctx_buf);

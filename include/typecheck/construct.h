@@ -34,10 +34,10 @@
  * given name (e.g., "T" for a var named "T").
  *
  * @param ctx   Type-checking context.
- * @param name  User-visible name (e.g., `*r"T"`).
+ * @param name  User-visible name (e.g., `r"T"`).
  * @return      Allocated type node with Var kind.
  */
-extern n00b_tc_type_t *n00b_tc_var(n00b_tc_ctx_t *ctx, n00b_string_t name);
+extern n00b_tc_type_t *n00b_tc_var(n00b_tc_ctx_t *ctx, n00b_string_t *name);
 
 /**
  * @brief Create an anonymous type variable.
@@ -53,26 +53,26 @@ extern n00b_tc_type_t *n00b_tc_fresh_var(n00b_tc_ctx_t *ctx);
  * @brief Create a primitive type.
  *
  * @param ctx   Type-checking context.
- * @param name  Interned name (e.g., `*r"int"`, `*r"bool"`).
+ * @param name  Interned name (e.g., `r"int"`, `r"bool"`).
  * @return      Allocated type node with Prim kind.
  */
-extern n00b_tc_type_t *n00b_tc_prim(n00b_tc_ctx_t *ctx, n00b_string_t name);
+extern n00b_tc_type_t *n00b_tc_prim(n00b_tc_ctx_t *ctx, n00b_string_t *name);
 
 /**
  * @brief Create a parameterized type.
  *
  * @param ctx   Type-checking context.
- * @param name  Constructor name (e.g., `*r"list"`, `*r"dict"`).
+ * @param name  Constructor name (e.g., `r"list"`, `r"dict"`).
  * @param ...   Type parameters as `n00b_tc_type_t *` positional varargs.
  * @return      Allocated type node with Param kind.
  *
  * @par Example
  * @code
- * auto list_int = n00b_tc_param(ctx, *r"list", t_int);
- * auto dict_kv  = n00b_tc_param(ctx, *r"dict", t_string, t_int);
+ * auto list_int = n00b_tc_param(ctx, r"list", t_int);
+ * auto dict_kv  = n00b_tc_param(ctx, r"dict", t_string, t_int);
  * @endcode
  */
-extern n00b_tc_type_t *n00b_tc_param(n00b_tc_ctx_t *ctx, n00b_string_t name, n00b_tc_type_t *+);
+extern n00b_tc_type_t *n00b_tc_param(n00b_tc_ctx_t *ctx, n00b_string_t *name, n00b_tc_type_t *+);
 
 /**
  * @brief Create a function type.
@@ -135,12 +135,12 @@ extern n00b_tc_type_t *n00b_tc_sum(n00b_tc_ctx_t *ctx, n00b_tc_type_t *+);
  *
  * @par Example
  * @code
- * auto point = n00b_tc_record(ctx, *r"Point",
- *     n00b_tc_field(*r"x", t_int),
- *     n00b_tc_field(*r"y", t_int));
+ * auto point = n00b_tc_record(ctx, r"Point",
+ *     n00b_tc_field(r"x", t_int),
+ *     n00b_tc_field(r"y", t_int));
  * @endcode
  */
-extern n00b_tc_type_t *n00b_tc_record(n00b_tc_ctx_t *ctx, n00b_string_t name, n00b_tc_field_t +)
+extern n00b_tc_type_t *n00b_tc_record(n00b_tc_ctx_t *ctx, n00b_string_t *name, n00b_tc_field_t +)
     _kargs {
         bool ordered = true;
         bool open    = false;
@@ -175,5 +175,5 @@ extern n00b_tc_type_t *n00b_tc_tuple(n00b_tc_ctx_t *ctx, n00b_tc_type_t *+)
  *
  * @return Heap-allocated field descriptor.
  */
-extern n00b_tc_field_t n00b_tc_field(n00b_string_t name, n00b_tc_type_t *type)
+extern n00b_tc_field_t n00b_tc_field(n00b_string_t *name, n00b_tc_type_t *type)
     _kargs { bool has_default = false; };

@@ -29,7 +29,7 @@ make_token(int64_t tid, const char *text, int32_t index)
     t->column = (uint32_t)(index + 1);
 
     if (text) {
-        t->value = n00b_option_set(n00b_string_t, n00b_string_from_cstr(text));
+        t->value = n00b_option_set(n00b_string_t *, n00b_string_from_cstr(text));
     }
 
     return t;
@@ -41,10 +41,10 @@ build_simple_grammar(n00b_grammar_t **out_g,
                      int64_t *out_a, int64_t *out_b)
 {
     n00b_grammar_t *g = n00b_grammar_new();
-    n00b_nonterm_t *s = n00b_nonterm(g, *r"S");
+    n00b_nonterm_t *s = n00b_nonterm(g, r"S");
 
-    *out_a = n00b_register_terminal(g, *r"A");
-    *out_b = n00b_register_terminal(g, *r"B");
+    *out_a = n00b_register_terminal(g, r"A");
+    *out_b = n00b_register_terminal(g, r"B");
 
     n00b_add_rule(g, s, N00B_TERMINAL(*out_a), N00B_TERMINAL(*out_b));
     n00b_grammar_set_error_recovery(g, false);
@@ -196,18 +196,18 @@ test_parse_failure_diagnostics(void)
     assert(found_a);
 
     // Error string should contain meaningful content.
-    n00b_string_t err = n00b_parse_result_error_string(r);
-    assert(err.data != NULL);
-    assert(err.u8_bytes > 0);
+    n00b_string_t *err = n00b_parse_result_error_string(r);
+    assert(err->data != NULL);
+    assert(err->u8_bytes > 0);
 
     // Should contain "parse error" and "expected".
     assert(n00b_unicode_str_contains(err, n00b_string_from_cstr("parse error")));
     assert(n00b_unicode_str_contains(err, n00b_string_from_cstr("expected")));
 
     // Expected string should mention terminal A.
-    n00b_string_t exp_str = n00b_parse_result_expected_string(r);
-    assert(exp_str.data != NULL);
-    assert(exp_str.u8_bytes > 0);
+    n00b_string_t *exp_str = n00b_parse_result_expected_string(r);
+    assert(exp_str->data != NULL);
+    assert(exp_str->u8_bytes > 0);
 
     n00b_parse_result_free(r);
     n00b_token_stream_free(ts);
@@ -345,20 +345,20 @@ test_bnf_parse_mode(void)
 {
     // Load a simple BNF grammar using the unified parse dispatch
     // with both EARLEY_ONLY and PWZ_ONLY modes.
-    n00b_string_t bnf = n00b_string_from_cstr(
+    n00b_string_t *bnf = n00b_string_from_cstr(
         "<expr> ::= %IDENTIFIER\n"
     );
 
     // Earley-only mode.
     n00b_grammar_t *g1 = n00b_grammar_new();
-    bool ok1 = n00b_bnf_load(bnf, *r"expr", g1,
+    bool ok1 = n00b_bnf_load(bnf, r"expr", g1,
                               .parse_mode = N00B_PARSE_MODE_EARLEY_ONLY);
     assert(ok1);
     n00b_grammar_free(g1);
 
     // PWZ-only mode.
     n00b_grammar_t *g2 = n00b_grammar_new();
-    bool ok2 = n00b_bnf_load(bnf, *r"expr", g2,
+    bool ok2 = n00b_bnf_load(bnf, r"expr", g2,
                               .parse_mode = N00B_PARSE_MODE_PWZ_ONLY);
     assert(ok2);
     n00b_grammar_free(g2);
@@ -366,7 +366,7 @@ test_bnf_parse_mode(void)
     // DEFAULT mode (parse_mode = 0, which used to be ignored due to
     // truthiness bug — now works via N00B_PARSE_MODE_UNSET sentinel).
     n00b_grammar_t *g3 = n00b_grammar_new();
-    bool ok3 = n00b_bnf_load(bnf, *r"expr", g3,
+    bool ok3 = n00b_bnf_load(bnf, r"expr", g3,
                               .parse_mode = N00B_PARSE_MODE_DEFAULT);
     assert(ok3);
     n00b_grammar_free(g3);

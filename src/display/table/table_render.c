@@ -136,8 +136,8 @@ compute_dimensions(n00b_table_t *table)
     n00b_isize_t int_h_total = d.has_int_h ? (n_rows > 0 ? n_rows - 1 : 0) : 0;
 
     // Title and caption.
-    d.title_h   = (table->title.u8_bytes > 0) ? 1 : 0;
-    d.caption_h = (table->caption.u8_bytes > 0) ? 1 : 0;
+    d.title_h   = (table->title && table->title->u8_bytes > 0) ? 1 : 0;
+    d.caption_h = (table->caption && table->caption->u8_bytes > 0) ? 1 : 0;
 
     // Total dimensions.
     d.total_w = (n00b_isize_t)(outer_left + col_sum + int_v_total + outer_right);
@@ -369,9 +369,9 @@ render_cell_content(n00b_table_t *table, n00b_plane_t *plane,
 
             // Wrap (or truncate) content.
             int64_t                  num_lines = 0;
-            n00b_array_t(n00b_string_t) lines = {};
+            n00b_array_t(n00b_string_t *) lines = {};
 
-            if (cell->content.u8_bytes > 0) {
+            if (cell->content && cell->content->u8_bytes > 0) {
                 if (cell_should_wrap(table, cell)) {
                     lines     = n00b_unicode_str_wrap(cell->content,
                                                        .width = (int32_t)cw);
@@ -379,15 +379,15 @@ render_cell_content(n00b_table_t *table, n00b_plane_t *plane,
                 }
                 else {
                     // No wrap: split on hard newlines, truncate each.
-                    n00b_array_t(n00b_string_t) hard_lines =
+                    n00b_array_t(n00b_string_t *) hard_lines =
                         n00b_unicode_str_split_lines(cell->content);
                     n00b_isize_t n_hard = n00b_array_len(hard_lines);
 
-                    lines = n00b_array_new(n00b_string_t, n_hard);
+                    lines = n00b_array_new(n00b_string_t *, n_hard);
 
                     for (n00b_isize_t li = 0; li < n_hard; li++) {
-                        n00b_string_t raw = n00b_array_get(hard_lines, li);
-                        n00b_string_t trunc =
+                        n00b_string_t *raw = n00b_array_get(hard_lines, li);
+                        n00b_string_t *trunc =
                             n00b_unicode_str_truncate(raw,
                                                        (int32_t)cw);
                         n00b_array_set(lines, li, trunc);
@@ -421,10 +421,10 @@ render_cell_content(n00b_table_t *table, n00b_plane_t *plane,
 
             // Write each line.
             for (int64_t li = 0; li < num_lines && li < ch; li++) {
-                n00b_string_t line = n00b_array_get(lines, (size_t)li);
+                n00b_string_t *line = n00b_array_get(lines, (size_t)li);
 
                 // Horizontal alignment.
-                n00b_string_t padded;
+                n00b_string_t *padded;
 
                 if (align & N00B_ALIGN_CENTER) {
                     padded = n00b_unicode_str_center(line, (int32_t)cw);
@@ -476,7 +476,7 @@ static void
 render_title_caption(n00b_table_t *table, n00b_plane_t *plane,
                        render_dims_t *d)
 {
-    if (table->title.u8_bytes > 0 && d->title_h > 0) {
+    if (table->title && table->title->u8_bytes > 0 && d->title_h > 0) {
         // Title goes in the first content row.
         n00b_isize_t title_y = d->content_y;
         n00b_isize_t title_x = d->content_x;
@@ -490,13 +490,13 @@ render_title_caption(n00b_table_t *table, n00b_plane_t *plane,
             title_w -= table->table_props->pad_right;
         }
 
-        n00b_string_t centered =
+        n00b_string_t *centered =
             n00b_unicode_str_center(table->title, (int32_t)title_w);
 
         n00b_plane_put_str_at(plane, title_y, title_x, centered);
     }
 
-    if (table->caption.u8_bytes > 0 && d->caption_h > 0) {
+    if (table->caption && table->caption->u8_bytes > 0 && d->caption_h > 0) {
         // Caption goes in the last content row.
         n00b_isize_t cap_y = d->total_h - 1;
 
@@ -517,7 +517,7 @@ render_title_caption(n00b_table_t *table, n00b_plane_t *plane,
             cap_w -= table->table_props->pad_right;
         }
 
-        n00b_string_t centered =
+        n00b_string_t *centered =
             n00b_unicode_str_center(table->caption, (int32_t)cap_w);
 
         n00b_plane_put_str_at(plane, cap_y, cap_x, centered);
@@ -564,7 +564,7 @@ n00b_table_render(n00b_table_t *table) _kargs
         table->plane = n00b_new_kargs(n00b_plane_t, plane,
                                        .cols      = d.total_w,
                                        .rows      = d.total_h,
-                                       .name      = n00b_option_set(n00b_string_t, *r"table"),
+                                       .name      = n00b_option_set(n00b_string_t *, r"table"),
                                        .allocator = table->allocator);
     }
 

@@ -5,6 +5,8 @@
 
 #include "internal/slay/annot_phases.h"
 #include "slay/infer_expr.h"
+#include "typecheck/unify.h"
+#include "adt/variant.h"
 
 void
 annot_phase_types_post(n00b_annot_walk_ctx_t *ctx, annot_node_ctx_t *nc)
@@ -122,12 +124,12 @@ annot_phase_types_post(n00b_annot_walk_ctx_t *ctx, annot_node_ctx_t *nc)
             n00b_parse_tree_t *name_node
                 = n00b_tree_resolve_child_ref(
                     ctx->grammar, nc->node, a->name_ref);
-            n00b_string_t sym_name
+            n00b_string_t *sym_name
                 = name_node
                     ? n00b_tree_extract_first_identifier(name_node)
                     : n00b_string_empty();
 
-            if (sym_name.u8_bytes == 0) {
+            if (!sym_name || sym_name->u8_bytes == 0) {
                 break;
             }
 
@@ -161,5 +163,123 @@ annot_phase_types_post(n00b_annot_walk_ctx_t *ctx, annot_node_ctx_t *nc)
 
             break;
         }
+    }
+
+    // ---- @call argument-to-parameter type unification ----
+    //
+    // When @call($callee, $args) is present and the callee resolves to
+    // a function type, unify each positional argument's inferred type
+    // with the corresponding parameter type.  Return-type propagation
+    // is already handled by @infer("return_of($0)").
+
+    for (size_t ai = 0; ai < nc->annot_count; ai++) {
+        n00b_annotation_t *a = nc->annots[ai];
+
+        if (a->kind != N00B_ANNOT_CALL) {
+            continue;
+        }
+
+        n00b_parse_tree_t *callee_node
+            = n00b_tree_resolve_child_ref(
+                ctx->grammar, nc->node, a->name_ref);
+
+        if (!callee_node) {
+            break;
+        }
+
+        bool           found = false;
+        uintptr_t      ck    = (uintptr_t)callee_node;
+        n00b_tc_type_t *callee_type
+            = n00b_dict_get(ctx->node_types, ck, &found);
+
+        if (!found || !callee_type) {
+            break;
+        }
+
+        n00b_tc_type_t *resolved = n00b_tc_find(callee_type);
+
+        if (!n00b_variant_is_type(resolved->kind, n00b_tc_fn_t)) {
+            break;
+        }
+
+        n00b_tc_fn_t fn = n00b_variant_get(resolved->kind, n00b_tc_fn_t);
+
+        n00b_parse_tree_t *args_node
+            = n00b_tree_resolve_child_ref(
+                ctx->grammar, nc->node, a->type_ref);
+
+        if (!args_node || !fn.positional) {
+            break;
+        }
+
+        size_t n_params = n00b_list_len(*fn.positional);
+        size_t arg_ix   = 0;
+        size_t n_kids   = n00b_tree_num_children(args_node);
+
+        for (size_t i = 0; i < n_kids; i++) {
+            n00b_parse_tree_t *child = n00b_tree_child(args_node, i);
+
+            if (!child || n00b_tree_is_leaf(child)) {
+                continue;
+            }
+
+            // Skip group_top wrappers — descend into their NT children.
+            n00b_nt_node_t *cpn = &n00b_tree_node_value(child);
+
+            if (cpn->group_top) {
+                size_t gn = n00b_tree_num_children(child);
+
+                for (size_t gi = 0; gi < gn; gi++) {
+                    n00b_parse_tree_t *gc = n00b_tree_child(child, gi);
+
+                    if (!gc || n00b_tree_is_leaf(gc)) {
+                        continue;
+                    }
+
+                    bool           gfound = false;
+                    uintptr_t      gk     = (uintptr_t)gc;
+                    n00b_tc_type_t *gtype
+                        = n00b_dict_get(ctx->node_types, gk, &gfound);
+
+                    if (gfound && gtype && arg_ix < n_params) {
+                        n00b_tc_type_t *param_type
+                            = n00b_list_get(*fn.positional, arg_ix);
+
+                        if (param_type) {
+                            n00b_tc_unify(ctx->tc_ctx, param_type, gtype);
+                        }
+                    }
+                    else if (gfound && gtype && fn.vargs_type) {
+                        n00b_tc_unify(ctx->tc_ctx, fn.vargs_type, gtype);
+                    }
+
+                    arg_ix++;
+                }
+
+                continue;
+            }
+
+            // Regular NT child — an argument expression.
+            bool           afound = false;
+            uintptr_t      ak     = (uintptr_t)child;
+            n00b_tc_type_t *arg_type
+                = n00b_dict_get(ctx->node_types, ak, &afound);
+
+            if (afound && arg_type && arg_ix < n_params) {
+                n00b_tc_type_t *param_type
+                    = n00b_list_get(*fn.positional, arg_ix);
+
+                if (param_type) {
+                    n00b_tc_unify(ctx->tc_ctx, param_type, arg_type);
+                }
+            }
+            else if (afound && arg_type && fn.vargs_type) {
+                n00b_tc_unify(ctx->tc_ctx, fn.vargs_type, arg_type);
+            }
+
+            arg_ix++;
+        }
+
+        break;
     }
 }

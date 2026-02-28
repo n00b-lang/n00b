@@ -21,31 +21,7 @@
 // object.  Pointer-based functions are stored directly.
 // ============================================================================
 
-// --- n00b_string_t (40-byte value type, passed by pointer in vtable) --------
-
-static n00b_uint128_t
-vt_string_hash(n00b_string_t *self)
-{
-    return n00b_string_hash(self);
-}
-
-static n00b_string_t
-vt_string_copy(n00b_string_t *self)
-{
-    return n00b_unicode_str_copy(*self);
-}
-
-static n00b_string_t
-vt_string_add(n00b_string_t *a, n00b_string_t *b)
-{
-    return n00b_unicode_str_cat(*a, *b);
-}
-
-static n00b_string_t
-vt_string_to_literal(n00b_string_t *self)
-{
-    return n00b_unicode_str_to_literal(*self);
-}
+// --- n00b_string_t (heap type, passed by pointer) ----------------------------
 
 static int64_t
 vt_string_len(n00b_string_t *self)
@@ -53,10 +29,10 @@ vt_string_len(n00b_string_t *self)
     return (int64_t)self->codepoints;
 }
 
-static n00b_string_t
+static n00b_string_t *
 vt_string_to_string(n00b_string_t *self)
 {
-    return *self;
+    return self;
 }
 
 // --- Primitives (word-sized value types) ------------------------------------
@@ -67,43 +43,43 @@ vt_word_hash(void *self)
     return n00b_hash_word(*(void **)self);
 }
 
-static n00b_string_t
+static n00b_string_t *
 vt_uint8_to_string(uint8_t *self)
 {
     return n00b_fmt_uint((uint64_t)*self);
 }
 
-static n00b_string_t
+static n00b_string_t *
 vt_int32_to_string(int32_t *self)
 {
     return n00b_unicode_str_from_int((int64_t)*self);
 }
 
-static n00b_string_t
+static n00b_string_t *
 vt_uint32_to_string(uint32_t *self)
 {
     return n00b_fmt_uint((uint64_t)*self);
 }
 
-static n00b_string_t
+static n00b_string_t *
 vt_int64_to_string(int64_t *self)
 {
     return n00b_unicode_str_from_int(*self);
 }
 
-static n00b_string_t
+static n00b_string_t *
 vt_uint64_to_string(uint64_t *self)
 {
     return n00b_fmt_uint(*self);
 }
 
-static n00b_string_t
+static n00b_string_t *
 vt_double_to_string(double *self)
 {
     return n00b_fmt_float(*self);
 }
 
-static n00b_string_t
+static n00b_string_t *
 vt_bool_to_string(bool *self)
 {
     return n00b_fmt_bool(*self, .word = true);
@@ -146,12 +122,14 @@ n00b_register_builtin_types(void)
         N00B_CORE_METHOD(N00B_BI_TO_STRING, vt_bool_to_string),
     );
 
-    // n00b_string_t (value type — uses wrappers).
+    // n00b_string_t — heap type with kargs constructor.
     N00B_TYPE_REGISTER(n00b_string_t,
-        N00B_CORE_METHOD(N00B_BI_HASH, vt_string_hash),
-        N00B_CORE_METHOD(N00B_BI_COPY, vt_string_copy),
-        N00B_CORE_METHOD(N00B_BI_ADD, vt_string_add),
-        N00B_CORE_METHOD(N00B_BI_TO_LITERAL, vt_string_to_literal),
+        N00B_CORE_METHOD(N00B_BI_CONSTRUCTOR, n00b_string_init),
+        N00B_CTOR_KARGS,
+        N00B_CORE_METHOD(N00B_BI_HASH, n00b_string_hash),
+        N00B_CORE_METHOD(N00B_BI_COPY, n00b_unicode_str_copy),
+        N00B_CORE_METHOD(N00B_BI_ADD, n00b_unicode_str_cat),
+        N00B_CORE_METHOD(N00B_BI_TO_LITERAL, n00b_unicode_str_to_literal),
         N00B_CORE_METHOD(N00B_BI_LEN, vt_string_len),
         N00B_CORE_METHOD(N00B_BI_TO_STRING, vt_string_to_string),
     );

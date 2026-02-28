@@ -426,10 +426,10 @@ epoll_io_wait(void *vctx, n00b_conduit_io_event_t *events, int max_events,
 // name
 // ============================================================================
 
-static n00b_string_t
+static n00b_string_t *
 epoll_io_name(void)
 {
-    return *r"epoll";
+    return r"epoll";
 }
 
 // ============================================================================

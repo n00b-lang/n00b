@@ -291,8 +291,7 @@ test_vtable_hash_uint64(void)
 static void
 test_vtable_hash_string(void)
 {
-    n00b_string_t *s = n00b_alloc(n00b_string_t);
-    *s = n00b_unicode_str_from_int(12345);
+    n00b_string_t *s = n00b_unicode_str_from_int(12345);
 
     n00b_vtable_entry fn = n00b_obj_core_method(s, N00B_BI_HASH);
     assert(fn != nullptr);
@@ -370,8 +369,9 @@ test_string_vtable_slots(void)
     assert(info->core_vtable[N00B_BI_TO_LITERAL] != nullptr);
     assert(info->core_vtable[N00B_BI_LEN] != nullptr);
 
-    // Slots we didn't fill should still be nullptr.
-    assert(info->core_vtable[N00B_BI_CONSTRUCTOR] == nullptr);
+    // String now has a constructor registered.
+    assert(info->core_vtable[N00B_BI_CONSTRUCTOR] != nullptr);
+    assert(info->ctor_takes_kargs);
     assert(info->core_vtable[N00B_BI_FINALIZER] == nullptr);
 
     printf("  [PASS] string vtable slots\n");

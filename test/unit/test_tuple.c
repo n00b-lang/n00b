@@ -7,16 +7,6 @@
 #include "core/runtime.h"
 #include "adt/tuple.h"
 
-// Declare tuple types at file scope (once each).
-n00b_tuple_decl(int, double, char *);
-n00b_tuple_decl(int, int);
-n00b_tuple_decl(int);
-n00b_tuple_decl(char *, char *);
-n00b_tuple_decl(char, int, double, char *);
-n00b_tuple_decl(int, double);
-n00b_tuple_decl(bool, bool);
-n00b_tuple_decl(int, int, int);
-
 // ============================================================================
 // 1. Basic construction and access
 // ============================================================================

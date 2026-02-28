@@ -16,9 +16,9 @@ TEST(test_store_new_free)
 TEST(test_new_var)
 {
     n00b_csp_store_t *s = n00b_csp_store_new();
-    n00b_csp_var_id_t x = n00b_csp_new_var(s, *r"X",
+    n00b_csp_var_id_t x = n00b_csp_new_var(s, r"X",
                                              n00b_csp_dom_range(1, 10));
-    n00b_csp_var_id_t y = n00b_csp_new_var(s, *r"Y",
+    n00b_csp_var_id_t y = n00b_csp_new_var(s, r"Y",
                                              n00b_csp_dom_range(1, 100));
 
     ASSERT(x != y);
@@ -37,12 +37,12 @@ TEST(test_new_var)
 TEST(test_find_var)
 {
     n00b_csp_store_t *s = n00b_csp_store_new();
-    n00b_csp_new_var(s, *r"X", n00b_csp_dom_range(1, 10));
-    n00b_csp_new_var(s, *r"Y", n00b_csp_dom_range(1, 10));
+    n00b_csp_new_var(s, r"X", n00b_csp_dom_range(1, 10));
+    n00b_csp_new_var(s, r"Y", n00b_csp_dom_range(1, 10));
 
-    ASSERT(n00b_option_is_set(n00b_csp_find_var(s, *r"X")));
-    ASSERT(n00b_option_is_set(n00b_csp_find_var(s, *r"Y")));
-    ASSERT(!n00b_option_is_set(n00b_csp_find_var(s, *r"Z")));
+    ASSERT(n00b_option_is_set(n00b_csp_find_var(s, r"X")));
+    ASSERT(n00b_option_is_set(n00b_csp_find_var(s, r"Y")));
+    ASSERT(!n00b_option_is_set(n00b_csp_find_var(s, r"Z")));
 
     n00b_csp_store_free(s);
 }
@@ -50,7 +50,7 @@ TEST(test_find_var)
 TEST(test_singleton_var)
 {
     n00b_csp_store_t *s = n00b_csp_store_new();
-    n00b_csp_var_id_t x = n00b_csp_new_var(s, *r"X",
+    n00b_csp_var_id_t x = n00b_csp_new_var(s, r"X",
                                              n00b_csp_dom_singleton(42));
 
     ASSERT(n00b_result_get(n00b_csp_var_is_ground(s, x)));
@@ -66,7 +66,7 @@ TEST(test_singleton_var)
 TEST(test_eq_const)
 {
     n00b_csp_store_t *s = n00b_csp_store_new();
-    n00b_csp_var_id_t x = n00b_csp_new_var(s, *r"X",
+    n00b_csp_var_id_t x = n00b_csp_new_var(s, r"X",
                                              n00b_csp_dom_range(1, 100));
 
     bool ok = n00b_csp_post_eq_const(s, x, 50);
@@ -80,7 +80,7 @@ TEST(test_eq_const)
 TEST(test_eq_const_infeasible)
 {
     n00b_csp_store_t *s = n00b_csp_store_new();
-    n00b_csp_var_id_t x = n00b_csp_new_var(s, *r"X",
+    n00b_csp_var_id_t x = n00b_csp_new_var(s, r"X",
                                              n00b_csp_dom_range(1, 10));
 
     bool ok = n00b_csp_post_eq_const(s, x, 50);
@@ -92,9 +92,9 @@ TEST(test_eq_const_infeasible)
 TEST(test_eq_vars)
 {
     n00b_csp_store_t *s = n00b_csp_store_new();
-    n00b_csp_var_id_t x = n00b_csp_new_var(s, *r"X",
+    n00b_csp_var_id_t x = n00b_csp_new_var(s, r"X",
                                              n00b_csp_dom_range(1, 10));
-    n00b_csp_var_id_t y = n00b_csp_new_var(s, *r"Y",
+    n00b_csp_var_id_t y = n00b_csp_new_var(s, r"Y",
                                              n00b_csp_dom_range(5, 20));
 
     bool ok = n00b_csp_post_eq(s, x, y);
@@ -114,9 +114,9 @@ TEST(test_eq_vars)
 TEST(test_lt)
 {
     n00b_csp_store_t *s = n00b_csp_store_new();
-    n00b_csp_var_id_t x = n00b_csp_new_var(s, *r"X",
+    n00b_csp_var_id_t x = n00b_csp_new_var(s, r"X",
                                              n00b_csp_dom_range(0, 100));
-    n00b_csp_var_id_t y = n00b_csp_new_var(s, *r"Y",
+    n00b_csp_var_id_t y = n00b_csp_new_var(s, r"Y",
                                              n00b_csp_dom_range(0, 100));
 
     n00b_csp_post_eq_const(s, y, 50);
@@ -133,9 +133,9 @@ TEST(test_lt)
 TEST(test_le)
 {
     n00b_csp_store_t *s = n00b_csp_store_new();
-    n00b_csp_var_id_t x = n00b_csp_new_var(s, *r"X",
+    n00b_csp_var_id_t x = n00b_csp_new_var(s, r"X",
                                              n00b_csp_dom_range(0, 100));
-    n00b_csp_var_id_t y = n00b_csp_new_var(s, *r"Y",
+    n00b_csp_var_id_t y = n00b_csp_new_var(s, r"Y",
                                              n00b_csp_dom_range(0, 100));
 
     n00b_csp_post_eq_const(s, y, 50);
@@ -149,9 +149,9 @@ TEST(test_le)
 TEST(test_ne)
 {
     n00b_csp_store_t *s = n00b_csp_store_new();
-    n00b_csp_var_id_t x = n00b_csp_new_var(s, *r"X",
+    n00b_csp_var_id_t x = n00b_csp_new_var(s, r"X",
                                              n00b_csp_dom_range(1, 3));
-    n00b_csp_var_id_t y = n00b_csp_new_var(s, *r"Y",
+    n00b_csp_var_id_t y = n00b_csp_new_var(s, r"Y",
                                              n00b_csp_dom_singleton(2));
 
     bool ok = n00b_csp_post_ne(s, x, y);
@@ -166,7 +166,7 @@ TEST(test_ne)
 TEST(test_in)
 {
     n00b_csp_store_t *s = n00b_csp_store_new();
-    n00b_csp_var_id_t x = n00b_csp_new_var(s, *r"X",
+    n00b_csp_var_id_t x = n00b_csp_new_var(s, r"X",
                                              n00b_csp_dom_range(1, 100));
 
     int64_t vals[] = {10, 20, 30};
@@ -187,9 +187,9 @@ TEST(test_combined_propagation)
     // X < Y, Y = 50
     // Expected: X in [0, 49], Y = 50
     n00b_csp_store_t *s = n00b_csp_store_new();
-    n00b_csp_var_id_t x = n00b_csp_new_var(s, *r"X",
+    n00b_csp_var_id_t x = n00b_csp_new_var(s, r"X",
                                              n00b_csp_dom_range(0, 100));
-    n00b_csp_var_id_t y = n00b_csp_new_var(s, *r"Y",
+    n00b_csp_var_id_t y = n00b_csp_new_var(s, r"Y",
                                              n00b_csp_dom_range(0, 100));
 
     n00b_csp_post_lt(s, x, y);
@@ -206,11 +206,11 @@ TEST(test_chain_propagation)
 {
     // X < Y < Z, Z = 5
     n00b_csp_store_t *s = n00b_csp_store_new();
-    n00b_csp_var_id_t x = n00b_csp_new_var(s, *r"X",
+    n00b_csp_var_id_t x = n00b_csp_new_var(s, r"X",
                                              n00b_csp_dom_range(0, 100));
-    n00b_csp_var_id_t y = n00b_csp_new_var(s, *r"Y",
+    n00b_csp_var_id_t y = n00b_csp_new_var(s, r"Y",
                                              n00b_csp_dom_range(0, 100));
-    n00b_csp_var_id_t z = n00b_csp_new_var(s, *r"Z",
+    n00b_csp_var_id_t z = n00b_csp_new_var(s, r"Z",
                                              n00b_csp_dom_range(0, 100));
 
     n00b_csp_post_lt(s, x, y);
@@ -232,7 +232,7 @@ TEST(test_chain_propagation)
 TEST(test_backtracking)
 {
     n00b_csp_store_t *s = n00b_csp_store_new();
-    n00b_csp_var_id_t x = n00b_csp_new_var(s, *r"X",
+    n00b_csp_var_id_t x = n00b_csp_new_var(s, r"X",
                                              n00b_csp_dom_range(1, 10));
 
     n00b_csp_push_state(s);
@@ -254,12 +254,12 @@ TEST(test_backtracking)
 TEST(test_nested_backtracking)
 {
     n00b_csp_store_t *s = n00b_csp_store_new();
-    n00b_csp_var_id_t x = n00b_csp_new_var(s, *r"X",
+    n00b_csp_var_id_t x = n00b_csp_new_var(s, r"X",
                                              n00b_csp_dom_range(1, 100));
 
     n00b_csp_push_state(s);
     n00b_csp_post_le(s, x,
-                      n00b_csp_new_var(s, *r"_t1",
+                      n00b_csp_new_var(s, r"_t1",
                                         n00b_csp_dom_singleton(50)));
     ASSERT_EQ(n00b_csp_dom_max(n00b_result_get(n00b_csp_var_domain(s, x))), 50);
 
@@ -284,9 +284,9 @@ TEST(test_nested_backtracking)
 TEST(test_failure_detection)
 {
     n00b_csp_store_t *s = n00b_csp_store_new();
-    n00b_csp_var_id_t x = n00b_csp_new_var(s, *r"X",
+    n00b_csp_var_id_t x = n00b_csp_new_var(s, r"X",
                                              n00b_csp_dom_range(1, 5));
-    n00b_csp_var_id_t y = n00b_csp_new_var(s, *r"Y",
+    n00b_csp_var_id_t y = n00b_csp_new_var(s, r"Y",
                                              n00b_csp_dom_range(10, 20));
 
     // X = Y should fail (disjoint domains).
@@ -306,9 +306,9 @@ TEST(test_entailment_after_backtrack)
     // Post EQ, let it become entailed (both ground), pop, verify
     // the constraint re-propagates correctly on the restored domains.
     n00b_csp_store_t *s = n00b_csp_store_new();
-    n00b_csp_var_id_t x = n00b_csp_new_var(s, *r"X",
+    n00b_csp_var_id_t x = n00b_csp_new_var(s, r"X",
                                              n00b_csp_dom_range(1, 10));
-    n00b_csp_var_id_t y = n00b_csp_new_var(s, *r"Y",
+    n00b_csp_var_id_t y = n00b_csp_new_var(s, r"Y",
                                              n00b_csp_dom_range(1, 10));
 
     // Post X = Y.
@@ -347,7 +347,7 @@ TEST(test_constraint_backtracking)
     // Push, post constraint, pop — verify the constraint is removed
     // and doesn't affect further propagation.
     n00b_csp_store_t *s = n00b_csp_store_new();
-    n00b_csp_var_id_t x = n00b_csp_new_var(s, *r"X",
+    n00b_csp_var_id_t x = n00b_csp_new_var(s, r"X",
                                              n00b_csp_dom_range(1, 100));
 
     n00b_csp_push_state(s);
@@ -377,9 +377,9 @@ TEST(test_backtrack_with_ne_constraint)
     // More complex regression test: NE constraint posted in branch
     // should not persist after pop.
     n00b_csp_store_t *s = n00b_csp_store_new();
-    n00b_csp_var_id_t x = n00b_csp_new_var(s, *r"X",
+    n00b_csp_var_id_t x = n00b_csp_new_var(s, r"X",
                                              n00b_csp_dom_range(1, 3));
-    n00b_csp_var_id_t y = n00b_csp_new_var(s, *r"Y",
+    n00b_csp_var_id_t y = n00b_csp_new_var(s, r"Y",
                                              n00b_csp_dom_singleton(2));
 
     n00b_csp_push_state(s);
@@ -411,8 +411,8 @@ TEST(test_linear_basic)
     // X + Y = 10, X in [0,10], Y in [0,10]
     // Should narrow both to [0,10] (unchanged), but establish the constraint.
     n00b_csp_store_t *s = n00b_csp_store_new();
-    n00b_csp_var_id_t x = n00b_csp_new_var(s, *r"X", n00b_csp_dom_range(0, 10));
-    n00b_csp_var_id_t y = n00b_csp_new_var(s, *r"Y", n00b_csp_dom_range(0, 10));
+    n00b_csp_var_id_t x = n00b_csp_new_var(s, r"X", n00b_csp_dom_range(0, 10));
+    n00b_csp_var_id_t y = n00b_csp_new_var(s, r"Y", n00b_csp_dom_range(0, 10));
 
     n00b_csp_var_id_t vars[]  = {x, y};
     int64_t           coeffs[] = {1, 1};
@@ -438,8 +438,8 @@ TEST(test_linear_narrowing)
     //    but also X >= 0, so [0, 6]
     // Y: (12 - 2*6) / 3 .. (12 - 2*0) / 3 = 0/3..12/3 = 0..4
     n00b_csp_store_t *s = n00b_csp_store_new();
-    n00b_csp_var_id_t x = n00b_csp_new_var(s, *r"X", n00b_csp_dom_range(0, 10));
-    n00b_csp_var_id_t y = n00b_csp_new_var(s, *r"Y", n00b_csp_dom_range(0, 10));
+    n00b_csp_var_id_t x = n00b_csp_new_var(s, r"X", n00b_csp_dom_range(0, 10));
+    n00b_csp_var_id_t y = n00b_csp_new_var(s, r"Y", n00b_csp_dom_range(0, 10));
 
     n00b_csp_var_id_t vars[]  = {x, y};
     int64_t           coeffs[] = {2, 3};
@@ -460,8 +460,8 @@ TEST(test_linear_infeasible)
     // X + Y = 100, X in [0,10], Y in [0,10]
     // sum_hi = 20 < 100 → fail
     n00b_csp_store_t *s = n00b_csp_store_new();
-    n00b_csp_var_id_t x = n00b_csp_new_var(s, *r"X", n00b_csp_dom_range(0, 10));
-    n00b_csp_var_id_t y = n00b_csp_new_var(s, *r"Y", n00b_csp_dom_range(0, 10));
+    n00b_csp_var_id_t x = n00b_csp_new_var(s, r"X", n00b_csp_dom_range(0, 10));
+    n00b_csp_var_id_t y = n00b_csp_new_var(s, r"Y", n00b_csp_dom_range(0, 10));
 
     n00b_csp_var_id_t vars[]  = {x, y};
     int64_t           coeffs[] = {1, 1};
@@ -478,8 +478,8 @@ TEST(test_linear_negative_coeffs)
     // X: needs Y in [3,5] → X in [3,5]
     // Y: needs X in [3,5] → Y in [3,5]
     n00b_csp_store_t *s = n00b_csp_store_new();
-    n00b_csp_var_id_t x = n00b_csp_new_var(s, *r"X", n00b_csp_dom_range(1, 5));
-    n00b_csp_var_id_t y = n00b_csp_new_var(s, *r"Y", n00b_csp_dom_range(3, 8));
+    n00b_csp_var_id_t x = n00b_csp_new_var(s, r"X", n00b_csp_dom_range(1, 5));
+    n00b_csp_var_id_t y = n00b_csp_new_var(s, r"Y", n00b_csp_dom_range(3, 8));
 
     n00b_csp_var_id_t vars[]  = {x, y};
     int64_t           coeffs[] = {1, -1};
@@ -503,8 +503,8 @@ TEST(test_linear_with_label)
     // After propagation: X in [2,5], Y in [2,5]
     // Label should find a solution.
     n00b_csp_store_t *s = n00b_csp_store_new();
-    n00b_csp_var_id_t x = n00b_csp_new_var(s, *r"X", n00b_csp_dom_range(1, 5));
-    n00b_csp_var_id_t y = n00b_csp_new_var(s, *r"Y", n00b_csp_dom_range(1, 5));
+    n00b_csp_var_id_t x = n00b_csp_new_var(s, r"X", n00b_csp_dom_range(1, 5));
+    n00b_csp_var_id_t y = n00b_csp_new_var(s, r"Y", n00b_csp_dom_range(1, 5));
 
     n00b_csp_var_id_t vars[]  = {x, y};
     int64_t           coeffs[] = {1, 1};
@@ -528,9 +528,9 @@ TEST(test_linear_three_vars)
     // After propagation: each in [1,3] (sum_lo=3, sum_hi=9, rhs=6 in range)
     // Label should find solutions like (1,2,3), (2,2,2), etc.
     n00b_csp_store_t *s = n00b_csp_store_new();
-    n00b_csp_var_id_t x = n00b_csp_new_var(s, *r"X", n00b_csp_dom_range(1, 3));
-    n00b_csp_var_id_t y = n00b_csp_new_var(s, *r"Y", n00b_csp_dom_range(1, 3));
-    n00b_csp_var_id_t z = n00b_csp_new_var(s, *r"Z", n00b_csp_dom_range(1, 3));
+    n00b_csp_var_id_t x = n00b_csp_new_var(s, r"X", n00b_csp_dom_range(1, 3));
+    n00b_csp_var_id_t y = n00b_csp_new_var(s, r"Y", n00b_csp_dom_range(1, 3));
+    n00b_csp_var_id_t z = n00b_csp_new_var(s, r"Z", n00b_csp_dom_range(1, 3));
 
     n00b_csp_var_id_t vars[]  = {x, y, z};
     int64_t           coeffs[] = {1, 1, 1};
@@ -557,9 +557,9 @@ TEST(test_alldiff_basic)
 {
     // Three vars in [1,3], all different → exactly one solution per permutation.
     n00b_csp_store_t *s = n00b_csp_store_new();
-    n00b_csp_var_id_t x = n00b_csp_new_var(s, *r"X", n00b_csp_dom_range(1, 3));
-    n00b_csp_var_id_t y = n00b_csp_new_var(s, *r"Y", n00b_csp_dom_range(1, 3));
-    n00b_csp_var_id_t z = n00b_csp_new_var(s, *r"Z", n00b_csp_dom_range(1, 3));
+    n00b_csp_var_id_t x = n00b_csp_new_var(s, r"X", n00b_csp_dom_range(1, 3));
+    n00b_csp_var_id_t y = n00b_csp_new_var(s, r"Y", n00b_csp_dom_range(1, 3));
+    n00b_csp_var_id_t z = n00b_csp_new_var(s, r"Z", n00b_csp_dom_range(1, 3));
 
     n00b_csp_var_id_t vars[] = {x, y, z};
     bool ok = n00b_csp_post_alldiff(s, vars, 3);
@@ -572,9 +572,9 @@ TEST(test_alldiff_infeasible)
 {
     // Three vars in [1,2], all different → only 2 values for 3 vars → fail.
     n00b_csp_store_t *s = n00b_csp_store_new();
-    n00b_csp_var_id_t x = n00b_csp_new_var(s, *r"X", n00b_csp_dom_range(1, 2));
-    n00b_csp_var_id_t y = n00b_csp_new_var(s, *r"Y", n00b_csp_dom_range(1, 2));
-    n00b_csp_var_id_t z = n00b_csp_new_var(s, *r"Z", n00b_csp_dom_range(1, 2));
+    n00b_csp_var_id_t x = n00b_csp_new_var(s, r"X", n00b_csp_dom_range(1, 2));
+    n00b_csp_var_id_t y = n00b_csp_new_var(s, r"Y", n00b_csp_dom_range(1, 2));
+    n00b_csp_var_id_t z = n00b_csp_new_var(s, r"Z", n00b_csp_dom_range(1, 2));
 
     n00b_csp_var_id_t vars[] = {x, y, z};
     bool ok = n00b_csp_post_alldiff(s, vars, 3);
@@ -589,9 +589,9 @@ TEST(test_alldiff_pruning)
     // X=1 is forced → Régin should prune 1 from Y and Z.
     // Y forced to {2} → Z forced to {3}.
     n00b_csp_store_t *s = n00b_csp_store_new();
-    n00b_csp_var_id_t x = n00b_csp_new_var(s, *r"X", n00b_csp_dom_singleton(1));
-    n00b_csp_var_id_t y = n00b_csp_new_var(s, *r"Y", n00b_csp_dom_range(1, 2));
-    n00b_csp_var_id_t z = n00b_csp_new_var(s, *r"Z", n00b_csp_dom_range(1, 3));
+    n00b_csp_var_id_t x = n00b_csp_new_var(s, r"X", n00b_csp_dom_singleton(1));
+    n00b_csp_var_id_t y = n00b_csp_new_var(s, r"Y", n00b_csp_dom_range(1, 2));
+    n00b_csp_var_id_t z = n00b_csp_new_var(s, r"Z", n00b_csp_dom_range(1, 3));
 
     n00b_csp_var_id_t vars[] = {x, y, z};
     bool ok = n00b_csp_post_alldiff(s, vars, 3);
@@ -612,10 +612,10 @@ TEST(test_alldiff_with_label)
 {
     // Four vars in [1,4], all different → 4! = 24 solutions.
     n00b_csp_store_t *s = n00b_csp_store_new();
-    n00b_csp_var_id_t a = n00b_csp_new_var(s, *r"A", n00b_csp_dom_range(1, 4));
-    n00b_csp_var_id_t b = n00b_csp_new_var(s, *r"B", n00b_csp_dom_range(1, 4));
-    n00b_csp_var_id_t c = n00b_csp_new_var(s, *r"C", n00b_csp_dom_range(1, 4));
-    n00b_csp_var_id_t d = n00b_csp_new_var(s, *r"D", n00b_csp_dom_range(1, 4));
+    n00b_csp_var_id_t a = n00b_csp_new_var(s, r"A", n00b_csp_dom_range(1, 4));
+    n00b_csp_var_id_t b = n00b_csp_new_var(s, r"B", n00b_csp_dom_range(1, 4));
+    n00b_csp_var_id_t c = n00b_csp_new_var(s, r"C", n00b_csp_dom_range(1, 4));
+    n00b_csp_var_id_t d = n00b_csp_new_var(s, r"D", n00b_csp_dom_range(1, 4));
 
     n00b_csp_var_id_t vars[] = {a, b, c, d};
     bool ok = n00b_csp_post_alldiff(s, vars, 4);
@@ -631,7 +631,7 @@ TEST(test_alldiff_single_var)
 {
     // Edge case: alldiff with 1 var is trivially entailed.
     n00b_csp_store_t *s = n00b_csp_store_new();
-    n00b_csp_var_id_t x = n00b_csp_new_var(s, *r"X", n00b_csp_dom_range(1, 10));
+    n00b_csp_var_id_t x = n00b_csp_new_var(s, r"X", n00b_csp_dom_range(1, 10));
 
     n00b_csp_var_id_t vars[] = {x};
     bool ok = n00b_csp_post_alldiff(s, vars, 1);
@@ -645,9 +645,9 @@ TEST(test_alldiff_partial_overlap)
     // X in [1,3], Y in [2,4], Z in [3,5], all different.
     // Should be satisfiable. Label and verify.
     n00b_csp_store_t *s = n00b_csp_store_new();
-    n00b_csp_var_id_t x = n00b_csp_new_var(s, *r"X", n00b_csp_dom_range(1, 3));
-    n00b_csp_var_id_t y = n00b_csp_new_var(s, *r"Y", n00b_csp_dom_range(2, 4));
-    n00b_csp_var_id_t z = n00b_csp_new_var(s, *r"Z", n00b_csp_dom_range(3, 5));
+    n00b_csp_var_id_t x = n00b_csp_new_var(s, r"X", n00b_csp_dom_range(1, 3));
+    n00b_csp_var_id_t y = n00b_csp_new_var(s, r"Y", n00b_csp_dom_range(2, 4));
+    n00b_csp_var_id_t z = n00b_csp_new_var(s, r"Z", n00b_csp_dom_range(3, 5));
 
     n00b_csp_var_id_t vars[] = {x, y, z};
     bool ok = n00b_csp_post_alldiff(s, vars, 3);
@@ -669,9 +669,9 @@ TEST(test_linear_plus_alldiff)
     // X + Y + Z = 6, all in [1,4], all different.
     // Valid solutions: permutations of (1,2,3) only (sum=6).
     n00b_csp_store_t *s = n00b_csp_store_new();
-    n00b_csp_var_id_t x = n00b_csp_new_var(s, *r"X", n00b_csp_dom_range(1, 4));
-    n00b_csp_var_id_t y = n00b_csp_new_var(s, *r"Y", n00b_csp_dom_range(1, 4));
-    n00b_csp_var_id_t z = n00b_csp_new_var(s, *r"Z", n00b_csp_dom_range(1, 4));
+    n00b_csp_var_id_t x = n00b_csp_new_var(s, r"X", n00b_csp_dom_range(1, 4));
+    n00b_csp_var_id_t y = n00b_csp_new_var(s, r"Y", n00b_csp_dom_range(1, 4));
+    n00b_csp_var_id_t z = n00b_csp_new_var(s, r"Z", n00b_csp_dom_range(1, 4));
 
     n00b_csp_var_id_t vars_lin[]  = {x, y, z};
     int64_t           coeffs[]    = {1, 1, 1};

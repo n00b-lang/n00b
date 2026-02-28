@@ -42,8 +42,10 @@
 #include "slay/pretty_print.h"
 #include "slay/transform.h"
 #include "slay/symtab.h"
+#include "core/dict_untyped.h"
 
 // Transform registration prototypes.
+extern void n00b_register_generic_struct_xform(n00b_xform_registry_t *reg);
 extern void n00b_register_typeid_xform(n00b_xform_registry_t *reg);
 extern void n00b_register_typestr_xform(n00b_xform_registry_t *reg);
 extern void n00b_register_typehash_xform(n00b_xform_registry_t *reg);
@@ -53,6 +55,7 @@ extern void n00b_register_rstr_xform(n00b_xform_registry_t *reg);
 extern void n00b_register_constexpr_xform(n00b_xform_registry_t *reg);
 extern void n00b_register_constexpr_paste_xform(n00b_xform_registry_t *reg);
 extern void n00b_register_kargs_vargs_xform(n00b_xform_registry_t *reg);
+extern void n00b_register_option_xform(n00b_xform_registry_t *reg);
 #include "parsers/scan_recipes.h"
 #include "parsers/scanner.h"
 #include "parsers/token_stream.h"
@@ -145,9 +148,12 @@ typedef struct {
 
 // Passed to transforms via ctx->user_data.
 typedef struct {
-    const char      *compiler;
-    const char      *constexpr_headers; // NULL or comma-separated header list
-    ncc_meta_table_t func_meta;         // kargs/vargs metadata
+    const char          *compiler;
+    const char          *constexpr_headers; // NULL or comma-separated header list
+    ncc_meta_table_t     func_meta;         // kargs/vargs metadata
+    n00b_dict_untyped_t  option_meta;       // _option var metadata
+    n00b_dict_untyped_t  option_decls;      // emitted option struct decls
+    n00b_dict_untyped_t  generic_struct_decls; // emitted _generic_struct tags
 } ncc_xform_data_t;
 
 static void
@@ -1562,7 +1568,9 @@ compile_file(ncc_opts_t *opts)
     // Stage 6: Transform passes (typeid, typestr, typehash).
     n00b_xform_registry_t xreg;
     n00b_xform_registry_init(&xreg, g);
+    n00b_register_generic_struct_xform(&xreg);
     n00b_register_typeid_xform(&xreg);
+    n00b_register_option_xform(&xreg);
     n00b_register_typestr_xform(&xreg);
     n00b_register_typehash_xform(&xreg);
     n00b_register_kargs_vargs_xform(&xreg);
@@ -1579,6 +1587,12 @@ compile_file(ncc_opts_t *opts)
         .constexpr_headers = opts->constexpr_headers,
         .func_meta         = {0},
     };
+    n00b_dict_untyped_init(&xdata.option_meta,
+                            n00b_hash_cstring, n00b_dict_cstr_eq);
+    n00b_dict_untyped_init(&xdata.option_decls,
+                            n00b_hash_cstring, n00b_dict_cstr_eq);
+    n00b_dict_untyped_init(&xdata.generic_struct_decls,
+                            n00b_hash_cstring, n00b_dict_cstr_eq);
     xctx.user_data = &xdata;
     tree = n00b_xform_apply(&xreg, &xctx);
 
@@ -1586,6 +1600,9 @@ compile_file(ncc_opts_t *opts)
         ncc_verbose("transforms: %d nodes replaced", xctx.nodes_replaced);
     }
 
+    n00b_dict_untyped_free(&xdata.option_meta);
+    n00b_dict_untyped_free(&xdata.option_decls);
+    n00b_dict_untyped_free(&xdata.generic_struct_decls);
     n00b_xform_registry_free(&xreg);
 
     // Stage 7: Emit transformed C.

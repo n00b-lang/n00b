@@ -14,8 +14,8 @@
 #include "slay/n00b_parse.h"
 #include "slay/diagnostic.h"
 
-n00b_string_t n00b_bnf_strip_comments(n00b_string_t input);
-n00b_string_t n00b_bnf_trim_lines(n00b_string_t input);
+n00b_string_t *n00b_bnf_strip_comments(n00b_string_t *input);
+n00b_string_t *n00b_bnf_trim_lines(n00b_string_t *input);
 
 /**
  * @brief Load a BNF/EBNF grammar from text into a grammar object.
@@ -33,8 +33,8 @@ n00b_string_t n00b_bnf_trim_lines(n00b_string_t input);
  *                 error messages are pushed here instead of (or in addition
  *                 to) being printed to stderr.
  */
-bool n00b_bnf_load(n00b_string_t   bnf_text,
-                    n00b_string_t   start_symbol,
+bool n00b_bnf_load(n00b_string_t  *bnf_text,
+                    n00b_string_t  *start_symbol,
                     n00b_grammar_t *user_g) _kargs {
     n00b_parse_fn_t   parse_fn;
     n00b_parse_mode_t parse_mode = N00B_PARSE_MODE_UNSET;

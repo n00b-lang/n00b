@@ -27,10 +27,10 @@ json_collect_text(n00b_parse_tree_t *tree, char *buf, int *pos, int max)
         n00b_token_info_t *tok = n00b_tree_leaf_value(tree);
 
         if (tok && n00b_option_is_set(tok->value)) {
-            n00b_string_t v = n00b_option_get(tok->value);
+            n00b_string_t *v = n00b_option_get(tok->value);
 
-            for (size_t i = 0; i < v.u8_bytes && *pos < max - 1; i++) {
-                buf[(*pos)++] = v.data[i];
+            for (size_t i = 0; i < v->u8_bytes && *pos < max - 1; i++) {
+                buf[(*pos)++] = v->data[i];
             }
         }
 
@@ -89,11 +89,11 @@ json_node_name(n00b_parse_tree_t *node)
 
     n00b_nt_node_t *pn = &n00b_tree_node_value(node);
 
-    if (!pn->name.data) {
+    if (!pn->name || !pn->name->data) {
         return NULL;
     }
 
-    return pn->name.data;
+    return pn->name->data;
 }
 
 // Find a named member in a JSON object parse tree.
@@ -312,7 +312,7 @@ json_parse_type_name(const char *type_str)
     return N00B_CMDR_TYPE_WORD;
 }
 
-static n00b_string_t
+static n00b_string_t *
 cstr_to_n00b(const char *s)
 {
     if (!s || !*s) {
@@ -483,16 +483,16 @@ static const char json_bnf_text[] =
     "<ws>      ::= __WHITESPACE*\n";
 
 n00b_cmdr_t *
-n00b_cmdr_from_json(n00b_string_t json)
+n00b_cmdr_from_json(n00b_string_t *json)
 {
-    if (!json.data || json.u8_bytes == 0) {
+    if (!json || json->u8_bytes == 0) {
         return NULL;
     }
 
     // Build JSON grammar from BNF.
     n00b_grammar_t *json_g = n00b_grammar_new();
 
-    if (!n00b_bnf_load(n00b_string_from_cstr(json_bnf_text), *r"value",
+    if (!n00b_bnf_load(n00b_string_from_cstr(json_bnf_text), r"value",
                         json_g,
                         .parse_mode = N00B_PARSE_MODE_EARLEY_ONLY)) {
         n00b_grammar_free(json_g);

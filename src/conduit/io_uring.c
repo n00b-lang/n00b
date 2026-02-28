@@ -472,10 +472,10 @@ uring_wait(void *vctx, n00b_conduit_io_event_t *events, int max_events,
 // name
 // ============================================================================
 
-static n00b_string_t
+static n00b_string_t *
 uring_name(void)
 {
-    return *r"io_uring";
+    return r"io_uring";
 }
 
 // ============================================================================

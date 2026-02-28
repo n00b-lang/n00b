@@ -27,4 +27,4 @@ bool n00b_unicode_is_emoji_presentation(n00b_codepoint_t cp);
  *  @param byte_pos  Byte offset at which to begin scanning.
  *  @return A result containing the emoji type and number of bytes consumed.
  */
-n00b_unicode_emoji_scan_result_t n00b_unicode_emoji_scan(n00b_string_t s, uint32_t byte_pos);
+n00b_unicode_emoji_scan_result_t n00b_unicode_emoji_scan(n00b_string_t *s, uint32_t byte_pos);

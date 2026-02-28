@@ -623,9 +623,9 @@ n00b_unicode_utf8_validate(const char *src, uint32_t len)
 }
 
 bool
-n00b_unicode_str_validate(n00b_string_t s)
+n00b_unicode_str_validate(n00b_string_t *s)
 {
-    return n00b_unicode_utf8_validate(s.data, (uint32_t)s.u8_bytes);
+    return n00b_unicode_utf8_validate(s->data, (uint32_t)s->u8_bytes);
 }
 
 // ---------------------------------------------------------------------------
@@ -705,9 +705,9 @@ n00b_unicode_utf8_count_codepoints_raw(const char *src, uint32_t len)
 }
 
 int64_t
-n00b_unicode_utf8_count_codepoints(n00b_string_t s)
+n00b_unicode_utf8_count_codepoints(n00b_string_t *s)
 {
-    return n00b_unicode_utf8_count_codepoints_raw(s.data, (uint32_t)s.u8_bytes);
+    return n00b_unicode_utf8_count_codepoints_raw(s->data, (uint32_t)s->u8_bytes);
 }
 
 // ---------------------------------------------------------------------------
@@ -776,7 +776,7 @@ n00b_unicode_to_utf16_raw(const char       *data,
 }
 
 n00b_array_t(uint16_t)
-n00b_unicode_to_utf16(n00b_string_t s) _kargs
+n00b_unicode_to_utf16(n00b_string_t *s) _kargs
 {
     n00b_allocator_t *allocator = nullptr;
 }
@@ -784,9 +784,9 @@ n00b_unicode_to_utf16(n00b_string_t s) _kargs
     if (!allocator)
         allocator = nullptr;
     uint32_t  count = 0;
-    uint16_t *raw   = n00b_unicode_to_utf16_raw(s.data, s.u8_bytes, &count, allocator);
+    uint16_t *raw   = n00b_unicode_to_utf16_raw(s->data, s->u8_bytes, &count, allocator);
     n00b_array_t(uint16_t) result = n00b_array_checked_ptr(uint16_t,
-                                                            (size_t)s.u8_bytes + 1,
+                                                            (size_t)s->u8_bytes + 1,
                                                             raw);
     result.len = count;
     return result;
@@ -839,7 +839,7 @@ n00b_unicode_to_utf32_raw(const char       *data,
 }
 
 n00b_array_t(n00b_codepoint_t)
-n00b_unicode_to_utf32(n00b_string_t s) _kargs
+n00b_unicode_to_utf32(n00b_string_t *s) _kargs
 {
     n00b_allocator_t *allocator = nullptr;
 }
@@ -847,15 +847,15 @@ n00b_unicode_to_utf32(n00b_string_t s) _kargs
     if (!allocator)
         allocator = nullptr;
     uint32_t          count = 0;
-    n00b_codepoint_t *raw   = n00b_unicode_to_utf32_raw(s.data, s.u8_bytes, &count, allocator);
+    n00b_codepoint_t *raw   = n00b_unicode_to_utf32_raw(s->data, s->u8_bytes, &count, allocator);
     n00b_array_t(n00b_codepoint_t) result = n00b_array_checked_ptr(n00b_codepoint_t,
-                                                                    (size_t)s.u8_bytes + 1,
+                                                                    (size_t)s->u8_bytes + 1,
                                                                     raw);
     result.len = count;
     return result;
 }
 
-n00b_string_t
+n00b_string_t *
 n00b_unicode_from_utf16(const uint16_t *src, uint32_t len) _kargs
 {
     n00b_allocator_t *allocator = nullptr;
@@ -885,12 +885,12 @@ n00b_unicode_from_utf16(const uint16_t *src, uint32_t len) _kargs
 
     buf[pos] = '\0';
 
-    n00b_string_t result = n00b_string_from_raw(buf, pos, .allocator = allocator);
+    n00b_string_t *result = n00b_string_from_raw(buf, pos, .allocator = allocator);
     n00b_free(buf);
     return result;
 }
 
-n00b_string_t
+n00b_string_t *
 n00b_unicode_from_utf32(const n00b_codepoint_t *src, uint32_t len) _kargs
 {
     n00b_allocator_t *allocator = nullptr;
@@ -910,7 +910,7 @@ n00b_unicode_from_utf32(const n00b_codepoint_t *src, uint32_t len) _kargs
 
     buf[pos] = '\0';
 
-    n00b_string_t result = n00b_string_from_raw(buf, pos, .allocator = allocator);
+    n00b_string_t *result = n00b_string_from_raw(buf, pos, .allocator = allocator);
     n00b_free(buf);
     return result;
 }

@@ -57,15 +57,15 @@ utf8_decode(const char **pp)
 // Preprocessing
 // ============================================================================
 
-n00b_string_t
-n00b_bnf_strip_comments(n00b_string_t input)
+n00b_string_t *
+n00b_bnf_strip_comments(n00b_string_t *input)
 {
-    if (!input.data) {
+    if (!input) {
         return n00b_string_empty();
     }
 
-    size_t      len    = input.u8_bytes;
-    const char *src    = input.data;
+    size_t      len    = input->u8_bytes;
+    const char *src    = input->data;
     char       *result = n00b_alloc_array(char, len + 1);
     size_t      ri     = 0;
     bool        in_sq  = false;
@@ -101,15 +101,15 @@ n00b_bnf_strip_comments(n00b_string_t input)
     return n00b_string_from_raw(result, (int64_t)ri);
 }
 
-n00b_string_t
-n00b_bnf_trim_lines(n00b_string_t input)
+n00b_string_t *
+n00b_bnf_trim_lines(n00b_string_t *input)
 {
-    if (!input.data) {
+    if (!input) {
         return n00b_string_empty();
     }
 
-    size_t      len    = input.u8_bytes;
-    const char *src    = input.data;
+    size_t      len    = input->u8_bytes;
+    const char *src    = input->data;
     const char *end    = src + len;
     char       *result = n00b_alloc_array(char, len + 1);
     size_t      ri     = 0;
@@ -152,15 +152,15 @@ n00b_bnf_trim_lines(n00b_string_t input)
 // Join continuation lines: remove newlines before lines starting with '|'
 // ============================================================================
 
-static n00b_string_t
-bnf_join_continuations(n00b_string_t input)
+static n00b_string_t *
+bnf_join_continuations(n00b_string_t *input)
 {
-    if (!input.data) {
+    if (!input) {
         return n00b_string_empty();
     }
 
-    size_t      len    = input.u8_bytes;
-    const char *src    = input.data;
+    size_t      len    = input->u8_bytes;
+    const char *src    = input->data;
     char       *result = n00b_alloc_array(char, len + 1);
     size_t      ri     = 0;
 
@@ -321,14 +321,14 @@ bnf_scan(n00b_scanner_t *s)
                 n00b_scan_advance(s);
             }
 
-            n00b_string_t val = n00b_scan_extract(s);
+            n00b_string_t *val = n00b_scan_extract(s);
 
             if (!n00b_scan_at_eof(s) && n00b_scan_peek(s, 0) == quote) {
                 n00b_scan_advance(s);  // skip closing quote
             }
 
             n00b_scan_emit(s, .tid = BNF_TOK_TOKEN_LIT,
-                           .contents = n00b_option_set(n00b_string_t, val));
+                           .contents = n00b_option_set(n00b_string_t *, val));
             return true;
         }
 
@@ -348,9 +348,9 @@ bnf_scan(n00b_scanner_t *s)
                 n00b_scan_advance(s);
             }
 
-            n00b_string_t val = n00b_scan_extract(s);
+            n00b_string_t *val = n00b_scan_extract(s);
             n00b_scan_emit(s, .tid = BNF_TOK_TOKEN_TYPE,
-                           .contents = n00b_option_set(n00b_string_t, val));
+                           .contents = n00b_option_set(n00b_string_t *, val));
             return true;
         }
 
@@ -374,15 +374,15 @@ bnf_scan(n00b_scanner_t *s)
             n00b_scan_advance(s);
         }
 
-        n00b_string_t val = n00b_scan_extract(s);
+        n00b_string_t *val = n00b_scan_extract(s);
 
         if (!n00b_scan_at_eof(s) && n00b_scan_peek(s, 0) == quote) {
             n00b_scan_advance(s);  // skip closing quote
         }
 
-        int64_t tid = (val.u8_bytes == 0) ? BNF_TOK_EMPTY_LIT : BNF_TOK_LITERAL;
+        int64_t tid = (!val || val->u8_bytes == 0) ? BNF_TOK_EMPTY_LIT : BNF_TOK_LITERAL;
         n00b_scan_emit(s, .tid = tid,
-                       .contents = n00b_option_set(n00b_string_t, val));
+                       .contents = n00b_option_set(n00b_string_t *, val));
         return true;
     }
 
@@ -406,9 +406,9 @@ bnf_scan(n00b_scanner_t *s)
                 n00b_scan_advance(s);
             }
 
-            n00b_string_t val = n00b_scan_extract(s);
+            n00b_string_t *val = n00b_scan_extract(s);
             n00b_scan_emit(s, .tid = BNF_TOK_CLASS,
-                           .contents = n00b_option_set(n00b_string_t, val));
+                           .contents = n00b_option_set(n00b_string_t *, val));
             return true;
         }
     }
@@ -430,9 +430,9 @@ bnf_scan(n00b_scanner_t *s)
             n00b_scan_advance(s);
         }
 
-        n00b_string_t val = n00b_scan_extract(s);
+        n00b_string_t *val = n00b_scan_extract(s);
         n00b_scan_emit(s, .tid = BNF_TOK_NAME,
-                       .contents = n00b_option_set(n00b_string_t, val));
+                       .contents = n00b_option_set(n00b_string_t *, val));
         return true;
     }
 
@@ -468,9 +468,9 @@ bnf_scan(n00b_scanner_t *s)
                 n00b_scan_advance(s);
             }
 
-            n00b_string_t val = n00b_scan_extract(s);
+            n00b_string_t *val = n00b_scan_extract(s);
             n00b_scan_emit(s, .tid = BNF_TOK_DOLLAR,
-                           .contents = n00b_option_set(n00b_string_t, val));
+                           .contents = n00b_option_set(n00b_string_t *, val));
             return true;
         }
     }
@@ -483,33 +483,33 @@ bnf_scan(n00b_scanner_t *s)
 // Helper: extract n00b_string_t from token value
 // ============================================================================
 
-static n00b_string_t
+static n00b_string_t *
 tok_str(n00b_token_info_t *tok)
 {
     if (!tok || !n00b_option_is_set(tok->value)) {
-        return (n00b_string_t){0};
+        return NULL;
     }
 
     return n00b_option_get(tok->value);
 }
 
-static n00b_string_t
-tok_str_or(n00b_token_info_t *tok, const char *fallback)
+static n00b_string_t *
+tok_str_or(n00b_token_info_t *tok, n00b_string_t *fallback)
 {
-    n00b_string_t s = tok_str(tok);
+    n00b_string_t *s = tok_str(tok);
 
-    if (s.data) {
+    if (s) {
         return s;
     }
 
-    return n00b_string_from_cstr(fallback);
+    return fallback;
 }
 
-// Compare n00b_string_t against a C string literal (internal dispatch helper).
+// Compare n00b_string_t against an n00b_string_t (internal dispatch helper).
 static inline bool
-str_eq_lit(n00b_string_t s, const char *lit)
+str_eq_lit(n00b_string_t *s, n00b_string_t *lit)
 {
-    return n00b_unicode_str_eq(s, n00b_string_from_cstr(lit));
+    return n00b_unicode_str_eq(s, lit);
 }
 
 // ============================================================================
@@ -532,7 +532,6 @@ enum {
 };
 
 typedef void *bnf_ptr_t;
-n00b_list_decl(bnf_ptr_t);
 typedef n00b_list_t(bnf_ptr_t) bnf_list_t;
 
 typedef struct {
@@ -613,53 +612,53 @@ bnf_walk_atom(n00b_nt_node_t *pn, void *children, void *thunk)
     if (pn->rule_index == 0) {
         // term -> LITERAL
         n00b_token_info_t *tok = (n00b_token_info_t *)kids[0];
-        n00b_string_t      val = tok_str_or(tok, "");
-        size_t             len = val.u8_bytes;
+        n00b_string_t     *val = tok_str_or(tok, r"");
+        size_t             len = val->u8_bytes;
         result                 = n00b_alloc_array(char, len + 3);
         result[0]              = 'L';
         result[1]              = ':';
-        memcpy(result + 2, val.data, len + 1);
+        memcpy(result + 2, val->data, len + 1);
     }
     else if (pn->rule_index == 1) {
         // term -> LANGLE NAME RANGLE
         n00b_token_info_t *tok = (n00b_token_info_t *)kids[1];
-        n00b_string_t      val = tok_str_or(tok, "");
-        size_t             len = val.u8_bytes;
+        n00b_string_t     *val = tok_str_or(tok, r"");
+        size_t             len = val->u8_bytes;
         result                 = n00b_alloc_array(char, len + 3);
         result[0]              = 'N';
         result[1]              = ':';
-        memcpy(result + 2, val.data, len + 1);
+        memcpy(result + 2, val->data, len + 1);
     }
     else if (pn->rule_index == 2) {
         // term -> CLASS
         n00b_token_info_t *tok = (n00b_token_info_t *)kids[0];
-        n00b_string_t      val = tok_str_or(tok, "");
-        size_t             len = val.u8_bytes;
+        n00b_string_t     *val = tok_str_or(tok, r"");
+        size_t             len = val->u8_bytes;
         result                 = n00b_alloc_array(char, len + 3);
         result[0]              = 'C';
         result[1]              = ':';
-        memcpy(result + 2, val.data, len + 1);
+        memcpy(result + 2, val->data, len + 1);
     }
     else if (pn->rule_index == 3) {
         // term -> TOKEN_TYPE  (%IDENTIFIER, %STRING, etc.)
         n00b_token_info_t *tok = (n00b_token_info_t *)kids[0];
-        n00b_string_t      val = tok_str_or(tok, "");
-        size_t             len = val.u8_bytes;
+        n00b_string_t     *val = tok_str_or(tok, r"");
+        size_t             len = val->u8_bytes;
         result                 = n00b_alloc_array(char, len + 3);
         result[0]              = 'T';
         result[1]              = ':';
-        memcpy(result + 2, val.data, len + 1);
+        memcpy(result + 2, val->data, len + 1);
     }
     else if (pn->rule_index == 4) {
         // term -> TOKEN_LIT  (%"if", %"+", etc.)
         // Quoted after % is still as-named (hash-based ID).
         n00b_token_info_t *tok = (n00b_token_info_t *)kids[0];
-        n00b_string_t      val = tok_str_or(tok, "");
-        size_t             len = val.u8_bytes;
+        n00b_string_t     *val = tok_str_or(tok, r"");
+        size_t             len = val->u8_bytes;
         result                 = n00b_alloc_array(char, len + 3);
         result[0]              = 'K';
         result[1]              = ':';
-        memcpy(result + 2, val.data, len + 1);
+        memcpy(result + 2, val->data, len + 1);
     }
     else {
         // term -> EMPTY_LIT  ("")
@@ -838,15 +837,15 @@ typedef struct {
     n00b_child_ref_t  name_ref;
     n00b_child_ref_t  type_ref;
     n00b_child_ref_t  value_ref;
-    n00b_string_t     scope_tag;
+    n00b_string_t    *scope_tag;
     bool              capture_by_tag;
-    n00b_string_t     type_spec;
-    n00b_string_t     infer_expr;
-    n00b_string_t     adt_kind;
-    n00b_string_t     visibility_spec;
-    n00b_string_t     op_kind;
+    n00b_string_t    *type_spec;
+    n00b_string_t    *infer_expr;
+    n00b_string_t    *adt_kind;
+    n00b_string_t    *visibility_spec;
+    n00b_string_t    *op_kind;
     n00b_child_ref_t  notrivia_ref;
-    n00b_string_t     sym_kind;
+    n00b_string_t    *sym_kind;
     n00b_child_ref_t  adt_keyword_ref;
     int32_t           penalty_cost;
 } bnf_annot_info_t;
@@ -862,16 +861,16 @@ parse_child_ref(void *result)
     n00b_token_info_t *tok = (n00b_token_info_t *)result;
 
     if (tok->tid == BNF_TOK_DOLLAR) {
-        n00b_string_t val = tok_str(tok);
-        int32_t       ix  = val.data ? (int32_t)atoi(val.data) : -1;
+        n00b_string_t *val = tok_str(tok);
+        int32_t        ix  = val ? (int32_t)atoi(val->data) : -1;
         return (n00b_child_ref_t){.kind = N00B_ROLE_BY_INDEX, .index = ix};
     }
 
     // NAME token -> by NT name
     if (tok->tid == BNF_TOK_NAME) {
-        n00b_string_t val = tok_str(tok);
+        n00b_string_t *val = tok_str(tok);
 
-        if (val.data) {
+        if (val) {
             return (n00b_child_ref_t){.kind = N00B_ROLE_BY_NAME, .name = val};
         }
     }
@@ -961,9 +960,9 @@ bnf_walk_annotation(n00b_nt_node_t *pn, void *children, void *thunk)
     info->type_ref  = (n00b_child_ref_t){.kind = N00B_ROLE_BY_INDEX, .index = -1};
     info->value_ref = (n00b_child_ref_t){.kind = N00B_ROLE_BY_INDEX, .index = -1};
 
-    n00b_string_t annot_str = tok_str(name_tok);
+    n00b_string_t *annot_str = tok_str(name_tok);
 
-    if (str_eq_lit(annot_str, "scope")) {
+    if (str_eq_lit(annot_str, r"scope")) {
         info->kind = N00B_ANNOT_SCOPE_OPEN;
 
         // arg 0 = tag (LITERAL), arg 1 = name-ref (optional)
@@ -976,7 +975,7 @@ bnf_walk_annotation(n00b_nt_node_t *pn, void *children, void *thunk)
             info->name_ref = parse_child_ref(slist_get(args, 1));
         }
     }
-    else if (str_eq_lit(annot_str, "declares")) {
+    else if (str_eq_lit(annot_str, r"declares")) {
         info->kind = N00B_ANNOT_DECLARES;
 
         // @declares($name)
@@ -1006,7 +1005,7 @@ bnf_walk_annotation(n00b_nt_node_t *pn, void *children, void *thunk)
             }
         }
     }
-    else if (str_eq_lit(annot_str, "type")) {
+    else if (str_eq_lit(annot_str, r"type")) {
         if (args && args->len >= 2) {
             // 2-arg form: @type($n, "type_spec")
             info->kind     = N00B_ANNOT_TYPE;
@@ -1025,7 +1024,7 @@ bnf_walk_annotation(n00b_nt_node_t *pn, void *children, void *thunk)
             }
         }
     }
-    else if (str_eq_lit(annot_str, "assigns")) {
+    else if (str_eq_lit(annot_str, r"assigns")) {
         info->kind = N00B_ANNOT_ASSIGNS;
 
         if (args && args->len >= 1) {
@@ -1036,7 +1035,7 @@ bnf_walk_annotation(n00b_nt_node_t *pn, void *children, void *thunk)
             info->value_ref = parse_child_ref(slist_get(args, 1));
         }
     }
-    else if (str_eq_lit(annot_str, "branch")) {
+    else if (str_eq_lit(annot_str, r"branch")) {
         info->kind = N00B_ANNOT_BRANCH;
 
         if (args && args->len >= 1) {
@@ -1051,7 +1050,7 @@ bnf_walk_annotation(n00b_nt_node_t *pn, void *children, void *thunk)
             info->value_ref = parse_child_ref(slist_get(args, 2));
         }
     }
-    else if (str_eq_lit(annot_str, "switch")) {
+    else if (str_eq_lit(annot_str, r"switch")) {
         info->kind = N00B_ANNOT_SWITCH;
 
         if (args && args->len >= 1) {
@@ -1062,7 +1061,7 @@ bnf_walk_annotation(n00b_nt_node_t *pn, void *children, void *thunk)
             info->type_ref = parse_child_ref(slist_get(args, 1));
         }
     }
-    else if (str_eq_lit(annot_str, "loop")) {
+    else if (str_eq_lit(annot_str, r"loop")) {
         info->kind = N00B_ANNOT_LOOP;
 
         if (args && args->len >= 1) {
@@ -1073,7 +1072,7 @@ bnf_walk_annotation(n00b_nt_node_t *pn, void *children, void *thunk)
             info->type_ref = parse_child_ref(slist_get(args, 1));
         }
     }
-    else if (str_eq_lit(annot_str, "jump")) {
+    else if (str_eq_lit(annot_str, r"jump")) {
         info->kind = N00B_ANNOT_JUMP;
 
         if (args && args->len >= 1) {
@@ -1081,7 +1080,7 @@ bnf_walk_annotation(n00b_nt_node_t *pn, void *children, void *thunk)
             info->scope_tag = tok_str(tag_tok);
         }
     }
-    else if (str_eq_lit(annot_str, "capture")) {
+    else if (str_eq_lit(annot_str, r"capture")) {
         info->kind = N00B_ANNOT_CAPTURE;
 
         // arg 0: tag (LITERAL string)
@@ -1093,69 +1092,69 @@ bnf_walk_annotation(n00b_nt_node_t *pn, void *children, void *thunk)
         // arg 1: optional "dynamic" keyword (NAME token)
         if (args && args->len >= 2) {
             n00b_token_info_t *mode_tok = (n00b_token_info_t *)slist_get(args, 1);
-            n00b_string_t      mode_val = tok_str(mode_tok);
+            n00b_string_t     *mode_val = tok_str(mode_tok);
 
-            if (mode_val.data && str_eq_lit(mode_val, "dynamic")) {
+            if (mode_val && str_eq_lit(mode_val, r"dynamic")) {
                 info->capture_by_tag = true;
             }
         }
     }
     // Formatting annotations
-    else if (str_eq_lit(annot_str, "indent")) {
+    else if (str_eq_lit(annot_str, r"indent")) {
         info->kind = N00B_ANNOT_INDENT;
     }
-    else if (str_eq_lit(annot_str, "group")) {
+    else if (str_eq_lit(annot_str, r"group")) {
         info->kind = N00B_ANNOT_GROUP;
     }
-    else if (str_eq_lit(annot_str, "concat")) {
+    else if (str_eq_lit(annot_str, r"concat")) {
         info->kind = N00B_ANNOT_CONCAT;
     }
-    else if (str_eq_lit(annot_str, "blankline")) {
+    else if (str_eq_lit(annot_str, r"blankline")) {
         info->kind = N00B_ANNOT_BLANKLINE;
     }
-    else if (str_eq_lit(annot_str, "softline")) {
+    else if (str_eq_lit(annot_str, r"softline")) {
         info->kind = N00B_ANNOT_SOFTLINE;
 
         if (args && args->len >= 1) {
             info->name_ref = parse_child_ref(slist_get(args, 0));
         }
     }
-    else if (str_eq_lit(annot_str, "hardline")) {
+    else if (str_eq_lit(annot_str, r"hardline")) {
         info->kind = N00B_ANNOT_HARDLINE;
 
         if (args && args->len >= 1) {
             info->name_ref = parse_child_ref(slist_get(args, 0));
         }
     }
-    else if (str_eq_lit(annot_str, "newline")) {
+    else if (str_eq_lit(annot_str, r"newline")) {
         info->kind = N00B_ANNOT_NEWLINE;
 
         if (args && args->len >= 1) {
             info->name_ref = parse_child_ref(slist_get(args, 0));
         }
     }
-    else if (str_eq_lit(annot_str, "space")) {
+    else if (str_eq_lit(annot_str, r"space")) {
         info->kind = N00B_ANNOT_SPACE;
 
         if (args && args->len >= 1) {
             info->name_ref = parse_child_ref(slist_get(args, 0));
         }
     }
-    else if (str_eq_lit(annot_str, "nospace")) {
+    else if (str_eq_lit(annot_str, r"nospace")) {
         info->kind = N00B_ANNOT_NOSPACE;
 
         if (args && args->len >= 1) {
             info->name_ref = parse_child_ref(slist_get(args, 0));
         }
     }
-    else if (str_eq_lit(annot_str, "align")) {
+    else if (str_eq_lit(annot_str, r"align")) {
         info->kind = N00B_ANNOT_ALIGN;
 
         if (args && args->len >= 1) {
             info->name_ref = parse_child_ref(slist_get(args, 0));
         }
     }
-    else if (str_eq_lit(annot_str, "tokenizer")) {
+    else if (str_eq_lit(annot_str, r"tokenizer")) {
         info->kind = N00B_ANNOT_TOKENIZER;
 
         // arg 0: tokenizer name (LITERAL string, e.g. "c")
@@ -1164,7 +1163,7 @@ bnf_walk_annotation(n00b_nt_node_t *pn, void *children, void *thunk)
             info->scope_tag = tok_str(name_tok2);
         }
     }
-    else if (str_eq_lit(annot_str, "infer")) {
+    else if (str_eq_lit(annot_str, r"infer")) {
         info->kind = N00B_ANNOT_INFER;
 
         // arg 0: constraint expression string (LITERAL)
@@ -1173,7 +1172,7 @@ bnf_walk_annotation(n00b_nt_node_t *pn, void *children, void *thunk)
             info->infer_expr = tok_str(expr_tok);
         }
     }
-    else if (str_eq_lit(annot_str, "adt")) {
+    else if (str_eq_lit(annot_str, r"adt")) {
         info->kind = N00B_ANNOT_ADT;
 
         // arg 0: LITERAL -> adt_kind ("class", "struct", "enum", "interface")
@@ -1198,7 +1197,7 @@ bnf_walk_annotation(n00b_nt_node_t *pn, void *children, void *thunk)
             info->adt_keyword_ref = parse_child_ref(slist_get(args, 3));
         }
     }
-    else if (str_eq_lit(annot_str, "field")) {
+    else if (str_eq_lit(annot_str, r"field")) {
         info->kind = N00B_ANNOT_FIELD;
 
         // arg 0: child_ref -> name_ref
@@ -1211,7 +1210,7 @@ bnf_walk_annotation(n00b_nt_node_t *pn, void *children, void *thunk)
             info->type_ref = parse_child_ref(slist_get(args, 1));
         }
     }
-    else if (str_eq_lit(annot_str, "method")) {
+    else if (str_eq_lit(annot_str, r"method")) {
         info->kind = N00B_ANNOT_METHOD;
 
         // arg 0: child_ref -> name_ref
@@ -1224,7 +1223,7 @@ bnf_walk_annotation(n00b_nt_node_t *pn, void *children, void *thunk)
             info->type_ref = parse_child_ref(slist_get(args, 1));
         }
     }
-    else if (str_eq_lit(annot_str, "inherits")) {
+    else if (str_eq_lit(annot_str, r"inherits")) {
         info->kind = N00B_ANNOT_INHERITS;
 
         // arg 0: child_ref -> name_ref (parent type name)
@@ -1232,7 +1231,7 @@ bnf_walk_annotation(n00b_nt_node_t *pn, void *children, void *thunk)
             info->name_ref = parse_child_ref(slist_get(args, 0));
         }
     }
-    else if (str_eq_lit(annot_str, "implements")) {
+    else if (str_eq_lit(annot_str, r"implements")) {
         info->kind = N00B_ANNOT_IMPLEMENTS;
 
         // arg 0: child_ref -> name_ref (interface name)
@@ -1240,7 +1239,7 @@ bnf_walk_annotation(n00b_nt_node_t *pn, void *children, void *thunk)
             info->name_ref = parse_child_ref(slist_get(args, 0));
         }
     }
-    else if (str_eq_lit(annot_str, "visibility")) {
+    else if (str_eq_lit(annot_str, r"visibility")) {
         info->kind = N00B_ANNOT_VISIBILITY;
 
         // arg 0: LITERAL -> visibility_spec ("public", "private", "protected")
@@ -1249,13 +1248,13 @@ bnf_walk_annotation(n00b_nt_node_t *pn, void *children, void *thunk)
             info->visibility_spec = tok_str(vis_tok);
         }
     }
-    else if (str_eq_lit(annot_str, "static")) {
+    else if (str_eq_lit(annot_str, r"static")) {
         info->kind = N00B_ANNOT_STATIC;
     }
-    else if (str_eq_lit(annot_str, "abstract")) {
+    else if (str_eq_lit(annot_str, r"abstract")) {
         info->kind = N00B_ANNOT_ABSTRACT;
     }
-    else if (str_eq_lit(annot_str, "operator")) {
+    else if (str_eq_lit(annot_str, r"operator")) {
         // @operator("+")
         info->kind = N00B_ANNOT_OPERATOR;
         if (args && args->len >= 1) {
@@ -1263,7 +1262,7 @@ bnf_walk_annotation(n00b_nt_node_t *pn, void *children, void *thunk)
             info->op_kind = tok_str(op_tok);
         }
     }
-    else if (str_eq_lit(annot_str, "literal")) {
+    else if (str_eq_lit(annot_str, r"literal")) {
         // @literal("int")           — base type only
         // @literal("int", $2)       — base type + type modifier child ref
         info->kind = N00B_ANNOT_LITERAL;
@@ -1276,7 +1275,7 @@ bnf_walk_annotation(n00b_nt_node_t *pn, void *children, void *thunk)
             info->type_ref = parse_child_ref(slist_get(args, 1));
         }
     }
-    else if (str_eq_lit(annot_str, "call")) {
+    else if (str_eq_lit(annot_str, r"call")) {
         // @call($0, $2)
         info->kind = N00B_ANNOT_CALL;
         if (args && args->len >= 1) {
@@ -1286,23 +1285,23 @@ bnf_walk_annotation(n00b_nt_node_t *pn, void *children, void *thunk)
             info->type_ref = parse_child_ref(slist_get(args, 1));
         }
     }
-    else if (str_eq_lit(annot_str, "varref")) {
+    else if (str_eq_lit(annot_str, r"varref")) {
         // @varref($0)
         info->kind = N00B_ANNOT_VARREF;
         if (args && args->len >= 1) {
             info->name_ref = parse_child_ref(slist_get(args, 0));
         }
     }
-    else if (str_eq_lit(annot_str, "penalty")) {
+    else if (str_eq_lit(annot_str, r"penalty")) {
         // @penalty(N) -- applied to rule, not NT
         info->kind = N00B_ANNOT_PENALTY;
 
         if (args && args->len >= 1) {
             n00b_token_info_t *cost_tok = (n00b_token_info_t *)slist_get(args, 0);
-            n00b_string_t      cost_val = tok_str(cost_tok);
+            n00b_string_t     *cost_val = tok_str(cost_tok);
 
-            if (cost_val.data) {
-                info->penalty_cost = (int32_t)strtol(cost_val.data, NULL, 10);
+            if (cost_val) {
+                info->penalty_cost = (int32_t)strtol(cost_val->data, NULL, 10);
             }
         }
 
@@ -1310,7 +1309,7 @@ bnf_walk_annotation(n00b_nt_node_t *pn, void *children, void *thunk)
             info->penalty_cost = 1;
         }
     }
-    else if (str_eq_lit(annot_str, "notrivia")) {
+    else if (str_eq_lit(annot_str, r"notrivia")) {
         // @notrivia($1) — child at given index must have no leading trivia.
         info->kind = N00B_ANNOT_NOTRIVIA;
 
@@ -1318,7 +1317,7 @@ bnf_walk_annotation(n00b_nt_node_t *pn, void *children, void *thunk)
             info->notrivia_ref = parse_child_ref(slist_get(args, 0));
         }
     }
-    else if (str_eq_lit(annot_str, "exposes")) {
+    else if (str_eq_lit(annot_str, r"exposes")) {
         info->kind = N00B_ANNOT_EXPOSES;
     }
 
@@ -1370,7 +1369,6 @@ bnf_walk_annotations(n00b_nt_node_t *pn, void *children, void *thunk)
 static void *
 bnf_walk_rule(n00b_nt_node_t *pn, void *children, void *thunk)
 {
-    (void)pn;
     (void)thunk;
     void **kids = (void **)children;
 
@@ -1378,19 +1376,32 @@ bnf_walk_rule(n00b_nt_node_t *pn, void *children, void *thunk)
         return NULL;
     }
 
-    // kids[0] = '<', kids[1] = NAME, kids[2] = '>',
-    // kids[3] = annotations result, kids[4] = '::=',
-    // kids[5] = expression result, kids[6] = newline
-    n00b_token_info_t *name_tok   = (n00b_token_info_t *)kids[1];
-    bnf_result_t      *annots_r   = (bnf_result_t *)kids[3];
-    bnf_result_t      *expr_r     = (bnf_result_t *)kids[5];
+    // All rule variants share this structure:
+    //   < NAME > [NEWLINE] annotations ::= [NEWLINE] expression NEWLINE
+    //
+    // Optional NEWLINEs shift child positions, but the layout relative
+    // to each optional NEWLINE is consistent:
+    //   - NAME is always kids[1].
+    //   - A NEWLINE after '>' pushes annotations from [3] to [4].
+    //   - A NEWLINE after '::=' pushes expression forward by one.
+    //
+    // Rather than hard-coding indices, use the two boolean flags
+    // encoded in rule_index (bit 0 = NL after ::=, bit 1 = NL after >).
 
-    n00b_string_t  name_s    = tok_str_or(name_tok, "?");
-    n00b_string_t *heap_name = n00b_alloc(n00b_string_t);
-    *heap_name = name_s;
+    bool nl_after_rangle = (pn->rule_index >= 2);
+    bool nl_after_assign = (pn->rule_index & 1);
+
+    int annots_idx = 3 + nl_after_rangle;
+    int expr_idx   = annots_idx + 2 + nl_after_assign;
+
+    n00b_token_info_t *name_tok = (n00b_token_info_t *)kids[1];
+    bnf_result_t      *annots_r = (bnf_result_t *)kids[annots_idx];
+    bnf_result_t      *expr_r   = (bnf_result_t *)kids[expr_idx];
+
+    n00b_string_t *name_s = tok_str_or(name_tok, r"?");
 
     bnf_list_t *triple = slist_new();
-    slist_push(triple, bnf_result(BNF_NAME, heap_name));
+    slist_push(triple, bnf_result(BNF_NAME, name_s));
     slist_push(triple, expr_r);
     slist_push(triple, annots_r);
 
@@ -1464,8 +1475,7 @@ bnf_walk_syntax(n00b_nt_node_t *pn, void *children, void *thunk)
 
             bnf_list_t *triple = slist_new();
             {
-                n00b_string_t *empty = n00b_alloc(n00b_string_t);
-                *empty = n00b_string_empty();
+                n00b_string_t *empty = n00b_string_empty();
                 slist_push(triple, bnf_result(BNF_NAME, empty));
             }
             slist_push(triple, NULL);  // no expression
@@ -1484,8 +1494,7 @@ bnf_walk_syntax(n00b_nt_node_t *pn, void *children, void *thunk)
 
             bnf_list_t *triple = slist_new();
             {
-                n00b_string_t *empty = n00b_alloc(n00b_string_t);
-                *empty = n00b_string_empty();
+                n00b_string_t *empty = n00b_string_empty();
                 slist_push(triple, bnf_result(BNF_NAME, empty));
             }
             slist_push(triple, NULL);
@@ -1530,21 +1539,20 @@ build_bnf_grammar(void)
     int64_t COMMA      = BNF_TOK_COMMA;
 
     // Register a readable name for the newline token (non-visible).
-    n00b_string_t *nl_name = n00b_alloc(n00b_string_t);
-    *nl_name = N00B_STRING_STATIC("newline");
+    n00b_string_t *nl_name = r"newline";
     n00b_dict_put(g->terminal_by_id, NEWLINE, nl_name);
 
     // Create all non-terminals.
-    n00b_string_t s_syntax      = *r"syntax";
-    n00b_string_t s_rule        = *r"rule";
-    n00b_string_t s_expression  = *r"expression";
-    n00b_string_t s_list        = *r"list";
-    n00b_string_t s_item        = *r"item";
-    n00b_string_t s_atom        = *r"atom";
-    n00b_string_t s_annotations = *r"annotations";
-    n00b_string_t s_annotation  = *r"annotation";
-    n00b_string_t s_arg_list    = *r"arg-list";
-    n00b_string_t s_annot_arg   = *r"annot-arg";
+    n00b_string_t *s_syntax      = r"syntax";
+    n00b_string_t *s_rule        = r"rule";
+    n00b_string_t *s_expression  = r"expression";
+    n00b_string_t *s_list        = r"list";
+    n00b_string_t *s_item        = r"item";
+    n00b_string_t *s_atom        = r"atom";
+    n00b_string_t *s_annotations = r"annotations";
+    n00b_string_t *s_annotation  = r"annotation";
+    n00b_string_t *s_arg_list    = r"arg-list";
+    n00b_string_t *s_annot_arg   = r"annot-arg";
 
     n00b_nonterm(g, s_syntax);
     n00b_nonterm(g, s_rule);
@@ -1582,9 +1590,24 @@ build_bnf_grammar(void)
     n00b_add_rule(g, syntax, N00B_NT(annotation), N00B_TERMINAL(NEWLINE));
 
     // rule -> LANGLE NAME RANGLE annotations ASSIGN expression NEWLINE
+    // Optional NEWLINE allowed after RANGLE (before annotations) and after ASSIGN.
     n00b_add_rule(g, rule, N00B_TERMINAL(LANGLE), N00B_TERMINAL(NAME),
                   N00B_TERMINAL(RANGLE), N00B_NT(annotations),
                   N00B_TERMINAL(ASSIGN),
+                  N00B_NT(expression), N00B_TERMINAL(NEWLINE));
+    n00b_add_rule(g, rule, N00B_TERMINAL(LANGLE), N00B_TERMINAL(NAME),
+                  N00B_TERMINAL(RANGLE), N00B_NT(annotations),
+                  N00B_TERMINAL(ASSIGN), N00B_TERMINAL(NEWLINE),
+                  N00B_NT(expression), N00B_TERMINAL(NEWLINE));
+    n00b_add_rule(g, rule, N00B_TERMINAL(LANGLE), N00B_TERMINAL(NAME),
+                  N00B_TERMINAL(RANGLE), N00B_TERMINAL(NEWLINE),
+                  N00B_NT(annotations),
+                  N00B_TERMINAL(ASSIGN),
+                  N00B_NT(expression), N00B_TERMINAL(NEWLINE));
+    n00b_add_rule(g, rule, N00B_TERMINAL(LANGLE), N00B_TERMINAL(NAME),
+                  N00B_TERMINAL(RANGLE), N00B_TERMINAL(NEWLINE),
+                  N00B_NT(annotations),
+                  N00B_TERMINAL(ASSIGN), N00B_TERMINAL(NEWLINE),
                   N00B_NT(expression), N00B_TERMINAL(NEWLINE));
 
     // expression -> list | list PIPE expression
@@ -1667,31 +1690,31 @@ build_bnf_grammar(void)
 // ============================================================================
 
 static bool
-reserved_to_class(n00b_string_t name, n00b_char_class_t *cc_out)
+reserved_to_class(n00b_string_t *name, n00b_char_class_t *cc_out)
 {
-    if (!name.data) {
+    if (!name) {
         return false;
     }
 
     struct {
-        const char       *lit;
+        n00b_string_t    *lit;
         n00b_char_class_t cc;
     } map[] = {
-        {"__DIGIT",          N00B_CC_ASCII_DIGIT       },
-        {"__ALPHA",          N00B_CC_ASCII_ALPHA        },
-        {"__UPPER",          N00B_CC_ASCII_UPPER        },
-        {"__LOWER",          N00B_CC_ASCII_LOWER        },
-        {"__HEX",            N00B_CC_HEX_DIGIT          },
-        {"__NONZERO_DIGIT",  N00B_CC_NONZERO_DIGIT      },
-        {"__WHITESPACE",     N00B_CC_WHITESPACE          },
-        {"__WS",             N00B_CC_WHITESPACE          },
-        {"__ID_START",       N00B_CC_ID_START            },
-        {"__ID_CONTINUE",    N00B_CC_ID_CONTINUE         },
-        {"__PRINTABLE",      N00B_CC_PRINTABLE           },
-        {"__UNICODE_DIGIT",  N00B_CC_UNICODE_DIGIT       },
-        {"__JSON_STR",       N00B_CC_JSON_STRING_CHAR    },
-        {"__REGEX_STR",      N00B_CC_REGEX_BODY_CHAR     },
-        {NULL,               0                          },
+        {r"__DIGIT",          N00B_CC_ASCII_DIGIT       },
+        {r"__ALPHA",          N00B_CC_ASCII_ALPHA        },
+        {r"__UPPER",          N00B_CC_ASCII_UPPER        },
+        {r"__LOWER",          N00B_CC_ASCII_LOWER        },
+        {r"__HEX",            N00B_CC_HEX_DIGIT          },
+        {r"__NONZERO_DIGIT",  N00B_CC_NONZERO_DIGIT      },
+        {r"__WHITESPACE",     N00B_CC_WHITESPACE          },
+        {r"__WS",             N00B_CC_WHITESPACE          },
+        {r"__ID_START",       N00B_CC_ID_START            },
+        {r"__ID_CONTINUE",    N00B_CC_ID_CONTINUE         },
+        {r"__PRINTABLE",      N00B_CC_PRINTABLE           },
+        {r"__UNICODE_DIGIT",  N00B_CC_UNICODE_DIGIT       },
+        {r"__JSON_STR",       N00B_CC_JSON_STRING_CHAR    },
+        {r"__REGEX_STR",      N00B_CC_REGEX_BODY_CHAR     },
+        {NULL,                0                          },
     };
 
     for (int i = 0; map[i].lit; i++) {
@@ -1732,7 +1755,7 @@ resolve_term_to_matches(n00b_grammar_t *user_g,
     int           cap   = *cap_p;
     char          type  = tagged[0];
     const char   *val   = tagged + 2;
-    n00b_string_t val_s  = n00b_string_from_cstr(val);
+    n00b_string_t *val_s  = n00b_string_from_cstr(val);
 
     switch (type) {
     case 'L': {
@@ -1752,7 +1775,7 @@ resolve_term_to_matches(n00b_grammar_t *user_g,
 
             // Register it as a terminal so valid_tokens and terminal_by_id
             // are populated.
-            n00b_string_t cp_str = n00b_string_from_raw(start, (int64_t)cp_len);
+            n00b_string_t *cp_str = n00b_string_from_raw(start, (int64_t)cp_len);
             n00b_register_terminal(user_g, cp_str);
 
             if (n >= cap) {
@@ -1938,7 +1961,7 @@ resolve_group_to_match(n00b_grammar_t    *user_g,
         char namebuf[64];
         snprintf(namebuf, sizeof(namebuf),
                  "$$bnf_anon_%d", bnf_anon_counter++);
-        n00b_string_t   name_s  = n00b_string_from_cstr(namebuf);
+        n00b_string_t  *name_s  = n00b_string_from_cstr(namebuf);
         n00b_nonterm_t *anon_nt = n00b_nonterm(user_g, name_s);
         int64_t         anon_id = anon_nt->id;
 
@@ -2052,7 +2075,7 @@ attach_annot_to_rule(n00b_parse_rule_t *rule_p, bnf_annot_info_t *info)
 // Helper: push a BNF diagnostic (to diag if available, always to stderr).
 static void
 bnf_diag(n00b_diag_ctx_t *diag, n00b_diag_severity_t sev,
-         n00b_string_t code, n00b_string_t msg, n00b_diag_span_t span)
+         n00b_string_t *code, n00b_string_t *msg, n00b_diag_span_t span)
 {
     if (diag) {
         n00b_diag_push(diag, sev, N00B_STAGE_PARSE, code, msg, span);
@@ -2063,8 +2086,8 @@ bnf_diag(n00b_diag_ctx_t *diag, n00b_diag_severity_t sev,
                                                      : "note";
     fprintf(stderr, "bnf %s[%.*s]: %.*s",
             sev_str,
-            (int)code.u8_bytes, code.data,
-            (int)msg.u8_bytes, msg.data);
+            (int)code->u8_bytes, code->data,
+            (int)msg->u8_bytes, msg->data);
 
     if (span.start_line > 0) {
         fprintf(stderr, " (line %u, col %u)", span.start_line, span.start_col);
@@ -2075,11 +2098,11 @@ bnf_diag(n00b_diag_ctx_t *diag, n00b_diag_severity_t sev,
 
 static bool
 populate_grammar(n00b_grammar_t *user_g, bnf_result_t *result,
-                 n00b_string_t start_symbol, n00b_diag_ctx_t *diag)
+                 n00b_string_t *start_symbol, n00b_diag_ctx_t *diag)
 {
     if (!result || result->tag != BNF_DICT) {
-        bnf_diag(diag, N00B_DIAG_ERROR, *r"B010",
-                 *r"BNF walk result is not a rule dictionary (internal error)",
+        bnf_diag(diag, N00B_DIAG_ERROR, r"B010",
+                 r"BNF walk result is not a rule dictionary (internal error)",
                  (n00b_diag_span_t){0});
         return false;
     }
@@ -2087,8 +2110,8 @@ populate_grammar(n00b_grammar_t *user_g, bnf_result_t *result,
     bnf_list_t *pairs = (bnf_list_t *)result->data;
 
     if (!pairs || !pairs->len) {
-        bnf_diag(diag, N00B_DIAG_ERROR, *r"B011",
-                 *r"BNF grammar contains no rules",
+        bnf_diag(diag, N00B_DIAG_ERROR, r"B011",
+                 r"BNF grammar contains no rules",
                  (n00b_diag_span_t){0});
         return false;
     }
@@ -2105,7 +2128,7 @@ populate_grammar(n00b_grammar_t *user_g, bnf_result_t *result,
         bool is_grammar_annot = (!name || !name->data || name->data[0] == '\0');
 
         if (!is_grammar_annot) {
-            n00b_nonterm(user_g, *name);
+            n00b_nonterm(user_g, name);
 
             if (!first_name) {
                 first_name = name;
@@ -2125,7 +2148,7 @@ populate_grammar(n00b_grammar_t *user_g, bnf_result_t *result,
                     bnf_annot_info_t *info = (bnf_annot_info_t *)a_r->data;
 
                     if (info->kind == N00B_ANNOT_TOKENIZER) {
-                        if (info->scope_tag.data) {
+                        if (info->scope_tag->data) {
                             user_g->tokenizer_name = info->scope_tag;
                         }
                     }
@@ -2135,17 +2158,17 @@ populate_grammar(n00b_grammar_t *user_g, bnf_result_t *result,
     }
 
     // Set start symbol.
-    n00b_string_t start_s;
+    n00b_string_t *start_s;
 
-    if (start_symbol.data) {
+    if (start_symbol) {
         start_s = start_symbol;
     }
     else if (first_name) {
-        start_s = *first_name;
+        start_s = first_name;
     }
     else {
-        bnf_diag(diag, N00B_DIAG_ERROR, *r"B012",
-                 *r"no start symbol specified and grammar has no rules",
+        bnf_diag(diag, N00B_DIAG_ERROR, r"B012",
+                 r"no start symbol specified and grammar has no rules",
                  (n00b_diag_span_t){0});
         return false;
     }
@@ -2186,7 +2209,7 @@ populate_grammar(n00b_grammar_t *user_g, bnf_result_t *result,
             }
         }
 
-        int64_t nt_id = n00b_nonterm(user_g, *name)->id;
+        int64_t nt_id = n00b_nonterm(user_g, name)->id;
 
         bnf_list_t *alternatives = (bnf_list_t *)expr_r->data;
 
@@ -2269,11 +2292,11 @@ populate_grammar(n00b_grammar_t *user_g, bnf_result_t *result,
 
         if (has_type && !has_declares) {
             n00b_nonterm_t *nt = n00b_get_nonterm(user_g, rule->nt_id);
-            const char *nt_name = (nt && nt->name.data) ? nt->name.data : "?";
+            const char *nt_name = (nt && nt->name && nt->name->data) ? nt->name->data : "?";
             char msg_buf[256];
             snprintf(msg_buf, sizeof(msg_buf),
                      "@type requires @declares on <%s>", nt_name);
-            bnf_diag(diag, N00B_DIAG_ERROR, *r"B013",
+            bnf_diag(diag, N00B_DIAG_ERROR, r"B013",
                      n00b_string_from_cstr(msg_buf),
                      (n00b_diag_span_t){0});
             return false;
@@ -2357,7 +2380,7 @@ free_bnf_result(bnf_result_t *r)
     }
 
     case BNF_ANNOT: {
-        // Fields are n00b_string_t values from tok_str(); their .data is
+        // Fields are n00b_string_t * pointers from tok_str(); their .data is
         // owned by the scanner/token stream, not us.  Just free the struct.
         bnf_annot_info_t *info = (bnf_annot_info_t *)r->data;
         n00b_free(info);
@@ -2373,8 +2396,8 @@ free_bnf_result(bnf_result_t *r)
 // ============================================================================
 
 bool
-n00b_bnf_load(n00b_string_t   bnf_text,
-              n00b_string_t   start_symbol,
+n00b_bnf_load(n00b_string_t  *bnf_text,
+              n00b_string_t  *start_symbol,
               n00b_grammar_t *user_g) _kargs {
     n00b_parse_fn_t   parse_fn;
     n00b_parse_mode_t parse_mode = N00B_PARSE_MODE_UNSET;
@@ -2387,35 +2410,35 @@ n00b_bnf_load(n00b_string_t   bnf_text,
 
     n00b_diag_ctx_t *dx = kargs->diag;
 
-    if (!bnf_text.data || !user_g) {
-        bnf_diag(dx, N00B_DIAG_ERROR, *r"B000",
-                 *r"n00b_bnf_load: NULL input text or grammar",
+    if (!bnf_text || !user_g) {
+        bnf_diag(dx, N00B_DIAG_ERROR, r"B000",
+                 r"n00b_bnf_load: NULL input text or grammar",
                  (n00b_diag_span_t){0});
         return false;
     }
 
     // Preprocess.
-    n00b_string_t stripped = n00b_bnf_strip_comments(bnf_text);
-    n00b_string_t trimmed  = n00b_bnf_trim_lines(stripped);
+    n00b_string_t *stripped = n00b_bnf_strip_comments(bnf_text);
+    n00b_string_t *trimmed  = n00b_bnf_trim_lines(stripped);
 
     // Join continuation lines (lines starting with '|' are
     // merged with the preceding line).
     trimmed = bnf_join_continuations(trimmed);
 
     // Ensure text ends with a newline.
-    size_t len = trimmed.u8_bytes;
+    size_t len = trimmed->u8_bytes;
 
-    if (len > 0 && trimmed.data[len - 1] != '\n') {
+    if (len > 0 && trimmed->data[len - 1] != '\n') {
         char *tmp = n00b_alloc_array(char, len + 2);
-        memcpy(tmp, trimmed.data, len);
+        memcpy(tmp, trimmed->data, len);
         tmp[len]     = '\n';
         tmp[len + 1] = '\0';
         trimmed = n00b_string_from_raw(tmp, (int64_t)(len + 1));
     }
 
     // Tokenize using the scanner API.
-    n00b_buffer_t       *bnf_buf  = n00b_buffer_from_bytes(trimmed.data,
-                                                           (int64_t)trimmed.u8_bytes);
+    n00b_buffer_t       *bnf_buf  = n00b_buffer_from_bytes(trimmed->data,
+                                                           (int64_t)trimmed->u8_bytes);
     bool                 in_angle = false;
     n00b_scanner_t      *bnf_sc   = n00b_scanner_new(bnf_buf, bnf_scan, NULL,
                                                       .state = &in_angle);
@@ -2423,8 +2446,8 @@ n00b_bnf_load(n00b_string_t   bnf_text,
     n00b_list_t(n00b_token_info_t)    bnf_tl   = n00b_stream_collect(bnf_ts);
 
     if (n00b_list_len(bnf_tl) == 0) {
-        bnf_diag(dx, N00B_DIAG_ERROR, *r"B001",
-                 *r"BNF tokenizer produced no tokens (empty or unparseable input)",
+        bnf_diag(dx, N00B_DIAG_ERROR, r"B001",
+                 r"BNF tokenizer produced no tokens (empty or unparseable input)",
                  (n00b_diag_span_t){0});
         n00b_list_free(bnf_tl);
         n00b_token_stream_free(bnf_ts);
@@ -2449,14 +2472,14 @@ n00b_bnf_load(n00b_string_t   bnf_text,
 
     if (!n00b_parse_result_ok(pr)) {
         // Extract the rich error string from the Earley chart.
-        n00b_string_t err = n00b_parse_result_error_string(pr);
+        n00b_string_t *err = n00b_parse_result_error_string(pr);
         n00b_error_location_t loc = n00b_parse_result_error_location(pr);
         n00b_diag_span_t span = {
             .start_line = loc.line,
             .start_col  = loc.column,
         };
 
-        bnf_diag(dx, N00B_DIAG_ERROR, *r"B002", err, span);
+        bnf_diag(dx, N00B_DIAG_ERROR, r"B002", err, span);
 
         n00b_parse_result_free(pr);
         n00b_free(raw_ptrs);
@@ -2473,8 +2496,8 @@ n00b_bnf_load(n00b_string_t   bnf_text,
     bnf_result_t *result = (bnf_result_t *)n00b_parse_result_walk(pr, NULL, NULL);
 
     if (!result) {
-        bnf_diag(dx, N00B_DIAG_ERROR, *r"B003",
-                 *r"BNF parse succeeded but tree walk produced no result",
+        bnf_diag(dx, N00B_DIAG_ERROR, r"B003",
+                 r"BNF parse succeeded but tree walk produced no result",
                  (n00b_diag_span_t){0});
         n00b_parse_result_free(pr);
         n00b_free(raw_ptrs);

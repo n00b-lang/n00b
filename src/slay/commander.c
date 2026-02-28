@@ -18,7 +18,7 @@
 // ============================================================================
 
 static n00b_option_t(size_t)
-cmdr_find_command_index(n00b_cmdr_t *c, n00b_string_t name)
+cmdr_find_command_index(n00b_cmdr_t *c, n00b_string_t *name)
 {
     int32_t n_subs = n00b_list_len(c->root.subcommands);
 
@@ -26,8 +26,8 @@ cmdr_find_command_index(n00b_cmdr_t *c, n00b_string_t name)
         n00b_cmdr_command_t sub = n00b_list_get(c->root.subcommands, i);
 
         if (sub.has_name
-            && sub.name.u8_bytes == name.u8_bytes
-            && memcmp(sub.name.data, name.data, name.u8_bytes) == 0) {
+            && sub.name->u8_bytes == name->u8_bytes
+            && memcmp(sub.name->data, name->data, name->u8_bytes) == 0) {
             return n00b_option_set(size_t, (size_t)i);
         }
     }
@@ -43,7 +43,7 @@ cmdr_find_command_index_cstr(n00b_cmdr_t *c, const char *name)
     for (int32_t i = 0; i < n_subs; i++) {
         n00b_cmdr_command_t sub = n00b_list_get(c->root.subcommands, i);
 
-        if (sub.has_name && strcmp(sub.name.data, name) == 0) {
+        if (sub.has_name && strcmp(sub.name->data, name) == 0) {
             return n00b_option_set(size_t, (size_t)i);
         }
     }
@@ -56,9 +56,9 @@ cmdr_find_command_index_cstr(n00b_cmdr_t *c, const char *name)
 // The returned pointer is stable as long as no elements are added to
 // the subcommands list (which is true after finalize).
 static n00b_cmdr_command_t *
-cmdr_get_command(n00b_cmdr_t *c, n00b_string_t name)
+cmdr_get_command(n00b_cmdr_t *c, n00b_string_t *name)
 {
-    if (!name.data || name.u8_bytes == 0) {
+    if (!name || name->u8_bytes == 0) {
         return &c->root;
     }
 
@@ -72,9 +72,9 @@ cmdr_get_command(n00b_cmdr_t *c, n00b_string_t name)
 }
 
 static n00b_option_t(size_t)
-cmdr_find_flag_index(n00b_cmdr_command_t *cmd, n00b_string_t flag_name)
+cmdr_find_flag_index(n00b_cmdr_command_t *cmd, n00b_string_t *flag_name)
 {
-    if (!cmd || !flag_name.data) {
+    if (!cmd || !flag_name) {
         return n00b_option_none(size_t);
     }
 
@@ -83,15 +83,15 @@ cmdr_find_flag_index(n00b_cmdr_command_t *cmd, n00b_string_t flag_name)
     for (int32_t i = 0; i < n_flags; i++) {
         n00b_cmdr_flag_spec_t f = n00b_list_get(cmd->flags, i);
 
-        if (f.name.u8_bytes == flag_name.u8_bytes
-            && memcmp(f.name.data, flag_name.data, flag_name.u8_bytes) == 0) {
+        if (f.name->u8_bytes == flag_name->u8_bytes
+            && memcmp(f.name->data, flag_name->data, flag_name->u8_bytes) == 0) {
             return n00b_option_set(size_t, (size_t)i);
         }
 
         if (f.has_short
-            && f.short_name.u8_bytes == flag_name.u8_bytes
-            && memcmp(f.short_name.data, flag_name.data,
-                      flag_name.u8_bytes) == 0) {
+            && f.short_name->u8_bytes == flag_name->u8_bytes
+            && memcmp(f.short_name->data, flag_name->data,
+                      flag_name->u8_bytes) == 0) {
             return n00b_option_set(size_t, (size_t)i);
         }
     }
@@ -101,7 +101,7 @@ cmdr_find_flag_index(n00b_cmdr_command_t *cmd, n00b_string_t flag_name)
 
 // Find a flag by n00b_string_t name, returning its index.
 static n00b_option_t(size_t)
-cmdr_find_flag(n00b_cmdr_command_t *cmd, n00b_string_t flag_name)
+cmdr_find_flag(n00b_cmdr_command_t *cmd, n00b_string_t *flag_name)
 {
     return cmdr_find_flag_index(cmd, flag_name);
 }
@@ -119,11 +119,11 @@ cmdr_find_flag_cstr(n00b_cmdr_command_t *cmd, const char *flag_name)
     for (int32_t i = 0; i < n_flags; i++) {
         n00b_cmdr_flag_spec_t f = n00b_list_get(cmd->flags, i);
 
-        if (strcmp(f.name.data, flag_name) == 0) {
+        if (strcmp(f.name->data, flag_name) == 0) {
             return n00b_option_set(size_t, (size_t)i);
         }
 
-        if (f.has_short && strcmp(f.short_name.data, flag_name) == 0) {
+        if (f.has_short && strcmp(f.short_name->data, flag_name) == 0) {
             return n00b_option_set(size_t, (size_t)i);
         }
     }
@@ -156,7 +156,7 @@ n00b_cmdr_new(void)
 }
 
 n00b_cmdr_t *
-n00b_cmdr_from_bnf(n00b_string_t bnf, n00b_string_t start_symbol)
+n00b_cmdr_from_bnf(n00b_string_t *bnf, n00b_string_t *start_symbol)
 {
     n00b_cmdr_t *c = n00b_cmdr_new();
 
@@ -197,7 +197,7 @@ n00b_cmdr_free(n00b_cmdr_t *c)
 // ============================================================================
 
 void
-n00b_cmdr_set_name(n00b_cmdr_t *c, n00b_string_t name)
+n00b_cmdr_set_name(n00b_cmdr_t *c, n00b_string_t *name)
 {
     if (c) {
         c->name = name;
@@ -205,9 +205,9 @@ n00b_cmdr_set_name(n00b_cmdr_t *c, n00b_string_t name)
 }
 
 void
-n00b_cmdr_add_command(n00b_cmdr_t *c, n00b_string_t name, n00b_string_t doc)
+n00b_cmdr_add_command(n00b_cmdr_t *c, n00b_string_t *name, n00b_string_t *doc)
 {
-    if (!c || !name.data) {
+    if (!c || !name) {
         return;
     }
 
@@ -221,10 +221,10 @@ n00b_cmdr_add_command(n00b_cmdr_t *c, n00b_string_t name, n00b_string_t doc)
 }
 
 void
-n00b_cmdr_add_subcommand(n00b_cmdr_t *c, n00b_string_t parent,
-                          n00b_string_t name, n00b_string_t doc)
+n00b_cmdr_add_subcommand(n00b_cmdr_t *c, n00b_string_t *parent,
+                          n00b_string_t *name, n00b_string_t *doc)
 {
-    if (!c || !name.data) {
+    if (!c || !name) {
         return;
     }
 
@@ -244,11 +244,11 @@ n00b_cmdr_add_subcommand(n00b_cmdr_t *c, n00b_string_t parent,
 }
 
 void
-n00b_cmdr_add_flag(n00b_cmdr_t *c, n00b_string_t command,
-                    n00b_string_t flag_name, n00b_cmdr_arg_type_t type,
-                    bool takes_value, n00b_string_t doc)
+n00b_cmdr_add_flag(n00b_cmdr_t *c, n00b_string_t *command,
+                    n00b_string_t *flag_name, n00b_cmdr_arg_type_t type,
+                    bool takes_value, n00b_string_t *doc)
 {
-    if (!c || !flag_name.data) {
+    if (!c || !flag_name) {
         return;
     }
 
@@ -270,10 +270,10 @@ n00b_cmdr_add_flag(n00b_cmdr_t *c, n00b_string_t command,
 }
 
 void
-n00b_cmdr_add_flag_alias(n00b_cmdr_t *c, n00b_string_t command,
-                          n00b_string_t flag_name, n00b_string_t alias)
+n00b_cmdr_add_flag_alias(n00b_cmdr_t *c, n00b_string_t *command,
+                          n00b_string_t *flag_name, n00b_string_t *alias)
 {
-    if (!c || !flag_name.data || !alias.data) {
+    if (!c || !flag_name || !alias) {
         return;
     }
 
@@ -296,11 +296,11 @@ n00b_cmdr_add_flag_alias(n00b_cmdr_t *c, n00b_string_t command,
 }
 
 void
-n00b_cmdr_add_positional(n00b_cmdr_t *c, n00b_string_t command,
-                          n00b_string_t name, n00b_cmdr_arg_type_t type,
+n00b_cmdr_add_positional(n00b_cmdr_t *c, n00b_string_t *command,
+                          n00b_string_t *name, n00b_cmdr_arg_type_t type,
                           int min, int max)
 {
-    if (!c || !name.data) {
+    if (!c || !name) {
         return;
     }
 
@@ -346,7 +346,7 @@ cmdr_build_flag_nt(n00b_cmdr_t *c, n00b_cmdr_flag_spec_t f,
                     const char *prefix)
 {
     char nt_name[256];
-    snprintf(nt_name, sizeof(nt_name), "%s-flag-%s", prefix, f.name.data);
+    snprintf(nt_name, sizeof(nt_name), "%s-flag-%s", prefix, f.name->data);
 
     n00b_nonterm_t *nt = n00b_nonterm(c->grammar,
                                        n00b_string_from_cstr(nt_name));
@@ -501,7 +501,7 @@ cmdr_build_command_grammar(n00b_cmdr_t *c, n00b_cmdr_command_t *cmd,
         n00b_cmdr_command_t sub = n00b_list_get(cmd->subcommands, i);
         char sub_prefix[256];
         snprintf(sub_prefix, sizeof(sub_prefix), "%s-%s",
-                 prefix, sub.name.data);
+                 prefix, sub.name->data);
 
         cmdr_build_command_grammar(c, &sub, parent_id, sub_prefix);
     }
@@ -522,21 +522,21 @@ n00b_cmdr_finalize(n00b_cmdr_t *c)
 
     // Register base token types.
     c->tok_ids[N00B_CMDR_TID_WORD]  = n00b_register_terminal(c->grammar,
-                                                                *r"WORD");
+                                                                r"WORD");
     c->tok_ids[N00B_CMDR_TID_INT]   = n00b_register_terminal(c->grammar,
-                                                                *r"INT");
+                                                                r"INT");
     c->tok_ids[N00B_CMDR_TID_FLOAT] = n00b_register_terminal(c->grammar,
-                                                                *r"FLOAT");
+                                                                r"FLOAT");
     c->tok_ids[N00B_CMDR_TID_BOOL]  = n00b_register_terminal(c->grammar,
-                                                                *r"BOOL");
+                                                                r"BOOL");
     c->tok_ids[N00B_CMDR_TID_EQ]    = n00b_register_terminal(c->grammar,
-                                                                *r"EQ");
+                                                                r"EQ");
     c->tok_ids[N00B_CMDR_TID_COMMA] = n00b_register_terminal(c->grammar,
-                                                                *r"COMMA");
+                                                                r"COMMA");
     c->tok_ids[N00B_CMDR_TID_DD]    = n00b_register_terminal(c->grammar,
-                                                                *r"DD");
+                                                                r"DD");
     c->tok_ids[N00B_CMDR_TID_FLAG]  = n00b_register_terminal(c->grammar,
-                                                                *r"FLAG");
+                                                                r"FLAG");
 
     // Register all flag names.
     cmdr_register_command_terminals(c, &c->root);
@@ -558,7 +558,7 @@ n00b_cmdr_finalize(n00b_cmdr_t *c)
     // Build grammar.  Save the start NT's id — not a pointer —
     // since building subcommand grammars will grow nt_list and
     // invalidate pointers into it.
-    n00b_nonterm_t *start    = n00b_nonterm(c->grammar, *r"cmd");
+    n00b_nonterm_t *start    = n00b_nonterm(c->grammar, r"cmd");
     n00b_nt_id_t    start_id = n00b_nonterm_id(start);
     n00b_grammar_set_start(c->grammar, start);
 
@@ -566,7 +566,7 @@ n00b_cmdr_finalize(n00b_cmdr_t *c)
         for (int32_t i = 0; i < n_subs; i++) {
             n00b_cmdr_command_t sub = n00b_list_get(c->root.subcommands, i);
             char prefix[256];
-            snprintf(prefix, sizeof(prefix), "cmd-%s", sub.name.data);
+            snprintf(prefix, sizeof(prefix), "cmd-%s", sub.name->data);
 
             cmdr_build_command_grammar(c, &sub, start_id, prefix);
         }
@@ -595,7 +595,7 @@ cmdr_make_error_result(const char *msg)
 
     r->ok     = false;
     r->args   = n00b_list_new_private(n00b_cmdr_arg_t);
-    r->errors = n00b_list_new_private(n00b_string_t);
+    r->errors = n00b_list_new_private(n00b_string_t *);
 
     n00b_list_push(r->errors, n00b_string_from_cstr(msg));
 
@@ -607,7 +607,7 @@ cmdr_make_error_result(const char *msg)
 // Collect all terminal text from a parse tree into a flat list.
 static void
 cmdr_collect_terminal_text(n00b_parse_tree_t *tree,
-                            n00b_list_t(n00b_string_t) *texts)
+                            n00b_list_t(n00b_string_t *) *texts)
 {
     if (!tree) {
         return;
@@ -617,9 +617,9 @@ cmdr_collect_terminal_text(n00b_parse_tree_t *tree,
         n00b_token_info_t *tok = n00b_tree_leaf_value(tree);
 
         if (tok && n00b_option_is_set(tok->value)) {
-            n00b_string_t text = n00b_option_get(tok->value);
+            n00b_string_t *text = n00b_option_get(tok->value);
 
-            if (text.data && text.u8_bytes > 0) {
+            if (text && text->u8_bytes > 0) {
                 n00b_list_push(*texts, text);
             }
         }
@@ -642,22 +642,22 @@ cmdr_extract_result(n00b_cmdr_t *c, n00b_parse_tree_t *tree,
         return;
     }
 
-    n00b_list_t(n00b_string_t) texts = n00b_list_new_private(n00b_string_t);
+    n00b_list_t(n00b_string_t *) texts = n00b_list_new_private(n00b_string_t *);
     cmdr_collect_terminal_text(tree, &texts);
 
     int32_t n    = n00b_list_len(texts);
     bool past_dd = false;
 
     for (int32_t i = 0; i < n; i++) {
-        n00b_string_t text = n00b_list_get(texts, i);
+        n00b_string_t *text = n00b_list_get(texts, i);
 
-        if (!text.data || text.u8_bytes == 0) {
+        if (!text || text->u8_bytes == 0) {
             continue;
         }
 
         // Track -- separator
-        if (text.u8_bytes == 2
-            && text.data[0] == '-' && text.data[1] == '-') {
+        if (text->u8_bytes == 2
+            && text->data[0] == '-' && text->data[1] == '-') {
             past_dd = true;
             continue;
         }
@@ -672,9 +672,9 @@ cmdr_extract_result(n00b_cmdr_t *c, n00b_parse_tree_t *tree,
                                                          si);
 
                 if (sub.has_name
-                    && sub.name.u8_bytes == text.u8_bytes
-                    && memcmp(sub.name.data, text.data,
-                              text.u8_bytes) == 0) {
+                    && sub.name->u8_bytes == text->u8_bytes
+                    && memcmp(sub.name->data, text->data,
+                              text->u8_bytes) == 0) {
                     r->command = text;
                     r->has_cmd = true;
                     found_sub  = true;
@@ -707,7 +707,7 @@ cmdr_extract_result(n00b_cmdr_t *c, n00b_parse_tree_t *tree,
         }
 
         n00b_option_t(size_t) flag_idx = cmdr_find_flag(cmd, text);
-        n00b_cmdr_command_t *flag_cmd = cmd;
+        n00b_cmdr_command_t  *flag_cmd = cmd;
 
         if (!n00b_option_is_set(flag_idx)) {
             flag_idx = cmdr_find_flag(&c->root, text);
@@ -722,20 +722,20 @@ cmdr_extract_result(n00b_cmdr_t *c, n00b_parse_tree_t *tree,
             if (flag.takes_value && i + 1 < n) {
                 // Skip '=' if present
                 if (i + 1 < n) {
-                    n00b_string_t next = n00b_list_get(texts, i + 1);
+                    n00b_string_t *next = n00b_list_get(texts, i + 1);
 
-                    if (next.u8_bytes == 1 && next.data[0] == '=') {
+                    if (next && next->u8_bytes == 1 && next->data[0] == '=') {
                         i++;
                     }
                 }
 
                 if (i + 1 < n) {
                     i++;
-                    n00b_string_t val = n00b_list_get(texts, i);
+                    n00b_string_t *val = n00b_list_get(texts, i);
 
                     // Need a null-terminated copy for strtoll/strtod
-                    char *cval = n00b_alloc_array(char, val.u8_bytes + 1);
-                    memcpy(cval, val.data, val.u8_bytes);
+                    char *cval = n00b_alloc_array(char, val->u8_bytes + 1);
+                    memcpy(cval, val->data, val->u8_bytes);
 
                     switch (flag.value_type) {
                     case N00B_CMDR_TYPE_INT:
@@ -770,20 +770,18 @@ cmdr_extract_result(n00b_cmdr_t *c, n00b_parse_tree_t *tree,
             }
 
             // Store under long name
-            n00b_string_t *name_key = &flag.name;
-            n00b_dict_put(&r->flags, name_key, v);
+            n00b_dict_put(&r->flags, flag.name, v);
 
             // Also store under alias
             if (flag.has_short) {
-                n00b_string_t *short_key = &flag.short_name;
-                n00b_dict_put(&r->flags, short_key, v);
+                n00b_dict_put(&r->flags, flag.short_name, v);
             }
 
             continue;
         }
 
         // Skip '='
-        if (text.u8_bytes == 1 && text.data[0] == '=') {
+        if (text->u8_bytes == 1 && text->data[0] == '=') {
             continue;
         }
 
@@ -793,8 +791,8 @@ cmdr_extract_result(n00b_cmdr_t *c, n00b_parse_tree_t *tree,
         arg.value = text;
 
         // Pre-parse numeric values
-        char *ctext = n00b_alloc_array(char, text.u8_bytes + 1);
-        memcpy(ctext, text.data, text.u8_bytes);
+        char *ctext = n00b_alloc_array(char, text->u8_bytes + 1);
+        memcpy(ctext, text->data, text->u8_bytes);
 
         arg.int_val   = strtoll(ctext, NULL, 10);
         arg.float_val = strtod(ctext, NULL);
@@ -838,16 +836,16 @@ n00b_cmdr_parse(n00b_cmdr_t *c, int argc, const char **argv)
 
     n00b_cmdr_result_t *r = n00b_alloc(n00b_cmdr_result_t);
     r->args   = n00b_list_new_private(n00b_cmdr_arg_t);
-    r->errors = n00b_list_new_private(n00b_string_t);
+    r->errors = n00b_list_new_private(n00b_string_t *);
 
     n00b_dict_init(&r->flags, .hash = n00b_string_hash, .skip_obj_hash = true);
 
     if (!n00b_parse_result_ok(pr)) {
         r->ok = false;
 
-        n00b_string_t err_str = n00b_parse_result_error_string(pr);
+        n00b_string_t *err_str = n00b_parse_result_error_string(pr);
 
-        if (err_str.data && err_str.u8_bytes > 0) {
+        if (err_str && err_str->u8_bytes > 0) {
             n00b_list_push(r->errors, err_str);
         }
         else {
@@ -875,7 +873,7 @@ n00b_cmdr_parse(n00b_cmdr_t *c, int argc, const char **argv)
 }
 
 n00b_cmdr_result_t *
-n00b_cmdr_parse_string(n00b_cmdr_t *c, n00b_string_t cmdline)
+n00b_cmdr_parse_string(n00b_cmdr_t *c, n00b_string_t *cmdline)
 {
     if (!c) {
         return cmdr_make_error_result("commander not initialized");
@@ -903,16 +901,16 @@ n00b_cmdr_parse_string(n00b_cmdr_t *c, n00b_string_t cmdline)
 
     n00b_cmdr_result_t *r = n00b_alloc(n00b_cmdr_result_t);
     r->args   = n00b_list_new_private(n00b_cmdr_arg_t);
-    r->errors = n00b_list_new_private(n00b_string_t);
+    r->errors = n00b_list_new_private(n00b_string_t *);
 
     n00b_dict_init(&r->flags, .hash = n00b_string_hash, .skip_obj_hash = true);
 
     if (!n00b_parse_result_ok(pr)) {
         r->ok = false;
 
-        n00b_string_t err_str = n00b_parse_result_error_string(pr);
+        n00b_string_t *err_str = n00b_parse_result_error_string(pr);
 
-        if (err_str.data && err_str.u8_bytes > 0) {
+        if (err_str && err_str->u8_bytes > 0) {
             n00b_list_push(r->errors, err_str);
         }
         else {
@@ -940,7 +938,7 @@ n00b_cmdr_parse_string(n00b_cmdr_t *c, n00b_string_t cmdline)
 // Result queries
 // ============================================================================
 
-n00b_string_t
+n00b_string_t *
 n00b_cmdr_result_command(n00b_cmdr_result_t *r)
 {
     if (!r || !r->has_cmd) {
@@ -951,32 +949,30 @@ n00b_cmdr_result_command(n00b_cmdr_result_t *r)
 }
 
 bool
-n00b_cmdr_flag_present(n00b_cmdr_result_t *r, n00b_string_t flag)
+n00b_cmdr_flag_present(n00b_cmdr_result_t *r, n00b_string_t *flag)
 {
-    if (!r || !flag.data) {
+    if (!r || !flag) {
         return false;
     }
 
-    n00b_string_t *key = &flag;
-    return n00b_dict_contains(&r->flags, key);
+    return n00b_dict_contains(&r->flags, flag);
 }
 
 n00b_cmdr_val_t *
-n00b_cmdr_flag_get(n00b_cmdr_result_t *r, n00b_string_t flag)
+n00b_cmdr_flag_get(n00b_cmdr_result_t *r, n00b_string_t *flag)
 {
-    if (!r || !flag.data) {
+    if (!r || !flag) {
         return NULL;
     }
 
-    n00b_string_t *key   = &flag;
     bool           found = false;
-    n00b_cmdr_val_t *v   = n00b_dict_get(&r->flags, key, &found);
+    n00b_cmdr_val_t *v   = n00b_dict_get(&r->flags, flag, &found);
 
     return found ? v : NULL;
 }
 
-n00b_string_t
-n00b_cmdr_flag_str(n00b_cmdr_result_t *r, n00b_string_t flag)
+n00b_string_t *
+n00b_cmdr_flag_str(n00b_cmdr_result_t *r, n00b_string_t *flag)
 {
     n00b_cmdr_val_t *v = n00b_cmdr_flag_get(r, flag);
 
@@ -988,7 +984,7 @@ n00b_cmdr_flag_str(n00b_cmdr_result_t *r, n00b_string_t flag)
 }
 
 int64_t
-n00b_cmdr_flag_int(n00b_cmdr_result_t *r, n00b_string_t flag)
+n00b_cmdr_flag_int(n00b_cmdr_result_t *r, n00b_string_t *flag)
 {
     n00b_cmdr_val_t *v = n00b_cmdr_flag_get(r, flag);
 
@@ -1000,7 +996,7 @@ n00b_cmdr_flag_int(n00b_cmdr_result_t *r, n00b_string_t flag)
 }
 
 bool
-n00b_cmdr_flag_bool(n00b_cmdr_result_t *r, n00b_string_t flag)
+n00b_cmdr_flag_bool(n00b_cmdr_result_t *r, n00b_string_t *flag)
 {
     n00b_cmdr_val_t *v = n00b_cmdr_flag_get(r, flag);
 
@@ -1021,7 +1017,7 @@ n00b_cmdr_arg_count(n00b_cmdr_result_t *r)
     return n00b_list_len(r->args);
 }
 
-n00b_string_t
+n00b_string_t *
 n00b_cmdr_arg_str(n00b_cmdr_result_t *r, int index)
 {
     if (!r || index < 0 || (size_t)index >= n00b_list_len(r->args)) {
@@ -1057,7 +1053,7 @@ n00b_cmdr_error_count(n00b_cmdr_result_t *r)
     return n00b_list_len(r->errors);
 }
 
-n00b_string_t
+n00b_string_t *
 n00b_cmdr_error_get(n00b_cmdr_result_t *r, int32_t index)
 {
     if (!r || index < 0 || (size_t)index >= n00b_list_len(r->errors)) {

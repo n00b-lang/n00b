@@ -13,22 +13,12 @@
 #include "core/string.h"
 
 // ===========================================================================
-// Option types for API functions that may fail
-// ===========================================================================
-// n00b_option_decl(int32_t) is in core/option.h
-// ===========================================================================
-// Result types for string operations
-// ===========================================================================
-
-n00b_result_decl(n00b_string_t);
-
-// ===========================================================================
 // Result types
 // ===========================================================================
 
 /** @brief Result of an IDNA domain name conversion. */
 typedef struct n00b_unicode_idna_result_t {
-    n00b_string_t              value; /**< The converted domain string (empty on error) */
+    n00b_string_t             *value; /**< The converted domain string (empty on error) */
     n00b_unicode_idna_error_t  error; /**< Error code (N00B_UNICODE_IDNA_OK on success) */
 } n00b_unicode_idna_result_t;
 

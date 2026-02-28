@@ -47,8 +47,6 @@ typedef bool (*n00b_condition_predicate_fn)(uint64_t actual_pred,
                                             void    *cv_param,
                                             void    *thread_param);
 
-n00b_list_decl(n00b_thread_t *);
-
 struct n00b_condition_t {
     N00B_COMMON_LOCK_BASE;
     // These first two fields must mirror n00b_mutex_t layout:

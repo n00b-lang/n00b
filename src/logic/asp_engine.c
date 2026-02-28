@@ -48,7 +48,7 @@ n00b_dl_engine_free(n00b_dl_engine_t *eng)
 // ---------------------------------------------------------------------------
 
 n00b_dl_rel_id_t
-n00b_dl_engine_relation(n00b_dl_engine_t *eng, n00b_string_t name,
+n00b_dl_engine_relation(n00b_dl_engine_t *eng, n00b_string_t *name,
                          int32_t arity)
 {
     size_t n = n00b_list_len(eng->relations);
@@ -73,7 +73,7 @@ n00b_dl_engine_relation(n00b_dl_engine_t *eng, n00b_string_t name,
 // ---------------------------------------------------------------------------
 
 n00b_dl_sym_t
-n00b_dl_const(n00b_dl_engine_t *eng, n00b_string_t name)
+n00b_dl_const(n00b_dl_engine_t *eng, n00b_string_t *name)
 {
     return n00b_dl_intern(&eng->intern, name);
 }
@@ -85,7 +85,7 @@ n00b_dl_int(n00b_dl_engine_t *eng, int64_t value)
 }
 
 n00b_dl_sym_t
-n00b_dl_var(n00b_dl_engine_t *eng, n00b_string_t name)
+n00b_dl_var(n00b_dl_engine_t *eng, n00b_string_t *name)
 {
     return n00b_dl_intern_var(&eng->intern, name);
 }
@@ -160,11 +160,11 @@ n00b_dl_expr_free(n00b_dl_expr_t *expr)
 n00b_result_t(int64_t)
 n00b_dl_sym_to_int64(n00b_dl_engine_t *eng, n00b_dl_sym_t sym)
 {
-    n00b_string_t name = n00b_dl_intern_name(&eng->intern, sym);
-    if (name.u8_bytes == 0 || name.data[0] != '#') {
+    n00b_string_t *name = n00b_dl_intern_name(&eng->intern, sym);
+    if (!name || name->u8_bytes == 0 || name->data[0] != '#') {
         return n00b_result_err(int64_t, EINVAL);
     }
-    return n00b_result_ok(int64_t, strtoll(name.data + 1, nullptr, 10));
+    return n00b_result_ok(int64_t, strtoll(name->data + 1, nullptr, 10));
 }
 
 // ---------------------------------------------------------------------------
@@ -786,7 +786,7 @@ n00b_dl_count(n00b_dl_engine_t *eng, n00b_dl_rel_id_t rel)
 // ---------------------------------------------------------------------------
 
 n00b_option_t(n00b_dl_rel_id_t)
-n00b_dl_find_relation(n00b_dl_engine_t *eng, n00b_string_t name)
+n00b_dl_find_relation(n00b_dl_engine_t *eng, n00b_string_t *name)
 {
     size_t n = n00b_list_len(eng->relations);
     for (size_t i = 0; i < n; i++) {
@@ -798,7 +798,7 @@ n00b_dl_find_relation(n00b_dl_engine_t *eng, n00b_string_t name)
     return n00b_option_none(n00b_dl_rel_id_t);
 }
 
-n00b_string_t
+n00b_string_t *
 n00b_dl_relation_name(n00b_dl_engine_t *eng, n00b_dl_rel_id_t id)
 {
     if (id < 0 || (size_t)id >= n00b_list_len(eng->relations)) {
@@ -817,7 +817,7 @@ n00b_dl_relation_arity(n00b_dl_engine_t *eng, n00b_dl_rel_id_t id)
 }
 
 size_t
-n00b_dl_count_by_name(n00b_dl_engine_t *eng, n00b_string_t name)
+n00b_dl_count_by_name(n00b_dl_engine_t *eng, n00b_string_t *name)
 {
     auto opt = n00b_dl_find_relation(eng, name);
     if (!n00b_option_is_set(opt)) return 0;
@@ -843,16 +843,16 @@ n00b_dl_num_relations(n00b_dl_engine_t *eng)
     return (int32_t)n00b_list_len(eng->relations);
 }
 
-n00b_string_t
+n00b_string_t *
 n00b_dl_sym_to_str(n00b_dl_engine_t *eng, n00b_dl_sym_t sym)
 {
-    n00b_string_t name = n00b_dl_intern_name(&eng->intern, sym);
-    if (name.u8_bytes == 0) {
-        return *r"?";
+    n00b_string_t *name = n00b_dl_intern_name(&eng->intern, sym);
+    if (!name || name->u8_bytes == 0) {
+        return r"?";
     }
-    if (name.data[0] == '#') {
-        return n00b_string_from_raw(name.data + 1,
-                                    (int64_t)name.u8_bytes - 1);
+    if (name->data[0] == '#') {
+        return n00b_string_from_raw(name->data + 1,
+                                    (int64_t)name->u8_bytes - 1);
     }
     return name;
 }

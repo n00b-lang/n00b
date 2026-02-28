@@ -7,6 +7,9 @@
 #include "n00b/n00b_module_loader.h"
 #include "n00b/n00b_compile.h"
 #include "n00b/n00b_tokenizer.h"
+#include "n00b/n00b_type_map.h"
+#include "typecheck/unify.h"
+#include "adt/variant.h"
 #include "internal/slay/codegen_internal.h"
 #include "internal/slay/grammar_internal.h"
 #include "slay/tree_util.h"
@@ -309,21 +312,21 @@ extract_func_name(n00b_parse_tree_t *func_def_node)
             continue;
         }
 
-        n00b_string_t val = n00b_option_get(tok->value);
+        n00b_string_t *val = n00b_option_get(tok->value);
 
-        if (val.u8_bytes <= 0) {
+        if (val->u8_bytes <= 0) {
             continue;
         }
 
         // Skip grammar keywords.
-        if (n00b_unicode_str_eq(val, *r"private")
-            || n00b_unicode_str_eq(val, *r"once")
-            || n00b_unicode_str_eq(val, *r"func")
-            || n00b_unicode_str_eq(val, *r"method")) {
+        if (n00b_unicode_str_eq(val, r"private")
+            || n00b_unicode_str_eq(val, r"once")
+            || n00b_unicode_str_eq(val, r"func")
+            || n00b_unicode_str_eq(val, r"method")) {
             continue;
         }
 
-        return val.data;
+        return val->data;
     }
 
     return NULL;
@@ -359,9 +362,9 @@ is_func_private(n00b_parse_tree_t *func_def_node)
                     n00b_token_info_t *tok = n00b_tree_leaf_value(gc);
 
                     if (tok && n00b_option_is_set(tok->value)) {
-                        n00b_string_t v = n00b_option_get(tok->value);
+                        n00b_string_t *v = n00b_option_get(tok->value);
 
-                        if (n00b_unicode_str_eq(v, *r"private")) {
+                        if (n00b_unicode_str_eq(v, r"private")) {
                             return true;
                         }
                     }
@@ -377,15 +380,15 @@ is_func_private(n00b_parse_tree_t *func_def_node)
             continue;
         }
 
-        n00b_string_t val = n00b_option_get(tok->value);
+        n00b_string_t *val = n00b_option_get(tok->value);
 
-        if (n00b_unicode_str_eq(val, *r"private")) {
+        if (n00b_unicode_str_eq(val, r"private")) {
             return true;
         }
 
         // Once we hit "func" or "method" there are no more modifiers.
-        if (n00b_unicode_str_eq(val, *r"func")
-            || n00b_unicode_str_eq(val, *r"method")) {
+        if (n00b_unicode_str_eq(val, r"func")
+            || n00b_unicode_str_eq(val, r"method")) {
             break;
         }
     }
@@ -425,11 +428,11 @@ count_ids_in_list(n00b_parse_tree_t *node)
             n00b_token_info_t *tok = n00b_tree_leaf_value(child);
 
             if (tok && n00b_option_is_set(tok->value)) {
-                n00b_string_t v = n00b_option_get(tok->value);
+                n00b_string_t *v = n00b_option_get(tok->value);
 
                 // Count identifiers, skip "," separator.
-                if (v.u8_bytes > 0
-                    && !(v.u8_bytes == 1 && v.data[0] == ',')) {
+                if (v->u8_bytes > 0
+                    && !(v->u8_bytes == 1 && v->data[0] == ',')) {
                     count++;
                 }
             }
@@ -464,11 +467,11 @@ collect_ids_from_list(n00b_parse_tree_t *node,
             n00b_token_info_t *tok = n00b_tree_leaf_value(child);
 
             if (tok && n00b_option_is_set(tok->value)) {
-                n00b_string_t v = n00b_option_get(tok->value);
+                n00b_string_t *v = n00b_option_get(tok->value);
 
-                if (v.u8_bytes > 0
-                    && !(v.u8_bytes == 1 && v.data[0] == ',')) {
-                    names[pos++] = v.data;
+                if (v->u8_bytes > 0
+                    && !(v->u8_bytes == 1 && v->data[0] == ',')) {
+                    names[pos++] = v->data;
                 }
             }
         }
@@ -494,7 +497,7 @@ extract_params(n00b_grammar_t     *grammar,
 {
     // Find <param-decl>.
     n00b_parse_tree_t *param_decl = n00b_tree_find_child_by_nt_name(
-        grammar, func_def_node, *r"param-decl");
+        grammar, func_def_node, r"param-decl");
 
     if (!param_decl) {
         return 0;
@@ -502,7 +505,7 @@ extract_params(n00b_grammar_t     *grammar,
 
     // Find <formals> inside <param-decl>.
     n00b_parse_tree_t *formals = n00b_tree_find_child_by_nt_name(
-        grammar, param_decl, *r"formals");
+        grammar, param_decl, r"formals");
 
     if (!formals) {
         return 0;
@@ -555,11 +558,11 @@ extract_params(n00b_grammar_t     *grammar,
 
                             if (nt2
                                 && n00b_unicode_str_eq(nt2->name,
-                                                       *r"formal-param")) {
+                                                       r"formal-param")) {
                                 // Find <id-list> inside formal-param.
                                 n00b_parse_tree_t *ids
                                     = n00b_tree_find_child_by_nt_name(
-                                        grammar, gc2, *r"id-list");
+                                        grammar, gc2, r"id-list");
 
                                 if (ids) {
                                     pos = collect_ids_from_list(
@@ -577,10 +580,10 @@ extract_params(n00b_grammar_t     *grammar,
 
                     if (gnt
                         && n00b_unicode_str_eq(gnt->name,
-                                               *r"formal-param")) {
+                                               r"formal-param")) {
                         n00b_parse_tree_t *ids
                             = n00b_tree_find_child_by_nt_name(
-                                grammar, gc, *r"id-list");
+                                grammar, gc, r"id-list");
 
                         if (ids) {
                             pos = collect_ids_from_list(
@@ -597,9 +600,9 @@ extract_params(n00b_grammar_t     *grammar,
         if (cpn->id >= 0) {
             n00b_nonterm_t *nt = n00b_get_nonterm(grammar, cpn->id);
 
-            if (nt && n00b_unicode_str_eq(nt->name, *r"formal-param")) {
+            if (nt && n00b_unicode_str_eq(nt->name, r"formal-param")) {
                 n00b_parse_tree_t *ids = n00b_tree_find_child_by_nt_name(
-                    grammar, child, *r"id-list");
+                    grammar, child, r"id-list");
 
                 if (ids) {
                     pos = collect_ids_from_list(ids, out_names, cap, pos);
@@ -632,7 +635,7 @@ emit_func_def(n00b_cg_session_t *session,
 
     // Find the <body> child.
     n00b_parse_tree_t *body = n00b_tree_find_child_by_nt_name(
-        grammar, func_def_node, *r"body");
+        grammar, func_def_node, r"body");
 
     if (!body) {
         fprintf(stderr, "warning: func-def '%s' has no body\n", fname);
@@ -644,16 +647,50 @@ emit_func_def(n00b_cg_session_t *session,
     int32_t     n_params = extract_params(grammar, func_def_node,
                                           param_names, 64);
 
-    // Build type array (all I64 until type system is wired up).
+    // Build type array from annotation symtab when available.
     n00b_cg_type_tag_t param_types[64];
+    n00b_cg_type_tag_t ret_type = N00B_CG_I64;
+
+    n00b_annot_result_t *annot = session->active_module
+                                    ? session->active_module->annot
+                                    : session->annot;
 
     for (int32_t i = 0; i < n_params; i++) {
         param_types[i] = N00B_CG_I64;
+
+        if (annot && annot->symtab && session->type_map) {
+            n00b_string_t *pname = n00b_string_from_cstr(param_names[i]);
+            n00b_sym_entry_t *sym = n00b_symtab_lookup_any(
+                annot->symtab, n00b_string_empty(), pname);
+
+            if (sym && sym->type_var) {
+                param_types[i] = session->type_map(session, sym->type_var);
+            }
+        }
+    }
+
+    // Extract return type from <func-return-type> child if present.
+    if (annot && annot->symtab && session->type_map) {
+        n00b_string_t *sname = n00b_string_from_cstr(fname);
+        n00b_sym_entry_t *fsym = n00b_symtab_lookup_any(
+            annot->symtab, n00b_string_empty(), sname);
+
+        if (fsym && fsym->type_var) {
+            n00b_tc_type_t *ftype = n00b_tc_find(fsym->type_var);
+
+            if (n00b_variant_is_type(ftype->kind, n00b_tc_fn_t)) {
+                n00b_tc_fn_t fn = n00b_variant_get(ftype->kind, n00b_tc_fn_t);
+
+                if (fn.return_type) {
+                    ret_type = session->type_map(session, fn.return_type);
+                }
+            }
+        }
     }
 
     // Emit: begin_func → lower body → ret → end_func.
     n00b_cg_begin_func(session, fname,
-                        .ret         = N00B_CG_I64,
+                        .ret         = ret_type,
                         .param_names = n_params > 0 ? param_names : NULL,
                         .param_types = n_params > 0 ? param_types : NULL,
                         .n_params    = n_params);
@@ -699,7 +736,7 @@ emit_module_functions(n00b_cg_session_t  *session,
     if (!pn->group_top && pn->id >= 0) {
         n00b_nonterm_t *nt = n00b_get_nonterm(grammar, pn->id);
 
-        if (nt && n00b_unicode_str_eq(nt->name, *r"func-def")) {
+        if (nt && n00b_unicode_str_eq(nt->name, r"func-def")) {
             bool is_priv = false;
 
             if (emit_func_def(session, grammar, node, &is_priv)
@@ -855,7 +892,7 @@ n00b_module_load(n00b_cg_session_t *session,
     // because we need to filter out private functions.
     for (int32_t i = 0; i < n_funcs; i++) {
         if (!func_info[i].is_private && func_info[i].name) {
-            n00b_string_t sname = n00b_string_from_cstr(func_info[i].name);
+            n00b_string_t *sname = n00b_string_from_cstr(func_info[i].name);
 
             n00b_symtab_add(session->global_scope, n00b_string_empty(),
                              sname, N00B_SYM_FUNCTION, NULL);
@@ -910,7 +947,7 @@ extract_from_path(n00b_grammar_t *grammar, n00b_parse_tree_t *use_node)
         if (!cpn->group_top && cpn->id >= 0) {
             n00b_nonterm_t *cnt = n00b_get_nonterm(grammar, cpn->id);
 
-            if (cnt && n00b_unicode_str_eq(cnt->name, *r"member-chain")) {
+            if (cnt && n00b_unicode_str_eq(cnt->name, r"member-chain")) {
                 continue;
             }
         }
@@ -932,13 +969,13 @@ extract_from_path(n00b_grammar_t *grammar, n00b_parse_tree_t *use_node)
                 continue;
             }
 
-            n00b_string_t val = n00b_option_get(tok->value);
+            n00b_string_t *val = n00b_option_get(tok->value);
 
             // Skip "from" keyword — we want the STRING_LIT value.
-            if (val.u8_bytes > 0
-                && !(val.u8_bytes == 4
-                     && memcmp(val.data, "from", 4) == 0)) {
-                return val.data;
+            if (val->u8_bytes > 0
+                && !(val->u8_bytes == 4
+                     && memcmp(val->data, "from", 4) == 0)) {
+                return val->data;
             }
         }
     }
@@ -962,7 +999,7 @@ walk_for_use_stmts(n00b_cg_session_t  *session,
     if (!pn->group_top && pn->id >= 0) {
         n00b_nonterm_t *nt = n00b_get_nonterm(grammar, pn->id);
 
-        if (nt && n00b_unicode_str_eq(nt->name, *r"use-stmt")) {
+        if (nt && n00b_unicode_str_eq(nt->name, r"use-stmt")) {
             // Extract the member-chain (first NT child).
             n00b_parse_tree_t *mc_node = n00b_tree_get_nth_nt_child(node, 0);
 

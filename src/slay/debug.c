@@ -142,8 +142,8 @@ fprint_match(FILE *out, n00b_grammar_t *g, n00b_match_t *m)
     case N00B_MATCH_NT: {
         n00b_nonterm_t *nt = n00b_get_nonterm(g, m->nt_id);
 
-        if (nt && nt->name.data) {
-            fprintf(out, "%.*s", (int)nt->name.u8_bytes, nt->name.data);
+        if (nt && nt->name && nt->name->data) {
+            fprintf(out, "%.*s", (int)nt->name->u8_bytes, nt->name->data);
         }
         else {
             fprintf(out, "?");
@@ -275,9 +275,9 @@ n00b_grammar_print(n00b_grammar_t *g, FILE *out)
 
         fprintf(out, "  [%3zu] ", i);
 
-        if (nt && nt->name.data) {
+        if (nt && nt->name && nt->name->data) {
             fprintf(out, "%-20.*s -> ",
-                    (int)nt->name.u8_bytes, nt->name.data);
+                    (int)nt->name->u8_bytes, nt->name->data);
         }
         else {
             fprintf(out, "%-20s -> ", "?");
@@ -324,8 +324,8 @@ n00b_parser_print_states(n00b_earley_parser_t *p, FILE *out, bool show_all)
                 fprintf(out, " [EOF]");
             }
             else if (n00b_option_is_set(s->token->value)) {
-                n00b_string_t v = n00b_option_get(s->token->value);
-                fprintf(out, " [%.*s]", (int)v.u8_bytes, v.data);
+                n00b_string_t *v = n00b_option_get(s->token->value);
+                fprintf(out, " [%.*s]", (int)v->u8_bytes, v->data);
             }
             else {
                 fprintf(out, " [tid=%lld]", (long long)s->token->tid);
@@ -355,9 +355,9 @@ n00b_parser_print_states(n00b_earley_parser_t *p, FILE *out, bool show_all)
             n00b_nonterm_t *nt = n00b_get_nonterm(
                 p->grammar, start->ruleset_id);
 
-            if (nt && nt->name.data) {
+            if (nt && nt->name && nt->name->data) {
                 fprintf(out, "%.*s -> ",
-                        (int)nt->name.u8_bytes, nt->name.data);
+                        (int)nt->name->u8_bytes, nt->name->data);
             }
             else {
                 fprintf(out, "?%d -> ", start->ruleset_id);
@@ -417,8 +417,8 @@ tree_print_recursive(n00b_parse_tree_t *t, n00b_grammar_t *g, FILE *out,
 
         if (tok) {
             if (n00b_option_is_set(tok->value)) {
-                n00b_string_t v = n00b_option_get(tok->value);
-                fprintf(out, "'%.*s'", (int)v.u8_bytes, v.data);
+                n00b_string_t *v = n00b_option_get(tok->value);
+                fprintf(out, "'%.*s'", (int)v->u8_bytes, v->data);
             }
             else {
                 fprintf(out, "tok(%lld)", (long long)tok->tid);
@@ -441,15 +441,15 @@ tree_print_recursive(n00b_parse_tree_t *t, n00b_grammar_t *g, FILE *out,
         return;
     }
 
-    if (pn->name.data) {
-        fprintf(out, "%.*s", (int)pn->name.u8_bytes, pn->name.data);
+    if (pn->name && pn->name->data) {
+        fprintf(out, "%.*s", (int)pn->name->u8_bytes, pn->name->data);
     }
     else {
         // Try grammar lookup.
         n00b_nonterm_t *nt = g ? n00b_get_nonterm(g, pn->id) : NULL;
 
-        if (nt && nt->name.data) {
-            fprintf(out, "%.*s", (int)nt->name.u8_bytes, nt->name.data);
+        if (nt && nt->name && nt->name->data) {
+            fprintf(out, "%.*s", (int)nt->name->u8_bytes, nt->name->data);
         }
         else {
             fprintf(out, "?");
@@ -526,7 +526,7 @@ n00b_forest_print(n00b_parse_forest_t *forest, n00b_grammar_t *g, FILE *out)
 // Public API: n00b_parse_node_repr
 // ============================================================================
 
-n00b_string_t
+n00b_string_t *
 n00b_parse_node_repr(n00b_parse_tree_t *node)
 {
     if (!node) {
@@ -539,9 +539,9 @@ n00b_parse_node_repr(n00b_parse_tree_t *node)
         n00b_token_info_t *tok = n00b_tree_leaf_value(node);
 
         if (tok && n00b_option_is_set(tok->value)) {
-            n00b_string_t v = n00b_option_get(tok->value);
+            n00b_string_t *v = n00b_option_get(tok->value);
             snprintf(buf, sizeof(buf), "'%.*s' (%u:%u-%u) tid=%lld",
-                     (int)v.u8_bytes, v.data,
+                     (int)v->u8_bytes, v->data,
                      tok->line, tok->column, tok->endcol,
                      (long long)tok->tid);
         }
@@ -560,9 +560,9 @@ n00b_parse_node_repr(n00b_parse_tree_t *node)
         if (pn->id == N00B_EMPTY_STRING) {
             snprintf(buf, sizeof(buf), "e (%d-%d)", pn->start, pn->end);
         }
-        else if (pn->name.data) {
+        else if (pn->name && pn->name->data) {
             snprintf(buf, sizeof(buf), "%.*s (%d-%d) id#%lld",
-                     (int)pn->name.u8_bytes, pn->name.data,
+                     (int)pn->name->u8_bytes, pn->name->data,
                      pn->start, pn->end,
                      (long long)pn->id);
         }
@@ -623,9 +623,9 @@ n00b_lr0_print(n00b_grammar_t *g, FILE *out)
 
             fprintf(out, "  ");
 
-            if (nt && nt->name.data) {
+            if (nt && nt->name && nt->name->data) {
                 fprintf(out, "%.*s -> ",
-                        (int)nt->name.u8_bytes, nt->name.data);
+                        (int)nt->name->u8_bytes, nt->name->data);
             }
             else {
                 fprintf(out, "? -> ");
@@ -654,9 +654,9 @@ n00b_lr0_print(n00b_grammar_t *g, FILE *out)
                 // Non-terminal.
                 n00b_nonterm_t *nt = n00b_get_nonterm(g, sym);
 
-                if (nt && nt->name.data) {
+                if (nt && nt->name && nt->name->data) {
                     fprintf(out, "%.*s",
-                            (int)nt->name.u8_bytes, nt->name.data);
+                            (int)nt->name->u8_bytes, nt->name->data);
                 }
                 else {
                     fprintf(out, "?");
@@ -694,9 +694,9 @@ n00b_lr0_print(n00b_grammar_t *g, FILE *out)
             n00b_nonterm_t *nt = n00b_get_nonterm(g, (int64_t)i);
 
             if (g->lr0_predict_state[i] >= 0) {
-                if (nt && nt->name.data) {
+                if (nt && nt->name && nt->name->data) {
                     fprintf(out, "  %.*s -> state %d\n",
-                            (int)nt->name.u8_bytes, nt->name.data,
+                            (int)nt->name->u8_bytes, nt->name->data,
                             g->lr0_predict_state[i]);
                 }
                 else {
@@ -744,6 +744,7 @@ cf_kind_name(n00b_cf_kind_t kind)
     case N00B_CF_ASSIGNS: return "assigns";
     case N00B_CF_VARREF:         return "varref";
     case N00B_CF_UNWRAP_RESULT:  return "unwrap_result";
+    case N00B_CF_CALL:           return "call";
     }
 
     return "?cf?";
@@ -761,8 +762,8 @@ fprint_node_ref(FILE *out, n00b_parse_tree_t *node)
         return;
     }
 
-    n00b_string_t repr = n00b_parse_node_repr(node);
-    fprintf(out, "%.*s", (int)repr.u8_bytes, repr.data);
+    n00b_string_t *repr = n00b_parse_node_repr(node);
+    fprintf(out, "%.*s", (int)repr->u8_bytes, repr->data);
 }
 
 // ============================================================================
@@ -854,7 +855,7 @@ n00b_cfg_print(n00b_cfg_t *cfg, n00b_grammar_t *g, FILE *out)
     int32_t ne = n00b_cfg_edge_count(cfg);
 
     fprintf(out, "CFG: %.*s — %d blocks, %d edges\n",
-            (int)cfg->name.u8_bytes, cfg->name.data, nb, ne);
+            (int)cfg->name->u8_bytes, cfg->name->data, nb, ne);
     fprintf(out, "  entry=B%d  exit=B%d\n", cfg->entry_id, cfg->exit_id);
     fprintf(out, "----------------------------------------\n");
 
@@ -868,9 +869,9 @@ n00b_cfg_print(n00b_cfg_t *cfg, n00b_grammar_t *g, FILE *out)
         // Block open tag.
         fprintf(out, "\n[B%d", blk->id);
 
-        if (blk->label.data && blk->label.u8_bytes > 0) {
+        if (blk->label->data && blk->label->u8_bytes > 0) {
             fprintf(out, " %.*s",
-                    (int)blk->label.u8_bytes, blk->label.data);
+                    (int)blk->label->u8_bytes, blk->label->data);
         }
 
         if (blk->is_entry) {
@@ -909,9 +910,9 @@ n00b_cfg_print(n00b_cfg_t *cfg, n00b_grammar_t *g, FILE *out)
             fprintf(out, "  -> B%d  [%s]",
                     e->to_id, cfg_edge_kind_name(e->kind));
 
-            if (e->label.data && e->label.u8_bytes > 0) {
+            if (e->label->data && e->label->u8_bytes > 0) {
                 fprintf(out, "  \"%.*s\"",
-                        (int)e->label.u8_bytes, e->label.data);
+                        (int)e->label->u8_bytes, e->label->data);
             }
 
             fprintf(out, "\n");
@@ -971,14 +972,14 @@ n00b_cf_labels_print(n00b_cf_labels_t *labels, n00b_grammar_t *g, FILE *out)
             fprintf(out, "\n");
         }
 
-        if (label->jump_kind.data && label->jump_kind.u8_bytes > 0) {
+        if (label->jump_kind && label->jump_kind->data && label->jump_kind->u8_bytes > 0) {
             fprintf(out, "    jump: %.*s\n",
-                    (int)label->jump_kind.u8_bytes, label->jump_kind.data);
+                    (int)label->jump_kind->u8_bytes, label->jump_kind->data);
         }
 
-        if (label->tag.data && label->tag.u8_bytes > 0) {
+        if (label->tag && label->tag->data && label->tag->u8_bytes > 0) {
             fprintf(out, "    tag:  %.*s\n",
-                    (int)label->tag.u8_bytes, label->tag.data);
+                    (int)label->tag->u8_bytes, label->tag->data);
         }
 
         (void)node_key;
@@ -1006,7 +1007,7 @@ n00b_cdg_print(n00b_cdg_t *cdg, n00b_grammar_t *g, FILE *out)
     int32_t n_cd  = n00b_cdg_cd_count(cdg);
 
     fprintf(out, "CDG: %.*s — %d CD edges\n",
-            (int)cdg->name.u8_bytes, cdg->name.data, n_cd);
+            (int)cdg->name->u8_bytes, cdg->name->data, n_cd);
     fprintf(out, "----------------------------------------\n");
 
     // Post-dominator tree.
@@ -1052,9 +1053,9 @@ n00b_cdg_print(n00b_cdg_t *cdg, n00b_grammar_t *g, FILE *out)
         // Block open tag.
         fprintf(out, "[B%d", i);
 
-        if (blk->label.data && blk->label.u8_bytes > 0) {
+        if (blk->label->data && blk->label->u8_bytes > 0) {
             fprintf(out, " %.*s",
-                    (int)blk->label.u8_bytes, blk->label.data);
+                    (int)blk->label->u8_bytes, blk->label->data);
         }
 
         if (first_line) {
@@ -1103,7 +1104,7 @@ n00b_dfg_print(n00b_dfg_t *dfg, n00b_grammar_t *g, FILE *out)
     int32_t ne = n00b_dfg_edge_count(dfg);
 
     fprintf(out, "DFG: %.*s — %d facts, %d DD edges\n",
-            (int)dfg->name.u8_bytes, dfg->name.data, nf, ne);
+            (int)dfg->name->u8_bytes, dfg->name->data, nf, ne);
     fprintf(out, "----------------------------------------\n");
 
     // Facts.
@@ -1117,7 +1118,7 @@ n00b_dfg_print(n00b_dfg_t *dfg, n00b_grammar_t *g, FILE *out)
         fprintf(out, "    [%d] %s %.*s  B%d:%d",
                 f->id,
                 f->is_def ? "DEF" : "USE",
-                (int)f->var_name.u8_bytes, f->var_name.data,
+                (int)f->var_name->u8_bytes, f->var_name->data,
                 f->block_id, f->stmt_ix);
 
         if (line) {
@@ -1139,7 +1140,7 @@ n00b_dfg_print(n00b_dfg_t *dfg, n00b_grammar_t *g, FILE *out)
 
             fprintf(out, "    [%d] -> [%d]  (%.*s: def B%d:%d -> use B%d:%d)\n",
                     e->def_id, e->use_id,
-                    (int)def_f->var_name.u8_bytes, def_f->var_name.data,
+                    (int)def_f->var_name->u8_bytes, def_f->var_name->data,
                     def_f->block_id, def_f->stmt_ix,
                     use_f->block_id, use_f->stmt_ix);
         }

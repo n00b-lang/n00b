@@ -80,8 +80,8 @@ n00b_analyze_dead_code(n00b_analyze_ctx_t *ctx)
         n00b_diag_push(ctx->diag,
                       N00B_DIAG_WARNING,
                       N00B_STAGE_ANALYSIS,
-                      *r"W001",
-                      *r"unreachable code",
+                      r"W001",
+                      r"unreachable code",
                       span);
     }
 
@@ -139,12 +139,12 @@ n00b_analyze_use_before_def(n00b_analyze_ctx_t *ctx)
         char msg_buf[256];
         snprintf(msg_buf, sizeof(msg_buf),
                  "variable '%.*s' used before definition",
-                 (int)fact.var_name.u8_bytes, fact.var_name.data);
+                 (int)fact.var_name->u8_bytes, fact.var_name->data);
 
         n00b_diag_push(ctx->diag,
                       N00B_DIAG_WARNING,
                       N00B_STAGE_ANALYSIS,
-                      *r"W002",
+                      r"W002",
                       n00b_string_from_cstr(msg_buf),
                       span);
     }
@@ -201,12 +201,12 @@ n00b_analyze_unused_vars(n00b_analyze_ctx_t *ctx)
         char msg_buf[256];
         snprintf(msg_buf, sizeof(msg_buf),
                  "variable '%.*s' is assigned but never used",
-                 (int)fact.var_name.u8_bytes, fact.var_name.data);
+                 (int)fact.var_name->u8_bytes, fact.var_name->data);
 
         n00b_diag_push(ctx->diag,
                       N00B_DIAG_WARNING,
                       N00B_STAGE_ANALYSIS,
-                      *r"W003",
+                      r"W003",
                       n00b_string_from_cstr(msg_buf),
                       span);
     }
@@ -246,12 +246,12 @@ n00b_analyze_undefined_vars(n00b_analyze_ctx_t *ctx)
         char msg_buf[256];
         snprintf(msg_buf, sizeof(msg_buf),
                  "use of undeclared identifier '%.*s'",
-                 (int)fact.var_name.u8_bytes, fact.var_name.data);
+                 (int)fact.var_name->u8_bytes, fact.var_name->data);
 
         n00b_diag_push(ctx->diag,
                       N00B_DIAG_ERROR,
                       N00B_STAGE_ANALYSIS,
-                      *r"E001",
+                      r"E001",
                       n00b_string_from_cstr(msg_buf),
                       span);
     }
@@ -292,8 +292,8 @@ n00b_analyze_unreachable_after_jump(n00b_analyze_ctx_t *ctx)
                 n00b_diag_push(ctx->diag,
                               N00B_DIAG_WARNING,
                               N00B_STAGE_ANALYSIS,
-                              *r"W004",
-                              *r"code after return/break/continue is unreachable",
+                              r"W004",
+                              r"code after return/break/continue is unreachable",
                               span);
 
                 break;  // Only report once per block.
@@ -334,12 +334,12 @@ n00b_analyze_shadowed_vars(n00b_analyze_ctx_t *ctx)
         char msg_buf[256];
         snprintf(msg_buf, sizeof(msg_buf),
                  "declaration of '%.*s' shadows previous declaration",
-                 (int)entry->name.u8_bytes, entry->name.data);
+                 (int)entry->name->u8_bytes, entry->name->data);
 
         n00b_diag_push_related(ctx->diag,
                               N00B_DIAG_WARNING,
                               N00B_STAGE_ANALYSIS,
-                              *r"W005",
+                              r"W005",
                               n00b_string_from_cstr(msg_buf),
                               span,
                               related);

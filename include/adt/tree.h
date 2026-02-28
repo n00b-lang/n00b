@@ -29,31 +29,24 @@
 // ============================================================================
 
 /**
- * @brief Declare + define a tree type with node type @p N and leaf type @p L.
- *        Use in variable declarations.
+ * @brief Tree type with node type @p N and leaf type @p L.
  *
  * @param N  Internal node value type.
  * @param L  Leaf value type.
  */
-#define n00b_tree_decl(N, L)                                                                   \
-    struct n00b_tree_tid(N, L) {                                                               \
+#define n00b_tree_t(N, L)                                                                      \
+    _generic_struct n00b_tree_tid(N, L) {                                                      \
         bool is_leaf;                                                                          \
         union {                                                                                \
             struct {                                                                           \
                 N value;                                                                       \
-                struct n00b_tree_tid(N, L) * *children;                                        \
+                struct n00b_tree_tid(N, L) **children;                                         \
                 size_t num_children;                                                           \
                 size_t capacity;                                                               \
             } node;                                                                            \
             L leaf;                                                                            \
         };                                                                                     \
     }
-
-/**
- * @brief Tag-only reference (no body) — use after the type has already been
- *        defined by @c n00b_tree_t in the same scope.
- */
-#define n00b_tree_t(N, L) struct n00b_tree_tid(N, L)
 
 // ============================================================================
 // Construction

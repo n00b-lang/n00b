@@ -68,8 +68,6 @@
 
 #define N00B_CONDUIT_RW_IMPL(T)                                                                    \
                                                                                                    \
-    n00b_result_decl(n00b_conduit_message_t(T) *);                                                 \
-                                                                                                   \
     /**                                                                                            \
      * @brief Blocking read: subscribe, wait for one message, return it.                           \
      *                                                                                             \
@@ -181,7 +179,6 @@
         n00b_conduit_inbox_t(T)  *inbox;                                                           \
         n00b_conduit_sub_handle_t handle;                                                          \
     };                                                                                             \
-    n00b_result_decl(n00b_conduit_async_read_t(T));                                                \
                                                                                                    \
     /**                                                                                            \
      * @brief Non-blocking read: subscribe and return inbox + handle.                              \

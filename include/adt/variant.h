@@ -14,18 +14,18 @@
 #include <assert.h>
 
 #define n00b_variant_tid(...) typeid("n00b_variant", __VA_ARGS__)
-#define n00b_variant_t(...)   struct n00b_variant_tid(__VA_ARGS__)
 
 #define N00B_VARIANT_FIELD(T)       constexpr_paste(field_, typeid(T))
 #define _N00B_VARIANT_FIELD_DECL(T) T N00B_VARIANT_FIELD(T);
 
 /**
- * @brief Declare + define a variant type. Use in variable declarations.
- * @param ...  Types held inside the variant.
+ * @brief Variant type with the given alternative types.
+ *
+ * Each use auto-defines the struct via `_generic_struct`.
+ * @param ...  Alternative types.
  */
-#define n00b_variant_decl(...)                                                                 \
-    n00b_variant_t(__VA_ARGS__)                                                                \
-    {                                                                                          \
+#define n00b_variant_t(...)                                                                    \
+    _generic_struct n00b_variant_tid(__VA_ARGS__) {                                            \
         uint64_t selector;                                                                     \
         union {                                                                                \
             N00B_MAP(_N00B_VARIANT_FIELD_DECL, __VA_ARGS__)                                    \

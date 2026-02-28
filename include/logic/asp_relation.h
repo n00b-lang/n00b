@@ -22,7 +22,7 @@
 typedef struct {
     n00b_dl_rel_id_t        id;
     int32_t                 arity;
-    n00b_string_t           name;
+    n00b_string_t          *name;
 
     n00b_dl_sym_t          *stable_data;
     size_t                  stable_count;
@@ -53,7 +53,7 @@ typedef struct {
  * @param arity Number of columns.
  */
 void n00b_dl_relation_init(n00b_dl_relation_t *rel, n00b_dl_rel_id_t id,
-                             n00b_string_t name, int32_t arity);
+                             n00b_string_t *name, int32_t arity);
 
 /**
  * @brief Free all resources held by a relation.

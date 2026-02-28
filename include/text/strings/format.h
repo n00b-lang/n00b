@@ -43,9 +43,9 @@
  *
  *  @param desc  The markup descriptor string.
  *  @param +     Variadic substitution arguments.
- *  @return A styled `n00b_string_t` (by value).
+ *  @return A styled `n00b_string_t *`.
  */
-n00b_string_t n00b_format(n00b_string_t desc, +);
+n00b_string_t *n00b_format(n00b_string_t *desc, +);
 
 /** @brief Convenience: format from a C string descriptor.
  *
@@ -53,14 +53,14 @@ n00b_string_t n00b_format(n00b_string_t desc, +);
  *
  *  @param desc  NUL-terminated C string descriptor.
  *  @param +     Variadic substitution arguments.
- *  @return A styled `n00b_string_t` (by value).
+ *  @return A styled `n00b_string_t *`.
  */
-n00b_string_t n00b_cformat(const char *desc, +);
+n00b_string_t *n00b_cformat(const char *desc, +);
 
 // ===================================================================
 // Internal API (used by n00b_printf to forward vargs)
 // ===================================================================
 
-extern n00b_string_t _n00b_format_impl(const char   *desc_data,
+extern n00b_string_t *_n00b_format_impl(const char   *desc_data,
                                         int32_t       desc_len,
                                         n00b_vargs_t *vargs);

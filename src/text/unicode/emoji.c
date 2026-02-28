@@ -195,10 +195,10 @@ n00b_unicode_emoji_scan_raw(const char *data,
 }
 
 n00b_unicode_emoji_scan_result_t
-n00b_unicode_emoji_scan(n00b_string_t s, uint32_t byte_pos)
+n00b_unicode_emoji_scan(n00b_string_t *s, uint32_t byte_pos)
 {
     uint32_t                  seq_bytes = 0;
     n00b_unicode_emoji_type_t type
-        = n00b_unicode_emoji_scan_raw(s.data, s.u8_bytes, byte_pos, &seq_bytes);
+        = n00b_unicode_emoji_scan_raw(s->data, s->u8_bytes, byte_pos, &seq_bytes);
     return (n00b_unicode_emoji_scan_result_t){.type = type, .seq_bytes = seq_bytes};
 }

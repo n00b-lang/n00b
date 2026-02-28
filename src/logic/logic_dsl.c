@@ -69,7 +69,7 @@ typedef struct {
     dsl_token_t   *tokens;
     int32_t        tok_count;
     int32_t        tok_cap;
-    n00b_string_t  error;
+    n00b_string_t *error;
     int32_t        error_line;
     int32_t        error_col;
 } dsl_lexer_t;
@@ -297,7 +297,7 @@ lex_tokenize(dsl_lexer_t *lex)
                                               start_col, start, 2, 0});
             }
             else {
-                lex->error      = *r"expected '-' after ':'";
+                lex->error      = r"expected '-' after ':'";
                 lex->error_line = start_line;
                 lex->error_col  = start_col;
                 return false;
@@ -310,7 +310,7 @@ lex_tokenize(dsl_lexer_t *lex)
                                               start, 2, 0});
             }
             else {
-                lex->error      = *r"expected '-' after '?'";
+                lex->error      = r"expected '-' after '?'";
                 lex->error_line = start_line;
                 lex->error_col  = start_col;
                 return false;
@@ -323,7 +323,7 @@ lex_tokenize(dsl_lexer_t *lex)
                                               start, 2, 0});
             }
             else {
-                lex->error      = *r"expected '=' after '='";
+                lex->error      = r"expected '=' after '='";
                 lex->error_line = start_line;
                 lex->error_col  = start_col;
                 return false;
@@ -336,7 +336,7 @@ lex_tokenize(dsl_lexer_t *lex)
                                               start, 2, 0});
             }
             else {
-                lex->error      = *r"expected '=' after '!'";
+                lex->error      = r"expected '=' after '!'";
                 lex->error_line = start_line;
                 lex->error_col  = start_col;
                 return false;
@@ -370,7 +370,7 @@ lex_tokenize(dsl_lexer_t *lex)
                                           start, 1, 0});
             break;
         default:
-            lex->error      = *r"unexpected character";
+            lex->error      = r"unexpected character";
             lex->error_line = start_line;
             lex->error_col  = start_col;
             return false;
@@ -416,7 +416,7 @@ struct dsl_ast {
     int32_t          col;
 
     // Atom/term data.
-    n00b_string_t    name;
+    n00b_string_t   *name;
     int64_t          int_val;
     dsl_tok_kind_t   cmp_op;   // For constraints/comparisons.
 
@@ -495,7 +495,7 @@ typedef struct {
     int32_t        tok_count;
     int32_t        pos;
     int32_t        anon_counter;
-    n00b_string_t  error;
+    n00b_string_t *error;
     int32_t        error_line;
     int32_t        error_col;
     dsl_ast_t    **stmts;
@@ -532,7 +532,7 @@ parser_match(dsl_parser_t *p, dsl_tok_kind_t kind)
 }
 
 static bool
-parser_expect(dsl_parser_t *p, dsl_tok_kind_t kind, n00b_string_t what)
+parser_expect(dsl_parser_t *p, dsl_tok_kind_t kind, n00b_string_t *what)
 {
     if (p->tokens[p->pos].kind == kind) {
         p->pos++;
@@ -561,7 +561,7 @@ parser_add_stmt(dsl_parser_t *p, dsl_ast_t *stmt)
     p->stmts[p->stmt_count++] = stmt;
 }
 
-static n00b_string_t
+static n00b_string_t *
 tok_to_str(dsl_token_t *tok)
 {
     return n00b_string_from_raw(tok->start, tok->len);
@@ -621,7 +621,7 @@ parse_term(dsl_parser_t *p)
         return node;
     }
     default:
-        p->error      = *r"expected term";
+        p->error      = r"expected term";
         p->error_line = tok->line;
         p->error_col  = tok->col;
         return nullptr;
@@ -633,7 +633,7 @@ parse_atom(dsl_parser_t *p)
 {
     dsl_token_t *name_tok = parser_advance(p);
     if (name_tok->kind != TOK_IDENT) {
-        p->error      = *r"expected atom name";
+        p->error      = r"expected atom name";
         p->error_line = name_tok->line;
         p->error_col  = name_tok->col;
         return nullptr;
@@ -642,7 +642,7 @@ parse_atom(dsl_parser_t *p)
     dsl_ast_t *atom = ast_new(AST_ATOM, name_tok->line, name_tok->col);
     atom->name = tok_to_str(name_tok);
 
-    if (!parser_expect(p, TOK_LPAREN, *r"expected '('")) {
+    if (!parser_expect(p, TOK_LPAREN, r"expected '('")) {
         ast_free(atom);
         return nullptr;
     }
@@ -666,7 +666,7 @@ parse_atom(dsl_parser_t *p)
         }
     }
 
-    if (!parser_expect(p, TOK_RPAREN, *r"expected ')'")) {
+    if (!parser_expect(p, TOK_RPAREN, r"expected ')'")) {
         ast_free(atom);
         return nullptr;
     }
@@ -747,7 +747,7 @@ parse_goal(dsl_parser_t *p)
         }
     }
     else {
-        p->error      = *r"expected goal";
+        p->error      = r"expected goal";
         p->error_line = parser_peek(p)->line;
         p->error_col  = parser_peek(p)->col;
         return nullptr;
@@ -804,7 +804,7 @@ parse_domain(dsl_parser_t *p)
 
         if (!parser_at(p, TOK_RBRACE)) {
             if (!parser_at(p, TOK_INT)) {
-                p->error      = *r"expected integer in set";
+                p->error      = r"expected integer in set";
                 p->error_line = parser_peek(p)->line;
                 p->error_col  = parser_peek(p)->col;
                 ast_free(dom);
@@ -826,7 +826,7 @@ parse_domain(dsl_parser_t *p)
 
             while (parser_match(p, TOK_COMMA)) {
                 if (!parser_at(p, TOK_INT)) {
-                    p->error      = *r"expected integer in set";
+                    p->error      = r"expected integer in set";
                     p->error_line = parser_peek(p)->line;
                     p->error_col  = parser_peek(p)->col;
                     n00b_free(vals);
@@ -846,7 +846,7 @@ parse_domain(dsl_parser_t *p)
             }
         }
 
-        if (!parser_expect(p, TOK_RBRACE, *r"expected '}'")) {
+        if (!parser_expect(p, TOK_RBRACE, r"expected '}'")) {
             n00b_free(vals);
             ast_free(dom);
             return nullptr;
@@ -860,11 +860,11 @@ parse_domain(dsl_parser_t *p)
     // Range domain: INT..INT
     if (tok->kind == TOK_INT) {
         dsl_token_t *lo = parser_advance(p);
-        if (!parser_expect(p, TOK_DOTDOT, *r"expected '..'")) {
+        if (!parser_expect(p, TOK_DOTDOT, r"expected '..'")) {
             return nullptr;
         }
         if (!parser_at(p, TOK_INT)) {
-            p->error      = *r"expected integer after '..'";
+            p->error      = r"expected integer after '..'";
             p->error_line = parser_peek(p)->line;
             p->error_col  = parser_peek(p)->col;
             return nullptr;
@@ -876,7 +876,7 @@ parse_domain(dsl_parser_t *p)
         return dom;
     }
 
-    p->error      = *r"expected domain (range or set)";
+    p->error      = r"expected domain (range or set)";
     p->error_line = tok->line;
     p->error_col  = tok->col;
     return nullptr;
@@ -1033,7 +1033,7 @@ parse_statement(dsl_parser_t *p)
             ast_free(query);
             return false;
         }
-        if (!parser_expect(p, TOK_DOT, *r"expected '.' after query")) {
+        if (!parser_expect(p, TOK_DOT, r"expected '.' after query")) {
             ast_free(query);
             return false;
         }
@@ -1048,7 +1048,7 @@ parse_statement(dsl_parser_t *p)
         if (parser_match(p, TOK_KW_ALL)) {
             solve->solve_all = true;
         }
-        if (!parser_expect(p, TOK_DOT, *r"expected '.' after solve")) {
+        if (!parser_expect(p, TOK_DOT, r"expected '.' after solve")) {
             ast_free(solve);
             return false;
         }
@@ -1061,14 +1061,14 @@ parse_statement(dsl_parser_t *p)
         parser_advance(p);
         dsl_token_t *name = parser_peek(p);
         if (name->kind != TOK_IDENT && name->kind != TOK_VAR) {
-            p->error      = *r"expected variable name after 'var'";
+            p->error      = r"expected variable name after 'var'";
             p->error_line = name->line;
             p->error_col  = name->col;
             return false;
         }
         parser_advance(p);
 
-        if (!parser_expect(p, TOK_KW_IN, *r"expected 'in'")) {
+        if (!parser_expect(p, TOK_KW_IN, r"expected 'in'")) {
             return false;
         }
 
@@ -1077,7 +1077,7 @@ parse_statement(dsl_parser_t *p)
             return false;
         }
 
-        if (!parser_expect(p, TOK_DOT, *r"expected '.'")) {
+        if (!parser_expect(p, TOK_DOT, r"expected '.'")) {
             ast_free(dom);
             return false;
         }
@@ -1092,7 +1092,7 @@ parse_statement(dsl_parser_t *p)
     // alldiff(x, y, z).
     if (tok->kind == TOK_KW_ALLDIFF) {
         parser_advance(p);
-        if (!parser_expect(p, TOK_LPAREN, *r"expected '(' after alldiff")) {
+        if (!parser_expect(p, TOK_LPAREN, r"expected '(' after alldiff")) {
             return false;
         }
 
@@ -1116,11 +1116,11 @@ parse_statement(dsl_parser_t *p)
             }
         }
 
-        if (!parser_expect(p, TOK_RPAREN, *r"expected ')'")) {
+        if (!parser_expect(p, TOK_RPAREN, r"expected ')'")) {
             ast_free(node);
             return false;
         }
-        if (!parser_expect(p, TOK_DOT, *r"expected '.' after alldiff")) {
+        if (!parser_expect(p, TOK_DOT, r"expected '.' after alldiff")) {
             ast_free(node);
             return false;
         }
@@ -1161,7 +1161,7 @@ parse_statement(dsl_parser_t *p)
                 ast_free(rule);
                 return false;
             }
-            if (!parser_expect(p, TOK_DOT, *r"expected '.' after rule")) {
+            if (!parser_expect(p, TOK_DOT, r"expected '.' after rule")) {
                 ast_free(rule);
                 return false;
             }
@@ -1189,7 +1189,7 @@ parse_statement(dsl_parser_t *p)
                 }
             }
 
-            if (!parser_expect(p, TOK_DOT, *r"expected '.'")) {
+            if (!parser_expect(p, TOK_DOT, r"expected '.'")) {
                 ast_free(decl);
                 return false;
             }
@@ -1255,7 +1255,7 @@ parse_statement(dsl_parser_t *p)
                     }
                 }
 
-                if (!parser_expect(p, TOK_DOT, *r"expected '.'")) {
+                if (!parser_expect(p, TOK_DOT, r"expected '.'")) {
                     ast_free(ad);
                     return false;
                 }
@@ -1276,7 +1276,7 @@ parse_statement(dsl_parser_t *p)
                 }
             }
 
-            if (!parser_expect(p, TOK_DOT, *r"expected '.'")) {
+            if (!parser_expect(p, TOK_DOT, r"expected '.'")) {
                 ast_free(con);
                 return false;
             }
@@ -1285,7 +1285,7 @@ parse_statement(dsl_parser_t *p)
             return true;
         }
 
-        p->error      = *r"expected '.', ':-', 'in', or comparison after atom";
+        p->error      = r"expected '.', ':-', 'in', or comparison after atom";
         p->error_line = parser_peek(p)->line;
         p->error_col  = parser_peek(p)->col;
         ast_free(head);
@@ -1296,7 +1296,7 @@ parse_statement(dsl_parser_t *p)
     // Try to parse with backtracking; fall through on failure.
     if (tok->kind == TOK_INT || tok->kind == TOK_VAR || tok->kind == TOK_IDENT) {
         int32_t       save_pos      = p->pos;
-        n00b_string_t save_err      = p->error;
+        n00b_string_t *save_err      = p->error;
         int32_t       save_err_line = p->error_line;
         int32_t       save_err_col  = p->error_col;
 
@@ -1352,7 +1352,7 @@ parse_statement(dsl_parser_t *p)
                     ast_add_child(ad, next_op);
                 }
 
-                if (!parser_expect(p, TOK_DOT, *r"expected '.'")) {
+                if (!parser_expect(p, TOK_DOT, r"expected '.'")) {
                     ast_free(ad);
                     return false;
                 }
@@ -1373,7 +1373,7 @@ parse_statement(dsl_parser_t *p)
                 }
             }
 
-            if (!parser_expect(p, TOK_DOT, *r"expected '.'")) {
+            if (!parser_expect(p, TOK_DOT, r"expected '.'")) {
                 ast_free(con);
                 return false;
             }
@@ -1382,14 +1382,14 @@ parse_statement(dsl_parser_t *p)
             return true;
         }
 
-        p->error      = *r"expected comparison operator";
+        p->error      = r"expected comparison operator";
         p->error_line = parser_peek(p)->line;
         p->error_col  = parser_peek(p)->col;
         ast_free(lhs);
         return false;
     }
 
-    p->error      = *r"unexpected token";
+    p->error      = r"unexpected token";
     p->error_line = tok->line;
     p->error_col  = tok->col;
     return false;
@@ -1400,7 +1400,7 @@ parse_program(dsl_parser_t *p)
 {
     while (!parser_at(p, TOK_EOF)) {
         if (!parse_statement(p)) {
-            if (p->error.data) {
+            if (p->error) {
                 return false;
             }
             break;
@@ -1429,31 +1429,31 @@ typedef enum {
 
 // Rule body atom.
 typedef struct {
-    n00b_string_t functor;
-    int32_t       arity;
-    n00b_string_t args[16];
-    bool          negated;
+    n00b_string_t *functor;
+    int32_t        arity;
+    n00b_string_t *args[16];
+    bool           negated;
 } dsl_body_atom_t;
 
 typedef struct {
     dsl_inst_kind_t kind;
 
     // INST_ADD_FACT.
-    n00b_string_t   functor;
+    n00b_string_t  *functor;
     int32_t         arity;
-    n00b_string_t   args[16];
+    n00b_string_t  *args[16];
     bool            args_is_int[16];
     int64_t         args_int[16];
 
     // INST_ADD_RULE.
-    n00b_string_t   head_functor;
+    n00b_string_t  *head_functor;
     int32_t         head_arity;
-    n00b_string_t   head_args[16];
+    n00b_string_t  *head_args[16];
     dsl_body_atom_t body_atoms[32];
     int32_t         body_count;
 
     // INST_CSP_VAR.
-    n00b_string_t   var_name;
+    n00b_string_t  *var_name;
     int64_t         dom_lo;
     int64_t         dom_hi;
     int64_t        *dom_vals;
@@ -1461,13 +1461,13 @@ typedef struct {
     bool            dom_is_range;
 
     // INST_VARS_FROM_REL.
-    n00b_string_t   rel_name;
+    n00b_string_t  *rel_name;
     int32_t         col;
 
     // INST_CONSTRAIN_PAIRS / INST_CSP_STANDALONE_CONSTR.
     dsl_tok_kind_t  cmp_op;
-    n00b_string_t   lhs_name;
-    n00b_string_t   rhs_name;
+    n00b_string_t  *lhs_name;
+    n00b_string_t  *rhs_name;
     bool            lhs_is_atom;
     bool            rhs_is_atom;
 
@@ -1476,11 +1476,11 @@ typedef struct {
     int32_t         query_goal_count;
 
     // INST_CSP_ALLDIFF.
-    n00b_string_t  *alldiff_vars;
+    n00b_string_t **alldiff_vars;
     int32_t         alldiff_count;
 
     // INST_CSP_LINEAR.
-    n00b_string_t  *linear_vars;
+    n00b_string_t **linear_vars;
     int64_t        *linear_coeffs;
     int32_t         linear_count;
     int64_t         linear_rhs;
@@ -1494,7 +1494,7 @@ typedef struct {
     dsl_inst_t    *insts;
     int32_t        inst_count;
     int32_t        inst_cap;
-    n00b_string_t  error;
+    n00b_string_t *error;
     int32_t        error_line;
     int32_t        error_col;
 } dsl_compiler_t;
@@ -1738,7 +1738,7 @@ compile_alldiff(dsl_compiler_t *c, dsl_ast_t *stmt)
         //   color(X) != color(Y) != color(Z) :- edge(X,Y), edge(Y,Z).
         // Decompose into pairwise CONSTRAIN_PAIRS, reusing the body
         // relation — identical to the existing pairwise constraint path.
-        n00b_string_t body_rel = (n00b_string_t){};
+        n00b_string_t *body_rel = nullptr;
         for (int32_t bi = var_limit; bi < stmt->child_count; bi++) {
             dsl_ast_t *goal = stmt->children[bi];
             if (goal->kind == AST_ATOM) {
@@ -1771,7 +1771,7 @@ compile_alldiff(dsl_compiler_t *c, dsl_ast_t *stmt)
     dsl_inst_t inst = {};
     inst.kind = INST_CSP_ALLDIFF;
     inst.alldiff_count = var_limit;
-    inst.alldiff_vars  = n00b_alloc_array(n00b_string_t, var_limit);
+    inst.alldiff_vars  = n00b_alloc_array(n00b_string_t *, var_limit);
 
     for (int32_t i = 0; i < var_limit; i++) {
         inst.alldiff_vars[i] = stmt->children[i]->name;
@@ -1787,7 +1787,7 @@ compile_linear(dsl_compiler_t *c, dsl_ast_t *stmt)
     inst.kind         = INST_CSP_LINEAR;
     inst.linear_count = stmt->linear_count;
     inst.linear_rhs   = stmt->linear_rhs;
-    inst.linear_vars  = n00b_alloc_array(n00b_string_t, stmt->linear_count);
+    inst.linear_vars  = n00b_alloc_array(n00b_string_t *, stmt->linear_count);
     inst.linear_coeffs = n00b_alloc_array(int64_t, stmt->linear_count);
 
     for (int32_t i = 0; i < stmt->linear_count; i++) {
@@ -1872,7 +1872,7 @@ make_domain(dsl_inst_t *inst)
 
 // Helper: create or find a CSP variable by name.
 static n00b_csp_var_id_t
-ensure_csp_var(n00b_logic_t *prog, n00b_string_t name, n00b_csp_domain_t dom)
+ensure_csp_var(n00b_logic_t *prog, n00b_string_t *name, n00b_csp_domain_t dom)
 {
     if (prog->store) {
         n00b_option_t(n00b_csp_var_id_t) opt = n00b_csp_find_var(prog->store,
@@ -1885,7 +1885,7 @@ ensure_csp_var(n00b_logic_t *prog, n00b_string_t name, n00b_csp_domain_t dom)
 }
 
 static n00b_csp_var_id_t
-find_csp_var(n00b_logic_t *prog, n00b_string_t name)
+find_csp_var(n00b_logic_t *prog, n00b_string_t *name)
 {
     if (prog->store) {
         n00b_option_t(n00b_csp_var_id_t) opt = n00b_csp_find_var(prog->store,
@@ -1916,19 +1916,19 @@ dsl_solve_all_adapter(n00b_csp_store_t *s, void *raw_ctx)
 }
 
 static bool
-is_var_name(n00b_string_t name)
+is_var_name(n00b_string_t *name)
 {
-    return name.u8_bytes > 0 && isupper((unsigned char)name.data[0]);
+    return name && name->u8_bytes > 0 && isupper((unsigned char)name->data[0]);
 }
 
 static n00b_dl_sym_t
-intern_sym(n00b_logic_t *prog, n00b_string_t name, bool is_int, int64_t int_val)
+intern_sym(n00b_logic_t *prog, n00b_string_t *name, bool is_int, int64_t int_val)
 {
     if (is_int) {
         return n00b_logic_int(prog, int_val);
     }
     if (is_var_name(name)
-        || (name.u8_bytes > 1 && name.data[0] == '_')) {
+        || (name->u8_bytes > 1 && name->data[0] == '_')) {
         return n00b_logic_var(prog, name);
     }
     return n00b_logic_const(prog, name);
@@ -1987,7 +1987,7 @@ execute_program(n00b_logic_t *prog, dsl_inst_t *insts, int32_t count,
 
     // Phase 2: Run Datalog.
     if (!n00b_logic_run_datalog(prog)) {
-        result->error = *r"Datalog stratification failed";
+        result->error = r"Datalog stratification failed";
         return false;
     }
 
@@ -2027,7 +2027,7 @@ execute_program(n00b_logic_t *prog, dsl_inst_t *insts, int32_t count,
                                                          0);
             n00b_csp_con_kind_t ck = tok_to_csp_kind(inst->cmp_op);
             if (!n00b_logic_constrain_pairs(prog, rel, ck)) {
-                result->error = *r"constraint posting failed (unsatisfiable)";
+                result->error = r"constraint posting failed (unsatisfiable)";
                 return false;
             }
         }
@@ -2037,7 +2037,7 @@ execute_program(n00b_logic_t *prog, dsl_inst_t *insts, int32_t count,
             n00b_csp_var_id_t rhs = find_csp_var(prog, inst->rhs_name);
 
             if (lhs < 0 || rhs < 0) {
-                result->error = *r"constraint references undefined variable";
+                result->error = r"constraint references undefined variable";
                 return false;
             }
 
@@ -2069,14 +2069,14 @@ execute_program(n00b_logic_t *prog, dsl_inst_t *insts, int32_t count,
             }
 
             if (!ok) {
-                result->error = *r"standalone constraint failed (unsatisfiable)";
+                result->error = r"standalone constraint failed (unsatisfiable)";
                 return false;
             }
         }
 
         if (inst->kind == INST_CSP_ALLDIFF) {
             if (!prog->store) {
-                result->error = *r"alldiff requires CSP variables";
+                result->error = r"alldiff requires CSP variables";
                 return false;
             }
             n00b_csp_var_id_t *vars = n00b_alloc_array(n00b_csp_var_id_t,
@@ -2085,13 +2085,13 @@ execute_program(n00b_logic_t *prog, dsl_inst_t *insts, int32_t count,
                 vars[j] = find_csp_var(prog, inst->alldiff_vars[j]);
                 if (vars[j] < 0) {
                     n00b_free(vars);
-                    result->error = *r"alldiff references undefined variable";
+                    result->error = r"alldiff references undefined variable";
                     return false;
                 }
             }
             if (!n00b_csp_post_alldiff(prog->store, vars, inst->alldiff_count)) {
                 n00b_free(vars);
-                result->error = *r"alldiff constraint failed (unsatisfiable)";
+                result->error = r"alldiff constraint failed (unsatisfiable)";
                 return false;
             }
             n00b_free(vars);
@@ -2099,7 +2099,7 @@ execute_program(n00b_logic_t *prog, dsl_inst_t *insts, int32_t count,
 
         if (inst->kind == INST_CSP_LINEAR) {
             if (!prog->store) {
-                result->error = *r"linear constraint requires CSP variables";
+                result->error = r"linear constraint requires CSP variables";
                 return false;
             }
             n00b_csp_var_id_t *vars = n00b_alloc_array(n00b_csp_var_id_t,
@@ -2108,14 +2108,14 @@ execute_program(n00b_logic_t *prog, dsl_inst_t *insts, int32_t count,
                 vars[j] = find_csp_var(prog, inst->linear_vars[j]);
                 if (vars[j] < 0) {
                     n00b_free(vars);
-                    result->error = *r"linear constraint references undefined variable";
+                    result->error = r"linear constraint references undefined variable";
                     return false;
                 }
             }
             if (!n00b_csp_post_linear(prog->store, vars, inst->linear_coeffs,
                                        inst->linear_count, inst->linear_rhs)) {
                 n00b_free(vars);
-                result->error = *r"linear constraint failed (unsatisfiable)";
+                result->error = r"linear constraint failed (unsatisfiable)";
                 return false;
             }
             n00b_free(vars);
@@ -2124,7 +2124,7 @@ execute_program(n00b_logic_t *prog, dsl_inst_t *insts, int32_t count,
 
     // Phase 5: Run CSP propagation.
     if (!n00b_logic_run_csp(prog)) {
-        result->error = *r"CSP propagation failed (unsatisfiable)";
+        result->error = r"CSP propagation failed (unsatisfiable)";
         return false;
     }
 
@@ -2176,12 +2176,12 @@ execute_program(n00b_logic_t *prog, dsl_inst_t *insts, int32_t count,
 // ============================================================================
 
 static n00b_dsl_result_t
-dsl_process(n00b_string_t src, n00b_logic_solution_cb cb, void *ctx,
+dsl_process(n00b_string_t *src, n00b_logic_solution_cb cb, void *ctx,
             bool run_solve)
 {
     n00b_dsl_result_t result = {};
 
-    if (!src.data || src.u8_bytes == 0) {
+    if (!src || !src->data || src->u8_bytes == 0) {
         // Empty program.
         result.prog = n00b_alloc(n00b_logic_t);
         n00b_logic_init(result.prog);
@@ -2190,8 +2190,8 @@ dsl_process(n00b_string_t src, n00b_logic_solution_cb cb, void *ctx,
 
     // Lex.
     dsl_lexer_t lex = {
-        .src     = src.data,
-        .src_len = src.u8_bytes,
+        .src     = src->data,
+        .src_len = src->u8_bytes,
         .pos     = 0,
         .line    = 1,
         .col     = 1,
@@ -2254,13 +2254,13 @@ dsl_process(n00b_string_t src, n00b_logic_solution_cb cb, void *ctx,
 }
 
 n00b_dsl_result_t
-n00b_dsl_compile(n00b_string_t src)
+n00b_dsl_compile(n00b_string_t *src)
 {
     return dsl_process(src, nullptr, nullptr, false);
 }
 
 n00b_dsl_result_t
-n00b_dsl_run(n00b_string_t src, n00b_logic_solution_cb cb, void *ctx)
+n00b_dsl_run(n00b_string_t *src, n00b_logic_solution_cb cb, void *ctx)
 {
     return dsl_process(src, cb, ctx, true);
 }

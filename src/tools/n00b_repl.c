@@ -22,6 +22,7 @@
 #include "n00b/n00b_module_loader.h"
 #include "slay/codegen.h"
 #include "slay/diagnostic.h"
+#include "n00b/n00b_type_map.h"
 #include "slay/grammar.h"
 #include "slay/n00b_parse.h"
 #include "slay/parse_tree.h"
@@ -197,7 +198,7 @@ n00b_repl_run(n00b_grammar_t *grammar)
 {
     n00b_repl_state_t state = {
         .grammar    = grammar,
-        .session    = n00b_cg_session_new(grammar),
+        .session    = n00b_cg_session_new(grammar, .type_map = n00b_type_map),
         .input_buf  = NULL,
         .input_len  = 0,
         .input_cap  = 0,
@@ -255,16 +256,16 @@ n00b_repl_run(n00b_grammar_t *grammar)
 
         case REPL_PARSE_ERROR: {
             // Print error.
-            n00b_string_t err = n00b_parse_result_error_string(parse_result);
+            n00b_string_t *err = n00b_parse_result_error_string(parse_result);
             fprintf(stderr, "Parse error: %.*s\n",
-                    (int)err.u8_bytes, err.data);
+                    (int)err->u8_bytes, err->data);
 
-            n00b_string_t expected = n00b_parse_result_expected_string(
+            n00b_string_t *expected = n00b_parse_result_expected_string(
                 parse_result);
 
-            if (expected.u8_bytes > 0) {
+            if (expected->u8_bytes > 0) {
                 fprintf(stderr, "Expected: %.*s\n",
-                        (int)expected.u8_bytes, expected.data);
+                        (int)expected->u8_bytes, expected->data);
             }
 
             n00b_parse_result_free(parse_result);

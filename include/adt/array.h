@@ -16,7 +16,6 @@
  *
  * Usage:
  * @code
- *     n00b_array_decl(int);
  *     n00b_array_t(int) arr = n00b_array_new(int, 16);
  *     n00b_array_set(arr, 0, 42);
  *     int x = n00b_array_get(arr, 0);
@@ -39,12 +38,10 @@
  * @brief Declare an array type for element type @p T.
  * @param T  Element type.
  *
- * Struct layout: @c { T *data; size_t len; size_t cap; }
+ * Struct layout: @c { T *data; size_t len; size_t cap; n00b_rwlock_t *lock; }
  */
-#define n00b_array_t(T)   struct n00b_array_tid(T)
-
-#define n00b_array_decl(T)                                                                     \
-    struct n00b_array_tid(T) {                                                                 \
+#define n00b_array_t(T)                                                                        \
+    _generic_struct n00b_array_tid(T) {                                                        \
         T                *data;                                                                \
         size_t            len;                                                                 \
         size_t            cap;                                                                 \

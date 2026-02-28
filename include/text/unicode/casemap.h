@@ -49,8 +49,8 @@ n00b_codepoint_t n00b_unicode_casefold_cp(n00b_codepoint_t cp);
  *                 or nullptr for default behavior.
  *  @return A new uppercased string.
  */
-n00b_string_t
-n00b_unicode_toupper(n00b_string_t s) _kargs
+n00b_string_t *
+n00b_unicode_toupper(n00b_string_t *s) _kargs
 {
     n00b_allocator_t *allocator = nullptr;
     char             *locale    = nullptr;
@@ -63,8 +63,8 @@ n00b_unicode_toupper(n00b_string_t s) _kargs
  *                 or nullptr for default behavior.
  *  @return A new lowercased string.
  */
-n00b_string_t
-n00b_unicode_tolower(n00b_string_t s) _kargs
+n00b_string_t *
+n00b_unicode_tolower(n00b_string_t *s) _kargs
 {
     n00b_allocator_t *allocator = nullptr;
     char             *locale    = nullptr;
@@ -77,8 +77,8 @@ n00b_unicode_tolower(n00b_string_t s) _kargs
  *                 or nullptr for default behavior.
  *  @return A new titlecased string.
  */
-n00b_string_t
-n00b_unicode_totitle(n00b_string_t s) _kargs
+n00b_string_t *
+n00b_unicode_totitle(n00b_string_t *s) _kargs
 {
     n00b_allocator_t *allocator = nullptr;
     char             *locale    = nullptr;
@@ -89,8 +89,8 @@ n00b_unicode_totitle(n00b_string_t s) _kargs
  *  @kw allocator  Optional allocator (defaults to the runtime allocator).
  *  @return A new case-folded string.
  */
-n00b_string_t
-n00b_unicode_casefold(n00b_string_t s) _kargs
+n00b_string_t *
+n00b_unicode_casefold(n00b_string_t *s) _kargs
 {
     n00b_allocator_t *allocator = nullptr;
 };
@@ -103,4 +103,4 @@ n00b_unicode_casefold(n00b_string_t s) _kargs
  *  @note Does not normalize inputs.  For strings in different
  *        normalization forms, normalize both to NFC first.
  */
-int n00b_unicode_casecmp(n00b_string_t a, n00b_string_t b);
+int n00b_unicode_casecmp(n00b_string_t *a, n00b_string_t *b);

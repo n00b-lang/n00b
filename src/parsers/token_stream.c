@@ -423,9 +423,9 @@ cp_scan_cb(n00b_scanner_t *s)
     tok->column = st->column;
 
     // Set value to the one-codepoint string.
-    n00b_string_t val = n00b_string_from_raw(st->data + start_pos,
+    n00b_string_t *val = n00b_string_from_raw(st->data + start_pos,
                                                (int64_t)cp_byte_len);
-    tok->value = n00b_option_set(n00b_string_t, val);
+    tok->value = n00b_option_set(n00b_string_t *, val);
 
     cp_scan_emit(ts, tok);
 
@@ -452,12 +452,12 @@ cp_scan_reset_cb(n00b_scanner_t *s)
 }
 
 n00b_token_stream_t *
-n00b_token_stream_from_codepoints(n00b_string_t input)
+n00b_token_stream_from_codepoints(n00b_string_t *input)
 {
     cp_scan_state_t *st = n00b_alloc(cp_scan_state_t);
 
-    st->data      = input.data;
-    st->byte_len  = (uint32_t)input.u8_bytes;
+    st->data      = input->data;
+    st->byte_len  = (uint32_t)input->u8_bytes;
     st->byte_pos  = 0;
     st->tok_index = 0;
     st->line      = 1;

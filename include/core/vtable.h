@@ -60,8 +60,6 @@ typedef struct n00b_method_param_t {
     const char *type_name; ///< Human-readable C type name.
 } n00b_method_param_t;
 
-n00b_array_decl(n00b_method_param_t);
-
 /**
  * @brief An extension method: function pointer + full signature metadata.
  *
@@ -74,5 +72,3 @@ typedef struct n00b_method_t {
     n00b_method_param_t                return_type; ///< Return type info.
     n00b_array_t(n00b_method_param_t)  params;      ///< Parameter type info.
 } n00b_method_t;
-
-n00b_array_decl(n00b_method_t);

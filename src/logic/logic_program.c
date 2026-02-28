@@ -63,13 +63,13 @@ ensure_store(n00b_logic_t *prog)
 // ============================================================================
 
 n00b_dl_rel_id_t
-n00b_logic_relation(n00b_logic_t *prog, n00b_string_t name, int32_t arity)
+n00b_logic_relation(n00b_logic_t *prog, n00b_string_t *name, int32_t arity)
 {
     return n00b_dl_engine_relation(&prog->engine, name, arity);
 }
 
 n00b_dl_sym_t
-n00b_logic_const(n00b_logic_t *prog, n00b_string_t name)
+n00b_logic_const(n00b_logic_t *prog, n00b_string_t *name)
 {
     return n00b_dl_const(&prog->engine, name);
 }
@@ -81,7 +81,7 @@ n00b_logic_int(n00b_logic_t *prog, int64_t value)
 }
 
 n00b_dl_sym_t
-n00b_logic_var(n00b_logic_t *prog, n00b_string_t name)
+n00b_logic_var(n00b_logic_t *prog, n00b_string_t *name)
 {
     return n00b_dl_var(&prog->engine, name);
 }
@@ -104,7 +104,7 @@ n00b_logic_add_rule(n00b_logic_t *prog, n00b_dl_rule_t rule)
 // ============================================================================
 
 n00b_csp_var_id_t
-n00b_logic_csp_var(n00b_logic_t *prog, n00b_string_t name,
+n00b_logic_csp_var(n00b_logic_t *prog, n00b_string_t *name,
                     n00b_csp_domain_t domain)
 {
     ensure_store(prog);
@@ -197,7 +197,7 @@ vars_from_rel_cb(const n00b_dl_sym_t *tuple, int32_t arity, void *ctx)
     (void)arity;
 
     n00b_dl_sym_t  sym  = tuple[c->col];
-    n00b_string_t  name = n00b_dl_sym_to_str(&c->prog->engine, sym);
+    n00b_string_t *name = n00b_dl_sym_to_str(&c->prog->engine, sym);
 
     // Skip if already bridged
     int64_t *existing = n00b_dl_str_i64_map_get(&c->prog->sym_to_csp, name);
@@ -244,8 +244,8 @@ constrain_pairs_cb(const n00b_dl_sym_t *tuple, int32_t arity, void *ctx)
     constrain_pairs_ctx_t *c = (constrain_pairs_ctx_t *)ctx;
     (void)arity;
 
-    n00b_string_t name_a = n00b_dl_sym_to_str(&c->prog->engine, tuple[0]);
-    n00b_string_t name_b = n00b_dl_sym_to_str(&c->prog->engine, tuple[1]);
+    n00b_string_t *name_a = n00b_dl_sym_to_str(&c->prog->engine, tuple[0]);
+    n00b_string_t *name_b = n00b_dl_sym_to_str(&c->prog->engine, tuple[1]);
 
     int64_t *id_a = n00b_dl_str_i64_map_get(&c->prog->sym_to_csp, name_a);
     int64_t *id_b = n00b_dl_str_i64_map_get(&c->prog->sym_to_csp, name_b);
@@ -301,7 +301,7 @@ n00b_logic_constrain_pairs(n00b_logic_t *prog, n00b_dl_rel_id_t rel,
 n00b_option_t(n00b_csp_var_id_t)
 n00b_logic_csp_find(n00b_logic_t *prog, n00b_dl_sym_t sym)
 {
-    n00b_string_t name = n00b_dl_sym_to_str(&prog->engine, sym);
+    n00b_string_t *name = n00b_dl_sym_to_str(&prog->engine, sym);
     int64_t *id = n00b_dl_str_i64_map_get(&prog->sym_to_csp, name);
     if (id) {
         return n00b_option_set(n00b_csp_var_id_t, (n00b_csp_var_id_t)*id);
@@ -446,7 +446,7 @@ n00b_logic_csp_value(n00b_logic_t *prog, n00b_csp_var_id_t var)
 // ============================================================================
 
 void
-n00b_logic_fact(n00b_logic_t *prog, n00b_string_t rel, +)
+n00b_logic_fact(n00b_logic_t *prog, n00b_string_t *rel, +)
 {
     int32_t arity = (int32_t)vargs->nargs;
 
@@ -457,14 +457,14 @@ n00b_logic_fact(n00b_logic_t *prog, n00b_string_t rel, +)
     n00b_dl_sym_t syms[arity];
     for (int32_t i = 0; i < arity; i++) {
         n00b_string_t *name = (n00b_string_t *)n00b_vargs_next(vargs);
-        syms[i] = n00b_logic_const(prog, *name);
+        syms[i] = n00b_logic_const(prog, name);
     }
 
     n00b_logic_add_fact(prog, rel_id, arity, syms);
 }
 
 int32_t
-n00b_logic_bridge(n00b_logic_t *prog, n00b_string_t rel) _kargs
+n00b_logic_bridge(n00b_logic_t *prog, n00b_string_t *rel) _kargs
 {
     n00b_csp_domain_t   domain;
     n00b_csp_con_kind_t constraint = -1;
@@ -504,7 +504,7 @@ n00b_logic_bridge(n00b_logic_t *prog, n00b_string_t rel) _kargs
 }
 
 n00b_csp_var_id_t
-n00b_logic_int_var(n00b_logic_t *prog, n00b_string_t name,
+n00b_logic_int_var(n00b_logic_t *prog, n00b_string_t *name,
                     int64_t lo, int64_t hi)
 {
     return n00b_logic_csp_var(prog, name, n00b_csp_dom_range(lo, hi));
@@ -512,7 +512,7 @@ n00b_logic_int_var(n00b_logic_t *prog, n00b_string_t name,
 
 bool
 n00b_logic_constrain(n00b_logic_t *prog,
-                      n00b_string_t var_a, n00b_string_t var_b,
+                      n00b_string_t *var_a, n00b_string_t *var_b,
                       n00b_csp_con_kind_t kind)
 {
     int64_t *id_a = n00b_dl_str_i64_map_get(&prog->sym_to_csp, var_a);
@@ -549,7 +549,7 @@ n00b_logic_alldiff(n00b_logic_t *prog, +)
 
     for (int32_t i = 0; i < n; i++) {
         n00b_string_t *name = (n00b_string_t *)n00b_vargs_next(vargs);
-        int64_t *id = n00b_dl_str_i64_map_get(&prog->sym_to_csp, *name);
+        int64_t *id = n00b_dl_str_i64_map_get(&prog->sym_to_csp, name);
         if (!id) {
             return false;
         }
@@ -581,7 +581,7 @@ n00b_logic_linear(n00b_logic_t *prog, const n00b_linear_term_t *terms,
 }
 
 n00b_result_t(int64_t)
-n00b_logic_get_int(n00b_logic_t *prog, n00b_string_t name)
+n00b_logic_get_int(n00b_logic_t *prog, n00b_string_t *name)
 {
     if (!prog->store) {
         return n00b_result_err(int64_t, ENOENT);

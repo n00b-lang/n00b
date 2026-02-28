@@ -106,9 +106,9 @@ read_pipe(int fd, char *buf, int max_len)
 static void
 test_to_string_null(void)
 {
-    n00b_string_t s = n00b_to_string(nullptr);
-    assert(s.u8_bytes == 6);
-    assert(memcmp(s.data, "(null)", 6) == 0);
+    n00b_string_t *s = n00b_to_string(nullptr);
+    assert(s->u8_bytes == 6);
+    assert(memcmp(s->data, "(null)", 6) == 0);
 
     printf("  [PASS] to_string null\n");
 }
@@ -123,9 +123,9 @@ test_to_string_int64(void)
     int64_t *p = n00b_alloc(int64_t);
     *p = 42;
 
-    n00b_string_t s = n00b_to_string(p);
-    assert(s.u8_bytes == 2);
-    assert(memcmp(s.data, "42", 2) == 0);
+    n00b_string_t *s = n00b_to_string(p);
+    assert(s->u8_bytes == 2);
+    assert(memcmp(s->data, "42", 2) == 0);
 
     printf("  [PASS] to_string int64\n");
 }
@@ -140,9 +140,9 @@ test_to_string_uint64(void)
     uint64_t *p = n00b_alloc(uint64_t);
     *p = 12345;
 
-    n00b_string_t s = n00b_to_string(p);
-    assert(s.u8_bytes > 0);
-    assert(s.data != nullptr);
+    n00b_string_t *s = n00b_to_string(p);
+    assert(s->u8_bytes > 0);
+    assert(s->data != nullptr);
 
     printf("  [PASS] to_string uint64\n");
 }
@@ -157,8 +157,8 @@ test_to_string_bool(void)
     bool *p = n00b_alloc(bool);
     *p = true;
 
-    n00b_string_t s = n00b_to_string(p);
-    assert(s.u8_bytes > 0);
+    n00b_string_t *s = n00b_to_string(p);
+    assert(s->u8_bytes > 0);
 
     printf("  [PASS] to_string bool\n");
 }
@@ -173,8 +173,8 @@ test_to_string_double(void)
     double *p = n00b_alloc(double);
     *p = 3.14;
 
-    n00b_string_t s = n00b_to_string(p);
-    assert(s.u8_bytes > 0);
+    n00b_string_t *s = n00b_to_string(p);
+    assert(s->u8_bytes > 0);
 
     printf("  [PASS] to_string double\n");
 }
@@ -186,12 +186,11 @@ test_to_string_double(void)
 static void
 test_to_string_string(void)
 {
-    n00b_string_t *p = n00b_alloc(n00b_string_t);
-    *p = n00b_string_from_raw("hello", 5);
+    n00b_string_t *p = n00b_string_from_raw("hello", 5);
 
-    n00b_string_t s = n00b_to_string(p);
-    assert(s.u8_bytes == 5);
-    assert(memcmp(s.data, "hello", 5) == 0);
+    n00b_string_t *s = n00b_to_string(p);
+    assert(s->u8_bytes == 5);
+    assert(memcmp(s->data, "hello", 5) == 0);
 
     printf("  [PASS] to_string string\n");
 }
@@ -205,11 +204,11 @@ test_to_string_fallback(void)
 {
     // n00b_dict_untyped_t is registered but has no TO_STRING entry.
     n00b_dict_untyped_t *d = n00b_alloc(n00b_dict_untyped_t);
-    n00b_string_t s = n00b_to_string(d);
+    n00b_string_t *s = n00b_to_string(d);
 
     // Should produce something like "<unknown@0x...>"
-    assert(s.u8_bytes > 0);
-    assert(s.data[0] == '<');
+    assert(s->u8_bytes > 0);
+    assert(s->data[0] == '<');
 
     printf("  [PASS] to_string fallback\n");
 }
@@ -223,8 +222,7 @@ test_print_basic(void)
 {
     test_pipe_t tp = make_test_pipe();
 
-    n00b_string_t *msg = n00b_alloc(n00b_string_t);
-    *msg = n00b_string_from_raw("hello", 5);
+    n00b_string_t *msg = n00b_string_from_raw("hello", 5);
 
     n00b_print(msg, .topic = tp.topic);
 
@@ -250,12 +248,11 @@ test_print_custom_end(void)
 {
     test_pipe_t tp = make_test_pipe();
 
-    n00b_string_t *msg = n00b_alloc(n00b_string_t);
-    *msg = n00b_string_from_raw("world", 5);
+    n00b_string_t *msg = n00b_string_from_raw("world", 5);
 
-    n00b_string_t end_str = n00b_string_from_raw("!\n", 2);
+    n00b_string_t *end_str = n00b_string_from_raw("!\n", 2);
 
-    n00b_print(msg, .topic = tp.topic, .end = n00b_option_set(n00b_string_t, end_str));
+    n00b_print(msg, .topic = tp.topic, .end = n00b_option_set(n00b_string_t *, end_str));
 
     close(tp.write_fd);
 
@@ -359,8 +356,7 @@ test_printf_basic(void)
 {
     test_pipe_t tp = make_test_pipe();
 
-    n00b_string_t *name = n00b_alloc(n00b_string_t);
-    *name = n00b_string_from_raw("World", 5);
+    n00b_string_t *name = n00b_string_from_raw("World", 5);
 
     n00b_printf("Hello [|#|]!", name, .topic = tp.topic);
 
@@ -385,9 +381,9 @@ test_printf_no_newline(void)
 {
     test_pipe_t tp = make_test_pipe();
 
-    n00b_string_t empty = n00b_string_from_raw("", 0);
+    n00b_string_t *empty = n00b_string_from_raw("", 0);
 
-    n00b_printf("ok", .topic = tp.topic, .end = n00b_option_set(n00b_string_t, empty));
+    n00b_printf("ok", .topic = tp.topic, .end = n00b_option_set(n00b_string_t *, empty));
 
     close(tp.write_fd);
 

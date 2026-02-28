@@ -24,14 +24,14 @@ n00b_parse_node_token(n00b_parse_tree_t *t)
     return n00b_tree_leaf_value(t);
 }
 
-n00b_option_t(n00b_string_t)
+n00b_option_t(n00b_string_t *)
 n00b_parse_node_name(n00b_parse_tree_t *t)
 {
     if (!t || n00b_tree_is_leaf(t)) {
-        return n00b_option_none(n00b_string_t);
+        return n00b_option_none(n00b_string_t *);
     }
 
-    return n00b_option_set(n00b_string_t, n00b_tree_node_value(t).name);
+    return n00b_option_set(n00b_string_t *, n00b_tree_node_value(t).name);
 }
 
 // ============================================================================
@@ -118,7 +118,7 @@ n00b_pt_nt_name(n00b_parse_tree_t *t)
     }
 
     n00b_nt_node_t *pn = &n00b_tree_node_value(t);
-    return pn->name.data;
+    return pn->name ? pn->name->data : NULL;
 }
 
 size_t
@@ -128,7 +128,8 @@ n00b_pt_nt_name_len(n00b_parse_tree_t *t)
         return 0;
     }
 
-    return n00b_tree_node_value(t).name.u8_bytes;
+    n00b_nt_node_t *pn = &n00b_tree_node_value(t);
+    return pn->name ? pn->name->u8_bytes : 0;
 }
 
 bool
@@ -179,7 +180,7 @@ n00b_pt_token_text(n00b_parse_tree_t *t)
         return NULL;
     }
 
-    return n00b_option_get(tok->value).data;
+    return n00b_option_get(tok->value)->data;
 }
 
 size_t
@@ -195,7 +196,7 @@ n00b_pt_token_text_len(n00b_parse_tree_t *t)
         return 0;
     }
 
-    return n00b_option_get(tok->value).u8_bytes;
+    return n00b_option_get(tok->value)->u8_bytes;
 }
 
 size_t
@@ -312,8 +313,8 @@ n00b_pt_is_group(n00b_parse_tree_t *t)
         return true;
     }
 
-    const char *name = pn->name.data;
-    size_t      nlen = pn->name.u8_bytes;
+    const char *name = pn->name ? pn->name->data : NULL;
+    size_t      nlen = pn->name ? pn->name->u8_bytes : 0;
 
     return name && nlen >= 2 && name[0] == '$' && name[1] == '$';
 }
@@ -422,8 +423,8 @@ search_by_nt_recurse(n00b_parse_tree_t  *node,
     // Check this node.
     if (!n00b_tree_is_leaf(node)) {
         n00b_nt_node_t *pn   = &n00b_tree_node_value(node);
-        const char     *name = pn->name.data;
-        size_t          nlen = pn->name.u8_bytes;
+        const char     *name = pn->name ? pn->name->data : NULL;
+        size_t          nlen = pn->name ? pn->name->u8_bytes : 0;
 
         if (name && nlen == nt_len && memcmp(name, nt_name, nlen) == 0) {
             out[count++] = node;
@@ -474,9 +475,9 @@ search_by_token_text_recurse(n00b_parse_tree_t  *node,
         n00b_token_info_t *tok = n00b_tree_leaf_value(node);
 
         if (tok && n00b_option_is_set(tok->value)) {
-            n00b_string_t val = n00b_option_get(tok->value);
+            n00b_string_t *val = n00b_option_get(tok->value);
 
-            if (val.u8_bytes == tlen && memcmp(val.data, text, tlen) == 0) {
+            if (val && val->u8_bytes == tlen && memcmp(val->data, text, tlen) == 0) {
                 out[count++] = node;
             }
         }

@@ -642,8 +642,8 @@ bidi_open_internal(const char *data, int64_t len)
     uint32_t                  num_bytes = (uint32_t)len;
 
     // Count codepoints for allocation
-    n00b_string_t _s             = {.u8_bytes = num_bytes, .data = (char *)data};
-    int64_t       num_codepoints = n00b_unicode_utf8_count_codepoints(_s);
+    int64_t       num_codepoints = n00b_unicode_utf8_count_codepoints(
+        &(n00b_string_t){.u8_bytes = num_bytes, .data = (char *)data});
     if (num_codepoints < 0)
         num_codepoints = 0;
 
@@ -722,13 +722,13 @@ bidi_open_internal(const char *data, int64_t len)
 }
 
 n00b_unicode_bidi_para_t *
-n00b_unicode_bidi_open(n00b_string_t s) _kargs
+n00b_unicode_bidi_open(n00b_string_t *s) _kargs
 {
     n00b_allocator_t *allocator = nullptr;
 }
 {
     (void)allocator;
-    return bidi_open_internal(s.data, s.u8_bytes);
+    return bidi_open_internal(s->data, s->u8_bytes);
 }
 
 uint8_t

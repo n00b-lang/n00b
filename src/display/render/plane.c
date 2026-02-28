@@ -128,7 +128,7 @@ n00b_plane_init(n00b_plane_t *p) _kargs
     n00b_isize_t       rows      = 25;
     n00b_isize_t       vp_cols   = 0;
     n00b_isize_t       vp_rows   = 0;
-    n00b_option_t(n00b_string_t) name = n00b_option_none(n00b_string_t);
+    n00b_option_t(n00b_string_t *) name = n00b_option_none(n00b_string_t *);
     n00b_scroll_mode_t scroll    = N00B_SCROLL_NONE;
     int32_t            z         = 0;
     n00b_box_props_t  *box       = nullptr;
@@ -231,21 +231,21 @@ n00b_plane_remove_child(n00b_plane_t *parent, n00b_plane_t *child)
 // -------------------------------------------------------------------
 
 void
-n00b_plane_put_str(n00b_plane_t *p, n00b_string_t s) _kargs
+n00b_plane_put_str(n00b_plane_t *p, n00b_string_t *s) _kargs
 {
     bool wrap = true;
 }
 {
-    if (!s.data || s.u8_bytes == 0) {
+    if (!s || s->u8_bytes == 0) {
         return;
     }
 
     plane_lock(p);
 
-    const uint8_t *data = (const uint8_t *)s.data;
+    const uint8_t *data = (const uint8_t *)s->data;
     size_t         pos  = 0;
 
-    while (pos < s.u8_bytes) {
+    while (pos < s->u8_bytes) {
         if (p->cursor_row >= p->total_rows) {
             break;
         }
@@ -279,7 +279,7 @@ n00b_plane_put_str(n00b_plane_t *p, n00b_string_t s) _kargs
             continue;
         }
 
-        if (pos + byte_len > s.u8_bytes) {
+        if (pos + byte_len > s->u8_bytes) {
             break;
         }
 
@@ -318,7 +318,7 @@ n00b_plane_put_str(n00b_plane_t *p, n00b_string_t s) _kargs
         if (cell) {
             n00b_text_style_t *cell_style = p->default_style;
 
-            if (s.styling) {
+            if (s->styling) {
                 n00b_text_style_t *resolved =
                     n00b_str_resolve_style_at(s, pos);
                 if (resolved) {
@@ -354,7 +354,7 @@ n00b_plane_put_str(n00b_plane_t *p, n00b_string_t s) _kargs
 
 void
 n00b_plane_put_str_at(n00b_plane_t *p, n00b_isize_t row,
-                       n00b_isize_t col, n00b_string_t s)
+                       n00b_isize_t col, n00b_string_t *s)
 {
     p->cursor_row = row;
     p->cursor_col = col;

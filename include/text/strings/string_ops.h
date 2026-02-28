@@ -19,7 +19,6 @@
 #include "text/unicode/types_ext.h"
 #include "adt/array.h"
 
-n00b_array_decl(n00b_string_t);
 
 // ===================================================================
 // Error codes for string operations
@@ -39,7 +38,7 @@ n00b_array_decl(n00b_string_t);
  *  @kw allocator  Optional allocator (defaults to the runtime allocator).
  *  @return A new string containing @p a followed by @p b.
  */
-n00b_string_t n00b_unicode_str_cat(n00b_string_t a, n00b_string_t b)
+n00b_string_t *n00b_unicode_str_cat(n00b_string_t *a, n00b_string_t *b)
     _kargs { n00b_allocator_t *allocator = nullptr; };
 
 /** @brief Concatenate an array of strings.
@@ -47,7 +46,7 @@ n00b_string_t n00b_unicode_str_cat(n00b_string_t a, n00b_string_t b)
  *  @kw allocator  Optional allocator (defaults to the runtime allocator).
  *  @return A new string containing all parts concatenated in order.
  */
-n00b_string_t n00b_unicode_str_cat_many(n00b_array_t(n00b_string_t) parts)
+n00b_string_t *n00b_unicode_str_cat_many(n00b_array_t(n00b_string_t *) parts)
     _kargs { n00b_allocator_t *allocator = nullptr; };
 
 /** @brief Join an array of strings with a separator.
@@ -56,8 +55,8 @@ n00b_string_t n00b_unicode_str_cat_many(n00b_array_t(n00b_string_t) parts)
  *  @kw allocator  Optional allocator (defaults to the runtime allocator).
  *  @return A new string with all parts joined by @p sep.
  */
-n00b_string_t n00b_unicode_str_join(n00b_string_t sep,
-                                    n00b_array_t(n00b_string_t) parts)
+n00b_string_t *n00b_unicode_str_join(n00b_string_t *sep,
+                                    n00b_array_t(n00b_string_t *) parts)
     _kargs { n00b_allocator_t *allocator = nullptr; };
 
 // ===================================================================
@@ -71,7 +70,7 @@ n00b_string_t n00b_unicode_str_join(n00b_string_t sep,
  *  @kw allocator  Optional allocator (defaults to the runtime allocator).
  *  @return A new string containing the selected grapheme clusters.
  */
-n00b_string_t n00b_unicode_str_slice(n00b_string_t s, int32_t start,
+n00b_string_t *n00b_unicode_str_slice(n00b_string_t *s, int32_t start,
                                      int32_t end)
     _kargs { n00b_allocator_t *allocator = nullptr; };
 
@@ -81,7 +80,7 @@ n00b_string_t n00b_unicode_str_slice(n00b_string_t s, int32_t start,
  *  @kw allocator  Optional allocator (defaults to the runtime allocator).
  *  @return A new string containing the grapheme cluster at @p index.
  */
-n00b_string_t n00b_unicode_str_grapheme_at(n00b_string_t s, int32_t index)
+n00b_string_t *n00b_unicode_str_grapheme_at(n00b_string_t *s, int32_t index)
     _kargs { n00b_allocator_t *allocator = nullptr; };
 
 // ===================================================================
@@ -95,7 +94,7 @@ n00b_string_t n00b_unicode_str_grapheme_at(n00b_string_t s, int32_t index)
  *  @kw allocator  Optional allocator (defaults to the runtime allocator).
  *  @return A new string containing bytes [byte_start, byte_end).
  */
-n00b_string_t n00b_unicode_str_slice_bytes(n00b_string_t s,
+n00b_string_t *n00b_unicode_str_slice_bytes(n00b_string_t *s,
                                            uint32_t byte_start,
                                            uint32_t byte_end)
     _kargs { n00b_allocator_t *allocator = nullptr; };
@@ -131,8 +130,8 @@ n00b_string_t n00b_unicode_str_slice_bytes(n00b_string_t s,
  *        `n00b_unicode_str_contains()` for presence checks with transforms,
  *        or disable transforms when you need sliceable byte offsets.
  */
-n00b_option_t(int32_t) n00b_unicode_str_find(n00b_string_t haystack,
-                                             n00b_string_t needle)
+n00b_option_t(int32_t) n00b_unicode_str_find(n00b_string_t *haystack,
+                                             n00b_string_t *needle)
     _kargs {
         bool reverse         = false;
         bool normalize       = true;
@@ -160,14 +159,14 @@ n00b_option_t(int32_t) n00b_unicode_str_find(n00b_string_t haystack,
  *  @param prefix  The prefix to check.
  *  @return true if @p s starts with @p prefix.
  */
-bool n00b_unicode_str_starts_with(n00b_string_t s, n00b_string_t prefix);
+bool n00b_unicode_str_starts_with(n00b_string_t *s, n00b_string_t *prefix);
 
 /** @brief Test whether a string ends with a given suffix.
  *  @param s       The string to test.
  *  @param suffix  The suffix to check.
  *  @return true if @p s ends with @p suffix.
  */
-bool n00b_unicode_str_ends_with(n00b_string_t s, n00b_string_t suffix);
+bool n00b_unicode_str_ends_with(n00b_string_t *s, n00b_string_t *suffix);
 
 // ===================================================================
 // Replace
@@ -180,8 +179,8 @@ bool n00b_unicode_str_ends_with(n00b_string_t s, n00b_string_t suffix);
  *  @kw allocator  Optional allocator (defaults to the runtime allocator).
  *  @return A new string with the first occurrence replaced.
  */
-n00b_string_t n00b_unicode_str_replace(n00b_string_t s, n00b_string_t old_s,
-                                       n00b_string_t new_s)
+n00b_string_t *n00b_unicode_str_replace(n00b_string_t *s, n00b_string_t *old_s,
+                                       n00b_string_t *new_s)
     _kargs { n00b_allocator_t *allocator = nullptr; };
 
 /** @brief Replace all occurrences of @p old_s with @p new_s.
@@ -191,9 +190,9 @@ n00b_string_t n00b_unicode_str_replace(n00b_string_t s, n00b_string_t old_s,
  *  @kw allocator  Optional allocator (defaults to the runtime allocator).
  *  @return A new string with all occurrences replaced.
  */
-n00b_string_t n00b_unicode_str_replace_all(n00b_string_t s,
-                                           n00b_string_t old_s,
-                                           n00b_string_t new_s)
+n00b_string_t *n00b_unicode_str_replace_all(n00b_string_t *s,
+                                           n00b_string_t *old_s,
+                                           n00b_string_t *new_s)
     _kargs { n00b_allocator_t *allocator = nullptr; };
 
 // ===================================================================
@@ -206,8 +205,8 @@ n00b_string_t n00b_unicode_str_replace_all(n00b_string_t s,
  *  @kw allocator  Optional allocator (defaults to the runtime allocator).
  *  @return An array of strings.
  */
-n00b_array_t(n00b_string_t) n00b_unicode_str_split(n00b_string_t s,
-                                                    n00b_string_t sep)
+n00b_array_t(n00b_string_t *) n00b_unicode_str_split(n00b_string_t *s,
+                                                    n00b_string_t *sep)
     _kargs { n00b_allocator_t *allocator = nullptr; };
 
 /** @brief Split a string at word boundaries (UAX #29).
@@ -215,7 +214,7 @@ n00b_array_t(n00b_string_t) n00b_unicode_str_split(n00b_string_t s,
  *  @kw allocator  Optional allocator (defaults to the runtime allocator).
  *  @return An array of strings.
  */
-n00b_array_t(n00b_string_t) n00b_unicode_str_split_words(n00b_string_t s)
+n00b_array_t(n00b_string_t *) n00b_unicode_str_split_words(n00b_string_t *s)
     _kargs { n00b_allocator_t *allocator = nullptr; };
 
 /** @brief Split a string into individual grapheme clusters.
@@ -223,7 +222,7 @@ n00b_array_t(n00b_string_t) n00b_unicode_str_split_words(n00b_string_t s)
  *  @kw allocator  Optional allocator (defaults to the runtime allocator).
  *  @return An array of strings.
  */
-n00b_array_t(n00b_string_t) n00b_unicode_str_split_graphemes(n00b_string_t s)
+n00b_array_t(n00b_string_t *) n00b_unicode_str_split_graphemes(n00b_string_t *s)
     _kargs { n00b_allocator_t *allocator = nullptr; };
 
 /** @brief Split a string into lines (at CR, LF, or CRLF).
@@ -231,7 +230,7 @@ n00b_array_t(n00b_string_t) n00b_unicode_str_split_graphemes(n00b_string_t s)
  *  @kw allocator  Optional allocator (defaults to the runtime allocator).
  *  @return An array of strings (without line terminators).
  */
-n00b_array_t(n00b_string_t) n00b_unicode_str_split_lines(n00b_string_t s)
+n00b_array_t(n00b_string_t *) n00b_unicode_str_split_lines(n00b_string_t *s)
     _kargs { n00b_allocator_t *allocator = nullptr; };
 
 // ===================================================================
@@ -245,7 +244,7 @@ n00b_array_t(n00b_string_t) n00b_unicode_str_split_lines(n00b_string_t s)
  *  @kw allocator  Optional allocator (defaults to the runtime allocator).
  *  @return A new trimmed string.
  */
-n00b_string_t n00b_unicode_str_trim(n00b_string_t s)
+n00b_string_t *n00b_unicode_str_trim(n00b_string_t *s)
     _kargs {
         bool              left      = true;
         bool              right     = true;
@@ -274,7 +273,7 @@ n00b_string_t n00b_unicode_str_trim(n00b_string_t s)
  *
  *  @note Defaults to `.normalize = false` (same as `n00b_unicode_str_eq`).
  */
-int n00b_unicode_str_cmp(n00b_string_t a, n00b_string_t b)
+int n00b_unicode_str_cmp(n00b_string_t *a, n00b_string_t *b)
     _kargs {
         bool normalize      = false;
         bool case_sensitive  = true;
@@ -292,7 +291,7 @@ int n00b_unicode_str_cmp(n00b_string_t a, n00b_string_t b)
  *  @note Defaults to `.normalize = false` (differs from `n00b_unicode_str_find`
  *        which defaults to true).
  */
-bool n00b_unicode_str_eq(n00b_string_t a, n00b_string_t b)
+bool n00b_unicode_str_eq(n00b_string_t *a, n00b_string_t *b)
     _kargs {
         bool normalize      = false;
         bool case_sensitive  = true;
@@ -327,7 +326,7 @@ enum {
  *  @kw fill       Fill codepoint (default: space U+0020).
  *  @return A new string padded to @p width columns.
  */
-n00b_string_t n00b_unicode_str_pad(n00b_string_t s, int32_t width)
+n00b_string_t *n00b_unicode_str_pad(n00b_string_t *s, int32_t width)
     _kargs {
         int              align     = N00B_STR_ALIGN_LEFT;
         n00b_allocator_t *allocator = nullptr;
@@ -355,7 +354,7 @@ n00b_string_t n00b_unicode_str_pad(n00b_string_t s, int32_t width)
  *  @return A new string truncated with an ellipsis if it exceeds
  *          @p max_width.
  */
-n00b_string_t n00b_unicode_str_truncate(n00b_string_t s, int32_t max_width)
+n00b_string_t *n00b_unicode_str_truncate(n00b_string_t *s, int32_t max_width)
     _kargs { n00b_allocator_t *allocator = nullptr;
              const char *ellipsis = "..."; };
 
@@ -369,7 +368,7 @@ n00b_string_t n00b_unicode_str_truncate(n00b_string_t s, int32_t max_width)
  *  @kw allocator  Optional allocator (defaults to the runtime allocator).
  *  @return A new string containing @p s repeated @p count times.
  */
-n00b_string_t n00b_unicode_str_repeat(n00b_string_t s, uint32_t count)
+n00b_string_t *n00b_unicode_str_repeat(n00b_string_t *s, uint32_t count)
     _kargs { n00b_allocator_t *allocator = nullptr; };
 
 // ===================================================================
@@ -381,7 +380,7 @@ n00b_string_t n00b_unicode_str_repeat(n00b_string_t s, uint32_t count)
  *  @kw allocator  Optional allocator (defaults to the runtime allocator).
  *  @return A new string with grapheme clusters in reverse order.
  */
-n00b_string_t n00b_unicode_str_reverse(n00b_string_t s)
+n00b_string_t *n00b_unicode_str_reverse(n00b_string_t *s)
     _kargs { n00b_allocator_t *allocator = nullptr; };
 
 // ===================================================================
@@ -398,7 +397,7 @@ n00b_string_t n00b_unicode_str_reverse(n00b_string_t s)
  *  @kw allocator  Optional allocator.
  *  @return A new string with escape sequences inserted.
  */
-n00b_string_t n00b_unicode_str_escape(n00b_string_t s)
+n00b_string_t *n00b_unicode_str_escape(n00b_string_t *s)
     _kargs { n00b_allocator_t *allocator = nullptr; };
 
 /** @brief Interpret escape sequences in a string.
@@ -412,7 +411,7 @@ n00b_string_t n00b_unicode_str_escape(n00b_string_t s)
  *  @post Error codes: `N00B_ERR_STR_INVALID_ESCAPE`,
  *        `N00B_ERR_STR_ESCAPE_EOS`, `N00B_ERR_STR_BAD_HEX`.
  */
-n00b_result_t(n00b_string_t) n00b_unicode_str_unescape(n00b_string_t s)
+n00b_result_t(n00b_string_t *) n00b_unicode_str_unescape(n00b_string_t *s)
     _kargs { n00b_allocator_t *allocator = nullptr; };
 
 // ===================================================================
@@ -428,7 +427,7 @@ n00b_result_t(n00b_string_t) n00b_unicode_str_unescape(n00b_string_t s)
  *  @return The codepoint at that index, or none if out of bounds.
  */
 n00b_option_t(n00b_codepoint_t) n00b_unicode_str_codepoint_at(
-    n00b_string_t s, int64_t index);
+    n00b_string_t *s, int64_t index);
 
 // ===================================================================
 // Deep copy
@@ -439,7 +438,7 @@ n00b_option_t(n00b_codepoint_t) n00b_unicode_str_codepoint_at(
  *  @kw allocator  Optional allocator.
  *  @return A new string with independently allocated data.
  */
-n00b_string_t n00b_unicode_str_copy(n00b_string_t s)
+n00b_string_t *n00b_unicode_str_copy(n00b_string_t *s)
     _kargs { n00b_allocator_t *allocator = nullptr; };
 
 // ===================================================================
@@ -453,8 +452,8 @@ n00b_string_t n00b_unicode_str_copy(n00b_string_t s)
  *  @kw allocator  Optional allocator.
  *  @return An array of truncated strings.
  */
-n00b_array_t(n00b_string_t) n00b_unicode_str_split_and_crop(n00b_string_t s,
-    n00b_string_t sep, int32_t width)
+n00b_array_t(n00b_string_t *) n00b_unicode_str_split_and_crop(n00b_string_t *s,
+    n00b_string_t *sep, int32_t width)
     _kargs { n00b_allocator_t *allocator = nullptr; };
 
 // ===================================================================
@@ -479,6 +478,6 @@ n00b_array_t(n00b_string_t) n00b_unicode_str_split_and_crop(n00b_string_t s,
  *  @kw allocator     Optional allocator.
  *  @return An array of line strings.
  */
-n00b_array_t(n00b_string_t) n00b_unicode_str_wrap(n00b_string_t s)
+n00b_array_t(n00b_string_t *) n00b_unicode_str_wrap(n00b_string_t *s)
     _kargs { int32_t width = 80; int32_t hang = 0; bool no_hard_wrap = false;
              n00b_allocator_t *allocator = nullptr; };

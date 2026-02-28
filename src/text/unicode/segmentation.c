@@ -167,13 +167,13 @@ n00b_unicode_grapheme_iter_raw(const char *data, int64_t len)
 }
 
 n00b_unicode_break_iter_t *
-n00b_unicode_grapheme_iter(n00b_string_t s) _kargs
+n00b_unicode_grapheme_iter(n00b_string_t *s) _kargs
 {
     n00b_allocator_t *allocator = nullptr;
 }
 {
     (void)allocator; // accepted for API surface
-    return n00b_unicode_grapheme_iter_raw(s.data, s.u8_bytes);
+    return n00b_unicode_grapheme_iter_raw(s->data, s->u8_bytes);
 }
 
 // Forward: returns byte offset of NEXT grapheme boundary, or -1
@@ -823,13 +823,13 @@ n00b_unicode_word_iter_raw(const char *data, int64_t len)
 }
 
 n00b_unicode_break_iter_t *
-n00b_unicode_word_iter(n00b_string_t s) _kargs
+n00b_unicode_word_iter(n00b_string_t *s) _kargs
 {
     n00b_allocator_t *allocator = nullptr;
 }
 {
     (void)allocator; // accepted for API surface
-    return n00b_unicode_word_iter_raw(s.data, s.u8_bytes);
+    return n00b_unicode_word_iter_raw(s->data, s->u8_bytes);
 }
 
 n00b_unicode_break_iter_t *
@@ -843,13 +843,13 @@ n00b_unicode_sentence_iter_raw(const char *data, int64_t len)
 }
 
 n00b_unicode_break_iter_t *
-n00b_unicode_sentence_iter(n00b_string_t s) _kargs
+n00b_unicode_sentence_iter(n00b_string_t *s) _kargs
 {
     n00b_allocator_t *allocator = nullptr;
 }
 {
     (void)allocator; // accepted for API surface
-    return n00b_unicode_sentence_iter_raw(s.data, s.u8_bytes);
+    return n00b_unicode_sentence_iter_raw(s->data, s->u8_bytes);
 }
 
 // ---------------------------------------------------------------------------
@@ -871,7 +871,7 @@ n00b_unicode_grapheme_count_raw(const char *data, int64_t len)
 }
 
 uint32_t
-n00b_unicode_grapheme_count(n00b_string_t s)
+n00b_unicode_grapheme_count(n00b_string_t *s)
 {
-    return n00b_unicode_grapheme_count_raw(s.data, s.u8_bytes);
+    return n00b_unicode_grapheme_count_raw(s->data, s->u8_bytes);
 }

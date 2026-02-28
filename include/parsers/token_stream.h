@@ -213,7 +213,7 @@ n00b_token_stream_from_array(n00b_token_info_t **tokens, int32_t count);
  * @return A new token stream.
  */
 extern n00b_token_stream_t *
-n00b_token_stream_from_codepoints(n00b_string_t input);
+n00b_token_stream_from_codepoints(n00b_string_t *input);
 
 // ============================================================================
 // Iteration macro

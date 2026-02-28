@@ -14,7 +14,7 @@
 // Helpers
 // ====================================================================
 
-static n00b_string_t
+static n00b_string_t *
 make_str(const char *s)
 {
     return n00b_string_from_raw(s, (int64_t)strlen(s));
@@ -232,7 +232,7 @@ test_render_from_csv(void)
         "Margaret,75,Stephens City,Virginia\n"
         "Emily,27,Montclair,New Jersey\n";
 
-    n00b_string_t input = n00b_string_from_raw(csv, (int64_t)strlen(csv));
+    n00b_string_t *input = n00b_string_from_raw(csv, (int64_t)strlen(csv));
 
     n00b_table_t *t = n00b_table_from_string(input);
     assert(t != nullptr);
@@ -286,7 +286,7 @@ test_render_large_table_gc_stress(void)
         }
     }
 
-    n00b_string_t input = n00b_string_from_raw(buf,
+    n00b_string_t *input = n00b_string_from_raw(buf,
                                                 (int64_t)pos);
 
     n00b_table_t *t = n00b_table_from_string(input);

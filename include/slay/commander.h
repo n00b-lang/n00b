@@ -71,19 +71,16 @@ typedef struct n00b_cmdr_val {
         bool          b;
         int64_t       i;
         double        f;
-        n00b_string_t s;
+        n00b_string_t *s;
     };
 } n00b_cmdr_val_t;
 
 /** @brief A positional argument with raw string and pre-parsed numeric values. */
 typedef struct n00b_cmdr_arg {
-    n00b_string_t value;     /**< Raw string value. */
+    n00b_string_t *value;     /**< Raw string value. */
     int64_t       int_val;   /**< Value parsed as integer (0 if not numeric). */
     double        float_val; /**< Value parsed as float (0.0 if not numeric). */
 } n00b_cmdr_arg_t;
-
-n00b_list_decl(n00b_cmdr_arg_t);
-n00b_dict_decl(n00b_string_t *, n00b_cmdr_val_t *);
 
 /**
  * @brief Specification for a single flag (e.g., --verbose, -o).
@@ -92,16 +89,14 @@ n00b_dict_decl(n00b_string_t *, n00b_cmdr_val_t *);
  * "--flag value" and "--flag=value" syntax.
  */
 typedef struct n00b_cmdr_flag_spec {
-    n00b_string_t       name;        /**< Long name including dashes (e.g., "--output"). */
-    n00b_string_t       short_name;  /**< Short alias (e.g., "-o"), or empty. */
+    n00b_string_t       *name;        /**< Long name including dashes (e.g., "--output"). */
+    n00b_string_t       *short_name;  /**< Short alias (e.g., "-o"), or empty. */
     n00b_cmdr_arg_type_t value_type; /**< Type of the flag's value. */
     bool                takes_value; /**< Whether this flag expects a value argument. */
-    n00b_string_t       doc;         /**< Human-readable description, or empty. */
+    n00b_string_t       *doc;         /**< Human-readable description, or empty. */
     int64_t             terminal_id; /**< Grammar terminal ID (set during finalize). */
     bool                has_short;   /**< True if short_name is set. */
 } n00b_cmdr_flag_spec_t;
-
-n00b_list_decl(n00b_cmdr_flag_spec_t);
 
 /**
  * @brief Specification for a positional argument slot.
@@ -109,22 +104,18 @@ n00b_list_decl(n00b_cmdr_flag_spec_t);
  * Use max=-1 for unlimited.
  */
 typedef struct n00b_cmdr_positional_spec {
-    n00b_string_t        name; /**< Display name (e.g., "file"). */
+    n00b_string_t       *name; /**< Display name (e.g., "file"). */
     n00b_cmdr_arg_type_t type; /**< Expected type of the argument. */
     int                  min;  /**< Minimum number of arguments required. */
     int                  max;  /**< Maximum number of arguments (-1 = unlimited). */
 } n00b_cmdr_positional_spec_t;
 
-n00b_list_decl(n00b_cmdr_positional_spec_t);
-
 /** @brief A command or subcommand with its flags and positional args. */
 typedef struct n00b_cmdr_command n00b_cmdr_command_t;
 
-n00b_list_decl(n00b_cmdr_command_t);
-
 struct n00b_cmdr_command {
-    n00b_string_t                            name;        /**< Command name, or empty for root. */
-    n00b_string_t                            doc;         /**< Description, or empty. */
+    n00b_string_t                           *name;        /**< Command name, or empty for root. */
+    n00b_string_t                           *doc;         /**< Description, or empty. */
     n00b_list_t(n00b_cmdr_flag_spec_t)       flags;       /**< Flag specs. */
     n00b_list_t(n00b_cmdr_positional_spec_t) positionals; /**< Positional arg specs. */
     n00b_list_t(n00b_cmdr_command_t)         subcommands; /**< Subcommands. */
@@ -143,10 +134,10 @@ typedef struct n00b_cmdr {
     n00b_cmdr_command_t root;                           /**< Root command. */
     int64_t             next_flag_id;                   /**< Next terminal ID for flags. */
     bool                finalized;                      /**< True after grammar is built. */
-    n00b_string_t       name;                           /**< Program name. */
+    n00b_string_t      *name;                           /**< Program name. */
     int64_t             tok_ids[N00B_CMDR_TID_COUNT];   /**< Terminal IDs for base token types. */
-    n00b_string_t       bnf_text;                       /**< BNF source (BNF mode only). */
-    n00b_string_t       start_symbol;                   /**< BNF start symbol. */
+    n00b_string_t      *bnf_text;                       /**< BNF source (BNF mode only). */
+    n00b_string_t      *start_symbol;                   /**< BNF start symbol. */
     bool                has_bnf;                        /**< True if bnf_text is set. */
 } n00b_cmdr_t;
 
@@ -158,10 +149,10 @@ typedef struct n00b_cmdr {
  * contains diagnostic messages.
  */
 typedef struct n00b_cmdr_result {
-    n00b_string_t                command;  /**< Matched subcommand name, or empty. */
+    n00b_string_t               *command;  /**< Matched subcommand name, or empty. */
     n00b_dict_t(n00b_string_t *, n00b_cmdr_val_t *) flags; /**< Parsed flags: string key -> n00b_cmdr_val_t *. */
     n00b_list_t(n00b_cmdr_arg_t) args;     /**< Positional arguments. */
-    n00b_list_t(n00b_string_t)   errors;   /**< Error messages (on failure). */
+    n00b_list_t(n00b_string_t *)   errors;   /**< Error messages (on failure). */
     bool                         ok;       /**< True if parsing succeeded. */
     bool                         has_cmd;  /**< True if command is set. */
     n00b_parse_tree_t           *tree;     /**< Raw parse tree (advanced use). */
@@ -184,7 +175,7 @@ n00b_cmdr_t *n00b_cmdr_new(void);
  * @param start_symbol  Name of the start non-terminal.
  * @return Finalized commander, or NULL on grammar error.
  */
-n00b_cmdr_t *n00b_cmdr_from_bnf(n00b_string_t bnf, n00b_string_t start_symbol);
+n00b_cmdr_t *n00b_cmdr_from_bnf(n00b_string_t *bnf, n00b_string_t *start_symbol);
 
 /**
  * @brief Create a commander from a JSON specification string.
@@ -207,7 +198,7 @@ n00b_cmdr_t *n00b_cmdr_from_bnf(n00b_string_t bnf, n00b_string_t start_symbol);
  * @param json  JSON specification string.
  * @return Commander instance, or NULL on parse error.
  */
-n00b_cmdr_t *n00b_cmdr_from_json(n00b_string_t json);
+n00b_cmdr_t *n00b_cmdr_from_json(n00b_string_t *json);
 
 /**
  * @brief Free a commander instance and all associated resources.
@@ -224,7 +215,7 @@ void n00b_cmdr_free(n00b_cmdr_t *c);
  * @param c     Commander instance.
  * @param name  Program name string.
  */
-void n00b_cmdr_set_name(n00b_cmdr_t *c, n00b_string_t name);
+void n00b_cmdr_set_name(n00b_cmdr_t *c, n00b_string_t *name);
 
 /**
  * @brief Add a top-level subcommand.
@@ -232,7 +223,7 @@ void n00b_cmdr_set_name(n00b_cmdr_t *c, n00b_string_t name);
  * @param name  Command name (e.g., "build").
  * @param doc   Description string.
  */
-void n00b_cmdr_add_command(n00b_cmdr_t *c, n00b_string_t name, n00b_string_t doc);
+void n00b_cmdr_add_command(n00b_cmdr_t *c, n00b_string_t *name, n00b_string_t *doc);
 
 /**
  * @brief Add a nested subcommand under an existing command.
@@ -241,8 +232,8 @@ void n00b_cmdr_add_command(n00b_cmdr_t *c, n00b_string_t name, n00b_string_t doc
  * @param name    Subcommand name.
  * @param doc     Description string.
  */
-void n00b_cmdr_add_subcommand(n00b_cmdr_t *c, n00b_string_t parent,
-                               n00b_string_t name, n00b_string_t doc);
+void n00b_cmdr_add_subcommand(n00b_cmdr_t *c, n00b_string_t *parent,
+                               n00b_string_t *name, n00b_string_t *doc);
 
 /**
  * @brief Add a flag to a command.
@@ -253,9 +244,9 @@ void n00b_cmdr_add_subcommand(n00b_cmdr_t *c, n00b_string_t parent,
  * @param takes_value  Whether the flag expects a following value.
  * @param doc          Description string.
  */
-void n00b_cmdr_add_flag(n00b_cmdr_t *c, n00b_string_t command,
-                         n00b_string_t flag_name, n00b_cmdr_arg_type_t type,
-                         bool takes_value, n00b_string_t doc);
+void n00b_cmdr_add_flag(n00b_cmdr_t *c, n00b_string_t *command,
+                         n00b_string_t *flag_name, n00b_cmdr_arg_type_t type,
+                         bool takes_value, n00b_string_t *doc);
 
 /**
  * @brief Add a short alias for an existing flag.
@@ -264,8 +255,8 @@ void n00b_cmdr_add_flag(n00b_cmdr_t *c, n00b_string_t command,
  * @param flag_name  Long flag name (must already exist).
  * @param alias      Short alias (e.g., "-v").
  */
-void n00b_cmdr_add_flag_alias(n00b_cmdr_t *c, n00b_string_t command,
-                               n00b_string_t flag_name, n00b_string_t alias);
+void n00b_cmdr_add_flag_alias(n00b_cmdr_t *c, n00b_string_t *command,
+                               n00b_string_t *flag_name, n00b_string_t *alias);
 
 /**
  * @brief Add a positional argument spec to a command.
@@ -276,8 +267,8 @@ void n00b_cmdr_add_flag_alias(n00b_cmdr_t *c, n00b_string_t command,
  * @param min      Minimum number of arguments required.
  * @param max      Maximum number of arguments (-1 for unlimited).
  */
-void n00b_cmdr_add_positional(n00b_cmdr_t *c, n00b_string_t command,
-                               n00b_string_t name, n00b_cmdr_arg_type_t type,
+void n00b_cmdr_add_positional(n00b_cmdr_t *c, n00b_string_t *command,
+                               n00b_string_t *name, n00b_cmdr_arg_type_t type,
                                int min, int max);
 
 /**
@@ -314,7 +305,7 @@ n00b_cmdr_result_t *n00b_cmdr_parse(n00b_cmdr_t *c, int argc, const char **argv)
  * @param cmdline  Command-line string.
  * @return Parse result. Caller must n00b_cmdr_result_free(). Check r->ok.
  */
-n00b_cmdr_result_t *n00b_cmdr_parse_string(n00b_cmdr_t *c, n00b_string_t cmdline);
+n00b_cmdr_result_t *n00b_cmdr_parse_string(n00b_cmdr_t *c, n00b_string_t *cmdline);
 
 /**
  * @brief Free a parse result.
@@ -331,7 +322,7 @@ void n00b_cmdr_result_free(n00b_cmdr_result_t *r);
  * @param r  Parse result.
  * @return Subcommand name, or empty string if none matched.
  */
-n00b_string_t n00b_cmdr_result_command(n00b_cmdr_result_t *r);
+n00b_string_t *n00b_cmdr_result_command(n00b_cmdr_result_t *r);
 
 /**
  * @brief Check whether a flag was present on the command line.
@@ -339,7 +330,7 @@ n00b_string_t n00b_cmdr_result_command(n00b_cmdr_result_t *r);
  * @param flag  Flag name to check (long or short).
  * @return True if the flag was present.
  */
-bool n00b_cmdr_flag_present(n00b_cmdr_result_t *r, n00b_string_t flag);
+bool n00b_cmdr_flag_present(n00b_cmdr_result_t *r, n00b_string_t *flag);
 
 /**
  * @brief Get the raw n00b_cmdr_val_t for a flag.
@@ -347,25 +338,25 @@ bool n00b_cmdr_flag_present(n00b_cmdr_result_t *r, n00b_string_t flag);
  * @param flag  Flag name (long or short).
  * @return Pointer to the value, or NULL if not present.
  */
-n00b_cmdr_val_t *n00b_cmdr_flag_get(n00b_cmdr_result_t *r, n00b_string_t flag);
+n00b_cmdr_val_t *n00b_cmdr_flag_get(n00b_cmdr_result_t *r, n00b_string_t *flag);
 
 /**
  * @brief Get a flag's value as a string.
  * @return String value, or empty string if not present or not a string type.
  */
-n00b_string_t n00b_cmdr_flag_str(n00b_cmdr_result_t *r, n00b_string_t flag);
+n00b_string_t *n00b_cmdr_flag_str(n00b_cmdr_result_t *r, n00b_string_t *flag);
 
 /**
  * @brief Get a flag's value as an integer.
  * @return Integer value, or 0 if not present or not an int type.
  */
-int64_t n00b_cmdr_flag_int(n00b_cmdr_result_t *r, n00b_string_t flag);
+int64_t n00b_cmdr_flag_int(n00b_cmdr_result_t *r, n00b_string_t *flag);
 
 /**
  * @brief Get a flag's value as a boolean.
  * @return Boolean value, or false if not present.
  */
-bool n00b_cmdr_flag_bool(n00b_cmdr_result_t *r, n00b_string_t flag);
+bool n00b_cmdr_flag_bool(n00b_cmdr_result_t *r, n00b_string_t *flag);
 
 /**
  * @brief Get the number of positional arguments.
@@ -377,7 +368,7 @@ int32_t n00b_cmdr_arg_count(n00b_cmdr_result_t *r);
  * @param index  0-based argument index.
  * @return String value, or empty string if out of range.
  */
-n00b_string_t n00b_cmdr_arg_str(n00b_cmdr_result_t *r, int index);
+n00b_string_t *n00b_cmdr_arg_str(n00b_cmdr_result_t *r, int index);
 
 /**
  * @brief Get a positional argument as an integer.
@@ -400,7 +391,7 @@ int32_t n00b_cmdr_error_count(n00b_cmdr_result_t *r);
  * @brief Get an error message by index.
  * @return Error string, or empty string if out of range.
  */
-n00b_string_t n00b_cmdr_error_get(n00b_cmdr_result_t *r, int32_t index);
+n00b_string_t *n00b_cmdr_error_get(n00b_cmdr_result_t *r, int32_t index);
 
 // ============================================================================
 // Tokenizer (used internally, exposed for testing)
@@ -432,7 +423,7 @@ int32_t n00b_cmdr_tokenize(const char **argv, int argc,
  * @param n_tokens_out  Output: number of tokens.
  * @return 0 on success, -1 on error.
  */
-int32_t n00b_cmdr_tokenize_string(n00b_string_t cmdline,
+int32_t n00b_cmdr_tokenize_string(n00b_string_t *cmdline,
                                    n00b_cmdr_t *c,
                                    n00b_token_info_t ***tokens_out,
                                    int32_t *n_tokens_out);

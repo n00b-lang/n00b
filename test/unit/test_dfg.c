@@ -58,9 +58,10 @@ load_n00b_grammar(void)
     }
 
     if (!f && srcroot) {
-        char path[1024];
-        snprintf(path, sizeof(path), "%s/grammars/n00b.bnf", srcroot);
+        char *path = nullptr;
+        (void)asprintf(&path, "%s/grammars/n00b.bnf", srcroot);
         f = fopen(path, "r");
+        free(path);
     }
 
     if (!f) {
@@ -76,13 +77,13 @@ load_n00b_grammar(void)
     buf[len] = '\0';
     fclose(f);
 
-    n00b_string_t bnf_text = n00b_string_from_cstr(buf);
+    n00b_string_t *bnf_text = n00b_string_from_cstr(buf);
     free(buf);
 
     n00b_grammar_t *g = n00b_grammar_new();
     n00b_grammar_set_error_recovery(g, false);
 
-    bool ok = n00b_bnf_load(bnf_text, *r"module", g);
+    bool ok = n00b_bnf_load(bnf_text, r"module", g);
 
     if (!ok) {
         fprintf(stderr, "  [FAIL] n00b_bnf_load failed for n00b.bnf\n");
@@ -122,9 +123,9 @@ build_dfg_for(const char *src)
     n00b_parse_result_t *pr = parse_n00b_source(shared_grammar, src);
 
     if (!n00b_parse_result_ok(pr)) {
-        n00b_string_t err = n00b_parse_result_error_string(pr);
+        n00b_string_t *err = n00b_parse_result_error_string(pr);
         fprintf(stderr, "  Parse failed: %.*s\n",
-                (int)err.u8_bytes, err.data);
+                (int)err->u8_bytes, err->data);
         return r;
     }
 
@@ -134,7 +135,7 @@ build_dfg_for(const char *src)
     n00b_annot_result_t *ar = n00b_compile_walk(shared_grammar, tree);
     assert(ar != NULL);
 
-    r.cfg   = n00b_build_cfg(ar->cf_labels, tree, *r"test", ar->symtab);
+    r.cfg   = n00b_build_cfg(ar->cf_labels, tree, r"test", ar->symtab);
     assert(r.cfg != NULL);
 
     r.dfg   = n00b_build_dfg(r.cfg, ar->cf_labels, shared_grammar, ar);
@@ -170,8 +171,8 @@ find_fact(n00b_dfg_t *dfg, const char *var, bool is_def, int nth)
         n00b_du_fact_t *f = &dfg->facts.data[i];
 
         if (f->is_def == is_def
-            && f->var_name.u8_bytes == strlen(var)
-            && memcmp(f->var_name.data, var, f->var_name.u8_bytes) == 0) {
+            && f->var_name->u8_bytes == strlen(var)
+            && memcmp(f->var_name->data, var, f->var_name->u8_bytes) == 0) {
             if (hit == nth) {
                 return f;
             }
@@ -194,8 +195,8 @@ count_defs(n00b_dfg_t *dfg, const char *var)
         n00b_du_fact_t *f = &dfg->facts.data[i];
 
         if (f->is_def
-            && f->var_name.u8_bytes == strlen(var)
-            && memcmp(f->var_name.data, var, f->var_name.u8_bytes) == 0) {
+            && f->var_name->u8_bytes == strlen(var)
+            && memcmp(f->var_name->data, var, f->var_name->u8_bytes) == 0) {
             count++;
         }
     }
@@ -214,8 +215,8 @@ count_uses(n00b_dfg_t *dfg, const char *var)
         n00b_du_fact_t *f = &dfg->facts.data[i];
 
         if (!f->is_def
-            && f->var_name.u8_bytes == strlen(var)
-            && memcmp(f->var_name.data, var, f->var_name.u8_bytes) == 0) {
+            && f->var_name->u8_bytes == strlen(var)
+            && memcmp(f->var_name->data, var, f->var_name->u8_bytes) == 0) {
             count++;
         }
     }
@@ -234,8 +235,8 @@ count_edges_for_var(n00b_dfg_t *dfg, const char *var)
         n00b_dd_edge_t *e = &dfg->edges.data[i];
         n00b_du_fact_t *d = &dfg->facts.data[e->def_id];
 
-        if (d->var_name.u8_bytes == strlen(var)
-            && memcmp(d->var_name.data, var, d->var_name.u8_bytes) == 0) {
+        if (d->var_name->u8_bytes == strlen(var)
+            && memcmp(d->var_name->data, var, d->var_name->u8_bytes) == 0) {
             count++;
         }
     }
@@ -366,8 +367,8 @@ test_dfg_branch(void)
         n00b_du_fact_t *f = &r.dfg->facts.data[i];
 
         if (!f->is_def
-            && f->var_name.u8_bytes == 1
-            && f->var_name.data[0] == 'x') {
+            && f->var_name->u8_bytes == 1
+            && f->var_name->data[0] == 'x') {
             last_use_x = f;
             break;
         }
@@ -650,7 +651,7 @@ test_dfg_param_def(void)
 
     // The function's own CFG is stored on its symbol entry.
     n00b_sym_entry_t *fsym = n00b_symtab_lookup_all(
-        r.annot->symtab, n00b_string_empty(), *r"f");
+        r.annot->symtab, n00b_string_empty(), r"f");
     assert(fsym != NULL);
     assert(fsym->kind == N00B_SYM_FUNCTION);
     assert(fsym->cfg != NULL);

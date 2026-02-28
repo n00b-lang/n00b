@@ -7,7 +7,7 @@
 // n00b_nt_annotate() which heap-allocates a copy and prepends it to
 // the non-terminal's annotation linked list.
 //
-// All string fields are n00b_string_t (value type, GC-managed .data)
+// All string fields are n00b_string_t * (pointer type, GC-managed)
 // so no strdup/free is needed.
 
 #include "slay/annotation.h"
@@ -57,7 +57,7 @@ n00b_rule_annotate(n00b_parse_rule_t *rule, n00b_annotation_t annot)
 
 void
 n00b_nt_scope_open(n00b_nonterm_t *nt,
-                   n00b_string_t scope_tag, n00b_child_ref_t name_ref)
+                   n00b_string_t *scope_tag, n00b_child_ref_t name_ref)
 {
     n00b_annotation_t a = {0};
     a.kind      = N00B_ANNOT_SCOPE_OPEN;
@@ -69,7 +69,7 @@ n00b_nt_scope_open(n00b_nonterm_t *nt,
 void
 n00b_nt_declares(n00b_nonterm_t *nt,
                  n00b_child_ref_t name_ref, n00b_child_ref_t type_ref,
-                 n00b_string_t sym_kind)
+                 n00b_string_t *sym_kind)
 {
     n00b_annotation_t a = {0};
     a.kind     = N00B_ANNOT_DECLARES;
@@ -90,7 +90,7 @@ n00b_nt_type_decl(n00b_nonterm_t *nt, n00b_child_ref_t name_ref)
 
 void
 n00b_nt_type(n00b_nonterm_t *nt,
-             n00b_child_ref_t name_ref, n00b_string_t type_spec)
+             n00b_child_ref_t name_ref, n00b_string_t *type_spec)
 {
     n00b_annotation_t a = {0};
     a.kind      = N00B_ANNOT_TYPE;
@@ -138,7 +138,7 @@ n00b_nt_loop(n00b_nonterm_t *nt, n00b_child_ref_t cond_ref,
 }
 
 void
-n00b_nt_jump(n00b_nonterm_t *nt, n00b_string_t jump_kind)
+n00b_nt_jump(n00b_nonterm_t *nt, n00b_string_t *jump_kind)
 {
     n00b_annotation_t a = {0};
     a.kind      = N00B_ANNOT_JUMP;
@@ -147,7 +147,7 @@ n00b_nt_jump(n00b_nonterm_t *nt, n00b_string_t jump_kind)
 }
 
 void
-n00b_nt_capture(n00b_nonterm_t *nt, n00b_string_t tag, bool by_tag)
+n00b_nt_capture(n00b_nonterm_t *nt, n00b_string_t *tag, bool by_tag)
 {
     n00b_annotation_t a = {0};
     a.kind           = N00B_ANNOT_CAPTURE;
@@ -157,7 +157,7 @@ n00b_nt_capture(n00b_nonterm_t *nt, n00b_string_t tag, bool by_tag)
 }
 
 void
-n00b_nt_infer(n00b_nonterm_t *nt, n00b_string_t constraint_expr)
+n00b_nt_infer(n00b_nonterm_t *nt, n00b_string_t *constraint_expr)
 {
     n00b_annotation_t a = {0};
     a.kind       = N00B_ANNOT_INFER;
@@ -181,17 +181,17 @@ n00b_nt_switch(n00b_nonterm_t *nt, n00b_child_ref_t cond_ref,
 // ============================================================================
 
 void
-n00b_nt_adt(n00b_nonterm_t *nt, n00b_string_t adt_kind,
-            n00b_child_ref_t name_ref, n00b_string_t scope_tag,
+n00b_nt_adt(n00b_nonterm_t *nt, n00b_string_t *adt_kind,
+            n00b_child_ref_t name_ref, n00b_string_t *scope_tag,
             n00b_child_ref_t keyword_ref)
 {
     n00b_annotation_t a = {0};
     a.kind            = N00B_ANNOT_ADT;
     a.adt_kind        = adt_kind;
     a.name_ref        = name_ref;
-    a.scope_tag       = scope_tag.data ? scope_tag
-                                       : (adt_kind.data ? adt_kind
-                                                        : n00b_string_empty());
+    a.scope_tag       = scope_tag ? scope_tag
+                                  : (adt_kind ? adt_kind
+                                              : n00b_string_empty());
     a.adt_keyword_ref = keyword_ref;
     n00b_nt_annotate(nt, a);
 }
@@ -237,7 +237,7 @@ n00b_nt_implements(n00b_nonterm_t *nt, n00b_child_ref_t name_ref)
 }
 
 void
-n00b_nt_visibility(n00b_nonterm_t *nt, n00b_string_t visibility_spec)
+n00b_nt_visibility(n00b_nonterm_t *nt, n00b_string_t *visibility_spec)
 {
     n00b_annotation_t a = {0};
     a.kind            = N00B_ANNOT_VISIBILITY;
@@ -266,7 +266,7 @@ n00b_nt_abstract(n00b_nonterm_t *nt)
 // ============================================================================
 
 void
-n00b_nt_operator(n00b_nonterm_t *nt, n00b_string_t op_str)
+n00b_nt_operator(n00b_nonterm_t *nt, n00b_string_t *op_str)
 {
     n00b_annotation_t a = {0};
     a.kind    = N00B_ANNOT_OPERATOR;
@@ -275,7 +275,7 @@ n00b_nt_operator(n00b_nonterm_t *nt, n00b_string_t op_str)
 }
 
 void
-n00b_nt_literal(n00b_nonterm_t *nt, n00b_string_t lit_kind,
+n00b_nt_literal(n00b_nonterm_t *nt, n00b_string_t *lit_kind,
                 n00b_child_ref_t type_ref)
 {
     n00b_annotation_t a = {0};
@@ -427,7 +427,7 @@ n00b_nt_pp_align(n00b_nonterm_t *nt, n00b_child_ref_t child_ref)
 
 void
 n00b_rule_scope_open(n00b_parse_rule_t *rule,
-                     n00b_string_t scope_tag, n00b_child_ref_t name_ref)
+                     n00b_string_t *scope_tag, n00b_child_ref_t name_ref)
 {
     n00b_annotation_t a = {0};
     a.kind      = N00B_ANNOT_SCOPE_OPEN;
@@ -439,7 +439,7 @@ n00b_rule_scope_open(n00b_parse_rule_t *rule,
 void
 n00b_rule_declares(n00b_parse_rule_t *rule,
                    n00b_child_ref_t name_ref, n00b_child_ref_t type_ref,
-                   n00b_string_t sym_kind)
+                   n00b_string_t *sym_kind)
 {
     n00b_annotation_t a = {0};
     a.kind     = N00B_ANNOT_DECLARES;
@@ -460,7 +460,7 @@ n00b_rule_type_decl(n00b_parse_rule_t *rule, n00b_child_ref_t name_ref)
 
 void
 n00b_rule_type(n00b_parse_rule_t *rule,
-               n00b_child_ref_t name_ref, n00b_string_t type_spec)
+               n00b_child_ref_t name_ref, n00b_string_t *type_spec)
 {
     n00b_annotation_t a = {0};
     a.kind      = N00B_ANNOT_TYPE;
@@ -504,7 +504,7 @@ n00b_rule_loop(n00b_parse_rule_t *rule, n00b_child_ref_t cond_ref,
 }
 
 void
-n00b_rule_jump(n00b_parse_rule_t *rule, n00b_string_t jump_kind)
+n00b_rule_jump(n00b_parse_rule_t *rule, n00b_string_t *jump_kind)
 {
     n00b_annotation_t a = {0};
     a.kind      = N00B_ANNOT_JUMP;
@@ -524,7 +524,7 @@ n00b_rule_switch(n00b_parse_rule_t *rule, n00b_child_ref_t cond_ref,
 }
 
 void
-n00b_rule_capture(n00b_parse_rule_t *rule, n00b_string_t tag, bool by_tag)
+n00b_rule_capture(n00b_parse_rule_t *rule, n00b_string_t *tag, bool by_tag)
 {
     n00b_annotation_t a = {0};
     a.kind           = N00B_ANNOT_CAPTURE;

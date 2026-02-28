@@ -19,7 +19,7 @@
 // Extract the variable name string from a parse tree node.
 // For token leaves: returns the token text as n00b_string_t.
 // For interior nodes: walks to the leftmost token leaf.
-static n00b_string_t
+static n00b_string_t *
 extract_var_name(n00b_parse_tree_t *node)
 {
     if (!node) {
@@ -40,9 +40,9 @@ extract_var_name(n00b_parse_tree_t *node)
     size_t nc = n00b_tree_num_children(node);
 
     for (size_t i = 0; i < nc; i++) {
-        n00b_string_t s = extract_var_name(n00b_tree_child(node, i));
+        n00b_string_t *s = extract_var_name(n00b_tree_child(node, i));
 
-        if (s.u8_bytes > 0) {
+        if (s->u8_bytes > 0) {
             return s;
         }
     }
@@ -55,11 +55,11 @@ extract_var_name(n00b_parse_tree_t *node)
 // ============================================================================
 
 static void
-emit_fact(n00b_list_t(n00b_du_fact_t) *facts, n00b_string_t var_name,
+emit_fact(n00b_list_t(n00b_du_fact_t) *facts, n00b_string_t *var_name,
           n00b_parse_tree_t *node, int32_t block_id, int32_t stmt_ix,
           bool is_def)
 {
-    if (var_name.u8_bytes == 0) {
+    if (!var_name || var_name->u8_bytes == 0) {
         return;
     }
 
@@ -103,13 +103,13 @@ walk_for_uses(n00b_parse_tree_t *node, n00b_cf_labels_t *cf_labels,
         // Skip EOF, literals, and operators.
         // Identifiers have non-negative tid or hash-based tid from grammar.
         // We use a simple heuristic: token text starts with [a-zA-Z_].
-        n00b_string_t val = n00b_option_get(tok->value);
+        n00b_string_t *val = n00b_option_get(tok->value);
 
-        if (val.u8_bytes == 0 || !val.data) {
+        if (!val || val->u8_bytes == 0 || !val->data) {
             return;
         }
 
-        char first = val.data[0];
+        char first = val->data[0];
 
         if (!((first >= 'a' && first <= 'z')
               || (first >= 'A' && first <= 'Z')
@@ -141,8 +141,9 @@ walk_for_uses(n00b_parse_tree_t *node, n00b_cf_labels_t *cf_labels,
     // Detected via @scope("function", ...) tag from the annotation walk.
     n00b_nt_node_t *nt = &n00b_tree_node_value(node);
 
-    if (nt->scope && nt->scope->scope_tag.u8_bytes > 0
-        && n00b_unicode_str_eq(nt->scope->scope_tag, *r"function")) {
+    if (nt->scope && nt->scope->scope_tag
+        && nt->scope->scope_tag->u8_bytes > 0
+        && n00b_unicode_str_eq(nt->scope->scope_tag, r"function")) {
         return;
     }
 
@@ -181,7 +182,7 @@ extract_facts(n00b_cfg_t *cfg, n00b_cf_labels_t *cf_labels,
 
             if (label && label->kind == N00B_CF_ASSIGNS) {
                 // LHS = def, RHS = uses.
-                n00b_string_t lhs_name = extract_var_name(label->cond);
+                n00b_string_t *lhs_name = extract_var_name(label->cond);
                 emit_fact(facts, lhs_name, label->cond, bi, (int32_t)si, true);
 
                 // Walk RHS for uses.
@@ -192,7 +193,7 @@ extract_facts(n00b_cfg_t *cfg, n00b_cf_labels_t *cf_labels,
             }
             else if (label && label->kind == N00B_CF_VARREF) {
                 // Pure variable reference = use.
-                n00b_string_t name = extract_var_name(label->cond);
+                n00b_string_t *name = extract_var_name(label->cond);
                 emit_fact(facts, name, label->cond, bi, (int32_t)si, false);
             }
             else {
@@ -266,11 +267,15 @@ bitset_subtract(uint64_t *out, uint64_t *a, uint64_t *b, size_t nwords)
 
 // Compare variable names for equality.
 static inline bool
-var_name_eq(n00b_string_t a, n00b_string_t b)
+var_name_eq(n00b_string_t *a, n00b_string_t *b)
 {
-    return a.u8_bytes == b.u8_bytes
-           && a.u8_bytes > 0
-           && memcmp(a.data, b.data, a.u8_bytes) == 0;
+    if (!a || !b) {
+        return false;
+    }
+
+    return a->u8_bytes == b->u8_bytes
+           && a->u8_bytes > 0
+           && memcmp(a->data, b->data, a->u8_bytes) == 0;
 }
 
 static void

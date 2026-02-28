@@ -20,7 +20,7 @@ n00b_dl_tuple_hash(const n00b_dl_sym_t *tuple, int32_t arity)
 
 void
 n00b_dl_relation_init(n00b_dl_relation_t *rel, n00b_dl_rel_id_t id,
-                        n00b_string_t name, int32_t arity)
+                        n00b_string_t *name, int32_t arity)
 {
     rel->id    = id;
     rel->arity = arity;

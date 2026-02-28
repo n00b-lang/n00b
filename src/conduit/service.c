@@ -140,14 +140,14 @@ n00b_conduit_service_start(n00b_conduit_service_t *svc)
         return n00b_result_err(bool, n00b_result_get_err(ops_r));
     }
     const n00b_conduit_io_ops_t *ops = n00b_result_get(ops_r);
-    n00b_string_t io_name = ops->name ? ops->name() : *r"io";
+    n00b_string_t *io_name = ops->name ? ops->name() : r"io";
 
     // Build a descriptive name: "io:<backend_name>"
-    size_t name_len = 3 + io_name.u8_bytes + 1;
+    size_t name_len = 3 + io_name->u8_bytes + 1;
     char *name_buf = n00b_alloc_array(char, name_len);
     memcpy(name_buf, "io:", 3);
-    memcpy(name_buf + 3, io_name.data, io_name.u8_bytes);
-    name_buf[3 + io_name.u8_bytes] = '\0';
+    memcpy(name_buf + 3, io_name->data, io_name->u8_bytes);
+    name_buf[3 + io_name->u8_bytes] = '\0';
 
     n00b_result_t(n00b_conduit_svc_thread_t *) io_res =
         add_thread(svc, N00B_CONDUIT_SVC_IO, ops, name_buf);
@@ -178,12 +178,12 @@ n00b_conduit_service_add_io(n00b_conduit_service_t   *svc,
         return n00b_result_err(n00b_conduit_svc_thread_t *, N00B_CONDUIT_ERR_NULL_ARG);
     }
 
-    n00b_string_t io_name = ops->name ? ops->name() : n00b_string_from_raw("io", 2);
-    size_t name_len = 3 + io_name.u8_bytes + 1;
+    n00b_string_t *io_name = ops->name ? ops->name() : n00b_string_from_raw("io", 2);
+    size_t name_len = 3 + io_name->u8_bytes + 1;
     char *name_buf = n00b_alloc_array(char, name_len);
     memcpy(name_buf, "io:", 3);
-    memcpy(name_buf + 3, io_name.data, io_name.u8_bytes);
-    name_buf[3 + io_name.u8_bytes] = '\0';
+    memcpy(name_buf + 3, io_name->data, io_name->u8_bytes);
+    name_buf[3 + io_name->u8_bytes] = '\0';
 
     return add_thread(svc, N00B_CONDUIT_SVC_IO, ops, name_buf);
 }

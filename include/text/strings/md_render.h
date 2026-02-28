@@ -38,11 +38,11 @@
  *  a single `n00b_string_t` with style records for each styled region.
  *
  *  @param tree  Root of a parsed markdown AST.
- *  @return Styled `n00b_string_t` (by value).
+ *  @return Styled `n00b_string_t *`.
  *
  *  @pre @p tree was produced by `n00b_parse_markdown()`.
  *  @post Returned string has style records for bold, italic, code,
  *        strikethrough, and underline spans.
  */
-n00b_string_t
+n00b_string_t *
 n00b_str_md_render(n00b_tree_t(n00b_md_node_t, n00b_md_node_t) *tree);

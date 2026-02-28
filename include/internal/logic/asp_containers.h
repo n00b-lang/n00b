@@ -23,7 +23,6 @@
 // Dynamic arrays
 // ============================================================================
 
-n00b_list_decl(n00b_dl_rule_t);
 typedef n00b_list_t(n00b_dl_rule_t) n00b_dl_rule_list_t;
 
 typedef struct {
@@ -48,10 +47,10 @@ typedef struct {
 // ============================================================================
 
 typedef struct {
-    n00b_string_t key;
-    int64_t       value;
-    bool          occupied;
-    bool          deleted;
+    n00b_string_t *key;
+    int64_t        value;
+    bool           occupied;
+    bool           deleted;
 } n00b_dl_str_i64_entry_t;
 
 typedef struct {
@@ -61,9 +60,9 @@ typedef struct {
 } n00b_dl_str_i64_map_t;
 
 static inline uint64_t
-_n00b_dl_str_hash(n00b_string_t s)
+_n00b_dl_str_hash(n00b_string_t *s)
 {
-    return (uint64_t)n00b_string_hash(&s);
+    return (uint64_t)n00b_string_hash(s);
 }
 
 static inline void
@@ -84,7 +83,7 @@ n00b_dl_str_i64_map_free(n00b_dl_str_i64_map_t *m)
 }
 
 static inline void n00b_dl_str_i64_map_put(n00b_dl_str_i64_map_t *m,
-                                             n00b_string_t           key,
+                                             n00b_string_t          *key,
                                              int64_t                 value);
 
 static inline void
@@ -107,7 +106,7 @@ n00b_dl_str_i64_map_grow(n00b_dl_str_i64_map_t *m)
 }
 
 static inline void
-n00b_dl_str_i64_map_put(n00b_dl_str_i64_map_t *m, n00b_string_t key,
+n00b_dl_str_i64_map_put(n00b_dl_str_i64_map_t *m, n00b_string_t *key,
                           int64_t value)
 {
     if (m->count * 2 >= m->capacity) {
@@ -136,7 +135,7 @@ n00b_dl_str_i64_map_put(n00b_dl_str_i64_map_t *m, n00b_string_t key,
 }
 
 static inline int64_t *
-n00b_dl_str_i64_map_get(n00b_dl_str_i64_map_t *m, n00b_string_t key)
+n00b_dl_str_i64_map_get(n00b_dl_str_i64_map_t *m, n00b_string_t *key)
 {
     uint64_t h   = _n00b_dl_str_hash(key);
     int32_t  idx = (int32_t)(h % (uint64_t)m->capacity);
@@ -158,10 +157,10 @@ n00b_dl_str_i64_map_get(n00b_dl_str_i64_map_t *m, n00b_string_t key)
 // ============================================================================
 
 typedef struct {
-    int64_t       key;
-    n00b_string_t value;
-    bool          occupied;
-    bool          deleted;
+    int64_t        key;
+    n00b_string_t *value;
+    bool           occupied;
+    bool           deleted;
 } n00b_dl_i64_str_entry_t;
 
 typedef struct {
@@ -201,7 +200,7 @@ n00b_dl_i64_str_map_free(n00b_dl_i64_str_map_t *m)
 
 static inline void n00b_dl_i64_str_map_put(n00b_dl_i64_str_map_t *m,
                                              int64_t                 key,
-                                             n00b_string_t           value);
+                                             n00b_string_t          *value);
 
 static inline void
 n00b_dl_i64_str_map_grow(n00b_dl_i64_str_map_t *m)
@@ -224,7 +223,7 @@ n00b_dl_i64_str_map_grow(n00b_dl_i64_str_map_t *m)
 
 static inline void
 n00b_dl_i64_str_map_put(n00b_dl_i64_str_map_t *m, int64_t key,
-                          n00b_string_t value)
+                          n00b_string_t *value)
 {
     if (m->count * 2 >= m->capacity) {
         n00b_dl_i64_str_map_grow(m);
@@ -251,7 +250,7 @@ n00b_dl_i64_str_map_put(n00b_dl_i64_str_map_t *m, int64_t key,
     }
 }
 
-static inline n00b_string_t *
+static inline n00b_string_t **
 n00b_dl_i64_str_map_get(n00b_dl_i64_str_map_t *m, int64_t key)
 {
     uint64_t h   = _n00b_dl_i64_hash(key);

@@ -54,7 +54,7 @@ extern bool n00b_tc_is_prim(n00b_tc_type_t *t);
  * @param t  Type node (find is called internally).
  * @return   The primitive's name string.
  */
-extern n00b_string_t n00b_tc_prim_name(n00b_tc_type_t *t);
+extern n00b_string_t *n00b_tc_prim_name(n00b_tc_type_t *t);
 
 /**
  * @brief Structurally unify two types.

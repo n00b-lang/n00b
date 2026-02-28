@@ -13,9 +13,6 @@
 #include "adt/option.h"
 #include "adt/result.h"
 
-n00b_option_decl(n00b_csp_var_id_t);
-n00b_result_decl(const n00b_csp_domain_t *);
-
 /**
  * @brief Opaque constraint store.
  */
@@ -49,7 +46,7 @@ void n00b_csp_store_free(n00b_csp_store_t *store);
  * @param dom   Initial domain (consumed; caller should not free).
  * @return      Variable ID.
  */
-n00b_csp_var_id_t n00b_csp_new_var(n00b_csp_store_t *s, n00b_string_t name,
+n00b_csp_var_id_t n00b_csp_new_var(n00b_csp_store_t *s, n00b_string_t *name,
                                     n00b_csp_domain_t dom);
 
 /**
@@ -59,7 +56,7 @@ n00b_csp_var_id_t n00b_csp_new_var(n00b_csp_store_t *s, n00b_string_t name,
  * @return     Option containing variable ID, or none if not found.
  */
 n00b_option_t(n00b_csp_var_id_t) n00b_csp_find_var(n00b_csp_store_t *s,
-                                                     n00b_string_t     name);
+                                                     n00b_string_t    *name);
 
 /**
  * @brief Get a variable's current domain.

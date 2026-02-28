@@ -49,12 +49,6 @@ typedef struct n00b_scanner_t      n00b_scanner_t;
 typedef struct n00b_token_stream_t n00b_token_stream_t;
 
 // ============================================================================
-// Result type for skip_until_str
-// ============================================================================
-
-n00b_result_decl(size_t);
-
-// ============================================================================
 // Error codes for scanner operations
 // ============================================================================
 
@@ -98,7 +92,7 @@ struct n00b_scanner_t {
     // Position tracking
     uint32_t                       line;   /**< Current 1-based line number. */
     uint32_t                       column; /**< Current 1-based column number. */
-    n00b_option_t(n00b_string_t)   file;   /**< Source filename (optional). */
+    n00b_option_t(n00b_string_t *)  file;   /**< Source filename (optional). */
 
     // Token mark (start of current token)
     size_t            mark;        /**< Byte offset where current token started. */
@@ -145,7 +139,7 @@ n00b_scanner_new(n00b_buffer_t *buf,
                  n00b_scan_cb_t cb,
                  n00b_grammar_t *grammar) _kargs
 {
-    n00b_option_t(n00b_string_t) file;
+    n00b_option_t(n00b_string_t *) file;
     void                        *state;
     n00b_scan_reset_cb_t         reset_cb;
 };
@@ -282,7 +276,7 @@ extern void n00b_scan_mark(n00b_scanner_t *s);
  *
  * The backing data is GC-managed.
  */
-extern n00b_string_t n00b_scan_extract(n00b_scanner_t *s);
+extern n00b_string_t *n00b_scan_extract(n00b_scanner_t *s);
 
 /** @brief Length in bytes from mark to cursor. */
 extern size_t n00b_scan_mark_len(n00b_scanner_t *s);
@@ -320,7 +314,7 @@ extern size_t n00b_scan_mark_len(n00b_scanner_t *s);
  */
 extern n00b_token_err_t
 n00b_scan_emit(n00b_scanner_t *s) _kargs {
-    n00b_option_t(n00b_string_t) contents;
+    n00b_option_t(n00b_string_t *) contents;
     bool                         use_mark   = true;
     const char                  *token_type = nullptr;
     int64_t                      tid        = 0;
@@ -332,11 +326,11 @@ n00b_scan_emit(n00b_scanner_t *s) _kargs {
 
 /** @brief Collect text as leading trivia for the next token. */
 extern void n00b_scan_add_leading_trivia(n00b_scanner_t *s,
-                                          n00b_string_t text);
+                                          n00b_string_t *text);
 
 /** @brief Collect trailing trivia for the most recently emitted token. */
 extern void n00b_scan_add_trailing_trivia(n00b_scanner_t *s,
-                                           n00b_string_t text);
+                                           n00b_string_t *text);
 
 /**
  * @brief Skip whitespace, collecting it as leading trivia.

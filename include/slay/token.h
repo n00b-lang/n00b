@@ -86,7 +86,7 @@ typedef enum {
 
 /** @brief A piece of trivia (whitespace, comment) attached to a token. */
 typedef struct n00b_trivia_t {
-    n00b_string_t         text; /**< Trivia text (GC-managed data). */
+    n00b_string_t        *text; /**< Trivia text (GC-managed data). */
     struct n00b_trivia_t *next; /**< Next trivia piece in the linked list. */
 } n00b_trivia_t;
 
@@ -94,14 +94,14 @@ typedef struct n00b_trivia_t {
 // Token
 // ============================================================================
 
-// n00b_option_t(n00b_string_t) is declared in core/string.h (included above).
+// n00b_option_t(n00b_string_t *) is declared in core/string.h (included above).
 
 /** @brief Token with position, value, trivia, and user data. */
 typedef struct n00b_token_info_t {
-    void                          *user_info;       /**< User-defined data. */
-    n00b_option_t(n00b_string_t)   value;           /**< Token text (optional). */
-    n00b_option_t(n00b_string_t)   file;            /**< Source file path (optional). */
-    n00b_option_t(n00b_string_t)   modifier;        /**< Literal modifier (e.g., 'hex). */
+    void                            *user_info;       /**< User-defined data. */
+    n00b_option_t(n00b_string_t *)   value;           /**< Token text (optional). */
+    n00b_option_t(n00b_string_t *)   file;            /**< Source file path (optional). */
+    n00b_option_t(n00b_string_t *)   modifier;        /**< Literal modifier (e.g., 'hex). */
     n00b_trivia_t                 *leading_trivia;  /**< Whitespace/comments before token. */
     n00b_trivia_t                 *trailing_trivia; /**< Line comment after token (same line). */
     int64_t                        tid;             /**< Terminal ID assigned by tokenizer. */
@@ -116,11 +116,7 @@ typedef struct n00b_token_info_t {
 // Token list
 // ============================================================================
 
-n00b_list_decl(n00b_token_info_t);
-
 typedef n00b_token_info_t *n00b_token_info_ptr_t;
-n00b_array_decl(n00b_token_info_ptr_t);
-n00b_list_decl(n00b_token_info_ptr_t);
 
 /**
  * @brief Build a pointer array from a token list (for parser consumption).

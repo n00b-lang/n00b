@@ -126,7 +126,7 @@ parse_codepoints(char *str, n00b_codepoint_t *cps, uint32_t max_cps)
 /**
  * @brief Encode codepoints to an n00b_string_t (default allocator).
  */
-static inline n00b_string_t
+static inline n00b_string_t *
 cps_to_str(const n00b_codepoint_t *cps, uint32_t count)
 {
     // Worst case: 4 bytes per codepoint

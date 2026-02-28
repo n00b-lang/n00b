@@ -36,7 +36,7 @@
 #include "text/unicode/types_ext.h"
 #include "text/unicode/properties.h"
 #include "adt/array.h"
-#include "text/unicode/encoding.h"  // for n00b_array_decl(n00b_codepoint_t)
+#include "text/unicode/encoding.h"
 
 // ===========================================================================
 // Filter objects

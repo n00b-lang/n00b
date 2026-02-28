@@ -2,9 +2,9 @@
  * @file string.h
  * @brief Layout and construction helpers for `n00b_string_t`.
  *
- * `n00b_string_t` is a **value type** (40 bytes, passed/returned by
- * value).  This contrasts with `n00b_buffer_t`, which is a **heap
- * type** (passed by pointer).
+ * `n00b_string_t` is a **heap type** (always passed by pointer), like
+ * `n00b_buffer_t`.  It is GC-managed and has a vtable-backed
+ * constructor (`n00b_string_init`).
  *
  * This header defines the struct layout and declares low-level
  * construction helpers so that other modules (e.g., buffer, unicode)
@@ -28,33 +28,44 @@ struct n00b_string_t {
     void  *styling;
 };
 
-// Declare option_t(n00b_string_t) here (next to the struct definition)
-// so any header using optional strings can rely on this single declaration.
+// n00b_option_t(n00b_string_t *) is auto-defined via _generic_struct;
+// include adt/option.h so dependent headers can use n00b_option_t().
 #include "adt/option.h"
-n00b_option_decl(n00b_string_t);
+
 
 /**
- * @brief Static initializer for an `n00b_string_t` from an ASCII literal.
+ * @brief Initialize a pre-allocated `n00b_string_t` in place.
  *
- * Usable at file scope (static struct initializers) where `*r"..."`
- * cannot appear because ncc's statement-expression lowering is not
- * valid outside function bodies.
+ * This is the vtable-registered constructor.  Callers typically use
+ * `n00b_string_from_raw()` / `n00b_string_from_cstr()` instead.
  *
- * @param lit  A string literal (must be pure ASCII — codepoints == bytes).
+ * @param self  Pre-allocated string (from `n00b_alloc`).
+ *
+ * @kw src       Source UTF-8 bytes (or NUL-terminated C string).
+ * @kw byte_len  Byte count (-1 = use strlen).
+ * @kw allocator Allocator for `.data` (nullptr = runtime default).
+ * @kw cp_count  Optional output pointer for the codepoint count.
+ *
+ * @pre @p self is non-nullptr and zero-initialized.
+ * @post self->data is NUL-terminated, codepoints counted.
  */
-#define N00B_STRING_STATIC(lit) \
-    ((n00b_string_t){ .data = (char *)(lit), .u8_bytes = sizeof(lit) - 1, \
-                      .codepoints = sizeof(lit) - 1, .styling = nullptr })
+extern void n00b_string_init(n00b_string_t *self)
+    _kargs {
+        const char       *src       = nullptr;
+        int64_t           byte_len  = -1;
+        n00b_allocator_t *allocator = nullptr;
+        int64_t          *cp_count  = nullptr;
+    };
 
 /**
- * @brief Construct an `n00b_string_t` by value from UTF-8 data with known length.
+ * @brief Construct an `n00b_string_t *` from UTF-8 data with known length.
  *
- * Allocates a copy of @p src (plus NUL terminator), counts UTF-8
- * codepoints internally, and returns a populated string struct.
+ * Allocates a new string, copies @p src (plus NUL terminator), and
+ * counts UTF-8 codepoints internally.
  *
  * @param src        Source UTF-8 bytes (may be nullptr if byte_len == 0).
  * @param byte_len   Number of bytes to copy.
- * @return           A populated `n00b_string_t` (by value).
+ * @return           Heap-allocated `n00b_string_t *`.
  *
  * @kw allocator  Allocator to use (nullptr = runtime default).
  * @kw cp_count   Optional output pointer for the codepoint count.
@@ -62,31 +73,31 @@ n00b_option_decl(n00b_string_t);
  * @pre @p byte_len >= 0.
  * @post Returned string's data is NUL-terminated.
  */
-extern n00b_string_t n00b_string_from_raw(const char *src,
-                                          int64_t     byte_len)
+extern n00b_string_t *n00b_string_from_raw(const char *src,
+                                           int64_t     byte_len)
     _kargs {
         n00b_allocator_t *allocator = nullptr;
         int64_t          *cp_count  = nullptr;
     };
 
 /**
- * @brief Construct an `n00b_string_t` from a NUL-terminated C string.
+ * @brief Construct an `n00b_string_t *` from a NUL-terminated C string.
  *
  * Computes byte length and counts UTF-8 codepoints.
  *
  * @param src  NUL-terminated C string.
- * @return     A populated `n00b_string_t` (by value).
+ * @return     Heap-allocated `n00b_string_t *`.
  *
  * @kw allocator  Allocator to use (nullptr = runtime default).
  */
-extern n00b_string_t n00b_string_from_cstr(const char *src)
+extern n00b_string_t *n00b_string_from_cstr(const char *src)
     _kargs { n00b_allocator_t *allocator = nullptr; };
 
 /**
- * @brief Return an empty `n00b_string_t`.
+ * @brief Return an empty `n00b_string_t *`.
  *
  * @kw allocator  Allocator (nullptr = runtime default).
- * @return        An empty string (0 bytes, 0 codepoints).
+ * @return        Heap-allocated empty string (0 bytes, 0 codepoints).
  */
-extern n00b_string_t n00b_string_empty()
+extern n00b_string_t *n00b_string_empty()
     _kargs { n00b_allocator_t *allocator = nullptr; };

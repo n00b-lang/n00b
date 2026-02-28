@@ -30,13 +30,13 @@ tc_alloc_type(n00b_tc_ctx_t *ctx)
 // ============================================================================
 
 n00b_tc_type_t *
-n00b_tc_var(n00b_tc_ctx_t *ctx, n00b_string_t name)
+n00b_tc_var(n00b_tc_ctx_t *ctx, n00b_string_t *name)
 {
     n00b_tc_type_t *t = tc_alloc_type(ctx);
 
     n00b_tc_var_t var = {
         .id           = ctx->next_var_id++,
-        .given_name   = n00b_option_set(n00b_string_t, name),
+        .given_name   = n00b_option_set(n00b_string_t *, name),
         .display_name = name,
         .constraints  = nullptr,
     };
@@ -57,13 +57,13 @@ n00b_tc_fresh_var(n00b_tc_ctx_t *ctx)
     // Generate display name like "t_42".
     char buf[32];
     snprintf(buf, sizeof(buf), "t_%u", id);
-    n00b_string_t display = n00b_string_from_cstr(buf);
+    n00b_string_t *display = n00b_string_from_cstr(buf);
 
     n00b_tc_type_t *t = tc_alloc_type(ctx);
 
     n00b_tc_var_t var = {
         .id           = id,
-        .given_name   = n00b_option_none(n00b_string_t),
+        .given_name   = n00b_option_none(n00b_string_t *),
         .display_name = display,
         .constraints  = nullptr,
     };
@@ -77,7 +77,7 @@ n00b_tc_fresh_var(n00b_tc_ctx_t *ctx)
 // ============================================================================
 
 n00b_tc_type_t *
-n00b_tc_prim(n00b_tc_ctx_t *ctx, n00b_string_t name)
+n00b_tc_prim(n00b_tc_ctx_t *ctx, n00b_string_t *name)
 {
     n00b_tc_type_t *t = tc_alloc_type(ctx);
 
@@ -94,7 +94,7 @@ n00b_tc_prim(n00b_tc_ctx_t *ctx, n00b_string_t name)
 // ============================================================================
 
 n00b_tc_type_t *
-n00b_tc_param(n00b_tc_ctx_t *ctx, n00b_string_t name, n00b_tc_type_t *+)
+n00b_tc_param(n00b_tc_ctx_t *ctx, n00b_string_t *name, n00b_tc_type_t *+)
 {
     n00b_tc_type_t *t = tc_alloc_type(ctx);
 
@@ -186,7 +186,7 @@ n00b_tc_sum(n00b_tc_ctx_t *ctx, n00b_tc_type_t *+)
 // ============================================================================
 
 n00b_tc_field_t
-n00b_tc_field(n00b_string_t name, n00b_tc_type_t *type)
+n00b_tc_field(n00b_string_t *name, n00b_tc_type_t *type)
     _kargs { bool has_default = false; }
 {
     (void)has_default;
@@ -203,7 +203,7 @@ n00b_tc_field(n00b_string_t name, n00b_tc_type_t *type)
 // ============================================================================
 
 n00b_tc_type_t *
-n00b_tc_record(n00b_tc_ctx_t *ctx, n00b_string_t name, n00b_tc_field_t +)
+n00b_tc_record(n00b_tc_ctx_t *ctx, n00b_string_t *name, n00b_tc_field_t +)
     _kargs {
         bool ordered = true;
         bool open    = false;
@@ -214,7 +214,7 @@ n00b_tc_record(n00b_tc_ctx_t *ctx, n00b_string_t name, n00b_tc_field_t +)
 
     n00b_tc_type_t *t = tc_alloc_type(ctx);
 
-    n00b_list_t(n00b_string_t)    field_names       = n00b_list_new_private(n00b_string_t);
+    n00b_list_t(n00b_string_t *)    field_names       = n00b_list_new_private(n00b_string_t *);
     n00b_list_t(n00b_tc_type_t *) field_types        = n00b_list_new_private(n00b_tc_type_t *);
     n00b_list_t(bool)             field_has_default   = n00b_list_new_private(bool);
 
@@ -234,7 +234,7 @@ n00b_tc_record(n00b_tc_ctx_t *ctx, n00b_string_t name, n00b_tc_field_t +)
     n00b_tc_record_t rec = {
         .name              = name,
         .type_params       = nullptr,
-        .field_names       = n00b_alloc(n00b_list_t(n00b_string_t)),
+        .field_names       = n00b_alloc(n00b_list_t(n00b_string_t *)),
         .field_types       = n00b_alloc(n00b_list_t(n00b_tc_type_t *)),
         .field_has_default = any_default
                                  ? n00b_alloc(n00b_list_t(bool))

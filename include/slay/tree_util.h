@@ -22,7 +22,7 @@
  * @return A non-empty string on success, or `n00b_string_empty()` on failure.
  *         Callers must check `.u8_bytes > 0` (not just `.data`).
  */
-n00b_string_t n00b_tree_extract_first_identifier(n00b_parse_tree_t *node);
+n00b_string_t *n00b_tree_extract_first_identifier(n00b_parse_tree_t *node);
 
 /**
  * @brief Find a child NT by name, recursing through `$$group` nodes.
@@ -34,7 +34,7 @@ n00b_string_t n00b_tree_extract_first_identifier(n00b_parse_tree_t *node);
  */
 n00b_parse_tree_t *n00b_tree_find_child_by_nt_name(n00b_grammar_t    *g,
                                                       n00b_parse_tree_t *parent,
-                                                      n00b_string_t      name);
+                                                      n00b_string_t     *name);
 
 /**
  * @brief Find the leftmost terminal token in a subtree.

@@ -32,9 +32,12 @@
                    | <binop-assign-stmt>
                    | <expression-stmt>
                    | <class-decl>
+                   | <interface-decl>
+# extern blocks, confspecs and sections are going to go into our new minilang literal.
 #                   | <extern-block>
 #                   | <confspec-block>
 #                   | <section-stmt>
+# We're going to try to use the logic subsystem to avoid this.
 #                   | <lock-attr-stmt>
 
 
@@ -42,7 +45,8 @@
 
 <body> @scope("block") ::= <block-start> <body-stmts>? <block-end>
 <body-stmts>           ::= <body-stmt> (<eos>+ <body-stmt>)*
-<body-stmt>            ::=  <if-stmt>
+<body-stmt>            ::=  <block>
+                         | <if-stmt>
                          | <for-stmt>
                          | <while-stmt>
                          | <typeof-stmt>
@@ -57,14 +61,14 @@
                          | <labeled-switch>
                          | <assert-stmt>
                          | <use-stmt>
-#                         | <section-stmt>
                          | <assign-stmt>
                          | <binop-assign-stmt>
                          | <expression-stmt>
+#                        | <section-stmt>
 
 # ============================================================================
 # All body statements can also appear in case bodies, but
-# case bodies do not need to end in a block
+# case bodies do not need to end in a block, it's fine to use C-like colon blocks.
 # ============================================================================
 
 <case-body> @scope("block") ::= %":" <eos>? <body-stmt> (<eos>+ <body-stmt>)* <eos>*
@@ -102,11 +106,20 @@
 
 
 # $0=for, $1=for-var-list, $2=in, $3=for-in-target, $4=body
-<for-stmt> @scope("for") @loop($3, $4) @declares($1) ::= %"for" <for-var-list> %"in" <for-in-target> <body>
-                           | %"for" <for-var-list> %"from" <range> <body>
+<for-stmt> @scope("for") @loop($3, $4) @declares($1) @infer("$3 unify (list[$1] | array[$1])") ::=
+       %"for" <for-var-list> %"in" <for-in-target-list> <body>
 
-<for-var-list>  ::= %IDENTIFIER (%"," %IDENTIFIER)*
-<for-in-target> ::= <expression> (<range-sep> <expression>)?
+
+<for-stmt> @scope("for") @loop($3, $4) @declares($1) @infer("$1 unify i64") ::=
+       %"for" <for-var-list> %"in" <range> <body>
+       
+<for-stmt> @scope("for") @loop($3, $4) @declares($1) @infer("$1 unify i64") ::=       
+       %"for" <for-var-list> %"from" <range> <body>
+
+<for-var-list> ::= %IDENTIFIER
+<for-var-list> @infer("$0 unify $2") ::= %IDENTIFIER %"," <for-var-list>
+
+<for-in-target-list> @infer("$0 unify list[`t]|array[`t]") ::= <expression>
 
 # ============================================================================
 # While loop
@@ -119,8 +132,9 @@
 # Member chain (dot-separated identifiers, no postfix ops)
 # ============================================================================
 
-<member-chain> ::= <member-chain> %"." %IDENTIFIER
-                 | %IDENTIFIER
+# TODO: infer the constraint on member chain LHS being either a module
+# or an object (instantiation of a class)
+<member-chain> ::= <member-chain> %"." %IDENTIFIER | %IDENTIFIER
 
 
 # ============================================================================
@@ -128,7 +142,8 @@
 # ============================================================================
 
 # $0=typeof, $1=member-chain, $2={, $3=typeof-cases, $4=}
-<typeof-stmt> @scope("typeof") @switch($1, $3) ::= %"typeof" <member-chain> <block-start> <typeof-cases> <block-end>
+<typeof-stmt> @scope("typeof") @switch($1, $3) ::=
+       %"typeof" <member-chain> <block-start> <typeof-cases> <block-end>
 
 <typeof-cases> ::= (<eos>* %"case" <typeof-case-block>)+ <eos>* <case-else>?
 
@@ -142,18 +157,24 @@
 # ============================================================================
 
 # $0=switch, $1=expression, $2={, $3=switch-cases, $4=}
-<switch-stmt> @scope("switch") @switch($1, $3) ::= %"switch" <expression> <block-start> <switch-cases> <block-end>
+<switch-stmt> @scope("switch") @switch($1, $3) @infer("$1 unify $3") ::=
+       %"switch" <expression> <block-start> <switch-cases> <block-end>
 
-<switch-cases> ::= (<eos>* %"case" <switch-case-block>)+ <eos>* <case-else>?
+<switch-cases> ::= <branch-list> <eos>* <case-else>?
 
+<branch-list> @infer("$2") ::= <eos>* %"case" <switch-case-block>
+<branch-list> @infer("$2 unify $3") ::= <eos>* %"case" <switch-case-block> <branch-list>
+              
 <switch-case-block> ::= <case-expr-list> <case-body>
                        | <case-expr-list> <body>
 
-<case-expr-list> ::= <case-expr-item> (%"," <case-expr-item>)*
-                   | <case-expr-item>
+<case-expr-list> @infer("$0") ::= <case-expr-item>
 
-<case-expr-item> ::= <expression> <range-sep> <expression>
-                   | <expression>
+<case-expr-list> @infer("$0 unify $2") ::=
+           <case-expr-item> %"," <case-expr-list>
+
+<case-expr-item> @infer("$0 unify $2 unify i64") ::= <expression> <range-sep> <expression>
+<case-expr-item> @infer("$0")             ::= <expression>
 
 <case-else> ::= %"else" <case-body>
               | %"else" <body>
@@ -162,7 +183,8 @@
 # Range
 # ============================================================================
 
-<range> ::= <expression> <range-sep> <expression>
+<range> @infer("array[$1]") ::= <range-parts>
+<range-parts> @infer("$0 unify $2 unify i64") ::= <expression> <range-sep> <expression>
 
 <range-sep> ::= %"to" | %"," | %":"
 
@@ -178,7 +200,7 @@
 # Assert
 # ============================================================================
 
-<assert-stmt> ::= %"assert" <expression>
+<assert-stmt> @type($1) ::= %"assert" <expression>
 
 # ============================================================================
 # Use
@@ -187,14 +209,14 @@
 <use-stmt> @declares($1, "module") ::= %"use" <member-chain> (%"from" %STRING_LIT)?
 
 # ============================================================================
-# Lock attribute (~)
+# Lock attribute (~) Temporarily? disabled; might be able to get away w/o it.
 # ============================================================================
 
 # <lock-attr-stmt> ::= %"~" <assign-or-expr>
 
-<assign-or-expr> ::= <expression> <assign-op> <expression>
-                   | <expression> <binop-assign-op> <expression>
-                   | <expression>
+<assign-or-expr> @infer("$0 unify $2") ::= <expression> <assign-op> <expression>
+<assign-or-expr> @infer("$0 unify $2") ::= <expression> <binop-assign-op> <expression>
+<assign-or-expr> @infer("$0")          ::= <expression>
 
 # ============================================================================
 # Variable declarations
@@ -212,9 +234,10 @@
                   | <sym-decl>
 
 # Typed with initializer: name is $0, type is $2, value is $4
-<sym-decl> @declares($0, $2) @assigns($0, $4) ::= <id-list> %":" <type-spec> <assign-op> <expression>
+<sym-decl> @declares($0, $2) @assigns($0, $4)  @infer("$0 unify $4") ::=
+         <id-list> %":" <type-spec> <assign-op> <expression>
 # Typed without initializer:
-<sym-decl> @declares($0, $2) ::= <id-list> %":" <type-spec>
+<sym-decl> @declares($0, $2) @infer("$0 unify $2") ::= <id-list> %":" <type-spec>
 # Untyped with initializer: name is $0, value is $2
 <sym-decl> @declares($0) @assigns($0, $2) ::= <id-list> <assign-op> <expression>
 # Untyped without initializer:
@@ -702,5 +725,29 @@
 <type-params> ::= %"[" <tspec-tvar> (%"," <tspec-tvar>)* %"]"
 <class-body> ::= <block-start> <class-decl-spec-list> <block-end>
 <class-decl-spec-list> ::= (<class-decl-one> (<eos>+ <class-decl-one>)*)?
+
+# Member declarations with optional visibility qualifier
+<class-decl-one> @declares($1, $3) ::= <member-visibility> %IDENTIFIER %":" <type-spec>
+<class-decl-one> @declares($1) ::= <member-visibility> %IDENTIFIER
 <class-decl-one> @declares($0, $2) ::= %IDENTIFIER %":" <type-spec>
 <class-decl-one> @declares($0) ::= %IDENTIFIER
+
+<member-visibility> @visibility("public") ::= %"public"
+<member-visibility> @visibility("private") ::= %"private"
+<member-visibility> @visibility("protected") ::= %"protected"
+
+# ============================================================================
+# Interface declaration (like class but methods only, no fields)
+# ============================================================================
+<interface-decl> @scope("interface", $1) @declares($1) @type($1) @exposes ::= %"interface" <concrete-interface>
+<interface-decl> @scope("interface", $1) @declares($1) @exposes           ::= %"interface" <parameterized-interface>
+
+<concrete-interface> ::= %IDENTIFIER <interface-body>
+<parameterized-interface> @infer("$0[...$0]") ::= %IDENTIFIER <type-params> <where-clause>? <interface-body>
+
+<interface-body> ::= <block-start> <interface-spec-list> <block-end>
+<interface-spec-list> ::= (<interface-spec-one> (<eos>+ <interface-spec-one>)*)?
+
+# Interface members must have a type (method signature); bare names are not allowed.
+<interface-spec-one> @declares($1, $3) ::= <member-visibility> %IDENTIFIER %":" <type-spec>
+<interface-spec-one> @declares($0, $2) ::= %IDENTIFIER %":" <type-spec>

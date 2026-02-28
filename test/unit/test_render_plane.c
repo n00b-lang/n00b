@@ -39,14 +39,14 @@ test_plane_new_with_kwargs(void)
                                       .rows    = 50,
                                       .vp_cols = 80,
                                       .vp_rows = 25,
-                                      .name    = n00b_option_set(n00b_string_t, *r"test-plane"),
+                                      .name    = n00b_option_set(n00b_string_t *, r"test-plane"),
                                       .z       = 5);
     assert(p->total_cols == 100);
     assert(p->total_rows == 50);
     assert(p->vp_cols == 80);
     assert(p->vp_rows == 25);
     assert(p->z == 5);
-    assert(n00b_unicode_str_eq(p->name, *r"test-plane"));
+    assert(n00b_unicode_str_eq(p->name, r"test-plane"));
 
     n00b_plane_destroy(p);
     printf("  [PASS] plane new with kwargs\n");

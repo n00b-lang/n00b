@@ -21,16 +21,16 @@ TEST(test_fact_variadic)
 {
     n00b_logic_t *prog = n00b_logic_new();
 
-    n00b_logic_fact(prog, *r"node", r"a");
-    n00b_logic_fact(prog, *r"edge", r"a", r"b");
-    n00b_logic_fact(prog, *r"edge", r"b", r"c");
-    n00b_logic_fact(prog, *r"triple", r"x", r"y", r"z");
+    n00b_logic_fact(prog, r"node", r"a");
+    n00b_logic_fact(prog, r"edge", r"a", r"b");
+    n00b_logic_fact(prog, r"edge", r"b", r"c");
+    n00b_logic_fact(prog, r"triple", r"x", r"y", r"z");
 
     ASSERT(n00b_logic_run_datalog(prog));
 
-    ASSERT_EQ((int64_t)n00b_logic_count(prog, n00b_logic_relation(prog, *r"node", 1)), 1);
-    ASSERT_EQ((int64_t)n00b_logic_count(prog, n00b_logic_relation(prog, *r"edge", 2)), 2);
-    ASSERT_EQ((int64_t)n00b_logic_count(prog, n00b_logic_relation(prog, *r"triple", 3)), 1);
+    ASSERT_EQ((int64_t)n00b_logic_count(prog, n00b_logic_relation(prog, r"node", 1)), 1);
+    ASSERT_EQ((int64_t)n00b_logic_count(prog, n00b_logic_relation(prog, r"edge", 2)), 2);
+    ASSERT_EQ((int64_t)n00b_logic_count(prog, n00b_logic_relation(prog, r"triple", 3)), 1);
 
     n00b_logic_free(prog);
 }
@@ -43,14 +43,14 @@ TEST(test_bridge_basic)
 {
     n00b_logic_t *prog = n00b_logic_new();
 
-    n00b_logic_fact(prog, *r"edge", r"a", r"b");
-    n00b_logic_fact(prog, *r"edge", r"b", r"c");
+    n00b_logic_fact(prog, r"edge", r"a", r"b");
+    n00b_logic_fact(prog, r"edge", r"b", r"c");
 
-    int32_t created = n00b_logic_bridge(prog, *r"edge",
+    int32_t created = n00b_logic_bridge(prog, r"edge",
                                           .domain = n00b_csp_dom_range(1, 5));
     ASSERT_EQ(created, 3);
 
-    n00b_result_t(int64_t) r = n00b_logic_get_int(prog, *r"a");
+    n00b_result_t(int64_t) r = n00b_logic_get_int(prog, r"a");
     ASSERT(n00b_result_is_ok(r) || n00b_result_get_err(r) == EINVAL);
 
     n00b_logic_free(prog);
@@ -64,11 +64,11 @@ TEST(test_bridge_with_constraint)
 {
     n00b_logic_t *prog = n00b_logic_new();
 
-    n00b_logic_fact(prog, *r"edge", r"a", r"b");
-    n00b_logic_fact(prog, *r"edge", r"b", r"c");
-    n00b_logic_fact(prog, *r"edge", r"a", r"c");
+    n00b_logic_fact(prog, r"edge", r"a", r"b");
+    n00b_logic_fact(prog, r"edge", r"b", r"c");
+    n00b_logic_fact(prog, r"edge", r"a", r"c");
 
-    int32_t created = n00b_logic_bridge(prog, *r"edge",
+    int32_t created = n00b_logic_bridge(prog, r"edge",
                                           .domain     = n00b_csp_dom_range(1, 3),
                                           .constraint = N00B_CSP_CON_NE);
     ASSERT_EQ(created, 3);
@@ -86,8 +86,8 @@ TEST(test_int_var)
 {
     n00b_logic_t *prog = n00b_logic_new();
 
-    n00b_csp_var_id_t x = n00b_logic_int_var(prog, *r"x", 1, 10);
-    n00b_csp_var_id_t y = n00b_logic_int_var(prog, *r"y", 1, 10);
+    n00b_csp_var_id_t x = n00b_logic_int_var(prog, r"x", 1, 10);
+    n00b_csp_var_id_t y = n00b_logic_int_var(prog, r"y", 1, 10);
 
     ASSERT(n00b_logic_csp_ne(prog, x, y));
     ASSERT(n00b_logic_csp_eq_const(prog, x, 5));
@@ -112,13 +112,13 @@ TEST(test_constrain_by_name)
 {
     n00b_logic_t *prog = n00b_logic_new();
 
-    n00b_logic_int_var(prog, *r"x", 1, 3);
-    n00b_logic_int_var(prog, *r"y", 1, 3);
+    n00b_logic_int_var(prog, r"x", 1, 3);
+    n00b_logic_int_var(prog, r"y", 1, 3);
 
-    ASSERT(n00b_logic_constrain(prog, *r"x", *r"y", N00B_CSP_CON_NE));
+    ASSERT(n00b_logic_constrain(prog, r"x", r"y", N00B_CSP_CON_NE));
     ASSERT(n00b_logic_run_csp(prog));
 
-    ASSERT(!n00b_logic_constrain(prog, *r"x", *r"z", N00B_CSP_CON_NE));
+    ASSERT(!n00b_logic_constrain(prog, r"x", r"z", N00B_CSP_CON_NE));
 
     n00b_logic_free(prog);
 }
@@ -131,19 +131,19 @@ TEST(test_get_int)
 {
     n00b_logic_t *prog = n00b_logic_new();
 
-    n00b_logic_int_var(prog, *r"x", 1, 3);
-    n00b_logic_int_var(prog, *r"y", 1, 3);
-    n00b_logic_constrain(prog, *r"x", *r"y", N00B_CSP_CON_NE);
-    n00b_logic_csp_eq_const(prog, n00b_logic_int_var(prog, *r"z", 7, 7), 7);
+    n00b_logic_int_var(prog, r"x", 1, 3);
+    n00b_logic_int_var(prog, r"y", 1, 3);
+    n00b_logic_constrain(prog, r"x", r"y", N00B_CSP_CON_NE);
+    n00b_logic_csp_eq_const(prog, n00b_logic_int_var(prog, r"z", 7, 7), 7);
 
     ASSERT(n00b_logic_solve(prog));
 
-    n00b_result_t(int64_t) vz = n00b_logic_get_int(prog, *r"z");
+    n00b_result_t(int64_t) vz = n00b_logic_get_int(prog, r"z");
     ASSERT(n00b_result_is_ok(vz));
     ASSERT_EQ(n00b_result_get(vz), 7);
 
-    n00b_result_t(int64_t) vx = n00b_logic_get_int(prog, *r"x");
-    n00b_result_t(int64_t) vy = n00b_logic_get_int(prog, *r"y");
+    n00b_result_t(int64_t) vx = n00b_logic_get_int(prog, r"x");
+    n00b_result_t(int64_t) vy = n00b_logic_get_int(prog, r"y");
     ASSERT(n00b_result_is_ok(vx));
     ASSERT(n00b_result_is_ok(vy));
     ASSERT(n00b_result_get(vx) != n00b_result_get(vy));
@@ -159,10 +159,10 @@ TEST(test_get_int_missing)
 {
     n00b_logic_t *prog = n00b_logic_new();
 
-    n00b_logic_int_var(prog, *r"x", 1, 3);
+    n00b_logic_int_var(prog, r"x", 1, 3);
     ASSERT(n00b_logic_solve(prog));
 
-    n00b_result_t(int64_t) r = n00b_logic_get_int(prog, *r"nonexistent");
+    n00b_result_t(int64_t) r = n00b_logic_get_int(prog, r"nonexistent");
     ASSERT(!n00b_result_is_ok(r));
     ASSERT_EQ(n00b_result_get_err(r), ENOENT);
 
@@ -177,19 +177,19 @@ TEST(test_graph_coloring)
 {
     auto prog = n00b_logic_new();
 
-    n00b_logic_fact(prog, *r"edge", r"a", r"b");
-    n00b_logic_fact(prog, *r"edge", r"b", r"c");
-    n00b_logic_fact(prog, *r"edge", r"a", r"c");
+    n00b_logic_fact(prog, r"edge", r"a", r"b");
+    n00b_logic_fact(prog, r"edge", r"b", r"c");
+    n00b_logic_fact(prog, r"edge", r"a", r"c");
 
-    n00b_logic_bridge(prog, *r"edge",
+    n00b_logic_bridge(prog, r"edge",
                        .domain     = n00b_csp_dom_range(1, 3),
                        .constraint = N00B_CSP_CON_NE);
 
     ASSERT(n00b_logic_solve(prog));
 
-    n00b_result_t(int64_t) ca = n00b_logic_get_int(prog, *r"a");
-    n00b_result_t(int64_t) cb = n00b_logic_get_int(prog, *r"b");
-    n00b_result_t(int64_t) cc = n00b_logic_get_int(prog, *r"c");
+    n00b_result_t(int64_t) ca = n00b_logic_get_int(prog, r"a");
+    n00b_result_t(int64_t) cb = n00b_logic_get_int(prog, r"b");
+    n00b_result_t(int64_t) cc = n00b_logic_get_int(prog, r"c");
 
     ASSERT(n00b_result_is_ok(ca));
     ASSERT(n00b_result_is_ok(cb));
@@ -219,8 +219,8 @@ static bool
 count_solutions_cb(n00b_logic_t *prog, void *ctx)
 {
     (void)ctx;
-    n00b_result_t(int64_t) vx = n00b_logic_get_int(prog, *r"x");
-    n00b_result_t(int64_t) vy = n00b_logic_get_int(prog, *r"y");
+    n00b_result_t(int64_t) vx = n00b_logic_get_int(prog, r"x");
+    n00b_result_t(int64_t) vy = n00b_logic_get_int(prog, r"y");
     if (!n00b_result_is_ok(vx) || !n00b_result_is_ok(vy)) {
         return false;
     }
@@ -235,9 +235,9 @@ TEST(test_solve_all)
 {
     n00b_logic_t *prog = n00b_logic_new();
 
-    n00b_logic_int_var(prog, *r"x", 1, 3);
-    n00b_logic_int_var(prog, *r"y", 1, 3);
-    n00b_logic_constrain(prog, *r"x", *r"y", N00B_CSP_CON_NE);
+    n00b_logic_int_var(prog, r"x", 1, 3);
+    n00b_logic_int_var(prog, r"y", 1, 3);
+    n00b_logic_constrain(prog, r"x", r"y", N00B_CSP_CON_NE);
 
     solve_all_count = 0;
     int64_t total = n00b_logic_solve_all(prog, count_solutions_cb, nullptr);
@@ -256,16 +256,16 @@ TEST(test_alldiff_by_name)
 {
     n00b_logic_t *prog = n00b_logic_new();
 
-    n00b_logic_int_var(prog, *r"x", 1, 3);
-    n00b_logic_int_var(prog, *r"y", 1, 3);
-    n00b_logic_int_var(prog, *r"z", 1, 3);
+    n00b_logic_int_var(prog, r"x", 1, 3);
+    n00b_logic_int_var(prog, r"y", 1, 3);
+    n00b_logic_int_var(prog, r"z", 1, 3);
 
     ASSERT(n00b_logic_alldiff(prog, r"x", r"y", r"z"));
     ASSERT(n00b_logic_solve(prog));
 
-    n00b_result_t(int64_t) vx = n00b_logic_get_int(prog, *r"x");
-    n00b_result_t(int64_t) vy = n00b_logic_get_int(prog, *r"y");
-    n00b_result_t(int64_t) vz = n00b_logic_get_int(prog, *r"z");
+    n00b_result_t(int64_t) vx = n00b_logic_get_int(prog, r"x");
+    n00b_result_t(int64_t) vy = n00b_logic_get_int(prog, r"y");
+    n00b_result_t(int64_t) vz = n00b_logic_get_int(prog, r"z");
 
     ASSERT(n00b_result_is_ok(vx));
     ASSERT(n00b_result_is_ok(vy));
@@ -290,8 +290,8 @@ TEST(test_alldiff_missing_var)
 {
     n00b_logic_t *prog = n00b_logic_new();
 
-    n00b_logic_int_var(prog, *r"x", 1, 3);
-    n00b_logic_int_var(prog, *r"y", 1, 3);
+    n00b_logic_int_var(prog, r"x", 1, 3);
+    n00b_logic_int_var(prog, r"y", 1, 3);
 
     ASSERT(!n00b_logic_alldiff(prog, r"x", r"y", r"missing"));
 
@@ -308,9 +308,9 @@ static bool
 alldiff_count_cb(n00b_logic_t *prog, void *ctx)
 {
     (void)ctx;
-    n00b_result_t(int64_t) vx = n00b_logic_get_int(prog, *r"x");
-    n00b_result_t(int64_t) vy = n00b_logic_get_int(prog, *r"y");
-    n00b_result_t(int64_t) vz = n00b_logic_get_int(prog, *r"z");
+    n00b_result_t(int64_t) vx = n00b_logic_get_int(prog, r"x");
+    n00b_result_t(int64_t) vy = n00b_logic_get_int(prog, r"y");
+    n00b_result_t(int64_t) vz = n00b_logic_get_int(prog, r"z");
     if (!n00b_result_is_ok(vx) || !n00b_result_is_ok(vy)
         || !n00b_result_is_ok(vz)) {
         return false;
@@ -331,9 +331,9 @@ TEST(test_alldiff_solve_all)
 {
     n00b_logic_t *prog = n00b_logic_new();
 
-    n00b_logic_int_var(prog, *r"x", 1, 3);
-    n00b_logic_int_var(prog, *r"y", 1, 3);
-    n00b_logic_int_var(prog, *r"z", 1, 3);
+    n00b_logic_int_var(prog, r"x", 1, 3);
+    n00b_logic_int_var(prog, r"y", 1, 3);
+    n00b_logic_int_var(prog, r"z", 1, 3);
 
     ASSERT(n00b_logic_alldiff(prog, r"x", r"y", r"z"));
 
@@ -354,18 +354,18 @@ TEST(test_linear_by_name)
 {
     n00b_logic_t *prog = n00b_logic_new();
 
-    n00b_logic_int_var(prog, *r"x", 0, 10);
-    n00b_logic_int_var(prog, *r"y", 0, 10);
+    n00b_logic_int_var(prog, r"x", 0, 10);
+    n00b_logic_int_var(prog, r"y", 0, 10);
 
     n00b_linear_term_t terms[] = {
-        { .coeff = 2, .name = *r"x" },
-        { .coeff = 3, .name = *r"y" },
+        { .coeff = 2, .name = r"x" },
+        { .coeff = 3, .name = r"y" },
     };
     ASSERT(n00b_logic_linear(prog, terms, 2, .rhs = 12));
     ASSERT(n00b_logic_solve(prog));
 
-    n00b_result_t(int64_t) vx = n00b_logic_get_int(prog, *r"x");
-    n00b_result_t(int64_t) vy = n00b_logic_get_int(prog, *r"y");
+    n00b_result_t(int64_t) vx = n00b_logic_get_int(prog, r"x");
+    n00b_result_t(int64_t) vy = n00b_logic_get_int(prog, r"y");
     ASSERT(n00b_result_is_ok(vx));
     ASSERT(n00b_result_is_ok(vy));
 
@@ -384,11 +384,11 @@ TEST(test_linear_missing_var)
 {
     n00b_logic_t *prog = n00b_logic_new();
 
-    n00b_logic_int_var(prog, *r"x", 0, 10);
+    n00b_logic_int_var(prog, r"x", 0, 10);
 
     n00b_linear_term_t terms[] = {
-        { .coeff = 1, .name = *r"x" },
-        { .coeff = 1, .name = *r"missing" },
+        { .coeff = 1, .name = r"x" },
+        { .coeff = 1, .name = r"missing" },
     };
     ASSERT(!n00b_logic_linear(prog, terms, 2, .rhs = 5));
 
@@ -403,16 +403,16 @@ TEST(test_linear_plus_alldiff)
 {
     n00b_logic_t *prog = n00b_logic_new();
 
-    n00b_logic_int_var(prog, *r"x", 1, 3);
-    n00b_logic_int_var(prog, *r"y", 1, 3);
-    n00b_logic_int_var(prog, *r"z", 1, 3);
+    n00b_logic_int_var(prog, r"x", 1, 3);
+    n00b_logic_int_var(prog, r"y", 1, 3);
+    n00b_logic_int_var(prog, r"z", 1, 3);
 
     ASSERT(n00b_logic_alldiff(prog, r"x", r"y", r"z"));
 
     n00b_linear_term_t terms[] = {
-        { .coeff = 1, .name = *r"x" },
-        { .coeff = 1, .name = *r"y" },
-        { .coeff = 1, .name = *r"z" },
+        { .coeff = 1, .name = r"x" },
+        { .coeff = 1, .name = r"y" },
+        { .coeff = 1, .name = r"z" },
     };
     ASSERT(n00b_logic_linear(prog, terms, 3, .rhs = 6));
 

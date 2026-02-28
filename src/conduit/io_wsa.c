@@ -417,10 +417,10 @@ wsa_remove(void *vctx, int fd)
     return true;
 }
 
-static n00b_string_t
+static n00b_string_t *
 wsa_name(void)
 {
-    return *r"wsa";
+    return r"wsa";
 }
 
 // ============================================================================

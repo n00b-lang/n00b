@@ -160,7 +160,7 @@ append_text_with_style(outbuf_t *ob, rec_list_t *rl,
     }
 }
 
-n00b_string_t
+n00b_string_t *
 _n00b_format_impl(const char *desc_data, int32_t desc_len,
                   n00b_vargs_t *vargs)
 {
@@ -239,8 +239,8 @@ _n00b_format_impl(const char *desc_data, int32_t desc_len,
             }
             void *arg = vargs->args[arg_idx];
 
-            n00b_string_t sub_str;
-            bool          have_str = false;
+            n00b_string_t *sub_str = nullptr;
+            bool           have_str = false;
 
             if (seg->tag) {
                 // Has format spec.
@@ -266,7 +266,7 @@ _n00b_format_impl(const char *desc_data, int32_t desc_len,
                 }
                 case 's': {
                     n00b_string_t *sp = (n00b_string_t *)arg;
-                    sub_str           = n00b_str_fmt_string_ex(*sp, &fs);
+                    sub_str           = n00b_str_fmt_string_ex(sp, &fs);
                     have_str          = true;
                     break;
                 }
@@ -286,9 +286,8 @@ _n00b_format_impl(const char *desc_data, int32_t desc_len,
                 default:
                     // Default to string interpretation.
                     if (arg) {
-                        n00b_string_t *sp = (n00b_string_t *)arg;
-                        sub_str           = *sp;
-                        have_str          = true;
+                        sub_str  = (n00b_string_t *)arg;
+                        have_str = true;
                     }
                     break;
                 }
@@ -296,9 +295,8 @@ _n00b_format_impl(const char *desc_data, int32_t desc_len,
             else {
                 // No spec: treat as string pointer by default.
                 if (arg) {
-                    n00b_string_t *sp = (n00b_string_t *)arg;
-                    sub_str           = *sp;
-                    have_str          = true;
+                    sub_str  = (n00b_string_t *)arg;
+                    have_str = true;
                 }
             }
 
@@ -308,8 +306,8 @@ _n00b_format_impl(const char *desc_data, int32_t desc_len,
                     sub_str = n00b_str_strip_styles(sub_str);
                 }
                 append_text_with_style(&ob, &rl, &ss,
-                                       sub_str.data,
-                                       (int32_t)sub_str.u8_bytes);
+                                       sub_str->data,
+                                       (int32_t)sub_str->u8_bytes);
             }
             break;
         }
@@ -328,7 +326,7 @@ _n00b_format_impl(const char *desc_data, int32_t desc_len,
     if (total_cps < 0) {
         total_cps = 0;
     }
-    n00b_string_t result = n00b_string_from_raw(ob.buf, ob.len);
+    n00b_string_t *result = n00b_string_from_raw(ob.buf, ob.len);
 
     // Attach style info if we have records.
     if (rl.count > 0) {
@@ -338,7 +336,7 @@ _n00b_format_impl(const char *desc_data, int32_t desc_len,
         info->num_styles = rl.count;
         memcpy(info->styles, rl.records,
                rl.count * sizeof(n00b_style_record_t));
-        result.styling = info;
+        result->styling = info;
     }
 
     if (ob.buf) {
@@ -355,13 +353,13 @@ _n00b_format_impl(const char *desc_data, int32_t desc_len,
 // Public API
 // ===================================================================
 
-n00b_string_t
-n00b_format(n00b_string_t desc, +)
+n00b_string_t *
+n00b_format(n00b_string_t *desc, +)
 {
-    return _n00b_format_impl(desc.data, (int32_t)desc.u8_bytes, vargs);
+    return _n00b_format_impl(desc->data, (int32_t)desc->u8_bytes, vargs);
 }
 
-n00b_string_t
+n00b_string_t *
 n00b_cformat(const char *desc, +)
 {
     int32_t len = (int32_t)strlen(desc);

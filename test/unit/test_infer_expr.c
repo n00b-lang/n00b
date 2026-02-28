@@ -65,9 +65,10 @@ load_n00b_grammar(void)
     }
 
     if (!f && srcroot) {
-        char path[1024];
-        snprintf(path, sizeof(path), "%s/grammars/n00b.bnf", srcroot);
+        char *path = nullptr;
+        (void)asprintf(&path, "%s/grammars/n00b.bnf", srcroot);
         f = fopen(path, "r");
+        free(path);
     }
 
     if (!f) {
@@ -83,14 +84,14 @@ load_n00b_grammar(void)
     buf[len] = '\0';
     fclose(f);
 
-    n00b_string_t bnf_text = n00b_string_from_cstr(buf);
+    n00b_string_t *bnf_text = n00b_string_from_cstr(buf);
     free(buf);
 
     n00b_grammar_t *g = n00b_grammar_new();
     n00b_grammar_set_error_recovery(g, false);
 
     n00b_diag_ctx_t *bnf_diag = n00b_diag_ctx_new();
-    bool ok = n00b_bnf_load(bnf_text, *r"module", g, .diag = bnf_diag);
+    bool ok = n00b_bnf_load(bnf_text, r"module", g, .diag = bnf_diag);
 
     if (!ok) {
         fprintf(stderr, "  [FAIL] n00b_bnf_load failed for n00b.bnf\n");
@@ -156,8 +157,8 @@ find_nt_node(n00b_grammar_t *g, n00b_parse_tree_t *node, const char *name)
     if (pn->id >= 0 && !pn->group_top) {
         n00b_nonterm_t *nt = n00b_get_nonterm(g, pn->id);
 
-        if (nt && nt->name.u8_bytes == strlen(name)
-            && memcmp(nt->name.data, name, nt->name.u8_bytes) == 0) {
+        if (nt && nt->name->u8_bytes == strlen(name)
+            && memcmp(nt->name->data, name, nt->name->u8_bytes) == 0) {
             return node;
         }
     }
@@ -278,7 +279,7 @@ test_comparison_bool(void)
 
     assert(n00b_variant_is_type(resolved->kind, n00b_tc_prim_t));
     auto prim = n00b_variant_get(resolved->kind, n00b_tc_prim_t);
-    assert(n00b_unicode_str_eq(prim.name, *r"bool"));
+    assert(n00b_unicode_str_eq(prim.name, r"bool"));
 
     printf("  [PASS] comparison_bool\n");
 }
@@ -308,7 +309,7 @@ test_equality_bool(void)
 
     assert(n00b_variant_is_type(resolved->kind, n00b_tc_prim_t));
     auto prim = n00b_variant_get(resolved->kind, n00b_tc_prim_t);
-    assert(n00b_unicode_str_eq(prim.name, *r"bool"));
+    assert(n00b_unicode_str_eq(prim.name, r"bool"));
 
     printf("  [PASS] equality_bool\n");
 }
@@ -359,7 +360,7 @@ test_unary_not_bool(void)
 
     assert(n00b_variant_is_type(resolved->kind, n00b_tc_prim_t));
     auto prim = n00b_variant_get(resolved->kind, n00b_tc_prim_t);
-    assert(n00b_unicode_str_eq(prim.name, *r"bool"));
+    assert(n00b_unicode_str_eq(prim.name, r"bool"));
 
     printf("  [PASS] unary_not_bool\n");
 }
@@ -408,7 +409,7 @@ test_identifier_lookup(void)
     // referencing it got a type too.
 
     n00b_sym_entry_t *x_sym = n00b_symtab_lookup_all(r.annot->symtab,
-                                                        *r"", *r"x");
+                                                        r"", r"x");
     assert(x_sym != NULL);
     assert(x_sym->type_var != NULL);
 
@@ -441,7 +442,7 @@ test_list_literal_type(void)
 
     assert(n00b_variant_is_type(resolved->kind, n00b_tc_param_t));
     auto param = n00b_variant_get(resolved->kind, n00b_tc_param_t);
-    assert(n00b_unicode_str_eq(param.name, *r"list"));
+    assert(n00b_unicode_str_eq(param.name, r"list"));
 
     // Element type should resolve to int (not a bare type variable).
     assert(param.params != NULL);
@@ -456,7 +457,7 @@ test_list_literal_type(void)
 
     assert(n00b_variant_is_type(elem_r->kind, n00b_tc_prim_t));
     auto elem_prim = n00b_variant_get(elem_r->kind, n00b_tc_prim_t);
-    assert(n00b_unicode_str_eq(elem_prim.name, *r"int"));
+    assert(n00b_unicode_str_eq(elem_prim.name, r"int"));
 
     printf("  [PASS] list_literal_type\n");
 }
@@ -486,7 +487,7 @@ test_dict_literal_type(void)
 
     assert(n00b_variant_is_type(resolved->kind, n00b_tc_param_t));
     auto param = n00b_variant_get(resolved->kind, n00b_tc_param_t);
-    assert(n00b_unicode_str_eq(param.name, *r"dict"));
+    assert(n00b_unicode_str_eq(param.name, r"dict"));
 
     // Key and value types should be resolved (not bare type variables).
     assert(param.params != NULL);
@@ -502,7 +503,7 @@ test_dict_literal_type(void)
 
     assert(n00b_variant_is_type(key_r->kind, n00b_tc_prim_t));
     auto key_prim = n00b_variant_get(key_r->kind, n00b_tc_prim_t);
-    assert(n00b_unicode_str_eq(key_prim.name, *r"string"));
+    assert(n00b_unicode_str_eq(key_prim.name, r"string"));
 
     // Value → int.
     n00b_tc_type_t *val = n00b_list_get(*param.params, 1);
@@ -514,7 +515,7 @@ test_dict_literal_type(void)
 
     assert(n00b_variant_is_type(val_r->kind, n00b_tc_prim_t));
     auto val_prim = n00b_variant_get(val_r->kind, n00b_tc_prim_t);
-    assert(n00b_unicode_str_eq(val_prim.name, *r"int"));
+    assert(n00b_unicode_str_eq(val_prim.name, r"int"));
 
     printf("  [PASS] dict_literal_type\n");
 }
@@ -538,7 +539,7 @@ test_parameterized_class_type(void)
 
     // The class symbol should exist and have a parameterized type.
     n00b_sym_entry_t *sym = n00b_symtab_lookup_all(r.annot->symtab,
-                                                       *r"", *r"Pair");
+                                                       r"", r"Pair");
     assert(sym != NULL);
     assert(sym->type_var != NULL);
 
@@ -547,7 +548,7 @@ test_parameterized_class_type(void)
     assert(n00b_variant_is_type(resolved->kind, n00b_tc_param_t));
 
     auto param = n00b_variant_get(resolved->kind, n00b_tc_param_t);
-    assert(n00b_unicode_str_eq(param.name, *r"Pair"));
+    assert(n00b_unicode_str_eq(param.name, r"Pair"));
     assert(param.params != NULL);
     assert(n00b_list_len(*param.params) == 2);
 
@@ -591,7 +592,7 @@ test_concrete_class_type(void)
     assert(r.annot != NULL);
 
     n00b_sym_entry_t *sym = n00b_symtab_lookup_all(r.annot->symtab,
-                                                       *r"", *r"Point");
+                                                       r"", r"Point");
     assert(sym != NULL);
     assert(sym->type_var != NULL);
 
@@ -601,7 +602,7 @@ test_concrete_class_type(void)
     // Concrete class should be a primitive (named) type.
     assert(n00b_variant_is_type(resolved->kind, n00b_tc_prim_t));
     auto prim = n00b_variant_get(resolved->kind, n00b_tc_prim_t);
-    assert(n00b_unicode_str_eq(prim.name, *r"Point"));
+    assert(n00b_unicode_str_eq(prim.name, r"Point"));
 
     printf("  [PASS] concrete_class_type\n");
 }
@@ -617,7 +618,7 @@ test_infer_eval_prim(void)
     n00b_tc_ctx_t *ctx = n00b_tc_ctx_new();
 
     n00b_tc_type_t *t = n00b_infer_eval(ctx, NULL, NULL, NULL, NULL,
-                                           *r"bool");
+                                           r"bool");
     assert(t != NULL);
 
     n00b_tc_type_t *resolved = t;
@@ -628,7 +629,7 @@ test_infer_eval_prim(void)
 
     assert(n00b_variant_is_type(resolved->kind, n00b_tc_prim_t));
     auto prim = n00b_variant_get(resolved->kind, n00b_tc_prim_t);
-    assert(n00b_unicode_str_eq(prim.name, *r"bool"));
+    assert(n00b_unicode_str_eq(prim.name, r"bool"));
 
     n00b_tc_ctx_free(ctx);
     printf("  [PASS] infer_eval_prim\n");
@@ -641,7 +642,7 @@ test_infer_eval_tvar(void)
     n00b_tc_ctx_t *ctx = n00b_tc_ctx_new();
 
     n00b_tc_type_t *t = n00b_infer_eval(ctx, NULL, NULL, NULL, NULL,
-                                           *r"`x");
+                                           r"`x");
     assert(t != NULL);
 
     n00b_tc_type_t *resolved = t;
@@ -655,7 +656,7 @@ test_infer_eval_tvar(void)
     // Within ONE expression, same `x should give the same var.
     // Test via "dict[`x, `x]" — both params should be the same var.
     n00b_tc_type_t *dict_t = n00b_infer_eval(ctx, NULL, NULL, NULL, NULL,
-                                                *r"dict[`x, `x]");
+                                                r"dict[`x, `x]");
     assert(dict_t != NULL);
 
     n00b_tc_type_t *dr = dict_t;
@@ -687,7 +688,7 @@ test_infer_eval_param(void)
     n00b_tc_ctx_t *ctx = n00b_tc_ctx_new();
 
     n00b_tc_type_t *t = n00b_infer_eval(ctx, NULL, NULL, NULL, NULL,
-                                           *r"list[`e]");
+                                           r"list[`e]");
     assert(t != NULL);
 
     n00b_tc_type_t *resolved = t;
@@ -698,7 +699,7 @@ test_infer_eval_param(void)
 
     assert(n00b_variant_is_type(resolved->kind, n00b_tc_param_t));
     auto param = n00b_variant_get(resolved->kind, n00b_tc_param_t);
-    assert(n00b_unicode_str_eq(param.name, *r"list"));
+    assert(n00b_unicode_str_eq(param.name, r"list"));
     assert(param.params != NULL);
     assert(n00b_list_len(*param.params) == 1);
 
@@ -723,7 +724,7 @@ test_infer_eval_dict_param(void)
     n00b_tc_ctx_t *ctx = n00b_tc_ctx_new();
 
     n00b_tc_type_t *t = n00b_infer_eval(ctx, NULL, NULL, NULL, NULL,
-                                           *r"dict[`k, `v]");
+                                           r"dict[`k, `v]");
     assert(t != NULL);
 
     n00b_tc_type_t *resolved = t;
@@ -734,7 +735,7 @@ test_infer_eval_dict_param(void)
 
     assert(n00b_variant_is_type(resolved->kind, n00b_tc_param_t));
     auto param = n00b_variant_get(resolved->kind, n00b_tc_param_t);
-    assert(n00b_unicode_str_eq(param.name, *r"dict"));
+    assert(n00b_unicode_str_eq(param.name, r"dict"));
     assert(n00b_list_len(*param.params) == 2);
 
     n00b_tc_ctx_free(ctx);
@@ -748,7 +749,7 @@ test_infer_eval_sum(void)
     n00b_tc_ctx_t *ctx = n00b_tc_ctx_new();
 
     n00b_tc_type_t *t = n00b_infer_eval(ctx, NULL, NULL, NULL, NULL,
-                                           *r"int | nil");
+                                           r"int | nil");
     assert(t != NULL);
 
     n00b_tc_type_t *resolved = t;
@@ -777,7 +778,7 @@ test_var_type_from_int_literal(void)
     assert(r.parsed);
     assert(r.annot != NULL);
 
-    n00b_sym_entry_t *x = n00b_symtab_lookup_all(r.annot->symtab, *r"", *r"x");
+    n00b_sym_entry_t *x = n00b_symtab_lookup_all(r.annot->symtab, r"", r"x");
     assert(x != NULL);
     assert(x->type_var != NULL);
 
@@ -786,7 +787,7 @@ test_var_type_from_int_literal(void)
     assert(n00b_variant_is_type(resolved->kind, n00b_tc_prim_t));
 
     auto prim = n00b_variant_get(resolved->kind, n00b_tc_prim_t);
-    assert(n00b_unicode_str_eq(prim.name, *r"int"));
+    assert(n00b_unicode_str_eq(prim.name, r"int"));
 
     printf("  [PASS] var_type_from_int_literal\n");
 }
@@ -799,7 +800,7 @@ test_var_type_from_string_literal(void)
     assert(r.parsed);
     assert(r.annot != NULL);
 
-    n00b_sym_entry_t *s = n00b_symtab_lookup_all(r.annot->symtab, *r"", *r"s");
+    n00b_sym_entry_t *s = n00b_symtab_lookup_all(r.annot->symtab, r"", r"s");
     assert(s != NULL);
     assert(s->type_var != NULL);
 
@@ -808,7 +809,7 @@ test_var_type_from_string_literal(void)
     assert(n00b_variant_is_type(resolved->kind, n00b_tc_prim_t));
 
     auto prim = n00b_variant_get(resolved->kind, n00b_tc_prim_t);
-    assert(n00b_unicode_str_eq(prim.name, *r"string"));
+    assert(n00b_unicode_str_eq(prim.name, r"string"));
 
     printf("  [PASS] var_type_from_string_literal\n");
 }
@@ -821,7 +822,7 @@ test_var_type_from_bool_literal(void)
     assert(r.parsed);
     assert(r.annot != NULL);
 
-    n00b_sym_entry_t *b = n00b_symtab_lookup_all(r.annot->symtab, *r"", *r"b");
+    n00b_sym_entry_t *b = n00b_symtab_lookup_all(r.annot->symtab, r"", r"b");
     assert(b != NULL);
     assert(b->type_var != NULL);
 
@@ -830,7 +831,7 @@ test_var_type_from_bool_literal(void)
     assert(n00b_variant_is_type(resolved->kind, n00b_tc_prim_t));
 
     auto prim = n00b_variant_get(resolved->kind, n00b_tc_prim_t);
-    assert(n00b_unicode_str_eq(prim.name, *r"bool"));
+    assert(n00b_unicode_str_eq(prim.name, r"bool"));
 
     printf("  [PASS] var_type_from_bool_literal\n");
 }
@@ -843,7 +844,7 @@ test_var_type_explicit_preserved(void)
     assert(r.parsed);
     assert(r.annot != NULL);
 
-    n00b_sym_entry_t *x = n00b_symtab_lookup_all(r.annot->symtab, *r"", *r"x");
+    n00b_sym_entry_t *x = n00b_symtab_lookup_all(r.annot->symtab, r"", r"x");
     assert(x != NULL);
     assert(x->type_var != NULL);
 
@@ -852,7 +853,7 @@ test_var_type_explicit_preserved(void)
     assert(n00b_variant_is_type(resolved->kind, n00b_tc_prim_t));
 
     auto prim = n00b_variant_get(resolved->kind, n00b_tc_prim_t);
-    assert(n00b_unicode_str_eq(prim.name, *r"i32"));
+    assert(n00b_unicode_str_eq(prim.name, r"i32"));
 
     printf("  [PASS] var_type_explicit_preserved\n");
 }
@@ -872,7 +873,7 @@ test_func_return_symbol(void)
 
     // The $return symbol should be findable in the symtab (all scopes).
     n00b_sym_entry_t *ret = n00b_symtab_lookup_all(
-        r.annot->symtab, *r"", *r"$return");
+        r.annot->symtab, r"", r"$return");
     assert(ret != NULL);
     assert(ret->type_var != NULL);
 
@@ -887,7 +888,7 @@ test_var_type_from_comparison(void)
     assert(r.parsed);
     assert(r.annot != NULL);
 
-    n00b_sym_entry_t *x = n00b_symtab_lookup_all(r.annot->symtab, *r"", *r"x");
+    n00b_sym_entry_t *x = n00b_symtab_lookup_all(r.annot->symtab, r"", r"x");
     assert(x != NULL);
     assert(x->type_var != NULL);
 
@@ -896,7 +897,7 @@ test_var_type_from_comparison(void)
     assert(n00b_variant_is_type(resolved->kind, n00b_tc_prim_t));
 
     auto prim = n00b_variant_get(resolved->kind, n00b_tc_prim_t);
-    assert(n00b_unicode_str_eq(prim.name, *r"bool"));
+    assert(n00b_unicode_str_eq(prim.name, r"bool"));
 
     printf("  [PASS] var_type_from_comparison\n");
 }

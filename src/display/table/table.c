@@ -96,14 +96,14 @@ n00b_table_init(n00b_table_t *table) _kargs
     table->wrap               = wrap;
 
     if (title) {
-        table->title = *title;
+        table->title = title;
     }
     else {
         table->title = n00b_string_empty(.allocator = allocator);
     }
 
     if (caption) {
-        table->caption = *caption;
+        table->caption = caption;
     }
     else {
         table->caption = n00b_string_empty(.allocator = allocator);
@@ -165,7 +165,7 @@ n00b_table_destroy(n00b_table_t *table)
 // ====================================================================
 
 void
-n00b_table_add_cell(n00b_table_t *table, n00b_string_t content) _kargs
+n00b_table_add_cell(n00b_table_t *table, n00b_string_t *content) _kargs
 {
     int32_t           col_span   = 1;
     int32_t           row_span   = 1;
@@ -191,7 +191,7 @@ void
 n00b_table_empty_cell(n00b_table_t *table)
 {
     assert(table);
-    n00b_string_t empty = n00b_string_empty(.allocator = table->allocator);
+    n00b_string_t *empty = n00b_string_empty(.allocator = table->allocator);
 
     n00b_table_add_cell(table, empty);
 }
@@ -269,13 +269,14 @@ n00b_table_end_row(n00b_table_t *table)
 }
 
 void
-n00b_table_add_row(n00b_table_t *table, n00b_string_t *cells, n00b_isize_t n)
+n00b_table_add_row(n00b_table_t *table, n00b_array_t(n00b_string_t *) cells)
 {
     assert(table);
-    assert(!n || cells);
+
+    n00b_isize_t n = n00b_array_len(cells);
 
     for (n00b_isize_t i = 0; i < n; i++) {
-        n00b_table_add_cell(table, cells[i]);
+        n00b_table_add_cell(table, cells.data[i]);
     }
 
     n00b_table_end_row(table);
@@ -440,7 +441,7 @@ _n00b_table_resolve_cell_props(const n00b_table_t      *table,
 // ====================================================================
 
 n00b_table_t *
-n00b_table_from_string(n00b_string_t s) _kargs
+n00b_table_from_string(n00b_string_t *s) _kargs
 {
     n00b_string_t    *row_sep      = nullptr;
     n00b_string_t    *col_sep      = nullptr;
@@ -456,15 +457,15 @@ n00b_table_from_string(n00b_string_t s) _kargs
         alt_props = nullptr;
     }
 
-    n00b_string_t default_row_sep = n00b_string_from_raw("\n", 1,
+    n00b_string_t *default_row_sep = n00b_string_from_raw("\n", 1,
                                                           .allocator = allocator);
-    n00b_string_t default_col_sep = n00b_string_from_raw(",", 1,
+    n00b_string_t *default_col_sep = n00b_string_from_raw(",", 1,
                                                           .allocator = allocator);
 
-    n00b_string_t rsep = row_sep ? *row_sep : default_row_sep;
-    n00b_string_t csep = col_sep ? *col_sep : default_col_sep;
+    n00b_string_t *rsep = row_sep ? row_sep : default_row_sep;
+    n00b_string_t *csep = col_sep ? col_sep : default_col_sep;
 
-    n00b_array_t(n00b_string_t) rows = n00b_unicode_str_split(s, rsep);
+    n00b_array_t(n00b_string_t *) rows = n00b_unicode_str_split(s, rsep);
 
     n00b_table_t *table = n00b_new_kargs(n00b_table_t, table,
         .table_props  = table_props,
@@ -476,14 +477,14 @@ n00b_table_from_string(n00b_string_t s) _kargs
     n00b_isize_t num_rows = n00b_array_len(rows);
 
     for (n00b_isize_t r = 0; r < num_rows; r++) {
-        n00b_string_t row_str = n00b_array_get(rows, r);
+        n00b_string_t *row_str = n00b_array_get(rows, r);
 
         // Skip trailing empty rows (common from trailing newline).
-        if (row_str.u8_bytes == 0 && r == num_rows - 1) {
+        if ((!row_str || row_str->u8_bytes == 0) && r == num_rows - 1) {
             break;
         }
 
-        n00b_array_t(n00b_string_t) cols = n00b_unicode_str_split(row_str,
+        n00b_array_t(n00b_string_t *) cols = n00b_unicode_str_split(row_str,
                                                                     csep);
         n00b_isize_t num_cols = n00b_array_len(cols);
 

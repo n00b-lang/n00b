@@ -39,7 +39,7 @@ typedef enum : uint8_t {
 /**
  * @brief A single cell in a table row.
  *
- * Holds the content string (by value), optional per-cell styling,
+ * Holds the content string pointer, optional per-cell styling,
  * span counts, and a tristate wrap control.
  *
  * The `wrap` field uses `n00b_tristate_t`:
@@ -50,7 +50,7 @@ typedef enum : uint8_t {
  * @pre `row_span` must be 1 (multi-row spanning not yet implemented).
  */
 typedef struct n00b_table_cell_t {
-    n00b_string_t     content;    /**< Styled string (empty = blank cell). */
+    n00b_string_t    *content;    /**< Styled string (empty = blank cell). */
     n00b_box_props_t *cell_props; /**< Per-cell style (nullptr = cascade). */
     int32_t           col_span;   /**< Columns spanned (1 = normal, -1 = all). */
     int32_t           row_span;   /**< Rows spanned (only 1 supported). */
@@ -60,8 +60,6 @@ typedef struct n00b_table_cell_t {
 // ====================================================================
 // Table row
 // ====================================================================
-
-n00b_list_decl(n00b_table_cell_t);
 
 /**
  * @brief A completed row of cells.
@@ -106,5 +104,3 @@ typedef struct n00b_table_style_t {
     n00b_box_props_t *alt_cell_props;
 } n00b_table_style_t;
 
-n00b_list_decl(n00b_table_row_t);
-n00b_list_decl(n00b_table_col_spec_t);

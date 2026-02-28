@@ -102,12 +102,12 @@ try_scan_modifier(n00b_scanner_t *s)
         n00b_scan_advance(s);
     }
 
-    n00b_string_t mod_name = n00b_scan_extract(s);
+    n00b_string_t *mod_name = n00b_scan_extract(s);
 
     n00b_token_info_t *tok = last_emitted_token(s);
 
     if (tok) {
-        tok->modifier = n00b_option_set(n00b_string_t, mod_name);
+        tok->modifier = n00b_option_set(n00b_string_t *, mod_name);
     }
 }
 
@@ -165,7 +165,7 @@ try_scan_long_literal(n00b_scanner_t *s)
     }
 
     // After the = signs, we expect either an identifier (encoder) or [.
-    n00b_string_t encoder = {0};
+    n00b_string_t *encoder = nullptr;
 
     if (n00b_scan_at_eof(s)) {
         goto rollback;
@@ -195,6 +195,7 @@ try_scan_long_literal(n00b_scanner_t *s)
         }
 
         encoder = n00b_scan_extract(s);
+
 
         // Must be followed by [.
         if (n00b_scan_at_eof(s) || n00b_scan_peek_byte(s, 0) != '[') {
@@ -241,21 +242,19 @@ try_scan_long_literal(n00b_scanner_t *s)
 
             trim_whitespace(raw, raw_len, &trim_start, &trim_len);
 
-            n00b_string_t contents = n00b_string_from_raw(
+            n00b_string_t *contents = n00b_string_from_raw(
                 raw + trim_start, (int64_t)trim_len);
 
             // Emit the token.
             n00b_scan_emit(s, .token_type = "EMBED",
-                            .contents = n00b_option_set(n00b_string_t, contents));
+                            .contents = n00b_option_set(n00b_string_t *, contents));
 
             // Set encoder on the token via user_info.
-            if (encoder.data) {
+            if (encoder) {
                 n00b_token_info_t *tok = last_emitted_token(s);
 
                 if (tok) {
-                    n00b_string_t *enc = n00b_alloc(n00b_string_t);
-                    *enc = encoder;
-                    tok->user_info = enc;
+                    tok->user_info = encoder;
                 }
             }
 
@@ -345,13 +344,13 @@ restart:
                 n00b_scan_advance(s);
             }
 
-            n00b_string_t text = n00b_scan_extract(s);
+            n00b_string_t *text = n00b_scan_extract(s);
             n00b_scan_emit(s, .token_type = "STRING_LIT",
-                            .contents = n00b_option_set(n00b_string_t, text));
+                            .contents = n00b_option_set(n00b_string_t *, text));
             return true;
         }
 
-        n00b_option_t(n00b_string_t) val = n00b_scan_string_double(s);
+        n00b_option_t(n00b_string_t *) val = n00b_scan_string_double(s);
         n00b_scan_emit(s, .token_type = "STRING_LIT", .contents = val);
         return true;
     }
@@ -364,7 +363,7 @@ restart:
         uint32_t save_ln  = s->line;
         uint32_t save_col = s->column;
 
-        n00b_option_t(n00b_string_t) val = n00b_scan_string_single(s);
+        n00b_option_t(n00b_string_t *) val = n00b_scan_string_single(s);
 
         if (n00b_option_is_set(val)) {
             n00b_scan_emit(s, .token_type = "CHAR_LIT", .contents = val);
@@ -393,7 +392,7 @@ restart:
     if (cp == '0'
         && (n00b_scan_peek_byte(s, 1) == 'x'
             || n00b_scan_peek_byte(s, 1) == 'X')) {
-        n00b_option_t(n00b_string_t) hval = n00b_scan_integer(s);
+        n00b_option_t(n00b_string_t *) hval = n00b_scan_integer(s);
 
         if (n00b_option_is_set(hval)) {
             n00b_scan_emit(s, .token_type = "HEX_LIT", .contents = hval);
@@ -418,7 +417,7 @@ restart:
     // Identifiers / keywords
     // -----------------------------------------------------------------
     if ((cp >= 'a' && cp <= 'z') || (cp >= 'A' && cp <= 'Z') || cp == '_') {
-        n00b_option_t(n00b_string_t) id_val = n00b_scan_identifier(s);
+        n00b_option_t(n00b_string_t *) id_val = n00b_scan_identifier(s);
 
         if (n00b_option_is_set(id_val)) {
             // Try as a keyword first (hashes the text, checks grammar).

@@ -27,7 +27,7 @@ make_token(int64_t tid, const char *text, int32_t index)
     t->line  = 1;
 
     if (text) {
-        t->value = n00b_option_set(n00b_string_t, n00b_string_from_cstr(text));
+        t->value = n00b_option_set(n00b_string_t *, n00b_string_from_cstr(text));
     }
 
     return t;
@@ -64,10 +64,10 @@ static void
 test_simple_sequence(void)
 {
     n00b_grammar_t *g = n00b_grammar_new();
-    n00b_nonterm_t *s = n00b_nonterm(g, *r"S");
+    n00b_nonterm_t *s = n00b_nonterm(g, r"S");
 
-    int64_t tid_a = n00b_register_terminal(g, *r"A");
-    int64_t tid_b = n00b_register_terminal(g, *r"B");
+    int64_t tid_a = n00b_register_terminal(g, r"A");
+    int64_t tid_b = n00b_register_terminal(g, r"B");
 
     n00b_add_rule(g, s, N00B_TERMINAL(tid_a), N00B_TERMINAL(tid_b));
     n00b_grammar_set_error_recovery(g, false);
@@ -106,10 +106,10 @@ static void
 test_alternatives(void)
 {
     n00b_grammar_t *g = n00b_grammar_new();
-    n00b_nonterm_t *s = n00b_nonterm(g, *r"S");
+    n00b_nonterm_t *s = n00b_nonterm(g, r"S");
 
-    int64_t tid_a = n00b_register_terminal(g, *r"A");
-    int64_t tid_b = n00b_register_terminal(g, *r"B");
+    int64_t tid_a = n00b_register_terminal(g, r"A");
+    int64_t tid_b = n00b_register_terminal(g, r"B");
 
     n00b_add_rule(g, s, N00B_TERMINAL(tid_a));
     n00b_add_rule(g, s, N00B_TERMINAL(tid_b));
@@ -152,9 +152,9 @@ static void
 test_left_recursion(void)
 {
     n00b_grammar_t *g = n00b_grammar_new();
-    n00b_nonterm_t *e = n00b_nonterm(g, *r"E");
+    n00b_nonterm_t *e = n00b_nonterm(g, r"E");
 
-    int64_t tid_a = n00b_register_terminal(g, *r"A");
+    int64_t tid_a = n00b_register_terminal(g, r"A");
 
     n00b_add_rule(g, e, N00B_NT(e), N00B_TERMINAL(tid_a));
     n00b_add_rule(g, e, N00B_TERMINAL(tid_a));
@@ -193,9 +193,9 @@ static void
 test_right_recursion(void)
 {
     n00b_grammar_t *g = n00b_grammar_new();
-    n00b_nonterm_t *e = n00b_nonterm(g, *r"E");
+    n00b_nonterm_t *e = n00b_nonterm(g, r"E");
 
-    int64_t tid_a = n00b_register_terminal(g, *r"A");
+    int64_t tid_a = n00b_register_terminal(g, r"A");
 
     n00b_add_rule(g, e, N00B_TERMINAL(tid_a), N00B_NT(e));
     n00b_add_rule(g, e, N00B_TERMINAL(tid_a));
@@ -234,9 +234,9 @@ static void
 test_ebnf_star(void)
 {
     n00b_grammar_t *g = n00b_grammar_new();
-    n00b_nonterm_t *s = n00b_nonterm(g, *r"S");
+    n00b_nonterm_t *s = n00b_nonterm(g, r"S");
 
-    int64_t tid_a = n00b_register_terminal(g, *r"A");
+    int64_t tid_a = n00b_register_terminal(g, r"A");
 
     n00b_add_rule(g, s, n00b_star(g, N00B_TERMINAL(tid_a)));
     n00b_grammar_set_error_recovery(g, false);
@@ -273,9 +273,9 @@ static void
 test_ebnf_plus(void)
 {
     n00b_grammar_t *g = n00b_grammar_new();
-    n00b_nonterm_t *s = n00b_nonterm(g, *r"S");
+    n00b_nonterm_t *s = n00b_nonterm(g, r"S");
 
-    int64_t tid_a = n00b_register_terminal(g, *r"A");
+    int64_t tid_a = n00b_register_terminal(g, r"A");
 
     n00b_add_rule(g, s, n00b_plus_group(g, N00B_TERMINAL(tid_a)));
     n00b_grammar_set_error_recovery(g, false);
@@ -313,10 +313,10 @@ static void
 test_ebnf_optional(void)
 {
     n00b_grammar_t *g = n00b_grammar_new();
-    n00b_nonterm_t *s = n00b_nonterm(g, *r"S");
+    n00b_nonterm_t *s = n00b_nonterm(g, r"S");
 
-    int64_t tid_a = n00b_register_terminal(g, *r"A");
-    int64_t tid_b = n00b_register_terminal(g, *r"B");
+    int64_t tid_a = n00b_register_terminal(g, r"A");
+    int64_t tid_b = n00b_register_terminal(g, r"B");
 
     n00b_add_rule(g, s, N00B_TERMINAL(tid_a), n00b_optional(g, N00B_TERMINAL(tid_b)));
     n00b_grammar_set_error_recovery(g, false);
@@ -351,10 +351,10 @@ static void
 test_parse_failure(void)
 {
     n00b_grammar_t *g = n00b_grammar_new();
-    n00b_nonterm_t *s = n00b_nonterm(g, *r"S");
+    n00b_nonterm_t *s = n00b_nonterm(g, r"S");
 
-    int64_t tid_a = n00b_register_terminal(g, *r"A");
-    int64_t tid_b = n00b_register_terminal(g, *r"B");
+    int64_t tid_a = n00b_register_terminal(g, r"A");
+    int64_t tid_b = n00b_register_terminal(g, r"B");
 
     n00b_add_rule(g, s, N00B_TERMINAL(tid_a), N00B_TERMINAL(tid_b));
     n00b_grammar_set_error_recovery(g, false);
@@ -385,7 +385,7 @@ static void
 test_empty_input(void)
 {
     n00b_grammar_t *g = n00b_grammar_new();
-    n00b_nonterm_t *s = n00b_nonterm(g, *r"S");
+    n00b_nonterm_t *s = n00b_nonterm(g, r"S");
 
     n00b_add_rule(g, s, N00B_EPSILON());
     n00b_grammar_set_error_recovery(g, false);
@@ -413,10 +413,10 @@ static void
 test_reset_reparse(void)
 {
     n00b_grammar_t *g = n00b_grammar_new();
-    n00b_nonterm_t *s = n00b_nonterm(g, *r"S");
+    n00b_nonterm_t *s = n00b_nonterm(g, r"S");
 
-    int64_t tid_a = n00b_register_terminal(g, *r"A");
-    int64_t tid_b = n00b_register_terminal(g, *r"B");
+    int64_t tid_a = n00b_register_terminal(g, r"A");
+    int64_t tid_b = n00b_register_terminal(g, r"B");
 
     n00b_add_rule(g, s, N00B_TERMINAL(tid_a));
     n00b_add_rule(g, s, N00B_TERMINAL(tid_b));
@@ -454,11 +454,11 @@ static void
 test_expression_grammar(void)
 {
     n00b_grammar_t *g    = n00b_grammar_new();
-    n00b_nonterm_t *expr = n00b_nonterm(g, *r"expr");
-    n00b_nonterm_t *term = n00b_nonterm(g, *r"term");
+    n00b_nonterm_t *expr = n00b_nonterm(g, r"expr");
+    n00b_nonterm_t *term = n00b_nonterm(g, r"term");
 
-    int64_t tid_num  = n00b_register_terminal(g, *r"NUM");
-    int64_t tid_plus = n00b_register_terminal(g, *r"+");
+    int64_t tid_num  = n00b_register_terminal(g, r"NUM");
+    int64_t tid_plus = n00b_register_terminal(g, r"+");
 
     n00b_add_rule(g, expr, N00B_NT(term), N00B_TERMINAL(tid_plus), N00B_NT(expr));
     n00b_add_rule(g, expr, N00B_NT(term));
@@ -521,10 +521,10 @@ static void
 test_tree_walk(void)
 {
     n00b_grammar_t *g = n00b_grammar_new();
-    n00b_nonterm_t *s = n00b_nonterm(g, *r"S");
+    n00b_nonterm_t *s = n00b_nonterm(g, r"S");
 
-    int64_t tid_a = n00b_register_terminal(g, *r"A");
-    int64_t tid_b = n00b_register_terminal(g, *r"B");
+    int64_t tid_a = n00b_register_terminal(g, r"A");
+    int64_t tid_b = n00b_register_terminal(g, r"B");
 
     n00b_add_rule(g, s, N00B_TERMINAL(tid_a), N00B_TERMINAL(tid_b));
     n00b_grammar_set_start(g, s);
@@ -563,9 +563,9 @@ static void
 test_parse_count(void)
 {
     n00b_grammar_t *g = n00b_grammar_new();
-    n00b_nonterm_t *s = n00b_nonterm(g, *r"S");
+    n00b_nonterm_t *s = n00b_nonterm(g, r"S");
 
-    int64_t tid_a = n00b_register_terminal(g, *r"A");
+    int64_t tid_a = n00b_register_terminal(g, r"A");
 
     n00b_add_rule(g, s, N00B_TERMINAL(tid_a));
     n00b_grammar_set_error_recovery(g, false);
@@ -593,10 +593,10 @@ static void
 test_forest_extraction(void)
 {
     n00b_grammar_t *g = n00b_grammar_new();
-    n00b_nonterm_t *s = n00b_nonterm(g, *r"S");
+    n00b_nonterm_t *s = n00b_nonterm(g, r"S");
 
-    int64_t tid_a = n00b_register_terminal(g, *r"A");
-    int64_t tid_b = n00b_register_terminal(g, *r"B");
+    int64_t tid_a = n00b_register_terminal(g, r"A");
+    int64_t tid_b = n00b_register_terminal(g, r"B");
 
     n00b_add_rule(g, s, N00B_TERMINAL(tid_a), N00B_TERMINAL(tid_b));
     n00b_grammar_set_start(g, s);
@@ -631,9 +631,9 @@ static void
 test_one_shot_parse(void)
 {
     n00b_grammar_t *g = n00b_grammar_new();
-    n00b_nonterm_t *s = n00b_nonterm(g, *r"S");
+    n00b_nonterm_t *s = n00b_nonterm(g, r"S");
 
-    int64_t tid_a = n00b_register_terminal(g, *r"A");
+    int64_t tid_a = n00b_register_terminal(g, r"A");
 
     n00b_add_rule(g, s, N00B_TERMINAL(tid_a));
     n00b_grammar_set_error_recovery(g, false);

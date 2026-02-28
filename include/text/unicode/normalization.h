@@ -18,7 +18,7 @@
  *  @kw allocator  Optional allocator (defaults to the runtime allocator).
  *  @return A new NFC-normalized string.
  */
-n00b_string_t n00b_unicode_nfc(n00b_string_t s)
+n00b_string_t *n00b_unicode_nfc(n00b_string_t *s)
     _kargs { n00b_allocator_t *allocator = nullptr; };
 
 /** @brief Normalize a string to NFD (Canonical Decomposition).
@@ -26,7 +26,7 @@ n00b_string_t n00b_unicode_nfc(n00b_string_t s)
  *  @kw allocator  Optional allocator (defaults to the runtime allocator).
  *  @return A new NFD-normalized string.
  */
-n00b_string_t n00b_unicode_nfd(n00b_string_t s)
+n00b_string_t *n00b_unicode_nfd(n00b_string_t *s)
     _kargs { n00b_allocator_t *allocator = nullptr; };
 
 /** @brief Normalize a string to NFKC (Compatibility Decomposition + Canonical
@@ -35,7 +35,7 @@ n00b_string_t n00b_unicode_nfd(n00b_string_t s)
  *  @kw allocator  Optional allocator (defaults to the runtime allocator).
  *  @return A new NFKC-normalized string.
  */
-n00b_string_t n00b_unicode_nfkc(n00b_string_t s)
+n00b_string_t *n00b_unicode_nfkc(n00b_string_t *s)
     _kargs { n00b_allocator_t *allocator = nullptr; };
 
 /** @brief Normalize a string to NFKD (Compatibility Decomposition).
@@ -43,7 +43,7 @@ n00b_string_t n00b_unicode_nfkc(n00b_string_t s)
  *  @kw allocator  Optional allocator (defaults to the runtime allocator).
  *  @return A new NFKD-normalized string.
  */
-n00b_string_t n00b_unicode_nfkd(n00b_string_t s)
+n00b_string_t *n00b_unicode_nfkd(n00b_string_t *s)
     _kargs { n00b_allocator_t *allocator = nullptr; };
 
 // ===========================================================================
@@ -54,13 +54,13 @@ n00b_string_t n00b_unicode_nfkd(n00b_string_t s)
  *  @param s  The string to test.
  *  @return true if the string is already NFC.
  */
-bool n00b_unicode_is_nfc(n00b_string_t s);
+bool n00b_unicode_is_nfc(n00b_string_t *s);
 
 /** @brief Quick-check whether a string is already in NFD form.
  *  @param s  The string to test.
  *  @return true if the string is already NFD.
  */
-bool n00b_unicode_is_nfd(n00b_string_t s);
+bool n00b_unicode_is_nfd(n00b_string_t *s);
 
 // ===========================================================================
 // Mark stripping
@@ -76,7 +76,7 @@ bool n00b_unicode_is_nfd(n00b_string_t s);
  *  @kw allocator  Optional allocator (defaults to the runtime allocator).
  *  @return A new string with combining marks removed.
  */
-n00b_string_t n00b_unicode_strip_marks(n00b_string_t s)
+n00b_string_t *n00b_unicode_strip_marks(n00b_string_t *s)
     _kargs { n00b_allocator_t *allocator = nullptr; };
 
 // ===========================================================================

@@ -13,8 +13,6 @@
 #include "adt/option.h"
 #include "adt/list.h"
 
-n00b_option_decl(n00b_dl_sym_t);
-
 /**
  * @brief Symbol intern table.
  *
@@ -24,7 +22,7 @@ n00b_option_decl(n00b_dl_sym_t);
 typedef struct {
     n00b_dl_str_i64_map_t     name_to_id;
     n00b_dl_i64_str_map_t     var_id_to_name;
-    n00b_list_t(n00b_string_t) id_to_name;
+    n00b_list_t(n00b_string_t *) id_to_name;
     int64_t                   next_var;
 } n00b_dl_intern_t;
 
@@ -50,7 +48,7 @@ void n00b_dl_intern_free(n00b_dl_intern_t *intern);
  * @param name   Constant name (copied internally).
  * @return Non-negative symbol ID.
  */
-n00b_dl_sym_t n00b_dl_intern(n00b_dl_intern_t *intern, n00b_string_t name);
+n00b_dl_sym_t n00b_dl_intern(n00b_dl_intern_t *intern, n00b_string_t *name);
 
 /**
  * @brief Look up a symbol by name without inserting.
@@ -60,7 +58,7 @@ n00b_dl_sym_t n00b_dl_intern(n00b_dl_intern_t *intern, n00b_string_t name);
  * @return Option containing the symbol ID, or none if not found.
  */
 n00b_option_t(n00b_dl_sym_t) n00b_dl_intern_lookup(n00b_dl_intern_t *intern,
-                                                     n00b_string_t     name);
+                                                     n00b_string_t    *name);
 
 /**
  * @brief Get the name for a symbol ID.
@@ -69,7 +67,7 @@ n00b_option_t(n00b_dl_sym_t) n00b_dl_intern_lookup(n00b_dl_intern_t *intern,
  * @param id     Symbol ID (constant or variable).
  * @return Name string, or empty string if not found.
  */
-n00b_string_t n00b_dl_intern_name(n00b_dl_intern_t *intern,
+n00b_string_t *n00b_dl_intern_name(n00b_dl_intern_t *intern,
                                     n00b_dl_sym_t     id);
 
 /**
@@ -83,7 +81,7 @@ n00b_string_t n00b_dl_intern_name(n00b_dl_intern_t *intern,
  * @return Negative symbol ID (<= N00B_DL_VAR_BASE).
  */
 n00b_dl_sym_t n00b_dl_intern_var(n00b_dl_intern_t *intern,
-                                   n00b_string_t     name);
+                                   n00b_string_t    *name);
 
 /**
  * @brief Intern an integer value as a symbol.

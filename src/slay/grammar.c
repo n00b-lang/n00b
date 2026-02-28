@@ -248,10 +248,10 @@ create_one_error_rule_set(n00b_grammar_t *g, int32_t rule_ix)
         snprintf(namebuf,
                  sizeof(namebuf),
                  "$term-%s-%d-%d",
-                 cur_nt->name.data ? cur_nt->name.data : "?",
+                 (cur_nt->name && cur_nt->name->data) ? cur_nt->name->data : "?",
                  rule_ix,
                  tok_ct);
-        n00b_string_t name = n00b_string_from_cstr(namebuf);
+        n00b_string_t *name = n00b_string_from_cstr(namebuf);
 
         n00b_nonterm_t *nt_err    = n00b_nonterm(g, name);
         n00b_nt_id_t    nt_err_id = n00b_nonterm_id(nt_err);
@@ -391,7 +391,9 @@ n00b_grammar_free(n00b_grammar_t *g)
         n00b_free(g->terminal_categories);
     }
 
-    n00b_free(g->tokenizer_name.data);
+    if (g->tokenizer_name) {
+        n00b_free(g->tokenizer_name->data);
+    }
     n00b_free(g);
 }
 
@@ -420,28 +422,24 @@ n00b_grammar_set_disambiguator(n00b_grammar_t *g, n00b_tree_disambig_fn_t fn)
 }
 
 int64_t
-n00b_grammar_terminal_id(n00b_grammar_t *g, const char *name)
+n00b_grammar_terminal_id(n00b_grammar_t *g, n00b_string_t *name)
 {
-    if (!g || !g->terminal_map) {
+    if (!g || !g->terminal_map || !name) {
         return 0;
     }
 
-    n00b_string_t  str  = n00b_string_from_cstr(name);
-    n00b_string_t *sptr = &str;
-    bool           found = false;
-    int64_t        val   = n00b_dict_get(g->terminal_map, sptr, &found);
+    bool    found = false;
+    int64_t val   = n00b_dict_get(g->terminal_map, name, &found);
 
     return found ? val : 0;
 }
 
 n00b_nonterm_t *
-n00b_nonterm(n00b_grammar_t *g, n00b_string_t name)
+n00b_nonterm(n00b_grammar_t *g, n00b_string_t *name)
 {
-    if (name.data) {
-        // Build a temporary n00b_string_t * for lookup.
-        n00b_string_t *name_ptr = &name;
+    if (name) {
         bool           found    = false;
-        int64_t        val      = n00b_dict_get(g->nt_map, name_ptr, &found);
+        int64_t        val      = n00b_dict_get(g->nt_map, name, &found);
 
         if (found) {
             return n00b_get_nonterm(g, val);
@@ -455,10 +453,9 @@ n00b_nonterm(n00b_grammar_t *g, n00b_string_t name)
 
     n00b_list_push(g->nt_list, nt);
 
-    if (name.data) {
-        n00b_string_t *key = &name;
+    if (name) {
         int64_t        id  = nt.id;
-        n00b_dict_put(g->nt_map, key, id);
+        n00b_dict_put(g->nt_map, name, id);
     }
 
     return n00b_get_nonterm(g, nt.id);
@@ -471,37 +468,32 @@ n00b_nonterm_id(n00b_nonterm_t *nt)
 }
 
 int64_t
-n00b_register_terminal(n00b_grammar_t *g, n00b_string_t name)
+n00b_register_terminal(n00b_grammar_t *g, n00b_string_t *name)
 {
-    n00b_string_t *name_ptr = &name;
     bool           found    = false;
-    int64_t        val      = n00b_dict_get(g->terminal_map, name_ptr, &found);
+    int64_t        val      = n00b_dict_get(g->terminal_map, name, &found);
 
     if (found) {
         return val;
     }
 
     // All fixed-text terminals get a hash-based ID (including single-char).
-    int64_t id = n00b_token_id_from_text(name.data, name.u8_bytes);
+    int64_t id = n00b_token_id_from_text(name->data, name->u8_bytes);
 
     // Forward map: name -> id (key is hashed, stack-local is fine)
-    n00b_dict_put(g->terminal_map, name_ptr, id);
+    n00b_dict_put(g->terminal_map, name, id);
 
-    // Reverse map: id -> name. The value is retrieved later by
-    // n00b_get_terminal_name(), so allocate a persistent copy.
-    n00b_string_t *name_copy = n00b_alloc(n00b_string_t);
-    *name_copy = name;
-    n00b_dict_put(g->terminal_by_id, id, name_copy);
+    // Reverse map: id -> name.
+    n00b_dict_put(g->terminal_by_id, id, name);
 
     return id;
 }
 
 int64_t
-n00b_register_literal_type(n00b_grammar_t *g, n00b_string_t name)
+n00b_register_literal_type(n00b_grammar_t *g, n00b_string_t *name)
 {
-    n00b_string_t *name_ptr = &name;
     bool           found    = false;
-    int64_t        val      = n00b_dict_get(g->literal_type_map, name_ptr, &found);
+    int64_t        val      = n00b_dict_get(g->literal_type_map, name, &found);
 
     if (found) {
         return val;
@@ -509,12 +501,10 @@ n00b_register_literal_type(n00b_grammar_t *g, n00b_string_t name)
 
     int64_t id = g->next_literal_type_id++;
 
-    n00b_dict_put(g->literal_type_map, name_ptr, id);
+    n00b_dict_put(g->literal_type_map, name, id);
 
     // Also store reverse mapping for diagnostics/debug.
-    n00b_string_t *name_copy = n00b_alloc(n00b_string_t);
-    *name_copy = name;
-    n00b_dict_put(g->terminal_by_id, id, name_copy);
+    n00b_dict_put(g->terminal_by_id, id, name);
 
     return id;
 }
@@ -522,7 +512,7 @@ n00b_register_literal_type(n00b_grammar_t *g, n00b_string_t name)
 void
 n00b_grammar_set_terminal_category(n00b_grammar_t *g,
                                    int64_t         terminal_id,
-                                   n00b_string_t   category)
+                                   n00b_string_t  *category)
 {
     if (!g->has_terminal_categories) {
         g->terminal_categories = n00b_alloc(n00b_dict_t(int64_t, n00b_string_t *));
@@ -532,10 +522,7 @@ n00b_grammar_set_terminal_category(n00b_grammar_t *g,
         g->has_terminal_categories = true;
     }
 
-    // Allocate a persistent copy of the category string.
-    n00b_string_t *cat_copy = n00b_alloc(n00b_string_t);
-    *cat_copy = category;
-    n00b_dict_put(g->terminal_categories, terminal_id, cat_copy);
+    n00b_dict_put(g->terminal_categories, terminal_id, category);
 }
 
 void
@@ -589,7 +576,7 @@ n00b_group_match_v(n00b_grammar_t *g, int min, int max, int n, n00b_match_t *ite
 
     char namebuf[64];
     snprintf(namebuf, sizeof(namebuf), "$$group_%d", group->gid);
-    n00b_string_t name = n00b_string_from_cstr(namebuf);
+    n00b_string_t *name = n00b_string_from_cstr(namebuf);
 
     n00b_nonterm_t *nt = n00b_nonterm(g, name);
 
@@ -1667,16 +1654,15 @@ n00b_grammar_finalize(n00b_grammar_t *g)
 // ============================================================================
 
 bool
-n00b_grammar_is_keyword(n00b_grammar_t *g, n00b_string_t text)
+n00b_grammar_is_keyword(n00b_grammar_t *g, n00b_string_t *text)
 {
-    if (!g || !g->terminal_map || text.u8_bytes == 0) {
+    if (!g || !g->terminal_map || !text || text->u8_bytes == 0) {
         return false;
     }
 
-    n00b_string_t *key   = &text;
     bool           found = false;
 
-    (void)n00b_dict_get(g->terminal_map, key, &found);
+    (void)n00b_dict_get(g->terminal_map, text, &found);
 
     return found;
 }

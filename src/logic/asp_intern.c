@@ -10,7 +10,7 @@ n00b_dl_intern_init(n00b_dl_intern_t *intern)
 {
     n00b_dl_str_i64_map_init(&intern->name_to_id);
     n00b_dl_i64_str_map_init(&intern->var_id_to_name);
-    intern->id_to_name = n00b_list_new_cap_private(n00b_string_t, INTERN_INIT_CAP);
+    intern->id_to_name = n00b_list_new_cap_private(n00b_string_t *, INTERN_INIT_CAP);
     intern->next_var   = N00B_DL_VAR_BASE;
 }
 
@@ -24,7 +24,7 @@ n00b_dl_intern_free(n00b_dl_intern_t *intern)
 }
 
 n00b_dl_sym_t
-n00b_dl_intern(n00b_dl_intern_t *intern, n00b_string_t name)
+n00b_dl_intern(n00b_dl_intern_t *intern, n00b_string_t *name)
 {
     int64_t *existing = n00b_dl_str_i64_map_get(&intern->name_to_id, name);
     if (existing) {
@@ -40,7 +40,7 @@ n00b_dl_intern(n00b_dl_intern_t *intern, n00b_string_t name)
 }
 
 n00b_option_t(n00b_dl_sym_t)
-n00b_dl_intern_lookup(n00b_dl_intern_t *intern, n00b_string_t name)
+n00b_dl_intern_lookup(n00b_dl_intern_t *intern, n00b_string_t *name)
 {
     int64_t *existing = n00b_dl_str_i64_map_get(&intern->name_to_id, name);
     if (existing) {
@@ -49,14 +49,14 @@ n00b_dl_intern_lookup(n00b_dl_intern_t *intern, n00b_string_t name)
     return n00b_option_none(n00b_dl_sym_t);
 }
 
-n00b_string_t
+n00b_string_t *
 n00b_dl_intern_name(n00b_dl_intern_t *intern, n00b_dl_sym_t id)
 {
     if (n00b_dl_is_var(id)) {
-        n00b_string_t *name = n00b_dl_i64_str_map_get(
+        n00b_string_t **namep = n00b_dl_i64_str_map_get(
             &intern->var_id_to_name, (int64_t)id);
-        if (name) {
-            return *name;
+        if (namep) {
+            return *namep;
         }
         return n00b_string_empty();
     }
@@ -67,7 +67,7 @@ n00b_dl_intern_name(n00b_dl_intern_t *intern, n00b_dl_sym_t id)
 }
 
 n00b_dl_sym_t
-n00b_dl_intern_var(n00b_dl_intern_t *intern, n00b_string_t name)
+n00b_dl_intern_var(n00b_dl_intern_t *intern, n00b_string_t *name)
 {
     int64_t *existing = n00b_dl_str_i64_map_get(&intern->name_to_id, name);
     if (existing) {
@@ -93,6 +93,6 @@ n00b_dl_intern_int(n00b_dl_intern_t *intern, int64_t value)
     }
     char tmp[(size_t)needed + 1];
     snprintf(tmp, (size_t)needed + 1, "#%lld", (long long)value);
-    n00b_string_t s = n00b_string_from_raw(tmp, needed);
+    n00b_string_t *s = n00b_string_from_raw(tmp, needed);
     return n00b_dl_intern(intern, s);
 }

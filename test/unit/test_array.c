@@ -6,7 +6,6 @@
 #include "core/runtime.h"
 #include "adt/array.h"
 
-n00b_array_decl(int);
 
 // ============================================================================
 // 1. n00b_array_set updates len correctly (off-by-one regression test)

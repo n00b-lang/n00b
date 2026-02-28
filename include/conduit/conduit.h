@@ -25,12 +25,6 @@
 // Forward declarations
 typedef struct n00b_conduit_io_backend n00b_conduit_io_backend_t;
 typedef struct n00b_conduit_service    n00b_conduit_service_t;
-n00b_result_decl(n00b_conduit_t *);
-n00b_result_decl(n00b_conduit_publisher_t *);
-n00b_option_decl(n00b_conduit_io_backend_t *);
-n00b_option_decl(n00b_conduit_topic_base_t *);
-n00b_list_decl(n00b_conduit_io_backend_t *);
-
 struct n00b_conduit {
     n00b_allocator_t   *allocator;
     n00b_dict_untyped_t int_topics; /**< URI int -> topic base ptr */
@@ -111,7 +105,7 @@ static inline n00b_option_t(n00b_conduit_io_backend_t *)
  * @return Some(backend) if found, None otherwise.
  */
 extern n00b_option_t(n00b_conduit_io_backend_t *)
-    n00b_conduit_backend_by_name(n00b_conduit_t *c, n00b_string_t name);
+    n00b_conduit_backend_by_name(n00b_conduit_t *c, n00b_string_t *name);
 
 extern n00b_result_t(n00b_conduit_topic_base_t *)
 n00b_conduit_topic_get(n00b_conduit_t *c, n00b_conduit_uri_t uri, size_t topic_size);

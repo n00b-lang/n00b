@@ -349,10 +349,10 @@ kqueue_wait(void *vctx, n00b_conduit_io_event_t *events, int max_events,
 /*
  * Get backend name
  */
-static n00b_string_t
+static n00b_string_t *
 kqueue_name(void)
 {
-    return *r"kqueue";
+    return r"kqueue";
 }
 
 // ============================================================================

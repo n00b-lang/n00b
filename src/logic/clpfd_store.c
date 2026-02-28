@@ -266,7 +266,7 @@ n00b_csp_store_free(n00b_csp_store_t *s)
         return;
     }
 
-    // Free variables (n00b_string_t is by-value, no free needed for name).
+    // Free variables (n00b_string_t name pointers are GC-managed).
     for (int32_t i = 0; i < s->var_count; i++) {
         n00b_csp_dom_free(&s->vars[i].domain);
     }
@@ -308,7 +308,7 @@ n00b_csp_store_free(n00b_csp_store_t *s)
 // ---------------------------------------------------------------------------
 
 n00b_csp_var_id_t
-n00b_csp_new_var(n00b_csp_store_t *s, n00b_string_t name, n00b_csp_domain_t dom)
+n00b_csp_new_var(n00b_csp_store_t *s, n00b_string_t *name, n00b_csp_domain_t dom)
 {
     if (s->var_count >= s->var_cap) {
         int32_t         new_cap  = s->var_cap ? s->var_cap * 2 : 16;
@@ -336,7 +336,7 @@ n00b_csp_new_var(n00b_csp_store_t *s, n00b_string_t name, n00b_csp_domain_t dom)
 }
 
 n00b_option_t(n00b_csp_var_id_t)
-n00b_csp_find_var(n00b_csp_store_t *s, n00b_string_t name)
+n00b_csp_find_var(n00b_csp_store_t *s, n00b_string_t *name)
 {
     for (int32_t i = 0; i < s->var_count; i++) {
         if (n00b_unicode_str_eq(s->vars[i].name, name)) {

@@ -34,34 +34,34 @@ TEST(test_casefold_simple)
 
 TEST(test_full_uppercase)
 {
-    n00b_string_t upper = n00b_unicode_toupper(*r"hello", .allocator = nullptr);
-    ASSERT_STR_EQ(upper.data, "HELLO");
+    n00b_string_t *upper = n00b_unicode_toupper(r"hello", .allocator = nullptr);
+    ASSERT_STR_EQ(upper->data, "HELLO");
 }
 
 TEST(test_full_lowercase)
 {
-    n00b_string_t lower = n00b_unicode_tolower(*r"HELLO", .allocator = nullptr);
-    ASSERT_STR_EQ(lower.data, "hello");
+    n00b_string_t *lower = n00b_unicode_tolower(r"HELLO", .allocator = nullptr);
+    ASSERT_STR_EQ(lower->data, "hello");
 }
 
 TEST(test_full_casefold)
 {
-    n00b_string_t folded
-        = n00b_unicode_casefold(*r"Hello World", .allocator = nullptr);
-    ASSERT_STR_EQ(folded.data, "hello world");
+    n00b_string_t *folded
+        = n00b_unicode_casefold(r"Hello World", .allocator = nullptr);
+    ASSERT_STR_EQ(folded->data, "hello world");
 }
 
 TEST(test_casecmp)
 {
-    ASSERT_EQ(n00b_unicode_casecmp(*r"Hello", *r"hello"), 0);
-    ASSERT(n00b_unicode_casecmp(*r"apple", *r"BANANA") < 0);
+    ASSERT_EQ(n00b_unicode_casecmp(r"Hello", r"hello"), 0);
+    ASSERT(n00b_unicode_casecmp(r"apple", r"BANANA") < 0);
 }
 
 TEST(test_sharp_s_uppercase)
 {
     // ß (U+00DF) → "SS" when uppercased
-    n00b_string_t upper = n00b_unicode_toupper(*r"\xC3\x9F", .allocator = nullptr);
-    ASSERT_STR_EQ(upper.data, "SS");
+    n00b_string_t *upper = n00b_unicode_toupper(r"\xC3\x9F", .allocator = nullptr);
+    ASSERT_STR_EQ(upper->data, "SS");
 }
 
 static void

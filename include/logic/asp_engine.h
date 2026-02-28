@@ -28,10 +28,7 @@
 #include "adt/result.h"
 #include "adt/list.h"
 
-n00b_option_decl(n00b_dl_rel_id_t);
-
 typedef n00b_dl_relation_t *n00b_dl_relation_ptr_t;
-n00b_list_decl(n00b_dl_relation_ptr_t);
 
 /**
  * @brief Datalog engine state.
@@ -52,13 +49,13 @@ void n00b_dl_engine_free(n00b_dl_engine_t *eng);
 
 // Schema
 n00b_dl_rel_id_t n00b_dl_engine_relation(n00b_dl_engine_t *eng,
-                                           n00b_string_t     name,
+                                           n00b_string_t    *name,
                                            int32_t           arity);
 
 // Symbol interning shortcuts
-n00b_dl_sym_t n00b_dl_const(n00b_dl_engine_t *eng, n00b_string_t name);
+n00b_dl_sym_t n00b_dl_const(n00b_dl_engine_t *eng, n00b_string_t *name);
 n00b_dl_sym_t n00b_dl_int(n00b_dl_engine_t *eng, int64_t value);
-n00b_dl_sym_t n00b_dl_var(n00b_dl_engine_t *eng, n00b_string_t name);
+n00b_dl_sym_t n00b_dl_var(n00b_dl_engine_t *eng, n00b_string_t *name);
 
 // Facts and rules
 void n00b_dl_add_fact(n00b_dl_engine_t *eng, n00b_dl_rel_id_t rel,
@@ -113,16 +110,16 @@ size_t n00b_dl_count(n00b_dl_engine_t *eng, n00b_dl_rel_id_t rel);
 
 // Query by name and introspection
 n00b_option_t(n00b_dl_rel_id_t) n00b_dl_find_relation(n00b_dl_engine_t *eng,
-                                                        n00b_string_t     name);
-n00b_string_t    n00b_dl_relation_name(n00b_dl_engine_t *eng,
+                                                        n00b_string_t    *name);
+n00b_string_t   *n00b_dl_relation_name(n00b_dl_engine_t *eng,
                                          n00b_dl_rel_id_t  id);
 n00b_option_t(int32_t) n00b_dl_relation_arity(n00b_dl_engine_t *eng,
                                                n00b_dl_rel_id_t  id);
 size_t           n00b_dl_count_by_name(n00b_dl_engine_t *eng,
-                                         n00b_string_t     name);
+                                         n00b_string_t    *name);
 int64_t          n00b_dl_iterations(n00b_dl_engine_t *eng);
 int64_t          n00b_dl_total_facts(n00b_dl_engine_t *eng);
 int32_t          n00b_dl_num_relations(n00b_dl_engine_t *eng);
 
 // Symbol -> string
-n00b_string_t n00b_dl_sym_to_str(n00b_dl_engine_t *eng, n00b_dl_sym_t sym);
+n00b_string_t *n00b_dl_sym_to_str(n00b_dl_engine_t *eng, n00b_dl_sym_t sym);

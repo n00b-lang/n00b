@@ -267,7 +267,7 @@ puny_encode(const n00b_codepoint_t *input, uint32_t input_len, uint32_t *out_len
 // UTS #46 processing
 // ---------------------------------------------------------------------------
 
-n00b_string_t
+n00b_string_t *
 n00b_unicode_idna_to_ascii_raw(n00b_allocator_t          *allocator,
                                const char                *domain,
                                int64_t                    len,
@@ -320,22 +320,22 @@ n00b_unicode_idna_to_ascii_raw(n00b_allocator_t          *allocator,
     mapped[map_pos] = '\0';
 
     // Step 2: Normalize to NFC
-    n00b_string_t normalized = n00b_unicode_nfc_raw(allocator, mapped, map_pos);
+    n00b_string_t *normalized = n00b_unicode_nfc_raw(allocator, mapped, map_pos);
     n00b_free(mapped);
 
     // Step 3: Break into labels at '.'
     // Step 4: Convert non-ASCII labels to Punycode
-    char    *result      = n00b_alloc_array(char, normalized.u8_bytes * 2 + 64);
+    char    *result      = n00b_alloc_array(char, normalized->u8_bytes * 2 + 64);
     uint32_t res_pos     = 0;
     uint32_t label_start = 0;
 
     pos                 = 0;
-    uint32_t norm_bytes = (uint32_t)normalized.u8_bytes;
+    uint32_t norm_bytes = (uint32_t)normalized->u8_bytes;
     while (pos <= norm_bytes) {
         int32_t  cp       = -1;
         uint32_t save_pos = pos;
         if (pos < norm_bytes) {
-            cp = n00b_unicode_utf8_decode(normalized.data, norm_bytes, &pos);
+            cp = n00b_unicode_utf8_decode(normalized->data, norm_bytes, &pos);
         }
 
         bool is_dot = (cp == '.' || cp == 0x3002 || cp == 0xFF0E || cp == 0xFF61);
@@ -354,14 +354,14 @@ n00b_unicode_idna_to_ascii_raw(n00b_allocator_t          *allocator,
             // Check if label is all ASCII
             bool all_ascii = true;
             for (uint32_t i = label_start; i < save_pos; i++) {
-                if ((uint8_t)normalized.data[i] > 0x7F) {
+                if ((uint8_t)normalized->data[i] > 0x7F) {
                     all_ascii = false;
                     break;
                 }
             }
 
             if (all_ascii) {
-                memcpy(result + res_pos, normalized.data + label_start, label_len_bytes);
+                memcpy(result + res_pos, normalized->data + label_start, label_len_bytes);
                 res_pos += label_len_bytes;
             }
             else {
@@ -371,7 +371,7 @@ n00b_unicode_idna_to_ascii_raw(n00b_allocator_t          *allocator,
                 uint32_t label_cp_count = 0;
                 uint32_t lp             = label_start;
                 while (lp < save_pos) {
-                    int32_t lcp = n00b_unicode_utf8_decode(normalized.data, norm_bytes, &lp);
+                    int32_t lcp = n00b_unicode_utf8_decode(normalized->data, norm_bytes, &lp);
                     if (lcp < 0)
                         break;
                     label_cps[label_cp_count++] = (n00b_codepoint_t)lcp;
@@ -418,14 +418,14 @@ n00b_unicode_idna_to_ascii_raw(n00b_allocator_t          *allocator,
         return n00b_string_empty(.allocator = allocator);
     }
 
-    n00b_string_t out
+    n00b_string_t *out
         = n00b_string_from_raw(result, res_pos, .allocator = allocator);
     n00b_free(result);
     return out;
 }
 
 n00b_unicode_idna_result_t
-n00b_unicode_idna_to_ascii(n00b_string_t domain) _kargs
+n00b_unicode_idna_to_ascii(n00b_string_t *domain) _kargs
 {
     n00b_allocator_t *allocator = nullptr;
 }
@@ -433,12 +433,12 @@ n00b_unicode_idna_to_ascii(n00b_string_t domain) _kargs
     if (!allocator)
         allocator = nullptr;
     n00b_unicode_idna_error_t err = N00B_UNICODE_IDNA_OK;
-    n00b_string_t             value
-        = n00b_unicode_idna_to_ascii_raw(allocator, domain.data, domain.u8_bytes, &err);
+    n00b_string_t            *value
+        = n00b_unicode_idna_to_ascii_raw(allocator, domain->data, domain->u8_bytes, &err);
     return (n00b_unicode_idna_result_t){.value = value, .error = err};
 }
 
-n00b_string_t
+n00b_string_t *
 n00b_unicode_idna_to_unicode_raw(n00b_allocator_t          *allocator,
                                  const char                *domain,
                                  int64_t                    len,
@@ -488,14 +488,14 @@ n00b_unicode_idna_to_unicode_raw(n00b_allocator_t          *allocator,
     }
     mapped[map_pos] = '\0';
 
-    n00b_string_t normalized = n00b_unicode_nfc_raw(allocator, mapped, map_pos);
+    n00b_string_t *normalized = n00b_unicode_nfc_raw(allocator, mapped, map_pos);
     n00b_free(mapped);
 
     return normalized;
 }
 
 n00b_unicode_idna_result_t
-n00b_unicode_idna_to_unicode(n00b_string_t domain) _kargs
+n00b_unicode_idna_to_unicode(n00b_string_t *domain) _kargs
 {
     n00b_allocator_t *allocator = nullptr;
 }
@@ -503,7 +503,7 @@ n00b_unicode_idna_to_unicode(n00b_string_t domain) _kargs
     if (!allocator)
         allocator = nullptr;
     n00b_unicode_idna_error_t err = N00B_UNICODE_IDNA_OK;
-    n00b_string_t             value
-        = n00b_unicode_idna_to_unicode_raw(allocator, domain.data, domain.u8_bytes, &err);
+    n00b_string_t            *value
+        = n00b_unicode_idna_to_unicode_raw(allocator, domain->data, domain->u8_bytes, &err);
     return (n00b_unicode_idna_result_t){.value = value, .error = err};
 }

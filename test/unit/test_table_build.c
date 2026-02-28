@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <assert.h>
 #include "n00b.h"
+#include "adt/array.h"
 #include "core/alloc.h"
 #include "core/runtime.h"
 #include "core/string.h"
@@ -11,7 +12,7 @@
 // Helpers
 // ====================================================================
 
-static n00b_string_t
+static n00b_string_t *
 make_str(const char *s)
 {
     return n00b_string_from_raw(s, (int64_t)strlen(s));
@@ -96,7 +97,7 @@ test_empty_cell(void)
 
     assert(t->rows.len == 1);
     assert(t->rows.data[0].cells.len == 3);
-    assert(t->rows.data[0].cells.data[1].content.u8_bytes == 0);
+    assert(t->rows.data[0].cells.data[1].content->u8_bytes == 0);
 
     n00b_table_destroy(t);
     printf("  [PASS] empty cell\n");
@@ -146,13 +147,12 @@ test_add_row_convenience(void)
 {
     n00b_table_t *t = n00b_new_kargs(n00b_table_t, table, .num_cols = 3);
 
-    n00b_string_t cells[3] = {
-        make_str("X"),
-        make_str("Y"),
-        make_str("Z"),
-    };
+    n00b_array_t(n00b_string_t *) cells = n00b_array_new(n00b_string_t *, 3);
+    n00b_array_set(cells, 0, make_str("X"));
+    n00b_array_set(cells, 1, make_str("Y"));
+    n00b_array_set(cells, 2, make_str("Z"));
 
-    n00b_table_add_row(t, cells, 3);
+    n00b_table_add_row(t, cells);
 
     assert(t->rows.len == 1);
     assert(t->rows.data[0].cells.len == 3);

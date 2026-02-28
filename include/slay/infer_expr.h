@@ -51,7 +51,7 @@ n00b_tc_type_t *n00b_infer_eval(
     n00b_grammar_t *grammar,
     n00b_parse_tree_t *node,
     n00b_node_types_t *node_types,
-    n00b_string_t   expr);
+    n00b_string_t  *expr);
 
 /**
  * @brief Evaluate an `@infer` expression with a custom type-spec translator.
@@ -66,4 +66,4 @@ n00b_tc_type_t *n00b_infer_eval_ex(
     n00b_parse_tree_t          *node,
     n00b_node_types_t          *node_types,
     n00b_translate_type_spec_fn ts_fn,
-    n00b_string_t               expr);
+    n00b_string_t              *expr);

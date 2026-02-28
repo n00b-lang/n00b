@@ -2,9 +2,8 @@
  * @file buffer.h
  * @brief Mutable growable byte buffer with thread-safe access.
  *
- * `n00b_buffer_t` is a **heap type** (always passed by pointer).
- * This contrasts with `n00b_string_t`, which is a **value type**
- * (40 bytes, passed/returned by value).
+ * `n00b_buffer_t` is a **heap type** (always passed by pointer),
+ * like `n00b_string_t`.
  *
  * `n00b_buffer_t` is a length-prefixed mutable buffer for building data.
  * Supports concatenation, slicing, searching, hex encoding/decoding,
@@ -77,7 +76,6 @@
 // ============================================================================
 
 // int64_t and size_t option types declared in core/option.h.
-// n00b_result_decl(uint8_t) and n00b_result_decl(bool) are in core/result.h.
 
 // ============================================================================
 // Struct definition
@@ -101,8 +99,6 @@ struct n00b_buffer_t {
     int32_t           flags;
 };
 
-/** @brief Array of buffer pointers (for n00b_buffer_join). */
-n00b_array_decl(n00b_buffer_t *);
 
 // ============================================================================
 // Lock macros (internal)
@@ -340,7 +336,7 @@ extern char *n00b_buffer_to_c(n00b_buffer_t *buf, int64_t *len_ptr);
  * @param buf Buffer to convert.
  * @return    New string with the buffer data.
  */
-extern n00b_string_t n00b_buffer_to_string(n00b_buffer_t *buf);
+extern n00b_string_t *n00b_buffer_to_string(n00b_buffer_t *buf);
 
 /**
  * @brief Hex-encode the buffer contents into a string.
@@ -348,7 +344,7 @@ extern n00b_string_t n00b_buffer_to_string(n00b_buffer_t *buf);
  * @param buf Buffer to encode.
  * @return    New string with lowercase hex digits ("deadbeef").
  */
-extern n00b_string_t n00b_buffer_to_hex_str(n00b_buffer_t *buf);
+extern n00b_string_t *n00b_buffer_to_hex_str(n00b_buffer_t *buf);
 
 /** @brief Shared lowercase hex digit lookup table ("0123456789abcdef"). */
 extern const char n00b_hex_map_lower[16];

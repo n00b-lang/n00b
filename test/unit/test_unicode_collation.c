@@ -8,7 +8,7 @@
 
 TEST(test_sort_key)
 {
-    n00b_unicode_sort_key_t key = n00b_unicode_sort_key(*r"hello");
+    n00b_unicode_sort_key_t key = n00b_unicode_sort_key(r"hello");
     ASSERT(key.data != nullptr);
     ASSERT(key.len > 0);
     n00b_unicode_sort_key_free(&key);
@@ -16,18 +16,18 @@ TEST(test_sort_key)
 
 TEST(test_collate_same)
 {
-    ASSERT_EQ(n00b_unicode_collate(*r"hello", *r"hello"), 0);
+    ASSERT_EQ(n00b_unicode_collate(r"hello", r"hello"), 0);
 }
 
 TEST(test_collate_order)
 {
-    ASSERT(n00b_unicode_collate(*r"apple", *r"banana") < 0);
-    ASSERT(n00b_unicode_collate(*r"banana", *r"apple") > 0);
+    ASSERT(n00b_unicode_collate(r"apple", r"banana") < 0);
+    ASSERT(n00b_unicode_collate(r"banana", r"apple") > 0);
 }
 
 TEST(test_collate_case)
 {
-    int result = n00b_unicode_collate(*r"a", *r"A");
+    int result = n00b_unicode_collate(r"a", r"A");
     ASSERT(result != 0);
 }
 
@@ -48,7 +48,7 @@ run_collation_conformance(void)
     int total = 0, passed_count = 0, fail_count = 0;
 
     bool have_prev = false;
-    n00b_string_t prev = {};
+    n00b_string_t *prev = {};
 
     while (fgets(line, sizeof(line), f)) {
         if (line[0] == '#' || line[0] == '\n' || line[0] == '\r') continue;
@@ -81,7 +81,7 @@ run_collation_conformance(void)
             continue;
         }
 
-        n00b_string_t cur = cps_to_str(cps, n);
+        n00b_string_t *cur = cps_to_str(cps, n);
 
         if (have_prev) {
             int cmp = n00b_unicode_collate(prev, cur);

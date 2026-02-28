@@ -10,8 +10,6 @@
 #include "text/unicode/types_ext.h"
 #include "adt/array.h"
 
-n00b_array_decl(uint8_t);
-n00b_array_decl(int32_t);
 
 /** @brief Opaque handle for a resolved bidirectional paragraph. */
 typedef struct n00b_unicode_bidi_para_s n00b_unicode_bidi_para_t;
@@ -27,7 +25,7 @@ typedef struct n00b_unicode_bidi_para_s n00b_unicode_bidi_para_t;
  *          n00b_unicode_bidi_free().
  */
 n00b_unicode_bidi_para_t *
-n00b_unicode_bidi_open(n00b_string_t s) _kargs
+n00b_unicode_bidi_open(n00b_string_t *s) _kargs
 {
     n00b_allocator_t *allocator = nullptr;
 };

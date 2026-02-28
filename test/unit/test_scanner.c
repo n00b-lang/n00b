@@ -67,7 +67,7 @@ calc_scan(n00b_scanner_t *s)
     n00b_codepoint_t cp = n00b_scan_peek(s, 0);
 
     if (cp >= '0' && cp <= '9') {
-        n00b_option_t(n00b_string_t) val = n00b_scan_integer(s);
+        n00b_option_t(n00b_string_t *) val = n00b_scan_integer(s);
 
         n00b_scan_emit(s, .tid = TOK_NUMBER, .contents = val);
         return true;
@@ -106,7 +106,7 @@ comment_scan(n00b_scanner_t *s)
     n00b_codepoint_t cp = n00b_scan_peek(s, 0);
 
     if (cp >= '0' && cp <= '9') {
-        n00b_option_t(n00b_string_t) val = n00b_scan_integer(s);
+        n00b_option_t(n00b_string_t *) val = n00b_scan_integer(s);
 
         n00b_scan_emit(s, .tid = TOK_NUMBER, .contents = val);
         return true;
@@ -298,9 +298,9 @@ test_scan_mark_extract(void)
     n00b_scan_mark(s);
     n00b_scan_advance_n(s, 5);  // Read "world"
 
-    n00b_string_t text = n00b_scan_extract(s);
+    n00b_string_t *text = n00b_scan_extract(s);
 
-    assert(n00b_unicode_str_eq(text, *r"world"));
+    assert(n00b_unicode_str_eq(text, r"world"));
     assert(n00b_scan_mark_len(s) == 5);
 
     n00b_scanner_free(s);
@@ -324,7 +324,7 @@ test_scan_emit(void)
     assert(tok != nullptr);
     assert(tok->tid == 42);
     assert(n00b_option_is_set(tok->value));
-    assert(n00b_unicode_str_eq(n00b_option_get(tok->value), *r"A"));
+    assert(n00b_unicode_str_eq(n00b_option_get(tok->value), r"A"));
     assert(tok->line == 1);
     assert(tok->column == 1);
     assert(tok->endcol == 2);
@@ -347,9 +347,9 @@ test_scan_trivia(void)
     assert(tok != nullptr);
     assert(tok->tid == TOK_NUMBER);
     assert(n00b_option_is_set(tok->value));
-    assert(n00b_unicode_str_eq(n00b_option_get(tok->value), *r"42"));
+    assert(n00b_unicode_str_eq(n00b_option_get(tok->value), r"42"));
     assert(tok->leading_trivia != nullptr);
-    assert(tok->leading_trivia->text.u8_bytes == 2);
+    assert(tok->leading_trivia->text->u8_bytes == 2);
 
     n00b_token_stream_free(ts);
     n00b_scanner_free(s);
@@ -386,14 +386,14 @@ test_scan_line_comment(void)
     assert(tok1 != nullptr);
     assert(tok1->tid == TOK_NUMBER);
     assert(n00b_option_is_set(tok1->value));
-    assert(n00b_unicode_str_eq(n00b_option_get(tok1->value), *r"42"));
+    assert(n00b_unicode_str_eq(n00b_option_get(tok1->value), r"42"));
 
     n00b_token_info_t *tok2 = n00b_stream_next(ts);
 
     assert(tok2 != nullptr);
     assert(tok2->tid == TOK_NUMBER);
     assert(n00b_option_is_set(tok2->value));
-    assert(n00b_unicode_str_eq(n00b_option_get(tok2->value), *r"99"));
+    assert(n00b_unicode_str_eq(n00b_option_get(tok2->value), r"99"));
 
     n00b_token_stream_free(ts);
     n00b_scanner_free(s);
@@ -413,7 +413,7 @@ test_scan_block_comment(void)
     assert(tok != nullptr);
     assert(tok->tid == TOK_NUMBER);
     assert(n00b_option_is_set(tok->value));
-    assert(n00b_unicode_str_eq(n00b_option_get(tok->value), *r"42"));
+    assert(n00b_unicode_str_eq(n00b_option_get(tok->value), r"42"));
     assert(tok->leading_trivia != nullptr);
 
     n00b_token_stream_free(ts);
@@ -750,10 +750,10 @@ test_recipe_string_double(void)
 
     n00b_scan_mark(ctx.scanner);
 
-    n00b_option_t(n00b_string_t) val = n00b_scan_string_double(ctx.scanner);
+    n00b_option_t(n00b_string_t *) val = n00b_scan_string_double(ctx.scanner);
 
     assert(n00b_option_is_set(val));
-    assert(n00b_unicode_str_eq(n00b_option_get(val), *r"hello\nworld"));
+    assert(n00b_unicode_str_eq(n00b_option_get(val), r"hello\nworld"));
 
     recipe_teardown(&ctx);
     printf("  [PASS] recipe string double\n");
@@ -766,10 +766,10 @@ test_recipe_string_single(void)
 
     n00b_scan_mark(ctx.scanner);
 
-    n00b_option_t(n00b_string_t) val = n00b_scan_string_single(ctx.scanner);
+    n00b_option_t(n00b_string_t *) val = n00b_scan_string_single(ctx.scanner);
 
     assert(n00b_option_is_set(val));
-    assert(n00b_unicode_str_eq(n00b_option_get(val), *r"tab\there"));
+    assert(n00b_unicode_str_eq(n00b_option_get(val), r"tab\there"));
 
     recipe_teardown(&ctx);
     printf("  [PASS] recipe string single\n");
@@ -780,7 +780,7 @@ test_recipe_string_unterminated(void)
 {
     recipe_ctx_t ctx = recipe_setup("\"hello");
 
-    n00b_option_t(n00b_string_t) val = n00b_scan_string_double(ctx.scanner);
+    n00b_option_t(n00b_string_t *) val = n00b_scan_string_double(ctx.scanner);
 
     assert(!n00b_option_is_set(val));
 
@@ -794,7 +794,7 @@ test_recipe_string_bad_hex_escape(void)
     // \xGG is not valid hex.
     recipe_ctx_t ctx = recipe_setup("\"\\xGG\"");
 
-    n00b_option_t(n00b_string_t) val = n00b_scan_string_double(ctx.scanner);
+    n00b_option_t(n00b_string_t *) val = n00b_scan_string_double(ctx.scanner);
 
     assert(!n00b_option_is_set(val));
 
@@ -808,10 +808,10 @@ test_recipe_string_unicode_escape(void)
     // \u00E9 = é
     recipe_ctx_t ctx = recipe_setup("\"caf\\u00E9\"");
 
-    n00b_option_t(n00b_string_t) val = n00b_scan_string_double(ctx.scanner);
+    n00b_option_t(n00b_string_t *) val = n00b_scan_string_double(ctx.scanner);
 
     assert(n00b_option_is_set(val));
-    assert(n00b_unicode_str_eq(n00b_option_get(val), *r"caf\xC3\xA9"));
+    assert(n00b_unicode_str_eq(n00b_option_get(val), r"caf\xC3\xA9"));
 
     recipe_teardown(&ctx);
     printf("  [PASS] recipe string unicode escape\n");
@@ -822,10 +822,10 @@ test_recipe_integer_decimal(void)
 {
     recipe_ctx_t ctx = recipe_setup("12345");
 
-    n00b_option_t(n00b_string_t) val = n00b_scan_integer(ctx.scanner);
+    n00b_option_t(n00b_string_t *) val = n00b_scan_integer(ctx.scanner);
 
     assert(n00b_option_is_set(val));
-    assert(n00b_unicode_str_eq(n00b_option_get(val), *r"12345"));
+    assert(n00b_unicode_str_eq(n00b_option_get(val), r"12345"));
 
     recipe_teardown(&ctx);
     printf("  [PASS] recipe integer decimal\n");
@@ -836,10 +836,10 @@ test_recipe_integer_hex(void)
 {
     recipe_ctx_t ctx = recipe_setup("0xFF");
 
-    n00b_option_t(n00b_string_t) val = n00b_scan_integer(ctx.scanner);
+    n00b_option_t(n00b_string_t *) val = n00b_scan_integer(ctx.scanner);
 
     assert(n00b_option_is_set(val));
-    assert(n00b_unicode_str_eq(n00b_option_get(val), *r"0xFF"));
+    assert(n00b_unicode_str_eq(n00b_option_get(val), r"0xFF"));
 
     recipe_teardown(&ctx);
     printf("  [PASS] recipe integer hex\n");
@@ -850,10 +850,10 @@ test_recipe_integer_binary(void)
 {
     recipe_ctx_t ctx = recipe_setup("0b1010");
 
-    n00b_option_t(n00b_string_t) val = n00b_scan_integer(ctx.scanner);
+    n00b_option_t(n00b_string_t *) val = n00b_scan_integer(ctx.scanner);
 
     assert(n00b_option_is_set(val));
-    assert(n00b_unicode_str_eq(n00b_option_get(val), *r"0b1010"));
+    assert(n00b_unicode_str_eq(n00b_option_get(val), r"0b1010"));
 
     recipe_teardown(&ctx);
     printf("  [PASS] recipe integer binary\n");
@@ -864,10 +864,10 @@ test_recipe_integer_octal(void)
 {
     recipe_ctx_t ctx = recipe_setup("0o777");
 
-    n00b_option_t(n00b_string_t) val = n00b_scan_integer(ctx.scanner);
+    n00b_option_t(n00b_string_t *) val = n00b_scan_integer(ctx.scanner);
 
     assert(n00b_option_is_set(val));
-    assert(n00b_unicode_str_eq(n00b_option_get(val), *r"0o777"));
+    assert(n00b_unicode_str_eq(n00b_option_get(val), r"0o777"));
 
     recipe_teardown(&ctx);
     printf("  [PASS] recipe integer octal\n");
@@ -878,10 +878,10 @@ test_recipe_integer_separators(void)
 {
     recipe_ctx_t ctx = recipe_setup("1_000_000");
 
-    n00b_option_t(n00b_string_t) val = n00b_scan_integer(ctx.scanner);
+    n00b_option_t(n00b_string_t *) val = n00b_scan_integer(ctx.scanner);
 
     assert(n00b_option_is_set(val));
-    assert(n00b_unicode_str_eq(n00b_option_get(val), *r"1_000_000"));
+    assert(n00b_unicode_str_eq(n00b_option_get(val), r"1_000_000"));
 
     recipe_teardown(&ctx);
     printf("  [PASS] recipe integer separators\n");
@@ -893,7 +893,7 @@ test_recipe_integer_no_digits_after_prefix(void)
     // "0x" with no hex digits after — should return none.
     recipe_ctx_t ctx = recipe_setup("0xZZ");
 
-    n00b_option_t(n00b_string_t) val = n00b_scan_integer(ctx.scanner);
+    n00b_option_t(n00b_string_t *) val = n00b_scan_integer(ctx.scanner);
 
     assert(!n00b_option_is_set(val));
 
@@ -906,10 +906,10 @@ test_recipe_float(void)
 {
     recipe_ctx_t ctx = recipe_setup("3.14");
 
-    n00b_option_t(n00b_string_t) val = n00b_scan_float(ctx.scanner);
+    n00b_option_t(n00b_string_t *) val = n00b_scan_float(ctx.scanner);
 
     assert(n00b_option_is_set(val));
-    assert(n00b_unicode_str_eq(n00b_option_get(val), *r"3.14"));
+    assert(n00b_unicode_str_eq(n00b_option_get(val), r"3.14"));
 
     recipe_teardown(&ctx);
     printf("  [PASS] recipe float\n");
@@ -920,10 +920,10 @@ test_recipe_float_exponent(void)
 {
     recipe_ctx_t ctx = recipe_setup("1e10");
 
-    n00b_option_t(n00b_string_t) val = n00b_scan_float(ctx.scanner);
+    n00b_option_t(n00b_string_t *) val = n00b_scan_float(ctx.scanner);
 
     assert(n00b_option_is_set(val));
-    assert(n00b_unicode_str_eq(n00b_option_get(val), *r"1e10"));
+    assert(n00b_unicode_str_eq(n00b_option_get(val), r"1e10"));
 
     recipe_teardown(&ctx);
     printf("  [PASS] recipe float exponent\n");
@@ -934,10 +934,10 @@ test_recipe_float_full(void)
 {
     recipe_ctx_t ctx = recipe_setup("2.5E-3");
 
-    n00b_option_t(n00b_string_t) val = n00b_scan_float(ctx.scanner);
+    n00b_option_t(n00b_string_t *) val = n00b_scan_float(ctx.scanner);
 
     assert(n00b_option_is_set(val));
-    assert(n00b_unicode_str_eq(n00b_option_get(val), *r"2.5E-3"));
+    assert(n00b_unicode_str_eq(n00b_option_get(val), r"2.5E-3"));
 
     recipe_teardown(&ctx);
     printf("  [PASS] recipe float full\n");
@@ -949,7 +949,7 @@ test_recipe_float_integer_only(void)
     // "42" is not a float (no dot, no exponent).
     recipe_ctx_t ctx = recipe_setup("42");
 
-    n00b_option_t(n00b_string_t) val = n00b_scan_float(ctx.scanner);
+    n00b_option_t(n00b_string_t *) val = n00b_scan_float(ctx.scanner);
 
     assert(!n00b_option_is_set(val));
 
@@ -974,7 +974,7 @@ test_recipe_number_emits_correctly(void)
     // Without a grammar, the scan_number call won't find the type name,
     // so we just verify a token was emitted.
     assert(n00b_option_is_set(tok->value));
-    assert(n00b_unicode_str_eq(n00b_option_get(tok->value), *r"3.14"));
+    assert(n00b_unicode_str_eq(n00b_option_get(tok->value), r"3.14"));
 
     recipe_teardown(&ctx);
 
@@ -988,7 +988,7 @@ test_recipe_number_emits_correctly(void)
 
     assert(tok != nullptr);
     assert(n00b_option_is_set(tok->value));
-    assert(n00b_unicode_str_eq(n00b_option_get(tok->value), *r"42"));
+    assert(n00b_unicode_str_eq(n00b_option_get(tok->value), r"42"));
 
     recipe_teardown(&ctx);
     printf("  [PASS] recipe number emits correctly\n");
@@ -999,10 +999,10 @@ test_recipe_identifier(void)
 {
     recipe_ctx_t ctx = recipe_setup("foo_bar123");
 
-    n00b_option_t(n00b_string_t) val = n00b_scan_identifier(ctx.scanner);
+    n00b_option_t(n00b_string_t *) val = n00b_scan_identifier(ctx.scanner);
 
     assert(n00b_option_is_set(val));
-    assert(n00b_unicode_str_eq(n00b_option_get(val), *r"foo_bar123"));
+    assert(n00b_unicode_str_eq(n00b_option_get(val), r"foo_bar123"));
 
     recipe_teardown(&ctx);
     printf("  [PASS] recipe identifier\n");
@@ -1013,10 +1013,10 @@ test_recipe_identifier_unicode(void)
 {
     recipe_ctx_t ctx = recipe_setup("caf\xC3\xA9");
 
-    n00b_option_t(n00b_string_t) val = n00b_scan_identifier(ctx.scanner);
+    n00b_option_t(n00b_string_t *) val = n00b_scan_identifier(ctx.scanner);
 
     assert(n00b_option_is_set(val));
-    assert(n00b_unicode_str_eq(n00b_option_get(val), *r"caf\xC3\xA9"));
+    assert(n00b_unicode_str_eq(n00b_option_get(val), r"caf\xC3\xA9"));
 
     recipe_teardown(&ctx);
     printf("  [PASS] recipe identifier unicode\n");
@@ -1028,7 +1028,7 @@ test_recipe_identifier_not_at_start(void)
     // "123abc" — digit is not ID_Start, should return none.
     recipe_ctx_t ctx = recipe_setup("123abc");
 
-    n00b_option_t(n00b_string_t) val = n00b_scan_identifier(ctx.scanner);
+    n00b_option_t(n00b_string_t *) val = n00b_scan_identifier(ctx.scanner);
 
     assert(!n00b_option_is_set(val));
 

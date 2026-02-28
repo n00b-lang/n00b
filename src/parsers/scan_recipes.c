@@ -74,17 +74,17 @@ sb_push_cp(strbuf_t *sb, n00b_codepoint_t cp)
     sb->cp_count++;
 }
 
-static n00b_option_t(n00b_string_t)
+static n00b_option_t(n00b_string_t *)
 sb_finish(strbuf_t *sb)
 {
-    n00b_string_t str = n00b_string_from_raw(sb->buf, (int64_t)sb->len);
+    n00b_string_t *str = n00b_string_from_raw(sb->buf, (int64_t)sb->len);
     n00b_free(sb->buf);
     sb->buf      = nullptr;
     sb->len      = 0;
     sb->cap      = 0;
     sb->cp_count = 0;
 
-    return n00b_option_set(n00b_string_t, str);
+    return n00b_option_set(n00b_string_t *,str);
 }
 
 static void
@@ -126,13 +126,13 @@ scan_hex_digits(n00b_scanner_t *s, int count, n00b_codepoint_t *out)
 // Internal: quoted string with escape processing
 // ============================================================================
 
-static n00b_option_t(n00b_string_t)
+static n00b_option_t(n00b_string_t *)
 scan_quoted_string(n00b_scanner_t *s, n00b_codepoint_t quote_cp)
 {
     n00b_codepoint_t cp = n00b_scan_peek(s, 0);
 
     if (cp != quote_cp) {
-        return n00b_option_none(n00b_string_t);
+        return n00b_option_none(n00b_string_t *);
     }
 
     n00b_scan_mark(s);
@@ -154,7 +154,7 @@ scan_quoted_string(n00b_scanner_t *s, n00b_codepoint_t quote_cp)
 
             if (n00b_scan_at_eof(s)) {
                 sb_discard(&sb);
-                return n00b_option_none(n00b_string_t);
+                return n00b_option_none(n00b_string_t *);
             }
 
             cp = n00b_scan_peek(s, 0);
@@ -172,7 +172,7 @@ scan_quoted_string(n00b_scanner_t *s, n00b_codepoint_t quote_cp)
                 n00b_codepoint_t val;
                 if (!scan_hex_digits(s, 2, &val)) {
                     sb_discard(&sb);
-                    return n00b_option_none(n00b_string_t);
+                    return n00b_option_none(n00b_string_t *);
                 }
                 sb_push(&sb, (char)(uint8_t)val);
                 break;
@@ -181,7 +181,7 @@ scan_quoted_string(n00b_scanner_t *s, n00b_codepoint_t quote_cp)
                 n00b_codepoint_t val;
                 if (!scan_hex_digits(s, 4, &val)) {
                     sb_discard(&sb);
-                    return n00b_option_none(n00b_string_t);
+                    return n00b_option_none(n00b_string_t *);
                 }
                 sb_push_cp(&sb, val);
                 break;
@@ -190,7 +190,7 @@ scan_quoted_string(n00b_scanner_t *s, n00b_codepoint_t quote_cp)
                 n00b_codepoint_t val;
                 if (!scan_hex_digits(s, 8, &val)) {
                     sb_discard(&sb);
-                    return n00b_option_none(n00b_string_t);
+                    return n00b_option_none(n00b_string_t *);
                 }
                 sb_push_cp(&sb, val);
                 break;
@@ -219,33 +219,33 @@ scan_quoted_string(n00b_scanner_t *s, n00b_codepoint_t quote_cp)
 
     // Unterminated string.
     sb_discard(&sb);
-    return n00b_option_none(n00b_string_t);
+    return n00b_option_none(n00b_string_t *);
 }
 
 // ============================================================================
 // String recipes
 // ============================================================================
 
-n00b_option_t(n00b_string_t)
+n00b_option_t(n00b_string_t *)
 n00b_scan_string_double(n00b_scanner_t *s)
 {
     return scan_quoted_string(s, '"');
 }
 
-n00b_option_t(n00b_string_t)
+n00b_option_t(n00b_string_t *)
 n00b_scan_string_single(n00b_scanner_t *s)
 {
     return scan_quoted_string(s, '\'');
 }
 
-n00b_option_t(n00b_string_t)
+n00b_option_t(n00b_string_t *)
 n00b_scan_string_raw(n00b_scanner_t *s, const char *quote)
 {
     size_t qlen = strlen(quote);
 
     if (s->cursor + qlen > s->input_len
         || memcmp(s->input + s->cursor, quote, qlen) != 0) {
-        return n00b_option_none(n00b_string_t);
+        return n00b_option_none(n00b_string_t *);
     }
 
     n00b_scan_mark(s);
@@ -258,18 +258,18 @@ n00b_scan_string_raw(n00b_scanner_t *s, const char *quote)
             size_t  content_end = s->cursor;
             size_t  len         = content_end - content_start;
 
-            n00b_string_t str = n00b_string_from_raw(s->input + content_start,
-                                                      (int64_t)len);
+            n00b_string_t *str = n00b_string_from_raw(s->input + content_start,
+                                                       (int64_t)len);
 
             n00b_scan_advance_bytes(s, qlen);
-            return n00b_option_set(n00b_string_t, str);
+            return n00b_option_set(n00b_string_t *,str);
         }
 
         n00b_scan_advance(s);
     }
 
     // Unterminated.
-    return n00b_option_none(n00b_string_t);
+    return n00b_option_none(n00b_string_t *);
 }
 
 // ============================================================================
@@ -326,13 +326,13 @@ skip_digits(n00b_scanner_t *s, bool (*pred)(n00b_codepoint_t))
     return count;
 }
 
-n00b_option_t(n00b_string_t)
+n00b_option_t(n00b_string_t *)
 n00b_scan_integer(n00b_scanner_t *s)
 {
     n00b_codepoint_t cp = n00b_scan_peek(s, 0);
 
     if (!is_digit(cp)) {
-        return n00b_option_none(n00b_string_t);
+        return n00b_option_none(n00b_string_t *);
     }
 
     n00b_scan_mark(s);
@@ -345,10 +345,10 @@ n00b_scan_integer(n00b_scanner_t *s)
             n00b_scan_advance(s);
 
             if (skip_digits(s, is_hex) == 0) {
-                return n00b_option_none(n00b_string_t);
+                return n00b_option_none(n00b_string_t *);
             }
 
-            return n00b_option_set(n00b_string_t, n00b_scan_extract(s));
+            return n00b_option_set(n00b_string_t *,n00b_scan_extract(s));
         }
 
         if (next == 'o' || next == 'O') {
@@ -356,10 +356,10 @@ n00b_scan_integer(n00b_scanner_t *s)
             n00b_scan_advance(s);
 
             if (skip_digits(s, is_octal) == 0) {
-                return n00b_option_none(n00b_string_t);
+                return n00b_option_none(n00b_string_t *);
             }
 
-            return n00b_option_set(n00b_string_t, n00b_scan_extract(s));
+            return n00b_option_set(n00b_string_t *,n00b_scan_extract(s));
         }
 
         if (next == 'b' || next == 'B') {
@@ -367,24 +367,24 @@ n00b_scan_integer(n00b_scanner_t *s)
             n00b_scan_advance(s);
 
             if (skip_digits(s, is_binary) == 0) {
-                return n00b_option_none(n00b_string_t);
+                return n00b_option_none(n00b_string_t *);
             }
 
-            return n00b_option_set(n00b_string_t, n00b_scan_extract(s));
+            return n00b_option_set(n00b_string_t *,n00b_scan_extract(s));
         }
     }
 
     skip_digits(s, is_digit);
-    return n00b_option_set(n00b_string_t, n00b_scan_extract(s));
+    return n00b_option_set(n00b_string_t *,n00b_scan_extract(s));
 }
 
-n00b_option_t(n00b_string_t)
+n00b_option_t(n00b_string_t *)
 n00b_scan_float(n00b_scanner_t *s)
 {
     n00b_codepoint_t cp = n00b_scan_peek(s, 0);
 
     if (!is_digit(cp)) {
-        return n00b_option_none(n00b_string_t);
+        return n00b_option_none(n00b_string_t *);
     }
 
     n00b_scan_mark(s);
@@ -416,15 +416,15 @@ n00b_scan_float(n00b_scanner_t *s)
         }
 
         if (skip_digits(s, is_digit) == 0) {
-            return n00b_option_none(n00b_string_t);
+            return n00b_option_none(n00b_string_t *);
         }
     }
 
     if (!has_dot && !has_exponent) {
-        return n00b_option_none(n00b_string_t);
+        return n00b_option_none(n00b_string_t *);
     }
 
-    return n00b_option_set(n00b_string_t, n00b_scan_extract(s));
+    return n00b_option_set(n00b_string_t *,n00b_scan_extract(s));
 }
 
 bool
@@ -446,7 +446,7 @@ n00b_scan_number(n00b_scanner_t *s,
     // Try float.
     n00b_scan_mark(s);
 
-    n00b_option_t(n00b_string_t) fval = n00b_scan_float(s);
+    n00b_option_t(n00b_string_t *) fval = n00b_scan_float(s);
 
     if (n00b_option_is_set(fval)) {
         n00b_scan_emit(s, .token_type = float_type_name,
@@ -464,7 +464,7 @@ n00b_scan_number(n00b_scanner_t *s,
 
     n00b_scan_mark(s);
 
-    n00b_option_t(n00b_string_t) ival = n00b_scan_integer(s);
+    n00b_option_t(n00b_string_t *) ival = n00b_scan_integer(s);
 
     if (n00b_option_is_set(ival)) {
         n00b_scan_emit(s, .token_type = int_type_name,
@@ -484,17 +484,17 @@ n00b_scan_number(n00b_scanner_t *s,
 // Identifier recipe
 // ============================================================================
 
-n00b_option_t(n00b_string_t)
+n00b_option_t(n00b_string_t *)
 n00b_scan_identifier(n00b_scanner_t *s)
 {
     if (n00b_scan_at_eof(s)) {
-        return n00b_option_none(n00b_string_t);
+        return n00b_option_none(n00b_string_t *);
     }
 
     n00b_codepoint_t cp = n00b_scan_peek(s, 0);
 
     if (!n00b_unicode_is_id_start(cp)) {
-        return n00b_option_none(n00b_string_t);
+        return n00b_option_none(n00b_string_t *);
     }
 
     n00b_scan_mark(s);
@@ -510,5 +510,5 @@ n00b_scan_identifier(n00b_scanner_t *s)
         n00b_scan_advance(s);
     }
 
-    return n00b_option_set(n00b_string_t, n00b_scan_extract(s));
+    return n00b_option_set(n00b_string_t *,n00b_scan_extract(s));
 }

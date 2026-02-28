@@ -51,21 +51,21 @@ TEST(test_transitive_closure)
     n00b_dl_engine_t eng;
     n00b_dl_engine_init(&eng);
 
-    n00b_dl_rel_id_t edge = n00b_dl_engine_relation(&eng, *r"edge", 2);
-    n00b_dl_rel_id_t path = n00b_dl_engine_relation(&eng, *r"path", 2);
+    n00b_dl_rel_id_t edge = n00b_dl_engine_relation(&eng, r"edge", 2);
+    n00b_dl_rel_id_t path = n00b_dl_engine_relation(&eng, r"path", 2);
 
-    n00b_dl_sym_t a = n00b_dl_const(&eng, *r"a");
-    n00b_dl_sym_t b = n00b_dl_const(&eng, *r"b");
-    n00b_dl_sym_t c = n00b_dl_const(&eng, *r"c");
-    n00b_dl_sym_t d = n00b_dl_const(&eng, *r"d");
+    n00b_dl_sym_t a = n00b_dl_const(&eng, r"a");
+    n00b_dl_sym_t b = n00b_dl_const(&eng, r"b");
+    n00b_dl_sym_t c = n00b_dl_const(&eng, r"c");
+    n00b_dl_sym_t d = n00b_dl_const(&eng, r"d");
 
     n00b_dl_add_fact(&eng, edge, 2, (n00b_dl_sym_t[]){a, b});
     n00b_dl_add_fact(&eng, edge, 2, (n00b_dl_sym_t[]){b, c});
     n00b_dl_add_fact(&eng, edge, 2, (n00b_dl_sym_t[]){c, d});
 
-    n00b_dl_sym_t X = n00b_dl_var(&eng, *r"X");
-    n00b_dl_sym_t Y = n00b_dl_var(&eng, *r"Y");
-    n00b_dl_sym_t Z = n00b_dl_var(&eng, *r"Z");
+    n00b_dl_sym_t X = n00b_dl_var(&eng, r"X");
+    n00b_dl_sym_t Y = n00b_dl_var(&eng, r"Y");
+    n00b_dl_sym_t Z = n00b_dl_var(&eng, r"Z");
 
     // path(X,Y) :- edge(X,Y)
     n00b_dl_add_rule(&eng, make_rule_2(&eng, path, edge, X, Y));
@@ -95,24 +95,24 @@ TEST(test_ancestors)
     n00b_dl_engine_init(&eng);
 
     n00b_dl_rel_id_t parent   = n00b_dl_engine_relation(&eng,
-                                                          *r"parent",
+                                                          r"parent",
                                                           2);
     n00b_dl_rel_id_t ancestor = n00b_dl_engine_relation(&eng,
-                                                          *r"ancestor",
+                                                          r"ancestor",
                                                           2);
 
-    n00b_dl_sym_t tom = n00b_dl_const(&eng, *r"tom");
-    n00b_dl_sym_t bob = n00b_dl_const(&eng, *r"bob");
-    n00b_dl_sym_t ann = n00b_dl_const(&eng, *r"ann");
-    n00b_dl_sym_t sue = n00b_dl_const(&eng, *r"sue");
+    n00b_dl_sym_t tom = n00b_dl_const(&eng, r"tom");
+    n00b_dl_sym_t bob = n00b_dl_const(&eng, r"bob");
+    n00b_dl_sym_t ann = n00b_dl_const(&eng, r"ann");
+    n00b_dl_sym_t sue = n00b_dl_const(&eng, r"sue");
 
     n00b_dl_add_fact(&eng, parent, 2, (n00b_dl_sym_t[]){tom, bob});
     n00b_dl_add_fact(&eng, parent, 2, (n00b_dl_sym_t[]){bob, ann});
     n00b_dl_add_fact(&eng, parent, 2, (n00b_dl_sym_t[]){ann, sue});
 
-    n00b_dl_sym_t X = n00b_dl_var(&eng, *r"X");
-    n00b_dl_sym_t Y = n00b_dl_var(&eng, *r"Y");
-    n00b_dl_sym_t Z = n00b_dl_var(&eng, *r"Z");
+    n00b_dl_sym_t X = n00b_dl_var(&eng, r"X");
+    n00b_dl_sym_t Y = n00b_dl_var(&eng, r"Y");
+    n00b_dl_sym_t Z = n00b_dl_var(&eng, r"Z");
 
     // ancestor(X,Y) :- parent(X,Y)
     n00b_dl_add_rule(&eng, make_rule_2(&eng, ancestor, parent, X, Y));
@@ -142,18 +142,18 @@ TEST(test_stratified_negation)
     n00b_dl_engine_init(&eng);
 
     n00b_dl_rel_id_t node      = n00b_dl_engine_relation(&eng,
-                                                           *r"node",
+                                                           r"node",
                                                            1);
     n00b_dl_rel_id_t connected = n00b_dl_engine_relation(&eng,
-                                                           *r"connected",
+                                                           r"connected",
                                                            1);
     n00b_dl_rel_id_t isolated  = n00b_dl_engine_relation(&eng,
-                                                           *r"isolated",
+                                                           r"isolated",
                                                            1);
 
-    n00b_dl_sym_t a = n00b_dl_const(&eng, *r"a");
-    n00b_dl_sym_t b = n00b_dl_const(&eng, *r"b");
-    n00b_dl_sym_t c = n00b_dl_const(&eng, *r"c");
+    n00b_dl_sym_t a = n00b_dl_const(&eng, r"a");
+    n00b_dl_sym_t b = n00b_dl_const(&eng, r"b");
+    n00b_dl_sym_t c = n00b_dl_const(&eng, r"c");
 
     n00b_dl_add_fact(&eng, node, 1, &a);
     n00b_dl_add_fact(&eng, node, 1, &b);
@@ -162,7 +162,7 @@ TEST(test_stratified_negation)
     n00b_dl_add_fact(&eng, connected, 1, &b);
 
     // isolated(X) :- node(X), not connected(X)
-    n00b_dl_sym_t X = n00b_dl_var(&eng, *r"X");
+    n00b_dl_sym_t X = n00b_dl_var(&eng, r"X");
     {
         n00b_dl_rule_builder_t rb;
         n00b_dl_rule_builder_init(&rb);
@@ -194,16 +194,16 @@ TEST(test_multi_stratum)
     n00b_dl_engine_init(&eng);
 
     n00b_dl_rel_id_t base_rel  = n00b_dl_engine_relation(&eng,
-                                                           *r"base",
+                                                           r"base",
                                                            1);
     n00b_dl_rel_id_t derived   = n00b_dl_engine_relation(&eng,
-                                                           *r"derived",
+                                                           r"derived",
                                                            1);
     n00b_dl_rel_id_t excluded  = n00b_dl_engine_relation(&eng,
-                                                           *r"excluded",
+                                                           r"excluded",
                                                            1);
     n00b_dl_rel_id_t final_rel = n00b_dl_engine_relation(&eng,
-                                                           *r"final",
+                                                           r"final",
                                                            1);
 
     n00b_dl_sym_t v1 = n00b_dl_int(&eng, 1);
@@ -214,7 +214,7 @@ TEST(test_multi_stratum)
     n00b_dl_add_fact(&eng, base_rel, 1, &v2);
     n00b_dl_add_fact(&eng, base_rel, 1, &v3);
 
-    n00b_dl_sym_t X = n00b_dl_var(&eng, *r"X");
+    n00b_dl_sym_t X = n00b_dl_var(&eng, r"X");
 
     // derived(X) :- base(X)
     {
@@ -258,14 +258,14 @@ TEST(test_unstratifiable)
     n00b_dl_engine_t eng;
     n00b_dl_engine_init(&eng);
 
-    n00b_dl_rel_id_t a_rel = n00b_dl_engine_relation(&eng, *r"a", 1);
-    n00b_dl_rel_id_t b_rel = n00b_dl_engine_relation(&eng, *r"b", 1);
+    n00b_dl_rel_id_t a_rel = n00b_dl_engine_relation(&eng, r"a", 1);
+    n00b_dl_rel_id_t b_rel = n00b_dl_engine_relation(&eng, r"b", 1);
 
-    n00b_dl_sym_t v1 = n00b_dl_const(&eng, *r"v1");
+    n00b_dl_sym_t v1 = n00b_dl_const(&eng, r"v1");
     n00b_dl_add_fact(&eng, b_rel, 1, &v1);
 
     // a(X) :- b(X), not a(X)  — cyclic negation
-    n00b_dl_sym_t X = n00b_dl_var(&eng, *r"X");
+    n00b_dl_sym_t X = n00b_dl_var(&eng, r"X");
     {
         n00b_dl_rule_builder_t rb;
         n00b_dl_rule_builder_init(&rb);
@@ -286,11 +286,11 @@ TEST(test_facts_only)
     n00b_dl_engine_init(&eng);
 
     n00b_dl_rel_id_t fact_rel = n00b_dl_engine_relation(&eng,
-                                                          *r"fact", 3);
+                                                          r"fact", 3);
 
-    n00b_dl_sym_t a = n00b_dl_const(&eng, *r"a");
-    n00b_dl_sym_t b = n00b_dl_const(&eng, *r"b");
-    n00b_dl_sym_t c = n00b_dl_const(&eng, *r"c");
+    n00b_dl_sym_t a = n00b_dl_const(&eng, r"a");
+    n00b_dl_sym_t b = n00b_dl_const(&eng, r"b");
+    n00b_dl_sym_t c = n00b_dl_const(&eng, r"c");
 
     n00b_dl_add_fact(&eng, fact_rel, 3, (n00b_dl_sym_t[]){a, b, c});
     n00b_dl_add_fact(&eng, fact_rel, 3, (n00b_dl_sym_t[]){b, c, a});
@@ -307,16 +307,16 @@ TEST(test_join)
     n00b_dl_engine_init(&eng);
 
     n00b_dl_rel_id_t parent  = n00b_dl_engine_relation(&eng,
-                                                         *r"parent",
+                                                         r"parent",
                                                          2);
     n00b_dl_rel_id_t sibling = n00b_dl_engine_relation(&eng,
-                                                         *r"sibling",
+                                                         r"sibling",
                                                          2);
 
-    n00b_dl_sym_t a = n00b_dl_const(&eng, *r"a");
-    n00b_dl_sym_t b = n00b_dl_const(&eng, *r"b");
-    n00b_dl_sym_t c = n00b_dl_const(&eng, *r"c");
-    n00b_dl_sym_t d = n00b_dl_const(&eng, *r"d");
+    n00b_dl_sym_t a = n00b_dl_const(&eng, r"a");
+    n00b_dl_sym_t b = n00b_dl_const(&eng, r"b");
+    n00b_dl_sym_t c = n00b_dl_const(&eng, r"c");
+    n00b_dl_sym_t d = n00b_dl_const(&eng, r"d");
 
     n00b_dl_add_fact(&eng, parent, 2, (n00b_dl_sym_t[]){a, b});
     n00b_dl_add_fact(&eng, parent, 2, (n00b_dl_sym_t[]){a, c});
@@ -324,9 +324,9 @@ TEST(test_join)
     n00b_dl_add_fact(&eng, parent, 2, (n00b_dl_sym_t[]){c, d});
 
     // sibling(X,Y) :- parent(Z,X), parent(Z,Y)
-    n00b_dl_sym_t X = n00b_dl_var(&eng, *r"X");
-    n00b_dl_sym_t Y = n00b_dl_var(&eng, *r"Y");
-    n00b_dl_sym_t Z = n00b_dl_var(&eng, *r"Z");
+    n00b_dl_sym_t X = n00b_dl_var(&eng, r"X");
+    n00b_dl_sym_t Y = n00b_dl_var(&eng, r"Y");
+    n00b_dl_sym_t Z = n00b_dl_var(&eng, r"Z");
     {
         n00b_dl_rule_builder_t rb;
         n00b_dl_rule_builder_init(&rb);
@@ -353,21 +353,21 @@ TEST(test_introspection)
     n00b_dl_engine_t eng;
     n00b_dl_engine_init(&eng);
 
-    n00b_dl_rel_id_t r = n00b_dl_engine_relation(&eng, *r"test_rel",
+    n00b_dl_rel_id_t r = n00b_dl_engine_relation(&eng, r"test_rel",
                                                     3);
-    auto found = n00b_dl_find_relation(&eng, *r"test_rel");
+    auto found = n00b_dl_find_relation(&eng, r"test_rel");
     ASSERT(n00b_option_is_set(found));
     ASSERT_EQ(n00b_option_get(found), r);
 
-    auto not_found = n00b_dl_find_relation(&eng, *r"nonexistent");
+    auto not_found = n00b_dl_find_relation(&eng, r"nonexistent");
     ASSERT(!n00b_option_is_set(not_found));
 
     auto arity_opt = n00b_dl_relation_arity(&eng, r);
     ASSERT(n00b_option_is_set(arity_opt));
     ASSERT_EQ(n00b_option_get(arity_opt), 3);
 
-    n00b_string_t name = n00b_dl_relation_name(&eng, r);
-    ASSERT(n00b_unicode_str_eq(name, *r"test_rel"));
+    n00b_string_t *name = n00b_dl_relation_name(&eng, r);
+    ASSERT(n00b_unicode_str_eq(name, r"test_rel"));
 
     ASSERT_EQ(n00b_dl_num_relations(&eng), 1);
 
@@ -379,18 +379,18 @@ TEST(test_sym_to_str)
     n00b_dl_engine_t eng;
     n00b_dl_engine_init(&eng);
 
-    n00b_dl_sym_t a = n00b_dl_const(&eng, *r"hello");
+    n00b_dl_sym_t a = n00b_dl_const(&eng, r"hello");
     n00b_dl_sym_t i = n00b_dl_int(&eng, 42);
-    n00b_dl_sym_t v = n00b_dl_var(&eng, *r"X");
+    n00b_dl_sym_t v = n00b_dl_var(&eng, r"X");
 
-    n00b_string_t s1 = n00b_dl_sym_to_str(&eng, a);
-    ASSERT(n00b_unicode_str_eq(s1, *r"hello"));
+    n00b_string_t *s1 = n00b_dl_sym_to_str(&eng, a);
+    ASSERT(n00b_unicode_str_eq(s1, r"hello"));
 
-    n00b_string_t s2 = n00b_dl_sym_to_str(&eng, i);
-    ASSERT(n00b_unicode_str_eq(s2, *r"42"));
+    n00b_string_t *s2 = n00b_dl_sym_to_str(&eng, i);
+    ASSERT(n00b_unicode_str_eq(s2, r"42"));
 
-    n00b_string_t s3 = n00b_dl_sym_to_str(&eng, v);
-    ASSERT(n00b_unicode_str_eq(s3, *r"X"));
+    n00b_string_t *s3 = n00b_dl_sym_to_str(&eng, v);
+    ASSERT(n00b_unicode_str_eq(s3, r"X"));
 
     n00b_dl_engine_free(&eng);
 }
@@ -400,15 +400,15 @@ TEST(test_count_by_name)
     n00b_dl_engine_t eng;
     n00b_dl_engine_init(&eng);
 
-    n00b_dl_rel_id_t r = n00b_dl_engine_relation(&eng, *r"items", 1);
-    n00b_dl_sym_t    a = n00b_dl_const(&eng, *r"a");
-    n00b_dl_sym_t    b = n00b_dl_const(&eng, *r"b");
+    n00b_dl_rel_id_t r = n00b_dl_engine_relation(&eng, r"items", 1);
+    n00b_dl_sym_t    a = n00b_dl_const(&eng, r"a");
+    n00b_dl_sym_t    b = n00b_dl_const(&eng, r"b");
     n00b_dl_add_fact(&eng, r, 1, &a);
     n00b_dl_add_fact(&eng, r, 1, &b);
 
     ASSERT(n00b_dl_run(&eng));
-    ASSERT_EQ((int64_t)n00b_dl_count_by_name(&eng, *r"items"), 2);
-    ASSERT_EQ((int64_t)n00b_dl_count_by_name(&eng, *r"nope"), 0);
+    ASSERT_EQ((int64_t)n00b_dl_count_by_name(&eng, r"items"), 2);
+    ASSERT_EQ((int64_t)n00b_dl_count_by_name(&eng, r"nope"), 0);
 
     n00b_dl_engine_free(&eng);
 }

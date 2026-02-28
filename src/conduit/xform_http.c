@@ -638,11 +638,15 @@ http_parse_flush(
 // Ops vtable
 // ============================================================================
 
+static n00b_string_t _kind_http_parse = {
+    .data = "http_parse", .u8_bytes = 10, .codepoints = 10, .styling = nullptr
+};
+
 static const n00b_conduit_xform_ops_t(n00b_buffer_t *, n00b_http_parse_event_t *)
     http_parse_ops = {
     .transform = http_parse_transform,
     .flush     = http_parse_flush,
-    .kind      = N00B_STRING_STATIC("http_parse"),
+    .kind      = &_kind_http_parse,
 };
 
 // ============================================================================

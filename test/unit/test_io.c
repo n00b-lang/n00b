@@ -32,9 +32,9 @@ test_io_create_destroy(void)
     n00b_conduit_io_backend_t *io = n00b_result_get(ir);
     assert(io != nullptr);
 
-    n00b_string_t name = n00b_conduit_io_name(io);
-    assert(name.data != nullptr);
-    printf("    (backend: %.*s)\n", (int)name.u8_bytes, name.data);
+    n00b_string_t *name = n00b_conduit_io_name(io);
+    assert(name->data != nullptr);
+    printf("    (backend: %.*s)\n", (int)name->u8_bytes, name->data);
 
     n00b_conduit_io_destroy(io);
     n00b_conduit_destroy(c);

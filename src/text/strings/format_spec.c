@@ -103,7 +103,7 @@ n00b_format_spec_parse(const char *spec, int spec_len)
 // Padding helper
 // ===================================================================
 
-static n00b_string_t
+static n00b_string_t *
 pad_string(const char *raw, int raw_len, int raw_cps,
            const n00b_format_spec_t *spec, n00b_allocator_t *allocator)
 {
@@ -137,7 +137,7 @@ pad_string(const char *raw, int raw_len, int raw_cps,
     }
     buf[total_len] = '\0';
 
-    n00b_string_t result = n00b_string_from_raw(buf, total_len, .allocator = allocator);
+    n00b_string_t *result = n00b_string_from_raw(buf, total_len, .allocator = allocator);
     n00b_free(buf);
     return result;
 }
@@ -146,7 +146,7 @@ pad_string(const char *raw, int raw_len, int raw_cps,
 // Extended integer formatting
 // ===================================================================
 
-n00b_string_t
+n00b_string_t *
 n00b_str_fmt_int_ex(int64_t value, const n00b_format_spec_t *spec)
     _kargs { n00b_allocator_t *allocator = nullptr; }
 {
@@ -197,24 +197,24 @@ n00b_str_fmt_int_ex(int64_t value, const n00b_format_spec_t *spec)
     }
     else {
         // Decimal.
-        n00b_string_t s = n00b_fmt_int(value, .commas = commas, .allocator = allocator);
+        n00b_string_t *s = n00b_fmt_int(value, .commas = commas, .allocator = allocator);
         // Apply sign flags.
         if (value >= 0 && spec->sign_plus) {
             char tmp[80];
             tmp[0] = '+';
-            memcpy(tmp + 1, s.data, s.u8_bytes);
-            return pad_string(tmp, (int)s.u8_bytes + 1,
-                              (int)s.codepoints + 1, spec, allocator);
+            memcpy(tmp + 1, s->data, s->u8_bytes);
+            return pad_string(tmp, (int)s->u8_bytes + 1,
+                              (int)s->codepoints + 1, spec, allocator);
         }
         if (value >= 0 && spec->sign_space) {
             char tmp[80];
             tmp[0] = ' ';
-            memcpy(tmp + 1, s.data, s.u8_bytes);
-            return pad_string(tmp, (int)s.u8_bytes + 1,
-                              (int)s.codepoints + 1, spec, allocator);
+            memcpy(tmp + 1, s->data, s->u8_bytes);
+            return pad_string(tmp, (int)s->u8_bytes + 1,
+                              (int)s->codepoints + 1, spec, allocator);
         }
-        return pad_string(s.data, (int)s.u8_bytes,
-                          (int)s.codepoints, spec, allocator);
+        return pad_string(s->data, (int)s->u8_bytes,
+                          (int)s->codepoints, spec, allocator);
     }
 
     buf[len] = '\0';
@@ -225,7 +225,7 @@ n00b_str_fmt_int_ex(int64_t value, const n00b_format_spec_t *spec)
 // Extended float formatting
 // ===================================================================
 
-n00b_string_t
+n00b_string_t *
 n00b_str_fmt_float_ex(double value, const n00b_format_spec_t *spec)
     _kargs { n00b_allocator_t *allocator = nullptr; }
 {
@@ -249,10 +249,10 @@ n00b_str_fmt_float_ex(double value, const n00b_format_spec_t *spec)
         }
         else {
             // Use Grisu2 via existing function.
-            n00b_string_t s = n00b_fmt_float(value,
+            n00b_string_t *s = n00b_fmt_float(value,
                                               .allocator = allocator);
-            return pad_string(s.data, (int)s.u8_bytes,
-                              (int)s.codepoints, spec, allocator);
+            return pad_string(s->data, (int)s->u8_bytes,
+                              (int)s->codepoints, spec, allocator);
         }
     }
 
@@ -268,13 +268,13 @@ n00b_str_fmt_float_ex(double value, const n00b_format_spec_t *spec)
 // Extended string formatting
 // ===================================================================
 
-n00b_string_t
-n00b_str_fmt_string_ex(n00b_string_t value, const n00b_format_spec_t *spec)
+n00b_string_t *
+n00b_str_fmt_string_ex(n00b_string_t *value, const n00b_format_spec_t *spec)
     _kargs { n00b_allocator_t *allocator = nullptr; }
 {
-    const char *raw = value.data;
-    int         len = (int)value.u8_bytes;
-    int         cps = (int)value.codepoints;
+    const char *raw = value->data;
+    int         len = (int)value->u8_bytes;
+    int         cps = (int)value->codepoints;
 
     // Precision = max chars for strings.
     if (spec->precision >= 0 && cps > spec->precision) {

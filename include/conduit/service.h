@@ -70,9 +70,6 @@ struct n00b_conduit_service {
 // Result types
 // ============================================================================
 
-n00b_result_decl(n00b_conduit_service_t *);
-n00b_result_decl(n00b_conduit_svc_thread_t *);
-
 // ============================================================================
 // Service API
 // ============================================================================
@@ -141,8 +138,6 @@ n00b_conduit_svc_thread_io(n00b_conduit_svc_thread_t *st)
  *
  * @return Some(svc_thread) or None if no IO threads exist.
  */
-n00b_option_decl(n00b_conduit_svc_thread_t *);
-
 static inline n00b_option_t(n00b_conduit_svc_thread_t *)
 n00b_conduit_service_default_io(n00b_conduit_service_t *svc)
 {

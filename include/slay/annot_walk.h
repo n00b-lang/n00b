@@ -47,6 +47,7 @@ typedef struct {
     n00b_list_t(n00b_sym_entry_t *)  *shadowed_entries;   /**< Entries that shadow outer decls. */
     n00b_translate_type_spec_fn       translate_type_spec; /**< Language-specific type translator (may be NULL). */
     int32_t                           anon_counter;       /**< Counter for unique anonymous ADT scope names. */
+    n00b_sym_mutability_t             current_mutability;  /**< Set by `<variable-decl>` for child `@declares`. */
 } n00b_annot_walk_ctx_t;
 
 // ============================================================================

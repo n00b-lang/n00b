@@ -77,11 +77,11 @@ cmdr_find_flag_tid(n00b_cmdr_t *c, const char *name)
     for (int32_t i = 0; i < n_root_flags; i++) {
         n00b_cmdr_flag_spec_t f = n00b_list_get(c->root.flags, i);
 
-        if (strcmp(f.name.data, name) == 0) {
+        if (strcmp(f.name->data, name) == 0) {
             return f.terminal_id;
         }
 
-        if (f.has_short && strcmp(f.short_name.data, name) == 0) {
+        if (f.has_short && strcmp(f.short_name->data, name) == 0) {
             return f.terminal_id;
         }
     }
@@ -96,11 +96,11 @@ cmdr_find_flag_tid(n00b_cmdr_t *c, const char *name)
         for (int32_t i = 0; i < n_flags; i++) {
             n00b_cmdr_flag_spec_t f = n00b_list_get(sub.flags, i);
 
-            if (strcmp(f.name.data, name) == 0) {
+            if (strcmp(f.name->data, name) == 0) {
                 return f.terminal_id;
             }
 
-            if (f.has_short && strcmp(f.short_name.data, name) == 0) {
+            if (f.has_short && strcmp(f.short_name->data, name) == 0) {
                 return f.terminal_id;
             }
         }
@@ -121,11 +121,11 @@ cmdr_flag_takes_value(n00b_cmdr_t *c, const char *name)
     for (int32_t i = 0; i < n_root_flags; i++) {
         n00b_cmdr_flag_spec_t f = n00b_list_get(c->root.flags, i);
 
-        if (strcmp(f.name.data, name) == 0) {
+        if (strcmp(f.name->data, name) == 0) {
             return f.takes_value;
         }
 
-        if (f.has_short && strcmp(f.short_name.data, name) == 0) {
+        if (f.has_short && strcmp(f.short_name->data, name) == 0) {
             return f.takes_value;
         }
     }
@@ -139,11 +139,11 @@ cmdr_flag_takes_value(n00b_cmdr_t *c, const char *name)
         for (int32_t i = 0; i < n_flags; i++) {
             n00b_cmdr_flag_spec_t f = n00b_list_get(sub.flags, i);
 
-            if (strcmp(f.name.data, name) == 0) {
+            if (strcmp(f.name->data, name) == 0) {
                 return f.takes_value;
             }
 
-            if (f.has_short && strcmp(f.short_name.data, name) == 0) {
+            if (f.has_short && strcmp(f.short_name->data, name) == 0) {
                 return f.takes_value;
             }
         }
@@ -209,7 +209,7 @@ cmdr_make_token(const char *value, int64_t tid, int32_t index)
     n00b_token_info_t *tok = n00b_alloc(n00b_token_info_t);
 
     if (value && *value) {
-        tok->value = n00b_option_set(n00b_string_t,
+        tok->value = n00b_option_set(n00b_string_t *,
                                       n00b_string_from_cstr(value));
     }
 
@@ -370,7 +370,7 @@ n00b_cmdr_tokenize(const char **argv, int argc,
                 n00b_cmdr_command_t sub = n00b_list_get(c->root.subcommands,
                                                          si);
 
-                if (sub.has_name && strcmp(arg, sub.name.data) == 0) {
+                if (sub.has_name && strcmp(arg, sub.name->data) == 0) {
                     tid = n00b_register_terminal(c->grammar,
                                                   n00b_string_from_cstr(arg));
                     break;
@@ -391,12 +391,12 @@ n00b_cmdr_tokenize(const char **argv, int argc,
 }
 
 int32_t
-n00b_cmdr_tokenize_string(n00b_string_t cmdline,
+n00b_cmdr_tokenize_string(n00b_string_t *cmdline,
                            n00b_cmdr_t *c,
                            n00b_token_info_t ***tokens_out,
                            int32_t *n_tokens_out)
 {
-    if (!cmdline.data || !tokens_out || !n_tokens_out || !c) {
+    if (!cmdline || !tokens_out || !n_tokens_out || !c) {
         return -1;
     }
 
@@ -407,8 +407,8 @@ n00b_cmdr_tokenize_string(n00b_string_t cmdline,
 
     argv = n00b_alloc_array(const char *, 16);
 
-    const char *p = cmdline.data;
-    const char *end = cmdline.data + cmdline.u8_bytes;
+    const char *p = cmdline->data;
+    const char *end = cmdline->data + cmdline->u8_bytes;
 
     while (p < end) {
         while (p < end && isspace((unsigned char)*p)) {

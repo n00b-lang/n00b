@@ -21,13 +21,13 @@
  * Lines are split on CR/LF/CRLF boundaries.
  */
 static int32_t
-longest_line_width(n00b_string_t s)
+longest_line_width(n00b_string_t *s)
 {
-    if (s.u8_bytes == 0) {
+    if (!s || s->u8_bytes == 0) {
         return 0;
     }
 
-    n00b_array_t(n00b_string_t) lines = n00b_unicode_str_split_lines(s);
+    n00b_array_t(n00b_string_t *) lines = n00b_unicode_str_split_lines(s);
     int32_t max_w = 0;
 
     n00b_array_foreach(lines, lp) {
@@ -48,19 +48,19 @@ longest_line_width(n00b_string_t s)
  * Words are delimited by spaces.
  */
 static int32_t
-longest_word_width(n00b_string_t s)
+longest_word_width(n00b_string_t *s)
 {
-    if (s.u8_bytes == 0) {
+    if (!s || s->u8_bytes == 0) {
         return 0;
     }
 
-    n00b_string_t space = n00b_string_from_raw(" ", 1);
+    n00b_string_t *space = n00b_string_from_raw(" ", 1);
 
-    n00b_array_t(n00b_string_t) lines = n00b_unicode_str_split_lines(s);
+    n00b_array_t(n00b_string_t *) lines = n00b_unicode_str_split_lines(s);
     int32_t max_w = 0;
 
     n00b_array_foreach(lines, lp) {
-        n00b_array_t(n00b_string_t) words =
+        n00b_array_t(n00b_string_t *) words =
             n00b_unicode_str_split(*lp, space);
 
         n00b_array_foreach(words, wp) {
@@ -196,7 +196,7 @@ scan_column_preferences(n00b_table_t *table, int64_t width)
 
                 if (cell_col + (n00b_isize_t)span > col && cell_col <= col) {
                     // This cell covers our column.
-                    if (cell->content.u8_bytes > 0) {
+                    if (cell->content && cell->content->u8_bytes > 0) {
                         int32_t ll = longest_line_width(cell->content);
                         int32_t lw;
 
@@ -338,9 +338,9 @@ compute_row_heights(n00b_table_t *table)
             // Wrap (or don't) content and count lines.
             int64_t num_lines = 1;
 
-            if (cell->content.u8_bytes > 0) {
+            if (cell->content && cell->content->u8_bytes > 0) {
                 if (cell_should_wrap(table, cell)) {
-                    n00b_array_t(n00b_string_t) wrapped =
+                    n00b_array_t(n00b_string_t *) wrapped =
                         n00b_unicode_str_wrap(cell->content,
                                               .width = (int32_t)content_w);
                     num_lines = (int64_t)n00b_array_len(wrapped);
@@ -348,7 +348,7 @@ compute_row_heights(n00b_table_t *table)
                 }
                 else {
                     // No wrap: count only hard newlines.
-                    n00b_array_t(n00b_string_t) hard_lines =
+                    n00b_array_t(n00b_string_t *) hard_lines =
                         n00b_unicode_str_split_lines(cell->content);
                     num_lines = (int64_t)n00b_array_len(hard_lines);
                     n00b_array_free(hard_lines);

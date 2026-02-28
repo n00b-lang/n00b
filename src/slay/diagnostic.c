@@ -45,8 +45,8 @@ void
 n00b_diag_push(n00b_diag_ctx_t     *ctx,
                n00b_diag_severity_t severity,
                n00b_diag_stage_t    stage,
-               n00b_string_t        code,
-               n00b_string_t        message,
+               n00b_string_t       *code,
+               n00b_string_t       *message,
                n00b_diag_span_t     span)
 {
     if (!ctx) {
@@ -76,8 +76,8 @@ void
 n00b_diag_push_related(n00b_diag_ctx_t     *ctx,
                        n00b_diag_severity_t severity,
                        n00b_diag_stage_t    stage,
-                       n00b_string_t        code,
-                       n00b_string_t        message,
+                       n00b_string_t       *code,
+                       n00b_string_t       *message,
                        n00b_diag_span_t     span,
                        n00b_diag_span_t     related)
 {
@@ -196,14 +196,14 @@ n00b_diag_print_all(n00b_diag_ctx_t *ctx,
         // Print: severity[code]: message
         fprintf(stderr, "%s%s", color, label);
 
-        if (d.code.u8_bytes > 0) {
-            fprintf(stderr, "[%.*s]", (int)d.code.u8_bytes, d.code.data);
+        if (d.code && d.code->u8_bytes > 0) {
+            fprintf(stderr, "[%.*s]", (int)d.code->u8_bytes, d.code->data);
         }
 
         fprintf(stderr, ":%s ", reset);
 
-        if (d.message.u8_bytes > 0) {
-            fprintf(stderr, "%.*s", (int)d.message.u8_bytes, d.message.data);
+        if (d.message && d.message->u8_bytes > 0) {
+            fprintf(stderr, "%.*s", (int)d.message->u8_bytes, d.message->data);
         }
 
         fprintf(stderr, "\n");
@@ -260,25 +260,25 @@ n00b_diag_print_all(n00b_diag_ctx_t *ctx,
 // ============================================================================
 
 // Map tc error kind to a diagnostic code string.
-static n00b_string_t
+static n00b_string_t *
 tc_err_code(n00b_tc_err_kind_t kind)
 {
     switch (kind) {
-    case N00B_TC_ERR_UNIFY_FAIL:          return *r"TC001";
-    case N00B_TC_ERR_CONSTRAINT_FAIL:     return *r"TC002";
-    case N00B_TC_ERR_OCCURS_CHECK:        return *r"TC003";
-    case N00B_TC_ERR_NON_EXHAUSTIVE:      return *r"TC004";
-    case N00B_TC_ERR_UNREACHABLE_PATTERN: return *r"TC005";
-    case N00B_TC_ERR_DUPLICATE_VARIANT:   return *r"TC006";
-    case N00B_TC_ERR_NO_SUCH_FIELD:       return *r"TC007";
-    case N00B_TC_ERR_PARAM_MISMATCH:      return *r"TC008";
-    case N00B_TC_ERR_ARITY_MISMATCH:      return *r"TC009";
-    case N00B_TC_ERR_MISSING_KEYWORD:     return *r"TC010";
-    case N00B_TC_ERR_UNKNOWN_KEYWORD:     return *r"TC011";
-    case N00B_TC_ERR_NO_MATCHING_RULE:    return *r"TC012";
+    case N00B_TC_ERR_UNIFY_FAIL:          return r"TC001";
+    case N00B_TC_ERR_CONSTRAINT_FAIL:     return r"TC002";
+    case N00B_TC_ERR_OCCURS_CHECK:        return r"TC003";
+    case N00B_TC_ERR_NON_EXHAUSTIVE:      return r"TC004";
+    case N00B_TC_ERR_UNREACHABLE_PATTERN: return r"TC005";
+    case N00B_TC_ERR_DUPLICATE_VARIANT:   return r"TC006";
+    case N00B_TC_ERR_NO_SUCH_FIELD:       return r"TC007";
+    case N00B_TC_ERR_PARAM_MISMATCH:      return r"TC008";
+    case N00B_TC_ERR_ARITY_MISMATCH:      return r"TC009";
+    case N00B_TC_ERR_MISSING_KEYWORD:     return r"TC010";
+    case N00B_TC_ERR_UNKNOWN_KEYWORD:     return r"TC011";
+    case N00B_TC_ERR_NO_MATCHING_RULE:    return r"TC012";
     }
 
-    return *r"TC000";
+    return r"TC000";
 }
 
 void

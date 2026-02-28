@@ -22,7 +22,7 @@
 #define MAX_BACKENDS 32
 
 typedef struct {
-    n00b_string_t                 name;
+    n00b_string_t                *name;
     const n00b_renderer_vtable_t *vtable;
 } registry_entry_t;
 
@@ -35,10 +35,10 @@ static bool              registry_initialized = false;
 // -------------------------------------------------------------------
 
 void
-n00b_renderer_register(n00b_string_t                 name,
+n00b_renderer_register(n00b_string_t                *name,
                         const n00b_renderer_vtable_t *vtable)
 {
-    if (!name.data || !vtable) {
+    if (!name || !vtable) {
         return;
     }
 
@@ -62,9 +62,9 @@ n00b_renderer_register(n00b_string_t                 name,
 }
 
 n00b_option_t(n00b_renderer_vtable_ptr_t)
-n00b_renderer_find(n00b_string_t name)
+n00b_renderer_find(n00b_string_t *name)
 {
-    if (!name.data) {
+    if (!name) {
         return n00b_option_none(n00b_renderer_vtable_ptr_t);
     }
 
@@ -78,10 +78,10 @@ n00b_renderer_find(n00b_string_t name)
     return n00b_option_none(n00b_renderer_vtable_ptr_t);
 }
 
-n00b_list_t(n00b_string_t)
+n00b_list_t(n00b_string_t *)
 n00b_renderer_list(void)
 {
-    n00b_list_t(n00b_string_t) result = n00b_list_new(n00b_string_t);
+    n00b_list_t(n00b_string_t *) result = n00b_list_new(n00b_string_t *);
 
     for (n00b_isize_t i = 0; i < registry_count; i++) {
         n00b_list_push(result, registry[i].name);
@@ -95,9 +95,9 @@ n00b_renderer_list(void)
 // -------------------------------------------------------------------
 
 n00b_result_t(n00b_renderer_vtable_ptr_t)
-n00b_renderer_load(n00b_string_t path)
+n00b_renderer_load(n00b_string_t *path)
 {
-    if (!path.data) {
+    if (!path) {
         return n00b_result_err(n00b_renderer_vtable_ptr_t, EINVAL);
     }
 
@@ -105,10 +105,10 @@ n00b_renderer_load(n00b_string_t path)
     (void)path;
     return n00b_result_err(n00b_renderer_vtable_ptr_t, ENOTSUP);
 #else
-    void *handle = dlopen(path.data, RTLD_NOW | RTLD_LOCAL);
+    void *handle = dlopen(path->data, RTLD_NOW | RTLD_LOCAL);
     if (!handle) {
         fprintf(stderr, "n00b: failed to load renderer '%s': %s\n",
-                path.data, dlerror());
+                path->data, dlerror());
         return n00b_result_err(n00b_renderer_vtable_ptr_t, ENOENT);
     }
 
@@ -117,7 +117,7 @@ n00b_renderer_load(n00b_string_t path)
 
     if (!plugin) {
         fprintf(stderr, "n00b: no n00b_renderer_plugin symbol in '%s': %s\n",
-                path.data, dlerror());
+                path->data, dlerror());
         dlclose(handle);
         return n00b_result_err(n00b_renderer_vtable_ptr_t, ENOENT);
     }
@@ -125,13 +125,13 @@ n00b_renderer_load(n00b_string_t path)
     if (plugin->abi_version != N00B_RENDERER_ABI_VERSION) {
         fprintf(stderr,
                 "n00b: ABI version mismatch in '%s': expected %u, got %u\n",
-                path.data, N00B_RENDERER_ABI_VERSION, plugin->abi_version);
+                path->data, N00B_RENDERER_ABI_VERSION, plugin->abi_version);
         dlclose(handle);
         return n00b_result_err(n00b_renderer_vtable_ptr_t, EPROTO);
     }
 
     if (!plugin->vtable || !plugin->name) {
-        fprintf(stderr, "n00b: invalid plugin in '%s'\n", path.data);
+        fprintf(stderr, "n00b: invalid plugin in '%s'\n", path->data);
         dlclose(handle);
         return n00b_result_err(n00b_renderer_vtable_ptr_t, EINVAL);
     }
@@ -145,9 +145,9 @@ n00b_renderer_load(n00b_string_t path)
 }
 
 n00b_result_t(n00b_renderer_vtable_ptr_t)
-n00b_renderer_load_by_name(n00b_string_t name)
+n00b_renderer_load_by_name(n00b_string_t *name)
 {
-    if (!name.data) {
+    if (!name) {
         return n00b_result_err(n00b_renderer_vtable_ptr_t, EINVAL);
     }
 
@@ -182,7 +182,7 @@ n00b_renderer_load_by_name(n00b_string_t name)
 
         while (dir) {
             snprintf(path_buf, sizeof(path_buf),
-                     "%s/libn00b_render_%s.%s", dir, name.data, ext);
+                     "%s/libn00b_render_%s.%s", dir, name->data, ext);
 
             n00b_result_t(n00b_renderer_vtable_ptr_t) res =
                 n00b_renderer_load(n00b_string_from_cstr(path_buf));
@@ -198,7 +198,7 @@ n00b_renderer_load_by_name(n00b_string_t name)
     const char *home = getenv("HOME");
     if (home) {
         snprintf(path_buf, sizeof(path_buf),
-                 "%s/.n00b/renderers/libn00b_render_%s.%s", home, name.data, ext);
+                 "%s/.n00b/renderers/libn00b_render_%s.%s", home, name->data, ext);
 
         n00b_result_t(n00b_renderer_vtable_ptr_t) res =
             n00b_renderer_load(n00b_string_from_cstr(path_buf));
@@ -210,7 +210,7 @@ n00b_renderer_load_by_name(n00b_string_t name)
 
     // Search 3: /usr/local/lib/n00b/renderers/.
     snprintf(path_buf, sizeof(path_buf),
-             "/usr/local/lib/n00b/renderers/libn00b_render_%s.%s", name.data, ext);
+             "/usr/local/lib/n00b/renderers/libn00b_render_%s.%s", name->data, ext);
 
     n00b_result_t(n00b_renderer_vtable_ptr_t) res =
         n00b_renderer_load(n00b_string_from_cstr(path_buf));
@@ -234,7 +234,7 @@ n00b_renderer_registry_init(void)
     }
     registry_initialized = true;
 
-    n00b_renderer_register(*r"stream", &n00b_renderer_stream);
-    n00b_renderer_register(*r"ansi",   &n00b_renderer_ansi);
-    n00b_renderer_register(*r"dumb",   &n00b_renderer_dumb);
+    n00b_renderer_register(r"stream", &n00b_renderer_stream);
+    n00b_renderer_register(r"ansi",   &n00b_renderer_ansi);
+    n00b_renderer_register(r"dumb",   &n00b_renderer_dumb);
 }

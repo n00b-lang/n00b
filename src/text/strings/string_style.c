@@ -34,29 +34,30 @@ clone_info(const n00b_string_style_info_t *src, int64_t extra_records,
 // Attach
 // ===================================================================
 
-n00b_string_t
-n00b_str_set_base_style(n00b_string_t s, const n00b_text_style_t *style)
+n00b_string_t *
+n00b_str_set_base_style(n00b_string_t *s, const n00b_text_style_t *style)
     _kargs { n00b_allocator_t *allocator = nullptr; }
 {
-    n00b_string_style_info_t *old  = (n00b_string_style_info_t *)s.styling;
+    n00b_string_style_info_t *old  = (n00b_string_style_info_t *)s->styling;
     n00b_string_style_info_t *info = clone_info(old, 0, allocator);
     info->base_style               = n00b_str_style_copy(style,
                                                           .allocator = allocator);
 
-    n00b_string_t result = s;
-    result.styling       = info;
+    n00b_string_t *result = n00b_alloc(n00b_string_t);
+    *result               = *s;
+    result->styling       = info;
     return result;
 }
 
-n00b_string_t
-n00b_str_add_style(n00b_string_t s, const n00b_text_style_t *style,
+n00b_string_t *
+n00b_str_add_style(n00b_string_t *s, const n00b_text_style_t *style,
                     size_t start, n00b_option_t(size_t) end_opt)
     _kargs {
         const char       *tag       = nullptr;
         n00b_allocator_t *allocator = nullptr;
     }
 {
-    n00b_string_style_info_t *old  = (n00b_string_style_info_t *)s.styling;
+    n00b_string_style_info_t *old  = (n00b_string_style_info_t *)s->styling;
     n00b_string_style_info_t *info = clone_info(old, 1, allocator);
 
     int64_t idx              = info->num_styles - 1;
@@ -67,8 +68,9 @@ n00b_str_add_style(n00b_string_t s, const n00b_text_style_t *style,
     info->styles[idx].start  = start;
     info->styles[idx].end    = end_opt;
 
-    n00b_string_t result = s;
-    result.styling       = info;
+    n00b_string_t *result = n00b_alloc(n00b_string_t);
+    *result               = *s;
+    result->styling       = info;
     return result;
 }
 
@@ -77,17 +79,17 @@ n00b_str_add_style(n00b_string_t s, const n00b_text_style_t *style,
 // ===================================================================
 
 n00b_option_t(n00b_string_style_info_t *)
-n00b_str_get_style_info(n00b_string_t s)
+n00b_str_get_style_info(n00b_string_t *s)
 {
     return n00b_option_from_nullable(n00b_string_style_info_t *,
-                                     (n00b_string_style_info_t *)s.styling);
+                                     (n00b_string_style_info_t *)s->styling);
 }
 
 n00b_text_style_t *
-n00b_str_resolve_style_at(n00b_string_t s, size_t byte_pos)
+n00b_str_resolve_style_at(n00b_string_t *s, size_t byte_pos)
     _kargs { n00b_allocator_t *allocator = nullptr; }
 {
-    n00b_string_style_info_t *info = (n00b_string_style_info_t *)s.styling;
+    n00b_string_style_info_t *info = (n00b_string_style_info_t *)s->styling;
 
     if (!info) {
         return n00b_str_style_new(.allocator = allocator);
@@ -139,10 +141,11 @@ n00b_str_resolve_style_at(n00b_string_t s, size_t byte_pos)
 // Strip
 // ===================================================================
 
-n00b_string_t
-n00b_str_strip_styles(n00b_string_t s)
+n00b_string_t *
+n00b_str_strip_styles(n00b_string_t *s)
 {
-    n00b_string_t result = s;
-    result.styling       = nullptr;
+    n00b_string_t *result = n00b_alloc(n00b_string_t);
+    *result               = *s;
+    result->styling       = nullptr;
     return result;
 }

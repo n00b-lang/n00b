@@ -27,9 +27,6 @@ typedef struct pwz_exp_t pwz_exp_t;
 
 typedef pwz_exp_t *pwz_exp_ptr_t;
 
-// Must be declared before pwz_exp_t so the type is complete inside the union.
-n00b_list_decl(pwz_exp_ptr_t);
-
 struct pwz_exp_t {
     pwz_mem_t     *mem;
     pwz_exp_kind_t kind;
@@ -113,11 +110,7 @@ typedef struct {
     pwz_mem_t *mem;
 } pwz_zipper_t;
 
-// Container declarations for n00b_list_t usage.
-n00b_list_decl(pwz_zipper_t);
-
 typedef n00b_parse_tree_t *n00b_parse_tree_ptr_t;
-n00b_list_decl(n00b_parse_tree_ptr_t);
 
 // ============================================================================
 // Parser state (full definition)

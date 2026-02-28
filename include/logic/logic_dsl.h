@@ -31,7 +31,7 @@ typedef struct {
     n00b_logic_t *prog;           /**< Compiled program (caller frees via n00b_dsl_result_free()). */
     bool          solved;         /**< true if `solve` succeeded. */
     int64_t       solution_count; /**< Number of solutions if `solve all`. */
-    n00b_string_t error;          /**< Error message, or empty string on success. */
+    n00b_string_t *error;          /**< Error message, or empty string on success. */
     int32_t       error_line;     /**< 1-based line of error. */
     int32_t       error_col;      /**< 1-based column of error. */
 } n00b_dsl_result_t;
@@ -45,7 +45,7 @@ typedef struct {
  * @param src Source text.
  * @return    Result with compiled program or error.
  */
-n00b_dsl_result_t n00b_dsl_compile(n00b_string_t src);
+n00b_dsl_result_t n00b_dsl_compile(n00b_string_t *src);
 
 /**
  * @brief Compile and run a DSL program, including solve commands.
@@ -55,7 +55,7 @@ n00b_dsl_result_t n00b_dsl_compile(n00b_string_t src);
  * @param ctx User context for callback.
  * @return    Result with solved state.
  */
-n00b_dsl_result_t n00b_dsl_run(n00b_string_t src,
+n00b_dsl_result_t n00b_dsl_run(n00b_string_t *src,
                                  n00b_logic_solution_cb cb, void *ctx);
 
 /**

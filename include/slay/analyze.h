@@ -33,7 +33,7 @@ typedef struct {
     n00b_annot_result_t  *annot;
     n00b_grammar_t       *grammar;
     n00b_diag_ctx_t      *diag;       /**< Output: diagnostics pushed here. */
-    n00b_string_t         func_name;
+    n00b_string_t        *func_name;
 } n00b_analyze_ctx_t;
 
 // ============================================================================

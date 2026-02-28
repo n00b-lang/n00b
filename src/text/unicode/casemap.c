@@ -125,7 +125,7 @@ full_map_cp(n00b_codepoint_t cp,
     return n00b_unicode_utf8_encode(mapped, buf);
 }
 
-static n00b_string_t
+static n00b_string_t *
 full_case_map(n00b_allocator_t *allocator,
               const char       *data,
               int64_t           len,
@@ -159,13 +159,13 @@ full_case_map(n00b_allocator_t *allocator,
         out_pos += n;
     }
 
-    out[out_pos]         = '\0';
-    n00b_string_t result = n00b_string_from_raw(out, out_pos, .allocator = allocator);
+    out[out_pos]          = '\0';
+    n00b_string_t *result = n00b_string_from_raw(out, out_pos, .allocator = allocator);
     n00b_free(out);
     return result;
 }
 
-n00b_string_t
+n00b_string_t *
 n00b_unicode_toupper_raw(n00b_allocator_t *allocator,
                          const char       *data,
                          int64_t           len,
@@ -183,8 +183,8 @@ n00b_unicode_toupper_raw(n00b_allocator_t *allocator,
                          n00b_unicode_simple_upper_data);
 }
 
-n00b_string_t
-n00b_unicode_toupper(n00b_string_t s) _kargs
+n00b_string_t *
+n00b_unicode_toupper(n00b_string_t *s) _kargs
 {
     n00b_allocator_t *allocator = nullptr;
     const char       *locale    = nullptr;
@@ -192,10 +192,10 @@ n00b_unicode_toupper(n00b_string_t s) _kargs
 {
     if (!allocator)
         allocator = nullptr;
-    return n00b_unicode_toupper_raw(allocator, s.data, s.u8_bytes, locale);
+    return n00b_unicode_toupper_raw(allocator, s->data, s->u8_bytes, locale);
 }
 
-n00b_string_t
+n00b_string_t *
 n00b_unicode_tolower_raw(n00b_allocator_t *allocator,
                          const char       *data,
                          int64_t           len,
@@ -213,8 +213,8 @@ n00b_unicode_tolower_raw(n00b_allocator_t *allocator,
                          n00b_unicode_simple_lower_data);
 }
 
-n00b_string_t
-n00b_unicode_tolower(n00b_string_t s) _kargs
+n00b_string_t *
+n00b_unicode_tolower(n00b_string_t *s) _kargs
 {
     n00b_allocator_t *allocator = nullptr;
     const char       *locale    = nullptr;
@@ -222,10 +222,10 @@ n00b_unicode_tolower(n00b_string_t s) _kargs
 {
     if (!allocator)
         allocator = nullptr;
-    return n00b_unicode_tolower_raw(allocator, s.data, s.u8_bytes, locale);
+    return n00b_unicode_tolower_raw(allocator, s->data, s->u8_bytes, locale);
 }
 
-n00b_string_t
+n00b_string_t *
 n00b_unicode_totitle_raw(n00b_allocator_t *allocator,
                          const char       *data,
                          int64_t           len,
@@ -270,14 +270,14 @@ n00b_unicode_totitle_raw(n00b_allocator_t *allocator,
         out_pos += n00b_unicode_utf8_encode(mapped, out + out_pos);
     }
 
-    out[out_pos]         = '\0';
-    n00b_string_t result = n00b_string_from_raw(out, out_pos, .allocator = allocator);
+    out[out_pos]          = '\0';
+    n00b_string_t *result = n00b_string_from_raw(out, out_pos, .allocator = allocator);
     n00b_free(out);
     return result;
 }
 
-n00b_string_t
-n00b_unicode_totitle(n00b_string_t s) _kargs
+n00b_string_t *
+n00b_unicode_totitle(n00b_string_t *s) _kargs
 {
     n00b_allocator_t *allocator = nullptr;
     const char       *locale    = nullptr;
@@ -285,10 +285,10 @@ n00b_unicode_totitle(n00b_string_t s) _kargs
 {
     if (!allocator)
         allocator = nullptr;
-    return n00b_unicode_totitle_raw(allocator, s.data, s.u8_bytes, locale);
+    return n00b_unicode_totitle_raw(allocator, s->data, s->u8_bytes, locale);
 }
 
-n00b_string_t
+n00b_string_t *
 n00b_unicode_casefold_raw(n00b_allocator_t *allocator, const char *data, int64_t len)
 {
     char    *out      = n00b_alloc_array(char, (size_t)len * 12 + 1);
@@ -317,53 +317,47 @@ n00b_unicode_casefold_raw(n00b_allocator_t *allocator, const char *data, int64_t
         }
     }
 
-    out[out_pos]         = '\0';
-    n00b_string_t result = n00b_string_from_raw(out, out_pos, .allocator = allocator);
+    out[out_pos]          = '\0';
+    n00b_string_t *result = n00b_string_from_raw(out, out_pos, .allocator = allocator);
     n00b_free(out);
     return result;
 }
 
-n00b_string_t
-n00b_unicode_casefold(n00b_string_t s) _kargs
+n00b_string_t *
+n00b_unicode_casefold(n00b_string_t *s) _kargs
 {
     n00b_allocator_t *allocator = nullptr;
 }
 {
     if (!allocator)
         allocator = nullptr;
-    return n00b_unicode_casefold_raw(allocator, s.data, s.u8_bytes);
+    return n00b_unicode_casefold_raw(allocator, s->data, s->u8_bytes);
 }
 
 int
 n00b_unicode_casecmp_raw(const char *a, int64_t a_len, const char *b, int64_t b_len)
 {
-    n00b_string_t fa = n00b_unicode_casefold_raw(nullptr, a, a_len);
-    n00b_string_t fb = n00b_unicode_casefold_raw(nullptr, b, b_len);
+    n00b_string_t *fa = n00b_unicode_casefold_raw(nullptr, a, a_len);
+    n00b_string_t *fb = n00b_unicode_casefold_raw(nullptr, b, b_len);
 
     // NFD for canonical equivalence
-    n00b_string_t na = n00b_unicode_nfd_raw(nullptr, fa.data, fa.u8_bytes);
-    n00b_string_t nb = n00b_unicode_nfd_raw(nullptr, fb.data, fb.u8_bytes);
+    n00b_string_t *na = n00b_unicode_nfd_raw(nullptr, fa->data, fa->u8_bytes);
+    n00b_string_t *nb = n00b_unicode_nfd_raw(nullptr, fb->data, fb->u8_bytes);
 
-    n00b_free(fa.data);
-    n00b_free(fb.data);
-
-    int64_t min_len = na.u8_bytes < nb.u8_bytes ? na.u8_bytes : nb.u8_bytes;
-    int     result  = memcmp(na.data, nb.data, (size_t)min_len);
+    int64_t min_len = na->u8_bytes < nb->u8_bytes ? na->u8_bytes : nb->u8_bytes;
+    int     result  = memcmp(na->data, nb->data, (size_t)min_len);
     if (result == 0) {
-        if (na.u8_bytes < nb.u8_bytes)
+        if (na->u8_bytes < nb->u8_bytes)
             result = -1;
-        else if (na.u8_bytes > nb.u8_bytes)
+        else if (na->u8_bytes > nb->u8_bytes)
             result = 1;
     }
-
-    n00b_free(na.data);
-    n00b_free(nb.data);
 
     return result;
 }
 
 int
-n00b_unicode_casecmp(n00b_string_t a, n00b_string_t b)
+n00b_unicode_casecmp(n00b_string_t *a, n00b_string_t *b)
 {
-    return n00b_unicode_casecmp_raw(a.data, a.u8_bytes, b.data, b.u8_bytes);
+    return n00b_unicode_casecmp_raw(a->data, a->u8_bytes, b->data, b->u8_bytes);
 }

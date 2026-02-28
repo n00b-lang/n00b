@@ -9,7 +9,7 @@ TEST(test_lex_basic)
 {
     // Compiling a fact should succeed.
     n00b_dsl_result_t r = n00b_dsl_compile(n00b_string_from_cstr("edge(a, b)."));
-    ASSERT(r.error.data == nullptr);
+    ASSERT(r.error == nullptr);
     ASSERT(r.prog != nullptr);
     n00b_dsl_result_free(&r);
 }
@@ -20,34 +20,34 @@ TEST(test_lex_operators)
     n00b_dsl_result_t r;
 
     r = n00b_dsl_compile(n00b_string_from_cstr("var x in 1..10.\nvar y in 1..10.\nx != y.\n"));
-    ASSERT(r.error.data == nullptr);
+    ASSERT(r.error == nullptr);
     n00b_dsl_result_free(&r);
 
     r = n00b_dsl_compile(n00b_string_from_cstr("var x in 1..10.\nvar y in 1..10.\nx < y.\n"));
-    ASSERT(r.error.data == nullptr);
+    ASSERT(r.error == nullptr);
     n00b_dsl_result_free(&r);
 
     r = n00b_dsl_compile(n00b_string_from_cstr("var x in 1..10.\nvar y in 1..10.\nx <= y.\n"));
-    ASSERT(r.error.data == nullptr);
+    ASSERT(r.error == nullptr);
     n00b_dsl_result_free(&r);
 
     r = n00b_dsl_compile(n00b_string_from_cstr("var x in 1..10.\nvar y in 1..10.\nx > y.\n"));
-    ASSERT(r.error.data == nullptr);
+    ASSERT(r.error == nullptr);
     n00b_dsl_result_free(&r);
 
     r = n00b_dsl_compile(n00b_string_from_cstr("var x in 1..10.\nvar y in 1..10.\nx >= y.\n"));
-    ASSERT(r.error.data == nullptr);
+    ASSERT(r.error == nullptr);
     n00b_dsl_result_free(&r);
 
     r = n00b_dsl_compile(n00b_string_from_cstr("var x in 1..10.\nvar y in 1..10.\nx == y.\n"));
-    ASSERT(r.error.data == nullptr);
+    ASSERT(r.error == nullptr);
     n00b_dsl_result_free(&r);
 }
 
 TEST(test_lex_dotdot)
 {
     n00b_dsl_result_t r = n00b_dsl_compile(n00b_string_from_cstr("var x in 1..3."));
-    ASSERT(r.error.data == nullptr);
+    ASSERT(r.error == nullptr);
     n00b_dsl_result_free(&r);
 }
 
@@ -57,7 +57,7 @@ TEST(test_lex_implies_query)
         "edge(a, b).\n"
         "path(X, Y) :- edge(X, Y).\n"
         "?- path(a, b).\n"));
-    ASSERT(r.error.data == nullptr);
+    ASSERT(r.error == nullptr);
     n00b_dsl_result_free(&r);
 }
 
@@ -68,10 +68,10 @@ TEST(test_lex_implies_query)
 TEST(test_parse_fact)
 {
     n00b_dsl_result_t r = n00b_dsl_compile(n00b_string_from_cstr("edge(a, b)."));
-    ASSERT(r.error.data == nullptr);
+    ASSERT(r.error == nullptr);
     ASSERT(r.prog != nullptr);
     // Verify the fact was added: edge relation should exist.
-    n00b_dl_rel_id_t edge = n00b_logic_relation(r.prog, *r"edge", 2);
+    n00b_dl_rel_id_t edge = n00b_logic_relation(r.prog, r"edge", 2);
     ASSERT_EQ((int64_t)n00b_logic_count(r.prog, edge), 1);
     n00b_dsl_result_free(&r);
 }
@@ -83,9 +83,9 @@ TEST(test_parse_rule)
         "edge(b, c).\n"
         "path(X, Y) :- edge(X, Y).\n"
         "path(X, Y) :- path(X, Z), edge(Z, Y).\n"));
-    ASSERT(r.error.data == nullptr);
+    ASSERT(r.error == nullptr);
     // path should have 3 tuples: a->b, b->c, a->c.
-    n00b_dl_rel_id_t path = n00b_logic_relation(r.prog, *r"path", 2);
+    n00b_dl_rel_id_t path = n00b_logic_relation(r.prog, r"path", 2);
     ASSERT_EQ((int64_t)n00b_logic_count(r.prog, path), 3);
     n00b_dsl_result_free(&r);
 }
@@ -93,11 +93,11 @@ TEST(test_parse_rule)
 TEST(test_parse_var_decl)
 {
     n00b_dsl_result_t r = n00b_dsl_compile(n00b_string_from_cstr("var x in 1..3."));
-    ASSERT(r.error.data == nullptr);
+    ASSERT(r.error == nullptr);
     // Should have a CSP variable 'x'.
     ASSERT(r.prog->store != nullptr);
     n00b_option_t(n00b_csp_var_id_t) opt =
-        n00b_csp_find_var(r.prog->store, *r"x");
+        n00b_csp_find_var(r.prog->store, r"x");
     ASSERT(n00b_option_is_set(opt));
     n00b_dsl_result_free(&r);
 }
@@ -108,13 +108,13 @@ TEST(test_parse_cvar_decl)
         "edge(a, b).\n"
         "edge(b, c).\n"
         "color(Node) in 1..3 :- edge(Node, _).\n"));
-    ASSERT(r.error.data == nullptr);
+    ASSERT(r.error == nullptr);
     ASSERT(r.prog->store != nullptr);
     // Should have CSP vars for 'a' and 'b' (from col 0 of edge).
     n00b_option_t(n00b_csp_var_id_t) va =
-        n00b_csp_find_var(r.prog->store, *r"a");
+        n00b_csp_find_var(r.prog->store, r"a");
     n00b_option_t(n00b_csp_var_id_t) vb =
-        n00b_csp_find_var(r.prog->store, *r"b");
+        n00b_csp_find_var(r.prog->store, r"b");
     ASSERT(n00b_option_is_set(va));
     ASSERT(n00b_option_is_set(vb));
     n00b_dsl_result_free(&r);
@@ -129,7 +129,7 @@ TEST(test_parse_constraint)
         "color(Node) in 1..3 :- edge(Node, _).\n"
         "color(Node) in 1..3 :- edge(_, Node).\n"
         "color(X) != color(Y) :- edge(X, Y).\n"));
-    ASSERT(r.error.data == nullptr);
+    ASSERT(r.error == nullptr);
     n00b_dsl_result_free(&r);
 }
 
@@ -138,18 +138,18 @@ TEST(test_parse_query)
     n00b_dsl_result_t r = n00b_dsl_compile(n00b_string_from_cstr(
         "edge(a, b).\n"
         "?- edge(a, b).\n"));
-    ASSERT(r.error.data == nullptr);
+    ASSERT(r.error == nullptr);
     n00b_dsl_result_free(&r);
 }
 
 TEST(test_parse_domain_set)
 {
     n00b_dsl_result_t r = n00b_dsl_compile(n00b_string_from_cstr("var x in {1, 3, 5}."));
-    ASSERT(r.error.data == nullptr);
+    ASSERT(r.error == nullptr);
     ASSERT(r.prog->store != nullptr);
 
     n00b_option_t(n00b_csp_var_id_t) opt =
-        n00b_csp_find_var(r.prog->store, *r"x");
+        n00b_csp_find_var(r.prog->store, r"x");
     ASSERT(n00b_option_is_set(opt));
 
     n00b_csp_var_id_t x = n00b_option_get(opt);
@@ -173,8 +173,8 @@ TEST(test_compile_facts)
         "edge(a, b).\n"
         "edge(b, c).\n"
         "edge(a, c).\n"));
-    ASSERT(r.error.data == nullptr);
-    n00b_dl_rel_id_t edge = n00b_logic_relation(r.prog, *r"edge", 2);
+    ASSERT(r.error == nullptr);
+    n00b_dl_rel_id_t edge = n00b_logic_relation(r.prog, r"edge", 2);
     ASSERT_EQ((int64_t)n00b_logic_count(r.prog, edge), 3);
     n00b_dsl_result_free(&r);
 }
@@ -187,8 +187,8 @@ TEST(test_compile_transitive)
         "edge(c, d).\n"
         "path(X, Y) :- edge(X, Y).\n"
         "path(X, Y) :- path(X, Z), edge(Z, Y).\n"));
-    ASSERT(r.error.data == nullptr);
-    n00b_dl_rel_id_t path = n00b_logic_relation(r.prog, *r"path", 2);
+    ASSERT(r.error == nullptr);
+    n00b_dl_rel_id_t path = n00b_logic_relation(r.prog, r"path", 2);
     // path: a->b, b->c, c->d, a->c, a->d, b->d = 6
     ASSERT_EQ((int64_t)n00b_logic_count(r.prog, path), 6);
     n00b_dsl_result_free(&r);
@@ -206,16 +206,16 @@ TEST(test_graph_coloring)
             "color(X) != color(Y) :- edge(X, Y).\n"
             "solve.\n"),
         nullptr, nullptr);
-    ASSERT(r.error.data == nullptr);
+    ASSERT(r.error == nullptr);
     ASSERT(r.solved);
 
     // Verify the coloring is valid.
     n00b_option_t(n00b_csp_var_id_t) va =
-        n00b_csp_find_var(r.prog->store, *r"a");
+        n00b_csp_find_var(r.prog->store, r"a");
     n00b_option_t(n00b_csp_var_id_t) vb =
-        n00b_csp_find_var(r.prog->store, *r"b");
+        n00b_csp_find_var(r.prog->store, r"b");
     n00b_option_t(n00b_csp_var_id_t) vc =
-        n00b_csp_find_var(r.prog->store, *r"c");
+        n00b_csp_find_var(r.prog->store, r"c");
 
     ASSERT(n00b_option_is_set(va));
     ASSERT(n00b_option_is_set(vb));
@@ -261,7 +261,7 @@ TEST(test_solve_all)
             "color(X) != color(Y) :- edge(X, Y).\n"
             "solve all.\n"),
         dsl_count_cb, &ctx);
-    ASSERT(r.error.data == nullptr);
+    ASSERT(r.error == nullptr);
     // Triangle with 3 colors: 3! = 6 valid colorings.
     ASSERT_EQ(r.solution_count, 6);
 
@@ -271,7 +271,7 @@ TEST(test_solve_all)
 TEST(test_error_line)
 {
     n00b_dsl_result_t r = n00b_dsl_compile(n00b_string_from_cstr("edge(a, b)\n@@@\n"));
-    ASSERT(r.error.data != nullptr);
+    ASSERT(r.error != nullptr);
     // Error should be on line 1 (missing dot) or line 2 (bad token).
     ASSERT(r.error_line >= 1);
     n00b_dsl_result_free(&r);
@@ -280,7 +280,7 @@ TEST(test_error_line)
 TEST(test_empty_program)
 {
     n00b_dsl_result_t r = n00b_dsl_compile(n00b_string_from_cstr(""));
-    ASSERT(r.error.data == nullptr);
+    ASSERT(r.error == nullptr);
     ASSERT(r.prog != nullptr);
     n00b_dsl_result_free(&r);
 }
@@ -299,12 +299,12 @@ TEST(test_alldiff_keyword)
             "alldiff(x, y, z).\n"
             "solve.\n"),
         nullptr, nullptr);
-    ASSERT(r.error.data == nullptr);
+    ASSERT(r.error == nullptr);
     ASSERT(r.solved);
 
-    int64_t vx = n00b_result_get(n00b_logic_get_int(r.prog, *r"x"));
-    int64_t vy = n00b_result_get(n00b_logic_get_int(r.prog, *r"y"));
-    int64_t vz = n00b_result_get(n00b_logic_get_int(r.prog, *r"z"));
+    int64_t vx = n00b_result_get(n00b_logic_get_int(r.prog, r"x"));
+    int64_t vy = n00b_result_get(n00b_logic_get_int(r.prog, r"y"));
+    int64_t vz = n00b_result_get(n00b_logic_get_int(r.prog, r"z"));
     ASSERT(vx != vy);
     ASSERT(vy != vz);
     ASSERT(vx != vz);
@@ -322,7 +322,7 @@ TEST(test_alldiff_solve_all_dsl)
             "alldiff(x, y, z).\n"
             "solve all.\n"),
         nullptr, nullptr);
-    ASSERT(r.error.data == nullptr);
+    ASSERT(r.error == nullptr);
     ASSERT_EQ(r.solution_count, 6);
 
     n00b_dsl_result_free(&r);
@@ -341,7 +341,7 @@ TEST(test_alldiff_infeasible_dsl)
             "solve.\n"),
         nullptr, nullptr);
     // Should fail during propagation or labeling.
-    ASSERT(r.error.data != nullptr || !r.solved);
+    ASSERT(r.error != nullptr || !r.solved);
 
     n00b_dsl_result_free(&r);
 }
@@ -360,12 +360,12 @@ TEST(test_chained_ne)
             "x != y != z.\n"
             "solve.\n"),
         nullptr, nullptr);
-    ASSERT(r.error.data == nullptr);
+    ASSERT(r.error == nullptr);
     ASSERT(r.solved);
 
-    int64_t vx = n00b_result_get(n00b_logic_get_int(r.prog, *r"x"));
-    int64_t vy = n00b_result_get(n00b_logic_get_int(r.prog, *r"y"));
-    int64_t vz = n00b_result_get(n00b_logic_get_int(r.prog, *r"z"));
+    int64_t vx = n00b_result_get(n00b_logic_get_int(r.prog, r"x"));
+    int64_t vy = n00b_result_get(n00b_logic_get_int(r.prog, r"y"));
+    int64_t vz = n00b_result_get(n00b_logic_get_int(r.prog, r"z"));
     ASSERT(vx != vy);
     ASSERT(vy != vz);
     ASSERT(vx != vz);
@@ -385,12 +385,12 @@ TEST(test_chained_ne_atoms)
             "color(X) != color(Y) != color(Z) :- edge(X, Y), edge(Y, Z).\n"
             "solve.\n"),
         nullptr, nullptr);
-    ASSERT(r.error.data == nullptr);
+    ASSERT(r.error == nullptr);
     ASSERT(r.solved);
 
-    int64_t va = n00b_result_get(n00b_logic_get_int(r.prog, *r"a"));
-    int64_t vb = n00b_result_get(n00b_logic_get_int(r.prog, *r"b"));
-    int64_t vc = n00b_result_get(n00b_logic_get_int(r.prog, *r"c"));
+    int64_t va = n00b_result_get(n00b_logic_get_int(r.prog, r"a"));
+    int64_t vb = n00b_result_get(n00b_logic_get_int(r.prog, r"b"));
+    int64_t vc = n00b_result_get(n00b_logic_get_int(r.prog, r"c"));
     ASSERT(va != vb);
     ASSERT(vb != vc);
     ASSERT(va != vc);
@@ -410,7 +410,7 @@ TEST(test_chained_ne_four_vars)
             "a != b != c != d.\n"
             "solve all.\n"),
         nullptr, nullptr);
-    ASSERT(r.error.data == nullptr);
+    ASSERT(r.error == nullptr);
     // 4! = 24 permutations.
     ASSERT_EQ(r.solution_count, 24);
 
@@ -431,11 +431,11 @@ TEST(test_linear_dsl_basic)
             "2*x + 3*y == 12.\n"
             "solve.\n"),
         nullptr, nullptr);
-    ASSERT(r.error.data == nullptr);
+    ASSERT(r.error == nullptr);
     ASSERT(r.solved);
 
-    int64_t vx = n00b_result_get(n00b_logic_get_int(r.prog, *r"x"));
-    int64_t vy = n00b_result_get(n00b_logic_get_int(r.prog, *r"y"));
+    int64_t vx = n00b_result_get(n00b_logic_get_int(r.prog, r"x"));
+    int64_t vy = n00b_result_get(n00b_logic_get_int(r.prog, r"y"));
     ASSERT_EQ(2 * vx + 3 * vy, 12);
 
     n00b_dsl_result_free(&r);
@@ -451,11 +451,11 @@ TEST(test_linear_dsl_negative_coeffs)
             "x - y == 0.\n"
             "solve.\n"),
         nullptr, nullptr);
-    ASSERT(r.error.data == nullptr);
+    ASSERT(r.error == nullptr);
     ASSERT(r.solved);
 
-    int64_t vx = n00b_result_get(n00b_logic_get_int(r.prog, *r"x"));
-    int64_t vy = n00b_result_get(n00b_logic_get_int(r.prog, *r"y"));
+    int64_t vx = n00b_result_get(n00b_logic_get_int(r.prog, r"x"));
+    int64_t vy = n00b_result_get(n00b_logic_get_int(r.prog, r"y"));
     ASSERT_EQ(vx, vy);
 
     n00b_dsl_result_free(&r);
@@ -471,11 +471,11 @@ TEST(test_linear_implicit_coeff)
             "x + y == 7.\n"
             "solve.\n"),
         nullptr, nullptr);
-    ASSERT(r.error.data == nullptr);
+    ASSERT(r.error == nullptr);
     ASSERT(r.solved);
 
-    int64_t vx = n00b_result_get(n00b_logic_get_int(r.prog, *r"x"));
-    int64_t vy = n00b_result_get(n00b_logic_get_int(r.prog, *r"y"));
+    int64_t vx = n00b_result_get(n00b_logic_get_int(r.prog, r"x"));
+    int64_t vy = n00b_result_get(n00b_logic_get_int(r.prog, r"y"));
     ASSERT_EQ(vx + vy, 7);
 
     n00b_dsl_result_free(&r);
@@ -493,7 +493,7 @@ TEST(test_linear_plus_alldiff_dsl)
             "x + y + z == 6.\n"
             "solve all.\n"),
         nullptr, nullptr);
-    ASSERT(r.error.data == nullptr);
+    ASSERT(r.error == nullptr);
     ASSERT_EQ(r.solution_count, 6);
 
     n00b_dsl_result_free(&r);

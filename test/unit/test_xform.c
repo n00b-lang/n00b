@@ -33,10 +33,6 @@ typedef struct {
     char buf[32];
 } xform_str_t;
 
-// Declare option types for transform return values.
-n00b_option_decl(xform_int_t);
-n00b_option_decl(xform_str_t);
-
 // Instantiate typed pipeline for xform_int_t.
 N00B_CONDUIT_MESSAGE_IMPL(xform_int_t);
 N00B_CONDUIT_INBOX_IMPL_NO_MSG(xform_int_t);
@@ -173,9 +169,13 @@ identity_xform(n00b_conduit_filter_t(xform_int_t) *xf, xform_int_t input)
     return n00b_option_set(xform_int_t, input);
 }
 
+static n00b_string_t _kind_identity = {
+    .data = "identity", .u8_bytes = 8, .codepoints = 8, .styling = nullptr
+};
+
 static const n00b_conduit_filter_ops_t(xform_int_t) identity_ops = {
     .transform = identity_xform,
-    .kind      = N00B_STRING_STATIC("identity"),
+    .kind      = &_kind_identity,
 };
 
 static void
@@ -240,9 +240,13 @@ drop_xform(n00b_conduit_filter_t(xform_int_t) *xf, xform_int_t input)
     return n00b_option_none(xform_int_t);
 }
 
+static n00b_string_t _kind_dropper = {
+    .data = "dropper", .u8_bytes = 7, .codepoints = 7, .styling = nullptr
+};
+
 static const n00b_conduit_filter_ops_t(xform_int_t) drop_ops = {
     .transform = drop_xform,
-    .kind      = N00B_STRING_STATIC("dropper"),
+    .kind      = &_kind_dropper,
 };
 
 static void
@@ -296,9 +300,13 @@ int_to_str_xform(n00b_conduit_xform_t(xform_int_t, xform_str_t) *xf,
     return n00b_option_set(xform_str_t, out);
 }
 
+static n00b_string_t _kind_int_to_str = {
+    .data = "int_to_str", .u8_bytes = 10, .codepoints = 10, .styling = nullptr
+};
+
 static const n00b_conduit_xform_ops_t(xform_int_t, xform_str_t) int_to_str_ops = {
     .transform = int_to_str_xform,
-    .kind      = N00B_STRING_STATIC("int_to_str"),
+    .kind      = &_kind_int_to_str,
 };
 
 static void
@@ -375,10 +383,14 @@ flush_cb(n00b_conduit_filter_t(xform_int_t) *xf)
     n00b_atomic_store(&g_flush_called, true);
 }
 
+static n00b_string_t _kind_flush_test = {
+    .data = "flush_test", .u8_bytes = 10, .codepoints = 10, .styling = nullptr
+};
+
 static const n00b_conduit_filter_ops_t(xform_int_t) flush_ops = {
     .transform = passthru_xform,
     .flush     = flush_cb,
-    .kind      = N00B_STRING_STATIC("flush_test"),
+    .kind      = &_kind_flush_test,
 };
 
 static void
@@ -422,9 +434,13 @@ slow_xform(n00b_conduit_filter_t(xform_int_t) *xf, xform_int_t input)
     return n00b_option_set(xform_int_t, input);
 }
 
+static n00b_string_t _kind_slow_test = {
+    .data = "slow_test", .u8_bytes = 9, .codepoints = 9, .styling = nullptr
+};
+
 static const n00b_conduit_filter_ops_t(xform_int_t) slow_ops = {
     .transform = slow_xform,
-    .kind      = N00B_STRING_STATIC("slow_test"),
+    .kind      = &_kind_slow_test,
 };
 
 static void
@@ -506,9 +522,12 @@ test_null_args(void)
     assert(n00b_result_is_err(r3));
 
     // Ops with null transform callback.
+    static n00b_string_t _bad_kind = {
+        .data = (char *)"bad", .u8_bytes = 3, .codepoints = 3, .styling = nullptr
+    };
     static const n00b_conduit_filter_ops_t(xform_int_t) bad_ops = {
         .transform = nullptr,
-        .kind      = N00B_STRING_STATIC("bad"),
+        .kind      = &_bad_kind,
     };
     auto r4 = n00b_conduit_filter_new(xform_int_t, c, src_topic,
                                       &bad_ops, 0);
@@ -538,10 +557,14 @@ multi_out_xform(n00b_conduit_xform_t(xform_int_t, xform_str_t) *xf,
     return n00b_option_none(xform_str_t);
 }
 
+static n00b_string_t _kind_multi_out = {
+    .data = "multi_out", .u8_bytes = 9, .codepoints = 9, .styling = nullptr
+};
+
 static const n00b_conduit_xform_ops_t(xform_int_t, xform_str_t)
     multi_out_ops = {
     .transform = multi_out_xform,
-    .kind      = N00B_STRING_STATIC("multi_out"),
+    .kind      = &_kind_multi_out,
 };
 
 static void

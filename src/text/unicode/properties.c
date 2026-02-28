@@ -272,7 +272,7 @@ n00b_unicode_display_width_raw(const char *data, int64_t len)
 }
 
 int32_t
-n00b_unicode_display_width(n00b_string_t s)
+n00b_unicode_display_width(n00b_string_t *s)
 {
-    return n00b_unicode_display_width_raw(s.data, s.u8_bytes);
+    return n00b_unicode_display_width_raw(s->data, s->u8_bytes);
 }

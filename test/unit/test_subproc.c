@@ -362,7 +362,7 @@ test_kill(void)
         .args    = nullptr);
 
     // Add "100" argument.
-    n00b_array_t(n00b_string_t) args = n00b_array_new(n00b_string_t, 1);
+    n00b_array_t(n00b_string_t *) args = n00b_array_new(n00b_string_t *, 1);
     n00b_array_set(args, 0, n00b_string_from_cstr("100"));
     sp.args = &args;
 
@@ -477,7 +477,7 @@ test_timeout_sigterm(void)
         .timeout        = &timeout,
         .timeout_policy = N00B_SUBPROC_TIMEOUT_SIGTERM);
 
-    n00b_array_t(n00b_string_t) args = n00b_array_new(n00b_string_t, 1);
+    n00b_array_t(n00b_string_t *) args = n00b_array_new(n00b_string_t *, 1);
     n00b_array_set(args, 0, n00b_string_from_cstr("100"));
     sp.args = &args;
 
@@ -578,7 +578,7 @@ test_stdout_xform_linebuf(void)
         .stdout_xforms  = &xforms);
 
     // Add "hello" argument.
-    n00b_array_t(n00b_string_t) args = n00b_array_new(n00b_string_t, 1);
+    n00b_array_t(n00b_string_t *) args = n00b_array_new(n00b_string_t *, 1);
     n00b_array_set(args, 0, n00b_string_from_cstr("hello"));
     sp.args = &args;
 
@@ -629,7 +629,7 @@ test_capture_echo_hello(void)
         .capture_stdout = true,
         .merge          = false);
 
-    n00b_array_t(n00b_string_t) args = n00b_array_new(n00b_string_t, 1);
+    n00b_array_t(n00b_string_t *) args = n00b_array_new(n00b_string_t *, 1);
     n00b_array_set(args, 0, n00b_string_from_cstr("hello"));
     sp.args = &args;
 
@@ -720,7 +720,7 @@ test_run_ls_with_args(void)
         .merge          = false);
 
     // Add "-la" and "/tmp" arguments.
-    n00b_array_t(n00b_string_t) args = n00b_array_new(n00b_string_t, 2);
+    n00b_array_t(n00b_string_t *) args = n00b_array_new(n00b_string_t *, 2);
     n00b_array_set(args, 0, n00b_string_from_cstr("-la"));
     n00b_array_set(args, 1, n00b_string_from_cstr("/tmp"));
     sp.args = &args;
@@ -861,12 +861,12 @@ test_run_with_env(void)
         .capture_stdout = true,
         .merge          = false);
 
-    n00b_array_t(n00b_string_t) args = n00b_array_new(n00b_string_t, 1);
+    n00b_array_t(n00b_string_t *) args = n00b_array_new(n00b_string_t *, 1);
     n00b_array_set(args, 0, n00b_string_from_cstr("env_works"));
     sp.args = &args;
 
     // Provide a minimal environment.
-    n00b_array_t(n00b_string_t) env = n00b_array_new(n00b_string_t, 1);
+    n00b_array_t(n00b_string_t *) env = n00b_array_new(n00b_string_t *, 1);
     n00b_array_set(env, 0, n00b_string_from_cstr("HOME=/tmp"));
     sp.env = &env;
 
@@ -911,7 +911,7 @@ test_pty_spawn_echo(void)
         .capture_stdout = true,
         .merge          = false);
 
-    n00b_array_t(n00b_string_t) args = n00b_array_new(n00b_string_t, 1);
+    n00b_array_t(n00b_string_t *) args = n00b_array_new(n00b_string_t *, 1);
     n00b_array_set(args, 0, n00b_string_from_cstr("hello"));
     sp.args = &args;
 
@@ -1049,7 +1049,7 @@ test_pty_separate_stderr(void)
         .capture_stderr = true,
         .merge          = false);
 
-    n00b_array_t(n00b_string_t) args = n00b_array_new(n00b_string_t, 2);
+    n00b_array_t(n00b_string_t *) args = n00b_array_new(n00b_string_t *, 2);
     n00b_array_set(args, 0, n00b_string_from_cstr("-c"));
     n00b_array_set(args, 1,
         n00b_string_from_cstr("echo out_data; echo err_data >&2"));
@@ -1130,7 +1130,7 @@ test_pty_timeout(void)
         .timeout        = &timeout,
         .timeout_policy = N00B_SUBPROC_TIMEOUT_SIGTERM);
 
-    n00b_array_t(n00b_string_t) args = n00b_array_new(n00b_string_t, 1);
+    n00b_array_t(n00b_string_t *) args = n00b_array_new(n00b_string_t *, 1);
     n00b_array_set(args, 0, n00b_string_from_cstr("100"));
     sp.args = &args;
 
@@ -1169,7 +1169,7 @@ test_pty_close_idempotent(void)
         .capture_stdout = true,
         .merge   = false);
 
-    n00b_array_t(n00b_string_t) args = n00b_array_new(n00b_string_t, 1);
+    n00b_array_t(n00b_string_t *) args = n00b_array_new(n00b_string_t *, 1);
     n00b_array_set(args, 0, n00b_string_from_cstr("test"));
     sp.args = &args;
 
@@ -1264,7 +1264,7 @@ test_pipe_stderr_capture(void)
         .capture_stderr = true,
         .merge          = false);
 
-    n00b_array_t(n00b_string_t) args = n00b_array_new(n00b_string_t, 2);
+    n00b_array_t(n00b_string_t *) args = n00b_array_new(n00b_string_t *, 2);
     n00b_array_set(args, 0, n00b_string_from_cstr("-c"));
     n00b_array_set(args, 1,
         n00b_string_from_cstr("echo out_msg; echo err_msg >&2"));
@@ -1316,7 +1316,7 @@ test_nonzero_exit(void)
         .conduit = c,
         .io      = io);
 
-    n00b_array_t(n00b_string_t) args = n00b_array_new(n00b_string_t, 2);
+    n00b_array_t(n00b_string_t *) args = n00b_array_new(n00b_string_t *, 2);
     n00b_array_set(args, 0, n00b_string_from_cstr("-c"));
     n00b_array_set(args, 1, n00b_string_from_cstr("exit 42"));
     sp.args = &args;
@@ -1362,7 +1362,7 @@ test_multiline_output(void)
         .capture_stdout = true,
         .merge          = false);
 
-    n00b_array_t(n00b_string_t) args = n00b_array_new(n00b_string_t, 2);
+    n00b_array_t(n00b_string_t *) args = n00b_array_new(n00b_string_t *, 2);
     n00b_array_set(args, 0, n00b_string_from_cstr("-c"));
     n00b_array_set(args, 1,
         n00b_string_from_cstr("echo line1; echo line2; echo line3"));
@@ -1409,7 +1409,7 @@ test_large_output(void)
         .capture_stdout = true,
         .merge          = false);
 
-    n00b_array_t(n00b_string_t) args = n00b_array_new(n00b_string_t, 2);
+    n00b_array_t(n00b_string_t *) args = n00b_array_new(n00b_string_t *, 2);
     n00b_array_set(args, 0, n00b_string_from_cstr("-c"));
     n00b_array_set(args, 1, n00b_string_from_cstr("seq 1 1000"));
     sp.args = &args;
@@ -1462,7 +1462,7 @@ test_interleaved_stdout_stderr(void)
         .capture_stderr = true,
         .merge          = false);
 
-    n00b_array_t(n00b_string_t) args = n00b_array_new(n00b_string_t, 2);
+    n00b_array_t(n00b_string_t *) args = n00b_array_new(n00b_string_t *, 2);
     n00b_array_set(args, 0, n00b_string_from_cstr("-c"));
     n00b_array_set(args, 1,
         n00b_string_from_cstr(
@@ -1538,7 +1538,7 @@ test_merged_output(void)
         .capture_stdout = true);
     // merge=true is the default.
 
-    n00b_array_t(n00b_string_t) args = n00b_array_new(n00b_string_t, 2);
+    n00b_array_t(n00b_string_t *) args = n00b_array_new(n00b_string_t *, 2);
     n00b_array_set(args, 0, n00b_string_from_cstr("-c"));
     n00b_array_set(args, 1,
         n00b_string_from_cstr("echo out_merged; echo err_merged >&2"));
@@ -1603,7 +1603,7 @@ test_write_stdin_after_spawn(void)
         .capture_stdin  = true,
         .merge          = false);
 
-    n00b_array_t(n00b_string_t) args = n00b_array_new(n00b_string_t, 2);
+    n00b_array_t(n00b_string_t *) args = n00b_array_new(n00b_string_t *, 2);
     n00b_array_set(args, 0, n00b_string_from_cstr("-n"));
     n00b_array_set(args, 1, n00b_string_from_cstr("1"));
     sp.args = &args;
@@ -1691,7 +1691,7 @@ test_linebuf_multiline(void)
         .merge          = false,
         .stdout_xforms  = &xforms);
 
-    n00b_array_t(n00b_string_t) args = n00b_array_new(n00b_string_t, 2);
+    n00b_array_t(n00b_string_t *) args = n00b_array_new(n00b_string_t *, 2);
     n00b_array_set(args, 0, n00b_string_from_cstr("-c"));
     n00b_array_set(args, 1,
         n00b_string_from_cstr("echo line1; echo line2; echo line3"));
@@ -1748,7 +1748,7 @@ test_xform_chain_ansi_linebuf(void)
         .stdout_xforms  = &xforms);
 
     // printf ANSI-colored text with newlines.
-    n00b_array_t(n00b_string_t) args = n00b_array_new(n00b_string_t, 2);
+    n00b_array_t(n00b_string_t *) args = n00b_array_new(n00b_string_t *, 2);
     n00b_array_set(args, 0, n00b_string_from_cstr("-c"));
     n00b_array_set(args, 1,
         n00b_string_from_cstr(
@@ -1805,7 +1805,7 @@ test_pty_linebuf_xform(void)
         .merge          = false,
         .stdout_xforms  = &xforms);
 
-    n00b_array_t(n00b_string_t) args = n00b_array_new(n00b_string_t, 1);
+    n00b_array_t(n00b_string_t *) args = n00b_array_new(n00b_string_t *, 1);
     n00b_array_set(args, 0, n00b_string_from_cstr("hello"));
     sp.args = &args;
 
@@ -1857,7 +1857,7 @@ test_pty_ansi_strip(void)
         .merge          = false,
         .stdout_xforms  = &xforms);
 
-    n00b_array_t(n00b_string_t) args = n00b_array_new(n00b_string_t, 2);
+    n00b_array_t(n00b_string_t *) args = n00b_array_new(n00b_string_t *, 2);
     n00b_array_set(args, 0, n00b_string_from_cstr("-c"));
     n00b_array_set(args, 1,
         n00b_string_from_cstr("printf '\\033[31mcolor\\033[0m\\n'"));
@@ -1922,7 +1922,7 @@ test_pty_nonzero_exit(void)
         .pty            = true,
         .capture_stdout = true);
 
-    n00b_array_t(n00b_string_t) args = n00b_array_new(n00b_string_t, 2);
+    n00b_array_t(n00b_string_t *) args = n00b_array_new(n00b_string_t *, 2);
     n00b_array_set(args, 0, n00b_string_from_cstr("-c"));
     n00b_array_set(args, 1, n00b_string_from_cstr("exit 7"));
     sp.args = &args;
@@ -2017,7 +2017,7 @@ test_pty_kill_signal(void)
         .pty            = true,
         .capture_stdout = true);
 
-    n00b_array_t(n00b_string_t) args = n00b_array_new(n00b_string_t, 1);
+    n00b_array_t(n00b_string_t *) args = n00b_array_new(n00b_string_t *, 1);
     n00b_array_set(args, 0, n00b_string_from_cstr("100"));
     sp.args = &args;
 
@@ -2076,7 +2076,7 @@ test_custom_done_condition(void)
         .done_fn        = custom_done_check);
 
     // Child prints "go" then sleeps forever.
-    n00b_array_t(n00b_string_t) args = n00b_array_new(n00b_string_t, 2);
+    n00b_array_t(n00b_string_t *) args = n00b_array_new(n00b_string_t *, 2);
     n00b_array_set(args, 0, n00b_string_from_cstr("-c"));
     n00b_array_set(args, 1,
         n00b_string_from_cstr("echo go; sleep 100"));

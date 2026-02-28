@@ -275,7 +275,7 @@ expand_group_nt(n00b_pwz_parser_t *p, n00b_grammar_t *g, int64_t nt_id)
 
             build_seq_children(p, rule, &children, &nchildren);
 
-            pwz_exp_t *seq = make_seq_exp(p, nt->name.data, nt_id, (int32_t)i,
+            pwz_exp_t *seq = make_seq_exp(p, nt->name->data, nt_id, (int32_t)i,
                                           children, nchildren);
             alt_add(alt, seq);
         }
@@ -299,7 +299,7 @@ expand_group_nt(n00b_pwz_parser_t *p, n00b_grammar_t *g, int64_t nt_id)
 
         build_seq_children(p, rule, &children, &nchildren);
 
-        pwz_exp_t *seq = make_seq_exp(p, nt->name.data, nt_id, (int32_t)i,
+        pwz_exp_t *seq = make_seq_exp(p, nt->name->data, nt_id, (int32_t)i,
                                       children, nchildren);
         // Reset is below; we accumulate body rules temporarily.
         (void)seq;
@@ -323,13 +323,13 @@ expand_group_nt(n00b_pwz_parser_t *p, n00b_grammar_t *g, int64_t nt_id)
 
         build_seq_children(p, rule, &children, &nchildren);
 
-        pwz_exp_t *seq = make_seq_exp(p, nt->name.data, nt_id, (int32_t)i,
+        pwz_exp_t *seq = make_seq_exp(p, nt->name->data, nt_id, (int32_t)i,
                                       children, nchildren);
         alt_add(body_alt, seq);
     }
 
     // Empty seq (matches epsilon).
-    pwz_exp_t *empty_seq = make_seq_exp(p, nt->name.data, nt_id, -1, NULL, 0);
+    pwz_exp_t *empty_seq = make_seq_exp(p, nt->name->data, nt_id, -1, NULL, 0);
 
     size_t body_nalts = n00b_list_len(body_alt->alt.alts);
 
@@ -353,7 +353,7 @@ expand_group_nt(n00b_pwz_parser_t *p, n00b_grammar_t *g, int64_t nt_id)
                    (size_t)nc * sizeof(pwz_exp_ptr_t));
             new_children[nc] = alt; // self-reference
 
-            pwz_exp_t *rep_seq = make_seq_exp(p, nt->name.data, nt_id,
+            pwz_exp_t *rep_seq = make_seq_exp(p, nt->name->data, nt_id,
                                               body_seq->seq.rule_ix,
                                               new_children, new_nc);
             alt_add(alt, rep_seq);
@@ -375,13 +375,13 @@ expand_group_nt(n00b_pwz_parser_t *p, n00b_grammar_t *g, int64_t nt_id)
                    (size_t)nc * sizeof(pwz_exp_ptr_t));
             new_children[nc] = star_alt;
 
-            pwz_exp_t *rep_seq = make_seq_exp(p, nt->name.data, nt_id,
+            pwz_exp_t *rep_seq = make_seq_exp(p, nt->name->data, nt_id,
                                               body_seq->seq.rule_ix,
                                               new_children, new_nc);
             alt_add(star_alt, rep_seq);
         }
 
-        pwz_exp_t *star_empty = make_seq_exp(p, nt->name.data, nt_id, -1, NULL, 0);
+        pwz_exp_t *star_empty = make_seq_exp(p, nt->name->data, nt_id, -1, NULL, 0);
         alt_add(star_alt, star_empty);
 
         // Plus: Seq(body, star) for each body alt.
@@ -395,7 +395,7 @@ expand_group_nt(n00b_pwz_parser_t *p, n00b_grammar_t *g, int64_t nt_id)
                    (size_t)nc * sizeof(pwz_exp_ptr_t));
             new_children[nc] = star_alt;
 
-            pwz_exp_t *rep_seq = make_seq_exp(p, nt->name.data, nt_id,
+            pwz_exp_t *rep_seq = make_seq_exp(p, nt->name->data, nt_id,
                                               body_seq->seq.rule_ix,
                                               new_children, new_nc);
             alt_add(alt, rep_seq);
@@ -445,7 +445,7 @@ build_exp_graph(n00b_pwz_parser_t *p, n00b_grammar_t *g)
 
             build_seq_children(p, rule, &children, &nchildren);
 
-            pwz_exp_t *seq = make_seq_exp(p, nt->name.data, (int64_t)i,
+            pwz_exp_t *seq = make_seq_exp(p, nt->name->data, (int64_t)i,
                                           (int32_t)j, children, nchildren);
             alt_add(alt_node, seq);
         }
@@ -531,10 +531,10 @@ token_matches(n00b_token_info_t *tok, pwz_exp_t *exp)
             return false;
         }
         {
-            n00b_string_t val = n00b_option_get(tok->value);
-            uint32_t      pos = 0;
-            int32_t       cp  = n00b_unicode_utf8_decode(val.data,
-                                                          (uint32_t)val.u8_bytes,
+            n00b_string_t *val = n00b_option_get(tok->value);
+            uint32_t       pos = 0;
+            int32_t        cp  = n00b_unicode_utf8_decode(val->data,
+                                                           (uint32_t)val->u8_bytes,
                                                           &pos);
             return cp >= 0 && n00b_codepoint_matches_class(cp, exp->cls.cc);
         }
@@ -944,7 +944,7 @@ make_nt_node(n00b_grammar_t *g, int64_t nt_id, int32_t rule_index,
     n00b_nonterm_t *nt = n00b_get_nonterm(g, nt_id);
     n00b_nt_node_t  pn = {0};
 
-    pn.name       = (nt && nt->name.data) ? nt->name : n00b_string_from_cstr("?");
+    pn.name       = (nt && nt->name->data) ? nt->name : n00b_string_from_cstr("?");
     pn.id         = nt_id;
     pn.rule_index = rule_index;
     pn.start      = start;

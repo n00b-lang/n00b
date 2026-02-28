@@ -49,7 +49,7 @@ emit_line(n00b_hexdump_xform_state_t *st, n00b_hexdump_t *hd,
     n00b_hexdump_format_line(hd, hd->line_buf, nbytes, line_out);
 
     int64_t len = (int64_t)hd->line_width - 1;
-    n00b_string_t s = n00b_string_from_raw(line_out, len);
+    n00b_string_t *s = n00b_string_from_raw(line_out, len);
 
     // Build style info with 2 deferred-tag records.
     n00b_string_style_info_t *info =
@@ -70,7 +70,7 @@ emit_line(n00b_hexdump_xform_state_t *st, n00b_hexdump_t *hd,
     info->styles[1].start = (size_t)hd->ascii_start;
     info->styles[1].end   = n00b_option_set(size_t, ascii_end);
 
-    s.styling = info;
+    s->styling = info;
 
     ensure_plane_rows(st, st->current_row + 1);
     n00b_plane_put_str_at(st->plane, st->current_row, 0, s);
@@ -152,11 +152,15 @@ hexdump_flush(
 // Ops vtable
 // ============================================================================
 
+static n00b_string_t _kind_hexdump = {
+    .data = "hexdump", .u8_bytes = 7, .codepoints = 7, .styling = nullptr
+};
+
 static const n00b_conduit_xform_ops_t(n00b_buffer_t *, n00b_plane_t *)
     hexdump_ops = {
     .transform = hexdump_transform,
     .flush     = hexdump_flush,
-    .kind      = N00B_STRING_STATIC("hexdump"),
+    .kind      = &_kind_hexdump,
 };
 
 // ============================================================================

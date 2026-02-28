@@ -45,8 +45,6 @@ typedef enum {
 
 typedef struct n00b_json_node n00b_json_node_t;
 
-n00b_list_decl(n00b_json_node_t *);
-
 /**
  * @brief JSON value — tagged union of all JSON types.
  *

@@ -14,9 +14,6 @@
 #include "adt/option.h"
 #include "adt/result.h"
 
-n00b_option_decl(pthread_attr_t);
-n00b_result_decl(n00b_thread_t *);
-
 /** @brief Thread-local storage for the current thread's n00b_thread_t. */
 extern thread_local n00b_thread_t __n00b_thread_self;
 

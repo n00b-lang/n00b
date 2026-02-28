@@ -293,16 +293,16 @@ sort_key_internal(const char *data, int64_t len)
     // Normalize to NFD first
     n00b_allocator_t *allocator = nullptr;
     n00b_ensure_allocator(allocator);
-    n00b_string_t nfd = n00b_unicode_nfd_raw(allocator, data, len);
+    n00b_string_t *nfd = n00b_unicode_nfd_raw(allocator, data, len);
 
     // Decode all codepoints into an array
     // Upper bound: each byte could be a codepoint
     n00b_codepoint_t *cps
-        = n00b_alloc_array(char, (uint32_t)nfd.u8_bytes * sizeof(n00b_codepoint_t));
+        = n00b_alloc_array(char, (uint32_t)nfd->u8_bytes * sizeof(n00b_codepoint_t));
     uint32_t num_cps = 0;
     uint32_t pos     = 0;
-    while (pos < (uint32_t)nfd.u8_bytes) {
-        int32_t cp = n00b_unicode_utf8_decode(nfd.data, (uint32_t)nfd.u8_bytes, &pos);
+    while (pos < (uint32_t)nfd->u8_bytes) {
+        int32_t cp = n00b_unicode_utf8_decode(nfd->data, (uint32_t)nfd->u8_bytes, &pos);
         if (cp < 0)
             break;
         cps[num_cps++] = (n00b_codepoint_t)cp;
@@ -387,13 +387,13 @@ sort_key_internal(const char *data, int64_t len)
 }
 
 n00b_unicode_sort_key_t
-n00b_unicode_sort_key(n00b_string_t s) _kargs
+n00b_unicode_sort_key(n00b_string_t *s) _kargs
 {
     n00b_allocator_t *allocator = nullptr;
 }
 {
     (void)allocator;
-    return sort_key_internal(s.data, s.u8_bytes);
+    return sort_key_internal(s->data, s->u8_bytes);
 }
 
 static int
@@ -417,9 +417,9 @@ collate_internal(const char *a, int64_t a_len, const char *b, int64_t b_len)
 }
 
 int
-n00b_unicode_collate(n00b_string_t a, n00b_string_t b)
+n00b_unicode_collate(n00b_string_t *a, n00b_string_t *b)
 {
-    return collate_internal(a.data, a.u8_bytes, b.data, b.u8_bytes);
+    return collate_internal(a->data, a->u8_bytes, b->data, b->u8_bytes);
 }
 
 void

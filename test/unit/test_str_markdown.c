@@ -38,7 +38,7 @@ find_kind(n00b_tree_t(n00b_md_node_t, n00b_md_node_t) *t,
 
 TEST(test_empty)
 {
-    n00b_string_t s = n00b_string_from_raw("", 0);
+    n00b_string_t *s = n00b_string_from_raw("", 0);
 
     auto root = n00b_parse_markdown(s);
     ASSERT(root != nullptr);
@@ -51,7 +51,7 @@ TEST(test_empty)
 
 TEST(test_paragraph)
 {
-    n00b_string_t s = *r"Hello world";
+    n00b_string_t *s = r"Hello world";
 
     auto root = n00b_parse_markdown(s);
     ASSERT(root != nullptr);
@@ -69,7 +69,7 @@ TEST(test_paragraph)
 
 TEST(test_heading)
 {
-    n00b_string_t s = *r"# Title";
+    n00b_string_t *s = r"# Title";
 
     auto root = n00b_parse_markdown(s);
     ASSERT(root != nullptr);
@@ -83,7 +83,7 @@ TEST(test_heading)
 
 TEST(test_bold)
 {
-    n00b_string_t s = *r"**bold**";
+    n00b_string_t *s = r"**bold**";
 
     auto root = n00b_parse_markdown(s);
     ASSERT(root != nullptr);
@@ -97,7 +97,7 @@ TEST(test_bold)
 
 TEST(test_italic)
 {
-    n00b_string_t s = *r"*emphasis*";
+    n00b_string_t *s = r"*emphasis*";
 
     auto root = n00b_parse_markdown(s);
     ASSERT(root != nullptr);
@@ -111,7 +111,7 @@ TEST(test_italic)
 
 TEST(test_code_block)
 {
-    n00b_string_t s = *r"```\ncode\n```";
+    n00b_string_t *s = r"```\ncode\n```";
 
     auto root = n00b_parse_markdown(s);
     ASSERT(root != nullptr);
@@ -125,7 +125,7 @@ TEST(test_code_block)
 
 TEST(test_unordered_list)
 {
-    n00b_string_t s = *r"- item1\n- item2\n- item3";
+    n00b_string_t *s = r"- item1\n- item2\n- item3";
 
     auto root = n00b_parse_markdown(s);
     ASSERT(root != nullptr);
@@ -151,7 +151,7 @@ TEST(test_unordered_list)
 
 TEST(test_multiple_paragraphs)
 {
-    n00b_string_t s = *r"First para\n\nSecond para";
+    n00b_string_t *s = r"First para\n\nSecond para";
 
     auto root = n00b_parse_markdown(s);
     ASSERT(root != nullptr);
@@ -175,7 +175,7 @@ TEST(test_multiple_paragraphs)
 
 TEST(test_inline_code)
 {
-    n00b_string_t s = *r"Use `foo()` here";
+    n00b_string_t *s = r"Use `foo()` here";
 
     auto root = n00b_parse_markdown(s);
     ASSERT(root != nullptr);

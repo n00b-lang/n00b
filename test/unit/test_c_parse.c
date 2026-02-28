@@ -64,7 +64,7 @@ restart:
     // String literals
     // -----------------------------------------------------------------
     if (cp == '"') {
-        n00b_option_t(n00b_string_t) val = n00b_scan_string_double(s);
+        n00b_option_t(n00b_string_t *) val = n00b_scan_string_double(s);
         n00b_scan_emit(s, .token_type = "STRING_LIT", .contents = val);
         return true;
     }
@@ -73,7 +73,7 @@ restart:
     // Character literals
     // -----------------------------------------------------------------
     if (cp == '\'') {
-        n00b_option_t(n00b_string_t) val = n00b_scan_string_single(s);
+        n00b_option_t(n00b_string_t *) val = n00b_scan_string_single(s);
         n00b_scan_emit(s, .token_type = "CHAR_LIT", .contents = val);
         return true;
     }
@@ -109,7 +109,7 @@ restart:
     // Identifiers / keywords
     // -----------------------------------------------------------------
     if ((cp >= 'a' && cp <= 'z') || (cp >= 'A' && cp <= 'Z') || cp == '_') {
-        n00b_option_t(n00b_string_t) id_val = n00b_scan_identifier(s);
+        n00b_option_t(n00b_string_t *) id_val = n00b_scan_identifier(s);
 
         if (n00b_option_is_set(id_val)) {
             // Try as keyword (hashes text, checks grammar).
@@ -224,9 +224,10 @@ load_c_grammar(void)
     }
 
     if (!f && srcroot) {
-        char path[1024];
-        snprintf(path, sizeof(path), "%s/grammars/c_ncc.bnf", srcroot);
+        char *path = nullptr;
+        (void)asprintf(&path, "%s/grammars/c_ncc.bnf", srcroot);
         f = fopen(path, "r");
+        free(path);
     }
 
     if (!f) {
@@ -243,13 +244,13 @@ load_c_grammar(void)
     buf[len] = '\0';
     fclose(f);
 
-    n00b_string_t bnf_text = n00b_string_from_cstr(buf);
+    n00b_string_t *bnf_text = n00b_string_from_cstr(buf);
     free(buf);
 
     n00b_grammar_t *g = n00b_grammar_new();
     n00b_grammar_set_error_recovery(g, false);
 
-    bool ok = n00b_bnf_load(bnf_text, *r"translation_unit", g);
+    bool ok = n00b_bnf_load(bnf_text, r"translation_unit", g);
 
     if (!ok) {
         fprintf(stderr, "  [FAIL] n00b_bnf_load failed for c_ncc.bnf\n");
@@ -388,9 +389,9 @@ test_function_def(void)
     n00b_parse_result_t *r = parse_c_source(shared_grammar, src);
 
     if (!n00b_parse_result_ok(r)) {
-        n00b_string_t err = n00b_parse_result_error_string(r);
+        n00b_string_t *err = n00b_parse_result_error_string(r);
         fprintf(stderr, "  function_def: %.*s\n",
-                (int)err.u8_bytes, err.data);
+                (int)err->u8_bytes, err->data);
     }
 
     assert(n00b_parse_result_ok(r));
@@ -421,9 +422,9 @@ test_typedef_then_use(void)
     n00b_parse_result_t *r = parse_c_source(shared_grammar, src);
 
     if (!n00b_parse_result_ok(r)) {
-        n00b_string_t err = n00b_parse_result_error_string(r);
+        n00b_string_t *err = n00b_parse_result_error_string(r);
         fprintf(stderr, "  typedef_then_use: %.*s\n",
-                (int)err.u8_bytes, err.data);
+                (int)err->u8_bytes, err->data);
     }
 
     assert(n00b_parse_result_ok(r));
@@ -457,9 +458,9 @@ test_struct_typedef(void)
     n00b_parse_result_t *r = parse_c_source(shared_grammar, src);
 
     if (!n00b_parse_result_ok(r)) {
-        n00b_string_t err = n00b_parse_result_error_string(r);
+        n00b_string_t *err = n00b_parse_result_error_string(r);
         fprintf(stderr, "  struct_typedef: %.*s\n",
-                (int)err.u8_bytes, err.data);
+                (int)err->u8_bytes, err->data);
     }
 
     assert(n00b_parse_result_ok(r));
@@ -495,9 +496,9 @@ test_nested_typedef_scopes(void)
     n00b_parse_result_t *r = parse_c_source(shared_grammar, src);
 
     if (!n00b_parse_result_ok(r)) {
-        n00b_string_t err = n00b_parse_result_error_string(r);
+        n00b_string_t *err = n00b_parse_result_error_string(r);
         fprintf(stderr, "  nested_typedef_scopes: %.*s\n",
-                (int)err.u8_bytes, err.data);
+                (int)err->u8_bytes, err->data);
     }
 
     assert(n00b_parse_result_ok(r));
@@ -531,9 +532,9 @@ test_multi_typedef(void)
     n00b_parse_result_t *r = parse_c_source(shared_grammar, src);
 
     if (!n00b_parse_result_ok(r)) {
-        n00b_string_t err = n00b_parse_result_error_string(r);
+        n00b_string_t *err = n00b_parse_result_error_string(r);
         fprintf(stderr, "  multi_typedef: %.*s\n",
-                (int)err.u8_bytes, err.data);
+                (int)err->u8_bytes, err->data);
     }
 
     assert(n00b_parse_result_ok(r));
@@ -568,9 +569,9 @@ test_parse_source_file(const char *path)
     n00b_parse_result_t *r = parse_c_source(shared_grammar, src);
 
     if (!n00b_parse_result_ok(r)) {
-        n00b_string_t err = n00b_parse_result_error_string(r);
+        n00b_string_t *err = n00b_parse_result_error_string(r);
         fprintf(stderr, "  parse_file %s: %.*s\n",
-                path, (int)err.u8_bytes, err.data);
+                path, (int)err->u8_bytes, err->data);
         n00b_parse_result_free(r);
         free(src);
         assert(0 && "parse_file failed");
@@ -615,11 +616,12 @@ test_parse_directory(const char *dirpath, int max_files)
             continue;
         }
 
-        char fullpath[1024];
-        snprintf(fullpath, sizeof(fullpath), "%s/%s", dirpath, ent->d_name);
+        char *fullpath = nullptr;
+        (void)asprintf(&fullpath, "%s/%s", dirpath, ent->d_name);
 
         size_t  flen = 0;
         char   *src  = read_file(fullpath, &flen);
+        free(fullpath);
 
         if (!src) {
             continue;
@@ -642,10 +644,10 @@ test_parse_directory(const char *dirpath, int max_files)
         }
         else {
             failed++;
-            n00b_string_t err = n00b_parse_result_error_string(r);
+            n00b_string_t *err = n00b_parse_result_error_string(r);
             fprintf(stderr, "  parse_dir %s/%s: %.*s\n",
                     dirpath, ent->d_name,
-                    (int)err.u8_bytes, err.data);
+                    (int)err->u8_bytes, err->data);
         }
 
         n00b_parse_result_free(r);
@@ -724,9 +726,9 @@ test_complex_patterns(void)
     n00b_parse_result_t *r = parse_c_source(shared_grammar, src);
 
     if (!n00b_parse_result_ok(r)) {
-        n00b_string_t err = n00b_parse_result_error_string(r);
+        n00b_string_t *err = n00b_parse_result_error_string(r);
         fprintf(stderr, "  complex_patterns: %.*s\n",
-                (int)err.u8_bytes, err.data);
+                (int)err->u8_bytes, err->data);
     }
 
     assert(n00b_parse_result_ok(r));
@@ -789,15 +791,16 @@ main(int argc, char **argv)
         }
     }
 
+    char *dynamic_dir_buf = nullptr;
+
     if (!src_dir && getenv("MESON_SOURCE_ROOT")) {
-        static char dir_buf[1024];
-        snprintf(dir_buf, sizeof(dir_buf), "%s/src/slay",
-                 getenv("MESON_SOURCE_ROOT"));
-        DIR *d = opendir(dir_buf);
+        (void)asprintf(&dynamic_dir_buf, "%s/src/slay",
+                       getenv("MESON_SOURCE_ROOT"));
+        DIR *d = opendir(dynamic_dir_buf);
 
         if (d) {
             closedir(d);
-            src_dir = dir_buf;
+            src_dir = dynamic_dir_buf;
         }
     }
 
@@ -812,6 +815,8 @@ main(int argc, char **argv)
     //         printf("  WARNING: %d file(s) failed to parse\n", failures);
     //     }
     // }
+
+    free(dynamic_dir_buf);
 
     if (shared_grammar) {
         n00b_grammar_free(shared_grammar);

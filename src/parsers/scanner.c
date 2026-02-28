@@ -89,7 +89,7 @@ cc_match(n00b_char_class_t cc, n00b_codepoint_t cp)
 // ============================================================================
 
 static n00b_trivia_t *
-make_trivia(n00b_string_t text)
+make_trivia(n00b_string_t *text)
 {
     n00b_trivia_t *t = n00b_alloc(n00b_trivia_t);
 
@@ -136,7 +136,7 @@ n00b_scanner_new(n00b_buffer_t  *buf,
                  n00b_grammar_t *grammar)
     _kargs
 {
-    n00b_option_t(n00b_string_t) file;
+    n00b_option_t(n00b_string_t *) file;
     void                        *state;
     n00b_scan_reset_cb_t         reset_cb;
 }
@@ -568,7 +568,7 @@ n00b_scan_mark(n00b_scanner_t *s)
     s->mark_col  = s->column;
 }
 
-n00b_string_t
+n00b_string_t *
 n00b_scan_extract(n00b_scanner_t *s)
 {
     size_t len = s->cursor - s->mark;
@@ -589,7 +589,7 @@ n00b_scan_mark_len(n00b_scanner_t *s)
 // Internal: emit a fully-resolved token into the stream.
 static void
 scan_emit_internal(n00b_scanner_t *s, int64_t resolved_tid,
-                   n00b_option_t(n00b_string_t) value)
+                   n00b_option_t(n00b_string_t *) value)
 {
     n00b_token_stream_t *ts = s->stream;
 
@@ -636,17 +636,17 @@ n00b_token_err_t
 n00b_scan_emit(n00b_scanner_t *s)
     _kargs
 {
-    n00b_option_t(n00b_string_t) contents;
-    bool                         use_mark   = true;
-    const char                  *token_type = nullptr;
-    int64_t                      tid        = 0;
+    n00b_option_t(n00b_string_t *) contents;
+    bool                          use_mark   = true;
+    const char                   *token_type = nullptr;
+    int64_t                       tid        = 0;
 }
 {
     assert(s->stream);
 
     // 1. Get token text.
-    n00b_option_t(n00b_string_t) value = n00b_option_none(n00b_string_t);
-    n00b_string_t text = {0};
+    n00b_option_t(n00b_string_t *) value = n00b_option_none(n00b_string_t *);
+    n00b_string_t *text = nullptr;
     bool have_text = false;
 
     if (n00b_option_is_set(contents)) {
@@ -656,7 +656,7 @@ n00b_scan_emit(n00b_scanner_t *s)
     }
     else if (use_mark && s->cursor > s->mark) {
         text = n00b_scan_extract(s);
-        value = n00b_option_set(n00b_string_t, text);
+        value = n00b_option_set(n00b_string_t *, text);
         have_text = true;
     }
 
@@ -675,8 +675,8 @@ n00b_scan_emit(n00b_scanner_t *s)
                                                     strlen(token_type));
         }
         else {
-            n00b_string_t  tt_str = n00b_string_from_cstr(token_type);
-            n00b_string_t *tt_ptr = &tt_str;
+            n00b_string_t *tt_str = n00b_string_from_cstr(token_type);
+            n00b_string_t *tt_ptr = tt_str;
             bool           found  = false;
             int64_t        val    = n00b_dict_get(s->grammar->literal_type_map,
                                                   tt_ptr, &found);
@@ -694,7 +694,7 @@ n00b_scan_emit(n00b_scanner_t *s)
             return N00B_TOK_ERR_NO_TEXT;
         }
 
-        resolved_tid = n00b_token_id_from_text(text.data, text.u8_bytes);
+        resolved_tid = n00b_token_id_from_text(text->data, text->u8_bytes);
 
         // Validate against grammar if present.
         if (s->grammar && s->grammar->valid_tokens) {
@@ -714,7 +714,7 @@ n00b_scan_emit(n00b_scanner_t *s)
 // ============================================================================
 
 void
-n00b_scan_add_leading_trivia(n00b_scanner_t *s, n00b_string_t text)
+n00b_scan_add_leading_trivia(n00b_scanner_t *s, n00b_string_t *text)
 {
     n00b_trivia_t *t = make_trivia(text);
 
@@ -722,7 +722,7 @@ n00b_scan_add_leading_trivia(n00b_scanner_t *s, n00b_string_t text)
 }
 
 void
-n00b_scan_add_trailing_trivia(n00b_scanner_t *s, n00b_string_t text)
+n00b_scan_add_trailing_trivia(n00b_scanner_t *s, n00b_string_t *text)
 {
     n00b_trivia_t *t = make_trivia(text);
 
@@ -759,8 +759,8 @@ n00b_scan_skip_whitespace(n00b_scanner_t *s)
     if (count > 0) {
         size_t byte_len = s->cursor - start;
 
-        n00b_string_t text = n00b_string_from_raw(s->input + start,
-                                                   (int64_t)byte_len);
+        n00b_string_t *text = n00b_string_from_raw(s->input + start,
+                                                    (int64_t)byte_len);
         n00b_scan_add_leading_trivia(s, text);
     }
 
@@ -787,8 +787,8 @@ n00b_scan_skip_line_comment(n00b_scanner_t *s)
     size_t byte_len = s->cursor - start;
 
     if (byte_len > 0) {
-        n00b_string_t text = n00b_string_from_raw(s->input + start,
-                                                   (int64_t)byte_len);
+        n00b_string_t *text = n00b_string_from_raw(s->input + start,
+                                                    (int64_t)byte_len);
         n00b_scan_add_trailing_trivia(s, text);
     }
 }
@@ -846,8 +846,8 @@ n00b_scan_skip_block_comment(n00b_scanner_t *s,
 
             size_t byte_len = s->cursor - start;
 
-            n00b_string_t text = n00b_string_from_raw(s->input + start,
-                                                       (int64_t)byte_len);
+            n00b_string_t *text = n00b_string_from_raw(s->input + start,
+                                                        (int64_t)byte_len);
             n00b_scan_add_leading_trivia(s, text);
             return true;
         }
@@ -873,8 +873,8 @@ n00b_scan_skip_block_comment(n00b_scanner_t *s,
 
     size_t byte_len = s->cursor - start;
 
-    n00b_string_t text = n00b_string_from_raw(s->input + start,
-                                               (int64_t)byte_len);
+    n00b_string_t *text = n00b_string_from_raw(s->input + start,
+                                                (int64_t)byte_len);
     n00b_scan_add_leading_trivia(s, text);
     return false;
 }

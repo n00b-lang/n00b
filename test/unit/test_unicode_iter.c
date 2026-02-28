@@ -3,11 +3,11 @@
 
 TEST(test_foreach_cp)
 {
-    n00b_string_t          s = *r"A\xC3\xA9"; // "Aé"
+    n00b_string_t         *s = r"A\xC3\xA9"; // "Aé"
     n00b_codepoint_t cps[10];
     int                 n = 0;
 
-    n00b_unicode_foreach_cp(&s, cp)
+    n00b_unicode_foreach_cp(s, cp)
     {
         cps[n++] = (n00b_codepoint_t)cp;
     }
@@ -19,10 +19,10 @@ TEST(test_foreach_cp)
 
 TEST(test_foreach_cp_break)
 {
-    n00b_string_t s = *r"abcdef";
+    n00b_string_t *s = r"abcdef";
     int        n = 0;
 
-    n00b_unicode_foreach_cp(&s, cp)
+    n00b_unicode_foreach_cp(s, cp)
     {
         (void)cp;
         n++;
@@ -35,10 +35,10 @@ TEST(test_foreach_cp_break)
 
 TEST(test_foreach_cp_continue)
 {
-    n00b_string_t s     = *r"abc";
+    n00b_string_t *s = r"abc";
     int        count = 0;
 
-    n00b_unicode_foreach_cp(&s, cp)
+    n00b_unicode_foreach_cp(s, cp)
     {
         if (cp == 'b')
             continue;
@@ -51,11 +51,11 @@ TEST(test_foreach_cp_continue)
 TEST(test_foreach_grapheme)
 {
     // "e" + combining acute + "x" → 2 grapheme clusters
-    n00b_string_t s = *r"e\xCC\x81x";
+    n00b_string_t *s = r"e\xCC\x81x";
     int        n = 0;
     uint32_t   lens[10];
 
-    n00b_unicode_foreach_grapheme(&s, g)
+    n00b_unicode_foreach_grapheme(s, g)
     {
         lens[n++] = g.u8_bytes;
     }
@@ -67,10 +67,10 @@ TEST(test_foreach_grapheme)
 
 TEST(test_foreach_grapheme_break)
 {
-    n00b_string_t s = *r"abcdef";
+    n00b_string_t *s = r"abcdef";
     int        n = 0;
 
-    n00b_unicode_foreach_grapheme(&s, g)
+    n00b_unicode_foreach_grapheme(s, g)
     {
         (void)g;
         n++;
@@ -83,10 +83,10 @@ TEST(test_foreach_grapheme_break)
 
 TEST(test_foreach_word)
 {
-    n00b_string_t s = *r"Hello World";
+    n00b_string_t *s = r"Hello World";
     int        n = 0;
 
-    n00b_unicode_foreach_word(&s, w)
+    n00b_unicode_foreach_word(s, w)
     {
         (void)w;
         n++;
@@ -98,10 +98,10 @@ TEST(test_foreach_word)
 
 TEST(test_foreach_sentence)
 {
-    n00b_string_t s = *r"Hello. World.";
+    n00b_string_t *s = r"Hello. World.";
     int        n = 0;
 
-    n00b_unicode_foreach_sentence(&s, sent)
+    n00b_unicode_foreach_sentence(s, sent)
     {
         (void)sent;
         n++;
@@ -112,11 +112,11 @@ TEST(test_foreach_sentence)
 
 TEST(test_foreach_line_lf)
 {
-    n00b_string_t s = *r"line1\nline2\nline3";
+    n00b_string_t *s = r"line1\nline2\nline3";
     int        n = 0;
     char       bufs[3][20];
 
-    n00b_unicode_foreach_line(&s, line)
+    n00b_unicode_foreach_line(s, line)
     {
         if (n < 3) {
             memcpy(bufs[n], line.data, line.u8_bytes);
@@ -133,10 +133,10 @@ TEST(test_foreach_line_lf)
 
 TEST(test_foreach_line_crlf)
 {
-    n00b_string_t s = *r"a\r\nb\r\nc";
+    n00b_string_t *s = r"a\r\nb\r\nc";
     int        n = 0;
 
-    n00b_unicode_foreach_line(&s, line)
+    n00b_unicode_foreach_line(s, line)
     {
         (void)line;
         n++;
@@ -147,10 +147,10 @@ TEST(test_foreach_line_crlf)
 
 TEST(test_foreach_line_mixed)
 {
-    n00b_string_t s = *r"a\nb\rc\r\nd";
+    n00b_string_t *s = r"a\nb\rc\r\nd";
     int        n = 0;
 
-    n00b_unicode_foreach_line(&s, line)
+    n00b_unicode_foreach_line(s, line)
     {
         (void)line;
         n++;
@@ -161,10 +161,10 @@ TEST(test_foreach_line_mixed)
 
 TEST(test_foreach_line_break)
 {
-    n00b_string_t s = *r"a\nb\nc\nd";
+    n00b_string_t *s = r"a\nb\nc\nd";
     int        n = 0;
 
-    n00b_unicode_foreach_line(&s, line)
+    n00b_unicode_foreach_line(s, line)
     {
         (void)line;
         n++;
@@ -177,10 +177,10 @@ TEST(test_foreach_line_break)
 
 TEST(test_foreach_cp_empty)
 {
-    n00b_string_t s = *r"";
+    n00b_string_t *s = r"";
     int        n = 0;
 
-    n00b_unicode_foreach_cp(&s, cp)
+    n00b_unicode_foreach_cp(s, cp)
     {
         (void)cp;
         n++;
@@ -191,10 +191,10 @@ TEST(test_foreach_cp_empty)
 
 TEST(test_foreach_grapheme_empty)
 {
-    n00b_string_t s = *r"";
+    n00b_string_t *s = r"";
     int        n = 0;
 
-    n00b_unicode_foreach_grapheme(&s, g)
+    n00b_unicode_foreach_grapheme(s, g)
     {
         (void)g;
         n++;

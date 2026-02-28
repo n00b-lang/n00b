@@ -53,14 +53,12 @@ typedef enum {
 typedef struct {
     n00b_diag_severity_t severity;
     n00b_diag_stage_t    stage;
-    n00b_string_t        code;       /**< "W001", "E042", etc. */
-    n00b_string_t        message;
+    n00b_string_t       *code;       /**< "W001", "E042", etc. */
+    n00b_string_t       *message;
     n00b_diag_span_t     span;
     n00b_diag_span_t     related;    /**< Secondary location (e.g., original decl). */
     bool                 has_related;
 } n00b_diagnostic_t;
-
-n00b_list_decl(n00b_diagnostic_t);
 
 // ============================================================================
 // Diagnostic context (accumulator)
@@ -86,15 +84,15 @@ void n00b_diag_ctx_free(n00b_diag_ctx_t *ctx);
 void n00b_diag_push(n00b_diag_ctx_t     *ctx,
                     n00b_diag_severity_t  severity,
                     n00b_diag_stage_t     stage,
-                    n00b_string_t         code,
-                    n00b_string_t         message,
+                    n00b_string_t        *code,
+                    n00b_string_t        *message,
                     n00b_diag_span_t      span);
 
 void n00b_diag_push_related(n00b_diag_ctx_t     *ctx,
                             n00b_diag_severity_t  severity,
                             n00b_diag_stage_t     stage,
-                            n00b_string_t         code,
-                            n00b_string_t         message,
+                            n00b_string_t        *code,
+                            n00b_string_t        *message,
                             n00b_diag_span_t      span,
                             n00b_diag_span_t      related);
 

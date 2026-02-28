@@ -23,8 +23,6 @@
 // Forward declarations
 typedef struct n00b_conduit_file n00b_conduit_file_t;
 
-n00b_result_decl(n00b_conduit_file_t *);
-
 // ============================================================================
 // File Open Mode Flags
 // ============================================================================
@@ -63,7 +61,7 @@ struct n00b_conduit_file {
     n00b_conduit_io_backend_t   *io;
     n00b_conduit_fd_owner_t     *owner;
     n00b_conduit_topic_base_t   *file_topic;
-    n00b_string_t                path;       /**< File path */
+    n00b_string_t               *path;       /**< File path */
     int                          fd;
     uint32_t                     mode;       /**< n00b_conduit_file_mode_t bits */
 };

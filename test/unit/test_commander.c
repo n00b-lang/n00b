@@ -18,23 +18,23 @@ build_simple_commander(void)
 {
     n00b_cmdr_t *c = n00b_cmdr_new();
 
-    n00b_cmdr_set_name(c, *r"test");
+    n00b_cmdr_set_name(c, r"test");
 
     // Global flags
-    n00b_cmdr_add_flag(c, n00b_string_empty(), *r"--verbose",
-                        N00B_CMDR_TYPE_BOOL, false, *r"Enable verbose output");
-    n00b_cmdr_add_flag_alias(c, n00b_string_empty(), *r"--verbose", *r"-v");
+    n00b_cmdr_add_flag(c, n00b_string_empty(), r"--verbose",
+                        N00B_CMDR_TYPE_BOOL, false, r"Enable verbose output");
+    n00b_cmdr_add_flag_alias(c, n00b_string_empty(), r"--verbose", r"-v");
 
-    n00b_cmdr_add_flag(c, n00b_string_empty(), *r"--output",
-                        N00B_CMDR_TYPE_WORD, true, *r"Output path");
-    n00b_cmdr_add_flag_alias(c, n00b_string_empty(), *r"--output", *r"-o");
+    n00b_cmdr_add_flag(c, n00b_string_empty(), r"--output",
+                        N00B_CMDR_TYPE_WORD, true, r"Output path");
+    n00b_cmdr_add_flag_alias(c, n00b_string_empty(), r"--output", r"-o");
 
-    n00b_cmdr_add_flag(c, n00b_string_empty(), *r"--jobs",
-                        N00B_CMDR_TYPE_INT, true, *r"Parallelism");
-    n00b_cmdr_add_flag_alias(c, n00b_string_empty(), *r"--jobs", *r"-j");
+    n00b_cmdr_add_flag(c, n00b_string_empty(), r"--jobs",
+                        N00B_CMDR_TYPE_INT, true, r"Parallelism");
+    n00b_cmdr_add_flag_alias(c, n00b_string_empty(), r"--jobs", r"-j");
 
     // Positional args (0 or more words)
-    n00b_cmdr_add_positional(c, n00b_string_empty(), *r"file",
+    n00b_cmdr_add_positional(c, n00b_string_empty(), r"file",
                               N00B_CMDR_TYPE_WORD, 0, -1);
 
     return c;
@@ -45,23 +45,23 @@ build_subcommand_commander(void)
 {
     n00b_cmdr_t *c = n00b_cmdr_new();
 
-    n00b_cmdr_set_name(c, *r"tool");
+    n00b_cmdr_set_name(c, r"tool");
 
     // "build" subcommand
-    n00b_cmdr_add_command(c, *r"build", *r"Build the project");
-    n00b_cmdr_add_flag(c, *r"build", *r"--verbose",
-                        N00B_CMDR_TYPE_BOOL, false, *r"Verbose build");
-    n00b_cmdr_add_flag_alias(c, *r"build", *r"--verbose", *r"-v");
-    n00b_cmdr_add_flag(c, *r"build", *r"--output",
-                        N00B_CMDR_TYPE_WORD, true, *r"Output path");
-    n00b_cmdr_add_flag_alias(c, *r"build", *r"--output", *r"-o");
-    n00b_cmdr_add_positional(c, *r"build", *r"file",
+    n00b_cmdr_add_command(c, r"build", r"Build the project");
+    n00b_cmdr_add_flag(c, r"build", r"--verbose",
+                        N00B_CMDR_TYPE_BOOL, false, r"Verbose build");
+    n00b_cmdr_add_flag_alias(c, r"build", r"--verbose", r"-v");
+    n00b_cmdr_add_flag(c, r"build", r"--output",
+                        N00B_CMDR_TYPE_WORD, true, r"Output path");
+    n00b_cmdr_add_flag_alias(c, r"build", r"--output", r"-o");
+    n00b_cmdr_add_positional(c, r"build", r"file",
                               N00B_CMDR_TYPE_WORD, 0, -1);
 
     // "test" subcommand
-    n00b_cmdr_add_command(c, *r"test", *r"Run tests");
-    n00b_cmdr_add_flag(c, *r"test", *r"--filter",
-                        N00B_CMDR_TYPE_WORD, true, *r"Filter pattern");
+    n00b_cmdr_add_command(c, r"test", r"Run tests");
+    n00b_cmdr_add_flag(c, r"test", r"--filter",
+                        N00B_CMDR_TYPE_WORD, true, r"Filter pattern");
 
     return c;
 }
@@ -83,22 +83,22 @@ test_basic_parse(void)
     assert(r != NULL);
     assert(r->ok);
 
-    assert(n00b_cmdr_flag_bool(r, *r"--verbose") == true);
-    assert(n00b_cmdr_flag_present(r, *r"--verbose"));
+    assert(n00b_cmdr_flag_bool(r, r"--verbose") == true);
+    assert(n00b_cmdr_flag_present(r, r"--verbose"));
 
-    n00b_string_t out = n00b_cmdr_flag_str(r, *r"--output");
-    assert(out.data != NULL);
-    assert(strcmp(out.data, "out.txt") == 0);
+    n00b_string_t *out = n00b_cmdr_flag_str(r, r"--output");
+    assert(out->data != NULL);
+    assert(strcmp(out->data, "out.txt") == 0);
 
     assert(n00b_cmdr_arg_count(r) == 2);
 
-    n00b_string_t a0 = n00b_cmdr_arg_str(r, 0);
-    assert(a0.data != NULL);
-    assert(strcmp(a0.data, "file1.c") == 0);
+    n00b_string_t *a0 = n00b_cmdr_arg_str(r, 0);
+    assert(a0->data != NULL);
+    assert(strcmp(a0->data, "file1.c") == 0);
 
-    n00b_string_t a1 = n00b_cmdr_arg_str(r, 1);
-    assert(a1.data != NULL);
-    assert(strcmp(a1.data, "file2.c") == 0);
+    n00b_string_t *a1 = n00b_cmdr_arg_str(r, 1);
+    assert(a1->data != NULL);
+    assert(strcmp(a1->data, "file2.c") == 0);
 
     n00b_cmdr_result_free(r);
     n00b_cmdr_free(c);
@@ -120,9 +120,9 @@ test_flag_eq_syntax(void)
     assert(r != NULL);
     assert(r->ok);
 
-    n00b_string_t out = n00b_cmdr_flag_str(r, *r"--output");
-    assert(out.data != NULL);
-    assert(strcmp(out.data, "out.txt") == 0);
+    n00b_string_t *out = n00b_cmdr_flag_str(r, r"--output");
+    assert(out->data != NULL);
+    assert(strcmp(out->data, "out.txt") == 0);
 
     n00b_cmdr_result_free(r);
     n00b_cmdr_free(c);
@@ -144,9 +144,9 @@ test_short_flag(void)
     assert(r != NULL);
     assert(r->ok);
 
-    assert(n00b_cmdr_flag_bool(r, *r"--verbose") == true);
+    assert(n00b_cmdr_flag_bool(r, r"--verbose") == true);
     // Also check via alias
-    assert(n00b_cmdr_flag_bool(r, *r"-v") == true);
+    assert(n00b_cmdr_flag_bool(r, r"-v") == true);
 
     n00b_cmdr_result_free(r);
     n00b_cmdr_free(c);
@@ -171,7 +171,7 @@ test_short_flag_no_expand(void)
     assert(r->ok);
 
     // -vj isn't recognized as --verbose, so verbose should be false
-    assert(n00b_cmdr_flag_present(r, *r"--verbose") == false);
+    assert(n00b_cmdr_flag_present(r, r"--verbose") == false);
     // -vj should appear as a positional arg (unknown flag → positional)
     assert(n00b_cmdr_arg_count(r) >= 1);
 
@@ -195,13 +195,13 @@ test_double_dash(void)
     assert(r != NULL);
     assert(r->ok);
 
-    assert(n00b_cmdr_flag_bool(r, *r"--verbose") == true);
+    assert(n00b_cmdr_flag_bool(r, r"--verbose") == true);
     // --not-a-flag and file.c are positional args after --
     assert(n00b_cmdr_arg_count(r) == 2);
 
-    n00b_string_t a0 = n00b_cmdr_arg_str(r, 0);
-    assert(a0.data != NULL);
-    assert(strcmp(a0.data, "--not-a-flag") == 0);
+    n00b_string_t *a0 = n00b_cmdr_arg_str(r, 0);
+    assert(a0->data != NULL);
+    assert(strcmp(a0->data, "--not-a-flag") == 0);
 
     n00b_cmdr_result_free(r);
     n00b_cmdr_free(c);
@@ -223,7 +223,7 @@ test_int_flag(void)
     assert(r != NULL);
     assert(r->ok);
 
-    assert(n00b_cmdr_flag_int(r, *r"--jobs") == 4);
+    assert(n00b_cmdr_flag_int(r, r"--jobs") == 4);
 
     n00b_cmdr_result_free(r);
     n00b_cmdr_free(c);
@@ -245,19 +245,19 @@ test_subcommand(void)
     assert(r != NULL);
     assert(r->ok);
 
-    n00b_string_t cmd = n00b_cmdr_result_command(r);
-    assert(cmd.data != NULL);
-    assert(strcmp(cmd.data, "build") == 0);
+    n00b_string_t *cmd = n00b_cmdr_result_command(r);
+    assert(cmd->data != NULL);
+    assert(strcmp(cmd->data, "build") == 0);
 
-    assert(n00b_cmdr_flag_bool(r, *r"--verbose") == true);
+    assert(n00b_cmdr_flag_bool(r, r"--verbose") == true);
 
-    n00b_string_t out = n00b_cmdr_flag_str(r, *r"--output");
-    assert(out.data != NULL);
-    assert(strcmp(out.data, "out") == 0);
+    n00b_string_t *out = n00b_cmdr_flag_str(r, r"--output");
+    assert(out->data != NULL);
+    assert(strcmp(out->data, "out") == 0);
 
     assert(n00b_cmdr_arg_count(r) == 1);
-    n00b_string_t a0 = n00b_cmdr_arg_str(r, 0);
-    assert(strcmp(a0.data, "main.c") == 0);
+    n00b_string_t *a0 = n00b_cmdr_arg_str(r, 0);
+    assert(strcmp(a0->data, "main.c") == 0);
 
     n00b_cmdr_result_free(r);
     n00b_cmdr_free(c);
@@ -274,7 +274,7 @@ test_parse_failure(void)
     // Create a commander with no flags or positionals that only
     // expects a known subcommand.
     n00b_cmdr_t *c = n00b_cmdr_new();
-    n00b_cmdr_add_command(c, *r"run", *r"Run something");
+    n00b_cmdr_add_command(c, r"run", r"Run something");
 
     // Parse something that isn't "run" — this should still parse
     // because items grammar accepts WORDs, but "bogus" will be a
@@ -325,8 +325,8 @@ test_null_safety(void)
 
     // Queries on NULL results
     assert(n00b_cmdr_arg_count(NULL) == 0);
-    assert(n00b_cmdr_flag_bool(NULL, *r"--foo") == false);
-    assert(n00b_cmdr_flag_int(NULL, *r"--foo") == 0);
+    assert(n00b_cmdr_flag_bool(NULL, r"--foo") == false);
+    assert(n00b_cmdr_flag_int(NULL, r"--foo") == 0);
     assert(n00b_cmdr_error_count(NULL) == 0);
 
     printf("  [PASS] null_safety\n");
@@ -342,20 +342,20 @@ test_parse_string(void)
     n00b_cmdr_t *c = build_simple_commander();
 
     n00b_cmdr_result_t *r = n00b_cmdr_parse_string(c,
-        *r"--verbose --output out.txt file1.c");
+        r"--verbose --output out.txt file1.c");
 
     assert(r != NULL);
     assert(r->ok);
 
-    assert(n00b_cmdr_flag_bool(r, *r"--verbose") == true);
+    assert(n00b_cmdr_flag_bool(r, r"--verbose") == true);
 
-    n00b_string_t out = n00b_cmdr_flag_str(r, *r"--output");
-    assert(out.data != NULL);
-    assert(strcmp(out.data, "out.txt") == 0);
+    n00b_string_t *out = n00b_cmdr_flag_str(r, r"--output");
+    assert(out->data != NULL);
+    assert(strcmp(out->data, "out.txt") == 0);
 
     assert(n00b_cmdr_arg_count(r) == 1);
-    n00b_string_t a0 = n00b_cmdr_arg_str(r, 0);
-    assert(strcmp(a0.data, "file1.c") == 0);
+    n00b_string_t *a0 = n00b_cmdr_arg_str(r, 0);
+    assert(strcmp(a0->data, "file1.c") == 0);
 
     n00b_cmdr_result_free(r);
     n00b_cmdr_free(c);
@@ -400,8 +400,8 @@ test_bnf_mode(void)
 {
     // Simple BNF: cmd -> "hello" "world" | "hello"
     n00b_cmdr_t *c = n00b_cmdr_from_bnf(
-        *r"<cmd> ::= \"hello\" \"world\" | \"hello\"",
-        *r"cmd");
+        r"<cmd> ::= \"hello\" \"world\" | \"hello\"",
+        r"cmd");
 
     if (!c) {
         // BNF mode depends on the BNF loader's character-level parsing
@@ -430,9 +430,9 @@ test_error_queries(void)
     assert(!r->ok);
     assert(n00b_cmdr_error_count(r) > 0);
 
-    n00b_string_t err = n00b_cmdr_error_get(r, 0);
-    assert(err.data != NULL);
-    assert(err.u8_bytes > 0);
+    n00b_string_t *err = n00b_cmdr_error_get(r, 0);
+    assert(err->data != NULL);
+    assert(err->u8_bytes > 0);
 
     n00b_cmdr_result_free(r);
     printf("  [PASS] error_queries\n");

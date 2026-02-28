@@ -4,26 +4,26 @@
 
 TEST(test_ascii_passthrough)
 {
-    n00b_unicode_idna_result_t r = n00b_unicode_idna_to_ascii(*r"example.com", .allocator = nullptr);
+    n00b_unicode_idna_result_t r = n00b_unicode_idna_to_ascii(r"example.com", .allocator = nullptr);
     ASSERT_EQ(r.error, N00B_UNICODE_IDNA_OK);
-    ASSERT_STR_EQ(r.value.data, "example.com");
+    ASSERT_STR_EQ(r.value->data, "example.com");
 }
 
 TEST(test_unicode_domain)
 {
     // münchen.de → xn--mnchen-3ya.de
-    n00b_unicode_idna_result_t r = n00b_unicode_idna_to_ascii(*r"m\xC3\xBCnchen.de", .allocator = nullptr);
+    n00b_unicode_idna_result_t r = n00b_unicode_idna_to_ascii(r"m\xC3\xBCnchen.de", .allocator = nullptr);
     ASSERT_EQ(r.error, N00B_UNICODE_IDNA_OK);
-    ASSERT(r.value.data != nullptr);
+    ASSERT(r.value->data != nullptr);
     // Should start with xn-- for the first label
-    ASSERT(strncmp(r.value.data, "xn--", 4) == 0);
+    ASSERT(strncmp(r.value->data, "xn--", 4) == 0);
 }
 
 TEST(test_to_unicode)
 {
-    n00b_unicode_idna_result_t r = n00b_unicode_idna_to_unicode(*r"example.com", .allocator = nullptr);
+    n00b_unicode_idna_result_t r = n00b_unicode_idna_to_unicode(r"example.com", .allocator = nullptr);
     ASSERT_EQ(r.error, N00B_UNICODE_IDNA_OK);
-    ASSERT_STR_EQ(r.value.data, "example.com");
+    ASSERT_STR_EQ(r.value->data, "example.com");
 }
 
 // --- CONTEXTJ tests ---
@@ -33,10 +33,10 @@ TEST(test_zwj_after_virama)
     // Devanagari KA (U+0915) + Virama (U+094D, CCC=9) + ZWJ (U+200D) + Devanagari KA
     // This is a valid use of ZWJ after Virama
     n00b_unicode_idna_result_t r = n00b_unicode_idna_to_ascii(
-        *r"\xE0\xA4\x95\xE0\xA5\x8D\xE2\x80\x8D\xE0\xA4\x95.example.com",
+        r"\xE0\xA4\x95\xE0\xA5\x8D\xE2\x80\x8D\xE0\xA4\x95.example.com",
         .allocator = nullptr);
     ASSERT_EQ(r.error, N00B_UNICODE_IDNA_OK);
-    ASSERT(r.value.u8_bytes > 0);
+    ASSERT(r.value->u8_bytes > 0);
 }
 
 TEST(test_zwj_invalid)
@@ -44,7 +44,7 @@ TEST(test_zwj_invalid)
     // ZWJ without preceding Virama → CONTEXTJ error
     // Latin 'a' + ZWJ (U+200D) + Latin 'b'
     n00b_unicode_idna_result_t r = n00b_unicode_idna_to_ascii(
-        *r"a\xE2\x80\x8Db.com",
+        r"a\xE2\x80\x8Db.com",
         .allocator = nullptr);
     ASSERT_EQ(r.error, N00B_UNICODE_IDNA_CONTEXTJ_ERROR);
 }
@@ -53,10 +53,10 @@ TEST(test_zwnj_joining_context)
 {
     // Arabic BEH (U+0628, Dual_Joining) + ZWNJ (U+200C) + Arabic BEH (U+0628, Dual_Joining)
     n00b_unicode_idna_result_t r = n00b_unicode_idna_to_ascii(
-        *r"\xD8\xA8\xE2\x80\x8C\xD8\xA8.example.com",
+        r"\xD8\xA8\xE2\x80\x8C\xD8\xA8.example.com",
         .allocator = nullptr);
     ASSERT_EQ(r.error, N00B_UNICODE_IDNA_OK);
-    ASSERT(r.value.u8_bytes > 0);
+    ASSERT(r.value->u8_bytes > 0);
 }
 
 TEST(test_zwnj_invalid)
@@ -64,7 +64,7 @@ TEST(test_zwnj_invalid)
     // ZWNJ in bad position → CONTEXTJ error
     // Latin 'a' + ZWNJ (U+200C) + Latin 'b'
     n00b_unicode_idna_result_t r = n00b_unicode_idna_to_ascii(
-        *r"a\xE2\x80\x8Cb.com",
+        r"a\xE2\x80\x8Cb.com",
         .allocator = nullptr);
     ASSERT_EQ(r.error, N00B_UNICODE_IDNA_CONTEXTJ_ERROR);
 }
@@ -74,17 +74,17 @@ TEST(test_middle_dot_valid)
     // "l·l" (U+006C + U+00B7 + U+006C) in a non-ASCII label
     // We need non-ASCII to trigger Punycode path — U+00B7 is non-ASCII
     n00b_unicode_idna_result_t r = n00b_unicode_idna_to_ascii(
-        *r"l\xC2\xB7l.com",
+        r"l\xC2\xB7l.com",
         .allocator = nullptr);
     ASSERT_EQ(r.error, N00B_UNICODE_IDNA_OK);
-    ASSERT(r.value.u8_bytes > 0);
+    ASSERT(r.value->u8_bytes > 0);
 }
 
 TEST(test_middle_dot_invalid)
 {
     // "a·b" → CONTEXTO error (not between two 'l's)
     n00b_unicode_idna_result_t r = n00b_unicode_idna_to_ascii(
-        *r"a\xC2\xB7b.com",
+        r"a\xC2\xB7b.com",
         .allocator = nullptr);
     ASSERT_EQ(r.error, N00B_UNICODE_IDNA_CONTEXTO_ERROR);
 }
@@ -93,7 +93,7 @@ TEST(test_arabic_digit_mix)
 {
     // Arabic-Indic digit (U+0660) + Extended Arabic-Indic digit (U+06F0) → CONTEXTO error
     n00b_unicode_idna_result_t r = n00b_unicode_idna_to_ascii(
-        *r"\xD9\xA0\xDB\xB0.com",
+        r"\xD9\xA0\xDB\xB0.com",
         .allocator = nullptr);
     ASSERT_EQ(r.error, N00B_UNICODE_IDNA_CONTEXTO_ERROR);
 }
@@ -102,10 +102,10 @@ TEST(test_hebrew_geresh)
 {
     // Hebrew letter (U+05D0 ALEF) + Geresh (U+05F3) → valid
     n00b_unicode_idna_result_t r = n00b_unicode_idna_to_ascii(
-        *r"\xD7\x90\xD7\xB3.com",
+        r"\xD7\x90\xD7\xB3.com",
         .allocator = nullptr);
     ASSERT_EQ(r.error, N00B_UNICODE_IDNA_OK);
-    ASSERT(r.value.u8_bytes > 0);
+    ASSERT(r.value->u8_bytes > 0);
 }
 
 static void run_tests(void)

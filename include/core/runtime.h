@@ -25,12 +25,6 @@
 
 typedef struct n00b_runtime_t n00b_runtime_t;
 
-n00b_array_decl(char *);
-n00b_array_decl(uint32_t);
-
-n00b_list_decl(n00b_gc_root_t);
-n00b_list_decl(n00b_finalizer_info_t *);
-
 // Forward declarations to avoid circular includes.
 typedef struct n00b_interval_tree_t    n00b_interval_tree_t;
 typedef struct n00b_conduit_service    n00b_conduit_service_t;

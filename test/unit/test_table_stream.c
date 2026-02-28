@@ -10,7 +10,7 @@
 // Helpers
 // ====================================================================
 
-static n00b_string_t
+static n00b_string_t *
 make_str(const char *s)
 {
     return n00b_string_from_raw(s, (int64_t)strlen(s));

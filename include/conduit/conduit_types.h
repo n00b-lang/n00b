@@ -30,7 +30,6 @@ typedef struct n00b_conduit_listener n00b_conduit_listener_t;
 // IO watch target -- variant discriminating fd_owner vs listener
 // ============================================================================
 
-n00b_variant_decl(n00b_conduit_fd_owner_t *, n00b_conduit_listener_t *);
 typedef n00b_variant_t(n00b_conduit_fd_owner_t *,
                        n00b_conduit_listener_t *) n00b_conduit_io_target_t;
 
@@ -71,4 +70,3 @@ enum {
 // Common result type declarations
 // ============================================================================
 
-// n00b_result_decl(bool) is in core/result.h.

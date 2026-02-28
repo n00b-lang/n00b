@@ -94,6 +94,8 @@ src_slay = files(
   'src/slay/xform_constexpr.c',
   'src/slay/xform_constexpr_paste.c',
   'src/slay/xform_kargs_vargs.c',
+  'src/slay/xform_option.c',
+  'src/slay/xform_generic_struct.c',
 )
 
 src_parsers = files(
@@ -156,6 +158,9 @@ ncc_compile_tests = {
   'kargs_vargs':  ['compile_run',  test_dir / 'test_kargs_vargs.c'],
   'rstr':         ['compile_run',  test_dir / 'test_rstr.c'],
   'vargs':        ['compile_run',  test_dir / 'test_vargs.c'],
+  'option':       ['compile_run',  test_dir / 'test_option.c'],
+  'generic_struct': ['compile_run', test_dir / 'test_generic_struct.c'],
+  'gs_result':      ['compile_run', test_dir / 'test_gs_result.c'],
 }
 
 foreach name, params : ncc_compile_tests

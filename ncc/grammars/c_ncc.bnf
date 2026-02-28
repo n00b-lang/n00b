@@ -518,6 +518,11 @@
     | %"(" <storage_class_specifiers> <type_name> %")" <braced_initializer>
     | <primary_expression>
     | <postfix_expression> %"!"
+    | <_kw_option_some> %"(" <typeid_atom> <typeid_continuation>? %"," <assignment_expression> %")"
+    | <_kw_option_none> %"(" <typeid_atom> <typeid_continuation>? %")"
+    | <_kw_option_is_some> %"(" <argument_expression_list> %")"
+    | <_kw_option_is_none> %"(" <argument_expression_list> %")"
+    | <_kw_option_unwrap> %"(" <argument_expression_list> %")"
 
 <_member_name> ::= <identifier>
     | %TYPEDEF_NAME
@@ -602,13 +607,25 @@
     | %TYPEDEF_NAME
     | <synthetic_identifier>
 
+<_kw_generic_struct> ::= %"_generic_struct"
+
 <struct_or_union_specifier> @adt("struct_or_union", tag_name) ::= <_kw_kw_struct_or_union> <attribute_specifier_sequence>? <tag_name>? %"{" <member_declaration_list> %"}"
     | <_kw_kw_struct_or_union> <attribute_specifier_sequence>? <tag_name>? %"{" %"}"
     | <_kw_kw_struct_or_union> <attribute_specifier_sequence>? <tag_name>
+    | <_kw_generic_struct> <attribute_specifier_sequence>? <tag_name> %"{" <member_declaration_list> %"}"
+    | <_kw_generic_struct> <attribute_specifier_sequence>? <tag_name> %"{" %"}"
+    | <_kw_generic_struct> <attribute_specifier_sequence>? <tag_name>
 
 <_named_id_kw_typeid> ::= %"typeid"
+<_named_id_kw_option> ::= %"_option"
+<_kw_option_some> ::= %"_some"
+<_kw_option_none> ::= %"_none"
+<_kw_option_is_some> ::= %"_is_some"
+<_kw_option_is_none> ::= %"_is_none"
+<_kw_option_unwrap> ::= %"_unwrap"
 
 <synthetic_identifier> ::= <_named_id_kw_typeid> %"(" <typeid_atom> <typeid_continuation>? %")"
+    | <_named_id_kw_option> %"(" <typeid_atom> <typeid_continuation>? %")"
     | %"constexpr_paste" %"(" <argument_expression_list> %")"
 
 <_named_id_kw_typestr> ::= %"typestr"

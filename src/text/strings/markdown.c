@@ -166,7 +166,7 @@ md_text(MD_TEXTTYPE type, const MD_CHAR *text, MD_SIZE size, void *extra)
 // -------------------------------------------------------------------
 
 n00b_tree_t(n00b_md_node_t, n00b_md_node_t) *
-n00b_parse_markdown(n00b_string_t s) _kargs
+n00b_parse_markdown(n00b_string_t *s) _kargs
 {
     n00b_allocator_t *allocator = nullptr;
 }
@@ -199,7 +199,7 @@ n00b_parse_markdown(n00b_string_t s) _kargs
         .allocator = allocator,
     };
 
-    md_parse(s.data, (unsigned)s.u8_bytes, &parser, (void *)&build_ctx);
+    md_parse(s->data, (unsigned)s->u8_bytes, &parser, (void *)&build_ctx);
 
     return t;
 }

@@ -116,7 +116,7 @@ typedef struct {
 
 typedef struct {
     int            error_code;
-    n00b_string_t  error_msg;
+    n00b_string_t *error_msg;
 } n00b_conduit_error_payload_t;
 
 typedef struct {

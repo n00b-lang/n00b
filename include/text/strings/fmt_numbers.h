@@ -2,7 +2,7 @@
 /** @file fmt_numbers.h
  *  @brief Numeric formatting: hex, int, float, bool, codepoint, pointer.
  *
- *  All functions return `n00b_string_t` **by value** and accept an optional
+ *  All functions return `n00b_string_t *` and accept an optional
  *  `.allocator` keyword argument.  Integer formatting supports optional
  *  comma-separated thousands grouping; float formatting uses Grisu2 via
  *  `n00b_fptostr()` from `strings/fptostr.h`.
@@ -27,7 +27,7 @@
  *  @kw allocator  Optional allocator.
  *  @return A hex string (e.g. `"dead"` or `"DEAD"`), or `"0"` for zero.
  */
-n00b_string_t n00b_fmt_hex(uint64_t value)
+n00b_string_t *n00b_fmt_hex(uint64_t value)
     _kargs {
         bool              caps      = false;
         n00b_allocator_t *allocator = nullptr;
@@ -43,7 +43,7 @@ n00b_string_t n00b_fmt_hex(uint64_t value)
  *  @kw allocator  Optional allocator.
  *  @return A decimal string (e.g. `"-1,234"` or `"42"`).
  */
-n00b_string_t n00b_fmt_int(int64_t value)
+n00b_string_t *n00b_fmt_int(int64_t value)
     _kargs {
         bool              commas    = false;
         n00b_allocator_t *allocator = nullptr;
@@ -55,7 +55,7 @@ n00b_string_t n00b_fmt_int(int64_t value)
  *  @kw allocator  Optional allocator.
  *  @return A decimal string (e.g. `"18,446,744,073,709,551,615"`).
  */
-n00b_string_t n00b_fmt_uint(uint64_t value)
+n00b_string_t *n00b_fmt_uint(uint64_t value)
     _kargs {
         bool              commas    = false;
         n00b_allocator_t *allocator = nullptr;
@@ -73,7 +73,7 @@ n00b_string_t n00b_fmt_uint(uint64_t value)
  *  @kw allocator  Optional allocator.
  *  @return A decimal float string (e.g. `"3.14"`, `"nan"`, `"-inf"`).
  */
-n00b_string_t n00b_fmt_float(double value)
+n00b_string_t *n00b_fmt_float(double value)
     _kargs {
         int               width     = 0;
         bool              fill      = false;
@@ -94,7 +94,7 @@ n00b_string_t n00b_fmt_float(double value)
  *  @kw allocator  Optional allocator.
  *  @return One of 16 possible strings (see source for table).
  */
-n00b_string_t n00b_fmt_bool(bool value)
+n00b_string_t *n00b_fmt_bool(bool value)
     _kargs {
         bool              upper     = false;
         bool              word      = false;
@@ -116,7 +116,7 @@ n00b_string_t n00b_fmt_bool(bool value)
  *  @kw allocator  Optional allocator.
  *  @return A string containing the character or its `U+` representation.
  */
-n00b_string_t n00b_fmt_codepoint(n00b_codepoint_t cp)
+n00b_string_t *n00b_fmt_codepoint(n00b_codepoint_t cp)
     _kargs { n00b_allocator_t *allocator = nullptr; };
 
 // ===================================================================
@@ -129,7 +129,7 @@ n00b_string_t n00b_fmt_codepoint(n00b_codepoint_t cp)
  *  @kw allocator  Optional allocator.
  *  @return A 17-character string (e.g. `"@00007fff5fbffa00"`).
  */
-n00b_string_t n00b_fmt_pointer(void *ptr)
+n00b_string_t *n00b_fmt_pointer(void *ptr)
     _kargs {
         bool              caps      = false;
         n00b_allocator_t *allocator = nullptr;

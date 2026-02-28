@@ -102,8 +102,6 @@ typedef struct {
         void                        *next_for_topic;                                           \
     };                                                                                         \
                                                                                                \
-    /* Declare list type for storing pointers to this subscription type */                     \
-    n00b_list_decl(n00b_conduit_subscription_t(T) *);                                          \
                                                                                                \
     /** @brief Deliver a typed message to a subscription's inbox. */                           \
     static inline bool                                                                         \

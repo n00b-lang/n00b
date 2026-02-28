@@ -290,7 +290,7 @@ n00b_init(n00b_runtime_t *rt, int argc, char *argv[]) _kargs
             auto *out_typed = n00b_conduit_topic_init(
                 n00b_buffer_t *,
                 rt->default_conduit,
-                n00b_conduit_str_uri(N00B_STRING_STATIC("stdout")));
+                n00b_conduit_str_uri(r"stdout"));
 
             if (out_typed) {
                 rt->stdout_topic = (n00b_conduit_topic_base_t *)out_typed;
@@ -301,7 +301,7 @@ n00b_init(n00b_runtime_t *rt, int argc, char *argv[]) _kargs
             auto *err_typed = n00b_conduit_topic_init(
                 n00b_buffer_t *,
                 rt->default_conduit,
-                n00b_conduit_str_uri(N00B_STRING_STATIC("stderr")));
+                n00b_conduit_str_uri(r"stderr"));
 
             if (err_typed) {
                 rt->stderr_topic = (n00b_conduit_topic_base_t *)err_typed;

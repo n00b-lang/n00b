@@ -217,8 +217,8 @@ render_node(render_ctx_t *ctx,
 
         if (val->node_type >= N00B_MD_TEXT_NORMAL
             && val->node_type <= N00B_MD_TEXT_LATEX) {
-            n00b_string_t *text = &val->detail.text;
-            if (text->data && text->u8_bytes > 0) {
+            n00b_string_t *text = val->detail.text;
+            if (text && text->data && text->u8_bytes > 0) {
                 emit_text(ctx, text->data, (int32_t)text->u8_bytes);
             }
         }
@@ -256,7 +256,7 @@ render_node(render_ctx_t *ctx,
 // Public API
 // ===================================================================
 
-n00b_string_t
+n00b_string_t *
 n00b_str_md_render(n00b_tree_t(n00b_md_node_t, n00b_md_node_t) *tree)
 {
     render_ctx_t ctx = {};
@@ -273,7 +273,7 @@ n00b_str_md_render(n00b_tree_t(n00b_md_node_t, n00b_md_node_t) *tree)
         }
     }
 
-    n00b_string_t result = n00b_string_from_raw(ctx.ob.buf, ctx.ob.len);
+    n00b_string_t *result = n00b_string_from_raw(ctx.ob.buf, ctx.ob.len);
 
     // Attach style info if we have records.
     if (ctx.rl.count > 0) {
@@ -283,7 +283,7 @@ n00b_str_md_render(n00b_tree_t(n00b_md_node_t, n00b_md_node_t) *tree)
         info->num_styles = ctx.rl.count;
         memcpy(info->styles, ctx.rl.records,
                ctx.rl.count * sizeof(n00b_style_record_t));
-        result.styling = info;
+        result->styling = info;
     }
 
     if (ctx.ob.buf) {

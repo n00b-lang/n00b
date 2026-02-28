@@ -6,8 +6,8 @@
  *
  * The annotation walk can produce control flow labels for tree nodes
  * annotated with `@branch`, `@loop`, `@switch`, `@jump`, `@capture`,
- * or `@assigns`. Each label records the kind and the resolved child
- * subtrees (condition, body, else, etc.).
+ * `@assigns`, or `@call`. Each label records the kind and the resolved
+ * child subtrees (condition, body, else, etc.).
  *
  * Labels are stored in a typed dict keyed by parse tree node pointer.
  * Use `n00b_cf_label_lookup()` to query.
@@ -21,12 +21,7 @@
 
 typedef struct n00b_tc_ctx_s n00b_tc_ctx_t;
 
-n00b_list_decl(n00b_sym_entry_t *);
-
-// Forward declare so the dict_decl works before the full typedef.
 typedef struct n00b_cf_label_s n00b_cf_label_t;
-
-n00b_dict_decl(n00b_parse_tree_t *, n00b_cf_label_t *);
 
 typedef n00b_dict_t(n00b_parse_tree_t *, n00b_cf_label_t *) n00b_cf_labels_t;
 
@@ -44,6 +39,7 @@ typedef enum {
     N00B_CF_ASSIGNS,        /**< assignment (name = value) */
     N00B_CF_VARREF,         /**< variable reference (use) */
     N00B_CF_UNWRAP_RESULT,  /**< postfix ! (result unwrap with early return) */
+    N00B_CF_CALL,           /**< function/method call */
 } n00b_cf_kind_t;
 
 // ============================================================================
@@ -61,8 +57,8 @@ struct n00b_cf_label_s {
     n00b_parse_tree_t *cond;      /**< Condition subtree (branch, loop, switch). */
     n00b_parse_tree_t *then_body; /**< Then/body subtree. */
     n00b_parse_tree_t *else_body; /**< Else subtree (branch only, may be NULL). */
-    n00b_string_t      jump_kind; /**< "break", "continue", "return", "goto". */
-    n00b_string_t      tag;       /**< Capture tag or jump target. */
+    n00b_string_t     *jump_kind; /**< "break", "continue", "return", "goto". */
+    n00b_string_t     *tag;       /**< Capture tag or jump target. */
     bool               capture_by_tag;
 };
 
@@ -70,8 +66,6 @@ struct n00b_cf_label_s {
 // Walk result
 // ============================================================================
 
-// Dict from parse tree node pointer → type pointer for literal/expression types.
-n00b_dict_decl(uintptr_t, n00b_tc_type_t *);
 typedef n00b_dict_t(uintptr_t, n00b_tc_type_t *) n00b_node_types_t;
 
 /**

@@ -238,33 +238,33 @@ TEST(test_count_invalid_returns_negative)
 
 TEST(test_str_from_cstr)
 {
-    n00b_string_t s = *r"Hello";
-    ASSERT_EQ(s.u8_bytes, 5);
-    ASSERT_EQ(s.codepoints, 5);
+    n00b_string_t *s = r"Hello";
+    ASSERT_EQ(s->u8_bytes, 5);
+    ASSERT_EQ(s->codepoints, 5);
 
-    n00b_string_t s2 = *r"\xE6\x97\xA5\xE6\x9C\xAC";
-    ASSERT_EQ(s2.u8_bytes, 6);
-    ASSERT_EQ(s2.codepoints, 2);
+    n00b_string_t *s2 = r"\xE6\x97\xA5\xE6\x9C\xAC";
+    ASSERT_EQ(s2->u8_bytes, 6);
+    ASSERT_EQ(s2->codepoints, 2);
 }
 
 TEST(test_str_copy)
 {
-    n00b_string_t s = *r"test";
-    n00b_string_t c = n00b_string_from_raw(s.data, s.u8_bytes);
-    ASSERT_EQ(c.u8_bytes, 4);
-    ASSERT_STR_EQ(c.data, "test");
-    ASSERT(c.data != s.data);
+    n00b_string_t *s = r"test";
+    n00b_string_t *c = n00b_string_from_raw(s->data, s->u8_bytes);
+    ASSERT_EQ(c->u8_bytes, 4);
+    ASSERT_STR_EQ(c->data, "test");
+    ASSERT(c->data != s->data);
 }
 
 TEST(test_next_cp)
 {
-    n00b_string_t s   = *r"A\xC3\xA9\xE4\xB8\x96";
+    n00b_string_t *s = r"A\xC3\xA9\xE4\xB8\x96";
     uint32_t      pos = 0;
 
-    ASSERT_EQ(n00b_unicode_utf8_decode(s.data, (uint32_t)s.u8_bytes, &pos), 'A');
-    ASSERT_EQ(n00b_unicode_utf8_decode(s.data, (uint32_t)s.u8_bytes, &pos), 0x00E9);
-    ASSERT_EQ(n00b_unicode_utf8_decode(s.data, (uint32_t)s.u8_bytes, &pos), 0x4E16);
-    ASSERT_EQ(n00b_unicode_utf8_decode(s.data, (uint32_t)s.u8_bytes, &pos), -1);
+    ASSERT_EQ(n00b_unicode_utf8_decode(s->data, (uint32_t)s->u8_bytes, &pos), 'A');
+    ASSERT_EQ(n00b_unicode_utf8_decode(s->data, (uint32_t)s->u8_bytes, &pos), 0x00E9);
+    ASSERT_EQ(n00b_unicode_utf8_decode(s->data, (uint32_t)s->u8_bytes, &pos), 0x4E16);
+    ASSERT_EQ(n00b_unicode_utf8_decode(s->data, (uint32_t)s->u8_bytes, &pos), -1);
 }
 
 // ===================================================================
@@ -273,18 +273,18 @@ TEST(test_next_cp)
 
 TEST(test_utf16_roundtrip)
 {
-    n00b_string_t s = *r"Hello \xE4\xB8\x96\xE7\x95\x8C \xF0\x9F\x98\x80";
+    n00b_string_t *s = r"Hello \xE4\xB8\x96\xE7\x95\x8C \xF0\x9F\x98\x80";
     n00b_array_t(uint16_t) u16 = n00b_unicode_to_utf16(s);
     ASSERT(u16.data != nullptr);
 
-    n00b_string_t back = n00b_unicode_from_utf16(u16.data, (uint32_t)u16.len, .allocator = nullptr);
-    ASSERT_EQ(back.u8_bytes, s.u8_bytes);
-    ASSERT_STR_EQ(back.data, s.data);
+    n00b_string_t *back = n00b_unicode_from_utf16(u16.data, (uint32_t)u16.len, .allocator = nullptr);
+    ASSERT_EQ(back->u8_bytes, s->u8_bytes);
+    ASSERT_STR_EQ(back->data, s->data);
 }
 
 TEST(test_utf16_all_bmp)
 {
-    n00b_string_t s = *r"ABC\xC3\xA9\xE4\xB8\x96";
+    n00b_string_t *s = r"ABC\xC3\xA9\xE4\xB8\x96";
     n00b_array_t(uint16_t) u16 = n00b_unicode_to_utf16(s);
     ASSERT(u16.data != nullptr);
     ASSERT_EQ(u16.len, 5); // A, B, C, e-acute, CJK
@@ -298,7 +298,7 @@ TEST(test_utf16_all_bmp)
 TEST(test_utf16_surrogate_pairs)
 {
     // U+1F600 = surrogate pair D83D DE00
-    n00b_string_t s = *r"\xF0\x9F\x98\x80";
+    n00b_string_t *s = r"\xF0\x9F\x98\x80";
     n00b_array_t(uint16_t) u16 = n00b_unicode_to_utf16(s);
     ASSERT(u16.data != nullptr);
     ASSERT_EQ(u16.len, 2);
@@ -308,7 +308,7 @@ TEST(test_utf16_surrogate_pairs)
 
 TEST(test_utf16_empty)
 {
-    n00b_string_t s = *r"";
+    n00b_string_t *s = r"";
     n00b_array_t(uint16_t) u16 = n00b_unicode_to_utf16(s);
     ASSERT(u16.data != nullptr);
     ASSERT_EQ(u16.len, 0);
@@ -320,19 +320,19 @@ TEST(test_utf16_empty)
 
 TEST(test_utf32_roundtrip)
 {
-    n00b_string_t s = *r"Test \xE6\x97\xA5\xE6\x9C\xAC";
+    n00b_string_t *s = r"Test \xE6\x97\xA5\xE6\x9C\xAC";
     n00b_array_t(n00b_codepoint_t) u32 = n00b_unicode_to_utf32(s);
     ASSERT(u32.data != nullptr);
-    ASSERT_EQ(u32.len, s.codepoints);
+    ASSERT_EQ(u32.len, s->codepoints);
 
-    n00b_string_t back = n00b_unicode_from_utf32(u32.data, (uint32_t)u32.len, .allocator = nullptr);
-    ASSERT_STR_EQ(back.data, s.data);
+    n00b_string_t *back = n00b_unicode_from_utf32(u32.data, (uint32_t)u32.len, .allocator = nullptr);
+    ASSERT_STR_EQ(back->data, s->data);
 }
 
 TEST(test_utf32_count_matches_codepoints)
 {
     // "Aé世😀" = 4 codepoints
-    n00b_string_t s = *r"A\xC3\xA9\xE4\xB8\x96\xF0\x9F\x98\x80";
+    n00b_string_t *s = r"A\xC3\xA9\xE4\xB8\x96\xF0\x9F\x98\x80";
     n00b_array_t(n00b_codepoint_t) u32 = n00b_unicode_to_utf32(s);
     ASSERT(u32.data != nullptr);
     ASSERT_EQ(u32.len, 4);
@@ -344,7 +344,7 @@ TEST(test_utf32_count_matches_codepoints)
 
 TEST(test_utf32_empty)
 {
-    n00b_string_t s = *r"";
+    n00b_string_t *s = r"";
     n00b_array_t(n00b_codepoint_t) u32 = n00b_unicode_to_utf32(s);
     ASSERT(u32.data != nullptr);
     ASSERT_EQ(u32.len, 0);
@@ -443,7 +443,7 @@ TEST(test_utf32_large_trusted)
     // Verify UTF-32 conversion uses the trusted path on large valid input.
     char big[256];
     memset(big, 'Z', sizeof(big));
-    n00b_string_t s = n00b_string_from_raw(big, sizeof(big));
+    n00b_string_t *s = n00b_string_from_raw(big, sizeof(big));
     n00b_array_t(n00b_codepoint_t) u32 = n00b_unicode_to_utf32(s);
     ASSERT(u32.data != nullptr);
     ASSERT_EQ(u32.len, 256);

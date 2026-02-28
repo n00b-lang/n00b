@@ -105,84 +105,84 @@ TEST(test_parse_bool_letter)
 TEST(test_fmt_int_comma)
 {
     n00b_format_spec_t fs = n00b_format_spec_parse(",d", 2);
-    n00b_string_t r       = n00b_str_fmt_int_ex(1234567, &fs);
-    ASSERT_STR_EQ(r.data, "1,234,567");
+    n00b_string_t *r = n00b_str_fmt_int_ex(1234567, &fs);
+    ASSERT_STR_EQ(r->data, "1,234,567");
 }
 
 TEST(test_fmt_int_zero_pad)
 {
     n00b_format_spec_t fs = n00b_format_spec_parse("08d", 3);
-    n00b_string_t r       = n00b_str_fmt_int_ex(42, &fs);
-    ASSERT_STR_EQ(r.data, "00000042");
+    n00b_string_t *r = n00b_str_fmt_int_ex(42, &fs);
+    ASSERT_STR_EQ(r->data, "00000042");
 }
 
 TEST(test_fmt_int_left_align)
 {
     n00b_format_spec_t fs = n00b_format_spec_parse("-8d", 3);
-    n00b_string_t r       = n00b_str_fmt_int_ex(42, &fs);
+    n00b_string_t *r = n00b_str_fmt_int_ex(42, &fs);
     // "42      " (42 + 6 spaces)
-    ASSERT_EQ(r.codepoints, 8);
-    ASSERT(r.data[0] == '4' && r.data[1] == '2');
-    ASSERT(r.data[7] == ' ');
+    ASSERT_EQ(r->codepoints, 8);
+    ASSERT(r->data[0] == '4' && r->data[1] == '2');
+    ASSERT(r->data[7] == ' ');
 }
 
 TEST(test_fmt_int_sign_plus)
 {
     n00b_format_spec_t fs = n00b_format_spec_parse("+d", 2);
-    n00b_string_t r       = n00b_str_fmt_int_ex(42, &fs);
-    ASSERT(r.data[0] == '+');
+    n00b_string_t *r = n00b_str_fmt_int_ex(42, &fs);
+    ASSERT(r->data[0] == '+');
 }
 
 TEST(test_fmt_float_precision)
 {
     n00b_format_spec_t fs = n00b_format_spec_parse(".2f", 3);
-    n00b_string_t r       = n00b_str_fmt_float_ex(3.14159, &fs);
-    ASSERT_STR_EQ(r.data, "3.14");
+    n00b_string_t *r = n00b_str_fmt_float_ex(3.14159, &fs);
+    ASSERT_STR_EQ(r->data, "3.14");
 }
 
 TEST(test_fmt_float_scientific)
 {
     n00b_format_spec_t fs = n00b_format_spec_parse(".2e", 3);
-    n00b_string_t r       = n00b_str_fmt_float_ex(12345.0, &fs);
+    n00b_string_t *r = n00b_str_fmt_float_ex(12345.0, &fs);
     // Should contain 'e' and exponent.
-    ASSERT(strchr(r.data, 'e') != nullptr || strchr(r.data, 'E') != nullptr);
+    ASSERT(strchr(r->data, 'e') != nullptr || strchr(r->data, 'E') != nullptr);
 }
 
 TEST(test_fmt_string_width)
 {
     n00b_format_spec_t fs = n00b_format_spec_parse("10s", 3);
-    n00b_string_t val     = *r"hi";
-    n00b_string_t r       = n00b_str_fmt_string_ex(val, &fs);
-    ASSERT_EQ(r.codepoints, 10);
+    n00b_string_t *val = r"hi";
+    n00b_string_t *r = n00b_str_fmt_string_ex(val, &fs);
+    ASSERT_EQ(r->codepoints, 10);
 }
 
 TEST(test_fmt_string_truncate)
 {
     n00b_format_spec_t fs = n00b_format_spec_parse(".3s", 3);
-    n00b_string_t val     = *r"hello";
-    n00b_string_t r       = n00b_str_fmt_string_ex(val, &fs);
-    ASSERT_EQ(r.codepoints, 3);
+    n00b_string_t *val = r"hello";
+    n00b_string_t *r = n00b_str_fmt_string_ex(val, &fs);
+    ASSERT_EQ(r->codepoints, 3);
 }
 
 TEST(test_fmt_hex)
 {
     n00b_format_spec_t fs = n00b_format_spec_parse("x", 1);
-    n00b_string_t r       = n00b_str_fmt_int_ex(255, &fs);
-    ASSERT_STR_EQ(r.data, "ff");
+    n00b_string_t *r = n00b_str_fmt_int_ex(255, &fs);
+    ASSERT_STR_EQ(r->data, "ff");
 }
 
 TEST(test_fmt_hex_upper)
 {
     n00b_format_spec_t fs = n00b_format_spec_parse("X", 1);
-    n00b_string_t r       = n00b_str_fmt_int_ex(255, &fs);
-    ASSERT_STR_EQ(r.data, "FF");
+    n00b_string_t *r = n00b_str_fmt_int_ex(255, &fs);
+    ASSERT_STR_EQ(r->data, "FF");
 }
 
 TEST(test_fmt_octal)
 {
     n00b_format_spec_t fs = n00b_format_spec_parse("o", 1);
-    n00b_string_t r       = n00b_str_fmt_int_ex(8, &fs);
-    ASSERT_STR_EQ(r.data, "10");
+    n00b_string_t *r = n00b_str_fmt_int_ex(8, &fs);
+    ASSERT_STR_EQ(r->data, "10");
 }
 
 // ===================================================================

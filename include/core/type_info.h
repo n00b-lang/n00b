@@ -25,9 +25,7 @@ typedef enum n00b_literal_kind_t : uint8_t {
     N00B_LIT_CONTAINER,
 } n00b_literal_kind_t;
 
-n00b_option_decl(n00b_type_info_t *);
-
-typedef n00b_option_decl(n00b_array_t(n00b_method_t) *) n00b_ext_vtable_opt_t;
+typedef n00b_option_t(n00b_array_t(n00b_method_t) *) n00b_ext_vtable_opt_t;
 
 /**
  * @brief Per-type metadata: name, vtables, allocation size, literal info.

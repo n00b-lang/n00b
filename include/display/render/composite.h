@@ -46,8 +46,6 @@ typedef struct n00b_composite_entry_t {
     int32_t       clip_h;
 } n00b_composite_entry_t;
 
-n00b_array_decl(n00b_composite_entry_t);
-
 // ====================================================================
 // Pipeline functions
 // ====================================================================

@@ -200,7 +200,7 @@ typedef n00b_cg_val_t (*n00b_cg_handler_fn)(n00b_cg_session_t *session,
  */
 typedef n00b_cg_val_t (*n00b_cg_literal_fn)(n00b_cg_session_t  *session,
                                               n00b_parse_tree_t  *node,
-                                              n00b_string_t       lit_kind,
+                                              n00b_string_t      *lit_kind,
                                               n00b_cg_type_tag_t  type_tag);
 
 /**

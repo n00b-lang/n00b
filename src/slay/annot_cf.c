@@ -58,7 +58,7 @@ annot_phase_cf(n00b_annot_walk_ctx_t *ctx, annot_node_ctx_t *nc)
                                                     N00B_CF_JUMP);
             label->jump_kind = a->scope_tag;
 
-            if (!label->jump_kind.data) {
+            if (!label->jump_kind || !label->jump_kind->data) {
                 label->jump_kind
                     = n00b_tree_extract_first_identifier(nc->node);
             }
@@ -93,10 +93,20 @@ annot_phase_cf(n00b_annot_walk_ctx_t *ctx, annot_node_ctx_t *nc)
         }
 
         case N00B_ANNOT_OPERATOR: {
-            if (a->op_kind.u8_bytes > 0
-                && n00b_unicode_str_eq(a->op_kind, *r"unwrap_result")) {
+            if (a->op_kind->u8_bytes > 0
+                && n00b_unicode_str_eq(a->op_kind, r"unwrap_result")) {
                 make_cf_label(ctx, nc->node, N00B_CF_UNWRAP_RESULT);
             }
+            break;
+        }
+
+        case N00B_ANNOT_CALL: {
+            n00b_cf_label_t *label = make_cf_label(ctx, nc->node,
+                                                    N00B_CF_CALL);
+            label->cond      = n00b_tree_resolve_child_ref(
+                                   ctx->grammar, nc->node, a->name_ref);
+            label->then_body = n00b_tree_resolve_child_ref(
+                                   ctx->grammar, nc->node, a->type_ref);
             break;
         }
 

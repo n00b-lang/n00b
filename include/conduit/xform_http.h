@@ -90,7 +90,6 @@ typedef enum {
 // Type instantiations
 // ============================================================================
 
-n00b_option_decl(n00b_http_parse_event_t *);
 N00B_CONDUIT_FULL_IMPL(n00b_http_parse_event_t *);
 N00B_CONDUIT_XFORM_IMPL(n00b_buffer_t *, n00b_http_parse_event_t *);
 

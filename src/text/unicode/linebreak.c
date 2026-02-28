@@ -113,8 +113,8 @@ void
 n00b_unicode_linebreaks_raw(const char *data, int64_t len, n00b_unicode_lb_action_t *out)
 {
     uint32_t      num_bytes      = (uint32_t)len;
-    n00b_string_t _s             = {.u8_bytes = num_bytes, .data = (char *)data};
-    int64_t       num_codepoints = n00b_unicode_utf8_count_codepoints(_s);
+    int64_t       num_codepoints = n00b_unicode_utf8_count_codepoints(
+        &(n00b_string_t){.u8_bytes = num_bytes, .data = (char *)data});
 
     if (num_codepoints <= 0)
         return;
@@ -724,10 +724,10 @@ n00b_unicode_linebreaks_raw(const char *data, int64_t len, n00b_unicode_lb_actio
 }
 
 void
-n00b_unicode_linebreaks(n00b_string_t s, n00b_unicode_lb_action_t *out)
+n00b_unicode_linebreaks(n00b_string_t *s, n00b_unicode_lb_action_t *out)
 {
-    assert(out || s.u8_bytes == 0);
-    n00b_unicode_linebreaks_raw(s.data, s.u8_bytes, out);
+    assert(out || s->u8_bytes == 0);
+    n00b_unicode_linebreaks_raw(s->data, s->u8_bytes, out);
 }
 
 uint32_t *
@@ -736,8 +736,8 @@ n00b_unicode_linebreak_wrap_raw(const char *data, int64_t len, int width,
                                 uint32_t *num_breaks)
 {
     uint32_t      num_bytes      = (uint32_t)len;
-    n00b_string_t _s2            = {.u8_bytes = num_bytes, .data = (char *)data};
-    int64_t       num_codepoints = n00b_unicode_utf8_count_codepoints(_s2);
+    int64_t       num_codepoints = n00b_unicode_utf8_count_codepoints(
+        &(n00b_string_t){.u8_bytes = num_bytes, .data = (char *)data});
 
     if (num_codepoints <= 0 || width <= 0) {
         *num_breaks = 0;
@@ -832,7 +832,7 @@ n00b_unicode_linebreak_wrap_raw(const char *data, int64_t len, int width,
 }
 
 n00b_array_t(uint32_t)
-n00b_unicode_linebreak_wrap(n00b_string_t s) _kargs
+n00b_unicode_linebreak_wrap(n00b_string_t *s) _kargs
 {
     int               width        = 80;
     int               hang         = 0;
@@ -842,7 +842,7 @@ n00b_unicode_linebreak_wrap(n00b_string_t s) _kargs
 {
     (void)allocator;
     uint32_t  count = 0;
-    uint32_t *raw   = n00b_unicode_linebreak_wrap_raw(s.data, s.u8_bytes, width, hang,
+    uint32_t *raw   = n00b_unicode_linebreak_wrap_raw(s->data, s->u8_bytes, width, hang,
                                                        no_hard_wrap, &count);
     if (!raw) {
         n00b_array_t(uint32_t) empty = {};

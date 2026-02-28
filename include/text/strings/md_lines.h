@@ -48,5 +48,5 @@
  *  @pre @p tree was produced by `n00b_parse_markdown()`.
  *  @post Each array element is a self-contained styled string.
  */
-n00b_array_t(n00b_string_t)
+n00b_array_t(n00b_string_t *)
 n00b_str_md_to_lines(n00b_tree_t(n00b_md_node_t, n00b_md_node_t) *tree);

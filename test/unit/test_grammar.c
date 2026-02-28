@@ -35,10 +35,10 @@ static void
 test_nonterm_create(void)
 {
     n00b_grammar_t *g  = n00b_grammar_new();
-    n00b_nonterm_t *nt = n00b_nonterm(g, *r"expression");
+    n00b_nonterm_t *nt = n00b_nonterm(g, r"expression");
 
     assert(nt != NULL);
-    assert(n00b_unicode_str_eq(nt->name, *r"expression"));
+    assert(n00b_unicode_str_eq(nt->name, r"expression"));
     assert(nt->id >= 0);
 
     n00b_grammar_free(g);
@@ -53,8 +53,8 @@ static void
 test_nonterm_duplicate(void)
 {
     n00b_grammar_t *g   = n00b_grammar_new();
-    n00b_nonterm_t *nt1 = n00b_nonterm(g, *r"stmt");
-    n00b_nonterm_t *nt2 = n00b_nonterm(g, *r"stmt");
+    n00b_nonterm_t *nt1 = n00b_nonterm(g, r"stmt");
+    n00b_nonterm_t *nt2 = n00b_nonterm(g, r"stmt");
 
     assert(nt1->id == nt2->id);
     assert(n00b_unicode_str_eq(nt1->name, nt2->name));
@@ -72,9 +72,9 @@ test_terminal_register(void)
 {
     n00b_grammar_t *g = n00b_grammar_new();
 
-    int64_t id1 = n00b_register_terminal(g, *r"PLUS");
-    int64_t id2 = n00b_register_terminal(g, *r"MINUS");
-    int64_t id3 = n00b_register_terminal(g, *r"PLUS"); // duplicate
+    int64_t id1 = n00b_register_terminal(g, r"PLUS");
+    int64_t id2 = n00b_register_terminal(g, r"MINUS");
+    int64_t id3 = n00b_register_terminal(g, r"PLUS"); // duplicate
 
     assert(id1 != id2);
     assert(id1 == id3); // same name → same ID
@@ -93,16 +93,16 @@ test_terminal_single_char(void)
 {
     n00b_grammar_t *g = n00b_grammar_new();
 
-    int64_t id = n00b_register_terminal(g, *r"+");
+    int64_t id = n00b_register_terminal(g, r"+");
     // Single-char terminals now get hash-based IDs like all others.
     assert(n00b_token_id_is_fixed_text(id));
 
-    int64_t id2 = n00b_register_terminal(g, *r"*");
+    int64_t id2 = n00b_register_terminal(g, r"*");
     assert(n00b_token_id_is_fixed_text(id2));
     assert(id != id2);
 
     // Re-registering gives the same ID.
-    int64_t id3 = n00b_register_terminal(g, *r"+");
+    int64_t id3 = n00b_register_terminal(g, r"+");
     assert(id3 == id);
 
     n00b_grammar_free(g);
@@ -117,9 +117,9 @@ static void
 test_add_rule(void)
 {
     n00b_grammar_t *g    = n00b_grammar_new();
-    n00b_nonterm_t *expr = n00b_nonterm(g, *r"expr");
-    n00b_nonterm_t *term = n00b_nonterm(g, *r"term");
-    int64_t plus_id      = n00b_register_terminal(g, *r"+");
+    n00b_nonterm_t *expr = n00b_nonterm(g, r"expr");
+    n00b_nonterm_t *term = n00b_nonterm(g, r"term");
+    int64_t plus_id      = n00b_register_terminal(g, r"+");
 
     n00b_parse_rule_t *r = n00b_add_rule(g, expr,
                                           N00B_NT(term),
@@ -142,8 +142,8 @@ static void
 test_add_rule_with_cost(void)
 {
     n00b_grammar_t *g    = n00b_grammar_new();
-    n00b_nonterm_t *expr = n00b_nonterm(g, *r"expr");
-    n00b_nonterm_t *term = n00b_nonterm(g, *r"term");
+    n00b_nonterm_t *expr = n00b_nonterm(g, r"expr");
+    n00b_nonterm_t *term = n00b_nonterm(g, r"term");
 
     n00b_parse_rule_t *r = n00b_add_rule_with_cost(g, expr, 5, N00B_NT(term));
     assert(r != NULL);
@@ -161,8 +161,8 @@ static void
 test_duplicate_rule(void)
 {
     n00b_grammar_t *g    = n00b_grammar_new();
-    n00b_nonterm_t *expr = n00b_nonterm(g, *r"expr");
-    n00b_nonterm_t *term = n00b_nonterm(g, *r"term");
+    n00b_nonterm_t *expr = n00b_nonterm(g, r"expr");
+    n00b_nonterm_t *term = n00b_nonterm(g, r"term");
 
     n00b_parse_rule_t *r1 = n00b_add_rule(g, expr, N00B_NT(term));
     n00b_parse_rule_t *r2 = n00b_add_rule(g, expr, N00B_NT(term)); // duplicate
@@ -185,7 +185,7 @@ static void
 test_group_optional(void)
 {
     n00b_grammar_t *g    = n00b_grammar_new();
-    n00b_nonterm_t *item = n00b_nonterm(g, *r"item");
+    n00b_nonterm_t *item = n00b_nonterm(g, r"item");
 
     n00b_match_t opt = n00b_optional(g, N00B_NT(item));
     assert(opt.kind == N00B_MATCH_GROUP);
@@ -197,7 +197,7 @@ test_group_optional(void)
     // Should have created a $$group_N non-terminal
     n00b_nonterm_t *group_nt = n00b_get_nonterm(g, grp->contents_id);
     assert(group_nt != NULL);
-    assert(n00b_unicode_str_starts_with(group_nt->name, *r"$$group_"));
+    assert(n00b_unicode_str_starts_with(group_nt->name, r"$$group_"));
 
     n00b_grammar_free(g);
     printf("  [PASS] group_optional\n");
@@ -211,7 +211,7 @@ static void
 test_group_star(void)
 {
     n00b_grammar_t *g    = n00b_grammar_new();
-    n00b_nonterm_t *item = n00b_nonterm(g, *r"item");
+    n00b_nonterm_t *item = n00b_nonterm(g, r"item");
 
     n00b_match_t star_m = n00b_star(g, N00B_NT(item));
     assert(star_m.kind == N00B_MATCH_GROUP);
@@ -232,7 +232,7 @@ static void
 test_group_plus(void)
 {
     n00b_grammar_t *g    = n00b_grammar_new();
-    n00b_nonterm_t *item = n00b_nonterm(g, *r"item");
+    n00b_nonterm_t *item = n00b_nonterm(g, r"item");
 
     n00b_match_t plus_m = n00b_plus_group(g, N00B_NT(item));
     assert(plus_m.kind == N00B_MATCH_GROUP);
@@ -253,10 +253,10 @@ static void
 test_finalize(void)
 {
     n00b_grammar_t *g    = n00b_grammar_new();
-    n00b_nonterm_t *expr = n00b_nonterm(g, *r"expr");
-    n00b_nonterm_t *term = n00b_nonterm(g, *r"term");
-    int64_t plus_id      = n00b_register_terminal(g, *r"+");
-    int64_t num_id       = n00b_register_terminal(g, *r"NUM");
+    n00b_nonterm_t *expr = n00b_nonterm(g, r"expr");
+    n00b_nonterm_t *term = n00b_nonterm(g, r"term");
+    int64_t plus_id      = n00b_register_terminal(g, r"+");
+    int64_t num_id       = n00b_register_terminal(g, r"NUM");
 
     // expr ::= term "+" expr | term
     n00b_add_rule(g, expr, N00B_NT(term), N00B_TERMINAL(plus_id), N00B_NT(expr));
@@ -291,10 +291,10 @@ static void
 test_first_set(void)
 {
     n00b_grammar_t *g    = n00b_grammar_new();
-    n00b_nonterm_t *expr = n00b_nonterm(g, *r"expr");
-    n00b_nonterm_t *term = n00b_nonterm(g, *r"term");
-    int64_t num_id       = n00b_register_terminal(g, *r"NUM");
-    int64_t plus_id      = n00b_register_terminal(g, *r"+");
+    n00b_nonterm_t *expr = n00b_nonterm(g, r"expr");
+    n00b_nonterm_t *term = n00b_nonterm(g, r"term");
+    int64_t num_id       = n00b_register_terminal(g, r"NUM");
+    int64_t plus_id      = n00b_register_terminal(g, r"+");
 
     // expr ::= term "+" expr | term
     n00b_add_rule(g, expr, N00B_NT(term), N00B_TERMINAL(plus_id), N00B_NT(expr));
@@ -334,7 +334,7 @@ static void
 test_walk_action(void)
 {
     n00b_grammar_t *g  = n00b_grammar_new();
-    n00b_nonterm_t *nt = n00b_nonterm(g, *r"stmt");
+    n00b_nonterm_t *nt = n00b_nonterm(g, r"stmt");
 
     n00b_nonterm_set_action(nt, dummy_action);
 
@@ -354,7 +354,7 @@ static void
 test_user_data(void)
 {
     n00b_grammar_t *g  = n00b_grammar_new();
-    n00b_nonterm_t *nt = n00b_nonterm(g, *r"stmt");
+    n00b_nonterm_t *nt = n00b_nonterm(g, r"stmt");
 
     int tag = 42;
     n00b_nonterm_set_user_data(nt, &tag);
@@ -375,12 +375,12 @@ static void
 test_annotation_attach(void)
 {
     n00b_grammar_t *g  = n00b_grammar_new();
-    n00b_nonterm_t *nt = n00b_nonterm(g, *r"block");
+    n00b_nonterm_t *nt = n00b_nonterm(g, r"block");
 
     assert(!nt->pending_annotations.data);
 
     // Stage an annotation on the NT.
-    n00b_nt_scope_open(nt, *r"block_scope", N00B_CHILD_IX(0));
+    n00b_nt_scope_open(nt, r"block_scope", N00B_CHILD_IX(0));
 
     nt = n00b_get_nonterm(g, nt->id);
     assert(nt->pending_annotations.data);
@@ -405,7 +405,7 @@ test_annotation_attach(void)
 
     n00b_annotation_t *a = n00b_list_get(rule->annotations, 0);
     assert(a->kind == N00B_ANNOT_SCOPE_OPEN);
-    assert(n00b_unicode_str_eq(a->scope_tag, *r"block_scope"));
+    assert(n00b_unicode_str_eq(a->scope_tag, r"block_scope"));
 
     n00b_grammar_free(g);
     printf("  [PASS] annotation_attach\n");
@@ -421,12 +421,12 @@ test_token_list(void)
     n00b_list_t(n00b_token_info_t) tl = n00b_list_new_cap(n00b_token_info_t, 8);
 
     n00b_token_info_t t1 = {0};
-    t1.value = n00b_option_set(n00b_string_t, *r"foo");
+    t1.value = n00b_option_set(n00b_string_t *, r"foo");
     t1.tid   = 1;
     t1.line  = 1;
 
     n00b_token_info_t t2 = {0};
-    t2.value = n00b_option_set(n00b_string_t, *r"bar");
+    t2.value = n00b_option_set(n00b_string_t *, r"bar");
     t2.tid   = 2;
     t2.line  = 1;
 
@@ -440,8 +440,8 @@ test_token_list(void)
 
     assert(n00b_option_is_set(g0.value));
     assert(n00b_option_is_set(g1.value));
-    assert(n00b_unicode_str_eq(n00b_option_get(g0.value), *r"foo"));
-    assert(n00b_unicode_str_eq(n00b_option_get(g1.value), *r"bar"));
+    assert(n00b_unicode_str_eq(n00b_option_get(g0.value), r"foo"));
+    assert(n00b_unicode_str_eq(n00b_option_get(g1.value), r"bar"));
     assert(g0.tid == 1);
     assert(g1.tid == 2);
 

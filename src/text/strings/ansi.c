@@ -586,7 +586,7 @@ n00b_ansi_parser_results(n00b_ansi_ctx *ctx)
 // Node-to-string conversion
 // -------------------------------------------------------------------
 
-static inline n00b_string_t
+static inline n00b_string_t *
 one_node_to_string(n00b_ansi_node_t *node)
 {
     char *p   = node->start;
@@ -623,7 +623,7 @@ one_node_to_string(n00b_ansi_node_t *node)
     return n00b_string_from_raw(p, len);
 }
 
-n00b_string_t
+n00b_string_t *
 n00b_ansi_nodes_to_string(
     n00b_list_t(n00b_ansi_node_t *) nodes, bool keep_control) _kargs
 {
@@ -633,12 +633,12 @@ n00b_ansi_nodes_to_string(
     if (!allocator)
         allocator = nullptr;
 
-    size_t        num = n00b_list_len(nodes);
-    n00b_string_t acc = n00b_string_from_raw("", 0, .allocator = allocator);
+    size_t         num = n00b_list_len(nodes);
+    n00b_string_t *acc = n00b_string_from_raw("", 0, .allocator = allocator);
 
     for (size_t i = 0; i < num; i++) {
         n00b_ansi_node_t *node = n00b_list_get(nodes, i);
-        n00b_string_t     piece;
+        n00b_string_t    *piece;
 
         if (keep_control) {
             piece = one_node_to_string(node);

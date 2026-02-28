@@ -123,9 +123,7 @@ n00b_conduit_file_open(n00b_conduit_t *c, n00b_conduit_io_backend_t *io,
     snprintf(uri_buf, uri_len, "file:%s:%s", mode_str, path);
 
     // Create string-URI topic
-    n00b_string_t uri_str;
-    uri_str.data     = uri_buf;
-    uri_str.u8_bytes = uri_len - 1;
+    n00b_string_t *uri_str = n00b_string_from_raw(uri_buf, (int64_t)(uri_len - 1));
 
     n00b_result_t(n00b_conduit_topic_base_t *) res =
         n00b_conduit_topic_get(c, n00b_conduit_str_uri(uri_str), 0);

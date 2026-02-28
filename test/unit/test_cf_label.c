@@ -58,13 +58,13 @@ restart:
     n00b_codepoint_t cp = n00b_scan_peek(s, 0);
 
     if (cp == '"') {
-        n00b_option_t(n00b_string_t) val = n00b_scan_string_double(s);
+        n00b_option_t(n00b_string_t *) val = n00b_scan_string_double(s);
         n00b_scan_emit(s, .token_type = "STRING_LIT", .contents = val);
         return true;
     }
 
     if (cp == '\'') {
-        n00b_option_t(n00b_string_t) val = n00b_scan_string_single(s);
+        n00b_option_t(n00b_string_t *) val = n00b_scan_string_single(s);
         n00b_scan_emit(s, .token_type = "CHAR_LIT", .contents = val);
         return true;
     }
@@ -80,7 +80,7 @@ restart:
     }
 
     if ((cp >= 'a' && cp <= 'z') || (cp >= 'A' && cp <= 'Z') || cp == '_') {
-        n00b_option_t(n00b_string_t) id_val = n00b_scan_identifier(s);
+        n00b_option_t(n00b_string_t *) id_val = n00b_scan_identifier(s);
 
         if (n00b_option_is_set(id_val)) {
             n00b_token_err_t err = n00b_scan_emit(s, .contents = id_val);
@@ -186,9 +186,10 @@ load_c_grammar(void)
     }
 
     if (!f && srcroot) {
-        char path[1024];
-        snprintf(path, sizeof(path), "%s/grammars/c_ncc.bnf", srcroot);
+        char *path = nullptr;
+        (void)asprintf(&path, "%s/grammars/c_ncc.bnf", srcroot);
         f = fopen(path, "r");
+        free(path);
     }
 
     if (!f) {
@@ -204,13 +205,13 @@ load_c_grammar(void)
     buf[len] = '\0';
     fclose(f);
 
-    n00b_string_t bnf_text = n00b_string_from_cstr(buf);
+    n00b_string_t *bnf_text = n00b_string_from_cstr(buf);
     free(buf);
 
     n00b_grammar_t *g = n00b_grammar_new();
     n00b_grammar_set_error_recovery(g, false);
 
-    bool ok = n00b_bnf_load(bnf_text, *r"translation_unit", g);
+    bool ok = n00b_bnf_load(bnf_text, r"translation_unit", g);
 
     if (!ok) {
         fprintf(stderr, "  [FAIL] n00b_bnf_load failed for c_ncc.bnf\n");
@@ -258,6 +259,7 @@ typedef struct {
     int assigns;
     int varref;
     int unwrap_result;
+    int call;
 } label_counts_t;
 
 static void
@@ -280,6 +282,7 @@ count_labels_walk(n00b_cf_labels_t *cf_labels, n00b_parse_tree_t *node,
         case N00B_CF_ASSIGNS:       out->assigns++;        break;
         case N00B_CF_VARREF:        out->varref++;         break;
         case N00B_CF_UNWRAP_RESULT: out->unwrap_result++;  break;
+        case N00B_CF_CALL:          out->call++;           break;
         }
     }
 
@@ -756,14 +759,14 @@ test_struct_adt(void)
     assert(ar->symtab != NULL);
 
     // The tag "foo" should be in the "tag" namespace.
-    n00b_sym_entry_t *sym = n00b_symtab_lookup(ar->symtab, *r"tag", *r"foo");
+    n00b_sym_entry_t *sym = n00b_symtab_lookup(ar->symtab, r"tag", r"foo");
     assert(sym != NULL);
     assert(sym->kind == N00B_SYM_TAG);
-    assert(sym->adt_kind.u8_bytes > 0);
-    assert(n00b_unicode_str_eq(sym->adt_kind, *r"struct"));
+    assert(sym->adt_kind->u8_bytes > 0);
+    assert(n00b_unicode_str_eq(sym->adt_kind, r"struct"));
 
     // Field "x" is in a popped scope — should NOT be accessible at file level.
-    n00b_sym_entry_t *field = n00b_symtab_lookup(ar->symtab, *r"", *r"x");
+    n00b_sym_entry_t *field = n00b_symtab_lookup(ar->symtab, r"", r"x");
     assert(field == NULL);
 
     n00b_symtab_free(ar->symtab);
@@ -826,16 +829,16 @@ test_enum_adt(void)
     assert(ar->symtab != NULL);
 
     // The tag "color" should be in the "tag" namespace.
-    n00b_sym_entry_t *sym = n00b_symtab_lookup(ar->symtab, *r"tag", *r"color");
+    n00b_sym_entry_t *sym = n00b_symtab_lookup(ar->symtab, r"tag", r"color");
     assert(sym != NULL);
     assert(sym->kind == N00B_SYM_TAG);
-    assert(sym->adt_kind.u8_bytes > 0);
-    assert(n00b_unicode_str_eq(sym->adt_kind, *r"enum"));
+    assert(sym->adt_kind->u8_bytes > 0);
+    assert(n00b_unicode_str_eq(sym->adt_kind, r"enum"));
 
     // Enum constants are fields in a popped scope — not accessible at file level.
-    assert(n00b_symtab_lookup(ar->symtab, *r"", *r"RED") == NULL);
-    assert(n00b_symtab_lookup(ar->symtab, *r"", *r"GREEN") == NULL);
-    assert(n00b_symtab_lookup(ar->symtab, *r"", *r"BLUE") == NULL);
+    assert(n00b_symtab_lookup(ar->symtab, r"", r"RED") == NULL);
+    assert(n00b_symtab_lookup(ar->symtab, r"", r"GREEN") == NULL);
+    assert(n00b_symtab_lookup(ar->symtab, r"", r"BLUE") == NULL);
 
     n00b_symtab_free(ar->symtab);
     n00b_parse_result_free(r);
@@ -866,11 +869,11 @@ test_union_adt(void)
     assert(ar->symtab != NULL);
 
     // The tag "data" should be in the "tag" namespace.
-    n00b_sym_entry_t *sym = n00b_symtab_lookup(ar->symtab, *r"tag", *r"data");
+    n00b_sym_entry_t *sym = n00b_symtab_lookup(ar->symtab, r"tag", r"data");
     assert(sym != NULL);
     assert(sym->kind == N00B_SYM_TAG);
-    assert(sym->adt_kind.u8_bytes > 0);
-    assert(n00b_unicode_str_eq(sym->adt_kind, *r"union"));
+    assert(sym->adt_kind->u8_bytes > 0);
+    assert(n00b_unicode_str_eq(sym->adt_kind, r"union"));
 
     n00b_symtab_free(ar->symtab);
     n00b_parse_result_free(r);
@@ -902,14 +905,14 @@ test_struct_with_typedef(void)
     assert(ar->symtab != NULL);
 
     // Tag "point" in "tag" namespace with adt_kind "struct".
-    n00b_sym_entry_t *tag = n00b_symtab_lookup(ar->symtab, *r"tag", *r"point");
+    n00b_sym_entry_t *tag = n00b_symtab_lookup(ar->symtab, r"tag", r"point");
     assert(tag != NULL);
     assert(tag->kind == N00B_SYM_TAG);
-    assert(tag->adt_kind.u8_bytes > 0);
-    assert(n00b_unicode_str_eq(tag->adt_kind, *r"struct"));
+    assert(tag->adt_kind->u8_bytes > 0);
+    assert(n00b_unicode_str_eq(tag->adt_kind, r"struct"));
 
     // "point_t" should be found in the default namespace via @declares.
-    n00b_sym_entry_t *td = n00b_symtab_lookup_all(ar->symtab, *r"", *r"point_t");
+    n00b_sym_entry_t *td = n00b_symtab_lookup_all(ar->symtab, r"", r"point_t");
     assert(td != NULL);
     assert(td->kind == N00B_SYM_VARIABLE);  // @declares registers as variable
 
@@ -1009,10 +1012,10 @@ test_earley_no_group_items(void)
     n00b_annot_result_t *ar = n00b_compile_walk(shared_grammar, tree);
     assert(ar != NULL);
 
-    n00b_sym_entry_t *sym = n00b_symtab_lookup(ar->symtab, *r"tag", *r"bar");
+    n00b_sym_entry_t *sym = n00b_symtab_lookup(ar->symtab, r"tag", r"bar");
     assert(sym != NULL);
     assert(sym->kind == N00B_SYM_TAG);
-    assert(n00b_unicode_str_eq(sym->adt_kind, *r"struct"));
+    assert(n00b_unicode_str_eq(sym->adt_kind, r"struct"));
 
     n00b_symtab_free(ar->symtab);
     n00b_parse_result_free(r);

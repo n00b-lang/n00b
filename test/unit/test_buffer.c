@@ -278,15 +278,10 @@ static void
 test_hex_init(void)
 {
     // Create a mock n00b_string_t with hex data.
-    n00b_string_t hex_str = {
-        .data       = "deadbeef",
-        .u8_bytes   = 8,
-        .codepoints = 8,
-        .styling    = nullptr,
-    };
+    n00b_string_t *hex_str = n00b_string_from_raw("deadbeef", 8);
 
     n00b_buffer_t *buf = n00b_alloc(n00b_buffer_t);
-    n00b_buffer_init(buf, .hex = &hex_str);
+    n00b_buffer_init(buf, .hex = hex_str);
 
     assert(n00b_buffer_len(buf) == 4);
     assert((uint8_t)buf->data[0] == 0xde);
@@ -309,9 +304,9 @@ test_to_hex_str(void)
     char bytes[] = { (char)0xde, (char)0xad, (char)0xbe, (char)0xef };
     n00b_buffer_t *buf = n00b_buffer_from_bytes(bytes, 4);
 
-    n00b_string_t hex = n00b_buffer_to_hex_str(buf);
-    assert(hex.u8_bytes == 8);
-    assert(memcmp(hex.data, "deadbeef", 8) == 0);
+    n00b_string_t *hex = n00b_buffer_to_hex_str(buf);
+    assert(hex->u8_bytes == 8);
+    assert(memcmp(hex->data, "deadbeef", 8) == 0);
 
     n00b_buffer_free(buf);
     // hex string memory will be cleaned up by GC / allocator.
@@ -327,10 +322,10 @@ static void
 test_to_string(void)
 {
     n00b_buffer_t *buf = n00b_buffer_from_bytes("test string", 11);
-    n00b_string_t s = n00b_buffer_to_string(buf);
+    n00b_string_t *s = n00b_buffer_to_string(buf);
 
-    assert(s.u8_bytes == 11);
-    assert(memcmp(s.data, "test string", 11) == 0);
+    assert(s->u8_bytes == 11);
+    assert(memcmp(s->data, "test string", 11) == 0);
 
     n00b_buffer_free(buf);
 

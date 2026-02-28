@@ -61,20 +61,20 @@ static const n00b_unicode_script_t recommended_scripts[] = {
 #define NUM_RECOMMENDED (sizeof(recommended_scripts) / sizeof(recommended_scripts[0]))
 
 // UTS #39 skeleton algorithm: NFD -> confusable map -> NFD
-n00b_string_t
+n00b_string_t *
 n00b_unicode_skeleton_raw(n00b_allocator_t *allocator, const char *data, int64_t len)
 {
     // Step 1: NFD
-    n00b_string_t nfd = n00b_unicode_nfd_raw(allocator, data, len);
+    n00b_string_t *nfd = n00b_unicode_nfd_raw(allocator, data, len);
 
     // Step 2: Apply confusable mappings
-    char    *buf     = n00b_alloc_array(char, nfd.u8_bytes * 12 + 1);
+    char    *buf     = n00b_alloc_array(char, nfd->u8_bytes * 12 + 1);
     uint32_t buf_pos = 0;
     uint32_t count   = 0;
     uint32_t pos     = 0;
 
-    while (pos < (uint32_t)nfd.u8_bytes) {
-        int32_t cp = n00b_unicode_utf8_decode(nfd.data, nfd.u8_bytes, &pos);
+    while (pos < (uint32_t)nfd->u8_bytes) {
+        int32_t cp = n00b_unicode_utf8_decode(nfd->data, nfd->u8_bytes, &pos);
         if (cp < 0)
             break;
 
@@ -97,39 +97,37 @@ n00b_unicode_skeleton_raw(n00b_allocator_t *allocator, const char *data, int64_t
     buf[buf_pos] = '\0';
 
     // Step 3: NFD again
-    n00b_string_t result = n00b_unicode_nfd_raw(allocator, buf, buf_pos);
+    n00b_string_t *result = n00b_unicode_nfd_raw(allocator, buf, buf_pos);
 
     return result;
 }
 
-n00b_string_t
-n00b_unicode_skeleton(n00b_string_t s) _kargs
+n00b_string_t *
+n00b_unicode_skeleton(n00b_string_t *s) _kargs
 {
     n00b_allocator_t *allocator = nullptr;
 }
 {
     if (!allocator)
         allocator = nullptr;
-    return n00b_unicode_skeleton_raw(allocator, s.data, s.u8_bytes);
+    return n00b_unicode_skeleton_raw(allocator, s->data, s->u8_bytes);
 }
 
 bool
 n00b_unicode_is_confusable_raw(const char *a, int64_t a_len, const char *b, int64_t b_len)
 {
-    n00b_string_t sa = n00b_unicode_skeleton_raw(nullptr, a, a_len);
-    n00b_string_t sb = n00b_unicode_skeleton_raw(nullptr, b, b_len);
+    n00b_string_t *sa = n00b_unicode_skeleton_raw(nullptr, a, a_len);
+    n00b_string_t *sb = n00b_unicode_skeleton_raw(nullptr, b, b_len);
 
-    bool result = (sa.u8_bytes == sb.u8_bytes && memcmp(sa.data, sb.data, sa.u8_bytes) == 0);
+    bool result = (sa->u8_bytes == sb->u8_bytes && memcmp(sa->data, sb->data, sa->u8_bytes) == 0);
 
-    n00b_free(sa.data);
-    n00b_free(sb.data);
     return result;
 }
 
 bool
-n00b_unicode_is_confusable(n00b_string_t a, n00b_string_t b)
+n00b_unicode_is_confusable(n00b_string_t *a, n00b_string_t *b)
 {
-    return n00b_unicode_is_confusable_raw(a.data, a.u8_bytes, b.data, b.u8_bytes);
+    return n00b_unicode_is_confusable_raw(a->data, a->u8_bytes, b->data, b->u8_bytes);
 }
 
 static bool
@@ -326,9 +324,9 @@ n00b_unicode_script_restriction_raw(const char *data, int64_t len)
 }
 
 n00b_unicode_restriction_level_t
-n00b_unicode_script_restriction(n00b_string_t s)
+n00b_unicode_script_restriction(n00b_string_t *s)
 {
-    return n00b_unicode_script_restriction_raw(s.data, s.u8_bytes);
+    return n00b_unicode_script_restriction_raw(s->data, s->u8_bytes);
 }
 
 bool
@@ -339,7 +337,7 @@ n00b_unicode_has_mixed_scripts_raw(const char *data, int64_t len)
 }
 
 bool
-n00b_unicode_has_mixed_scripts(n00b_string_t s)
+n00b_unicode_has_mixed_scripts(n00b_string_t *s)
 {
-    return n00b_unicode_has_mixed_scripts_raw(s.data, s.u8_bytes);
+    return n00b_unicode_has_mixed_scripts_raw(s->data, s->u8_bytes);
 }

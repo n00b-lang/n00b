@@ -74,7 +74,7 @@ void n00b_forest_print(n00b_parse_forest_t *forest, n00b_grammar_t *g, FILE *out
  * @param node  Parse tree node to format.
  * @return Formatted string representation.
  */
-n00b_string_t n00b_parse_node_repr(n00b_parse_tree_t *node);
+n00b_string_t *n00b_parse_node_repr(n00b_parse_tree_t *node);
 
 /**
  * @brief Print the LR(0) state table to @p out.

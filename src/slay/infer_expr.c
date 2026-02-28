@@ -40,9 +40,9 @@
 #include "typecheck/unify.h"
 
 // Forward-declare construct functions (same pattern as infer.c).
-extern n00b_tc_type_t *n00b_tc_var(n00b_tc_ctx_t *ctx, n00b_string_t name);
+extern n00b_tc_type_t *n00b_tc_var(n00b_tc_ctx_t *ctx, n00b_string_t *name);
 extern n00b_tc_type_t *n00b_tc_fresh_var(n00b_tc_ctx_t *ctx);
-extern n00b_tc_type_t *n00b_tc_prim(n00b_tc_ctx_t *ctx, n00b_string_t name);
+extern n00b_tc_type_t *n00b_tc_prim(n00b_tc_ctx_t *ctx, n00b_string_t *name);
 extern void n00b_tc_ctx_register(n00b_tc_ctx_t *ctx, n00b_tc_type_t *type);
 
 
@@ -54,7 +54,7 @@ extern void n00b_tc_ctx_register(n00b_tc_ctx_t *ctx, n00b_tc_type_t *type);
 #define INFER_MAX_TVARS 16
 
 typedef struct {
-    n00b_string_t   name;
+    n00b_string_t  *name;
     n00b_tc_type_t *var;
 } infer_tvar_entry_t;
 
@@ -145,7 +145,7 @@ match_kw(infer_ctx_t *ctx, const char *kw)
 }
 
 // Parse an identifier (alnum + _).
-static n00b_string_t
+static n00b_string_t *
 parse_ident(infer_ctx_t *ctx)
 {
     skip_ws(ctx);
@@ -242,7 +242,7 @@ parse_type_primary(infer_ctx_t *ctx)
     if (match_kw(ctx, "$return")) {
         if (ctx->symtab) {
             n00b_sym_entry_t *sym = n00b_symtab_lookup_any(
-                ctx->symtab, n00b_string_empty(), *r"$return");
+                ctx->symtab, n00b_string_empty(), r"$return");
 
             if (sym && sym->type_var) {
                 return sym->type_var;
@@ -276,9 +276,9 @@ parse_type_primary(infer_ctx_t *ctx)
                 name_child = n00b_tree_child(ctx->node, index);
             }
 
-            n00b_string_t name = n00b_tree_extract_first_identifier(name_child);
+            n00b_string_t *name = n00b_tree_extract_first_identifier(name_child);
 
-            if (name.u8_bytes == 0) {
+            if (!name || name->u8_bytes == 0) {
                 ctx->error = true;
                 return NULL;
             }
@@ -420,9 +420,9 @@ parse_type_primary(infer_ctx_t *ctx)
 
     // `x — type variable (same name within one expression = same var).
     if (match_char(ctx, '`')) {
-        n00b_string_t name = parse_ident(ctx);
+        n00b_string_t *name = parse_ident(ctx);
 
-        if (name.u8_bytes == 0) {
+        if (!name || name->u8_bytes == 0) {
             ctx->error = true;
             return NULL;
         }
@@ -482,9 +482,9 @@ parse_type_primary(infer_ctx_t *ctx)
             }
         }
 
-        n00b_string_t ident = n00b_tree_extract_first_identifier(child);
+        n00b_string_t *ident = n00b_tree_extract_first_identifier(child);
 
-        if (ident.u8_bytes == 0) {
+        if (!ident || ident->u8_bytes == 0) {
             return n00b_tc_fresh_var(ctx->tc_ctx);
         }
 
@@ -540,9 +540,9 @@ parse_type_primary(infer_ctx_t *ctx)
     }
 
     // IDENT — could be primitive or parameterized (IDENT[...]).
-    n00b_string_t name = parse_ident(ctx);
+    n00b_string_t *name = parse_ident(ctx);
 
-    if (name.u8_bytes == 0) {
+    if (!name || name->u8_bytes == 0) {
         ctx->error = true;
         return NULL;
     }
@@ -669,9 +669,9 @@ n00b_infer_eval_ex(n00b_tc_ctx_t              *tc_ctx,
                    n00b_parse_tree_t          *node,
                    n00b_node_types_t          *node_types,
                    n00b_translate_type_spec_fn ts_fn,
-                   n00b_string_t               expr)
+                   n00b_string_t              *expr)
 {
-    if (!tc_ctx || expr.u8_bytes == 0) {
+    if (!tc_ctx || !expr || expr->u8_bytes == 0) {
         return NULL;
     }
 
@@ -682,9 +682,9 @@ n00b_infer_eval_ex(n00b_tc_ctx_t              *tc_ctx,
         .node                = node,
         .node_types          = node_types,
         .translate_type_spec = ts_fn,
-        .src                 = expr.data,
+        .src                 = expr->data,
         .pos                 = 0,
-        .len                 = (int32_t)expr.u8_bytes,
+        .len                 = (int32_t)expr->u8_bytes,
         .error               = false,
     };
 
@@ -703,7 +703,7 @@ n00b_infer_eval(n00b_tc_ctx_t     *tc_ctx,
                 n00b_grammar_t    *grammar,
                 n00b_parse_tree_t *node,
                 n00b_node_types_t *node_types,
-                n00b_string_t      expr)
+                n00b_string_t     *expr)
 {
     return n00b_infer_eval_ex(tc_ctx, symtab, grammar, node, node_types,
                               NULL, expr);

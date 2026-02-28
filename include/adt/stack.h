@@ -16,7 +16,6 @@
  *
  * Usage:
  * @code
- *     n00b_stack_decl(int);
  *     n00b_stack_t(int) stk = n00b_stack_new(int);
  *     n00b_stack_push(stk, 42);
  *     int x = n00b_option_get(n00b_stack_pop(int, stk));
@@ -46,10 +45,8 @@
 
 #define n00b_stack_tid(T) typeid("n00b_stack", T)
 
-#define n00b_stack_t(T) struct n00b_stack_tid(T)
-
-#define n00b_stack_decl(T)                                                                         \
-    struct n00b_stack_tid(T) {                                                                     \
+#define n00b_stack_t(T)                                                                            \
+    _generic_struct n00b_stack_tid(T) {                                                            \
         T                *data;                                                                    \
         size_t            len;                                                                     \
         size_t            cap;                                                                     \

@@ -33,7 +33,7 @@
  * The public API uses n00b types exclusively:
  * - `n00b_string_t` for text (command, arguments, environment)
  * - `n00b_buffer_t *` for byte data (I/O payloads, captures)
- * - `n00b_array_t(n00b_string_t)` for argument/environment lists
+ * - `n00b_array_t(n00b_string_t *)` for argument/environment lists
  * - No `char *` crosses the public API boundary
  *
  * @pre  Windows is not supported (`#ifndef _WIN32` guard).
@@ -165,8 +165,6 @@ typedef bool (*n00b_subproc_done_fn_t)(n00b_subproc_t *sp, void *ctx);
 // Type declarations needed by the struct
 // ============================================================================
 
-// n00b_array_decl(n00b_string_t) is already in string_ops.h.
-n00b_array_decl(void *);
 
 /**
  * @brief Buffer inbox type — used for user-supplied I/O subscriptions.
@@ -178,14 +176,6 @@ n00b_array_decl(void *);
  */
 typedef n00b_conduit_inbox_t(n00b_buffer_t *) n00b_subproc_buf_inbox_t;
 
-n00b_array_decl(n00b_subproc_buf_inbox_t *);
-
-// ============================================================================
-// Result declarations
-// ============================================================================
-
-n00b_option_decl(pid_t);
-n00b_result_decl(n00b_subproc_t *);
 
 // ============================================================================
 // Subprocess struct
@@ -203,11 +193,11 @@ n00b_result_decl(n00b_subproc_t *);
 struct n00b_subproc {
     // -- Configuration (set before spawn, immutable after) --
 
-    n00b_string_t                  cmd;           /**< Command to execute */
-    n00b_array_t(n00b_string_t)   *args;          /**< Argument list (null = none) */
-    n00b_array_t(n00b_string_t)   *env;           /**< Environment (null = inherit) */
+    n00b_string_t                 *cmd;           /**< Command to execute */
+    n00b_array_t(n00b_string_t *)  *args;          /**< Argument list (null = none) */
+    n00b_array_t(n00b_string_t *)  *env;           /**< Environment (null = inherit) */
     n00b_buffer_t                 *stdin_inject;   /**< Initial stdin data (null = none) */
-    n00b_string_t                  cwd;           /**< Working directory (null = inherit) */
+    n00b_string_t                 *cwd;           /**< Working directory (null = inherit) */
     struct termios                *termcap;        /**< PTY terminal settings (null = inherit) */
     n00b_pre_exec_hook_t           pre_exec_hook; /**< Child pre-exec callback */
     void                          *hook_param;    /**< Hook user data */
@@ -334,8 +324,8 @@ struct n00b_subproc {
  * @kw cmd              Command to execute (`n00b_string_t`).
  * @kw conduit          Conduit instance.
  * @kw io               IO backend (null = conduit's default).
- * @kw args             Argument list (`n00b_array_t(n00b_string_t) *`).
- * @kw env              Environment (`n00b_array_t(n00b_string_t) *`).
+ * @kw args             Argument list (`n00b_array_t(n00b_string_t *) *`).
+ * @kw env              Environment (`n00b_array_t(n00b_string_t *) *`).
  * @kw capture          Enable all capture flags.
  * @kw proxy            Enable all proxy flags.
  * @kw merge            Merge stderr into stdout (default: true).
@@ -364,11 +354,11 @@ struct n00b_subproc {
  */
 extern void n00b_subproc_init(n00b_subproc_t *sp)
     _kargs {
-        n00b_string_t                              cmd;
+        n00b_string_t                             *cmd;
         n00b_conduit_t                            *conduit         = nullptr;
         n00b_conduit_io_backend_t                 *io              = nullptr;
-        n00b_array_t(n00b_string_t)               *args            = nullptr;
-        n00b_array_t(n00b_string_t)               *env             = nullptr;
+        n00b_array_t(n00b_string_t *)              *args            = nullptr;
+        n00b_array_t(n00b_string_t *)              *env             = nullptr;
         bool                                       capture         = false;
         bool                                       capture_stdin   = false;
         bool                                       capture_stdout  = false;
@@ -384,7 +374,7 @@ extern void n00b_subproc_init(n00b_subproc_t *sp)
         bool                                       handle_win_size = true;
         n00b_buffer_t                             *stdin_inject    = nullptr;
         bool                                       close_stdin     = false;
-        n00b_string_t                              cwd;
+        n00b_string_t                             *cwd;
         struct termios                            *termcap         = nullptr;
         n00b_duration_t                           *timeout         = nullptr;
         n00b_subproc_timeout_t                     timeout_policy  = N00B_SUBPROC_TIMEOUT_SIGTERM;

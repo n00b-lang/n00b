@@ -12,23 +12,11 @@
 #include "adt/dict.h"
 
 // ============================================================================
-// Container declarations
-// ============================================================================
-
-n00b_list_decl(n00b_match_t);
-n00b_list_decl(n00b_parse_rule_t);
-n00b_list_decl(n00b_nonterm_t);
-n00b_list_decl(n00b_annotation_t *);
-n00b_dict_decl(int64_t, bool);
-n00b_dict_decl(n00b_string_t *, int64_t);
-n00b_dict_decl(int64_t, n00b_string_t *);
-
-// ============================================================================
 // Internal structures
 // ============================================================================
 
 struct n00b_nonterm_t {
-    n00b_string_t                    name;
+    n00b_string_t                   *name;
     n00b_list_t(int32_t)             rule_ids;
     n00b_list_t(n00b_annotation_t *) pending_annotations;
     n00b_walk_action_t               action;
@@ -52,7 +40,7 @@ struct n00b_parse_rule_t {
     n00b_dict_t(int64_t, bool)           *first_set;
     int32_t                               cost;
     int32_t                               link_ix;
-    n00b_string_t                         doc;
+    n00b_string_t                        *doc;
     bool                                  penalty_rule;
     bool                                  first_has_any;
     void                                 *thunk;
@@ -115,7 +103,7 @@ struct n00b_grammar_t {
     bool                           hide_groups;
     int                            suspend_penalty_hiding;
     bool                           suspend_group_hiding;
-    n00b_string_t                  tokenizer_name;
+    n00b_string_t                 *tokenizer_name;
     n00b_scan_cb_t                 tokenize_cb;
     n00b_walk_action_t             default_action;
     n00b_tree_disambig_fn_t        disambiguator;

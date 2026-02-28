@@ -70,7 +70,7 @@ n00b_format_spec_t n00b_format_spec_parse(const char *spec, int spec_len);
  *  @kw allocator Optional allocator.
  *  @pre @p spec is non-nullptr.
  */
-n00b_string_t n00b_str_fmt_int_ex(int64_t value,
+n00b_string_t *n00b_str_fmt_int_ex(int64_t value,
                                    const n00b_format_spec_t *spec)
     _kargs { n00b_allocator_t *allocator = nullptr; };
 
@@ -85,7 +85,7 @@ n00b_string_t n00b_str_fmt_int_ex(int64_t value,
  *  @kw allocator Optional allocator.
  *  @pre @p spec is non-nullptr.
  */
-n00b_string_t n00b_str_fmt_float_ex(double value,
+n00b_string_t *n00b_str_fmt_float_ex(double value,
                                      const n00b_format_spec_t *spec)
     _kargs { n00b_allocator_t *allocator = nullptr; };
 
@@ -95,6 +95,6 @@ n00b_string_t n00b_str_fmt_float_ex(double value,
  *  @kw allocator Optional allocator.
  *  @pre @p spec is non-nullptr.
  */
-n00b_string_t n00b_str_fmt_string_ex(n00b_string_t value,
+n00b_string_t *n00b_str_fmt_string_ex(n00b_string_t *value,
                                       const n00b_format_spec_t *spec)
     _kargs { n00b_allocator_t *allocator = nullptr; };

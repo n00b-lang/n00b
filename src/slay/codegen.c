@@ -329,10 +329,9 @@ n00b_codegen_register(n00b_cg_session_t  *s,
         return false;
     }
 
-    n00b_string_t  name     = n00b_string_from_cstr(nt_name);
-    n00b_string_t *name_ptr = &name;
+    n00b_string_t *name     = n00b_string_from_cstr(nt_name);
     bool           found;
-    int64_t        id = n00b_dict_get(s->grammar->nt_map, name_ptr, &found);
+    int64_t        id = n00b_dict_get(s->grammar->nt_map, name, &found);
 
     if (!found) {
         return false;
@@ -468,7 +467,7 @@ n00b_codegen_get_user_data(n00b_cg_session_t *s)
 static n00b_cg_val_t
 default_literal_parser(n00b_cg_session_t  *s,
                        n00b_parse_tree_t  *node,
-                       n00b_string_t       lit_kind,
+                       n00b_string_t      *lit_kind,
                        n00b_cg_type_tag_t  type_tag)
 {
     const char *text = n00b_pt_token_text(node);
@@ -638,7 +637,7 @@ codegen_literal(n00b_cg_session_t *s,
         return _n00b_cg_const_i64(s, 0);
     }
 
-    n00b_string_t lit_kind = annot->op_kind;
+    n00b_string_t *lit_kind = annot->op_kind;
 
     if (s->literal_parser) {
         return s->literal_parser(s, tok_node, lit_kind, type);
@@ -801,7 +800,7 @@ static n00b_cg_val_t
 codegen_jump(n00b_cg_session_t *s, n00b_cf_label_t *cf)
 {
     n00b_cg_module_t *m = s->active_module;
-    const char       *jk = cf->jump_kind.data;
+    const char       *jk = cf->jump_kind ? cf->jump_kind->data : NULL;
 
     if (!jk) {
         return N00B_CG_VOID_VAL;
@@ -986,11 +985,10 @@ codegen_walk(n00b_cg_session_t *s, n00b_parse_tree_t *node)
         n00b_parse_tree_t *tok  = node;
 
         if (s->literal_parser) {
-            n00b_string_t no_kind = {0};
-            return s->literal_parser(s, tok, no_kind, type);
+            return s->literal_parser(s, tok, NULL, type);
         }
 
-        return default_literal_parser(s, tok, (n00b_string_t){0}, type);
+        return default_literal_parser(s, tok, NULL, type);
     }
 
     n00b_nt_node_t *pn = &n00b_tree_node_value(node);
@@ -1019,6 +1017,7 @@ codegen_walk(n00b_cg_session_t *s, n00b_parse_tree_t *node)
         case N00B_CF_SWITCH:
         case N00B_CF_CAPTURE:
         case N00B_CF_UNWRAP_RESULT:
+        case N00B_CF_CALL:
             break;
         }
     }
@@ -1181,7 +1180,7 @@ n00b_codegen_audit(n00b_cg_session_t *s)
             continue;
         }
 
-        const char *name = nt->name.data;
+        const char *name = nt->name ? nt->name->data : NULL;
 
         if (!name) {
             continue;
@@ -1534,7 +1533,7 @@ n00b_cg_module_lookup(n00b_cg_module_t *m, const char *name)
 
     // Try module's own symtab first.
     if (m->annot && m->annot->symtab) {
-        n00b_string_t sname = n00b_string_from_cstr(name);
+        n00b_string_t *sname = n00b_string_from_cstr(name);
         n00b_sym_entry_t *sym = n00b_symtab_lookup_any(
             m->annot->symtab, n00b_string_empty(), sname);
 
@@ -1545,7 +1544,7 @@ n00b_cg_module_lookup(n00b_cg_module_t *m, const char *name)
 
     // Fall back to session global scope.
     if (m->session && m->session->global_scope) {
-        n00b_string_t sname = n00b_string_from_cstr(name);
+        n00b_string_t *sname = n00b_string_from_cstr(name);
 
         return n00b_symtab_lookup_any(
             m->session->global_scope, n00b_string_empty(), sname);

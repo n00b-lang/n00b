@@ -22,7 +22,6 @@
  *
  * Usage:
  * @code
- *     n00b_list_decl(int);
  *     n00b_list_t(int) lst = n00b_list_new(int);
  *     n00b_list_push(lst, 42);
  *     int x = n00b_list_get(lst, 0);
@@ -57,28 +56,17 @@
 /**
  * @brief Reference a list type for element type @p T.
  * @param T  Element type.
- */
-#define n00b_list_t(T) struct n00b_list_tid(T)
-
-/**
- * @brief Declare (define) a list struct for element type @p T.
- * @param T  Element type.
  *
  * Struct layout: @c { T *data; size_t len; size_t cap; n00b_rwlock_t *lock; }
  */
-#define n00b_list_decl(T)                                                                      \
-    struct n00b_list_tid(T) {                                                                  \
+#define n00b_list_t(T)                                                                         \
+    _generic_struct n00b_list_tid(T) {                                                         \
         T                *data;                                                                \
         size_t            len;                                                                 \
         size_t            cap;                                                                 \
         n00b_rwlock_t    *lock;                                                                \
         n00b_allocator_t *allocator;                                                           \
     }
-
-// Common list types that many modules need.
-n00b_list_decl(int);
-n00b_list_decl(int32_t);
-n00b_list_decl(n00b_string_t);
 
 // ============================================================================
 // Internal helpers  (not part of public API)

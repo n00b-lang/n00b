@@ -28,9 +28,9 @@
  * n00b_logic_t prog;
  * n00b_logic_init(&prog);
  *
- * n00b_dl_rel_id_t edge = n00b_logic_relation(&prog, *r"edge", 2);
- * n00b_dl_sym_t a = n00b_logic_const(&prog, *r"a");
- * n00b_dl_sym_t b = n00b_logic_const(&prog, *r"b");
+ * n00b_dl_rel_id_t edge = n00b_logic_relation(&prog, r"edge", 2);
+ * n00b_dl_sym_t a = n00b_logic_const(&prog, r"a");
+ * n00b_dl_sym_t b = n00b_logic_const(&prog, r"b");
  * n00b_logic_add_fact(&prog, edge, 2, (n00b_dl_sym_t[]){a, b});
  *
  * n00b_logic_run_datalog(&prog);
@@ -90,17 +90,17 @@ void n00b_logic_free(n00b_logic_t *prog);
 // ============================================================================
 
 /** @brief Define or look up a relation. */
-n00b_dl_rel_id_t n00b_logic_relation(n00b_logic_t *prog, n00b_string_t name,
+n00b_dl_rel_id_t n00b_logic_relation(n00b_logic_t *prog, n00b_string_t *name,
                                        int32_t arity);
 
 /** @brief Intern a constant symbol. */
-n00b_dl_sym_t n00b_logic_const(n00b_logic_t *prog, n00b_string_t name);
+n00b_dl_sym_t n00b_logic_const(n00b_logic_t *prog, n00b_string_t *name);
 
 /** @brief Intern an integer symbol. */
 n00b_dl_sym_t n00b_logic_int(n00b_logic_t *prog, int64_t value);
 
 /** @brief Intern a logic variable. */
-n00b_dl_sym_t n00b_logic_var(n00b_logic_t *prog, n00b_string_t name);
+n00b_dl_sym_t n00b_logic_var(n00b_logic_t *prog, n00b_string_t *name);
 
 /** @brief Add a ground fact. */
 void n00b_logic_add_fact(n00b_logic_t *prog, n00b_dl_rel_id_t rel,
@@ -123,7 +123,7 @@ void n00b_logic_add_rule(n00b_logic_t *prog, n00b_dl_rule_t rule);
  * @param domain Initial domain.
  * @return       Variable ID.
  */
-n00b_csp_var_id_t n00b_logic_csp_var(n00b_logic_t *prog, n00b_string_t name,
+n00b_csp_var_id_t n00b_logic_csp_var(n00b_logic_t *prog, n00b_string_t *name,
                                        n00b_csp_domain_t domain);
 
 /** @brief Post X = Y. */
@@ -305,7 +305,7 @@ n00b_result_t(int64_t) n00b_logic_csp_value(n00b_logic_t *prog,
  * @param prog Program.
  * @param rel  Relation name.
  */
-void n00b_logic_fact(n00b_logic_t *prog, n00b_string_t rel, +);
+void n00b_logic_fact(n00b_logic_t *prog, n00b_string_t *rel, +);
 
 /**
  * @brief Bridge a Datalog relation into the CSP.
@@ -326,7 +326,7 @@ void n00b_logic_fact(n00b_logic_t *prog, n00b_string_t rel, +);
  * @return     Total CSP variables created across all columns.
  */
 extern int32_t
-n00b_logic_bridge(n00b_logic_t *prog, n00b_string_t rel) _kargs
+n00b_logic_bridge(n00b_logic_t *prog, n00b_string_t *rel) _kargs
 {
     n00b_csp_domain_t   domain;
     n00b_csp_con_kind_t constraint = -1;
@@ -343,7 +343,7 @@ n00b_logic_bridge(n00b_logic_t *prog, n00b_string_t rel) _kargs
  * @param hi   Domain upper bound (inclusive).
  * @return     Variable ID.
  */
-n00b_csp_var_id_t n00b_logic_int_var(n00b_logic_t *prog, n00b_string_t name,
+n00b_csp_var_id_t n00b_logic_int_var(n00b_logic_t *prog, n00b_string_t *name,
                                        int64_t lo, int64_t hi);
 
 /**
@@ -359,7 +359,7 @@ n00b_csp_var_id_t n00b_logic_int_var(n00b_logic_t *prog, n00b_string_t name,
  *              or if either variable is not found.
  */
 bool n00b_logic_constrain(n00b_logic_t *prog,
-                            n00b_string_t var_a, n00b_string_t var_b,
+                            n00b_string_t *var_a, n00b_string_t *var_b,
                             n00b_csp_con_kind_t kind);
 
 /**
@@ -374,14 +374,14 @@ bool n00b_logic_constrain(n00b_logic_t *prog,
  * @return     Result containing the integer value.
  */
 n00b_result_t(int64_t) n00b_logic_get_int(n00b_logic_t *prog,
-                                            n00b_string_t name);
+                                            n00b_string_t *name);
 
 /**
  * @brief Term in a linear constraint: `coeff * variable`.
  */
 typedef struct {
-    int64_t       coeff;
-    n00b_string_t name;
+    int64_t        coeff;
+    n00b_string_t *name;
 } n00b_linear_term_t;
 
 /**
@@ -406,7 +406,7 @@ bool n00b_logic_alldiff(n00b_logic_t *prog, +);
  * a linear equality constraint via `n00b_csp_post_linear`.
  *
  * ```c
- * n00b_linear_term_t terms[] = {{2, *r"x"}, {3, *r"y"}};
+ * n00b_linear_term_t terms[] = {{2, r"x"}, {3, r"y"}};
  * n00b_logic_linear(prog, terms, 2, .rhs = 12);
  * ```
  *

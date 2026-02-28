@@ -39,22 +39,22 @@ annot_phase_symtab(n00b_annot_walk_ctx_t *ctx, annot_node_ctx_t *nc)
             n00b_parse_tree_t *name_node
                 = n00b_tree_resolve_child_ref(
                     ctx->grammar, nc->node, a->name_ref);
-            n00b_string_t sym_name
+            n00b_string_t *sym_name
                 = name_node
                     ? n00b_tree_extract_first_identifier(name_node)
                     : n00b_string_empty();
 
-            if (sym_name.u8_bytes > 0) {
+            if (sym_name && sym_name->u8_bytes > 0) {
                 n00b_sym_kind_t sym_kind = N00B_SYM_VARIABLE;
 
-                if (a->sym_kind.u8_bytes > 0) {
-                    if (n00b_unicode_str_eq(a->sym_kind, *r"param")) {
+                if (a->sym_kind && a->sym_kind->u8_bytes > 0) {
+                    if (n00b_unicode_str_eq(a->sym_kind, r"param")) {
                         sym_kind = N00B_SYM_PARAM;
                     }
-                    else if (n00b_unicode_str_eq(a->sym_kind, *r"function")) {
+                    else if (n00b_unicode_str_eq(a->sym_kind, r"function")) {
                         sym_kind = N00B_SYM_FUNCTION;
                     }
-                    else if (n00b_unicode_str_eq(a->sym_kind, *r"module")) {
+                    else if (n00b_unicode_str_eq(a->sym_kind, r"module")) {
                         sym_kind = N00B_SYM_MODULE;
                     }
                 }
@@ -64,6 +64,15 @@ annot_phase_symtab(n00b_annot_walk_ctx_t *ctx, annot_node_ctx_t *nc)
                                                 sym_name,
                                                 sym_kind,
                                                 nc->node);
+
+                // Stamp mutability: params default to immutable,
+                // variables inherit from the enclosing <variable-decl>.
+                if (sym_kind == N00B_SYM_PARAM) {
+                    nc->last_sym->mutability = N00B_SYM_IMMUTABLE;
+                }
+                else {
+                    nc->last_sym->mutability = ctx->current_mutability;
+                }
 
                 if (nc->last_sym->shadowed && ctx->shadowed_entries) {
                     n00b_list_push(*ctx->shadowed_entries, nc->last_sym);
@@ -77,7 +86,7 @@ annot_phase_symtab(n00b_annot_walk_ctx_t *ctx, annot_node_ctx_t *nc)
                 // so type binding can bind the explicit annotation.
                 if (a->type_ref.kind == N00B_ROLE_BY_INDEX
                         ? a->type_ref.index >= 0
-                        : a->type_ref.name.data != NULL) {
+                        : a->type_ref.name != NULL) {
                     n00b_parse_tree_t *tnode
                         = n00b_tree_resolve_child_ref(
                             ctx->grammar, nc->node, a->type_ref);
@@ -101,12 +110,12 @@ annot_phase_symtab(n00b_annot_walk_ctx_t *ctx, annot_node_ctx_t *nc)
             n00b_parse_tree_t *name_node
                 = n00b_tree_resolve_child_ref(
                     ctx->grammar, nc->node, a->name_ref);
-            n00b_string_t sym_name
+            n00b_string_t *sym_name
                 = name_node
                     ? n00b_tree_extract_first_identifier(name_node)
                     : n00b_string_empty();
 
-            if (sym_name.u8_bytes > 0) {
+            if (sym_name && sym_name->u8_bytes > 0) {
                 nc->last_sym = n00b_symtab_add(ctx->symtab,
                                                 n00b_string_empty(),
                                                 sym_name,
@@ -130,33 +139,33 @@ annot_phase_symtab(n00b_annot_walk_ctx_t *ctx, annot_node_ctx_t *nc)
             n00b_parse_tree_t *name_node
                 = n00b_tree_resolve_child_ref(
                     ctx->grammar, nc->node, a->name_ref);
-            n00b_string_t tag_name
+            n00b_string_t *tag_name
                 = name_node
                     ? n00b_tree_extract_first_identifier(name_node)
                     : n00b_string_empty();
 
-            if (tag_name.u8_bytes > 0) {
+            if (tag_name && tag_name->u8_bytes > 0) {
                 n00b_sym_entry_t *sym = n00b_symtab_add(
                     ctx->symtab,
-                    *r"tag",
+                    r"tag",
                     tag_name,
                     N00B_SYM_TAG,
                     nc->node);
 
-                n00b_string_t kind = a->adt_kind;
+                n00b_string_t *kind = a->adt_kind;
 
                 if (a->adt_keyword_ref.kind == N00B_ROLE_BY_INDEX
                         ? a->adt_keyword_ref.index >= 0
-                        : a->adt_keyword_ref.name.data != NULL) {
+                        : a->adt_keyword_ref.name != NULL) {
                     n00b_parse_tree_t *kw_node
                         = n00b_tree_resolve_child_ref(
                             ctx->grammar, nc->node, a->adt_keyword_ref);
 
                     if (kw_node) {
-                        n00b_string_t kw
+                        n00b_string_t *kw
                             = n00b_tree_extract_first_identifier(kw_node);
 
-                        if (kw.u8_bytes > 0) {
+                        if (kw && kw->u8_bytes > 0) {
                             kind = kw;
                         }
                     }
@@ -177,12 +186,12 @@ annot_phase_symtab(n00b_annot_walk_ctx_t *ctx, annot_node_ctx_t *nc)
             n00b_parse_tree_t *name_node
                 = n00b_tree_resolve_child_ref(
                     ctx->grammar, nc->node, a->name_ref);
-            n00b_string_t field_name
+            n00b_string_t *field_name
                 = name_node
                     ? n00b_tree_extract_first_identifier(name_node)
                     : n00b_string_empty();
 
-            if (field_name.u8_bytes > 0) {
+            if (field_name && field_name->u8_bytes > 0) {
                 n00b_parse_tree_t *type_node
                     = n00b_tree_resolve_child_ref(
                         ctx->grammar, nc->node, a->type_ref);
@@ -212,12 +221,12 @@ annot_phase_symtab(n00b_annot_walk_ctx_t *ctx, annot_node_ctx_t *nc)
             n00b_parse_tree_t *name_node
                 = n00b_tree_resolve_child_ref(
                     ctx->grammar, nc->node, a->name_ref);
-            n00b_string_t method_name
+            n00b_string_t *method_name
                 = name_node
                     ? n00b_tree_extract_first_identifier(name_node)
                     : n00b_string_empty();
 
-            if (method_name.u8_bytes > 0) {
+            if (method_name && method_name->u8_bytes > 0) {
                 n00b_parse_tree_t *type_node
                     = n00b_tree_resolve_child_ref(
                         ctx->grammar, nc->node, a->type_ref);
@@ -277,18 +286,84 @@ annot_phase_symtab(n00b_annot_walk_ctx_t *ctx, annot_node_ctx_t *nc)
             break;
         }
 
+        case N00B_ANNOT_INHERITS: {
+            if (nc->last_sym) {
+                n00b_parse_tree_t *name_node
+                    = n00b_tree_resolve_child_ref(
+                        ctx->grammar, nc->node, a->name_ref);
+                n00b_string_t *parent_name
+                    = name_node
+                        ? n00b_tree_extract_first_identifier(name_node)
+                        : NULL;
+
+                if (parent_name && parent_name->u8_bytes > 0) {
+                    nc->last_sym->inherits_name = parent_name;
+                }
+            }
+
+            break;
+        }
+
+        case N00B_ANNOT_IMPLEMENTS: {
+            if (nc->last_sym) {
+                n00b_parse_tree_t *name_node
+                    = n00b_tree_resolve_child_ref(
+                        ctx->grammar, nc->node, a->name_ref);
+                n00b_string_t *iface_name
+                    = name_node
+                        ? n00b_tree_extract_first_identifier(name_node)
+                        : NULL;
+
+                if (iface_name && iface_name->u8_bytes > 0) {
+                    if (!nc->last_sym->implements) {
+                        nc->last_sym->implements
+                            = n00b_alloc(n00b_list_t(n00b_string_t *));
+                    }
+
+                    n00b_list_push(*nc->last_sym->implements, iface_name);
+                }
+            }
+
+            break;
+        }
+
+        case N00B_ANNOT_VISIBILITY: {
+            if (nc->last_sym && a->visibility_spec
+                && a->visibility_spec->u8_bytes > 0) {
+                nc->last_sym->visibility = a->visibility_spec;
+            }
+
+            break;
+        }
+
+        case N00B_ANNOT_STATIC: {
+            if (nc->last_sym) {
+                nc->last_sym->is_static = true;
+            }
+
+            break;
+        }
+
+        case N00B_ANNOT_ABSTRACT: {
+            if (nc->last_sym) {
+                nc->last_sym->is_abstract = true;
+            }
+
+            break;
+        }
+
         case N00B_ANNOT_LITERAL: {
-            n00b_string_t type_name = a->op_kind;
+            n00b_string_t *type_name = a->op_kind;
             n00b_tc_type_t *lit_type = NULL;
 
-            if (type_name.u8_bytes > 0 && ctx->tc_ctx && ctx->node_types) {
+            if (type_name && type_name->u8_bytes > 0 && ctx->tc_ctx && ctx->node_types) {
                 lit_type = n00b_tc_lookup_prim(ctx->tc_ctx, type_name);
             }
 
             if (ctx->tc_ctx && ctx->translate_type_spec
                 && (a->type_ref.kind == N00B_ROLE_BY_INDEX
                         ? a->type_ref.index >= 0
-                        : a->type_ref.name.data != NULL)) {
+                        : a->type_ref.name != NULL)) {
                 n00b_parse_tree_t *tspec
                     = n00b_tree_resolve_child_ref(
                         ctx->grammar, nc->node, a->type_ref);

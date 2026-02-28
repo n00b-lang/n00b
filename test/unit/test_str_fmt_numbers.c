@@ -11,26 +11,26 @@
 
 TEST(test_hex_zero)
 {
-    n00b_string_t r = n00b_fmt_hex(0);
-    ASSERT_STR_EQ(r.data, "0");
+    n00b_string_t *r = n00b_fmt_hex(0);
+    ASSERT_STR_EQ(r->data, "0");
 }
 
 TEST(test_hex_lower)
 {
-    n00b_string_t r = n00b_fmt_hex(0xdead);
-    ASSERT_STR_EQ(r.data, "dead");
+    n00b_string_t *r = n00b_fmt_hex(0xdead);
+    ASSERT_STR_EQ(r->data, "dead");
 }
 
 TEST(test_hex_upper)
 {
-    n00b_string_t r = n00b_fmt_hex(0xdead, .caps = true);
-    ASSERT_STR_EQ(r.data, "DEAD");
+    n00b_string_t *r = n00b_fmt_hex(0xdead, .caps = true);
+    ASSERT_STR_EQ(r->data, "DEAD");
 }
 
 TEST(test_hex_max)
 {
-    n00b_string_t r = n00b_fmt_hex(UINT64_MAX);
-    ASSERT_STR_EQ(r.data, "ffffffffffffffff");
+    n00b_string_t *r = n00b_fmt_hex(UINT64_MAX);
+    ASSERT_STR_EQ(r->data, "ffffffffffffffff");
 }
 
 // ===================================================================
@@ -39,38 +39,38 @@ TEST(test_hex_max)
 
 TEST(test_int_zero)
 {
-    n00b_string_t r = n00b_fmt_int(0);
-    ASSERT_STR_EQ(r.data, "0");
+    n00b_string_t *r = n00b_fmt_int(0);
+    ASSERT_STR_EQ(r->data, "0");
 }
 
 TEST(test_int_positive)
 {
-    n00b_string_t r = n00b_fmt_int(12345);
-    ASSERT_STR_EQ(r.data, "12345");
+    n00b_string_t *r = n00b_fmt_int(12345);
+    ASSERT_STR_EQ(r->data, "12345");
 }
 
 TEST(test_int_negative)
 {
-    n00b_string_t r = n00b_fmt_int(-42);
-    ASSERT_STR_EQ(r.data, "-42");
+    n00b_string_t *r = n00b_fmt_int(-42);
+    ASSERT_STR_EQ(r->data, "-42");
 }
 
 TEST(test_int_commas)
 {
-    n00b_string_t r = n00b_fmt_int(1234567, .commas = true);
-    ASSERT_STR_EQ(r.data, "1,234,567");
+    n00b_string_t *r = n00b_fmt_int(1234567, .commas = true);
+    ASSERT_STR_EQ(r->data, "1,234,567");
 }
 
 TEST(test_int_commas_negative)
 {
-    n00b_string_t r = n00b_fmt_int(-1234567, .commas = true);
-    ASSERT_STR_EQ(r.data, "-1,234,567");
+    n00b_string_t *r = n00b_fmt_int(-1234567, .commas = true);
+    ASSERT_STR_EQ(r->data, "-1,234,567");
 }
 
 TEST(test_int_min)
 {
-    n00b_string_t r = n00b_fmt_int(INT64_MIN);
-    ASSERT_STR_EQ(r.data, "-9223372036854775808");
+    n00b_string_t *r = n00b_fmt_int(INT64_MIN);
+    ASSERT_STR_EQ(r->data, "-9223372036854775808");
 }
 
 // ===================================================================
@@ -79,14 +79,14 @@ TEST(test_int_min)
 
 TEST(test_uint_zero)
 {
-    n00b_string_t r = n00b_fmt_uint(0);
-    ASSERT_STR_EQ(r.data, "0");
+    n00b_string_t *r = n00b_fmt_uint(0);
+    ASSERT_STR_EQ(r->data, "0");
 }
 
 TEST(test_uint_large)
 {
-    n00b_string_t r = n00b_fmt_uint(18446744073709551615ULL, .commas = true);
-    ASSERT_STR_EQ(r.data, "18,446,744,073,709,551,615");
+    n00b_string_t *r = n00b_fmt_uint(18446744073709551615ULL, .commas = true);
+    ASSERT_STR_EQ(r->data, "18,446,744,073,709,551,615");
 }
 
 // ===================================================================
@@ -95,35 +95,35 @@ TEST(test_uint_large)
 
 TEST(test_float_zero)
 {
-    n00b_string_t r = n00b_fmt_float(0.0);
-    ASSERT_STR_EQ(r.data, "0");
+    n00b_string_t *r = n00b_fmt_float(0.0);
+    ASSERT_STR_EQ(r->data, "0");
 }
 
 TEST(test_float_pi)
 {
-    n00b_string_t r = n00b_fmt_float(3.14);
-    ASSERT_STR_EQ(r.data, "3.14");
+    n00b_string_t *r = n00b_fmt_float(3.14);
+    ASSERT_STR_EQ(r->data, "3.14");
 }
 
 TEST(test_float_nan)
 {
-    n00b_string_t r = n00b_fmt_float(NAN);
+    n00b_string_t *r = n00b_fmt_float(NAN);
     // NAN may carry sign bit
-    ASSERT(strcmp(r.data, "nan") == 0 || strcmp(r.data, "-nan") == 0);
+    ASSERT(strcmp(r->data, "nan") == 0 || strcmp(r->data, "-nan") == 0);
 }
 
 TEST(test_float_inf)
 {
-    n00b_string_t r = n00b_fmt_float(INFINITY);
-    ASSERT_STR_EQ(r.data, "inf");
+    n00b_string_t *r = n00b_fmt_float(INFINITY);
+    ASSERT_STR_EQ(r->data, "inf");
 }
 
 TEST(test_float_width_fill)
 {
-    n00b_string_t r = n00b_fmt_float(1.5, .width = 8, .fill = true);
+    n00b_string_t *r = n00b_fmt_float(1.5, .width = 8, .fill = true);
     // Should be "000001.5"
-    ASSERT_EQ(r.u8_bytes, 8);
-    ASSERT(r.data[0] == '0');
+    ASSERT_EQ(r->u8_bytes, 8);
+    ASSERT(r->data[0] == '0');
 }
 
 // ===================================================================
@@ -133,27 +133,27 @@ TEST(test_float_width_fill)
 TEST(test_bool_all_combos)
 {
     // value=false, defaults → "f"
-    ASSERT_STR_EQ(n00b_fmt_bool(false).data, "f");
+    ASSERT_STR_EQ(n00b_fmt_bool(false)->data, "f");
     // value=true, defaults → "t"
-    ASSERT_STR_EQ(n00b_fmt_bool(true).data, "t");
+    ASSERT_STR_EQ(n00b_fmt_bool(true)->data, "t");
     // upper → "F" / "T"
-    ASSERT_STR_EQ(n00b_fmt_bool(false, .upper = true).data, "F");
-    ASSERT_STR_EQ(n00b_fmt_bool(true, .upper = true).data, "T");
+    ASSERT_STR_EQ(n00b_fmt_bool(false, .upper = true)->data, "F");
+    ASSERT_STR_EQ(n00b_fmt_bool(true, .upper = true)->data, "T");
     // word → "false" / "true"
-    ASSERT_STR_EQ(n00b_fmt_bool(false, .word = true).data, "false");
-    ASSERT_STR_EQ(n00b_fmt_bool(true, .word = true).data, "true");
+    ASSERT_STR_EQ(n00b_fmt_bool(false, .word = true)->data, "false");
+    ASSERT_STR_EQ(n00b_fmt_bool(true, .word = true)->data, "true");
     // upper + word → "False" / "True"
-    ASSERT_STR_EQ(n00b_fmt_bool(false, .upper = true, .word = true).data, "False");
-    ASSERT_STR_EQ(n00b_fmt_bool(true, .upper = true, .word = true).data, "True");
+    ASSERT_STR_EQ(n00b_fmt_bool(false, .upper = true, .word = true)->data, "False");
+    ASSERT_STR_EQ(n00b_fmt_bool(true, .upper = true, .word = true)->data, "True");
     // yn variants
-    ASSERT_STR_EQ(n00b_fmt_bool(false, .yn = true).data, "n");
-    ASSERT_STR_EQ(n00b_fmt_bool(true, .yn = true).data, "y");
-    ASSERT_STR_EQ(n00b_fmt_bool(false, .upper = true, .yn = true).data, "N");
-    ASSERT_STR_EQ(n00b_fmt_bool(true, .upper = true, .yn = true).data, "Y");
-    ASSERT_STR_EQ(n00b_fmt_bool(false, .word = true, .yn = true).data, "no");
-    ASSERT_STR_EQ(n00b_fmt_bool(true, .word = true, .yn = true).data, "yes");
-    ASSERT_STR_EQ(n00b_fmt_bool(false, .upper = true, .word = true, .yn = true).data, "No");
-    ASSERT_STR_EQ(n00b_fmt_bool(true, .upper = true, .word = true, .yn = true).data, "Yes");
+    ASSERT_STR_EQ(n00b_fmt_bool(false, .yn = true)->data, "n");
+    ASSERT_STR_EQ(n00b_fmt_bool(true, .yn = true)->data, "y");
+    ASSERT_STR_EQ(n00b_fmt_bool(false, .upper = true, .yn = true)->data, "N");
+    ASSERT_STR_EQ(n00b_fmt_bool(true, .upper = true, .yn = true)->data, "Y");
+    ASSERT_STR_EQ(n00b_fmt_bool(false, .word = true, .yn = true)->data, "no");
+    ASSERT_STR_EQ(n00b_fmt_bool(true, .word = true, .yn = true)->data, "yes");
+    ASSERT_STR_EQ(n00b_fmt_bool(false, .upper = true, .word = true, .yn = true)->data, "No");
+    ASSERT_STR_EQ(n00b_fmt_bool(true, .upper = true, .word = true, .yn = true)->data, "Yes");
 }
 
 // ===================================================================
@@ -162,33 +162,33 @@ TEST(test_bool_all_combos)
 
 TEST(test_codepoint_ascii)
 {
-    n00b_string_t r = n00b_fmt_codepoint('A');
-    ASSERT_STR_EQ(r.data, "A");
+    n00b_string_t *r = n00b_fmt_codepoint('A');
+    ASSERT_STR_EQ(r->data, "A");
 }
 
 TEST(test_codepoint_control)
 {
     // NUL is a control character → U+0000
-    n00b_string_t r = n00b_fmt_codepoint(0);
-    ASSERT(r.data[0] == 'U');
-    ASSERT(r.data[1] == '+');
+    n00b_string_t *r = n00b_fmt_codepoint(0);
+    ASSERT(r->data[0] == 'U');
+    ASSERT(r->data[1] == '+');
 }
 
 TEST(test_codepoint_emoji)
 {
     // U+1F600 (grinning face) is printable → UTF-8 encoding
-    n00b_string_t r = n00b_fmt_codepoint(0x1F600);
-    ASSERT_EQ(r.u8_bytes, 4);
-    ASSERT_EQ(r.codepoints, 1);
+    n00b_string_t *r = n00b_fmt_codepoint(0x1F600);
+    ASSERT_EQ(r->u8_bytes, 4);
+    ASSERT_EQ(r->codepoints, 1);
 }
 
 TEST(test_codepoint_invalid)
 {
     // > U+10FFFF → replaced with U+FFFD (also a control-like category)
-    n00b_string_t r = n00b_fmt_codepoint(0x200000);
+    n00b_string_t *r = n00b_fmt_codepoint(0x200000);
     // FFFD is in "So" (Symbol, other) — so it's printable.
     // Just verify it doesn't crash and returns something.
-    ASSERT(r.u8_bytes > 0);
+    ASSERT(r->u8_bytes > 0);
 }
 
 // ===================================================================
@@ -197,24 +197,24 @@ TEST(test_codepoint_invalid)
 
 TEST(test_pointer_null)
 {
-    n00b_string_t r = n00b_fmt_pointer(nullptr);
-    ASSERT_STR_EQ(r.data, "@0000000000000000");
+    n00b_string_t *r = n00b_fmt_pointer(nullptr);
+    ASSERT_STR_EQ(r->data, "@0000000000000000");
 }
 
 TEST(test_pointer_nonnull)
 {
-    n00b_string_t r = n00b_fmt_pointer((void *)0xDEADBEEF, .caps = true);
+    n00b_string_t *r = n00b_fmt_pointer((void *)0xDEADBEEF, .caps = true);
     // Should be "@00000000DEADBEEF"
-    ASSERT(r.data[0] == '@');
-    ASSERT_EQ(r.u8_bytes, 17);
+    ASSERT(r->data[0] == '@');
+    ASSERT_EQ(r->u8_bytes, 17);
 }
 
 TEST(test_pointer_caps)
 {
-    n00b_string_t r = n00b_fmt_pointer((void *)0xabc, .caps = true);
-    ASSERT(r.data[0] == '@');
+    n00b_string_t *r = n00b_fmt_pointer((void *)0xabc, .caps = true);
+    ASSERT(r->data[0] == '@');
     // Check that hex digits are uppercase
-    ASSERT(r.data[16] == 'C');
+    ASSERT(r->data[16] == 'C');
 }
 
 static void run_tests(void)

@@ -26,9 +26,9 @@ void            n00b_grammar_finalize(n00b_grammar_t *g);
 // Registration
 // ============================================================================
 
-n00b_nonterm_t *n00b_nonterm(n00b_grammar_t *g, n00b_string_t name);
+n00b_nonterm_t *n00b_nonterm(n00b_grammar_t *g, n00b_string_t *name);
 int64_t         n00b_nonterm_id(n00b_nonterm_t *nt);
-int64_t         n00b_register_terminal(n00b_grammar_t *g, n00b_string_t name);
+int64_t         n00b_register_terminal(n00b_grammar_t *g, n00b_string_t *name);
 
 /**
  * @brief Register a named literal type (e.g. "IDENTIFIER", "INTEGER").
@@ -37,14 +37,14 @@ int64_t         n00b_register_terminal(n00b_grammar_t *g, n00b_string_t name);
  * If the name is already registered, returns the existing ID.
  * These IDs are used by tokenizers via `n00b_scan_emit(.token_type = ...)`.
  */
-int64_t         n00b_register_literal_type(n00b_grammar_t *g, n00b_string_t name);
+int64_t         n00b_register_literal_type(n00b_grammar_t *g, n00b_string_t *name);
 
 /**
  * @brief Look up a terminal ID by name.
  *
  * @return The terminal ID, or 0 if not found.
  */
-int64_t         n00b_grammar_terminal_id(n00b_grammar_t *g, const char *name);
+int64_t         n00b_grammar_terminal_id(n00b_grammar_t *g, n00b_string_t *name);
 
 /**
  * @brief Check if a string is a registered terminal/keyword in the grammar.
@@ -57,7 +57,7 @@ int64_t         n00b_grammar_terminal_id(n00b_grammar_t *g, const char *name);
  * @param text  Text to check.
  * @return True if @p text matches a registered terminal name.
  */
-bool            n00b_grammar_is_keyword(n00b_grammar_t *g, n00b_string_t text);
+bool            n00b_grammar_is_keyword(n00b_grammar_t *g, n00b_string_t *text);
 
 // ============================================================================
 // Walk actions / user data
@@ -68,7 +68,7 @@ void  n00b_nonterm_set_user_data(n00b_nonterm_t *nt, void *data);
 void *n00b_nonterm_get_user_data(n00b_nonterm_t *nt);
 void  n00b_grammar_set_default_action(n00b_grammar_t *g, n00b_walk_action_t a);
 void  n00b_grammar_set_terminal_category(n00b_grammar_t *g, int64_t tid,
-                                          n00b_string_t category);
+                                          n00b_string_t *category);
 
 /**
  * @brief Set a custom disambiguator for the grammar.

@@ -121,4 +121,4 @@ n00b_option_t(int32_t) n00b_unicode_digit_value(n00b_codepoint_t cp);
  *  @param s  The string to measure.
  *  @return The display width (sum of character widths).
  */
-int32_t n00b_unicode_display_width(n00b_string_t s);
+int32_t n00b_unicode_display_width(n00b_string_t *s);

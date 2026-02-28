@@ -78,12 +78,12 @@ typedef enum {
 
 /** @brief Per-node detail data.
  *
- *  For text nodes, use the `text` member (an `n00b_string_t` by value).
+ *  For text nodes, use the `text` member (an `n00b_string_t *`).
  *  For block/span nodes, the md4c detail struct is stored in `raw[]`;
  *  cast to the appropriate md4c detail type in the implementation.
  */
 typedef union {
-    n00b_string_t text;      /**< Text content (for text-kind nodes) */
+    n00b_string_t *text;     /**< Text content (for text-kind nodes) */
     uint8_t       raw[96];   /**< Opaque md4c detail storage */
 } n00b_md_detail_t;
 
@@ -96,9 +96,6 @@ typedef struct {
     n00b_md_node_kind_t node_type;  /**< Kind of markdown element */
     n00b_md_detail_t    detail;     /**< Detail data (text or md4c struct) */
 } n00b_md_node_t;
-
-// Declare the typed tree (both internal and leaf are n00b_md_node_t).
-n00b_tree_decl(n00b_md_node_t, n00b_md_node_t);
 
 // ===================================================================
 // Public API
@@ -119,5 +116,5 @@ n00b_tree_decl(n00b_md_node_t, n00b_md_node_t);
  *       `n00b_tree_free_node`.
  */
 n00b_tree_t(n00b_md_node_t, n00b_md_node_t) *
-n00b_parse_markdown(n00b_string_t s)
+n00b_parse_markdown(n00b_string_t *s)
     _kargs { n00b_allocator_t *allocator = nullptr; };

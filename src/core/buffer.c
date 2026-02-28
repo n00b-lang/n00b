@@ -531,21 +531,14 @@ n00b_buffer_to_c(n00b_buffer_t *b, int64_t *len_ptr)
 // To string
 // ============================================================================
 
-n00b_string_t
+n00b_string_t *
 n00b_buffer_to_string(n00b_buffer_t *buffer)
 {
     defer_on();
     n00b_buffer_acquire_r(buffer);
 
-    n00b_string_t result = {};
-    int64_t       nbytes = (int64_t)buffer->byte_len;
-
-    result.data = n00b_alloc_array(char, nbytes + 1);
-    memcpy(result.data, buffer->data, nbytes);
-    result.data[nbytes] = '\0';
-    result.u8_bytes     = nbytes;
-    result.codepoints   = nbytes; // Placeholder: assume ASCII / 1:1.
-    result.styling      = nullptr;
+    int64_t        nbytes = (int64_t)buffer->byte_len;
+    n00b_string_t *result = n00b_string_from_raw(buffer->data, nbytes);
 
     Return result;
     defer_func_end();
@@ -555,17 +548,17 @@ n00b_buffer_to_string(n00b_buffer_t *buffer)
 // To hex string
 // ============================================================================
 
-n00b_string_t
+n00b_string_t *
 n00b_buffer_to_hex_str(n00b_buffer_t *buf)
 {
     defer_on();
     n00b_buffer_acquire_r(buf);
 
-    int64_t       hex_len = (int64_t)buf->byte_len * 2;
-    n00b_string_t result  = {};
+    int64_t        hex_len = (int64_t)buf->byte_len * 2;
+    n00b_string_t *result  = n00b_alloc(n00b_string_t);
 
-    result.data = n00b_alloc_array(char, hex_len + 1);
-    char *p     = result.data;
+    result->data = n00b_alloc_array(char, hex_len + 1);
+    char *p      = result->data;
 
     for (size_t i = 0; i < buf->byte_len; i++) {
         uint8_t c = ((uint8_t *)buf->data)[i];
@@ -573,10 +566,10 @@ n00b_buffer_to_hex_str(n00b_buffer_t *buf)
         *p++      = n00b_hex_map_lower[c & 0x0f];
     }
 
-    *p                = '\0';
-    result.codepoints = hex_len;
-    result.u8_bytes   = hex_len;
-    result.styling    = nullptr;
+    *p                 = '\0';
+    result->codepoints = hex_len;
+    result->u8_bytes   = hex_len;
+    result->styling    = nullptr;
 
     Return result;
     defer_func_end();

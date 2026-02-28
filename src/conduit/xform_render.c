@@ -18,7 +18,7 @@
 // Stream backend helpers (defined in backend_stream.c)
 // ============================================================================
 
-extern n00b_string_t n00b_stream_backend_get_buffer(void *ctx);
+extern n00b_string_t *n00b_stream_backend_get_buffer(void *ctx);
 extern size_t        n00b_stream_backend_get_length(void *ctx);
 extern void        n00b_stream_backend_set_size(void *ctx,
                                                  n00b_isize_t rows,
@@ -51,15 +51,15 @@ render_out_transform(
     n00b_canvas_invalidate(st->canvas);
     n00b_canvas_render(st->canvas);
 
-    n00b_string_t captured = n00b_stream_backend_get_buffer(st->canvas->backend_ctx);
+    n00b_string_t *captured = n00b_stream_backend_get_buffer(st->canvas->backend_ctx);
 
     n00b_canvas_remove_plane(st->canvas, input);
 
-    if (!captured.data || captured.u8_bytes == 0)
+    if (!captured || captured->u8_bytes == 0)
         return n00b_option_none(n00b_buffer_t *);
 
-    n00b_buffer_t *out = n00b_buffer_from_bytes(captured.data,
-                                                  (int64_t)captured.u8_bytes);
+    n00b_buffer_t *out = n00b_buffer_from_bytes(captured->data,
+                                                  (int64_t)captured->u8_bytes);
     return n00b_option_set(n00b_buffer_t *, out);
 }
 
@@ -76,11 +76,15 @@ render_out_teardown(
     }
 }
 
+static n00b_string_t _kind_render_out = {
+    .data = "render_out", .u8_bytes = 10, .codepoints = 10, .styling = nullptr
+};
+
 static const n00b_conduit_xform_ops_t(n00b_plane_t *, n00b_buffer_t *)
     render_out_ops = {
     .transform = render_out_transform,
     .teardown  = render_out_teardown,
-    .kind      = N00B_STRING_STATIC("render_out"),
+    .kind      = &_kind_render_out,
 };
 
 n00b_result_t(n00b_conduit_xform_t(n00b_plane_t *, n00b_buffer_t *) *)
@@ -149,16 +153,20 @@ render_in_transform(
     char   *data = n00b_buffer_to_c(input, &len);
 
     // Count codepoints (assume UTF-8; approximate with byte count for now).
-    n00b_string_t str = n00b_string_from_raw(data, len);
+    n00b_string_t *str = n00b_string_from_raw(data, len);
     n00b_plane_put_str(plane, str);
 
     return n00b_option_set(n00b_plane_t *, plane);
 }
 
+static n00b_string_t _kind_render_in = {
+    .data = "render_in", .u8_bytes = 9, .codepoints = 9, .styling = nullptr
+};
+
 static const n00b_conduit_xform_ops_t(n00b_buffer_t *, n00b_plane_t *)
     render_in_ops = {
     .transform = render_in_transform,
-    .kind      = N00B_STRING_STATIC("render_in"),
+    .kind      = &_kind_render_in,
 };
 
 n00b_result_t(n00b_conduit_xform_t(n00b_buffer_t *, n00b_plane_t *) *)

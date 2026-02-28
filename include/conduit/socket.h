@@ -32,11 +32,6 @@
 // Forward declarations
 typedef struct n00b_conduit_conn     n00b_conduit_conn_t;
 
-// Result/option declarations for socket types
-n00b_result_decl(n00b_conduit_listener_t *);
-n00b_result_decl(n00b_conduit_conn_t *);
-n00b_option_decl(n00b_conduit_listener_t *);
-
 // ============================================================================
 // Connection Lifecycle Events
 // ============================================================================

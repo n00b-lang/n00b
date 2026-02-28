@@ -30,16 +30,10 @@
 
 // n00b_buffer_t * is the standard wire type for FD read events
 // and byte-oriented pipelines.
-n00b_option_decl(n00b_buffer_t *);
 N00B_CONDUIT_FULL_IMPL(n00b_buffer_t *);
 
 // Forward declarations
 typedef struct n00b_conduit_stream_reader n00b_conduit_stream_reader_t;
-
-// Result/option declarations for managed FD types
-n00b_result_decl(n00b_conduit_fd_owner_t *);
-n00b_option_decl(n00b_conduit_fd_owner_t *);
-n00b_result_decl(n00b_conduit_stream_reader_t *);
 
 // ============================================================================
 // FD Status Events

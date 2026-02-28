@@ -77,7 +77,7 @@ typedef struct n00b_conduit_io_ops {
     bool        (*remove)(void *ctx, int fd);
     int         (*wait)(void *ctx, n00b_conduit_io_event_t *events,
                         int max_events, int timeout_ms);
-    n00b_string_t (*name)(void);
+    n00b_string_t *(*name)(void);
 
     // Optional extended operations.
     bool (*timer_add)(void *ctx, n00b_conduit_timer_t *timer);
@@ -137,8 +137,6 @@ struct n00b_conduit_io_backend {
 // Backend registration
 // ============================================================================
 
-n00b_result_decl(const n00b_conduit_io_ops_t *);
-
 extern n00b_result_t(const n00b_conduit_io_ops_t *) n00b_conduit_io_kqueue_ops(void);
 extern n00b_result_t(const n00b_conduit_io_ops_t *) n00b_conduit_io_poll_ops(void);
 extern n00b_result_t(const n00b_conduit_io_ops_t *) n00b_conduit_io_epoll_ops(void);
@@ -160,12 +158,6 @@ n00b_conduit_io_default_ops(void)
 }
 
 // ============================================================================
-// Result types
-// ============================================================================
-
-n00b_result_decl(n00b_conduit_io_backend_t *);
-
-// ============================================================================
 // Lifecycle API
 // ============================================================================
 
@@ -177,7 +169,7 @@ n00b_conduit_io_new_default(n00b_conduit_t *c);
 
 extern void n00b_conduit_io_destroy(n00b_conduit_io_backend_t *io);
 
-static inline n00b_string_t
+static inline n00b_string_t *
 n00b_conduit_io_name(n00b_conduit_io_backend_t *io)
 {
     return io && io->ops && io->ops->name

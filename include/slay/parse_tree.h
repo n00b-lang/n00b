@@ -16,8 +16,6 @@
 // Parse tree type
 // ============================================================================
 
-n00b_tree_decl(n00b_nt_node_t, n00b_token_info_t *);
-
 /**
  * @brief A parse tree: n-ary tree where interior nodes carry
  *        @c n00b_nt_node_t and leaves carry @c n00b_token_info_t pointers.
@@ -30,9 +28,6 @@ typedef n00b_tree_t(n00b_nt_node_t, n00b_token_info_t *) n00b_parse_tree_t;
 
 typedef n00b_parse_tree_t *n00b_parse_tree_ptr_t;
 
-n00b_array_decl(n00b_parse_tree_ptr_t);
-
-/** @brief Array of parse tree pointers. */
 typedef n00b_array_t(n00b_parse_tree_ptr_t) n00b_parse_tree_array_t;
 
 // ============================================================================
@@ -87,7 +82,7 @@ n00b_token_info_t *n00b_parse_node_token(n00b_parse_tree_t *t);
  * @param t  Parse tree node (must be a non-terminal interior node).
  * @return The NT name, or none if the node is a terminal.
  */
-n00b_option_t(n00b_string_t) n00b_parse_node_name(n00b_parse_tree_t *t);
+n00b_option_t(n00b_string_t *) n00b_parse_node_name(n00b_parse_tree_t *t);
 
 // ============================================================================
 // Tree walking (engine-agnostic)

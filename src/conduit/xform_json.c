@@ -102,11 +102,15 @@ json_parse_flush(
     }
 }
 
+static n00b_string_t _kind_json_parse = {
+    .data = "json_parse", .u8_bytes = 10, .codepoints = 10, .styling = nullptr
+};
+
 static const n00b_conduit_xform_ops_t(n00b_buffer_t *, n00b_json_node_t *)
     json_parse_ops = {
     .transform = json_parse_transform,
     .flush     = json_parse_flush,
-    .kind      = N00B_STRING_STATIC("json_parse"),
+    .kind      = &_kind_json_parse,
 };
 
 n00b_result_t(n00b_conduit_xform_t(n00b_buffer_t *, n00b_json_node_t *) *)
@@ -157,10 +161,14 @@ json_encode_transform(
     return n00b_option_set(n00b_buffer_t *, buf);
 }
 
+static n00b_string_t _kind_json_encode = {
+    .data = "json_encode", .u8_bytes = 11, .codepoints = 11, .styling = nullptr
+};
+
 static const n00b_conduit_xform_ops_t(n00b_json_node_t *, n00b_buffer_t *)
     json_encode_ops = {
     .transform = json_encode_transform,
-    .kind      = N00B_STRING_STATIC("json_encode"),
+    .kind      = &_kind_json_encode,
 };
 
 n00b_result_t(n00b_conduit_xform_t(n00b_json_node_t *, n00b_buffer_t *) *)

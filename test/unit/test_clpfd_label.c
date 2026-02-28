@@ -10,10 +10,10 @@ TEST(test_var_count)
     n00b_csp_store_t *s = n00b_csp_store_new();
     ASSERT_EQ(n00b_csp_var_count(s), 0);
 
-    n00b_csp_new_var(s, *r"X", n00b_csp_dom_range(1, 5));
+    n00b_csp_new_var(s, r"X", n00b_csp_dom_range(1, 5));
     ASSERT_EQ(n00b_csp_var_count(s), 1);
 
-    n00b_csp_new_var(s, *r"Y", n00b_csp_dom_range(1, 5));
+    n00b_csp_new_var(s, r"Y", n00b_csp_dom_range(1, 5));
     ASSERT_EQ(n00b_csp_var_count(s), 2);
 
     n00b_csp_store_free(s);
@@ -39,7 +39,7 @@ iter_cb(int64_t value, void *ctx)
 TEST(test_dom_iterate_interval)
 {
     n00b_csp_store_t *s = n00b_csp_store_new();
-    n00b_csp_var_id_t x = n00b_csp_new_var(s, *r"X",
+    n00b_csp_var_id_t x = n00b_csp_new_var(s, r"X",
                                              n00b_csp_dom_range(1, 5));
 
     int64_t    buf[10];
@@ -62,7 +62,7 @@ TEST(test_dom_iterate_bitset)
     n00b_csp_store_t *s = n00b_csp_store_new();
 
     // Create a bitset domain by starting with [1,5] and removing 3.
-    n00b_csp_var_id_t x = n00b_csp_new_var(s, *r"X",
+    n00b_csp_var_id_t x = n00b_csp_new_var(s, r"X",
                                              n00b_csp_dom_range(1, 5));
     // Remove middle value to promote to bitset.
     int64_t vals[] = {1, 2, 4, 5};
@@ -87,7 +87,7 @@ TEST(test_dom_iterate_sparse)
 
     // Values spread more than 64 apart forces sparse representation.
     int64_t vals[] = {10, 100, 1000};
-    n00b_csp_var_id_t x = n00b_csp_new_var(s, *r"X",
+    n00b_csp_var_id_t x = n00b_csp_new_var(s, r"X",
                                              n00b_csp_dom_from_values(vals, 3));
 
     int64_t    buf[10];
@@ -110,8 +110,8 @@ TEST(test_label_trivial)
 {
     // All variables already ground -> label returns true immediately.
     n00b_csp_store_t *s = n00b_csp_store_new();
-    n00b_csp_new_var(s, *r"X", n00b_csp_dom_singleton(1));
-    n00b_csp_new_var(s, *r"Y", n00b_csp_dom_singleton(2));
+    n00b_csp_new_var(s, r"X", n00b_csp_dom_singleton(1));
+    n00b_csp_new_var(s, r"Y", n00b_csp_dom_singleton(2));
 
     ASSERT(n00b_csp_label(s));
     ASSERT_EQ(n00b_result_get(n00b_csp_var_value(s, 0)), 1);
@@ -123,7 +123,7 @@ TEST(test_label_trivial)
 TEST(test_label_single_var)
 {
     n00b_csp_store_t *s = n00b_csp_store_new();
-    n00b_csp_var_id_t x = n00b_csp_new_var(s, *r"X",
+    n00b_csp_var_id_t x = n00b_csp_new_var(s, r"X",
                                              n00b_csp_dom_range(1, 3));
 
     ASSERT(n00b_csp_label(s));
@@ -138,9 +138,9 @@ TEST(test_label_ne_pair)
 {
     // X, Y in {1,2}, X != Y -> should find a solution.
     n00b_csp_store_t *s = n00b_csp_store_new();
-    n00b_csp_var_id_t x = n00b_csp_new_var(s, *r"X",
+    n00b_csp_var_id_t x = n00b_csp_new_var(s, r"X",
                                              n00b_csp_dom_range(1, 2));
-    n00b_csp_var_id_t y = n00b_csp_new_var(s, *r"Y",
+    n00b_csp_var_id_t y = n00b_csp_new_var(s, r"Y",
                                              n00b_csp_dom_range(1, 2));
     n00b_csp_post_ne(s, x, y);
 
@@ -162,11 +162,11 @@ TEST(test_label_triangle)
     // Triangle graph: a-b, b-c, a-c, colors in {1,2,3}.
     // Must find a valid 3-coloring.
     n00b_csp_store_t *s = n00b_csp_store_new();
-    n00b_csp_var_id_t a = n00b_csp_new_var(s, *r"a",
+    n00b_csp_var_id_t a = n00b_csp_new_var(s, r"a",
                                              n00b_csp_dom_range(1, 3));
-    n00b_csp_var_id_t b = n00b_csp_new_var(s, *r"b",
+    n00b_csp_var_id_t b = n00b_csp_new_var(s, r"b",
                                              n00b_csp_dom_range(1, 3));
-    n00b_csp_var_id_t c = n00b_csp_new_var(s, *r"c",
+    n00b_csp_var_id_t c = n00b_csp_new_var(s, r"c",
                                              n00b_csp_dom_range(1, 3));
 
     n00b_csp_post_ne(s, a, b);
@@ -193,8 +193,8 @@ TEST(test_label_infeasible)
 {
     // X in {1}, Y in {1}, X != Y -> unsatisfiable.
     n00b_csp_store_t *s = n00b_csp_store_new();
-    n00b_csp_new_var(s, *r"X", n00b_csp_dom_singleton(1));
-    n00b_csp_new_var(s, *r"Y", n00b_csp_dom_singleton(1));
+    n00b_csp_new_var(s, r"X", n00b_csp_dom_singleton(1));
+    n00b_csp_new_var(s, r"Y", n00b_csp_dom_singleton(1));
     n00b_csp_post_ne(s, 0, 1);
 
     // NE with both ground and equal fails at posting.
@@ -207,9 +207,9 @@ TEST(test_label_infeasible)
 
     // Better test: X,Y in {1,2}, X != Y, X == Y.
     s = n00b_csp_store_new();
-    n00b_csp_var_id_t x = n00b_csp_new_var(s, *r"X",
+    n00b_csp_var_id_t x = n00b_csp_new_var(s, r"X",
                                              n00b_csp_dom_range(1, 2));
-    n00b_csp_var_id_t y = n00b_csp_new_var(s, *r"Y",
+    n00b_csp_var_id_t y = n00b_csp_new_var(s, r"Y",
                                              n00b_csp_dom_range(1, 2));
     n00b_csp_post_ne(s, x, y);
     n00b_csp_post_eq(s, x, y);
@@ -243,8 +243,8 @@ TEST(test_label_all_count)
 {
     // X, Y in {1,2}, X != Y -> exactly 2 solutions.
     n00b_csp_store_t *s = n00b_csp_store_new();
-    n00b_csp_new_var(s, *r"X", n00b_csp_dom_range(1, 2));
-    n00b_csp_new_var(s, *r"Y", n00b_csp_dom_range(1, 2));
+    n00b_csp_new_var(s, r"X", n00b_csp_dom_range(1, 2));
+    n00b_csp_new_var(s, r"Y", n00b_csp_dom_range(1, 2));
     n00b_csp_post_ne(s, 0, 1);
 
     count_ctx_t ctx = { .count = 0 };
@@ -263,9 +263,9 @@ TEST(test_label_all_triangle)
 {
     // Triangle 3-coloring: 3! = 6 solutions.
     n00b_csp_store_t *s = n00b_csp_store_new();
-    n00b_csp_new_var(s, *r"a", n00b_csp_dom_range(1, 3));
-    n00b_csp_new_var(s, *r"b", n00b_csp_dom_range(1, 3));
-    n00b_csp_new_var(s, *r"c", n00b_csp_dom_range(1, 3));
+    n00b_csp_new_var(s, r"a", n00b_csp_dom_range(1, 3));
+    n00b_csp_new_var(s, r"b", n00b_csp_dom_range(1, 3));
+    n00b_csp_new_var(s, r"c", n00b_csp_dom_range(1, 3));
     n00b_csp_post_ne(s, 0, 1);
     n00b_csp_post_ne(s, 1, 2);
     n00b_csp_post_ne(s, 0, 2);
@@ -288,8 +288,8 @@ stop_after_one_cb(n00b_csp_store_t *s, void *ctx)
 TEST(test_label_all_early_stop)
 {
     n00b_csp_store_t *s = n00b_csp_store_new();
-    n00b_csp_new_var(s, *r"X", n00b_csp_dom_range(1, 3));
-    n00b_csp_new_var(s, *r"Y", n00b_csp_dom_range(1, 3));
+    n00b_csp_new_var(s, r"X", n00b_csp_dom_range(1, 3));
+    n00b_csp_new_var(s, r"Y", n00b_csp_dom_range(1, 3));
     n00b_csp_post_ne(s, 0, 1);
 
     count_ctx_t ctx = { .count = 0 };
@@ -312,10 +312,10 @@ TEST(test_logic_solve)
     n00b_logic_t prog;
     n00b_logic_init(&prog);
 
-    n00b_dl_rel_id_t edge = n00b_logic_relation(&prog, *r"edge", 2);
-    n00b_dl_sym_t a = n00b_logic_const(&prog, *r"a");
-    n00b_dl_sym_t b = n00b_logic_const(&prog, *r"b");
-    n00b_dl_sym_t c = n00b_logic_const(&prog, *r"c");
+    n00b_dl_rel_id_t edge = n00b_logic_relation(&prog, r"edge", 2);
+    n00b_dl_sym_t a = n00b_logic_const(&prog, r"a");
+    n00b_dl_sym_t b = n00b_logic_const(&prog, r"b");
+    n00b_dl_sym_t c = n00b_logic_const(&prog, r"c");
 
     n00b_logic_add_fact(&prog, edge, 2, (n00b_dl_sym_t[]){a, b});
     n00b_logic_add_fact(&prog, edge, 2, (n00b_dl_sym_t[]){b, c});

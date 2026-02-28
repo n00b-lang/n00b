@@ -8,7 +8,7 @@
 TEST(test_basic_insert)
 {
     n00b_dl_relation_t rel;
-    n00b_dl_relation_init(&rel, 0, *r"test", 2);
+    n00b_dl_relation_init(&rel, 0, r"test", 2);
 
     n00b_dl_sym_t t1[] = {10, 20};
     n00b_dl_sym_t t2[] = {30, 40};
@@ -27,7 +27,7 @@ TEST(test_basic_insert)
 TEST(test_swap_lifecycle)
 {
     n00b_dl_relation_t rel;
-    n00b_dl_relation_init(&rel, 0, *r"test", 2);
+    n00b_dl_relation_init(&rel, 0, r"test", 2);
 
     n00b_dl_sym_t t1[] = {1, 2};
     n00b_dl_sym_t t2[] = {3, 4};
@@ -62,7 +62,7 @@ TEST(test_swap_lifecycle)
 TEST(test_column_index)
 {
     n00b_dl_relation_t rel;
-    n00b_dl_relation_init(&rel, 0, *r"test", 2);
+    n00b_dl_relation_init(&rel, 0, r"test", 2);
 
     n00b_dl_sym_t t1[] = {10, 20};
     n00b_dl_sym_t t2[] = {10, 30};
@@ -112,7 +112,7 @@ TEST(test_dedup_correctness)
 {
     // Insert multiple distinct tuples and verify they're all stored
     n00b_dl_relation_t rel;
-    n00b_dl_relation_init(&rel, 0, *r"dedup", 2);
+    n00b_dl_relation_init(&rel, 0, r"dedup", 2);
 
     // These are all distinct
     for (int64_t i = 0; i < 100; i++) {

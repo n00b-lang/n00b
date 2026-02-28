@@ -97,13 +97,13 @@ load_n00b_grammar(const char *grammar_file)
     buf[len] = '\0';
     fclose(f);
 
-    n00b_string_t bnf_text = n00b_string_from_cstr(buf);
+    n00b_string_t *bnf_text = n00b_string_from_cstr(buf);
     free(buf);
 
     n00b_grammar_t *g = n00b_grammar_new();
     n00b_grammar_set_error_recovery(g, false);
 
-    bool ok = n00b_bnf_load(bnf_text, *r"module", g);
+    bool ok = n00b_bnf_load(bnf_text, r"module", g);
 
     if (!ok) {
         fprintf(stderr, "error: n00b_bnf_load failed\n");
@@ -161,9 +161,9 @@ dump_tokens(n00b_token_stream_t *ts)
         size_t      tlen = 0;
 
         if (n00b_option_is_set(tok->value)) {
-            n00b_string_t val = n00b_option_get(tok->value);
-            text = val.data;
-            tlen = val.u8_bytes;
+            n00b_string_t *val = n00b_option_get(tok->value);
+            text = val->data;
+            tlen = val->u8_bytes;
         }
 
         printf("%4d  tid=%-20lld L%u:C%u  \"%.*s\"\n",
@@ -208,9 +208,9 @@ dump_symtab_recursive(n00b_parse_tree_t *t, int depth)
             printf("  ");
         }
 
-        if (scope->name.data && scope->name.u8_bytes > 0) {
+        if (scope->name && scope->name->data && scope->name->u8_bytes > 0) {
             printf("scope \"%.*s\" (depth %d):\n",
-                   (int)scope->name.u8_bytes, scope->name.data,
+                   (int)scope->name->u8_bytes, scope->name->data,
                    scope->depth);
         }
         else {
@@ -239,26 +239,26 @@ dump_symtab_recursive(n00b_parse_tree_t *t, int depth)
             }
 
             if (entry->type_var) {
-                n00b_string_t ts = n00b_tc_type_to_string(entry->type_var);
+                n00b_string_t *ts = n00b_tc_type_to_string(entry->type_var);
                 printf("%-6s %.*s : %.*s  line %u",
                        sym_kind_str(entry->kind),
-                       (int)entry->name.u8_bytes, entry->name.data,
-                       (int)ts.u8_bytes, ts.data,
+                       (int)entry->name->u8_bytes, entry->name->data,
+                       (int)ts->u8_bytes, ts->data,
                        line);
             }
             else {
                 printf("%-6s %.*s  line %u",
                        sym_kind_str(entry->kind),
-                       (int)entry->name.u8_bytes, entry->name.data,
+                       (int)entry->name->u8_bytes, entry->name->data,
                        line);
             }
 
             if (entry->exposed_scope) {
                 n00b_scope_t *es = entry->exposed_scope;
 
-                if (es->name.data && es->name.u8_bytes > 0) {
+                if (es->name && es->name->data && es->name->u8_bytes > 0) {
                     printf("  [exposes \"%.*s\"]",
-                           (int)es->name.u8_bytes, es->name.data);
+                           (int)es->name->u8_bytes, es->name->data);
                 }
                 else {
                     printf("  [exposes scope]");
@@ -477,10 +477,10 @@ main(int argc, char **argv)
             fprintf(stderr, "Error at line %u, col %u",
                     diag.error_loc.line, diag.error_loc.column);
 
-            if (diag.error_loc.got.data) {
+            if (diag.error_loc.got && diag.error_loc.got->data) {
                 fprintf(stderr, ": got '%.*s'",
-                        (int)diag.error_loc.got.u8_bytes,
-                        diag.error_loc.got.data);
+                        (int)diag.error_loc.got->u8_bytes,
+                        diag.error_loc.got->data);
             }
 
             fprintf(stderr, "\n");
@@ -522,15 +522,15 @@ main(int argc, char **argv)
         n00b_parse_result_t *r = n00b_grammar_parse(g, ts, mode);
 
         if (!n00b_parse_result_ok(r)) {
-            n00b_string_t err = n00b_parse_result_error_string(r);
+            n00b_string_t *err = n00b_parse_result_error_string(r);
             fprintf(stderr, "Parse failed: %.*s\n",
-                    (int)err.u8_bytes, err.data);
+                    (int)err->u8_bytes, err->data);
 
-            n00b_string_t expected = n00b_parse_result_expected_string(r);
+            n00b_string_t *expected = n00b_parse_result_expected_string(r);
 
-            if (expected.u8_bytes > 0) {
+            if (expected->u8_bytes > 0) {
                 fprintf(stderr, "Expected: %.*s\n",
-                        (int)expected.u8_bytes, expected.data);
+                        (int)expected->u8_bytes, expected->data);
             }
 
             n00b_parse_result_free(r);
@@ -597,7 +597,7 @@ main(int argc, char **argv)
         bool need_graphs = show_cfg || show_cdg || show_dfg || run_analyze;
 
         if (need_graphs && ar && ar->cf_labels) {
-            n00b_cfg_t *cfg = n00b_build_cfg(ar->cf_labels, tree, *r"module",
+            n00b_cfg_t *cfg = n00b_build_cfg(ar->cf_labels, tree, r"module",
                                                 ar->symtab);
 
             if (cfg) {
@@ -648,7 +648,7 @@ main(int argc, char **argv)
                         .annot     = ar,
                         .grammar   = g,
                         .diag      = diag_ctx,
-                        .func_name = *r"module",
+                        .func_name = r"module",
                     };
 
                     n00b_analyze_all(&actx);

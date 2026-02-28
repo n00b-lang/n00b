@@ -76,8 +76,8 @@ TEST(test_id_properties)
 
 TEST(test_display_width)
 {
-    ASSERT_EQ(n00b_unicode_display_width(*r"Hello"), 5);
-    ASSERT_EQ(n00b_unicode_display_width(*r"世界"), 4);
+    ASSERT_EQ(n00b_unicode_display_width(r"Hello"), 5);
+    ASSERT_EQ(n00b_unicode_display_width(r"世界"), 4);
 }
 
 TEST(test_joining_type)

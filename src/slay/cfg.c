@@ -59,7 +59,7 @@ typedef struct {
 // ============================================================================
 
 static int32_t
-new_block(cfg_ctx_t *ctx, n00b_string_t label)
+new_block(cfg_ctx_t *ctx, n00b_string_t *label)
 {
     n00b_cfg_block_t blk = {
         .id    = (int32_t)n00b_list_len(ctx->cfg->blocks),
@@ -74,7 +74,7 @@ new_block(cfg_ctx_t *ctx, n00b_string_t label)
 
 static void
 add_edge(cfg_ctx_t *ctx, int32_t from, int32_t to,
-         n00b_cfg_edge_kind_t kind, n00b_string_t label)
+         n00b_cfg_edge_kind_t kind, n00b_string_t *label)
 {
     n00b_cfg_edge_t e = {
         .from_id = from,
@@ -174,10 +174,10 @@ cfg_build_branch(cfg_ctx_t *ctx, n00b_cf_label_t *label, int32_t cur_block)
         block_add_stmt(ctx, cur_block, label->cond);
     }
 
-    int32_t merge = new_block(ctx, *r"merge");
+    int32_t merge = new_block(ctx, r"merge");
 
     // Then-arm.
-    int32_t then_blk = new_block(ctx, *r"then");
+    int32_t then_blk = new_block(ctx, r"then");
     add_edge(ctx, cur_block, then_blk, N00B_CFG_BRANCH_TRUE, n00b_string_empty());
 
     int32_t then_end = then_blk;
@@ -192,7 +192,7 @@ cfg_build_branch(cfg_ctx_t *ctx, n00b_cf_label_t *label, int32_t cur_block)
 
     // Else-arm (optional).
     if (label->else_body) {
-        int32_t else_blk = new_block(ctx, *r"else");
+        int32_t else_blk = new_block(ctx, r"else");
         add_edge(ctx, cur_block, else_blk, N00B_CFG_BRANCH_FALSE, n00b_string_empty());
 
         int32_t else_end = cfg_build_stmts(ctx, label->else_body, else_blk);
@@ -216,9 +216,9 @@ cfg_build_branch(cfg_ctx_t *ctx, n00b_cf_label_t *label, int32_t cur_block)
 static int32_t
 cfg_build_loop(cfg_ctx_t *ctx, n00b_cf_label_t *label, int32_t cur_block)
 {
-    int32_t header = new_block(ctx, *r"loop_header");
-    int32_t body   = new_block(ctx, *r"loop_body");
-    int32_t exit   = new_block(ctx, *r"loop_exit");
+    int32_t header = new_block(ctx, r"loop_header");
+    int32_t body   = new_block(ctx, r"loop_body");
+    int32_t exit   = new_block(ctx, r"loop_exit");
 
     // Current block falls through to loop header.
     add_edge(ctx, cur_block, header, N00B_CFG_FALLTHROUGH, n00b_string_empty());
@@ -262,7 +262,7 @@ cfg_build_switch(cfg_ctx_t *ctx, n00b_cf_label_t *label, int32_t cur_block)
         block_add_stmt(ctx, cur_block, label->cond);
     }
 
-    int32_t merge = new_block(ctx, *r"switch_merge");
+    int32_t merge = new_block(ctx, r"switch_merge");
 
     // The then_body is the cases container.  Flatten $$group wrappers
     // to find the actual case-block / case-else nodes — the grammar's
@@ -282,7 +282,7 @@ cfg_build_switch(cfg_ctx_t *ctx, n00b_cf_label_t *label, int32_t cur_block)
     }
 
     for (int i = 0; i < narms; i++) {
-        int32_t case_blk = new_block(ctx, *r"case");
+        int32_t case_blk = new_block(ctx, r"case");
         add_edge(ctx, cur_block, case_blk, N00B_CFG_CASE_BRANCH, n00b_string_empty());
 
         int32_t case_end = cfg_build_stmts(ctx, arms[i], case_blk);
@@ -306,13 +306,13 @@ cfg_build_jump(cfg_ctx_t *ctx, n00b_cf_label_t *label, int32_t cur_block)
 
     int32_t target;
 
-    if (label->jump_kind.data && ctx->loops.top > 0) {
+    if (label->jump_kind && ctx->loops.top > 0) {
         loop_info_t *loop = &ctx->loops.items[ctx->loops.top - 1];
 
-        if (n00b_unicode_str_starts_with(label->jump_kind, *r"break")) {
+        if (n00b_unicode_str_starts_with(label->jump_kind, r"break")) {
             target = loop->exit_id;
         }
-        else if (n00b_unicode_str_starts_with(label->jump_kind, *r"continue")) {
+        else if (n00b_unicode_str_starts_with(label->jump_kind, r"continue")) {
             target = loop->header_id;
         }
         else {
@@ -328,7 +328,7 @@ cfg_build_jump(cfg_ctx_t *ctx, n00b_cf_label_t *label, int32_t cur_block)
     add_edge(ctx, cur_block, target, N00B_CFG_JUMP, label->jump_kind);
 
     // Code after a jump is unreachable — start a new dead block.
-    return new_block(ctx, *r"unreachable");
+    return new_block(ctx, r"unreachable");
 }
 
 // ============================================================================
@@ -358,6 +358,7 @@ cfg_build_stmt(cfg_ctx_t *ctx, n00b_parse_tree_t *node, int32_t cur_block)
         case N00B_CF_VARREF:
         case N00B_CF_CAPTURE:
         case N00B_CF_UNWRAP_RESULT:
+        case N00B_CF_CALL:
             // Treat as a regular statement for CFG purposes.
             block_add_stmt(ctx, cur_block, node);
             return cur_block;
@@ -376,8 +377,9 @@ cfg_build_stmt(cfg_ctx_t *ctx, n00b_parse_tree_t *node, int32_t cur_block)
     // stored during the annotation walk (language-independent).
     n00b_nt_node_t *nt = &n00b_tree_node_value(node);
 
-    if (nt->scope && nt->scope->scope_tag.u8_bytes > 0
-        && n00b_unicode_str_eq(nt->scope->scope_tag, *r"function")) {
+    if (nt->scope && nt->scope->scope_tag
+        && nt->scope->scope_tag->u8_bytes > 0
+        && n00b_unicode_str_eq(nt->scope->scope_tag, r"function")) {
         // Find the body child (last non-leaf NT child).
         n00b_parse_tree_t *body = NULL;
         size_t nc = n00b_tree_num_children(node);
@@ -392,7 +394,7 @@ cfg_build_stmt(cfg_ctx_t *ctx, n00b_parse_tree_t *node, int32_t cur_block)
         }
 
         // Get function name from the scope attached to this node.
-        n00b_string_t func_name = nt->scope->name;
+        n00b_string_t *func_name = nt->scope->name;
 
         if (body) {
             // Build a separate CFG for the function body.
@@ -445,7 +447,7 @@ cfg_build_stmts(cfg_ctx_t *ctx, n00b_parse_tree_t *node, int32_t cur_block)
 n00b_cfg_t *
 n00b_build_cfg(n00b_cf_labels_t *cf_labels,
                n00b_parse_tree_t   *func_body,
-               n00b_string_t        func_name,
+               n00b_string_t       *func_name,
                n00b_symtab_t       *symtab)
 {
     if (!cf_labels || !func_body) {
@@ -465,8 +467,8 @@ n00b_build_cfg(n00b_cf_labels_t *cf_labels,
     };
 
     // Create entry and exit blocks.
-    cfg->entry_id = new_block(&ctx, *r"entry");
-    cfg->exit_id  = new_block(&ctx, *r"exit");
+    cfg->entry_id = new_block(&ctx, r"entry");
+    cfg->exit_id  = new_block(&ctx, r"exit");
 
     cfg->blocks.data[cfg->entry_id].is_entry = true;
     cfg->blocks.data[cfg->exit_id].is_exit   = true;

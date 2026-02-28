@@ -48,7 +48,7 @@ typedef struct {
     int32_t            position;     /**< Token index where repair occurred. */
     uint32_t           line;         /**< Source line of repair. */
     uint32_t           column;       /**< Source column of repair. */
-    n00b_string_t      description;  /**< Human-readable repair description. */
+    n00b_string_t     *description;  /**< Human-readable repair description. */
     int64_t            terminal_id;  /**< Terminal involved in the repair. */
 } n00b_repair_t;
 
@@ -61,7 +61,7 @@ typedef struct {
     int32_t       position; /**< Token index where parsing stopped. */
     uint32_t      line;     /**< Source line of failure. */
     uint32_t      column;   /**< Source column of failure. */
-    n00b_string_t got;      /**< Text of the unexpected token. */
+    n00b_string_t *got;      /**< Text of the unexpected token. */
     int64_t       got_id;   /**< Terminal ID of the unexpected token. */
 } n00b_error_location_t;
 
@@ -71,7 +71,7 @@ typedef struct {
 
 /** @brief One point of ambiguity in the parse result. */
 typedef struct {
-    n00b_string_t       nt_name;      /**< Non-terminal where ambiguity occurs. */
+    n00b_string_t      *nt_name;      /**< Non-terminal where ambiguity occurs. */
     int32_t             start_pos;    /**< Start token position. */
     int32_t             end_pos;      /**< End token position. */
     int32_t             alt_count;    /**< Number of alternative subtrees. */
@@ -100,9 +100,9 @@ typedef struct n00b_parse_result_t n00b_parse_result_t;
 /** @brief Diagnostic information extracted from the Earley chart. */
 typedef struct {
     int64_t              *expected_ids;    /**< Terminal IDs expected at failure. */
-    n00b_string_t        *expected_desc;   /**< Human-readable descriptions (parallel to expected_ids). */
+    n00b_string_t       **expected_desc;   /**< Human-readable descriptions (parallel to expected_ids). */
     int32_t               expected_count;  /**< Number of expected terminals/descriptions. */
-    n00b_string_t        *active_ctx;      /**< Active NT context names. */
+    n00b_string_t       **active_ctx;      /**< Active NT context names. */
     int32_t               active_ctx_count;
     n00b_error_location_t error_loc;       /**< Error location. */
 } n00b_earley_diagnostics_t;
@@ -201,10 +201,10 @@ int32_t n00b_parse_result_expected_tokens(n00b_parse_result_t *r,
                                            int64_t *out, int32_t max_out);
 
 /** @brief Get a human-readable string of expected tokens. */
-n00b_string_t n00b_parse_result_expected_string(n00b_parse_result_t *r);
+n00b_string_t *n00b_parse_result_expected_string(n00b_parse_result_t *r);
 
 /** @brief Get a full human-readable error message. */
-n00b_string_t n00b_parse_result_error_string(n00b_parse_result_t *r);
+n00b_string_t *n00b_parse_result_error_string(n00b_parse_result_t *r);
 
 // ============================================================================
 // Repair diagnostics

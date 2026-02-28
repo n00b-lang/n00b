@@ -2,9 +2,9 @@
 /** @file string_style.h
  *  @brief Attach, query, and manipulate styling on `n00b_string_t`.
  *
- *  All functions that produce new strings return `n00b_string_t` by
- *  value.  The original string is never mutated -- a new string with
- *  the same data but updated `styling` pointer is returned.
+ *  All functions that produce new strings return `n00b_string_t *`.
+ *  The original string is never mutated -- a new string with the same
+ *  data but updated `styling` pointer is returned.
  *
  *  ### Related modules
  *
@@ -16,8 +16,6 @@
 #include "text/strings/style_ops.h"
 #include "core/string.h"
 #include "adt/option.h"
-
-n00b_option_decl(n00b_string_style_info_t *);
 
 // ===================================================================
 // Attach
@@ -33,7 +31,7 @@ n00b_option_decl(n00b_string_style_info_t *);
  *  @kw allocator Optional allocator.
  *  @return New string value with base style set.
  */
-n00b_string_t n00b_str_set_base_style(n00b_string_t s,
+n00b_string_t *n00b_str_set_base_style(n00b_string_t *s,
                                        const n00b_text_style_t *style)
     _kargs { n00b_allocator_t *allocator = nullptr; };
 
@@ -56,7 +54,7 @@ n00b_string_t n00b_str_set_base_style(n00b_string_t s,
  *  @kw allocator   Optional allocator.
  *  @return New string value with the style record appended.
  */
-n00b_string_t n00b_str_add_style(n00b_string_t s,
+n00b_string_t *n00b_str_add_style(n00b_string_t *s,
                                   const n00b_text_style_t *style,
                                   size_t start,
                                   n00b_option_t(size_t) end_opt)
@@ -72,7 +70,7 @@ n00b_string_t n00b_str_add_style(n00b_string_t s,
 /** @brief Get the raw styling metadata from a string.
  *  @return The style info, or none if no styling is attached.
  */
-n00b_option_t(n00b_string_style_info_t *) n00b_str_get_style_info(n00b_string_t s);
+n00b_option_t(n00b_string_style_info_t *) n00b_str_get_style_info(n00b_string_t *s);
 
 /** @brief Resolve the effective style at a byte position.
  *
@@ -83,7 +81,7 @@ n00b_option_t(n00b_string_style_info_t *) n00b_str_get_style_info(n00b_string_t 
  *  @kw allocator    Optional allocator for the returned style.
  *  @return Merged style, or an empty style if no styling is attached.
  */
-n00b_text_style_t *n00b_str_resolve_style_at(n00b_string_t s,
+n00b_text_style_t *n00b_str_resolve_style_at(n00b_string_t *s,
                                               size_t byte_pos)
     _kargs { n00b_allocator_t *allocator = nullptr; };
 
@@ -94,4 +92,4 @@ n00b_text_style_t *n00b_str_resolve_style_at(n00b_string_t s,
 /** @brief Return a copy of @p s with all styling removed.
  *  @return String with `styling == nullptr`.
  */
-n00b_string_t n00b_str_strip_styles(n00b_string_t s);
+n00b_string_t *n00b_str_strip_styles(n00b_string_t *s);

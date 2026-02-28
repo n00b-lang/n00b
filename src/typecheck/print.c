@@ -90,13 +90,13 @@ tc_find(n00b_tc_type_t *t)
     return t;
 }
 
-static n00b_string_t type_to_string_inner(n00b_tc_type_t *type, visit_set_t *vs);
+static n00b_string_t *type_to_string_inner(n00b_tc_type_t *type, visit_set_t *vs);
 
 // ============================================================================
 // Helper: build string from C format string
 // ============================================================================
 
-static n00b_string_t
+static n00b_string_t *
 str_from_fmt(const char *fmt, ...)
 {
     char    buf[512];
@@ -113,58 +113,58 @@ str_from_fmt(const char *fmt, ...)
 // Per-kind printers
 // ============================================================================
 
-static n00b_string_t
+static n00b_string_t *
 print_var(n00b_tc_var_t *var)
 {
     if (n00b_option_is_set(var->given_name)) {
-        n00b_string_t name = n00b_option_get(var->given_name);
+        n00b_string_t *name = n00b_option_get(var->given_name);
 
-        return str_from_fmt("`%.*s", (int)name.u8_bytes, name.data);
+        return str_from_fmt("`%.*s", (int)name->u8_bytes, name->data);
     }
 
     return str_from_fmt("`%.*s",
-                        (int)var->display_name.u8_bytes,
-                        var->display_name.data);
+                        (int)var->display_name->u8_bytes,
+                        var->display_name->data);
 }
 
-static n00b_string_t
+static n00b_string_t *
 print_prim(n00b_tc_prim_t *prim)
 {
     // Return the name directly.
     return prim->name;
 }
 
-static n00b_string_t
+static n00b_string_t *
 print_param(n00b_tc_param_t *param, visit_set_t *vs)
 {
     // name[p1, p2, ...]
-    n00b_string_t result = param->name;
+    n00b_string_t *result = param->name;
 
     if (param->params && n00b_list_len(*param->params) > 0) {
-        result = n00b_unicode_str_cat(result, *r"[");
+        result = n00b_unicode_str_cat(result, r"[");
 
         size_t np = n00b_list_len(*param->params);
 
         for (size_t i = 0; i < np; i++) {
             if (i > 0) {
-                result = n00b_unicode_str_cat(result, *r", ");
+                result = n00b_unicode_str_cat(result, r", ");
             }
 
             n00b_tc_type_t *p = n00b_list_get(*param->params, i);
-            n00b_string_t   ps = type_to_string_inner(p, vs);
+            n00b_string_t  *ps = type_to_string_inner(p, vs);
             result = n00b_unicode_str_cat(result, ps);
         }
 
-        result = n00b_unicode_str_cat(result, *r"]");
+        result = n00b_unicode_str_cat(result, r"]");
     }
 
     return result;
 }
 
-static n00b_string_t
+static n00b_string_t *
 print_fn(n00b_tc_fn_t *fn, visit_set_t *vs)
 {
-    n00b_string_t result = *r"(";
+    n00b_string_t *result = r"(";
 
     // Positional params.
     if (fn->positional) {
@@ -172,11 +172,11 @@ print_fn(n00b_tc_fn_t *fn, visit_set_t *vs)
 
         for (size_t i = 0; i < np; i++) {
             if (i > 0) {
-                result = n00b_unicode_str_cat(result, *r", ");
+                result = n00b_unicode_str_cat(result, r", ");
             }
 
             n00b_tc_type_t *p = n00b_list_get(*fn->positional, i);
-            n00b_string_t   ps = type_to_string_inner(p, vs);
+            n00b_string_t  *ps = type_to_string_inner(p, vs);
             result = n00b_unicode_str_cat(result, ps);
         }
     }
@@ -186,11 +186,11 @@ print_fn(n00b_tc_fn_t *fn, visit_set_t *vs)
         size_t np = fn->positional ? n00b_list_len(*fn->positional) : 0;
 
         if (np > 0) {
-            result = n00b_unicode_str_cat(result, *r", ");
+            result = n00b_unicode_str_cat(result, r", ");
         }
 
-        result = n00b_unicode_str_cat(result, *r"*");
-        n00b_string_t vs_str = type_to_string_inner(fn->vargs_type, vs);
+        result = n00b_unicode_str_cat(result, r"*");
+        n00b_string_t *vs_str = type_to_string_inner(fn->vargs_type, vs);
         result = n00b_unicode_str_cat(result, vs_str);
     }
 
@@ -206,56 +206,56 @@ print_fn(n00b_tc_fn_t *fn, visit_set_t *vs)
                          + (fn->vargs_type ? 1 : 0);
 
             if (prior > 0) {
-                result = n00b_unicode_str_cat(result, *r", ");
+                result = n00b_unicode_str_cat(result, r", ");
             }
 
-            result = n00b_unicode_str_cat(result, *r"**");
+            result = n00b_unicode_str_cat(result, r"**");
 
             for (size_t i = 0; i < nf; i++) {
                 if (i > 0) {
-                    result = n00b_unicode_str_cat(result, *r", ");
+                    result = n00b_unicode_str_cat(result, r", ");
                 }
 
-                n00b_string_t fname = n00b_list_get(*rec.field_names, i);
+                n00b_string_t *fname = n00b_list_get(*rec.field_names, i);
                 n00b_tc_type_t *ft = n00b_list_get(*rec.field_types, i);
-                n00b_string_t fts = type_to_string_inner(ft, vs);
+                n00b_string_t *fts = type_to_string_inner(ft, vs);
 
                 result = n00b_unicode_str_cat(result, fname);
-                result = n00b_unicode_str_cat(result, *r": ");
+                result = n00b_unicode_str_cat(result, r": ");
                 result = n00b_unicode_str_cat(result, fts);
             }
         }
     }
 
-    result = n00b_unicode_str_cat(result, *r") -> ");
+    result = n00b_unicode_str_cat(result, r") -> ");
 
     // Return type.
     if (fn->return_type) {
-        n00b_string_t rs = type_to_string_inner(fn->return_type, vs);
+        n00b_string_t *rs = type_to_string_inner(fn->return_type, vs);
         result = n00b_unicode_str_cat(result, rs);
     }
     else {
-        result = n00b_unicode_str_cat(result, *r"void");
+        result = n00b_unicode_str_cat(result, r"void");
     }
 
     return result;
 }
 
-static n00b_string_t
+static n00b_string_t *
 print_sum(n00b_tc_sum_t *sum, visit_set_t *vs)
 {
-    n00b_string_t result = n00b_string_empty();
+    n00b_string_t *result = n00b_string_empty();
 
     if (sum->variants) {
         size_t nv = n00b_list_len(*sum->variants);
 
         for (size_t i = 0; i < nv; i++) {
             if (i > 0) {
-                result = n00b_unicode_str_cat(result, *r" | ");
+                result = n00b_unicode_str_cat(result, r" | ");
             }
 
             n00b_tc_type_t *v = n00b_list_get(*sum->variants, i);
-            n00b_string_t   vs_str = type_to_string_inner(v, vs);
+            n00b_string_t  *vs_str = type_to_string_inner(v, vs);
             result = n00b_unicode_str_cat(result, vs_str);
         }
     }
@@ -263,62 +263,62 @@ print_sum(n00b_tc_sum_t *sum, visit_set_t *vs)
     return result;
 }
 
-static n00b_string_t
+static n00b_string_t *
 print_record(n00b_tc_record_t *rec, visit_set_t *vs)
 {
-    n00b_string_t result = n00b_string_empty();
+    n00b_string_t *result = n00b_string_empty();
 
     // Named record: Name{...}
-    if (rec->name.u8_bytes > 0) {
+    if (rec->name && rec->name->u8_bytes > 0) {
         result = rec->name;
     }
 
-    result = n00b_unicode_str_cat(result, *r"{");
+    result = n00b_unicode_str_cat(result, r"{");
 
     size_t nf = rec->field_names ? n00b_list_len(*rec->field_names) : 0;
 
     for (size_t i = 0; i < nf; i++) {
         if (i > 0) {
-            result = n00b_unicode_str_cat(result, *r", ");
+            result = n00b_unicode_str_cat(result, r", ");
         }
 
-        n00b_string_t fname = n00b_list_get(*rec->field_names, i);
+        n00b_string_t *fname = n00b_list_get(*rec->field_names, i);
         result = n00b_unicode_str_cat(result, fname);
-        result = n00b_unicode_str_cat(result, *r": ");
+        result = n00b_unicode_str_cat(result, r": ");
 
         n00b_tc_type_t *ft = n00b_list_get(*rec->field_types, i);
-        n00b_string_t fts = type_to_string_inner(ft, vs);
+        n00b_string_t *fts = type_to_string_inner(ft, vs);
         result = n00b_unicode_str_cat(result, fts);
     }
 
     if (rec->open) {
         if (nf > 0) {
-            result = n00b_unicode_str_cat(result, *r", ");
+            result = n00b_unicode_str_cat(result, r", ");
         }
 
-        result = n00b_unicode_str_cat(result, *r"...");
+        result = n00b_unicode_str_cat(result, r"...");
     }
 
-    result = n00b_unicode_str_cat(result, *r"}");
+    result = n00b_unicode_str_cat(result, r"}");
 
     return result;
 }
 
-static n00b_string_t
+static n00b_string_t *
 print_tuple(n00b_tc_tuple_t *tup, visit_set_t *vs)
 {
-    n00b_string_t result = *r"(";
+    n00b_string_t *result = r"(";
 
     if (tup->elements) {
         size_t ne = n00b_list_len(*tup->elements);
 
         for (size_t i = 0; i < ne; i++) {
             if (i > 0) {
-                result = n00b_unicode_str_cat(result, *r", ");
+                result = n00b_unicode_str_cat(result, r", ");
             }
 
             n00b_tc_type_t *e = n00b_list_get(*tup->elements, i);
-            n00b_string_t   es = type_to_string_inner(e, vs);
+            n00b_string_t  *es = type_to_string_inner(e, vs);
             result = n00b_unicode_str_cat(result, es);
         }
     }
@@ -327,13 +327,13 @@ print_tuple(n00b_tc_tuple_t *tup, visit_set_t *vs)
         size_t ne = tup->elements ? n00b_list_len(*tup->elements) : 0;
 
         if (ne > 0) {
-            result = n00b_unicode_str_cat(result, *r", ");
+            result = n00b_unicode_str_cat(result, r", ");
         }
 
-        result = n00b_unicode_str_cat(result, *r"...");
+        result = n00b_unicode_str_cat(result, r"...");
     }
 
-    result = n00b_unicode_str_cat(result, *r")");
+    result = n00b_unicode_str_cat(result, r")");
 
     return result;
 }
@@ -342,11 +342,11 @@ print_tuple(n00b_tc_tuple_t *tup, visit_set_t *vs)
 // Core recursive printer
 // ============================================================================
 
-static n00b_string_t
+static n00b_string_t *
 type_to_string_inner(n00b_tc_type_t *type, visit_set_t *vs)
 {
     if (!type) {
-        return *r"<null>";
+        return r"<null>";
     }
 
     // Follow union-find chain.
@@ -354,14 +354,14 @@ type_to_string_inner(n00b_tc_type_t *type, visit_set_t *vs)
 
     // Cycle detection.
     if (visit_contains(vs, type)) {
-        return *r"<cycle>";
+        return r"<cycle>";
     }
 
     if (!visit_push(vs, type)) {
-        return *r"<too-deep>";
+        return r"<too-deep>";
     }
 
-    n00b_string_t result;
+    n00b_string_t *result;
 
     if (n00b_variant_is_type(type->kind, n00b_tc_var_t)) {
         auto var = n00b_variant_get(type->kind, n00b_tc_var_t);
@@ -392,7 +392,7 @@ type_to_string_inner(n00b_tc_type_t *type, visit_set_t *vs)
         result = print_tuple(&tup, vs);
     }
     else {
-        result = *r"<unknown>";
+        result = r"<unknown>";
     }
 
     visit_pop(vs);
@@ -404,7 +404,7 @@ type_to_string_inner(n00b_tc_type_t *type, visit_set_t *vs)
 // Public API
 // ============================================================================
 
-n00b_string_t
+n00b_string_t *
 n00b_tc_type_to_string(n00b_tc_type_t *type)
 {
     visit_set_t vs = {.count = 0};
@@ -412,11 +412,11 @@ n00b_tc_type_to_string(n00b_tc_type_t *type)
     return type_to_string_inner(type, &vs);
 }
 
-n00b_string_t
+n00b_string_t *
 n00b_tc_constraint_to_string(n00b_tc_constraint_t *con)
 {
     if (!con) {
-        return *r"<null>";
+        return r"<null>";
     }
 
     switch (con->kind) {
@@ -424,64 +424,64 @@ n00b_tc_constraint_to_string(n00b_tc_constraint_t *con)
         return con->implements.iface_name;
 
     case N00B_TC_CON_NOT: {
-        n00b_string_t ts = n00b_tc_type_to_string(con->not_.excluded);
-        return n00b_unicode_str_cat(*r"!= ", ts);
+        n00b_string_t *ts = n00b_tc_type_to_string(con->not_.excluded);
+        return n00b_unicode_str_cat(r"!= ", ts);
     }
 
     case N00B_TC_CON_UNIFIES: {
-        n00b_string_t ts = n00b_tc_type_to_string(con->unifies.target);
-        return n00b_unicode_str_cat(*r"== ", ts);
+        n00b_string_t *ts = n00b_tc_type_to_string(con->unifies.target);
+        return n00b_unicode_str_cat(r"== ", ts);
     }
 
     case N00B_TC_CON_ONE_OF: {
-        n00b_string_t result = *r"one_of(";
+        n00b_string_t *result = r"one_of(";
         size_t        nt     = n00b_list_len(*con->one_of.types);
 
         for (size_t i = 0; i < nt; i++) {
             if (i > 0) {
-                result = n00b_unicode_str_cat(result, *r", ");
+                result = n00b_unicode_str_cat(result, r", ");
             }
 
             n00b_tc_type_t *t = n00b_list_get(*con->one_of.types, i);
             result = n00b_unicode_str_cat(result, n00b_tc_type_to_string(t));
         }
 
-        return n00b_unicode_str_cat(result, *r")");
+        return n00b_unicode_str_cat(result, r")");
     }
 
     case N00B_TC_CON_HAS_FIELD: {
-        n00b_string_t ts = n00b_tc_type_to_string(con->has_field.field_type);
-        n00b_string_t result = n00b_unicode_str_cat(*r"has_field(", con->has_field.field_name);
-        result = n00b_unicode_str_cat(result, *r": ");
+        n00b_string_t *ts = n00b_tc_type_to_string(con->has_field.field_type);
+        n00b_string_t *result = n00b_unicode_str_cat(r"has_field(", con->has_field.field_name);
+        result = n00b_unicode_str_cat(result, r": ");
         result = n00b_unicode_str_cat(result, ts);
-        return n00b_unicode_str_cat(result, *r")");
+        return n00b_unicode_str_cat(result, r")");
     }
 
     case N00B_TC_CON_HAS_PARAM: {
-        n00b_string_t ts = n00b_tc_type_to_string(con->has_param.param_type);
+        n00b_string_t *ts = n00b_tc_type_to_string(con->has_param.param_type);
         return str_from_fmt("has_param(%d, %.*s)",
                             con->has_param.index,
-                            (int)ts.u8_bytes, ts.data);
+                            (int)ts->u8_bytes, ts->data);
     }
 
     case N00B_TC_CON_PROMOTES: {
-        n00b_string_t ts = n00b_tc_type_to_string(con->promotes.target);
-        return n00b_unicode_str_cat(*r"promotes_to ", ts);
+        n00b_string_t *ts = n00b_tc_type_to_string(con->promotes.target);
+        return n00b_unicode_str_cat(r"promotes_to ", ts);
     }
 
     default:
-        return *r"<unknown-constraint>";
+        return r"<unknown-constraint>";
     }
 }
 
-n00b_string_t
+n00b_string_t *
 n00b_tc_type_to_string_full(n00b_tc_type_t *type)
 {
     if (!type) {
-        return *r"<null>";
+        return r"<null>";
     }
 
-    n00b_string_t base = n00b_tc_type_to_string(type);
+    n00b_string_t *base = n00b_tc_type_to_string(type);
 
     // Follow union-find.
     n00b_tc_type_t *resolved = tc_find(type);
@@ -498,7 +498,7 @@ n00b_tc_type_to_string_full(n00b_tc_type_t *type)
     }
 
     // Get the var name for the where clause.
-    n00b_string_t var_name;
+    n00b_string_t *var_name;
 
     if (n00b_option_is_set(var.given_name)) {
         var_name = n00b_option_get(var.given_name);
@@ -507,19 +507,19 @@ n00b_tc_type_to_string_full(n00b_tc_type_t *type)
         var_name = var.display_name;
     }
 
-    n00b_string_t result = n00b_unicode_str_cat(base, *r" where `");
+    n00b_string_t *result = n00b_unicode_str_cat(base, r" where `");
     result = n00b_unicode_str_cat(result, var_name);
-    result = n00b_unicode_str_cat(result, *r": ");
+    result = n00b_unicode_str_cat(result, r": ");
 
     size_t nc = n00b_list_len(*var.constraints);
 
     for (size_t i = 0; i < nc; i++) {
         if (i > 0) {
-            result = n00b_unicode_str_cat(result, *r" + ");
+            result = n00b_unicode_str_cat(result, r" + ");
         }
 
         n00b_tc_constraint_t con = n00b_list_get(*var.constraints, i);
-        n00b_string_t cs = n00b_tc_constraint_to_string(&con);
+        n00b_string_t *cs = n00b_tc_constraint_to_string(&con);
         result = n00b_unicode_str_cat(result, cs);
     }
 

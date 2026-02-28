@@ -20,7 +20,7 @@
 // Integer → string
 // ---------------------------------------------------------------------------
 
-n00b_string_t
+n00b_string_t *
 n00b_unicode_str_from_int(int64_t n) _kargs
 {
     n00b_allocator_t *allocator = nullptr;
@@ -65,8 +65,8 @@ n00b_unicode_str_from_int(int64_t n) _kargs
 static const char hex_lower_tbl[16] __attribute__((nonstring)) = "0123456789abcdef";
 static const char hex_upper_tbl[16] __attribute__((nonstring)) = "0123456789ABCDEF";
 
-n00b_string_t
-n00b_unicode_str_to_hex(n00b_string_t s) _kargs
+n00b_string_t *
+n00b_unicode_str_to_hex(n00b_string_t *s) _kargs
 {
     bool              upper     = false;
     n00b_allocator_t *allocator = nullptr;
@@ -75,19 +75,19 @@ n00b_unicode_str_to_hex(n00b_string_t s) _kargs
     if (!allocator)
         allocator = nullptr;
 
-    uint32_t    len = (uint32_t)s.u8_bytes;
+    uint32_t    len = (uint32_t)s->u8_bytes;
     uint32_t    out = len * 2;
     char       *buf = n00b_alloc_array(char, out + 1);
     const char *map = upper ? hex_upper_tbl : hex_lower_tbl;
 
     for (uint32_t i = 0; i < len; i++) {
-        uint8_t c      = (uint8_t)s.data[i];
+        uint8_t c      = (uint8_t)s->data[i];
         buf[i * 2]     = map[c >> 4];
         buf[i * 2 + 1] = map[c & 0x0f];
     }
     buf[out] = '\0';
 
-    n00b_string_t result = n00b_string_from_raw(buf, out, .allocator = allocator);
+    n00b_string_t *result = n00b_string_from_raw(buf, out, .allocator = allocator);
     n00b_free(buf);
     return result;
 }
@@ -97,7 +97,7 @@ n00b_unicode_str_to_hex(n00b_string_t s) _kargs
 // ---------------------------------------------------------------------------
 
 char *
-n00b_unicode_str_to_cstr(n00b_string_t s) _kargs
+n00b_unicode_str_to_cstr(n00b_string_t *s) _kargs
 {
     n00b_allocator_t *allocator = nullptr;
 }
@@ -105,9 +105,9 @@ n00b_unicode_str_to_cstr(n00b_string_t s) _kargs
     if (!allocator)
         allocator = nullptr;
 
-    uint32_t len    = (uint32_t)s.u8_bytes;
+    uint32_t len    = (uint32_t)s->u8_bytes;
     char    *result = n00b_alloc_array(char, len + 1);
-    memcpy(result, s.data, len);
+    memcpy(result, s->data, len);
     result[len] = '\0';
     return result;
 }
@@ -116,8 +116,8 @@ n00b_unicode_str_to_cstr(n00b_string_t s) _kargs
 // Literal form
 // ---------------------------------------------------------------------------
 
-n00b_string_t
-n00b_unicode_str_to_literal(n00b_string_t s) _kargs
+n00b_string_t *
+n00b_unicode_str_to_literal(n00b_string_t *s) _kargs
 {
     n00b_allocator_t *allocator = nullptr;
 }
@@ -125,19 +125,19 @@ n00b_unicode_str_to_literal(n00b_string_t s) _kargs
     if (!allocator)
         allocator = nullptr;
 
-    n00b_string_t escaped = n00b_unicode_str_escape(s, .allocator = allocator);
+    n00b_string_t *escaped = n00b_unicode_str_escape(s, .allocator = allocator);
 
     // Build: '"' + escaped + '"'
-    uint32_t elen  = (uint32_t)escaped.u8_bytes;
+    uint32_t elen  = (uint32_t)escaped->u8_bytes;
     uint32_t total = elen + 2;
     char    *buf   = n00b_alloc_array(char, total + 1);
 
     buf[0] = '"';
-    memcpy(buf + 1, escaped.data, elen);
+    memcpy(buf + 1, escaped->data, elen);
     buf[total - 1] = '"';
     buf[total]     = '\0';
 
-    n00b_string_t result = n00b_string_from_raw(buf, total, .allocator = allocator);
+    n00b_string_t *result = n00b_string_from_raw(buf, total, .allocator = allocator);
     n00b_free(buf);
     return result;
 }
@@ -146,7 +146,7 @@ n00b_unicode_str_to_literal(n00b_string_t s) _kargs
 // Codepoint → string
 // ---------------------------------------------------------------------------
 
-n00b_string_t
+n00b_string_t *
 n00b_unicode_str_from_codepoint(n00b_codepoint_t cp) _kargs
 {
     n00b_allocator_t *allocator = nullptr;
@@ -169,7 +169,7 @@ n00b_unicode_str_from_codepoint(n00b_codepoint_t cp) _kargs
 // File I/O
 // ---------------------------------------------------------------------------
 
-n00b_result_t(n00b_string_t) n00b_unicode_str_from_file(const char *path) _kargs
+n00b_result_t(n00b_string_t *) n00b_unicode_str_from_file(const char *path) _kargs
 {
     n00b_allocator_t *allocator = nullptr;
 }
@@ -179,21 +179,21 @@ n00b_result_t(n00b_string_t) n00b_unicode_str_from_file(const char *path) _kargs
 
     int fd = open(path, O_RDONLY);
     if (fd < 0) {
-        return n00b_result_err(n00b_string_t, errno);
+        return n00b_result_err(n00b_string_t *, errno);
     }
 
     struct stat st;
     if (fstat(fd, &st) < 0) {
         int e = errno;
         close(fd);
-        return n00b_result_err(n00b_string_t, e);
+        return n00b_result_err(n00b_string_t *, e);
     }
 
     off_t file_size = st.st_size;
     if (file_size == 0) {
         close(fd);
-        n00b_string_t empty = n00b_string_from_raw("", 0, .allocator = allocator);
-        return n00b_result_ok(n00b_string_t, empty);
+        n00b_string_t *empty = n00b_string_from_raw("", 0, .allocator = allocator);
+        return n00b_result_ok(n00b_string_t *, empty);
     }
 
     char   *buf        = n00b_alloc_array(char, (size_t)file_size + 1);
@@ -207,7 +207,7 @@ n00b_result_t(n00b_string_t) n00b_unicode_str_from_file(const char *path) _kargs
             int e = errno;
             close(fd);
             n00b_free(buf);
-            return n00b_result_err(n00b_string_t, e);
+            return n00b_result_err(n00b_string_t *, e);
         }
         if (n == 0)
             break; // EOF
@@ -219,19 +219,19 @@ n00b_result_t(n00b_string_t) n00b_unicode_str_from_file(const char *path) _kargs
     // Validate UTF-8.
     if (!n00b_unicode_utf8_validate(buf, (uint32_t)total_read)) {
         n00b_free(buf);
-        return n00b_result_err(n00b_string_t, N00B_ERR_STR_INVALID_ESCAPE);
+        return n00b_result_err(n00b_string_t *, N00B_ERR_STR_INVALID_ESCAPE);
     }
 
-    n00b_string_t result = n00b_string_from_raw(buf, total_read, .allocator = allocator);
+    n00b_string_t *result = n00b_string_from_raw(buf, total_read, .allocator = allocator);
     n00b_free(buf);
-    return n00b_result_ok(n00b_string_t, result);
+    return n00b_result_ok(n00b_string_t *, result);
 }
 
 // ---------------------------------------------------------------------------
 // C string array
 // ---------------------------------------------------------------------------
 
-n00b_array_t(n00b_cstr_t) n00b_unicode_make_cstr_array(n00b_array_t(n00b_string_t) parts) _kargs
+n00b_array_t(n00b_cstr_t) n00b_unicode_make_cstr_array(n00b_array_t(n00b_string_t *) parts) _kargs
 {
     n00b_allocator_t *allocator = nullptr;
 }

@@ -20,7 +20,7 @@
  *  @return A result containing the ACE domain string and an error code.
  */
 n00b_unicode_idna_result_t
-n00b_unicode_idna_to_ascii(n00b_string_t domain) _kargs
+n00b_unicode_idna_to_ascii(n00b_string_t *domain) _kargs
 {
     n00b_allocator_t *allocator = nullptr;
 };
@@ -34,7 +34,7 @@ n00b_unicode_idna_to_ascii(n00b_string_t domain) _kargs
  *  @return A result containing the Unicode domain string and an error code.
  */
 n00b_unicode_idna_result_t
-n00b_unicode_idna_to_unicode(n00b_string_t domain) _kargs
+n00b_unicode_idna_to_unicode(n00b_string_t *domain) _kargs
 {
     n00b_allocator_t *allocator = nullptr;
 };

@@ -8,32 +8,32 @@
 
 TEST(test_grapheme_ascii)
 {
-    ASSERT_EQ(n00b_unicode_grapheme_count(*r"abc"), 3);
+    ASSERT_EQ(n00b_unicode_grapheme_count(r"abc"), 3);
 }
 
 TEST(test_grapheme_combining)
 {
-    ASSERT_EQ(n00b_unicode_grapheme_count(*r"e\xCC\x81"), 1);
+    ASSERT_EQ(n00b_unicode_grapheme_count(r"e\xCC\x81"), 1);
 }
 
 TEST(test_grapheme_crlf)
 {
-    ASSERT_EQ(n00b_unicode_grapheme_count(*r"\r\n"), 1);
+    ASSERT_EQ(n00b_unicode_grapheme_count(r"\r\n"), 1);
 }
 
 TEST(test_grapheme_emoji_flag)
 {
-    ASSERT_EQ(n00b_unicode_grapheme_count(*r"\xF0\x9F\x87\xBA\xF0\x9F\x87\xB8"), 1);
+    ASSERT_EQ(n00b_unicode_grapheme_count(r"\xF0\x9F\x87\xBA\xF0\x9F\x87\xB8"), 1);
 }
 
 TEST(test_grapheme_hangul)
 {
-    ASSERT_EQ(n00b_unicode_grapheme_count(*r"\xED\x95\x9C"), 1);
+    ASSERT_EQ(n00b_unicode_grapheme_count(r"\xED\x95\x9C"), 1);
 }
 
 TEST(test_grapheme_iter)
 {
-    n00b_unicode_break_iter_t *it = n00b_unicode_grapheme_iter(*r"ab");
+    n00b_unicode_break_iter_t *it = n00b_unicode_grapheme_iter(r"ab");
 
     int32_t b1 = n00b_unicode_break_next(it);
     ASSERT_EQ(b1, 1);
@@ -49,7 +49,7 @@ TEST(test_grapheme_iter)
 
 TEST(test_word_iter)
 {
-    n00b_unicode_break_iter_t *it = n00b_unicode_word_iter(*r"Hello world");
+    n00b_unicode_break_iter_t *it = n00b_unicode_word_iter(r"Hello world");
 
     int count = 0;
     while (n00b_unicode_break_next(it) >= 0) {
@@ -61,7 +61,7 @@ TEST(test_word_iter)
 
 TEST(test_sentence_iter)
 {
-    n00b_unicode_break_iter_t *it = n00b_unicode_sentence_iter(*r"Hello. World.");
+    n00b_unicode_break_iter_t *it = n00b_unicode_sentence_iter(r"Hello. World.");
 
     int count = 0;
     while (n00b_unicode_break_next(it) >= 0) {
@@ -77,13 +77,13 @@ TEST(test_sentence_iter)
 
 // Thin wrappers: ncc keyword functions have an extra hidden kargs param,
 // so their address doesn't match a plain function-pointer type.
-static n00b_unicode_break_iter_t *wrap_grapheme_iter(n00b_string_t s) { return n00b_unicode_grapheme_iter(s); }
-static n00b_unicode_break_iter_t *wrap_word_iter(n00b_string_t s)     { return n00b_unicode_word_iter(s); }
-static n00b_unicode_break_iter_t *wrap_sentence_iter(n00b_string_t s) { return n00b_unicode_sentence_iter(s); }
+static n00b_unicode_break_iter_t *wrap_grapheme_iter(n00b_string_t *s) { return n00b_unicode_grapheme_iter(s); }
+static n00b_unicode_break_iter_t *wrap_word_iter(n00b_string_t *s)     { return n00b_unicode_word_iter(s); }
+static n00b_unicode_break_iter_t *wrap_sentence_iter(n00b_string_t *s) { return n00b_unicode_sentence_iter(s); }
 
 static void
 run_break_conformance(const char *filename, const char *label,
-                      n00b_unicode_break_iter_t *(*iter_fn)(n00b_string_t))
+                      n00b_unicode_break_iter_t *(*iter_fn)(n00b_string_t *))
 {
     FILE *f = fopen(filename, "r");
     if (!f) {
@@ -106,7 +106,7 @@ run_break_conformance(const char *filename, const char *label,
         if (n == 0) continue;
 
         // Build UTF-8 string from codepoints
-        n00b_string_t s = cps_to_str(cps, n);
+        n00b_string_t *s = cps_to_str(cps, n);
 
         // Run break iterator and collect boundary byte offsets
         n00b_unicode_break_iter_t *it = iter_fn(s);
@@ -120,8 +120,8 @@ run_break_conformance(const char *filename, const char *label,
             }
         }
         // End of string is always a boundary
-        if (n_actual == 0 || actual_breaks[n_actual - 1] != (uint32_t)s.u8_bytes) {
-            actual_breaks[n_actual++] = (uint32_t)s.u8_bytes;
+        if (n_actual == 0 || actual_breaks[n_actual - 1] != (uint32_t)s->u8_bytes) {
+            actual_breaks[n_actual++] = (uint32_t)s->u8_bytes;
         }
 
         n00b_unicode_break_iter_free(it);

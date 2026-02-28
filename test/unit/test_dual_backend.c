@@ -218,7 +218,7 @@ test_backend_by_name(void)
 
     // Look up by the backend's ops name.
     if (io->ops->name) {
-        n00b_string_t name = io->ops->name();
+        n00b_string_t *name = io->ops->name();
         n00b_option_t(n00b_conduit_io_backend_t *) found =
             n00b_conduit_backend_by_name(c, name);
         assert(n00b_option_is_set(found));
@@ -227,7 +227,7 @@ test_backend_by_name(void)
 
     // Non-existent name must return None.
     n00b_option_t(n00b_conduit_io_backend_t *) none =
-        n00b_conduit_backend_by_name(c, *r"no_such_backend_xyz");
+        n00b_conduit_backend_by_name(c, r"no_such_backend_xyz");
     assert(!n00b_option_is_set(none));
 
     n00b_conduit_io_destroy(io);

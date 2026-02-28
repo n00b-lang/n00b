@@ -27,7 +27,7 @@ nt_id_for_name(n00b_grammar_t *grammar, const char *nt_name)
         return -1;
     }
 
-    n00b_string_t s = n00b_string_from_cstr(nt_name);
+    n00b_string_t *s = n00b_string_from_cstr(nt_name);
     n00b_nonterm_t *nt = n00b_nonterm(grammar, s);
 
     if (!nt) {
@@ -135,11 +135,11 @@ n00b_xform_make_token_node(int64_t tid, const char *value,
     tok->column = col;
 
     if (value) {
-        n00b_string_t s = n00b_string_from_cstr(value);
-        tok->value = n00b_option_set(n00b_string_t, s);
+        n00b_string_t *s = n00b_string_from_cstr(value);
+        tok->value = n00b_option_set(n00b_string_t *, s);
     }
     else {
-        tok->value = n00b_option_none(n00b_string_t);
+        tok->value = n00b_option_none(n00b_string_t *);
     }
 
     return n00b_tree_leaf(n00b_nt_node_t, n00b_token_info_t *, tok);
@@ -711,7 +711,7 @@ n00b_xform_parse_template(n00b_grammar_t *grammar,
     }
 
     // Resolve the NT name to an id.
-    n00b_string_t nt_str = n00b_string_from_cstr(nt_name);
+    n00b_string_t *nt_str = n00b_string_from_cstr(nt_name);
     n00b_nonterm_t *nt   = n00b_nonterm(grammar, nt_str);
 
     if (!nt) {

@@ -59,7 +59,7 @@ test_namespace_create(void)
     assert(st->ns_count == 1);
 
     // Tag namespace.
-    n00b_namespace_t *tag_ns = n00b_symtab_ns(st, *r"tag");
+    n00b_namespace_t *tag_ns = n00b_symtab_ns(st, r"tag");
     assert(tag_ns != NULL);
     assert(st->ns_count == 2);
 
@@ -83,19 +83,19 @@ test_add_lookup(void)
 
     n00b_sym_entry_t *e = n00b_symtab_add(st,
                                             n00b_string_empty(),
-                                            *r"x",
+                                            r"x",
                                             N00B_SYM_VARIABLE,
                                             NULL);
     assert(e != NULL);
     assert(e->kind == N00B_SYM_VARIABLE);
-    assert(n00b_unicode_str_eq(e->name, *r"x"));
+    assert(n00b_unicode_str_eq(e->name, r"x"));
 
     // Lookup should find it.
-    n00b_sym_entry_t *found = n00b_symtab_lookup(st, n00b_string_empty(), *r"x");
+    n00b_sym_entry_t *found = n00b_symtab_lookup(st, n00b_string_empty(), r"x");
     assert(found == e);
 
     // Lookup of non-existent symbol.
-    n00b_sym_entry_t *miss = n00b_symtab_lookup(st, n00b_string_empty(), *r"y");
+    n00b_sym_entry_t *miss = n00b_symtab_lookup(st, n00b_string_empty(), r"y");
     assert(miss == NULL);
 
     n00b_symtab_free(st);
@@ -114,19 +114,19 @@ test_scope_shadowing(void)
     // Add 'x' at file scope.
     n00b_sym_entry_t *outer = n00b_symtab_add(st,
                                                 n00b_string_empty(),
-                                                *r"x",
+                                                r"x",
                                                 N00B_SYM_VARIABLE,
                                                 NULL);
     assert(outer != NULL);
 
     // Push a new scope.
-    n00b_symtab_push_scope(st, n00b_string_empty(), *r"block1");
+    n00b_symtab_push_scope(st, n00b_string_empty(), r"block1");
     assert(n00b_symtab_depth(st, n00b_string_empty()) == 1);
 
     // Add 'x' again — shadows the outer one.
     n00b_sym_entry_t *inner = n00b_symtab_add(st,
                                                 n00b_string_empty(),
-                                                *r"x",
+                                                r"x",
                                                 N00B_SYM_VARIABLE,
                                                 NULL);
     assert(inner != NULL);
@@ -134,14 +134,14 @@ test_scope_shadowing(void)
     assert(inner->shadowed == outer);
 
     // Lookup should find the inner one.
-    n00b_sym_entry_t *found = n00b_symtab_lookup(st, n00b_string_empty(), *r"x");
+    n00b_sym_entry_t *found = n00b_symtab_lookup(st, n00b_string_empty(), r"x");
     assert(found == inner);
 
     // Pop scope — should restore outer.
     n00b_symtab_pop_scope(st, n00b_string_empty());
     assert(n00b_symtab_depth(st, n00b_string_empty()) == 0);
 
-    found = n00b_symtab_lookup(st, n00b_string_empty(), *r"x");
+    found = n00b_symtab_lookup(st, n00b_string_empty(), r"x");
     assert(found == outer);
 
     n00b_symtab_free(st);
@@ -158,35 +158,35 @@ test_independent_namespaces(void)
     n00b_symtab_t *st = n00b_symtab_new();
 
     // Add 'foo' in default namespace.
-    n00b_symtab_add(st, n00b_string_empty(), *r"foo", N00B_SYM_VARIABLE, NULL);
+    n00b_symtab_add(st, n00b_string_empty(), r"foo", N00B_SYM_VARIABLE, NULL);
 
     // Add 'foo' in tag namespace — independent.
-    n00b_symtab_add(st, *r"tag", *r"foo", N00B_SYM_TAG, NULL);
+    n00b_symtab_add(st, r"tag", r"foo", N00B_SYM_TAG, NULL);
 
     // Lookup in each namespace.
-    n00b_sym_entry_t *var = n00b_symtab_lookup(st, n00b_string_empty(), *r"foo");
-    n00b_sym_entry_t *tag = n00b_symtab_lookup(st, *r"tag", *r"foo");
+    n00b_sym_entry_t *var = n00b_symtab_lookup(st, n00b_string_empty(), r"foo");
+    n00b_sym_entry_t *tag = n00b_symtab_lookup(st, r"tag", r"foo");
     assert(var != NULL);
     assert(tag != NULL);
     assert(var->kind == N00B_SYM_VARIABLE);
     assert(tag->kind == N00B_SYM_TAG);
 
     // Push scope on "tag" namespace only.
-    n00b_symtab_push_scope(st, *r"tag", *r"inner");
-    n00b_symtab_add(st, *r"tag", *r"foo", N00B_SYM_TAG, NULL);
+    n00b_symtab_push_scope(st, r"tag", r"inner");
+    n00b_symtab_add(st, r"tag", r"foo", N00B_SYM_TAG, NULL);
 
     // Default namespace unaffected.
-    n00b_sym_entry_t *still_var = n00b_symtab_lookup(st, n00b_string_empty(), *r"foo");
+    n00b_sym_entry_t *still_var = n00b_symtab_lookup(st, n00b_string_empty(), r"foo");
     assert(still_var == var);
 
     // Tag namespace sees the inner one.
-    n00b_sym_entry_t *inner_tag = n00b_symtab_lookup(st, *r"tag", *r"foo");
+    n00b_sym_entry_t *inner_tag = n00b_symtab_lookup(st, r"tag", r"foo");
     assert(inner_tag != tag);
     assert(inner_tag->shadowed == tag);
 
     // Pop tag scope — restored.
-    n00b_symtab_pop_scope(st, *r"tag");
-    n00b_sym_entry_t *restored = n00b_symtab_lookup(st, *r"tag", *r"foo");
+    n00b_symtab_pop_scope(st, r"tag");
+    n00b_sym_entry_t *restored = n00b_symtab_lookup(st, r"tag", r"foo");
     assert(restored == tag);
 
     n00b_symtab_free(st);
@@ -202,22 +202,22 @@ test_nested_scopes(void)
 {
     n00b_symtab_t *st = n00b_symtab_new();
 
-    n00b_symtab_add(st, n00b_string_empty(), *r"a", N00B_SYM_VARIABLE, NULL);
+    n00b_symtab_add(st, n00b_string_empty(), r"a", N00B_SYM_VARIABLE, NULL);
 
     // Depth 1.
-    n00b_symtab_push_scope(st, n00b_string_empty(), *r"d1");
-    n00b_symtab_add(st, n00b_string_empty(), *r"b", N00B_SYM_VARIABLE, NULL);
-    n00b_symtab_add(st, n00b_string_empty(), *r"a", N00B_SYM_VARIABLE, NULL);
+    n00b_symtab_push_scope(st, n00b_string_empty(), r"d1");
+    n00b_symtab_add(st, n00b_string_empty(), r"b", N00B_SYM_VARIABLE, NULL);
+    n00b_symtab_add(st, n00b_string_empty(), r"a", N00B_SYM_VARIABLE, NULL);
 
     // Depth 2.
-    n00b_symtab_push_scope(st, n00b_string_empty(), *r"d2");
-    n00b_symtab_add(st, n00b_string_empty(), *r"c", N00B_SYM_VARIABLE, NULL);
-    n00b_symtab_add(st, n00b_string_empty(), *r"a", N00B_SYM_VARIABLE, NULL);
+    n00b_symtab_push_scope(st, n00b_string_empty(), r"d2");
+    n00b_symtab_add(st, n00b_string_empty(), r"c", N00B_SYM_VARIABLE, NULL);
+    n00b_symtab_add(st, n00b_string_empty(), r"a", N00B_SYM_VARIABLE, NULL);
 
     assert(n00b_symtab_depth(st, n00b_string_empty()) == 2);
 
     // Innermost 'a'.
-    n00b_sym_entry_t *a = n00b_symtab_lookup(st, n00b_string_empty(), *r"a");
+    n00b_sym_entry_t *a = n00b_symtab_lookup(st, n00b_string_empty(), r"a");
     assert(a != NULL);
     assert(a->scope_depth == 2);
     assert(a->shadowed != NULL);
@@ -227,15 +227,15 @@ test_nested_scopes(void)
 
     // Pop depth 2.
     n00b_symtab_pop_scope(st, n00b_string_empty());
-    a = n00b_symtab_lookup(st, n00b_string_empty(), *r"a");
+    a = n00b_symtab_lookup(st, n00b_string_empty(), r"a");
     assert(a->scope_depth == 1);
-    assert(n00b_symtab_lookup(st, n00b_string_empty(), *r"c") == NULL);
+    assert(n00b_symtab_lookup(st, n00b_string_empty(), r"c") == NULL);
 
     // Pop depth 1.
     n00b_symtab_pop_scope(st, n00b_string_empty());
-    a = n00b_symtab_lookup(st, n00b_string_empty(), *r"a");
+    a = n00b_symtab_lookup(st, n00b_string_empty(), r"a");
     assert(a->scope_depth == 0);
-    assert(n00b_symtab_lookup(st, n00b_string_empty(), *r"b") == NULL);
+    assert(n00b_symtab_lookup(st, n00b_string_empty(), r"b") == NULL);
 
     n00b_symtab_free(st);
     printf("  [PASS] nested_scopes\n");
@@ -250,12 +250,12 @@ test_typedef_detection(void)
 {
     n00b_symtab_t *st = n00b_symtab_new();
 
-    n00b_symtab_add(st, n00b_string_empty(), *r"MyInt", N00B_SYM_TYPEDEF, NULL);
-    n00b_symtab_add(st, n00b_string_empty(), *r"x", N00B_SYM_VARIABLE, NULL);
+    n00b_symtab_add(st, n00b_string_empty(), r"MyInt", N00B_SYM_TYPEDEF, NULL);
+    n00b_symtab_add(st, n00b_string_empty(), r"x", N00B_SYM_VARIABLE, NULL);
 
-    assert(n00b_symtab_is_typedef(st, *r"MyInt") == true);
-    assert(n00b_symtab_is_typedef(st, *r"x") == false);
-    assert(n00b_symtab_is_typedef(st, *r"unknown") == false);
+    assert(n00b_symtab_is_typedef(st, r"MyInt") == true);
+    assert(n00b_symtab_is_typedef(st, r"x") == false);
+    assert(n00b_symtab_is_typedef(st, r"unknown") == false);
 
     n00b_symtab_free(st);
     printf("  [PASS] typedef_detection\n");
@@ -275,14 +275,14 @@ test_annot_walk_scope(void)
     n00b_grammar_t *g = n00b_grammar_new();
 
     // Create all NTs first (list may reallocate, invalidating pointers).
-    (void)n00b_nonterm(g, *r"program");
-    (void)n00b_nonterm(g, *r"decl");
-    (void)n00b_nonterm(g, *r"block");
+    (void)n00b_nonterm(g, r"program");
+    (void)n00b_nonterm(g, r"decl");
+    (void)n00b_nonterm(g, r"block");
 
     // Re-fetch stable pointers and attach annotations.
-    n00b_nonterm_t *prog = n00b_nonterm(g, *r"program");
-    n00b_nonterm_t *decl = n00b_nonterm(g, *r"decl");
-    n00b_nonterm_t *blk  = n00b_nonterm(g, *r"block");
+    n00b_nonterm_t *prog = n00b_nonterm(g, r"program");
+    n00b_nonterm_t *decl = n00b_nonterm(g, r"decl");
+    n00b_nonterm_t *blk  = n00b_nonterm(g, r"block");
 
     // "decl" declares from child 0 (at whatever scope is current).
     n00b_nt_declares(decl, N00B_CHILD_IX(0), N00B_CHILD_NONE, n00b_string_empty());
@@ -294,27 +294,27 @@ test_annot_walk_scope(void)
     int32_t prog_ri = add_epsilon_rule(g, prog);
     int32_t decl_ri = add_epsilon_rule(g, decl);
     int32_t blk_ri  = add_epsilon_rule(g, blk);
-    n00b_grammar_set_start(g, n00b_nonterm(g, *r"program"));
+    n00b_grammar_set_start(g, n00b_nonterm(g, r"program"));
     n00b_grammar_finalize(g);
 
     // Build tree: program -> [decl("x"), block]
-    n00b_nt_node_t prog_pn = {.id = prog->id, .name = *r"program", .rule_index = prog_ri};
+    n00b_nt_node_t prog_pn = {.id = prog->id, .name = r"program", .rule_index = prog_ri};
     n00b_parse_tree_t *prog_tree
         = n00b_tree_node(n00b_nt_node_t, n00b_token_info_t *, prog_pn);
 
     // Decl node with token child "x".
-    n00b_nt_node_t decl_pn = {.id = decl->id, .name = *r"decl", .rule_index = decl_ri};
+    n00b_nt_node_t decl_pn = {.id = decl->id, .name = r"decl", .rule_index = decl_ri};
     n00b_parse_tree_t *decl_tree
         = n00b_tree_node(n00b_nt_node_t, n00b_token_info_t *, decl_pn);
     n00b_token_info_t tok = {0};
-    tok.value = n00b_option_set(n00b_string_t, *r"x");
+    tok.value = n00b_option_set(n00b_string_t *, r"x");
     tok.tid   = 1;  // Arbitrary non-sentinel ID (annotation walk uses value text).
     n00b_parse_tree_t *tok_tree
         = n00b_tree_leaf(n00b_nt_node_t, n00b_token_info_t *, &tok);
     (void)n00b_tree_add_child(decl_tree, tok_tree);
 
     // Empty block node.
-    n00b_nt_node_t blk_pn = {.id = blk->id, .name = *r"block", .rule_index = blk_ri};
+    n00b_nt_node_t blk_pn = {.id = blk->id, .name = r"block", .rule_index = blk_ri};
     n00b_parse_tree_t *blk_tree
         = n00b_tree_node(n00b_nt_node_t, n00b_token_info_t *, blk_pn);
 
@@ -326,7 +326,7 @@ test_annot_walk_scope(void)
     assert(st != NULL);
 
     // "x" was declared at file scope (outside the block), so it survives.
-    n00b_sym_entry_t *e = n00b_symtab_lookup(st, n00b_string_empty(), *r"x");
+    n00b_sym_entry_t *e = n00b_symtab_lookup(st, n00b_string_empty(), r"x");
     assert(e != NULL);
     assert(e->kind == N00B_SYM_VARIABLE);
 
@@ -349,11 +349,11 @@ test_annot_walk_typedef(void)
     n00b_grammar_t *g = n00b_grammar_new();
 
     // Create all NTs first, then re-fetch to avoid stale pointers.
-    (void)n00b_nonterm(g, *r"program");
-    (void)n00b_nonterm(g, *r"type_decl");
+    (void)n00b_nonterm(g, r"program");
+    (void)n00b_nonterm(g, r"type_decl");
 
-    n00b_nonterm_t *prog = n00b_nonterm(g, *r"program");
-    n00b_nonterm_t *decl = n00b_nonterm(g, *r"type_decl");
+    n00b_nonterm_t *prog = n00b_nonterm(g, r"program");
+    n00b_nonterm_t *decl = n00b_nonterm(g, r"type_decl");
 
     // Mark type_decl as declaring a typedef via name child at index 0.
     n00b_nt_type_decl(decl, N00B_CHILD_IX(0));
@@ -361,20 +361,20 @@ test_annot_walk_typedef(void)
     // Add epsilon rules and finalize so annotations land on rules.
     int32_t prog_ri = add_epsilon_rule(g, prog);
     int32_t decl_ri = add_epsilon_rule(g, decl);
-    n00b_grammar_set_start(g, n00b_nonterm(g, *r"program"));
+    n00b_grammar_set_start(g, n00b_nonterm(g, r"program"));
     n00b_grammar_finalize(g);
 
     // Build tree: program -> type_decl -> "MyType" (token)
-    n00b_nt_node_t prog_pn = {.id = prog->id, .name = *r"program", .rule_index = prog_ri};
+    n00b_nt_node_t prog_pn = {.id = prog->id, .name = r"program", .rule_index = prog_ri};
     n00b_parse_tree_t *prog_tree
         = n00b_tree_node(n00b_nt_node_t, n00b_token_info_t *, prog_pn);
 
-    n00b_nt_node_t decl_pn = {.id = decl->id, .name = *r"type_decl", .rule_index = decl_ri};
+    n00b_nt_node_t decl_pn = {.id = decl->id, .name = r"type_decl", .rule_index = decl_ri};
     n00b_parse_tree_t *decl_tree
         = n00b_tree_node(n00b_nt_node_t, n00b_token_info_t *, decl_pn);
 
     n00b_token_info_t tok = {0};
-    tok.value = n00b_option_set(n00b_string_t, *r"MyType");
+    tok.value = n00b_option_set(n00b_string_t *, r"MyType");
     tok.tid   = 1;  // Arbitrary non-sentinel ID (annotation walk uses value text).
 
     n00b_parse_tree_t *tok_tree
@@ -388,7 +388,7 @@ test_annot_walk_typedef(void)
     assert(st != NULL);
 
     // MyType should be a typedef.
-    assert(n00b_symtab_is_typedef(st, *r"MyType") == true);
+    assert(n00b_symtab_is_typedef(st, r"MyType") == true);
 
     n00b_symtab_free(st);
     n00b_parse_tree_free(prog_tree);
@@ -410,13 +410,13 @@ test_scope_auto_push_pop(void)
     n00b_grammar_t *g = n00b_grammar_new();
 
     // Create all NTs first, then re-fetch to avoid stale pointers.
-    (void)n00b_nonterm(g, *r"program");
-    (void)n00b_nonterm(g, *r"func");
-    (void)n00b_nonterm(g, *r"body");
+    (void)n00b_nonterm(g, r"program");
+    (void)n00b_nonterm(g, r"func");
+    (void)n00b_nonterm(g, r"body");
 
-    n00b_nonterm_t *prog = n00b_nonterm(g, *r"program");
-    n00b_nonterm_t *func = n00b_nonterm(g, *r"func");
-    n00b_nonterm_t *body = n00b_nonterm(g, *r"body");
+    n00b_nonterm_t *prog = n00b_nonterm(g, r"program");
+    n00b_nonterm_t *func = n00b_nonterm(g, r"func");
+    n00b_nonterm_t *body = n00b_nonterm(g, r"body");
 
     // "func" opens a scope.
     n00b_nt_scope_open(func, n00b_string_empty(), N00B_CHILD_NONE);
@@ -428,21 +428,21 @@ test_scope_auto_push_pop(void)
     int32_t prog_ri = add_epsilon_rule(g, prog);
     int32_t func_ri = add_epsilon_rule(g, func);
     int32_t body_ri = add_epsilon_rule(g, body);
-    n00b_grammar_set_start(g, n00b_nonterm(g, *r"program"));
+    n00b_grammar_set_start(g, n00b_nonterm(g, r"program"));
     n00b_grammar_finalize(g);
 
     // Tree: program -> func -> body -> "local_var"
-    n00b_nt_node_t prog_pn = {.id = prog->id, .name = *r"program", .rule_index = prog_ri};
+    n00b_nt_node_t prog_pn = {.id = prog->id, .name = r"program", .rule_index = prog_ri};
     n00b_parse_tree_t *prog_tree = n00b_tree_node(n00b_nt_node_t, n00b_token_info_t *, prog_pn);
 
-    n00b_nt_node_t func_pn = {.id = func->id, .name = *r"func", .rule_index = func_ri};
+    n00b_nt_node_t func_pn = {.id = func->id, .name = r"func", .rule_index = func_ri};
     n00b_parse_tree_t *func_tree = n00b_tree_node(n00b_nt_node_t, n00b_token_info_t *, func_pn);
 
-    n00b_nt_node_t body_pn = {.id = body->id, .name = *r"body", .rule_index = body_ri};
+    n00b_nt_node_t body_pn = {.id = body->id, .name = r"body", .rule_index = body_ri};
     n00b_parse_tree_t *body_tree = n00b_tree_node(n00b_nt_node_t, n00b_token_info_t *, body_pn);
 
     n00b_token_info_t tok = {0};
-    tok.value = n00b_option_set(n00b_string_t, *r"local_var");
+    tok.value = n00b_option_set(n00b_string_t *, r"local_var");
     tok.tid   = 1;  // Arbitrary non-sentinel ID (annotation walk uses value text).
 
     n00b_parse_tree_t *tok_tree = n00b_tree_leaf(n00b_nt_node_t, n00b_token_info_t *, &tok);
@@ -456,7 +456,7 @@ test_scope_auto_push_pop(void)
 
     // After the walk, the scope was popped, so the local_var should
     // NOT be visible at file scope. The pop removed it from the hash table.
-    n00b_sym_entry_t *e = n00b_symtab_lookup(st, n00b_string_empty(), *r"local_var");
+    n00b_sym_entry_t *e = n00b_symtab_lookup(st, n00b_string_empty(), r"local_var");
     assert(e == NULL);
 
     // Depth should be 0.
@@ -478,15 +478,15 @@ test_pop_preserves_outer(void)
     n00b_grammar_t *g = n00b_grammar_new();
 
     // Create all NTs first, then re-fetch to avoid stale pointers.
-    (void)n00b_nonterm(g, *r"program");
-    (void)n00b_nonterm(g, *r"decl");
-    (void)n00b_nonterm(g, *r"block");
-    (void)n00b_nonterm(g, *r"inner_decl");
+    (void)n00b_nonterm(g, r"program");
+    (void)n00b_nonterm(g, r"decl");
+    (void)n00b_nonterm(g, r"block");
+    (void)n00b_nonterm(g, r"inner_decl");
 
-    n00b_nonterm_t *prog       = n00b_nonterm(g, *r"program");
-    n00b_nonterm_t *decl       = n00b_nonterm(g, *r"decl");
-    n00b_nonterm_t *blk        = n00b_nonterm(g, *r"block");
-    n00b_nonterm_t *inner_decl = n00b_nonterm(g, *r"inner_decl");
+    n00b_nonterm_t *prog       = n00b_nonterm(g, r"program");
+    n00b_nonterm_t *decl       = n00b_nonterm(g, r"decl");
+    n00b_nonterm_t *blk        = n00b_nonterm(g, r"block");
+    n00b_nonterm_t *inner_decl = n00b_nonterm(g, r"inner_decl");
 
     // "decl" declares at child 0 (outer, no scope).
     n00b_nt_declares(decl, N00B_CHILD_IX(0), N00B_CHILD_NONE, n00b_string_empty());
@@ -502,29 +502,29 @@ test_pop_preserves_outer(void)
     int32_t decl_ri = add_epsilon_rule(g, decl);
     int32_t blk_ri  = add_epsilon_rule(g, blk);
     int32_t id_ri   = add_epsilon_rule(g, inner_decl);
-    n00b_grammar_set_start(g, n00b_nonterm(g, *r"program"));
+    n00b_grammar_set_start(g, n00b_nonterm(g, r"program"));
     n00b_grammar_finalize(g);
 
     // Tree: program -> [decl("outer"), block -> inner_decl("inner")]
-    n00b_nt_node_t prog_pn = {.id = prog->id, .name = *r"program", .rule_index = prog_ri};
+    n00b_nt_node_t prog_pn = {.id = prog->id, .name = r"program", .rule_index = prog_ri};
     n00b_parse_tree_t *prog_tree = n00b_tree_node(n00b_nt_node_t, n00b_token_info_t *, prog_pn);
 
     // Outer decl of "outer".
-    n00b_nt_node_t decl_pn = {.id = decl->id, .name = *r"decl", .rule_index = decl_ri};
+    n00b_nt_node_t decl_pn = {.id = decl->id, .name = r"decl", .rule_index = decl_ri};
     n00b_parse_tree_t *decl_tree = n00b_tree_node(n00b_nt_node_t, n00b_token_info_t *, decl_pn);
     n00b_token_info_t tok1 = {0};
-    tok1.value = n00b_option_set(n00b_string_t, *r"outer");
+    tok1.value = n00b_option_set(n00b_string_t *, r"outer");
     n00b_parse_tree_t *tok1_tree = n00b_tree_leaf(n00b_nt_node_t, n00b_token_info_t *, &tok1);
     (void)n00b_tree_add_child(decl_tree, tok1_tree);
 
     // Block with inner decl.
-    n00b_nt_node_t blk_pn = {.id = blk->id, .name = *r"block", .rule_index = blk_ri};
+    n00b_nt_node_t blk_pn = {.id = blk->id, .name = r"block", .rule_index = blk_ri};
     n00b_parse_tree_t *blk_tree = n00b_tree_node(n00b_nt_node_t, n00b_token_info_t *, blk_pn);
 
-    n00b_nt_node_t id_pn = {.id = inner_decl->id, .name = *r"inner_decl", .rule_index = id_ri};
+    n00b_nt_node_t id_pn = {.id = inner_decl->id, .name = r"inner_decl", .rule_index = id_ri};
     n00b_parse_tree_t *id_tree = n00b_tree_node(n00b_nt_node_t, n00b_token_info_t *, id_pn);
     n00b_token_info_t tok2 = {0};
-    tok2.value = n00b_option_set(n00b_string_t, *r"inner");
+    tok2.value = n00b_option_set(n00b_string_t *, r"inner");
     n00b_parse_tree_t *tok2_tree = n00b_tree_leaf(n00b_nt_node_t, n00b_token_info_t *, &tok2);
     (void)n00b_tree_add_child(id_tree, tok2_tree);
     (void)n00b_tree_add_child(blk_tree, id_tree);
@@ -536,12 +536,12 @@ test_pop_preserves_outer(void)
     assert(st != NULL);
 
     // "outer" should survive (declared outside the block scope).
-    n00b_sym_entry_t *out = n00b_symtab_lookup(st, n00b_string_empty(), *r"outer");
+    n00b_sym_entry_t *out = n00b_symtab_lookup(st, n00b_string_empty(), r"outer");
     assert(out != NULL);
     assert(out->kind == N00B_SYM_VARIABLE);
 
     // "inner" should have been removed when the block scope was popped.
-    n00b_sym_entry_t *in = n00b_symtab_lookup(st, n00b_string_empty(), *r"inner");
+    n00b_sym_entry_t *in = n00b_symtab_lookup(st, n00b_string_empty(), r"inner");
     assert(in == NULL);
 
     n00b_symtab_free(st);

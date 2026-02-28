@@ -136,7 +136,7 @@ void n00b_table_empty_cell(n00b_table_t *table);
 
 void n00b_table_end_row(n00b_table_t *table);
 
-void n00b_table_add_row(n00b_table_t *table, n00b_string_t *cells, n00b_isize_t n);
+void n00b_table_add_row(n00b_table_t *table, n00b_array_t(n00b_string_t *) cells);
 
 void n00b_table_end(n00b_table_t *table);
 ```
@@ -226,7 +226,7 @@ n00b_table_t *n00b_table_from_string(n00b_string_t s, +);
 
 n00b_table_t *n00b_table_callout(n00b_string_t content);
 
-n00b_table_t *n00b_table_flow(n00b_string_t *items, n00b_isize_t n);
+n00b_table_t *n00b_table_flow(n00b_array_t(n00b_string_t *) items);
 ```
 
 `n00b_table_from_string()` splits a string into rows and columns on the
@@ -427,5 +427,5 @@ to the row array and layout cache.
 | Default style | `n00b_table_style_default()` |
 | Parse CSV/delimited | `n00b_table_from_string(s)` |
 | Callout box | `n00b_table_callout(content)` |
-| Horizontal flow | `n00b_table_flow(items, n)` |
+| Horizontal flow | `n00b_table_flow(items)` |
 | Destroy table | `n00b_table_destroy(t)` |

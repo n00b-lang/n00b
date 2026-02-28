@@ -196,7 +196,7 @@ test_render_out_basic(void)
     n00b_conduit_publish_claim((n00b_conduit_topic_base_t *)src);
 
     n00b_plane_t *plane = n00b_new_kargs(n00b_plane_t, plane, .cols = 80, .rows = 25);
-    n00b_string_t str = n00b_string_from_raw("Hello", 5);
+    n00b_string_t *str = n00b_string_from_raw("Hello", 5);
     n00b_plane_put_str(plane, str);
 
     push_plane(src, plane);
@@ -221,10 +221,10 @@ test_render_out_multiline(void)
     n00b_conduit_publish_claim((n00b_conduit_topic_base_t *)src);
 
     n00b_plane_t *plane = n00b_new_kargs(n00b_plane_t, plane, .cols = 80, .rows = 25);
-    n00b_string_t line1 = n00b_string_from_raw("Line1", 5);
+    n00b_string_t *line1 = n00b_string_from_raw("Line1", 5);
     n00b_plane_put_str(plane, line1);
     n00b_plane_newline(plane);
-    n00b_string_t line2 = n00b_string_from_raw("Line2", 5);
+    n00b_string_t *line2 = n00b_string_from_raw("Line2", 5);
     n00b_plane_put_str(plane, line2);
 
     push_plane(src, plane);

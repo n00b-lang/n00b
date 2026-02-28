@@ -82,7 +82,7 @@ typedef struct {
  */
 typedef struct {
     n00b_csp_var_id_t  id;
-    n00b_string_t      name;   /**< Variable name. */
+    n00b_string_t     *name;   /**< Variable name. */
     n00b_csp_domain_t  domain;
     bool               ground; /**< True if domain is singleton. */
     int64_t            value;  /**< Value if ground. */

@@ -204,7 +204,7 @@ chars_action(n00b_nt_node_t *pn, void *children, void *thunk)
         n00b_token_info_t *tok  = (n00b_token_info_t *)kids[0];
         json_value_t      *rest = (json_value_t *)kids[1];
         char               c    = (tok && n00b_option_is_set(tok->value))
-                                      ? n00b_option_get(tok->value).data[0]
+                                      ? n00b_option_get(tok->value)->data[0]
                                       : '?';
 
         const char *rest_str = (rest && rest->type == JSON_STRING)
@@ -227,7 +227,7 @@ chars_action(n00b_nt_node_t *pn, void *children, void *thunk)
     n00b_token_info_t *escaped = (n00b_token_info_t *)kids[1];
     json_value_t      *rest    = (json_value_t *)kids[2];
     char               c       = (escaped && n00b_option_is_set(escaped->value))
-                                      ? n00b_option_get(escaped->value).data[0]
+                                      ? n00b_option_get(escaped->value)->data[0]
                                       : '?';
 
     char actual;
@@ -562,7 +562,7 @@ make_json_grammar(void)
     buf[len] = '\0';
     fclose(f);
 
-    n00b_string_t bnf_text = n00b_string_from_cstr(buf);
+    n00b_string_t *bnf_text = n00b_string_from_cstr(buf);
     free(buf);
 
     bool ok = n00b_bnf_load(bnf_text, n00b_string_from_cstr("value"), g);

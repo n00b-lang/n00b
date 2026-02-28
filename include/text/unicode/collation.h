@@ -21,7 +21,7 @@ typedef struct {
  *  @return A sort key; free with n00b_unicode_sort_key_free().
  */
 n00b_unicode_sort_key_t
-n00b_unicode_sort_key(n00b_string_t s) _kargs
+n00b_unicode_sort_key(n00b_string_t *s) _kargs
 {
     n00b_allocator_t *allocator = nullptr;
 };
@@ -31,7 +31,7 @@ n00b_unicode_sort_key(n00b_string_t s) _kargs
  *  @param b  Second string.
  *  @return Negative, zero, or positive (like strcmp).
  */
-int n00b_unicode_collate(n00b_string_t a, n00b_string_t b);
+int n00b_unicode_collate(n00b_string_t *a, n00b_string_t *b);
 
 /** @brief Free a sort key's allocated data.
  *  @param key  The sort key to free.
