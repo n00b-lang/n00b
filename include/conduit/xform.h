@@ -31,6 +31,7 @@
 #include "core/alloc.h"
 #include "core/option.h"
 #include "core/result.h"
+#include <stdio.h>
 
 // ============================================================================
 // Parameterized transform types and IMPL macro
@@ -265,10 +266,16 @@
         n00b_atomic_store(&xf->stop_requested, false);                        \
         auto _spawn_r = n00b_thread_spawn(                                      \
             _N00B_XFORM_FN(loop, T_in, T_out), xf);                           \
-        if (n00b_result_is_err(_spawn_r))                                      \
+        if (n00b_result_is_err(_spawn_r)) {                                    \
+            fprintf(stderr,                                                    \
+                    "[xform] thread spawn failed: kind=%.*s err=%d\n",         \
+                    (int)ops->kind.u8_bytes,                                   \
+                    ops->kind.data,                                            \
+                    n00b_result_get_err(_spawn_r));                            \
             return n00b_result_err(                                            \
                 n00b_conduit_xform_t(T_in, T_out) *,                           \
                 N00B_CONDUIT_ERR_ALLOC);                                       \
+        }                                                                      \
         xf->thread = n00b_result_get(_spawn_r);                               \
         return n00b_result_ok(                                                 \
             n00b_conduit_xform_t(T_in, T_out) *, xf);                         \

@@ -53,6 +53,9 @@ test_service_start_stop(void)
     n00b_conduit_service_t *svc = n00b_result_get(sr);
 
     n00b_result_t(bool) br = n00b_conduit_service_start(svc);
+    if (n00b_result_is_err(br)) {
+        fprintf(stderr, "  [FAIL] service_start(start_stop) err=%d\n", n00b_result_get_err(br));
+    }
     assert(n00b_result_is_ok(br));
 
     // Service must report itself as started.
@@ -63,8 +66,7 @@ test_service_start_stop(void)
     assert(num >= 1);
 
     // The default IO thread must be present and carry the IO role.
-    n00b_option_t(n00b_conduit_svc_thread_t *) opt =
-        n00b_conduit_service_default_io(svc);
+    n00b_option_t(n00b_conduit_svc_thread_t *) opt = n00b_conduit_service_default_io(svc);
     assert(n00b_option_is_set(opt));
 
     n00b_conduit_svc_thread_t *st = n00b_option_get(opt);
@@ -93,14 +95,17 @@ test_service_add_io(void)
     n00b_conduit_service_t *svc = n00b_result_get(sr);
 
     n00b_result_t(bool) br = n00b_conduit_service_start(svc);
+    if (n00b_result_is_err(br)) {
+        fprintf(stderr, "  [FAIL] service_start(add_io) err=%d\n", n00b_result_get_err(br));
+    }
     assert(n00b_result_is_ok(br));
 
     int before = n00b_atomic_load(&svc->num_threads);
     assert(before >= 1);
 
     // Add a second IO thread using the platform-default backend ops.
-    n00b_result_t(n00b_conduit_svc_thread_t *) tr =
-        n00b_conduit_service_add_io(svc, n00b_result_get(n00b_conduit_io_default_ops()));
+    n00b_result_t(n00b_conduit_svc_thread_t *) tr
+        = n00b_conduit_service_add_io(svc, n00b_result_get(n00b_conduit_io_default_ops()));
     assert(n00b_result_is_ok(tr));
 
     n00b_conduit_svc_thread_t *extra = n00b_result_get(tr);
@@ -132,10 +137,20 @@ test_service_idempotent_start(void)
     n00b_conduit_service_t *svc = n00b_result_get(sr);
 
     n00b_result_t(bool) br1 = n00b_conduit_service_start(svc);
+    if (n00b_result_is_err(br1)) {
+        fprintf(stderr,
+                "  [FAIL] service_start(idempotent #1) err=%d\n",
+                n00b_result_get_err(br1));
+    }
     assert(n00b_result_is_ok(br1));
 
     // Second start must not crash and must return ok.
     n00b_result_t(bool) br2 = n00b_conduit_service_start(svc);
+    if (n00b_result_is_err(br2)) {
+        fprintf(stderr,
+                "  [FAIL] service_start(idempotent #2) err=%d\n",
+                n00b_result_get_err(br2));
+    }
     assert(n00b_result_is_ok(br2));
 
     // Thread count must not have doubled.
@@ -164,6 +179,11 @@ test_service_double_stop(void)
     n00b_conduit_service_t *svc = n00b_result_get(sr);
 
     n00b_result_t(bool) br = n00b_conduit_service_start(svc);
+    if (n00b_result_is_err(br)) {
+        fprintf(stderr,
+                "  [FAIL] service_start(double_stop) err=%d\n",
+                n00b_result_get_err(br));
+    }
     assert(n00b_result_is_ok(br));
 
     n00b_conduit_service_stop(svc);

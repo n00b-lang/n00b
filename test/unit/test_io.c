@@ -1,20 +1,164 @@
 /*
  * test_io.c — Tests for conduit IO backend lifecycle and event delivery.
  *
- * Tests use a pipe pair to verify FD readability detection through the
- * platform-default IO backend.
+ * Tests use backend-appropriate primitives (pipe or socket pair) to verify
+ * readability detection through the platform-default IO backend.
  */
 
 #include <stdio.h>
 #include <assert.h>
 #include <unistd.h>
 #include <string.h>
+#if defined(_WIN32)
+#include <io.h>
+#include <fcntl.h>
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#define pipe(fds) _pipe((fds), 4096, _O_BINARY)
+#endif
 
 #include "n00b.h"
 #include "conduit/conduit.h"
 #include "conduit/io.h"
 #include "core/alloc.h"
 #include "core/runtime.h"
+
+typedef struct {
+    int  read_fd;
+    int  write_fd;
+    bool socket_pair;
+} test_io_pair_t;
+
+static bool
+backend_is_wsa(n00b_conduit_io_backend_t *io)
+{
+    n00b_string_t name = n00b_conduit_io_name(io);
+    return name.u8_bytes == 3 && memcmp(name.data, "wsa", 3) == 0;
+}
+
+#if defined(_WIN32)
+static bool
+create_wsa_socket_pair(test_io_pair_t *pair)
+{
+    SOCKET listener = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (listener == INVALID_SOCKET) {
+        return false;
+    }
+
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family      = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port        = 0;
+
+    if (bind(listener, (struct sockaddr *)&addr, sizeof(addr)) == SOCKET_ERROR) {
+        closesocket(listener);
+        return false;
+    }
+
+    if (listen(listener, 1) == SOCKET_ERROR) {
+        closesocket(listener);
+        return false;
+    }
+
+    int addr_len = sizeof(addr);
+    if (getsockname(listener, (struct sockaddr *)&addr, &addr_len) == SOCKET_ERROR) {
+        closesocket(listener);
+        return false;
+    }
+
+    SOCKET writer = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (writer == INVALID_SOCKET) {
+        closesocket(listener);
+        return false;
+    }
+
+    if (connect(writer, (struct sockaddr *)&addr, sizeof(addr)) == SOCKET_ERROR) {
+        closesocket(writer);
+        closesocket(listener);
+        return false;
+    }
+
+    SOCKET reader = accept(listener, NULL, NULL);
+    closesocket(listener);
+    if (reader == INVALID_SOCKET) {
+        closesocket(writer);
+        return false;
+    }
+
+    pair->read_fd     = (int)reader;
+    pair->write_fd    = (int)writer;
+    pair->socket_pair = true;
+    return true;
+}
+#endif
+
+static bool
+create_test_pair(n00b_conduit_io_backend_t *io, test_io_pair_t *pair)
+{
+    pair->read_fd     = -1;
+    pair->write_fd    = -1;
+    pair->socket_pair = false;
+
+#if defined(_WIN32)
+    if (backend_is_wsa(io)) {
+        return create_wsa_socket_pair(pair);
+    }
+#endif
+
+    int fds[2];
+    if (pipe(fds) != 0) {
+        return false;
+    }
+
+    pair->read_fd  = fds[0];
+    pair->write_fd = fds[1];
+    return true;
+}
+
+static int
+write_test_pair(test_io_pair_t *pair, const char *buf, size_t len)
+{
+#if defined(_WIN32)
+    if (pair->socket_pair) {
+        return send((SOCKET)pair->write_fd, buf, (int)len, 0);
+    }
+#endif
+
+    return (int)write(pair->write_fd, buf, len);
+}
+
+static void
+close_test_pair(test_io_pair_t *pair)
+{
+    if (pair->read_fd >= 0) {
+#if defined(_WIN32)
+        if (pair->socket_pair) {
+            closesocket((SOCKET)pair->read_fd);
+        }
+        else {
+            close(pair->read_fd);
+        }
+#else
+        close(pair->read_fd);
+#endif
+        pair->read_fd = -1;
+    }
+
+    if (pair->write_fd >= 0) {
+#if defined(_WIN32)
+        if (pair->socket_pair) {
+            closesocket((SOCKET)pair->write_fd);
+        }
+        else {
+            close(pair->write_fd);
+        }
+#else
+        close(pair->write_fd);
+#endif
+        pair->write_fd = -1;
+    }
+}
 
 // ============================================================================
 // 1. IO backend create / destroy
@@ -56,18 +200,17 @@ test_io_watch_pipe(void)
     assert(n00b_result_is_ok(ir));
     n00b_conduit_io_backend_t *io = n00b_result_get(ir);
 
-    int fds[2];
-    int rc = pipe(fds);
-    assert(rc == 0);
+    test_io_pair_t pair;
+    assert(create_test_pair(io, &pair));
 
     // Watch read end for readability.
-    n00b_result_t(n00b_conduit_topic_base_t *) tr =
-        n00b_conduit_io_watch(io, fds[0], N00B_CONDUIT_IO_READ, nullptr);
+    n00b_result_t(n00b_conduit_topic_base_t *) tr
+        = n00b_conduit_io_watch(io, pair.read_fd, N00B_CONDUIT_IO_READ, nullptr);
     assert(n00b_result_is_ok(tr));
 
     // Write some data so the read end becomes readable.
     const char *msg = "hello";
-    (void)write(fds[1], msg, strlen(msg));
+    assert(write_test_pair(&pair, msg, strlen(msg)) >= 1);
 
     // Poll — should get at least 1 event.
     auto poll_r = n00b_conduit_io_poll(io, 100);
@@ -76,12 +219,11 @@ test_io_watch_pipe(void)
     assert(n >= 1);
 
     // Clean up.
-    n00b_conduit_io_unwatch(io, fds[0]);
-    close(fds[0]);
-    close(fds[1]);
+    n00b_conduit_io_unwatch(io, pair.read_fd);
+    close_test_pair(&pair);
     n00b_conduit_io_destroy(io);
     n00b_conduit_destroy(c);
-    printf("  [PASS] watch pipe FD\n");
+    printf("  [PASS] watch readable endpoint\n");
 }
 
 // ============================================================================
@@ -99,23 +241,21 @@ test_io_unwatch(void)
     assert(n00b_result_is_ok(ir));
     n00b_conduit_io_backend_t *io = n00b_result_get(ir);
 
-    int fds[2];
-    int rc = pipe(fds);
-    assert(rc == 0);
+    test_io_pair_t pair;
+    assert(create_test_pair(io, &pair));
 
-    n00b_conduit_io_watch(io, fds[0], N00B_CONDUIT_IO_READ, nullptr);
-    bool ok = n00b_conduit_io_unwatch(io, fds[0]);
+    n00b_conduit_io_watch(io, pair.read_fd, N00B_CONDUIT_IO_READ, nullptr);
+    bool ok = n00b_conduit_io_unwatch(io, pair.read_fd);
     assert(ok);
 
     // Write data. Poll should return 0 since we unwatched.
-    (void)write(fds[1], "x", 1);
+    assert(write_test_pair(&pair, "x", 1) >= 1);
     auto poll_r2 = n00b_conduit_io_poll(io, 50);
     assert(n00b_result_is_ok(poll_r2));
     int n = n00b_result_get(poll_r2);
     assert(n == 0);
 
-    close(fds[0]);
-    close(fds[1]);
+    close_test_pair(&pair);
     n00b_conduit_io_destroy(io);
     n00b_conduit_destroy(c);
     printf("  [PASS] unwatch removes FD\n");
@@ -138,17 +278,15 @@ test_io_shutdown(void)
 
     n00b_conduit_io_shutdown(io);
 
-    int fds[2];
-    int rc = pipe(fds);
-    assert(rc == 0);
+    test_io_pair_t pair;
+    assert(create_test_pair(io, &pair));
 
-    n00b_result_t(n00b_conduit_topic_base_t *) tr =
-        n00b_conduit_io_watch(io, fds[0], N00B_CONDUIT_IO_READ, nullptr);
+    n00b_result_t(n00b_conduit_topic_base_t *) tr
+        = n00b_conduit_io_watch(io, pair.read_fd, N00B_CONDUIT_IO_READ, nullptr);
     assert(n00b_result_is_err(tr));
     assert(n00b_result_get_err(tr) == N00B_CONDUIT_ERR_SHUTDOWN);
 
-    close(fds[0]);
-    close(fds[1]);
+    close_test_pair(&pair);
     n00b_conduit_io_destroy(io);
     n00b_conduit_destroy(c);
     printf("  [PASS] shutdown prevents watches\n");
