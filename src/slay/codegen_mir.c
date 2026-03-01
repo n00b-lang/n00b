@@ -623,6 +623,7 @@ void
 n00b_cg_end_func(n00b_cg_session_t *s)
 {
     MIR_finish_func(s->mir_ctx);
+    s->active_module->cur_func = NULL;
 }
 
 n00b_cg_val_t

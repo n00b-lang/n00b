@@ -12,6 +12,11 @@ if [[ -z "${CC}" ]] && [[ -x /usr/local/bin/clang ]] ; then
     export CC=/usr/local/bin/clang
 fi
 
+# Ensure the macOS SDK root is set so the linker can find libSystem.
+if [[ "$(uname -s)" == "Darwin" ]] && [[ -z "${SDKROOT}" ]] && command -v xcrun &>/dev/null; then
+    export SDKROOT=$(xcrun --show-sdk-path 2>/dev/null)
+fi
+
 # ── Docker cross-compilation on macOS ────────────────────────────────────────
 # On macOS, if Docker is available with an osxcross-enabled image, delegate
 # to docker/cross-build.sh for cross-compilation. Set N00B_NATIVE=1 to
@@ -112,6 +117,11 @@ function build_n00b {
        rm -rf ${build_dir}
    fi
    if [[ ! -d ${build_dir} ]] ; then
+       # OBJC must point to Apple's clang (with sysroot) for the Cocoa backend;
+       # the LLVM clang at /usr/local/bin lacks macOS SDK paths.
+       if [[ "$(uname -s)" == "Darwin" ]] && command -v xcrun &>/dev/null; then
+           export OBJC=$(xcrun --find clang 2>/dev/null)
+       fi
        CC=${N00B_ROOT}/bin/ncc meson setup --buildtype=${N00B_BUILD_TYPE} $(all_options) ${build_dir} .
        if [[ $? -ne 0 ]] ; then
            echo "Build setup failed."

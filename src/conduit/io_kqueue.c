@@ -18,6 +18,18 @@
 #include <errno.h>
 #include <stdlib.h>
 #include <signal.h>
+#include <stdio.h>
+
+static FILE *
+kq_dbg(void)
+{
+    static FILE *f = nullptr;
+    if (!f) {
+        f = fopen("/tmp/widget_demo.log", "a");
+        if (f) setbuf(f, nullptr);
+    }
+    return f;
+}
 
 // ============================================================================
 // kqueue fflags conversion
@@ -275,6 +287,8 @@ kqueue_wait(void *vctx, n00b_conduit_io_event_t *events, int max_events,
         if (kev->filter == EVFILT_SIGNAL) {
             n00b_conduit_signal_watch_t *watch =
                 (n00b_conduit_signal_watch_t *)kev->udata;
+            if (kq_dbg()) fprintf(kq_dbg(), "[kq_wait] EVFILT_SIGNAL ident=%lu watch=%p\n",
+                                  (unsigned long)kev->ident, (void *)watch);
             if (watch) {
                 n00b_conduit_signal_fire(watch);
             }
@@ -457,6 +471,7 @@ kqueue_signal_add(void *vctx, n00b_conduit_signal_watch_t *watch)
     int ret = kevent(ctx->kq, &kev, 1, nullptr, 0, nullptr);
     if (ret < 0) {
         // Restore old signal handler on failure
+        if (kq_dbg()) fprintf(kq_dbg(), "[kq_signal_add] kevent FAILED sig=%d errno=%d\n", watch->signum, errno);
         sigaction(watch->signum, &sa_old, nullptr);
         return false;
     }
@@ -465,6 +480,7 @@ kqueue_signal_add(void *vctx, n00b_conduit_signal_watch_t *watch)
     watch->next  = ctx->signals;
     ctx->signals = watch;
 
+    if (kq_dbg()) fprintf(kq_dbg(), "[kq_signal_add] sig=%d kq=%d watch=%p\n", watch->signum, ctx->kq, (void *)watch);
     return true;
 }
 

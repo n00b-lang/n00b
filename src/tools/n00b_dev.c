@@ -17,7 +17,9 @@
 #include "parsers/scanner.h"
 #include "parsers/token_stream.h"
 #include "slay/annot_walk.h"
+#include "slay/codegen.h"
 #include "n00b/n00b_compile.h"
+#include "n00b/n00b_type_map.h"
 #include "slay/bnf.h"
 #include "slay/cf_label.h"
 #include "slay/cdg.h"
@@ -306,6 +308,7 @@ main(int argc, char **argv)
     bool                run_analyze  = false;
     bool                run_typecheck = false;
     bool                repl_mode    = false;
+    bool                run_mode     = false;
     bool                quiet        = false;
     n00b_parse_mode_t   mode         = N00B_PARSE_MODE_DEFAULT;
     const char         *source_file  = NULL;
@@ -365,6 +368,9 @@ main(int argc, char **argv)
         else if (strcmp(argv[i], "--repl") == 0) {
             repl_mode = true;
         }
+        else if (strcmp(argv[i], "--run") == 0) {
+            run_mode = true;
+        }
         else if (strcmp(argv[i], "--quiet") == 0
                  || strcmp(argv[i], "-q") == 0) {
             quiet = true;
@@ -392,7 +398,8 @@ main(int argc, char **argv)
                         "[--earley|--pwz] [--tokens] [--grammar] "
                         "[--cfg] [--cdg] [--dfg] [--labels] [--symtab|-s] "
                         "[--analyze|-a] [--typecheck|-t] [--all] "
-                        "[--quiet|-q] [--repl] [--grammar-file <path>]\n");
+                        "[--quiet|-q] [--repl] [--run] "
+                        "[--grammar-file <path>]\n");
         return 1;
     }
 
@@ -517,7 +524,9 @@ main(int argc, char **argv)
                               : (mode == N00B_PARSE_MODE_PWZ_ONLY)    ? "pwz"
                                                                       : "default";
 
-        printf("=== Parse (mode: %s) ===\n", mode_name);
+        if (!quiet) {
+            printf("=== Parse (mode: %s) ===\n", mode_name);
+        }
 
         n00b_parse_result_t *r = n00b_grammar_parse(g, ts, mode);
 
@@ -591,6 +600,37 @@ main(int argc, char **argv)
             printf("\n=== CF Labels ===\n");
             n00b_cf_labels_print(ar->cf_labels, g, stdout);
             printf("\n");
+        }
+
+        // --run mode: codegen + JIT + execute.
+        if (run_mode) {
+            n00b_cg_session_t *session = n00b_cg_session_new(
+                g, .type_map = n00b_type_map);
+
+            bool    run_ok = false;
+            int64_t result = n00b_cg_session_run_module(
+                session, tree, .annot = ar, .ok = &run_ok);
+
+            if (run_ok) {
+                printf("=> %lld\n", (long long)result);
+            }
+            else {
+                fprintf(stderr, "error: codegen/JIT failed\n");
+            }
+
+            n00b_cg_session_free(session);
+
+            if (ar && ar->symtab) {
+                n00b_symtab_free(ar->symtab);
+            }
+
+            n00b_diag_print_all(diag_ctx, src, source_file);
+            n00b_diag_ctx_free(diag_ctx);
+            n00b_parse_result_free(r);
+            free(src);
+            n00b_shutdown();
+
+            return run_ok ? 0 : 1;
         }
 
         // CFG / CDG / DFG + Analysis.

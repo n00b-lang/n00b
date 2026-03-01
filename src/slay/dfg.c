@@ -131,9 +131,16 @@ walk_for_uses(n00b_parse_tree_t *node, n00b_cf_labels_t *cf_labels,
     // Interior node — check if it has its own CF label (handled separately).
     n00b_cf_label_t *label = n00b_cf_label_lookup(cf_labels, node);
 
-    if (label
-        && (label->kind == N00B_CF_ASSIGNS || label->kind == N00B_CF_VARREF)) {
+    if (label && label->kind == N00B_CF_ASSIGNS) {
         return;  // Will be / was handled by the main extraction.
+    }
+
+    if (label && label->kind == N00B_CF_VARREF) {
+        // Varref may appear at any depth (e.g. on <member-chain>).
+        // Emit the use here rather than assuming the main loop handles it.
+        n00b_string_t *name = extract_var_name(label->cond);
+        emit_fact(facts, name, label->cond, block_id, stmt_ix, false);
+        return;
     }
 
     // Function definitions are opaque — don't recurse into them.

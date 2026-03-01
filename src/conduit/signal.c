@@ -7,6 +7,18 @@
 #include "conduit/conduit.h"
 #include "conduit/signal.h"
 #include "conduit/io.h"
+#include <stdio.h>
+
+static FILE *
+sig_dbg(void)
+{
+    static FILE *f = nullptr;
+    if (!f) {
+        f = fopen("/tmp/widget_demo.log", "a");
+        if (f) setbuf(f, nullptr);
+    }
+    return f;
+}
 
 // ============================================================================
 // Signal Watch Creation
@@ -41,9 +53,11 @@ n00b_conduit_signal_topic(n00b_conduit_t *c, int signum)
 
     // Register with I/O backend
     if (!n00b_conduit_signal_register(c, watch)) {
+        if (sig_dbg()) fprintf(sig_dbg(), "[signal_topic] register FAILED for sig %d\n", signum);
         return n00b_result_err(n00b_conduit_topic_base_t *, N00B_CONDUIT_ERR_ALLOC);
     }
 
+    if (sig_dbg()) fprintf(sig_dbg(), "[signal_topic] registered sig %d, topic=%p\n", signum, (void *)watch->topic);
     return n00b_result_ok(n00b_conduit_topic_base_t *, watch->topic);
 }
 
@@ -114,13 +128,18 @@ void
 n00b_conduit_signal_fire(n00b_conduit_signal_watch_t *watch)
 {
     if (!watch || !watch->topic) {
+        if (sig_dbg()) fprintf(sig_dbg(), "[signal_fire] null watch or topic\n");
         return;
     }
 
     n00b_conduit_t *c = watch->topic->conduit;
     if (!c || n00b_conduit_is_shutdown(c)) {
+        if (sig_dbg()) fprintf(sig_dbg(), "[signal_fire] conduit null or shutdown, sig=%d\n", watch->signum);
         return;
     }
+
+    if (sig_dbg()) fprintf(sig_dbg(), "[signal_fire] sig=%d, raise_count before=%llu\n",
+                           watch->signum, (unsigned long long)n00b_atomic_load(&watch->raise_count));
 
     n00b_atomic_add(&watch->raise_count, 1);
 
@@ -129,6 +148,7 @@ n00b_conduit_signal_fire(n00b_conduit_signal_watch_t *watch)
     if (n00b_result_is_err(pub_res)) {
         // Bump epoch so subscribers can detect the missed signal.
         n00b_atomic_add(&watch->topic->epoch, 1);
+        if (sig_dbg()) fprintf(sig_dbg(), "[signal_fire] publish_try_claim FAILED for sig=%d\n", watch->signum);
         return;
     }
     n00b_conduit_publisher_t *pub = n00b_result_get(pub_res);
@@ -150,6 +170,8 @@ n00b_conduit_signal_fire(n00b_conduit_signal_watch_t *watch)
         (n00b_conduit_topic_t(n00b_conduit_signal_payload_t) *)watch->topic,
         msg,
         N00B_CONDUIT_SIGNAL_RAISED);
+
+    if (sig_dbg()) fprintf(sig_dbg(), "[signal_fire] delivered sig=%d to topic subscribers\n", watch->signum);
 
     n00b_conduit_publish_yield(pub);
 }

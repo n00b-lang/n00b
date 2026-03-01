@@ -148,9 +148,11 @@ n00b_plane_init(n00b_plane_t *p) _kargs
     p->box        = box;
     p->default_style = style;
     p->scroll_mode   = scroll;
-    p->flags         = N00B_PLANE_VISIBLE | N00B_PLANE_DIRTY;
-    p->allocator     = allocator;
-    p->widget_state  = N00B_WSTATE_NORMAL;
+    p->flags          = N00B_PLANE_VISIBLE | N00B_PLANE_DIRTY;
+    p->allocator      = allocator;
+    p->widget_state   = N00B_WSTATE_NORMAL;
+    p->widget_vtable  = nullptr;
+    p->widget_data    = nullptr;
 
     p->grid = n00b_alloc_array_with_opts(n00b_rcell_t, (size_t)cols * rows,
                                          &(n00b_alloc_opts_t){.allocator = allocator,
@@ -618,29 +620,11 @@ n00b_plane_content_size(n00b_plane_t *p,
                          n00b_isize_t *out_rows,
                          n00b_isize_t *out_cols)
 {
-    n00b_isize_t h_inset = 0;
-    n00b_isize_t v_inset = 0;
-
-    if (p->box) {
-        if (p->box->borders & N00B_BORDER_LEFT) {
-            h_inset++;
-        }
-        if (p->box->borders & N00B_BORDER_RIGHT) {
-            h_inset++;
-        }
-        if (p->box->borders & N00B_BORDER_TOP) {
-            v_inset++;
-        }
-        if (p->box->borders & N00B_BORDER_BOTTOM) {
-            v_inset++;
-        }
-
-        h_inset += p->box->pad_left + p->box->pad_right;
-        v_inset += p->box->pad_top + p->box->pad_bottom;
-    }
-
-    *out_cols = p->vp_cols > h_inset ? p->vp_cols - h_inset : 0;
-    *out_rows = p->vp_rows > v_inset ? p->vp_rows - v_inset : 0;
+    // The compositor draws border and padding OUTSIDE the plane's
+    // viewport (outer_rows = vp_rows + insets).  The viewport grid
+    // IS the content area, so content size == viewport size.
+    *out_cols = p->vp_cols;
+    *out_rows = p->vp_rows;
 }
 
 // -------------------------------------------------------------------

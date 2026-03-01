@@ -66,3 +66,18 @@ option('using_build_script',
     type: 'boolean',
     value: false)
 
+option('enable_cocoa',
+    type: 'boolean',
+    value: true,
+    description: 'Build the Cocoa rendering backend (macOS only).')
+
+option('enable_notcurses',
+    type: 'boolean',
+    value: true,
+    description: 'Build the notcurses rendering backend (requires notcurses >= 3.0.0).')
+
+option('enable_freetype',
+    type: 'boolean',
+    value: true,
+    description: 'Build with FreeType font rendering (required for pixel text in notcurses).')
+

@@ -16,6 +16,7 @@
  *      | "`" IDENT                      # fresh type variable
  *      | "lookup" "(" "$" INT ")"       # symtab lookup
  *      | "return_of" "(" "$" INT ")"    # callee return type
+ *      | "element_of" "(" "$" INT ")"  # container element type
  *      | IDENT "[" param_list "]"       # parameterized type
  *      | IDENT                          # primitive
  *      | "(" type_expr ")"             # grouping
@@ -536,6 +537,127 @@ parse_type_primary(infer_ctx_t *ctx)
         }
 
         // Not a function type (yet?) — return a fresh variable.
+        return n00b_tc_fresh_var(ctx->tc_ctx);
+    }
+
+    // unwrap_result($N) — unwrap result[T]: unify child with result[`t],
+    // return `t.
+    //
+    // Constrains the operand to be result[T] for some T, then returns T.
+    // Used by the `!` postfix operator.
+    if (match_kw(ctx, "unwrap_result")) {
+        if (!match_char(ctx, '(') || !match_char(ctx, '$')) {
+            ctx->error = true;
+            return NULL;
+        }
+
+        int32_t index = parse_int(ctx);
+
+        if (ctx->error || !match_char(ctx, ')')) {
+            ctx->error = true;
+            return NULL;
+        }
+
+        n00b_tc_type_t *operand_type = get_child_type(ctx, index);
+
+        if (!operand_type) {
+            // Operand has no inferred type yet — create a fresh variable
+            // and store it so unification can still propagate.
+            operand_type = n00b_tc_fresh_var(ctx->tc_ctx);
+
+            n00b_parse_tree_t *child
+                = n00b_tree_get_nth_nt_child(ctx->node, index);
+
+            if (child && ctx->node_types) {
+                uintptr_t key = (uintptr_t)child;
+                n00b_dict_put(ctx->node_types, key, operand_type);
+            }
+        }
+
+        // Build result[`t] and unify with operand.
+        n00b_tc_type_t *t_var = n00b_tc_fresh_var(ctx->tc_ctx);
+
+        n00b_list_t(n00b_tc_type_t *) params
+            = n00b_list_new_private(n00b_tc_type_t *);
+        n00b_list_t(n00b_tc_type_t *) *params_ptr
+            = n00b_alloc(n00b_list_t(n00b_tc_type_t *));
+        *params_ptr = params;
+        n00b_list_push(*params_ptr, t_var);
+
+        n00b_tc_type_t *result_type = n00b_alloc(n00b_tc_type_t);
+        result_type->forward = nullptr;
+        n00b_tc_ctx_register(ctx->tc_ctx, result_type);
+
+        n00b_tc_param_t param = {
+            .name   = r"result",
+            .params = params_ptr,
+        };
+
+        _n00b_variant_set_ptr(&result_type->kind, n00b_tc_param_t, param);
+
+        n00b_tc_unify(ctx->tc_ctx, operand_type, result_type);
+
+        return t_var;
+    }
+
+    // element_of($N) — element type of a parameterized container.
+    //
+    // For list[T], array[T], set[T] → T  (first param).
+    // For dict[K,V] → V (last param — the value type).
+    // For string → i32 (character code).
+    // For anything else → fresh type variable.
+    if (match_kw(ctx, "element_of")) {
+        if (!match_char(ctx, '(') || !match_char(ctx, '$')) {
+            ctx->error = true;
+            return NULL;
+        }
+
+        int32_t index = parse_int(ctx);
+
+        if (ctx->error || !match_char(ctx, ')')) {
+            ctx->error = true;
+            return NULL;
+        }
+
+        n00b_tc_type_t *container_type = get_child_type(ctx, index);
+
+        if (!container_type) {
+            return n00b_tc_fresh_var(ctx->tc_ctx);
+        }
+
+        n00b_tc_type_t *resolved = container_type;
+
+        while (resolved->forward) {
+            resolved = resolved->forward;
+        }
+
+        // Parameterized: list[T] → T, dict[K,V] → V.
+        if (n00b_variant_is_type(resolved->kind, n00b_tc_param_t)) {
+            auto param = n00b_variant_get(resolved->kind, n00b_tc_param_t);
+
+            if (param.params && n00b_list_len(*param.params) > 0) {
+                size_t nparams = n00b_list_len(*param.params);
+
+                // dict[K,V] → V (last param).
+                if (param.name
+                    && n00b_unicode_str_eq(param.name, r"dict")) {
+                    return n00b_list_get(*param.params, nparams - 1);
+                }
+
+                // list[T], array[T], set[T], etc. → first param.
+                return n00b_list_get(*param.params, 0);
+            }
+        }
+
+        // string → i32 (character indexing).
+        if (n00b_variant_is_type(resolved->kind, n00b_tc_prim_t)) {
+            auto prim = n00b_variant_get(resolved->kind, n00b_tc_prim_t);
+
+            if (prim.name && n00b_unicode_str_eq(prim.name, r"string")) {
+                return n00b_tc_prim(ctx->tc_ctx, r"i32");
+            }
+        }
+
         return n00b_tc_fresh_var(ctx->tc_ctx);
     }
 

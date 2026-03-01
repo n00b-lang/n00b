@@ -405,6 +405,12 @@ void *n00b_cg_module_compile(n00b_cg_module_t *module,
 void n00b_cg_set_active_module(n00b_cg_session_t *session,
                                 n00b_cg_module_t  *module);
 
+/**
+ * @brief Set the annotation result on a module (for tree-walk codegen).
+ */
+void n00b_cg_module_set_annot(n00b_cg_module_t    *module,
+                                n00b_annot_result_t *annot);
+
 // ============================================================================
 // Eval convenience (REPL primary path)
 // ============================================================================
@@ -429,6 +435,34 @@ int64_t n00b_cg_session_eval_tree(n00b_cg_session_t *session,
 _kargs {
     n00b_annot_result_t *annot;
     const char          *func_name;
+    bool                *ok;
+};
+
+// ============================================================================
+// Module-level run (whole-file execution)
+// ============================================================================
+
+/**
+ * @brief Compile and execute a whole module (file) with two-pass codegen.
+ *
+ * Pass 1 emits top-level function definitions as standalone MIR functions.
+ * Pass 2 wraps remaining top-level statements in an entry function, compiles,
+ * and executes it.
+ *
+ * @param session  Persistent codegen session.
+ * @param tree     Parse tree for the entire module.
+ *
+ * @kw annot       Annotation walk result (NULL).
+ * @kw entry_name  Name for the entry function ("_main").
+ * @kw ok          If non-NULL, set to true on success, false on error.
+ *
+ * @return The int64_t result of execution (0 on error).
+ */
+int64_t n00b_cg_session_run_module(n00b_cg_session_t *session,
+                                     n00b_parse_tree_t  *tree)
+_kargs {
+    n00b_annot_result_t *annot;
+    const char          *entry_name;
     bool                *ok;
 };
 

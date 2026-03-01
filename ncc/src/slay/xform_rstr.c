@@ -7,7 +7,9 @@
 // Registered as post-order on "postfix_expression".
 
 #include "slay/xform_helpers.h"
+#include "slay/type_normalize.h"
 
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -766,10 +768,24 @@ emit_rstr_expression(rstr_text_buf_t *tb, out_style_list_t *out, int uid)
         fprintf(f, "}};");
     }
 
+    // Emit a static header + string pair so the runtime can identify
+    // r"" strings as managed objects via N00B_STATIC_MAGIC.
+    // Compute typehash("n00b_string_t*") at transform time since
+    // the emitted code is compiled by clang, not ncc.
+    uint64_t str_typehash = n00b_type_hash_u64("n00b_string_t*");
+
     fprintf(f,
-            "static struct n00b_string_t _ncc_rs_%d={"
-            ".u8_bytes=%d,.data=\"",
-            uid, tb->len);
+            "static struct{n00b_static_header_t hdr;"
+            "n00b_string_t obj;}"
+            " _ncc_rsh_%d={"
+            ".hdr={"
+            ".static_magic=0xcc653162303034ccULL,"
+            ".tinfo=%" PRIu64 "ULL,"
+            ".alloc_len=(unsigned)(sizeof(n00b_inline_hdr_t)"
+            "+sizeof(n00b_string_t))"
+            "},"
+            ".obj={.u8_bytes=%d,.data=\"",
+            uid, str_typehash, tb->len);
     emit_escaped_string(f, tb->data, tb->len);
     fprintf(f, "\",.codepoints=%lld,", (long long)cp_count);
 
@@ -780,8 +796,8 @@ emit_rstr_expression(rstr_text_buf_t *tb, out_style_list_t *out, int uid)
         fprintf(f, ".styling=&_ncc_rs_%d_si", uid);
     }
 
-    fprintf(f, "};");
-    fprintf(f, "&_ncc_rs_%d;})", uid);
+    fprintf(f, "}};");
+    fprintf(f, "&_ncc_rsh_%d.obj;})", uid);
 
     fclose(f);
     return result;

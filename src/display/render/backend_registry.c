@@ -237,4 +237,12 @@ n00b_renderer_registry_init(void)
     n00b_renderer_register(r"stream", &n00b_renderer_stream);
     n00b_renderer_register(r"ansi",   &n00b_renderer_ansi);
     n00b_renderer_register(r"dumb",   &n00b_renderer_dumb);
+
+#if defined(__APPLE__)
+    n00b_renderer_register(r"cocoa", &n00b_renderer_cocoa);
+#endif
+
+#if defined(N00B_HAVE_NOTCURSES)
+    n00b_renderer_register(r"notcurses", &n00b_renderer_notcurses);
+#endif
 }

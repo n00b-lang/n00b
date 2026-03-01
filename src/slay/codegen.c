@@ -50,6 +50,13 @@ static const struct {
 #define NUM_DEFAULT_OPS (sizeof(default_ops) / sizeof(default_ops[0]))
 
 // ============================================================================
+// Forward declarations for NT handlers registered during session init
+// ============================================================================
+
+static n00b_cg_val_t codegen_func_def(n00b_cg_session_t *s, n00b_parse_tree_t *node);
+static n00b_cg_val_t codegen_assert_stmt(n00b_cg_session_t *s, n00b_parse_tree_t *node);
+
+// ============================================================================
 // Internal: install default operators on a session
 // ============================================================================
 
@@ -123,6 +130,12 @@ _kargs {
 
     install_handlers(s);
     install_default_ops(s);
+
+    // Register built-in NT handlers.
+    if (grammar) {
+        n00b_codegen_register(s, "func-def", codegen_func_def);
+        n00b_codegen_register(s, "assert-stmt", codegen_assert_stmt);
+    }
 
     return s;
 }
@@ -316,6 +329,12 @@ n00b_cg_set_active_module(n00b_cg_session_t *s, n00b_cg_module_t *m)
     s->active_module = m;
 }
 
+void
+n00b_cg_module_set_annot(n00b_cg_module_t *m, n00b_annot_result_t *annot)
+{
+    m->annot = annot;
+}
+
 // ============================================================================
 // Handler registration
 // ============================================================================
@@ -481,6 +500,35 @@ default_literal_parser(n00b_cg_session_t  *s,
     memcpy(buf, text, len);
     buf[len] = '\0';
 
+    // Boolean literals.
+    if (type_tag == N00B_CG_BOOL
+        || (len == 4 && memcmp(text, "true", 4) == 0)
+        || (len == 5 && memcmp(text, "false", 5) == 0)) {
+        bool val = (len == 4 && memcmp(text, "true", 4) == 0);
+        return _n00b_cg_const_i64(s, val ? 1 : 0);
+    }
+
+    // String literals: type is PTR, or text starts with a quote char.
+    if (type_tag == N00B_CG_PTR
+        || (len >= 2 && (text[0] == '"' || text[0] == '\''))) {
+        // Strip quotes if present.
+        const char *str_data = buf;
+        size_t      str_len  = len;
+
+        if (str_len >= 2
+            && (str_data[0] == '"' || str_data[0] == '\'')) {
+            str_data++;
+            str_len -= 2;
+        }
+
+        // Allocate a persistent copy as a C string.
+        char *str_copy = n00b_alloc_size(1, str_len + 1);
+        memcpy(str_copy, str_data, str_len);
+        str_copy[str_len] = '\0';
+
+        return _n00b_cg_const_ptr(s, str_copy);
+    }
+
     if (type_tag == N00B_CG_F64) {
         return _n00b_cg_const_f64(s, strtod(buf, NULL));
     }
@@ -507,6 +555,11 @@ static n00b_cg_val_t codegen_loop(n00b_cg_session_t *s, n00b_cf_label_t *cf);
 static n00b_cg_val_t codegen_jump(n00b_cg_session_t *s, n00b_cf_label_t *cf);
 static n00b_cg_val_t codegen_assign(n00b_cg_session_t *s, n00b_cf_label_t *cf);
 static n00b_cg_val_t codegen_varref(n00b_cg_session_t *s, n00b_cf_label_t *cf);
+static n00b_cg_val_t codegen_switch(n00b_cg_session_t *s, n00b_cf_label_t *cf);
+static n00b_cg_val_t codegen_unwrap_result(n00b_cg_session_t *s, n00b_cf_label_t *cf);
+static n00b_cg_val_t codegen_call_cf(n00b_cg_session_t *s, n00b_cf_label_t *cf);
+static n00b_cg_val_t codegen_func_def(n00b_cg_session_t *s, n00b_parse_tree_t *node);
+static n00b_cg_val_t codegen_assert_stmt(n00b_cg_session_t *s, n00b_parse_tree_t *node);
 static n00b_cg_val_t codegen_children_default(n00b_cg_session_t *s,
                                                n00b_parse_tree_t *node);
 
@@ -840,6 +893,64 @@ codegen_jump(n00b_cg_session_t *s, n00b_cf_label_t *cf)
     return N00B_CG_VOID_VAL;
 }
 
+// Compound assignment operator table: token text -> base operator text.
+static const struct {
+    const char *compound;
+    const char *base;
+} compound_assign_ops[] = {
+    {"+=",  "+"},
+    {"-=",  "-"},
+    {"*=",  "*"},
+    {"/=",  "/"},
+    {"%=",  "%"},
+    {"&=",  "&"},
+    {"|=",  "|"},
+    {"^=",  "^"},
+    {"<<=", "<<"},
+    {">>=", ">>"},
+};
+
+#define NUM_COMPOUND_OPS (sizeof(compound_assign_ops) / sizeof(compound_assign_ops[0]))
+
+// Find compound assignment operator token in cf->self children.
+// Returns the base operator string (e.g. "+" for "+="), or NULL for simple "=".
+static const char *
+find_compound_op(n00b_parse_tree_t *self_node)
+{
+    size_t nc = n00b_pt_num_children(self_node);
+
+    for (size_t i = 0; i < nc; i++) {
+        n00b_parse_tree_t *child = n00b_pt_get_child(self_node, i);
+
+        // The operator is in child $1 (<binop-assign-op>), which may
+        // be a non-terminal containing a single token, or the token
+        // itself might be directly found via first_token.
+        n00b_parse_tree_t *tok = n00b_pt_first_token(child);
+
+        if (!tok) {
+            continue;
+        }
+
+        const char *text = n00b_pt_token_text(tok);
+        size_t      tlen = n00b_pt_token_text_len(tok);
+
+        if (!text || tlen == 0) {
+            continue;
+        }
+
+        for (size_t j = 0; j < NUM_COMPOUND_OPS; j++) {
+            size_t clen = strlen(compound_assign_ops[j].compound);
+
+            if (tlen == clen && memcmp(text, compound_assign_ops[j].compound,
+                                       clen) == 0) {
+                return compound_assign_ops[j].base;
+            }
+        }
+    }
+
+    return NULL;
+}
+
 static n00b_cg_val_t
 codegen_assign(n00b_cg_session_t *s, n00b_cf_label_t *cf)
 {
@@ -856,8 +967,80 @@ codegen_assign(n00b_cg_session_t *s, n00b_cf_label_t *cf)
             const char *var_name = n00b_pt_token_text(name_tok);
 
             if (var_name) {
-                n00b_cg_val_t dst = n00b_cg_local(s, var_name,
-                                                     .type = value.type_tag);
+                // Check for compound assignment (+=, -=, etc.).
+                const char *base_op = find_compound_op(cf->self);
+
+                if (base_op) {
+                    // Compound: load current value, apply binop, store back.
+                    n00b_cg_module_t *m   = s->active_module;
+                    MIR_func_t        func = m->cur_func->u.func;
+                    size_t            nlen = n00b_pt_token_text_len(name_tok);
+                    char              nbuf[128];
+
+                    if (nlen >= sizeof(nbuf)) {
+                        nlen = sizeof(nbuf) - 1;
+                    }
+
+                    memcpy(nbuf, var_name, nlen);
+                    nbuf[nlen] = '\0';
+
+                    MIR_reg_t reg = MIR_reg(s->mir_ctx, nbuf, func);
+                    n00b_cg_val_t lhs = (n00b_cg_val_t){
+                        .id       = (uint32_t)reg,
+                        .kind     = N00B_CG_VAL_REG,
+                        .type_tag = value.type_tag,
+                    };
+
+                    int32_t sem_op = n00b_cg_lookup_op(s, base_op);
+
+                    if (sem_op >= 0) {
+                        n00b_cg_val_t result = n00b_cg_emit_binop(
+                            s, (n00b_cg_semantic_op_t)sem_op, lhs, value);
+                        n00b_cg_store(s, lhs, result);
+                        return lhs;
+                    }
+                }
+
+                // Simple assignment: try to look up existing register first,
+                // only create a new local if it doesn't exist yet.
+                n00b_cg_module_t *m2   = s->active_module;
+                MIR_func_t        fn2  = m2->cur_func->u.func;
+                size_t            nlen2 = n00b_pt_token_text_len(name_tok);
+                char              nbuf2[128];
+
+                if (nlen2 >= sizeof(nbuf2)) {
+                    nlen2 = sizeof(nbuf2) - 1;
+                }
+
+                memcpy(nbuf2, var_name, nlen2);
+                nbuf2[nlen2] = '\0';
+
+                n00b_cg_val_t dst;
+                MIR_reg_t existing = 0;
+                bool found_reg = false;
+
+                // Check if register already exists (re-assignment).
+                for (uint32_t ri = 0;
+                     ri < VARR_LENGTH(MIR_var_t, fn2->vars); ri++) {
+                    MIR_var_t v = VARR_GET(MIR_var_t, fn2->vars, ri);
+
+                    if (v.name && strcmp(v.name, nbuf2) == 0) {
+                        existing  = MIR_reg(s->mir_ctx, nbuf2, fn2);
+                        found_reg = true;
+                        break;
+                    }
+                }
+
+                if (found_reg) {
+                    dst = (n00b_cg_val_t){
+                        .id       = (uint32_t)existing,
+                        .kind     = N00B_CG_VAL_REG,
+                        .type_tag = value.type_tag,
+                    };
+                } else {
+                    dst = n00b_cg_local(s, nbuf2, .type = value.type_tag);
+                }
+
                 n00b_cg_store(s, dst, value);
                 return dst;
             }
@@ -900,6 +1083,618 @@ codegen_varref(n00b_cg_session_t *s, n00b_cf_label_t *cf)
             }
         }
     }
+
+    return N00B_CG_VOID_VAL;
+}
+
+// ============================================================================
+// Unwrap result (postfix !)
+// ============================================================================
+
+static n00b_cg_val_t
+codegen_unwrap_result(n00b_cg_session_t *s, n00b_cf_label_t *cf)
+{
+    // Grammar: <postfix-expr> ::= <postfix-expr> %"!"
+    // Child $0 is the operand (a result value).
+    // For now, just evaluate the operand and return it.
+    // Once the type system is fully wired, this will check the
+    // is_ok field and either extract .ok or trigger early return.
+    size_t nc = n00b_pt_num_children(cf->self);
+
+    for (size_t i = 0; i < nc; i++) {
+        n00b_parse_tree_t *child = n00b_pt_get_child(cf->self, i);
+
+        if (!n00b_pt_is_token(child)) {
+            return codegen_walk(s, child);
+        }
+    }
+
+    return N00B_CG_VOID_VAL;
+}
+
+// ============================================================================
+// CF_CALL: function call via control flow label
+// ============================================================================
+
+static n00b_cg_val_t
+codegen_call_cf(n00b_cg_session_t *s, n00b_cf_label_t *cf)
+{
+    // CF_CALL has: cond = callee node, then_body = args node.
+    // Extract function name from the callee.
+    const char *func_name = NULL;
+
+    if (cf->cond) {
+        n00b_parse_tree_t *name_tok = n00b_pt_first_token(cf->cond);
+
+        if (name_tok) {
+            const char *raw = n00b_pt_token_text(name_tok);
+            size_t      len = n00b_pt_token_text_len(name_tok);
+
+            if (raw && len > 0) {
+                char *buf = n00b_alloc_size(1, len + 1);
+                memcpy(buf, raw, len);
+                buf[len] = '\0';
+                func_name = buf;
+            }
+        }
+    }
+
+    if (!func_name) {
+        return codegen_children_default(s, cf->self);
+    }
+
+    // Collect arguments from the args node.
+    // call-args has: expression ("," expression)* with groups from
+    // the quantifier. We DFS through groups but evaluate any
+    // non-token, non-group NT as an argument expression.
+    n00b_cg_val_t args[32];
+    int32_t       n_args = 0;
+
+    if (cf->then_body) {
+        n00b_parse_tree_t *arg_stack[64];
+        int                arg_sp = 0;
+
+        // Push call-args children in reverse for L-to-R order.
+        size_t nc = n00b_pt_num_children(cf->then_body);
+
+        for (size_t i = nc; i > 0; i--) {
+            if (arg_sp < 64) {
+                arg_stack[arg_sp++] = n00b_pt_get_child(cf->then_body, i - 1);
+            }
+        }
+
+        while (arg_sp > 0 && n_args < 32) {
+            n00b_parse_tree_t *cur = arg_stack[--arg_sp];
+
+            if (!cur || n00b_pt_is_token(cur)) {
+                continue; // Skip commas, parens, etc.
+            }
+
+            n00b_nt_node_t *cpn = &n00b_tree_node_value(cur);
+
+            if (cpn->group_top) {
+                // Group node: recurse into its children.
+                size_t gnc = n00b_pt_num_children(cur);
+
+                for (size_t i = gnc; i > 0; i--) {
+                    if (arg_sp < 64) {
+                        arg_stack[arg_sp++] = n00b_pt_get_child(cur, i - 1);
+                    }
+                }
+
+                continue;
+            }
+
+            // Non-token, non-group NT: this is an argument expression.
+            n00b_cg_val_t val = codegen_walk(s, cur);
+
+            if (val.kind != N00B_CG_VAL_VOID) {
+                args[n_args++] = val;
+            }
+        }
+    }
+
+    n00b_cg_type_tag_t ret_type = n00b_codegen_node_type(s, cf->self);
+
+    // If the node type is unresolved (mapped to PTR for Var types),
+    // default to I64 since MIR call protos need a concrete type and
+    // I64 is the most common return type for user functions.
+    if (ret_type == N00B_CG_PTR) {
+        ret_type = N00B_CG_I64;
+    }
+
+    return n00b_cg_emit_call(s, func_name, args, n_args,
+                              .ret = ret_type);
+}
+
+// ============================================================================
+// Switch codegen
+// ============================================================================
+
+// Forward: walk a branch-list node recursively to emit case arms.
+static void
+codegen_switch_branch_list(n00b_cg_session_t *s,
+                           n00b_parse_tree_t *branch_list,
+                           n00b_cg_val_t      switch_val,
+                           n00b_cg_val_t      end_label);
+
+static void
+codegen_switch_case_block(n00b_cg_session_t *s,
+                          n00b_parse_tree_t *case_block,
+                          n00b_cg_val_t      switch_val,
+                          n00b_cg_val_t      end_label,
+                          n00b_cg_val_t      next_label)
+{
+    // <switch-case-block> ::= <case-expr-list> <case-body>
+    //                       | <case-expr-list> <body>
+    // First non-token child is the case-expr-list, second is body.
+    n00b_parse_tree_t *expr_list = NULL;
+    n00b_parse_tree_t *body      = NULL;
+    size_t nc = n00b_pt_num_children(case_block);
+
+    for (size_t i = 0; i < nc; i++) {
+        n00b_parse_tree_t *child = n00b_pt_get_child(case_block, i);
+
+        if (n00b_pt_is_token(child)) {
+            continue;
+        }
+
+        if (!expr_list) {
+            expr_list = child;
+        } else {
+            body = child;
+            break;
+        }
+    }
+
+    // Evaluate case expressions and emit comparisons.
+    // Each case-expr-item may be a simple expression or a range.
+    n00b_cg_val_t match_label = n00b_cg_label_new(s);
+
+    if (expr_list) {
+        // Walk case-expr-list children: each non-token child is a
+        // case-expr-item that might be a simple value or range.
+        size_t enc = n00b_pt_num_children(expr_list);
+
+        for (size_t i = 0; i < enc; i++) {
+            n00b_parse_tree_t *item = n00b_pt_get_child(expr_list, i);
+
+            if (n00b_pt_is_token(item)) {
+                continue; // Skip commas.
+            }
+
+            // Check if this is a range (has 3+ children with a
+            // separator token like "to" between two expressions).
+            size_t inc = n00b_pt_num_children(item);
+            n00b_parse_tree_t *exprs[2] = {NULL, NULL};
+            int n_exprs = 0;
+            bool has_range_sep = false;
+
+            for (size_t j = 0; j < inc; j++) {
+                n00b_parse_tree_t *ic = n00b_pt_get_child(item, j);
+
+                if (n00b_pt_is_token(ic)) {
+                    const char *tt = n00b_pt_token_text(ic);
+                    size_t tl = n00b_pt_token_text_len(ic);
+
+                    if (tt && tl == 2 && memcmp(tt, "to", 2) == 0) {
+                        has_range_sep = true;
+                    }
+                } else if (n_exprs < 2) {
+                    exprs[n_exprs++] = ic;
+                }
+            }
+
+            if (has_range_sep && n_exprs == 2) {
+                // Range: switch_val >= low && switch_val <= high
+                n00b_cg_val_t low  = codegen_walk(s, exprs[0]);
+                n00b_cg_val_t high = codegen_walk(s, exprs[1]);
+                n00b_cg_val_t ge   = n00b_cg_emit_ge(s, switch_val, low);
+                n00b_cg_val_t le   = n00b_cg_emit_le(s, switch_val, high);
+                n00b_cg_val_t both = n00b_cg_emit_and(s, ge, le);
+                n00b_cg_emit_bt(s, both, match_label);
+            } else if (n_exprs >= 1) {
+                // Simple value match.
+                n00b_cg_val_t val = codegen_walk(s, exprs[0]);
+                n00b_cg_val_t eq  = n00b_cg_emit_eq(s, switch_val, val);
+                n00b_cg_emit_bt(s, eq, match_label);
+            }
+        }
+    }
+
+    // No match — jump to next case.
+    n00b_cg_emit_jmp(s, next_label);
+
+    // Match: emit body, then jump to end.
+    n00b_cg_label_here(s, match_label);
+
+    if (body) {
+        codegen_walk(s, body);
+    }
+
+    n00b_cg_emit_jmp(s, end_label);
+}
+
+static void
+codegen_switch_branch_list(n00b_cg_session_t *s,
+                           n00b_parse_tree_t *branch_list,
+                           n00b_cg_val_t      switch_val,
+                           n00b_cg_val_t      end_label)
+{
+    // <branch-list> ::= <eos>* %"case" <switch-case-block>
+    // <branch-list> ::= <eos>* %"case" <switch-case-block> <branch-list>
+    // Children: some tokens (eos, "case"), then a <switch-case-block>,
+    // then optionally another <branch-list>.
+    n00b_parse_tree_t *case_block     = NULL;
+    n00b_parse_tree_t *next_branch    = NULL;
+    size_t nc = n00b_pt_num_children(branch_list);
+
+    for (size_t i = 0; i < nc; i++) {
+        n00b_parse_tree_t *child = n00b_pt_get_child(branch_list, i);
+
+        if (n00b_pt_is_token(child) || n00b_pt_is_group(child)) {
+            continue;
+        }
+
+        if (!case_block) {
+            case_block = child;
+        } else {
+            next_branch = child;
+            break;
+        }
+    }
+
+    n00b_cg_val_t next_label = n00b_cg_label_new(s);
+
+    if (case_block) {
+        codegen_switch_case_block(s, case_block, switch_val,
+                                  end_label, next_label);
+    }
+
+    n00b_cg_label_here(s, next_label);
+
+    if (next_branch) {
+        codegen_switch_branch_list(s, next_branch, switch_val, end_label);
+    }
+}
+
+static n00b_cg_val_t
+codegen_switch(n00b_cg_session_t *s, n00b_cf_label_t *cf)
+{
+    // @switch($1, $3): cond = switch expression, then_body = <switch-cases>
+    n00b_cg_val_t switch_val = N00B_CG_VOID_VAL;
+
+    if (cf->cond) {
+        switch_val = codegen_walk(s, cf->cond);
+    }
+
+    n00b_cg_val_t end_label = n00b_cg_label_new(s);
+
+    if (cf->then_body) {
+        // <switch-cases> ::= <branch-list> <eos>* <case-else>?
+        n00b_parse_tree_t *branch_list = NULL;
+        n00b_parse_tree_t *case_else   = NULL;
+        size_t nc = n00b_pt_num_children(cf->then_body);
+
+        for (size_t i = 0; i < nc; i++) {
+            n00b_parse_tree_t *child = n00b_pt_get_child(cf->then_body, i);
+
+            if (n00b_pt_is_token(child) || n00b_pt_is_group(child)) {
+                continue;
+            }
+
+            // First non-token is branch-list, second (if any) is case-else.
+            if (!branch_list) {
+                branch_list = child;
+            } else {
+                case_else = child;
+                break;
+            }
+        }
+
+        if (branch_list) {
+            codegen_switch_branch_list(s, branch_list, switch_val, end_label);
+        }
+
+        if (case_else) {
+            // <case-else> ::= %"else" <case-body> | %"else" <body>
+            // Walk children, emit the body.
+            size_t enc = n00b_pt_num_children(case_else);
+
+            for (size_t i = 0; i < enc; i++) {
+                n00b_parse_tree_t *child = n00b_pt_get_child(case_else, i);
+
+                if (!n00b_pt_is_token(child)) {
+                    codegen_walk(s, child);
+                    break;
+                }
+            }
+        }
+    }
+
+    n00b_cg_label_here(s, end_label);
+
+    return N00B_CG_VOID_VAL;
+}
+
+// ============================================================================
+// Assert statement handler
+// ============================================================================
+
+// Runtime assert failure: called when assert expression is false.
+static void
+n00b_assert_fail_impl(void)
+{
+    fprintf(stderr, "n00b: assertion failed\n");
+    abort();
+}
+
+static n00b_cg_val_t
+codegen_assert_stmt(n00b_cg_session_t *s, n00b_parse_tree_t *node)
+{
+    // Grammar: <assert-stmt> ::= %"assert" <expression>
+    // Evaluate the expression; if false, call abort helper.
+    size_t nc = n00b_pt_num_children(node);
+    n00b_cg_val_t cond = N00B_CG_VOID_VAL;
+
+    for (size_t i = 0; i < nc; i++) {
+        n00b_parse_tree_t *child = n00b_pt_get_child(node, i);
+
+        if (!n00b_pt_is_token(child)) {
+            cond = codegen_walk(s, child);
+            break;
+        }
+    }
+
+    if (cond.kind == N00B_CG_VAL_VOID) {
+        return N00B_CG_VOID_VAL;
+    }
+
+    // bt cond, ok_label  (skip abort if condition is true)
+    n00b_cg_val_t ok_label = n00b_cg_label_new(s);
+    n00b_cg_emit_bt(s, cond, ok_label);
+
+    // Call abort helper.
+    n00b_cg_import_func(s, "n00b_assert_fail",
+                          (void *)n00b_assert_fail_impl,
+                          .ret = N00B_CG_VOID);
+    n00b_cg_emit_call(s, "n00b_assert_fail", NULL, 0,
+                        .ret = N00B_CG_VOID);
+
+    n00b_cg_label_here(s, ok_label);
+
+    return N00B_CG_VOID_VAL;
+}
+
+// ============================================================================
+// Function definition handler
+// ============================================================================
+
+static n00b_cg_val_t
+codegen_func_def(n00b_cg_session_t *s, n00b_parse_tree_t *node)
+{
+    // Grammar:
+    // <func-def> @scope("function", $3) @declares($3, "function") ::=
+    //     <func-mod>* <func-return-type>? <func-kind> IDENTIFIER
+    //     <param-decl> <where-clause>? <body>
+    //
+    // Walk children to extract: name, params, return type, body.
+    const char        *func_name    = NULL;
+    n00b_parse_tree_t *param_decl   = NULL;
+    n00b_parse_tree_t *body_node    = NULL;
+    n00b_parse_tree_t *ret_type_node = NULL;
+
+    size_t nc = n00b_pt_num_children(node);
+    bool   saw_func_kw = false;
+
+    for (size_t i = 0; i < nc; i++) {
+        n00b_parse_tree_t *child = n00b_pt_get_child(node, i);
+
+        if (n00b_pt_is_token(child)) {
+            const char *tt  = n00b_pt_token_text(child);
+            size_t      tl  = n00b_pt_token_text_len(child);
+
+            if (!tt || tl == 0) {
+                continue;
+            }
+
+            // Check for "func" or "method" keyword.
+            if ((tl == 4 && memcmp(tt, "func", 4) == 0)
+                || (tl == 6 && memcmp(tt, "method", 6) == 0)) {
+                saw_func_kw = true;
+                continue;
+            }
+
+            // The IDENTIFIER after func/method is the function name.
+            if (saw_func_kw && !func_name) {
+                char *buf = n00b_alloc_size(1, tl + 1);
+                memcpy(buf, tt, tl);
+                buf[tl] = '\0';
+                func_name = buf;
+                continue;
+            }
+        } else if (n00b_pt_is_group(child)) {
+            // Group nodes from quantifiers — recurse through them.
+            // func-mod* and others may create groups.
+            continue;
+        } else {
+            // Non-terminal children: could be func-mod, func-return-type,
+            // func-kind, param-decl, where-clause, or body.
+            // We identify them by position relative to the func keyword
+            // and the IDENTIFIER.
+
+            // Before the function name: func-mod or func-return-type.
+            if (!saw_func_kw) {
+                // Could be <func-mod> or <func-return-type> or <func-kind>.
+                // <func-kind> is "func" | "method" which are tokens inside
+                // the NT, so check if this child contains a "func" token.
+                n00b_parse_tree_t *ft = n00b_pt_first_token(child);
+
+                if (ft) {
+                    const char *ftt = n00b_pt_token_text(ft);
+                    size_t ftl = n00b_pt_token_text_len(ft);
+
+                    if (ftt && ((ftl == 4 && memcmp(ftt, "func", 4) == 0)
+                                || (ftl == 6
+                                    && memcmp(ftt, "method", 6) == 0))) {
+                        saw_func_kw = true;
+                        continue;
+                    }
+                }
+
+                // This is either func-mod or func-return-type.
+                // func-return-type comes right before func-kind.
+                // We'll capture it as potential return type.
+                ret_type_node = child;
+                continue;
+            }
+
+            if (!func_name) {
+                // This shouldn't happen if the grammar is well-formed,
+                // but handle gracefully.
+                continue;
+            }
+
+            // After the name: param-decl, where-clause, or body.
+            if (!param_decl) {
+                param_decl = child;
+            } else if (!body_node) {
+                // Could be where-clause or body.
+                // where-clause is optional; body is always last.
+                // We'll check if there's another child after this one.
+                // For now, take the last non-token child as body.
+                body_node = child;
+            } else {
+                // If we already have body, this later one replaces it
+                // (the previous was where-clause).
+                body_node = child;
+            }
+        }
+    }
+
+    if (!func_name) {
+        return codegen_children_default(s, node);
+    }
+
+    // Extract parameter names and types from <param-decl>.
+    // <param-decl> ::= %"(" <formals>? %")"
+    // <formals> ::= <formal-param> ("," <formal-param>)* ...
+    // <formal-param> ::= <id-list> ":" <type-spec>
+    //                   | <id-list>
+    const char         *param_names[32];
+    n00b_cg_type_tag_t  param_types[32];
+    int32_t             n_params = 0;
+
+    if (param_decl) {
+        // Find the formal-param NT id so we can identify them.
+        int64_t fp_nt_id = -1;
+
+        if (s->grammar) {
+            n00b_string_t *fp_name = n00b_string_from_cstr("formal-param");
+            bool           fp_found = false;
+
+            fp_nt_id = n00b_dict_get(s->grammar->nt_map, fp_name, &fp_found);
+
+            if (!fp_found) {
+                fp_nt_id = -1;
+            }
+        }
+
+        // DFS through param-decl to find all formal-param nodes.
+        n00b_parse_tree_t *fp_stack[128];
+        int                fp_sp = 0;
+
+        fp_stack[fp_sp++] = param_decl;
+
+        while (fp_sp > 0 && n_params < 32) {
+            n00b_parse_tree_t *cur = fp_stack[--fp_sp];
+
+            if (!cur || n00b_pt_is_token(cur)) {
+                continue;
+            }
+
+            n00b_nt_node_t *cpn = &n00b_tree_node_value(cur);
+
+            if (cpn->id == fp_nt_id) {
+                // Found a formal-param. Extract name from first token.
+                n00b_parse_tree_t *pt = n00b_pt_first_token(cur);
+
+                if (pt) {
+                    const char *pn = n00b_pt_token_text(pt);
+                    size_t pl      = n00b_pt_token_text_len(pt);
+
+                    if (pn && pl > 0) {
+                        char *pbuf = n00b_alloc_size(1, pl + 1);
+                        memcpy(pbuf, pn, pl);
+                        pbuf[pl] = '\0';
+                        param_names[n_params] = pbuf;
+                        param_types[n_params] = n00b_codegen_node_type(s, cur);
+                        n_params++;
+                    }
+                }
+
+                continue; // Don't recurse into formal-param.
+            }
+
+            // Push children in reverse for left-to-right visit.
+            size_t cnc = n00b_pt_num_children(cur);
+
+            for (size_t ci = cnc; ci > 0; ci--) {
+                if (fp_sp < 128) {
+                    fp_stack[fp_sp++] = n00b_pt_get_child(cur, ci - 1);
+                }
+            }
+        }
+    }
+
+    // Determine return type.
+    n00b_cg_type_tag_t ret_type = N00B_CG_I64;
+
+    if (ret_type_node) {
+        ret_type = n00b_codegen_node_type(s, ret_type_node);
+    } else {
+        // Try to get from the func-def node's own type.
+        ret_type = n00b_codegen_node_type(s, node);
+    }
+
+    // Function definitions must be emitted as top-level MIR functions.
+    // If we're inside a wrapper function (like _eval in the REPL),
+    // we can't nest MIR functions. Instead, we use the deferred
+    // approach: the func-def is emitted *outside* the wrapper by
+    // n00b_cg_emit_func_from_tree's pre-scan pass. When we reach
+    // here during normal tree-walk, the function was already emitted,
+    // so we just return void.
+    //
+    // If we're NOT inside a wrapper (cur_func == NULL), emit directly.
+    n00b_cg_module_t *m = s->active_module;
+
+    if (m->cur_func != NULL) {
+        // Inside a wrapper — func was already emitted in the pre-scan.
+        return N00B_CG_VOID_VAL;
+    }
+
+    // Top-level emit: not inside any function.
+    n00b_cg_begin_func(s, func_name,
+                        .ret         = ret_type,
+                        .param_names = (const char **)param_names,
+                        .param_types = param_types,
+                        .n_params    = n_params);
+
+    n00b_cg_val_t body_result = N00B_CG_VOID_VAL;
+
+    if (body_node) {
+        body_result = codegen_walk(s, body_node);
+    }
+
+    if (body_result.kind != N00B_CG_VAL_VOID) {
+        n00b_cg_emit_ret(s, body_result);
+    } else if (ret_type == N00B_CG_VOID) {
+        n00b_cg_emit_ret_void(s);
+    } else {
+        n00b_cg_emit_ret(s, _n00b_cg_const_i64(s, 0));
+    }
+
+    n00b_cg_end_func(s);
 
     return N00B_CG_VOID_VAL;
 }
@@ -979,16 +1774,13 @@ codegen_walk(n00b_cg_session_t *s, n00b_parse_tree_t *node)
         return N00B_CG_VOID_VAL;
     }
 
-    // Leaf token: return as immediate.
+    // Leaf token: return VOID.
+    // Literal tokens are handled by @literal annotations on their parent
+    // node (codegen_literal), and operator tokens are extracted by
+    // codegen_operator. Bare tokens (keywords, punctuation, newlines)
+    // should not produce values.
     if (n00b_parse_node_is_token(node)) {
-        n00b_cg_type_tag_t type = n00b_codegen_node_type(s, node);
-        n00b_parse_tree_t *tok  = node;
-
-        if (s->literal_parser) {
-            return s->literal_parser(s, tok, NULL, type);
-        }
-
-        return default_literal_parser(s, tok, NULL, type);
+        return N00B_CG_VOID_VAL;
     }
 
     n00b_nt_node_t *pn = &n00b_tree_node_value(node);
@@ -1014,10 +1806,10 @@ codegen_walk(n00b_cg_session_t *s, n00b_parse_tree_t *node)
         case N00B_CF_JUMP:          return codegen_jump(s, cf);
         case N00B_CF_ASSIGNS:       return codegen_assign(s, cf);
         case N00B_CF_VARREF:        return codegen_varref(s, cf);
-        case N00B_CF_SWITCH:
+        case N00B_CF_SWITCH:        return codegen_switch(s, cf);
+        case N00B_CF_UNWRAP_RESULT: return codegen_unwrap_result(s, cf);
+        case N00B_CF_CALL:          return codegen_call_cf(s, cf);
         case N00B_CF_CAPTURE:
-        case N00B_CF_UNWRAP_RESULT:
-        case N00B_CF_CALL:
             break;
         }
     }
@@ -1685,6 +2477,123 @@ n00b_cg_import_table_resolve_types(n00b_cg_import_table_t *table,
             e->resolved_type = e->type_builder(ctx);
         }
     }
+}
+
+// ============================================================================
+// Module-level run: two-pass codegen for whole-file execution
+// ============================================================================
+
+int64_t
+n00b_cg_session_run_module(n00b_cg_session_t *s,
+                             n00b_parse_tree_t *tree)
+_kargs {
+    n00b_annot_result_t *annot;
+    const char          *entry_name;
+    bool                *ok;
+}
+{
+    if (kargs->ok) {
+        *kargs->ok = false;
+    }
+
+    if (!tree || !s) {
+        return 0;
+    }
+
+    const char *entry = kargs->entry_name ? kargs->entry_name : "_main";
+
+    // Create a new module.
+    char mod_name[64];
+    snprintf(mod_name, sizeof(mod_name), "mod_%d", s->module_count);
+
+    n00b_cg_module_t *m = n00b_cg_module_new(s, mod_name);
+
+    if (kargs->annot) {
+        m->annot = kargs->annot;
+    }
+
+    // --- Pass 1: emit top-level function definitions ---
+    // Look up the func-def NT id so we can identify func-def nodes.
+    int64_t func_def_nt_id = -1;
+
+    if (s->grammar) {
+        n00b_string_t *fd_name = n00b_string_from_cstr("func-def");
+        bool           found   = false;
+
+        func_def_nt_id = n00b_dict_get(s->grammar->nt_map, fd_name, &found);
+
+        if (!found) {
+            func_def_nt_id = -1;
+        }
+    }
+
+    // Recursively scan the tree for func-def nodes and emit them.
+    // func-defs can be nested inside groups and wrapper NTs like
+    // top-level-stmt, other-top-stmts, etc.
+    {
+        // Use a simple stack-based DFS to find all func-def nodes.
+        n00b_parse_tree_t *stack[256];
+        int                sp = 0;
+
+        stack[sp++] = tree;
+
+        while (sp > 0) {
+            n00b_parse_tree_t *cur = stack[--sp];
+
+            if (!cur || n00b_pt_is_token(cur)) {
+                continue;
+            }
+
+            n00b_nt_node_t *pn = &n00b_tree_node_value(cur);
+
+            if (pn->id == func_def_nt_id) {
+                // Emit this function definition at top level.
+                codegen_walk(s, cur);
+                continue; // Don't recurse into func-def children.
+            }
+
+            // Push children in reverse order so we visit them left-to-right.
+            size_t nc = n00b_pt_num_children(cur);
+
+            for (size_t i = nc; i > 0; i--) {
+                n00b_parse_tree_t *child = n00b_pt_get_child(cur, i - 1);
+
+                if (sp < 256) {
+                    stack[sp++] = child;
+                }
+            }
+        }
+    }
+
+    // --- Pass 2: wrap all top-level statements in _main ---
+    // codegen_func_def will see cur_func != NULL and return VOID,
+    // skipping already-emitted function definitions.
+    bool emit_ok = n00b_cg_emit_func_from_tree(s, tree, entry,
+                                                 .ret = N00B_CG_I64);
+
+    if (!emit_ok) {
+        return 0;
+    }
+
+    // Compile the module and get entry function pointer.
+    typedef int64_t (*entry_fn_t)(void);
+
+    entry_fn_t fn = (entry_fn_t)n00b_cg_module_compile(m, entry);
+
+    // Merge public symbols.
+    n00b_cg_session_merge_module(s, m);
+
+    if (!fn) {
+        return 0;
+    }
+
+    int64_t val = fn();
+
+    if (kargs->ok) {
+        *kargs->ok = true;
+    }
+
+    return val;
 }
 
 // Platform-specific section boundary declarations.

@@ -92,6 +92,10 @@ typedef struct n00b_plane_t {
     n00b_widget_state_t  widget_state;
     uint16_t             flags;
 
+    // Widget behavior (nullptr = plain plane, no widget attached)
+    const struct n00b_widget_vtable_t *widget_vtable;
+    void                              *widget_data;
+
     n00b_rwlock_t       *lock;
     n00b_allocator_t    *allocator;
 } n00b_plane_t;

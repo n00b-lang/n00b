@@ -44,11 +44,11 @@ test_widget_dtor(void *self, void *params)
 static void
 test_builtin_lookup(void)
 {
-    assert(n00b_option_is_set(n00b_type_lookup(typehash(uint64_t))));
-    assert(n00b_option_is_set(n00b_type_lookup(typehash(n00b_string_t))));
-    assert(n00b_option_is_set(n00b_type_lookup(typehash(n00b_buffer_t))));
-    assert(n00b_option_is_set(n00b_type_lookup(typehash(double))));
-    assert(n00b_option_is_set(n00b_type_lookup(typehash(bool))));
+    assert(n00b_option_is_set(n00b_type_lookup(typehash(uint64_t *))));
+    assert(n00b_option_is_set(n00b_type_lookup(typehash(n00b_string_t *))));
+    assert(n00b_option_is_set(n00b_type_lookup(typehash(n00b_buffer_t *))));
+    assert(n00b_option_is_set(n00b_type_lookup(typehash(double *))));
+    assert(n00b_option_is_set(n00b_type_lookup(typehash(bool *))));
 
     printf("  [PASS] builtin lookup\n");
 }
@@ -60,11 +60,11 @@ test_builtin_lookup(void)
 static void
 test_name_field(void)
 {
-    auto info_opt = n00b_type_lookup(typehash(uint64_t));
+    auto info_opt = n00b_type_lookup(typehash(uint64_t *));
     assert(n00b_option_is_set(info_opt));
     assert(strcmp(n00b_option_get(info_opt)->name, "uint64_t") == 0);
 
-    info_opt = n00b_type_lookup(typehash(n00b_string_t));
+    info_opt = n00b_type_lookup(typehash(n00b_string_t *));
     assert(n00b_option_is_set(info_opt));
     assert(strcmp(n00b_option_get(info_opt)->name, "n00b_string_t") == 0);
 
@@ -98,7 +98,7 @@ test_dynamic_registration(void)
     assert(!dup);
 
     // Lookup should work now.
-    auto info_opt = n00b_type_lookup(typehash(test_widget_t));
+    auto info_opt = n00b_type_lookup(typehash(test_widget_t *));
     assert(n00b_option_is_set(info_opt));
     n00b_type_info_t *info = n00b_option_get(info_opt);
     assert(strcmp(info->name, "test_widget_t") == 0);
@@ -108,17 +108,17 @@ test_dynamic_registration(void)
 }
 
 // ============================================================================
-// 5. n00b_obj_typehash on n00b_alloc(T) matches typehash(T)
+// 5. n00b_obj_typehash on n00b_alloc(T) matches typehash(T *)
 // ============================================================================
 
 static void
 test_obj_typehash(void)
 {
     uint64_t *p = n00b_alloc(uint64_t);
-    assert(n00b_obj_typehash(p) == typehash(uint64_t));
+    assert(n00b_obj_typehash(p) == typehash(uint64_t *));
 
     n00b_buffer_t *buf = n00b_alloc(n00b_buffer_t);
-    assert(n00b_obj_typehash(buf) == typehash(n00b_buffer_t));
+    assert(n00b_obj_typehash(buf) == typehash(n00b_buffer_t *));
 
     printf("  [PASS] obj typehash\n");
 }
@@ -168,7 +168,7 @@ test_core_method_set(void)
     typedef struct { int dummy; } test_core_method_type_t;
 
     bool ok = n00b_type_register(
-        typehash(test_core_method_type_t),
+        typehash(test_core_method_type_t *),
         &(n00b_type_info_t){
             .name      = "test_core_method_type_t",
             .alloc_len = sizeof(test_core_method_type_t),
@@ -177,7 +177,7 @@ test_core_method_set(void)
         });
     assert(ok);
 
-    auto cm_opt = n00b_type_lookup(typehash(test_core_method_type_t));
+    auto cm_opt = n00b_type_lookup(typehash(test_core_method_type_t *));
     assert(n00b_option_is_set(cm_opt));
     n00b_type_info_t *info = n00b_option_get(cm_opt);
     assert(info->core_vtable[N00B_BI_CONSTRUCTOR] == (n00b_vtable_entry)test_widget_ctor);
@@ -194,7 +194,7 @@ test_core_method_set(void)
 static void
 test_add_extension_method(void)
 {
-    auto ext_opt = n00b_type_lookup(typehash(test_widget_t));
+    auto ext_opt = n00b_type_lookup(typehash(test_widget_t *));
     assert(n00b_option_is_set(ext_opt));
     n00b_type_info_t *info = n00b_option_get(ext_opt);
 
@@ -213,7 +213,7 @@ test_add_extension_method(void)
         .return_type = {.type_hash = 0, .type_name = "void"},
         .params      = {.data = local_params, .len = 2, .cap = 2},
     };
-    bool ok = n00b_type_add_method(typehash(test_widget_t), &m);
+    bool ok = n00b_type_add_method(typehash(test_widget_t *), &m);
     assert(ok);
 
     // ext_vtable should now be set.
@@ -309,7 +309,7 @@ test_vtable_hash_string(void)
 static void
 test_buffer_vtable_slots(void)
 {
-    auto buf_opt = n00b_type_lookup(typehash(n00b_buffer_t));
+    auto buf_opt = n00b_type_lookup(typehash(n00b_buffer_t *));
     assert(n00b_option_is_set(buf_opt));
     n00b_type_info_t *info = n00b_option_get(buf_opt);
 
@@ -333,19 +333,19 @@ test_buffer_vtable_slots(void)
 static void
 test_primitive_to_string(void)
 {
-    auto i64_opt = n00b_type_lookup(typehash(int64_t));
+    auto i64_opt = n00b_type_lookup(typehash(int64_t *));
     assert(n00b_option_is_set(i64_opt));
     assert(n00b_option_get(i64_opt)->core_vtable[N00B_BI_TO_STRING] != nullptr);
 
-    auto u64_opt = n00b_type_lookup(typehash(uint64_t));
+    auto u64_opt = n00b_type_lookup(typehash(uint64_t *));
     assert(n00b_option_is_set(u64_opt));
     assert(n00b_option_get(u64_opt)->core_vtable[N00B_BI_TO_STRING] != nullptr);
 
-    auto dbl_opt = n00b_type_lookup(typehash(double));
+    auto dbl_opt = n00b_type_lookup(typehash(double *));
     assert(n00b_option_is_set(dbl_opt));
     assert(n00b_option_get(dbl_opt)->core_vtable[N00B_BI_TO_STRING] != nullptr);
 
-    auto bool_opt = n00b_type_lookup(typehash(bool));
+    auto bool_opt = n00b_type_lookup(typehash(bool *));
     assert(n00b_option_is_set(bool_opt));
     assert(n00b_option_get(bool_opt)->core_vtable[N00B_BI_TO_STRING] != nullptr);
 
@@ -359,7 +359,7 @@ test_primitive_to_string(void)
 static void
 test_string_vtable_slots(void)
 {
-    auto str_opt = n00b_type_lookup(typehash(n00b_string_t));
+    auto str_opt = n00b_type_lookup(typehash(n00b_string_t *));
     assert(n00b_option_is_set(str_opt));
     n00b_type_info_t *info = n00b_option_get(str_opt);
 
@@ -386,15 +386,15 @@ test_all_builtins_have_hash(void)
 {
     // Every registered primitive should have a HASH slot.
     uint64_t hashes[] = {
-        typehash(uint8_t),
-        typehash(int32_t),
-        typehash(uint32_t),
-        typehash(int64_t),
-        typehash(uint64_t),
-        typehash(double),
-        typehash(bool),
-        typehash(n00b_string_t),
-        typehash(n00b_buffer_t),
+        typehash(uint8_t *),
+        typehash(int32_t *),
+        typehash(uint32_t *),
+        typehash(int64_t *),
+        typehash(uint64_t *),
+        typehash(double *),
+        typehash(bool *),
+        typehash(n00b_string_t *),
+        typehash(n00b_buffer_t *),
     };
 
     for (size_t i = 0; i < sizeof(hashes) / sizeof(hashes[0]); i++) {
@@ -429,7 +429,7 @@ test_auto_constructor_dispatch(void)
 {
     // Register the type with a constructor.
     bool ok = n00b_type_register(
-        typehash(test_auto_ctor_t),
+        typehash(test_auto_ctor_t *),
         &(n00b_type_info_t){
             .name      = "test_auto_ctor_t",
             .alloc_len = sizeof(test_auto_ctor_t),
@@ -467,7 +467,7 @@ static void
 test_auto_finalizer_dispatch(void)
 {
     bool ok = n00b_type_register(
-        typehash(test_auto_dtor_t),
+        typehash(test_auto_dtor_t *),
         &(n00b_type_info_t){
             .name      = "test_auto_dtor_t",
             .alloc_len = sizeof(test_auto_dtor_t),
@@ -582,7 +582,7 @@ test_buffer_vtable_finalizer(void)
 static void
 test_lock_offset_registration(void)
 {
-    auto buf_lo_opt = n00b_type_lookup(typehash(n00b_buffer_t));
+    auto buf_lo_opt = n00b_type_lookup(typehash(n00b_buffer_t *));
     assert(n00b_option_is_set(buf_lo_opt));
     n00b_type_info_t *buf_info = n00b_option_get(buf_lo_opt);
     assert(n00b_option_is_set(buf_info->lock_offset));
@@ -591,7 +591,7 @@ test_lock_offset_registration(void)
     assert(offset == (uint32_t)offsetof(n00b_buffer_t, lock));
 
     // dict_untyped has no lock_offset.
-    auto dict_lo_opt = n00b_type_lookup(typehash(n00b_dict_untyped_t));
+    auto dict_lo_opt = n00b_type_lookup(typehash(n00b_dict_untyped_t *));
     assert(n00b_option_is_set(dict_lo_opt));
     n00b_type_info_t *dict_info = n00b_option_get(dict_lo_opt);
     assert(!n00b_option_is_set(dict_info->lock_offset));

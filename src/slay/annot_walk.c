@@ -93,6 +93,31 @@ walk_node(n00b_annot_walk_ctx_t *ctx, n00b_parse_tree_t *node)
         .scope_ns     = n00b_string_empty(),
     };
 
+    // --- Pre-phase extraction ---
+    //
+    // For <class-decl-one> or <interface-spec-one>, extract visibility
+    // from the <member-visibility> child BEFORE phases fire, because
+    // @declares is on this node itself and fires in Phase 2.
+
+    n00b_sym_mutability_t saved_mut = ctx->current_mutability;
+    n00b_string_t        *saved_vis = ctx->current_visibility;
+
+    if (nt && (n00b_unicode_str_eq(nt->name, r"class-decl-one")
+               || n00b_unicode_str_eq(nt->name, r"interface-spec-one"))) {
+        ctx->current_visibility = NULL;
+
+        n00b_parse_tree_t *vis = n00b_tree_find_child_by_nt_name(
+            ctx->grammar, node, r"member-visibility");
+
+        if (vis) {
+            n00b_token_info_t *tok = n00b_tree_find_first_terminal(vis);
+
+            if (tok && n00b_option_is_set(tok->value)) {
+                ctx->current_visibility = n00b_option_get(tok->value);
+            }
+        }
+    }
+
     // --- Phase 1: scope open ---
     annot_phase_scope_open(ctx, &nc_ctx);
 
@@ -107,8 +132,6 @@ walk_node(n00b_annot_walk_ctx_t *ctx, n00b_parse_tree_t *node)
     // For <variable-decl>, extract the qualifier keyword from the
     // <decl-qualifiers> subtree and set ctx->current_mutability so
     // that child @declares handlers can stamp the symbol.
-
-    n00b_sym_mutability_t saved_mut = ctx->current_mutability;
 
     if (nt && n00b_unicode_str_eq(nt->name, r"variable-decl")) {
         // Default: var (mutable).
@@ -145,6 +168,7 @@ walk_node(n00b_annot_walk_ctx_t *ctx, n00b_parse_tree_t *node)
     }
 
     ctx->current_mutability = saved_mut;
+    ctx->current_visibility = saved_vis;
 
     // --- Phase 6: post-order types ---
     annot_phase_types_post(ctx, &nc_ctx);

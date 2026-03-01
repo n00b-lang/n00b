@@ -25,6 +25,14 @@ vcpkg_lib = get_option('vcpkg_lib')
 incdir = [include_directories('include'), include_directories('include/internal'), include_directories(vcpkg_inc)]
 using_macos = host_machine.system() == 'darwin'
 
+conf_cocoa = get_option('enable_cocoa') and target_os == 'darwin'
+if conf_cocoa
+  add_languages('objc', required: true, native: false)
+endif
+
+conf_notcurses = get_option('enable_notcurses')
+conf_freetype  = get_option('enable_freetype')
+
 conf_release_build = get_option('buildtype') == 'release'
 conf_asan = get_option('use_asan').enabled()
 conf_ubsan = get_option('use_ubsan').enabled()
@@ -226,6 +234,31 @@ if libatomic_dep.found()
   deps = deps + [libatomic_dep]
 endif
 
+if conf_cocoa
+  cocoa_dep = dependency('appleframeworks',
+      modules: ['Cocoa', 'CoreText', 'CoreGraphics', 'QuartzCore'])
+  deps += cocoa_dep
+endif
+
+if conf_notcurses
+  notcurses_dep = dependency('notcurses', version: '>=3.0.0', required: false)
+  conf_notcurses = notcurses_dep.found()
+endif
+
+if conf_freetype
+  freetype_dep = dependency('freetype2', required: false)
+  conf_freetype = freetype_dep.found()
+endif
+
+if conf_notcurses
+  exe_c_args = exe_c_args + ['-DN00B_HAVE_NOTCURSES=1']
+  deps += notcurses_dep
+endif
+if conf_freetype
+  exe_c_args = exe_c_args + ['-DN00B_HAVE_FREETYPE=1']
+  deps += freetype_dep
+endif
+
 mir_proj = subproject('mir')
 mir_dep  = mir_proj.get_variable('mir_dep')
 
@@ -249,6 +282,7 @@ n00b_core = [
     'src/core/condition.c',
     'src/core/type_registry.c',
     'src/core/builtin_types.c',
+    'src/core/sha256.c',
 ]
 
 # ============================================================================
@@ -359,6 +393,18 @@ n00b_display = [
     'src/display/render/backend_ansi_inline.c',
     'src/display/render/backend_dumb.c',
     'src/display/render/backend_registry.c',
+    'src/display/render/cocoa_init_bridge.c',
+    # Widget system
+    'src/display/widget.c',
+    'src/display/focus.c',
+    'src/display/event_loop.c',
+    'src/display/widgets/label.c',
+    'src/display/widgets/divider.c',
+    'src/display/widgets/spacer.c',
+    'src/display/widgets/progress.c',
+    'src/display/widgets/button.c',
+    'src/display/widgets/checkbox.c',
+    'src/display/widgets/input.c',
     # Table
     'src/display/table/table.c',
     'src/display/table/table_layout.c',
@@ -515,9 +561,35 @@ n00b_typecheck = [
     'src/typecheck/context.c',
     'src/typecheck/unify.c',
     'src/typecheck/print.c',
+    'src/typecheck/hash.c',
 ]
 
-n00b_dll_src = n00b_core + n00b_adt + n00b_text + n00b_display + n00b_conduit + n00b_parsers + n00b_logic + n00b_slay + n00b_typecheck + n00b_compiler
+n00b_objfile = [
+    'src/compiler/objfile/bstream.c',
+    'src/compiler/objfile/writer.c',
+    'src/compiler/objfile/abstract.c',
+    'src/compiler/objfile/md5.c',
+    'src/compiler/objfile/demangle.c',
+    'src/compiler/objfile/demangle_rust.c',
+    'src/compiler/objfile/elf.c',
+    'src/compiler/objfile/elf_query.c',
+    'src/compiler/objfile/elf_helpers.c',
+    'src/compiler/objfile/elf_build.c',
+    'src/compiler/objfile/macho.c',
+    'src/compiler/objfile/macho_query.c',
+    'src/compiler/objfile/macho_helpers.c',
+    'src/compiler/objfile/macho_build.c',
+    'src/compiler/objfile/pe.c',
+    'src/compiler/objfile/pe_query.c',
+    'src/compiler/objfile/pe_helpers.c',
+    'src/compiler/objfile/pe_build.c',
+    'src/compiler/objfile/dwarf.c',
+    'src/compiler/objfile/dwarf_query.c',
+    'src/compiler/objfile/dwarf_codegen.c',
+    'src/compiler/objfile/dwarf_build.c',
+]
+
+n00b_dll_src = n00b_core + n00b_adt + n00b_text + n00b_display + n00b_conduit + n00b_parsers + n00b_logic + n00b_slay + n00b_typecheck + n00b_compiler + n00b_objfile
 
 # Build generated unicode tables with --no-ncc (they are pure data,
 # no ncc extensions, and parsing them is extremely expensive).
@@ -538,13 +610,64 @@ n00b_vendor_lib = static_library('n00b_vendor',
     link_args: link_args,
 )
 
+link_whole_libs = [gen_unicode_lib, n00b_vendor_lib]
+
+# Build the Cocoa backend as a separate ObjC static library (macOS only).
+# ObjC files cannot go through ncc's C parser, so we compile them with
+# the system ObjC compiler directly (similar to the vendor library pattern).
+if conf_cocoa
+  objc_comp = meson.get_compiler('objc')
+  cocoa_objc_args = [
+    '-Wextra',
+    '-g',
+    '-Wno-unused-parameter',
+    '-Wno-unused-function',
+    '-Wno-unknown-pragmas',
+    '-fno-omit-frame-pointer',
+    '-fPIC',
+    '-Wno-atomic-alignment',
+    '-fobjc-arc',
+    '-DN00B_HOST_OS=' + host_machine.system(),
+    '-DN00B_HOST_CPU=' + host_machine.cpu_family(),
+  ]
+  if conf_dev_mode
+    cocoa_objc_args += '-DN00B_DEV'
+  endif
+  if conf_debug
+    cocoa_objc_args += '-DN00B_DEBUG'
+  endif
+
+  n00b_cocoa_lib = static_library('n00b_cocoa',
+      ['src/display/render/backend_cocoa.m'],
+      include_directories: incdir,
+      dependencies: deps,
+      objc_args: cocoa_objc_args,
+      link_args: link_args,
+  )
+  link_whole_libs += n00b_cocoa_lib
+endif
+
+# Build the notcurses backend as a separate static library.
+# notcurses is a plain C library so this compiles through ncc normally,
+# but we keep it separate to gate on the optional dependency.
+if conf_notcurses
+  n00b_notcurses_lib = static_library('n00b_notcurses',
+      ['src/display/render/backend_notcurses.c'],
+      include_directories: incdir,
+      dependencies: deps,
+      c_args: exe_c_args,
+      link_args: link_args,
+  )
+  link_whole_libs += n00b_notcurses_lib
+endif
+
 n00b = static_library('n00b',
     n00b_dll_src,
     include_directories: incdir,
     dependencies: deps + [libdl_dep, mir_dep],
     c_args: exe_c_args,
     link_args: link_args,
-    link_whole: [gen_unicode_lib, n00b_vendor_lib],
+    link_whole: link_whole_libs,
     install: true,
 )
 
@@ -648,6 +771,12 @@ type_registry_test = executable('test_type_registry',
     kwargs: test_common_kwargs,
 )
 test('type_registry', type_registry_test, suite: 'unit')
+
+type_hash_test = executable('test_type_hash',
+    ['test/unit/test_type_hash.c'],
+    kwargs: test_common_kwargs,
+)
+test('type_hash', type_hash_test, suite: 'unit')
 
 conduit_test = executable('test_conduit',
     ['test/unit/test_conduit.c'],
@@ -990,6 +1119,12 @@ n00b_programs_test = executable('test_n00b_programs',
 )
 test('n00b_programs', n00b_programs_test, suite: 'unit')
 
+n00b_types_test = executable('test_n00b_types',
+    ['test/unit/test_n00b_types.c'],
+    kwargs: test_common_kwargs,
+)
+test('n00b_types', n00b_types_test, suite: 'unit')
+
 infer_expr_test = executable('test_infer_expr',
     ['test/unit/test_infer_expr.c'],
     kwargs: test_common_kwargs,
@@ -1058,6 +1193,55 @@ render_ansi_test = executable('test_render_ansi',
 )
 test('render_ansi', render_ansi_test, suite: 'unit')
 
+# Widget tests
+label_test = executable('test_label',
+    ['test/unit/test_label.c'],
+    kwargs: test_common_kwargs,
+)
+test('label', label_test, suite: 'unit')
+
+focus_test = executable('test_focus',
+    ['test/unit/test_focus.c'],
+    kwargs: test_common_kwargs,
+)
+test('focus', focus_test, suite: 'unit')
+
+divider_test = executable('test_divider',
+    ['test/unit/test_divider.c'],
+    kwargs: test_common_kwargs,
+)
+test('divider', divider_test, suite: 'unit')
+
+spacer_test = executable('test_spacer',
+    ['test/unit/test_spacer.c'],
+    kwargs: test_common_kwargs,
+)
+test('spacer', spacer_test, suite: 'unit')
+
+progress_test = executable('test_progress',
+    ['test/unit/test_progress.c'],
+    kwargs: test_common_kwargs,
+)
+test('progress', progress_test, suite: 'unit')
+
+button_test = executable('test_button',
+    ['test/unit/test_button.c'],
+    kwargs: test_common_kwargs,
+)
+test('button', button_test, suite: 'unit')
+
+checkbox_test = executable('test_checkbox',
+    ['test/unit/test_checkbox.c'],
+    kwargs: test_common_kwargs,
+)
+test('checkbox', checkbox_test, suite: 'unit')
+
+input_test = executable('test_input',
+    ['test/unit/test_input.c'],
+    kwargs: test_common_kwargs,
+)
+test('input', input_test, suite: 'unit')
+
 # Table tests
 table_build_test = executable('test_table_build',
     ['test/unit/test_table_build.c'],
@@ -1083,6 +1267,30 @@ table_stream_test = executable('test_table_stream',
 )
 test('table_stream', table_stream_test, suite: 'unit')
 
+event_normalize_test = executable('test_event_normalize',
+    ['test/unit/test_event_normalize.c'],
+    kwargs: test_common_kwargs,
+)
+test('event_normalize', event_normalize_test, suite: 'unit')
+
+if conf_cocoa
+  cocoa_test = executable('test_cocoa_backend',
+      ['test/unit/test_cocoa_backend.m'],
+      include_directories: incdir,
+      objc_args: cocoa_objc_args,
+      link_with: [n00b],
+  )
+  test('cocoa_backend', cocoa_test, suite: 'unit')
+endif
+
+if conf_notcurses
+  notcurses_test = executable('test_notcurses_backend',
+      ['test/unit/test_notcurses_backend.c'],
+      kwargs: test_common_kwargs,
+  )
+  test('notcurses_backend', notcurses_test, suite: 'unit')
+endif
+
 # Table CLI tool
 table_tool = executable('n00b_table',
     ['src/tools/table.c'],
@@ -1090,9 +1298,26 @@ table_tool = executable('n00b_table',
     install: true,
 )
 
+# Widget visual demo tool
+widget_demo = executable('widget_demo',
+    ['src/tools/widget_demo.c'],
+    kwargs: test_common_kwargs,
+    install: false,
+)
+
 # N00b dev tool (parse + annotate n00b source files, REPL)
 n00b_dev = executable('n00b_dev',
     ['src/tools/n00b_dev.c', 'src/tools/n00b_repl.c'],
+    include_directories: incdir,
+    c_args: exe_c_args,
+    link_with: [n00b],
+    dependencies: [mir_dep],
+    install: true,
+)
+
+# N00b main executable (compile, run, repl)
+n00b_exe = executable('n00b',
+    ['src/tools/n00b.c'],
     include_directories: incdir,
     c_args: exe_c_args,
     link_with: [n00b],
@@ -1193,6 +1418,24 @@ foreach name : str_test_names
         kwargs: str_test_kwargs,
     )
     test('str_' + name, exe, suite: 'unit')
+endforeach
+
+# ============================================================================
+# Object file (LIEF) tests
+# ============================================================================
+
+objfile_test_names = [
+    'types', 'bstream', 'writer', 'detect', 'elf', 'elf_build',
+    'macho', 'macho_build', 'pe', 'pe_build', 'demangle',
+    'abstract', 'dwarf',
+]
+
+foreach name : objfile_test_names
+    exe = executable('test_objfile_' + name,
+        'test/unit/test_objfile_' + name + '.c',
+        kwargs: test_common_kwargs,
+    )
+    test('objfile_' + name, exe, suite: 'unit')
 endforeach
 
 # ============================================================================

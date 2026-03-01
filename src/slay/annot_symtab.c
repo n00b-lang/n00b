@@ -74,6 +74,12 @@ annot_phase_symtab(n00b_annot_walk_ctx_t *ctx, annot_node_ctx_t *nc)
                     nc->last_sym->mutability = ctx->current_mutability;
                 }
 
+                // Stamp visibility if set by a preceding @visibility.
+                if (ctx->current_visibility) {
+                    nc->last_sym->visibility = ctx->current_visibility;
+                    ctx->current_visibility  = NULL;
+                }
+
                 if (nc->last_sym->shadowed && ctx->shadowed_entries) {
                     n00b_list_push(*ctx->shadowed_entries, nc->last_sym);
                 }
@@ -328,9 +334,10 @@ annot_phase_symtab(n00b_annot_walk_ctx_t *ctx, annot_node_ctx_t *nc)
         }
 
         case N00B_ANNOT_VISIBILITY: {
-            if (nc->last_sym && a->visibility_spec
-                && a->visibility_spec->u8_bytes > 0) {
-                nc->last_sym->visibility = a->visibility_spec;
+            // Save visibility in the walk context; it will be stamped
+            // on the next symbol created by @declares.
+            if (a->visibility_spec && a->visibility_spec->u8_bytes > 0) {
+                ctx->current_visibility = a->visibility_spec;
             }
 
             break;

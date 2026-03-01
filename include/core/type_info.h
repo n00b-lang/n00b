@@ -138,7 +138,7 @@ n00b_obj_core_method(void *obj, enum n00b_builtin_type_fn slot)
  * ```
  */
 #define N00B_TYPE_REGISTER(T, ...)                                                             \
-    n00b_type_register(typehash(T),                                                            \
+    n00b_type_register(typehash(T *),                                                          \
                        &(n00b_type_info_t){                                                    \
                            .name      = N00B_TO_STRING(T),                                     \
                            .alloc_len = sizeof(T),                                             \

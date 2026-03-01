@@ -1,10 +1,15 @@
 // n00b_repl.c — Interactive REPL for the n00b language.
 //
-// Parses n00b expressions/statements, runs annotation walk, generates
-// MIR via the codegen session API, JIT-compiles, executes, and prints results.
+// Statement-at-a-time REPL:
+//   - Buffers input, parses from the 'module' production on each Enter
+//   - Incomplete input (EOF while expecting more) → "..." continuation prompt
+//   - Parse error at non-EOF token → report error
+//   - Complete parse → walk top-level statements:
+//       * func-def  → emit as top-level MIR function, compile, register
+//       * other     → wrap in _eval, execute, print result
 //
-// Uses a persistent n00b_cg_session_t so functions defined in one expression
-// are visible in subsequent expressions.
+// Uses a persistent n00b_cg_session_t so functions defined in one input
+// are callable from subsequent inputs.
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -131,13 +136,175 @@ try_parse(n00b_repl_state_t     *state,
 }
 
 // ============================================================================
-// Codegen + JIT + execute (uses persistent session)
+// Check if a parse tree node is (or contains) a func-def
+// ============================================================================
+
+static bool
+is_func_def_node(n00b_parse_tree_t *node)
+{
+    return n00b_pt_is_nt(node, "func-def");
+}
+
+// DFS through groups and single-child wrapper NTs to find a func-def.
+static bool
+contains_func_def(n00b_parse_tree_t *node)
+{
+    if (!node || n00b_pt_is_token(node)) {
+        return false;
+    }
+
+    if (is_func_def_node(node)) {
+        return true;
+    }
+
+    // Recurse through group nodes (from BNF quantifiers).
+    if (n00b_pt_is_group(node)) {
+        size_t nc = n00b_pt_num_children(node);
+
+        for (size_t i = 0; i < nc; i++) {
+            if (contains_func_def(n00b_pt_get_child(node, i))) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    // For regular NTs with exactly one child, look through
+    // (e.g., top-level-stmt → func-def).
+    size_t nc = n00b_pt_num_children(node);
+
+    if (nc == 1) {
+        return contains_func_def(n00b_pt_get_child(node, 0));
+    }
+
+    return false;
+}
+
+// ============================================================================
+// Collect top-level statements from a module parse tree
+// ============================================================================
+
+static int
+collect_top_level_stmts(n00b_parse_tree_t  *tree,
+                        n00b_parse_tree_t **out,
+                        int                 max)
+{
+    // The module parse tree has top-level statements as children,
+    // possibly wrapped in group nodes from the grammar's quantifiers.
+    // DFS through groups to collect all non-group, non-token children.
+    int count = 0;
+
+    n00b_parse_tree_t *stack[256];
+    int                sp = 0;
+
+    // Push direct children of the module root.
+    size_t nc = n00b_pt_num_children(tree);
+
+    for (size_t i = 0; i < nc && sp < 256; i++) {
+        stack[sp++] = n00b_pt_get_child(tree, i);
+    }
+
+    while (sp > 0 && count < max) {
+        n00b_parse_tree_t *cur = stack[--sp];
+
+        if (!cur || n00b_pt_is_token(cur)) {
+            continue;
+        }
+
+        if (n00b_pt_is_group(cur)) {
+            // Expand group: push children in reverse for L-to-R order.
+            size_t gnc = n00b_pt_num_children(cur);
+
+            for (size_t i = gnc; i > 0; i--) {
+                if (sp < 256) {
+                    stack[sp++] = n00b_pt_get_child(cur, i - 1);
+                }
+            }
+
+            continue;
+        }
+
+        // Real top-level statement node.
+        out[count++] = cur;
+    }
+
+    return count;
+}
+
+// ============================================================================
+// Emit function definitions from a module parse tree
+// ============================================================================
+
+static bool
+emit_func_defs(n00b_repl_state_t   *state,
+               n00b_parse_tree_t   *tree,
+               n00b_annot_result_t *annot)
+{
+    // Create a module for the function definitions.
+    char mod_name[64];
+    snprintf(mod_name, sizeof(mod_name), "repl_def_%d", state->eval_count);
+
+    n00b_cg_module_t *m = n00b_cg_module_new(state->session, mod_name);
+
+    if (annot) {
+        n00b_cg_module_set_annot(m, annot);
+    }
+
+    // DFS through the tree to find and emit all func-def nodes.
+    n00b_parse_tree_t *stack[256];
+    int                sp    = 0;
+    int                count = 0;
+
+    stack[sp++] = tree;
+
+    while (sp > 0) {
+        n00b_parse_tree_t *cur = stack[--sp];
+
+        if (!cur || n00b_pt_is_token(cur)) {
+            continue;
+        }
+
+        if (is_func_def_node(cur)) {
+            // codegen_walk emits as top-level MIR function (cur_func == NULL).
+            n00b_codegen_lower(state->session, cur);
+            count++;
+            continue;
+        }
+
+        // Push children in reverse for L-to-R order.
+        size_t nc = n00b_pt_num_children(cur);
+
+        for (size_t i = nc; i > 0; i--) {
+            if (sp < 256) {
+                stack[sp++] = n00b_pt_get_child(cur, i - 1);
+            }
+        }
+    }
+
+    if (count == 0) {
+        // No func-defs found — shouldn't happen but handle gracefully.
+        return true;
+    }
+
+    // Compile the module so the functions are JIT'd and callable.
+    void *fn = n00b_cg_module_compile(m, NULL);
+    (void)fn;
+
+    // Merge symbols so subsequent expressions can call these functions.
+    n00b_cg_session_merge_module(state->session, m);
+
+    return true;
+}
+
+// ============================================================================
+// Evaluate an expression/statement and print the result
 // ============================================================================
 
 static void
-generate_and_run(n00b_repl_state_t   *state,
-                 n00b_parse_tree_t   *tree,
-                 n00b_annot_result_t *annot)
+eval_and_print(n00b_repl_state_t   *state,
+               n00b_parse_tree_t   *tree,
+               n00b_annot_result_t *annot)
 {
     bool    ok  = false;
     int64_t val = n00b_cg_session_eval_tree(state->session, tree,
@@ -145,10 +312,77 @@ generate_and_run(n00b_repl_state_t   *state,
 
     if (ok) {
         printf("=> %lld\n", (long long)val);
-    }
-    else {
+    } else {
         fprintf(stderr, "error: codegen/JIT failed\n");
     }
+}
+
+// ============================================================================
+// Process a successfully parsed module tree
+//
+// Walks top-level statements and routes each one:
+//   func-def  → emit as top-level MIR function (no output)
+//   other     → wrap in _eval, execute, print result
+// ============================================================================
+
+static void
+process_parsed_input(n00b_repl_state_t   *state,
+                     n00b_parse_tree_t   *tree,
+                     n00b_annot_result_t *annot)
+{
+    // Collect top-level statements.
+    n00b_parse_tree_t *stmts[256];
+    int n_stmts = collect_top_level_stmts(tree, stmts, 256);
+
+    // Check if there are any func-defs.
+    bool has_func_defs = false;
+    bool has_exprs     = false;
+
+    for (int i = 0; i < n_stmts; i++) {
+        if (contains_func_def(stmts[i])) {
+            has_func_defs = true;
+        } else {
+            has_exprs = true;
+        }
+    }
+
+    // If there are func-defs, emit them all as top-level MIR functions.
+    if (has_func_defs) {
+        emit_func_defs(state, tree, annot);
+    }
+
+    // If there are non-func-def statements, evaluate them.
+    // When func-defs and expressions are mixed, use run_module which
+    // handles both (func-defs already emitted get skipped in pass 2).
+    if (has_exprs) {
+        if (has_func_defs) {
+            // Mixed: use run_module on the full tree.
+            // func-defs were already emitted above, so run_module's
+            // pass 1 will re-emit them (harmless — they get the same
+            // names and MIR handles duplicates). Pass 2 wraps the rest.
+            //
+            // Actually, to avoid double-emission, just eval the
+            // full tree which will skip func-defs (cur_func != NULL).
+            bool    ok  = false;
+            int64_t val = n00b_cg_session_eval_tree(state->session, tree,
+                                                      .annot = annot,
+                                                      .ok    = &ok);
+
+            if (ok) {
+                printf("=> %lld\n", (long long)val);
+            } else {
+                fprintf(stderr, "error: codegen/JIT failed\n");
+            }
+        } else {
+            // Pure expressions: eval the whole tree directly.
+            eval_and_print(state, tree, annot);
+        }
+    } else if (has_func_defs) {
+        // Only func-defs — no output, just confirmation.
+        // (Python-like: defining a function produces no output.)
+    }
+
+    state->eval_count++;
 }
 
 // ============================================================================
@@ -197,12 +431,12 @@ int
 n00b_repl_run(n00b_grammar_t *grammar)
 {
     n00b_repl_state_t state = {
-        .grammar    = grammar,
-        .session    = n00b_cg_session_new(grammar, .type_map = n00b_type_map),
-        .input_buf  = NULL,
-        .input_len  = 0,
-        .input_cap  = 0,
-        .eval_count = 0,
+        .grammar        = grammar,
+        .session        = n00b_cg_session_new(grammar, .type_map = n00b_type_map),
+        .input_buf      = NULL,
+        .input_len      = 0,
+        .input_cap      = 0,
+        .eval_count     = 0,
     };
 
     linenoiseSetMultiLine(1);
@@ -243,14 +477,14 @@ n00b_repl_run(n00b_grammar_t *grammar)
         repl_buf_append(&state, line);
         linenoiseFree(line);
 
-        // Try to parse.
+        // Try to parse the accumulated input as a complete module.
         n00b_parse_result_t *parse_result = NULL;
         repl_parse_status_t  status = try_parse(&state, state.input_buf,
                                                  &parse_result);
 
         switch (status) {
         case REPL_PARSE_INCOMPLETE:
-            // Need more input.
+            // Need more input — show continuation prompt.
             prompt = "  ... ";
             continue;
 
@@ -298,8 +532,8 @@ n00b_repl_run(n00b_grammar_t *grammar)
         // Resolve use statements (load imported modules).
         n00b_resolve_use_stmts(state.session, grammar, tree, annot);
 
-        // Codegen + JIT + execute (reuses persistent session).
-        generate_and_run(&state, tree, annot);
+        // Process the parsed input: route func-defs vs expressions.
+        process_parsed_input(&state, tree, annot);
 
         // Cleanup.
         if (annot->symtab) {

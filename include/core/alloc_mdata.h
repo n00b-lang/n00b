@@ -139,7 +139,7 @@ struct n00b_static_header_t {
 #define N00B_STR_DECL(name, value)                                                             \
     N00B_STATIC_BASE(name,                                                                     \
                      n00b_string_t,                                                            \
-                     typehash(n00b_string_t),                                                  \
+                     typehash(n00b_string_t *),                                                \
                      {                                                                         \
                          .data       = (value),                                                \
                          .styling    = nullptr,                                                \

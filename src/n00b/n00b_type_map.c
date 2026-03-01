@@ -18,10 +18,9 @@ n00b_type_map(n00b_cg_session_t *session, n00b_tc_type_t *type)
     // Chase union-find to canonical representative.
     type = n00b_tc_find(type);
 
-    // Var (unresolved): default to I64.
-    // Phase 5 (deferred) will box into n00b_any_t / PTR.
+    // Var (unresolved): boxed into n00b_any_t, passed as pointer.
     if (n00b_variant_is_type(type->kind, n00b_tc_var_t)) {
-        return N00B_CG_I64;
+        return N00B_CG_PTR;
     }
 
     // Primitive: match by interned name.

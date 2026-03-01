@@ -134,7 +134,8 @@
 
 # TODO: infer the constraint on member chain LHS being either a module
 # or an object (instantiation of a class)
-<member-chain> ::= <member-chain> %"." %IDENTIFIER | %IDENTIFIER
+<member-chain> ::= <member-chain> %"." %IDENTIFIER
+<member-chain> @varref($0) @infer("lookup($0)") ::= %IDENTIFIER
 
 
 # ============================================================================
@@ -246,7 +247,7 @@
 <id-list> ::= %IDENTIFIER %"," <id-list>
             | %IDENTIFIER
 
-<assign-op> ::= %":" | %"="
+<assign-op> ::= %"="
 
 # ============================================================================
 # Function definition
@@ -567,11 +568,11 @@
 <unary-expr>                    ::= <postfix-expr>
 
 <postfix-expr> @infer("`t")             ::= <postfix-expr> %"." %IDENTIFIER
-<postfix-expr> @infer("`t")             ::= <postfix-expr> %"[" <index-contents> %"]"
+<postfix-expr> @infer("element_of($0)") ::= <postfix-expr> %"[" <index-contents> %"]"
 <postfix-expr> @infer("return_of($0)") @call($0, $2) ::= <postfix-expr> %"(" <call-args> %")"
 <postfix-expr> @infer("return_of($0)") @call($0)     ::= <postfix-expr> %"(" %")"
 <postfix-expr>                          ::= <primary>
-<postfix-expr> @operator("unwrap_result") @infer("`t") ::= <postfix-expr> %"!"
+<postfix-expr> @operator("unwrap_result") @infer("unwrap_result($0)") ::= <postfix-expr> %"!"
 
 <index-contents> ::= <expression> <range-sep> <expression>
                    | <expression> <range-sep>
@@ -594,9 +595,8 @@
             | <list-lit>
             | <dict-or-set-lit>
             | <tuple-or-paren>
-            | <identifier-expr>
 
-<identifier-expr> @varref($0) @infer("lookup($0)") ::= %IDENTIFIER
+<primary> @varref($0) @infer("lookup($0)") ::= %IDENTIFIER
 
 # ============================================================================
 # Literals

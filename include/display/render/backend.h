@@ -15,6 +15,7 @@
 
 #include "n00b.h"
 #include "display/render/cell.h"
+#include "display/event.h"
 #include "conduit/rw.h"
 #include "core/buffer.h"
 
@@ -47,6 +48,7 @@ typedef enum : uint32_t {
     N00B_RCAP_FONT_METRICS  = 1 << 20,
     N00B_RCAP_DIFF_RENDER   = 1 << 21,
     N00B_RCAP_GUI_EXT       = 1 << 22,
+    N00B_RCAP_MANAGES_TTY   = 1 << 23,  /**< Backend owns terminal state (raw mode, alt screen). */
 } n00b_render_cap_t;
 
 // ====================================================================
@@ -119,6 +121,16 @@ typedef struct n00b_renderer_vtable_t {
                       void (*cb)(n00b_isize_t, n00b_isize_t, void *),
                       void *user_ctx);
     void (*prepare_gui)(void *ctx, n00b_plane_t **planes, n00b_isize_t n);
+
+    /**
+     * @brief Poll for an input event with timeout.
+     *
+     * @param ctx        Backend context.
+     * @param timeout_ms Max milliseconds to wait (-1 = block, 0 = non-blocking).
+     * @param out        Output event (set to NONE if no event).
+     * @return           true if an event was produced.
+     */
+    bool (*poll_event)(void *ctx, int32_t timeout_ms, n00b_event_t *out);
 } n00b_renderer_vtable_t;
 
 // Built-in backends.
@@ -136,3 +148,13 @@ extern const n00b_renderer_vtable_t n00b_renderer_dumb;
 
 /** Buffer-capture backend for testing (no terminal output). */
 extern const n00b_renderer_vtable_t n00b_renderer_stream;
+
+#if defined(__APPLE__)
+/** Native Cocoa/macOS backend with Core Text rendering. */
+extern const n00b_renderer_vtable_t n00b_renderer_cocoa;
+#endif
+
+#if defined(N00B_HAVE_NOTCURSES)
+/** Notcurses backend with optional FreeType pixel rendering. */
+extern const n00b_renderer_vtable_t n00b_renderer_notcurses;
+#endif

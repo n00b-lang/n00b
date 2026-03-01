@@ -42,6 +42,9 @@ typedef struct n00b_canvas_t {
     bool                          size_set;
     n00b_rwlock_t                *lock;
     n00b_allocator_t             *allocator;
+
+    // Focus manager (set by event loop, nullptr when not running).
+    struct n00b_focus_mgr_t      *focus;
 } n00b_canvas_t;
 
 // ====================================================================

@@ -220,21 +220,21 @@ static inline n00b_option_t(n00b_inline_hdr_t *) n00b_inline_alloc_header(void *
 #define n00b_alloc_with_opts(T, opts, ...)                                                     \
     _n00b_alloc_raw(1,                                                                         \
                     sizeof(T),                                                                 \
-                    typehash(T),                                                               \
+                    typehash(T *),                                                             \
                     N00B_LOC_STRING(),                                                         \
                     opts __VA_OPT__(, __VA_ARGS__))
 
 #define n00b_alloc_array_with_opts(T, N, opts, ...)                                            \
     _n00b_alloc_raw((N),                                                                       \
                     sizeof(T),                                                                 \
-                    typehash(T),                                                               \
+                    typehash(T *),                                                             \
                     N00B_LOC_STRING(),                                                         \
                     opts __VA_OPT__(, __VA_ARGS__))
 
 #define n00b_alloc_flex_with_opts(T1, T2, N2, opts, ...)                                       \
     _n00b_alloc_raw(1,                                                                         \
                     (sizeof(T1) + sizeof(T2) * (N2)),                                          \
-                    typehash(T1),                                                              \
+                    typehash(T1 *),                                                            \
                     N00B_LOC_STRING(),                                                         \
                     opts __VA_OPT__(, __VA_ARGS__))
 

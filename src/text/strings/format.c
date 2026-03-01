@@ -4,6 +4,8 @@
 #include "text/unicode/encoding.h"
 #include "internal/text/unicode/raw.h"
 #include "core/alloc.h"
+#include "core/memory_info.h"
+#include "core/type_info.h"
 #include <string.h>
 #include <assert.h>
 
@@ -293,10 +295,37 @@ _n00b_format_impl(const char *desc_data, int32_t desc_len,
                 }
             }
             else {
-                // No spec: treat as string pointer by default.
-                if (arg) {
-                    sub_str  = (n00b_string_t *)arg;
+                // No format spec: introspect the argument.
+                //
+                // 1. If arg is NULL or looks like a small integer
+                //    (not inside any known memory mapping), format as
+                //    int64_t.
+                // 2. If arg points into the managed heap and has a
+                //    TO_STRING vtable slot, call it.
+                // 3. If it's a managed object without TO_STRING,
+                //    format as a pointer.
+                // 4. Otherwise (unmapped / data), format as int64_t.
+                if (!arg) {
+                    sub_str  = n00b_fmt_int((int64_t)0);
                     have_str = true;
+                }
+                else if (n00b_value_is_data(arg)) {
+                    sub_str  = n00b_fmt_int((int64_t)arg);
+                    have_str = true;
+                }
+                else {
+                    n00b_vtable_entry to_str =
+                        n00b_obj_core_method(arg, N00B_BI_TO_STRING);
+
+                    if (to_str) {
+                        typedef n00b_string_t *(*to_string_fn)(void *);
+                        sub_str  = ((to_string_fn)to_str)(arg);
+                        have_str = true;
+                    }
+                    else {
+                        sub_str  = n00b_fmt_pointer(arg);
+                        have_str = true;
+                    }
                 }
             }
 

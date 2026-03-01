@@ -19,6 +19,8 @@
  * | `A \| B`                  | Sum type                                       |
  * | `lookup($N)`              | Symtab lookup: child N's identifier → type_var |
  * | `return_of($N)`           | Return type of function-typed child N          |
+ * | `element_of($N)`          | Element type of container child N               |
+ * | `unwrap_result($N)`       | Unify child N with `result[T]`, return T        |
  * | `$return`                 | Current function's return type variable         |
  * | `(expr)`                  | Grouping                                       |
  */

@@ -249,10 +249,10 @@ test_plane_content_size_with_box(void)
     n00b_isize_t cr, cc;
     n00b_plane_content_size(p, &cr, &cc);
 
-    // 20 cols - 2 borders - 2 padding = 16
-    // 10 rows - 2 borders - 2 padding = 6
-    assert(cc == 16);
-    assert(cr == 6);
+    // The compositor adds border+padding OUTSIDE the viewport grid,
+    // so content size == viewport size (20x10).
+    assert(cc == 20);
+    assert(cr == 10);
 
     n00b_plane_destroy(p);
     printf("  [PASS] plane content_size with box\n");

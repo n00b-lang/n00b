@@ -15,11 +15,15 @@
 #else
 #include <unistd.h>
 #include <sys/ioctl.h>
+#include <poll.h>
+#include <termios.h>
 #endif
 #include "n00b.h"
 #include "core/alloc.h"
 #include "display/render/backend.h"
+#include "display/event.h"
 #include "conduit/write.h"
+#include "conduit/signal.h"
 #include "text/strings/text_style.h"
 #include "text/strings/theme.h"
 
@@ -38,6 +42,9 @@ typedef struct {
     n00b_isize_t                            cursor_row;
     n00b_isize_t                            cursor_col;
     bool                                    cursor_visible;
+#ifndef _WIN32
+    n00b_conduit_signal_inbox_t            *sigwinch_inbox;
+#endif
 } ansi_ctx_t;
 
 #define ANSI_INITIAL_BUF 16384
@@ -235,6 +242,41 @@ ansi_init(n00b_conduit_topic_t(n00b_buffer_t *) *output)
         ctx->rows = 25;
     }
 
+#ifndef _WIN32
+    {
+        // Subscribe to SIGWINCH via the conduit signal system.
+        FILE *df = fopen("/tmp/widget_demo.log", "a");
+        if (df) setbuf(df, nullptr);
+
+        if (!output) {
+            if (df) fprintf(df, "[ansi_init] output is NULL, skipping SIGWINCH\n");
+        }
+        else {
+            n00b_conduit_topic_base_t *base = (n00b_conduit_topic_base_t *)output;
+            n00b_conduit_t *c = base->conduit;
+            if (df) fprintf(df, "[ansi_init] output=%p base->conduit=%p\n", (void *)output, (void *)c);
+            if (c) {
+                n00b_result_t(n00b_conduit_topic_base_t *) sr =
+                    n00b_conduit_signal_topic(c, SIGWINCH);
+                if (n00b_result_is_ok(sr)) {
+                    ctx->sigwinch_inbox = n00b_conduit_signal_inbox_new(c);
+                    n00b_conduit_signal_subscribe(
+                        n00b_result_get(sr), ctx->sigwinch_inbox,
+                        .operations = N00B_CONDUIT_SIGNAL_ALL);
+                    if (df) fprintf(df, "[ansi_init] SIGWINCH subscribed, inbox=%p\n", (void *)ctx->sigwinch_inbox);
+                }
+                else {
+                    if (df) fprintf(df, "[ansi_init] n00b_conduit_signal_topic FAILED\n");
+                }
+            }
+            else {
+                if (df) fprintf(df, "[ansi_init] conduit is NULL\n");
+            }
+        }
+        if (df) fclose(df);
+    }
+#endif
+
     return ctx;
 }
 
@@ -243,6 +285,15 @@ ansi_destroy(void *vctx)
 {
     ansi_ctx_t *ctx = vctx;
     if (ctx) {
+#ifndef _WIN32
+        if (ctx->sigwinch_inbox) {
+            n00b_conduit_topic_base_t *base =
+                (n00b_conduit_topic_base_t *)ctx->output;
+            if (base && base->conduit) {
+                n00b_conduit_signal_unwatch(base->conduit, SIGWINCH);
+            }
+        }
+#endif
         n00b_free(ctx->buf);
         n00b_free(ctx);
     }
@@ -400,6 +451,264 @@ ansi_alt_screen_leave(void *vctx)
 }
 
 // -------------------------------------------------------------------
+// Event polling
+// -------------------------------------------------------------------
+
+#ifndef _WIN32
+
+// Try to read one byte from stdin (non-blocking).
+// Returns the byte, or -1 if nothing available.
+static int
+ansi_try_read_byte(void)
+{
+    unsigned char c;
+    ssize_t n = read(STDIN_FILENO, &c, 1);
+    if (n == 1) {
+        return (int)c;
+    }
+    return -1;
+}
+
+// Read one byte, waiting up to timeout_ms.  Uses poll() for sub-sequence
+// reads (CSI/SS3 parsing) where we don't need SIGWINCH responsiveness.
+static int
+ansi_read_byte(int timeout_ms)
+{
+    struct pollfd pfd = { .fd = STDIN_FILENO, .events = POLLIN };
+    int pr = poll(&pfd, 1, timeout_ms);
+    if (pr <= 0) {
+        return -1;
+    }
+    return ansi_try_read_byte();
+}
+
+static bool
+ansi_parse_csi(n00b_event_t *out)
+{
+    char   buf[32];
+    size_t len = 0;
+
+    for (;;) {
+        int c = ansi_read_byte(50);
+        if (c < 0) {
+            return false;
+        }
+        if (c >= 0x40 && c <= 0x7E) {
+            // Final byte.
+            out->type     = N00B_EVENT_KEY;
+            out->key.mods = N00B_MOD_NONE;
+
+            switch (c) {
+            case 'A': out->key.key = N00B_KEY_UP;        return true;
+            case 'B': out->key.key = N00B_KEY_DOWN;      return true;
+            case 'C': out->key.key = N00B_KEY_RIGHT;     return true;
+            case 'D': out->key.key = N00B_KEY_LEFT;      return true;
+            case 'H': out->key.key = N00B_KEY_HOME;      return true;
+            case 'F': out->key.key = N00B_KEY_END;       return true;
+            case 'Z':
+                out->key.key  = N00B_KEY_TAB;
+                out->key.mods = N00B_MOD_SHIFT;
+                return true;
+            case '~':
+                if (len > 0) {
+                    int num = 0;
+                    for (size_t i = 0; i < len; i++) {
+                        if (buf[i] >= '0' && buf[i] <= '9') {
+                            num = num * 10 + (buf[i] - '0');
+                        }
+                        else {
+                            break;
+                        }
+                    }
+                    switch (num) {
+                    case 1:  out->key.key = N00B_KEY_HOME;      return true;
+                    case 2:  out->key.key = N00B_KEY_INSERT;    return true;
+                    case 3:  out->key.key = N00B_KEY_DELETE;    return true;
+                    case 4:  out->key.key = N00B_KEY_END;       return true;
+                    case 5:  out->key.key = N00B_KEY_PAGE_UP;   return true;
+                    case 6:  out->key.key = N00B_KEY_PAGE_DOWN; return true;
+                    case 15: out->key.key = N00B_KEY_F5;        return true;
+                    case 17: out->key.key = N00B_KEY_F6;        return true;
+                    case 18: out->key.key = N00B_KEY_F7;        return true;
+                    case 19: out->key.key = N00B_KEY_F8;        return true;
+                    case 20: out->key.key = N00B_KEY_F9;        return true;
+                    case 21: out->key.key = N00B_KEY_F10;       return true;
+                    case 23: out->key.key = N00B_KEY_F11;       return true;
+                    case 24: out->key.key = N00B_KEY_F12;       return true;
+                    default: return false;
+                    }
+                }
+                return false;
+            default:
+                return false;
+            }
+        }
+        if (len < sizeof(buf) - 1) {
+            buf[len++] = (char)c;
+        }
+    }
+}
+
+static bool
+ansi_parse_ss3(n00b_event_t *out)
+{
+    int c = ansi_read_byte(50);
+    if (c < 0) {
+        return false;
+    }
+
+    out->type     = N00B_EVENT_KEY;
+    out->key.mods = N00B_MOD_NONE;
+
+    switch (c) {
+    case 'P': out->key.key = N00B_KEY_F1;   return true;
+    case 'Q': out->key.key = N00B_KEY_F2;   return true;
+    case 'R': out->key.key = N00B_KEY_F3;   return true;
+    case 'S': out->key.key = N00B_KEY_F4;   return true;
+    case 'A': out->key.key = N00B_KEY_UP;   return true;
+    case 'B': out->key.key = N00B_KEY_DOWN; return true;
+    case 'C': out->key.key = N00B_KEY_RIGHT;return true;
+    case 'D': out->key.key = N00B_KEY_LEFT; return true;
+    default:  return false;
+    }
+}
+
+static FILE *
+ansi_dbg(void)
+{
+    static FILE *f = nullptr;
+    if (!f) {
+        f = fopen("/tmp/widget_demo.log", "a");
+        if (f) setbuf(f, nullptr);
+    }
+    return f;
+}
+
+static bool
+ansi_check_sigwinch(ansi_ctx_t *ctx, n00b_event_t *out)
+{
+    if (!ctx->sigwinch_inbox) {
+        return false;
+    }
+    if (!n00b_conduit_signal_inbox_has_messages(ctx->sigwinch_inbox)) {
+        return false;
+    }
+    if (ansi_dbg()) fprintf(ansi_dbg(), "[ansi_check_sigwinch] inbox has messages!\n");
+    while (n00b_conduit_signal_inbox_has_messages(ctx->sigwinch_inbox)) {
+        n00b_conduit_signal_inbox_pop(ctx->sigwinch_inbox);
+    }
+    struct winsize ws;
+    if (ioctl(ctx->fd, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0) {
+        ctx->rows = (n00b_isize_t)ws.ws_row;
+        ctx->cols = (n00b_isize_t)ws.ws_col;
+        out->type        = N00B_EVENT_RESIZE;
+        out->resize.rows = ctx->rows;
+        out->resize.cols = ctx->cols;
+        if (ansi_dbg()) fprintf(ansi_dbg(), "[ansi_check_sigwinch] resize → %dx%d\n", (int)ws.ws_col, (int)ws.ws_row);
+        return true;
+    }
+    return false;
+}
+
+static bool
+ansi_poll_event(void *vctx, int32_t timeout_ms, n00b_event_t *out)
+{
+    ansi_ctx_t *ctx = vctx;
+    out->type = N00B_EVENT_NONE;
+
+    // Check for pending SIGWINCH.
+    if (ansi_check_sigwinch(ctx, out)) {
+        return true;
+    }
+
+    // Try non-blocking read from stdin.
+    int c = ansi_try_read_byte();
+
+    if (c < 0) {
+        // No stdin data yet.  Wait on the inbox CV so we wake
+        // immediately when SIGWINCH arrives, rather than sleeping
+        // the full tick.  The CV times out after timeout_ms, giving
+        // us the same polling cadence as before for keyboard input.
+        if (ctx->sigwinch_inbox && timeout_ms > 0) {
+            int64_t timeout_ns = (int64_t)timeout_ms * 1000000LL;
+            n00b_condition_wait(&ctx->sigwinch_inbox->cv,
+                                .timeout = timeout_ns);
+        }
+        else if (timeout_ms > 0) {
+            // No inbox — fall back to poll() on stdin.
+            struct pollfd pfd = { .fd = STDIN_FILENO, .events = POLLIN };
+            poll(&pfd, 1, timeout_ms);
+        }
+
+        // Re-check SIGWINCH after waking.
+        if (ansi_check_sigwinch(ctx, out)) {
+            return true;
+        }
+
+        // Try stdin again.
+        c = ansi_try_read_byte();
+        if (c < 0) {
+            return false;
+        }
+    }
+
+    // ESC: start of escape sequence.
+    if (c == 0x1B) {
+        int next = ansi_read_byte(50);
+        if (next < 0) {
+            out->type     = N00B_EVENT_KEY;
+            out->key.key  = N00B_KEY_ESCAPE;
+            out->key.mods = N00B_MOD_NONE;
+            return true;
+        }
+        if (next == '[') {
+            return ansi_parse_csi(out);
+        }
+        if (next == 'O') {
+            return ansi_parse_ss3(out);
+        }
+        // Alt+key.
+        out->type     = N00B_EVENT_KEY;
+        out->key.key  = (uint32_t)next;
+        out->key.mods = N00B_MOD_ALT;
+        return true;
+    }
+
+    // Control characters.
+    out->type     = N00B_EVENT_KEY;
+    out->key.mods = N00B_MOD_NONE;
+
+    if (c == 0x7F || c == 0x08) {
+        out->key.key = N00B_KEY_BACKSPACE;
+        return true;
+    }
+    if (c == '\r' || c == '\n') {
+        out->key.key = N00B_KEY_ENTER;
+        return true;
+    }
+    if (c == '\t') {
+        out->key.key = N00B_KEY_TAB;
+        return true;
+    }
+    if (c == 0x19) {
+        // Shift+Tab (backtab).
+        out->key.key  = N00B_KEY_TAB;
+        out->key.mods = N00B_MOD_SHIFT;
+        return true;
+    }
+    if (c < 0x20) {
+        out->key.key  = (uint32_t)(c + 'a' - 1);
+        out->key.mods = N00B_MOD_CTRL;
+        return true;
+    }
+
+    // Printable ASCII.
+    out->key.key = (uint32_t)c;
+    return true;
+}
+#endif // !_WIN32
+
+// -------------------------------------------------------------------
 // Public vtable
 // -------------------------------------------------------------------
 
@@ -416,4 +725,7 @@ const n00b_renderer_vtable_t n00b_renderer_ansi = {
     .cursor_move        = ansi_cursor_move,
     .alt_screen_enter   = ansi_alt_screen_enter,
     .alt_screen_leave   = ansi_alt_screen_leave,
+#ifndef _WIN32
+    .poll_event         = ansi_poll_event,
+#endif
 };

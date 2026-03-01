@@ -1152,18 +1152,6 @@ test_assign_equals(void)
 }
 
 static void
-test_assign_colon(void)
-{
-    const char *src =
-        "var x = 1\n"
-        "x : 42\n";
-
-    pipeline_result_t r = assert_parses(src, "assign_colon");
-    pipeline_free(&r);
-    printf("  [PASS] assign_colon\n");
-}
-
-static void
 test_binop_assign(void)
 {
     const char *src =
@@ -2969,7 +2957,6 @@ main(int argc, char **argv)
 
     // Assignments.
     test_assign_equals();
-    test_assign_colon();
     test_binop_assign();
     test_bitwise_assign();
 
