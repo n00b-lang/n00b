@@ -29,6 +29,7 @@
 #include "core/align.h"
 #include "core/mmaps.h"
 #include "adt/interval_tree.h"
+#include "adt/variant.h"
 #include "core/runtime.h"
 #include "core/pool.h"
 #include "adt/dict_untyped.h"
@@ -45,8 +46,10 @@ static void n00b_process_finalizers(n00b_collect_t *);
 static void n00b_scan_thread_stacks(n00b_collect_t *);
 static void n00b_scan_runtime(n00b_collect_t *);
 static void n00b_scan_roots(n00b_collect_t *);
-static void n00b_add_alloc_to_worklist(n00b_inline_hdr_t *alloc,
+static void n00b_add_alloc_to_worklist(n00b_alloc_info_t  ainfo,
                                        n00b_collect_t    *ctx);
+static void n00b_add_range_to_worklist(void *start, uint32_t nwords,
+                                       n00b_collect_t *ctx);
 
 // ============================================================================
 // Helpers
@@ -187,19 +190,31 @@ n00b_forward_alloc(n00b_collect_t *ctx, n00b_inline_hdr_t *old)
     n00b_atomic_store(&ctx->to_space->next_alloc, top);
 
     n00b_inline_hdr_t *result;
+    void              *scan_start;
+    bool               no_scan;
+    uint32_t           nwords;
 
     if (ctx->from_space->vtable.metadata_pool) {
-        result = n00b_forward_mdata(ctx, n00b_to_mem_metadata_record(old), new);
+        n00b_oob_hdr_t *old_oob = n00b_to_mem_metadata_record(old);
+        result     = n00b_forward_mdata(ctx, old_oob, new);
+        scan_start = ((n00b_oob_hdr_t *)result)->user_ptr;
+        no_scan    = old_oob->no_scan;
+        nwords     = (old_oob->alloc_len - arena_overhead(ctx->from_space))
+                         / sizeof(void *);
     }
     else {
-        result = n00b_forward_inline(ctx, old, new);
+        result     = n00b_forward_inline(ctx, old, new);
+        scan_start = (char *)new + arena_overhead(ctx->to_space);
+        no_scan    = new->no_scan;
+        nwords     = (old->alloc_len - arena_overhead(ctx->from_space))
+                         / sizeof(void *);
     }
 
 #if defined(N00B_DISABLE_NOSCAN)
-    n00b_add_alloc_to_worklist(new, ctx);
+    n00b_add_range_to_worklist(scan_start, nwords, ctx);
 #else
-    if (!new->no_scan) {
-        n00b_add_alloc_to_worklist(new, ctx);
+    if (!no_scan) {
+        n00b_add_range_to_worklist(scan_start, nwords, ctx);
     }
 #endif
 
@@ -282,43 +297,58 @@ n00b_register_visit(n00b_collect_t    *ctx,
 // ============================================================================
 
 static void
-n00b_add_alloc_to_worklist(n00b_inline_hdr_t *alloc, n00b_collect_t *ctx)
+n00b_add_range_to_worklist(void *start, uint32_t nwords, n00b_collect_t *ctx)
 {
     n00b_gc_wl_item_t *entry;
-#if !defined(N00B_DISABLE_PTR_WORDS)
-    uint32_t n = alloc->ptr_words;
-
-    if (!n) {
-        n = (alloc->alloc_len - arena_overhead(ctx->from_space)) / sizeof(void *);
-    }
-#else
-    uint32_t n;
-    n = (alloc->alloc_len - arena_overhead(ctx->from_space)) / sizeof(void *);
-#endif
-
     entry = n00b_alloc_with_opts(n00b_gc_wl_item_t,
                                  &(n00b_alloc_opts_t){.allocator = (n00b_allocator_t *)&ctx->work_pool});
-    entry->tospace_alloc = alloc;
-    entry->num_words     = n;
-
+    entry->start     = start;
+    entry->num_words = nwords;
     n00b_list_push(ctx->worklist, entry);
+}
+
+static void
+n00b_add_alloc_to_worklist(n00b_alloc_info_t ainfo, n00b_collect_t *ctx)
+{
+    void     *start;
+    uint32_t  n;
+
+    if (ainfo.kind == n00b_alloc_oob) {
+        n00b_oob_hdr_t *oob = ainfo.hdr.oob;
+#if !defined(N00B_DISABLE_PTR_WORDS)
+        n = oob->ptr_words;
+        if (!n)
+#endif
+        {
+            n = (oob->alloc_len - arena_overhead(ctx->from_space))
+                    / sizeof(void *);
+        }
+        start = oob->user_ptr;
+    }
+    else {
+        n00b_inline_hdr_t *hdr = ainfo.hdr.in_line;
+#if !defined(N00B_DISABLE_PTR_WORDS)
+        n = hdr->ptr_words;
+        if (!n)
+#endif
+        {
+            n = (hdr->alloc_len - arena_overhead(ctx->from_space))
+                    / sizeof(void *);
+        }
+        start = (char *)hdr + arena_overhead(ctx->from_space);
+    }
+
+    n00b_add_range_to_worklist(start, n, ctx);
 }
 
 static void
 n00b_process_worklist(n00b_collect_t *ctx)
 {
     n00b_gc_wl_item_t *item;
-    n00b_inline_hdr_t *new_hdr;
-    void              *p;
-    uint32_t           words;
 
     while (n00b_list_len(ctx->worklist) > 0) {
-        item    = n00b_option_get(n00b_list_pop_front(n00b_gc_wl_item_t *, ctx->worklist));
-        words   = item->num_words;
-        new_hdr = item->tospace_alloc;
-        p       = (char *)new_hdr + arena_overhead(ctx->from_space);
-
-        n00b_scan_memory_range(ctx, p, words);
+        item = n00b_option_get(n00b_list_pop_front(n00b_gc_wl_item_t *, ctx->worklist));
+        n00b_scan_memory_range(ctx, item->start, item->num_words);
         n00b_free(item);
     }
 }
@@ -408,25 +438,33 @@ n00b_visit_possible_pointer(n00b_collect_t *ctx,
         ainfo = n00b_find_alloc_info(word, .scan_for_header = true);
 
         if (ainfo.kind != n00b_alloc_oob && ainfo.kind != n00b_alloc_inline) {
-            // Range tree fallback for non-header allocations.
+            // Unified mmap tree fallback for non-header allocations.
+            // Search for sub-range entries (n00b_alloc_range_t *) that
+            // cover this word.
             n00b_runtime_t  *rt   = n00b_get_runtime();
             n00b_mmap_ctx_t *mctx = n00b_global_mem_map(rt);
 
-            auto range_r = n00b_interval_search_any(mctx->range_tree,
-                                                     (uint64_t)word,
-                                                     (uint64_t)word + 1);
-            if (n00b_result_is_ok(range_r)) {
-                n00b_interval_node_t *rnode = n00b_result_get(range_r);
+            n00b_allocator_t *wpool = (n00b_allocator_t *)&ctx->work_pool;
+            n00b_stack_t(void *) range_hits = n00b_stack_new_private(void *, wpool);
 
-                if (rnode != nullptr && rnode->data != nullptr) {
-                    n00b_mmap_info_t *rinfo = (n00b_mmap_info_t *)rnode->data;
+            (void)n00b_interval_search(mctx->mmap_tree,
+                                        (uint64_t)word,
+                                        (uint64_t)word + 1,
+                                        &range_hits);
 
-                    n00b_scan_memory_range(ctx,
-                                           (void *)rinfo->start,
-                                           (rinfo->end - rinfo->start)
-                                               / sizeof(void *));
+            while (n00b_stack_len(range_hits) > 0) {
+                auto rnode = (n00b_interval_node_t(n00b_mmap_data_t) *)
+                    n00b_option_get(n00b_stack_pop(void *, range_hits));
+
+                if (n00b_variant_is_type(rnode->data, n00b_alloc_range_t *)) {
+                    n00b_alloc_range_t *range = n00b_variant_get(
+                        rnode->data, n00b_alloc_range_t *);
+
+                    n00b_add_range_to_worklist(range->start,
+                                              range->len / sizeof(void *),
+                                              ctx);
+                    break;
                 }
-                return false;
             }
 
             return false;
@@ -445,10 +483,13 @@ n00b_visit_possible_pointer(n00b_collect_t *ctx,
         else {
             fw_hdr = nullptr;
 #if !defined(N00B_DISABLE_NOSCAN)
-            if (!old_hdr->no_scan)
+            bool no_scan = (ainfo.kind == n00b_alloc_oob)
+                               ? ainfo.hdr.oob->no_scan
+                               : ainfo.hdr.in_line->no_scan;
+            if (!no_scan)
 #endif
             {
-                n00b_add_alloc_to_worklist(old_hdr, ctx);
+                n00b_add_alloc_to_worklist(ainfo, ctx);
             }
         }
         // This has to happen after we create the fw_hdr object if

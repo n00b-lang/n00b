@@ -19,6 +19,7 @@
 #include "n00b.h"
 #include "display/render/cell.h"
 #include "display/render/plane.h"
+#include "display/render/font_metrics.h"
 #include "display/render/backend.h"
 
 // ====================================================================
@@ -30,14 +31,18 @@ typedef struct n00b_canvas_t {
     void                         *backend_ctx;
     n00b_render_cap_t             caps;
 
-    n00b_rcell_t                 *frame;
-    n00b_rcell_t                 *prev_frame;
-    n00b_isize_t                  frame_rows;
-    n00b_isize_t                  frame_cols;
+    n00b_isize_t                  frame_rows;  /**< Frame height in pixels. */
+    n00b_isize_t                  frame_cols;  /**< Frame width in pixels. */
 
     n00b_list_t(n00b_plane_ptr_t) planes;
 
     n00b_text_style_t            *default_style;
+
+    n00b_isize_t                  cell_px_w;  /**< Pixels per cell column (1 for cell-only backends). */
+    n00b_isize_t                  cell_px_h;  /**< Pixels per cell row (1 for cell-only backends). */
+
+    n00b_font_metrics_provider_t  metrics;    /**< Font metrics (from backend or fallback). */
+
     bool                          needs_full_redraw;
     bool                          size_set;
     n00b_rwlock_t                *lock;
@@ -45,6 +50,9 @@ typedef struct n00b_canvas_t {
 
     // Focus manager (set by event loop, nullptr when not running).
     struct n00b_focus_mgr_t      *focus;
+
+    // Mouse capture (plane receiving all mouse events during drag, nullptr = hit-test).
+    n00b_plane_t                 *mouse_capture;
 } n00b_canvas_t;
 
 // ====================================================================
@@ -117,8 +125,8 @@ extern void n00b_canvas_invalidate(n00b_canvas_t *c);
 /**
  * @brief Resize the canvas frame buffer.
  * @param c    Canvas.
- * @param rows New row count.
- * @param cols New column count.
+ * @param rows New height in pixels.
+ * @param cols New width in pixels.
  */
 extern void n00b_canvas_resize(n00b_canvas_t *c,
                                 n00b_isize_t   rows,

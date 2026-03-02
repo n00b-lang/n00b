@@ -515,7 +515,7 @@ main(int argc, char **argv)
     n00b_canvas_t  *canvas = n00b_new_kargs(n00b_canvas_t, canvas,
         .vtable = &n00b_renderer_ansi_inline,
         .output = (n00b_conduit_topic_t(n00b_buffer_t *) *)rt->stdout_topic);
-    n00b_canvas_resize(canvas, plane->total_rows, plane->total_cols);
+    n00b_canvas_resize(canvas, plane->height, plane->width);
     n00b_canvas_add_plane(canvas, plane);
     n00b_canvas_render(canvas);
     n00b_canvas_flush(canvas);

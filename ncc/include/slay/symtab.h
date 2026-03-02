@@ -73,7 +73,7 @@ struct n00b_namespace_t {
     n00b_string_t     ns_name;
     n00b_scope_t     *current;
     int32_t           depth;
-    void             *symbols;  // n00b_dict_untyped_t*
+    void             *symbols;  // n00b_dict_t*
 };
 
 // ============================================================================

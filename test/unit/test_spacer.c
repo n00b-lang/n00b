@@ -10,7 +10,7 @@
 #include "core/runtime.h"
 #include "adt/option.h"
 #include "display/render/plane.h"
-#include "display/render/cell.h"
+#include "display/render/draw_cmd.h"
 #include "display/widget.h"
 #include "display/widgets/spacer.h"
 
@@ -25,14 +25,10 @@ test_spacer_default(void)
 
     assert(sp != nullptr);
     assert(sp->widget_vtable == &n00b_widget_spacer);
-    assert(sp->total_cols == 1);
-    assert(sp->total_rows == 1);
 
-    // Cell should be empty (not occupied).
-    n00b_option_t(n00b_const_rcell_ptr_t) opt = n00b_plane_get_cell(sp, 0, 0);
-    assert(n00b_option_is_set(opt));
-    const n00b_rcell_t *cell = n00b_option_get(opt);
-    assert(!(cell->flags & N00B_CELL_OCCUPIED));
+    // Spacer render should produce an empty draw list (no content).
+    n00b_widget_render(sp);
+    assert(sp->draw_list.count == 0);
 
     printf("  [PASS] default spacer\n");
     n00b_plane_destroy(sp);
@@ -45,11 +41,16 @@ test_spacer_default(void)
 static void
 test_spacer_custom_size(void)
 {
-    n00b_plane_t *sp = n00b_spacer_new(.cols = 5, .rows = 3);
+    n00b_plane_t *sp = n00b_spacer_new(.width = 5, .height = 3);
 
     assert(sp != nullptr);
-    assert(sp->total_cols == 5);
-    assert(sp->total_rows == 3);
+
+    // Verify size via measure.
+    int32_t pref_w, pref_h, min_w, min_h;
+    n00b_widget_measure(sp, &pref_w, &pref_h, &min_w, &min_h);
+
+    assert(pref_w == 5);
+    assert(pref_h == 3);
 
     printf("  [PASS] custom size spacer\n");
     n00b_plane_destroy(sp);
@@ -62,15 +63,15 @@ test_spacer_custom_size(void)
 static void
 test_spacer_measure(void)
 {
-    n00b_plane_t *sp = n00b_spacer_new(.cols = 4, .rows = 2);
+    n00b_plane_t *sp = n00b_spacer_new(.width = 4, .height = 2);
 
-    n00b_isize_t pref_cols, pref_rows, min_cols, min_rows;
-    n00b_widget_measure(sp, &pref_cols, &pref_rows, &min_cols, &min_rows);
+    int32_t pref_w, pref_h, min_w, min_h;
+    n00b_widget_measure(sp, &pref_w, &pref_h, &min_w, &min_h);
 
-    assert(pref_cols == 4);
-    assert(pref_rows == 2);
-    assert(min_cols == 4);
-    assert(min_rows == 2);
+    assert(pref_w == 4);
+    assert(pref_h == 2);
+    assert(min_w == 4);
+    assert(min_h == 2);
 
     printf("  [PASS] spacer measure\n");
     n00b_plane_destroy(sp);

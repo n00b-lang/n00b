@@ -58,7 +58,7 @@ test_on_change(n00b_plane_t *plane, n00b_string_t *text, void *data)
 static void
 test_input_create(void)
 {
-    n00b_plane_t *inp = n00b_input_new(.cols = 20);
+    n00b_plane_t *inp = n00b_input_new(.width = 20);
 
     assert(inp != nullptr);
     assert(inp->widget_vtable == &n00b_widget_input);
@@ -81,7 +81,7 @@ test_input_type(void)
 {
     g_changed = false;
 
-    n00b_plane_t *inp = n00b_input_new(.cols = 20,
+    n00b_plane_t *inp = n00b_input_new(.width = 20,
                                          .on_change = test_on_change);
 
     // Type "Hi".
@@ -109,7 +109,7 @@ static void
 test_input_backspace(void)
 {
     n00b_string_t *initial = n00b_string_from_cstr("AB");
-    n00b_plane_t  *inp     = n00b_input_new(.cols = 20, .text = initial);
+    n00b_plane_t  *inp     = n00b_input_new(.width = 20, .text = initial);
 
     n00b_string_t *text = n00b_input_get_text(inp);
     assert(text->codepoints == 2);
@@ -132,7 +132,7 @@ test_input_backspace(void)
 static void
 test_input_set_text(void)
 {
-    n00b_plane_t *inp = n00b_input_new(.cols = 20);
+    n00b_plane_t *inp = n00b_input_new(.width = 20);
 
     n00b_string_t *new_text = n00b_string_from_cstr("Hello");
     n00b_input_set_text(inp, new_text);
@@ -154,7 +154,7 @@ test_input_submit(void)
 {
     g_submitted = false;
 
-    n00b_plane_t *inp = n00b_input_new(.cols = 20,
+    n00b_plane_t *inp = n00b_input_new(.width = 20,
                                          .on_submit = test_on_submit);
 
     n00b_event_t e_enter = make_key_event(N00B_KEY_ENTER, N00B_MOD_NONE);
@@ -173,7 +173,7 @@ test_input_submit(void)
 static void
 test_input_max_length(void)
 {
-    n00b_plane_t *inp = n00b_input_new(.cols = 20, .max_length = 3);
+    n00b_plane_t *inp = n00b_input_new(.width = 20, .max_length = 3);
 
     n00b_event_t e_a = make_key_event('a', N00B_MOD_NONE);
     n00b_widget_handle_event(inp, &e_a);

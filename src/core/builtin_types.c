@@ -9,6 +9,7 @@
 #include "display/render/canvas.h"
 #include "display/table/table.h"
 #include "conduit/subproc.h"
+#include "n00b/embed_ffi.h"
 #include "text/strings/string_convert.h"
 #include "text/strings/string_ops.h"
 #include "text/strings/fmt_numbers.h"
@@ -153,12 +154,9 @@ n00b_register_builtin_types(void)
         N00B_CTOR_KARGS,
     );
 
-    // n00b_interval_tree_t — kargs constructor, lock cleanup.
-    N00B_TYPE_REGISTER(n00b_interval_tree_t,
-        N00B_CORE_METHOD(N00B_BI_CONSTRUCTOR, n00b_interval_tree_init),
-        N00B_CTOR_KARGS,
-        N00B_LOCK_FIELD(n00b_interval_tree_t, lock),
-    );
+    // n00b_interval_tree_t is now a generic macro (parameterized per data type).
+    // Each parameterization is its own struct; initialization is via the
+    // n00b_interval_tree_init() macro, not a vtable constructor.
 
     // table, canvas, plane — kargs constructors, lock cleanup.
     N00B_TYPE_REGISTER(n00b_table_t,
@@ -184,4 +182,7 @@ n00b_register_builtin_types(void)
         N00B_CTOR_KARGS,
     );
 #endif
+
+    // n00b_ffi_module_t — embed literal type with install() method.
+    n00b_ffi_module_type_register();
 }

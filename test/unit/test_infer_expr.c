@@ -29,7 +29,7 @@
 #include "slay/grammar.h"
 #include "slay/bnf.h"
 #include "slay/n00b_parse.h"
-#include "slay/n00b_tokenizer.h"
+#include "n00b/n00b_tokenizer.h"
 #include "slay/symtab.h"
 #include "slay/annot_walk.h"
 #include "n00b/n00b_compile.h"
@@ -863,7 +863,7 @@ test_func_return_symbol(void)
 {
     // Function scope should have a $return symbol with a type_var.
     const char *src =
-        "int func add(a: int, b: int) {\n"
+        "func add(a: int, b: int) -> int {\n"
         "  return a + b\n"
         "}\n";
 

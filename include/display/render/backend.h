@@ -15,6 +15,7 @@
 
 #include "n00b.h"
 #include "display/render/cell.h"
+#include "display/render/font_metrics.h"
 #include "display/event.h"
 #include "conduit/rw.h"
 #include "core/buffer.h"
@@ -39,6 +40,7 @@ typedef enum : uint32_t {
     N00B_RCAP_ITALIC        = 1 <<  4,
     N00B_RCAP_UNDERLINE     = 1 <<  5,
     N00B_RCAP_STRIKETHROUGH = 1 <<  6,
+    N00B_RCAP_MOUSE         = 1 <<  7,  /**< Backend supports mouse input. */
     N00B_RCAP_DIM           = 1 <<  9,
     N00B_RCAP_CURSOR_MOVE   = 1 << 10,
     N00B_RCAP_ALT_SCREEN    = 1 << 11,
@@ -71,13 +73,14 @@ typedef struct n00b_render_size_t {
 // ABI version
 // ====================================================================
 
-#define N00B_RENDERER_ABI_VERSION 1
+#define N00B_RENDERER_ABI_VERSION 3
 
 // ====================================================================
 // Forward declarations
 // ====================================================================
 
 typedef struct n00b_plane_t n00b_plane_t;
+typedef struct n00b_composite_entry_t n00b_composite_entry_t;
 
 // ====================================================================
 // Renderer vtable
@@ -90,11 +93,15 @@ typedef struct n00b_plane_t n00b_plane_t;
  * **only** interface a backend author implements.
  *
  * Required slots: `init`, `destroy`, `capabilities`, `get_size`,
- * `render_frame`, `flush`.
+ * `render_planes`, `flush`.
  *
- * Optional slots (set to nullptr if unsupported): `cursor_set_visible`,
- * `cursor_move`, `alt_screen_enter`, `alt_screen_leave`, `on_resize`,
- * `prepare_gui`.
+ * Optional slots (set to nullptr if unsupported):
+ * `render_frame`, `cursor_set_visible`, `cursor_move`,
+ * `alt_screen_enter`, `alt_screen_leave`, `on_resize`, `prepare_gui`.
+ *
+ * The canvas dispatches to `render_planes` for all rendering.
+ * `render_frame` exists for internal use by backends that composite
+ * to a cell grid before output.
  */
 typedef struct n00b_renderer_vtable_t {
     const char *name;
@@ -112,6 +119,29 @@ typedef struct n00b_renderer_vtable_t {
                                       n00b_rcell_t *prev_cells);
     void              (*flush)(void *ctx);
 
+    /**
+     * @brief Plane-based rendering (required).
+     *
+     * Receives z-sorted composite entries (planes with absolute
+     * pixel positions and clip rects) and renders each plane.
+     * The canvas always dispatches here.
+     *
+     * @param ctx           Backend context.
+     * @param entries       Z-sorted composite entries (low-z first, pixel coords).
+     * @param count         Number of entries.
+     * @param total_rows    Frame height in pixels.
+     * @param total_cols    Frame width in pixels.
+     * @param default_style Default style for empty regions.
+     * @param caps          Backend capabilities for degradation.
+     */
+    void              (*render_planes)(void                         *ctx,
+                                       const n00b_composite_entry_t *entries,
+                                       n00b_isize_t                  count,
+                                       n00b_isize_t                  total_rows,
+                                       n00b_isize_t                  total_cols,
+                                       n00b_text_style_t            *default_style,
+                                       n00b_render_cap_t             caps);
+
     // Optional.
     void (*cursor_set_visible)(void *ctx, bool visible);
     void (*cursor_move)(void *ctx, n00b_isize_t row, n00b_isize_t col);
@@ -121,6 +151,18 @@ typedef struct n00b_renderer_vtable_t {
                       void (*cb)(n00b_isize_t, n00b_isize_t, void *),
                       void *user_ctx);
     void (*prepare_gui)(void *ctx, n00b_plane_t **planes, n00b_isize_t n);
+
+    /**
+     * @brief Get a font metrics provider from the backend (optional).
+     *
+     * If non-nullptr, the canvas uses this for text measurement instead
+     * of the cell-based fallback.  Pixel backends (NC, Cocoa) should
+     * implement this.
+     *
+     * @param ctx Backend context.
+     * @return    Initialized font metrics provider.
+     */
+    n00b_font_metrics_provider_t (*get_font_metrics)(void *ctx);
 
     /**
      * @brief Poll for an input event with timeout.

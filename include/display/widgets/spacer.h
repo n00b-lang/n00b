@@ -7,7 +7,7 @@
  * ### Usage
  *
  * ```c
- * n00b_plane_t *sp = n00b_spacer_new(.cols = 5, .rows = 2);
+ * n00b_plane_t *sp = n00b_spacer_new(.width = 5, .height = 2);
  * ```
  */
 #pragma once
@@ -38,13 +38,15 @@ extern const n00b_widget_vtable_t n00b_widget_spacer;
 /**
  * @brief Create a new spacer widget.
  *
- * @kw cols      Width (default 1).
- * @kw rows      Height (default 1).
+ * @kw width     Width (default 1).
+ * @kw height    Height (default 1).
+ * @kw canvas    Canvas to attach for font metrics (nullptr = none).
  * @kw allocator Allocator.
  */
 extern n00b_plane_t *
 n00b_spacer_new() _kargs {
-    n00b_isize_t      cols      = 1;
-    n00b_isize_t      rows      = 1;
+    int32_t           width     = 1;
+    int32_t           height    = 1;
+    n00b_canvas_t    *canvas    = nullptr;
     n00b_allocator_t *allocator = nullptr;
 };

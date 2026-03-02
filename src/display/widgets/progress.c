@@ -48,13 +48,19 @@ progress_render(n00b_plane_t *plane, void *data)
 
     n00b_plane_clear(plane);
 
-    n00b_isize_t content_rows;
-    n00b_isize_t content_cols;
-    n00b_plane_content_size(plane, &content_rows, &content_cols);
+    int32_t content_w;
+    int32_t content_h;
+    n00b_plane_content_size(plane, &content_w, &content_h);
 
-    if (content_cols == 0 || content_rows == 0) {
+    if (content_w == 0 || content_h == 0) {
         return;
     }
+
+    int32_t cpw = n00b_plane_text_width(plane, n00b_string_from_cstr("M"), nullptr);
+    if (cpw <= 0) cpw = 1;
+
+    int32_t lh = n00b_plane_line_height(plane, nullptr);
+    if (lh <= 0) lh = 1;
 
     double val = prog->value;
     if (val < 0.0) val = 0.0;
@@ -64,58 +70,61 @@ progress_render(n00b_plane_t *plane, void *data)
     n00b_codepoint_t empty_cp = prog->empty_char;
 
     if (prog->vertical) {
-        // Vertical: fill from bottom up.
-        double fill_exact = val * (double)content_rows;
-        n00b_isize_t fill_full = (n00b_isize_t)fill_exact;
+        // Vertical: fill from bottom up. Work in whole line-height rows.
+        int32_t n_rows     = content_h / lh;
+        double  fill_exact = val * (double)n_rows;
+        int32_t fill_rows  = (int32_t)fill_exact;
+        int32_t fill_px    = fill_rows * lh;
 
-        // Fill empty cells from top.
-        if (content_rows - fill_full > 0) {
+        // Empty rows from the top.
+        if (content_h - fill_px > 0) {
             n00b_plane_fill_rect(plane, 0, 0,
-                                  content_rows - fill_full, content_cols,
+                                  content_w, content_h - fill_px,
                                   .cp    = empty_cp,
                                   .style = prog->empty_style);
         }
 
-        // Fill full cells from bottom.
-        if (fill_full > 0) {
-            n00b_plane_fill_rect(plane,
-                                  content_rows - fill_full, 0,
-                                  fill_full, content_cols,
+        // Filled rows from the bottom.
+        if (fill_px > 0) {
+            n00b_plane_fill_rect(plane, 0, content_h - fill_px,
+                                  content_w, fill_px,
                                   .cp    = fill_cp,
                                   .style = prog->fill_style);
         }
     }
     else {
-        // Horizontal: fill from left to right.
-        double fill_exact = val * (double)content_cols;
-        n00b_isize_t fill_full = (n00b_isize_t)fill_exact;
-        double fraction = fill_exact - (double)fill_full;
+        // Horizontal: fill from left to right. Work in whole cell-width columns.
+        int32_t n_cols     = content_w / cpw;
+        double  fill_exact = val * (double)n_cols;
+        int32_t fill_cols  = (int32_t)fill_exact;
+        double  fraction   = fill_exact - (double)fill_cols;
+        int32_t fill_px    = fill_cols * cpw;
 
-        // Full filled cells.
-        if (fill_full > 0) {
-            n00b_plane_fill_rect(plane, 0, 0, 1, fill_full,
+        // Full filled columns.
+        if (fill_px > 0) {
+            n00b_plane_fill_rect(plane, 0, 0, fill_px, lh,
                                   .cp    = fill_cp,
                                   .style = prog->fill_style);
         }
 
         // Partial block for sub-cell precision.
-        if (fill_full < content_cols) {
+        if (fill_cols < n_cols) {
             int partial_idx = (int)(fraction * 8.0);
             if (partial_idx < 0) partial_idx = 0;
             if (partial_idx > 8) partial_idx = 8;
 
             if (partial_idx > 0) {
-                n00b_plane_cursor_move(plane, 0, fill_full);
-                n00b_plane_put_cp(plane, partial_blocks[partial_idx],
-                                   .style = prog->fill_style);
-                fill_full++;
+                n00b_plane_draw_glyph(plane, fill_px, 0,
+                                       partial_blocks[partial_idx],
+                                       .style = prog->fill_style);
+                fill_px += cpw;
             }
         }
 
-        // Empty cells.
-        if (fill_full < content_cols) {
-            n00b_plane_fill_rect(plane, 0, fill_full, 1,
-                                  content_cols - fill_full,
+        // Empty columns.
+        if (fill_px < content_w) {
+            n00b_plane_fill_rect(plane, fill_px, 0,
+                                  content_w - fill_px, lh,
                                   .cp    = empty_cp,
                                   .style = prog->empty_style);
         }
@@ -124,23 +133,28 @@ progress_render(n00b_plane_t *plane, void *data)
 
 static void
 progress_measure(n00b_plane_t *plane, void *data,
-                 n00b_isize_t *pref_cols, n00b_isize_t *pref_rows,
-                 n00b_isize_t *min_cols,  n00b_isize_t *min_rows)
+                 int32_t *pref_w, int32_t *pref_h,
+                 int32_t *min_w,  int32_t *min_h)
 {
-    (void)plane;
     n00b_progress_t *prog = (n00b_progress_t *)data;
 
+    int32_t cpw = n00b_plane_text_width(plane, n00b_string_from_cstr("M"), nullptr);
+    if (cpw <= 0) cpw = 1;
+
+    int32_t lh = n00b_plane_line_height(plane, nullptr);
+    if (lh <= 0) lh = 1;
+
     if (prog && prog->vertical) {
-        *pref_cols = 1;
-        *pref_rows = 10;
-        *min_cols  = 1;
-        *min_rows  = 1;
+        *pref_w = cpw;
+        *pref_h = 10 * lh;
+        *min_w  = cpw;
+        *min_h  = lh;
     }
     else {
-        *pref_cols = 20;
-        *pref_rows = 1;
-        *min_cols  = 3;
-        *min_rows  = 1;
+        *pref_w = 20 * cpw;
+        *pref_h = lh;
+        *min_w  = 3 * cpw;
+        *min_h  = lh;
     }
 }
 
@@ -165,22 +179,37 @@ n00b_progress_new() _kargs {
     bool                vertical    = false;
     n00b_text_style_t  *fill_style  = nullptr;
     n00b_text_style_t  *empty_style = nullptr;
-    n00b_isize_t        cols        = 20;
-    n00b_isize_t        rows        = 1;
+    int32_t             width       = 20;
+    int32_t             height      = 1;
+    n00b_canvas_t      *canvas      = nullptr;
     n00b_allocator_t   *allocator   = nullptr;
 }
 {
-    if (vertical && rows == 1) {
-        rows = 10;
-    }
-    if (!vertical && cols == 20 && rows == 1) {
-        // Defaults are fine.
+    n00b_plane_t *plane = n00b_new_kargs(n00b_plane_t, plane,
+                                           .canvas    = canvas,
+                                           .allocator = allocator);
+
+    int32_t cpw = n00b_plane_text_width(plane, n00b_string_from_cstr("M"), nullptr);
+    if (cpw <= 0) cpw = 1;
+
+    int32_t lh = n00b_plane_line_height(plane, nullptr);
+    if (lh <= 0) lh = 1;
+
+    // Convert caller-supplied character-count widths to pixels.
+    // The default karg value of 20 means "20 characters wide".
+    if (width == 20) {
+        width = 20 * cpw;
     }
 
-    n00b_plane_t *plane = n00b_new_kargs(n00b_plane_t, plane,
-                                           .cols      = cols,
-                                           .rows      = rows,
-                                           .allocator = allocator);
+    if (vertical && height == 1) {
+        height = 10 * lh;
+    }
+    else if (!vertical && height <= 1) {
+        height = lh;
+    }
+
+    plane->width = width;
+    plane->height = height;
 
     n00b_progress_t *prog = n00b_alloc(n00b_progress_t);
     prog->value       = value;
@@ -191,6 +220,7 @@ n00b_progress_new() _kargs {
     prog->empty_char  = 0x2591;  // Light shade.
 
     n00b_widget_attach(plane, &n00b_widget_progress, prog);
+    n00b_plane_mark_dirty(plane);
     n00b_widget_render(plane);
 
     return plane;
@@ -207,6 +237,7 @@ n00b_progress_set_value(n00b_plane_t *plane, double value)
     if (value < 0.0) value = 0.0;
     if (value > 1.0) value = 1.0;
     prog->value = value;
+    n00b_plane_mark_dirty(plane);
     n00b_widget_render(plane);
 }
 

@@ -4,8 +4,8 @@
  *
  * A widget is a plane with attached behavior.  Rather than a separate
  * object hierarchy, we store a vtable pointer and an opaque data
- * pointer directly on `n00b_plane_t`.  This reuses the plane's grid,
- * box model, styles, and hierarchy for free.
+ * pointer directly on `n00b_plane_t`.  This reuses the plane's draw
+ * list, box model, styles, and hierarchy for free.
  *
  * ### Lifecycle
  *
@@ -44,26 +44,27 @@ typedef struct n00b_widget_vtable_t {
     void (*destroy)(n00b_plane_t *plane, void *data);
 
     /**
-     * @brief Render widget content into the plane's cell grid.
+     * @brief Render widget content into the plane's draw list.
      *
-     * Implementations should clear the grid (or the relevant region)
-     * and write cells via the plane's `put_*` APIs.
+     * Implementations should clear the draw list and issue draw
+     * commands via `n00b_plane_draw_text()`, `n00b_plane_draw_glyph()`,
+     * and `n00b_plane_fill_rect()`.
      */
     void (*render)(n00b_plane_t *plane, void *data);
 
     /**
-     * @brief Report preferred and minimum sizes for layout.
+     * @brief Report preferred and minimum sizes in pixels.
      *
-     * @param plane     The widget's plane.
-     * @param data      Widget-specific data.
-     * @param pref_cols Output: preferred column count.
-     * @param pref_rows Output: preferred row count.
-     * @param min_cols  Output: minimum usable column count.
-     * @param min_rows  Output: minimum usable row count.
+     * @param plane  The widget's plane.
+     * @param data   Widget-specific data.
+     * @param pref_w Output: preferred width in pixels.
+     * @param pref_h Output: preferred height in pixels.
+     * @param min_w  Output: minimum width in pixels.
+     * @param min_h  Output: minimum height in pixels.
      */
     void (*measure)(n00b_plane_t *plane, void *data,
-                    n00b_isize_t *pref_cols, n00b_isize_t *pref_rows,
-                    n00b_isize_t *min_cols,  n00b_isize_t *min_rows);
+                    int32_t *pref_w, int32_t *pref_h,
+                    int32_t *min_w,  int32_t *min_h);
 
     /**
      * @brief Handle an input event.
@@ -84,6 +85,19 @@ typedef struct n00b_widget_vtable_t {
      * @return      true if the widget is focusable.
      */
     bool (*can_focus)(n00b_plane_t *plane, void *data);
+
+    /**
+     * @brief Position and size the widget within the given pixel bounds.
+     *
+     * Container widgets override this to recursively lay out children.
+     * Leaf widgets can leave this nullptr — the default
+     * `n00b_widget_layout()` handles move + viewport sizing.
+     *
+     * @param plane  The widget's plane.
+     * @param data   Widget-specific data.
+     * @param bounds Pixel bounding rectangle assigned by the parent.
+     */
+    void (*layout)(n00b_plane_t *plane, void *data, n00b_rect_t bounds);
 } n00b_widget_vtable_t;
 
 // ====================================================================
@@ -110,21 +124,20 @@ extern void n00b_widget_detach(n00b_plane_t *plane);
 /**
  * @brief Invoke the widget's render callback.
  *
- * No-op if no widget is attached.  Marks the plane dirty after render.
+ * No-op if no widget is attached.  Marks the plane dirty so the
+ * compositor picks up the new content.
  */
 extern void n00b_widget_render(n00b_plane_t *plane);
 
 /**
- * @brief Invoke the widget's measure callback.
+ * @brief Invoke the widget's measure callback (pixels).
  *
  * No-op (zeros all outputs) if no widget is attached or if the vtable
  * has no measure function.
  */
 extern void n00b_widget_measure(n00b_plane_t *plane,
-                                 n00b_isize_t *pref_cols,
-                                 n00b_isize_t *pref_rows,
-                                 n00b_isize_t *min_cols,
-                                 n00b_isize_t *min_rows);
+                                 int32_t *pref_w, int32_t *pref_h,
+                                 int32_t *min_w,  int32_t *min_h);
 
 /**
  * @brief Dispatch an event to a widget.
@@ -142,3 +155,20 @@ extern bool n00b_widget_handle_event(n00b_plane_t       *plane,
  * can_focus function.
  */
 extern bool n00b_widget_can_focus(n00b_plane_t *plane);
+
+// ====================================================================
+// Layout
+// ====================================================================
+
+/**
+ * @brief Lay out a widget within pixel bounds.
+ *
+ * Stores bounds on the plane, computes viewport size (bounds minus
+ * box insets), calls `n00b_plane_move()`, marks dirty, and invokes
+ * the widget's custom `layout` vtable slot if present.
+ *
+ * @param plane  The widget's plane.
+ * @param bounds Pixel bounding rectangle.
+ */
+extern void n00b_widget_layout(n00b_plane_t *plane,
+                                n00b_rect_t   bounds);

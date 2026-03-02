@@ -27,7 +27,7 @@
 #include "slay/grammar.h"
 #include "slay/bnf.h"
 #include "slay/n00b_parse.h"
-#include "slay/n00b_tokenizer.h"
+#include "n00b/n00b_tokenizer.h"
 #include "slay/symtab.h"
 #include "slay/annot_walk.h"
 #include "n00b/n00b_compile.h"

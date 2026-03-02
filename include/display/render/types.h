@@ -208,3 +208,82 @@ typedef enum : uint8_t {
     N00B_SCROLL_MANUAL = 1, /**< Viewport moves on explicit API calls. */
     N00B_SCROLL_AUTO   = 2, /**< Viewport follows cursor; old rows discarded. */
 } n00b_scroll_mode_t;
+
+// ====================================================================
+// Layout types (pixel-based flex layout)
+// ====================================================================
+
+/**
+ * @brief Pixel-based bounding rectangle used by the layout engine.
+ */
+typedef struct n00b_rect_t {
+    int32_t x;
+    int32_t y;
+    int32_t width;
+    int32_t height;
+} n00b_rect_t;
+
+/**
+ * @brief Flex layout direction for child arrangement.
+ */
+typedef enum : uint8_t {
+    N00B_FLEX_ROW,    /**< Arrange children horizontally. */
+    N00B_FLEX_COLUMN, /**< Arrange children vertically. */
+} n00b_flex_direction_t;
+
+/**
+ * @brief Main-axis content justification.
+ */
+typedef enum : uint8_t {
+    N00B_JUSTIFY_START,         /**< Pack children at the start. */
+    N00B_JUSTIFY_END,           /**< Pack children at the end. */
+    N00B_JUSTIFY_CENTER,        /**< Center children. */
+    N00B_JUSTIFY_SPACE_BETWEEN, /**< Even space between children. */
+    N00B_JUSTIFY_SPACE_AROUND,  /**< Even space around each child. */
+    N00B_JUSTIFY_SPACE_EVENLY,  /**< Equal space between and around children. */
+} n00b_justify_t;
+
+/**
+ * @brief Cross-axis alignment for flex items and containers.
+ *
+ * AUTO is first (0) so zero-initialized `align_self` inherits from
+ * the container.  For container `align`, AUTO resolves to STRETCH
+ * (the CSS flexbox default).
+ */
+typedef enum : uint8_t {
+    N00B_ALIGN_AUTO_CROSS,    /**< Inherit / default (resolves to STRETCH for containers). */
+    N00B_ALIGN_STRETCH_CROSS, /**< Stretch to fill the cross axis. */
+    N00B_ALIGN_START_CROSS,   /**< Align to the start of the cross axis. */
+    N00B_ALIGN_END_CROSS,     /**< Align to the end of the cross axis. */
+    N00B_ALIGN_CENTER_CROSS,  /**< Center on the cross axis. */
+} n00b_align_items_t;
+
+/**
+ * @brief Per-item flex layout properties.
+ */
+typedef struct n00b_flex_props_t {
+    float              grow;       /**< Flex-grow factor (0 = do not grow). */
+    float              shrink;     /**< Flex-shrink factor (0 = do not shrink). */
+    int32_t            basis;      /**< Flex-basis in pixels (0 = auto / use preferred size). */
+    n00b_align_items_t align_self; /**< Cross-axis override (AUTO = inherit from container). */
+} n00b_flex_props_t;
+
+/**
+ * @brief Flex container layout parameters.
+ */
+typedef struct n00b_flex_container_t {
+    n00b_flex_direction_t direction;
+    n00b_justify_t        justify;
+    n00b_align_items_t    align;
+    int32_t               gap; /**< Gap between children in cells (converted to pixels at layout time). */
+} n00b_flex_container_t;
+
+/**
+ * @brief Padding in cells (converted to pixels at layout time).
+ */
+typedef struct n00b_padding_t {
+    int32_t top;
+    int32_t right;
+    int32_t bottom;
+    int32_t left;
+} n00b_padding_t;

@@ -33,7 +33,7 @@
 #include "n00b.h"
 #include "core/buffer.h"
 #include "core/list.h"
-#include "core/dict_untyped.h"
+#include "core/dict.h"
 #include "core/result.h"
 #include "slay/token.h"
 #include "slay/types.h"
@@ -117,7 +117,7 @@ struct n00b_scanner_t {
     n00b_token_stream_t *stream;   /**< Back-pointer to owning stream. */
 
     // Terminal ID cache (for grammar integration)
-    n00b_dict_untyped_t *terminal_ids; /**< Lazily built name→id cache from grammar. */
+    n00b_dict_t *terminal_ids; /**< Lazily built name→id cache from grammar. */
 
     // Trivia collection
     n00b_trivia_t    *pending_leading;  /**< Leading trivia for next token. */

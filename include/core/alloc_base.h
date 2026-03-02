@@ -45,9 +45,6 @@ struct n00b_base_allocator_t {
 // Memory-map record types
 // ============================================================================
 
-// Forward declaration to avoid circular dep with interval_tree.h.
-typedef struct n00b_interval_node_t n00b_interval_node_t;
-
 typedef enum n00b_mmap_rec_kind_t n00b_mmap_rec_kind_t;
 
 enum n00b_mmap_rec_kind_t {
@@ -73,5 +70,16 @@ struct n00b_mmap_info_t {
     intptr_t                    slide;
     const char                 *file;
     n00b_mmap_rec_kind_t        kind;
-    n00b_interval_node_t       *tree_node; // back-pointer for O(1) delete
+    void                       *tree_node; // back-pointer for O(1) delete (generic node ptr)
 };
+
+/**
+ * @brief Sub-range record for headerless allocations within larger mappings.
+ *
+ * Stored as a variant alternative alongside `n00b_mmap_info_t *` in the
+ * unified mmap interval tree.
+ */
+typedef struct {
+    void     *start;
+    uint32_t  len;
+} n00b_alloc_range_t;

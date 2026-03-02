@@ -18,6 +18,8 @@
 #include "parsers/token_stream.h"
 #include "slay/annot_walk.h"
 #include "slay/codegen.h"
+#include "n00b/embed.h"
+#include "n00b/embed_ffi.h"
 #include "n00b/n00b_compile.h"
 #include "n00b/n00b_type_map.h"
 #include "slay/bnf.h"
@@ -29,7 +31,7 @@
 #include "slay/grammar.h"
 #include "slay/earley.h"
 #include "slay/n00b_parse.h"
-#include "slay/n00b_tokenizer.h"
+#include "n00b/n00b_tokenizer.h"
 #include "slay/parse_tree.h"
 #include "slay/symtab.h"
 #include "slay/token.h"
@@ -40,7 +42,8 @@
 #include "typecheck/print.h"
 
 // From n00b_repl.c.
-extern int n00b_repl_run(n00b_grammar_t *grammar);
+extern int  n00b_repl_run(n00b_grammar_t *grammar);
+extern bool n00b_load_builtins(n00b_grammar_t *g, n00b_cg_session_t *session);
 
 // ============================================================================
 // Grammar loading
@@ -604,8 +607,14 @@ main(int argc, char **argv)
 
         // --run mode: codegen + JIT + execute.
         if (run_mode) {
+            n00b_dict_untyped_t *embed_reg = n00b_embed_registry_new();
+            n00b_ffi_embed_register(embed_reg);
+
             n00b_cg_session_t *session = n00b_cg_session_new(
-                g, .type_map = n00b_type_map);
+                g, .type_map = n00b_type_map,
+                   .embed_registry = embed_reg);
+
+            n00b_load_builtins(g, session);
 
             bool    run_ok = false;
             int64_t result = n00b_cg_session_run_module(

@@ -24,7 +24,7 @@ find_identifier_tid(n00b_grammar_t *g)
 {
     n00b_string_t name = N00B_STRING_STATIC("IDENTIFIER");
     bool          found = false;
-    void         *val   = _n00b_dict_untyped_get(g->terminal_map,
+    void         *val   = _n00b_dict_get(g->terminal_map,
                                                   (void *)name.data, &found);
     if (found) {
         return (int64_t)(intptr_t)val;

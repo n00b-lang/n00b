@@ -65,9 +65,9 @@ static const n00b_widget_vtable_t nonfocusable_vtable = {
 static n00b_plane_t *
 make_focusable_plane(const char *name)
 {
-    n00b_plane_t *p = n00b_new_kargs(n00b_plane_t, plane,
-                                       .cols = 10,
-                                       .rows = 1);
+    n00b_plane_t *p = n00b_new_kargs(n00b_plane_t, plane);
+    p->width = 10;
+    p->height = 1;
     n00b_widget_attach(p, &focusable_vtable, nullptr);
     (void)name;
     return p;
@@ -76,9 +76,9 @@ make_focusable_plane(const char *name)
 static n00b_plane_t *
 make_nonfocusable_plane(void)
 {
-    n00b_plane_t *p = n00b_new_kargs(n00b_plane_t, plane,
-                                       .cols = 10,
-                                       .rows = 1);
+    n00b_plane_t *p = n00b_new_kargs(n00b_plane_t, plane);
+    p->width = 10;
+    p->height = 1;
     n00b_widget_attach(p, &nonfocusable_vtable, nullptr);
     return p;
 }
@@ -131,9 +131,9 @@ test_focus_tab_cycle(void)
                       .output = stdout_topic);
 
     // Create a root with 3 focusable and 1 non-focusable child.
-    n00b_plane_t *root = n00b_new_kargs(n00b_plane_t, plane,
-                                          .cols = 80,
-                                          .rows = 25);
+    n00b_plane_t *root = n00b_new_kargs(n00b_plane_t, plane);
+    root->width = 80;
+    root->height = 25;
 
     n00b_plane_t *f1 = make_focusable_plane("f1");
     n00b_plane_t *nf = make_nonfocusable_plane();
@@ -197,8 +197,9 @@ test_focus_shift_tab(void)
                       .vtable = &n00b_renderer_stream,
                       .output = stdout_topic);
 
-    n00b_plane_t *root = n00b_new_kargs(n00b_plane_t, plane,
-                                          .cols = 80, .rows = 25);
+    n00b_plane_t *root = n00b_new_kargs(n00b_plane_t, plane);
+    root->width = 80;
+    root->height = 25;
 
     n00b_plane_t *f1 = make_focusable_plane("f1");
     n00b_plane_t *f2 = make_focusable_plane("f2");
@@ -244,8 +245,9 @@ test_focus_set(void)
                       .vtable = &n00b_renderer_stream,
                       .output = stdout_topic);
 
-    n00b_plane_t *root = n00b_new_kargs(n00b_plane_t, plane,
-                                          .cols = 80, .rows = 25);
+    n00b_plane_t *root = n00b_new_kargs(n00b_plane_t, plane);
+    root->width = 80;
+    root->height = 25;
 
     n00b_plane_t *f1 = make_focusable_plane("f1");
     n00b_plane_t *f2 = make_focusable_plane("f2");

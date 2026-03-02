@@ -33,7 +33,7 @@ ensure_plane_rows(n00b_hexdump_xform_state_t *st, n00b_isize_t needed_rows)
     while (new_cap < needed_rows)
         new_cap += HEXDUMP_GROW_ROWS;
 
-    n00b_plane_resize(st->plane, new_cap, st->plane_cols);
+    // Draw list grows dynamically; just update capacity tracking.
     st->plane_cap = new_cap;
 }
 
@@ -73,7 +73,8 @@ emit_line(n00b_hexdump_xform_state_t *st, n00b_hexdump_t *hd,
     s->styling = info;
 
     ensure_plane_rows(st, st->current_row + 1);
-    n00b_plane_put_str_at(st->plane, st->current_row, 0, s);
+    int32_t lh = n00b_plane_line_height(st->plane, nullptr);
+    n00b_plane_draw_text(st->plane, 0, (int32_t)st->current_row * lh, s);
 
     if (complete) {
         st->current_row++;
@@ -191,9 +192,9 @@ n00b_conduit_hexdump_new(
 
         st->plane_cols = (n00b_isize_t)st->hd->line_width;
         st->plane_cap  = HEXDUMP_INITIAL_ROWS;
-        st->plane      = n00b_new_kargs(n00b_plane_t, plane,
-                                        .cols = st->plane_cols,
-                                        .rows = st->plane_cap);
+        st->plane      = n00b_new_kargs(n00b_plane_t, plane);
+        st->plane->width = st->plane_cols;
+        st->plane->height = st->plane_cap;
         st->current_row = 0;
         st->has_partial = false;
     }

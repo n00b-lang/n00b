@@ -10,6 +10,7 @@
 #include "slay/n00b_parse.h"
 #include "internal/slay/grammar_internal.h"
 #include "parsers/token_stream.h"
+#include "parsers/tokenizer_registry.h"
 #include "core/alloc.h"
 #include "core/buffer.h"
 
@@ -699,8 +700,18 @@ n00b_xform_parse_template(n00b_grammar_t *grammar,
 {
     assert(grammar && nt_name && source);
 
-    // Resolve the tokenizer: explicit karg > grammar's stored cb.
+    // Resolve the tokenizer: explicit karg > grammar's stored cb > registry > default.
     n00b_scan_cb_t cb = tokenize ? tokenize : grammar->tokenize_cb;
+
+    if (!cb && grammar->tokenizer_name) {
+        bool found = false;
+        cb = n00b_tokenizer_lookup(grammar->tokenizer_name->data, &found);
+    }
+
+    if (!cb) {
+        bool found = false;
+        cb = n00b_tokenizer_lookup("text", &found);
+    }
 
     if (cb) {
         grammar->tokenize_cb = cb;

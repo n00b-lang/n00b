@@ -5,8 +5,8 @@
  * @brief Tree transform framework: registry, pre/post-order transforms,
  *        tree mutation, node construction, and pattern search.
  *
- * Provides the infrastructure for semantic tree transforms (e.g., ncc's
- * 12 AST transforms). Transforms are registered by NT name or id, then
+ * Provides the infrastructure for semantic tree
+ * transforms. Transforms are registered by NT name or id, then
  * applied in one or more passes over a parse tree.
  *
  * ### Usage
@@ -55,8 +55,7 @@ typedef enum {
  * @param node  Current tree node.
  * @return Replacement node, or NULL for no change.
  */
-typedef n00b_parse_tree_t *(*n00b_xform_fn_t)(n00b_xform_ctx_t  *ctx,
-                                                n00b_parse_tree_t *node);
+typedef n00b_parse_tree_t *(*n00b_xform_fn_t)(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *node);
 
 /**
  * @brief Pre-order transform: called before children are processed.
@@ -65,9 +64,9 @@ typedef n00b_parse_tree_t *(*n00b_xform_fn_t)(n00b_xform_ctx_t  *ctx,
  * @param control  Output: set to SKIP_CHILDREN to skip child walk.
  * @return Replacement node, or NULL for no change.
  */
-typedef n00b_parse_tree_t *(*n00b_xform_pre_fn_t)(n00b_xform_ctx_t    *ctx,
-                                                    n00b_parse_tree_t   *node,
-                                                    n00b_xform_control_t *control);
+typedef n00b_parse_tree_t *(*n00b_xform_pre_fn_t)(n00b_xform_ctx_t     *ctx,
+                                                  n00b_parse_tree_t    *node,
+                                                  n00b_xform_control_t *control);
 
 // ============================================================================
 // Transform entry (one registered transform)
@@ -79,8 +78,8 @@ typedef struct {
         n00b_xform_fn_t     post_fn; /**< Post-order function. */
         n00b_xform_pre_fn_t pre_fn;  /**< Pre-order function. */
     };
-    const char *name;  /**< Human-readable name for debugging. */
-    bool        is_pre; /**< True if pre-order. */
+    const char *name;                /**< Human-readable name for debugging. */
+    bool        is_pre;              /**< True if pre-order. */
 } n00b_xform_entry_t;
 
 // ============================================================================
@@ -108,7 +107,7 @@ struct n00b_xform_registry_t {
     int                  wildcard_post_count;
     int                  wildcard_post_cap;
 
-    n00b_grammar_t      *grammar;
+    n00b_grammar_t *grammar;
 };
 
 // ============================================================================
@@ -136,8 +135,7 @@ struct n00b_xform_ctx_t {
  * @param reg      Registry to initialize.
  * @param grammar  Grammar for NT name resolution.
  */
-void n00b_xform_registry_init(n00b_xform_registry_t *reg,
-                                n00b_grammar_t        *grammar);
+void n00b_xform_registry_init(n00b_xform_registry_t *reg, n00b_grammar_t *grammar);
 
 /** @brief Free all resources held by a registry. */
 void n00b_xform_registry_free(n00b_xform_registry_t *reg);
@@ -150,9 +148,9 @@ void n00b_xform_registry_free(n00b_xform_registry_t *reg);
  * @return True on success, false if the NT name was not found.
  */
 bool n00b_xform_register(n00b_xform_registry_t *reg,
-                           const char            *nt_name,
-                           n00b_xform_fn_t        fn,
-                           const char            *name);
+                         const char            *nt_name,
+                         n00b_xform_fn_t        fn,
+                         const char            *name);
 
 /**
  * @brief Register a pre-order transform for a non-terminal.
@@ -160,21 +158,21 @@ bool n00b_xform_register(n00b_xform_registry_t *reg,
  * Pass @p nt_name = NULL for a wildcard.
  */
 bool n00b_xform_register_pre(n00b_xform_registry_t *reg,
-                               const char            *nt_name,
-                               n00b_xform_pre_fn_t    fn,
-                               const char            *name);
+                             const char            *nt_name,
+                             n00b_xform_pre_fn_t    fn,
+                             const char            *name);
 
 /** @brief Register a post-order transform by NT id. */
 bool n00b_xform_register_by_id(n00b_xform_registry_t *reg,
-                                 int64_t                nt_id,
-                                 n00b_xform_fn_t        fn,
-                                 const char            *name);
+                               int64_t                nt_id,
+                               n00b_xform_fn_t        fn,
+                               const char            *name);
 
 /** @brief Register a pre-order transform by NT id. */
 bool n00b_xform_register_pre_by_id(n00b_xform_registry_t *reg,
-                                     int64_t                nt_id,
-                                     n00b_xform_pre_fn_t    fn,
-                                     const char            *name);
+                                   int64_t                nt_id,
+                                   n00b_xform_pre_fn_t    fn,
+                                   const char            *name);
 
 // ============================================================================
 // Context API
@@ -188,9 +186,9 @@ bool n00b_xform_register_pre_by_id(n00b_xform_registry_t *reg,
  * @param root     Root tree node.
  */
 void n00b_xform_ctx_init(n00b_xform_ctx_t      *ctx,
-                           n00b_grammar_t         *grammar,
-                           n00b_xform_registry_t  *reg,
-                           n00b_parse_tree_t      *root);
+                         n00b_grammar_t        *grammar,
+                         n00b_xform_registry_t *reg,
+                         n00b_parse_tree_t     *root);
 
 // ============================================================================
 // Transform application
@@ -200,17 +198,15 @@ void n00b_xform_ctx_init(n00b_xform_ctx_t      *ctx,
  * @brief Apply one pass of transforms over the tree.
  * @return Transformed root tree (may differ from original).
  */
-n00b_parse_tree_t *n00b_xform_apply(n00b_xform_registry_t *reg,
-                                      n00b_xform_ctx_t      *ctx);
+n00b_parse_tree_t *n00b_xform_apply(n00b_xform_registry_t *reg, n00b_xform_ctx_t *ctx);
 
 /**
  * @brief Apply transforms in multiple passes until fixpoint or limit.
  * @param max_passes  Maximum number of passes (0 defaults to 100).
  * @return Transformed root tree.
  */
-n00b_parse_tree_t *n00b_xform_apply_multi(n00b_xform_registry_t *reg,
-                                            n00b_xform_ctx_t      *ctx,
-                                            int                    max_passes);
+n00b_parse_tree_t *
+n00b_xform_apply_multi(n00b_xform_registry_t *reg, n00b_xform_ctx_t *ctx, int max_passes);
 
 // ============================================================================
 // Tree mutation primitives
@@ -220,22 +216,20 @@ n00b_parse_tree_t *n00b_xform_apply_multi(n00b_xform_registry_t *reg,
  * @brief Replace child at index.
  * @return True on success, false if index out of range.
  */
-bool n00b_xform_set_child(n00b_parse_tree_t *parent, size_t index,
-                            n00b_parse_tree_t *new_child);
+bool
+n00b_xform_set_child(n00b_parse_tree_t *parent, size_t index, n00b_parse_tree_t *new_child);
 
 /**
  * @brief Remove child at index, compacting the array.
  * @return The removed child, or NULL if out of range.
  */
-n00b_parse_tree_t *n00b_xform_remove_child(n00b_parse_tree_t *parent,
-                                              size_t             index);
+n00b_parse_tree_t *n00b_xform_remove_child(n00b_parse_tree_t *parent, size_t index);
 
 /**
  * @brief Insert a child at index, shifting others right.
  * @return True on success, false if out of range.
  */
-bool n00b_xform_insert_child(n00b_parse_tree_t *parent, size_t index,
-                               n00b_parse_tree_t *child);
+bool n00b_xform_insert_child(n00b_parse_tree_t *parent, size_t index, n00b_parse_tree_t *child);
 
 /**
  * @brief Deep-copy a subtree.
@@ -253,9 +247,8 @@ n00b_parse_tree_t *n00b_xform_clone(n00b_parse_tree_t *tree);
  * @param nt_name     Non-terminal name (borrowed, copied into n00b_string_t).
  * @param rule_index  Index of the production rule.
  */
-n00b_parse_tree_t *n00b_xform_make_nt_node(n00b_grammar_t *grammar,
-                                              const char     *nt_name,
-                                              int32_t         rule_index);
+n00b_parse_tree_t *
+n00b_xform_make_nt_node(n00b_grammar_t *grammar, const char *nt_name, int32_t rule_index);
 
 /**
  * @brief Create a terminal/token leaf node.
@@ -264,10 +257,8 @@ n00b_parse_tree_t *n00b_xform_make_nt_node(n00b_grammar_t *grammar,
  * @param line   Source line number.
  * @param col    Source column number.
  */
-n00b_parse_tree_t *n00b_xform_make_token_node(int64_t     tid,
-                                                const char *value,
-                                                uint32_t    line,
-                                                uint32_t    col);
+n00b_parse_tree_t *
+n00b_xform_make_token_node(int64_t tid, const char *value, uint32_t line, uint32_t col);
 
 /**
  * @brief Create a non-terminal with pre-populated children.
@@ -277,12 +268,11 @@ n00b_parse_tree_t *n00b_xform_make_token_node(int64_t     tid,
  * @param children    Array of child tree nodes.
  * @param count       Number of children.
  */
-n00b_parse_tree_t *n00b_xform_make_node_with_children(
-    n00b_grammar_t     *grammar,
-    const char         *nt_name,
-    int32_t             rule_index,
-    n00b_parse_tree_t **children,
-    size_t              count);
+n00b_parse_tree_t *n00b_xform_make_node_with_children(n00b_grammar_t     *grammar,
+                                                      const char         *nt_name,
+                                                      int32_t             rule_index,
+                                                      n00b_parse_tree_t **children,
+                                                      size_t              count);
 
 // ============================================================================
 // Template-based subtree construction
@@ -305,8 +295,8 @@ n00b_parse_tree_t *n00b_xform_make_node_with_children(
  * `.tokenize` to override it; otherwise the previously stored callback
  * is reused.
  *
- * The grammar's default start symbol is temporarily overridden for the
- * parse and restored afterward.
+ * The grammar's default start symbol is temporarily overridden for
+ * the parse and restored afterward (not thread-safe).
  *
  * @param grammar  Grammar to parse with (must be finalized).
  * @param nt_name  Non-terminal to use as start symbol.
@@ -317,9 +307,9 @@ n00b_parse_tree_t *n00b_xform_make_node_with_children(
  *               grammar on first call; subsequent calls reuse it unless
  *               a new one is provided.
  */
-n00b_result_t(n00b_parse_tree_t *)
-n00b_xform_parse_template(n00b_grammar_t *grammar,
-                           const char     *nt_name,
-                           const char     *source) _kargs {
+n00b_result_t(n00b_parse_tree_t *) n00b_xform_parse_template(n00b_grammar_t *grammar,
+                                                             const char     *nt_name,
+                                                             const char     *source) _kargs
+{
     n00b_scan_cb_t tokenize;
 };

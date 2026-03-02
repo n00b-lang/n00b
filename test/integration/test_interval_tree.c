@@ -6,6 +6,9 @@
 #include "core/runtime.h"
 #include "adt/interval_tree.h"
 
+// Convenience alias — n00b_result_get returns void * now.
+#define inode_t n00b_interval_node_t(void *)
+
 // ============================================================================
 // 1. Create empty tree
 // ============================================================================
@@ -13,8 +16,11 @@
 static void
 test_create_empty(void)
 {
-    n00b_allocator_t     *alloc = n00b_default_allocator();
-    n00b_interval_tree_t *tree  = n00b_new_kargs(n00b_interval_tree_t, interval_tree, .allocator = alloc);
+    n00b_allocator_t *alloc = n00b_default_allocator();
+
+    n00b_interval_tree_t(void *) *tree = n00b_alloc_with_opts(
+        n00b_interval_tree_t(void *), &(n00b_alloc_opts_t){.allocator = alloc});
+    n00b_interval_tree_init(tree, alloc);
 
     assert(tree != nullptr);
     assert(tree->root == nullptr);
@@ -29,12 +35,15 @@ test_create_empty(void)
 static void
 test_single_insert(void)
 {
-    n00b_allocator_t     *alloc = n00b_default_allocator();
-    n00b_interval_tree_t *tree  = n00b_new_kargs(n00b_interval_tree_t, interval_tree, .allocator = alloc);
+    n00b_allocator_t *alloc = n00b_default_allocator();
+
+    n00b_interval_tree_t(void *) *tree = n00b_alloc_with_opts(
+        n00b_interval_tree_t(void *), &(n00b_alloc_opts_t){.allocator = alloc});
+    n00b_interval_tree_init(tree, alloc);
 
     auto r = n00b_interval_insert(tree, 10, 20, (void *)0xA);
     assert(n00b_result_is_ok(r));
-    n00b_interval_node_t *node = n00b_result_get(r);
+    inode_t *node = n00b_result_get(r);
     assert(node != nullptr);
     assert(node->low == 10);
     assert(node->high == 20);
@@ -42,7 +51,7 @@ test_single_insert(void)
 
     auto sr = n00b_interval_search_any(tree, 10, 20);
     assert(n00b_result_is_ok(sr));
-    n00b_interval_node_t *found = n00b_result_get(sr);
+    inode_t *found = n00b_result_get(sr);
     assert(found != nullptr);
     assert(found->low == 10);
 
@@ -56,8 +65,11 @@ test_single_insert(void)
 static void
 test_multi_insert(void)
 {
-    n00b_allocator_t     *alloc = n00b_default_allocator();
-    n00b_interval_tree_t *tree  = n00b_new_kargs(n00b_interval_tree_t, interval_tree, .allocator = alloc);
+    n00b_allocator_t *alloc = n00b_default_allocator();
+
+    n00b_interval_tree_t(void *) *tree = n00b_alloc_with_opts(
+        n00b_interval_tree_t(void *), &(n00b_alloc_opts_t){.allocator = alloc});
+    n00b_interval_tree_init(tree, alloc);
 
     uint64_t intervals[][2] = {
         {10, 20},
@@ -78,7 +90,7 @@ test_multi_insert(void)
                                             intervals[i][0],
                                             intervals[i][1]);
         assert(n00b_result_is_ok(sr));
-        n00b_interval_node_t *found = n00b_result_get(sr);
+        inode_t *found = n00b_result_get(sr);
         assert(found != nullptr);
         assert(found->low == intervals[i][0]);
         assert(found->high == intervals[i][1]);
@@ -94,8 +106,11 @@ test_multi_insert(void)
 static void
 test_overlap_search(void)
 {
-    n00b_allocator_t     *alloc = n00b_default_allocator();
-    n00b_interval_tree_t *tree  = n00b_new_kargs(n00b_interval_tree_t, interval_tree, .allocator = alloc);
+    n00b_allocator_t *alloc = n00b_default_allocator();
+
+    n00b_interval_tree_t(void *) *tree = n00b_alloc_with_opts(
+        n00b_interval_tree_t(void *), &(n00b_alloc_opts_t){.allocator = alloc});
+    n00b_interval_tree_init(tree, alloc);
 
     // Insert overlapping intervals: [10,30], [20,40], [25,35]
     n00b_interval_insert(tree, 10, 30, nullptr);
@@ -120,8 +135,11 @@ test_overlap_search(void)
 static void
 test_ordered_search(void)
 {
-    n00b_allocator_t     *alloc = n00b_default_allocator();
-    n00b_interval_tree_t *tree  = n00b_new_kargs(n00b_interval_tree_t, interval_tree, .allocator = alloc);
+    n00b_allocator_t *alloc = n00b_default_allocator();
+
+    n00b_interval_tree_t(void *) *tree = n00b_alloc_with_opts(
+        n00b_interval_tree_t(void *), &(n00b_alloc_opts_t){.allocator = alloc});
+    n00b_interval_tree_init(tree, alloc);
 
     // Insert in non-sorted order
     n00b_interval_insert(tree, 30, 50, nullptr);
@@ -138,7 +156,7 @@ test_ordered_search(void)
     // Verify ordering by low bound
     uint64_t prev_low = 0;
     n00b_stack_foreach(results, p) {
-        n00b_interval_node_t *node = (n00b_interval_node_t *)*p;
+        inode_t *node = (inode_t *)*p;
         assert(node->low >= prev_low);
         prev_low = node->low;
     }
@@ -154,8 +172,11 @@ test_ordered_search(void)
 static void
 test_delete(void)
 {
-    n00b_allocator_t     *alloc = n00b_default_allocator();
-    n00b_interval_tree_t *tree  = n00b_new_kargs(n00b_interval_tree_t, interval_tree, .allocator = alloc);
+    n00b_allocator_t *alloc = n00b_default_allocator();
+
+    n00b_interval_tree_t(void *) *tree = n00b_alloc_with_opts(
+        n00b_interval_tree_t(void *), &(n00b_alloc_opts_t){.allocator = alloc});
+    n00b_interval_tree_init(tree, alloc);
 
     auto r1 = n00b_interval_insert(tree, 10, 20, (void *)1);
     auto r2 = n00b_interval_insert(tree, 30, 40, (void *)2);
@@ -165,7 +186,7 @@ test_delete(void)
     assert(n00b_result_is_ok(r2));
     assert(n00b_result_is_ok(r3));
 
-    n00b_interval_node_t *mid = n00b_result_get(r2);
+    inode_t *mid = n00b_result_get(r2);
 
     // Delete [30, 40]
     auto dr = n00b_interval_delete(tree, mid);
@@ -174,7 +195,7 @@ test_delete(void)
     // Should not find [30, 40] anymore
     auto sr = n00b_interval_search_any(tree, 30, 40);
     assert(n00b_result_is_ok(sr));
-    n00b_interval_node_t *found = n00b_result_get(sr);
+    inode_t *found = n00b_result_get(sr);
     assert(found == nullptr);
 
     // [10, 20] and [50, 60] should still be there
@@ -196,8 +217,11 @@ test_delete(void)
 static void
 test_min_max(void)
 {
-    n00b_allocator_t     *alloc = n00b_default_allocator();
-    n00b_interval_tree_t *tree  = n00b_new_kargs(n00b_interval_tree_t, interval_tree, .allocator = alloc);
+    n00b_allocator_t *alloc = n00b_default_allocator();
+
+    n00b_interval_tree_t(void *) *tree = n00b_alloc_with_opts(
+        n00b_interval_tree_t(void *), &(n00b_alloc_opts_t){.allocator = alloc});
+    n00b_interval_tree_init(tree, alloc);
 
     n00b_interval_insert(tree, 50, 60, nullptr);
     n00b_interval_insert(tree, 10, 20, nullptr);
@@ -221,8 +245,11 @@ test_min_max(void)
 static void
 test_next_low(void)
 {
-    n00b_allocator_t     *alloc = n00b_default_allocator();
-    n00b_interval_tree_t *tree  = n00b_new_kargs(n00b_interval_tree_t, interval_tree, .allocator = alloc);
+    n00b_allocator_t *alloc = n00b_default_allocator();
+
+    n00b_interval_tree_t(void *) *tree = n00b_alloc_with_opts(
+        n00b_interval_tree_t(void *), &(n00b_alloc_opts_t){.allocator = alloc});
+    n00b_interval_tree_init(tree, alloc);
 
     n00b_interval_insert(tree, 10, 20, nullptr);
     n00b_interval_insert(tree, 30, 40, nullptr);
@@ -231,14 +258,14 @@ test_next_low(void)
     // next_low(25) should find [30, 40]
     auto r = n00b_interval_next_low(tree, 25);
     assert(n00b_result_is_ok(r));
-    n00b_interval_node_t *node = n00b_result_get(r);
+    inode_t *node = n00b_result_get(r);
     assert(node != nullptr);
     assert(node->low == 30);
 
     // next_low(10) should find [10, 20] (exact match)
     auto r2 = n00b_interval_next_low(tree, 10);
     assert(n00b_result_is_ok(r2));
-    n00b_interval_node_t *node2 = n00b_result_get(r2);
+    inode_t *node2 = n00b_result_get(r2);
     assert(node2 != nullptr);
     assert(node2->low == 10);
 
@@ -252,8 +279,11 @@ test_next_low(void)
 static void
 test_not_found(void)
 {
-    n00b_allocator_t     *alloc = n00b_default_allocator();
-    n00b_interval_tree_t *tree  = n00b_new_kargs(n00b_interval_tree_t, interval_tree, .allocator = alloc);
+    n00b_allocator_t *alloc = n00b_default_allocator();
+
+    n00b_interval_tree_t(void *) *tree = n00b_alloc_with_opts(
+        n00b_interval_tree_t(void *), &(n00b_alloc_opts_t){.allocator = alloc});
+    n00b_interval_tree_init(tree, alloc);
 
     n00b_interval_insert(tree, 10, 20, nullptr);
     n00b_interval_insert(tree, 50, 60, nullptr);
@@ -261,7 +291,7 @@ test_not_found(void)
     // Search gap [25, 35] — no overlap
     auto sr = n00b_interval_search_any(tree, 25, 35);
     assert(n00b_result_is_ok(sr));
-    n00b_interval_node_t *found = n00b_result_get(sr);
+    inode_t *found = n00b_result_get(sr);
     assert(found == nullptr);
 
     printf("  [PASS] not_found\n");
@@ -274,10 +304,13 @@ test_not_found(void)
 static void
 test_stress(void)
 {
-    n00b_allocator_t     *alloc = n00b_default_allocator();
-    n00b_interval_tree_t *tree  = n00b_new_kargs(n00b_interval_tree_t, interval_tree, .allocator = alloc);
+    n00b_allocator_t *alloc = n00b_default_allocator();
 
-    n00b_interval_node_t *nodes[500];
+    n00b_interval_tree_t(void *) *tree = n00b_alloc_with_opts(
+        n00b_interval_tree_t(void *), &(n00b_alloc_opts_t){.allocator = alloc});
+    n00b_interval_tree_init(tree, alloc);
+
+    inode_t *nodes[500];
 
     for (int i = 0; i < 500; i++) {
         uint64_t low  = (uint64_t)i * 100;
@@ -299,7 +332,7 @@ test_stress(void)
         uint64_t high = low + 50;
         auto     sr   = n00b_interval_search_any(tree, low, high);
         assert(n00b_result_is_ok(sr));
-        n00b_interval_node_t *found = n00b_result_get(sr);
+        inode_t *found = n00b_result_get(sr);
         assert(found != nullptr);
         assert(found->low == low);
     }
@@ -310,7 +343,7 @@ test_stress(void)
         uint64_t high = low + 50;
         auto     sr   = n00b_interval_search_any(tree, low, high);
         assert(n00b_result_is_ok(sr));
-        n00b_interval_node_t *found = n00b_result_get(sr);
+        inode_t *found = n00b_result_get(sr);
         assert(found == nullptr);
     }
 

@@ -113,11 +113,11 @@ extern void _n00b_gc_unregister_root(void *addr);
 // ============================================================================
 
 /**
- * @brief Work-list entry: a to-space allocation that still needs scanning.
+ * @brief Work-list entry: a memory range that still needs scanning.
  */
 typedef struct {
-    n00b_inline_hdr_t *tospace_alloc;
-    uint32_t           num_words;
+    void     *start;
+    uint32_t  num_words;
 } n00b_gc_wl_item_t;
 
 /**

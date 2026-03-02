@@ -687,13 +687,9 @@ translate(n00b_tc_ctx_t *ctx, n00b_grammar_t *g, n00b_parse_tree_t *node)
             }
         }
 
-        // Get return type from <opt-return-type> or <return-type>.
+        // Get return type from <return-type>.
         n00b_tc_type_t *ret_type = nullptr;
-        n00b_parse_tree_t *ret_node = n00b_tree_find_child_by_nt_name(g, node, r"opt-return-type");
-
-        if (!ret_node) {
-            ret_node = n00b_tree_find_child_by_nt_name(g, node, r"return-type");
-        }
+        n00b_parse_tree_t *ret_node = n00b_tree_find_child_by_nt_name(g, node, r"return-type");
 
         if (ret_node) {
             n00b_parse_tree_t *type_spec = n00b_tree_find_child_by_nt_name(g, ret_node, r"type-spec");

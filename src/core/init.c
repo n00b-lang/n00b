@@ -32,6 +32,7 @@
 #include "conduit/fd_managed.h"
 #include "conduit/fd_writer.h"
 #include "conduit/io.h"
+#include "parsers/tokenizer_registry.h"
 
 size_t   n00b_page_size = 0;
 uint64_t n00b_gc_guard  = 0;
@@ -253,6 +254,8 @@ n00b_init(n00b_runtime_t *rt, int argc, char *argv[]) _kargs
 
     n00b_str_registry_init();
     n00b_theme_init();
+    n00b_tokenizers_init();
+    rt->theme_name = "n00b-classic";
 
     // Create default conduit + service for IO (stdout/stderr, signals).
     n00b_result_t(n00b_conduit_t *) cond_r = n00b_conduit_new();
@@ -312,4 +315,16 @@ n00b_init(n00b_runtime_t *rt, int argc, char *argv[]) _kargs
     }
 
     rt->startup_complete = true;
+}
+
+void
+n00b_init_simple(int argc, char *argv[])
+{
+    static n00b_runtime_t *rt = nullptr;
+
+    if (!rt) {
+        rt = calloc(1, sizeof(n00b_runtime_t));
+    }
+
+    n00b_init(rt, argc, argv);
 }

@@ -20,20 +20,28 @@
 #include "adt/array.h"
 #include "adt/list.h"
 #include "adt/option.h"
+#include "adt/variant.h"
+#include "adt/interval_tree.h"
 #include "core/pool.h"
 #include "conduit/conduit_types.h"
 
 typedef struct n00b_runtime_t n00b_runtime_t;
 
 // Forward declarations to avoid circular includes.
-typedef struct n00b_interval_tree_t    n00b_interval_tree_t;
 typedef struct n00b_conduit_service    n00b_conduit_service_t;
 
+/**
+ * @brief Variant type for the unified mmap interval tree.
+ *
+ * Discriminates between full mmap records (page-level regions) and
+ * lightweight sub-range records (headerless allocations).
+ */
+typedef n00b_variant_t(n00b_mmap_info_t *, n00b_alloc_range_t *) n00b_mmap_data_t;
+
 struct n00b_mmap_ctx_t {
-    n00b_interval_tree_t *mmap_tree;   // page-level mmaps
-    n00b_interval_tree_t *range_tree;  // optional sub-range tracking
-    _Atomic int64_t       tid_lock;
-    n00b_pool_t           pool;
+    n00b_interval_tree_t(n00b_mmap_data_t) *mmap_tree;
+    _Atomic int64_t  tid_lock;
+    n00b_pool_t      pool;
 };
 
 struct n00b_runtime_t {
@@ -61,6 +69,7 @@ struct n00b_runtime_t {
     n00b_base_allocator_t       slab_allocator;
     n00b_futex_t                stw;
     uint32_t                    stw_nesting;
+    const char                 *theme_name;    // Active theme name (set during init).
 };
 
 /**
@@ -89,6 +98,15 @@ n00b_init(n00b_runtime_t *rt, int argc, char *argv[]) _kargs
     int                fd_limit       = 0; // Less than 0 = "don't set"
     unsigned int       max_threads    = N00B_THREADS_MAX;
 };
+
+/**
+ * @brief Plain-C wrapper for n00b_init() with default kargs.
+ *
+ * Callable from code not compiled through ncc (e.g. startup shims
+ * for AOT-compiled binaries).  Heap-allocates an n00b_runtime_t
+ * internally.
+ */
+extern void n00b_init_simple(int argc, char *argv[]);
 
 /**
  * @brief Shut down the runtime, stopping all service threads.

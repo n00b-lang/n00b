@@ -1,5 +1,0 @@
-int func add(a: int, b: int) {
-  return a + b
-}
-
-var result = 1 + 2

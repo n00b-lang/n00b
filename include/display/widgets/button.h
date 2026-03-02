@@ -54,8 +54,9 @@ extern const n00b_widget_vtable_t n00b_widget_button;
  * @kw on_click_data User data for callback.
  * @kw shortcut      Keyboard shortcut codepoint (0 = none).
  * @kw box           Box decoration (nullptr = auto with rounded border).
- * @kw cols          Width (0 = auto from label).
- * @kw rows          Height (0 = auto, typically 3 for border).
+ * @kw canvas        Canvas for font metrics (nullptr = none).
+ * @kw width         Width (0 = auto from label).
+ * @kw height        Height (0 = auto, typically 3 for border).
  * @kw style         Text style.
  * @kw allocator     Allocator.
  */
@@ -65,8 +66,9 @@ n00b_button_new(n00b_string_t *label) _kargs {
     void              *on_click_data = nullptr;
     n00b_codepoint_t   shortcut      = 0;
     n00b_box_props_t  *box           = nullptr;
-    n00b_isize_t       cols          = 0;
-    n00b_isize_t       rows          = 0;
+    n00b_canvas_t     *canvas        = nullptr;
+    int32_t            width         = 0;
+    int32_t            height        = 0;
     n00b_text_style_t *style         = nullptr;
     n00b_allocator_t  *allocator     = nullptr;
 };

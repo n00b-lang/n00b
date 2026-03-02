@@ -45,6 +45,15 @@ if host_machine.cpu_family() == 'x86_64' and cc.get_id() == 'clang'
   c_args += ['-Wno-atomic-alignment']
 endif
 
+rstr_styled = get_option('rstr_template_styled')
+if rstr_styled != ''
+  c_args += ['-DNCC_RSTR_TEMPLATE_STYLED="' + rstr_styled + '"']
+endif
+rstr_plain = get_option('rstr_template_plain')
+if rstr_plain != ''
+  c_args += ['-DNCC_RSTR_TEMPLATE_PLAIN="' + rstr_plain + '"']
+endif
+
 # Clang source-based code coverage
 coverage_enabled = get_option('coverage')
 coverage_args = []
@@ -71,31 +80,34 @@ src_slay = files(
   'src/slay/grammar.c',
   'src/slay/parse_tree.c',
   'src/slay/parse_forest.c',
-  'src/slay/hashset.c',
   'src/slay/unicode_class.c',
   'src/slay/annotation.c',
   'src/slay/token.c',
   'src/slay/bnf.c',
   'src/slay/pretty_print.c',
   'src/slay/annot_walk.c',
-  'src/slay/transform.c',
   'src/slay/symtab.c',
   'src/slay/c_tokenizer.c',
   'src/slay/pprint.c',
   'src/slay/commander.c',
-  'src/slay/type_normalize.c',
-  'src/slay/xform_helpers.c',
-  'src/slay/xform_typeid.c',
-  'src/slay/xform_typestr.c',
-  'src/slay/xform_typehash.c',
-  'src/slay/xform_once.c',
-  'src/slay/xform_bang.c',
-  'src/slay/xform_rstr.c',
-  'src/slay/xform_constexpr.c',
-  'src/slay/xform_constexpr_paste.c',
-  'src/slay/xform_kargs_vargs.c',
-  'src/slay/xform_option.c',
-  'src/slay/xform_generic_struct.c',
+)
+
+src_xform = files(
+  'src/xform/transform.c',
+  'src/xform/type_normalize.c',
+  'src/xform/xform_helpers.c',
+  'src/xform/xform_bang.c',
+  'src/xform/xform_constexpr.c',
+  'src/xform/xform_constexpr_paste.c',
+  'src/xform/xform_generic_struct.c',
+  'src/xform/xform_kargs_vargs.c',
+  'src/xform/xform_once.c',
+  'src/xform/xform_option.c',
+  'src/xform/xform_rstr.c',
+  'src/xform/xform_typeid.c',
+  'src/xform/xform_typestr.c',
+  'src/xform/xform_typehash.c',
+  'src/xform/xform_template.c',
 )
 
 src_parsers = files(
@@ -107,7 +119,7 @@ src_parsers = files(
 # ── Static library (available for standalone use) ────────────────────────────
 
 libncc = static_library('ncc',
-  src_core + src_slay + src_parsers,
+  src_core + src_slay + src_xform + src_parsers,
   include_directories : inc,
   c_args : c_args + coverage_args,
   link_args : coverage_link_args,
@@ -149,6 +161,14 @@ test_bnf = executable('test_bnf',
   dependencies : libncc_dep,
 )
 test('bnf_c_parse', test_bnf, suite : 'ncc')
+
+test_xform_template = executable('test_xform_template',
+  'test/test_xform_template.c',
+  c_args : c_args + coverage_args,
+  link_args : coverage_link_args,
+  dependencies : libncc_dep,
+)
+test('xform_template', test_xform_template, suite : 'ncc')
 
 # Compiler-level tests (run through ncc executable)
 ncc_compile_tests = {

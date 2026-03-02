@@ -127,6 +127,14 @@ struct n00b_cg_session_t {
     // Global scope: merged public symbols from all compiled modules
     n00b_symtab_t            *global_scope;
 
+    // Embed literal handler registry (modifier name → n00b_embed_handler_t *)
+    n00b_dict_untyped_t      *embed_registry;
+
+    // Compile-time variable store (comptime {} blocks).
+    // Maps C-string name → void * (managed objects).
+    n00b_dict_untyped_t      *comptime_vars;
+    bool                      in_comptime;
+
     // Diagnostics
     n00b_diag_ctx_t          *diag;
     void                     *user_data;

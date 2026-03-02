@@ -26,6 +26,7 @@
 #include "conduit/signal.h"
 #include "text/strings/text_style.h"
 #include "text/strings/theme.h"
+#include "display/render/composite.h"
 
 // -------------------------------------------------------------------
 // ANSI context
@@ -42,9 +43,15 @@ typedef struct {
     n00b_isize_t                            cursor_row;
     n00b_isize_t                            cursor_col;
     bool                                    cursor_visible;
+    bool                                    mouse_button_down;
 #ifndef _WIN32
     n00b_conduit_signal_inbox_t            *sigwinch_inbox;
 #endif
+
+    // Persistent compositing grid.
+    n00b_rcell_t                           *comp_grid;
+    n00b_isize_t                            comp_grid_rows;
+    n00b_isize_t                            comp_grid_cols;
 } ansi_ctx_t;
 
 #define ANSI_INITIAL_BUF 16384
@@ -294,6 +301,9 @@ ansi_destroy(void *vctx)
             }
         }
 #endif
+        if (ctx->comp_grid) {
+            n00b_free(ctx->comp_grid);
+        }
         n00b_free(ctx->buf);
         n00b_free(ctx);
     }
@@ -315,7 +325,8 @@ ansi_capabilities(void *vctx)
          | N00B_RCAP_ALT_SCREEN
          | N00B_RCAP_UNICODE
          | N00B_RCAP_WIDE_CHARS
-         | N00B_RCAP_DIFF_RENDER;
+         | N00B_RCAP_DIFF_RENDER
+         | N00B_RCAP_MOUSE;
 }
 
 static n00b_render_size_t
@@ -351,6 +362,13 @@ ansi_render_frame(void *vctx, n00b_rcell_t *cells,
 {
     ansi_ctx_t *ctx = vctx;
     ctx->buf_used = 0;
+
+    // Invalidate tracked cursor so the first cell always gets an
+    // explicit CUP.  Without this, if the terminal's real cursor
+    // isn't at (0,0) (e.g. after alt-screen + mouse-enable sequences),
+    // the backend skips the move and row 0 renders at the wrong spot.
+    ctx->cursor_row = -1;
+    ctx->cursor_col = -1;
 
     const n00b_text_style_t *last_style = nullptr;
 
@@ -410,6 +428,43 @@ ansi_flush(void *vctx)
     }
 
     ctx->buf_used = 0;
+}
+
+// -------------------------------------------------------------------
+// Plane-based rendering
+// -------------------------------------------------------------------
+
+static void
+ansi_render_planes(void                         *vctx,
+                   const n00b_composite_entry_t *entries,
+                   n00b_isize_t                  count,
+                   n00b_isize_t                  total_rows,
+                   n00b_isize_t                  total_cols,
+                   n00b_text_style_t            *default_style,
+                   n00b_render_cap_t             caps)
+{
+    ansi_ctx_t *ctx = vctx;
+
+    // Reuse persistent grid; reallocate only on size change.
+    if (total_rows != ctx->comp_grid_rows
+        || total_cols != ctx->comp_grid_cols) {
+        if (ctx->comp_grid) {
+            n00b_free(ctx->comp_grid);
+        }
+        size_t total = (size_t)total_rows * total_cols;
+        ctx->comp_grid = n00b_alloc_array_with_opts(
+            n00b_rcell_t, total,
+            &(n00b_alloc_opts_t){.no_scan = true});
+        ctx->comp_grid_rows = total_rows;
+        ctx->comp_grid_cols = total_cols;
+    }
+
+    n00b_composite_commands_to_grid(entries, count, ctx->comp_grid,
+                                     total_rows, total_cols,
+                                     1, 1,
+                                     default_style, caps);
+
+    ansi_render_frame(vctx, ctx->comp_grid, total_rows, total_cols, nullptr);
 }
 
 static void
@@ -483,7 +538,92 @@ ansi_read_byte(int timeout_ms)
 }
 
 static bool
-ansi_parse_csi(n00b_event_t *out)
+ansi_parse_sgr_mouse(ansi_ctx_t *ctx, const char *buf, size_t len,
+                      bool pressed, n00b_event_t *out)
+{
+    // SGR mouse: buf contains "Cb;Cx;Cy" (without the leading '<').
+    // pressed = true for 'M' (press/motion), false for 'm' (release).
+    int cb = 0, cx = 0, cy = 0;
+    int field = 0;
+
+    for (size_t i = 0; i < len; i++) {
+        if (buf[i] == ';') {
+            field++;
+            continue;
+        }
+        if (buf[i] >= '0' && buf[i] <= '9') {
+            int digit = buf[i] - '0';
+            switch (field) {
+            case 0: cb = cb * 10 + digit; break;
+            case 1: cx = cx * 10 + digit; break;
+            case 2: cy = cy * 10 + digit; break;
+            }
+        }
+    }
+
+    out->type = N00B_EVENT_MOUSE;
+    out->mouse.x = cx - 1;  // SGR uses 1-based coords.
+    out->mouse.y = cy - 1;
+
+    // Decode modifiers from cb bits.
+    out->mouse.mods = N00B_MOD_NONE;
+    if (cb & 4)  out->mouse.mods |= N00B_MOD_SHIFT;
+    if (cb & 8)  out->mouse.mods |= N00B_MOD_ALT;
+    if (cb & 16) out->mouse.mods |= N00B_MOD_CTRL;
+
+    // Decode button.
+    bool is_motion = (cb & 32) != 0;
+    int  btn_bits  = cb & 3;
+
+    if (cb & 64) {
+        // Scroll events.
+        out->mouse.button = (btn_bits == 0) ? N00B_MOUSE_SCROLL_UP
+                                             : N00B_MOUSE_SCROLL_DOWN;
+        out->mouse.action = N00B_MOUSE_PRESS;
+        return true;
+    }
+
+    if (is_motion) {
+        // Motion event (with or without button).
+        if (ctx->mouse_button_down) {
+            out->mouse.action = N00B_MOUSE_DRAG;
+            // Preserve the button from the original press.
+            switch (btn_bits) {
+            case 0: out->mouse.button = N00B_MOUSE_LEFT;   break;
+            case 1: out->mouse.button = N00B_MOUSE_MIDDLE; break;
+            case 2: out->mouse.button = N00B_MOUSE_RIGHT;  break;
+            default: out->mouse.button = N00B_MOUSE_NONE;  break;
+            }
+        }
+        else {
+            out->mouse.action = N00B_MOUSE_MOVE;
+            out->mouse.button = N00B_MOUSE_NONE;
+        }
+        return true;
+    }
+
+    // Button press or release.
+    switch (btn_bits) {
+    case 0: out->mouse.button = N00B_MOUSE_LEFT;   break;
+    case 1: out->mouse.button = N00B_MOUSE_MIDDLE; break;
+    case 2: out->mouse.button = N00B_MOUSE_RIGHT;  break;
+    default: out->mouse.button = N00B_MOUSE_NONE;  break;
+    }
+
+    if (!pressed) {
+        out->mouse.action      = N00B_MOUSE_RELEASE;
+        ctx->mouse_button_down = false;
+    }
+    else {
+        out->mouse.action      = N00B_MOUSE_PRESS;
+        ctx->mouse_button_down = true;
+    }
+
+    return true;
+}
+
+static bool
+ansi_parse_csi(ansi_ctx_t *ctx, n00b_event_t *out)
 {
     char   buf[32];
     size_t len = 0;
@@ -494,6 +634,12 @@ ansi_parse_csi(n00b_event_t *out)
             return false;
         }
         if (c >= 0x40 && c <= 0x7E) {
+            // SGR mouse: ESC [ < Cb ; Cx ; Cy M/m
+            if ((c == 'M' || c == 'm') && len > 0 && buf[0] == '<') {
+                return ansi_parse_sgr_mouse(ctx, buf + 1, len - 1,
+                                             c == 'M', out);
+            }
+
             // Final byte.
             out->type     = N00B_EVENT_KEY;
             out->key.mods = N00B_MOD_NONE;
@@ -662,7 +808,7 @@ ansi_poll_event(void *vctx, int32_t timeout_ms, n00b_event_t *out)
             return true;
         }
         if (next == '[') {
-            return ansi_parse_csi(out);
+            return ansi_parse_csi(ctx, out);
         }
         if (next == 'O') {
             return ansi_parse_ss3(out);
@@ -721,6 +867,7 @@ const n00b_renderer_vtable_t n00b_renderer_ansi = {
     .get_size           = ansi_get_size,
     .render_frame       = ansi_render_frame,
     .flush              = ansi_flush,
+    .render_planes      = ansi_render_planes,
     .cursor_set_visible = ansi_cursor_set_visible,
     .cursor_move        = ansi_cursor_move,
     .alt_screen_enter   = ansi_alt_screen_enter,

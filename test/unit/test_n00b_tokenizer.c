@@ -10,7 +10,7 @@
 #include "core/runtime.h"
 #include "parsers/scanner.h"
 #include "parsers/token_stream.h"
-#include "slay/n00b_tokenizer.h"
+#include "n00b/n00b_tokenizer.h"
 #include "slay/token.h"
 
 // ============================================================================
@@ -230,7 +230,7 @@ test_long_literals(void)
     n00b_string_t *val = n00b_option_get(toks[0]->value);
     assert(val->u8_bytes == 11);
     assert(memcmp(val->data, "hello world", 11) == 0);
-    assert(!toks[0]->user_info);  // No encoder.
+    assert(!n00b_option_is_set(toks[0]->encoding));  // No encoder.
     assert(!n00b_option_is_set(toks[0]->modifier));
 
     printf("  [PASS] long literal basic\n");
@@ -257,9 +257,9 @@ test_long_literals(void)
 
     val = n00b_option_get(toks[0]->value);
     assert(memcmp(val->data, "SGVsbG8=", 8) == 0);
-    assert(toks[0]->user_info != NULL);
+    assert(n00b_option_is_set(toks[0]->encoding));
 
-    n00b_string_t *enc = (n00b_string_t *)toks[0]->user_info;
+    n00b_string_t *enc = n00b_option_get(toks[0]->encoding);
     assert(enc->u8_bytes == 3);
     assert(memcmp(enc->data, "b64", 3) == 0);
 
@@ -291,7 +291,7 @@ test_long_literals(void)
     val = n00b_option_get(toks[0]->value);
     assert(memcmp(val->data, "path/to/file", 12) == 0);
 
-    enc = (n00b_string_t *)toks[0]->user_info;
+    enc = n00b_option_get(toks[0]->encoding);
     assert(enc->u8_bytes == 5);
     assert(memcmp(enc->data, "embed", 5) == 0);
 

@@ -31,8 +31,8 @@ extern void        n00b_stream_backend_set_size(void *ctx,
 typedef struct {
     n00b_canvas_t                *canvas;
     const n00b_renderer_vtable_t *backend;
-    n00b_isize_t                  cols;
-    n00b_isize_t                  rows;
+    int32_t                       width;
+    int32_t                       height;
 } render_out_state_t;
 
 static n00b_option_t(n00b_buffer_t *)
@@ -93,8 +93,8 @@ n00b_conduit_render_out_new(
     n00b_conduit_topic_t(n00b_plane_t *) *upstream)
     _kargs {
         const n00b_renderer_vtable_t *backend = nullptr;
-        n00b_isize_t                  cols    = 80;
-        n00b_isize_t                  rows    = 25;
+        int32_t                       width   = 80;
+        int32_t                       height  = 25;
     }
 {
     if (!backend)
@@ -110,13 +110,13 @@ n00b_conduit_render_out_new(
             n00b_plane_t *, n00b_buffer_t *, xf);
 
         st->backend = backend;
-        st->cols    = cols;
-        st->rows    = rows;
+        st->width   = width;
+        st->height  = height;
 
         // Always use stream backend for buffer capture.
         st->canvas = n00b_new_kargs(n00b_canvas_t, canvas, .vtable = &n00b_renderer_stream);
-        n00b_canvas_resize(st->canvas, rows, cols);
-        n00b_stream_backend_set_size(st->canvas->backend_ctx, rows, cols);
+        n00b_canvas_resize(st->canvas, height, width);
+        n00b_stream_backend_set_size(st->canvas->backend_ctx, height, width);
     }
 
     return r;
@@ -127,8 +127,8 @@ n00b_conduit_render_out_new(
 // ============================================================================
 
 typedef struct {
-    n00b_isize_t       cols;
-    n00b_isize_t       rows;
+    int32_t            width;
+    int32_t            height;
     n00b_text_style_t *style;
 } render_in_state_t;
 
@@ -144,9 +144,9 @@ render_in_transform(
         return n00b_option_none(n00b_plane_t *);
 
     n00b_plane_t *plane = n00b_new_kargs(n00b_plane_t, plane,
-                                          .cols  = st->cols,
-                                          .rows  = st->rows,
                                           .style = st->style);
+    plane->width  = st->width;
+    plane->height = st->height;
 
     // Convert buffer to string and write to plane.
     int64_t len  = 0;
@@ -154,7 +154,7 @@ render_in_transform(
 
     // Count codepoints (assume UTF-8; approximate with byte count for now).
     n00b_string_t *str = n00b_string_from_raw(data, len);
-    n00b_plane_put_str(plane, str);
+    n00b_plane_draw_text(plane, 0, 0, str);
 
     return n00b_option_set(n00b_plane_t *, plane);
 }
@@ -174,9 +174,9 @@ n00b_conduit_render_in_new(
     n00b_conduit_t                        *c,
     n00b_conduit_topic_t(n00b_buffer_t *) *upstream)
     _kargs {
-        n00b_isize_t       cols  = 80;
-        n00b_isize_t       rows  = 25;
-        n00b_text_style_t *style = nullptr;
+        int32_t            width  = 80;
+        int32_t            height = 25;
+        n00b_text_style_t *style  = nullptr;
     }
 {
 
@@ -189,9 +189,9 @@ n00b_conduit_render_in_new(
         render_in_state_t *st = n00b_conduit_xform_cookie(
             n00b_buffer_t *, n00b_plane_t *, xf);
 
-        st->cols  = cols;
-        st->rows  = rows;
-        st->style = style;
+        st->width  = width;
+        st->height = height;
+        st->style  = style;
     }
 
     return r;
@@ -204,8 +204,8 @@ n00b_conduit_render_in_new(
 typedef struct {
     n00b_conduit_xform_spec_base_t base;
     const n00b_renderer_vtable_t  *backend;
-    n00b_isize_t                   cols;
-    n00b_isize_t                   rows;
+    int32_t                        width;
+    int32_t                        height;
 } n00b_conduit_render_out_spec_t;
 
 static n00b_conduit_xform_base_t *
@@ -216,15 +216,15 @@ render_out_create_from_spec(n00b_conduit_t            *c,
     const n00b_conduit_render_out_spec_t *s = spec;
     auto r = n00b_conduit_render_out_new(
         c, (n00b_conduit_topic_t(n00b_plane_t *) *)upstream,
-        .backend = s->backend, .cols = s->cols, .rows = s->rows);
+        .backend = s->backend, .width = s->width, .height = s->height);
     if (n00b_result_is_err(r)) return nullptr;
     return (n00b_conduit_xform_base_t *)n00b_result_get(r);
 }
 
 typedef struct {
     n00b_conduit_xform_spec_base_t base;
-    n00b_isize_t                   cols;
-    n00b_isize_t                   rows;
+    int32_t                        width;
+    int32_t                        height;
     n00b_text_style_t             *style;
 } n00b_conduit_render_in_spec_t;
 
@@ -236,7 +236,7 @@ render_in_create_from_spec(n00b_conduit_t            *c,
     const n00b_conduit_render_in_spec_t *s = spec;
     auto r = n00b_conduit_render_in_new(
         c, (n00b_conduit_topic_t(n00b_buffer_t *) *)upstream,
-        .cols = s->cols, .rows = s->rows, .style = s->style);
+        .width = s->width, .height = s->height, .style = s->style);
     if (n00b_result_is_err(r)) return nullptr;
     return (n00b_conduit_xform_base_t *)n00b_result_get(r);
 }

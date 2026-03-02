@@ -34,7 +34,7 @@
 #include "slay/grammar.h"
 #include "slay/bnf.h"
 #include "slay/n00b_parse.h"
-#include "slay/n00b_tokenizer.h"
+#include "n00b/n00b_tokenizer.h"
 #include "slay/symtab.h"
 #include "slay/annot_walk.h"
 #include "n00b/n00b_compile.h"
@@ -885,7 +885,7 @@ static void
 test_func_decl_sym(void)
 {
     test_result_t r = run_pipeline(
-        "int func add(a: int, b: int) {\n"
+        "func add(a: int, b: int) -> int {\n"
         "    return a + b\n"
         "}\n"
     );
@@ -902,7 +902,7 @@ static void
 test_func_param_types(void)
 {
     test_result_t r = run_pipeline(
-        "int func add(a: int, b: int) {\n"
+        "func add(a: int, b: int) -> int {\n"
         "    return a + b\n"
         "}\n"
     );

@@ -28,6 +28,7 @@ typedef enum : uint8_t {
     N00B_EVENT_NONE    = 0,
     N00B_EVENT_KEY     = 1, /**< Keyboard input. */
     N00B_EVENT_RESIZE  = 2, /**< Terminal resized. */
+    N00B_EVENT_MOUSE   = 3, /**< Mouse input. */
 } n00b_event_type_t;
 
 // ====================================================================
@@ -68,6 +69,30 @@ typedef enum : uint32_t {
 } n00b_key_t;
 
 // ====================================================================
+// Mouse button constants
+// ====================================================================
+
+typedef enum : uint8_t {
+    N00B_MOUSE_NONE       = 0, /**< No button (motion only). */
+    N00B_MOUSE_LEFT       = 1, /**< Left button. */
+    N00B_MOUSE_MIDDLE     = 2, /**< Middle button. */
+    N00B_MOUSE_RIGHT      = 3, /**< Right button. */
+    N00B_MOUSE_SCROLL_UP  = 4, /**< Scroll wheel up. */
+    N00B_MOUSE_SCROLL_DOWN= 5, /**< Scroll wheel down. */
+} n00b_mouse_button_t;
+
+// ====================================================================
+// Mouse action constants
+// ====================================================================
+
+typedef enum : uint8_t {
+    N00B_MOUSE_PRESS   = 0, /**< Button pressed. */
+    N00B_MOUSE_RELEASE = 1, /**< Button released. */
+    N00B_MOUSE_MOVE    = 2, /**< Mouse moved (no button held). */
+    N00B_MOUSE_DRAG    = 3, /**< Mouse moved with button held. */
+} n00b_mouse_action_t;
+
+// ====================================================================
 // Modifier flags
 // ====================================================================
 
@@ -97,6 +122,15 @@ typedef struct n00b_event_t {
             n00b_isize_t rows;
             n00b_isize_t cols;
         } resize;
+
+        /** Mouse event payload. */
+        struct {
+            int32_t              x;      /**< Cell column (0-based). */
+            int32_t              y;      /**< Cell row (0-based). */
+            n00b_mouse_button_t  button; /**< Which button (if any). */
+            n00b_mouse_action_t  action; /**< Press, release, move, or drag. */
+            n00b_key_mod_t       mods;   /**< Active modifier keys. */
+        } mouse;
     };
 } n00b_event_t;
 

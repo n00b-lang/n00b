@@ -40,9 +40,10 @@
 #include "slay/c_tokenizer.h"
 #include "slay/pprint.h"
 #include "slay/pretty_print.h"
-#include "slay/transform.h"
+#include "xform/transform.h"
+#include "xform/xform_template.h"
 #include "slay/symtab.h"
-#include "core/dict_untyped.h"
+#include "core/dict.h"
 
 // Transform registration prototypes.
 extern void n00b_register_generic_struct_xform(n00b_xform_registry_t *reg);
@@ -129,6 +130,10 @@ typedef struct {
     const char  *dep_mq;        // -MQ <target>
     const char  *dep_mt;        // -MT <target>
 
+    // rstr template overrides (CLI > meson define > default).
+    const char  *rstr_template_styled;
+    const char  *rstr_template_plain;
+
     // Flags to pass through to clang.
     const char **clang_args;
     int          n_clang_args;
@@ -148,12 +153,13 @@ typedef struct {
 
 // Passed to transforms via ctx->user_data.
 typedef struct {
-    const char          *compiler;
-    const char          *constexpr_headers; // NULL or comma-separated header list
-    ncc_meta_table_t     func_meta;         // kargs/vargs metadata
-    n00b_dict_untyped_t  option_meta;       // _option var metadata
-    n00b_dict_untyped_t  option_decls;      // emitted option struct decls
-    n00b_dict_untyped_t  generic_struct_decls; // emitted _generic_struct tags
+    const char                *compiler;
+    const char                *constexpr_headers; // NULL or comma-separated header list
+    ncc_meta_table_t           func_meta;         // kargs/vargs metadata
+    n00b_dict_t                option_meta;       // _option var metadata
+    n00b_dict_t                option_decls;      // emitted option struct decls
+    n00b_dict_t                generic_struct_decls; // emitted _generic_struct tags
+    n00b_template_registry_t  *template_reg;      // template engine registry
 } ncc_xform_data_t;
 
 static void
@@ -282,6 +288,14 @@ parse_argv(ncc_opts_t *opts, int argc, const char **argv)
         }
         if (strncmp(arg, "--ncc-constexpr-include=", 23) == 0) {
             opts->constexpr_headers = arg + 23;
+            continue;
+        }
+        if (strncmp(arg, "--ncc-rstr-template-styled=", 27) == 0) {
+            opts->rstr_template_styled = arg + 27;
+            continue;
+        }
+        if (strncmp(arg, "--ncc-rstr-template-plain=", 26) == 0) {
+            opts->rstr_template_plain = arg + 26;
             continue;
         }
 
@@ -1580,18 +1594,54 @@ compile_file(ncc_opts_t *opts)
     n00b_register_constexpr_xform(&xreg);
     n00b_register_constexpr_paste_xform(&xreg);
 
+    // Template registry for rstr (and future template-based transforms).
+    n00b_template_registry_t tmpl_reg;
+    n00b_template_registry_init(&tmpl_reg, g, n00b_c_tokenize);
+
+    // Default rstr templates (simple n00b_string_t compound literal, no GC header).
+    static const char *default_rstr_styled =
+        "({$0 static n00b_string_t $1={.u8_bytes=$2,.data=$3,"
+        ".codepoints=$4,.styling=$5};&$1;})";
+    static const char *default_rstr_plain =
+        "({static n00b_string_t $0={.u8_bytes=$1,.data=$2,"
+        ".codepoints=$3,.styling=((void*)0)};&$0;})";
+
+    // Resolution order: CLI flag > meson define > built-in default.
+    const char *rstr_styled = default_rstr_styled;
+    const char *rstr_plain  = default_rstr_plain;
+
+#ifdef NCC_RSTR_TEMPLATE_STYLED
+    rstr_styled = NCC_RSTR_TEMPLATE_STYLED;
+#endif
+#ifdef NCC_RSTR_TEMPLATE_PLAIN
+    rstr_plain = NCC_RSTR_TEMPLATE_PLAIN;
+#endif
+
+    if (opts->rstr_template_styled) {
+        rstr_styled = opts->rstr_template_styled;
+    }
+    if (opts->rstr_template_plain) {
+        rstr_plain = opts->rstr_template_plain;
+    }
+
+    n00b_template_register(&tmpl_reg, "rstr_styled",
+                           "primary_expression", rstr_styled);
+    n00b_template_register(&tmpl_reg, "rstr_plain",
+                           "primary_expression", rstr_plain);
+
     n00b_xform_ctx_t xctx;
     n00b_xform_ctx_init(&xctx, g, &xreg, tree);
     ncc_xform_data_t xdata = {
         .compiler          = opts->compiler,
         .constexpr_headers = opts->constexpr_headers,
         .func_meta         = {0},
+        .template_reg      = &tmpl_reg,
     };
-    n00b_dict_untyped_init(&xdata.option_meta,
+    n00b_dict_init(&xdata.option_meta,
                             n00b_hash_cstring, n00b_dict_cstr_eq);
-    n00b_dict_untyped_init(&xdata.option_decls,
+    n00b_dict_init(&xdata.option_decls,
                             n00b_hash_cstring, n00b_dict_cstr_eq);
-    n00b_dict_untyped_init(&xdata.generic_struct_decls,
+    n00b_dict_init(&xdata.generic_struct_decls,
                             n00b_hash_cstring, n00b_dict_cstr_eq);
     xctx.user_data = &xdata;
     tree = n00b_xform_apply(&xreg, &xctx);
@@ -1600,9 +1650,10 @@ compile_file(ncc_opts_t *opts)
         ncc_verbose("transforms: %d nodes replaced", xctx.nodes_replaced);
     }
 
-    n00b_dict_untyped_free(&xdata.option_meta);
-    n00b_dict_untyped_free(&xdata.option_decls);
-    n00b_dict_untyped_free(&xdata.generic_struct_decls);
+    n00b_dict_free(&xdata.option_meta);
+    n00b_dict_free(&xdata.option_decls);
+    n00b_dict_free(&xdata.generic_struct_decls);
+    n00b_template_registry_free(&tmpl_reg);
     n00b_xform_registry_free(&xreg);
 
     // Stage 7: Emit transformed C.

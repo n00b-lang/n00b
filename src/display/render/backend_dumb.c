@@ -13,6 +13,7 @@
 #include "core/alloc.h"
 #include "core/buffer.h"
 #include "display/render/backend.h"
+#include "display/render/composite.h"
 
 // -------------------------------------------------------------------
 // Dumb context
@@ -22,6 +23,11 @@ typedef struct {
     int          fd;
     n00b_isize_t rows;
     n00b_isize_t cols;
+
+    // Persistent compositing grid.
+    n00b_rcell_t *comp_grid;
+    n00b_isize_t  comp_grid_rows;
+    n00b_isize_t  comp_grid_cols;
 } dumb_ctx_t;
 
 #define DUMB_DEFAULT_ROWS 25
@@ -47,7 +53,12 @@ static void
 dumb_destroy(void *vctx)
 {
     dumb_ctx_t *ctx = vctx;
-    n00b_free(ctx);
+    if (ctx) {
+        if (ctx->comp_grid) {
+            n00b_free(ctx->comp_grid);
+        }
+        n00b_free(ctx);
+    }
 }
 
 static n00b_render_cap_t
@@ -112,16 +123,53 @@ dumb_flush(void *vctx)
 }
 
 // -------------------------------------------------------------------
+// Plane-based rendering
+// -------------------------------------------------------------------
+
+static void
+dumb_render_planes(void                         *vctx,
+                   const n00b_composite_entry_t *entries,
+                   n00b_isize_t                  count,
+                   n00b_isize_t                  total_rows,
+                   n00b_isize_t                  total_cols,
+                   n00b_text_style_t            *default_style,
+                   n00b_render_cap_t             caps)
+{
+    dumb_ctx_t *ctx = vctx;
+
+    if (total_rows != ctx->comp_grid_rows
+        || total_cols != ctx->comp_grid_cols) {
+        if (ctx->comp_grid) {
+            n00b_free(ctx->comp_grid);
+        }
+        size_t total = (size_t)total_rows * total_cols;
+        ctx->comp_grid = n00b_alloc_array_with_opts(
+            n00b_rcell_t, total,
+            &(n00b_alloc_opts_t){.no_scan = true});
+        ctx->comp_grid_rows = total_rows;
+        ctx->comp_grid_cols = total_cols;
+    }
+
+    n00b_composite_commands_to_grid(entries, count, ctx->comp_grid,
+                                     total_rows, total_cols,
+                                     1, 1,
+                                     default_style, caps);
+
+    dumb_render_frame(vctx, ctx->comp_grid, total_rows, total_cols, nullptr);
+}
+
+// -------------------------------------------------------------------
 // Public vtable
 // -------------------------------------------------------------------
 
 const n00b_renderer_vtable_t n00b_renderer_dumb = {
-    .name         = "dumb",
-    .version      = N00B_RENDERER_ABI_VERSION,
-    .init         = dumb_init,
-    .destroy      = dumb_destroy,
-    .capabilities = dumb_capabilities,
-    .get_size     = dumb_get_size,
-    .render_frame = dumb_render_frame,
-    .flush        = dumb_flush,
+    .name          = "dumb",
+    .version       = N00B_RENDERER_ABI_VERSION,
+    .init          = dumb_init,
+    .destroy       = dumb_destroy,
+    .capabilities  = dumb_capabilities,
+    .get_size      = dumb_get_size,
+    .render_frame  = dumb_render_frame,
+    .flush         = dumb_flush,
+    .render_planes = dumb_render_planes,
 };

@@ -18,23 +18,17 @@
 #include <assert.h>
 
 // ====================================================================
-// Internal: grid helpers
+// Internal: draw helper
 // ====================================================================
 
-static inline n00b_rcell_t *
-grid_at(n00b_rcell_t *grid, n00b_isize_t grid_cols,
-        n00b_isize_t row, n00b_isize_t col)
-{
-    return &grid[row * grid_cols + col];
-}
-
 static inline void
-stamp_border(n00b_rcell_t      *cell,
-              n00b_codepoint_t   cp,
-              n00b_text_style_t *style)
+stamp_border(n00b_plane_t      *plane,
+             n00b_isize_t       x,
+             n00b_isize_t       y,
+             n00b_codepoint_t   cp,
+             n00b_text_style_t *style)
 {
-    n00b_rcell_set_codepoint(cell, cp, 1, style);
-    cell->flags = (n00b_cell_flags_t)(cell->flags | N00B_CELL_BORDER);
+    n00b_plane_draw_glyph(plane, (int32_t)x, (int32_t)y, cp, .style = style);
 }
 
 // ====================================================================
@@ -198,17 +192,64 @@ row_start_y(n00b_table_t *table, n00b_isize_t row, bool has_int_h,
 static void
 render_outer_box(n00b_table_t *table, n00b_plane_t *plane, render_dims_t *d)
 {
-    if (!table->table_props || !table->table_props->border_theme) {
+    const n00b_box_props_t    *bp    = table->table_props;
+    if (!bp || !bp->border_theme) {
         return;
     }
 
-    n00b_box_stamp(table->table_props,
-                    plane->grid,
-                    plane->total_cols,
-                    0, 0,
-                    d->total_h, d->total_w,
-                    table->table_props->border_style,
-                    table->table_props->fill_style);
+    const n00b_border_theme_t *theme = bp->border_theme;
+    n00b_text_style_t         *bs    = bp->border_style;
+    n00b_isize_t               h     = d->total_h;
+    n00b_isize_t               w     = d->total_w;
+
+    bool has_top    = (bp->borders & N00B_BORDER_TOP)    != 0;
+    bool has_bottom = (bp->borders & N00B_BORDER_BOTTOM) != 0;
+    bool has_left   = (bp->borders & N00B_BORDER_LEFT)   != 0;
+    bool has_right  = (bp->borders & N00B_BORDER_RIGHT)  != 0;
+
+    // Corners.
+    if (has_top && has_left) {
+        stamp_border(plane, 0, 0, theme->upper_left, bs);
+    }
+    if (has_top && has_right) {
+        stamp_border(plane, w - 1, 0, theme->upper_right, bs);
+    }
+    if (has_bottom && has_left) {
+        stamp_border(plane, 0, h - 1, theme->lower_left, bs);
+    }
+    if (has_bottom && has_right) {
+        stamp_border(plane, w - 1, h - 1, theme->lower_right, bs);
+    }
+
+    // Top / bottom horizontal lines.
+    n00b_isize_t x_start = has_left  ? 1 : 0;
+    n00b_isize_t x_end   = has_right ? w - 1 : w;
+
+    if (has_top) {
+        for (n00b_isize_t x = x_start; x < x_end; x++) {
+            stamp_border(plane, x, 0, theme->horizontal, bs);
+        }
+    }
+    if (has_bottom) {
+        for (n00b_isize_t x = x_start; x < x_end; x++) {
+            stamp_border(plane, x, h - 1, theme->horizontal, bs);
+        }
+    }
+
+    // Left / right vertical lines.
+    n00b_isize_t y_start = has_top    ? 1 : 0;
+    n00b_isize_t y_end   = has_bottom ? h - 1 : h;
+
+    if (has_left) {
+        for (n00b_isize_t y = y_start; y < y_end; y++) {
+            stamp_border(plane, 0, y, theme->vertical, bs);
+        }
+    }
+    if (has_right) {
+        for (n00b_isize_t y = y_start; y < y_end; y++) {
+            stamp_border(plane, w - 1, y, theme->vertical, bs);
+        }
+    }
 }
 
 // ====================================================================
@@ -222,8 +263,6 @@ render_interior_borders(n00b_table_t *table, n00b_plane_t *plane,
     const n00b_box_props_t    *tp    = table->table_props;
     const n00b_border_theme_t *theme = tp ? tp->border_theme : nullptr;
     n00b_text_style_t         *bstyle  = tp ? tp->border_style : nullptr;
-    n00b_isize_t               grid_w  = plane->total_cols;
-    n00b_rcell_t              *grid    = plane->grid;
     n00b_isize_t               n_rows  = (n00b_isize_t)table->rows.len;
     n00b_isize_t               n_cols  = (n00b_isize_t)table->col_specs.len;
 
@@ -232,13 +271,12 @@ render_interior_borders(n00b_table_t *table, n00b_plane_t *plane,
         for (n00b_isize_t col = 1; col < n_cols; col++) {
             n00b_isize_t x = col_start_x(table, col, true, d->content_x) - 1;
 
-            // Draw from top of data to bottom of data.
             for (n00b_isize_t r = 0; r < n_rows; r++) {
                 n00b_isize_t y  = row_start_y(table, r, d->has_int_h, d->data_y);
                 n00b_isize_t rh = (n00b_isize_t)table->row_heights[r];
 
                 for (n00b_isize_t dy = 0; dy < rh; dy++) {
-                    stamp_border(grid_at(grid, grid_w, y + dy, x),
+                    stamp_border(plane, x, y + dy,
                                   theme->vertical, bstyle);
                 }
             }
@@ -251,7 +289,6 @@ render_interior_borders(n00b_table_t *table, n00b_plane_t *plane,
             n00b_isize_t y = row_start_y(table, r, true, d->data_y)
                              + (n00b_isize_t)table->row_heights[r];
 
-            // Fill the horizontal line.
             n00b_isize_t x_start = d->content_x;
             n00b_isize_t x_end   = d->content_x;
 
@@ -263,7 +300,7 @@ render_interior_borders(n00b_table_t *table, n00b_plane_t *plane,
             }
 
             for (n00b_isize_t x = x_start; x < x_end; x++) {
-                stamp_border(grid_at(grid, grid_w, y, x),
+                stamp_border(plane, x, y,
                               theme->horizontal, bstyle);
             }
 
@@ -272,7 +309,7 @@ render_interior_borders(n00b_table_t *table, n00b_plane_t *plane,
                 for (n00b_isize_t col = 1; col < n_cols; col++) {
                     n00b_isize_t cx = col_start_x(table, col, true,
                                                     d->content_x) - 1;
-                    stamp_border(grid_at(grid, grid_w, y, cx),
+                    stamp_border(plane, cx, y,
                                   theme->cross, bstyle);
                 }
             }
@@ -280,17 +317,14 @@ render_interior_borders(n00b_table_t *table, n00b_plane_t *plane,
             // T-junctions at outer edges.
             if (d->has_left) {
                 n00b_isize_t lx = d->content_x - 1;
-                if (lx < grid_w) {
-                    stamp_border(grid_at(grid, grid_w, y, lx),
+                if (lx >= 0) {
+                    stamp_border(plane, lx, y,
                                   theme->left_t, bstyle);
                 }
             }
             if (d->has_right) {
-                n00b_isize_t rx = x_end;
-                if (rx < grid_w) {
-                    stamp_border(grid_at(grid, grid_w, y, rx),
-                                  theme->right_t, bstyle);
-                }
+                stamp_border(plane, x_end, y,
+                              theme->right_t, bstyle);
             }
         }
     }
@@ -301,11 +335,11 @@ render_interior_borders(n00b_table_t *table, n00b_plane_t *plane,
             n00b_isize_t x = col_start_x(table, col, true, d->content_x) - 1;
 
             if (d->has_top) {
-                stamp_border(grid_at(grid, grid_w, 0, x),
+                stamp_border(plane, x, 0,
                               theme->top_t, bstyle);
             }
             if (d->has_bottom) {
-                stamp_border(grid_at(grid, grid_w, d->total_h - 1, x),
+                stamp_border(plane, x, d->total_h - 1,
                               theme->bottom_t, bstyle);
             }
         }
@@ -456,7 +490,7 @@ render_cell_content(n00b_table_t *table, n00b_plane_t *plane,
                                        + (n00b_isize_t)li;
                 n00b_isize_t write_x = gx + pl;
 
-                n00b_plane_put_str_at(plane, write_y, write_x, padded);
+                n00b_plane_draw_text(plane, (int32_t)write_x, (int32_t)write_y, padded);
             }
 
             if (num_lines > 0) {
@@ -493,7 +527,7 @@ render_title_caption(n00b_table_t *table, n00b_plane_t *plane,
         n00b_string_t *centered =
             n00b_unicode_str_center(table->title, (int32_t)title_w);
 
-        n00b_plane_put_str_at(plane, title_y, title_x, centered);
+        n00b_plane_draw_text(plane, (int32_t)title_x, (int32_t)title_y, centered);
     }
 
     if (table->caption && table->caption->u8_bytes > 0 && d->caption_h > 0) {
@@ -520,7 +554,7 @@ render_title_caption(n00b_table_t *table, n00b_plane_t *plane,
         n00b_string_t *centered =
             n00b_unicode_str_center(table->caption, (int32_t)cap_w);
 
-        n00b_plane_put_str_at(plane, cap_y, cap_x, centered);
+        n00b_plane_draw_text(plane, (int32_t)cap_x, (int32_t)cap_y, centered);
     }
 }
 
@@ -552,21 +586,18 @@ n00b_table_render(n00b_table_t *table) _kargs
         return nullptr;
     }
 
-    // Create or resize the plane.
+    // Create or clear the plane.
     if (table->plane) {
-        if (table->plane->total_cols != d.total_w
-            || table->plane->total_rows != d.total_h) {
-            n00b_plane_resize(table->plane, d.total_h, d.total_w);
-        }
         n00b_plane_clear(table->plane);
     }
     else {
         table->plane = n00b_new_kargs(n00b_plane_t, plane,
-                                       .cols      = d.total_w,
-                                       .rows      = d.total_h,
                                        .name      = n00b_option_set(n00b_string_t *, r"table"),
                                        .allocator = table->allocator);
     }
+
+    table->plane->height = d.total_h;
+    table->plane->width = d.total_w;
 
     // Render phases.
     render_outer_box(table, table->plane, &d);

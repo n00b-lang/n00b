@@ -20,6 +20,7 @@
                    | <typeof-stmt>
                    | <switch-stmt>
                    | <func-def>
+                   | <comptime-stmt>
                    | <variable-decl>
                    | <labeled-for>
                    | <labeled-while>
@@ -250,47 +251,51 @@
 <assign-op> ::= %"="
 
 # ============================================================================
+# Comptime block — runs during compilation (pass 1)
+# ============================================================================
+
+<comptime-stmt> ::= %"comptime" <body>
+
+# ============================================================================
 # Function definition
 # ============================================================================
 
-# $0=func-mods, $1=opt-return-type, $2=func-kw, $3=IDENTIFIER (name),
-# $4=formal-list, $5=where-clause, $6=body
-<func-def> @scope("function", $3) @declares($3, "function") ::= <func-mod>* <func-return-type>? <func-kind> %IDENTIFIER <param-decl> <where-clause>? <body>
+# $0=func-mods, $1=func-kind, $2=IDENTIFIER (name),
+# $3=param-decl, $4=where-clause, $5=return-type, $6=body
+<func-def> @scope("function", $2) @declares($2, "function") ::=
+    <func-mod>* <func-kind> %IDENTIFIER <param-decl> <where-clause>? <return-type>? <body>
 
 <func-kind> ::= %"func" | %"method"
 <func-mod> ::= %"private" | %"once"
-<func-kw> ::= %"func"
 
 <param-decl> ::= %"(" <formals>? %")"
 
-<formals> ::= <formal-param> (%"," <formal-param>)* (%"," <varargs-spec>)?
-            | <varargs-spec>
-
-<varargs-spec> ::= <varargs-param> %"," <kw-list>
-               | <kw-list> %","?
-               | <varargs-param>?
+<formals> ::= <formal-param> (%"," <formal-param>)* (%"," <vargs-param>)? (%"," <k-param>)*
+            | <vargs-param>
 
 # Typed: $0=id-list (name), $1=":", $2=type-spec
 # Untyped: $0=id-list (name)
-<formal-param> @declares($0, $2, "param") ::= <id-list> %":" <type-spec>
-<formal-param> @declares($0, "param") ::= <id-list>
 
+<formal-param> ::= <pos-param> | <k-param>
+
+# Positional parameters
+<pos-param> @declares($0, "param")     ::= %IDENTIFIER
+<pos-param> @declares($0, $2, "param") ::= %IDENTIFIER %":" <type-spec>
+
+# Keyword parameters (can go in any order)
+<k-param> @declares($0, "param") @infer("$0 unify $2") ::=
+                %IDENTIFIER %"=" <expression>
+<k-param> @declares($0, $2, "param") @infer("$0 unify $4") ::=
+                %IDENTIFIER %":" <type-spec> %"=" <expression>
+               
 # Typed: $0="*", $1=IDENTIFIER (name), $2=":", $3=type-spec
 # Untyped: $0="*", $1=IDENTIFIER (name)
-<varargs-param> @declares($1, $3, "param") ::= %"*" %IDENTIFIER %":" <type-spec>
-<varargs-param> @declares($1, "param") ::= %"*" %IDENTIFIER
-
-<kw-list> ::= %"**" <kw-one> (%"," <kw-one>)*
-<kw-one> @declares($0, $2, "param") ::= %IDENTIFIER %":" <type-spec> %"=" <literal>
-<kw-one> @declares($0, "param") ::= %IDENTIFIER %"=" <literal>
-
-# Return type in front position (function definitions)
-<func-return-type> ::= <union-tspec>
+<vargs-param> @declares($1, $3, "param") ::= %"*" %IDENTIFIER %":" <type-spec>
+<vargs-param> @declares($1, "param") ::= %"*" %IDENTIFIER
 
 # Return type with arrow (function type-specs only)
 <return-type> ::= %"->" <union-tspec>
 
-<opt-return-type> ::= <return-type>?
 
 # ============================================================================
 # Enum
@@ -336,13 +341,13 @@
 #                 | <extern-holds>
 #                 | <extern-allocs>
 
-# <extern-local> @declares($2) ::= %"local" %":" %IDENTIFIER %"(" <local-formals> %")" <opt-return-type>
-#                  | %"local" %":" %IDENTIFIER %"(" %")" <opt-return-type>
+# <extern-local> @declares($2) ::= %"local" %":" %IDENTIFIER %"(" <local-formals> %")" <return-type>?
+#                  | %"local" %":" %IDENTIFIER %"(" %")" <return-type>?
 
 <local-formals> ::= <formal-param> %"," <local-formals>
-                  | <formal-param> %"," <varargs-param>
+                  | <formal-param> %"," <vargs-param>
                   | <formal-param>
-                  | <varargs-param>
+                  | <vargs-param>
 
 <extern-dll> ::= %"dll" %":" %STRING_LIT
 
@@ -686,11 +691,11 @@
 <tspec-list> ::= <union-tspec> %"," <tspec-list>
               | <union-tspec>
 
-<tspec-func> ::= %"(" <tspec-func-params> %")" <opt-return-type>
-               | %"(" %")" <opt-return-type>
+<tspec-func> ::= %"(" <tspec-func-params> %")" <return-type>?
+               | %"(" %")" <return-type>?
 
-<tspec-func-params> ::= <union-tspec> (%"," <tspec-func-params>)* ("," <tspec-vargs>)? ("," <tspec-kargs>)?
-                       | <tspec-vargs> ("," <tspec-kargs>)?
+<tspec-func-params> ::= <union-tspec> (%"," <tspec-func-params>)* (%"," <tspec-vargs>)? (%"," <tspec-kargs>)?
+                       | <tspec-vargs> (%"," <tspec-kargs>)?
                        | <tspec-kargs>
 
 <tspec-field> ::= %IDENTIFIER %":" <union-tspec>
@@ -702,7 +707,7 @@
 # Where clauses (type constraints on type variables)
 # ============================================================================
 
-<where-clause> ::= %"where" <type-constraint> (%"," <type-constraint>)*
+<where-clause> ::= %"[" <type-constraint> (%"," <type-constraint>)* %"]"
 
 <type-constraint> ::= %"`" %IDENTIFIER %":" <constraint-list>
 

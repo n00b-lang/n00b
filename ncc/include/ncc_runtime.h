@@ -120,6 +120,41 @@ n00b_vargs_peek_address(n00b_vargs_t *va_ctx)
     return &va_ctx->args[va_ctx->cur_ix];
 }
 
+static inline void *
+n00b_vargs_peek_forward(n00b_vargs_t *va_ctx, unsigned int n, bool *err)
+{
+    if (!va_ctx || va_ctx->cur_ix + n < va_ctx->cur_ix) {
+        if (err) {
+            *err = true;
+        }
+        return nullptr;
+    }
+    unsigned int ix = va_ctx->cur_ix + n;
+    if (ix >= va_ctx->nargs) {
+        if (err) {
+            *err = true;
+        }
+        return nullptr;
+    }
+    if (err) {
+        *err = false;
+    }
+    return va_ctx->args[ix];
+}
+
+static inline void **
+n00b_vargs_peek_forward_address(n00b_vargs_t *va_ctx, unsigned int n)
+{
+    if (!va_ctx || va_ctx->cur_ix + n < va_ctx->cur_ix) {
+        return nullptr;
+    }
+    unsigned int ix = va_ctx->cur_ix + n;
+    if (ix >= va_ctx->nargs) {
+        return nullptr;
+    }
+    return &va_ctx->args[ix];
+}
+
 // ============================================================================
 // _Once support — pthread_once wrapper
 // ============================================================================

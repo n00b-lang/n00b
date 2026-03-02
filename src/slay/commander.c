@@ -434,6 +434,23 @@ cmdr_build_items_nt(n00b_cmdr_t *c, n00b_cmdr_command_t *cmd,
                          });
     }
 
+    // Also allow root-level flags inside subcommand grammars.
+    if (cmd != &c->root) {
+        int32_t n_root = n00b_list_len(c->root.flags);
+
+        for (int32_t i = 0; i < n_root; i++) {
+            n00b_cmdr_flag_spec_t f = n00b_list_get(c->root.flags, i);
+            n00b_nonterm_t *fnt = cmdr_build_flag_nt(c, f, prefix);
+            n00b_nt_id_t fnt_id = n00b_nonterm_id(fnt);
+
+            n00b_add_rule_v(c->grammar, items_id, 2,
+                             (n00b_match_t[]){
+                                 (n00b_match_t){.kind = N00B_MATCH_NT, .nt_id = fnt_id},
+                                 (n00b_match_t){.kind = N00B_MATCH_NT, .nt_id = items_id},
+                             });
+        }
+    }
+
     // items -> WORD items | INT items | FLOAT items | BOOL items
     n00b_add_rule_v(c->grammar, items_id, 2,
                      (n00b_match_t[]){

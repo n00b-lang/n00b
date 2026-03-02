@@ -12,13 +12,7 @@
 #include "display/event.h"
 #include "text/unicode/properties.h"
 #include "text/strings/text_style.h"
-
-// Theme colors (matching slop's dark theme palette).
-#define BTN_BORDER_NORMAL   0x585858  // Medium gray
-#define BTN_BORDER_FOCUSED  0x89B4FA  // Primary blue
-#define BTN_BORDER_ACTIVE   0xF5C2E7  // Pink/accent
-#define BTN_TEXT_ACTIVE     0x1E1E2E  // Dark bg for inverted text
-#define BTN_BG_ACTIVE       0x89B4FA  // Blue bg when pressed
+#include "text/strings/theme.h"
 
 // -------------------------------------------------------------------
 // Vtable callbacks
@@ -41,34 +35,57 @@ button_render(n00b_plane_t *plane, void *data)
 
     n00b_plane_clear(plane);
 
-    n00b_isize_t content_rows;
-    n00b_isize_t content_cols;
-    n00b_plane_content_size(plane, &content_rows, &content_cols);
+    int32_t content_w;
+    int32_t content_h;
+    n00b_plane_content_size(plane, &content_w, &content_h);
 
-    if (content_cols == 0 || content_rows == 0) {
+    if (content_w == 0 || content_h == 0) {
         return;
     }
 
     // Center the label horizontally and vertically.
-    int32_t label_width = n00b_unicode_display_width(btn->label);
-    n00b_isize_t col_offset = 0;
-    n00b_isize_t row_offset = 0;
+    int32_t label_width = n00b_plane_text_width(plane, btn->label, nullptr);
+    int32_t x = 0;
+    int32_t y = 0;
 
-    if (label_width < (int32_t)content_cols) {
-        col_offset = (n00b_isize_t)(((int32_t)content_cols - label_width) / 2);
+    if (label_width < content_w) {
+        x = (content_w - label_width) / 2;
     }
-    if (content_rows > 1) {
-        row_offset = (content_rows - 1) / 2;
+    if (content_h > 1) {
+        int32_t line_h = n00b_plane_line_height(plane, nullptr);
+        y = (content_h - line_h) / 2;
     }
 
-    n00b_plane_put_str_at(plane, row_offset, col_offset, btn->label);
+    n00b_plane_draw_text(plane, x, y, btn->label);
 }
 
 static bool
 button_handle_event(n00b_plane_t *plane, void *data, const n00b_event_t *event)
 {
     n00b_button_t *btn = (n00b_button_t *)data;
-    if (!btn || event->type != N00B_EVENT_KEY) {
+    if (!btn) {
+        return false;
+    }
+
+    // Mouse click activates the button.
+    if (event->type == N00B_EVENT_MOUSE) {
+        if (event->mouse.button == N00B_MOUSE_LEFT
+            && event->mouse.action == N00B_MOUSE_PRESS) {
+            n00b_plane_set_state(plane, N00B_WSTATE_ACTIVE);
+            n00b_plane_mark_dirty(plane);
+
+            if (btn->on_click) {
+                btn->on_click(plane, btn->on_click_data);
+            }
+
+            n00b_plane_set_state(plane, N00B_WSTATE_FOCUSED);
+            n00b_plane_mark_dirty(plane);
+            return true;
+        }
+        return false;
+    }
+
+    if (event->type != N00B_EVENT_KEY) {
         return false;
     }
 
@@ -85,7 +102,7 @@ button_handle_event(n00b_plane_t *plane, void *data, const n00b_event_t *event)
     if (activate) {
         // Brief ACTIVE state.
         n00b_plane_set_state(plane, N00B_WSTATE_ACTIVE);
-        plane->flags |= N00B_PLANE_DIRTY;
+        n00b_plane_mark_dirty(plane);
 
         if (btn->on_click) {
             btn->on_click(plane, btn->on_click_data);
@@ -93,7 +110,7 @@ button_handle_event(n00b_plane_t *plane, void *data, const n00b_event_t *event)
 
         // Return to FOCUSED state.
         n00b_plane_set_state(plane, N00B_WSTATE_FOCUSED);
-        plane->flags |= N00B_PLANE_DIRTY;
+        n00b_plane_mark_dirty(plane);
         return true;
     }
 
@@ -110,23 +127,33 @@ button_can_focus(n00b_plane_t *plane, void *data)
 
 static void
 button_measure(n00b_plane_t *plane, void *data,
-               n00b_isize_t *pref_cols, n00b_isize_t *pref_rows,
-               n00b_isize_t *min_cols,  n00b_isize_t *min_rows)
+               int32_t *pref_w, int32_t *pref_h,
+               int32_t *min_w,  int32_t *min_h)
 {
-    (void)plane;
     n00b_button_t *btn = (n00b_button_t *)data;
 
+    int32_t lh = n00b_plane_line_height(plane, nullptr);
+    if (lh <= 0) lh = 1;
+
+    // Determine one character's pixel width for converting character-unit
+    // padding (2 chars) into pixels.
+    int32_t cpw = n00b_plane_text_width(plane, n00b_string_from_cstr("M"), nullptr);
+    if (cpw <= 0) {
+        cpw = 1;
+    }
+
+    // Report content-area size only.  Box insets (borders + padding)
+    // are added by the layout engine automatically.
     if (btn && btn->label) {
-        int32_t w = n00b_unicode_display_width(btn->label);
-        // Add 8 for border + padding + centering margin.
-        *pref_cols = (n00b_isize_t)(w > 0 ? w + 6 : 5);
+        int32_t w = n00b_plane_text_width(plane, btn->label, nullptr);
+        *pref_w = (w > 0 ? w + 2 * cpw : 1);
     }
     else {
-        *pref_cols = 5;
+        *pref_w = 1;
     }
-    *pref_rows = 3;
-    *min_cols  = 3;
-    *min_rows  = 1;
+    *pref_h = lh;
+    *min_w  = 1;
+    *min_h  = lh;
 }
 
 // -------------------------------------------------------------------
@@ -152,24 +179,13 @@ n00b_button_new(n00b_string_t *label) _kargs {
     void              *on_click_data = nullptr;
     n00b_codepoint_t   shortcut      = 0;
     n00b_box_props_t  *box           = nullptr;
-    n00b_isize_t       cols          = 0;
-    n00b_isize_t       rows          = 0;
+    n00b_canvas_t     *canvas        = nullptr;
+    int32_t            width         = 0;
+    int32_t            height        = 0;
     n00b_text_style_t *style         = nullptr;
     n00b_allocator_t  *allocator     = nullptr;
 }
 {
-    // Auto-size from label.
-    if (cols == 0 && label) {
-        int32_t w = n00b_unicode_display_width(label);
-        cols = (n00b_isize_t)(w > 0 ? w + 6 : 5); // +6 for centering margin.
-    }
-    if (cols == 0) {
-        cols = 10;
-    }
-    if (rows == 0) {
-        rows = 3; // Top border + content + bottom border.
-    }
-
     // Auto-create box props with rounded border if none given.
     if (!box) {
         box = n00b_alloc(n00b_box_props_t);
@@ -180,32 +196,54 @@ n00b_button_new(n00b_string_t *label) _kargs {
 
         // Normal state: gray border.
         box->border_style = n00b_alloc(n00b_text_style_t);
-        box->border_style->fg_rgb = n00b_color_make(BTN_BORDER_NORMAL);
+        box->border_style->fg_rgb = n00b_theme_resolve_color(N00B_PAL_BORDER);
 
         // Focused state: blue border to show focus ring.
         n00b_state_style_t *ss_focus = n00b_alloc(n00b_state_style_t);
         ss_focus->border_style = n00b_alloc(n00b_text_style_t);
-        ss_focus->border_style->fg_rgb = n00b_color_make(BTN_BORDER_FOCUSED);
+        ss_focus->border_style->fg_rgb = n00b_theme_resolve_color(N00B_PAL_FOCUS);
         ss_focus->border_style->bold   = N00B_TRI_YES;
         box->state_styles[N00B_WSTATE_FOCUSED] = ss_focus;
 
         // Active state: accent border + inverted fill.
         n00b_state_style_t *ss_active = n00b_alloc(n00b_state_style_t);
         ss_active->border_style = n00b_alloc(n00b_text_style_t);
-        ss_active->border_style->fg_rgb = n00b_color_make(BTN_BORDER_ACTIVE);
+        ss_active->border_style->fg_rgb = n00b_theme_resolve_color(N00B_PAL_ACCENT);
         ss_active->fill_style = n00b_alloc(n00b_text_style_t);
-        ss_active->fill_style->bg_rgb = n00b_color_make(BTN_BG_ACTIVE);
+        ss_active->fill_style->bg_rgb = n00b_theme_resolve_color(N00B_PAL_PRIMARY);
         ss_active->text_style = n00b_alloc(n00b_text_style_t);
-        ss_active->text_style->fg_rgb = n00b_color_make(BTN_TEXT_ACTIVE);
+        ss_active->text_style->fg_rgb = n00b_theme_resolve_color(N00B_PAL_TEXT_INVERSE);
         box->state_styles[N00B_WSTATE_ACTIVE] = ss_active;
     }
 
     n00b_plane_t *plane = n00b_new_kargs(n00b_plane_t, plane,
-                                           .cols      = cols,
-                                           .rows      = rows,
                                            .box       = box,
+                                           .canvas    = canvas,
                                            .style     = style,
                                            .allocator = allocator);
+
+    // Auto-size from label using plane metrics (content area only; the
+    // layout engine accounts for box insets automatically).
+    if (width == 0 && label) {
+        int32_t w   = n00b_plane_text_width(plane, label, nullptr);
+        int32_t cpw = n00b_plane_text_width(plane, n00b_string_from_cstr("M"), nullptr);
+        if (cpw <= 0) {
+            cpw = 1;
+        }
+        width = (int32_t)(w > 0 ? w + 2 * cpw : 1);
+    }
+    if (width == 0) {
+        width = 1;
+    }
+    if (height == 0) {
+        height = n00b_plane_line_height(plane, nullptr);
+    }
+
+    plane->width = width;
+    plane->height = height;
+
+    // Buttons should not stretch on the cross axis by default.
+    plane->flex.align_self = N00B_ALIGN_START_CROSS;
 
     n00b_button_t *btn = n00b_alloc(n00b_button_t);
     btn->label         = label;
@@ -214,7 +252,7 @@ n00b_button_new(n00b_string_t *label) _kargs {
     btn->shortcut      = shortcut;
 
     n00b_widget_attach(plane, &n00b_widget_button, btn);
-    n00b_widget_render(plane);
+    n00b_plane_mark_dirty(plane);
 
     return plane;
 }

@@ -8,7 +8,7 @@
  * ### Usage
  *
  * ```c
- * n00b_plane_t *inp = n00b_input_new(.cols = 30,
+ * n00b_plane_t *inp = n00b_input_new(.width = 30,
  *                                     .placeholder = my_str,
  *                                     .on_submit = handle_submit);
  * ```
@@ -65,9 +65,10 @@ extern const n00b_widget_vtable_t n00b_widget_input;
  * @kw on_change_data User data for on_change.
  * @kw on_submit      Called on Enter.
  * @kw on_submit_data User data for on_submit.
- * @kw cols           Width (default 20).
- * @kw rows           Height (default 1).
+ * @kw width          Width in pixels (0 = auto: 20 chars wide).
+ * @kw height         Height in pixels (0 = auto from line height).
  * @kw style          Text style.
+ * @kw canvas         Canvas for font metrics (nullptr = cell mode).
  * @kw allocator      Allocator.
  */
 extern n00b_plane_t *
@@ -80,9 +81,10 @@ n00b_input_new() _kargs {
     void             *on_change_data = nullptr;
     n00b_input_cb_t   on_submit      = nullptr;
     void             *on_submit_data = nullptr;
-    n00b_isize_t      cols           = 20;
-    n00b_isize_t      rows           = 1;
+    int32_t           width          = 0;
+    int32_t           height         = 0;
     n00b_text_style_t *style         = nullptr;
+    n00b_canvas_t     *canvas        = nullptr;
     n00b_allocator_t  *allocator     = nullptr;
 };
 

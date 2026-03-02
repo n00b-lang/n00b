@@ -27,7 +27,7 @@
 #include "slay/grammar.h"
 #include "slay/bnf.h"
 #include "slay/n00b_parse.h"
-#include "slay/n00b_tokenizer.h"
+#include "n00b/n00b_tokenizer.h"
 #include "slay/symtab.h"
 #include "slay/annot_walk.h"
 #include "n00b/n00b_compile.h"
@@ -478,7 +478,7 @@ test_diag_print(void)
 
     // Print with source text.
     const char *src = "var foo = 42\nvar bar = 1\n";
-    n00b_diag_print_all(ctx, src, "test.n00b");
+    n00b_diag_print_all(ctx, src, "test.n");
 
     // Print with no source text.
     n00b_diag_print_all(ctx, NULL, NULL);

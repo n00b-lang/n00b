@@ -165,6 +165,15 @@ n00b_obj_core_method(void *obj, enum n00b_builtin_type_fn slot)
 #define N00B_CTOR_VARGS .ctor_takes_vargs = true, .ctor_takes_kargs = true
 
 /**
+ * @brief Look up an extension method by type hash and method name.
+ * @param type_hash typehash(T) of the type.
+ * @param method_name Name of the method to look up.
+ * @return The function pointer, or none if not found.
+ */
+extern n00b_option_t(n00b_vtable_entry)
+n00b_type_method_lookup(uint64_t type_hash, const char *method_name);
+
+/**
  * @brief Register all built-in types (called by n00b_type_registry_init).
  */
 extern void n00b_register_builtin_types(void);

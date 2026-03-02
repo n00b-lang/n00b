@@ -110,6 +110,33 @@ n00b_type_info_for(void *obj)
     return n00b_type_lookup(hash);
 }
 
+n00b_option_t(n00b_vtable_entry)
+n00b_type_method_lookup(uint64_t type_hash, const char *method_name)
+{
+    auto info_opt = n00b_type_lookup(type_hash);
+
+    if (!n00b_option_is_set(info_opt)) {
+        return n00b_option_none(n00b_vtable_entry);
+    }
+
+    n00b_type_info_t *info = n00b_option_get(info_opt);
+
+    if (!n00b_option_is_set(info->ext_vtable)) {
+        return n00b_option_none(n00b_vtable_entry);
+    }
+
+    n00b_array_t(n00b_method_t) *methods = n00b_option_get(info->ext_vtable);
+
+    for (size_t i = 0; i < methods->len; i++) {
+        if (methods->data[i].name
+            && strcmp(methods->data[i].name, method_name) == 0) {
+            return n00b_option_set(n00b_vtable_entry, methods->data[i].fn);
+        }
+    }
+
+    return n00b_option_none(n00b_vtable_entry);
+}
+
 bool
 n00b_type_add_method(uint64_t type_hash, const n00b_method_t *method)
 {

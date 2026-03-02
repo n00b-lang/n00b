@@ -202,8 +202,8 @@ hierarchy for composition.
 ```c
 n00b_plane_t *n00b_plane_new(n00b_isize_t cols, n00b_isize_t rows, +);
     // keyword args:
-    //   .vp_cols = 0      (0 = cols)
-    //   .vp_rows = 0      (0 = rows)
+    //   .width = 0      (0 = cols)
+    //   .height = 0      (0 = rows)
     //   .name    = nullptr
     //   .scroll  = N00B_SCROLL_NONE
     //   .z       = 0

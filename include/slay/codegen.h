@@ -328,15 +328,17 @@ typedef struct {
  * @kw storage_policy  Storage policy callback (NULL = all registers).
  * @kw default_handler Default handler for unregistered NTs (NULL = lower children).
  * @kw user_data       User-defined context pointer (NULL).
+ * @kw embed_registry  Pre-built embed handler registry (NULL = allocate new).
  */
 n00b_cg_session_t *n00b_cg_session_new(n00b_grammar_t *grammar)
 _kargs {
-    n00b_cg_import_table_t *imports;
-    n00b_cg_type_map_fn     type_map;
-    n00b_cg_literal_fn      literal_parser;
-    n00b_cg_storage_fn      storage_policy;
-    n00b_cg_handler_fn      default_handler;
-    void                   *user_data;
+    n00b_cg_import_table_t  *imports;
+    n00b_cg_type_map_fn      type_map;
+    n00b_cg_literal_fn       literal_parser;
+    n00b_cg_storage_fn       storage_policy;
+    n00b_cg_handler_fn       default_handler;
+    void                    *user_data;
+    n00b_dict_untyped_t     *embed_registry;
 };
 
 /**

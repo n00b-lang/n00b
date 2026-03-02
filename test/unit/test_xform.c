@@ -205,10 +205,16 @@ test_identity_filter(void)
     n00b_conduit_subscribe(xform_int_t, out_topic, inbox,
                            .operations = N00B_CONDUIT_OP_ALL);
 
+    // Wait for xform thread to start its loop.
+    while (!n00b_atomic_load(&xf->running))
+        usleep(100);
+
     // Push 5 ints then TOPIC_CLOSED.
     n00b_thread_t *pusher = push_ints(c, src_topic, 5);
     n00b_thread_join(pusher);
-    usleep(50000); // let xform drain
+
+    // Wait for xform to finish (it exits on TOPIC_CLOSED).
+    n00b_conduit_xform_join((n00b_conduit_xform_base_t *)xf);
 
     // Count messages.
     int count = 0;
@@ -221,8 +227,6 @@ test_identity_filter(void)
     }
     assert(count == 5);
 
-    n00b_conduit_xform_stop((n00b_conduit_xform_base_t *)xf);
-    n00b_conduit_xform_join((n00b_conduit_xform_base_t *)xf);
     n00b_conduit_destroy(c);
 
     printf("  [PASS] identity filter\n");
@@ -272,15 +276,18 @@ test_dropping_transform(void)
     n00b_conduit_subscribe(xform_int_t, out_topic, inbox,
                            .operations = N00B_CONDUIT_OP_ALL);
 
+    while (!n00b_atomic_load(&xf->running))
+        usleep(100);
+
     n00b_thread_t *pusher = push_ints(c, src_topic, 3);
     n00b_thread_join(pusher);
-    usleep(50000);
+
+    // Wait for xform to finish (it exits on TOPIC_CLOSED).
+    n00b_conduit_xform_join((n00b_conduit_xform_base_t *)xf);
 
     // Should have received zero messages.
     assert(!n00b_conduit_inbox_has_msg(xform_int_t, inbox));
 
-    n00b_conduit_xform_stop((n00b_conduit_xform_base_t *)xf);
-    n00b_conduit_xform_join((n00b_conduit_xform_base_t *)xf);
     n00b_conduit_destroy(c);
 
     printf("  [PASS] dropping transform\n");
@@ -332,23 +339,18 @@ test_type_changing_transform(void)
     n00b_conduit_subscribe(xform_str_t, out_topic, inbox,
                            .operations = N00B_CONDUIT_OP_ALL);
 
+    while (!n00b_atomic_load(&xf->running))
+        usleep(100);
+
     n00b_thread_t *pusher = push_ints(c, src_topic, 2);
     n00b_thread_join(pusher);
 
-    // Poll for 2 messages with a generous timeout.
-    n00b_conduit_message_t(xform_str_t) *m1 = nullptr;
-    n00b_conduit_message_t(xform_str_t) *m2 = nullptr;
+    n00b_conduit_xform_join((n00b_conduit_xform_base_t *)xf);
 
-    for (int tries = 0; tries < 100; tries++) {
-        if (!m1) {
-            m1 = n00b_conduit_inbox_pop_msg(xform_str_t, inbox);
-        }
-        if (m1 && !m2) {
-            m2 = n00b_conduit_inbox_pop_msg(xform_str_t, inbox);
-        }
-        if (m1 && m2) break;
-        usleep(10000);
-    }
+    n00b_conduit_message_t(xform_str_t) *m1 =
+        n00b_conduit_inbox_pop_msg(xform_str_t, inbox);
+    n00b_conduit_message_t(xform_str_t) *m2 =
+        n00b_conduit_inbox_pop_msg(xform_str_t, inbox);
 
     assert(m1 != nullptr);
     assert(strcmp(m1->payload.buf, "val=1") == 0);
@@ -356,8 +358,6 @@ test_type_changing_transform(void)
     assert(m2 != nullptr);
     assert(strcmp(m2->payload.buf, "val=2") == 0);
 
-    n00b_conduit_xform_stop((n00b_conduit_xform_base_t *)xf);
-    n00b_conduit_xform_join((n00b_conduit_xform_base_t *)xf);
     n00b_conduit_destroy(c);
 
     printf("  [PASS] type-changing transform (int->str)\n");
@@ -458,8 +458,9 @@ test_stop_wakes_thread(void)
         n00b_conduit_xform_topic(xform_int_t, xform_int_t, xf);
     init_int_topic(out_topic);
 
-    // Let the xform thread settle into waiting.
-    usleep(20000);
+    // Wait for xform thread to start its loop.
+    while (!n00b_atomic_load(&xf->running))
+        usleep(100);
 
     // Stop should wake the thread immediately (not wait for 50ms timeout).
     n00b_conduit_xform_stop((n00b_conduit_xform_base_t *)xf);
@@ -589,10 +590,14 @@ test_multi_output_emit(void)
     n00b_conduit_subscribe(xform_str_t, out_topic, inbox,
                            .operations = N00B_CONDUIT_OP_ALL);
 
+    while (!n00b_atomic_load(&xf->running))
+        usleep(100);
+
     // Push 2 ints -> should get 4 str messages.
     n00b_thread_t *pusher = push_ints(c, src_topic, 2);
     n00b_thread_join(pusher);
-    usleep(50000);
+
+    n00b_conduit_xform_join((n00b_conduit_xform_base_t *)xf);
 
     int count = 0;
     while (true) {
@@ -603,8 +608,6 @@ test_multi_output_emit(void)
     }
     assert(count == 4);
 
-    n00b_conduit_xform_stop((n00b_conduit_xform_base_t *)xf);
-    n00b_conduit_xform_join((n00b_conduit_xform_base_t *)xf);
     n00b_conduit_destroy(c);
 
     printf("  [PASS] multi-output emit\n");
@@ -702,9 +705,22 @@ test_chain_two_stage(void)
     n00b_conduit_subscribe(n00b_buffer_t *, out, inbox,
                            .operations = N00B_CONDUIT_OP_ALL);
 
+    // Wait for both xform threads to start.
+    while (!n00b_atomic_load(&linebuf_xf->running))
+        usleep(100);
+    while (!n00b_atomic_load(&ansi_xf->running))
+        usleep(100);
+
     n00b_conduit_publish_claim((n00b_conduit_topic_base_t *)src);
     push_buf(src, "\033[1mhello\033[0m\n\033[31mworld\033[0m\n", 29);
-    usleep(200000);
+
+    // Send TOPIC_CLOSED so xforms drain and exit.
+    n00b_conduit_topic_deliver_sys(n00b_buffer_t *, src,
+        N00B_CONDUIT_MSG_TOPIC_CLOSED, N00B_CONDUIT_OP_ALL);
+
+    // Wait for both xforms to finish.
+    n00b_conduit_xform_join(linebuf_xf);
+    n00b_conduit_xform_join(ansi_xf);
 
     char *line1 = pop_buf_str(inbox);
     assert(line1 != nullptr);

@@ -119,9 +119,7 @@ test_register_range(void)
     void *sub_start = (char *)addr + 1024;
     void *sub_end   = (char *)addr + 2048;
 
-    n00b_mmap_info_t *range_info = n00b_mmap_register_range(sub_start, sub_end,
-                                                             n00b_mmap_internal);
-    assert(range_info != nullptr);
+    n00b_mmap_register_range(sub_start, sub_end, n00b_mmap_internal);
 
     n00b_munmap(addr);
     printf("  [PASS] register_range\n");

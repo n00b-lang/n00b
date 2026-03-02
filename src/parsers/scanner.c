@@ -2,6 +2,7 @@
 
 #include "parsers/scanner.h"
 #include "parsers/token_stream.h"
+#include "parsers/tokenizer_registry.h"
 #include "internal/slay/grammar_internal.h"
 #include "core/string.h"
 #include <assert.h>
@@ -142,7 +143,23 @@ n00b_scanner_new(n00b_buffer_t  *buf,
 }
 {
     assert(buf);
-    assert(cb);
+
+    // Auto-resolve tokenizer from registry when no explicit callback.
+    if (!cb && grammar && grammar->tokenizer_name) {
+        bool found = false;
+        cb = n00b_tokenizer_lookup(grammar->tokenizer_name->data, &found);
+    }
+
+    // Default to "text" tokenizer when nothing else resolved.
+    if (!cb && (!grammar || !grammar->tokenize_cb)) {
+        bool found = false;
+        cb = n00b_tokenizer_lookup("text", &found);
+    }
+
+    // Fall back to grammar's cached callback.
+    if (!cb && grammar && grammar->tokenize_cb) {
+        cb = grammar->tokenize_cb;
+    }
 
     n00b_scanner_t *s = n00b_alloc(n00b_scanner_t);
 
@@ -159,7 +176,7 @@ n00b_scanner_new(n00b_buffer_t  *buf,
     s->at_eof    = false;
 
     // Cache the tokenizer in the grammar so template parsing can reuse it.
-    if (grammar && !grammar->tokenize_cb) {
+    if (grammar && cb && !grammar->tokenize_cb) {
         grammar->tokenize_cb = cb;
     }
 

@@ -814,13 +814,13 @@ n00b_scan_terminal_id(n00b_scanner_t *s, const char *name)
 
     // Lazily create the terminal ID dict.
     if (!s->terminal_ids) {
-        s->terminal_ids = n00b_alloc(n00b_dict_untyped_t);
-        n00b_dict_untyped_init(s->terminal_ids, n00b_hash_cstring, n00b_dict_cstr_eq);
+        s->terminal_ids = n00b_alloc(n00b_dict_t);
+        n00b_dict_init(s->terminal_ids, n00b_hash_cstring, n00b_dict_cstr_eq);
     }
 
     // Look up in cache.
     bool found;
-    void *val = n00b_dict_untyped_get(s->terminal_ids, (void *)name, &found);
+    void *val = n00b_dict_get(s->terminal_ids, (void *)name, &found);
 
     if (found) {
         return (int64_t)(intptr_t)val;
@@ -832,12 +832,12 @@ n00b_scan_terminal_id(n00b_scanner_t *s, const char *name)
     }
 
     bool  gfound = false;
-    void *gval   = _n00b_dict_untyped_get(s->grammar->terminal_map,
+    void *gval   = _n00b_dict_get(s->grammar->terminal_map,
                                            (void *)name, &gfound);
 
     if (!gfound) {
         // Cache the miss so we don't re-lookup.
-        _n00b_dict_untyped_put(s->terminal_ids,
+        _n00b_dict_put(s->terminal_ids,
                                (void *)name,
                                (void *)(intptr_t)N00B_TOK_OTHER);
         return N00B_TOK_OTHER;
@@ -846,7 +846,7 @@ n00b_scan_terminal_id(n00b_scanner_t *s, const char *name)
     int64_t tid = (int64_t)(intptr_t)gval;
 
     // Cache the hit.
-    _n00b_dict_untyped_put(s->terminal_ids,
+    _n00b_dict_put(s->terminal_ids,
                            (void *)name,
                            (void *)(intptr_t)tid);
     return tid;

@@ -255,7 +255,7 @@ n00b_safe_munmap(void *addr, size_t size)
  * @kw allocator Allocator owning the sub-range.
  * @kw file      Debug file name.
  */
-extern n00b_mmap_info_t *
+extern void
 n00b_mmap_register_range(void *start, void *end, n00b_mmap_rec_kind_t kind) _kargs
 {
     n00b_allocator_t *allocator = nullptr;

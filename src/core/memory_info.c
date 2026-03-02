@@ -22,6 +22,7 @@
 #include "core/arena.h"
 #include "core/runtime.h"
 #include "adt/interval_tree.h"
+#include "adt/variant.h"
 #include "text/unicode/encoding.h"
 #include "text/unicode/properties.h"
 
@@ -121,7 +122,7 @@ n00b_on_lib_load(const struct mach_header *hdr, intptr_t slide)
         uint64_t seg_start = command->vmaddr + slide;
         uint64_t seg_end   = seg_start + command->vmsize;
 
-        if (command->cmd == LC_SEGMENT_64) {
+        if (command->cmd == LC_SEGMENT_64 && seg_start != seg_end) {
             (void)n00b_mmap_register((void *)seg_start,
                                      (void *)seg_end,
                                      seg_start ? n00b_mmap_static : n00b_mmap_zero_page,
@@ -607,8 +608,12 @@ n00b_debug_memory_info(bool all)
     (void)n00b_interval_search_ordered(ctx->mmap_tree, 0, UINT64_MAX, &results);
 
     for (size_t i = 0; i < n00b_stack_len(results); i++) {
-        n00b_interval_node_t *node = results.data[i];
-        show_mem_info((n00b_mmap_info_t *)node->data, all, &len);
+        auto node = results.data[i];
+        n00b_mmap_data_t data = ((n00b_interval_node_t(n00b_mmap_data_t) *)node)->data;
+        if (!n00b_variant_is_type(data, n00b_mmap_info_t *)) {
+            continue;
+        }
+        show_mem_info(n00b_variant_get(data, n00b_mmap_info_t *), all, &len);
     }
 
     n00b_fprintf(stderr,

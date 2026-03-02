@@ -9,7 +9,7 @@
 // - Literal modifiers (e.g., `42'hex`, `[==[data]==]'sometype`)
 // - `and`/`or` for logical operators (not `&&`/`||`)
 
-#include "slay/n00b_tokenizer.h"
+#include "n00b/n00b_tokenizer.h"
 #include "parsers/scan_recipes.h"
 #include "parsers/token_stream.h"
 #include "core/alloc.h"
@@ -57,59 +57,9 @@ last_emitted_token(n00b_scanner_t *s)
 // Internal: try to scan a literal modifier ('identifier after a literal)
 // ============================================================================
 
-static void
-try_scan_modifier(n00b_scanner_t *s)
-{
-    if (n00b_scan_at_eof(s) || n00b_scan_peek_byte(s, 0) != '\'') {
-        return;
-    }
-
-    // Peek ahead: must be ' followed by an identifier start character.
-    size_t saved_cursor = s->cursor;
-    uint32_t saved_line = s->line;
-    uint32_t saved_col  = s->column;
-
-    n00b_scan_advance(s);  // Skip the '.
-
-    if (n00b_scan_at_eof(s)) {
-        s->cursor = saved_cursor;
-        s->line   = saved_line;
-        s->column = saved_col;
-        return;
-    }
-
-    n00b_codepoint_t cp = n00b_scan_peek(s, 0);
-
-    if (!((cp >= 'a' && cp <= 'z') || (cp >= 'A' && cp <= 'Z') || cp == '_')) {
-        s->cursor = saved_cursor;
-        s->line   = saved_line;
-        s->column = saved_col;
-        return;
-    }
-
-    // Scan the identifier.
-    n00b_scan_mark(s);
-    n00b_scan_advance(s);
-
-    while (!n00b_scan_at_eof(s)) {
-        cp = n00b_scan_peek(s, 0);
-
-        if (!((cp >= 'a' && cp <= 'z') || (cp >= 'A' && cp <= 'Z')
-              || (cp >= '0' && cp <= '9') || cp == '_')) {
-            break;
-        }
-
-        n00b_scan_advance(s);
-    }
-
-    n00b_string_t *mod_name = n00b_scan_extract(s);
-
-    n00b_token_info_t *tok = last_emitted_token(s);
-
-    if (tok) {
-        tok->modifier = n00b_option_set(n00b_string_t *, mod_name);
-    }
-}
+// try_scan_modifier is no longer needed — the grammar handles the
+// trailing 'type-spec via: %EMBED (%"'" <type-spec>)?
+// The tokenizer's main loop naturally scans the tick and identifier.
 
 // ============================================================================
 // Internal: trim leading/trailing whitespace from a byte range
@@ -249,14 +199,18 @@ try_scan_long_literal(n00b_scanner_t *s)
             n00b_scan_emit(s, .token_type = "EMBED",
                             .contents = n00b_option_set(n00b_string_t *, contents));
 
-            // Set encoder on the token via user_info.
+            // Set encoder on the token's encoding field.
             if (encoder) {
                 n00b_token_info_t *tok = last_emitted_token(s);
 
                 if (tok) {
-                    tok->user_info = encoder;
+                    tok->encoding = n00b_option_set(n00b_string_t *, encoder);
                 }
             }
+
+            // Trailing 'modifier (e.g., 'ffi) is handled by the grammar:
+            //   %EMBED (%"'" <type-spec>)?
+            // The main scan loop will tokenize the ' and identifier.
 
             return true;
         }

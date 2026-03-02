@@ -8,7 +8,7 @@
 
 #include "slay/bnf.h"
 #include "slay/pwz.h"
-#include "slay/n00b_tokenizer.h"
+#include "n00b/n00b_tokenizer.h"
 #include "internal/slay/grammar_internal.h"
 #include "text/strings/string_ops.h"
 #include "parsers/scanner.h"

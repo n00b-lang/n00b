@@ -134,7 +134,7 @@ setup_render_out(n00b_conduit_t *c,
                  n00b_conduit_topic_t(n00b_plane_t *) *src)
 {
     auto r = n00b_conduit_render_out_new(c, src,
-        .cols = 80, .rows = 25);
+        .width = 80, .height = 25);
     assert(n00b_result_is_ok(r));
     auto xf = n00b_result_get(r);
 
@@ -163,7 +163,7 @@ setup_render_in(n00b_conduit_t *c,
                 n00b_conduit_topic_t(n00b_buffer_t *) *src)
 {
     auto r = n00b_conduit_render_in_new(c, src,
-        .cols = 80, .rows = 25);
+        .width = 80, .height = 25);
     assert(n00b_result_is_ok(r));
     auto xf = n00b_result_get(r);
 
@@ -195,9 +195,11 @@ test_render_out_basic(void)
 
     n00b_conduit_publish_claim((n00b_conduit_topic_base_t *)src);
 
-    n00b_plane_t *plane = n00b_new_kargs(n00b_plane_t, plane, .cols = 80, .rows = 25);
+    n00b_plane_t *plane = n00b_new_kargs(n00b_plane_t, plane);
+    plane->width = 80;
+    plane->height = 25;
     n00b_string_t *str = n00b_string_from_raw("Hello", 5);
-    n00b_plane_put_str(plane, str);
+    n00b_plane_draw_text(plane, 0, 0, str);
 
     push_plane(src, plane);
     usleep(100000);
@@ -220,12 +222,14 @@ test_render_out_multiline(void)
 
     n00b_conduit_publish_claim((n00b_conduit_topic_base_t *)src);
 
-    n00b_plane_t *plane = n00b_new_kargs(n00b_plane_t, plane, .cols = 80, .rows = 25);
+    n00b_plane_t *plane = n00b_new_kargs(n00b_plane_t, plane);
+    plane->width = 80;
+    plane->height = 25;
     n00b_string_t *line1 = n00b_string_from_raw("Line1", 5);
-    n00b_plane_put_str(plane, line1);
-    n00b_plane_newline(plane);
+    n00b_plane_draw_text(plane, 0, 0, line1);
+    int32_t lh = n00b_plane_line_height(plane, nullptr);
     n00b_string_t *line2 = n00b_string_from_raw("Line2", 5);
-    n00b_plane_put_str(plane, line2);
+    n00b_plane_draw_text(plane, 0, lh, line2);
 
     push_plane(src, plane);
     usleep(100000);
@@ -316,7 +320,7 @@ test_round_trip(void)
         n00b_buffer_t *, n00b_plane_t *, in_ctx.xf);
 
     auto r = n00b_conduit_render_out_new(c, plane_topic,
-        .cols = 80, .rows = 25);
+        .width = 80, .height = 25);
     assert(n00b_result_is_ok(r));
     auto out_xf = n00b_result_get(r);
 

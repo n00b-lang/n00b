@@ -18,7 +18,7 @@
  * ```c
  * // Render planes to ANSI bytes:
  * auto r = n00b_conduit_render_out_new(conduit, upstream,
- *     .backend = &n00b_renderer_ansi_inline, .cols = 80, .rows = 25);
+ *     .backend = &n00b_renderer_ansi_inline, .width = 80, .height = 25);
  * ```
  */
 #pragma once
@@ -55,8 +55,8 @@ N00B_CONDUIT_XFORM_IMPL(n00b_buffer_t *, n00b_plane_t *);
  * @param upstream Upstream topic producing `n00b_plane_t *` payloads.
  *
  * @kw backend Renderer vtable (default: `&n00b_renderer_stream`).
- * @kw cols    Output column width (default: 80).
- * @kw rows    Output row height (default: 25).
+ * @kw width   Output column width (default: 80).
+ * @kw height  Output row height (default: 25).
  *
  * @return Result with xform pointer on success.
  */
@@ -66,8 +66,8 @@ n00b_conduit_render_out_new(
     n00b_conduit_topic_t(n00b_plane_t *) *upstream)
     _kargs {
         const n00b_renderer_vtable_t *backend = nullptr;
-        n00b_isize_t                  cols    = 80;
-        n00b_isize_t                  rows    = 25;
+        int32_t                       width   = 80;
+        int32_t                       height  = 25;
     };
 
 // ============================================================================
@@ -84,9 +84,9 @@ n00b_conduit_render_out_new(
  * @param c        Conduit instance.
  * @param upstream Upstream topic producing `n00b_buffer_t *` payloads.
  *
- * @kw cols  Plane column width (default: 80).
- * @kw rows  Plane row count (default: 25).
- * @kw style Default text style for the plane (nullable).
+ * @kw width  Plane column width (default: 80).
+ * @kw height Plane row count (default: 25).
+ * @kw style  Default text style for the plane (nullable).
  *
  * @return Result with xform pointer on success.
  */
@@ -95,7 +95,7 @@ n00b_conduit_render_in_new(
     n00b_conduit_t                        *c,
     n00b_conduit_topic_t(n00b_buffer_t *) *upstream)
     _kargs {
-        n00b_isize_t       cols  = 80;
-        n00b_isize_t       rows  = 25;
-        n00b_text_style_t *style = nullptr;
+        int32_t            width  = 80;
+        int32_t            height = 25;
+        n00b_text_style_t *style  = nullptr;
     };

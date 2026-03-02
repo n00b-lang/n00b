@@ -1,0 +1,31 @@
+<ffi> ::= <binding>+
+
+<binding>    ::= <c-def> <ws> %":" <n00b-def> <map-info>
+<c-def>      ::= <ret-type> <ws> %IDENTIFIER <ws> %"(" <c-params> <ws> ")"
+<c-params>   ::= <c-args> (<ws> %"," <c-vargs>)? (<ws> %"," <c-kargs>)?
+               | <c-vargs> (<ws> %","  <c-kargs>)?
+               | (<c-kargs>)?
+<ret-type>   ::= <c-type> | <ws> %"void"
+<c-args>     ::= <c-one-arg> (<ws> %"," <c-one-arg>)*
+<c-one-arg>  ::= <c-mods>? <ws> <c-type>
+<c-type>     ::= %"i8" | %"u8" | %"bool" | %"i16" | %"u16" | %"i32" | %"u32" | %"u64" | %"ptr" |
+                 %"char" <ws> %"*"
+<c-vargs>    ::= <ws> %"*" <ws> <c-type> | <ws> %"..."
+<c-kargs>    ::= <ws> %"**" <c-one-arg> (<ws> %"," <c-one-arg>)*
+
+<n00b-def>   ::= <ws> %IDENTIFIER <ws> %"(" <formals>? <ws> %")" <return-type>
+<formals>    ::= <formal-param> (<ws> %"," <formal>)* (<ws> %"," <v-param>)? (<ws> %"," <k-param>)*
+               | <vspec>
+<formal>     ::= <pos-param> | <k-param>
+<pos-param>  ::= <ws> %IDENTIFIER <ws> %":" <type-spec>
+<k-param>    ::= <ws> %IDENTIFIER <ws> %":" <type-spec> <ws> %"=" <expression>
+<v-param>    ::= <ws> "%*" <ws> %IDENTIFIER <ws> %":" <type-spec>
+<c-mods>     ::= <ws> <c-mod> (<ws> %"," <c-mod>)
+
+<c-mod>      ::= %"const" | "%volatile" | "%keeps"
+
+<map-info>   ::= ("\n" <array-spec>)*
+
+<c-argnum>   ::= <ws> "$" _DIGIT+
+<array-spec> ::= %IDENTIFIER %":" <c-argnum> %"[" <c-argnum> %"]"
+<ws>         ::= __WHITESPACE*

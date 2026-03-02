@@ -897,5 +897,5 @@ n00b_theme_init(void)
     n00b_theme_register(&theme_n00b_classic);
 
     // Set default theme and update named styles.
-    n00b_theme_set_current("n00b-dark");
+    n00b_theme_set_current("n00b-classic");
 }

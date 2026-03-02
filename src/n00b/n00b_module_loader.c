@@ -288,8 +288,8 @@ find_module_file(const char *module_name, const char *package,
 
 // Extract the function name from a func-def node.
 //
-// Grammar: <func-def> ::= <func-mod>* <func-return-type>? <func-kind>
-//                          %IDENTIFIER <param-decl> <where-clause>? <body>
+// Grammar: <func-def> ::= <func-mod>* <func-kind> %IDENTIFIER
+//                          <param-decl> <where-clause>? <return-type>? <body>
 //
 // The IDENTIFIER is a leaf child.  We skip keyword leaves ("private",
 // "once", "func", "method") and return the first identifier that isn't
@@ -399,94 +399,23 @@ is_func_private(n00b_parse_tree_t *func_def_node)
 // ---- Parameter extraction ----
 //
 // Grammar:
-//   <param-decl> ::= %"(" <formals>? %")"
-//   <formals>    ::= <formal-param> (%"," <formal-param>)* ...
-//   <formal-param> ::= <id-list> %":" <type-spec>
-//                     | <id-list>
-//   <id-list>    ::= %IDENTIFIER %"," <id-list>
-//                   | %IDENTIFIER
+//   <param-decl>   ::= %"(" <formals>? %")"
+//   <formals>      ::= <formal-param> (%"," <formal-param>)* ...
+//   <formal-param> ::= <pos-param> | <k-param>
+//   <pos-param>    ::= %IDENTIFIER | %IDENTIFIER %":" <type-spec>
+//   <k-param>      ::= %IDENTIFIER %"=" <expression>
+//                     | %IDENTIFIER %":" <type-spec> %"=" <expression>
+//   <vargs-param>  ::= %"*" %IDENTIFIER ...
 //
-// We collect all IDENTIFIER leaves from within all <formal-param>
-// <id-list> subtrees.  Each becomes a parameter (all typed I64 until
-// the type system is wired into codegen).
-
-// Count identifiers in an id-list subtree (recursive right-linked).
-static int32_t
-count_ids_in_list(n00b_parse_tree_t *node)
-{
-    if (!node) {
-        return 0;
-    }
-
-    int32_t count = 0;
-    size_t  nc    = n00b_tree_num_children(node);
-
-    for (size_t i = 0; i < nc; i++) {
-        n00b_parse_tree_t *child = n00b_tree_child(node, i);
-
-        if (n00b_tree_is_leaf(child)) {
-            n00b_token_info_t *tok = n00b_tree_leaf_value(child);
-
-            if (tok && n00b_option_is_set(tok->value)) {
-                n00b_string_t *v = n00b_option_get(tok->value);
-
-                // Count identifiers, skip "," separator.
-                if (v->u8_bytes > 0
-                    && !(v->u8_bytes == 1 && v->data[0] == ',')) {
-                    count++;
-                }
-            }
-        }
-        else {
-            // Recurse into nested <id-list> or group nodes.
-            count += count_ids_in_list(child);
-        }
-    }
-
-    return count;
-}
-
-// Collect identifier names from an id-list subtree into names[].
-// Returns the number of names written starting at offset pos.
-static int32_t
-collect_ids_from_list(n00b_parse_tree_t *node,
-                      const char       **names,
-                      int32_t            cap,
-                      int32_t            pos)
-{
-    if (!node || pos >= cap) {
-        return pos;
-    }
-
-    size_t nc = n00b_tree_num_children(node);
-
-    for (size_t i = 0; i < nc && pos < cap; i++) {
-        n00b_parse_tree_t *child = n00b_tree_child(node, i);
-
-        if (n00b_tree_is_leaf(child)) {
-            n00b_token_info_t *tok = n00b_tree_leaf_value(child);
-
-            if (tok && n00b_option_is_set(tok->value)) {
-                n00b_string_t *v = n00b_option_get(tok->value);
-
-                if (v->u8_bytes > 0
-                    && !(v->u8_bytes == 1 && v->data[0] == ',')) {
-                    names[pos++] = v->data;
-                }
-            }
-        }
-        else {
-            pos = collect_ids_from_list(child, names, cap, pos);
-        }
-    }
-
-    return pos;
-}
+// Each <pos-param> / <k-param> / <vargs-param> has a single
+// %IDENTIFIER as its first token (vargs-param has "*" first, then
+// the IDENTIFIER).  We extract the first IDENTIFIER from each.
 
 // Extract parameter names from a func-def node.
 //
-// Finds <param-decl>, then <formals> inside it, then walks each
-// <formal-param>'s <id-list> children to collect names.
+// Uses a DFS through <param-decl> to find all <formal-param> and
+// <vargs-param> nodes.  Each contains a bare %IDENTIFIER as its
+// first token (for <vargs-param>, the name follows the "*" token).
 //
 // Returns the count, writes into caller-provided arrays.
 static int32_t
@@ -503,110 +432,87 @@ extract_params(n00b_grammar_t     *grammar,
         return 0;
     }
 
-    // Find <formals> inside <param-decl>.
-    n00b_parse_tree_t *formals = n00b_tree_find_child_by_nt_name(
-        grammar, param_decl, r"formals");
+    // Look up NT ids for the param types we care about.
+    int64_t fp_id = -1;
+    int64_t vp_id = -1;
 
-    if (!formals) {
-        return 0;
+    if (grammar) {
+        bool found = false;
+
+        n00b_string_t *fp_key = n00b_string_from_cstr("formal-param");
+        fp_id = n00b_dict_get(grammar->nt_map, fp_key, &found);
+        if (!found) {
+            fp_id = -1;
+        }
+
+        found = false;
+        n00b_string_t *vp_key = n00b_string_from_cstr("vargs-param");
+        vp_id = n00b_dict_get(grammar->nt_map, vp_key, &found);
+        if (!found) {
+            vp_id = -1;
+        }
     }
 
-    // Walk children of <formals>, looking for <formal-param> NTs.
-    // Each <formal-param> contains an <id-list> with one or more names.
-    int32_t pos = 0;
-    size_t  nc  = n00b_tree_num_children(formals);
+    // DFS through param-decl to find all formal-param / vargs-param
+    // nodes, extracting the first IDENTIFIER token from each.
+    n00b_parse_tree_t *stack[128];
+    int                sp  = 0;
+    int32_t            pos = 0;
 
-    for (size_t i = 0; i < nc && pos < cap; i++) {
-        n00b_parse_tree_t *child = n00b_tree_child(formals, i);
+    stack[sp++] = param_decl;
 
-        if (n00b_tree_is_leaf(child)) {
+    while (sp > 0 && pos < cap) {
+        n00b_parse_tree_t *cur = stack[--sp];
+
+        if (!cur || n00b_pt_is_token(cur)) {
             continue;
         }
 
-        n00b_nt_node_t *cpn = &n00b_tree_node_value(child);
+        n00b_nt_node_t *pn = &n00b_tree_node_value(cur);
 
-        // Recurse through group nodes (the (%"," <formal-param>)*
-        // creates $$group wrappers).
-        if (cpn->group_top) {
-            size_t gnc = n00b_tree_num_children(child);
+        if (pn->id == fp_id || pn->id == vp_id) {
+            // Found a parameter node.  Extract the first IDENTIFIER.
+            n00b_parse_tree_t *tok_node = n00b_pt_first_token(cur);
 
-            for (size_t j = 0; j < gnc && pos < cap; j++) {
-                n00b_parse_tree_t *gc = n00b_tree_child(child, j);
+            if (tok_node) {
+                const char *name = n00b_pt_token_text(tok_node);
+                size_t      len  = n00b_pt_token_text_len(tok_node);
 
-                if (n00b_tree_is_leaf(gc)) {
-                    continue;
-                }
+                // For <vargs-param>, the first token is "*"; skip it
+                // and grab the second token instead.
+                if (name && len == 1 && name[0] == '*') {
+                    // Walk children to find the second leaf.
+                    size_t nc = n00b_pt_num_children(cur);
 
-                n00b_nt_node_t *gpn = &n00b_tree_node_value(gc);
+                    for (size_t i = 0; i < nc; i++) {
+                        n00b_parse_tree_t *ch = n00b_pt_get_child(cur, i);
 
-                if (gpn->group_top) {
-                    // Nested group — recurse one more level.
-                    size_t gnc2 = n00b_tree_num_children(gc);
-
-                    for (size_t k = 0; k < gnc2 && pos < cap; k++) {
-                        n00b_parse_tree_t *gc2 = n00b_tree_child(gc, k);
-
-                        if (n00b_tree_is_leaf(gc2)) {
-                            continue;
-                        }
-
-                        n00b_nt_node_t *gpn2 = &n00b_tree_node_value(gc2);
-
-                        if (!gpn2->group_top && gpn2->id >= 0) {
-                            n00b_nonterm_t *nt2 = n00b_get_nonterm(
-                                grammar, gpn2->id);
-
-                            if (nt2
-                                && n00b_unicode_str_eq(nt2->name,
-                                                       r"formal-param")) {
-                                // Find <id-list> inside formal-param.
-                                n00b_parse_tree_t *ids
-                                    = n00b_tree_find_child_by_nt_name(
-                                        grammar, gc2, r"id-list");
-
-                                if (ids) {
-                                    pos = collect_ids_from_list(
-                                        ids, out_names, cap, pos);
-                                }
-                            }
+                        if (n00b_pt_is_token(ch) && ch != tok_node) {
+                            name = n00b_pt_token_text(ch);
+                            len  = n00b_pt_token_text_len(ch);
+                            break;
                         }
                     }
-
-                    continue;
                 }
 
-                if (gpn->id >= 0) {
-                    n00b_nonterm_t *gnt = n00b_get_nonterm(grammar, gpn->id);
-
-                    if (gnt
-                        && n00b_unicode_str_eq(gnt->name,
-                                               r"formal-param")) {
-                        n00b_parse_tree_t *ids
-                            = n00b_tree_find_child_by_nt_name(
-                                grammar, gc, r"id-list");
-
-                        if (ids) {
-                            pos = collect_ids_from_list(
-                                ids, out_names, cap, pos);
-                        }
-                    }
+                if (name && len > 0) {
+                    char *buf = n00b_alloc_size(1, len + 1);
+                    memcpy(buf, name, len);
+                    buf[len]       = '\0';
+                    out_names[pos] = buf;
+                    pos++;
                 }
             }
 
-            continue;
+            continue; // Don't recurse into param nodes.
         }
 
-        // Direct <formal-param> child.
-        if (cpn->id >= 0) {
-            n00b_nonterm_t *nt = n00b_get_nonterm(grammar, cpn->id);
+        // Push children in reverse for left-to-right DFS.
+        size_t nc = n00b_pt_num_children(cur);
 
-            if (nt && n00b_unicode_str_eq(nt->name, r"formal-param")) {
-                n00b_parse_tree_t *ids = n00b_tree_find_child_by_nt_name(
-                    grammar, child, r"id-list");
-
-                if (ids) {
-                    pos = collect_ids_from_list(ids, out_names, cap, pos);
-                }
+        for (size_t i = nc; i > 0; i--) {
+            if (sp < 128) {
+                stack[sp++] = n00b_pt_get_child(cur, i - 1);
             }
         }
     }
@@ -669,7 +575,7 @@ emit_func_def(n00b_cg_session_t *session,
         }
     }
 
-    // Extract return type from <func-return-type> child if present.
+    // Extract return type from <return-type> child if present.
     if (annot && annot->symtab && session->type_map) {
         n00b_string_t *sname = n00b_string_from_cstr(fname);
         n00b_sym_entry_t *fsym = n00b_symtab_lookup_any(

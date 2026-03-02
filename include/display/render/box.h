@@ -117,6 +117,34 @@ n00b_box_insets(const n00b_box_props_t *box,
 }
 
 /**
+ * @brief Compute insets in pixels (border + padding scaled by cell size).
+ * @param box        Box properties.
+ * @param cell_px_w  Pixels per cell column.
+ * @param cell_px_h  Pixels per cell row.
+ * @param out_top    Output: top inset in pixels.
+ * @param out_bottom Output: bottom inset in pixels.
+ * @param out_left   Output: left inset in pixels.
+ * @param out_right  Output: right inset in pixels.
+ */
+static inline void
+n00b_box_insets_px(const n00b_box_props_t *box,
+                    int32_t                cell_px_w,
+                    int32_t                cell_px_h,
+                    int32_t               *out_top,
+                    int32_t               *out_bottom,
+                    int32_t               *out_left,
+                    int32_t               *out_right)
+{
+    n00b_isize_t ct, cb, cl, cr;
+    n00b_box_insets(box, &ct, &cb, &cl, &cr);
+
+    if (out_top)    *out_top    = (int32_t)ct * cell_px_h;
+    if (out_bottom) *out_bottom = (int32_t)cb * cell_px_h;
+    if (out_left)   *out_left   = (int32_t)cl * cell_px_w;
+    if (out_right)  *out_right  = (int32_t)cr * cell_px_w;
+}
+
+/**
  * @brief Compute total outer size including margins, borders, and padding.
  * @param box      Box properties.
  * @param content_rows Content area rows.

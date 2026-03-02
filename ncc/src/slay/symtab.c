@@ -6,48 +6,48 @@
 
 #include "slay/symtab.h"
 #include "core/alloc.h"
-#include "core/dict_untyped.h"
+#include "core/dict.h"
 #include "core/hash.h"
 #include "core/string.h"
 
 #include <string.h>
 
 // ============================================================================
-// Hash table helpers (thin wrappers around dict_untyped)
+// Hash table helpers (thin wrappers around n00b_dict_t)
 // ============================================================================
 
-static n00b_dict_untyped_t *
+static n00b_dict_t *
 ht_new(void)
 {
-    n00b_dict_untyped_t *d = n00b_alloc(n00b_dict_untyped_t);
-    n00b_dict_untyped_init(d, n00b_hash_cstring, n00b_dict_cstr_eq);
+    n00b_dict_t *d = n00b_alloc(n00b_dict_t);
+    n00b_dict_init(d, n00b_hash_cstring, n00b_dict_cstr_eq);
     return d;
 }
 
 static void
-ht_put(n00b_dict_untyped_t *d, n00b_string_t key, n00b_sym_entry_t *val)
+ht_put(n00b_dict_t *d, n00b_string_t key, n00b_sym_entry_t *val)
 {
-    n00b_dict_untyped_put(d, key.data, val);
+    n00b_dict_put(d, key.data, val);
 }
 
 static n00b_sym_entry_t *
-ht_get(n00b_dict_untyped_t *d, n00b_string_t key)
+ht_get(n00b_dict_t *d, n00b_string_t key)
 {
     if (!d || !key.data) {
         return NULL;
     }
 
     bool found = false;
-    void *val  = n00b_dict_untyped_get(d, key.data, &found);
+    void *val  = n00b_dict_get(d, key.data, &found);
 
     return found ? (n00b_sym_entry_t *)val : NULL;
 }
 
 static void
-ht_remove(n00b_dict_untyped_t *d, n00b_string_t key)
+ht_remove(n00b_dict_t *d, n00b_string_t key)
 {
     if (d && key.data) {
-        n00b_dict_untyped_remove(d, key.data);
+        n00b_dict_remove(d, key.data);
     }
 }
 
@@ -88,7 +88,7 @@ n00b_symtab_free(n00b_symtab_t *st)
         }
 
         if (ns->symbols) {
-            n00b_dict_untyped_free((n00b_dict_untyped_t *)ns->symbols);
+            n00b_dict_free((n00b_dict_t *)ns->symbols);
             n00b_free(ns->symbols);
         }
     }
@@ -175,7 +175,7 @@ n00b_symtab_pop_scope(n00b_symtab_t *st, n00b_string_t ns_name)
     }
 
     n00b_scope_t        *scope = ns->current;
-    n00b_dict_untyped_t *ht    = (n00b_dict_untyped_t *)ns->symbols;
+    n00b_dict_t *ht    = (n00b_dict_t *)ns->symbols;
 
     n00b_sym_entry_t *entry = scope->first_in_scope;
 
@@ -213,7 +213,7 @@ n00b_symtab_add(n00b_symtab_t *st, n00b_string_t ns_name,
         return NULL;
     }
 
-    n00b_dict_untyped_t *ht = (n00b_dict_untyped_t *)ns->symbols;
+    n00b_dict_t *ht = (n00b_dict_t *)ns->symbols;
 
     n00b_sym_entry_t *entry = n00b_alloc(n00b_sym_entry_t);
     entry->name        = n00b_string_from_raw(name.data, (int64_t)name.u8_bytes);
@@ -247,7 +247,7 @@ n00b_symtab_lookup(n00b_symtab_t *st, n00b_string_t ns_name,
 
     for (int32_t i = 0; i < st->ns_count; i++) {
         if (n00b_string_eq(st->namespaces[i].ns_name, ns_name)) {
-            return ht_get((n00b_dict_untyped_t *)st->namespaces[i].symbols,
+            return ht_get((n00b_dict_t *)st->namespaces[i].symbols,
                           name);
         }
     }

@@ -292,7 +292,6 @@ n00b_core = [
 n00b_adt = [
     'src/adt/dict_untyped.c',
     'src/adt/dict.c',
-    'src/adt/interval_tree.c',
 ]
 
 python3 = find_program('python3')
@@ -392,12 +391,15 @@ n00b_display = [
     'src/display/render/backend_ansi.c',
     'src/display/render/backend_ansi_inline.c',
     'src/display/render/backend_dumb.c',
+    'src/display/render/draw_cmd.c',
+    'src/display/render/font_metrics.c',
     'src/display/render/backend_registry.c',
     'src/display/render/cocoa_init_bridge.c',
     # Widget system
     'src/display/widget.c',
     'src/display/focus.c',
     'src/display/event_loop.c',
+    'src/display/mouse.c',
     'src/display/widgets/label.c',
     'src/display/widgets/divider.c',
     'src/display/widgets/spacer.c',
@@ -405,6 +407,13 @@ n00b_display = [
     'src/display/widgets/button.c',
     'src/display/widgets/checkbox.c',
     'src/display/widgets/input.c',
+    'src/display/widgets/box.c',
+    'src/display/widgets/switch.c',
+    'src/display/widgets/radio.c',
+    'src/display/widgets/link.c',
+    'src/display/widgets/list_widget.c',
+    'src/display/widgets/selectionlist.c',
+    'src/display/widgets/breadcrumb.c',
     # Table
     'src/display/table/table.c',
     'src/display/table/table_layout.c',
@@ -481,6 +490,11 @@ n00b_parsers = [
     'src/parsers/scanner.c',
     'src/parsers/token_stream.c',
     'src/parsers/scan_recipes.c',
+    'src/parsers/tokenizer_registry.c',
+    'src/parsers/text_tokenizer.c',
+    'src/parsers/shell_tokenizer.c',
+    'src/parsers/lisp_tokenizer.c',
+    'src/parsers/json_tokenizer.c',
 ]
 
 # ============================================================================
@@ -532,6 +546,10 @@ n00b_compiler = [
     'src/n00b/n00b_compile.c',
     'src/n00b/n00b_module_loader.c',
     'src/n00b/n00b_type_map.c',
+    'src/n00b/embed.c',
+    'src/n00b/embed_ffi.c',
+    'src/n00b/n00b_objfile_emit.c',
+    'src/n00b/n00b_compile_link.c',
 ]
 
 libdl_dep = cc.find_library('dl', required: false)
@@ -1069,6 +1087,36 @@ n00b_tokenizer_test = executable('test_n00b_tokenizer',
 )
 test('n00b_tokenizer', n00b_tokenizer_test, suite: 'unit')
 
+tokenizer_registry_test = executable('test_tokenizer_registry',
+    ['test/unit/test_tokenizer_registry.c'],
+    kwargs: test_common_kwargs,
+)
+test('tokenizer_registry', tokenizer_registry_test, suite: 'unit')
+
+text_tokenizer_test = executable('test_text_tokenizer',
+    ['test/unit/test_text_tokenizer.c'],
+    kwargs: test_common_kwargs,
+)
+test('text_tokenizer', text_tokenizer_test, suite: 'unit')
+
+shell_tokenizer_test = executable('test_shell_tokenizer',
+    ['test/unit/test_shell_tokenizer.c'],
+    kwargs: test_common_kwargs,
+)
+test('shell_tokenizer', shell_tokenizer_test, suite: 'unit')
+
+lisp_tokenizer_test = executable('test_lisp_tokenizer',
+    ['test/unit/test_lisp_tokenizer.c'],
+    kwargs: test_common_kwargs,
+)
+test('lisp_tokenizer', lisp_tokenizer_test, suite: 'unit')
+
+json_tokenizer_test = executable('test_json_tokenizer',
+    ['test/unit/test_json_tokenizer.c'],
+    kwargs: test_common_kwargs,
+)
+test('json_tokenizer', json_tokenizer_test, suite: 'unit')
+
 cf_label_test = executable('test_cf_label',
     ['test/unit/test_cf_label.c'],
     kwargs: test_common_kwargs,
@@ -1230,6 +1278,12 @@ button_test = executable('test_button',
 )
 test('button', button_test, suite: 'unit')
 
+mouse_test = executable('test_mouse',
+    ['test/unit/test_mouse.c'],
+    kwargs: test_common_kwargs,
+)
+test('mouse', mouse_test, suite: 'unit')
+
 checkbox_test = executable('test_checkbox',
     ['test/unit/test_checkbox.c'],
     kwargs: test_common_kwargs,
@@ -1241,6 +1295,48 @@ input_test = executable('test_input',
     kwargs: test_common_kwargs,
 )
 test('input', input_test, suite: 'unit')
+
+switch_test = executable('test_switch',
+    ['test/unit/test_switch.c'],
+    kwargs: test_common_kwargs,
+)
+test('switch', switch_test, suite: 'unit')
+
+radio_test = executable('test_radio',
+    ['test/unit/test_radio.c'],
+    kwargs: test_common_kwargs,
+)
+test('radio', radio_test, suite: 'unit')
+
+link_test = executable('test_link',
+    ['test/unit/test_link.c'],
+    kwargs: test_common_kwargs,
+)
+test('link', link_test, suite: 'unit')
+
+list_widget_test = executable('test_list_widget',
+    ['test/unit/test_list_widget.c'],
+    kwargs: test_common_kwargs,
+)
+test('list_widget', list_widget_test, suite: 'unit')
+
+selectionlist_test = executable('test_selectionlist',
+    ['test/unit/test_selectionlist.c'],
+    kwargs: test_common_kwargs,
+)
+test('selectionlist', selectionlist_test, suite: 'unit')
+
+draw_cmd_test = executable('test_draw_cmd',
+    ['test/unit/test_draw_cmd.c'],
+    kwargs: test_common_kwargs,
+)
+test('draw_cmd', draw_cmd_test, suite: 'unit')
+
+breadcrumb_test = executable('test_breadcrumb',
+    ['test/unit/test_breadcrumb.c'],
+    kwargs: test_common_kwargs,
+)
+test('breadcrumb', breadcrumb_test, suite: 'unit')
 
 # Table tests
 table_build_test = executable('test_table_build',
@@ -1310,17 +1406,17 @@ n00b_dev = executable('n00b_dev',
     ['src/tools/n00b_dev.c', 'src/tools/n00b_repl.c'],
     include_directories: incdir,
     c_args: exe_c_args,
-    link_with: [n00b],
+    link_whole: [n00b],
     dependencies: [mir_dep],
     install: true,
 )
 
 # N00b main executable (compile, run, repl)
 n00b_exe = executable('n00b',
-    ['src/tools/n00b.c'],
+    ['src/tools/n00b.c', 'src/tools/n00b_repl.c'],
     include_directories: incdir,
     c_args: exe_c_args,
-    link_with: [n00b],
+    link_whole: [n00b],
     dependencies: [mir_dep],
     install: true,
 )

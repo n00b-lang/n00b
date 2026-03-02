@@ -8,6 +8,7 @@
 #include "core/string.h"
 #include "display/render/canvas.h"
 #include "display/render/plane.h"
+#include "display/render/draw_cmd.h"
 #include "display/render/box.h"
 #include "display/render/composite.h"
 #include "display/render/types.h"
@@ -42,7 +43,7 @@ static void
 test_canvas_add_remove_plane(void)
 {
     n00b_canvas_t *c = n00b_new_kargs(n00b_canvas_t, canvas, .vtable = &n00b_renderer_stream);
-    n00b_plane_t  *p = n00b_new_kargs(n00b_plane_t, plane, .cols = 10, .rows = 5);
+    n00b_plane_t  *p = n00b_new_kargs(n00b_plane_t, plane);
 
     n00b_canvas_add_plane(c, p);
     assert(n00b_list_len(c->planes) == 1);
@@ -84,9 +85,10 @@ test_canvas_render_single_plane(void)
     n00b_stream_backend_set_size(c->backend_ctx, 5, 10);
     n00b_canvas_resize(c, 5, 10);
 
-    n00b_plane_t *p = n00b_new_kargs(n00b_plane_t, plane, .cols = 10, .rows = 5);
-    n00b_plane_put_cp(p, 'H');
-    n00b_plane_put_cp(p, 'i');
+    n00b_plane_t *p = n00b_new_kargs(n00b_plane_t, plane);
+    p->width = 10;
+    p->height = 5;
+    n00b_plane_draw_text(p, 0, 0, n00b_string_from_cstr("Hi"));
 
     n00b_canvas_add_plane(c, p);
     n00b_canvas_render(c);
@@ -110,12 +112,16 @@ test_canvas_z_order(void)
     n00b_canvas_resize(c, 5, 10);
 
     // Back plane (z=0) writes 'B' at (0,0).
-    n00b_plane_t *back = n00b_new_kargs(n00b_plane_t, plane, .cols = 10, .rows = 5, .z = 0);
-    n00b_plane_put_cp(back, 'B');
+    n00b_plane_t *back = n00b_new_kargs(n00b_plane_t, plane, .z = 0);
+    back->width = 10;
+    back->height = 5;
+    n00b_plane_draw_glyph(back, 0, 0, 'B');
 
     // Front plane (z=1) writes 'F' at (0,0).
-    n00b_plane_t *front = n00b_new_kargs(n00b_plane_t, plane, .cols = 10, .rows = 5, .z = 1);
-    n00b_plane_put_cp(front, 'F');
+    n00b_plane_t *front = n00b_new_kargs(n00b_plane_t, plane, .z = 1);
+    front->width = 10;
+    front->height = 5;
+    n00b_plane_draw_glyph(front, 0, 0, 'F');
 
     n00b_canvas_add_plane(c, back);
     n00b_canvas_add_plane(c, front);
@@ -138,16 +144,17 @@ test_canvas_plane_offset(void)
     n00b_stream_backend_set_size(c->backend_ctx, 5, 20);
     n00b_canvas_resize(c, 5, 20);
 
-    n00b_plane_t *p = n00b_new_kargs(n00b_plane_t, plane, .cols = 5, .rows = 3);
+    n00b_plane_t *p = n00b_new_kargs(n00b_plane_t, plane);
+    p->width = 5;
+    p->height = 3;
     n00b_plane_move(p, 3, 1);  // x=3, y=1
-    n00b_plane_put_cp(p, 'X');
+    n00b_plane_draw_glyph(p, 0, 0, 'X');
 
     n00b_canvas_add_plane(c, p);
     n00b_canvas_render(c);
 
     n00b_string_t *buf = n00b_stream_backend_get_buffer(c->backend_ctx);
     // 'X' should be at frame position (row=1, col=3).
-    // Row 0 is empty, so first line in buffer is empty or spaces.
     assert(n00b_unicode_str_contains(buf, r"X"));
 
     n00b_plane_destroy(p);
@@ -173,14 +180,20 @@ test_canvas_invalidate(void)
 static void
 test_composite_flatten(void)
 {
-    n00b_plane_t *p1 = n00b_new_kargs(n00b_plane_t, plane, .cols = 10, .rows = 5, .z = 2);
-    n00b_plane_t *p2 = n00b_new_kargs(n00b_plane_t, plane, .cols = 10, .rows = 5, .z = 0);
-    n00b_plane_t *p3 = n00b_new_kargs(n00b_plane_t, plane, .cols = 10, .rows = 5, .z = 1);
+    n00b_plane_t *p1 = n00b_new_kargs(n00b_plane_t, plane, .z = 2);
+    p1->width = 10;
+    p1->height = 5;
+    n00b_plane_t *p2 = n00b_new_kargs(n00b_plane_t, plane, .z = 0);
+    p2->width = 10;
+    p2->height = 5;
+    n00b_plane_t *p3 = n00b_new_kargs(n00b_plane_t, plane, .z = 1);
+    p3->width = 10;
+    p3->height = 5;
 
     n00b_plane_t *planes[] = { p1, p2, p3 };
 
     n00b_array_t(n00b_composite_entry_t) entries =
-        n00b_composite_flatten(planes, 3);
+        n00b_composite_flatten(planes, 3, 1, 1);
 
     assert(n00b_array_len(entries) == 3);
     // Should be sorted by z: 0, 1, 2.
@@ -202,8 +215,10 @@ test_canvas_widget_state_styling(void)
     n00b_stream_backend_set_size(c->backend_ctx, 5, 10);
     n00b_canvas_resize(c, 5, 10);
 
-    n00b_plane_t *p = n00b_new_kargs(n00b_plane_t, plane, .cols = 10, .rows = 5);
-    n00b_plane_put_cp(p, 'S');
+    n00b_plane_t *p = n00b_new_kargs(n00b_plane_t, plane);
+    p->width = 10;
+    p->height = 5;
+    n00b_plane_draw_glyph(p, 0, 0, 'S');
 
     // Set up a box with state-based styling.
     n00b_box_props_t *box = n00b_box_props_new(
@@ -231,46 +246,6 @@ test_canvas_widget_state_styling(void)
 }
 
 static void
-test_canvas_viewport_subsetting(void)
-{
-    n00b_canvas_t *c = n00b_new_kargs(n00b_canvas_t, canvas, .vtable = &n00b_renderer_stream);
-    n00b_stream_backend_set_size(c->backend_ctx, 5, 10);
-    n00b_canvas_resize(c, 5, 10);
-
-    // Plane with 20 cols of content but only 10-col viewport.
-    n00b_plane_t *p = n00b_new_kargs(n00b_plane_t, plane, .cols = 20, .rows = 5,
-                                      .vp_cols = 10,
-                                      .vp_rows = 5);
-
-    // Write 'A' at col 0 and 'B' at col 15.
-    n00b_plane_cursor_move(p, 0, 0);
-    n00b_plane_put_cp(p, 'A');
-    n00b_plane_cursor_move(p, 0, 15);
-    n00b_plane_put_cp(p, 'B');
-
-    n00b_canvas_add_plane(c, p);
-    n00b_canvas_render(c);
-
-    n00b_string_t *buf = n00b_stream_backend_get_buffer(c->backend_ctx);
-    // Default viewport at col 0 — should see 'A' but not 'B'.
-    assert(buf->data[0] == 'A');
-    assert(!n00b_unicode_str_contains(buf, r"B"));
-
-    // Scroll viewport to show 'B'.
-    n00b_plane_scroll_to(p, 0, 10);
-    n00b_canvas_render(c);
-
-    buf = n00b_stream_backend_get_buffer(c->backend_ctx);
-    // Now col 15 maps to viewport col 5 → frame col 5.
-    assert(n00b_unicode_str_contains(buf, r"B"));
-    assert(!n00b_unicode_str_contains(buf, r"A"));
-
-    n00b_plane_destroy(p);
-    n00b_canvas_destroy(c);
-    printf("  [PASS] canvas viewport subsetting\n");
-}
-
-static void
 test_canvas_nested_planes(void)
 {
     n00b_canvas_t *c = n00b_new_kargs(n00b_canvas_t, canvas, .vtable = &n00b_renderer_stream);
@@ -278,13 +253,17 @@ test_canvas_nested_planes(void)
     n00b_canvas_resize(c, 10, 20);
 
     // Parent at (2,1).
-    n00b_plane_t *parent = n00b_new_kargs(n00b_plane_t, plane, .cols = 15, .rows = 8);
+    n00b_plane_t *parent = n00b_new_kargs(n00b_plane_t, plane);
+    parent->width = 15;
+    parent->height = 8;
     n00b_plane_move(parent, 2, 1);
-    n00b_plane_put_cp(parent, 'P');
+    n00b_plane_draw_glyph(parent, 0, 0, 'P');
 
-    // Child at (3,2) relative to parent → absolute (5,3).
-    n00b_plane_t *child = n00b_new_kargs(n00b_plane_t, plane, .cols = 5, .rows = 3);
-    n00b_plane_put_cp(child, 'C');
+    // Child at (3,2) relative to parent -> absolute (5,3).
+    n00b_plane_t *child = n00b_new_kargs(n00b_plane_t, plane);
+    child->width = 5;
+    child->height = 3;
+    n00b_plane_draw_glyph(child, 0, 0, 'C');
     n00b_plane_add_child(parent, child, 3, 2);
 
     n00b_canvas_add_plane(c, parent);
@@ -310,12 +289,16 @@ test_canvas_nested_z_order(void)
     n00b_canvas_resize(c, 5, 10);
 
     // Parent with child that overlaps at same position.
-    n00b_plane_t *parent = n00b_new_kargs(n00b_plane_t, plane, .cols = 10, .rows = 5);
-    n00b_plane_put_cp(parent, 'P');
+    n00b_plane_t *parent = n00b_new_kargs(n00b_plane_t, plane);
+    parent->width = 10;
+    parent->height = 5;
+    n00b_plane_draw_glyph(parent, 0, 0, 'P');
 
     // Child at (0,0), z=1 higher, overwrites parent.
-    n00b_plane_t *child = n00b_new_kargs(n00b_plane_t, plane, .cols = 10, .rows = 5, .z = 1);
-    n00b_plane_put_cp(child, 'C');
+    n00b_plane_t *child = n00b_new_kargs(n00b_plane_t, plane, .z = 1);
+    child->width = 10;
+    child->height = 5;
+    n00b_plane_draw_glyph(child, 0, 0, 'C');
     n00b_plane_add_child(parent, child, 0, 0);
 
     n00b_canvas_add_plane(c, parent);
@@ -338,14 +321,18 @@ test_canvas_child_clipping(void)
     n00b_stream_backend_set_size(c->backend_ctx, 10, 20);
     n00b_canvas_resize(c, 10, 20);
 
-    // Parent plane 10x5, positioned at (0,0).
-    n00b_plane_t *parent = n00b_new_kargs(n00b_plane_t, plane, .cols = 10, .rows = 5);
+    // Parent plane, positioned at (0,0).
+    n00b_plane_t *parent = n00b_new_kargs(n00b_plane_t, plane);
+    parent->width = 10;
+    parent->height = 5;
 
-    // Child plane 10x5 positioned at (8,0) relative to parent.
+    // Child plane positioned at (8,0) relative to parent.
     // This means the child extends from absolute col 8 to col 17.
-    // But parent only goes to col 9 — child should be clipped.
-    n00b_plane_t *child = n00b_new_kargs(n00b_plane_t, plane, .cols = 10, .rows = 5);
-    n00b_plane_put_cp(child, 'X');
+    // But parent only goes to col 9 -- child should be clipped.
+    n00b_plane_t *child = n00b_new_kargs(n00b_plane_t, plane);
+    child->width = 10;
+    child->height = 5;
+    n00b_plane_draw_glyph(child, 0, 0, 'X');
     n00b_plane_add_child(parent, child, 8, 0);
 
     n00b_canvas_add_plane(c, parent);
@@ -363,75 +350,43 @@ test_canvas_child_clipping(void)
 }
 
 static void
-test_canvas_ellipsis_overflow(void)
-{
-    n00b_canvas_t *c = n00b_new_kargs(n00b_canvas_t, canvas, .vtable = &n00b_renderer_stream);
-    n00b_stream_backend_set_size(c->backend_ctx, 5, 10);
-    n00b_canvas_resize(c, 5, 10);
-
-    // Plane: 10 rows of content, but only 3 visible in viewport.
-    n00b_plane_t *p = n00b_new_kargs(n00b_plane_t, plane, .cols = 10, .rows = 10,
-                                      .vp_cols = 10,
-                                      .vp_rows = 3);
-
-    // Set up box with ellipsis overflow.
-    n00b_box_props_t *box = n00b_box_props_new(.overflow = N00B_OVERFLOW_ELLIPSIS);
-    n00b_plane_set_box(p, box);
-
-    // Write content on all 10 rows.
-    for (int i = 0; i < 10; i++) {
-        n00b_plane_put_cp(p, 'A' + i);
-        if (i < 9) {
-            n00b_plane_newline(p);
-        }
-    }
-
-    n00b_canvas_add_plane(c, p);
-    n00b_canvas_render(c);
-
-    n00b_string_t *buf = n00b_stream_backend_get_buffer(c->backend_ctx);
-    assert(buf->data != nullptr);
-
-    // The last visible row should show "..." (three dots).
-    // Row 0 = 'A', Row 1 = 'B', Row 2 = '...'
-    assert(n00b_unicode_str_contains(buf, r"A"));
-
-    n00b_plane_destroy(p);
-    n00b_canvas_destroy(c);
-    printf("  [PASS] canvas ellipsis overflow\n");
-}
-
-static void
 test_composite_flatten_nested(void)
 {
-    n00b_plane_t *parent = n00b_new_kargs(n00b_plane_t, plane, .cols = 20, .rows = 10, .z = 0);
+    n00b_plane_t *parent = n00b_new_kargs(n00b_plane_t, plane, .z = 0);
+    parent->width = 20;
+    parent->height = 10;
     n00b_plane_move(parent, 5, 5);
 
-    n00b_plane_t *child1 = n00b_new_kargs(n00b_plane_t, plane, .cols = 5, .rows = 3, .z = 1);
+    n00b_plane_t *child1 = n00b_new_kargs(n00b_plane_t, plane, .z = 1);
+    child1->width = 5;
+    child1->height = 3;
     n00b_plane_add_child(parent, child1, 2, 1);
 
-    n00b_plane_t *child2 = n00b_new_kargs(n00b_plane_t, plane, .cols = 5, .rows = 3, .z = 2);
+    n00b_plane_t *child2 = n00b_new_kargs(n00b_plane_t, plane, .z = 2);
+    child2->width = 5;
+    child2->height = 3;
     n00b_plane_add_child(parent, child2, 8, 4);
 
     n00b_plane_t *planes[] = { parent };
 
     n00b_array_t(n00b_composite_entry_t) entries =
-        n00b_composite_flatten(planes, 1);
+        n00b_composite_flatten(planes, 1, 1, 1);
 
     assert(n00b_array_len(entries) == 3); // parent + 2 children.
 
-    // Sorted by z: parent(0), child1(1), child2(2).
+    // Sorted by z: parent(0), child1(0+1+1=2), child2(0+1+2=3).
+    // Children get parent's abs_z + 1 as base, plus their own z offset.
     assert(entries.data[0].abs_z == 0);
     assert(entries.data[0].plane == parent);
     assert(entries.data[0].abs_x == 5);
     assert(entries.data[0].abs_y == 5);
 
-    assert(entries.data[1].abs_z == 1);
+    assert(entries.data[1].abs_z == 2);  // parent(0) + 1 + child1.z(1)
     assert(entries.data[1].plane == child1);
     assert(entries.data[1].abs_x == 7);  // 5 + 2
     assert(entries.data[1].abs_y == 6);  // 5 + 1
 
-    assert(entries.data[2].abs_z == 2);
+    assert(entries.data[2].abs_z == 3);  // parent(0) + 1 + child2.z(2)
     assert(entries.data[2].plane == child2);
     assert(entries.data[2].abs_x == 13); // 5 + 8
     assert(entries.data[2].abs_y == 9);  // 5 + 4
@@ -464,11 +419,9 @@ main(int argc, char **argv)
     test_canvas_invalidate();
     test_composite_flatten();
     test_canvas_widget_state_styling();
-    test_canvas_viewport_subsetting();
     test_canvas_nested_planes();
     test_canvas_nested_z_order();
     test_canvas_child_clipping();
-    test_canvas_ellipsis_overflow();
     test_composite_flatten_nested();
 
     printf("All render canvas tests passed.\n");

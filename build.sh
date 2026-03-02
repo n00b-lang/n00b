@@ -47,7 +47,14 @@ function ensure_ncc {
                 echo "Removing old ncc build dir"
                 rm -rf build_ncc
             fi
-            meson setup --buildtype=${N00B_BUILD_TYPE} -Dcc_path=${CC} --prefix=${N00B_ROOT} --bindir=${N00B_ROOT}/bin build_ncc .
+            # n00b-specific rstr templates: wrap strings in n00b_static_header_t
+            # so the GC can identify r"" strings as managed objects.
+            # Styled slots: $0=style_decls $1=var $2=bytes $3=data $4=cp $5=styling $6=typehash $7=wrapper
+            # Plain slots:  $0=var $1=bytes $2=data $3=cp $4=typehash $5=wrapper
+            meson setup --buildtype=${N00B_BUILD_TYPE} -Dcc_path=${CC} --prefix=${N00B_ROOT} --bindir=${N00B_ROOT}/bin \
+                '-Drstr_template_styled=({$0 static struct{n00b_static_header_t hdr;n00b_string_t obj;} $7={.hdr={.static_magic=0xcc653162303034ccULL,.tinfo=$6,.alloc_len=(unsigned)(sizeof(n00b_inline_hdr_t)+sizeof(n00b_string_t))},.obj={.u8_bytes=$2,.data=$3,.codepoints=$4,.styling=$5}};&$7.obj;})' \
+                '-Drstr_template_plain=({static struct{n00b_static_header_t hdr;n00b_string_t obj;} $5={.hdr={.static_magic=0xcc653162303034ccULL,.tinfo=$4,.alloc_len=(unsigned)(sizeof(n00b_inline_hdr_t)+sizeof(n00b_string_t))},.obj={.u8_bytes=$1,.data=$2,.codepoints=$3,.styling=((void*)0)}};&$5.obj;})' \
+                build_ncc .
             if [[ $? -ne 0 ]] ; then
                 echo "NCC setup failed."
                 exit 1

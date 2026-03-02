@@ -1007,7 +1007,7 @@ extract_result_from_tree(n00b_cmdr_t *c, n00b_parse_tree_t *tree,
                 }
 
                 // Store under long flag name.
-                _n00b_dict_untyped_put(&r->flags,
+                _n00b_dict_put(&r->flags,
                                        (void *)cmdr_intern(flag->name),
                                        (void *)v);
 
@@ -1018,7 +1018,7 @@ extract_result_from_tree(n00b_cmdr_t *c, n00b_parse_tree_t *tree,
                     if (alias_v->tag == N00B_CMDR_VAL_STR && alias_v->s) {
                         alias_v->s = cmdr_intern(alias_v->s);
                     }
-                    _n00b_dict_untyped_put(
+                    _n00b_dict_put(
                         &r->flags,
                         (void *)cmdr_intern(flag->short_name),
                         (void *)alias_v);
@@ -1100,7 +1100,7 @@ n00b_cmdr_parse(n00b_cmdr_t *c, int argc, const char **argv)
     bool parse_ok = n00b_pwz_parse(pp, ts);
 
     n00b_cmdr_result_t *r = calloc(1, sizeof(n00b_cmdr_result_t));
-    n00b_dict_untyped_init(&r->flags, n00b_hash_cstring, n00b_dict_cstr_eq);
+    n00b_dict_init(&r->flags, n00b_hash_cstring, n00b_dict_cstr_eq);
 
     if (!parse_ok) {
         r->ok       = false;
@@ -1227,7 +1227,7 @@ n00b_cmdr_flag_present(n00b_cmdr_result_t *r, const char *flag)
         return false;
     }
 
-    return n00b_dict_untyped_contains(&r->flags, (void *)flag);
+    return n00b_dict_contains(&r->flags, (void *)flag);
 }
 
 n00b_cmdr_val_t *
@@ -1238,7 +1238,7 @@ n00b_cmdr_flag_get(n00b_cmdr_result_t *r, const char *flag)
     }
 
     bool found;
-    void *val = n00b_dict_untyped_get(&r->flags, (void *)flag, &found);
+    void *val = n00b_dict_get(&r->flags, (void *)flag, &found);
 
     return found ? (n00b_cmdr_val_t *)val : NULL;
 }
@@ -1333,7 +1333,7 @@ n00b_cmdr_result_free(n00b_cmdr_result_t *r)
         }
     }
 
-    n00b_dict_untyped_free(&r->flags);
+    n00b_dict_free(&r->flags);
 
     for (int32_t i = 0; i < r->n_args; i++) {
         free((void *)r->args[i].value);

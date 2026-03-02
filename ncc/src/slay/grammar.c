@@ -294,11 +294,11 @@ n00b_grammar_new(void)
     g->hide_penalty_rewrites = true;
     g->hide_groups           = true;
 
-    g->nt_map = n00b_alloc(n00b_dict_untyped_t);
-    n00b_dict_untyped_init(g->nt_map, n00b_hash_cstring, n00b_dict_cstr_eq);
+    g->nt_map = n00b_alloc(n00b_dict_t);
+    n00b_dict_init(g->nt_map, n00b_hash_cstring, n00b_dict_cstr_eq);
 
-    g->terminal_map = n00b_alloc(n00b_dict_untyped_t);
-    n00b_dict_untyped_init(g->terminal_map, n00b_hash_cstring, n00b_dict_cstr_eq);
+    g->terminal_map = n00b_alloc(n00b_dict_t);
+    n00b_dict_init(g->terminal_map, n00b_hash_cstring, n00b_dict_cstr_eq);
 
     return g;
 }
@@ -392,7 +392,7 @@ n00b_nonterm(n00b_grammar_t *g, n00b_string_t name)
 {
     if (name.data) {
         bool  found = false;
-        void *val   = _n00b_dict_untyped_get(g->nt_map, (void *)name.data, &found);
+        void *val   = _n00b_dict_get(g->nt_map, (void *)name.data, &found);
 
         if (found) {
             int64_t existing = (int64_t)(intptr_t)val;
@@ -409,7 +409,7 @@ n00b_nonterm(n00b_grammar_t *g, n00b_string_t name)
 
     if (name.data) {
         n00b_nonterm_t *stored = n00b_get_nonterm(g, nt.id);
-        _n00b_dict_untyped_put(g->nt_map,
+        _n00b_dict_put(g->nt_map,
                                (void *)stored->name.data,
                                (void *)(intptr_t)stored->id);
     }
@@ -427,7 +427,7 @@ int64_t
 n00b_register_terminal(n00b_grammar_t *g, n00b_string_t name)
 {
     bool  found = false;
-    void *val   = _n00b_dict_untyped_get(g->terminal_map, (void *)name.data, &found);
+    void *val   = _n00b_dict_get(g->terminal_map, (void *)name.data, &found);
 
     if (found) {
         return (int64_t)(intptr_t)val;
@@ -445,7 +445,7 @@ n00b_register_terminal(n00b_grammar_t *g, n00b_string_t name)
     n00b_list_push(g->named_terms, term);
 
     n00b_terminal_t *stored = n00b_get_terminal(g, term.id);
-    _n00b_dict_untyped_put(g->terminal_map,
+    _n00b_dict_put(g->terminal_map,
                            (void *)stored->value.data,
                            (void *)(intptr_t)stored->id);
 
@@ -588,23 +588,28 @@ n00b_add_rule_with_cost_v(n00b_grammar_t *g,
 // FIRST set computation (iterative fixed-point)
 // ============================================================================
 
-// Encode a terminal ID as a void* for use in n00b_hashset_t.
-// Offset by 0x100 to avoid NULL (0) and TOMBSTONE (1) sentinels.
+// Encode a terminal ID as a void* for use in dict-as-set FIRST sets.
+// Offset by 0x100 to avoid NULL (0) collisions.
 #define TERM_TO_PTR(id) ((void *)(uintptr_t)((uint64_t)(id) + 0x100))
-#define TOMBSTONE_VAL   ((void *)(uintptr_t)1)
+
+static inline n00b_dict_t *
+n00b_dict_set_new(void)
+{
+    n00b_dict_t *d = calloc(1, sizeof(*d));
+    n00b_dict_init(d, NULL, NULL);
+    return d;
+}
 
 static inline void
-merge_hashset_into(n00b_hashset_t *dst, n00b_hashset_t *src)
+merge_dict_set_into(n00b_dict_t *dst, n00b_dict_t *src)
 {
     if (!src) {
         return;
     }
 
-    for (int32_t i = 0; i < src->cap; i++) {
-        void *item = src->buckets[i];
-
-        if (item && item != TOMBSTONE_VAL) {
-            n00b_hashset_add(dst, item);
+    for (size_t i = 0; i < src->capacity; i++) {
+        if (src->buckets[i].state == _N00B_BUCKET_OCCUPIED) {
+            n00b_dict_add(dst, src->buckets[i].key, (void *)1);
         }
     }
 }
@@ -648,10 +653,10 @@ static bool
 update_rule_first(n00b_grammar_t *g, n00b_parse_rule_t *rule, bool *first_nullable)
 {
     if (!rule->first_set) {
-        rule->first_set = n00b_hashset_new(8);
+        rule->first_set = n00b_dict_set_new();
     }
 
-    int32_t old_len     = rule->first_set->len;
+    size_t old_len      = rule->first_set->count;
     bool    old_has_any = rule->first_has_any;
 
     size_t n = rule->contents.len;
@@ -661,7 +666,7 @@ update_rule_first(n00b_grammar_t *g, n00b_parse_rule_t *rule, bool *first_nullab
 
         switch (m->kind) {
         case N00B_MATCH_TERMINAL:
-            n00b_hashset_add(rule->first_set, TERM_TO_PTR(m->terminal_id));
+            n00b_dict_add(rule->first_set, TERM_TO_PTR(m->terminal_id), (void *)1);
             goto done;
         case N00B_MATCH_ANY:
         case N00B_MATCH_CLASS:
@@ -676,7 +681,7 @@ update_rule_first(n00b_grammar_t *g, n00b_parse_rule_t *rule, bool *first_nullab
 
             if (gnt) {
                 if (gnt->first_set) {
-                    merge_hashset_into(rule->first_set, gnt->first_set);
+                    merge_dict_set_into(rule->first_set, gnt->first_set);
                 }
 
                 if (gnt->first_has_any) {
@@ -695,7 +700,7 @@ update_rule_first(n00b_grammar_t *g, n00b_parse_rule_t *rule, bool *first_nullab
 
             if (nt) {
                 if (nt->first_set) {
-                    merge_hashset_into(rule->first_set, nt->first_set);
+                    merge_dict_set_into(rule->first_set, nt->first_set);
                 }
 
                 if (nt->first_has_any) {
@@ -717,7 +722,7 @@ update_rule_first(n00b_grammar_t *g, n00b_parse_rule_t *rule, bool *first_nullab
     }
 
 done:
-    return rule->first_set->len != old_len || rule->first_has_any != old_has_any;
+    return rule->first_set->count != old_len || rule->first_has_any != old_has_any;
 }
 
 static void
@@ -760,14 +765,14 @@ compute_all_first_sets(n00b_grammar_t *g)
     for (size_t i = 0; i < n_nts; i++) {
         n00b_nonterm_t *nt = n00b_get_nonterm(g, (int64_t)i);
 
-        nt->first_set     = n00b_hashset_new(8);
+        nt->first_set     = n00b_dict_set_new();
         nt->first_has_any = false;
     }
 
     for (size_t i = 0; i < n_rules; i++) {
         n00b_parse_rule_t *rule = n00b_get_rule(g, (int32_t)i);
 
-        rule->first_set     = n00b_hashset_new(8);
+        rule->first_set     = n00b_dict_set_new();
         rule->first_has_any = false;
     }
 
@@ -788,21 +793,21 @@ compute_all_first_sets(n00b_grammar_t *g)
         // Merge rule FIRST sets into their NTs.
         for (size_t i = 0; i < n_nts; i++) {
             n00b_nonterm_t *nt      = n00b_get_nonterm(g, (int64_t)i);
-            int32_t         old_len = nt->first_set->len;
+            size_t          old_len = nt->first_set->count;
             bool            old_any = nt->first_has_any;
 
             for (size_t j = 0; j < nt->rule_ids.len; j++) {
                 int32_t            rule_ix = nt->rule_ids.data[j];
                 n00b_parse_rule_t *rule    = n00b_get_rule(g, rule_ix);
 
-                merge_hashset_into(nt->first_set, rule->first_set);
+                merge_dict_set_into(nt->first_set, rule->first_set);
 
                 if (rule->first_has_any) {
                     nt->first_has_any = true;
                 }
             }
 
-            if (nt->first_set->len != old_len || nt->first_has_any != old_any) {
+            if (nt->first_set->count != old_len || nt->first_has_any != old_any) {
                 changed = true;
             }
         }

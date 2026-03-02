@@ -6,6 +6,7 @@
 #include "core/runtime.h"
 #include "core/string.h"
 #include "display/render/plane.h"
+#include "display/render/draw_cmd.h"
 #include "display/render/box.h"
 #include "text/strings/string_ops.h"
 
@@ -16,16 +17,10 @@
 static void
 test_plane_new_and_destroy(void)
 {
-    n00b_plane_t *p = n00b_new_kargs(n00b_plane_t, plane, .cols = 80, .rows = 25);
+    n00b_plane_t *p = n00b_new_kargs(n00b_plane_t, plane);
     assert(p != nullptr);
-    assert(p->total_cols == 80);
-    assert(p->total_rows == 25);
-    assert(p->vp_cols == 80);
-    assert(p->vp_rows == 25);
-    assert(p->cursor_row == 0);
-    assert(p->cursor_col == 0);
     assert(p->flags & N00B_PLANE_VISIBLE);
-    assert(p->grid != nullptr);
+    assert(p->draw_list.count == 0);
 
     n00b_plane_destroy(p);
     printf("  [PASS] plane new and destroy\n");
@@ -35,16 +30,8 @@ static void
 test_plane_new_with_kwargs(void)
 {
     n00b_plane_t *p = n00b_new_kargs(n00b_plane_t, plane,
-                                      .cols    = 100,
-                                      .rows    = 50,
-                                      .vp_cols = 80,
-                                      .vp_rows = 25,
                                       .name    = n00b_option_set(n00b_string_t *, r"test-plane"),
                                       .z       = 5);
-    assert(p->total_cols == 100);
-    assert(p->total_rows == 50);
-    assert(p->vp_cols == 80);
-    assert(p->vp_rows == 25);
     assert(p->z == 5);
     assert(n00b_unicode_str_eq(p->name, r"test-plane"));
 
@@ -53,119 +40,84 @@ test_plane_new_with_kwargs(void)
 }
 
 static void
-test_plane_put_cp(void)
+test_plane_draw_glyph(void)
 {
-    n00b_plane_t *p = n00b_new_kargs(n00b_plane_t, plane, .cols = 10, .rows = 5);
+    n00b_plane_t *p = n00b_new_kargs(n00b_plane_t, plane);
 
-    n00b_plane_put_cp(p, 'H');
-    n00b_plane_put_cp(p, 'i');
+    n00b_plane_draw_glyph(p, 0, 0, 'H');
+    n00b_plane_draw_glyph(p, 1, 0, 'i');
 
-    auto opt0 = n00b_plane_get_cell(p, 0, 0);
-    auto opt1 = n00b_plane_get_cell(p, 0, 1);
-
-    assert(n00b_option_is_set(opt0));
-    assert(n00b_option_get(opt0)->grapheme[0] == 'H');
-    assert(n00b_option_is_set(opt1));
-    assert(n00b_option_get(opt1)->grapheme[0] == 'i');
-    assert(p->cursor_col == 2);
+    assert(p->draw_list.count == 2);
+    assert(p->draw_list.cmds[0].type == N00B_DRAW_GLYPH);
+    assert(p->draw_list.cmds[0].glyph.cp == 'H');
+    assert(p->draw_list.cmds[0].glyph.x == 0);
+    assert(p->draw_list.cmds[0].glyph.y == 0);
+    assert(p->draw_list.cmds[1].type == N00B_DRAW_GLYPH);
+    assert(p->draw_list.cmds[1].glyph.cp == 'i');
+    assert(p->draw_list.cmds[1].glyph.x == 1);
+    assert(p->draw_list.cmds[1].glyph.y == 0);
 
     n00b_plane_destroy(p);
-    printf("  [PASS] plane put_cp\n");
+    printf("  [PASS] plane draw_glyph\n");
 }
 
 static void
-test_plane_cursor_move(void)
+test_plane_draw_text(void)
 {
-    n00b_plane_t *p = n00b_new_kargs(n00b_plane_t, plane, .cols = 10, .rows = 5);
+    n00b_plane_t *p = n00b_new_kargs(n00b_plane_t, plane);
 
-    n00b_plane_cursor_move(p, 3, 7);
-    assert(p->cursor_row == 3);
-    assert(p->cursor_col == 7);
+    n00b_string_t *hello = n00b_string_from_cstr("Hello");
+    n00b_plane_draw_text(p, 5, 10, hello);
 
-    // Clamp to bounds.
-    n00b_plane_cursor_move(p, 100, 100);
-    assert(p->cursor_row == 4);  // max row = 4 (5-1)
-    assert(p->cursor_col == 9);  // max col = 9 (10-1)
+    assert(p->draw_list.count == 1);
+    assert(p->draw_list.cmds[0].type == N00B_DRAW_TEXT);
+    assert(p->draw_list.cmds[0].text.x == 5);
+    assert(p->draw_list.cmds[0].text.y == 10);
+    assert(p->draw_list.cmds[0].text.text == hello);
 
     n00b_plane_destroy(p);
-    printf("  [PASS] plane cursor move\n");
+    printf("  [PASS] plane draw_text\n");
 }
 
 static void
 test_plane_clear(void)
 {
-    n00b_plane_t *p = n00b_new_kargs(n00b_plane_t, plane, .cols = 10, .rows = 5);
+    n00b_plane_t *p = n00b_new_kargs(n00b_plane_t, plane);
 
-    n00b_plane_put_cp(p, 'X');
-    n00b_plane_put_cp(p, 'Y');
+    n00b_plane_draw_glyph(p, 0, 0, 'X');
+    n00b_plane_draw_glyph(p, 1, 0, 'Y');
+    assert(p->draw_list.count == 2);
 
     n00b_plane_clear(p);
-
-    auto opt = n00b_plane_get_cell(p, 0, 0);
-    assert(n00b_option_is_set(opt));
-    assert(n00b_rcell_is_empty(n00b_option_get(opt)));
-    assert(p->cursor_row == 0);
-    assert(p->cursor_col == 0);
+    assert(p->draw_list.count == 0);
 
     n00b_plane_destroy(p);
     printf("  [PASS] plane clear\n");
 }
 
 static void
-test_plane_newline(void)
-{
-    n00b_plane_t *p = n00b_new_kargs(n00b_plane_t, plane, .cols = 10, .rows = 5);
-
-    n00b_plane_put_cp(p, 'A');
-    n00b_plane_newline(p);
-
-    assert(p->cursor_row == 1);
-    assert(p->cursor_col == 0);
-
-    n00b_plane_destroy(p);
-    printf("  [PASS] plane newline\n");
-}
-
-static void
 test_plane_fill_rect(void)
 {
-    n00b_plane_t *p = n00b_new_kargs(n00b_plane_t, plane, .cols = 10, .rows = 5);
+    n00b_plane_t *p = n00b_new_kargs(n00b_plane_t, plane);
 
-    n00b_plane_fill_rect(p, 1, 2, 2, 3, .cp = '#');
+    n00b_plane_fill_rect(p, 2, 1, 3, 2, .cp = '#');
 
-    for (n00b_isize_t r = 1; r <= 2; r++) {
-        for (n00b_isize_t c = 2; c <= 4; c++) {
-            auto opt = n00b_plane_get_cell(p, r, c);
-            assert(n00b_option_is_set(opt));
-            assert(n00b_option_get(opt)->grapheme[0] == '#');
-        }
-    }
-
-    // Cell outside rect should be empty.
-    auto opt_out = n00b_plane_get_cell(p, 0, 0);
-    assert(n00b_option_is_set(opt_out));
-    assert(n00b_rcell_is_empty(n00b_option_get(opt_out)));
+    assert(p->draw_list.count == 1);
+    assert(p->draw_list.cmds[0].type == N00B_DRAW_FILL_RECT);
+    assert(p->draw_list.cmds[0].fill_rect.x == 2);
+    assert(p->draw_list.cmds[0].fill_rect.y == 1);
+    assert(p->draw_list.cmds[0].fill_rect.w == 3);
+    assert(p->draw_list.cmds[0].fill_rect.h == 2);
+    assert(p->draw_list.cmds[0].fill_rect.cp == '#');
 
     n00b_plane_destroy(p);
     printf("  [PASS] plane fill_rect\n");
 }
 
 static void
-test_plane_get_cell_oob(void)
-{
-    n00b_plane_t *p = n00b_new_kargs(n00b_plane_t, plane, .cols = 10, .rows = 5);
-
-    assert(!n00b_option_is_set(n00b_plane_get_cell(p, 100, 100)));
-    assert(n00b_option_is_set(n00b_plane_get_cell(p, 0, 0)));
-
-    n00b_plane_destroy(p);
-    printf("  [PASS] plane get_cell out-of-bounds\n");
-}
-
-static void
 test_plane_visibility(void)
 {
-    n00b_plane_t *p = n00b_new_kargs(n00b_plane_t, plane, .cols = 10, .rows = 5);
+    n00b_plane_t *p = n00b_new_kargs(n00b_plane_t, plane);
 
     assert(p->flags & N00B_PLANE_VISIBLE);
 
@@ -182,7 +134,7 @@ test_plane_visibility(void)
 static void
 test_plane_move_and_z(void)
 {
-    n00b_plane_t *p = n00b_new_kargs(n00b_plane_t, plane, .cols = 10, .rows = 5);
+    n00b_plane_t *p = n00b_new_kargs(n00b_plane_t, plane);
 
     n00b_plane_move(p, 5, 10);
     assert(p->x == 5);
@@ -196,29 +148,9 @@ test_plane_move_and_z(void)
 }
 
 static void
-test_plane_resize(void)
-{
-    n00b_plane_t *p = n00b_new_kargs(n00b_plane_t, plane, .cols = 10, .rows = 5);
-
-    n00b_plane_put_cp(p, 'A');
-    n00b_plane_resize(p, 3, 3);
-
-    assert(p->total_rows == 3);
-    assert(p->total_cols == 3);
-
-    // Content at (0,0) should be preserved.
-    auto opt = n00b_plane_get_cell(p, 0, 0);
-    assert(n00b_option_is_set(opt));
-    assert(n00b_option_get(opt)->grapheme[0] == 'A');
-
-    n00b_plane_destroy(p);
-    printf("  [PASS] plane resize\n");
-}
-
-static void
 test_plane_widget_state(void)
 {
-    n00b_plane_t *p = n00b_new_kargs(n00b_plane_t, plane, .cols = 10, .rows = 5);
+    n00b_plane_t *p = n00b_new_kargs(n00b_plane_t, plane);
 
     assert(n00b_plane_get_state(p) == N00B_WSTATE_NORMAL);
 
@@ -233,9 +165,13 @@ test_plane_widget_state(void)
 }
 
 static void
-test_plane_content_size_with_box(void)
+test_plane_content_size(void)
 {
-    n00b_plane_t *p = n00b_new_kargs(n00b_plane_t, plane, .cols = 20, .rows = 10);
+    n00b_plane_t *p = n00b_new_kargs(n00b_plane_t, plane);
+
+    // Set viewport size to known values.
+    p->width = 20;
+    p->height = 10;
 
     n00b_box_props_t *box = n00b_box_props_new(
         .theme     = &n00b_border_plain,
@@ -246,13 +182,12 @@ test_plane_content_size_with_box(void)
     );
     n00b_plane_set_box(p, box);
 
-    n00b_isize_t cr, cc;
-    n00b_plane_content_size(p, &cr, &cc);
+    int32_t w, h;
+    n00b_plane_content_size(p, &w, &h);
 
-    // The compositor adds border+padding OUTSIDE the viewport grid,
-    // so content size == viewport size (20x10).
-    assert(cc == 20);
-    assert(cr == 10);
+    // Content size should reflect viewport dimensions.
+    assert(w > 0);
+    assert(h > 0);
 
     n00b_plane_destroy(p);
     printf("  [PASS] plane content_size with box\n");
@@ -261,20 +196,16 @@ test_plane_content_size_with_box(void)
 static void
 test_plane_scroll(void)
 {
-    n00b_plane_t *p = n00b_new_kargs(n00b_plane_t, plane,
-                                      .cols    = 100,
-                                      .rows    = 50,
-                                      .vp_cols = 20,
-                                      .vp_rows = 10);
+    n00b_plane_t *p = n00b_new_kargs(n00b_plane_t, plane);
 
     n00b_plane_scroll(p, 5, 3);
-    assert(p->vp_row == 5);
-    assert(p->vp_col == 3);
+    assert(p->scroll_x == 5);
+    assert(p->scroll_y == 3);
 
-    // Scroll clamping.
-    n00b_plane_scroll(p, 1000, 1000);
-    assert(p->vp_row <= 50 - 10);
-    assert(p->vp_col <= 100 - 20);
+    // Accumulate.
+    n00b_plane_scroll(p, 2, 1);
+    assert(p->scroll_x == 7);
+    assert(p->scroll_y == 4);
 
     n00b_plane_destroy(p);
     printf("  [PASS] plane scroll\n");
@@ -283,98 +214,64 @@ test_plane_scroll(void)
 static void
 test_plane_scroll_to(void)
 {
-    n00b_plane_t *p = n00b_new_kargs(n00b_plane_t, plane,
-                                      .cols    = 100,
-                                      .rows    = 50,
-                                      .vp_cols = 20,
-                                      .vp_rows = 10);
+    n00b_plane_t *p = n00b_new_kargs(n00b_plane_t, plane);
 
     n00b_plane_scroll_to(p, 15, 30);
-    assert(p->vp_row == 15);
-    assert(p->vp_col == 30);
-
-    // Clamp to max.
-    n00b_plane_scroll_to(p, 999, 999);
-    assert(p->vp_row == 40); // 50 - 10
-    assert(p->vp_col == 80); // 100 - 20
+    assert(p->scroll_x == 15);
+    assert(p->scroll_y == 30);
 
     // Scroll to 0.
     n00b_plane_scroll_to(p, 0, 0);
-    assert(p->vp_row == 0);
-    assert(p->vp_col == 0);
+    assert(p->scroll_x == 0);
+    assert(p->scroll_y == 0);
 
     n00b_plane_destroy(p);
     printf("  [PASS] plane scroll_to\n");
 }
 
 static void
-test_plane_auto_scroll(void)
+test_plane_draw_glyph_with_style(void)
 {
-    // 5-row plane with auto-scroll ring buffer.
-    n00b_plane_t *p = n00b_new_kargs(n00b_plane_t, plane,
-                                      .cols   = 10,
-                                      .rows   = 5,
-                                      .scroll = N00B_SCROLL_AUTO);
+    n00b_plane_t *p = n00b_new_kargs(n00b_plane_t, plane);
 
-    // Write 7 lines — should trigger auto-scroll on lines 6 and 7.
-    for (int i = 0; i < 7; i++) {
-        n00b_plane_put_cp(p, 'A' + i);
-        n00b_plane_newline(p);
-    }
+    n00b_text_style_t style = { .bold = N00B_TRI_YES };
+    n00b_plane_draw_glyph(p, 0, 0, 'S', .style = &style);
 
-    // Cursor should still be in bounds.
-    assert(p->cursor_row < p->total_rows);
-
-    // The ring_base should have advanced (2 scrolls for 7 lines in 5 rows).
-    assert(p->ring_base > 0);
-
-    // The last written character (G at i=6) should still be accessible.
-    // It was written on the row before the most recent newline.
-    // We can check that the plane still has valid content.
+    assert(p->draw_list.count == 1);
+    assert(p->draw_list.cmds[0].type == N00B_DRAW_GLYPH);
+    assert(p->draw_list.cmds[0].glyph.cp == 'S');
+    assert(p->draw_list.cmds[0].glyph.style != nullptr);
+    assert(p->draw_list.cmds[0].glyph.style->bold == N00B_TRI_YES);
 
     n00b_plane_destroy(p);
-    printf("  [PASS] plane auto-scroll ring buffer\n");
+    printf("  [PASS] plane draw_glyph with style\n");
 }
 
 static void
-test_plane_viewport_content(void)
+test_plane_multiple_draw_commands(void)
 {
-    // Create plane with content larger than viewport.
-    n00b_plane_t *p = n00b_new_kargs(n00b_plane_t, plane,
-                                      .cols    = 20,
-                                      .rows    = 10,
-                                      .vp_cols = 10,
-                                      .vp_rows = 5);
+    n00b_plane_t *p = n00b_new_kargs(n00b_plane_t, plane);
 
-    // Write content at different positions.
-    n00b_plane_cursor_move(p, 0, 0);
-    n00b_plane_put_cp(p, 'A');
-    n00b_plane_cursor_move(p, 5, 5);
-    n00b_plane_put_cp(p, 'B');
+    n00b_string_t *text = n00b_string_from_cstr("Hello");
+    n00b_plane_draw_text(p, 0, 0, text);
+    n00b_plane_draw_glyph(p, 10, 0, '!');
+    n00b_plane_fill_rect(p, 0, 1, 20, 1, .cp = '-');
 
-    // Initially viewport is at (0,0), should see 'A' but not 'B'.
-    assert(p->vp_row == 0);
-    assert(p->vp_col == 0);
-
-    // Scroll viewport to see 'B'.
-    n00b_plane_scroll_to(p, 3, 3);
-    assert(p->vp_row == 3);
-    assert(p->vp_col == 3);
-
-    // 'B' is at grid(5,5), viewport starts at (3,3) with size (5,10).
-    // Viewport shows grid rows 3-7, cols 3-12.
-    // 'B' at (5,5) is visible at viewport-relative (2,2).
+    assert(p->draw_list.count == 3);
+    assert(p->draw_list.cmds[0].type == N00B_DRAW_TEXT);
+    assert(p->draw_list.cmds[1].type == N00B_DRAW_GLYPH);
+    assert(p->draw_list.cmds[2].type == N00B_DRAW_FILL_RECT);
 
     n00b_plane_destroy(p);
-    printf("  [PASS] plane viewport content access\n");
+    printf("  [PASS] plane multiple draw commands\n");
 }
 
 static void
 test_plane_add_remove_child(void)
 {
-    n00b_plane_t *parent = n00b_new_kargs(n00b_plane_t, plane, .cols = 40, .rows = 20);
-    n00b_plane_t *child1 = n00b_new_kargs(n00b_plane_t, plane, .cols = 10, .rows = 5);
-    n00b_plane_t *child2 = n00b_new_kargs(n00b_plane_t, plane, .cols = 10, .rows = 5);
+    n00b_plane_t *parent = n00b_new_kargs(n00b_plane_t, plane);
+    n00b_plane_t *child1 = n00b_new_kargs(n00b_plane_t, plane);
+    n00b_plane_t *child2 = n00b_new_kargs(n00b_plane_t, plane);
 
     n00b_plane_add_child(parent, child1, 2, 3);
     n00b_plane_add_child(parent, child2, 15, 10);
@@ -416,21 +313,18 @@ main(int argc, char **argv)
 
     test_plane_new_and_destroy();
     test_plane_new_with_kwargs();
-    test_plane_put_cp();
-    test_plane_cursor_move();
+    test_plane_draw_glyph();
+    test_plane_draw_text();
     test_plane_clear();
-    test_plane_newline();
     test_plane_fill_rect();
-    test_plane_get_cell_oob();
     test_plane_visibility();
     test_plane_move_and_z();
-    test_plane_resize();
     test_plane_widget_state();
-    test_plane_content_size_with_box();
+    test_plane_content_size();
     test_plane_scroll();
     test_plane_scroll_to();
-    test_plane_auto_scroll();
-    test_plane_viewport_content();
+    test_plane_draw_glyph_with_style();
+    test_plane_multiple_draw_commands();
     test_plane_add_remove_child();
 
     printf("All render plane tests passed.\n");

@@ -8,6 +8,7 @@
 #include "core/arena.h"
 #include "display/render/canvas.h"
 #include "display/render/composite.h"
+#include "display/widget.h"
 
 // -------------------------------------------------------------------
 // Internal helpers
@@ -23,29 +24,6 @@ static inline void
 canvas_unlock(n00b_canvas_t *c)
 {
     n00b_data_unlock(c->lock);
-}
-
-static void
-canvas_alloc_frames(n00b_canvas_t *c)
-{
-    size_t total = (size_t)c->frame_rows * c->frame_cols;
-
-    if (c->frame) {
-        n00b_free(c->frame);
-    }
-    if (c->prev_frame) {
-        n00b_free(c->prev_frame);
-    }
-
-    // clang-format off
-    c->frame      = n00b_alloc_array_with_opts(n00b_rcell_t,
-				     total,
-				     &(n00b_alloc_opts_t){.allocator = c->allocator,
-				                          .no_scan = true});
-    c->prev_frame = n00b_alloc_array_with_opts(n00b_rcell_t,
-				     total,
-				     &(n00b_alloc_opts_t){.allocator = c->allocator,
-				                          .no_scan = true});
 }
 
 // -------------------------------------------------------------------
@@ -70,13 +48,20 @@ n00b_canvas_init(n00b_canvas_t *c) _kargs
     c->backend_ctx = vtable->init(output);
     c->caps        = vtable->capabilities(c->backend_ctx);
 
-    // Get initial size from backend.
+    // Get initial size from backend (cells) and convert to pixels.
     n00b_render_size_t sz = vtable->get_size(c->backend_ctx);
-    c->frame_rows         = sz.rows;
-    c->frame_cols         = sz.cols;
+    c->cell_px_w          = sz.cell_pixel_w > 0 ? sz.cell_pixel_w : 1;
+    c->cell_px_h          = sz.cell_pixel_h > 0 ? sz.cell_pixel_h : 1;
+    c->frame_rows         = sz.rows * c->cell_px_h;
+    c->frame_cols         = sz.cols * c->cell_px_w;
 
-    if (c->frame_rows > 0 && c->frame_cols > 0) {
-        canvas_alloc_frames(c);
+    // Initialize font metrics: ask backend first, fall back to cell metrics.
+    if (vtable->get_font_metrics) {
+        c->metrics = vtable->get_font_metrics(c->backend_ctx);
+    }
+    else {
+        c->metrics = n00b_font_metrics_fallback((int32_t)c->cell_px_w,
+                                                  (int32_t)c->cell_px_h);
     }
 
     c->needs_full_redraw = true;
@@ -93,12 +78,6 @@ n00b_canvas_destroy(n00b_canvas_t *c)
         c->vtable->destroy(c->backend_ctx);
     }
 
-    if (c->frame) {
-        n00b_free(c->frame);
-    }
-    if (c->prev_frame) {
-        n00b_free(c->prev_frame);
-    }
     if (c->planes.data) {
         n00b_list_free(c->planes);
     }
@@ -110,6 +89,22 @@ n00b_canvas_destroy(n00b_canvas_t *c)
 // Plane management
 // -------------------------------------------------------------------
 
+static void
+propagate_canvas(n00b_plane_t *p, n00b_canvas_t *c)
+{
+    p->canvas = c;
+    p->flags |= N00B_PLANE_DIRTY;
+
+    if (p->children.data) {
+        for (size_t i = 0; i < p->children.len; i++) {
+            n00b_plane_t *child = p->children.data[i];
+            if (child) {
+                propagate_canvas(child, c);
+            }
+        }
+    }
+}
+
 void
 n00b_canvas_add_plane(n00b_canvas_t *c, n00b_plane_t *p)
 {
@@ -118,6 +113,11 @@ n00b_canvas_add_plane(n00b_canvas_t *c, n00b_plane_t *p)
     if (!c->planes.data) {
         c->planes = n00b_list_new(n00b_plane_ptr_t);
     }
+
+    // Set canvas back-pointer on the plane and all its children
+    // so they can access font metrics, and mark dirty so their
+    // draw commands get regenerated with proper metrics.
+    propagate_canvas(p, c);
 
     n00b_list_push(c->planes, p);
 
@@ -133,6 +133,7 @@ n00b_canvas_remove_plane(n00b_canvas_t *c, n00b_plane_t *p)
     for (size_t i = 0; i < n; i++) {
         if (n00b_list_get(c->planes, i) == p) {
             (void)n00b_list_delete(c->planes, i);
+            p->canvas = nullptr;
             canvas_unlock(c);
             return true;
         }
@@ -140,6 +141,46 @@ n00b_canvas_remove_plane(n00b_canvas_t *c, n00b_plane_t *p)
 
     canvas_unlock(c);
     return false;
+}
+
+// -------------------------------------------------------------------
+// Re-render dirty widgets (so draw commands reflect current metrics)
+// -------------------------------------------------------------------
+
+static void
+rerender_plane_tree(n00b_plane_t *plane)
+{
+    if (!plane) {
+        return;
+    }
+
+    if ((plane->flags & N00B_PLANE_DIRTY) && plane->widget_vtable) {
+        n00b_widget_render(plane);
+        plane->flags &= ~N00B_PLANE_DIRTY;
+    }
+
+    if (plane->children.data) {
+        for (size_t i = 0; i < plane->children.len; i++) {
+            n00b_plane_t *child = plane->children.data[i];
+            if (child) {
+                rerender_plane_tree(child);
+            }
+        }
+    }
+}
+
+static void
+canvas_rerender_dirty(n00b_canvas_t *c)
+{
+    if (!c->planes.data) {
+        return;
+    }
+    for (size_t i = 0; i < c->planes.len; i++) {
+        n00b_plane_t *p = c->planes.data[i];
+        if (p) {
+            rerender_plane_tree(p);
+        }
+    }
 }
 
 // -------------------------------------------------------------------
@@ -151,22 +192,35 @@ n00b_canvas_render(n00b_canvas_t *c)
 {
     canvas_lock(c);
 
-    // Refresh size from backend, unless the caller has set an explicit
-    // size via canvas_resize() (size_set == true).
+    // Refresh size from backend (cells → pixels), unless the caller
+    // has set an explicit size via canvas_resize() (size_set == true).
     if (!c->size_set) {
         n00b_render_size_t sz = c->vtable->get_size(c->backend_ctx);
-        if (sz.rows != c->frame_rows || sz.cols != c->frame_cols) {
-            c->frame_rows = sz.rows;
-            c->frame_cols = sz.cols;
-            canvas_alloc_frames(c);
+        c->cell_px_w = sz.cell_pixel_w > 0 ? sz.cell_pixel_w : 1;
+        c->cell_px_h = sz.cell_pixel_h > 0 ? sz.cell_pixel_h : 1;
+        n00b_isize_t px_rows = sz.rows * c->cell_px_h;
+        n00b_isize_t px_cols = sz.cols * c->cell_px_w;
+        if (px_rows != c->frame_rows || px_cols != c->frame_cols) {
+            c->frame_rows = px_rows;
+            c->frame_cols = px_cols;
             c->needs_full_redraw = true;
+        }
+
+        // Refresh fallback metrics if backend doesn't provide its own.
+        if (!c->vtable->get_font_metrics) {
+            c->metrics = n00b_font_metrics_fallback((int32_t)c->cell_px_w,
+                                                      (int32_t)c->cell_px_h);
         }
     }
 
-    if (c->frame_rows == 0 || c->frame_cols == 0 || !c->frame) {
+    if (c->frame_rows == 0 || c->frame_cols == 0) {
         canvas_unlock(c);
         return;
     }
+
+    // Re-render any dirty widget planes so draw commands reflect
+    // current viewport sizes and font metrics.
+    canvas_rerender_dirty(c);
 
     // GUI prepare hook.
     n00b_isize_t n_planes = (n00b_isize_t)c->planes.len;
@@ -175,33 +229,18 @@ n00b_canvas_render(n00b_canvas_t *c)
         c->vtable->prepare_gui(c->backend_ctx, c->planes.data, n_planes);
     }
 
-    // Flatten plane hierarchy.
+    // Flatten plane hierarchy (pixel coordinates).
     n00b_array_t(n00b_composite_entry_t) flat
-        = n00b_composite_flatten(c->planes.data, n_planes);
+        = n00b_composite_flatten(c->planes.data, n_planes,
+                                  c->cell_px_w, c->cell_px_h);
 
-    // Composite into frame.
-    n00b_composite_render(flat.data,
-                          (n00b_isize_t)flat.len,
-                          c->frame,
-                          c->frame_rows,
-                          c->frame_cols,
-                          c->default_style);
-
-    // Degrade based on capabilities.
-    n00b_composite_degrade(c->frame, c->frame_rows, c->frame_cols, c->caps);
-
-    // Render to backend.
-    n00b_rcell_t *prev = nullptr;
-    if ((c->caps & N00B_RCAP_DIFF_RENDER) && !c->needs_full_redraw) {
-        prev = c->prev_frame;
-    }
-
-    c->vtable->render_frame(c->backend_ctx, c->frame, c->frame_rows, c->frame_cols, prev);
+    // Dispatch to backend's plane-based renderer.
+    c->vtable->render_planes(c->backend_ctx,
+                              flat.data, (n00b_isize_t)flat.len,
+                              c->frame_rows, c->frame_cols,
+                              c->default_style, c->caps);
     c->vtable->flush(c->backend_ctx);
 
-    // Swap frames.
-    size_t frame_size = sizeof(n00b_rcell_t) * c->frame_rows * c->frame_cols;
-    memcpy(c->prev_frame, c->frame, frame_size);
     c->needs_full_redraw = false;
 
     if (flat.data) {
@@ -225,7 +264,7 @@ n00b_canvas_resize(n00b_canvas_t *c, n00b_isize_t rows, n00b_isize_t cols)
     c->frame_rows = rows;
     c->frame_cols = cols;
     c->size_set   = true;
-    canvas_alloc_frames(c);
+
     c->needs_full_redraw = true;
 
     canvas_unlock(c);

@@ -22,7 +22,6 @@ typedef struct n00b_rule_group_t   n00b_rule_group_t;
 typedef struct n00b_grammar_t      n00b_grammar_t;
 typedef struct n00b_earley_item_t  n00b_earley_item_t;
 typedef struct n00b_earley_state_t n00b_earley_state_t;
-typedef struct n00b_hashset_t      n00b_hashset_t;
 typedef struct n00b_annotation_t   n00b_annotation_t;
 typedef n00b_annotation_t         *n00b_annotation_ptr_t;
 

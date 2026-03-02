@@ -25,7 +25,7 @@ typedef void n00b_oob_hdr_t;
 // Forward declarations for types used across headers.
 typedef struct n00b_string_t     n00b_string_t;
 typedef struct n00b_buffer_t     n00b_buffer_t;
-typedef struct n00b_dict_untyped_t n00b_dict_untyped_t;
+typedef struct n00b_dict_t n00b_dict_t;
 
 typedef n00b_hash_value_t (*n00b_hash_fn)(void *);
 

@@ -27,12 +27,105 @@
 #include "n00b/n00b_module_loader.h"
 #include "slay/codegen.h"
 #include "slay/diagnostic.h"
+#include "n00b/embed.h"
+#include "n00b/embed_ffi.h"
 #include "n00b/n00b_type_map.h"
 #include "slay/grammar.h"
 #include "slay/n00b_parse.h"
 #include "slay/parse_tree.h"
 #include "slay/token.h"
 #include "vendor/linenoise.h"
+
+// ============================================================================
+// Builtins loading: auto-import lib/std/builtins.n into a codegen session.
+// Shared between n00b and n00b_dev executables (both link this file).
+// ============================================================================
+
+bool
+n00b_load_builtins(n00b_grammar_t *g, n00b_cg_session_t *session)
+{
+    FILE *f = NULL;
+
+    const char *try_paths[] = {
+        "lib/std/builtins.n",
+        "../lib/std/builtins.n",
+        "../../lib/std/builtins.n",
+        NULL,
+    };
+
+    for (const char **p = try_paths; *p; p++) {
+        f = fopen(*p, "r");
+
+        if (f) {
+            break;
+        }
+    }
+
+    if (!f) {
+        const char *srcroot = getenv("MESON_SOURCE_ROOT");
+
+        if (srcroot) {
+            char path[1024];
+            snprintf(path, sizeof(path), "%s/lib/std/builtins.n", srcroot);
+            f = fopen(path, "r");
+        }
+    }
+
+    if (!f) {
+        // Builtins not found — not fatal, just skip.
+        return true;
+    }
+
+    fseek(f, 0, SEEK_END);
+    long len = ftell(f);
+    fseek(f, 0, SEEK_SET);
+
+    char *raw = malloc((size_t)len + 1);
+    fread(raw, 1, (size_t)len, f);
+    raw[len] = '\0';
+    fclose(f);
+
+    n00b_buffer_t *buf = n00b_buffer_from_bytes(raw, (int64_t)len);
+    free(raw);
+
+    // Tokenize.
+    n00b_scanner_t      *scanner = n00b_scanner_new(buf, n00b_lang_tokenize, g);
+    n00b_token_stream_t *ts      = n00b_token_stream_new(scanner);
+
+    // Parse.
+    n00b_parse_result_t *r = n00b_grammar_parse(g, ts,
+                                                  N00B_PARSE_MODE_DEFAULT);
+
+    if (!n00b_parse_result_ok(r)) {
+        n00b_string_t *err = n00b_parse_result_error_string(r);
+        fprintf(stderr, "warning: builtins.n parse failed: %.*s\n",
+                (int)err->u8_bytes, err->data);
+        n00b_parse_result_free(r);
+        return false;
+    }
+
+    n00b_parse_tree_t *tree = n00b_parse_result_tree(r);
+
+    // Annotation walk.
+    n00b_annot_result_t *ar = n00b_compile_walk(g, tree);
+
+    // Run the builtins module on the session.
+    // This triggers FFI embed handlers, registering wrapper functions.
+    bool    ok     = false;
+    n00b_cg_session_run_module(session, tree,
+                                .annot      = ar,
+                                .entry_name = "_builtins_init",
+                                .ok         = &ok);
+
+    n00b_parse_result_free(r);
+
+    if (!ok) {
+        fprintf(stderr, "warning: builtins.n codegen failed\n");
+        return false;
+    }
+
+    return true;
+}
 
 // ============================================================================
 // REPL state
@@ -430,9 +523,19 @@ dispatch_command(const char *line)
 int
 n00b_repl_run(n00b_grammar_t *grammar)
 {
+    n00b_dict_untyped_t *repl_embed_reg = n00b_embed_registry_new();
+    n00b_ffi_embed_register(repl_embed_reg);
+
+    n00b_cg_session_t *repl_session = n00b_cg_session_new(grammar,
+                                         .type_map = n00b_type_map,
+                                         .embed_registry = repl_embed_reg);
+
+    // Load builtins (print, etc.) before REPL interaction.
+    n00b_load_builtins(grammar, repl_session);
+
     n00b_repl_state_t state = {
         .grammar        = grammar,
-        .session        = n00b_cg_session_new(grammar, .type_map = n00b_type_map),
+        .session        = repl_session,
         .input_buf      = NULL,
         .input_len      = 0,
         .input_cap      = 0,

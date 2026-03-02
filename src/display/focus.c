@@ -60,7 +60,7 @@ blur_current(n00b_focus_mgr_t *fm)
     if (fm->current < fm->count) {
         n00b_plane_t *old = fm->focusable[fm->current];
         n00b_plane_set_state(old, N00B_WSTATE_NORMAL);
-        old->flags |= N00B_PLANE_DIRTY;
+        n00b_plane_mark_dirty(old);
     }
 }
 
@@ -70,7 +70,7 @@ focus_current(n00b_focus_mgr_t *fm)
     if (fm->current < fm->count) {
         n00b_plane_t *cur = fm->focusable[fm->current];
         n00b_plane_set_state(cur, N00B_WSTATE_FOCUSED);
-        cur->flags |= N00B_PLANE_DIRTY;
+        n00b_plane_mark_dirty(cur);
     }
 }
 

@@ -13,8 +13,10 @@
 #include "display/render/plane.h"
 #include "display/render/cell.h"
 #include "display/widget.h"
+#include "display/render/backend.h"
 #include "display/widgets/checkbox.h"
 #include "display/event.h"
+#include "text/unicode/properties.h"
 
 // -------------------------------------------------------------------
 // Helpers
@@ -134,6 +136,142 @@ test_checkbox_other_key(void)
 }
 
 // -------------------------------------------------------------------
+// Test 5: Explicit BALLOT resolves correctly
+// -------------------------------------------------------------------
+
+static void
+test_checkbox_indicator_ballot(void)
+{
+    n00b_string_t *label = n00b_string_from_cstr("Hi");
+    n00b_plane_t  *cb    = n00b_checkbox_new(label,
+                                               .indicator = N00B_CB_STYLE_BALLOT);
+
+    n00b_checkbox_t *data = (n00b_checkbox_t *)cb->widget_data;
+    assert(data->glyphs.unchecked == 0x2610);
+    assert(data->glyphs.checked   == 0x2611);
+    assert(data->glyphs.indicator_width == 1);
+
+    printf("  [PASS] checkbox indicator ballot\n");
+    n00b_plane_destroy(cb);
+}
+
+// -------------------------------------------------------------------
+// Test 6: AUTO + UNICODE caps → BALLOT
+// -------------------------------------------------------------------
+
+static void
+test_checkbox_auto_unicode(void)
+{
+    n00b_string_t *label = n00b_string_from_cstr("Hi");
+    n00b_plane_t  *cb    = n00b_checkbox_new(label,
+                                               .indicator = N00B_CB_STYLE_AUTO,
+                                               .caps      = N00B_RCAP_UNICODE);
+
+    n00b_checkbox_t *data = (n00b_checkbox_t *)cb->widget_data;
+    assert(data->glyphs.unchecked == 0x2610); // ballot
+    assert(data->glyphs.indicator_width == 1);
+
+    printf("  [PASS] checkbox auto + unicode → ballot\n");
+    n00b_plane_destroy(cb);
+}
+
+// -------------------------------------------------------------------
+// Test 7: AUTO + NONE caps → ASCII
+// -------------------------------------------------------------------
+
+static void
+test_checkbox_auto_none(void)
+{
+    n00b_string_t *label = n00b_string_from_cstr("Hi");
+    n00b_plane_t  *cb    = n00b_checkbox_new(label,
+                                               .indicator = N00B_CB_STYLE_AUTO,
+                                               .caps      = N00B_RCAP_NONE);
+
+    n00b_checkbox_t *data = (n00b_checkbox_t *)cb->widget_data;
+    assert(data->glyphs.unchecked == 0); // ASCII path
+    assert(data->glyphs.indicator_width == 3);
+
+    printf("  [PASS] checkbox auto + none → ascii\n");
+    n00b_plane_destroy(cb);
+}
+
+// -------------------------------------------------------------------
+// Test 8: AUTO + GUI_EXT caps → GUI
+// -------------------------------------------------------------------
+
+static void
+test_checkbox_auto_gui(void)
+{
+    n00b_string_t *label = n00b_string_from_cstr("Hi");
+    n00b_plane_t  *cb    = n00b_checkbox_new(label,
+                                               .indicator = N00B_CB_STYLE_AUTO,
+                                               .caps      = N00B_RCAP_GUI_EXT);
+
+    n00b_checkbox_t *data = (n00b_checkbox_t *)cb->widget_data;
+    // GUI uses same codepoints as ballot.
+    assert(data->glyphs.unchecked == 0x2610);
+    assert(data->indicator == N00B_CB_STYLE_AUTO);
+
+    printf("  [PASS] checkbox auto + gui_ext → gui\n");
+    n00b_plane_destroy(cb);
+}
+
+// -------------------------------------------------------------------
+// Test 9: set_indicator changes glyphs
+// -------------------------------------------------------------------
+
+static void
+test_checkbox_set_indicator(void)
+{
+    n00b_string_t *label = n00b_string_from_cstr("Hi");
+    n00b_plane_t  *cb    = n00b_checkbox_new(label,
+                                               .indicator = N00B_CB_STYLE_ASCII);
+
+    n00b_checkbox_t *data = (n00b_checkbox_t *)cb->widget_data;
+    assert(data->glyphs.unchecked == 0); // ASCII
+    assert(data->glyphs.indicator_width == 3);
+
+    n00b_checkbox_set_indicator(cb, N00B_CB_STYLE_CIRCLE, N00B_RCAP_UNICODE);
+
+    assert(data->glyphs.unchecked == 0x25CB); // ○
+    assert(data->glyphs.checked   == 0x25CF); // ●
+    assert(data->glyphs.indicator_width == 1);
+    assert(data->indicator == N00B_CB_STYLE_CIRCLE);
+
+    printf("  [PASS] checkbox set_indicator\n");
+    n00b_plane_destroy(cb);
+}
+
+// -------------------------------------------------------------------
+// Test 10: Measure reflects style width
+// -------------------------------------------------------------------
+
+static void
+test_checkbox_measure_width(void)
+{
+    // ASCII: focus(1) + indicator(3) + space(1) + label(2) = 7
+    n00b_string_t *label = n00b_string_from_cstr("Hi");
+    n00b_plane_t  *cb_a  = n00b_checkbox_new(label,
+                                               .indicator = N00B_CB_STYLE_ASCII,
+                                               .caps      = N00B_RCAP_NONE);
+
+    n00b_isize_t pc, pr, mc, mr;
+    n00b_widget_measure(cb_a, &pc, &pr, &mc, &mr);
+    assert(pc == 7); // 1 + 3 + 1 + 2
+
+    // BALLOT: focus(1) + indicator(1) + space(1) + label(2) = 5
+    n00b_plane_t *cb_b = n00b_checkbox_new(label,
+                                             .indicator = N00B_CB_STYLE_BALLOT);
+
+    n00b_widget_measure(cb_b, &pc, &pr, &mc, &mr);
+    assert(pc == 5); // 1 + 1 + 1 + 2
+
+    printf("  [PASS] checkbox measure width\n");
+    n00b_plane_destroy(cb_a);
+    n00b_plane_destroy(cb_b);
+}
+
+// -------------------------------------------------------------------
 // Main
 // -------------------------------------------------------------------
 
@@ -149,6 +287,12 @@ main(int argc, char **argv)
     test_checkbox_toggle();
     test_checkbox_set_checked();
     test_checkbox_other_key();
+    test_checkbox_indicator_ballot();
+    test_checkbox_auto_unicode();
+    test_checkbox_auto_none();
+    test_checkbox_auto_gui();
+    test_checkbox_set_indicator();
+    test_checkbox_measure_width();
 
     printf("All checkbox tests passed.\n");
 

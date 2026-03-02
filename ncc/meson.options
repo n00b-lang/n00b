@@ -6,3 +6,11 @@ option('coverage',
        type: 'boolean',
        value: false,
        description: 'Build with Clang source-based code coverage instrumentation')
+option('rstr_template_styled',
+       type: 'string',
+       value: '',
+       description: 'Override the default styled rstr code generation template')
+option('rstr_template_plain',
+       type: 'string',
+       value: '',
+       description: 'Override the default plain rstr code generation template')

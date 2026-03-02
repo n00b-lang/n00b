@@ -158,6 +158,7 @@ typedef enum : uint32_t {
     N00B_RCAP_ITALIC        = 1 <<  4,
     N00B_RCAP_UNDERLINE     = 1 <<  5,
     N00B_RCAP_STRIKETHROUGH = 1 <<  6,
+    N00B_RCAP_MOUSE         = 1 <<  7,
     N00B_RCAP_DIM           = 1 <<  9,
     N00B_RCAP_CURSOR_MOVE   = 1 << 10,
     N00B_RCAP_ALT_SCREEN    = 1 << 11,
@@ -179,7 +180,7 @@ typedef struct n00b_render_size_t {
     n00b_isize_t cell_pixel_h;
 } n00b_render_size_t;
 
-#define N00B_RENDERER_ABI_VERSION 1
+#define N00B_RENDERER_ABI_VERSION 3
 
 // ====================================================================
 // Event types (from display/event.h)
@@ -189,7 +190,24 @@ typedef enum : uint8_t {
     N00B_EVENT_NONE   = 0,
     N00B_EVENT_KEY    = 1,
     N00B_EVENT_RESIZE = 2,
+    N00B_EVENT_MOUSE  = 3,
 } n00b_event_type_t;
+
+typedef enum : uint8_t {
+    N00B_MOUSE_NONE        = 0,
+    N00B_MOUSE_LEFT        = 1,
+    N00B_MOUSE_MIDDLE      = 2,
+    N00B_MOUSE_RIGHT       = 3,
+    N00B_MOUSE_SCROLL_UP   = 4,
+    N00B_MOUSE_SCROLL_DOWN = 5,
+} n00b_mouse_button_t;
+
+typedef enum : uint8_t {
+    N00B_MOUSE_PRESS   = 0,
+    N00B_MOUSE_RELEASE = 1,
+    N00B_MOUSE_MOVE    = 2,
+    N00B_MOUSE_DRAG    = 3,
+} n00b_mouse_action_t;
 
 typedef enum : uint32_t {
     N00B_KEY_NONE       = 0,
@@ -233,6 +251,13 @@ typedef struct n00b_event_t {
     union {
         struct { uint32_t key; n00b_key_mod_t mods; } key;
         struct { n00b_isize_t rows; n00b_isize_t cols; } resize;
+        struct {
+            int32_t              x;
+            int32_t              y;
+            n00b_mouse_button_t  button;
+            n00b_mouse_action_t  action;
+            n00b_key_mod_t       mods;
+        } mouse;
     };
 } n00b_event_t;
 
@@ -242,6 +267,36 @@ typedef struct n00b_event_t {
 
 typedef struct n00b_plane_t    n00b_plane_t;
 typedef struct n00b_box_props_t n00b_box_props_t;
+
+// ====================================================================
+// Composite entry (from display/render/composite.h)
+// ====================================================================
+
+typedef struct n00b_composite_entry_t {
+    n00b_plane_t *plane;
+    int32_t       abs_x;
+    int32_t       abs_y;
+    int32_t       abs_z;
+    int32_t       clip_x;
+    int32_t       clip_y;
+    int32_t       clip_w;
+    int32_t       clip_h;
+} n00b_composite_entry_t;
+
+// ====================================================================
+// Compositing helpers (from display/render/composite.h)
+// ====================================================================
+
+extern void
+n00b_composite_commands_to_grid(const n00b_composite_entry_t *entries,
+                                 n00b_isize_t                  count,
+                                 n00b_rcell_t                 *frame,
+                                 n00b_isize_t                  cell_rows,
+                                 n00b_isize_t                  cell_cols,
+                                 int32_t                       cell_px_w,
+                                 int32_t                       cell_px_h,
+                                 n00b_text_style_t            *default_style,
+                                 n00b_render_cap_t             caps);
 
 // ====================================================================
 // Renderer vtable (from display/render/backend.h)
@@ -264,6 +319,14 @@ typedef struct n00b_renderer_vtable_t {
                                       n00b_isize_t  cols,
                                       n00b_rcell_t *prev_cells);
     void              (*flush)(void *ctx);
+
+    void              (*render_planes)(void                         *ctx,
+                                       const n00b_composite_entry_t *entries,
+                                       n00b_isize_t                  count,
+                                       n00b_isize_t                  total_rows,
+                                       n00b_isize_t                  total_cols,
+                                       n00b_text_style_t            *default_style,
+                                       n00b_render_cap_t             caps);
 
     void (*cursor_set_visible)(void *ctx, bool visible);
     void (*cursor_move)(void *ctx, n00b_isize_t row, n00b_isize_t col);
@@ -342,31 +405,67 @@ struct n00b_box_props_t {
 };
 
 struct n00b_plane_t {
-    void              *_name;
+    // Identity / hierarchy
+    void                *_name;          // n00b_string_t *
     struct n00b_plane_t *_parent;
-    void              *_children;
-    n00b_rcell_t      *_grid;
-    n00b_isize_t       _total_rows;
-    n00b_isize_t       _total_cols;
-    n00b_isize_t       _vp_row;
-    n00b_isize_t       _vp_col;
-    n00b_isize_t       _vp_rows;
-    n00b_isize_t       _vp_cols;
-    int32_t            _x;
-    int32_t            _y;
-    int32_t            _z;
-    n00b_isize_t       _cursor_row;
-    n00b_isize_t       _cursor_col;
-    n00b_isize_t       _ring_base;
-    n00b_isize_t       _ring_len;
-    n00b_box_props_t  *box;
-    void              *_default_style;
-    uint8_t            _scroll_mode;
-    uint8_t            _widget_state;
-    uint16_t           _flags;
-    const void        *_widget_vtable;
-    void              *_widget_data;
-    // ... remaining fields omitted (not accessed by Cocoa backend)
+    // n00b_list_t(n00b_plane_ptr_t) children:
+    //   { T *data; size_t len; size_t cap; n00b_rwlock_t *lock; }
+    void                *_children_data;
+    size_t               _children_len;
+    size_t               _children_cap;
+    void                *_children_lock;
+
+    // n00b_draw_list_t draw_list:
+    //   { n00b_draw_cmd_t *cmds; n00b_isize_t count, capacity; }
+    void                *_draw_cmds;
+    n00b_isize_t         _draw_count;
+    n00b_isize_t         _draw_capacity;
+
+    // Canvas back-pointer
+    void                *_canvas;
+
+    // Scroll offset (pixels)
+    int32_t              _scroll_x;
+    int32_t              _scroll_y;
+
+    // Viewport size (pixels)
+    n00b_isize_t         _height;
+    n00b_isize_t         _width;
+
+    // Position (pixels)
+    int32_t              _x;
+    int32_t              _y;
+    int32_t              _z;
+
+    // Decoration
+    n00b_box_props_t    *box;
+    void                *_default_style;  // n00b_text_style_t *
+
+    // Behavior
+    uint8_t              _scroll_mode;
+    uint8_t              _widget_state;
+    uint16_t             _flags;
+
+    // Widget
+    const void          *_widget_vtable;
+    void                *_widget_data;
+
+    // Flex layout + bounds (not accessed by Cocoa backend, but present)
+    // n00b_flex_props_t flex: { float grow, shrink; int32_t basis;
+    //                           uint8_t align_self; }
+    float                _flex_grow;
+    float                _flex_shrink;
+    int32_t              _flex_basis;
+    uint8_t              _flex_align_self;
+    uint8_t              _flex_pad[3];
+    // n00b_rect_t bounds: { int32_t x, y, width, height; }
+    int32_t              _bounds_x;
+    int32_t              _bounds_y;
+    int32_t              _bounds_w;
+    int32_t              _bounds_h;
+
+    void                *_lock;
+    void                *_allocator;
 };
 
 // ====================================================================

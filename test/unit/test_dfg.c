@@ -24,7 +24,7 @@
 #include "slay/debug.h"
 #include "slay/grammar.h"
 #include "slay/n00b_parse.h"
-#include "slay/n00b_tokenizer.h"
+#include "n00b/n00b_tokenizer.h"
 #include "slay/parse_tree.h"
 #include "slay/token.h"
 #include "text/strings/string_ops.h"

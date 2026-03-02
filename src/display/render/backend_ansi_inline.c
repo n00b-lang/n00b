@@ -18,6 +18,7 @@
 #include "conduit/write.h"
 #include "text/strings/text_style.h"
 #include "text/strings/theme.h"
+#include "display/render/composite.h"
 
 // -------------------------------------------------------------------
 // Context
@@ -30,6 +31,11 @@ typedef struct {
     n00b_conduit_topic_t(n00b_buffer_t *)  *output;
     n00b_isize_t                            rows;
     n00b_isize_t                            cols;
+
+    // Persistent compositing grid.
+    n00b_rcell_t                           *comp_grid;
+    n00b_isize_t                            comp_grid_rows;
+    n00b_isize_t                            comp_grid_cols;
 } ansi_inline_ctx_t;
 
 #define INLINE_INITIAL_BUF 16384
@@ -191,6 +197,9 @@ ansi_inline_destroy(void *vctx)
     ansi_inline_ctx_t *ctx = vctx;
 
     if (ctx) {
+        if (ctx->comp_grid) {
+            n00b_free(ctx->comp_grid);
+        }
         n00b_free(ctx->buf);
         n00b_free(ctx);
     }
@@ -306,6 +315,43 @@ ansi_inline_flush(void *vctx)
 }
 
 // -------------------------------------------------------------------
+// Plane-based rendering
+// -------------------------------------------------------------------
+
+static void
+ansi_inline_render_planes(void                         *vctx,
+                           const n00b_composite_entry_t *entries,
+                           n00b_isize_t                  count,
+                           n00b_isize_t                  total_rows,
+                           n00b_isize_t                  total_cols,
+                           n00b_text_style_t            *default_style,
+                           n00b_render_cap_t             caps)
+{
+    ansi_inline_ctx_t *ctx = vctx;
+
+    if (total_rows != ctx->comp_grid_rows
+        || total_cols != ctx->comp_grid_cols) {
+        if (ctx->comp_grid) {
+            n00b_free(ctx->comp_grid);
+        }
+        size_t total = (size_t)total_rows * total_cols;
+        ctx->comp_grid = n00b_alloc_array_with_opts(
+            n00b_rcell_t, total,
+            &(n00b_alloc_opts_t){.no_scan = true});
+        ctx->comp_grid_rows = total_rows;
+        ctx->comp_grid_cols = total_cols;
+    }
+
+    n00b_composite_commands_to_grid(entries, count, ctx->comp_grid,
+                                     total_rows, total_cols,
+                                     1, 1,
+                                     default_style, caps);
+
+    ansi_inline_render_frame(vctx, ctx->comp_grid, total_rows, total_cols,
+                              nullptr);
+}
+
+// -------------------------------------------------------------------
 // Inline-specific helpers
 // -------------------------------------------------------------------
 
@@ -326,12 +372,13 @@ n00b_ansi_inline_set_size(void *ctx, n00b_isize_t rows, n00b_isize_t cols)
 // -------------------------------------------------------------------
 
 const n00b_renderer_vtable_t n00b_renderer_ansi_inline = {
-    .name         = "ansi_inline",
-    .version      = N00B_RENDERER_ABI_VERSION,
-    .init         = ansi_inline_init,
-    .destroy      = ansi_inline_destroy,
-    .capabilities = ansi_inline_capabilities,
-    .get_size     = ansi_inline_get_size,
-    .render_frame = ansi_inline_render_frame,
-    .flush        = ansi_inline_flush,
+    .name          = "ansi_inline",
+    .version       = N00B_RENDERER_ABI_VERSION,
+    .init          = ansi_inline_init,
+    .destroy       = ansi_inline_destroy,
+    .capabilities  = ansi_inline_capabilities,
+    .get_size      = ansi_inline_get_size,
+    .render_frame  = ansi_inline_render_frame,
+    .flush         = ansi_inline_flush,
+    .render_planes = ansi_inline_render_planes,
 };

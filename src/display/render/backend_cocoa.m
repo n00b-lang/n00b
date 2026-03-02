@@ -480,8 +480,19 @@ draw_border_cell(CGContextRef cg,
             }
             // --- Foreground text ---
             else if ((cell->flags & N00B_CELL_OCCUPIED) && cell->grapheme_len > 0) {
-                // Select font.
-                CTFontRef font = ctx->ct_fonts[font_hint < COCOA_NUM_FONT_HINTS ? font_hint : 0];
+                // Select font, honoring per-cell font_size.
+                CTFontRef base_font = ctx->ct_fonts[font_hint < COCOA_NUM_FONT_HINTS ? font_hint : 0];
+                CTFontRef font = base_font;
+                bool font_size_override = false;
+
+                if (style && style->font_size > 0) {
+                    CGFloat pt = (CGFloat)style->font_size;
+                    CTFontRef sized = CTFontCreateCopyWithAttributes(base_font, pt, NULL, NULL);
+                    if (sized) {
+                        font = sized;
+                        font_size_override = true;
+                    }
+                }
 
                 // Apply bold/italic traits.
                 if (is_bold || is_italic) {
@@ -492,16 +503,23 @@ draw_border_cell(CGContextRef cg,
                     CTFontRef styled = CTFontCreateCopyWithSymbolicTraits(
                         font, 0.0, NULL, traits, traits);
                     if (styled) {
+                        if (font_size_override) {
+                            CFRelease(font);  // Release sized intermediate.
+                        }
                         font = styled;
                     }
                     else {
-                        // Fallback: keep base font, rely on synthetic
-                        // stroke for bold later if needed.
-                        font = CFRetain(font);
+                        // Fallback: keep current font.  If font_size_override
+                        // is set, font is already owned; otherwise retain.
+                        if (!font_size_override) {
+                            font = CFRetain(font);
+                        }
                     }
                 }
                 else {
-                    font = CFRetain(font);
+                    if (!font_size_override) {
+                        font = CFRetain(font);
+                    }
                 }
 
                 // Build attributed string.
@@ -656,6 +674,183 @@ draw_border_cell(CGContextRef cg,
         .type    = N00B_EVENT_KEY,
         .key.key  = key,
         .key.mods = mods,
+    };
+    cocoa_enqueue_event(ctx, &ev);
+}
+
+// -------------------------------------------------------------------
+// Mouse event handlers
+// -------------------------------------------------------------------
+
+- (void)mouseDown:(NSEvent *)event
+{
+    cocoa_ctx_t *ctx = self.ctx;
+    if (!ctx) return;
+
+    NSPoint loc = [self convertPoint:[event locationInWindow] fromView:nil];
+    n00b_event_t ev = {
+        .type         = N00B_EVENT_MOUSE,
+        .mouse.x      = (int32_t)(loc.x / ctx->cell_w),
+        .mouse.y      = (int32_t)(loc.y / ctx->cell_h),  // isFlipped=YES, y=0 at top.
+        .mouse.button = N00B_MOUSE_LEFT,
+        .mouse.action = N00B_MOUSE_PRESS,
+        .mouse.mods   = cocoa_translate_modifiers([event modifierFlags]),
+    };
+    cocoa_enqueue_event(ctx, &ev);
+}
+
+- (void)mouseUp:(NSEvent *)event
+{
+    cocoa_ctx_t *ctx = self.ctx;
+    if (!ctx) return;
+
+    NSPoint loc = [self convertPoint:[event locationInWindow] fromView:nil];
+    n00b_event_t ev = {
+        .type         = N00B_EVENT_MOUSE,
+        .mouse.x      = (int32_t)(loc.x / ctx->cell_w),
+        .mouse.y      = (int32_t)(loc.y / ctx->cell_h),
+        .mouse.button = N00B_MOUSE_LEFT,
+        .mouse.action = N00B_MOUSE_RELEASE,
+        .mouse.mods   = cocoa_translate_modifiers([event modifierFlags]),
+    };
+    cocoa_enqueue_event(ctx, &ev);
+}
+
+- (void)rightMouseDown:(NSEvent *)event
+{
+    cocoa_ctx_t *ctx = self.ctx;
+    if (!ctx) return;
+
+    NSPoint loc = [self convertPoint:[event locationInWindow] fromView:nil];
+    n00b_event_t ev = {
+        .type         = N00B_EVENT_MOUSE,
+        .mouse.x      = (int32_t)(loc.x / ctx->cell_w),
+        .mouse.y      = (int32_t)(loc.y / ctx->cell_h),
+        .mouse.button = N00B_MOUSE_RIGHT,
+        .mouse.action = N00B_MOUSE_PRESS,
+        .mouse.mods   = cocoa_translate_modifiers([event modifierFlags]),
+    };
+    cocoa_enqueue_event(ctx, &ev);
+}
+
+- (void)rightMouseUp:(NSEvent *)event
+{
+    cocoa_ctx_t *ctx = self.ctx;
+    if (!ctx) return;
+
+    NSPoint loc = [self convertPoint:[event locationInWindow] fromView:nil];
+    n00b_event_t ev = {
+        .type         = N00B_EVENT_MOUSE,
+        .mouse.x      = (int32_t)(loc.x / ctx->cell_w),
+        .mouse.y      = (int32_t)(loc.y / ctx->cell_h),
+        .mouse.button = N00B_MOUSE_RIGHT,
+        .mouse.action = N00B_MOUSE_RELEASE,
+        .mouse.mods   = cocoa_translate_modifiers([event modifierFlags]),
+    };
+    cocoa_enqueue_event(ctx, &ev);
+}
+
+- (void)otherMouseDown:(NSEvent *)event
+{
+    cocoa_ctx_t *ctx = self.ctx;
+    if (!ctx) return;
+
+    NSPoint loc = [self convertPoint:[event locationInWindow] fromView:nil];
+    n00b_event_t ev = {
+        .type         = N00B_EVENT_MOUSE,
+        .mouse.x      = (int32_t)(loc.x / ctx->cell_w),
+        .mouse.y      = (int32_t)(loc.y / ctx->cell_h),
+        .mouse.button = N00B_MOUSE_MIDDLE,
+        .mouse.action = N00B_MOUSE_PRESS,
+        .mouse.mods   = cocoa_translate_modifiers([event modifierFlags]),
+    };
+    cocoa_enqueue_event(ctx, &ev);
+}
+
+- (void)otherMouseUp:(NSEvent *)event
+{
+    cocoa_ctx_t *ctx = self.ctx;
+    if (!ctx) return;
+
+    NSPoint loc = [self convertPoint:[event locationInWindow] fromView:nil];
+    n00b_event_t ev = {
+        .type         = N00B_EVENT_MOUSE,
+        .mouse.x      = (int32_t)(loc.x / ctx->cell_w),
+        .mouse.y      = (int32_t)(loc.y / ctx->cell_h),
+        .mouse.button = N00B_MOUSE_MIDDLE,
+        .mouse.action = N00B_MOUSE_RELEASE,
+        .mouse.mods   = cocoa_translate_modifiers([event modifierFlags]),
+    };
+    cocoa_enqueue_event(ctx, &ev);
+}
+
+- (void)mouseMoved:(NSEvent *)event
+{
+    cocoa_ctx_t *ctx = self.ctx;
+    if (!ctx) return;
+
+    NSPoint loc = [self convertPoint:[event locationInWindow] fromView:nil];
+    n00b_event_t ev = {
+        .type         = N00B_EVENT_MOUSE,
+        .mouse.x      = (int32_t)(loc.x / ctx->cell_w),
+        .mouse.y      = (int32_t)(loc.y / ctx->cell_h),
+        .mouse.button = N00B_MOUSE_NONE,
+        .mouse.action = N00B_MOUSE_MOVE,
+        .mouse.mods   = cocoa_translate_modifiers([event modifierFlags]),
+    };
+    cocoa_enqueue_event(ctx, &ev);
+}
+
+- (void)mouseDragged:(NSEvent *)event
+{
+    cocoa_ctx_t *ctx = self.ctx;
+    if (!ctx) return;
+
+    NSPoint loc = [self convertPoint:[event locationInWindow] fromView:nil];
+    n00b_event_t ev = {
+        .type         = N00B_EVENT_MOUSE,
+        .mouse.x      = (int32_t)(loc.x / ctx->cell_w),
+        .mouse.y      = (int32_t)(loc.y / ctx->cell_h),
+        .mouse.button = N00B_MOUSE_LEFT,
+        .mouse.action = N00B_MOUSE_DRAG,
+        .mouse.mods   = cocoa_translate_modifiers([event modifierFlags]),
+    };
+    cocoa_enqueue_event(ctx, &ev);
+}
+
+- (void)rightMouseDragged:(NSEvent *)event
+{
+    cocoa_ctx_t *ctx = self.ctx;
+    if (!ctx) return;
+
+    NSPoint loc = [self convertPoint:[event locationInWindow] fromView:nil];
+    n00b_event_t ev = {
+        .type         = N00B_EVENT_MOUSE,
+        .mouse.x      = (int32_t)(loc.x / ctx->cell_w),
+        .mouse.y      = (int32_t)(loc.y / ctx->cell_h),
+        .mouse.button = N00B_MOUSE_RIGHT,
+        .mouse.action = N00B_MOUSE_DRAG,
+        .mouse.mods   = cocoa_translate_modifiers([event modifierFlags]),
+    };
+    cocoa_enqueue_event(ctx, &ev);
+}
+
+- (void)scrollWheel:(NSEvent *)event
+{
+    cocoa_ctx_t *ctx = self.ctx;
+    if (!ctx) return;
+
+    CGFloat dy = [event scrollingDeltaY];
+    if (dy == 0.0) return;
+
+    NSPoint loc = [self convertPoint:[event locationInWindow] fromView:nil];
+    n00b_event_t ev = {
+        .type         = N00B_EVENT_MOUSE,
+        .mouse.x      = (int32_t)(loc.x / ctx->cell_w),
+        .mouse.y      = (int32_t)(loc.y / ctx->cell_h),
+        .mouse.button = (dy > 0.0) ? N00B_MOUSE_SCROLL_UP : N00B_MOUSE_SCROLL_DOWN,
+        .mouse.action = N00B_MOUSE_PRESS,
+        .mouse.mods   = cocoa_translate_modifiers([event modifierFlags]),
     };
     cocoa_enqueue_event(ctx, &ev);
 }
@@ -1115,7 +1310,8 @@ cocoa_capabilities(void *vctx)
          | N00B_RCAP_FONT_METRICS
          | N00B_RCAP_DIFF_RENDER
          | N00B_RCAP_GUI_EXT
-         | N00B_RCAP_MANAGES_TTY;
+         | N00B_RCAP_MANAGES_TTY
+         | N00B_RCAP_MOUSE;
 }
 
 // ====================================================================
@@ -1474,6 +1670,51 @@ n00b_cocoa_run_loop_pump(double seconds)
 }
 
 // ====================================================================
+// Plane-based rendering
+// ====================================================================
+
+static void
+cocoa_render_planes(void                         *vctx,
+                    const n00b_composite_entry_t *entries,
+                    n00b_isize_t                  count,
+                    n00b_isize_t                  total_rows,
+                    n00b_isize_t                  total_cols,
+                    n00b_text_style_t            *default_style,
+                    n00b_render_cap_t             caps)
+{
+    cocoa_ctx_t *ctx = vctx;
+
+    // total_rows/total_cols are now in pixels; convert to cells for the grid.
+    int32_t cpw = ctx->cell_w > 0 ? (int32_t)ctx->cell_w : 1;
+    int32_t cph = ctx->cell_h > 0 ? (int32_t)ctx->cell_h : 1;
+    n00b_isize_t cell_rows = total_rows / cph;
+    n00b_isize_t cell_cols = total_cols / cpw;
+    if (cell_rows < 1) cell_rows = 1;
+    if (cell_cols < 1) cell_cols = 1;
+
+    // Reuse staging buffer dimensions for grid caching.
+    size_t total = (size_t)cell_rows * cell_cols;
+
+    // Use the staging buffer directly as our compositing target.
+    // Reallocate if size changed.
+    if (ctx->staging_rows != cell_rows || ctx->staging_cols != cell_cols) {
+        free(ctx->staging);
+        ctx->staging      = calloc(total, sizeof(n00b_rcell_t));
+        ctx->staging_rows = cell_rows;
+        ctx->staging_cols = cell_cols;
+    }
+
+    n00b_composite_commands_to_grid(entries, count, ctx->staging,
+                                     cell_rows, cell_cols,
+                                     cpw, cph,
+                                     default_style, caps);
+
+    // Route through existing render_frame (which copies staging and
+    // invalidates the dirty region for drawRect:).
+    cocoa_render_frame(vctx, ctx->staging, cell_rows, cell_cols, NULL);
+}
+
+// ====================================================================
 // Public vtable
 // ====================================================================
 
@@ -1486,6 +1727,7 @@ const n00b_renderer_vtable_t n00b_renderer_cocoa = {
     .get_size           = cocoa_get_size,
     .render_frame       = cocoa_render_frame,
     .flush              = cocoa_flush,
+    .render_planes      = cocoa_render_planes,
     .cursor_set_visible = cocoa_cursor_set_visible,
     .cursor_move        = cocoa_cursor_move,
     .on_resize          = cocoa_on_resize,

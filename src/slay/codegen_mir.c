@@ -844,7 +844,8 @@ n00b_cg_get_or_create_proto(n00b_cg_session_t   *s,
     snprintf(proto_name, sizeof(proto_name), "_proto_%s", name);
 
     MIR_item_t proto = MIR_new_proto_arr(s->mir_ctx, proto_name,
-                                          nres, &res_type, n_params, vars);
+                                          nres, nres ? &res_type : NULL,
+                                          n_params, vars);
 
     // Cache it in the module.
     if (m->func_proto_count >= m->func_proto_cap) {
@@ -983,6 +984,13 @@ _kargs {
         }
 
         MIR_func_t fn = func_item->u.func;
+
+        // Override ret_type based on the actual function's return count.
+        // The caller may pass I64 for unresolved types, but the wrapper
+        // may be void — trust the function definition.
+        if (fn->nres == 0) {
+            ret_type = N00B_CG_VOID;
+        }
 
         n00b_cg_type_tag_t *ptypes = NULL;
 

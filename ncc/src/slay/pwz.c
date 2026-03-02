@@ -11,7 +11,6 @@
 #include "slay/annotation.h"
 #include "internal/slay/pwz_internal.h"
 #include "internal/slay/grammar_internal.h"
-#include "internal/slay/hashset.h"
 #include "internal/slay/unicode_class.h"
 #include "core/alloc.h"
 #include "core/array.h"
@@ -342,16 +341,18 @@ expand_group_nt(n00b_pwz_parser_t *p, n00b_grammar_t *g, int64_t nt_id)
         alt_add(alt, empty_seq);
     }
     else if (grp->min == 0 && grp->max == 0) {
-        // Star: Alt(Seq(body, self_ref), empty)
+        // Star (left-recursive): Alt(Seq(self, body), empty)
+        // Left-recursion lets PWZ's seed-growing handle repetition
+        // with a single memo, avoiding O(n) parent-chain depth.
         for (size_t i = 0; i < body_nalts; i++) {
             pwz_exp_t *body_seq = body_alt->alt.alts.data[i];
             int32_t    nc       = body_seq->seq.nchildren;
             int32_t    new_nc   = nc + 1;
 
             pwz_exp_ptr_t *new_children = n00b_alloc_array(pwz_exp_ptr_t, new_nc);
-            memcpy(new_children, body_seq->seq.children,
+            new_children[0] = alt; // self-reference (left-recursive)
+            memcpy(new_children + 1, body_seq->seq.children,
                    (size_t)nc * sizeof(pwz_exp_ptr_t));
-            new_children[nc] = alt; // self-reference
 
             pwz_exp_t *rep_seq = make_seq_exp(p, nt->name.data, nt_id,
                                               body_seq->seq.rule_ix,
@@ -362,43 +363,28 @@ expand_group_nt(n00b_pwz_parser_t *p, n00b_grammar_t *g, int64_t nt_id)
         alt_add(alt, empty_seq);
     }
     else if (grp->min == 1 && grp->max == 0) {
-        // Plus: Alt(Seq(body, star_ref), body)
-        pwz_exp_t *star_alt = make_alt_exp(p, nt_id);
-
+        // Plus (left-recursive): Alt(Seq(self, body), body)
+        // Left-recursion lets PWZ's seed-growing handle repetition
+        // with a single memo, avoiding O(n) parent-chain depth.
         for (size_t i = 0; i < body_nalts; i++) {
             pwz_exp_t *body_seq = body_alt->alt.alts.data[i];
             int32_t    nc       = body_seq->seq.nchildren;
             int32_t    new_nc   = nc + 1;
 
             pwz_exp_ptr_t *new_children = n00b_alloc_array(pwz_exp_ptr_t, new_nc);
-            memcpy(new_children, body_seq->seq.children,
+            new_children[0] = alt; // self-reference (left-recursive)
+            memcpy(new_children + 1, body_seq->seq.children,
                    (size_t)nc * sizeof(pwz_exp_ptr_t));
-            new_children[nc] = star_alt;
-
-            pwz_exp_t *rep_seq = make_seq_exp(p, nt->name.data, nt_id,
-                                              body_seq->seq.rule_ix,
-                                              new_children, new_nc);
-            alt_add(star_alt, rep_seq);
-        }
-
-        pwz_exp_t *star_empty = make_seq_exp(p, nt->name.data, nt_id, -1, NULL, 0);
-        alt_add(star_alt, star_empty);
-
-        // Plus: Seq(body, star) for each body alt.
-        for (size_t i = 0; i < body_nalts; i++) {
-            pwz_exp_t *body_seq = body_alt->alt.alts.data[i];
-            int32_t    nc       = body_seq->seq.nchildren;
-            int32_t    new_nc   = nc + 1;
-
-            pwz_exp_ptr_t *new_children = n00b_alloc_array(pwz_exp_ptr_t, new_nc);
-            memcpy(new_children, body_seq->seq.children,
-                   (size_t)nc * sizeof(pwz_exp_ptr_t));
-            new_children[nc] = star_alt;
 
             pwz_exp_t *rep_seq = make_seq_exp(p, nt->name.data, nt_id,
                                               body_seq->seq.rule_ix,
                                               new_children, new_nc);
             alt_add(alt, rep_seq);
+        }
+
+        // Base case: just the body itself.
+        for (size_t i = 0; i < body_nalts; i++) {
+            alt_add(alt, body_alt->alt.alts.data[i]);
         }
     }
     else {
@@ -482,11 +468,11 @@ nt_first_matches(n00b_nonterm_t *nt, int64_t token_id)
         return true;
     }
 
-    if (!nt->first_set || nt->first_set->len == 0) {
+    if (!nt->first_set || nt->first_set->count == 0) {
         return true;
     }
 
-    return n00b_hashset_contains(nt->first_set, TERM_TO_PTR(token_id));
+    return n00b_dict_contains(nt->first_set, TERM_TO_PTR(token_id));
 }
 
 static inline bool
@@ -496,11 +482,11 @@ rule_first_matches(n00b_parse_rule_t *rule, int64_t token_id)
         return true;
     }
 
-    if (!rule->first_set || rule->first_set->len == 0) {
+    if (!rule->first_set || rule->first_set->count == 0) {
         return true;
     }
 
-    return n00b_hashset_contains(rule->first_set, TERM_TO_PTR(token_id));
+    return n00b_dict_contains(rule->first_set, TERM_TO_PTR(token_id));
 }
 
 // ============================================================================

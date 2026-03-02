@@ -16,6 +16,7 @@
 #include "core/string.h"
 #include "core/buffer.h"
 #include "display/render/backend.h"
+#include "display/render/composite.h"
 
 // -------------------------------------------------------------------
 // Stream backend context
@@ -27,6 +28,11 @@ typedef struct {
     size_t       buf_used;
     n00b_isize_t rows;
     n00b_isize_t cols;
+
+    // Persistent compositing grid.
+    n00b_rcell_t *comp_grid;
+    n00b_isize_t  comp_grid_rows;
+    n00b_isize_t  comp_grid_cols;
 } stream_ctx_t;
 
 #define STREAM_DEFAULT_ROWS 25
@@ -55,6 +61,9 @@ stream_destroy(void *vctx)
 {
     stream_ctx_t *ctx = vctx;
     if (ctx) {
+        if (ctx->comp_grid) {
+            n00b_free(ctx->comp_grid);
+        }
         n00b_free(ctx->buffer);
         n00b_free(ctx);
     }
@@ -158,18 +167,56 @@ stream_flush(void *vctx)
 }
 
 // -------------------------------------------------------------------
+// Plane-based rendering
+// -------------------------------------------------------------------
+
+static void
+stream_render_planes(void                         *vctx,
+                     const n00b_composite_entry_t *entries,
+                     n00b_isize_t                  count,
+                     n00b_isize_t                  total_rows,
+                     n00b_isize_t                  total_cols,
+                     n00b_text_style_t            *default_style,
+                     n00b_render_cap_t             caps)
+{
+    stream_ctx_t *ctx = vctx;
+
+    if (total_rows != ctx->comp_grid_rows
+        || total_cols != ctx->comp_grid_cols) {
+        if (ctx->comp_grid) {
+            n00b_free(ctx->comp_grid);
+        }
+        size_t total = (size_t)total_rows * total_cols;
+        ctx->comp_grid = n00b_alloc_array_with_opts(
+            n00b_rcell_t, total,
+            &(n00b_alloc_opts_t){.no_scan = true});
+        ctx->comp_grid_rows = total_rows;
+        ctx->comp_grid_cols = total_cols;
+    }
+
+    n00b_composite_commands_to_grid(entries, count, ctx->comp_grid,
+                                     total_rows, total_cols,
+                                     1, 1,
+                                     default_style, caps);
+
+    stream_render_frame(vctx, ctx->comp_grid, total_rows, total_cols,
+                         nullptr);
+}
+
+// -------------------------------------------------------------------
 // Public vtable
 // -------------------------------------------------------------------
 
 const n00b_renderer_vtable_t n00b_renderer_stream = {
-    .name         = "stream",
-    .version      = N00B_RENDERER_ABI_VERSION,
-    .init         = stream_init,
-    .destroy      = stream_destroy,
-    .capabilities = stream_capabilities,
-    .get_size     = stream_get_size,
-    .render_frame = stream_render_frame,
-    .flush        = stream_flush,
+    .name          = "stream",
+    .version       = N00B_RENDERER_ABI_VERSION,
+    .init          = stream_init,
+    .destroy       = stream_destroy,
+    .capabilities  = stream_capabilities,
+    .get_size      = stream_get_size,
+    .render_frame  = stream_render_frame,
+    .flush         = stream_flush,
+    .render_planes = stream_render_planes,
 };
 
 // -------------------------------------------------------------------

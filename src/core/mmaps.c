@@ -9,7 +9,9 @@
 #include "core/align.h"
 #include "core/pool.h"
 #include "core/thread.h"
+#include "core/runtime.h"
 #include "adt/interval_tree.h"
+#include "adt/variant.h"
 
 // TODO: fix this
 // #include "conduit/print.h"
@@ -25,6 +27,10 @@
 #if !defined(N00B_MMAPS_START_PAGES)
 #define N00B_MMAPS_START_PAGES 16
 #endif
+
+// Convenience alias for the concrete tree/node types.
+#define mmap_tree_t n00b_interval_tree_t(n00b_mmap_data_t)
+#define mmap_node_t n00b_interval_node_t(n00b_mmap_data_t)
 
 // ============================================================================
 // Locking (reentrant TID-based spinlock, unchanged from treap version)
@@ -78,7 +84,8 @@ mmaps_insert_raw(n00b_mmap_ctx_t     *ctx,
         .binary_offset = binary_offset,
     };
 
-    auto insert_r = n00b_interval_insert(ctx->mmap_tree, start, end, info);
+    n00b_mmap_data_t data = n00b_variant_set(n00b_mmap_data_t, n00b_mmap_info_t *, info);
+    auto insert_r = n00b_interval_insert(ctx->mmap_tree, start, end, data);
     assert(n00b_result_is_ok(insert_r));
     info->tree_node = n00b_result_get(insert_r);
 
@@ -92,7 +99,7 @@ n00b_mmaps_remove_base(n00b_mmap_ctx_t *ctx, n00b_mmap_info_t *info)
         return;
     }
 
-    (void)n00b_interval_delete(ctx->mmap_tree, info->tree_node);
+    (void)n00b_interval_delete(ctx->mmap_tree, (mmap_node_t *)info->tree_node);
     n00b_free(info);
 }
 
@@ -119,17 +126,28 @@ n00b_mmap_lookup(n00b_mmap_ctx_t *ctx, void *addr)
     }
 
     mmap_read_lock(ctx);
-    auto r = n00b_interval_search_any(ctx->mmap_tree, start, end);
+
+    // We need to find an mmap_info entry (not a range entry).
+    // Use search (multi-result) so we can skip range variants.
+    n00b_allocator_t *alloc = (n00b_allocator_t *)&ctx->pool;
+    n00b_stack_t(void *) hits = n00b_stack_new_private(void *, alloc);
+
+    auto r = n00b_interval_search(ctx->mmap_tree, start, end, &hits);
     mmap_read_unlock(ctx);
 
     if (n00b_result_is_err(r)) {
         return n00b_option_none(n00b_mmap_info_t *);
     }
 
-    n00b_interval_node_t *node = n00b_result_get(r);
+    while (n00b_stack_len(hits) > 0) {
+        mmap_node_t *node = n00b_option_get(n00b_stack_pop(void *, hits));
+        if (n00b_variant_is_type(node->data, n00b_mmap_info_t *)) {
+            return n00b_option_set(n00b_mmap_info_t *,
+                                    n00b_variant_get(node->data, n00b_mmap_info_t *));
+        }
+    }
 
-    return n00b_option_from_nullable(n00b_mmap_info_t *,
-                                     node ? (n00b_mmap_info_t *)node->data : nullptr);
+    return n00b_option_none(n00b_mmap_info_t *);
 }
 
 // ============================================================================
@@ -149,11 +167,8 @@ n00b_mmaps_initialize(n00b_mmap_ctx_t *ctx)
     n00b_allocator_t  *alloc = (n00b_allocator_t *)&ctx->pool;
     n00b_alloc_opts_t  aopts = { .allocator = alloc };
 
-    ctx->mmap_tree  = n00b_alloc_with_opts(n00b_interval_tree_t, &aopts);
-    n00b_interval_tree_init(ctx->mmap_tree, .allocator = alloc);
-
-    ctx->range_tree = n00b_alloc_with_opts(n00b_interval_tree_t, &aopts);
-    n00b_interval_tree_init(ctx->range_tree, .allocator = alloc);
+    ctx->mmap_tree = n00b_alloc_with_opts(mmap_tree_t, &aopts);
+    n00b_interval_tree_init(ctx->mmap_tree, alloc);
 
     n00b_load_static_ranges();
 }
@@ -168,17 +183,21 @@ n00b_mmap_delete_ranges(n00b_mmap_ctx_t *ctx, uint64_t start, uint64_t end)
     n00b_allocator_t *alloc = (n00b_allocator_t *)&ctx->pool;
     n00b_stack_t(void *) hits = n00b_stack_new(void *, alloc);
 
-    (void)n00b_interval_search(ctx->range_tree, start, end, &hits);
+    (void)n00b_interval_search(ctx->mmap_tree, start, end, &hits);
 
     while (n00b_stack_len(hits) > 0) {
-        n00b_interval_node_t *node = n00b_option_get(n00b_stack_pop(void *, hits));
-        n00b_mmap_info_t     *info = (n00b_mmap_info_t *)node->data;
-        (void)n00b_interval_delete(ctx->range_tree, node);
-        n00b_free(info);
+        mmap_node_t *node = n00b_option_get(n00b_stack_pop(void *, hits));
+
+        // Only delete sub-range entries, leave mmap records alone.
+        if (n00b_variant_is_type(node->data, n00b_alloc_range_t *)) {
+            n00b_alloc_range_t *range = n00b_variant_get(node->data, n00b_alloc_range_t *);
+            (void)n00b_interval_delete(ctx->mmap_tree, node);
+            n00b_free(range);
+        }
     }
 }
 
-n00b_mmap_info_t *
+void
 n00b_mmap_register_range(void *startp, void *endp, n00b_mmap_rec_kind_t kind) _kargs
 {
     n00b_allocator_t *allocator = nullptr;
@@ -188,26 +207,23 @@ n00b_mmap_register_range(void *startp, void *endp, n00b_mmap_rec_kind_t kind) _k
     n00b_runtime_t  *rt  = n00b_get_runtime();
     n00b_mmap_ctx_t *ctx = n00b_global_mem_map(rt);
 
-    n00b_allocator_t *alloc = (n00b_allocator_t *)&ctx->pool;
-    n00b_mmap_info_t *info  = n00b_alloc_with_opts(n00b_mmap_info_t, &(n00b_alloc_opts_t){.allocator = alloc});
-    uint64_t          start = (uint64_t)startp;
-    uint64_t          end   = (uint64_t)endp;
+    n00b_allocator_t   *alloc = (n00b_allocator_t *)&ctx->pool;
+    n00b_alloc_range_t *range = n00b_alloc_with_opts(n00b_alloc_range_t,
+                                                      &(n00b_alloc_opts_t){.allocator = alloc});
+    uint64_t start = (uint64_t)startp;
+    uint64_t end   = (uint64_t)endp;
 
-    *info = (n00b_mmap_info_t){
-        .start     = start,
-        .end       = end,
-        .kind      = kind,
-        .allocator = allocator,
-        .file      = file,
+    *range = (n00b_alloc_range_t){
+        .start = startp,
+        .len   = (uint32_t)(end - start),
     };
 
-    mmap_write_lock(ctx);
-    auto range_r = n00b_interval_insert(ctx->range_tree, start, end, info);
-    assert(n00b_result_is_ok(range_r));
-    info->tree_node = n00b_result_get(range_r);
-    mmap_write_unlock(ctx);
+    n00b_mmap_data_t data = n00b_variant_set(n00b_mmap_data_t, n00b_alloc_range_t *, range);
 
-    return info;
+    mmap_write_lock(ctx);
+    auto range_r = n00b_interval_insert(ctx->mmap_tree, start, end, data);
+    assert(n00b_result_is_ok(range_r));
+    mmap_write_unlock(ctx);
 }
 
 // ============================================================================
@@ -244,10 +260,10 @@ n00b_mmap_register(void *startp, void *endp, n00b_mmap_rec_kind_t kind) _kargs
     mmap_write_lock(ctx);
 
     if (!definitely_unique) {
-        n00b_interval_node_t *existing = n00b_result_get(
+        mmap_node_t *existing = n00b_result_get(
             n00b_interval_search_any(ctx->mmap_tree, start, start + 1));
-        if (existing) {
-            result = (n00b_mmap_info_t *)existing->data;
+        if (existing && n00b_variant_is_type(existing->data, n00b_mmap_info_t *)) {
+            result = n00b_variant_get(existing->data, n00b_mmap_info_t *);
             assert(allocator == result->allocator || !allocator);
             mmap_write_unlock(ctx);
             return n00b_option_set(n00b_mmap_info_t *, result);
@@ -390,9 +406,16 @@ n00b_print_mmap_tree(void)
     (void)n00b_interval_search_ordered(ctx->mmap_tree, 0, UINT64_MAX, &results);
 
     for (size_t i = 0; i < n00b_stack_len(results); i++) {
-        n00b_interval_node_t *node = results.data[i];
-        n00b_mmap_info_t     *info = (n00b_mmap_info_t *)node->data;
-        char                 *name;
+        mmap_node_t      *node = results.data[i];
+        n00b_mmap_data_t  data = node->data;
+
+        // Skip sub-range entries in the debug dump.
+        if (!n00b_variant_is_type(data, n00b_mmap_info_t *)) {
+            continue;
+        }
+
+        n00b_mmap_info_t *info = n00b_variant_get(data, n00b_mmap_info_t *);
+        char             *name;
 
         switch (info->kind) {
         case n00b_mmap_static:

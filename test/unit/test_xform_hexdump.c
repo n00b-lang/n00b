@@ -119,8 +119,8 @@ test_hexdump_xform_basic(void)
 
     n00b_plane_t *plane = pop_plane(ctx.inbox);
     assert(plane != nullptr);
-    assert(plane->total_rows > 0);
-    assert(plane->total_cols > 0);
+    assert(plane->height > 0);
+    assert(plane->width > 0);
 
     n00b_conduit_xform_destroy((n00b_conduit_xform_base_t *)ctx.xf);
     n00b_conduit_destroy(c);

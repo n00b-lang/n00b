@@ -7,9 +7,8 @@
  */
 
 #include "slay/grammar.h"
-#include "internal/slay/hashset.h"
 #include "core/list.h"
-#include "core/dict_untyped.h"
+#include "core/dict.h"
 
 // ============================================================================
 // Container declarations
@@ -37,7 +36,7 @@ struct n00b_nonterm_t {
     n00b_list_t(n00b_annotation_ptr_t) pending_annotations;
     n00b_walk_action_t               action;
     void                            *user_data;
-    n00b_hashset_t                  *first_set;
+    n00b_dict_t             *first_set;
     int64_t                          id;
     bool                             group_nt;
     bool                             empty_is_error;
@@ -54,7 +53,7 @@ struct n00b_parse_rule_t {
     n00b_nt_id_t                          nt_id;
     n00b_list_t(n00b_match_t)             contents;
     n00b_list_t(n00b_annotation_ptr_t)      annotations;
-    n00b_hashset_t                       *first_set;
+    n00b_dict_t                  *first_set;
     int32_t                               cost;
     int32_t                               link_ix;
     n00b_string_t                         doc;
@@ -100,8 +99,8 @@ struct n00b_grammar_t {
     n00b_list_t(n00b_terminal_t)   named_terms;
     n00b_list_t(n00b_parse_rule_t) rules;
     n00b_list_t(n00b_nonterm_t)    nt_list;
-    n00b_dict_untyped_t           *nt_map;
-    n00b_dict_untyped_t           *terminal_map;
+    n00b_dict_t           *nt_map;
+    n00b_dict_t           *terminal_map;
     int32_t                        default_start;
     uint32_t                       max_penalty;
     bool                           error_rules;

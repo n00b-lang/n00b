@@ -28,7 +28,7 @@
 #include "slay/grammar.h"
 #include "slay/bnf.h"
 #include "slay/n00b_parse.h"
-#include "slay/n00b_tokenizer.h"
+#include "n00b/n00b_tokenizer.h"
 #include "slay/symtab.h"
 #include "slay/annot_walk.h"
 #include "n00b/n00b_compile.h"
@@ -407,7 +407,7 @@ static void
 test_func_return_type(void)
 {
     const char *src =
-        "int func double(x: int) {\n"
+        "func double(x: int) -> int {\n"
         "    return x\n"
         "}\n";
 
@@ -482,7 +482,7 @@ static void
 test_func_kwargs(void)
 {
     const char *src =
-        "func with_kw(**timeout: int = 30) {\n"
+        "func with_kw(timeout: int = 30) {\n"
         "}\n";
 
     pipeline_result_t r = assert_parses(src, "func_kwargs");
@@ -1620,7 +1620,7 @@ test_type_spec_in_func_params(void)
 
     // Function with tvar param types
     const char *src2 =
-        "`T func identity(x: `T) {\n"
+        "func identity(x: `T) -> `T {\n"
         "    return x\n"
         "}\n";
     pipeline_result_t r2 = assert_parses(src2, "tspec_func_param_tvar");
@@ -1628,7 +1628,7 @@ test_type_spec_in_func_params(void)
 
     // Function with callback param that has container types
     const char *src3 =
-        "list[`U] func apply(items: list[`T], f: (`T) -> `U) {\n"
+        "func apply(items: list[`T], f: (`T) -> `U) -> list[`U] {\n"
         "    return []\n"
         "}\n";
     pipeline_result_t r3 = assert_parses(src3, "tspec_func_param_map_sig");
@@ -1644,7 +1644,7 @@ test_type_spec_in_func_params(void)
 
     // Function returning parameterized type
     const char *src5 =
-        "tuple[`A, `B] func make_pair(a: `A, b: `B) {\n"
+        "func make_pair(a: `A, b: `B) -> tuple[`A, `B] {\n"
         "    return (a, b)\n"
         "}\n";
     pipeline_result_t r5 = assert_parses(src5, "tspec_func_ret_tuple_tvar");
@@ -1805,10 +1805,10 @@ test_union_in_func_param(void)
 static void
 test_union_in_return(void)
 {
-    // Return type in front position uses union-tspec (lower tier),
+    // Return type after -> uses union-tspec (lower tier),
     // so | is allowed directly.
     pipeline_result_t r = assert_parses(
-        "int | nil func f() {\n"
+        "func f() -> int | nil {\n"
         "    return nil\n"
         "}\n", "union_in_return");
     pipeline_free(&r);
@@ -1839,7 +1839,7 @@ static void
 test_where_basic(void)
 {
     pipeline_result_t r = assert_parses(
-        "var x: `T where `T: Numeric\n", "where_basic");
+        "var x: `T [`T: Numeric]\n", "where_basic");
     pipeline_free(&r);
     printf("  [PASS] where_basic\n");
 }
@@ -1848,7 +1848,7 @@ static void
 test_where_multi_constraint(void)
 {
     pipeline_result_t r = assert_parses(
-        "var x: `T where `T: Numeric + Comparable\n",
+        "var x: `T [`T: Numeric + Comparable]\n",
         "where_multi_constraint");
     pipeline_free(&r);
     printf("  [PASS] where_multi_constraint\n");
@@ -1858,7 +1858,7 @@ static void
 test_where_exclusion(void)
 {
     pipeline_result_t r = assert_parses(
-        "var x: `T where `T: != nil\n", "where_exclusion");
+        "var x: `T [`T: != nil]\n", "where_exclusion");
     pipeline_free(&r);
     printf("  [PASS] where_exclusion\n");
 }
@@ -1867,7 +1867,7 @@ static void
 test_where_multi_var(void)
 {
     pipeline_result_t r = assert_parses(
-        "`T func f(a: `T, b: `U) where `T: Hashable, `U: Printable {\n"
+        "func f(a: `T, b: `U) [`T: Hashable, `U: Printable] -> `T {\n"
         "    return a\n"
         "}\n", "where_multi_var");
     pipeline_free(&r);
@@ -1878,7 +1878,7 @@ static void
 test_where_mixed(void)
 {
     pipeline_result_t r = assert_parses(
-        "var x: `T where `T: Numeric + != nil\n", "where_mixed");
+        "var x: `T [`T: Numeric + != nil]\n", "where_mixed");
     pipeline_free(&r);
     printf("  [PASS] where_mixed\n");
 }
@@ -1953,7 +1953,7 @@ static void
 test_complex_function(void)
 {
     const char *src =
-        "int func fibonacci(n: int) {\n"
+        "func fibonacci(n: int) -> int {\n"
         "    if n <= 1 {\n"
         "        return n\n"
         "    }\n"
@@ -2265,13 +2265,13 @@ static void
 test_func_return_no_false_warnings(void)
 {
     const char *src =
-        "int func first() {\n"
+        "func first() -> int {\n"
         "    return 1\n"
         "}\n"
-        "int func second() {\n"
+        "func second() -> int {\n"
         "    return 2\n"
         "}\n"
-        "int func third() {\n"
+        "func third() -> int {\n"
         "    return 3\n"
         "}\n";
 
@@ -2516,7 +2516,7 @@ static void
 test_func_varargs_kwargs(void)
 {
     const char *src =
-        "func f(x: int, *rest: int, **kw: int = 0) {\n"
+        "func f(x: int, *rest: int, kw: int = 0) {\n"
         "}\n";
 
     pipeline_result_t r = assert_parses(src, "func_varargs_kwargs");
@@ -2532,7 +2532,7 @@ static void
 test_func_multi_kwargs(void)
 {
     const char *src =
-        "func f(**a: int = 1, b: int = 2) {\n"
+        "func f(a: int = 1, b: int = 2) {\n"
         "}\n";
 
     pipeline_result_t r = assert_parses(src, "func_multi_kwargs");
@@ -2596,14 +2596,14 @@ test_class_type_params(void)
 
     // Type params with where clause
     pipeline_result_t r3 = assert_parses(
-        "class SortedList[`T] where `T: Comparable {\n"
+        "class SortedList[`T] [`T: Comparable] {\n"
         "    items: list[`T]\n"
         "}\n", "class_type_param_where");
     pipeline_free(&r3);
 
     // Type params with multi-constraint where clause
     pipeline_result_t r4 = assert_parses(
-        "class Cache[`K, `V] where `K: Hashable + Comparable, `V: Printable {\n"
+        "class Cache[`K, `V] [`K: Hashable + Comparable, `V: Printable] {\n"
         "    data: dict[`K, `V]\n"
         "}\n", "class_type_param_where_multi");
     pipeline_free(&r4);
@@ -2821,7 +2821,7 @@ static void
 test_func_untyped_kwargs(void)
 {
     const char *src =
-        "func f(**kw = 0) {\n"
+        "func f(kw = 0) {\n"
         "}\n";
 
     pipeline_result_t r = assert_parses(src, "func_untyped_kwargs");

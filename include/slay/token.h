@@ -101,7 +101,8 @@ typedef struct n00b_token_info_t {
     void                            *user_info;       /**< User-defined data. */
     n00b_option_t(n00b_string_t *)   value;           /**< Token text (optional). */
     n00b_option_t(n00b_string_t *)   file;            /**< Source file path (optional). */
-    n00b_option_t(n00b_string_t *)   modifier;        /**< Literal modifier (e.g., 'hex). */
+    n00b_option_t(n00b_string_t *)   modifier;        /**< Literal modifier (e.g., 'ffi). */
+    n00b_option_t(n00b_string_t *)   encoding;        /**< Embed encoding (e.g., b64, hex). */
     n00b_trivia_t                 *leading_trivia;  /**< Whitespace/comments before token. */
     n00b_trivia_t                 *trailing_trivia; /**< Line comment after token (same line). */
     int64_t                        tid;             /**< Terminal ID assigned by tokenizer. */

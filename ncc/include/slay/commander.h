@@ -20,7 +20,7 @@
 
 #include "slay/grammar.h"
 #include "slay/parse_tree.h"
-#include "core/dict_untyped.h"
+#include "core/dict.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -118,7 +118,7 @@ typedef struct {
 
 typedef struct {
     const char          *command;
-    n00b_dict_untyped_t  flags;
+    n00b_dict_t  flags;
     n00b_cmdr_arg_t     *args;
     int32_t              n_args;
     const char         **errors;

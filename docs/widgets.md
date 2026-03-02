@@ -33,7 +33,7 @@ building blocks for everything else.
 | 5 | **input**    | Single-line text input with cursor                | Text editing, cursor  |
 | 6 | **progress** | Horizontal/vertical progress bar                  | Partial-cell fill     |
 
-**Status**: label (done), divider–progress (planned)
+**Status**: done (label, divider, spacer, button, checkbox, input, progress)
 
 ### Wave 2 — Selection & Navigation
 
@@ -45,6 +45,8 @@ building blocks for everything else.
 | 10 | **selectionlist** | List with checkboxes for multi-select     |
 | 11 | **breadcrumb**   | Navigation path with clickable segments   |
 | 12 | **link**         | Clickable hyperlink (OSC 8)               |
+
+**Status**: done (switch, radio, link, list, selectionlist, breadcrumb)
 
 ### Wave 3 — Layout Containers
 
