@@ -87,21 +87,20 @@ src_core = files(
   'src/core/sha256.c',
 )
 
-src_slay = files(
-  'src/slay/pwz.c',
-  'src/slay/grammar.c',
-  'src/slay/parse_tree.c',
-  'src/slay/parse_forest.c',
-  'src/slay/unicode_class.c',
-  'src/slay/annotation.c',
-  'src/slay/token.c',
-  'src/slay/bnf.c',
-  'src/slay/pretty_print.c',
-  'src/slay/annot_walk.c',
-  'src/slay/symtab.c',
-  'src/slay/c_tokenizer.c',
-  'src/slay/pprint.c',
-  'src/slay/commander.c',
+src_parse = files(
+  'src/parse/pwz.c',
+  'src/parse/grammar.c',
+  'src/parse/parse_tree.c',
+  'src/parse/parse_forest.c',
+  'src/parse/unicode_class.c',
+  'src/parse/token.c',
+  'src/parse/bnf.c',
+  'src/parse/pretty_print.c',
+  'src/parse/typedef_walk.c',
+  'src/parse/symtab.c',
+  'src/parse/c_tokenizer.c',
+  'src/parse/pprint.c',
+  'src/parse/commander.c',
 )
 
 src_xform = files(
@@ -122,16 +121,16 @@ src_xform = files(
   'src/xform/xform_template.c',
 )
 
-src_parsers = files(
-  'src/parsers/token_stream.c',
-  'src/parsers/scanner.c',
-  'src/parsers/scan_recipes.c',
+src_scanner = files(
+  'src/scanner/token_stream.c',
+  'src/scanner/scanner.c',
+  'src/scanner/scan_builtins.c',
 )
 
 # ── Static library (available for standalone use) ────────────────────────────
 
 libncc = static_library('ncc',
-  src_core + src_slay + src_xform + src_parsers,
+  src_core + src_parse + src_xform + src_scanner,
   include_directories : inc,
   c_args : c_args + coverage_args,
   link_args : coverage_link_args,
@@ -182,6 +181,18 @@ test_xform_template = executable('test_xform_template',
 )
 test('xform_template', test_xform_template, suite : 'ncc')
 
+# Default ncc type settings for tests.  When the ncc binary is built with
+# overridden type names (e.g. n00b_vargs_t for the n00b project), the test
+# files still use the default ncc_* names.  Pass CLI overrides so the
+# transforms emit the names the test files expect.
+ncc_test_flags = [
+  '--ncc-vargs-type=ncc_vargs_t',
+  '--ncc-once-prefix=__ncc_',
+  '--ncc-rstr-string-type=ncc_string_t*',
+  '--ncc-rstr-template-styled=({$0 static ncc_string_t $1={.u8_bytes=$2,.data=$3,.codepoints=$4,.styling=$5};&$1;})',
+  '--ncc-rstr-template-plain=({static ncc_string_t $0={.u8_bytes=$1,.data=$2,.codepoints=$3,.styling=((void*)0)};&$0;})',
+]
+
 # Compiler-level tests (run through ncc executable)
 ncc_compile_tests = {
   'bang':          ['compile_run',  test_dir / 'test_bang.c'],
@@ -197,7 +208,7 @@ ncc_compile_tests = {
 
 foreach name, params : ncc_compile_tests
   test('ncc_' + name, test_runner,
-    args : [ncc_exe, params[0], params[1]],
+    args : [ncc_exe, params[0], params[1]] + ncc_test_flags,
     suite : 'ncc',
     depends : ncc_exe,
   )

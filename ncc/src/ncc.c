@@ -34,15 +34,15 @@
 #include <limits.h>
 #endif
 
-#include "slay/bnf.h"
-#include "slay/pwz.h"
-#include "slay/annot_walk.h"
-#include "slay/c_tokenizer.h"
-#include "slay/pprint.h"
-#include "slay/pretty_print.h"
+#include "parse/bnf.h"
+#include "parse/pwz.h"
+#include "parse/typedef_walk.h"
+#include "parse/c_tokenizer.h"
+#include "parse/pprint.h"
+#include "parse/pretty_print.h"
 #include "xform/transform.h"
 #include "xform/xform_template.h"
-#include "slay/symtab.h"
+#include "parse/symtab.h"
 #include "core/dict.h"
 
 // Transform registration prototypes.
@@ -57,11 +57,11 @@ extern void ncc_register_constexpr_xform(ncc_xform_registry_t *reg);
 extern void ncc_register_constexpr_paste_xform(ncc_xform_registry_t *reg);
 extern void ncc_register_kargs_vargs_xform(ncc_xform_registry_t *reg);
 extern void ncc_register_option_xform(ncc_xform_registry_t *reg);
-#include "parsers/scan_recipes.h"
-#include "parsers/scanner.h"
-#include "parsers/token_stream.h"
+#include "scanner/scan_builtins.h"
+#include "scanner/scanner.h"
+#include "scanner/token_stream.h"
 #include "core/buffer.h"
-#include "internal/slay/grammar_internal.h"
+#include "internal/parse/grammar_internal.h"
 
 // ============================================================================
 // Signal handler for crash backtrace
@@ -1587,7 +1587,7 @@ compile_file(ncc_opts_t *opts)
     ncc_verbose("parse OK (%d tokens)", ts->token_count);
 
     // Stage 5: Reclassify walk (typedef tracking).
-    int32_t reclassified = ncc_annot_reclassify_walk(
+    int32_t reclassified = ncc_typedef_walk(
         g, tree, ts->tokens, ts->token_count);
 
     if (reclassified > 0) {

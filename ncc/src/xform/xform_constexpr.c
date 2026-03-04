@@ -13,7 +13,7 @@
 // Registered as pre-order on "postfix_expression".
 
 #include "xform/xform_helpers.h"
-#include "slay/pprint.h"
+#include "parse/pprint.h"
 
 #include <ctype.h>
 #include <errno.h>

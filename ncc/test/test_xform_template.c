@@ -6,12 +6,12 @@
 #include <string.h>
 
 #include "xform/xform_template.h"
-#include "slay/bnf.h"
-#include "slay/c_tokenizer.h"
-#include "slay/pwz.h"
-#include "parsers/token_stream.h"
+#include "parse/bnf.h"
+#include "parse/c_tokenizer.h"
+#include "parse/pwz.h"
+#include "scanner/token_stream.h"
 #include "core/alloc.h"
-#include "internal/slay/grammar_internal.h"
+#include "internal/parse/grammar_internal.h"
 
 static int test_count = 0;
 static int fail_count = 0;

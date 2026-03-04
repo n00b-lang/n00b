@@ -24,8 +24,8 @@
  * ```
  */
 
-#include "slay/parse_tree.h"
-#include "parsers/scanner.h"
+#include "parse/parse_tree.h"
+#include "scanner/scanner.h"
 #include "core/result.h"
 
 ncc_result_decl(ncc_parse_tree_ptr_t);

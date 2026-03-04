@@ -5,9 +5,9 @@
 // spliced into the pre-lexed token runs, and parsed as a unit.
 
 #include "xform/xform_template.h"
-#include "slay/pwz.h"
-#include "internal/slay/grammar_internal.h"
-#include "parsers/token_stream.h"
+#include "parse/pwz.h"
+#include "internal/parse/grammar_internal.h"
+#include "scanner/token_stream.h"
 #include "core/alloc.h"
 #include "core/buffer.h"
 

@@ -5,14 +5,14 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "slay/bnf.h"
-#include "slay/pwz.h"
-#include "slay/pretty_print.h"
-#include "parsers/scan_recipes.h"
-#include "parsers/scanner.h"
-#include "parsers/token_stream.h"
+#include "parse/bnf.h"
+#include "parse/pwz.h"
+#include "parse/pretty_print.h"
+#include "scanner/scan_builtins.h"
+#include "scanner/scanner.h"
+#include "scanner/token_stream.h"
 #include "core/buffer.h"
-#include "internal/slay/grammar_internal.h"
+#include "internal/parse/grammar_internal.h"
 
 // ============================================================================
 // C tokenizer callback

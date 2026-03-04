@@ -5,7 +5,7 @@
 // Walk a parse subtree's leaf tokens, normalize the type string,
 // then hash/mangle for typeid and typehash output.
 
-#include "slay/parse_tree.h"
+#include "parse/parse_tree.h"
 #include <stdint.h>
 
 // Walk a parse subtree's leaves, collect token text, normalize.

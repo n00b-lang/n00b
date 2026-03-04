@@ -5,8 +5,8 @@
 //   2. Codepoint-level parse: S → 'a' 'b'
 //   3. Ambiguous grammar (forest): S → S S | 'a'
 
-#include "slay/pwz.h"
-#include "parsers/token_stream.h"
+#include "parse/pwz.h"
+#include "scanner/token_stream.h"
 #include "core/alloc.h"
 
 #include <assert.h>
