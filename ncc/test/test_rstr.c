@@ -19,7 +19,7 @@ bytes_eq(const void *a, const void *b, size_t n)
     return 1;
 }
 
-typedef struct n00b_text_style_t {
+typedef struct ncc_text_style_t {
     int bold;
     int italic;
     int underline;
@@ -29,34 +29,34 @@ typedef struct n00b_text_style_t {
     int dim;
     int blink;
     int text_case;
-} n00b_text_style_t;
+} ncc_text_style_t;
 
 typedef struct {
     int    has_value;
     size_t value;
-} n00b_option_size_t;
+} ncc_option_size_t;
 
 typedef struct {
-    n00b_text_style_t *info;
+    ncc_text_style_t *info;
     const char        *tag;
     size_t             start;
-    n00b_option_size_t end;
-} n00b_style_record_t;
+    ncc_option_size_t end;
+} ncc_style_record_t;
 
-struct n00b_string_t {
+struct ncc_string_t {
     size_t u8_bytes;
     char  *data;
     size_t codepoints;
     void  *styling;
 };
 
-typedef struct n00b_string_t n00b_string_t;
+typedef struct ncc_string_t ncc_string_t;
 
 typedef struct {
     int64_t             num_styles;
-    n00b_text_style_t  *base_style;
-    n00b_style_record_t styles[];
-} n00b_styling_info_t;
+    ncc_text_style_t  *base_style;
+    ncc_style_record_t styles[];
+} ncc_styling_info_t;
 
 static int test_count = 0;
 static int fail_count = 0;
@@ -75,7 +75,7 @@ test_plain_string(void)
 {
     TEST("plain r-string (no markup)");
 
-    n00b_string_t *s = r"Hello world";
+    ncc_string_t *s = r"Hello world";
 
     CHECK(s != NULL, "null pointer");
     CHECK(s->u8_bytes == 11, "wrong byte count");
@@ -90,14 +90,14 @@ test_bold_markup(void)
 {
     TEST("styled r-string with bold");
 
-    n00b_string_t *s = r"Hello «b»world«/b»!";
+    ncc_string_t *s = r"Hello «b»world«/b»!";
 
     CHECK(s != NULL, "null pointer");
     CHECK(s->u8_bytes == 12, "wrong byte count");
     CHECK(bytes_eq(s->data, "Hello world!", 12), "wrong stripped text");
     CHECK(s->styling != NULL, "styling should not be NULL");
 
-    n00b_styling_info_t *si = (n00b_styling_info_t *)s->styling;
+    ncc_styling_info_t *si = (ncc_styling_info_t *)s->styling;
 
     CHECK(si->num_styles == 1, "expected 1 style record");
     CHECK(si->styles[0].info != NULL, "style info should not be NULL");
@@ -113,7 +113,7 @@ test_adjacent_concat(void)
 {
     TEST("adjacent string concatenation");
 
-    n00b_string_t *s = r"Hello " "world";
+    ncc_string_t *s = r"Hello " "world";
 
     CHECK(s != NULL, "null pointer");
     CHECK(s->u8_bytes == 11, "wrong byte count");
@@ -126,7 +126,7 @@ test_escaped_guillemet(void)
 {
     TEST("escaped guillemet");
 
-    n00b_string_t *s = r"Use \« for literal";
+    ncc_string_t *s = r"Use \« for literal";
 
     CHECK(s != NULL, "null pointer");
     CHECK(s->u8_bytes == 18, "wrong byte count");
@@ -141,13 +141,13 @@ test_multiple_styles(void)
 {
     TEST("multiple style tags");
 
-    n00b_string_t *s = r"«b»bold«/b» and «i»italic«/i»";
+    ncc_string_t *s = r"«b»bold«/b» and «i»italic«/i»";
 
     CHECK(s != NULL, "null pointer");
     CHECK(bytes_eq(s->data, "bold and italic", 15), "wrong stripped text");
     CHECK(s->u8_bytes == 15, "wrong byte count");
 
-    n00b_styling_info_t *si = (n00b_styling_info_t *)s->styling;
+    ncc_styling_info_t *si = (ncc_styling_info_t *)s->styling;
 
     CHECK(si->num_styles == 2, "expected 2 style records");
     PASS();
@@ -158,14 +158,14 @@ test_bracket_syntax(void)
 {
     TEST("bracket tag syntax");
 
-    n00b_string_t *s = r"Hello [|b|]world[|/b|]!";
+    ncc_string_t *s = r"Hello [|b|]world[|/b|]!";
 
     CHECK(s != NULL, "null pointer");
     CHECK(s->u8_bytes == 12, "wrong byte count");
     CHECK(bytes_eq(s->data, "Hello world!", 12), "wrong stripped text");
     CHECK(s->styling != NULL, "styling should not be NULL");
 
-    n00b_styling_info_t *si = (n00b_styling_info_t *)s->styling;
+    ncc_styling_info_t *si = (ncc_styling_info_t *)s->styling;
 
     CHECK(si->num_styles == 1, "expected 1 style record");
     CHECK(si->styles[0].info->bold == 2, "bold should be 2");
@@ -177,12 +177,12 @@ test_reset(void)
 {
     TEST("reset tag");
 
-    n00b_string_t *s = r"«b»bold«/»normal";
+    ncc_string_t *s = r"«b»bold«/»normal";
 
     CHECK(s != NULL, "null pointer");
     CHECK(bytes_eq(s->data, "boldnormal", 10), "wrong stripped text");
 
-    n00b_styling_info_t *si = (n00b_styling_info_t *)s->styling;
+    ncc_styling_info_t *si = (ncc_styling_info_t *)s->styling;
 
     CHECK(si->num_styles == 1, "expected 1 style record");
     CHECK(si->styles[0].start == 0, "start should be 0");
@@ -196,12 +196,12 @@ test_unclosed_tag(void)
 {
     TEST("unclosed tag extends to end");
 
-    n00b_string_t *s = r"«b»bold forever";
+    ncc_string_t *s = r"«b»bold forever";
 
     CHECK(s != NULL, "null pointer");
     CHECK(bytes_eq(s->data, "bold forever", 12), "wrong stripped text");
 
-    n00b_styling_info_t *si = (n00b_styling_info_t *)s->styling;
+    ncc_styling_info_t *si = (ncc_styling_info_t *)s->styling;
 
     CHECK(si->num_styles == 1, "expected 1 style record");
     CHECK(si->styles[0].end.has_value == 0, "end should be open (no value)");

@@ -54,6 +54,9 @@ function ensure_ncc {
             meson setup --buildtype=${N00B_BUILD_TYPE} -Dcc_path=${CC} --prefix=${N00B_ROOT} --bindir=${N00B_ROOT}/bin \
                 '-Drstr_template_styled=({$0 static struct{n00b_static_header_t hdr;n00b_string_t obj;} $7={.hdr={.static_magic=0xcc653162303034ccULL,.tinfo=$6,.alloc_len=(unsigned)(sizeof(n00b_inline_hdr_t)+sizeof(n00b_string_t))},.obj={.u8_bytes=$2,.data=$3,.codepoints=$4,.styling=$5}};&$7.obj;})' \
                 '-Drstr_template_plain=({static struct{n00b_static_header_t hdr;n00b_string_t obj;} $5={.hdr={.static_magic=0xcc653162303034ccULL,.tinfo=$4,.alloc_len=(unsigned)(sizeof(n00b_inline_hdr_t)+sizeof(n00b_string_t))},.obj={.u8_bytes=$1,.data=$2,.codepoints=$3,.styling=((void*)0)}};&$5.obj;})' \
+                '-Dvargs_type=n00b_vargs_t' \
+                '-Donce_prefix=__n00b_' \
+                '-Drstr_string_type=n00b_string_t*' \
                 build_ncc .
             if [[ $? -ne 0 ]] ; then
                 echo "NCC setup failed."

@@ -16,10 +16,10 @@
  *
  * We compute a 64-bit FNV-1a hash and then replicate it into
  * a 128-bit value with a second round using a different offset basis,
- * so that the full n00b_hash_value_t (unsigned __int128) space is used.
+ * so that the full ncc_hash_value_t (unsigned __int128) space is used.
  */
-static inline n00b_hash_value_t
-n00b_hash_raw(const void *data, size_t len)
+static inline ncc_hash_value_t
+ncc_hash_raw(const void *data, size_t len)
 {
     const uint8_t *p = (const uint8_t *)data;
 
@@ -37,7 +37,7 @@ n00b_hash_raw(const void *data, size_t len)
         h2 *= 0x100000001b3ULL;
     }
 
-    return ((n00b_hash_value_t)h2 << 64) | (n00b_hash_value_t)h1;
+    return ((ncc_hash_value_t)h2 << 64) | (ncc_hash_value_t)h1;
 }
 
 /**
@@ -45,12 +45,12 @@ n00b_hash_raw(const void *data, size_t len)
  * @param value Pointer to the C string (cast from void* for API compat).
  * @return 128-bit hash value.
  */
-static inline n00b_hash_value_t
-n00b_hash_cstring(void *value)
+static inline ncc_hash_value_t
+ncc_hash_cstring(void *value)
 {
     const char *s   = (const char *)value;
     size_t      len = s ? strlen(s) : 0;
-    return n00b_hash_raw(s, len);
+    return ncc_hash_raw(s, len);
 }
 
 /**
@@ -58,36 +58,36 @@ n00b_hash_cstring(void *value)
  * @param value Pointer to the word to hash.
  * @return 128-bit hash value.
  */
-static inline n00b_hash_value_t
-n00b_hash_word(void *value)
+static inline ncc_hash_value_t
+ncc_hash_word(void *value)
 {
     uintptr_t w = (uintptr_t)value;
-    return n00b_hash_raw(&w, sizeof(w));
+    return ncc_hash_raw(&w, sizeof(w));
 }
 
 /**
- * @brief Hash an n00b_string_t by its UTF-8 content.
+ * @brief Hash an ncc_string_t by its UTF-8 content.
  * @param s The string to hash.
  * @return 128-bit hash value.
  */
-static inline n00b_hash_value_t
-n00b_string_hash(n00b_string_t s)
+static inline ncc_hash_value_t
+ncc_string_hash(ncc_string_t s)
 {
-    return n00b_hash_raw(s.data, s.u8_bytes);
+    return ncc_hash_raw(s.data, s.u8_bytes);
 }
 
 /**
- * @brief Hash an n00b_buffer_t by its raw byte content.
+ * @brief Hash an ncc_buffer_t by its raw byte content.
  * @param b Pointer to the buffer.
  * @return 128-bit hash value.
  */
-static inline n00b_hash_value_t
-n00b_buffer_hash(n00b_buffer_t *b)
+static inline ncc_hash_value_t
+ncc_buffer_hash(ncc_buffer_t *b)
 {
     if (!b || !b->data) {
         return 0;
     }
-    return n00b_hash_raw(b->data, b->byte_len);
+    return ncc_hash_raw(b->data, b->byte_len);
 }
 
 /**
@@ -96,11 +96,11 @@ n00b_buffer_hash(n00b_buffer_t *b)
  * @param fn  Hash function to invoke on @p obj.
  * @return 128-bit hash value.
  */
-static inline n00b_hash_value_t
-n00b_hash(void *obj, n00b_hash_fn fn)
+static inline ncc_hash_value_t
+ncc_hash(void *obj, ncc_hash_fn fn)
 {
     if (fn) {
         return fn(obj);
     }
-    return n00b_hash_word(obj);
+    return ncc_hash_word(obj);
 }

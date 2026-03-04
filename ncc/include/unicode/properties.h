@@ -16,184 +16,184 @@
 // ============================================================================
 
 typedef enum {
-    N00B_UNICODE_GC_LU, /**< Letter, uppercase */
-    N00B_UNICODE_GC_LL, /**< Letter, lowercase */
-    N00B_UNICODE_GC_LT, /**< Letter, titlecase */
-    N00B_UNICODE_GC_LM, /**< Letter, modifier */
-    N00B_UNICODE_GC_LO, /**< Letter, other */
-    N00B_UNICODE_GC_MN, /**< Mark, nonspacing */
-    N00B_UNICODE_GC_MC, /**< Mark, spacing combining */
-    N00B_UNICODE_GC_ME, /**< Mark, enclosing */
-    N00B_UNICODE_GC_ND, /**< Number, decimal digit */
-    N00B_UNICODE_GC_NL, /**< Number, letter */
-    N00B_UNICODE_GC_NO, /**< Number, other */
-    N00B_UNICODE_GC_PC, /**< Punctuation, connector */
-    N00B_UNICODE_GC_PD, /**< Punctuation, dash */
-    N00B_UNICODE_GC_PS, /**< Punctuation, open */
-    N00B_UNICODE_GC_PE, /**< Punctuation, close */
-    N00B_UNICODE_GC_PI, /**< Punctuation, initial quote */
-    N00B_UNICODE_GC_PF, /**< Punctuation, final quote */
-    N00B_UNICODE_GC_PO, /**< Punctuation, other */
-    N00B_UNICODE_GC_SM, /**< Symbol, math */
-    N00B_UNICODE_GC_SC, /**< Symbol, currency */
-    N00B_UNICODE_GC_SK, /**< Symbol, modifier */
-    N00B_UNICODE_GC_SO, /**< Symbol, other */
-    N00B_UNICODE_GC_ZS, /**< Separator, space */
-    N00B_UNICODE_GC_ZL, /**< Separator, line */
-    N00B_UNICODE_GC_ZP, /**< Separator, paragraph */
-    N00B_UNICODE_GC_CC, /**< Other, control */
-    N00B_UNICODE_GC_CF, /**< Other, format */
-    N00B_UNICODE_GC_CS, /**< Other, surrogate */
-    N00B_UNICODE_GC_CO, /**< Other, private use */
-    N00B_UNICODE_GC_CN, /**< Other, not assigned */
-} n00b_unicode_gc_t;
+    NCC_UNICODE_GC_LU, /**< Letter, uppercase */
+    NCC_UNICODE_GC_LL, /**< Letter, lowercase */
+    NCC_UNICODE_GC_LT, /**< Letter, titlecase */
+    NCC_UNICODE_GC_LM, /**< Letter, modifier */
+    NCC_UNICODE_GC_LO, /**< Letter, other */
+    NCC_UNICODE_GC_MN, /**< Mark, nonspacing */
+    NCC_UNICODE_GC_MC, /**< Mark, spacing combining */
+    NCC_UNICODE_GC_ME, /**< Mark, enclosing */
+    NCC_UNICODE_GC_ND, /**< Number, decimal digit */
+    NCC_UNICODE_GC_NL, /**< Number, letter */
+    NCC_UNICODE_GC_NO, /**< Number, other */
+    NCC_UNICODE_GC_PC, /**< Punctuation, connector */
+    NCC_UNICODE_GC_PD, /**< Punctuation, dash */
+    NCC_UNICODE_GC_PS, /**< Punctuation, open */
+    NCC_UNICODE_GC_PE, /**< Punctuation, close */
+    NCC_UNICODE_GC_PI, /**< Punctuation, initial quote */
+    NCC_UNICODE_GC_PF, /**< Punctuation, final quote */
+    NCC_UNICODE_GC_PO, /**< Punctuation, other */
+    NCC_UNICODE_GC_SM, /**< Symbol, math */
+    NCC_UNICODE_GC_SC, /**< Symbol, currency */
+    NCC_UNICODE_GC_SK, /**< Symbol, modifier */
+    NCC_UNICODE_GC_SO, /**< Symbol, other */
+    NCC_UNICODE_GC_ZS, /**< Separator, space */
+    NCC_UNICODE_GC_ZL, /**< Separator, line */
+    NCC_UNICODE_GC_ZP, /**< Separator, paragraph */
+    NCC_UNICODE_GC_CC, /**< Other, control */
+    NCC_UNICODE_GC_CF, /**< Other, format */
+    NCC_UNICODE_GC_CS, /**< Other, surrogate */
+    NCC_UNICODE_GC_CO, /**< Other, private use */
+    NCC_UNICODE_GC_CN, /**< Other, not assigned */
+} ncc_unicode_gc_t;
 
 // ============================================================================
 // Bidi_Class
 // ============================================================================
 
 typedef enum {
-    N00B_UNICODE_BIDI_L,
-    N00B_UNICODE_BIDI_R,
-    N00B_UNICODE_BIDI_AL,
-    N00B_UNICODE_BIDI_EN,
-    N00B_UNICODE_BIDI_ES,
-    N00B_UNICODE_BIDI_ET,
-    N00B_UNICODE_BIDI_AN,
-    N00B_UNICODE_BIDI_CS,
-    N00B_UNICODE_BIDI_NSM,
-    N00B_UNICODE_BIDI_BN,
-    N00B_UNICODE_BIDI_B,
-    N00B_UNICODE_BIDI_S,
-    N00B_UNICODE_BIDI_WS,
-    N00B_UNICODE_BIDI_ON,
-    N00B_UNICODE_BIDI_LRE,
-    N00B_UNICODE_BIDI_LRO,
-    N00B_UNICODE_BIDI_RLE,
-    N00B_UNICODE_BIDI_RLO,
-    N00B_UNICODE_BIDI_PDF,
-    N00B_UNICODE_BIDI_LRI,
-    N00B_UNICODE_BIDI_RLI,
-    N00B_UNICODE_BIDI_FSI,
-    N00B_UNICODE_BIDI_PDI,
-} n00b_unicode_bidi_class_t;
+    NCC_UNICODE_BIDI_L,
+    NCC_UNICODE_BIDI_R,
+    NCC_UNICODE_BIDI_AL,
+    NCC_UNICODE_BIDI_EN,
+    NCC_UNICODE_BIDI_ES,
+    NCC_UNICODE_BIDI_ET,
+    NCC_UNICODE_BIDI_AN,
+    NCC_UNICODE_BIDI_CS,
+    NCC_UNICODE_BIDI_NSM,
+    NCC_UNICODE_BIDI_BN,
+    NCC_UNICODE_BIDI_B,
+    NCC_UNICODE_BIDI_S,
+    NCC_UNICODE_BIDI_WS,
+    NCC_UNICODE_BIDI_ON,
+    NCC_UNICODE_BIDI_LRE,
+    NCC_UNICODE_BIDI_LRO,
+    NCC_UNICODE_BIDI_RLE,
+    NCC_UNICODE_BIDI_RLO,
+    NCC_UNICODE_BIDI_PDF,
+    NCC_UNICODE_BIDI_LRI,
+    NCC_UNICODE_BIDI_RLI,
+    NCC_UNICODE_BIDI_FSI,
+    NCC_UNICODE_BIDI_PDI,
+} ncc_unicode_bidi_class_t;
 
 // ============================================================================
 // East_Asian_Width
 // ============================================================================
 
 typedef enum {
-    N00B_UNICODE_EAW_N,
-    N00B_UNICODE_EAW_NA,
-    N00B_UNICODE_EAW_H,
-    N00B_UNICODE_EAW_W,
-    N00B_UNICODE_EAW_F,
-    N00B_UNICODE_EAW_A,
-} n00b_unicode_eaw_t;
+    NCC_UNICODE_EAW_N,
+    NCC_UNICODE_EAW_NA,
+    NCC_UNICODE_EAW_H,
+    NCC_UNICODE_EAW_W,
+    NCC_UNICODE_EAW_F,
+    NCC_UNICODE_EAW_A,
+} ncc_unicode_eaw_t;
 
 // ============================================================================
 // Script / Block
 // ============================================================================
 
-typedef uint8_t  n00b_unicode_script_t;
-typedef uint16_t n00b_unicode_block_t;
+typedef uint8_t  ncc_unicode_script_t;
+typedef uint16_t ncc_unicode_block_t;
 
 // ============================================================================
 // Joining_Type
 // ============================================================================
 
 typedef enum {
-    N00B_UNICODE_JT_U,
-    N00B_UNICODE_JT_C,
-    N00B_UNICODE_JT_D,
-    N00B_UNICODE_JT_L,
-    N00B_UNICODE_JT_R,
-    N00B_UNICODE_JT_T,
-} n00b_unicode_jt_t;
+    NCC_UNICODE_JT_U,
+    NCC_UNICODE_JT_C,
+    NCC_UNICODE_JT_D,
+    NCC_UNICODE_JT_L,
+    NCC_UNICODE_JT_R,
+    NCC_UNICODE_JT_T,
+} ncc_unicode_jt_t;
 
 // ============================================================================
 // Binary properties
 // ============================================================================
 
 typedef enum {
-    N00B_UNICODE_PROP_WHITE_SPACE,
-    N00B_UNICODE_PROP_ALPHABETIC,
-    N00B_UNICODE_PROP_NONCHARACTER_CODE_POINT,
-    N00B_UNICODE_PROP_DEFAULT_IGNORABLE_CODE_POINT,
-    N00B_UNICODE_PROP_DEPRECATED,
-    N00B_UNICODE_PROP_LOGICAL_ORDER_EXCEPTION,
-    N00B_UNICODE_PROP_VARIATION_SELECTOR,
-    N00B_UNICODE_PROP_UPPERCASE,
-    N00B_UNICODE_PROP_LOWERCASE,
-    N00B_UNICODE_PROP_SOFT_DOTTED,
-    N00B_UNICODE_PROP_CASE_IGNORABLE,
-    N00B_UNICODE_PROP_CASED,
-    N00B_UNICODE_PROP_CHANGES_WHEN_LOWERCASED,
-    N00B_UNICODE_PROP_CHANGES_WHEN_UPPERCASED,
-    N00B_UNICODE_PROP_CHANGES_WHEN_TITLECASED,
-    N00B_UNICODE_PROP_CHANGES_WHEN_CASEFOLDED,
-    N00B_UNICODE_PROP_CHANGES_WHEN_CASEMAPPED,
-    N00B_UNICODE_PROP_ID_START,
-    N00B_UNICODE_PROP_ID_CONTINUE,
-    N00B_UNICODE_PROP_XID_START,
-    N00B_UNICODE_PROP_XID_CONTINUE,
-    N00B_UNICODE_PROP_PATTERN_SYNTAX,
-    N00B_UNICODE_PROP_PATTERN_WHITE_SPACE,
-    N00B_UNICODE_PROP_DASH,
-    N00B_UNICODE_PROP_QUOTATION_MARK,
-    N00B_UNICODE_PROP_TERMINAL_PUNCTUATION,
-    N00B_UNICODE_PROP_SENTENCE_TERMINAL,
-    N00B_UNICODE_PROP_DIACRITIC,
-    N00B_UNICODE_PROP_EXTENDER,
-    N00B_UNICODE_PROP_GRAPHEME_BASE,
-    N00B_UNICODE_PROP_GRAPHEME_EXTEND,
-    N00B_UNICODE_PROP_GRAPHEME_LINK,
-    N00B_UNICODE_PROP_MATH,
-    N00B_UNICODE_PROP_HEX_DIGIT,
-    N00B_UNICODE_PROP_ASCII_HEX_DIGIT,
-    N00B_UNICODE_PROP_IDEOGRAPHIC,
-    N00B_UNICODE_PROP_UNIFIED_IDEOGRAPH,
-    N00B_UNICODE_PROP_RADICAL,
-    N00B_UNICODE_PROP_IDS_BINARY_OPERATOR,
-    N00B_UNICODE_PROP_IDS_TRINARY_OPERATOR,
-    N00B_UNICODE_PROP_JOIN_CONTROL,
-    N00B_UNICODE_PROP_EMOJI,
-    N00B_UNICODE_PROP_EMOJI_PRESENTATION,
-    N00B_UNICODE_PROP_EMOJI_MODIFIER,
-    N00B_UNICODE_PROP_EMOJI_MODIFIER_BASE,
-    N00B_UNICODE_PROP_EMOJI_COMPONENT,
-    N00B_UNICODE_PROP_EXTENDED_PICTOGRAPHIC,
-} n00b_unicode_property_t;
+    NCC_UNICODE_PROP_WHITE_SPACE,
+    NCC_UNICODE_PROP_ALPHABETIC,
+    NCC_UNICODE_PROP_NONCHARACTER_CODE_POINT,
+    NCC_UNICODE_PROP_DEFAULT_IGNORABLE_CODE_POINT,
+    NCC_UNICODE_PROP_DEPRECATED,
+    NCC_UNICODE_PROP_LOGICAL_ORDER_EXCEPTION,
+    NCC_UNICODE_PROP_VARIATION_SELECTOR,
+    NCC_UNICODE_PROP_UPPERCASE,
+    NCC_UNICODE_PROP_LOWERCASE,
+    NCC_UNICODE_PROP_SOFT_DOTTED,
+    NCC_UNICODE_PROP_CASE_IGNORABLE,
+    NCC_UNICODE_PROP_CASED,
+    NCC_UNICODE_PROP_CHANGES_WHEN_LOWERCASED,
+    NCC_UNICODE_PROP_CHANGES_WHEN_UPPERCASED,
+    NCC_UNICODE_PROP_CHANGES_WHEN_TITLECASED,
+    NCC_UNICODE_PROP_CHANGES_WHEN_CASEFOLDED,
+    NCC_UNICODE_PROP_CHANGES_WHEN_CASEMAPPED,
+    NCC_UNICODE_PROP_ID_START,
+    NCC_UNICODE_PROP_ID_CONTINUE,
+    NCC_UNICODE_PROP_XID_START,
+    NCC_UNICODE_PROP_XID_CONTINUE,
+    NCC_UNICODE_PROP_PATTERN_SYNTAX,
+    NCC_UNICODE_PROP_PATTERN_WHITE_SPACE,
+    NCC_UNICODE_PROP_DASH,
+    NCC_UNICODE_PROP_QUOTATION_MARK,
+    NCC_UNICODE_PROP_TERMINAL_PUNCTUATION,
+    NCC_UNICODE_PROP_SENTENCE_TERMINAL,
+    NCC_UNICODE_PROP_DIACRITIC,
+    NCC_UNICODE_PROP_EXTENDER,
+    NCC_UNICODE_PROP_GRAPHEME_BASE,
+    NCC_UNICODE_PROP_GRAPHEME_EXTEND,
+    NCC_UNICODE_PROP_GRAPHEME_LINK,
+    NCC_UNICODE_PROP_MATH,
+    NCC_UNICODE_PROP_HEX_DIGIT,
+    NCC_UNICODE_PROP_ASCII_HEX_DIGIT,
+    NCC_UNICODE_PROP_IDEOGRAPHIC,
+    NCC_UNICODE_PROP_UNIFIED_IDEOGRAPH,
+    NCC_UNICODE_PROP_RADICAL,
+    NCC_UNICODE_PROP_IDS_BINARY_OPERATOR,
+    NCC_UNICODE_PROP_IDS_TRINARY_OPERATOR,
+    NCC_UNICODE_PROP_JOIN_CONTROL,
+    NCC_UNICODE_PROP_EMOJI,
+    NCC_UNICODE_PROP_EMOJI_PRESENTATION,
+    NCC_UNICODE_PROP_EMOJI_MODIFIER,
+    NCC_UNICODE_PROP_EMOJI_MODIFIER_BASE,
+    NCC_UNICODE_PROP_EMOJI_COMPONENT,
+    NCC_UNICODE_PROP_EXTENDED_PICTOGRAPHIC,
+} ncc_unicode_property_t;
 
 // ============================================================================
 // Numeric types
 // ============================================================================
 
 typedef enum {
-    N00B_UNICODE_NUMERIC_NONE,
-    N00B_UNICODE_NUMERIC_DECIMAL,
-    N00B_UNICODE_NUMERIC_DIGIT,
-    N00B_UNICODE_NUMERIC_NUMERIC,
-} n00b_unicode_numeric_type_t;
+    NCC_UNICODE_NUMERIC_NONE,
+    NCC_UNICODE_NUMERIC_DECIMAL,
+    NCC_UNICODE_NUMERIC_DIGIT,
+    NCC_UNICODE_NUMERIC_NUMERIC,
+} ncc_unicode_numeric_type_t;
 
 typedef struct {
-    n00b_unicode_numeric_type_t type;
+    ncc_unicode_numeric_type_t type;
     int32_t                     numerator;
     int32_t                     denominator;
-} n00b_unicode_numeric_value_t;
+} ncc_unicode_numeric_value_t;
 
 // ============================================================================
 // BOM detection
 // ============================================================================
 
 typedef enum {
-    N00B_UNICODE_BOM_NONE,
-    N00B_UNICODE_BOM_UTF8,
-    N00B_UNICODE_BOM_UTF16_LE,
-    N00B_UNICODE_BOM_UTF16_BE,
-    N00B_UNICODE_BOM_UTF32_LE,
-    N00B_UNICODE_BOM_UTF32_BE,
-} n00b_unicode_bom_t;
+    NCC_UNICODE_BOM_NONE,
+    NCC_UNICODE_BOM_UTF8,
+    NCC_UNICODE_BOM_UTF16_LE,
+    NCC_UNICODE_BOM_UTF16_BE,
+    NCC_UNICODE_BOM_UTF32_LE,
+    NCC_UNICODE_BOM_UTF32_BE,
+} ncc_unicode_bom_t;
 
 // ============================================================================
 // Stub implementations (ASCII-only)
@@ -202,30 +202,30 @@ typedef enum {
 /**
  * @brief Return the General_Category of a codepoint (ASCII-only stub).
  */
-static inline n00b_unicode_gc_t
-n00b_unicode_general_category(n00b_codepoint_t cp)
+static inline ncc_unicode_gc_t
+ncc_unicode_general_category(ncc_codepoint_t cp)
 {
     if (cp >= 'A' && cp <= 'Z') {
-        return N00B_UNICODE_GC_LU;
+        return NCC_UNICODE_GC_LU;
     }
     if (cp >= 'a' && cp <= 'z') {
-        return N00B_UNICODE_GC_LL;
+        return NCC_UNICODE_GC_LL;
     }
     if (cp >= '0' && cp <= '9') {
-        return N00B_UNICODE_GC_ND;
+        return NCC_UNICODE_GC_ND;
     }
     if (cp == ' ') {
-        return N00B_UNICODE_GC_ZS;
+        return NCC_UNICODE_GC_ZS;
     }
     if (cp < 0x20 || cp == 0x7F) {
-        return N00B_UNICODE_GC_CC;
+        return NCC_UNICODE_GC_CC;
     }
     // Default: treat remaining ASCII punctuation/symbols as PO.
     if (cp < 0x80) {
-        return N00B_UNICODE_GC_PO;
+        return NCC_UNICODE_GC_PO;
     }
     // Non-ASCII: unassigned.
-    return N00B_UNICODE_GC_CN;
+    return NCC_UNICODE_GC_CN;
 }
 
 /**
@@ -234,29 +234,29 @@ n00b_unicode_general_category(n00b_codepoint_t cp)
  * Only handles the most common ASCII cases; returns false otherwise.
  */
 static inline bool
-n00b_unicode_has_property(n00b_codepoint_t cp,
-                          n00b_unicode_property_t prop)
+ncc_unicode_has_property(ncc_codepoint_t cp,
+                          ncc_unicode_property_t prop)
 {
     switch (prop) {
-    case N00B_UNICODE_PROP_WHITE_SPACE:
+    case NCC_UNICODE_PROP_WHITE_SPACE:
         return cp == ' ' || cp == '\t' || cp == '\n' || cp == '\r'
             || cp == '\f' || cp == '\v';
-    case N00B_UNICODE_PROP_ALPHABETIC:
+    case NCC_UNICODE_PROP_ALPHABETIC:
         return (cp >= 'A' && cp <= 'Z') || (cp >= 'a' && cp <= 'z');
-    case N00B_UNICODE_PROP_UPPERCASE:
+    case NCC_UNICODE_PROP_UPPERCASE:
         return cp >= 'A' && cp <= 'Z';
-    case N00B_UNICODE_PROP_LOWERCASE:
+    case NCC_UNICODE_PROP_LOWERCASE:
         return cp >= 'a' && cp <= 'z';
-    case N00B_UNICODE_PROP_HEX_DIGIT:
-    case N00B_UNICODE_PROP_ASCII_HEX_DIGIT:
+    case NCC_UNICODE_PROP_HEX_DIGIT:
+    case NCC_UNICODE_PROP_ASCII_HEX_DIGIT:
         return (cp >= '0' && cp <= '9') || (cp >= 'A' && cp <= 'F')
             || (cp >= 'a' && cp <= 'f');
-    case N00B_UNICODE_PROP_ID_START:
-    case N00B_UNICODE_PROP_XID_START:
+    case NCC_UNICODE_PROP_ID_START:
+    case NCC_UNICODE_PROP_XID_START:
         return (cp >= 'A' && cp <= 'Z') || (cp >= 'a' && cp <= 'z')
             || cp == '_';
-    case N00B_UNICODE_PROP_ID_CONTINUE:
-    case N00B_UNICODE_PROP_XID_CONTINUE:
+    case NCC_UNICODE_PROP_ID_CONTINUE:
+    case NCC_UNICODE_PROP_XID_CONTINUE:
         return (cp >= 'A' && cp <= 'Z') || (cp >= 'a' && cp <= 'z')
             || (cp >= '0' && cp <= '9') || cp == '_';
     default:
@@ -268,7 +268,7 @@ n00b_unicode_has_property(n00b_codepoint_t cp,
  * @brief Return the display column width of a codepoint (ASCII stub).
  */
 static inline int
-n00b_unicode_char_width(n00b_codepoint_t cp)
+ncc_unicode_char_width(ncc_codepoint_t cp)
 {
     if (cp == 0) {
         return 0;

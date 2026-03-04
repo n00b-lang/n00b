@@ -18,37 +18,37 @@
 // ============================================================================
 
 typedef enum {
-    N00B_SYM_VARIABLE,
-    N00B_SYM_FUNCTION,
-    N00B_SYM_TYPEDEF,
-    N00B_SYM_TAG,
-    N00B_SYM_ENUM_CONST,
-    N00B_SYM_LABEL,
-    N00B_SYM_PARAM,
-} n00b_sym_kind_t;
+    NCC_SYM_VARIABLE,
+    NCC_SYM_FUNCTION,
+    NCC_SYM_TYPEDEF,
+    NCC_SYM_TAG,
+    NCC_SYM_ENUM_CONST,
+    NCC_SYM_LABEL,
+    NCC_SYM_PARAM,
+} ncc_sym_kind_t;
 
 // ============================================================================
 // Forward declarations
 // ============================================================================
 
-typedef struct n00b_sym_entry_t  n00b_sym_entry_t;
-typedef struct n00b_scope_t      n00b_scope_t;
-typedef struct n00b_namespace_t  n00b_namespace_t;
-typedef struct n00b_symtab_t     n00b_symtab_t;
+typedef struct ncc_sym_entry_t  ncc_sym_entry_t;
+typedef struct ncc_scope_t      ncc_scope_t;
+typedef struct ncc_namespace_t  ncc_namespace_t;
+typedef struct ncc_symtab_t     ncc_symtab_t;
 
 // ============================================================================
 // Symbol entry
 // ============================================================================
 
-struct n00b_sym_entry_t {
-    n00b_string_t        name;
-    n00b_sym_kind_t      kind;
+struct ncc_sym_entry_t {
+    ncc_string_t        name;
+    ncc_sym_kind_t      kind;
     int32_t              scope_depth;
-    n00b_parse_tree_t   *decl_node;
-    n00b_sym_entry_t    *shadowed;
-    n00b_sym_entry_t    *next_in_scope;
-    n00b_parse_tree_t   *type_node;
-    n00b_string_t        adt_kind;
+    ncc_parse_tree_t   *decl_node;
+    ncc_sym_entry_t    *shadowed;
+    ncc_sym_entry_t    *next_in_scope;
+    ncc_parse_tree_t   *type_node;
+    ncc_string_t        adt_kind;
     bool                 is_field;
     bool                 is_method;
 };
@@ -57,31 +57,31 @@ struct n00b_sym_entry_t {
 // Scope
 // ============================================================================
 
-struct n00b_scope_t {
-    n00b_scope_t     *parent;
-    n00b_string_t     name;
+struct ncc_scope_t {
+    ncc_scope_t     *parent;
+    ncc_string_t     name;
     int32_t           depth;
-    n00b_sym_entry_t *first_in_scope;
-    n00b_string_t     adt_kind;
+    ncc_sym_entry_t *first_in_scope;
+    ncc_string_t     adt_kind;
 };
 
 // ============================================================================
 // Namespace
 // ============================================================================
 
-struct n00b_namespace_t {
-    n00b_string_t     ns_name;
-    n00b_scope_t     *current;
+struct ncc_namespace_t {
+    ncc_string_t     ns_name;
+    ncc_scope_t     *current;
     int32_t           depth;
-    void             *symbols;  // n00b_dict_t*
+    void             *symbols;  // ncc_dict_t*
 };
 
 // ============================================================================
 // Symbol table
 // ============================================================================
 
-struct n00b_symtab_t {
-    n00b_namespace_t *namespaces;
+struct ncc_symtab_t {
+    ncc_namespace_t *namespaces;
     int32_t           ns_count;
     int32_t           ns_cap;
 };
@@ -90,37 +90,37 @@ struct n00b_symtab_t {
 // Lifecycle
 // ============================================================================
 
-n00b_symtab_t *n00b_symtab_new(void);
-void n00b_symtab_free(n00b_symtab_t *st);
+ncc_symtab_t *ncc_symtab_new(void);
+void ncc_symtab_free(ncc_symtab_t *st);
 
 // ============================================================================
 // Namespace management
 // ============================================================================
 
-n00b_namespace_t *n00b_symtab_ns(n00b_symtab_t *st, n00b_string_t ns_name);
+ncc_namespace_t *ncc_symtab_ns(ncc_symtab_t *st, ncc_string_t ns_name);
 
 // ============================================================================
 // Scope management
 // ============================================================================
 
-void n00b_symtab_push_scope(n00b_symtab_t *st, n00b_string_t ns_name,
-                             n00b_string_t scope_name);
-void n00b_symtab_pop_scope(n00b_symtab_t *st, n00b_string_t ns_name);
+void ncc_symtab_push_scope(ncc_symtab_t *st, ncc_string_t ns_name,
+                             ncc_string_t scope_name);
+void ncc_symtab_pop_scope(ncc_symtab_t *st, ncc_string_t ns_name);
 
 // ============================================================================
 // Symbol operations
 // ============================================================================
 
-n00b_sym_entry_t *n00b_symtab_add(n00b_symtab_t *st, n00b_string_t ns_name,
-                                    n00b_string_t name, n00b_sym_kind_t kind,
-                                    n00b_parse_tree_t *decl_node);
+ncc_sym_entry_t *ncc_symtab_add(ncc_symtab_t *st, ncc_string_t ns_name,
+                                    ncc_string_t name, ncc_sym_kind_t kind,
+                                    ncc_parse_tree_t *decl_node);
 
-n00b_sym_entry_t *n00b_symtab_lookup(n00b_symtab_t *st, n00b_string_t ns_name,
-                                       n00b_string_t name);
+ncc_sym_entry_t *ncc_symtab_lookup(ncc_symtab_t *st, ncc_string_t ns_name,
+                                       ncc_string_t name);
 
-bool n00b_symtab_is_typedef(n00b_symtab_t *st, n00b_string_t name);
+bool ncc_symtab_is_typedef(ncc_symtab_t *st, ncc_string_t name);
 
-int32_t n00b_symtab_depth(n00b_symtab_t *st, n00b_string_t ns_name);
+int32_t ncc_symtab_depth(ncc_symtab_t *st, ncc_string_t ns_name);
 
-n00b_scope_t *n00b_symtab_current_scope(n00b_symtab_t *st,
-                                          n00b_string_t ns_name);
+ncc_scope_t *ncc_symtab_current_scope(ncc_symtab_t *st,
+                                          ncc_string_t ns_name);

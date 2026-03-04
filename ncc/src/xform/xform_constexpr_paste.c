@@ -4,7 +4,7 @@
 //
 //   constexpr_paste("item_", 3)         → item_3
 //   constexpr_paste(field_, typeid(int)) → field_<hash>
-//   constexpr_paste("n00b_", "list")    → n00b_list
+//   constexpr_paste("ncc_", "list")    → ncc_list
 //
 // Registered as pre-order on "synthetic_identifier" and "postfix_expression".
 
@@ -19,8 +19,8 @@
 // Shared functions from xform_constexpr.c.
 extern char *compile_and_run(const char *compiler, const char *source,
                              char **err_out);
-extern char *pprint_subtree(n00b_grammar_t *g, n00b_parse_tree_t *node);
-extern n00b_parse_tree_t **collect_arguments(n00b_parse_tree_t *arglist,
+extern char *pprint_subtree(ncc_grammar_t *g, ncc_parse_tree_t *node);
+extern ncc_parse_tree_t **collect_arguments(ncc_parse_tree_t *arglist,
                                              int *nargs);
 
 // ============================================================================
@@ -44,7 +44,7 @@ is_ident_fragment(const char *s)
 
 // Emit a subtree to text, trim whitespace, strip surrounding quotes.
 static char *
-pprint_and_clean(n00b_grammar_t *g, n00b_parse_tree_t *node)
+pprint_and_clean(ncc_grammar_t *g, ncc_parse_tree_t *node)
 {
     char *raw = pprint_subtree(g, node);
     if (!raw) {
@@ -148,17 +148,17 @@ try_eval_integer(const char *compiler, const char *expr, long long *out)
 // ============================================================================
 
 static const char *
-get_first_leaf_text(n00b_parse_tree_t *node)
+get_first_leaf_text(ncc_parse_tree_t *node)
 {
     if (!node) {
         return NULL;
     }
-    if (n00b_tree_is_leaf(node)) {
-        return n00b_xform_leaf_text(node);
+    if (ncc_tree_is_leaf(node)) {
+        return ncc_xform_leaf_text(node);
     }
-    size_t nc = n00b_tree_num_children(node);
+    size_t nc = ncc_tree_num_children(node);
     for (size_t i = 0; i < nc; i++) {
-        const char *t = get_first_leaf_text(n00b_tree_child(node, i));
+        const char *t = get_first_leaf_text(ncc_tree_child(node, i));
         if (t) {
             return t;
         }
@@ -186,30 +186,30 @@ get_first_leaf_text(n00b_parse_tree_t *node)
 //     └── ")"
 // ============================================================================
 
-static n00b_parse_tree_t *
-xform_constexpr_paste(n00b_xform_ctx_t  *ctx,
-                      n00b_parse_tree_t *node)
+static ncc_parse_tree_t *
+xform_constexpr_paste(ncc_xform_ctx_t  *ctx,
+                      ncc_parse_tree_t *node)
 {
-    size_t nc = n00b_tree_num_children(node);
+    size_t nc = ncc_tree_num_children(node);
     if (nc < 3) {
         return NULL;
     }
 
     // Find the callee name — either a direct leaf child[0] or buried
     // in a callee subtree.
-    const char *callee = get_first_leaf_text(n00b_tree_child(node, 0));
+    const char *callee = get_first_leaf_text(ncc_tree_child(node, 0));
     if (!callee || strcmp(callee, "constexpr_paste") != 0) {
         return NULL;
     }
 
     // Verify "(" is child[1] (quick filter).
-    n00b_parse_tree_t *child1 = n00b_tree_child(node, 1);
-    if (!child1 || !n00b_xform_leaf_text_eq(child1, "(")) {
+    ncc_parse_tree_t *child1 = ncc_tree_child(node, 1);
+    if (!child1 || !ncc_xform_leaf_text_eq(child1, "(")) {
         return NULL;
     }
 
     uint32_t line, col_pos;
-    n00b_xform_first_leaf_pos(node, &line, &col_pos);
+    ncc_xform_first_leaf_pos(node, &line, &col_pos);
 
     typedef struct {
         const char *compiler;
@@ -220,7 +220,7 @@ xform_constexpr_paste(n00b_xform_ctx_t  *ctx,
     const char       *compiler = xdata ? xdata->compiler : NULL;
 
     // Find argument_expression_list child (may be wrapped in group node).
-    n00b_parse_tree_t *arglist = n00b_xform_find_child_nt(
+    ncc_parse_tree_t *arglist = ncc_xform_find_child_nt(
         node, "argument_expression_list");
 
     if (!arglist) {
@@ -231,7 +231,7 @@ xform_constexpr_paste(n00b_xform_ctx_t  *ctx,
     }
 
     int                 nargs = 0;
-    n00b_parse_tree_t **args  = collect_arguments(arglist, &nargs);
+    ncc_parse_tree_t **args  = collect_arguments(arglist, &nargs);
 
     if (nargs != 2) {
         fprintf(stderr,
@@ -308,8 +308,8 @@ xform_constexpr_paste(n00b_xform_ctx_t  *ctx,
     }
 
     // Build replacement: a single identifier token node.
-    n00b_parse_tree_t *replacement = n00b_xform_make_token_node(
-        N00B_TOK_IDENTIFIER, id_buf, line, col_pos);
+    ncc_parse_tree_t *replacement = ncc_xform_make_token_node(
+        NCC_TOK_IDENTIFIER, id_buf, line, col_pos);
 
     if (!replacement) {
         fprintf(stderr,
@@ -327,10 +327,10 @@ xform_constexpr_paste(n00b_xform_ctx_t  *ctx,
 // ============================================================================
 
 void
-n00b_register_constexpr_paste_xform(n00b_xform_registry_t *reg)
+ncc_register_constexpr_paste_xform(ncc_xform_registry_t *reg)
 {
-    n00b_xform_register(reg, "synthetic_identifier", xform_constexpr_paste,
+    ncc_xform_register(reg, "synthetic_identifier", xform_constexpr_paste,
                         "constexpr_paste");
-    n00b_xform_register(reg, "postfix_expression", xform_constexpr_paste,
+    ncc_xform_register(reg, "postfix_expression", xform_constexpr_paste,
                         "constexpr_paste");
 }

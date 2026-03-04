@@ -3,11 +3,11 @@
 // Provides programmatic annotation helpers that attach semantic
 // information (scope, declarations, control flow, ADT, formatting)
 // to non-terminals.  Each convenience function creates a stack-local
-// n00b_annotation_t, fills the relevant fields, and calls
-// n00b_nt_annotate() which heap-allocates a copy and prepends it to
+// ncc_annotation_t, fills the relevant fields, and calls
+// ncc_nt_annotate() which heap-allocates a copy and prepends it to
 // the non-terminal's annotation linked list.
 //
-// All string fields are n00b_string_t (value type, GC-managed .data)
+// All string fields are ncc_string_t (value type, GC-managed .data)
 // so no strdup/free is needed.
 
 #include "slay/annotation.h"
@@ -17,38 +17,38 @@
 // Core annotation attachment
 // ============================================================================
 
-static n00b_annotation_t *
-heap_annot(n00b_annotation_t annot)
+static ncc_annotation_t *
+heap_annot(ncc_annotation_t annot)
 {
-    n00b_annotation_t *a = n00b_alloc(n00b_annotation_t);
+    ncc_annotation_t *a = ncc_alloc(ncc_annotation_t);
     *a = annot;
     return a;
 }
 
 void
-n00b_nt_annotate(n00b_nonterm_t *nt, n00b_annotation_t annot)
+ncc_nt_annotate(ncc_nonterm_t *nt, ncc_annotation_t annot)
 {
-    // Stage the annotation on the NT.  n00b_grammar_finalize() distributes
+    // Stage the annotation on the NT.  ncc_grammar_finalize() distributes
     // staged annotations to all of the NT's rules.
-    n00b_annotation_t *a = heap_annot(annot);
+    ncc_annotation_t *a = heap_annot(annot);
 
     if (!nt->pending_annotations.data) {
-        nt->pending_annotations = n00b_list_new(n00b_annotation_ptr_t, false);
+        nt->pending_annotations = ncc_list_new(ncc_annotation_ptr_t, false);
     }
 
-    n00b_list_push(nt->pending_annotations, a);
+    ncc_list_push(nt->pending_annotations, a);
 }
 
 void
-n00b_rule_annotate(n00b_parse_rule_t *rule, n00b_annotation_t annot)
+ncc_rule_annotate(ncc_parse_rule_t *rule, ncc_annotation_t annot)
 {
-    n00b_annotation_t *a = heap_annot(annot);
+    ncc_annotation_t *a = heap_annot(annot);
 
     if (!rule->annotations.data) {
-        rule->annotations = n00b_list_new(n00b_annotation_ptr_t, false);
+        rule->annotations = ncc_list_new(ncc_annotation_ptr_t, false);
     }
 
-    n00b_list_push(rule->annotations, a);
+    ncc_list_push(rule->annotations, a);
 }
 
 // ============================================================================
@@ -56,56 +56,56 @@ n00b_rule_annotate(n00b_parse_rule_t *rule, n00b_annotation_t annot)
 // ============================================================================
 
 void
-n00b_nt_scope_open(n00b_nonterm_t *nt,
-                   n00b_string_t scope_tag, n00b_child_ref_t name_ref)
+ncc_nt_scope_open(ncc_nonterm_t *nt,
+                   ncc_string_t scope_tag, ncc_child_ref_t name_ref)
 {
-    n00b_annotation_t a = {0};
-    a.kind      = N00B_ANNOT_SCOPE_OPEN;
+    ncc_annotation_t a = {0};
+    a.kind      = NCC_ANNOT_SCOPE_OPEN;
     a.scope_tag = scope_tag;
     a.name_ref  = name_ref;
-    n00b_nt_annotate(nt, a);
+    ncc_nt_annotate(nt, a);
 }
 
 void
-n00b_nt_declares(n00b_nonterm_t *nt,
-                 n00b_child_ref_t name_ref, n00b_child_ref_t type_ref)
+ncc_nt_declares(ncc_nonterm_t *nt,
+                 ncc_child_ref_t name_ref, ncc_child_ref_t type_ref)
 {
-    n00b_annotation_t a = {0};
-    a.kind     = N00B_ANNOT_DECLARES;
+    ncc_annotation_t a = {0};
+    a.kind     = NCC_ANNOT_DECLARES;
     a.name_ref = name_ref;
     a.type_ref = type_ref;
-    n00b_nt_annotate(nt, a);
+    ncc_nt_annotate(nt, a);
 }
 
 void
-n00b_nt_type_decl(n00b_nonterm_t *nt, n00b_child_ref_t name_ref)
+ncc_nt_type_decl(ncc_nonterm_t *nt, ncc_child_ref_t name_ref)
 {
-    n00b_annotation_t a = {0};
-    a.kind     = N00B_ANNOT_TYPE_DECL;
+    ncc_annotation_t a = {0};
+    a.kind     = NCC_ANNOT_TYPE_DECL;
     a.name_ref = name_ref;
-    n00b_nt_annotate(nt, a);
+    ncc_nt_annotate(nt, a);
 }
 
 void
-n00b_nt_type(n00b_nonterm_t *nt,
-             n00b_child_ref_t name_ref, n00b_string_t type_spec)
+ncc_nt_type(ncc_nonterm_t *nt,
+             ncc_child_ref_t name_ref, ncc_string_t type_spec)
 {
-    n00b_annotation_t a = {0};
-    a.kind      = N00B_ANNOT_TYPE;
+    ncc_annotation_t a = {0};
+    a.kind      = NCC_ANNOT_TYPE;
     a.name_ref  = name_ref;
     a.type_spec = type_spec;
-    n00b_nt_annotate(nt, a);
+    ncc_nt_annotate(nt, a);
 }
 
 void
-n00b_nt_assigns(n00b_nonterm_t *nt,
-                n00b_child_ref_t name_ref, n00b_child_ref_t value_ref)
+ncc_nt_assigns(ncc_nonterm_t *nt,
+                ncc_child_ref_t name_ref, ncc_child_ref_t value_ref)
 {
-    n00b_annotation_t a = {0};
-    a.kind      = N00B_ANNOT_ASSIGNS;
+    ncc_annotation_t a = {0};
+    a.kind      = NCC_ANNOT_ASSIGNS;
     a.name_ref  = name_ref;
     a.value_ref = value_ref;
-    n00b_nt_annotate(nt, a);
+    ncc_nt_annotate(nt, a);
 }
 
 // ============================================================================
@@ -113,65 +113,65 @@ n00b_nt_assigns(n00b_nonterm_t *nt,
 // ============================================================================
 
 void
-n00b_nt_branch(n00b_nonterm_t *nt, n00b_child_ref_t cond_ref,
-               n00b_child_ref_t then_ref, n00b_child_ref_t else_ref)
+ncc_nt_branch(ncc_nonterm_t *nt, ncc_child_ref_t cond_ref,
+               ncc_child_ref_t then_ref, ncc_child_ref_t else_ref)
 {
-    n00b_annotation_t a = {0};
-    a.kind      = N00B_ANNOT_BRANCH;
+    ncc_annotation_t a = {0};
+    a.kind      = NCC_ANNOT_BRANCH;
     a.name_ref  = cond_ref;
     a.type_ref  = then_ref;
     a.value_ref = else_ref;
-    n00b_nt_annotate(nt, a);
+    ncc_nt_annotate(nt, a);
 }
 
 void
-n00b_nt_loop(n00b_nonterm_t *nt, n00b_child_ref_t cond_ref,
-             n00b_child_ref_t body_ref)
+ncc_nt_loop(ncc_nonterm_t *nt, ncc_child_ref_t cond_ref,
+             ncc_child_ref_t body_ref)
 {
-    n00b_annotation_t a = {0};
-    a.kind     = N00B_ANNOT_LOOP;
+    ncc_annotation_t a = {0};
+    a.kind     = NCC_ANNOT_LOOP;
     a.name_ref = cond_ref;
     a.type_ref = body_ref;
-    n00b_nt_annotate(nt, a);
+    ncc_nt_annotate(nt, a);
 }
 
 void
-n00b_nt_jump(n00b_nonterm_t *nt, n00b_string_t jump_kind)
+ncc_nt_jump(ncc_nonterm_t *nt, ncc_string_t jump_kind)
 {
-    n00b_annotation_t a = {0};
-    a.kind      = N00B_ANNOT_JUMP;
+    ncc_annotation_t a = {0};
+    a.kind      = NCC_ANNOT_JUMP;
     a.scope_tag = jump_kind;
-    n00b_nt_annotate(nt, a);
+    ncc_nt_annotate(nt, a);
 }
 
 void
-n00b_nt_capture(n00b_nonterm_t *nt, n00b_string_t tag, bool by_tag)
+ncc_nt_capture(ncc_nonterm_t *nt, ncc_string_t tag, bool by_tag)
 {
-    n00b_annotation_t a = {0};
-    a.kind           = N00B_ANNOT_CAPTURE;
+    ncc_annotation_t a = {0};
+    a.kind           = NCC_ANNOT_CAPTURE;
     a.scope_tag      = tag;
     a.capture_by_tag = by_tag;
-    n00b_nt_annotate(nt, a);
+    ncc_nt_annotate(nt, a);
 }
 
 void
-n00b_nt_infer(n00b_nonterm_t *nt, n00b_string_t constraint_expr)
+ncc_nt_infer(ncc_nonterm_t *nt, ncc_string_t constraint_expr)
 {
-    n00b_annotation_t a = {0};
-    a.kind       = N00B_ANNOT_INFER;
+    ncc_annotation_t a = {0};
+    a.kind       = NCC_ANNOT_INFER;
     a.infer_expr = constraint_expr;
-    n00b_nt_annotate(nt, a);
+    ncc_nt_annotate(nt, a);
 }
 
 void
-n00b_nt_switch(n00b_nonterm_t *nt, n00b_child_ref_t cond_ref,
-               n00b_child_ref_t cases_ref)
+ncc_nt_switch(ncc_nonterm_t *nt, ncc_child_ref_t cond_ref,
+               ncc_child_ref_t cases_ref)
 {
-    n00b_annotation_t a = {0};
-    a.kind     = N00B_ANNOT_SWITCH;
+    ncc_annotation_t a = {0};
+    a.kind     = NCC_ANNOT_SWITCH;
     a.name_ref = cond_ref;
     a.type_ref = cases_ref;
-    n00b_nt_annotate(nt, a);
+    ncc_nt_annotate(nt, a);
 }
 
 // ============================================================================
@@ -179,82 +179,82 @@ n00b_nt_switch(n00b_nonterm_t *nt, n00b_child_ref_t cond_ref,
 // ============================================================================
 
 void
-n00b_nt_adt(n00b_nonterm_t *nt, n00b_string_t adt_kind,
-            n00b_child_ref_t name_ref, n00b_string_t scope_tag)
+ncc_nt_adt(ncc_nonterm_t *nt, ncc_string_t adt_kind,
+            ncc_child_ref_t name_ref, ncc_string_t scope_tag)
 {
-    n00b_annotation_t a = {0};
-    a.kind      = N00B_ANNOT_ADT;
+    ncc_annotation_t a = {0};
+    a.kind      = NCC_ANNOT_ADT;
     a.adt_kind  = adt_kind;
     a.name_ref  = name_ref;
     a.scope_tag = scope_tag.data ? scope_tag
                                  : (adt_kind.data ? adt_kind
-                                                  : n00b_string_empty());
-    n00b_nt_annotate(nt, a);
+                                                  : ncc_string_empty());
+    ncc_nt_annotate(nt, a);
 }
 
 void
-n00b_nt_field(n00b_nonterm_t *nt,
-              n00b_child_ref_t name_ref, n00b_child_ref_t type_ref)
+ncc_nt_field(ncc_nonterm_t *nt,
+              ncc_child_ref_t name_ref, ncc_child_ref_t type_ref)
 {
-    n00b_annotation_t a = {0};
-    a.kind     = N00B_ANNOT_FIELD;
+    ncc_annotation_t a = {0};
+    a.kind     = NCC_ANNOT_FIELD;
     a.name_ref = name_ref;
     a.type_ref = type_ref;
-    n00b_nt_annotate(nt, a);
+    ncc_nt_annotate(nt, a);
 }
 
 void
-n00b_nt_method(n00b_nonterm_t *nt,
-               n00b_child_ref_t name_ref, n00b_child_ref_t type_ref)
+ncc_nt_method(ncc_nonterm_t *nt,
+               ncc_child_ref_t name_ref, ncc_child_ref_t type_ref)
 {
-    n00b_annotation_t a = {0};
-    a.kind     = N00B_ANNOT_METHOD;
+    ncc_annotation_t a = {0};
+    a.kind     = NCC_ANNOT_METHOD;
     a.name_ref = name_ref;
     a.type_ref = type_ref;
-    n00b_nt_annotate(nt, a);
+    ncc_nt_annotate(nt, a);
 }
 
 void
-n00b_nt_inherits(n00b_nonterm_t *nt, n00b_child_ref_t name_ref)
+ncc_nt_inherits(ncc_nonterm_t *nt, ncc_child_ref_t name_ref)
 {
-    n00b_annotation_t a = {0};
-    a.kind     = N00B_ANNOT_INHERITS;
+    ncc_annotation_t a = {0};
+    a.kind     = NCC_ANNOT_INHERITS;
     a.name_ref = name_ref;
-    n00b_nt_annotate(nt, a);
+    ncc_nt_annotate(nt, a);
 }
 
 void
-n00b_nt_implements(n00b_nonterm_t *nt, n00b_child_ref_t name_ref)
+ncc_nt_implements(ncc_nonterm_t *nt, ncc_child_ref_t name_ref)
 {
-    n00b_annotation_t a = {0};
-    a.kind     = N00B_ANNOT_IMPLEMENTS;
+    ncc_annotation_t a = {0};
+    a.kind     = NCC_ANNOT_IMPLEMENTS;
     a.name_ref = name_ref;
-    n00b_nt_annotate(nt, a);
+    ncc_nt_annotate(nt, a);
 }
 
 void
-n00b_nt_visibility(n00b_nonterm_t *nt, n00b_string_t visibility_spec)
+ncc_nt_visibility(ncc_nonterm_t *nt, ncc_string_t visibility_spec)
 {
-    n00b_annotation_t a = {0};
-    a.kind            = N00B_ANNOT_VISIBILITY;
+    ncc_annotation_t a = {0};
+    a.kind            = NCC_ANNOT_VISIBILITY;
     a.visibility_spec = visibility_spec;
-    n00b_nt_annotate(nt, a);
+    ncc_nt_annotate(nt, a);
 }
 
 void
-n00b_nt_static(n00b_nonterm_t *nt)
+ncc_nt_static(ncc_nonterm_t *nt)
 {
-    n00b_annotation_t a = {0};
-    a.kind = N00B_ANNOT_STATIC;
-    n00b_nt_annotate(nt, a);
+    ncc_annotation_t a = {0};
+    a.kind = NCC_ANNOT_STATIC;
+    ncc_nt_annotate(nt, a);
 }
 
 void
-n00b_nt_abstract(n00b_nonterm_t *nt)
+ncc_nt_abstract(ncc_nonterm_t *nt)
 {
-    n00b_annotation_t a = {0};
-    a.kind = N00B_ANNOT_ABSTRACT;
-    n00b_nt_annotate(nt, a);
+    ncc_annotation_t a = {0};
+    a.kind = NCC_ANNOT_ABSTRACT;
+    ncc_nt_annotate(nt, a);
 }
 
 // ============================================================================
@@ -262,41 +262,41 @@ n00b_nt_abstract(n00b_nonterm_t *nt)
 // ============================================================================
 
 void
-n00b_nt_operator(n00b_nonterm_t *nt, n00b_string_t op_str)
+ncc_nt_operator(ncc_nonterm_t *nt, ncc_string_t op_str)
 {
-    n00b_annotation_t a = {0};
-    a.kind    = N00B_ANNOT_OPERATOR;
+    ncc_annotation_t a = {0};
+    a.kind    = NCC_ANNOT_OPERATOR;
     a.op_kind = op_str;
-    n00b_nt_annotate(nt, a);
+    ncc_nt_annotate(nt, a);
 }
 
 void
-n00b_nt_literal(n00b_nonterm_t *nt, n00b_string_t lit_kind)
+ncc_nt_literal(ncc_nonterm_t *nt, ncc_string_t lit_kind)
 {
-    n00b_annotation_t a = {0};
-    a.kind    = N00B_ANNOT_LITERAL;
+    ncc_annotation_t a = {0};
+    a.kind    = NCC_ANNOT_LITERAL;
     a.op_kind = lit_kind;
-    n00b_nt_annotate(nt, a);
+    ncc_nt_annotate(nt, a);
 }
 
 void
-n00b_nt_call(n00b_nonterm_t *nt, n00b_child_ref_t func_ref,
-             n00b_child_ref_t args_ref)
+ncc_nt_call(ncc_nonterm_t *nt, ncc_child_ref_t func_ref,
+             ncc_child_ref_t args_ref)
 {
-    n00b_annotation_t a = {0};
-    a.kind     = N00B_ANNOT_CALL;
+    ncc_annotation_t a = {0};
+    a.kind     = NCC_ANNOT_CALL;
     a.name_ref = func_ref;
     a.type_ref = args_ref;
-    n00b_nt_annotate(nt, a);
+    ncc_nt_annotate(nt, a);
 }
 
 void
-n00b_nt_varref(n00b_nonterm_t *nt, n00b_child_ref_t name_ref)
+ncc_nt_varref(ncc_nonterm_t *nt, ncc_child_ref_t name_ref)
 {
-    n00b_annotation_t a = {0};
-    a.kind     = N00B_ANNOT_VARREF;
+    ncc_annotation_t a = {0};
+    a.kind     = NCC_ANNOT_VARREF;
     a.name_ref = name_ref;
-    n00b_nt_annotate(nt, a);
+    ncc_nt_annotate(nt, a);
 }
 
 // ============================================================================
@@ -304,34 +304,34 @@ n00b_nt_varref(n00b_nonterm_t *nt, n00b_child_ref_t name_ref)
 // ============================================================================
 
 void
-n00b_nt_reclassify(n00b_nonterm_t *nt,
-                   n00b_child_ref_t guard_ref,
-                   n00b_string_t guard_text,
+ncc_nt_reclassify(ncc_nonterm_t *nt,
+                   ncc_child_ref_t guard_ref,
+                   ncc_string_t guard_text,
                    int64_t new_tid)
 {
-    n00b_annotation_t a = {0};
-    a.kind           = N00B_ANNOT_RECLASSIFY;
+    ncc_annotation_t a = {0};
+    a.kind           = NCC_ANNOT_RECLASSIFY;
     a.type_ref       = guard_ref;
     a.scope_tag      = guard_text;
     a.reclassify_tid = new_tid;
-    n00b_nt_annotate(nt, a);
+    ncc_nt_annotate(nt, a);
     nt->has_reclassify = true;
 }
 
 void
-n00b_nt_reclassify_list(n00b_nonterm_t *nt,
-                        n00b_child_ref_t guard_ref,
-                        n00b_string_t guard_text,
-                        n00b_child_ref_t list_ref,
+ncc_nt_reclassify_list(ncc_nonterm_t *nt,
+                        ncc_child_ref_t guard_ref,
+                        ncc_string_t guard_text,
+                        ncc_child_ref_t list_ref,
                         int64_t new_tid)
 {
-    n00b_annotation_t a = {0};
-    a.kind           = N00B_ANNOT_RECLASSIFY_LIST;
+    ncc_annotation_t a = {0};
+    a.kind           = NCC_ANNOT_RECLASSIFY_LIST;
     a.type_ref       = guard_ref;
     a.name_ref       = list_ref;
     a.scope_tag      = guard_text;
     a.reclassify_tid = new_tid;
-    n00b_nt_annotate(nt, a);
+    ncc_nt_annotate(nt, a);
     nt->has_reclassify = true;
 }
 
@@ -340,89 +340,89 @@ n00b_nt_reclassify_list(n00b_nonterm_t *nt,
 // ============================================================================
 
 void
-n00b_nt_indent(n00b_nonterm_t *nt)
+ncc_nt_indent(ncc_nonterm_t *nt)
 {
-    n00b_annotation_t a = {0};
-    a.kind = N00B_ANNOT_INDENT;
-    n00b_nt_annotate(nt, a);
+    ncc_annotation_t a = {0};
+    a.kind = NCC_ANNOT_INDENT;
+    ncc_nt_annotate(nt, a);
 }
 
 void
-n00b_nt_group(n00b_nonterm_t *nt)
+ncc_nt_group(ncc_nonterm_t *nt)
 {
-    n00b_annotation_t a = {0};
-    a.kind = N00B_ANNOT_GROUP;
-    n00b_nt_annotate(nt, a);
+    ncc_annotation_t a = {0};
+    a.kind = NCC_ANNOT_GROUP;
+    ncc_nt_annotate(nt, a);
 }
 
 void
-n00b_nt_concat(n00b_nonterm_t *nt)
+ncc_nt_concat(ncc_nonterm_t *nt)
 {
-    n00b_annotation_t a = {0};
-    a.kind = N00B_ANNOT_CONCAT;
-    n00b_nt_annotate(nt, a);
+    ncc_annotation_t a = {0};
+    a.kind = NCC_ANNOT_CONCAT;
+    ncc_nt_annotate(nt, a);
 }
 
 void
-n00b_nt_blankline(n00b_nonterm_t *nt)
+ncc_nt_blankline(ncc_nonterm_t *nt)
 {
-    n00b_annotation_t a = {0};
-    a.kind = N00B_ANNOT_BLANKLINE;
-    n00b_nt_annotate(nt, a);
+    ncc_annotation_t a = {0};
+    a.kind = NCC_ANNOT_BLANKLINE;
+    ncc_nt_annotate(nt, a);
 }
 
 void
-n00b_nt_softline(n00b_nonterm_t *nt, n00b_child_ref_t child_ref)
+ncc_nt_softline(ncc_nonterm_t *nt, ncc_child_ref_t child_ref)
 {
-    n00b_annotation_t a = {0};
-    a.kind     = N00B_ANNOT_SOFTLINE;
+    ncc_annotation_t a = {0};
+    a.kind     = NCC_ANNOT_SOFTLINE;
     a.name_ref = child_ref;
-    n00b_nt_annotate(nt, a);
+    ncc_nt_annotate(nt, a);
 }
 
 void
-n00b_nt_hardline(n00b_nonterm_t *nt, n00b_child_ref_t child_ref)
+ncc_nt_hardline(ncc_nonterm_t *nt, ncc_child_ref_t child_ref)
 {
-    n00b_annotation_t a = {0};
-    a.kind     = N00B_ANNOT_HARDLINE;
+    ncc_annotation_t a = {0};
+    a.kind     = NCC_ANNOT_HARDLINE;
     a.name_ref = child_ref;
-    n00b_nt_annotate(nt, a);
+    ncc_nt_annotate(nt, a);
 }
 
 void
-n00b_nt_pp_newline(n00b_nonterm_t *nt, n00b_child_ref_t child_ref)
+ncc_nt_pp_newline(ncc_nonterm_t *nt, ncc_child_ref_t child_ref)
 {
-    n00b_annotation_t a = {0};
-    a.kind     = N00B_ANNOT_NEWLINE;
+    ncc_annotation_t a = {0};
+    a.kind     = NCC_ANNOT_NEWLINE;
     a.name_ref = child_ref;
-    n00b_nt_annotate(nt, a);
+    ncc_nt_annotate(nt, a);
 }
 
 void
-n00b_nt_pp_space(n00b_nonterm_t *nt, n00b_child_ref_t child_ref)
+ncc_nt_pp_space(ncc_nonterm_t *nt, ncc_child_ref_t child_ref)
 {
-    n00b_annotation_t a = {0};
-    a.kind     = N00B_ANNOT_SPACE;
+    ncc_annotation_t a = {0};
+    a.kind     = NCC_ANNOT_SPACE;
     a.name_ref = child_ref;
-    n00b_nt_annotate(nt, a);
+    ncc_nt_annotate(nt, a);
 }
 
 void
-n00b_nt_nospace(n00b_nonterm_t *nt, n00b_child_ref_t child_ref)
+ncc_nt_nospace(ncc_nonterm_t *nt, ncc_child_ref_t child_ref)
 {
-    n00b_annotation_t a = {0};
-    a.kind     = N00B_ANNOT_NOSPACE;
+    ncc_annotation_t a = {0};
+    a.kind     = NCC_ANNOT_NOSPACE;
     a.name_ref = child_ref;
-    n00b_nt_annotate(nt, a);
+    ncc_nt_annotate(nt, a);
 }
 
 void
-n00b_nt_pp_align(n00b_nonterm_t *nt, n00b_child_ref_t child_ref)
+ncc_nt_pp_align(ncc_nonterm_t *nt, ncc_child_ref_t child_ref)
 {
-    n00b_annotation_t a = {0};
-    a.kind     = N00B_ANNOT_ALIGN;
+    ncc_annotation_t a = {0};
+    a.kind     = NCC_ANNOT_ALIGN;
     a.name_ref = child_ref;
-    n00b_nt_annotate(nt, a);
+    ncc_nt_annotate(nt, a);
 }
 
 // ============================================================================
@@ -430,115 +430,115 @@ n00b_nt_pp_align(n00b_nonterm_t *nt, n00b_child_ref_t child_ref)
 // ============================================================================
 
 void
-n00b_rule_scope_open(n00b_parse_rule_t *rule,
-                     n00b_string_t scope_tag, n00b_child_ref_t name_ref)
+ncc_rule_scope_open(ncc_parse_rule_t *rule,
+                     ncc_string_t scope_tag, ncc_child_ref_t name_ref)
 {
-    n00b_annotation_t a = {0};
-    a.kind      = N00B_ANNOT_SCOPE_OPEN;
+    ncc_annotation_t a = {0};
+    a.kind      = NCC_ANNOT_SCOPE_OPEN;
     a.scope_tag = scope_tag;
     a.name_ref  = name_ref;
-    n00b_rule_annotate(rule, a);
+    ncc_rule_annotate(rule, a);
 }
 
 void
-n00b_rule_declares(n00b_parse_rule_t *rule,
-                   n00b_child_ref_t name_ref, n00b_child_ref_t type_ref)
+ncc_rule_declares(ncc_parse_rule_t *rule,
+                   ncc_child_ref_t name_ref, ncc_child_ref_t type_ref)
 {
-    n00b_annotation_t a = {0};
-    a.kind     = N00B_ANNOT_DECLARES;
+    ncc_annotation_t a = {0};
+    a.kind     = NCC_ANNOT_DECLARES;
     a.name_ref = name_ref;
     a.type_ref = type_ref;
-    n00b_rule_annotate(rule, a);
+    ncc_rule_annotate(rule, a);
 }
 
 void
-n00b_rule_type_decl(n00b_parse_rule_t *rule, n00b_child_ref_t name_ref)
+ncc_rule_type_decl(ncc_parse_rule_t *rule, ncc_child_ref_t name_ref)
 {
-    n00b_annotation_t a = {0};
-    a.kind     = N00B_ANNOT_TYPE_DECL;
+    ncc_annotation_t a = {0};
+    a.kind     = NCC_ANNOT_TYPE_DECL;
     a.name_ref = name_ref;
-    n00b_rule_annotate(rule, a);
+    ncc_rule_annotate(rule, a);
 }
 
 void
-n00b_rule_type(n00b_parse_rule_t *rule,
-               n00b_child_ref_t name_ref, n00b_string_t type_spec)
+ncc_rule_type(ncc_parse_rule_t *rule,
+               ncc_child_ref_t name_ref, ncc_string_t type_spec)
 {
-    n00b_annotation_t a = {0};
-    a.kind      = N00B_ANNOT_TYPE;
+    ncc_annotation_t a = {0};
+    a.kind      = NCC_ANNOT_TYPE;
     a.name_ref  = name_ref;
     a.type_spec = type_spec;
-    n00b_rule_annotate(rule, a);
+    ncc_rule_annotate(rule, a);
 }
 
 void
-n00b_rule_assigns(n00b_parse_rule_t *rule,
-                  n00b_child_ref_t name_ref, n00b_child_ref_t value_ref)
+ncc_rule_assigns(ncc_parse_rule_t *rule,
+                  ncc_child_ref_t name_ref, ncc_child_ref_t value_ref)
 {
-    n00b_annotation_t a = {0};
-    a.kind      = N00B_ANNOT_ASSIGNS;
+    ncc_annotation_t a = {0};
+    a.kind      = NCC_ANNOT_ASSIGNS;
     a.name_ref  = name_ref;
     a.value_ref = value_ref;
-    n00b_rule_annotate(rule, a);
+    ncc_rule_annotate(rule, a);
 }
 
 void
-n00b_rule_branch(n00b_parse_rule_t *rule, n00b_child_ref_t cond_ref,
-                 n00b_child_ref_t then_ref, n00b_child_ref_t else_ref)
+ncc_rule_branch(ncc_parse_rule_t *rule, ncc_child_ref_t cond_ref,
+                 ncc_child_ref_t then_ref, ncc_child_ref_t else_ref)
 {
-    n00b_annotation_t a = {0};
-    a.kind      = N00B_ANNOT_BRANCH;
+    ncc_annotation_t a = {0};
+    a.kind      = NCC_ANNOT_BRANCH;
     a.name_ref  = cond_ref;
     a.type_ref  = then_ref;
     a.value_ref = else_ref;
-    n00b_rule_annotate(rule, a);
+    ncc_rule_annotate(rule, a);
 }
 
 void
-n00b_rule_loop(n00b_parse_rule_t *rule, n00b_child_ref_t cond_ref,
-               n00b_child_ref_t body_ref)
+ncc_rule_loop(ncc_parse_rule_t *rule, ncc_child_ref_t cond_ref,
+               ncc_child_ref_t body_ref)
 {
-    n00b_annotation_t a = {0};
-    a.kind     = N00B_ANNOT_LOOP;
+    ncc_annotation_t a = {0};
+    a.kind     = NCC_ANNOT_LOOP;
     a.name_ref = cond_ref;
     a.type_ref = body_ref;
-    n00b_rule_annotate(rule, a);
+    ncc_rule_annotate(rule, a);
 }
 
 void
-n00b_rule_jump(n00b_parse_rule_t *rule, n00b_string_t jump_kind)
+ncc_rule_jump(ncc_parse_rule_t *rule, ncc_string_t jump_kind)
 {
-    n00b_annotation_t a = {0};
-    a.kind      = N00B_ANNOT_JUMP;
+    ncc_annotation_t a = {0};
+    a.kind      = NCC_ANNOT_JUMP;
     a.scope_tag = jump_kind;
-    n00b_rule_annotate(rule, a);
+    ncc_rule_annotate(rule, a);
 }
 
 void
-n00b_rule_switch(n00b_parse_rule_t *rule, n00b_child_ref_t cond_ref,
-                 n00b_child_ref_t cases_ref)
+ncc_rule_switch(ncc_parse_rule_t *rule, ncc_child_ref_t cond_ref,
+                 ncc_child_ref_t cases_ref)
 {
-    n00b_annotation_t a = {0};
-    a.kind     = N00B_ANNOT_SWITCH;
+    ncc_annotation_t a = {0};
+    a.kind     = NCC_ANNOT_SWITCH;
     a.name_ref = cond_ref;
     a.type_ref = cases_ref;
-    n00b_rule_annotate(rule, a);
+    ncc_rule_annotate(rule, a);
 }
 
 void
-n00b_rule_capture(n00b_parse_rule_t *rule, n00b_string_t tag, bool by_tag)
+ncc_rule_capture(ncc_parse_rule_t *rule, ncc_string_t tag, bool by_tag)
 {
-    n00b_annotation_t a = {0};
-    a.kind           = N00B_ANNOT_CAPTURE;
+    ncc_annotation_t a = {0};
+    a.kind           = NCC_ANNOT_CAPTURE;
     a.scope_tag      = tag;
     a.capture_by_tag = by_tag;
-    n00b_rule_annotate(rule, a);
+    ncc_rule_annotate(rule, a);
 }
 
 void
-n00b_rule_concat(n00b_parse_rule_t *rule)
+ncc_rule_concat(ncc_parse_rule_t *rule)
 {
-    n00b_annotation_t a = {0};
-    a.kind = N00B_ANNOT_CONCAT;
-    n00b_rule_annotate(rule, a);
+    ncc_annotation_t a = {0};
+    a.kind = NCC_ANNOT_CONCAT;
+    ncc_rule_annotate(rule, a);
 }

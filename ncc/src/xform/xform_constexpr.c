@@ -28,18 +28,18 @@
 // Helpers: parse template
 // ============================================================================
 
-static n00b_parse_tree_t *
-parse_template(n00b_grammar_t *g, const char *nt_name, const char *src)
+static ncc_parse_tree_t *
+parse_template(ncc_grammar_t *g, const char *nt_name, const char *src)
 {
-    n00b_result_t(n00b_parse_tree_ptr_t) r =
-        n00b_xform_parse_template(g, nt_name, src, NULL);
-    if (n00b_result_is_err(r)) {
+    ncc_result_t(ncc_parse_tree_ptr_t) r =
+        ncc_xform_parse_template(g, nt_name, src, NULL);
+    if (ncc_result_is_err(r)) {
         fprintf(stderr,
                 "xform_constexpr: template parse failed for '%s':\n  %s\n",
                 nt_name, src);
         return NULL;
     }
-    return n00b_result_get(r);
+    return ncc_result_get(r);
 }
 
 // ============================================================================
@@ -202,31 +202,31 @@ compile_and_run(const char *compiler, const char *source, char **err_out)
 }
 
 // ============================================================================
-// pprint_subtree — emit a parse subtree as C source via n00b_pprint
+// pprint_subtree — emit a parse subtree as C source via ncc_pprint
 // ============================================================================
 
 char *
-pprint_subtree(n00b_grammar_t *g, n00b_parse_tree_t *node)
+pprint_subtree(ncc_grammar_t *g, ncc_parse_tree_t *node)
 {
-    n00b_pprint_opts_t opts = {
+    ncc_pprint_opts_t opts = {
         .line_width        = 200,
         .indent_size       = 4,
-        .indent_style      = N00B_PPRINT_SPACES,
+        .indent_style      = NCC_PPRINT_SPACES,
         .use_unicode_width = false,
         .out               = NULL,
         .newline           = "\n",
         .style             = NULL,
     };
 
-    return n00b_pprint(g, node, opts);
+    return ncc_pprint(g, node, opts);
 }
 
 // ============================================================================
 // collect_arguments — extract args from argument_expression_list
 // ============================================================================
 
-n00b_parse_tree_t **
-collect_arguments(n00b_parse_tree_t *arglist, int *nargs)
+ncc_parse_tree_t **
+collect_arguments(ncc_parse_tree_t *arglist, int *nargs)
 {
     *nargs = 0;
 
@@ -239,24 +239,24 @@ collect_arguments(n00b_parse_tree_t *arglist, int *nargs)
     //    or: arg_list -> assignment_expression
     //    or: arg_list -> keyword_argument (treated like assignment_expression)
     int                 cap   = 8;
-    n00b_parse_tree_t **stack = malloc(sizeof(n00b_parse_tree_t *) * (size_t)cap);
+    ncc_parse_tree_t **stack = malloc(sizeof(ncc_parse_tree_t *) * (size_t)cap);
     int                 top   = 0;
 
-    n00b_parse_tree_t *cur = arglist;
+    ncc_parse_tree_t *cur = arglist;
 
     for (;;) {
-        size_t nc = n00b_tree_num_children(cur);
+        size_t nc = ncc_tree_num_children(cur);
 
         if (nc >= 3) {
-            n00b_parse_tree_t *child0 = n00b_tree_child(cur, 0);
+            ncc_parse_tree_t *child0 = ncc_tree_child(cur, 0);
 
-            if (n00b_xform_nt_name_is(child0, "argument_expression_list")) {
+            if (ncc_xform_nt_name_is(child0, "argument_expression_list")) {
                 // Left-recursive: child[0] = nested arglist, child[1] = ",",
                 //                 child[2] = assignment_expression
-                n00b_parse_tree_t *right_arg = n00b_tree_child(cur, 2);
+                ncc_parse_tree_t *right_arg = ncc_tree_child(cur, 2);
                 if (top >= cap) {
                     cap *= 2;
-                    stack = realloc(stack, sizeof(n00b_parse_tree_t *) * (size_t)cap);
+                    stack = realloc(stack, sizeof(ncc_parse_tree_t *) * (size_t)cap);
                 }
                 stack[top++] = right_arg;
                 cur = child0;
@@ -266,10 +266,10 @@ collect_arguments(n00b_parse_tree_t *arglist, int *nargs)
 
         // Base case: single argument (assignment_expression or keyword_argument).
         if (nc >= 1) {
-            n00b_parse_tree_t *arg = n00b_tree_child(cur, 0);
+            ncc_parse_tree_t *arg = ncc_tree_child(cur, 0);
             if (top >= cap) {
                 cap *= 2;
-                stack = realloc(stack, sizeof(n00b_parse_tree_t *) * (size_t)cap);
+                stack = realloc(stack, sizeof(ncc_parse_tree_t *) * (size_t)cap);
             }
             stack[top++] = arg;
         }
@@ -277,7 +277,7 @@ collect_arguments(n00b_parse_tree_t *arglist, int *nargs)
     }
 
     // Reverse into result array (stack is in right-to-left order).
-    n00b_parse_tree_t **args = malloc(sizeof(n00b_parse_tree_t *) * (size_t)top);
+    ncc_parse_tree_t **args = malloc(sizeof(ncc_parse_tree_t *) * (size_t)top);
     for (int i = 0; i < top; i++) {
         args[i] = stack[top - 1 - i];
     }
@@ -292,7 +292,7 @@ collect_arguments(n00b_parse_tree_t *arglist, int *nargs)
 
 // Check whether a subtree contains a specific node (pointer comparison).
 static bool
-contains_node(n00b_parse_tree_t *root, n00b_parse_tree_t *target)
+contains_node(ncc_parse_tree_t *root, ncc_parse_tree_t *target)
 {
     if (!root || !target) {
         return false;
@@ -300,13 +300,13 @@ contains_node(n00b_parse_tree_t *root, n00b_parse_tree_t *target)
     if (root == target) {
         return true;
     }
-    if (n00b_tree_is_leaf(root)) {
+    if (ncc_tree_is_leaf(root)) {
         return false;
     }
 
-    size_t nc = n00b_tree_num_children(root);
+    size_t nc = ncc_tree_num_children(root);
     for (size_t i = 0; i < nc; i++) {
-        if (contains_node(n00b_tree_child(root, i), target)) {
+        if (contains_node(ncc_tree_child(root, i), target)) {
             return true;
         }
     }
@@ -315,20 +315,20 @@ contains_node(n00b_parse_tree_t *root, n00b_parse_tree_t *target)
 
 // Check if the first leaf token of a node has the system_header flag.
 static bool
-node_in_system_header(n00b_parse_tree_t *node)
+node_in_system_header(ncc_parse_tree_t *node)
 {
     if (!node) {
         return false;
     }
-    if (n00b_tree_is_leaf(node)) {
-        n00b_token_info_t *tok = n00b_tree_leaf_value(node);
+    if (ncc_tree_is_leaf(node)) {
+        ncc_token_info_t *tok = ncc_tree_leaf_value(node);
         return tok && tok->system_header;
     }
-    size_t nc = n00b_tree_num_children(node);
+    size_t nc = ncc_tree_num_children(node);
     for (size_t i = 0; i < nc; i++) {
-        n00b_parse_tree_t *c = n00b_tree_child(node, i);
-        if (n00b_tree_is_leaf(c)) {
-            n00b_token_info_t *tok = n00b_tree_leaf_value(c);
+        ncc_parse_tree_t *c = ncc_tree_child(node, i);
+        if (ncc_tree_is_leaf(c)) {
+            ncc_token_info_t *tok = ncc_tree_leaf_value(c);
             if (tok) {
                 return tok->system_header;
             }
@@ -342,17 +342,17 @@ node_in_system_header(n00b_parse_tree_t *node)
 
 // DFS search for a leaf with text matching `keyword` under node.
 static bool
-has_keyword_leaf(n00b_parse_tree_t *node, const char *keyword)
+has_keyword_leaf(ncc_parse_tree_t *node, const char *keyword)
 {
     if (!node) {
         return false;
     }
-    if (n00b_tree_is_leaf(node)) {
-        return n00b_xform_leaf_text_eq(node, keyword);
+    if (ncc_tree_is_leaf(node)) {
+        return ncc_xform_leaf_text_eq(node, keyword);
     }
-    size_t nc = n00b_tree_num_children(node);
+    size_t nc = ncc_tree_num_children(node);
     for (size_t i = 0; i < nc; i++) {
-        if (has_keyword_leaf(n00b_tree_child(node, i), keyword)) {
+        if (has_keyword_leaf(ncc_tree_child(node, i), keyword)) {
             return true;
         }
     }
@@ -361,12 +361,12 @@ has_keyword_leaf(n00b_parse_tree_t *node, const char *keyword)
 
 // Check if a declaration has a typedef keyword in its declaration_specifiers.
 static bool
-has_typedef_keyword(n00b_parse_tree_t *decl)
+has_typedef_keyword(ncc_parse_tree_t *decl)
 {
-    size_t nc = n00b_tree_num_children(decl);
+    size_t nc = ncc_tree_num_children(decl);
     for (size_t i = 0; i < nc; i++) {
-        n00b_parse_tree_t *c = n00b_tree_child(decl, i);
-        if (n00b_xform_nt_name_is(c, "declaration_specifiers")) {
+        ncc_parse_tree_t *c = ncc_tree_child(decl, i);
+        if (ncc_xform_nt_name_is(c, "declaration_specifiers")) {
             return has_keyword_leaf(c, "typedef");
         }
     }
@@ -375,32 +375,32 @@ has_typedef_keyword(n00b_parse_tree_t *decl)
 
 // Check if a declaration contains a struct/union/enum definition (with body).
 static bool
-has_struct_body(n00b_parse_tree_t *node)
+has_struct_body(ncc_parse_tree_t *node)
 {
     if (!node) {
         return false;
     }
-    if (n00b_tree_is_leaf(node)) {
+    if (ncc_tree_is_leaf(node)) {
         return false;
     }
 
-    if (n00b_xform_nt_name_is(node, "struct_or_union_specifier")
-        || n00b_xform_nt_name_is(node, "enum_specifier")) {
+    if (ncc_xform_nt_name_is(node, "struct_or_union_specifier")
+        || ncc_xform_nt_name_is(node, "enum_specifier")) {
         // Check if it has a "{" child — meaning it's a definition, not just
         // a forward reference.
-        size_t nc = n00b_tree_num_children(node);
+        size_t nc = ncc_tree_num_children(node);
         for (size_t i = 0; i < nc; i++) {
-            n00b_parse_tree_t *c = n00b_tree_child(node, i);
-            if (n00b_tree_is_leaf(c) && n00b_xform_leaf_text_eq(c, "{")) {
+            ncc_parse_tree_t *c = ncc_tree_child(node, i);
+            if (ncc_tree_is_leaf(c) && ncc_xform_leaf_text_eq(c, "{")) {
                 return true;
             }
         }
         return false;
     }
 
-    size_t nc = n00b_tree_num_children(node);
+    size_t nc = ncc_tree_num_children(node);
     for (size_t i = 0; i < nc; i++) {
-        if (has_struct_body(n00b_tree_child(node, i))) {
+        if (has_struct_body(ncc_tree_child(node, i))) {
             return true;
         }
     }
@@ -409,19 +409,19 @@ has_struct_body(n00b_parse_tree_t *node)
 
 // Is this an interesting declaration for constexpr? (typedef or struct def)
 static bool
-is_type_declaration(n00b_parse_tree_t *decl)
+is_type_declaration(ncc_parse_tree_t *decl)
 {
     return has_typedef_keyword(decl) || has_struct_body(decl);
 }
 
 // Check if a node is a group wrapper ($$group_*).
 static bool
-is_group_wrapper(n00b_parse_tree_t *node)
+is_group_wrapper(ncc_parse_tree_t *node)
 {
-    if (!node || n00b_tree_is_leaf(node)) {
+    if (!node || ncc_tree_is_leaf(node)) {
         return false;
     }
-    n00b_nt_node_t pn = n00b_tree_node_value(node);
+    ncc_nt_node_t pn = ncc_tree_node_value(node);
     return pn.name.data
         && pn.name.data[0] == '$' && pn.name.data[1] == '$';
 }
@@ -429,27 +429,27 @@ is_group_wrapper(n00b_parse_tree_t *node)
 // Recursively walk translation_unit children, flattening group wrappers,
 // and collect type declarations (typedefs, struct/union/enum defs).
 static void
-collect_decls_recursive(n00b_parse_tree_t *node,
-                        n00b_parse_tree_t *call_node,
-                        n00b_grammar_t    *grammar,
+collect_decls_recursive(ncc_parse_tree_t *node,
+                        ncc_parse_tree_t *call_node,
+                        ncc_grammar_t    *grammar,
                         FILE              *f)
 {
-    if (!node || n00b_tree_is_leaf(node)) {
+    if (!node || ncc_tree_is_leaf(node)) {
         return;
     }
 
     // If this is a group wrapper, recurse into its children.
     if (is_group_wrapper(node)) {
-        size_t nc = n00b_tree_num_children(node);
+        size_t nc = ncc_tree_num_children(node);
         for (size_t i = 0; i < nc; i++) {
-            collect_decls_recursive(n00b_tree_child(node, i),
+            collect_decls_recursive(ncc_tree_child(node, i),
                                     call_node, grammar, f);
         }
         return;
     }
 
     // This should be an external_declaration. Find its declaration child.
-    n00b_parse_tree_t *decl = n00b_xform_find_child_nt(node, "declaration");
+    ncc_parse_tree_t *decl = ncc_xform_find_child_nt(node, "declaration");
     if (!decl) {
         return;
     }
@@ -478,10 +478,10 @@ collect_decls_recursive(n00b_parse_tree_t *node,
 }
 
 char *
-collect_file_scope_declarations(n00b_xform_ctx_t  *ctx,
-                                n00b_parse_tree_t *call_node)
+collect_file_scope_declarations(ncc_xform_ctx_t  *ctx,
+                                ncc_parse_tree_t *call_node)
 {
-    n00b_parse_tree_t *root = ctx->root;
+    ncc_parse_tree_t *root = ctx->root;
     if (!root) {
         return strdup("");
     }
@@ -490,9 +490,9 @@ collect_file_scope_declarations(n00b_xform_ctx_t  *ctx,
     size_t output_size;
     FILE  *f = open_memstream(&output, &output_size);
 
-    size_t nc = n00b_tree_num_children(root);
+    size_t nc = ncc_tree_num_children(root);
     for (size_t i = 0; i < nc; i++) {
-        collect_decls_recursive(n00b_tree_child(root, i),
+        collect_decls_recursive(ncc_tree_child(root, i),
                                 call_node, ctx->grammar, f);
     }
 
@@ -547,17 +547,17 @@ strip_line_directives(const char *src)
 
 // Walk to the leftmost leaf of a subtree to find the callee token.
 static const char *
-get_first_leaf_text(n00b_parse_tree_t *node)
+get_first_leaf_text(ncc_parse_tree_t *node)
 {
     if (!node) {
         return NULL;
     }
-    if (n00b_tree_is_leaf(node)) {
-        return n00b_xform_leaf_text(node);
+    if (ncc_tree_is_leaf(node)) {
+        return ncc_xform_leaf_text(node);
     }
-    size_t nc = n00b_tree_num_children(node);
+    size_t nc = ncc_tree_num_children(node);
     for (size_t i = 0; i < nc; i++) {
-        const char *t = get_first_leaf_text(n00b_tree_child(node, i));
+        const char *t = get_first_leaf_text(ncc_tree_child(node, i));
         if (t) {
             return t;
         }
@@ -578,25 +578,25 @@ get_first_leaf_text(n00b_parse_tree_t *node)
 //     └── ")"
 // ============================================================================
 
-static n00b_parse_tree_t *
-xform_constexpr(n00b_xform_ctx_t  *ctx,
-                n00b_parse_tree_t *node)
+static ncc_parse_tree_t *
+xform_constexpr(ncc_xform_ctx_t  *ctx,
+                ncc_parse_tree_t *node)
 {
 
     // A function call has 4 children: callee, "(", arglist, ")".
-    size_t nc = n00b_tree_num_children(node);
+    size_t nc = ncc_tree_num_children(node);
     if (nc < 3) {
         return NULL;
     }
 
     // Check child[1] is "(" — quick filter for CALL shape.
-    n00b_parse_tree_t *child1 = n00b_tree_child(node, 1);
-    if (!child1 || !n00b_xform_leaf_text_eq(child1, "(")) {
+    ncc_parse_tree_t *child1 = ncc_tree_child(node, 1);
+    if (!child1 || !ncc_xform_leaf_text_eq(child1, "(")) {
         return NULL;
     }
 
     // Extract callee name from child[0] (dig to first leaf).
-    n00b_parse_tree_t *callee_node = n00b_tree_child(node, 0);
+    ncc_parse_tree_t *callee_node = ncc_tree_child(node, 0);
     const char        *callee      = get_first_leaf_text(callee_node);
     if (!callee) {
         return NULL;
@@ -632,7 +632,7 @@ xform_constexpr(n00b_xform_ctx_t  *ctx,
     }
 
     uint32_t line, col;
-    n00b_xform_first_leaf_pos(node, &line, &col);
+    ncc_xform_first_leaf_pos(node, &line, &col);
 
     // Extract compiler path and constexpr headers from user_data.
     typedef struct {
@@ -650,7 +650,7 @@ xform_constexpr(n00b_xform_ctx_t  *ctx,
     }
 
     // Find the argument_expression_list (may be wrapped in a group node).
-    n00b_parse_tree_t *arglist = n00b_xform_find_child_nt(
+    ncc_parse_tree_t *arglist = ncc_xform_find_child_nt(
         node, "argument_expression_list");
 
     if (!arglist) {
@@ -662,7 +662,7 @@ xform_constexpr(n00b_xform_ctx_t  *ctx,
 
     // Collect arguments.
     int                 nargs = 0;
-    n00b_parse_tree_t **args  = collect_arguments(arglist, &nargs);
+    ncc_parse_tree_t **args  = collect_arguments(arglist, &nargs);
 
     // Validate argument counts.
     if (mode == CE_EVAL || mode == CE_STRLEN) {
@@ -906,7 +906,7 @@ xform_constexpr(n00b_xform_ctx_t  *ctx,
     }
 
     // Parse as primary_expression.
-    n00b_parse_tree_t *replacement = parse_template(
+    ncc_parse_tree_t *replacement = parse_template(
         ctx->grammar, "primary_expression", result_str);
 
     if (!replacement) {
@@ -925,8 +925,8 @@ xform_constexpr(n00b_xform_ctx_t  *ctx,
 // ============================================================================
 
 void
-n00b_register_constexpr_xform(n00b_xform_registry_t *reg)
+ncc_register_constexpr_xform(ncc_xform_registry_t *reg)
 {
-    n00b_xform_register(reg, "postfix_expression", xform_constexpr,
+    ncc_xform_register(reg, "postfix_expression", xform_constexpr,
                         "constexpr");
 }

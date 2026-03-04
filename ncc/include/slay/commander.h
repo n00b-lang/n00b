@@ -9,13 +9,13 @@
  * parsing with proper error reporting.
  *
  * Usage:
- *   n00b_cmdr_t *c = n00b_cmdr_new();
- *   n00b_cmdr_add_flag(c, NULL, "--verbose", N00B_CMDR_TYPE_BOOL, false, NULL);
- *   n00b_cmdr_add_positional(c, NULL, "file", N00B_CMDR_TYPE_WORD, 1, -1);
- *   n00b_cmdr_result_t *r = n00b_cmdr_parse(c, argc - 1, argv + 1);
+ *   ncc_cmdr_t *c = ncc_cmdr_new();
+ *   ncc_cmdr_add_flag(c, NULL, "--verbose", NCC_CMDR_TYPE_BOOL, false, NULL);
+ *   ncc_cmdr_add_positional(c, NULL, "file", NCC_CMDR_TYPE_WORD, 1, -1);
+ *   ncc_cmdr_result_t *r = ncc_cmdr_parse(c, argc - 1, argv + 1);
  *   if (r->ok) { ... }
- *   n00b_cmdr_result_free(r);
- *   n00b_cmdr_free(c);
+ *   ncc_cmdr_result_free(r);
+ *   ncc_cmdr_free(c);
  */
 
 #include "slay/grammar.h"
@@ -31,15 +31,15 @@
 // ============================================================================
 
 enum {
-    N00B_CMDR_TID_WORD  = 0,
-    N00B_CMDR_TID_INT   = 1,
-    N00B_CMDR_TID_FLOAT = 2,
-    N00B_CMDR_TID_BOOL  = 3,
-    N00B_CMDR_TID_EQ    = 4,
-    N00B_CMDR_TID_COMMA = 5,
-    N00B_CMDR_TID_DD    = 6,
-    N00B_CMDR_TID_FLAG  = 7,
-    N00B_CMDR_TID_COUNT = 8,
+    NCC_CMDR_TID_WORD  = 0,
+    NCC_CMDR_TID_INT   = 1,
+    NCC_CMDR_TID_FLOAT = 2,
+    NCC_CMDR_TID_BOOL  = 3,
+    NCC_CMDR_TID_EQ    = 4,
+    NCC_CMDR_TID_COMMA = 5,
+    NCC_CMDR_TID_DD    = 6,
+    NCC_CMDR_TID_FLAG  = 7,
+    NCC_CMDR_TID_COUNT = 8,
 };
 
 // ============================================================================
@@ -47,137 +47,137 @@ enum {
 // ============================================================================
 
 typedef enum {
-    N00B_CMDR_TYPE_BOOL,
-    N00B_CMDR_TYPE_WORD,
-    N00B_CMDR_TYPE_INT,
-    N00B_CMDR_TYPE_FLOAT,
-} n00b_cmdr_arg_type_t;
+    NCC_CMDR_TYPE_BOOL,
+    NCC_CMDR_TYPE_WORD,
+    NCC_CMDR_TYPE_INT,
+    NCC_CMDR_TYPE_FLOAT,
+} ncc_cmdr_arg_type_t;
 
 typedef enum {
-    N00B_CMDR_VAL_NONE,
-    N00B_CMDR_VAL_BOOL,
-    N00B_CMDR_VAL_INT,
-    N00B_CMDR_VAL_FLOAT,
-    N00B_CMDR_VAL_STR,
-} n00b_cmdr_val_tag_t;
+    NCC_CMDR_VAL_NONE,
+    NCC_CMDR_VAL_BOOL,
+    NCC_CMDR_VAL_INT,
+    NCC_CMDR_VAL_FLOAT,
+    NCC_CMDR_VAL_STR,
+} ncc_cmdr_val_tag_t;
 
 typedef struct {
-    n00b_cmdr_val_tag_t tag;
+    ncc_cmdr_val_tag_t tag;
     union {
         bool        b;
         int64_t     i;
         double      f;
         const char *s;
     };
-} n00b_cmdr_val_t;
+} ncc_cmdr_val_t;
 
 typedef struct {
     const char *value;
     int64_t     int_val;
     double      float_val;
-} n00b_cmdr_arg_t;
+} ncc_cmdr_arg_t;
 
 typedef struct {
     const char          *name;
     const char          *short_name;
-    n00b_cmdr_arg_type_t value_type;
+    ncc_cmdr_arg_type_t value_type;
     bool                 takes_value;
     const char          *doc;
     int64_t              terminal_id;
-} n00b_cmdr_flag_spec_t;
+} ncc_cmdr_flag_spec_t;
 
 typedef struct {
     const char          *name;
-    n00b_cmdr_arg_type_t type;
+    ncc_cmdr_arg_type_t type;
     int                  min;
     int                  max;
-} n00b_cmdr_positional_spec_t;
+} ncc_cmdr_positional_spec_t;
 
-typedef struct n00b_cmdr_command {
+typedef struct ncc_cmdr_command {
     const char                  *name;
     const char                  *doc;
-    n00b_cmdr_flag_spec_t       *flags;
+    ncc_cmdr_flag_spec_t       *flags;
     int32_t                      n_flags;
     int32_t                      flags_cap;
-    n00b_cmdr_positional_spec_t *positionals;
+    ncc_cmdr_positional_spec_t *positionals;
     int32_t                      n_positionals;
     int32_t                      positionals_cap;
-    struct n00b_cmdr_command    *subcommands;
+    struct ncc_cmdr_command    *subcommands;
     int32_t                      n_subcommands;
     int32_t                      subcommands_cap;
-} n00b_cmdr_command_t;
+} ncc_cmdr_command_t;
 
 typedef struct {
-    n00b_grammar_t      *grammar;
-    n00b_cmdr_command_t  root;
+    ncc_grammar_t      *grammar;
+    ncc_cmdr_command_t  root;
     int64_t              next_flag_id;
     bool                 finalized;
     const char          *name;
-    int64_t              tok_ids[N00B_CMDR_TID_COUNT];
-} n00b_cmdr_t;
+    int64_t              tok_ids[NCC_CMDR_TID_COUNT];
+} ncc_cmdr_t;
 
 typedef struct {
     const char          *command;
-    n00b_dict_t  flags;
-    n00b_cmdr_arg_t     *args;
+    ncc_dict_t  flags;
+    ncc_cmdr_arg_t     *args;
     int32_t              n_args;
     const char         **errors;
     int32_t              n_errors;
     bool                 ok;
-    n00b_parse_tree_t   *tree;
-} n00b_cmdr_result_t;
+    ncc_parse_tree_t   *tree;
+} ncc_cmdr_result_t;
 
 // ============================================================================
 // Lifecycle
 // ============================================================================
 
-n00b_cmdr_t *n00b_cmdr_new(void);
-void         n00b_cmdr_free(n00b_cmdr_t *c);
+ncc_cmdr_t *ncc_cmdr_new(void);
+void         ncc_cmdr_free(ncc_cmdr_t *c);
 
 // ============================================================================
 // Builder API
 // ============================================================================
 
-void n00b_cmdr_set_name(n00b_cmdr_t *c, const char *name);
-void n00b_cmdr_add_command(n00b_cmdr_t *c, const char *name, const char *doc);
-void n00b_cmdr_add_subcommand(n00b_cmdr_t *c, const char *parent,
+void ncc_cmdr_set_name(ncc_cmdr_t *c, const char *name);
+void ncc_cmdr_add_command(ncc_cmdr_t *c, const char *name, const char *doc);
+void ncc_cmdr_add_subcommand(ncc_cmdr_t *c, const char *parent,
                                const char *name, const char *doc);
-void n00b_cmdr_add_flag(n00b_cmdr_t *c, const char *command,
-                          const char *flag_name, n00b_cmdr_arg_type_t type,
+void ncc_cmdr_add_flag(ncc_cmdr_t *c, const char *command,
+                          const char *flag_name, ncc_cmdr_arg_type_t type,
                           bool takes_value, const char *doc);
-void n00b_cmdr_add_flag_alias(n00b_cmdr_t *c, const char *command,
+void ncc_cmdr_add_flag_alias(ncc_cmdr_t *c, const char *command,
                                 const char *flag_name, const char *alias);
-void n00b_cmdr_add_positional(n00b_cmdr_t *c, const char *command,
-                                const char *name, n00b_cmdr_arg_type_t type,
+void ncc_cmdr_add_positional(ncc_cmdr_t *c, const char *command,
+                                const char *name, ncc_cmdr_arg_type_t type,
                                 int min, int max);
-void n00b_cmdr_finalize(n00b_cmdr_t *c);
+void ncc_cmdr_finalize(ncc_cmdr_t *c);
 
 // ============================================================================
 // Parsing
 // ============================================================================
 
-n00b_cmdr_result_t *n00b_cmdr_parse(n00b_cmdr_t *c, int argc,
+ncc_cmdr_result_t *ncc_cmdr_parse(ncc_cmdr_t *c, int argc,
                                       const char **argv);
-n00b_cmdr_result_t *n00b_cmdr_parse_string(n00b_cmdr_t *c,
+ncc_cmdr_result_t *ncc_cmdr_parse_string(ncc_cmdr_t *c,
                                               const char *cmdline);
-void                n00b_cmdr_result_free(n00b_cmdr_result_t *r);
+void                ncc_cmdr_result_free(ncc_cmdr_result_t *r);
 
 // ============================================================================
 // Result queries
 // ============================================================================
 
-const char *n00b_cmdr_result_command(n00b_cmdr_result_t *r);
-bool        n00b_cmdr_flag_present(n00b_cmdr_result_t *r, const char *flag);
-n00b_cmdr_val_t *n00b_cmdr_flag_get(n00b_cmdr_result_t *r, const char *flag);
-const char *n00b_cmdr_flag_str(n00b_cmdr_result_t *r, const char *flag);
-int64_t     n00b_cmdr_flag_int(n00b_cmdr_result_t *r, const char *flag);
-bool        n00b_cmdr_flag_bool(n00b_cmdr_result_t *r, const char *flag);
-int32_t     n00b_cmdr_arg_count(n00b_cmdr_result_t *r);
-const char *n00b_cmdr_arg_str(n00b_cmdr_result_t *r, int index);
-int64_t     n00b_cmdr_arg_int(n00b_cmdr_result_t *r, int index);
+const char *ncc_cmdr_result_command(ncc_cmdr_result_t *r);
+bool        ncc_cmdr_flag_present(ncc_cmdr_result_t *r, const char *flag);
+ncc_cmdr_val_t *ncc_cmdr_flag_get(ncc_cmdr_result_t *r, const char *flag);
+const char *ncc_cmdr_flag_str(ncc_cmdr_result_t *r, const char *flag);
+int64_t     ncc_cmdr_flag_int(ncc_cmdr_result_t *r, const char *flag);
+bool        ncc_cmdr_flag_bool(ncc_cmdr_result_t *r, const char *flag);
+int32_t     ncc_cmdr_arg_count(ncc_cmdr_result_t *r);
+const char *ncc_cmdr_arg_str(ncc_cmdr_result_t *r, int index);
+int64_t     ncc_cmdr_arg_int(ncc_cmdr_result_t *r, int index);
 
 // ============================================================================
 // Error output
 // ============================================================================
 
-int32_t n00b_cmdr_print_errors(n00b_cmdr_result_t *r, FILE *out);
+int32_t ncc_cmdr_print_errors(ncc_cmdr_result_t *r, FILE *out);

@@ -14,18 +14,18 @@
 // ============================================================================
 
 static void
-free_trivia_chain(n00b_trivia_t *t)
+free_trivia_chain(ncc_trivia_t *t)
 {
     while (t) {
-        n00b_trivia_t *next = t->next;
+        ncc_trivia_t *next = t->next;
         // t->text.data is GC-managed; just free the node.
-        n00b_free(t);
+        ncc_free(t);
         t = next;
     }
 }
 
 static void
-free_token_trivia(n00b_token_info_t *tok)
+free_token_trivia(ncc_token_info_t *tok)
 {
     free_trivia_chain(tok->leading_trivia);
     free_trivia_chain(tok->trailing_trivia);
@@ -38,7 +38,7 @@ free_token_trivia(n00b_token_info_t *tok)
 // ============================================================================
 
 static bool
-ensure_filled(n00b_token_stream_t *ts, int32_t target)
+ensure_filled(ncc_token_stream_t *ts, int32_t target)
 {
     while (ts->token_count <= target) {
         if (ts->scanner->at_eof) {
@@ -60,16 +60,16 @@ ensure_filled(n00b_token_stream_t *ts, int32_t target)
 // Lifecycle
 // ============================================================================
 
-n00b_token_stream_t *
-n00b_token_stream_new(n00b_scanner_t *scanner)
+ncc_token_stream_t *
+ncc_token_stream_new(ncc_scanner_t *scanner)
 {
     assert(scanner);
 
-    n00b_token_stream_t *ts = n00b_alloc(n00b_token_stream_t);
+    ncc_token_stream_t *ts = ncc_alloc(ncc_token_stream_t);
 
     ts->scanner     = scanner;
     ts->token_cap   = 128;
-    ts->tokens      = n00b_alloc_array(n00b_token_info_t *, 128);
+    ts->tokens      = ncc_alloc_array(ncc_token_info_t *, 128);
     ts->token_count = 0;
     ts->pos         = 0;
     ts->next_index  = 0;
@@ -82,7 +82,7 @@ n00b_token_stream_new(n00b_scanner_t *scanner)
 }
 
 void
-n00b_token_stream_free(n00b_token_stream_t *ts)
+ncc_token_stream_free(ncc_token_stream_t *ts)
 {
     if (!ts) {
         return;
@@ -92,20 +92,20 @@ n00b_token_stream_free(n00b_token_stream_t *ts)
     for (int32_t i = 0; i < ts->token_count; i++) {
         if (ts->tokens[i]) {
             free_token_trivia(ts->tokens[i]);
-            n00b_free(ts->tokens[i]);
+            ncc_free(ts->tokens[i]);
         }
     }
 
-    n00b_free(ts->tokens);
-    n00b_free(ts);
+    ncc_free(ts->tokens);
+    ncc_free(ts);
 }
 
 // ============================================================================
 // Forward iteration
 // ============================================================================
 
-n00b_token_info_t *
-n00b_stream_next(n00b_token_stream_t *ts)
+ncc_token_info_t *
+ncc_stream_next(ncc_token_stream_t *ts)
 {
     if (!ensure_filled(ts, ts->pos)) {
         ts->exhausted = true;
@@ -116,7 +116,7 @@ n00b_stream_next(n00b_token_stream_t *ts)
 }
 
 bool
-n00b_stream_is_done(n00b_token_stream_t *ts)
+ncc_stream_is_done(ncc_token_stream_t *ts)
 {
     if (ts->exhausted) {
         return true;
@@ -134,8 +134,8 @@ n00b_stream_is_done(n00b_token_stream_t *ts)
 // Peek (lookahead)
 // ============================================================================
 
-n00b_token_info_t *
-n00b_stream_peek(n00b_token_stream_t *ts, int32_t n)
+ncc_token_info_t *
+ncc_stream_peek(ncc_token_stream_t *ts, int32_t n)
 {
     int32_t target = ts->pos + n;
 
@@ -155,7 +155,7 @@ n00b_stream_peek(n00b_token_stream_t *ts, int32_t n)
 // ============================================================================
 
 bool
-n00b_stream_rewind(n00b_token_stream_t *ts, int32_t n)
+ncc_stream_rewind(ncc_token_stream_t *ts, int32_t n)
 {
     int32_t new_pos = ts->pos - n;
 
@@ -169,8 +169,8 @@ n00b_stream_rewind(n00b_token_stream_t *ts, int32_t n)
     return true;
 }
 
-n00b_token_info_t *
-n00b_stream_lookback(n00b_token_stream_t *ts, int32_t n)
+ncc_token_info_t *
+ncc_stream_lookback(ncc_token_stream_t *ts, int32_t n)
 {
     int32_t target = ts->pos - n;
 
@@ -185,8 +185,8 @@ n00b_stream_lookback(n00b_token_stream_t *ts, int32_t n)
 // Random access
 // ============================================================================
 
-n00b_token_info_t *
-n00b_stream_get(n00b_token_stream_t *ts, int32_t pos)
+ncc_token_info_t *
+ncc_stream_get(ncc_token_stream_t *ts, int32_t pos)
 {
     if (pos < 0) {
         return nullptr;
@@ -200,7 +200,7 @@ n00b_stream_get(n00b_token_stream_t *ts, int32_t pos)
 }
 
 int32_t
-n00b_stream_token_count(n00b_token_stream_t *ts)
+ncc_stream_token_count(ncc_token_stream_t *ts)
 {
     return ts->token_count;
 }
@@ -210,7 +210,7 @@ n00b_stream_token_count(n00b_token_stream_t *ts)
 // ============================================================================
 
 void
-n00b_stream_reset(n00b_token_stream_t *ts)
+ncc_stream_reset(ncc_token_stream_t *ts)
 {
     if (!ts) {
         return;
@@ -220,7 +220,7 @@ n00b_stream_reset(n00b_token_stream_t *ts)
     for (int32_t i = 0; i < ts->token_count; i++) {
         if (ts->tokens[i]) {
             free_token_trivia(ts->tokens[i]);
-            n00b_free(ts->tokens[i]);
+            ncc_free(ts->tokens[i]);
             ts->tokens[i] = nullptr;
         }
     }
@@ -231,21 +231,21 @@ n00b_stream_reset(n00b_token_stream_t *ts)
     ts->exhausted   = false;
 
     // Reset the scanner to re-tokenize from the beginning.
-    n00b_scanner_reset(ts->scanner);
+    ncc_scanner_reset(ts->scanner);
 }
 
 // ============================================================================
 // Save / restore
 // ============================================================================
 
-n00b_stream_mark_t
-n00b_stream_save(n00b_token_stream_t *ts)
+ncc_stream_mark_t
+ncc_stream_save(ncc_token_stream_t *ts)
 {
-    return (n00b_stream_mark_t){ .pos = ts->pos };
+    return (ncc_stream_mark_t){ .pos = ts->pos };
 }
 
 bool
-n00b_stream_restore(n00b_token_stream_t *ts, n00b_stream_mark_t mark)
+ncc_stream_restore(ncc_token_stream_t *ts, ncc_stream_mark_t mark)
 {
     if (mark.pos < 0 || mark.pos > ts->token_count) {
         return false;
@@ -261,15 +261,15 @@ n00b_stream_restore(n00b_token_stream_t *ts, n00b_stream_mark_t mark)
 // Collect all
 // ============================================================================
 
-n00b_list_t(n00b_token_info_t)
-n00b_stream_collect(n00b_token_stream_t *ts)
+ncc_list_t(ncc_token_info_t)
+ncc_stream_collect(ncc_token_stream_t *ts)
 {
-    n00b_list_t(n00b_token_info_t) tl = n00b_list_new_cap(n00b_token_info_t, 64);
+    ncc_list_t(ncc_token_info_t) tl = ncc_list_new_cap(ncc_token_info_t, 64);
 
-    n00b_token_info_t *tok;
+    ncc_token_info_t *tok;
 
-    while ((tok = n00b_stream_next(ts)) != nullptr) {
-        n00b_list_push(tl, *tok);
+    while ((tok = ncc_stream_next(ts)) != nullptr) {
+        ncc_list_push(tl, *tok);
     }
 
     return tl;
@@ -280,13 +280,13 @@ n00b_stream_collect(n00b_token_stream_t *ts)
 // ============================================================================
 
 typedef struct {
-    n00b_token_info_t **tokens;
+    ncc_token_info_t **tokens;
     int32_t             count;
     int32_t             pos;
 } array_scan_state_t;
 
 static bool
-array_scan_cb(n00b_scanner_t *s)
+array_scan_cb(ncc_scanner_t *s)
 {
     array_scan_state_t *st = (array_scan_state_t *)s->user_state;
 
@@ -294,28 +294,28 @@ array_scan_cb(n00b_scanner_t *s)
         return false;
     }
 
-    n00b_token_info_t *src = st->tokens[st->pos];
+    ncc_token_info_t *src = st->tokens[st->pos];
 
     // Emit the token into the stream's growable list.
-    n00b_token_stream_t *ts = s->stream;
+    ncc_token_stream_t *ts = s->stream;
 
     // Grow token array if needed.
     if (ts->token_count >= ts->token_cap) {
         int32_t new_cap = ts->token_cap ? ts->token_cap * 2 : 128;
-        n00b_token_info_t **new_tokens = n00b_alloc_array(n00b_token_info_t *, new_cap);
+        ncc_token_info_t **new_tokens = ncc_alloc_array(ncc_token_info_t *, new_cap);
 
         if (ts->tokens && ts->token_count > 0) {
             memcpy(new_tokens, ts->tokens,
-                   (size_t)ts->token_count * sizeof(n00b_token_info_t *));
+                   (size_t)ts->token_count * sizeof(ncc_token_info_t *));
         }
 
-        n00b_free(ts->tokens);
+        ncc_free(ts->tokens);
         ts->tokens    = new_tokens;
         ts->token_cap = new_cap;
     }
 
     // Copy the token so the stream owns the memory.
-    n00b_token_info_t *copy = n00b_alloc(n00b_token_info_t);
+    ncc_token_info_t *copy = ncc_alloc(ncc_token_info_t);
     *copy = *src;
     copy->index = ts->next_index++;
 
@@ -326,30 +326,30 @@ array_scan_cb(n00b_scanner_t *s)
 }
 
 static void
-array_scan_reset_cb(n00b_scanner_t *s)
+array_scan_reset_cb(ncc_scanner_t *s)
 {
     array_scan_state_t *st = (array_scan_state_t *)s->user_state;
     st->pos = 0;
 }
 
-n00b_token_stream_t *
-n00b_token_stream_from_array(n00b_token_info_t **tokens, int32_t count)
+ncc_token_stream_t *
+ncc_token_stream_from_array(ncc_token_info_t **tokens, int32_t count)
 {
-    array_scan_state_t *st = n00b_alloc(array_scan_state_t);
+    array_scan_state_t *st = ncc_alloc(array_scan_state_t);
 
     st->tokens = tokens;
     st->count  = count;
     st->pos    = 0;
 
     // Create a dummy buffer — the scanner callback doesn't use input bytes.
-    n00b_buffer_t *dummy_buf = n00b_buffer_empty();
+    ncc_buffer_t *dummy_buf = ncc_buffer_empty();
 
-    n00b_scanner_t *sc = n00b_scanner_new(dummy_buf, array_scan_cb, NULL,
-                                            n00b_option_none(n00b_string_t),
+    ncc_scanner_t *sc = ncc_scanner_new(dummy_buf, array_scan_cb, NULL,
+                                            ncc_option_none(ncc_string_t),
                                             st,
                                             array_scan_reset_cb);
 
-    return n00b_token_stream_new(sc);
+    return ncc_token_stream_new(sc);
 }
 
 // ============================================================================
@@ -366,19 +366,19 @@ typedef struct {
 } cp_scan_state_t;
 
 static void
-cp_scan_emit(n00b_token_stream_t *ts, n00b_token_info_t *tok)
+cp_scan_emit(ncc_token_stream_t *ts, ncc_token_info_t *tok)
 {
     if (ts->token_count >= ts->token_cap) {
         int32_t new_cap = ts->token_cap ? ts->token_cap * 2 : 128;
-        n00b_token_info_t **new_tokens
-            = n00b_alloc_array(n00b_token_info_t *, new_cap);
+        ncc_token_info_t **new_tokens
+            = ncc_alloc_array(ncc_token_info_t *, new_cap);
 
         if (ts->tokens && ts->token_count > 0) {
             memcpy(new_tokens, ts->tokens,
-                   (size_t)ts->token_count * sizeof(n00b_token_info_t *));
+                   (size_t)ts->token_count * sizeof(ncc_token_info_t *));
         }
 
-        n00b_free(ts->tokens);
+        ncc_free(ts->tokens);
         ts->tokens    = new_tokens;
         ts->token_cap = new_cap;
     }
@@ -387,17 +387,17 @@ cp_scan_emit(n00b_token_stream_t *ts, n00b_token_info_t *tok)
 }
 
 static bool
-cp_scan_cb(n00b_scanner_t *s)
+cp_scan_cb(ncc_scanner_t *s)
 {
     cp_scan_state_t     *st = (cp_scan_state_t *)s->user_state;
-    n00b_token_stream_t *ts = s->stream;
+    ncc_token_stream_t *ts = s->stream;
 
     if (st->byte_pos >= st->byte_len) {
         return false;
     }
 
     uint32_t start_pos = st->byte_pos;
-    int32_t  cp = n00b_unicode_utf8_decode(st->data, st->byte_len,
+    int32_t  cp = ncc_unicode_utf8_decode(st->data, st->byte_len,
                                             &st->byte_pos);
 
     if (cp < 0) {
@@ -407,7 +407,7 @@ cp_scan_cb(n00b_scanner_t *s)
         return true;
     }
 
-    n00b_token_info_t *tok = n00b_alloc(n00b_token_info_t);
+    ncc_token_info_t *tok = ncc_alloc(ncc_token_info_t);
     tok->tid    = (int32_t)cp;
     tok->index  = ts->next_index++;
     tok->line   = st->line;
@@ -415,9 +415,9 @@ cp_scan_cb(n00b_scanner_t *s)
 
     // Set value to the one-codepoint string.
     uint32_t cp_byte_len = st->byte_pos - start_pos;
-    n00b_string_t val = n00b_string_from_raw(st->data + start_pos,
+    ncc_string_t val = ncc_string_from_raw(st->data + start_pos,
                                                (int64_t)cp_byte_len);
-    tok->value = n00b_option_set(n00b_string_t, val);
+    tok->value = ncc_option_set(ncc_string_t, val);
 
     cp_scan_emit(ts, tok);
 
@@ -434,7 +434,7 @@ cp_scan_cb(n00b_scanner_t *s)
 }
 
 static void
-cp_scan_reset_cb(n00b_scanner_t *s)
+cp_scan_reset_cb(ncc_scanner_t *s)
 {
     cp_scan_state_t *st = (cp_scan_state_t *)s->user_state;
     st->byte_pos  = 0;
@@ -443,10 +443,10 @@ cp_scan_reset_cb(n00b_scanner_t *s)
     st->column    = 1;
 }
 
-n00b_token_stream_t *
-n00b_token_stream_from_codepoints(n00b_string_t input)
+ncc_token_stream_t *
+ncc_token_stream_from_codepoints(ncc_string_t input)
 {
-    cp_scan_state_t *st = n00b_alloc(cp_scan_state_t);
+    cp_scan_state_t *st = ncc_alloc(cp_scan_state_t);
 
     st->data      = input.data;
     st->byte_len  = (uint32_t)input.u8_bytes;
@@ -455,12 +455,12 @@ n00b_token_stream_from_codepoints(n00b_string_t input)
     st->line      = 1;
     st->column    = 1;
 
-    n00b_buffer_t *dummy_buf = n00b_buffer_empty();
+    ncc_buffer_t *dummy_buf = ncc_buffer_empty();
 
-    n00b_scanner_t *sc = n00b_scanner_new(dummy_buf, cp_scan_cb, NULL,
-                                            n00b_option_none(n00b_string_t),
+    ncc_scanner_t *sc = ncc_scanner_new(dummy_buf, cp_scan_cb, NULL,
+                                            ncc_option_none(ncc_string_t),
                                             st,
                                             cp_scan_reset_cb);
 
-    return n00b_token_stream_new(sc);
+    return ncc_token_stream_new(sc);
 }

@@ -11,5 +11,5 @@
  * @param out   Output FILE stream.
  * @param raw   If true, show group wrapper nodes instead of flattening them.
  */
-void n00b_parse_tree_print(n00b_grammar_t *g, n00b_parse_tree_t *tree,
+void ncc_parse_tree_print(ncc_grammar_t *g, ncc_parse_tree_t *tree,
                             FILE *out, bool raw);

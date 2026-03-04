@@ -35,17 +35,27 @@ typedef struct {
     const char                *compiler;
     const char                *constexpr_headers;
     _rstr_meta_table_t         func_meta;
-    n00b_dict_t                option_meta;
-    n00b_dict_t                option_decls;
-    n00b_dict_t                generic_struct_decls;
-    n00b_template_registry_t  *template_reg;
+    ncc_dict_t                option_meta;
+    ncc_dict_t                option_decls;
+    ncc_dict_t                generic_struct_decls;
+    ncc_template_registry_t  *template_reg;
+    const char                *vargs_type;
+    const char                *once_prefix;
+    const char                *rstr_string_type;
 } _rstr_xform_data_t;
 
-static n00b_template_registry_t *
-get_template_reg(n00b_xform_ctx_t *ctx)
+static ncc_template_registry_t *
+get_template_reg(ncc_xform_ctx_t *ctx)
 {
     _rstr_xform_data_t *d = ctx->user_data;
     return d->template_reg;
+}
+
+static const char *
+get_rstr_string_type(ncc_xform_ctx_t *ctx)
+{
+    _rstr_xform_data_t *d = ctx->user_data;
+    return d->rstr_string_type;
 }
 
 // =========================================================================
@@ -733,7 +743,7 @@ emit_style_var(FILE *f, out_style_t *os, int idx, int uid)
     }
     else if (os->kind == PSTYLE_CASE) {
         fprintf(f,
-                "static n00b_text_style_t _ncc_rs_%d_ts_%d="
+                "static ncc_text_style_t _ncc_rs_%d_ts_%d="
                 "{.text_case=%d};",
                 uid,
                 idx,
@@ -741,7 +751,7 @@ emit_style_var(FILE *f, out_style_t *os, int idx, int uid)
     }
     else {
         fprintf(f,
-                "static n00b_text_style_t _ncc_rs_%d_ts_%d="
+                "static ncc_text_style_t _ncc_rs_%d_ts_%d="
                 "{.%s=2};",
                 uid,
                 idx,
@@ -766,12 +776,12 @@ emit_style_declarations(out_style_list_t *out, int uid)
     fprintf(f,
             "static struct{"
             "int64_t num_styles;"
-            "n00b_text_style_t*base_style;"
-            "n00b_style_record_t styles[%d];"
+            "ncc_text_style_t*base_style;"
+            "ncc_style_record_t styles[%d];"
             "}_ncc_rs_%d_si={",
             out->count,
             uid);
-    fprintf(f, ".num_styles=%d,.base_style=((n00b_text_style_t*)0),", out->count);
+    fprintf(f, ".num_styles=%d,.base_style=((ncc_text_style_t*)0),", out->count);
     fprintf(f, ".styles={");
 
     for (int i = 0; i < out->count; i++) {
@@ -784,7 +794,7 @@ emit_style_declarations(out_style_list_t *out, int uid)
         fprintf(f, "{");
 
         if (os->kind == PSTYLE_NAMED || os->kind == PSTYLE_ROLE) {
-            fprintf(f, ".info=((n00b_text_style_t*)0),.tag=\"");
+            fprintf(f, ".info=((ncc_text_style_t*)0),.tag=\"");
             fputs(os->field_name, f);
             fprintf(f, "\"");
         }
@@ -815,7 +825,7 @@ emit_style_declarations(out_style_list_t *out, int uid)
 // =========================================================================
 
 static char *
-extract_rstr_content(n00b_parse_tree_t *arglist, int *out_len)
+extract_rstr_content(ncc_parse_tree_t *arglist, int *out_len)
 {
     char  *result = NULL;
     size_t size;
@@ -823,7 +833,7 @@ extract_rstr_content(n00b_parse_tree_t *arglist, int *out_len)
 
     // DFS to find all STRING token leaves.
     typedef struct {
-        n00b_parse_tree_t **items;
+        ncc_parse_tree_t **items;
         int                 count;
         int                 cap;
     } node_stack_t;
@@ -831,18 +841,18 @@ extract_rstr_content(n00b_parse_tree_t *arglist, int *out_len)
     node_stack_t stack = {0};
 
     stack.cap                  = 32;
-    stack.items                = malloc((size_t)stack.cap * sizeof(n00b_parse_tree_t *));
+    stack.items                = malloc((size_t)stack.cap * sizeof(ncc_parse_tree_t *));
     stack.items[stack.count++] = arglist;
 
     while (stack.count > 0) {
-        n00b_parse_tree_t *node = stack.items[--stack.count];
+        ncc_parse_tree_t *node = stack.items[--stack.count];
 
         if (!node) {
             continue;
         }
 
-        if (n00b_tree_is_leaf(node)) {
-            const char *text = n00b_xform_leaf_text(node);
+        if (ncc_tree_is_leaf(node)) {
+            const char *text = ncc_xform_leaf_text(node);
 
             if (!text) {
                 continue;
@@ -939,10 +949,10 @@ extract_rstr_content(n00b_parse_tree_t *arglist, int *out_len)
         }
         else {
             // Push children in reverse for in-order traversal.
-            size_t nc = n00b_tree_num_children(node);
+            size_t nc = ncc_tree_num_children(node);
 
             for (int i = (int)nc - 1; i >= 0; i--) {
-                n00b_parse_tree_t *kid = n00b_tree_child(node, (size_t)i);
+                ncc_parse_tree_t *kid = ncc_tree_child(node, (size_t)i);
 
                 if (!kid) {
                     continue;
@@ -951,7 +961,7 @@ extract_rstr_content(n00b_parse_tree_t *arglist, int *out_len)
                 if (stack.count >= stack.cap) {
                     stack.cap *= 2;
                     stack.items
-                        = realloc(stack.items, (size_t)stack.cap * sizeof(n00b_parse_tree_t *));
+                        = realloc(stack.items, (size_t)stack.cap * sizeof(ncc_parse_tree_t *));
                 }
 
                 stack.items[stack.count++] = kid;
@@ -970,49 +980,49 @@ extract_rstr_content(n00b_parse_tree_t *arglist, int *out_len)
 // =========================================================================
 
 static const char *
-rstr_get_callee_name(n00b_parse_tree_t *node)
+rstr_get_callee_name(ncc_parse_tree_t *node)
 {
     // child[0] is the callee.
-    if (n00b_tree_num_children(node) == 0) {
+    if (ncc_tree_num_children(node) == 0) {
         return NULL;
     }
 
-    n00b_parse_tree_t *callee = n00b_tree_child(node, 0);
+    ncc_parse_tree_t *callee = ncc_tree_child(node, 0);
 
     if (!callee) {
         return NULL;
     }
 
     // Walk down to find the first leaf token.
-    while (callee && !n00b_tree_is_leaf(callee)) {
-        if (n00b_tree_num_children(callee) == 0) {
+    while (callee && !ncc_tree_is_leaf(callee)) {
+        if (ncc_tree_num_children(callee) == 0) {
             return NULL;
         }
-        callee = n00b_tree_child(callee, 0);
+        callee = ncc_tree_child(callee, 0);
     }
 
-    return n00b_xform_leaf_text(callee);
+    return ncc_xform_leaf_text(callee);
 }
 
 // =========================================================================
 // Main transform
 // =========================================================================
 
-static n00b_parse_tree_t *
-xform_rstr(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *node)
+static ncc_parse_tree_t *
+xform_rstr(ncc_xform_ctx_t *ctx, ncc_parse_tree_t *node)
 {
     // Match: postfix_expression that looks like a function call.
     // A call has children: callee ( arglist ) or callee ( )
-    size_t nc = n00b_tree_num_children(node);
+    size_t nc = ncc_tree_num_children(node);
 
     if (nc < 3) {
         return NULL;
     }
 
     // Check that child[1] is "(".
-    n00b_parse_tree_t *paren = n00b_tree_child(node, 1);
+    ncc_parse_tree_t *paren = ncc_tree_child(node, 1);
 
-    if (!paren || !n00b_xform_leaf_text_eq(paren, "(")) {
+    if (!paren || !ncc_xform_leaf_text_eq(paren, "(")) {
         return NULL;
     }
 
@@ -1025,7 +1035,7 @@ xform_rstr(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *node)
 
     // Get the argument subtree.
     // CALL: kid[0]=callee, kid[1]="(", kid[2]=arglist or ")", kid[3]=")"
-    n00b_parse_tree_t *kid2 = n00b_tree_child(node, 2);
+    ncc_parse_tree_t *kid2 = ncc_tree_child(node, 2);
 
     if (!kid2) {
         fprintf(stderr, "ncc: error: __ncc_rstr() requires a string argument\n");
@@ -1033,12 +1043,12 @@ xform_rstr(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *node)
     }
 
     // kid2 might be the ")" if no arguments.
-    if (n00b_xform_leaf_text_eq(kid2, ")")) {
+    if (ncc_xform_leaf_text_eq(kid2, ")")) {
         fprintf(stderr, "ncc: error: __ncc_rstr() requires a string argument\n");
         exit(1);
     }
 
-    n00b_parse_tree_t *arglist = kid2;
+    ncc_parse_tree_t *arglist = kid2;
 
     // Extract string content from the argument.
     int   content_len;
@@ -1062,7 +1072,7 @@ xform_rstr(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *node)
 
     // Generate the replacement tree via template engine.
     int uid = ctx->unique_id++;
-    n00b_template_registry_t *tmpl_reg = get_template_reg(ctx);
+    ncc_template_registry_t *tmpl_reg = get_template_reg(ctx);
 
     int64_t cp_count = count_utf8_codepoints(tb.data, tb.len);
 
@@ -1088,14 +1098,14 @@ xform_rstr(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *node)
     // Extra args for n00b build (typehash + wrapper var name).
     // These are ignored by the default template (fewer slots), but
     // consumed by the n00b template override which adds more slots.
-    uint64_t str_typehash = n00b_type_hash_u64("n00b_string_t*");
+    uint64_t str_typehash = ncc_type_hash_u64(get_rstr_string_type(ctx));
     char typehash_str[32];
     snprintf(typehash_str, sizeof(typehash_str), "%" PRIu64 "ULL", str_typehash);
 
     char wrapper_var[64];
     snprintf(wrapper_var, sizeof(wrapper_var), "_ncc_rsh_%d", uid);
 
-    n00b_result_t(n00b_parse_tree_ptr_t) r;
+    ncc_result_t(ncc_parse_tree_ptr_t) r;
 
     if (out.count > 0) {
         // Styled template.
@@ -1110,8 +1120,8 @@ xform_rstr(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *node)
             style_decls, var_name, bytes_str, data_str,
             cp_str, styling_str, typehash_str, wrapper_var,
         };
-        int nslots = n00b_template_slot_count(tmpl_reg, "rstr_styled");
-        r = n00b_template_instantiate(tmpl_reg, "rstr_styled", all_args, nslots);
+        int nslots = ncc_template_slot_count(tmpl_reg, "rstr_styled");
+        r = ncc_template_instantiate(tmpl_reg, "rstr_styled", all_args, nslots);
         free(style_decls);
     }
     else {
@@ -1122,17 +1132,17 @@ xform_rstr(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *node)
             var_name, bytes_str, data_str, cp_str,
             typehash_str, wrapper_var,
         };
-        int nslots = n00b_template_slot_count(tmpl_reg, "rstr_plain");
-        r = n00b_template_instantiate(tmpl_reg, "rstr_plain", all_args, nslots);
+        int nslots = ncc_template_slot_count(tmpl_reg, "rstr_plain");
+        r = ncc_template_instantiate(tmpl_reg, "rstr_plain", all_args, nslots);
     }
 
-    if (n00b_result_is_err(r)) {
+    if (ncc_result_is_err(r)) {
         fprintf(stderr, "ncc: error: failed to instantiate rstr template "
                         "(err=%d)\n", r.err);
         exit(1);
     }
 
-    n00b_parse_tree_t *replacement = n00b_result_get(r);
+    ncc_parse_tree_t *replacement = ncc_result_get(r);
 
     // Cleanup.
     free(content);
@@ -1149,7 +1159,7 @@ xform_rstr(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *node)
 // =========================================================================
 
 void
-n00b_register_rstr_xform(n00b_xform_registry_t *reg)
+ncc_register_rstr_xform(ncc_xform_registry_t *reg)
 {
-    n00b_xform_register(reg, "postfix_expression", xform_rstr, "rstr");
+    ncc_xform_register(reg, "postfix_expression", xform_rstr, "rstr");
 }

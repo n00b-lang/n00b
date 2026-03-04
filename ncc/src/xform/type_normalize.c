@@ -48,16 +48,16 @@ leaf_buf_free(leaf_buf_t *lb)
 }
 
 static void
-collect_leaves(n00b_parse_tree_t *node, leaf_buf_t *lb)
+collect_leaves(ncc_parse_tree_t *node, leaf_buf_t *lb)
 {
     if (!node) {
         return;
     }
 
-    if (n00b_tree_is_leaf(node)) {
-        n00b_token_info_t *tok = n00b_tree_leaf_value(node);
-        if (tok && n00b_option_is_set(tok->value)) {
-            n00b_string_t s = n00b_option_get(tok->value);
+    if (ncc_tree_is_leaf(node)) {
+        ncc_token_info_t *tok = ncc_tree_leaf_value(node);
+        if (tok && ncc_option_is_set(tok->value)) {
+            ncc_string_t s = ncc_option_get(tok->value);
             if (s.data && s.u8_bytes > 0) {
                 leaf_buf_push(lb, s.data);
             }
@@ -65,9 +65,9 @@ collect_leaves(n00b_parse_tree_t *node, leaf_buf_t *lb)
         return;
     }
 
-    size_t nc = n00b_tree_num_children(node);
+    size_t nc = ncc_tree_num_children(node);
     for (size_t i = 0; i < nc; i++) {
-        collect_leaves(n00b_tree_child(node, i), lb);
+        collect_leaves(ncc_tree_child(node, i), lb);
     }
 }
 
@@ -171,7 +171,7 @@ strbuf_finish(strbuf_t *sb)
 // ============================================================================
 
 char *
-n00b_normalize_type_tree(n00b_parse_tree_t *subtree)
+ncc_normalize_type_tree(ncc_parse_tree_t *subtree)
 {
     if (!subtree) {
         return strdup("");
@@ -341,9 +341,9 @@ map_one(int bits, char *p)
 }
 
 static void
-digest_to_bytes(n00b_sha256_digest_t digest, uint8_t *out)
+digest_to_bytes(ncc_sha256_digest_t digest, uint8_t *out)
 {
-    for (int i = 0; i < N00B_SHA256_DIGEST_WORDS; i++) {
+    for (int i = 0; i < NCC_SHA256_DIGEST_WORDS; i++) {
         uint32_t w     = digest[i];
         out[i * 4 + 0] = (uint8_t)(w >> 24);
         out[i * 4 + 1] = (uint8_t)(w >> 16);
@@ -353,10 +353,10 @@ digest_to_bytes(n00b_sha256_digest_t digest, uint8_t *out)
 }
 
 char *
-n00b_type_mangle(const char *normalized)
+ncc_type_mangle(const char *normalized)
 {
-    n00b_sha256_digest_t digest;
-    n00b_sha256_hash(normalized, strlen(normalized), digest);
+    ncc_sha256_digest_t digest;
+    ncc_sha256_hash(normalized, strlen(normalized), digest);
 
     uint8_t dbytes[32];
     digest_to_bytes(digest, dbytes);
@@ -388,10 +388,10 @@ n00b_type_mangle(const char *normalized)
 // ============================================================================
 
 uint64_t
-n00b_type_hash_u64(const char *normalized)
+ncc_type_hash_u64(const char *normalized)
 {
-    n00b_sha256_digest_t digest;
-    n00b_sha256_hash(normalized, strlen(normalized), digest);
+    ncc_sha256_digest_t digest;
+    ncc_sha256_hash(normalized, strlen(normalized), digest);
 
     uint8_t dbytes[32];
     digest_to_bytes(digest, dbytes);

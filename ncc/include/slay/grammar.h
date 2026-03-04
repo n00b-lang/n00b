@@ -11,90 +11,90 @@
 // Grammar lifecycle
 // ============================================================================
 
-n00b_grammar_t *n00b_grammar_new(void);
-void            n00b_grammar_free(n00b_grammar_t *g);
-void            n00b_grammar_set_start_id(n00b_grammar_t *g, n00b_nt_id_t nt_id);
+ncc_grammar_t *ncc_grammar_new(void);
+void            ncc_grammar_free(ncc_grammar_t *g);
+void            ncc_grammar_set_start_id(ncc_grammar_t *g, ncc_nt_id_t nt_id);
 
-#define n00b_grammar_set_start(g, nt) \
-    n00b_grammar_set_start_id((g), n00b_nonterm_id(nt))
-void            n00b_grammar_set_error_recovery(n00b_grammar_t *g, bool enable);
-void            n00b_grammar_set_max_penalty(n00b_grammar_t *g, uint32_t max);
-void            n00b_grammar_finalize(n00b_grammar_t *g);
+#define ncc_grammar_set_start(g, nt) \
+    ncc_grammar_set_start_id((g), ncc_nonterm_id(nt))
+void            ncc_grammar_set_error_recovery(ncc_grammar_t *g, bool enable);
+void            ncc_grammar_set_max_penalty(ncc_grammar_t *g, uint32_t max);
+void            ncc_grammar_finalize(ncc_grammar_t *g);
 
 // ============================================================================
 // Registration
 // ============================================================================
 
-n00b_nonterm_t *n00b_nonterm(n00b_grammar_t *g, n00b_string_t name);
-int64_t         n00b_nonterm_id(n00b_nonterm_t *nt);
-int64_t         n00b_register_terminal(n00b_grammar_t *g, n00b_string_t name);
+ncc_nonterm_t *ncc_nonterm(ncc_grammar_t *g, ncc_string_t name);
+int64_t         ncc_nonterm_id(ncc_nonterm_t *nt);
+int64_t         ncc_register_terminal(ncc_grammar_t *g, ncc_string_t name);
 
 // ============================================================================
 // Walk actions / user data
 // ============================================================================
 
-void  n00b_nonterm_set_action(n00b_nonterm_t *nt, n00b_walk_action_t action);
-void  n00b_nonterm_set_user_data(n00b_nonterm_t *nt, void *data);
-void *n00b_nonterm_get_user_data(n00b_nonterm_t *nt);
-void  n00b_grammar_set_default_action(n00b_grammar_t *g, n00b_walk_action_t a);
-void  n00b_grammar_set_terminal_category(n00b_grammar_t *g, int64_t tid,
-                                          n00b_string_t category);
+void  ncc_nonterm_set_action(ncc_nonterm_t *nt, ncc_walk_action_t action);
+void  ncc_nonterm_set_user_data(ncc_nonterm_t *nt, void *data);
+void *ncc_nonterm_get_user_data(ncc_nonterm_t *nt);
+void  ncc_grammar_set_default_action(ncc_grammar_t *g, ncc_walk_action_t a);
+void  ncc_grammar_set_terminal_category(ncc_grammar_t *g, int64_t tid,
+                                          ncc_string_t category);
 
 // ============================================================================
 // Match macros
 // ============================================================================
 
-#define N00B_NT(nt)       ((n00b_match_t){.kind = N00B_MATCH_NT, .nt_id = n00b_nonterm_id(nt)})
-#define N00B_CHAR(cp)     ((n00b_match_t){.kind = N00B_MATCH_TERMINAL, .terminal_id = (int64_t)(cp)})
-#define N00B_TERMINAL(id) ((n00b_match_t){.kind = N00B_MATCH_TERMINAL, .terminal_id = (id)})
-#define N00B_ANY()        ((n00b_match_t){.kind = N00B_MATCH_ANY})
-#define N00B_EPSILON()    ((n00b_match_t){.kind = N00B_MATCH_EMPTY})
-#define N00B_CLASS(cc)    ((n00b_match_t){.kind = N00B_MATCH_CLASS, .char_class = (cc)})
+#define NCC_NT(nt)       ((ncc_match_t){.kind = NCC_MATCH_NT, .nt_id = ncc_nonterm_id(nt)})
+#define NCC_CHAR(cp)     ((ncc_match_t){.kind = NCC_MATCH_TERMINAL, .terminal_id = (int64_t)(cp)})
+#define NCC_TERMINAL(id) ((ncc_match_t){.kind = NCC_MATCH_TERMINAL, .terminal_id = (id)})
+#define NCC_ANY()        ((ncc_match_t){.kind = NCC_MATCH_ANY})
+#define NCC_EPSILON()    ((ncc_match_t){.kind = NCC_MATCH_EMPTY})
+#define NCC_CLASS(cc)    ((ncc_match_t){.kind = NCC_MATCH_CLASS, .char_class = (cc)})
 
 // ============================================================================
 // Group constructors (variadic via compound literal)
 // ============================================================================
 
-n00b_match_t n00b_group_match_v(n00b_grammar_t *g, int min, int max,
-                                 int n, n00b_match_t *items);
+ncc_match_t ncc_group_match_v(ncc_grammar_t *g, int min, int max,
+                                 int n, ncc_match_t *items);
 
-#define n00b_optional(g, ...)                                                  \
-    n00b_group_match_v((g), 0, 1,                                              \
-        sizeof((n00b_match_t[]){__VA_ARGS__}) / sizeof(n00b_match_t),           \
-        (n00b_match_t[]){__VA_ARGS__})
+#define ncc_optional(g, ...)                                                  \
+    ncc_group_match_v((g), 0, 1,                                              \
+        sizeof((ncc_match_t[]){__VA_ARGS__}) / sizeof(ncc_match_t),           \
+        (ncc_match_t[]){__VA_ARGS__})
 
-#define n00b_star(g, ...)                                                      \
-    n00b_group_match_v((g), 0, 0,                                              \
-        sizeof((n00b_match_t[]){__VA_ARGS__}) / sizeof(n00b_match_t),           \
-        (n00b_match_t[]){__VA_ARGS__})
+#define ncc_star(g, ...)                                                      \
+    ncc_group_match_v((g), 0, 0,                                              \
+        sizeof((ncc_match_t[]){__VA_ARGS__}) / sizeof(ncc_match_t),           \
+        (ncc_match_t[]){__VA_ARGS__})
 
-#define n00b_plus_group(g, ...)                                                \
-    n00b_group_match_v((g), 1, 0,                                              \
-        sizeof((n00b_match_t[]){__VA_ARGS__}) / sizeof(n00b_match_t),           \
-        (n00b_match_t[]){__VA_ARGS__})
+#define ncc_plus_group(g, ...)                                                \
+    ncc_group_match_v((g), 1, 0,                                              \
+        sizeof((ncc_match_t[]){__VA_ARGS__}) / sizeof(ncc_match_t),           \
+        (ncc_match_t[]){__VA_ARGS__})
 
-#define n00b_repeat(g, min, max, ...)                                          \
-    n00b_group_match_v((g), (min), (max),                                      \
-        sizeof((n00b_match_t[]){__VA_ARGS__}) / sizeof(n00b_match_t),           \
-        (n00b_match_t[]){__VA_ARGS__})
+#define ncc_repeat(g, min, max, ...)                                          \
+    ncc_group_match_v((g), (min), (max),                                      \
+        sizeof((ncc_match_t[]){__VA_ARGS__}) / sizeof(ncc_match_t),           \
+        (ncc_match_t[]){__VA_ARGS__})
 
 // ============================================================================
 // Rule building (variadic via compound literal)
 // ============================================================================
 
-n00b_parse_rule_t *n00b_add_rule_v(n00b_grammar_t *g, n00b_nt_id_t nt_id,
-                                    int n, n00b_match_t *items);
-n00b_parse_rule_t *n00b_add_rule_with_cost_v(n00b_grammar_t *g,
-                                              n00b_nt_id_t nt_id,
+ncc_parse_rule_t *ncc_add_rule_v(ncc_grammar_t *g, ncc_nt_id_t nt_id,
+                                    int n, ncc_match_t *items);
+ncc_parse_rule_t *ncc_add_rule_with_cost_v(ncc_grammar_t *g,
+                                              ncc_nt_id_t nt_id,
                                               int cost,
-                                              int n, n00b_match_t *items);
+                                              int n, ncc_match_t *items);
 
-#define n00b_add_rule(g, nt, ...)                                              \
-    n00b_add_rule_v((g), n00b_nonterm_id(nt),                                  \
-        sizeof((n00b_match_t[]){__VA_ARGS__}) / sizeof(n00b_match_t),           \
-        (n00b_match_t[]){__VA_ARGS__})
+#define ncc_add_rule(g, nt, ...)                                              \
+    ncc_add_rule_v((g), ncc_nonterm_id(nt),                                  \
+        sizeof((ncc_match_t[]){__VA_ARGS__}) / sizeof(ncc_match_t),           \
+        (ncc_match_t[]){__VA_ARGS__})
 
-#define n00b_add_rule_with_cost(g, nt, cost, ...)                              \
-    n00b_add_rule_with_cost_v((g), n00b_nonterm_id(nt), (cost),                \
-        sizeof((n00b_match_t[]){__VA_ARGS__}) / sizeof(n00b_match_t),           \
-        (n00b_match_t[]){__VA_ARGS__})
+#define ncc_add_rule_with_cost(g, nt, cost, ...)                              \
+    ncc_add_rule_with_cost_v((g), ncc_nonterm_id(nt), (cost),                \
+        sizeof((ncc_match_t[]){__VA_ARGS__}) / sizeof(ncc_match_t),           \
+        (ncc_match_t[]){__VA_ARGS__})

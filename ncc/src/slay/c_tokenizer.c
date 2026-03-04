@@ -21,34 +21,34 @@
 // State management
 // ============================================================================
 
-n00b_c_tokenizer_state_t *
-n00b_c_tokenizer_state_new(void)
+ncc_c_tokenizer_state_t *
+ncc_c_tokenizer_state_new(void)
 {
-    n00b_c_tokenizer_state_t *st = n00b_alloc(n00b_c_tokenizer_state_t);
+    ncc_c_tokenizer_state_t *st = ncc_alloc(ncc_c_tokenizer_state_t);
     return st;
 }
 
 void
-n00b_c_tokenizer_reset(n00b_scanner_t *s)
+ncc_c_tokenizer_reset(ncc_scanner_t *s)
 {
     if (!s || !s->user_state) {
         return;
     }
 
-    n00b_c_tokenizer_state_t *st = s->user_state;
+    ncc_c_tokenizer_state_t *st = s->user_state;
     st->ncc_off          = false;
     st->in_system_header = false;
     st->current_file     = NULL;
 }
 
 bool
-n00b_c_tokenizer_is_ncc_off(n00b_scanner_t *s)
+ncc_c_tokenizer_is_ncc_off(ncc_scanner_t *s)
 {
     if (!s || !s->user_state) {
         return false;
     }
 
-    return ((n00b_c_tokenizer_state_t *)s->user_state)->ncc_off;
+    return ((ncc_c_tokenizer_state_t *)s->user_state)->ncc_off;
 }
 
 // ============================================================================
@@ -56,16 +56,16 @@ n00b_c_tokenizer_is_ncc_off(n00b_scanner_t *s)
 // ============================================================================
 
 static void
-mark_system_header(n00b_scanner_t *s)
+mark_system_header(ncc_scanner_t *s)
 {
-    n00b_c_tokenizer_state_t *st = s->user_state;
+    ncc_c_tokenizer_state_t *st = s->user_state;
 
     if (!st) {
         return;
     }
 
     if (st->ncc_off || st->in_system_header) {
-        n00b_token_stream_t *ts = s->stream;
+        ncc_token_stream_t *ts = s->stream;
 
         if (ts && ts->token_count > 0) {
             ts->tokens[ts->token_count - 1]->system_header = true;
@@ -78,22 +78,22 @@ mark_system_header(n00b_scanner_t *s)
 // ============================================================================
 
 static void
-skip_pp_directive(n00b_scanner_t *s)
+skip_pp_directive(ncc_scanner_t *s)
 {
-    while (!n00b_scan_at_eof(s)) {
-        uint8_t b = n00b_scan_peek_byte(s, 0);
+    while (!ncc_scan_at_eof(s)) {
+        uint8_t b = ncc_scan_peek_byte(s, 0);
 
         if (b == '\n') {
-            n00b_scan_advance(s);
+            ncc_scan_advance(s);
             break;
         }
 
-        if (b == '\\' && n00b_scan_peek_byte(s, 1) == '\n') {
-            n00b_scan_advance_n(s, 2);
+        if (b == '\\' && ncc_scan_peek_byte(s, 1) == '\n') {
+            ncc_scan_advance_n(s, 2);
             continue;
         }
 
-        n00b_scan_advance(s);
+        ncc_scan_advance(s);
     }
 }
 
@@ -113,7 +113,7 @@ is_word_boundary(char ch)
 // ============================================================================
 
 static bool
-check_pragma_ncc(n00b_scanner_t *s, size_t directive_start)
+check_pragma_ncc(ncc_scanner_t *s, size_t directive_start)
 {
     if (!s->user_state) {
         return false;
@@ -158,7 +158,7 @@ check_pragma_ncc(n00b_scanner_t *s, size_t directive_start)
         pos++;
     }
 
-    n00b_c_tokenizer_state_t *st = s->user_state;
+    ncc_c_tokenizer_state_t *st = s->user_state;
 
     if (pos + 3 <= len && memcmp(base + pos, "off", 3) == 0) {
         if (pos + 3 >= len || is_word_boundary(base[pos + 3])) {
@@ -182,23 +182,23 @@ check_pragma_ncc(n00b_scanner_t *s, size_t directive_start)
 // ============================================================================
 
 static void
-handle_line_marker(n00b_scanner_t *s)
+handle_line_marker(ncc_scanner_t *s)
 {
     // Mark before '#' so we capture the entire line.
-    n00b_scan_mark(s);
+    ncc_scan_mark(s);
 
     // Scan to end of line.
-    while (!n00b_scan_at_eof(s) && n00b_scan_peek_byte(s, 0) != '\n') {
-        n00b_scan_advance(s);
+    while (!ncc_scan_at_eof(s) && ncc_scan_peek_byte(s, 0) != '\n') {
+        ncc_scan_advance(s);
     }
 
-    if (!n00b_scan_at_eof(s)) {
-        n00b_scan_advance(s); // consume the newline
+    if (!ncc_scan_at_eof(s)) {
+        ncc_scan_advance(s); // consume the newline
     }
 
     // Extract verbatim text and add as leading trivia for the next token.
-    n00b_string_t text = n00b_scan_extract(s);
-    n00b_scan_add_leading_trivia(s, text);
+    ncc_string_t text = ncc_scan_extract(s);
+    ncc_scan_add_leading_trivia(s, text);
 
     // Parse the line marker to update tokenizer state.
     // Format: # <linenum> "filename" [flags]
@@ -206,7 +206,7 @@ handle_line_marker(n00b_scanner_t *s)
         return;
     }
 
-    n00b_c_tokenizer_state_t *st = s->user_state;
+    ncc_c_tokenizer_state_t *st = s->user_state;
 
     const char *p   = text.data;
     const char *end = text.data + text.u8_bytes;
@@ -291,21 +291,21 @@ handle_line_marker(n00b_scanner_t *s)
 // ============================================================================
 
 static void
-handle_pp_directive_as_trivia(n00b_scanner_t *s)
+handle_pp_directive_as_trivia(ncc_scanner_t *s)
 {
-    size_t pp_start = n00b_scan_offset(s);
+    size_t pp_start = ncc_scan_offset(s);
 
     // Mark before '#'.
-    n00b_scan_mark(s);
-    n00b_scan_advance(s); // skip '#'
+    ncc_scan_mark(s);
+    ncc_scan_advance(s); // skip '#'
     skip_pp_directive(s);
 
     // Check for #pragma ncc.
     check_pragma_ncc(s, pp_start + 1);
 
     // Preserve as leading trivia.
-    n00b_string_t text = n00b_scan_extract(s);
-    n00b_scan_add_leading_trivia(s, text);
+    ncc_string_t text = ncc_scan_extract(s);
+    ncc_scan_add_leading_trivia(s, text);
 }
 
 // ============================================================================
@@ -313,11 +313,11 @@ handle_pp_directive_as_trivia(n00b_scanner_t *s)
 // ============================================================================
 
 static int
-string_prefix_len(n00b_scanner_t *s)
+string_prefix_len(ncc_scanner_t *s)
 {
-    uint8_t b0 = n00b_scan_peek_byte(s, 0);
-    uint8_t b1 = n00b_scan_peek_byte(s, 1);
-    uint8_t b2 = n00b_scan_peek_byte(s, 2);
+    uint8_t b0 = ncc_scan_peek_byte(s, 0);
+    uint8_t b1 = ncc_scan_peek_byte(s, 1);
+    uint8_t b2 = ncc_scan_peek_byte(s, 2);
 
     if (b0 == 'u' && b1 == '8' && (b2 == '"' || b2 == '\'')) {
         return 2;
@@ -340,22 +340,22 @@ string_prefix_len(n00b_scanner_t *s)
 // ============================================================================
 
 static bool
-scan_c_number(n00b_scanner_t *s)
+scan_c_number(ncc_scanner_t *s)
 {
     // Mark is already set by the caller before the first digit/dot.
-    uint8_t b0 = n00b_scan_peek_byte(s, 0);
+    uint8_t b0 = ncc_scan_peek_byte(s, 0);
     bool    is_float = false;
 
     // Leading dot float: .5, .123e4
     if (b0 == '.') {
         is_float = true;
-        n00b_scan_advance(s); // skip '.'
+        ncc_scan_advance(s); // skip '.'
 
         // Consume decimal digits.
-        while (!n00b_scan_at_eof(s)) {
-            uint8_t d = n00b_scan_peek_byte(s, 0);
+        while (!ncc_scan_at_eof(s)) {
+            uint8_t d = ncc_scan_peek_byte(s, 0);
             if (d >= '0' && d <= '9') {
-                n00b_scan_advance(s);
+                ncc_scan_advance(s);
             }
             else {
                 break;
@@ -363,17 +363,17 @@ scan_c_number(n00b_scanner_t *s)
         }
 
         // Optional exponent.
-        uint8_t e = n00b_scan_peek_byte(s, 0);
+        uint8_t e = ncc_scan_peek_byte(s, 0);
         if (e == 'e' || e == 'E') {
-            n00b_scan_advance(s);
-            uint8_t sign = n00b_scan_peek_byte(s, 0);
+            ncc_scan_advance(s);
+            uint8_t sign = ncc_scan_peek_byte(s, 0);
             if (sign == '+' || sign == '-') {
-                n00b_scan_advance(s);
+                ncc_scan_advance(s);
             }
-            while (!n00b_scan_at_eof(s)) {
-                uint8_t d = n00b_scan_peek_byte(s, 0);
+            while (!ncc_scan_at_eof(s)) {
+                uint8_t d = ncc_scan_peek_byte(s, 0);
                 if (d >= '0' && d <= '9') {
-                    n00b_scan_advance(s);
+                    ncc_scan_advance(s);
                 }
                 else {
                     break;
@@ -386,16 +386,16 @@ scan_c_number(n00b_scanner_t *s)
 
     // Hex prefix: 0x / 0X
     if (b0 == '0'
-        && (n00b_scan_peek_byte(s, 1) == 'x'
-            || n00b_scan_peek_byte(s, 1) == 'X')) {
-        n00b_scan_advance_n(s, 2); // skip 0x
+        && (ncc_scan_peek_byte(s, 1) == 'x'
+            || ncc_scan_peek_byte(s, 1) == 'X')) {
+        ncc_scan_advance_n(s, 2); // skip 0x
 
         // Hex digits.
-        while (!n00b_scan_at_eof(s)) {
-            uint8_t d = n00b_scan_peek_byte(s, 0);
+        while (!ncc_scan_at_eof(s)) {
+            uint8_t d = ncc_scan_peek_byte(s, 0);
             if ((d >= '0' && d <= '9') || (d >= 'a' && d <= 'f')
                 || (d >= 'A' && d <= 'F')) {
-                n00b_scan_advance(s);
+                ncc_scan_advance(s);
             }
             else {
                 break;
@@ -403,15 +403,15 @@ scan_c_number(n00b_scanner_t *s)
         }
 
         // Hex float: '.' + hex digits and/or 'p'/'P' exponent.
-        if (n00b_scan_peek_byte(s, 0) == '.') {
+        if (ncc_scan_peek_byte(s, 0) == '.') {
             is_float = true;
-            n00b_scan_advance(s);
+            ncc_scan_advance(s);
 
-            while (!n00b_scan_at_eof(s)) {
-                uint8_t d = n00b_scan_peek_byte(s, 0);
+            while (!ncc_scan_at_eof(s)) {
+                uint8_t d = ncc_scan_peek_byte(s, 0);
                 if ((d >= '0' && d <= '9') || (d >= 'a' && d <= 'f')
                     || (d >= 'A' && d <= 'F')) {
-                    n00b_scan_advance(s);
+                    ncc_scan_advance(s);
                 }
                 else {
                     break;
@@ -419,18 +419,18 @@ scan_c_number(n00b_scanner_t *s)
             }
         }
 
-        uint8_t p = n00b_scan_peek_byte(s, 0);
+        uint8_t p = ncc_scan_peek_byte(s, 0);
         if (p == 'p' || p == 'P') {
             is_float = true;
-            n00b_scan_advance(s);
-            uint8_t sign = n00b_scan_peek_byte(s, 0);
+            ncc_scan_advance(s);
+            uint8_t sign = ncc_scan_peek_byte(s, 0);
             if (sign == '+' || sign == '-') {
-                n00b_scan_advance(s);
+                ncc_scan_advance(s);
             }
-            while (!n00b_scan_at_eof(s)) {
-                uint8_t d = n00b_scan_peek_byte(s, 0);
+            while (!ncc_scan_at_eof(s)) {
+                uint8_t d = ncc_scan_peek_byte(s, 0);
                 if (d >= '0' && d <= '9') {
-                    n00b_scan_advance(s);
+                    ncc_scan_advance(s);
                 }
                 else {
                     break;
@@ -443,14 +443,14 @@ scan_c_number(n00b_scanner_t *s)
 
     // Binary prefix: 0b / 0B
     if (b0 == '0'
-        && (n00b_scan_peek_byte(s, 1) == 'b'
-            || n00b_scan_peek_byte(s, 1) == 'B')) {
-        n00b_scan_advance_n(s, 2);
+        && (ncc_scan_peek_byte(s, 1) == 'b'
+            || ncc_scan_peek_byte(s, 1) == 'B')) {
+        ncc_scan_advance_n(s, 2);
 
-        while (!n00b_scan_at_eof(s)) {
-            uint8_t d = n00b_scan_peek_byte(s, 0);
+        while (!ncc_scan_at_eof(s)) {
+            uint8_t d = ncc_scan_peek_byte(s, 0);
             if (d == '0' || d == '1') {
-                n00b_scan_advance(s);
+                ncc_scan_advance(s);
             }
             else {
                 break;
@@ -461,10 +461,10 @@ scan_c_number(n00b_scanner_t *s)
     }
 
     // Decimal (or octal starting with 0) integer or float.
-    while (!n00b_scan_at_eof(s)) {
-        uint8_t d = n00b_scan_peek_byte(s, 0);
+    while (!ncc_scan_at_eof(s)) {
+        uint8_t d = ncc_scan_peek_byte(s, 0);
         if (d >= '0' && d <= '9') {
-            n00b_scan_advance(s);
+            ncc_scan_advance(s);
         }
         else {
             break;
@@ -473,19 +473,19 @@ scan_c_number(n00b_scanner_t *s)
 
     // Decimal point(s) -> float / pp-number (e.g. 10.13.4).
     // Loop to consume multiple dot-digit sequences (pp-number grammar).
-    while (n00b_scan_peek_byte(s, 0) == '.') {
+    while (ncc_scan_peek_byte(s, 0) == '.') {
         // Make sure next char isn't '..' (ellipsis).
-        uint8_t after_dot = n00b_scan_peek_byte(s, 1);
+        uint8_t after_dot = ncc_scan_peek_byte(s, 1);
         if (after_dot == '.') {
             break;
         }
         is_float = true;
-        n00b_scan_advance(s); // skip '.'
+        ncc_scan_advance(s); // skip '.'
 
-        while (!n00b_scan_at_eof(s)) {
-            uint8_t d = n00b_scan_peek_byte(s, 0);
+        while (!ncc_scan_at_eof(s)) {
+            uint8_t d = ncc_scan_peek_byte(s, 0);
             if (d >= '0' && d <= '9') {
-                n00b_scan_advance(s);
+                ncc_scan_advance(s);
             }
             else {
                 break;
@@ -495,18 +495,18 @@ scan_c_number(n00b_scanner_t *s)
 
     // Exponent.
     {
-        uint8_t e = n00b_scan_peek_byte(s, 0);
+        uint8_t e = ncc_scan_peek_byte(s, 0);
         if (e == 'e' || e == 'E') {
             is_float = true;
-            n00b_scan_advance(s);
-            uint8_t sign = n00b_scan_peek_byte(s, 0);
+            ncc_scan_advance(s);
+            uint8_t sign = ncc_scan_peek_byte(s, 0);
             if (sign == '+' || sign == '-') {
-                n00b_scan_advance(s);
+                ncc_scan_advance(s);
             }
-            while (!n00b_scan_at_eof(s)) {
-                uint8_t d = n00b_scan_peek_byte(s, 0);
+            while (!ncc_scan_at_eof(s)) {
+                uint8_t d = ncc_scan_peek_byte(s, 0);
                 if (d >= '0' && d <= '9') {
-                    n00b_scan_advance(s);
+                    ncc_scan_advance(s);
                 }
                 else {
                     break;
@@ -518,15 +518,15 @@ scan_c_number(n00b_scanner_t *s)
 suffix:
     // Consume C number suffix: u/U/l/L/f/F/i (imaginary) and C23 wb/WB.
     for (;;) {
-        uint8_t ch = n00b_scan_peek_byte(s, 0);
+        uint8_t ch = ncc_scan_peek_byte(s, 0);
         if (ch == 'u' || ch == 'U' || ch == 'l' || ch == 'L'
             || ch == 'f' || ch == 'F' || ch == 'i') {
-            n00b_scan_advance(s);
+            ncc_scan_advance(s);
         }
         else if ((ch == 'w' || ch == 'W')
-                 && (n00b_scan_peek_byte(s, 1) == 'b'
-                     || n00b_scan_peek_byte(s, 1) == 'B')) {
-            n00b_scan_advance_n(s, 2);
+                 && (ncc_scan_peek_byte(s, 1) == 'b'
+                     || ncc_scan_peek_byte(s, 1) == 'B')) {
+            ncc_scan_advance_n(s, 2);
         }
         else {
             break;
@@ -534,12 +534,12 @@ suffix:
     }
 
     // Extract verbatim source text and emit.
-    n00b_string_t             val_str = n00b_scan_extract(s);
-    n00b_option_t(n00b_string_t) val  = n00b_option_set(n00b_string_t, val_str);
+    ncc_string_t             val_str = ncc_scan_extract(s);
+    ncc_option_t(ncc_string_t) val  = ncc_option_set(ncc_string_t, val_str);
 
-    int32_t tid = is_float ? (int32_t)N00B_TOK_FLOAT
-                           : (int32_t)N00B_TOK_INTEGER;
-    n00b_scan_emit(s, tid, val);
+    int32_t tid = is_float ? (int32_t)NCC_TOK_FLOAT
+                           : (int32_t)NCC_TOK_INTEGER;
+    ncc_scan_emit(s, tid, val);
     mark_system_header(s);
 
     return true;
@@ -554,35 +554,35 @@ suffix:
 // ============================================================================
 
 static void
-scan_raw_string(n00b_scanner_t *s, int32_t tid)
+scan_raw_string(ncc_scanner_t *s, int32_t tid)
 {
     // Mark was set before the encoding prefix (if any) by the caller.
     // We've already advanced past the prefix.  Now at the opening quote.
-    uint8_t quote = n00b_scan_peek_byte(s, 0);
-    n00b_scan_advance(s); // skip opening quote
+    uint8_t quote = ncc_scan_peek_byte(s, 0);
+    ncc_scan_advance(s); // skip opening quote
 
-    while (!n00b_scan_at_eof(s)) {
-        uint8_t b = n00b_scan_peek_byte(s, 0);
+    while (!ncc_scan_at_eof(s)) {
+        uint8_t b = ncc_scan_peek_byte(s, 0);
 
         if (b == (uint8_t)quote) {
-            n00b_scan_advance(s); // consume closing quote
+            ncc_scan_advance(s); // consume closing quote
             break;
         }
 
         if (b == '\\') {
-            n00b_scan_advance(s); // skip backslash
-            if (!n00b_scan_at_eof(s)) {
-                n00b_scan_advance(s); // skip escaped character
+            ncc_scan_advance(s); // skip backslash
+            if (!ncc_scan_at_eof(s)) {
+                ncc_scan_advance(s); // skip escaped character
             }
             continue;
         }
 
-        n00b_scan_advance(s);
+        ncc_scan_advance(s);
     }
 
-    n00b_string_t             val_str = n00b_scan_extract(s);
-    n00b_option_t(n00b_string_t) val  = n00b_option_set(n00b_string_t, val_str);
-    n00b_scan_emit(s, tid, val);
+    ncc_string_t             val_str = ncc_scan_extract(s);
+    ncc_option_t(ncc_string_t) val  = ncc_option_set(ncc_string_t, val_str);
+    ncc_scan_emit(s, tid, val);
     mark_system_header(s);
 }
 
@@ -591,32 +591,32 @@ scan_raw_string(n00b_scanner_t *s, int32_t tid)
 // ============================================================================
 
 bool
-n00b_c_tokenize(n00b_scanner_t *s)
+ncc_c_tokenize(ncc_scanner_t *s)
 {
 restart:
-    n00b_scan_skip_whitespace(s);
+    ncc_scan_skip_whitespace(s);
 
-    if (n00b_scan_at_eof(s)) {
+    if (ncc_scan_at_eof(s)) {
         return false;
     }
 
     // Skip line comments.
-    if (n00b_scan_peek_byte(s, 0) == '/'
-        && n00b_scan_peek_byte(s, 1) == '/') {
-        n00b_scan_skip_line_comment(s);
+    if (ncc_scan_peek_byte(s, 0) == '/'
+        && ncc_scan_peek_byte(s, 1) == '/') {
+        ncc_scan_skip_line_comment(s);
         goto restart;
     }
 
     // Skip block comments.
-    if (n00b_scan_peek_byte(s, 0) == '/'
-        && n00b_scan_peek_byte(s, 1) == '*') {
-        n00b_scan_skip_block_comment(s, "/*", "*/");
+    if (ncc_scan_peek_byte(s, 0) == '/'
+        && ncc_scan_peek_byte(s, 1) == '*') {
+        ncc_scan_skip_block_comment(s, "/*", "*/");
         goto restart;
     }
 
     // Preprocessor directives: preserve as leading trivia.
-    if (n00b_scan_peek_byte(s, 0) == '#') {
-        uint8_t next = n00b_scan_peek_byte(s, 1);
+    if (ncc_scan_peek_byte(s, 0) == '#') {
+        uint8_t next = ncc_scan_peek_byte(s, 1);
 
         // Line markers from clang -E: # <num> "file" [flags]
         if (next == ' ' || (next >= '0' && next <= '9')) {
@@ -629,8 +629,8 @@ restart:
         goto restart;
     }
 
-    n00b_scan_mark(s);
-    n00b_codepoint_t cp = n00b_scan_peek(s, 0);
+    ncc_scan_mark(s);
+    ncc_codepoint_t cp = ncc_scan_peek(s, 0);
 
     // -----------------------------------------------------------------
     // String literals (with optional encoding prefix) — raw source
@@ -638,48 +638,48 @@ restart:
     int pfx = string_prefix_len(s);
 
     if (pfx > 0) {
-        n00b_scan_advance_n(s, pfx);
-        cp = n00b_scan_peek(s, 0);
+        ncc_scan_advance_n(s, pfx);
+        cp = ncc_scan_peek(s, 0);
     }
 
     if (cp == '"' && pfx >= 0) {
-        scan_raw_string(s, (int32_t)N00B_TOK_STRING_LIT);
+        scan_raw_string(s, (int32_t)NCC_TOK_STRING_LIT);
         return true;
     }
 
     if (cp == '\'' && pfx >= 0) {
-        scan_raw_string(s, (int32_t)N00B_TOK_CHAR_LIT);
+        scan_raw_string(s, (int32_t)NCC_TOK_CHAR_LIT);
         return true;
     }
 
     // If we advanced past a prefix but didn't find a quote,
     // treat the prefix as an identifier start.
     if (pfx > 0) {
-        cp = n00b_scan_peek_byte(s, 0);
+        cp = ncc_scan_peek_byte(s, 0);
 
-        while (!n00b_scan_at_eof(s)) {
-            uint8_t b = n00b_scan_peek_byte(s, 0);
+        while (!ncc_scan_at_eof(s)) {
+            uint8_t b = ncc_scan_peek_byte(s, 0);
 
             if ((b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
                 || (b >= '0' && b <= '9') || b == '_') {
-                n00b_scan_advance(s);
+                ncc_scan_advance(s);
             }
             else {
                 break;
             }
         }
 
-        n00b_string_t id_str = n00b_scan_extract(s);
-        n00b_option_t(n00b_string_t) id_val = n00b_option_set(
-            n00b_string_t, id_str);
+        ncc_string_t id_str = ncc_scan_extract(s);
+        ncc_option_t(ncc_string_t) id_val = ncc_option_set(
+            ncc_string_t, id_str);
 
-        int64_t kw_id = n00b_scan_terminal_id(s, id_str.data);
+        int64_t kw_id = ncc_scan_terminal_id(s, id_str.data);
 
-        if (kw_id != N00B_TOK_OTHER) {
-            n00b_scan_emit(s, (int32_t)kw_id, id_val);
+        if (kw_id != NCC_TOK_OTHER) {
+            ncc_scan_emit(s, (int32_t)kw_id, id_val);
         }
         else {
-            n00b_scan_emit(s, (int32_t)N00B_TOK_IDENTIFIER, id_val);
+            ncc_scan_emit(s, (int32_t)NCC_TOK_IDENTIFIER, id_val);
         }
 
         mark_system_header(s);
@@ -690,8 +690,8 @@ restart:
     // Numbers (custom scanner: preserves suffixes, handles hex floats)
     // -----------------------------------------------------------------
     if ((cp >= '0' && cp <= '9')
-        || (cp == '.' && n00b_scan_peek_byte(s, 1) >= '0'
-            && n00b_scan_peek_byte(s, 1) <= '9')) {
+        || (cp == '.' && ncc_scan_peek_byte(s, 1) >= '0'
+            && ncc_scan_peek_byte(s, 1) <= '9')) {
         return scan_c_number(s);
     }
 
@@ -699,17 +699,17 @@ restart:
     // Identifiers / keywords
     // -----------------------------------------------------------------
     if ((cp >= 'a' && cp <= 'z') || (cp >= 'A' && cp <= 'Z') || cp == '_') {
-        n00b_option_t(n00b_string_t) id_val = n00b_scan_identifier(s);
+        ncc_option_t(ncc_string_t) id_val = ncc_scan_identifier(s);
 
-        if (n00b_option_is_set(id_val)) {
-            n00b_string_t id_str = n00b_option_get(id_val);
-            int64_t kw_id = n00b_scan_terminal_id(s, id_str.data);
+        if (ncc_option_is_set(id_val)) {
+            ncc_string_t id_str = ncc_option_get(id_val);
+            int64_t kw_id = ncc_scan_terminal_id(s, id_str.data);
 
-            if (kw_id != N00B_TOK_OTHER) {
-                n00b_scan_emit(s, (int32_t)kw_id, id_val);
+            if (kw_id != NCC_TOK_OTHER) {
+                ncc_scan_emit(s, (int32_t)kw_id, id_val);
             }
             else {
-                n00b_scan_emit(s, (int32_t)N00B_TOK_IDENTIFIER, id_val);
+                ncc_scan_emit(s, (int32_t)NCC_TOK_IDENTIFIER, id_val);
             }
 
             mark_system_header(s);
@@ -727,14 +727,14 @@ restart:
     };
 
     for (const char **op = ops3; *op; op++) {
-        if (n00b_scan_peek_byte(s, 0) == (uint8_t)(*op)[0]
-            && n00b_scan_peek_byte(s, 1) == (uint8_t)(*op)[1]
-            && n00b_scan_peek_byte(s, 2) == (uint8_t)(*op)[2]) {
-            int64_t tid = n00b_scan_terminal_id(s, *op);
+        if (ncc_scan_peek_byte(s, 0) == (uint8_t)(*op)[0]
+            && ncc_scan_peek_byte(s, 1) == (uint8_t)(*op)[1]
+            && ncc_scan_peek_byte(s, 2) == (uint8_t)(*op)[2]) {
+            int64_t tid = ncc_scan_terminal_id(s, *op);
 
-            if (tid != N00B_TOK_OTHER) {
-                n00b_scan_advance_n(s, 3);
-                n00b_scan_emit_marked(s, (int32_t)tid);
+            if (tid != NCC_TOK_OTHER) {
+                ncc_scan_advance_n(s, 3);
+                ncc_scan_emit_marked(s, (int32_t)tid);
                 mark_system_header(s);
                 return true;
             }
@@ -749,13 +749,13 @@ restart:
     };
 
     for (const char **op = ops2; *op; op++) {
-        if (n00b_scan_peek_byte(s, 0) == (uint8_t)(*op)[0]
-            && n00b_scan_peek_byte(s, 1) == (uint8_t)(*op)[1]) {
-            int64_t tid = n00b_scan_terminal_id(s, *op);
+        if (ncc_scan_peek_byte(s, 0) == (uint8_t)(*op)[0]
+            && ncc_scan_peek_byte(s, 1) == (uint8_t)(*op)[1]) {
+            int64_t tid = ncc_scan_terminal_id(s, *op);
 
-            if (tid != N00B_TOK_OTHER) {
-                n00b_scan_advance_n(s, 2);
-                n00b_scan_emit_marked(s, (int32_t)tid);
+            if (tid != NCC_TOK_OTHER) {
+                ncc_scan_advance_n(s, 2);
+                ncc_scan_emit_marked(s, (int32_t)tid);
                 mark_system_header(s);
                 return true;
             }
@@ -765,8 +765,8 @@ restart:
     // -----------------------------------------------------------------
     // Single-character token
     // -----------------------------------------------------------------
-    n00b_scan_advance(s);
-    n00b_scan_emit_marked(s, (int32_t)cp);
+    ncc_scan_advance(s);
+    ncc_scan_emit_marked(s, (int32_t)cp);
     mark_system_header(s);
 
     return true;

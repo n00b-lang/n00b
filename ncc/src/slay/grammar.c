@@ -11,7 +11,7 @@
 // ============================================================================
 
 static bool
-check_stack_for_nt(n00b_list_t(int) *stack, int64_t ruleset)
+check_stack_for_nt(ncc_list_t(int) *stack, int64_t ruleset)
 {
     for (size_t i = 0; i < stack->len; i++) {
         if (ruleset == (int64_t)stack->data[i]) {
@@ -23,7 +23,7 @@ check_stack_for_nt(n00b_list_t(int) *stack, int64_t ruleset)
 }
 
 static inline void
-finalize_nullable(n00b_nonterm_t *nt, bool value)
+finalize_nullable(ncc_nonterm_t *nt, bool value)
 {
     nt->nullable  = value;
     nt->finalized = true;
@@ -32,19 +32,19 @@ finalize_nullable(n00b_nonterm_t *nt, bool value)
 }
 
 static bool
-is_nullable_rule(n00b_grammar_t *g, n00b_parse_rule_t *rule, n00b_list_t(int) *stack);
+is_nullable_rule(ncc_grammar_t *g, ncc_parse_rule_t *rule, ncc_list_t(int) *stack);
 
 static bool
-is_nullable_nt(n00b_grammar_t *g, int64_t nt_id, n00b_list_t(int) *stack)
+is_nullable_nt(ncc_grammar_t *g, int64_t nt_id, ncc_list_t(int) *stack)
 {
     if (stack && check_stack_for_nt(stack, nt_id)) {
         return true;
     }
     else {
-        n00b_list_push(*stack, (int)nt_id);
+        ncc_list_push(*stack, (int)nt_id);
     }
 
-    n00b_nonterm_t *nt = n00b_get_nonterm(g, nt_id);
+    ncc_nonterm_t *nt = ncc_get_nonterm(g, nt_id);
 
     if (nt->finalized) {
         return nt->nullable;
@@ -58,31 +58,31 @@ is_nullable_nt(n00b_grammar_t *g, int64_t nt_id, n00b_list_t(int) *stack)
     bool found_any_rule = false;
 
     for (size_t i = 0; i < nt->rule_ids.len; i++) {
-        n00b_parse_rule_t *cur_rule = n00b_get_rule(g, nt->rule_ids.data[i]);
+        ncc_parse_rule_t *cur_rule = ncc_get_rule(g, nt->rule_ids.data[i]);
         found_any_rule              = true;
 
         if (is_nullable_rule(g, cur_rule, stack)) {
             finalize_nullable(nt, true);
-            (void)n00b_list_pop(int, *stack);
+            (void)ncc_list_pop(int, *stack);
             return true;
         }
     }
 
     finalize_nullable(nt, !found_any_rule);
-    (void)n00b_list_pop(int, *stack);
+    (void)ncc_list_pop(int, *stack);
 
     return nt->nullable;
 }
 
 static bool
-is_nullable_match(n00b_grammar_t *g, n00b_match_t *m, n00b_list_t(int) *stack)
+is_nullable_match(ncc_grammar_t *g, ncc_match_t *m, ncc_list_t(int) *stack)
 {
     switch (m->kind) {
-    case N00B_MATCH_EMPTY:
+    case NCC_MATCH_EMPTY:
         return true;
-    case N00B_MATCH_GROUP:
-        return ((n00b_rule_group_t *)m->group)->min == 0;
-    case N00B_MATCH_NT:
+    case NCC_MATCH_GROUP:
+        return ((ncc_rule_group_t *)m->group)->min == 0;
+    case NCC_MATCH_NT:
         return is_nullable_nt(g, m->nt_id, stack);
     default:
         return false;
@@ -90,18 +90,18 @@ is_nullable_match(n00b_grammar_t *g, n00b_match_t *m, n00b_list_t(int) *stack)
 }
 
 static bool
-is_nullable_rule(n00b_grammar_t *g, n00b_parse_rule_t *rule, n00b_list_t(int) *stack)
+is_nullable_rule(ncc_grammar_t *g, ncc_parse_rule_t *rule, ncc_list_t(int) *stack)
 {
     size_t n = rule->contents.len;
 
     for (size_t i = 0; i < n; i++) {
-        n00b_match_t *item = &rule->contents.data[i];
+        ncc_match_t *item = &rule->contents.data[i];
 
         if (!is_nullable_match(g, item, stack)) {
             return false;
         }
 
-        if (item->kind == N00B_MATCH_NT) {
+        if (item->kind == NCC_MATCH_NT) {
             if (check_stack_for_nt(stack, item->nt_id)) {
                 return false;
             }
@@ -118,25 +118,25 @@ is_nullable_rule(n00b_grammar_t *g, n00b_parse_rule_t *rule, n00b_list_t(int) *s
 // ============================================================================
 
 static bool
-matches_eq(n00b_match_t *a, n00b_match_t *b)
+matches_eq(ncc_match_t *a, ncc_match_t *b)
 {
     if (a->kind != b->kind) {
         return false;
     }
 
     switch (a->kind) {
-    case N00B_MATCH_EMPTY:
-    case N00B_MATCH_ANY:
+    case NCC_MATCH_EMPTY:
+    case NCC_MATCH_ANY:
         return true;
-    case N00B_MATCH_TERMINAL:
+    case NCC_MATCH_TERMINAL:
         return a->terminal_id == b->terminal_id;
-    case N00B_MATCH_CLASS:
+    case NCC_MATCH_CLASS:
         return a->char_class == b->char_class;
-    case N00B_MATCH_NT:
+    case NCC_MATCH_NT:
         return a->nt_id == b->nt_id;
-    case N00B_MATCH_GROUP:
+    case NCC_MATCH_GROUP:
         return a->group == b->group;
-    case N00B_MATCH_SET:
+    case NCC_MATCH_SET:
         return a->set_items == b->set_items;
     }
 
@@ -144,16 +144,16 @@ matches_eq(n00b_match_t *a, n00b_match_t *b)
 }
 
 static bool
-rule_exists(n00b_grammar_t *g,
-            n00b_nonterm_t *nt,
-            n00b_list_t(n00b_match_t) *new_contents,
+rule_exists(ncc_grammar_t *g,
+            ncc_nonterm_t *nt,
+            ncc_list_t(ncc_match_t) *new_contents,
             int32_t *old_ix_out)
 {
     size_t new_len = new_contents->len;
 
     for (size_t i = 0; i < nt->rule_ids.len; i++) {
         int32_t            rule_ix = nt->rule_ids.data[i];
-        n00b_parse_rule_t *old     = n00b_get_rule(g, rule_ix);
+        ncc_parse_rule_t *old     = ncc_get_rule(g, rule_ix);
 
         if (old->contents.len != new_len) {
             continue;
@@ -181,9 +181,9 @@ rule_exists(n00b_grammar_t *g,
 }
 
 static int32_t
-add_rule_internal(n00b_grammar_t *g,
-                  n00b_nt_id_t    nt_id,
-                  n00b_list_t(n00b_match_t) *items,
+add_rule_internal(ncc_grammar_t *g,
+                  ncc_nt_id_t    nt_id,
+                  ncc_list_t(ncc_match_t) *items,
                   int      cost,
                   int32_t  penalty_link_ix,
                   int32_t *old_ix_out)
@@ -191,13 +191,13 @@ add_rule_internal(n00b_grammar_t *g,
     assert(!g->finalized && "Cannot modify grammar after finalization");
     assert(items->len > 0 && "Empty productions not allowed");
 
-    n00b_nonterm_t *nt = n00b_get_nonterm(g, nt_id);
+    ncc_nonterm_t *nt = ncc_get_nonterm(g, nt_id);
 
     if (rule_exists(g, nt, items, old_ix_out)) {
         return -1;
     }
 
-    n00b_parse_rule_t rule = {0};
+    ncc_parse_rule_t rule = {0};
 
     rule.nt_id        = nt_id;
     rule.contents     = *items;
@@ -205,10 +205,10 @@ add_rule_internal(n00b_grammar_t *g,
     rule.penalty_rule = penalty_link_ix >= 0;
     rule.link_ix      = penalty_link_ix;
 
-    n00b_list_push(g->rules, rule);
+    ncc_list_push(g->rules, rule);
 
     int32_t ix = (int32_t)(g->rules.len - 1);
-    n00b_list_push(nt->rule_ids, ix);
+    ncc_list_push(nt->rule_ids, ix);
 
     return ix;
 }
@@ -218,11 +218,11 @@ add_rule_internal(n00b_grammar_t *g,
 // ============================================================================
 
 static void
-create_one_error_rule_set(n00b_grammar_t *g, int32_t rule_ix)
+create_one_error_rule_set(ncc_grammar_t *g, int32_t rule_ix)
 {
-    n00b_parse_rule_t *cur = n00b_get_rule(g, rule_ix);
-    n00b_nt_id_t cur_nt_id = cur->nt_id;
-    n00b_nonterm_t *cur_nt = n00b_get_nonterm(g, cur_nt_id);
+    ncc_parse_rule_t *cur = ncc_get_rule(g, rule_ix);
+    ncc_nt_id_t cur_nt_id = cur->nt_id;
+    ncc_nonterm_t *cur_nt = ncc_get_nonterm(g, cur_nt_id);
 
     if (cur_nt->no_error_rule) {
         return;
@@ -232,17 +232,17 @@ create_one_error_rule_set(n00b_grammar_t *g, int32_t rule_ix)
     int    tok_ct = 0;
 
     for (size_t i = 0; i < n; i++) {
-        n00b_match_t *m = &cur->contents.data[i];
+        ncc_match_t *m = &cur->contents.data[i];
 
-        if (m->kind == N00B_MATCH_NT || m->kind == N00B_MATCH_GROUP) {
+        if (m->kind == NCC_MATCH_NT || m->kind == NCC_MATCH_GROUP) {
             continue;
         }
 
         tok_ct++;
 
         // Re-resolve the nt pointer since a previous iteration's
-        // n00b_nonterm() may have reallocated nt_list.
-        n00b_nonterm_t *cur_nt = n00b_get_nonterm(g, cur_nt_id);
+        // ncc_nonterm() may have reallocated nt_list.
+        ncc_nonterm_t *cur_nt = ncc_get_nonterm(g, cur_nt_id);
 
         char namebuf[256];
         snprintf(namebuf,
@@ -251,32 +251,32 @@ create_one_error_rule_set(n00b_grammar_t *g, int32_t rule_ix)
                  cur_nt->name.data ? cur_nt->name.data : "?",
                  rule_ix,
                  tok_ct);
-        n00b_string_t name = n00b_string_from_cstr(namebuf);
+        ncc_string_t name = ncc_string_from_cstr(namebuf);
 
-        n00b_nonterm_t *nt_err    = n00b_nonterm(g, name);
-        n00b_nt_id_t    nt_err_id = n00b_nonterm_id(nt_err);
+        ncc_nonterm_t *nt_err    = ncc_nonterm(g, name);
+        ncc_nt_id_t    nt_err_id = ncc_nonterm_id(nt_err);
 
         // Rule 1: match the terminal normally (cost 0)
-        n00b_list_t(n00b_match_t) r1 = n00b_list_new_private(n00b_match_t);
-        n00b_list_push(r1, *m);
+        ncc_list_t(ncc_match_t) r1 = ncc_list_new_private(ncc_match_t);
+        ncc_list_push(r1, *m);
         int32_t ok_ix = add_rule_internal(g, nt_err_id, &r1, 0, -1, NULL);
 
         // Rule 2: omit the terminal (penalty = token omission)
-        n00b_list_t(n00b_match_t) r2 = n00b_list_new_private(n00b_match_t);
-        n00b_match_t empty           = {.kind = N00B_MATCH_EMPTY};
-        n00b_list_push(r2, empty);
+        ncc_list_t(ncc_match_t) r2 = ncc_list_new_private(ncc_match_t);
+        ncc_match_t empty           = {.kind = NCC_MATCH_EMPTY};
+        ncc_list_push(r2, empty);
         add_rule_internal(g, nt_err_id, &r2, 0, ok_ix, NULL);
 
         // Rule 3: junk prefix + terminal (bad prefix penalty)
-        n00b_list_t(n00b_match_t) r3 = n00b_list_new_private(n00b_match_t);
-        n00b_match_t any             = {.kind = N00B_MATCH_ANY};
-        n00b_list_push(r3, any);
-        n00b_list_push(r3, *m);
+        ncc_list_t(ncc_match_t) r3 = ncc_list_new_private(ncc_match_t);
+        ncc_match_t any             = {.kind = NCC_MATCH_ANY};
+        ncc_list_push(r3, any);
+        ncc_list_push(r3, *m);
         add_rule_internal(g, nt_err_id, &r3, 0, ok_ix, NULL);
 
         // Re-fetch cur since the rule list may have been reallocated.
-        cur                   = n00b_get_rule(g, rule_ix);
-        cur->contents.data[i] = (n00b_match_t){.kind = N00B_MATCH_NT, .nt_id = nt_err_id};
+        cur                   = ncc_get_rule(g, rule_ix);
+        cur->contents.data[i] = (ncc_match_t){.kind = NCC_MATCH_NT, .nt_id = nt_err_id};
     }
 }
 
@@ -284,150 +284,150 @@ create_one_error_rule_set(n00b_grammar_t *g, int32_t rule_ix)
 // Public API
 // ============================================================================
 
-n00b_grammar_t *
-n00b_grammar_new(void)
+ncc_grammar_t *
+ncc_grammar_new(void)
 {
-    n00b_grammar_t *g = n00b_alloc(n00b_grammar_t);
+    ncc_grammar_t *g = ncc_alloc(ncc_grammar_t);
 
     g->error_rules           = true;
-    g->max_penalty           = N00B_DEFAULT_MAX_PENALTY;
+    g->max_penalty           = NCC_DEFAULT_MAX_PENALTY;
     g->hide_penalty_rewrites = true;
     g->hide_groups           = true;
 
-    g->nt_map = n00b_alloc(n00b_dict_t);
-    n00b_dict_init(g->nt_map, n00b_hash_cstring, n00b_dict_cstr_eq);
+    g->nt_map = ncc_alloc(ncc_dict_t);
+    ncc_dict_init(g->nt_map, ncc_hash_cstring, ncc_dict_cstr_eq);
 
-    g->terminal_map = n00b_alloc(n00b_dict_t);
-    n00b_dict_init(g->terminal_map, n00b_hash_cstring, n00b_dict_cstr_eq);
+    g->terminal_map = ncc_alloc(ncc_dict_t);
+    ncc_dict_init(g->terminal_map, ncc_hash_cstring, ncc_dict_cstr_eq);
 
     return g;
 }
 
 void
-n00b_grammar_free(n00b_grammar_t *g)
+ncc_grammar_free(ncc_grammar_t *g)
 {
     if (!g) {
         return;
     }
 
     for (size_t i = 0; i < g->rules.len; i++) {
-        n00b_list_free(g->rules.data[i].contents);
+        ncc_list_free(g->rules.data[i].contents);
     }
 
-    n00b_list_free(g->rules);
+    ncc_list_free(g->rules);
 
     for (size_t i = 0; i < g->nt_list.len; i++) {
-        n00b_nonterm_t *nt = &g->nt_list.data[i];
+        ncc_nonterm_t *nt = &g->nt_list.data[i];
 
-        n00b_list_free(nt->rule_ids);
+        ncc_list_free(nt->rule_ids);
 
         // Annotation structs and lists are GC-managed; no manual free needed.
     }
 
-    n00b_list_free(g->nt_list);
-    n00b_list_free(g->named_terms);
+    ncc_list_free(g->nt_list);
+    ncc_list_free(g->named_terms);
 
     // The untyped dicts are GC-managed; explicit free for predictable cleanup.
     if (g->nt_map) {
-        n00b_free(g->nt_map);
+        ncc_free(g->nt_map);
     }
     if (g->terminal_map) {
-        n00b_free(g->terminal_map);
+        ncc_free(g->terminal_map);
     }
 
     if (g->left_corner_sets) {
-        n00b_free(g->left_corner_sets);
+        ncc_free(g->left_corner_sets);
     }
 
     if (g->lr0_items) {
-        n00b_free(g->lr0_items);
+        ncc_free(g->lr0_items);
     }
     if (g->lr0_rule_item_base) {
-        n00b_free(g->lr0_rule_item_base);
+        ncc_free(g->lr0_rule_item_base);
     }
     if (g->lr0_states) {
-        n00b_free(g->lr0_states);
+        ncc_free(g->lr0_states);
     }
     if (g->lr0_state_items) {
-        n00b_free(g->lr0_state_items);
+        ncc_free(g->lr0_state_items);
     }
     if (g->lr0_gotos) {
-        n00b_free(g->lr0_gotos);
+        ncc_free(g->lr0_gotos);
     }
     if (g->lr0_predict_state) {
-        n00b_free(g->lr0_predict_state);
+        ncc_free(g->lr0_predict_state);
     }
 
     if (g->has_terminal_categories) {
         for (size_t i = 0; i < g->terminal_categories.len; i++) {
-            n00b_free(g->terminal_categories.data[i].data);
+            ncc_free(g->terminal_categories.data[i].data);
         }
-        n00b_list_free(g->terminal_categories);
+        ncc_list_free(g->terminal_categories);
     }
 
-    n00b_free(g->tokenizer_name.data);
-    n00b_free(g);
+    ncc_free(g->tokenizer_name.data);
+    ncc_free(g);
 }
 
 void
-n00b_grammar_set_start_id(n00b_grammar_t *g, n00b_nt_id_t nt_id)
+ncc_grammar_set_start_id(ncc_grammar_t *g, ncc_nt_id_t nt_id)
 {
     g->default_start = nt_id;
 }
 
 void
-n00b_grammar_set_error_recovery(n00b_grammar_t *g, bool enable)
+ncc_grammar_set_error_recovery(ncc_grammar_t *g, bool enable)
 {
     g->error_rules = enable;
 }
 
 void
-n00b_grammar_set_max_penalty(n00b_grammar_t *g, uint32_t max)
+ncc_grammar_set_max_penalty(ncc_grammar_t *g, uint32_t max)
 {
     g->max_penalty = max;
 }
 
-n00b_nonterm_t *
-n00b_nonterm(n00b_grammar_t *g, n00b_string_t name)
+ncc_nonterm_t *
+ncc_nonterm(ncc_grammar_t *g, ncc_string_t name)
 {
     if (name.data) {
         bool  found = false;
-        void *val   = _n00b_dict_get(g->nt_map, (void *)name.data, &found);
+        void *val   = _ncc_dict_get(g->nt_map, (void *)name.data, &found);
 
         if (found) {
             int64_t existing = (int64_t)(intptr_t)val;
-            return n00b_get_nonterm(g, existing);
+            return ncc_get_nonterm(g, existing);
         }
     }
 
-    n00b_nonterm_t nt = {0};
+    ncc_nonterm_t nt = {0};
 
     nt.name = name;
     nt.id   = (int64_t)g->nt_list.len;
 
-    n00b_list_push(g->nt_list, nt);
+    ncc_list_push(g->nt_list, nt);
 
     if (name.data) {
-        n00b_nonterm_t *stored = n00b_get_nonterm(g, nt.id);
-        _n00b_dict_put(g->nt_map,
+        ncc_nonterm_t *stored = ncc_get_nonterm(g, nt.id);
+        _ncc_dict_put(g->nt_map,
                                (void *)stored->name.data,
                                (void *)(intptr_t)stored->id);
     }
 
-    return n00b_get_nonterm(g, nt.id);
+    return ncc_get_nonterm(g, nt.id);
 }
 
 int64_t
-n00b_nonterm_id(n00b_nonterm_t *nt)
+ncc_nonterm_id(ncc_nonterm_t *nt)
 {
     return nt->id;
 }
 
 int64_t
-n00b_register_terminal(n00b_grammar_t *g, n00b_string_t name)
+ncc_register_terminal(ncc_grammar_t *g, ncc_string_t name)
 {
     bool  found = false;
-    void *val   = _n00b_dict_get(g->terminal_map, (void *)name.data, &found);
+    void *val   = _ncc_dict_get(g->terminal_map, (void *)name.data, &found);
 
     if (found) {
         return (int64_t)(intptr_t)val;
@@ -437,15 +437,15 @@ n00b_register_terminal(n00b_grammar_t *g, n00b_string_t name)
         return (int64_t)(unsigned char)name.data[0];
     }
 
-    n00b_terminal_t term = {0};
+    ncc_terminal_t term = {0};
 
     term.value = name;
-    term.id    = (int64_t)g->named_terms.len + N00B_TOK_START_ID + 1;
+    term.id    = (int64_t)g->named_terms.len + NCC_TOK_START_ID + 1;
 
-    n00b_list_push(g->named_terms, term);
+    ncc_list_push(g->named_terms, term);
 
-    n00b_terminal_t *stored = n00b_get_terminal(g, term.id);
-    _n00b_dict_put(g->terminal_map,
+    ncc_terminal_t *stored = ncc_get_terminal(g, term.id);
+    _ncc_dict_put(g->terminal_map,
                            (void *)stored->value.data,
                            (void *)(intptr_t)stored->id);
 
@@ -453,49 +453,49 @@ n00b_register_terminal(n00b_grammar_t *g, n00b_string_t name)
 }
 
 void
-n00b_grammar_set_terminal_category(n00b_grammar_t *g,
+ncc_grammar_set_terminal_category(ncc_grammar_t *g,
                                    int64_t         terminal_id,
-                                   n00b_string_t   category)
+                                   ncc_string_t   category)
 {
-    if (terminal_id < N00B_TOK_START_ID) {
+    if (terminal_id < NCC_TOK_START_ID) {
         return; // single-char terminals self-describe
     }
 
-    int32_t ix = (int32_t)(terminal_id - N00B_TOK_START_ID);
+    int32_t ix = (int32_t)(terminal_id - NCC_TOK_START_ID);
 
     if (!g->has_terminal_categories) {
-        g->terminal_categories     = n00b_list_new_private(n00b_string_t);
+        g->terminal_categories     = ncc_list_new_private(ncc_string_t);
         g->has_terminal_categories = true;
     }
 
     // Extend list with empty strings up to the required index.
     while ((int32_t)g->terminal_categories.len <= ix) {
-        n00b_list_push(g->terminal_categories, (n00b_string_t){0});
+        ncc_list_push(g->terminal_categories, (ncc_string_t){0});
     }
 
-    n00b_list_set(g->terminal_categories, ix, category);
+    ncc_list_set(g->terminal_categories, ix, category);
 }
 
 void
-n00b_set_action(n00b_nonterm_t *nt, n00b_walk_action_t action)
+ncc_set_action(ncc_nonterm_t *nt, ncc_walk_action_t action)
 {
     nt->action = action;
 }
 
 void
-n00b_nonterm_set_user_data(n00b_nonterm_t *nt, void *data)
+ncc_nonterm_set_user_data(ncc_nonterm_t *nt, void *data)
 {
     nt->user_data = data;
 }
 
 void *
-n00b_nonterm_get_user_data(n00b_nonterm_t *nt)
+ncc_nonterm_get_user_data(ncc_nonterm_t *nt)
 {
     return nt->user_data;
 }
 
 void
-n00b_nonterm_set_action(n00b_nonterm_t *nt, n00b_walk_action_t action)
+ncc_nonterm_set_action(ncc_nonterm_t *nt, ncc_walk_action_t action)
 {
     if (nt) {
         nt->action = action;
@@ -503,7 +503,7 @@ n00b_nonterm_set_action(n00b_nonterm_t *nt, n00b_walk_action_t action)
 }
 
 void
-n00b_grammar_set_default_action(n00b_grammar_t *g, n00b_walk_action_t action)
+ncc_grammar_set_default_action(ncc_grammar_t *g, ncc_walk_action_t action)
 {
     if (g) {
         g->default_action = action;
@@ -516,10 +516,10 @@ n00b_grammar_set_default_action(n00b_grammar_t *g, n00b_walk_action_t action)
 
 static int32_t group_id_counter = 1;
 
-n00b_match_t
-n00b_group_match_v(n00b_grammar_t *g, int min, int max, int n, n00b_match_t *items)
+ncc_match_t
+ncc_group_match_v(ncc_grammar_t *g, int min, int max, int n, ncc_match_t *items)
 {
-    n00b_rule_group_t *group = n00b_alloc(n00b_rule_group_t);
+    ncc_rule_group_t *group = ncc_alloc(ncc_rule_group_t);
 
     group->gid = group_id_counter++;
     group->min = min;
@@ -527,61 +527,61 @@ n00b_group_match_v(n00b_grammar_t *g, int min, int max, int n, n00b_match_t *ite
 
     char namebuf[64];
     snprintf(namebuf, sizeof(namebuf), "$$group_%d", group->gid);
-    n00b_string_t name = n00b_string_from_cstr(namebuf);
+    ncc_string_t name = ncc_string_from_cstr(namebuf);
 
-    n00b_nonterm_t *nt = n00b_nonterm(g, name);
+    ncc_nonterm_t *nt = ncc_nonterm(g, name);
 
     nt->group_nt = true;
 
-    n00b_list_t(n00b_match_t) match_items = n00b_list_new_private(n00b_match_t);
+    ncc_list_t(ncc_match_t) match_items = ncc_list_new_private(ncc_match_t);
 
     for (int i = 0; i < n; i++) {
-        n00b_list_push(match_items, items[i]);
+        ncc_list_push(match_items, items[i]);
     }
 
-    add_rule_internal(g, n00b_nonterm_id(nt), &match_items, 0, -1, NULL);
+    add_rule_internal(g, ncc_nonterm_id(nt), &match_items, 0, -1, NULL);
 
     group->contents_id = nt->id;
 
-    return (n00b_match_t){.kind = N00B_MATCH_GROUP, .group = group};
+    return (ncc_match_t){.kind = NCC_MATCH_GROUP, .group = group};
 }
 
 // ============================================================================
 // Rule building
 // ============================================================================
 
-n00b_parse_rule_t *
-n00b_add_rule_v(n00b_grammar_t *g, n00b_nt_id_t nt_id, int n, n00b_match_t *items)
+ncc_parse_rule_t *
+ncc_add_rule_v(ncc_grammar_t *g, ncc_nt_id_t nt_id, int n, ncc_match_t *items)
 {
-    n00b_list_t(n00b_match_t) match_items = n00b_list_new_private(n00b_match_t);
+    ncc_list_t(ncc_match_t) match_items = ncc_list_new_private(ncc_match_t);
 
     for (int i = 0; i < n; i++) {
-        n00b_list_push(match_items, items[i]);
+        ncc_list_push(match_items, items[i]);
     }
 
     int32_t old_ix = -1;
     int32_t ix     = add_rule_internal(g, nt_id, &match_items, 0, -1, &old_ix);
 
-    return n00b_get_rule(g, ix >= 0 ? ix : old_ix);
+    return ncc_get_rule(g, ix >= 0 ? ix : old_ix);
 }
 
-n00b_parse_rule_t *
-n00b_add_rule_with_cost_v(n00b_grammar_t *g,
-                          n00b_nt_id_t    nt_id,
+ncc_parse_rule_t *
+ncc_add_rule_with_cost_v(ncc_grammar_t *g,
+                          ncc_nt_id_t    nt_id,
                           int             cost,
                           int             n,
-                          n00b_match_t   *items)
+                          ncc_match_t   *items)
 {
-    n00b_list_t(n00b_match_t) match_items = n00b_list_new_private(n00b_match_t);
+    ncc_list_t(ncc_match_t) match_items = ncc_list_new_private(ncc_match_t);
 
     for (int i = 0; i < n; i++) {
-        n00b_list_push(match_items, items[i]);
+        ncc_list_push(match_items, items[i]);
     }
 
     int32_t old_ix = -1;
     int32_t ix     = add_rule_internal(g, nt_id, &match_items, cost, -1, &old_ix);
 
-    return n00b_get_rule(g, ix >= 0 ? ix : old_ix);
+    return ncc_get_rule(g, ix >= 0 ? ix : old_ix);
 }
 
 // ============================================================================
@@ -592,24 +592,24 @@ n00b_add_rule_with_cost_v(n00b_grammar_t *g,
 // Offset by 0x100 to avoid NULL (0) collisions.
 #define TERM_TO_PTR(id) ((void *)(uintptr_t)((uint64_t)(id) + 0x100))
 
-static inline n00b_dict_t *
-n00b_dict_set_new(void)
+static inline ncc_dict_t *
+ncc_dict_set_new(void)
 {
-    n00b_dict_t *d = calloc(1, sizeof(*d));
-    n00b_dict_init(d, NULL, NULL);
+    ncc_dict_t *d = calloc(1, sizeof(*d));
+    ncc_dict_init(d, NULL, NULL);
     return d;
 }
 
 static inline void
-merge_dict_set_into(n00b_dict_t *dst, n00b_dict_t *src)
+merge_dict_set_into(ncc_dict_t *dst, ncc_dict_t *src)
 {
     if (!src) {
         return;
     }
 
     for (size_t i = 0; i < src->capacity; i++) {
-        if (src->buckets[i].state == _N00B_BUCKET_OCCUPIED) {
-            n00b_dict_add(dst, src->buckets[i].key, (void *)1);
+        if (src->buckets[i].state == _NCC_BUCKET_OCCUPIED) {
+            ncc_dict_add(dst, src->buckets[i].key, (void *)1);
         }
     }
 }
@@ -617,15 +617,15 @@ merge_dict_set_into(n00b_dict_t *dst, n00b_dict_t *src)
 // Check if a match can derive the empty string, using the first_nullable
 // array instead of nt->nullable (which has a known bug for non-NT-ending rules).
 static inline bool
-match_is_first_nullable(n00b_grammar_t *g, n00b_match_t *m, bool *first_nullable)
+match_is_first_nullable(ncc_grammar_t *g, ncc_match_t *m, bool *first_nullable)
 {
     (void)g;
     switch (m->kind) {
-    case N00B_MATCH_EMPTY:
+    case NCC_MATCH_EMPTY:
         return true;
-    case N00B_MATCH_GROUP:
-        return ((n00b_rule_group_t *)m->group)->min == 0;
-    case N00B_MATCH_NT:
+    case NCC_MATCH_GROUP:
+        return ((ncc_rule_group_t *)m->group)->min == 0;
+    case NCC_MATCH_NT:
         return first_nullable[m->nt_id];
     default:
         return false;
@@ -634,7 +634,7 @@ match_is_first_nullable(n00b_grammar_t *g, n00b_match_t *m, bool *first_nullable
 
 // Check if a rule can derive the empty string.
 static bool
-rule_is_first_nullable(n00b_grammar_t *g, n00b_parse_rule_t *rule, bool *fn)
+rule_is_first_nullable(ncc_grammar_t *g, ncc_parse_rule_t *rule, bool *fn)
 {
     size_t n = rule->contents.len;
 
@@ -650,10 +650,10 @@ rule_is_first_nullable(n00b_grammar_t *g, n00b_parse_rule_t *rule, bool *fn)
 // Compute the FIRST set for a single rule, given current NT FIRST sets.
 // Returns true if the rule's FIRST set changed.
 static bool
-update_rule_first(n00b_grammar_t *g, n00b_parse_rule_t *rule, bool *first_nullable)
+update_rule_first(ncc_grammar_t *g, ncc_parse_rule_t *rule, bool *first_nullable)
 {
     if (!rule->first_set) {
-        rule->first_set = n00b_dict_set_new();
+        rule->first_set = ncc_dict_set_new();
     }
 
     size_t old_len      = rule->first_set->count;
@@ -662,22 +662,22 @@ update_rule_first(n00b_grammar_t *g, n00b_parse_rule_t *rule, bool *first_nullab
     size_t n = rule->contents.len;
 
     for (size_t i = 0; i < n; i++) {
-        n00b_match_t *m = &rule->contents.data[i];
+        ncc_match_t *m = &rule->contents.data[i];
 
         switch (m->kind) {
-        case N00B_MATCH_TERMINAL:
-            n00b_dict_add(rule->first_set, TERM_TO_PTR(m->terminal_id), (void *)1);
+        case NCC_MATCH_TERMINAL:
+            ncc_dict_add(rule->first_set, TERM_TO_PTR(m->terminal_id), (void *)1);
             goto done;
-        case N00B_MATCH_ANY:
-        case N00B_MATCH_CLASS:
-        case N00B_MATCH_SET:
+        case NCC_MATCH_ANY:
+        case NCC_MATCH_CLASS:
+        case NCC_MATCH_SET:
             rule->first_has_any = true;
             goto done;
-        case N00B_MATCH_EMPTY:
+        case NCC_MATCH_EMPTY:
             break;
-        case N00B_MATCH_GROUP: {
-            n00b_rule_group_t *grp = (n00b_rule_group_t *)m->group;
-            n00b_nonterm_t    *gnt = n00b_get_nonterm(g, grp->contents_id);
+        case NCC_MATCH_GROUP: {
+            ncc_rule_group_t *grp = (ncc_rule_group_t *)m->group;
+            ncc_nonterm_t    *gnt = ncc_get_nonterm(g, grp->contents_id);
 
             if (gnt) {
                 if (gnt->first_set) {
@@ -695,8 +695,8 @@ update_rule_first(n00b_grammar_t *g, n00b_parse_rule_t *rule, bool *first_nullab
 
             break;
         }
-        case N00B_MATCH_NT: {
-            n00b_nonterm_t *nt = n00b_get_nonterm(g, m->nt_id);
+        case NCC_MATCH_NT: {
+            ncc_nonterm_t *nt = ncc_get_nonterm(g, m->nt_id);
 
             if (nt) {
                 if (nt->first_set) {
@@ -726,7 +726,7 @@ done:
 }
 
 static void
-compute_all_first_sets(n00b_grammar_t *g)
+compute_all_first_sets(ncc_grammar_t *g)
 {
     size_t n_nts   = g->nt_list.len;
     size_t n_rules = g->rules.len;
@@ -735,7 +735,7 @@ compute_all_first_sets(n00b_grammar_t *g)
     // The parser's nt->nullable has a known limitation for rules ending
     // with non-NT nullable items (EMPTY, groups with min==0).  We compute
     // a separate array here via iterative fixed point.
-    bool *first_nullable = n00b_alloc_array(bool, n_nts);
+    bool *first_nullable = ncc_alloc_array(bool, n_nts);
 
     bool fn_changed = true;
 
@@ -747,10 +747,10 @@ compute_all_first_sets(n00b_grammar_t *g)
                 continue;
             }
 
-            n00b_nonterm_t *nt = n00b_get_nonterm(g, (int64_t)i);
+            ncc_nonterm_t *nt = ncc_get_nonterm(g, (int64_t)i);
 
             for (size_t j = 0; j < nt->rule_ids.len; j++) {
-                n00b_parse_rule_t *rule = n00b_get_rule(g, nt->rule_ids.data[j]);
+                ncc_parse_rule_t *rule = ncc_get_rule(g, nt->rule_ids.data[j]);
 
                 if (rule_is_first_nullable(g, rule, first_nullable)) {
                     first_nullable[i] = true;
@@ -763,16 +763,16 @@ compute_all_first_sets(n00b_grammar_t *g)
 
     // Initialize all FIRST sets.
     for (size_t i = 0; i < n_nts; i++) {
-        n00b_nonterm_t *nt = n00b_get_nonterm(g, (int64_t)i);
+        ncc_nonterm_t *nt = ncc_get_nonterm(g, (int64_t)i);
 
-        nt->first_set     = n00b_dict_set_new();
+        nt->first_set     = ncc_dict_set_new();
         nt->first_has_any = false;
     }
 
     for (size_t i = 0; i < n_rules; i++) {
-        n00b_parse_rule_t *rule = n00b_get_rule(g, (int32_t)i);
+        ncc_parse_rule_t *rule = ncc_get_rule(g, (int32_t)i);
 
-        rule->first_set     = n00b_dict_set_new();
+        rule->first_set     = ncc_dict_set_new();
         rule->first_has_any = false;
     }
 
@@ -783,7 +783,7 @@ compute_all_first_sets(n00b_grammar_t *g)
         changed = false;
 
         for (size_t i = 0; i < n_rules; i++) {
-            n00b_parse_rule_t *rule = n00b_get_rule(g, (int32_t)i);
+            ncc_parse_rule_t *rule = ncc_get_rule(g, (int32_t)i);
 
             if (update_rule_first(g, rule, first_nullable)) {
                 changed = true;
@@ -792,13 +792,13 @@ compute_all_first_sets(n00b_grammar_t *g)
 
         // Merge rule FIRST sets into their NTs.
         for (size_t i = 0; i < n_nts; i++) {
-            n00b_nonterm_t *nt      = n00b_get_nonterm(g, (int64_t)i);
+            ncc_nonterm_t *nt      = ncc_get_nonterm(g, (int64_t)i);
             size_t          old_len = nt->first_set->count;
             bool            old_any = nt->first_has_any;
 
             for (size_t j = 0; j < nt->rule_ids.len; j++) {
                 int32_t            rule_ix = nt->rule_ids.data[j];
-                n00b_parse_rule_t *rule    = n00b_get_rule(g, rule_ix);
+                ncc_parse_rule_t *rule    = ncc_get_rule(g, rule_ix);
 
                 merge_dict_set_into(nt->first_set, rule->first_set);
 
@@ -817,11 +817,11 @@ compute_all_first_sets(n00b_grammar_t *g)
     // any token is compatible (it matches whatever follows the NT).
     for (size_t i = 0; i < n_nts; i++) {
         if (first_nullable[i]) {
-            n00b_get_nonterm(g, (int64_t)i)->first_has_any = true;
+            ncc_get_nonterm(g, (int64_t)i)->first_has_any = true;
         }
     }
 
-    n00b_free(first_nullable);
+    ncc_free(first_nullable);
 }
 
 // ============================================================================
@@ -829,7 +829,7 @@ compute_all_first_sets(n00b_grammar_t *g)
 // ============================================================================
 
 static void
-compute_left_corners(n00b_grammar_t *g)
+compute_left_corners(ncc_grammar_t *g)
 {
     size_t n_nts = g->nt_list.len;
 
@@ -840,7 +840,7 @@ compute_left_corners(n00b_grammar_t *g)
     int32_t words = (int32_t)((n_nts + 63) / 64);
 
     g->lc_words_per_nt  = words;
-    g->left_corner_sets = n00b_alloc_array(uint64_t, n_nts * (size_t)words);
+    g->left_corner_sets = ncc_alloc_array(uint64_t, n_nts * (size_t)words);
 
     // Each NT includes itself.
     for (size_t i = 0; i < n_nts; i++) {
@@ -851,43 +851,43 @@ compute_left_corners(n00b_grammar_t *g)
 
     // Compute direct left-corners.
     for (size_t i = 0; i < n_nts; i++) {
-        n00b_nonterm_t *nt  = n00b_get_nonterm(g, (int64_t)i);
+        ncc_nonterm_t *nt  = ncc_get_nonterm(g, (int64_t)i);
         uint64_t       *set = g->left_corner_sets + i * (size_t)words;
 
         for (size_t j = 0; j < nt->rule_ids.len; j++) {
             int32_t            rule_ix = nt->rule_ids.data[j];
-            n00b_parse_rule_t *rule    = n00b_get_rule(g, rule_ix);
+            ncc_parse_rule_t *rule    = ncc_get_rule(g, rule_ix);
             size_t             n_match = rule->contents.len;
 
             for (size_t k = 0; k < n_match; k++) {
-                n00b_match_t *m = &rule->contents.data[k];
+                ncc_match_t *m = &rule->contents.data[k];
 
-                if (m->kind == N00B_MATCH_NT) {
+                if (m->kind == NCC_MATCH_NT) {
                     size_t child_id = (size_t)m->nt_id;
 
                     set[child_id / 64] |= (uint64_t)1 << (child_id % 64);
 
-                    n00b_nonterm_t *child = n00b_get_nonterm(g, m->nt_id);
+                    ncc_nonterm_t *child = ncc_get_nonterm(g, m->nt_id);
 
                     if (!child->nullable) {
                         break;
                     }
                 }
-                else if (m->kind == N00B_MATCH_GROUP) {
-                    n00b_rule_group_t *grp      = (n00b_rule_group_t *)m->group;
+                else if (m->kind == NCC_MATCH_GROUP) {
+                    ncc_rule_group_t *grp      = (ncc_rule_group_t *)m->group;
                     size_t             child_id = (size_t)grp->contents_id;
 
                     set[child_id / 64] |= (uint64_t)1 << (child_id % 64);
 
                     if (grp->min > 0) {
-                        n00b_nonterm_t *gnt = n00b_get_nonterm(g, grp->contents_id);
+                        ncc_nonterm_t *gnt = ncc_get_nonterm(g, grp->contents_id);
 
                         if (!gnt->nullable) {
                             break;
                         }
                     }
                 }
-                else if (m->kind == N00B_MATCH_EMPTY) {
+                else if (m->kind == NCC_MATCH_EMPTY) {
                     continue;
                 }
                 else {
@@ -930,28 +930,28 @@ compute_left_corners(n00b_grammar_t *g)
 // LR(0) state table construction
 // ============================================================================
 
-// Encode a n00b_match_t as an int32_t symbol for GOTO keys.
+// Encode a ncc_match_t as an int32_t symbol for GOTO keys.
 // NT -> nt_id, TERMINAL -> terminal_id (offset to avoid overlap with NTs),
 // GROUP -> -(1000+gid), ANY -> -1, EMPTY -> -2, CLASS -> -(100+class_id)
 static int32_t
-lr0_symbol_of_match(n00b_match_t *m)
+lr0_symbol_of_match(ncc_match_t *m)
 {
     switch (m->kind) {
-    case N00B_MATCH_NT:
+    case NCC_MATCH_NT:
         return (int32_t)m->nt_id;
-    case N00B_MATCH_TERMINAL:
+    case NCC_MATCH_TERMINAL:
         return (int32_t)m->terminal_id + 0x10000;
-    case N00B_MATCH_GROUP: {
-        n00b_rule_group_t *grp = (n00b_rule_group_t *)m->group;
+    case NCC_MATCH_GROUP: {
+        ncc_rule_group_t *grp = (ncc_rule_group_t *)m->group;
         return -(1000 + grp->gid);
     }
-    case N00B_MATCH_ANY:
+    case NCC_MATCH_ANY:
         return -1;
-    case N00B_MATCH_EMPTY:
+    case NCC_MATCH_EMPTY:
         return -2;
-    case N00B_MATCH_CLASS:
+    case NCC_MATCH_CLASS:
         return -(100 + (int32_t)m->char_class);
-    case N00B_MATCH_SET:
+    case NCC_MATCH_SET:
         return -3;
     }
 
@@ -961,33 +961,33 @@ lr0_symbol_of_match(n00b_match_t *m)
 // Build lr0_items[] and lr0_rule_item_base[].
 // For each rule, items at dot 0..len.
 static void
-compute_lr0_items(n00b_grammar_t *g)
+compute_lr0_items(ncc_grammar_t *g)
 {
     size_t n_rules = g->rules.len;
 
-    g->lr0_rule_item_base = n00b_alloc_array(int32_t, n_rules);
+    g->lr0_rule_item_base = ncc_alloc_array(int32_t, n_rules);
 
     // Count total items first.
     int32_t total = 0;
 
     for (size_t i = 0; i < n_rules; i++) {
-        n00b_parse_rule_t *r   = n00b_get_rule(g, (int32_t)i);
+        ncc_parse_rule_t *r   = ncc_get_rule(g, (int32_t)i);
         int32_t            len = (int32_t)r->contents.len;
 
         g->lr0_rule_item_base[i] = total;
         total += len + 1; // dot positions 0..len
     }
 
-    g->lr0_items      = n00b_alloc_array(n00b_lr0_item_t, total);
+    g->lr0_items      = ncc_alloc_array(ncc_lr0_item_t, total);
     g->lr0_item_count = total;
 
     for (size_t i = 0; i < n_rules; i++) {
-        n00b_parse_rule_t *r    = n00b_get_rule(g, (int32_t)i);
+        ncc_parse_rule_t *r    = ncc_get_rule(g, (int32_t)i);
         int32_t            len  = (int32_t)r->contents.len;
         int32_t            base = g->lr0_rule_item_base[i];
 
         for (int32_t d = 0; d <= len; d++) {
-            g->lr0_items[base + d] = (n00b_lr0_item_t){
+            g->lr0_items[base + d] = (ncc_lr0_item_t){
                 .rule_ix  = (int32_t)i,
                 .dot      = (int16_t)d,
                 .rule_len = (int16_t)len,
@@ -1001,7 +1001,7 @@ compute_lr0_items(n00b_grammar_t *g)
 // list of item_ids in the seed. On return, seed_bits and seed_list/seed_len
 // are the closed set.
 static void
-lr0_closure(n00b_grammar_t *g, uint64_t *seed_bits, int32_t *seed_list, int32_t *seed_len)
+lr0_closure(ncc_grammar_t *g, uint64_t *seed_bits, int32_t *seed_list, int32_t *seed_len)
 {
     int32_t words = (g->lr0_item_count + 63) / 64;
     (void)words;
@@ -1010,22 +1010,22 @@ lr0_closure(n00b_grammar_t *g, uint64_t *seed_bits, int32_t *seed_list, int32_t 
     // add that NT's rules at dot=0.
     for (int32_t idx = 0; idx < *seed_len; idx++) {
         int32_t          item_id = seed_list[idx];
-        n00b_lr0_item_t *item    = &g->lr0_items[item_id];
+        ncc_lr0_item_t *item    = &g->lr0_items[item_id];
 
         if (item->dot >= item->rule_len) {
             continue;
         }
 
-        n00b_parse_rule_t *rule = n00b_get_rule(g, item->rule_ix);
-        n00b_match_t      *m    = &rule->contents.data[item->dot];
+        ncc_parse_rule_t *rule = ncc_get_rule(g, item->rule_ix);
+        ncc_match_t      *m    = &rule->contents.data[item->dot];
 
         int64_t predict_nt_id = -1;
 
-        if (m->kind == N00B_MATCH_NT) {
+        if (m->kind == NCC_MATCH_NT) {
             predict_nt_id = m->nt_id;
         }
-        else if (m->kind == N00B_MATCH_GROUP) {
-            n00b_rule_group_t *grp = (n00b_rule_group_t *)m->group;
+        else if (m->kind == NCC_MATCH_GROUP) {
+            ncc_rule_group_t *grp = (ncc_rule_group_t *)m->group;
             predict_nt_id          = grp->contents_id;
         }
 
@@ -1033,7 +1033,7 @@ lr0_closure(n00b_grammar_t *g, uint64_t *seed_bits, int32_t *seed_list, int32_t 
             continue;
         }
 
-        n00b_nonterm_t *nt = n00b_get_nonterm(g, predict_nt_id);
+        ncc_nonterm_t *nt = ncc_get_nonterm(g, predict_nt_id);
 
         if (!nt) {
             continue;
@@ -1093,7 +1093,7 @@ cmp_int32(const void *a, const void *b)
 
 // Builder context for LR(0) state construction.
 typedef struct {
-    n00b_grammar_t  *g;
+    ncc_grammar_t  *g;
     int32_t         *state_starts;
     int32_t         *state_counts;
     int32_t         *state_items;
@@ -1101,7 +1101,7 @@ typedef struct {
     int32_t          state_items_cap;
     int32_t         *goto_starts;
     int32_t         *goto_counts;
-    n00b_lr0_goto_t *gotos;
+    ncc_lr0_goto_t *gotos;
     int32_t          gotos_cap;
     int32_t          gotos_count;
     int32_t          states_cap;
@@ -1140,24 +1140,24 @@ lr0_find_or_create(lr0_builder_t *b, int32_t *items_buf, int32_t count)
         int32_t old_cap = b->states_cap;
         b->states_cap *= 2;
 
-        int32_t *new_state_starts = n00b_alloc_array(int32_t, b->states_cap);
+        int32_t *new_state_starts = ncc_alloc_array(int32_t, b->states_cap);
         memcpy(new_state_starts, b->state_starts, (size_t)old_cap * sizeof(int32_t));
-        n00b_free(b->state_starts);
+        ncc_free(b->state_starts);
         b->state_starts = new_state_starts;
 
-        int32_t *new_state_counts = n00b_alloc_array(int32_t, b->states_cap);
+        int32_t *new_state_counts = ncc_alloc_array(int32_t, b->states_cap);
         memcpy(new_state_counts, b->state_counts, (size_t)old_cap * sizeof(int32_t));
-        n00b_free(b->state_counts);
+        ncc_free(b->state_counts);
         b->state_counts = new_state_counts;
 
-        int32_t *new_goto_starts = n00b_alloc_array(int32_t, b->states_cap);
+        int32_t *new_goto_starts = ncc_alloc_array(int32_t, b->states_cap);
         memcpy(new_goto_starts, b->goto_starts, (size_t)old_cap * sizeof(int32_t));
-        n00b_free(b->goto_starts);
+        ncc_free(b->goto_starts);
         b->goto_starts = new_goto_starts;
 
-        int32_t *new_goto_counts = n00b_alloc_array(int32_t, b->states_cap);
+        int32_t *new_goto_counts = ncc_alloc_array(int32_t, b->states_cap);
         memcpy(new_goto_counts, b->goto_counts, (size_t)old_cap * sizeof(int32_t));
-        n00b_free(b->goto_counts);
+        ncc_free(b->goto_counts);
         b->goto_counts = new_goto_counts;
     }
 
@@ -1165,9 +1165,9 @@ lr0_find_or_create(lr0_builder_t *b, int32_t *items_buf, int32_t count)
         int32_t  old_si_cap = b->state_items_cap;
         b->state_items_cap *= 2;
 
-        int32_t *new_si = n00b_alloc_array(int32_t, b->state_items_cap);
+        int32_t *new_si = ncc_alloc_array(int32_t, b->state_items_cap);
         memcpy(new_si, b->state_items, (size_t)old_si_cap * sizeof(int32_t));
-        n00b_free(b->state_items);
+        ncc_free(b->state_items);
         b->state_items = new_si;
     }
 
@@ -1188,8 +1188,8 @@ lr0_find_or_create(lr0_builder_t *b, int32_t *items_buf, int32_t count)
         int32_t *old_dsid  = b->dedup_sid;
 
         b->dedup_cap *= 2;
-        b->dedup_hash = n00b_alloc_array(int64_t, b->dedup_cap);
-        b->dedup_sid  = n00b_alloc_array(int32_t, b->dedup_cap);
+        b->dedup_hash = ncc_alloc_array(int64_t, b->dedup_cap);
+        b->dedup_sid  = ncc_alloc_array(int32_t, b->dedup_cap);
 
         int32_t dmask = b->dedup_cap - 1;
 
@@ -1206,8 +1206,8 @@ lr0_find_or_create(lr0_builder_t *b, int32_t *items_buf, int32_t count)
             }
         }
 
-        n00b_free(old_dhash);
-        n00b_free(old_dsid);
+        ncc_free(old_dhash);
+        ncc_free(old_dsid);
 
         idx = (int32_t)(h & (uint64_t)(b->dedup_cap - 1));
 
@@ -1229,7 +1229,7 @@ lr0_find_or_create(lr0_builder_t *b, int32_t *items_buf, int32_t count)
 
 // Build the LR(0) automaton.
 static void
-build_lr0_states(n00b_grammar_t *g)
+build_lr0_states(ncc_grammar_t *g)
 {
     size_t n_rules = g->rules.len;
     size_t n_nts   = g->nt_list.len;
@@ -1251,21 +1251,21 @@ build_lr0_states(n00b_grammar_t *g)
         .dedup_cap         = 1024,
     };
 
-    b.state_starts = n00b_alloc_array(int32_t, b.states_cap);
-    b.state_counts = n00b_alloc_array(int32_t, b.states_cap);
-    b.state_items  = n00b_alloc_array(int32_t, b.state_items_cap);
-    b.goto_starts  = n00b_alloc_array(int32_t, b.states_cap);
-    b.goto_counts  = n00b_alloc_array(int32_t, b.states_cap);
-    b.gotos        = n00b_alloc_array(n00b_lr0_goto_t, b.gotos_cap);
-    b.dedup_hash   = n00b_alloc_array(int64_t, b.dedup_cap);
-    b.dedup_sid    = n00b_alloc_array(int32_t, b.dedup_cap);
+    b.state_starts = ncc_alloc_array(int32_t, b.states_cap);
+    b.state_counts = ncc_alloc_array(int32_t, b.states_cap);
+    b.state_items  = ncc_alloc_array(int32_t, b.state_items_cap);
+    b.goto_starts  = ncc_alloc_array(int32_t, b.states_cap);
+    b.goto_counts  = ncc_alloc_array(int32_t, b.states_cap);
+    b.gotos        = ncc_alloc_array(ncc_lr0_goto_t, b.gotos_cap);
+    b.dedup_hash   = ncc_alloc_array(int64_t, b.dedup_cap);
+    b.dedup_sid    = ncc_alloc_array(int32_t, b.dedup_cap);
 
-    uint64_t *bits     = n00b_alloc_array(uint64_t, bitset_words);
-    int32_t  *itemlist = n00b_alloc_array(int32_t, g->lr0_item_count);
+    uint64_t *bits     = ncc_alloc_array(uint64_t, bitset_words);
+    int32_t  *itemlist = ncc_alloc_array(int32_t, g->lr0_item_count);
 
     // Create initial state: closure of start NT's rules at dot=0.
     {
-        n00b_nonterm_t *start = n00b_get_nonterm(g, g->default_start);
+        ncc_nonterm_t *start = ncc_get_nonterm(g, g->default_start);
 
         memset(bits, 0, (size_t)bitset_words * sizeof(uint64_t));
 
@@ -1291,8 +1291,8 @@ build_lr0_states(n00b_grammar_t *g)
     }
 
     int32_t sym_buf_sz = g->lr0_item_count > 256 ? g->lr0_item_count : 256;
-    int32_t *sym_buf   = n00b_alloc_array(int32_t, sym_buf_sz);
-    int32_t *kernel    = n00b_alloc_array(int32_t, g->lr0_item_count);
+    int32_t *sym_buf   = ncc_alloc_array(int32_t, sym_buf_sz);
+    int32_t *kernel    = ncc_alloc_array(int32_t, g->lr0_item_count);
 
     for (int32_t si = 0; si < b.states_count; si++) {
         int32_t s_off = b.state_starts[si];
@@ -1301,14 +1301,14 @@ build_lr0_states(n00b_grammar_t *g)
         int32_t n_syms = 0;
 
         for (int32_t j = 0; j < s_cnt; j++) {
-            n00b_lr0_item_t *it = &g->lr0_items[b.state_items[s_off + j]];
+            ncc_lr0_item_t *it = &g->lr0_items[b.state_items[s_off + j]];
 
             if (it->dot >= it->rule_len) {
                 continue;
             }
 
-            n00b_parse_rule_t *rule = n00b_get_rule(g, it->rule_ix);
-            n00b_match_t      *m    = &rule->contents.data[it->dot];
+            ncc_parse_rule_t *rule = ncc_get_rule(g, it->rule_ix);
+            ncc_match_t      *m    = &rule->contents.data[it->dot];
             int32_t            sym  = lr0_symbol_of_match(m);
 
             bool found = false;
@@ -1338,14 +1338,14 @@ build_lr0_states(n00b_grammar_t *g)
             int32_t klen = 0;
 
             for (int32_t j = 0; j < s_cnt; j++) {
-                n00b_lr0_item_t *it = &g->lr0_items[b.state_items[s_off + j]];
+                ncc_lr0_item_t *it = &g->lr0_items[b.state_items[s_off + j]];
 
                 if (it->dot >= it->rule_len) {
                     continue;
                 }
 
-                n00b_parse_rule_t *rule = n00b_get_rule(g, it->rule_ix);
-                n00b_match_t      *m    = &rule->contents.data[it->dot];
+                ncc_parse_rule_t *rule = ncc_get_rule(g, it->rule_ix);
+                ncc_match_t      *m    = &rule->contents.data[it->dot];
 
                 if (lr0_symbol_of_match(m) != sym) {
                     continue;
@@ -1374,13 +1374,13 @@ build_lr0_states(n00b_grammar_t *g)
             if (b.gotos_count >= b.gotos_cap) {
                 int32_t          old_gcap = b.gotos_cap;
                 b.gotos_cap *= 2;
-                n00b_lr0_goto_t *new_gotos = n00b_alloc_array(n00b_lr0_goto_t, b.gotos_cap);
-                memcpy(new_gotos, b.gotos, (size_t)old_gcap * sizeof(n00b_lr0_goto_t));
-                n00b_free(b.gotos);
+                ncc_lr0_goto_t *new_gotos = ncc_alloc_array(ncc_lr0_goto_t, b.gotos_cap);
+                memcpy(new_gotos, b.gotos, (size_t)old_gcap * sizeof(ncc_lr0_goto_t));
+                ncc_free(b.gotos);
                 b.gotos = new_gotos;
             }
 
-            b.gotos[b.gotos_count++] = (n00b_lr0_goto_t){
+            b.gotos[b.gotos_count++] = (ncc_lr0_goto_t){
                 .symbol     = sym,
                 .dest_state = dest,
             };
@@ -1391,10 +1391,10 @@ build_lr0_states(n00b_grammar_t *g)
 
     // Flatten into grammar struct.
     g->lr0_state_count = b.states_count;
-    g->lr0_states      = n00b_alloc_array(n00b_lr0_state_t, b.states_count);
+    g->lr0_states      = ncc_alloc_array(ncc_lr0_state_t, b.states_count);
 
     for (int32_t i = 0; i < b.states_count; i++) {
-        g->lr0_states[i] = (n00b_lr0_state_t){
+        g->lr0_states[i] = (ncc_lr0_state_t){
             .items_start = b.state_starts[i],
             .items_count = b.state_counts[i],
             .gotos_start = b.goto_starts[i],
@@ -1408,33 +1408,33 @@ build_lr0_states(n00b_grammar_t *g)
     g->lr0_goto_count = b.gotos_count;
     g->lr0_gotos      = b.gotos;
 
-    n00b_free(b.state_starts);
-    n00b_free(b.state_counts);
-    n00b_free(b.goto_starts);
-    n00b_free(b.goto_counts);
-    n00b_free(b.dedup_hash);
-    n00b_free(b.dedup_sid);
-    n00b_free(bits);
-    n00b_free(itemlist);
-    n00b_free(sym_buf);
-    n00b_free(kernel);
+    ncc_free(b.state_starts);
+    ncc_free(b.state_counts);
+    ncc_free(b.goto_starts);
+    ncc_free(b.goto_counts);
+    ncc_free(b.dedup_hash);
+    ncc_free(b.dedup_sid);
+    ncc_free(bits);
+    ncc_free(itemlist);
+    ncc_free(sym_buf);
+    ncc_free(kernel);
 }
 
 // For each NT, find the LR(0) state that corresponds to the closure of
 // that NT's rules at dot=0.
 static void
-lr0_compute_predict_states(n00b_grammar_t *g)
+lr0_compute_predict_states(ncc_grammar_t *g)
 {
     size_t n_nts = g->nt_list.len;
 
-    g->lr0_predict_state = n00b_alloc_array(int32_t, n_nts);
+    g->lr0_predict_state = ncc_alloc_array(int32_t, n_nts);
 
     int32_t   bitset_words = (g->lr0_item_count + 63) / 64;
-    uint64_t *bits         = n00b_alloc_array(uint64_t, bitset_words);
-    int32_t  *itemlist     = n00b_alloc_array(int32_t, g->lr0_item_count);
+    uint64_t *bits         = ncc_alloc_array(uint64_t, bitset_words);
+    int32_t  *itemlist     = ncc_alloc_array(int32_t, g->lr0_item_count);
 
     for (size_t i = 0; i < n_nts; i++) {
-        n00b_nonterm_t *nt = n00b_get_nonterm(g, (int64_t)i);
+        ncc_nonterm_t *nt = ncc_get_nonterm(g, (int64_t)i);
 
         memset(bits, 0, (size_t)bitset_words * sizeof(uint64_t));
         int32_t len = 0;
@@ -1459,7 +1459,7 @@ lr0_compute_predict_states(n00b_grammar_t *g)
         int32_t found = -1;
 
         for (int32_t s = 0; s < g->lr0_state_count; s++) {
-            n00b_lr0_state_t *st = &g->lr0_states[s];
+            ncc_lr0_state_t *st = &g->lr0_states[s];
 
             if (lr0_items_eq(itemlist,
                              len,
@@ -1473,8 +1473,8 @@ lr0_compute_predict_states(n00b_grammar_t *g)
         g->lr0_predict_state[i] = found;
     }
 
-    n00b_free(bits);
-    n00b_free(itemlist);
+    ncc_free(bits);
+    ncc_free(itemlist);
 }
 
 // ============================================================================
@@ -1482,41 +1482,41 @@ lr0_compute_predict_states(n00b_grammar_t *g)
 // ============================================================================
 
 void
-n00b_grammar_finalize(n00b_grammar_t *g)
+ncc_grammar_finalize(ncc_grammar_t *g)
 {
     if (g->finalized) {
         return;
     }
 
     // Flush pending NT annotations to all of the NT's rules.
-    // Programmatic users call n00b_nt_annotate() which stages on the NT;
+    // Programmatic users call ncc_nt_annotate() which stages on the NT;
     // here we distribute the same annotation pointers to every rule.
     for (size_t ni = 0; ni < g->nt_list.len; ni++) {
-        n00b_nonterm_t *nt = &g->nt_list.data[ni];
+        ncc_nonterm_t *nt = &g->nt_list.data[ni];
 
         if (!nt->pending_annotations.data
-                || !n00b_list_len(nt->pending_annotations)) {
+                || !ncc_list_len(nt->pending_annotations)) {
             continue;
         }
 
-        size_t nrules  = nt->rule_ids.data ? n00b_list_len(nt->rule_ids) : 0;
-        size_t nannots = n00b_list_len(nt->pending_annotations);
+        size_t nrules  = nt->rule_ids.data ? ncc_list_len(nt->rule_ids) : 0;
+        size_t nannots = ncc_list_len(nt->pending_annotations);
 
         for (size_t ri = 0; ri < nrules; ri++) {
-            int32_t            rule_ix = n00b_list_get(nt->rule_ids, ri);
-            n00b_parse_rule_t *rule    = n00b_get_rule(g, rule_ix);
+            int32_t            rule_ix = ncc_list_get(nt->rule_ids, ri);
+            ncc_parse_rule_t *rule    = ncc_get_rule(g, rule_ix);
 
             if (!rule) {
                 continue;
             }
 
             if (!rule->annotations.data) {
-                rule->annotations = n00b_list_new(n00b_annotation_ptr_t, false);
+                rule->annotations = ncc_list_new(ncc_annotation_ptr_t, false);
             }
 
             for (size_t ai = 0; ai < nannots; ai++) {
-                n00b_annotation_t *a = n00b_list_get(nt->pending_annotations, ai);
-                n00b_list_push(rule->annotations, a);
+                ncc_annotation_t *a = ncc_list_get(nt->pending_annotations, ai);
+                ncc_list_push(rule->annotations, a);
             }
         }
     }
@@ -1524,9 +1524,9 @@ n00b_grammar_finalize(n00b_grammar_t *g)
     size_t n = g->nt_list.len;
 
     for (size_t i = 0; i < n; i++) {
-        n00b_list_t(int) stack = n00b_list_new_private(int);
+        ncc_list_t(int) stack = ncc_list_new_private(int);
         is_nullable_nt(g, (int64_t)i, &stack);
-        n00b_list_free(stack);
+        ncc_list_free(stack);
     }
 
     if (g->error_rules) {
@@ -1555,7 +1555,7 @@ n00b_grammar_finalize(n00b_grammar_t *g)
         }
     }
 
-    n00b_nonterm_t *start = n00b_get_nonterm(g, g->default_start);
+    ncc_nonterm_t *start = ncc_get_nonterm(g, g->default_start);
 
     if (start) {
         start->start_nt = true;

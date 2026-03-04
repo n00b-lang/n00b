@@ -53,6 +53,18 @@ rstr_plain = get_option('rstr_template_plain')
 if rstr_plain != ''
   c_args += ['-DNCC_RSTR_TEMPLATE_PLAIN="' + rstr_plain + '"']
 endif
+vargs_type_opt = get_option('vargs_type')
+if vargs_type_opt != ''
+  c_args += ['-DNCC_VARGS_TYPE="' + vargs_type_opt + '"']
+endif
+once_prefix_opt = get_option('once_prefix')
+if once_prefix_opt != ''
+  c_args += ['-DNCC_ONCE_PREFIX="' + once_prefix_opt + '"']
+endif
+rstr_string_type_opt = get_option('rstr_string_type')
+if rstr_string_type_opt != ''
+  c_args += ['-DNCC_RSTR_STRING_TYPE="' + rstr_string_type_opt + '"']
+endif
 
 # Clang source-based code coverage
 coverage_enabled = get_option('coverage')

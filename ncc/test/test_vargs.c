@@ -1,10 +1,10 @@
 #include <stdio.h>
 
-typedef struct n00b_vargs_t {
+typedef struct ncc_vargs_t {
     unsigned int  nargs;
     unsigned int  cur_ix;
     void        **args;
-} n00b_vargs_t;
+} ncc_vargs_t;
 
 int sum(int count, +) {
     int total = count;

@@ -12,16 +12,16 @@
  * ### Usage
  *
  * ```c
- * n00b_template_registry_t reg;
- * n00b_template_registry_init(&reg, grammar, tokenize_cb);
- * n00b_template_register(&reg, "my_tmpl", "primary_expression",
+ * ncc_template_registry_t reg;
+ * ncc_template_registry_init(&reg, grammar, tokenize_cb);
+ * ncc_template_register(&reg, "my_tmpl", "primary_expression",
  *                        "($0 + $1)");
  *
  * const char *args[] = { "42", "x" };
- * n00b_result_t(n00b_parse_tree_ptr_t) r =
- *     n00b_template_instantiate(&reg, "my_tmpl", args, 2);
+ * ncc_result_t(ncc_parse_tree_ptr_t) r =
+ *     ncc_template_instantiate(&reg, "my_tmpl", args, 2);
  * // ...
- * n00b_template_registry_free(&reg);
+ * ncc_template_registry_free(&reg);
  * ```
  */
 
@@ -33,13 +33,13 @@
 // ============================================================================
 
 /** @brief Template name not found in registry. */
-#define N00B_TMPL_ERR_NOT_FOUND     10
+#define NCC_TMPL_ERR_NOT_FOUND     10
 /** @brief Argument count does not match template slot count. */
-#define N00B_TMPL_ERR_ARG_COUNT     11
+#define NCC_TMPL_ERR_ARG_COUNT     11
 /** @brief Lexing a `$N` argument string failed. */
-#define N00B_TMPL_ERR_ARG_LEX       12
+#define NCC_TMPL_ERR_ARG_LEX       12
 /** @brief Parsing the assembled token stream failed. */
-#define N00B_TMPL_ERR_PARSE_FAILED  13
+#define NCC_TMPL_ERR_PARSE_FAILED  13
 
 // ============================================================================
 // Types
@@ -52,26 +52,26 @@
  * slot (or `slot_index == -1` for trailing text with no substitution).
  */
 typedef struct {
-    n00b_token_info_t **tokens;
+    ncc_token_info_t **tokens;
     int32_t             count;
     int32_t             slot_index; /**< Slot number, or -1 if none. */
-} n00b_template_segment_t;
+} ncc_template_segment_t;
 
 /** @brief A compiled template ready for instantiation. */
 typedef struct {
     char                    *name;
     char                    *start_symbol;
-    n00b_template_segment_t *segments;
+    ncc_template_segment_t *segments;
     int32_t                  num_segments;
     int32_t                  num_slots; /**< max($N) + 1 */
-} n00b_compiled_template_t;
+} ncc_compiled_template_t;
 
 /** @brief Registry caching compiled templates by name. */
 typedef struct {
-    n00b_dict_t     templates; /**< name -> n00b_compiled_template_t* */
-    n00b_grammar_t *grammar;
-    n00b_scan_cb_t  tokenize;
-} n00b_template_registry_t;
+    ncc_dict_t     templates; /**< name -> ncc_compiled_template_t* */
+    ncc_grammar_t *grammar;
+    ncc_scan_cb_t  tokenize;
+} ncc_template_registry_t;
 
 // ============================================================================
 // API
@@ -83,12 +83,12 @@ typedef struct {
  * @param grammar   Grammar for parsing (must be finalized).
  * @param tokenize  Tokenizer callback for lexing template fragments.
  */
-void n00b_template_registry_init(n00b_template_registry_t *reg,
-                                 n00b_grammar_t           *grammar,
-                                 n00b_scan_cb_t            tokenize);
+void ncc_template_registry_init(ncc_template_registry_t *reg,
+                                 ncc_grammar_t           *grammar,
+                                 ncc_scan_cb_t            tokenize);
 
 /** @brief Free all resources held by the registry. */
-void n00b_template_registry_free(n00b_template_registry_t *reg);
+void ncc_template_registry_free(ncc_template_registry_t *reg);
 
 /**
  * @brief Compile and cache a template.
@@ -103,7 +103,7 @@ void n00b_template_registry_free(n00b_template_registry_t *reg);
  * @param template_text  Template string with `$N` placeholders.
  * @return True on success, false if fixed-segment lexing fails.
  */
-bool n00b_template_register(n00b_template_registry_t *reg,
+bool ncc_template_register(ncc_template_registry_t *reg,
                             const char               *name,
                             const char               *start_symbol,
                             const char               *template_text);
@@ -121,8 +121,8 @@ bool n00b_template_register(n00b_template_registry_t *reg,
  * @param nargs  Number of arguments (must equal template's num_slots).
  * @return Ok with cloned parse tree, or err with error code.
  */
-n00b_result_t(n00b_parse_tree_ptr_t)
-n00b_template_instantiate(n00b_template_registry_t *reg,
+ncc_result_t(ncc_parse_tree_ptr_t)
+ncc_template_instantiate(ncc_template_registry_t *reg,
                           const char               *name,
                           const char              **args,
                           int                       nargs);
@@ -134,5 +134,5 @@ n00b_template_instantiate(n00b_template_registry_t *reg,
  * @param name  Template name.
  * @return Slot count (>= 0), or -1 if not found.
  */
-int n00b_template_slot_count(n00b_template_registry_t *reg,
+int ncc_template_slot_count(ncc_template_registry_t *reg,
                              const char               *name);

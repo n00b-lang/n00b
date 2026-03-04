@@ -28,7 +28,7 @@ typedef struct pwz_exp_t pwz_exp_t;
 typedef pwz_exp_t *pwz_exp_ptr_t;
 
 // Must be declared before pwz_exp_t so the type is complete inside the union.
-n00b_list_decl(pwz_exp_ptr_t);
+ncc_list_decl(pwz_exp_ptr_t);
 
 struct pwz_exp_t {
     pwz_mem_t     *mem;
@@ -41,15 +41,15 @@ struct pwz_exp_t {
             const char     *name;
             int64_t         nt_id;
             int32_t         rule_ix;
-            pwz_exp_ptr_t  *children;  // n00b_alloc_array, fixed at creation
+            pwz_exp_ptr_t  *children;  // ncc_alloc_array, fixed at creation
             int32_t         nchildren;
         } seq;
         struct {
             int64_t                    nt_id;
-            n00b_list_t(pwz_exp_ptr_t) alts;  // growable via n00b_list_push
+            ncc_list_t(pwz_exp_ptr_t) alts;  // growable via ncc_list_push
         } alt;
         struct {
-            n00b_char_class_t cc;
+            ncc_char_class_t cc;
         } cls;
     };
 };
@@ -93,7 +93,7 @@ typedef struct pwz_cxt_t {
             const char    *name;
             int64_t        nt_id;
             int32_t        rule_ix;
-            pwz_exp_ptr_t *left;   // n00b_alloc_array, fixed at creation
+            pwz_exp_ptr_t *left;   // ncc_alloc_array, fixed at creation
             int32_t        nleft;
             pwz_exp_ptr_t *right;  // pointer into grammar exp children
             int32_t        nright;
@@ -113,31 +113,31 @@ typedef struct {
     pwz_mem_t *mem;
 } pwz_zipper_t;
 
-// Container declarations for n00b_list_t usage.
-n00b_list_decl(pwz_zipper_t);
+// Container declarations for ncc_list_t usage.
+ncc_list_decl(pwz_zipper_t);
 
-typedef n00b_parse_tree_t *n00b_parse_tree_ptr_t;
-n00b_list_decl(n00b_parse_tree_ptr_t);
+typedef ncc_parse_tree_t *ncc_parse_tree_ptr_t;
+ncc_list_decl(ncc_parse_tree_ptr_t);
 
 // ============================================================================
 // Parser state (full definition)
 // ============================================================================
 
-struct n00b_pwz_parser_t {
-    n00b_grammar_t              *grammar;
+struct ncc_pwz_parser_t {
+    ncc_grammar_t              *grammar;
     pwz_exp_t                   *start_exp;
-    pwz_exp_ptr_t               *nt_exps;     // n00b_alloc_array, indexed by NT id
-    n00b_list_t(pwz_exp_ptr_t)   all_exps;    // all grammar exp nodes (for memo reset)
+    pwz_exp_ptr_t               *nt_exps;     // ncc_alloc_array, indexed by NT id
+    ncc_list_t(pwz_exp_ptr_t)   all_exps;    // all grammar exp nodes (for memo reset)
 
     // Per-parse state (GC-managed, cleared on reset)
-    n00b_list_t(pwz_zipper_t)    worklist;
-    n00b_list_t(pwz_zipper_t)    worklist_swap;
-    n00b_list_t(pwz_exp_ptr_t)   tops;
+    ncc_list_t(pwz_zipper_t)    worklist;
+    ncc_list_t(pwz_zipper_t)    worklist_swap;
+    ncc_list_t(pwz_exp_ptr_t)   tops;
 
-    n00b_token_stream_t              *stream;
+    ncc_token_stream_t              *stream;
 
-    n00b_parse_tree_t           *result_tree;
-    n00b_parse_tree_array_t      result_trees;
+    ncc_parse_tree_t           *result_tree;
+    ncc_parse_tree_array_t      result_trees;
 
     pwz_mem_t                   *mem_bottom;
     pwz_exp_t                   *exp_bottom;

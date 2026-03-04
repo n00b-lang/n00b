@@ -53,8 +53,8 @@ is_nonzero_digit(int32_t cp)
 static bool
 is_whitespace(int32_t cp)
 {
-    return n00b_unicode_has_property((n00b_codepoint_t)cp,
-                                     N00B_UNICODE_PROP_WHITE_SPACE);
+    return ncc_unicode_has_property((ncc_codepoint_t)cp,
+                                     NCC_UNICODE_PROP_WHITE_SPACE);
 }
 
 static bool
@@ -64,15 +64,15 @@ is_printable(int32_t cp)
         return false;
     }
 
-    n00b_unicode_gc_t gc = n00b_unicode_general_category((n00b_codepoint_t)cp);
+    ncc_unicode_gc_t gc = ncc_unicode_general_category((ncc_codepoint_t)cp);
 
     // Control characters (Cc) are not printable.
-    if (gc == N00B_UNICODE_GC_CC) {
+    if (gc == NCC_UNICODE_GC_CC) {
         return false;
     }
 
     // Unassigned (Cn) and surrogates (Cs) are not printable.
-    if (gc == N00B_UNICODE_GC_CN || gc == N00B_UNICODE_GC_CS) {
+    if (gc == NCC_UNICODE_GC_CN || gc == NCC_UNICODE_GC_CS) {
         return false;
     }
 
@@ -118,40 +118,40 @@ is_json_string_char(int32_t cp)
 // ============================================================================
 
 bool
-n00b_codepoint_matches_class(int32_t cp, n00b_char_class_t cc)
+ncc_codepoint_matches_class(int32_t cp, ncc_char_class_t cc)
 {
     switch (cc) {
-    case N00B_CC_ID_START:
-        return n00b_unicode_is_id_start((n00b_codepoint_t)cp);
-    case N00B_CC_ID_CONTINUE:
-        return n00b_unicode_is_id_continue((n00b_codepoint_t)cp);
-    case N00B_CC_ASCII_DIGIT:
+    case NCC_CC_ID_START:
+        return ncc_unicode_is_id_start((ncc_codepoint_t)cp);
+    case NCC_CC_ID_CONTINUE:
+        return ncc_unicode_is_id_continue((ncc_codepoint_t)cp);
+    case NCC_CC_ASCII_DIGIT:
         return is_ascii_digit(cp);
-    case N00B_CC_UNICODE_DIGIT:
-        return n00b_unicode_general_category((n00b_codepoint_t)cp) == N00B_UNICODE_GC_ND;
-    case N00B_CC_ASCII_UPPER:
+    case NCC_CC_UNICODE_DIGIT:
+        return ncc_unicode_general_category((ncc_codepoint_t)cp) == NCC_UNICODE_GC_ND;
+    case NCC_CC_ASCII_UPPER:
         return is_ascii_upper(cp);
-    case N00B_CC_ASCII_LOWER:
+    case NCC_CC_ASCII_LOWER:
         return is_ascii_lower(cp);
-    case N00B_CC_ASCII_ALPHA:
+    case NCC_CC_ASCII_ALPHA:
         return is_ascii_alpha(cp);
-    case N00B_CC_WHITESPACE:
+    case NCC_CC_WHITESPACE:
         return is_whitespace(cp);
-    case N00B_CC_HEX_DIGIT:
+    case NCC_CC_HEX_DIGIT:
         return is_hex_digit(cp);
-    case N00B_CC_NONZERO_DIGIT:
+    case NCC_CC_NONZERO_DIGIT:
         return is_nonzero_digit(cp);
-    case N00B_CC_PRINTABLE:
+    case NCC_CC_PRINTABLE:
         return is_printable(cp);
-    case N00B_CC_NON_WS_PRINTABLE:
+    case NCC_CC_NON_WS_PRINTABLE:
         return is_non_ws_printable(cp);
-    case N00B_CC_NON_NL_WS:
+    case NCC_CC_NON_NL_WS:
         return is_non_nl_ws(cp);
-    case N00B_CC_NON_NL_PRINTABLE:
+    case NCC_CC_NON_NL_PRINTABLE:
         return is_non_nl_printable(cp);
-    case N00B_CC_JSON_STRING_CHAR:
+    case NCC_CC_JSON_STRING_CHAR:
         return is_json_string_char(cp);
-    case N00B_CC_REGEX_BODY_CHAR:
+    case NCC_CC_REGEX_BODY_CHAR:
         return is_printable(cp) && cp != '/';
     }
 

@@ -5,19 +5,19 @@
  * @brief Streaming tokenizer scanner — implementor-facing layer.
  *
  * A tokenizer author writes a callback that receives a scanner, uses
- * helpers to consume input bytes, and calls `n00b_scan_emit()` to
+ * helpers to consume input bytes, and calls `ncc_scan_emit()` to
  * produce tokens.  The scanner handles position tracking, mark/extract,
  * string ownership, and trivia collection.
  *
  * ### Usage
  *
  * ```c
- * static bool my_tokenizer(n00b_scanner_t *s) {
- *     n00b_scan_skip_whitespace(s);
- *     if (n00b_scan_at_eof(s)) return false;
- *     n00b_scan_mark(s);
- *     n00b_scan_advance(s);
- *     n00b_scan_emit_marked(s, MY_TOK);
+ * static bool my_tokenizer(ncc_scanner_t *s) {
+ *     ncc_scan_skip_whitespace(s);
+ *     if (ncc_scan_at_eof(s)) return false;
+ *     ncc_scan_mark(s);
+ *     ncc_scan_advance(s);
+ *     ncc_scan_emit_marked(s, MY_TOK);
  *     return true;
  * }
  * ```
@@ -45,23 +45,23 @@
 // Forward declarations
 // ============================================================================
 
-typedef struct n00b_scanner_t      n00b_scanner_t;
-typedef struct n00b_token_stream_t n00b_token_stream_t;
+typedef struct ncc_scanner_t      ncc_scanner_t;
+typedef struct ncc_token_stream_t ncc_token_stream_t;
 
 // ============================================================================
 // Result type for skip_until_str
 // ============================================================================
 
-n00b_result_decl(size_t);
+ncc_result_decl(size_t);
 
 // ============================================================================
 // Error codes for scanner operations
 // ============================================================================
 
 /** @brief The needle string was not found before EOF. */
-#define N00B_ERR_SCAN_NOT_FOUND  (-10)
+#define NCC_ERR_SCAN_NOT_FOUND  (-10)
 
-// (Owned string list removed — n00b_string_t data is GC-managed.)
+// (Owned string list removed — ncc_string_t data is GC-managed.)
 
 // ============================================================================
 // Callback typedef
@@ -73,23 +73,23 @@ n00b_result_decl(size_t);
  * Return `true` to indicate a token was emitted (or skip/trivia handled).
  * Return `false` to indicate end-of-input (no more tokens).
  *
- * The callback uses scanner helpers (`n00b_scan_peek`, `n00b_scan_advance`,
- * etc.) to inspect and consume input, then calls `n00b_scan_emit()` to
+ * The callback uses scanner helpers (`ncc_scan_peek`, `ncc_scan_advance`,
+ * etc.) to inspect and consume input, then calls `ncc_scan_emit()` to
  * produce a token.
  */
-typedef bool (*n00b_scan_cb_t)(n00b_scanner_t *s);
+typedef bool (*ncc_scan_cb_t)(ncc_scanner_t *s);
 
 /**
- * @brief Optional callback invoked by `n00b_scanner_reset()` to reset
+ * @brief Optional callback invoked by `ncc_scanner_reset()` to reset
  *        user state (e.g., lexer modes, array scan position).
  */
-typedef void (*n00b_scan_reset_cb_t)(n00b_scanner_t *s);
+typedef void (*ncc_scan_reset_cb_t)(ncc_scanner_t *s);
 
 // ============================================================================
 // Scanner struct
 // ============================================================================
 
-struct n00b_scanner_t {
+struct ncc_scanner_t {
     // Input
     const char       *input;       /**< Raw input bytes (from buffer). */
     size_t            input_len;   /**< Total input byte length. */
@@ -98,7 +98,7 @@ struct n00b_scanner_t {
     // Position tracking
     uint32_t                       line;   /**< Current 1-based line number. */
     uint32_t                       column; /**< Current 1-based column number. */
-    n00b_option_t(n00b_string_t)   file;   /**< Source filename (optional). */
+    ncc_option_t(ncc_string_t)   file;   /**< Source filename (optional). */
 
     // Token mark (start of current token)
     size_t            mark;        /**< Byte offset where current token started. */
@@ -106,22 +106,22 @@ struct n00b_scanner_t {
     uint32_t          mark_col;    /**< Column at mark. */
 
     // Callback + state
-    n00b_scan_cb_t        cb;          /**< User's tokenizer callback. */
-    n00b_scan_reset_cb_t  reset_cb;    /**< Optional callback to reset user state. */
+    ncc_scan_cb_t        cb;          /**< User's tokenizer callback. */
+    ncc_scan_reset_cb_t  reset_cb;    /**< Optional callback to reset user state. */
     void                 *user_state;  /**< Opaque user state (lexer modes, etc.). */
 
     // Grammar linkage (optional)
-    n00b_grammar_t   *grammar;     /**< If set, used for terminal ID lookups. */
+    ncc_grammar_t   *grammar;     /**< If set, used for terminal ID lookups. */
 
     // Output target (the token stream fills this)
-    n00b_token_stream_t *stream;   /**< Back-pointer to owning stream. */
+    ncc_token_stream_t *stream;   /**< Back-pointer to owning stream. */
 
     // Terminal ID cache (for grammar integration)
-    n00b_dict_t *terminal_ids; /**< Lazily built name→id cache from grammar. */
+    ncc_dict_t *terminal_ids; /**< Lazily built name→id cache from grammar. */
 
     // Trivia collection
-    n00b_trivia_t    *pending_leading;  /**< Leading trivia for next token. */
-    n00b_trivia_t    *pending_trailing; /**< Trailing trivia for prev token. */
+    ncc_trivia_t    *pending_leading;  /**< Leading trivia for next token. */
+    ncc_trivia_t    *pending_trailing; /**< Trailing trivia for prev token. */
 
     bool              at_eof;      /**< True after callback returns false. */
 };
@@ -140,19 +140,19 @@ struct n00b_scanner_t {
  * @kw file  Source filename for diagnostics (default: NULL).
  * @kw state Initial user state pointer (default: NULL).
  */
-extern n00b_scanner_t *
-n00b_scanner_new(n00b_buffer_t                *buf,
-                 n00b_scan_cb_t                cb,
-                 n00b_grammar_t               *grammar,
-                 n00b_option_t(n00b_string_t)  file,
+extern ncc_scanner_t *
+ncc_scanner_new(ncc_buffer_t                *buf,
+                 ncc_scan_cb_t                cb,
+                 ncc_grammar_t               *grammar,
+                 ncc_option_t(ncc_string_t)  file,
                  void                         *state,
-                 n00b_scan_reset_cb_t          reset_cb);
+                 ncc_scan_reset_cb_t          reset_cb);
 
 /**
  * @brief Free a scanner.
  * @param s Scanner to free.
  */
-extern void n00b_scanner_free(n00b_scanner_t *s);
+extern void ncc_scanner_free(ncc_scanner_t *s);
 
 /**
  * @brief Reset a scanner to the beginning of its input.
@@ -160,7 +160,7 @@ extern void n00b_scanner_free(n00b_scanner_t *s);
  * Resets cursor, line/column, mark, pending trivia, and EOF flag.
  * If `reset_cb` is set, calls it to reset user state.
  */
-extern void n00b_scanner_reset(n00b_scanner_t *s);
+extern void ncc_scanner_reset(ncc_scanner_t *s);
 
 // ============================================================================
 // Cursor inspection
@@ -173,7 +173,7 @@ extern void n00b_scanner_reset(n00b_scanner_t *s);
  * @param offset Byte offset from cursor (0 = current position).
  * @return Decoded codepoint, or 0 at EOF or if offset underflows.
  */
-extern n00b_codepoint_t n00b_scan_peek(n00b_scanner_t *s, int32_t offset);
+extern ncc_codepoint_t ncc_scan_peek(ncc_scanner_t *s, int32_t offset);
 
 /**
  * @brief Peek at raw byte at offset from cursor.
@@ -181,29 +181,29 @@ extern n00b_codepoint_t n00b_scan_peek(n00b_scanner_t *s, int32_t offset);
  * @param offset Byte offset from cursor.
  * @return Byte value, or 0 at EOF or if offset underflows.
  */
-extern uint8_t n00b_scan_peek_byte(n00b_scanner_t *s, int32_t offset);
+extern uint8_t ncc_scan_peek_byte(ncc_scanner_t *s, int32_t offset);
 
 /** @brief True if cursor is at end of input. */
-extern bool n00b_scan_at_eof(n00b_scanner_t *s);
+extern bool ncc_scan_at_eof(ncc_scanner_t *s);
 
 /** @brief Remaining bytes from cursor to end. */
-extern size_t n00b_scan_remaining(n00b_scanner_t *s);
+extern size_t ncc_scan_remaining(ncc_scanner_t *s);
 
 /** @brief Current byte offset. */
-extern size_t n00b_scan_offset(n00b_scanner_t *s);
+extern size_t ncc_scan_offset(ncc_scanner_t *s);
 
 // ============================================================================
 // Cursor movement
 // ============================================================================
 
 /** @brief Advance cursor by one codepoint, updating line/column. */
-extern void n00b_scan_advance(n00b_scanner_t *s);
+extern void ncc_scan_advance(ncc_scanner_t *s);
 
 /** @brief Advance cursor by N codepoints. */
-extern void n00b_scan_advance_n(n00b_scanner_t *s, int32_t n);
+extern void ncc_scan_advance_n(ncc_scanner_t *s, int32_t n);
 
 /** @brief Advance cursor by N raw bytes (for binary protocols). */
-extern void n00b_scan_advance_bytes(n00b_scanner_t *s, size_t n);
+extern void ncc_scan_advance_bytes(ncc_scanner_t *s, size_t n);
 
 // ============================================================================
 // Matching helpers
@@ -214,76 +214,76 @@ extern void n00b_scan_advance_bytes(n00b_scanner_t *s, size_t n);
  * @return Byte length matched, or 0 if no match.
  * @post Cursor is advanced past the match on success.
  */
-extern size_t n00b_scan_match_str(n00b_scanner_t *s, const char *lit);
+extern size_t ncc_scan_match_str(ncc_scanner_t *s, const char *lit);
 
 /**
  * @brief Match one codepoint satisfying predicate.
  * @return UTF-8 byte length of matched codepoint, or 0.
  * @post Cursor is advanced past the match on success.
  */
-extern size_t n00b_scan_match_if(n00b_scanner_t *s, n00b_cp_predicate_fn pred);
+extern size_t ncc_scan_match_if(ncc_scanner_t *s, ncc_cp_predicate_fn pred);
 
 /**
  * @brief Match one codepoint in the given character class.
  * @return Byte length of matched codepoint, or 0.
  * @post Cursor is advanced past the match on success.
  */
-extern size_t n00b_scan_match_class(n00b_scanner_t *s, n00b_char_class_t cc);
+extern size_t ncc_scan_match_class(ncc_scanner_t *s, ncc_char_class_t cc);
 
 /**
  * @brief Match one specific codepoint.
  * @return Byte length of matched codepoint, or 0.
  * @post Cursor is advanced past the match on success.
  */
-extern size_t n00b_scan_match_cp(n00b_scanner_t *s, n00b_codepoint_t cp);
+extern size_t ncc_scan_match_cp(ncc_scanner_t *s, ncc_codepoint_t cp);
 
 /**
  * @brief Skip zero or more codepoints matching predicate.
  * @return Count of codepoints skipped.
  */
-extern int32_t n00b_scan_skip_while(n00b_scanner_t *s, n00b_cp_predicate_fn pred);
+extern int32_t ncc_scan_skip_while(ncc_scanner_t *s, ncc_cp_predicate_fn pred);
 
 /**
  * @brief Skip zero or more codepoints in character class.
  * @return Count of codepoints skipped.
  */
-extern int32_t n00b_scan_skip_class(n00b_scanner_t *s, n00b_char_class_t cc);
+extern int32_t ncc_scan_skip_class(ncc_scanner_t *s, ncc_char_class_t cc);
 
 /**
  * @brief Skip until (but not past) the stop codepoint.
  * @return Bytes skipped.
  */
-extern size_t n00b_scan_skip_until_cp(n00b_scanner_t *s, n00b_codepoint_t stop);
+extern size_t ncc_scan_skip_until_cp(ncc_scanner_t *s, ncc_codepoint_t stop);
 
 /**
  * @brief Skip until (but not past) the given string.
  *
- * @return `n00b_result_t(size_t)` — ok with bytes skipped if needle was found,
- *         or err with `N00B_ERR_SCAN_NOT_FOUND` if EOF was reached without
+ * @return `ncc_result_t(size_t)` — ok with bytes skipped if needle was found,
+ *         or err with `NCC_ERR_SCAN_NOT_FOUND` if EOF was reached without
  *         finding the needle.
  *
  * @post On success, cursor is positioned at the start of the needle.
  *       On failure, cursor is at EOF.
  */
-extern n00b_result_t(size_t)
-n00b_scan_skip_until_str(n00b_scanner_t *s, const char *needle);
+extern ncc_result_t(size_t)
+ncc_scan_skip_until_str(ncc_scanner_t *s, const char *needle);
 
 // ============================================================================
 // Mark / extract
 // ============================================================================
 
 /** @brief Set the mark to the current cursor position. */
-extern void n00b_scan_mark(n00b_scanner_t *s);
+extern void ncc_scan_mark(ncc_scanner_t *s);
 
 /**
- * @brief Extract text from mark to cursor as an `n00b_string_t`.
+ * @brief Extract text from mark to cursor as an `ncc_string_t`.
  *
  * The backing data is GC-managed.
  */
-extern n00b_string_t n00b_scan_extract(n00b_scanner_t *s);
+extern ncc_string_t ncc_scan_extract(ncc_scanner_t *s);
 
 /** @brief Length in bytes from mark to cursor. */
-extern size_t n00b_scan_mark_len(n00b_scanner_t *s);
+extern size_t ncc_scan_mark_len(ncc_scanner_t *s);
 
 // ============================================================================
 // Token emission
@@ -297,41 +297,41 @@ extern size_t n00b_scan_mark_len(n00b_scanner_t *s);
  *
  * @param s     Scanner.
  * @param tid   Terminal ID for the token.
- * @param value Token text, or `n00b_option_none(n00b_string_t)`.
+ * @param value Token text, or `ncc_option_none(ncc_string_t)`.
  */
-extern void n00b_scan_emit(n00b_scanner_t *s, int32_t tid,
-                            n00b_option_t(n00b_string_t) value);
+extern void ncc_scan_emit(ncc_scanner_t *s, int32_t tid,
+                            ncc_option_t(ncc_string_t) value);
 
 /**
  * @brief Emit using the text from mark to cursor as the value.
  *
- * Equivalent to: `n00b_scan_emit(s, tid, n00b_scan_extract(s))`.
+ * Equivalent to: `ncc_scan_emit(s, tid, ncc_scan_extract(s))`.
  */
-extern void n00b_scan_emit_marked(n00b_scanner_t *s, int32_t tid);
+extern void ncc_scan_emit_marked(ncc_scanner_t *s, int32_t tid);
 
 // ============================================================================
 // Trivia helpers
 // ============================================================================
 
 /** @brief Collect text as leading trivia for the next token. */
-extern void n00b_scan_add_leading_trivia(n00b_scanner_t *s,
-                                          n00b_string_t text);
+extern void ncc_scan_add_leading_trivia(ncc_scanner_t *s,
+                                          ncc_string_t text);
 
 /** @brief Collect trailing trivia for the most recently emitted token. */
-extern void n00b_scan_add_trailing_trivia(n00b_scanner_t *s,
-                                           n00b_string_t text);
+extern void ncc_scan_add_trailing_trivia(ncc_scanner_t *s,
+                                           ncc_string_t text);
 
 /**
  * @brief Skip whitespace, collecting it as leading trivia.
  * @return Count of codepoints skipped.
  */
-extern int32_t n00b_scan_skip_whitespace(n00b_scanner_t *s);
+extern int32_t ncc_scan_skip_whitespace(ncc_scanner_t *s);
 
 /**
  * @brief Skip a line comment (to newline), collecting as trailing trivia.
  * @pre Cursor is positioned at the start of the comment text.
  */
-extern void n00b_scan_skip_line_comment(n00b_scanner_t *s);
+extern void ncc_scan_skip_line_comment(ncc_scanner_t *s);
 
 /**
  * @brief Skip a block comment, collecting as leading trivia.
@@ -343,7 +343,7 @@ extern void n00b_scan_skip_line_comment(n00b_scanner_t *s);
  *
  * @pre Cursor is positioned at the start of the opening delimiter.
  */
-extern bool n00b_scan_skip_block_comment(n00b_scanner_t *s,
+extern bool ncc_scan_skip_block_comment(ncc_scanner_t *s,
                                           const char *opener,
                                           const char *closer);
 
@@ -353,6 +353,6 @@ extern bool n00b_scan_skip_block_comment(n00b_scanner_t *s,
 
 /**
  * @brief Look up a terminal ID by name in the scanner's grammar.
- * @return The terminal ID, or `N00B_TOK_OTHER` if not found or no grammar.
+ * @return The terminal ID, or `NCC_TOK_OTHER` if not found or no grammar.
  */
-extern int64_t n00b_scan_terminal_id(n00b_scanner_t *s, const char *name);
+extern int64_t ncc_scan_terminal_id(ncc_scanner_t *s, const char *name);

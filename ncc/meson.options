@@ -14,3 +14,15 @@ option('rstr_template_plain',
        type: 'string',
        value: '',
        description: 'Override the default plain rstr code generation template')
+option('vargs_type',
+       type: 'string',
+       value: '',
+       description: 'Override the vargs struct type name (default: n00b_vargs_t)')
+option('once_prefix',
+       type: 'string',
+       value: '',
+       description: 'Override the once-guard identifier prefix (default: __n00b_)')
+option('rstr_string_type',
+       type: 'string',
+       value: '',
+       description: 'Override the rstr string type name for typehash (default: ncc_string_t*)')

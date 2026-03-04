@@ -46,17 +46,17 @@
 #include "core/dict.h"
 
 // Transform registration prototypes.
-extern void n00b_register_generic_struct_xform(n00b_xform_registry_t *reg);
-extern void n00b_register_typeid_xform(n00b_xform_registry_t *reg);
-extern void n00b_register_typestr_xform(n00b_xform_registry_t *reg);
-extern void n00b_register_typehash_xform(n00b_xform_registry_t *reg);
-extern void n00b_register_once_xform(n00b_xform_registry_t *reg);
-extern void n00b_register_bang_xform(n00b_xform_registry_t *reg);
-extern void n00b_register_rstr_xform(n00b_xform_registry_t *reg);
-extern void n00b_register_constexpr_xform(n00b_xform_registry_t *reg);
-extern void n00b_register_constexpr_paste_xform(n00b_xform_registry_t *reg);
-extern void n00b_register_kargs_vargs_xform(n00b_xform_registry_t *reg);
-extern void n00b_register_option_xform(n00b_xform_registry_t *reg);
+extern void ncc_register_generic_struct_xform(ncc_xform_registry_t *reg);
+extern void ncc_register_typeid_xform(ncc_xform_registry_t *reg);
+extern void ncc_register_typestr_xform(ncc_xform_registry_t *reg);
+extern void ncc_register_typehash_xform(ncc_xform_registry_t *reg);
+extern void ncc_register_once_xform(ncc_xform_registry_t *reg);
+extern void ncc_register_bang_xform(ncc_xform_registry_t *reg);
+extern void ncc_register_rstr_xform(ncc_xform_registry_t *reg);
+extern void ncc_register_constexpr_xform(ncc_xform_registry_t *reg);
+extern void ncc_register_constexpr_paste_xform(ncc_xform_registry_t *reg);
+extern void ncc_register_kargs_vargs_xform(ncc_xform_registry_t *reg);
+extern void ncc_register_option_xform(ncc_xform_registry_t *reg);
 #include "parsers/scan_recipes.h"
 #include "parsers/scanner.h"
 #include "parsers/token_stream.h"
@@ -134,6 +134,11 @@ typedef struct {
     const char  *rstr_template_styled;
     const char  *rstr_template_plain;
 
+    // vargs/once/rstr overrides (CLI > meson define > default).
+    const char  *vargs_type;
+    const char  *once_prefix;
+    const char  *rstr_string_type;
+
     // Flags to pass through to clang.
     const char **clang_args;
     int          n_clang_args;
@@ -156,10 +161,13 @@ typedef struct {
     const char                *compiler;
     const char                *constexpr_headers; // NULL or comma-separated header list
     ncc_meta_table_t           func_meta;         // kargs/vargs metadata
-    n00b_dict_t                option_meta;       // _option var metadata
-    n00b_dict_t                option_decls;      // emitted option struct decls
-    n00b_dict_t                generic_struct_decls; // emitted _generic_struct tags
-    n00b_template_registry_t  *template_reg;      // template engine registry
+    ncc_dict_t                option_meta;       // _option var metadata
+    ncc_dict_t                option_decls;      // emitted option struct decls
+    ncc_dict_t                generic_struct_decls; // emitted _generic_struct tags
+    ncc_template_registry_t  *template_reg;      // template engine registry
+    const char                *vargs_type;        // vargs struct type name
+    const char                *once_prefix;       // once-guard identifier prefix
+    const char                *rstr_string_type;  // rstr string type name for typehash
 } ncc_xform_data_t;
 
 static void
@@ -296,6 +304,18 @@ parse_argv(ncc_opts_t *opts, int argc, const char **argv)
         }
         if (strncmp(arg, "--ncc-rstr-template-plain=", 26) == 0) {
             opts->rstr_template_plain = arg + 26;
+            continue;
+        }
+        if (strncmp(arg, "--ncc-vargs-type=", 17) == 0) {
+            opts->vargs_type = arg + 17;
+            continue;
+        }
+        if (strncmp(arg, "--ncc-once-prefix=", 18) == 0) {
+            opts->once_prefix = arg + 18;
+            continue;
+        }
+        if (strncmp(arg, "--ncc-rstr-string-type=", 23) == 0) {
+            opts->rstr_string_type = arg + 23;
             continue;
         }
 
@@ -1175,7 +1195,7 @@ compiler_passthrough(const ncc_opts_t *opts, int argc, const char **argv)
 // Load the C grammar
 // ============================================================================
 
-static n00b_grammar_t *
+static ncc_grammar_t *
 load_c_grammar(void)
 {
     char *grammar_path = find_grammar_path();
@@ -1193,23 +1213,23 @@ load_c_grammar(void)
         return NULL;
     }
 
-    n00b_string_t bnf_text = n00b_string_from_raw(buf, (int64_t)len);
+    ncc_string_t bnf_text = ncc_string_from_raw(buf, (int64_t)len);
     free(buf);
 
-    n00b_grammar_t *g = n00b_grammar_new();
-    n00b_grammar_set_error_recovery(g, false);
+    ncc_grammar_t *g = ncc_grammar_new();
+    ncc_grammar_set_error_recovery(g, false);
 
-    n00b_string_t start = N00B_STRING_STATIC("translation_unit");
-    bool          ok    = n00b_bnf_load(bnf_text, start, g);
+    ncc_string_t start = NCC_STRING_STATIC("translation_unit");
+    bool          ok    = ncc_bnf_load(bnf_text, start, g);
 
     if (!ok) {
         fprintf(stderr, "ncc: failed to load C grammar from BNF\n");
-        n00b_grammar_free(g);
+        ncc_grammar_free(g);
         return NULL;
     }
 
     ncc_verbose("grammar loaded (%zu NTs, %zu rules)",
-                n00b_list_len(g->nt_list), n00b_list_len(g->rules));
+                ncc_list_len(g->nt_list), ncc_list_len(g->rules));
 
     return g;
 }
@@ -1219,10 +1239,10 @@ load_c_grammar(void)
 // ============================================================================
 
 static void
-dump_tokens(n00b_token_stream_t *ts, FILE *out)
+dump_tokens(ncc_token_stream_t *ts, FILE *out)
 {
     for (int32_t i = 0; i < ts->token_count; i++) {
-        n00b_token_info_t *t = ts->tokens[i];
+        ncc_token_info_t *t = ts->tokens[i];
         if (!t) {
             continue;
         }
@@ -1234,8 +1254,8 @@ dump_tokens(n00b_token_stream_t *ts, FILE *out)
             fprintf(out, " system_header");
         }
 
-        if (n00b_option_is_set(t->value)) {
-            n00b_string_t v = n00b_option_get(t->value);
+        if (ncc_option_is_set(t->value)) {
+            ncc_string_t v = ncc_option_get(t->value);
             if (v.data) {
                 fprintf(out, " \"%.60s\"", v.data);
             }
@@ -1455,7 +1475,7 @@ static int
 compile_file(ncc_opts_t *opts)
 {
     // Stage 1: Load grammar.
-    n00b_grammar_t *g = load_c_grammar();
+    ncc_grammar_t *g = load_c_grammar();
     if (!g) {
         return 1;
     }
@@ -1464,43 +1484,43 @@ compile_file(ncc_opts_t *opts)
     size_t pp_len  = 0;
     char  *pp_text = run_preprocessor(opts, &pp_len);
     if (!pp_text) {
-        n00b_grammar_free(g);
+        ncc_grammar_free(g);
         return 1;
     }
 
     ncc_verbose("preprocessed %zu bytes", pp_len);
 
     // Stage 3: Tokenize.
-    n00b_buffer_t              *buf      = n00b_buffer_from_bytes(pp_text,
+    ncc_buffer_t              *buf      = ncc_buffer_from_bytes(pp_text,
                                                                   (int64_t)pp_len);
-    n00b_c_tokenizer_state_t   *tok_state = n00b_c_tokenizer_state_new();
-    n00b_scanner_t             *scanner   = n00b_scanner_new(
-        buf, n00b_c_tokenize, g,
-        n00b_option_set(n00b_string_t,
-                        n00b_string_from_cstr(opts->input_file)),
-        tok_state, n00b_c_tokenizer_reset);
-    n00b_token_stream_t *ts = n00b_token_stream_new(scanner);
+    ncc_c_tokenizer_state_t   *tok_state = ncc_c_tokenizer_state_new();
+    ncc_scanner_t             *scanner   = ncc_scanner_new(
+        buf, ncc_c_tokenize, g,
+        ncc_option_set(ncc_string_t,
+                        ncc_string_from_cstr(opts->input_file)),
+        tok_state, ncc_c_tokenizer_reset);
+    ncc_token_stream_t *ts = ncc_token_stream_new(scanner);
 
-    // Store tokenizer callback in grammar so n00b_xform_parse_template can use it.
-    g->tokenize_cb = (void *)n00b_c_tokenize;
+    // Store tokenizer callback in grammar so ncc_xform_parse_template can use it.
+    g->tokenize_cb = (void *)ncc_c_tokenize;
 
     free(pp_text);
 
     // Stage 3.5: Token dump (before parsing).
     if (opts->dump_tokens) {
         // Force full tokenization by scanning all tokens.
-        while (n00b_stream_next(ts)) {
+        while (ncc_stream_next(ts)) {
         }
         dump_tokens(ts, stderr);
     }
 
     // Stage 4: Parse with PWZ.
-    n00b_pwz_parser_t *parser = n00b_pwz_new(g);
+    ncc_pwz_parser_t *parser = ncc_pwz_new(g);
     assert(parser);
 
     ncc_verbose("parsing...");
 
-    bool ok = n00b_pwz_parse(parser, ts);
+    bool ok = ncc_pwz_parse(parser, ts);
 
     if (!ok) {
         int32_t ntokens = ts->token_count;
@@ -1511,11 +1531,11 @@ compile_file(ncc_opts_t *opts)
             fprintf(stderr, "  first %d tokens:\n",
                     show < ntokens ? show : ntokens);
             for (int32_t i = 0; i < ntokens && i < show; i++) {
-                n00b_token_info_t *t = ts->tokens[i];
+                ncc_token_info_t *t = ts->tokens[i];
                 if (t) {
                     fprintf(stderr, "    [%d] tid=%d", i, t->tid);
-                    if (n00b_option_is_set(t->value)) {
-                        n00b_string_t v = n00b_option_get(t->value);
+                    if (ncc_option_is_set(t->value)) {
+                        ncc_string_t v = ncc_option_get(t->value);
                         if (v.data) {
                             fprintf(stderr, " \"%.*s\"",
                                     v.u8_bytes > 40 ? 40 : (int)v.u8_bytes,
@@ -1528,11 +1548,11 @@ compile_file(ncc_opts_t *opts)
             if (ntokens > show * 2) {
                 fprintf(stderr, "  last %d tokens:\n", show);
                 for (int32_t i = ntokens - show; i < ntokens; i++) {
-                    n00b_token_info_t *t = ts->tokens[i];
+                    ncc_token_info_t *t = ts->tokens[i];
                     if (t) {
                         fprintf(stderr, "    [%d] tid=%d", i, t->tid);
-                        if (n00b_option_is_set(t->value)) {
-                            n00b_string_t v = n00b_option_get(t->value);
+                        if (ncc_option_is_set(t->value)) {
+                            ncc_string_t v = ncc_option_get(t->value);
                             if (v.data) {
                                 fprintf(stderr, " \"%.*s\"",
                                         v.u8_bytes > 40
@@ -1547,27 +1567,27 @@ compile_file(ncc_opts_t *opts)
             }
         }
 
-        n00b_pwz_free(parser);
-        n00b_token_stream_free(ts);
-        n00b_scanner_free(scanner);
-        n00b_grammar_free(g);
+        ncc_pwz_free(parser);
+        ncc_token_stream_free(ts);
+        ncc_scanner_free(scanner);
+        ncc_grammar_free(g);
         return 1;
     }
 
-    n00b_parse_tree_t *tree = n00b_pwz_get_tree(parser);
+    ncc_parse_tree_t *tree = ncc_pwz_get_tree(parser);
     if (!tree) {
         fprintf(stderr, "ncc: parse succeeded but no tree produced\n");
-        n00b_pwz_free(parser);
-        n00b_token_stream_free(ts);
-        n00b_scanner_free(scanner);
-        n00b_grammar_free(g);
+        ncc_pwz_free(parser);
+        ncc_token_stream_free(ts);
+        ncc_scanner_free(scanner);
+        ncc_grammar_free(g);
         return 1;
     }
 
     ncc_verbose("parse OK (%d tokens)", ts->token_count);
 
     // Stage 5: Reclassify walk (typedef tracking).
-    int32_t reclassified = n00b_annot_reclassify_walk(
+    int32_t reclassified = ncc_annot_reclassify_walk(
         g, tree, ts->tokens, ts->token_count);
 
     if (reclassified > 0) {
@@ -1576,34 +1596,34 @@ compile_file(ncc_opts_t *opts)
 
     // Stage 5.5: Dump pre-transform tree.
     if (opts->dump_tree) {
-        n00b_parse_tree_print(g, tree, stderr, opts->dump_tree_raw);
+        ncc_parse_tree_print(g, tree, stderr, opts->dump_tree_raw);
     }
 
     // Stage 6: Transform passes (typeid, typestr, typehash).
-    n00b_xform_registry_t xreg;
-    n00b_xform_registry_init(&xreg, g);
-    n00b_register_generic_struct_xform(&xreg);
-    n00b_register_typeid_xform(&xreg);
-    n00b_register_option_xform(&xreg);
-    n00b_register_typestr_xform(&xreg);
-    n00b_register_typehash_xform(&xreg);
-    n00b_register_kargs_vargs_xform(&xreg);
-    n00b_register_once_xform(&xreg);
-    n00b_register_bang_xform(&xreg);
-    n00b_register_rstr_xform(&xreg);
-    n00b_register_constexpr_xform(&xreg);
-    n00b_register_constexpr_paste_xform(&xreg);
+    ncc_xform_registry_t xreg;
+    ncc_xform_registry_init(&xreg, g);
+    ncc_register_generic_struct_xform(&xreg);
+    ncc_register_typeid_xform(&xreg);
+    ncc_register_option_xform(&xreg);
+    ncc_register_typestr_xform(&xreg);
+    ncc_register_typehash_xform(&xreg);
+    ncc_register_kargs_vargs_xform(&xreg);
+    ncc_register_once_xform(&xreg);
+    ncc_register_bang_xform(&xreg);
+    ncc_register_rstr_xform(&xreg);
+    ncc_register_constexpr_xform(&xreg);
+    ncc_register_constexpr_paste_xform(&xreg);
 
     // Template registry for rstr (and future template-based transforms).
-    n00b_template_registry_t tmpl_reg;
-    n00b_template_registry_init(&tmpl_reg, g, n00b_c_tokenize);
+    ncc_template_registry_t tmpl_reg;
+    ncc_template_registry_init(&tmpl_reg, g, ncc_c_tokenize);
 
-    // Default rstr templates (simple n00b_string_t compound literal, no GC header).
+    // Default rstr templates (simple ncc_string_t compound literal, no GC header).
     static const char *default_rstr_styled =
-        "({$0 static n00b_string_t $1={.u8_bytes=$2,.data=$3,"
+        "({$0 static ncc_string_t $1={.u8_bytes=$2,.data=$3,"
         ".codepoints=$4,.styling=$5};&$1;})";
     static const char *default_rstr_plain =
-        "({static n00b_string_t $0={.u8_bytes=$1,.data=$2,"
+        "({static ncc_string_t $0={.u8_bytes=$1,.data=$2,"
         ".codepoints=$3,.styling=((void*)0)};&$0;})";
 
     // Resolution order: CLI flag > meson define > built-in default.
@@ -1624,57 +1644,85 @@ compile_file(ncc_opts_t *opts)
         rstr_plain = opts->rstr_template_plain;
     }
 
-    n00b_template_register(&tmpl_reg, "rstr_styled",
+    ncc_template_register(&tmpl_reg, "rstr_styled",
                            "primary_expression", rstr_styled);
-    n00b_template_register(&tmpl_reg, "rstr_plain",
+    ncc_template_register(&tmpl_reg, "rstr_plain",
                            "primary_expression", rstr_plain);
 
-    n00b_xform_ctx_t xctx;
-    n00b_xform_ctx_init(&xctx, g, &xreg, tree);
+    // Resolve vargs_type, once_prefix, rstr_string_type: CLI > meson define > default.
+    const char *vargs_type      = "ncc_vargs_t";
+    const char *once_prefix     = "__ncc_";
+    const char *rstr_string_type = "ncc_string_t*";
+
+#ifdef NCC_VARGS_TYPE
+    vargs_type = NCC_VARGS_TYPE;
+#endif
+#ifdef NCC_ONCE_PREFIX
+    once_prefix = NCC_ONCE_PREFIX;
+#endif
+#ifdef NCC_RSTR_STRING_TYPE
+    rstr_string_type = NCC_RSTR_STRING_TYPE;
+#endif
+
+    if (opts->vargs_type) {
+        vargs_type = opts->vargs_type;
+    }
+    if (opts->once_prefix) {
+        once_prefix = opts->once_prefix;
+    }
+    if (opts->rstr_string_type) {
+        rstr_string_type = opts->rstr_string_type;
+    }
+
+    ncc_xform_ctx_t xctx;
+    ncc_xform_ctx_init(&xctx, g, &xreg, tree);
     ncc_xform_data_t xdata = {
         .compiler          = opts->compiler,
         .constexpr_headers = opts->constexpr_headers,
         .func_meta         = {0},
         .template_reg      = &tmpl_reg,
+        .vargs_type        = vargs_type,
+        .once_prefix       = once_prefix,
+        .rstr_string_type  = rstr_string_type,
     };
-    n00b_dict_init(&xdata.option_meta,
-                            n00b_hash_cstring, n00b_dict_cstr_eq);
-    n00b_dict_init(&xdata.option_decls,
-                            n00b_hash_cstring, n00b_dict_cstr_eq);
-    n00b_dict_init(&xdata.generic_struct_decls,
-                            n00b_hash_cstring, n00b_dict_cstr_eq);
+    ncc_dict_init(&xdata.option_meta,
+                            ncc_hash_cstring, ncc_dict_cstr_eq);
+    ncc_dict_init(&xdata.option_decls,
+                            ncc_hash_cstring, ncc_dict_cstr_eq);
+    ncc_dict_init(&xdata.generic_struct_decls,
+                            ncc_hash_cstring, ncc_dict_cstr_eq);
     xctx.user_data = &xdata;
-    tree = n00b_xform_apply(&xreg, &xctx);
+    tree = ncc_xform_apply(&xreg, &xctx);
 
     if (xctx.nodes_replaced > 0) {
         ncc_verbose("transforms: %d nodes replaced", xctx.nodes_replaced);
     }
 
-    n00b_dict_free(&xdata.option_meta);
-    n00b_dict_free(&xdata.option_decls);
-    n00b_dict_free(&xdata.generic_struct_decls);
-    n00b_template_registry_free(&tmpl_reg);
-    n00b_xform_registry_free(&xreg);
+    ncc_dict_free(&xdata.option_meta);
+    ncc_dict_free(&xdata.option_decls);
+    ncc_dict_free(&xdata.generic_struct_decls);
+    ncc_template_registry_free(&tmpl_reg);
+    ncc_xform_registry_free(&xreg);
 
     // Stage 7: Emit transformed C.
-    n00b_pprint_opts_t pp_opts = {
+    ncc_pprint_opts_t pp_opts = {
         .line_width       = 100,
         .indent_size      = 4,
-        .indent_style     = N00B_PPRINT_SPACES,
+        .indent_style     = NCC_PPRINT_SPACES,
         .use_unicode_width = false,
         .out              = NULL,
         .newline          = "\n",
         .style            = NULL,
     };
 
-    char *emitted = n00b_pprint(g, tree, pp_opts);
+    char *emitted = ncc_pprint(g, tree, pp_opts);
 
     if (!emitted) {
         fprintf(stderr, "ncc: emission produced no output\n");
-        n00b_pwz_free(parser);
-        n00b_token_stream_free(ts);
-        n00b_scanner_free(scanner);
-        n00b_grammar_free(g);
+        ncc_pwz_free(parser);
+        ncc_token_stream_free(ts);
+        ncc_scanner_free(scanner);
+        ncc_grammar_free(g);
         return 1;
     }
 
@@ -1724,10 +1772,10 @@ compile_file(ncc_opts_t *opts)
 
 cleanup:
     free(emitted);
-    n00b_pwz_free(parser);
-    n00b_token_stream_free(ts);
-    n00b_scanner_free(scanner);
-    n00b_grammar_free(g);
+    ncc_pwz_free(parser);
+    ncc_token_stream_free(ts);
+    ncc_scanner_free(scanner);
+    ncc_grammar_free(g);
 
     return rc;
 }

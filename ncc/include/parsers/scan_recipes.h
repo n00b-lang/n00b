@@ -8,8 +8,8 @@
  * escapes, number literals, identifiers, etc.
  *
  * All recipes operate on the scanner's cursor and return
- * `n00b_option_t(n00b_string_t)`.  On failure (no match or unterminated
- * literal) they return `n00b_option_none(n00b_string_t)` and leave the
+ * `ncc_option_t(ncc_string_t)`.  On failure (no match or unterminated
+ * literal) they return `ncc_option_none(ncc_string_t)` and leave the
  * cursor unchanged.
  *
  * ### Related modules
@@ -33,16 +33,16 @@
  * @return Decoded string value, or none on unterminated string or if
  *         cursor is not at `"`.
  */
-extern n00b_option_t(n00b_string_t) n00b_scan_string_double(n00b_scanner_t *s);
+extern ncc_option_t(ncc_string_t) ncc_scan_string_double(ncc_scanner_t *s);
 
 /**
  * @brief Scan a single-quoted string/char literal.
  *
- * Same escape handling as `n00b_scan_string_double`.
+ * Same escape handling as `ncc_scan_string_double`.
  *
  * @return Decoded string value, or none on error.
  */
-extern n00b_option_t(n00b_string_t) n00b_scan_string_single(n00b_scanner_t *s);
+extern ncc_option_t(ncc_string_t) ncc_scan_string_single(ncc_scanner_t *s);
 
 /**
  * @brief Scan a raw/verbatim string (no escape processing).
@@ -51,7 +51,7 @@ extern n00b_option_t(n00b_string_t) n00b_scan_string_single(n00b_scanner_t *s);
  * @param quote The quote character (or string) that opens/closes.
  * @return Raw string value, or none on error.
  */
-extern n00b_option_t(n00b_string_t) n00b_scan_string_raw(n00b_scanner_t *s, const char *quote);
+extern ncc_option_t(ncc_string_t) ncc_scan_string_raw(ncc_scanner_t *s, const char *quote);
 
 // ============================================================================
 // Number recipes
@@ -65,7 +65,7 @@ extern n00b_option_t(n00b_string_t) n00b_scan_string_raw(n00b_scanner_t *s, cons
  *
  * @return Extracted text, or none if no digits found.
  */
-extern n00b_option_t(n00b_string_t) n00b_scan_integer(n00b_scanner_t *s);
+extern ncc_option_t(ncc_string_t) ncc_scan_integer(ncc_scanner_t *s);
 
 /**
  * @brief Scan a floating-point literal (with optional exponent).
@@ -75,7 +75,7 @@ extern n00b_option_t(n00b_string_t) n00b_scan_integer(n00b_scanner_t *s);
  *
  * @return Extracted text, or none if no match.
  */
-extern n00b_option_t(n00b_string_t) n00b_scan_float(n00b_scanner_t *s);
+extern ncc_option_t(ncc_string_t) ncc_scan_float(ncc_scanner_t *s);
 
 /**
  * @brief Scan a number (integer or float) and emit appropriate token.
@@ -85,7 +85,7 @@ extern n00b_option_t(n00b_string_t) n00b_scan_float(n00b_scanner_t *s);
  * @param float_tid Terminal ID to emit for floats.
  * @return true if a number was scanned and emitted.
  */
-extern bool n00b_scan_number(n00b_scanner_t *s,
+extern bool ncc_scan_number(ncc_scanner_t *s,
                               int32_t int_tid,
                               int32_t float_tid);
 
@@ -100,4 +100,4 @@ extern bool n00b_scan_number(n00b_scanner_t *s,
  *
  * @return Extracted text, or none if no ID_Start at cursor.
  */
-extern n00b_option_t(n00b_string_t) n00b_scan_identifier(n00b_scanner_t *s);
+extern ncc_option_t(ncc_string_t) ncc_scan_identifier(ncc_scanner_t *s);

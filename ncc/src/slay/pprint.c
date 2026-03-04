@@ -89,7 +89,7 @@ ob_finish(out_buf_t *ob)
 // ============================================================================
 
 typedef struct {
-    n00b_doc_kind_t kind;
+    ncc_doc_kind_t kind;
     const char     *text;
     int32_t         text_len;
 } doc_cmd_t;
@@ -118,7 +118,7 @@ doc_free(doc_stream_t *ds)
 }
 
 static void
-doc_emit(doc_stream_t *ds, n00b_doc_kind_t kind, const char *text, int32_t len)
+doc_emit(doc_stream_t *ds, ncc_doc_kind_t kind, const char *text, int32_t len)
 {
     if (ds->count >= ds->cap) {
         ds->cap  = ds->cap ? ds->cap * 2 : 64;
@@ -135,67 +135,67 @@ doc_emit(doc_stream_t *ds, n00b_doc_kind_t kind, const char *text, int32_t len)
 static inline void
 doc_text(doc_stream_t *ds, const char *text, int32_t len)
 {
-    doc_emit(ds, N00B_DOC_TEXT, text, len);
+    doc_emit(ds, NCC_DOC_TEXT, text, len);
 }
 
 static inline void
 doc_space(doc_stream_t *ds)
 {
-    doc_emit(ds, N00B_DOC_SPACE, NULL, 0);
+    doc_emit(ds, NCC_DOC_SPACE, NULL, 0);
 }
 
 static inline void
 doc_softline(doc_stream_t *ds)
 {
-    doc_emit(ds, N00B_DOC_SOFTLINE, NULL, 0);
+    doc_emit(ds, NCC_DOC_SOFTLINE, NULL, 0);
 }
 
 static inline void
 doc_hardline(doc_stream_t *ds)
 {
-    doc_emit(ds, N00B_DOC_HARDLINE, NULL, 0);
+    doc_emit(ds, NCC_DOC_HARDLINE, NULL, 0);
 }
 
 static inline void
 doc_blankline(doc_stream_t *ds)
 {
-    doc_emit(ds, N00B_DOC_BLANKLINE, NULL, 0);
+    doc_emit(ds, NCC_DOC_BLANKLINE, NULL, 0);
 }
 
 static inline void
 doc_indent(doc_stream_t *ds)
 {
-    doc_emit(ds, N00B_DOC_INDENT, NULL, 0);
+    doc_emit(ds, NCC_DOC_INDENT, NULL, 0);
 }
 
 static inline void
 doc_dedent(doc_stream_t *ds)
 {
-    doc_emit(ds, N00B_DOC_DEDENT, NULL, 0);
+    doc_emit(ds, NCC_DOC_DEDENT, NULL, 0);
 }
 
 static inline void
 doc_group_begin(doc_stream_t *ds)
 {
-    doc_emit(ds, N00B_DOC_GROUP_BEGIN, NULL, 0);
+    doc_emit(ds, NCC_DOC_GROUP_BEGIN, NULL, 0);
 }
 
 static inline void
 doc_group_end(doc_stream_t *ds)
 {
-    doc_emit(ds, N00B_DOC_GROUP_END, NULL, 0);
+    doc_emit(ds, NCC_DOC_GROUP_END, NULL, 0);
 }
 
 static inline void
 doc_align_begin(doc_stream_t *ds)
 {
-    doc_emit(ds, N00B_DOC_ALIGN_BEGIN, NULL, 0);
+    doc_emit(ds, NCC_DOC_ALIGN_BEGIN, NULL, 0);
 }
 
 static inline void
 doc_align_end(doc_stream_t *ds)
 {
-    doc_emit(ds, N00B_DOC_ALIGN_END, NULL, 0);
+    doc_emit(ds, NCC_DOC_ALIGN_END, NULL, 0);
 }
 
 // ============================================================================
@@ -218,7 +218,7 @@ typedef struct {
 } annot_summary_t;
 
 static annot_summary_t
-read_annotations(n00b_nonterm_t *nt)
+read_annotations(ncc_nonterm_t *nt)
 {
     annot_summary_t s    = {0};
     s.softline_before[0] = -1;
@@ -230,54 +230,54 @@ read_annotations(n00b_nonterm_t *nt)
         return s;
     }
 
-    size_t na = n00b_list_len(nt->pending_annotations);
+    size_t na = ncc_list_len(nt->pending_annotations);
 
     for (size_t i = 0; i < na; i++) {
-        n00b_annotation_t *a = n00b_list_get(nt->pending_annotations, i);
+        ncc_annotation_t *a = ncc_list_get(nt->pending_annotations, i);
 
         if (!a) {
             continue;
         }
 
         switch (a->kind) {
-        case N00B_ANNOT_INDENT:
+        case NCC_ANNOT_INDENT:
             s.indent = true;
             break;
-        case N00B_ANNOT_GROUP:
+        case NCC_ANNOT_GROUP:
             s.group = true;
             break;
-        case N00B_ANNOT_CONCAT:
+        case NCC_ANNOT_CONCAT:
             s.concat = true;
             break;
-        case N00B_ANNOT_BLANKLINE:
+        case NCC_ANNOT_BLANKLINE:
             s.blankline = true;
             break;
-        case N00B_ANNOT_SOFTLINE:
-            if (a->name_ref.kind == N00B_ROLE_BY_INDEX
+        case NCC_ANNOT_SOFTLINE:
+            if (a->name_ref.kind == NCC_ROLE_BY_INDEX
                 && a->name_ref.index >= 0
                 && s.softline_count < 31) {
                 s.softline_before[s.softline_count++] = a->name_ref.index;
                 s.softline_before[s.softline_count]   = -1;
             }
             break;
-        case N00B_ANNOT_HARDLINE:
-            if (a->name_ref.kind == N00B_ROLE_BY_INDEX
+        case NCC_ANNOT_HARDLINE:
+            if (a->name_ref.kind == NCC_ROLE_BY_INDEX
                 && a->name_ref.index >= 0
                 && s.hardline_count < 31) {
                 s.hardline_before[s.hardline_count++] = a->name_ref.index;
                 s.hardline_before[s.hardline_count]   = -1;
             }
             break;
-        case N00B_ANNOT_NOSPACE:
-            if (a->name_ref.kind == N00B_ROLE_BY_INDEX
+        case NCC_ANNOT_NOSPACE:
+            if (a->name_ref.kind == NCC_ROLE_BY_INDEX
                 && a->name_ref.index >= 0
                 && s.nospace_count < 31) {
                 s.nospace_before[s.nospace_count++] = a->name_ref.index;
                 s.nospace_before[s.nospace_count]   = -1;
             }
             break;
-        case N00B_ANNOT_ALIGN:
-            if (a->name_ref.kind == N00B_ROLE_BY_INDEX
+        case NCC_ANNOT_ALIGN:
+            if (a->name_ref.kind == NCC_ROLE_BY_INDEX
                 && a->name_ref.index >= 0
                 && s.align_count < 31) {
                 s.align_to[s.align_count++] = a->name_ref.index;
@@ -296,14 +296,14 @@ read_annotations(n00b_nonterm_t *nt)
 // Style table lookup
 // ============================================================================
 
-static const n00b_pprint_rule_t *
-style_lookup(n00b_pprint_style_t style, const char *nt_name)
+static const ncc_pprint_rule_t *
+style_lookup(ncc_pprint_style_t style, const char *nt_name)
 {
     if (!style || !nt_name) {
         return NULL;
     }
 
-    for (n00b_pprint_rule_t *r = style; r->nt_name; r++) {
+    for (ncc_pprint_rule_t *r = style; r->nt_name; r++) {
         if (strcmp(r->nt_name, nt_name) == 0) {
             return r;
         }
@@ -376,8 +376,8 @@ heuristic_space(tok_category_t prev, tok_category_t next)
 
 typedef struct {
     doc_stream_t       *ds;
-    n00b_grammar_t     *grammar;
-    n00b_pprint_style_t style;
+    ncc_grammar_t     *grammar;
+    ncc_pprint_style_t style;
     tok_category_t      last_tok_cat;
     bool                need_space;
     bool                first_token;
@@ -404,9 +404,9 @@ in_index_array(const int32_t *arr, int32_t ix)
 // ============================================================================
 
 static void
-emit_trivia(emit_ctx_t *ctx, n00b_trivia_t *trivia)
+emit_trivia(emit_ctx_t *ctx, ncc_trivia_t *trivia)
 {
-    for (n00b_trivia_t *t = trivia; t; t = t->next) {
+    for (ncc_trivia_t *t = trivia; t; t = t->next) {
         if (t->text.data && t->text.u8_bytes > 0) {
             doc_text(ctx->ds, t->text.data, (int32_t)t->text.u8_bytes);
         }
@@ -417,16 +417,16 @@ emit_trivia(emit_ctx_t *ctx, n00b_trivia_t *trivia)
 // Tree walk: emit document commands
 // ============================================================================
 
-static void emit_tree(emit_ctx_t *ctx, n00b_parse_tree_t *node);
+static void emit_tree(emit_ctx_t *ctx, ncc_parse_tree_t *node);
 
 static void
-emit_token(emit_ctx_t *ctx, n00b_token_info_t *tok)
+emit_token(emit_ctx_t *ctx, ncc_token_info_t *tok)
 {
-    if (!tok || !n00b_option_is_set(tok->value)) {
+    if (!tok || !ncc_option_is_set(tok->value)) {
         return;
     }
 
-    n00b_string_t val = n00b_option_get(tok->value);
+    ncc_string_t val = ncc_option_get(tok->value);
 
     if (!val.data || val.u8_bytes == 0) {
         return;
@@ -459,9 +459,9 @@ emit_token(emit_ctx_t *ctx, n00b_token_info_t *tok)
 }
 
 static void
-emit_nt(emit_ctx_t *ctx, n00b_parse_tree_t *node, n00b_nt_node_t *pn)
+emit_nt(emit_ctx_t *ctx, ncc_parse_tree_t *node, ncc_nt_node_t *pn)
 {
-    n00b_nonterm_t *nt = n00b_get_nonterm(ctx->grammar, pn->id);
+    ncc_nonterm_t *nt = ncc_get_nonterm(ctx->grammar, pn->id);
 
     // Get NT name for style lookup.
     const char *name = NULL;
@@ -471,7 +471,7 @@ emit_nt(emit_ctx_t *ctx, n00b_parse_tree_t *node, n00b_nt_node_t *pn)
     }
 
     // Tier 1: style table lookup.
-    const n00b_pprint_rule_t *rule = style_lookup(ctx->style, name);
+    const ncc_pprint_rule_t *rule = style_lookup(ctx->style, name);
 
     bool           do_indent = false;
     bool           do_group  = false;
@@ -511,7 +511,7 @@ emit_nt(emit_ctx_t *ctx, n00b_parse_tree_t *node, n00b_nt_node_t *pn)
         doc_group_begin(ctx->ds);
     }
 
-    size_t nc = n00b_tree_num_children(node);
+    size_t nc = ncc_tree_num_children(node);
 
     // Find the last hardline child index so we can dedent before it
     // (closing delimiter at parent indent level).
@@ -537,15 +537,15 @@ emit_nt(emit_ctx_t *ctx, n00b_parse_tree_t *node, n00b_nt_node_t *pn)
     }
 
     for (size_t i = 0; i < nc; i++) {
-        n00b_parse_tree_t *child = n00b_tree_child(node, i);
+        ncc_parse_tree_t *child = ncc_tree_child(node, i);
 
         if (!child) {
             continue;
         }
 
         // Skip missing children.
-        if (!n00b_tree_is_leaf(child)) {
-            n00b_nt_node_t *cpn = &n00b_tree_node_value(child);
+        if (!ncc_tree_is_leaf(child)) {
+            ncc_nt_node_t *cpn = &ncc_tree_node_value(child);
 
             if (cpn->missing) {
                 continue;
@@ -609,20 +609,20 @@ emit_nt(emit_ctx_t *ctx, n00b_parse_tree_t *node, n00b_nt_node_t *pn)
 }
 
 static void
-emit_tree(emit_ctx_t *ctx, n00b_parse_tree_t *node)
+emit_tree(emit_ctx_t *ctx, ncc_parse_tree_t *node)
 {
     if (!node) {
         return;
     }
 
     // Token leaf.
-    if (n00b_tree_is_leaf(node)) {
-        n00b_token_info_t *tok = n00b_tree_leaf_value(node);
+    if (ncc_tree_is_leaf(node)) {
+        ncc_token_info_t *tok = ncc_tree_leaf_value(node);
         emit_token(ctx, tok);
         return;
     }
 
-    n00b_nt_node_t *pn = &n00b_tree_node_value(node);
+    ncc_nt_node_t *pn = &ncc_tree_node_value(node);
 
     if (pn->missing) {
         return;
@@ -630,10 +630,10 @@ emit_tree(emit_ctx_t *ctx, n00b_parse_tree_t *node)
 
     // Group nodes: transparent recursion.
     if (pn->group_top || pn->group_item) {
-        size_t nc = n00b_tree_num_children(node);
+        size_t nc = ncc_tree_num_children(node);
 
         for (size_t i = 0; i < nc; i++) {
-            emit_tree(ctx, n00b_tree_child(node, i));
+            emit_tree(ctx, ncc_tree_child(node, i));
         }
 
         return;
@@ -655,20 +655,20 @@ measure_flat_width(doc_cmd_t *cmds, int32_t start, int32_t end)
 
     for (int32_t i = start; i < end; i++) {
         switch (cmds[i].kind) {
-        case N00B_DOC_TEXT:
+        case NCC_DOC_TEXT:
             width += cmds[i].text_len;
             break;
-        case N00B_DOC_SPACE:
-        case N00B_DOC_SOFTLINE:
+        case NCC_DOC_SPACE:
+        case NCC_DOC_SOFTLINE:
             width += 1;
             break;
-        case N00B_DOC_HARDLINE:
-        case N00B_DOC_BLANKLINE:
+        case NCC_DOC_HARDLINE:
+        case NCC_DOC_BLANKLINE:
             return INT32_MAX;
-        case N00B_DOC_GROUP_BEGIN:
+        case NCC_DOC_GROUP_BEGIN:
             depth++;
             break;
-        case N00B_DOC_GROUP_END:
+        case NCC_DOC_GROUP_END:
             depth--;
             if (depth < 0)
                 return width;
@@ -687,9 +687,9 @@ find_group_end(doc_cmd_t *cmds, int32_t count, int32_t start)
     int depth = 1;
 
     for (int32_t i = start + 1; i < count; i++) {
-        if (cmds[i].kind == N00B_DOC_GROUP_BEGIN)
+        if (cmds[i].kind == NCC_DOC_GROUP_BEGIN)
             depth++;
-        if (cmds[i].kind == N00B_DOC_GROUP_END) {
+        if (cmds[i].kind == NCC_DOC_GROUP_END) {
             depth--;
             if (depth == 0)
                 return i;
@@ -800,12 +800,12 @@ bstack_pop(bool_stack_t *st)
 
 static void
 emit_layout_indent(out_buf_t *ob, int32_t level, int32_t indent_size,
-                   n00b_indent_style_t style)
+                   ncc_indent_style_t style)
 {
     int32_t total = level * indent_size;
 
     for (int32_t i = 0; i < total; i++) {
-        ob_putc(ob, (style == N00B_PPRINT_TABS) ? '\t' : ' ');
+        ob_putc(ob, (style == NCC_PPRINT_TABS) ? '\t' : ' ');
     }
 }
 
@@ -822,7 +822,7 @@ emit_spaces(out_buf_t *ob, int32_t count)
 static int32_t
 emit_newline_indent(out_buf_t *ob, const char *nl,
                     int_stack_t *indent_st, int32_t indent_size,
-                    n00b_indent_style_t style,
+                    ncc_indent_style_t style,
                     int_stack_t *align_st)
 {
     ob_puts(ob, nl);
@@ -840,7 +840,7 @@ emit_newline_indent(out_buf_t *ob, const char *nl,
 }
 
 static char *
-layout_resolve(doc_stream_t *ds, n00b_pprint_opts_t *opts)
+layout_resolve(doc_stream_t *ds, ncc_pprint_opts_t *opts)
 {
     int32_t     line_width  = opts->line_width > 0 ? opts->line_width : 80;
     int32_t     indent_size = opts->indent_size > 0 ? opts->indent_size : 4;
@@ -863,17 +863,17 @@ layout_resolve(doc_stream_t *ds, n00b_pprint_opts_t *opts)
         doc_cmd_t *cmd = &ds->cmds[i];
 
         switch (cmd->kind) {
-        case N00B_DOC_TEXT:
+        case NCC_DOC_TEXT:
             ob_write(&ob, cmd->text, (size_t)cmd->text_len);
             col += cmd->text_len;
             break;
 
-        case N00B_DOC_SPACE:
+        case NCC_DOC_SPACE:
             ob_putc(&ob, ' ');
             col++;
             break;
 
-        case N00B_DOC_SOFTLINE:
+        case NCC_DOC_SOFTLINE:
             if (group_st.top > 0 && !group_st.data[group_st.top]) {
                 ob_putc(&ob, ' ');
                 col++;
@@ -884,41 +884,41 @@ layout_resolve(doc_stream_t *ds, n00b_pprint_opts_t *opts)
             }
             break;
 
-        case N00B_DOC_HARDLINE:
+        case NCC_DOC_HARDLINE:
             col = emit_newline_indent(&ob, nl, &indent_st, indent_size,
                                       opts->indent_style, &align_st);
             break;
 
-        case N00B_DOC_BLANKLINE:
+        case NCC_DOC_BLANKLINE:
             ob_puts(&ob, nl);
             col = emit_newline_indent(&ob, nl, &indent_st, indent_size,
                                       opts->indent_style, &align_st);
             break;
 
-        case N00B_DOC_INDENT:
+        case NCC_DOC_INDENT:
             istack_push(&indent_st, istack_peek(&indent_st) + 1);
             break;
 
-        case N00B_DOC_DEDENT:
+        case NCC_DOC_DEDENT:
             istack_pop(&indent_st);
             break;
 
-        case N00B_DOC_GROUP_BEGIN: {
+        case NCC_DOC_GROUP_BEGIN: {
             int32_t end    = find_group_end(ds->cmds, ds->count, i);
             int32_t flat_w = measure_flat_width(ds->cmds, i + 1, end);
             bstack_push(&group_st, (col + flat_w > line_width));
             break;
         }
 
-        case N00B_DOC_GROUP_END:
+        case NCC_DOC_GROUP_END:
             bstack_pop(&group_st);
             break;
 
-        case N00B_DOC_ALIGN_BEGIN:
+        case NCC_DOC_ALIGN_BEGIN:
             istack_push(&align_st, col);
             break;
 
-        case N00B_DOC_ALIGN_END:
+        case NCC_DOC_ALIGN_END:
             istack_pop(&align_st);
             break;
         }
@@ -932,13 +932,13 @@ layout_resolve(doc_stream_t *ds, n00b_pprint_opts_t *opts)
 }
 
 // ============================================================================
-// Public API: n00b_pprint
+// Public API: ncc_pprint
 // ============================================================================
 
 char *
-n00b_pprint(n00b_grammar_t    *g,
-             n00b_parse_tree_t *tree,
-             n00b_pprint_opts_t opts)
+ncc_pprint(ncc_grammar_t    *g,
+             ncc_parse_tree_t *tree,
+             ncc_pprint_opts_t opts)
 {
     if (!g || !tree) {
         return strdup("");
@@ -980,55 +980,55 @@ n00b_pprint(n00b_grammar_t    *g,
 // ============================================================================
 
 static const char *
-bnf_cc_name(n00b_char_class_t cc)
+bnf_cc_name(ncc_char_class_t cc)
 {
     switch (cc) {
-    case N00B_CC_ASCII_DIGIT:
+    case NCC_CC_ASCII_DIGIT:
         return "__DIGIT";
-    case N00B_CC_ASCII_ALPHA:
+    case NCC_CC_ASCII_ALPHA:
         return "__ALPHA";
-    case N00B_CC_ASCII_UPPER:
+    case NCC_CC_ASCII_UPPER:
         return "__UPPER";
-    case N00B_CC_ASCII_LOWER:
+    case NCC_CC_ASCII_LOWER:
         return "__LOWER";
-    case N00B_CC_HEX_DIGIT:
+    case NCC_CC_HEX_DIGIT:
         return "__HEX";
-    case N00B_CC_NONZERO_DIGIT:
+    case NCC_CC_NONZERO_DIGIT:
         return "__NONZERO_DIGIT";
-    case N00B_CC_WHITESPACE:
+    case NCC_CC_WHITESPACE:
         return "__WHITESPACE";
-    case N00B_CC_ID_START:
+    case NCC_CC_ID_START:
         return "__ID_START";
-    case N00B_CC_ID_CONTINUE:
+    case NCC_CC_ID_CONTINUE:
         return "__ID_CONTINUE";
-    case N00B_CC_PRINTABLE:
+    case NCC_CC_PRINTABLE:
         return "__PRINTABLE";
-    case N00B_CC_UNICODE_DIGIT:
+    case NCC_CC_UNICODE_DIGIT:
         return "__UNICODE_DIGIT";
-    case N00B_CC_JSON_STRING_CHAR:
+    case NCC_CC_JSON_STRING_CHAR:
         return "__JSON_STR";
-    case N00B_CC_REGEX_BODY_CHAR:
+    case NCC_CC_REGEX_BODY_CHAR:
         return "__REGEX_STR";
-    case N00B_CC_NON_WS_PRINTABLE:
+    case NCC_CC_NON_WS_PRINTABLE:
         return "__NON_WS_PRINTABLE";
-    case N00B_CC_NON_NL_WS:
+    case NCC_CC_NON_NL_WS:
         return "__NON_NL_WS";
-    case N00B_CC_NON_NL_PRINTABLE:
+    case NCC_CC_NON_NL_PRINTABLE:
         return "__NON_NL_PRINTABLE";
     }
     return "__UNKNOWN";
 }
 
 static void
-emit_match_item(out_buf_t *ob, n00b_grammar_t *g, n00b_match_t *m)
+emit_match_item(out_buf_t *ob, ncc_grammar_t *g, ncc_match_t *m)
 {
     switch (m->kind) {
-    case N00B_MATCH_EMPTY:
+    case NCC_MATCH_EMPTY:
         ob_puts(ob, "\"\"");
         break;
 
-    case N00B_MATCH_NT: {
-        n00b_nonterm_t *nt = n00b_get_nonterm(g, m->nt_id);
+    case NCC_MATCH_NT: {
+        ncc_nonterm_t *nt = ncc_get_nonterm(g, m->nt_id);
         ob_putc(ob, '<');
         if (nt && nt->name.data) {
             ob_write(ob, nt->name.data, nt->name.u8_bytes);
@@ -1040,9 +1040,9 @@ emit_match_item(out_buf_t *ob, n00b_grammar_t *g, n00b_match_t *m)
         break;
     }
 
-    case N00B_MATCH_TERMINAL: {
+    case NCC_MATCH_TERMINAL: {
         int64_t          tid  = m->terminal_id;
-        n00b_terminal_t *term = n00b_get_terminal(g, tid);
+        ncc_terminal_t *term = ncc_get_terminal(g, tid);
 
         if (term && term->value.data) {
             const char *val       = term->value.data;
@@ -1073,23 +1073,23 @@ emit_match_item(out_buf_t *ob, n00b_grammar_t *g, n00b_match_t *m)
         break;
     }
 
-    case N00B_MATCH_ANY:
+    case NCC_MATCH_ANY:
         ob_puts(ob, "__ANY");
         break;
 
-    case N00B_MATCH_CLASS:
+    case NCC_MATCH_CLASS:
         ob_puts(ob, bnf_cc_name(m->char_class));
         break;
 
-    case N00B_MATCH_SET:
+    case NCC_MATCH_SET:
         ob_puts(ob, "(set)");
         break;
 
-    case N00B_MATCH_GROUP: {
-        n00b_rule_group_t *grp = (n00b_rule_group_t *)m->group;
+    case NCC_MATCH_GROUP: {
+        ncc_rule_group_t *grp = (ncc_rule_group_t *)m->group;
 
         if (grp) {
-            n00b_nonterm_t *cnt_nt = n00b_get_nonterm(g, grp->contents_id);
+            ncc_nonterm_t *cnt_nt = ncc_get_nonterm(g, grp->contents_id);
 
             if (cnt_nt && cnt_nt->name.data) {
                 ob_putc(ob, '<');
@@ -1110,26 +1110,26 @@ emit_match_item(out_buf_t *ob, n00b_grammar_t *g, n00b_match_t *m)
 }
 
 static void
-emit_annotation_bnf(out_buf_t *ob, n00b_annotation_t *a)
+emit_annotation_bnf(out_buf_t *ob, ncc_annotation_t *a)
 {
     char num[16];
 
     switch (a->kind) {
-    case N00B_ANNOT_INDENT:
+    case NCC_ANNOT_INDENT:
         ob_puts(ob, " @indent");
         break;
-    case N00B_ANNOT_GROUP:
+    case NCC_ANNOT_GROUP:
         ob_puts(ob, " @group");
         break;
-    case N00B_ANNOT_CONCAT:
+    case NCC_ANNOT_CONCAT:
         ob_puts(ob, " @concat");
         break;
-    case N00B_ANNOT_BLANKLINE:
+    case NCC_ANNOT_BLANKLINE:
         ob_puts(ob, " @blankline");
         break;
-    case N00B_ANNOT_SOFTLINE:
+    case NCC_ANNOT_SOFTLINE:
         ob_puts(ob, " @softline(");
-        if (a->name_ref.kind == N00B_ROLE_BY_INDEX
+        if (a->name_ref.kind == NCC_ROLE_BY_INDEX
             && a->name_ref.index >= 0) {
             ob_putc(ob, '$');
             snprintf(num, sizeof(num), "%d", a->name_ref.index);
@@ -1137,9 +1137,9 @@ emit_annotation_bnf(out_buf_t *ob, n00b_annotation_t *a)
         }
         ob_putc(ob, ')');
         break;
-    case N00B_ANNOT_HARDLINE:
+    case NCC_ANNOT_HARDLINE:
         ob_puts(ob, " @hardline(");
-        if (a->name_ref.kind == N00B_ROLE_BY_INDEX
+        if (a->name_ref.kind == NCC_ROLE_BY_INDEX
             && a->name_ref.index >= 0) {
             ob_putc(ob, '$');
             snprintf(num, sizeof(num), "%d", a->name_ref.index);
@@ -1147,9 +1147,9 @@ emit_annotation_bnf(out_buf_t *ob, n00b_annotation_t *a)
         }
         ob_putc(ob, ')');
         break;
-    case N00B_ANNOT_NOSPACE:
+    case NCC_ANNOT_NOSPACE:
         ob_puts(ob, " @nospace(");
-        if (a->name_ref.kind == N00B_ROLE_BY_INDEX
+        if (a->name_ref.kind == NCC_ROLE_BY_INDEX
             && a->name_ref.index >= 0) {
             ob_putc(ob, '$');
             snprintf(num, sizeof(num), "%d", a->name_ref.index);
@@ -1157,9 +1157,9 @@ emit_annotation_bnf(out_buf_t *ob, n00b_annotation_t *a)
         }
         ob_putc(ob, ')');
         break;
-    case N00B_ANNOT_ALIGN:
+    case NCC_ANNOT_ALIGN:
         ob_puts(ob, " @align(");
-        if (a->name_ref.kind == N00B_ROLE_BY_INDEX
+        if (a->name_ref.kind == NCC_ROLE_BY_INDEX
             && a->name_ref.index >= 0) {
             ob_putc(ob, '$');
             snprintf(num, sizeof(num), "%d", a->name_ref.index);
@@ -1167,20 +1167,20 @@ emit_annotation_bnf(out_buf_t *ob, n00b_annotation_t *a)
         }
         ob_putc(ob, ')');
         break;
-    case N00B_ANNOT_SCOPE_OPEN:
+    case NCC_ANNOT_SCOPE_OPEN:
         ob_puts(ob, " @scope(");
         if (a->scope_tag.data) {
             ob_putc(ob, '"');
             ob_write(ob, a->scope_tag.data, a->scope_tag.u8_bytes);
             ob_putc(ob, '"');
         }
-        if (a->name_ref.kind == N00B_ROLE_BY_INDEX
+        if (a->name_ref.kind == NCC_ROLE_BY_INDEX
             && a->name_ref.index >= 0) {
             ob_puts(ob, ", $");
             snprintf(num, sizeof(num), "%d", a->name_ref.index);
             ob_puts(ob, num);
         }
-        else if (a->name_ref.kind == N00B_ROLE_BY_NAME
+        else if (a->name_ref.kind == NCC_ROLE_BY_NAME
                  && a->name_ref.name.data) {
             ob_puts(ob, ", ");
             ob_write(ob, a->name_ref.name.data,
@@ -1188,26 +1188,26 @@ emit_annotation_bnf(out_buf_t *ob, n00b_annotation_t *a)
         }
         ob_putc(ob, ')');
         break;
-    case N00B_ANNOT_DECLARES:
+    case NCC_ANNOT_DECLARES:
         ob_puts(ob, " @declares(");
-        if (a->name_ref.kind == N00B_ROLE_BY_INDEX
+        if (a->name_ref.kind == NCC_ROLE_BY_INDEX
             && a->name_ref.index >= 0) {
             ob_putc(ob, '$');
             snprintf(num, sizeof(num), "%d", a->name_ref.index);
             ob_puts(ob, num);
         }
-        else if (a->name_ref.kind == N00B_ROLE_BY_NAME
+        else if (a->name_ref.kind == NCC_ROLE_BY_NAME
                  && a->name_ref.name.data) {
             ob_write(ob, a->name_ref.name.data,
                      a->name_ref.name.u8_bytes);
         }
-        if (a->type_ref.kind == N00B_ROLE_BY_INDEX
+        if (a->type_ref.kind == NCC_ROLE_BY_INDEX
             && a->type_ref.index >= 0) {
             ob_puts(ob, ", $");
             snprintf(num, sizeof(num), "%d", a->type_ref.index);
             ob_puts(ob, num);
         }
-        else if (a->type_ref.kind == N00B_ROLE_BY_NAME
+        else if (a->type_ref.kind == NCC_ROLE_BY_NAME
                  && a->type_ref.name.data) {
             ob_puts(ob, ", ");
             ob_write(ob, a->type_ref.name.data,
@@ -1215,9 +1215,9 @@ emit_annotation_bnf(out_buf_t *ob, n00b_annotation_t *a)
         }
         ob_putc(ob, ')');
         break;
-    case N00B_ANNOT_RECLASSIFY:
+    case NCC_ANNOT_RECLASSIFY:
         ob_puts(ob, " @reclassify(");
-        if (a->type_ref.kind == N00B_ROLE_BY_INDEX
+        if (a->type_ref.kind == NCC_ROLE_BY_INDEX
             && a->type_ref.index >= 0) {
             ob_putc(ob, '$');
             snprintf(num, sizeof(num), "%d", a->type_ref.index);
@@ -1230,9 +1230,9 @@ emit_annotation_bnf(out_buf_t *ob, n00b_annotation_t *a)
         }
         ob_putc(ob, ')');
         break;
-    case N00B_ANNOT_RECLASSIFY_LIST:
+    case NCC_ANNOT_RECLASSIFY_LIST:
         ob_puts(ob, " @reclassify_list(");
-        if (a->type_ref.kind == N00B_ROLE_BY_INDEX
+        if (a->type_ref.kind == NCC_ROLE_BY_INDEX
             && a->type_ref.index >= 0) {
             ob_putc(ob, '$');
             snprintf(num, sizeof(num), "%d", a->type_ref.index);
@@ -1243,7 +1243,7 @@ emit_annotation_bnf(out_buf_t *ob, n00b_annotation_t *a)
             ob_write(ob, a->scope_tag.data, a->scope_tag.u8_bytes);
             ob_putc(ob, '"');
         }
-        if (a->name_ref.kind == N00B_ROLE_BY_INDEX
+        if (a->name_ref.kind == NCC_ROLE_BY_INDEX
             && a->name_ref.index >= 0) {
             ob_puts(ob, ", $");
             snprintf(num, sizeof(num), "%d", a->name_ref.index);
@@ -1257,8 +1257,8 @@ emit_annotation_bnf(out_buf_t *ob, n00b_annotation_t *a)
 }
 
 char *
-n00b_grammar_emit_bnf(n00b_grammar_t    *g,
-                        n00b_pprint_opts_t opts)
+ncc_grammar_emit_bnf(ncc_grammar_t    *g,
+                        ncc_pprint_opts_t opts)
 {
     if (!g) {
         return strdup("");
@@ -1267,10 +1267,10 @@ n00b_grammar_emit_bnf(n00b_grammar_t    *g,
     out_buf_t ob;
     ob_init(&ob);
 
-    size_t nt_count = n00b_list_len(g->nt_list);
+    size_t nt_count = ncc_list_len(g->nt_list);
 
     for (size_t ni = 0; ni < nt_count; ni++) {
-        n00b_nonterm_t *nt = &g->nt_list.data[ni];
+        ncc_nonterm_t *nt = &g->nt_list.data[ni];
 
         if (nt->group_nt) {
             continue;
@@ -1291,10 +1291,10 @@ n00b_grammar_emit_bnf(n00b_grammar_t    *g,
 
         // Emit annotations from pending_annotations.
         if (nt->pending_annotations.data) {
-            size_t na = n00b_list_len(nt->pending_annotations);
+            size_t na = ncc_list_len(nt->pending_annotations);
 
             for (size_t ai = 0; ai < na; ai++) {
-                n00b_annotation_t *a = n00b_list_get(
+                ncc_annotation_t *a = ncc_list_get(
                     nt->pending_annotations, ai);
                 if (a) {
                     emit_annotation_bnf(&ob, a);
@@ -1305,11 +1305,11 @@ n00b_grammar_emit_bnf(n00b_grammar_t    *g,
         ob_puts(&ob, " ::=");
 
         size_t rule_count = nt->rule_ids.data
-            ? n00b_list_len(nt->rule_ids) : 0;
+            ? ncc_list_len(nt->rule_ids) : 0;
 
         for (size_t ri = 0; ri < rule_count; ri++) {
-            int32_t            rule_ix = n00b_list_get(nt->rule_ids, ri);
-            n00b_parse_rule_t *rule    = n00b_get_rule(g, rule_ix);
+            int32_t            rule_ix = ncc_list_get(nt->rule_ids, ri);
+            ncc_parse_rule_t *rule    = ncc_get_rule(g, rule_ix);
 
             if (!rule) {
                 continue;
@@ -1325,14 +1325,14 @@ n00b_grammar_emit_bnf(n00b_grammar_t    *g,
 
             ob_putc(&ob, ' ');
 
-            size_t item_count = n00b_list_len(rule->contents);
+            size_t item_count = ncc_list_len(rule->contents);
 
             for (size_t mi = 0; mi < item_count; mi++) {
                 if (mi > 0) {
                     ob_putc(&ob, ' ');
                 }
 
-                n00b_match_t *m = &rule->contents.data[mi];
+                ncc_match_t *m = &rule->contents.data[mi];
                 emit_match_item(&ob, g, m);
             }
         }

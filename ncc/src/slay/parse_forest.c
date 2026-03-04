@@ -8,20 +8,20 @@
 // Construction
 // ============================================================================
 
-n00b_parse_forest_t
-n00b_parse_forest_empty(n00b_grammar_t *g)
+ncc_parse_forest_t
+ncc_parse_forest_empty(ncc_grammar_t *g)
 {
-    return (n00b_parse_forest_t){
-        .trees   = n00b_array_new(n00b_parse_tree_ptr_t, 0),
+    return (ncc_parse_forest_t){
+        .trees   = ncc_array_new(ncc_parse_tree_ptr_t, 0),
         .grammar = g,
     };
 }
 
-n00b_parse_forest_t
-n00b_parse_forest_new(n00b_grammar_t          *g,
-                       n00b_parse_tree_array_t  trees)
+ncc_parse_forest_t
+ncc_parse_forest_new(ncc_grammar_t          *g,
+                       ncc_parse_tree_array_t  trees)
 {
-    return (n00b_parse_forest_t){
+    return (ncc_parse_forest_t){
         .trees   = trees,
         .grammar = g,
     };
@@ -32,7 +32,7 @@ n00b_parse_forest_new(n00b_grammar_t          *g,
 // ============================================================================
 
 int32_t
-n00b_parse_forest_count(n00b_parse_forest_t *f)
+ncc_parse_forest_count(ncc_parse_forest_t *f)
 {
     if (!f || !f->trees.data) {
         return 0;
@@ -42,17 +42,17 @@ n00b_parse_forest_count(n00b_parse_forest_t *f)
 }
 
 bool
-n00b_parse_forest_is_ambiguous(n00b_parse_forest_t *f)
+ncc_parse_forest_is_ambiguous(ncc_parse_forest_t *f)
 {
-    return n00b_parse_forest_count(f) > 1;
+    return ncc_parse_forest_count(f) > 1;
 }
 
 // ============================================================================
 // Access
 // ============================================================================
 
-n00b_parse_tree_t *
-n00b_parse_forest_tree(n00b_parse_forest_t *f, int32_t ix)
+ncc_parse_tree_t *
+ncc_parse_forest_tree(ncc_parse_forest_t *f, int32_t ix)
 {
     if (!f || !f->trees.data || ix < 0 || (size_t)ix >= f->trees.len) {
         return NULL;
@@ -61,10 +61,10 @@ n00b_parse_forest_tree(n00b_parse_forest_t *f, int32_t ix)
     return f->trees.data[ix];
 }
 
-n00b_parse_tree_t *
-n00b_parse_forest_best(n00b_parse_forest_t *f)
+ncc_parse_tree_t *
+ncc_parse_forest_best(ncc_parse_forest_t *f)
 {
-    return n00b_parse_forest_tree(f, 0);
+    return ncc_parse_forest_tree(f, 0);
 }
 
 // ============================================================================
@@ -72,24 +72,24 @@ n00b_parse_forest_best(n00b_parse_forest_t *f)
 // ============================================================================
 
 void *
-n00b_parse_forest_walk(n00b_parse_forest_t *f,
+ncc_parse_forest_walk(ncc_parse_forest_t *f,
                         int32_t              ix,
                         void                *thunk)
 {
-    n00b_parse_tree_t *tree = n00b_parse_forest_tree(f, ix);
+    ncc_parse_tree_t *tree = ncc_parse_forest_tree(f, ix);
 
     if (!tree || !f->grammar) {
         return NULL;
     }
 
-    return n00b_parse_tree_walk(f->grammar, tree, thunk);
+    return ncc_parse_tree_walk(f->grammar, tree, thunk);
 }
 
 void *
-n00b_parse_forest_walk_best(n00b_parse_forest_t *f,
+ncc_parse_forest_walk_best(ncc_parse_forest_t *f,
                              void               *thunk)
 {
-    return n00b_parse_forest_walk(f, 0, thunk);
+    return ncc_parse_forest_walk(f, 0, thunk);
 }
 
 // ============================================================================
@@ -97,16 +97,16 @@ n00b_parse_forest_walk_best(n00b_parse_forest_t *f,
 // ============================================================================
 
 void
-n00b_parse_forest_free(n00b_parse_forest_t *f)
+ncc_parse_forest_free(ncc_parse_forest_t *f)
 {
     if (!f || !f->trees.data) {
         return;
     }
 
     for (size_t i = 0; i < f->trees.len; i++) {
-        n00b_parse_tree_free(f->trees.data[i]);
+        ncc_parse_tree_free(f->trees.data[i]);
     }
 
-    n00b_array_free(f->trees);
-    f->trees = (n00b_parse_tree_array_t){0};
+    ncc_array_free(f->trees);
+    f->trees = (ncc_parse_tree_array_t){0};
 }

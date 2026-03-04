@@ -9,29 +9,29 @@
 // ============================================================================
 
 bool
-n00b_parse_node_is_token(n00b_parse_tree_t *t)
+ncc_parse_node_is_token(ncc_parse_tree_t *t)
 {
-    return t && n00b_tree_is_leaf(t);
+    return t && ncc_tree_is_leaf(t);
 }
 
-n00b_token_info_t *
-n00b_parse_node_token(n00b_parse_tree_t *t)
+ncc_token_info_t *
+ncc_parse_node_token(ncc_parse_tree_t *t)
 {
-    if (!t || !n00b_tree_is_leaf(t)) {
+    if (!t || !ncc_tree_is_leaf(t)) {
         return NULL;
     }
 
-    return n00b_tree_leaf_value(t);
+    return ncc_tree_leaf_value(t);
 }
 
-n00b_option_t(n00b_string_t)
-n00b_parse_node_name(n00b_parse_tree_t *t)
+ncc_option_t(ncc_string_t)
+ncc_parse_node_name(ncc_parse_tree_t *t)
 {
-    if (!t || n00b_tree_is_leaf(t)) {
-        return n00b_option_none(n00b_string_t);
+    if (!t || ncc_tree_is_leaf(t)) {
+        return ncc_option_none(ncc_string_t);
     }
 
-    return n00b_option_set(n00b_string_t, n00b_tree_node_value(t).name);
+    return ncc_option_set(ncc_string_t, ncc_tree_node_value(t).name);
 }
 
 // ============================================================================
@@ -39,44 +39,44 @@ n00b_parse_node_name(n00b_parse_tree_t *t)
 // ============================================================================
 
 void *
-n00b_parse_tree_walk(n00b_grammar_t *g, n00b_parse_tree_t *node, void *thunk)
+ncc_parse_tree_walk(ncc_grammar_t *g, ncc_parse_tree_t *node, void *thunk)
 {
     if (!node) {
         return NULL;
     }
 
-    if (n00b_tree_is_leaf(node)) {
-        return n00b_tree_leaf_value(node);
+    if (ncc_tree_is_leaf(node)) {
+        return ncc_tree_leaf_value(node);
     }
 
-    n00b_nt_node_t *pn = &n00b_tree_node_value(node);
+    ncc_nt_node_t *pn = &ncc_tree_node_value(node);
 
-    if (pn->id == N00B_EMPTY_STRING) {
+    if (pn->id == NCC_EMPTY_STRING) {
         return NULL;
     }
 
-    size_t nc = n00b_tree_num_children(node);
+    size_t nc = ncc_tree_num_children(node);
 
     void **sub_results = NULL;
 
     if (nc) {
-        sub_results = n00b_alloc_array(void *, nc);
+        sub_results = ncc_alloc_array(void *, nc);
 
         for (size_t i = 0; i < nc; i++) {
-            sub_results[i] = n00b_parse_tree_walk(g,
-                                                   n00b_tree_child(node, i),
+            sub_results[i] = ncc_parse_tree_walk(g,
+                                                   ncc_tree_child(node, i),
                                                    thunk);
         }
     }
 
-    // Group wrapper nodes (from BNF ?, *, +) have pn->id = N00B_GROUP_ID
+    // Group wrapper nodes (from BNF ?, *, +) have pn->id = NCC_GROUP_ID
     // which won't resolve to a real nonterm. Skip the action lookup.
     if (pn->group_top) {
         return sub_results;
     }
 
-    n00b_nonterm_t    *nt     = n00b_get_nonterm(g, pn->id);
-    n00b_walk_action_t action = (nt && nt->action) ? nt->action
+    ncc_nonterm_t    *nt     = ncc_get_nonterm(g, pn->id);
+    ncc_walk_action_t action = (nt && nt->action) ? nt->action
                                                     : g->default_action;
 
     if (!action) {
@@ -91,7 +91,7 @@ n00b_parse_tree_walk(n00b_grammar_t *g, n00b_parse_tree_t *node, void *thunk)
 // ============================================================================
 
 void
-n00b_parse_tree_free(n00b_parse_tree_t *t)
+ncc_parse_tree_free(ncc_parse_tree_t *t)
 {
     if (!t) {
         return;
@@ -99,9 +99,9 @@ n00b_parse_tree_free(n00b_parse_tree_t *t)
 
     if (!t->is_leaf) {
         for (size_t i = 0; i < t->node.num_children; i++) {
-            n00b_parse_tree_free(t->node.children[i]);
+            ncc_parse_tree_free(t->node.children[i]);
         }
     }
 
-    n00b_tree_free_node(t);
+    ncc_tree_free_node(t);
 }

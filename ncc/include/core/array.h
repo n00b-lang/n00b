@@ -3,15 +3,15 @@
  * @file array.h
  * @brief Type-safe dynamic array (standalone extraction).
  *
- * Stripped-down version of n00b_array_t: no rwlock, no allocator field,
+ * Stripped-down version of ncc_array_t: no rwlock, no allocator field,
  * single-threaded only. Lock calls compile to no-ops via data_lock.h.
  *
  * Usage:
- *     n00b_array_decl(int);
- *     n00b_array_t(int) arr = n00b_array_new(int, 16);
- *     n00b_array_set(arr, 0, 42);
- *     int x = n00b_array_get(arr, 0);
- *     n00b_array_free(arr);
+ *     ncc_array_decl(int);
+ *     ncc_array_t(int) arr = ncc_array_new(int, 16);
+ *     ncc_array_set(arr, 0, 42);
+ *     int x = ncc_array_get(arr, 0);
+ *     ncc_array_free(arr);
  */
 
 #include <assert.h>
@@ -25,39 +25,39 @@
 // Type definition
 // ============================================================================
 
-#define n00b_array_tid(T) typeid(n00b_array, T)
-#define n00b_array_t(T)   struct n00b_array_tid(T)
+#define ncc_array_tid(T) typeid(ncc_array, T)
+#define ncc_array_t(T)   struct ncc_array_tid(T)
 
-#define n00b_array_decl(T)                                                     \
-    struct n00b_array_tid(T) {                                                 \
+#define ncc_array_decl(T)                                                     \
+    struct ncc_array_tid(T) {                                                 \
         T                *data;                                                \
         size_t            len;                                                 \
         size_t            cap;                                                 \
-        n00b_rwlock_t    *lock;                                                \
-        n00b_allocator_t *allocator;                                           \
+        ncc_rwlock_t    *lock;                                                \
+        ncc_allocator_t *allocator;                                           \
     }
 
 // ============================================================================
 // Construction / destruction
 // ============================================================================
 
-#define n00b_array_new(T, N, ...)              _n00b_array_new_sel(T, N, false, ##__VA_ARGS__)
-#define n00b_array_new_locked(T, N, ...)       _n00b_array_new_sel(T, N, true, ##__VA_ARGS__)
+#define ncc_array_new(T, N, ...)              _ncc_array_new_sel(T, N, false, ##__VA_ARGS__)
+#define ncc_array_new_locked(T, N, ...)       _ncc_array_new_sel(T, N, true, ##__VA_ARGS__)
 
-#define _n00b_array_new_sel(T, N, locked, ...)                                 \
+#define _ncc_array_new_sel(T, N, locked, ...)                                 \
     ({                                                                         \
-        (n00b_array_t(T)){                                                     \
+        (ncc_array_t(T)){                                                     \
             .len  = 0,                                                         \
             .cap  = (N),                                                       \
-            .data = n00b_alloc_array(T, (N)),                                  \
+            .data = ncc_alloc_array(T, (N)),                                  \
             .lock = nullptr,                                                   \
             .allocator = nullptr,                                              \
         };                                                                     \
     })
 
-#define n00b_array_checked_ptr(T, N, P)                                        \
+#define ncc_array_checked_ptr(T, N, P)                                        \
     ({                                                                         \
-        (n00b_array_t(T)){                                                     \
+        (ncc_array_t(T)){                                                     \
             .len  = 0,                                                         \
             .cap  = (N),                                                       \
             .data = (P),                                                       \
@@ -65,11 +65,11 @@
         };                                                                     \
     })
 
-#define n00b_array_free(x)                                                     \
+#define ncc_array_free(x)                                                     \
     ({                                                                         \
         auto _bl_ap = &(x);                                                    \
         if (_bl_ap->data) {                                                    \
-            n00b_free(_bl_ap->data);                                           \
+            ncc_free(_bl_ap->data);                                           \
         }                                                                      \
         *_bl_ap = (typeof(x)){};                                               \
     })
@@ -78,7 +78,7 @@
 // Access
 // ============================================================================
 
-#define n00b_array_get(x, i)                                                   \
+#define ncc_array_get(x, i)                                                   \
     ({                                                                         \
         auto _bl_ap = &(x);                                                    \
         size_t _bl_i = (i);                                                    \
@@ -89,7 +89,7 @@
         _bl_r;                                                                 \
     })
 
-#define n00b_array_set(x, i, val)                                              \
+#define ncc_array_set(x, i, val)                                              \
     ({                                                                         \
         auto _bl_ap = &(x);                                                    \
         size_t _bl_i = (i);                                                    \
@@ -102,13 +102,13 @@
         _bl_ap->data[_bl_i] = (val);                                           \
     })
 
-#define n00b_array_len(x)                                                      \
+#define ncc_array_len(x)                                                      \
     ({                                                                         \
         auto _bl_ap = &(x);                                                    \
         _bl_ap->len;                                                           \
     })
 
-#define n00b_array_cap(x)                                                      \
+#define ncc_array_cap(x)                                                      \
     ({                                                                         \
         auto _bl_ap = &(x);                                                    \
         _bl_ap->cap;                                                           \
@@ -118,13 +118,13 @@
 // Clone
 // ============================================================================
 
-#define n00b_array_clone(x)                                                    \
+#define ncc_array_clone(x)                                                    \
     ({                                                                         \
         auto _bl_sp = &(x);                                                    \
         typeof(x) _bl_copy = (typeof(x)){                                      \
             .len       = _bl_sp->len,                                          \
             .cap       = _bl_sp->cap,                                          \
-            .data      = n00b_alloc_array(typeof(*_bl_sp->data), _bl_sp->cap), \
+            .data      = ncc_alloc_array(typeof(*_bl_sp->data), _bl_sp->cap), \
             .lock      = nullptr,                                              \
             .allocator = nullptr,                                              \
         };                                                                     \
@@ -137,7 +137,7 @@
 // Iteration
 // ============================================================================
 
-#define n00b_array_foreach(arr, var)                                            \
+#define ncc_array_foreach(arr, var)                                            \
     for (typeof((arr).data) var = (arr).data;                                  \
          (var) < (arr).data + (arr).len;                                       \
          ++(var))

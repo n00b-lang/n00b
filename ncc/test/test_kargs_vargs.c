@@ -1,11 +1,11 @@
 #include <stdio.h>
 #include <stdbool.h>
 
-typedef struct n00b_vargs_t {
+typedef struct ncc_vargs_t {
     unsigned int  nargs;
     unsigned int  cur_ix;
     void        **args;
-} n00b_vargs_t;
+} ncc_vargs_t;
 
 // Function with both vargs and kargs
 void log_msg(int level, +) _kargs { const char *prefix = "LOG"; } {

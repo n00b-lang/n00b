@@ -28,13 +28,13 @@
  * @param ntokens Number of tokens in the array.
  * @return Number of tokens reclassified.
  */
-int32_t n00b_annot_reclassify_walk(n00b_grammar_t    *g,
-                                    n00b_parse_tree_t *tree,
-                                    n00b_token_info_t **tokens,
+int32_t ncc_annot_reclassify_walk(ncc_grammar_t    *g,
+                                    ncc_parse_tree_t *tree,
+                                    ncc_token_info_t **tokens,
                                     int32_t            ntokens);
 
 /**
- * @brief Same as n00b_annot_reclassify_walk, but also populates a
+ * @brief Same as ncc_annot_reclassify_walk, but also populates a
  *        symbol table with typedef entries for each reclassified name.
  *
  * @param g       Grammar with reclassify annotations.
@@ -44,8 +44,8 @@ int32_t n00b_annot_reclassify_walk(n00b_grammar_t    *g,
  * @param st      Symbol table to populate (NULL to skip symtab).
  * @return Number of tokens reclassified.
  */
-int32_t n00b_annot_reclassify_walk_with_symtab(n00b_grammar_t    *g,
-                                                 n00b_parse_tree_t *tree,
-                                                 n00b_token_info_t **tokens,
+int32_t ncc_annot_reclassify_walk_with_symtab(ncc_grammar_t    *g,
+                                                 ncc_parse_tree_t *tree,
+                                                 ncc_token_info_t **tokens,
                                                  int32_t            ntokens,
-                                                 n00b_symtab_t     *st);
+                                                 ncc_symtab_t     *st);

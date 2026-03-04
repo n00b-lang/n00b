@@ -3,23 +3,23 @@
 #include "n00b.h"
 #include "core/alloc.h"
 
-struct n00b_buffer_t {
+struct ncc_buffer_t {
     char  *data;
     size_t byte_len;
     size_t alloc_len;
 };
 
-static inline n00b_buffer_t *
-n00b_buffer_empty(void)
+static inline ncc_buffer_t *
+ncc_buffer_empty(void)
 {
-    n00b_buffer_t *buf = n00b_alloc(n00b_buffer_t);
+    ncc_buffer_t *buf = ncc_alloc(ncc_buffer_t);
     return buf;
 }
 
-static inline n00b_buffer_t *
-n00b_buffer_from_cstr(const char *s)
+static inline ncc_buffer_t *
+ncc_buffer_from_cstr(const char *s)
 {
-    n00b_buffer_t *buf = n00b_alloc(n00b_buffer_t);
+    ncc_buffer_t *buf = ncc_alloc(ncc_buffer_t);
     size_t len = strlen(s);
 
     buf->data      = (char *)calloc(1, len + 1);
@@ -30,10 +30,10 @@ n00b_buffer_from_cstr(const char *s)
     return buf;
 }
 
-static inline n00b_buffer_t *
-n00b_buffer_from_bytes(const char *data, int64_t len)
+static inline ncc_buffer_t *
+ncc_buffer_from_bytes(const char *data, int64_t len)
 {
-    n00b_buffer_t *buf = n00b_alloc(n00b_buffer_t);
+    ncc_buffer_t *buf = ncc_alloc(ncc_buffer_t);
 
     buf->data      = (char *)calloc(1, (size_t)len + 1);
     memcpy(buf->data, data, (size_t)len);
@@ -44,7 +44,7 @@ n00b_buffer_from_bytes(const char *data, int64_t len)
 }
 
 static inline void
-n00b_buffer_free(n00b_buffer_t *buf)
+ncc_buffer_free(ncc_buffer_t *buf)
 {
     if (!buf) {
         return;

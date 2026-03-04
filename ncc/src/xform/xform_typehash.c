@@ -14,42 +14,42 @@
 // Transform callback
 // ============================================================================
 
-static n00b_parse_tree_t *
-xform_typehash(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *node)
+static ncc_parse_tree_t *
+xform_typehash(ncc_xform_ctx_t *ctx, ncc_parse_tree_t *node)
 {
     // primary_expression has many alternatives. The typehash one is:
     //   "typehash" "(" <typeid_atom> <typeid_continuation>? ")"
     //
     // Check that first child is the "typehash" keyword token.
 
-    size_t nc = n00b_tree_num_children(node);
+    size_t nc = ncc_tree_num_children(node);
     if (nc < 4) {
         return NULL;
     }
 
-    n00b_parse_tree_t *first = n00b_tree_child(node, 0);
-    if (!n00b_xform_leaf_text_eq(first, "typehash")) {
+    ncc_parse_tree_t *first = ncc_tree_child(node, 0);
+    if (!ncc_xform_leaf_text_eq(first, "typehash")) {
         return NULL;
     }
 
-    n00b_parse_tree_t *atom = n00b_xform_find_child_nt(node, "typeid_atom");
-    n00b_parse_tree_t *cont = n00b_xform_find_child_nt(node,
+    ncc_parse_tree_t *atom = ncc_xform_find_child_nt(node, "typeid_atom");
+    ncc_parse_tree_t *cont = ncc_xform_find_child_nt(node,
                                                         "typeid_continuation");
     if (!atom) {
         return NULL;
     }
 
-    char    *type_str = n00b_xform_extract_type_string(ctx, atom, cont);
-    uint64_t hash     = n00b_type_hash_u64(type_str);
+    char    *type_str = ncc_xform_extract_type_string(ctx, atom, cont);
+    uint64_t hash     = ncc_type_hash_u64(type_str);
 
     char buf[32];
     snprintf(buf, sizeof(buf), "%" PRIu64 "ULL", hash);
 
     uint32_t line, col;
-    n00b_xform_first_leaf_pos(node, &line, &col);
+    ncc_xform_first_leaf_pos(node, &line, &col);
 
-    n00b_parse_tree_t *replacement = n00b_xform_make_token_node(
-        N00B_TOK_INTEGER, buf, line, col);
+    ncc_parse_tree_t *replacement = ncc_xform_make_token_node(
+        NCC_TOK_INTEGER, buf, line, col);
 
     free(type_str);
     return replacement;
@@ -60,8 +60,8 @@ xform_typehash(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *node)
 // ============================================================================
 
 void
-n00b_register_typehash_xform(n00b_xform_registry_t *reg)
+ncc_register_typehash_xform(ncc_xform_registry_t *reg)
 {
-    n00b_xform_register(reg, "primary_expression", xform_typehash,
+    ncc_xform_register(reg, "primary_expression", xform_typehash,
                          "typehash");
 }

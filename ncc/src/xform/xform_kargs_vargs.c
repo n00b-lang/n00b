@@ -16,6 +16,40 @@
 #include <string.h>
 
 // ============================================================================
+// Layout-compatible accessor for ncc_xform_data_t.vargs_type
+// ============================================================================
+
+#define _NCC_META_TABLE_SIZE 256
+
+typedef struct {
+    char *key;
+    void *value;
+} _kv_meta_entry_t;
+
+typedef struct {
+    _kv_meta_entry_t entries[_NCC_META_TABLE_SIZE];
+} _kv_meta_table_t;
+
+typedef struct {
+    const char        *compiler;
+    const char        *constexpr_headers;
+    _kv_meta_table_t   func_meta;
+    ncc_dict_t         option_meta;
+    ncc_dict_t         option_decls;
+    ncc_dict_t         generic_struct_decls;
+    void              *template_reg;
+    const char        *vargs_type;
+    const char        *once_prefix;
+} _kv_xform_data_t;
+
+static const char *
+get_vargs_type(ncc_xform_ctx_t *ctx)
+{
+    _kv_xform_data_t *d = ctx->user_data;
+    return d->vargs_type;
+}
+
+// ============================================================================
 // Metadata types
 // ============================================================================
 
@@ -23,9 +57,9 @@ typedef struct {
     char              *name;         // param name
     char              *type_text;    // full type as text (e.g. "int", "const char *")
     char              *default_text; // default as text, NULL = no default
-    n00b_parse_tree_t *decl_specs;   // cloned declaration_specifiers subtree
-    n00b_parse_tree_t *declarator;   // cloned declarator subtree
-    n00b_parse_tree_t *default_val;  // cloned initializer subtree (NULL = none)
+    ncc_parse_tree_t *decl_specs;   // cloned declaration_specifiers subtree
+    ncc_parse_tree_t *declarator;   // cloned declarator subtree
+    ncc_parse_tree_t *default_val;  // cloned initializer subtree (NULL = none)
 } ncc_kw_param_t;
 
 typedef struct {
@@ -46,7 +80,7 @@ typedef enum {
 typedef struct {
     ncc_vargs_style_t  style;
     int                num_positional;
-    n00b_parse_tree_t *type_node;
+    ncc_parse_tree_t *type_node;
 } ncc_vargs_info_t;
 
 typedef struct {
@@ -77,7 +111,7 @@ typedef struct {
 } ncc_kv_xform_data_t;
 
 static meta_table_t *
-get_meta_table(n00b_xform_ctx_t *ctx)
+get_meta_table(ncc_xform_ctx_t *ctx)
 {
     // The user_data is ncc_xform_data_t which we've extended.
     // We access the func_meta field.
@@ -262,7 +296,7 @@ resolve_ncc_type_calls(const char *text)
             }
             type_str[tpos] = '\0';
 
-            char  *mangled = n00b_type_mangle(type_str);
+            char  *mangled = ncc_type_mangle(type_str);
             size_t mlen    = strlen(mangled);
             memcpy(result + rpos, mangled, mlen);
             rpos += mlen;
@@ -281,7 +315,7 @@ resolve_ncc_type_calls(const char *text)
             // But the canonical path is: typehash uses the same type string
             // as typeid (before mangling). We need the original type args.
             // Since this is uncommon in kargs type_text, emit a warning.
-            uint64_t hash = n00b_type_hash_u64(type_for_hash);
+            uint64_t hash = ncc_type_hash_u64(type_for_hash);
             char     hash_buf[32];
             snprintf(hash_buf, sizeof(hash_buf), "%" PRIu64 "ULL", hash);
             size_t hlen = strlen(hash_buf);
@@ -301,18 +335,18 @@ resolve_ncc_type_calls(const char *text)
 // Template parsing helper
 // ============================================================================
 
-static n00b_parse_tree_t *
-parse_template(n00b_grammar_t *g, const char *nt_name, const char *src)
+static ncc_parse_tree_t *
+parse_template(ncc_grammar_t *g, const char *nt_name, const char *src)
 {
-    n00b_result_t(n00b_parse_tree_ptr_t) r = n00b_xform_parse_template(g, nt_name, src, NULL);
-    if (n00b_result_is_err(r)) {
+    ncc_result_t(ncc_parse_tree_ptr_t) r = ncc_xform_parse_template(g, nt_name, src, NULL);
+    if (ncc_result_is_err(r)) {
         fprintf(stderr,
                 "xform_kargs_vargs: template parse failed for '%s':\n  %s\n",
                 nt_name,
                 src);
         return NULL;
     }
-    return n00b_result_get(r);
+    return ncc_result_get(r);
 }
 
 // ============================================================================
@@ -320,21 +354,21 @@ parse_template(n00b_grammar_t *g, const char *nt_name, const char *src)
 // ============================================================================
 
 static const char *
-extract_func_name(n00b_parse_tree_t *node)
+extract_func_name(ncc_parse_tree_t *node)
 {
     if (!node) {
         return NULL;
     }
-    if (n00b_tree_is_leaf(node)) {
-        n00b_token_info_t *tok = n00b_tree_leaf_value(node);
-        if (tok && tok->tid == (int32_t)N00B_TOK_IDENTIFIER) {
-            return n00b_xform_leaf_text(node);
+    if (ncc_tree_is_leaf(node)) {
+        ncc_token_info_t *tok = ncc_tree_leaf_value(node);
+        if (tok && tok->tid == (int32_t)NCC_TOK_IDENTIFIER) {
+            return ncc_xform_leaf_text(node);
         }
         return NULL;
     }
-    size_t nc = n00b_tree_num_children(node);
+    size_t nc = ncc_tree_num_children(node);
     for (size_t i = 0; i < nc; i++) {
-        const char *name = extract_func_name(n00b_tree_child(node, i));
+        const char *name = extract_func_name(ncc_tree_child(node, i));
         if (name) {
             return name;
         }
@@ -343,18 +377,18 @@ extract_func_name(n00b_parse_tree_t *node)
 }
 
 // Recursively find a synthetic_identifier node in the tree.
-static n00b_parse_tree_t *
-find_synthetic_identifier(n00b_parse_tree_t *node)
+static ncc_parse_tree_t *
+find_synthetic_identifier(ncc_parse_tree_t *node)
 {
-    if (!node || n00b_tree_is_leaf(node)) {
+    if (!node || ncc_tree_is_leaf(node)) {
         return NULL;
     }
-    if (n00b_xform_nt_name_is(node, "synthetic_identifier")) {
+    if (ncc_xform_nt_name_is(node, "synthetic_identifier")) {
         return node;
     }
-    size_t nc = n00b_tree_num_children(node);
+    size_t nc = ncc_tree_num_children(node);
     for (size_t i = 0; i < nc; i++) {
-        n00b_parse_tree_t *r = find_synthetic_identifier(n00b_tree_child(node, i));
+        ncc_parse_tree_t *r = find_synthetic_identifier(ncc_tree_child(node, i));
         if (r) {
             return r;
         }
@@ -365,16 +399,16 @@ find_synthetic_identifier(n00b_parse_tree_t *node)
 // Extract function name, resolving typeid() if the name is a
 // synthetic_identifier.  Returns a malloc'd string; caller must free.
 static char *
-extract_resolved_func_name(n00b_parse_tree_t *declarator)
+extract_resolved_func_name(ncc_parse_tree_t *declarator)
 {
     if (!declarator) {
         return NULL;
     }
 
     // Search for synthetic_identifier anywhere in the declarator tree.
-    n00b_parse_tree_t *si = find_synthetic_identifier(declarator);
+    ncc_parse_tree_t *si = find_synthetic_identifier(declarator);
     if (si) {
-        char *text     = n00b_xform_node_to_text(si);
+        char *text     = ncc_xform_node_to_text(si);
         char *resolved = resolve_ncc_type_calls(text);
         free(text);
         return resolved;
@@ -390,12 +424,12 @@ extract_resolved_func_name(n00b_parse_tree_t *declarator)
 // ============================================================================
 
 static int
-find_child_index_nt(n00b_parse_tree_t *parent, const char *nt_name)
+find_child_index_nt(ncc_parse_tree_t *parent, const char *nt_name)
 {
-    size_t nc = n00b_tree_num_children(parent);
+    size_t nc = ncc_tree_num_children(parent);
     for (size_t i = 0; i < nc; i++) {
-        n00b_parse_tree_t *c = n00b_tree_child(parent, i);
-        if (c && !n00b_tree_is_leaf(c) && n00b_xform_nt_name_is(c, nt_name)) {
+        ncc_parse_tree_t *c = ncc_tree_child(parent, i);
+        if (c && !ncc_tree_is_leaf(c) && ncc_xform_nt_name_is(c, nt_name)) {
             return (int)i;
         }
     }
@@ -403,11 +437,11 @@ find_child_index_nt(n00b_parse_tree_t *parent, const char *nt_name)
 }
 
 static int
-find_child_index(n00b_parse_tree_t *parent, n00b_parse_tree_t *child)
+find_child_index(ncc_parse_tree_t *parent, ncc_parse_tree_t *child)
 {
-    size_t nc = n00b_tree_num_children(parent);
+    size_t nc = ncc_tree_num_children(parent);
     for (size_t i = 0; i < nc; i++) {
-        if (n00b_tree_child(parent, i) == child) {
+        if (ncc_tree_child(parent, i) == child) {
             return (int)i;
         }
     }
@@ -417,21 +451,21 @@ find_child_index(n00b_parse_tree_t *parent, n00b_parse_tree_t *child)
 // Find index of direct child of parent that IS or CONTAINS (via group
 // unwrapping) a node with the given NT name.
 static int
-find_child_index_containing_nt(n00b_parse_tree_t *parent, const char *nt_name)
+find_child_index_containing_nt(ncc_parse_tree_t *parent, const char *nt_name)
 {
-    size_t nc = n00b_tree_num_children(parent);
+    size_t nc = ncc_tree_num_children(parent);
     for (size_t i = 0; i < nc; i++) {
-        n00b_parse_tree_t *c = n00b_tree_child(parent, i);
-        if (!c || n00b_tree_is_leaf(c)) {
+        ncc_parse_tree_t *c = ncc_tree_child(parent, i);
+        if (!c || ncc_tree_is_leaf(c)) {
             continue;
         }
-        if (n00b_xform_nt_name_is(c, nt_name)) {
+        if (ncc_xform_nt_name_is(c, nt_name)) {
             return (int)i;
         }
         // Check if this is a group wrapper containing the NT.
-        n00b_nt_node_t pn = n00b_tree_node_value(c);
+        ncc_nt_node_t pn = ncc_tree_node_value(c);
         if (pn.name.data && pn.name.data[0] == '$' && pn.name.data[1] == '$') {
-            if (n00b_xform_find_child_nt(c, nt_name)) {
+            if (ncc_xform_find_child_nt(c, nt_name)) {
                 return (int)i;
             }
         }
@@ -443,18 +477,18 @@ find_child_index_containing_nt(n00b_parse_tree_t *parent, const char *nt_name)
 // Helpers: find a leaf with specific text in a subtree
 // ============================================================================
 
-static n00b_parse_tree_t *
-find_leaf_with_text(n00b_parse_tree_t *node, const char *text)
+static ncc_parse_tree_t *
+find_leaf_with_text(ncc_parse_tree_t *node, const char *text)
 {
     if (!node) {
         return NULL;
     }
-    if (n00b_tree_is_leaf(node)) {
-        return n00b_xform_leaf_text_eq(node, text) ? node : NULL;
+    if (ncc_tree_is_leaf(node)) {
+        return ncc_xform_leaf_text_eq(node, text) ? node : NULL;
     }
-    size_t nc = n00b_tree_num_children(node);
+    size_t nc = ncc_tree_num_children(node);
     for (size_t i = 0; i < nc; i++) {
-        n00b_parse_tree_t *r = find_leaf_with_text(n00b_tree_child(node, i), text);
+        ncc_parse_tree_t *r = find_leaf_with_text(ncc_tree_child(node, i), text);
         if (r) {
             return r;
         }
@@ -467,23 +501,23 @@ find_leaf_with_text(n00b_parse_tree_t *node, const char *text)
 // ============================================================================
 
 static bool
-param_list_has_plus(n00b_parse_tree_t *declarator)
+param_list_has_plus(ncc_parse_tree_t *declarator)
 {
     // Search declarator for function_declarator -> parameter_type_list
     // and look for a "+" leaf.
-    n00b_parse_tree_t *fd = n00b_xform_find_child_nt(declarator, "function_declarator");
+    ncc_parse_tree_t *fd = ncc_xform_find_child_nt(declarator, "function_declarator");
     if (!fd) {
         // Might be deeper (pointer -> direct_declarator -> function_declarator)
-        n00b_parse_tree_t *dd = n00b_xform_find_child_nt(declarator, "direct_declarator");
+        ncc_parse_tree_t *dd = ncc_xform_find_child_nt(declarator, "direct_declarator");
         if (dd) {
-            fd = n00b_xform_find_child_nt(dd, "function_declarator");
+            fd = ncc_xform_find_child_nt(dd, "function_declarator");
         }
     }
     if (!fd) {
         return false;
     }
 
-    n00b_parse_tree_t *ptl = n00b_xform_find_child_nt(fd, "parameter_type_list");
+    ncc_parse_tree_t *ptl = ncc_xform_find_child_nt(fd, "parameter_type_list");
     if (!ptl) {
         return false;
     }
@@ -496,7 +530,7 @@ param_list_has_plus(n00b_parse_tree_t *declarator)
 // ============================================================================
 
 static int
-count_positional_params(n00b_parse_tree_t *param_list)
+count_positional_params(ncc_parse_tree_t *param_list)
 {
     if (!param_list) {
         return 0;
@@ -505,20 +539,20 @@ count_positional_params(n00b_parse_tree_t *param_list)
     // With group wrappers, just count parameter_declaration children.
     int count = 0;
 
-    if (n00b_tree_is_leaf(param_list)) {
+    if (ncc_tree_is_leaf(param_list)) {
         return 0;
     }
 
-    size_t nc = n00b_tree_num_children(param_list);
+    size_t nc = ncc_tree_num_children(param_list);
     for (size_t i = 0; i < nc; i++) {
-        n00b_parse_tree_t *c = n00b_tree_child(param_list, i);
+        ncc_parse_tree_t *c = ncc_tree_child(param_list, i);
         if (!c) {
             continue;
         }
-        if (n00b_xform_nt_name_is(c, "parameter_declaration")) {
+        if (ncc_xform_nt_name_is(c, "parameter_declaration")) {
             count++;
         }
-        else if (!n00b_tree_is_leaf(c)) {
+        else if (!ncc_tree_is_leaf(c)) {
             // Group wrapper — recurse.
             count += count_positional_params(c);
         }
@@ -530,21 +564,21 @@ count_positional_params(n00b_parse_tree_t *param_list)
 // Helpers: find function_declarator and parameter_type_list
 // ============================================================================
 
-static n00b_parse_tree_t *
-find_func_declarator(n00b_parse_tree_t *declarator)
+static ncc_parse_tree_t *
+find_func_declarator(ncc_parse_tree_t *declarator)
 {
     if (!declarator) {
         return NULL;
     }
-    if (n00b_xform_nt_name_is(declarator, "function_declarator")) {
+    if (ncc_xform_nt_name_is(declarator, "function_declarator")) {
         return declarator;
     }
-    if (n00b_tree_is_leaf(declarator)) {
+    if (ncc_tree_is_leaf(declarator)) {
         return NULL;
     }
-    size_t nc = n00b_tree_num_children(declarator);
+    size_t nc = ncc_tree_num_children(declarator);
     for (size_t i = 0; i < nc; i++) {
-        n00b_parse_tree_t *r = find_func_declarator(n00b_tree_child(declarator, i));
+        ncc_parse_tree_t *r = find_func_declarator(ncc_tree_child(declarator, i));
         if (r) {
             return r;
         }
@@ -552,14 +586,14 @@ find_func_declarator(n00b_parse_tree_t *declarator)
     return NULL;
 }
 
-static n00b_parse_tree_t *
-find_param_type_list(n00b_parse_tree_t *declarator)
+static ncc_parse_tree_t *
+find_param_type_list(ncc_parse_tree_t *declarator)
 {
-    n00b_parse_tree_t *fd = find_func_declarator(declarator);
+    ncc_parse_tree_t *fd = find_func_declarator(declarator);
     if (!fd) {
         return NULL;
     }
-    return n00b_xform_find_child_nt(fd, "parameter_type_list");
+    return ncc_xform_find_child_nt(fd, "parameter_type_list");
 }
 
 // ============================================================================
@@ -567,21 +601,21 @@ find_param_type_list(n00b_parse_tree_t *declarator)
 // ============================================================================
 
 static void
-collect_kw_params_from_list(n00b_parse_tree_t *node,
+collect_kw_params_from_list(ncc_parse_tree_t *node,
                             ncc_kw_param_t   **out_params,
                             int               *out_count,
                             int               *out_cap)
 {
-    if (!node || n00b_tree_is_leaf(node)) {
+    if (!node || ncc_tree_is_leaf(node)) {
         return;
     }
 
-    if (n00b_xform_nt_name_is(node, "keyword_param")) {
+    if (ncc_xform_nt_name_is(node, "keyword_param")) {
         // keyword_param ::= declaration_specifiers declarator "=" initializer ";"
         //                 | declaration_specifiers declarator ";"
-        n00b_parse_tree_t *ds   = n00b_xform_find_child_nt(node, "declaration_specifiers");
-        n00b_parse_tree_t *decl = n00b_xform_find_child_nt(node, "declarator");
-        n00b_parse_tree_t *init = n00b_xform_find_child_nt(node, "initializer");
+        ncc_parse_tree_t *ds   = ncc_xform_find_child_nt(node, "declaration_specifiers");
+        ncc_parse_tree_t *decl = ncc_xform_find_child_nt(node, "declarator");
+        ncc_parse_tree_t *init = ncc_xform_find_child_nt(node, "initializer");
 
         if (!ds || !decl) {
             return;
@@ -597,17 +631,17 @@ collect_kw_params_from_list(n00b_parse_tree_t *node,
 
         const char *pname = extract_func_name(decl);
         p->name           = strdup(pname ? pname : "");
-        p->decl_specs     = n00b_xform_clone(ds);
-        p->declarator     = n00b_xform_clone(decl);
+        p->decl_specs     = ncc_xform_clone(ds);
+        p->declarator     = ncc_xform_clone(decl);
 
         // Build full type text: declaration_specifiers + pointer from declarator.
         // declarator ::= pointer? direct_declarator
         // We need the pointer part (e.g. "*") if present.
-        char              *ds_text = n00b_xform_node_to_text(ds);
-        n00b_parse_tree_t *ptr     = n00b_xform_find_child_nt(decl, "pointer");
+        char              *ds_text = ncc_xform_node_to_text(ds);
+        ncc_parse_tree_t *ptr     = ncc_xform_find_child_nt(decl, "pointer");
         char              *raw_type;
         if (ptr) {
-            char  *ptr_text = n00b_xform_node_to_text(ptr);
+            char  *ptr_text = ncc_xform_node_to_text(ptr);
             size_t len      = strlen(ds_text) + strlen(ptr_text) + 2;
             raw_type        = malloc(len);
             snprintf(raw_type, len, "%s %s", ds_text, ptr_text);
@@ -622,8 +656,8 @@ collect_kw_params_from_list(n00b_parse_tree_t *node,
         free(raw_type);
 
         if (init) {
-            p->default_val    = n00b_xform_clone(init);
-            char *raw_default = n00b_xform_node_to_text(init);
+            p->default_val    = ncc_xform_clone(init);
+            char *raw_default = ncc_xform_node_to_text(init);
             p->default_text   = resolve_ncc_type_calls(raw_default);
             free(raw_default);
         }
@@ -633,9 +667,9 @@ collect_kw_params_from_list(n00b_parse_tree_t *node,
     }
 
     // Recurse into group wrappers, keyword_param_list, etc.
-    size_t nc = n00b_tree_num_children(node);
+    size_t nc = ncc_tree_num_children(node);
     for (size_t i = 0; i < nc; i++) {
-        collect_kw_params_from_list(n00b_tree_child(node, i), out_params, out_count, out_cap);
+        collect_kw_params_from_list(ncc_tree_child(node, i), out_params, out_count, out_cap);
     }
 }
 
@@ -644,7 +678,7 @@ collect_kw_params_from_list(n00b_parse_tree_t *node,
 // ============================================================================
 
 static ncc_vargs_info_t *
-extract_vargs_info(n00b_parse_tree_t *ptl)
+extract_vargs_info(ncc_parse_tree_t *ptl)
 {
     if (!ptl) {
         return NULL;
@@ -657,13 +691,13 @@ extract_vargs_info(n00b_parse_tree_t *ptl)
     vi->style            = NCC_VARGS_N00B;
 
     // Count positional params: those in parameter_list before the "+"
-    n00b_parse_tree_t *pl = n00b_xform_find_child_nt(ptl, "parameter_list");
+    ncc_parse_tree_t *pl = ncc_xform_find_child_nt(ptl, "parameter_list");
     vi->num_positional    = count_positional_params(pl);
 
     // Check for typed vargs: <type_name> "+"
-    n00b_parse_tree_t *tn = n00b_xform_find_child_nt(ptl, "type_name");
+    ncc_parse_tree_t *tn = ncc_xform_find_child_nt(ptl, "type_name");
     if (tn) {
-        vi->type_node = n00b_xform_clone(tn);
+        vi->type_node = ncc_xform_clone(tn);
     }
 
     return vi;
@@ -673,8 +707,8 @@ extract_vargs_info(n00b_parse_tree_t *ptl)
 // Generate kargs struct as external_declaration
 // ============================================================================
 
-static n00b_parse_tree_t *
-generate_kargs_struct(n00b_grammar_t *g, const char *func_name, ncc_kw_info_t *kw)
+static ncc_parse_tree_t *
+generate_kargs_struct(ncc_grammar_t *g, const char *func_name, ncc_kw_info_t *kw)
 {
     // Build source for struct:
     // struct _funcname__kargs {
@@ -718,18 +752,18 @@ generate_kargs_struct(n00b_grammar_t *g, const char *func_name, ncc_kw_info_t *k
 
 // ============================================================================
 // Rewrite parameter_type_list: remove "+" and optional type_name,
-// add n00b_vargs_t *vargs parameter.
+// add <vargs_type> *vargs parameter.
 // ============================================================================
 
 static void
-rewrite_vargs_params(n00b_grammar_t *g, n00b_parse_tree_t *declarator)
+rewrite_vargs_params(ncc_xform_ctx_t *ctx, ncc_parse_tree_t *declarator)
 {
-    n00b_parse_tree_t *fd = find_func_declarator(declarator);
+    ncc_parse_tree_t *fd = find_func_declarator(declarator);
     if (!fd) {
         return;
     }
 
-    n00b_parse_tree_t *ptl = n00b_xform_find_child_nt(fd, "parameter_type_list");
+    ncc_parse_tree_t *ptl = ncc_xform_find_child_nt(fd, "parameter_type_list");
     if (!ptl) {
         return;
     }
@@ -737,26 +771,27 @@ rewrite_vargs_params(n00b_grammar_t *g, n00b_parse_tree_t *declarator)
     // Build a new parameter_type_list.
     // Collect the existing parameter_list text (if any), then append the
     // vargs param.
-    n00b_parse_tree_t *pl      = n00b_xform_find_child_nt(ptl, "parameter_list");
+    ncc_parse_tree_t *pl      = ncc_xform_find_child_nt(ptl, "parameter_list");
     char              *pl_text = NULL;
     if (pl) {
-        pl_text = n00b_xform_node_to_text(pl);
+        pl_text = ncc_xform_node_to_text(pl);
     }
 
     // Resolve any typeid/typehash in existing params before interpolation.
     char *resolved_pl = pl_text ? resolve_ncc_type_calls(pl_text) : NULL;
     free(pl_text);
 
+    const char *vt = get_vargs_type(ctx);
     char new_ptl_src[4096];
     if (resolved_pl && strlen(resolved_pl) > 0) {
-        snprintf(new_ptl_src, sizeof(new_ptl_src), "%s , n00b_vargs_t * vargs", resolved_pl);
+        snprintf(new_ptl_src, sizeof(new_ptl_src), "%s , %s * vargs", resolved_pl, vt);
     }
     else {
-        snprintf(new_ptl_src, sizeof(new_ptl_src), "n00b_vargs_t * vargs");
+        snprintf(new_ptl_src, sizeof(new_ptl_src), "%s * vargs", vt);
     }
     free(resolved_pl);
 
-    n00b_parse_tree_t *new_ptl = parse_template(g, "parameter_type_list", new_ptl_src);
+    ncc_parse_tree_t *new_ptl = parse_template(ctx->grammar, "parameter_type_list", new_ptl_src);
     if (!new_ptl) {
         return;
     }
@@ -764,7 +799,7 @@ rewrite_vargs_params(n00b_grammar_t *g, n00b_parse_tree_t *declarator)
     // Replace ptl in fd (may be wrapped in a group node).
     int ptl_idx = find_child_index_containing_nt(fd, "parameter_type_list");
     if (ptl_idx >= 0) {
-        n00b_xform_set_child(fd, (size_t)ptl_idx, new_ptl);
+        ncc_xform_set_child(fd, (size_t)ptl_idx, new_ptl);
     }
 }
 
@@ -773,18 +808,18 @@ rewrite_vargs_params(n00b_grammar_t *g, n00b_parse_tree_t *declarator)
 // ============================================================================
 
 static void
-add_kargs_param(n00b_grammar_t *g, n00b_parse_tree_t *declarator, const char *func_name)
+add_kargs_param(ncc_grammar_t *g, ncc_parse_tree_t *declarator, const char *func_name)
 {
-    n00b_parse_tree_t *fd = find_func_declarator(declarator);
+    ncc_parse_tree_t *fd = find_func_declarator(declarator);
     if (!fd) {
         return;
     }
 
-    n00b_parse_tree_t *ptl = n00b_xform_find_child_nt(fd, "parameter_type_list");
+    ncc_parse_tree_t *ptl = ncc_xform_find_child_nt(fd, "parameter_type_list");
 
     char *existing_text = NULL;
     if (ptl) {
-        existing_text = n00b_xform_node_to_text(ptl);
+        existing_text = ncc_xform_node_to_text(ptl);
     }
 
     // Resolve any typeid/typehash in func_name and existing params
@@ -808,7 +843,7 @@ add_kargs_param(n00b_grammar_t *g, n00b_parse_tree_t *declarator, const char *fu
     free(resolved_existing);
     free(resolved_name);
 
-    n00b_parse_tree_t *new_ptl = parse_template(g, "parameter_type_list", new_ptl_src);
+    ncc_parse_tree_t *new_ptl = parse_template(g, "parameter_type_list", new_ptl_src);
     if (!new_ptl) {
         fprintf(stderr, "ncc: debug: add_kargs_param: template parse failed\n");
         return;
@@ -819,15 +854,15 @@ add_kargs_param(n00b_grammar_t *g, n00b_parse_tree_t *declarator, const char *fu
         // (may be wrapped in a group node due to ? in grammar).
         int ptl_idx = find_child_index_containing_nt(fd, "parameter_type_list");
         if (ptl_idx >= 0) {
-            n00b_xform_set_child(fd, (size_t)ptl_idx, new_ptl);
+            ncc_xform_set_child(fd, (size_t)ptl_idx, new_ptl);
         }
     }
     else {
         // Function has no params, insert ptl before the closing ")".
         // fd children: direct_declarator "(" ")"
         // Insert new_ptl before the last child.
-        size_t nc = n00b_tree_num_children(fd);
-        n00b_xform_insert_child(fd, nc - 1, new_ptl);
+        size_t nc = ncc_tree_num_children(fd);
+        ncc_xform_insert_child(fd, nc - 1, new_ptl);
     }
 }
 
@@ -836,18 +871,18 @@ add_kargs_param(n00b_grammar_t *g, n00b_parse_tree_t *declarator, const char *fu
 // ============================================================================
 
 static void
-add_opaque_kargs_param(n00b_grammar_t *g, n00b_parse_tree_t *declarator)
+add_opaque_kargs_param(ncc_grammar_t *g, ncc_parse_tree_t *declarator)
 {
-    n00b_parse_tree_t *fd = find_func_declarator(declarator);
+    ncc_parse_tree_t *fd = find_func_declarator(declarator);
     if (!fd) {
         return;
     }
 
-    n00b_parse_tree_t *ptl = n00b_xform_find_child_nt(fd, "parameter_type_list");
+    ncc_parse_tree_t *ptl = ncc_xform_find_child_nt(fd, "parameter_type_list");
 
     char *existing_text = NULL;
     if (ptl) {
-        existing_text = n00b_xform_node_to_text(ptl);
+        existing_text = ncc_xform_node_to_text(ptl);
     }
 
     // Resolve any typeid/typehash in existing params before interpolation.
@@ -863,7 +898,7 @@ add_opaque_kargs_param(n00b_grammar_t *g, n00b_parse_tree_t *declarator)
     }
     free(resolved_existing);
 
-    n00b_parse_tree_t *new_ptl = parse_template(g, "parameter_type_list", new_ptl_src);
+    ncc_parse_tree_t *new_ptl = parse_template(g, "parameter_type_list", new_ptl_src);
     if (!new_ptl) {
         return;
     }
@@ -871,12 +906,12 @@ add_opaque_kargs_param(n00b_grammar_t *g, n00b_parse_tree_t *declarator)
     if (ptl) {
         int ptl_idx = find_child_index_containing_nt(fd, "parameter_type_list");
         if (ptl_idx >= 0) {
-            n00b_xform_set_child(fd, (size_t)ptl_idx, new_ptl);
+            ncc_xform_set_child(fd, (size_t)ptl_idx, new_ptl);
         }
     }
     else {
-        size_t nc = n00b_tree_num_children(fd);
-        n00b_xform_insert_child(fd, nc - 1, new_ptl);
+        size_t nc = ncc_tree_num_children(fd);
+        ncc_xform_insert_child(fd, nc - 1, new_ptl);
     }
 }
 
@@ -885,11 +920,11 @@ add_opaque_kargs_param(n00b_grammar_t *g, n00b_parse_tree_t *declarator)
 // ============================================================================
 
 static void
-remove_keyword_clause(n00b_parse_tree_t *node)
+remove_keyword_clause(ncc_parse_tree_t *node)
 {
     int idx = find_child_index_nt(node, "keyword_clause");
     if (idx >= 0) {
-        n00b_xform_remove_child(node, (size_t)idx);
+        ncc_xform_remove_child(node, (size_t)idx);
     }
 }
 
@@ -898,15 +933,15 @@ remove_keyword_clause(n00b_parse_tree_t *node)
 // ============================================================================
 
 static void
-inject_kargs_body(n00b_grammar_t *g, n00b_parse_tree_t *func_body, ncc_kw_info_t *kw)
+inject_kargs_body(ncc_grammar_t *g, ncc_parse_tree_t *func_body, ncc_kw_info_t *kw)
 {
     // Find compound_statement -> block_item_list
-    n00b_parse_tree_t *compound = n00b_xform_find_child_nt(func_body, "compound_statement");
+    ncc_parse_tree_t *compound = ncc_xform_find_child_nt(func_body, "compound_statement");
     if (!compound) {
         return;
     }
 
-    n00b_parse_tree_t *bil = n00b_xform_find_child_nt(compound, "block_item_list");
+    ncc_parse_tree_t *bil = ncc_xform_find_child_nt(compound, "block_item_list");
 
     // For each keyword param, generate an extraction declaration.
     // Insert them at the start of the block.
@@ -938,22 +973,22 @@ inject_kargs_body(n00b_grammar_t *g, n00b_parse_tree_t *func_body, ncc_kw_info_t
                      p->name);
         }
 
-        n00b_parse_tree_t *block_item = parse_template(g, "block_item", decl_src);
+        ncc_parse_tree_t *block_item = parse_template(g, "block_item", decl_src);
         if (!block_item) {
             continue;
         }
 
         if (bil) {
-            n00b_xform_insert_child(bil, 0, block_item);
+            ncc_xform_insert_child(bil, 0, block_item);
         }
         else {
             // Create block_item_list with this single item.
-            n00b_parse_tree_t *children[] = {block_item};
-            bil = n00b_xform_make_node_with_children(g, "block_item_list", 0, children, 1);
+            ncc_parse_tree_t *children[] = {block_item};
+            bil = ncc_xform_make_node_with_children(g, "block_item_list", 0, children, 1);
 
             // Insert bil into compound_statement before the closing "}".
-            size_t nc = n00b_tree_num_children(compound);
-            n00b_xform_insert_child(compound, nc - 1, bil);
+            size_t nc = ncc_tree_num_children(compound);
+            ncc_xform_insert_child(compound, nc - 1, bil);
         }
     }
 }
@@ -962,10 +997,10 @@ inject_kargs_body(n00b_grammar_t *g, n00b_parse_tree_t *func_body, ncc_kw_info_t
 // Helpers: find parent external_declaration via parent pointer chain
 // ============================================================================
 
-static n00b_parse_tree_t *
-find_parent_external_decl(n00b_parse_tree_t *node)
+static ncc_parse_tree_t *
+find_parent_external_decl(ncc_parse_tree_t *node)
 {
-    return n00b_xform_find_ancestor(node, "external_declaration");
+    return ncc_xform_find_ancestor(node, "external_declaration");
 }
 
 // ============================================================================
@@ -973,22 +1008,22 @@ find_parent_external_decl(n00b_parse_tree_t *node)
 // ============================================================================
 
 static void
-insert_struct_before(n00b_parse_tree_t *ext_decl, n00b_parse_tree_t *struct_node)
+insert_struct_before(ncc_parse_tree_t *ext_decl, ncc_parse_tree_t *struct_node)
 {
     if (!ext_decl || !struct_node) {
         return;
     }
 
     // Get the parent of ext_decl (a group node or translation_unit).
-    n00b_nt_node_t     pn     = n00b_tree_node_value(ext_decl);
-    n00b_parse_tree_t *parent = (n00b_parse_tree_t *)pn.parent;
+    ncc_nt_node_t     pn     = ncc_tree_node_value(ext_decl);
+    ncc_parse_tree_t *parent = (ncc_parse_tree_t *)pn.parent;
     if (!parent) {
         return;
     }
 
     int idx = find_child_index(parent, ext_decl);
     if (idx >= 0) {
-        n00b_xform_insert_child(parent, (size_t)idx, struct_node);
+        ncc_xform_insert_child(parent, (size_t)idx, struct_node);
     }
 }
 
@@ -999,29 +1034,29 @@ insert_struct_before(n00b_parse_tree_t *ext_decl, n00b_parse_tree_t *struct_node
 // Find declarator in a declaration node, handling both direct children
 // (function_definition) and init_declarator_list > init_declarator > declarator
 // (forward declarations).
-static n00b_parse_tree_t *
-find_decl_declarator(n00b_parse_tree_t *node)
+static ncc_parse_tree_t *
+find_decl_declarator(ncc_parse_tree_t *node)
 {
     // Direct child (function_definition style).
-    n00b_parse_tree_t *decl = n00b_xform_find_child_nt(node, "declarator");
+    ncc_parse_tree_t *decl = ncc_xform_find_child_nt(node, "declarator");
     if (decl) {
         return decl;
     }
 
     // init_declarator_list > init_declarator > declarator
-    n00b_parse_tree_t *idl = n00b_xform_find_child_nt(node, "init_declarator_list");
+    ncc_parse_tree_t *idl = ncc_xform_find_child_nt(node, "init_declarator_list");
     if (idl) {
-        n00b_parse_tree_t *id = n00b_xform_find_child_nt(idl, "init_declarator");
+        ncc_parse_tree_t *id = ncc_xform_find_child_nt(idl, "init_declarator");
         if (id) {
-            return n00b_xform_find_child_nt(id, "declarator");
+            return ncc_xform_find_child_nt(id, "declarator");
         }
     }
 
     return NULL;
 }
 
-static n00b_parse_tree_t *
-xform_funcdef(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *node)
+static ncc_parse_tree_t *
+xform_funcdef(ncc_xform_ctx_t *ctx, ncc_parse_tree_t *node)
 {
     // Check for __extension__ wrapper.
     // function_definition ::= attr_spec_seq? declaration_specifiers declarator
@@ -1031,19 +1066,19 @@ xform_funcdef(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *node)
     //                       | __extension__ function_definition
 
     // Handle __extension__ wrapper — find the real function_definition inside.
-    n00b_parse_tree_t *real_fd = node;
-    size_t             nc      = n00b_tree_num_children(real_fd);
+    ncc_parse_tree_t *real_fd = node;
+    size_t             nc      = ncc_tree_num_children(real_fd);
     if (nc == 2) {
-        n00b_parse_tree_t *c0 = n00b_tree_child(real_fd, 0);
-        if (c0 && n00b_tree_is_leaf(c0) && n00b_xform_leaf_text_eq(c0, "__extension__")) {
-            real_fd = n00b_tree_child(real_fd, 1);
-            if (!real_fd || !n00b_xform_nt_name_is(real_fd, "function_definition")) {
+        ncc_parse_tree_t *c0 = ncc_tree_child(real_fd, 0);
+        if (c0 && ncc_tree_is_leaf(c0) && ncc_xform_leaf_text_eq(c0, "__extension__")) {
+            real_fd = ncc_tree_child(real_fd, 1);
+            if (!real_fd || !ncc_xform_nt_name_is(real_fd, "function_definition")) {
                 return NULL;
             }
         }
     }
 
-    n00b_parse_tree_t *declarator = n00b_xform_find_child_nt(real_fd, "declarator");
+    ncc_parse_tree_t *declarator = ncc_xform_find_child_nt(real_fd, "declarator");
     if (!declarator) {
         return NULL;
     }
@@ -1065,7 +1100,7 @@ xform_funcdef(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *node)
 
     // Process keyword args.
     if (has_kw) {
-        n00b_parse_tree_t *kw_clause = n00b_xform_find_child_nt(real_fd, "keyword_clause");
+        ncc_parse_tree_t *kw_clause = ncc_xform_find_child_nt(real_fd, "keyword_clause");
 
         // Check for _kargs : opaque
         bool is_opaque = false;
@@ -1075,10 +1110,10 @@ xform_funcdef(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *node)
 
         if (!is_opaque) {
             // Extract params from keyword_param_list.
-            n00b_parse_tree_t *kpl = n00b_xform_find_child_nt(kw_clause, "keyword_param_list");
+            ncc_parse_tree_t *kpl = ncc_xform_find_child_nt(kw_clause, "keyword_param_list");
             if (!kpl) {
                 uint32_t line, col;
-                n00b_xform_first_leaf_pos(node, &line, &col);
+                ncc_xform_first_leaf_pos(node, &line, &col);
                 fprintf(stderr,
                         "ncc: error: _kargs clause with no parameters "
                         "(line %u, col %u)\n",
@@ -1114,9 +1149,9 @@ xform_funcdef(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *node)
                 meta->kw->defaults_set = has_defaults;
 
                 // Count positional params.
-                n00b_parse_tree_t *ptl = find_param_type_list(declarator);
-                n00b_parse_tree_t *pl
-                    = ptl ? n00b_xform_find_child_nt(ptl, "parameter_list") : NULL;
+                ncc_parse_tree_t *ptl = find_param_type_list(declarator);
+                ncc_parse_tree_t *pl
+                    = ptl ? ncc_xform_find_child_nt(ptl, "parameter_list") : NULL;
                 meta->kw->num_positional = count_positional_params(pl);
             }
             else {
@@ -1199,10 +1234,10 @@ xform_funcdef(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *node)
 
         // Emit struct if not already done.
         if (meta->kw && !meta->kw->is_opaque && !meta->kw->struct_emitted) {
-            n00b_parse_tree_t *struct_node
+            ncc_parse_tree_t *struct_node
                 = generate_kargs_struct(ctx->grammar, func_name, meta->kw);
             if (struct_node) {
-                n00b_parse_tree_t *ext_decl = find_parent_external_decl(node);
+                ncc_parse_tree_t *ext_decl = find_parent_external_decl(node);
                 insert_struct_before(ext_decl, struct_node);
                 meta->kw->struct_emitted = true;
             }
@@ -1214,7 +1249,7 @@ xform_funcdef(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *node)
 
     // Process vargs.
     if (has_va) {
-        n00b_parse_tree_t *ptl = find_param_type_list(declarator);
+        ncc_parse_tree_t *ptl = find_param_type_list(declarator);
         ncc_vargs_info_t  *vi  = extract_vargs_info(ptl);
 
         if (!meta) {
@@ -1229,8 +1264,8 @@ xform_funcdef(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *node)
         }
 
         // Rewrite parameter_type_list: remove + and type_name, add
-        // n00b_vargs_t *vargs
-        rewrite_vargs_params(ctx->grammar, declarator);
+        // <vargs_type> *vargs
+        rewrite_vargs_params(ctx, declarator);
     }
 
     // Add kargs param to signature (after vargs if both).
@@ -1244,7 +1279,7 @@ xform_funcdef(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *node)
     }
 
     // For definitions: inject body extraction code (non-opaque only).
-    n00b_parse_tree_t *func_body = n00b_xform_find_child_nt(real_fd, "function_body");
+    ncc_parse_tree_t *func_body = ncc_xform_find_child_nt(real_fd, "function_body");
     if (func_body && meta->kw && !meta->kw->is_opaque) {
         inject_kargs_body(ctx->grammar, func_body, meta->kw);
     }
@@ -1255,14 +1290,14 @@ xform_funcdef(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *node)
 }
 
 // Forward declaration — xform_call is defined in Phase B below.
-static n00b_parse_tree_t *xform_call(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *node);
+static ncc_parse_tree_t *xform_call(ncc_xform_ctx_t *ctx, ncc_parse_tree_t *node);
 
 // ============================================================================
 // Phase A: Pre-order on declaration (forward decl with _kargs)
 // ============================================================================
 
-static n00b_parse_tree_t *
-xform_decl(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *node)
+static ncc_parse_tree_t *
+xform_decl(ncc_xform_ctx_t *ctx, ncc_parse_tree_t *node)
 {
     // declaration ::= declaration_specifiers declarator keyword_clause ";"
     int kw_idx = find_child_index_nt(node, "keyword_clause");
@@ -1270,8 +1305,8 @@ xform_decl(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *node)
     if (kw_idx < 0) {
         // No keyword_clause. Check for vargs-only forward declarations
         // (e.g. "extern void foo(int x, +);") which still need the "+"
-        // replaced with "n00b_vargs_t *vargs".
-        n00b_parse_tree_t *declarator = find_decl_declarator(node);
+        // replaced with "<vargs_type> *vargs".
+        ncc_parse_tree_t *declarator = find_decl_declarator(node);
         if (declarator && param_list_has_plus(declarator)) {
             char *func_name = extract_resolved_func_name(declarator);
             if (func_name) {
@@ -1281,7 +1316,7 @@ xform_decl(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *node)
                     meta = meta_insert(table, func_name);
                 }
 
-                n00b_parse_tree_t *ptl = find_param_type_list(declarator);
+                ncc_parse_tree_t *ptl = find_param_type_list(declarator);
                 ncc_vargs_info_t  *vi  = extract_vargs_info(ptl);
                 if (!meta->va) {
                     meta->va = vi;
@@ -1290,7 +1325,7 @@ xform_decl(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *node)
                     free(vi);
                 }
 
-                rewrite_vargs_params(ctx->grammar, declarator);
+                rewrite_vargs_params(ctx, declarator);
                 free(func_name);
                 ctx->nodes_replaced++;
                 return node;
@@ -1303,13 +1338,13 @@ xform_decl(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *node)
         // contains only an identifier that is in our function metadata
         // table, this is actually a function call — rebuild it.
         meta_table_t      *table = get_meta_table(ctx);
-        n00b_parse_tree_t *ds    = n00b_xform_find_child_nt(node, "declaration_specifiers");
+        ncc_parse_tree_t *ds    = ncc_xform_find_child_nt(node, "declaration_specifiers");
         if (ds) {
             const char *id = extract_func_name(ds);
             if (id) {
                 ncc_func_meta_t *meta = meta_lookup(table, id);
                 if (meta) {
-                    char *full_text = n00b_xform_node_to_text(node);
+                    char *full_text = ncc_xform_node_to_text(node);
 
                     size_t len = strlen(full_text);
                     while (len > 0
@@ -1320,26 +1355,26 @@ xform_decl(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *node)
 
                     char *resolved_text = resolve_ncc_type_calls(full_text);
                     free(full_text);
-                    n00b_parse_tree_t *call_expr
+                    ncc_parse_tree_t *call_expr
                         = parse_template(ctx->grammar, "postfix_expression", resolved_text);
                     free(resolved_text);
 
                     if (call_expr) {
                         // Apply call-site transform directly since the
                         // tree walker won't revisit replacement children.
-                        n00b_parse_tree_t *xformed = xform_call(ctx, call_expr);
+                        ncc_parse_tree_t *xformed = xform_call(ctx, call_expr);
                         if (xformed) {
                             call_expr = xformed;
                         }
 
-                        char *ct          = n00b_xform_node_to_text(call_expr);
+                        char *ct          = ncc_xform_node_to_text(call_expr);
                         char *resolved_ct = resolve_ncc_type_calls(ct);
                         free(ct);
                         char stmt_src[32768];
                         snprintf(stmt_src, sizeof(stmt_src), "%s ;", resolved_ct);
                         free(resolved_ct);
 
-                        n00b_parse_tree_t *expr_stmt
+                        ncc_parse_tree_t *expr_stmt
                             = parse_template(ctx->grammar, "expression_statement", stmt_src);
                         if (expr_stmt) {
                             ctx->nodes_replaced++;
@@ -1352,7 +1387,7 @@ xform_decl(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *node)
         return NULL;
     }
 
-    n00b_parse_tree_t *declarator = find_decl_declarator(node);
+    ncc_parse_tree_t *declarator = find_decl_declarator(node);
     if (!declarator) {
         return NULL;
     }
@@ -1364,7 +1399,7 @@ xform_decl(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *node)
         return NULL;
     }
 
-    n00b_parse_tree_t *kw_clause = n00b_tree_child(node, (size_t)kw_idx);
+    ncc_parse_tree_t *kw_clause = ncc_tree_child(node, (size_t)kw_idx);
 
     meta_table_t    *table = get_meta_table(ctx);
     ncc_func_meta_t *meta  = meta_lookup(table, func_name);
@@ -1373,10 +1408,10 @@ xform_decl(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *node)
     bool is_opaque = (find_leaf_with_text(kw_clause, "opaque") != NULL);
 
     if (!is_opaque) {
-        n00b_parse_tree_t *kpl = n00b_xform_find_child_nt(kw_clause, "keyword_param_list");
+        ncc_parse_tree_t *kpl = ncc_xform_find_child_nt(kw_clause, "keyword_param_list");
         if (!kpl) {
             uint32_t line, col;
-            n00b_xform_first_leaf_pos(node, &line, &col);
+            ncc_xform_first_leaf_pos(node, &line, &col);
             fprintf(stderr,
                     "ncc: error: _kargs clause with no parameters "
                     "(line %u, col %u)\n",
@@ -1409,9 +1444,9 @@ xform_decl(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *node)
             }
             meta->kw->defaults_set = has_defaults;
 
-            n00b_parse_tree_t *ptl = find_param_type_list(declarator);
-            n00b_parse_tree_t *pl
-                = ptl ? n00b_xform_find_child_nt(ptl, "parameter_list") : NULL;
+            ncc_parse_tree_t *ptl = find_param_type_list(declarator);
+            ncc_parse_tree_t *pl
+                = ptl ? ncc_xform_find_child_nt(ptl, "parameter_list") : NULL;
             meta->kw->num_positional = count_positional_params(pl);
         }
         else {
@@ -1470,10 +1505,10 @@ xform_decl(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *node)
 
     // Emit struct if needed.
     if (meta->kw && !meta->kw->is_opaque && !meta->kw->struct_emitted) {
-        n00b_parse_tree_t *struct_node
+        ncc_parse_tree_t *struct_node
             = generate_kargs_struct(ctx->grammar, func_name, meta->kw);
         if (struct_node) {
-            n00b_parse_tree_t *ext_decl = find_parent_external_decl(node);
+            ncc_parse_tree_t *ext_decl = find_parent_external_decl(node);
             insert_struct_before(ext_decl, struct_node);
             meta->kw->struct_emitted = true;
         }
@@ -1484,7 +1519,7 @@ xform_decl(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *node)
 
     // Process vargs if present.
     if (has_va) {
-        n00b_parse_tree_t *ptl = find_param_type_list(declarator);
+        ncc_parse_tree_t *ptl = find_param_type_list(declarator);
         ncc_vargs_info_t  *vi  = extract_vargs_info(ptl);
         if (!meta->va) {
             meta->va = vi;
@@ -1492,7 +1527,7 @@ xform_decl(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *node)
         else {
             free(vi);
         }
-        rewrite_vargs_params(ctx->grammar, declarator);
+        rewrite_vargs_params(ctx, declarator);
     }
 
     // Add kargs param.
@@ -1518,32 +1553,32 @@ xform_decl(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *node)
 // The callee is child[0] (which may be a nested postfix_expression or
 // primary_expression containing an identifier).
 static const char *
-extract_callee_name(n00b_parse_tree_t *call_node)
+extract_callee_name(ncc_parse_tree_t *call_node)
 {
-    size_t nc = n00b_tree_num_children(call_node);
+    size_t nc = ncc_tree_num_children(call_node);
     if (nc < 2) {
         return NULL;
     }
-    n00b_parse_tree_t *callee = n00b_tree_child(call_node, 0);
+    ncc_parse_tree_t *callee = ncc_tree_child(call_node, 0);
     return extract_func_name(callee);
 }
 
 // Check if an argument_expression_list has any keyword_argument children.
 static bool
-has_keyword_args(n00b_parse_tree_t *arg_list)
+has_keyword_args(ncc_parse_tree_t *arg_list)
 {
     if (!arg_list) {
         return false;
     }
-    if (n00b_xform_nt_name_is(arg_list, "keyword_argument")) {
+    if (ncc_xform_nt_name_is(arg_list, "keyword_argument")) {
         return true;
     }
-    if (n00b_tree_is_leaf(arg_list)) {
+    if (ncc_tree_is_leaf(arg_list)) {
         return false;
     }
-    size_t nc = n00b_tree_num_children(arg_list);
+    size_t nc = ncc_tree_num_children(arg_list);
     for (size_t i = 0; i < nc; i++) {
-        if (has_keyword_args(n00b_tree_child(arg_list, i))) {
+        if (has_keyword_args(ncc_tree_child(arg_list, i))) {
             return true;
         }
     }
@@ -1553,22 +1588,22 @@ has_keyword_args(n00b_parse_tree_t *arg_list)
 // Collected argument info.
 typedef struct {
     char              *name; // NULL for positional
-    n00b_parse_tree_t *expr; // The expression subtree
+    ncc_parse_tree_t *expr; // The expression subtree
 } collected_arg_t;
 
 // Flatten argument_expression_list into positional and keyword args.
 static void
-collect_args(n00b_parse_tree_t *node, collected_arg_t **out, int *out_count, int *out_cap)
+collect_args(ncc_parse_tree_t *node, collected_arg_t **out, int *out_count, int *out_cap)
 {
-    if (!node || n00b_tree_is_leaf(node)) {
+    if (!node || ncc_tree_is_leaf(node)) {
         return;
     }
 
-    if (n00b_xform_nt_name_is(node, "keyword_argument")) {
+    if (ncc_xform_nt_name_is(node, "keyword_argument")) {
         // keyword_argument ::= "." identifier "=" assignment_expression
         // Children: "." identifier "=" assignment_expression
-        n00b_parse_tree_t *ident_node = n00b_xform_find_child_nt(node, "identifier");
-        n00b_parse_tree_t *expr       = n00b_xform_find_child_nt(node, "assignment_expression");
+        ncc_parse_tree_t *ident_node = ncc_xform_find_child_nt(node, "identifier");
+        ncc_parse_tree_t *expr       = ncc_xform_find_child_nt(node, "assignment_expression");
 
         if (*out_count >= *out_cap) {
             *out_cap = *out_cap ? *out_cap * 2 : 16;
@@ -1583,8 +1618,8 @@ collect_args(n00b_parse_tree_t *node, collected_arg_t **out, int *out_count, int
         return;
     }
 
-    if (n00b_xform_nt_name_is(node, "assignment_expression")
-        || n00b_xform_nt_name_is(node, "conditional_expression")) {
+    if (ncc_xform_nt_name_is(node, "assignment_expression")
+        || ncc_xform_nt_name_is(node, "conditional_expression")) {
         // Positional arg.
         if (*out_count >= *out_cap) {
             *out_cap = *out_cap ? *out_cap * 2 : 16;
@@ -1599,10 +1634,10 @@ collect_args(n00b_parse_tree_t *node, collected_arg_t **out, int *out_count, int
     }
 
     // Recurse into argument_expression_list and group wrappers.
-    size_t nc = n00b_tree_num_children(node);
+    size_t nc = ncc_tree_num_children(node);
     for (size_t i = 0; i < nc; i++) {
-        n00b_parse_tree_t *c = n00b_tree_child(node, i);
-        if (!c || n00b_tree_is_leaf(c)) {
+        ncc_parse_tree_t *c = ncc_tree_child(node, i);
+        if (!c || ncc_tree_is_leaf(c)) {
             continue;
         }
         collect_args(c, out, out_count, out_cap);
@@ -1612,16 +1647,16 @@ collect_args(n00b_parse_tree_t *node, collected_arg_t **out, int *out_count, int
 // Check whether a positional arg's text is a kw_func-generated kargs
 // compound literal: & ( struct _<ANY_FUNC>__kargs ) { ... }
 // The kw_func literal may be for a different function than the outer callee
-// (e.g. n00b_alloc calls kw_func(n00b_plane_init, ...)), so we match the
+// (e.g. ncc_alloc calls kw_func(ncc_plane_init, ...)), so we match the
 // generic pattern rather than a specific callee name.
 static bool
-is_kw_func_kargs_literal(n00b_parse_tree_t *expr)
+is_kw_func_kargs_literal(ncc_parse_tree_t *expr)
 {
     if (!expr) {
         return false;
     }
 
-    char *text = n00b_xform_node_to_text(expr);
+    char *text = ncc_xform_node_to_text(expr);
     if (!text) {
         return false;
     }
@@ -1659,35 +1694,35 @@ is_kw_func_kargs_literal(n00b_parse_tree_t *expr)
 
 // Extract the first positional argument from an argument_expression_list.
 // Returns the assignment_expression or conditional_expression node.
-static n00b_parse_tree_t *
-find_first_positional_arg(n00b_parse_tree_t *arg_list)
+static ncc_parse_tree_t *
+find_first_positional_arg(ncc_parse_tree_t *arg_list)
 {
     if (!arg_list) {
         return NULL;
     }
-    if (n00b_xform_nt_name_is(arg_list, "assignment_expression")
-        || n00b_xform_nt_name_is(arg_list, "conditional_expression")) {
+    if (ncc_xform_nt_name_is(arg_list, "assignment_expression")
+        || ncc_xform_nt_name_is(arg_list, "conditional_expression")) {
         return arg_list;
     }
-    if (n00b_tree_is_leaf(arg_list)) {
+    if (ncc_tree_is_leaf(arg_list)) {
         return NULL;
     }
-    size_t nc = n00b_tree_num_children(arg_list);
+    size_t nc = ncc_tree_num_children(arg_list);
     for (size_t i = 0; i < nc; i++) {
-        n00b_parse_tree_t *c = n00b_tree_child(arg_list, i);
-        if (!c || n00b_tree_is_leaf(c)) {
+        ncc_parse_tree_t *c = ncc_tree_child(arg_list, i);
+        if (!c || ncc_tree_is_leaf(c)) {
             continue;
         }
         // Skip keyword_argument nodes.
-        if (n00b_xform_nt_name_is(c, "keyword_argument")) {
+        if (ncc_xform_nt_name_is(c, "keyword_argument")) {
             continue;
         }
-        if (n00b_xform_nt_name_is(c, "assignment_expression")
-            || n00b_xform_nt_name_is(c, "conditional_expression")) {
+        if (ncc_xform_nt_name_is(c, "assignment_expression")
+            || ncc_xform_nt_name_is(c, "conditional_expression")) {
             return c;
         }
         // Recurse into argument_expression_list and group wrappers.
-        n00b_parse_tree_t *r = find_first_positional_arg(c);
+        ncc_parse_tree_t *r = find_first_positional_arg(c);
         if (r) {
             return r;
         }
@@ -1697,11 +1732,11 @@ find_first_positional_arg(n00b_parse_tree_t *arg_list)
 
 // Handle kw_func(target_func, .name=val, ...) calls.
 // Produces: &(struct _target__kargs){defaults..., ._has_name=1, .name=val}
-static n00b_parse_tree_t *
-xform_kw_func(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *arg_list)
+static ncc_parse_tree_t *
+xform_kw_func(ncc_xform_ctx_t *ctx, ncc_parse_tree_t *arg_list)
 {
     // arg0 is the target function name.
-    n00b_parse_tree_t *first_arg = find_first_positional_arg(arg_list);
+    ncc_parse_tree_t *first_arg = find_first_positional_arg(arg_list);
     if (!first_arg) {
         return NULL;
     }
@@ -1773,7 +1808,7 @@ xform_kw_func(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *arg_list)
         if (!args[i].name) {
             continue; // Skip positional (arg0 = target function name).
         }
-        char *val_text = n00b_xform_node_to_text(args[i].expr);
+        char *val_text = ncc_xform_node_to_text(args[i].expr);
         if (!first) {
             pos += (size_t)snprintf(literal_src + pos, sizeof(literal_src) - pos, " , ");
         }
@@ -1805,7 +1840,7 @@ xform_kw_func(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *arg_list)
     // parser can handle the & operator, then return it as the replacement
     // for the postfix_expression node — the tree walker accepts any
     // expression-level node as a replacement.
-    n00b_parse_tree_t *replacement
+    ncc_parse_tree_t *replacement
         = parse_template(ctx->grammar, "assignment_expression", resolved);
     free(resolved);
 
@@ -1815,18 +1850,18 @@ xform_kw_func(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *arg_list)
     return replacement;
 }
 
-static n00b_parse_tree_t *
-xform_call(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *node)
+static ncc_parse_tree_t *
+xform_call(ncc_xform_ctx_t *ctx, ncc_parse_tree_t *node)
 {
     // postfix_expression ::= postfix_expression "(" argument_expression_list? ")"
-    size_t nc = n00b_tree_num_children(node);
+    size_t nc = ncc_tree_num_children(node);
     if (nc < 3) {
         return NULL;
     }
 
     // Check for "(" — if child[1] is not "(", this isn't a call.
-    n00b_parse_tree_t *c1 = n00b_tree_child(node, 1);
-    if (!c1 || !n00b_tree_is_leaf(c1) || !n00b_xform_leaf_text_eq(c1, "(")) {
+    ncc_parse_tree_t *c1 = ncc_tree_child(node, 1);
+    if (!c1 || !ncc_tree_is_leaf(c1) || !ncc_xform_leaf_text_eq(c1, "(")) {
         return NULL;
     }
 
@@ -1837,8 +1872,8 @@ xform_call(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *node)
 
     // Handle kw_func(target, .name=val, ...) — produces a compound literal.
     if (strcmp(callee, "kw_func") == 0) {
-        n00b_parse_tree_t *arg_list
-            = n00b_xform_find_child_nt(node, "argument_expression_list");
+        ncc_parse_tree_t *arg_list
+            = ncc_xform_find_child_nt(node, "argument_expression_list");
         return xform_kw_func(ctx, arg_list);
     }
 
@@ -1846,7 +1881,7 @@ xform_call(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *node)
     ncc_func_meta_t *meta  = meta_lookup(table, callee);
 
     // Find argument_expression_list.
-    n00b_parse_tree_t *arg_list = n00b_xform_find_child_nt(node, "argument_expression_list");
+    ncc_parse_tree_t *arg_list = ncc_xform_find_child_nt(node, "argument_expression_list");
 
     bool has_kw_args = has_keyword_args(arg_list);
 
@@ -1856,7 +1891,7 @@ xform_call(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *node)
 
     if (!meta && has_kw_args) {
         uint32_t line, col;
-        n00b_xform_first_leaf_pos(node, &line, &col);
+        ncc_xform_first_leaf_pos(node, &line, &col);
         fprintf(stderr,
                 "ncc: error: keyword argument in call to unknown function "
                 "'%s' (line %u, col %u)\n",
@@ -1889,7 +1924,7 @@ xform_call(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *node)
     // been transformed.  A transformed call has exactly the expected number
     // of positional args plus one synthesized arg per vargs/kargs parameter.
     // Vargs-only functions are never skipped here because excess positional
-    // args need to be bundled into a n00b_vargs_t compound literal.
+    // args need to be bundled into a vargs compound literal.
     if (n_keyword == 0 && meta) {
         bool already_done = false;
 
@@ -1913,7 +1948,7 @@ xform_call(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *node)
             if (n_positional == expected) {
                 // Find the last positional arg and check if it's a kw_func
                 // kargs literal.  If so, the call is NOT already done.
-                n00b_parse_tree_t *last_pos  = NULL;
+                ncc_parse_tree_t *last_pos  = NULL;
                 int                pos_count = 0;
                 for (int i = 0; i < arg_count; i++) {
                     if (!args[i].name) {
@@ -1950,7 +1985,7 @@ xform_call(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *node)
             }
             if (strcmp(args[i].name, args[j].name) == 0) {
                 uint32_t line, col;
-                n00b_xform_first_leaf_pos(node, &line, &col);
+                ncc_xform_first_leaf_pos(node, &line, &col);
                 fprintf(stderr,
                         "ncc: error: duplicate keyword argument '.%s' in call "
                         "to '%s' (line %u, col %u)\n",
@@ -1985,7 +2020,7 @@ xform_call(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *node)
         // This applies to both opaque and non-opaque kargs functions.
         if (vargs_count > 0 && meta->kw) {
             // Find the last positional arg.
-            n00b_parse_tree_t *last_varg = NULL;
+            ncc_parse_tree_t *last_varg = NULL;
             int                pos_count = 0;
             for (int i = 0; i < arg_count; i++) {
                 if (!args[i].name) {
@@ -1996,7 +2031,7 @@ xform_call(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *node)
                 }
             }
             if (last_varg && is_kw_func_kargs_literal(last_varg)) {
-                kw_func_kargs_text = n00b_xform_node_to_text(last_varg);
+                kw_func_kargs_text = ncc_xform_node_to_text(last_varg);
                 vargs_count--;
             }
         }
@@ -2008,7 +2043,7 @@ xform_call(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *node)
         if (args[i].name) {
             continue;
         }
-        char *text = n00b_xform_node_to_text(args[i].expr);
+        char *text = ncc_xform_node_to_text(args[i].expr);
         if (pos > 0) {
             pos += (size_t)snprintf(new_args + pos, sizeof(new_args) - pos, " , ");
         }
@@ -2023,7 +2058,7 @@ xform_call(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *node)
             pos += (size_t)snprintf(new_args + pos, sizeof(new_args) - pos, " , ");
         }
 
-        // Determine if the vargs have a typed hint (e.g. "n00b_tc_field_t +").
+        // Determine if the vargs have a typed hint (e.g. "ncc_tc_field_t +").
         // If the type is a struct/union (not a pointer), items may be larger
         // than 64 bits and we need to pass pointers to compound literals
         // instead of casting to void *.
@@ -2031,7 +2066,7 @@ xform_call(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *node)
         bool  va_type_is_large = false;
 
         if (meta->va->type_node) {
-            va_type_text = n00b_xform_node_to_text(meta->va->type_node);
+            va_type_text = ncc_xform_node_to_text(meta->va->type_node);
             // Heuristic: if the type text does NOT end with '*', it's
             // a value type that may be larger than a pointer.  We pass
             // a pointer to a compound-literal copy instead.
@@ -2050,9 +2085,9 @@ xform_call(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *node)
         if (vargs_count > 0) {
             pos += (size_t)snprintf(new_args + pos,
                                     sizeof(new_args) - pos,
-                                    "& ( n00b_vargs_t ) { . nargs = %d , . cur_ix = 0 , "
+                                    "& ( %s ) { . nargs = %d , . cur_ix = 0 , "
                                     ". args = ( void * [] ) { ",
-                                    vargs_count);
+                                    get_vargs_type(ctx), vargs_count);
 
             // Collect the vargs (positional args past fixed_positional).
             // Stop at vargs_count to exclude a trailing kw_func kargs
@@ -2064,7 +2099,7 @@ xform_call(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *node)
                     continue;
                 }
                 if (cur_pos >= fixed_positional) {
-                    char *text = n00b_xform_node_to_text(args[i].expr);
+                    char *text = ncc_xform_node_to_text(args[i].expr);
                     if (va_idx > 0) {
                         pos += (size_t)snprintf(new_args + pos, sizeof(new_args) - pos, " , ");
                     }
@@ -2098,8 +2133,9 @@ xform_call(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *node)
         else {
             pos += (size_t)snprintf(new_args + pos,
                                     sizeof(new_args) - pos,
-                                    "& ( n00b_vargs_t ) { . nargs = 0 , . cur_ix = 0 , "
-                                    ". args = ( void * [] ) { 0 } }");
+                                    "& ( %s ) { . nargs = 0 , . cur_ix = 0 , "
+                                    ". args = ( void * [] ) { 0 } }",
+                                    get_vargs_type(ctx));
         }
 
         free(va_type_text);
@@ -2133,7 +2169,7 @@ xform_call(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *node)
                 // Forward the first keyword arg as opaque kargs pointer.
                 for (int i = 0; i < arg_count; i++) {
                     if (args[i].name) {
-                        char *val_text = n00b_xform_node_to_text(args[i].expr);
+                        char *val_text = ncc_xform_node_to_text(args[i].expr);
                         pos += (size_t)
                             snprintf(new_args + pos, sizeof(new_args) - pos, "%s", val_text);
                         free(val_text);
@@ -2183,7 +2219,7 @@ xform_call(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *node)
 
                 if (override_idx >= 0) {
                     // User override: set _has_ flag and value.
-                    char *val_text = n00b_xform_node_to_text(args[override_idx].expr);
+                    char *val_text = ncc_xform_node_to_text(args[override_idx].expr);
                     if (!first) {
                         pos += (size_t)snprintf(new_args + pos, sizeof(new_args) - pos, " , ");
                     }
@@ -2217,7 +2253,7 @@ xform_call(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *node)
     new_args[pos] = '\0';
 
     // Build complete call expression.
-    char *callee_text = n00b_xform_node_to_text(n00b_tree_child(node, 0));
+    char *callee_text = ncc_xform_node_to_text(ncc_tree_child(node, 0));
 
     char call_src[32768];
     if (pos > 0) {
@@ -2230,7 +2266,7 @@ xform_call(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *node)
 
     // Resolve any embedded typeid/typehash calls in the template text.
     char              *resolved_src = resolve_ncc_type_calls(call_src);
-    n00b_parse_tree_t *replacement
+    ncc_parse_tree_t *replacement
         = parse_template(ctx->grammar, "postfix_expression", resolved_src);
     free(resolved_src);
 
@@ -2254,9 +2290,9 @@ xform_call(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *node)
 // ============================================================================
 
 void
-n00b_register_kargs_vargs_xform(n00b_xform_registry_t *reg)
+ncc_register_kargs_vargs_xform(ncc_xform_registry_t *reg)
 {
-    n00b_xform_register(reg, "function_definition", xform_funcdef, "kargs_vargs_funcdef");
-    n00b_xform_register(reg, "declaration", xform_decl, "kargs_vargs_decl");
-    n00b_xform_register(reg, "postfix_expression", xform_call, "kargs_vargs_call");
+    ncc_xform_register(reg, "function_definition", xform_funcdef, "kargs_vargs_funcdef");
+    ncc_xform_register(reg, "declaration", xform_decl, "kargs_vargs_decl");
+    ncc_xform_register(reg, "postfix_expression", xform_call, "kargs_vargs_call");
 }

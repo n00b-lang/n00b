@@ -34,13 +34,13 @@
 // only storage_class_specifier subtrees. We include function_specifier
 // leaves because the parser may classify typedef names there.
 static void
-collect_type_text(n00b_parse_tree_t *node, char *buf, size_t cap, size_t *pos)
+collect_type_text(ncc_parse_tree_t *node, char *buf, size_t cap, size_t *pos)
 {
     if (!node) {
         return;
     }
-    if (n00b_tree_is_leaf(node)) {
-        const char *text = n00b_xform_leaf_text(node);
+    if (ncc_tree_is_leaf(node)) {
+        const char *text = ncc_xform_leaf_text(node);
         if (text) {
             // Skip known function specifiers that aren't type names.
             if (strcmp(text, "inline") == 0
@@ -62,32 +62,32 @@ collect_type_text(n00b_parse_tree_t *node, char *buf, size_t cap, size_t *pos)
         }
         return;
     }
-    if (n00b_xform_nt_name_is(node, "storage_class_specifier")) {
+    if (ncc_xform_nt_name_is(node, "storage_class_specifier")) {
         return;
     }
-    size_t nc = n00b_tree_num_children(node);
+    size_t nc = ncc_tree_num_children(node);
     for (size_t i = 0; i < nc; i++) {
-        collect_type_text(n00b_tree_child(node, i), buf, cap, pos);
+        collect_type_text(ncc_tree_child(node, i), buf, cap, pos);
     }
 }
 
 // Check if declaration_specifiers has void type (excluding storage/function).
 static bool
-has_void_type(n00b_parse_tree_t *node)
+has_void_type(ncc_parse_tree_t *node)
 {
     if (!node) {
         return false;
     }
-    if (n00b_tree_is_leaf(node)) {
-        return n00b_xform_leaf_text_eq(node, "void");
+    if (ncc_tree_is_leaf(node)) {
+        return ncc_xform_leaf_text_eq(node, "void");
     }
-    if (n00b_xform_nt_name_is(node, "storage_class_specifier")
-        || n00b_xform_nt_name_is(node, "function_specifier")) {
+    if (ncc_xform_nt_name_is(node, "storage_class_specifier")
+        || ncc_xform_nt_name_is(node, "function_specifier")) {
         return false;
     }
-    size_t nc = n00b_tree_num_children(node);
+    size_t nc = ncc_tree_num_children(node);
     for (size_t i = 0; i < nc; i++) {
-        if (has_void_type(n00b_tree_child(node, i))) {
+        if (has_void_type(ncc_tree_child(node, i))) {
             return true;
         }
     }
@@ -95,49 +95,49 @@ has_void_type(n00b_parse_tree_t *node)
 }
 
 // Template parsing helper.
-static n00b_parse_tree_t *
-parse_template(n00b_grammar_t *g, const char *nt_name, const char *src)
+static ncc_parse_tree_t *
+parse_template(ncc_grammar_t *g, const char *nt_name, const char *src)
 {
-    n00b_result_t(n00b_parse_tree_ptr_t) r =
-        n00b_xform_parse_template(g, nt_name, src, NULL);
-    if (n00b_result_is_err(r)) {
+    ncc_result_t(ncc_parse_tree_ptr_t) r =
+        ncc_xform_parse_template(g, nt_name, src, NULL);
+    if (ncc_result_is_err(r)) {
         fprintf(stderr,
                 "xform_bang: template parse failed for '%s':\n  %s\n",
                 nt_name, src);
         return NULL;
     }
-    return n00b_result_get(r);
+    return ncc_result_get(r);
 }
 
 // ============================================================================
 // Post-order transform on postfix_expression
 // ============================================================================
 
-static n00b_parse_tree_t *
-xform_bang(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *node)
+static ncc_parse_tree_t *
+xform_bang(ncc_xform_ctx_t *ctx, ncc_parse_tree_t *node)
 {
-    size_t nc = n00b_tree_num_children(node);
+    size_t nc = ncc_tree_num_children(node);
     if (nc < 2) {
         return NULL;
     }
 
-    n00b_parse_tree_t *last_child = n00b_tree_child(node, nc - 1);
-    if (!last_child || !n00b_tree_is_leaf(last_child)) {
+    ncc_parse_tree_t *last_child = ncc_tree_child(node, nc - 1);
+    if (!last_child || !ncc_tree_is_leaf(last_child)) {
         return NULL;
     }
-    if (!n00b_xform_leaf_text_eq(last_child, "!")) {
+    if (!ncc_xform_leaf_text_eq(last_child, "!")) {
         return NULL;
     }
 
     // Found a postfix ! expression.
 
     // Find the enclosing function via parent pointers.
-    n00b_parse_tree_t *func_def = n00b_xform_find_ancestor(
+    ncc_parse_tree_t *func_def = ncc_xform_find_ancestor(
         node, "function_definition");
 
     if (!func_def) {
         uint32_t line, col;
-        n00b_xform_first_leaf_pos(node, &line, &col);
+        ncc_xform_first_leaf_pos(node, &line, &col);
         fprintf(stderr,
                 "ncc: error: postfix '!' used outside of a function "
                 "(line %u, col %u)\n",
@@ -146,12 +146,12 @@ xform_bang(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *node)
     }
 
     // Extract the return type from the function's declaration_specifiers.
-    n00b_parse_tree_t *decl_specs = n00b_xform_find_child_nt(
+    ncc_parse_tree_t *decl_specs = ncc_xform_find_child_nt(
         func_def, "declaration_specifiers");
 
     if (!decl_specs) {
         uint32_t line, col;
-        n00b_xform_first_leaf_pos(node, &line, &col);
+        ncc_xform_first_leaf_pos(node, &line, &col);
         fprintf(stderr,
                 "ncc: error: postfix '!' in function with no return type "
                 "(line %u, col %u)\n",
@@ -161,7 +161,7 @@ xform_bang(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *node)
 
     if (has_void_type(decl_specs)) {
         uint32_t line, col;
-        n00b_xform_first_leaf_pos(node, &line, &col);
+        ncc_xform_first_leaf_pos(node, &line, &col);
         fprintf(stderr,
                 "ncc: error: postfix '!' in void function "
                 "(line %u, col %u)\n",
@@ -184,7 +184,7 @@ xform_bang(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *node)
     size_t opos = 0;
 
     for (size_t i = 0; i < nc - 1; i++) {
-        char *part = n00b_xform_node_to_text(n00b_tree_child(node, i));
+        char *part = ncc_xform_node_to_text(ncc_tree_child(node, i));
         if (part) {
             size_t plen = strlen(part);
             if (opos + plen + 2 < sizeof(operand_buf)) {
@@ -218,7 +218,7 @@ xform_bang(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *node)
         var_name);
 
     // Parse as primary_expression (statement expression is a primary expr).
-    n00b_parse_tree_t *replacement = parse_template(
+    ncc_parse_tree_t *replacement = parse_template(
         ctx->grammar, "primary_expression", src);
 
     if (!replacement) {
@@ -235,7 +235,7 @@ xform_bang(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *node)
 // ============================================================================
 
 void
-n00b_register_bang_xform(n00b_xform_registry_t *reg)
+ncc_register_bang_xform(ncc_xform_registry_t *reg)
 {
-    n00b_xform_register(reg, "postfix_expression", xform_bang, "bang");
+    ncc_xform_register(reg, "postfix_expression", xform_bang, "bang");
 }

@@ -12,11 +12,11 @@
  * ### Usage
  *
  * ```c
- * n00b_token_stream_t *ts = n00b_token_stream_new(scanner);
- * n00b_stream_foreach(ts, tok) {
+ * ncc_token_stream_t *ts = ncc_token_stream_new(scanner);
+ * ncc_stream_foreach(ts, tok) {
  *     printf("[%d] %s\n", tok->tid, tok->value);
  * }
- * n00b_token_stream_free(ts);
+ * ncc_token_stream_free(ts);
  * ```
  *
  * ### Related modules
@@ -31,11 +31,11 @@
 // Token stream struct
 // ============================================================================
 
-struct n00b_token_stream_t {
-    n00b_scanner_t    *scanner;       /**< Produces tokens on demand. */
+struct ncc_token_stream_t {
+    ncc_scanner_t    *scanner;       /**< Produces tokens on demand. */
 
     // Token storage (growable, position-indexed)
-    n00b_token_info_t **tokens;       /**< Pointer array of all tokens. */
+    ncc_token_info_t **tokens;       /**< Pointer array of all tokens. */
     int32_t             token_cap;    /**< Allocated capacity. */
     int32_t             token_count;  /**< Number of tokens stored. */
 
@@ -58,14 +58,14 @@ struct n00b_token_stream_t {
  *
  * @param scanner The scanner that produces tokens.
  */
-extern n00b_token_stream_t *
-n00b_token_stream_new(n00b_scanner_t *scanner);
+extern ncc_token_stream_t *
+ncc_token_stream_new(ncc_scanner_t *scanner);
 
 /**
  * @brief Free a token stream (does not free the scanner).
  * @param ts Token stream to free.
  */
-extern void n00b_token_stream_free(n00b_token_stream_t *ts);
+extern void ncc_token_stream_free(ncc_token_stream_t *ts);
 
 // ============================================================================
 // Forward iteration
@@ -77,10 +77,10 @@ extern void n00b_token_stream_free(n00b_token_stream_t *ts);
  * Returns NULL when the stream is exhausted.
  * The returned pointer remains valid for the lifetime of the stream.
  */
-extern n00b_token_info_t *n00b_stream_next(n00b_token_stream_t *ts);
+extern ncc_token_info_t *ncc_stream_next(ncc_token_stream_t *ts);
 
 /** @brief True if the stream has no more tokens. */
-extern bool n00b_stream_is_done(n00b_token_stream_t *ts);
+extern bool ncc_stream_is_done(ncc_token_stream_t *ts);
 
 // ============================================================================
 // Peek (lookahead)
@@ -89,10 +89,10 @@ extern bool n00b_stream_is_done(n00b_token_stream_t *ts);
 /**
  * @brief Peek at a token N positions ahead of current without advancing.
  *
- * `n00b_stream_peek(ts, 0)` returns the token that `next()` would return.
+ * `ncc_stream_peek(ts, 0)` returns the token that `next()` would return.
  * Returns NULL if N exceeds available tokens.
  */
-extern n00b_token_info_t *n00b_stream_peek(n00b_token_stream_t *ts, int32_t n);
+extern ncc_token_info_t *ncc_stream_peek(ncc_token_stream_t *ts, int32_t n);
 
 // ============================================================================
 // Rewind (lookback)
@@ -103,15 +103,15 @@ extern n00b_token_info_t *n00b_stream_peek(n00b_token_stream_t *ts, int32_t n);
  *
  * @return true on success, false if N exceeds available history.
  */
-extern bool n00b_stream_rewind(n00b_token_stream_t *ts, int32_t n);
+extern bool ncc_stream_rewind(ncc_token_stream_t *ts, int32_t n);
 
 /**
  * @brief Peek at a token N positions behind current (already consumed).
  *
- * `n00b_stream_lookback(ts, 1)` returns the most recently consumed token.
+ * `ncc_stream_lookback(ts, 1)` returns the most recently consumed token.
  * Returns NULL if N exceeds available history.
  */
-extern n00b_token_info_t *n00b_stream_lookback(n00b_token_stream_t *ts,
+extern ncc_token_info_t *ncc_stream_lookback(ncc_token_stream_t *ts,
                                                 int32_t n);
 
 // ============================================================================
@@ -123,12 +123,12 @@ extern n00b_token_info_t *n00b_stream_lookback(n00b_token_stream_t *ts,
  *
  * Returns NULL if the position is beyond EOF.
  */
-extern n00b_token_info_t *n00b_stream_get(n00b_token_stream_t *ts, int32_t pos);
+extern ncc_token_info_t *ncc_stream_get(ncc_token_stream_t *ts, int32_t pos);
 
 /**
  * @brief Total number of tokens stored so far.
  */
-extern int32_t n00b_stream_token_count(n00b_token_stream_t *ts);
+extern int32_t ncc_stream_token_count(ncc_token_stream_t *ts);
 
 // ============================================================================
 // Reset (re-tokenize from scratch)
@@ -140,7 +140,7 @@ extern int32_t n00b_stream_token_count(n00b_token_stream_t *ts);
  * After reset the stream is at position 0 with no tokens cached.
  * This undoes any in-place token mutations (e.g., reclassify).
  */
-extern void n00b_stream_reset(n00b_token_stream_t *ts);
+extern void ncc_stream_reset(ncc_token_stream_t *ts);
 
 // ============================================================================
 // Save / restore (speculative parsing)
@@ -148,21 +148,21 @@ extern void n00b_stream_reset(n00b_token_stream_t *ts);
 
 typedef struct {
     int32_t pos;  /**< Saved read position. */
-} n00b_stream_mark_t;
+} ncc_stream_mark_t;
 
 /** @brief Save the current stream position. */
-extern n00b_stream_mark_t n00b_stream_save(n00b_token_stream_t *ts);
+extern ncc_stream_mark_t ncc_stream_save(ncc_token_stream_t *ts);
 
 /**
  * @brief Restore to a previously saved position.
  * @return false if the saved position is beyond current token count.
  */
-extern bool n00b_stream_restore(n00b_token_stream_t *ts,
-                                 n00b_stream_mark_t mark);
+extern bool ncc_stream_restore(ncc_token_stream_t *ts,
+                                 ncc_stream_mark_t mark);
 
 /** @brief Discard a save point (no-op, for symmetry / readability). */
 static inline void
-n00b_stream_commit(n00b_stream_mark_t mark)
+ncc_stream_commit(ncc_stream_mark_t mark)
 {
     (void)mark;
 }
@@ -172,12 +172,12 @@ n00b_stream_commit(n00b_stream_mark_t mark)
 // ============================================================================
 
 /**
- * @brief Drain the entire stream into an `n00b_list_t(n00b_token_info_t)`.
+ * @brief Drain the entire stream into an `ncc_list_t(ncc_token_info_t)`.
  *
  * Useful for parsers that need all tokens up front (e.g., Earley).
  * After this call the stream is exhausted.
  */
-extern n00b_list_t(n00b_token_info_t) n00b_stream_collect(n00b_token_stream_t *ts);
+extern ncc_list_t(ncc_token_info_t) ncc_stream_collect(ncc_token_stream_t *ts);
 
 // ============================================================================
 // Array-backed stream (for tests and pre-tokenized input)
@@ -194,8 +194,8 @@ extern n00b_list_t(n00b_token_info_t) n00b_stream_collect(n00b_token_stream_t *t
  * @param count  Number of tokens in the array.
  * @return A new token stream.
  */
-extern n00b_token_stream_t *
-n00b_token_stream_from_array(n00b_token_info_t **tokens, int32_t count);
+extern ncc_token_stream_t *
+ncc_token_stream_from_array(ncc_token_info_t **tokens, int32_t count);
 
 // ============================================================================
 // Codepoint-level stream (for character-level grammars)
@@ -206,14 +206,14 @@ n00b_token_stream_from_array(n00b_token_info_t **tokens, int32_t count);
  *
  * Iterates over the UTF-8 bytes of @p input, producing one token per
  * codepoint.  Each token's `tid` is set to the codepoint value (so
- * the parser can match against `N00B_CHAR('x')` or `N00B_CLASS(...)` items).
+ * the parser can match against `NCC_CHAR('x')` or `NCC_CLASS(...)` items).
  * A trailing EOF token is appended.
  *
  * @param input  The string to tokenize codepoint-by-codepoint.
  * @return A new token stream.
  */
-extern n00b_token_stream_t *
-n00b_token_stream_from_codepoints(n00b_string_t input);
+extern ncc_token_stream_t *
+ncc_token_stream_from_codepoints(ncc_string_t input);
 
 // ============================================================================
 // Iteration macro
@@ -224,12 +224,12 @@ n00b_token_stream_from_codepoints(n00b_string_t input);
  *
  * Usage:
  * ```c
- * n00b_stream_foreach(ts, tok) {
+ * ncc_stream_foreach(ts, tok) {
  *     printf("token: %s\n", tok->value);
  * }
  * ```
  */
-#define n00b_stream_foreach(ts, tok_var)                       \
-    for (n00b_token_info_t *(tok_var) = n00b_stream_next(ts);  \
+#define ncc_stream_foreach(ts, tok_var)                       \
+    for (ncc_token_info_t *(tok_var) = ncc_stream_next(ts);  \
          (tok_var) != NULL;                                    \
-         (tok_var) = n00b_stream_next(ts))
+         (tok_var) = ncc_stream_next(ts))

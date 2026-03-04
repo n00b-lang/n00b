@@ -23,18 +23,18 @@
 // ============================================================================
 
 typedef enum {
-    N00B_DOC_TEXT,
-    N00B_DOC_SPACE,
-    N00B_DOC_SOFTLINE,
-    N00B_DOC_HARDLINE,
-    N00B_DOC_BLANKLINE,
-    N00B_DOC_INDENT,
-    N00B_DOC_DEDENT,
-    N00B_DOC_GROUP_BEGIN,
-    N00B_DOC_GROUP_END,
-    N00B_DOC_ALIGN_BEGIN,
-    N00B_DOC_ALIGN_END,
-} n00b_doc_kind_t;
+    NCC_DOC_TEXT,
+    NCC_DOC_SPACE,
+    NCC_DOC_SOFTLINE,
+    NCC_DOC_HARDLINE,
+    NCC_DOC_BLANKLINE,
+    NCC_DOC_INDENT,
+    NCC_DOC_DEDENT,
+    NCC_DOC_GROUP_BEGIN,
+    NCC_DOC_GROUP_END,
+    NCC_DOC_ALIGN_BEGIN,
+    NCC_DOC_ALIGN_END,
+} ncc_doc_kind_t;
 
 // ============================================================================
 // Per-NT formatting rule (for style tables)
@@ -50,28 +50,28 @@ typedef struct {
     int32_t    *softline_before;  // -1 terminated array
     int32_t    *nospace_before;   // -1 terminated array
     int32_t    *align_to;         // -1 terminated array
-} n00b_pprint_rule_t;
+} ncc_pprint_rule_t;
 
-typedef n00b_pprint_rule_t *n00b_pprint_style_t;
+typedef ncc_pprint_rule_t *ncc_pprint_style_t;
 
 // ============================================================================
 // Options
 // ============================================================================
 
 typedef enum {
-    N00B_PPRINT_SPACES,
-    N00B_PPRINT_TABS,
-} n00b_indent_style_t;
+    NCC_PPRINT_SPACES,
+    NCC_PPRINT_TABS,
+} ncc_indent_style_t;
 
 typedef struct {
     int32_t              line_width;
     int32_t              indent_size;
-    n00b_indent_style_t  indent_style;
+    ncc_indent_style_t  indent_style;
     bool                 use_unicode_width;
     FILE                *out;
     const char          *newline;
-    n00b_pprint_style_t  style;
-} n00b_pprint_opts_t;
+    ncc_pprint_style_t  style;
+} ncc_pprint_opts_t;
 
 // ============================================================================
 // Code pretty-printing (tree -> formatted source)
@@ -84,9 +84,9 @@ typedef struct {
  * @param opts  Pretty-printer options.
  * @return Heap-allocated string (caller frees), or NULL if opts.out was set.
  */
-char *n00b_pprint(n00b_grammar_t    *g,
-                   n00b_parse_tree_t *tree,
-                   n00b_pprint_opts_t opts);
+char *ncc_pprint(ncc_grammar_t    *g,
+                   ncc_parse_tree_t *tree,
+                   ncc_pprint_opts_t opts);
 
 // ============================================================================
 // BNF emission (grammar -> BNF text, with annotations)
@@ -98,5 +98,5 @@ char *n00b_pprint(n00b_grammar_t    *g,
  * @param opts  Pretty-printer options for formatting the output.
  * @return Heap-allocated string (caller frees), or NULL if opts.out was set.
  */
-char *n00b_grammar_emit_bnf(n00b_grammar_t    *g,
-                              n00b_pprint_opts_t opts);
+char *ncc_grammar_emit_bnf(ncc_grammar_t    *g,
+                              ncc_pprint_opts_t opts);

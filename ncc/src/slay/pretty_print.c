@@ -12,15 +12,15 @@ print_indent(FILE *out, int depth)
 }
 
 static void
-print_node(n00b_grammar_t *g, n00b_parse_tree_t *node, FILE *out,
+print_node(ncc_grammar_t *g, ncc_parse_tree_t *node, FILE *out,
            int depth, bool raw)
 {
     if (!node) {
         return;
     }
 
-    if (n00b_tree_is_leaf(node)) {
-        n00b_token_info_t *tok = n00b_tree_leaf_value(node);
+    if (ncc_tree_is_leaf(node)) {
+        ncc_token_info_t *tok = ncc_tree_leaf_value(node);
 
         if (!tok) {
             return;
@@ -28,8 +28,8 @@ print_node(n00b_grammar_t *g, n00b_parse_tree_t *node, FILE *out,
 
         print_indent(out, depth);
 
-        if (n00b_option_is_set(tok->value)) {
-            n00b_string_t val = n00b_option_get(tok->value);
+        if (ncc_option_is_set(tok->value)) {
+            ncc_string_t val = ncc_option_get(tok->value);
 
             if (val.data) {
                 fprintf(out, "TOKEN[%d] \"%.*s\"\n",
@@ -46,13 +46,13 @@ print_node(n00b_grammar_t *g, n00b_parse_tree_t *node, FILE *out,
         return;
     }
 
-    n00b_nt_node_t *pn = &n00b_tree_node_value(node);
+    ncc_nt_node_t *pn = &ncc_tree_node_value(node);
 
     // Skip group wrappers — just recurse into children at same depth.
     // In raw mode, show them explicitly instead.
     if (pn->group_top && !raw) {
-        for (size_t i = 0; i < n00b_tree_num_children(node); i++) {
-            print_node(g, n00b_tree_child(node, i), out, depth, raw);
+        for (size_t i = 0; i < ncc_tree_num_children(node); i++) {
+            print_node(g, ncc_tree_child(node, i), out, depth, raw);
         }
         return;
     }
@@ -70,7 +70,7 @@ print_node(n00b_grammar_t *g, n00b_parse_tree_t *node, FILE *out,
         fprintf(out, "<%.*s>", (int)pn->name.u8_bytes, pn->name.data);
     }
     else {
-        n00b_nonterm_t *nt = n00b_get_nonterm(g, pn->id);
+        ncc_nonterm_t *nt = ncc_get_nonterm(g, pn->id);
 
         if (nt && nt->name.data) {
             fprintf(out, "<%.*s>", (int)nt->name.u8_bytes, nt->name.data);
@@ -88,13 +88,13 @@ print_node(n00b_grammar_t *g, n00b_parse_tree_t *node, FILE *out,
 
     fprintf(out, "\n");
 
-    for (size_t i = 0; i < n00b_tree_num_children(node); i++) {
-        print_node(g, n00b_tree_child(node, i), out, depth + 1, raw);
+    for (size_t i = 0; i < ncc_tree_num_children(node); i++) {
+        print_node(g, ncc_tree_child(node, i), out, depth + 1, raw);
     }
 }
 
 void
-n00b_parse_tree_print(n00b_grammar_t *g, n00b_parse_tree_t *tree,
+ncc_parse_tree_print(ncc_grammar_t *g, ncc_parse_tree_t *tree,
                        FILE *out, bool raw)
 {
     if (!tree || !out) {

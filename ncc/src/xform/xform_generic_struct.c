@@ -43,13 +43,13 @@ typedef struct {
     const char          *compiler;
     const char          *constexpr_headers;
     _ncc_meta_table_t    func_meta;
-    n00b_dict_t  option_meta;
-    n00b_dict_t  option_decls;
-    n00b_dict_t  generic_struct_decls;
+    ncc_dict_t  option_meta;
+    ncc_dict_t  option_decls;
+    ncc_dict_t  generic_struct_decls;
 } _gs_xform_data_t;
 
-static n00b_dict_t *
-get_gs_decls(n00b_xform_ctx_t *ctx)
+static ncc_dict_t *
+get_gs_decls(ncc_xform_ctx_t *ctx)
 {
     _gs_xform_data_t *d = (_gs_xform_data_t *)ctx->user_data;
     return &d->generic_struct_decls;
@@ -59,33 +59,33 @@ get_gs_decls(n00b_xform_ctx_t *ctx)
 // Helpers
 // ============================================================================
 
-static n00b_parse_tree_t *
-parse_template(n00b_grammar_t *g, const char *nt_name, const char *src)
+static ncc_parse_tree_t *
+parse_template(ncc_grammar_t *g, const char *nt_name, const char *src)
 {
-    n00b_result_t(n00b_parse_tree_ptr_t) r =
-        n00b_xform_parse_template(g, nt_name, src, NULL);
-    if (n00b_result_is_err(r)) {
+    ncc_result_t(ncc_parse_tree_ptr_t) r =
+        ncc_xform_parse_template(g, nt_name, src, NULL);
+    if (ncc_result_is_err(r)) {
         fprintf(stderr,
                 "xform_generic_struct: template parse failed for '%s':\n  %s\n",
                 nt_name, src);
         return NULL;
     }
-    return n00b_result_get(r);
+    return ncc_result_get(r);
 }
 
-static n00b_token_info_t *
-find_last_leaf_token(n00b_parse_tree_t *node)
+static ncc_token_info_t *
+find_last_leaf_token(ncc_parse_tree_t *node)
 {
     if (!node) {
         return NULL;
     }
-    if (n00b_tree_is_leaf(node)) {
-        return n00b_tree_leaf_value(node);
+    if (ncc_tree_is_leaf(node)) {
+        return ncc_tree_leaf_value(node);
     }
-    size_t nc = n00b_tree_num_children(node);
+    size_t nc = ncc_tree_num_children(node);
     for (size_t i = nc; i > 0; i--) {
-        n00b_token_info_t *tok = find_last_leaf_token(
-            n00b_tree_child(node, i - 1));
+        ncc_token_info_t *tok = find_last_leaf_token(
+            ncc_tree_child(node, i - 1));
         if (tok) {
             return tok;
         }
@@ -97,25 +97,25 @@ find_last_leaf_token(n00b_parse_tree_t *node)
 // Transform: _generic_struct on struct_or_union_specifier (post-order)
 // ============================================================================
 
-static n00b_parse_tree_t *
-xform_generic_struct(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *node)
+static ncc_parse_tree_t *
+xform_generic_struct(ncc_xform_ctx_t *ctx, ncc_parse_tree_t *node)
 {
-    size_t nc = n00b_tree_num_children(node);
+    size_t nc = ncc_tree_num_children(node);
     if (nc < 2) {
         return NULL;
     }
 
     // Check child 0 is _kw_generic_struct NT.
-    n00b_parse_tree_t *kw_nt = n00b_tree_child(node, 0);
-    if (!kw_nt || !n00b_xform_nt_name_is(kw_nt, "_kw_generic_struct")) {
+    ncc_parse_tree_t *kw_nt = ncc_tree_child(node, 0);
+    if (!kw_nt || !ncc_xform_nt_name_is(kw_nt, "_kw_generic_struct")) {
         return NULL;
     }
 
     // Find the tag_name child (required).
-    n00b_parse_tree_t *tag_node = n00b_xform_find_child_nt(node, "tag_name");
+    ncc_parse_tree_t *tag_node = ncc_xform_find_child_nt(node, "tag_name");
     if (!tag_node) {
         uint32_t line, col;
-        n00b_xform_first_leaf_pos(node, &line, &col);
+        ncc_xform_first_leaf_pos(node, &line, &col);
         fprintf(stderr,
                 "ncc: error: _generic_struct requires a tag name "
                 "(line %u, col %u)\n",
@@ -124,10 +124,10 @@ xform_generic_struct(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *node)
     }
 
     // Extract tag text.
-    char *tag_text = n00b_xform_node_to_text(tag_node);
+    char *tag_text = ncc_xform_node_to_text(tag_node);
     if (!tag_text || tag_text[0] == '\0') {
         uint32_t line, col;
-        n00b_xform_first_leaf_pos(node, &line, &col);
+        ncc_xform_first_leaf_pos(node, &line, &col);
         fprintf(stderr,
                 "ncc: error: _generic_struct has empty tag name "
                 "(line %u, col %u)\n",
@@ -147,7 +147,7 @@ xform_generic_struct(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *node)
     free(tag_text);
 
     // Check if this is a definition (has body) or bare reference.
-    bool has_body = (n00b_xform_find_child_nt(node, "member_declaration_list")
+    bool has_body = (ncc_xform_find_child_nt(node, "member_declaration_list")
                      != NULL);
 
     // Also check empty body: _generic_struct tag { }
@@ -156,9 +156,9 @@ xform_generic_struct(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *node)
     if (!has_body && nc >= 4) {
         // Check if there's a "{" leaf among children.
         for (size_t i = 0; i < nc; i++) {
-            n00b_parse_tree_t *c = n00b_tree_child(node, i);
-            if (c && n00b_tree_is_leaf(c)) {
-                const char *txt = n00b_xform_leaf_text(c);
+            ncc_parse_tree_t *c = ncc_tree_child(node, i);
+            if (c && ncc_tree_is_leaf(c)) {
+                const char *txt = ncc_xform_leaf_text(c);
                 if (txt && strcmp(txt, "{") == 0) {
                     has_body = true;
                     break;
@@ -168,14 +168,14 @@ xform_generic_struct(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *node)
     }
 
     if (has_body) {
-        n00b_dict_t *decls = get_gs_decls(ctx);
+        ncc_dict_t *decls = get_gs_decls(ctx);
 
-        if (!n00b_dict_contains(decls, (void *)tag)) {
-            n00b_dict_put(decls, strdup(tag),
+        if (!ncc_dict_contains(decls, (void *)tag)) {
+            ncc_dict_put(decls, strdup(tag),
                                    (void *)(uintptr_t)1);
 
             // Serialize the full node, replacing _generic_struct with struct.
-            char *full_text = n00b_xform_node_to_text(node);
+            char *full_text = ncc_xform_node_to_text(node);
             if (!full_text) {
                 fprintf(stderr,
                         "ncc: error: failed to serialize _generic_struct '%s'\n",
@@ -215,7 +215,7 @@ xform_generic_struct(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *node)
                 src = full_text;
             }
 
-            n00b_parse_tree_t *decl_tree = parse_template(
+            ncc_parse_tree_t *decl_tree = parse_template(
                 ctx->grammar, "external_declaration", src);
             free(src);
 
@@ -227,10 +227,10 @@ xform_generic_struct(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *node)
             }
 
             // Add trailing newline trivia.
-            n00b_token_info_t *last_tok = find_last_leaf_token(decl_tree);
+            ncc_token_info_t *last_tok = find_last_leaf_token(decl_tree);
             if (last_tok) {
-                n00b_trivia_t *nl = n00b_alloc(n00b_trivia_t);
-                nl->text = n00b_string_from_cstr("\n");
+                ncc_trivia_t *nl = ncc_alloc(ncc_trivia_t);
+                nl->text = ncc_string_from_cstr("\n");
                 nl->next = last_tok->trailing_trivia;
                 last_tok->trailing_trivia = nl;
             }
@@ -238,7 +238,7 @@ xform_generic_struct(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *node)
             // Find the enclosing external_declaration and insert before it.
             // This keeps the emitted struct after all preceding typedefs
             // and includes, so types in the struct body are visible.
-            n00b_parse_tree_t *ext_decl = n00b_xform_find_ancestor(
+            ncc_parse_tree_t *ext_decl = ncc_xform_find_ancestor(
                 node, "external_declaration");
             size_t insert_pos = 0;
 
@@ -247,22 +247,22 @@ xform_generic_struct(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *node)
             // of ext_decl within it.  Insert the struct definition
             // just before ext_decl so preceding typedefs are visible.
             {
-                n00b_nt_node_t pn = n00b_tree_node_value(ext_decl);
-                n00b_parse_tree_t *container = pn.parent;
+                ncc_nt_node_t pn = ncc_tree_node_value(ext_decl);
+                ncc_parse_tree_t *container = pn.parent;
 
                 if (!container) {
                     container = ctx->root;
                 }
 
-                size_t cnc = n00b_tree_num_children(container);
+                size_t cnc = ncc_tree_num_children(container);
                 for (size_t i = 0; i < cnc; i++) {
-                    if (n00b_tree_child(container, i) == ext_decl) {
+                    if (ncc_tree_child(container, i) == ext_decl) {
                         insert_pos = i;
                         break;
                     }
                 }
 
-                n00b_xform_insert_child(container, insert_pos, decl_tree);
+                ncc_xform_insert_child(container, insert_pos, decl_tree);
             }
         }
     }
@@ -271,11 +271,11 @@ xform_generic_struct(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *node)
     char ref[280];
     snprintf(ref, sizeof(ref), "struct %s", tag);
 
-    n00b_parse_tree_t *replacement = parse_template(
+    ncc_parse_tree_t *replacement = parse_template(
         ctx->grammar, "type_specifier", ref);
     if (!replacement) {
         uint32_t line, col;
-        n00b_xform_first_leaf_pos(node, &line, &col);
+        ncc_xform_first_leaf_pos(node, &line, &col);
         fprintf(stderr,
                 "ncc: error: failed to create 'struct %s' replacement "
                 "(line %u, col %u)\n",
@@ -291,8 +291,8 @@ xform_generic_struct(n00b_xform_ctx_t *ctx, n00b_parse_tree_t *node)
 // ============================================================================
 
 void
-n00b_register_generic_struct_xform(n00b_xform_registry_t *reg)
+ncc_register_generic_struct_xform(ncc_xform_registry_t *reg)
 {
-    n00b_xform_register(reg, "struct_or_union_specifier",
+    ncc_xform_register(reg, "struct_or_union_specifier",
                          xform_generic_struct, "generic_struct");
 }

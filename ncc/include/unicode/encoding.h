@@ -17,7 +17,7 @@
  * @return The decoded codepoint, or -1 on error.
  */
 static inline int32_t
-n00b_unicode_utf8_decode(const char *src, uint32_t len, uint32_t *pos)
+ncc_unicode_utf8_decode(const char *src, uint32_t len, uint32_t *pos)
 {
     if (*pos >= len) {
         return -1;
@@ -97,7 +97,7 @@ n00b_unicode_utf8_decode(const char *src, uint32_t len, uint32_t *pos)
  * @return Number of bytes written.
  */
 static inline uint32_t
-n00b_unicode_utf8_encode(n00b_codepoint_t cp, char *dst)
+ncc_unicode_utf8_encode(ncc_codepoint_t cp, char *dst)
 {
     if (cp < 0x80) {
         dst[0] = (char)cp;
@@ -130,12 +130,12 @@ n00b_unicode_utf8_encode(n00b_codepoint_t cp, char *dst)
  * @return true if the entire buffer is valid UTF-8.
  */
 static inline bool
-n00b_unicode_utf8_validate(const char *src, uint32_t len)
+ncc_unicode_utf8_validate(const char *src, uint32_t len)
 {
     uint32_t pos = 0;
 
     while (pos < len) {
-        if (n00b_unicode_utf8_decode(src, len, &pos) < 0) {
+        if (ncc_unicode_utf8_decode(src, len, &pos) < 0) {
             return false;
         }
     }

@@ -36,7 +36,7 @@ rotr(uint32_t val, uint32_t n)
 }
 
 static void
-sha256_one_block(n00b_sha256_ctx_t *ctx, const uint8_t *block)
+sha256_one_block(ncc_sha256_ctx_t *ctx, const uint8_t *block)
 {
     uint32_t W[64];
 
@@ -93,14 +93,14 @@ sha256_one_block(n00b_sha256_ctx_t *ctx, const uint8_t *block)
 }
 
 void
-n00b_sha256_init(n00b_sha256_ctx_t *ctx)
+ncc_sha256_init(ncc_sha256_ctx_t *ctx)
 {
     ctx->byte_count = 0;
     memcpy(ctx->hv, init_vec, sizeof(init_vec));
 }
 
 void
-n00b_sha256_update(n00b_sha256_ctx_t *ctx, const void *data, size_t len)
+ncc_sha256_update(ncc_sha256_ctx_t *ctx, const void *data, size_t len)
 {
     const uint8_t *p        = data;
     size_t         buffered = ctx->byte_count % 64;
@@ -131,7 +131,7 @@ n00b_sha256_update(n00b_sha256_ctx_t *ctx, const void *data, size_t len)
 }
 
 void
-n00b_sha256_finalize(n00b_sha256_ctx_t *ctx, n00b_sha256_digest_t digest)
+ncc_sha256_finalize(ncc_sha256_ctx_t *ctx, ncc_sha256_digest_t digest)
 {
     size_t   buffered = ctx->byte_count % 64;
     uint64_t bits     = ctx->byte_count * 8;
@@ -158,17 +158,17 @@ n00b_sha256_finalize(n00b_sha256_ctx_t *ctx, n00b_sha256_digest_t digest)
     sha256_one_block(ctx, ctx->buffer);
 
     // Convert to big-endian bytes.
-    for (int i = 0; i < N00B_SHA256_DIGEST_WORDS; i++) {
+    for (int i = 0; i < NCC_SHA256_DIGEST_WORDS; i++) {
         uint32_t w = ctx->hv[i];
         digest[i]  = w;
     }
 }
 
 void
-n00b_sha256_hash(const void *data, size_t len, n00b_sha256_digest_t digest)
+ncc_sha256_hash(const void *data, size_t len, ncc_sha256_digest_t digest)
 {
-    n00b_sha256_ctx_t ctx;
-    n00b_sha256_init(&ctx);
-    n00b_sha256_update(&ctx, data, len);
-    n00b_sha256_finalize(&ctx, digest);
+    ncc_sha256_ctx_t ctx;
+    ncc_sha256_init(&ctx);
+    ncc_sha256_update(&ctx, data, len);
+    ncc_sha256_finalize(&ctx, digest);
 }

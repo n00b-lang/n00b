@@ -4,7 +4,7 @@
 #include <stdint.h>
 
 static inline size_t
-n00b_align_closest_pow2_ceil(size_t v)
+ncc_align_closest_pow2_ceil(size_t v)
 {
     if (v <= 1) {
         return 1;

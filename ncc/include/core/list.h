@@ -3,15 +3,15 @@
  * @file list.h
  * @brief Type-safe dynamic list (standalone extraction).
  *
- * Stripped-down version of n00b_list_t: no rwlock, no allocator,
+ * Stripped-down version of ncc_list_t: no rwlock, no allocator,
  * single-threaded only. All lock/unlock calls are no-ops.
  *
  * Usage:
- *     n00b_list_decl(int);
- *     n00b_list_t(int) lst = n00b_list_new(int);
- *     n00b_list_push(lst, 42);
- *     int x = n00b_list_get(lst, 0);
- *     n00b_list_free(lst);
+ *     ncc_list_decl(int);
+ *     ncc_list_t(int) lst = ncc_list_new(int);
+ *     ncc_list_push(lst, 42);
+ *     int x = ncc_list_get(lst, 0);
+ *     ncc_list_free(lst);
  */
 
 #include <assert.h>
@@ -30,42 +30,42 @@
 // Constants
 // ============================================================================
 
-#define N00B_DEFAULT_LIST_SZ 16
+#define NCC_DEFAULT_LIST_SZ 16
 
 // ============================================================================
 // Type definition
 // ============================================================================
 
-#define n00b_list_tid(T) typeid(n00b_list, T)
-#define n00b_list_t(T)   struct n00b_list_tid(T)
+#define ncc_list_tid(T) typeid(ncc_list, T)
+#define ncc_list_t(T)   struct ncc_list_tid(T)
 
-#define n00b_list_decl(T)                                                      \
-    struct n00b_list_tid(T) {                                                  \
+#define ncc_list_decl(T)                                                      \
+    struct ncc_list_tid(T) {                                                  \
         T                *data;                                                \
         size_t            len;                                                 \
         size_t            cap;                                                 \
-        n00b_rwlock_t    *lock;                                                \
-        n00b_allocator_t *allocator;                                           \
+        ncc_rwlock_t    *lock;                                                \
+        ncc_allocator_t *allocator;                                           \
     }
 
 // Common list types.
-n00b_list_decl(int);
-n00b_list_decl(int32_t);
-n00b_list_decl(n00b_string_t);
+ncc_list_decl(int);
+ncc_list_decl(int32_t);
+ncc_list_decl(ncc_string_t);
 
 // ============================================================================
 // Internal helpers (no-op locks, realloc-based growth)
 // ============================================================================
 
-#define _n00b_list_read_lock(xptr)  ((void)0)
-#define _n00b_list_write_lock(xptr) ((void)0)
-#define _n00b_list_unlock(xptr)     ((void)0)
+#define _ncc_list_read_lock(xptr)  ((void)0)
+#define _ncc_list_write_lock(xptr) ((void)0)
+#define _ncc_list_unlock(xptr)     ((void)0)
 
-#define _n00b_list_ensure_cap(xptr, needed)                                    \
+#define _ncc_list_ensure_cap(xptr, needed)                                    \
     do {                                                                       \
         size_t _bl_need = (needed);                                            \
         if (_bl_need > (xptr)->cap) {                                          \
-            size_t _bl_nc = n00b_align_closest_pow2_ceil(_bl_need);            \
+            size_t _bl_nc = ncc_align_closest_pow2_ceil(_bl_need);            \
             typeof((xptr)->data) _bl_nd =                                      \
                 (typeof((xptr)->data))calloc(_bl_nc, sizeof(*(xptr)->data));   \
             if ((xptr)->len > 0) {                                             \
@@ -84,25 +84,25 @@ n00b_list_decl(n00b_string_t);
 // Construction / destruction
 // ============================================================================
 
-#define n00b_list_new(T, ...)                                                  \
+#define ncc_list_new(T, ...)                                                  \
     ({                                                                         \
-        (n00b_list_t(T)){                                                      \
-            .data      = n00b_alloc_array(T, N00B_DEFAULT_LIST_SZ),            \
+        (ncc_list_t(T)){                                                      \
+            .data      = ncc_alloc_array(T, NCC_DEFAULT_LIST_SZ),            \
             .len       = 0,                                                    \
-            .cap       = N00B_DEFAULT_LIST_SZ,                                 \
+            .cap       = NCC_DEFAULT_LIST_SZ,                                 \
             .lock      = nullptr,                                              \
             .allocator = nullptr,                                              \
         };                                                                     \
     })
 
-#define n00b_list_new_private(T, ...) n00b_list_new(T)
+#define ncc_list_new_private(T, ...) ncc_list_new(T)
 
-#define n00b_list_new_cap(T, N, ...)                                           \
+#define ncc_list_new_cap(T, N, ...)                                           \
     ({                                                                         \
-        size_t _bl_rc = n00b_align_closest_pow2_ceil(                          \
-                            n00b_max((size_t)(N), (size_t)1));                 \
-        (n00b_list_t(T)){                                                      \
-            .data      = n00b_alloc_array(T, _bl_rc),                          \
+        size_t _bl_rc = ncc_align_closest_pow2_ceil(                          \
+                            ncc_max((size_t)(N), (size_t)1));                 \
+        (ncc_list_t(T)){                                                      \
+            .data      = ncc_alloc_array(T, _bl_rc),                          \
             .len       = 0,                                                    \
             .cap       = _bl_rc,                                               \
             .lock      = nullptr,                                              \
@@ -110,9 +110,9 @@ n00b_list_decl(n00b_string_t);
         };                                                                     \
     })
 
-#define n00b_list_new_cap_private(T, N, ...) n00b_list_new_cap(T, N)
+#define ncc_list_new_cap_private(T, N, ...) ncc_list_new_cap(T, N)
 
-#define n00b_list_free(x)                                                      \
+#define ncc_list_free(x)                                                      \
     ({                                                                         \
         auto _bl_lp = &(x);                                                    \
         if (_bl_lp->data) {                                                    \
@@ -125,19 +125,19 @@ n00b_list_decl(n00b_string_t);
 // Access
 // ============================================================================
 
-#define n00b_list_len(x)                                                       \
+#define ncc_list_len(x)                                                       \
     ({                                                                         \
         auto _bl_lp = &(x);                                                    \
         _bl_lp->len;                                                           \
     })
 
-#define n00b_list_cap(x)                                                       \
+#define ncc_list_cap(x)                                                       \
     ({                                                                         \
         auto _bl_lp = &(x);                                                    \
         _bl_lp->cap;                                                           \
     })
 
-#define n00b_list_get(x, i)                                                    \
+#define ncc_list_get(x, i)                                                    \
     ({                                                                         \
         auto _bl_lp = &(x);                                                    \
         size_t _bl_i = (i);                                                    \
@@ -148,7 +148,7 @@ n00b_list_decl(n00b_string_t);
         _bl_r;                                                                 \
     })
 
-#define n00b_list_set(x, i, val)                                               \
+#define ncc_list_set(x, i, val)                                               \
     ({                                                                         \
         auto _bl_lp = &(x);                                                    \
         size_t _bl_i = (i);                                                    \
@@ -162,22 +162,22 @@ n00b_list_decl(n00b_string_t);
 // Push / Pop -- Back
 // ============================================================================
 
-#define n00b_list_push(x, val)                                                 \
+#define ncc_list_push(x, val)                                                 \
     ({                                                                         \
         auto _bl_lp = &(x);                                                    \
-        _n00b_list_ensure_cap(_bl_lp, _bl_lp->len + 1);                        \
+        _ncc_list_ensure_cap(_bl_lp, _bl_lp->len + 1);                        \
         _bl_lp->data[_bl_lp->len++] = (val);                                   \
     })
 
-#define n00b_list_pop(T, x)                                                    \
+#define ncc_list_pop(T, x)                                                    \
     ({                                                                         \
         auto _bl_lp = &(x);                                                    \
-        n00b_option_t(T) _bl_opt;                                              \
+        ncc_option_t(T) _bl_opt;                                              \
         if (_bl_lp->len > 0) {                                                 \
-            _bl_opt = n00b_option_set(T, _bl_lp->data[--_bl_lp->len]);         \
+            _bl_opt = ncc_option_set(T, _bl_lp->data[--_bl_lp->len]);         \
         }                                                                      \
         else {                                                                 \
-            _bl_opt = n00b_option_none(T);                                     \
+            _bl_opt = ncc_option_none(T);                                     \
         }                                                                      \
         _bl_opt;                                                               \
     })
@@ -186,10 +186,10 @@ n00b_list_decl(n00b_string_t);
 // Push / Pop -- Front
 // ============================================================================
 
-#define n00b_list_push_front(x, val)                                           \
+#define ncc_list_push_front(x, val)                                           \
     ({                                                                         \
         auto _bl_lp = &(x);                                                    \
-        _n00b_list_ensure_cap(_bl_lp, _bl_lp->len + 1);                        \
+        _ncc_list_ensure_cap(_bl_lp, _bl_lp->len + 1);                        \
         if (_bl_lp->len > 0) {                                                 \
             memmove(_bl_lp->data + 1, _bl_lp->data,                            \
                     _bl_lp->len * sizeof(*_bl_lp->data));                      \
@@ -198,10 +198,10 @@ n00b_list_decl(n00b_string_t);
         _bl_lp->len++;                                                         \
     })
 
-#define n00b_list_pop_front(T, x)                                              \
+#define ncc_list_pop_front(T, x)                                              \
     ({                                                                         \
         auto _bl_lp = &(x);                                                    \
-        n00b_option_t(T) _bl_opt;                                              \
+        ncc_option_t(T) _bl_opt;                                              \
         if (_bl_lp->len > 0) {                                                 \
             T _bl_r = _bl_lp->data[0];                                         \
             _bl_lp->len--;                                                     \
@@ -209,10 +209,10 @@ n00b_list_decl(n00b_string_t);
                 memmove(_bl_lp->data, _bl_lp->data + 1,                        \
                         _bl_lp->len * sizeof(*_bl_lp->data));                  \
             }                                                                  \
-            _bl_opt = n00b_option_set(T, _bl_r);                               \
+            _bl_opt = ncc_option_set(T, _bl_r);                               \
         }                                                                      \
         else {                                                                 \
-            _bl_opt = n00b_option_none(T);                                     \
+            _bl_opt = ncc_option_none(T);                                     \
         }                                                                      \
         _bl_opt;                                                               \
     })
@@ -221,12 +221,12 @@ n00b_list_decl(n00b_string_t);
 // Insert / Delete -- Single Element
 // ============================================================================
 
-#define n00b_list_insert(x, i, val)                                            \
+#define ncc_list_insert(x, i, val)                                            \
     ({                                                                         \
         auto _bl_lp = &(x);                                                    \
         size_t _bl_i = (i);                                                    \
         assert(_bl_i <= _bl_lp->len);                                          \
-        _n00b_list_ensure_cap(_bl_lp, _bl_lp->len + 1);                        \
+        _ncc_list_ensure_cap(_bl_lp, _bl_lp->len + 1);                        \
         if (_bl_i < _bl_lp->len) {                                             \
             memmove(_bl_lp->data + _bl_i + 1,                                  \
                     _bl_lp->data + _bl_i,                                      \
@@ -236,7 +236,7 @@ n00b_list_decl(n00b_string_t);
         _bl_lp->len++;                                                         \
     })
 
-#define n00b_list_delete(x, i)                                                 \
+#define ncc_list_delete(x, i)                                                 \
     ({                                                                         \
         auto _bl_lp = &(x);                                                    \
         size_t _bl_i = (i);                                                    \
@@ -255,14 +255,14 @@ n00b_list_decl(n00b_string_t);
 // Insert / Delete -- Bulk
 // ============================================================================
 
-#define n00b_list_insert_list(x, i, src)                                       \
+#define ncc_list_insert_list(x, i, src)                                       \
     ({                                                                         \
         auto _bl_lp = &(x);                                                    \
         auto _bl_sp = &(src);                                                  \
         size_t _bl_i  = (i);                                                   \
         size_t _bl_sn = _bl_sp->len;                                           \
         assert(_bl_i <= _bl_lp->len);                                          \
-        _n00b_list_ensure_cap(_bl_lp, _bl_lp->len + _bl_sn);                   \
+        _ncc_list_ensure_cap(_bl_lp, _bl_lp->len + _bl_sn);                   \
         if (_bl_i < _bl_lp->len) {                                             \
             memmove(_bl_lp->data + _bl_i + _bl_sn,                             \
                     _bl_lp->data + _bl_i,                                      \
@@ -273,7 +273,7 @@ n00b_list_decl(n00b_string_t);
         _bl_lp->len += _bl_sn;                                                 \
     })
 
-#define n00b_list_delete_range(x, start, count)                                \
+#define ncc_list_delete_range(x, start, count)                                \
     ({                                                                         \
         auto _bl_lp = &(x);                                                    \
         size_t _bl_s = (start);                                                \
@@ -292,13 +292,13 @@ n00b_list_decl(n00b_string_t);
 // Concatenation
 // ============================================================================
 
-#define n00b_list_concat(a, b)                                                 \
+#define ncc_list_concat(a, b)                                                 \
     ({                                                                         \
         auto      _bl_ap  = &(a);                                              \
         auto      _bl_bp  = &(b);                                              \
         size_t    _bl_tl  = _bl_ap->len + _bl_bp->len;                         \
-        size_t    _bl_tc  = n00b_align_closest_pow2_ceil(                      \
-                                n00b_max(_bl_tl, (size_t)1));                  \
+        size_t    _bl_tc  = ncc_align_closest_pow2_ceil(                      \
+                                ncc_max(_bl_tl, (size_t)1));                  \
         typeof(a) _bl_new = {                                                  \
             .data      = (typeof(_bl_ap->data))calloc(                         \
                              _bl_tc, sizeof(*_bl_ap->data)),                   \
@@ -323,14 +323,14 @@ n00b_list_decl(n00b_string_t);
 // Search
 // ============================================================================
 
-#define n00b_list_find(x, val)                                                 \
+#define ncc_list_find(x, val)                                                 \
     ({                                                                         \
         auto _bl_lp = &(x);                                                    \
         typeof(*_bl_lp->data) _bl_v = (val);                                   \
-        n00b_option_t(size_t) _bl_r = n00b_option_none(size_t);               \
+        ncc_option_t(size_t) _bl_r = ncc_option_none(size_t);               \
         for (size_t _bl_i = 0; _bl_i < _bl_lp->len; _bl_i++) {                 \
             if (_bl_lp->data[_bl_i] == _bl_v) {                                \
-                _bl_r = n00b_option_set(size_t, _bl_i);                        \
+                _bl_r = ncc_option_set(size_t, _bl_i);                        \
                 break;                                                         \
             }                                                                  \
         }                                                                      \
@@ -341,7 +341,7 @@ n00b_list_decl(n00b_string_t);
 // Sort
 // ============================================================================
 
-#define n00b_list_sort(x, cmp)                                                 \
+#define ncc_list_sort(x, cmp)                                                 \
     ({                                                                         \
         auto _bl_lp = &(x);                                                    \
         if (_bl_lp->len > 1) {                                                 \
@@ -354,7 +354,7 @@ n00b_list_decl(n00b_string_t);
 // Remove by value
 // ============================================================================
 
-#define n00b_list_remove_all(x, val)                                           \
+#define ncc_list_remove_all(x, val)                                           \
     ({                                                                         \
         auto _bl_lp = &(x);                                                    \
         typeof(*_bl_lp->data) _bl_v = (val);                                   \
@@ -373,10 +373,10 @@ n00b_list_decl(n00b_string_t);
 // Utilities
 // ============================================================================
 
-#define n00b_list_clone(x)                                                     \
+#define ncc_list_clone(x)                                                     \
     ({                                                                         \
         auto      _bl_sp  = &(x);                                              \
-        size_t    _bl_nc  = n00b_max(_bl_sp->cap, (size_t)1);                  \
+        size_t    _bl_nc  = ncc_max(_bl_sp->cap, (size_t)1);                  \
         typeof(x) _bl_new = {                                                  \
             .data      = (typeof(_bl_sp->data))calloc(                         \
                              _bl_nc, sizeof(*_bl_sp->data)),                   \
@@ -392,9 +392,9 @@ n00b_list_decl(n00b_string_t);
         _bl_new;                                                               \
     })
 
-#define n00b_list_is_empty(x) (n00b_list_len(x) == 0)
+#define ncc_list_is_empty(x) (ncc_list_len(x) == 0)
 
-#define n00b_list_clear(x)                                                     \
+#define ncc_list_clear(x)                                                     \
     ({                                                                         \
         auto _bl_lp = &(x);                                                    \
         _bl_lp->len = 0;                                                       \
@@ -404,21 +404,21 @@ n00b_list_decl(n00b_string_t);
 // Iteration
 // ============================================================================
 
-#define n00b_list_foreach(x, var)                                              \
+#define ncc_list_foreach(x, var)                                              \
     for (typeof((x).data) var = (x).data;                                      \
          (var) < (x).data + (x).len;                                           \
          ++(var))
 
-#define n00b_list_foreach_locked(x, var) n00b_list_foreach(x, var)
+#define ncc_list_foreach_locked(x, var) ncc_list_foreach(x, var)
 
 // ============================================================================
 // Conversion: list -> array
 // ============================================================================
 
-#define n00b_list_to_array(T, x)                                               \
+#define ncc_list_to_array(T, x)                                               \
     ({                                                                         \
         auto _bl_lp = &(x);                                                    \
-        n00b_array_t(T) _bl_arr = {                                            \
+        ncc_array_t(T) _bl_arr = {                                            \
             .data      = _bl_lp->data,                                         \
             .len       = _bl_lp->len,                                          \
             .cap       = _bl_lp->cap,                                          \
