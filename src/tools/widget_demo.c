@@ -61,9 +61,6 @@
 #if defined(__APPLE__)
 #include "display/render/backend_cocoa.h"
 #endif
-#if defined(N00B_HAVE_NOTCURSES)
-#include "display/render/backend_notcurses.h"
-#endif
 
 // ====================================================================
 // Debug log
@@ -601,17 +598,48 @@ static void
 usage(const char *prog)
 {
     fprintf(stderr,
-            "Usage: %s --widget <name> --backend <tui|gui|cocoa|x11|nc> [--theme <name>]\n"
+            "Usage: %s --widget <name> [--backend <auto|tui|gui|cocoa|x11|nc|stream|dumb>] [--theme <name>]\n"
             "\n"
             "Widgets:  label, all\n"
-            "Backends: tui (ANSI alt-screen), gui (portable alias),\n"
+            "Backends: auto (policy-driven), tui (ANSI alt-screen),\n"
+            "          gui (portable alias),\n"
             "          cocoa (macOS native), x11 (Linux/Unix native),\n"
-            "          nc / notcurses (pixel + cell-based terminal)\n"
+            "          nc / notcurses (pixel + cell-based terminal),\n"
+            "          stream (buffer capture), dumb (no-op)\n"
             "          gui maps to cocoa on macOS, x11 on Linux/Unix\n"
             "\n"
             "Short flags: -w <widget> -b <backend> -t <theme>\n",
             prog);
     exit(1);
+}
+
+static const char *
+normalize_backend_alias(const char *name)
+{
+    if (!name || !name[0]) {
+        return "auto";
+    }
+
+    if (strcmp(name, "tui") == 0) {
+        return "ansi";
+    }
+
+    if (strcmp(name, "nc") == 0) {
+        return "notcurses";
+    }
+
+    return name;
+}
+
+static bool
+backend_uses_terminal_io(const char *selected_backend)
+{
+    if (!selected_backend) {
+        return false;
+    }
+
+    return strcmp(selected_backend, "ansi") == 0
+        || strcmp(selected_backend, "notcurses") == 0;
 }
 
 // ====================================================================
@@ -622,7 +650,7 @@ int
 main(int argc, char **argv)
 {
     const char *widget_name  = nullptr;
-    const char *backend_name = nullptr;
+    const char *backend_name = "auto";
     const char *theme_name   = nullptr;
 
     for (int i = 1; i < argc; i++) {
@@ -643,7 +671,7 @@ main(int argc, char **argv)
         }
     }
 
-    if (!widget_name || !backend_name) {
+    if (!widget_name) {
         usage(argv[0]);
     }
 
@@ -653,54 +681,6 @@ main(int argc, char **argv)
         fprintf(stderr, "Warning: could not open /tmp/widget_demo.log\n");
     }
     dbg("widget_demo started: widget=%s backend=%s\n", widget_name, backend_name);
-
-    // Select backend vtable.
-    const n00b_renderer_vtable_t *vtable = nullptr;
-    bool                          backend_uses_terminal_io = false;
-
-    if (strcmp(backend_name, "tui") == 0) {
-        vtable = &n00b_renderer_ansi;
-        backend_uses_terminal_io = true;
-    }
-    else if (strcmp(backend_name, "gui") == 0) {
-#if defined(__APPLE__)
-        vtable = &n00b_renderer_cocoa;
-#elif defined(N00B_HAVE_X11)
-        vtable = &n00b_renderer_x11;
-#elif defined(N00B_HAVE_NOTCURSES)
-        fprintf(stderr,
-                "Backend 'gui' requires a windowed backend, but x11 is not built.\n");
-        usage(argv[0]);
-#else
-        fprintf(stderr,
-                "Backend 'gui' is unavailable in this build "
-                "(requires cocoa on macOS or x11 on Linux/Unix).\n");
-        usage(argv[0]);
-#endif
-    }
-#if defined(__APPLE__)
-    else if (strcmp(backend_name, "cocoa") == 0) {
-        vtable = &n00b_renderer_cocoa;
-    }
-#endif
-#if defined(N00B_HAVE_NOTCURSES)
-    else if (strcmp(backend_name, "nc") == 0
-             || strcmp(backend_name, "notcurses") == 0) {
-        vtable = &n00b_renderer_notcurses;
-        backend_uses_terminal_io = true;
-    }
-#endif
-#if defined(N00B_HAVE_X11)
-    else if (strcmp(backend_name, "x11") == 0) {
-        vtable = &n00b_renderer_x11;
-    }
-#endif
-    else {
-        fprintf(stderr, "Unknown backend: %s\n", backend_name);
-        usage(argv[0]);
-    }
-
-    dbg("Selected vtable: name='%s' version=%u\n", vtable->name, vtable->version);
 
     // Initialize runtime.
     n00b_runtime_t runtime;
@@ -729,18 +709,42 @@ main(int argc, char **argv)
     // Create canvas with chosen backend.  Heap-allocate so the GC
     // can trace through it to find all reachable planes and widgets.
     n00b_canvas_t *canvas = n00b_alloc(n00b_canvas_t);
-    n00b_canvas_init(canvas, .vtable = vtable, .output = stdout_topic);
+    n00b_canvas_init(canvas,
+                     .backend_name           = n00b_string_from_cstr(backend_name),
+                     .backend_allow_fallback = true,
+                     .backend_allow_dynamic_load = true,
+                     .backend_allow_env_override = true,
+                     .output                 = stdout_topic);
 
     if (!canvas->backend_ctx) {
         fprintf(stderr,
-                "Failed to initialize backend '%s'.\n",
-                vtable->name ? vtable->name : "unknown");
+                "Failed to initialize backend '%s' (or fallback candidates).\n",
+                backend_name);
+        n00b_canvas_destroy(canvas);
         n00b_shutdown();
         if (g_log) {
             fclose(g_log);
         }
         return 1;
     }
+
+    const char *selected_backend = canvas->vtable && canvas->vtable->name
+                                 ? canvas->vtable->name
+                                 : "unknown";
+    const char *normalized_requested = normalize_backend_alias(backend_name);
+    bool used_fallback = strcmp(normalized_requested, selected_backend) != 0;
+    bool uses_terminal_io = backend_uses_terminal_io(selected_backend);
+
+    fprintf(stderr, "Backend request '%s' selected '%s'%s\n",
+            backend_name,
+            selected_backend,
+            used_fallback ? " (fallback)" : "");
+
+    dbg("Selected backend: requested='%s' selected='%s' fallback=%d\n",
+        backend_name, selected_backend, (int)used_fallback);
+    dbg("Selected vtable: name='%s' version=%u\n",
+        selected_backend,
+        canvas->vtable ? canvas->vtable->version : 0u);
 
     dbg("Canvas initialized:\n");
     dbg_canvas(canvas);
@@ -756,14 +760,22 @@ main(int argc, char **argv)
     }
     else {
         fprintf(stderr, "Unknown widget: %s\n", widget_name);
+        n00b_canvas_destroy(canvas);
         n00b_shutdown();
         return 1;
+    }
+
+    if (use_event_loop && (!canvas->vtable || !canvas->vtable->poll_event)) {
+        fprintf(stderr,
+                "Backend '%s' has no input polling; using single-frame mode.\n",
+                selected_backend);
+        use_event_loop = false;
     }
 
     // Render.
     dbg("\n=== About to render ===\n");
 
-    if (backend_uses_terminal_io) {
+    if (uses_terminal_io) {
 
         if (use_event_loop) {
             // Interactive event loop for "all" mode.
@@ -852,15 +864,15 @@ main(int argc, char **argv)
         }
     }
     else {
-        // Cocoa backend — use the event loop for interactive mode,
-        // static render + pump for non-interactive demos.
+        // Non-terminal backend — use the event loop for interactive mode,
+        // static render + optional platform pump for non-interactive demos.
         if (use_event_loop) {
-            dbg("Starting Cocoa event loop...\n");
+            dbg("Starting non-terminal event loop...\n");
             n00b_canvas_run(canvas, .tick_ms = 50);
-            dbg("Cocoa event loop exited.\n");
+            dbg("Non-terminal event loop exited.\n");
         }
         else {
-            dbg("Calling canvas_render (cocoa)...\n");
+            dbg("Calling canvas_render (non-terminal)...\n");
             n00b_canvas_render(canvas);
 
             dbg("After render:\n");

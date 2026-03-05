@@ -7,7 +7,9 @@
 #include "core/data_lock.h"
 #include "core/arena.h"
 #include "display/render/canvas.h"
+#include "display/render/backend_registry.h"
 #include "internal/display/backend_services.h"
+#include "internal/display/diagnostics.h"
 #include "internal/display/scene_contracts.h"
 
 // -------------------------------------------------------------------
@@ -26,27 +28,36 @@ canvas_unlock(n00b_canvas_t *c)
     n00b_data_unlock(c->lock);
 }
 
-// -------------------------------------------------------------------
-// Lifecycle
-// -------------------------------------------------------------------
-
-void
-n00b_canvas_init(n00b_canvas_t *c) _kargs
+static const char *
+safe_name(n00b_string_t *name)
 {
-    const n00b_renderer_vtable_t           *vtable    = nullptr;
-    n00b_allocator_t                       *allocator = nullptr;
-    n00b_conduit_topic_t(n00b_buffer_t *)  *output    = nullptr;
+    if (!name || !name->data || !name->data[0]) {
+        return "<null>";
+    }
+    return name->data;
 }
+
+static const char *
+safe_vtable_name(const n00b_renderer_vtable_t *vtable)
 {
-    assert(vtable);
+    if (!vtable || !vtable->name || !vtable->name[0]) {
+        return "<unknown>";
+    }
+    return vtable->name;
+}
 
-    c->lock      = n00b_data_lock_new();
-    c->vtable    = vtable;
-    c->allocator = allocator;
+static bool
+canvas_bind_backend(n00b_canvas_t                *c,
+                    const n00b_renderer_vtable_t *vtable,
+                    void                         *backend_ctx)
+{
+    if (!c || !vtable || !backend_ctx) {
+        return false;
+    }
 
-    // Initialize backend, passing the output topic.
-    c->backend_ctx = vtable->init(output);
-    c->caps        = n00b_display_backend_caps(c);
+    c->vtable     = vtable;
+    c->backend_ctx = backend_ctx;
+    c->caps       = n00b_display_backend_caps(c);
 
     // Get initial size from backend (cells) and convert to pixels.
     n00b_render_size_t sz = n00b_display_backend_get_size(c);
@@ -61,10 +72,119 @@ n00b_canvas_init(n00b_canvas_t *c) _kargs
     }
     else {
         c->metrics = n00b_font_metrics_fallback((int32_t)c->cell_px_w,
-                                                  (int32_t)c->cell_px_h);
+                                                (int32_t)c->cell_px_h);
     }
 
     c->needs_full_redraw = true;
+    return true;
+}
+
+static bool
+canvas_try_vtable(n00b_canvas_t                       *c,
+                  const n00b_renderer_vtable_t        *vtable,
+                  n00b_conduit_topic_t(n00b_buffer_t *) *output)
+{
+    if (!vtable || !vtable->init) {
+        return false;
+    }
+
+    void *backend_ctx = vtable->init(output);
+    if (!backend_ctx) {
+        return false;
+    }
+
+    return canvas_bind_backend(c, vtable, backend_ctx);
+}
+
+// -------------------------------------------------------------------
+// Lifecycle
+// -------------------------------------------------------------------
+
+void
+n00b_canvas_init(n00b_canvas_t *c) _kargs
+{
+    const n00b_renderer_vtable_t           *vtable    = nullptr;
+    n00b_string_t                          *backend_name = nullptr;
+    bool                                    backend_allow_fallback = true;
+    bool                                    backend_allow_dynamic_load = true;
+    bool                                    backend_allow_env_override = true;
+    n00b_allocator_t                       *allocator = nullptr;
+    n00b_conduit_topic_t(n00b_buffer_t *)  *output    = nullptr;
+}
+{
+    if (!c) {
+        return;
+    }
+
+    c->lock      = n00b_data_lock_new();
+    c->allocator = allocator;
+    c->vtable    = nullptr;
+    c->backend_ctx = nullptr;
+    c->caps      = N00B_RCAP_NONE;
+    c->cell_px_w = 1;
+    c->cell_px_h = 1;
+    c->metrics   = n00b_font_metrics_fallback(1, 1);
+    c->needs_full_redraw = true;
+
+    if (vtable) {
+        if (!canvas_try_vtable(c, vtable, output)) {
+            c->vtable = vtable;
+            n00b_display_diag_log(N00B_DISPLAY_DIAG_ERROR,
+                                  "canvas",
+                                  "backend init failed for direct vtable '%s'",
+                                  safe_vtable_name(vtable));
+        }
+        return;
+    }
+
+    n00b_string_t *requested = backend_name ? backend_name : r"auto";
+    n00b_list_t(n00b_string_t *) candidates =
+        n00b_renderer_candidate_names(requested,
+                                       .allow_fallback     = backend_allow_fallback,
+                                       .allow_env_override = backend_allow_env_override);
+
+    for (size_t i = 0; i < candidates.len; i++) {
+        n00b_string_t *candidate_name = n00b_list_get(candidates, i);
+        n00b_result_t(n00b_renderer_vtable_ptr_t) resolved =
+            n00b_renderer_resolve_exact(candidate_name,
+                                        .allow_dynamic_load = backend_allow_dynamic_load);
+        if (!n00b_result_is_ok(resolved)) {
+            n00b_display_diag_log(N00B_DISPLAY_DIAG_TRACE,
+                                  "canvas",
+                                  "backend candidate unresolved: requested=%s candidate=%s err=%d",
+                                  safe_name(requested),
+                                  safe_name(candidate_name),
+                                  n00b_result_get_err(resolved));
+            continue;
+        }
+
+        const n00b_renderer_vtable_t *candidate_vtable = n00b_result_get(resolved);
+        if (!candidate_vtable) {
+            continue;
+        }
+
+        if (canvas_try_vtable(c, candidate_vtable, output)) {
+            n00b_display_diag_log(N00B_DISPLAY_DIAG_INFO,
+                                  "canvas",
+                                  "backend selected: requested=%s selected=%s fallback=%s",
+                                  safe_name(requested),
+                                  safe_vtable_name(candidate_vtable),
+                                  i == 0 ? "false" : "true");
+            return;
+        }
+
+        n00b_display_diag_log(N00B_DISPLAY_DIAG_TRACE,
+                              "canvas",
+                              "backend candidate init failed: requested=%s candidate=%s",
+                              safe_name(requested),
+                              safe_vtable_name(candidate_vtable));
+    }
+
+    n00b_display_diag_log(N00B_DISPLAY_DIAG_ERROR,
+                          "canvas",
+                          "backend selection failed: requested=%s candidates=%zu",
+                          safe_name(requested),
+                          candidates.len);
 }
 
 void

@@ -1441,6 +1441,30 @@ display_backend_registry_test = executable('test_display_backend_registry',
 )
 test('display_backend_registry', display_backend_registry_test, suite: 'unit')
 
+display_backend_selection_test = executable('test_display_backend_selection',
+    ['test/unit/test_display_backend_selection.c'],
+    kwargs: test_common_kwargs,
+)
+test('display_backend_selection', display_backend_selection_test, suite: 'unit')
+
+m5_renderer_plugin_fixture = shared_library('n00b_render_m5_test',
+    ['test/fixtures/display/renderers/m5_test_renderer.c'],
+    include_directories: incdir,
+    c_args: exe_c_args,
+    dependencies: deps,
+    install: false,
+)
+
+display_backend_plugin_test = executable('test_display_backend_plugin',
+    ['test/unit/test_display_backend_plugin.c'],
+    kwargs: test_common_kwargs,
+)
+test('display_backend_plugin',
+     display_backend_plugin_test,
+     suite: 'unit',
+     env: ['N00B_RENDERER_PATH=' + meson.current_build_dir()],
+     depends: [m5_renderer_plugin_fixture])
+
 display_event_dispatch_test = executable('test_display_event_dispatch',
     ['test/unit/test_display_event_dispatch.c'],
     kwargs: test_common_kwargs,
@@ -1573,6 +1597,12 @@ display_gui_parity_report = executable('display_gui_parity_report',
     install: false,
 )
 
+display_backend_selection_report = executable('display_backend_selection_report',
+    ['src/tools/display_backend_selection_report.c'],
+    kwargs: test_common_kwargs,
+    install: false,
+)
+
 # N00b dev tool (parse + annotate n00b source files, REPL)
 n00b_dev = executable('n00b_dev',
     ['src/tools/n00b_dev.c', 'src/tools/n00b_repl.c'],
@@ -1668,6 +1698,12 @@ display_m4_widget_table_flow_test = executable('test_display_m4_widget_table_flo
     kwargs: test_common_kwargs,
 )
 test('display_m4_widget_table_flow', display_m4_widget_table_flow_test, suite: 'integration')
+
+display_m5_runtime_selection_test = executable('test_display_m5_runtime_selection',
+    ['test/integration/test_display_m5_runtime_selection.c'],
+    kwargs: test_common_kwargs,
+)
+test('display_m5_runtime_selection', display_m5_runtime_selection_test, suite: 'integration')
 
 # ============================================================================
 # Unicode tests
