@@ -18,7 +18,8 @@ The user-visible result is a new baseline test harness with one new display-focu
 - [x] (2026-03-05 09:27Z) Created and switched to `display-rewrite/m0-baseline`; adjusted branch base to `needs-rebase` after validating this workspace's `main` does not contain the expected display subtree.
 - [x] (2026-03-05 09:33Z) Added `test/unit/test_display_baseline_contract.c`, `test/integration/test_display_baseline_flow.c`, and Meson registrations `display_baseline_contract` and `display_baseline_flow`.
 - [x] (2026-03-05 09:34Z) Added deterministic baseline capture tool `src/tools/display_baseline_capture.c`, default output convention `plans/artifacts/display-rewrite/m0/`, and Meson tool target `display_baseline_capture`.
-- [ ] (2026-03-05 09:36Z) Execute tests and generate milestone artifacts. Attempted, but blocked by existing `ncc`/core rebuild failures in `build_debug` before new test/tool binaries are linked.
+- [x] (2026-03-05 10:34Z) Rebased `display-rewrite/m0-baseline` onto `codex/linux-build-and-test`, bringing in Linux build/test fixes that removed prior `ncc`/core rebuild blockers.
+- [x] (2026-03-05 10:41Z) Executed milestone validation (`display_baseline_contract`, `display_baseline_flow`, display smoke suite) and generated deterministic artifacts in `plans/artifacts/display-rewrite/m0/`.
 
 ## Surprises & Discoveries
 
@@ -30,10 +31,10 @@ The user-visible result is a new baseline test harness with one new display-focu
   Evidence: current tests such as `test/unit/test_render_canvas.c` rely on stream backend helpers and run as standard unit tests.
 - Observation: In this workspace, `main` does not contain the display subsystem expected by the Milestone 0 plan.
   Evidence: switching to `main` removed expected paths (`include/display`, `src/display`) required by planned test/tool work; implementation continued on `display-rewrite/m0-baseline` based on `needs-rebase`.
-- Observation: Baseline test execution is currently blocked by unrelated pre-existing `ncc`/core compilation failures before test binaries build.
-  Evidence: `meson test -C build_debug --print-errorlogs display_baseline_contract` fails during rebuild with errors in `src/core/hash.c` (`ncc: parse FAILED ... "__m128"`), `src/core/buffer.c` (default argument mismatch), and allocator/mmap macro expansion errors in `src/core/pool.c`, `src/core/arena.c`, and `src/core/mmaps.c`.
-- Observation: Because rebuild fails, the baseline capture executable is not produced.
-  Evidence: `build_debug/display_baseline_capture --out-dir plans/artifacts/display-rewrite/m0` returns `zsh: no such file or directory: build_debug/display_baseline_capture`.
+- Observation: Baseline test execution was blocked on the pre-rebase branch state but is unblocked after rebasing onto `codex/linux-build-and-test`.
+  Evidence: Pre-rebase runs failed in core rebuild; post-rebase reruns completed with `display_baseline_contract OK`, `display_baseline_flow OK`, and display smoke tests `19/19 OK`.
+- Observation: Running `meson test` for named tests does not guarantee non-test local tools are built.
+  Evidence: `build_debug/display_baseline_capture` was missing until running `ninja -C build_debug display_baseline_capture`; artifact capture succeeded immediately afterward.
 
 ## Decision Log
 
@@ -52,10 +53,13 @@ The user-visible result is a new baseline test harness with one new display-focu
 - Decision: Do not patch unrelated `ncc`/core build failures as part of Milestone 0 baseline scope.
   Rationale: The milestone objective is additive baseline harnessing for display; broad toolchain/core fixes are orthogonal and would hide true baseline status.
   Date/Author: 2026-03-05 / Codex
+- Decision: Build `display_baseline_capture` explicitly with Ninja before artifact capture in validation transcripts.
+  Rationale: Meson test invocations for named suites do not always produce unrelated local tool binaries, and explicit target builds make artifact steps deterministic.
+  Date/Author: 2026-03-05 / Codex
 
 ## Outcomes & Retrospective
 
-Milestone 0 implementation is complete for code deliverables but incomplete for validation artifacts due external build blockers.
+Milestone 0 implementation and acceptance evidence are complete.
 
 Implemented:
 - `meson.build` wiring for `display_baseline_contract` (unit), `display_baseline_flow` (integration), and `display_baseline_capture` (tool).
@@ -63,12 +67,15 @@ Implemented:
 - New cross-component integration test at `test/integration/test_display_baseline_flow.c`.
 - Deterministic artifact capture tool at `src/tools/display_baseline_capture.c` targeting `plans/artifacts/display-rewrite/m0/`.
 
-Not completed:
-- Passing Meson evidence for new tests.
-- Generated baseline artifact files (`scene_stream.txt`, `table_stream.txt`, `metadata.txt`).
+Validation completed:
+- `meson test -C build_debug --print-errorlogs display_baseline_contract` passed.
+- `meson test -C build_debug --print-errorlogs display_baseline_flow` passed.
+- Display smoke command (`render_plane` through `xform_render`) passed with `19/19 OK`.
+- `display_baseline_capture` produced `scene_stream.txt`, `table_stream.txt`, and `metadata.txt` under `plans/artifacts/display-rewrite/m0/`.
+- Re-running `display_baseline_capture` without code changes preserved identical artifact `sha256sum` values (deterministic output check).
 
 Current risk:
-- Later display rewrite milestones can build on the new harness code structure, but acceptance-level baseline evidence cannot be established until the existing `ncc`/core rebuild failures are fixed in this branch lineage.
+- Build emits existing warnings outside M0 scope (pointer-sign and unused-variable warnings in existing files). No M0 acceptance blocker remains.
 
 ## Context and Orientation
 
@@ -154,35 +161,50 @@ If an artifact file changes unexpectedly between two runs without code changes, 
 
 ## Artifacts and Notes
 
-Milestone command evidence for this run:
+Initial attempt on pre-rebase base (for historical context):
 
     $ meson test -C build_debug --print-errorlogs display_baseline_contract
-    ninja: Entering directory `/home/baron/crash-override/n00b-athens/build_debug'
-    [1/200] Compiling C object libn00b.a.p/src_core_hash.c.o
-    ncc: parse FAILED (37009 tokens produced) ... "__m128"
+    ncc: parse FAILED ... "__m128"
     Could not rebuild /home/baron/crash-override/n00b-athens/build_debug
 
     $ meson test -C build_debug --print-errorlogs display_baseline_flow
-    ninja: Entering directory `/home/baron/crash-override/n00b-athens/build_debug'
-    [1/200] Compiling C object libn00b.a.p/src_core_buffer.c.o
     ncc: error: default for 'start' in 'n00b_buffer_find' differs from previous declaration
     Could not rebuild /home/baron/crash-override/n00b-athens/build_debug
 
+Post-rebase validation run (`display-rewrite/m0-baseline` rebased onto `codex/linux-build-and-test`):
+
+    $ meson test -C build_debug --print-errorlogs display_baseline_contract
+    1/1 unit - n00b:display_baseline_contract OK
+
+    $ meson test -C build_debug --print-errorlogs display_baseline_flow
+    1/1 integration - n00b:display_baseline_flow OK
+
     $ meson test -C build_debug --print-errorlogs render_plane render_canvas render_ansi event_normalize focus mouse ...
-    ninja: Entering directory `/home/baron/crash-override/n00b-athens/build_debug'
-    [1/236] Compiling C object libn00b.a.p/src_core_hash.c.o
-    ncc: parse FAILED (37009 tokens produced) ... "__m128"
-    Could not rebuild /home/baron/crash-override/n00b-athens/build_debug
+    19/19 unit tests OK
+
+    $ ninja -C build_debug display_baseline_capture
+    [2/2] Linking target display_baseline_capture
 
     $ build_debug/display_baseline_capture --out-dir plans/artifacts/display-rewrite/m0
-    zsh: no such file or directory: build_debug/display_baseline_capture
+    wrote scene_stream.txt
+    wrote table_stream.txt
+    wrote metadata.txt
 
-Artifact directory state after attempted run:
+    $ sha256sum plans/artifacts/display-rewrite/m0/scene_stream.txt plans/artifacts/display-rewrite/m0/table_stream.txt plans/artifacts/display-rewrite/m0/metadata.txt > /tmp/m0_before.sha
+    $ build_debug/display_baseline_capture --out-dir plans/artifacts/display-rewrite/m0
+    $ sha256sum plans/artifacts/display-rewrite/m0/scene_stream.txt plans/artifacts/display-rewrite/m0/table_stream.txt plans/artifacts/display-rewrite/m0/metadata.txt > /tmp/m0_after.sha
+    $ diff -u /tmp/m0_before.sha /tmp/m0_after.sha
+    (no output)
+
+Artifact directory state after successful run:
 
     $ ls -la plans/artifacts/display-rewrite/m0
-    total 8
-    drwxr-xr-x 2 baron baron 4096 Mar  5 01:36 .
+    total 20
+    drwxr-xr-x 2 baron baron 4096 Mar  5 02:41 .
     drwxr-xr-x 3 baron baron 4096 Mar  5 01:36 ..
+    -rw-r--r-- 1 baron baron  128 Mar  5 02:41 metadata.txt
+    -rw-r--r-- 1 baron baron  111 Mar  5 02:41 scene_stream.txt
+    -rw-r--r-- 1 baron baron  314 Mar  5 02:41 table_stream.txt
 
 ## Interfaces and Dependencies
 
@@ -212,3 +234,4 @@ Dependencies for this milestone are existing display modules and Meson test wiri
 
 - 2026-03-05: Initial Milestone 0 child ExecPlan created to convert the umbrella rewrite strategy into concrete baseline harness work with explicit test and artifact deliverables.
 - 2026-03-05: Implemented M0 code deliverables (`meson.build` wiring, baseline unit/integration tests, deterministic capture tool) and recorded real command evidence showing validation blocked by existing `ncc`/core rebuild failures.
+- 2026-03-05: Rebased onto `codex/linux-build-and-test`, reran validation successfully, and generated baseline artifacts under `plans/artifacts/display-rewrite/m0/`.
