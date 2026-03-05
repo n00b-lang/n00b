@@ -31,6 +31,7 @@ This plan is the top-level roadmap for the in-place rewrite. "In-place" means ex
 - [x] (2026-03-05 13:19Z) Authored the Milestone 4 child ExecPlan in `plans/display-rewrite/m4-widget-table-migration-execplan.md`.
 - [x] (2026-03-05 13:41Z) Executed Milestone 4 and recorded shared widget/table/hexdump primitive migration, validation evidence, and deterministic M4 artifacts in `plans/display-rewrite/m4-widget-table-migration-execplan.md` and `plans/artifacts/display-rewrite/m4/`.
 - [x] (2026-03-18 02:47Z) Applied M4 review remediation on `display-rewrite/m4-widget-table-migration`: extracted the shared showcase fixture, removed unused internal helper surface, added full M4 artifact parity coverage with whitespace gating, refreshed the tracked M4 artifacts/docs, and cleared the M4 `git diff --check` failures.
+- [x] (2026-03-05 13:50Z) Authored the Milestone 5 child ExecPlan in `plans/display-rewrite/m5-runtime-selection-execplan.md`.
 - [ ] Execute Milestones 5-6 as stacked diffs, preserving this document as the top-level source of milestone ordering and acceptance scope.
 
 ## Surprises & Discoveries
@@ -489,3 +490,4 @@ Dependencies that materially affect milestone planning include optional GUI/rend
 - 2026-03-05: Marked Milestone 4 child ExecPlan authoring as complete after creating `plans/display-rewrite/m4-widget-table-migration-execplan.md`, while keeping remaining execution scope at Milestones 4-6.
 - 2026-03-05: Updated umbrella plan after Milestone 4 execution to mark M4 complete, add M4 validation/artifact evidence, adjust branch/remaining scope guidance to Milestones 5-6, and replace the missing table sample path in generic artifact commands with deterministic stdin-fed table input.
 - 2026-03-18: Updated umbrella plan after M4 review remediation so the documented Milestone 4 state includes the shared showcase fixture, full M4 artifact parity coverage with whitespace gating, refreshed M4 artifacts/docs, and clean repository hygiene evidence.
+- 2026-03-05: Marked Milestone 5 child ExecPlan authoring as complete after creating `plans/display-rewrite/m5-runtime-selection-execplan.md`, while keeping remaining execution scope at Milestones 5-6.
