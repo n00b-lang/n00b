@@ -394,6 +394,9 @@ n00b_text = [
 n00b_display = [
     'src/display/layout.c',
     'src/display/hexdump.c',
+    'src/display/diagnostics.c',
+    'src/display/scene_contracts.c',
+    'src/display/event_dispatch.c',
     # Render engine
     'src/display/render/cell.c',
     'src/display/render/border_themes.c',
@@ -401,6 +404,7 @@ n00b_display = [
     'src/display/render/box.c',
     'src/display/render/composite.c',
     'src/display/render/canvas.c',
+    'src/display/render/backend_services.c',
     'src/display/render/backend_stream.c',
     'src/display/render/backend_ansi.c',
     'src/display/render/backend_ansi_inline.c',
@@ -1394,6 +1398,24 @@ event_normalize_test = executable('test_event_normalize',
 )
 test('event_normalize', event_normalize_test, suite: 'unit')
 
+display_diagnostics_test = executable('test_display_diagnostics',
+    ['test/unit/test_display_diagnostics.c'],
+    kwargs: test_common_kwargs,
+)
+test('display_diagnostics', display_diagnostics_test, suite: 'unit')
+
+display_scene_contracts_test = executable('test_display_scene_contracts',
+    ['test/unit/test_display_scene_contracts.c'],
+    kwargs: test_common_kwargs,
+)
+test('display_scene_contracts', display_scene_contracts_test, suite: 'unit')
+
+display_event_dispatch_test = executable('test_display_event_dispatch',
+    ['test/unit/test_display_event_dispatch.c'],
+    kwargs: test_common_kwargs,
+)
+test('display_event_dispatch', display_event_dispatch_test, suite: 'unit')
+
 display_baseline_contract_test = executable('test_display_baseline_contract',
     ['test/unit/test_display_baseline_contract.c'],
     kwargs: test_common_kwargs,
@@ -1434,6 +1456,12 @@ widget_demo = executable('widget_demo',
 
 display_baseline_capture = executable('display_baseline_capture',
     ['src/tools/display_baseline_capture.c'],
+    kwargs: test_common_kwargs,
+    install: false,
+)
+
+display_scene_inspect = executable('display_scene_inspect',
+    ['src/tools/display_scene_inspect.c'],
     kwargs: test_common_kwargs,
     install: false,
 )
@@ -1520,6 +1548,12 @@ test('display_baseline_artifacts',
     ],
     suite: 'integration',
 )
+
+display_m1_compat_test = executable('test_display_m1_compat',
+    ['test/integration/test_display_m1_compat.c'],
+    kwargs: test_common_kwargs,
+)
+test('display_m1_compat', display_m1_compat_test, suite: 'integration')
 
 # ============================================================================
 # Unicode tests

@@ -3,7 +3,6 @@
  */
 
 #include "n00b.h"
-#include <stdio.h>
 #include "core/alloc.h"
 #include "core/string.h"
 #include "display/render/plane.h"
@@ -14,15 +13,7 @@
 #include "text/unicode/linebreak.h"
 #include "text/strings/string_ops.h"
 #include "text/strings/text_style.h"
-
-// Temp debug log — writes to same file as widget_demo.
-static FILE *g_label_log = nullptr;
-
-__attribute__((constructor))
-static void label_open_log(void) {
-    g_label_log = fopen("/tmp/widget_demo.log", "a");
-    if (!g_label_log) g_label_log = stderr;
-}
+#include "internal/display/diagnostics.h"
 
 // -------------------------------------------------------------------
 // Internal helpers
@@ -96,9 +87,14 @@ label_render_line(n00b_plane_t      *plane,
         x = content_w - line_width;
     }
 
-    fprintf(g_label_log, "[label_render_line] line_width=%d content_w=%d halign=%d x=%d y=%d\n",
-            line_width, content_w, (int)halign, x, y);
-    fflush(g_label_log);
+    n00b_display_diag_log(N00B_DISPLAY_DIAG_TRACE,
+                           "widget_label",
+                           "render_line line_width=%d content_w=%d halign=%d x=%d y=%d",
+                           line_width,
+                           content_w,
+                           (int)halign,
+                           x,
+                           y);
 
     n00b_plane_draw_text(plane, x, y, line, .style = style);
 }
@@ -127,12 +123,18 @@ label_render(n00b_plane_t *plane, void *data)
     int32_t text_w = n00b_plane_text_width(plane, label->text, style);
     n00b_alignment_t halign = label->alignment & N00B_HORIZONTAL_MASK;
 
-    fprintf(g_label_log, "[label_render] content_w=%d content_h=%d text_w=%d "
-            "line_h=%d halign=%d wrap=%d canvas=%p text='%.*s'\n",
-            content_w, content_h, text_w, line_h, (int)halign,
-            (int)label->wrap, (void *)plane->canvas,
-            (int)label->text->u8_bytes, label->text->data);
-    fflush(g_label_log);
+    n00b_display_diag_log(N00B_DISPLAY_DIAG_TRACE,
+                           "widget_label",
+                           "render content_w=%d content_h=%d text_w=%d line_h=%d halign=%d wrap=%d canvas=%p text='%.*s'",
+                           content_w,
+                           content_h,
+                           text_w,
+                           line_h,
+                           (int)halign,
+                           (int)label->wrap,
+                           (void *)plane->canvas,
+                           (int)label->text->u8_bytes,
+                           label->text->data);
 
     if (!label->wrap) {
         label_render_line(plane, label->text, 0, content_w, halign, style);
@@ -141,8 +143,10 @@ label_render(n00b_plane_t *plane, void *data)
 
     // Convert pixel width to character columns for the linebreak algorithm.
     int32_t wrap_cols = n00b_plane_text_columns(plane, content_w, style);
-    fprintf(g_label_log, "[label_render] wrap_cols=%d\n", wrap_cols);
-    fflush(g_label_log);
+    n00b_display_diag_log(N00B_DISPLAY_DIAG_TRACE,
+                           "widget_label",
+                           "render wrap_cols=%d",
+                           wrap_cols);
 
     // Unicode-aware word wrap (expects column count, not pixels).
     n00b_array_t(uint32_t) breaks =

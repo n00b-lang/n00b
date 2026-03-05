@@ -23,12 +23,12 @@
 #include "display/event_loop.h"
 #include "display/event.h"
 #include "display/focus.h"
-#include "display/widget.h"
 #include "display/render/canvas.h"
-#include "display/render/backend.h"
 #include "display/render/plane.h"
-#include "display/render/types.h"
-#include "display/mouse.h"
+#include "internal/display/backend_services.h"
+#include "internal/display/diagnostics.h"
+#include "internal/display/event_dispatch.h"
+#include "internal/display/scene_contracts.h"
 
 // Global stop flag (set by n00b_canvas_run_stop).
 static volatile bool g_run_stop = false;
@@ -89,7 +89,7 @@ event_loop_setup_terminal(n00b_canvas_t *canvas)
     g_signal_canvas = canvas;
 
     // Check if the backend manages terminal state itself.
-    n00b_render_cap_t caps = canvas->vtable->capabilities(canvas->backend_ctx);
+    n00b_render_cap_t caps = n00b_display_backend_caps(canvas);
     g_manages_tty = (caps & N00B_RCAP_MANAGES_TTY) != 0;
 
     // Always save termios so the signal handler can restore on fatal
@@ -190,151 +190,6 @@ event_loop_teardown_terminal(n00b_canvas_t *canvas)
 #endif /* _WIN32 */
 
 // -------------------------------------------------------------------
-// Dirty check: walk the plane tree for any dirty planes
-// -------------------------------------------------------------------
-
-static bool
-plane_tree_dirty(n00b_plane_t *plane)
-{
-    if (!plane) {
-        return false;
-    }
-    if (plane->flags & N00B_PLANE_DIRTY) {
-        return true;
-    }
-    if (plane->children.data) {
-        for (size_t i = 0; i < plane->children.len; i++) {
-            n00b_plane_t *child = plane->children.data[i];
-            if (child && plane_tree_dirty(child)) {
-                return true;
-            }
-        }
-    }
-    return false;
-}
-
-static bool
-canvas_any_dirty(n00b_canvas_t *canvas)
-{
-    if (canvas->needs_full_redraw) {
-        return true;
-    }
-    if (canvas->planes.data) {
-        for (size_t i = 0; i < canvas->planes.len; i++) {
-            n00b_plane_t *p = canvas->planes.data[i];
-            if (p && plane_tree_dirty(p)) {
-                return true;
-            }
-        }
-    }
-    return false;
-}
-
-// -------------------------------------------------------------------
-// Mark all planes dirty (used after resize)
-// -------------------------------------------------------------------
-
-static void
-mark_plane_tree_dirty(n00b_plane_t *plane)
-{
-    if (!plane) {
-        return;
-    }
-    plane->flags |= N00B_PLANE_DIRTY;
-    if (plane->children.data) {
-        for (size_t i = 0; i < plane->children.len; i++) {
-            n00b_plane_t *child = plane->children.data[i];
-            if (child) {
-                mark_plane_tree_dirty(child);
-            }
-        }
-    }
-}
-
-static void
-canvas_mark_all_dirty(n00b_canvas_t *canvas)
-{
-    if (canvas->planes.data) {
-        for (size_t i = 0; i < canvas->planes.len; i++) {
-            n00b_plane_t *p = canvas->planes.data[i];
-            if (p) {
-                mark_plane_tree_dirty(p);
-            }
-        }
-    }
-}
-
-// -------------------------------------------------------------------
-// Re-render dirty widgets before compositing
-// -------------------------------------------------------------------
-
-static void
-rerender_dirty(n00b_plane_t *plane)
-{
-    if (!plane) {
-        return;
-    }
-    if ((plane->flags & N00B_PLANE_DIRTY) && plane->widget_vtable) {
-        n00b_widget_render(plane);
-        // Clear dirty after render so the event loop doesn't
-        // re-render every tick.  n00b_widget_render sets dirty
-        // (content changed) but the rerender pass consumes it.
-        plane->flags &= ~N00B_PLANE_DIRTY;
-    }
-    if (plane->children.data) {
-        for (size_t i = 0; i < plane->children.len; i++) {
-            n00b_plane_t *child = plane->children.data[i];
-            if (child) {
-                rerender_dirty(child);
-            }
-        }
-    }
-}
-
-static void
-canvas_rerender_dirty(n00b_canvas_t *canvas)
-{
-    if (canvas->planes.data) {
-        for (size_t i = 0; i < canvas->planes.len; i++) {
-            n00b_plane_t *p = canvas->planes.data[i];
-            if (p) {
-                rerender_dirty(p);
-            }
-        }
-    }
-}
-
-// -------------------------------------------------------------------
-// Layout cascade: run pixel-based layout on all top-level planes
-// -------------------------------------------------------------------
-
-static void
-canvas_run_layout(n00b_canvas_t *canvas)
-{
-    if (!canvas->planes.data) {
-        return;
-    }
-
-    n00b_render_size_t sz = canvas->vtable->get_size(canvas->backend_ctx);
-    int32_t pw = sz.cell_pixel_w > 0 ? sz.cell_pixel_w : 1;
-    int32_t ph = sz.cell_pixel_h > 0 ? sz.cell_pixel_h : 1;
-
-    n00b_rect_t root_bounds = {
-        .x      = 0,
-        .y      = 0,
-        .width  = (int32_t)sz.cols * pw,
-        .height = (int32_t)sz.rows * ph,
-    };
-
-    for (size_t i = 0; i < canvas->planes.len; i++) {
-        n00b_plane_t *p = canvas->planes.data[i];
-        if (p) {
-            n00b_widget_layout(p, root_bounds);
-        }
-    }
-}
-
-// -------------------------------------------------------------------
 // Public API
 // -------------------------------------------------------------------
 
@@ -347,72 +202,67 @@ n00b_canvas_run(n00b_canvas_t *canvas) _kargs
 }
 {
     g_run_stop = false;
+    n00b_display_diag_init();
 
 #ifndef _WIN32
     event_loop_setup_terminal(canvas);
 #endif
 
     // Hide cursor during event loop.
-    if (canvas->vtable->cursor_set_visible) {
-        canvas->vtable->cursor_set_visible(canvas->backend_ctx, false);
-    }
+    n00b_display_backend_set_cursor_visible(canvas, false);
 
     // Create focus manager.
     n00b_focus_mgr_t *fm = n00b_focus_mgr_new(canvas);
-
-    // Profiling log.
-    FILE *prof = fopen("/tmp/widget_demo_prof.log", "w");
 
 #define PROF_NOW(tv) clock_gettime(CLOCK_MONOTONIC, &(tv))
 #define PROF_MS(a, b) \
     (((b).tv_sec - (a).tv_sec) * 1000.0 + \
      ((b).tv_nsec - (a).tv_nsec) / 1e6)
 
-    struct timespec t0, t1, t2, t3, t4;
+    struct timespec t0, t1, t2, t3;
 
     // Initial layout cascade + render.
     PROF_NOW(t0);
-    canvas_run_layout(canvas);
+    n00b_display_scene_run_layout(canvas);
     PROF_NOW(t1);
-    canvas_mark_all_dirty(canvas);
-    canvas_rerender_dirty(canvas);
+    n00b_display_scene_mark_all_dirty(canvas);
+    n00b_display_scene_rerender_dirty(canvas);
     PROF_NOW(t2);
     n00b_canvas_render(canvas);
     PROF_NOW(t3);
 
-    if (prof) {
-        fprintf(prof, "=== Initial render profiling ===\n");
-        fprintf(prof, "  layout:      %.2f ms\n", PROF_MS(t0, t1));
-        fprintf(prof, "  rerender:    %.2f ms\n", PROF_MS(t1, t2));
-        fprintf(prof, "  canvas_render: %.2f ms\n", PROF_MS(t2, t3));
-        fprintf(prof, "  total:       %.2f ms\n", PROF_MS(t0, t3));
-        fflush(prof);
-    }
+    n00b_display_diag_log(N00B_DISPLAY_DIAG_TRACE,
+                           "event_loop",
+                           "initial-render layout=%.2fms rerender=%.2fms canvas=%.2fms total=%.2fms",
+                           PROF_MS(t0, t1),
+                           PROF_MS(t1, t2),
+                           PROF_MS(t2, t3),
+                           PROF_MS(t0, t3));
 
     // Warmup: discard spurious input events from backend initialization
     // (e.g. notcurses terminal probe responses).  The number of ticks
     // to drain is ceil(100ms / tick_ms).
     int warmup_ticks = (100 + tick_ms - 1) / tick_ms;
 
-    int tick_count = 0;
+    int tick_count   = 0;
+    int render_count = 0;
 
     while (!g_run_stop) {
         n00b_event_t event = { .type = N00B_EVENT_NONE };
 
         // Poll backend for input.
         PROF_NOW(t0);
-        if (canvas->vtable->poll_event) {
-            canvas->vtable->poll_event(canvas->backend_ctx,
-                                        tick_ms,
-                                        &event);
-        }
+        (void)n00b_display_backend_poll_event(canvas, tick_ms, &event);
         PROF_NOW(t1);
 
         tick_count++;
-        if (prof && tick_count <= 20) {
-            fprintf(prof, "[tick %d] poll=%.2fms event=%d\n",
-                    tick_count, PROF_MS(t0, t1), event.type);
-            fflush(prof);
+        if (tick_count <= 20) {
+            n00b_display_diag_log(N00B_DISPLAY_DIAG_TRACE,
+                                   "event_loop",
+                                   "tick=%d poll=%.2fms event=%d",
+                                   tick_count,
+                                   PROF_MS(t0, t1),
+                                   (int)event.type);
         }
 
         // Normalize backend-specific key representations into
@@ -427,106 +277,83 @@ n00b_canvas_run(n00b_canvas_t *canvas) _kargs
             }
         }
 
-        if (event.type == N00B_EVENT_KEY) {
-            uint32_t       key  = event.key.key;
-            n00b_key_mod_t mods = event.key.mods;
-
-            if (prof) {
-                fprintf(prof, "KEY: key=0x%x mods=0x%x N00B_KEY_TAB=0x%x match=%d\n",
-                        key, mods, N00B_KEY_TAB,
-                        (key == N00B_KEY_TAB && !(mods & N00B_MOD_SHIFT)));
-                fflush(prof);
-            }
-
-            // Ctrl+C → quit (normalizer guarantees lowercase 'c').
-            if (key == 'c' && (mods & N00B_MOD_CTRL)) {
-                break;
-            }
-
-            // Tab → focus next.
-            if (key == N00B_KEY_TAB && !(mods & N00B_MOD_SHIFT)) {
-                n00b_focus_mgr_next(fm);
-            }
-            // Shift+Tab → focus prev.
-            else if (key == N00B_KEY_TAB && (mods & N00B_MOD_SHIFT)) {
-                n00b_focus_mgr_prev(fm);
-            }
-            // Dispatch to focused widget.
-            else {
-                n00b_plane_t *focused = n00b_focus_mgr_current(fm);
-                if (focused) {
-                    n00b_widget_handle_event(focused, &event);
-                }
-            }
-        }
-        else if (event.type == N00B_EVENT_MOUSE) {
-            n00b_mouse_route_event(canvas, fm, &event);
-        }
-        else if (event.type == N00B_EVENT_RESIZE) {
+        if (event.type == N00B_EVENT_RESIZE) {
             // Backend reports resize in cells; convert to pixels.
             n00b_isize_t px_rows = event.resize.rows * canvas->cell_px_h;
             n00b_isize_t px_cols = event.resize.cols * canvas->cell_px_w;
             n00b_canvas_resize(canvas, px_rows, px_cols);
-            canvas_run_layout(canvas);
+            n00b_display_scene_run_layout(canvas);
             if (on_resize) {
                 on_resize(canvas, resize_data);
             }
             n00b_focus_mgr_rebuild(fm);
-            canvas_mark_all_dirty(canvas);
+            n00b_display_scene_mark_all_dirty(canvas);
             n00b_canvas_invalidate(canvas);
+        }
+        else {
+            n00b_display_dispatch_result_t dispatch =
+                n00b_display_dispatch_event(canvas, fm, &event);
+            if (dispatch.should_stop) {
+                break;
+            }
         }
 
         // Re-render if dirty.
-        if (canvas_any_dirty(canvas)) {
-            if (prof) {
+        if (n00b_display_scene_any_dirty(canvas)) {
+            if (n00b_display_diag_would_log(N00B_DISPLAY_DIAG_TRACE)) {
                 // Log which planes are dirty before rerender.
                 for (size_t di = 0; di < canvas->planes.len; di++) {
                     n00b_plane_t *dp = canvas->planes.data[di];
                     if (dp && (dp->flags & N00B_PLANE_DIRTY)) {
-                        fprintf(prof, "  dirty-before: plane=%p gen=%u\n",
-                                (void *)dp, dp->render_gen);
+                        n00b_display_diag_log(N00B_DISPLAY_DIAG_TRACE,
+                                               "event_loop",
+                                               "dirty-before plane=%p gen=%u",
+                                               (void *)dp,
+                                               dp->render_gen);
                     }
                 }
             }
             PROF_NOW(t1);
-            canvas_rerender_dirty(canvas);
+            n00b_display_scene_rerender_dirty(canvas);
             PROF_NOW(t2);
             // Check if anything is STILL dirty after rerender.
-            if (prof && canvas_any_dirty(canvas)) {
+            if (n00b_display_diag_would_log(N00B_DISPLAY_DIAG_TRACE)
+                && n00b_display_scene_any_dirty(canvas)) {
                 for (size_t di = 0; di < canvas->planes.len; di++) {
                     n00b_plane_t *dp = canvas->planes.data[di];
                     if (dp && (dp->flags & N00B_PLANE_DIRTY)) {
-                        fprintf(prof, "  STILL-dirty-after-rerender: plane=%p gen=%u widget=%d\n",
-                                (void *)dp, dp->render_gen,
-                                dp->widget_vtable != nullptr);
+                        n00b_display_diag_log(N00B_DISPLAY_DIAG_TRACE,
+                                               "event_loop",
+                                               "still-dirty plane=%p gen=%u widget=%d",
+                                               (void *)dp,
+                                               dp->render_gen,
+                                               dp->widget_vtable != nullptr);
                     }
                 }
             }
             n00b_canvas_render(canvas);
             PROF_NOW(t3);
 
-            if (prof) {
-                static int render_count = 0;
-                render_count++;
-                fprintf(prof, "[tick render #%d] rerender=%.2fms canvas_render=%.2fms\n",
-                        render_count, PROF_MS(t1, t2), PROF_MS(t2, t3));
-                fflush(prof);
-            }
+            render_count++;
+            n00b_display_diag_log(N00B_DISPLAY_DIAG_TRACE,
+                                   "event_loop",
+                                   "tick-render=%d rerender=%.2fms canvas=%.2fms",
+                                   render_count,
+                                   PROF_MS(t1, t2),
+                                   PROF_MS(t2, t3));
         }
     }
 
-    if (prof) {
-        fprintf(prof, "=== Exit: %d ticks ===\n", tick_count);
-        fclose(prof);
-        prof = nullptr;
-    }
+    n00b_display_diag_log(N00B_DISPLAY_DIAG_TRACE,
+                           "event_loop",
+                           "exit ticks=%d renders=%d",
+                           tick_count,
+                           render_count);
 
     n00b_focus_mgr_destroy(fm);
 
     // Restore cursor visibility.
-    if (canvas->vtable->cursor_set_visible) {
-        canvas->vtable->cursor_set_visible(canvas->backend_ctx, true);
-    }
+    n00b_display_backend_set_cursor_visible(canvas, true);
 
 #ifndef _WIN32
     event_loop_teardown_terminal(canvas);
