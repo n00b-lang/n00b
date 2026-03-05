@@ -23,6 +23,7 @@ This plan is the top-level roadmap for the in-place rewrite. "In-place" means ex
 - [x] (2026-03-05 11:18Z) Reconfigured with installed notcurses (`3.0.17`) and reran M1/display smoke validation with `notcurses_backend` enabled.
 - [x] (2026-03-05 11:23Z) Authored the Milestone 2 child ExecPlan in `plans/display-rewrite/m2-terminal-backend-execplan.md`.
 - [x] (2026-03-05 11:45Z) Executed Milestone 2 and recorded terminal contract extraction, replay tooling, test validation, and parity artifacts in `plans/display-rewrite/m2-terminal-backend-execplan.md` and `plans/artifacts/display-rewrite/m2/`.
+- [x] (2026-03-05 11:55Z) Authored the Milestone 3 child ExecPlan in `plans/display-rewrite/m3-gui-backend-execplan.md`.
 - [x] (2026-03-17 18:12Z) Applied M1 review remediation on `display-rewrite/m1-core-contracts`: added blocking regression tests, mandatory `display_scene_inspect --out`, artifact parity coverage, diagnostics rerun coverage, and refreshed M0/M1 scene artifacts after trimming the trailing blank line at EOF.
 - [x] (2026-03-17 20:23Z) Applied M2 review remediation on `display-rewrite/m2-terminal-backend`: required `display_terminal_replay --out-dir`, extracted the shared replay fixture, added replay artifact parity coverage, split replay/manual metadata files, and refreshed the M2 artifact tree.
 - [ ] Execute Milestones 3-6 as stacked diffs, preserving this document as the top-level source of milestone ordering and acceptance scope.
@@ -397,3 +398,4 @@ Dependencies that materially affect milestone planning include optional GUI/rend
 - 2026-03-05: Marked Milestone 2 child ExecPlan authoring as complete after creating `plans/display-rewrite/m2-terminal-backend-execplan.md`, and narrowed the remaining umbrella progress item to milestone execution.
 - 2026-03-05: Updated umbrella plan after Milestone 2 execution to mark M2 complete, add M2 validation/artifact evidence, and narrow remaining execution scope to Milestones 3-6.
 - 2026-03-17: Updated the umbrella plan after M2 review remediation so replay parity automation, explicit replay output requirements, and the corrected M2 artifact layout are part of the recorded milestone state.
+- 2026-03-05: Marked Milestone 3 child ExecPlan authoring as complete after creating `plans/display-rewrite/m3-gui-backend-execplan.md`, while keeping remaining execution scope at Milestones 3-6.
