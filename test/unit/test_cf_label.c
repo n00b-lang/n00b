@@ -540,7 +540,7 @@ test_jump_return(void)
         return;
     }
 
-    const char *src = "int f(void) { return 0; }\n";
+    const char *src = "void f(void) { return; }\n";
 
     n00b_parse_result_t *r = parse_c_source(shared_grammar, src, current_mode);
     assert(n00b_parse_result_ok(r));

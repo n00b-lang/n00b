@@ -60,14 +60,12 @@ test_mir_interp_add(void)
     MIR_load_module(ctx, m);
     MIR_link(ctx, MIR_set_interp_interface, NULL);
 
-    // Interpret: add(3, 4) should yield 7.
-    MIR_val_t result;
-    MIR_interp(ctx, func, &result, 2, (int64_t)3, (int64_t)4);
-    assert(result.i == 7);
-
-    // Interpret: add(-10, 25) should yield 15.
-    MIR_interp(ctx, func, &result, 2, (int64_t)-10, (int64_t)25);
-    assert(result.i == 15);
+    // Interpreter entrypoint is exposed via func->addr after MIR_link.
+    typedef int64_t (*add_fn)(int64_t, int64_t);
+    add_fn interpreted = (add_fn)func->addr;
+    assert(interpreted != NULL);
+    assert(interpreted(3, 4) == 7);
+    assert(interpreted(-10, 25) == 15);
 
     MIR_finish(ctx);
     printf("  [PASS] mir_interp_add\n");
