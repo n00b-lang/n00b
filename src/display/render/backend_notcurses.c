@@ -24,6 +24,7 @@
 #include "text/strings/text_style.h"
 #include "display/render/composite.h"
 #include "core/string.h"
+#include "internal/display/diagnostics.h"
 
 #if N00B_HAVE_FREETYPE
 #include <ft2build.h>
@@ -249,9 +250,6 @@ typedef struct {
     // Last known dimensions for resize detection.
     unsigned int      last_rows;
     unsigned int      last_cols;
-
-    // Debug log (written to /tmp/nc_backend.log).
-    FILE             *debug_log;
 
     // Mouse drag detection state.
     bool              mouse_button_down;
@@ -1378,7 +1376,7 @@ nc_render_entry(nc_ctx_t                     *ctx,
     }
 
     // Log content summary.
-    if (ctx->debug_log) {
+    if (n00b_display_diag_would_log(N00B_DISPLAY_DIAG_TRACE)) {
         // Collect sample text from draw commands.
         char sample[128] = {0};
         int slen = 0;
@@ -1408,30 +1406,37 @@ nc_render_entry(nc_ctx_t                     *ctx,
         }
         sample[slen] = '\0';
 
-        fprintf(ctx->debug_log,
-                "  entry z=%d outer=%dx%d vp=%ux%u "
-                "draw_cmds=%u (text=%d glyph=%d fill=%d) "
-                "content_ofs=%d,%d text=\"%s\"\n",
-                entry->abs_z, outer_w, outer_h,
-                (unsigned)(plane->width / cpw),
-                (unsigned)(plane->height / cph),
-                (unsigned)plane->draw_list.count,
-                text_cmds, glyph_cmds, fill_cmds,
-                content_ox, content_oy, sample);
+        n00b_display_diag_log(N00B_DISPLAY_DIAG_TRACE,
+                               "backend_notcurses",
+                               "entry z=%d outer=%dx%d vp=%ux%u draw_cmds=%u (text=%d glyph=%d fill=%d) content_ofs=%d,%d text=\"%s\"",
+                               entry->abs_z,
+                               outer_w,
+                               outer_h,
+                               (unsigned)(plane->width / cpw),
+                               (unsigned)(plane->height / cph),
+                               (unsigned)plane->draw_list.count,
+                               text_cmds,
+                               glyph_cmds,
+                               fill_cmds,
+                               content_ox,
+                               content_oy,
+                               sample);
 
         // Dump each draw command's coordinates.
         for (n00b_isize_t c = 0; c < plane->draw_list.count; c++) {
             const n00b_draw_cmd_t *cmd = &plane->draw_list.cmds[c];
             if (cmd->type == N00B_DRAW_TEXT && cmd->text.text) {
-                fprintf(ctx->debug_log,
-                        "    cmd[%d] TEXT x=%d y=%d style=%p '%.*s'\n",
-                        (int)c, cmd->text.x, cmd->text.y,
-                        (void *)cmd->text.style,
-                        (int)cmd->text.text->u8_bytes,
-                        cmd->text.text->data);
+                n00b_display_diag_log(N00B_DISPLAY_DIAG_TRACE,
+                                       "backend_notcurses",
+                                       "cmd[%d] TEXT x=%d y=%d style=%p '%.*s'",
+                                       (int)c,
+                                       cmd->text.x,
+                                       cmd->text.y,
+                                       (void *)cmd->text.style,
+                                       (int)cmd->text.text->u8_bytes,
+                                       cmd->text.text->data);
             }
         }
-        fflush(ctx->debug_log);
     }
 
     struct ncvisual *visual =
@@ -1454,14 +1459,14 @@ nc_render_entry(nc_ctx_t                     *ctx,
 
     struct ncplane *blit_plane = ncvisual_blit(ctx->nc, visual, &vopts);
 
-    if (ctx->debug_log) {
-        fprintf(ctx->debug_log,
-                "    blit %s @cell(%d,%d) %dx%d cells\n",
-                blit_plane ? "OK" : "FAIL",
-                plane_cell_x, plane_cell_y,
-                plane_cell_w, plane_cell_h);
-        fflush(ctx->debug_log);
-    }
+    n00b_display_diag_log(N00B_DISPLAY_DIAG_TRACE,
+                           "backend_notcurses",
+                           "blit %s @cell(%d,%d) %dx%d cells",
+                           blit_plane ? "OK" : "FAIL",
+                           plane_cell_x,
+                           plane_cell_y,
+                           plane_cell_w,
+                           plane_cell_h);
 
     ncvisual_destroy(visual);
     return ncp;
@@ -1505,8 +1510,6 @@ nc_init(n00b_conduit_topic_t(n00b_buffer_t *) *output)
         return nullptr;
     }
 
-    ctx->debug_log = fopen("/tmp/nc_backend.log", "w");
-
     // The n00b runtime owns fatal-signal handlers and their alternate
     // signal stack.  If notcurses also installs fatal handlers it
     // allocates its own sigaltstack; on notcurses_stop() it tries to
@@ -1525,10 +1528,9 @@ nc_init(n00b_conduit_topic_t(n00b_buffer_t *) *output)
 
     ctx->nc = notcurses_init(&opts, nullptr);
     if (!ctx->nc) {
-        if (ctx->debug_log) {
-            fprintf(ctx->debug_log, "notcurses_init FAILED\n");
-            fclose(ctx->debug_log);
-        }
+        n00b_display_diag_log(N00B_DISPLAY_DIAG_ERROR,
+                               "backend_notcurses",
+                               "notcurses_init failed");
         free(ctx);
         return nullptr;
     }
@@ -1567,20 +1569,20 @@ nc_init(n00b_conduit_topic_t(n00b_buffer_t *) *output)
     }
 #endif
 
-    if (ctx->debug_log) {
-        fprintf(ctx->debug_log,
-                "nc_init: %ux%u cells, cell_pixel=%ux%u, "
-                "has_pixel=%d, has_freetype=%d\n",
-                cols, rows, pix_x, pix_y,
-                ctx->has_pixel,
+    n00b_display_diag_log(N00B_DISPLAY_DIAG_INFO,
+                           "backend_notcurses",
+                           "init cells=%ux%u cell_pixel=%ux%u has_pixel=%d has_freetype=%d",
+                           cols,
+                           rows,
+                           pix_x,
+                           pix_y,
+                           ctx->has_pixel,
 #if N00B_HAVE_FREETYPE
-                ctx->has_freetype
+                           ctx->has_freetype
 #else
-                0
+                           0
 #endif
-                );
-        fflush(ctx->debug_log);
-    }
+                           );
 
     return ctx;
 }
@@ -1603,12 +1605,9 @@ nc_destroy(void *vctx)
     free(ctx->entry_planes);
     ctx->entry_planes       = nullptr;
     ctx->entry_planes_count = 0;
-
-    if (ctx->debug_log) {
-        fprintf(ctx->debug_log, "nc_destroy\n");
-        fclose(ctx->debug_log);
-        ctx->debug_log = nullptr;
-    }
+    n00b_display_diag_log(N00B_DISPLAY_DIAG_TRACE,
+                           "backend_notcurses",
+                           "destroy");
 
     if (ctx->nc) {
         notcurses_stop(ctx->nc);
@@ -1692,10 +1691,10 @@ nc_flush(void *vctx)
 {
     nc_ctx_t *ctx = vctx;
     int rc = notcurses_render(ctx->nc);
-    if (ctx->debug_log) {
-        fprintf(ctx->debug_log, "nc_flush: notcurses_render=%d\n", rc);
-        fflush(ctx->debug_log);
-    }
+    n00b_display_diag_log(N00B_DISPLAY_DIAG_TRACE,
+                           "backend_notcurses",
+                           "flush render=%d",
+                           rc);
     check_resize(ctx);
 }
 
@@ -1819,13 +1818,15 @@ nc_poll_event(void *vctx, int32_t timeout_ms, n00b_event_t *out)
         return false;
     }
 
-    if (ctx->debug_log) {
-        fprintf(ctx->debug_log,
-                "nc_poll: id=0x%x evtype=%d ctrl=%d shift=%d alt=%d eff_text[0]=0x%x\n",
-                ni.id, ni.evtype, ni.ctrl, ni.shift, ni.alt,
-                (unsigned)ni.eff_text[0]);
-        fflush(ctx->debug_log);
-    }
+    n00b_display_diag_log(N00B_DISPLAY_DIAG_TRACE,
+                           "backend_notcurses",
+                           "poll id=0x%x evtype=%d ctrl=%d shift=%d alt=%d eff_text[0]=0x%x",
+                           ni.id,
+                           ni.evtype,
+                           ni.ctrl,
+                           ni.shift,
+                           ni.alt,
+                           (unsigned)ni.eff_text[0]);
 
     // Resize event.
     if (ni.id == NCKEY_RESIZE) {
@@ -1990,11 +1991,9 @@ nc_render_planes(void                         *vctx,
 
 #if N00B_HAVE_FREETYPE
     if (!ctx->has_freetype || !ctx->has_pixel) {
-        if (ctx->debug_log) {
-            fprintf(ctx->debug_log,
-                    "nc_render_planes: no pixel/freetype — skipping\n");
-            fflush(ctx->debug_log);
-        }
+        n00b_display_diag_log(N00B_DISPLAY_DIAG_TRACE,
+                               "backend_notcurses",
+                               "render_planes skipped: no pixel/freetype");
         return;
     }
 
@@ -2029,12 +2028,12 @@ nc_render_planes(void                         *vctx,
         .baseline = ascent + ((pixel_h > line_h) ? (pixel_h - line_h) / 2 : 0),
     };
 
-    if (ctx->debug_log) {
-        fprintf(ctx->debug_log,
-                "nc_render_planes: %u entries, cell_px=%dx%d\n",
-                (unsigned)count, pixel_w, pixel_h);
-        fflush(ctx->debug_log);
-    }
+    n00b_display_diag_log(N00B_DISPLAY_DIAG_TRACE,
+                           "backend_notcurses",
+                           "render_planes entries=%u cell_px=%dx%d",
+                           (unsigned)count,
+                           pixel_w,
+                           pixel_h);
 
     // Destroy orphaned cached ncplanes (planes no longer in this frame's
     // entry list).  Build a "seen" set by marking cache slots, then destroy

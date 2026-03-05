@@ -7,8 +7,8 @@
 #include "core/data_lock.h"
 #include "core/arena.h"
 #include "display/render/canvas.h"
-#include "display/render/composite.h"
-#include "display/widget.h"
+#include "internal/display/backend_services.h"
+#include "internal/display/scene_contracts.h"
 
 // -------------------------------------------------------------------
 // Internal helpers
@@ -46,10 +46,10 @@ n00b_canvas_init(n00b_canvas_t *c) _kargs
 
     // Initialize backend, passing the output topic.
     c->backend_ctx = vtable->init(output);
-    c->caps        = vtable->capabilities(c->backend_ctx);
+    c->caps        = n00b_display_backend_caps(c);
 
     // Get initial size from backend (cells) and convert to pixels.
-    n00b_render_size_t sz = vtable->get_size(c->backend_ctx);
+    n00b_render_size_t sz = n00b_display_backend_get_size(c);
     c->cell_px_w          = sz.cell_pixel_w > 0 ? sz.cell_pixel_w : 1;
     c->cell_px_h          = sz.cell_pixel_h > 0 ? sz.cell_pixel_h : 1;
     c->frame_rows         = sz.rows * c->cell_px_h;
@@ -144,46 +144,6 @@ n00b_canvas_remove_plane(n00b_canvas_t *c, n00b_plane_t *p)
 }
 
 // -------------------------------------------------------------------
-// Re-render dirty widgets (so draw commands reflect current metrics)
-// -------------------------------------------------------------------
-
-static void
-rerender_plane_tree(n00b_plane_t *plane)
-{
-    if (!plane) {
-        return;
-    }
-
-    if ((plane->flags & N00B_PLANE_DIRTY) && plane->widget_vtable) {
-        n00b_widget_render(plane);
-        plane->flags &= ~N00B_PLANE_DIRTY;
-    }
-
-    if (plane->children.data) {
-        for (size_t i = 0; i < plane->children.len; i++) {
-            n00b_plane_t *child = plane->children.data[i];
-            if (child) {
-                rerender_plane_tree(child);
-            }
-        }
-    }
-}
-
-static void
-canvas_rerender_dirty(n00b_canvas_t *c)
-{
-    if (!c->planes.data) {
-        return;
-    }
-    for (size_t i = 0; i < c->planes.len; i++) {
-        n00b_plane_t *p = c->planes.data[i];
-        if (p) {
-            rerender_plane_tree(p);
-        }
-    }
-}
-
-// -------------------------------------------------------------------
 // Rendering
 // -------------------------------------------------------------------
 
@@ -195,7 +155,7 @@ n00b_canvas_render(n00b_canvas_t *c)
     // Refresh size from backend (cells → pixels), unless the caller
     // has set an explicit size via canvas_resize() (size_set == true).
     if (!c->size_set) {
-        n00b_render_size_t sz = c->vtable->get_size(c->backend_ctx);
+        n00b_render_size_t sz = n00b_display_backend_get_size(c);
         c->cell_px_w = sz.cell_pixel_w > 0 ? sz.cell_pixel_w : 1;
         c->cell_px_h = sz.cell_pixel_h > 0 ? sz.cell_pixel_h : 1;
         n00b_isize_t px_rows = sz.rows * c->cell_px_h;
@@ -220,7 +180,7 @@ n00b_canvas_render(n00b_canvas_t *c)
 
     // Re-render any dirty widget planes so draw commands reflect
     // current viewport sizes and font metrics.
-    canvas_rerender_dirty(c);
+    n00b_display_scene_rerender_dirty(c);
 
     // GUI prepare hook.
     n00b_isize_t n_planes = (n00b_isize_t)c->planes.len;
@@ -230,9 +190,7 @@ n00b_canvas_render(n00b_canvas_t *c)
     }
 
     // Flatten plane hierarchy (pixel coordinates).
-    n00b_array_t(n00b_composite_entry_t) flat
-        = n00b_composite_flatten(c->planes.data, n_planes,
-                                  c->cell_px_w, c->cell_px_h);
+    n00b_array_t(n00b_composite_entry_t) flat = n00b_display_scene_build(c);
 
     // Dispatch to backend's plane-based renderer.
     c->vtable->render_planes(c->backend_ctx,
@@ -244,7 +202,7 @@ n00b_canvas_render(n00b_canvas_t *c)
     c->needs_full_redraw = false;
 
     if (flat.data) {
-        n00b_array_free(flat);
+        n00b_display_scene_free(flat);
     }
 
     canvas_unlock(c);

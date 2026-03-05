@@ -27,6 +27,7 @@
 #include "text/strings/text_style.h"
 #include "text/strings/theme.h"
 #include "display/render/composite.h"
+#include "internal/display/diagnostics.h"
 
 // -------------------------------------------------------------------
 // ANSI context
@@ -252,16 +253,19 @@ ansi_init(n00b_conduit_topic_t(n00b_buffer_t *) *output)
 #ifndef _WIN32
     {
         // Subscribe to SIGWINCH via the conduit signal system.
-        FILE *df = fopen("/tmp/widget_demo.log", "a");
-        if (df) setbuf(df, nullptr);
-
         if (!output) {
-            if (df) fprintf(df, "[ansi_init] output is NULL, skipping SIGWINCH\n");
+            n00b_display_diag_log(N00B_DISPLAY_DIAG_TRACE,
+                                   "backend_ansi",
+                                   "init: output topic is null; skipping SIGWINCH");
         }
         else {
             n00b_conduit_topic_base_t *base = (n00b_conduit_topic_base_t *)output;
             n00b_conduit_t *c = base->conduit;
-            if (df) fprintf(df, "[ansi_init] output=%p base->conduit=%p\n", (void *)output, (void *)c);
+            n00b_display_diag_log(N00B_DISPLAY_DIAG_TRACE,
+                                   "backend_ansi",
+                                   "init: output=%p conduit=%p",
+                                   (void *)output,
+                                   (void *)c);
             if (c) {
                 n00b_result_t(n00b_conduit_topic_base_t *) sr =
                     n00b_conduit_signal_topic(c, SIGWINCH);
@@ -270,17 +274,23 @@ ansi_init(n00b_conduit_topic_t(n00b_buffer_t *) *output)
                     n00b_conduit_signal_subscribe(
                         n00b_result_get(sr), ctx->sigwinch_inbox,
                         .operations = N00B_CONDUIT_SIGNAL_ALL);
-                    if (df) fprintf(df, "[ansi_init] SIGWINCH subscribed, inbox=%p\n", (void *)ctx->sigwinch_inbox);
+                    n00b_display_diag_log(N00B_DISPLAY_DIAG_TRACE,
+                                           "backend_ansi",
+                                           "init: SIGWINCH subscribed inbox=%p",
+                                           (void *)ctx->sigwinch_inbox);
                 }
                 else {
-                    if (df) fprintf(df, "[ansi_init] n00b_conduit_signal_topic FAILED\n");
+                    n00b_display_diag_log(N00B_DISPLAY_DIAG_ERROR,
+                                           "backend_ansi",
+                                           "init: failed to fetch SIGWINCH signal topic");
                 }
             }
             else {
-                if (df) fprintf(df, "[ansi_init] conduit is NULL\n");
+                n00b_display_diag_log(N00B_DISPLAY_DIAG_TRACE,
+                                       "backend_ansi",
+                                       "init: conduit is null");
             }
         }
-        if (df) fclose(df);
     }
 #endif
 
@@ -719,17 +729,6 @@ ansi_parse_ss3(n00b_event_t *out)
     }
 }
 
-static FILE *
-ansi_dbg(void)
-{
-    static FILE *f = nullptr;
-    if (!f) {
-        f = fopen("/tmp/widget_demo.log", "a");
-        if (f) setbuf(f, nullptr);
-    }
-    return f;
-}
-
 static bool
 ansi_check_sigwinch(ansi_ctx_t *ctx, n00b_event_t *out)
 {
@@ -739,7 +738,9 @@ ansi_check_sigwinch(ansi_ctx_t *ctx, n00b_event_t *out)
     if (!n00b_conduit_signal_inbox_has_messages(ctx->sigwinch_inbox)) {
         return false;
     }
-    if (ansi_dbg()) fprintf(ansi_dbg(), "[ansi_check_sigwinch] inbox has messages!\n");
+    n00b_display_diag_log(N00B_DISPLAY_DIAG_TRACE,
+                           "backend_ansi",
+                           "sigwinch: inbox has messages");
     while (n00b_conduit_signal_inbox_has_messages(ctx->sigwinch_inbox)) {
         n00b_conduit_signal_inbox_pop(ctx->sigwinch_inbox);
     }
@@ -750,7 +751,11 @@ ansi_check_sigwinch(ansi_ctx_t *ctx, n00b_event_t *out)
         out->type        = N00B_EVENT_RESIZE;
         out->resize.rows = ctx->rows;
         out->resize.cols = ctx->cols;
-        if (ansi_dbg()) fprintf(ansi_dbg(), "[ansi_check_sigwinch] resize → %dx%d\n", (int)ws.ws_col, (int)ws.ws_row);
+        n00b_display_diag_log(N00B_DISPLAY_DIAG_TRACE,
+                               "backend_ansi",
+                               "sigwinch: resize=%dx%d",
+                               (int)ws.ws_col,
+                               (int)ws.ws_row);
         return true;
     }
     return false;

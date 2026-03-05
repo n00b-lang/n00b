@@ -15,10 +15,11 @@ The user-visible effect is parity with Milestone 0 plus safer runtime behavior: 
 - [x] (2026-03-05 11:08Z) Reviewed the umbrella plan and confirmed Milestone 1 scope, acceptance criteria, and branch stacking requirements.
 - [x] (2026-03-05 11:10Z) Audited current display hotspots and identified concrete extraction targets: event loop internals, diagnostics side effects, and scene/composition boundary points.
 - [x] (2026-03-05 11:18Z) Authored this Milestone 1 child ExecPlan with file-level implementation details, test additions, and artifact commands.
-- [ ] Create `display-rewrite/m1-core-contracts` from `display-rewrite/m0-baseline`.
-- [ ] Implement internal contract modules and rewire existing call sites without changing public display headers.
-- [ ] Remove hardcoded `/tmp` diagnostics from touched display files and replace them with centralized diagnostics policy.
-- [ ] Add Milestone 1 unit and integration tests, run full display smoke validation, and capture Milestone 1 artifacts.
+- [x] (2026-03-05 11:23Z) Confirmed work is on `display-rewrite/m1-core-contracts` and proceeded in-place from the existing Milestone 1 branch tip.
+- [x] (2026-03-05 11:23Z) Implemented internal contract modules (`diagnostics`, `scene_contracts`, `event_dispatch`, `backend_services`) and rewired `event_loop.c`/`canvas.c` and backend call sites without public API changes.
+- [x] (2026-03-05 11:23Z) Removed hardcoded `/tmp` diagnostics from touched display files and replaced those paths with centralized diagnostics gating.
+- [x] (2026-03-05 11:23Z) Added M1 unit/integration tests, built tooling, ran milestone tests + smoke tests, and generated M1 artifacts with empty baseline diffs.
+- [x] (2026-03-05 11:17Z) Reconfigured with installed notcurses (`3.0.17`) and reran notcurses backend coverage plus milestone/smoke validation with backend enabled.
 
 ## Surprises & Discoveries
 
@@ -30,6 +31,10 @@ The user-visible effect is parity with Milestone 0 plus safer runtime behavior: 
   Evidence: `src/tools/widget_demo.c` opens `/tmp/widget_demo.log` and uses keypress waits for non-event-loop terminal mode.
 - Observation: Milestone 0 added deterministic baseline capture and display integration coverage, so M1 can prove parity without depending on interactive terminal sessions.
   Evidence: `test_display_baseline_contract`, `test_display_baseline_flow`, and `src/tools/display_baseline_capture.c` are already present and green on `display-rewrite/m0-baseline`.
+- Observation: `n00b_canvas_run()` warmup logic intentionally discards early key/mouse input, so deterministic loop-compat tests must queue an initial `N00B_EVENT_NONE` before behavioral key events.
+  Evidence: `test/integration/test_display_m1_compat.c` uses an initial NONE event and `tick_ms=100` to avoid warmup swallowing the compatibility assertions.
+- Observation: Backend-dependent coverage changed mid-milestone after installing notcurses, and reconfigure picked it up without code changes.
+  Evidence: `ninja -C build_debug reconfigure` now reports `Run-time dependency notcurses found: YES 3.0.17`, and `meson test ... notcurses_backend ...` passes.
 
 ## Decision Log
 
@@ -45,10 +50,22 @@ The user-visible effect is parity with Milestone 0 plus safer runtime behavior: 
 - Decision: Add a deterministic scene-inspection tool artifact for M1 (`display_scene_inspect`) instead of relying on interactive probes.
   Rationale: M1 acceptance requires before/after compositing parity evidence, which is easier to diff from deterministic text output.
   Date/Author: 2026-03-05 / Codex
+- Decision: Make diagnostics opt-in with `N00B_DISPLAY_DIAG`/`N00B_DISPLAY_DIAG_LEVEL`, defaulting to silent mode with no implicit `/tmp` sink.
+  Rationale: This preserves baseline runtime behavior while eliminating filesystem side effects and still allows targeted tracing during debugging/tests.
+  Date/Author: 2026-03-05 / Codex
 
 ## Outcomes & Retrospective
 
-Milestone 1 implementation has not started yet. The expected outcome is an internal-contract carve-out that keeps Milestone 0 behavior stable while reducing coupling in event loop and render orchestration paths. Retrospective notes will be added once code, tests, and artifacts are complete.
+Milestone 1 implementation is complete on `display-rewrite/m1-core-contracts`. Internal contract modules were added under `include/internal/display/` and `src/display/**`, `event_loop.c` and `canvas.c` were reduced to orchestration over those contracts, and touched display files no longer contain hardcoded `/tmp` diagnostics.
+
+Compatibility and parity evidence:
+
+- Milestone contract tests passed: `display_diagnostics`, `display_scene_contracts`, `display_event_dispatch`, `display_baseline_contract`, `display_baseline_flow`, `display_m1_compat`.
+- Display smoke suite passed for render/event/widget/table/hexdump/xform targets listed in this plan.
+- Notcurses backend validation passed after install (`notcurses_backend` green with dependency detected as `3.0.17`).
+- M1 artifact generation completed, including `scene_inspect.txt`.
+- Baseline diffs (`scene_stream.txt`, `table_stream.txt`) were empty relative to M0.
+- Final `/tmp` scan for touched files returned no matches.
 
 ## Context and Orientation
 
@@ -202,6 +219,40 @@ Use concise transcripts to prove acceptance, for example:
     (no output)
 
 If any diff output appears and is intentional, copy only the relevant lines into this section and explain why the change is acceptable.
+
+Actual M1 run transcripts:
+
+    $ meson test -C build_debug --print-errorlogs display_diagnostics display_scene_contracts display_event_dispatch display_baseline_contract display_baseline_flow display_m1_compat
+    6/6 tests OK
+
+    $ meson test -C build_debug --print-errorlogs render_plane render_canvas render_ansi event_normalize focus mouse label button checkbox input list_widget selectionlist breadcrumb table_build table_layout table_render table_stream hexdump xform_render
+    19/19 tests OK
+
+    $ ninja -C build_debug reconfigure
+    Run-time dependency notcurses found: YES 3.0.17
+
+    $ meson test -C build_debug --print-errorlogs notcurses_backend display_diagnostics display_scene_contracts display_event_dispatch display_baseline_contract display_baseline_flow display_m1_compat
+    7/7 tests OK
+
+    $ meson test -C build_debug --print-errorlogs notcurses_backend render_plane render_canvas render_ansi event_normalize focus mouse label button checkbox input list_widget selectionlist breadcrumb table_build table_layout table_render table_stream hexdump xform_render
+    20/20 tests OK
+
+    $ build_debug/display_baseline_capture --out-dir plans/artifacts/display-rewrite/m1
+    wrote scene_stream.txt
+    wrote table_stream.txt
+    wrote metadata.txt
+
+    $ build_debug/display_scene_inspect --out plans/artifacts/display-rewrite/m1/scene_inspect.txt
+    wrote plans/artifacts/display-rewrite/m1/scene_inspect.txt
+
+    $ diff -u plans/artifacts/display-rewrite/m0/scene_stream.txt plans/artifacts/display-rewrite/m1/scene_stream.txt
+    (no output)
+
+    $ diff -u plans/artifacts/display-rewrite/m0/table_stream.txt plans/artifacts/display-rewrite/m1/table_stream.txt
+    (no output)
+
+    $ rg --line-number '/tmp' src/display/event_loop.c src/display/render/backend_ansi.c src/display/render/backend_notcurses.c src/display/widgets/label.c
+    (no output)
 
 ## Interfaces and Dependencies
 
