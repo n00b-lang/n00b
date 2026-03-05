@@ -262,20 +262,48 @@ n00b_canvas_backend_error(const n00b_canvas_t *c)
 }
 
 void
-n00b_canvas_destroy(n00b_canvas_t *c)
+n00b_canvas_deinit(n00b_canvas_t *c)
 {
     if (!c) {
         return;
     }
 
-    if (n00b_canvas_backend_ready(c) && c->vtable->destroy) {
+    if (c->vtable && c->vtable->destroy && c->backend_ctx) {
         c->vtable->destroy(c->backend_ctx);
     }
 
     if (c->planes.data) {
         n00b_list_free(c->planes);
     }
+    if (c->lock) {
+        n00b_finalize_data_lock(c->lock);
+    }
 
+    c->vtable            = nullptr;
+    c->backend_ctx       = nullptr;
+    c->caps              = N00B_RCAP_NONE;
+    c->frame_rows        = 0;
+    c->frame_cols        = 0;
+    c->default_style     = nullptr;
+    c->cell_px_w         = 1;
+    c->cell_px_h         = 1;
+    c->metrics           = n00b_font_metrics_fallback(1, 1);
+    c->needs_full_redraw = true;
+    c->size_set          = false;
+    c->lock              = nullptr;
+    c->allocator         = nullptr;
+    c->focus             = nullptr;
+    c->mouse_capture     = nullptr;
+}
+
+void
+n00b_canvas_destroy(n00b_canvas_t *c)
+{
+    if (!c) {
+        return;
+    }
+
+    n00b_canvas_deinit(c);
     n00b_free(c);
 }
 

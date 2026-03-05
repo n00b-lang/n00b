@@ -101,7 +101,16 @@ extern bool n00b_canvas_backend_ready(const n00b_canvas_t *c);
 extern int n00b_canvas_backend_error(const n00b_canvas_t *c);
 
 /**
- * @brief Destroy a canvas, its backend, and free resources.
+ * @brief Tear down canvas backend/list resources without freeing @p c.
+ * @param c Canvas to deinitialize.
+ *
+ * Safe to call on stack/embedded canvases, and safe to call more than once.
+ * After return, the canvas may be reinitialized with `n00b_canvas_init()`.
+ */
+extern void n00b_canvas_deinit(n00b_canvas_t *c);
+
+/**
+ * @brief Destroy a heap-allocated canvas (`deinit` + free).
  * @param c Canvas to destroy.
  * @pre  All planes have been removed or are owned by the canvas.
  */

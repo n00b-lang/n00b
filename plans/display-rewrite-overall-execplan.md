@@ -35,7 +35,7 @@ This plan is the top-level roadmap for the in-place rewrite. "In-place" means ex
 - [x] (2026-03-05 14:10Z) Executed Milestone 5 and recorded registry-first runtime selection, plugin-readiness coverage, validation evidence, and deterministic artifacts in `plans/display-rewrite/m5-runtime-selection-execplan.md` and `plans/artifacts/display-rewrite/m5/`.
 - [x] (2026-03-18 04:46Z) Applied M5 review remediation on `display-rewrite/m5-runtime-selection`: explicit backend requests now beat environment defaults, shared fallback/reporting helpers and canvas backend-status accessors closed the M5 safety/reporting gaps, `stream` / `dumb` demo output is visible, `display_m5_artifacts` parity coverage was added, the tracked M5 artifacts/docs were refreshed, and `git diff --check` remained clean.
 - [x] (2026-03-05 14:23Z) Authored the Milestone 6 child ExecPlan in `plans/display-rewrite/m6-hardening-and-cutover-execplan.md`.
-- [ ] Execute Milestone 6 as stacked diff, preserving this document as the top-level source of milestone ordering and acceptance scope.
+- [x] (2026-03-05 14:42Z) Executed Milestone 6 and recorded lifecycle/logging hardening, doc cutover, M6 validation matrix, and deterministic cutover artifacts in `plans/display-rewrite/m6-hardening-and-cutover-execplan.md` and `plans/artifacts/display-rewrite/m6/`.
 
 ## Surprises & Discoveries
 
@@ -77,6 +77,10 @@ This plan is the top-level roadmap for the in-place rewrite. "In-place" means ex
   Evidence: `timeout 5 ./build_debug/widget_demo --widget all --backend gui` reported `x11 backend unavailable (cannot open DISPLAY)` then `Backend request 'gui' selected 'ansi' (fallback)`.
 - Observation: the initial M5 focused test set was not sufficient to protect the user-visible runtime-selection contract.
   Evidence: M5’s original `display_backend_registry` / `display_backend_selection` / `display_backend_plugin` / `display_m5_runtime_selection` coverage passed while `widget_demo` still let `$N00B_RENDERER_BACKEND` override explicit requests, mislabeled `auto` as fallback, and produced empty stdout for `stream` / `dumb`; adding `display_m5_artifacts` closed that gap with deterministic tool-level smoke coverage.
+- Observation: Milestone 6 final cutover kept deterministic parity while hardening ownership/logging semantics; M5-to-M6 scene/table streams were unchanged.
+  Evidence: `diff -u plans/artifacts/display-rewrite/m5/scene_stream.txt plans/artifacts/display-rewrite/m6/scene_stream.txt` and corresponding table diff both produced no output.
+- Observation: `widget_demo` no longer mutates hardcoded `/tmp` debug logs by default, while explicit opt-in logging works.
+  Evidence: `stat -c %Y /tmp/widget_demo.log` unchanged across default run and `--debug-log plans/artifacts/display-rewrite/m6/widget_demo_debug.log` created the requested log.
 
 ## Decision Log
 
@@ -122,12 +126,18 @@ This plan is the top-level roadmap for the in-place rewrite. "In-place" means ex
 - Decision: Treat `$N00B_RENDERER_BACKEND` as a default only for `auto` / implicit requests and back the full Milestone 5 artifact directory with parity automation plus widget-demo smoke checks.
   Rationale: the review remediation showed that M5’s shared policy and tracked evidence were still vulnerable to user-visible drift until explicit-request precedence and tool-level artifact/smoke coverage were enforced together.
   Date/Author: 2026-03-18 / Codex
+- Decision: Finalize canvas lifecycle ownership semantics with explicit teardown (`n00b_canvas_deinit`) and heap convenience destroy (`n00b_canvas_destroy`) and migrate stack call sites.
+  Rationale: This removes ambiguity between teardown and deallocation, prevents stack misuse, and aligns runtime code/docs/tests.
+  Date/Author: 2026-03-05 / Codex
+- Decision: Treat hardcoded `/tmp` logging in user-facing display paths as disallowed by default; require explicit opt-in diagnostics via CLI/env.
+  Rationale: Final cutover behavior must be side-effect free unless users intentionally request logs.
+  Date/Author: 2026-03-05 / Codex
 
 ## Outcomes & Retrospective
 
-Milestones 0, 1, 2, 3, 4, and 5 are complete on the active rewrite lineage. Milestone 0 established deterministic baseline harnessing (`display_baseline_contract`, `display_baseline_flow`, `display_baseline_capture`) and baseline artifacts in `plans/artifacts/display-rewrite/m0/`. Milestone 1 then carved out internal display contracts (`diagnostics`, `scene_contracts`, `event_dispatch`, `backend_services`), removed hardcoded `/tmp` diagnostics from touched display paths, added deterministic scene inspection (`display_scene_inspect`), and captured parity artifacts in `plans/artifacts/display-rewrite/m1/`. Milestone 2 extracted shared terminal contracts (`terminal_lifecycle`, `ansi_sgr`, `terminal_input`), rewired terminal backends/event loop to consume them, added deterministic replay tooling (`display_terminal_replay`), and after review remediation now enforces explicit replay destinations, parity-tests replay artifacts, and keeps baseline/replay/manual evidence separate in `plans/artifacts/display-rewrite/m2/`. Milestone 3 hardened Cocoa/X11 GUI contracts, added backend-specific regressions for the real GUI bugs, narrowed the synthetic artifact language to GUI-profile contract parity, and refreshed the M3 evidence set under `plans/artifacts/display-rewrite/m3/`. Milestone 4 centralized widget/table/hexdump shared primitives, and after review remediation now shares its deterministic showcase scenario between the tool and integration test, parity-tests the full M4 artifact directory, keeps `git diff --check` clean, and records refreshed evidence under `plans/artifacts/display-rewrite/m4/`. Milestone 5 unified runtime backend selection into a registry-first path and, after review remediation, now also keeps explicit-request precedence, alias-aware fallback reporting, safe failed-startup behavior, visible `stream` / `dumb` demo output, and full M5 artifact parity coverage under `plans/artifacts/display-rewrite/m5/`.
+Milestones 0, 1, 2, 3, 4, 5, and 6 are complete on the active rewrite lineage. Milestone 0 established deterministic baseline harnessing (`display_baseline_contract`, `display_baseline_flow`, `display_baseline_capture`) and baseline artifacts in `plans/artifacts/display-rewrite/m0/`. Milestone 1 then carved out internal display contracts (`diagnostics`, `scene_contracts`, `event_dispatch`, `backend_services`), removed hardcoded `/tmp` diagnostics from touched display paths, added deterministic scene inspection (`display_scene_inspect`), and captured parity artifacts in `plans/artifacts/display-rewrite/m1/`. Milestone 2 extracted shared terminal contracts (`terminal_lifecycle`, `ansi_sgr`, `terminal_input`), rewired terminal backends/event loop to consume them, added deterministic replay tooling (`display_terminal_replay`), and after review remediation now enforces explicit replay destinations, parity-tests replay artifacts, and keeps baseline/replay/manual evidence separate in `plans/artifacts/display-rewrite/m2/`. Milestone 3 hardened Cocoa/X11 GUI contracts, added backend-specific regressions for the real GUI bugs, narrowed the synthetic artifact language to GUI-profile contract parity, and refreshed the M3 evidence set under `plans/artifacts/display-rewrite/m3/`. Milestone 4 centralized widget/table/hexdump shared primitives, and after review remediation now shares its deterministic showcase scenario between the tool and integration test, parity-tests the full M4 artifact directory, keeps `git diff --check` clean, and records refreshed evidence under `plans/artifacts/display-rewrite/m4/`. Milestone 5 unified runtime backend selection into a registry-first path and, after review remediation, now also keeps explicit-request precedence, alias-aware fallback reporting, safe failed-startup behavior, visible `stream` / `dumb` demo output, and full M5 artifact parity coverage under `plans/artifacts/display-rewrite/m5/`. Milestone 6 closed the rewrite by hardening lifecycle/logging contracts, aligning docs to runtime truth, adding final cutover tests/tooling, and generating deterministic cutover artifacts in `plans/artifacts/display-rewrite/m6/` with parity preserved against M5.
 
-What remains is Milestone 6 execution only: hardening, documentation alignment, and final cutover. The key lesson through M5 is that deterministic artifact generation and shared internal contracts remain valuable only when the evidence is scoped honestly and backed by runtime-specific regression coverage where platform semantics differ.
+The display rewrite is now complete as an in-place dual terminal/GUI runtime cutover. The key lesson across milestones is that deterministic artifact generation plus explicit internal contracts keeps parity claims defensible while enabling large runtime refactors.
 
 ## Context and Orientation
 
@@ -237,6 +247,8 @@ Completion evidence: `display_backend_registry`, `display_backend_selection`, `d
 
 ### Milestone 6: Hardening, Documentation Alignment, And Final Cutover
 
+Status: Complete on `display-rewrite/m6-hardening-and-cutover`.
+
 Milestone 6 removes temporary compatibility layers, finalizes docs, and closes the rewrite. This milestone updates architecture docs so they match the implemented model and verifies release-grade behavior across target backends.
 
 Implementation scope includes deleting deprecated shims introduced during migration, updating display docs to match real APIs and runtime behavior, and producing a final acceptance artifact that demonstrates the dual terminal/GUI runtime story end-to-end.
@@ -245,6 +257,8 @@ Unit tests for this milestone must confirm no deprecated paths are silently used
 
 Acceptance for Milestone 6 is a fully in-place rewritten display subsystem with aligned docs, green test matrix, and a reproducible final demo.
 
+Completion evidence: `display_canvas_lifecycle` and `display_m6_cutover_matrix` passed with prior milestone suites; optional backend tests present in this build (`notcurses_backend`, `x11_backend`, `display_cocoa_input`) passed; `display_m6_cutover_report` and companion artifacts were generated under `plans/artifacts/display-rewrite/m6/`; and M6 stream parity diffs against M5 were empty.
+
 ## Concrete Steps
 
 Run all commands from `/home/baron/crash-override/n00b-tui/n00b-athens`.
@@ -252,9 +266,9 @@ Run all commands from `/home/baron/crash-override/n00b-tui/n00b-athens`.
 Current branch reality:
 
     git branch --show-current
-    # expected: display-rewrite/m5-runtime-selection
+    # expected: display-rewrite/m6-hardening-and-cutover
 
-Milestones 0-5 are already complete on the active lineage. Create the final milestone branch from the current milestone branch:
+Milestones 0-6 are complete on the active lineage. The branch creation commands are retained here for replay/reference:
 
     git switch display-rewrite/m5-runtime-selection
     git switch -c display-rewrite/m6-hardening-and-cutover
@@ -507,6 +521,27 @@ Milestone 5 evidence captured on this branch:
     $ diff -u plans/artifacts/display-rewrite/m4/table_stream.txt plans/artifacts/display-rewrite/m5/table_stream.txt
     (no output)
 
+Milestone 6 evidence captured on this branch:
+
+    $ meson test -C build_debug --print-errorlogs display_canvas_lifecycle display_backend_registry display_backend_selection display_backend_plugin display_event_dispatch display_terminal_lifecycle display_ansi_sgr display_terminal_input display_widget_primitives display_table_text_primitives display_hexdump_contracts display_baseline_contract render_plane render_canvas render_ansi event_normalize focus mouse label button checkbox input list_widget selectionlist breadcrumb table_build table_layout table_render table_stream hexdump xform_render
+    31/31 tests OK
+
+    $ meson test -C build_debug --print-errorlogs display_baseline_flow display_m1_compat display_m2_terminal_flow display_m3_backend_parity display_m4_widget_table_flow display_m5_runtime_selection display_m6_cutover_matrix
+    7/7 tests OK
+
+    $ meson test -C build_debug --print-errorlogs notcurses_backend x11_backend display_cocoa_input
+    3/3 tests OK
+
+    $ build_debug/display_m6_cutover_report --out-dir plans/artifacts/display-rewrite/m6
+    wrote cutover_report.txt
+    wrote cutover_metadata.txt
+
+    $ diff -u plans/artifacts/display-rewrite/m5/scene_stream.txt plans/artifacts/display-rewrite/m6/scene_stream.txt
+    (no output)
+
+    $ diff -u plans/artifacts/display-rewrite/m5/table_stream.txt plans/artifacts/display-rewrite/m6/table_stream.txt
+    (no output)
+
 ## Interfaces and Dependencies
 
 This rewrite must preserve and evolve the existing display-facing interfaces in place:
@@ -538,3 +573,4 @@ Dependencies that materially affect milestone planning include optional GUI/rend
 - 2026-03-05: Updated umbrella plan after Milestone 5 execution to mark M5 complete, add M5 validation/artifact evidence, capture M5 surprises/decisions, and narrow remaining execution scope to Milestone 6 only.
 - 2026-03-18: Updated umbrella plan after M5 review remediation so the recorded Milestone 5 state now includes explicit-request precedence, shared fallback/reporting helpers, safe failed-startup behavior, visible `stream` / `dumb` demo output, `display_m5_artifacts` parity automation, refreshed M5 artifacts/docs, and the clean post-remediation validation matrix.
 - 2026-03-05: Marked Milestone 6 child ExecPlan authoring as complete after creating `plans/display-rewrite/m6-hardening-and-cutover-execplan.md`, while keeping remaining execution scope at Milestone 6 execution.
+- 2026-03-05: Updated umbrella plan after Milestone 6 execution to mark M6 complete, record final hardening/cutover evidence, and close remaining rewrite scope.

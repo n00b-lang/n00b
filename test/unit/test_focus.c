@@ -108,7 +108,7 @@ test_focus_empty(void)
     assert(n00b_focus_mgr_prev(fm) == nullptr);
 
     n00b_focus_mgr_destroy(fm);
-    n00b_canvas_destroy(&canvas);
+    n00b_canvas_deinit(&canvas);
 
     printf("  [PASS] empty canvas focus\n");
 }
@@ -175,7 +175,7 @@ test_focus_tab_cycle(void)
     assert(f3->widget_state == N00B_WSTATE_NORMAL);
 
     n00b_focus_mgr_destroy(fm);
-    n00b_canvas_destroy(&canvas);
+    n00b_canvas_deinit(&canvas);
 
     printf("  [PASS] tab cycle\n");
 }
@@ -223,7 +223,7 @@ test_focus_shift_tab(void)
     assert(prev == f1);
 
     n00b_focus_mgr_destroy(fm);
-    n00b_canvas_destroy(&canvas);
+    n00b_canvas_deinit(&canvas);
 
     printf("  [PASS] shift-tab\n");
 }
@@ -272,7 +272,7 @@ test_focus_set(void)
     assert(n00b_focus_mgr_current(fm) == f2);
 
     n00b_focus_mgr_destroy(fm);
-    n00b_canvas_destroy(&canvas);
+    n00b_canvas_deinit(&canvas);
     n00b_plane_destroy(nf);
 
     printf("  [PASS] focus set\n");
