@@ -15,10 +15,10 @@ The user-visible effect is startup predictability. Instead of `widget_demo` cont
 - [x] (2026-03-05 13:50Z) Reviewed Milestone 5 scope and acceptance criteria from `plans/display-rewrite-overall-execplan.md`.
 - [x] (2026-03-05 13:50Z) Audited current backend-selection paths in `src/display/render/backend_registry.c`, `src/display/render/canvas.c`, `src/core/init.c`, and `src/tools/widget_demo.c`.
 - [x] (2026-03-05 13:50Z) Authored this Milestone 5 child ExecPlan at `plans/display-rewrite/m5-runtime-selection-execplan.md`.
-- [ ] Implement registry-first backend-selection helpers and runtime-init wiring.
-- [ ] Migrate `n00b_canvas_init` and `widget_demo` to the canonical selection path while preserving existing explicit-vtable call sites.
-- [ ] Add M5 unit/integration coverage plus plugin-readiness fixture coverage.
-- [ ] Add deterministic backend-selection artifact tool, run M5 validation matrix, and capture artifacts under `plans/artifacts/display-rewrite/m5/`.
+- [x] (2026-03-05 14:02Z) Implemented registry-first backend-selection helpers (`n00b_renderer_candidate_names`, `n00b_renderer_resolve_exact`) plus runtime startup registry wiring in `src/core/init.c`.
+- [x] (2026-03-05 14:04Z) Migrated `n00b_canvas_init` to support backend-name policy selection (with direct-vtable compatibility preserved) and migrated `widget_demo` to canonical backend-name startup with selected-backend reporting/default `auto`.
+- [x] (2026-03-05 14:07Z) Added M5 unit/integration/plugin-fixture coverage: `test_display_backend_selection`, `test_display_backend_plugin`, `test_display_m5_runtime_selection`, and plugin fixture `test/fixtures/display/renderers/m5_test_renderer.c`.
+- [x] (2026-03-05 14:10Z) Added deterministic selection artifact tool (`display_backend_selection_report`), ran M5 validation matrix, generated `plans/artifacts/display-rewrite/m5/` outputs, and confirmed empty scene/table stream diffs versus M4.
 
 ## Surprises & Discoveries
 
@@ -32,6 +32,10 @@ The user-visible effect is startup predictability. Instead of `widget_demo` cont
   Evidence: `src/display/render/canvas.c` currently asserts `vtable` in `n00b_canvas_init` and has no `backend_name` path.
 - Observation: Existing unit coverage checks registration and aliasing but not startup-policy fallback or plugin-path selection behavior.
   Evidence: `test/unit/test_display_backend_registry.c` asserts built-ins/`gui` alias only.
+- Observation: Initial candidate-list implementation silently returned empty lists because helper functions mutated a by-value copy of `n00b_list_t`.
+  Evidence: `test_display_backend_selection` first failed at `assert(tui.len == 1)` with observed `tui.len=0`; converting helper signatures to pointer parameters fixed the regression.
+- Observation: GUI startup is unavailable in this environment due missing `DISPLAY`, but canonical fallback now still starts `widget_demo` by selecting `ansi`.
+  Evidence: `timeout 5 ./build_debug/widget_demo --widget all --backend gui` printed `n00b: x11 backend unavailable (cannot open DISPLAY).` then `Backend request 'gui' selected 'ansi' (fallback)`.
 
 ## Decision Log
 
@@ -50,10 +54,18 @@ The user-visible effect is startup predictability. Instead of `widget_demo` cont
 - Decision: Add plugin-readiness evidence with a test fixture shared library loaded through `N00B_RENDERER_PATH`.
   Rationale: M5 explicitly includes plugin readiness; positive dynamic-load proof is required, not only ENOENT failure handling.
   Date/Author: 2026-03-05 / Codex
+- Decision: Set deterministic auto candidate order to `ansi -> gui -> notcurses -> stream -> dumb`.
+  Rationale: This preserves interactive terminal-default behavior for `auto` while still providing deterministic fallback coverage to non-interactive backends.
+  Date/Author: 2026-03-05 / Codex
+- Decision: Keep `display_backend_selection_report` non-interactive by disabling dynamic-load attempts and running report cases with null output topics.
+  Rationale: This prevents noisy escape-sequence/plugin-miss stderr output and keeps artifact generation deterministic for CI/local reruns.
+  Date/Author: 2026-03-05 / Codex
 
 ## Outcomes & Retrospective
 
-Milestone 5 execution has not started yet; this document currently captures implementation intent, concrete file edits, and acceptance evidence requirements only. The expected outcome is startup-policy coherence: runtime/backend tools share one selection path, fallback behavior is deterministic and tested, and plugin load readiness is demonstrated with real fixture loading plus a human-readable M5 selection report.
+Milestone 5 is complete on `display-rewrite/m5-runtime-selection`. Runtime/backend startup now converges on one registry-first policy: backend candidate ordering and exact resolution are explicit APIs, runtime init guarantees registry bootstrapping, canvas supports backend-name selection with deterministic fallback, and `widget_demo` now reports requested vs selected backend through the shared path.
+
+Acceptance evidence is complete across all required layers: `display_backend_registry`, `display_backend_selection`, `display_backend_plugin`, `display_m5_runtime_selection`, prior display integration matrix, and shared display smoke matrix all passed; `plans/artifacts/display-rewrite/m5/` contains `scene_stream.txt`, `table_stream.txt`, `metadata.txt`, `scene_inspect.txt`, `selection_report.txt`, and `selection_metadata.txt`; and M5 scene/table baseline diffs versus M4 are empty. Environment-specific GUI unavailability (`DISPLAY` missing) was handled through deterministic fallback evidence (`gui` request falling back to `ansi`) without blocking milestone acceptance.
 
 ## Context and Orientation
 
@@ -290,3 +302,4 @@ Dependencies remain existing project toolchain and optional backend dependencies
 ## Revision Notes
 
 - 2026-03-05: Initial Milestone 5 child ExecPlan authored from umbrella Milestone 5 scope, with concrete registry-first backend selection policy, runtime startup wiring, plugin-readiness coverage, and deterministic artifact/report requirements.
+- 2026-03-05: Updated after full M5 execution to reflect completed implementation, test/artifact evidence, discovered list-mutation bug fix, and environment-specific GUI fallback behavior.
