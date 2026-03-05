@@ -16,7 +16,6 @@
 #include <unistd.h>
 #include <sys/ioctl.h>
 #include <poll.h>
-#include <termios.h>
 #endif
 #include "n00b.h"
 #include "core/alloc.h"
@@ -25,9 +24,10 @@
 #include "conduit/write.h"
 #include "conduit/signal.h"
 #include "text/strings/text_style.h"
-#include "text/strings/theme.h"
 #include "display/render/composite.h"
 #include "internal/display/diagnostics.h"
+#include "internal/display/ansi_sgr.h"
+#include "internal/display/terminal_input.h"
 
 // -------------------------------------------------------------------
 // ANSI context
@@ -44,7 +44,7 @@ typedef struct {
     n00b_isize_t                            cursor_row;
     n00b_isize_t                            cursor_col;
     bool                                    cursor_visible;
-    bool                                    mouse_button_down;
+    n00b_terminal_input_state_t             input_state;
 #ifndef _WIN32
     n00b_conduit_signal_inbox_t            *sigwinch_inbox;
 #endif
@@ -93,6 +93,13 @@ ansi_emit_str(ansi_ctx_t *ctx, const char *str)
 }
 
 static void
+ansi_sgr_emit_adapter(void *vctx, const char *data, size_t len)
+{
+    ansi_ctx_t *ctx = vctx;
+    ansi_emit(ctx, data, len);
+}
+
+static void
 ansi_emit_int(ansi_ctx_t *ctx, int val)
 {
     char tmp[16];
@@ -104,95 +111,6 @@ ansi_emit_int(ansi_ctx_t *ctx, int val)
 // SGR escape generation
 // -------------------------------------------------------------------
 
-static void
-ansi_emit_sgr_reset(ansi_ctx_t *ctx)
-{
-    ansi_emit_str(ctx, "\033[0m");
-}
-
-static void
-ansi_emit_style(ansi_ctx_t *ctx, const n00b_text_style_t *style)
-{
-    if (!style) {
-        ansi_emit_sgr_reset(ctx);
-        return;
-    }
-
-    ansi_emit_str(ctx, "\033[0");
-
-    if (style->bold == N00B_TRI_YES) {
-        ansi_emit_str(ctx, ";1");
-    }
-    if (style->dim == N00B_TRI_YES) {
-        ansi_emit_str(ctx, ";2");
-    }
-    if (style->italic == N00B_TRI_YES) {
-        ansi_emit_str(ctx, ";3");
-    }
-    if (style->underline == N00B_TRI_YES) {
-        ansi_emit_str(ctx, ";4");
-    }
-    if (style->blink == N00B_TRI_YES) {
-        ansi_emit_str(ctx, ";5");
-    }
-    if (style->reverse == N00B_TRI_YES) {
-        ansi_emit_str(ctx, ";7");
-    }
-    if (style->strikethrough == N00B_TRI_YES) {
-        ansi_emit_str(ctx, ";9");
-    }
-    if (style->double_underline == N00B_TRI_YES) {
-        ansi_emit_str(ctx, ";21");
-    }
-
-    // Foreground color: direct RGB > palette > 256-color index.
-    if (n00b_color_is_set(style->fg_rgb)) {
-        int rgb = n00b_color_rgb(style->fg_rgb);
-        char buf[32];
-        int len = snprintf(buf, sizeof(buf), ";38;2;%d;%d;%d",
-                           (rgb >> 16) & 0xFF,
-                           (rgb >> 8) & 0xFF,
-                           rgb & 0xFF);
-        ansi_emit(ctx, buf, len);
-    }
-    else if (style->fg_palette_ix >= 0 && style->fg_palette_ix < N00B_PAL_SIZE) {
-        n00b_color_t resolved = n00b_theme_resolve_color(style->fg_palette_ix);
-        if (n00b_color_is_set(resolved)) {
-            int rgb = n00b_color_rgb(resolved);
-            char buf[32];
-            int len = snprintf(buf, sizeof(buf), ";38;2;%d;%d;%d",
-                               (rgb >> 16) & 0xFF,
-                               (rgb >> 8) & 0xFF,
-                               rgb & 0xFF);
-            ansi_emit(ctx, buf, len);
-        }
-    }
-
-    // Background color: direct RGB > palette > 256-color index.
-    if (n00b_color_is_set(style->bg_rgb)) {
-        int rgb = n00b_color_rgb(style->bg_rgb);
-        char buf[32];
-        int len = snprintf(buf, sizeof(buf), ";48;2;%d;%d;%d",
-                           (rgb >> 16) & 0xFF,
-                           (rgb >> 8) & 0xFF,
-                           rgb & 0xFF);
-        ansi_emit(ctx, buf, len);
-    }
-    else if (style->bg_palette_ix >= 0 && style->bg_palette_ix < N00B_PAL_SIZE) {
-        n00b_color_t resolved = n00b_theme_resolve_color(style->bg_palette_ix);
-        if (n00b_color_is_set(resolved)) {
-            int rgb = n00b_color_rgb(resolved);
-            char buf[32];
-            int len = snprintf(buf, sizeof(buf), ";48;2;%d;%d;%d",
-                               (rgb >> 16) & 0xFF,
-                               (rgb >> 8) & 0xFF,
-                               rgb & 0xFF);
-            ansi_emit(ctx, buf, len);
-        }
-    }
-
-    ansi_emit_str(ctx, "m");
-}
 
 // -------------------------------------------------------------------
 // Cursor movement
@@ -230,6 +148,7 @@ ansi_init(n00b_conduit_topic_t(n00b_buffer_t *) *output)
     ctx->buf        = n00b_alloc_array_with_opts(char, ANSI_INITIAL_BUF, &(n00b_alloc_opts_t){.no_scan = true});
     ctx->buf_used   = 0;
     ctx->cursor_visible = true;
+    n00b_terminal_input_reset(&ctx->input_state);
 
     // Try to get terminal size.
 #ifdef _WIN32
@@ -403,7 +322,7 @@ ansi_render_frame(void *vctx, n00b_rcell_t *cells,
 
             // Emit style if changed.
             if (cell->style != last_style) {
-                ansi_emit_style(ctx, cell->style);
+                n00b_display_ansi_emit_style(cell->style, ansi_sgr_emit_adapter, ctx);
                 last_style = cell->style;
             }
 
@@ -420,7 +339,7 @@ ansi_render_frame(void *vctx, n00b_rcell_t *cells,
     }
 
     // Reset style at end.
-    ansi_emit_sgr_reset(ctx);
+    n00b_display_ansi_emit_reset(ansi_sgr_emit_adapter, ctx);
 }
 
 static void
@@ -547,186 +466,20 @@ ansi_read_byte(int timeout_ms)
     return ansi_try_read_byte();
 }
 
-static bool
-ansi_parse_sgr_mouse(ansi_ctx_t *ctx, const char *buf, size_t len,
-                      bool pressed, n00b_event_t *out)
+typedef struct {
+    int pending;
+} ansi_input_reader_t;
+
+static int
+ansi_read_for_parser(void *vctx, int32_t timeout_ms)
 {
-    // SGR mouse: buf contains "Cb;Cx;Cy" (without the leading '<').
-    // pressed = true for 'M' (press/motion), false for 'm' (release).
-    int cb = 0, cx = 0, cy = 0;
-    int field = 0;
-
-    for (size_t i = 0; i < len; i++) {
-        if (buf[i] == ';') {
-            field++;
-            continue;
-        }
-        if (buf[i] >= '0' && buf[i] <= '9') {
-            int digit = buf[i] - '0';
-            switch (field) {
-            case 0: cb = cb * 10 + digit; break;
-            case 1: cx = cx * 10 + digit; break;
-            case 2: cy = cy * 10 + digit; break;
-            }
-        }
+    ansi_input_reader_t *reader = vctx;
+    if (reader->pending >= 0) {
+        int c = reader->pending;
+        reader->pending = -1;
+        return c;
     }
-
-    out->type = N00B_EVENT_MOUSE;
-    out->mouse.x = cx - 1;  // SGR uses 1-based coords.
-    out->mouse.y = cy - 1;
-
-    // Decode modifiers from cb bits.
-    out->mouse.mods = N00B_MOD_NONE;
-    if (cb & 4)  out->mouse.mods |= N00B_MOD_SHIFT;
-    if (cb & 8)  out->mouse.mods |= N00B_MOD_ALT;
-    if (cb & 16) out->mouse.mods |= N00B_MOD_CTRL;
-
-    // Decode button.
-    bool is_motion = (cb & 32) != 0;
-    int  btn_bits  = cb & 3;
-
-    if (cb & 64) {
-        // Scroll events.
-        out->mouse.button = (btn_bits == 0) ? N00B_MOUSE_SCROLL_UP
-                                             : N00B_MOUSE_SCROLL_DOWN;
-        out->mouse.action = N00B_MOUSE_PRESS;
-        return true;
-    }
-
-    if (is_motion) {
-        // Motion event (with or without button).
-        if (ctx->mouse_button_down) {
-            out->mouse.action = N00B_MOUSE_DRAG;
-            // Preserve the button from the original press.
-            switch (btn_bits) {
-            case 0: out->mouse.button = N00B_MOUSE_LEFT;   break;
-            case 1: out->mouse.button = N00B_MOUSE_MIDDLE; break;
-            case 2: out->mouse.button = N00B_MOUSE_RIGHT;  break;
-            default: out->mouse.button = N00B_MOUSE_NONE;  break;
-            }
-        }
-        else {
-            out->mouse.action = N00B_MOUSE_MOVE;
-            out->mouse.button = N00B_MOUSE_NONE;
-        }
-        return true;
-    }
-
-    // Button press or release.
-    switch (btn_bits) {
-    case 0: out->mouse.button = N00B_MOUSE_LEFT;   break;
-    case 1: out->mouse.button = N00B_MOUSE_MIDDLE; break;
-    case 2: out->mouse.button = N00B_MOUSE_RIGHT;  break;
-    default: out->mouse.button = N00B_MOUSE_NONE;  break;
-    }
-
-    if (!pressed) {
-        out->mouse.action      = N00B_MOUSE_RELEASE;
-        ctx->mouse_button_down = false;
-    }
-    else {
-        out->mouse.action      = N00B_MOUSE_PRESS;
-        ctx->mouse_button_down = true;
-    }
-
-    return true;
-}
-
-static bool
-ansi_parse_csi(ansi_ctx_t *ctx, n00b_event_t *out)
-{
-    char   buf[32];
-    size_t len = 0;
-
-    for (;;) {
-        int c = ansi_read_byte(50);
-        if (c < 0) {
-            return false;
-        }
-        if (c >= 0x40 && c <= 0x7E) {
-            // SGR mouse: ESC [ < Cb ; Cx ; Cy M/m
-            if ((c == 'M' || c == 'm') && len > 0 && buf[0] == '<') {
-                return ansi_parse_sgr_mouse(ctx, buf + 1, len - 1,
-                                             c == 'M', out);
-            }
-
-            // Final byte.
-            out->type     = N00B_EVENT_KEY;
-            out->key.mods = N00B_MOD_NONE;
-
-            switch (c) {
-            case 'A': out->key.key = N00B_KEY_UP;        return true;
-            case 'B': out->key.key = N00B_KEY_DOWN;      return true;
-            case 'C': out->key.key = N00B_KEY_RIGHT;     return true;
-            case 'D': out->key.key = N00B_KEY_LEFT;      return true;
-            case 'H': out->key.key = N00B_KEY_HOME;      return true;
-            case 'F': out->key.key = N00B_KEY_END;       return true;
-            case 'Z':
-                out->key.key  = N00B_KEY_TAB;
-                out->key.mods = N00B_MOD_SHIFT;
-                return true;
-            case '~':
-                if (len > 0) {
-                    int num = 0;
-                    for (size_t i = 0; i < len; i++) {
-                        if (buf[i] >= '0' && buf[i] <= '9') {
-                            num = num * 10 + (buf[i] - '0');
-                        }
-                        else {
-                            break;
-                        }
-                    }
-                    switch (num) {
-                    case 1:  out->key.key = N00B_KEY_HOME;      return true;
-                    case 2:  out->key.key = N00B_KEY_INSERT;    return true;
-                    case 3:  out->key.key = N00B_KEY_DELETE;    return true;
-                    case 4:  out->key.key = N00B_KEY_END;       return true;
-                    case 5:  out->key.key = N00B_KEY_PAGE_UP;   return true;
-                    case 6:  out->key.key = N00B_KEY_PAGE_DOWN; return true;
-                    case 15: out->key.key = N00B_KEY_F5;        return true;
-                    case 17: out->key.key = N00B_KEY_F6;        return true;
-                    case 18: out->key.key = N00B_KEY_F7;        return true;
-                    case 19: out->key.key = N00B_KEY_F8;        return true;
-                    case 20: out->key.key = N00B_KEY_F9;        return true;
-                    case 21: out->key.key = N00B_KEY_F10;       return true;
-                    case 23: out->key.key = N00B_KEY_F11;       return true;
-                    case 24: out->key.key = N00B_KEY_F12;       return true;
-                    default: return false;
-                    }
-                }
-                return false;
-            default:
-                return false;
-            }
-        }
-        if (len < sizeof(buf) - 1) {
-            buf[len++] = (char)c;
-        }
-    }
-}
-
-static bool
-ansi_parse_ss3(n00b_event_t *out)
-{
-    int c = ansi_read_byte(50);
-    if (c < 0) {
-        return false;
-    }
-
-    out->type     = N00B_EVENT_KEY;
-    out->key.mods = N00B_MOD_NONE;
-
-    switch (c) {
-    case 'P': out->key.key = N00B_KEY_F1;   return true;
-    case 'Q': out->key.key = N00B_KEY_F2;   return true;
-    case 'R': out->key.key = N00B_KEY_F3;   return true;
-    case 'S': out->key.key = N00B_KEY_F4;   return true;
-    case 'A': out->key.key = N00B_KEY_UP;   return true;
-    case 'B': out->key.key = N00B_KEY_DOWN; return true;
-    case 'C': out->key.key = N00B_KEY_RIGHT;return true;
-    case 'D': out->key.key = N00B_KEY_LEFT; return true;
-    default:  return false;
-    }
+    return ansi_read_byte(timeout_ms);
 }
 
 static bool
@@ -803,59 +556,12 @@ ansi_poll_event(void *vctx, int32_t timeout_ms, n00b_event_t *out)
         }
     }
 
-    // ESC: start of escape sequence.
-    if (c == 0x1B) {
-        int next = ansi_read_byte(50);
-        if (next < 0) {
-            out->type     = N00B_EVENT_KEY;
-            out->key.key  = N00B_KEY_ESCAPE;
-            out->key.mods = N00B_MOD_NONE;
-            return true;
-        }
-        if (next == '[') {
-            return ansi_parse_csi(ctx, out);
-        }
-        if (next == 'O') {
-            return ansi_parse_ss3(out);
-        }
-        // Alt+key.
-        out->type     = N00B_EVENT_KEY;
-        out->key.key  = (uint32_t)next;
-        out->key.mods = N00B_MOD_ALT;
-        return true;
-    }
-
-    // Control characters.
-    out->type     = N00B_EVENT_KEY;
-    out->key.mods = N00B_MOD_NONE;
-
-    if (c == 0x7F || c == 0x08) {
-        out->key.key = N00B_KEY_BACKSPACE;
-        return true;
-    }
-    if (c == '\r' || c == '\n') {
-        out->key.key = N00B_KEY_ENTER;
-        return true;
-    }
-    if (c == '\t') {
-        out->key.key = N00B_KEY_TAB;
-        return true;
-    }
-    if (c == 0x19) {
-        // Shift+Tab (backtab).
-        out->key.key  = N00B_KEY_TAB;
-        out->key.mods = N00B_MOD_SHIFT;
-        return true;
-    }
-    if (c < 0x20) {
-        out->key.key  = (uint32_t)(c + 'a' - 1);
-        out->key.mods = N00B_MOD_CTRL;
-        return true;
-    }
-
-    // Printable ASCII.
-    out->key.key = (uint32_t)c;
-    return true;
+    ansi_input_reader_t reader = { .pending = c };
+    return n00b_terminal_parse_ansi_event(&ctx->input_state,
+                                           ansi_read_for_parser,
+                                           &reader,
+                                           0,
+                                           out);
 }
 #endif // !_WIN32
 

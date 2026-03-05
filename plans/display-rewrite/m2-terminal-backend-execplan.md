@@ -15,11 +15,11 @@ User-visible behavior stays parity with Milestone 1. The difference is maintaina
 - [x] (2026-03-05 11:23Z) Reviewed Milestone 2 scope from `plans/display-rewrite-overall-execplan.md` and mapped it to concrete file touchpoints in the current M1 codebase.
 - [x] (2026-03-05 11:23Z) Audited terminal hotspots in `src/display/event_loop.c`, `src/display/render/backend_ansi.c`, `src/display/render/backend_ansi_inline.c`, and `src/display/render/backend_notcurses.c`.
 - [x] (2026-03-05 11:23Z) Authored this Milestone 2 child ExecPlan with concrete module boundaries, file-level edits, tests, and artifact commands.
-- [ ] Create and switch to `display-rewrite/m2-terminal-backend` from `display-rewrite/m1-core-contracts`.
-- [ ] Implement shared terminal modules (`terminal_lifecycle`, `terminal_input`, `ansi_sgr`) and rewire terminal backends/event loop to consume them.
-- [ ] Add Milestone 2 unit and integration coverage for ANSI parsing, notcurses translation, and terminal event-loop behavior.
-- [ ] Add deterministic replay tooling and produce M2 artifacts under `plans/artifacts/display-rewrite/m2/`.
-- [ ] Run milestone tests, display smoke tests, optional notcurses validation, and baseline artifact diffs versus M1.
+- [x] (2026-03-05 11:27Z) Confirmed branch `display-rewrite/m2-terminal-backend` already existed and continued implementation there.
+- [x] (2026-03-05 11:35Z) Implemented shared terminal modules (`terminal_lifecycle`, `terminal_input`, `ansi_sgr`) and rewired `event_loop`, `backend_ansi`, `backend_ansi_inline`, and `backend_notcurses` to consume them.
+- [x] (2026-03-05 11:40Z) Added Milestone 2 unit and integration coverage: `test_display_terminal_lifecycle`, `test_display_ansi_sgr`, `test_display_terminal_input`, and `test_display_m2_terminal_flow`.
+- [x] (2026-03-05 11:42Z) Added deterministic replay tool `display_terminal_replay` and generated artifacts under `plans/artifacts/display-rewrite/m2/`.
+- [x] (2026-03-05 11:45Z) Ran milestone tests, display smoke tests, `notcurses_backend` validation, M1-vs-M2 artifact diffs, and a scripted `widget_demo` terminal probe with clean exit.
 
 ## Surprises & Discoveries
 
@@ -33,6 +33,12 @@ User-visible behavior stays parity with Milestone 1. The difference is maintaina
   Evidence: `test/unit/test_render_ansi.c` validates capabilities and render calls; `test/unit/test_notcurses_backend.c` skips many checks when no terminal and does not assert detailed key/mouse mapping tables.
 - Observation: M1 already has a deterministic integration pattern that can be extended for M2 terminal replay coverage.
   Evidence: `test/integration/test_display_m1_compat.c` uses a synthetic backend queue and proves `n00b_canvas_run()` behavior deterministically.
+- Observation: ANSI parser extraction needed a pending-byte adapter to avoid regressing SIGWINCH wake behavior.
+  Evidence: `src/display/render/backend_ansi.c` now does initial non-blocking read/wait plus `ansi_read_for_parser()` for delegated parsing in `n00b_terminal_parse_ansi_event`.
+- Observation: M2 parity artifacts remained byte-identical to M1 for baseline streams after rewiring.
+  Evidence: `diff -u plans/artifacts/display-rewrite/m1/scene_stream.txt plans/artifacts/display-rewrite/m2/scene_stream.txt` and `diff -u .../table_stream.txt ...` both produced no output.
+- Observation: Manual terminal probe is scriptable in this environment by piping the expected key sequence.
+  Evidence: `printf '\t\t \003' | build_debug/widget_demo --widget all --backend tui` exited `0` and cleanup escape sequences were emitted.
 
 ## Decision Log
 
@@ -51,12 +57,20 @@ User-visible behavior stays parity with Milestone 1. The difference is maintaina
 - Decision: Preserve M1 baseline output parity (`scene_stream.txt`, `table_stream.txt`) unless an intentional terminal behavior fix is explicitly documented.
   Rationale: Milestone 2 must prove architecture changes do not silently alter established behavior.
   Date/Author: 2026-03-05 / Codex
+- Decision: Keep SIGWINCH inbox waiting orchestration in `backend_ansi.c` and delegate only byte-level parsing to `terminal_input`.
+  Rationale: This preserved existing wake-up responsiveness on resize while still centralizing ANSI escape parsing semantics.
+  Date/Author: 2026-03-05 / Codex
+- Decision: Record manual probe evidence from scripted key input (`Tab,Tab,Space,Ctrl-C`) in artifact metadata.
+  Rationale: The execution environment is non-interactive; scripted input gives deterministic, repeatable terminal-run evidence.
+  Date/Author: 2026-03-05 / Codex
 
 ## Outcomes & Retrospective
 
-Milestone 2 has not been implemented yet. This plan defines the implementation and validation path needed to reach acceptance on `display-rewrite/m2-terminal-backend`.
+Milestone 2 implementation is complete on `display-rewrite/m2-terminal-backend`.
 
-Success for this milestone means terminal behavior remains parity with M1 while terminal-specific logic is moved into named internal contracts with dedicated tests and deterministic artifacts. Remaining milestones after M2 continue with GUI parity (M3) and higher-level widget/table/hexdump migration (M4+), so M2 is intentionally scoped to terminal runtime quality and evidence.
+Terminal lifecycle, ANSI SGR emission, and terminal input translation now live in dedicated modules with explicit interfaces (`terminal_lifecycle`, `ansi_sgr`, `terminal_input`). `event_loop`, ANSI backends, and notcurses backend consume those contracts without public API changes. New unit and integration tests pass, deterministic replay tooling is in place, and M2 artifacts were generated with baseline parity to M1 for `scene_stream.txt` and `table_stream.txt`.
+
+Remaining work is outside M2 scope (GUI parity and later widget/table migration milestones). M2 acceptance criteria for modularization, deterministic replay evidence, and parity validation are satisfied.
 
 ## Context and Orientation
 
@@ -278,3 +292,4 @@ Dependencies remain the existing display runtime and optional notcurses dependen
 ## Revision Notes
 
 - 2026-03-05: Initial Milestone 2 child ExecPlan authored from umbrella Milestone 2 scope, with concrete module boundaries, validation commands, and deterministic replay artifact requirements.
+- 2026-03-05: Updated this ExecPlan after implementation to reflect completed progress, added implementation discoveries/decisions, and recorded final M2 validation/artifact outcomes so the document is restartable from current state.
