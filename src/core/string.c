@@ -68,6 +68,12 @@ n00b_string_from_raw(const char *src, int64_t byte_len)
 }
 
 n00b_string_t *
+__ncc_rstr(const char *src)
+{
+    return n00b_string_from_cstr(src);
+}
+
+n00b_string_t *
 n00b_string_from_cstr(const char *src)
     _kargs { n00b_allocator_t *allocator = nullptr; }
 {

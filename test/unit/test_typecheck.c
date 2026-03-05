@@ -34,6 +34,12 @@
 #include "slay/cf_label.h"
 #include "internal/slay/grammar_internal.h"
 
+static inline bool
+tc_str_eq(n00b_string_t *a, n00b_string_t *b)
+{
+    return n00b_unicode_str_eq(a, b);
+}
+
 // ============================================================================
 // Phase 1: Type Representation + Constructors (updated for ctx)
 // ============================================================================
@@ -62,13 +68,13 @@ test_construct_primitives(void)
 
     // Verify names.
     auto int_prim = n00b_variant_get(t_int->kind, n00b_tc_prim_t);
-    assert(n00b_unicode_str_eq(int_prim.name, r"int"));
+    assert(tc_str_eq(int_prim.name, r"int"));
 
     auto bool_prim = n00b_variant_get(t_bool->kind, n00b_tc_prim_t);
-    assert(n00b_unicode_str_eq(bool_prim.name, r"bool"));
+    assert(tc_str_eq(bool_prim.name, r"bool"));
 
     auto nil_prim = n00b_variant_get(t_nil->kind, n00b_tc_prim_t);
-    assert(n00b_unicode_str_eq(nil_prim.name, r"nil"));
+    assert(tc_str_eq(nil_prim.name, r"nil"));
 
     // forward pointer should be null (root).
     assert(t_int->forward == nullptr);
@@ -92,7 +98,7 @@ test_construct_param(void)
     assert(n00b_variant_is_type(list_int->kind, n00b_tc_param_t));
 
     auto p = n00b_variant_get(list_int->kind, n00b_tc_param_t);
-    assert(n00b_unicode_str_eq(p.name, r"list"));
+    assert(tc_str_eq(p.name, r"list"));
     assert(n00b_list_len(*p.params) == 1);
     assert(n00b_list_get(*p.params, 0) == t_int);
 
@@ -101,7 +107,7 @@ test_construct_param(void)
     assert(n00b_variant_is_type(dict_si->kind, n00b_tc_param_t));
 
     auto d = n00b_variant_get(dict_si->kind, n00b_tc_param_t);
-    assert(n00b_unicode_str_eq(d.name, r"dict"));
+    assert(tc_str_eq(d.name, r"dict"));
     assert(n00b_list_len(*d.params) == 2);
     assert(n00b_list_get(*d.params, 0) == t_str);
     assert(n00b_list_get(*d.params, 1) == t_int);
@@ -174,17 +180,17 @@ test_construct_record_ordered(void)
     assert(n00b_variant_is_type(point->kind, n00b_tc_record_t));
 
     auto rec = n00b_variant_get(point->kind, n00b_tc_record_t);
-    assert(n00b_unicode_str_eq(rec.name, r"Point"));
+    assert(tc_str_eq(rec.name, r"Point"));
     assert(rec.ordered == true);
     assert(rec.open == false);
     assert(n00b_list_len(*rec.field_names) == 2);
     assert(n00b_list_len(*rec.field_types) == 2);
 
     n00b_string_t *name0 = n00b_list_get(*rec.field_names, 0);
-    assert(n00b_unicode_str_eq(name0, r"x"));
+    assert(tc_str_eq(name0, r"x"));
 
     n00b_string_t *name1 = n00b_list_get(*rec.field_names, 1);
-    assert(n00b_unicode_str_eq(name1, r"y"));
+    assert(tc_str_eq(name1, r"y"));
 
     assert(n00b_list_get(*rec.field_types, 0) == t_int);
     assert(n00b_list_get(*rec.field_types, 1) == t_int);
@@ -302,8 +308,8 @@ test_construct_var(void)
 
     auto v = n00b_variant_get(tv->kind, n00b_tc_var_t);
     assert(n00b_option_is_set(v.given_name));
-    assert(n00b_unicode_str_eq(n00b_option_get(v.given_name), r"T"));
-    assert(n00b_unicode_str_eq(v.display_name, r"T"));
+    assert(tc_str_eq(n00b_option_get(v.given_name), r"T"));
+    assert(tc_str_eq(v.display_name, r"T"));
     assert(v.constraints == nullptr);
 
     // Anonymous variable.
@@ -355,7 +361,7 @@ test_context_lifecycle(void)
 
     // Verify t_int has the right name.
     auto ip = n00b_variant_get(ctx->t_int->kind, n00b_tc_prim_t);
-    assert(n00b_unicode_str_eq(ip.name, r"int"));
+    assert(tc_str_eq(ip.name, r"int"));
 
     // all_types should have at least 16 entries (the builtins).
     // (15 builtins: int, i8..u64, f32, f64, bool, string, nil, void)
@@ -497,7 +503,7 @@ test_unify_var_to_prim(void)
     assert(n00b_tc_find(v) == t_int);
     assert(!n00b_tc_is_var(v));
     assert(n00b_tc_is_prim(v));
-    assert(n00b_unicode_str_eq(n00b_tc_prim_name(v), r"int"));
+    assert(tc_str_eq(n00b_tc_prim_name(v), r"int"));
 
     n00b_tc_ctx_free(ctx);
     printf("  [PASS] unify_var_to_prim\n");
@@ -982,7 +988,7 @@ test_explicit_type_annotation(void)
     n00b_tc_type_t *resolved = n00b_tc_find(x->type_var);
 
     if (n00b_tc_is_prim(resolved)) {
-        assert(n00b_unicode_str_eq(n00b_tc_prim_name(resolved), r"i32"));
+        assert(tc_str_eq(n00b_tc_prim_name(resolved), r"i32"));
         printf("  [PASS] explicit_type_annotation\n");
     } else {
         // Type annotation binding may not have fully resolved yet
@@ -1139,7 +1145,7 @@ test_literal_modifier_u8(void)
 
     if (n00b_tc_is_prim(resolved)) {
         n00b_string_t *name = n00b_tc_prim_name(resolved);
-        assert(n00b_unicode_str_eq(name, r"u8"));
+        assert(tc_str_eq(name, r"u8"));
     }
     else {
         // Type resolution didn't fully work — still a pass if we got
@@ -1180,7 +1186,7 @@ test_literal_no_modifier(void)
 
     if (n00b_tc_is_prim(resolved)) {
         n00b_string_t *name = n00b_tc_prim_name(resolved);
-        assert(n00b_unicode_str_eq(name, r"int"));
+        assert(tc_str_eq(name, r"int"));
     }
 
     printf("  [PASS] literal_no_modifier\n");
@@ -1253,7 +1259,7 @@ assert_type_prints_as(n00b_tc_type_t *type, const char *expected)
     n00b_string_t *result = n00b_tc_type_to_string(type);
     n00b_string_t *exp = n00b_string_from_cstr(expected);
 
-    if (!n00b_unicode_str_eq(result, exp)) {
+    if (!tc_str_eq(result, exp)) {
         fprintf(stderr, "  [FAIL] expected \"%s\", got \"%.*s\"\n",
                 expected, (int)result->u8_bytes, result->data);
         assert(false);

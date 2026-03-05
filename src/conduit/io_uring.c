@@ -3,6 +3,9 @@
  */
 
 #include "conduit/io.h"
+#include "conduit/timer.h"
+#include "conduit/signal.h"
+#include "conduit/user_event.h"
 #include "core/stw.h"
 
 #ifdef __linux__

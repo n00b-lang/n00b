@@ -1,6 +1,5 @@
 // IWYU pragma: no_include <sys/_endian.h>
 
-#define XXH_INLINE_ALL
 #define N00B_HASH_INTERNAL
 
 #include "n00b.h"
@@ -21,18 +20,6 @@
 #include "core/type_info.h"
 #include "core/string.h"
 #include "core/buffer.h"
-#include "vendor/xxhash.h"
-
-static inline n00b_uint128_t
-n00b_xxh_convert(XXH128_hash_t hv)
-{
-    union {
-        XXH128_hash_t  xxh;
-        n00b_uint128_t n00b;
-    } u = {.xxh = hv};
-
-    return u.n00b;
-}
 
 n00b_uint128_t
 n00b_hash(void *obj, n00b_hash_fn fn)
@@ -89,7 +76,7 @@ n00b_hash_word(void *value)
 {
     n00b_word_t w = (n00b_word_t)value;
 
-    return n00b_xxh_convert(XXH3_128bits(&w, sizeof(n00b_word_t)));
+    return n00b_xxh3_128bits_raw(&w, sizeof(n00b_word_t));
 }
 
 n00b_uint128_t
@@ -97,13 +84,13 @@ n00b_hash_cstring(void *value)
 {
     char *s = (char *)value;
 
-    return n00b_xxh_convert(XXH3_128bits(s, strlen(s)));
+    return n00b_xxh3_128bits_raw(s, strlen(s));
 }
 
 n00b_uint128_t
 n00b_hash_raw(const void *data, size_t len)
 {
-    return n00b_xxh_convert(XXH3_128bits(data, len));
+    return n00b_xxh3_128bits_raw(data, len);
 }
 
 n00b_uint128_t
@@ -115,7 +102,7 @@ n00b_string_hash(void *key)
         return n00b_hash_word(0ULL);
     }
 
-    return n00b_xxh_convert(XXH3_128bits(s->data, s->u8_bytes));
+    return n00b_xxh3_128bits_raw(s->data, s->u8_bytes);
 }
 
 n00b_uint128_t
@@ -125,5 +112,5 @@ n00b_buffer_hash(n00b_buffer_t *b)
         return n00b_hash_word(0ULL);
     }
 
-    return n00b_xxh_convert(XXH3_128bits(b->data, b->byte_len));
+    return n00b_xxh3_128bits_raw(b->data, b->byte_len);
 }

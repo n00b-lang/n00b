@@ -3206,22 +3206,29 @@ _kargs {
 
 // Platform-specific section boundary declarations.
 #ifdef __APPLE__
-extern const n00b_cg_import_entry_t __start_n00b_ffi
-    __asm("section$start$__DATA$n00b_ffi");
-extern const n00b_cg_import_entry_t __stop_n00b_ffi
-    __asm("section$end$__DATA$n00b_ffi");
+extern const n00b_cg_import_entry_t __start_n00b_ffi[]
+    __asm("section$start$__DATA$n00b_ffi")
+    __attribute__((weak));
+extern const n00b_cg_import_entry_t __stop_n00b_ffi[]
+    __asm("section$end$__DATA$n00b_ffi")
+    __attribute__((weak));
 #else
-extern const n00b_cg_import_entry_t __start_n00b_ffi;
-extern const n00b_cg_import_entry_t __stop_n00b_ffi;
+extern const n00b_cg_import_entry_t __start_n00b_ffi[]
+    __attribute__((weak));
+extern const n00b_cg_import_entry_t __stop_n00b_ffi[]
+    __attribute__((weak));
 #endif
 
 n00b_cg_import_table_t *
 n00b_cg_collect_exports(void)
 {
-    const n00b_cg_import_entry_t *start = &__start_n00b_ffi;
-    const n00b_cg_import_entry_t *stop  = &__stop_n00b_ffi;
-
     n00b_cg_import_table_t *table = n00b_cg_import_table_new();
+    const n00b_cg_import_entry_t *start = __start_n00b_ffi;
+    const n00b_cg_import_entry_t *stop  = __stop_n00b_ffi;
+
+    if (start == NULL || stop == NULL || start >= stop) {
+        return table;
+    }
 
     for (const n00b_cg_import_entry_t *e = start; e < stop; e++) {
         if (e->name && e->addr) {
