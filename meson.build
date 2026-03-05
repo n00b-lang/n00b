@@ -1394,6 +1394,12 @@ event_normalize_test = executable('test_event_normalize',
 )
 test('event_normalize', event_normalize_test, suite: 'unit')
 
+display_baseline_contract_test = executable('test_display_baseline_contract',
+    ['test/unit/test_display_baseline_contract.c'],
+    kwargs: test_common_kwargs,
+)
+test('display_baseline_contract', display_baseline_contract_test, suite: 'unit')
+
 if conf_cocoa
   cocoa_test = executable('test_cocoa_backend',
       ['test/unit/test_cocoa_backend.m'],
@@ -1422,6 +1428,12 @@ table_tool = executable('n00b_table',
 # Widget visual demo tool
 widget_demo = executable('widget_demo',
     ['src/tools/widget_demo.c'],
+    kwargs: test_common_kwargs,
+    install: false,
+)
+
+display_baseline_capture = executable('display_baseline_capture',
+    ['src/tools/display_baseline_capture.c'],
     kwargs: test_common_kwargs,
     install: false,
 )
@@ -1491,6 +1503,12 @@ alloc_metadata_test = executable('test_alloc_metadata',
     kwargs: test_common_kwargs,
 )
 test('alloc_metadata', alloc_metadata_test, suite: 'integration')
+
+display_baseline_flow_test = executable('test_display_baseline_flow',
+    ['test/integration/test_display_baseline_flow.c'],
+    kwargs: test_common_kwargs,
+)
+test('display_baseline_flow', display_baseline_flow_test, suite: 'integration')
 
 # ============================================================================
 # Unicode tests
