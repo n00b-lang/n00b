@@ -238,11 +238,28 @@ n00b_renderer_registry_init(void)
     n00b_renderer_register(r"ansi",   &n00b_renderer_ansi);
     n00b_renderer_register(r"dumb",   &n00b_renderer_dumb);
 
+    const n00b_renderer_vtable_t *gui_vtable = nullptr;
+
 #if defined(__APPLE__)
     n00b_renderer_register(r"cocoa", &n00b_renderer_cocoa);
+    gui_vtable = &n00b_renderer_cocoa;
+#endif
+
+#if defined(N00B_HAVE_X11)
+    n00b_renderer_register(r"x11", &n00b_renderer_x11);
+    if (!gui_vtable) {
+        gui_vtable = &n00b_renderer_x11;
+    }
 #endif
 
 #if defined(N00B_HAVE_NOTCURSES)
     n00b_renderer_register(r"notcurses", &n00b_renderer_notcurses);
 #endif
+
+    if (gui_vtable) {
+        // Portable GUI alias (actual window backend):
+        //   macOS -> cocoa
+        //   Linux/Unix -> x11
+        n00b_renderer_register(r"gui", gui_vtable);
+    }
 }

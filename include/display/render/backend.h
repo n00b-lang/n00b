@@ -200,3 +200,8 @@ extern const n00b_renderer_vtable_t n00b_renderer_cocoa;
 /** Notcurses backend with optional FreeType pixel rendering. */
 extern const n00b_renderer_vtable_t n00b_renderer_notcurses;
 #endif
+
+#if defined(N00B_HAVE_X11)
+/** Native X11 backend (Linux/Unix GUI window). */
+extern const n00b_renderer_vtable_t n00b_renderer_x11;
+#endif

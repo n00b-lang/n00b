@@ -116,7 +116,10 @@ extern n00b_result_t(n00b_renderer_vtable_ptr_t)
 /**
  * @brief Initialize the backend registry with built-in backends.
  *
- * Called automatically during `n00b_init()`.  Registers ansi, dumb,
- * and stream backends.
+ * Called automatically during `n00b_init()`. Registers `stream`,
+ * `ansi`, and `dumb`, plus platform backends (`cocoa` and/or
+ * `x11`/`notcurses`) when built. Also registers `gui` as a portable
+ * alias for a true windowed GUI backend: `cocoa` on macOS, `x11`
+ * on Linux/Unix when available.
  */
 extern void n00b_renderer_registry_init(void);

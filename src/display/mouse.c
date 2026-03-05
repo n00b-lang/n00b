@@ -28,10 +28,16 @@ plane_full_pixel_size(n00b_plane_t *plane,
                        int32_t cell_px_w, int32_t cell_px_h,
                        int32_t *out_w, int32_t *out_h)
 {
-    int32_t w = (int32_t)plane->width;  // Already pixels.
+    int32_t w = (int32_t)plane->width;  // Content size in pixels.
     int32_t h = (int32_t)plane->height;
 
-    if (plane->box) {
+    // When layout has run, bounds track the assigned outer size.
+    // Prefer them for hit-testing so border/padding footprint stays exact.
+    if (plane->bounds.width > 0 && plane->bounds.height > 0) {
+        w = plane->bounds.width;
+        h = plane->bounds.height;
+    }
+    else if (plane->box) {
         int32_t it, ib, il, ir;
         n00b_box_insets_px(plane->box, cell_px_w, cell_px_h,
                             &it, &ib, &il, &ir);

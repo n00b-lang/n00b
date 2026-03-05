@@ -1,0 +1,6 @@
+tool=display_gui_parity_report
+tool_version=1
+subset=focus_traversal,key_activation,mouse_press,resize,stop
+cocoa_built=0
+cocoa_smoke_available=0
+n00b_version=0.3.0
