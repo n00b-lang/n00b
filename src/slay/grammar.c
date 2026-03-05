@@ -579,6 +579,7 @@ n00b_group_match_v(n00b_grammar_t *g, int min, int max, int n, n00b_match_t *ite
     n00b_string_t *name = n00b_string_from_cstr(namebuf);
 
     n00b_nonterm_t *nt = n00b_nonterm(g, name);
+    n00b_nt_id_t    nt_id = n00b_nonterm_id(nt);
 
     nt->group_nt = true;
 
@@ -588,9 +589,10 @@ n00b_group_match_v(n00b_grammar_t *g, int min, int max, int n, n00b_match_t *ite
         n00b_list_push(match_items, items[i]);
     }
 
-    add_rule_internal(g, n00b_nonterm_id(nt), &match_items, 0, -1, NULL);
+    // Do NOT use `nt` after this — add_rule_internal can grow nt_list.
+    add_rule_internal(g, nt_id, &match_items, 0, -1, NULL);
 
-    group->contents_id = nt->id;
+    group->contents_id = nt_id;
 
     return (n00b_match_t){.kind = N00B_MATCH_GROUP, .group = group};
 }

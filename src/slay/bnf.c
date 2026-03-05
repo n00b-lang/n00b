@@ -1565,59 +1565,76 @@ build_bnf_grammar(void)
     n00b_nonterm(g, s_arg_list);
     n00b_nonterm(g, s_annot_arg);
 
-    // Re-fetch stable pointers.
-    n00b_nonterm_t *syntax      = n00b_nonterm(g, s_syntax);
-    n00b_nonterm_t *rule        = n00b_nonterm(g, s_rule);
-    n00b_nonterm_t *expression  = n00b_nonterm(g, s_expression);
-    n00b_nonterm_t *list        = n00b_nonterm(g, s_list);
-    n00b_nonterm_t *item        = n00b_nonterm(g, s_item);
-    n00b_nonterm_t *atom        = n00b_nonterm(g, s_atom);
-    n00b_nonterm_t *annotations = n00b_nonterm(g, s_annotations);
-    n00b_nonterm_t *annotation  = n00b_nonterm(g, s_annotation);
-    n00b_nonterm_t *arg_list    = n00b_nonterm(g, s_arg_list);
-    n00b_nonterm_t *annot_arg   = n00b_nonterm(g, s_annot_arg);
+    // Capture IDs — never hold n00b_nonterm_t * across grammar mutations,
+    // because n00b_add_rule can create error NTs which reallocate nt_list.
+    n00b_nt_id_t syntax_id      = n00b_nonterm_id(n00b_nonterm(g, s_syntax));
+    n00b_nt_id_t rule_id        = n00b_nonterm_id(n00b_nonterm(g, s_rule));
+    n00b_nt_id_t expression_id  = n00b_nonterm_id(n00b_nonterm(g, s_expression));
+    n00b_nt_id_t list_id        = n00b_nonterm_id(n00b_nonterm(g, s_list));
+    n00b_nt_id_t item_id        = n00b_nonterm_id(n00b_nonterm(g, s_item));
+    n00b_nt_id_t atom_id        = n00b_nonterm_id(n00b_nonterm(g, s_atom));
+    n00b_nt_id_t annotations_id = n00b_nonterm_id(n00b_nonterm(g, s_annotations));
+    n00b_nt_id_t annotation_id  = n00b_nonterm_id(n00b_nonterm(g, s_annotation));
+    n00b_nt_id_t arg_list_id    = n00b_nonterm_id(n00b_nonterm(g, s_arg_list));
+    n00b_nt_id_t annot_arg_id   = n00b_nonterm_id(n00b_nonterm(g, s_annot_arg));
 
-    n00b_grammar_set_start(g, syntax);
+#define NT(id) (n00b_match_t){.kind = N00B_MATCH_NT, .nt_id = (id)}
+
+    n00b_grammar_set_start_id(g, syntax_id);
 
     // syntax -> rule | rule syntax | NEWLINE syntax | NEWLINE
     //        | annotation NEWLINE syntax | annotation NEWLINE
-    n00b_add_rule(g, syntax, N00B_NT(rule));
-    n00b_add_rule(g, syntax, N00B_NT(rule), N00B_NT(syntax));
-    n00b_add_rule(g, syntax, N00B_TERMINAL(NEWLINE), N00B_NT(syntax));
-    n00b_add_rule(g, syntax, N00B_TERMINAL(NEWLINE));
-    n00b_add_rule(g, syntax, N00B_NT(annotation), N00B_TERMINAL(NEWLINE),
-                  N00B_NT(syntax));
-    n00b_add_rule(g, syntax, N00B_NT(annotation), N00B_TERMINAL(NEWLINE));
+    n00b_add_rule_v(g, syntax_id, 1,
+                     (n00b_match_t[]){NT(rule_id)});
+    n00b_add_rule_v(g, syntax_id, 2,
+                     (n00b_match_t[]){NT(rule_id), NT(syntax_id)});
+    n00b_add_rule_v(g, syntax_id, 2,
+                     (n00b_match_t[]){N00B_TERMINAL(NEWLINE), NT(syntax_id)});
+    n00b_add_rule_v(g, syntax_id, 1,
+                     (n00b_match_t[]){N00B_TERMINAL(NEWLINE)});
+    n00b_add_rule_v(g, syntax_id, 3,
+                     (n00b_match_t[]){NT(annotation_id), N00B_TERMINAL(NEWLINE),
+                                      NT(syntax_id)});
+    n00b_add_rule_v(g, syntax_id, 2,
+                     (n00b_match_t[]){NT(annotation_id), N00B_TERMINAL(NEWLINE)});
 
     // rule -> LANGLE NAME RANGLE annotations ASSIGN expression NEWLINE
     // Optional NEWLINE allowed after RANGLE (before annotations) and after ASSIGN.
-    n00b_add_rule(g, rule, N00B_TERMINAL(LANGLE), N00B_TERMINAL(NAME),
-                  N00B_TERMINAL(RANGLE), N00B_NT(annotations),
-                  N00B_TERMINAL(ASSIGN),
-                  N00B_NT(expression), N00B_TERMINAL(NEWLINE));
-    n00b_add_rule(g, rule, N00B_TERMINAL(LANGLE), N00B_TERMINAL(NAME),
-                  N00B_TERMINAL(RANGLE), N00B_NT(annotations),
-                  N00B_TERMINAL(ASSIGN), N00B_TERMINAL(NEWLINE),
-                  N00B_NT(expression), N00B_TERMINAL(NEWLINE));
-    n00b_add_rule(g, rule, N00B_TERMINAL(LANGLE), N00B_TERMINAL(NAME),
-                  N00B_TERMINAL(RANGLE), N00B_TERMINAL(NEWLINE),
-                  N00B_NT(annotations),
-                  N00B_TERMINAL(ASSIGN),
-                  N00B_NT(expression), N00B_TERMINAL(NEWLINE));
-    n00b_add_rule(g, rule, N00B_TERMINAL(LANGLE), N00B_TERMINAL(NAME),
-                  N00B_TERMINAL(RANGLE), N00B_TERMINAL(NEWLINE),
-                  N00B_NT(annotations),
-                  N00B_TERMINAL(ASSIGN), N00B_TERMINAL(NEWLINE),
-                  N00B_NT(expression), N00B_TERMINAL(NEWLINE));
+    n00b_add_rule_v(g, rule_id, 7,
+                     (n00b_match_t[]){N00B_TERMINAL(LANGLE), N00B_TERMINAL(NAME),
+                                      N00B_TERMINAL(RANGLE), NT(annotations_id),
+                                      N00B_TERMINAL(ASSIGN),
+                                      NT(expression_id), N00B_TERMINAL(NEWLINE)});
+    n00b_add_rule_v(g, rule_id, 8,
+                     (n00b_match_t[]){N00B_TERMINAL(LANGLE), N00B_TERMINAL(NAME),
+                                      N00B_TERMINAL(RANGLE), NT(annotations_id),
+                                      N00B_TERMINAL(ASSIGN), N00B_TERMINAL(NEWLINE),
+                                      NT(expression_id), N00B_TERMINAL(NEWLINE)});
+    n00b_add_rule_v(g, rule_id, 8,
+                     (n00b_match_t[]){N00B_TERMINAL(LANGLE), N00B_TERMINAL(NAME),
+                                      N00B_TERMINAL(RANGLE), N00B_TERMINAL(NEWLINE),
+                                      NT(annotations_id),
+                                      N00B_TERMINAL(ASSIGN),
+                                      NT(expression_id), N00B_TERMINAL(NEWLINE)});
+    n00b_add_rule_v(g, rule_id, 9,
+                     (n00b_match_t[]){N00B_TERMINAL(LANGLE), N00B_TERMINAL(NAME),
+                                      N00B_TERMINAL(RANGLE), N00B_TERMINAL(NEWLINE),
+                                      NT(annotations_id),
+                                      N00B_TERMINAL(ASSIGN), N00B_TERMINAL(NEWLINE),
+                                      NT(expression_id), N00B_TERMINAL(NEWLINE)});
 
     // expression -> list | list PIPE expression
-    n00b_add_rule(g, expression, N00B_NT(list));
-    n00b_add_rule(g, expression, N00B_NT(list), N00B_TERMINAL(PIPE),
-                  N00B_NT(expression));
+    n00b_add_rule_v(g, expression_id, 1,
+                     (n00b_match_t[]){NT(list_id)});
+    n00b_add_rule_v(g, expression_id, 3,
+                     (n00b_match_t[]){NT(list_id), N00B_TERMINAL(PIPE),
+                                      NT(expression_id)});
 
     // list -> item | item list
-    n00b_add_rule(g, list, N00B_NT(item));
-    n00b_add_rule(g, list, N00B_NT(item), N00B_NT(list));
+    n00b_add_rule_v(g, list_id, 1,
+                     (n00b_match_t[]){NT(item_id)});
+    n00b_add_rule_v(g, list_id, 2,
+                     (n00b_match_t[]){NT(item_id), NT(list_id)});
 
     // item -> atom                            (rule 0: pass-through)
     //       | atom QUESTION                   (rule 1: atom?)
@@ -1627,60 +1644,87 @@ build_bnf_grammar(void)
     //       | LPAREN expression RPAREN QUESTION           (rule 5: group?)
     //       | LPAREN expression RPAREN STAR               (rule 6: group*)
     //       | LPAREN expression RPAREN PLUS               (rule 7: group+)
-    n00b_add_rule(g, item, N00B_NT(atom));
-    n00b_add_rule(g, item, N00B_NT(atom), N00B_TERMINAL(QUESTION));
-    n00b_add_rule(g, item, N00B_NT(atom), N00B_TERMINAL(STAR));
-    n00b_add_rule(g, item, N00B_NT(atom), N00B_TERMINAL(PLUS_OP));
-    n00b_add_rule(g, item, N00B_TERMINAL(LPAREN), N00B_NT(expression),
-                  N00B_TERMINAL(RPAREN));
-    n00b_add_rule(g, item, N00B_TERMINAL(LPAREN), N00B_NT(expression),
-                  N00B_TERMINAL(RPAREN), N00B_TERMINAL(QUESTION));
-    n00b_add_rule(g, item, N00B_TERMINAL(LPAREN), N00B_NT(expression),
-                  N00B_TERMINAL(RPAREN), N00B_TERMINAL(STAR));
-    n00b_add_rule(g, item, N00B_TERMINAL(LPAREN), N00B_NT(expression),
-                  N00B_TERMINAL(RPAREN), N00B_TERMINAL(PLUS_OP));
+    n00b_add_rule_v(g, item_id, 1,
+                     (n00b_match_t[]){NT(atom_id)});
+    n00b_add_rule_v(g, item_id, 2,
+                     (n00b_match_t[]){NT(atom_id), N00B_TERMINAL(QUESTION)});
+    n00b_add_rule_v(g, item_id, 2,
+                     (n00b_match_t[]){NT(atom_id), N00B_TERMINAL(STAR)});
+    n00b_add_rule_v(g, item_id, 2,
+                     (n00b_match_t[]){NT(atom_id), N00B_TERMINAL(PLUS_OP)});
+    n00b_add_rule_v(g, item_id, 3,
+                     (n00b_match_t[]){N00B_TERMINAL(LPAREN), NT(expression_id),
+                                      N00B_TERMINAL(RPAREN)});
+    n00b_add_rule_v(g, item_id, 4,
+                     (n00b_match_t[]){N00B_TERMINAL(LPAREN), NT(expression_id),
+                                      N00B_TERMINAL(RPAREN), N00B_TERMINAL(QUESTION)});
+    n00b_add_rule_v(g, item_id, 4,
+                     (n00b_match_t[]){N00B_TERMINAL(LPAREN), NT(expression_id),
+                                      N00B_TERMINAL(RPAREN), N00B_TERMINAL(STAR)});
+    n00b_add_rule_v(g, item_id, 4,
+                     (n00b_match_t[]){N00B_TERMINAL(LPAREN), NT(expression_id),
+                                      N00B_TERMINAL(RPAREN), N00B_TERMINAL(PLUS_OP)});
 
     // atom -> LITERAL | LANGLE NAME RANGLE | CLASS | TOKEN_TYPE | TOKEN_LIT | EMPTY_LIT
-    n00b_add_rule(g, atom, N00B_TERMINAL(LITERAL));
-    n00b_add_rule(g, atom, N00B_TERMINAL(LANGLE), N00B_TERMINAL(NAME),
-                  N00B_TERMINAL(RANGLE));
-    n00b_add_rule(g, atom, N00B_TERMINAL(CLASS));
-    n00b_add_rule(g, atom, N00B_TERMINAL(TOKEN_TYPE));
-    n00b_add_rule(g, atom, N00B_TERMINAL(TOKEN_LIT));
-    n00b_add_rule(g, atom, N00B_TERMINAL(EMPTY_LIT));
+    n00b_add_rule_v(g, atom_id, 1,
+                     (n00b_match_t[]){N00B_TERMINAL(LITERAL)});
+    n00b_add_rule_v(g, atom_id, 3,
+                     (n00b_match_t[]){N00B_TERMINAL(LANGLE), N00B_TERMINAL(NAME),
+                                      N00B_TERMINAL(RANGLE)});
+    n00b_add_rule_v(g, atom_id, 1,
+                     (n00b_match_t[]){N00B_TERMINAL(CLASS)});
+    n00b_add_rule_v(g, atom_id, 1,
+                     (n00b_match_t[]){N00B_TERMINAL(TOKEN_TYPE)});
+    n00b_add_rule_v(g, atom_id, 1,
+                     (n00b_match_t[]){N00B_TERMINAL(TOKEN_LIT)});
+    n00b_add_rule_v(g, atom_id, 1,
+                     (n00b_match_t[]){N00B_TERMINAL(EMPTY_LIT)});
 
     // annotations -> "" | annotation annotations
-    n00b_add_rule(g, annotations, N00B_EPSILON());
-    n00b_add_rule(g, annotations, N00B_NT(annotation), N00B_NT(annotations));
+    n00b_add_rule_v(g, annotations_id, 1,
+                     (n00b_match_t[]){N00B_EPSILON()});
+    n00b_add_rule_v(g, annotations_id, 2,
+                     (n00b_match_t[]){NT(annotation_id), NT(annotations_id)});
 
     // annotation -> AT NAME LPAREN arg-list RPAREN | AT NAME
-    n00b_add_rule(g, annotation, N00B_TERMINAL(AT), N00B_TERMINAL(NAME),
-                  N00B_TERMINAL(LPAREN), N00B_NT(arg_list),
-                  N00B_TERMINAL(RPAREN));
-    n00b_add_rule(g, annotation, N00B_TERMINAL(AT), N00B_TERMINAL(NAME));
+    n00b_add_rule_v(g, annotation_id, 5,
+                     (n00b_match_t[]){N00B_TERMINAL(AT), N00B_TERMINAL(NAME),
+                                      N00B_TERMINAL(LPAREN), NT(arg_list_id),
+                                      N00B_TERMINAL(RPAREN)});
+    n00b_add_rule_v(g, annotation_id, 2,
+                     (n00b_match_t[]){N00B_TERMINAL(AT), N00B_TERMINAL(NAME)});
 
     // arg-list -> annot-arg | annot-arg COMMA arg-list
-    n00b_add_rule(g, arg_list, N00B_NT(annot_arg));
-    n00b_add_rule(g, arg_list, N00B_NT(annot_arg), N00B_TERMINAL(COMMA),
-                  N00B_NT(arg_list));
+    n00b_add_rule_v(g, arg_list_id, 1,
+                     (n00b_match_t[]){NT(annot_arg_id)});
+    n00b_add_rule_v(g, arg_list_id, 3,
+                     (n00b_match_t[]){NT(annot_arg_id), N00B_TERMINAL(COMMA),
+                                      NT(arg_list_id)});
 
     // annot-arg -> LITERAL | DOLLAR | NAME | EMPTY_LIT
-    n00b_add_rule(g, annot_arg, N00B_TERMINAL(LITERAL));
-    n00b_add_rule(g, annot_arg, N00B_TERMINAL(DOLLAR));
-    n00b_add_rule(g, annot_arg, N00B_TERMINAL(NAME));
-    n00b_add_rule(g, annot_arg, N00B_TERMINAL(EMPTY_LIT));
+    n00b_add_rule_v(g, annot_arg_id, 1,
+                     (n00b_match_t[]){N00B_TERMINAL(LITERAL)});
+    n00b_add_rule_v(g, annot_arg_id, 1,
+                     (n00b_match_t[]){N00B_TERMINAL(DOLLAR)});
+    n00b_add_rule_v(g, annot_arg_id, 1,
+                     (n00b_match_t[]){N00B_TERMINAL(NAME)});
+    n00b_add_rule_v(g, annot_arg_id, 1,
+                     (n00b_match_t[]){N00B_TERMINAL(EMPTY_LIT)});
 
-    // Set walk actions.
-    n00b_nonterm_set_action(syntax, bnf_walk_syntax);
-    n00b_nonterm_set_action(rule, bnf_walk_rule);
-    n00b_nonterm_set_action(expression, bnf_walk_expression);
-    n00b_nonterm_set_action(list, bnf_walk_list);
-    n00b_nonterm_set_action(item, bnf_walk_item);
-    n00b_nonterm_set_action(atom, bnf_walk_atom);
-    n00b_nonterm_set_action(annotations, bnf_walk_annotations);
-    n00b_nonterm_set_action(annotation, bnf_walk_annotation);
-    n00b_nonterm_set_action(arg_list, bnf_walk_arg_list);
-    n00b_nonterm_set_action(annot_arg, bnf_walk_annot_arg);
+#undef NT
+
+    // Set walk actions — use n00b_get_nonterm for fresh pointers
+    // (safe since no further grammar mutations follow).
+    n00b_nonterm_set_action(n00b_get_nonterm(g, syntax_id), bnf_walk_syntax);
+    n00b_nonterm_set_action(n00b_get_nonterm(g, rule_id), bnf_walk_rule);
+    n00b_nonterm_set_action(n00b_get_nonterm(g, expression_id), bnf_walk_expression);
+    n00b_nonterm_set_action(n00b_get_nonterm(g, list_id), bnf_walk_list);
+    n00b_nonterm_set_action(n00b_get_nonterm(g, item_id), bnf_walk_item);
+    n00b_nonterm_set_action(n00b_get_nonterm(g, atom_id), bnf_walk_atom);
+    n00b_nonterm_set_action(n00b_get_nonterm(g, annotations_id), bnf_walk_annotations);
+    n00b_nonterm_set_action(n00b_get_nonterm(g, annotation_id), bnf_walk_annotation);
+    n00b_nonterm_set_action(n00b_get_nonterm(g, arg_list_id), bnf_walk_arg_list);
+    n00b_nonterm_set_action(n00b_get_nonterm(g, annot_arg_id), bnf_walk_annot_arg);
 
     return g;
 }
@@ -2173,8 +2217,8 @@ populate_grammar(n00b_grammar_t *user_g, bnf_result_t *result,
         return false;
     }
 
-    n00b_nonterm_t *start_nt = n00b_nonterm(user_g, start_s);
-    n00b_grammar_set_start(user_g, start_nt);
+    n00b_grammar_set_start_id(user_g,
+        n00b_nonterm_id(n00b_nonterm(user_g, start_s)));
 
     // Second pass: create rules.
     for (size_t i = 0; i < pairs->len; i++) {

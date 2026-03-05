@@ -341,15 +341,17 @@ cmdr_register_command_terminals(n00b_cmdr_t *c, n00b_cmdr_command_t *cmd)
     }
 }
 
-static n00b_nonterm_t *
+static n00b_nt_id_t
 cmdr_build_flag_nt(n00b_cmdr_t *c, n00b_cmdr_flag_spec_t f,
                     const char *prefix)
 {
     char nt_name[256];
     snprintf(nt_name, sizeof(nt_name), "%s-flag-%s", prefix, f.name->data);
 
-    n00b_nonterm_t *nt = n00b_nonterm(c->grammar,
-                                       n00b_string_from_cstr(nt_name));
+    // Capture ID immediately — n00b_add_rule can reallocate nt_list,
+    // invalidating any n00b_nonterm_t * pointer.
+    n00b_nt_id_t nt_id = n00b_nonterm_id(
+        n00b_nonterm(c->grammar, n00b_string_from_cstr(nt_name)));
 
     int64_t flag_tid = f.terminal_id;
     int64_t eq_tid   = c->tok_ids[N00B_CMDR_TID_EQ];
@@ -360,48 +362,67 @@ cmdr_build_flag_nt(n00b_cmdr_t *c, n00b_cmdr_flag_spec_t f,
 
     if (f.takes_value) {
         // flag = value
-        n00b_add_rule(c->grammar, nt,
-                       N00B_TERMINAL(flag_tid),
-                       N00B_TERMINAL(eq_tid),
-                       N00B_TERMINAL(word_tid));
+        n00b_add_rule_v(c->grammar, nt_id, 3,
+                         (n00b_match_t[]){
+                             N00B_TERMINAL(flag_tid),
+                             N00B_TERMINAL(eq_tid),
+                             N00B_TERMINAL(word_tid),
+                         });
 
         if (f.has_short) {
             int64_t short_tid = n00b_register_terminal(c->grammar,
                                                         f.short_name);
-            n00b_add_rule(c->grammar, nt,
-                           N00B_TERMINAL(short_tid),
-                           N00B_TERMINAL(eq_tid),
-                           N00B_TERMINAL(word_tid));
-            n00b_add_rule(c->grammar, nt,
-                           N00B_TERMINAL(short_tid),
-                           N00B_TERMINAL(word_tid));
+            n00b_add_rule_v(c->grammar, nt_id, 3,
+                             (n00b_match_t[]){
+                                 N00B_TERMINAL(short_tid),
+                                 N00B_TERMINAL(eq_tid),
+                                 N00B_TERMINAL(word_tid),
+                             });
+            n00b_add_rule_v(c->grammar, nt_id, 2,
+                             (n00b_match_t[]){
+                                 N00B_TERMINAL(short_tid),
+                                 N00B_TERMINAL(word_tid),
+                             });
         }
 
         // long flag with space separator
-        n00b_add_rule(c->grammar, nt,
-                       N00B_TERMINAL(flag_tid),
-                       N00B_TERMINAL(word_tid));
+        n00b_add_rule_v(c->grammar, nt_id, 2,
+                         (n00b_match_t[]){
+                             N00B_TERMINAL(flag_tid),
+                             N00B_TERMINAL(word_tid),
+                         });
 
         // Also accept int/float/bool tokens as values
-        n00b_add_rule(c->grammar, nt,
-                       N00B_TERMINAL(flag_tid), N00B_TERMINAL(int_tid));
-        n00b_add_rule(c->grammar, nt,
-                       N00B_TERMINAL(flag_tid), N00B_TERMINAL(flt_tid));
-        n00b_add_rule(c->grammar, nt,
-                       N00B_TERMINAL(flag_tid), N00B_TERMINAL(bool_tid));
+        n00b_add_rule_v(c->grammar, nt_id, 2,
+                         (n00b_match_t[]){
+                             N00B_TERMINAL(flag_tid),
+                             N00B_TERMINAL(int_tid),
+                         });
+        n00b_add_rule_v(c->grammar, nt_id, 2,
+                         (n00b_match_t[]){
+                             N00B_TERMINAL(flag_tid),
+                             N00B_TERMINAL(flt_tid),
+                         });
+        n00b_add_rule_v(c->grammar, nt_id, 2,
+                         (n00b_match_t[]){
+                             N00B_TERMINAL(flag_tid),
+                             N00B_TERMINAL(bool_tid),
+                         });
     }
     else {
         // Boolean flag (no value)
-        n00b_add_rule(c->grammar, nt, N00B_TERMINAL(flag_tid));
+        n00b_add_rule_v(c->grammar, nt_id, 1,
+                         (n00b_match_t[]){N00B_TERMINAL(flag_tid)});
 
         if (f.has_short) {
             int64_t short_tid = n00b_register_terminal(c->grammar,
                                                         f.short_name);
-            n00b_add_rule(c->grammar, nt, N00B_TERMINAL(short_tid));
+            n00b_add_rule_v(c->grammar, nt_id, 1,
+                             (n00b_match_t[]){N00B_TERMINAL(short_tid)});
         }
     }
 
-    return nt;
+    return nt_id;
 }
 
 static n00b_nt_id_t
@@ -411,9 +432,8 @@ cmdr_build_items_nt(n00b_cmdr_t *c, n00b_cmdr_command_t *cmd,
     char nt_name[256];
     snprintf(nt_name, sizeof(nt_name), "%s-items", prefix);
 
-    n00b_nonterm_t *items    = n00b_nonterm(c->grammar,
-                                             n00b_string_from_cstr(nt_name));
-    n00b_nt_id_t    items_id = n00b_nonterm_id(items);
+    n00b_nt_id_t items_id = n00b_nonterm_id(
+        n00b_nonterm(c->grammar, n00b_string_from_cstr(nt_name)));
 
     // items -> ""
     n00b_add_rule_v(c->grammar, items_id, 1,
@@ -424,8 +444,7 @@ cmdr_build_items_nt(n00b_cmdr_t *c, n00b_cmdr_command_t *cmd,
 
     for (int32_t i = 0; i < n_flags; i++) {
         n00b_cmdr_flag_spec_t f = n00b_list_get(cmd->flags, i);
-        n00b_nonterm_t *fnt = cmdr_build_flag_nt(c, f, prefix);
-        n00b_nt_id_t fnt_id = n00b_nonterm_id(fnt);
+        n00b_nt_id_t fnt_id = cmdr_build_flag_nt(c, f, prefix);
 
         n00b_add_rule_v(c->grammar, items_id, 2,
                          (n00b_match_t[]){
@@ -440,8 +459,7 @@ cmdr_build_items_nt(n00b_cmdr_t *c, n00b_cmdr_command_t *cmd,
 
         for (int32_t i = 0; i < n_root; i++) {
             n00b_cmdr_flag_spec_t f = n00b_list_get(c->root.flags, i);
-            n00b_nonterm_t *fnt = cmdr_build_flag_nt(c, f, prefix);
-            n00b_nt_id_t fnt_id = n00b_nonterm_id(fnt);
+            n00b_nt_id_t fnt_id = cmdr_build_flag_nt(c, f, prefix);
 
             n00b_add_rule_v(c->grammar, items_id, 2,
                              (n00b_match_t[]){
@@ -575,9 +593,9 @@ n00b_cmdr_finalize(n00b_cmdr_t *c)
     // Build grammar.  Save the start NT's id — not a pointer —
     // since building subcommand grammars will grow nt_list and
     // invalidate pointers into it.
-    n00b_nonterm_t *start    = n00b_nonterm(c->grammar, r"cmd");
-    n00b_nt_id_t    start_id = n00b_nonterm_id(start);
-    n00b_grammar_set_start(c->grammar, start);
+    n00b_nt_id_t start_id = n00b_nonterm_id(
+        n00b_nonterm(c->grammar, r"cmd"));
+    n00b_grammar_set_start_id(c->grammar, start_id);
 
     if (n_subs > 0) {
         for (int32_t i = 0; i < n_subs; i++) {

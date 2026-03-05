@@ -2,6 +2,7 @@
 
 #include "core/alloc.h"
 #include "core/string.h"
+#include "adt/list.h"
 #include "adt/option.h"
 
 #include <ctype.h>
@@ -171,37 +172,10 @@ cmdr_classify_word(n00b_cmdr_t *c, const char *s)
 }
 
 // ============================================================================
-// Token array management
+// Token list type
 // ============================================================================
 
-typedef struct {
-    n00b_token_info_t **tokens;
-    int32_t             len;
-    int32_t             cap;
-} cmdr_token_list_t;
-
-static void
-cmdr_tok_list_init(cmdr_token_list_t *tl)
-{
-    tl->cap    = 32;
-    tl->len    = 0;
-    tl->tokens = n00b_alloc_array(n00b_token_info_t *, 32);
-}
-
-static void
-cmdr_tok_list_push(cmdr_token_list_t *tl, n00b_token_info_t *tok)
-{
-    if (tl->len >= tl->cap) {
-        int32_t new_cap = tl->cap * 2;
-        n00b_token_info_t **new_arr = n00b_alloc_array(n00b_token_info_t *, new_cap);
-        memcpy(new_arr, tl->tokens, tl->len * sizeof(n00b_token_info_t *));
-        n00b_free(tl->tokens);
-        tl->tokens = new_arr;
-        tl->cap    = new_cap;
-    }
-
-    tl->tokens[tl->len++] = tok;
-}
+typedef n00b_token_info_t *n00b_token_info_ptr_t;
 
 static n00b_token_info_t *
 cmdr_make_token(const char *value, int64_t tid, int32_t index)
@@ -235,8 +209,8 @@ n00b_cmdr_tokenize(const char **argv, int argc,
         return -1;
     }
 
-    cmdr_token_list_t tl;
-    cmdr_tok_list_init(&tl);
+    n00b_list_t(n00b_token_info_ptr_t) tl
+        = n00b_list_new_private(n00b_token_info_ptr_t);
 
     bool past_dd = false;
 
@@ -250,7 +224,7 @@ n00b_cmdr_tokenize(const char **argv, int argc,
         // -- means end of flags
         if (!past_dd && strcmp(arg, "--") == 0) {
             past_dd = true;
-            cmdr_tok_list_push(&tl,
+            n00b_list_push(tl,
                                cmdr_make_token("--",
                                                c->tok_ids[N00B_CMDR_TID_DD],
                                                tl.len));
@@ -259,7 +233,7 @@ n00b_cmdr_tokenize(const char **argv, int argc,
 
         // After --, everything is a word
         if (past_dd) {
-            cmdr_tok_list_push(&tl,
+            n00b_list_push(tl,
                                cmdr_make_token(arg,
                                                cmdr_classify_word(c, arg),
                                                tl.len));
@@ -281,17 +255,17 @@ n00b_cmdr_tokenize(const char **argv, int argc,
                     ftid = c->tok_ids[N00B_CMDR_TID_FLAG];
                 }
 
-                cmdr_tok_list_push(&tl,
+                n00b_list_push(tl,
                                    cmdr_make_token(flag_name, ftid, tl.len));
                 n00b_free(flag_name);
 
-                cmdr_tok_list_push(&tl,
+                n00b_list_push(tl,
                                    cmdr_make_token("=",
                                                    c->tok_ids[N00B_CMDR_TID_EQ],
                                                    tl.len));
 
                 const char *val = eq + 1;
-                cmdr_tok_list_push(&tl,
+                n00b_list_push(tl,
                                    cmdr_make_token(val,
                                                    cmdr_classify_word(c, val),
                                                    tl.len));
@@ -303,7 +277,7 @@ n00b_cmdr_tokenize(const char **argv, int argc,
                     ftid = c->tok_ids[N00B_CMDR_TID_FLAG];
                 }
 
-                cmdr_tok_list_push(&tl,
+                n00b_list_push(tl,
                                    cmdr_make_token(arg, ftid, tl.len));
             }
 
@@ -317,7 +291,7 @@ n00b_cmdr_tokenize(const char **argv, int argc,
             int64_t ftid = cmdr_find_flag_tid(c, arg);
 
             if (ftid) {
-                cmdr_tok_list_push(&tl,
+                n00b_list_push(tl,
                                    cmdr_make_token(arg, ftid, tl.len));
                 continue;
             }
@@ -344,13 +318,13 @@ n00b_cmdr_tokenize(const char **argv, int argc,
                 for (int j = 1; arg[j]; j++) {
                     char    short_flag[3] = {'-', arg[j], '\0'};
                     int64_t stid = cmdr_find_flag_tid(c, short_flag);
-                    cmdr_tok_list_push(&tl,
+                    n00b_list_push(tl,
                                        cmdr_make_token(short_flag, stid,
                                                        tl.len));
                 }
             }
             else {
-                cmdr_tok_list_push(&tl,
+                n00b_list_push(tl,
                                    cmdr_make_token(arg,
                                                    c->tok_ids[N00B_CMDR_TID_FLAG],
                                                    tl.len));
@@ -378,14 +352,14 @@ n00b_cmdr_tokenize(const char **argv, int argc,
             }
         }
 
-        cmdr_tok_list_push(&tl, cmdr_make_token(arg, tid, tl.len));
+        n00b_list_push(tl, cmdr_make_token(arg, tid, tl.len));
     }
 
     // Add EOF
-    cmdr_tok_list_push(&tl, cmdr_make_token("", N00B_TOK_EOF, tl.len));
+    n00b_list_push(tl, cmdr_make_token("", N00B_TOK_EOF, tl.len));
 
-    *tokens_out   = tl.tokens;
-    *n_tokens_out = tl.len;
+    *tokens_out   = tl.data;
+    *n_tokens_out = (int32_t)tl.len;
 
     return 0;
 }

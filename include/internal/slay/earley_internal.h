@@ -167,12 +167,8 @@ struct n00b_earley_parser_t {
     int32_t virt_items_cap;
 
     // Tree construction intermediates
-    void  **tree_nb_infos;
-    int32_t tree_nb_infos_len;
-    int32_t tree_nb_infos_cap;
-    void  **tree_ptrlists;
-    int32_t tree_ptrlists_len;
-    int32_t tree_ptrlists_cap;
+    n00b_list_t(void *) tree_nb_infos;
+    n00b_list_t(void *) tree_ptrlists;
 
 };
 

@@ -10,33 +10,28 @@
 #include "internal/slay/grammar_internal.h"
 #include "parsers/token_stream.h"
 #include "core/alloc.h"
+#include "adt/list.h"
 
 #include <assert.h>
 #include <stdlib.h>
 #include <string.h>
 
 // ============================================================================
-// Simple dynamic pointer list for tree construction intermediates
+// Pointer list type — thin wrapper around n00b_list_t(void*)
 // ============================================================================
 
-typedef struct {
-    void **data;
-    size_t len;
-    size_t cap;
-} ptrlist_t;
+typedef n00b_list_t(void *) ptrlist_raw_t;
 
-static inline void
-ptrlist_init(ptrlist_t *l)
-{
-    *l = (ptrlist_t){0};
-}
+typedef struct {
+    ptrlist_raw_t list;
+} ptrlist_t;
 
 static inline ptrlist_t *
 ptrlist_new(void)
 {
     ptrlist_t *l = n00b_alloc(ptrlist_t);
 
-    ptrlist_init(l);
+    l->list = n00b_list_new_private(void *);
 
     return l;
 }
@@ -44,46 +39,33 @@ ptrlist_new(void)
 static inline void
 ptrlist_push(ptrlist_t *l, void *item)
 {
-    if (l->len >= l->cap) {
-        size_t new_cap = l->cap ? l->cap * 2 : 8;
-        void **new_data = n00b_alloc_array(void *, new_cap);
-
-        if (l->len > 0) {
-            memcpy(new_data, l->data, l->len * sizeof(void *));
-        }
-
-        n00b_free(l->data);
-        l->data = new_data;
-        l->cap  = new_cap;
-    }
-
-    l->data[l->len++] = item;
+    n00b_list_push(l->list, item);
 }
 
 static inline void *
 ptrlist_get(ptrlist_t *l, size_t i)
 {
-    if (!l || i >= l->len) {
+    if (!l || i >= l->list.len) {
         return NULL;
     }
 
-    return l->data[i];
+    return n00b_list_get(l->list, i);
 }
 
 static inline void
 ptrlist_set(ptrlist_t *l, size_t i, void *val)
 {
-    if (i >= l->len) {
+    if (i >= l->list.len) {
         return;
     }
 
-    l->data[i] = val;
+    n00b_list_set(l->list, i, val);
 }
 
 static inline size_t
 ptrlist_len(ptrlist_t *l)
 {
-    return l ? l->len : 0;
+    return l ? l->list.len : 0;
 }
 
 static inline ptrlist_t *
@@ -91,14 +73,12 @@ ptrlist_copy(ptrlist_t *src)
 {
     ptrlist_t *dst = ptrlist_new();
 
-    if (!src || src->len == 0) {
+    if (!src || src->list.len == 0) {
         return dst;
     }
 
-    dst->data = n00b_alloc_array(void *, src->cap);
-    memcpy(dst->data, src->data, src->len * sizeof(void *));
-    dst->len = src->len;
-    dst->cap = src->cap;
+    n00b_list_free(dst->list);
+    dst->list = n00b_list_clone(src->list);
 
     return dst;
 }
@@ -107,7 +87,7 @@ static inline void
 ptrlist_free(ptrlist_t *l)
 {
     if (l) {
-        n00b_free(l->data);
+        n00b_list_free(l->list);
         n00b_free(l);
     }
 }
@@ -115,13 +95,11 @@ ptrlist_free(ptrlist_t *l)
 static inline void
 ptrlist_extend(ptrlist_t *dst, ptrlist_t *src)
 {
-    if (!src) {
+    if (!src || src->list.len == 0) {
         return;
     }
 
-    for (size_t i = 0; i < src->len; i++) {
-        ptrlist_push(dst, src->data[i]);
-    }
+    n00b_list_insert_list(dst->list, dst->list.len, src->list);
 }
 
 // ============================================================================
@@ -159,21 +137,11 @@ track_nb_info(n00b_earley_parser_t *p, void *ptr)
         return;
     }
 
-    if (p->tree_nb_infos_len >= p->tree_nb_infos_cap) {
-        int32_t new_cap = p->tree_nb_infos_cap ? p->tree_nb_infos_cap * 2 : 256;
-        void  **new_buf = n00b_alloc_array(void *, new_cap);
-
-        if (p->tree_nb_infos_len > 0) {
-            memcpy(new_buf, p->tree_nb_infos,
-                   (size_t)p->tree_nb_infos_len * sizeof(void *));
-        }
-
-        n00b_free(p->tree_nb_infos);
-        p->tree_nb_infos     = new_buf;
-        p->tree_nb_infos_cap = new_cap;
+    if (!p->tree_nb_infos.data) {
+        p->tree_nb_infos = n00b_list_new_private(void *);
     }
 
-    p->tree_nb_infos[p->tree_nb_infos_len++] = ptr;
+    n00b_list_push(p->tree_nb_infos, ptr);
 }
 
 static inline void
@@ -183,21 +151,11 @@ track_ptrlist(n00b_earley_parser_t *p, ptrlist_t *pl)
         return;
     }
 
-    if (p->tree_ptrlists_len >= p->tree_ptrlists_cap) {
-        int32_t new_cap = p->tree_ptrlists_cap ? p->tree_ptrlists_cap * 2 : 256;
-        void  **new_buf = n00b_alloc_array(void *, new_cap);
-
-        if (p->tree_ptrlists_len > 0) {
-            memcpy(new_buf, p->tree_ptrlists,
-                   (size_t)p->tree_ptrlists_len * sizeof(void *));
-        }
-
-        n00b_free(p->tree_ptrlists);
-        p->tree_ptrlists     = new_buf;
-        p->tree_ptrlists_cap = new_cap;
+    if (!p->tree_ptrlists.data) {
+        p->tree_ptrlists = n00b_list_new_private(void *);
     }
 
-    p->tree_ptrlists[p->tree_ptrlists_len++] = pl;
+    n00b_list_push(p->tree_ptrlists, pl);
 }
 
 // ============================================================================
@@ -328,13 +286,7 @@ item_cmp(const void *a, const void *b)
 static void
 sort_items(ptrlist_t *l)
 {
-    size_t n = ptrlist_len(l);
-
-    if (n < 2) {
-        return;
-    }
-
-    qsort(l->data, n, sizeof(void *), item_cmp);
+    n00b_list_sort(l->list, item_cmp);
 }
 
 // ============================================================================
@@ -471,11 +423,11 @@ sort_trees(ptrlist_t *l, n00b_tree_disambig_fn_t cmp)
         size_t             j   = i;
 
         while (j > 0 && cmp(ptrlist_get(l, j - 1), key) > 0) {
-            l->data[j] = l->data[j - 1];
+            l->list.data[j] = l->list.data[j - 1];
             j--;
         }
 
-        l->data[j] = key;
+        l->list.data[j] = key;
     }
 }
 
@@ -1303,133 +1255,61 @@ typedef struct {
     int32_t pivot;
 } bsr_pair_t;
 
-typedef struct {
-    uint64_t    key;
-    bsr_pair_t *pairs;
-    int32_t     count;
-    int32_t     cap;
-} bsr_bucket_t;
-
-typedef struct {
-    bsr_bucket_t *buckets;
-    int32_t       cap;
-    int32_t       len;
-} bsr_index_t;
+typedef n00b_list_t(bsr_pair_t) bsr_pair_list_t;
+typedef bsr_pair_list_t *bsr_pair_list_ptr_t;
+typedef n00b_dict_t(uint64_t, bsr_pair_list_ptr_t) bsr_index_t;
 
 static void
-bsr_index_init(bsr_index_t *idx, int32_t hint)
+bsr_index_init(bsr_index_t *idx)
 {
-    idx->cap     = hint < 16 ? 16 : hint;
-    idx->len     = 0;
-    idx->buckets = n00b_alloc_array(bsr_bucket_t, idx->cap);
+    n00b_dict_init(idx, .hash = n00b_hash_word, .skip_obj_hash = true);
 }
 
 static void
 bsr_index_free(bsr_index_t *idx)
 {
-    for (int32_t i = 0; i < idx->cap; i++) {
-        n00b_free(idx->buckets[i].pairs);
-    }
-
-    n00b_free(idx->buckets);
+    n00b_dict_foreach(idx, k, v, {
+        (void)k;
+        if (v) {
+            n00b_list_free(*v);
+            n00b_free(v);
+        }
+    });
 }
 
-static bsr_bucket_t *
+static bsr_pair_list_t *
 bsr_index_find(bsr_index_t *idx, uint64_t key)
 {
-    uint64_t h  = key * 0x9e3779b97f4a7c15ULL;
-    int32_t  ix = (int32_t)(h % (uint64_t)idx->cap);
+    bool                 found = false;
+    bsr_pair_list_ptr_t  val   = n00b_dict_get(idx, key, &found);
 
-    for (int32_t i = 0; i < idx->cap; i++) {
-        int32_t       slot = (ix + i) % idx->cap;
-        bsr_bucket_t *b    = &idx->buckets[slot];
-
-        if (b->count == 0 && b->pairs == NULL) {
-            return NULL;
-        }
-
-        if (b->key == key) {
-            return b;
-        }
-    }
-
-    return NULL;
+    return found ? val : NULL;
 }
 
 static void
 bsr_index_insert(bsr_index_t *idx, int32_t slot, int32_t right,
                  int32_t left, int32_t pivot)
 {
-    // Grow if > 70% full.
-    if (idx->len * 10 > idx->cap * 7) {
-        int32_t       old_cap     = idx->cap;
-        bsr_bucket_t *old_buckets = idx->buckets;
-        int32_t       new_cap     = old_cap * 2;
-
-        idx->buckets = n00b_alloc_array(bsr_bucket_t, new_cap);
-        idx->cap     = new_cap;
-        idx->len     = 0;
-
-        for (int32_t i = 0; i < old_cap; i++) {
-            bsr_bucket_t *ob = &old_buckets[i];
-
-            if (ob->count > 0) {
-                for (int32_t j = 0; j < ob->count; j++) {
-                    int32_t s = (int32_t)(ob->key >> 32);
-                    int32_t r = (int32_t)(ob->key & 0xFFFFFFFF);
-
-                    bsr_index_insert(idx, s, r,
-                                     ob->pairs[j].left,
-                                     ob->pairs[j].pivot);
-                }
-
-                n00b_free(ob->pairs);
-            }
-        }
-
-        n00b_free(old_buckets);
-    }
-
     uint64_t key = ((uint64_t)(uint32_t)slot << 32) | (uint64_t)(uint32_t)right;
-    uint64_t h   = key * 0x9e3779b97f4a7c15ULL;
-    int32_t  ix  = (int32_t)(h % (uint64_t)idx->cap);
 
-    for (int32_t i = 0; i < idx->cap; i++) {
-        int32_t       si = (ix + i) % idx->cap;
-        bsr_bucket_t *b  = &idx->buckets[si];
+    bool                found    = false;
+    bsr_pair_list_ptr_t existing = n00b_dict_get(idx, key, &found);
 
-        if (b->count == 0 && b->pairs == NULL) {
-            b->key      = key;
-            b->cap      = 4;
-            b->pairs    = n00b_alloc_array(bsr_pair_t, 4);
-            b->pairs[0] = (bsr_pair_t){ left, pivot };
-            b->count    = 1;
-            idx->len++;
-            return;
-        }
-
-        if (b->key == key) {
-            if (b->count >= b->cap) {
-                int32_t     new_c = b->cap * 2;
-                bsr_pair_t *nb    = n00b_alloc_array(bsr_pair_t, new_c);
-
-                memcpy(nb, b->pairs,
-                       (size_t)b->count * sizeof(bsr_pair_t));
-                n00b_free(b->pairs);
-                b->pairs = nb;
-                b->cap   = new_c;
-            }
-
-            b->pairs[b->count++] = (bsr_pair_t){ left, pivot };
-            return;
-        }
+    if (found && existing) {
+        n00b_list_push(*existing, ((bsr_pair_t){ left, pivot }));
+    }
+    else {
+        bsr_pair_list_ptr_t new_list = n00b_alloc(bsr_pair_list_t);
+        *new_list = n00b_list_new_private(bsr_pair_t);
+        n00b_list_push(*new_list, ((bsr_pair_t){ left, pivot }));
+        n00b_dict_put(idx, key, new_list);
     }
 }
 
 static void
 bsr_build_index(n00b_earley_parser_t *p, bsr_index_t *idx)
 {
-    bsr_index_init(idx, p->bsr_count * 2);
+    bsr_index_init(idx);
 
     for (int32_t i = 0; i < p->bsr_count; i++) {
         n00b_bsr_element_t *e = &p->bsr_set[i];
@@ -1439,96 +1319,75 @@ bsr_build_index(n00b_earley_parser_t *p, bsr_index_t *idx)
     }
 }
 
-// BSR memoization entry: caches completed (nt, left, right) results.
-// A NULL result pointer means "currently being computed" (cycle guard).
-// A non-NULL result pointer is the cached tree list.
-typedef struct bsr_memo_entry_t {
-    int64_t                  nt_id;
-    int32_t                  left;
-    int32_t                  right;
-    ptrlist_t               *result;   // NULL = in-progress, non-NULL = done
-    struct bsr_memo_entry_t *next;
-} bsr_memo_entry_t;
+// BSR memoization: maps packed (nt_id, left, right) → ptrlist_t*.
+// A NULL value after n00b_dict_contains() == true means "in-progress" (cycle).
+// A non-NULL value is the cached tree list.
 
-typedef struct {
-    bsr_memo_entry_t **buckets;
-    int32_t            cap;
-} bsr_memo_t;
+typedef ptrlist_t *ptrlist_ptr_t;
+typedef n00b_dict_t(uint64_t, ptrlist_ptr_t) bsr_memo_t;
 
 static void
-bsr_memo_init(bsr_memo_t *m, int32_t cap)
+bsr_memo_init(bsr_memo_t *m)
 {
-    m->buckets = n00b_alloc_array(bsr_memo_entry_t *, cap);
-    m->cap     = cap;
+    n00b_dict_init(m, .hash = n00b_hash_word, .skip_obj_hash = true);
 }
 
-static uint32_t
-bsr_memo_hash(int64_t nt_id, int32_t left, int32_t right)
+static uint64_t
+bsr_memo_key(int64_t nt_id, int32_t left, int32_t right)
 {
     uint64_t k = ((uint64_t)(uint32_t)nt_id * 2654435761ULL)
                ^ ((uint64_t)(uint32_t)left * 40499ULL)
                ^ ((uint64_t)(uint32_t)right);
     k = (k ^ (k >> 16)) * 0x45d9f3b;
-    return (uint32_t)(k & 0xFFFFFFFF);
+    return k;
 }
 
-// Returns: NULL if not found, entry if found.
-// If entry->result is NULL, it's currently being computed (cycle).
-static bsr_memo_entry_t *
-bsr_memo_find(bsr_memo_t *m, int64_t nt_id, int32_t left, int32_t right)
+// Returns: -1 if not found, 0 if in-progress (cycle), 1 if result is ready.
+// When returning 1, *out is set to the cached result.
+static int
+bsr_memo_find(bsr_memo_t *m, int64_t nt_id, int32_t left, int32_t right,
+              ptrlist_t **out)
 {
-    uint32_t          h   = bsr_memo_hash(nt_id, left, right);
-    int32_t           idx = (int32_t)(h % (uint32_t)m->cap);
-    bsr_memo_entry_t *e   = m->buckets[idx];
+    uint64_t key = bsr_memo_key(nt_id, left, right);
 
-    while (e) {
-        if (e->nt_id == nt_id && e->left == left && e->right == right) {
-            return e;
-        }
-        e = e->next;
+    if (!n00b_dict_contains(m, key)) {
+        return -1;
     }
 
-    return NULL;
+    bool        found = false;
+    ptrlist_ptr_t val = n00b_dict_get(m, key, &found);
+
+    if (found && val) {
+        *out = val;
+        return 1;
+    }
+
+    return 0; // in-progress
 }
 
-// Insert a new entry with result=NULL (in-progress marker).
-static bsr_memo_entry_t *
-bsr_memo_insert(bsr_memo_t *m, int64_t nt_id, int32_t left, int32_t right)
-{
-    uint32_t          h   = bsr_memo_hash(nt_id, left, right);
-    int32_t           idx = (int32_t)(h % (uint32_t)m->cap);
-    bsr_memo_entry_t *e   = n00b_alloc(bsr_memo_entry_t);
-
-    e->nt_id  = nt_id;
-    e->left   = left;
-    e->right  = right;
-    e->result = NULL; // in-progress
-    e->next   = m->buckets[idx];
-
-    m->buckets[idx] = e;
-
-    return e;
-}
-
+// Insert an in-progress marker.
 static void
-bsr_memo_free(bsr_memo_t *m)
+bsr_memo_mark_in_progress(bsr_memo_t *m, int64_t nt_id,
+                           int32_t left, int32_t right)
 {
-    for (int32_t i = 0; i < m->cap; i++) {
-        bsr_memo_entry_t *e = m->buckets[i];
-
-        while (e) {
-            bsr_memo_entry_t *next = e->next;
-            n00b_free(e);
-            e = next;
-        }
-    }
-
-    n00b_free(m->buckets);
+    uint64_t      key     = bsr_memo_key(nt_id, left, right);
+    ptrlist_ptr_t nullval = NULL;
+    n00b_dict_put(m, key, nullval);
 }
+
+// Store the completed result.
+static void
+bsr_memo_store(bsr_memo_t *m, int64_t nt_id, int32_t left, int32_t right,
+               ptrlist_t *result)
+{
+    uint64_t key = bsr_memo_key(nt_id, left, right);
+    n00b_dict_put(m, key, result);
+}
+
 
 typedef struct {
     n00b_earley_parser_t *parser;
-    bsr_index_t          *index;
+    bsr_index_t           index;
     bsr_memo_t            memo;
 } bsr_ctx_t;
 
@@ -1613,28 +1472,29 @@ static ptrlist_t *
 bsr_build_nt(bsr_ctx_t *ctx, int64_t nt_id, int32_t left, int32_t right)
 {
     // Memoization: check if already computed or in-progress (cycle).
-    bsr_memo_entry_t *memo = bsr_memo_find(&ctx->memo, nt_id, left, right);
+    ptrlist_t *cached = NULL;
+    int        status = bsr_memo_find(&ctx->memo, nt_id, left, right, &cached);
 
-    if (memo) {
-        if (memo->result) {
-            // Already computed — return a copy of the cached result.
-            ptrlist_t *copy = ptrlist_new();
-            ptrlist_extend(copy, memo->result);
-            return copy;
-        }
+    if (status == 1) {
+        // Already computed — return a copy of the cached result.
+        ptrlist_t *copy = ptrlist_new();
+        ptrlist_extend(copy, cached);
+        return copy;
+    }
 
+    if (status == 0) {
         // In-progress (cycle detected) — return empty to break recursion.
         return ptrlist_new();
     }
 
     // Insert in-progress marker.
-    memo = bsr_memo_insert(&ctx->memo, nt_id, left, right);
+    bsr_memo_mark_in_progress(&ctx->memo, nt_id, left, right);
 
     ptrlist_t      *results = ptrlist_new();
     n00b_nonterm_t *nt      = n00b_get_nonterm(ctx->parser->grammar, nt_id);
 
     if (!nt) {
-        memo->result = results;
+        bsr_memo_store(&ctx->memo, nt_id, left, right, results);
         return results;
     }
 
@@ -1649,7 +1509,7 @@ bsr_build_nt(bsr_ctx_t *ctx, int64_t nt_id, int32_t left, int32_t right)
     }
 
     // Cache the result.
-    memo->result = results;
+    bsr_memo_store(&ctx->memo, nt_id, left, right, results);
 
     return results;
 }
@@ -1708,18 +1568,18 @@ bsr_build_rule(bsr_ctx_t *ctx, int32_t rule_ix,
         int32_t      slot = g->lr0_rule_item_base[rule_ix] + 1;
         uint64_t     key  = ((uint64_t)(uint32_t)slot << 32)
                           | (uint64_t)(uint32_t)right;
-        bsr_bucket_t *b   = bsr_index_find(ctx->index, key);
+        bsr_pair_list_t *b   = bsr_index_find(&ctx->index, key);
 
         if (!b) {
             return results;
         }
 
-        for (int32_t i = 0; i < b->count; i++) {
-            if (b->pairs[i].left != left) {
+        for (size_t i = 0; i < b->len; i++) {
+            if (b->data[i].left != left) {
                 continue;
             }
 
-            int32_t    pivot = b->pairs[i].pivot;
+            int32_t    pivot = b->data[i].pivot;
             n00b_match_t *match = &rule->contents.data[0];
             ptrlist_t  *sub   = bsr_build_symbol(ctx, match, pivot, right);
             size_t      n_sub = ptrlist_len(sub);
@@ -1782,18 +1642,18 @@ bsr_build_rule(bsr_ctx_t *ctx, int32_t rule_ix,
     int32_t      complete_slot = g->lr0_rule_item_base[rule_ix] + rule_len;
     uint64_t     key           = ((uint64_t)(uint32_t)complete_slot << 32)
                                | (uint64_t)(uint32_t)right;
-    bsr_bucket_t *b            = bsr_index_find(ctx->index, key);
+    bsr_pair_list_t *b            = bsr_index_find(&ctx->index, key);
 
     if (!b) {
         return results;
     }
 
-    for (int32_t i = 0; i < b->count; i++) {
-        if (b->pairs[i].left != left) {
+    for (size_t i = 0; i < b->len; i++) {
+        if (b->data[i].left != left) {
             continue;
         }
 
-        int32_t pivot = b->pairs[i].pivot;
+        int32_t pivot = b->data[i].pivot;
 
         n00b_match_t *last_match = &rule->contents.data[rule_len - 1];
         ptrlist_t    *right_opts = bsr_build_symbol(ctx, last_match,
@@ -1920,18 +1780,18 @@ bsr_build_prefix(bsr_ctx_t *ctx, int32_t rule_ix,
     int32_t      slot = g->lr0_rule_item_base[rule_ix] + k;
     uint64_t     key  = ((uint64_t)(uint32_t)slot << 32)
                       | (uint64_t)(uint32_t)right;
-    bsr_bucket_t *b   = bsr_index_find(ctx->index, key);
+    bsr_pair_list_t *b   = bsr_index_find(&ctx->index, key);
 
     if (!b) {
         return results;
     }
 
-    for (int32_t i = 0; i < b->count; i++) {
-        if (b->pairs[i].left != left) {
+    for (size_t i = 0; i < b->len; i++) {
+        if (b->data[i].left != left) {
             continue;
         }
 
-        int32_t pivot = b->pairs[i].pivot;
+        int32_t pivot = b->data[i].pivot;
 
         n00b_match_t *match     = &rule->contents.data[k - 1];
         ptrlist_t    *sym_opts  = bsr_build_symbol(ctx, match, pivot, right);
@@ -2080,11 +1940,11 @@ bsr_build_group(bsr_ctx_t *ctx, n00b_rule_group_t *grp,
 
         uint64_t     key = ((uint64_t)(uint32_t)complete_slot << 32)
                          | (uint64_t)(uint32_t)right;
-        bsr_bucket_t *b  = bsr_index_find(ctx->index, key);
+        bsr_pair_list_t *b  = bsr_index_find(&ctx->index, key);
 
         if (b) {
-            for (int32_t i = 0; i < b->count; i++) {
-                if (b->pairs[i].left != left) {
+            for (size_t i = 0; i < b->len; i++) {
+                if (b->data[i].left != left) {
                     continue;
                 }
 
@@ -2131,16 +1991,12 @@ build_bsr_forest(n00b_earley_parser_t *p)
         return ptrlist_new();
     }
 
-    bsr_index_t idx;
-
-    bsr_build_index(p, &idx);
-
     bsr_ctx_t ctx = {
         .parser = p,
-        .index  = &idx,
     };
 
-    bsr_memo_init(&ctx.memo, 128);
+    bsr_build_index(p, &ctx.index);
+    bsr_memo_init(&ctx.memo);
 
     p->grammar->suspend_penalty_hiding++;
 
@@ -2149,8 +2005,7 @@ build_bsr_forest(n00b_earley_parser_t *p)
 
     p->grammar->suspend_penalty_hiding--;
 
-    bsr_index_free(&idx);
-    bsr_memo_free(&ctx.memo);
+    bsr_index_free(&ctx.index);
 
     return results;
 }
@@ -2162,8 +2017,10 @@ build_bsr_forest(n00b_earley_parser_t *p)
 void
 n00b_earley_cleanup_intermediates(n00b_earley_parser_t *p)
 {
-    for (int32_t i = 0; i < p->tree_nb_infos_len; i++) {
-        nb_info_t *ni = p->tree_nb_infos[i];
+    size_t n_infos = n00b_list_len(p->tree_nb_infos);
+
+    for (size_t i = 0; i < n_infos; i++) {
+        nb_info_t *ni = n00b_list_get(p->tree_nb_infos, i);
 
         if (!ni) {
             continue;
@@ -2172,39 +2029,32 @@ n00b_earley_cleanup_intermediates(n00b_earley_parser_t *p)
         n00b_free(ni->pnode);
 
         if (ni->opts) {
-            n00b_free(ni->opts->data);
-            n00b_free(ni->opts);
+            ptrlist_free(ni->opts);
         }
 
         n00b_free(ni);
     }
 
-    for (int32_t i = 0; i < p->tree_ptrlists_len; i++) {
-        ptrlist_t *pl = p->tree_ptrlists[i];
+    size_t n_ptrlists = n00b_list_len(p->tree_ptrlists);
+
+    for (size_t i = 0; i < n_ptrlists; i++) {
+        ptrlist_t *pl = n00b_list_get(p->tree_ptrlists, i);
 
         if (pl) {
             for (size_t j = 0; j < ptrlist_len(pl); j++) {
                 ptrlist_t *inner = ptrlist_get(pl, j);
 
                 if (inner) {
-                    n00b_free(inner->data);
-                    n00b_free(inner);
+                    ptrlist_free(inner);
                 }
             }
 
-            n00b_free(pl->data);
-            n00b_free(pl);
+            ptrlist_free(pl);
         }
     }
 
-    n00b_free(p->tree_nb_infos);
-    n00b_free(p->tree_ptrlists);
-    p->tree_nb_infos     = NULL;
-    p->tree_nb_infos_len = 0;
-    p->tree_nb_infos_cap = 0;
-    p->tree_ptrlists     = NULL;
-    p->tree_ptrlists_len = 0;
-    p->tree_ptrlists_cap = 0;
+    n00b_list_free(p->tree_nb_infos);
+    n00b_list_free(p->tree_ptrlists);
 }
 
 // ============================================================================
