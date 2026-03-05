@@ -49,7 +49,8 @@ add_thread(n00b_conduit_service_t      *svc,
     }
     n00b_conduit_io_backend_t *io = n00b_result_get(io_res);
 
-    n00b_conduit_svc_thread_t *st = n00b_alloc(n00b_conduit_svc_thread_t);
+    n00b_conduit_svc_thread_t *st = n00b_alloc_with_opts(n00b_conduit_svc_thread_t,
+                                        &(n00b_alloc_opts_t){.allocator = svc->conduit->allocator});
     if (!st) {
         n00b_conduit_io_destroy(io);
         return n00b_result_err(n00b_conduit_svc_thread_t *, N00B_CONDUIT_ERR_ALLOC);

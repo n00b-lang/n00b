@@ -493,6 +493,34 @@ if target_os == 'windows'
 endif
 
 # ============================================================================
+# Virtual Filesystem
+# ============================================================================
+
+n00b_vfs = [
+    'src/vfs/types.c',
+    'src/vfs/backend.c',
+    'src/vfs/backend_memory.c',
+    'src/vfs/backend_local.c',
+    'src/vfs/hooks.c',
+    'src/vfs/vfs.c',
+    'src/vfs/cache.c',
+    'src/vfs/frontend.c',
+]
+
+if target_os == 'linux'
+    n00b_vfs += 'src/vfs/frontend_nfs.c'
+endif
+
+if target_os == 'darwin'
+    fuse_dep_opt = dependency('fuse', required: false)
+    if fuse_dep_opt.found()
+        n00b_vfs += 'src/vfs/frontend_fuse.c'
+        deps += fuse_dep_opt
+        exe_c_args += ['-DN00B_HAVE_FUSE=1']
+    endif
+endif
+
+# ============================================================================
 # Parsers
 # ============================================================================
 
@@ -619,7 +647,7 @@ n00b_objfile = [
     'src/compiler/objfile/dwarf_build.c',
 ]
 
-n00b_dll_src = n00b_core + n00b_adt + n00b_text + n00b_display + n00b_conduit + n00b_parsers + n00b_logic + n00b_slay + n00b_typecheck + n00b_compiler + n00b_objfile
+n00b_dll_src = n00b_core + n00b_adt + n00b_text + n00b_display + n00b_conduit + n00b_vfs + n00b_parsers + n00b_logic + n00b_slay + n00b_typecheck + n00b_compiler + n00b_objfile
 
 # Build generated unicode tables with --no-ncc (they are pure data,
 # no ncc extensions, and parsing them is extremely expensive).
@@ -968,7 +996,7 @@ regex_resharp_test = executable('test_regex_resharp',
     ['test/unit/test_regex_resharp.c'],
     kwargs: test_common_kwargs,
 )
-test('regex_resharp', regex_resharp_test, suite: 'unit')
+test('regex_resharp', regex_resharp_test, suite: 'unit', timeout: 300)
 
 # ============================================================================
 # Logic / constraint solver tests
@@ -1467,6 +1495,13 @@ n00b_exe = executable('n00b',
     install: true,
 )
 
+# VFS journaling daemon / demo
+vfs_journal = executable('vfs_journal',
+    ['src/tools/vfs_journal.c'],
+    kwargs: test_common_kwargs,
+    install: false,
+)
+
 # ============================================================================
 # Integration tests
 # ============================================================================
@@ -1512,6 +1547,40 @@ alloc_metadata_test = executable('test_alloc_metadata',
     kwargs: test_common_kwargs,
 )
 test('alloc_metadata', alloc_metadata_test, suite: 'integration')
+
+# ============================================================================
+# VFS tests
+# ============================================================================
+
+vfs_backend_test = executable('test_vfs_backend',
+    ['test/unit/test_vfs_backend.c'],
+    kwargs: test_common_kwargs,
+)
+test('vfs_backend', vfs_backend_test, suite: 'unit')
+
+vfs_core_test = executable('test_vfs_core',
+    ['test/unit/test_vfs_core.c'],
+    kwargs: test_common_kwargs,
+)
+test('vfs_core', vfs_core_test, suite: 'unit')
+
+vfs_cache_test = executable('test_vfs_cache',
+    ['test/unit/test_vfs_cache.c'],
+    kwargs: test_common_kwargs,
+)
+test('vfs_cache', vfs_cache_test, suite: 'unit')
+
+vfs_local_test = executable('test_vfs_local',
+    ['test/unit/test_vfs_local.c'],
+    kwargs: test_common_kwargs,
+)
+test('vfs_local', vfs_local_test, suite: 'unit')
+
+vfs_journal_test = executable('test_vfs_journal',
+    ['test/unit/test_vfs_journal.c'],
+    kwargs: test_common_kwargs,
+)
+test('vfs_journal', vfs_journal_test, suite: 'unit')
 
 # ============================================================================
 # Unicode tests

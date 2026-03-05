@@ -125,7 +125,21 @@ derivative(n00b_regex_builder_t *b, n00b_regex_dfa_t *dfa,
         uint32_t dh = derivative(b, dfa, n->concat.head, minterm, loc);
         uint32_t dh_concat = n00b_regex_mk_concat(b, dh, n->concat.tail);
 
-        if (n00b_regex_node_is_nullable(b, n->concat.head, loc)) {
+        bool head_nullable = n00b_regex_node_is_nullable(b, n->concat.head, loc);
+
+        // Also treat head as nullable if its derivative is a lookaround
+        // with pending nullables — the assertion just fired, so the tail
+        // should also be consumed at this step.
+        if (!head_nullable && dh >= N00B_RE_SENTINEL_COUNT) {
+            n00b_regex_node_t *dh_node = n00b_regex_node_get(b, dh);
+            if (dh_node->kind == N00B_RE_LOOKAROUND
+                && !dh_node->lookaround.look_back
+                && dh_node->lookaround.n_pending > 0) {
+                head_nullable = true;
+            }
+        }
+
+        if (head_nullable) {
             uint32_t dt = derivative(b, dfa, n->concat.tail, minterm, loc);
             if (dt == N00B_RE_ID_NOTHING) {
                 result = dh_concat;
@@ -273,9 +287,9 @@ derivative(n00b_regex_builder_t *b, n00b_regex_dfa_t *dfa,
                         if (tail_node->kind == N00B_RE_BEGIN
                             || tail_node->kind == N00B_RE_END
                             || is_anchor_surrounded_by_dotstar(b, tail_id)) {
-                            int32_t zero = 0;
+                            int32_t zero2 = 0;
                             result = n00b_regex_mk_lookaround(b, N00B_RE_ID_EPSILON,
-                                                               false, rel + 1, &zero, 1);
+                                                               false, rel + 1, &zero2, 1);
                         }
                         else {
                             result = n00b_regex_mk_lookaround(b, der_body, false,
@@ -353,8 +367,13 @@ collect_pending_from_node(n00b_regex_builder_t *b, uint32_t node_id,
         switch (n->kind) {
         case N00B_RE_LOOKAROUND:
             if (n->lookaround.n_pending > 0 && n->lookaround.pending_nullable_pos) {
+                // Resharp's refSetAddAll: add relative_to to each pending position.
+                // The node stores raw positions; the offset converts them to
+                // the number of input characters consumed since the lookaround
+                // started being tracked.
+                int32_t offset = n->lookaround.relative_to;
                 for (uint16_t i = 0; i < n->lookaround.n_pending && *out_count < max_count; i++) {
-                    int32_t pos = n->lookaround.pending_nullable_pos[i];
+                    int32_t pos = n->lookaround.pending_nullable_pos[i] + offset;
                     (*out_ranges)[*out_count] = (n00b_regex_pending_range_t){
                         .lo = (uint16_t)pos, .hi = (uint16_t)pos,
                     };
@@ -391,6 +410,11 @@ collect_pending_from_node(n00b_regex_builder_t *b, uint32_t node_id,
 // DFA state management
 // ============================================================================
 
+// Safety limit for lazy DFA state creation during matching.
+// Lookaround derivatives can produce unique nodes indefinitely
+// (each step increments relative_to). Cap to prevent runaway.
+#define DFA_LAZY_STATE_LIMIT 5000
+
 static uint32_t
 dfa_get_or_create_state(n00b_regex_dfa_t *dfa, uint32_t node_id, bool is_initial)
 {
@@ -399,6 +423,11 @@ dfa_get_or_create_state(n00b_regex_dfa_t *dfa, uint32_t node_id, bool is_initial
     if (found) return cached;
 
     uint32_t state_id = (uint32_t)dfa->states.len;
+    if (state_id >= DFA_LAZY_STATE_LIMIT) {
+        // Too many states — return dead state to prevent runaway
+        dfa->hit_state_limit = true;
+        return 0;
+    }
     n00b_regex_builder_t *b = dfa->builder;
 
     // Compute state flags (matches resharp's _getOrCreateState)
@@ -482,17 +511,24 @@ dfa_get_or_create_state(n00b_regex_dfa_t *dfa, uint32_t node_id, bool is_initial
 
     // Compute NullKind
     n00b_regex_null_kind_t null_kind;
-    if (!(flags & N00B_RE_SF_ALWAYS_NULLABLE)) {
+    if ((flags & N00B_RE_SF_PENDING_NULLABLE) && n_pending > 0) {
+        // Has pending nullable positions from lookarounds — even if not always-nullable
+        if ((flags & N00B_RE_SF_ALWAYS_NULLABLE) && !(n_pending == 1 && pending_ranges[0].lo == 0)) {
+            // Always nullable AND has pending: use PENDING to cover both
+            null_kind = N00B_RE_NULL_PENDING;
+        }
+        else if (n_pending == 1 && pending_ranges[0].lo == 1 && pending_ranges[0].hi == 1) {
+            null_kind = N00B_RE_NULL_PREV;
+        }
+        else {
+            null_kind = N00B_RE_NULL_PENDING;
+        }
+    }
+    else if (!(flags & N00B_RE_SF_ALWAYS_NULLABLE)) {
         null_kind = N00B_RE_NULL_NOT;
     }
-    else if ((flags & N00B_RE_SF_ALWAYS_NULLABLE) && !(flags & N00B_RE_SF_PENDING_NULLABLE)) {
-        null_kind = N00B_RE_NULL_CURRENT;
-    }
-    else if (n_pending == 1 && pending_ranges && pending_ranges[0].lo == 1 && pending_ranges[0].hi == 1) {
-        null_kind = N00B_RE_NULL_PREV;
-    }
     else {
-        null_kind = N00B_RE_NULL_PENDING;
+        null_kind = N00B_RE_NULL_CURRENT;
     }
 
     n00b_regex_dfa_state_t state = {
@@ -532,8 +568,17 @@ dfa_step_at_loc(n00b_regex_dfa_t *dfa, uint32_t state_id,
 {
     n00b_regex_dfa_state_t *st = &dfa->states.data[state_id];
 
-    // For End location with anchor dependencies, use separate cache
-    if (loc == LOC_END && (st->flags & N00B_RE_SF_ANCHOR_NULLABLE)) {
+    // For End location with anchor dependencies, use separate cache.
+    // Must check depends_on_anchor (not just ANCHOR_NULLABLE) because
+    // the End-location derivative differs from Center even for non-nullable
+    // states (e.g., _.*·END·\d·BEGIN is not nullable but its End derivative
+    // differs from its Center derivative due to END being nullable at LOC_END).
+    bool has_anchor_dep = (st->flags & N00B_RE_SF_ANCHOR_NULLABLE) != 0;
+    if (!has_anchor_dep && st->node_id >= N00B_RE_SENTINEL_COUNT) {
+        n00b_regex_node_t *node = n00b_regex_node_get(dfa->builder, st->node_id);
+        has_anchor_dep = node->depends_on_anchor;
+    }
+    if (loc == LOC_END && has_anchor_dep) {
         uint32_t idx = state_id * dfa->minterms->count + mt_id;
 
         // Ensure anchor_transitions is large enough

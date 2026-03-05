@@ -127,24 +127,25 @@ n00b_mmap_lookup(n00b_mmap_ctx_t *ctx, void *addr)
 
     mmap_read_lock(ctx);
 
-    // We need to find an mmap_info entry (not a range entry).
-    // Use search (multi-result) so we can skip range variants.
-    n00b_allocator_t *alloc = (n00b_allocator_t *)&ctx->pool;
-    n00b_stack_t(void *) hits = n00b_stack_new_private(void *, alloc);
+    // Use search_any to avoid allocating a temp stack per call.
+    // This is called per potential pointer during GC collection.
+    auto r = n00b_interval_search_any(ctx->mmap_tree, start, end);
 
-    auto r = n00b_interval_search(ctx->mmap_tree, start, end, &hits);
     mmap_read_unlock(ctx);
 
     if (n00b_result_is_err(r)) {
         return n00b_option_none(n00b_mmap_info_t *);
     }
 
-    while (n00b_stack_len(hits) > 0) {
-        mmap_node_t *node = n00b_option_get(n00b_stack_pop(void *, hits));
-        if (n00b_variant_is_type(node->data, n00b_mmap_info_t *)) {
-            return n00b_option_set(n00b_mmap_info_t *,
-                                    n00b_variant_get(node->data, n00b_mmap_info_t *));
-        }
+    mmap_node_t *node = n00b_result_get(r);
+
+    if (!node) {
+        return n00b_option_none(n00b_mmap_info_t *);
+    }
+
+    if (n00b_variant_is_type(node->data, n00b_mmap_info_t *)) {
+        return n00b_option_set(n00b_mmap_info_t *,
+                                n00b_variant_get(node->data, n00b_mmap_info_t *));
     }
 
     return n00b_option_none(n00b_mmap_info_t *);

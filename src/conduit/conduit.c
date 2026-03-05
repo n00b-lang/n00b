@@ -28,12 +28,14 @@
 n00b_result_t(n00b_conduit_t *)
 n00b_conduit_new(void)
 {
-    n00b_conduit_t *c = n00b_alloc(n00b_conduit_t);
+    n00b_allocator_t *cpool = (n00b_allocator_t *)&n00b_get_runtime()->conduit_pool;
+    n00b_conduit_t   *c     = n00b_alloc_with_opts(n00b_conduit_t,
+                                  &(n00b_alloc_opts_t){.allocator = cpool});
     if (!c) {
         return n00b_result_err(n00b_conduit_t *, N00B_CONDUIT_ERR_ALLOC);
     }
 
-    c->allocator = n00b_default_allocator();
+    c->allocator = cpool;
 
     n00b_dict_untyped_init(&c->int_topics,
                            .skip_obj_hash = true,

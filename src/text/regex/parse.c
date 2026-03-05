@@ -9,6 +9,11 @@
 
 #include <limits.h>
 
+// Marker values for word boundary rewriting in parse_sequence.
+// These are NOT real node IDs — they get replaced before building the concat.
+#define WB_MARKER  0xFFFFFFFEu   // \b word boundary
+#define NWB_MARKER 0xFFFFFFFDu   // \B non-word boundary
+
 // ============================================================================
 // Parser state
 // ============================================================================
@@ -380,23 +385,67 @@ parse_charclass(parse_ctx_t *p)
 }
 
 // ============================================================================
-// Word boundary \b / \B
+// Word boundary \b / \B — context-aware rewriting (resharp rewriteWordBorder)
 // ============================================================================
 
+typedef enum {
+    WCK_WORD,
+    WCK_NONWORD,
+    WCK_EDGE,
+    WCK_UNKNOWN,
+} word_char_kind_t;
+
+/** Classify the RIGHT edge of a node (what the last consumed char will be). */
+static word_char_kind_t
+classify_right_edge(parse_ctx_t *p, uint32_t node_id)
+{
+    if (node_id == N00B_RE_ID_EPSILON) return WCK_UNKNOWN;
+    if (node_id < N00B_RE_SENTINEL_COUNT) return WCK_UNKNOWN;
+
+    n00b_regex_node_t *n = n00b_regex_node_get(p->builder, node_id);
+    if (n->kind == N00B_RE_SINGLETON) {
+        n00b_regex_charset_t word_cs = charset_word(p);
+        n00b_regex_charset_t nonword_cs = n00b_regex_charset_not(p->solver, word_cs);
+        if (n00b_regex_charset_contains_set(p->solver, word_cs, n->singleton.set))
+            return WCK_WORD;
+        if (n00b_regex_charset_contains_set(p->solver, nonword_cs, n->singleton.set))
+            return WCK_NONWORD;
+        return WCK_UNKNOWN;
+    }
+    if (n->kind == N00B_RE_LOOP) return classify_right_edge(p, n->loop.body);
+    if (n->kind == N00B_RE_CONCAT) return classify_right_edge(p, n->concat.tail);
+    return WCK_UNKNOWN;
+}
+
+/** Classify the LEFT edge of a node (what the first consumed char will be). */
+static word_char_kind_t
+classify_left_edge(parse_ctx_t *p, uint32_t node_id)
+{
+    if (node_id == N00B_RE_ID_EPSILON) return WCK_UNKNOWN;
+    if (node_id < N00B_RE_SENTINEL_COUNT) return WCK_UNKNOWN;
+
+    n00b_regex_node_t *n = n00b_regex_node_get(p->builder, node_id);
+    if (n->kind == N00B_RE_SINGLETON) return classify_right_edge(p, node_id);
+    if (n->kind == N00B_RE_LOOP) return classify_left_edge(p, n->loop.body);
+    if (n->kind == N00B_RE_CONCAT) return classify_left_edge(p, n->concat.head);
+    return WCK_UNKNOWN;
+}
+
 /**
- * Build \b or \B as lookaround intersections, matching resharp's approach.
+ * Expand a word boundary marker into concrete nodes based on context.
  *
- * \b = (wordLeft & nonWordRight) | (nonWordLeft & wordRight)
- * \B = (wordLeft & wordRight) | (nonWordLeft & nonWordRight)
- *
- * where:
- *   wordLeft     = lookbehind(Or(BEGIN, \w))
- *   nonWordLeft  = lookbehind(Or(BEGIN, \W))
- *   wordRight    = lookahead(Or(END, \w))
- *   nonWordRight = lookahead(Or(END, \W))
+ * Resharp simplifies \b at parse time based on neighbor context:
+ * - left=WordChar  → nonWordRight (just check right side)
+ * - left=NonWord   → wordRight
+ * - right=WordChar → nonWordLeft (just check left side)
+ * - right=NonWord  → wordLeft
+ * - both known & different → EPS (boundary always holds)
+ * - both known & same → NOTHING (boundary never holds)
+ * - unknown → fall back to full definition
  */
 static uint32_t
-parse_word_boundary(parse_ctx_t *p, bool is_boundary)
+expand_word_boundary(parse_ctx_t *p, bool is_boundary,
+                     word_char_kind_t left, word_char_kind_t right)
 {
     n00b_regex_builder_t *b = p->builder;
     n00b_regex_charset_t word_cs    = charset_word(p);
@@ -404,37 +453,54 @@ parse_word_boundary(parse_ctx_t *p, bool is_boundary)
     uint32_t word_node    = n00b_regex_mk_singleton(b, word_cs);
     uint32_t nonword_node = n00b_regex_mk_singleton(b, nonword_cs);
 
-    // wordLeft = lookbehind(Or(BEGIN, \w))
-    uint32_t wl_body = n00b_regex_mk_or2(b, N00B_RE_ID_BEGIN, word_node);
-    uint32_t word_left = n00b_regex_mk_lookaround(b, wl_body, true, 0, nullptr, 0);
-
-    // nonWordLeft = lookbehind(Or(BEGIN, \W))
-    uint32_t nwl_body = n00b_regex_mk_or2(b, N00B_RE_ID_BEGIN, nonword_node);
-    uint32_t nonword_left = n00b_regex_mk_lookaround(b, nwl_body, true, 0, nullptr, 0);
-
-    // wordRight = lookahead(Or(END, \w))
-    uint32_t wr_body = n00b_regex_mk_or2(b, N00B_RE_ID_END, word_node);
-    uint32_t word_right = n00b_regex_mk_lookaround(b, wr_body, false, 0, nullptr, 0);
-
-    // nonWordRight = lookahead(Or(END, \W))
-    uint32_t nwr_body = n00b_regex_mk_or2(b, N00B_RE_ID_END, nonword_node);
-    uint32_t nonword_right = n00b_regex_mk_lookaround(b, nwr_body, false, 0, nullptr, 0);
+    uint32_t word_left     = n00b_regex_mk_lookaround(b,
+        n00b_regex_mk_or2(b, N00B_RE_ID_BEGIN, word_node), true, 0, nullptr, 0);
+    uint32_t nonword_left  = n00b_regex_mk_lookaround(b,
+        n00b_regex_mk_or2(b, N00B_RE_ID_BEGIN, nonword_node), true, 0, nullptr, 0);
+    uint32_t word_right    = n00b_regex_mk_lookaround(b,
+        n00b_regex_mk_or2(b, N00B_RE_ID_END, word_node), false, 0, nullptr, 0);
+    uint32_t nonword_right = n00b_regex_mk_lookaround(b,
+        n00b_regex_mk_or2(b, N00B_RE_ID_END, nonword_node), false, 0, nullptr, 0);
 
     if (is_boundary) {
-        // \b = (wordLeft & nonWordRight) | (nonWordLeft & wordRight)
-        uint32_t and1_children[] = { word_left, nonword_right };
-        uint32_t and1 = n00b_regex_mk_and(b, and1_children, 2);
-        uint32_t and2_children[] = { nonword_left, word_right };
-        uint32_t and2 = n00b_regex_mk_and(b, and2_children, 2);
-        return n00b_regex_mk_or2(b, and1, and2);
+        // Simplify based on context
+        if ((left == WCK_NONWORD && right == WCK_WORD)
+            || (left == WCK_WORD && right == WCK_NONWORD))
+            return N00B_RE_ID_EPSILON;
+        if ((left == WCK_WORD && right == WCK_WORD)
+            || (left == WCK_NONWORD && right == WCK_NONWORD))
+            return N00B_RE_ID_NOTHING;
+        if (left == WCK_WORD)    return nonword_right;
+        if (left == WCK_NONWORD) return word_right;
+        if (right == WCK_WORD)   return nonword_left;
+        if (right == WCK_NONWORD) return word_left;
+        // Edge context: at pattern start/end, use one-sided check
+        if (left == WCK_EDGE)    return word_right;
+        if (right == WCK_EDGE)   return word_left;
+        // Full fallback
+        uint32_t c1[] = { word_left, nonword_right };
+        uint32_t c2[] = { nonword_left, word_right };
+        return n00b_regex_mk_or2(b,
+            n00b_regex_mk_and(b, c1, 2),
+            n00b_regex_mk_and(b, c2, 2));
     }
     else {
-        // \B = (wordLeft & wordRight) | (nonWordLeft & nonWordRight)
-        uint32_t and1_children[] = { word_left, word_right };
-        uint32_t and1 = n00b_regex_mk_and(b, and1_children, 2);
-        uint32_t and2_children[] = { nonword_left, nonword_right };
-        uint32_t and2 = n00b_regex_mk_and(b, and2_children, 2);
-        return n00b_regex_mk_or2(b, and1, and2);
+        // \B: same class on both sides
+        if ((left == WCK_WORD && right == WCK_WORD)
+            || (left == WCK_NONWORD && right == WCK_NONWORD))
+            return N00B_RE_ID_EPSILON;
+        if ((left == WCK_WORD && right == WCK_NONWORD)
+            || (left == WCK_NONWORD && right == WCK_WORD))
+            return N00B_RE_ID_NOTHING;
+        if (left == WCK_WORD)    return word_right;
+        if (left == WCK_NONWORD) return nonword_right;
+        if (right == WCK_WORD)   return word_left;
+        if (right == WCK_NONWORD) return nonword_left;
+        uint32_t c1[] = { word_left, word_right };
+        uint32_t c2[] = { nonword_left, nonword_right };
+        return n00b_regex_mk_or2(b,
+            n00b_regex_mk_and(b, c1, 2),
+            n00b_regex_mk_and(b, c2, 2));
     }
 }
 
@@ -609,7 +675,7 @@ parse_atom(parse_ctx_t *p)
             }
             if (esc == 'b' || esc == 'B') {
                 next_cp(p);
-                return parse_word_boundary(p, esc == 'b');
+                return (esc == 'b') ? WB_MARKER : NWB_MARKER;
             }
             // Otherwise it's a class or literal escape
             n00b_regex_charset_t cs = parse_escape_class(p);
@@ -689,6 +755,12 @@ parse_quantified(parse_ctx_t *p)
             next_cp(p);
         }
 
+        // If the node is a word-boundary marker being quantified, expand it
+        // with unknown context (full fallback) before wrapping in a loop.
+        if (node == WB_MARKER || node == NWB_MARKER) {
+            node = expand_word_boundary(p, node == WB_MARKER, WCK_UNKNOWN, WCK_UNKNOWN);
+        }
+
         node = n00b_regex_mk_loop(p->builder, node, lo, hi);
     }
 
@@ -702,7 +774,9 @@ parse_quantified(parse_ctx_t *p)
 static uint32_t
 parse_sequence(parse_ctx_t *p)
 {
-    uint32_t result = N00B_RE_ID_EPSILON;
+    // Collect terms into a flat array so we can rewrite \b markers.
+    uint32_t terms[512];
+    uint32_t n_terms = 0;
 
     while (!at_end(p)) {
         n00b_codepoint_t c = peek_cp(p);
@@ -711,7 +785,49 @@ parse_sequence(parse_ctx_t *p)
         uint32_t q = parse_quantified(p);
         if (p->error != N00B_RE_PARSE_OK) return N00B_RE_ID_NOTHING;
 
-        result = n00b_regex_mk_concat(p->builder, result, q);
+        if (n_terms < 512) terms[n_terms++] = q;
+    }
+
+    // Rewrite word boundary markers based on neighbor context (resharp's
+    // rewriteWordBorder).  This is necessary because lookbehinds inside \b
+    // don't work correctly in the forward DFA — the derivative of a lookbehind
+    // checks the current character, not the previous one.  By simplifying \b
+    // based on context, we eliminate the lookbehind when possible.
+    for (uint32_t i = 0; i < n_terms; i++) {
+        if (terms[i] != WB_MARKER && terms[i] != NWB_MARKER) continue;
+
+        bool is_boundary = (terms[i] == WB_MARKER);
+
+        // Determine left context (right edge of previous term)
+        word_char_kind_t left;
+        if (i == 0) {
+            left = WCK_EDGE;
+        } else {
+            left = classify_right_edge(p, terms[i - 1]);
+        }
+
+        // Determine right context (left edge of next term)
+        word_char_kind_t right;
+        if (i == n_terms - 1) {
+            right = WCK_EDGE;
+        } else {
+            // Skip over adjacent \b markers to find real next term
+            uint32_t j = i + 1;
+            while (j < n_terms && (terms[j] == WB_MARKER || terms[j] == NWB_MARKER)) j++;
+            if (j < n_terms) {
+                right = classify_left_edge(p, terms[j]);
+            } else {
+                right = WCK_EDGE;
+            }
+        }
+
+        terms[i] = expand_word_boundary(p, is_boundary, left, right);
+    }
+
+    // Build the concat chain
+    uint32_t result = N00B_RE_ID_EPSILON;
+    for (uint32_t i = 0; i < n_terms; i++) {
+        result = n00b_regex_mk_concat(p->builder, result, terms[i]);
     }
 
     return result;

@@ -50,7 +50,8 @@ n00b_conduit_io_new(n00b_conduit_t *c, const n00b_conduit_io_ops_t *ops)
     }
 #endif
 
-    n00b_conduit_io_backend_t *io = n00b_alloc(n00b_conduit_io_backend_t);
+    n00b_conduit_io_backend_t *io = n00b_alloc_with_opts(n00b_conduit_io_backend_t,
+                                        &(n00b_alloc_opts_t){.allocator = c->allocator});
     if (!io) {
         return n00b_result_err(n00b_conduit_io_backend_t *, N00B_CONDUIT_ERR_ALLOC);
     }

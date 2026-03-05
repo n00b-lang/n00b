@@ -81,6 +81,9 @@ typedef struct n00b_regex_dfa_state_t {
     uint8_t                     skip_map[16];   /**< 128-bit bitmap: which ASCII bytes cause
                                                      a non-self-loop, non-dead transition.
                                                      Only valid when can_skip is true. */
+    uint8_t                     dead_map[16];   /**< 128-bit bitmap: which ASCII bytes cause
+                                                     a transition to the dead state (state 0).
+                                                     Used by skip loop to stop on dead bytes. */
     bool                        can_skip;       /**< True if skip_map is usable for skipping. */
 } n00b_regex_dfa_state_t;
 
@@ -99,6 +102,7 @@ typedef struct n00b_regex_dfa_t {
     uint16_t                            n_minterms_cached;  /**< Cached minterm count for flat table indexing. */
     uint8_t                             mt_log2;            /**< log2(n_minterms_padded) for bit-shift indexing. */
     bool                                is_flat;            /**< True if flat_transitions is populated. */
+    bool                                hit_state_limit;    /**< True if state creation hit the lazy limit. */
     n00b_rwlock_t                      *lock;
 } n00b_regex_dfa_t;
 
@@ -108,13 +112,14 @@ typedef struct n00b_regex_dfa_t {
 
 /** @brief A compiled regex — opaque, reusable, thread-safe after compile. */
 typedef struct n00b_regex_t {
-    n00b_regex_solver_t         solver;
-    n00b_regex_builder_t        builder;
+    n00b_regex_solver_t        *solver;
+    n00b_regex_builder_t       *builder;
     n00b_regex_minterm_table_t *minterms;
     n00b_regex_dfa_t           *forward_dfa;
     n00b_regex_dfa_t           *reverse_dfa;
     n00b_string_t              *pattern;
     bool                        is_full_dfa;
+    bool                        has_anchors; /**< Root pattern depends on anchors (^, $). */
     n00b_regex_optimizations_t  optimizations; /**< Pre-computed match-time optimizations. */
 } n00b_regex_t;
 

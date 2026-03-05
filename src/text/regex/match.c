@@ -7,6 +7,61 @@
 
 #include <limits.h>
 #include <string.h>
+#include <stdio.h>
+
+// Debug: dump a node tree (limited depth)
+static void
+dbg_dump_node(n00b_regex_builder_t *b, uint32_t id, int depth)
+{
+    if (depth > 8) { fprintf(stderr, "..."); return; }
+    for (int i = 0; i < depth; i++) fprintf(stderr, "  ");
+
+    if (id < N00B_RE_SENTINEL_COUNT) {
+        const char *names[] = {"NOTHING","EPSILON","ANY","DOTSTAR","ANYPLUS","BEGIN","END"};
+        fprintf(stderr, "[%u] %s\n", id, names[id]);
+        return;
+    }
+    n00b_regex_node_t *n = n00b_regex_node_get(b, id);
+    switch (n->kind) {
+    case N00B_RE_SINGLETON:
+        fprintf(stderr, "[%u] Singleton(set=%u)\n", id, n->singleton.set);
+        break;
+    case N00B_RE_LOOP:
+        fprintf(stderr, "[%u] Loop(lo=%d, hi=%d) nullable=%d always=%d\n", id,
+                n->loop.lo, n->loop.hi, n->can_be_nullable, n->is_always_nullable);
+        dbg_dump_node(b, n->loop.body, depth+1);
+        break;
+    case N00B_RE_CONCAT:
+        fprintf(stderr, "[%u] Concat nullable=%d always=%d\n", id,
+                n->can_be_nullable, n->is_always_nullable);
+        dbg_dump_node(b, n->concat.head, depth+1);
+        dbg_dump_node(b, n->concat.tail, depth+1);
+        break;
+    case N00B_RE_OR:
+        fprintf(stderr, "[%u] Or(%u children)\n", id, n->multi.count);
+        for (uint32_t i = 0; i < n->multi.count && i < 4; i++)
+            dbg_dump_node(b, n->multi.children[i], depth+1);
+        break;
+    case N00B_RE_AND:
+        fprintf(stderr, "[%u] And(%u children)\n", id, n->multi.count);
+        for (uint32_t i = 0; i < n->multi.count && i < 4; i++)
+            dbg_dump_node(b, n->multi.children[i], depth+1);
+        break;
+    case N00B_RE_NOT:
+        fprintf(stderr, "[%u] Not\n", id);
+        dbg_dump_node(b, n->not_.inner, depth+1);
+        break;
+    case N00B_RE_LOOKAROUND:
+        fprintf(stderr, "[%u] Look%s(rel=%d, n_pending=%u) nullable=%d always=%d\n", id,
+                n->lookaround.look_back ? "behind" : "ahead",
+                n->lookaround.relative_to, n->lookaround.n_pending,
+                n->can_be_nullable, n->is_always_nullable);
+        dbg_dump_node(b, n->lookaround.body, depth+1);
+        break;
+    default:
+        fprintf(stderr, "[%u] kind=%d\n", id, n->kind);
+    }
+}
 
 // Forward declarations from deriv.c
 extern uint32_t
@@ -231,24 +286,41 @@ handle_input_end(n00b_regex_dfa_t *rev_dfa,
     n00b_regex_dfa_state_t *st = &rev_dfa->states.data[*state_id];
     int64_t pos = (int64_t)data_len;
 
-    // Check if nullable at End location
+    // Check if nullable at End location (resharp: isNullable(LOC_END))
     bool nullable_at_end = (st->flags & N00B_RE_SF_END_NULLABLE) != 0
                         || (st->flags & N00B_RE_SF_ALWAYS_NULLABLE) != 0;
-    bool depends_on_anchor = (st->flags & N00B_RE_SF_ANCHOR_NULLABLE) != 0;
+    if (!nullable_at_end && st->node_id >= N00B_RE_SENTINEL_COUNT) {
+        nullable_at_end = n00b_regex_node_is_nullable(
+            rev_dfa->builder, st->node_id, LOC_END);
+    }
+
+    // Check anchor dependency from the node directly, not from state flags.
+    bool depends_on_anchor = false;
+    if (st->node_id >= N00B_RE_SENTINEL_COUNT) {
+        n00b_regex_node_t *node = n00b_regex_node_get(rev_dfa->builder, st->node_id);
+        depends_on_anchor = node->depends_on_anchor;
+    }
+
+    static bool hie_dbg = false;
+    static bool hie_dbg_checked = false;
+    if (!hie_dbg_checked) { hie_dbg = getenv("N00B_RE_DEBUG") != nullptr; hie_dbg_checked = true; }
+    if (hie_dbg) {
+        fprintf(stderr, "DBG HIE: state=%u node=%u flags=0x%x null_kind=%u nullable_at_end=%d depends_on_anchor=%d pos=%lld\n",
+                *state_id, st->node_id, st->flags, st->null_kind, nullable_at_end, depends_on_anchor, pos);
+    }
 
     if (!nullable_at_end && !depends_on_anchor) {
-        // Not nullable at end and no anchor dependency — start reverse scan from end
         return pos;
     }
 
     if (nullable_at_end) {
-        // State is nullable at end — add position(s)
         if (st->flags & N00B_RE_SF_PENDING_NULLABLE) {
             add_pending_rev(st, acc, pos);
         }
         else {
             acc_push(acc, pos);
         }
+        if (hie_dbg) fprintf(stderr, "DBG HIE: added pos=%lld\n", pos);
     }
 
     // Take one End-location transition backward from the last codepoint
@@ -259,10 +331,14 @@ handle_input_end(n00b_regex_dfa_t *rev_dfa,
         *state_id = n00b_regex_dfa_step_end(rev_dfa, *state_id, mt);
         pos = bd.prev_pos;
 
-        // Check new state
         st = &rev_dfa->states.data[*state_id];
+        if (hie_dbg) {
+            fprintf(stderr, "DBG HIE: end-trans -> state=%u node=%u null_kind=%u flags=0x%x pos=%lld\n",
+                    *state_id, st->node_id, st->null_kind, st->flags, pos);
+        }
         if (state_is_null(st)) {
             add_null_positions(st, acc, pos);
+            if (hie_dbg) fprintf(stderr, "DBG HIE: added null pos=%lld\n", pos);
         }
     }
 
@@ -279,16 +355,22 @@ handle_input_start(n00b_regex_dfa_t *rev_dfa,
 {
     n00b_regex_dfa_state_t *st = &rev_dfa->states.data[state_id];
 
-    // Check if nullable at Begin location
+    // Check if nullable at Begin location (resharp: isNullable(LOC_BEGIN))
     bool nullable_at_begin = (st->flags & N00B_RE_SF_BEGIN_NULLABLE) != 0
                           || (st->flags & N00B_RE_SF_ALWAYS_NULLABLE) != 0;
+    if (!nullable_at_begin && st->node_id >= N00B_RE_SENTINEL_COUNT) {
+        nullable_at_begin = n00b_regex_node_is_nullable(
+            rev_dfa->builder, st->node_id, LOC_BEGIN);
+    }
 
     if (!nullable_at_begin) return;
 
     // Avoid duplicate: don't add 0 if last entry is already 0
     if (acc->len > 0 && acc->data[acc->len - 1] == 0) return;
 
-    // Add position 0 with NullKind offset
+    // Add position 0 with NullKind offset.
+    // For anchor-only nullable states (BEGIN_NULLABLE but not ALWAYS_NULLABLE),
+    // null_kind may be NOT_NULL — still add position 0 since the anchor resolved.
     switch (st->null_kind) {
     case N00B_RE_NULL_CURRENT:
         acc_push(acc, 0);
@@ -314,6 +396,8 @@ handle_input_start(n00b_regex_dfa_t *rev_dfa,
         }
         break;
     default:
+        // Anchor-only nullable: null_kind is NOT_NULL but BEGIN_NULLABLE is set
+        acc_push(acc, 0);
         break;
     }
 }
@@ -329,6 +413,13 @@ collect_starts(n00b_regex_dfa_t *rev_dfa,
 {
     uint32_t state = init_state;
     int64_t  pos = start_pos;
+
+    static bool cs_dbg = false;
+    static bool cs_dbg_checked = false;
+    if (!cs_dbg_checked) { cs_dbg = getenv("N00B_RE_DEBUG") != nullptr; cs_dbg_checked = true; }
+    if (cs_dbg) {
+        fprintf(stderr, "DBG CS: init_state=%u start_pos=%lld\n", init_state, start_pos);
+    }
 
     // Fast path: flat transition table + bit-shift indexing + ASCII fast path
     if (rev_dfa->is_flat) {
@@ -351,11 +442,17 @@ collect_starts(n00b_regex_dfa_t *rev_dfa,
                 mt = n00b_regex_minterm_classify(rev_dfa->minterms, bd.cp);
                 prev_pos = bd.prev_pos;
             }
+            uint32_t old_state = state;
             state = flat[(state << mt_log) | mt] & 0x7FFFFFFFu;
 
             n00b_regex_dfa_state_t *st = &rev_dfa->states.data[state];
+            if (cs_dbg) {
+                fprintf(stderr, "DBG CS: pos=%lld->%lld char='%c' mt=%u: state %u->%u null_kind=%u flags=0x%x\n",
+                        pos, prev_pos, prev_byte, mt, old_state, state, st->null_kind, st->flags);
+            }
             if (state_is_null(st)) {
                 add_null_positions(st, acc, prev_pos);
+                if (cs_dbg) fprintf(stderr, "DBG CS: added null prev_pos=%lld\n", prev_pos);
             }
             pos = prev_pos;
         }
@@ -506,6 +603,14 @@ reverse_find_start(n00b_regex_t *re, const char *data, uint32_t data_len,
         }
     }
 
+    {
+        static bool rfs_dbg = false, rfs_dbg_checked = false;
+        if (!rfs_dbg_checked) { rfs_dbg = getenv("N00B_RE_DEBUG") != nullptr; rfs_dbg_checked = true; }
+        if (rfs_dbg && data_len <= 20) {
+            fprintf(stderr, "DBG RFS: end_pos=%lld lower=%lld leftmost=%lld state=%u pos=%lld\n",
+                    end_pos, lower_bound, leftmost, state, pos);
+        }
+    }
     return leftmost;
 }
 
@@ -522,10 +627,39 @@ forward_longest_from(n00b_regex_dfa_t *fwd_dfa,
     int64_t  last_final = -1;
     uint32_t pos = start;
 
-    // Check if initial state is final
+    static bool fl_dbg = false;
+    static bool fl_dbg_checked = false;
+    if (!fl_dbg_checked) { fl_dbg = getenv("N00B_RE_DEBUG") != nullptr; fl_dbg_checked = true; }
+
+    // Check if initial state is final (using NullKind for correct lookaround offsets)
     n00b_regex_dfa_state_t *st = &fwd_dfa->states.data[state];
+    if (fl_dbg) {
+        fprintf(stderr, "DBG FWD: start=%u init_state=%u node=%u flags=0x%x null_kind=%u\n",
+                start, init_state, st->node_id, st->flags, st->null_kind);
+        if (data_len <= 10) {
+            fprintf(stderr, "DBG FWD node tree:\n");
+            dbg_dump_node(fwd_dfa->builder, st->node_id, 1);
+        }
+    }
     if (st->flags & N00B_RE_SF_ALWAYS_NULLABLE) {
-        last_final = (int64_t)pos;
+        switch (st->null_kind) {
+        case N00B_RE_NULL_CURRENT:
+            last_final = (int64_t)pos;
+            break;
+        case N00B_RE_NULL_PREV:
+            // Can't go before start
+            break;
+        case N00B_RE_NULL_PENDING: {
+            int64_t candidate = (int64_t)pos - st->min_pending;
+            if (candidate >= (int64_t)start && candidate > last_final) {
+                last_final = candidate;
+            }
+            break;
+        }
+        default:
+            last_final = (int64_t)pos;
+            break;
+        }
     }
 
     // Fast path: flat transition table + ASCII byte LUT + per-state skip + bit-shift indexing
@@ -550,9 +684,13 @@ forward_longest_from(n00b_regex_dfa_t *fwd_dfa,
                                   | N00B_RE_SF_BEGIN_NULLABLE
                                   | N00B_RE_SF_ANCHOR_NULLABLE))) {
                 const uint8_t *smap = st->skip_map;
+                const uint8_t *dmap = st->dead_map;
                 while (pos < data_len) {
                     uint8_t b = (uint8_t)data[pos];
                     if (b >= 0x80 || (smap[b >> 3] & (1u << (b & 7)))) break;
+                    // If this byte leads to the dead state, stop the entire
+                    // forward scan — no point stepping into dead.
+                    if (b < 0x80 && (dmap[b >> 3] & (1u << (b & 7)))) goto fwd_done;
                     pos++;
                 }
                 if (pos >= data_len) break;
@@ -572,17 +710,30 @@ forward_longest_from(n00b_regex_dfa_t *fwd_dfa,
                 mt = n00b_regex_minterm_classify(fwd_dfa->minterms, (n00b_codepoint_t)cp);
             }
 
+            uint32_t old_st = state;
             state = flat[(state << mt_log) | mt] & 0x7FFFFFFFu;
 
             st = &fwd_dfa->states.data[state];
-            if (st->flags & N00B_RE_SF_ALWAYS_NULLABLE) {
-                last_final = (int64_t)pos;
+            if (fl_dbg) {
+                fprintf(stderr, "DBG FWD: pos=%u char='%c' mt=%u: state %u->%u node=%u null_kind=%u flags=0x%x\n",
+                        pos, b, mt, old_st, state, st->node_id, st->null_kind, st->flags);
             }
-            else if (st->null_kind == N00B_RE_NULL_PENDING) {
+            switch (st->null_kind) {
+            case N00B_RE_NULL_CURRENT:
+                last_final = (int64_t)pos;
+                break;
+            case N00B_RE_NULL_PREV: {
+                int64_t candidate = (int64_t)pos - 1;
+                if (candidate > last_final) last_final = candidate;
+                break;
+            }
+            case N00B_RE_NULL_PENDING: {
                 int64_t candidate = (int64_t)pos - st->min_pending;
-                if (candidate > last_final) {
-                    last_final = candidate;
-                }
+                if (candidate > last_final) last_final = candidate;
+                break;
+            }
+            default:
+                break;
             }
         }
     } else {
@@ -605,34 +756,59 @@ forward_longest_from(n00b_regex_dfa_t *fwd_dfa,
 
             state = n00b_regex_dfa_step(fwd_dfa, state, mt);
 
+            // debug removed
+
             st = &fwd_dfa->states.data[state];
-            if (st->flags & N00B_RE_SF_ALWAYS_NULLABLE) {
+            switch (st->null_kind) {
+            case N00B_RE_NULL_CURRENT:
                 last_final = (int64_t)pos;
+                break;
+            case N00B_RE_NULL_PREV: {
+                int64_t candidate = (int64_t)pos - 1;
+                if (candidate > last_final) last_final = candidate;
+                break;
             }
-            else if (st->null_kind == N00B_RE_NULL_PENDING) {
+            case N00B_RE_NULL_PENDING: {
                 int64_t candidate = (int64_t)pos - st->min_pending;
-                if (candidate > last_final) {
-                    last_final = candidate;
-                }
+                if (candidate > last_final) last_final = candidate;
+                break;
+            }
+            default:
+                break;
             }
         }
     }
 
+fwd_done:
     // Check end-of-input nullability
     if (pos >= data_len) {
         st = &fwd_dfa->states.data[state];
-        if ((st->flags & N00B_RE_SF_END_NULLABLE)
-            && (int64_t)pos > last_final) {
-            last_final = (int64_t)pos;
-        }
-        else if (st->null_kind == N00B_RE_NULL_PENDING) {
-            int64_t candidate = (int64_t)pos - st->min_pending;
+        if (st->flags & (N00B_RE_SF_END_NULLABLE | N00B_RE_SF_ALWAYS_NULLABLE
+                         | N00B_RE_SF_PENDING_NULLABLE)) {
+            int64_t candidate;
+            switch (st->null_kind) {
+            case N00B_RE_NULL_CURRENT:
+                candidate = (int64_t)pos;
+                break;
+            case N00B_RE_NULL_PREV:
+                candidate = (int64_t)pos - 1;
+                break;
+            case N00B_RE_NULL_PENDING:
+                candidate = (int64_t)pos - st->min_pending;
+                break;
+            default:
+                candidate = (int64_t)pos;
+                break;
+            }
             if (candidate > last_final) {
                 last_final = candidate;
             }
         }
     }
 
+    if (fl_dbg) {
+        fprintf(stderr, "DBG FWD: returning last_final=%lld pos=%u state=%u\n", last_final, pos, state);
+    }
     return last_final;
 }
 
@@ -657,8 +833,19 @@ static uint32_t
 find_all_matches(n00b_regex_t *re, const char *data, uint32_t data_len,
                  match_pair_t **out_matches)
 {
+    static bool fam_dbg = false, fam_dbg_checked = false;
+    if (!fam_dbg_checked) { fam_dbg = getenv("N00B_RE_DEBUG") != nullptr; fam_dbg_checked = true; }
+    if (fam_dbg) {
+        fprintf(stderr, "DBG FAM: pat='%.*s' data_len=%u has_anchors=%d accel=%d\n",
+                (int)(re->pattern->u8_bytes < 40 ? re->pattern->u8_bytes : 40),
+                re->pattern->data, data_len, re->has_anchors,
+                re->optimizations.accelerator.kind);
+    }
+
     // --- Override: fixed-string matching ---
-    if (re->optimizations.override_.kind == N00B_RE_OVERRIDE_FIXED_STRING) {
+    // Skip when pattern has anchors — anchors need the three-phase path.
+    if (re->optimizations.override_.kind == N00B_RE_OVERRIDE_FIXED_STRING
+        && !re->has_anchors) {
         const n00b_codepoint_t *needle = re->optimizations.override_.fixed_string.codepoints;
         uint32_t needle_len = re->optimizations.override_.fixed_string.len;
 
@@ -701,12 +888,14 @@ find_all_matches(n00b_regex_t *re, const char *data, uint32_t data_len,
     }
 
     // --- Prefix acceleration for find-all ---
+    // Skip prefix acceleration when pattern has anchors — anchors are validated
+    // by the reverse scan in the three-phase path, not by the prefix accelerator.
     const n00b_regex_accelerator_t *accel = &re->optimizations.accelerator;
     const n00b_regex_len_lookup_t  *llen  = &re->optimizations.len_lookup;
     n00b_regex_minterm_table_t     *mt_t  = re->minterms;
-    n00b_regex_solver_t            *solv  = &re->solver;
+    n00b_regex_solver_t            *solv  = re->solver;
 
-    if (accel->kind != N00B_RE_ACCEL_NONE) {
+    if (accel->kind != N00B_RE_ACCEL_NONE && !re->has_anchors) {
         bool can_use_len = (accel->kind == N00B_RE_ACCEL_FIXED_PREFIX
                             || accel->kind == N00B_RE_ACCEL_FIXED_PREFIX_CI
                             || accel->kind == N00B_RE_ACCEL_MINTERM_PREFIX);
@@ -737,6 +926,11 @@ find_all_matches(n00b_regex_t *re, const char *data, uint32_t data_len,
                 else {
                     end = forward_longest(re->forward_dfa, data, data_len, (uint32_t)found);
                 }
+            }
+
+            if (fam_dbg && data_len <= 20) {
+                fprintf(stderr, "DBG ACCEL: found=%lld end=%lld ts=%u plen=%u needs_rev=%d\n",
+                        found, end, ts, plen, accel->needs_reverse_start);
             }
 
             if (end >= 0) {
@@ -783,6 +977,16 @@ find_all_matches(n00b_regex_t *re, const char *data, uint32_t data_len,
     // Phase 2: Reverse scan from scan_start
     collect_starts(re->reverse_dfa, data, data_len, &acc, rev_state, scan_start);
 
+    static bool dbg = false;
+    static bool dbg_checked = false;
+    if (!dbg_checked) { dbg = getenv("N00B_RE_DEBUG") != nullptr; dbg_checked = true; }
+    if (dbg) {
+        fprintf(stderr, "DBG three-phase: data_len=%u scan_start=%lld acc.len=%u rev_state=%u\n",
+                data_len, scan_start, acc.len, rev_state);
+        for (uint32_t di = 0; di < acc.len; di++)
+            fprintf(stderr, "  acc[%u] = %lld\n", di, acc.data[di]);
+    }
+
     if (acc.len == 0) {
         acc_free(&acc);
         *out_matches = nullptr;
@@ -803,6 +1007,9 @@ find_all_matches(n00b_regex_t *re, const char *data, uint32_t data_len,
         int64_t end = try_length_lookup(llen, re->forward_dfa, data, data_len, solv, s);
         if (end < 0) {
             end = forward_longest(re->forward_dfa, data, data_len, (uint32_t)s);
+        }
+        if (dbg) {
+            fprintf(stderr, "DBG P3: start=%lld end=%lld next_valid=%lld\n", s, end, next_valid);
         }
         if (end < 0) continue;
 
@@ -1167,7 +1374,7 @@ n00b_regex_is_match(n00b_regex_t *re, n00b_string_t *input)
     const n00b_regex_accelerator_t *accel = &re->optimizations.accelerator;
     const n00b_regex_len_lookup_t  *llen  = &re->optimizations.len_lookup;
     n00b_regex_minterm_table_t     *mt_t  = re->minterms;
-    n00b_regex_solver_t            *solv  = &re->solver;
+    n00b_regex_solver_t            *solv  = re->solver;
 
     if (accel->kind != N00B_RE_ACCEL_NONE) {
         // Length lookup is only safe when the accelerator confirms a full prefix match.
@@ -1359,7 +1566,7 @@ count_all_matches(n00b_regex_t *re, const char *data, uint32_t data_len)
     const n00b_regex_accelerator_t *accel = &re->optimizations.accelerator;
     const n00b_regex_len_lookup_t  *llen  = &re->optimizations.len_lookup;
     n00b_regex_minterm_table_t     *mt_t  = re->minterms;
-    n00b_regex_solver_t            *solv  = &re->solver;
+    n00b_regex_solver_t            *solv  = re->solver;
 
     if (accel->kind != N00B_RE_ACCEL_NONE) {
         bool can_use_len = (accel->kind == N00B_RE_ACCEL_FIXED_PREFIX

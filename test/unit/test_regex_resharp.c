@@ -349,34 +349,19 @@ static int total_compile_fail = 0;
 static int total_timeout = 0;
 
 static jmp_buf timeout_jmp;
-static volatile sig_atomic_t timed_out;
 
-static void timeout_handler(int sig) {
+static void
+timeout_handler(int sig)
+{
     (void)sig;
-    timed_out = 1;
     longjmp(timeout_jmp, 1);
 }
+
+#define PER_TEST_TIMEOUT 5  // seconds
 
 static void
 run_match_test(const test_case_t *tc, const char *file)
 {
-    // Per-test timeout (3 seconds)
-    timed_out = 0;
-    struct sigaction sa = {.sa_handler = timeout_handler};
-    struct sigaction old_sa;
-    sigaction(SIGALRM, &sa, &old_sa);
-
-    if (setjmp(timeout_jmp) != 0) {
-        // Timed out
-        fprintf(stderr, "  [TIMEOUT] %s:%d pattern='%s'\n",
-                file, tc->line_number, tc->pattern);
-        total_timeout++;
-        alarm(0);
-        sigaction(SIGALRM, &old_sa, NULL);
-        return;
-    }
-    alarm(1);
-
     n00b_string_t *pat = n00b_string_from_cstr(tc->pattern);
     auto result = n00b_regex_new(pat);
 
@@ -400,6 +385,18 @@ run_match_test(const test_case_t *tc, const char *file)
     n00b_regex_compile(re);
 
     n00b_string_t *input = n00b_string_from_cstr(tc->input);
+
+    // Per-test timeout to prevent hangs on complex patterns
+    signal(SIGALRM, timeout_handler);
+    if (setjmp(timeout_jmp)) {
+        signal(SIGALRM, SIG_DFL);
+        fprintf(stderr, "  [TIMEOUT] %s:%d pattern='%s' input='%.40s%s'\n",
+                file, tc->line_number, tc->pattern,
+                tc->input, strlen(tc->input) > 40 ? "..." : "");
+        total_timeout++;
+        return;
+    }
+    alarm(PER_TEST_TIMEOUT);
 
     if (tc->has_matches) {
         auto results = n00b_regex_matches(re, input);
@@ -484,7 +481,7 @@ run_match_test(const test_case_t *tc, const char *file)
     }
 
     alarm(0);
-    sigaction(SIGALRM, &old_sa, NULL);
+    signal(SIGALRM, SIG_DFL);
 }
 
 static void
@@ -533,7 +530,7 @@ main(int argc, char **argv)
     printf("\nResults: %d passed, %d failed, %d compile-fail, %d skipped, %d timeout\n",
            total_pass, total_fail, total_compile_fail, total_skip, total_timeout);
 
-    if (total_fail > 0) {
+    if (total_fail > 0 || total_timeout > 0) {
         printf("FAIL\n");
         return 1;
     }

@@ -220,7 +220,7 @@ n00b_regex_calc_prefix_sets(struct n00b_regex_t  *re,
                              n00b_regex_charset_t *out_sets,
                              uint32_t              max_len)
 {
-    n00b_regex_builder_t *b   = &re->builder;
+    n00b_regex_builder_t *b   = re->builder;
     n00b_regex_dfa_t     *dfa = re->forward_dfa;
     n00b_regex_minterm_table_t *mt = re->minterms;
 
@@ -275,7 +275,7 @@ calc_potential_match_start(struct n00b_regex_t  *re,
                            n00b_regex_charset_t *out_sets,
                            uint32_t              max_len)
 {
-    n00b_regex_builder_t *b   = &re->builder;
+    n00b_regex_builder_t *b   = re->builder;
     n00b_regex_dfa_t     *dfa = re->forward_dfa;
     n00b_regex_minterm_table_t *mt = re->minterms;
 
@@ -511,7 +511,7 @@ strip_lookback_prefix(n00b_regex_builder_t *b, uint32_t node)
 static n00b_regex_len_lookup_t
 infer_length_lookup(struct n00b_regex_t *re, uint32_t node)
 {
-    n00b_regex_builder_t *b = &re->builder;
+    n00b_regex_builder_t *b = re->builder;
     n00b_regex_len_lookup_t result = {.kind = N00B_RE_LEN_MATCH_END};
 
     // Check for fixed-length match
@@ -621,7 +621,7 @@ infer_override(struct n00b_regex_t          *re,
 {
     n00b_regex_override_t result = {.kind = N00B_RE_OVERRIDE_NONE};
 
-    n00b_regex_node_t *n = n00b_regex_node_get(&re->builder, node);
+    n00b_regex_node_t *n = n00b_regex_node_get(re->builder, node);
 
     // Can't override if depends on anchors or contains lookarounds
     if (n->depends_on_anchor || n->contains_lookaround) return result;
@@ -736,7 +736,7 @@ static n00b_regex_accelerator_t
 find_initial_optimizations(struct n00b_regex_t *re, uint32_t node)
 {
     n00b_regex_accelerator_t result = {.kind = N00B_RE_ACCEL_NONE, .needs_reverse_start = false};
-    n00b_regex_builder_t *b = &re->builder;
+    n00b_regex_builder_t *b = re->builder;
 
     // Check if get_prefix_node will strip a nullable head (e.g., .* in .*Holmes).
     // If so, prefix acceleration finds the suffix position, not the true match start.
