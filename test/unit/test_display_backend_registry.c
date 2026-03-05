@@ -8,6 +8,23 @@
 #include "widget_demo_backend_resolution.h"
 
 static void
+test_runtime_init_registers_backends(void)
+{
+    n00b_option_t(n00b_renderer_vtable_ptr_t) stream =
+        n00b_renderer_find(r"stream");
+    n00b_option_t(n00b_renderer_vtable_ptr_t) ansi =
+        n00b_renderer_find(r"ansi");
+    n00b_option_t(n00b_renderer_vtable_ptr_t) dumb =
+        n00b_renderer_find(r"dumb");
+
+    assert(n00b_option_is_set(stream));
+    assert(n00b_option_is_set(ansi));
+    assert(n00b_option_is_set(dumb));
+
+    printf("  [PASS] runtime init registers builtins\n");
+}
+
+static void
 test_builtin_registry_entries(void)
 {
     n00b_renderer_registry_init();
@@ -93,6 +110,7 @@ main(int argc, char **argv)
     n00b_init(&runtime, argc, argv);
 
     printf("Running display backend-registry tests...\n");
+    test_runtime_init_registers_backends();
     test_builtin_registry_entries();
     test_gui_alias();
     test_widget_demo_resolution_uses_registry_aliases();

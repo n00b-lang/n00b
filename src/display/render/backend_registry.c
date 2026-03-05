@@ -29,6 +29,72 @@ typedef struct {
 static registry_entry_t registry[MAX_BACKENDS];
 static n00b_isize_t      registry_count = 0;
 static bool              registry_initialized = false;
+static const char       *backend_override_env = "N00B_RENDERER_BACKEND";
+
+static const char *const auto_candidates[] = {
+    "ansi",
+    "gui",
+    "notcurses",
+    "stream",
+    "dumb",
+};
+
+// -------------------------------------------------------------------
+// Selection helpers
+// -------------------------------------------------------------------
+
+static n00b_string_t *
+normalize_backend_name(n00b_string_t *name)
+{
+    if (!name || n00b_unicode_str_eq(name, r"", .case_sensitive = false)) {
+        return r"auto";
+    }
+
+    if (n00b_unicode_str_eq(name, r"tui", .case_sensitive = false)) {
+        return r"ansi";
+    }
+
+    if (n00b_unicode_str_eq(name, r"nc", .case_sensitive = false)) {
+        return r"notcurses";
+    }
+
+    return name;
+}
+
+static bool
+candidate_list_contains(n00b_list_t(n00b_string_t *) *candidates,
+                        n00b_string_t               *name)
+{
+    for (size_t i = 0; i < candidates->len; i++) {
+        n00b_string_t *existing = n00b_list_get(*candidates, i);
+        if (n00b_unicode_str_eq(existing, name, .case_sensitive = false)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void
+candidate_list_push_unique(n00b_list_t(n00b_string_t *) *candidates,
+                           n00b_string_t               *name)
+{
+    if (!name) {
+        return;
+    }
+
+    n00b_string_t *normalized = normalize_backend_name(name);
+    if (!candidate_list_contains(candidates, normalized)) {
+        n00b_list_push(*candidates, normalized);
+    }
+}
+
+static void
+candidate_list_append_auto(n00b_list_t(n00b_string_t *) *candidates)
+{
+    for (size_t i = 0; i < (sizeof(auto_candidates) / sizeof(auto_candidates[0])); i++) {
+        candidate_list_push_unique(candidates, n00b_string_from_cstr(auto_candidates[i]));
+    }
+}
 
 // -------------------------------------------------------------------
 // Registration
@@ -88,6 +154,68 @@ n00b_renderer_list(void)
     }
 
     return result;
+}
+
+n00b_list_t(n00b_string_t *)
+n00b_renderer_candidate_names(n00b_string_t *requested) _kargs
+{
+    bool allow_fallback     = true;
+    bool allow_env_override = true;
+}
+{
+    n00b_list_t(n00b_string_t *) result = n00b_list_new(n00b_string_t *);
+
+    if (allow_env_override) {
+        const char *env_value = getenv(backend_override_env);
+        if (env_value && env_value[0]) {
+            candidate_list_push_unique(&result, n00b_string_from_cstr(env_value));
+        }
+    }
+
+    n00b_string_t *normalized_request = normalize_backend_name(requested);
+    bool is_auto = n00b_unicode_str_eq(normalized_request, r"auto",
+                                       .case_sensitive = false);
+
+    if (is_auto) {
+        candidate_list_append_auto(&result);
+        return result;
+    }
+
+    candidate_list_push_unique(&result, normalized_request);
+
+    if (allow_fallback) {
+        candidate_list_append_auto(&result);
+    }
+
+    return result;
+}
+
+n00b_result_t(n00b_renderer_vtable_ptr_t)
+n00b_renderer_resolve_exact(n00b_string_t *name) _kargs
+{
+    bool allow_dynamic_load = true;
+}
+{
+    if (!name || n00b_unicode_str_eq(name, r"", .case_sensitive = false)) {
+        return n00b_result_err(n00b_renderer_vtable_ptr_t, EINVAL);
+    }
+
+    n00b_string_t *normalized = normalize_backend_name(name);
+    n00b_renderer_registry_init();
+
+    n00b_option_t(n00b_renderer_vtable_ptr_t) found =
+        n00b_renderer_find(normalized);
+
+    if (n00b_option_is_set(found)) {
+        return n00b_result_ok(n00b_renderer_vtable_ptr_t,
+                               n00b_option_get(found));
+    }
+
+    if (!allow_dynamic_load) {
+        return n00b_result_err(n00b_renderer_vtable_ptr_t, ENOENT);
+    }
+
+    return n00b_renderer_load_by_name(normalized);
 }
 
 // -------------------------------------------------------------------
@@ -150,6 +278,8 @@ n00b_renderer_load_by_name(n00b_string_t *name)
     if (!name) {
         return n00b_result_err(n00b_renderer_vtable_ptr_t, EINVAL);
     }
+
+    n00b_renderer_registry_init();
 
     // First check if already registered.
     n00b_option_t(n00b_renderer_vtable_ptr_t) found =

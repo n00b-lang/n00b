@@ -86,6 +86,46 @@ extern n00b_option_t(n00b_renderer_vtable_ptr_t)
 extern n00b_list_t(n00b_string_t *) n00b_renderer_list(void);
 
 // ====================================================================
+// Selection policy
+// ====================================================================
+
+/**
+ * @brief Build ordered backend candidates for a runtime backend request.
+ *
+ * Alias normalization:
+ * - `tui` -> `ansi`
+ * - `nc`  -> `notcurses`
+ *
+ * Request handling:
+ * - `nullptr` or `auto` expands to deterministic auto candidates.
+ * - Explicit names are tried first; optional fallback can append auto
+ *   candidates after the explicit request.
+ *
+ * Environment override:
+ * - When enabled, `$N00B_RENDERER_BACKEND` is prepended as the first
+ *   candidate (after alias normalization).
+ */
+extern n00b_list_t(n00b_string_t *)
+n00b_renderer_candidate_names(n00b_string_t *requested) _kargs
+{
+    bool allow_fallback     = true;
+    bool allow_env_override = true;
+};
+
+/**
+ * @brief Resolve one exact backend candidate name.
+ *
+ * Resolution is registry-first. If the name is not already registered
+ * and dynamic loading is allowed, this function attempts to load the
+ * backend using `n00b_renderer_load_by_name(name)`.
+ */
+extern n00b_result_t(n00b_renderer_vtable_ptr_t)
+n00b_renderer_resolve_exact(n00b_string_t *name) _kargs
+{
+    bool allow_dynamic_load = true;
+};
+
+// ====================================================================
 // Dynamic loading
 // ====================================================================
 

@@ -63,16 +63,24 @@ typedef struct n00b_canvas_t {
  * @brief Initialize a pre-allocated canvas with the given backend.
  * @param c Canvas to initialize.
  *
- * @kw vtable    Renderer vtable (must not be nullptr).
+ * @kw vtable    Renderer vtable (optional direct backend path).
+ * @kw backend_name Requested backend name (defaults to `auto` when no vtable is given).
+ * @kw backend_allow_fallback     Append fallback candidates after explicit request.
+ * @kw backend_allow_dynamic_load Allow dynamic plugin loading during backend resolve.
+ * @kw backend_allow_env_override Honor `$N00B_RENDERER_BACKEND` override in selection.
  * @kw allocator Allocator for internal allocations (nullptr = runtime default).
  * @kw output    Output topic for the backend (nullptr = none).
  *
- * @post Canvas is ready; backend is initialized.
+ * @post On success, canvas backend is initialized (`backend_ctx != nullptr`).
  */
 extern void
 n00b_canvas_init(n00b_canvas_t *c) _kargs
 {
     const n00b_renderer_vtable_t           *vtable    = nullptr;
+    n00b_string_t                          *backend_name = nullptr;
+    bool                                    backend_allow_fallback = true;
+    bool                                    backend_allow_dynamic_load = true;
+    bool                                    backend_allow_env_override = true;
     n00b_allocator_t                       *allocator = nullptr;
     n00b_conduit_topic_t(n00b_buffer_t *)  *output    = nullptr;
 };

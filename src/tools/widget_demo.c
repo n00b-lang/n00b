@@ -60,13 +60,6 @@
 #include "text/strings/string_style.h"
 #include "text/strings/string_ops.h"
 #include "text/strings/theme.h"
-#if defined(N00B_HAVE_NOTCURSES)
-#include "display/render/backend_notcurses.h"
-#endif
-#if defined(__APPLE__)
-#include "display/render/backend_cocoa.h"
-#endif
-#include "widget_demo_backend_resolution.h"
 
 // ====================================================================
 // Debug log
@@ -604,17 +597,48 @@ static void
 usage(const char *prog)
 {
     fprintf(stderr,
-            "Usage: %s --widget <name> --backend <tui|gui|cocoa|x11|nc> [--theme <name>]\n"
+            "Usage: %s --widget <name> [--backend <auto|tui|gui|cocoa|x11|nc|stream|dumb>] [--theme <name>]\n"
             "\n"
             "Widgets:  label, all\n"
-            "Backends: tui (ANSI alt-screen), gui (portable alias),\n"
+            "Backends: auto (policy-driven), tui (ANSI alt-screen),\n"
+            "          gui (portable alias),\n"
             "          cocoa (macOS native), x11 (Linux/Unix native),\n"
-            "          nc / notcurses (pixel + cell-based terminal)\n"
+            "          nc / notcurses (pixel + cell-based terminal),\n"
+            "          stream (buffer capture), dumb (no-op)\n"
             "          gui maps to cocoa on macOS, x11 on Linux/Unix\n"
             "\n"
             "Short flags: -w <widget> -b <backend> -t <theme>\n",
             prog);
     exit(1);
+}
+
+static const char *
+normalize_backend_alias(const char *name)
+{
+    if (!name || !name[0]) {
+        return "auto";
+    }
+
+    if (strcmp(name, "tui") == 0) {
+        return "ansi";
+    }
+
+    if (strcmp(name, "nc") == 0) {
+        return "notcurses";
+    }
+
+    return name;
+}
+
+static bool
+backend_uses_terminal_io(const char *selected_backend)
+{
+    if (!selected_backend) {
+        return false;
+    }
+
+    return strcmp(selected_backend, "ansi") == 0
+        || strcmp(selected_backend, "notcurses") == 0;
 }
 
 static bool
@@ -660,6 +684,10 @@ widget_demo_apply_resize(n00b_canvas_t *canvas, const n00b_event_t *event)
 static void
 widget_demo_hold_gui(n00b_canvas_t *canvas)
 {
+    if (!canvas || !canvas->vtable || !canvas->vtable->poll_event) {
+        return;
+    }
+
     for (;;) {
         n00b_event_t event = {.type = N00B_EVENT_NONE};
 
@@ -687,7 +715,7 @@ int
 main(int argc, char **argv)
 {
     const char *widget_name  = nullptr;
-    const char *backend_name = nullptr;
+    const char *backend_name = "auto";
     const char *theme_name   = nullptr;
 
     for (int i = 1; i < argc; i++) {
@@ -708,7 +736,7 @@ main(int argc, char **argv)
         }
     }
 
-    if (!widget_name || !backend_name) {
+    if (!widget_name) {
         usage(argv[0]);
     }
 
@@ -723,31 +751,6 @@ main(int argc, char **argv)
     n00b_runtime_t runtime;
     n00b_init(&runtime, argc, argv);
     dbg("Runtime initialized.\n");
-
-    n00b_widget_demo_backend_resolution_t backend = {};
-    if (!n00b_widget_demo_resolve_backend(backend_name, &backend)) {
-        if (strcmp(backend_name, "gui") == 0) {
-            fprintf(stderr,
-                    "Backend 'gui' is unavailable in this build "
-                    "(requires cocoa on macOS or x11 on Linux/Unix).\n");
-        }
-        else {
-            fprintf(stderr, "Unknown backend: %s\n", backend_name);
-        }
-        n00b_shutdown();
-        if (g_log) {
-            fclose(g_log);
-        }
-        usage(argv[0]);
-    }
-
-    const n00b_renderer_vtable_t *vtable = backend.vtable;
-    bool backend_uses_terminal_io = backend.uses_terminal_io;
-
-    dbg("Selected vtable: name='%s' version=%u canonical='%s'\n",
-        vtable->name,
-        vtable->version,
-        backend.canonical_name ? backend.canonical_name : "unknown");
 
     // Apply theme override if requested.
     if (theme_name) {
@@ -771,18 +774,42 @@ main(int argc, char **argv)
     // Create canvas with chosen backend.  Heap-allocate so the GC
     // can trace through it to find all reachable planes and widgets.
     n00b_canvas_t *canvas = n00b_alloc(n00b_canvas_t);
-    n00b_canvas_init(canvas, .vtable = vtable, .output = stdout_topic);
+    n00b_canvas_init(canvas,
+                     .backend_name           = n00b_string_from_cstr(backend_name),
+                     .backend_allow_fallback = true,
+                     .backend_allow_dynamic_load = true,
+                     .backend_allow_env_override = true,
+                     .output                 = stdout_topic);
 
     if (!canvas->backend_ctx) {
         fprintf(stderr,
-                "Failed to initialize backend '%s'.\n",
-                vtable->name ? vtable->name : "unknown");
+                "Failed to initialize backend '%s' (or fallback candidates).\n",
+                backend_name);
+        n00b_canvas_destroy(canvas);
         n00b_shutdown();
         if (g_log) {
             fclose(g_log);
         }
         return 1;
     }
+
+    const char *selected_backend = canvas->vtable && canvas->vtable->name
+                                 ? canvas->vtable->name
+                                 : "unknown";
+    const char *normalized_requested = normalize_backend_alias(backend_name);
+    bool used_fallback = strcmp(normalized_requested, selected_backend) != 0;
+    bool uses_terminal_io = backend_uses_terminal_io(selected_backend);
+
+    fprintf(stderr, "Backend request '%s' selected '%s'%s\n",
+            backend_name,
+            selected_backend,
+            used_fallback ? " (fallback)" : "");
+
+    dbg("Selected backend: requested='%s' selected='%s' fallback=%d\n",
+        backend_name, selected_backend, (int)used_fallback);
+    dbg("Selected vtable: name='%s' version=%u\n",
+        selected_backend,
+        canvas->vtable ? canvas->vtable->version : 0u);
 
     dbg("Canvas initialized:\n");
     dbg_canvas(canvas);
@@ -798,14 +825,22 @@ main(int argc, char **argv)
     }
     else {
         fprintf(stderr, "Unknown widget: %s\n", widget_name);
+        n00b_canvas_destroy(canvas);
         n00b_shutdown();
         return 1;
+    }
+
+    if (use_event_loop && (!canvas->vtable || !canvas->vtable->poll_event)) {
+        fprintf(stderr,
+                "Backend '%s' has no input polling; using single-frame mode.\n",
+                selected_backend);
+        use_event_loop = false;
     }
 
     // Render.
     dbg("\n=== About to render ===\n");
 
-    if (backend_uses_terminal_io) {
+    if (uses_terminal_io) {
 
         if (use_event_loop) {
             // Interactive event loop for "all" mode.
@@ -894,22 +929,25 @@ main(int argc, char **argv)
         }
     }
     else {
-        // GUI backend: use the event loop for interactive mode,
-        // or keep the window alive for inspection after a one-shot render.
+        // Non-terminal backend — use the event loop for interactive mode,
+        // render once for passive backends, and keep GUI backends open
+        // when they support event polling.
         if (use_event_loop) {
-            dbg("Starting GUI event loop...\n");
+            dbg("Starting non-terminal event loop...\n");
             n00b_canvas_run(canvas, .tick_ms = 50);
-            dbg("GUI event loop exited.\n");
+            dbg("Non-terminal event loop exited.\n");
         }
         else {
-            dbg("Calling canvas_render (gui)...\n");
+            dbg("Calling canvas_render (non-terminal)...\n");
             n00b_canvas_render(canvas);
 
             dbg("After render:\n");
             dbg_canvas(canvas);
 
-            dbg("Holding GUI demo open until close/interrupt...\n");
-            widget_demo_hold_gui(canvas);
+            if (canvas->vtable && canvas->vtable->poll_event) {
+                dbg("Holding non-terminal demo open until close/interrupt...\n");
+                widget_demo_hold_gui(canvas);
+            }
         }
     }
 
