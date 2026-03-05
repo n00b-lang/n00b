@@ -14,6 +14,7 @@
 #include "display/widget.h"
 #include "display/widgets/checkbox.h"
 #include "display/event.h"
+#include "internal/display/widget_primitives.h"
 #include "text/unicode/properties.h"
 #include "text/strings/text_style.h"
 #include "text/strings/string_style.h"
@@ -133,11 +134,9 @@ checkbox_render(n00b_plane_t *plane, void *data)
     }
 
     // Pixel width of an average character cell (used to convert glyph counts).
-    int32_t cpw = n00b_plane_text_width(plane, n00b_string_from_cstr("M"), nullptr);
-    if (cpw <= 0) cpw = 1;
+    int32_t cpw = n00b_widget_cell_px_width(plane);
 
-    bool focused = (n00b_plane_get_state(plane) == N00B_WSTATE_FOCUSED
-                    || n00b_plane_get_state(plane) == N00B_WSTATE_ACTIVE);
+    bool focused = n00b_widget_state_is_focused_or_active(plane);
 
     const n00b_checkbox_glyphs_t *g = &cb->glyphs;
     int32_t col = 0;
@@ -200,8 +199,7 @@ checkbox_handle_event(n00b_plane_t *plane, void *data, const n00b_event_t *event
 
     // Mouse left-click toggles.
     if (event->type == N00B_EVENT_MOUSE) {
-        if (event->mouse.button == N00B_MOUSE_LEFT
-            && event->mouse.action == N00B_MOUSE_PRESS) {
+        if (n00b_widget_event_is_left_press(event)) {
             cb->checked = !cb->checked;
             n00b_plane_mark_dirty(plane);
 
@@ -217,10 +215,8 @@ checkbox_handle_event(n00b_plane_t *plane, void *data, const n00b_event_t *event
         return false;
     }
 
-    uint32_t key = event->key.key;
-
     // Space or Enter toggles.
-    if (key == ' ' || key == N00B_KEY_ENTER) {
+    if (n00b_widget_event_is_keyboard_activate(event)) {
         cb->checked = !cb->checked;
         n00b_plane_mark_dirty(plane);
 
@@ -248,12 +244,10 @@ checkbox_measure(n00b_plane_t *plane, void *data,
 {
     n00b_checkbox_t *cb = (n00b_checkbox_t *)data;
 
-    int32_t lh = n00b_plane_line_height(plane, nullptr);
-    if (lh <= 0) lh = 1;
+    int32_t lh = n00b_widget_line_px_height(plane);
 
     // Pixel width of an average character cell (use "M" as reference).
-    int32_t cpw = n00b_plane_text_width(plane, n00b_string_from_cstr("M"), nullptr);
-    if (cpw <= 0) cpw = 1;
+    int32_t cpw = n00b_widget_cell_px_width(plane);
 
     int32_t label_w = 0;
     if (cb && cb->label) {
@@ -315,12 +309,7 @@ n00b_checkbox_new(n00b_string_t *label) _kargs {
         if (label) {
             label_w = n00b_plane_text_width(plane, label, nullptr);
         }
-        int32_t cell_w = n00b_plane_text_width(plane,
-                                                n00b_string_from_cstr("M"),
-                                                nullptr);
-        if (cell_w < 1) {
-            cell_w = 1;
-        }
+        int32_t cell_w = n00b_widget_cell_px_width(plane);
         int32_t overhead = (int32_t)(g->focus_width + g->indicator_width + 1);
         width = (int32_t)(overhead * cell_w + (label_w > 0 ? label_w : 0));
     }
@@ -328,7 +317,7 @@ n00b_checkbox_new(n00b_string_t *label) _kargs {
         width = (int32_t)(g->focus_width + g->indicator_width);
     }
     if (height == 0) {
-        height = n00b_plane_line_height(plane, nullptr);
+        height = n00b_widget_line_px_height(plane);
     }
 
     plane->width  = width;
@@ -354,11 +343,12 @@ n00b_checkbox_new(n00b_string_t *label) _kargs {
 void
 n00b_checkbox_set_checked(n00b_plane_t *plane, bool checked)
 {
-    if (!plane || plane->widget_vtable != &n00b_widget_checkbox) {
+    n00b_checkbox_t *cb =
+        n00b_widget_data_if_kind(plane, &n00b_widget_checkbox);
+    if (!cb) {
         return;
     }
 
-    n00b_checkbox_t *cb = (n00b_checkbox_t *)plane->widget_data;
     cb->checked = checked;
     n00b_plane_mark_dirty(plane);
 }
@@ -366,11 +356,12 @@ n00b_checkbox_set_checked(n00b_plane_t *plane, bool checked)
 bool
 n00b_checkbox_is_checked(n00b_plane_t *plane)
 {
-    if (!plane || plane->widget_vtable != &n00b_widget_checkbox) {
+    n00b_checkbox_t *cb =
+        n00b_widget_data_if_kind(plane, &n00b_widget_checkbox);
+    if (!cb) {
         return false;
     }
 
-    n00b_checkbox_t *cb = (n00b_checkbox_t *)plane->widget_data;
     return cb->checked;
 }
 
@@ -379,11 +370,11 @@ n00b_checkbox_set_indicator(n00b_plane_t              *plane,
                              n00b_checkbox_indicator_t  indicator,
                              n00b_render_cap_t          caps)
 {
-    if (!plane || plane->widget_vtable != &n00b_widget_checkbox) {
+    n00b_checkbox_t *cb =
+        n00b_widget_data_if_kind(plane, &n00b_widget_checkbox);
+    if (!cb) {
         return;
     }
-
-    n00b_checkbox_t *cb = (n00b_checkbox_t *)plane->widget_data;
 
     const n00b_checkbox_glyphs_t *g = checkbox_resolve_glyphs(indicator, caps);
 

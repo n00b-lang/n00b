@@ -13,6 +13,7 @@
 #include "display/widget.h"
 #include "display/widgets/switch.h"
 #include "display/event.h"
+#include "internal/display/widget_primitives.h"
 #include "text/unicode/properties.h"
 #include "text/strings/text_style.h"
 #include "text/strings/string_style.h"
@@ -60,11 +61,9 @@ switch_render(n00b_plane_t *plane, void *data)
         return;
     }
 
-    int32_t cpw = n00b_plane_text_width(plane, n00b_string_from_cstr("M"), nullptr);
-    if (cpw <= 0) cpw = 1;
+    int32_t cpw = n00b_widget_cell_px_width(plane);
 
-    bool focused = (n00b_plane_get_state(plane) == N00B_WSTATE_FOCUSED
-                    || n00b_plane_get_state(plane) == N00B_WSTATE_ACTIVE);
+    bool focused = n00b_widget_state_is_focused_or_active(plane);
 
     int32_t col = 0;
 
@@ -134,8 +133,7 @@ switch_handle_event(n00b_plane_t *plane, void *data, const n00b_event_t *event)
 
     // Mouse left-click toggles.
     if (event->type == N00B_EVENT_MOUSE) {
-        if (event->mouse.button == N00B_MOUSE_LEFT
-            && event->mouse.action == N00B_MOUSE_PRESS) {
+        if (n00b_widget_event_is_left_press(event)) {
             sw->on = !sw->on;
             n00b_plane_mark_dirty(plane);
 
@@ -151,10 +149,8 @@ switch_handle_event(n00b_plane_t *plane, void *data, const n00b_event_t *event)
         return false;
     }
 
-    uint32_t key = event->key.key;
-
     // Space or Enter toggles.
-    if (key == ' ' || key == N00B_KEY_ENTER) {
+    if (n00b_widget_event_is_keyboard_activate(event)) {
         sw->on = !sw->on;
         n00b_plane_mark_dirty(plane);
 
@@ -182,11 +178,9 @@ switch_measure(n00b_plane_t *plane, void *data,
 {
     n00b_switch_t *sw = (n00b_switch_t *)data;
 
-    int32_t lh = n00b_plane_line_height(plane, nullptr);
-    if (lh <= 0) lh = 1;
+    int32_t lh = n00b_widget_line_px_height(plane);
 
-    int32_t cpw = n00b_plane_text_width(plane, n00b_string_from_cstr("M"), nullptr);
-    if (cpw <= 0) cpw = 1;
+    int32_t cpw = n00b_widget_cell_px_width(plane);
 
     int32_t label_w = 0;
     if (sw && sw->label) {
@@ -241,11 +235,7 @@ n00b_switch_new(n00b_string_t *label) _kargs {
     // Auto-size: focus(1) + track(5) + space(1) + label.
     // Use plane text metrics when available; fall back to display width.
     if (width == 0) {
-        int32_t char_w = n00b_plane_text_width(
-            plane, n00b_string_from_cstr("M"), nullptr);
-        if (char_w <= 0) {
-            char_w = 1;
-        }
+        int32_t char_w = n00b_widget_cell_px_width(plane);
         int32_t overhead = (int32_t)(SW_FOCUS_WIDTH + SW_TRACK_WIDTH + 1)
                            * char_w;
         int32_t label_w = 0;
@@ -262,10 +252,7 @@ n00b_switch_new(n00b_string_t *label) _kargs {
     }
 
     if (height <= 0) {
-        height = n00b_plane_line_height(plane, nullptr);
-        if (height <= 0) {
-            height = 1;
-        }
+        height = n00b_widget_line_px_height(plane);
     }
 
     plane->width = width;
@@ -288,22 +275,22 @@ n00b_switch_new(n00b_string_t *label) _kargs {
 bool
 n00b_switch_is_on(n00b_plane_t *plane)
 {
-    if (!plane || plane->widget_vtable != &n00b_widget_switch) {
+    n00b_switch_t *sw = n00b_widget_data_if_kind(plane, &n00b_widget_switch);
+    if (!sw) {
         return false;
     }
 
-    n00b_switch_t *sw = (n00b_switch_t *)plane->widget_data;
     return sw->on;
 }
 
 void
 n00b_switch_set_on(n00b_plane_t *plane, bool on)
 {
-    if (!plane || plane->widget_vtable != &n00b_widget_switch) {
+    n00b_switch_t *sw = n00b_widget_data_if_kind(plane, &n00b_widget_switch);
+    if (!sw) {
         return;
     }
 
-    n00b_switch_t *sw = (n00b_switch_t *)plane->widget_data;
     sw->on = on;
     n00b_plane_mark_dirty(plane);
 }
@@ -311,11 +298,11 @@ n00b_switch_set_on(n00b_plane_t *plane, bool on)
 void
 n00b_switch_toggle(n00b_plane_t *plane)
 {
-    if (!plane || plane->widget_vtable != &n00b_widget_switch) {
+    n00b_switch_t *sw = n00b_widget_data_if_kind(plane, &n00b_widget_switch);
+    if (!sw) {
         return;
     }
 
-    n00b_switch_t *sw = (n00b_switch_t *)plane->widget_data;
     sw->on = !sw->on;
     n00b_plane_mark_dirty(plane);
 

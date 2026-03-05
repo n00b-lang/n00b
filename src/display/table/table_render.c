@@ -10,6 +10,7 @@
 #include "display/render/plane.h"
 #include "display/render/cell.h"
 #include "display/table/table.h"
+#include "internal/display/table_text_primitives.h"
 #include "text/strings/string_ops.h"
 #include "text/strings/string_style.h"
 #include "text/strings/style_ops.h"
@@ -406,30 +407,10 @@ render_cell_content(n00b_table_t *table, n00b_plane_t *plane,
             n00b_array_t(n00b_string_t *) lines = {};
 
             if (cell->content && cell->content->u8_bytes > 0) {
-                if (cell_should_wrap(table, cell)) {
-                    lines     = n00b_unicode_str_wrap(cell->content,
-                                                       .width = (int32_t)cw);
-                    num_lines = (int64_t)n00b_array_len(lines);
-                }
-                else {
-                    // No wrap: split on hard newlines, truncate each.
-                    n00b_array_t(n00b_string_t *) hard_lines =
-                        n00b_unicode_str_split_lines(cell->content);
-                    n00b_isize_t n_hard = n00b_array_len(hard_lines);
-
-                    lines = n00b_array_new(n00b_string_t *, n_hard);
-
-                    for (n00b_isize_t li = 0; li < n_hard; li++) {
-                        n00b_string_t *raw = n00b_array_get(hard_lines, li);
-                        n00b_string_t *trunc =
-                            n00b_unicode_str_truncate(raw,
-                                                       (int32_t)cw);
-                        n00b_array_set(lines, li, trunc);
-                    }
-
-                    num_lines = (int64_t)n_hard;
-                    n00b_array_free(hard_lines);
-                }
+                lines = n00b_table_text_lines_for_width(cell->content,
+                                                        (int32_t)cw,
+                                                        cell_should_wrap(table, cell));
+                num_lines = (int64_t)n00b_array_len(lines);
             }
 
             // Vertical alignment.
@@ -458,17 +439,8 @@ render_cell_content(n00b_table_t *table, n00b_plane_t *plane,
                 n00b_string_t *line = n00b_array_get(lines, (size_t)li);
 
                 // Horizontal alignment.
-                n00b_string_t *padded;
-
-                if (align & N00B_ALIGN_CENTER) {
-                    padded = n00b_unicode_str_center(line, (int32_t)cw);
-                }
-                else if (align & N00B_ALIGN_RIGHT) {
-                    padded = n00b_unicode_str_pad_left(line, (int32_t)cw);
-                }
-                else {
-                    padded = n00b_unicode_str_pad_right(line, (int32_t)cw);
-                }
+                n00b_string_t *padded =
+                    n00b_table_text_align_line(line, (int32_t)cw, align);
 
                 // Apply text style from cell props.  When both
                 // text_style and fill_style exist, merge them so text
