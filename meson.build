@@ -295,6 +295,8 @@ n00b_adt = [
 ]
 
 python3 = find_program('python3')
+unicode_allow_downloads = get_option('unicode_allow_downloads')
+unicode_strict_cache = get_option('unicode_strict_cache')
 
 gen_unicode_file_names = [
     'gen_age.c',
@@ -324,15 +326,27 @@ gen_unicode_file_names = [
     'gen_wordbreak.c',
 ]
 
+gen_unicode_cmd = [
+    python3,
+    meson.project_source_root() / 'src' / 'text' / 'unicode' / 'tools' / 'gen_tables.py',
+    '--out-dir', '@OUTDIR@',
+    '--cache-dir', meson.project_source_root() / 'src' / 'text' / 'unicode' / '.unicode_cache',
+    '--test-data-dir', meson.project_source_root() / 'test' / 'data',
+]
+
+if unicode_allow_downloads
+    gen_unicode_cmd += ['--allow-downloads']
+endif
+
+if unicode_strict_cache
+    gen_unicode_cmd += ['--strict']
+else
+    gen_unicode_cmd += ['--no-strict']
+endif
+
 gen_unicode_tables = custom_target('gen_unicode_tables',
     output: gen_unicode_file_names,
-    command: [
-        python3,
-        meson.project_source_root() / 'src' / 'text' / 'unicode' / 'tools' / 'gen_tables.py',
-        '--out-dir', '@OUTDIR@',
-        '--cache-dir', meson.project_source_root() / 'src' / 'text' / 'unicode' / '.unicode_cache',
-        '--test-data-dir', meson.project_source_root() / 'test' / 'data',
-    ],
+    command: gen_unicode_cmd,
     depend_files: files('src/text/unicode/tools/gen_tables.py'),
 )
 
@@ -608,6 +622,10 @@ n00b_objfile = [
 ]
 
 n00b_dll_src = n00b_core + n00b_adt + n00b_text + n00b_display + n00b_conduit + n00b_parsers + n00b_logic + n00b_slay + n00b_typecheck + n00b_compiler + n00b_objfile
+n00b_no_ncc_src = [
+    'src/core/xxhash_wrap.c',
+    'src/slay/token_id_hash.c',
+]
 
 # Build generated unicode tables with --no-ncc (they are pure data,
 # no ncc extensions, and parsing them is extremely expensive).
@@ -628,7 +646,14 @@ n00b_vendor_lib = static_library('n00b_vendor',
     link_args: link_args,
 )
 
-link_whole_libs = [gen_unicode_lib, n00b_vendor_lib]
+n00b_no_ncc_lib = static_library('n00b_no_ncc',
+    n00b_no_ncc_src,
+    include_directories: incdir,
+    c_args: exe_c_args + ['--no-ncc'],
+    link_args: link_args,
+)
+
+link_whole_libs = [gen_unicode_lib, n00b_vendor_lib, n00b_no_ncc_lib]
 
 # Build the Cocoa backend as a separate ObjC static library (macOS only).
 # ObjC files cannot go through ncc's C parser, so we compile them with
@@ -1002,7 +1027,7 @@ xform_json_test = executable('test_xform_json',
     ['test/unit/test_xform_json.c'],
     kwargs: test_common_kwargs,
 )
-test('xform_json', xform_json_test, suite: 'unit')
+test('xform_json', xform_json_test, suite: 'unit', timeout: 120)
 
 xform_http_test = executable('test_xform_http',
     ['test/unit/test_xform_http.c'],
@@ -1121,7 +1146,7 @@ cf_label_test = executable('test_cf_label',
     ['test/unit/test_cf_label.c'],
     kwargs: test_common_kwargs,
 )
-test('cf_label', cf_label_test, suite: 'unit')
+test('cf_label', cf_label_test, suite: 'unit', env: ['MALLOC_PERTURB_=0'])
 
 cfg_test = executable('test_cfg',
     ['test/unit/test_cfg.c'],

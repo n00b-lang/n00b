@@ -81,3 +81,12 @@ option('enable_freetype',
     value: true,
     description: 'Build with FreeType font rendering (required for pixel text in notcurses).')
 
+option('unicode_allow_downloads',
+    type: 'boolean',
+    value: false,
+    description: 'Allow Unicode table generator to download missing cache files.')
+
+option('unicode_strict_cache',
+    type: 'boolean',
+    value: true,
+    description: 'Fail Unicode table generation when required cache files are missing.')
