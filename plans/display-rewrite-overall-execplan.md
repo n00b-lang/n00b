@@ -27,6 +27,7 @@ This plan is the top-level roadmap for the in-place rewrite. "In-place" means ex
 - [x] (2026-03-05 13:06Z) Executed Milestone 3 and recorded Cocoa contract hardening plus Linux X11 GUI backend delivery, registry alias updates, and validation evidence in `plans/display-rewrite/m3-gui-backend-execplan.md`.
 - [x] (2026-03-05 13:19Z) Authored the Milestone 4 child ExecPlan in `plans/display-rewrite/m4-widget-table-migration-execplan.md`.
 - [x] (2026-03-05 13:41Z) Executed Milestone 4 and recorded shared widget/table/hexdump primitive migration, validation evidence, and deterministic M4 artifacts in `plans/display-rewrite/m4-widget-table-migration-execplan.md` and `plans/artifacts/display-rewrite/m4/`.
+- [x] (2026-03-05 13:50Z) Authored the Milestone 5 child ExecPlan in `plans/display-rewrite/m5-runtime-selection-execplan.md`.
 - [ ] Execute Milestones 5-6 as stacked diffs, preserving this document as the top-level source of milestone ordering and acceptance scope.
 
 ## Surprises & Discoveries
@@ -464,3 +465,4 @@ Dependencies that materially affect milestone planning include optional GUI/rend
 - 2026-03-05: Updated umbrella plan after Milestone 3 execution to mark M3 complete, record Linux X11 GUI backend evidence, update branch guidance to start at M4, and narrow remaining scope to Milestones 4-6. Reason: milestone planning state must match implemented GUI deliverables and current branch reality.
 - 2026-03-05: Marked Milestone 4 child ExecPlan authoring as complete after creating `plans/display-rewrite/m4-widget-table-migration-execplan.md`, while keeping remaining execution scope at Milestones 4-6.
 - 2026-03-05: Updated umbrella plan after Milestone 4 execution to mark M4 complete, add M4 validation/artifact evidence, adjust branch/remaining scope guidance to Milestones 5-6, and replace the missing table sample path in generic artifact commands with deterministic stdin-fed table input.
+- 2026-03-05: Marked Milestone 5 child ExecPlan authoring as complete after creating `plans/display-rewrite/m5-runtime-selection-execplan.md`, while keeping remaining execution scope at Milestones 5-6.
