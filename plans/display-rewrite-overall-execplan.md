@@ -18,7 +18,7 @@ This plan is the top-level roadmap for the in-place rewrite. "In-place" means ex
 - [x] (2026-03-05 09:19Z) Authored the Milestone 0 child ExecPlan in `plans/display-rewrite/m0-baseline-execplan.md`.
 - [x] (2026-03-05 09:34Z) Landed Milestone 0 harness code on `display-rewrite/m0-baseline`: `test_display_baseline_contract`, `test_display_baseline_flow`, `display_baseline_capture`, and `meson.build` wiring.
 - [x] (2026-03-05 10:41Z) Completed Milestone 0 acceptance evidence: named test passes, display smoke suite pass, and deterministic artifacts in `plans/artifacts/display-rewrite/m0/`.
-- [ ] Author the child ExecPlan for Milestone 1 in `plans/display-rewrite/m1-core-contracts-execplan.md`.
+- [x] (2026-03-05 11:18Z) Authored the Milestone 1 child ExecPlan in `plans/display-rewrite/m1-core-contracts-execplan.md`.
 - [ ] Execute Milestone 1 and record parity, diagnostics cleanup, and evidence artifacts.
 - [ ] Author and execute Milestones 2-6 as stacked diffs, preserving this document as the top-level source of milestone ordering and acceptance scope.
 
@@ -302,3 +302,4 @@ Dependencies that materially affect milestone planning include optional GUI/rend
 
 - 2026-03-05: Initial umbrella ExecPlan created to guide an in-place display rewrite with stacked diffs, milestone-specific child ExecPlans, and mandatory unit/integration/artifact acceptance requirements per milestone.
 - 2026-03-05: Updated umbrella plan to match the current `display-rewrite/m0-baseline` branch state: marked Milestone 0 complete, recorded real validation/artifact evidence, adjusted stack-root guidance to current branch lineage, and set Milestone 1 as the next pending step.
+- 2026-03-05: Marked Milestone 1 child ExecPlan authoring as complete after creating `plans/display-rewrite/m1-core-contracts-execplan.md`, so umbrella progress reflects current branch planning state.
