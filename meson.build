@@ -66,6 +66,10 @@ test(void)
 '''
 
 c_args = [
+  '--ncc-vargs-type=n00b_vargs_t',
+  '--ncc-rstr-string-type=n00b_string_t',
+  '--ncc-rstr-template-plain=({static n00b_string_t $0={.u8_bytes=$1,.data=$2,.codepoints=$3,.styling=((void*)0)};&$0;})',
+  '--ncc-rstr-template-styled=({$0 static n00b_string_t $1={.u8_bytes=$2,.data=$3,.codepoints=$4,.styling=$5};&$1;})',
   '-Wextra',
   '-g',
   '-std=c23',
@@ -371,6 +375,14 @@ n00b_text = [
     'src/text/strings/md_render.c',
     'src/text/strings/md_lines.c',
     'src/text/strings/theme.c',
+    # Regex engine (Brzozowski symbolic derivatives)
+    'src/text/regex/charset.c',
+    'src/text/regex/node.c',
+    'src/text/regex/parse.c',
+    'src/text/regex/deriv.c',
+    'src/text/regex/match.c',
+    'src/text/regex/optimize.c',
+    'src/text/regex/regex.c',
 ]
 
 # ============================================================================
@@ -923,6 +935,40 @@ print_test = executable('test_print',
     kwargs: test_common_kwargs,
 )
 test('print', print_test, suite: 'unit')
+
+# ============================================================================
+# Regex engine tests
+# ============================================================================
+
+regex_charset_test = executable('test_regex_charset',
+    ['test/unit/test_regex_charset.c'],
+    kwargs: test_common_kwargs,
+)
+test('regex_charset', regex_charset_test, suite: 'unit')
+
+regex_parse_test = executable('test_regex_parse',
+    ['test/unit/test_regex_parse.c'],
+    kwargs: test_common_kwargs,
+)
+test('regex_parse', regex_parse_test, suite: 'unit')
+
+regex_match_test = executable('test_regex_match',
+    ['test/unit/test_regex_match.c'],
+    kwargs: test_common_kwargs,
+)
+test('regex_match', regex_match_test, suite: 'unit')
+
+regex_api_test = executable('test_regex_api',
+    ['test/unit/test_regex_api.c'],
+    kwargs: test_common_kwargs,
+)
+test('regex_api', regex_api_test, suite: 'unit')
+
+regex_resharp_test = executable('test_regex_resharp',
+    ['test/unit/test_regex_resharp.c'],
+    kwargs: test_common_kwargs,
+)
+test('regex_resharp', regex_resharp_test, suite: 'unit')
 
 # ============================================================================
 # Logic / constraint solver tests
