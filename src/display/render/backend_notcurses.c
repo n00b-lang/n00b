@@ -25,6 +25,7 @@
 #include "display/render/composite.h"
 #include "core/string.h"
 #include "internal/display/diagnostics.h"
+#include "internal/display/terminal_input.h"
 
 #if N00B_HAVE_FREETYPE
 #include <ft2build.h>
@@ -252,7 +253,7 @@ typedef struct {
     unsigned int      last_cols;
 
     // Mouse drag detection state.
-    bool              mouse_button_down;
+    n00b_terminal_input_state_t input_state;
 } nc_ctx_t;
 
 // ====================================================================
@@ -1558,6 +1559,7 @@ nc_init(n00b_conduit_topic_t(n00b_buffer_t *) *output)
                        &pix_y, &pix_x, nullptr, nullptr);
     ctx->cell_pixel_h = pix_y;
     ctx->cell_pixel_w = pix_x;
+    n00b_terminal_input_reset(&ctx->input_state);
 
     // Detect pixel support.
     ctx->has_pixel = (notcurses_check_pixel_support(ctx->nc) > 0);
@@ -1758,44 +1760,6 @@ nc_prepare_gui(void *vctx, n00b_plane_t **planes, n00b_isize_t n)
 // Input polling
 // ====================================================================
 
-static uint32_t
-nc_map_key(uint32_t nc_id)
-{
-    switch (nc_id) {
-    case NCKEY_UP:        return N00B_KEY_UP;
-    case NCKEY_DOWN:      return N00B_KEY_DOWN;
-    case NCKEY_LEFT:      return N00B_KEY_LEFT;
-    case NCKEY_RIGHT:     return N00B_KEY_RIGHT;
-    case NCKEY_HOME:      return N00B_KEY_HOME;
-    case NCKEY_END:       return N00B_KEY_END;
-    case NCKEY_PGUP:      return N00B_KEY_PAGE_UP;
-    case NCKEY_PGDOWN:    return N00B_KEY_PAGE_DOWN;
-    case NCKEY_INS:       return N00B_KEY_INSERT;
-    case NCKEY_DEL:       return N00B_KEY_DELETE;
-    case NCKEY_BACKSPACE: return N00B_KEY_BACKSPACE;
-    case 0x7F:            return N00B_KEY_BACKSPACE; // Raw DEL.
-    case 0x08:            return N00B_KEY_BACKSPACE; // Raw BS.
-    case NCKEY_TAB:       return N00B_KEY_TAB;
-    case NCKEY_ENTER:     return N00B_KEY_ENTER;
-    case '\r':            return N00B_KEY_ENTER;  // Raw CR.
-    case '\n':            return N00B_KEY_ENTER;  // Raw LF.
-    case NCKEY_ESC:       return N00B_KEY_ESCAPE;
-    case NCKEY_F01:       return N00B_KEY_F1;
-    case NCKEY_F02:       return N00B_KEY_F2;
-    case NCKEY_F03:       return N00B_KEY_F3;
-    case NCKEY_F04:       return N00B_KEY_F4;
-    case NCKEY_F05:       return N00B_KEY_F5;
-    case NCKEY_F06:       return N00B_KEY_F6;
-    case NCKEY_F07:       return N00B_KEY_F7;
-    case NCKEY_F08:       return N00B_KEY_F8;
-    case NCKEY_F09:       return N00B_KEY_F9;
-    case NCKEY_F10:       return N00B_KEY_F10;
-    case NCKEY_F11:       return N00B_KEY_F11;
-    case NCKEY_F12:       return N00B_KEY_F12;
-    default:              return nc_id; // Unicode codepoint.
-    }
-}
-
 static bool
 nc_poll_event(void *vctx, int32_t timeout_ms, n00b_event_t *out)
 {
@@ -1840,131 +1804,22 @@ nc_poll_event(void *vctx, int32_t timeout_ms, n00b_event_t *out)
         return true;
     }
 
-    // Mouse events: buttons, scroll, motion.
-    if (ni.id >= NCKEY_BUTTON1 && ni.id <= NCKEY_BUTTON3) {
-        out->type = N00B_EVENT_MOUSE;
-        out->mouse.x = (int32_t)ni.x * (int32_t)ctx->cell_pixel_w;
-        out->mouse.y = (int32_t)ni.y * (int32_t)ctx->cell_pixel_h;
+    n00b_terminal_ncinput_view_t view = {
+        .id        = ni.id,
+        .evtype    = (uint32_t)ni.evtype,
+        .x         = ni.x,
+        .y         = ni.y,
+        .shift     = ni.shift,
+        .ctrl      = ni.ctrl,
+        .alt       = ni.alt,
+        .eff_text0 = (uint32_t)ni.eff_text[0],
+    };
 
-        switch (ni.id) {
-        case NCKEY_BUTTON1: out->mouse.button = N00B_MOUSE_LEFT;   break;
-        case NCKEY_BUTTON2: out->mouse.button = N00B_MOUSE_MIDDLE; break;
-        case NCKEY_BUTTON3: out->mouse.button = N00B_MOUSE_RIGHT;  break;
-        default:            out->mouse.button = N00B_MOUSE_NONE;   break;
-        }
-
-        out->mouse.mods = N00B_MOD_NONE;
-        if (ni.shift) out->mouse.mods |= N00B_MOD_SHIFT;
-        if (ni.ctrl)  out->mouse.mods |= N00B_MOD_CTRL;
-        if (ni.alt)   out->mouse.mods |= N00B_MOD_ALT;
-
-        if (ni.evtype == NCTYPE_RELEASE) {
-            out->mouse.action      = N00B_MOUSE_RELEASE;
-            ctx->mouse_button_down = false;
-        }
-        else if (ctx->mouse_button_down) {
-            out->mouse.action = N00B_MOUSE_DRAG;
-        }
-        else {
-            out->mouse.action      = N00B_MOUSE_PRESS;
-            ctx->mouse_button_down = true;
-        }
-        return true;
-    }
-    if (ni.id == NCKEY_SCROLL_UP || ni.id == NCKEY_SCROLL_DOWN) {
-        out->type         = N00B_EVENT_MOUSE;
-        out->mouse.x      = (int32_t)ni.x * (int32_t)ctx->cell_pixel_w;
-        out->mouse.y      = (int32_t)ni.y * (int32_t)ctx->cell_pixel_h;
-        out->mouse.button = (ni.id == NCKEY_SCROLL_UP) ? N00B_MOUSE_SCROLL_UP
-                                                        : N00B_MOUSE_SCROLL_DOWN;
-        out->mouse.action = N00B_MOUSE_PRESS;
-        out->mouse.mods   = N00B_MOD_NONE;
-        if (ni.shift) out->mouse.mods |= N00B_MOD_SHIFT;
-        if (ni.ctrl)  out->mouse.mods |= N00B_MOD_CTRL;
-        if (ni.alt)   out->mouse.mods |= N00B_MOD_ALT;
-        return true;
-    }
-    if (ni.id == NCKEY_MOTION) {
-        out->type         = N00B_EVENT_MOUSE;
-        out->mouse.x      = (int32_t)ni.x * (int32_t)ctx->cell_pixel_w;
-        out->mouse.y      = (int32_t)ni.y * (int32_t)ctx->cell_pixel_h;
-        out->mouse.button = N00B_MOUSE_NONE;
-        out->mouse.mods   = N00B_MOD_NONE;
-        if (ctx->mouse_button_down) {
-            out->mouse.action = N00B_MOUSE_DRAG;
-        }
-        else {
-            out->mouse.action = N00B_MOUSE_MOVE;
-        }
-        return true;
-    }
-
-    // Filter key-release events (can arrive at startup from the
-    // Enter that launched the program).  Accept PRESS, REPEAT, and
-    // UNKNOWN.
-    if (ni.evtype == NCTYPE_RELEASE) {
-        return false;
-    }
-
-    // Filter synthesized keys above the Unicode range that we
-    // don't handle (invalid / unrecognized notcurses keys).
-    if (ni.id >= NCKEY_INVALID) {
-        uint32_t mapped = nc_map_key(ni.id);
-        if (mapped == ni.id) {
-            // nc_map_key didn't recognize it — drop.
-            return false;
-        }
-    }
-
-    // Build modifier flags.
-    n00b_key_mod_t mods = N00B_MOD_NONE;
-    if (ni.shift) {
-        mods |= N00B_MOD_SHIFT;
-    }
-    if (ni.ctrl) {
-        mods |= N00B_MOD_CTRL;
-    }
-    if (ni.alt) {
-        mods |= N00B_MOD_ALT;
-    }
-
-    out->type     = N00B_EVENT_KEY;
-    out->key.mods = mods;
-
-    // Try recognized special keys first (Enter, Tab, arrows, etc.).
-    uint32_t mapped = nc_map_key(ni.id);
-    if (mapped != ni.id) {
-        out->key.key = mapped;
-        return true;
-    }
-
-    // Raw control characters (bytes 1–26): map to Ctrl+letter,
-    // matching the ANSI backend's convention.  This ensures e.g.
-    // byte 3 → key='c' + CTRL regardless of what notcurses reports
-    // in ni.ctrl / ni.eff_text.
-    if (ni.id >= 1 && ni.id <= 26) {
-        out->key.key  = ni.id + 'a' - 1;
-        out->key.mods |= N00B_MOD_CTRL;
-        return true;
-    }
-
-    // Printable character — prefer eff_text (has modifiers applied,
-    // e.g. Shift+' → ").  Fall back to ni.id.
-    if (ni.eff_text[0] != 0) {
-        out->key.key = ni.eff_text[0];
-    }
-    else {
-        out->key.key = ni.id;
-    }
-
-    // Reject null or bare escape fragments from broken SGR mouse
-    // sequences (notcurses issue #2904).
-    if (out->key.key == 0) {
-        out->type = N00B_EVENT_NONE;
-        return false;
-    }
-
-    return true;
+    return n00b_terminal_translate_notcurses(&view,
+                                              &ctx->input_state,
+                                              ctx->cell_pixel_w,
+                                              ctx->cell_pixel_h,
+                                              out);
 }
 
 // ====================================================================

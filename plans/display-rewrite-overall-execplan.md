@@ -22,7 +22,8 @@ This plan is the top-level roadmap for the in-place rewrite. "In-place" means ex
 - [x] (2026-03-05 11:18Z) Executed Milestone 1 and recorded parity, diagnostics cleanup, and evidence artifacts in `plans/display-rewrite/m1-core-contracts-execplan.md` and `plans/artifacts/display-rewrite/m1/`.
 - [x] (2026-03-05 11:18Z) Reconfigured with installed notcurses (`3.0.17`) and reran M1/display smoke validation with `notcurses_backend` enabled.
 - [x] (2026-03-05 11:23Z) Authored the Milestone 2 child ExecPlan in `plans/display-rewrite/m2-terminal-backend-execplan.md`.
-- [ ] Execute Milestones 2-6 as stacked diffs, preserving this document as the top-level source of milestone ordering and acceptance scope.
+- [x] (2026-03-05 11:45Z) Executed Milestone 2 and recorded terminal contract extraction, replay tooling, test validation, and parity artifacts in `plans/display-rewrite/m2-terminal-backend-execplan.md` and `plans/artifacts/display-rewrite/m2/`.
+- [ ] Execute Milestones 3-6 as stacked diffs, preserving this document as the top-level source of milestone ordering and acceptance scope.
 
 ## Surprises & Discoveries
 
@@ -42,6 +43,8 @@ This plan is the top-level roadmap for the in-place rewrite. "In-place" means ex
   Evidence: `build_debug/display_baseline_capture` required explicit `ninja -C build_debug display_baseline_capture` before artifact generation.
 - Observation: notcurses availability changed during M1, and Meson picked up the dependency after reconfigure without code-level fallback changes.
   Evidence: Initial M1 runs reported `Run-time dependency notcurses found: NO`; subsequent `ninja -C build_debug reconfigure` reported `Run-time dependency notcurses found: YES 3.0.17`, and `notcurses_backend` tests passed.
+- Observation: Milestone 2 terminal modularization preserved baseline stream outputs while removing large duplicated parsing/style blocks from terminal backends.
+  Evidence: `diff -u plans/artifacts/display-rewrite/m1/scene_stream.txt plans/artifacts/display-rewrite/m2/scene_stream.txt` and corresponding table diff both produced no output; new shared modules are wired through `src/display/event_loop.c`, `src/display/render/backend_ansi.c`, `src/display/render/backend_ansi_inline.c`, and `src/display/render/backend_notcurses.c`.
 
 ## Decision Log
 
@@ -63,12 +66,15 @@ This plan is the top-level roadmap for the in-place rewrite. "In-place" means ex
 - Decision: In this repository state, root the milestone stack on the `needs-rebase` lineage (`display-rewrite/m0-baseline` rebased onto `codex/linux-build-and-test`) rather than `main`.
   Rationale: The current `main` branch lacks the display sources needed for rewrite milestones in this workspace, while the chosen lineage supports full milestone validation.
   Date/Author: 2026-03-05 / Codex
+- Decision: Treat M2 acceptance as complete only after deterministic replay output and M1 artifact parity diffs are both validated in addition to unit/integration tests.
+  Rationale: M2 is primarily internal modularization; replay output plus parity diffs provide concrete evidence that behavior remained stable while architecture changed.
+  Date/Author: 2026-03-05 / Codex
 
 ## Outcomes & Retrospective
 
-Milestones 0 and 1 are complete on the active rewrite lineage. Milestone 0 established deterministic baseline harnessing (`display_baseline_contract`, `display_baseline_flow`, `display_baseline_capture`) and baseline artifacts in `plans/artifacts/display-rewrite/m0/`. Milestone 1 then carved out internal display contracts (`diagnostics`, `scene_contracts`, `event_dispatch`, `backend_services`), removed hardcoded `/tmp` diagnostics from touched display paths, added deterministic scene inspection (`display_scene_inspect`), and captured parity artifacts in `plans/artifacts/display-rewrite/m1/`.
+Milestones 0, 1, and 2 are complete on the active rewrite lineage. Milestone 0 established deterministic baseline harnessing (`display_baseline_contract`, `display_baseline_flow`, `display_baseline_capture`) and baseline artifacts in `plans/artifacts/display-rewrite/m0/`. Milestone 1 then carved out internal display contracts (`diagnostics`, `scene_contracts`, `event_dispatch`, `backend_services`), removed hardcoded `/tmp` diagnostics from touched display paths, added deterministic scene inspection (`display_scene_inspect`), and captured parity artifacts in `plans/artifacts/display-rewrite/m1/`. Milestone 2 extracted shared terminal contracts (`terminal_lifecycle`, `ansi_sgr`, `terminal_input`), rewired terminal backends/event loop to consume them, added deterministic replay tooling (`display_terminal_replay`), and produced parity-checked artifacts in `plans/artifacts/display-rewrite/m2/`.
 
-What remains is milestone execution from M2 onward: terminal backend modularization, GUI parity path, widget/table/hexdump migration, runtime backend selection cleanup, and final hardening/cutover. The key lesson through M1 is that deterministic artifact generation plus explicit internal contracts keeps parity diffs reviewable while refactoring large backend paths.
+What remains is milestone execution from M3 onward: GUI parity path, widget/table/hexdump migration, runtime backend selection cleanup, and final hardening/cutover. The key lesson through M2 is that deterministic artifact generation plus explicit internal contracts keeps parity diffs reviewable while refactoring large backend paths.
 
 ## Context and Orientation
 
@@ -122,6 +128,8 @@ Completion evidence: `display_diagnostics`, `display_scene_contracts`, `display_
 
 ### Milestone 2: Terminal Backend Rewrite On New Contracts
 
+Status: Complete on `display-rewrite/m2-terminal-backend`.
+
 Milestone 2 rewrites terminal execution paths to consume Milestone 1 internal contracts cleanly. This includes ANSI/inline ANSI rendering paths, terminal input translation, and event loop interactions that are currently scattered.
 
 Implementation scope includes decomposing terminal backend responsibilities into dedicated internal units (event translation, render diffing, lifecycle state, optional metrics helpers) under `src/display/render/`, while preserving existing backend entry symbols.
@@ -129,6 +137,8 @@ Implementation scope includes decomposing terminal backend responsibilities into
 Unit tests for this milestone must target terminal-specific helpers and renderer correctness under edge cases (resize, style degradation, cursor visibility, key normalization). Integration tests must drive an end-to-end terminal interaction sequence (focus traversal, mouse click routing, widget activation, rerender) through a deterministic harness. The human-runnable artifact is an interactive `widget_demo` terminal session plus a non-interactive replay command that emits a capture file under `plans/artifacts/display-rewrite/m2/`.
 
 Acceptance for Milestone 2 is that terminal behavior is feature-parity with baseline while code is modularized by concern and covered by both unit and integration tests.
+
+Completion evidence: `display_terminal_lifecycle`, `display_ansi_sgr`, `display_terminal_input`, `display_baseline_contract`, `display_event_dispatch`, `display_baseline_flow`, `display_m1_compat`, and `display_m2_terminal_flow` all passed; display smoke tests and `notcurses_backend` passed; `display_terminal_replay` artifacts were generated under `plans/artifacts/display-rewrite/m2/`; and M2 stream artifacts matched M1 (`scene_stream.txt`, `table_stream.txt`) with empty diffs.
 
 ### Milestone 3: GUI Backend Parity Path
 
@@ -322,6 +332,41 @@ Milestone 1 evidence captured on this branch:
     $ meson test -C build_debug --print-errorlogs notcurses_backend display_diagnostics display_scene_contracts display_event_dispatch display_baseline_contract display_baseline_flow display_m1_compat
     7/7 tests OK
 
+Milestone 2 evidence captured on this branch:
+
+    $ ninja -C build_debug display_terminal_replay display_baseline_capture display_scene_inspect
+    [14/14] Linking target display_terminal_replay
+
+    $ meson test -C build_debug --print-errorlogs display_terminal_lifecycle display_ansi_sgr display_terminal_input display_baseline_contract display_event_dispatch
+    5/5 tests OK
+
+    $ meson test -C build_debug --print-errorlogs display_baseline_flow display_m1_compat display_m2_terminal_flow
+    3/3 tests OK
+
+    $ meson test -C build_debug --print-errorlogs render_plane render_canvas render_ansi event_normalize focus mouse label button checkbox input list_widget selectionlist breadcrumb table_build table_layout table_render table_stream hexdump xform_render
+    19/19 unit tests OK
+
+    $ meson test -C build_debug --print-errorlogs notcurses_backend
+    1/1 tests OK
+
+    $ build_debug/display_baseline_capture --out-dir plans/artifacts/display-rewrite/m2
+    wrote scene_stream.txt
+    wrote table_stream.txt
+    wrote metadata.txt
+
+    $ build_debug/display_scene_inspect --out plans/artifacts/display-rewrite/m2/scene_inspect.txt
+    wrote plans/artifacts/display-rewrite/m2/scene_inspect.txt
+
+    $ build_debug/display_terminal_replay --out-dir plans/artifacts/display-rewrite/m2
+    wrote terminal_replay.txt
+    wrote metadata.txt
+
+    $ diff -u plans/artifacts/display-rewrite/m1/scene_stream.txt plans/artifacts/display-rewrite/m2/scene_stream.txt
+    (no output)
+
+    $ diff -u plans/artifacts/display-rewrite/m1/table_stream.txt plans/artifacts/display-rewrite/m2/table_stream.txt
+    (no output)
+
 ## Interfaces and Dependencies
 
 This rewrite must preserve and evolve the existing display-facing interfaces in place:
@@ -341,3 +386,4 @@ Dependencies that materially affect milestone planning include optional GUI/rend
 - 2026-03-05: Marked Milestone 1 child ExecPlan authoring as complete after creating `plans/display-rewrite/m1-core-contracts-execplan.md`, so umbrella progress reflects current branch planning state.
 - 2026-03-05: Marked Milestone 1 execution complete in the umbrella plan, added M1 artifact/test evidence (including notcurses-enabled rerun), and moved remaining scope to M2-M6.
 - 2026-03-05: Marked Milestone 2 child ExecPlan authoring as complete after creating `plans/display-rewrite/m2-terminal-backend-execplan.md`, and narrowed the remaining umbrella progress item to milestone execution.
+- 2026-03-05: Updated umbrella plan after Milestone 2 execution to mark M2 complete, add M2 validation/artifact evidence, and narrow remaining execution scope to Milestones 3-6.

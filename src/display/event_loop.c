@@ -11,13 +11,7 @@
  */
 
 #include <stdio.h>
-#include <signal.h>
 #include <time.h>
-
-#ifndef _WIN32
-#include <unistd.h>
-#include <termios.h>
-#endif
 
 #include "n00b.h"
 #include "display/event_loop.h"
@@ -29,165 +23,10 @@
 #include "internal/display/diagnostics.h"
 #include "internal/display/event_dispatch.h"
 #include "internal/display/scene_contracts.h"
+#include "internal/display/terminal_lifecycle.h"
 
 // Global stop flag (set by n00b_canvas_run_stop).
 static volatile bool g_run_stop = false;
-
-// -------------------------------------------------------------------
-// Terminal state saved for signal-safe restoration
-// -------------------------------------------------------------------
-
-#ifndef _WIN32
-static struct termios    g_saved_termios;
-static bool              g_termios_saved    = false;
-static bool              g_manages_tty      = false;
-static n00b_canvas_t    *g_signal_canvas    = nullptr;
-
-/*
- * Signal handler — async-signal-safe.
- *
- * For backends that manage their own TTY (notcurses), we just set the
- * stop flag and let the loop exit normally so the backend's destroy
- * path can clean up.
- *
- * For backends where WE manage the TTY (ANSI), we restore terminal
- * state immediately (in case the process is about to die) and then
- * re-raise with SIG_DFL.
- */
-static void
-signal_cleanup_handler(int sig)
-{
-    if (!g_manages_tty) {
-        static const char mouse_off[]    = "\033[?1006l\033[?1002l\033[?1000l";
-        static const char show_cursor[]  = "\033[?25h";
-        static const char sgr_reset[]    = "\033[0m";
-        static const char alt_leave[]    = "\033[?1049l";
-        write(STDOUT_FILENO, mouse_off,   sizeof(mouse_off)   - 1);
-        write(STDOUT_FILENO, show_cursor, sizeof(show_cursor) - 1);
-        write(STDOUT_FILENO, sgr_reset,   sizeof(sgr_reset)   - 1);
-        write(STDOUT_FILENO, alt_leave,   sizeof(alt_leave)    - 1);
-    }
-
-    // Restore original termios if we saved them.
-    if (g_termios_saved) {
-        tcsetattr(STDIN_FILENO, TCSANOW, &g_saved_termios);
-        g_termios_saved = false;
-    }
-
-    g_signal_canvas = nullptr;
-
-    // Re-raise with default handler so the parent gets the right exit status.
-    signal(sig, SIG_DFL);
-    raise(sig);
-}
-
-static void tty_write_raw(const char *seq);
-
-static void
-event_loop_setup_terminal(n00b_canvas_t *canvas)
-{
-    g_signal_canvas = canvas;
-
-    // Check if the backend manages terminal state itself.
-    n00b_render_cap_t caps = n00b_display_backend_caps(canvas);
-    g_manages_tty = (caps & N00B_RCAP_MANAGES_TTY) != 0;
-
-    // Always save termios so the signal handler can restore on fatal
-    // signals, even for backends that manage their own TTY state.
-    if (isatty(STDIN_FILENO)) {
-        tcgetattr(STDIN_FILENO, &g_saved_termios);
-        g_termios_saved = true;
-    }
-
-    // Install signal handlers for cleanup.
-    struct sigaction sa = {
-        .sa_handler = signal_cleanup_handler,
-        .sa_flags   = 0,
-    };
-    sigemptyset(&sa.sa_mask);
-    sigaction(SIGINT,  &sa, nullptr);
-    sigaction(SIGTERM, &sa, nullptr);
-    sigaction(SIGQUIT, &sa, nullptr);
-    sigaction(SIGHUP,  &sa, nullptr);
-
-    if (g_manages_tty) {
-        // Backend handles raw mode, alt screen, etc.
-        return;
-    }
-
-    if (!isatty(STDIN_FILENO)) {
-        return;
-    }
-
-    // Enter raw mode.
-    struct termios raw = g_saved_termios;
-    raw.c_lflag &= (tcflag_t)~(ECHO | ICANON | ISIG);
-    raw.c_cc[VMIN]  = 0;
-    raw.c_cc[VTIME] = 0;
-    tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
-
-    // Enter alt screen.
-    n00b_canvas_alt_screen_enter(canvas);
-
-    // Enable SGR mouse protocol if the backend reports mouse support.
-    // Only button + drag — NOT all-motion (1003h) which floods the
-    // event loop with motion events on every pixel movement.
-    if (caps & N00B_RCAP_MOUSE) {
-        tty_write_raw("\033[?1000h");  // Button events.
-        tty_write_raw("\033[?1002h");  // Button + drag events.
-        tty_write_raw("\033[?1006h");  // SGR extended coordinates.
-    }
-}
-
-/*
- * Write terminal cleanup sequences directly to the fd, bypassing the
- * conduit/backend buffer.  The conduit may be async or already
- * partially shut down, so we can't rely on it for cleanup.
- */
-static void
-tty_write_raw(const char *seq)
-{
-    size_t len = strlen(seq);
-    while (len > 0) {
-        ssize_t n = write(STDOUT_FILENO, seq, len);
-        if (n <= 0) break;
-        seq += n;
-        len -= (size_t)n;
-    }
-}
-
-static void
-event_loop_teardown_terminal(n00b_canvas_t *canvas)
-{
-    (void)canvas;
-
-    if (!g_manages_tty) {
-        // We manage terminal state — write cleanup sequences directly
-        // to stdout (the conduit may be async / shutting down).
-        tty_write_raw("\033[?1006l");  // Disable SGR extended mouse.
-        tty_write_raw("\033[?1002l");  // Disable button+drag.
-        tty_write_raw("\033[?1000l");  // Disable button events.
-        tty_write_raw("\033[?25h");    // Show cursor.
-        tty_write_raw("\033[0m");      // Reset SGR.
-        tty_write_raw("\033[?1049l");  // Leave alt screen.
-    }
-
-    // Restore termios (saved for all backends in setup).
-    if (g_termios_saved) {
-        tcsetattr(STDIN_FILENO, TCSAFLUSH, &g_saved_termios);
-        g_termios_saved = false;
-    }
-
-    // Restore default signal handlers.
-    signal(SIGINT,  SIG_DFL);
-    signal(SIGTERM, SIG_DFL);
-    signal(SIGQUIT, SIG_DFL);
-    signal(SIGHUP,  SIG_DFL);
-
-    g_signal_canvas = nullptr;
-    g_manages_tty   = false;
-}
-#endif /* _WIN32 */
 
 // -------------------------------------------------------------------
 // Public API
@@ -204,9 +43,7 @@ n00b_canvas_run(n00b_canvas_t *canvas) _kargs
     g_run_stop = false;
     n00b_display_diag_init();
 
-#ifndef _WIN32
-    event_loop_setup_terminal(canvas);
-#endif
+    n00b_display_terminal_setup(canvas);
 
     // Hide cursor during event loop.
     n00b_display_backend_set_cursor_visible(canvas, false);
@@ -355,9 +192,7 @@ n00b_canvas_run(n00b_canvas_t *canvas) _kargs
     // Restore cursor visibility.
     n00b_display_backend_set_cursor_visible(canvas, true);
 
-#ifndef _WIN32
-    event_loop_teardown_terminal(canvas);
-#endif
+    n00b_display_terminal_teardown(canvas);
 }
 
 void

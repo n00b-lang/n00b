@@ -397,6 +397,7 @@ n00b_display = [
     'src/display/diagnostics.c',
     'src/display/scene_contracts.c',
     'src/display/event_dispatch.c',
+    'src/display/terminal_lifecycle.c',
     # Render engine
     'src/display/render/cell.c',
     'src/display/render/border_themes.c',
@@ -408,6 +409,8 @@ n00b_display = [
     'src/display/render/backend_stream.c',
     'src/display/render/backend_ansi.c',
     'src/display/render/backend_ansi_inline.c',
+    'src/display/render/ansi_sgr.c',
+    'src/display/render/terminal_input.c',
     'src/display/render/backend_dumb.c',
     'src/display/render/draw_cmd.c',
     'src/display/render/font_metrics.c',
@@ -1416,6 +1419,24 @@ display_event_dispatch_test = executable('test_display_event_dispatch',
 )
 test('display_event_dispatch', display_event_dispatch_test, suite: 'unit')
 
+display_terminal_lifecycle_test = executable('test_display_terminal_lifecycle',
+    ['test/unit/test_display_terminal_lifecycle.c'],
+    kwargs: test_common_kwargs,
+)
+test('display_terminal_lifecycle', display_terminal_lifecycle_test, suite: 'unit')
+
+display_ansi_sgr_test = executable('test_display_ansi_sgr',
+    ['test/unit/test_display_ansi_sgr.c'],
+    kwargs: test_common_kwargs,
+)
+test('display_ansi_sgr', display_ansi_sgr_test, suite: 'unit')
+
+display_terminal_input_test = executable('test_display_terminal_input',
+    ['test/unit/test_display_terminal_input.c'],
+    kwargs: test_common_kwargs,
+)
+test('display_terminal_input', display_terminal_input_test, suite: 'unit')
+
 display_baseline_contract_test = executable('test_display_baseline_contract',
     ['test/unit/test_display_baseline_contract.c'],
     kwargs: test_common_kwargs,
@@ -1462,6 +1483,12 @@ display_baseline_capture = executable('display_baseline_capture',
 
 display_scene_inspect = executable('display_scene_inspect',
     ['src/tools/display_scene_inspect.c'],
+    kwargs: test_common_kwargs,
+    install: false,
+)
+
+display_terminal_replay = executable('display_terminal_replay',
+    ['src/tools/display_terminal_replay.c'],
     kwargs: test_common_kwargs,
     install: false,
 )
@@ -1543,6 +1570,12 @@ display_m1_compat_test = executable('test_display_m1_compat',
     kwargs: test_common_kwargs,
 )
 test('display_m1_compat', display_m1_compat_test, suite: 'integration')
+
+display_m2_terminal_flow_test = executable('test_display_m2_terminal_flow',
+    ['test/integration/test_display_m2_terminal_flow.c'],
+    kwargs: test_common_kwargs,
+)
+test('display_m2_terminal_flow', display_m2_terminal_flow_test, suite: 'integration')
 
 # ============================================================================
 # Unicode tests
