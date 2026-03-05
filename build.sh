@@ -6,10 +6,16 @@ N00B_DOCS=${N00B_DOCS:-0}
 N00B_CROSS=${N00B_CROSS:-}
 N00B_JOBS=${N00B_JOBS:-}
 N00B_NATIVE=${N00B_NATIVE:-0}
+N00B_UNICODE_ALLOW_DOWNLOADS=${N00B_UNICODE_ALLOW_DOWNLOADS:-0}
+N00B_UNICODE_STRICT_CACHE=${N00B_UNICODE_STRICT_CACHE:-1}
 
 # Default to a C23-capable compiler if CC is not set.
-if [[ -z "${CC}" ]] && [[ -x /usr/local/bin/clang ]] ; then
-    export CC=/usr/local/bin/clang
+if [[ -z "${CC}" ]] ; then
+    if command -v clang &>/dev/null ; then
+        export CC=$(command -v clang)
+    elif command -v cc &>/dev/null ; then
+        export CC=$(command -v cc)
+    fi
 fi
 
 # Ensure the macOS SDK root is set so the linker can find libSystem.
@@ -82,38 +88,46 @@ function all_options {
     local s="-Dusing_build_script=true"
 
     if [[ ${N00B_BUILD_DEBUG:-0} -ne 0 ]] ; then
-        s=${s} -Denable_debug=true
+        s="${s} -Denable_debug=true"
     fi
 
     if [[ ${N00B_BUILD_DEV:-0} -ne 0 ]] ; then
-        s=${s} -Ddev_mode=true
+        s="${s} -Ddev_mode=true"
     fi
 
     if [[ ${N00B_BUILD_LTO:-0} -ne 0 ]] ; then
-        s=${s} -Denable_lto=true
+        s="${s} -Denable_lto=true"
     fi
 
     if [[ ${N00B_BUILD_GC_STATS:-0} -ne 0 ]] ; then
-        s=${s} -Dshow_gc_stats=true
+        s="${s} -Dshow_gc_stats=true"
     fi
 
     if [[ ${N00B_BUILD_MEMCHECK:-0} -ne 0 ]] ; then
-        s=${s} -Duse_memcheck=true
+        s="${s} -Duse_memcheck=true"
     fi
 
     if [[ ${N00B_BUILD_ASAN:-0} -ne 0 ]] ; then
-        s=${s} -Duse_asan
+        s="${s} -Duse_asan"
     fi
 
     if [[ ${N00B_BUILD_UBSAN:-0} -ne 0 ]] ; then
-        s=${s} -Duse_ubsan
+        s="${s} -Duse_ubsan"
     fi
 
     if [[ ${N00B_BUILD_MUSL:-0} -ne 0 ]] ; then
-        s=${s} -Dusing_musl=true
+        s="${s} -Dusing_musl=true"
     fi
 
-    echo $s
+    if [[ ${N00B_UNICODE_ALLOW_DOWNLOADS} -ne 0 ]] ; then
+        s="${s} -Dunicode_allow_downloads=true"
+    fi
+
+    if [[ ${N00B_UNICODE_STRICT_CACHE} -eq 0 ]] ; then
+        s="${s} -Dunicode_strict_cache=false"
+    fi
+
+    echo "${s}"
 }
 
 function build_n00b {
@@ -140,6 +154,10 @@ function build_n00b {
    fi
 
    meson compile -C ${build_dir} ${jobs_flag}
+   if [[ $? -ne 0 ]] ; then
+       echo "Build compile failed."
+       exit 1
+   fi
 
    if [[ ${N00B_TEST} -ne 0 ]] ; then
        meson test -C ${build_dir} --print-errorlogs

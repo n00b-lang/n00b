@@ -116,6 +116,7 @@ typedef struct {
     bool         has_E;
     bool         has_c;
     bool         has_std;       // user specified -std=
+    bool         use_fno_blocks; // underlying compiler supports -fno-blocks
     bool         no_ncc;
     bool         ncc_help;
     bool         dump_tokens;
@@ -212,6 +213,59 @@ is_ncc_path(const char *path)
     return same;
 }
 
+static bool
+compiler_is_clang(const char *compiler)
+{
+    if (!compiler || !compiler[0]) {
+        return false;
+    }
+
+    const char *base = strrchr(compiler, '/');
+    base             = base ? base + 1 : compiler;
+
+    if (strstr(base, "clang")) {
+        return true;
+    }
+
+    int pipefd[2];
+    if (pipe(pipefd) < 0) {
+        return false;
+    }
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        close(pipefd[0]);
+        close(pipefd[1]);
+        return false;
+    }
+
+    if (pid == 0) {
+        const char *argv[] = {compiler, "--version", NULL};
+        close(pipefd[0]);
+        dup2(pipefd[1], STDOUT_FILENO);
+        dup2(pipefd[1], STDERR_FILENO);
+        close(pipefd[1]);
+        execvp(compiler, (char *const *)argv);
+        _exit(127);
+    }
+
+    close(pipefd[1]);
+
+    char    buf[512];
+    ssize_t n = read(pipefd[0], buf, sizeof(buf) - 1);
+    close(pipefd[0]);
+
+    int wstatus = 0;
+    waitpid(pid, &wstatus, 0);
+
+    if (n <= 0) {
+        return false;
+    }
+
+    buf[n] = '\0';
+    return strstr(buf, "clang") != NULL;
+}
+
 // ============================================================================
 // Argument parsing (simple hand-rolled, no commander dependency)
 // ============================================================================
@@ -234,8 +288,9 @@ parse_argv(ncc_opts_t *opts, int argc, const char **argv)
     }
 #endif
     if (!opts->compiler) {
-        opts->compiler = "/usr/local/bin/clang";
+        opts->compiler = "clang";
     }
+    opts->use_fno_blocks = compiler_is_clang(opts->compiler);
 
     // Init constexpr headers from env var (flag overrides later).
     const char *ce_env = getenv("NCC_CONSTEXPR_HEADERS");
@@ -1020,7 +1075,7 @@ run_preprocessor(const ncc_opts_t *opts, size_t *out_len)
         include_dir = src_dir;
     }
 
-    // Build argv: compiler -E -std=gnu23 -fno-blocks [-I src_dir]
+    // Build argv: compiler -E -std=gnu23 [-fno-blocks] [-I src_dir]
     //             [filtered clang_args...] tmp_path
     // Filter out -c, -o (and its argument) from preprocessor args.
     int extra = include_dir ? 2 : 0;
@@ -1038,8 +1093,10 @@ run_preprocessor(const ncc_opts_t *opts, size_t *out_len)
         argv[ai++] = "-std=gnu23";
     }
 
-    // Disable Apple block syntax in system headers.
-    argv[ai++] = "-fno-blocks";
+    // Disable Apple block syntax in system headers when the compiler supports it.
+    if (opts->use_fno_blocks) {
+        argv[ai++] = "-fno-blocks";
+    }
 
     if (include_dir) {
         argv[ai++] = "-I";
@@ -1395,7 +1452,9 @@ generate_depfile(const ncc_opts_t *opts)
         argv[ai++] = "-M";
     }
 
-    argv[ai++] = "-fno-blocks";
+    if (opts->use_fno_blocks) {
+        argv[ai++] = "-fno-blocks";
+    }
 
     if (!opts->has_std) {
         argv[ai++] = "-std=gnu23";
