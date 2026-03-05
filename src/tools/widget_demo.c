@@ -11,7 +11,8 @@
  * Press Ctrl-C to exit.
  * Tab cycles focus, Space/Enter activates widgets.
  *
- * Debug log written to /tmp/widget_demo.log
+ * Optional debug log:
+ *   --debug-log <path> or N00B_WIDGET_DEMO_LOG=<path>
  */
 
 #include <stdio.h>
@@ -33,6 +34,7 @@
 #include "core/string.h"
 #include "adt/option.h"
 #include "display/render/backend.h"
+#include "display/render/backend_registry.h"
 #include "display/render/canvas.h"
 #include "display/render/plane.h"
 #include "display/render/types.h"
@@ -598,7 +600,7 @@ static void
 usage(const char *prog)
 {
     fprintf(stderr,
-            "Usage: %s --widget <name> [--backend <auto|tui|gui|cocoa|x11|nc|stream|dumb>] [--theme <name>]\n"
+            "Usage: %s --widget <name> [--backend <auto|tui|gui|cocoa|x11|nc|stream|dumb>] [--theme <name>] [--debug-log <path>]\n"
             "\n"
             "Widgets:  label, all\n"
             "Backends: auto (policy-driven), tui (ANSI alt-screen),\n"
@@ -608,27 +610,48 @@ usage(const char *prog)
             "          stream (buffer capture), dumb (no-op)\n"
             "          gui maps to cocoa on macOS, x11 on Linux/Unix\n"
             "\n"
+            "Debug log: --debug-log <path> or N00B_WIDGET_DEMO_LOG=<path>\n"
+            "\n"
             "Short flags: -w <widget> -b <backend> -t <theme>\n",
             prog);
     exit(1);
 }
 
-static const char *
-normalize_backend_alias(const char *name)
+static bool
+backend_request_used_fallback(const char *requested_backend,
+                              const char *selected_backend,
+                              bool        allow_fallback,
+                              bool        allow_env_override)
 {
-    if (!name || !name[0]) {
-        return "auto";
+    if (!selected_backend || !selected_backend[0]) {
+        return false;
     }
 
-    if (strcmp(name, "tui") == 0) {
-        return "ansi";
+    n00b_string_t *requested = n00b_string_from_cstr(
+        (requested_backend && requested_backend[0]) ? requested_backend : "auto");
+    n00b_list_t(n00b_string_t *) candidates =
+        n00b_renderer_candidate_names(requested,
+                                      .allow_fallback     = allow_fallback,
+                                      .allow_env_override = allow_env_override);
+
+    if (candidates.len == 0) {
+        return false;
     }
 
-    if (strcmp(name, "nc") == 0) {
-        return "notcurses";
+    n00b_string_t *primary_candidate = n00b_list_get(candidates, 0);
+    n00b_result_t(n00b_renderer_vtable_ptr_t) primary_resolved =
+        n00b_renderer_resolve_exact(primary_candidate, .allow_dynamic_load = false);
+
+    if (n00b_result_is_ok(primary_resolved)) {
+        const n00b_renderer_vtable_t *vtable = n00b_result_get(primary_resolved);
+        if (vtable && vtable->name) {
+            return strcmp(vtable->name, selected_backend) != 0;
+        }
     }
 
-    return name;
+    return !n00b_unicode_str_eq(primary_candidate,
+                                n00b_string_from_cstr(selected_backend),
+                                .case_sensitive = false);
 }
 
 static bool
@@ -652,6 +675,10 @@ main(int argc, char **argv)
     const char *widget_name  = nullptr;
     const char *backend_name = "auto";
     const char *theme_name   = nullptr;
+    const char *debug_log_path = nullptr;
+    const bool  allow_fallback = true;
+    const bool  allow_dynamic_load = true;
+    const bool  allow_env_override = true;
 
     for (int i = 1; i < argc; i++) {
         if ((strcmp(argv[i], "--widget") == 0 || strcmp(argv[i], "-w") == 0)
@@ -666,6 +693,9 @@ main(int argc, char **argv)
                  && i + 1 < argc) {
             theme_name = argv[++i];
         }
+        else if (strcmp(argv[i], "--debug-log") == 0 && i + 1 < argc) {
+            debug_log_path = argv[++i];
+        }
         else {
             usage(argv[0]);
         }
@@ -675,11 +705,23 @@ main(int argc, char **argv)
         usage(argv[0]);
     }
 
-    // Open debug log.
-    g_log = fopen("/tmp/widget_demo.log", "w");
-    if (!g_log) {
-        fprintf(stderr, "Warning: could not open /tmp/widget_demo.log\n");
+    if (!debug_log_path || !debug_log_path[0]) {
+        const char *env_debug_path = getenv("N00B_WIDGET_DEMO_LOG");
+        if (env_debug_path && env_debug_path[0]) {
+            debug_log_path = env_debug_path;
+        }
     }
+
+    if (debug_log_path && debug_log_path[0]) {
+        g_log = fopen(debug_log_path, "w");
+        if (!g_log) {
+            fprintf(stderr,
+                    "Warning: could not open debug log '%s': %s\n",
+                    debug_log_path,
+                    strerror(errno));
+        }
+    }
+
     dbg("widget_demo started: widget=%s backend=%s\n", widget_name, backend_name);
 
     // Initialize runtime.
@@ -711,9 +753,9 @@ main(int argc, char **argv)
     n00b_canvas_t *canvas = n00b_alloc(n00b_canvas_t);
     n00b_canvas_init(canvas,
                      .backend_name           = n00b_string_from_cstr(backend_name),
-                     .backend_allow_fallback = true,
-                     .backend_allow_dynamic_load = true,
-                     .backend_allow_env_override = true,
+                     .backend_allow_fallback = allow_fallback,
+                     .backend_allow_dynamic_load = allow_dynamic_load,
+                     .backend_allow_env_override = allow_env_override,
                      .output                 = stdout_topic);
 
     if (!canvas->backend_ctx) {
@@ -731,8 +773,10 @@ main(int argc, char **argv)
     const char *selected_backend = canvas->vtable && canvas->vtable->name
                                  ? canvas->vtable->name
                                  : "unknown";
-    const char *normalized_requested = normalize_backend_alias(backend_name);
-    bool used_fallback = strcmp(normalized_requested, selected_backend) != 0;
+    bool used_fallback = backend_request_used_fallback(backend_name,
+                                                       selected_backend,
+                                                       allow_fallback,
+                                                       allow_env_override);
     bool uses_terminal_io = backend_uses_terminal_io(selected_backend);
 
     fprintf(stderr, "Backend request '%s' selected '%s'%s\n",
@@ -762,6 +806,9 @@ main(int argc, char **argv)
         fprintf(stderr, "Unknown widget: %s\n", widget_name);
         n00b_canvas_destroy(canvas);
         n00b_shutdown();
+        if (g_log) {
+            fclose(g_log);
+        }
         return 1;
     }
 

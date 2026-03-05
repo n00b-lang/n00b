@@ -1477,6 +1477,12 @@ display_terminal_lifecycle_test = executable('test_display_terminal_lifecycle',
 )
 test('display_terminal_lifecycle', display_terminal_lifecycle_test, suite: 'unit')
 
+display_canvas_lifecycle_test = executable('test_display_canvas_lifecycle',
+    ['test/unit/test_display_canvas_lifecycle.c'],
+    kwargs: test_common_kwargs,
+)
+test('display_canvas_lifecycle', display_canvas_lifecycle_test, suite: 'unit')
+
 display_ansi_sgr_test = executable('test_display_ansi_sgr',
     ['test/unit/test_display_ansi_sgr.c'],
     kwargs: test_common_kwargs,
@@ -1603,6 +1609,12 @@ display_backend_selection_report = executable('display_backend_selection_report'
     install: false,
 )
 
+display_m6_cutover_report = executable('display_m6_cutover_report',
+    ['src/tools/display_m6_cutover_report.c'],
+    kwargs: test_common_kwargs,
+    install: false,
+)
+
 # N00b dev tool (parse + annotate n00b source files, REPL)
 n00b_dev = executable('n00b_dev',
     ['src/tools/n00b_dev.c', 'src/tools/n00b_repl.c'],
@@ -1704,6 +1716,12 @@ display_m5_runtime_selection_test = executable('test_display_m5_runtime_selectio
     kwargs: test_common_kwargs,
 )
 test('display_m5_runtime_selection', display_m5_runtime_selection_test, suite: 'integration')
+
+display_m6_cutover_matrix_test = executable('test_display_m6_cutover_matrix',
+    ['test/integration/test_display_m6_cutover_matrix.c'],
+    kwargs: test_common_kwargs,
+)
+test('display_m6_cutover_matrix', display_m6_cutover_matrix_test, suite: 'integration')
 
 # ============================================================================
 # Unicode tests

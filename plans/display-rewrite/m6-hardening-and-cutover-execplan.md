@@ -15,10 +15,10 @@ The user-visible effect is operational clarity: no hardcoded `/tmp` debug side e
 - [x] (2026-03-05 14:23Z) Reviewed Milestone 6 scope and acceptance criteria from `plans/display-rewrite-overall-execplan.md`.
 - [x] (2026-03-05 14:23Z) Audited current hardening/doc-cutover touchpoints in `src/tools/widget_demo.c`, `src/display/render/canvas.c`, `include/display/render/canvas.h`, `docs/render.md`, `docs/widgets.md`, and `docs/tui_prototype_intent.md`.
 - [x] (2026-03-05 14:23Z) Authored this Milestone 6 child ExecPlan at `plans/display-rewrite/m6-hardening-and-cutover-execplan.md`.
-- [ ] Implement runtime hardening and remove remaining migration-era diagnostics/compatibility leftovers.
-- [ ] Align display documentation with current runtime APIs and backend policy.
-- [ ] Add Milestone 6 lifecycle/cutover coverage and wire M6 tooling in `meson.build`.
-- [ ] Run final validation matrix, generate `plans/artifacts/display-rewrite/m6/`, and record acceptance evidence.
+- [x] (2026-03-05 14:38Z) Implemented runtime hardening: added `n00b_canvas_deinit`, made `n00b_canvas_destroy` delegate teardown+free, migrated stack canvas callers in `test/unit/test_focus.c`, and removed default `widget_demo` `/tmp` logging by adding `--debug-log` / `N00B_WIDGET_DEMO_LOG`.
+- [x] (2026-03-05 14:38Z) Aligned docs with runtime reality by rewriting `docs/render.md`, `docs/widgets.md`, and `docs/tui_prototype_intent.md` around current backend policy/lifecycle behavior.
+- [x] (2026-03-05 14:38Z) Added M6 lifecycle/cutover coverage and tooling: `test/unit/test_display_canvas_lifecycle.c`, `test/integration/test_display_m6_cutover_matrix.c`, `src/tools/display_m6_cutover_report.c`, with `meson.build` wiring.
+- [x] (2026-03-05 14:38Z) Ran validation matrix, optional backend checks, generated `plans/artifacts/display-rewrite/m6/` outputs, and confirmed parity diffs versus M5 are empty for scene/table streams.
 
 ## Surprises & Discoveries
 
@@ -32,6 +32,12 @@ The user-visible effect is operational clarity: no hardcoded `/tmp` debug side e
   Evidence: `src/tools/widget_demo.c` top comment and `fopen("/tmp/widget_demo.log", "w")` in `main`.
 - Observation: Canvas lifecycle semantics are ambiguous: header text says “initialize a pre-allocated canvas,” while `n00b_canvas_destroy` always calls `n00b_free(c)`.
   Evidence: `include/display/render/canvas.h` lifecycle docs and `src/display/render/canvas.c::n00b_canvas_destroy`; stack-based usage remains in `test/unit/test_focus.c`.
+- Observation: GUI request behavior in this Linux environment falls back from `gui` to `ansi` because X11 cannot open a display; this is now explicitly captured in M6 artifacts.
+  Evidence: `build_debug/display_m6_cutover_report --out-dir plans/artifacts/display-rewrite/m6` output includes `n00b: x11 backend unavailable (cannot open DISPLAY).` and `plans/artifacts/display-rewrite/m6/cutover_metadata.txt` records environment flags.
+- Observation: Legacy `/tmp/widget_demo.log` existed before M6 runs, but default `widget_demo` execution no longer mutates it; only explicit `--debug-log` creates logs.
+  Evidence: `stat -c %Y /tmp/widget_demo.log` unchanged before/after `./build_debug/widget_demo --widget label --backend stream`, while `--debug-log plans/artifacts/display-rewrite/m6/widget_demo_debug.log` creates the requested file.
+- Observation: The optional Cocoa command in the concrete steps can fail on non-macOS builds because only `display_cocoa_input` is present in this environment.
+  Evidence: `meson test -C build_debug --print-errorlogs display_cocoa_input display_cocoa_bridge_contracts cocoa_backend` reports missing `display_cocoa_bridge_contracts`; running `display_cocoa_input` alone passes.
 
 ## Decision Log
 
@@ -47,10 +53,32 @@ The user-visible effect is operational clarity: no hardcoded `/tmp` debug side e
 - Decision: Final acceptance will require parity-style artifact continuity against M5 baseline captures in addition to new M6 cutover outputs.
   Rationale: The rewrite is complete only if hardening/docs changes do not regress established rendering behavior.
   Date/Author: 2026-03-05 / Codex
+- Decision: Fallback detection in user-facing reporting should compare selected backend against the resolved primary candidate vtable name (not raw alias text) to avoid false fallback reports for aliases like `gui`.
+  Rationale: Alias names (`gui`) can resolve to concrete backend names (`x11`/`cocoa`); string-only comparisons misclassify successful primary selection.
+  Date/Author: 2026-03-05 / Codex
+- Decision: Human-runnable final demo commands were executed under timeout in automation to capture startup/fallback evidence without requiring manual Ctrl-C.
+  Rationale: `widget_demo --widget all` intentionally enters an interactive event loop and does not self-terminate in non-interactive CI-style runs.
+  Date/Author: 2026-03-05 / Codex
 
 ## Outcomes & Retrospective
 
-Milestone 6 implementation has not started yet on this branch. This document defines the concrete hardening, documentation, and validation work required to complete the display rewrite cutover. Outcomes and lessons will be recorded here after implementation and validation runs.
+Milestone 6 implementation is complete on `display-rewrite/m6-hardening-and-cutover`.
+
+Delivered outcomes:
+
+- Runtime hardening completed: canvas lifecycle contract now has explicit teardown (`n00b_canvas_deinit`) and heap convenience destroy (`n00b_canvas_destroy`), with stack-based tests migrated.
+- `widget_demo` default execution is side-effect free for logs; debug logging is explicit opt-in via CLI/env.
+- M6 test/tool additions are wired and passing (`display_canvas_lifecycle`, `display_m6_cutover_matrix`, `display_m6_cutover_report`).
+- Documentation has been cut over to current runtime/backends.
+- Artifact bundle regenerated under `plans/artifacts/display-rewrite/m6/`, including new cutover report/metadata.
+- Parity guardrail passed: `scene_stream.txt` and `table_stream.txt` diffs versus M5 are empty.
+
+Validation summary:
+
+- M6 unit matrix command: pass (31/31 tests OK).
+- M6 integration matrix command: pass (7/7 tests OK, including `display_m6_cutover_matrix`).
+- Optional backend tests present in this build: `notcurses_backend`, `x11_backend`, and `display_cocoa_input` all pass.
+- GUI runtime availability in this environment is limited by missing display server (`x11` init failure), and fallback behavior is captured in M6 artifacts as intended.
 
 ## Context and Orientation
 
@@ -245,6 +273,20 @@ Expected validation transcript pattern:
 
 If any parity diff is intentional, include only relevant diff hunks here with a short rationale.
 
+Observed validation evidence for this run:
+
+- `meson test -C build_debug --print-errorlogs ...` unit matrix passed (`31/31`).
+- `meson test -C build_debug --print-errorlogs ...` integration matrix passed (`7/7`, including `display_m6_cutover_matrix`).
+- Optional backend tests present in this build passed: `notcurses_backend`, `x11_backend`, `display_cocoa_input`.
+- `build_debug/display_m6_cutover_report --out-dir plans/artifacts/display-rewrite/m6` wrote `cutover_report.txt` and `cutover_metadata.txt` and logged GUI environment limitation (`x11 backend unavailable (cannot open DISPLAY)`).
+- `diff -u` for `scene_stream.txt` and `table_stream.txt` versus M5 produced no output.
+- Demo startup proof:
+- `timeout 8 ./build_debug/widget_demo --widget all --backend auto` selected `ansi`.
+- `timeout 8 ./build_debug/widget_demo --widget all --backend gui` selected `ansi` with fallback after `x11` unavailability.
+- Default logging side-effect check:
+- `/tmp/widget_demo.log` timestamp unchanged after default `widget_demo --widget label --backend stream`.
+- explicit `--debug-log plans/artifacts/display-rewrite/m6/widget_demo_debug.log` produced opt-in log output.
+
 ## Interfaces and Dependencies
 
 Implement the following interfaces in Milestone 6.
@@ -296,3 +338,4 @@ Dependencies remain existing project toolchain and optional display backends (No
 ## Revision Notes
 
 - 2026-03-05: Initial Milestone 6 child ExecPlan authored from umbrella Milestone 6 scope, defining runtime hardening, documentation alignment, and final cutover validation/artifact requirements.
+- 2026-03-05: M6 execution completed with lifecycle/logging hardening, docs cutover, M6 tests/tool wiring, full validation pass, and regenerated `plans/artifacts/display-rewrite/m6/` evidence.
