@@ -25,6 +25,7 @@ This plan is the top-level roadmap for the in-place rewrite. "In-place" means ex
 - [x] (2026-03-05 11:45Z) Executed Milestone 2 and recorded terminal contract extraction, replay tooling, test validation, and parity artifacts in `plans/display-rewrite/m2-terminal-backend-execplan.md` and `plans/artifacts/display-rewrite/m2/`.
 - [x] (2026-03-05 11:55Z) Authored the Milestone 3 child ExecPlan in `plans/display-rewrite/m3-gui-backend-execplan.md`.
 - [x] (2026-03-05 13:06Z) Executed Milestone 3 and recorded Cocoa contract hardening plus Linux X11 GUI backend delivery, registry alias updates, and validation evidence in `plans/display-rewrite/m3-gui-backend-execplan.md`.
+- [x] (2026-03-05 13:19Z) Authored the Milestone 4 child ExecPlan in `plans/display-rewrite/m4-widget-table-migration-execplan.md`.
 - [ ] Execute Milestones 4-6 as stacked diffs, preserving this document as the top-level source of milestone ordering and acceptance scope.
 
 ## Surprises & Discoveries
@@ -420,3 +421,4 @@ Dependencies that materially affect milestone planning include optional GUI/rend
 - 2026-03-05: Updated umbrella plan after Milestone 2 execution to mark M2 complete, add M2 validation/artifact evidence, and narrow remaining execution scope to Milestones 3-6.
 - 2026-03-05: Marked Milestone 3 child ExecPlan authoring as complete after creating `plans/display-rewrite/m3-gui-backend-execplan.md`, while keeping remaining execution scope at Milestones 3-6.
 - 2026-03-05: Updated umbrella plan after Milestone 3 execution to mark M3 complete, record Linux X11 GUI backend evidence, update branch guidance to start at M4, and narrow remaining scope to Milestones 4-6. Reason: milestone planning state must match implemented GUI deliverables and current branch reality.
+- 2026-03-05: Marked Milestone 4 child ExecPlan authoring as complete after creating `plans/display-rewrite/m4-widget-table-migration-execplan.md`, while keeping remaining execution scope at Milestones 4-6.
