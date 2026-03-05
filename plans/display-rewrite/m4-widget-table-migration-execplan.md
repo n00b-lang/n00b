@@ -15,9 +15,9 @@ The user-visible effect is no regression in existing widget/table/hexdump behavi
 - [x] (2026-03-05 13:19Z) Reviewed Milestone 4 scope and acceptance criteria from `plans/display-rewrite-overall-execplan.md`.
 - [x] (2026-03-05 13:19Z) Audited widget/table/hexdump duplication hotspots and existing test/tool coverage to ground the migration plan in concrete files.
 - [x] (2026-03-05 13:19Z) Authored this Milestone 4 child ExecPlan at `plans/display-rewrite/m4-widget-table-migration-execplan.md`.
-- [ ] Implement shared widget/table/hexdump helper modules on `display-rewrite/m4-widget-table-migration` and migrate target call sites without public API churn.
-- [ ] Add Milestone 4 unit/integration tests, add deterministic M4 showcase artifact tooling, and wire all targets in `meson.build`.
-- [ ] Run milestone validations and parity diffs, then record outcomes and artifact evidence under `plans/artifacts/display-rewrite/m4/`.
+- [x] (2026-03-05 13:34Z) Implemented shared helper modules (`widget_primitives`, `table_text_primitives`, `hexdump_contracts`) and migrated widget/table/hexdump call sites without public API churn.
+- [x] (2026-03-05 13:36Z) Added Milestone 4 unit/integration tests, added deterministic `display_m4_showcase` artifact tooling, and wired new sources/tests/tools in `meson.build`.
+- [x] (2026-03-05 13:41Z) Ran milestone validation matrix, generated M4 artifacts under `plans/artifacts/display-rewrite/m4/`, and confirmed `scene_stream.txt` / `table_stream.txt` parity against M3 (empty diffs).
 
 ## Surprises & Discoveries
 
@@ -31,6 +31,12 @@ The user-visible effect is no regression in existing widget/table/hexdump behavi
   Evidence: `src/conduit/xform_hexdump.c` builds offset/ascii style ranges from `hd->offset_cols` and `hd->ascii_start` directly during `emit_line`.
 - Observation: Existing baseline artifact tooling captures deterministic scene/table outputs but not a dedicated hexdump artifact for milestone parity review.
   Evidence: `src/tools/display_baseline_capture.c` writes `scene_stream.txt`, `table_stream.txt`, and `metadata.txt` only.
+- Observation: `ncc` parsing failed for the new table helper until the file explicitly included `core/alloc.h`.
+  Evidence: `ninja -C build_debug ...` failed with `unknown type name 'n00b_free'` and `use of undeclared identifier 'n00b_alloc_size'` in `src/display/table/table_text_primitives.c`; adding `#include "core/alloc.h"` fixed the build.
+- Observation: The plan’s `test/data/table_sample.txt` input file does not exist in this repository.
+  Evidence: `build_debug/n00b_table --style simple test/data/table_sample.txt` returned `No such file or directory`.
+- Observation: Interactive smoke checks are environment-dependent in this execution context.
+  Evidence: `timeout 5 ./build_debug/widget_demo --widget all --backend tui` exited with code 124 (non-interactive timeout), and `timeout 5 ./build_debug/widget_demo --widget all --backend gui` reported `x11 backend unavailable (cannot open DISPLAY)`.
 
 ## Decision Log
 
@@ -49,12 +55,20 @@ The user-visible effect is no regression in existing widget/table/hexdump behavi
 - Decision: Add a deterministic `display_m4_showcase` tool for mixed widget/table/hexdump proof instead of relying only on interactive `widget_demo` sessions.
   Rationale: Deterministic text artifacts are diffable and CI-friendly; interactive smoke remains supplementary evidence.
   Date/Author: 2026-03-05 / Codex
+- Decision: In `table_text_primitives.c`, use explicit array struct initialization plus `core/alloc.h`-provided allocation helpers to satisfy `ncc` parser/runtime expectations.
+  Rationale: This avoided repeated parser/build failures while preserving the helper’s behavior contract.
+  Date/Author: 2026-03-05 / Codex
+- Decision: Replace the missing `test/data/table_sample.txt` artifact command with deterministic stdin-fed CSV for `n00b_table`.
+  Rationale: The original path does not exist in this repo; stdin input keeps artifact generation deterministic and idempotent.
+  Date/Author: 2026-03-05 / Codex
 
 ## Outcomes & Retrospective
 
-Milestone 4 implementation has not started yet; this document is the executable plan for that implementation. It now provides concrete file-level edits, test additions, artifact commands, and acceptance gates aligned with the umbrella milestone scope.
+Milestone 4 implementation is complete on `display-rewrite/m4-widget-table-migration`. Internal shared primitives now back widget metrics/activation/type-guards, table text fit/alignment, and hexdump line-region styling contracts. Public APIs remained unchanged (`widget.h`, `table.h`, `hexdump.h`).
 
-The expected outcome at milestone completion is centralized widget/table/hexdump helper logic with preserved behavior, passing mixed-flow integration coverage, and deterministic M4 artifacts under `plans/artifacts/display-rewrite/m4/`.
+Validation passed across new primitive tests, migrated regression suites, mixed-flow integration, and shared display smoke checks. Deterministic artifacts were generated under `plans/artifacts/display-rewrite/m4/`, and parity diffs against `plans/artifacts/display-rewrite/m3/scene_stream.txt` and `table_stream.txt` were empty.
+
+Remaining gap is only environment-dependent interactive smoke: TUI demo requires an interactive terminal session and GUI demo requires an available X11 display server. This was recorded with concrete command output and is non-blocking for deterministic acceptance.
 
 ## Context and Orientation
 
@@ -185,7 +199,7 @@ Generate Milestone 4 artifacts and compare baseline captures to M3:
     build_debug/display_baseline_capture --out-dir plans/artifacts/display-rewrite/m4
     build_debug/display_scene_inspect --out plans/artifacts/display-rewrite/m4/scene_inspect.txt
     build_debug/display_m4_showcase --out-dir plans/artifacts/display-rewrite/m4
-    build_debug/n00b_table --style simple test/data/table_sample.txt > plans/artifacts/display-rewrite/m4/table_cli.txt
+    printf 'Component,State\nwidget,ready\nhexdump,formatted\n' | build_debug/n00b_table --style simple > plans/artifacts/display-rewrite/m4/table_cli.txt
     diff -u plans/artifacts/display-rewrite/m3/scene_stream.txt plans/artifacts/display-rewrite/m4/scene_stream.txt
     diff -u plans/artifacts/display-rewrite/m3/table_stream.txt plans/artifacts/display-rewrite/m4/table_stream.txt
 
@@ -252,6 +266,15 @@ Expected validation transcript pattern:
     (no output)
 
 If any diff is intentional, include only relevant diff hunks here with a short rationale.
+
+Observed interactive-smoke evidence in this environment:
+
+    $ timeout 5 ./build_debug/widget_demo --widget all --backend tui
+    (exited with 124 after timeout in non-interactive session)
+
+    $ timeout 5 ./build_debug/widget_demo --widget all --backend gui
+    n00b: x11 backend unavailable (cannot open DISPLAY).
+    Failed to initialize backend 'x11'.
 
 ## Interfaces and Dependencies
 
@@ -325,3 +348,4 @@ Dependencies remain the existing project toolchain and already-optional backend 
 ## Revision Notes
 
 - 2026-03-05: Initial Milestone 4 child ExecPlan authored from umbrella Milestone 4 scope, with concrete shared-primitive module boundaries, migration targets, validation commands, and deterministic mixed-content artifact strategy.
+- 2026-03-05: Updated after implementation run to mark all progress complete, capture build/test/artifact evidence, record environment/tooling discoveries, and replace the missing `test/data/table_sample.txt` command with deterministic stdin-fed table CLI input.

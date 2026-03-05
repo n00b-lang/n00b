@@ -404,6 +404,7 @@ n00b_text = [
 n00b_display = [
     'src/display/layout.c',
     'src/display/hexdump.c',
+    'src/display/hexdump_contracts.c',
     'src/display/diagnostics.c',
     'src/display/scene_contracts.c',
     'src/display/event_dispatch.c',
@@ -433,6 +434,7 @@ n00b_display = [
     'src/display/focus.c',
     'src/display/event_loop.c',
     'src/display/mouse.c',
+    'src/display/widgets/widget_primitives.c',
     'src/display/widgets/label.c',
     'src/display/widgets/divider.c',
     'src/display/widgets/spacer.c',
@@ -449,6 +451,7 @@ n00b_display = [
     'src/display/widgets/breadcrumb.c',
     # Table
     'src/display/table/table.c',
+    'src/display/table/table_text_primitives.c',
     'src/display/table/table_layout.c',
     'src/display/table/table_render.c',
     'src/display/table/table_styles.c',
@@ -1481,6 +1484,24 @@ display_baseline_contract_test = executable('test_display_baseline_contract',
 )
 test('display_baseline_contract', display_baseline_contract_test, suite: 'unit')
 
+display_widget_primitives_test = executable('test_display_widget_primitives',
+    ['test/unit/test_display_widget_primitives.c'],
+    kwargs: test_common_kwargs,
+)
+test('display_widget_primitives', display_widget_primitives_test, suite: 'unit')
+
+display_table_text_primitives_test = executable('test_display_table_text_primitives',
+    ['test/unit/test_display_table_text_primitives.c'],
+    kwargs: test_common_kwargs,
+)
+test('display_table_text_primitives', display_table_text_primitives_test, suite: 'unit')
+
+display_hexdump_contracts_test = executable('test_display_hexdump_contracts',
+    ['test/unit/test_display_hexdump_contracts.c'],
+    kwargs: test_common_kwargs,
+)
+test('display_hexdump_contracts', display_hexdump_contracts_test, suite: 'unit')
+
 if conf_cocoa
   cocoa_test = executable('test_cocoa_backend',
       ['test/unit/test_cocoa_backend.m'],
@@ -1545,6 +1566,12 @@ display_baseline_capture = executable('display_baseline_capture',
 
 display_scene_inspect = executable('display_scene_inspect',
     ['src/tools/display_scene_inspect.c', 'src/tools/display_demo_scene.c'],
+    kwargs: test_common_kwargs,
+    install: false,
+)
+
+display_m4_showcase = executable('display_m4_showcase',
+    ['src/tools/display_m4_showcase.c'],
     kwargs: test_common_kwargs,
     install: false,
 )
@@ -1689,6 +1716,12 @@ display_m3_backend_parity_test = executable('test_display_m3_backend_parity',
     link_with: [n00b],
 )
 test('display_m3_backend_parity', display_m3_backend_parity_test, suite: 'integration')
+
+display_m4_widget_table_flow_test = executable('test_display_m4_widget_table_flow',
+    ['test/integration/test_display_m4_widget_table_flow.c'],
+    kwargs: test_common_kwargs,
+)
+test('display_m4_widget_table_flow', display_m4_widget_table_flow_test, suite: 'integration')
 
 # ============================================================================
 # Unicode tests

@@ -14,6 +14,7 @@
 #include "display/widget.h"
 #include "display/widgets/list_widget.h"
 #include "display/event.h"
+#include "internal/display/widget_primitives.h"
 #include "text/unicode/properties.h"
 #include "text/strings/text_style.h"
 #include "text/strings/string_style.h"
@@ -73,14 +74,11 @@ list_render(n00b_plane_t *plane, void *data)
         return;
     }
 
-    int32_t lh = n00b_plane_line_height(plane, nullptr);
-    if (lh <= 0) lh = 1;
+    int32_t lh = n00b_widget_line_px_height(plane);
 
-    int32_t cpw = n00b_plane_text_width(plane, n00b_string_from_cstr("M"), nullptr);
-    if (cpw <= 0) cpw = 1;
+    int32_t cpw = n00b_widget_cell_px_width(plane);
 
-    bool focused = (n00b_plane_get_state(plane) == N00B_WSTATE_FOCUSED
-                    || n00b_plane_get_state(plane) == N00B_WSTATE_ACTIVE);
+    bool focused = n00b_widget_state_is_focused_or_active(plane);
 
     n00b_isize_t visible = content_h / lh;
     list_ensure_visible(lw, visible);
@@ -152,10 +150,8 @@ list_handle_event(n00b_plane_t *plane, void *data, const n00b_event_t *event)
 
     // Mouse left-click selects a row.
     if (event->type == N00B_EVENT_MOUSE) {
-        if (event->mouse.button == N00B_MOUSE_LEFT
-            && event->mouse.action == N00B_MOUSE_PRESS) {
-            int line_h = n00b_plane_line_height(plane, nullptr);
-            if (line_h < 1) line_h = 1;
+        if (n00b_widget_event_is_left_press(event)) {
+            int line_h = n00b_widget_line_px_height(plane);
             int row = event->mouse.y / line_h;
             int item_idx = lw->scroll_offset + row;
             if (item_idx >= 0 && item_idx < (int)lw->item_count) {
@@ -176,8 +172,7 @@ list_handle_event(n00b_plane_t *plane, void *data, const n00b_event_t *event)
             int32_t content_w;
             int32_t content_h;
             n00b_plane_content_size(plane, &content_w, &content_h);
-            int32_t lh_scroll = n00b_plane_line_height(plane, nullptr);
-            if (lh_scroll < 1) lh_scroll = 1;
+            int32_t lh_scroll = n00b_widget_line_px_height(plane);
             int32_t visible_rows = content_h / lh_scroll;
             if (lw->scroll_offset + visible_rows < (int)lw->item_count) {
                 lw->scroll_offset++;
@@ -235,8 +230,7 @@ list_handle_event(n00b_plane_t *plane, void *data, const n00b_event_t *event)
     }
 
     if (key == N00B_KEY_PAGE_DOWN) {
-        int32_t lh_key = n00b_plane_line_height(plane, nullptr);
-        if (lh_key < 1) lh_key = 1;
+        int32_t lh_key = n00b_widget_line_px_height(plane);
         lw->selected += content_h / lh_key;
         if (lw->selected >= count) {
             lw->selected = count - 1;
@@ -246,8 +240,7 @@ list_handle_event(n00b_plane_t *plane, void *data, const n00b_event_t *event)
     }
 
     if (key == N00B_KEY_PAGE_UP) {
-        int32_t lh_key = n00b_plane_line_height(plane, nullptr);
-        if (lh_key < 1) lh_key = 1;
+        int32_t lh_key = n00b_widget_line_px_height(plane);
         lw->selected -= content_h / lh_key;
         if (lw->selected < 0) {
             lw->selected = 0;
@@ -257,7 +250,7 @@ list_handle_event(n00b_plane_t *plane, void *data, const n00b_event_t *event)
     }
 
     // Enter/Space activates callback.
-    if (key == N00B_KEY_ENTER || key == ' ') {
+    if (n00b_widget_event_is_keyboard_activate(event)) {
         if (lw->selected >= 0 && lw->on_select) {
             lw->on_select(plane, lw->selected, lw->on_select_data);
         }
@@ -282,11 +275,9 @@ list_measure(n00b_plane_t *plane, void *data,
 {
     n00b_list_widget_t *lw = (n00b_list_widget_t *)data;
 
-    int32_t lh = n00b_plane_line_height(plane, nullptr);
-    if (lh <= 0) lh = 1;
+    int32_t lh = n00b_widget_line_px_height(plane);
 
-    int32_t cpw = n00b_plane_text_width(plane, n00b_string_from_cstr("M"), nullptr);
-    if (cpw <= 0) cpw = 1;
+    int32_t cpw = n00b_widget_cell_px_width(plane);
 
     int32_t max_w = 0;
     if (lw) {
@@ -397,22 +388,22 @@ n00b_list_widget_new(n00b_string_t **items,
 int
 n00b_list_widget_get_selected(n00b_plane_t *plane)
 {
-    if (!plane || plane->widget_vtable != &n00b_widget_list) {
+    n00b_list_widget_t *lw = n00b_widget_data_if_kind(plane, &n00b_widget_list);
+    if (!lw) {
         return -1;
     }
 
-    n00b_list_widget_t *lw = (n00b_list_widget_t *)plane->widget_data;
     return lw->selected;
 }
 
 void
 n00b_list_widget_set_selected(n00b_plane_t *plane, int index)
 {
-    if (!plane || plane->widget_vtable != &n00b_widget_list) {
+    n00b_list_widget_t *lw = n00b_widget_data_if_kind(plane, &n00b_widget_list);
+    if (!lw) {
         return;
     }
 
-    n00b_list_widget_t *lw = (n00b_list_widget_t *)plane->widget_data;
     if (index < -1 || index >= (int)lw->item_count) {
         return;
     }
@@ -424,11 +415,10 @@ n00b_list_widget_set_selected(n00b_plane_t *plane, int index)
 void
 n00b_list_widget_add_item(n00b_plane_t *plane, n00b_string_t *item)
 {
-    if (!plane || plane->widget_vtable != &n00b_widget_list) {
+    n00b_list_widget_t *lw = n00b_widget_data_if_kind(plane, &n00b_widget_list);
+    if (!lw) {
         return;
     }
-
-    n00b_list_widget_t *lw = (n00b_list_widget_t *)plane->widget_data;
 
     if (lw->item_count >= lw->item_capacity) {
         n00b_isize_t new_cap = lw->item_capacity * 2;
@@ -447,11 +437,11 @@ n00b_list_widget_add_item(n00b_plane_t *plane, n00b_string_t *item)
 void
 n00b_list_widget_clear(n00b_plane_t *plane)
 {
-    if (!plane || plane->widget_vtable != &n00b_widget_list) {
+    n00b_list_widget_t *lw = n00b_widget_data_if_kind(plane, &n00b_widget_list);
+    if (!lw) {
         return;
     }
 
-    n00b_list_widget_t *lw = (n00b_list_widget_t *)plane->widget_data;
     lw->item_count    = 0;
     lw->selected      = -1;
     lw->scroll_offset = 0;
@@ -461,10 +451,10 @@ n00b_list_widget_clear(n00b_plane_t *plane)
 n00b_isize_t
 n00b_list_widget_count(n00b_plane_t *plane)
 {
-    if (!plane || plane->widget_vtable != &n00b_widget_list) {
+    n00b_list_widget_t *lw = n00b_widget_data_if_kind(plane, &n00b_widget_list);
+    if (!lw) {
         return 0;
     }
 
-    n00b_list_widget_t *lw = (n00b_list_widget_t *)plane->widget_data;
     return lw->item_count;
 }

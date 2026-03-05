@@ -29,7 +29,8 @@ This plan is the top-level roadmap for the in-place rewrite. "In-place" means ex
 - [x] (2026-03-17 20:23Z) Applied M2 review remediation on `display-rewrite/m2-terminal-backend`: required `display_terminal_replay --out-dir`, extracted the shared replay fixture, added replay artifact parity coverage, split replay/manual metadata files, and refreshed the M2 artifact tree.
 - [x] (2026-03-18 00:49Z) Applied M3 review remediation on `display-rewrite/m3-gui-backend`: added backend-specific X11/Cocoa regressions, exact-pixel resize propagation, honest synthetic GUI-profile parity artifacts, registry-backed `widget_demo` resolution, and refreshed M3 artifacts/docs.
 - [x] (2026-03-05 13:19Z) Authored the Milestone 4 child ExecPlan in `plans/display-rewrite/m4-widget-table-migration-execplan.md`.
-- [ ] Execute Milestones 4-6 as stacked diffs, preserving this document as the top-level source of milestone ordering and acceptance scope.
+- [x] (2026-03-05 13:41Z) Executed Milestone 4 and recorded shared widget/table/hexdump primitive migration, validation evidence, and deterministic M4 artifacts in `plans/display-rewrite/m4-widget-table-migration-execplan.md` and `plans/artifacts/display-rewrite/m4/`.
+- [ ] Execute Milestones 5-6 as stacked diffs, preserving this document as the top-level source of milestone ordering and acceptance scope.
 
 ## Surprises & Discoveries
 
@@ -59,6 +60,10 @@ This plan is the top-level roadmap for the in-place rewrite. "In-place" means ex
   Evidence: M3 review remediation moved the shared harness into `src/tools/display_m3_parity_fixture.[ch]`, changed the GUI profile to `9x16`, and relabeled the emitted artifacts with `evidence_scope=synthetic_contract_parity`.
 - Observation: GUI smoke validation can remain unavailable even when `Xvfb` is installed, so the plan needs an explicit “record the limitation” fallback for M3.
   Evidence: `xvfb-run -a sh -c 'echo DISPLAY=$DISPLAY; xdpyinfo >/dev/null 2>&1; echo xdpyinfo=$?; ./build_debug/test_x11_backend'` reported `xdpyinfo=1` and `cannot open DISPLAY` during M3 remediation.
+- Observation: Milestone 4 table helper extraction initially failed under `ncc` parsing until allocation headers/macros were aligned with project conventions.
+  Evidence: `ninja -C build_debug ...` failed in `src/display/table/table_text_primitives.c` with `unknown type name 'n00b_free'` and `use of undeclared identifier 'n00b_alloc_size'`; adding `#include "core/alloc.h"` resolved the build.
+- Observation: The umbrella/milestone artifact example path `test/data/table_sample.txt` does not exist in this repository snapshot.
+  Evidence: `build_debug/n00b_table --style simple test/data/table_sample.txt` returned `No such file or directory` during Milestone 4 artifact generation.
 
 ## Decision Log
 
@@ -92,12 +97,15 @@ This plan is the top-level roadmap for the in-place rewrite. "In-place" means ex
 - Decision: Treat M3 completion evidence as the combination of backend-specific GUI regressions plus a narrower synthetic GUI-profile parity fixture, not as a single “backend parity” claim.
   Rationale: The synthetic harness is useful and deterministic, but the review remediation proved it cannot stand in for real Cocoa/X11 behavior checks on its own.
   Date/Author: 2026-03-18 / Codex
+- Decision: For deterministic table CLI artifacts in this repo state, feed `n00b_table` via stdin instead of the non-existent `test/data/table_sample.txt`.
+  Rationale: This keeps milestone artifact commands reproducible and avoids false failures from missing fixture files.
+  Date/Author: 2026-03-05 / Codex
 
 ## Outcomes & Retrospective
 
-Milestones 0, 1, 2, and 3 are complete on the active rewrite lineage. Milestone 0 established deterministic baseline harnessing (`display_baseline_contract`, `display_baseline_flow`, `display_baseline_capture`) and baseline artifacts in `plans/artifacts/display-rewrite/m0/`. Milestone 1 then carved out internal display contracts (`diagnostics`, `scene_contracts`, `event_dispatch`, `backend_services`), removed hardcoded `/tmp` diagnostics from touched display paths, added deterministic scene inspection (`display_scene_inspect`), and captured parity artifacts in `plans/artifacts/display-rewrite/m1/`. Milestone 2 extracted shared terminal contracts (`terminal_lifecycle`, `ansi_sgr`, `terminal_input`), rewired terminal backends/event loop to consume them, added deterministic replay tooling (`display_terminal_replay`), and after review remediation now enforces explicit replay destinations, parity-tests replay artifacts, and keeps baseline/replay/manual evidence separate in `plans/artifacts/display-rewrite/m2/`. Milestone 3 hardened Cocoa/X11 GUI contracts, added backend-specific regressions for the real GUI bugs, narrowed the synthetic artifact language to GUI-profile contract parity, wired `widget_demo` through registry-backed backend resolution, and refreshed the M3 evidence set under `plans/artifacts/display-rewrite/m3/`.
+Milestones 0, 1, 2, 3, and 4 are complete on the active rewrite lineage. Milestone 0 established deterministic baseline harnessing (`display_baseline_contract`, `display_baseline_flow`, `display_baseline_capture`) and baseline artifacts in `plans/artifacts/display-rewrite/m0/`. Milestone 1 then carved out internal display contracts (`diagnostics`, `scene_contracts`, `event_dispatch`, `backend_services`), removed hardcoded `/tmp` diagnostics from touched display paths, added deterministic scene inspection (`display_scene_inspect`), and captured parity artifacts in `plans/artifacts/display-rewrite/m1/`. Milestone 2 extracted shared terminal contracts (`terminal_lifecycle`, `ansi_sgr`, `terminal_input`), rewired terminal backends/event loop to consume them, added deterministic replay tooling (`display_terminal_replay`), and after review remediation now enforces explicit replay destinations, parity-tests replay artifacts, and keeps baseline/replay/manual evidence separate in `plans/artifacts/display-rewrite/m2/`. Milestone 3 hardened Cocoa/X11 GUI contracts, added backend-specific regressions for the real GUI bugs, narrowed the synthetic artifact language to GUI-profile contract parity, wired `widget_demo` through registry-backed backend resolution, and refreshed the M3 evidence set under `plans/artifacts/display-rewrite/m3/`. Milestone 4 centralized widget/table/hexdump shared primitives, added mixed-flow integration coverage and deterministic showcase tooling (`display_m4_showcase`), and produced parity-checked artifacts under `plans/artifacts/display-rewrite/m4/`.
 
-What remains is milestone execution for M4-M6: widget/table/hexdump migration, runtime backend selection cleanup follow-through, and final hardening/cutover. The key lesson through M3 is that deterministic artifact generation must be paired with backend-specific runtime checks; synthetic contract artifacts stay valuable, but only when the plan states clearly what they do and do not prove.
+What remains is milestone execution for M5-M6: runtime backend selection cleanup follow-through and final hardening/cutover. The key lesson through M4 is that deterministic artifact generation and shared internal contracts remain valuable only when synthetic evidence is clearly scoped and backed by real runtime-specific regression coverage where the platform semantics differ.
 
 ## Context and Orientation
 
@@ -179,6 +187,8 @@ Completion evidence: Cocoa input and bridge contracts were extracted/guarded, de
 
 ### Milestone 4: Widget, Table, And Hexdump Migration To Shared Primitives
 
+Status: Complete on `display-rewrite/m4-widget-table-migration`.
+
 Milestone 4 migrates higher-level UI behavior to the rewritten runtime. The focus is reducing duplication in widget behavior, aligning table/hexdump rendering with shared text/layout helpers, and preserving user-visible outputs.
 
 Implementation scope includes introducing common widget helper modules, migrating target widgets incrementally, and converging table/hexdump formatting helpers where behavior overlap exists.
@@ -186,6 +196,8 @@ Implementation scope includes introducing common widget helper modules, migratin
 Unit tests for this milestone must cover shared helper modules and migrated widget/table/hexdump edge cases. Integration tests must exercise realistic flows that combine multiple widgets plus table/hexdump rendering in one canvas lifecycle. The human-runnable artifact is a showcase run (extended `widget_demo` scenario or dedicated display showcase tool) that demonstrates mixed widgets, table views, and hexdump views under at least one terminal and one non-terminal backend path (or parity harness output when GUI is unavailable).
 
 Acceptance for Milestone 4 is that duplicated behavior is centralized, outputs remain stable against baseline expectations, and mixed-content flows are demonstrably functional.
+
+Completion evidence: new primitive tests (`display_widget_primitives`, `display_table_text_primitives`, `display_hexdump_contracts`) passed; migrated regression suites and `display_m4_widget_table_flow` integration passed; `display_m4_showcase` generated deterministic artifacts in `plans/artifacts/display-rewrite/m4/`; and M4 parity diffs against M3 scene/table baseline streams were empty.
 
 ### Milestone 5: Runtime Backend Selection And Plugin Readiness
 
@@ -214,16 +226,15 @@ Run all commands from `/home/baron/crash-override/n00b-tui/n00b-athens`.
 Current branch reality:
 
     git branch --show-current
-    # expected: display-rewrite/m3-gui-backend
+    # expected: display-rewrite/m4-widget-table-migration
 
-Milestones 0-3 are already complete on the active lineage. Create the next milestone branch from the current milestone branch:
+Milestones 0-4 are already complete on the active lineage. Create the next milestone branch from the current milestone branch:
 
-    git switch display-rewrite/m3-gui-backend
-    git switch -c display-rewrite/m4-widget-table-migration
+    git switch display-rewrite/m4-widget-table-migration
+    git switch -c display-rewrite/m5-runtime-selection
 
 Continue creating descendant milestone branches from their immediate parent when each milestone is ready:
 
-    git switch -c display-rewrite/m5-runtime-selection
     git switch -c display-rewrite/m6-hardening-and-cutover
 
 For each milestone `Mx`, create the child ExecPlan first:
@@ -251,7 +262,7 @@ For Milestones 1-6, run human-runnable artifact commands and capture outputs und
 
     mkdir -p plans/artifacts/display-rewrite/mx
     build_debug/widget_demo --widget all --backend tui > plans/artifacts/display-rewrite/mx/widget_demo_tui.txt
-    build_debug/n00b_table --style simple test/data/table_sample.txt > plans/artifacts/display-rewrite/mx/table_simple.txt
+    printf 'Component,State\nwidget,ready\nhexdump,formatted\n' | build_debug/n00b_table --style simple > plans/artifacts/display-rewrite/mx/table_simple.txt
 
 When review feedback modifies an earlier milestone branch, rebase descendants in order:
 
@@ -415,6 +426,36 @@ Milestone 3 evidence captured on this branch:
     $ diff -u plans/artifacts/display-rewrite/m2/table_stream.txt plans/artifacts/display-rewrite/m3/table_stream.txt
     (no output)
 
+Milestone 4 evidence captured on this branch:
+
+    $ meson test -C build_debug --print-errorlogs display_widget_primitives display_table_text_primitives display_hexdump_contracts
+    3/3 tests OK
+
+    $ meson test -C build_debug --print-errorlogs button checkbox switch radio list_widget selectionlist input breadcrumb link table_build table_layout table_render table_stream hexdump xform_hexdump display_event_dispatch display_baseline_contract
+    17/17 tests OK
+
+    $ meson test -C build_debug --print-errorlogs display_baseline_flow display_m1_compat display_m2_terminal_flow display_m3_backend_parity display_m4_widget_table_flow
+    5/5 tests OK
+
+    $ build_debug/display_baseline_capture --out-dir plans/artifacts/display-rewrite/m4
+    wrote scene_stream.txt
+    wrote table_stream.txt
+    wrote metadata.txt
+
+    $ build_debug/display_scene_inspect --out plans/artifacts/display-rewrite/m4/scene_inspect.txt
+    wrote plans/artifacts/display-rewrite/m4/scene_inspect.txt
+
+    $ build_debug/display_m4_showcase --out-dir plans/artifacts/display-rewrite/m4
+    wrote showcase_stream.txt
+    wrote hexdump_stream.txt
+    wrote showcase_metadata.txt
+
+    $ diff -u plans/artifacts/display-rewrite/m3/scene_stream.txt plans/artifacts/display-rewrite/m4/scene_stream.txt
+    (no output)
+
+    $ diff -u plans/artifacts/display-rewrite/m3/table_stream.txt plans/artifacts/display-rewrite/m4/table_stream.txt
+    (no output)
+
 ## Interfaces and Dependencies
 
 This rewrite must preserve and evolve the existing display-facing interfaces in place:
@@ -440,3 +481,4 @@ Dependencies that materially affect milestone planning include optional GUI/rend
 - 2026-03-05: Marked Milestone 3 child ExecPlan authoring as complete after creating `plans/display-rewrite/m3-gui-backend-execplan.md`, while keeping remaining execution scope at Milestones 3-6.
 - 2026-03-05: Updated umbrella plan after Milestone 3 execution to mark M3 complete, record Linux X11 GUI backend evidence, update branch guidance to start at M4, and narrow remaining scope to Milestones 4-6. Reason: milestone planning state must match implemented GUI deliverables and current branch reality.
 - 2026-03-05: Marked Milestone 4 child ExecPlan authoring as complete after creating `plans/display-rewrite/m4-widget-table-migration-execplan.md`, while keeping remaining execution scope at Milestones 4-6.
+- 2026-03-05: Updated umbrella plan after Milestone 4 execution to mark M4 complete, add M4 validation/artifact evidence, adjust branch/remaining scope guidance to Milestones 5-6, and replace the missing table sample path in generic artifact commands with deterministic stdin-fed table input.

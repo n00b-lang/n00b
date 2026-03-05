@@ -9,6 +9,7 @@
 #include "display/render/types.h"
 #include "display/widget.h"
 #include "display/widgets/label.h"
+#include "internal/display/widget_primitives.h"
 #include "text/unicode/properties.h"
 #include "text/unicode/linebreak.h"
 #include "text/strings/string_ops.h"
@@ -308,11 +309,11 @@ n00b_label_new(n00b_string_t *text) _kargs {
 void
 n00b_label_set_text(n00b_plane_t *plane, n00b_string_t *text)
 {
-    if (!plane || !plane->widget_vtable || plane->widget_vtable != &n00b_widget_label) {
+    n00b_label_t *label = n00b_widget_data_if_kind(plane, &n00b_widget_label);
+    if (!label) {
         return;
     }
 
-    n00b_label_t *label = (n00b_label_t *)plane->widget_data;
     label->text = text;
     n00b_plane_mark_dirty(plane);
     n00b_widget_render(plane);
@@ -321,10 +322,10 @@ n00b_label_set_text(n00b_plane_t *plane, n00b_string_t *text)
 n00b_string_t *
 n00b_label_get_text(n00b_plane_t *plane)
 {
-    if (!plane || plane->widget_vtable != &n00b_widget_label) {
+    n00b_label_t *label = n00b_widget_data_if_kind(plane, &n00b_widget_label);
+    if (!label) {
         return nullptr;
     }
 
-    n00b_label_t *label = (n00b_label_t *)plane->widget_data;
     return label->text;
 }

@@ -11,6 +11,7 @@
 #include "display/render/types.h"
 #include "display/widget.h"
 #include "display/widgets/progress.h"
+#include "internal/display/widget_primitives.h"
 #include "text/strings/text_style.h"
 
 // Partial horizontal block characters: 1/8 to 8/8.
@@ -56,11 +57,9 @@ progress_render(n00b_plane_t *plane, void *data)
         return;
     }
 
-    int32_t cpw = n00b_plane_text_width(plane, n00b_string_from_cstr("M"), nullptr);
-    if (cpw <= 0) cpw = 1;
+    int32_t cpw = n00b_widget_cell_px_width(plane);
 
-    int32_t lh = n00b_plane_line_height(plane, nullptr);
-    if (lh <= 0) lh = 1;
+    int32_t lh = n00b_widget_line_px_height(plane);
 
     double val = prog->value;
     if (val < 0.0) val = 0.0;
@@ -138,11 +137,9 @@ progress_measure(n00b_plane_t *plane, void *data,
 {
     n00b_progress_t *prog = (n00b_progress_t *)data;
 
-    int32_t cpw = n00b_plane_text_width(plane, n00b_string_from_cstr("M"), nullptr);
-    if (cpw <= 0) cpw = 1;
+    int32_t cpw = n00b_widget_cell_px_width(plane);
 
-    int32_t lh = n00b_plane_line_height(plane, nullptr);
-    if (lh <= 0) lh = 1;
+    int32_t lh = n00b_widget_line_px_height(plane);
 
     if (prog && prog->vertical) {
         *pref_w = cpw;
@@ -189,11 +186,9 @@ n00b_progress_new() _kargs {
                                            .canvas    = canvas,
                                            .allocator = allocator);
 
-    int32_t cpw = n00b_plane_text_width(plane, n00b_string_from_cstr("M"), nullptr);
-    if (cpw <= 0) cpw = 1;
+    int32_t cpw = n00b_widget_cell_px_width(plane);
 
-    int32_t lh = n00b_plane_line_height(plane, nullptr);
-    if (lh <= 0) lh = 1;
+    int32_t lh = n00b_widget_line_px_height(plane);
 
     // Convert caller-supplied character-count widths to pixels.
     // The default karg value of 20 means "20 characters wide".
@@ -229,11 +224,11 @@ n00b_progress_new() _kargs {
 void
 n00b_progress_set_value(n00b_plane_t *plane, double value)
 {
-    if (!plane || plane->widget_vtable != &n00b_widget_progress) {
+    n00b_progress_t *prog = n00b_widget_data_if_kind(plane, &n00b_widget_progress);
+    if (!prog) {
         return;
     }
 
-    n00b_progress_t *prog = (n00b_progress_t *)plane->widget_data;
     if (value < 0.0) value = 0.0;
     if (value > 1.0) value = 1.0;
     prog->value = value;
@@ -244,10 +239,10 @@ n00b_progress_set_value(n00b_plane_t *plane, double value)
 double
 n00b_progress_get_value(n00b_plane_t *plane)
 {
-    if (!plane || plane->widget_vtable != &n00b_widget_progress) {
+    n00b_progress_t *prog = n00b_widget_data_if_kind(plane, &n00b_widget_progress);
+    if (!prog) {
         return 0.0;
     }
 
-    n00b_progress_t *prog = (n00b_progress_t *)plane->widget_data;
     return prog->value;
 }
