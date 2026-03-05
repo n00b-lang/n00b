@@ -29,6 +29,7 @@ This plan is the top-level roadmap for the in-place rewrite. "In-place" means ex
 - [x] (2026-03-05 13:41Z) Executed Milestone 4 and recorded shared widget/table/hexdump primitive migration, validation evidence, and deterministic M4 artifacts in `plans/display-rewrite/m4-widget-table-migration-execplan.md` and `plans/artifacts/display-rewrite/m4/`.
 - [x] (2026-03-05 13:50Z) Authored the Milestone 5 child ExecPlan in `plans/display-rewrite/m5-runtime-selection-execplan.md`.
 - [x] (2026-03-05 14:10Z) Executed Milestone 5 and recorded registry-first runtime selection, plugin-readiness coverage, validation evidence, and deterministic artifacts in `plans/display-rewrite/m5-runtime-selection-execplan.md` and `plans/artifacts/display-rewrite/m5/`.
+- [x] (2026-03-05 14:23Z) Authored the Milestone 6 child ExecPlan in `plans/display-rewrite/m6-hardening-and-cutover-execplan.md`.
 - [ ] Execute Milestone 6 as stacked diff, preserving this document as the top-level source of milestone ordering and acceptance scope.
 
 ## Surprises & Discoveries
@@ -504,3 +505,4 @@ Dependencies that materially affect milestone planning include optional GUI/rend
 - 2026-03-05: Updated umbrella plan after Milestone 4 execution to mark M4 complete, add M4 validation/artifact evidence, adjust branch/remaining scope guidance to Milestones 5-6, and replace the missing table sample path in generic artifact commands with deterministic stdin-fed table input.
 - 2026-03-05: Marked Milestone 5 child ExecPlan authoring as complete after creating `plans/display-rewrite/m5-runtime-selection-execplan.md`, while keeping remaining execution scope at Milestones 5-6.
 - 2026-03-05: Updated umbrella plan after Milestone 5 execution to mark M5 complete, add M5 validation/artifact evidence, capture M5 surprises/decisions, and narrow remaining execution scope to Milestone 6 only.
+- 2026-03-05: Marked Milestone 6 child ExecPlan authoring as complete after creating `plans/display-rewrite/m6-hardening-and-cutover-execplan.md`, while keeping remaining execution scope at Milestone 6 execution.
