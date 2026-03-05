@@ -3,7 +3,9 @@
  *
  * Usage:
  *   widget_demo --widget label --backend tui    # ANSI alt-screen
+ *   widget_demo --widget label --backend gui    # portable GUI (cocoa/x11)
  *   widget_demo --widget label --backend cocoa  # macOS Cocoa window
+ *   widget_demo --widget label --backend x11    # Linux/Unix X11 window
  *   widget_demo -w label -b tui                 # short forms
  *
  * Press Ctrl-C to exit.
@@ -289,11 +291,15 @@ static bool           g_auto_progress = false;
 static void
 on_button_click(n00b_plane_t *plane, void *data)
 {
-    (void)plane;
     (void)data;
-    if (g_status_label) {
-        n00b_label_set_text(g_status_label,
-                             n00b_string_from_cstr("Button clicked!"));
+
+    if (plane
+        && plane->widget_vtable == &n00b_widget_button
+        && plane->widget_data) {
+        n00b_button_t *btn = (n00b_button_t *)plane->widget_data;
+        btn->label         = n00b_string_from_cstr("Clicked!");
+        n00b_plane_mark_dirty(plane);
+        n00b_widget_render(plane);
     }
 }
 
@@ -595,11 +601,13 @@ static void
 usage(const char *prog)
 {
     fprintf(stderr,
-            "Usage: %s --widget <name> --backend <tui|cocoa|nc> [--theme <name>]\n"
+            "Usage: %s --widget <name> --backend <tui|gui|cocoa|x11|nc> [--theme <name>]\n"
             "\n"
             "Widgets:  label, all\n"
-            "Backends: tui (ANSI alt-screen), cocoa (macOS native),\n"
+            "Backends: tui (ANSI alt-screen), gui (portable alias),\n"
+            "          cocoa (macOS native), x11 (Linux/Unix native),\n"
             "          nc / notcurses (pixel + cell-based terminal)\n"
+            "          gui maps to cocoa on macOS, x11 on Linux/Unix\n"
             "\n"
             "Short flags: -w <widget> -b <backend> -t <theme>\n",
             prog);
@@ -648,9 +656,27 @@ main(int argc, char **argv)
 
     // Select backend vtable.
     const n00b_renderer_vtable_t *vtable = nullptr;
+    bool                          backend_uses_terminal_io = false;
 
     if (strcmp(backend_name, "tui") == 0) {
         vtable = &n00b_renderer_ansi;
+        backend_uses_terminal_io = true;
+    }
+    else if (strcmp(backend_name, "gui") == 0) {
+#if defined(__APPLE__)
+        vtable = &n00b_renderer_cocoa;
+#elif defined(N00B_HAVE_X11)
+        vtable = &n00b_renderer_x11;
+#elif defined(N00B_HAVE_NOTCURSES)
+        fprintf(stderr,
+                "Backend 'gui' requires a windowed backend, but x11 is not built.\n");
+        usage(argv[0]);
+#else
+        fprintf(stderr,
+                "Backend 'gui' is unavailable in this build "
+                "(requires cocoa on macOS or x11 on Linux/Unix).\n");
+        usage(argv[0]);
+#endif
     }
 #if defined(__APPLE__)
     else if (strcmp(backend_name, "cocoa") == 0) {
@@ -661,6 +687,12 @@ main(int argc, char **argv)
     else if (strcmp(backend_name, "nc") == 0
              || strcmp(backend_name, "notcurses") == 0) {
         vtable = &n00b_renderer_notcurses;
+        backend_uses_terminal_io = true;
+    }
+#endif
+#if defined(N00B_HAVE_X11)
+    else if (strcmp(backend_name, "x11") == 0) {
+        vtable = &n00b_renderer_x11;
     }
 #endif
     else {
@@ -699,6 +731,17 @@ main(int argc, char **argv)
     n00b_canvas_t *canvas = n00b_alloc(n00b_canvas_t);
     n00b_canvas_init(canvas, .vtable = vtable, .output = stdout_topic);
 
+    if (!canvas->backend_ctx) {
+        fprintf(stderr,
+                "Failed to initialize backend '%s'.\n",
+                vtable->name ? vtable->name : "unknown");
+        n00b_shutdown();
+        if (g_log) {
+            fclose(g_log);
+        }
+        return 1;
+    }
+
     dbg("Canvas initialized:\n");
     dbg_canvas(canvas);
 
@@ -720,9 +763,7 @@ main(int argc, char **argv)
     // Render.
     dbg("\n=== About to render ===\n");
 
-    if (strcmp(backend_name, "tui") == 0
-        || strcmp(backend_name, "nc") == 0
-        || strcmp(backend_name, "notcurses") == 0) {
+    if (backend_uses_terminal_io) {
 
         if (use_event_loop) {
             // Interactive event loop for "all" mode.

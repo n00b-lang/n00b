@@ -5,10 +5,14 @@
 #include "core/runtime.h"
 #include "display/focus.h"
 #include "display/render/backend.h"
+#include "display/render/box.h"
 #include "display/render/canvas.h"
 #include "display/render/plane.h"
 #include "display/widget.h"
+#include "display/widgets/box.h"
+#include "display/widgets/button.h"
 #include "internal/display/event_dispatch.h"
+#include "internal/display/scene_contracts.h"
 
 extern void n00b_stream_backend_set_size(void        *ctx,
                                           n00b_isize_t rows,
@@ -149,6 +153,72 @@ test_event_dispatch_contracts(void)
     printf("  [PASS] event dispatch key/mouse/stop\n");
 }
 
+static void
+test_button_border_click_focuses(void)
+{
+    n00b_canvas_t *canvas = n00b_new_kargs(n00b_canvas_t, canvas,
+                                            .vtable = &n00b_renderer_stream);
+    n00b_stream_backend_set_size(canvas->backend_ctx, 20, 80);
+    n00b_canvas_resize(canvas, 20, 80);
+
+    n00b_plane_t *root = n00b_box_new(.canvas = canvas,
+                                        .direction = N00B_FLEX_COLUMN,
+                                        .gap = 1);
+    root->width  = 80;
+    root->height = 20;
+    n00b_canvas_add_plane(canvas, root);
+
+    n00b_plane_t *btn1 = n00b_button_new(n00b_string_from_cstr("One"),
+                                           .canvas = canvas);
+    n00b_plane_t *btn2 = n00b_button_new(n00b_string_from_cstr("Two"),
+                                           .canvas = canvas);
+    n00b_plane_add_child(root, btn1, 0, 0);
+    n00b_plane_add_child(root, btn2, 0, 0);
+
+    n00b_display_scene_run_layout(canvas);
+    n00b_display_scene_mark_all_dirty(canvas);
+    n00b_display_scene_rerender_dirty(canvas);
+
+    int32_t cpw = (int32_t)canvas->cell_px_w;
+    int32_t cph = (int32_t)canvas->cell_px_h;
+    int32_t it = 0;
+    n00b_box_insets_px(btn2->box, cpw, cph, &it, nullptr, nullptr, nullptr);
+
+    // Click exactly on the left border cell (outside content area).
+    n00b_event_t click = {
+        .type = N00B_EVENT_MOUSE,
+        .mouse = {
+            .x = btn2->x,
+            .y = btn2->y + (it > 0 ? it : 0),
+            .button = N00B_MOUSE_LEFT,
+            .action = N00B_MOUSE_PRESS,
+            .mods = N00B_MOD_NONE,
+        },
+    };
+
+    n00b_focus_mgr_t *fm = n00b_focus_mgr_new(canvas);
+    assert(n00b_focus_mgr_set(fm, btn1));
+    assert(n00b_focus_mgr_current(fm) == btn1);
+
+    n00b_display_dispatch_result_t r = n00b_display_dispatch_event(canvas, fm, &click);
+    assert(r.handled);
+    assert(n00b_focus_mgr_current(fm) == btn2);
+
+    n00b_focus_mgr_destroy(fm);
+    n00b_canvas_remove_plane(canvas, root);
+    n00b_plane_remove_child(root, btn1);
+    n00b_plane_remove_child(root, btn2);
+    n00b_widget_detach(btn1);
+    n00b_widget_detach(btn2);
+    n00b_plane_destroy(btn1);
+    n00b_plane_destroy(btn2);
+    n00b_widget_detach(root);
+    n00b_plane_destroy(root);
+    n00b_canvas_destroy(canvas);
+
+    printf("  [PASS] button border click focuses button\n");
+}
+
 int
 main(int argc, char **argv)
 {
@@ -157,6 +227,7 @@ main(int argc, char **argv)
 
     printf("Running display event-dispatch tests...\n");
     test_event_dispatch_contracts();
+    test_button_border_click_focuses();
 
     printf("Display event-dispatch tests passed.\n");
     n00b_shutdown();

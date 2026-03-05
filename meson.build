@@ -32,6 +32,7 @@ endif
 
 conf_notcurses = get_option('enable_notcurses')
 conf_freetype  = get_option('enable_freetype')
+conf_x11       = get_option('enable_x11') and target_os != 'windows'
 
 conf_release_build = get_option('buildtype') == 'release'
 conf_asan = get_option('use_asan').enabled()
@@ -245,6 +246,11 @@ if conf_notcurses
   conf_notcurses = notcurses_dep.found()
 endif
 
+if conf_x11
+  x11_dep = dependency('x11', required: false)
+  conf_x11 = x11_dep.found()
+endif
+
 if conf_freetype
   freetype_dep = dependency('freetype2', required: false)
   conf_freetype = freetype_dep.found()
@@ -257,6 +263,10 @@ endif
 if conf_freetype
   exe_c_args = exe_c_args + ['-DN00B_HAVE_FREETYPE=1']
   deps += freetype_dep
+endif
+if conf_x11
+  exe_c_args = exe_c_args + ['-DN00B_HAVE_X11=1']
+  deps += x11_dep
 endif
 
 mir_proj = subproject('mir')
@@ -411,6 +421,8 @@ n00b_display = [
     'src/display/render/backend_ansi_inline.c',
     'src/display/render/ansi_sgr.c',
     'src/display/render/terminal_input.c',
+    'src/display/render/cocoa_input.c',
+    'src/display/render/cocoa_bridge_contracts.c',
     'src/display/render/backend_dumb.c',
     'src/display/render/draw_cmd.c',
     'src/display/render/font_metrics.c',
@@ -441,6 +453,10 @@ n00b_display = [
     'src/display/table/table_render.c',
     'src/display/table/table_styles.c',
 ]
+
+if conf_x11
+    n00b_display += 'src/display/render/backend_x11.c'
+endif
 
 # ============================================================================
 # Conduit pub/sub system
@@ -688,7 +704,10 @@ if conf_cocoa
   endif
 
   n00b_cocoa_lib = static_library('n00b_cocoa',
-      ['src/display/render/backend_cocoa.m'],
+      [
+        'src/display/render/backend_cocoa.m',
+        'src/display/render/cocoa_bridge_layout.m',
+      ],
       include_directories: incdir,
       dependencies: deps,
       objc_args: cocoa_objc_args,
@@ -1413,6 +1432,12 @@ display_scene_contracts_test = executable('test_display_scene_contracts',
 )
 test('display_scene_contracts', display_scene_contracts_test, suite: 'unit')
 
+display_backend_registry_test = executable('test_display_backend_registry',
+    ['test/unit/test_display_backend_registry.c'],
+    kwargs: test_common_kwargs,
+)
+test('display_backend_registry', display_backend_registry_test, suite: 'unit')
+
 display_event_dispatch_test = executable('test_display_event_dispatch',
     ['test/unit/test_display_event_dispatch.c'],
     kwargs: test_common_kwargs,
@@ -1437,6 +1462,12 @@ display_terminal_input_test = executable('test_display_terminal_input',
 )
 test('display_terminal_input', display_terminal_input_test, suite: 'unit')
 
+display_cocoa_input_test = executable('test_display_cocoa_input',
+    ['test/unit/test_display_cocoa_input.c'],
+    kwargs: test_common_kwargs,
+)
+test('display_cocoa_input', display_cocoa_input_test, suite: 'unit')
+
 display_baseline_contract_test = executable('test_display_baseline_contract',
     ['test/unit/test_display_baseline_contract.c'],
     kwargs: test_common_kwargs,
@@ -1451,6 +1482,14 @@ if conf_cocoa
       link_with: [n00b],
   )
   test('cocoa_backend', cocoa_test, suite: 'unit')
+
+  cocoa_bridge_contracts_test = executable('test_display_cocoa_bridge_contracts',
+      ['test/unit/test_display_cocoa_bridge_contracts.m'],
+      include_directories: incdir,
+      objc_args: cocoa_objc_args,
+      link_with: [n00b],
+  )
+  test('display_cocoa_bridge_contracts', cocoa_bridge_contracts_test, suite: 'unit')
 endif
 
 if conf_notcurses
@@ -1459,6 +1498,14 @@ if conf_notcurses
       kwargs: test_common_kwargs,
   )
   test('notcurses_backend', notcurses_test, suite: 'unit')
+endif
+
+if conf_x11
+  x11_test = executable('test_x11_backend',
+      ['test/unit/test_x11_backend.c'],
+      kwargs: test_common_kwargs,
+  )
+  test('x11_backend', x11_test, suite: 'unit')
 endif
 
 # Table CLI tool
@@ -1489,6 +1536,12 @@ display_scene_inspect = executable('display_scene_inspect',
 
 display_terminal_replay = executable('display_terminal_replay',
     ['src/tools/display_terminal_replay.c'],
+    kwargs: test_common_kwargs,
+    install: false,
+)
+
+display_gui_parity_report = executable('display_gui_parity_report',
+    ['src/tools/display_gui_parity_report.c'],
     kwargs: test_common_kwargs,
     install: false,
 )
@@ -1576,6 +1629,12 @@ display_m2_terminal_flow_test = executable('test_display_m2_terminal_flow',
     kwargs: test_common_kwargs,
 )
 test('display_m2_terminal_flow', display_m2_terminal_flow_test, suite: 'integration')
+
+display_m3_backend_parity_test = executable('test_display_m3_backend_parity',
+    ['test/integration/test_display_m3_backend_parity.c'],
+    kwargs: test_common_kwargs,
+)
+test('display_m3_backend_parity', display_m3_backend_parity_test, suite: 'integration')
 
 # ============================================================================
 # Unicode tests

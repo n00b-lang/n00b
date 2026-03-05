@@ -76,6 +76,11 @@ option('enable_notcurses',
     value: true,
     description: 'Build the notcurses rendering backend (requires notcurses >= 3.0.0).')
 
+option('enable_x11',
+    type: 'boolean',
+    value: true,
+    description: 'Build the X11 rendering backend (Linux/Unix GUI window backend).')
+
 option('enable_freetype',
     type: 'boolean',
     value: true,
