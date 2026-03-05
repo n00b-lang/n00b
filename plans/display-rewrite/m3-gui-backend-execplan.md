@@ -6,20 +6,24 @@ This plan is Milestone 3 of the umbrella plan at `plans/display-rewrite-overall-
 
 ## Purpose / Big Picture
 
-Milestone 3 makes the dual-target runtime concrete by bringing the Cocoa GUI backend onto the same internal-contract discipline used by terminal paths in Milestones 1 and 2. After this milestone, contributors should be able to prove that one app composition produces equivalent interaction semantics through terminal and GUI pathways for a documented subset (focus traversal, key activation, mouse press routing, resize handling, and clean stop behavior).
+Milestone 3 makes the dual-target runtime concrete by bringing GUI backends onto the same internal-contract discipline used by terminal paths in Milestones 1 and 2. After this milestone, contributors can run one app composition through terminal and GUI pathways (Cocoa where available and X11 on Linux) and get equivalent interaction semantics for a documented subset (focus traversal, key activation, mouse press routing, resize handling, and clean stop behavior).
 
-The user-visible effect is parity confidence and safer GUI evolution. Instead of leaving Cocoa-specific translation and bridge assumptions as implicit static code in `backend_cocoa.m`, this milestone introduces explicit, testable contracts plus a deterministic parity report artifact under `plans/artifacts/display-rewrite/m3/`.
+The user-visible effect is parity confidence and a real Linux windowed path instead of terminal-only fallbacks. Instead of leaving Cocoa-specific translation and bridge assumptions as implicit static code in `backend_cocoa.m`, and instead of mapping `gui` to non-windowed terminal backends on Linux, this milestone introduces explicit, testable contracts plus a native X11 backend and deterministic parity artifacts under `plans/artifacts/display-rewrite/m3/`.
 
 ## Progress
 
 - [x] (2026-03-05 11:55Z) Reviewed Milestone 3 scope and acceptance criteria from `plans/display-rewrite-overall-execplan.md`.
 - [x] (2026-03-05 11:55Z) Audited current GUI touchpoints: `src/display/render/backend_cocoa.m`, `include/display/render/cocoa_bridge.h`, `test/unit/test_cocoa_backend.m`, and Meson Cocoa gating.
 - [x] (2026-03-05 11:55Z) Authored this Milestone 3 child ExecPlan with concrete internal contracts, tests, and artifact commands.
-- [ ] Create and switch to branch `display-rewrite/m3-gui-backend` from `display-rewrite/m2-terminal-backend`.
-- [ ] Implement shared Cocoa input-translation and bridge-layout contract modules, then rewire `backend_cocoa.m` to consume them.
-- [ ] Add M3 unit tests (`display_cocoa_input`, `display_cocoa_bridge_contracts`) and integration parity coverage (`display_m3_backend_parity`).
-- [ ] Add deterministic artifact tool `display_gui_parity_report` and generate Milestone 3 artifacts under `plans/artifacts/display-rewrite/m3/`.
-- [ ] Run milestone validations (tests, smoke checks, parity diffs), record outcomes, and update this plan’s living sections.
+- [x] (2026-03-05 12:18Z) Confirmed active branch is `display-rewrite/m3-gui-backend`.
+- [x] (2026-03-05 12:18Z) Implemented Cocoa contract modules (`cocoa_input`, `cocoa_bridge_contracts`, `cocoa_bridge_layout`) and rewired `backend_cocoa.m` to use them, including runtime bridge-layout guard in `cocoa_init()`.
+- [x] (2026-03-05 12:18Z) Added M3 tests: `display_cocoa_input`, `display_cocoa_bridge_contracts` (Cocoa-gated), and `display_m3_backend_parity`; wired all targets in `meson.build`.
+- [x] (2026-03-05 12:18Z) Added deterministic artifact tool `display_gui_parity_report` and generated M3 artifacts under `plans/artifacts/display-rewrite/m3/`.
+- [x] (2026-03-05 12:18Z) Ran milestone validations, smoke checks, optional Cocoa availability probes, and M2-vs-M3 stream diffs; captured outcomes below.
+- [x] (2026-03-05 13:06Z) Added native Linux GUI backend `src/display/render/backend_x11.c`, Meson X11 gating (`enable_x11`), and backend registration/alias wiring so `--backend gui` resolves to `x11` on Linux/Unix.
+- [x] (2026-03-05 13:06Z) Updated `widget_demo` backend UX (`gui`, `x11`, initialization failure path) and ensured interactive `--widget all` runs via event loop on non-terminal GUI backends.
+- [x] (2026-03-05 13:06Z) Fixed X11 stability/usability defects found during manual bring-up: invalid font handling (`BadFont`), mouse pixel-coordinate mapping, and border hit-testing footprint.
+- [x] (2026-03-05 13:06Z) Added/ran Linux GUI-focused regression coverage: `test_display_backend_registry`, `test_x11_backend`, and expanded `test_display_event_dispatch` border-click coverage.
 
 ## Surprises & Discoveries
 
@@ -31,6 +35,16 @@ The user-visible effect is parity confidence and safer GUI evolution. Instead of
   Evidence: `test/unit/test_cocoa_backend.m` gates most tests behind `has_display()` and prints many `[SKIP] ... (headless)` outcomes.
 - Observation: Cocoa key/modifier translation is currently static inside Objective-C code, which makes it hard to validate in non-interactive C unit tests.
   Evidence: `src/display/render/backend_cocoa.m` defines `cocoa_translate_modifiers` and `cocoa_translate_function_key` as static helpers used directly in event handlers.
+- Observation: Raw control byte `0x19` does not normalize to Shift+Tab in `n00b_event_normalize`; it normalizes to Ctrl+Y.
+  Evidence: Initial `display_m3_backend_parity` run failed with terminal-side key routing skew, and `parity_report.txt` showed `terminal.left.key_events=0`/`terminal.right.key_events=3` until the script used symbolic `N00B_KEY_TAB + N00B_MOD_SHIFT`.
+- Observation: Cocoa-specific bridge-contract and smoke tests are unavailable in this Linux build, so deterministic fallback evidence is required and sufficient.
+  Evidence: `meson test -C build_debug --list` checks produced `display_cocoa_bridge_contracts unavailable (no Cocoa build in this environment)` and `cocoa_backend unavailable (non-Darwin or Cocoa disabled)`.
+- Observation: X11 core fonts can report a `None` font identifier even when `XLoadQueryFont` returns non-null, which crashes on `XSetFont` unless guarded.
+  Evidence: Running `./build_debug/widget_demo --widget all --backend gui` initially failed with `BadFont (invalid Font parameter)` and `X_ChangeGC` until font candidate fallback + `fid != None` checks were added.
+- Observation: Demo status messages were not reliably visible in the default X11 window because the status widget sits at the bottom of a tall vertical stack.
+  Evidence: Manual run feedback showed button activation flash with no visible status-line text change; button callback was switched to self-label updates for immediate, always-visible feedback.
+- Observation: Border click hit-testing can under-shoot rendered extents when inferred from content size in mixed layout states.
+  Evidence: Border-click behavior improved after switching hit-test footprint to prefer `plane->bounds` outer size and after adding `test_button_border_click_focuses` in `test/unit/test_display_event_dispatch.c`.
 
 ## Decision Log
 
@@ -46,27 +60,77 @@ The user-visible effect is parity confidence and safer GUI evolution. Instead of
 - Decision: Preserve public display APIs and renderer vtable shape in M3; keep all work internal or additive.
   Rationale: M3 scope is parity path hardening, not public API redesign.
   Date/Author: 2026-03-05 / Codex
+- Decision: Keep terminal-like parity script aligned with real backend-normalized semantics by using symbolic Shift+Tab (`N00B_KEY_TAB` + `N00B_MOD_SHIFT`) instead of raw byte `0x19`.
+  Rationale: `n00b_event_normalize` intentionally maps raw control bytes 1–26 to Ctrl+letters; using symbolic backtab avoids a false parity failure unrelated to backend behavior.
+  Date/Author: 2026-03-05 / Codex
+- Decision: Preserve legacy Cocoa Command-key behavior by mapping CMD into `N00B_MOD_ALT` in `n00b_cocoa_input_modifiers`.
+  Rationale: Existing backend behavior already treated Command as Alt; preserving this in the new contract prevents unexpected input regressions in M3.
+  Date/Author: 2026-03-05 / Codex
+- Decision: Introduce a native X11 backend for Linux/Unix and map the `gui` alias to actual windowed backends only (`cocoa` on macOS, `x11` on Linux/Unix).
+  Rationale: Milestone 3 acceptance requires a real GUI backend path; terminal-backed aliases (for example notcurses) do not satisfy the “actual GUI” objective.
+  Date/Author: 2026-03-05 / Codex
+- Decision: Keep X11 backend optional via Meson (`enable_x11`) and feature-detect X11 dependency at configure time.
+  Rationale: This preserves portability for environments without X11 while still enabling native GUI support where available.
+  Date/Author: 2026-03-05 / Codex
+- Decision: Use visible button-label mutation (`Click Me` -> `Clicked!`) in `widget_demo` click callback during X11 demos instead of relying on bottom status-line updates.
+  Rationale: It gives immediate confirmation of click handling in constrained window sizes and avoids false-negative UX during manual validation.
+  Date/Author: 2026-03-05 / Codex
 
 ## Outcomes & Retrospective
 
-Milestone 3 implementation has not started yet on this branch snapshot. This document now defines the complete execution path, concrete files, commands, and acceptance evidence needed to deliver M3 in one restartable pass.
+Milestone 3 implementation is complete on `display-rewrite/m3-gui-backend` for both deterministic/headless parity acceptance and Linux native GUI bring-up.
 
-Expected M3 completion outcome is: explicit Cocoa input and bridge contracts, passing unit and integration parity tests (including headless fallback), and deterministic M3 artifacts proving parity versus M2 baselines for stream captures plus GUI-path interaction semantics.
+Delivered artifacts and contracts:
+
+- Cocoa input contract extracted into `include/internal/display/cocoa_input.h` and `src/display/render/cocoa_input.c`.
+- Bridge layout contracts added via `include/internal/display/cocoa_bridge_contracts.h`, `src/display/render/cocoa_bridge_contracts.c`, and ObjC bridge snapshot `src/display/render/cocoa_bridge_layout.m`.
+- `backend_cocoa.m` now consumes shared input translation helpers and validates bridge layout during `cocoa_init()`.
+- New tests and tools wired in `meson.build`: `display_cocoa_input`, `display_cocoa_bridge_contracts` (Cocoa-gated), `display_m3_backend_parity`, and `display_gui_parity_report`.
+- Native X11 backend added in `src/display/render/backend_x11.c`, with renderer registration in `src/display/render/backend_registry.c` and vtable declaration in `include/display/render/backend.h`.
+- Linux GUI build/configuration wired via `meson.options` (`enable_x11`) and `meson.build` dependency detection/target wiring (`test_x11_backend`).
+- Backend selection UX updated in `src/tools/widget_demo.c` so `--backend gui` maps to `x11` on Linux/Unix, with explicit `--backend x11` support and backend-init failure diagnostics.
+- Input/hit UX fixes landed for Linux GUI validation: X11 font fallback/guards, X11 mouse pixel-coordinate mapping, and border hit-testing based on laid-out bounds.
+
+Validation outcomes (2026-03-05):
+
+- `meson test -C build_debug --print-errorlogs display_cocoa_input display_terminal_input display_event_dispatch display_baseline_contract` -> all pass.
+- `meson test -C build_debug --print-errorlogs display_baseline_flow display_m1_compat display_m2_terminal_flow display_m3_backend_parity` -> all pass.
+- `meson test -C build_debug --print-errorlogs render_plane ... xform_render` smoke set -> all pass.
+- Cocoa-gated checks reported unavailable in this environment:
+  - `display_cocoa_bridge_contracts unavailable (no Cocoa build in this environment)`
+  - `cocoa_backend unavailable (non-Darwin or Cocoa disabled)`
+- Artifact generation succeeded:
+  - `build_debug/display_baseline_capture --out-dir plans/artifacts/display-rewrite/m3`
+  - `build_debug/display_scene_inspect --out plans/artifacts/display-rewrite/m3/scene_inspect.txt`
+  - `build_debug/display_gui_parity_report --out-dir plans/artifacts/display-rewrite/m3`
+- Baseline parity vs M2:
+  - `diff -u plans/artifacts/display-rewrite/m2/scene_stream.txt plans/artifacts/display-rewrite/m3/scene_stream.txt` -> no output
+  - `diff -u plans/artifacts/display-rewrite/m2/table_stream.txt plans/artifacts/display-rewrite/m3/table_stream.txt` -> no output
+- Linux GUI validations:
+  - `ninja -C build_debug widget_demo test_display_backend_registry test_x11_backend` -> build success.
+  - `meson test -C build_debug --print-errorlogs display_backend_registry x11_backend display_event_dispatch` -> all pass.
+  - `./build_debug/widget_demo --widget all --backend gui` -> opens X11 window on Linux with interactive widget event loop.
 
 ## Context and Orientation
 
-Milestones 0-2 are complete and established the baseline harness (`display_baseline_capture`), core internal contracts (`diagnostics`, `scene_contracts`, `event_dispatch`, `backend_services`), and terminal modularization (`terminal_lifecycle`, `terminal_input`, `ansi_sgr`). M3 extends that contract-first approach to the GUI path.
+Milestones 0-2 are complete and established the baseline harness (`display_baseline_capture`), core internal contracts (`diagnostics`, `scene_contracts`, `event_dispatch`, `backend_services`), and terminal modularization (`terminal_lifecycle`, `terminal_input`, `ansi_sgr`). M3 extends that contract-first approach to GUI paths by hardening Cocoa bridge/input contracts and adding a native Linux X11 backend.
 
-For this milestone, “bridge layout” means memory layout compatibility between canonical C structs in normal headers and redeclared bridge structs in `include/display/render/cocoa_bridge.h` used by ObjC files. “Parity harness” means a deterministic, non-interactive test/tool that runs the same widget composition through terminal-like and GUI-like backend paths and compares normalized behavior outcomes. “GUI smoke” means an optional real Cocoa execution proof when the environment supports it.
+For this milestone, “bridge layout” means memory layout compatibility between canonical C structs in normal headers and redeclared bridge structs in `include/display/render/cocoa_bridge.h` used by ObjC files. “Parity harness” means a deterministic, non-interactive test/tool that runs the same widget composition through terminal-like and GUI-like backend paths and compares normalized behavior outcomes. “GUI smoke” means a real windowed execution proof (Cocoa on macOS, X11 on Linux/Unix) beyond terminal emulation.
 
 Primary files to understand before editing are:
 
 - `src/display/render/backend_cocoa.m`
+- `src/display/render/backend_x11.c`
 - `include/display/render/cocoa_bridge.h`
 - `src/display/render/cocoa_init_bridge.c`
+- `src/display/render/backend_registry.c`
+- `include/display/render/backend_registry.h`
 - `test/unit/test_cocoa_backend.m`
+- `test/unit/test_x11_backend.c`
+- `test/unit/test_display_backend_registry.c`
 - `test/integration/test_display_m2_terminal_flow.c`
 - `src/tools/display_terminal_replay.c`
+- `src/tools/widget_demo.c`
 - `meson.build`
 
 Milestone 3 is stacked on Milestone 2, so branch base is `display-rewrite/m2-terminal-backend` and parity comparisons must use `plans/artifacts/display-rewrite/m2/` as the parent evidence baseline.
@@ -84,6 +148,8 @@ Fourth, add milestone test coverage. Add a pure C unit test `test/unit/test_disp
 Fifth, add one integration parity test and one artifact tool. Add `test/integration/test_display_m3_backend_parity.c` that runs one scripted interaction flow through two deterministic backends (terminal-like and GUI-like capability profiles) and asserts equivalent normalized outcomes. Add `src/tools/display_gui_parity_report.c` to run a deterministic parity scenario and write `parity_report.txt` and `parity_metadata.txt` under `plans/artifacts/display-rewrite/m3/`.
 
 Finally, wire all new sources/tests/tools in `meson.build`, run milestone and smoke validations, generate M3 artifacts, and compare stream baseline captures against M2. Any intentional parity differences must be documented in `Decision Log` and artifact notes.
+
+Linux GUI extension for M3 adds one native backend (`x11`), updates registry/alias semantics so `gui` maps to real GUI backends, and validates interactive `widget_demo` behavior on X11. This extension also hardens runtime behavior through robust font fallback, explicit backend-init failure messaging, and corrected mouse/hit-test behavior for border clicks.
 
 ## Concrete Steps
 
@@ -150,6 +216,13 @@ Run optional real Cocoa smoke test when available:
       echo "cocoa_backend unavailable (non-Darwin or Cocoa disabled)"
     fi
 
+Run Linux X11 milestone checks and interactive smoke:
+
+    ninja -C build_debug widget_demo test_display_backend_registry test_x11_backend
+    meson test -C build_debug --print-errorlogs \
+      display_backend_registry x11_backend display_event_dispatch
+    ./build_debug/widget_demo --widget all --backend gui
+
 Generate Milestone 3 artifacts and compare against Milestone 2 captures:
 
     mkdir -p plans/artifacts/display-rewrite/m3
@@ -171,7 +244,7 @@ The second layer is integration parity validation. `display_m3_backend_parity` m
 
 The third layer is artifact validation. `display_gui_parity_report` must generate deterministic files in `plans/artifacts/display-rewrite/m3/`, and `display_baseline_capture` stream files in M3 should match M2 unless an intentional behavior change is documented.
 
-The fourth layer is optional real GUI smoke. If Cocoa backend tests are built and a display server is available, `cocoa_backend` must pass. If Cocoa cannot run in the current environment, acceptance remains valid only when the limitation is explicitly documented and all deterministic fallback evidence is green.
+The fourth layer is real GUI smoke. On Linux/Unix builds with X11 enabled, `widget_demo --widget all --backend gui` must open an X11 window and process click/key interactions. On macOS/Cocoa-capable environments, `cocoa_backend` should pass when available. If one GUI runtime is unavailable in the current environment, acceptance remains valid only when the limitation is explicitly documented and all deterministic fallback evidence is green.
 
 ## Idempotence and Recovery
 
@@ -182,6 +255,8 @@ If branch creation fails because `display-rewrite/m3-gui-backend` already exists
 If bridge-layout guard fails at runtime, treat it as a hard compatibility defect. Fix the redeclarations or canonical structure assumptions, rerun `display_cocoa_bridge_contracts`, and capture mismatch/fix evidence in `Surprises & Discoveries`.
 
 If Cocoa is unavailable (non-Darwin build, disabled option, or headless GUI limits), continue with deterministic parity harness plus baseline diff checks, and record the exact command output proving the limitation.
+
+If X11 initialization fails at runtime (for example missing `DISPLAY` or unavailable fonts), keep `widget_demo` failure messaging explicit (`Failed to initialize backend 'x11'.`) and verify backend tests still pass in headless mode (`x11_backend` may skip interactively but must not crash).
 
 ## Artifacts and Notes
 
@@ -207,6 +282,9 @@ Expected validation transcript pattern:
 
     $ diff -u plans/artifacts/display-rewrite/m2/table_stream.txt plans/artifacts/display-rewrite/m3/table_stream.txt
     (no output)
+
+    $ meson test -C build_debug --print-errorlogs display_backend_registry x11_backend display_event_dispatch
+    3/3 tests OK
 
 If a parity diff is intentional, include only the relevant diff lines here with a short explanation of why the behavior change is accepted for M3.
 
@@ -269,8 +347,25 @@ In `src/tools/display_gui_parity_report.c`, define:
                                      bool cocoa_smoke_available);
     int main(int argc, char **argv);
 
-Dependencies remain the existing project toolchain and optional Cocoa backend build gate already present in Meson. Do not add third-party dependencies in M3.
+In `meson.options`, define:
+
+    option('enable_x11', type: 'boolean', value: true, description: 'Enable the X11 GUI backend')
+
+In `include/display/render/backend.h`, declare:
+
+    #if defined(N00B_HAVE_X11)
+    extern const n00b_renderer_vtable_t n00b_renderer_x11;
+    #endif
+
+In `src/display/render/backend_registry.c`, ensure:
+
+    - `x11` backend is registered when `N00B_HAVE_X11` is defined.
+    - `gui` alias resolves to `cocoa` on macOS and `x11` on Linux/Unix.
+    - terminal backends remain available by explicit names (`tui`, `notcurses`, `ansi`).
+
+Dependencies remain the existing project toolchain plus optional Cocoa and optional X11 build gates already present in Meson. Do not add third-party dependencies in M3 beyond system X11 libs.
 
 ## Revision Notes
 
 - 2026-03-05: Initial Milestone 3 child ExecPlan authored from umbrella Milestone 3 scope, with concrete Cocoa contract extraction, bridge-layout guard strategy, parity testing plan, and artifact commands including non-GUI fallback acceptance.
+- 2026-03-05: Revised Milestone 3 ExecPlan after Linux GUI execution work to include X11 backend scope, registry/alias behavior, runtime/input/hit-test fixes, and Linux-native validation commands. Reason: M3 acceptance expanded from deterministic Cocoa-contract work to include an actual Linux windowed backend path.
