@@ -33,48 +33,11 @@ if [[ "$(uname -s)" == "Darwin" ]] && \
 fi
 
 function ensure_ncc {
-    if [[ ! -f bin/ncc ]] || [[ ${N00B_CLEAN} -ne 0 ]] ; then
-        N00B_BUILD_NCC=1
-    else
-        N00B_BUILD_NCC=${N00B_BUILD_NCC:-0}
-    fi
+    export NCC_PATH=$(which ncc)
 
-
-    if [[ ${N00B_BUILD_NCC} -ne 0 ]] ; then
-        cd ${N00B_ROOT}/ncc
-        if [[ ${N00B_CLEAN} -ne 0 ]] || [[ ! -d build_ncc ]] ; then
-            if [[ -d build_ncc ]] ; then
-                echo "Removing old ncc build dir"
-                rm -rf build_ncc
-            fi
-            # n00b-specific rstr templates: wrap strings in n00b_static_header_t
-            # so the GC can identify r"" strings as managed objects.
-            # Styled slots: $0=style_decls $1=var $2=bytes $3=data $4=cp $5=styling $6=typehash $7=wrapper
-            # Plain slots:  $0=var $1=bytes $2=data $3=cp $4=typehash $5=wrapper
-            meson setup --buildtype=${N00B_BUILD_TYPE} -Dcc_path=${CC} --prefix=${N00B_ROOT} --bindir=${N00B_ROOT}/bin \
-                '-Drstr_template_styled=({$0 static struct{n00b_static_header_t hdr;n00b_string_t obj;} $7={.hdr={.static_magic=0xcc653162303034ccULL,.tinfo=$6,.alloc_len=(unsigned)(sizeof(n00b_inline_hdr_t)+sizeof(n00b_string_t))},.obj={.u8_bytes=$2,.data=$3,.codepoints=$4,.styling=$5}};&$7.obj;})' \
-                '-Drstr_template_plain=({static struct{n00b_static_header_t hdr;n00b_string_t obj;} $5={.hdr={.static_magic=0xcc653162303034ccULL,.tinfo=$4,.alloc_len=(unsigned)(sizeof(n00b_inline_hdr_t)+sizeof(n00b_string_t))},.obj={.u8_bytes=$1,.data=$2,.codepoints=$3,.styling=((void*)0)}};&$5.obj;})' \
-                '-Dvargs_type=n00b_vargs_t' \
-                '-Donce_prefix=__n00b_' \
-                '-Drstr_string_type=n00b_string_t*' \
-                build_ncc .
-            if [[ $? -ne 0 ]] ; then
-                echo "NCC setup failed."
-                exit 1
-            fi
-        fi
-
-        meson compile -C build_ncc
-        if [[ $? -ne 0 ]] ; then
-            echo "Could not build ncc."
-            exit 1
-        fi
-        meson install -C build_ncc
-        if [[ $? -ne 0 ]] ; then
-            echo "NCC install failed."
-            exit 1
-        fi
-        cd ${N00B_ROOT}
+    if [[ -z ${NCC_PATH} ]] ; then
+        echo "=== Error: the ncc non-compiler is not found in your path. ==="
+        exit 1
     fi
 }
 
@@ -132,7 +95,7 @@ function build_n00b {
        if [[ "$(uname -s)" == "Darwin" ]] && command -v xcrun &>/dev/null; then
            export OBJC=$(xcrun --find clang 2>/dev/null)
        fi
-       CC=${N00B_ROOT}/bin/ncc meson setup --buildtype=${N00B_BUILD_TYPE} $(all_options) ${build_dir} .
+       CC=${NCC_PATH} meson setup --buildtype=${N00B_BUILD_TYPE} $(all_options) ${build_dir} .
        if [[ $? -ne 0 ]] ; then
            echo "Build setup failed."
            exit 1
@@ -196,7 +159,7 @@ print(c_val)
     fi
 
     if [[ ! -d ${build_dir} ]] ; then
-        CC=${N00B_ROOT}/bin/ncc \
+        CC=${NCC_PATH} \
         meson setup --cross-file ${cross_file} \
             --buildtype=${N00B_BUILD_TYPE} $(all_options) ${build_dir} .
         if [[ $? -ne 0 ]] ; then
