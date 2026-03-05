@@ -24,9 +24,10 @@ This plan is the top-level roadmap for the in-place rewrite. "In-place" means ex
 - [x] (2026-03-05 11:23Z) Authored the Milestone 2 child ExecPlan in `plans/display-rewrite/m2-terminal-backend-execplan.md`.
 - [x] (2026-03-05 11:45Z) Executed Milestone 2 and recorded terminal contract extraction, replay tooling, test validation, and parity artifacts in `plans/display-rewrite/m2-terminal-backend-execplan.md` and `plans/artifacts/display-rewrite/m2/`.
 - [x] (2026-03-05 11:55Z) Authored the Milestone 3 child ExecPlan in `plans/display-rewrite/m3-gui-backend-execplan.md`.
+- [x] (2026-03-05 13:06Z) Executed Milestone 3 and recorded Cocoa contract hardening plus Linux X11 GUI backend delivery, registry alias updates, and validation evidence in `plans/display-rewrite/m3-gui-backend-execplan.md`.
 - [x] (2026-03-17 18:12Z) Applied M1 review remediation on `display-rewrite/m1-core-contracts`: added blocking regression tests, mandatory `display_scene_inspect --out`, artifact parity coverage, diagnostics rerun coverage, and refreshed M0/M1 scene artifacts after trimming the trailing blank line at EOF.
 - [x] (2026-03-17 20:23Z) Applied M2 review remediation on `display-rewrite/m2-terminal-backend`: required `display_terminal_replay --out-dir`, extracted the shared replay fixture, added replay artifact parity coverage, split replay/manual metadata files, and refreshed the M2 artifact tree.
-- [ ] Execute Milestones 3-6 as stacked diffs, preserving this document as the top-level source of milestone ordering and acceptance scope.
+- [ ] Execute Milestones 4-6 as stacked diffs, preserving this document as the top-level source of milestone ordering and acceptance scope.
 
 ## Surprises & Discoveries
 
@@ -48,6 +49,10 @@ This plan is the top-level roadmap for the in-place rewrite. "In-place" means ex
   Evidence: Initial M1 runs reported `Run-time dependency notcurses found: NO`; subsequent `ninja -C build_debug reconfigure` reported `Run-time dependency notcurses found: YES 3.0.17`, and `notcurses_backend` tests passed.
 - Observation: Milestone 2 terminal modularization preserved baseline stream outputs while removing large duplicated parsing/style blocks from terminal backends.
   Evidence: `diff -u plans/artifacts/display-rewrite/m1/scene_stream.txt plans/artifacts/display-rewrite/m2/scene_stream.txt` and corresponding table diff both produced no output; new shared modules are wired through `src/display/event_loop.c`, `src/display/render/backend_ansi.c`, `src/display/render/backend_ansi_inline.c`, and `src/display/render/backend_notcurses.c`.
+- Observation: Linux needed a true windowed backend for M3 acceptance; mapping `gui` to terminal backends did not satisfy the milestone objective.
+  Evidence: User-facing validation required `./build_debug/widget_demo --widget all --backend gui` to open an X11 window and process real GUI interactions.
+- Observation: X11 bring-up uncovered runtime-specific defects (font identifier validity, pixel-vs-cell mouse routing, and border hit-testing footprint) that were not exercised by prior deterministic parity-only checks.
+  Evidence: Initial runtime error included `BadFont (invalid Font parameter)` from `X_ChangeGC`; subsequent fixes landed in `src/display/render/backend_x11.c` and `src/display/mouse.c` with new regression checks in `test_x11_backend` and `test_display_event_dispatch`.
 
 ## Decision Log
 
@@ -72,12 +77,18 @@ This plan is the top-level roadmap for the in-place rewrite. "In-place" means ex
 - Decision: Treat M2 acceptance as complete only after deterministic replay output and M1 artifact parity diffs are both validated in addition to unit/integration tests.
   Rationale: M2 is primarily internal modularization; replay output plus parity diffs provide concrete evidence that behavior remained stable while architecture changed.
   Date/Author: 2026-03-05 / Codex
+- Decision: Extend M3 acceptance to require one actual Linux GUI path (X11) in addition to deterministic parity harness evidence.
+  Rationale: The rewrite goal is dual terminal/GUI runtime proof, so Linux must show a real windowed backend path instead of terminal emulation aliases.
+  Date/Author: 2026-03-05 / Codex
+- Decision: Make backend alias `gui` resolve to true GUI backends only (`cocoa` on macOS, `x11` on Linux/Unix) and keep terminal backends explicit by name.
+  Rationale: This removes ambiguity for users validating GUI behavior and keeps backend selection intent unambiguous for later milestones.
+  Date/Author: 2026-03-05 / Codex
 
 ## Outcomes & Retrospective
 
-Milestones 0, 1, and 2 are complete on the active rewrite lineage. Milestone 0 established deterministic baseline harnessing (`display_baseline_contract`, `display_baseline_flow`, `display_baseline_capture`) and baseline artifacts in `plans/artifacts/display-rewrite/m0/`. Milestone 1 then carved out internal display contracts (`diagnostics`, `scene_contracts`, `event_dispatch`, `backend_services`), removed hardcoded `/tmp` diagnostics from touched display paths, added deterministic scene inspection (`display_scene_inspect`), and captured parity artifacts in `plans/artifacts/display-rewrite/m1/`. Milestone 2 extracted shared terminal contracts (`terminal_lifecycle`, `ansi_sgr`, `terminal_input`), rewired terminal backends/event loop to consume them, added deterministic replay tooling (`display_terminal_replay`), and after review remediation now enforces explicit replay destinations, parity-tests replay artifacts, and keeps baseline/replay/manual evidence separate in `plans/artifacts/display-rewrite/m2/`.
+Milestones 0, 1, 2, and 3 are complete on the active rewrite lineage. Milestone 0 established deterministic baseline harnessing (`display_baseline_contract`, `display_baseline_flow`, `display_baseline_capture`) and baseline artifacts in `plans/artifacts/display-rewrite/m0/`. Milestone 1 then carved out internal display contracts (`diagnostics`, `scene_contracts`, `event_dispatch`, `backend_services`), removed hardcoded `/tmp` diagnostics from touched display paths, added deterministic scene inspection (`display_scene_inspect`), and captured parity artifacts in `plans/artifacts/display-rewrite/m1/`. Milestone 2 extracted shared terminal contracts (`terminal_lifecycle`, `ansi_sgr`, `terminal_input`), rewired terminal backends/event loop to consume them, added deterministic replay tooling (`display_terminal_replay`), and after review remediation now enforces explicit replay destinations, parity-tests replay artifacts, and keeps baseline/replay/manual evidence separate in `plans/artifacts/display-rewrite/m2/`. Milestone 3 hardened Cocoa GUI contracts and delivered the first Linux native GUI backend (`x11`) with `gui` alias cleanup, interactive `widget_demo` window proof, and M3 validation artifacts under `plans/artifacts/display-rewrite/m3/`.
 
-What remains is milestone execution from M3 onward: GUI parity path, widget/table/hexdump migration, runtime backend selection cleanup, and final hardening/cutover. The key lesson through M2 is that deterministic artifact generation plus explicit internal contracts keeps parity diffs reviewable while refactoring large backend paths.
+What remains is milestone execution for M4-M6: widget/table/hexdump migration, runtime backend selection cleanup follow-through, and final hardening/cutover. The key lesson through M3 is that deterministic artifact generation plus explicit internal contracts and one real windowed backend proof keep parity claims defensible while refactoring large backend paths.
 
 ## Context and Orientation
 
@@ -145,6 +156,8 @@ Completion evidence: `display_terminal_lifecycle`, `display_ansi_sgr`, `display_
 
 ### Milestone 3: GUI Backend Parity Path
 
+Status: Complete on `display-rewrite/m3-gui-backend`.
+
 Milestone 3 makes the dual-target goal concrete by bringing one GUI backend path up to parity on the same contracts used by terminal rendering. In this repository, the initial GUI path is Cocoa-backed code (`backend_cocoa.m`) with bridge constraints that must be formalized.
 
 Implementation scope includes rewriting GUI bridge internals onto the shared contracts, codifying bridge invariants, and adding compile-time or runtime guards that detect ABI drift between C headers and Objective-C bridge declarations.
@@ -152,6 +165,8 @@ Implementation scope includes rewriting GUI bridge internals onto the shared con
 Unit tests for this milestone must include bridge layout/contract guard tests and GUI event translation helpers that can run in non-interactive environments where possible. Integration tests must include a backend parity scenario that renders the same widget composition through terminal and GUI pathways (or GUI headless harness if CI lacks a window server) and compares normalized output properties. The human-runnable artifact is a GUI smoke command (for supported systems) and a generated parity report in `plans/artifacts/display-rewrite/m3/`.
 
 Acceptance for Milestone 3 is that one app composition can run through terminal and GUI backends with equivalent interaction semantics for a documented subset.
+
+Completion evidence: Cocoa input and bridge contracts were extracted/guarded, deterministic parity artifacts were generated under `plans/artifacts/display-rewrite/m3/`, Linux native GUI backend `x11` was added and wired into backend registry/`gui` alias resolution, and validation passed for `display_backend_registry`, `x11_backend`, and `display_event_dispatch` alongside existing M3 parity checks.
 
 ### Milestone 4: Widget, Table, And Hexdump Migration To Shared Primitives
 
@@ -190,18 +205,15 @@ Run all commands from `/home/baron/crash-override/n00b-tui/n00b-athens`.
 Current branch reality:
 
     git branch --show-current
-    # expected: display-rewrite/m0-baseline
+    # expected: display-rewrite/m3-gui-backend
 
-Milestone 0 is already complete on the current branch. Create the next milestone branch directly from this root:
+Milestones 0-3 are already complete on the active lineage. Create the next milestone branch from the current milestone branch:
 
-    git switch display-rewrite/m0-baseline
-    git switch -c display-rewrite/m1-core-contracts
+    git switch display-rewrite/m3-gui-backend
+    git switch -c display-rewrite/m4-widget-table-migration
 
 Continue creating descendant milestone branches from their immediate parent when each milestone is ready:
 
-    git switch -c display-rewrite/m2-terminal-backend
-    git switch -c display-rewrite/m3-gui-backend
-    git switch -c display-rewrite/m4-widget-table-migration
     git switch -c display-rewrite/m5-runtime-selection
     git switch -c display-rewrite/m6-hardening-and-cutover
 
@@ -376,17 +388,35 @@ Milestone 2 evidence captured on this branch:
     $ diff -u plans/artifacts/display-rewrite/m1/table_stream.txt plans/artifacts/display-rewrite/m2/table_stream.txt
     (no output)
 
+Milestone 3 evidence captured on this branch:
+
+    $ ninja -C build_debug widget_demo test_display_backend_registry test_x11_backend
+    [5/5] Linking target test_x11_backend
+
+    $ meson test -C build_debug --print-errorlogs display_backend_registry x11_backend display_event_dispatch
+    3/3 tests OK
+
+    $ ./build_debug/widget_demo --widget all --backend gui
+    # expected on Linux/Unix with DISPLAY:
+    # opens an X11 window and processes interactive clicks/keys
+
+    $ diff -u plans/artifacts/display-rewrite/m2/scene_stream.txt plans/artifacts/display-rewrite/m3/scene_stream.txt
+    (no output)
+
+    $ diff -u plans/artifacts/display-rewrite/m2/table_stream.txt plans/artifacts/display-rewrite/m3/table_stream.txt
+    (no output)
+
 ## Interfaces and Dependencies
 
 This rewrite must preserve and evolve the existing display-facing interfaces in place:
 
-- Render contracts and types in `include/display/render/*.h` with implementations in `src/display/render/*.c` and `src/display/render/backend_cocoa.m`.
+- Render contracts and types in `include/display/render/*.h` with implementations in `src/display/render/*.c`, `src/display/render/backend_cocoa.m`, and `src/display/render/backend_x11.c`.
 - Interaction contracts in `include/display/event.h`, `include/display/event_loop.h`, `include/display/focus.h`, and `include/display/mouse.h` with implementations in `src/display/`.
 - Widget contracts in `include/display/widget.h` and concrete widgets in `src/display/widgets/*.c`.
 - Data presentation modules in `include/display/table/table.h`, `src/display/table/*.c`, `include/display/hexdump.h`, and `src/display/hexdump.c`.
 - Tool and integration surfaces in `src/tools/widget_demo.c`, `src/tools/table.c`, and `src/conduit/xform_render.c`.
 
-Dependencies that materially affect milestone planning include optional GUI/render backends (Cocoa, Notcurses, FreeType), Meson test wiring in `meson.build`, and any environment prerequisites needed to run GUI or advanced backend tests. Each child ExecPlan must spell out environment assumptions and fallback validation paths.
+Dependencies that materially affect milestone planning include optional GUI/render backends (Cocoa, X11, Notcurses, FreeType), Meson test wiring in `meson.build`, and any environment prerequisites needed to run GUI or advanced backend tests. Each child ExecPlan must spell out environment assumptions and fallback validation paths.
 
 ## Revision Notes
 
@@ -399,3 +429,4 @@ Dependencies that materially affect milestone planning include optional GUI/rend
 - 2026-03-05: Updated umbrella plan after Milestone 2 execution to mark M2 complete, add M2 validation/artifact evidence, and narrow remaining execution scope to Milestones 3-6.
 - 2026-03-17: Updated the umbrella plan after M2 review remediation so replay parity automation, explicit replay output requirements, and the corrected M2 artifact layout are part of the recorded milestone state.
 - 2026-03-05: Marked Milestone 3 child ExecPlan authoring as complete after creating `plans/display-rewrite/m3-gui-backend-execplan.md`, while keeping remaining execution scope at Milestones 3-6.
+- 2026-03-05: Updated umbrella plan after Milestone 3 execution to mark M3 complete, record Linux X11 GUI backend evidence, update branch guidance to start at M4, and narrow remaining scope to Milestones 4-6. Reason: milestone planning state must match implemented GUI deliverables and current branch reality.
