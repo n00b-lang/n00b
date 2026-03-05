@@ -88,14 +88,14 @@ radio_group_select(n00b_radio_group_t *group, int index)
 
     group->selected = index;
 
-    // Re-render the previously selected radio.
+    // Mark the previously selected radio dirty so the event loop rerenders.
     if (prev >= 0 && prev < (int)group->count) {
-        n00b_widget_render(group->radios[prev]);
+        n00b_plane_mark_dirty(group->radios[prev]);
     }
 
-    // Re-render the newly selected radio.
+    // Mark the newly selected radio dirty so the event loop rerenders.
     if (index >= 0 && index < (int)group->count) {
-        n00b_widget_render(group->radios[index]);
+        n00b_plane_mark_dirty(group->radios[index]);
     }
 
     if (group->on_change) {
