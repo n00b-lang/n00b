@@ -1573,6 +1573,12 @@ widget_demo = executable('widget_demo',
     install: false,
 )
 
+notcurses_probe = executable('notcurses_probe',
+    ['src/tools/notcurses_probe.c'],
+    kwargs: test_common_kwargs,
+    install: false,
+)
+
 display_baseline_capture = executable('display_baseline_capture',
     ['src/tools/display_baseline_capture.c'],
     kwargs: test_common_kwargs,

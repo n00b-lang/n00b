@@ -156,6 +156,8 @@ test_key_mapping_and_notcurses_translation(void)
         .evtype = NCTYPE_PRESS,
         .x      = 2,
         .y      = 3,
+        .xpx    = 0,
+        .ypx    = 0,
     };
     assert(n00b_terminal_translate_notcurses(&mouse, &state, 4, 2, &out));
     assert(out.type == N00B_EVENT_MOUSE);

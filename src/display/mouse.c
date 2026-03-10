@@ -14,6 +14,24 @@
 #include "display/widget.h"
 #include "display/focus.h"
 
+static inline int32_t
+floor_div_i32(int32_t v, int32_t d)
+{
+    if (d <= 0) {
+        return v;
+    }
+    if (v >= 0) {
+        return v / d;
+    }
+    return -(((-v) + d - 1) / d);
+}
+
+static inline int32_t
+align_down_i32(int32_t v, int32_t step)
+{
+    return floor_div_i32(v, step) * step;
+}
+
 // -------------------------------------------------------------------
 // Hit testing
 // -------------------------------------------------------------------
@@ -66,6 +84,20 @@ n00b_mouse_hit_test(n00b_plane_t *plane, int32_t x, int32_t y,
     int32_t py = plane->y;
     int32_t pw, ph;
     plane_full_pixel_size(plane, cell_px_w, cell_px_h, &pw, &ph);
+
+    // Terminal backends place visuals on a cell grid, while layout/hit
+    // coordinates are pixel-space. Quantize bounds the same way rendering
+    // does so hit-testing tracks what users actually see.
+    bool tty_quantized = plane->canvas
+                      && (plane->canvas->caps & N00B_RCAP_MANAGES_TTY);
+    if (tty_quantized) {
+        int32_t cpw = cell_px_w > 0 ? cell_px_w : 1;
+        int32_t cph = cell_px_h > 0 ? cell_px_h : 1;
+        px = align_down_i32(px, cpw);
+        py = align_down_i32(py, cph);
+        pw = ((pw + cpw - 1) / cpw) * cpw;
+        ph = ((ph + cph - 1) / cph) * cph;
+    }
 
     if (x < px || x >= px + pw || y < py || y >= py + ph) {
         return nullptr;
@@ -155,6 +187,13 @@ n00b_mouse_route_event(n00b_canvas_t          *canvas,
         n00b_box_insets_px(target->box, cpw, cph, &it, &ib, &il, &ir);
         abs_x += il;
         abs_y += it;
+    }
+
+    // Keep local coordinates on the same snapped grid used for terminal
+    // rendering so widget hit regions line up with visible rows/columns.
+    if (canvas->caps & N00B_RCAP_MANAGES_TTY) {
+        abs_x = align_down_i32(abs_x, cpw > 0 ? cpw : 1);
+        abs_y = align_down_i32(abs_y, cph > 0 ? cph : 1);
     }
 
     n00b_event_t local_event = *event;

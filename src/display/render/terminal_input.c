@@ -435,9 +435,20 @@ n00b_terminal_translate_notcurses(const n00b_terminal_ncinput_view_t *in,
 
 #if defined(N00B_HAVE_NOTCURSES) && N00B_HAVE_NOTCURSES
     if (in->id >= NCKEY_BUTTON1 && in->id <= NCKEY_BUTTON3) {
+        int32_t cell_x = in->x >= 0 ? in->x : 0;
+        int32_t cell_y = in->y >= 0 ? in->y : 0;
+        int32_t pxoff_x = in->xpx >= 0 ? in->xpx : (int32_t)cell_px_w / 2;
+        int32_t pxoff_y = in->ypx >= 0 ? in->ypx : (int32_t)cell_px_h / 2;
+        if (pxoff_x >= (int32_t)cell_px_w) {
+            pxoff_x = (int32_t)cell_px_w - 1;
+        }
+        if (pxoff_y >= (int32_t)cell_px_h) {
+            pxoff_y = (int32_t)cell_px_h - 1;
+        }
+
         out->type = N00B_EVENT_MOUSE;
-        out->mouse.x = in->x * (int32_t)cell_px_w;
-        out->mouse.y = in->y * (int32_t)cell_px_h;
+        out->mouse.x = cell_x * (int32_t)cell_px_w + pxoff_x;
+        out->mouse.y = cell_y * (int32_t)cell_px_h + pxoff_y;
         out->mouse.mods = N00B_MOD_NONE;
         if (in->shift) {
             out->mouse.mods |= N00B_MOD_SHIFT;
@@ -479,9 +490,20 @@ n00b_terminal_translate_notcurses(const n00b_terminal_ncinput_view_t *in,
     }
 
     if (in->id == NCKEY_SCROLL_UP || in->id == NCKEY_SCROLL_DOWN) {
+        int32_t cell_x = in->x >= 0 ? in->x : 0;
+        int32_t cell_y = in->y >= 0 ? in->y : 0;
+        int32_t pxoff_x = in->xpx >= 0 ? in->xpx : (int32_t)cell_px_w / 2;
+        int32_t pxoff_y = in->ypx >= 0 ? in->ypx : (int32_t)cell_px_h / 2;
+        if (pxoff_x >= (int32_t)cell_px_w) {
+            pxoff_x = (int32_t)cell_px_w - 1;
+        }
+        if (pxoff_y >= (int32_t)cell_px_h) {
+            pxoff_y = (int32_t)cell_px_h - 1;
+        }
+
         out->type = N00B_EVENT_MOUSE;
-        out->mouse.x = in->x * (int32_t)cell_px_w;
-        out->mouse.y = in->y * (int32_t)cell_px_h;
+        out->mouse.x = cell_x * (int32_t)cell_px_w + pxoff_x;
+        out->mouse.y = cell_y * (int32_t)cell_px_h + pxoff_y;
         out->mouse.button = (in->id == NCKEY_SCROLL_UP) ? N00B_MOUSE_SCROLL_UP
                                                          : N00B_MOUSE_SCROLL_DOWN;
         out->mouse.action = N00B_MOUSE_PRESS;
@@ -499,9 +521,20 @@ n00b_terminal_translate_notcurses(const n00b_terminal_ncinput_view_t *in,
     }
 
     if (in->id == NCKEY_MOTION) {
+        int32_t cell_x = in->x >= 0 ? in->x : 0;
+        int32_t cell_y = in->y >= 0 ? in->y : 0;
+        int32_t pxoff_x = in->xpx >= 0 ? in->xpx : (int32_t)cell_px_w / 2;
+        int32_t pxoff_y = in->ypx >= 0 ? in->ypx : (int32_t)cell_px_h / 2;
+        if (pxoff_x >= (int32_t)cell_px_w) {
+            pxoff_x = (int32_t)cell_px_w - 1;
+        }
+        if (pxoff_y >= (int32_t)cell_px_h) {
+            pxoff_y = (int32_t)cell_px_h - 1;
+        }
+
         out->type = N00B_EVENT_MOUSE;
-        out->mouse.x = in->x * (int32_t)cell_px_w;
-        out->mouse.y = in->y * (int32_t)cell_px_h;
+        out->mouse.x = cell_x * (int32_t)cell_px_w + pxoff_x;
+        out->mouse.y = cell_y * (int32_t)cell_px_h + pxoff_y;
         out->mouse.button = N00B_MOUSE_NONE;
         out->mouse.mods = N00B_MOD_NONE;
         out->mouse.action = state->mouse_button_down ? N00B_MOUSE_DRAG

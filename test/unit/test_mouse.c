@@ -135,6 +135,35 @@ test_hit_test_invisible(void)
 }
 
 // -------------------------------------------------------------------
+// Test 4b: Terminal quantized hit-test aligns to cell grid
+// -------------------------------------------------------------------
+
+static void
+test_hit_test_terminal_quantized(void)
+{
+    n00b_canvas_t canvas;
+    memset(&canvas, 0, sizeof(canvas));
+    canvas.caps = N00B_RCAP_MANAGES_TTY;
+
+    // Plane starts mid-cell in pixel space. Terminal rendering snaps this
+    // to the cell grid; hit-testing should do the same for managed TTY
+    // backends.
+    n00b_plane_t *plane = make_plane(0, 35, 20, 19);
+    plane->canvas = &canvas;
+
+    // cph=16 => snapped top is 32. A click on row 32 should still hit.
+    n00b_plane_t *hit = n00b_mouse_hit_test(plane, 2, 32, 8, 16);
+    assert(hit == plane);
+
+    // One full cell above snapped top should miss.
+    hit = n00b_mouse_hit_test(plane, 2, 15, 8, 16);
+    assert(hit == nullptr);
+
+    n00b_plane_destroy(plane);
+    printf("  PASS: hit_test_terminal_quantized\n");
+}
+
+// -------------------------------------------------------------------
 // Test 5: Mouse capture
 // -------------------------------------------------------------------
 
@@ -279,6 +308,7 @@ main(int argc, char **argv)
     test_hit_test_depth();
     test_hit_test_miss();
     test_hit_test_invisible();
+    test_hit_test_terminal_quantized();
     test_capture();
     test_button_mouse_click();
     test_sgr_encoding();

@@ -66,8 +66,9 @@ canvas_bind_backend(n00b_canvas_t                *c,
     c->frame_rows         = sz.rows * c->cell_px_h;
     c->frame_cols         = sz.cols * c->cell_px_w;
 
-    // Initialize font metrics: ask backend first, fall back to cell metrics.
-    if (vtable->get_font_metrics) {
+    // Initialize font metrics: use backend metrics only when explicitly
+    // advertised; otherwise use deterministic cell fallback metrics.
+    if (vtable->get_font_metrics && (c->caps & N00B_RCAP_FONT_METRICS)) {
         c->metrics = vtable->get_font_metrics(c->backend_ctx);
     }
     else {
@@ -303,12 +304,20 @@ n00b_canvas_render(n00b_canvas_t *c)
     // Refresh size from backend (cells → pixels), unless the caller
     // has set an explicit size via canvas_resize() (size_set == true).
     if (!c->size_set) {
+        n00b_isize_t prev_cell_w = c->cell_px_w;
+        n00b_isize_t prev_cell_h = c->cell_px_h;
+        n00b_isize_t prev_rows   = c->frame_rows;
+        n00b_isize_t prev_cols   = c->frame_cols;
+
         n00b_render_size_t sz = n00b_display_backend_get_size(c);
         c->cell_px_w = sz.cell_pixel_w > 0 ? sz.cell_pixel_w : 1;
         c->cell_px_h = sz.cell_pixel_h > 0 ? sz.cell_pixel_h : 1;
         n00b_isize_t px_rows = sz.rows * c->cell_px_h;
         n00b_isize_t px_cols = sz.cols * c->cell_px_w;
-        if (px_rows != c->frame_rows || px_cols != c->frame_cols) {
+        bool size_changed = (px_rows != prev_rows || px_cols != prev_cols);
+        bool cell_changed = (c->cell_px_w != prev_cell_w
+                             || c->cell_px_h != prev_cell_h);
+        if (size_changed) {
             c->frame_rows = px_rows;
             c->frame_cols = px_cols;
             c->needs_full_redraw = true;
@@ -318,6 +327,14 @@ n00b_canvas_render(n00b_canvas_t *c)
         if (!c->vtable->get_font_metrics) {
             c->metrics = n00b_font_metrics_fallback((int32_t)c->cell_px_w,
                                                       (int32_t)c->cell_px_h);
+        }
+
+        // If backend cell metrics changed (even without a resize event),
+        // existing pixel-layout assignments are stale. Re-run layout now.
+        if (cell_changed) {
+            n00b_display_scene_run_layout(c);
+            n00b_display_scene_mark_all_dirty(c);
+            c->needs_full_redraw = true;
         }
     }
 

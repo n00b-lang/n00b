@@ -14,6 +14,8 @@ typedef struct n00b_terminal_ncinput_view_t {
     uint32_t evtype;
     int32_t  x;
     int32_t  y;
+    int32_t  xpx;
+    int32_t  ypx;
     bool     shift;
     bool     ctrl;
     bool     alt;
