@@ -59,10 +59,14 @@
 #include "display/focus.h"
 #include "internal/display/backend_services.h"
 #include "internal/display/scene_contracts.h"
+#include "internal/display/widget_primitives.h"
 #include "text/strings/text_style.h"
 #include "text/strings/string_style.h"
 #include "text/strings/string_ops.h"
 #include "text/strings/theme.h"
+#if defined(__APPLE__)
+#include "display/render/backend_cocoa.h"
+#endif
 
 // ====================================================================
 // Debug log
@@ -285,21 +289,65 @@ demo_label(n00b_canvas_t *canvas)
 static n00b_plane_t  *g_root_plane    = nullptr;
 static n00b_plane_t  *g_status_label  = nullptr;
 static n00b_plane_t  *g_progress_bar  = nullptr;
+static n00b_plane_t  *g_font_demo_label = nullptr;
+static n00b_text_style_t *g_font_demo_style = nullptr;
+static n00b_text_style_t *g_status_style = nullptr;
 static bool           g_auto_progress = false;
+
+#define FONT_DEMO_SIZE 32
+
+static void
+refresh_font_demo_label(void)
+{
+    if (!g_font_demo_label || !g_font_demo_style) {
+        return;
+    }
+
+    char msg[96];
+    snprintf(msg, sizeof(msg), "Font size preview (%d px)", FONT_DEMO_SIZE);
+    n00b_string_t *text = n00b_str_set_base_style(
+        n00b_string_from_cstr(msg),
+        g_font_demo_style);
+    n00b_label_set_text(g_font_demo_label, text);
+}
+
+static void
+set_status_text(n00b_string_t *msg)
+{
+    if (!g_status_label || !msg) {
+        return;
+    }
+
+    if (g_status_style) {
+        msg = n00b_str_set_base_style(msg, g_status_style);
+    }
+
+    // Avoid immediate callback-path render. Update model state and let the
+    // event loop's normal rerender pass draw once with consistent metrics.
+    n00b_label_t *label =
+        n00b_widget_data_if_kind(g_status_label, &n00b_widget_label);
+    if (!label) {
+        return;
+    }
+    label->text = msg;
+    n00b_plane_mark_dirty(g_status_label);
+}
 
 static void
 on_button_click(n00b_plane_t *plane, void *data)
 {
     (void)data;
 
-    if (plane
-        && plane->widget_vtable == &n00b_widget_button
-        && plane->widget_data) {
-        n00b_button_t *btn = (n00b_button_t *)plane->widget_data;
-        btn->label         = n00b_string_from_cstr("Clicked!");
-        n00b_plane_mark_dirty(plane);
-        n00b_widget_render(plane);
+    if (!plane
+        || plane->widget_vtable != &n00b_widget_button
+        || !plane->widget_data) {
+        return;
     }
+
+    n00b_button_t *btn = (n00b_button_t *)plane->widget_data;
+    btn->label         = n00b_string_from_cstr("Clicked!");
+    n00b_plane_mark_dirty(plane);
+    n00b_widget_render(plane);
 }
 
 static void
@@ -308,12 +356,8 @@ on_checkbox_change(n00b_plane_t *plane, bool checked, void *data)
     (void)plane;
     (void)data;
     g_auto_progress = checked;
-    if (g_status_label) {
-        n00b_label_set_text(g_status_label,
-                             n00b_string_from_cstr(
-                                 checked ? "Auto-progress enabled"
-                                         : "Auto-progress disabled"));
-    }
+    set_status_text(n00b_string_from_cstr(
+        checked ? "Auto-progress enabled" : "Auto-progress disabled"));
 }
 
 static void
@@ -325,7 +369,7 @@ on_input_submit(n00b_plane_t *plane, n00b_string_t *text, void *data)
         // Build "Input: <text>" message.
         n00b_string_t *prefix = n00b_string_from_cstr("Input: ");
         n00b_string_t *msg    = n00b_unicode_str_cat(prefix, text);
-        n00b_label_set_text(g_status_label, msg);
+        set_status_text(msg);
     }
 }
 
@@ -334,11 +378,7 @@ on_switch_change(n00b_plane_t *plane, bool on, void *data)
 {
     (void)plane;
     (void)data;
-    if (g_status_label) {
-        n00b_label_set_text(g_status_label,
-                             n00b_string_from_cstr(
-                                 on ? "Switch: ON" : "Switch: OFF"));
-    }
+    set_status_text(n00b_string_from_cstr(on ? "Switch: ON" : "Switch: OFF"));
 }
 
 static void
@@ -346,13 +386,12 @@ on_radio_change(n00b_plane_t *plane, int selected, void *data)
 {
     (void)plane;
     (void)data;
-    if (g_status_label) {
-        const char *names[] = {"Red", "Green", "Blue"};
-        if (selected >= 0 && selected < 3) {
-            char msg[64];
-            snprintf(msg, sizeof(msg), "Radio: %s selected", names[selected]);
-            n00b_label_set_text(g_status_label, n00b_string_from_cstr(msg));
-        }
+    const char *names[] = {"Red", "Green", "Blue"};
+    if (selected >= 0 && selected < 3) {
+        char msg[64];
+        snprintf(msg, sizeof(msg), "Radio: %s selected", names[selected]);
+        n00b_string_t *status = n00b_string_from_cstr(msg);
+        set_status_text(status);
     }
 }
 
@@ -361,10 +400,7 @@ on_link_click(n00b_plane_t *plane, void *data)
 {
     (void)plane;
     (void)data;
-    if (g_status_label) {
-        n00b_label_set_text(g_status_label,
-                             n00b_string_from_cstr("Link clicked!"));
-    }
+    set_status_text(n00b_string_from_cstr("Link clicked!"));
 }
 
 static void
@@ -372,11 +408,10 @@ on_list_select(n00b_plane_t *plane, int index, void *data)
 {
     (void)plane;
     (void)data;
-    if (g_status_label) {
-        char msg[64];
-        snprintf(msg, sizeof(msg), "List: item %d activated", index);
-        n00b_label_set_text(g_status_label, n00b_string_from_cstr(msg));
-    }
+    char msg[64];
+    snprintf(msg, sizeof(msg), "List: item %d activated", index);
+    n00b_string_t *status = n00b_string_from_cstr(msg);
+    set_status_text(status);
 }
 
 static void
@@ -384,12 +419,11 @@ on_sellist_change(n00b_plane_t *plane, void *data)
 {
     (void)plane;
     (void)data;
-    if (g_status_label) {
-        int count = n00b_selectionlist_selected_count(plane);
-        char msg[64];
-        snprintf(msg, sizeof(msg), "Selection: %d items selected", count);
-        n00b_label_set_text(g_status_label, n00b_string_from_cstr(msg));
-    }
+    int count = n00b_selectionlist_selected_count(plane);
+    char msg[64];
+    snprintf(msg, sizeof(msg), "Selection: %d items selected", count);
+    n00b_string_t *status = n00b_string_from_cstr(msg);
+    set_status_text(status);
 }
 
 static void
@@ -397,12 +431,11 @@ on_breadcrumb_click(n00b_plane_t *plane, n00b_isize_t index, void *data)
 {
     (void)plane;
     (void)data;
-    if (g_status_label) {
-        char msg[64];
-        snprintf(msg, sizeof(msg), "Breadcrumb: segment %zu clicked",
-                 (size_t)index);
-        n00b_label_set_text(g_status_label, n00b_string_from_cstr(msg));
-    }
+    char msg[64];
+    snprintf(msg, sizeof(msg), "Breadcrumb: segment %zu clicked",
+             (size_t)index);
+    n00b_string_t *status = n00b_string_from_cstr(msg);
+    set_status_text(status);
 }
 
 static void
@@ -530,6 +563,24 @@ demo_all(n00b_canvas_t *canvas)
         .canvas = canvas, .group = rg, .height = 2 * cph);
     n00b_plane_add_child(root, r3, 0, 0);
 
+    // Font size preview with a fixed larger size (for notcurses pixel mode).
+    n00b_plane_t *font_div = n00b_divider_new(.canvas = canvas,
+                                                .width  = content_w,
+                                                .label  = n00b_string_from_cstr("Font Size"));
+    n00b_plane_add_child(root, font_div, 0, 0);
+
+    g_font_demo_style = make_style(N00B_TRI_YES, N00B_TRI_NO, 0xFFD166);
+    g_font_demo_style->font_hint = N00B_FONT_SANS;
+    g_font_demo_style->font_size = FONT_DEMO_SIZE;
+
+    g_font_demo_label = n00b_label_new(
+        n00b_str_set_base_style(n00b_string_from_cstr("Font size preview"), g_font_demo_style),
+        .canvas    = canvas,
+        .width     = content_w,
+        .alignment = N00B_ALIGN_CENTER);
+    n00b_plane_add_child(root, g_font_demo_label, 0, 0);
+    refresh_font_demo_label();
+
     // Link widget.
     n00b_plane_t *lk = n00b_link_new(
         n00b_string_from_cstr("n00b documentation"),
@@ -585,6 +636,7 @@ demo_all(n00b_canvas_t *canvas)
     n00b_string_t *status_text = n00b_str_set_base_style(
         n00b_string_from_cstr("Ready. Tab to navigate, Enter/Space to interact."),
         status_style);
+    g_status_style = status_style;
     g_status_label = n00b_label_new(status_text, .canvas = canvas, .width = content_w);
     g_status_label->flex.grow = 1.0f;
     n00b_plane_add_child(root, g_status_label, 0, 0);
@@ -830,10 +882,14 @@ main(int argc, char **argv)
                                               .allow_env_override = allow_env_override);
     bool uses_terminal_io = backend_uses_alt_screen(canvas);
 
-    fprintf(stderr, "Backend request '%s' selected '%s'%s\n",
-            backend_name,
-            selected_backend,
-            used_fallback ? " (fallback)" : "");
+    // Avoid writing directly to stderr once a backend owns terminal state
+    // (notcurses). Out-of-band writes can desynchronize the managed TUI.
+    if (!(canvas->caps & N00B_RCAP_MANAGES_TTY)) {
+        fprintf(stderr, "Backend request '%s' selected '%s'%s\n",
+                backend_name,
+                selected_backend,
+                used_fallback ? " (fallback)" : "");
+    }
 
     dbg("Selected backend: requested='%s' selected='%s' fallback=%d\n",
         backend_name, selected_backend, (int)used_fallback);

@@ -92,11 +92,13 @@ flatten_recurse(flatten_ctx_t *ctx, n00b_plane_t *p,
         flatten_grow(ctx);
     }
 
-    ctx->entries[ctx->count++] = (n00b_composite_entry_t){
+    n00b_isize_t entry_ix = ctx->count++;
+    ctx->entries[entry_ix] = (n00b_composite_entry_t){
         .plane  = p,
         .abs_x  = abs_x,
         .abs_y  = abs_y,
         .abs_z  = abs_z,
+        .order  = (uint32_t)entry_ix,
         .clip_x = my_clip_x,
         .clip_y = my_clip_y,
         .clip_w = my_clip_w,
@@ -120,6 +122,9 @@ compare_z(const void *a, const void *b)
 
     if (ea->abs_z != eb->abs_z) {
         return ea->abs_z < eb->abs_z ? -1 : 1;
+    }
+    if (ea->order != eb->order) {
+        return ea->order < eb->order ? -1 : 1;
     }
     return 0;
 }

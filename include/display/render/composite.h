@@ -44,6 +44,7 @@ typedef struct n00b_composite_entry_t {
     int32_t       abs_x;
     int32_t       abs_y;
     int32_t       abs_z;
+    uint32_t      order;
 
     // Clip rectangle (in absolute frame coordinates, pixels).
     int32_t       clip_x;

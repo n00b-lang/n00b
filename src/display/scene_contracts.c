@@ -29,7 +29,9 @@ mark_plane_tree_dirty(n00b_plane_t *plane)
     if (!plane) {
         return;
     }
-    plane->flags |= N00B_PLANE_DIRTY;
+    // Use the public helper so render_gen advances with DIRTY.
+    // Backend plane caches key off render_gen to detect content updates.
+    n00b_plane_mark_dirty(plane);
     if (!plane->children.data) {
         return;
     }
@@ -147,21 +149,24 @@ n00b_display_scene_run_layout(n00b_canvas_t *canvas)
         return;
     }
 
-    n00b_render_size_t sz = n00b_display_backend_get_size(canvas);
+    // Layout must use the same geometry snapshot as the current frame render.
+    // Re-querying backend size here can return slightly different cell metrics
+    // and desync visual placement from hit-testing coordinates.
+    int32_t width = (int32_t)canvas->frame_cols;
+    int32_t height = (int32_t)canvas->frame_rows;
 
-    int32_t cell_px_w = (int32_t)(sz.cell_pixel_w > 0
-                                  ? sz.cell_pixel_w
-                                  : (canvas->cell_px_w > 0 ? canvas->cell_px_w : 1));
-    int32_t cell_px_h = (int32_t)(sz.cell_pixel_h > 0
-                                  ? sz.cell_pixel_h
-                                  : (canvas->cell_px_h > 0 ? canvas->cell_px_h : 1));
-
-    int32_t width = (int32_t)(sz.cols > 0
-                              ? sz.cols * cell_px_w
-                              : canvas->frame_cols);
-    int32_t height = (int32_t)(sz.rows > 0
-                               ? sz.rows * cell_px_h
-                               : canvas->frame_rows);
+    if (width <= 0 || height <= 0) {
+        // Fallback for early initialization paths.
+        n00b_render_size_t sz = n00b_display_backend_get_size(canvas);
+        int32_t cell_px_w = (int32_t)(sz.cell_pixel_w > 0
+                                      ? sz.cell_pixel_w
+                                      : (canvas->cell_px_w > 0 ? canvas->cell_px_w : 1));
+        int32_t cell_px_h = (int32_t)(sz.cell_pixel_h > 0
+                                      ? sz.cell_pixel_h
+                                      : (canvas->cell_px_h > 0 ? canvas->cell_px_h : 1));
+        width = (int32_t)(sz.cols > 0 ? sz.cols * cell_px_w : canvas->frame_cols);
+        height = (int32_t)(sz.rows > 0 ? sz.rows * cell_px_h : canvas->frame_rows);
+    }
 
     if (width < 1) {
         width = 1;
