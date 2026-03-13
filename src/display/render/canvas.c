@@ -282,7 +282,7 @@ n00b_canvas_remove_plane(n00b_canvas_t *c, n00b_plane_t *p)
     for (size_t i = 0; i < n; i++) {
         if (n00b_list_get(c->planes, i) == p) {
             (void)n00b_list_delete(c->planes, i);
-            p->canvas = nullptr;
+            propagate_canvas(p, nullptr);
             canvas_unlock(c);
             return true;
         }

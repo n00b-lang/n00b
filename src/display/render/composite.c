@@ -1,5 +1,5 @@
 /*
- * Compositing pipeline: flatten, z-sort, composite, degrade.
+ * Compositing pipeline: flatten, painter-order composite, degrade.
  */
 
 #include <limits.h>
@@ -19,6 +19,11 @@ typedef struct {
     n00b_isize_t            count;
     n00b_isize_t            capacity;
 } flatten_ctx_t;
+
+typedef struct {
+    n00b_plane_t *plane;
+    size_t        ordinal;
+} plane_visit_t;
 
 static void
 flatten_grow(flatten_ctx_t *ctx)
@@ -43,6 +48,25 @@ imax32(int32_t a, int32_t b) { return a > b ? a : b; }
 
 static inline int32_t
 imin32(int32_t a, int32_t b) { return a < b ? a : b; }
+
+static int
+compare_plane_visit(const void *a, const void *b)
+{
+    const plane_visit_t *va = a;
+    const plane_visit_t *vb = b;
+
+    int32_t za = va->plane ? va->plane->z : 0;
+    int32_t zb = vb->plane ? vb->plane->z : 0;
+
+    if (za != zb) {
+        return za < zb ? -1 : 1;
+    }
+    if (va->ordinal != vb->ordinal) {
+        return va->ordinal < vb->ordinal ? -1 : 1;
+    }
+
+    return 0;
+}
 
 static void
 flatten_recurse(flatten_ctx_t *ctx, n00b_plane_t *p,
@@ -105,28 +129,31 @@ flatten_recurse(flatten_ctx_t *ctx, n00b_plane_t *p,
         .clip_h = my_clip_h,
     };
 
-    // Children composite on top of their parent: pass abs_z + 1
-    // so that even with all z offsets at 0, children sort after parent.
+    if (p->children.len == 0) {
+        return;
+    }
+
+    plane_visit_t *visits = n00b_alloc_array(plane_visit_t, p->children.len);
     for (size_t i = 0; i < p->children.len; i++) {
-        flatten_recurse(ctx, p->children.data[i], abs_x, abs_y, abs_z + 1,
+        visits[i] = (plane_visit_t){
+            .plane   = p->children.data[i],
+            .ordinal = i,
+        };
+    }
+    qsort(visits, p->children.len, sizeof(plane_visit_t), compare_plane_visit);
+
+    // Painter's order is subtree-stable: once a sibling starts painting,
+    // its whole subtree paints before the next sibling. We still advance
+    // abs_z for descendants so backends can inspect nesting depth.
+    for (size_t i = 0; i < p->children.len; i++) {
+        if (!visits[i].plane) {
+            continue;
+        }
+        flatten_recurse(ctx, visits[i].plane, abs_x, abs_y, abs_z + 1,
                         my_clip_x, my_clip_y, my_clip_w, my_clip_h,
                         cell_px_w, cell_px_h);
     }
-}
-
-static int
-compare_z(const void *a, const void *b)
-{
-    const n00b_composite_entry_t *ea = a;
-    const n00b_composite_entry_t *eb = b;
-
-    if (ea->abs_z != eb->abs_z) {
-        return ea->abs_z < eb->abs_z ? -1 : 1;
-    }
-    if (ea->order != eb->order) {
-        return ea->order < eb->order ? -1 : 1;
-    }
-    return 0;
+    n00b_free(visits);
 }
 
 // -------------------------------------------------------------------
@@ -140,19 +167,33 @@ n00b_composite_flatten(n00b_plane_t **planes,
                         int32_t        cell_px_h)
 {
     flatten_ctx_t ctx = {};
+    plane_visit_t *visits = nullptr;
 
     // Top-level planes get an effectively unbounded clip rectangle.
     // The compositing loop will clip to the actual frame bounds.
     int32_t max_dim = INT32_MAX / 2;
 
+    if (num_planes > 0) {
+        visits = n00b_alloc_array(plane_visit_t, num_planes);
+        for (n00b_isize_t i = 0; i < num_planes; i++) {
+            visits[i] = (plane_visit_t){
+                .plane   = planes[i],
+                .ordinal = (size_t)i,
+            };
+        }
+        qsort(visits, (size_t)num_planes, sizeof(plane_visit_t), compare_plane_visit);
+    }
+
     for (n00b_isize_t i = 0; i < num_planes; i++) {
-        flatten_recurse(&ctx, planes[i], 0, 0, 0,
+        if (!visits[i].plane) {
+            continue;
+        }
+        flatten_recurse(&ctx, visits[i].plane, 0, 0, 0,
                         0, 0, max_dim, max_dim,
                         cell_px_w, cell_px_h);
     }
-
-    if (ctx.count > 1) {
-        qsort(ctx.entries, ctx.count, sizeof(n00b_composite_entry_t), compare_z);
+    if (visits) {
+        n00b_free(visits);
     }
 
     return (n00b_array_t(n00b_composite_entry_t)){
@@ -275,9 +316,17 @@ n00b_composite_entry_info(const n00b_composite_entry_t *entry,
     out->box = p->box;
 
     // Compute box insets in pixels.
+    int32_t inset_top = 0;
+    int32_t inset_bot = 0;
+    int32_t inset_left = 0;
+    int32_t inset_right = 0;
     n00b_box_insets_px(p->box, cell_px_w, cell_px_h,
-                        &out->inset_top, &out->inset_bot,
-                        &out->inset_left, &out->inset_right);
+                        &inset_top, &inset_bot,
+                        &inset_left, &inset_right);
+    out->inset_top = (n00b_isize_t)inset_top;
+    out->inset_bot = (n00b_isize_t)inset_bot;
+    out->inset_left = (n00b_isize_t)inset_left;
+    out->inset_right = (n00b_isize_t)inset_right;
 
     // Outer box origin (after margins, in pixels).
     int32_t margin_top  = p->box ? p->box->margin_top  * cell_px_h : 0;
@@ -405,7 +454,7 @@ n00b_composite_commands_to_grid(const n00b_composite_entry_t *entries,
         n00b_rcell_mark_clean(&frame[i]);
     }
 
-    // Composite each entry (low-z first, painter's algorithm).
+    // Composite each entry in back-to-front painter order.
     for (n00b_isize_t e = 0; e < count; e++) {
         const n00b_composite_entry_t *entry = &entries[e];
         n00b_plane_t *p = entry->plane;

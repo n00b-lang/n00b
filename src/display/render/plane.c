@@ -35,6 +35,46 @@ plane_mark_dirty(n00b_plane_t *p)
     p->flags |= N00B_PLANE_DIRTY;
 }
 
+static void
+plane_assign_canvas_recursive(n00b_plane_t *plane, n00b_canvas_t *canvas)
+{
+    if (!plane) {
+        return;
+    }
+
+    plane->canvas = canvas;
+    plane_mark_dirty(plane);
+
+    if (plane->children.data) {
+        for (size_t i = 0; i < plane->children.len; i++) {
+            n00b_plane_t *child = plane->children.data[i];
+            if (child) {
+                plane_assign_canvas_recursive(child, canvas);
+            }
+        }
+    }
+}
+
+static void
+plane_clear_canvas_recursive(n00b_plane_t *plane)
+{
+    if (!plane) {
+        return;
+    }
+
+    plane->canvas = nullptr;
+    plane_mark_dirty(plane);
+
+    if (plane->children.data) {
+        for (size_t i = 0; i < plane->children.len; i++) {
+            n00b_plane_t *child = plane->children.data[i];
+            if (child) {
+                plane_clear_canvas_recursive(child);
+            }
+        }
+    }
+}
+
 // -------------------------------------------------------------------
 // Lifecycle
 // -------------------------------------------------------------------
@@ -101,8 +141,7 @@ n00b_plane_add_child(n00b_plane_t *parent, n00b_plane_t *child,
     child->x      = x;
     child->y      = y;
 
-    // Propagate canvas back-pointer.
-    child->canvas = parent->canvas;
+    plane_assign_canvas_recursive(child, parent->canvas);
 
     plane_lock(parent);
 
@@ -130,7 +169,7 @@ n00b_plane_remove_child(n00b_plane_t *parent, n00b_plane_t *child)
         if (n00b_list_get(parent->children, i) == child) {
             (void)n00b_list_delete(parent->children, i);
             child->parent = nullptr;
-            child->canvas = nullptr;
+            plane_clear_canvas_recursive(child);
             plane_unlock(parent);
             plane_mark_dirty(parent);
             return true;
