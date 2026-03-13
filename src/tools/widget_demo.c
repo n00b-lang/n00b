@@ -36,6 +36,7 @@
 #include "display/backend_stream_internal.h"
 #include "display/render/backend.h"
 #include "display/render/backend_registry.h"
+#include "display/render/box.h"
 #include "display/render/canvas.h"
 #include "display/render/plane.h"
 #include "display/render/types.h"
@@ -48,6 +49,7 @@
 #include "display/widgets/checkbox.h"
 #include "display/widgets/input.h"
 #include "display/widgets/box.h"
+#include "display/widgets/zstack.h"
 #include "display/widgets/switch.h"
 #include "display/widgets/radio.h"
 #include "display/widgets/link.h"
@@ -162,6 +164,40 @@ make_style(n00b_tristate_t bold,
     s->italic = italic;
     s->fg_rgb = n00b_color_make(fg_rgb);
     return s;
+}
+
+static void
+plane_outer_size_px(const n00b_plane_t *plane,
+                    int32_t             cell_px_w,
+                    int32_t             cell_px_h,
+                    int32_t            *out_w,
+                    int32_t            *out_h)
+{
+    int32_t width = plane ? plane->width : 0;
+    int32_t height = plane ? plane->height : 0;
+
+    if (plane && plane->box) {
+        int32_t inset_top = 0;
+        int32_t inset_bottom = 0;
+        int32_t inset_left = 0;
+        int32_t inset_right = 0;
+        n00b_box_insets_px(plane->box,
+                           cell_px_w,
+                           cell_px_h,
+                           &inset_top,
+                           &inset_bottom,
+                           &inset_left,
+                           &inset_right);
+        width += inset_left + inset_right;
+        height += inset_top + inset_bottom;
+    }
+
+    if (out_w) {
+        *out_w = width;
+    }
+    if (out_h) {
+        *out_h = height;
+    }
 }
 
 // ====================================================================
@@ -279,6 +315,353 @@ demo_label(n00b_canvas_t *canvas)
     dbg("Canvas after setup:\n");
     dbg_canvas(canvas);
     dbg("=== demo_label end ===\n\n");
+}
+
+// ====================================================================
+// ZStack demo
+// ====================================================================
+
+static n00b_plane_t *g_zstack_root = nullptr;
+static n00b_plane_t *g_zstack_overlay = nullptr;
+static n00b_plane_t *g_zstack_background_status = nullptr;
+static n00b_plane_t *g_zstack_overlay_status = nullptr;
+static n00b_plane_t *g_zstack_layer_status = nullptr;
+
+static void
+set_demo_label_text(n00b_plane_t *label, const char *text)
+{
+    if (!label || !text) {
+        return;
+    }
+
+    n00b_label_set_text(label, n00b_string_from_cstr(text));
+}
+
+static void
+set_zstack_layer_status(const char *text)
+{
+    set_demo_label_text(g_zstack_layer_status, text);
+}
+
+static void
+on_zstack_background_click(n00b_plane_t *plane, void *data)
+{
+    (void)plane;
+    (void)data;
+    set_demo_label_text(g_zstack_background_status,
+                        "Background button fired.");
+}
+
+static void
+on_zstack_overlay_click(n00b_plane_t *plane, void *data)
+{
+    (void)plane;
+    (void)data;
+    set_demo_label_text(g_zstack_overlay_status,
+                        "Overlay button captured the click.");
+}
+
+static void
+on_zstack_bring_to_front_click(n00b_plane_t *plane, void *data)
+{
+    (void)plane;
+    (void)data;
+
+    if (!g_zstack_root || !g_zstack_overlay) {
+        return;
+    }
+
+    (void)n00b_zstack_bring_to_front(g_zstack_root, g_zstack_overlay);
+    set_zstack_layer_status("Overlay layer order: front.");
+}
+
+static void
+on_zstack_send_to_back_click(n00b_plane_t *plane, void *data)
+{
+    (void)plane;
+    (void)data;
+
+    if (!g_zstack_root || !g_zstack_overlay) {
+        return;
+    }
+
+    (void)n00b_zstack_send_to_back(g_zstack_root, g_zstack_overlay);
+    set_zstack_layer_status("Overlay layer order: back.");
+}
+
+static void
+demo_zstack(n00b_canvas_t *canvas)
+{
+    dbg("\n=== demo_zstack start ===\n");
+
+    int32_t cpw = (int32_t)canvas->cell_px_w;
+    int32_t cph = (int32_t)canvas->cell_px_h;
+    int32_t frame_w = (int32_t)canvas->frame_cols;
+    int32_t frame_h = (int32_t)canvas->frame_rows;
+    int32_t gap_px = 2 * cpw;
+
+    if (gap_px < 1) {
+        gap_px = 1;
+    }
+
+    n00b_text_style_t *title_style = make_style(N00B_TRI_YES,
+                                                N00B_TRI_NO,
+                                                0x0B7285);
+    n00b_text_style_t *note_style = make_style(N00B_TRI_NO,
+                                               N00B_TRI_NO,
+                                               0x5C6770);
+    n00b_text_style_t *card_title_style = make_style(N00B_TRI_YES,
+                                                     N00B_TRI_NO,
+                                                     0x8C4A00);
+    n00b_text_style_t *bg_fill_style = n00b_alloc(n00b_text_style_t);
+    bg_fill_style->bg_rgb = n00b_color_make(0xF2E8D8);
+    n00b_text_style_t *controls_fill_style = n00b_alloc(n00b_text_style_t);
+    controls_fill_style->bg_rgb = n00b_color_make(0xE7F1F3);
+
+    n00b_plane_t *root = n00b_box_new(.canvas    = canvas,
+                                      .direction = N00B_FLEX_ROW,
+                                      .gap       = gap_px);
+    root->width  = frame_w;
+    root->height = frame_h;
+    n00b_canvas_add_plane(canvas, root);
+
+    n00b_plane_t *scene = n00b_zstack_new(.canvas = canvas);
+    scene->flex.grow   = 1.0f;
+    scene->flex.shrink = 1.0f;
+    scene->flex.basis  = 1;
+    g_zstack_root      = scene;
+    n00b_plane_add_child(root, scene, 0, 0);
+
+    n00b_box_props_t *controls_box = n00b_box_props_new(
+        .theme        = &n00b_border_double,
+        .border_style = make_style(N00B_TRI_YES, N00B_TRI_NO, 0x0B7285),
+        .fill_style   = controls_fill_style,
+        .pad_top      = 1,
+        .pad_bottom   = 1,
+        .pad_left     = 2,
+        .pad_right    = 2);
+    n00b_plane_t *controls = n00b_new_kargs(n00b_plane_t, plane,
+                                            .box    = controls_box,
+                                            .canvas = canvas);
+    controls->width  = frame_w > 72 * cpw ? 26 * cpw : n00b_max(20 * cpw, frame_w / 4);
+    controls->height = frame_h;
+    controls->flex.basis  = 0;
+    controls->flex.grow   = 0.0f;
+    controls->flex.shrink = 0.0f;
+
+    int32_t controls_outer_w = 0;
+    plane_outer_size_px(controls, cpw, cph, &controls_outer_w, nullptr);
+    controls->flex.basis = controls_outer_w;
+    n00b_plane_add_child(root, controls, 0, 0);
+
+    n00b_widget_layout(root,
+                       (n00b_rect_t){
+                           .x      = 0,
+                           .y      = 0,
+                           .width  = frame_w,
+                           .height = frame_h,
+                       });
+
+    n00b_plane_t *background = n00b_new_kargs(n00b_plane_t, plane);
+    n00b_plane_t *overlay    = n00b_new_kargs(n00b_plane_t, plane);
+    g_zstack_overlay         = overlay;
+
+    int32_t controls_inset_top = 0;
+    int32_t controls_inset_left = 0;
+    n00b_box_insets_px(controls->box,
+                       cpw,
+                       cph,
+                       &controls_inset_top,
+                       nullptr,
+                       &controls_inset_left,
+                       nullptr);
+
+    n00b_plane_t *controls_title = n00b_label_new(
+        n00b_str_set_base_style(n00b_string_from_cstr("Layer Controls"), title_style),
+        .canvas    = canvas,
+        .width     = controls->width,
+        .alignment = N00B_ALIGN_CENTER);
+    n00b_plane_add_child(controls,
+                         controls_title,
+                         controls_inset_left,
+                         controls_inset_top);
+
+    g_zstack_layer_status = n00b_label_new(
+        n00b_string_from_cstr("Overlay layer order: front."),
+        .canvas = canvas,
+        .width  = controls->width,
+        .wrap   = true,
+        .height = 2 * cph);
+    n00b_plane_add_child(controls,
+                         g_zstack_layer_status,
+                         controls_inset_left,
+                         controls_inset_top + cph);
+
+    n00b_plane_t *bring_front_button = n00b_button_new(
+        n00b_string_from_cstr("Bring Overlay To Front"),
+        .canvas   = canvas,
+        .on_click = on_zstack_bring_to_front_click);
+    int32_t bring_front_h = 0;
+    plane_outer_size_px(bring_front_button, cpw, cph, nullptr, &bring_front_h);
+    n00b_plane_add_child(controls,
+                         bring_front_button,
+                         controls_inset_left,
+                         controls_inset_top + 3 * cph);
+
+    n00b_plane_t *send_back_button = n00b_button_new(
+        n00b_string_from_cstr("Send Overlay To Back"),
+        .canvas   = canvas,
+        .on_click = on_zstack_send_to_back_click);
+    n00b_plane_add_child(controls,
+                         send_back_button,
+                         controls_inset_left,
+                         controls_inset_top + 3 * cph + bring_front_h + cph);
+
+    n00b_plane_fill_rect(controls,
+                         0,
+                         0,
+                         controls->width,
+                         controls->height,
+                         .style = controls_fill_style);
+    int32_t text_w = scene->width - 4 * cpw;
+    if (text_w < 1) {
+        text_w = 1;
+    }
+
+    n00b_plane_t *bg_title = n00b_label_new(
+        n00b_str_set_base_style(n00b_string_from_cstr("ZStack Demo"), title_style),
+        .canvas = canvas,
+        .width  = text_w);
+    n00b_plane_add_child(background, bg_title, 2 * cpw, 1 * cph);
+
+    n00b_plane_t *bg_note = n00b_label_new(
+        n00b_str_set_base_style(
+            n00b_string_from_cstr(
+                "Use the control panel to move the centered overlay card in front of or behind the background button."),
+            note_style),
+        .canvas = canvas,
+        .width  = text_w,
+        .wrap   = true,
+        .height = 3 * cph);
+    n00b_plane_add_child(background, bg_note, 2 * cpw, 3 * cph);
+
+    g_zstack_background_status = n00b_label_new(
+        n00b_string_from_cstr("Background status: waiting."),
+        .canvas = canvas,
+        .width  = text_w);
+    n00b_plane_add_child(background,
+                         g_zstack_background_status,
+                         2 * cpw,
+                         scene->height - 3 * cph);
+
+    n00b_box_props_t *card_box = n00b_box_props_new(
+        .theme        = &n00b_border_double,
+        .border_style = make_style(N00B_TRI_YES, N00B_TRI_NO, 0x8C4A00),
+        .fill_style   = bg_fill_style,
+        .pad_top      = 1,
+        .pad_bottom   = 1,
+        .pad_left     = 2,
+        .pad_right    = 2);
+    n00b_plane_t *card = n00b_new_kargs(n00b_plane_t, plane,
+                                         .box    = card_box,
+                                         .canvas = canvas);
+
+    card->width  = scene->width > 40 * cpw ? 30 * cpw : n00b_max(14 * cpw, scene->width - 10 * cpw);
+    card->height = scene->height > 14 * cph ? 6 * cph : n00b_max(4 * cph, scene->height - 8 * cph);
+    n00b_plane_fill_rect(card, 0, 0, card->width, card->height, .style = bg_fill_style);
+
+    int32_t card_outer_w = 0;
+    int32_t card_outer_h = 0;
+    plane_outer_size_px(card, cpw, cph, &card_outer_w, &card_outer_h);
+
+    int32_t card_x = (scene->width - card_outer_w) / 2;
+    int32_t card_y = (scene->height - card_outer_h) / 2;
+    if (card_x < cpw) {
+        card_x = cpw;
+    }
+    if (card_y < cph) {
+        card_y = cph;
+    }
+
+    int32_t inset_top = 0;
+    int32_t inset_left = 0;
+    n00b_box_insets_px(card->box,
+                       cpw,
+                       cph,
+                       &inset_top,
+                       nullptr,
+                       &inset_left,
+                       nullptr);
+
+    n00b_plane_t *card_title = n00b_label_new(
+        n00b_str_set_base_style(n00b_string_from_cstr("Overlay Card"), card_title_style),
+        .canvas    = canvas,
+        .width     = card->width,
+        .alignment = N00B_ALIGN_CENTER);
+    n00b_plane_add_child(card, card_title, inset_left, inset_top);
+
+    g_zstack_overlay_status = n00b_label_new(
+        n00b_string_from_cstr("Overlay status: click the top button."),
+        .canvas = canvas,
+        .width  = card->width,
+        .wrap   = true,
+        .height = 2 * cph);
+    n00b_plane_add_child(card,
+                         g_zstack_overlay_status,
+                         inset_left,
+                         inset_top + 2 * cph);
+
+    n00b_plane_t *overlay_button = n00b_button_new(
+        n00b_string_from_cstr("Overlay Button"),
+        .canvas   = canvas,
+        .on_click = on_zstack_overlay_click);
+    int32_t overlay_btn_w = 0;
+    int32_t overlay_btn_h = 0;
+    plane_outer_size_px(overlay_button, cpw, cph, &overlay_btn_w, &overlay_btn_h);
+    int32_t overlay_btn_x = inset_left + (card->width - overlay_btn_w) / 2;
+    int32_t overlay_btn_y = inset_top + card->height - overlay_btn_h;
+    if (overlay_btn_x < inset_left) {
+        overlay_btn_x = inset_left;
+    }
+    if (overlay_btn_y < inset_top) {
+        overlay_btn_y = inset_top;
+    }
+    n00b_plane_add_child(card, overlay_button, overlay_btn_x, overlay_btn_y);
+
+    n00b_plane_add_child(overlay, card, card_x, card_y);
+
+    n00b_plane_t *background_button = n00b_button_new(
+        n00b_string_from_cstr("Background Button"),
+        .canvas   = canvas,
+        .on_click = on_zstack_background_click);
+    n00b_plane_add_child(background,
+                         background_button,
+                         card_x + overlay_btn_x,
+                         card_y + overlay_btn_y);
+
+    n00b_zstack_push(scene, background);
+    n00b_zstack_push(scene, overlay);
+    n00b_widget_layout(scene,
+                       (n00b_rect_t){
+                           .x      = scene->bounds.x,
+                           .y      = scene->bounds.y,
+                           .width  = scene->bounds.width,
+                           .height = scene->bounds.height,
+                       });
+
+    n00b_plane_fill_rect(background,
+                         0,
+                         0,
+                         background->width,
+                         background->height,
+                         .style = bg_fill_style);
+
+    dbg_plane("zstack-root", root);
+    dbg_plane("zstack-scene", scene);
+    dbg_plane("zstack-background", background);
+    dbg_plane("zstack-overlay", overlay);
+    dbg_plane("zstack-controls", controls);
+    dbg("=== demo_zstack end ===\n\n");
 }
 
 // ====================================================================
@@ -654,7 +1037,7 @@ usage(const char *prog)
     fprintf(stderr,
             "Usage: %s --widget <name> [--backend <auto|tui|gui|cocoa|x11|nc|stream|dumb>] [--theme <name>] [--debug-log <path>]\n"
             "\n"
-            "Widgets:  label, all\n"
+            "Widgets:  label, zstack, all\n"
             "Backends: auto (policy-driven), tui (ANSI alt-screen),\n"
             "          gui (portable GUI alias; may fall back if unavailable),\n"
             "          cocoa (macOS native), x11 (Linux/Unix native),\n"
@@ -904,6 +1287,10 @@ main(int argc, char **argv)
     bool use_event_loop = false;
     if (strcmp(widget_name, "label") == 0) {
         demo_label(canvas);
+    }
+    else if (strcmp(widget_name, "zstack") == 0) {
+        demo_zstack(canvas);
+        use_event_loop = true;
     }
     else if (strcmp(widget_name, "all") == 0) {
         demo_all(canvas);

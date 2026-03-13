@@ -2,7 +2,7 @@
  * @file composite.h
  * @brief Compositing pipeline for the render layer.
  *
- * Flattens the plane hierarchy into a z-sorted list, composites
+ * Flattens the plane hierarchy into painter's-order entries, composites
  * planes into a frame buffer, resolves state-based styles, and
  * applies graceful degradation based on backend capabilities.
  *
@@ -80,10 +80,12 @@ typedef struct {
 // ====================================================================
 
 /**
- * @brief Flatten a list of top-level planes into a z-sorted array.
+ * @brief Flatten a list of top-level planes into painter's-order entries.
  *
  * Recursively walks each plane's children, computing absolute
- * coordinates in pixels.  The output is sorted by z (stable, low-z first).
+ * coordinates in pixels. The output is in back-to-front painter order:
+ * siblings are ordered by `z` and insertion order, and each sibling's
+ * whole subtree paints before the next sibling.
  *
  * @param planes     Top-level planes.
  * @param num_planes Number of top-level planes.
@@ -170,7 +172,7 @@ n00b_composite_degrade_cell(n00b_rcell_t     *cell,
  * Converts pixel-coordinate draw commands from each plane into a
  * flat cell grid for cell-based backends (ANSI, inline, stream, dumb).
  *
- * For each entry (low-z first, painter's algorithm):
+ * For each entry (back-to-front painter order):
  * 1. Stamps box decorations via `n00b_box_stamp()`.
  * 2. Walks `plane->draw_list`, converting pixel positions to cell
  *    positions, and writes graphemes into the cell grid.

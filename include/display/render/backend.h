@@ -122,12 +122,12 @@ typedef struct n00b_renderer_vtable_t {
     /**
      * @brief Plane-based rendering (required).
      *
-     * Receives z-sorted composite entries (planes with absolute
+     * Receives painter's-order composite entries (planes with absolute
      * pixel positions and clip rects) and renders each plane.
      * The canvas always dispatches here.
      *
      * @param ctx           Backend context.
-     * @param entries       Z-sorted composite entries (low-z first, pixel coords).
+     * @param entries       Back-to-front painter's-order composite entries (pixel coords).
      * @param count         Number of entries.
      * @param total_rows    Frame height in pixels.
      * @param total_cols    Frame width in pixels.
