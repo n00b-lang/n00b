@@ -32,6 +32,57 @@ align_down_i32(int32_t v, int32_t step)
     return floor_div_i32(v, step) * step;
 }
 
+static inline bool
+plane_has_layout_bounds(const n00b_plane_t *plane)
+{
+    return plane && plane->bounds.width > 0 && plane->bounds.height > 0;
+}
+
+static inline void
+resolve_plane_origin(const n00b_plane_t *plane,
+                     int32_t             parent_abs_x,
+                     int32_t             parent_abs_y,
+                     int32_t            *out_x,
+                     int32_t            *out_y)
+{
+    if (plane_has_layout_bounds(plane)) {
+        *out_x = plane->bounds.x;
+        *out_y = plane->bounds.y;
+        return;
+    }
+
+    *out_x = parent_abs_x + plane->x;
+    *out_y = parent_abs_y + plane->y;
+}
+
+static void
+plane_absolute_origin(const n00b_plane_t *plane,
+                      int32_t            *out_x,
+                      int32_t            *out_y)
+{
+    if (!plane) {
+        *out_x = 0;
+        *out_y = 0;
+        return;
+    }
+
+    if (plane_has_layout_bounds(plane)) {
+        *out_x = plane->bounds.x;
+        *out_y = plane->bounds.y;
+        return;
+    }
+
+    if (!plane->parent) {
+        *out_x = plane->x;
+        *out_y = plane->y;
+        return;
+    }
+
+    plane_absolute_origin(plane->parent, out_x, out_y);
+    *out_x += plane->x;
+    *out_y += plane->y;
+}
+
 // -------------------------------------------------------------------
 // Hit testing
 // -------------------------------------------------------------------
@@ -67,9 +118,14 @@ plane_full_pixel_size(n00b_plane_t *plane,
     *out_h = h;
 }
 
-n00b_plane_t *
-n00b_mouse_hit_test(n00b_plane_t *plane, int32_t x, int32_t y,
-                     int32_t cell_px_w, int32_t cell_px_h)
+static n00b_plane_t *
+mouse_hit_test_recurse(n00b_plane_t *plane,
+                       int32_t       x,
+                       int32_t       y,
+                       int32_t       parent_abs_x,
+                       int32_t       parent_abs_y,
+                       int32_t       cell_px_w,
+                       int32_t       cell_px_h)
 {
     if (!plane) {
         return nullptr;
@@ -79,10 +135,12 @@ n00b_mouse_hit_test(n00b_plane_t *plane, int32_t x, int32_t y,
     }
 
     // Check if (x, y) is within this plane's full bounding box
-    // (including borders + padding).  All coordinates are pixels.
-    int32_t px = plane->x;
-    int32_t py = plane->y;
-    int32_t pw, ph;
+    // (including borders + padding). All coordinates are absolute pixels.
+    int32_t px = 0;
+    int32_t py = 0;
+    int32_t pw = 0;
+    int32_t ph = 0;
+    resolve_plane_origin(plane, parent_abs_x, parent_abs_y, &px, &py);
     plane_full_pixel_size(plane, cell_px_w, cell_px_h, &pw, &ph);
 
     // Terminal backends place visuals on a cell grid, while layout/hit
@@ -103,24 +161,31 @@ n00b_mouse_hit_test(n00b_plane_t *plane, int32_t x, int32_t y,
         return nullptr;
     }
 
-    // Convert to plane-local coordinates for child testing.
-    int32_t lx = x - px;
-    int32_t ly = y - py;
-
     // Check children in reverse order (topmost first).
     if (plane->children.data) {
         for (size_t i = plane->children.len; i > 0; i--) {
             n00b_plane_t *child = plane->children.data[i - 1];
-            n00b_plane_t *hit   = n00b_mouse_hit_test(child, lx, ly,
-                                                        cell_px_w, cell_px_h);
+            n00b_plane_t *hit   = mouse_hit_test_recurse(child,
+                                                         x,
+                                                         y,
+                                                         px,
+                                                         py,
+                                                         cell_px_w,
+                                                         cell_px_h);
             if (hit) {
                 return hit;
             }
         }
     }
 
-    // No child hit — return this plane.
     return plane;
+}
+
+n00b_plane_t *
+n00b_mouse_hit_test(n00b_plane_t *plane, int32_t x, int32_t y,
+                     int32_t cell_px_w, int32_t cell_px_h)
+{
+    return mouse_hit_test_recurse(plane, x, y, 0, 0, cell_px_w, cell_px_h);
 }
 
 // -------------------------------------------------------------------
@@ -175,11 +240,9 @@ n00b_mouse_route_event(n00b_canvas_t          *canvas,
     // Translate mouse coordinates to content-local pixel space for the
     // target widget.  Walk up the parent chain to compute the absolute
     // pixel position, then subtract box insets (border + padding in pixels).
-    int32_t abs_x = 0, abs_y = 0;
-    for (n00b_plane_t *p = target; p; p = p->parent) {
-        abs_x += p->x;
-        abs_y += p->y;
-    }
+    int32_t abs_x = 0;
+    int32_t abs_y = 0;
+    plane_absolute_origin(target, &abs_x, &abs_y);
 
     // Subtract box insets (scaled to pixels) to get content-area origin.
     if (target->box) {

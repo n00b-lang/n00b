@@ -33,8 +33,8 @@
  * (topmost/highest-z first).  Skips planes without `N00B_PLANE_VISIBLE`.
  *
  * @param plane     Root plane to test.
- * @param x         Pixel column in the plane's parent coordinate space.
- * @param y         Pixel row in the plane's parent coordinate space.
+ * @param x         Absolute pixel column in the frame.
+ * @param y         Absolute pixel row in the frame.
  * @param cell_px_w Pixels per cell column.
  * @param cell_px_h Pixels per cell row.
  * @return          Deepest hit plane, or nullptr if no hit.
