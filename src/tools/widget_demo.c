@@ -49,6 +49,7 @@
 #include "display/widgets/checkbox.h"
 #include "display/widgets/input.h"
 #include "display/widgets/box.h"
+#include "display/widgets/grid.h"
 #include "display/widgets/zstack.h"
 #include "display/widgets/switch.h"
 #include "display/widgets/radio.h"
@@ -200,6 +201,31 @@ plane_outer_size_px(const n00b_plane_t *plane,
     }
 }
 
+static n00b_plane_t *
+make_demo_card(n00b_canvas_t               *canvas,
+               int32_t                      gap_px,
+               const n00b_border_theme_t   *theme,
+               uint32_t                     border_rgb,
+               uint32_t                     fill_rgb)
+{
+    n00b_text_style_t *fill_style = n00b_alloc(n00b_text_style_t);
+    fill_style->bg_rgb = n00b_color_make(fill_rgb);
+
+    n00b_plane_t *card = n00b_box_new(.canvas    = canvas,
+                                      .direction = N00B_FLEX_COLUMN,
+                                      .gap       = gap_px);
+    card->box = n00b_box_props_new(
+        .theme        = theme,
+        .border_style = make_style(N00B_TRI_YES, N00B_TRI_NO, border_rgb),
+        .fill_style   = fill_style,
+        .pad_top      = 0,
+        .pad_bottom   = 0,
+        .pad_left     = 1,
+        .pad_right    = 1);
+
+    return card;
+}
+
 // ====================================================================
 // Label demo
 // ====================================================================
@@ -326,6 +352,7 @@ static n00b_plane_t *g_zstack_overlay = nullptr;
 static n00b_plane_t *g_zstack_background_status = nullptr;
 static n00b_plane_t *g_zstack_overlay_status = nullptr;
 static n00b_plane_t *g_zstack_layer_status = nullptr;
+static n00b_plane_t *g_grid_status_label = nullptr;
 
 static void
 set_demo_label_text(n00b_plane_t *label, const char *text)
@@ -341,6 +368,12 @@ static void
 set_zstack_layer_status(const char *text)
 {
     set_demo_label_text(g_zstack_layer_status, text);
+}
+
+static void
+set_grid_status(const char *text)
+{
+    set_demo_label_text(g_grid_status_label, text);
 }
 
 static void
@@ -387,6 +420,24 @@ on_zstack_send_to_back_click(n00b_plane_t *plane, void *data)
 
     (void)n00b_zstack_send_to_back(g_zstack_root, g_zstack_overlay);
     set_zstack_layer_status("Overlay layer order: back.");
+}
+
+static void
+on_grid_filters_click(n00b_plane_t *plane, void *data)
+{
+    (void)plane;
+    (void)data;
+
+    set_grid_status("Left card action fired: filters toggled.");
+}
+
+static void
+on_grid_refresh_click(n00b_plane_t *plane, void *data)
+{
+    (void)plane;
+    (void)data;
+
+    set_grid_status("Wide card action fired: preview refreshed.");
 }
 
 static void
@@ -662,6 +713,105 @@ demo_zstack(n00b_canvas_t *canvas)
     dbg_plane("zstack-overlay", overlay);
     dbg_plane("zstack-controls", controls);
     dbg("=== demo_zstack end ===\n\n");
+}
+
+// ====================================================================
+// Grid demo
+// ====================================================================
+
+static void
+demo_grid(n00b_canvas_t *canvas)
+{
+    dbg("\n=== demo_grid start ===\n");
+
+    int32_t cpw = (int32_t)canvas->cell_px_w;
+    int32_t cph = (int32_t)canvas->cell_px_h;
+    int32_t frame_w = (int32_t)canvas->frame_cols;
+    int32_t frame_h = (int32_t)canvas->frame_rows;
+    int32_t gap_px = 2 * cpw;
+    int32_t card_gap_px = cph > 0 ? cph : 1;
+
+    if (gap_px < 1) {
+        gap_px = 1;
+    }
+
+    n00b_text_style_t *title_style = make_style(N00B_TRI_YES,
+                                                N00B_TRI_NO,
+                                                0x0F4C5C);
+    n00b_text_style_t *note_style = make_style(N00B_TRI_NO,
+                                               N00B_TRI_NO,
+                                               0x5A646A);
+
+    n00b_plane_t *root = n00b_grid_new(.canvas     = canvas,
+                                       .columns    = 3,
+                                       .gap        = gap_px,
+                                       .pad_top    = 2 * cph,
+                                       .pad_right  = 2 * cpw,
+                                       .pad_bottom = 2 * cph,
+                                       .pad_left   = 2 * cpw);
+    root->width  = frame_w;
+    root->height = frame_h;
+    n00b_canvas_add_plane(canvas, root);
+
+    n00b_plane_t *header_card = make_demo_card(canvas,
+                                               card_gap_px,
+                                               &n00b_border_double,
+                                               0x0F4C5C,
+                                               0xE7F4F1);
+    n00b_plane_t *left_card = make_demo_card(canvas,
+                                             card_gap_px,
+                                             &n00b_border_plain,
+                                             0x8C4A00,
+                                             0xF4E8D6);
+    n00b_plane_t *details_card = make_demo_card(canvas,
+                                                card_gap_px,
+                                                &n00b_border_double,
+                                                0x7A1F36,
+                                                0xF9E7EC);
+    n00b_plane_t *status_card = make_demo_card(canvas,
+                                               card_gap_px,
+                                               &n00b_border_plain,
+                                               0x495057,
+                                               0xEEF2F5);
+
+    n00b_plane_add_child(root, header_card, 0, 0);
+    n00b_plane_add_child(root, left_card, 0, 0);
+    n00b_plane_add_child(root, details_card, 0, 0);
+    n00b_plane_add_child(root, status_card, 0, 0);
+    n00b_grid_set_span(root, header_card, 3, 1);
+    n00b_grid_set_span(root, details_card, 2, 1);
+    n00b_grid_set_span(root, status_card, 3, 1);
+
+    n00b_plane_t *header_title = n00b_label_new(
+        n00b_str_set_base_style(n00b_string_from_cstr("Grid Widget Demo"), title_style),
+        .canvas = canvas);
+    n00b_plane_add_child(header_card, header_title, 0, 0);
+
+    n00b_plane_t *left_button = n00b_button_new(
+        n00b_string_from_cstr("Toggle Filters"),
+        .canvas   = canvas,
+        .on_click = on_grid_filters_click);
+    n00b_plane_add_child(left_card, left_button, 0, 0);
+
+    n00b_plane_t *refresh_button = n00b_button_new(
+        n00b_string_from_cstr("Refresh Preview"),
+        .canvas   = canvas,
+        .on_click = on_grid_refresh_click);
+    n00b_plane_add_child(details_card, refresh_button, 0, 0);
+
+    g_grid_status_label = n00b_label_new(
+        n00b_str_set_base_style(
+            n00b_string_from_cstr("Ready. Tab or click a card action."),
+            note_style),
+        .canvas = canvas);
+    n00b_plane_add_child(status_card, g_grid_status_label, 0, 0);
+
+    dbg_plane("grid-root", root);
+    dbg_plane("grid-header", header_card);
+    dbg_plane("grid-left", left_card);
+    dbg_plane("grid-details", details_card);
+    dbg_plane("grid-status", status_card);
+    dbg("=== demo_grid end ===\n\n");
 }
 
 // ====================================================================
@@ -1037,7 +1187,7 @@ usage(const char *prog)
     fprintf(stderr,
             "Usage: %s --widget <name> [--backend <auto|tui|gui|cocoa|x11|nc|stream|dumb>] [--theme <name>] [--debug-log <path>]\n"
             "\n"
-            "Widgets:  label, zstack, all\n"
+            "Widgets:  label, grid, zstack, all\n"
             "Backends: auto (policy-driven), tui (ANSI alt-screen),\n"
             "          gui (portable GUI alias; may fall back if unavailable),\n"
             "          cocoa (macOS native), x11 (Linux/Unix native),\n"
@@ -1287,6 +1437,10 @@ main(int argc, char **argv)
     bool use_event_loop = false;
     if (strcmp(widget_name, "label") == 0) {
         demo_label(canvas);
+    }
+    else if (strcmp(widget_name, "grid") == 0) {
+        demo_grid(canvas);
+        use_event_loop = true;
     }
     else if (strcmp(widget_name, "zstack") == 0) {
         demo_zstack(canvas);

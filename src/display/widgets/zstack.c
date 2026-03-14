@@ -163,8 +163,8 @@ zstack_layout(n00b_plane_t *plane, void *data, n00b_rect_t bounds)
     }
 
     n00b_rect_t child_bounds = {
-        .x      = 0,
-        .y      = 0,
+        .x      = bounds.x,
+        .y      = bounds.y,
         .width  = bounds.width,
         .height = bounds.height,
     };

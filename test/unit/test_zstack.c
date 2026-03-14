@@ -297,16 +297,16 @@ test_zstack_layout_fills_all_children(void)
     n00b_zstack_push(stack, b);
     n00b_widget_layout(stack, bounds);
 
-    assert(a->bounds.x == 0);
-    assert(a->bounds.y == 0);
+    assert(a->bounds.x == bounds.x);
+    assert(a->bounds.y == bounds.y);
     assert(a->bounds.width == bounds.width);
     assert(a->bounds.height == bounds.height);
-    assert(dummy_state(a)->last_bounds.x == 0);
-    assert(dummy_state(a)->last_bounds.y == 0);
+    assert(dummy_state(a)->last_bounds.x == bounds.x);
+    assert(dummy_state(a)->last_bounds.y == bounds.y);
     assert(dummy_state(a)->last_bounds.width == bounds.width);
     assert(dummy_state(a)->last_bounds.height == bounds.height);
-    assert(dummy_state(b)->last_bounds.x == 0);
-    assert(dummy_state(b)->last_bounds.y == 0);
+    assert(dummy_state(b)->last_bounds.x == bounds.x);
+    assert(dummy_state(b)->last_bounds.y == bounds.y);
     assert(dummy_state(b)->last_bounds.width == bounds.width);
     assert(dummy_state(b)->last_bounds.height == bounds.height);
 

@@ -15,6 +15,39 @@
 #include "display/widget.h"
 #include "display/focus.h"
 
+static inline bool
+plane_has_layout_bounds(const n00b_plane_t *plane)
+{
+    return plane && plane->bounds.width > 0 && plane->bounds.height > 0;
+}
+
+static void
+plane_absolute_origin(const n00b_plane_t *plane,
+                      int32_t            *out_x,
+                      int32_t            *out_y)
+{
+    if (!plane) {
+        *out_x = 0;
+        *out_y = 0;
+        return;
+    }
+
+    if (plane_has_layout_bounds(plane)) {
+        *out_x = plane->bounds.x;
+        *out_y = plane->bounds.y;
+        return;
+    }
+
+    if (!plane->parent) {
+        *out_x = plane->x;
+        *out_y = plane->y;
+        return;
+    }
+
+    plane_absolute_origin(plane->parent, out_x, out_y);
+    *out_x += plane->x;
+    *out_y += plane->y;
+}
 // -------------------------------------------------------------------
 // Hit testing
 // -------------------------------------------------------------------
@@ -118,9 +151,12 @@ mouse_hit_test_entries(const n00b_composite_entry_t *entries,
     return nullptr;
 }
 
-n00b_plane_t *
-n00b_mouse_hit_test(n00b_plane_t *plane, int32_t x, int32_t y,
-                     int32_t cell_px_w, int32_t cell_px_h)
+static n00b_plane_t *
+mouse_hit_test_plane(n00b_plane_t *plane,
+                     int32_t       x,
+                     int32_t       y,
+                     int32_t       cell_px_w,
+                     int32_t       cell_px_h)
 {
     if (!plane) {
         return nullptr;
@@ -144,6 +180,13 @@ n00b_mouse_hit_test(n00b_plane_t *plane, int32_t x, int32_t y,
     }
 
     return result;
+}
+
+n00b_plane_t *
+n00b_mouse_hit_test(n00b_plane_t *plane, int32_t x, int32_t y,
+                     int32_t cell_px_w, int32_t cell_px_h)
+{
+    return mouse_hit_test_plane(plane, x, y, cell_px_w, cell_px_h);
 }
 
 // -------------------------------------------------------------------
@@ -245,10 +288,7 @@ n00b_mouse_route_event(n00b_canvas_t          *canvas,
         .abs_x = 0,
         .abs_y = 0,
     };
-    for (n00b_plane_t *p = target; p; p = p->parent) {
-        entry.abs_x += p->x;
-        entry.abs_y += p->y;
-    }
+    plane_absolute_origin(target, &entry.abs_x, &entry.abs_y);
     n00b_composite_entry_info(&entry, &info, cpw, cph);
 
     n00b_event_t local_event = *event;

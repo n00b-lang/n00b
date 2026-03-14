@@ -443,6 +443,7 @@ n00b_display = [
     'src/display/widgets/checkbox.c',
     'src/display/widgets/input.c',
     'src/display/widgets/box.c',
+    'src/display/widgets/grid.c',
     'src/display/widgets/zstack.c',
     'src/display/widgets/switch.c',
     'src/display/widgets/radio.c',
@@ -1383,6 +1384,12 @@ selectionlist_test = executable('test_selectionlist',
     kwargs: test_common_kwargs,
 )
 test('selectionlist', selectionlist_test, suite: 'unit')
+
+grid_test = executable('test_grid',
+    ['test/unit/test_grid.c'],
+    kwargs: test_common_kwargs,
+)
+test('grid', grid_test, suite: 'unit')
 
 zstack_test = executable('test_zstack',
     ['test/unit/test_zstack.c'],
