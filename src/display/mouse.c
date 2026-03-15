@@ -35,6 +35,41 @@ plane_absolute_origin(const n00b_plane_t *plane,
     plane_absolute_origin(plane->parent, out_x, out_y);
     n00b_plane_resolve_absolute_origin(plane, *out_x, *out_y, out_x, out_y);
 }
+
+static void
+mouse_event_to_plane_local(n00b_canvas_t      *canvas,
+                           n00b_plane_t       *plane,
+                           const n00b_event_t *absolute,
+                           n00b_event_t       *localized)
+{
+    int32_t cpw = 1;
+    int32_t cph = 1;
+    n00b_entry_info_t info;
+    n00b_composite_entry_t entry = {
+        .plane = plane,
+        .abs_x = 0,
+        .abs_y = 0,
+    };
+
+    if (!absolute || !localized) {
+        return;
+    }
+
+    *localized = *absolute;
+
+    if (!canvas || !plane || absolute->type != N00B_EVENT_MOUSE) {
+        return;
+    }
+
+    cpw = (int32_t)(canvas->cell_px_w > 0 ? canvas->cell_px_w : 1);
+    cph = (int32_t)(canvas->cell_px_h > 0 ? canvas->cell_px_h : 1);
+
+    plane_absolute_origin(plane, &entry.abs_x, &entry.abs_y);
+    n00b_composite_entry_info(&entry, &info, cpw, cph);
+
+    localized->mouse.x = absolute->mouse.x - info.content_x;
+    localized->mouse.y = absolute->mouse.y - info.content_y;
+}
 // -------------------------------------------------------------------
 // Hit testing
 // -------------------------------------------------------------------
@@ -193,7 +228,6 @@ n00b_mouse_route_event(n00b_canvas_t          *canvas,
     int32_t cph = (int32_t)canvas->cell_px_h;
 
     n00b_plane_t *target = nullptr;
-    const n00b_composite_entry_t *target_entry = nullptr;
 
     // If a plane has captured the mouse, route everything to it.
     if (canvas->mouse_capture) {
@@ -207,54 +241,19 @@ n00b_mouse_route_event(n00b_canvas_t          *canvas,
                                        cpw,
                                        cph);
 
-            target_entry = mouse_hit_test_entries(flat.data,
-                                                  flat.len,
-                                                  canvas,
-                                                  event->mouse.x,
-                                                  event->mouse.y,
-                                                  cpw,
-                                                  cph);
+            const n00b_composite_entry_t *target_entry =
+                mouse_hit_test_entries(flat.data,
+                                       flat.len,
+                                       canvas,
+                                       event->mouse.x,
+                                       event->mouse.y,
+                                       cpw,
+                                       cph);
             target = target_entry ? target_entry->plane : nullptr;
 
-            if (!target_entry && flat.data) {
+            if (flat.data) {
                 n00b_array_free(flat);
             }
-            else if (target_entry) {
-                // Keep the flattened entry alive until local coordinates are derived.
-                target_entry = flat.data + (target_entry - flat.data);
-            }
-
-            if (!target) {
-                if (flat.data) {
-                    n00b_array_free(flat);
-                }
-                return;
-            }
-
-            n00b_entry_info_t info;
-            n00b_composite_entry_info(target_entry, &info, cpw, cph);
-
-            n00b_event_t local_event = *event;
-            local_event.mouse.x = event->mouse.x - info.content_x;
-            local_event.mouse.y = event->mouse.y - info.content_y;
-
-            if (event->mouse.action == N00B_MOUSE_PRESS && fm) {
-                if (n00b_widget_can_focus(target)) {
-                    n00b_focus_mgr_set(fm, target);
-                }
-            }
-
-            n00b_plane_t *cur = target;
-            while (cur) {
-                if (n00b_widget_handle_event(cur, &local_event)) {
-                    n00b_array_free(flat);
-                    return;
-                }
-                cur = cur->parent;
-            }
-
-            n00b_array_free(flat);
-            return;
         }
     }
 
@@ -269,22 +268,11 @@ n00b_mouse_route_event(n00b_canvas_t          *canvas,
         }
     }
 
-    n00b_entry_info_t info;
-    n00b_composite_entry_t entry = {
-        .plane = target,
-        .abs_x = 0,
-        .abs_y = 0,
-    };
-    plane_absolute_origin(target, &entry.abs_x, &entry.abs_y);
-    n00b_composite_entry_info(&entry, &info, cpw, cph);
-
-    n00b_event_t local_event = *event;
-    local_event.mouse.x = event->mouse.x - info.content_x;
-    local_event.mouse.y = event->mouse.y - info.content_y;
-
     // Dispatch to the target, then bubble up to parents.
     n00b_plane_t *cur = target;
     while (cur) {
+        n00b_event_t local_event;
+        mouse_event_to_plane_local(canvas, cur, event, &local_event);
         if (n00b_widget_handle_event(cur, &local_event)) {
             return;  // Consumed.
         }

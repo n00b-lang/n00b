@@ -23,6 +23,10 @@
 #include "display/focus.h"
 #include "display/backend_stream_internal.h"
 
+extern void n00b_stream_backend_set_size(void        *ctx,
+                                          n00b_isize_t rows,
+                                          n00b_isize_t cols);
+
 // -------------------------------------------------------------------
 // Helpers
 // -------------------------------------------------------------------
@@ -67,6 +71,57 @@ static const n00b_widget_vtable_t capture_widget_vtable = {
     .handle_event = capture_widget_handle_event,
 };
 
+typedef struct {
+    bool    consume;
+    int     press_count;
+    int32_t last_x;
+    int32_t last_y;
+} mouse_record_t;
+
+static void
+record_render(n00b_plane_t *plane, void *data)
+{
+    (void)plane;
+    (void)data;
+}
+
+static bool
+record_handle_event(n00b_plane_t *plane, void *data, const n00b_event_t *event)
+{
+    (void)plane;
+
+    mouse_record_t *record = data;
+    if (!record || !event || event->type != N00B_EVENT_MOUSE) {
+        return false;
+    }
+
+    if (event->mouse.button == N00B_MOUSE_LEFT
+        && event->mouse.action == N00B_MOUSE_PRESS) {
+        record->press_count++;
+        record->last_x = event->mouse.x;
+        record->last_y = event->mouse.y;
+        return record->consume;
+    }
+
+    return false;
+}
+
+static const n00b_widget_vtable_t record_widget = {
+    .kind         = "mouse_record",
+    .render       = record_render,
+    .handle_event = record_handle_event,
+};
+
+static n00b_canvas_t *
+make_stream_canvas(n00b_isize_t rows, n00b_isize_t cols)
+{
+    n00b_canvas_t *canvas = n00b_new_kargs(n00b_canvas_t, canvas,
+                                            .vtable = &n00b_renderer_stream);
+    n00b_stream_backend_set_size(canvas->backend_ctx, rows, cols);
+    n00b_canvas_resize(canvas, rows, cols);
+
+    return canvas;
+}
 // -------------------------------------------------------------------
 // Test 1: Hit test — basic
 // -------------------------------------------------------------------
@@ -410,6 +465,54 @@ test_capture(void)
 }
 
 // -------------------------------------------------------------------
+// Test 5b: Bubbled events re-localize to each parent plane
+// -------------------------------------------------------------------
+
+static void
+test_bubble_parent_receives_parent_local_coords(void)
+{
+    n00b_canvas_t *canvas = make_stream_canvas(20, 40);
+    n00b_plane_t  *parent = make_plane(10, 4, 20, 10);
+    n00b_plane_t  *child  = make_plane(0, 0, 6, 4);
+    mouse_record_t parent_record = {};
+    mouse_record_t child_record = {};
+    n00b_event_t click = {
+        .type = N00B_EVENT_MOUSE,
+        .mouse = {
+            .x = 17,
+            .y = 12,
+            .button = N00B_MOUSE_LEFT,
+            .action = N00B_MOUSE_PRESS,
+            .mods = N00B_MOD_NONE,
+        },
+    };
+
+    n00b_widget_attach(parent, &record_widget, &parent_record);
+    n00b_widget_attach(child, &record_widget, &child_record);
+    n00b_plane_add_child(parent, child, 5, 6);
+    n00b_canvas_add_plane(canvas, parent);
+
+    n00b_mouse_route_event(canvas, nullptr, &click);
+
+    assert(child_record.press_count == 1);
+    assert(child_record.last_x == 2);
+    assert(child_record.last_y == 2);
+    assert(parent_record.press_count == 1);
+    assert(parent_record.last_x == 7);
+    assert(parent_record.last_y == 8);
+
+    assert(n00b_canvas_remove_plane(canvas, parent));
+    assert(n00b_plane_remove_child(parent, child));
+    n00b_widget_detach(child);
+    n00b_widget_detach(parent);
+    n00b_plane_destroy(child);
+    n00b_plane_destroy(parent);
+    n00b_canvas_destroy(canvas);
+
+    printf("  PASS: bubble_parent_receives_parent_local_coords\n");
+}
+
+// -------------------------------------------------------------------
 // Test 6: Button mouse click
 // -------------------------------------------------------------------
 
@@ -537,6 +640,7 @@ main(int argc, char **argv)
     test_route_event_uses_visual_z_order_for_top_level_planes();
     test_route_event_tracks_manual_move_after_layout();
     test_capture();
+    test_bubble_parent_receives_parent_local_coords();
     test_button_mouse_click();
     test_sgr_encoding();
     printf("All mouse tests passed.\n");

@@ -50,6 +50,7 @@
 #include "display/widgets/input.h"
 #include "display/widgets/box.h"
 #include "display/widgets/grid.h"
+#include "display/widgets/split.h"
 #include "display/widgets/zstack.h"
 #include "display/widgets/switch.h"
 #include "display/widgets/radio.h"
@@ -353,6 +354,7 @@ static n00b_plane_t *g_zstack_background_status = nullptr;
 static n00b_plane_t *g_zstack_overlay_status = nullptr;
 static n00b_plane_t *g_zstack_layer_status = nullptr;
 static n00b_plane_t *g_grid_status_label = nullptr;
+static n00b_plane_t *g_split_status_label = nullptr;
 
 static void
 set_demo_label_text(n00b_plane_t *label, const char *text)
@@ -374,6 +376,12 @@ static void
 set_grid_status(const char *text)
 {
     set_demo_label_text(g_grid_status_label, text);
+}
+
+static void
+set_split_status(const char *text)
+{
+    set_demo_label_text(g_split_status_label, text);
 }
 
 static void
@@ -438,6 +446,36 @@ on_grid_refresh_click(n00b_plane_t *plane, void *data)
     (void)data;
 
     set_grid_status("Wide card action fired: preview refreshed.");
+}
+
+static void
+on_split_navigator_click(n00b_plane_t *plane, void *data)
+{
+    (void)plane;
+    (void)data;
+
+    set_split_status("Navigator action fired from the left pane.");
+}
+
+static void
+on_split_inspector_click(n00b_plane_t *plane, void *data)
+{
+    (void)plane;
+    (void)data;
+
+    set_split_status("Inspector action fired from the right pane.");
+}
+
+static void
+on_split_ratio_change(n00b_plane_t *plane, float ratio, void *data)
+{
+    char msg[96];
+
+    (void)plane;
+    (void)data;
+
+    snprintf(msg, sizeof(msg), "Divider ratio: %.2f", ratio);
+    set_split_status(msg);
 }
 
 static void
@@ -815,6 +853,143 @@ demo_grid(n00b_canvas_t *canvas)
 }
 
 // ====================================================================
+// Split demo
+// ====================================================================
+
+static void
+demo_split(n00b_canvas_t *canvas)
+{
+    dbg("\n=== demo_split start ===\n");
+
+    int32_t cpw = (int32_t)canvas->cell_px_w;
+    int32_t cph = (int32_t)canvas->cell_px_h;
+    int32_t frame_w = (int32_t)canvas->frame_cols;
+    int32_t frame_h = (int32_t)canvas->frame_rows;
+    int32_t content_w = frame_w - 4 * cpw;
+    int32_t gap_px = cph > 0 ? cph : 1;
+    int32_t divider_px = cpw > 0 ? cpw : 1;
+
+    if (content_w < 1) {
+        content_w = 1;
+    }
+
+    n00b_text_style_t *title_style = make_style(N00B_TRI_YES,
+                                                N00B_TRI_NO,
+                                                0x7A3E00);
+    n00b_text_style_t *note_style = make_style(N00B_TRI_NO,
+                                               N00B_TRI_NO,
+                                               0x5F6B73);
+    n00b_text_style_t *left_title_style = make_style(N00B_TRI_YES,
+                                                     N00B_TRI_NO,
+                                                     0x0B7285);
+    n00b_text_style_t *right_title_style = make_style(N00B_TRI_YES,
+                                                      N00B_TRI_NO,
+                                                      0x8C2F39);
+
+    n00b_plane_t *root = n00b_box_new(.canvas     = canvas,
+                                      .direction  = N00B_FLEX_COLUMN,
+                                      .gap        = gap_px,
+                                      .pad_top    = 2 * cph,
+                                      .pad_right  = 2 * cpw,
+                                      .pad_bottom = 2 * cph,
+                                      .pad_left   = 2 * cpw);
+    root->width  = frame_w;
+    root->height = frame_h;
+    n00b_canvas_add_plane(canvas, root);
+
+    n00b_plane_t *title = n00b_label_new(
+        n00b_str_set_base_style(n00b_string_from_cstr("Split Widget Demo"), title_style),
+        .canvas = canvas,
+        .width = content_w);
+    n00b_plane_add_child(root, title, 0, 0);
+
+    n00b_plane_t *instructions = n00b_label_new(
+        n00b_str_set_base_style(
+            n00b_string_from_cstr(
+                "Drag the divider to resize both panes live, then click either pane button to verify child widgets still receive input."),
+            note_style),
+        .canvas = canvas,
+        .width = content_w,
+        .wrap = true,
+        .height = 3 * cph);
+    n00b_plane_add_child(root, instructions, 0, 0);
+
+    g_split_status_label = n00b_label_new(
+        n00b_str_set_base_style(n00b_string_from_cstr("Divider ratio: 0.38"), note_style),
+        .canvas = canvas,
+        .width = content_w);
+    n00b_plane_add_child(root, g_split_status_label, 0, 0);
+
+    n00b_plane_t *left_card = make_demo_card(canvas,
+                                             gap_px,
+                                             &n00b_border_double,
+                                             0x0B7285,
+                                             0xE6F4F1);
+    n00b_plane_t *right_card = make_demo_card(canvas,
+                                              gap_px,
+                                              &n00b_border_plain,
+                                              0x8C2F39,
+                                              0xF9E7EA);
+
+    n00b_plane_t *left_title = n00b_label_new(
+        n00b_str_set_base_style(n00b_string_from_cstr("Navigator"), left_title_style),
+        .canvas = canvas);
+    n00b_plane_t *left_note = n00b_label_new(
+        n00b_str_set_base_style(
+            n00b_string_from_cstr(
+                "A compact list-style pane that behaves like a sidebar or project navigator."),
+            note_style),
+        .canvas = canvas,
+        .wrap = true,
+        .height = 3 * cph);
+    n00b_plane_t *left_button = n00b_button_new(
+        n00b_string_from_cstr("Open Item"),
+        .canvas   = canvas,
+        .on_click = on_split_navigator_click);
+    n00b_plane_add_child(left_card, left_title, 0, 0);
+    n00b_plane_add_child(left_card, left_note, 0, 0);
+    n00b_plane_add_child(left_card, left_button, 0, 0);
+
+    n00b_plane_t *right_title = n00b_label_new(
+        n00b_str_set_base_style(n00b_string_from_cstr("Inspector"), right_title_style),
+        .canvas = canvas);
+    n00b_plane_t *right_note = n00b_label_new(
+        n00b_str_set_base_style(
+            n00b_string_from_cstr(
+                "A detail pane sized for longer summaries, properties, or editor metadata."),
+            note_style),
+        .canvas = canvas,
+        .wrap = true,
+        .height = 3 * cph);
+    n00b_plane_t *right_button = n00b_button_new(
+        n00b_string_from_cstr("Apply Change"),
+        .canvas   = canvas,
+        .on_click = on_split_inspector_click);
+    n00b_plane_add_child(right_card, right_title, 0, 0);
+    n00b_plane_add_child(right_card, right_note, 0, 0);
+    n00b_plane_add_child(right_card, right_button, 0, 0);
+
+    n00b_plane_t *split = n00b_split_new(left_card,
+                                         right_card,
+                                         .canvas = canvas,
+                                         .ratio = 0.38f,
+                                         .min_first_px = 16 * divider_px,
+                                         .min_second_px = 18 * divider_px,
+                                         .divider_px = divider_px,
+                                         .on_change = on_split_ratio_change);
+    split->flex.grow   = 1.0f;
+    split->flex.shrink = 1.0f;
+    split->flex.basis  = 1;
+    n00b_plane_add_child(root, split, 0, 0);
+
+    dbg_plane("split-root", root);
+    dbg_plane("split-widget", split);
+    dbg_plane("split-left-card", left_card);
+    dbg_plane("split-right-card", right_card);
+    dbg("=== demo_split end ===\n\n");
+}
+
+// ====================================================================
 // All-widgets interactive demo
 // ====================================================================
 
@@ -1187,7 +1362,7 @@ usage(const char *prog)
     fprintf(stderr,
             "Usage: %s --widget <name> [--backend <auto|tui|gui|cocoa|x11|nc|stream|dumb>] [--theme <name>] [--debug-log <path>]\n"
             "\n"
-            "Widgets:  label, grid, zstack, all\n"
+            "Widgets:  label, grid, split, zstack, all\n"
             "Backends: auto (policy-driven), tui (ANSI alt-screen),\n"
             "          gui (portable GUI alias; may fall back if unavailable),\n"
             "          cocoa (macOS native), x11 (Linux/Unix native),\n"
@@ -1440,6 +1615,10 @@ main(int argc, char **argv)
     }
     else if (strcmp(widget_name, "grid") == 0) {
         demo_grid(canvas);
+        use_event_loop = true;
+    }
+    else if (strcmp(widget_name, "split") == 0) {
+        demo_split(canvas);
         use_event_loop = true;
     }
     else if (strcmp(widget_name, "zstack") == 0) {
