@@ -83,6 +83,48 @@ plane_absolute_origin(const n00b_plane_t *plane,
     *out_y += plane->y;
 }
 
+static void
+mouse_event_to_plane_local(n00b_canvas_t      *canvas,
+                           n00b_plane_t       *plane,
+                           const n00b_event_t *absolute,
+                           n00b_event_t       *localized)
+{
+    int32_t abs_x = 0;
+    int32_t abs_y = 0;
+    int32_t cpw = 1;
+    int32_t cph = 1;
+
+    if (!absolute || !localized) {
+        return;
+    }
+
+    *localized = *absolute;
+
+    if (!canvas || !plane || absolute->type != N00B_EVENT_MOUSE) {
+        return;
+    }
+
+    cpw = (int32_t)(canvas->cell_px_w > 0 ? canvas->cell_px_w : 1);
+    cph = (int32_t)(canvas->cell_px_h > 0 ? canvas->cell_px_h : 1);
+
+    plane_absolute_origin(plane, &abs_x, &abs_y);
+
+    if (plane->box) {
+        int32_t it, ib, il, ir;
+        n00b_box_insets_px(plane->box, cpw, cph, &it, &ib, &il, &ir);
+        abs_x += il;
+        abs_y += it;
+    }
+
+    if (canvas->caps & N00B_RCAP_MANAGES_TTY) {
+        abs_x = align_down_i32(abs_x, cpw);
+        abs_y = align_down_i32(abs_y, cph);
+    }
+
+    localized->mouse.x = absolute->mouse.x - abs_x;
+    localized->mouse.y = absolute->mouse.y - abs_y;
+}
+
 // -------------------------------------------------------------------
 // Hit testing
 // -------------------------------------------------------------------
@@ -237,35 +279,11 @@ n00b_mouse_route_event(n00b_canvas_t          *canvas,
         }
     }
 
-    // Translate mouse coordinates to content-local pixel space for the
-    // target widget.  Walk up the parent chain to compute the absolute
-    // pixel position, then subtract box insets (border + padding in pixels).
-    int32_t abs_x = 0;
-    int32_t abs_y = 0;
-    plane_absolute_origin(target, &abs_x, &abs_y);
-
-    // Subtract box insets (scaled to pixels) to get content-area origin.
-    if (target->box) {
-        int32_t it, ib, il, ir;
-        n00b_box_insets_px(target->box, cpw, cph, &it, &ib, &il, &ir);
-        abs_x += il;
-        abs_y += it;
-    }
-
-    // Keep local coordinates on the same snapped grid used for terminal
-    // rendering so widget hit regions line up with visible rows/columns.
-    if (canvas->caps & N00B_RCAP_MANAGES_TTY) {
-        abs_x = align_down_i32(abs_x, cpw > 0 ? cpw : 1);
-        abs_y = align_down_i32(abs_y, cph > 0 ? cph : 1);
-    }
-
-    n00b_event_t local_event = *event;
-    local_event.mouse.x = event->mouse.x - abs_x;
-    local_event.mouse.y = event->mouse.y - abs_y;
-
     // Dispatch to the target, then bubble up to parents.
     n00b_plane_t *cur = target;
     while (cur) {
+        n00b_event_t local_event;
+        mouse_event_to_plane_local(canvas, cur, event, &local_event);
         if (n00b_widget_handle_event(cur, &local_event)) {
             return;  // Consumed.
         }
