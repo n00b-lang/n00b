@@ -50,6 +50,7 @@
 #include "display/widgets/box.h"
 #include "display/widgets/grid.h"
 #include "display/widgets/split.h"
+#include "display/widgets/scroll.h"
 #include "display/widgets/zstack.h"
 #include "display/widgets/switch.h"
 #include "display/widgets/radio.h"
@@ -352,6 +353,7 @@ static n00b_plane_t *g_zstack_overlay_status = nullptr;
 static n00b_plane_t *g_zstack_layer_status = nullptr;
 static n00b_plane_t *g_grid_status_label = nullptr;
 static n00b_plane_t *g_split_status_label = nullptr;
+static n00b_plane_t *g_scroll_status_label = nullptr;
 
 static void
 set_demo_label_text(n00b_plane_t *label, const char *text)
@@ -379,6 +381,12 @@ static void
 set_split_status(const char *text)
 {
     set_demo_label_text(g_split_status_label, text);
+}
+
+static void
+set_scroll_status(const char *text)
+{
+    set_demo_label_text(g_scroll_status_label, text);
 }
 
 static void
@@ -473,6 +481,24 @@ on_split_ratio_change(n00b_plane_t *plane, float ratio, void *data)
 
     snprintf(msg, sizeof(msg), "Divider ratio: %.2f", ratio);
     set_split_status(msg);
+}
+
+static void
+on_scroll_top_click(n00b_plane_t *plane, void *data)
+{
+    (void)plane;
+    (void)data;
+
+    set_scroll_status("Top content button fired.");
+}
+
+static void
+on_scroll_bottom_click(n00b_plane_t *plane, void *data)
+{
+    (void)plane;
+    (void)data;
+
+    set_scroll_status("Bottom content button fired after scrolling.");
 }
 
 static void
@@ -987,6 +1013,189 @@ demo_split(n00b_canvas_t *canvas)
 }
 
 // ====================================================================
+// Scroll demo
+// ====================================================================
+
+static void
+demo_scroll(n00b_canvas_t *canvas)
+{
+    dbg("\n=== demo_scroll start ===\n");
+
+    int32_t cpw = (int32_t)canvas->cell_px_w;
+    int32_t cph = (int32_t)canvas->cell_px_h;
+    int32_t frame_w = (int32_t)canvas->frame_cols;
+    int32_t frame_h = (int32_t)canvas->frame_rows;
+    int32_t content_w = frame_w - 4 * cpw;
+    int32_t gap_px = cph > 0 ? cph : 1;
+    int32_t scroll_thickness = cpw > 0 ? cpw : 1;
+    n00b_text_style_t *title_style;
+    n00b_text_style_t *note_style;
+    n00b_text_style_t *wide_style;
+    n00b_text_style_t *scroll_fill_style;
+    n00b_box_props_t  *scroll_box;
+    n00b_state_style_t *focus_state;
+    n00b_plane_t *root;
+    n00b_plane_t *title;
+    n00b_plane_t *instructions;
+    n00b_plane_t *content;
+    n00b_plane_t *scroll;
+
+    if (content_w < 1) {
+        content_w = 1;
+    }
+
+    title_style = make_style(N00B_TRI_YES, N00B_TRI_NO, 0x7A3E00);
+    note_style = make_style(N00B_TRI_NO, N00B_TRI_NO, 0x5F6B73);
+    wide_style = make_style(N00B_TRI_YES, N00B_TRI_NO, 0x0B7285);
+    scroll_fill_style = n00b_alloc(n00b_text_style_t);
+    scroll_fill_style->bg_rgb = n00b_color_make(0xF6F0E8);
+
+    scroll_box = n00b_box_props_new(
+        .theme        = &n00b_border_rounded,
+        .border_style = make_style(N00B_TRI_NO, N00B_TRI_NO, 0x7A3E00),
+        .fill_style   = scroll_fill_style,
+        .pad_top      = 1,
+        .pad_right    = 1,
+        .pad_bottom   = 1,
+        .pad_left     = 1);
+    focus_state = n00b_alloc(n00b_state_style_t);
+    focus_state->border_style = make_style(N00B_TRI_YES, N00B_TRI_NO, 0x0B7285);
+    scroll_box->state_styles[N00B_WSTATE_FOCUSED] = focus_state;
+
+    root = n00b_box_new(.canvas     = canvas,
+                        .direction  = N00B_FLEX_COLUMN,
+                        .gap        = gap_px,
+                        .pad_top    = 2 * cph,
+                        .pad_right  = 2 * cpw,
+                        .pad_bottom = 2 * cph,
+                        .pad_left   = 2 * cpw);
+    root->width  = frame_w;
+    root->height = frame_h;
+    n00b_canvas_add_plane(canvas, root);
+
+    title = n00b_label_new(
+        n00b_str_set_base_style(n00b_string_from_cstr("Scroll Widget Demo"), title_style),
+        .canvas = canvas,
+        .width = content_w);
+    n00b_plane_add_child(root, title, 0, 0);
+
+    instructions = n00b_label_new(
+        n00b_str_set_base_style(
+            n00b_string_from_cstr(
+                "Tab to the scroll frame for keyboard tests, use the mouse wheel and Shift+wheel, drag either scrollbar thumb, then scroll down and click the bottom button."),
+            note_style),
+        .canvas = canvas,
+        .width = content_w,
+        .wrap = true,
+        .height = 3 * cph);
+    n00b_plane_add_child(root, instructions, 0, 0);
+
+    g_scroll_status_label = n00b_label_new(
+        n00b_str_set_base_style(
+            n00b_string_from_cstr("Ready. Scroll inside the frame and click either in-content button."),
+            note_style),
+        .canvas = canvas,
+        .width = content_w,
+        .wrap = true,
+        .height = 2 * cph);
+    n00b_plane_add_child(root, g_scroll_status_label, 0, 0);
+
+    content = n00b_box_new(.canvas = canvas,
+                           .direction = N00B_FLEX_COLUMN,
+                           .gap = gap_px);
+
+    n00b_plane_add_child(content,
+                         n00b_label_new(
+                             n00b_str_set_base_style(
+                                 n00b_string_from_cstr("Scrollable Athens Page"),
+                                 title_style),
+                             .canvas = canvas),
+                         0,
+                         0);
+    n00b_plane_add_child(content,
+                         n00b_label_new(
+                             n00b_str_set_base_style(
+                                 n00b_string_from_cstr("Use this as a proxy for long settings forms, tab pages, and article content."),
+                                 note_style),
+                             .canvas = canvas,
+                             .wrap = true,
+                             .width = content_w,
+                             .height = 2 * cph),
+                         0,
+                         0);
+    n00b_plane_add_child(content,
+                         n00b_button_new(
+                             n00b_string_from_cstr("Top Action"),
+                             .canvas   = canvas,
+                             .on_click = on_scroll_top_click),
+                         0,
+                         0);
+    n00b_plane_add_child(content,
+                         n00b_label_new(
+                             n00b_str_set_base_style(
+                                 n00b_string_from_cstr(
+                                     "Horizontal overflow probe: analytics_pipeline/quarterly/reimplementation/wave1/scroll/demo/summary.csv"),
+                                 wide_style),
+                             .canvas = canvas),
+                         0,
+                         0);
+
+    for (int i = 0; i < 12; i++) {
+        char msg[160];
+
+        snprintf(msg,
+                 sizeof(msg),
+                 "Section %02d: scroll this panel to keep interactive content reachable without rewriting every leaf widget.",
+                 i + 1);
+        n00b_plane_add_child(content,
+                             n00b_label_new(
+                                 n00b_str_set_base_style(n00b_string_from_cstr(msg), note_style),
+                                 .canvas = canvas,
+                                 .wrap = true,
+                                 .width = content_w,
+                                 .height = 2 * cph),
+                             0,
+                             0);
+    }
+
+    n00b_plane_add_child(content,
+                         n00b_button_new(
+                             n00b_string_from_cstr("Bottom Action"),
+                             .canvas   = canvas,
+                             .on_click = on_scroll_bottom_click),
+                         0,
+                         0);
+    n00b_plane_add_child(content,
+                         n00b_label_new(
+                             n00b_str_set_base_style(
+                                 n00b_string_from_cstr("If this button fires after you scrolled down, hit-testing stayed aligned with the translated content."),
+                                 note_style),
+                             .canvas = canvas,
+                             .wrap = true,
+                             .width = content_w,
+                             .height = 2 * cph),
+                         0,
+                         0);
+
+    scroll = n00b_scroll_new(content,
+                             .axes = N00B_SCROLL_AXIS_BOTH,
+                             .scrollbar_mode = N00B_SCROLLBAR_AUTO,
+                             .scroll_step_lines = 3,
+                             .scrollbar_thickness_px = scroll_thickness,
+                             .canvas = canvas);
+    scroll->flex.grow   = 1.0f;
+    scroll->flex.shrink = 1.0f;
+    scroll->flex.basis  = 1;
+    n00b_plane_set_box(scroll, scroll_box);
+    n00b_plane_add_child(root, scroll, 0, 0);
+
+    dbg_plane("scroll-root", root);
+    dbg_plane("scroll-widget", scroll);
+    dbg_plane("scroll-content", content);
+    dbg("=== demo_scroll end ===\n\n");
+}
+
+// ====================================================================
 // All-widgets interactive demo
 // ====================================================================
 
@@ -1359,7 +1568,7 @@ usage(const char *prog)
     fprintf(stderr,
             "Usage: %s --widget <name> [--backend <auto|tui|gui|cocoa|x11|nc|stream|dumb>] [--theme <name>] [--debug-log <path>]\n"
             "\n"
-            "Widgets:  label, grid, split, zstack, all\n"
+            "Widgets:  label, grid, split, scroll, zstack, all\n"
             "Backends: auto (policy-driven), tui (ANSI alt-screen),\n"
             "          gui (portable alias),\n"
             "          cocoa (macOS native), x11 (Linux/Unix native),\n"
@@ -1565,6 +1774,10 @@ main(int argc, char **argv)
     }
     else if (strcmp(widget_name, "split") == 0) {
         demo_split(canvas);
+        use_event_loop = true;
+    }
+    else if (strcmp(widget_name, "scroll") == 0) {
+        demo_scroll(canvas);
         use_event_loop = true;
     }
     else if (strcmp(widget_name, "zstack") == 0) {

@@ -445,6 +445,7 @@ n00b_display = [
     'src/display/widgets/box.c',
     'src/display/widgets/grid.c',
     'src/display/widgets/split.c',
+    'src/display/widgets/scroll.c',
     'src/display/widgets/zstack.c',
     'src/display/widgets/switch.c',
     'src/display/widgets/radio.c',
@@ -1394,6 +1395,12 @@ split_test = executable('test_split',
     kwargs: test_common_kwargs,
 )
 test('split', split_test, suite: 'unit')
+
+scroll_test = executable('test_scroll',
+    ['test/unit/test_scroll.c'],
+    kwargs: test_common_kwargs,
+)
+test('scroll', scroll_test, suite: 'unit')
 
 zstack_test = executable('test_zstack',
     ['test/unit/test_zstack.c'],

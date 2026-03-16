@@ -22,9 +22,10 @@ Implemented widgets:
 - `box`
 - `grid`
 - `split`
+- `scroll`
 - `zstack`
 
-Representative widget tests live under `test/unit/test_{label,button,checkbox,input,switch,radio,list_widget,selectionlist,breadcrumb,link,grid,split,zstack}.c`.
+Representative widget tests live under `test/unit/test_{label,button,checkbox,input,switch,radio,list_widget,selectionlist,breadcrumb,link,grid,split,scroll,zstack}.c`.
 
 ## Runtime Integration Expectations
 
@@ -47,7 +48,6 @@ prototype widgets after treating `list` as represented by `list_widget`.
 
 ### Wave 1 - Foundation And Layout Unlock
 
-- `scroll`
 - `tabs`
 - `text`
 
