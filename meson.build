@@ -1488,7 +1488,7 @@ display_scene_inspect = executable('display_scene_inspect',
 )
 
 display_terminal_replay = executable('display_terminal_replay',
-    ['src/tools/display_terminal_replay.c'],
+    ['src/tools/display_terminal_replay.c', 'src/tools/display_terminal_replay_fixture.c'],
     kwargs: test_common_kwargs,
     install: false,
 )
@@ -1586,15 +1586,29 @@ test('display_scene_inspect_artifacts',
     suite: 'integration',
 )
 
+test('display_terminal_replay_artifacts',
+    sh_prog,
+    args: [
+        files('test/integration/test_display_terminal_replay_artifacts.sh'),
+        display_baseline_capture,
+        display_terminal_replay,
+        meson.project_source_root(),
+    ],
+    suite: 'integration',
+)
+
 display_m1_compat_test = executable('test_display_m1_compat',
     ['test/integration/test_display_m1_compat.c'],
     kwargs: test_common_kwargs,
 )
 test('display_m1_compat', display_m1_compat_test, suite: 'integration')
 
+display_terminal_replay_fixture_inc = include_directories('src/tools')
 display_m2_terminal_flow_test = executable('test_display_m2_terminal_flow',
-    ['test/integration/test_display_m2_terminal_flow.c'],
-    kwargs: test_common_kwargs,
+    ['test/integration/test_display_m2_terminal_flow.c', 'src/tools/display_terminal_replay_fixture.c'],
+    include_directories: incdir + [display_terminal_replay_fixture_inc],
+    c_args: exe_c_args,
+    link_with: [n00b],
 )
 test('display_m2_terminal_flow', display_m2_terminal_flow_test, suite: 'integration')
 

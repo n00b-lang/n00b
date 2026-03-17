@@ -14,7 +14,6 @@
 static struct termios g_saved_termios;
 static bool           g_termios_saved = false;
 static bool           g_manages_tty   = false;
-static n00b_canvas_t *g_signal_canvas = nullptr;
 
 static void tty_write_raw(const char *seq);
 
@@ -37,9 +36,6 @@ signal_cleanup_handler(int sig)
         tcsetattr(STDIN_FILENO, TCSANOW, &g_saved_termios);
         g_termios_saved = false;
     }
-
-    g_signal_canvas = nullptr;
-
     signal(sig, SIG_DFL);
     raise(sig);
 }
@@ -65,8 +61,6 @@ n00b_display_terminal_setup(n00b_canvas_t *canvas)
 #ifdef _WIN32
     (void)canvas;
 #else
-    g_signal_canvas = canvas;
-
     n00b_render_cap_t caps = n00b_display_backend_caps(canvas);
     g_manages_tty = (caps & N00B_RCAP_MANAGES_TTY) != 0;
 
@@ -132,8 +126,6 @@ n00b_display_terminal_teardown(n00b_canvas_t *canvas)
     signal(SIGTERM, SIG_DFL);
     signal(SIGQUIT, SIG_DFL);
     signal(SIGHUP, SIG_DFL);
-
-    g_signal_canvas = nullptr;
     g_manages_tty = false;
 #endif
 }

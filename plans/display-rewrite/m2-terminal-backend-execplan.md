@@ -20,6 +20,7 @@ User-visible behavior stays parity with Milestone 1. The difference is maintaina
 - [x] (2026-03-05 11:40Z) Added Milestone 2 unit and integration coverage: `test_display_terminal_lifecycle`, `test_display_ansi_sgr`, `test_display_terminal_input`, and `test_display_m2_terminal_flow`.
 - [x] (2026-03-05 11:42Z) Added deterministic replay tool `display_terminal_replay` and generated artifacts under `plans/artifacts/display-rewrite/m2/`.
 - [x] (2026-03-05 11:45Z) Ran milestone tests, display smoke tests, `notcurses_backend` validation, M1-vs-M2 artifact diffs, and a scripted `widget_demo` terminal probe with clean exit.
+- [x] (2026-03-17 20:23Z) Applied M2 review remediation: made `display_terminal_replay --out-dir` mandatory, extracted the shared replay fixture, added `display_terminal_replay_artifacts`, refreshed M2 artifacts, and corrected the plan/documentation references.
 
 ## Surprises & Discoveries
 
@@ -39,6 +40,8 @@ User-visible behavior stays parity with Milestone 1. The difference is maintaina
   Evidence: `diff -u plans/artifacts/display-rewrite/m1/scene_stream.txt plans/artifacts/display-rewrite/m2/scene_stream.txt` and `diff -u .../table_stream.txt ...` both produced no output.
 - Observation: Manual terminal probe is scriptable in this environment by piping the expected key sequence.
   Evidence: `printf '\t\t \003' | build_debug/widget_demo --widget all --backend tui` exited `0` and cleanup escape sequences were emitted.
+- Observation: The original replay artifact drift came from implementation-sensitive counters, not a runtime behavior regression.
+  Evidence: after extracting the shared replay fixture, `display_terminal_replay` still reports the same observable resize/key/mouse/cursor behavior while `render_calls` remains available only through the integration-test summary.
 
 ## Decision Log
 
@@ -60,15 +63,15 @@ User-visible behavior stays parity with Milestone 1. The difference is maintaina
 - Decision: Keep SIGWINCH inbox waiting orchestration in `backend_ansi.c` and delegate only byte-level parsing to `terminal_input`.
   Rationale: This preserved existing wake-up responsiveness on resize while still centralizing ANSI escape parsing semantics.
   Date/Author: 2026-03-05 / Codex
-- Decision: Record manual probe evidence from scripted key input (`Tab,Tab,Space,Ctrl-C`) in artifact metadata.
-  Rationale: The execution environment is non-interactive; scripted input gives deterministic, repeatable terminal-run evidence.
+- Decision: Keep baseline capture metadata, replay metadata, and manual probe notes in separate artifact files.
+  Rationale: `metadata.txt` is baseline evidence, `terminal_replay_metadata.txt` is deterministic replay evidence, and `widget_demo_tui_manual.txt` records the human-facing probe without clobbering generated files.
   Date/Author: 2026-03-05 / Codex
 
 ## Outcomes & Retrospective
 
 Milestone 2 implementation is complete on `display-rewrite/m2-terminal-backend`.
 
-Terminal lifecycle, ANSI SGR emission, and terminal input translation now live in dedicated modules with explicit interfaces (`terminal_lifecycle`, `ansi_sgr`, `terminal_input`). `event_loop`, ANSI backends, and notcurses backend consume those contracts without public API changes. New unit and integration tests pass, deterministic replay tooling is in place, and M2 artifacts were generated with baseline parity to M1 for `scene_stream.txt` and `table_stream.txt`.
+Terminal lifecycle, ANSI SGR emission, and terminal input translation now live in dedicated modules with explicit interfaces (`terminal_lifecycle`, `ansi_sgr`, `terminal_input`). `event_loop`, ANSI backends, and notcurses backend consume those contracts without public API changes. The follow-up review remediation tightened the artifact workflow: `display_terminal_replay` now requires `--out-dir`, the replay scenario lives in `src/tools/display_terminal_replay_fixture.[ch]` and is shared with `test_display_m2_terminal_flow`, replay parity is enforced by `display_terminal_replay_artifacts`, and the M2 artifact directory now keeps `metadata.txt`, `terminal_replay_metadata.txt`, and `widget_demo_tui_manual.txt` in separate namespaces.
 
 Remaining work is outside M2 scope (GUI parity and later widget/table migration milestones). M2 acceptance criteria for modularization, deterministic replay evidence, and parity validation are satisfied.
 
@@ -109,7 +112,7 @@ Throughout implementation, preserve M1 behavior unless a change is intentionally
 
 ## Concrete Steps
 
-Run all commands from `/home/baron/crash-override/n00b-athens`.
+Run all commands from `/home/baron/crash-override/n00b-tui/n00b-athens`.
 
 Create and switch to the milestone branch:
 
@@ -167,14 +170,15 @@ Generate Milestone 2 artifacts and compare against Milestone 1:
     build_debug/display_baseline_capture --out-dir plans/artifacts/display-rewrite/m2
     build_debug/display_scene_inspect --out plans/artifacts/display-rewrite/m2/scene_inspect.txt
     build_debug/display_terminal_replay --out-dir plans/artifacts/display-rewrite/m2
+    meson test -C build_debug --print-errorlogs display_terminal_replay_artifacts
     diff -u plans/artifacts/display-rewrite/m1/scene_stream.txt plans/artifacts/display-rewrite/m2/scene_stream.txt
     diff -u plans/artifacts/display-rewrite/m1/table_stream.txt plans/artifacts/display-rewrite/m2/table_stream.txt
 
 Run the manual interactive probe once for human verification:
 
-    build_debug/widget_demo --widget all --backend tui
+    printf '\t\t \003' | build_debug/widget_demo --widget all --backend tui
 
-Expected manual interaction sequence is Tab, Tab, Space, Ctrl+C. Record brief notes about observed focus movement and activation in `plans/artifacts/display-rewrite/m2/metadata.txt`.
+Expected manual interaction sequence is Tab, Tab, Space, Ctrl+C. Record brief notes about observed focus movement and activation in `plans/artifacts/display-rewrite/m2/widget_demo_tui_manual.txt`.
 
 ## Validation and Acceptance
 
@@ -184,7 +188,7 @@ The first layer is unit validation of the new terminal contracts. The new tests 
 
 The second layer is integration validation. `display_m2_terminal_flow` must demonstrate deterministic end-to-end interaction through `n00b_canvas_run()` including resize handling, focus traversal, mouse routing, and Ctrl+C termination semantics. Existing `display_baseline_flow` and `display_m1_compat` tests must continue to pass.
 
-The third layer is artifact validation. `display_terminal_replay` must produce stable replay output under `plans/artifacts/display-rewrite/m2/`. `scene_stream.txt` and `table_stream.txt` from `display_baseline_capture` should match M1 unless an intentional and documented behavior change is approved in this plan.
+The third layer is artifact validation. `display_terminal_replay` must require `--out-dir`, write `terminal_replay.txt` plus `terminal_replay_metadata.txt`, and pass `display_terminal_replay_artifacts`. `scene_stream.txt` and `table_stream.txt` from `display_baseline_capture` should match M1 unless an intentional and documented behavior change is approved in this plan.
 
 The fourth layer is human verification. Running `widget_demo --widget all --backend tui` must still behave as expected for focus movement and activation under terminal interaction.
 
@@ -207,6 +211,8 @@ Milestone 2 artifact directory must include at least:
 - `plans/artifacts/display-rewrite/m2/scene_inspect.txt`
 - `plans/artifacts/display-rewrite/m2/terminal_replay.txt`
 - `plans/artifacts/display-rewrite/m2/metadata.txt`
+- `plans/artifacts/display-rewrite/m2/terminal_replay_metadata.txt`
+- `plans/artifacts/display-rewrite/m2/widget_demo_tui_manual.txt`
 
 Expected validation transcript pattern:
 
@@ -215,7 +221,7 @@ Expected validation transcript pattern:
 
     $ build_debug/display_terminal_replay --out-dir plans/artifacts/display-rewrite/m2
     wrote terminal_replay.txt
-    wrote metadata.txt
+    wrote terminal_replay_metadata.txt
 
     $ diff -u plans/artifacts/display-rewrite/m1/scene_stream.txt plans/artifacts/display-rewrite/m2/scene_stream.txt
     (no output)
@@ -280,12 +286,33 @@ In `include/internal/display/terminal_input.h`, define:
                                                   n00b_isize_t cell_px_h,
                                                   n00b_event_t *out);
 
-In `src/tools/display_terminal_replay.c`, define:
+In `src/tools/display_terminal_replay_fixture.h`, define:
 
-    static int run_replay(const char *out_dir);
-    static int write_replay_log(const char *out_dir, const char *text);
-    static int write_metadata(const char *out_dir);
-    int main(int argc, char **argv);
+    typedef struct {
+        int          resize_calls;
+        n00b_isize_t resize_rows;
+        n00b_isize_t resize_cols;
+        int          left_key_events;
+        int          right_key_events;
+        int          right_mouse_presses;
+        int          right_activations;
+        bool         cursor_hide;
+        bool         cursor_show;
+        int          poll_calls;
+        int          render_calls;
+    } n00b_display_terminal_replay_summary_t;
+
+    extern int n00b_display_terminal_replay_run(
+        n00b_display_terminal_replay_summary_t *summary);
+
+    extern int n00b_display_terminal_replay_write_artifacts(
+        const char *out_dir,
+        const n00b_display_terminal_replay_summary_t *summary);
+
+In `src/tools/display_terminal_replay.c`, keep only the CLI wrapper that requires
+`--out-dir`, ensures the destination directory exists, calls
+`n00b_display_terminal_replay_run()`, and then calls
+`n00b_display_terminal_replay_write_artifacts()`.
 
 Dependencies remain the existing display runtime and optional notcurses dependency gate in Meson. Do not add new external libraries for M2.
 
@@ -293,3 +320,4 @@ Dependencies remain the existing display runtime and optional notcurses dependen
 
 - 2026-03-05: Initial Milestone 2 child ExecPlan authored from umbrella Milestone 2 scope, with concrete module boundaries, validation commands, and deterministic replay artifact requirements.
 - 2026-03-05: Updated this ExecPlan after implementation to reflect completed progress, added implementation discoveries/decisions, and recorded final M2 validation/artifact outcomes so the document is restartable from current state.
+- 2026-03-17: Updated the Milestone 2 plan after review remediation so the documented workspace root, replay fixture split, explicit `--out-dir` requirement, replay parity test, and artifact filenames match the repaired branch state.
