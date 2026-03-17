@@ -20,11 +20,6 @@ n00b_display_dispatch_event(n00b_canvas_t      *canvas,
 
         result.handled = true;
 
-        if (key == 'c' && (mods & N00B_MOD_CTRL)) {
-            result.should_stop = true;
-            return result;
-        }
-
         if (key == N00B_KEY_TAB && !(mods & N00B_MOD_SHIFT)) {
             if (fm) {
                 n00b_plane_t *before = n00b_focus_mgr_current(fm);
@@ -56,6 +51,11 @@ n00b_display_dispatch_event(n00b_canvas_t      *canvas,
         }
         else {
             result.handled = false;
+        }
+
+        if (key == 'c' && (mods & N00B_MOD_CTRL) && !result.handled) {
+            result.handled     = true;
+            result.should_stop = true;
         }
 
         return result;

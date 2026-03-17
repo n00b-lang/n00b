@@ -23,10 +23,11 @@ Implemented widgets:
 - `grid`
 - `split`
 - `scroll`
+- `text`
 - `tabs`
 - `zstack`
 
-Representative widget tests live under `test/unit/test_{label,button,checkbox,input,switch,radio,list_widget,selectionlist,breadcrumb,link,grid,split,scroll,tabs,zstack}.c`.
+Representative widget tests live under `test/unit/test_{label,button,checkbox,input,switch,radio,list_widget,selectionlist,breadcrumb,link,grid,split,scroll,text,tabs,zstack}.c`.
 
 ## Runtime Integration Expectations
 
@@ -49,7 +50,7 @@ prototype widgets after treating `list` as represented by `list_widget`.
 
 ### Wave 1 - Foundation And Layout Unlock
 
-- `text`
+Wave 1 is complete in Athens: the production ports for `zstack`, `grid`, `split`, `scroll`, `tabs`, and `text` are all implemented.
 
 ### Wave 2 - Form And Shell Primitives
 

@@ -16,6 +16,8 @@
 #include "display/render/composite.h"
 #include "display/render/types.h"
 #include "display/widget.h"
+#include "text/strings/string_style.h"
+#include "text/strings/theme.h"
 #include "text/strings/text_style.h"
 #include "text/strings/string_ops.h"
 
@@ -426,6 +428,60 @@ test_canvas_widget_state_styling(void)
 }
 
 static void
+test_composite_honors_string_style_ranges(void)
+{
+    n00b_plane_t *plane = n00b_new_kargs(n00b_plane_t, plane);
+    n00b_plane_t *planes[] = { plane };
+    n00b_array_t(n00b_composite_entry_t) entries;
+    n00b_text_style_t default_style = {};
+    n00b_text_style_t base_style = {
+        .font_index = -1,
+        .fg_palette_ix = -1,
+        .bg_palette_ix = -1,
+        .fg_rgb = n00b_color_make(0x112233),
+    };
+    n00b_text_style_t selection_style = {
+        .font_index = -1,
+        .fg_palette_ix = N00B_PAL_SELECTION_FG,
+        .bg_palette_ix = N00B_PAL_SELECTION_BG,
+    };
+    n00b_string_t *text = n00b_string_from_cstr("AB");
+    n00b_rcell_t   frame[2] = {};
+
+    plane->width = 2;
+    plane->height = 1;
+
+    text = n00b_str_set_base_style(text, &base_style);
+    text = n00b_str_add_style(text,
+                              &selection_style,
+                              1,
+                              n00b_option_set(size_t, 2));
+    n00b_plane_draw_text(plane, 0, 0, text);
+
+    entries = n00b_composite_flatten(planes, 1, 1, 1);
+    n00b_composite_commands_to_grid(entries.data,
+                                    (n00b_isize_t)entries.len,
+                                    frame,
+                                    1,
+                                    2,
+                                    1,
+                                    1,
+                                    &default_style,
+                                    N00B_RCAP_UNICODE);
+
+    assert(frame[0].style != nullptr);
+    assert(frame[1].style != nullptr);
+    assert(frame[0].style->fg_rgb == base_style.fg_rgb);
+    assert(frame[0].style->bg_palette_ix == -1);
+    assert(frame[1].style->fg_palette_ix == N00B_PAL_SELECTION_FG);
+    assert(frame[1].style->bg_palette_ix == N00B_PAL_SELECTION_BG);
+
+    n00b_array_free(entries);
+    n00b_plane_destroy(plane);
+    printf("  [PASS] composite honors string style ranges\n");
+}
+
+static void
 test_canvas_nested_planes(void)
 {
     n00b_canvas_t *c = n00b_new_kargs(n00b_canvas_t, canvas, .vtable = &n00b_renderer_stream);
@@ -737,6 +793,7 @@ main(int argc, char **argv)
     test_canvas_refreshes_fallback_metrics_when_font_metrics_cap_absent();
     test_composite_flatten();
     test_canvas_widget_state_styling();
+    test_composite_honors_string_style_ranges();
     test_canvas_nested_planes();
     test_canvas_nested_z_order();
     test_canvas_child_clipping();

@@ -180,7 +180,7 @@ typedef struct n00b_render_size_t {
     n00b_isize_t cell_pixel_h;
 } n00b_render_size_t;
 
-#define N00B_RENDERER_ABI_VERSION 3
+#define N00B_RENDERER_ABI_VERSION 4
 
 // ====================================================================
 // Event types (from display/event.h)
@@ -328,6 +328,7 @@ typedef struct n00b_renderer_vtable_t {
                                        n00b_text_style_t            *default_style,
                                        n00b_render_cap_t             caps);
 
+    bool (*clipboard_copy)(void *ctx, const char *utf8, size_t len);
     void (*cursor_set_visible)(void *ctx, bool visible);
     void (*cursor_move)(void *ctx, n00b_isize_t row, n00b_isize_t col);
     void (*alt_screen_enter)(void *ctx);

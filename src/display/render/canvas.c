@@ -497,6 +497,23 @@ n00b_canvas_flush(n00b_canvas_t *c)
     }
 }
 
+bool
+n00b_canvas_clipboard_copy(n00b_canvas_t *c, n00b_string_t *text)
+{
+    if (!c || !text) {
+        return false;
+    }
+
+    if (!n00b_display_backend_copy_text(c,
+                                        text->data ? text->data : "",
+                                        (size_t)text->u8_bytes)) {
+        return false;
+    }
+
+    n00b_canvas_flush(c);
+    return true;
+}
+
 void
 n00b_canvas_alt_screen_enter(n00b_canvas_t *c)
 {

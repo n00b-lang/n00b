@@ -73,7 +73,7 @@ typedef struct n00b_render_size_t {
 // ABI version
 // ====================================================================
 
-#define N00B_RENDERER_ABI_VERSION 3
+#define N00B_RENDERER_ABI_VERSION 4
 
 // ====================================================================
 // Forward declarations
@@ -143,6 +143,7 @@ typedef struct n00b_renderer_vtable_t {
                                        n00b_render_cap_t             caps);
 
     // Optional.
+    bool (*clipboard_copy)(void *ctx, const char *utf8, size_t len);
     void (*cursor_set_visible)(void *ctx, bool visible);
     void (*cursor_move)(void *ctx, n00b_isize_t row, n00b_isize_t col);
     void (*alt_screen_enter)(void *ctx);
@@ -190,6 +191,9 @@ extern const n00b_renderer_vtable_t n00b_renderer_dumb;
 
 /** Buffer-capture backend for testing (no terminal output). */
 extern const n00b_renderer_vtable_t n00b_renderer_stream;
+
+/** Stream-backend clipboard helper for tests. */
+extern n00b_string_t *n00b_stream_backend_get_clipboard(void *ctx);
 
 #if defined(__APPLE__)
 /** Native Cocoa/macOS backend with Core Text rendering. */

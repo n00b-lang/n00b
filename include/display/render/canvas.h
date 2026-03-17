@@ -171,6 +171,14 @@ extern void n00b_canvas_resize(n00b_canvas_t *c,
 extern void n00b_canvas_flush(n00b_canvas_t *c);
 
 /**
+ * @brief Copy UTF-8 text through the active backend clipboard path.
+ * @param c    Canvas.
+ * @param text Text to copy.
+ * @return     true on successful backend copy.
+ */
+extern bool n00b_canvas_clipboard_copy(n00b_canvas_t *c, n00b_string_t *text);
+
+/**
  * @brief Enter alternate screen (if supported).
  * @param c Canvas.
  */

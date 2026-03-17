@@ -101,6 +101,18 @@ n00b_display_backend_poll_event(n00b_canvas_t *canvas,
     return canvas->vtable->poll_event(canvas->backend_ctx, timeout_ms, out);
 }
 
+bool
+n00b_display_backend_copy_text(n00b_canvas_t *canvas,
+                                const char    *utf8,
+                                size_t         len)
+{
+    if (!canvas || !canvas->vtable || !canvas->vtable->clipboard_copy || !utf8) {
+        return false;
+    }
+
+    return canvas->vtable->clipboard_copy(canvas->backend_ctx, utf8, len);
+}
+
 void
 n00b_display_backend_set_cursor_visible(n00b_canvas_t *canvas, bool visible)
 {

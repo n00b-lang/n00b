@@ -21,7 +21,9 @@
 #include "display/render/cell.h"
 #include "display/render/draw_cmd.h"
 #include "display/event.h"
+#include "text/strings/theme.h"
 #include "text/strings/text_style.h"
+#include "text/strings/string_style.h"
 #include "display/render/composite.h"
 #include "core/string.h"
 #include "internal/display/diagnostics.h"
@@ -732,23 +734,67 @@ typedef struct {
 } pixel_metrics_t;
 
 // Compare two cell styles for run-grouping purposes.
+static uint32_t style_bg_color(const n00b_text_style_t *style, uint32_t fallback);
+static uint32_t style_fg_color(const n00b_text_style_t *style, uint32_t fallback);
+
 static bool
 styles_match(const n00b_text_style_t *a, const n00b_text_style_t *b)
 {
+    uint32_t a_fg = 0;
+    uint32_t a_bg = 0;
+    uint32_t b_fg = 0;
+    uint32_t b_bg = 0;
+
     if (a == b) {
         return true;
     }
     if (!a || !b) {
         return false;
     }
-    return a->fg_rgb          == b->fg_rgb
-        && a->bg_rgb          == b->bg_rgb
+
+    a_fg = style_fg_color(a, 0);
+    a_bg = style_bg_color(a, 0);
+    b_fg = style_fg_color(b, 0);
+    b_bg = style_bg_color(b, 0);
+
+    return a_fg              == b_fg
+        && a_bg              == b_bg
         && a->bold           == b->bold
         && a->italic         == b->italic
         && a->underline      == b->underline
+        && a->double_underline == b->double_underline
         && a->strikethrough  == b->strikethrough
+        && a->reverse        == b->reverse
+        && a->dim            == b->dim
         && a->font_hint      == b->font_hint
         && a->font_size      == b->font_size;
+}
+
+static bool
+style_resolve_color(const n00b_text_style_t *style, bool foreground, uint32_t *out)
+{
+    if (!style || !out) {
+        return false;
+    }
+
+    n00b_color_t rgb = foreground ? style->fg_rgb : style->bg_rgb;
+    int8_t       ix  = foreground ? style->fg_palette_ix : style->bg_palette_ix;
+
+    if (n00b_color_is_set(rgb)) {
+        *out = (uint32_t)n00b_color_rgb(rgb);
+        return true;
+    }
+
+    if (ix >= 0 && ix < N00B_PAL_SIZE) {
+        n00b_color_t resolved = n00b_theme_resolve_color(ix);
+
+        if (n00b_color_is_set(resolved)) {
+            *out = (uint32_t)n00b_color_rgb(resolved);
+            return true;
+        }
+    }
+
+    return false;
 }
 
 // Extract style properties into local variables.
@@ -766,12 +812,8 @@ extract_style(const n00b_text_style_t *style,
     *font_size = 0;
 
     if (style) {
-        if (n00b_color_is_set(style->fg_rgb)) {
-            *fg = (uint32_t)n00b_color_rgb(style->fg_rgb);
-        }
-        if (n00b_color_is_set(style->bg_rgb)) {
-            *bg = (uint32_t)n00b_color_rgb(style->bg_rgb);
-        }
+        (void)style_resolve_color(style, true, fg);
+        (void)style_resolve_color(style, false, bg);
         *bold      = (style->bold == N00B_TRI_YES);
         *uline     = (style->underline == N00B_TRI_YES);
         *strike    = (style->strikethrough == N00B_TRI_YES);
@@ -877,8 +919,10 @@ fit_face_pixel_size(FT_Face face,
 static uint32_t
 style_bg_color(const n00b_text_style_t *style, uint32_t fallback)
 {
-    if (style && n00b_color_is_set(style->bg_rgb)) {
-        return (uint32_t)n00b_color_rgb(style->bg_rgb);
+    uint32_t resolved = fallback;
+
+    if (style_resolve_color(style, false, &resolved)) {
+        return resolved;
     }
     return fallback;
 }
@@ -886,10 +930,73 @@ style_bg_color(const n00b_text_style_t *style, uint32_t fallback)
 static uint32_t
 style_fg_color(const n00b_text_style_t *style, uint32_t fallback)
 {
-    if (style && n00b_color_is_set(style->fg_rgb)) {
-        return (uint32_t)n00b_color_rgb(style->fg_rgb);
+    uint32_t resolved = fallback;
+
+    if (style_resolve_color(style, true, &resolved)) {
+        return resolved;
     }
     return fallback;
+}
+
+static size_t
+text_next_style_boundary(n00b_string_t *text, size_t byte_pos)
+{
+    size_t boundary;
+
+    if (!text) {
+        return 0;
+    }
+
+    boundary = text->u8_bytes;
+
+    auto info_opt = n00b_str_get_style_info(text);
+    if (!n00b_option_is_set(info_opt)) {
+        return boundary;
+    }
+
+    n00b_string_style_info_t *info = n00b_option_get(info_opt);
+
+    for (int64_t i = 0; i < info->num_styles; i++) {
+        n00b_style_record_t *rec = &info->styles[i];
+
+        if (rec->start > byte_pos && rec->start < boundary) {
+            boundary = rec->start;
+        }
+
+        if (n00b_option_is_set(rec->end)) {
+            size_t end = n00b_option_get(rec->end);
+
+            if (end > byte_pos && end < boundary) {
+                boundary = end;
+            }
+        }
+    }
+
+    return boundary;
+}
+
+static n00b_text_style_t *
+text_resolve_effective_style(n00b_string_t      *text,
+                             n00b_text_style_t  *fallback_style,
+                             size_t              byte_pos)
+{
+    auto info_opt = n00b_str_get_style_info(text);
+
+    if (!n00b_option_is_set(info_opt)) {
+        return fallback_style;
+    }
+
+    n00b_text_style_t *resolved = n00b_str_resolve_style_at(text, byte_pos);
+    n00b_text_style_t *merged;
+
+    if (!fallback_style) {
+        return resolved;
+    }
+
+    merged = n00b_str_style_merge(fallback_style, resolved);
+    n00b_free(resolved);
+
+    return merged;
 }
 
 // Fill a rectangle in an RGBA buffer with a solid color.
@@ -1244,88 +1351,117 @@ nc_render_entry(nc_ctx_t                     *ctx,
         switch (cmd->type) {
         case N00B_DRAW_TEXT: {
             n00b_string_t *text = cmd->text.text;
+            bool           has_string_style;
+            size_t         run_start = 0;
+            int            run_px;
             if (!text || text->u8_bytes == 0) {
                 break;
             }
 
-            const n00b_text_style_t *run_style = cmd->text.style
-                                                    ? cmd->text.style
-                                                    : info.text_style;
+            n00b_text_style_t *base_style = cmd->text.style
+                                              ? cmd->text.style
+                                              : info.text_style;
+            has_string_style = n00b_option_is_set(n00b_str_get_style_info(text));
 
             // Pixel position within the RGBA buffer.
             // Draw commands are already in pixel coordinates.
             int px = content_ox + cmd->text.x - plane->scroll_x;
             int py = content_oy + cmd->text.y - plane->scroll_y;
+            run_px = px;
 
-            // Fill text background.
-            uint32_t text_bg = style_bg_color(run_style,
-                                   style_bg_color(info.text_style, fill_bg));
-            // We'll use the rendered text box dimensions for the bg fill
-            // after rendering, since we don't know the exact width yet.
+            while (run_start < text->u8_bytes) {
+                size_t run_end = has_string_style
+                                   ? text_next_style_boundary(text, run_start)
+                                   : text->u8_bytes;
+                n00b_text_style_t *run_style = has_string_style
+                                                 ? text_resolve_effective_style(text,
+                                                                                base_style,
+                                                                                run_start)
+                                                 : base_style;
+                n00b_string_t *run_text = run_start == 0 && run_end == text->u8_bytes
+                                            ? text
+                                            : n00b_string_from_raw(text->data + run_start,
+                                                                   (int64_t)(run_end - run_start));
+                uint32_t text_bg = style_bg_color(run_style,
+                                       style_bg_color(info.text_style, fill_bg));
+                uint32_t fg, bg;
+                bool     is_bold, is_uline, is_strike;
+                uint8_t  hint;
+                int16_t  font_size;
 
-            // Extract style attributes.
-            uint32_t fg, bg;
-            bool     is_bold, is_uline, is_strike;
-            uint8_t  hint;
-            int16_t  font_size;
-            extract_style(run_style, &fg, &bg, &is_bold,
-                           &is_uline, &is_strike, &hint, &font_size);
-
-            FT_Face face = resolve_style_face(ctx, hint);
-
-            int target_h = style_pixel_height(ctx, font_size);
-            int max_h = pm->pixel_h * 4;
-            if (target_h > max_h) {
-                target_h = max_h;
-            }
-
-            int ascent_px = target_h;
-            int descent_px = 0;
-            int line_h_px = target_h;
-            int render_ph = fit_face_pixel_size(face,
-                                                target_h,
-                                                &ascent_px,
-                                                &descent_px,
-                                                &line_h_px);
-
-            int box_w = 0, box_h = 0;
-            uint8_t *box = ft_render_text(ctx, face, text->data, render_ph,
-                                           fg, text_bg, is_bold, &box_w, &box_h);
-            if (!box) {
-                break;
-            }
-
-            // Vertically center within the style's effective line height.
-            int draw_h = line_h_px > 0 ? line_h_px : cph;
-            int y_off = (draw_h > box_h) ? (draw_h - box_h) / 2 : 0;
-
-            // Fill background behind the text area.
-            if (box_w > 0 && draw_h > 0 && px >= 0 && py >= 0) {
-                rgba_fill_rect(rgba, outer_w, outer_h, px, py, box_w, draw_h, text_bg);
-            }
-
-            rgba_blit(rgba, outer_w, box, box_w, box_h,
-                      px, py + y_off, outer_w, outer_h);
-            free(box);
-
-            // Decorations.
-            if (is_uline || is_strike) {
-                int dec_end = px + box_w;
-                if (dec_end > outer_w) dec_end = outer_w;
-
-                uint8_t fg_r = (fg >> 16) & 0xFF;
-                uint8_t fg_g = (fg >> 8) & 0xFF;
-                uint8_t fg_b = fg & 0xFF;
-
-                if (is_uline) {
-                    ft_draw_hline(rgba, outer_w, outer_h,
-                                  py + draw_h - 2,
-                                  px, dec_end, fg_r, fg_g, fg_b);
+                if (run_end <= run_start) {
+                    break;
                 }
-                if (is_strike) {
-                    ft_draw_hline(rgba, outer_w, outer_h,
-                                  py + draw_h / 2,
-                                  px, dec_end, fg_r, fg_g, fg_b);
+
+                extract_style(run_style, &fg, &bg, &is_bold,
+                               &is_uline, &is_strike, &hint, &font_size);
+
+                FT_Face face = resolve_style_face(ctx, hint);
+
+                int target_h = style_pixel_height(ctx, font_size);
+                int max_h = pm->pixel_h * 4;
+                if (target_h > max_h) {
+                    target_h = max_h;
+                }
+
+                int ascent_px = target_h;
+                int descent_px = 0;
+                int line_h_px = target_h;
+                int render_ph = fit_face_pixel_size(face,
+                                                    target_h,
+                                                    &ascent_px,
+                                                    &descent_px,
+                                                    &line_h_px);
+
+                int box_w = 0, box_h = 0;
+                uint8_t *box = ft_render_text(ctx, face, run_text->data, render_ph,
+                                               fg, text_bg, is_bold, &box_w, &box_h);
+                if (!box) {
+                    if (has_string_style) {
+                        n00b_free(run_style);
+                    }
+                    break;
+                }
+
+                // Vertically center within the style's effective line height.
+                int draw_h = line_h_px > 0 ? line_h_px : cph;
+                int y_off = (draw_h > box_h) ? (draw_h - box_h) / 2 : 0;
+
+                // Fill background behind the text area.
+                if (box_w > 0 && draw_h > 0 && run_px >= 0 && py >= 0) {
+                    rgba_fill_rect(rgba, outer_w, outer_h,
+                                   run_px, py, box_w, draw_h, text_bg);
+                }
+
+                rgba_blit(rgba, outer_w, box, box_w, box_h,
+                          run_px, py + y_off, outer_w, outer_h);
+                free(box);
+
+                if (is_uline || is_strike) {
+                    int dec_end = run_px + box_w;
+                    if (dec_end > outer_w) dec_end = outer_w;
+
+                    uint8_t fg_r = (fg >> 16) & 0xFF;
+                    uint8_t fg_g = (fg >> 8) & 0xFF;
+                    uint8_t fg_b = fg & 0xFF;
+
+                    if (is_uline) {
+                        ft_draw_hline(rgba, outer_w, outer_h,
+                                      py + draw_h - 2,
+                                      run_px, dec_end, fg_r, fg_g, fg_b);
+                    }
+                    if (is_strike) {
+                        ft_draw_hline(rgba, outer_w, outer_h,
+                                      py + draw_h / 2,
+                                      run_px, dec_end, fg_r, fg_g, fg_b);
+                    }
+                }
+
+                run_px += box_w;
+                run_start = run_end;
+
+                if (has_string_style) {
+                    n00b_free(run_style);
                 }
             }
             break;
@@ -1743,7 +1879,7 @@ nc_destroy(void *vctx)
     }
 
     if (ctx->comp_grid) {
-        free(ctx->comp_grid);
+        n00b_free(ctx->comp_grid);
         ctx->comp_grid = nullptr;
     }
 
@@ -1849,13 +1985,14 @@ nc_style_to_notcurses(const n00b_text_style_t *style,
     ncchannels_set_bg_alpha(&channels, NCALPHA_OPAQUE);
 
     if (style) {
-        if (n00b_color_is_set(style->fg_rgb)) {
-            ncchannels_set_fg_rgb(&channels,
-                                  (unsigned)n00b_color_rgb(style->fg_rgb));
+        uint32_t fg = 0;
+        uint32_t bg = 0;
+
+        if (style_resolve_color(style, true, &fg)) {
+            ncchannels_set_fg_rgb(&channels, fg);
         }
-        if (n00b_color_is_set(style->bg_rgb)) {
-            ncchannels_set_bg_rgb(&channels,
-                                  (unsigned)n00b_color_rgb(style->bg_rgb));
+        if (style_resolve_color(style, false, &bg)) {
+            ncchannels_set_bg_rgb(&channels, bg);
         }
         if (style->bold == N00B_TRI_YES) {
             styles |= NCSTYLE_BOLD;
@@ -2106,10 +2243,10 @@ nc_render_planes(void                         *vctx,
         if (cell_rows != ctx->comp_grid_rows
             || cell_cols != ctx->comp_grid_cols) {
             size_t total = (size_t)cell_rows * (size_t)cell_cols;
-            n00b_rcell_t *new_grid =
-                realloc(ctx->comp_grid, total * sizeof(n00b_rcell_t));
-            if (!new_grid) {
-                return;
+            n00b_rcell_t *new_grid = n00b_alloc_array(n00b_rcell_t, total);
+
+            if (ctx->comp_grid) {
+                n00b_free(ctx->comp_grid);
             }
             ctx->comp_grid      = new_grid;
             ctx->comp_grid_rows = cell_rows;

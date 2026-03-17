@@ -122,6 +122,15 @@ dumb_flush(void *vctx)
     (void)vctx;
 }
 
+static bool
+dumb_clipboard_copy(void *vctx, const char *utf8, size_t len)
+{
+    (void)vctx;
+    (void)utf8;
+    (void)len;
+    return false;
+}
+
 // -------------------------------------------------------------------
 // Plane-based rendering
 // -------------------------------------------------------------------
@@ -143,9 +152,7 @@ dumb_render_planes(void                         *vctx,
             n00b_free(ctx->comp_grid);
         }
         size_t total = (size_t)total_rows * total_cols;
-        ctx->comp_grid = n00b_alloc_array_with_opts(
-            n00b_rcell_t, total,
-            &(n00b_alloc_opts_t){.no_scan = true});
+        ctx->comp_grid = n00b_alloc_array(n00b_rcell_t, total);
         ctx->comp_grid_rows = total_rows;
         ctx->comp_grid_cols = total_cols;
     }
@@ -172,4 +179,5 @@ const n00b_renderer_vtable_t n00b_renderer_dumb = {
     .render_frame  = dumb_render_frame,
     .flush         = dumb_flush,
     .render_planes = dumb_render_planes,
+    .clipboard_copy = dumb_clipboard_copy,
 };

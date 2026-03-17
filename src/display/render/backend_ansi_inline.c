@@ -40,6 +40,9 @@ typedef struct {
 
 #define INLINE_INITIAL_BUF 16384
 
+static const char inline_base64[] =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
 // -------------------------------------------------------------------
 // Output buffer helpers
 // -------------------------------------------------------------------
@@ -73,6 +76,40 @@ static void
 inline_emit_str(ansi_inline_ctx_t *ctx, const char *str)
 {
     inline_emit(ctx, str, strlen(str));
+}
+
+static void
+inline_emit_base64(ansi_inline_ctx_t *ctx, const uint8_t *data, size_t len)
+{
+    size_t i;
+
+    for (i = 0; i + 3 <= len; i += 3) {
+        char chunk[4];
+        uint32_t block = ((uint32_t)data[i] << 16)
+                       | ((uint32_t)data[i + 1] << 8)
+                       | (uint32_t)data[i + 2];
+
+        chunk[0] = inline_base64[(block >> 18) & 0x3f];
+        chunk[1] = inline_base64[(block >> 12) & 0x3f];
+        chunk[2] = inline_base64[(block >> 6) & 0x3f];
+        chunk[3] = inline_base64[block & 0x3f];
+        inline_emit(ctx, chunk, sizeof(chunk));
+    }
+
+    if (i < len) {
+        char chunk[4];
+        uint32_t block = (uint32_t)data[i] << 16;
+
+        if (i + 1 < len) {
+            block |= (uint32_t)data[i + 1] << 8;
+        }
+
+        chunk[0] = inline_base64[(block >> 18) & 0x3f];
+        chunk[1] = inline_base64[(block >> 12) & 0x3f];
+        chunk[2] = (i + 1 < len) ? inline_base64[(block >> 6) & 0x3f] : '=';
+        chunk[3] = '=';
+        inline_emit(ctx, chunk, sizeof(chunk));
+    }
 }
 
 static void
@@ -232,6 +269,21 @@ ansi_inline_flush(void *vctx)
     ctx->buf_used = 0;
 }
 
+static bool
+ansi_inline_clipboard_copy(void *vctx, const char *utf8, size_t len)
+{
+    ansi_inline_ctx_t *ctx = vctx;
+
+    if (!ctx || !utf8) {
+        return false;
+    }
+
+    inline_emit_str(ctx, "\033]52;c;");
+    inline_emit_base64(ctx, (const uint8_t *)utf8, len);
+    inline_emit_str(ctx, "\a");
+    return true;
+}
+
 // -------------------------------------------------------------------
 // Plane-based rendering
 // -------------------------------------------------------------------
@@ -253,9 +305,7 @@ ansi_inline_render_planes(void                         *vctx,
             n00b_free(ctx->comp_grid);
         }
         size_t total = (size_t)total_rows * total_cols;
-        ctx->comp_grid = n00b_alloc_array_with_opts(
-            n00b_rcell_t, total,
-            &(n00b_alloc_opts_t){.no_scan = true});
+        ctx->comp_grid = n00b_alloc_array(n00b_rcell_t, total);
         ctx->comp_grid_rows = total_rows;
         ctx->comp_grid_cols = total_cols;
     }
@@ -299,4 +349,5 @@ const n00b_renderer_vtable_t n00b_renderer_ansi_inline = {
     .render_frame  = ansi_inline_render_frame,
     .flush         = ansi_inline_flush,
     .render_planes = ansi_inline_render_planes,
+    .clipboard_copy = ansi_inline_clipboard_copy,
 };

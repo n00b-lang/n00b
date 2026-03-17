@@ -10,6 +10,7 @@
 #include "display/render/box.h"
 #include "display/widgets/zstack.h"
 #include "internal/display/plane_geometry.h"
+#include "text/strings/string_style.h"
 #include "text/unicode/properties.h"
 
 // -------------------------------------------------------------------
@@ -120,6 +121,67 @@ imax32(int32_t a, int32_t b) { return a > b ? a : b; }
 
 static inline int32_t
 imin32(int32_t a, int32_t b) { return a < b ? a : b; }
+
+static size_t
+text_next_style_boundary(n00b_string_t *text, size_t byte_pos)
+{
+    size_t boundary;
+
+    if (!text) {
+        return 0;
+    }
+
+    boundary = text->u8_bytes;
+
+    auto info_opt = n00b_str_get_style_info(text);
+    if (!n00b_option_is_set(info_opt)) {
+        return boundary;
+    }
+
+    n00b_string_style_info_t *info = n00b_option_get(info_opt);
+
+    for (int64_t i = 0; i < info->num_styles; i++) {
+        n00b_style_record_t *rec = &info->styles[i];
+
+        if (rec->start > byte_pos && rec->start < boundary) {
+            boundary = rec->start;
+        }
+
+        if (n00b_option_is_set(rec->end)) {
+            size_t end = n00b_option_get(rec->end);
+
+            if (end > byte_pos && end < boundary) {
+                boundary = end;
+            }
+        }
+    }
+
+    return boundary;
+}
+
+static n00b_text_style_t *
+text_resolve_effective_style(n00b_string_t      *text,
+                             n00b_text_style_t  *fallback_style,
+                             size_t              byte_pos)
+{
+    auto info_opt = n00b_str_get_style_info(text);
+
+    if (!n00b_option_is_set(info_opt)) {
+        return fallback_style;
+    }
+
+    n00b_text_style_t *resolved = n00b_str_resolve_style_at(text, byte_pos);
+    n00b_text_style_t *merged;
+
+    if (!fallback_style) {
+        return resolved;
+    }
+
+    merged = n00b_str_style_merge(fallback_style, resolved);
+    n00b_free(resolved);
+
+    return merged;
+}
 
 static inline int32_t
 floor_div_i32(int32_t v, int32_t d)
@@ -729,6 +791,9 @@ n00b_composite_commands_to_grid(const n00b_composite_entry_t *entries,
             switch (cmd->type) {
             case N00B_DRAW_TEXT: {
                 n00b_string_t *text = cmd->text.text;
+                size_t         byte_pos = 0;
+                size_t         run_end = 0;
+                bool           has_string_style;
                 if (!text || text->u8_bytes == 0) {
                     break;
                 }
@@ -736,6 +801,15 @@ n00b_composite_commands_to_grid(const n00b_composite_entry_t *entries,
                 n00b_text_style_t *style = cmd->text.style
                                              ? cmd->text.style
                                              : info.text_style;
+                has_string_style = n00b_option_is_set(n00b_str_get_style_info(text));
+                run_end = has_string_style
+                              ? text_next_style_boundary(text, 0)
+                              : text->u8_bytes;
+                n00b_text_style_t *run_style = has_string_style
+                                                   ? text_resolve_effective_style(text,
+                                                                                  style,
+                                                                                  0)
+                                                   : style;
 
                 // Draw commands are in pixels; for cell backends
                 // cell_px_w == cell_px_h == 1, so pixel == cell.
@@ -761,17 +835,25 @@ n00b_composite_commands_to_grid(const n00b_composite_entry_t *entries,
                         break;
                     }
 
+                    if (has_string_style && byte_pos >= run_end) {
+                        run_end   = text_next_style_boundary(text, byte_pos);
+                        run_style = text_resolve_effective_style(text,
+                                                                 style,
+                                                                 byte_pos);
+                    }
+
                     int cp_width = n00b_unicode_char_width(cp);
 
                     write_cp_to_grid(frame, cell_cols, cell_rows,
                                      col_cursor, base_row,
-                                     cp, cp_width, style,
+                                     cp, cp_width, run_style,
                                      clip_cell_y, clip_cell_b,
                                      clip_cell_x, clip_cell_r);
 
                     col_cursor += cp_width > 0 ? cp_width : 1;
                     bytes      += cp_len;
                     remaining  -= cp_len;
+                    byte_pos   += cp_len;
                 }
                 break;
             }

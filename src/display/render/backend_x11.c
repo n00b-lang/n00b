@@ -23,6 +23,7 @@
 #include "display/render/backend.h"
 #include "display/render/composite.h"
 #include "internal/display/x11_backend_contracts.h"
+#include "text/strings/theme.h"
 
 #define X11_DEFAULT_COLS 80
 #define X11_DEFAULT_ROWS 25
@@ -444,6 +445,15 @@ x11_style_fg_rgb(const n00b_text_style_t *style)
     if (style && n00b_color_is_set(style->fg_rgb)) {
         return (uint32_t)n00b_color_rgb(style->fg_rgb);
     }
+    if (style
+        && style->fg_palette_ix >= 0
+        && style->fg_palette_ix < N00B_PAL_SIZE) {
+        n00b_color_t resolved = n00b_theme_resolve_color(style->fg_palette_ix);
+
+        if (n00b_color_is_set(resolved)) {
+            return (uint32_t)n00b_color_rgb(resolved);
+        }
+    }
     return 0xFFFFFFu;
 }
 
@@ -452,6 +462,15 @@ x11_style_bg_rgb(const n00b_text_style_t *style)
 {
     if (style && n00b_color_is_set(style->bg_rgb)) {
         return (uint32_t)n00b_color_rgb(style->bg_rgb);
+    }
+    if (style
+        && style->bg_palette_ix >= 0
+        && style->bg_palette_ix < N00B_PAL_SIZE) {
+        n00b_color_t resolved = n00b_theme_resolve_color(style->bg_palette_ix);
+
+        if (n00b_color_is_set(resolved)) {
+            return (uint32_t)n00b_color_rgb(resolved);
+        }
     }
     return 0x000000u;
 }
@@ -587,7 +606,7 @@ x11_destroy(void *vctx)
     }
 
     if (ctx->comp_grid) {
-        free(ctx->comp_grid);
+        n00b_free(ctx->comp_grid);
     }
 
     if (ctx->dpy) {
@@ -765,9 +784,12 @@ x11_render_planes(void                         *vctx,
     }
 
     if (cell_rows != ctx->comp_grid_rows || cell_cols != ctx->comp_grid_cols) {
-        free(ctx->comp_grid);
-        ctx->comp_grid = calloc((size_t)cell_rows * (size_t)cell_cols,
-                                sizeof(n00b_rcell_t));
+        size_t total = (size_t)cell_rows * (size_t)cell_cols;
+
+        if (ctx->comp_grid) {
+            n00b_free(ctx->comp_grid);
+        }
+        ctx->comp_grid = n00b_alloc_array(n00b_rcell_t, total);
         ctx->comp_grid_rows = cell_rows;
         ctx->comp_grid_cols = cell_cols;
     }

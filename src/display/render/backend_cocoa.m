@@ -1170,7 +1170,7 @@ cocoa_destroy(void *vctx)
 
     // Free staging buffer.
     if (ctx->staging) {
-        free(ctx->staging);
+        n00b_free(ctx->staging);
         ctx->staging = NULL;
     }
 
@@ -1250,8 +1250,10 @@ cocoa_render_frame(void         *vctx,
 
     // Reallocate staging if dimensions changed.
     if (ctx->staging_rows != rows || ctx->staging_cols != cols) {
-        free(ctx->staging);
-        ctx->staging = malloc(bytes);
+        if (ctx->staging) {
+            n00b_free(ctx->staging);
+        }
+        ctx->staging = n00b_alloc_array(n00b_rcell_t, total);
         ctx->staging_rows = rows;
         ctx->staging_cols = cols;
     }
@@ -1598,8 +1600,10 @@ cocoa_render_planes(void                         *vctx,
     // Use the staging buffer directly as our compositing target.
     // Reallocate if size changed.
     if (ctx->staging_rows != cell_rows || ctx->staging_cols != cell_cols) {
-        free(ctx->staging);
-        ctx->staging      = calloc(total, sizeof(n00b_rcell_t));
+        if (ctx->staging) {
+            n00b_free(ctx->staging);
+        }
+        ctx->staging      = n00b_alloc_array(n00b_rcell_t, total);
         ctx->staging_rows = cell_rows;
         ctx->staging_cols = cell_cols;
     }

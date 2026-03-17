@@ -27,6 +27,8 @@ typedef struct {
     char        *buffer;
     size_t       buf_size;
     size_t       buf_used;
+    char        *clipboard;
+    size_t       clipboard_len;
     n00b_isize_t rows;
     n00b_isize_t cols;
 
@@ -64,6 +66,9 @@ stream_destroy(void *vctx)
     if (ctx) {
         if (ctx->comp_grid) {
             n00b_free(ctx->comp_grid);
+        }
+        if (ctx->clipboard) {
+            n00b_free(ctx->clipboard);
         }
         n00b_free(ctx->buffer);
         n00b_free(ctx);
@@ -167,6 +172,33 @@ stream_flush(void *vctx)
     // Nothing to flush for buffer mode.
 }
 
+static bool
+stream_clipboard_copy(void *vctx, const char *utf8, size_t len)
+{
+    stream_ctx_t *ctx = vctx;
+    char         *copy;
+
+    if (!ctx || !utf8) {
+        return false;
+    }
+
+    copy = n00b_alloc_array_with_opts(char,
+                                      len + 1,
+                                      &(n00b_alloc_opts_t){.no_scan = true});
+    if (len > 0) {
+        memcpy(copy, utf8, len);
+    }
+    copy[len] = '\0';
+
+    if (ctx->clipboard) {
+        n00b_free(ctx->clipboard);
+    }
+
+    ctx->clipboard     = copy;
+    ctx->clipboard_len = len;
+    return true;
+}
+
 // -------------------------------------------------------------------
 // Plane-based rendering
 // -------------------------------------------------------------------
@@ -188,9 +220,7 @@ stream_render_planes(void                         *vctx,
             n00b_free(ctx->comp_grid);
         }
         size_t total = (size_t)total_rows * total_cols;
-        ctx->comp_grid = n00b_alloc_array_with_opts(
-            n00b_rcell_t, total,
-            &(n00b_alloc_opts_t){.no_scan = true});
+        ctx->comp_grid = n00b_alloc_array(n00b_rcell_t, total);
         ctx->comp_grid_rows = total_rows;
         ctx->comp_grid_cols = total_cols;
     }
@@ -218,6 +248,7 @@ const n00b_renderer_vtable_t n00b_renderer_stream = {
     .render_frame  = stream_render_frame,
     .flush         = stream_flush,
     .render_planes = stream_render_planes,
+    .clipboard_copy = stream_clipboard_copy,
 };
 
 // -------------------------------------------------------------------
@@ -231,6 +262,21 @@ n00b_stream_backend_get_buffer(void *ctx)
     return n00b_string_from_raw(sctx->buffer, (int64_t)sctx->buf_used);
 }
 
+n00b_string_t *
+n00b_stream_backend_get_clipboard(void *ctx)
+{
+    stream_ctx_t *sctx = ctx;
+
+    if (!sctx || !sctx->clipboard) {
+        return nullptr;
+    }
+
+    return n00b_string_from_raw(sctx->clipboard, (int64_t)sctx->clipboard_len);
+}
+
+/*
+ * Get the byte count of the stream backend's buffer.
+ */
 size_t
 n00b_stream_backend_get_length(void *ctx)
 {

@@ -53,6 +53,7 @@
 #include "display/widgets/split.h"
 #include "display/widgets/scroll.h"
 #include "display/widgets/tabs.h"
+#include "display/widgets/text.h"
 #include "display/widgets/zstack.h"
 #include "display/widgets/switch.h"
 #include "display/widgets/radio.h"
@@ -1273,6 +1274,130 @@ demo_scroll(n00b_canvas_t *canvas)
 }
 
 // ====================================================================
+// Text demo
+// ====================================================================
+
+static void
+demo_text(n00b_canvas_t *canvas)
+{
+    int32_t              cpw = (int32_t)canvas->cell_px_w;
+    int32_t              cph = (int32_t)canvas->cell_px_h;
+    int32_t              frame_w = (int32_t)canvas->frame_cols;
+    int32_t              frame_h = (int32_t)canvas->frame_rows;
+    int32_t              content_w = frame_w - 4 * cpw;
+    int32_t              gap_px = cph > 0 ? cph : 1;
+    int32_t              scroll_thickness = cpw > 0 ? cpw : 1;
+    n00b_text_style_t   *title_style;
+    n00b_text_style_t   *note_style;
+    n00b_text_style_t   *body_style;
+    n00b_text_style_t   *accent_style;
+    n00b_text_style_t   *scroll_fill_style;
+    n00b_box_props_t    *scroll_box;
+    n00b_state_style_t  *focus_state;
+    n00b_plane_t        *root;
+    n00b_plane_t        *title;
+    n00b_plane_t        *instructions;
+    n00b_plane_t        *text;
+    n00b_plane_t        *scroll;
+    n00b_string_t       *body;
+    n00b_string_t       *needle;
+    n00b_option_t(int32_t) highlight_at;
+
+    dbg("\n=== demo_text start ===\n");
+
+    if (content_w < 1) {
+        content_w = 1;
+    }
+
+    title_style = make_style(N00B_TRI_YES, N00B_TRI_NO, 0x7A3E00);
+    note_style = make_style(N00B_TRI_NO, N00B_TRI_NO, 0x5F6B73);
+    body_style = make_style(N00B_TRI_NO, N00B_TRI_NO, 0x3E4C59);
+    accent_style = make_style(N00B_TRI_YES, N00B_TRI_NO, 0x0B7285);
+    scroll_fill_style = n00b_alloc(n00b_text_style_t);
+    scroll_fill_style->bg_rgb = n00b_color_make(0xF6F0E8);
+
+    scroll_box = n00b_box_props_new(
+        .theme        = &n00b_border_rounded,
+        .border_style = make_style(N00B_TRI_NO, N00B_TRI_NO, 0x7A3E00),
+        .fill_style   = scroll_fill_style,
+        .pad_top      = 1,
+        .pad_right    = 1,
+        .pad_bottom   = 1,
+        .pad_left     = 1);
+    focus_state = n00b_alloc(n00b_state_style_t);
+    focus_state->border_style = make_style(N00B_TRI_YES, N00B_TRI_NO, 0x0B7285);
+    scroll_box->state_styles[N00B_WSTATE_FOCUSED] = focus_state;
+
+    root = n00b_box_new(.canvas     = canvas,
+                        .direction  = N00B_FLEX_COLUMN,
+                        .gap        = gap_px,
+                        .pad_top    = 2 * cph,
+                        .pad_right  = 2 * cpw,
+                        .pad_bottom = 2 * cph,
+                        .pad_left   = 2 * cpw);
+    root->width  = frame_w;
+    root->height = frame_h;
+    n00b_canvas_add_plane(canvas, root);
+
+    title = n00b_label_new(
+        n00b_str_set_base_style(n00b_string_from_cstr("Text Widget Demo"), title_style),
+        .canvas = canvas,
+        .width = content_w);
+    n00b_plane_add_child(root, title, 0, 0);
+
+    instructions = n00b_label_new(
+        n00b_str_set_base_style(
+            n00b_string_from_cstr(
+                "Drag-select inside the article, then press Ctrl+C. With an active selection the demo keeps running and copies text; with no selection Ctrl+C still exits."),
+            note_style),
+        .canvas = canvas,
+        .width = content_w,
+        .wrap = true,
+        .height = 3 * cph);
+    n00b_plane_add_child(root, instructions, 0, 0);
+
+    body = n00b_string_from_cstr(
+        "Athens finally has a production text widget for long-form notes, release logs, and help pages.\n\n"
+        "This paragraph includes a styled phrase so the selection overlay has to merge with rich text instead of repainting plain output.\n\n"
+        "Drag-select across wrapped lines, scroll a bit, and then copy the current visual slice. Hanging indent keeps continuation lines readable in narrow layouts.\n\n"
+        "A scroll container wraps the article so the demo still behaves like real help panels, changelogs, and tab content instead of a one-off static label.\n\n"
+        "Wave 1 is complete once this scene can highlight, copy, and keep the event loop alive while selected text is being copied.");
+    body = n00b_str_set_base_style(body, body_style);
+    needle = n00b_string_from_cstr("styled phrase");
+    highlight_at = n00b_unicode_str_find(body, needle, .normalize = false);
+    if (n00b_option_is_set(highlight_at)) {
+        int32_t start = n00b_option_get(highlight_at);
+        body = n00b_str_add_style(body,
+                                  accent_style,
+                                  (size_t)start,
+                                  n00b_option_set(size_t, (size_t)(start + needle->u8_bytes)));
+    }
+
+    text = n00b_text_new(body,
+                         .canvas = canvas,
+                         .wrap = true,
+                         .selectable = true,
+                         .copy_on_release = true,
+                         .hang_indent_cols = 2);
+    scroll = n00b_scroll_new(text,
+                             .axes = N00B_SCROLL_AXIS_VERTICAL,
+                             .scrollbar_mode = N00B_SCROLLBAR_AUTO,
+                             .scroll_step_lines = 3,
+                             .scrollbar_thickness_px = scroll_thickness,
+                             .canvas = canvas);
+    scroll->flex.grow   = 1.0f;
+    scroll->flex.shrink = 1.0f;
+    scroll->flex.basis  = 1;
+    n00b_plane_set_box(scroll, scroll_box);
+    n00b_plane_add_child(root, scroll, 0, 0);
+
+    dbg_plane("text-root", root);
+    dbg_plane("text-widget", text);
+    dbg_plane("text-scroll", scroll);
+    dbg("=== demo_text end ===\n\n");
+}
+
+// ====================================================================
 // Tabs demo
 // ====================================================================
 
@@ -2133,6 +2258,10 @@ main(int argc, char **argv)
     }
     else if (strcmp(widget_name, "scroll") == 0) {
         demo_scroll(canvas);
+        use_event_loop = true;
+    }
+    else if (strcmp(widget_name, "text") == 0) {
+        demo_text(canvas);
         use_event_loop = true;
     }
     else if (strcmp(widget_name, "tabs") == 0) {

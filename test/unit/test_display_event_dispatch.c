@@ -66,7 +66,7 @@ test_event_dispatch_contracts(void)
     root->height = 6;
 
     widget_state_t s1 = {.consume = true};
-    widget_state_t s2 = {.consume = true};
+    widget_state_t s2 = {.consume = false};
 
     n00b_plane_t *p1 = n00b_new_kargs(n00b_plane_t, plane);
     p1->width        = 8;
@@ -112,6 +112,15 @@ test_event_dispatch_contracts(void)
     assert(r.handled);
     assert(s1.key_events == 1);
 
+    n00b_event_t ctrl_c = {
+        .type = N00B_EVENT_KEY,
+        .key = {.key = 'c', .mods = N00B_MOD_CTRL},
+    };
+    r = n00b_display_dispatch_event(canvas, fm, &ctrl_c);
+    assert(r.handled);
+    assert(!r.should_stop);
+    assert(s1.key_events == 2);
+
     assert(n00b_focus_mgr_set(fm, p1));
     n00b_event_t click = {
         .type = N00B_EVENT_MOUSE,
@@ -128,13 +137,10 @@ test_event_dispatch_contracts(void)
     assert(r.focus_changed);
     assert(n00b_focus_mgr_current(fm) == p2);
 
-    n00b_event_t ctrl_c = {
-        .type = N00B_EVENT_KEY,
-        .key = {.key = 'c', .mods = N00B_MOD_CTRL},
-    };
     r = n00b_display_dispatch_event(canvas, fm, &ctrl_c);
     assert(r.handled);
     assert(r.should_stop);
+    assert(s2.key_events == 1);
 
     n00b_focus_mgr_destroy(fm);
     n00b_canvas_remove_plane(canvas, root);
