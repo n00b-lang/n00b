@@ -38,11 +38,15 @@ n00b_canvas_init(n00b_canvas_t *c) _kargs
     n00b_conduit_topic_t(n00b_buffer_t *)  *output    = nullptr;
 }
 {
+    assert(c);
     assert(vtable);
 
+    *c = (n00b_canvas_t){
+        .vtable    = vtable,
+        .allocator = allocator,
+    };
+
     c->lock      = n00b_data_lock_new();
-    c->vtable    = vtable;
-    c->allocator = allocator;
 
     // Initialize backend, passing the output topic.
     c->backend_ctx = vtable->init(output);

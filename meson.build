@@ -1455,13 +1455,13 @@ widget_demo = executable('widget_demo',
 )
 
 display_baseline_capture = executable('display_baseline_capture',
-    ['src/tools/display_baseline_capture.c'],
+    ['src/tools/display_baseline_capture.c', 'src/tools/display_demo_scene.c'],
     kwargs: test_common_kwargs,
     install: false,
 )
 
 display_scene_inspect = executable('display_scene_inspect',
-    ['src/tools/display_scene_inspect.c'],
+    ['src/tools/display_scene_inspect.c', 'src/tools/display_demo_scene.c'],
     kwargs: test_common_kwargs,
     install: false,
 )
@@ -1544,6 +1544,16 @@ test('display_baseline_artifacts',
     args: [
         files('test/integration/test_display_baseline_artifacts.sh'),
         display_baseline_capture,
+        meson.project_source_root(),
+    ],
+    suite: 'integration',
+)
+
+test('display_scene_inspect_artifacts',
+    sh_prog,
+    args: [
+        files('test/integration/test_display_scene_inspect_artifacts.sh'),
+        display_scene_inspect,
         meson.project_source_root(),
     ],
     suite: 'integration',

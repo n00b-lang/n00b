@@ -8,15 +8,10 @@
 
 #include "n00b.h"
 #include "core/runtime.h"
-#include "display/focus.h"
 #include "display/render/backend.h"
 #include "display/backend_stream_internal.h"
-#include "display/render/canvas.h"
-#include "display/render/plane.h"
 #include "display/table/table.h"
-#include "display/widget.h"
-#include "display/widgets/button.h"
-#include "display/widgets/label.h"
+#include "display_demo_scene.h"
 
 #define TOOL_VERSION      "1"
 #define SCENE_ROWS        10
@@ -96,54 +91,28 @@ write_bytes_file(const char *path, const char *data, size_t len)
     return 0;
 }
 
+static size_t
+trim_trailing_blank_line(const char *data, size_t len)
+{
+    while (len >= 2 && data[len - 1] == '\n' && data[len - 2] == '\n') {
+        len--;
+    }
+
+    return len;
+}
+
 static int
 write_scene_snapshot(const char *out_dir)
 {
     int rc = -1;
+    n00b_display_demo_scene_t scene = {};
 
-    n00b_canvas_t *canvas = n00b_new_kargs(n00b_canvas_t, canvas,
-                                           .vtable = &n00b_renderer_stream);
-    n00b_plane_t *root    = nullptr;
-    n00b_plane_t *title   = nullptr;
-    n00b_plane_t *status  = nullptr;
-    n00b_plane_t *button  = nullptr;
-    n00b_focus_mgr_t *fm  = nullptr;
+    if (!n00b_display_demo_scene_init(&scene, SCENE_ROWS, SCENE_COLS)) {
+        goto cleanup;
+    }
 
-    n00b_stream_backend_set_size(canvas->backend_ctx, SCENE_ROWS, SCENE_COLS);
-    n00b_canvas_resize(canvas, SCENE_ROWS, SCENE_COLS);
-
-    root         = n00b_new_kargs(n00b_plane_t, plane);
-    root->width        = SCENE_COLS;
-    root->height       = SCENE_ROWS;
-
-    title = n00b_label_new(
-        n00b_string_from_cstr("Display Baseline Scene"),
-        .canvas = canvas,
-        .width  = 30,
-        .height = 1);
-
-    status = n00b_label_new(
-        n00b_string_from_cstr("Status: baseline-ready"),
-        .canvas = canvas,
-        .width  = 36,
-        .height = 1);
-
-    button = n00b_button_new(
-        n00b_string_from_cstr("Execute"),
-        .canvas = canvas,
-        .width  = 12,
-        .height = 1);
-
-    n00b_plane_add_child(root, title, 2, 1);
-    n00b_plane_add_child(root, status, 2, 3);
-    n00b_plane_add_child(root, button, 2, 5);
-    n00b_canvas_add_plane(canvas, root);
-
-    fm = n00b_focus_mgr_new(canvas);
-    (void)n00b_focus_mgr_set(fm, button);
-
-    n00b_canvas_render(canvas);
-    n00b_string_t *buf = n00b_stream_backend_get_buffer(canvas->backend_ctx);
+    n00b_canvas_render(scene.canvas);
+    n00b_string_t *buf = n00b_stream_backend_get_buffer(scene.canvas->backend_ctx);
     if (!buf || !buf->data) {
         goto cleanup;
     }
@@ -153,45 +122,15 @@ write_scene_snapshot(const char *out_dir)
         goto cleanup;
     }
 
-    if (write_bytes_file(path, buf->data, buf->u8_bytes) != 0) {
+    size_t scene_len = trim_trailing_blank_line(buf->data, buf->u8_bytes);
+
+    if (write_bytes_file(path, buf->data, scene_len) != 0) {
         goto cleanup;
     }
 
     rc = 0;
 cleanup:
-    if (fm) {
-        n00b_focus_mgr_destroy(fm);
-    }
-    if (canvas && root) {
-        n00b_canvas_remove_plane(canvas, root);
-    }
-    if (root && title) {
-        n00b_plane_remove_child(root, title);
-    }
-    if (root && status) {
-        n00b_plane_remove_child(root, status);
-    }
-    if (root && button) {
-        n00b_plane_remove_child(root, button);
-    }
-    if (title) {
-        n00b_widget_detach(title);
-        n00b_plane_destroy(title);
-    }
-    if (status) {
-        n00b_widget_detach(status);
-        n00b_plane_destroy(status);
-    }
-    if (button) {
-        n00b_widget_detach(button);
-        n00b_plane_destroy(button);
-    }
-    if (root) {
-        n00b_plane_destroy(root);
-    }
-    if (canvas) {
-        n00b_canvas_destroy(canvas);
-    }
+    n00b_display_demo_scene_destroy(&scene);
 
     if (rc == 0) {
         printf("wrote scene_stream.txt\n");

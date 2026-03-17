@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <assert.h>
+#include <string.h>
 #include "n00b.h"
 #include "core/alloc.h"
 #include "adt/array.h"
@@ -31,6 +32,25 @@ test_canvas_new_destroy(void)
 
     n00b_canvas_destroy(c);
     printf("  [PASS] canvas new and destroy\n");
+}
+
+static void
+test_canvas_init_caller_owned_storage(void)
+{
+    n00b_canvas_t canvas;
+    memset(&canvas, 0xA5, sizeof(canvas));
+
+    n00b_canvas_init(&canvas, .vtable = &n00b_renderer_stream);
+
+    assert(canvas.vtable == &n00b_renderer_stream);
+    assert(canvas.backend_ctx != nullptr);
+    assert(canvas.cell_px_w == 1);
+    assert(canvas.cell_px_h == 1);
+    assert(canvas.frame_rows == 25);
+    assert(canvas.frame_cols == 80);
+
+    n00b_canvas_destroy(&canvas);
+    printf("  [PASS] canvas init resets caller-owned storage\n");
 }
 
 static void
@@ -404,6 +424,7 @@ main(int argc, char **argv)
 
     printf("Running render canvas tests...\n");
 
+    test_canvas_init_caller_owned_storage();
     test_canvas_new_destroy();
     test_canvas_add_remove_plane();
     test_canvas_render_empty();

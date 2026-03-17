@@ -48,8 +48,10 @@ rerender_dirty_plane_tree(n00b_plane_t *plane)
         return;
     }
 
-    if ((plane->flags & N00B_PLANE_DIRTY) && plane->widget_vtable) {
-        n00b_widget_render(plane);
+    if (plane->flags & N00B_PLANE_DIRTY) {
+        if (plane->widget_vtable) {
+            n00b_widget_render(plane);
+        }
         plane->flags &= ~N00B_PLANE_DIRTY;
     }
 

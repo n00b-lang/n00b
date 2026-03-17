@@ -4,15 +4,12 @@
 #include "n00b.h"
 #include "core/runtime.h"
 #include "display/focus.h"
+#include "display/backend_stream_internal.h"
 #include "display/render/backend.h"
 #include "display/render/canvas.h"
 #include "display/render/plane.h"
 #include "display/widget.h"
 #include "internal/display/event_dispatch.h"
-
-extern void n00b_stream_backend_set_size(void        *ctx,
-                                          n00b_isize_t rows,
-                                          n00b_isize_t cols);
 
 typedef struct {
     int  key_events;

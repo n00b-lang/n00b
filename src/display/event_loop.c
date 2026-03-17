@@ -358,6 +358,8 @@ n00b_canvas_run(n00b_canvas_t *canvas) _kargs
 #ifndef _WIN32
     event_loop_teardown_terminal(canvas);
 #endif
+
+    n00b_display_diag_shutdown();
 }
 
 void

@@ -20,6 +20,7 @@ The user-visible effect is parity with Milestone 0 plus safer runtime behavior: 
 - [x] (2026-03-05 11:23Z) Removed hardcoded `/tmp` diagnostics from touched display files and replaced those paths with centralized diagnostics gating.
 - [x] (2026-03-05 11:23Z) Added M1 unit/integration tests, built tooling, ran milestone tests + smoke tests, and generated M1 artifacts with empty baseline diffs.
 - [x] (2026-03-05 11:17Z) Reconfigured with installed notcurses (`3.0.17`) and reran notcurses backend coverage plus milestone/smoke validation with backend enabled.
+- [x] (2026-03-17 18:12Z) Executed the post-review remediation: added blocking regression tests, made `display_scene_inspect --out` mandatory, added `display_scene_inspect_artifacts`, and refreshed the M0/M1 scene artifacts after trimming the trailing blank line from `scene_stream.txt`.
 
 ## Surprises & Discoveries
 
@@ -66,6 +67,7 @@ Compatibility and parity evidence:
 - M1 artifact generation completed, including `scene_inspect.txt`.
 - Baseline diffs (`scene_stream.txt`, `table_stream.txt`) were empty relative to M0.
 - Final `/tmp` scan for touched files returned no matches.
+- Post-review remediation added explicit-output parity coverage for `display_scene_inspect`, refreshed the M0/M1 `scene_stream.txt` artifacts to remove the trailing blank line at EOF, and regenerated `scene_inspect.txt` with the root plane correctly marked clean.
 
 ## Context and Orientation
 
@@ -96,13 +98,13 @@ Second, split scene and event-loop responsibilities into internal contracts. Cre
 
 Third, add backend service adapters to isolate direct vtable invocations. Create `include/internal/display/backend_services.h` and `src/display/render/backend_services.c` for polling events, reading backend size/capabilities, and cursor visibility operations. Rewire `event_loop.c` and `canvas.c` to use these adapters so later backend rewrites can swap internals without changing event-loop/canvas public code paths.
 
-Fourth, add deterministic parity tooling and tests for the new boundaries. Add `src/tools/display_scene_inspect.c` to emit z-sorted flattened scene entries in stable text form. Register it in `meson.build` as a non-installed local tool. Add unit tests for diagnostics gating, scene contract invariants, and event dispatch behavior. Add one integration test that exercises a legacy-style loop path through `n00b_canvas_run` with deterministic backend events to confirm compatibility behavior remains stable.
+Fourth, add deterministic parity tooling and tests for the new boundaries. Add `src/tools/display_scene_inspect.c` to emit z-sorted flattened scene entries in stable text form and require `--out PATH` so callers choose the destination explicitly. Share the demo-scene construction between `display_baseline_capture` and `display_scene_inspect` through one private helper under `src/tools/`, register `display_scene_inspect` in `meson.build` as a non-installed local tool, and add parity coverage for both artifact generators. Add unit tests for diagnostics gating, scene contract invariants, and event dispatch behavior. Add one integration test that exercises a legacy-style loop path through `n00b_canvas_run` with deterministic backend events to confirm compatibility behavior remains stable.
 
 Throughout implementation, preserve external behavior and update this plan when decisions change. Any intentional baseline output difference must be documented in this plan’s `Decision Log` and justified in artifact notes.
 
 ## Concrete Steps
 
-Run all commands from `/home/baron/crash-override/n00b-athens`.
+Run all commands from `/home/baron/crash-override/n00b-tui/n00b-athens`.
 
 Create and switch to the Milestone 1 branch from the Milestone 0 branch tip.
 
@@ -160,6 +162,8 @@ Generate Milestone 1 artifacts and compare with Milestone 0 baseline captures.
     mkdir -p plans/artifacts/display-rewrite/m1
     build_debug/display_baseline_capture --out-dir plans/artifacts/display-rewrite/m1
     build_debug/display_scene_inspect --out plans/artifacts/display-rewrite/m1/scene_inspect.txt
+    meson test -C build_debug --print-errorlogs \
+      display_baseline_artifacts display_scene_inspect_artifacts
     diff -u plans/artifacts/display-rewrite/m0/scene_stream.txt plans/artifacts/display-rewrite/m1/scene_stream.txt
     diff -u plans/artifacts/display-rewrite/m0/table_stream.txt plans/artifacts/display-rewrite/m1/table_stream.txt
 
@@ -181,7 +185,7 @@ The first evidence type is unit tests proving internal contracts work as designe
 
 The second evidence type is integration behavior proving compatibility entry paths. `display_m1_compat` and `display_baseline_flow` must pass, showing that event dispatch and render flow still behave correctly through public APIs.
 
-The third evidence type is human-runnable artifacts. `display_baseline_capture` output in `plans/artifacts/display-rewrite/m1/` must match Milestone 0 baseline captures unless an intentional difference is documented. `display_scene_inspect` must generate a stable, diff-friendly scene report that reviewers can inspect.
+The third evidence type is human-runnable artifacts. `display_baseline_capture` output in `plans/artifacts/display-rewrite/m1/` must match Milestone 0 baseline captures unless an intentional difference is documented. `display_scene_inspect` must require `--out PATH`, generate a stable, diff-friendly scene report that reviewers can inspect, and pass its parity script against the committed artifact.
 
 In addition, diagnostics policy acceptance requires visible removal of hardcoded `/tmp` writes from touched display files and replacement with centralized diagnostics gating.
 
@@ -210,10 +214,13 @@ Use concise transcripts to prove acceptance, for example:
     4/4 tests OK
 
     $ build_debug/display_scene_inspect --out plans/artifacts/display-rewrite/m1/scene_inspect.txt
-    wrote scene_inspect.txt
+    wrote plans/artifacts/display-rewrite/m1/scene_inspect.txt
 
     $ diff -u plans/artifacts/display-rewrite/m0/scene_stream.txt plans/artifacts/display-rewrite/m1/scene_stream.txt
     (no output)
+
+    $ meson test -C build_debug --print-errorlogs display_baseline_artifacts display_scene_inspect_artifacts
+    2/2 tests OK
 
     $ rg --line-number '/tmp' src/display/event_loop.c src/display/render/backend_ansi.c src/display/render/backend_notcurses.c src/display/widgets/label.c
     (no output)
@@ -315,3 +322,4 @@ Dependencies for M1 remain the existing project toolchain and optional backend d
 ## Revision Notes
 
 - 2026-03-05: Initial Milestone 1 child ExecPlan authored from the umbrella plan and current `display-rewrite/m0-baseline` state, with explicit internal contract boundaries, diagnostics cleanup scope, and acceptance evidence requirements.
+- 2026-03-17: Updated the Milestone 1 record after review remediation so the documented workspace root, explicit `display_scene_inspect --out` workflow, parity-test coverage, and refreshed scene artifacts match the repaired branch state.

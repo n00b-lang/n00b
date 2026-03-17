@@ -3,15 +3,12 @@
 
 #include "n00b.h"
 #include "core/runtime.h"
+#include "display/backend_stream_internal.h"
 #include "display/render/backend.h"
 #include "display/render/canvas.h"
 #include "display/render/plane.h"
 #include "display/widget.h"
 #include "internal/display/scene_contracts.h"
-
-extern void n00b_stream_backend_set_size(void        *ctx,
-                                          n00b_isize_t rows,
-                                          n00b_isize_t cols);
 
 static void
 dummy_render(n00b_plane_t *plane, void *data)
@@ -75,6 +72,42 @@ test_scene_contracts(void)
     printf("  [PASS] scene contracts build/layout/dirty\n");
 }
 
+static void
+test_plain_container_root_clears_dirty(void)
+{
+    n00b_canvas_t *canvas = n00b_new_kargs(n00b_canvas_t, canvas,
+                                           .vtable = &n00b_renderer_stream);
+    n00b_stream_backend_set_size(canvas->backend_ctx, 8, 20);
+    n00b_canvas_resize(canvas, 8, 20);
+
+    n00b_plane_t *root = n00b_new_kargs(n00b_plane_t, plane, .z = 0);
+    root->width  = 20;
+    root->height = 8;
+
+    n00b_plane_t *child = n00b_new_kargs(n00b_plane_t, plane, .z = 1);
+    child->width  = 6;
+    child->height = 1;
+    n00b_widget_attach(child, &dummy_widget, nullptr);
+
+    n00b_plane_add_child(root, child, 2, 2);
+    n00b_canvas_add_plane(canvas, root);
+
+    n00b_canvas_render(canvas);
+
+    assert((root->flags & N00B_PLANE_DIRTY) == 0);
+    assert((child->flags & N00B_PLANE_DIRTY) == 0);
+    assert(!n00b_display_scene_any_dirty(canvas));
+
+    n00b_canvas_remove_plane(canvas, root);
+    n00b_plane_remove_child(root, child);
+    n00b_widget_detach(child);
+    n00b_plane_destroy(child);
+    n00b_plane_destroy(root);
+    n00b_canvas_destroy(canvas);
+
+    printf("  [PASS] scene contracts clear plain container roots\n");
+}
+
 int
 main(int argc, char **argv)
 {
@@ -83,6 +116,7 @@ main(int argc, char **argv)
 
     printf("Running display scene-contract tests...\n");
     test_scene_contracts();
+    test_plain_container_root_clears_dirty();
 
     printf("Display scene-contract tests passed.\n");
     n00b_shutdown();

@@ -8,22 +8,11 @@
 
 #include "n00b.h"
 #include "core/runtime.h"
-#include "display/focus.h"
-#include "display/render/backend.h"
-#include "display/render/canvas.h"
-#include "display/render/plane.h"
-#include "display/widget.h"
-#include "display/widgets/button.h"
-#include "display/widgets/label.h"
 #include "internal/display/scene_contracts.h"
+#include "display_demo_scene.h"
 
-#define DEFAULT_OUT_PATH "plans/artifacts/display-rewrite/m1/scene_inspect.txt"
 #define SCENE_ROWS 10
 #define SCENE_COLS 52
-
-extern void n00b_stream_backend_set_size(void        *ctx,
-                                          n00b_isize_t rows,
-                                          n00b_isize_t cols);
 
 static int
 ensure_dir_recursive(const char *dir)
@@ -96,53 +85,18 @@ static int
 write_scene_report(const char *path)
 {
     int rc = -1;
-    n00b_canvas_t *canvas = nullptr;
-    n00b_plane_t  *root = nullptr;
-    n00b_plane_t  *title = nullptr;
-    n00b_plane_t  *status = nullptr;
-    n00b_plane_t  *button = nullptr;
-    n00b_focus_mgr_t *fm = nullptr;
+    n00b_display_demo_scene_t demo = {};
     n00b_array_t(n00b_composite_entry_t) scene = {};
     FILE *fp = nullptr;
 
-    canvas = n00b_new_kargs(n00b_canvas_t, canvas, .vtable = &n00b_renderer_stream);
-    n00b_stream_backend_set_size(canvas->backend_ctx, SCENE_ROWS, SCENE_COLS);
-    n00b_canvas_resize(canvas, SCENE_ROWS, SCENE_COLS);
+    if (!n00b_display_demo_scene_init(&demo, SCENE_ROWS, SCENE_COLS)) {
+        goto done;
+    }
 
-    root = n00b_new_kargs(n00b_plane_t, plane);
-    root->width = SCENE_COLS;
-    root->height = SCENE_ROWS;
-
-    title = n00b_label_new(
-        n00b_string_from_cstr("Display Baseline Scene"),
-        .canvas = canvas,
-        .width = 30,
-        .height = 1);
-
-    status = n00b_label_new(
-        n00b_string_from_cstr("Status: baseline-ready"),
-        .canvas = canvas,
-        .width = 36,
-        .height = 1);
-
-    button = n00b_button_new(
-        n00b_string_from_cstr("Execute"),
-        .canvas = canvas,
-        .width = 12,
-        .height = 1);
-
-    n00b_plane_add_child(root, title, 2, 1);
-    n00b_plane_add_child(root, status, 2, 3);
-    n00b_plane_add_child(root, button, 2, 5);
-    n00b_canvas_add_plane(canvas, root);
-
-    fm = n00b_focus_mgr_new(canvas);
-    (void)n00b_focus_mgr_set(fm, button);
-
-    n00b_display_scene_run_layout(canvas);
-    n00b_display_scene_mark_all_dirty(canvas);
-    n00b_display_scene_rerender_dirty(canvas);
-    scene = n00b_display_scene_build(canvas);
+    n00b_display_scene_run_layout(demo.canvas);
+    n00b_display_scene_mark_all_dirty(demo.canvas);
+    n00b_display_scene_rerender_dirty(demo.canvas);
+    scene = n00b_display_scene_build(demo.canvas);
 
     fp = fopen(path, "wb");
     if (!fp) {
@@ -190,64 +144,48 @@ done:
         fclose(fp);
     }
     n00b_display_scene_free(scene);
-    if (fm) {
-        n00b_focus_mgr_destroy(fm);
-    }
-    if (canvas && root) {
-        n00b_canvas_remove_plane(canvas, root);
-    }
-    if (root && title) {
-        n00b_plane_remove_child(root, title);
-    }
-    if (root && status) {
-        n00b_plane_remove_child(root, status);
-    }
-    if (root && button) {
-        n00b_plane_remove_child(root, button);
-    }
-    if (title) {
-        n00b_widget_detach(title);
-        n00b_plane_destroy(title);
-    }
-    if (status) {
-        n00b_widget_detach(status);
-        n00b_plane_destroy(status);
-    }
-    if (button) {
-        n00b_widget_detach(button);
-        n00b_plane_destroy(button);
-    }
-    if (root) {
-        n00b_plane_destroy(root);
-    }
-    if (canvas) {
-        n00b_canvas_destroy(canvas);
-    }
+    n00b_display_demo_scene_destroy(&demo);
 
     return rc;
+}
+
+static void
+print_usage(const char *prog)
+{
+    fprintf(stderr,
+            "Usage: %s --out PATH\n"
+            "Capture deterministic display scene-inspection output.\n",
+            prog);
 }
 
 int
 main(int argc, char **argv)
 {
-    const char *out = DEFAULT_OUT_PATH;
+    const char *out = nullptr;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--out") == 0) {
             if (i + 1 >= argc) {
-                fprintf(stderr, "missing value for --out\n");
+                fprintf(stderr, "Error: --out requires a value.\n");
                 return 1;
             }
             out = argv[++i];
             continue;
         }
 
-        if (strcmp(argv[i], "--help") == 0) {
-            printf("Usage: %s [--out PATH]\n", argv[0]);
+        if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
+            print_usage(argv[0]);
             return 0;
         }
 
-        fprintf(stderr, "unknown argument: %s\n", argv[i]);
+        fprintf(stderr, "Error: unknown option '%s'\n", argv[i]);
+        print_usage(argv[0]);
+        return 1;
+    }
+
+    if (!out) {
+        fprintf(stderr, "Error: --out is required.\n");
+        print_usage(argv[0]);
         return 1;
     }
 

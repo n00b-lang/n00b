@@ -21,6 +21,7 @@ This plan is the top-level roadmap for the in-place rewrite. "In-place" means ex
 - [x] (2026-03-05 11:18Z) Authored the Milestone 1 child ExecPlan in `plans/display-rewrite/m1-core-contracts-execplan.md`.
 - [x] (2026-03-05 11:18Z) Executed Milestone 1 and recorded parity, diagnostics cleanup, and evidence artifacts in `plans/display-rewrite/m1-core-contracts-execplan.md` and `plans/artifacts/display-rewrite/m1/`.
 - [x] (2026-03-05 11:18Z) Reconfigured with installed notcurses (`3.0.17`) and reran M1/display smoke validation with `notcurses_backend` enabled.
+- [x] (2026-03-17 18:12Z) Applied M1 review remediation on `display-rewrite/m1-core-contracts`: added blocking regression tests, mandatory `display_scene_inspect --out`, artifact parity coverage, diagnostics rerun coverage, and refreshed M0/M1 scene artifacts after trimming the trailing blank line at EOF.
 - [ ] Author and execute Milestones 2-6 as stacked diffs, preserving this document as the top-level source of milestone ordering and acceptance scope.
 
 ## Surprises & Discoveries
@@ -171,7 +172,7 @@ Acceptance for Milestone 6 is a fully in-place rewritten display subsystem with 
 
 ## Concrete Steps
 
-Run all commands from `/home/baron/crash-override/n00b-athens`.
+Run all commands from `/home/baron/crash-override/n00b-tui/n00b-athens`.
 
 Current branch reality:
 
@@ -306,6 +307,9 @@ Milestone 1 evidence captured on this branch:
     $ build_debug/display_scene_inspect --out plans/artifacts/display-rewrite/m1/scene_inspect.txt
     wrote plans/artifacts/display-rewrite/m1/scene_inspect.txt
 
+    $ meson test -C build_debug --print-errorlogs display_baseline_artifacts display_scene_inspect_artifacts
+    2/2 tests OK
+
     $ diff -u plans/artifacts/display-rewrite/m0/scene_stream.txt plans/artifacts/display-rewrite/m1/scene_stream.txt
     (no output)
 
@@ -338,4 +342,5 @@ Dependencies that materially affect milestone planning include optional GUI/rend
 - 2026-03-05: Initial umbrella ExecPlan created to guide an in-place display rewrite with stacked diffs, milestone-specific child ExecPlans, and mandatory unit/integration/artifact acceptance requirements per milestone.
 - 2026-03-05: Updated umbrella plan to match the current `display-rewrite/m0-baseline` branch state: marked Milestone 0 complete, recorded real validation/artifact evidence, adjusted stack-root guidance to current branch lineage, and set Milestone 1 as the next pending step.
 - 2026-03-05: Marked Milestone 1 child ExecPlan authoring as complete after creating `plans/display-rewrite/m1-core-contracts-execplan.md`, so umbrella progress reflects current branch planning state.
+- 2026-03-17: Updated the umbrella record after M1 review remediation so the documented workspace root, scene-inspection workflow, parity coverage, and artifact evidence match the repaired branch state.
 - 2026-03-05: Marked Milestone 1 execution complete in the umbrella plan, added M1 artifact/test evidence (including notcurses-enabled rerun), and moved remaining scope to M2-M6.
