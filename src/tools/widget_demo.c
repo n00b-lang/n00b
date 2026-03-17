@@ -52,6 +52,7 @@
 #include "display/widgets/grid.h"
 #include "display/widgets/split.h"
 #include "display/widgets/scroll.h"
+#include "display/widgets/tabs.h"
 #include "display/widgets/zstack.h"
 #include "display/widgets/switch.h"
 #include "display/widgets/radio.h"
@@ -357,6 +358,9 @@ static n00b_plane_t *g_zstack_layer_status = nullptr;
 static n00b_plane_t *g_grid_status_label = nullptr;
 static n00b_plane_t *g_split_status_label = nullptr;
 static n00b_plane_t *g_scroll_status_label = nullptr;
+static n00b_plane_t *g_tabs_status_label = nullptr;
+static n00b_plane_t *g_tabs_counter_label = nullptr;
+static int           g_tabs_counter = 0;
 
 static void
 set_demo_label_text(n00b_plane_t *label, const char *text)
@@ -390,6 +394,21 @@ static void
 set_scroll_status(const char *text)
 {
     set_demo_label_text(g_scroll_status_label, text);
+}
+
+static void
+set_tabs_status(const char *text)
+{
+    set_demo_label_text(g_tabs_status_label, text);
+}
+
+static void
+refresh_tabs_counter_label(void)
+{
+    char msg[96];
+
+    snprintf(msg, sizeof(msg), "Counter value: %d", g_tabs_counter);
+    set_demo_label_text(g_tabs_counter_label, msg);
 }
 
 static void
@@ -502,6 +521,61 @@ on_scroll_bottom_click(n00b_plane_t *plane, void *data)
     (void)data;
 
     set_scroll_status("Bottom content button fired after scrolling.");
+}
+
+static void
+on_tabs_counter_click(n00b_plane_t *plane, void *data)
+{
+    char msg[96];
+
+    (void)plane;
+    (void)data;
+
+    g_tabs_counter++;
+    refresh_tabs_counter_label();
+    snprintf(msg,
+             sizeof(msg),
+             "Counter page action fired. Value is now %d.",
+             g_tabs_counter);
+    set_tabs_status(msg);
+}
+
+static void
+on_tabs_scroll_action_click(n00b_plane_t *plane, void *data)
+{
+    (void)plane;
+    (void)data;
+
+    set_tabs_status("Scrollable page action fired at the bottom of the list.");
+}
+
+static void
+on_tabs_select(n00b_plane_t *tabs, int new_index, int old_index, void *data)
+{
+    char              msg[160];
+    n00b_tab_entry_t *entry;
+
+    (void)data;
+
+    entry = n00b_tabs_get(tabs, new_index);
+    if (!entry || !entry->name || !entry->name->data) {
+        snprintf(msg,
+                 sizeof(msg),
+                 "Selected tab %d (previous %d).",
+                 new_index,
+                 old_index);
+        set_tabs_status(msg);
+        return;
+    }
+
+    snprintf(msg,
+             sizeof(msg),
+             "Selected tab %d: %.*s (previous %d).",
+             new_index,
+             (int)entry->name->u8_bytes,
+             entry->name->data,
+             old_index);
+    set_tabs_status(msg);
 }
 
 static void
@@ -1199,6 +1273,233 @@ demo_scroll(n00b_canvas_t *canvas)
 }
 
 // ====================================================================
+// Tabs demo
+// ====================================================================
+
+static void
+demo_tabs(n00b_canvas_t *canvas)
+{
+    int32_t       cpw = (int32_t)canvas->cell_px_w;
+    int32_t       cph = (int32_t)canvas->cell_px_h;
+    int32_t       frame_w = (int32_t)canvas->frame_cols;
+    int32_t       frame_h = (int32_t)canvas->frame_rows;
+    int32_t       content_w = frame_w - 4 * cpw;
+    int32_t       gap_px = cph > 0 ? cph : 1;
+    int32_t       page_w;
+    n00b_plane_t *root;
+    n00b_plane_t *title;
+    n00b_plane_t *instructions;
+    n00b_plane_t *tabs;
+    n00b_plane_t *counter_page;
+    n00b_plane_t *scroll_content;
+    n00b_plane_t *scroll_page;
+    n00b_plane_t *info_page;
+    n00b_text_style_t *title_style;
+    n00b_text_style_t *note_style;
+    n00b_text_style_t *page_title_style;
+
+    dbg("\n=== demo_tabs start ===\n");
+
+    if (content_w < 1) {
+        content_w = 1;
+    }
+
+    g_tabs_counter = 0;
+    g_tabs_status_label = nullptr;
+    g_tabs_counter_label = nullptr;
+
+    title_style = make_style(N00B_TRI_YES, N00B_TRI_NO, 0x7A3E00);
+    note_style = make_style(N00B_TRI_NO, N00B_TRI_NO, 0x5F6B73);
+    page_title_style = make_style(N00B_TRI_YES, N00B_TRI_NO, 0x0B7285);
+
+    root = n00b_box_new(.canvas     = canvas,
+                        .direction  = N00B_FLEX_COLUMN,
+                        .gap        = gap_px,
+                        .pad_top    = 2 * cph,
+                        .pad_right  = 2 * cpw,
+                        .pad_bottom = 2 * cph,
+                        .pad_left   = 2 * cpw);
+    root->width  = frame_w;
+    root->height = frame_h;
+    n00b_canvas_add_plane(canvas, root);
+
+    title = n00b_label_new(
+        n00b_str_set_base_style(n00b_string_from_cstr("Tabs Widget Demo"), title_style),
+        .canvas = canvas,
+        .width = content_w);
+    n00b_plane_add_child(root, title, 0, 0);
+
+    instructions = n00b_label_new(
+        n00b_str_set_base_style(
+            n00b_string_from_cstr(
+                "Tab to the tabs header and use Left/Right to switch pages, or click the tab labels directly. The first page keeps its counter when you switch away and back."),
+            note_style),
+        .canvas = canvas,
+        .width = content_w,
+        .wrap = true,
+        .height = 3 * cph);
+    n00b_plane_add_child(root, instructions, 0, 0);
+
+    g_tabs_status_label = n00b_label_new(
+        n00b_str_set_base_style(
+            n00b_string_from_cstr("Selected tab 0: Counter."),
+            note_style),
+        .canvas = canvas,
+        .width = content_w,
+        .wrap = true,
+        .height = 2 * cph);
+    n00b_plane_add_child(root, g_tabs_status_label, 0, 0);
+
+    tabs = n00b_tabs_new(.canvas         = canvas,
+                         .on_select      = on_tabs_select,
+                         .on_select_data = nullptr);
+    tabs->flex.grow   = 1.0f;
+    tabs->flex.shrink = 1.0f;
+    tabs->flex.basis  = 1;
+    n00b_plane_add_child(root, tabs, 0, 0);
+
+    page_w = n00b_max(content_w - 4 * cpw, 20 * cpw);
+
+    counter_page = n00b_box_new(.canvas = canvas,
+                                .direction = N00B_FLEX_COLUMN,
+                                .gap = gap_px);
+    n00b_plane_add_child(counter_page,
+                         n00b_label_new(
+                             n00b_str_set_base_style(n00b_string_from_cstr("Stateful Page"), page_title_style),
+                             .canvas = canvas,
+                             .width = page_w),
+                         0,
+                         0);
+    n00b_plane_add_child(counter_page,
+                         n00b_label_new(
+                             n00b_str_set_base_style(
+                                 n00b_string_from_cstr(
+                                     "Use the button below, switch to another tab, then return to confirm the counter label kept its value."),
+                                 note_style),
+                             .canvas = canvas,
+                             .width = page_w,
+                             .wrap = true,
+                             .height = 3 * cph),
+                         0,
+                         0);
+    g_tabs_counter_label = n00b_label_new(
+        n00b_str_set_base_style(n00b_string_from_cstr("Counter value: 0"), note_style),
+        .canvas = canvas,
+        .width = page_w);
+    n00b_plane_add_child(counter_page, g_tabs_counter_label, 0, 0);
+    n00b_plane_add_child(counter_page,
+                         n00b_button_new(
+                             n00b_string_from_cstr("Increment Counter"),
+                             .canvas   = canvas,
+                             .on_click = on_tabs_counter_click),
+                         0,
+                         0);
+
+    scroll_content = n00b_box_new(.canvas = canvas,
+                                  .direction = N00B_FLEX_COLUMN,
+                                  .gap = gap_px);
+    n00b_plane_add_child(scroll_content,
+                         n00b_label_new(
+                             n00b_str_set_base_style(n00b_string_from_cstr("Scrollable Page"), page_title_style),
+                             .canvas = canvas,
+                             .width = page_w),
+                         0,
+                         0);
+    n00b_plane_add_child(scroll_content,
+                         n00b_label_new(
+                             n00b_str_set_base_style(
+                                 n00b_string_from_cstr(
+                                     "This page embeds the production scroll widget inside tabs so you can verify focus, hit-testing, and layout survive repeated tab changes."),
+                                 note_style),
+                             .canvas = canvas,
+                             .width = page_w,
+                             .wrap = true,
+                             .height = 3 * cph),
+                         0,
+                         0);
+
+    for (int i = 0; i < 12; i++) {
+        char msg[160];
+
+        snprintf(msg,
+                 sizeof(msg),
+                 "Item %02d: scroll farther down to reach the bottom action button without losing the current tab state.",
+                 i + 1);
+        n00b_plane_add_child(scroll_content,
+                             n00b_label_new(
+                                 n00b_str_set_base_style(n00b_string_from_cstr(msg), note_style),
+                                 .canvas = canvas,
+                                 .width = page_w,
+                                 .wrap = true,
+                                 .height = 2 * cph),
+                             0,
+                             0);
+    }
+
+    n00b_plane_add_child(scroll_content,
+                         n00b_button_new(
+                             n00b_string_from_cstr("Bottom Scroll Action"),
+                             .canvas   = canvas,
+                             .on_click = on_tabs_scroll_action_click),
+                         0,
+                         0);
+
+    scroll_page = n00b_scroll_new(scroll_content,
+                                  .axes = N00B_SCROLL_AXIS_VERTICAL,
+                                  .scrollbar_mode = N00B_SCROLLBAR_AUTO,
+                                  .scroll_step_lines = 3,
+                                  .scrollbar_thickness_px = n00b_max(cpw, 1),
+                                  .canvas = canvas);
+
+    info_page = n00b_box_new(.canvas = canvas,
+                             .direction = N00B_FLEX_COLUMN,
+                             .gap = gap_px);
+    n00b_plane_add_child(info_page,
+                         n00b_label_new(
+                             n00b_str_set_base_style(n00b_string_from_cstr("Summary Page"), page_title_style),
+                             .canvas = canvas,
+                             .width = page_w),
+                         0,
+                         0);
+    n00b_plane_add_child(info_page,
+                         n00b_label_new(
+                             n00b_str_set_base_style(
+                                 n00b_string_from_cstr(
+                                     "Wave 1 tabs keep inactive pages parented but hidden. That means counters, nested widget trees, and scroll offsets survive tab switches instead of being recreated."),
+                                 note_style),
+                             .canvas = canvas,
+                             .width = page_w,
+                             .wrap = true,
+                             .height = 4 * cph),
+                         0,
+                         0);
+    n00b_plane_add_child(info_page,
+                         n00b_label_new(
+                             n00b_str_set_base_style(
+                                 n00b_string_from_cstr(
+                                     "Mouse clicks on the header labels switch pages. Keyboard Left/Right works when the tabs header has focus."),
+                                 note_style),
+                             .canvas = canvas,
+                             .width = page_w,
+                             .wrap = true,
+                             .height = 3 * cph),
+                         0,
+                         0);
+
+    (void)n00b_tabs_add(tabs, n00b_string_from_cstr("Counter"), counter_page);
+    (void)n00b_tabs_add(tabs, n00b_string_from_cstr("Scroll"), scroll_page);
+    (void)n00b_tabs_add(tabs, n00b_string_from_cstr("Summary"), info_page);
+    refresh_tabs_counter_label();
+
+    dbg_plane("tabs-root", root);
+    dbg_plane("tabs-widget", tabs);
+    dbg_plane("tabs-counter-page", counter_page);
+    dbg_plane("tabs-scroll-page", scroll_page);
+    dbg_plane("tabs-info-page", info_page);
+    dbg("=== demo_tabs end ===\n\n");
+}
+
+// ====================================================================
 // All-widgets interactive demo
 // ====================================================================
 
@@ -1571,7 +1872,7 @@ usage(const char *prog)
     fprintf(stderr,
             "Usage: %s --widget <name> [--backend <auto|tui|gui|cocoa|x11|nc|stream|dumb>] [--theme <name>] [--debug-log <path>]\n"
             "\n"
-            "Widgets:  label, grid, split, scroll, zstack, all\n"
+            "Widgets:  label, grid, split, scroll, tabs, zstack, all\n"
             "Backends: auto (policy-driven), tui (ANSI alt-screen),\n"
             "          gui (portable GUI alias; may fall back if unavailable),\n"
             "          cocoa (macOS native), x11 (Linux/Unix native),\n"
@@ -1832,6 +2133,10 @@ main(int argc, char **argv)
     }
     else if (strcmp(widget_name, "scroll") == 0) {
         demo_scroll(canvas);
+        use_event_loop = true;
+    }
+    else if (strcmp(widget_name, "tabs") == 0) {
+        demo_tabs(canvas);
         use_event_loop = true;
     }
     else if (strcmp(widget_name, "zstack") == 0) {
