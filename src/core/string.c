@@ -68,7 +68,7 @@ n00b_string_from_raw(const char *src, int64_t byte_len)
 }
 
 n00b_string_t *
-__ncc_rstr(const char *src)
+n00b_ncc_rstr(const char *src)
 {
     return n00b_string_from_cstr(src);
 }

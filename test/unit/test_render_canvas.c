@@ -9,18 +9,12 @@
 #include "display/render/canvas.h"
 #include "display/render/plane.h"
 #include "display/render/draw_cmd.h"
+#include "display/backend_stream_internal.h"
 #include "display/render/box.h"
 #include "display/render/composite.h"
 #include "display/render/types.h"
 #include "text/strings/text_style.h"
 #include "text/strings/string_ops.h"
-
-// Stream backend test helpers (defined in backend_stream.c).
-extern n00b_string_t *n00b_stream_backend_get_buffer(void *ctx);
-extern size_t        n00b_stream_backend_get_length(void *ctx);
-extern void          n00b_stream_backend_set_size(void *ctx,
-                                                   n00b_isize_t rows,
-                                                   n00b_isize_t cols);
 
 // ====================================================================
 // Tests

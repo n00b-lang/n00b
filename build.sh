@@ -7,16 +7,31 @@ N00B_CROSS=${N00B_CROSS:-}
 N00B_JOBS=${N00B_JOBS:-}
 N00B_NATIVE=${N00B_NATIVE:-0}
 N00B_UNICODE_ALLOW_DOWNLOADS=${N00B_UNICODE_ALLOW_DOWNLOADS:-0}
-N00B_UNICODE_STRICT_CACHE=${N00B_UNICODE_STRICT_CACHE:-1}
+N00B_UNICODE_STRICT_CACHE=${N00B_UNICODE_STRICT_CACHE:-0}
 
-# Default to a C23-capable compiler if CC is not set.
-if [[ -z "${CC}" ]] ; then
+function select_bootstrap_compiler {
+    if [[ -n "${CC:-}" ]] ; then
+        export CC
+        return
+    fi
+
     if command -v clang &>/dev/null ; then
         export CC=$(command -v clang)
-    elif command -v cc &>/dev/null ; then
-        export CC=$(command -v cc)
+        return
     fi
-fi
+
+    if command -v cc &>/dev/null && cc --version 2>/dev/null | head -n 1 | grep -qi 'clang' ; then
+        export CC=$(command -v cc)
+        echo "Using cc because it resolves to a clang-compatible compiler."
+        return
+    fi
+
+    echo "No clang-compatible bootstrap compiler found." >&2
+    echo "Install clang or rerun with CC=/path/to/clang-compatible-compiler." >&2
+    exit 1
+}
+
+select_bootstrap_compiler
 
 # Ensure the macOS SDK root is set so the linker can find libSystem.
 if [[ "$(uname -s)" == "Darwin" ]] && [[ -z "${SDKROOT}" ]] && command -v xcrun &>/dev/null; then
@@ -100,19 +115,19 @@ function all_options {
     fi
 
     if [[ ${N00B_BUILD_GC_STATS:-0} -ne 0 ]] ; then
-        s="${s} -Dshow_gc_stats=true"
+        s="${s} -Dshow_gc_stats=enabled"
     fi
 
     if [[ ${N00B_BUILD_MEMCHECK:-0} -ne 0 ]] ; then
-        s="${s} -Duse_memcheck=true"
+        s="${s} -Duse_memcheck=on"
     fi
 
     if [[ ${N00B_BUILD_ASAN:-0} -ne 0 ]] ; then
-        s="${s} -Duse_asan"
+        s="${s} -Duse_asan=enabled"
     fi
 
     if [[ ${N00B_BUILD_UBSAN:-0} -ne 0 ]] ; then
-        s="${s} -Duse_ubsan"
+        s="${s} -Duse_ubsan=enabled"
     fi
 
     if [[ ${N00B_BUILD_MUSL:-0} -ne 0 ]] ; then
@@ -123,8 +138,8 @@ function all_options {
         s="${s} -Dunicode_allow_downloads=true"
     fi
 
-    if [[ ${N00B_UNICODE_STRICT_CACHE} -eq 0 ]] ; then
-        s="${s} -Dunicode_strict_cache=false"
+    if [[ ${N00B_UNICODE_STRICT_CACHE} -ne 0 ]] ; then
+        s="${s} -Dunicode_strict_cache=true"
     fi
 
     echo "${s}"

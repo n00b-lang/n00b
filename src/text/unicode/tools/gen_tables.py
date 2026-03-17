@@ -5,7 +5,7 @@ optimized two-stage lookup tables as C source for the unicode library.
 
 Usage:
     python3 tools/gen_tables.py [--version 16.0.0] [--cache-dir .unicode_cache]
-                                [--allow-downloads] [--[no-]strict]
+                                [--allow-downloads] [--strict|--no-strict]
 """
 
 import argparse
@@ -1331,8 +1331,11 @@ def main():
                         help="Output directory for test data files")
     parser.add_argument("--allow-downloads", action="store_true",
                         help="Allow network downloads for missing unicode cache/test files")
-    parser.add_argument("--strict", action=argparse.BooleanOptionalAction, default=True,
-                        help="Fail when required unicode cache files are missing (default: true)")
+    parser.add_argument("--strict", dest="strict", action="store_true",
+                        help="Fail when required unicode cache files are missing")
+    parser.add_argument("--no-strict", dest="strict", action="store_false",
+                        help="Allow placeholder output when required unicode cache files are missing")
+    parser.set_defaults(strict=False)
     args = parser.parse_args()
 
     # Resolve paths relative to CWD (works both standalone and from meson)

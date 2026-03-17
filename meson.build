@@ -1510,6 +1510,17 @@ display_baseline_flow_test = executable('test_display_baseline_flow',
 )
 test('display_baseline_flow', display_baseline_flow_test, suite: 'integration')
 
+sh_prog = find_program('sh')
+test('display_baseline_artifacts',
+    sh_prog,
+    args: [
+        files('test/integration/test_display_baseline_artifacts.sh'),
+        display_baseline_capture,
+        meson.project_source_root(),
+    ],
+    suite: 'integration',
+)
+
 # ============================================================================
 # Unicode tests
 # ============================================================================

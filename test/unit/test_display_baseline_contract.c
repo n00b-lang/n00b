@@ -11,17 +11,12 @@
 #include "display/focus.h"
 #include "display/hexdump.h"
 #include "display/render/backend.h"
+#include "display/backend_stream_internal.h"
 #include "display/render/canvas.h"
 #include "display/render/plane.h"
 #include "display/table/table.h"
 #include "display/widget.h"
 #include "text/strings/string_ops.h"
-
-extern n00b_string_t *n00b_stream_backend_get_buffer(void *ctx);
-extern size_t        n00b_stream_backend_get_length(void *ctx);
-extern void          n00b_stream_backend_set_size(void         *ctx,
-                                                   n00b_isize_t  rows,
-                                                   n00b_isize_t  cols);
 
 static n00b_string_t *
 make_str(const char *s)

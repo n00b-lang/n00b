@@ -17,7 +17,7 @@ The user-visible result is a new baseline test harness with one new display-focu
 - [x] (2026-03-05 09:19Z) Authored Milestone 0 child ExecPlan at `plans/display-rewrite/m0-baseline-execplan.md`.
 - [x] (2026-03-05 09:27Z) Created and switched to `display-rewrite/m0-baseline`; adjusted branch base to `needs-rebase` after validating this workspace's `main` does not contain the expected display subtree.
 - [x] (2026-03-05 09:33Z) Added `test/unit/test_display_baseline_contract.c`, `test/integration/test_display_baseline_flow.c`, and Meson registrations `display_baseline_contract` and `display_baseline_flow`.
-- [x] (2026-03-05 09:34Z) Added deterministic baseline capture tool `src/tools/display_baseline_capture.c`, default output convention `plans/artifacts/display-rewrite/m0/`, and Meson tool target `display_baseline_capture`.
+- [x] (2026-03-05 09:34Z) Added deterministic baseline capture tool `src/tools/display_baseline_capture.c`, explicit `--out-dir` artifact workflow for `plans/artifacts/display-rewrite/m0/`, and Meson tool target `display_baseline_capture`.
 - [x] (2026-03-05 10:34Z) Rebased `display-rewrite/m0-baseline` onto `codex/linux-build-and-test`, bringing in Linux build/test fixes that removed prior `ncc`/core rebuild blockers.
 - [x] (2026-03-05 10:41Z) Executed milestone validation (`display_baseline_contract`, `display_baseline_flow`, display smoke suite) and generated deterministic artifacts in `plans/artifacts/display-rewrite/m0/`.
 
@@ -93,11 +93,11 @@ Create `test/unit/test_display_baseline_contract.c` as a pure contract test for 
 
 Create `test/integration/test_display_baseline_flow.c` as one scenario test that runs multiple display layers together. The scenario should create a canvas with stream backend, attach a small widget tree (for example label plus one focusable control), run focus traversal and mouse routing through public APIs, render to stream output, and assert both interaction state changes and rendered content markers. The goal is to prove “event/focus/render path works end-to-end” in one deterministic flow.
 
-Add a human-runnable artifact tool at `src/tools/display_baseline_capture.c`. This tool should run non-interactively and write deterministic baseline files to an output directory provided by `--out-dir` (default `plans/artifacts/display-rewrite/m0`). The tool should generate at least three files: one stream-rendered scene snapshot (widgets), one table-rendered snapshot, and one metadata file that records backend name, dimensions, and tool version string. Avoid timestamps inside snapshot content so files remain diff-friendly.
+Add a human-runnable artifact tool at `src/tools/display_baseline_capture.c`. This tool should run non-interactively and write deterministic baseline files to an output directory provided explicitly by `--out-dir`. The tool should generate at least three files: one stream-rendered scene snapshot (widgets), one table-rendered snapshot, and one metadata file that records backend name, dimensions, and tool version string. Avoid timestamps inside snapshot content so files remain diff-friendly.
 
 Update `meson.build` in the tools section to compile `display_baseline_capture` as a local executable (install false). Keep it linked with the same `test_common_kwargs` used by existing tools to avoid environment drift.
 
-After code changes compile, run the new unit and integration tests by name first, then run broader display smoke tests. Finally run `display_baseline_capture` to produce artifacts. Store the resulting files under `plans/artifacts/display-rewrite/m0/` and include brief transcript snippets in this plan’s `Artifacts and Notes` section.
+After code changes compile, run the new unit and integration tests by name first, then run broader display smoke tests. Finally run `display_baseline_capture --out-dir <path>` to produce artifacts, and keep one automated parity test that diffs those generated files against `plans/artifacts/display-rewrite/m0/`. Store the committed baseline files under `plans/artifacts/display-rewrite/m0/` and include brief transcript snippets in this plan’s `Artifacts and Notes` section.
 
 ## Concrete Steps
 
@@ -235,3 +235,4 @@ Dependencies for this milestone are existing display modules and Meson test wiri
 - 2026-03-05: Initial Milestone 0 child ExecPlan created to convert the umbrella rewrite strategy into concrete baseline harness work with explicit test and artifact deliverables.
 - 2026-03-05: Implemented M0 code deliverables (`meson.build` wiring, baseline unit/integration tests, deterministic capture tool) and recorded real command evidence showing validation blocked by existing `ncc`/core rebuild failures.
 - 2026-03-05: Rebased onto `codex/linux-build-and-test`, reran validation successfully, and generated baseline artifacts under `plans/artifacts/display-rewrite/m0/`.
+- 2026-03-17: Updated the documented baseline workflow so `display_baseline_capture` requires explicit `--out-dir` and noted the automated artifact-parity regression check added during review remediation.

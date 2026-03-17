@@ -155,6 +155,9 @@ ncc_exe = executable('ncc',
 
 test_runner = find_program('test/run_test.sh')
 test_dir    = meson.current_source_dir() / 'test'
+ncc_test_env = {
+  'MESON_SOURCE_ROOT': meson.project_source_root(),
+}
 
 # Library-level tests (link against libncc directly)
 test_pwz = executable('test_pwz',
@@ -163,7 +166,7 @@ test_pwz = executable('test_pwz',
   link_args : coverage_link_args,
   dependencies : libncc_dep,
 )
-test('pwz_smoke', test_pwz, suite : 'ncc')
+test('pwz_smoke', test_pwz, suite : 'ncc', env : ncc_test_env)
 
 test_bnf = executable('test_bnf',
   'test/test_bnf.c',
@@ -171,7 +174,7 @@ test_bnf = executable('test_bnf',
   link_args : coverage_link_args,
   dependencies : libncc_dep,
 )
-test('bnf_c_parse', test_bnf, suite : 'ncc')
+test('bnf_c_parse', test_bnf, suite : 'ncc', env : ncc_test_env)
 
 test_xform_template = executable('test_xform_template',
   'test/test_xform_template.c',
@@ -179,7 +182,7 @@ test_xform_template = executable('test_xform_template',
   link_args : coverage_link_args,
   dependencies : libncc_dep,
 )
-test('xform_template', test_xform_template, suite : 'ncc')
+test('xform_template', test_xform_template, suite : 'ncc', env : ncc_test_env)
 
 # Default ncc type settings for tests.  When the ncc binary is built with
 # overridden type names (e.g. n00b_vargs_t for the n00b project), the test
@@ -211,6 +214,7 @@ foreach name, params : ncc_compile_tests
     args : [ncc_exe, params[0], params[1]] + ncc_test_flags,
     suite : 'ncc',
     depends : ncc_exe,
+    env : ncc_test_env,
   )
 endforeach
 
@@ -234,5 +238,6 @@ foreach name, src : ncc_error_tests
     args : [ncc_exe, 'expect_error', src],
     suite : 'ncc',
     depends : ncc_exe,
+    env : ncc_test_env,
   )
 endforeach

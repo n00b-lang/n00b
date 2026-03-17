@@ -557,6 +557,31 @@ test_jump_return(void)
     printf("  [PASS] jump_return\n");
 }
 
+static void
+test_jump_return_value(void)
+{
+    if (!shared_grammar) {
+        printf("  [SKIP] jump_return_value\n");
+        return;
+    }
+
+    const char *src = "int f(void) { return 0; }\n";
+
+    n00b_parse_result_t *r = parse_c_source(shared_grammar, src, current_mode);
+    assert(n00b_parse_result_ok(r));
+
+    n00b_parse_tree_t *tree = n00b_parse_result_tree(r);
+    n00b_annot_result_t *ar = n00b_compile_walk(shared_grammar, tree);
+    assert(ar != NULL);
+
+    label_counts_t c = count_labels_from_tree(ar, tree);
+    assert(c.jump == 1);
+
+    n00b_symtab_free(ar->symtab);
+    n00b_parse_result_free(r);
+    printf("  [PASS] jump_return_value\n");
+}
+
 // ============================================================================
 // Test 8: Break + continue in loop
 // ============================================================================
@@ -1036,6 +1061,7 @@ run_all_tests(void)
     test_do_while();
     test_switch();
     test_jump_return();
+    test_jump_return_value();
     test_jump_break_continue();
     test_ternary();
     test_nested_control_flow();

@@ -1344,13 +1344,7 @@ test_nonzero_exit(void)
     assert(n00b_subproc_exited(&sp));
 
     n00b_result_t(int) ec = n00b_subproc_exit_code(&sp);
-    if (n00b_result_is_err(ec)) {
-        printf("  [SKIP] nonzero exit status unavailable (err=%d)\n",
-               n00b_result_get_err(ec));
-        n00b_conduit_io_destroy(io);
-        n00b_conduit_destroy(c);
-        return;
-    }
+    assert(n00b_result_is_ok(ec));
     assert(n00b_result_get(ec) == 42);
 
     // Not signaled — term_signal should be Err.

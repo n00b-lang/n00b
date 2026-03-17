@@ -178,6 +178,8 @@ test_proc_child_exit(void)
     assert(msg != nullptr);
     assert(msg->payload.pid == child);
     assert(msg->payload.events & N00B_CONDUIT_PROC_EXIT);
+    assert(WIFEXITED(msg->payload.exit_status));
+    assert(WEXITSTATUS(msg->payload.exit_status) == 42);
 
     // Reap the child.
     waitpid(child, nullptr, 0);

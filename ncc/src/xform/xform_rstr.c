@@ -1,6 +1,6 @@
 // xform_rstr.c — Transform: r"..." rich string literals.
 //
-// Matches __ncc_rstr("...") calls (produced by the prescan in ncc.c) and
+// Matches n00b_ncc_rstr("...") calls (produced by the prescan in ncc.c) and
 // replaces them with static compound literals containing pre-compiled
 // styling data.
 //
@@ -1026,10 +1026,10 @@ xform_rstr(ncc_xform_ctx_t *ctx, ncc_parse_tree_t *node)
         return NULL;
     }
 
-    // Check callee is __ncc_rstr.
+    // Check callee is n00b_ncc_rstr.
     const char *name = rstr_get_callee_name(node);
 
-    if (!name || strcmp(name, "__ncc_rstr") != 0) {
+    if (!name || strcmp(name, "n00b_ncc_rstr") != 0) {
         return NULL;
     }
 
@@ -1038,13 +1038,13 @@ xform_rstr(ncc_xform_ctx_t *ctx, ncc_parse_tree_t *node)
     ncc_parse_tree_t *kid2 = ncc_tree_child(node, 2);
 
     if (!kid2) {
-        fprintf(stderr, "ncc: error: __ncc_rstr() requires a string argument\n");
+        fprintf(stderr, "ncc: error: n00b_ncc_rstr() requires a string argument\n");
         exit(1);
     }
 
     // kid2 might be the ")" if no arguments.
     if (ncc_xform_leaf_text_eq(kid2, ")")) {
-        fprintf(stderr, "ncc: error: __ncc_rstr() requires a string argument\n");
+        fprintf(stderr, "ncc: error: n00b_ncc_rstr() requires a string argument\n");
         exit(1);
     }
 
@@ -1055,7 +1055,7 @@ xform_rstr(ncc_xform_ctx_t *ctx, ncc_parse_tree_t *node)
     char *content = extract_rstr_content(arglist, &content_len);
 
     if (!content) {
-        fprintf(stderr, "ncc: error: __ncc_rstr() argument must be a string literal\n");
+        fprintf(stderr, "ncc: error: n00b_ncc_rstr() argument must be a string literal\n");
         exit(1);
     }
 

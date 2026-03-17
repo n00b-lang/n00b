@@ -10,6 +10,7 @@
 #include "conduit/timer.h"
 #include "conduit/signal.h"
 #include "conduit/user_event.h"
+#include "conduit/proc_lifecycle_internal.h"
 #include "core/stw.h"
 
 #ifdef __linux__
@@ -367,7 +368,7 @@ epoll_io_wait(void *vctx, n00b_conduit_io_event_t *events, int max_events,
                             nullptr)
                         == 0
                     && info.si_pid > 0) {
-                    exit_status = info.si_status;
+                    exit_status = n00b_conduit_proc_wait_status_from_siginfo(&info);
                 }
 
                 n00b_conduit_proc_fire(entry->proc_watch,

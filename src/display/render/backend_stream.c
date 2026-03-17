@@ -17,6 +17,7 @@
 #include "core/buffer.h"
 #include "display/render/backend.h"
 #include "display/render/composite.h"
+#include "display/backend_stream_internal.h"
 
 // -------------------------------------------------------------------
 // Stream backend context
@@ -223,10 +224,6 @@ const n00b_renderer_vtable_t n00b_renderer_stream = {
 // Stream-specific helpers (for testing)
 // -------------------------------------------------------------------
 
-/*
- * Get the stream backend's internal buffer as a string.
- * Only valid when the backend is the stream backend.
- */
 n00b_string_t *
 n00b_stream_backend_get_buffer(void *ctx)
 {
@@ -234,9 +231,6 @@ n00b_stream_backend_get_buffer(void *ctx)
     return n00b_string_from_raw(sctx->buffer, (int64_t)sctx->buf_used);
 }
 
-/*
- * Get the byte count of the stream backend's buffer.
- */
 size_t
 n00b_stream_backend_get_length(void *ctx)
 {
@@ -244,9 +238,6 @@ n00b_stream_backend_get_length(void *ctx)
     return sctx->buf_used;
 }
 
-/*
- * Set the virtual terminal size for the stream backend.
- */
 void
 n00b_stream_backend_set_size(void *ctx, n00b_isize_t rows, n00b_isize_t cols)
 {

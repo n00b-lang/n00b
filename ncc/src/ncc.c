@@ -567,6 +567,11 @@ get_exe_dir(void)
 static char *
 find_grammar_path(void)
 {
+    const char *srcroot = getenv("NCC_SOURCE_ROOT");
+    if (!srcroot) {
+        srcroot = getenv("MESON_SOURCE_ROOT");
+    }
+
     char *exe_dir = get_exe_dir();
 
     if (exe_dir) {
@@ -593,6 +598,19 @@ find_grammar_path(void)
         }
 
         free(exe_dir);
+    }
+
+    if (srcroot) {
+        size_t path_len = strlen(srcroot) + strlen("/grammars/c_ncc.bnf");
+        char  *path     = malloc(path_len + 1);
+        snprintf(path, path_len + 1, "%s/grammars/c_ncc.bnf", srcroot);
+
+        FILE *f = fopen(path, "r");
+        if (f) {
+            fclose(f);
+            return path;
+        }
+        free(path);
     }
 
     static const char *fallbacks[] = {
@@ -769,7 +787,7 @@ wrap_system_headers(const char *src, size_t src_len, size_t *out_len)
 }
 
 // ============================================================================
-// Pre-CPP scan: r"..." → __ncc_rstr("...")
+// Pre-CPP scan: r"..." → n00b_ncc_rstr("...")
 // ============================================================================
 
 static bool
@@ -780,11 +798,11 @@ is_id_char(char c)
 }
 
 /**
- * @brief Rewrite r"..." to __ncc_rstr("...") in a source buffer.
+ * @brief Rewrite r"..." to n00b_ncc_rstr("...") in a source buffer.
  *
  * Scans the raw source before the C preprocessor runs. Tracks comment
  * and string context to avoid false matches. Handles adjacent string
- * concatenation (r"a" "b" → __ncc_rstr("a" "b")).
+ * concatenation (r"a" "b" → n00b_ncc_rstr("a" "b")).
  *
  * Returns a new buffer if any r"..." were found (caller frees old),
  * or the original buffer unchanged.
@@ -868,8 +886,8 @@ rstr_prescan(char *src, size_t len, size_t *out_len)
                     if (i > flush_from) {
                         RSTR_APPEND(src + flush_from, i - flush_from);
                     }
-                    // Emit __ncc_rstr( instead of r.
-                    RSTR_APPEND("__ncc_rstr(", 11);
+                    // Emit n00b_ncc_rstr( instead of r.
+                    RSTR_APPEND("n00b_ncc_rstr(", 14);
                     i++; // skip the 'r', keep the '"'
 
                     // Scan forward to find the end of the string.
@@ -1012,7 +1030,7 @@ run_preprocessor(const ncc_opts_t *opts, size_t *out_len)
         return NULL;
     }
 
-    // Prescan: rewrite r"..." → __ncc_rstr("...") before CPP.
+    // Prescan: rewrite r"..." → n00b_ncc_rstr("...") before CPP.
     // This must happen on the raw source before preprocessing.
     char  *wrapped     = rstr_prescan(raw_src, raw_len, &raw_len);
     size_t wrapped_len = raw_len;

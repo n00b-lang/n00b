@@ -6,6 +6,7 @@
 #include "display/event.h"
 #include "display/focus.h"
 #include "display/mouse.h"
+#include "display/backend_stream_internal.h"
 #include "display/render/backend.h"
 #include "display/render/canvas.h"
 #include "display/render/plane.h"
@@ -13,11 +14,6 @@
 #include "display/widgets/button.h"
 #include "display/widgets/label.h"
 #include "text/strings/string_ops.h"
-
-extern n00b_string_t *n00b_stream_backend_get_buffer(void *ctx);
-extern void          n00b_stream_backend_set_size(void         *ctx,
-                                                   n00b_isize_t  rows,
-                                                   n00b_isize_t  cols);
 
 static int g_button_clicks = 0;
 

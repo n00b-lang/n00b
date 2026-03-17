@@ -88,5 +88,5 @@ option('unicode_allow_downloads',
 
 option('unicode_strict_cache',
     type: 'boolean',
-    value: true,
+    value: false,
     description: 'Fail Unicode table generation when required cache files are missing.')

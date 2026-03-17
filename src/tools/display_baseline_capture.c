@@ -10,6 +10,7 @@
 #include "core/runtime.h"
 #include "display/focus.h"
 #include "display/render/backend.h"
+#include "display/backend_stream_internal.h"
 #include "display/render/canvas.h"
 #include "display/render/plane.h"
 #include "display/table/table.h"
@@ -17,12 +18,6 @@
 #include "display/widgets/button.h"
 #include "display/widgets/label.h"
 
-extern n00b_string_t *n00b_stream_backend_get_buffer(void *ctx);
-extern void          n00b_stream_backend_set_size(void         *ctx,
-                                                   n00b_isize_t  rows,
-                                                   n00b_isize_t  cols);
-
-#define DEFAULT_OUT_DIR   "plans/artifacts/display-rewrite/m0"
 #define TOOL_VERSION      "1"
 #define SCENE_ROWS        10
 #define SCENE_COLS        52
@@ -104,28 +99,36 @@ write_bytes_file(const char *path, const char *data, size_t len)
 static int
 write_scene_snapshot(const char *out_dir)
 {
+    int rc = -1;
+
     n00b_canvas_t *canvas = n00b_new_kargs(n00b_canvas_t, canvas,
-                                            .vtable = &n00b_renderer_stream);
+                                           .vtable = &n00b_renderer_stream);
+    n00b_plane_t *root    = nullptr;
+    n00b_plane_t *title   = nullptr;
+    n00b_plane_t *status  = nullptr;
+    n00b_plane_t *button  = nullptr;
+    n00b_focus_mgr_t *fm  = nullptr;
+
     n00b_stream_backend_set_size(canvas->backend_ctx, SCENE_ROWS, SCENE_COLS);
     n00b_canvas_resize(canvas, SCENE_ROWS, SCENE_COLS);
 
-    n00b_plane_t *root = n00b_new_kargs(n00b_plane_t, plane);
+    root         = n00b_new_kargs(n00b_plane_t, plane);
     root->width        = SCENE_COLS;
     root->height       = SCENE_ROWS;
 
-    n00b_plane_t *title = n00b_label_new(
+    title = n00b_label_new(
         n00b_string_from_cstr("Display Baseline Scene"),
         .canvas = canvas,
         .width  = 30,
         .height = 1);
 
-    n00b_plane_t *status = n00b_label_new(
+    status = n00b_label_new(
         n00b_string_from_cstr("Status: baseline-ready"),
         .canvas = canvas,
         .width  = 36,
         .height = 1);
 
-    n00b_plane_t *button = n00b_button_new(
+    button = n00b_button_new(
         n00b_string_from_cstr("Execute"),
         .canvas = canvas,
         .width  = 12,
@@ -136,45 +139,71 @@ write_scene_snapshot(const char *out_dir)
     n00b_plane_add_child(root, button, 2, 5);
     n00b_canvas_add_plane(canvas, root);
 
-    n00b_focus_mgr_t *fm = n00b_focus_mgr_new(canvas);
+    fm = n00b_focus_mgr_new(canvas);
     (void)n00b_focus_mgr_set(fm, button);
 
     n00b_canvas_render(canvas);
     n00b_string_t *buf = n00b_stream_backend_get_buffer(canvas->backend_ctx);
     if (!buf || !buf->data) {
-        return -1;
+        goto cleanup;
     }
 
     char path[PATH_MAX];
     if (build_path(path, sizeof(path), out_dir, "scene_stream.txt") != 0) {
-        return -1;
+        goto cleanup;
     }
 
     if (write_bytes_file(path, buf->data, buf->u8_bytes) != 0) {
-        return -1;
+        goto cleanup;
     }
 
-    n00b_focus_mgr_destroy(fm);
-    n00b_canvas_remove_plane(canvas, root);
-    n00b_plane_remove_child(root, title);
-    n00b_plane_remove_child(root, status);
-    n00b_plane_remove_child(root, button);
-    n00b_widget_detach(title);
-    n00b_widget_detach(status);
-    n00b_widget_detach(button);
-    n00b_plane_destroy(title);
-    n00b_plane_destroy(status);
-    n00b_plane_destroy(button);
-    n00b_plane_destroy(root);
-    n00b_canvas_destroy(canvas);
+    rc = 0;
+cleanup:
+    if (fm) {
+        n00b_focus_mgr_destroy(fm);
+    }
+    if (canvas && root) {
+        n00b_canvas_remove_plane(canvas, root);
+    }
+    if (root && title) {
+        n00b_plane_remove_child(root, title);
+    }
+    if (root && status) {
+        n00b_plane_remove_child(root, status);
+    }
+    if (root && button) {
+        n00b_plane_remove_child(root, button);
+    }
+    if (title) {
+        n00b_widget_detach(title);
+        n00b_plane_destroy(title);
+    }
+    if (status) {
+        n00b_widget_detach(status);
+        n00b_plane_destroy(status);
+    }
+    if (button) {
+        n00b_widget_detach(button);
+        n00b_plane_destroy(button);
+    }
+    if (root) {
+        n00b_plane_destroy(root);
+    }
+    if (canvas) {
+        n00b_canvas_destroy(canvas);
+    }
 
-    printf("wrote scene_stream.txt\n");
-    return 0;
+    if (rc == 0) {
+        printf("wrote scene_stream.txt\n");
+    }
+    return rc;
 }
 
 static int
 write_table_snapshot(const char *out_dir)
 {
+    int rc = -1;
+
     n00b_table_style_t style = n00b_table_style_ascii();
     n00b_table_t      *table = n00b_new_kargs(
         n00b_table_t,
@@ -182,6 +211,8 @@ write_table_snapshot(const char *out_dir)
         .num_cols    = 3,
         .table_props = style.table_props,
         .cell_props  = style.cell_props);
+    n00b_plane_t *plane      = nullptr;
+    n00b_canvas_t *canvas    = nullptr;
 
     n00b_table_add_cell(table, make_str("Component"));
     n00b_table_add_cell(table, make_str("Status"));
@@ -198,13 +229,13 @@ write_table_snapshot(const char *out_dir)
     n00b_table_add_cell(table, make_str("single control path"));
     n00b_table_end_row(table);
 
-    n00b_plane_t *plane = n00b_table_render(table, .width = TABLE_RENDER_COLS);
+    plane = n00b_table_render(table, .width = TABLE_RENDER_COLS);
     if (!plane) {
-        return -1;
+        goto cleanup;
     }
 
-    n00b_canvas_t *canvas = n00b_new_kargs(n00b_canvas_t, canvas,
-                                            .vtable = &n00b_renderer_stream);
+    canvas = n00b_new_kargs(n00b_canvas_t, canvas,
+                            .vtable = &n00b_renderer_stream);
     n00b_stream_backend_set_size(canvas->backend_ctx, plane->height, plane->width);
     n00b_canvas_resize(canvas, plane->height, plane->width);
     n00b_canvas_add_plane(canvas, plane);
@@ -212,24 +243,34 @@ write_table_snapshot(const char *out_dir)
 
     n00b_string_t *buf = n00b_stream_backend_get_buffer(canvas->backend_ctx);
     if (!buf || !buf->data) {
-        return -1;
+        goto cleanup;
     }
 
     char path[PATH_MAX];
     if (build_path(path, sizeof(path), out_dir, "table_stream.txt") != 0) {
-        return -1;
+        goto cleanup;
     }
 
     if (write_bytes_file(path, buf->data, buf->u8_bytes) != 0) {
-        return -1;
+        goto cleanup;
     }
 
-    n00b_canvas_remove_plane(canvas, plane);
-    n00b_canvas_destroy(canvas);
-    n00b_table_destroy(table);
+    rc = 0;
+cleanup:
+    if (canvas && plane) {
+        n00b_canvas_remove_plane(canvas, plane);
+    }
+    if (canvas) {
+        n00b_canvas_destroy(canvas);
+    }
+    if (table) {
+        n00b_table_destroy(table);
+    }
 
-    printf("wrote table_stream.txt\n");
-    return 0;
+    if (rc == 0) {
+        printf("wrote table_stream.txt\n");
+    }
+    return rc;
 }
 
 static int
@@ -273,7 +314,7 @@ static void
 print_usage(const char *prog)
 {
     fprintf(stderr,
-            "Usage: %s [--out-dir PATH]\n"
+            "Usage: %s --out-dir PATH\n"
             "Capture deterministic display baseline artifacts.\n",
             prog);
 }
@@ -281,7 +322,9 @@ print_usage(const char *prog)
 int
 main(int argc, char **argv)
 {
-    const char *out_dir = DEFAULT_OUT_DIR;
+    int rc = 1;
+    bool runtime_inited = false;
+    const char *out_dir = nullptr;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--out-dir") == 0) {
@@ -303,30 +346,41 @@ main(int argc, char **argv)
         return 1;
     }
 
+    if (!out_dir) {
+        fprintf(stderr, "Error: --out-dir is required.\n");
+        print_usage(argv[0]);
+        return 1;
+    }
+
     n00b_runtime_t runtime;
     n00b_init(&runtime, argc, argv);
+    runtime_inited = true;
 
     if (ensure_dir_recursive(out_dir) != 0) {
         fprintf(stderr, "Error: could not create output directory '%s': %s\n",
                 out_dir, strerror(errno));
-        return 1;
+        goto out;
     }
 
     if (write_scene_snapshot(out_dir) != 0) {
         fprintf(stderr, "Error: failed writing scene snapshot.\n");
-        return 1;
+        goto out;
     }
 
     if (write_table_snapshot(out_dir) != 0) {
         fprintf(stderr, "Error: failed writing table snapshot.\n");
-        return 1;
+        goto out;
     }
 
     if (write_metadata(out_dir) != 0) {
         fprintf(stderr, "Error: failed writing metadata.\n");
-        return 1;
+        goto out;
     }
 
-    n00b_shutdown();
-    return 0;
+    rc = 0;
+out:
+    if (runtime_inited) {
+        n00b_shutdown();
+    }
+    return rc;
 }

@@ -738,13 +738,6 @@ test_parse_real_binary(void)
                bin->num_symtab, bin->num_dynsym);
     }
 
-    if (bin->num_dynamic > 0) {
-        n00b_elf_dynamic_t *dt_null = n00b_elf_dynamic_by_tag(bin, DT_NULL);
-        if (dt_null == nullptr) {
-            printf("    [WARN] DT_NULL not found in parsed dynamic table\n");
-        }
-    }
-
     if (n00b_elf_has_interpreter(bin)) {
         printf("    interpreter: %s\n", bin->interpreter->data);
     }
