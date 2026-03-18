@@ -18,9 +18,8 @@
 
 #include "n00b.h"
 #include "core/runtime.h"
+#include "internal/display/startup_probe.h"
 #include "display/render/backend_registry.h"
-#include "display/render/canvas.h"
-#include "text/strings/string_ops.h"
 
 #define DEFAULT_OUT_DIR "plans/artifacts/display-rewrite/m6"
 #define TOOL_VERSION    "1"
@@ -31,12 +30,6 @@ typedef struct cutover_case_t {
     bool        allow_fallback;
     bool        allow_env_override;
 } cutover_case_t;
-
-typedef struct {
-    bool        startup_ok;
-    const char *selected_backend;
-    bool        fallback_used;
-} startup_probe_t;
 
 static int
 ensure_dir_recursive(const char *dir)
@@ -103,21 +96,6 @@ write_bytes_file(const char *path, const char *data, size_t len)
     return 0;
 }
 
-static void
-set_backend_override(const char *value)
-{
-#ifdef _WIN32
-    _putenv_s("N00B_RENDERER_BACKEND", value ? value : "");
-#else
-    if (value) {
-        setenv("N00B_RENDERER_BACKEND", value, 1);
-    }
-    else {
-        unsetenv("N00B_RENDERER_BACKEND");
-    }
-#endif
-}
-
 static char *
 dup_cstr(const char *s)
 {
@@ -135,76 +113,6 @@ dup_cstr(const char *s)
     return copy;
 }
 
-static bool
-backend_request_used_fallback(const char *requested_backend,
-                              const char *selected_backend,
-                              bool        allow_fallback,
-                              bool        allow_env_override)
-{
-    if (!selected_backend || !selected_backend[0]) {
-        return false;
-    }
-
-    n00b_string_t *requested = n00b_string_from_cstr(
-        (requested_backend && requested_backend[0]) ? requested_backend : "auto");
-    n00b_list_t(n00b_string_t *) candidates =
-        n00b_renderer_candidate_names(requested,
-                                      .allow_fallback     = allow_fallback,
-                                      .allow_env_override = allow_env_override);
-
-    if (candidates.len == 0) {
-        return false;
-    }
-
-    n00b_string_t *primary_candidate = n00b_list_get(candidates, 0);
-    n00b_result_t(n00b_renderer_vtable_ptr_t) primary_resolved =
-        n00b_renderer_resolve_exact(primary_candidate, .allow_dynamic_load = false);
-
-    if (n00b_result_is_ok(primary_resolved)) {
-        const n00b_renderer_vtable_t *vtable = n00b_result_get(primary_resolved);
-        if (vtable && vtable->name) {
-            return strcmp(vtable->name, selected_backend) != 0;
-        }
-    }
-
-    return !n00b_unicode_str_eq(primary_candidate,
-                                n00b_string_from_cstr(selected_backend),
-                                .case_sensitive = false);
-}
-
-static startup_probe_t
-probe_startup(const char                         *requested_backend,
-              bool                                allow_fallback,
-              bool                                allow_env_override,
-              n00b_conduit_topic_t(n00b_buffer_t *) *output)
-{
-    startup_probe_t result = {
-        .startup_ok       = false,
-        .selected_backend = "none",
-        .fallback_used    = false,
-    };
-
-    n00b_canvas_t *canvas = n00b_alloc(n00b_canvas_t);
-    n00b_canvas_init(canvas,
-                     .backend_name               = n00b_string_from_cstr(requested_backend),
-                     .backend_allow_fallback     = allow_fallback,
-                     .backend_allow_dynamic_load = false,
-                     .backend_allow_env_override = allow_env_override,
-                     .output                     = output);
-
-    result.startup_ok = canvas->backend_ctx != nullptr;
-    if (result.startup_ok && canvas->vtable && canvas->vtable->name) {
-        result.selected_backend = canvas->vtable->name;
-        result.fallback_used = backend_request_used_fallback(requested_backend,
-                                                             result.selected_backend,
-                                                             allow_fallback,
-                                                             allow_env_override);
-    }
-
-    n00b_canvas_destroy(canvas);
-    return result;
-}
-
 static int
 run_cutover_case(const cutover_case_t               *spec,
                  FILE                                *report,
@@ -215,10 +123,11 @@ run_cutover_case(const cutover_case_t               *spec,
     }
 
     const char *requested = spec->requested_backend ? spec->requested_backend : "auto";
-    startup_probe_t result = probe_startup(requested,
-                                           spec->allow_fallback,
-                                           spec->allow_env_override,
-                                           output);
+    n00b_display_startup_probe_t result =
+        n00b_display_probe_startup(requested,
+                                   .allow_fallback = spec->allow_fallback,
+                                   .allow_env_override = spec->allow_env_override,
+                                   .output = output);
 
     fprintf(report,
             "case=%s requested=%s allow_fallback=%s allow_env_override=%s selected=%s startup=%s fallback_used=%s\n",
@@ -349,8 +258,16 @@ main(int argc, char **argv)
     auto *stdout_topic =
         (n00b_conduit_topic_t(n00b_buffer_t *) *)rt->stdout_topic;
 
-    startup_probe_t gui_probe = probe_startup("gui", false, false, stdout_topic);
-    startup_probe_t notcurses_probe = probe_startup("notcurses", false, false, stdout_topic);
+    n00b_display_startup_probe_t gui_probe =
+        n00b_display_probe_startup("gui",
+                                   .allow_fallback = false,
+                                   .allow_env_override = false,
+                                   .output = stdout_topic);
+    n00b_display_startup_probe_t notcurses_probe =
+        n00b_display_probe_startup("notcurses",
+                                   .allow_fallback = false,
+                                   .allow_env_override = false,
+                                   .output = stdout_topic);
     bool gui_available = gui_probe.startup_ok;
     bool notcurses_available = notcurses_probe.startup_ok;
     bool x11_built = n00b_result_is_ok(
@@ -379,13 +296,13 @@ main(int argc, char **argv)
 
     for (size_t i = 0; i < (sizeof(cases) / sizeof(cases[0])); i++) {
         if (strcmp(cases[i].label, "env_override_stream") == 0) {
-            set_backend_override("stream");
+            n00b_display_set_backend_override("stream");
         }
         else if (saved_override) {
-            set_backend_override(saved_override);
+            n00b_display_set_backend_override(saved_override);
         }
         else {
-            set_backend_override(nullptr);
+            n00b_display_set_backend_override(nullptr);
         }
 
         if (run_cutover_case(&cases[i], report, stdout_topic) != 0) {
@@ -398,10 +315,10 @@ main(int argc, char **argv)
     }
 
     if (saved_override) {
-        set_backend_override(saved_override);
+        n00b_display_set_backend_override(saved_override);
     }
     else {
-        set_backend_override(nullptr);
+        n00b_display_set_backend_override(nullptr);
     }
     free(saved_override);
 

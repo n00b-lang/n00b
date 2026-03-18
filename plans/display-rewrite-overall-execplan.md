@@ -36,6 +36,7 @@ This plan is the top-level roadmap for the in-place rewrite. "In-place" means ex
 - [x] (2026-03-18 04:46Z) Applied M5 review remediation on `display-rewrite/m5-runtime-selection`: explicit backend requests now beat environment defaults, shared fallback/reporting helpers and canvas backend-status accessors closed the M5 safety/reporting gaps, `stream` / `dumb` demo output is visible, `display_m5_artifacts` parity coverage was added, the tracked M5 artifacts/docs were refreshed, and `git diff --check` remained clean.
 - [x] (2026-03-05 14:23Z) Authored the Milestone 6 child ExecPlan in `plans/display-rewrite/m6-hardening-and-cutover-execplan.md`.
 - [x] (2026-03-05 14:42Z) Executed Milestone 6 and recorded lifecycle/logging hardening, doc cutover, M6 validation matrix, and deterministic cutover artifacts in `plans/display-rewrite/m6-hardening-and-cutover-execplan.md` and `plans/artifacts/display-rewrite/m6/`.
+- [x] (2026-03-18 08:06Z) Applied M6 review remediation on `display-rewrite/m6-hardening-and-cutover`: added proof regressions for fallback metrics, terminal hit-testing/compositing, and undefined notcurses coordinates; extracted shared M6 startup probing; removed the dead `notcurses_probe` target; added `display_m6_artifacts`; refreshed the M6 artifacts; and revalidated optional backend coverage.
 
 ## Surprises & Discoveries
 
@@ -81,6 +82,8 @@ This plan is the top-level roadmap for the in-place rewrite. "In-place" means ex
   Evidence: `diff -u plans/artifacts/display-rewrite/m5/scene_stream.txt plans/artifacts/display-rewrite/m6/scene_stream.txt` and corresponding table diff both produced no output.
 - Observation: `widget_demo` no longer mutates hardcoded `/tmp` debug logs by default, while explicit opt-in logging works.
   Evidence: `stat -c %Y /tmp/widget_demo.log` unchanged across default run and `--debug-log plans/artifacts/display-rewrite/m6/widget_demo_debug.log` created the requested log.
+- Observation: M6 cutover artifacts are only reproducible in this workspace when the parity path pins a real terminal description instead of inheriting `TERM=dumb`.
+  Evidence: direct shell runs of `display_m6_cutover_report` recorded `notcurses_available=false`, while `test_display_m6_artifacts.sh` stabilized the refreshed `cutover_report.txt` by invoking the tool under `TERM=xterm-256color`, yielding `notcurses_available=true`.
 
 ## Decision Log
 
@@ -132,6 +135,9 @@ This plan is the top-level roadmap for the in-place rewrite. "In-place" means ex
 - Decision: Treat hardcoded `/tmp` logging in user-facing display paths as disallowed by default; require explicit opt-in diagnostics via CLI/env.
   Rationale: Final cutover behavior must be side-effect free unless users intentionally request logs.
   Date/Author: 2026-03-05 / Codex
+- Decision: Treat Milestone 6 as fully complete only after the review-remediation pass added targeted proof tests and parity automation on top of the original cutover matrix.
+  Rationale: the first M6 completion pass proved the main migration goals, but review follow-up showed runtime geometry and evidence reproducibility still needed the same hardening standard that M1-M5 already adopted.
+  Date/Author: 2026-03-18 / Codex
 
 ## Outcomes & Retrospective
 
@@ -257,7 +263,7 @@ Unit tests for this milestone must confirm no deprecated paths are silently used
 
 Acceptance for Milestone 6 is a fully in-place rewritten display subsystem with aligned docs, green test matrix, and a reproducible final demo.
 
-Completion evidence: `display_canvas_lifecycle` and `display_m6_cutover_matrix` passed with prior milestone suites; optional backend tests present in this build (`notcurses_backend`, `x11_backend`, `display_cocoa_input`) passed; `display_m6_cutover_report` and companion artifacts were generated under `plans/artifacts/display-rewrite/m6/`; and M6 stream parity diffs against M5 were empty.
+Completion evidence: `display_canvas_lifecycle`, `display_m6_cutover_matrix`, and the new review-remediation proofs in `render_canvas`, `mouse`, and `display_terminal_input` passed with prior milestone suites; optional backend tests present in this build (`notcurses_backend`, `x11_backend`) passed; `display_m6_cutover_report` and companion artifacts were regenerated under `plans/artifacts/display-rewrite/m6/` through the shared `display_startup_probe` helper; `display_m6_artifacts` now proves the ten-file M6 artifact bundle matches regenerated output with clean whitespace; the dead `notcurses_probe` target was removed; and M6 stream parity diffs against M5 remained empty.
 
 ## Concrete Steps
 
@@ -574,3 +580,4 @@ Dependencies that materially affect milestone planning include optional GUI/rend
 - 2026-03-18: Updated umbrella plan after M5 review remediation so the recorded Milestone 5 state now includes explicit-request precedence, shared fallback/reporting helpers, safe failed-startup behavior, visible `stream` / `dumb` demo output, `display_m5_artifacts` parity automation, refreshed M5 artifacts/docs, and the clean post-remediation validation matrix.
 - 2026-03-05: Marked Milestone 6 child ExecPlan authoring as complete after creating `plans/display-rewrite/m6-hardening-and-cutover-execplan.md`, while keeping remaining execution scope at Milestone 6 execution.
 - 2026-03-05: Updated umbrella plan after Milestone 6 execution to mark M6 complete, record final hardening/cutover evidence, and close remaining rewrite scope.
+- 2026-03-18: Updated the umbrella plan after M6 review remediation so the recorded Milestone 6 state now includes the added proof regressions, shared startup probing, `display_m6_artifacts` parity automation, the refreshed whitespace-clean artifact bundle, and the removal of the dead `notcurses_probe` target.

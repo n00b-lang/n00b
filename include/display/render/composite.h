@@ -136,6 +136,22 @@ n00b_composite_entry_info(const n00b_composite_entry_t *entry,
                            int32_t                       cell_px_h);
 
 /**
+ * @brief Expand a pixel rect to the enclosing cell grid footprint.
+ *
+ * The rect origin is rounded down to the nearest cell boundary and the
+ * far edge is rounded up so partially covered cells stay visible and
+ * clickable on cell-only backends.
+ *
+ * @param rect      Rect to rewrite in place.
+ * @param cell_px_w Pixels per cell column.
+ * @param cell_px_h Pixels per cell row.
+ */
+extern void
+n00b_composite_snap_rect_to_cells(n00b_rect_t *rect,
+                                   int32_t      cell_px_w,
+                                   int32_t      cell_px_h);
+
+/**
  * @brief Apply graceful degradation to a single cell.
  *
  * Backends that need degradation call this per-cell.  Pixel backends

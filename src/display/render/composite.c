@@ -44,6 +44,27 @@ imax32(int32_t a, int32_t b) { return a > b ? a : b; }
 static inline int32_t
 imin32(int32_t a, int32_t b) { return a < b ? a : b; }
 
+static inline int32_t
+floor_div_i32(int32_t v, int32_t d)
+{
+    if (d <= 0) {
+        return v;
+    }
+    if (v >= 0) {
+        return v / d;
+    }
+    return -(((-v) + d - 1) / d);
+}
+
+static inline int32_t
+ceil_div_i32(int32_t v, int32_t d)
+{
+    if (d <= 0) {
+        return v;
+    }
+    return -floor_div_i32(-v, d);
+}
+
 static void
 flatten_recurse(flatten_ctx_t *ctx, n00b_plane_t *p,
                 int32_t parent_x, int32_t parent_y, int32_t parent_z,
@@ -275,9 +296,17 @@ n00b_composite_entry_info(const n00b_composite_entry_t *entry,
     out->box = p->box;
 
     // Compute box insets in pixels.
+    int32_t inset_top = 0;
+    int32_t inset_bot = 0;
+    int32_t inset_left = 0;
+    int32_t inset_right = 0;
     n00b_box_insets_px(p->box, cell_px_w, cell_px_h,
-                        &out->inset_top, &out->inset_bot,
-                        &out->inset_left, &out->inset_right);
+                        &inset_top, &inset_bot,
+                        &inset_left, &inset_right);
+    out->inset_top = (n00b_isize_t)inset_top;
+    out->inset_bot = (n00b_isize_t)inset_bot;
+    out->inset_left = (n00b_isize_t)inset_left;
+    out->inset_right = (n00b_isize_t)inset_right;
 
     // Outer box origin (after margins, in pixels).
     int32_t margin_top  = p->box ? p->box->margin_top  * cell_px_h : 0;
@@ -302,6 +331,37 @@ n00b_composite_entry_info(const n00b_composite_entry_t *entry,
         p, p->box ? p->box->fill_style : nullptr, 2);
     out->text_style = n00b_composite_resolve_style(
         p, p->default_style, 0);
+}
+
+void
+n00b_composite_snap_rect_to_cells(n00b_rect_t *rect,
+                                   int32_t      cell_px_w,
+                                   int32_t      cell_px_h)
+{
+    if (!rect) {
+        return;
+    }
+
+    int32_t cpw = cell_px_w > 0 ? cell_px_w : 1;
+    int32_t cph = cell_px_h > 0 ? cell_px_h : 1;
+
+    if (rect->width <= 0 || rect->height <= 0) {
+        rect->width = 0;
+        rect->height = 0;
+        return;
+    }
+
+    int32_t right = rect->x + rect->width;
+    int32_t bottom = rect->y + rect->height;
+    int32_t snapped_x = floor_div_i32(rect->x, cpw) * cpw;
+    int32_t snapped_y = floor_div_i32(rect->y, cph) * cph;
+    int32_t snapped_right = ceil_div_i32(right, cpw) * cpw;
+    int32_t snapped_bottom = ceil_div_i32(bottom, cph) * cph;
+
+    rect->x = snapped_x;
+    rect->y = snapped_y;
+    rect->width = snapped_right - snapped_x;
+    rect->height = snapped_bottom - snapped_y;
 }
 
 // -------------------------------------------------------------------
@@ -417,11 +477,35 @@ n00b_composite_commands_to_grid(const n00b_composite_entry_t *entries,
         n00b_entry_info_t info;
         n00b_composite_entry_info(entry, &info, cell_px_w, cell_px_h);
 
+        n00b_rect_t outer_rect = {
+            .x = info.outer_x,
+            .y = info.outer_y,
+            .width = (int32_t)info.outer_cols,
+            .height = (int32_t)info.outer_rows,
+        };
+        n00b_rect_t content_rect = {
+            .x = info.content_x,
+            .y = info.content_y,
+            .width = p->width,
+            .height = p->height,
+        };
+        n00b_rect_t clip_rect = {
+            .x = entry->clip_x,
+            .y = entry->clip_y,
+            .width = entry->clip_w,
+            .height = entry->clip_h,
+        };
+
+        if (cell_px_w > 1 || cell_px_h > 1) {
+            n00b_composite_snap_rect_to_cells(&outer_rect, cell_px_w, cell_px_h);
+            n00b_composite_snap_rect_to_cells(&clip_rect, cell_px_w, cell_px_h);
+        }
+
         // Stamp box decoration.
-        n00b_isize_t stamp_row  = (n00b_isize_t)(info.outer_y / cell_px_h);
-        n00b_isize_t stamp_col  = (n00b_isize_t)(info.outer_x / cell_px_w);
-        n00b_isize_t stamp_rows = (n00b_isize_t)(info.outer_rows / cell_px_h);
-        n00b_isize_t stamp_cols = (n00b_isize_t)(info.outer_cols / cell_px_w);
+        n00b_isize_t stamp_row  = (n00b_isize_t)floor_div_i32(outer_rect.y, cell_px_h);
+        n00b_isize_t stamp_col  = (n00b_isize_t)floor_div_i32(outer_rect.x, cell_px_w);
+        n00b_isize_t stamp_rows = (n00b_isize_t)(outer_rect.height / cell_px_h);
+        n00b_isize_t stamp_cols = (n00b_isize_t)(outer_rect.width / cell_px_w);
 
         if (info.box && info.box->border_theme) {
             if (stamp_row >= 0
@@ -436,15 +520,11 @@ n00b_composite_commands_to_grid(const n00b_composite_entry_t *entries,
             }
         }
 
-        // Content origin in cells.
-        int32_t content_cell_x = info.content_x / cell_px_w;
-        int32_t content_cell_y = info.content_y / cell_px_h;
-
         // Clip rectangle in cells.
-        int32_t clip_cell_y = entry->clip_y / cell_px_h;
-        int32_t clip_cell_x = entry->clip_x / cell_px_w;
-        int32_t clip_cell_b = (entry->clip_y + entry->clip_h) / cell_px_h;
-        int32_t clip_cell_r = (entry->clip_x + entry->clip_w) / cell_px_w;
+        int32_t clip_cell_y = floor_div_i32(clip_rect.y, cell_px_h);
+        int32_t clip_cell_x = floor_div_i32(clip_rect.x, cell_px_w);
+        int32_t clip_cell_b = clip_cell_y + (clip_rect.height / cell_px_h);
+        int32_t clip_cell_r = clip_cell_x + (clip_rect.width / cell_px_w);
 
         // Walk draw commands, converting pixel coords to cells.
         for (n00b_isize_t c = 0; c < p->draw_list.count; c++) {
@@ -463,14 +543,14 @@ n00b_composite_commands_to_grid(const n00b_composite_entry_t *entries,
 
                 // Draw commands are in pixels; for cell backends
                 // cell_px_w == cell_px_h == 1, so pixel == cell.
-                int32_t base_col = content_cell_x
-                                 + cmd->text.x / cell_px_w;
-                int32_t base_row = content_cell_y
-                                 + cmd->text.y / cell_px_h;
-
-                // Apply scroll offset.
-                base_col -= p->scroll_x / cell_px_w;
-                base_row -= p->scroll_y / cell_px_h;
+                int32_t base_col = floor_div_i32(content_rect.x
+                                                 + cmd->text.x
+                                                 - p->scroll_x,
+                                                 cell_px_w);
+                int32_t base_row = floor_div_i32(content_rect.y
+                                                 + cmd->text.y
+                                                 - p->scroll_y,
+                                                 cell_px_h);
 
                 // Decode each codepoint and place into cells.
                 const uint8_t *bytes = (const uint8_t *)text->data;
@@ -505,12 +585,14 @@ n00b_composite_commands_to_grid(const n00b_composite_entry_t *entries,
                                              ? cmd->glyph.style
                                              : info.text_style;
 
-                int32_t col = content_cell_x
-                            + cmd->glyph.x / cell_px_w
-                            - p->scroll_x / cell_px_w;
-                int32_t row = content_cell_y
-                            + cmd->glyph.y / cell_px_h
-                            - p->scroll_y / cell_px_h;
+                int32_t col = floor_div_i32(content_rect.x
+                                            + cmd->glyph.x
+                                            - p->scroll_x,
+                                            cell_px_w);
+                int32_t row = floor_div_i32(content_rect.y
+                                            + cmd->glyph.y
+                                            - p->scroll_y,
+                                            cell_px_h);
 
                 int cp_width = n00b_unicode_char_width(cmd->glyph.cp);
 
@@ -527,14 +609,23 @@ n00b_composite_commands_to_grid(const n00b_composite_entry_t *entries,
                                              ? cmd->fill_rect.style
                                              : info.fill_style;
 
-                int32_t start_col = content_cell_x
-                                  + cmd->fill_rect.x / cell_px_w
-                                  - p->scroll_x / cell_px_w;
-                int32_t start_row = content_cell_y
-                                  + cmd->fill_rect.y / cell_px_h
-                                  - p->scroll_y / cell_px_h;
-                int32_t end_col = start_col + cmd->fill_rect.w / cell_px_w;
-                int32_t end_row = start_row + cmd->fill_rect.h / cell_px_h;
+                n00b_rect_t fill_rect = {
+                    .x = content_rect.x + cmd->fill_rect.x - p->scroll_x,
+                    .y = content_rect.y + cmd->fill_rect.y - p->scroll_y,
+                    .width = cmd->fill_rect.w,
+                    .height = cmd->fill_rect.h,
+                };
+
+                if (cell_px_w > 1 || cell_px_h > 1) {
+                    n00b_composite_snap_rect_to_cells(&fill_rect,
+                                                      cell_px_w,
+                                                      cell_px_h);
+                }
+
+                int32_t start_col = floor_div_i32(fill_rect.x, cell_px_w);
+                int32_t start_row = floor_div_i32(fill_rect.y, cell_px_h);
+                int32_t end_col = start_col + (fill_rect.width / cell_px_w);
+                int32_t end_row = start_row + (fill_rect.height / cell_px_h);
 
                 n00b_codepoint_t cp = cmd->fill_rect.cp;
                 int cp_width = n00b_unicode_char_width(cp);

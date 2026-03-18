@@ -21,6 +21,7 @@
 #include "display/event.h"
 #include "display/mouse.h"
 #include "display/focus.h"
+#include "display/backend_stream_internal.h"
 
 // -------------------------------------------------------------------
 // Helpers
@@ -37,6 +38,34 @@ make_plane(int32_t x, int32_t y, n00b_isize_t cols, n00b_isize_t rows)
     p->y = y;
     return p;
 }
+
+typedef struct {
+    int32_t x;
+    int32_t y;
+    int calls;
+} mouse_capture_widget_t;
+
+static bool
+capture_widget_handle_event(n00b_plane_t *plane,
+                            void *data,
+                            const n00b_event_t *event)
+{
+    (void)plane;
+    mouse_capture_widget_t *capture = data;
+    if (event->type != N00B_EVENT_MOUSE) {
+        return false;
+    }
+
+    capture->x = event->mouse.x;
+    capture->y = event->mouse.y;
+    capture->calls++;
+    return true;
+}
+
+static const n00b_widget_vtable_t capture_widget_vtable = {
+    .kind = "capture_widget",
+    .handle_event = capture_widget_handle_event,
+};
 
 // -------------------------------------------------------------------
 // Test 1: Hit test — basic
@@ -161,6 +190,90 @@ test_hit_test_terminal_quantized(void)
 
     n00b_plane_destroy(plane);
     printf("  PASS: hit_test_terminal_quantized\n");
+}
+
+static void
+test_hit_test_terminal_pixel_coords_preserved(void)
+{
+    n00b_canvas_t *canvas = n00b_new_kargs(n00b_canvas_t,
+                                           canvas,
+                                           .vtable = &n00b_renderer_stream);
+    canvas->caps = N00B_RCAP_MANAGES_TTY | N00B_RCAP_PIXEL_COORDS;
+
+    n00b_plane_t *plane = make_plane(5, 35, 2, 19);
+    n00b_canvas_add_plane(canvas, plane);
+
+    n00b_plane_t *hit = n00b_mouse_hit_test(plane, 1, 40, 8, 16);
+    assert(hit == nullptr);
+
+    hit = n00b_mouse_hit_test(plane, 5, 35, 8, 16);
+    assert(hit == plane);
+
+    n00b_plane_destroy(plane);
+    n00b_canvas_destroy(canvas);
+    printf("  PASS: hit_test_terminal_pixel_coords_preserved\n");
+}
+
+static void
+test_hit_test_terminal_nested_uses_absolute_quantization(void)
+{
+    n00b_canvas_t *canvas = n00b_new_kargs(n00b_canvas_t,
+                                           canvas,
+                                           .vtable = &n00b_renderer_stream);
+    canvas->caps = N00B_RCAP_MANAGES_TTY;
+
+    n00b_plane_t *parent = make_plane(5, 0, 16, 8);
+    n00b_plane_t *child = make_plane(0, 0, 2, 8);
+    n00b_plane_add_child(parent, child, 5, 0);
+    n00b_canvas_add_plane(canvas, parent);
+
+    n00b_plane_t *hit = n00b_mouse_hit_test(parent, 1, 1, 8, 8);
+    assert(hit == parent);
+
+    hit = n00b_mouse_hit_test(parent, 11, 1, 8, 8);
+    assert(hit == child);
+
+    n00b_plane_destroy(child);
+    n00b_plane_destroy(parent);
+    n00b_canvas_destroy(canvas);
+    printf("  PASS: hit_test_terminal_nested_uses_absolute_quantization\n");
+}
+
+static void
+test_route_event_terminal_preserves_true_local_coords(void)
+{
+    n00b_canvas_t *canvas = n00b_new_kargs(n00b_canvas_t,
+                                           canvas,
+                                           .vtable = &n00b_renderer_stream);
+    canvas->caps = N00B_RCAP_MANAGES_TTY;
+    canvas->cell_px_w = 8;
+    canvas->cell_px_h = 8;
+
+    n00b_plane_t *plane = make_plane(35, 0, 8, 8);
+    mouse_capture_widget_t capture = {0};
+    n00b_widget_attach(plane, &capture_widget_vtable, &capture);
+    n00b_canvas_add_plane(canvas, plane);
+
+    n00b_event_t event = {
+        .type = N00B_EVENT_MOUSE,
+        .mouse = {
+            .x = 35,
+            .y = 0,
+            .button = N00B_MOUSE_LEFT,
+            .action = N00B_MOUSE_PRESS,
+            .mods = N00B_MOD_NONE,
+        },
+    };
+
+    n00b_mouse_route_event(canvas, nullptr, &event);
+    assert(capture.calls == 1);
+    assert(capture.x == 0);
+    assert(capture.y == 0);
+
+    n00b_widget_detach(plane);
+    n00b_plane_destroy(plane);
+    n00b_canvas_destroy(canvas);
+    printf("  PASS: route_event_terminal_preserves_true_local_coords\n");
 }
 
 // -------------------------------------------------------------------
@@ -309,6 +422,9 @@ main(int argc, char **argv)
     test_hit_test_miss();
     test_hit_test_invisible();
     test_hit_test_terminal_quantized();
+    test_hit_test_terminal_pixel_coords_preserved();
+    test_hit_test_terminal_nested_uses_absolute_quantization();
+    test_route_event_terminal_preserves_true_local_coords();
     test_capture();
     test_button_mouse_click();
     test_sgr_encoding();

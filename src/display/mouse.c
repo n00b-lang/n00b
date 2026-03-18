@@ -9,67 +9,48 @@
 #include "display/render/canvas.h"
 #include "display/render/plane.h"
 #include "display/render/box.h"
+#include "display/render/composite.h"
 #include "display/render/types.h"
 #include "display/event.h"
 #include "display/widget.h"
 #include "display/focus.h"
 
-static inline int32_t
-floor_div_i32(int32_t v, int32_t d)
-{
-    if (d <= 0) {
-        return v;
-    }
-    if (v >= 0) {
-        return v / d;
-    }
-    return -(((-v) + d - 1) / d);
-}
-
-static inline int32_t
-align_down_i32(int32_t v, int32_t step)
-{
-    return floor_div_i32(v, step) * step;
-}
-
 // -------------------------------------------------------------------
 // Hit testing
 // -------------------------------------------------------------------
 
-/*
- * Compute the full pixel footprint of a plane including box decorations.
- * width/height are already in pixels.  Box insets are cell counts
- * that need scaling by cell_px_w/h.
- */
-static void
-plane_full_pixel_size(n00b_plane_t *plane,
-                       int32_t cell_px_w, int32_t cell_px_h,
-                       int32_t *out_w, int32_t *out_h)
+static bool
+canvas_uses_cell_snapped_bounds(const n00b_canvas_t *canvas)
 {
-    int32_t w = (int32_t)plane->width;  // Content size in pixels.
-    int32_t h = (int32_t)plane->height;
-
-    // When layout has run, bounds track the assigned outer size.
-    // Prefer them for hit-testing so border/padding footprint stays exact.
-    if (plane->bounds.width > 0 && plane->bounds.height > 0) {
-        w = plane->bounds.width;
-        h = plane->bounds.height;
-    }
-    else if (plane->box) {
-        int32_t it, ib, il, ir;
-        n00b_box_insets_px(plane->box, cell_px_w, cell_px_h,
-                            &it, &ib, &il, &ir);
-        w += il + ir;
-        h += it + ib;
-    }
-
-    *out_w = w;
-    *out_h = h;
+    return canvas
+        && (canvas->caps & N00B_RCAP_MANAGES_TTY)
+        && !(canvas->caps & N00B_RCAP_PIXEL_COORDS);
 }
 
-n00b_plane_t *
-n00b_mouse_hit_test(n00b_plane_t *plane, int32_t x, int32_t y,
-                     int32_t cell_px_w, int32_t cell_px_h)
+static void
+plane_entry_info_at(n00b_plane_t *plane,
+                    int32_t       abs_x,
+                    int32_t       abs_y,
+                    int32_t       cell_px_w,
+                    int32_t       cell_px_h,
+                    n00b_entry_info_t *out)
+{
+    n00b_composite_entry_t entry = {
+        .plane = plane,
+        .abs_x = abs_x,
+        .abs_y = abs_y,
+    };
+    n00b_composite_entry_info(&entry, out, cell_px_w, cell_px_h);
+}
+
+static n00b_plane_t *
+mouse_hit_test_absolute(n00b_plane_t *plane,
+                        int32_t       parent_abs_x,
+                        int32_t       parent_abs_y,
+                        int32_t       x,
+                        int32_t       y,
+                        int32_t       cell_px_w,
+                        int32_t       cell_px_h)
 {
     if (!plane) {
         return nullptr;
@@ -78,49 +59,54 @@ n00b_mouse_hit_test(n00b_plane_t *plane, int32_t x, int32_t y,
         return nullptr;
     }
 
-    // Check if (x, y) is within this plane's full bounding box
-    // (including borders + padding).  All coordinates are pixels.
-    int32_t px = plane->x;
-    int32_t py = plane->y;
-    int32_t pw, ph;
-    plane_full_pixel_size(plane, cell_px_w, cell_px_h, &pw, &ph);
+    int32_t abs_x = parent_abs_x + plane->x;
+    int32_t abs_y = parent_abs_y + plane->y;
 
-    // Terminal backends place visuals on a cell grid, while layout/hit
-    // coordinates are pixel-space. Quantize bounds the same way rendering
-    // does so hit-testing tracks what users actually see.
-    bool tty_quantized = plane->canvas
-                      && (plane->canvas->caps & N00B_RCAP_MANAGES_TTY);
-    if (tty_quantized) {
-        int32_t cpw = cell_px_w > 0 ? cell_px_w : 1;
-        int32_t cph = cell_px_h > 0 ? cell_px_h : 1;
-        px = align_down_i32(px, cpw);
-        py = align_down_i32(py, cph);
-        pw = ((pw + cpw - 1) / cpw) * cpw;
-        ph = ((ph + cph - 1) / cph) * cph;
+    n00b_entry_info_t info;
+    plane_entry_info_at(plane, abs_x, abs_y, cell_px_w, cell_px_h, &info);
+
+    n00b_rect_t outer_rect = {
+        .x = info.outer_x,
+        .y = info.outer_y,
+        .width = (int32_t)info.outer_cols,
+        .height = (int32_t)info.outer_rows,
+    };
+
+    if (canvas_uses_cell_snapped_bounds(plane->canvas)) {
+        n00b_composite_snap_rect_to_cells(&outer_rect, cell_px_w, cell_px_h);
     }
 
-    if (x < px || x >= px + pw || y < py || y >= py + ph) {
+    if (x < outer_rect.x
+        || x >= outer_rect.x + outer_rect.width
+        || y < outer_rect.y
+        || y >= outer_rect.y + outer_rect.height) {
         return nullptr;
     }
 
-    // Convert to plane-local coordinates for child testing.
-    int32_t lx = x - px;
-    int32_t ly = y - py;
-
-    // Check children in reverse order (topmost first).
     if (plane->children.data) {
         for (size_t i = plane->children.len; i > 0; i--) {
             n00b_plane_t *child = plane->children.data[i - 1];
-            n00b_plane_t *hit   = n00b_mouse_hit_test(child, lx, ly,
-                                                        cell_px_w, cell_px_h);
+            n00b_plane_t *hit = mouse_hit_test_absolute(child,
+                                                        abs_x,
+                                                        abs_y,
+                                                        x,
+                                                        y,
+                                                        cell_px_w,
+                                                        cell_px_h);
             if (hit) {
                 return hit;
             }
         }
     }
 
-    // No child hit — return this plane.
     return plane;
+}
+
+n00b_plane_t *
+n00b_mouse_hit_test(n00b_plane_t *plane, int32_t x, int32_t y,
+                     int32_t cell_px_w, int32_t cell_px_h)
+{
+    return mouse_hit_test_absolute(plane, 0, 0, x, y, cell_px_w, cell_px_h);
 }
 
 // -------------------------------------------------------------------
@@ -174,31 +160,20 @@ n00b_mouse_route_event(n00b_canvas_t          *canvas,
 
     // Translate mouse coordinates to content-local pixel space for the
     // target widget.  Walk up the parent chain to compute the absolute
-    // pixel position, then subtract box insets (border + padding in pixels).
+    // plane position, then derive the content origin from compositor
+    // metadata so local coordinates stay in true pixel space.
     int32_t abs_x = 0, abs_y = 0;
     for (n00b_plane_t *p = target; p; p = p->parent) {
         abs_x += p->x;
         abs_y += p->y;
     }
 
-    // Subtract box insets (scaled to pixels) to get content-area origin.
-    if (target->box) {
-        int32_t it, ib, il, ir;
-        n00b_box_insets_px(target->box, cpw, cph, &it, &ib, &il, &ir);
-        abs_x += il;
-        abs_y += it;
-    }
-
-    // Keep local coordinates on the same snapped grid used for terminal
-    // rendering so widget hit regions line up with visible rows/columns.
-    if (canvas->caps & N00B_RCAP_MANAGES_TTY) {
-        abs_x = align_down_i32(abs_x, cpw > 0 ? cpw : 1);
-        abs_y = align_down_i32(abs_y, cph > 0 ? cph : 1);
-    }
+    n00b_entry_info_t info;
+    plane_entry_info_at(target, abs_x, abs_y, cpw, cph, &info);
 
     n00b_event_t local_event = *event;
-    local_event.mouse.x = event->mouse.x - abs_x;
-    local_event.mouse.y = event->mouse.y - abs_y;
+    local_event.mouse.x = event->mouse.x - info.content_x;
+    local_event.mouse.y = event->mouse.y - info.content_y;
 
     // Dispatch to the target, then bubble up to parents.
     n00b_plane_t *cur = target;

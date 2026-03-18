@@ -410,10 +410,12 @@ n00b_canvas_render(n00b_canvas_t *c)
             c->needs_full_redraw = true;
         }
 
-        // Refresh fallback metrics if backend doesn't provide its own.
-        if (!c->vtable->get_font_metrics) {
+        if (c->vtable->get_font_metrics && (c->caps & N00B_RCAP_FONT_METRICS)) {
+            c->metrics = c->vtable->get_font_metrics(c->backend_ctx);
+        }
+        else {
             c->metrics = n00b_font_metrics_fallback((int32_t)c->cell_px_w,
-                                                      (int32_t)c->cell_px_h);
+                                                    (int32_t)c->cell_px_h);
         }
 
         // If backend cell metrics changed (even without a resize event),

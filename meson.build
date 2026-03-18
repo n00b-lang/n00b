@@ -1586,12 +1586,6 @@ widget_demo = executable('widget_demo',
     install: false,
 )
 
-notcurses_probe = executable('notcurses_probe',
-    ['src/tools/notcurses_probe.c'],
-    kwargs: test_common_kwargs,
-    install: false,
-)
-
 display_baseline_capture = executable('display_baseline_capture',
     ['src/tools/display_baseline_capture.c', 'src/tools/display_demo_scene.c'],
     kwargs: test_common_kwargs,
@@ -1633,7 +1627,7 @@ display_backend_selection_report = executable('display_backend_selection_report'
 )
 
 display_m6_cutover_report = executable('display_m6_cutover_report',
-    ['src/tools/display_m6_cutover_report.c'],
+    ['src/tools/display_m6_cutover_report.c', 'src/tools/display_startup_probe.c'],
     kwargs: test_common_kwargs,
     install: false,
 )
@@ -1768,6 +1762,20 @@ test('display_m5_artifacts',
     suite: 'integration',
 )
 
+test('display_m6_artifacts',
+    sh_prog,
+    args: [
+        files('test/integration/test_display_m6_artifacts.sh'),
+        display_baseline_capture,
+        display_scene_inspect,
+        display_backend_selection_report,
+        display_gui_parity_report,
+        display_m6_cutover_report,
+        meson.project_source_root(),
+    ],
+    suite: 'integration',
+)
+
 display_m1_compat_test = executable('test_display_m1_compat',
     ['test/integration/test_display_m1_compat.c'],
     kwargs: test_common_kwargs,
@@ -1806,7 +1814,7 @@ display_m5_runtime_selection_test = executable('test_display_m5_runtime_selectio
 test('display_m5_runtime_selection', display_m5_runtime_selection_test, suite: 'integration')
 
 display_m6_cutover_matrix_test = executable('test_display_m6_cutover_matrix',
-    ['test/integration/test_display_m6_cutover_matrix.c'],
+    ['test/integration/test_display_m6_cutover_matrix.c', 'src/tools/display_startup_probe.c'],
     kwargs: test_common_kwargs,
 )
 test('display_m6_cutover_matrix', display_m6_cutover_matrix_test, suite: 'integration')

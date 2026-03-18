@@ -156,17 +156,68 @@ test_key_mapping_and_notcurses_translation(void)
         .evtype = NCTYPE_PRESS,
         .x      = 2,
         .y      = 3,
-        .xpx    = 0,
-        .ypx    = 0,
+        .xpx    = -1,
+        .ypx    = -1,
     };
     assert(n00b_terminal_translate_notcurses(&mouse, &state, 4, 2, &out));
     assert(out.type == N00B_EVENT_MOUSE);
     assert(out.mouse.button == N00B_MOUSE_LEFT);
     assert(out.mouse.action == N00B_MOUSE_PRESS);
-    assert(out.mouse.x == 8 && out.mouse.y == 6);
+    assert(out.mouse.x == 10 && out.mouse.y == 7);
 #endif
 
     printf("  [PASS] key map + notcurses translation\n");
+}
+
+static void
+test_notcurses_undefined_mouse_coords_stay_off_canvas(void)
+{
+#if defined(N00B_HAVE_NOTCURSES) && N00B_HAVE_NOTCURSES
+    n00b_terminal_input_state_t state = {};
+    n00b_event_t                out = {};
+
+    n00b_terminal_ncinput_view_t button = {
+        .id = NCKEY_BUTTON1,
+        .evtype = NCTYPE_PRESS,
+        .x = -1,
+        .y = -1,
+        .xpx = -1,
+        .ypx = -1,
+    };
+    assert(n00b_terminal_translate_notcurses(&button, &state, 4, 2, &out));
+    assert(out.type == N00B_EVENT_MOUSE);
+    assert(out.mouse.x == -1 && out.mouse.y == -1);
+    assert(out.mouse.button == N00B_MOUSE_LEFT);
+    assert(out.mouse.action == N00B_MOUSE_PRESS);
+
+    n00b_terminal_ncinput_view_t scroll = {
+        .id = NCKEY_SCROLL_UP,
+        .x = -1,
+        .y = -1,
+        .xpx = -1,
+        .ypx = -1,
+    };
+    assert(n00b_terminal_translate_notcurses(&scroll, &state, 4, 2, &out));
+    assert(out.type == N00B_EVENT_MOUSE);
+    assert(out.mouse.x == -1 && out.mouse.y == -1);
+    assert(out.mouse.button == N00B_MOUSE_SCROLL_UP);
+    assert(out.mouse.action == N00B_MOUSE_PRESS);
+
+    n00b_terminal_ncinput_view_t motion = {
+        .id = NCKEY_MOTION,
+        .x = -1,
+        .y = -1,
+        .xpx = -1,
+        .ypx = -1,
+    };
+    assert(n00b_terminal_translate_notcurses(&motion, &state, 4, 2, &out));
+    assert(out.type == N00B_EVENT_MOUSE);
+    assert(out.mouse.x == -1 && out.mouse.y == -1);
+    assert(out.mouse.button == N00B_MOUSE_NONE);
+    assert(out.mouse.action == N00B_MOUSE_DRAG);
+#endif
+
+    printf("  [PASS] notcurses undefined mouse coords stay off-canvas\n");
 }
 
 int
@@ -180,6 +231,7 @@ main(int argc, char **argv)
     test_parse_escape_sequences();
     test_parse_sgr_mouse();
     test_key_mapping_and_notcurses_translation();
+    test_notcurses_undefined_mouse_coords_stay_off_canvas();
 
     printf("Display terminal-input tests passed.\n");
     n00b_shutdown();

@@ -19,6 +19,7 @@ The user-visible effect is operational clarity: no hardcoded `/tmp` debug side e
 - [x] (2026-03-05 14:38Z) Aligned docs with runtime reality by rewriting `docs/render.md`, `docs/widgets.md`, and `docs/tui_prototype_intent.md` around current backend policy/lifecycle behavior.
 - [x] (2026-03-05 14:38Z) Added M6 lifecycle/cutover coverage and tooling: `test/unit/test_display_canvas_lifecycle.c`, `test/integration/test_display_m6_cutover_matrix.c`, `src/tools/display_m6_cutover_report.c`, with `meson.build` wiring.
 - [x] (2026-03-05 14:38Z) Ran validation matrix, optional backend checks, generated `plans/artifacts/display-rewrite/m6/` outputs, and confirmed parity diffs versus M5 are empty for scene/table streams.
+- [x] (2026-03-18 08:06Z) Applied the M6 review-remediation pass: added proof tests for fallback-metric refresh, terminal hitbox/local-coordinate policy, and undefined notcurses mouse coordinates; repaired the runtime geometry/input paths; extracted shared startup probing into `include/internal/display/startup_probe.h` plus `src/tools/display_startup_probe.c`; removed the unused `notcurses_probe` target; added `display_m6_artifacts`; and refreshed the tracked M6 artifacts/docs.
 
 ## Surprises & Discoveries
 
@@ -38,6 +39,8 @@ The user-visible effect is operational clarity: no hardcoded `/tmp` debug side e
   Evidence: `stat -c %Y /tmp/widget_demo.log` unchanged before/after `./build_debug/widget_demo --widget label --backend stream`, while `--debug-log plans/artifacts/display-rewrite/m6/widget_demo_debug.log` creates the requested file.
 - Observation: The optional Cocoa command in the concrete steps can fail on non-macOS builds because only `display_cocoa_input` is present in this environment.
   Evidence: `meson test -C build_debug --print-errorlogs display_cocoa_input display_cocoa_bridge_contracts cocoa_backend` reports missing `display_cocoa_bridge_contracts`; running `display_cocoa_input` alone passes.
+- Observation: Direct shell regeneration of `cutover_report.txt` is not reproducible in this workspace unless the cutover tool runs under a real terminal description instead of `TERM=dumb`.
+  Evidence: the review-remediation parity test only stabilized after `test/integration/test_display_m6_artifacts.sh` invoked `display_m6_cutover_report` with `TERM=xterm-256color`; without that override, direct tool runs reported `notcurses_available=false` while the Meson test harness recorded `notcurses_available=true`.
 
 ## Decision Log
 
@@ -59,6 +62,12 @@ The user-visible effect is operational clarity: no hardcoded `/tmp` debug side e
 - Decision: Human-runnable final demo commands were executed under timeout in automation to capture startup/fallback evidence without requiring manual Ctrl-C.
   Rationale: `widget_demo --widget all` intentionally enters an interactive event loop and does not self-terminate in non-interactive CI-style runs.
   Date/Author: 2026-03-05 / Codex
+- Decision: Keep the M6 remediation geometry helper in `display/render/composite.[ch]` instead of adding a separate terminal-geometry module.
+  Rationale: the compositor already computes the authoritative absolute outer/content rects for planes, so exporting one shared rect-enclosing helper there kept mouse hit-testing and cell fallback on the same formula with less new surface area.
+  Date/Author: 2026-03-18 / Codex
+- Decision: Make `display_m6_artifacts` run the cutover report under `TERM=xterm-256color`.
+  Rationale: this workspace defaults direct shells to `TERM=dumb`, which changes notcurses startup availability and makes `cutover_report.txt` drift even when the code is unchanged.
+  Date/Author: 2026-03-18 / Codex
 
 ## Outcomes & Retrospective
 
@@ -68,16 +77,17 @@ Delivered outcomes:
 
 - Runtime hardening completed: canvas lifecycle contract now has explicit teardown (`n00b_canvas_deinit`) and heap convenience destroy (`n00b_canvas_destroy`), with stack-based tests migrated.
 - `widget_demo` default execution is side-effect free for logs; debug logging is explicit opt-in via CLI/env.
-- M6 test/tool additions are wired and passing (`display_canvas_lifecycle`, `display_m6_cutover_matrix`, `display_m6_cutover_report`).
+- Review remediation closed the remaining M6 behavior gaps: fallback metrics refresh after cell-size changes, managed-terminal hit-testing/local-coordinate policy, cell-fallback compositor coverage of partially aligned cells, and undefined notcurses mouse coordinates.
+- M6 test/tool additions are wired and passing (`display_canvas_lifecycle`, `display_m6_cutover_matrix`, `display_m6_cutover_report`, `display_m6_artifacts`).
 - Documentation has been cut over to current runtime/backends.
-- Artifact bundle regenerated under `plans/artifacts/display-rewrite/m6/`, including new cutover report/metadata.
+- Artifact bundle regenerated under `plans/artifacts/display-rewrite/m6/`, including new cutover report/metadata and parity automation that now proves the bundle stays synchronized.
 - Parity guardrail passed: `scene_stream.txt` and `table_stream.txt` diffs versus M5 are empty.
 
 Validation summary:
 
-- M6 unit matrix command: pass (31/31 tests OK).
-- M6 integration matrix command: pass (7/7 tests OK, including `display_m6_cutover_matrix`).
-- Optional backend tests present in this build: `notcurses_backend`, `x11_backend`, and `display_cocoa_input` all pass.
+- Focused M6 remediation matrix command: pass (`render_canvas`, `mouse`, `display_terminal_input`, `display_canvas_lifecycle`, `display_m6_cutover_matrix`).
+- Artifact parity command: pass (`display_m6_artifacts`).
+- Optional backend tests present in this build: `notcurses_backend` and `x11_backend` pass; `display_cocoa_input` remains the only Cocoa-target test available in this Linux environment.
 - GUI runtime availability in this environment is limited by missing display server (`x11` init failure), and fallback behavior is captured in M6 artifacts as intended.
 
 ## Context and Orientation
@@ -339,3 +349,4 @@ Dependencies remain existing project toolchain and optional display backends (No
 
 - 2026-03-05: Initial Milestone 6 child ExecPlan authored from umbrella Milestone 6 scope, defining runtime hardening, documentation alignment, and final cutover validation/artifact requirements.
 - 2026-03-05: M6 execution completed with lifecycle/logging hardening, docs cutover, M6 tests/tool wiring, full validation pass, and regenerated `plans/artifacts/display-rewrite/m6/` evidence.
+- 2026-03-18: M6 review remediation executed: proof regressions were added, terminal geometry/input/runtime fixes landed, the cutover tool and integration test now share `display_startup_probe`, `notcurses_probe` was removed, `display_m6_artifacts` was added, and the refreshed M6 artifact bundle now passes parity and whitespace validation.

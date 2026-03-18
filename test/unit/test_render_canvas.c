@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <assert.h>
+#include <stdlib.h>
 #include <string.h>
 #include "n00b.h"
 #include "core/alloc.h"
@@ -189,6 +190,170 @@ test_canvas_invalidate(void)
 
     n00b_canvas_destroy(c);
     printf("  [PASS] canvas invalidate\n");
+}
+
+typedef struct {
+    int render_count;
+} metrics_refresh_backend_ctx_t;
+
+static int32_t
+metrics_refresh_backend_text_width(void *ctx,
+                                   n00b_string_t *text,
+                                   n00b_text_style_t *style)
+{
+    (void)ctx;
+    (void)text;
+    (void)style;
+    return 777;
+}
+
+static int32_t
+metrics_refresh_backend_line_height(void *ctx, n00b_text_style_t *style)
+{
+    (void)ctx;
+    (void)style;
+    return 99;
+}
+
+static int32_t
+metrics_refresh_backend_ascent(void *ctx, n00b_text_style_t *style)
+{
+    (void)ctx;
+    (void)style;
+    return 88;
+}
+
+static void *
+metrics_refresh_backend_init(n00b_conduit_topic_t(n00b_buffer_t *) *output)
+{
+    (void)output;
+    metrics_refresh_backend_ctx_t *ctx = calloc(1, sizeof(*ctx));
+    assert(ctx != nullptr);
+    return ctx;
+}
+
+static void
+metrics_refresh_backend_destroy(void *vctx)
+{
+    free(vctx);
+}
+
+static n00b_render_cap_t
+metrics_refresh_backend_caps(void *vctx)
+{
+    (void)vctx;
+    return N00B_RCAP_NONE;
+}
+
+static n00b_render_size_t
+metrics_refresh_backend_get_size(void *vctx)
+{
+    metrics_refresh_backend_ctx_t *ctx = vctx;
+    if (ctx->render_count == 0) {
+        return (n00b_render_size_t){
+            .rows = 6,
+            .cols = 8,
+            .cell_pixel_w = 1,
+            .cell_pixel_h = 1,
+        };
+    }
+
+    return (n00b_render_size_t){
+        .rows = 6,
+        .cols = 8,
+        .cell_pixel_w = 2,
+        .cell_pixel_h = 3,
+    };
+}
+
+static void
+metrics_refresh_backend_render_frame(void *vctx,
+                                     n00b_rcell_t *cells,
+                                     n00b_isize_t rows,
+                                     n00b_isize_t cols,
+                                     n00b_rcell_t *prev_cells)
+{
+    (void)vctx;
+    (void)cells;
+    (void)rows;
+    (void)cols;
+    (void)prev_cells;
+}
+
+static void
+metrics_refresh_backend_flush(void *vctx)
+{
+    (void)vctx;
+}
+
+static void
+metrics_refresh_backend_render_planes(void *vctx,
+                                      const n00b_composite_entry_t *entries,
+                                      n00b_isize_t count,
+                                      n00b_isize_t total_rows,
+                                      n00b_isize_t total_cols,
+                                      n00b_text_style_t *default_style,
+                                      n00b_render_cap_t caps)
+{
+    metrics_refresh_backend_ctx_t *ctx = vctx;
+    (void)entries;
+    (void)count;
+    (void)total_rows;
+    (void)total_cols;
+    (void)default_style;
+    (void)caps;
+    ctx->render_count++;
+}
+
+static n00b_font_metrics_provider_t
+metrics_refresh_backend_get_font_metrics(void *vctx)
+{
+    return (n00b_font_metrics_provider_t){
+        .text_width = metrics_refresh_backend_text_width,
+        .line_height = metrics_refresh_backend_line_height,
+        .ascent = metrics_refresh_backend_ascent,
+        .ctx = vctx,
+    };
+}
+
+static const n00b_renderer_vtable_t metrics_refresh_backend = {
+    .name = "metrics_refresh_backend",
+    .version = N00B_RENDERER_ABI_VERSION,
+    .init = metrics_refresh_backend_init,
+    .destroy = metrics_refresh_backend_destroy,
+    .capabilities = metrics_refresh_backend_caps,
+    .get_size = metrics_refresh_backend_get_size,
+    .render_frame = metrics_refresh_backend_render_frame,
+    .flush = metrics_refresh_backend_flush,
+    .render_planes = metrics_refresh_backend_render_planes,
+    .get_font_metrics = metrics_refresh_backend_get_font_metrics,
+};
+
+static void
+test_canvas_refreshes_fallback_metrics_when_font_metrics_cap_absent(void)
+{
+    n00b_canvas_t *canvas = n00b_new_kargs(n00b_canvas_t,
+                                           canvas,
+                                           .vtable = &metrics_refresh_backend);
+
+    assert(canvas->metrics.line_height(canvas->metrics.ctx, nullptr) == 1);
+    assert(canvas->metrics.text_width(canvas->metrics.ctx,
+                                      n00b_string_from_cstr("ab"),
+                                      nullptr) == 2);
+
+    n00b_canvas_render(canvas);
+    assert(canvas->metrics.line_height(canvas->metrics.ctx, nullptr) == 1);
+
+    n00b_canvas_render(canvas);
+    assert(canvas->cell_px_w == 2);
+    assert(canvas->cell_px_h == 3);
+    assert(canvas->metrics.line_height(canvas->metrics.ctx, nullptr) == 3);
+    assert(canvas->metrics.text_width(canvas->metrics.ctx,
+                                      n00b_string_from_cstr("ab"),
+                                      nullptr) == 4);
+
+    n00b_canvas_destroy(canvas);
+    printf("  [PASS] canvas refreshes fallback metrics without font metrics cap\n");
 }
 
 static void
@@ -412,6 +577,41 @@ test_composite_flatten_nested(void)
     printf("  [PASS] composite flatten nested with absolute coords\n");
 }
 
+static void
+test_composite_commands_quantize_partial_cells(void)
+{
+    n00b_plane_t *plane = n00b_new_kargs(n00b_plane_t, plane);
+    plane->width = 2;
+    plane->height = 2;
+    n00b_plane_move(plane, 0, 5);
+    n00b_plane_fill_rect(plane, 0, 0, 2, 2, .cp = '#');
+
+    n00b_plane_t *planes[] = { plane };
+    n00b_array_t(n00b_composite_entry_t) entries =
+        n00b_composite_flatten(planes, 1, 2, 2);
+
+    n00b_rcell_t frame[24];
+    memset(frame, 0, sizeof(frame));
+    n00b_text_style_t default_style = {0};
+
+    n00b_composite_commands_to_grid(entries.data,
+                                    (n00b_isize_t)entries.len,
+                                    frame,
+                                    6,
+                                    4,
+                                    2,
+                                    2,
+                                    &default_style,
+                                    N00B_RCAP_NONE);
+
+    assert(frame[2 * 4].grapheme[0] == '#');
+    assert(frame[3 * 4].grapheme[0] == '#');
+
+    n00b_array_free(entries);
+    n00b_plane_destroy(plane);
+    printf("  [PASS] composite commands quantize partial cells\n");
+}
+
 // ====================================================================
 // Main
 // ====================================================================
@@ -432,12 +632,14 @@ main(int argc, char **argv)
     test_canvas_z_order();
     test_canvas_plane_offset();
     test_canvas_invalidate();
+    test_canvas_refreshes_fallback_metrics_when_font_metrics_cap_absent();
     test_composite_flatten();
     test_canvas_widget_state_styling();
     test_canvas_nested_planes();
     test_canvas_nested_z_order();
     test_canvas_child_clipping();
     test_composite_flatten_nested();
+    test_composite_commands_quantize_partial_cells();
 
     printf("All render canvas tests passed.\n");
     n00b_shutdown();
