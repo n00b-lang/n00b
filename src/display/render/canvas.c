@@ -2,6 +2,8 @@
  * Canvas: compositing surface with pluggable renderer backend.
  */
 
+#include <errno.h>
+
 #include "n00b.h"
 #include "core/alloc.h"
 #include "core/data_lock.h"
@@ -73,6 +75,7 @@ canvas_bind_backend(n00b_canvas_t                *c,
 
     c->vtable     = vtable;
     c->backend_ctx = backend_ctx;
+    c->backend_error = 0;
     c->caps       = n00b_display_backend_caps(c);
 
     // Get initial size from backend (cells) and convert to pixels.
@@ -98,18 +101,39 @@ canvas_bind_backend(n00b_canvas_t                *c,
 static bool
 canvas_try_vtable(n00b_canvas_t                       *c,
                   const n00b_renderer_vtable_t        *vtable,
-                  n00b_conduit_topic_t(n00b_buffer_t *) *output)
+                  n00b_conduit_topic_t(n00b_buffer_t *) *output,
+                  int                                 *out_err)
 {
     if (!vtable || !vtable->init) {
+        if (out_err) {
+            *out_err = EINVAL;
+        }
         return false;
     }
 
+    errno = 0;
     void *backend_ctx = vtable->init(output);
     if (!backend_ctx) {
+        if (out_err) {
+            *out_err = errno ? errno : ENODEV;
+        }
         return false;
     }
 
-    return canvas_bind_backend(c, vtable, backend_ctx);
+    if (canvas_bind_backend(c, vtable, backend_ctx)) {
+        if (out_err) {
+            *out_err = 0;
+        }
+        return true;
+    }
+
+    if (vtable->destroy) {
+        vtable->destroy(backend_ctx);
+    }
+    if (out_err) {
+        *out_err = EINVAL;
+    }
+    return false;
 }
 
 // -------------------------------------------------------------------
@@ -134,6 +158,7 @@ n00b_canvas_init(n00b_canvas_t *c) _kargs
 
     *c = (n00b_canvas_t){
         .allocator = allocator,
+        .backend_error = 0,
     };
 
     c->lock              = n00b_data_lock_new();
@@ -144,12 +169,14 @@ n00b_canvas_init(n00b_canvas_t *c) _kargs
     c->needs_full_redraw = true;
 
     if (vtable) {
-        if (!canvas_try_vtable(c, vtable, output)) {
-            c->vtable = vtable;
+        int init_err = 0;
+        if (!canvas_try_vtable(c, vtable, output, &init_err)) {
+            c->backend_error = init_err ? init_err : ENODEV;
             n00b_display_diag_log(N00B_DISPLAY_DIAG_ERROR,
                                   "canvas",
-                                  "backend init failed for direct vtable '%s'",
-                                  safe_vtable_name(vtable));
+                                  "backend init failed for direct vtable '%s' err=%d",
+                                  safe_vtable_name(vtable),
+                                  c->backend_error);
         }
         return;
     }
@@ -159,6 +186,7 @@ n00b_canvas_init(n00b_canvas_t *c) _kargs
         n00b_renderer_candidate_names(requested,
                                        .allow_fallback     = backend_allow_fallback,
                                        .allow_env_override = backend_allow_env_override);
+    int last_err = ENOENT;
 
     for (size_t i = 0; i < candidates.len; i++) {
         n00b_string_t *candidate_name = n00b_list_get(candidates, i);
@@ -166,12 +194,13 @@ n00b_canvas_init(n00b_canvas_t *c) _kargs
             n00b_renderer_resolve_exact(candidate_name,
                                         .allow_dynamic_load = backend_allow_dynamic_load);
         if (!n00b_result_is_ok(resolved)) {
+            last_err = n00b_result_get_err(resolved);
             n00b_display_diag_log(N00B_DISPLAY_DIAG_TRACE,
                                   "canvas",
                                   "backend candidate unresolved: requested=%s candidate=%s err=%d",
                                   safe_name(requested),
                                   safe_name(candidate_name),
-                                  n00b_result_get_err(resolved));
+                                  last_err);
             continue;
         }
 
@@ -180,7 +209,8 @@ n00b_canvas_init(n00b_canvas_t *c) _kargs
             continue;
         }
 
-        if (canvas_try_vtable(c, candidate_vtable, output)) {
+        int init_err = 0;
+        if (canvas_try_vtable(c, candidate_vtable, output, &init_err)) {
             n00b_display_diag_log(N00B_DISPLAY_DIAG_INFO,
                                   "canvas",
                                   "backend selected: requested=%s selected=%s fallback=%s",
@@ -190,18 +220,45 @@ n00b_canvas_init(n00b_canvas_t *c) _kargs
             return;
         }
 
+        last_err = init_err ? init_err : ENODEV;
         n00b_display_diag_log(N00B_DISPLAY_DIAG_TRACE,
                               "canvas",
-                              "backend candidate init failed: requested=%s candidate=%s",
+                              "backend candidate init failed: requested=%s candidate=%s err=%d",
                               safe_name(requested),
-                              safe_vtable_name(candidate_vtable));
+                              safe_vtable_name(candidate_vtable),
+                              last_err);
     }
 
+    c->backend_error = last_err ? last_err : ENODEV;
     n00b_display_diag_log(N00B_DISPLAY_DIAG_ERROR,
                           "canvas",
-                          "backend selection failed: requested=%s candidates=%zu",
+                          "backend selection failed: requested=%s candidates=%zu err=%d",
                           safe_name(requested),
-                          candidates.len);
+                          candidates.len,
+                          c->backend_error);
+}
+
+bool
+n00b_canvas_backend_ready(const n00b_canvas_t *c)
+{
+    return c
+        && c->backend_error == 0
+        && c->vtable
+        && c->backend_ctx;
+}
+
+int
+n00b_canvas_backend_error(const n00b_canvas_t *c)
+{
+    if (n00b_canvas_backend_ready(c)) {
+        return 0;
+    }
+
+    if (!c) {
+        return EINVAL;
+    }
+
+    return c->backend_error ? c->backend_error : ENODEV;
 }
 
 void
@@ -211,7 +268,7 @@ n00b_canvas_destroy(n00b_canvas_t *c)
         return;
     }
 
-    if (c->vtable && c->vtable->destroy) {
+    if (n00b_canvas_backend_ready(c) && c->vtable->destroy) {
         c->vtable->destroy(c->backend_ctx);
     }
 
@@ -287,7 +344,20 @@ n00b_canvas_remove_plane(n00b_canvas_t *c, n00b_plane_t *p)
 void
 n00b_canvas_render(n00b_canvas_t *c)
 {
+    if (!c || !c->lock) {
+        return;
+    }
+
     canvas_lock(c);
+
+    if (!n00b_canvas_backend_ready(c)) {
+        n00b_display_diag_log(N00B_DISPLAY_DIAG_ERROR,
+                              "canvas",
+                              "render skipped: backend not ready err=%d",
+                              n00b_canvas_backend_error(c));
+        canvas_unlock(c);
+        return;
+    }
 
     // Refresh size from backend (cells → pixels), unless the caller
     // has set an explicit size via canvas_resize() (size_set == true).
@@ -348,7 +418,9 @@ n00b_canvas_render(n00b_canvas_t *c)
 void
 n00b_canvas_invalidate(n00b_canvas_t *c)
 {
-    c->needs_full_redraw = true;
+    if (c) {
+        c->needs_full_redraw = true;
+    }
 }
 
 void
@@ -368,7 +440,7 @@ n00b_canvas_resize(n00b_canvas_t *c, n00b_isize_t rows, n00b_isize_t cols)
 void
 n00b_canvas_flush(n00b_canvas_t *c)
 {
-    if (c->vtable && c->vtable->flush) {
+    if (n00b_canvas_backend_ready(c) && c->vtable->flush) {
         c->vtable->flush(c->backend_ctx);
     }
 }
@@ -376,7 +448,7 @@ n00b_canvas_flush(n00b_canvas_t *c)
 void
 n00b_canvas_alt_screen_enter(n00b_canvas_t *c)
 {
-    if (c->vtable && c->vtable->alt_screen_enter) {
+    if (n00b_canvas_backend_ready(c) && c->vtable->alt_screen_enter) {
         c->vtable->alt_screen_enter(c->backend_ctx);
     }
 }
@@ -384,7 +456,7 @@ n00b_canvas_alt_screen_enter(n00b_canvas_t *c)
 void
 n00b_canvas_alt_screen_leave(n00b_canvas_t *c)
 {
-    if (c->vtable && c->vtable->alt_screen_leave) {
+    if (n00b_canvas_backend_ready(c) && c->vtable->alt_screen_leave) {
         c->vtable->alt_screen_leave(c->backend_ctx);
     }
 }

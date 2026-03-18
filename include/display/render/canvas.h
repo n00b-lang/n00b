@@ -29,6 +29,7 @@
 typedef struct n00b_canvas_t {
     const n00b_renderer_vtable_t *vtable;
     void                         *backend_ctx;
+    int                           backend_error;
     n00b_render_cap_t             caps;
 
     n00b_isize_t                  frame_rows;  /**< Frame height in pixels. */
@@ -71,7 +72,7 @@ typedef struct n00b_canvas_t {
  * @kw allocator Allocator for internal allocations (nullptr = runtime default).
  * @kw output    Output topic for the backend (nullptr = none).
  *
- * @post On success, canvas backend is initialized (`backend_ctx != nullptr`).
+ * @post On success, `n00b_canvas_backend_ready(c)` returns true.
  */
 extern void
 n00b_canvas_init(n00b_canvas_t *c) _kargs
@@ -84,6 +85,20 @@ n00b_canvas_init(n00b_canvas_t *c) _kargs
     n00b_allocator_t                       *allocator = nullptr;
     n00b_conduit_topic_t(n00b_buffer_t *)  *output    = nullptr;
 };
+
+/**
+ * @brief Report whether canvas startup successfully bound a backend.
+ * @param c Canvas.
+ * @return  true when the canvas has a usable backend binding.
+ */
+extern bool n00b_canvas_backend_ready(const n00b_canvas_t *c);
+
+/**
+ * @brief Return the last backend startup error recorded by the canvas.
+ * @param c Canvas.
+ * @return  0 when ready, otherwise the most recent startup error code.
+ */
+extern int n00b_canvas_backend_error(const n00b_canvas_t *c);
 
 /**
  * @brief Destroy a canvas, its backend, and free resources.

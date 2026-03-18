@@ -9,6 +9,7 @@
 #include "display/render/backend.h"
 #include "display/render/backend_registry.h"
 #include "display/render/canvas.h"
+#include "display/event_loop.h"
 
 static void
 set_backend_override(const char *value)
@@ -113,7 +114,8 @@ test_explicit_stream_startup(n00b_conduit_topic_t(n00b_buffer_t *) *output)
                      .backend_allow_env_override = false,
                      .output                     = output);
 
-    assert(canvas->backend_ctx);
+    assert(n00b_canvas_backend_ready(canvas));
+    assert(n00b_canvas_backend_error(canvas) == 0);
     assert(canvas->vtable == &n00b_renderer_stream);
 
     n00b_canvas_destroy(canvas);
@@ -133,7 +135,8 @@ test_auto_env_override_startup(n00b_conduit_topic_t(n00b_buffer_t *) *output)
                      .backend_allow_env_override = true,
                      .output                     = output);
 
-    assert(canvas->backend_ctx);
+    assert(n00b_canvas_backend_ready(canvas));
+    assert(n00b_canvas_backend_error(canvas) == 0);
     assert(canvas->vtable);
     assert(canvas->vtable->name);
     assert(strcmp(canvas->vtable->name, "stream") == 0);
@@ -156,13 +159,37 @@ test_missing_backend_fallback(n00b_conduit_topic_t(n00b_buffer_t *) *output)
                      .backend_allow_env_override = false,
                      .output                     = output);
 
-    assert(canvas->backend_ctx);
+    assert(n00b_canvas_backend_ready(canvas));
+    assert(n00b_canvas_backend_error(canvas) == 0);
     assert(canvas->vtable);
     assert(canvas->vtable != &fail_vtable);
     assert(strcmp(canvas->vtable->name, "m5_fail") != 0);
 
     n00b_canvas_destroy(canvas);
     printf("  [PASS] m5 missing-backend fallback startup\n");
+}
+
+static void
+test_failed_backend_startup_is_safe(n00b_conduit_topic_t(n00b_buffer_t *) *output)
+{
+    n00b_renderer_register(r"m5_fail_only", &fail_vtable);
+
+    n00b_canvas_t *canvas = n00b_alloc(n00b_canvas_t);
+    n00b_canvas_init(canvas,
+                     .backend_name               = r"m5_fail_only",
+                     .backend_allow_fallback     = false,
+                     .backend_allow_dynamic_load = false,
+                     .backend_allow_env_override = false,
+                     .output                     = output);
+
+    assert(!n00b_canvas_backend_ready(canvas));
+    assert(n00b_canvas_backend_error(canvas) != 0);
+
+    n00b_canvas_render(canvas);
+    n00b_canvas_run(canvas, .tick_ms = 1);
+
+    n00b_canvas_destroy(canvas);
+    printf("  [PASS] m5 failed backend startup is safe\n");
 }
 
 int
@@ -179,6 +206,7 @@ main(int argc, char **argv)
     test_explicit_stream_startup(stdout_topic);
     test_auto_env_override_startup(stdout_topic);
     test_missing_backend_fallback(stdout_topic);
+    test_failed_backend_startup_is_safe(stdout_topic);
     printf("Display m5 runtime selection integration test passed.\n");
 
     n00b_shutdown();

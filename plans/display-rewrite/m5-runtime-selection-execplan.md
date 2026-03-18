@@ -19,6 +19,7 @@ The user-visible effect is startup predictability. Instead of `widget_demo` cont
 - [x] (2026-03-05 14:04Z) Migrated `n00b_canvas_init` to support backend-name policy selection (with direct-vtable compatibility preserved) and migrated `widget_demo` to canonical backend-name startup with selected-backend reporting/default `auto`.
 - [x] (2026-03-05 14:07Z) Added M5 unit/integration/plugin-fixture coverage: `test_display_backend_selection`, `test_display_backend_plugin`, `test_display_m5_runtime_selection`, and plugin fixture `test/fixtures/display/renderers/m5_test_renderer.c`.
 - [x] (2026-03-05 14:10Z) Added deterministic selection artifact tool (`display_backend_selection_report`), ran M5 validation matrix, generated `plans/artifacts/display-rewrite/m5/` outputs, and confirmed empty scene/table stream diffs versus M4.
+- [x] (2026-03-18 04:46Z) Applied M5 review remediation: explicit requests now beat `$N00B_RENDERER_BACKEND`, fallback reporting lives in shared registry helpers, `n00b_canvas_backend_ready()` / `n00b_canvas_backend_error()` plus guarded `render` / `run` close the failed-startup crash path, `widget_demo` makes `stream` and `dumb` visibly useful, the obsolete widget-demo resolver helper is deleted, `display_m5_artifacts` now parity-checks the full M5 evidence tree, and the tracked M5 artifacts were refreshed.
 
 ## Surprises & Discoveries
 
@@ -36,6 +37,8 @@ The user-visible effect is startup predictability. Instead of `widget_demo` cont
   Evidence: `test_display_backend_selection` first failed at `assert(tui.len == 1)` with observed `tui.len=0`; converting helper signatures to pointer parameters fixed the regression.
 - Observation: GUI startup is unavailable in this environment due missing `DISPLAY`, but canonical fallback now still starts `widget_demo` by selecting `ansi`.
   Evidence: `timeout 5 ./build_debug/widget_demo --widget all --backend gui` printed `n00b: x11 backend unavailable (cannot open DISPLAY).` then `Backend request 'gui' selected 'ansi' (fallback)`.
+- Observation: the original focused M5 test subset passed while `widget_demo` still violated the milestone’s user-visible contract.
+  Evidence: before the remediation, `meson test -C build_debug --print-errorlogs display_backend_registry display_backend_selection display_backend_plugin display_m5_runtime_selection` reported `4/4 OK`, but `env N00B_RENDERER_BACKEND=stream ./build_debug/widget_demo --widget label --backend ansi` still selected `stream`, `--backend auto` still printed `(fallback)`, and both `stream` / `dumb` demo outputs were empty until the code and new `display_m5_artifacts` smoke coverage were added.
 
 ## Decision Log
 
@@ -60,12 +63,20 @@ The user-visible effect is startup predictability. Instead of `widget_demo` cont
 - Decision: Keep `display_backend_selection_report` non-interactive by disabling dynamic-load attempts and running report cases with null output topics.
   Rationale: This prevents noisy escape-sequence/plugin-miss stderr output and keeps artifact generation deterministic for CI/local reruns.
   Date/Author: 2026-03-05 / Codex
+- Decision: Treat `$N00B_RENDERER_BACKEND` as a default only for `auto` / implicit requests and expose fallback reporting through a shared alias-aware helper.
+  Rationale: this matches the documented “explicit names are tried first” contract and keeps `widget_demo`, the artifact tool, and startup selection on one policy path instead of drifting string comparisons.
+  Date/Author: 2026-03-18 / Codex
+- Decision: Preserve `n00b_canvas_init()` as a `void` initializer for M5 review remediation, but add explicit backend-ready/error accessors and guard `render` / `run` hot paths.
+  Rationale: this closes the null-dereference bug without forcing a broader constructor-signature migration across existing `n00b_new_kargs(..., canvas, ...)` call sites.
+  Date/Author: 2026-03-18 / Codex
 
 ## Outcomes & Retrospective
 
 Milestone 5 is complete on `display-rewrite/m5-runtime-selection`. Runtime/backend startup now converges on one registry-first policy: backend candidate ordering and exact resolution are explicit APIs, runtime init guarantees registry bootstrapping, canvas supports backend-name selection with deterministic fallback, and `widget_demo` now reports requested vs selected backend through the shared path.
 
-Acceptance evidence is complete across all required layers: `display_backend_registry`, `display_backend_selection`, `display_backend_plugin`, `display_m5_runtime_selection`, prior display integration matrix, and shared display smoke matrix all passed; `plans/artifacts/display-rewrite/m5/` contains `scene_stream.txt`, `table_stream.txt`, `metadata.txt`, `scene_inspect.txt`, `selection_report.txt`, and `selection_metadata.txt`; and M5 scene/table baseline diffs versus M4 are empty. Environment-specific GUI unavailability (`DISPLAY` missing) was handled through deterministic fallback evidence (`gui` request falling back to `ansi`) without blocking milestone acceptance.
+Review remediation is also complete. M5 now keeps explicit backend requests ahead of environment defaults, exposes backend startup state through `n00b_canvas_backend_ready()` / `n00b_canvas_backend_error()`, safely no-ops `n00b_canvas_render()` / `n00b_canvas_run()` after failed startup, prints visible stdout for `widget_demo --backend stream` / `--backend dumb`, and removes the obsolete `widget_demo_backend_resolution` helper from both the build and the repository.
+
+Acceptance evidence is complete across all required layers: `display_backend_registry`, `display_backend_selection`, `display_backend_plugin`, `display_m5_runtime_selection`, `display_m5_artifacts`, and the shared display regression matrix all passed; `plans/artifacts/display-rewrite/m5/` now contains refreshed `scene_stream.txt`, `table_stream.txt`, `metadata.txt`, `scene_inspect.txt`, `selection_report.txt`, and `selection_metadata.txt` with `cases=5`; M5 scene/table baseline diffs versus M4 are empty; `git diff --check` returned no output; and the repaired widget-demo smokes reported `Backend request 'ansi' selected 'ansi'`, `Backend request 'auto' selected 'stream'`, and non-zero stdout byte counts for both text-only fallback backends. Environment-specific GUI unavailability (`DISPLAY` missing) remained a recorded limitation without blocking milestone acceptance.
 
 ## Context and Orientation
 
@@ -303,3 +314,4 @@ Dependencies remain existing project toolchain and optional backend dependencies
 
 - 2026-03-05: Initial Milestone 5 child ExecPlan authored from umbrella Milestone 5 scope, with concrete registry-first backend selection policy, runtime startup wiring, plugin-readiness coverage, and deterministic artifact/report requirements.
 - 2026-03-05: Updated after full M5 execution to reflect completed implementation, test/artifact evidence, discovered list-mutation bug fix, and environment-specific GUI fallback behavior.
+- 2026-03-18: Updated after M5 review remediation to record explicit-request precedence over environment defaults, shared fallback-reporting helpers, safe failed-startup accessors/guards, visible `stream` / `dumb` demo behavior, `display_m5_artifacts` parity coverage, refreshed M5 artifacts, and the expanded validation evidence.

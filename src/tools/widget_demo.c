@@ -32,7 +32,9 @@
 #include "core/runtime.h"
 #include "core/string.h"
 #include "adt/option.h"
+#include "display/backend_stream_internal.h"
 #include "display/render/backend.h"
+#include "display/render/backend_registry.h"
 #include "display/render/canvas.h"
 #include "display/render/plane.h"
 #include "display/render/types.h"
@@ -601,44 +603,21 @@ usage(const char *prog)
             "\n"
             "Widgets:  label, all\n"
             "Backends: auto (policy-driven), tui (ANSI alt-screen),\n"
-            "          gui (portable alias),\n"
+            "          gui (portable GUI alias; may fall back if unavailable),\n"
             "          cocoa (macOS native), x11 (Linux/Unix native),\n"
             "          nc / notcurses (pixel + cell-based terminal),\n"
-            "          stream (buffer capture), dumb (no-op)\n"
-            "          gui maps to cocoa on macOS, x11 on Linux/Unix\n"
+            "          stream (stdout capture), dumb (plain text stdout)\n"
+            "          gui resolves to cocoa on macOS, x11 on Linux/Unix\n"
             "\n"
             "Short flags: -w <widget> -b <backend> -t <theme>\n",
             prog);
     exit(1);
 }
 
-static const char *
-normalize_backend_alias(const char *name)
-{
-    if (!name || !name[0]) {
-        return "auto";
-    }
-
-    if (strcmp(name, "tui") == 0) {
-        return "ansi";
-    }
-
-    if (strcmp(name, "nc") == 0) {
-        return "notcurses";
-    }
-
-    return name;
-}
-
 static bool
-backend_uses_terminal_io(const char *selected_backend)
+backend_uses_alt_screen(const n00b_canvas_t *canvas)
 {
-    if (!selected_backend) {
-        return false;
-    }
-
-    return strcmp(selected_backend, "ansi") == 0
-        || strcmp(selected_backend, "notcurses") == 0;
+    return canvas && (canvas->caps & N00B_RCAP_ALT_SCREEN) != 0;
 }
 
 static bool
@@ -705,6 +684,28 @@ widget_demo_hold_gui(n00b_canvas_t *canvas)
             widget_demo_apply_resize(canvas, &event);
         }
     }
+}
+
+static void
+widget_demo_emit_stream_stdout(n00b_canvas_t *canvas)
+{
+    if (!canvas
+        || !canvas->vtable
+        || !canvas->vtable->name
+        || strcmp(canvas->vtable->name, "stream") != 0) {
+        return;
+    }
+
+    n00b_string_t *buf = n00b_stream_backend_get_buffer(canvas->backend_ctx);
+    if (!buf || !buf->data || buf->u8_bytes == 0) {
+        return;
+    }
+
+    (void)fwrite(buf->data, 1, (size_t)buf->u8_bytes, stdout);
+    if (buf->data[buf->u8_bytes - 1] != '\n') {
+        fputc('\n', stdout);
+    }
+    fflush(stdout);
 }
 
 // ====================================================================
@@ -781,10 +782,13 @@ main(int argc, char **argv)
                      .backend_allow_env_override = true,
                      .output                 = stdout_topic);
 
-    if (!canvas->backend_ctx) {
+    if (!n00b_canvas_backend_ready(canvas)) {
+        int backend_err = n00b_canvas_backend_error(canvas);
         fprintf(stderr,
-                "Failed to initialize backend '%s' (or fallback candidates).\n",
-                backend_name);
+                "Failed to initialize backend '%s' (error %d: %s).\n",
+                backend_name,
+                backend_err,
+                strerror(backend_err));
         n00b_canvas_destroy(canvas);
         n00b_shutdown();
         if (g_log) {
@@ -796,9 +800,13 @@ main(int argc, char **argv)
     const char *selected_backend = canvas->vtable && canvas->vtable->name
                                  ? canvas->vtable->name
                                  : "unknown";
-    const char *normalized_requested = normalize_backend_alias(backend_name);
-    bool used_fallback = strcmp(normalized_requested, selected_backend) != 0;
-    bool uses_terminal_io = backend_uses_terminal_io(selected_backend);
+    bool used_fallback =
+        n00b_renderer_selection_uses_fallback(n00b_string_from_cstr(backend_name),
+                                              canvas->vtable,
+                                              .allow_fallback     = true,
+                                              .allow_dynamic_load = true,
+                                              .allow_env_override = true);
+    bool uses_terminal_io = backend_uses_alt_screen(canvas);
 
     fprintf(stderr, "Backend request '%s' selected '%s'%s\n",
             backend_name,
@@ -940,6 +948,7 @@ main(int argc, char **argv)
         else {
             dbg("Calling canvas_render (non-terminal)...\n");
             n00b_canvas_render(canvas);
+            widget_demo_emit_stream_stdout(canvas);
 
             dbg("After render:\n");
             dbg_canvas(canvas);

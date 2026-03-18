@@ -1441,10 +1441,8 @@ test('display_scene_contracts', display_scene_contracts_test, suite: 'unit')
 widget_demo_tools_inc = include_directories('src/tools')
 
 display_backend_registry_test = executable('test_display_backend_registry',
-    ['test/unit/test_display_backend_registry.c', 'src/tools/widget_demo_backend_resolution.c'],
-    include_directories: incdir + [widget_demo_tools_inc],
-    c_args: exe_c_args,
-    link_with: [n00b],
+    ['test/unit/test_display_backend_registry.c'],
+    kwargs: test_common_kwargs,
 )
 test('display_backend_registry', display_backend_registry_test, suite: 'unit')
 
@@ -1575,7 +1573,7 @@ table_tool = executable('n00b_table',
 
 # Widget visual demo tool
 widget_demo = executable('widget_demo',
-    ['src/tools/widget_demo.c', 'src/tools/widget_demo_backend_resolution.c'],
+    ['src/tools/widget_demo.c'],
     include_directories: incdir + [widget_demo_tools_inc],
     c_args: exe_c_args,
     link_with: [n00b],
@@ -1734,6 +1732,19 @@ test('display_m4_artifacts',
         display_scene_inspect,
         display_m4_showcase,
         table_tool,
+        meson.project_source_root(),
+    ],
+    suite: 'integration',
+)
+
+test('display_m5_artifacts',
+    sh_prog,
+    args: [
+        files('test/integration/test_display_m5_artifacts.sh'),
+        display_baseline_capture,
+        display_scene_inspect,
+        display_backend_selection_report,
+        widget_demo,
         meson.project_source_root(),
     ],
     suite: 'integration',

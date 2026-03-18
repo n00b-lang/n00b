@@ -102,13 +102,30 @@ extern n00b_list_t(n00b_string_t *) n00b_renderer_list(void);
  *   candidates after the explicit request.
  *
  * Environment override:
- * - When enabled, `$N00B_RENDERER_BACKEND` is prepended as the first
- *   candidate (after alias normalization).
+ * - When enabled, `$N00B_RENDERER_BACKEND` is treated as the default
+ *   candidate only for `auto` / implicit requests.
  */
 extern n00b_list_t(n00b_string_t *)
 n00b_renderer_candidate_names(n00b_string_t *requested) _kargs
 {
     bool allow_fallback     = true;
+    bool allow_env_override = true;
+};
+
+/**
+ * @brief Report whether a successful backend selection used fallback.
+ *
+ * Returns true only when the selected backend first appears at a later
+ * candidate index than the primary candidate produced by
+ * `n00b_renderer_candidate_names()`. Alias-backed selections such as
+ * `gui -> x11` or `gui -> cocoa` therefore do not count as fallback.
+ */
+extern bool
+n00b_renderer_selection_uses_fallback(n00b_string_t                *requested,
+                                      const n00b_renderer_vtable_t *selected) _kargs
+{
+    bool allow_fallback     = true;
+    bool allow_dynamic_load = false;
     bool allow_env_override = true;
 };
 

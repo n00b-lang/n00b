@@ -102,6 +102,58 @@ test_env_override_behavior(void)
 }
 
 static void
+test_explicit_request_beats_env_override(void)
+{
+    set_backend_override("stream");
+
+    n00b_list_t(n00b_string_t *) explicit_candidates =
+        n00b_renderer_candidate_names(r"ansi",
+                                      .allow_fallback     = true,
+                                      .allow_env_override = true);
+    assert(explicit_candidates.len >= 1);
+    assert_candidate_eq(explicit_candidates, 0, "ansi");
+
+    set_backend_override(nullptr);
+    printf("  [PASS] explicit backend request beats env override\n");
+}
+
+static void
+test_fallback_reporting(void)
+{
+    set_backend_override("stream");
+    assert(!n00b_renderer_selection_uses_fallback(r"auto",
+                                                  &n00b_renderer_stream,
+                                                  .allow_fallback     = true,
+                                                  .allow_dynamic_load = false,
+                                                  .allow_env_override = true));
+
+    assert(!n00b_renderer_selection_uses_fallback(r"ansi",
+                                                  &n00b_renderer_ansi,
+                                                  .allow_fallback     = true,
+                                                  .allow_dynamic_load = false,
+                                                  .allow_env_override = true));
+
+    set_backend_override(nullptr);
+    assert(n00b_renderer_selection_uses_fallback(r"missing-backend",
+                                                 &n00b_renderer_ansi,
+                                                 .allow_fallback     = true,
+                                                 .allow_dynamic_load = false,
+                                                 .allow_env_override = false));
+
+    n00b_option_t(n00b_renderer_vtable_ptr_t) gui =
+        n00b_renderer_find(r"gui");
+    if (n00b_option_is_set(gui)) {
+        assert(!n00b_renderer_selection_uses_fallback(r"gui",
+                                                      n00b_option_get(gui),
+                                                      .allow_fallback     = true,
+                                                      .allow_dynamic_load = false,
+                                                      .allow_env_override = false));
+    }
+
+    printf("  [PASS] backend fallback reporting\n");
+}
+
+static void
 test_resolve_exact(void)
 {
     n00b_result_t(n00b_renderer_vtable_ptr_t) stream =
@@ -135,6 +187,8 @@ main(int argc, char **argv)
     test_alias_normalization();
     test_auto_candidate_order();
     test_env_override_behavior();
+    test_explicit_request_beats_env_override();
+    test_fallback_reporting();
     test_resolve_exact();
     printf("Display backend-selection tests passed.\n");
 

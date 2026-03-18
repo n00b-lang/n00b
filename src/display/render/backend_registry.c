@@ -164,17 +164,16 @@ n00b_renderer_candidate_names(n00b_string_t *requested) _kargs
 }
 {
     n00b_list_t(n00b_string_t *) result = n00b_list_new(n00b_string_t *);
+    n00b_string_t *normalized_request = normalize_backend_name(requested);
+    bool is_auto = n00b_unicode_str_eq(normalized_request, r"auto",
+                                       .case_sensitive = false);
 
-    if (allow_env_override) {
+    if (allow_env_override && is_auto) {
         const char *env_value = getenv(backend_override_env);
         if (env_value && env_value[0]) {
             candidate_list_push_unique(&result, n00b_string_from_cstr(env_value));
         }
     }
-
-    n00b_string_t *normalized_request = normalize_backend_name(requested);
-    bool is_auto = n00b_unicode_str_eq(normalized_request, r"auto",
-                                       .case_sensitive = false);
 
     if (is_auto) {
         candidate_list_append_auto(&result);
@@ -188,6 +187,41 @@ n00b_renderer_candidate_names(n00b_string_t *requested) _kargs
     }
 
     return result;
+}
+
+bool
+n00b_renderer_selection_uses_fallback(n00b_string_t                *requested,
+                                      const n00b_renderer_vtable_t *selected) _kargs
+{
+    bool allow_fallback     = true;
+    bool allow_dynamic_load = false;
+    bool allow_env_override = true;
+}
+{
+    if (!selected) {
+        return false;
+    }
+
+    n00b_list_t(n00b_string_t *) candidates =
+        n00b_renderer_candidate_names(requested,
+                                      .allow_fallback     = allow_fallback,
+                                      .allow_env_override = allow_env_override);
+
+    for (size_t i = 0; i < candidates.len; i++) {
+        n00b_string_t *candidate_name = n00b_list_get(candidates, i);
+        n00b_result_t(n00b_renderer_vtable_ptr_t) resolved =
+            n00b_renderer_resolve_exact(candidate_name,
+                                        .allow_dynamic_load = allow_dynamic_load);
+        if (!n00b_result_is_ok(resolved)) {
+            continue;
+        }
+
+        if (n00b_result_get(resolved) == selected) {
+            return i != 0;
+        }
+    }
+
+    return false;
 }
 
 n00b_result_t(n00b_renderer_vtable_ptr_t)

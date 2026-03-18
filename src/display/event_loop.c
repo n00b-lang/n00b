@@ -43,6 +43,15 @@ n00b_canvas_run(n00b_canvas_t *canvas) _kargs
     g_run_stop = false;
     n00b_display_diag_init();
 
+    if (!n00b_canvas_backend_ready(canvas)) {
+        n00b_display_diag_log(N00B_DISPLAY_DIAG_ERROR,
+                              "event_loop",
+                              "run skipped: backend not ready err=%d",
+                              n00b_canvas_backend_error(canvas));
+        n00b_display_diag_shutdown();
+        return;
+    }
+
     n00b_display_terminal_setup(canvas);
 
     // Hide cursor during event loop.

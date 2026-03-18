@@ -36,7 +36,9 @@ n00b_display_backend_get_size(n00b_canvas_t *canvas)
 {
     n00b_render_size_t size = fallback_size(canvas);
 
-    if (!canvas || !canvas->vtable || !canvas->vtable->get_size) {
+    if (!n00b_canvas_backend_ready(canvas)
+        || !canvas->vtable
+        || !canvas->vtable->get_size) {
         return size;
     }
 
@@ -74,7 +76,9 @@ n00b_display_backend_get_size(n00b_canvas_t *canvas)
 n00b_render_cap_t
 n00b_display_backend_caps(n00b_canvas_t *canvas)
 {
-    if (!canvas || !canvas->vtable || !canvas->vtable->capabilities) {
+    if (!n00b_canvas_backend_ready(canvas)
+        || !canvas->vtable
+        || !canvas->vtable->capabilities) {
         return N00B_RCAP_NONE;
     }
     return canvas->vtable->capabilities(canvas->backend_ctx);
@@ -88,7 +92,10 @@ n00b_display_backend_poll_event(n00b_canvas_t *canvas,
     if (out) {
         out->type = N00B_EVENT_NONE;
     }
-    if (!canvas || !canvas->vtable || !canvas->vtable->poll_event || !out) {
+    if (!n00b_canvas_backend_ready(canvas)
+        || !canvas->vtable
+        || !canvas->vtable->poll_event
+        || !out) {
         return false;
     }
     return canvas->vtable->poll_event(canvas->backend_ctx, timeout_ms, out);
@@ -97,7 +104,9 @@ n00b_display_backend_poll_event(n00b_canvas_t *canvas,
 void
 n00b_display_backend_set_cursor_visible(n00b_canvas_t *canvas, bool visible)
 {
-    if (!canvas || !canvas->vtable || !canvas->vtable->cursor_set_visible) {
+    if (!n00b_canvas_backend_ready(canvas)
+        || !canvas->vtable
+        || !canvas->vtable->cursor_set_visible) {
         return;
     }
     canvas->vtable->cursor_set_visible(canvas->backend_ctx, visible);

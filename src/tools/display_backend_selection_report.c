@@ -186,13 +186,18 @@ run_selection_case(const selection_case_t             *spec,
                      .backend_allow_env_override = true,
                      .output                     = output);
 
-    bool startup_ok = canvas->backend_ctx != nullptr;
+    bool startup_ok = n00b_canvas_backend_ready(canvas);
     const char *selected_backend = "none";
     bool fallback_used = false;
 
     if (startup_ok && canvas->vtable && canvas->vtable->name) {
         selected_backend = canvas->vtable->name;
-        fallback_used = strcmp(selected_backend, primary_candidate) != 0;
+        fallback_used =
+            n00b_renderer_selection_uses_fallback(requested_name,
+                                                  canvas->vtable,
+                                                  .allow_fallback     = spec->allow_fallback,
+                                                  .allow_dynamic_load = false,
+                                                  .allow_env_override = true);
         (void)render_probe_scene(canvas);
     }
 
@@ -234,7 +239,7 @@ write_selection_metadata(const char *out_dir)
                       "tool=display_backend_selection_report\n"
                       "tool_version=%s\n"
                       "n00b_version=%u.%u.%u\n"
-                      "cases=4\n",
+                      "cases=5\n",
                       TOOL_VERSION,
                       (unsigned)N00B_VERS_MAJOR,
                       (unsigned)N00B_VERS_MINOR,
@@ -309,6 +314,7 @@ main(int argc, char **argv)
 
     selection_case_t cases[] = {
         { "explicit_stream",       "stream",          nullptr,  false },
+        { "explicit_ansi_beats_env", "ansi",          "stream", true  },
         { "auto_default",          "auto",            nullptr,  true  },
         { "missing_with_fallback", "missing-backend", nullptr,  true  },
         { "env_override_stream",   "auto",            "stream", true  },

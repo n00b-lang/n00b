@@ -44,7 +44,7 @@ dumb_init(n00b_conduit_topic_t(n00b_buffer_t *) *output)
     dumb_ctx_t *ctx = n00b_alloc_with_opts(dumb_ctx_t,
                                           &(n00b_alloc_opts_t){.no_scan = true});
     ctx->fd   = STDOUT_FILENO;
-    ctx->rows = 0;
+    ctx->rows = DUMB_DEFAULT_ROWS;
     ctx->cols = DUMB_DEFAULT_COLS;
     return ctx;
 }
