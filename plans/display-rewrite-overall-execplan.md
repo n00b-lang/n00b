@@ -27,6 +27,7 @@ This plan is the top-level roadmap for the in-place rewrite. "In-place" means ex
 - [x] (2026-03-05 13:06Z) Executed Milestone 3 and recorded Cocoa contract hardening plus Linux X11 GUI backend delivery, registry alias updates, and validation evidence in `plans/display-rewrite/m3-gui-backend-execplan.md`.
 - [x] (2026-03-17 18:12Z) Applied M1 review remediation on `display-rewrite/m1-core-contracts`: added blocking regression tests, mandatory `display_scene_inspect --out`, artifact parity coverage, diagnostics rerun coverage, and refreshed M0/M1 scene artifacts after trimming the trailing blank line at EOF.
 - [x] (2026-03-17 20:23Z) Applied M2 review remediation on `display-rewrite/m2-terminal-backend`: required `display_terminal_replay --out-dir`, extracted the shared replay fixture, added replay artifact parity coverage, split replay/manual metadata files, and refreshed the M2 artifact tree.
+- [x] (2026-03-18 00:49Z) Applied M3 review remediation on `display-rewrite/m3-gui-backend`: added backend-specific X11/Cocoa regressions, exact-pixel resize propagation, honest synthetic GUI-profile parity artifacts, registry-backed `widget_demo` resolution, and refreshed M3 artifacts/docs.
 - [ ] Execute Milestones 4-6 as stacked diffs, preserving this document as the top-level source of milestone ordering and acceptance scope.
 
 ## Surprises & Discoveries
@@ -53,6 +54,10 @@ This plan is the top-level roadmap for the in-place rewrite. "In-place" means ex
   Evidence: User-facing validation required `./build_debug/widget_demo --widget all --backend gui` to open an X11 window and process real GUI interactions.
 - Observation: X11 bring-up uncovered runtime-specific defects (font identifier validity, pixel-vs-cell mouse routing, and border hit-testing footprint) that were not exercised by prior deterministic parity-only checks.
   Evidence: Initial runtime error included `BadFont (invalid Font parameter)` from `X_ChangeGC`; subsequent fixes landed in `src/display/render/backend_x11.c` and `src/display/mouse.c` with new regression checks in `test_x11_backend` and `test_display_event_dispatch`.
+- Observation: Deterministic GUI artifact generation is still valuable after M3, but only as synthetic contract evidence; it cannot replace backend-specific runtime regressions for real Cocoa/X11 semantics.
+  Evidence: M3 review remediation moved the shared harness into `src/tools/display_m3_parity_fixture.[ch]`, changed the GUI profile to `9x16`, and relabeled the emitted artifacts with `evidence_scope=synthetic_contract_parity`.
+- Observation: GUI smoke validation can remain unavailable even when `Xvfb` is installed, so the plan needs an explicit “record the limitation” fallback for M3.
+  Evidence: `xvfb-run -a sh -c 'echo DISPLAY=$DISPLAY; xdpyinfo >/dev/null 2>&1; echo xdpyinfo=$?; ./build_debug/test_x11_backend'` reported `xdpyinfo=1` and `cannot open DISPLAY` during M3 remediation.
 
 ## Decision Log
 
@@ -83,12 +88,15 @@ This plan is the top-level roadmap for the in-place rewrite. "In-place" means ex
 - Decision: Make backend alias `gui` resolve to true GUI backends only (`cocoa` on macOS, `x11` on Linux/Unix) and keep terminal backends explicit by name.
   Rationale: This removes ambiguity for users validating GUI behavior and keeps backend selection intent unambiguous for later milestones.
   Date/Author: 2026-03-05 / Codex
+- Decision: Treat M3 completion evidence as the combination of backend-specific GUI regressions plus a narrower synthetic GUI-profile parity fixture, not as a single “backend parity” claim.
+  Rationale: The synthetic harness is useful and deterministic, but the review remediation proved it cannot stand in for real Cocoa/X11 behavior checks on its own.
+  Date/Author: 2026-03-18 / Codex
 
 ## Outcomes & Retrospective
 
-Milestones 0, 1, 2, and 3 are complete on the active rewrite lineage. Milestone 0 established deterministic baseline harnessing (`display_baseline_contract`, `display_baseline_flow`, `display_baseline_capture`) and baseline artifacts in `plans/artifacts/display-rewrite/m0/`. Milestone 1 then carved out internal display contracts (`diagnostics`, `scene_contracts`, `event_dispatch`, `backend_services`), removed hardcoded `/tmp` diagnostics from touched display paths, added deterministic scene inspection (`display_scene_inspect`), and captured parity artifacts in `plans/artifacts/display-rewrite/m1/`. Milestone 2 extracted shared terminal contracts (`terminal_lifecycle`, `ansi_sgr`, `terminal_input`), rewired terminal backends/event loop to consume them, added deterministic replay tooling (`display_terminal_replay`), and after review remediation now enforces explicit replay destinations, parity-tests replay artifacts, and keeps baseline/replay/manual evidence separate in `plans/artifacts/display-rewrite/m2/`. Milestone 3 hardened Cocoa GUI contracts and delivered the first Linux native GUI backend (`x11`) with `gui` alias cleanup, interactive `widget_demo` window proof, and M3 validation artifacts under `plans/artifacts/display-rewrite/m3/`.
+Milestones 0, 1, 2, and 3 are complete on the active rewrite lineage. Milestone 0 established deterministic baseline harnessing (`display_baseline_contract`, `display_baseline_flow`, `display_baseline_capture`) and baseline artifacts in `plans/artifacts/display-rewrite/m0/`. Milestone 1 then carved out internal display contracts (`diagnostics`, `scene_contracts`, `event_dispatch`, `backend_services`), removed hardcoded `/tmp` diagnostics from touched display paths, added deterministic scene inspection (`display_scene_inspect`), and captured parity artifacts in `plans/artifacts/display-rewrite/m1/`. Milestone 2 extracted shared terminal contracts (`terminal_lifecycle`, `ansi_sgr`, `terminal_input`), rewired terminal backends/event loop to consume them, added deterministic replay tooling (`display_terminal_replay`), and after review remediation now enforces explicit replay destinations, parity-tests replay artifacts, and keeps baseline/replay/manual evidence separate in `plans/artifacts/display-rewrite/m2/`. Milestone 3 hardened Cocoa/X11 GUI contracts, added backend-specific regressions for the real GUI bugs, narrowed the synthetic artifact language to GUI-profile contract parity, wired `widget_demo` through registry-backed backend resolution, and refreshed the M3 evidence set under `plans/artifacts/display-rewrite/m3/`.
 
-What remains is milestone execution for M4-M6: widget/table/hexdump migration, runtime backend selection cleanup follow-through, and final hardening/cutover. The key lesson through M3 is that deterministic artifact generation plus explicit internal contracts and one real windowed backend proof keep parity claims defensible while refactoring large backend paths.
+What remains is milestone execution for M4-M6: widget/table/hexdump migration, runtime backend selection cleanup follow-through, and final hardening/cutover. The key lesson through M3 is that deterministic artifact generation must be paired with backend-specific runtime checks; synthetic contract artifacts stay valuable, but only when the plan states clearly what they do and do not prove.
 
 ## Context and Orientation
 
@@ -154,7 +162,7 @@ Acceptance for Milestone 2 is that terminal behavior is feature-parity with base
 
 Completion evidence: `display_terminal_lifecycle`, `display_ansi_sgr`, `display_terminal_input`, `display_baseline_contract`, `display_event_dispatch`, `display_baseline_flow`, `display_m1_compat`, and `display_m2_terminal_flow` all passed; display smoke tests and `notcurses_backend` passed; `display_terminal_replay` now requires `--out-dir`; `display_terminal_replay_artifacts` parity coverage passes; replay evidence is split across `terminal_replay.txt`, `terminal_replay_metadata.txt`, and `widget_demo_tui_manual.txt`; and M2 stream artifacts matched M1 (`scene_stream.txt`, `table_stream.txt`) with empty diffs.
 
-### Milestone 3: GUI Backend Parity Path
+### Milestone 3: GUI Backend Contract Path
 
 Status: Complete on `display-rewrite/m3-gui-backend`.
 
@@ -162,11 +170,11 @@ Milestone 3 makes the dual-target goal concrete by bringing one GUI backend path
 
 Implementation scope includes rewriting GUI bridge internals onto the shared contracts, codifying bridge invariants, and adding compile-time or runtime guards that detect ABI drift between C headers and Objective-C bridge declarations.
 
-Unit tests for this milestone must include bridge layout/contract guard tests and GUI event translation helpers that can run in non-interactive environments where possible. Integration tests must include a backend parity scenario that renders the same widget composition through terminal and GUI pathways (or GUI headless harness if CI lacks a window server) and compares normalized output properties. The human-runnable artifact is a GUI smoke command (for supported systems) and a generated parity report in `plans/artifacts/display-rewrite/m3/`.
+Unit tests for this milestone must include bridge layout/contract guard tests and GUI event translation helpers that can run in non-interactive environments where possible. Integration tests must include a synthetic GUI-profile parity scenario that renders the same widget composition through terminal and GUI-like capability pathways, plus backend-specific regressions for real X11/Cocoa behavior. The human-runnable artifact is a GUI smoke command (for supported systems) and a generated synthetic contract parity report in `plans/artifacts/display-rewrite/m3/`.
 
 Acceptance for Milestone 3 is that one app composition can run through terminal and GUI backends with equivalent interaction semantics for a documented subset.
 
-Completion evidence: Cocoa input and bridge contracts were extracted/guarded, deterministic parity artifacts were generated under `plans/artifacts/display-rewrite/m3/`, Linux native GUI backend `x11` was added and wired into backend registry/`gui` alias resolution, and validation passed for `display_backend_registry`, `x11_backend`, and `display_event_dispatch` alongside existing M3 parity checks.
+Completion evidence: Cocoa input and bridge contracts were extracted/guarded, deterministic synthetic parity artifacts were generated under `plans/artifacts/display-rewrite/m3/`, Linux native GUI backend `x11` was added and wired into backend registry/`gui` alias resolution, `widget_demo` now uses registry-backed backend lookup and non-interactive GUI hold behavior, and validation passed for `display_backend_registry`, `display_cocoa_input`, `display_event_dispatch`, `display_x11_contracts`, `x11_backend`, and `display_m3_backend_parity`. When live GUI smoke is unavailable, the limitation is recorded explicitly instead of being treated as missing evidence.
 
 ### Milestone 4: Widget, Table, And Hexdump Migration To Shared Primitives
 

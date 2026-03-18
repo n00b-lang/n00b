@@ -144,3 +144,24 @@ n00b_cocoa_input_translate_mouse(int32_t              x,
     out->mouse.action = action;
     out->mouse.mods   = n00b_cocoa_input_modifiers(cocoa_mod_flags);
 }
+
+void
+n00b_cocoa_input_translate_mouse_point(double               x,
+                                       double               y,
+                                       n00b_isize_t         cell_w,
+                                       n00b_isize_t         cell_h,
+                                       n00b_mouse_button_t  button,
+                                       n00b_mouse_action_t  action,
+                                       uint32_t             cocoa_mod_flags,
+                                       n00b_event_t        *out)
+{
+    (void)cell_w;
+    (void)cell_h;
+
+    n00b_cocoa_input_translate_mouse((int32_t)x,
+                                     (int32_t)y,
+                                     button,
+                                     action,
+                                     cocoa_mod_flags,
+                                     out);
+}

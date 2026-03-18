@@ -26,6 +26,22 @@ canvas_unlock(n00b_canvas_t *c)
     n00b_data_unlock(c->lock);
 }
 
+static inline n00b_isize_t
+canvas_size_in_pixels(n00b_isize_t pixels,
+                      n00b_isize_t cells,
+                      n00b_isize_t cell_px)
+{
+    if (pixels > 0) {
+        return pixels;
+    }
+
+    if (cells > 0 && cell_px > 0) {
+        return cells * cell_px;
+    }
+
+    return 0;
+}
+
 // -------------------------------------------------------------------
 // Lifecycle
 // -------------------------------------------------------------------
@@ -56,8 +72,8 @@ n00b_canvas_init(n00b_canvas_t *c) _kargs
     n00b_render_size_t sz = n00b_display_backend_get_size(c);
     c->cell_px_w          = sz.cell_pixel_w > 0 ? sz.cell_pixel_w : 1;
     c->cell_px_h          = sz.cell_pixel_h > 0 ? sz.cell_pixel_h : 1;
-    c->frame_rows         = sz.rows * c->cell_px_h;
-    c->frame_cols         = sz.cols * c->cell_px_w;
+    c->frame_rows         = canvas_size_in_pixels(sz.pixel_h, sz.rows, c->cell_px_h);
+    c->frame_cols         = canvas_size_in_pixels(sz.pixel_w, sz.cols, c->cell_px_w);
 
     // Initialize font metrics: ask backend first, fall back to cell metrics.
     if (vtable->get_font_metrics) {
@@ -162,8 +178,8 @@ n00b_canvas_render(n00b_canvas_t *c)
         n00b_render_size_t sz = n00b_display_backend_get_size(c);
         c->cell_px_w = sz.cell_pixel_w > 0 ? sz.cell_pixel_w : 1;
         c->cell_px_h = sz.cell_pixel_h > 0 ? sz.cell_pixel_h : 1;
-        n00b_isize_t px_rows = sz.rows * c->cell_px_h;
-        n00b_isize_t px_cols = sz.cols * c->cell_px_w;
+        n00b_isize_t px_rows = canvas_size_in_pixels(sz.pixel_h, sz.rows, c->cell_px_h);
+        n00b_isize_t px_cols = canvas_size_in_pixels(sz.pixel_w, sz.cols, c->cell_px_w);
         if (px_rows != c->frame_rows || px_cols != c->frame_cols) {
             c->frame_rows = px_rows;
             c->frame_cols = px_cols;

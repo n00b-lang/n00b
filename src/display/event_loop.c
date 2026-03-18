@@ -115,9 +115,21 @@ n00b_canvas_run(n00b_canvas_t *canvas) _kargs
         }
 
         if (event.type == N00B_EVENT_RESIZE) {
-            // Backend reports resize in cells; convert to pixels.
-            n00b_isize_t px_rows = event.resize.rows * canvas->cell_px_h;
-            n00b_isize_t px_cols = event.resize.cols * canvas->cell_px_w;
+            // Prefer the backend's exact pixel size when it is available.
+            n00b_render_size_t size = n00b_display_backend_get_size(canvas);
+            if (size.cell_pixel_w > 0) {
+                canvas->cell_px_w = size.cell_pixel_w;
+            }
+            if (size.cell_pixel_h > 0) {
+                canvas->cell_px_h = size.cell_pixel_h;
+            }
+
+            n00b_isize_t px_rows = size.pixel_h > 0
+                                 ? size.pixel_h
+                                 : event.resize.rows * canvas->cell_px_h;
+            n00b_isize_t px_cols = size.pixel_w > 0
+                                 ? size.pixel_w
+                                 : event.resize.cols * canvas->cell_px_w;
             n00b_canvas_resize(canvas, px_rows, px_cols);
             n00b_display_scene_run_layout(canvas);
             if (on_resize) {

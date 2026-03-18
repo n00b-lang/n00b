@@ -8,7 +8,7 @@ This plan is Milestone 3 of the umbrella plan at `plans/display-rewrite-overall-
 
 Milestone 3 makes the dual-target runtime concrete by bringing GUI backends onto the same internal-contract discipline used by terminal paths in Milestones 1 and 2. After this milestone, contributors can run one app composition through terminal and GUI pathways (Cocoa where available and X11 on Linux) and get equivalent interaction semantics for a documented subset (focus traversal, key activation, mouse press routing, resize handling, and clean stop behavior).
 
-The user-visible effect is parity confidence and a real Linux windowed path instead of terminal-only fallbacks. Instead of leaving Cocoa-specific translation and bridge assumptions as implicit static code in `backend_cocoa.m`, and instead of mapping `gui` to non-windowed terminal backends on Linux, this milestone introduces explicit, testable contracts plus a native X11 backend and deterministic parity artifacts under `plans/artifacts/display-rewrite/m3/`.
+The user-visible effect is contract confidence and a real Linux windowed path instead of terminal-only fallbacks. Instead of leaving Cocoa-specific translation and bridge assumptions as implicit static code in `backend_cocoa.m`, and instead of mapping `gui` to non-windowed terminal backends on Linux, this milestone introduces explicit, testable contracts plus a native X11 backend and deterministic synthetic GUI-profile artifacts under `plans/artifacts/display-rewrite/m3/`.
 
 ## Progress
 
@@ -24,6 +24,7 @@ The user-visible effect is parity confidence and a real Linux windowed path inst
 - [x] (2026-03-05 13:06Z) Updated `widget_demo` backend UX (`gui`, `x11`, initialization failure path) and ensured interactive `--widget all` runs via event loop on non-terminal GUI backends.
 - [x] (2026-03-05 13:06Z) Fixed X11 stability/usability defects found during manual bring-up: invalid font handling (`BadFont`), mouse pixel-coordinate mapping, and border hit-testing footprint.
 - [x] (2026-03-05 13:06Z) Added/ran Linux GUI-focused regression coverage: `test_display_backend_registry`, `test_x11_backend`, and expanded `test_display_event_dispatch` border-click coverage.
+- [x] (2026-03-18 00:49Z) Applied M3 review remediation: added `display_x11_contracts`, pixel-space Cocoa/input regressions, shared synthetic parity fixture extraction, honest synthetic artifact wording, registry-backed `widget_demo` backend resolution, and non-interactive GUI hold behavior.
 
 ## Surprises & Discoveries
 
@@ -45,6 +46,10 @@ The user-visible effect is parity confidence and a real Linux windowed path inst
   Evidence: Manual run feedback showed button activation flash with no visible status-line text change; button callback was switched to self-label updates for immediate, always-visible feedback.
 - Observation: Border click hit-testing can under-shoot rendered extents when inferred from content size in mixed layout states.
   Evidence: Border-click behavior improved after switching hit-test footprint to prefer `plane->bounds` outer size and after adding `test_button_border_click_focuses` in `test/unit/test_display_event_dispatch.c`.
+- Observation: The original synthetic parity harness over-claimed what it proved and could not catch pixel-vs-cell regressions because the GUI profile hard-coded `1x1` cell metrics.
+  Evidence: M3 review remediation replaced duplicated harness code with `src/tools/display_m3_parity_fixture.[ch]`, changed the GUI profile to `9x16`, and updated `parity_report.txt` / `parity_metadata.txt` to declare `evidence_scope=synthetic_contract_parity`.
+- Observation: Live X11 smoke remained unavailable in the current sandbox even with `xvfb-run`, so the remediation had to rely on backend-specific headless tests plus refreshed artifacts.
+  Evidence: `xvfb-run -a sh -c 'echo DISPLAY=$DISPLAY; xdpyinfo >/dev/null 2>&1; echo xdpyinfo=$?; ./build_debug/test_x11_backend'` reported `xdpyinfo=1` and `cannot open DISPLAY`.
 
 ## Decision Log
 
@@ -78,23 +83,23 @@ The user-visible effect is parity confidence and a real Linux windowed path inst
 
 ## Outcomes & Retrospective
 
-Milestone 3 implementation is complete on `display-rewrite/m3-gui-backend` for both deterministic/headless parity acceptance and Linux native GUI bring-up.
+Milestone 3 implementation is complete on `display-rewrite/m3-gui-backend` after review remediation. The repository now combines real backend regression coverage with a narrower, explicit synthetic GUI-profile parity artifact instead of treating the synthetic harness as stand-alone proof of live backend equivalence.
 
 Delivered artifacts and contracts:
 
 - Cocoa input contract extracted into `include/internal/display/cocoa_input.h` and `src/display/render/cocoa_input.c`.
 - Bridge layout contracts added via `include/internal/display/cocoa_bridge_contracts.h`, `src/display/render/cocoa_bridge_contracts.c`, and ObjC bridge snapshot `src/display/render/cocoa_bridge_layout.m`.
 - `backend_cocoa.m` now consumes shared input translation helpers and validates bridge layout during `cocoa_init()`.
-- New tests and tools wired in `meson.build`: `display_cocoa_input`, `display_cocoa_bridge_contracts` (Cocoa-gated), `display_m3_backend_parity`, and `display_gui_parity_report`.
+- New tests and tools wired in `meson.build`: `display_cocoa_input`, `display_cocoa_bridge_contracts` (Cocoa-gated), `display_m3_backend_parity`, `display_x11_contracts`, and `display_gui_parity_report`.
 - Native X11 backend added in `src/display/render/backend_x11.c`, with renderer registration in `src/display/render/backend_registry.c` and vtable declaration in `include/display/render/backend.h`.
 - Linux GUI build/configuration wired via `meson.options` (`enable_x11`) and `meson.build` dependency detection/target wiring (`test_x11_backend`).
-- Backend selection UX updated in `src/tools/widget_demo.c` so `--backend gui` maps to `x11` on Linux/Unix, with explicit `--backend x11` support and backend-init failure diagnostics.
-- Input/hit UX fixes landed for Linux GUI validation: X11 font fallback/guards, X11 mouse pixel-coordinate mapping, and border hit-testing based on laid-out bounds.
+- Backend selection UX updated in `src/tools/widget_demo.c` so `--backend gui` resolves through a registry-backed helper, with explicit `--backend x11` support, backend-init failure diagnostics, and a non-interactive GUI hold loop instead of the previous Cocoa-only pump.
+- Input/runtime fixes landed for Linux GUI validation: X11 font fallback/guards, exact-pixel resize propagation, expose-driven redraw scheduling, UTF-8 key decoding, drag mapping, truthful capability reporting, Cocoa pixel-space mouse points, and border hit-testing based on laid-out bounds.
 
 Validation outcomes (2026-03-05):
 
 - `meson test -C build_debug --print-errorlogs display_cocoa_input display_terminal_input display_event_dispatch display_baseline_contract` -> all pass.
-- `meson test -C build_debug --print-errorlogs display_baseline_flow display_m1_compat display_m2_terminal_flow display_m3_backend_parity` -> all pass.
+- `meson test -C build_debug --print-errorlogs display_backend_registry display_cocoa_input display_event_dispatch display_x11_contracts x11_backend display_m3_backend_parity` -> all pass.
 - `meson test -C build_debug --print-errorlogs render_plane ... xform_render` smoke set -> all pass.
 - Cocoa-gated checks reported unavailable in this environment:
   - `display_cocoa_bridge_contracts unavailable (no Cocoa build in this environment)`
@@ -107,9 +112,10 @@ Validation outcomes (2026-03-05):
   - `diff -u plans/artifacts/display-rewrite/m2/scene_stream.txt plans/artifacts/display-rewrite/m3/scene_stream.txt` -> no output
   - `diff -u plans/artifacts/display-rewrite/m2/table_stream.txt plans/artifacts/display-rewrite/m3/table_stream.txt` -> no output
 - Linux GUI validations:
-  - `ninja -C build_debug widget_demo test_display_backend_registry test_x11_backend` -> build success.
-  - `meson test -C build_debug --print-errorlogs display_backend_registry x11_backend display_event_dispatch` -> all pass.
-  - `./build_debug/widget_demo --widget all --backend gui` -> opens X11 window on Linux with interactive widget event loop.
+  - `ninja -C build_debug widget_demo test_display_backend_registry test_display_x11_contracts test_x11_backend` -> build success.
+  - `meson test -C build_debug --print-errorlogs display_backend_registry display_x11_contracts x11_backend display_event_dispatch` -> all pass.
+  - `build_debug/widget_demo --widget label --backend gui` now resolves `gui` through the registry-backed helper and holds the GUI path open until explicit exit when a working X11 display is available.
+  - `xvfb-run` smoke remained unavailable in this environment because even the ephemeral display could not be opened by X11 clients; that limitation is recorded instead of being counted as evidence.
 
 ## Context and Orientation
 

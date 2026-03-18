@@ -829,12 +829,14 @@ cocoa_enqueue_mouse_event(cocoa_ctx_t        *ctx,
 
     NSPoint loc = [view convertPoint:[event locationInWindow] fromView:nil];
     n00b_event_t ev = {};
-    n00b_cocoa_input_translate_mouse((int32_t)(loc.x / ctx->cell_w),
-                                      (int32_t)(loc.y / ctx->cell_h),
-                                      button,
-                                      action,
-                                      cocoa_modifier_mask([event modifierFlags]),
-                                      &ev);
+    n00b_cocoa_input_translate_mouse_point(loc.x,
+                                           loc.y,
+                                           (n00b_isize_t)ctx->cell_w,
+                                           (n00b_isize_t)ctx->cell_h,
+                                           button,
+                                           action,
+                                           cocoa_modifier_mask([event modifierFlags]),
+                                           &ev);
     cocoa_enqueue_event(ctx, &ev);
 }
 

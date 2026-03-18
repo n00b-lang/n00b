@@ -60,3 +60,11 @@ extern void           n00b_cocoa_input_translate_mouse(int32_t              x,
                                                          n00b_mouse_action_t  action,
                                                          uint32_t             cocoa_mod_flags,
                                                          n00b_event_t        *out);
+extern void           n00b_cocoa_input_translate_mouse_point(double               x,
+                                                             double               y,
+                                                             n00b_isize_t         cell_w,
+                                                             n00b_isize_t         cell_h,
+                                                             n00b_mouse_button_t  button,
+                                                             n00b_mouse_action_t  action,
+                                                             uint32_t             cocoa_mod_flags,
+                                                             n00b_event_t        *out);

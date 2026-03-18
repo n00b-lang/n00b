@@ -455,7 +455,10 @@ n00b_display = [
 ]
 
 if conf_x11
-    n00b_display += 'src/display/render/backend_x11.c'
+    n00b_display += [
+        'src/display/render/x11_backend_contracts.c',
+        'src/display/render/backend_x11.c',
+    ]
 endif
 
 # ============================================================================
@@ -1432,9 +1435,13 @@ display_scene_contracts_test = executable('test_display_scene_contracts',
 )
 test('display_scene_contracts', display_scene_contracts_test, suite: 'unit')
 
+widget_demo_tools_inc = include_directories('src/tools')
+
 display_backend_registry_test = executable('test_display_backend_registry',
-    ['test/unit/test_display_backend_registry.c'],
-    kwargs: test_common_kwargs,
+    ['test/unit/test_display_backend_registry.c', 'src/tools/widget_demo_backend_resolution.c'],
+    include_directories: incdir + [widget_demo_tools_inc],
+    c_args: exe_c_args,
+    link_with: [n00b],
 )
 test('display_backend_registry', display_backend_registry_test, suite: 'unit')
 
@@ -1501,6 +1508,12 @@ if conf_notcurses
 endif
 
 if conf_x11
+  display_x11_contracts_test = executable('test_display_x11_contracts',
+      ['test/unit/test_display_x11_contracts.c'],
+      kwargs: test_common_kwargs,
+  )
+  test('display_x11_contracts', display_x11_contracts_test, suite: 'unit')
+
   x11_test = executable('test_x11_backend',
       ['test/unit/test_x11_backend.c'],
       kwargs: test_common_kwargs,
@@ -1517,8 +1530,10 @@ table_tool = executable('n00b_table',
 
 # Widget visual demo tool
 widget_demo = executable('widget_demo',
-    ['src/tools/widget_demo.c'],
-    kwargs: test_common_kwargs,
+    ['src/tools/widget_demo.c', 'src/tools/widget_demo_backend_resolution.c'],
+    include_directories: incdir + [widget_demo_tools_inc],
+    c_args: exe_c_args,
+    link_with: [n00b],
     install: false,
 )
 
@@ -1541,8 +1556,10 @@ display_terminal_replay = executable('display_terminal_replay',
 )
 
 display_gui_parity_report = executable('display_gui_parity_report',
-    ['src/tools/display_gui_parity_report.c'],
-    kwargs: test_common_kwargs,
+    ['src/tools/display_gui_parity_report.c', 'src/tools/display_m3_parity_fixture.c'],
+    include_directories: incdir + [widget_demo_tools_inc],
+    c_args: exe_c_args,
+    link_with: [n00b],
     install: false,
 )
 
@@ -1666,8 +1683,10 @@ display_m2_terminal_flow_test = executable('test_display_m2_terminal_flow',
 test('display_m2_terminal_flow', display_m2_terminal_flow_test, suite: 'integration')
 
 display_m3_backend_parity_test = executable('test_display_m3_backend_parity',
-    ['test/integration/test_display_m3_backend_parity.c'],
-    kwargs: test_common_kwargs,
+    ['test/integration/test_display_m3_backend_parity.c', 'src/tools/display_m3_parity_fixture.c'],
+    include_directories: incdir + [widget_demo_tools_inc],
+    c_args: exe_c_args,
+    link_with: [n00b],
 )
 test('display_m3_backend_parity', display_m3_backend_parity_test, suite: 'integration')
 

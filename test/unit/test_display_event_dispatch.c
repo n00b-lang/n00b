@@ -216,6 +216,79 @@ test_button_border_click_focuses(void)
     printf("  [PASS] button border click focuses button\n");
 }
 
+static void
+test_mouse_dispatch_uses_pixel_coordinates(void)
+{
+    n00b_canvas_t *canvas = n00b_new_kargs(n00b_canvas_t, canvas,
+                                           .vtable = &n00b_renderer_stream);
+    canvas->cell_px_w = 8;
+    canvas->cell_px_h = 16;
+    n00b_stream_backend_set_size(canvas->backend_ctx, 6, 40);
+    n00b_canvas_resize(canvas, 6 * canvas->cell_px_h, 40 * canvas->cell_px_w);
+
+    n00b_plane_t *root = n00b_new_kargs(n00b_plane_t, plane);
+    root->width  = canvas->frame_cols;
+    root->height = canvas->frame_rows;
+
+    widget_state_t s1 = {.consume = true};
+    widget_state_t s2 = {.consume = true};
+
+    n00b_plane_t *p1 = n00b_new_kargs(n00b_plane_t, plane);
+    p1->width        = 8 * canvas->cell_px_w;
+    p1->height       = 1 * canvas->cell_px_h;
+    n00b_widget_attach(p1, &dispatch_widget, &s1);
+
+    n00b_plane_t *p2 = n00b_new_kargs(n00b_plane_t, plane);
+    p2->width        = 8 * canvas->cell_px_w;
+    p2->height       = 1 * canvas->cell_px_h;
+    n00b_widget_attach(p2, &dispatch_widget, &s2);
+
+    n00b_plane_add_child(root, p1, 1 * canvas->cell_px_w, 1 * canvas->cell_px_h);
+    n00b_plane_add_child(root, p2, 12 * canvas->cell_px_w, 1 * canvas->cell_px_h);
+    n00b_canvas_add_plane(canvas, root);
+
+    n00b_focus_mgr_t *fm = n00b_focus_mgr_new(canvas);
+    assert(n00b_focus_mgr_set(fm, p1));
+
+    n00b_event_t pixel_click = {
+        .type = N00B_EVENT_MOUSE,
+        .mouse = {
+            .x = p2->x + 1,
+            .y = p2->y + 1,
+            .button = N00B_MOUSE_LEFT,
+            .action = N00B_MOUSE_PRESS,
+            .mods = N00B_MOD_NONE,
+        },
+    };
+    n00b_display_dispatch_result_t r =
+        n00b_display_dispatch_event(canvas, fm, &pixel_click);
+    assert(r.handled);
+    assert(r.focus_changed);
+    assert(n00b_focus_mgr_current(fm) == p2);
+
+    assert(n00b_focus_mgr_set(fm, p1));
+    n00b_event_t cell_scaled_click = pixel_click;
+    cell_scaled_click.mouse.x /= canvas->cell_px_w;
+    cell_scaled_click.mouse.y /= canvas->cell_px_h;
+
+    r = n00b_display_dispatch_event(canvas, fm, &cell_scaled_click);
+    assert(!r.focus_changed);
+    assert(n00b_focus_mgr_current(fm) == p1);
+
+    n00b_focus_mgr_destroy(fm);
+    n00b_canvas_remove_plane(canvas, root);
+    n00b_plane_remove_child(root, p1);
+    n00b_plane_remove_child(root, p2);
+    n00b_widget_detach(p1);
+    n00b_widget_detach(p2);
+    n00b_plane_destroy(p1);
+    n00b_plane_destroy(p2);
+    n00b_plane_destroy(root);
+    n00b_canvas_destroy(canvas);
+
+    printf("  [PASS] mouse dispatch expects pixel coordinates\n");
+}
+
 int
 main(int argc, char **argv)
 {
@@ -225,6 +298,7 @@ main(int argc, char **argv)
     printf("Running display event-dispatch tests...\n");
     test_event_dispatch_contracts();
     test_button_border_click_focuses();
+    test_mouse_dispatch_uses_pixel_coordinates();
 
     printf("Display event-dispatch tests passed.\n");
     n00b_shutdown();

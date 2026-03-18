@@ -22,6 +22,7 @@
 #include "display/event.h"
 #include "display/render/backend.h"
 #include "display/render/composite.h"
+#include "internal/display/x11_backend_contracts.h"
 
 #define X11_DEFAULT_COLS 80
 #define X11_DEFAULT_ROWS 25
@@ -56,9 +57,7 @@ typedef struct {
     uint32_t        eq_head;
     uint32_t        eq_tail;
 
-    bool            has_pending_resize;
-    n00b_isize_t    pending_resize_rows;
-    n00b_isize_t    pending_resize_cols;
+    n00b_x11_pending_state_t pending;
 
     void          (*resize_cb)(n00b_isize_t, n00b_isize_t, void *);
     void           *resize_user_ctx;
@@ -218,21 +217,12 @@ x11_handle_keypress(x11_ctx_t *ctx, XEvent *xev)
     }
 
     if (nbytes > 0) {
-        uint8_t c = (uint8_t)buf[0];
-        if (c == '\r' || c == '\n') {
-            ev.key.key = N00B_KEY_ENTER;
+        if (n00b_x11_translate_lookup_bytes(buf,
+                                            nbytes,
+                                            ev.key.mods,
+                                            &ev)) {
+            x11_enqueue_event(ctx, &ev);
         }
-        else if (c == '\t') {
-            ev.key.key = N00B_KEY_TAB;
-        }
-        else if (c == 0x7Fu || c == 0x08u) {
-            ev.key.key = N00B_KEY_BACKSPACE;
-        }
-        else {
-            ev.key.key = (uint32_t)c;
-        }
-
-        x11_enqueue_event(ctx, &ev);
     }
 }
 
@@ -303,9 +293,9 @@ x11_handle_resize(x11_ctx_t *ctx, int width, int height)
     if (new_cols != ctx->cols || new_rows != ctx->rows) {
         ctx->cols = new_cols;
         ctx->rows = new_rows;
-        ctx->has_pending_resize = true;
-        ctx->pending_resize_rows = new_rows;
-        ctx->pending_resize_cols = new_cols;
+        ctx->pending.has_pending_resize = true;
+        ctx->pending.pending_resize_rows = new_rows;
+        ctx->pending.pending_resize_cols = new_cols;
 
         if (ctx->resize_cb) {
             ctx->resize_cb(new_rows, new_cols, ctx->resize_user_ctx);
@@ -353,13 +343,21 @@ x11_pump_events(x11_ctx_t *ctx)
             break;
         }
 
-        case MotionNotify:
+        case MotionNotify: {
+            n00b_mouse_button_t button = N00B_MOUSE_NONE;
+            n00b_mouse_action_t action = N00B_MOUSE_MOVE;
+            n00b_x11_translate_motion_state(xev.xmotion.state, &button, &action);
             x11_enqueue_mouse(ctx,
                               xev.xmotion.x,
                               xev.xmotion.y,
-                              N00B_MOUSE_NONE,
-                              N00B_MOUSE_MOVE,
+                              button,
+                              action,
                               xev.xmotion.state);
+            break;
+        }
+
+        case Expose:
+            n00b_x11_note_expose(&ctx->pending, xev.xexpose.count);
             break;
 
         case ConfigureNotify:
@@ -619,9 +617,7 @@ x11_capabilities(void *vctx)
          | N00B_RCAP_COLOR_24BIT
          | N00B_RCAP_MOUSE
          | N00B_RCAP_CURSOR_MOVE
-         | N00B_RCAP_PIXEL_COORDS
-         | N00B_RCAP_FONT_METRICS
-         | N00B_RCAP_DIFF_RENDER;
+         | N00B_RCAP_PIXEL_COORDS;
 }
 
 static n00b_render_size_t
@@ -782,8 +778,6 @@ x11_render_planes(void                         *vctx,
 
     ctx->rows = cell_rows;
     ctx->cols = cell_cols;
-    ctx->pixel_w = total_cols;
-    ctx->pixel_h = total_rows;
 
     n00b_composite_commands_to_grid(entries,
                                      count,
@@ -846,21 +840,13 @@ x11_poll_event(void *vctx, int32_t timeout_ms, n00b_event_t *out)
 
     out->type = N00B_EVENT_NONE;
 
-    if (ctx->has_pending_resize) {
-        ctx->has_pending_resize = false;
-        out->type = N00B_EVENT_RESIZE;
-        out->resize.rows = ctx->pending_resize_rows;
-        out->resize.cols = ctx->pending_resize_cols;
+    if (n00b_x11_take_pending_event(&ctx->pending, ctx->rows, ctx->cols, out)) {
         return true;
     }
 
     x11_pump_events(ctx);
 
-    if (ctx->has_pending_resize) {
-        ctx->has_pending_resize = false;
-        out->type = N00B_EVENT_RESIZE;
-        out->resize.rows = ctx->pending_resize_rows;
-        out->resize.cols = ctx->pending_resize_cols;
+    if (n00b_x11_take_pending_event(&ctx->pending, ctx->rows, ctx->cols, out)) {
         return true;
     }
 
@@ -892,11 +878,7 @@ x11_poll_event(void *vctx, int32_t timeout_ms, n00b_event_t *out)
 
     x11_pump_events(ctx);
 
-    if (ctx->has_pending_resize) {
-        ctx->has_pending_resize = false;
-        out->type = N00B_EVENT_RESIZE;
-        out->resize.rows = ctx->pending_resize_rows;
-        out->resize.cols = ctx->pending_resize_cols;
+    if (n00b_x11_take_pending_event(&ctx->pending, ctx->rows, ctx->cols, out)) {
         return true;
     }
 

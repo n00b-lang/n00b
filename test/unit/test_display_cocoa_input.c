@@ -111,6 +111,29 @@ test_mouse_translation(void)
     printf("  [PASS] cocoa mouse translation\n");
 }
 
+static void
+test_mouse_point_translation_preserves_pixels(void)
+{
+    n00b_event_t ev = {};
+    n00b_cocoa_input_translate_mouse_point(97.0,
+                                           41.0,
+                                           8,
+                                           16,
+                                           N00B_MOUSE_LEFT,
+                                           N00B_MOUSE_PRESS,
+                                           N00B_COCOA_MOD_ALT,
+                                           &ev);
+
+    assert(ev.type == N00B_EVENT_MOUSE);
+    assert(ev.mouse.x == 97);
+    assert(ev.mouse.y == 41);
+    assert(ev.mouse.button == N00B_MOUSE_LEFT);
+    assert(ev.mouse.action == N00B_MOUSE_PRESS);
+    assert(ev.mouse.mods == N00B_MOD_ALT);
+
+    printf("  [PASS] cocoa mouse point translation stays in pixels\n");
+}
+
 int
 main(int argc, char **argv)
 {
@@ -122,6 +145,7 @@ main(int argc, char **argv)
     test_function_keys();
     test_key_translation();
     test_mouse_translation();
+    test_mouse_point_translation_preserves_pixels();
 
     printf("Display cocoa-input tests passed.\n");
     n00b_shutdown();

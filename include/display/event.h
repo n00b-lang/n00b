@@ -125,8 +125,8 @@ typedef struct n00b_event_t {
 
         /** Mouse event payload. */
         struct {
-            int32_t              x;      /**< Cell column (0-based). */
-            int32_t              y;      /**< Cell row (0-based). */
+            int32_t              x;      /**< Pixel x position (0-based). */
+            int32_t              y;      /**< Pixel y position (0-based). */
             n00b_mouse_button_t  button; /**< Which button (if any). */
             n00b_mouse_action_t  action; /**< Press, release, move, or drag. */
             n00b_key_mod_t       mods;   /**< Active modifier keys. */

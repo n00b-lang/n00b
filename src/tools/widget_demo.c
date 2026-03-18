@@ -54,16 +54,19 @@
 #include "display/event.h"
 #include "display/event_loop.h"
 #include "display/focus.h"
+#include "internal/display/backend_services.h"
+#include "internal/display/scene_contracts.h"
 #include "text/strings/text_style.h"
 #include "text/strings/string_style.h"
 #include "text/strings/string_ops.h"
 #include "text/strings/theme.h"
-#if defined(__APPLE__)
-#include "display/render/backend_cocoa.h"
-#endif
 #if defined(N00B_HAVE_NOTCURSES)
 #include "display/render/backend_notcurses.h"
 #endif
+#if defined(__APPLE__)
+#include "display/render/backend_cocoa.h"
+#endif
+#include "widget_demo_backend_resolution.h"
 
 // ====================================================================
 // Debug log
@@ -614,6 +617,68 @@ usage(const char *prog)
     exit(1);
 }
 
+static bool
+widget_demo_should_exit(const n00b_event_t *event)
+{
+    if (!event || event->type != N00B_EVENT_KEY) {
+        return false;
+    }
+
+    return event->key.key == (uint32_t)'c'
+        && (event->key.mods & N00B_MOD_CTRL);
+}
+
+static void
+widget_demo_apply_resize(n00b_canvas_t *canvas, const n00b_event_t *event)
+{
+    if (!canvas || !event || event->type != N00B_EVENT_RESIZE) {
+        return;
+    }
+
+    n00b_render_size_t size = n00b_display_backend_get_size(canvas);
+    if (size.cell_pixel_w > 0) {
+        canvas->cell_px_w = size.cell_pixel_w;
+    }
+    if (size.cell_pixel_h > 0) {
+        canvas->cell_px_h = size.cell_pixel_h;
+    }
+
+    n00b_isize_t px_rows = size.pixel_h > 0
+                         ? size.pixel_h
+                         : event->resize.rows * canvas->cell_px_h;
+    n00b_isize_t px_cols = size.pixel_w > 0
+                         ? size.pixel_w
+                         : event->resize.cols * canvas->cell_px_w;
+
+    n00b_canvas_resize(canvas, px_rows, px_cols);
+    n00b_display_scene_run_layout(canvas);
+    n00b_display_scene_mark_all_dirty(canvas);
+    n00b_canvas_invalidate(canvas);
+    n00b_canvas_render(canvas);
+}
+
+static void
+widget_demo_hold_gui(n00b_canvas_t *canvas)
+{
+    for (;;) {
+        n00b_event_t event = {.type = N00B_EVENT_NONE};
+
+        if (!n00b_display_backend_poll_event(canvas, 100, &event)) {
+            continue;
+        }
+
+        n00b_event_normalize(&event);
+
+        if (widget_demo_should_exit(&event)) {
+            break;
+        }
+
+        if (event.type == N00B_EVENT_RESIZE) {
+            widget_demo_apply_resize(canvas, &event);
+        }
+    }
+}
+
 // ====================================================================
 // Main
 // ====================================================================
@@ -654,58 +719,35 @@ main(int argc, char **argv)
     }
     dbg("widget_demo started: widget=%s backend=%s\n", widget_name, backend_name);
 
-    // Select backend vtable.
-    const n00b_renderer_vtable_t *vtable = nullptr;
-    bool                          backend_uses_terminal_io = false;
-
-    if (strcmp(backend_name, "tui") == 0) {
-        vtable = &n00b_renderer_ansi;
-        backend_uses_terminal_io = true;
-    }
-    else if (strcmp(backend_name, "gui") == 0) {
-#if defined(__APPLE__)
-        vtable = &n00b_renderer_cocoa;
-#elif defined(N00B_HAVE_X11)
-        vtable = &n00b_renderer_x11;
-#elif defined(N00B_HAVE_NOTCURSES)
-        fprintf(stderr,
-                "Backend 'gui' requires a windowed backend, but x11 is not built.\n");
-        usage(argv[0]);
-#else
-        fprintf(stderr,
-                "Backend 'gui' is unavailable in this build "
-                "(requires cocoa on macOS or x11 on Linux/Unix).\n");
-        usage(argv[0]);
-#endif
-    }
-#if defined(__APPLE__)
-    else if (strcmp(backend_name, "cocoa") == 0) {
-        vtable = &n00b_renderer_cocoa;
-    }
-#endif
-#if defined(N00B_HAVE_NOTCURSES)
-    else if (strcmp(backend_name, "nc") == 0
-             || strcmp(backend_name, "notcurses") == 0) {
-        vtable = &n00b_renderer_notcurses;
-        backend_uses_terminal_io = true;
-    }
-#endif
-#if defined(N00B_HAVE_X11)
-    else if (strcmp(backend_name, "x11") == 0) {
-        vtable = &n00b_renderer_x11;
-    }
-#endif
-    else {
-        fprintf(stderr, "Unknown backend: %s\n", backend_name);
-        usage(argv[0]);
-    }
-
-    dbg("Selected vtable: name='%s' version=%u\n", vtable->name, vtable->version);
-
     // Initialize runtime.
     n00b_runtime_t runtime;
     n00b_init(&runtime, argc, argv);
     dbg("Runtime initialized.\n");
+
+    n00b_widget_demo_backend_resolution_t backend = {};
+    if (!n00b_widget_demo_resolve_backend(backend_name, &backend)) {
+        if (strcmp(backend_name, "gui") == 0) {
+            fprintf(stderr,
+                    "Backend 'gui' is unavailable in this build "
+                    "(requires cocoa on macOS or x11 on Linux/Unix).\n");
+        }
+        else {
+            fprintf(stderr, "Unknown backend: %s\n", backend_name);
+        }
+        n00b_shutdown();
+        if (g_log) {
+            fclose(g_log);
+        }
+        usage(argv[0]);
+    }
+
+    const n00b_renderer_vtable_t *vtable = backend.vtable;
+    bool backend_uses_terminal_io = backend.uses_terminal_io;
+
+    dbg("Selected vtable: name='%s' version=%u canonical='%s'\n",
+        vtable->name,
+        vtable->version,
+        backend.canonical_name ? backend.canonical_name : "unknown");
 
     // Apply theme override if requested.
     if (theme_name) {
@@ -852,26 +894,22 @@ main(int argc, char **argv)
         }
     }
     else {
-        // Cocoa backend — use the event loop for interactive mode,
-        // static render + pump for non-interactive demos.
+        // GUI backend: use the event loop for interactive mode,
+        // or keep the window alive for inspection after a one-shot render.
         if (use_event_loop) {
-            dbg("Starting Cocoa event loop...\n");
+            dbg("Starting GUI event loop...\n");
             n00b_canvas_run(canvas, .tick_ms = 50);
-            dbg("Cocoa event loop exited.\n");
+            dbg("GUI event loop exited.\n");
         }
         else {
-            dbg("Calling canvas_render (cocoa)...\n");
+            dbg("Calling canvas_render (gui)...\n");
             n00b_canvas_render(canvas);
 
             dbg("After render:\n");
             dbg_canvas(canvas);
 
-#if defined(__APPLE__)
-            dbg("Pumping NSRunLoop...\n");
-            for (int i = 0; i < 120; i++) {
-                n00b_cocoa_run_loop_pump(0.5);
-            }
-#endif
+            dbg("Holding GUI demo open until close/interrupt...\n");
+            widget_demo_hold_gui(canvas);
         }
     }
 

@@ -5,6 +5,7 @@
 #include "core/runtime.h"
 #include "display/render/backend.h"
 #include "display/render/backend_registry.h"
+#include "widget_demo_backend_resolution.h"
 
 static void
 test_builtin_registry_entries(void)
@@ -58,6 +59,33 @@ test_gui_alias(void)
 #endif
 }
 
+static void
+test_widget_demo_resolution_uses_registry_aliases(void)
+{
+    n00b_renderer_registry_init();
+
+    n00b_widget_demo_backend_resolution_t resolved = {};
+    assert(n00b_widget_demo_resolve_backend("tui", &resolved));
+    assert(resolved.vtable == &n00b_renderer_ansi);
+    assert(resolved.uses_terminal_io);
+
+    assert(n00b_widget_demo_resolve_backend("gui", &resolved));
+
+    n00b_option_t(n00b_renderer_vtable_ptr_t) gui =
+        n00b_renderer_find(r"gui");
+    assert(n00b_option_is_set(gui));
+    assert(resolved.vtable == n00b_option_get(gui));
+    assert(!resolved.uses_terminal_io);
+
+#if defined(N00B_HAVE_NOTCURSES)
+    assert(n00b_widget_demo_resolve_backend("nc", &resolved));
+    assert(resolved.vtable == &n00b_renderer_notcurses);
+    assert(resolved.uses_terminal_io);
+#endif
+
+    printf("  [PASS] widget_demo backend resolution uses registry aliases\n");
+}
+
 int
 main(int argc, char **argv)
 {
@@ -67,6 +95,7 @@ main(int argc, char **argv)
     printf("Running display backend-registry tests...\n");
     test_builtin_registry_entries();
     test_gui_alias();
+    test_widget_demo_resolution_uses_registry_aliases();
 
     printf("Display backend-registry tests passed.\n");
     n00b_shutdown();
