@@ -276,6 +276,57 @@ test_route_event_terminal_preserves_true_local_coords(void)
     printf("  PASS: route_event_terminal_preserves_true_local_coords\n");
 }
 
+static void
+test_route_event_uses_visual_z_order_for_top_level_planes(void)
+{
+    n00b_canvas_t *canvas = n00b_new_kargs(n00b_canvas_t,
+                                           canvas,
+                                           .vtable = &n00b_renderer_stream);
+    n00b_stream_backend_set_size(canvas->backend_ctx, 5, 10);
+    n00b_canvas_resize(canvas, 5, 10);
+
+    n00b_plane_t *front = make_plane(0, 0, 10, 5);
+    n00b_plane_t *back = make_plane(0, 0, 10, 5);
+    mouse_capture_widget_t front_capture = {0};
+    mouse_capture_widget_t back_capture = {0};
+
+    front->z = 1;
+    n00b_plane_draw_glyph(front, 0, 0, 'F');
+    n00b_widget_attach(front, &capture_widget_vtable, &front_capture);
+
+    n00b_plane_draw_glyph(back, 0, 0, 'B');
+    n00b_widget_attach(back, &capture_widget_vtable, &back_capture);
+
+    n00b_canvas_add_plane(canvas, front);
+    n00b_canvas_add_plane(canvas, back);
+    n00b_canvas_render(canvas);
+
+    n00b_string_t *buf = n00b_stream_backend_get_buffer(canvas->backend_ctx);
+    assert(buf->data[0] == 'F');
+
+    n00b_event_t event = {
+        .type = N00B_EVENT_MOUSE,
+        .mouse = {
+            .x = 0,
+            .y = 0,
+            .button = N00B_MOUSE_LEFT,
+            .action = N00B_MOUSE_PRESS,
+            .mods = N00B_MOD_NONE,
+        },
+    };
+
+    n00b_mouse_route_event(canvas, nullptr, &event);
+    assert(front_capture.calls == 1);
+    assert(back_capture.calls == 0);
+
+    n00b_widget_detach(back);
+    n00b_widget_detach(front);
+    n00b_plane_destroy(back);
+    n00b_plane_destroy(front);
+    n00b_canvas_destroy(canvas);
+    printf("  PASS: route_event_uses_visual_z_order_for_top_level_planes\n");
+}
+
 // -------------------------------------------------------------------
 // Test 5: Mouse capture
 // -------------------------------------------------------------------
@@ -425,6 +476,7 @@ main(int argc, char **argv)
     test_hit_test_terminal_pixel_coords_preserved();
     test_hit_test_terminal_nested_uses_absolute_quantization();
     test_route_event_terminal_preserves_true_local_coords();
+    test_route_event_uses_visual_z_order_for_top_level_planes();
     test_capture();
     test_button_mouse_click();
     test_sgr_encoding();

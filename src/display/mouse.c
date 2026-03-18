@@ -27,86 +27,123 @@ canvas_uses_cell_snapped_bounds(const n00b_canvas_t *canvas)
         && !(canvas->caps & N00B_RCAP_PIXEL_COORDS);
 }
 
+static inline int32_t
+imax32(int32_t a, int32_t b) { return a > b ? a : b; }
+
+static inline int32_t
+imin32(int32_t a, int32_t b) { return a < b ? a : b; }
+
 static void
-plane_entry_info_at(n00b_plane_t *plane,
-                    int32_t       abs_x,
-                    int32_t       abs_y,
-                    int32_t       cell_px_w,
-                    int32_t       cell_px_h,
-                    n00b_entry_info_t *out)
+entry_visible_rect(const n00b_composite_entry_t *entry,
+                   const n00b_canvas_t          *canvas,
+                   int32_t                       cell_px_w,
+                   int32_t                       cell_px_h,
+                   n00b_rect_t                  *out_rect)
 {
-    n00b_composite_entry_t entry = {
-        .plane = plane,
-        .abs_x = abs_x,
-        .abs_y = abs_y,
-    };
-    n00b_composite_entry_info(&entry, out, cell_px_w, cell_px_h);
-}
-
-static n00b_plane_t *
-mouse_hit_test_absolute(n00b_plane_t *plane,
-                        int32_t       parent_abs_x,
-                        int32_t       parent_abs_y,
-                        int32_t       x,
-                        int32_t       y,
-                        int32_t       cell_px_w,
-                        int32_t       cell_px_h)
-{
-    if (!plane) {
-        return nullptr;
-    }
-    if (!(plane->flags & N00B_PLANE_VISIBLE)) {
-        return nullptr;
-    }
-
-    int32_t abs_x = parent_abs_x + plane->x;
-    int32_t abs_y = parent_abs_y + plane->y;
-
     n00b_entry_info_t info;
-    plane_entry_info_at(plane, abs_x, abs_y, cell_px_w, cell_px_h, &info);
+    n00b_composite_entry_info(entry, &info, cell_px_w, cell_px_h);
 
-    n00b_rect_t outer_rect = {
+    n00b_rect_t visible_rect = {
         .x = info.outer_x,
         .y = info.outer_y,
         .width = (int32_t)info.outer_cols,
         .height = (int32_t)info.outer_rows,
     };
 
-    if (canvas_uses_cell_snapped_bounds(plane->canvas)) {
-        n00b_composite_snap_rect_to_cells(&outer_rect, cell_px_w, cell_px_h);
+    int32_t clip_r = entry->clip_x + entry->clip_w;
+    int32_t clip_b = entry->clip_y + entry->clip_h;
+    int32_t rect_r = visible_rect.x + visible_rect.width;
+    int32_t rect_b = visible_rect.y + visible_rect.height;
+
+    visible_rect.x = imax32(visible_rect.x, entry->clip_x);
+    visible_rect.y = imax32(visible_rect.y, entry->clip_y);
+    rect_r = imin32(rect_r, clip_r);
+    rect_b = imin32(rect_b, clip_b);
+    visible_rect.width = imax32(0, rect_r - visible_rect.x);
+    visible_rect.height = imax32(0, rect_b - visible_rect.y);
+
+    if (visible_rect.width == 0 || visible_rect.height == 0) {
+        *out_rect = visible_rect;
+        return;
     }
 
-    if (x < outer_rect.x
-        || x >= outer_rect.x + outer_rect.width
-        || y < outer_rect.y
-        || y >= outer_rect.y + outer_rect.height) {
-        return nullptr;
+    if (canvas_uses_cell_snapped_bounds(canvas)) {
+        n00b_composite_snap_rect_to_cells(&visible_rect, cell_px_w, cell_px_h);
     }
 
-    if (plane->children.data) {
-        for (size_t i = plane->children.len; i > 0; i--) {
-            n00b_plane_t *child = plane->children.data[i - 1];
-            n00b_plane_t *hit = mouse_hit_test_absolute(child,
-                                                        abs_x,
-                                                        abs_y,
-                                                        x,
-                                                        y,
-                                                        cell_px_w,
-                                                        cell_px_h);
-            if (hit) {
-                return hit;
-            }
+    *out_rect = visible_rect;
+}
+
+static bool
+point_in_rect(int32_t x, int32_t y, const n00b_rect_t *rect)
+{
+    return x >= rect->x
+        && x < rect->x + rect->width
+        && y >= rect->y
+        && y < rect->y + rect->height;
+}
+
+static const n00b_composite_entry_t *
+mouse_hit_test_entries(const n00b_composite_entry_t *entries,
+                       size_t                        count,
+                       const n00b_canvas_t         *canvas,
+                       int32_t                       x,
+                       int32_t                       y,
+                       int32_t                       cell_px_w,
+                       int32_t                       cell_px_h)
+{
+    for (size_t i = count; i > 0; i--) {
+        const n00b_composite_entry_t *entry = &entries[i - 1];
+        n00b_rect_t visible_rect;
+
+        if (!entry->plane) {
+            continue;
+        }
+
+        entry_visible_rect(entry,
+                           canvas,
+                           cell_px_w,
+                           cell_px_h,
+                           &visible_rect);
+
+        if (visible_rect.width == 0 || visible_rect.height == 0) {
+            continue;
+        }
+
+        if (point_in_rect(x, y, &visible_rect)) {
+            return entry;
         }
     }
 
-    return plane;
+    return nullptr;
 }
 
 n00b_plane_t *
 n00b_mouse_hit_test(n00b_plane_t *plane, int32_t x, int32_t y,
                      int32_t cell_px_w, int32_t cell_px_h)
 {
-    return mouse_hit_test_absolute(plane, 0, 0, x, y, cell_px_w, cell_px_h);
+    if (!plane) {
+        return nullptr;
+    }
+
+    n00b_plane_t *planes[] = { plane };
+    n00b_array_t(n00b_composite_entry_t) flat =
+        n00b_composite_flatten(planes, 1, cell_px_w, cell_px_h);
+    const n00b_composite_entry_t *hit =
+        mouse_hit_test_entries(flat.data,
+                               flat.len,
+                               plane->canvas,
+                               x,
+                               y,
+                               cell_px_w,
+                               cell_px_h);
+    n00b_plane_t *result = hit ? hit->plane : nullptr;
+
+    if (flat.data) {
+        n00b_array_free(flat);
+    }
+
+    return result;
 }
 
 // -------------------------------------------------------------------
@@ -126,24 +163,68 @@ n00b_mouse_route_event(n00b_canvas_t          *canvas,
     int32_t cph = (int32_t)canvas->cell_px_h;
 
     n00b_plane_t *target = nullptr;
+    const n00b_composite_entry_t *target_entry = nullptr;
 
     // If a plane has captured the mouse, route everything to it.
     if (canvas->mouse_capture) {
         target = canvas->mouse_capture;
     }
     else {
-        // Hit-test top-level planes in reverse order (topmost first).
-        // Mouse coords and plane positions are both in pixels.
-        if (canvas->planes.data) {
-            for (size_t i = canvas->planes.len; i > 0; i--) {
-                n00b_plane_t *p = canvas->planes.data[i - 1];
-                target = n00b_mouse_hit_test(p, event->mouse.x,
-                                              event->mouse.y,
-                                              cpw, cph);
-                if (target) {
-                    break;
+        if (canvas->planes.data && canvas->planes.len > 0) {
+            n00b_array_t(n00b_composite_entry_t) flat =
+                n00b_composite_flatten(canvas->planes.data,
+                                       (n00b_isize_t)canvas->planes.len,
+                                       cpw,
+                                       cph);
+
+            target_entry = mouse_hit_test_entries(flat.data,
+                                                  flat.len,
+                                                  canvas,
+                                                  event->mouse.x,
+                                                  event->mouse.y,
+                                                  cpw,
+                                                  cph);
+            target = target_entry ? target_entry->plane : nullptr;
+
+            if (!target_entry && flat.data) {
+                n00b_array_free(flat);
+            }
+            else if (target_entry) {
+                // Keep the flattened entry alive until local coordinates are derived.
+                target_entry = flat.data + (target_entry - flat.data);
+            }
+
+            if (!target) {
+                if (flat.data) {
+                    n00b_array_free(flat);
+                }
+                return;
+            }
+
+            n00b_entry_info_t info;
+            n00b_composite_entry_info(target_entry, &info, cpw, cph);
+
+            n00b_event_t local_event = *event;
+            local_event.mouse.x = event->mouse.x - info.content_x;
+            local_event.mouse.y = event->mouse.y - info.content_y;
+
+            if (event->mouse.action == N00B_MOUSE_PRESS && fm) {
+                if (n00b_widget_can_focus(target)) {
+                    n00b_focus_mgr_set(fm, target);
                 }
             }
+
+            n00b_plane_t *cur = target;
+            while (cur) {
+                if (n00b_widget_handle_event(cur, &local_event)) {
+                    n00b_array_free(flat);
+                    return;
+                }
+                cur = cur->parent;
+            }
+
+            n00b_array_free(flat);
+            return;
         }
     }
 
@@ -158,18 +239,17 @@ n00b_mouse_route_event(n00b_canvas_t          *canvas,
         }
     }
 
-    // Translate mouse coordinates to content-local pixel space for the
-    // target widget.  Walk up the parent chain to compute the absolute
-    // plane position, then derive the content origin from compositor
-    // metadata so local coordinates stay in true pixel space.
-    int32_t abs_x = 0, abs_y = 0;
-    for (n00b_plane_t *p = target; p; p = p->parent) {
-        abs_x += p->x;
-        abs_y += p->y;
-    }
-
     n00b_entry_info_t info;
-    plane_entry_info_at(target, abs_x, abs_y, cpw, cph, &info);
+    n00b_composite_entry_t entry = {
+        .plane = target,
+        .abs_x = 0,
+        .abs_y = 0,
+    };
+    for (n00b_plane_t *p = target; p; p = p->parent) {
+        entry.abs_x += p->x;
+        entry.abs_y += p->y;
+    }
+    n00b_composite_entry_info(&entry, &info, cpw, cph);
 
     n00b_event_t local_event = *event;
     local_event.mouse.x = event->mouse.x - info.content_x;

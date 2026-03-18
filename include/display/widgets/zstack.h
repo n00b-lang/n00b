@@ -3,8 +3,9 @@
  * @brief ZStack widget: layers child planes in shared bounds.
  *
  * A zstack is a container widget that places every child in the same
- * content rectangle. Child-list order determines visual stacking:
- * earlier children are behind later children.
+ * content rectangle. Child-list order determines inter-layer stacking:
+ * earlier children are behind later children, while `z` still orders
+ * content inside a single layer subtree.
  */
 #pragma once
 

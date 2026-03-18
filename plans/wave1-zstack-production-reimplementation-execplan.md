@@ -10,6 +10,8 @@ This plan explicitly builds on `plans/notes/widget-port-priority.md`, `plans/wav
 
 The goal is to land the first production Wave 1 widget in Athens: a layering container named `zstack`. After this change, an Athens application will be able to put multiple child planes in the same bounds, render them back-to-front, and reorder them at runtime with `bring_to_front` and `send_to_back`. A contributor or reviewer should be able to prove the result in two ways: run a dedicated `zstack` unit test that exercises overlapping click routing and reordering, and run `widget_demo --widget zstack` to see an overlay panel visibly rendered above a background layer.
 
+Historical follow-up: the compositor conclusion recorded later in this document was superseded on 2026-03-18 by `plans/wave1-zstack-review-remediation-execplan.md`. The current renderer contract is hybrid: ordinary plane trees use global absolute-`z` ordering again, while direct `zstack` children behave as atomic ordered layers.
+
 ## Progress
 
 - [x] (2026-03-11 15:56Z) Reviewed the Wave 1 design dossier, the prototype `stack` widget, Athens plane/widget runtime files, existing widget implementations, and current test/demo wiring.
@@ -21,6 +23,7 @@ The goal is to land the first production Wave 1 widget in Athens: a layering con
 - [x] (2026-03-12 00:42Z) Reworked the manual `zstack` demo controls so a separate top-level control panel now drives `bring_to_front` and `send_to_back` on the overlay card layer.
 - [x] (2026-03-13 09:54Z) Fixed the operator-reported demo regression by restructuring `widget_demo --widget zstack` into a single top-level row layout with a sibling control column, and added a regression test for side controls plus overlay clicks in the same scene.
 - [x] (2026-03-13 10:11Z) Fixed the compositor ordering bug that let deeper descendants of a back layer paint above shallower descendants of a front layer, and added render-canvas regression coverage for sibling-subtree painter order.
+- [x] (2026-03-18 23:24Z) Landed the review-remediation follow-up from `plans/wave1-zstack-review-remediation-execplan.md`, which superseded the universal subtree-stable compositor rewrite with the current hybrid ordering model, added proof coverage for ordinary descendant-`z`, plain-plane measurement, and offset local hit targets, and revalidated `widget_demo --widget zstack`.
 
 ## Surprises & Discoveries
 
@@ -47,6 +50,9 @@ The goal is to land the first production Wave 1 widget in Athens: a layering con
 
 - Observation: The compositor's global `abs_z` sort allowed a deeper descendant of an earlier sibling to paint above a shallower descendant of a later sibling, which breaks zstack-style whole-layer reordering.
   Evidence: In the demo, sending the overlay layer to the back still left the nested overlay button painted above the background button while hit-testing already followed the new sibling order; `src/display/render/composite.c` sorted all flattened entries by `abs_z` before painting.
+
+- Observation: The 2026-03-13 compositor fix turned out to be too broad once the wider review set was aggregated.
+  Evidence: `plans/wave1-zstack-review-remediation-execplan.md` and its linked review files proved that universal subtree-stable ordering regressed ordinary non-`zstack` descendant-`z` rendering, still did not make `zstack` child-list ordering authoritative when child `z` differed, and left mouse ordering, plain-plane measurement, and offset local hit targets inconsistent.
 
 ## Decision Log
 
@@ -90,9 +96,15 @@ The goal is to land the first production Wave 1 widget in Athens: a layering con
   Rationale: Whole-subtree painter order is the only model that keeps visual stacking aligned with hit-testing and focus behavior for layered containers such as `zstack`; retaining a global `abs_z` sort makes nested descendants violate the layer order the widget is supposed to control.
   Date/Author: 2026-03-13 / Codex.
 
+- Decision: The 2026-03-13 universal subtree-stable compositor rewrite is superseded by the 2026-03-18 review-remediation follow-up.
+  Rationale: The later review pass proved that ordinary plane trees still need the pre-`4da6c09` global absolute-`z` contract, while direct `zstack` children need to behave as atomic layers only inside `zstack`. The current implementation therefore uses hybrid ordering instead of applying subtree-stable painter order to the whole scene.
+  Date/Author: 2026-03-18 / Codex.
+
 ## Outcomes & Retrospective
 
-As of 2026-03-13 this plan has been executed. Athens now has a production `zstack` widget with the approved public API, list-order-based runtime reordering, recursive subtree canvas propagation on add/remove, painter's-order subtree compositing that matches layer reordering semantics, a dedicated `test_zstack` unit, an additional `test_render_plane` regression, and a `widget_demo --widget zstack` scene with a sibling control column for manual reorder testing.
+As of 2026-03-13 this plan landed the first production `zstack` widget with the approved public API, list-order-based runtime reordering, recursive subtree canvas propagation on add/remove, a dedicated `test_zstack` unit, an additional `test_render_plane` regression, and a `widget_demo --widget zstack` scene with a sibling control column for manual reorder testing.
+
+As of 2026-03-18 the renderer contract recorded in this older plan has been corrected by `plans/wave1-zstack-review-remediation-execplan.md`. The current tree no longer uses universal subtree-stable compositor ordering. Instead, ordinary plane trees are back on the global absolute-`z` contract, direct `zstack` children behave as atomic ordered layers for both rendering and mouse routing, plain non-widget layers measure from their footprint, and stack children receive stack-local layout bounds. The remediation plan also added proof tests for those corrected behaviors and revalidated the stream demo plus a bounded TUI launch.
 
 The targeted validation matrix passed exactly as planned. `meson compile -C build_debug test_zstack test_render_plane test_mouse test_display_event_dispatch widget_demo` completed successfully after a clean rebuild, `meson test -C build_debug --print-errorlogs zstack render_plane mouse display_event_dispatch` passed all four tests, and `./build_debug/widget_demo --widget zstack --backend stream` exited cleanly without reporting an unknown widget or missing symbol.
 
@@ -102,7 +114,7 @@ The main implementation risk from planning was borne out but contained: `zstack`
 
 Athens widgets are not separate heap-managed objects with their own tree. A widget is a `n00b_plane_t` with a `n00b_widget_vtable_t` attached, as defined in `include/display/widget.h` and implemented in `src/display/widget.c`. The plane stores geometry, child planes, draw commands, optional box decoration, and widget-private data. Container widgets such as `box` live in `src/display/widgets/` and receive layout bounds through the `layout` vtable slot.
 
-A "zstack" is a container that gives every child the same content bounds and relies on sibling order to decide which child is visually in front. In this repository, that sibling order matters in three places. `src/display/render/composite.c` flattens the tree in child order, so later siblings draw after earlier siblings when `z` ties. `src/display/mouse.c` hit-tests children in reverse order, so later siblings receive overlapping mouse clicks first. `src/display/focus.c` collects focusable descendants in forward order, so zstack reordering also changes tab order among descendants.
+A "zstack" is a container that gives every child the same content bounds and relies on sibling order to decide which child is visually in front. In the current repository state, direct `zstack` children are atomic ordered layers in both `src/display/render/composite.c` and `src/display/mouse.c`, while content inside one layer still uses ordinary descendant `z` ordering. `src/display/focus.c` still collects focusable descendants in forward order, so zstack reordering also changes tab order among descendants.
 
 The authoritative design contract for this widget is already written in `plans/notes/widget-wave1-design-breakdown.md` under the `## stack` section. That document fixes the public API shape, the renamed public symbol family (`zstack`), the state model ("state lives in child ordering only"), the layout behavior ("every child gets the same content bounds"), and the Wave 1 test intent. This plan turns that design into a concrete implementation sequence.
 
@@ -369,3 +381,4 @@ The subtree canvas fix must remain internal. If helper recursion is introduced i
 
 - 2026-03-11: Initial ExecPlan added for the first Wave 1 production widget reimplementation, using `plans/notes/widget-wave1-design-breakdown.md` as the source-of-truth design contract for `zstack`.
 - 2026-03-12: Marked the plan executed after landing the production `zstack` widget, runtime subtree canvas fixes, tests, demo wiring, documentation updates, and the passing validation results. Added the clean-build recovery note because the existing `build_debug/` directory pointed at a stale source root.
+- 2026-03-18: Added a remediation note after executing `plans/wave1-zstack-review-remediation-execplan.md`, because the original universal subtree-stable compositor rewrite was superseded by the current hybrid ordering model and the old narrative would otherwise misdescribe the live renderer contract.

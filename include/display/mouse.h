@@ -29,8 +29,9 @@
 /**
  * @brief Find the deepest visible plane containing pixel (x, y).
  *
- * Walks `plane` and its children recursively in reverse child order
- * (topmost/highest-z first).  Skips planes without `N00B_PLANE_VISIBLE`.
+ * Flattens `plane` using the compositor's ordering rules, then walks the
+ * resulting entries from front to back. Skips planes without
+ * `N00B_PLANE_VISIBLE`.
  *
  * @param plane     Root plane to test.
  * @param x         Pixel column in the plane's parent coordinate space.
@@ -53,8 +54,8 @@ extern n00b_plane_t *n00b_mouse_hit_test(n00b_plane_t *plane,
  * @brief Route a mouse event through the canvas plane tree.
  *
  * 1. If `canvas->mouse_capture` is set, route directly to that plane.
- * 2. Otherwise, iterate top-level planes in reverse order calling
- *    `n00b_mouse_hit_test()`.
+ * 2. Otherwise, flatten the top-level plane tree and hit-test the same
+ *    ordered entries the renderer used.
  * 3. If the hit plane is focusable and action is PRESS, focus it.
  * 4. Dispatch via `n00b_widget_handle_event()`.
  * 5. If not consumed, bubble to `target->parent` until consumed or root.

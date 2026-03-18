@@ -613,7 +613,7 @@ test_composite_commands_quantize_partial_cells(void)
 }
 
 static void
-test_canvas_sibling_subtree_order(void)
+test_canvas_descendant_z_can_overlay_later_sibling(void)
 {
     n00b_canvas_t *c = n00b_new_kargs(n00b_canvas_t, canvas,
                                       .vtable = &n00b_renderer_stream);
@@ -624,46 +624,40 @@ test_canvas_sibling_subtree_order(void)
     parent->width = 10;
     parent->height = 5;
 
-    n00b_plane_t *front = n00b_new_kargs(n00b_plane_t, plane);
-    front->width = 10;
-    front->height = 5;
-    n00b_plane_t *front_wrap = n00b_new_kargs(n00b_plane_t, plane);
-    front_wrap->width = 10;
-    front_wrap->height = 5;
-    n00b_plane_t *front_leaf = n00b_new_kargs(n00b_plane_t, plane);
-    front_leaf->width = 10;
-    front_leaf->height = 5;
-    n00b_plane_draw_glyph(front_leaf, 0, 0, 'F');
-    n00b_plane_add_child(front_wrap, front_leaf, 0, 0);
-    n00b_plane_add_child(front, front_wrap, 0, 0);
+    n00b_plane_t *high_branch = n00b_new_kargs(n00b_plane_t, plane);
+    high_branch->width = 10;
+    high_branch->height = 5;
+    n00b_plane_t *high_wrap = n00b_new_kargs(n00b_plane_t, plane);
+    high_wrap->width = 10;
+    high_wrap->height = 5;
+    n00b_plane_t *high_leaf = n00b_new_kargs(n00b_plane_t, plane, .z = 10);
+    high_leaf->width = 10;
+    high_leaf->height = 5;
+    n00b_plane_draw_glyph(high_leaf, 0, 0, 'H');
+    n00b_plane_add_child(high_wrap, high_leaf, 0, 0);
+    n00b_plane_add_child(high_branch, high_wrap, 0, 0);
 
-    n00b_plane_t *back = n00b_new_kargs(n00b_plane_t, plane);
-    back->width = 10;
-    back->height = 5;
-    n00b_plane_t *back_leaf = n00b_new_kargs(n00b_plane_t, plane);
-    back_leaf->width = 10;
-    back_leaf->height = 5;
-    n00b_plane_draw_glyph(back_leaf, 0, 0, 'B');
-    n00b_plane_add_child(back, back_leaf, 0, 0);
+    n00b_plane_t *low_branch = n00b_new_kargs(n00b_plane_t, plane, .z = 1);
+    low_branch->width = 10;
+    low_branch->height = 5;
+    n00b_plane_draw_glyph(low_branch, 0, 0, 'L');
 
-    // The later sibling should win even though the earlier sibling is deeper.
-    n00b_plane_add_child(parent, front, 0, 0);
-    n00b_plane_add_child(parent, back, 0, 0);
+    n00b_plane_add_child(parent, high_branch, 0, 0);
+    n00b_plane_add_child(parent, low_branch, 0, 0);
 
     n00b_canvas_add_plane(c, parent);
     n00b_canvas_render(c);
 
     n00b_string_t *buf = n00b_stream_backend_get_buffer(c->backend_ctx);
-    assert(buf->data[0] == 'B');
+    assert(buf->data[0] == 'H');
 
-    n00b_plane_destroy(front_leaf);
-    n00b_plane_destroy(front_wrap);
-    n00b_plane_destroy(front);
-    n00b_plane_destroy(back_leaf);
-    n00b_plane_destroy(back);
+    n00b_plane_destroy(high_leaf);
+    n00b_plane_destroy(high_wrap);
+    n00b_plane_destroy(high_branch);
+    n00b_plane_destroy(low_branch);
     n00b_plane_destroy(parent);
     n00b_canvas_destroy(c);
-    printf("  [PASS] canvas sibling subtree order\n");
+    printf("  [PASS] canvas descendant z can overlay later sibling\n");
 }
 
 // ====================================================================
@@ -694,7 +688,7 @@ main(int argc, char **argv)
     test_canvas_child_clipping();
     test_composite_flatten_nested();
     test_composite_commands_quantize_partial_cells();
-    test_canvas_sibling_subtree_order();
+    test_canvas_descendant_z_can_overlay_later_sibling();
 
     printf("All render canvas tests passed.\n");
     n00b_shutdown();

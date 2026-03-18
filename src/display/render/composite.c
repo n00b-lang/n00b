@@ -1,5 +1,5 @@
 /*
- * Compositing pipeline: flatten, painter-order composite, degrade.
+ * Compositing pipeline: flatten, ordered composite, degrade.
  */
 
 #include <limits.h>
@@ -8,6 +8,7 @@
 #include "display/render/composite.h"
 #include "display/render/draw_cmd.h"
 #include "display/render/box.h"
+#include "display/widgets/zstack.h"
 #include "text/unicode/properties.h"
 
 // -------------------------------------------------------------------
@@ -15,32 +16,102 @@
 // -------------------------------------------------------------------
 
 typedef struct {
-    n00b_composite_entry_t *entries;
-    n00b_isize_t            count;
-    n00b_isize_t            capacity;
-} flatten_ctx_t;
+    n00b_plane_t *plane;
+    n00b_plane_t *stack;
+    int32_t       abs_z;
+    uint32_t      order;
+    uint32_t      index;
+} layer_marker_t;
 
 typedef struct {
-    n00b_plane_t *plane;
-    size_t        ordinal;
-} plane_visit_t;
+    n00b_composite_entry_t entry;
+    layer_marker_t        *layers;
+    size_t                 layer_count;
+} flatten_record_t;
+
+typedef struct {
+    flatten_record_t *records;
+    n00b_isize_t      count;
+    n00b_isize_t      capacity;
+    layer_marker_t   *layer_path;
+    size_t            layer_count;
+    size_t            layer_capacity;
+} flatten_ctx_t;
 
 static void
 flatten_grow(flatten_ctx_t *ctx)
 {
     n00b_isize_t new_cap = ctx->capacity ? ctx->capacity * 2 : 16;
-    n00b_composite_entry_t *new_arr = n00b_alloc_array_with_opts(
-        n00b_composite_entry_t, new_cap,
+    flatten_record_t *new_arr = n00b_alloc_array_with_opts(
+        flatten_record_t, new_cap,
         &(n00b_alloc_opts_t){.no_scan = true});
 
-    if (ctx->entries) {
-        memcpy(new_arr, ctx->entries,
-               ctx->count * sizeof(n00b_composite_entry_t));
-        n00b_free(ctx->entries);
+    if (ctx->records) {
+        memcpy(new_arr, ctx->records, ctx->count * sizeof(flatten_record_t));
+        n00b_free(ctx->records);
     }
 
-    ctx->entries  = new_arr;
+    ctx->records  = new_arr;
     ctx->capacity = new_cap;
+}
+
+static void
+flatten_path_grow(flatten_ctx_t *ctx)
+{
+    size_t new_cap = ctx->layer_capacity ? ctx->layer_capacity * 2 : 4;
+    layer_marker_t *new_arr = n00b_alloc_array_with_opts(
+        layer_marker_t, new_cap,
+        &(n00b_alloc_opts_t){.no_scan = true});
+
+    if (ctx->layer_path) {
+        memcpy(new_arr,
+               ctx->layer_path,
+               ctx->layer_count * sizeof(layer_marker_t));
+        n00b_free(ctx->layer_path);
+    }
+
+    ctx->layer_path = new_arr;
+    ctx->layer_capacity = new_cap;
+}
+
+static void
+flatten_path_push(flatten_ctx_t *ctx, layer_marker_t marker)
+{
+    if (ctx->layer_count >= ctx->layer_capacity) {
+        flatten_path_grow(ctx);
+    }
+
+    ctx->layer_path[ctx->layer_count++] = marker;
+}
+
+static void
+flatten_path_pop(flatten_ctx_t *ctx)
+{
+    if (ctx->layer_count > 0) {
+        ctx->layer_count--;
+    }
+}
+
+static bool
+plane_is_zstack(const n00b_plane_t *plane)
+{
+    return plane && plane->widget_vtable == &n00b_widget_zstack;
+}
+
+static uint32_t
+plane_child_index(n00b_plane_t *parent, n00b_plane_t *child)
+{
+    if (!parent || !child || !parent->children.data) {
+        return 0;
+    }
+
+    for (size_t i = 0; i < parent->children.len; i++) {
+        if (parent->children.data[i] == child) {
+            return (uint32_t)i;
+        }
+    }
+
+    return 0;
 }
 
 static inline int32_t
@@ -71,22 +142,65 @@ ceil_div_i32(int32_t v, int32_t d)
 }
 
 static int
-compare_plane_visit(const void *a, const void *b)
+compare_entry_key(int32_t abs_z_a, uint32_t order_a,
+                  int32_t abs_z_b, uint32_t order_b)
 {
-    const plane_visit_t *va = a;
-    const plane_visit_t *vb = b;
-
-    int32_t za = va->plane ? va->plane->z : 0;
-    int32_t zb = vb->plane ? vb->plane->z : 0;
-
-    if (za != zb) {
-        return za < zb ? -1 : 1;
+    if (abs_z_a != abs_z_b) {
+        return abs_z_a < abs_z_b ? -1 : 1;
     }
-    if (va->ordinal != vb->ordinal) {
-        return va->ordinal < vb->ordinal ? -1 : 1;
+    if (order_a != order_b) {
+        return order_a < order_b ? -1 : 1;
     }
 
     return 0;
+}
+
+static int
+compare_record_component(const flatten_record_t *a,
+                         size_t                  a_ix,
+                         const flatten_record_t *b,
+                         size_t                  b_ix)
+{
+    bool a_has_layer = a_ix < a->layer_count;
+    bool b_has_layer = b_ix < b->layer_count;
+
+    if (a_has_layer
+        && b_has_layer
+        && a->layers[a_ix].stack == b->layers[b_ix].stack
+        && a->layers[a_ix].plane != b->layers[b_ix].plane) {
+        return a->layers[a_ix].index < b->layers[b_ix].index ? -1 : 1;
+    }
+
+    int32_t a_abs_z = a_has_layer ? a->layers[a_ix].abs_z : a->entry.abs_z;
+    uint32_t a_order = a_has_layer ? a->layers[a_ix].order : a->entry.order;
+    int32_t b_abs_z = b_has_layer ? b->layers[b_ix].abs_z : b->entry.abs_z;
+    uint32_t b_order = b_has_layer ? b->layers[b_ix].order : b->entry.order;
+
+    return compare_entry_key(a_abs_z, a_order, b_abs_z, b_order);
+}
+
+static int
+compare_flatten_record(const void *a, const void *b)
+{
+    const flatten_record_t *ra = a;
+    const flatten_record_t *rb = b;
+    size_t                  ix = 0;
+
+    while (ix < ra->layer_count
+           && ix < rb->layer_count
+           && ra->layers[ix].plane == rb->layers[ix].plane) {
+        ix++;
+    }
+
+    int cmp = compare_record_component(ra, ix, rb, ix);
+    if (cmp != 0) {
+        return cmp;
+    }
+
+    return compare_entry_key(ra->entry.abs_z,
+                             ra->entry.order,
+                             rb->entry.abs_z,
+                             rb->entry.order);
 }
 
 static void
@@ -138,7 +252,20 @@ flatten_recurse(flatten_ctx_t *ctx, n00b_plane_t *p,
     }
 
     n00b_isize_t entry_ix = ctx->count++;
-    ctx->entries[entry_ix] = (n00b_composite_entry_t){
+    bool pushed_layer = plane_is_zstack(p->parent);
+
+    if (pushed_layer) {
+        flatten_path_push(ctx,
+                          (layer_marker_t){
+                              .plane  = p,
+                              .stack  = p->parent,
+                              .abs_z  = abs_z,
+                              .order  = (uint32_t)entry_ix,
+                              .index  = plane_child_index(p->parent, p),
+                          });
+    }
+
+    ctx->records[entry_ix].entry = (n00b_composite_entry_t){
         .plane  = p,
         .abs_x  = abs_x,
         .abs_y  = abs_y,
@@ -149,32 +276,38 @@ flatten_recurse(flatten_ctx_t *ctx, n00b_plane_t *p,
         .clip_w = my_clip_w,
         .clip_h = my_clip_h,
     };
+    ctx->records[entry_ix].layer_count = ctx->layer_count;
+    ctx->records[entry_ix].layers = nullptr;
+
+    if (ctx->layer_count > 0) {
+        ctx->records[entry_ix].layers = n00b_alloc_array_with_opts(
+            layer_marker_t, ctx->layer_count,
+            &(n00b_alloc_opts_t){.no_scan = true});
+        memcpy(ctx->records[entry_ix].layers,
+               ctx->layer_path,
+               ctx->layer_count * sizeof(layer_marker_t));
+    }
 
     if (p->children.len == 0) {
+        if (pushed_layer) {
+            flatten_path_pop(ctx);
+        }
         return;
     }
 
-    plane_visit_t *visits = n00b_alloc_array(plane_visit_t, p->children.len);
     for (size_t i = 0; i < p->children.len; i++) {
-        visits[i] = (plane_visit_t){
-            .plane   = p->children.data[i],
-            .ordinal = i,
-        };
-    }
-    qsort(visits, p->children.len, sizeof(plane_visit_t), compare_plane_visit);
-
-    // Painter's order is subtree-stable: once a sibling starts painting,
-    // its whole subtree paints before the next sibling. We still advance
-    // abs_z for descendants so backends can inspect nesting depth.
-    for (size_t i = 0; i < p->children.len; i++) {
-        if (!visits[i].plane) {
+        n00b_plane_t *child = p->children.data[i];
+        if (!child) {
             continue;
         }
-        flatten_recurse(ctx, visits[i].plane, abs_x, abs_y, abs_z + 1,
+        flatten_recurse(ctx, child, abs_x, abs_y, abs_z + 1,
                         my_clip_x, my_clip_y, my_clip_w, my_clip_h,
                         cell_px_w, cell_px_h);
     }
-    n00b_free(visits);
+
+    if (pushed_layer) {
+        flatten_path_pop(ctx);
+    }
 }
 
 // -------------------------------------------------------------------
@@ -188,39 +321,52 @@ n00b_composite_flatten(n00b_plane_t **planes,
                         int32_t        cell_px_h)
 {
     flatten_ctx_t ctx = {};
-    plane_visit_t *visits = nullptr;
+    n00b_composite_entry_t *entries = nullptr;
 
     // Top-level planes get an effectively unbounded clip rectangle.
     // The compositing loop will clip to the actual frame bounds.
     int32_t max_dim = INT32_MAX / 2;
 
-    if (num_planes > 0) {
-        visits = n00b_alloc_array(plane_visit_t, num_planes);
-        for (n00b_isize_t i = 0; i < num_planes; i++) {
-            visits[i] = (plane_visit_t){
-                .plane   = planes[i],
-                .ordinal = (size_t)i,
-            };
-        }
-        qsort(visits, (size_t)num_planes, sizeof(plane_visit_t), compare_plane_visit);
-    }
-
     for (n00b_isize_t i = 0; i < num_planes; i++) {
-        if (!visits[i].plane) {
+        if (!planes[i]) {
             continue;
         }
-        flatten_recurse(&ctx, visits[i].plane, 0, 0, 0,
+        flatten_recurse(&ctx, planes[i], 0, 0, 0,
                         0, 0, max_dim, max_dim,
                         cell_px_w, cell_px_h);
     }
-    if (visits) {
-        n00b_free(visits);
+
+    if (ctx.count > 1) {
+        qsort(ctx.records,
+              (size_t)ctx.count,
+              sizeof(flatten_record_t),
+              compare_flatten_record);
+    }
+
+    if (ctx.count > 0) {
+        entries = n00b_alloc_array_with_opts(
+            n00b_composite_entry_t, ctx.count,
+            &(n00b_alloc_opts_t){.no_scan = true});
+
+        for (n00b_isize_t i = 0; i < ctx.count; i++) {
+            entries[i] = ctx.records[i].entry;
+            if (ctx.records[i].layers) {
+                n00b_free(ctx.records[i].layers);
+            }
+        }
+    }
+
+    if (ctx.records) {
+        n00b_free(ctx.records);
+    }
+    if (ctx.layer_path) {
+        n00b_free(ctx.layer_path);
     }
 
     return (n00b_array_t(n00b_composite_entry_t)){
-        .data = ctx.entries,
+        .data = entries,
         .len  = (size_t)ctx.count,
-        .cap  = (size_t)ctx.capacity,
+        .cap  = (size_t)ctx.count,
     };
 }
 

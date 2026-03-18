@@ -2,7 +2,7 @@
  * @file composite.h
  * @brief Compositing pipeline for the render layer.
  *
- * Flattens the plane hierarchy into painter's-order entries, composites
+ * Flattens the plane hierarchy into composite entries, composites
  * planes into a frame buffer, resolves state-based styles, and
  * applies graceful degradation based on backend capabilities.
  *
@@ -80,12 +80,13 @@ typedef struct {
 // ====================================================================
 
 /**
- * @brief Flatten a list of top-level planes into painter's-order entries.
+ * @brief Flatten a list of top-level planes into ordered composite entries.
  *
  * Recursively walks each plane's children, computing absolute
- * coordinates in pixels. The output is in back-to-front painter order:
- * siblings are ordered by `z` and insertion order, and each sibling's
- * whole subtree paints before the next sibling.
+ * coordinates in pixels. Ordinary plane trees compare by absolute `z`
+ * and flatten order. Direct children of a `zstack` compare by child-list
+ * order as whole layers, while content inside one layer still compares
+ * by absolute `z` and flatten order.
  *
  * @param planes     Top-level planes.
  * @param num_planes Number of top-level planes.
@@ -172,13 +173,13 @@ n00b_composite_degrade_cell(n00b_rcell_t     *cell,
  * Converts pixel-coordinate draw commands from each plane into a
  * flat cell grid for cell-based backends (ANSI, inline, stream, dumb).
  *
- * For each entry (back-to-front painter order):
+ * For each entry (back-to-front composite order):
  * 1. Stamps box decorations via `n00b_box_stamp()`.
  * 2. Walks `plane->draw_list`, converting pixel positions to cell
  *    positions, and writes graphemes into the cell grid.
  * 3. Applies graceful degradation to all cells.
  *
- * @param entries       Z-sorted composite entries (pixel coords).
+ * @param entries       Ordered composite entries (pixel coords).
  * @param count         Number of entries.
  * @param frame         Target cell grid (row-major, `cell_rows * cell_cols`).
  * @param cell_rows     Frame height in cells.
