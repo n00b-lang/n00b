@@ -97,10 +97,6 @@ test_event_helpers(void)
     assert(n00b_widget_event_is_keyboard_activate(&space_key));
     assert(!n00b_widget_event_is_keyboard_activate(&other_key));
 
-    assert(n00b_widget_event_is_primary_activate(&left_press));
-    assert(n00b_widget_event_is_primary_activate(&enter_key));
-    assert(!n00b_widget_event_is_primary_activate(&other_key));
-
     printf("  [PASS] widget event primitives\n");
 }
 

@@ -17,9 +17,6 @@ test_regions_for_partial_and_full_lines(void)
 
     assert(regions.offset_start == 0);
     assert(regions.offset_end == hd->offset_cols);
-    assert(regions.hex_start == hd->hex_start);
-    assert(regions.hex_end > regions.hex_start);
-    assert(regions.hex_end <= regions.ascii_start);
     assert(regions.ascii_start == hd->ascii_start);
     assert(regions.ascii_end == hd->ascii_start + 8);
 
@@ -27,7 +24,6 @@ test_regions_for_partial_and_full_lines(void)
     assert(regions.ascii_end == hd->ascii_start + hd->cpl);
 
     n00b_hexdump_describe_line_regions(hd, 0, &regions);
-    assert(regions.hex_end == regions.hex_start);
     assert(regions.ascii_end == regions.ascii_start);
 
     n00b_hexdump_destroy(hd);

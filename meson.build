@@ -1571,8 +1571,10 @@ display_scene_inspect = executable('display_scene_inspect',
 )
 
 display_m4_showcase = executable('display_m4_showcase',
-    ['src/tools/display_m4_showcase.c'],
-    kwargs: test_common_kwargs,
+    ['src/tools/display_m4_showcase.c', 'src/tools/display_m4_showcase_fixture.c'],
+    include_directories: incdir + [widget_demo_tools_inc],
+    c_args: exe_c_args,
+    link_with: [n00b],
     install: false,
 )
 
@@ -1694,6 +1696,19 @@ test('display_terminal_replay_artifacts',
     suite: 'integration',
 )
 
+test('display_m4_artifacts',
+    sh_prog,
+    args: [
+        files('test/integration/test_display_m4_artifacts.sh'),
+        display_baseline_capture,
+        display_scene_inspect,
+        display_m4_showcase,
+        table_tool,
+        meson.project_source_root(),
+    ],
+    suite: 'integration',
+)
+
 display_m1_compat_test = executable('test_display_m1_compat',
     ['test/integration/test_display_m1_compat.c'],
     kwargs: test_common_kwargs,
@@ -1718,8 +1733,10 @@ display_m3_backend_parity_test = executable('test_display_m3_backend_parity',
 test('display_m3_backend_parity', display_m3_backend_parity_test, suite: 'integration')
 
 display_m4_widget_table_flow_test = executable('test_display_m4_widget_table_flow',
-    ['test/integration/test_display_m4_widget_table_flow.c'],
-    kwargs: test_common_kwargs,
+    ['test/integration/test_display_m4_widget_table_flow.c', 'src/tools/display_m4_showcase_fixture.c'],
+    include_directories: incdir + [widget_demo_tools_inc],
+    c_args: exe_c_args,
+    link_with: [n00b],
 )
 test('display_m4_widget_table_flow', display_m4_widget_table_flow_test, suite: 'integration')
 

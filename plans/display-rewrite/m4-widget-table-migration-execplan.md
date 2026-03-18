@@ -18,6 +18,7 @@ The user-visible effect is no regression in existing widget/table/hexdump behavi
 - [x] (2026-03-05 13:34Z) Implemented shared helper modules (`widget_primitives`, `table_text_primitives`, `hexdump_contracts`) and migrated widget/table/hexdump call sites without public API churn.
 - [x] (2026-03-05 13:36Z) Added Milestone 4 unit/integration tests, added deterministic `display_m4_showcase` artifact tooling, and wired new sources/tests/tools in `meson.build`.
 - [x] (2026-03-05 13:41Z) Ran milestone validation matrix, generated M4 artifacts under `plans/artifacts/display-rewrite/m4/`, and confirmed `scene_stream.txt` / `table_stream.txt` parity against M3 (empty diffs).
+- [x] (2026-03-18 02:47Z) Applied M4 review remediation: extracted `src/tools/display_m4_showcase_fixture.[ch]`, rewired the tool and integration test to share one deterministic scenario, removed unused internal helper surface, added `display_m4_artifacts` parity coverage, refreshed the tracked M4 artifacts, and reran the focused validation matrix plus `git diff --check`.
 
 ## Surprises & Discoveries
 
@@ -37,6 +38,10 @@ The user-visible effect is no regression in existing widget/table/hexdump behavi
   Evidence: `build_debug/n00b_table --style simple test/data/table_sample.txt` returned `No such file or directory`.
 - Observation: Interactive smoke checks are environment-dependent in this execution context.
   Evidence: `timeout 5 ./build_debug/widget_demo --widget all --backend tui` exited with code 124 (non-interactive timeout), and `timeout 5 ./build_debug/widget_demo --widget all --backend gui` reported `x11 backend unavailable (cannot open DISPLAY)`.
+- Observation: The initial M4 artifact refresh missed parity coverage for `scene_inspect.txt`, so the file drifted until remediation reran the tool and diffed the whole M4 directory.
+  Evidence: `git diff -- plans/artifacts/display-rewrite/m4/scene_inspect.txt` changed only the root entry from `dirty=1` to `dirty=0` after rerunning `build_debug/display_scene_inspect --out plans/artifacts/display-rewrite/m4/scene_inspect.txt`.
+- Observation: `git diff --no-index --check` returns status `1` for a clean generated file diffed against `/dev/null`, so shell-based whitespace gating must only fail on statuses greater than `1`.
+  Evidence: local command probes during remediation returned `rc=1` for a one-line file with no warnings and `rc=3` plus `new blank line at EOF` for a file ending in a blank line.
 
 ## Decision Log
 
@@ -61,12 +66,23 @@ The user-visible effect is no regression in existing widget/table/hexdump behavi
 - Decision: Replace the missing `test/data/table_sample.txt` artifact command with deterministic stdin-fed CSV for `n00b_table`.
   Rationale: The original path does not exist in this repo; stdin input keeps artifact generation deterministic and idempotent.
   Date/Author: 2026-03-05 / Codex
+- Decision: Keep the Milestone 4 copies of baseline-derived artifacts (`scene_stream.txt`, `table_stream.txt`, `metadata.txt`, `scene_inspect.txt`) and justify them with `display_m4_artifacts` parity automation instead of deleting them.
+  Rationale: the milestone already uses those files as acceptance evidence, and adding parity coverage was lower risk than redefining M4 scope after review.
+  Date/Author: 2026-03-18 / Codex
+- Decision: Extract `src/tools/display_m4_showcase_fixture.[ch]` and let both `display_m4_showcase` and `test_display_m4_widget_table_flow` consume one deterministic scenario summary.
+  Rationale: this removed duplicated setup/event logic, removed ad hoc stream-backend declarations, and let the integration test preserve its event-handled assertions without keeping the old copy-pasted scenario.
+  Date/Author: 2026-03-18 / Codex
+- Decision: Remove `n00b_widget_event_is_primary_activate()` and the unused `hex_start` / `hex_end` hexdump contract fields during remediation instead of keeping them for possible future use.
+  Rationale: no production code consumed those helpers on this branch, so keeping them would have preserved speculative internal API surface without behavioral payoff.
+  Date/Author: 2026-03-18 / Codex
 
 ## Outcomes & Retrospective
 
 Milestone 4 implementation is complete on `display-rewrite/m4-widget-table-migration`. Internal shared primitives now back widget metrics/activation/type-guards, table text fit/alignment, and hexdump line-region styling contracts. Public APIs remained unchanged (`widget.h`, `table.h`, `hexdump.h`).
 
 Validation passed across new primitive tests, migrated regression suites, mixed-flow integration, and shared display smoke checks. Deterministic artifacts were generated under `plans/artifacts/display-rewrite/m4/`, and parity diffs against `plans/artifacts/display-rewrite/m3/scene_stream.txt` and `table_stream.txt` were empty.
+
+Review remediation is also complete. The deterministic showcase scenario now lives in `src/tools/display_m4_showcase_fixture.[ch]`, `display_m4_showcase` trims `showcase_stream.txt` and always reaches `n00b_shutdown()` after init, `display_m4_artifacts` now proves the entire M4 artifact directory is reproducible, and the tracked artifact refresh removed stale blank lines from `scene_stream.txt` / `showcase_stream.txt` while updating `scene_inspect.txt` to current `dirty=0` output. The focused post-remediation matrix passed `22/22`, M3 parity diffs for `scene_stream.txt` and `table_stream.txt` stayed empty, and `git diff --check` returned no output.
 
 Remaining gap is only environment-dependent interactive smoke: TUI demo requires an interactive terminal session and GUI demo requires an available X11 display server. This was recorded with concrete command output and is non-blocking for deterministic acceptance.
 
@@ -111,6 +127,8 @@ Fifth, add deterministic M4 artifact tooling. Add `src/tools/display_m4_showcase
 - metadata describing configuration.
 
 This tool should use stream backend and fixed dimensions/scripts so artifact output is reproducible.
+
+After review remediation, keep the same user-visible artifact scope but change the maintenance path: put the mixed showcase scenario in `src/tools/display_m4_showcase_fixture.[ch]`, let both the tool and the M4 integration test call that fixture, trim trailing blank lines before writing `showcase_stream.txt`, and add one `display_m4_artifacts` shell test that regenerates the full M4 artifact directory and checks it for drift plus whitespace regressions.
 
 Finally, wire all new modules/tests/tools in `meson.build`, run milestone validations, generate M4 artifacts, and compare `display_baseline_capture` scene/table outputs against M3. Any intentional diff must be documented in this plan before milestone acceptance.
 
@@ -200,8 +218,10 @@ Generate Milestone 4 artifacts and compare baseline captures to M3:
     build_debug/display_scene_inspect --out plans/artifacts/display-rewrite/m4/scene_inspect.txt
     build_debug/display_m4_showcase --out-dir plans/artifacts/display-rewrite/m4
     printf 'Component,State\nwidget,ready\nhexdump,formatted\n' | build_debug/n00b_table --style simple > plans/artifacts/display-rewrite/m4/table_cli.txt
+    meson test -C build_debug --print-errorlogs display_m4_artifacts
     diff -u plans/artifacts/display-rewrite/m3/scene_stream.txt plans/artifacts/display-rewrite/m4/scene_stream.txt
     diff -u plans/artifacts/display-rewrite/m3/table_stream.txt plans/artifacts/display-rewrite/m4/table_stream.txt
+    git diff --check
 
 Run human interactive smoke where environment supports it:
 
@@ -220,7 +240,7 @@ The second layer is regression evidence for migrated paths. Existing widget/tabl
 
 The third layer is integration evidence. `display_m4_widget_table_flow` must pass and show one deterministic canvas lifecycle that includes widgets plus table/hexdump-derived content while event dispatch and rendering still behave correctly.
 
-The fourth layer is artifact evidence. `display_baseline_capture` scene/table outputs in M4 must match M3 unless intentional differences are documented in this plan. `display_m4_showcase` must generate deterministic mixed-content and hexdump artifacts under `plans/artifacts/display-rewrite/m4/`.
+The fourth layer is artifact evidence. `display_m4_artifacts` must regenerate `scene_stream.txt`, `table_stream.txt`, `metadata.txt`, `scene_inspect.txt`, `showcase_stream.txt`, `hexdump_stream.txt`, `showcase_metadata.txt`, and `table_cli.txt` into a temporary directory and diff them against `plans/artifacts/display-rewrite/m4/` with no output. `scene_stream.txt` and `table_stream.txt` must still match M3 unless intentional differences are documented in this plan, and `git diff --check` must stay empty after the artifact refresh.
 
 The fifth layer is human-runnable evidence. `widget_demo --widget all --backend tui` must remain interactive; `--backend gui` should work when a GUI backend/display server is available, otherwise the limitation must be explicitly recorded with command output.
 
@@ -252,6 +272,9 @@ Expected validation transcript pattern:
     3/3 tests OK
 
     $ meson test -C build_debug --print-errorlogs display_m4_widget_table_flow
+    1/1 tests OK
+
+    $ meson test -C build_debug --print-errorlogs display_m4_artifacts
     1/1 tests OK
 
     $ build_debug/display_m4_showcase --out-dir plans/artifacts/display-rewrite/m4
@@ -287,7 +310,6 @@ In `include/internal/display/widget_primitives.h`, define:
     extern bool n00b_widget_state_is_focused_or_active(const n00b_plane_t *plane);
     extern bool n00b_widget_event_is_left_press(const n00b_event_t *event);
     extern bool n00b_widget_event_is_keyboard_activate(const n00b_event_t *event);
-    extern bool n00b_widget_event_is_primary_activate(const n00b_event_t *event);
     extern void *n00b_widget_data_if_kind(n00b_plane_t *plane,
                                           const n00b_widget_vtable_t *expected);
 
@@ -316,8 +338,6 @@ In `include/internal/display/hexdump_contracts.h`, define:
     typedef struct n00b_hexdump_line_regions_t {
         uint32_t offset_start;
         uint32_t offset_end;
-        uint32_t hex_start;
-        uint32_t hex_end;
         uint32_t ascii_start;
         uint32_t ascii_end;
     } n00b_hexdump_line_regions_t;
@@ -326,11 +346,26 @@ In `include/internal/display/hexdump_contracts.h`, define:
                                                    uint32_t nbytes,
                                                    n00b_hexdump_line_regions_t *out);
 
+In `src/tools/display_m4_showcase_fixture.h`, define:
+
+    typedef struct {
+        n00b_string_t *showcase_stream;
+        bool enter_handled;
+        bool checkbox_click_handled;
+        bool status_is_run;
+        bool checkbox_checked;
+        int button_clicks;
+    } n00b_display_m4_showcase_summary_t;
+
+    extern int n00b_display_m4_showcase_run(n00b_display_m4_showcase_summary_t *out);
+
 In `src/tools/display_m4_showcase.c`, define:
 
-    static int write_showcase_stream(const char *out_dir);
+    static int write_showcase_stream(const char *out_dir,
+                                     const n00b_display_m4_showcase_summary_t *summary);
     static int write_hexdump_stream(const char *out_dir);
-    static int write_showcase_metadata(const char *out_dir);
+    static int write_showcase_metadata(const char *out_dir,
+                                       const n00b_display_m4_showcase_summary_t *summary);
     int main(int argc, char **argv);
 
 In `meson.build`, ensure:
@@ -340,8 +375,12 @@ In `meson.build`, ensure:
   `display_widget_primitives`, `display_table_text_primitives`, `display_hexdump_contracts`.
 - New integration test is wired:
   `display_m4_widget_table_flow`.
+- New artifact parity integration test is wired:
+  `display_m4_artifacts`.
 - New local tool target is wired:
   `display_m4_showcase`.
+- The shared showcase fixture source is linked into both
+  `display_m4_showcase` and `display_m4_widget_table_flow`.
 
 Dependencies remain the existing project toolchain and already-optional backend dependencies (Cocoa, X11, Notcurses, FreeType). Do not add new third-party libraries for M4.
 
@@ -349,3 +388,4 @@ Dependencies remain the existing project toolchain and already-optional backend 
 
 - 2026-03-05: Initial Milestone 4 child ExecPlan authored from umbrella Milestone 4 scope, with concrete shared-primitive module boundaries, migration targets, validation commands, and deterministic mixed-content artifact strategy.
 - 2026-03-05: Updated after implementation run to mark all progress complete, capture build/test/artifact evidence, record environment/tooling discoveries, and replace the missing `test/data/table_sample.txt` command with deterministic stdin-fed table CLI input.
+- 2026-03-18: Updated after M4 review remediation to record the shared showcase fixture, removed unused internal helper surface, added `display_m4_artifacts` parity coverage and whitespace gating, refreshed the tracked M4 artifacts, and capture the post-remediation validation evidence.

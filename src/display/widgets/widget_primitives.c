@@ -65,13 +65,6 @@ n00b_widget_event_is_keyboard_activate(const n00b_event_t *event)
     return event->key.key == N00B_KEY_ENTER || event->key.key == ' ';
 }
 
-bool
-n00b_widget_event_is_primary_activate(const n00b_event_t *event)
-{
-    return n00b_widget_event_is_left_press(event)
-        || n00b_widget_event_is_keyboard_activate(event);
-}
-
 void *
 n00b_widget_data_if_kind(n00b_plane_t *plane,
                           const n00b_widget_vtable_t *expected)
