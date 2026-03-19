@@ -207,6 +207,21 @@ split_available_main_from_content(const n00b_split_t *split, int32_t content_mai
     return content_main > 0 ? content_main : 0;
 }
 
+static void
+split_measure_child(n00b_plane_t *child,
+                    int32_t      *pref_w,
+                    int32_t      *pref_h,
+                    int32_t      *min_w,
+                    int32_t      *min_h)
+{
+    if (child && child->widget_vtable) {
+        n00b_widget_measure(child, pref_w, pref_h, min_w, min_h);
+        return;
+    }
+
+    n00b_widget_measure_plain_plane(child, pref_w, pref_h, min_w, min_h);
+}
+
 static n00b_box_props_t *
 split_make_box(void)
 {
@@ -241,7 +256,7 @@ split_destroy(n00b_plane_t *plane, void *data)
 
     if (plane && plane->canvas
         && n00b_canvas_get_mouse_capture(plane->canvas) == plane) {
-        n00b_canvas_release_mouse(plane->canvas);
+        n00b_canvas_cancel_mouse_capture(plane->canvas);
     }
 
     if (split) {
@@ -349,24 +364,34 @@ split_measure(n00b_plane_t *plane, void *data,
     split_resolve_visible_children(split, &first, &second);
 
     if (first && second) {
-        n00b_widget_measure(first,
+        split_measure_child(first,
                             &first_pref_w,
                             &first_pref_h,
                             &first_min_w,
                             &first_min_h);
-        n00b_widget_measure(second,
+        split_measure_child(second,
                             &second_pref_w,
                             &second_pref_h,
                             &second_min_w,
                             &second_min_h);
 
         if (split->orientation == N00B_SPLIT_HORIZONTAL) {
+            first_pref_w = n00b_max(first_pref_w, split->min_first_px);
+            first_min_w = n00b_max(first_min_w, split->min_first_px);
+            second_pref_w = n00b_max(second_pref_w, split->min_second_px);
+            second_min_w = n00b_max(second_min_w, split->min_second_px);
+
             *pref_w = first_pref_w + split->divider_px + second_pref_w;
             *pref_h = n00b_max(first_pref_h, second_pref_h);
             *min_w  = first_min_w + split->divider_px + second_min_w;
             *min_h  = n00b_max(first_min_h, second_min_h);
         }
         else {
+            first_pref_h = n00b_max(first_pref_h, split->min_first_px);
+            first_min_h = n00b_max(first_min_h, split->min_first_px);
+            second_pref_h = n00b_max(second_pref_h, split->min_second_px);
+            second_min_h = n00b_max(second_min_h, split->min_second_px);
+
             *pref_w = n00b_max(first_pref_w, second_pref_w);
             *pref_h = first_pref_h + split->divider_px + second_pref_h;
             *min_w  = n00b_max(first_min_w, second_min_w);
@@ -378,7 +403,7 @@ split_measure(n00b_plane_t *plane, void *data,
 
     if (first || second) {
         n00b_plane_t *only = first ? first : second;
-        n00b_widget_measure(only, pref_w, pref_h, min_w, min_h);
+        split_measure_child(only, pref_w, pref_h, min_w, min_h);
         return;
     }
 

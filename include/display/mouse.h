@@ -86,6 +86,15 @@ extern void n00b_canvas_capture_mouse(n00b_canvas_t *c, n00b_plane_t *plane);
 extern void n00b_canvas_release_mouse(n00b_canvas_t *c);
 
 /**
+ * @brief Cancel mouse capture outside the normal mouse-release path.
+ * @param c Canvas.
+ *
+ * Unlike `n00b_canvas_release_mouse()`, this also resets any widget-local
+ * drag state associated with the captured plane before clearing capture.
+ */
+extern void n00b_canvas_cancel_mouse_capture(n00b_canvas_t *c);
+
+/**
  * @brief Get the plane currently capturing mouse events.
  * @param c Canvas.
  * @return  Capturing plane, or nullptr.

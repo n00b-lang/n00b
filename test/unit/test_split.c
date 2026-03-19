@@ -10,6 +10,7 @@
 #include "core/runtime.h"
 #include "display/mouse.h"
 #include "display/render/backend.h"
+#include "display/render/box.h"
 #include "display/render/canvas.h"
 #include "display/render/plane.h"
 #include "display/widget.h"
@@ -142,6 +143,28 @@ make_dummy_child(int32_t pref_w, int32_t pref_h,
     plane->width  = dummy->pref_w;
     plane->height = dummy->pref_h;
     n00b_widget_attach(plane, &dummy_widget, dummy);
+
+    return plane;
+}
+
+static void
+plain_child_set_box(n00b_plane_t *plane)
+{
+    assert(plane != nullptr);
+    plane->box = n00b_box_props_new(.borders = N00B_BORDER_ALL);
+}
+
+static n00b_plane_t *
+make_plain_child(int32_t width, int32_t height, bool with_box)
+{
+    n00b_plane_t *plane = n00b_new_kargs(n00b_plane_t, plane);
+
+    plane->width  = width > 0 ? width : 1;
+    plane->height = height > 0 ? height : 1;
+
+    if (with_box) {
+        plain_child_set_box(plane);
+    }
 
     return plane;
 }
@@ -290,7 +313,11 @@ test_split_measure_by_orientation(void)
 {
     n00b_plane_t *h_first = make_dummy_child(30, 12, 10, 5, false);
     n00b_plane_t *h_second = make_dummy_child(20, 18, 8, 7, false);
-    n00b_plane_t *h_split = n00b_split_new(h_first, h_second, .divider_px = 4);
+    n00b_plane_t *h_split = n00b_split_new(h_first,
+                                           h_second,
+                                           .min_first_px = 0,
+                                           .min_second_px = 0,
+                                           .divider_px = 4);
     int32_t pref_w = 0;
     int32_t pref_h = 0;
     int32_t min_w = 0;
@@ -315,6 +342,8 @@ test_split_measure_by_orientation(void)
     n00b_plane_t *v_second = make_dummy_child(20, 18, 8, 7, false);
     n00b_plane_t *v_split = n00b_split_new(v_first,
                                            v_second,
+                                           .min_first_px = 0,
+                                           .min_second_px = 0,
                                            .orientation = N00B_SPLIT_VERTICAL,
                                            .divider_px = 6);
 
@@ -335,6 +364,56 @@ test_split_measure_by_orientation(void)
 
     destroy_plane_tree(empty);
     printf("  [PASS] split measure by orientation\n");
+}
+
+static void
+test_split_measure_honors_configured_minimums(void)
+{
+    n00b_plane_t *first = make_dummy_child(20, 8, 10, 4, false);
+    n00b_plane_t *second = make_dummy_child(22, 9, 8, 5, false);
+    n00b_plane_t *split = n00b_split_new(first,
+                                         second,
+                                         .min_first_px = 40,
+                                         .min_second_px = 30,
+                                         .divider_px = 6);
+    int32_t pref_w = 0;
+    int32_t pref_h = 0;
+    int32_t min_w = 0;
+    int32_t min_h = 0;
+
+    n00b_widget_measure(split, &pref_w, &pref_h, &min_w, &min_h);
+    assert(pref_w == 76);
+    assert(pref_h == 9);
+    assert(min_w == 76);
+    assert(min_h == 5);
+
+    destroy_plane_tree(split);
+    printf("  [PASS] split measure honors configured minimums\n");
+}
+
+static void
+test_split_measure_plain_planes(void)
+{
+    n00b_plane_t *first = make_plain_child(15, 6, true);
+    n00b_plane_t *second = make_plain_child(9, 12, false);
+    n00b_plane_t *split = n00b_split_new(first,
+                                         second,
+                                         .min_first_px = 0,
+                                         .min_second_px = 0,
+                                         .divider_px = 4);
+    int32_t pref_w = 0;
+    int32_t pref_h = 0;
+    int32_t min_w = 0;
+    int32_t min_h = 0;
+
+    n00b_widget_measure(split, &pref_w, &pref_h, &min_w, &min_h);
+    assert(pref_w == 30);
+    assert(pref_h == 12);
+    assert(min_w == 30);
+    assert(min_h == 12);
+
+    destroy_plane_tree(split);
+    printf("  [PASS] split measure plain planes\n");
 }
 
 static void
@@ -440,6 +519,126 @@ test_split_drag_updates_ratio_and_capture(void)
     printf("  [PASS] split drag updates ratio and capture\n");
 }
 
+static void
+test_split_vertical_drag_updates_ratio_and_capture(void)
+{
+    split_change_state_t change = {};
+    n00b_canvas_t *canvas = make_stream_canvas(80, 100);
+    n00b_plane_t  *first = make_dummy_child(20, 8, 10, 4, false);
+    n00b_plane_t  *second = make_dummy_child(20, 8, 10, 4, false);
+    n00b_plane_t  *split = n00b_split_new(first,
+                                          second,
+                                          .orientation = N00B_SPLIT_VERTICAL,
+                                          .ratio = 0.5f,
+                                          .min_first_px = 10,
+                                          .min_second_px = 10,
+                                          .divider_px = 6,
+                                          .on_change = on_split_change,
+                                          .on_change_data = &change,
+                                          .canvas = canvas);
+    n00b_split_t  *state = (n00b_split_t *)split->widget_data;
+    int32_t        release_y;
+
+    n00b_canvas_add_plane(canvas, split);
+    n00b_widget_layout(split,
+                       (n00b_rect_t){
+                           .x      = 0,
+                           .y      = 0,
+                           .width  = 100,
+                           .height = 80,
+                       });
+
+    route_mouse(canvas, 20, 39, N00B_MOUSE_LEFT, N00B_MOUSE_PRESS);
+    assert(n00b_canvas_get_mouse_capture(canvas) == split);
+    assert(n00b_plane_get_state(split) == N00B_WSTATE_ACTIVE);
+
+    route_mouse(canvas, 20, 61, N00B_MOUSE_LEFT, N00B_MOUSE_DRAG);
+    assert(n00b_canvas_get_mouse_capture(canvas) == split);
+    assert(change.calls == 1);
+    assert_ratio_near(change.last_ratio, 59.0f / 74.0f);
+    assert_ratio_near(n00b_split_get_ratio(split), 59.0f / 74.0f);
+    assert(state->divider_rect.y == 59);
+
+    release_y = state->divider_rect.y + (state->divider_rect.height / 2);
+    route_mouse(canvas, 20, release_y, N00B_MOUSE_LEFT, N00B_MOUSE_RELEASE);
+    assert(n00b_canvas_get_mouse_capture(canvas) == nullptr);
+    assert(n00b_plane_get_state(split) == N00B_WSTATE_HOVER);
+
+    assert(n00b_canvas_remove_plane(canvas, split));
+    destroy_plane_tree(split);
+    n00b_canvas_destroy(canvas);
+    printf("  [PASS] split vertical drag updates ratio and capture\n");
+}
+
+static void
+test_split_detach_during_drag_clears_capture(void)
+{
+    n00b_canvas_t *canvas = make_stream_canvas(40, 160);
+    n00b_plane_t  *first = make_dummy_child(20, 8, 10, 4, false);
+    n00b_plane_t  *second = make_dummy_child(20, 8, 10, 4, false);
+    n00b_plane_t  *split = n00b_split_new(first,
+                                          second,
+                                          .ratio = 0.5f,
+                                          .min_first_px = 10,
+                                          .min_second_px = 10,
+                                          .divider_px = 6,
+                                          .canvas = canvas);
+    n00b_split_t  *split_state = (n00b_split_t *)split->widget_data;
+    n00b_plane_t  *root = n00b_new_kargs(n00b_plane_t, plane, .canvas = canvas);
+    n00b_plane_t  *host = n00b_new_kargs(n00b_plane_t, plane, .canvas = canvas);
+
+    root->width  = 160;
+    root->height = 80;
+    host->width  = 160;
+    host->height = 80;
+
+    n00b_canvas_add_plane(canvas, split);
+    n00b_widget_layout(split,
+                       (n00b_rect_t){
+                           .x      = 0,
+                           .y      = 0,
+                           .width  = 120,
+                           .height = 40,
+                       });
+
+    route_mouse(canvas, 59, 10, N00B_MOUSE_LEFT, N00B_MOUSE_PRESS);
+    assert(n00b_canvas_get_mouse_capture(canvas) == split);
+    assert(split_state->dragging);
+    assert(n00b_plane_get_state(split) == N00B_WSTATE_ACTIVE);
+
+    assert(n00b_canvas_remove_plane(canvas, split));
+    assert(n00b_canvas_get_mouse_capture(canvas) == nullptr);
+    assert(!split_state->dragging);
+    assert(n00b_plane_get_state(split) == N00B_WSTATE_NORMAL);
+
+    n00b_canvas_add_plane(canvas, root);
+    n00b_plane_add_child(root, host, 0, 0);
+    n00b_plane_add_child(host, split, 0, 0);
+    n00b_widget_layout(split,
+                       (n00b_rect_t){
+                           .x      = 12,
+                           .y      = 6,
+                           .width  = 120,
+                           .height = 40,
+                       });
+
+    route_mouse(canvas, 71, 16, N00B_MOUSE_LEFT, N00B_MOUSE_PRESS);
+    assert(n00b_canvas_get_mouse_capture(canvas) == split);
+    assert(split_state->dragging);
+    assert(n00b_plane_get_state(split) == N00B_WSTATE_ACTIVE);
+
+    assert(n00b_plane_remove_child(root, host));
+    assert(n00b_canvas_get_mouse_capture(canvas) == nullptr);
+    assert(!split_state->dragging);
+    assert(n00b_plane_get_state(split) == N00B_WSTATE_NORMAL);
+
+    destroy_plane_tree(host);
+    assert(n00b_canvas_remove_plane(canvas, root));
+    destroy_plane_tree(root);
+    n00b_canvas_destroy(canvas);
+    printf("  [PASS] split detach during drag clears capture\n");
+}
+
 int
 main(int argc, char **argv)
 {
@@ -450,9 +649,13 @@ main(int argc, char **argv)
 
     test_split_create_and_api();
     test_split_measure_by_orientation();
+    test_split_measure_honors_configured_minimums();
+    test_split_measure_plain_planes();
     test_split_layout_horizontal_clamps_minimums();
     test_split_single_visible_pane_uses_full_bounds();
     test_split_drag_updates_ratio_and_capture();
+    test_split_vertical_drag_updates_ratio_and_capture();
+    test_split_detach_during_drag_clears_capture();
 
     printf("All split widget tests passed.\n");
     n00b_shutdown();

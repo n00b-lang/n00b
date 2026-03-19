@@ -8,10 +8,12 @@
 #include "core/arena.h"
 #include "core/string.h"
 #include "adt/list.h"
+#include "display/mouse.h"
 #include "display/render/plane.h"
 #include "display/render/canvas.h"
 #include "display/render/font_metrics.h"
 #include "internal/display/plane_geometry.h"
+#include "internal/display/plane_tree.h"
 #include "text/unicode/properties.h"
 
 // -------------------------------------------------------------------
@@ -100,6 +102,30 @@ plane_translate_layout_subtree(n00b_plane_t *plane, int32_t dx, int32_t dy)
     }
 }
 
+bool
+n00b_plane_tree_contains(const n00b_plane_t *root, const n00b_plane_t *target)
+{
+    if (!root || !target) {
+        return false;
+    }
+
+    if (root == target) {
+        return true;
+    }
+
+    if (!root->children.data) {
+        return false;
+    }
+
+    for (size_t i = 0; i < root->children.len; i++) {
+        if (n00b_plane_tree_contains(root->children.data[i], target)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 // -------------------------------------------------------------------
 // Lifecycle
 // -------------------------------------------------------------------
@@ -183,15 +209,21 @@ n00b_plane_add_child(n00b_plane_t *parent, n00b_plane_t *child,
 bool
 n00b_plane_remove_child(n00b_plane_t *parent, n00b_plane_t *child)
 {
+    n00b_canvas_t *canvas;
+
     if (!parent || !child || child->parent != parent) {
         return false;
     }
 
     plane_lock(parent);
+    canvas = parent->canvas;
 
     size_t n = parent->children.len;
     for (size_t i = 0; i < n; i++) {
         if (n00b_list_get(parent->children, i) == child) {
+            if (canvas && n00b_plane_tree_contains(child, canvas->mouse_capture)) {
+                n00b_canvas_cancel_mouse_capture(canvas);
+            }
             (void)n00b_list_delete(parent->children, i);
             child->parent = nullptr;
             plane_clear_canvas_recursive(child);

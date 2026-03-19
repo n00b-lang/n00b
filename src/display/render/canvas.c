@@ -8,10 +8,12 @@
 #include "core/alloc.h"
 #include "core/data_lock.h"
 #include "core/arena.h"
+#include "display/mouse.h"
 #include "display/render/canvas.h"
 #include "display/render/backend_registry.h"
 #include "internal/display/backend_services.h"
 #include "internal/display/diagnostics.h"
+#include "internal/display/plane_tree.h"
 #include "internal/display/scene_contracts.h"
 
 // -------------------------------------------------------------------
@@ -355,6 +357,9 @@ n00b_canvas_remove_plane(n00b_canvas_t *c, n00b_plane_t *p)
     size_t n = c->planes.len;
     for (size_t i = 0; i < n; i++) {
         if (n00b_list_get(c->planes, i) == p) {
+            if (n00b_plane_tree_contains(p, c->mouse_capture)) {
+                n00b_canvas_cancel_mouse_capture(c);
+            }
             (void)n00b_list_delete(c->planes, i);
             propagate_canvas(p, nullptr);
             canvas_unlock(c);

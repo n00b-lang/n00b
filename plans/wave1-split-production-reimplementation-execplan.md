@@ -1,4 +1,3 @@
-```md
 # Reimplement The Wave 1 Split Widget In Production
 
 This ExecPlan is a living document. The sections `Progress`, `Surprises & Discoveries`, `Decision Log`, and `Outcomes & Retrospective` must be kept up to date as work proceeds.
@@ -20,6 +19,7 @@ The goal is to land the next production Wave 1 widget in Athens: a pixel-native 
 - [x] (2026-03-14 16:48Z) Implemented `include/display/widgets/split.h` and `src/display/widgets/split.c` with the production split API, ratio/min-size layout math, divider rendering, capture-driven dragging, non-owning pane replacement, and immediate relayout on runtime changes.
 - [x] (2026-03-14 16:48Z) Updated `src/display/mouse.c` and `test/unit/test_mouse.c` so each bubbled mouse event is re-localized for the current parent plane before dispatch.
 - [x] (2026-03-14 16:48Z) Added `test/unit/test_split.c`, registered the new Meson target, extended `widget_demo --widget split`, updated `docs/widgets.md`, and ran the build/test/demo validation matrix from this plan.
+- [x] (2026-03-19 03:34Z) Remediated the post-landing review findings: split measurement now honors configured per-pane minimums and plain-plane children, detachment-time capture cancellation clears stale drag state in shared removal paths, and `test/unit/test_split.c` now covers vertical dragging plus removal-during-drag regressions.
 
 ## Surprises & Discoveries
 
@@ -85,11 +85,17 @@ The goal is to land the next production Wave 1 widget in Athens: a pixel-native 
   Rationale: The split render path needs theme-derived styles that survive past the render callback, but the widget must not introduce layout insets or visible borders that would shift divider geometry.
   Date/Author: 2026-03-14 / Codex.
 
+- Decision: The production split measurement contract is stricter than the original landing documented: when both panes are visible, configured `min_first_px` and `min_second_px` participate in split-axis preferred and minimum measurement, and plain panes measure through the existing plain-plane helper rather than the widget-only path.
+  Rationale: The post-landing review proved that the original child-only formulas under-reported the split's real runtime constraints and collapsed mixed widget/plain layouts to divider-only size.
+  Date/Author: 2026-03-19 / Codex.
+
 ## Outcomes & Retrospective
 
 The production Wave 1 split widget is now implemented in Athens together with the supporting mouse-bubbling fix the design required. Athens can now build two-pane shells with ratio-based sizing, feasible minimum clamps, a visible divider rendered inside the split plane, and live mouse dragging with capture and immediate relayout. The demo/tooling/documentation surface was updated in the same pass, so `widget_demo --widget split` is now a first-class verification path instead of a follow-up task.
 
 The validation matrix in this plan completed successfully. `meson compile -C build_debug test_split test_mouse test_display_event_dispatch widget_demo`, `meson test -C build_debug --print-errorlogs split mouse display_event_dispatch`, and `./build_debug/widget_demo --widget split --backend stream` all passed. A short PTY run of `./build_debug/widget_demo --widget split --backend tui` also rendered the interactive split scene successfully before exiting on `Ctrl-C`. The remaining gap relative to the wider split roadmap is unchanged from the earlier design decision: keyboard divider resizing remains deferred beyond Wave 1.
+
+The 2026-03-19 review-remediation follow-up tightened the shipped contract without changing the public API. Split measurement now treats configured per-pane minimums as real main-axis requirements when both panes are visible, plain `n00b_plane_t` children measure through their existing footprint instead of collapsing to `0x0`, and removing a captured split or its parent subtree now cancels capture before the detached tree loses its canvas pointer. The split proof surface also now covers vertical dragging and detach-during-drag cleanup directly.
 
 ## Context and Orientation
 
@@ -111,22 +117,26 @@ Two Athens-specific details matter for every code change in this plan. First, `p
 
 3. In `src/display/widgets/split.c`, implement pane ownership and child-list order carefully. `n00b_split_new()` must accept `nullptr` for either pane, assert that any non-null pane is currently unparented, parent `first` before `second`, and attach the split widget to a newly allocated plane. `set_first()` and `set_second()` must detach the previous pane with `n00b_plane_remove_child()` without destroying it, clear that old pane's parent pointer through the normal plane API, and then parent the replacement pane. After any replacement, reorder `plane->children` if necessary so the stored order is always `first` at index `0` and `second` at index `1`. This keeps focus traversal deterministic.
 
-4. Define exact measurement behavior in `src/display/widgets/split.c`. Hidden panes are skipped. When both panes are visible, the preferred and minimum sizes must combine by orientation:
+4. Define exact measurement behavior in `src/display/widgets/split.c`. Hidden panes are skipped. Measure each child through `n00b_widget_measure()` when it is a widget and through `n00b_widget_measure_plain_plane()` otherwise. When both panes are visible, clamp each pane's split-axis preferred and minimum size up to its configured `min_first_px` or `min_second_px` before combining by orientation:
 
     Horizontal:
-        pref_w = first_pref_w + divider_px + second_pref_w
+        first_req_w = max(first_min_w, min_first_px)
+        second_req_w = max(second_min_w, min_second_px)
+        pref_w = max(first_pref_w, first_req_w) + divider_px + max(second_pref_w, second_req_w)
         pref_h = max(first_pref_h, second_pref_h)
-        min_w  = first_min_w + divider_px + second_min_w
+        min_w  = first_req_w + divider_px + second_req_w
         min_h  = max(first_min_h, second_min_h)
 
     Vertical:
+        first_req_h = max(first_min_h, min_first_px)
+        second_req_h = max(second_min_h, min_second_px)
         pref_w = max(first_pref_w, second_pref_w)
-        pref_h = first_pref_h + divider_px + second_pref_h
+        pref_h = max(first_pref_h, first_req_h) + divider_px + max(second_pref_h, second_req_h)
         min_w  = max(first_min_w, second_min_w)
-        min_h  = first_min_h + divider_px + second_min_h
+        min_h  = first_req_h + divider_px + second_req_h
 
     Single visible pane:
-        copy that pane's preferred and minimum sizes exactly; add no divider contribution.
+        copy that pane's measured preferred and minimum sizes exactly; add no divider contribution.
 
     No visible panes:
         return `1` for all four outputs.
@@ -352,4 +362,4 @@ That helper must preserve the current absolute-to-local behavior for the origina
 
 - 2026-03-14: Initial ExecPlan added for the Wave 1 production `split` reimplementation because `split` is now the next missing widget after `zstack` and `grid`. The plan also records the required mouse-bubbling coordinate fix so divider interaction is implementable without reopening runtime design.
 - 2026-03-14: Updated the ExecPlan after implementation to mark all milestones complete, record the internal zero-border box decision, capture the drag-test discovery about default box borders, and log the successful build/test/demo validation commands.
-```
+- 2026-03-19: Updated the ExecPlan after the review-remediation follow-up to remove the accidental outer fence, correct the measurement contract for configured minima and plain planes, and record the shared detach-time capture cleanup that landed after the original production split port.

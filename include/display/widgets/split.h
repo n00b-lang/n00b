@@ -3,7 +3,9 @@
  * @brief Split widget: two-pane container with a draggable divider.
  *
  * A split lays out up to two child panes either left/right or
- * top/bottom. The divider size is pixel-native, sizing is ratio-based,
+ * top/bottom. Child panes may be widgets or plain planes. The divider
+ * size is pixel-native, sizing is ratio-based, configured per-pane
+ * minimums contribute to measurement only when both panes are visible,
  * minimum sizes are enforced when possible, and mouse dragging updates
  * the ratio live.
  */

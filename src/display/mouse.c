@@ -14,6 +14,7 @@
 #include "display/event.h"
 #include "display/widget.h"
 #include "display/focus.h"
+#include "display/widgets/split.h"
 #include "internal/display/plane_geometry.h"
 
 static void
@@ -204,6 +205,24 @@ mouse_hit_test_plane(n00b_plane_t *plane,
     return result;
 }
 
+static void
+mouse_cancel_capture_state(n00b_plane_t *plane)
+{
+    if (!plane || plane->widget_vtable != &n00b_widget_split) {
+        return;
+    }
+
+    n00b_split_t *split = plane->widget_data;
+    if (!split) {
+        return;
+    }
+
+    split->dragging = false;
+    split->divider_hovered = false;
+    split->drag_pointer_offset_px = 0;
+    n00b_plane_set_state(plane, N00B_WSTATE_NORMAL);
+}
+
 n00b_plane_t *
 n00b_mouse_hit_test(n00b_plane_t *plane, int32_t x, int32_t y,
                      int32_t cell_px_w, int32_t cell_px_h)
@@ -298,6 +317,17 @@ n00b_canvas_release_mouse(n00b_canvas_t *c)
     if (c) {
         c->mouse_capture = nullptr;
     }
+}
+
+void
+n00b_canvas_cancel_mouse_capture(n00b_canvas_t *c)
+{
+    if (!c) {
+        return;
+    }
+
+    mouse_cancel_capture_state(c->mouse_capture);
+    c->mouse_capture = nullptr;
 }
 
 n00b_plane_t *
