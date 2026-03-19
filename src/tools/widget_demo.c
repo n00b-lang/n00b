@@ -8,7 +8,7 @@
  *   widget_demo --widget label --backend x11    # Linux/Unix X11 window
  *   widget_demo -w label -b tui                 # short forms
  *
- * Press Ctrl-C to exit.
+ * Press Ctrl-C to exit when the focused widget does not consume it.
  * Tab cycles focus, Space/Enter activates widgets.
  *
  * Optional debug log:
@@ -1348,7 +1348,7 @@ demo_text(n00b_canvas_t *canvas)
     instructions = n00b_label_new(
         n00b_str_set_base_style(
             n00b_string_from_cstr(
-                "Drag-select inside the article, then press Ctrl+C. With an active selection the demo keeps running and copies text; with no selection Ctrl+C still exits."),
+                "Drag-select inside the article, then press Ctrl+C. Clipboard-capable backends copy the selection and keep the demo running; with no selection, or on backends without clipboard copy, Ctrl+C still exits."),
             note_style),
         .canvas = canvas,
         .width = content_w,
@@ -1997,7 +1997,7 @@ usage(const char *prog)
     fprintf(stderr,
             "Usage: %s --widget <name> [--backend <auto|tui|gui|cocoa|x11|nc|stream|dumb>] [--theme <name>] [--debug-log <path>]\n"
             "\n"
-            "Widgets:  label, grid, split, scroll, tabs, zstack, all\n"
+            "Widgets:  label, grid, split, scroll, tabs, text, zstack, all\n"
             "Backends: auto (policy-driven), tui (ANSI alt-screen),\n"
             "          gui (portable GUI alias; may fall back if unavailable),\n"
             "          cocoa (macOS native), x11 (Linux/Unix native),\n"

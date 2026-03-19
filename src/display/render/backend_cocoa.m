@@ -74,6 +74,7 @@ typedef struct {
     n00b_rcell_t        *staging;
     n00b_isize_t         staging_rows;
     n00b_isize_t         staging_cols;
+    n00b_composite_style_pool_t style_pool;
 
     // Cursor state.
     n00b_isize_t         cursor_row;
@@ -770,6 +771,41 @@ dispatch_to_main_sync(dispatch_block_t block)
     }
 }
 
+static bool
+cocoa_clipboard_copy(void *vctx, const char *utf8, size_t len)
+{
+    __block bool ok = false;
+
+    (void)vctx;
+
+    if (!utf8) {
+        return false;
+    }
+
+    dispatch_to_main_sync(^{
+        @autoreleasepool {
+            NSString *string = [[NSString alloc] initWithBytes:utf8
+                                                        length:len
+                                                      encoding:NSUTF8StringEncoding];
+            NSPasteboard *pasteboard;
+
+            if (!string) {
+                return;
+            }
+
+            pasteboard = [NSPasteboard generalPasteboard];
+            if (!pasteboard) {
+                return;
+            }
+
+            [pasteboard clearContents];
+            ok = [pasteboard setString:string forType:NSPasteboardTypeString];
+        }
+    });
+
+    return ok;
+}
+
 // ====================================================================
 // Event queue helpers
 // ====================================================================
@@ -1173,6 +1209,7 @@ cocoa_destroy(void *vctx)
         n00b_free(ctx->staging);
         ctx->staging = NULL;
     }
+    n00b_composite_style_pool_destroy(&ctx->style_pool);
 
     // Free GUI cache.
     if (ctx->gui_cache) {
@@ -1608,10 +1645,12 @@ cocoa_render_planes(void                         *vctx,
         ctx->staging_cols = cell_cols;
     }
 
+    n00b_composite_style_pool_clear(&ctx->style_pool);
     n00b_composite_commands_to_grid(entries, count, ctx->staging,
                                      cell_rows, cell_cols,
                                      cpw, cph,
-                                     default_style, caps);
+                                     default_style, caps,
+                                     &ctx->style_pool);
 
     // Route through existing render_frame (which copies staging and
     // invalidates the dirty region for drawRect:).
@@ -1632,6 +1671,7 @@ const n00b_renderer_vtable_t n00b_renderer_cocoa = {
     .render_frame       = cocoa_render_frame,
     .flush              = cocoa_flush,
     .render_planes      = cocoa_render_planes,
+    .clipboard_copy     = cocoa_clipboard_copy,
     .cursor_set_visible = cocoa_cursor_set_visible,
     .cursor_move        = cocoa_cursor_move,
     .on_resize          = cocoa_on_resize,

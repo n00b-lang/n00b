@@ -14,6 +14,7 @@
 #include <sys/select.h>
 #include <unistd.h>
 
+#include <X11/Xatom.h>
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 #include <X11/keysym.h>
@@ -40,6 +41,10 @@ typedef struct {
     Colormap        colormap;
     Visual         *visual;
     Atom            wm_delete;
+    Atom            clipboard_atom;
+    Atom            targets_atom;
+    Atom            utf8_string_atom;
+    Atom            text_atom;
 
     bool            running;
 
@@ -53,10 +58,13 @@ typedef struct {
     n00b_rcell_t   *comp_grid;
     n00b_isize_t    comp_grid_rows;
     n00b_isize_t    comp_grid_cols;
+    n00b_composite_style_pool_t style_pool;
 
     n00b_event_t    event_queue[X11_EVENT_QUEUE_CAP];
     uint32_t        eq_head;
     uint32_t        eq_tail;
+    char           *clipboard;
+    size_t          clipboard_len;
 
     n00b_x11_pending_state_t pending;
 
@@ -92,6 +100,125 @@ x11_dequeue_event(x11_ctx_t *ctx, n00b_event_t *out)
     *out = ctx->event_queue[ctx->eq_tail];
     ctx->eq_tail = (ctx->eq_tail + 1u) % X11_EVENT_QUEUE_CAP;
     return true;
+}
+
+static void
+x11_free_clipboard(x11_ctx_t *ctx)
+{
+    if (!ctx || !ctx->clipboard) {
+        return;
+    }
+
+    n00b_free(ctx->clipboard);
+    ctx->clipboard = nullptr;
+    ctx->clipboard_len = 0;
+}
+
+static bool
+x11_clipboard_is_ascii(const x11_ctx_t *ctx)
+{
+    if (!ctx || !ctx->clipboard) {
+        return true;
+    }
+
+    for (size_t i = 0; i < ctx->clipboard_len; i++) {
+        if (((unsigned char)ctx->clipboard[i]) > 0x7fu) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static void
+x11_send_selection_notify(x11_ctx_t *ctx,
+                          const XSelectionRequestEvent *request,
+                          Atom property)
+{
+    XEvent reply = {};
+
+    if (!ctx || !request) {
+        return;
+    }
+
+    reply.xselection.type      = SelectionNotify;
+    reply.xselection.display   = request->display;
+    reply.xselection.requestor = request->requestor;
+    reply.xselection.selection = request->selection;
+    reply.xselection.target    = request->target;
+    reply.xselection.property  = property;
+    reply.xselection.time      = request->time;
+
+    XSendEvent(ctx->dpy, request->requestor, False, 0, &reply);
+    XFlush(ctx->dpy);
+}
+
+static void
+x11_handle_selection_request(x11_ctx_t *ctx,
+                             const XSelectionRequestEvent *request)
+{
+    Atom property;
+    Atom reply_property = None;
+
+    if (!ctx || !request) {
+        return;
+    }
+
+    property = request->property ? request->property : request->target;
+
+    if (!ctx->clipboard
+        || (request->selection != ctx->clipboard_atom
+            && request->selection != XA_PRIMARY)) {
+        x11_send_selection_notify(ctx, request, None);
+        return;
+    }
+
+    if (request->target == ctx->targets_atom) {
+        Atom targets[4];
+        int  count = 0;
+
+        targets[count++] = ctx->targets_atom;
+        targets[count++] = ctx->utf8_string_atom;
+        targets[count++] = ctx->text_atom;
+        if (x11_clipboard_is_ascii(ctx)) {
+            targets[count++] = XA_STRING;
+        }
+
+        XChangeProperty(ctx->dpy,
+                        request->requestor,
+                        property,
+                        XA_ATOM,
+                        32,
+                        PropModeReplace,
+                        (unsigned char *)targets,
+                        count);
+        reply_property = property;
+    }
+    else if (request->target == ctx->utf8_string_atom
+             || request->target == ctx->text_atom) {
+        XChangeProperty(ctx->dpy,
+                        request->requestor,
+                        property,
+                        request->target,
+                        8,
+                        PropModeReplace,
+                        (const unsigned char *)ctx->clipboard,
+                        (int)ctx->clipboard_len);
+        reply_property = property;
+    }
+    else if (request->target == XA_STRING && x11_clipboard_is_ascii(ctx)) {
+        XChangeProperty(ctx->dpy,
+                        request->requestor,
+                        property,
+                        XA_STRING,
+                        8,
+                        PropModeReplace,
+                        (const unsigned char *)ctx->clipboard,
+                        (int)ctx->clipboard_len);
+        reply_property = property;
+    }
+
+    x11_send_selection_notify(ctx, request, reply_property);
 }
 
 static n00b_key_mod_t
@@ -365,6 +492,10 @@ x11_pump_events(x11_ctx_t *ctx)
             x11_handle_resize(ctx, xev.xconfigure.width, xev.xconfigure.height);
             break;
 
+        case SelectionRequest:
+            x11_handle_selection_request(ctx, &xev.xselectionrequest);
+            break;
+
         case ClientMessage:
             if ((Atom)xev.xclient.data.l[0] == ctx->wm_delete) {
                 // Synthesize Ctrl+C so event loop exits cleanly.
@@ -583,6 +714,10 @@ x11_init(n00b_conduit_topic_t(n00b_buffer_t *) *output)
     XSelectInput(ctx->dpy, ctx->window, input_mask);
 
     ctx->wm_delete = XInternAtom(ctx->dpy, "WM_DELETE_WINDOW", False);
+    ctx->clipboard_atom = XInternAtom(ctx->dpy, "CLIPBOARD", False);
+    ctx->targets_atom = XInternAtom(ctx->dpy, "TARGETS", False);
+    ctx->utf8_string_atom = XInternAtom(ctx->dpy, "UTF8_STRING", False);
+    ctx->text_atom = XInternAtom(ctx->dpy, "TEXT", False);
     XSetWMProtocols(ctx->dpy, ctx->window, &ctx->wm_delete, 1);
 
     XGCValues gcv = {};
@@ -608,6 +743,8 @@ x11_destroy(void *vctx)
     if (ctx->comp_grid) {
         n00b_free(ctx->comp_grid);
     }
+    x11_free_clipboard(ctx);
+    n00b_composite_style_pool_destroy(&ctx->style_pool);
 
     if (ctx->dpy) {
         if (ctx->gc) {
@@ -759,6 +896,35 @@ x11_flush(void *vctx)
     XFlush(ctx->dpy);
 }
 
+static bool
+x11_clipboard_copy(void *vctx, const char *utf8, size_t len)
+{
+    x11_ctx_t *ctx = vctx;
+    char      *copy;
+
+    if (!ctx || !ctx->dpy || !ctx->window || !utf8) {
+        return false;
+    }
+
+    copy = n00b_alloc_array_with_opts(char,
+                                      len + 1,
+                                      &(n00b_alloc_opts_t){.no_scan = true});
+    if (len > 0) {
+        memcpy(copy, utf8, len);
+    }
+    copy[len] = '\0';
+
+    x11_free_clipboard(ctx);
+    ctx->clipboard = copy;
+    ctx->clipboard_len = len;
+
+    XSetSelectionOwner(ctx->dpy, ctx->clipboard_atom, ctx->window, CurrentTime);
+    XSetSelectionOwner(ctx->dpy, XA_PRIMARY, ctx->window, CurrentTime);
+    XFlush(ctx->dpy);
+
+    return XGetSelectionOwner(ctx->dpy, ctx->clipboard_atom) == ctx->window;
+}
+
 static void
 x11_render_planes(void                         *vctx,
                   const n00b_composite_entry_t *entries,
@@ -801,6 +967,7 @@ x11_render_planes(void                         *vctx,
     ctx->rows = cell_rows;
     ctx->cols = cell_cols;
 
+    n00b_composite_style_pool_clear(&ctx->style_pool);
     n00b_composite_commands_to_grid(entries,
                                      count,
                                      ctx->comp_grid,
@@ -809,7 +976,8 @@ x11_render_planes(void                         *vctx,
                                      ctx->cell_w,
                                      ctx->cell_h,
                                      default_style,
-                                     caps);
+                                     caps,
+                                     &ctx->style_pool);
 
     x11_render_frame(vctx, ctx->comp_grid, cell_rows, cell_cols, nullptr);
 }
@@ -917,6 +1085,7 @@ const n00b_renderer_vtable_t n00b_renderer_x11 = {
     .render_frame       = x11_render_frame,
     .flush              = x11_flush,
     .render_planes      = x11_render_planes,
+    .clipboard_copy     = x11_clipboard_copy,
     .cursor_set_visible = x11_cursor_set_visible,
     .cursor_move        = x11_cursor_move,
     .on_resize          = x11_on_resize,

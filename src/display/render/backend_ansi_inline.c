@@ -36,6 +36,7 @@ typedef struct {
     n00b_rcell_t                           *comp_grid;
     n00b_isize_t                            comp_grid_rows;
     n00b_isize_t                            comp_grid_cols;
+    n00b_composite_style_pool_t             style_pool;
 } ansi_inline_ctx_t;
 
 #define INLINE_INITIAL_BUF 16384
@@ -155,6 +156,7 @@ ansi_inline_destroy(void *vctx)
         if (ctx->comp_grid) {
             n00b_free(ctx->comp_grid);
         }
+        n00b_composite_style_pool_destroy(&ctx->style_pool);
         n00b_free(ctx->buf);
         n00b_free(ctx);
     }
@@ -310,10 +312,12 @@ ansi_inline_render_planes(void                         *vctx,
         ctx->comp_grid_cols = total_cols;
     }
 
+    n00b_composite_style_pool_clear(&ctx->style_pool);
     n00b_composite_commands_to_grid(entries, count, ctx->comp_grid,
                                      total_rows, total_cols,
                                      1, 1,
-                                     default_style, caps);
+                                     default_style, caps,
+                                     &ctx->style_pool);
 
     ansi_inline_render_frame(vctx, ctx->comp_grid, total_rows, total_cols,
                               nullptr);

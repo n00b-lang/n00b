@@ -121,7 +121,27 @@ n00b_rcell_equal(const n00b_rcell_t *a, const n00b_rcell_t *b)
 {
     if (a->grapheme_len != b->grapheme_len) return false;
     if (a->display_width != b->display_width) return false;
-    if (a->style != b->style) return false;
+    if (a->style != b->style) {
+        if (!a->style || !b->style) return false;
+        if (a->style->bold != b->style->bold
+            || a->style->italic != b->style->italic
+            || a->style->underline != b->style->underline
+            || a->style->double_underline != b->style->double_underline
+            || a->style->strikethrough != b->style->strikethrough
+            || a->style->reverse != b->style->reverse
+            || a->style->dim != b->style->dim
+            || a->style->blink != b->style->blink
+            || a->style->text_case != b->style->text_case
+            || a->style->font_hint != b->style->font_hint
+            || a->style->font_index != b->style->font_index
+            || a->style->fg_palette_ix != b->style->fg_palette_ix
+            || a->style->bg_palette_ix != b->style->bg_palette_ix
+            || a->style->fg_rgb != b->style->fg_rgb
+            || a->style->bg_rgb != b->style->bg_rgb
+            || a->style->font_size != b->style->font_size) {
+            return false;
+        }
+    }
     if (a->grapheme_len > 0
         && memcmp(a->grapheme, b->grapheme, a->grapheme_len) != 0) {
         return false;
@@ -283,6 +303,12 @@ typedef struct n00b_composite_entry_t {
     int32_t       clip_h;
 } n00b_composite_entry_t;
 
+typedef struct n00b_composite_style_pool_t {
+    n00b_text_style_t **items;
+    n00b_isize_t        count;
+    n00b_isize_t        capacity;
+} n00b_composite_style_pool_t;
+
 // ====================================================================
 // Compositing helpers (from display/render/composite.h)
 // ====================================================================
@@ -296,7 +322,8 @@ n00b_composite_commands_to_grid(const n00b_composite_entry_t *entries,
                                  int32_t                       cell_px_w,
                                  int32_t                       cell_px_h,
                                  n00b_text_style_t            *default_style,
-                                 n00b_render_cap_t             caps);
+                                 n00b_render_cap_t             caps,
+                                 n00b_composite_style_pool_t  *style_pool);
 
 // ====================================================================
 // Renderer vtable (from display/render/backend.h)

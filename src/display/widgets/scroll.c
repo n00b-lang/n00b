@@ -151,6 +151,41 @@ scroll_measure_content(n00b_plane_t *content,
 }
 
 static void
+scroll_measure_content_for_width(n00b_plane_t *content,
+                                 int32_t       measure_width,
+                                 int32_t      *pref_w,
+                                 int32_t      *pref_h,
+                                 int32_t      *min_w,
+                                 int32_t      *min_h)
+{
+    int32_t     saved_width;
+    int32_t     saved_height;
+    n00b_rect_t saved_bounds;
+
+    if (!content || measure_width <= 0 || !content->widget_vtable) {
+        scroll_measure_content(content, pref_w, pref_h, min_w, min_h);
+        return;
+    }
+
+    saved_width  = content->width;
+    saved_height = content->height;
+    saved_bounds = content->bounds;
+
+    content->width        = measure_width;
+    content->bounds.width = measure_width;
+    if (content->bounds.height <= 0) {
+        content->bounds.height = saved_bounds.height > 0 ? saved_bounds.height
+                                                         : scroll_max_i32(saved_height, 1);
+    }
+
+    n00b_widget_measure(content, pref_w, pref_h, min_w, min_h);
+
+    content->width  = saved_width;
+    content->height = saved_height;
+    content->bounds = saved_bounds;
+}
+
+static void
 scroll_release_capture_if_owned(n00b_plane_t *plane)
 {
     if (plane && plane->canvas
@@ -452,64 +487,92 @@ static void
 scroll_layout_content(n00b_plane_t *plane, n00b_scroll_impl_t *impl, n00b_rect_t bounds)
 {
     n00b_scroll_t *scroll;
-    int32_t content_pref_w = 1;
-    int32_t content_pref_h = 1;
-    int32_t content_min_w = 1;
-    int32_t content_min_h = 1;
+    int32_t content_pref_w;
+    int32_t content_pref_h;
+    int32_t content_min_w;
+    int32_t content_min_h;
     n00b_rect_t viewport_bounds;
     n00b_rect_t child_bounds;
+    bool        constrain_width;
+    int32_t     measure_width;
 
     if (!plane || !impl) {
         return;
     }
 
     scroll = &impl->public_state;
+    constrain_width = scroll->content
+                   && !scroll_axis_enabled(scroll, N00B_SCROLL_AXIS_HORIZONTAL);
+    measure_width   = constrain_width ? scroll_max_i32(bounds.width, 1) : 0;
 
-    if (scroll->content) {
-        scroll_measure_content(scroll->content,
-                               &content_pref_w,
-                               &content_pref_h,
-                               &content_min_w,
-                               &content_min_h);
-    }
+    for (int pass = 0; pass < 3; pass++) {
+        content_pref_w = 1;
+        content_pref_h = 1;
+        content_min_w  = 1;
+        content_min_h  = 1;
 
-    content_pref_w = scroll_max_i32(content_pref_w, 1);
-    content_pref_h = scroll_max_i32(content_pref_h, 1);
-    content_min_w = scroll_max_i32(content_min_w, 1);
-    content_min_h = scroll_max_i32(content_min_h, 1);
-    (void)content_min_w;
-    (void)content_min_h;
+        if (scroll->content) {
+            if (constrain_width) {
+                scroll_measure_content_for_width(scroll->content,
+                                                 measure_width,
+                                                 &content_pref_w,
+                                                 &content_pref_h,
+                                                 &content_min_w,
+                                                 &content_min_h);
+            }
+            else {
+                scroll_measure_content(scroll->content,
+                                       &content_pref_w,
+                                       &content_pref_h,
+                                       &content_min_w,
+                                       &content_min_h);
+            }
+        }
 
-    if (scroll_axis_enabled(scroll, N00B_SCROLL_AXIS_HORIZONTAL)) {
-        scroll->content_width = scroll_max_i32(content_pref_w, bounds.width);
-    }
-    else {
-        scroll->content_width = bounds.width;
-    }
+        content_pref_w = scroll_max_i32(content_pref_w, 1);
+        content_pref_h = scroll_max_i32(content_pref_h, 1);
+        content_min_w  = scroll_max_i32(content_min_w, 1);
+        content_min_h  = scroll_max_i32(content_min_h, 1);
+        (void)content_min_w;
+        (void)content_min_h;
 
-    if (scroll_axis_enabled(scroll, N00B_SCROLL_AXIS_VERTICAL)) {
-        scroll->content_height = scroll_max_i32(content_pref_h, bounds.height);
-    }
-    else {
-        scroll->content_height = bounds.height;
-    }
+        if (scroll_axis_enabled(scroll, N00B_SCROLL_AXIS_HORIZONTAL)) {
+            scroll->content_width = scroll_max_i32(content_pref_w, bounds.width);
+        }
+        else {
+            scroll->content_width = scroll_max_i32(measure_width, 1);
+        }
 
-    scroll_resolve_viewport(scroll, bounds.width, bounds.height);
+        if (scroll_axis_enabled(scroll, N00B_SCROLL_AXIS_VERTICAL)) {
+            scroll->content_height = scroll_max_i32(content_pref_h, bounds.height);
+        }
+        else {
+            scroll->content_height = bounds.height;
+        }
 
-    if (scroll_axis_enabled(scroll, N00B_SCROLL_AXIS_HORIZONTAL)) {
-        scroll->content_width = scroll_max_i32(scroll->content_width,
-                                               scroll->viewport_width);
-    }
-    else {
-        scroll->content_width = scroll->viewport_width;
-    }
+        scroll_resolve_viewport(scroll, bounds.width, bounds.height);
 
-    if (scroll_axis_enabled(scroll, N00B_SCROLL_AXIS_VERTICAL)) {
-        scroll->content_height = scroll_max_i32(scroll->content_height,
-                                                scroll->viewport_height);
-    }
-    else {
-        scroll->content_height = scroll->viewport_height;
+        if (scroll_axis_enabled(scroll, N00B_SCROLL_AXIS_HORIZONTAL)) {
+            scroll->content_width = scroll_max_i32(scroll->content_width,
+                                                   scroll->viewport_width);
+        }
+        else {
+            scroll->content_width = scroll->viewport_width;
+        }
+
+        if (scroll_axis_enabled(scroll, N00B_SCROLL_AXIS_VERTICAL)) {
+            scroll->content_height = scroll_max_i32(scroll->content_height,
+                                                    scroll->viewport_height);
+        }
+        else {
+            scroll->content_height = scroll->viewport_height;
+        }
+
+        if (!constrain_width || scroll->viewport_width == measure_width) {
+            break;
+        }
+
+        measure_width = scroll->viewport_width;
     }
 
     scroll_clamp_offsets(scroll);
@@ -740,6 +803,7 @@ scroll_measure(n00b_plane_t *plane, void *data,
     int32_t default_viewport_h;
     int32_t cell_w;
     int32_t line_h;
+    int32_t measure_width = 0;
 
     if (!scroll) {
         *pref_w = *pref_h = *min_w = *min_h = 1;
@@ -747,11 +811,31 @@ scroll_measure(n00b_plane_t *plane, void *data,
     }
 
     if (scroll->content) {
-        scroll_measure_content(scroll->content,
-                               &content_pref_w,
-                               &content_pref_h,
-                               &content_min_w,
-                               &content_min_h);
+        if (!scroll_axis_enabled(scroll, N00B_SCROLL_AXIS_HORIZONTAL) && plane) {
+            measure_width = plane->width > 0 ? plane->width : plane->bounds.width;
+            if (measure_width > 0
+                && scroll_axis_enabled(scroll, N00B_SCROLL_AXIS_VERTICAL)
+                && scroll->scrollbar_mode == N00B_SCROLLBAR_ALWAYS) {
+                measure_width -= scroll->scrollbar_thickness_px;
+            }
+            measure_width = scroll_max_i32(measure_width, 1);
+        }
+
+        if (measure_width > 0) {
+            scroll_measure_content_for_width(scroll->content,
+                                             measure_width,
+                                             &content_pref_w,
+                                             &content_pref_h,
+                                             &content_min_w,
+                                             &content_min_h);
+        }
+        else {
+            scroll_measure_content(scroll->content,
+                                   &content_pref_w,
+                                   &content_pref_h,
+                                   &content_min_w,
+                                   &content_min_h);
+        }
     }
 
     content_pref_w = scroll_max_i32(content_pref_w, 1);

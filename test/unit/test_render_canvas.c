@@ -433,6 +433,7 @@ test_composite_honors_string_style_ranges(void)
     n00b_plane_t *plane = n00b_new_kargs(n00b_plane_t, plane);
     n00b_plane_t *planes[] = { plane };
     n00b_array_t(n00b_composite_entry_t) entries;
+    n00b_composite_style_pool_t style_pool = {};
     n00b_text_style_t default_style = {};
     n00b_text_style_t base_style = {
         .font_index = -1,
@@ -467,7 +468,8 @@ test_composite_honors_string_style_ranges(void)
                                     1,
                                     1,
                                     &default_style,
-                                    N00B_RCAP_UNICODE);
+                                    N00B_RCAP_UNICODE,
+                                    &style_pool);
 
     assert(frame[0].style != nullptr);
     assert(frame[1].style != nullptr);
@@ -476,9 +478,132 @@ test_composite_honors_string_style_ranges(void)
     assert(frame[1].style->fg_palette_ix == N00B_PAL_SELECTION_FG);
     assert(frame[1].style->bg_palette_ix == N00B_PAL_SELECTION_BG);
 
+    n00b_composite_style_pool_destroy(&style_pool);
     n00b_array_free(entries);
     n00b_plane_destroy(plane);
     printf("  [PASS] composite honors string style ranges\n");
+}
+
+static void
+test_composite_equal_cells_ignore_style_pointer_identity(void)
+{
+    n00b_plane_t *plane = n00b_new_kargs(n00b_plane_t, plane);
+    n00b_plane_t *planes[] = { plane };
+    n00b_array_t(n00b_composite_entry_t) entries;
+    n00b_composite_style_pool_t pool_a = {};
+    n00b_composite_style_pool_t pool_b = {};
+    n00b_text_style_t default_style = {};
+    n00b_text_style_t base_style = {
+        .font_index    = -1,
+        .fg_palette_ix = -1,
+        .bg_palette_ix = -1,
+        .fg_rgb        = n00b_color_make(0x112233),
+    };
+    n00b_text_style_t accent_style = {
+        .font_index    = -1,
+        .fg_palette_ix = -1,
+        .bg_palette_ix = -1,
+        .fg_rgb        = n00b_color_make(0x99aa55),
+    };
+    n00b_string_t *text = n00b_string_from_cstr("AB");
+    n00b_rcell_t frame_a[2] = {};
+    n00b_rcell_t frame_b[2] = {};
+
+    plane->width = 2;
+    plane->height = 1;
+
+    text = n00b_str_set_base_style(text, &base_style);
+    text = n00b_str_add_style(text,
+                              &accent_style,
+                              1,
+                              n00b_option_set(size_t, 2));
+    n00b_plane_draw_text(plane, 0, 0, text);
+
+    entries = n00b_composite_flatten(planes, 1, 1, 1);
+    n00b_composite_commands_to_grid(entries.data,
+                                    (n00b_isize_t)entries.len,
+                                    frame_a,
+                                    1,
+                                    2,
+                                    1,
+                                    1,
+                                    &default_style,
+                                    N00B_RCAP_UNICODE,
+                                    &pool_a);
+    n00b_composite_commands_to_grid(entries.data,
+                                    (n00b_isize_t)entries.len,
+                                    frame_b,
+                                    1,
+                                    2,
+                                    1,
+                                    1,
+                                    &default_style,
+                                    N00B_RCAP_UNICODE,
+                                    &pool_b);
+
+    assert(frame_a[0].style != nullptr);
+    assert(frame_b[0].style != nullptr);
+    assert(frame_a[0].style != frame_b[0].style);
+    assert(frame_a[1].style != nullptr);
+    assert(frame_b[1].style != nullptr);
+    assert(frame_a[1].style != frame_b[1].style);
+    assert(n00b_rcell_equal(&frame_a[0], &frame_b[0]));
+    assert(n00b_rcell_equal(&frame_a[1], &frame_b[1]));
+
+    n00b_composite_style_pool_destroy(&pool_a);
+    n00b_composite_style_pool_destroy(&pool_b);
+    n00b_array_free(entries);
+    n00b_plane_destroy(plane);
+    printf("  [PASS] composite equal cells ignore style pointer identity\n");
+}
+
+static void
+test_stream_backend_style_pool_does_not_accumulate_across_frames(void)
+{
+    n00b_canvas_t *canvas = n00b_new_kargs(n00b_canvas_t, canvas,
+                                           .vtable = &n00b_renderer_stream);
+    n00b_text_style_t base_style = {
+        .font_index    = -1,
+        .fg_palette_ix = -1,
+        .bg_palette_ix = -1,
+        .fg_rgb        = n00b_color_make(0x112233),
+    };
+    n00b_text_style_t accent_style = {
+        .font_index    = -1,
+        .fg_palette_ix = -1,
+        .bg_palette_ix = -1,
+        .fg_rgb        = n00b_color_make(0x99aa55),
+    };
+    n00b_string_t *text = n00b_string_from_cstr("AB");
+    n00b_plane_t *plane = n00b_new_kargs(n00b_plane_t, plane);
+    size_t first_count;
+    size_t second_count;
+
+    n00b_stream_backend_set_size(canvas->backend_ctx, 1, 2);
+    n00b_canvas_resize(canvas, 1, 2);
+
+    plane->width = 2;
+    plane->height = 1;
+    text = n00b_str_set_base_style(text, &base_style);
+    text = n00b_str_add_style(text,
+                              &accent_style,
+                              1,
+                              n00b_option_set(size_t, 2));
+    n00b_plane_draw_text(plane, 0, 0, text);
+    n00b_canvas_add_plane(canvas, plane);
+
+    n00b_canvas_render(canvas);
+    first_count = n00b_stream_backend_get_style_pool_count(canvas->backend_ctx);
+    assert(first_count > 0);
+
+    n00b_canvas_invalidate(canvas);
+    n00b_canvas_render(canvas);
+    second_count = n00b_stream_backend_get_style_pool_count(canvas->backend_ctx);
+    assert(second_count == first_count);
+
+    n00b_plane_destroy(plane);
+    n00b_canvas_destroy(canvas);
+    printf("  [PASS] stream backend style pool does not accumulate across frames\n");
 }
 
 static void
@@ -646,6 +771,7 @@ test_composite_commands_quantize_partial_cells(void)
     n00b_plane_t *planes[] = { plane };
     n00b_array_t(n00b_composite_entry_t) entries =
         n00b_composite_flatten(planes, 1, 2, 2);
+    n00b_composite_style_pool_t style_pool = {};
 
     n00b_rcell_t frame[24];
     memset(frame, 0, sizeof(frame));
@@ -659,11 +785,13 @@ test_composite_commands_quantize_partial_cells(void)
                                     2,
                                     2,
                                     &default_style,
-                                    N00B_RCAP_NONE);
+                                    N00B_RCAP_NONE,
+                                    &style_pool);
 
     assert(frame[2 * 4].grapheme[0] == '#');
     assert(frame[3 * 4].grapheme[0] == '#');
 
+    n00b_composite_style_pool_destroy(&style_pool);
     n00b_array_free(entries);
     n00b_plane_destroy(plane);
     printf("  [PASS] composite commands quantize partial cells\n");
@@ -794,6 +922,8 @@ main(int argc, char **argv)
     test_composite_flatten();
     test_canvas_widget_state_styling();
     test_composite_honors_string_style_ranges();
+    test_composite_equal_cells_ignore_style_pointer_identity();
+    test_stream_backend_style_pool_does_not_accumulate_across_frames();
     test_canvas_nested_planes();
     test_canvas_nested_z_order();
     test_canvas_child_clipping();

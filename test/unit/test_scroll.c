@@ -16,6 +16,7 @@
 #include "display/render/plane.h"
 #include "display/widget.h"
 #include "display/widgets/scroll.h"
+#include "display/widgets/text.h"
 #include "internal/display/event_dispatch.h"
 
 extern void n00b_stream_backend_set_size(void        *ctx,
@@ -950,6 +951,42 @@ test_scroll_scrolled_content_mouse_routes_to_visible_child(void)
     printf("  [PASS] scroll scrolled content mouse routes to visible child\n");
 }
 
+static void
+test_scroll_wrapped_text_uses_viewport_width_for_content_height(void)
+{
+    n00b_canvas_t *canvas = make_stream_canvas(20, 80);
+    n00b_plane_t *text = n00b_text_new(
+        n00b_string_from_cstr("aa bb cc dd ee ff gg hh ii jj kk ll"),
+        .wrap = true,
+        .canvas = canvas);
+    n00b_plane_t *scroll = n00b_scroll_new(text,
+                                           .axes = N00B_SCROLL_AXIS_VERTICAL,
+                                           .scrollbar_mode = N00B_SCROLLBAR_AUTO,
+                                           .canvas = canvas);
+    n00b_scroll_t *state = (n00b_scroll_t *)scroll->widget_data;
+
+    n00b_canvas_add_plane(canvas, scroll);
+    n00b_widget_layout(scroll,
+                       (n00b_rect_t){
+                           .x      = 0,
+                           .y      = 0,
+                           .width  = 4,
+                           .height = 3,
+                       });
+
+    assert(n00b_text_get_wrapped_line_count(text) > state->viewport_height);
+    assert(state->content_height > state->viewport_height);
+    assert(n00b_scroll_can_scroll_down(scroll));
+
+    n00b_scroll_to_bottom(scroll);
+    assert(n00b_scroll_get_offset_y(scroll) > 0);
+
+    assert(n00b_canvas_remove_plane(canvas, scroll));
+    destroy_plane_tree(scroll);
+    n00b_canvas_destroy(canvas);
+    printf("  [PASS] scroll wrapped text uses viewport width for content height\n");
+}
+
 int
 main(int argc, char **argv)
 {
@@ -970,6 +1007,7 @@ main(int argc, char **argv)
     test_scroll_detach_during_thumb_drag_clears_capture();
     test_scroll_horizontal_thumb_drag_and_track_click();
     test_scroll_scrolled_content_mouse_routes_to_visible_child();
+    test_scroll_wrapped_text_uses_viewport_width_for_content_height();
 
     printf("All scroll widget tests passed.\n");
     n00b_shutdown();

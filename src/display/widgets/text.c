@@ -272,7 +272,9 @@ text_build_grapheme_boundaries(n00b_text_line_t *line)
 }
 
 static bool
-text_reserve_lines(n00b_text_impl_t *impl, n00b_isize_t needed)
+text_reserve_lines(n00b_text_impl_t *impl,
+                   n00b_isize_t      current_count,
+                   n00b_isize_t      needed)
 {
     n00b_text_line_t *new_lines;
     n00b_isize_t      new_cap;
@@ -291,10 +293,10 @@ text_reserve_lines(n00b_text_impl_t *impl, n00b_isize_t needed)
     }
 
     new_lines = n00b_alloc_array(n00b_text_line_t, new_cap);
-    if (impl->lines && impl->public_state.wrapped_line_count > 0) {
+    if (impl->lines && current_count > 0) {
         memcpy(new_lines,
                impl->lines,
-               (size_t)impl->public_state.wrapped_line_count * sizeof(n00b_text_line_t));
+               (size_t)current_count * sizeof(n00b_text_line_t));
         n00b_free(impl->lines);
     }
     else if (impl->lines) {
@@ -318,7 +320,7 @@ text_append_line(n00b_text_impl_t *impl,
         return;
     }
 
-    if (!text_reserve_lines(impl, *count + 1)) {
+    if (!text_reserve_lines(impl, *count, *count + 1)) {
         return;
     }
 
@@ -328,6 +330,22 @@ text_append_line(n00b_text_impl_t *impl,
     line->indent_cols = indent_cols;
     text_build_grapheme_boundaries(line);
     (*count)++;
+}
+
+static int32_t
+text_cached_wrap_cols_for_width(n00b_plane_t *plane,
+                                n00b_text_impl_t *impl,
+                                int32_t       content_width_px)
+{
+    if (!impl || !impl->public_state.wrap) {
+        return 0;
+    }
+
+    if (content_width_px <= 0) {
+        content_width_px = text_fallback_width_px(plane, 80);
+    }
+
+    return text_wrap_cols_for_width(plane, content_width_px);
 }
 
 static void
@@ -351,12 +369,7 @@ text_build_cache(n00b_plane_t *plane, n00b_text_impl_t *impl, int32_t content_wi
     }
 
     impl->cached_content_width_px = content_width_px;
-    if (state->wrap) {
-        int32_t effective_width_px = content_width_px > 0
-                                   ? content_width_px
-                                   : text_fallback_width_px(plane, 80);
-        wrap_cols = text_wrap_cols_for_width(plane, effective_width_px);
-    }
+    wrap_cols = text_cached_wrap_cols_for_width(plane, impl, content_width_px);
 
     state->cached_wrap_cols = wrap_cols;
 
@@ -429,9 +442,14 @@ text_ensure_cache_for_width(n00b_plane_t *plane, n00b_text_impl_t *impl, int32_t
         return;
     }
 
+    int32_t wrap_cols = text_cached_wrap_cols_for_width(plane,
+                                                        impl,
+                                                        content_width_px);
+
     if (impl->lines
         && impl->public_state.wrapped_line_count > 0
-        && impl->cached_content_width_px == content_width_px) {
+        && impl->cached_content_width_px == content_width_px
+        && impl->public_state.cached_wrap_cols == wrap_cols) {
         return;
     }
 
@@ -687,13 +705,47 @@ text_destroy(n00b_plane_t *plane, void *data)
 }
 
 static void
+text_cancel_mouse_capture(n00b_plane_t *plane, void *data)
+{
+    n00b_text_impl_t *impl = data;
+
+    (void)plane;
+
+    if (!impl) {
+        return;
+    }
+
+    impl->dragging_selection = false;
+}
+
+static n00b_text_style_t
+text_selection_overlay_style(void)
+{
+    return (n00b_text_style_t){
+        .bold             = N00B_TRI_UNSPECIFIED,
+        .italic           = N00B_TRI_UNSPECIFIED,
+        .underline        = N00B_TRI_UNSPECIFIED,
+        .double_underline = N00B_TRI_UNSPECIFIED,
+        .strikethrough    = N00B_TRI_UNSPECIFIED,
+        .reverse          = N00B_TRI_UNSPECIFIED,
+        .dim              = N00B_TRI_UNSPECIFIED,
+        .blink            = N00B_TRI_UNSPECIFIED,
+        .text_case        = N00B_TEXT_CASE_NONE,
+        .font_hint        = N00B_FONT_DEFAULT,
+        .font_index       = -1,
+        .fg_palette_ix    = N00B_PAL_SELECTION_FG,
+        .bg_palette_ix    = N00B_PAL_SELECTION_BG,
+        .fg_rgb           = n00b_theme_resolve_color(N00B_PAL_SELECTION_FG),
+        .bg_rgb           = n00b_theme_resolve_color(N00B_PAL_SELECTION_BG),
+        .font_size        = 0,
+    };
+}
+
+static void
 text_render(n00b_plane_t *plane, void *data)
 {
     n00b_text_impl_t  *impl = data;
-    n00b_text_style_t  selection_style = {
-        .fg_palette_ix = N00B_PAL_SELECTION_FG,
-        .bg_palette_ix = N00B_PAL_SELECTION_BG,
-    };
+    n00b_text_style_t  selection_style = text_selection_overlay_style();
     int32_t            content_w;
     int32_t            content_h;
     int32_t            line_h;
@@ -824,8 +876,7 @@ text_handle_event(n00b_plane_t *plane, void *data, const n00b_event_t *event)
             && (event->key.mods & N00B_MOD_CTRL)
             && impl->public_state.selectable
             && n00b_text_has_selection(plane)) {
-            (void)n00b_text_copy_selection(plane);
-            return true;
+            return n00b_text_copy_selection(plane);
         }
 
         return false;
@@ -895,13 +946,14 @@ text_layout(n00b_plane_t *plane, void *data, n00b_rect_t bounds)
 }
 
 const n00b_widget_vtable_t n00b_widget_text = {
-    .kind         = "text",
-    .destroy      = text_destroy,
-    .render       = text_render,
-    .measure      = text_measure,
-    .handle_event = text_handle_event,
-    .can_focus    = text_can_focus,
-    .layout       = text_layout,
+    .kind                 = "text",
+    .destroy              = text_destroy,
+    .render               = text_render,
+    .measure              = text_measure,
+    .handle_event         = text_handle_event,
+    .can_focus            = text_can_focus,
+    .cancel_mouse_capture = text_cancel_mouse_capture,
+    .layout               = text_layout,
 };
 
 n00b_plane_t *

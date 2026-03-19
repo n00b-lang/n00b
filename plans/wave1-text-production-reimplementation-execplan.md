@@ -8,7 +8,7 @@ This plan explicitly builds on `plans/notes/widget-port-priority.md`, `plans/not
 
 ## Purpose / Big Picture
 
-The goal is to land the final production Wave 1 widget in Athens: a selectable `text` widget that renders wrapped multi-line rich text, supports alignment and hanging indent, preserves backend-neutral rendering, and can copy the current visual selection through an Athens clipboard abstraction instead of hard-coding terminal escape sequences inside widget code. After this change, an Athens application will be able to show help panels, article-style content, logs, release notes, and tab pages as real wrapped text instead of stacking many labels or inventing one-off text views. A contributor or reviewer should be able to prove the result in two ways: run a dedicated `text` unit test that exercises wrapping, selection extraction, clipboard copy, and `scroll + text` integration on the stream backend, and run `widget_demo --widget text` to see a long selectable paragraph inside a real scroll viewport where dragging highlights visual lines and `Ctrl+C` copies the current selection on interactive backends without quitting the event loop.
+The goal is to land the final production Wave 1 widget in Athens: a selectable `text` widget that renders wrapped multi-line rich text, supports alignment and hanging indent, preserves backend-neutral rendering, and can copy the current visual selection through an Athens clipboard abstraction instead of hard-coding terminal escape sequences inside widget code. After this change, an Athens application will be able to show help panels, article-style content, logs, release notes, and tab pages as real wrapped text instead of stacking many labels or inventing one-off text views. A contributor or reviewer should be able to prove the result in two ways: run a dedicated `text` unit test that exercises wrapping, selection extraction, clipboard copy, and `scroll + text` integration on the stream backend, and run `widget_demo --widget text` to see a long selectable paragraph inside a real scroll viewport where dragging highlights visual lines and `Ctrl+C` copies the current selection on clipboard-capable backends while still falling back to quit when copy is unavailable.
 
 ## Progress
 
@@ -75,8 +75,8 @@ The goal is to land the final production Wave 1 widget in Athens: a selectable `
   Rationale: `text` needs `Ctrl+C` for copy, but the broader TUI still needs a quit fallback when no widget uses that shortcut. Dispatch-first then quit-fallback preserves both behaviors without introducing a new global keybinding.
   Date/Author: 2026-03-17 / Codex.
 
-- Decision: Wrapped-text measurement uses the current known content width when one exists and otherwise falls back to an 80-column natural-width wrap.
-  Rationale: the vtable offers no available-width input, so Athens needs a deterministic fallback. Eighty columns matches the prototype's de facto fallback behavior and keeps `measure` stable instead of oscillating with later layout passes.
+- Decision: Wrapped-text measurement uses the current known content width when one exists and otherwise falls back to an 80-column provisional wrap until layout refreshes at the real width.
+  Rationale: the vtable offers no available-width input, so Athens needs a deterministic pre-layout fallback. The fallback keeps early measurement stable, but container/layout passes still have to rebuild the cache once the actual viewport width is known.
   Date/Author: 2026-03-17 / Codex.
 
 - Decision: Wave 1 clipboard support must be fully testable on the stream backend even though the stream backend has no real system clipboard.
@@ -125,9 +125,9 @@ The third edit is the public widget surface in `include/display/widgets/text.h` 
 
 The cache pipeline should reuse Athens Unicode helpers instead of reimplementing text segmentation. Split the source string into hard lines with `n00b_unicode_str_split_lines()`. When wrapping is enabled, wrap each hard line with `n00b_unicode_str_wrap()` using the current wrap width in text columns and the configured hanging indent. For each resulting visual line, cache the rendered substring, the display-column width, the continuation indent columns, and an array of grapheme-boundary byte offsets computed with `n00b_unicode_grapheme_iter()`. That cache is then reused by render, hit testing, selection extraction, and wrapped-line counting.
 
-Rendering should stay fully Athens-native. `text_render()` clears the plane, resolves the current content width, ensures the cache is valid, and draws each visible line with `n00b_plane_draw_text()`. Alignment is applied inside the usable width for that line: continuation lines reserve `hang_indent_cols * cell_px_w` pixels on the left, then left/center/right alignment is computed inside the remaining width and added to the indent offset. When part of a line is selected, build a styled copy of that cached line substring with `n00b_str_add_style()` over the selected byte range, using `N00B_PAL_SELECTION_BG` and `N00B_PAL_SELECTION_FG` so the existing rich-text styling remains intact under the selection overlay.
+Rendering should stay fully Athens-native. `text_render()` clears the plane, resolves the current content width, ensures the cache is valid, and draws each visible line with `n00b_plane_draw_text()`. Alignment is applied inside the usable width for that line: continuation lines reserve `hang_indent_cols * cell_px_w` pixels on the left, then left/center/right alignment is computed inside the remaining width and added to the indent offset. When part of a line is selected, build a styled copy of that cached line substring with `n00b_str_add_style()` over the selected byte range, using a fully sentinel-initialized overlay whose palette and direct RGB values come from `N00B_PAL_SELECTION_BG` and `N00B_PAL_SELECTION_FG` so the selection overrides inherited direct colors without resetting the inherited font choice.
 
-Selection and copy behavior belong entirely inside `src/display/widgets/text.c`. Mouse press starts a selection if the widget is selectable, captures the mouse on the canvas, and records the anchor caret slot. Mouse drag updates the tail slot even when the pointer leaves the original line bounds, clamping to the nearest legal line and slot. Mouse release finalizes the range, releases mouse capture, and triggers `n00b_text_copy_selection()` only when `copy_on_release` is enabled and the range is non-empty. `Ctrl+C` should attempt a copy whenever the widget is selectable and currently has a non-empty selection, and the event must be reported as consumed even if the active backend returns `false` for clipboard support so the fallback quit path does not terminate the application unexpectedly.
+Selection and copy behavior belong entirely inside `src/display/widgets/text.c`. Mouse press starts a selection if the widget is selectable, captures the mouse on the canvas, and records the anchor caret slot. Mouse drag updates the tail slot even when the pointer leaves the original line bounds, clamping to the nearest legal line and slot. Mouse release finalizes the range, releases mouse capture, and triggers `n00b_text_copy_selection()` only when `copy_on_release` is enabled and the range is non-empty. `Ctrl+C` should attempt a copy whenever the widget is selectable and currently has a non-empty selection, but it should report the key as consumed only when the backend copy succeeds so the fallback quit path still works on backends without clipboard support.
 
 The fourth edit is the test suite. Add `test/unit/test_text.c` in the same style as `test_scroll.c`, `test_tabs.c`, and `test_label.c`, using stream-backend canvases for deterministic layout and clipboard assertions. Also update `test/unit/test_display_event_dispatch.c` so it verifies the new "dispatch first, quit only if unhandled" `Ctrl+C` rule. The text test file should prove observable behavior: wrapped line counts at different widths, hanging-indent positioning, selection extraction across wrapped lines, `Ctrl+C` copy via the stream clipboard helper, and at least one `scroll + text` smoke scenario showing that selection does not reset scroll offsets or crash after a scroll operation.
 
@@ -251,7 +251,7 @@ Run all commands from `/home/baron/crash-override/n00b-tui/n00b-athens`.
    - All wrong-kind or null-plane accessors are harmless: setters are no-ops, booleans return `false`, integers return `0`, and pointer getters return `nullptr`.
    - `n00b_text_get_selection()` returns a newly allocated UTF-8 string representing the current visual selection, or `nullptr` when there is no non-empty selection.
    - `n00b_text_copy_selection()` returns `false` when there is no selection or no backend clipboard support. It never emits terminal escape sequences directly from widget code.
-   - `n00b_text_get_wrapped_line_count()` must ensure the cache exists before returning, using the current content width if known and the 80-column fallback otherwise.
+   - `n00b_text_get_wrapped_line_count()` must ensure the cache exists before returning, using the current content width if known and the 80-column fallback only as a provisional pre-layout width.
 
 5. Create `src/display/widgets/text.c`. Keep cache records and geometry helpers file-local. The file should define `text_destroy`, `text_render`, `text_measure`, `text_handle_event`, `text_can_focus`, and `text_layout`, plus private helpers for cache invalidation, hard-line wrapping, grapheme-boundary caching, selection normalization, line/slot hit testing, selection-style overlay, and immediate relayout.
 
@@ -296,7 +296,7 @@ Run all commands from `/home/baron/crash-override/n00b-tui/n00b-athens`.
 
    Measurement rules:
 
-   - `wrap == true`: if `plane->bounds.width > 0` or `plane->width > 0`, derive `measure_cols` from that current width; otherwise use 80 columns. Build the cache for `measure_cols`.
+   - `wrap == true`: if `plane->bounds.width > 0` or `plane->width > 0`, derive `measure_cols` from that current width; otherwise use 80 columns as a provisional fallback until layout refreshes the cache at the real width. Build the cache for `measure_cols`.
    - `wrap == false`: build the cache from hard lines only.
    - `pref_w` is the maximum rendered line width in pixels, including hanging-indent offset for continuation lines, with a floor of `1`.
    - `pref_h` is `max(wrapped_line_count, 1) * line_height_px`.
@@ -324,7 +324,7 @@ Run all commands from `/home/baron/crash-override/n00b-tui/n00b-athens`.
    - Mouse press starts selection, records the anchor slot, captures the mouse, and consumes the event.
    - Mouse drag updates the tail slot while capture is held and consumes the event.
    - Mouse release updates the tail slot one last time, releases capture, optionally calls `n00b_text_copy_selection()` when `copy_on_release == true` and the range is non-empty, and consumes the event.
-   - `Ctrl+C` consumes the key whenever the widget is selectable and has a non-empty selection. It should call `n00b_text_copy_selection()` but return `true` even when the backend copy reports failure.
+   - `Ctrl+C` attempts `n00b_text_copy_selection()` whenever the widget is selectable and has a non-empty selection. It returns the backend copy result so clipboard-capable backends consume the key and unsupported backends still fall back to the normal quit path.
 
 7. Create `test/unit/test_text.c` and update `test/unit/test_display_event_dispatch.c`.
 
@@ -444,8 +444,8 @@ Expected stream-backend clipboard assertion inside `test_text.c`:
 
 Expected manual TUI behavior after the final fix:
 
-    - `Ctrl+C` with a selection leaves the demo running and copies text.
-    - `Ctrl+C` with no selection exits the demo.
+    - `Ctrl+C` with a selection leaves the demo running and copies text on clipboard-capable backends.
+    - `Ctrl+C` with no selection, or with no backend clipboard support, exits the demo.
 
 ## Interfaces and Dependencies
 
@@ -501,3 +501,4 @@ The implementation depends on existing Athens modules only:
 - 2026-03-17: Initial ExecPlan added for the Wave 1 production `text` reimplementation after confirming that `text` is the final missing Wave 1 widget in `docs/widgets.md`. The plan resolves the missing clipboard/runtime seam, the `Ctrl+C` dispatch order change, the stream-backend clipboard test strategy, and the width-sensitive measurement fallback that the design dossier did not fully pin down.
 - 2026-03-17: Initial ExecPlan added for the Wave 1 production `text` reimplementation after confirming that `text` is the final missing Wave 1 widget in `docs/widgets.md`. The plan resolves the missing clipboard/runtime seam, the `Ctrl+C` dispatch order change, the stream-backend clipboard test strategy, and the width-sensitive measurement fallback that the design dossier did not fully pin down.
 - 2026-03-17: Updated after implementation to mark all three execution milestones complete, record the style-preserving wrapped-line cache decision, and embed the exact reconfigure/build/test/demo commands and results from the finished run so the plan can be resumed or audited from the repository alone.
+- 2026-03-20: Updated during the review-remediation follow-up so the document no longer claims that `Ctrl+C` should be consumed when backend copy fails or that the 80-column fallback is the final wrapped-measure contract after layout assigns a real width.

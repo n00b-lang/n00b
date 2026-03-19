@@ -240,6 +240,7 @@ typedef struct {
     n00b_rcell_t     *comp_grid;
     n00b_isize_t      comp_grid_rows;
     n00b_isize_t      comp_grid_cols;
+    n00b_composite_style_pool_t style_pool;
 
     // Plane blit cache: skip re-blitting planes whose content hasn't changed.
     // Open-addressing hash table keyed on n00b_plane_t pointer.
@@ -1882,6 +1883,7 @@ nc_destroy(void *vctx)
         n00b_free(ctx->comp_grid);
         ctx->comp_grid = nullptr;
     }
+    n00b_composite_style_pool_destroy(&ctx->style_pool);
 
 #if N00B_HAVE_FREETYPE
     glyph_cache_destroy(ctx->glyph_cache);
@@ -2253,6 +2255,7 @@ nc_render_planes(void                         *vctx,
             ctx->comp_grid_cols = cell_cols;
         }
 
+        n00b_composite_style_pool_clear(&ctx->style_pool);
         n00b_composite_commands_to_grid(entries,
                                          count,
                                          ctx->comp_grid,
@@ -2261,7 +2264,8 @@ nc_render_planes(void                         *vctx,
                                          (int32_t)cell_px_w,
                                          (int32_t)cell_px_h,
                                          default_style,
-                                         caps);
+                                         caps,
+                                         &ctx->style_pool);
         nc_render_frame(ctx,
                         ctx->comp_grid,
                         cell_rows,

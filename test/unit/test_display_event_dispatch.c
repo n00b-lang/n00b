@@ -12,8 +12,10 @@
 #include "display/widget.h"
 #include "display/widgets/box.h"
 #include "display/widgets/button.h"
+#include "display/widgets/text.h"
 #include "internal/display/event_dispatch.h"
 #include "internal/display/scene_contracts.h"
+#include "text/strings/string_ops.h"
 
 typedef struct {
     int  key_events;
@@ -223,6 +225,122 @@ test_button_border_click_focuses(void)
 }
 
 static void
+test_text_ctrl_c_falls_back_to_stop_when_copy_is_unsupported(void)
+{
+    n00b_canvas_t *canvas = n00b_new_kargs(n00b_canvas_t, canvas,
+                                           .vtable = &n00b_renderer_dumb);
+    n00b_plane_t *text = n00b_text_new(
+        n00b_string_from_cstr("Athens text"),
+        .selectable = true,
+        .copy_on_release = false,
+        .canvas = canvas);
+    n00b_focus_mgr_t *fm;
+    n00b_text_t *state;
+    n00b_event_t ctrl_c = {
+        .type = N00B_EVENT_KEY,
+        .key = {
+            .key  = 'c',
+            .mods = N00B_MOD_CTRL,
+        },
+    };
+    n00b_display_dispatch_result_t r;
+
+    n00b_canvas_resize(canvas, 6, 40);
+    n00b_canvas_add_plane(canvas, text);
+    n00b_widget_layout(text,
+                       (n00b_rect_t){
+                           .x      = 0,
+                           .y      = 0,
+                           .width  = 16,
+                           .height = 2,
+                       });
+
+    state = (n00b_text_t *)text->widget_data;
+    state->selection.active     = true;
+    state->selection.start_line = 0;
+    state->selection.start_col  = 0;
+    state->selection.end_line   = 0;
+    state->selection.end_col    = 6;
+
+    fm = n00b_focus_mgr_new(canvas);
+    assert(n00b_focus_mgr_current(fm) == text);
+
+    r = n00b_display_dispatch_event(canvas, fm, &ctrl_c);
+    assert(r.handled);
+    assert(r.should_stop);
+
+    n00b_focus_mgr_destroy(fm);
+    n00b_canvas_remove_plane(canvas, text);
+    n00b_widget_detach(text);
+    n00b_plane_destroy(text);
+    n00b_canvas_destroy(canvas);
+
+    printf("  [PASS] text ctrl-c falls back to stop when copy is unsupported\n");
+}
+
+static void
+test_text_ctrl_c_does_not_stop_when_copy_succeeds(void)
+{
+    n00b_canvas_t *canvas = n00b_new_kargs(n00b_canvas_t, canvas,
+                                           .vtable = &n00b_renderer_stream);
+    n00b_plane_t *text = n00b_text_new(
+        n00b_string_from_cstr("Athens text"),
+        .selectable = true,
+        .copy_on_release = false,
+        .canvas = canvas);
+    n00b_focus_mgr_t *fm;
+    n00b_text_t *state;
+    n00b_event_t ctrl_c = {
+        .type = N00B_EVENT_KEY,
+        .key = {
+            .key  = 'c',
+            .mods = N00B_MOD_CTRL,
+        },
+    };
+    n00b_display_dispatch_result_t r;
+    n00b_string_t *clipboard;
+    n00b_string_t *expected;
+
+    n00b_stream_backend_set_size(canvas->backend_ctx, 6, 40);
+    n00b_canvas_resize(canvas, 6, 40);
+    n00b_canvas_add_plane(canvas, text);
+    n00b_widget_layout(text,
+                       (n00b_rect_t){
+                           .x      = 0,
+                           .y      = 0,
+                           .width  = 16,
+                           .height = 2,
+                       });
+
+    state = (n00b_text_t *)text->widget_data;
+    state->selection.active     = true;
+    state->selection.start_line = 0;
+    state->selection.start_col  = 0;
+    state->selection.end_line   = 0;
+    state->selection.end_col    = 6;
+
+    fm = n00b_focus_mgr_new(canvas);
+    assert(n00b_focus_mgr_current(fm) == text);
+
+    r = n00b_display_dispatch_event(canvas, fm, &ctrl_c);
+    assert(r.handled);
+    assert(!r.should_stop);
+
+    clipboard = n00b_stream_backend_get_clipboard(canvas->backend_ctx);
+    expected = n00b_string_from_cstr("Athens");
+    assert(clipboard != nullptr);
+    assert(n00b_unicode_str_eq(clipboard, expected));
+
+    n00b_focus_mgr_destroy(fm);
+    n00b_canvas_remove_plane(canvas, text);
+    n00b_widget_detach(text);
+    n00b_plane_destroy(text);
+    n00b_canvas_destroy(canvas);
+
+    printf("  [PASS] text ctrl-c copies without stopping when supported\n");
+}
+
+static void
 test_mouse_dispatch_uses_pixel_coordinates(void)
 {
     n00b_canvas_t *canvas = n00b_new_kargs(n00b_canvas_t, canvas,
@@ -304,6 +422,8 @@ main(int argc, char **argv)
     printf("Running display event-dispatch tests...\n");
     test_event_dispatch_contracts();
     test_button_border_click_focuses();
+    test_text_ctrl_c_falls_back_to_stop_when_copy_is_unsupported();
+    test_text_ctrl_c_does_not_stop_when_copy_succeeds();
     test_mouse_dispatch_uses_pixel_coordinates();
 
     printf("Display event-dispatch tests passed.\n");

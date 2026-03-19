@@ -86,6 +86,7 @@ test_registration(void)
     assert(vt->get_size != NULL);
     assert(vt->render_frame != NULL);
     assert(vt->flush != NULL);
+    assert(vt->clipboard_copy != NULL);
     assert(vt->cursor_set_visible != NULL);
     assert(vt->cursor_move != NULL);
     assert(vt->on_resize != NULL);
@@ -106,6 +107,27 @@ test_init_destroy(void)
 
     n00b_renderer_cocoa.destroy(ctx);
     printf("  [PASS] init/destroy\n");
+}
+
+static void
+test_clipboard_copy(void)
+{
+    if (!has_display()) {
+        printf("  [SKIP] clipboard_copy (headless)\n");
+        return;
+    }
+
+    void *ctx = n00b_renderer_cocoa.init(NULL);
+    assert(ctx != NULL);
+
+    assert(n00b_renderer_cocoa.clipboard_copy(ctx, "Athens", 6));
+    NSString *value = [[NSPasteboard generalPasteboard]
+        stringForType:NSPasteboardTypeString];
+    assert(value != nil);
+    assert([value isEqualToString:@"Athens"]);
+
+    n00b_renderer_cocoa.destroy(ctx);
+    printf("  [PASS] clipboard_copy\n");
 }
 
 static void
@@ -540,6 +562,7 @@ main(int argc, char **argv)
 
     test_registration();
     test_init_destroy();
+    test_clipboard_copy();
     test_capabilities();
     test_get_size();
     test_cell_metrics();

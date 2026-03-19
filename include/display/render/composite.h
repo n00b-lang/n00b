@@ -75,6 +75,20 @@ typedef struct {
     const n00b_box_props_t *box;
 } n00b_entry_info_t;
 
+/**
+ * @brief Per-frame owner for transient merged styles produced during cell composition.
+ *
+ * Cell-grid backends reuse persistent `n00b_rcell_t` buffers across frames, but
+ * styled text composition may need heap-allocated merged styles for a single
+ * render pass. Backends clear this pool before recompositing and destroy it when
+ * the backend shuts down.
+ */
+typedef struct n00b_composite_style_pool_t {
+    n00b_text_style_t **items;
+    n00b_isize_t        count;
+    n00b_isize_t        capacity;
+} n00b_composite_style_pool_t;
+
 // ====================================================================
 // Pipeline functions
 // ====================================================================
@@ -168,6 +182,30 @@ n00b_composite_degrade_cell(n00b_rcell_t     *cell,
                              n00b_render_cap_t caps);
 
 /**
+ * @brief Free all transient styles currently owned by a composition pool.
+ * @param pool Pool to clear in place.
+ */
+extern void
+n00b_composite_style_pool_clear(n00b_composite_style_pool_t *pool);
+
+/**
+ * @brief Clear and release the storage backing a composition pool.
+ * @param pool Pool to destroy in place.
+ */
+extern void
+n00b_composite_style_pool_destroy(n00b_composite_style_pool_t *pool);
+
+/**
+ * @brief Record ownership of a transient style in a composition pool.
+ * @param pool  Pool that should own the style.
+ * @param style Heap-allocated style to track.
+ * @return      The same style pointer for call-site convenience.
+ */
+extern n00b_text_style_t *
+n00b_composite_style_pool_take(n00b_composite_style_pool_t *pool,
+                                n00b_text_style_t           *style);
+
+/**
  * @brief Composite draw commands into a caller-supplied cell grid.
  *
  * Converts pixel-coordinate draw commands from each plane into a
@@ -188,6 +226,7 @@ n00b_composite_degrade_cell(n00b_rcell_t     *cell,
  * @param cell_px_h     Pixels per cell row.
  * @param default_style Default style for empty cells.
  * @param caps          Backend capabilities for degradation.
+ * @param style_pool    Owner for any transient merged styles attached to cells.
  */
 extern void
 n00b_composite_commands_to_grid(const n00b_composite_entry_t *entries,
@@ -198,4 +237,5 @@ n00b_composite_commands_to_grid(const n00b_composite_entry_t *entries,
                                  int32_t                       cell_px_w,
                                  int32_t                       cell_px_h,
                                  n00b_text_style_t            *default_style,
-                                 n00b_render_cap_t             caps);
+                                 n00b_render_cap_t             caps,
+                                 n00b_composite_style_pool_t  *style_pool);

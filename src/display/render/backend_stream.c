@@ -36,6 +36,7 @@ typedef struct {
     n00b_rcell_t *comp_grid;
     n00b_isize_t  comp_grid_rows;
     n00b_isize_t  comp_grid_cols;
+    n00b_composite_style_pool_t style_pool;
 } stream_ctx_t;
 
 #define STREAM_DEFAULT_ROWS 25
@@ -67,6 +68,7 @@ stream_destroy(void *vctx)
         if (ctx->comp_grid) {
             n00b_free(ctx->comp_grid);
         }
+        n00b_composite_style_pool_destroy(&ctx->style_pool);
         if (ctx->clipboard) {
             n00b_free(ctx->clipboard);
         }
@@ -225,10 +227,12 @@ stream_render_planes(void                         *vctx,
         ctx->comp_grid_cols = total_cols;
     }
 
+    n00b_composite_style_pool_clear(&ctx->style_pool);
     n00b_composite_commands_to_grid(entries, count, ctx->comp_grid,
                                      total_rows, total_cols,
                                      1, 1,
-                                     default_style, caps);
+                                     default_style, caps,
+                                     &ctx->style_pool);
 
     stream_render_frame(vctx, ctx->comp_grid, total_rows, total_cols,
                          nullptr);
@@ -282,6 +286,13 @@ n00b_stream_backend_get_length(void *ctx)
 {
     stream_ctx_t *sctx = ctx;
     return sctx->buf_used;
+}
+
+size_t
+n00b_stream_backend_get_style_pool_count(void *ctx)
+{
+    stream_ctx_t *sctx = ctx;
+    return sctx ? (size_t)sctx->style_pool.count : 0;
 }
 
 void

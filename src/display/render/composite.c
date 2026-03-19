@@ -122,6 +122,73 @@ imax32(int32_t a, int32_t b) { return a > b ? a : b; }
 static inline int32_t
 imin32(int32_t a, int32_t b) { return a < b ? a : b; }
 
+static void
+composite_style_pool_grow(n00b_composite_style_pool_t *pool)
+{
+    n00b_isize_t       new_cap = pool->capacity > 0 ? pool->capacity * 2 : 8;
+    n00b_text_style_t **new_items = n00b_alloc_array(n00b_text_style_t *, new_cap);
+
+    if (pool->items && pool->count > 0) {
+        memcpy(new_items,
+               pool->items,
+               (size_t)pool->count * sizeof(n00b_text_style_t *));
+        n00b_free(pool->items);
+    }
+    else if (pool->items) {
+        n00b_free(pool->items);
+    }
+
+    pool->items    = new_items;
+    pool->capacity = new_cap;
+}
+
+void
+n00b_composite_style_pool_clear(n00b_composite_style_pool_t *pool)
+{
+    if (!pool) {
+        return;
+    }
+
+    for (n00b_isize_t i = 0; i < pool->count; i++) {
+        if (pool->items[i]) {
+            n00b_free(pool->items[i]);
+        }
+    }
+
+    pool->count = 0;
+}
+
+void
+n00b_composite_style_pool_destroy(n00b_composite_style_pool_t *pool)
+{
+    if (!pool) {
+        return;
+    }
+
+    n00b_composite_style_pool_clear(pool);
+    if (pool->items) {
+        n00b_free(pool->items);
+        pool->items = nullptr;
+    }
+    pool->capacity = 0;
+}
+
+n00b_text_style_t *
+n00b_composite_style_pool_take(n00b_composite_style_pool_t *pool,
+                                n00b_text_style_t           *style)
+{
+    if (!pool || !style) {
+        return style;
+    }
+
+    if (pool->count >= pool->capacity) {
+        composite_style_pool_grow(pool);
+    }
+
+    pool->items[pool->count++] = style;
+    return style;
+}
+
 static size_t
 text_next_style_boundary(n00b_string_t *text, size_t byte_pos)
 {
@@ -162,7 +229,8 @@ text_next_style_boundary(n00b_string_t *text, size_t byte_pos)
 static n00b_text_style_t *
 text_resolve_effective_style(n00b_string_t      *text,
                              n00b_text_style_t  *fallback_style,
-                             size_t              byte_pos)
+                             size_t              byte_pos,
+                             n00b_composite_style_pool_t *style_pool)
 {
     auto info_opt = n00b_str_get_style_info(text);
 
@@ -174,13 +242,13 @@ text_resolve_effective_style(n00b_string_t      *text,
     n00b_text_style_t *merged;
 
     if (!fallback_style) {
-        return resolved;
+        return n00b_composite_style_pool_take(style_pool, resolved);
     }
 
     merged = n00b_str_style_merge(fallback_style, resolved);
     n00b_free(resolved);
 
-    return merged;
+    return n00b_composite_style_pool_take(style_pool, merged);
 }
 
 static inline int32_t
@@ -715,7 +783,8 @@ n00b_composite_commands_to_grid(const n00b_composite_entry_t *entries,
                                  int32_t                       cell_px_w,
                                  int32_t                       cell_px_h,
                                  n00b_text_style_t            *default_style,
-                                 n00b_render_cap_t             caps)
+                                 n00b_render_cap_t             caps,
+                                 n00b_composite_style_pool_t  *style_pool)
 {
     // Clear frame.
     for (n00b_isize_t i = 0; i < cell_rows * cell_cols; i++) {
@@ -808,7 +877,8 @@ n00b_composite_commands_to_grid(const n00b_composite_entry_t *entries,
                 n00b_text_style_t *run_style = has_string_style
                                                    ? text_resolve_effective_style(text,
                                                                                   style,
-                                                                                  0)
+                                                                                  0,
+                                                                                  style_pool)
                                                    : style;
 
                 // Draw commands are in pixels; for cell backends
@@ -839,7 +909,8 @@ n00b_composite_commands_to_grid(const n00b_composite_entry_t *entries,
                         run_end   = text_next_style_boundary(text, byte_pos);
                         run_style = text_resolve_effective_style(text,
                                                                  style,
-                                                                 byte_pos);
+                                                                 byte_pos,
+                                                                 style_pool);
                     }
 
                     int cp_width = n00b_unicode_char_width(cp);
