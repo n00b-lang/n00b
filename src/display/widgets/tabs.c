@@ -8,9 +8,11 @@
 #include "core/alloc.h"
 #include "display/event.h"
 #include "display/focus.h"
+#include "display/mouse.h"
 #include "display/render/plane.h"
 #include "display/widget.h"
 #include "display/widgets/tabs.h"
+#include "internal/display/plane_tree.h"
 #include "internal/display/widget_primitives.h"
 #include "text/strings/style_ops.h"
 #include "text/strings/theme.h"
@@ -43,6 +45,29 @@ tabs_separator(const n00b_tabs_t *tabs)
     }
 
     return tabs_default_separator;
+}
+
+static void
+tabs_measure_content(n00b_plane_t *content,
+                     int32_t      *pref_w,
+                     int32_t      *pref_h,
+                     int32_t      *min_w,
+                     int32_t      *min_h)
+{
+    if (!content) {
+        *pref_w = 0;
+        *pref_h = 0;
+        *min_w = 0;
+        *min_h = 0;
+        return;
+    }
+
+    if (content->widget_vtable) {
+        n00b_widget_measure(content, pref_w, pref_h, min_w, min_h);
+        return;
+    }
+
+    n00b_widget_measure_plain_plane(content, pref_w, pref_h, min_w, min_h);
 }
 
 static void
@@ -147,6 +172,24 @@ tabs_apply_visibility(n00b_tabs_t *tabs)
         n00b_plane_set_visible(content, tabs->selected_index >= 0
                                          && (n00b_isize_t)tabs->selected_index == i);
     }
+}
+
+static bool
+tabs_cancel_capture_if_hidden(n00b_plane_t *tabs_plane, n00b_plane_t *content)
+{
+    n00b_plane_t *captured;
+
+    if (!tabs_plane || !content || !tabs_plane->canvas) {
+        return false;
+    }
+
+    captured = n00b_canvas_get_mouse_capture(tabs_plane->canvas);
+    if (!captured || !n00b_plane_tree_contains(content, captured)) {
+        return false;
+    }
+
+    n00b_canvas_cancel_mouse_capture(tabs_plane->canvas);
+    return true;
 }
 
 static bool
@@ -337,11 +380,11 @@ tabs_measure(n00b_plane_t *plane, void *data,
             int32_t child_min_w  = 0;
             int32_t child_min_h  = 0;
 
-            n00b_widget_measure(tabs->entries[i].content,
-                                &child_pref_w,
-                                &child_pref_h,
-                                &child_min_w,
-                                &child_min_h);
+            tabs_measure_content(tabs->entries[i].content,
+                                 &child_pref_w,
+                                 &child_pref_h,
+                                 &child_min_w,
+                                 &child_min_h);
 
             max_content_pref_w = n00b_max(max_content_pref_w, child_pref_w);
             max_content_pref_h = n00b_max(max_content_pref_h, child_pref_h);
@@ -574,6 +617,8 @@ n00b_tabs_remove(n00b_plane_t *plane, int index)
     force_tabs_focus = old_focus && removed_content
                     && tabs_plane_is_descendant_of(old_focus, removed_content);
 
+    (void)tabs_cancel_capture_if_hidden(plane, removed_content);
+
     if (removed_content && removed_content->parent == plane) {
         (void)n00b_plane_remove_child(plane, removed_content);
         n00b_plane_set_visible(removed_content, true);
@@ -641,6 +686,8 @@ n00b_tabs_select_index(n00b_plane_t *plane, int index)
     old_focus   = plane && plane->canvas && plane->canvas->focus
                 ? n00b_focus_mgr_current(plane->canvas->focus)
                 : nullptr;
+
+    (void)tabs_cancel_capture_if_hidden(plane, old_content);
 
     tabs->selected_index = index;
     tabs_apply_visibility(tabs);

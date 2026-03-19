@@ -18,6 +18,7 @@ The goal is to land the next production Wave 1 widget in Athens: a focusable `ta
 - [x] (2026-03-17 00:04Z) Implemented `include/display/widgets/tabs.h` and `src/display/widgets/tabs.c`, including visibility-based page switching, header hitboxes, wrap-around keyboard navigation, mouse selection, immediate relayout, and focus repair through `canvas->focus`.
 - [x] (2026-03-17 00:09Z) Wired `canvas->focus` through `src/display/event_loop.c`, added `test/unit/test_tabs.c`, updated `meson.build`, extended `src/tools/widget_demo.c` with the `tabs` demo, and moved `tabs` into the implemented set in `docs/widgets.md`.
 - [x] (2026-03-17 00:13Z) Validated the implementation with `meson compile -C build_debug test_tabs widget_demo`, `meson test -C build_debug --print-errorlogs tabs`, `./build_debug/widget_demo --widget tabs --backend stream`, and an ANSI PTY smoke run that launched the TUI demo and switched from `Counter` to `Scroll` via the Right Arrow key.
+- [x] (2026-03-19 15:50Z) Follow-up review remediation landed in `plans/wave1-tabs-review-remediation-execplan.md`: `n00b_focus_mgr_new(canvas)` now owns `canvas->focus`, `n00b_focus_mgr_rebuild()` blurs dropped hidden focus, tabs measurement accepts plain planes, and tab switches/removals cancel hidden-page mouse capture before hiding content.
 
 ## Surprises & Discoveries
 
@@ -45,6 +46,9 @@ The goal is to land the next production Wave 1 widget in Athens: a focusable `ta
 - Observation: In the ANSI TUI demo, the tabs header is focused on initial render and responds to Right Arrow immediately, so the selection callback and page switch are visible without an extra Tab keypress first.
   Evidence: A PTY run of `./build_debug/widget_demo --widget tabs --backend tui` showed the initial focused `Counter` header, and sending `ESC [ C` updated the status line to `Selected tab 1: Scroll (previous 0).`
 
+- Observation: The original landing's event-loop-only `canvas->focus` wiring was not sufficient for callers that construct focus managers directly outside `n00b_canvas_run()`.
+  Evidence: `plans/wave1-tabs-review-remediation-execplan.md` added failing direct-constructor regression coverage in `test/unit/test_focus.c`, and the fix moved `canvas->focus` ownership into `src/display/focus.c`.
+
 ## Decision Log
 
 - Decision: The next Wave 1 production widget after `zstack`, `grid`, `split`, and `scroll` is `tabs`, and this plan targets that widget only.
@@ -71,6 +75,14 @@ The goal is to land the next production Wave 1 widget in Athens: a focusable `ta
   Rationale: `n00b_canvas_t` already documents a focus-manager backpointer, and tabs is the first production widget that needs to repair focus when an entire subtree becomes hidden during normal interaction.
   Date/Author: 2026-03-17 / Codex.
 
+- Decision: Review remediation superseded the event-loop-only focus wiring by moving `canvas->focus` ownership into `n00b_focus_mgr_new()` and `n00b_focus_mgr_destroy()`.
+  Rationale: the public constructor is used by direct-dispatch and custom-loop callers as well as `n00b_canvas_run()`, so the backpointer contract needed to hold across all focus-manager entrypoints rather than only inside the event loop.
+  Date/Author: 2026-03-19 / Codex.
+
+- Decision: Tabs page transitions must cancel hidden-page mouse capture through the shared cancel API, and tabs measurement must treat plain content planes as supported public inputs.
+  Rationale: review remediation proved both behaviors are part of ordinary supported tabs usage, not optional polish, because the public API accepts arbitrary `n00b_plane_t *` pages and hidden captured pages otherwise keep receiving drag events.
+  Date/Author: 2026-03-19 / Codex.
+
 - Decision: If a tab switch or tab removal hides the currently focused plane, tabs will rebuild the focus manager and then set focus explicitly back to the tabs plane.
   Rationale: Relying on a plain rebuild can move focus to an unrelated earlier widget elsewhere on the canvas. Returning focus to the header keeps left/right navigation immediately usable and is predictable for both keyboard and mouse workflows.
   Date/Author: 2026-03-17 / Codex.
@@ -85,9 +97,9 @@ The goal is to land the next production Wave 1 widget in Athens: a focusable `ta
 
 ## Outcomes & Retrospective
 
-Implementation completed on 2026-03-17. Athens now has a production `tabs` widget under `include/display/widgets/tabs.h` and `src/display/widgets/tabs.c`, the event loop exposes the live focus manager through `canvas->focus`, `test_tabs` covers the public API plus the focus/state-retention regressions that motivated the port, `widget_demo --widget tabs` is a working entrypoint, and `docs/widgets.md` now leaves only `text` in Wave 1.
+Implementation completed on 2026-03-17, with review remediation follow-up landed on 2026-03-19. Athens now has a production `tabs` widget under `include/display/widgets/tabs.h` and `src/display/widgets/tabs.c`, focus-manager lifecycle owns the live `canvas->focus` backpointer, `test_tabs` and `test_focus` cover the public API plus the hidden-focus/plain-plane/capture regressions discovered in review, `widget_demo --widget tabs` is a working entrypoint, and `docs/widgets.md` now leaves only `text` in Wave 1.
 
-The automated validation matrix passed. `meson test -C build_debug --print-errorlogs tabs` reported `1/1 unit - n00b:tabs OK`, the stream demo smoke exited cleanly, and the ANSI PTY smoke rendered the demo and switched pages via Right Arrow with the status line updating to the selected tab name. A full human mouse-and-scroll visual pass in a real terminal is still advisable, but the implementation now meets the plan's observable production bar and removes `tabs` from the Wave 1 backlog.
+The automated validation matrix passed, including the review-remediation follow-up. `meson test -C build_debug --print-errorlogs tabs focus scroll display_event_dispatch` is now green, the stream demo smoke exited cleanly, and the ANSI PTY smoke rendered the demo and switched pages via Right Arrow with the status line updating to the selected tab name. A full human mouse-and-scroll visual pass in a real terminal is still advisable, but the implementation now meets the plan's observable production bar, exposes a consistent public focus-manager contract, and removes `tabs` from the Wave 1 backlog without the original hidden-plane edge cases.
 
 ## Context and Orientation
 
@@ -111,7 +123,7 @@ Inside `src/display/widgets/tabs.c`, keep all bookkeeping and geometry helpers f
 
 The layout contract in code should be simple and explicit. The tabs plane renders only the header row itself. The content rectangle is the incoming content bounds minus one line height at the top or bottom depending on `position`. Every content plane should be laid out to that same rectangle on each layout pass so that a later selection change only needs to toggle visibility and rerender. Because the event loop does not rerun layout on ordinary input, `add`, `remove`, and `select_index` must rerun `n00b_widget_layout()` immediately when `plane->bounds` already describes real bounds.
 
-The second edit is a small runtime seam in `src/display/event_loop.c`. Immediately after `n00b_focus_mgr_new(canvas)` succeeds, store the pointer in `canvas->focus`. Immediately before destroying the focus manager, clear `canvas->focus = nullptr`. Tabs will use that pointer to call `n00b_focus_mgr_rebuild()` after it changes page visibility, and to set focus back to the tabs plane if the current focused page was just hidden.
+The original landing used a small runtime seam in `src/display/event_loop.c` to mirror the new focus manager into `canvas->focus`. Review remediation in `plans/wave1-tabs-review-remediation-execplan.md` later moved that ownership into `src/display/focus.c` so `n00b_focus_mgr_new(canvas)` registers itself and `n00b_focus_mgr_destroy()` unregisters it for every caller, not just `n00b_canvas_run()`. Tabs still uses `canvas->focus` to call `n00b_focus_mgr_rebuild()` after it changes page visibility and to set focus back to the tabs plane if the current focused page was just hidden; the difference is that the backpointer contract now lives with the focus-manager lifecycle instead of the event loop.
 
 The third edit is the test suite. Add `test/unit/test_tabs.c` in the same style as `test_grid.c`, `test_scroll.c`, and `test_zstack.c`: small dummy widgets with controlled measurements, captured bounds, and click counters. The tests must prove observable behavior rather than just structure. That means creating a tabs widget, adding pages, switching by key and mouse, checking header hitboxes and content bounds, asserting repeated switching keeps the same child planes alive, and verifying focus is repaired when the active page containing the current focused plane is hidden.
 
@@ -437,3 +449,4 @@ The implementation depends only on already-landed subsystems and widgets:
 
 - 2026-03-17: Initial ExecPlan added for the Wave 1 production `tabs` reimplementation after confirming `tabs` is the next missing widget in `docs/widgets.md`. The plan resolves the production focus-rebuild strategy, tab-removal selection rule, and demo composition strategy that avoids depending on the still-missing `text` widget.
 - 2026-03-17: Updated the ExecPlan after implementation to record the shipped widget/files, the validation commands and observed outcomes, the stream/TUI demo findings, and the final visibility-reset decision for removed tab content.
+- 2026-03-19: Updated the historical production plan after `plans/wave1-tabs-review-remediation-execplan.md` landed so this document records the lifecycle-owned `canvas->focus` contract plus the plain-plane and hidden-capture fixes that were required to complete the public tabs behavior.

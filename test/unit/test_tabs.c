@@ -14,6 +14,7 @@
 #include "display/render/canvas.h"
 #include "display/render/plane.h"
 #include "display/widget.h"
+#include "display/widgets/scroll.h"
 #include "display/widgets/tabs.h"
 #include "internal/display/widget_primitives.h"
 
@@ -163,6 +164,17 @@ make_dummy_widget(int32_t pref_w, int32_t pref_h,
     plane->width  = dummy->pref_w;
     plane->height = dummy->pref_h;
     n00b_widget_attach(plane, &dummy_widget, dummy);
+
+    return plane;
+}
+
+static n00b_plane_t *
+make_plain_plane(int32_t width, int32_t height)
+{
+    n00b_plane_t *plane = n00b_new_kargs(n00b_plane_t, plane);
+
+    plane->width = width > 0 ? width : 1;
+    plane->height = height > 0 ? height : 1;
 
     return plane;
 }
@@ -328,6 +340,36 @@ test_tabs_measure_uses_header_and_max_content(void)
     destroy_plane_tree(tabs);
     n00b_canvas_destroy(canvas);
     printf("  [PASS] tabs measure uses header and max content\n");
+}
+
+static void
+test_tabs_measure_plain_plane_pages(void)
+{
+    n00b_canvas_t *canvas = make_stream_canvas(20, 60);
+    n00b_plane_t  *tabs   = n00b_tabs_new(.canvas = canvas);
+    n00b_plane_t  *plain  = make_plain_plane(14, 6);
+    int32_t        pref_w = 0;
+    int32_t        pref_h = 0;
+    int32_t        min_w  = 0;
+    int32_t        min_h  = 0;
+    int32_t        header_h;
+    int32_t        header_w;
+
+    assert(n00b_tabs_add(tabs, n00b_string_from_cstr("Plain"), plain) == 0);
+
+    n00b_widget_measure(tabs, &pref_w, &pref_h, &min_w, &min_h);
+
+    header_h = n00b_widget_line_px_height(tabs);
+    header_w = n00b_plane_text_width(tabs, n00b_string_from_cstr("Plain"), nullptr);
+
+    assert(pref_w == n00b_max(header_w, 14));
+    assert(pref_h == header_h + 6);
+    assert(min_w == 14);
+    assert(min_h == header_h + 6);
+
+    destroy_plane_tree(tabs);
+    n00b_canvas_destroy(canvas);
+    printf("  [PASS] tabs measure plain plane pages\n");
 }
 
 static void
@@ -539,20 +581,59 @@ test_tabs_focus_returns_to_header_when_hidden_page_was_focused(void)
     layout_to_canvas(canvas, tabs);
 
     fm = n00b_focus_mgr_new(canvas);
-    canvas->focus = fm;
-    n00b_focus_mgr_rebuild(fm);
+    assert(canvas->focus == fm);
     assert(n00b_focus_mgr_set(fm, focused_box));
     assert(n00b_focus_mgr_current(fm) == focused_box);
 
     assert(n00b_tabs_select_index(tabs, 1));
     assert(n00b_focus_mgr_current(fm) == tabs);
+    assert(n00b_plane_get_state(focused_box) == N00B_WSTATE_NORMAL);
 
-    canvas->focus = nullptr;
     n00b_focus_mgr_destroy(fm);
     assert(n00b_canvas_remove_plane(canvas, tabs));
     destroy_plane_tree(tabs);
     n00b_canvas_destroy(canvas);
     printf("  [PASS] tabs focus returns to header when hidden page was focused\n");
+}
+
+static void
+test_tabs_switch_clears_hidden_page_capture(void)
+{
+    n00b_canvas_t *canvas = make_stream_canvas(20, 80);
+    n00b_plane_t *scroll_content = make_dummy_widget(12, 24, 12, 24, false, false);
+    n00b_plane_t *scroll_page = n00b_scroll_new(scroll_content,
+                                                .axes = N00B_SCROLL_AXIS_VERTICAL,
+                                                .canvas = canvas);
+    n00b_plane_t *page_b = make_dummy_widget(10, 4, 2, 1, false, false);
+    n00b_plane_t *tabs = n00b_tabs_new(.canvas = canvas);
+    n00b_scroll_t *scroll_state = (n00b_scroll_t *)scroll_page->widget_data;
+    int32_t press_x;
+    int32_t press_y;
+
+    n00b_canvas_add_plane(canvas, tabs);
+    assert(n00b_tabs_add(tabs, n00b_string_from_cstr("Scroll"), scroll_page) == 0);
+    assert(n00b_tabs_add(tabs, n00b_string_from_cstr("Other"), page_b) == 1);
+
+    layout_to_canvas(canvas, tabs);
+
+    assert(scroll_state->vthumb_rect.width > 0);
+    assert(scroll_state->vthumb_rect.height > 0);
+    press_x = scroll_page->bounds.x + scroll_state->vthumb_rect.x;
+    press_y = scroll_page->bounds.y + scroll_state->vthumb_rect.y;
+
+    send_left_press(canvas, press_x, press_y);
+    assert(n00b_canvas_get_mouse_capture(canvas) == scroll_page);
+    assert(scroll_state->dragging_vertical_thumb);
+
+    assert(n00b_tabs_select_index(tabs, 1));
+    assert(n00b_canvas_get_mouse_capture(canvas) == nullptr);
+    assert(!scroll_state->dragging_vertical_thumb);
+    assert((scroll_page->flags & N00B_PLANE_VISIBLE) == 0);
+
+    assert(n00b_canvas_remove_plane(canvas, tabs));
+    destroy_plane_tree(tabs);
+    n00b_canvas_destroy(canvas);
+    printf("  [PASS] tabs switch clears hidden page capture\n");
 }
 
 static void
@@ -599,11 +680,13 @@ main(int argc, char **argv)
 
     test_tabs_create_and_api();
     test_tabs_measure_uses_header_and_max_content();
+    test_tabs_measure_plain_plane_pages();
     test_tabs_layout_top_and_bottom_headers();
     test_tabs_keyboard_navigation_wraps_and_fires_callback();
     test_tabs_mouse_header_click_selects_page();
     test_tabs_switch_preserves_content_planes_and_state();
     test_tabs_focus_returns_to_header_when_hidden_page_was_focused();
+    test_tabs_switch_clears_hidden_page_capture();
     test_tabs_remove_selected_uses_same_slot_then_previous();
 
     printf("All tabs widget tests passed.\n");

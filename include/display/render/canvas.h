@@ -49,7 +49,7 @@ typedef struct n00b_canvas_t {
     n00b_rwlock_t                *lock;
     n00b_allocator_t             *allocator;
 
-    // Focus manager (set by event loop, nullptr when not running).
+    // Focus manager attached to this canvas, or nullptr when none exists.
     struct n00b_focus_mgr_t      *focus;
 
     // Mouse capture (plane receiving all mouse events during drag, nullptr = hit-test).

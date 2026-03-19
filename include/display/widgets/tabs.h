@@ -4,7 +4,8 @@
  *
  * A tabs widget hosts zero or more named content planes and shows one
  * page at a time. The inactive pages stay parented but hidden so their
- * internal widget state survives repeated tab switches.
+ * internal widget state survives repeated tab switches. Content planes
+ * may be widget-backed children or plain `n00b_plane_t` instances.
  */
 #pragma once
 
@@ -43,6 +44,12 @@ typedef struct n00b_tabs_t {
 
 extern const n00b_widget_vtable_t n00b_widget_tabs;
 
+/**
+ * @brief Create a new tabs widget.
+ *
+ * The returned plane is focusable and owns only its internal tabs
+ * bookkeeping. Added content planes remain caller-owned.
+ */
 extern n00b_plane_t *
 n00b_tabs_new() _kargs {
     n00b_tabs_position_t  position       = N00B_TABS_TOP;
@@ -53,11 +60,45 @@ n00b_tabs_new() _kargs {
     n00b_allocator_t     *allocator      = nullptr;
 };
 
+/**
+ * @brief Append a named content page.
+ *
+ * Plain planes and widget-backed planes are both supported.
+ *
+ * @return The new zero-based tab index, or `-1` on invalid input.
+ */
 extern int               n00b_tabs_add(n00b_plane_t *tabs, n00b_string_t *name, n00b_plane_t *content);
+/**
+ * @brief Remove a tab without destroying its content plane.
+ */
 extern bool              n00b_tabs_remove(n00b_plane_t *tabs, int index);
+/**
+ * @brief Select a tab by zero-based index.
+ *
+ * Switching hides the previously selected page and, if that page owns
+ * mouse capture, cancels capture before the page becomes hidden.
+ */
 extern bool              n00b_tabs_select_index(n00b_plane_t *tabs, int index);
+/**
+ * @brief Return the selected tab index, or `-1` when none exists.
+ */
 extern int               n00b_tabs_selected_index(n00b_plane_t *tabs);
+/**
+ * @brief Return the number of tab entries.
+ */
 extern int               n00b_tabs_count(n00b_plane_t *tabs);
+/**
+ * @brief Return a pointer to one internal tab entry.
+ *
+ * The returned pointer becomes invalid after the next add/remove
+ * operation on the same tabs widget.
+ */
 extern n00b_tab_entry_t *n00b_tabs_get(n00b_plane_t *tabs, int index);
+/**
+ * @brief Select the next tab with wrap-around.
+ */
 extern bool              n00b_tabs_next(n00b_plane_t *tabs);
+/**
+ * @brief Select the previous tab with wrap-around.
+ */
 extern bool              n00b_tabs_prev(n00b_plane_t *tabs);

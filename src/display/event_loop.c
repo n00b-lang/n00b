@@ -59,7 +59,6 @@ n00b_canvas_run(n00b_canvas_t *canvas) _kargs
 
     // Create focus manager.
     n00b_focus_mgr_t *fm = n00b_focus_mgr_new(canvas);
-    canvas->focus       = fm;
 
 #define PROF_NOW(tv) clock_gettime(CLOCK_MONOTONIC, &(tv))
 #define PROF_MS(a, b) \
@@ -209,7 +208,6 @@ n00b_canvas_run(n00b_canvas_t *canvas) _kargs
                            tick_count,
                            render_count);
 
-    canvas->focus = nullptr;
     n00b_focus_mgr_destroy(fm);
 
     // Restore cursor visibility.
