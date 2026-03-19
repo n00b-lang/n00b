@@ -56,7 +56,8 @@ extern n00b_plane_t *n00b_mouse_hit_test(n00b_plane_t *plane,
  * 1. If `canvas->mouse_capture` is set, route directly to that plane.
  * 2. Otherwise, flatten the top-level plane tree and hit-test the same
  *    ordered entries the renderer used.
- * 3. If the hit plane is focusable and action is PRESS, focus it.
+ * 3. If action is PRESS, focus the nearest focusable ancestor of the
+ *    hit plane, if any.
  * 4. Dispatch via `n00b_widget_handle_event()`.
  * 5. If not consumed, bubble to `target->parent` until consumed or root.
  *
@@ -90,7 +91,8 @@ extern void n00b_canvas_release_mouse(n00b_canvas_t *c);
  * @param c Canvas.
  *
  * Unlike `n00b_canvas_release_mouse()`, this also resets any widget-local
- * drag state associated with the captured plane before clearing capture.
+ * drag state associated with the captured plane via the widget vtable's
+ * optional `cancel_mouse_capture` callback before clearing capture.
  */
 extern void n00b_canvas_cancel_mouse_capture(n00b_canvas_t *c);
 

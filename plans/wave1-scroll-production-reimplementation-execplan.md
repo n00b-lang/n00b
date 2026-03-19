@@ -6,6 +6,8 @@ There is no repository-local `PLANS.md` in this working tree at the time this pl
 
 This plan explicitly builds on `plans/notes/widget-port-priority.md`, `plans/notes/widget-wave1-design-breakdown.md`, and `docs/widgets.md`. Those files establish that after the production `zstack`, `grid`, and `split` ports landed, the next missing widget in the Wave 1 queue is `scroll`.
 
+Post-landing review remediation is tracked in `plans/wave1-scroll-review-remediation-execplan.md`. The shared mouse and focus fixes from that follow-up are part of the final shipped scroll contract described here.
+
 ## Purpose / Big Picture
 
 The goal is to land the next production Wave 1 widget in Athens: a backend-neutral `scroll` container that can host one content subtree, clip it to a viewport, scroll by wheel and keyboard, render theme-aware scrollbars, and support vertical thumb dragging without relying on notcurses-only cell-copy tricks. After this change, an Athens application will be able to show long forms, tab pages, article text, and tall settings panels inside a real scroll viewport instead of baking ad hoc per-widget scrolling into every leaf control. A contributor or reviewer should be able to prove the result in two ways: run a dedicated `scroll` unit test that exercises layout math, offset clamping, `ensure_visible`, wheel/key handling, thumb dragging, and scrolled-content click routing, and run `widget_demo --widget scroll` to interact with a long page whose internal buttons remain clickable after scrolling.
@@ -14,12 +16,13 @@ The goal is to land the next production Wave 1 widget in Athens: a backend-neutr
 
 - [x] (2026-03-15 01:19Z) Reviewed the Wave 1 queue, the checked-in scroll design dossier, the prototype `scroll` implementation and tests in `n00b-slop`, and the current Athens widget, mouse, compositor, theme, and demo patterns.
 - [x] (2026-03-15 01:19Z) Identified the Athens runtime seams that shape this port: dirty rerendering does not rerun layout on ordinary input, click-to-focus does not walk up to focusable ancestors, compositor clipping already handles oversized child subtrees, and `plane->scroll_x/y` affect rendering but not hit-testing.
-- [x] (2026-03-15 01:19Z) Resolved the initial open planning decisions left by the scroll dossier: Wave 1 uses the existing theme palette instead of a new public style API, offset-changing setters relayout immediately when bounds are known, and keyboard scrolling is validated through Tab focus rather than a global click-focus behavior change.
+- [x] (2026-03-15 01:19Z) Resolved the initial open planning decisions left by the scroll dossier: Wave 1 uses the existing theme palette instead of a new public style API, offset-changing setters relayout immediately when bounds are known, and the first landing validates keyboard scrolling through Tab focus while deferring shared click-focus changes pending review.
 - [x] (2026-03-15 01:19Z) Drafted this self-contained execution plan for the production `scroll` reimplementation.
 - [x] (2026-03-15 01:59Z) Implemented `include/display/widgets/scroll.h` and `src/display/widgets/scroll.c` with the public API, deterministic measurement, fixed-point scrollbar visibility, theme-aware scrollbar rendering, wheel/key/track handling, vertical-thumb dragging, immediate relayout on offset changes, and a hidden viewport wrapper plane that keeps child clipping and scrollbar chrome aligned under the current compositor order.
 - [x] (2026-03-15 01:59Z) Added `test/unit/test_scroll.c`, registered the Meson target, extended `widget_demo --widget scroll`, and updated `docs/widgets.md` so `scroll` moves into the implemented set.
 - [x] (2026-03-15 01:59Z) Reconfigured `build_debug`, compiled `test_scroll` and `widget_demo`, passed `meson test -C build_debug --print-errorlogs scroll`, and passed `./build_debug/widget_demo --widget scroll --backend stream`.
 - [x] (2026-03-15 02:06Z) Extended the production widget and unit suite to support horizontal thumb dragging on the bottom scrollbar, rebuilt `test_scroll` and `widget_demo`, reran the `scroll` Meson test target, and reran the stream demo smoke.
+- [x] (2026-03-19 05:49Z) Landed the post-landing remediation from `plans/wave1-scroll-review-remediation-execplan.md`: scroll now measures plain planes correctly, single-axis layouts use the resolved viewport after scrollbar reservation, clicks on non-focusable scroll content focus the scroll ancestor, and forced capture cleanup is widget-generic for both scroll and split.
 - [ ] (2026-03-15 01:59Z) Full human interactive verification of `./build_debug/widget_demo --widget scroll --backend tui` remains. This session completed only an automated two-second startup smoke under `timeout`, which proved startup and teardown but not the full wheel/key/drag/button workflow.
 
 ## Surprises & Discoveries
@@ -44,6 +47,9 @@ The goal is to land the next production Wave 1 widget in Athens: a backend-neutr
 
 - Observation: Parent planes are composited before their descendants, so drawing scrollbar chrome directly on the scroll plane only works if the scrolled content is clipped by a smaller intermediate viewport plane.
   Evidence: `src/display/render/composite.c` appends the parent entry to the flattened painter-order list before recursing into `p->children`, and the production demo rendered correctly only after the scroll implementation inserted a hidden viewport wrapper child that reserves the scrollbar gutter.
+
+- Observation: Post-landing review showed that scroll did need shared mouse-runtime changes after all.
+  Evidence: `plans/wave1-scroll-review-remediation-execplan.md` landed changes in `include/display/widget.h`, `src/display/mouse.c`, `src/display/widgets/scroll.c`, and `src/display/widgets/split.c` to fix click focus and forced capture cleanup for real scroll interactions.
 
 ## Decision Log
 
@@ -71,9 +77,9 @@ The goal is to land the next production Wave 1 widget in Athens: a backend-neutr
   Rationale: A vertical bar can cause horizontal overflow and vice versa, so a one-pass visibility check would be visibly wrong for some two-axis scenes.
   Date/Author: 2026-03-15 / Codex.
 
-- Decision: Wave 1 keeps the existing global click-to-focus semantics unchanged, and keyboard scrolling acceptance is defined around Tab focus on the scroll container.
-  Rationale: Focusing the nearest focusable ancestor would be a repository-wide behavior change that is useful but not necessary to ship the next production widget.
-  Date/Author: 2026-03-15 / Codex.
+- Decision: The initial landing kept the existing global click-to-focus semantics unchanged and validated keyboard scrolling around Tab focus on the scroll container. This decision was superseded by the 2026-03-19 review remediation.
+  Rationale: The first landing minimized scope, but post-landing review proved that clicks on non-focusable scroll content left keyboard scrolling unavailable until focus was moved manually.
+  Date/Author: 2026-03-15 and 2026-03-19 / Codex.
 
 - Decision: The production scroll widget wraps the public content subtree in an internal viewport child plane instead of attaching the content directly to the scroll plane.
   Rationale: Athens composites parent draw commands before child draw commands, so parent-drawn scrollbars would otherwise be overpainted by wide or tall child content. The hidden viewport plane keeps the content clipped to the viewport while the scroll plane still owns the scrollbar chrome and mouse/key behavior, with no shared-runtime changes.
@@ -83,11 +89,15 @@ The goal is to land the next production Wave 1 widget in Athens: a backend-neutr
   Rationale: Once the public demo and widget existed, the lack of bottom-thumb dragging was a clear user-facing inconsistency rather than a useful scope cut. The incremental implementation cost was small because the horizontal path can reuse the same capture, anchor, and proportional-offset math as the vertical path.
   Date/Author: 2026-03-15 / Codex.
 
+- Decision: The final shipped scroll contract includes shared nearest-focusable-ancestor click focus and generic widget-owned forced capture cleanup.
+  Rationale: Post-landing review validated real user-visible regressions when scroll content clicks did not focus the container and when forced capture cleanup only knew about `split`.
+  Date/Author: 2026-03-19 / Codex.
+
 ## Outcomes & Retrospective
 
-As of 2026-03-15 the production `scroll` widget, its unit suite, and its demo entrypoint are implemented in Athens. The new unit test covers constructor defaults, measure caps, offset clamping, `ensure_visible`, fixed-point scrollbar visibility, keyboard scrolling, vertical thumb dragging, and translated hit-testing into scrolled content. `docs/widgets.md` now lists `scroll` as implemented, and `widget_demo --widget scroll --backend stream` plus a timed `tui` startup smoke both completed without crashes.
+As of 2026-03-19 the production `scroll` widget, its unit suite, and its demo entrypoint are implemented in Athens, and the post-landing review remediation has also landed. The unit coverage now includes constructor defaults, measure caps, offset clamping, `ensure_visible`, fixed-point scrollbar visibility, keyboard scrolling, vertical and horizontal thumb dragging, translated hit-testing into scrolled content, content-click focus, plain-plane overflow, cross-axis relayout under reserved scrollbars, and forced capture cancellation during thumb drags. `docs/widgets.md` lists `scroll` as implemented, and `widget_demo --widget scroll --backend stream` plus a timed `tui` startup smoke both completed without crashes after the remediation.
 
-The main lesson from execution is that backend portability was not the hard part; compositor ordering was. The implementation needed one hidden viewport wrapper plane so parent-drawn scrollbar chrome stays visible while the content subtree remains a normal translated child tree. The main remaining gap is operational rather than structural: the full manual `tui` interaction pass still needs a human operator to verify the complete wheel, key, drag, and in-content button workflow end to end.
+The main lesson from execution is that backend portability was not the hard part; compositor ordering and shared mouse contracts were. The implementation needed one hidden viewport wrapper plane so parent-drawn scrollbar chrome stays visible while the content subtree remains a normal translated child tree, and post-landing review showed that click focus and forced capture cleanup could not stay scroll-local. The main remaining gap is operational rather than structural: the full manual `tui` interaction pass still needs a human operator to verify the complete wheel, key, drag, and in-content button workflow end to end.
 
 ## Context and Orientation
 
@@ -105,11 +115,11 @@ The prototype source of truth is `../n00b-slop/include/ctui/widgets/scroll.h`, `
 - `include/text/strings/theme.h` and `src/text/strings/theme.c` for scrollbar palette colors.
 - `src/tools/widget_demo.c`, `docs/widgets.md`, and `meson.build` for demo, roadmap, and build wiring.
 
-The implementation does not require any backend-specific plane copying or shared-runtime mouse/compositor changes. The scroll widget owns the viewport math, cached thumb rectangles, and input handling. The production code keeps the public content subtree wrapped in one hidden internal viewport plane so the compositor clips translated content before it reaches the scrollbar gutter. The other important Athens-specific compromise is measurement: because there is no width hint in `n00b_widget_measure()`, the widget reports a deterministic "reasonable viewport" size rather than trying to predict every future layout context.
+The implementation does not require any backend-specific plane copying. The final scroll contract does rely on two shared runtime adjustments that landed during post-landing review remediation: nearest-focusable-ancestor click focus in `src/display/mouse.c` and widget-owned forced capture cleanup via an optional `cancel_mouse_capture` vtable slot in `include/display/widget.h`. The scroll widget still owns the viewport math, cached thumb rectangles, and most input handling. The production code keeps the public content subtree wrapped in one hidden internal viewport plane so the compositor clips translated content before it reaches the scrollbar gutter. The other important Athens-specific compromise is measurement: because there is no width hint in `n00b_widget_measure()`, the widget reports a deterministic "reasonable viewport" size rather than trying to predict every future layout context.
 
 ## Plan of Work
 
-Milestone 1 adds the public widget surface and the production implementation. Create `include/display/widgets/scroll.h` and `src/display/widgets/scroll.c`. The header must expose the Wave 1 axis and scrollbar-mode enums, the `n00b_scroll_t` state record, the public constructor, the content setter/getter, offset setters, `ensure_visible`, offset getters, and the directional predicate helpers. The source file must implement the vtable callbacks, immediate-relayout public setters, fixed-point scrollbar visibility resolution, an internal viewport wrapper plane plus negative child placement, cached track/thumb rectangles, theme-aware overlay rendering, key and wheel scrolling, track clicks, and thumb dragging with mouse capture on both axes. No shared runtime edits are planned for this milestone.
+Milestone 1 adds the public widget surface and the production implementation. Create `include/display/widgets/scroll.h` and `src/display/widgets/scroll.c`. The header must expose the Wave 1 axis and scrollbar-mode enums, the `n00b_scroll_t` state record, the public constructor, the content setter/getter, offset setters, `ensure_visible`, offset getters, and the directional predicate helpers. The source file must implement the vtable callbacks, immediate-relayout public setters, fixed-point scrollbar visibility resolution, an internal viewport wrapper plane plus negative child placement, cached track/thumb rectangles, theme-aware overlay rendering, key and wheel scrolling, track clicks, and thumb dragging with mouse capture on both axes. The initial landing kept shared runtime edits out of scope, but the final shipped contract later added shared mouse and widget-vtable changes for click focus and forced capture cleanup during post-landing remediation.
 
 Milestone 2 adds behavior-driven tests. Create `test/unit/test_scroll.c` following the structure of `test_split.c` and `test_grid.c`: small test-only widgets with controlled preferred and minimum sizes, captured layout bounds, and simple click counters. The tests must prove the public API shape, measurement heuristic, offset clamping, `ensure_visible`, auto scrollbar visibility, thumb rectangle math, immediate relayout after offset changes, keyboard scrolling, thumb dragging on both axes, and correct click routing into scrolled content after the content child has been offset.
 
@@ -381,7 +391,9 @@ Run commands from `/home/baron/crash-override/n00b-tui/n00b-athens`.
 
        ./build_debug/widget_demo --widget scroll --backend tui
 
-   Expected result: a scrollable scene appears. After pressing Tab until the scroll viewport is focused, arrow keys and PageUp/PageDown move the content, `Ctrl+Home` and `Ctrl+End` jump to the top and bottom, the mouse wheel scrolls vertically, `Shift+wheel` scrolls horizontally, both scrollbar thumbs can be dragged repeatedly without stale mouse capture, and the bottom in-content button still fires after scrolling down to it.
+   Expected result: a scrollable scene appears. After pressing Tab until the scroll viewport is focused, or after clicking non-focusable content inside the scroll viewport, arrow keys and PageUp/PageDown move the content, `Ctrl+Home` and `Ctrl+End` jump to the top and bottom, the mouse wheel scrolls vertically, `Shift+wheel` scrolls horizontally, both scrollbar thumbs can be dragged repeatedly without stale mouse capture, and the bottom in-content button still fires after scrolling down to it.
+
+Revision note (2026-03-19): Updated this living plan after landing the follow-up review remediation so it no longer claims scroll shipped without shared mouse/runtime changes and now reflects the final click-focus and forced-capture behavior.
 
 ## Validation and Acceptance
 

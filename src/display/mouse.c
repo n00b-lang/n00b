@@ -14,7 +14,6 @@
 #include "display/event.h"
 #include "display/widget.h"
 #include "display/focus.h"
-#include "display/widgets/split.h"
 #include "internal/display/plane_geometry.h"
 
 static void
@@ -208,19 +207,24 @@ mouse_hit_test_plane(n00b_plane_t *plane,
 static void
 mouse_cancel_capture_state(n00b_plane_t *plane)
 {
-    if (!plane || plane->widget_vtable != &n00b_widget_split) {
+    if (!plane || !plane->widget_vtable
+        || !plane->widget_vtable->cancel_mouse_capture) {
         return;
     }
 
-    n00b_split_t *split = plane->widget_data;
-    if (!split) {
-        return;
+    plane->widget_vtable->cancel_mouse_capture(plane, plane->widget_data);
+}
+
+static n00b_plane_t *
+mouse_nearest_focusable_ancestor(n00b_plane_t *plane)
+{
+    n00b_plane_t *current = plane;
+
+    while (current && !n00b_widget_can_focus(current)) {
+        current = current->parent;
     }
 
-    split->dragging = false;
-    split->divider_hovered = false;
-    split->drag_pointer_offset_px = 0;
-    n00b_plane_set_state(plane, N00B_WSTATE_NORMAL);
+    return current;
 }
 
 n00b_plane_t *
@@ -280,10 +284,12 @@ n00b_mouse_route_event(n00b_canvas_t          *canvas,
         return;
     }
 
-    // Click-to-focus: on PRESS, focus the hit plane if focusable.
+    // Click-to-focus: on PRESS, focus the nearest focusable ancestor.
     if (event->mouse.action == N00B_MOUSE_PRESS && fm) {
-        if (n00b_widget_can_focus(target)) {
-            n00b_focus_mgr_set(fm, target);
+        n00b_plane_t *focus_target = mouse_nearest_focusable_ancestor(target);
+
+        if (focus_target) {
+            n00b_focus_mgr_set(fm, focus_target);
         }
     }
 

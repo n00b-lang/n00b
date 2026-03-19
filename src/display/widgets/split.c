@@ -99,6 +99,21 @@ split_sync_plane_state(n00b_plane_t *plane, n00b_split_t *split)
 }
 
 static void
+split_cancel_mouse_capture(n00b_plane_t *plane, void *data)
+{
+    n00b_split_t *split = data;
+
+    if (!plane || !split) {
+        return;
+    }
+
+    split->dragging = false;
+    split->divider_hovered = false;
+    split->drag_pointer_offset_px = 0;
+    split_sync_plane_state(plane, split);
+}
+
+static void
 split_sync_child_order(n00b_plane_t *plane, const n00b_split_t *split)
 {
     size_t write_ix = 0;
@@ -605,6 +620,7 @@ const n00b_widget_vtable_t n00b_widget_split = {
     .measure      = split_measure,
     .handle_event = split_handle_event,
     .can_focus    = split_can_focus,
+    .cancel_mouse_capture = split_cancel_mouse_capture,
     .layout       = split_layout,
 };
 

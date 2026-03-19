@@ -43,6 +43,8 @@ scroll_state(n00b_plane_t *plane)
     return impl ? &impl->public_state : nullptr;
 }
 
+static void scroll_mark_layout_dirty(n00b_plane_t *plane);
+
 static inline int32_t
 scroll_max_i32(int32_t a, int32_t b)
 {
@@ -129,6 +131,26 @@ scroll_clear_rects(n00b_scroll_t *scroll)
 }
 
 static void
+scroll_measure_content(n00b_plane_t *content,
+                       int32_t      *pref_w,
+                       int32_t      *pref_h,
+                       int32_t      *min_w,
+                       int32_t      *min_h)
+{
+    if (!content) {
+        *pref_w = *pref_h = *min_w = *min_h = 0;
+        return;
+    }
+
+    if (content->widget_vtable) {
+        n00b_widget_measure(content, pref_w, pref_h, min_w, min_h);
+        return;
+    }
+
+    n00b_widget_measure_plain_plane(content, pref_w, pref_h, min_w, min_h);
+}
+
+static void
 scroll_release_capture_if_owned(n00b_plane_t *plane)
 {
     if (plane && plane->canvas
@@ -150,6 +172,26 @@ scroll_stop_thumb_drag(n00b_plane_t *plane, n00b_scroll_t *scroll)
 
     scroll->dragging_vertical_thumb   = false;
     scroll->dragging_horizontal_thumb = false;
+    scroll->drag_anchor_px            = 0;
+    scroll->drag_anchor_offset_px     = 0;
+}
+
+static void
+scroll_cancel_mouse_capture(n00b_plane_t *plane, void *data)
+{
+    n00b_scroll_t *scroll = data;
+
+    if (!plane || !scroll) {
+        return;
+    }
+
+    scroll->dragging_vertical_thumb   = false;
+    scroll->dragging_horizontal_thumb = false;
+    scroll->hover_vertical_thumb      = false;
+    scroll->hover_horizontal_thumb    = false;
+    scroll->drag_anchor_px            = 0;
+    scroll->drag_anchor_offset_px     = 0;
+    scroll_mark_layout_dirty(plane);
 }
 
 static void
@@ -424,11 +466,11 @@ scroll_layout_content(n00b_plane_t *plane, n00b_scroll_impl_t *impl, n00b_rect_t
     scroll = &impl->public_state;
 
     if (scroll->content) {
-        n00b_widget_measure(scroll->content,
-                            &content_pref_w,
-                            &content_pref_h,
-                            &content_min_w,
-                            &content_min_h);
+        scroll_measure_content(scroll->content,
+                               &content_pref_w,
+                               &content_pref_h,
+                               &content_min_w,
+                               &content_min_h);
     }
 
     content_pref_w = scroll_max_i32(content_pref_w, 1);
@@ -454,8 +496,21 @@ scroll_layout_content(n00b_plane_t *plane, n00b_scroll_impl_t *impl, n00b_rect_t
 
     scroll_resolve_viewport(scroll, bounds.width, bounds.height);
 
-    scroll->content_width  = scroll_max_i32(scroll->content_width, scroll->viewport_width);
-    scroll->content_height = scroll_max_i32(scroll->content_height, scroll->viewport_height);
+    if (scroll_axis_enabled(scroll, N00B_SCROLL_AXIS_HORIZONTAL)) {
+        scroll->content_width = scroll_max_i32(scroll->content_width,
+                                               scroll->viewport_width);
+    }
+    else {
+        scroll->content_width = scroll->viewport_width;
+    }
+
+    if (scroll_axis_enabled(scroll, N00B_SCROLL_AXIS_VERTICAL)) {
+        scroll->content_height = scroll_max_i32(scroll->content_height,
+                                                scroll->viewport_height);
+    }
+    else {
+        scroll->content_height = scroll->viewport_height;
+    }
 
     scroll_clamp_offsets(scroll);
 
@@ -692,11 +747,11 @@ scroll_measure(n00b_plane_t *plane, void *data,
     }
 
     if (scroll->content) {
-        n00b_widget_measure(scroll->content,
-                            &content_pref_w,
-                            &content_pref_h,
-                            &content_min_w,
-                            &content_min_h);
+        scroll_measure_content(scroll->content,
+                               &content_pref_w,
+                               &content_pref_h,
+                               &content_min_w,
+                               &content_min_h);
     }
 
     content_pref_w = scroll_max_i32(content_pref_w, 1);
@@ -952,13 +1007,14 @@ scroll_layout(n00b_plane_t *plane, void *data, n00b_rect_t bounds)
 }
 
 const n00b_widget_vtable_t n00b_widget_scroll = {
-    .kind         = "scroll",
-    .destroy      = scroll_destroy,
-    .render       = scroll_render,
-    .measure      = scroll_measure,
-    .handle_event = scroll_handle_event,
-    .can_focus    = scroll_can_focus,
-    .layout       = scroll_layout,
+    .kind                 = "scroll",
+    .destroy              = scroll_destroy,
+    .render               = scroll_render,
+    .measure              = scroll_measure,
+    .handle_event         = scroll_handle_event,
+    .can_focus            = scroll_can_focus,
+    .cancel_mouse_capture = scroll_cancel_mouse_capture,
+    .layout               = scroll_layout,
 };
 
 n00b_plane_t *

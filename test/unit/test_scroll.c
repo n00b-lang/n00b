@@ -8,12 +8,15 @@
 #include "n00b.h"
 #include "core/alloc.h"
 #include "core/runtime.h"
+#include "display/focus.h"
 #include "display/mouse.h"
 #include "display/render/backend.h"
+#include "display/render/box.h"
 #include "display/render/canvas.h"
 #include "display/render/plane.h"
 #include "display/widget.h"
 #include "display/widgets/scroll.h"
+#include "internal/display/event_dispatch.h"
 
 extern void n00b_stream_backend_set_size(void        *ctx,
                                           n00b_isize_t rows,
@@ -24,6 +27,7 @@ typedef struct {
     int32_t     pref_h;
     int32_t     min_w;
     int32_t     min_h;
+    bool        can_focus;
     bool        consume_click;
     int         click_count;
     int         layout_calls;
@@ -98,9 +102,9 @@ static bool
 dummy_can_focus(n00b_plane_t *plane, void *data)
 {
     (void)plane;
-    (void)data;
 
-    return false;
+    dummy_widget_t *dummy = data;
+    return dummy ? dummy->can_focus : false;
 }
 
 static void
@@ -192,12 +196,28 @@ make_dummy_child(int32_t pref_w, int32_t pref_h,
         .pref_h        = pref_h > 0 ? pref_h : 1,
         .min_w         = min_w > 0 ? min_w : 1,
         .min_h         = min_h > 0 ? min_h : 1,
+        .can_focus     = false,
         .consume_click = consume_click,
     };
 
     plane->width  = dummy->pref_w;
     plane->height = dummy->pref_h;
     n00b_widget_attach(plane, &dummy_widget, dummy);
+
+    return plane;
+}
+
+static n00b_plane_t *
+make_plain_child(int32_t width, int32_t height, bool with_box)
+{
+    n00b_plane_t *plane = n00b_new_kargs(n00b_plane_t, plane);
+
+    plane->width  = width > 0 ? width : 1;
+    plane->height = height > 0 ? height : 1;
+
+    if (with_box) {
+        plane->box = n00b_box_props_new(.borders = N00B_BORDER_ALL);
+    }
 
     return plane;
 }
@@ -406,6 +426,42 @@ test_scroll_measure_caps_scroll_axes(void)
 }
 
 static void
+test_scroll_plain_plane_overflow_preserves_box_size(void)
+{
+    n00b_canvas_t *canvas = make_stream_canvas(20, 80);
+    n00b_plane_t *plain = make_plain_child(15, 6, true);
+    n00b_plane_t *scroll = n00b_scroll_new(plain,
+                                           .axes = N00B_SCROLL_AXIS_BOTH,
+                                           .canvas = canvas);
+    n00b_scroll_t *state = (n00b_scroll_t *)scroll->widget_data;
+
+    n00b_widget_layout(scroll,
+                       (n00b_rect_t){
+                           .x      = 0,
+                           .y      = 0,
+                           .width  = 8,
+                           .height = 5,
+                       });
+
+    assert(state->content_width == 17);
+    assert(state->content_height == 8);
+    assert(state->viewport_width == 7);
+    assert(state->viewport_height == 4);
+    assert_rect_eq(plain->bounds, 0, 0, 17, 8);
+    assert(plain->width == 15);
+    assert(plain->height == 6);
+
+    n00b_scroll_to(scroll, 999, 999);
+    assert(n00b_scroll_get_offset_x(scroll) == 10);
+    assert(n00b_scroll_get_offset_y(scroll) == 4);
+    assert_rect_eq(plain->bounds, -10, -4, 17, 8);
+
+    destroy_plane_tree(scroll);
+    n00b_canvas_destroy(canvas);
+    printf("  [PASS] scroll plain plane overflow preserves box size\n");
+}
+
+static void
 test_scroll_offsets_clamp_and_direction_helpers(void)
 {
     n00b_canvas_t *canvas = make_stream_canvas(20, 80);
@@ -478,6 +534,51 @@ test_scroll_offsets_clamp_and_direction_helpers(void)
 }
 
 static void
+test_scroll_non_scroll_axis_uses_resolved_viewport(void)
+{
+    n00b_canvas_t *canvas = make_stream_canvas(20, 80);
+    n00b_plane_t *vertical_content = make_dummy_child(10, 20, 10, 20, false);
+    n00b_plane_t *horizontal_content = make_dummy_child(20, 5, 20, 5, false);
+    n00b_plane_t *vertical = n00b_scroll_new(vertical_content,
+                                             .axes = N00B_SCROLL_AXIS_VERTICAL,
+                                             .canvas = canvas);
+    n00b_plane_t *horizontal = n00b_scroll_new(horizontal_content,
+                                               .axes = N00B_SCROLL_AXIS_HORIZONTAL,
+                                               .canvas = canvas);
+    n00b_scroll_t *vertical_state = (n00b_scroll_t *)vertical->widget_data;
+    n00b_scroll_t *horizontal_state = (n00b_scroll_t *)horizontal->widget_data;
+
+    n00b_widget_layout(vertical,
+                       (n00b_rect_t){
+                           .x      = 0,
+                           .y      = 0,
+                           .width  = 10,
+                           .height = 5,
+                       });
+    assert(vertical_state->show_vscrollbar);
+    assert(vertical_state->viewport_width == 9);
+    assert(vertical_state->content_width == 9);
+    assert_rect_eq(dummy_state(vertical_content)->last_bounds, 0, 0, 9, 20);
+
+    n00b_widget_layout(horizontal,
+                       (n00b_rect_t){
+                           .x      = 0,
+                           .y      = 0,
+                           .width  = 10,
+                           .height = 5,
+                       });
+    assert(horizontal_state->show_hscrollbar);
+    assert(horizontal_state->viewport_height == 4);
+    assert(horizontal_state->content_height == 4);
+    assert_rect_eq(dummy_state(horizontal_content)->last_bounds, 0, 0, 20, 4);
+
+    destroy_plane_tree(vertical);
+    destroy_plane_tree(horizontal);
+    n00b_canvas_destroy(canvas);
+    printf("  [PASS] scroll non-scroll axis uses resolved viewport\n");
+}
+
+static void
 test_scroll_auto_scrollbars_and_thumb_rects(void)
 {
     n00b_canvas_t *canvas = make_stream_canvas(20, 80);
@@ -509,6 +610,76 @@ test_scroll_auto_scrollbars_and_thumb_rects(void)
     destroy_plane_tree(scroll);
     n00b_canvas_destroy(canvas);
     printf("  [PASS] scroll auto scrollbars and thumb rects\n");
+}
+
+static void
+test_scroll_content_click_focuses_scroll_for_keyboard_input(void)
+{
+    n00b_canvas_t *canvas = make_stream_canvas(20, 80);
+    n00b_plane_t *sibling = make_dummy_child(6, 1, 6, 1, false);
+    n00b_plane_t *content = make_dummy_child(10, 20, 10, 20, false);
+    n00b_plane_t *scroll = n00b_scroll_new(content,
+                                           .axes = N00B_SCROLL_AXIS_VERTICAL,
+                                           .canvas = canvas);
+    n00b_focus_mgr_t *fm;
+    n00b_display_dispatch_result_t dispatch;
+    n00b_event_t click = {
+        .type = N00B_EVENT_MOUSE,
+        .mouse = {
+            .x      = 13,
+            .y      = 5,
+            .button = N00B_MOUSE_LEFT,
+            .action = N00B_MOUSE_PRESS,
+            .mods   = N00B_MOD_NONE,
+        },
+    };
+    n00b_event_t key_down = {
+        .type = N00B_EVENT_KEY,
+        .key = {
+            .key  = N00B_KEY_DOWN,
+            .mods = N00B_MOD_NONE,
+        },
+    };
+
+    dummy_state(sibling)->can_focus = true;
+    n00b_canvas_add_plane(canvas, sibling);
+    n00b_canvas_add_plane(canvas, scroll);
+    n00b_widget_layout(sibling,
+                       (n00b_rect_t){
+                           .x      = 0,
+                           .y      = 0,
+                           .width  = 6,
+                           .height = 1,
+                       });
+    n00b_widget_layout(scroll,
+                       (n00b_rect_t){
+                           .x      = 12,
+                           .y      = 4,
+                           .width  = 10,
+                           .height = 5,
+                       });
+
+    fm = n00b_focus_mgr_new(canvas);
+    assert(n00b_focus_mgr_current(fm) == sibling);
+    assert(n00b_scroll_get_offset_y(scroll) == 0);
+
+    dispatch = n00b_display_dispatch_event(canvas, fm, &click);
+    assert(dispatch.handled);
+    assert(dispatch.focus_changed);
+    assert(n00b_focus_mgr_current(fm) == scroll);
+    assert(dummy_state(content)->click_count == 1);
+
+    dispatch = n00b_display_dispatch_event(canvas, fm, &key_down);
+    assert(dispatch.handled);
+    assert(n00b_scroll_get_offset_y(scroll) == 1);
+
+    n00b_focus_mgr_destroy(fm);
+    assert(n00b_canvas_remove_plane(canvas, sibling));
+    assert(n00b_canvas_remove_plane(canvas, scroll));
+    destroy_plane_tree(sibling);
+    destroy_plane_tree(scroll);
+    n00b_canvas_destroy(canvas);
+    printf("  [PASS] scroll content click focuses scroll for keyboard input\n");
 }
 
 static void
@@ -604,6 +775,103 @@ test_scroll_vertical_thumb_drag_and_track_click(void)
 }
 
 static void
+test_scroll_detach_during_thumb_drag_clears_capture(void)
+{
+    n00b_canvas_t *canvas = make_stream_canvas(20, 80);
+    n00b_plane_t *content = make_dummy_child(10, 8, 10, 8, false);
+    n00b_plane_t *scroll = n00b_scroll_new(content,
+                                           .axes = N00B_SCROLL_AXIS_VERTICAL,
+                                           .canvas = canvas);
+    n00b_scroll_t *state = (n00b_scroll_t *)scroll->widget_data;
+    n00b_plane_t *root = n00b_new_kargs(n00b_plane_t, plane, .canvas = canvas);
+    int32_t press_x;
+    int32_t press_y;
+    int32_t offset_after_cancel;
+
+    root->width  = 80;
+    root->height = 20;
+
+    n00b_canvas_add_plane(canvas, scroll);
+    n00b_widget_layout(scroll,
+                       (n00b_rect_t){
+                           .x      = 0,
+                           .y      = 0,
+                           .width  = 10,
+                           .height = 5,
+                       });
+
+    assert(state->vthumb_rect.height > 1);
+    press_x = state->vthumb_rect.x;
+    press_y = state->vthumb_rect.y + state->vthumb_rect.height - 1;
+
+    route_mouse(canvas, press_x, press_y, N00B_MOUSE_LEFT, N00B_MOUSE_PRESS, N00B_MOD_NONE);
+    assert(n00b_canvas_get_mouse_capture(canvas) == scroll);
+    assert(state->dragging_vertical_thumb);
+    assert(state->hover_vertical_thumb);
+    assert(state->drag_anchor_px == press_y);
+    assert(state->drag_anchor_offset_px == 0);
+
+    assert(n00b_canvas_remove_plane(canvas, scroll));
+    assert(n00b_canvas_get_mouse_capture(canvas) == nullptr);
+    assert(!state->dragging_vertical_thumb);
+    assert(!state->dragging_horizontal_thumb);
+    assert(!state->hover_vertical_thumb);
+    assert(!state->hover_horizontal_thumb);
+    assert(state->drag_anchor_px == 0);
+    assert(state->drag_anchor_offset_px == 0);
+
+    offset_after_cancel = n00b_scroll_get_offset_y(scroll);
+    route_mouse(canvas,
+                press_x,
+                press_y + 2,
+                N00B_MOUSE_LEFT,
+                N00B_MOUSE_DRAG,
+                N00B_MOD_NONE);
+    assert(n00b_scroll_get_offset_y(scroll) == offset_after_cancel);
+
+    n00b_canvas_add_plane(canvas, root);
+    n00b_plane_add_child(root, scroll, 0, 0);
+    n00b_widget_layout(scroll,
+                       (n00b_rect_t){
+                           .x      = 12,
+                           .y      = 4,
+                           .width  = 10,
+                           .height = 5,
+                       });
+
+    press_x = 12 + state->vthumb_rect.x;
+    press_y = 4 + state->vthumb_rect.y + state->vthumb_rect.height - 1;
+    route_mouse(canvas, press_x, press_y, N00B_MOUSE_LEFT, N00B_MOUSE_PRESS, N00B_MOD_NONE);
+    assert(n00b_canvas_get_mouse_capture(canvas) == scroll);
+    assert(state->dragging_vertical_thumb);
+    assert(state->hover_vertical_thumb);
+
+    assert(n00b_plane_remove_child(root, scroll));
+    assert(n00b_canvas_get_mouse_capture(canvas) == nullptr);
+    assert(!state->dragging_vertical_thumb);
+    assert(!state->dragging_horizontal_thumb);
+    assert(!state->hover_vertical_thumb);
+    assert(!state->hover_horizontal_thumb);
+    assert(state->drag_anchor_px == 0);
+    assert(state->drag_anchor_offset_px == 0);
+
+    offset_after_cancel = n00b_scroll_get_offset_y(scroll);
+    route_mouse(canvas,
+                press_x,
+                press_y + 2,
+                N00B_MOUSE_LEFT,
+                N00B_MOUSE_DRAG,
+                N00B_MOD_NONE);
+    assert(n00b_scroll_get_offset_y(scroll) == offset_after_cancel);
+
+    assert(n00b_canvas_remove_plane(canvas, root));
+    destroy_plane_tree(root);
+    destroy_plane_tree(scroll);
+    n00b_canvas_destroy(canvas);
+    printf("  [PASS] scroll detach during thumb drag clears capture\n");
+}
+
+static void
 test_scroll_horizontal_thumb_drag_and_track_click(void)
 {
     n00b_canvas_t *canvas = make_stream_canvas(20, 80);
@@ -692,10 +960,14 @@ main(int argc, char **argv)
 
     test_scroll_create_and_api();
     test_scroll_measure_caps_scroll_axes();
+    test_scroll_plain_plane_overflow_preserves_box_size();
     test_scroll_offsets_clamp_and_direction_helpers();
+    test_scroll_non_scroll_axis_uses_resolved_viewport();
     test_scroll_auto_scrollbars_and_thumb_rects();
+    test_scroll_content_click_focuses_scroll_for_keyboard_input();
     test_scroll_keyboard_scroll_events();
     test_scroll_vertical_thumb_drag_and_track_click();
+    test_scroll_detach_during_thumb_drag_clears_capture();
     test_scroll_horizontal_thumb_drag_and_track_click();
     test_scroll_scrolled_content_mouse_routes_to_visible_child();
 
