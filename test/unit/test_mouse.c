@@ -327,6 +327,64 @@ test_route_event_uses_visual_z_order_for_top_level_planes(void)
     printf("  PASS: route_event_uses_visual_z_order_for_top_level_planes\n");
 }
 
+static void
+test_route_event_tracks_manual_move_after_layout(void)
+{
+    n00b_canvas_t *canvas = n00b_new_kargs(n00b_canvas_t,
+                                           canvas,
+                                           .vtable = &n00b_renderer_stream);
+    n00b_stream_backend_set_size(canvas->backend_ctx, 20, 20);
+    n00b_canvas_resize(canvas, 20, 20);
+
+    n00b_plane_t *parent = make_plane(0, 0, 10, 10);
+    n00b_plane_t *child = make_plane(0, 0, 4, 3);
+    mouse_capture_widget_t capture = {0};
+
+    n00b_widget_attach(child, &capture_widget_vtable, &capture);
+    n00b_plane_add_child(parent, child, 0, 0);
+    n00b_widget_layout(parent,
+                       (n00b_rect_t){
+                           .x = 0,
+                           .y = 0,
+                           .width = 10,
+                           .height = 10,
+                       });
+    n00b_widget_layout(child,
+                       (n00b_rect_t){
+                           .x = 2,
+                           .y = 1,
+                           .width = 4,
+                           .height = 3,
+                       });
+    n00b_plane_move(parent, 5, 4);
+
+    n00b_canvas_add_plane(canvas, parent);
+
+    n00b_event_t event = {
+        .type = N00B_EVENT_MOUSE,
+        .mouse = {
+            .x = 8,
+            .y = 6,
+            .button = N00B_MOUSE_LEFT,
+            .action = N00B_MOUSE_PRESS,
+            .mods = N00B_MOD_NONE,
+        },
+    };
+
+    n00b_mouse_route_event(canvas, nullptr, &event);
+    assert(capture.calls == 1);
+    assert(capture.x == 1);
+    assert(capture.y == 1);
+
+    n00b_canvas_remove_plane(canvas, parent);
+    n00b_plane_remove_child(parent, child);
+    n00b_widget_detach(child);
+    n00b_plane_destroy(child);
+    n00b_plane_destroy(parent);
+    n00b_canvas_destroy(canvas);
+    printf("  PASS: route_event_tracks_manual_move_after_layout\n");
+}
+
 // -------------------------------------------------------------------
 // Test 5: Mouse capture
 // -------------------------------------------------------------------
@@ -477,6 +535,7 @@ main(int argc, char **argv)
     test_hit_test_terminal_nested_uses_absolute_quantization();
     test_route_event_terminal_preserves_true_local_coords();
     test_route_event_uses_visual_z_order_for_top_level_planes();
+    test_route_event_tracks_manual_move_after_layout();
     test_capture();
     test_button_mouse_click();
     test_sgr_encoding();

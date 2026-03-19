@@ -14,12 +14,7 @@
 #include "display/event.h"
 #include "display/widget.h"
 #include "display/focus.h"
-
-static inline bool
-plane_has_layout_bounds(const n00b_plane_t *plane)
-{
-    return plane && plane->bounds.width > 0 && plane->bounds.height > 0;
-}
+#include "internal/display/plane_geometry.h"
 
 static void
 plane_absolute_origin(const n00b_plane_t *plane,
@@ -32,21 +27,13 @@ plane_absolute_origin(const n00b_plane_t *plane,
         return;
     }
 
-    if (plane_has_layout_bounds(plane)) {
-        *out_x = plane->bounds.x;
-        *out_y = plane->bounds.y;
-        return;
-    }
-
     if (!plane->parent) {
-        *out_x = plane->x;
-        *out_y = plane->y;
+        n00b_plane_resolve_absolute_origin(plane, 0, 0, out_x, out_y);
         return;
     }
 
     plane_absolute_origin(plane->parent, out_x, out_y);
-    *out_x += plane->x;
-    *out_y += plane->y;
+    n00b_plane_resolve_absolute_origin(plane, *out_x, *out_y, out_x, out_y);
 }
 // -------------------------------------------------------------------
 // Hit testing

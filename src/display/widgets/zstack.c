@@ -29,51 +29,6 @@ zstack_render(n00b_plane_t *plane, void *data)
 }
 
 static void
-measure_plain_layer(n00b_plane_t *plane,
-                    int32_t      *pref_w,
-                    int32_t      *pref_h,
-                    int32_t      *min_w,
-                    int32_t      *min_h)
-{
-    int32_t width = plane ? plane->width : 0;
-    int32_t height = plane ? plane->height : 0;
-
-    if (plane && plane->box) {
-        int32_t cpw = 1;
-        int32_t cph = 1;
-        int32_t inset_top = 0;
-        int32_t inset_bot = 0;
-        int32_t inset_left = 0;
-        int32_t inset_right = 0;
-
-        if (plane->canvas) {
-            cpw = (int32_t)(plane->canvas->cell_px_w > 0
-                            ? plane->canvas->cell_px_w
-                            : 1);
-            cph = (int32_t)(plane->canvas->cell_px_h > 0
-                            ? plane->canvas->cell_px_h
-                            : 1);
-        }
-
-        n00b_box_insets_px(plane->box,
-                           cpw,
-                           cph,
-                           &inset_top,
-                           &inset_bot,
-                           &inset_left,
-                           &inset_right);
-
-        width += inset_left + inset_right;
-        height += inset_top + inset_bot;
-    }
-
-    *pref_w = width;
-    *pref_h = height;
-    *min_w = width;
-    *min_h = height;
-}
-
-static void
 zstack_measure(n00b_plane_t *plane, void *data,
                int32_t *pref_w, int32_t *pref_h,
                int32_t *min_w, int32_t *min_h)
@@ -106,11 +61,11 @@ zstack_measure(n00b_plane_t *plane, void *data,
                                     &child_min_h);
             }
             else {
-                measure_plain_layer(child,
-                                    &child_pref_w,
-                                    &child_pref_h,
-                                    &child_min_w,
-                                    &child_min_h);
+                n00b_widget_measure_plain_plane(child,
+                                                &child_pref_w,
+                                                &child_pref_h,
+                                                &child_min_w,
+                                                &child_min_h);
             }
 
             max_pref_w = n00b_max(max_pref_w, child_pref_w);

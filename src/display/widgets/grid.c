@@ -140,9 +140,13 @@ grid_copy_tracks(n00b_grid_t            *data,
                  const n00b_grid_track_t *tracks,
                  n00b_isize_t             count)
 {
+    if (!data) {
+        return;
+    }
+
     grid_clear_tracks(data);
 
-    if (!data || !tracks || count == 0) {
+    if (!tracks || count == 0 || count > (n00b_isize_t)INT32_MAX) {
         return;
     }
 
@@ -247,11 +251,20 @@ grid_collect_visible_children(n00b_plane_t  *grid,
 
         grid_item_t *item = &items[write_ix++];
         item->child = child;
-        n00b_widget_measure(child,
-                            &item->pref_w,
-                            &item->pref_h,
-                            &item->min_w,
-                            &item->min_h);
+        if (child->widget_vtable && child->widget_vtable->measure) {
+            n00b_widget_measure(child,
+                                &item->pref_w,
+                                &item->pref_h,
+                                &item->min_w,
+                                &item->min_h);
+        }
+        else {
+            n00b_widget_measure_plain_plane(child,
+                                            &item->pref_w,
+                                            &item->pref_h,
+                                            &item->min_w,
+                                            &item->min_h);
+        }
         grid_child_span(data, child, &item->col_span, &item->row_span);
     }
 
@@ -608,6 +621,7 @@ static void
 grid_resolve_row_heights(const grid_item_t *items,
                          n00b_isize_t       item_count,
                          int32_t            row_count,
+                         int32_t            row_gap,
                          bool               use_min_sizes,
                          int32_t           *row_heights)
 {
@@ -626,7 +640,15 @@ grid_resolve_row_heights(const grid_item_t *items,
     for (n00b_isize_t i = 0; i < item_count; i++) {
         const grid_item_t *item = &items[i];
         int32_t height = use_min_sizes ? item->min_h : item->pref_h;
-        int32_t per_row = grid_ceil_div_i32(height, item->row_span);
+        int32_t internal_gap = grid_total_gap(item->row_span, row_gap);
+        int32_t adjusted = height - internal_gap;
+        int32_t per_row = 0;
+
+        if (adjusted < 0) {
+            adjusted = 0;
+        }
+
+        per_row = grid_ceil_div_i32(adjusted, item->row_span);
 
         for (int32_t r = 0; r < item->row_span && (item->row + r) < row_count; r++) {
             int32_t row_ix = item->row + r;
@@ -852,8 +874,18 @@ grid_measure(n00b_plane_t *plane, void *data,
         grid_build_placements(items, item_count, 1, &row_count);
         pref_rows = n00b_alloc_array(int32_t, row_count > 0 ? row_count : 1);
         min_rows = n00b_alloc_array(int32_t, row_count > 0 ? row_count : 1);
-        grid_resolve_row_heights(items, item_count, row_count, false, pref_rows);
-        grid_resolve_row_heights(items, item_count, row_count, true, min_rows);
+        grid_resolve_row_heights(items,
+                                 item_count,
+                                 row_count,
+                                 grid->row_gap,
+                                 false,
+                                 pref_rows);
+        grid_resolve_row_heights(items,
+                                 item_count,
+                                 row_count,
+                                 grid->row_gap,
+                                 true,
+                                 min_rows);
 
         *pref_w = n00b_max(1, pref_col_width + pad_w);
         *min_w  = n00b_max(1, min_col_width + pad_w);
@@ -926,8 +958,18 @@ grid_measure(n00b_plane_t *plane, void *data,
 
     pref_rows = n00b_alloc_array(int32_t, row_count > 0 ? row_count : 1);
     min_rows = n00b_alloc_array(int32_t, row_count > 0 ? row_count : 1);
-    grid_resolve_row_heights(items, item_count, row_count, false, pref_rows);
-    grid_resolve_row_heights(items, item_count, row_count, true, min_rows);
+    grid_resolve_row_heights(items,
+                             item_count,
+                             row_count,
+                             grid->row_gap,
+                             false,
+                             pref_rows);
+    grid_resolve_row_heights(items,
+                             item_count,
+                             row_count,
+                             grid->row_gap,
+                             true,
+                             min_rows);
 
     *pref_w = n00b_max(1, pref_content_w + pad_w);
     *min_w  = n00b_max(1, min_content_w + pad_w);
@@ -1034,7 +1076,12 @@ grid_layout(n00b_plane_t *plane, void *data, n00b_rect_t bounds)
     x_positions = n00b_alloc_array(int32_t, col_count);
     y_positions = n00b_alloc_array(int32_t, row_count > 0 ? row_count : 1);
 
-    grid_resolve_row_heights(items, item_count, row_count, false, rows);
+    grid_resolve_row_heights(items,
+                             item_count,
+                             row_count,
+                             grid->row_gap,
+                             false,
+                             rows);
     grid_build_positions(content.x, widths, col_count, grid->col_gap, x_positions);
     grid_build_positions(content.y, rows, row_count, grid->row_gap, y_positions);
 
@@ -1154,7 +1201,7 @@ n00b_grid_set_tracks(n00b_plane_t            *grid_plane,
         return;
     }
 
-    if (!tracks || count == 0) {
+    if (!tracks || count == 0 || count > (n00b_isize_t)INT32_MAX) {
         grid_clear_tracks(grid);
         grid->min_col_width = 0;
         grid->max_col_width = 0;
@@ -1287,7 +1334,8 @@ n00b_grid_get_span(n00b_plane_t *grid_plane,
     int32_t cols = 1;
     int32_t rows = 1;
 
-    if (grid && child) {
+    if (grid && child && child->parent == grid_plane) {
+        grid_prune_stale_spans(grid_plane, grid);
         grid_child_span(grid, child, &cols, &rows);
     }
 

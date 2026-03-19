@@ -66,6 +66,13 @@ n00b_grid_new() _kargs {
 };
 
 extern void n00b_grid_set_columns(n00b_plane_t *grid, int32_t columns);
+/**
+ * Copy explicit track definitions into widget-owned storage.
+ *
+ * Passing `tracks == nullptr`, `count == 0`, or an oversized count above
+ * `INT32_MAX` clears track mode and leaves the current fixed column count
+ * in place.
+ */
 extern void n00b_grid_set_tracks(n00b_plane_t              *grid,
                                  const n00b_grid_track_t   *tracks,
                                  n00b_isize_t               count);
@@ -79,6 +86,7 @@ extern void n00b_grid_set_span(n00b_plane_t *grid,
                                n00b_plane_t *child,
                                int32_t       col_span,
                                int32_t       row_span);
+/** Return the stored span for an attached child, or `1x1` for a miss. */
 extern void n00b_grid_get_span(n00b_plane_t *grid,
                                n00b_plane_t *child,
                                int32_t      *col_span,

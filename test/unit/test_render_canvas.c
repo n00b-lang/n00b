@@ -15,6 +15,7 @@
 #include "display/render/box.h"
 #include "display/render/composite.h"
 #include "display/render/types.h"
+#include "display/widget.h"
 #include "text/strings/text_style.h"
 #include "text/strings/string_ops.h"
 
@@ -613,6 +614,59 @@ test_composite_commands_quantize_partial_cells(void)
 }
 
 static void
+test_canvas_layout_move_updates_descendant_render_origin(void)
+{
+    n00b_canvas_t *c = n00b_new_kargs(n00b_canvas_t, canvas,
+                                      .vtable = &n00b_renderer_stream);
+    n00b_stream_backend_set_size(c->backend_ctx, 6, 12);
+    n00b_canvas_resize(c, 6, 12);
+
+    n00b_plane_t *parent = n00b_new_kargs(n00b_plane_t, plane);
+    n00b_plane_t *child = n00b_new_kargs(n00b_plane_t, plane);
+
+    n00b_plane_draw_glyph(child, 0, 0, 'X');
+    n00b_plane_add_child(parent, child, 0, 0);
+
+    n00b_widget_layout(parent,
+                       (n00b_rect_t){
+                           .x = 0,
+                           .y = 0,
+                           .width = 8,
+                           .height = 4,
+                       });
+    n00b_widget_layout(child,
+                       (n00b_rect_t){
+                           .x = 2,
+                           .y = 1,
+                           .width = 1,
+                           .height = 1,
+                       });
+    n00b_plane_move(parent, 4, 2);
+
+    n00b_plane_t *planes[] = { parent };
+    n00b_array_t(n00b_composite_entry_t) entries =
+        n00b_composite_flatten(planes, 1, 1, 1);
+
+    assert(entries.len == 2);
+    assert(entries.data[1].plane == child);
+    assert(entries.data[1].abs_x == 6);
+    assert(entries.data[1].abs_y == 3);
+
+    n00b_canvas_add_plane(c, parent);
+    n00b_canvas_render(c);
+
+    n00b_string_t *buf = n00b_stream_backend_get_buffer(c->backend_ctx);
+    assert(buf->data != nullptr);
+    assert(n00b_unicode_str_contains(buf, r"X"));
+
+    n00b_array_free(entries);
+    n00b_plane_destroy(child);
+    n00b_plane_destroy(parent);
+    n00b_canvas_destroy(c);
+    printf("  [PASS] canvas layout move updates descendant render origin\n");
+}
+
+static void
 test_canvas_descendant_z_can_overlay_later_sibling(void)
 {
     n00b_canvas_t *c = n00b_new_kargs(n00b_canvas_t, canvas,
@@ -688,6 +742,7 @@ main(int argc, char **argv)
     test_canvas_child_clipping();
     test_composite_flatten_nested();
     test_composite_commands_quantize_partial_cells();
+    test_canvas_layout_move_updates_descendant_render_origin();
     test_canvas_descendant_z_can_overlay_later_sibling();
 
     printf("All render canvas tests passed.\n");

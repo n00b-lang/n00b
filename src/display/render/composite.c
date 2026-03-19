@@ -9,6 +9,7 @@
 #include "display/render/draw_cmd.h"
 #include "display/render/box.h"
 #include "display/widgets/zstack.h"
+#include "internal/display/plane_geometry.h"
 #include "text/unicode/properties.h"
 
 // -------------------------------------------------------------------
@@ -203,29 +204,6 @@ compare_flatten_record(const void *a, const void *b)
                              rb->entry.order);
 }
 
-static inline bool
-plane_has_layout_bounds(const n00b_plane_t *plane)
-{
-    return plane && plane->bounds.width > 0 && plane->bounds.height > 0;
-}
-
-static inline void
-resolve_plane_origin(const n00b_plane_t *plane,
-                     int32_t             parent_x,
-                     int32_t             parent_y,
-                     int32_t            *out_x,
-                     int32_t            *out_y)
-{
-    if (plane_has_layout_bounds(plane)) {
-        *out_x = plane->bounds.x;
-        *out_y = plane->bounds.y;
-        return;
-    }
-
-    *out_x = parent_x + plane->x;
-    *out_y = parent_y + plane->y;
-}
-
 static void
 flatten_recurse(flatten_ctx_t *ctx, n00b_plane_t *p,
                 int32_t parent_x, int32_t parent_y, int32_t parent_z,
@@ -244,7 +222,11 @@ flatten_recurse(flatten_ctx_t *ctx, n00b_plane_t *p,
     // Layout assigns absolute bounds, while manually parented planes keep
     // parent-relative x/y. Prefer layout bounds when present so nested
     // container children do not double-apply ancestor offsets.
-    resolve_plane_origin(p, parent_x, parent_y, &abs_x, &abs_y);
+    n00b_plane_resolve_absolute_origin(p,
+                                       parent_x,
+                                       parent_y,
+                                       &abs_x,
+                                       &abs_y);
 
     int32_t plane_w = p->width;
     int32_t plane_h = p->height;

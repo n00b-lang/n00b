@@ -1,5 +1,7 @@
 #include "n00b.h"
 #include "core/string.h"
+#include "display/render/box.h"
+#include "display/render/canvas.h"
 #include "display/render/plane.h"
 #include "internal/display/widget_primitives.h"
 
@@ -63,6 +65,51 @@ n00b_widget_event_is_keyboard_activate(const n00b_event_t *event)
     }
 
     return event->key.key == N00B_KEY_ENTER || event->key.key == ' ';
+}
+
+void
+n00b_widget_measure_plain_plane(n00b_plane_t *plane,
+                                int32_t      *pref_w,
+                                int32_t      *pref_h,
+                                int32_t      *min_w,
+                                int32_t      *min_h)
+{
+    int32_t width = plane ? plane->width : 0;
+    int32_t height = plane ? plane->height : 0;
+
+    if (plane && plane->box) {
+        int32_t cpw = 1;
+        int32_t cph = 1;
+        int32_t inset_top = 0;
+        int32_t inset_bot = 0;
+        int32_t inset_left = 0;
+        int32_t inset_right = 0;
+
+        if (plane->canvas) {
+            cpw = (int32_t)(plane->canvas->cell_px_w > 0
+                            ? plane->canvas->cell_px_w
+                            : 1);
+            cph = (int32_t)(plane->canvas->cell_px_h > 0
+                            ? plane->canvas->cell_px_h
+                            : 1);
+        }
+
+        n00b_box_insets_px(plane->box,
+                           cpw,
+                           cph,
+                           &inset_top,
+                           &inset_bot,
+                           &inset_left,
+                           &inset_right);
+
+        width += inset_left + inset_right;
+        height += inset_top + inset_bot;
+    }
+
+    *pref_w = width;
+    *pref_h = height;
+    *min_w = width;
+    *min_h = height;
 }
 
 void *

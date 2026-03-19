@@ -11,6 +11,7 @@
 #include "display/render/plane.h"
 #include "display/render/canvas.h"
 #include "display/render/font_metrics.h"
+#include "internal/display/plane_geometry.h"
 #include "text/unicode/properties.h"
 
 // -------------------------------------------------------------------
@@ -70,6 +71,30 @@ plane_clear_canvas_recursive(n00b_plane_t *plane)
             n00b_plane_t *child = plane->children.data[i];
             if (child) {
                 plane_clear_canvas_recursive(child);
+            }
+        }
+    }
+}
+
+static void
+plane_translate_layout_subtree(n00b_plane_t *plane, int32_t dx, int32_t dy)
+{
+    if (!plane || (dx == 0 && dy == 0)) {
+        return;
+    }
+
+    if (n00b_plane_has_layout_bounds(plane)) {
+        plane->bounds.x += dx;
+        plane->bounds.y += dy;
+    }
+
+    plane_mark_dirty(plane);
+
+    if (plane->children.data) {
+        for (size_t i = 0; i < plane->children.len; i++) {
+            n00b_plane_t *child = plane->children.data[i];
+            if (child) {
+                plane_translate_layout_subtree(child, dx, dy);
             }
         }
     }
@@ -342,8 +367,23 @@ n00b_plane_scroll_to(n00b_plane_t *p, int32_t x, int32_t y)
 void
 n00b_plane_move(n00b_plane_t *p, int32_t x, int32_t y)
 {
+    int32_t old_x = p->x;
+    int32_t old_y = p->y;
+    int32_t dx = 0;
+    int32_t dy = 0;
+
+    if (n00b_plane_has_layout_bounds(p)) {
+        old_x = p->bounds.x;
+        old_y = p->bounds.y;
+    }
+
+    dx = x - old_x;
+    dy = y - old_y;
+
     p->x = x;
     p->y = y;
+
+    plane_translate_layout_subtree(p, dx, dy);
     plane_mark_dirty(p);
 }
 

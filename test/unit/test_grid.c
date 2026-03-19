@@ -3,6 +3,7 @@
  */
 
 #include <assert.h>
+#include <limits.h>
 #include <stdio.h>
 
 #include "n00b.h"
@@ -145,6 +146,17 @@ make_dummy_child(int32_t pref_w, int32_t pref_h,
     plane->width  = dummy->pref_w;
     plane->height = dummy->pref_h;
     n00b_widget_attach(plane, &dummy_widget, dummy);
+
+    return plane;
+}
+
+static n00b_plane_t *
+make_plain_child(int32_t width, int32_t height)
+{
+    n00b_plane_t *plane = n00b_new_kargs(n00b_plane_t, plane);
+
+    plane->width = width > 0 ? width : 1;
+    plane->height = height > 0 ? height : 1;
 
     return plane;
 }
@@ -380,6 +392,132 @@ test_grid_hidden_children_do_not_reserve_slots(void)
 }
 
 static void
+test_grid_row_span_respects_internal_row_gap(void)
+{
+    n00b_plane_t *grid = n00b_grid_new(.columns = 1, .row_gap = 5);
+    n00b_plane_t *span = make_dummy_child(20, 19, 20, 19, false);
+    n00b_plane_t *tail = make_dummy_child(20, 4, 20, 4, false);
+    int32_t       pref_w = 0;
+    int32_t       pref_h = 0;
+    int32_t       min_w = 0;
+    int32_t       min_h = 0;
+
+    n00b_plane_add_child(grid, span, 0, 0);
+    n00b_plane_add_child(grid, tail, 0, 0);
+    n00b_grid_set_span(grid, span, 1, 2);
+
+    n00b_widget_measure(grid, &pref_w, &pref_h, &min_w, &min_h);
+    assert(pref_w == 20);
+    assert(pref_h == 28);
+    assert(min_w == 20);
+    assert(min_h == 28);
+
+    n00b_widget_layout(grid,
+                       (n00b_rect_t){
+                           .x      = 0,
+                           .y      = 0,
+                           .width  = 20,
+                           .height = 40,
+                       });
+
+    assert_rect_eq(dummy_state(span)->last_bounds, 0, 0, 20, 19);
+    assert_rect_eq(dummy_state(tail)->last_bounds, 0, 24, 20, 4);
+
+    destroy_plane_tree(grid);
+    printf("  [PASS] grid row span respects internal row gap\n");
+}
+
+static void
+test_grid_plain_plane_child_keeps_size(void)
+{
+    n00b_plane_t *grid = n00b_grid_new(.columns = 1);
+    n00b_plane_t *plain = make_plain_child(17, 9);
+    int32_t       pref_w = 0;
+    int32_t       pref_h = 0;
+    int32_t       min_w = 0;
+    int32_t       min_h = 0;
+
+    n00b_plane_add_child(grid, plain, 0, 0);
+
+    n00b_widget_measure(grid, &pref_w, &pref_h, &min_w, &min_h);
+    assert(pref_w == 17);
+    assert(pref_h == 9);
+    assert(min_w == 17);
+    assert(min_h == 9);
+
+    n00b_widget_layout(grid,
+                       (n00b_rect_t){
+                           .x      = 0,
+                           .y      = 0,
+                           .width  = 17,
+                           .height = 30,
+                       });
+
+    assert_rect_eq(plain->bounds, 0, 0, 17, 9);
+    assert(plain->width == 17);
+    assert(plain->height == 9);
+
+    destroy_plane_tree(grid);
+    printf("  [PASS] grid plain plane child keeps size\n");
+}
+
+static void
+test_grid_removed_child_span_defaults_to_one(void)
+{
+    n00b_plane_t *grid = n00b_grid_new(.columns = 2);
+    n00b_plane_t *child = make_dummy_child(10, 6, 4, 2, false);
+    int32_t       col_span = 0;
+    int32_t       row_span = 0;
+
+    n00b_plane_add_child(grid, child, 0, 0);
+    n00b_grid_set_span(grid, child, 2, 3);
+    n00b_grid_get_span(grid, child, &col_span, &row_span);
+    assert(col_span == 2);
+    assert(row_span == 3);
+
+    assert(n00b_plane_remove_child(grid, child));
+
+    n00b_grid_get_span(grid, child, &col_span, &row_span);
+    assert(col_span == 1);
+    assert(row_span == 1);
+
+    destroy_plane_tree(child);
+    destroy_plane_tree(grid);
+    printf("  [PASS] grid removed child span defaults to one\n");
+}
+
+static void
+test_grid_set_tracks_rejects_oversized_count(void)
+{
+    n00b_grid_track_t tracks[] = {
+        {.type = N00B_GRID_SIZE_FIXED, .value = 10, .min_px = 0, .max_px = 0},
+        {.type = N00B_GRID_SIZE_FIXED, .value = 12, .min_px = 0, .max_px = 0},
+    };
+    n00b_grid_track_t one_track = {
+        .type = N00B_GRID_SIZE_FIXED,
+        .value = 1,
+        .min_px = 0,
+        .max_px = 0,
+    };
+    n00b_plane_t *grid = n00b_grid_new(.columns = 2);
+    n00b_grid_t  *state = (n00b_grid_t *)grid->widget_data;
+    n00b_isize_t  oversized = ((n00b_isize_t)INT32_MAX) + 1u;
+
+    n00b_grid_set_tracks(grid, tracks, 2);
+    assert(state->track_count == 2);
+    assert(state->tracks != nullptr);
+    assert(state->columns == 2);
+
+    n00b_grid_set_tracks(grid, &one_track, oversized);
+    assert(state->track_count == 0);
+    assert(state->tracks == nullptr);
+    assert(state->columns == 2);
+
+    destroy_plane_tree(grid);
+    printf("  [PASS] grid set tracks rejects oversized count\n");
+}
+
+static void
 test_grid_mouse_routes_to_laid_out_child(void)
 {
     n00b_canvas_t *canvas = make_stream_canvas(10, 40);
@@ -527,6 +665,10 @@ main(int argc, char **argv)
     test_grid_fr_tracks_with_clamps();
     test_grid_auto_fit_wraps_children();
     test_grid_hidden_children_do_not_reserve_slots();
+    test_grid_row_span_respects_internal_row_gap();
+    test_grid_plain_plane_child_keeps_size();
+    test_grid_removed_child_span_defaults_to_one();
+    test_grid_set_tracks_rejects_oversized_count();
     test_grid_mouse_routes_to_laid_out_child();
     test_grid_nested_card_children_render_and_interact();
 
