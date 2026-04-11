@@ -202,9 +202,10 @@ n00b_capture_stack_base(n00b_thread_t *thread, n00b_runtime_t *runtime)
     }
     else {
 #if defined(__linux__)
-        pthread_getattr_np(thread->pthread_id, &thread->pthread_attrs);
+        pthread_getattr_np(thread->pthread_id, &thread->pthread_attrs.value);
+        thread->pthread_attrs.has_value = true;
         // Pthreads reports the lowest address, not the highest.
-        pthread_attr_getstack(&thread->pthread_attrs, (void **)&lowest, &size);
+        pthread_attr_getstack(&thread->pthread_attrs.value, (void **)&lowest, &size);
         highest = lowest + size;
 #elifdef __APPLE__
         pthread_t ptid = pthread_self();

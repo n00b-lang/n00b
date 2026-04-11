@@ -323,7 +323,11 @@ _n00b_format_impl(const char *desc_data, int32_t desc_len,
                         have_str = true;
                     }
                     else {
-                        sub_str  = n00b_fmt_pointer(arg);
+                        // No vtable — treat as n00b_string_t *.
+                        // This covers static rstr literals and other
+                        // unmanaged string pointers that lack alloc
+                        // metadata for vtable lookup.
+                        sub_str  = (n00b_string_t *)arg;
                         have_str = true;
                     }
                 }

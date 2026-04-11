@@ -419,7 +419,7 @@ n00b_emit_object_file(n00b_module_code_t *mod)
         return NULL;
     }
 
-    return n00b_result_unwrap(r);
+    return n00b_result_get(r);
 }
 
 #endif  // __APPLE__ vs Linux

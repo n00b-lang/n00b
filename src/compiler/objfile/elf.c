@@ -470,11 +470,11 @@ parse_dynamic_table(n00b_bstream_t *stream, n00b_elf_binary_t *bin)
 
         n00b_bstream_advance(stream, 8); // skip d_val/d_ptr
 
+        count++;
+
         if (tag == DT_NULL) {
             break;
         }
-
-        count++;
     }
 
     if (count == 0) {

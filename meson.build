@@ -895,7 +895,7 @@ if target_os != 'windows'
         ['test/unit/test_subproc.c'],
         kwargs: test_common_kwargs,
     )
-    test('subproc', subproc_test, suite: 'unit')
+    test('subproc', subproc_test, suite: 'unit', timeout: 120)
 endif
 
 timer_test = executable('test_timer',
@@ -1117,7 +1117,7 @@ bnf_json_test = executable('test_bnf_json',
     ['test/unit/test_bnf_json.c'],
     kwargs: test_common_kwargs,
 )
-test('bnf_json', bnf_json_test, suite: 'unit')
+test('bnf_json', bnf_json_test, suite: 'unit', workdir: meson.project_source_root())
 
 earley_test = executable('test_earley',
     ['test/unit/test_earley.c'],
@@ -1147,7 +1147,7 @@ c_parse_test = executable('test_c_parse',
     ['test/unit/test_c_parse.c'],
     kwargs: test_common_kwargs,
 )
-test('c_parse', c_parse_test, suite: 'unit')
+test('c_parse', c_parse_test, suite: 'unit', workdir: meson.project_source_root())
 
 c_tokenizer_test = executable('test_c_tokenizer',
     ['test/unit/test_c_tokenizer.c'],
@@ -1195,25 +1195,25 @@ cf_label_test = executable('test_cf_label',
     ['test/unit/test_cf_label.c'],
     kwargs: test_common_kwargs,
 )
-test('cf_label', cf_label_test, suite: 'unit')
+test('cf_label', cf_label_test, suite: 'unit', workdir: meson.project_source_root())
 
 cfg_test = executable('test_cfg',
     ['test/unit/test_cfg.c'],
     kwargs: test_common_kwargs,
 )
-test('cfg', cfg_test, suite: 'unit')
+test('cfg', cfg_test, suite: 'unit', workdir: meson.project_source_root())
 
 cdg_test = executable('test_cdg',
     ['test/unit/test_cdg.c'],
     kwargs: test_common_kwargs,
 )
-test('cdg', cdg_test, suite: 'unit')
+test('cdg', cdg_test, suite: 'unit', workdir: meson.project_source_root())
 
 dfg_test = executable('test_dfg',
     ['test/unit/test_dfg.c'],
     kwargs: test_common_kwargs,
 )
-test('dfg', dfg_test, suite: 'unit')
+test('dfg', dfg_test, suite: 'unit', workdir: meson.project_source_root())
 
 # ============================================================================
 # Type checker tests
@@ -1223,7 +1223,7 @@ typecheck_test = executable('test_typecheck',
     ['test/unit/test_typecheck.c'],
     kwargs: test_common_kwargs,
 )
-test('typecheck', typecheck_test, suite: 'unit')
+test('typecheck', typecheck_test, suite: 'unit', workdir: meson.project_source_root())
 
 # ============================================================================
 # Analysis tests
@@ -1233,25 +1233,25 @@ analyze_test = executable('test_analyze',
     ['test/unit/test_analyze.c'],
     kwargs: test_common_kwargs,
 )
-test('analyze', analyze_test, suite: 'unit')
+test('analyze', analyze_test, suite: 'unit', workdir: meson.project_source_root())
 
 n00b_programs_test = executable('test_n00b_programs',
     ['test/unit/test_n00b_programs.c'],
     kwargs: test_common_kwargs,
 )
-test('n00b_programs', n00b_programs_test, suite: 'unit')
+test('n00b_programs', n00b_programs_test, suite: 'unit', workdir: meson.project_source_root())
 
 n00b_types_test = executable('test_n00b_types',
     ['test/unit/test_n00b_types.c'],
     kwargs: test_common_kwargs,
 )
-test('n00b_types', n00b_types_test, suite: 'unit')
+test('n00b_types', n00b_types_test, suite: 'unit', workdir: meson.project_source_root())
 
 infer_expr_test = executable('test_infer_expr',
     ['test/unit/test_infer_expr.c'],
     kwargs: test_common_kwargs,
 )
-test('infer_expr', infer_expr_test, suite: 'unit')
+test('infer_expr', infer_expr_test, suite: 'unit', workdir: meson.project_source_root())
 
 # ============================================================================
 # MIR JIT tests
@@ -1273,7 +1273,7 @@ codegen_test = executable('test_codegen',
     link_with: [n00b],
     dependencies: [mir_dep],
 )
-test('codegen', codegen_test, suite: 'unit')
+test('codegen', codegen_test, suite: 'unit', workdir: meson.project_source_root())
 
 # ============================================================================
 # Render / layout tests

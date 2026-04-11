@@ -153,7 +153,10 @@ vnode_ops_to_inotify_mask(uint32_t ops)
 static void *
 uring_init(n00b_conduit_t *c)
 {
-    uring_ctx_t *ctx = n00b_alloc(uring_ctx_t);
+    n00b_allocator_t *sp = (n00b_allocator_t *)&n00b_get_runtime()->system_pool;
+
+    uring_ctx_t *ctx = n00b_alloc_with_opts(uring_ctx_t,
+                           &(n00b_alloc_opts_t){.allocator = sp});
     if (!ctx)
         return nullptr;
 
@@ -204,7 +207,9 @@ uring_add(void *vctx, int fd, n00b_conduit_io_op_t ops,
     if (!ctx)
         return false;
 
-    uring_entry_t *entry = n00b_alloc(uring_entry_t);
+    n00b_allocator_t *_sp = (n00b_allocator_t *)&n00b_get_runtime()->system_pool;
+    uring_entry_t *entry = n00b_alloc_with_opts(uring_entry_t,
+                               &(n00b_alloc_opts_t){.allocator = _sp});
     if (!entry)
         return false;
 
@@ -400,7 +405,15 @@ uring_wait(void *vctx, n00b_conduit_io_event_t *events, int max_events,
                             nullptr)
                         == 0
                     && info.si_pid > 0) {
-                    exit_status = info.si_status;
+                    // waitid's si_status is the raw exit code or signal,
+                    // not in waitpid(2) format.  Encode it so downstream
+                    // WIFEXITED / WEXITSTATUS macros work correctly.
+                    if (info.si_code == CLD_EXITED) {
+                        exit_status = info.si_status << 8;
+                    }
+                    else {
+                        exit_status = info.si_status & 0x7f;
+                    }
                 }
 
                 n00b_conduit_proc_fire(entry->proc_watch,
@@ -505,7 +518,9 @@ uring_timer_add(void *vctx, n00b_conduit_timer_t *timer)
         return false;
     }
 
-    uring_entry_t *entry = n00b_alloc(uring_entry_t);
+    n00b_allocator_t *_sp = (n00b_allocator_t *)&n00b_get_runtime()->system_pool;
+    uring_entry_t *entry = n00b_alloc_with_opts(uring_entry_t,
+                               &(n00b_alloc_opts_t){.allocator = _sp});
     if (!entry) {
         close(tfd);
         return false;
@@ -564,7 +579,9 @@ uring_signal_add(void *vctx, n00b_conduit_signal_watch_t *watch)
         return false;
     }
 
-    uring_entry_t *entry = n00b_alloc(uring_entry_t);
+    n00b_allocator_t *_sp = (n00b_allocator_t *)&n00b_get_runtime()->system_pool;
+    uring_entry_t *entry = n00b_alloc_with_opts(uring_entry_t,
+                               &(n00b_alloc_opts_t){.allocator = _sp});
     if (!entry) {
         close(sfd);
         sigprocmask(SIG_UNBLOCK, &mask, nullptr);
@@ -624,7 +641,9 @@ uring_proc_add(void *vctx, n00b_conduit_proc_watch_t *watch)
     if (pidfd < 0)
         return false;
 
-    uring_entry_t *entry = n00b_alloc(uring_entry_t);
+    n00b_allocator_t *_sp = (n00b_allocator_t *)&n00b_get_runtime()->system_pool;
+    uring_entry_t *entry = n00b_alloc_with_opts(uring_entry_t,
+                               &(n00b_alloc_opts_t){.allocator = _sp});
     if (!entry) {
         close(pidfd);
         return false;
@@ -694,7 +713,9 @@ uring_vnode_add(void *vctx, n00b_conduit_vnode_watch_t *watch)
     if (wd < 0)
         return false;
 
-    uring_entry_t *entry = n00b_alloc(uring_entry_t);
+    n00b_allocator_t *_sp = (n00b_allocator_t *)&n00b_get_runtime()->system_pool;
+    uring_entry_t *entry = n00b_alloc_with_opts(uring_entry_t,
+                               &(n00b_alloc_opts_t){.allocator = _sp});
     if (!entry) {
         inotify_rm_watch(ctx->inotify_fd, wd);
         return false;
@@ -711,7 +732,9 @@ uring_vnode_add(void *vctx, n00b_conduit_vnode_watch_t *watch)
 
     // Register inotify fd for polling if not already done
     if (!ctx->inotify_registered) {
-        ctx->inotify_entry = n00b_alloc(uring_entry_t);
+        n00b_allocator_t *_isp = (n00b_allocator_t *)&n00b_get_runtime()->system_pool;
+        ctx->inotify_entry = n00b_alloc_with_opts(uring_entry_t,
+                                 &(n00b_alloc_opts_t){.allocator = _isp});
         if (!ctx->inotify_entry)
             return false;
         ctx->inotify_entry->type        = URING_ENTRY_VNODE;
@@ -761,7 +784,9 @@ uring_user_event_add(void *vctx, n00b_conduit_user_event_t *event)
     if (efd < 0)
         return false;
 
-    uring_entry_t *entry = n00b_alloc(uring_entry_t);
+    n00b_allocator_t *_sp = (n00b_allocator_t *)&n00b_get_runtime()->system_pool;
+    uring_entry_t *entry = n00b_alloc_with_opts(uring_entry_t,
+                               &(n00b_alloc_opts_t){.allocator = _sp});
     if (!entry) {
         close(efd);
         return false;

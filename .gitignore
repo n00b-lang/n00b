@@ -59,3 +59,4 @@ docker/sdk/
 
 # Vendored subproject sources (cloned at build time)
 /subprojects/mir/
+/subprojects/ncc/

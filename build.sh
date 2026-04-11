@@ -32,13 +32,69 @@ if [[ "$(uname -s)" == "Darwin" ]] && \
     fi
 fi
 
-function ensure_ncc {
-    export NCC_PATH=$(which ncc)
+function ensure_ncc_subproject {
+    local ncc_src="${N00B_ROOT}/subprojects/ncc"
 
-    if [[ -z ${NCC_PATH} ]] ; then
-        echo "=== Error: the ncc non-compiler is not found in your path. ==="
-        exit 1
+    if [[ -f "${ncc_src}/meson.build" ]] ; then
+        return 0
     fi
+
+    echo "=== Cloning ncc into subprojects/ncc ==="
+    git clone https://github.com/crashappsec/ncc.git "${ncc_src}"
+
+    if [[ -n "${NCC_REV:-}" ]] ; then
+        git -C "${ncc_src}" checkout "${NCC_REV}"
+    fi
+}
+
+function build_ncc {
+    local ncc_src="${N00B_ROOT}/subprojects/ncc"
+    local ncc_build="${ncc_src}/build_release"
+    local ncc_bin="${ncc_build}/ncc"
+
+    if [[ -x "${ncc_bin}" ]] && [[ "${N00B_BUILD_BOOTSTRAP:-0}" -eq 0 ]] ; then
+        echo "=== Using cached ncc build ==="
+        export NCC_PATH="${ncc_bin}"
+        return 0
+    fi
+
+    echo "=== Building ncc from subprojects/ncc ==="
+    local ncc_cc="${CC:-clang}"
+    # Avoid circular dependency: if CC is already ncc, fall back to clang.
+    if [[ "$(basename "${ncc_cc}")" == "ncc" ]] ; then
+        ncc_cc="clang"
+    fi
+
+    if [[ "${N00B_BUILD_BOOTSTRAP:-0}" -ne 0 ]] && [[ -d "${ncc_build}" ]] ; then
+        rm -rf "${ncc_build}"
+    fi
+
+    if [[ ! -d "${ncc_build}" ]] ; then
+        CC="${ncc_cc}" meson setup --buildtype=release "${ncc_build}" "${ncc_src}"
+    fi
+
+    meson compile -C "${ncc_build}"
+    export NCC_PATH="${ncc_bin}"
+}
+
+function ensure_ncc {
+    # 1. Explicit override via NCC_PATH env var.
+    if [[ -n "${NCC_PATH:-}" ]] && [[ -x "${NCC_PATH}" ]] ; then
+        export NCC_PATH
+        return 0
+    fi
+
+    # 2. System ncc in PATH.
+    local system_ncc
+    system_ncc=$(which ncc 2>/dev/null || true)
+    if [[ -n "${system_ncc}" ]] ; then
+        export NCC_PATH="${system_ncc}"
+        return 0
+    fi
+
+    # 3. Build from subproject.
+    ensure_ncc_subproject
+    build_ncc
 }
 
 function all_options {
@@ -105,7 +161,11 @@ function build_n00b {
    meson compile -C ${build_dir} ${jobs_flag}
 
    if [[ ${N00B_TEST} -ne 0 ]] ; then
-       meson test -C ${build_dir} --print-errorlogs
+       local test_jobs_flag=""
+       if [[ -n "${N00B_JOBS}" ]] ; then
+           test_jobs_flag="--num-processes ${N00B_JOBS}"
+       fi
+       meson test -C ${build_dir} --print-errorlogs --timeout-multiplier 3 ${test_jobs_flag}
        if [[ $? -ne 0 ]] ; then
            echo "Tests failed."
            exit 1

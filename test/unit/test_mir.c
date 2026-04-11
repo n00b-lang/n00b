@@ -61,12 +61,20 @@ test_mir_interp_add(void)
     MIR_link(ctx, MIR_set_interp_interface, NULL);
 
     // Interpret: add(3, 4) should yield 7.
+    // Use MIR_interp_arr to avoid va_arg(MIR_val_t) portability issues
+    // on Linux aarch64 where MIR_val_t (containing long double) may be
+    // larger than int64_t in the varargs ABI.
     MIR_val_t result;
-    MIR_interp(ctx, func, &result, 2, (int64_t)3, (int64_t)4);
+    MIR_val_t args[2];
+    args[0].i = 3;
+    args[1].i = 4;
+    MIR_interp_arr(ctx, func, &result, 2, args);
     assert(result.i == 7);
 
     // Interpret: add(-10, 25) should yield 15.
-    MIR_interp(ctx, func, &result, 2, (int64_t)-10, (int64_t)25);
+    args[0].i = -10;
+    args[1].i = 25;
+    MIR_interp_arr(ctx, func, &result, 2, args);
     assert(result.i == 15);
 
     MIR_finish(ctx);

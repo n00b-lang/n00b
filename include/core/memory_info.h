@@ -117,7 +117,7 @@ extern n00b_option_t(n00b_allocator_t *) n00b_find_allocator(void *val);
 static inline bool
 n00b_value_is_data(void *ptr)
 {
-    auto mmap_opt = n00b_mmap_by_address(ptr);
+    auto mmap_opt = n00b_mmap_info_lookup(ptr);
 
     return (!n00b_option_is_set(mmap_opt)
             || n00b_check_memory_perms(ptr) == n00b_mmap_perms_no_access);

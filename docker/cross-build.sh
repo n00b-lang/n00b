@@ -52,6 +52,16 @@ IMAGE_NAME="n00b-linux"
 BUILD_TYPE="${N00B_BUILD_TYPE:-debug}"
 OUTPUT_DIR="${PROJECT_ROOT}/build_cross_${TARGET}"
 
+# Verify ncc subproject exists (host side only).
+if [[ "${CROSS_INSIDE_CONTAINER:-0}" != "1" ]]; then
+    if [[ ! -f "${PROJECT_ROOT}/subprojects/ncc/meson.build" ]]; then
+        echo "ERROR: ncc subproject not found at subprojects/ncc/"
+        echo "Run 'bash build.sh' first (it will clone ncc automatically),"
+        echo "or manually: git clone https://github.com/crashappsec/ncc.git subprojects/ncc"
+        exit 1
+    fi
+fi
+
 # ── Inside container: do the actual build ────────────────────────────────────
 
 if [[ "${CROSS_INSIDE_CONTAINER:-0}" == "1" ]]; then
@@ -127,13 +137,13 @@ WRAPEOF
     echo "=== Cross-compiling for ${TARGET} ==="
     echo "  Cross-compiler: ${CROSS_CC_PATH}"
 
-    # Step 1: Build ncc natively with Linux clang
+    # Step 1: Build ncc natively with Linux clang.
+    # ncc source is in the project tree at /src/subprojects/ncc (subproject).
     echo "--- Building ncc (native Linux) ---"
     export CC=clang
-    cd /build/ncc
-    if [[ -d build_ncc ]]; then
-        rm -rf build_ncc
-    fi
+    cp -a /src/subprojects/ncc /build_ncc
+    cd /build_ncc
+    rm -rf build_ncc
     meson setup --buildtype="${BUILD_TYPE}" \
         -Dcc_path=clang \
         --prefix=/build --bindir=/build/bin \

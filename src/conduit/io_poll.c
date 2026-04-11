@@ -781,8 +781,8 @@ poll_proc_add(void *vctx, n00b_conduit_proc_watch_t *watch)
     pp->next   = ctx->procs;
     ctx->procs = pp;
 
-    // Add pidfd to poll set
-    if (!poll_add(ctx, pidfd, N00B_CONDUIT_IO_READ, pp)) {
+    // Add pidfd to poll set (no IO target — procs dispatch via poll_process_procs)
+    if (!poll_add(ctx, pidfd, N00B_CONDUIT_IO_READ, nullptr)) {
         close(pidfd);
         return false;
     }
@@ -838,7 +838,15 @@ poll_process_procs(poll_ctx_t *ctx)
         int ret = syscall(SYS_waitid, P_PIDFD, pp->pidfd, &info,
                           WEXITED | WNOHANG, nullptr);
         if (ret == 0 && info.si_pid != 0) {
-            exit_status = info.si_status;
+            // waitid's si_status is the raw exit code or signal,
+            // not in waitpid(2) format.  Encode it so downstream
+            // WIFEXITED / WEXITSTATUS macros work correctly.
+            if (info.si_code == CLD_EXITED) {
+                exit_status = info.si_status << 8;
+            }
+            else {
+                exit_status = info.si_status & 0x7f;
+            }
         }
 
         n00b_conduit_proc_fire(pp->watch, N00B_CONDUIT_PROC_EXIT, exit_status);
@@ -1037,8 +1045,8 @@ poll_user_event_add(void *vctx, n00b_conduit_user_event_t *event)
     pe->next         = ctx->user_events;
     ctx->user_events = pe;
 
-    // Add eventfd to poll set
-    if (!poll_add(ctx, efd, N00B_CONDUIT_IO_READ, pe)) {
+    // Add eventfd to poll set (no IO target — user events dispatch via poll_process_user_events)
+    if (!poll_add(ctx, efd, N00B_CONDUIT_IO_READ, nullptr)) {
         close(efd);
         return false;
     }
