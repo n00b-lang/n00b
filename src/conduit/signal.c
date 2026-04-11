@@ -36,7 +36,8 @@ n00b_conduit_signal_topic(n00b_conduit_t *c, int signum)
 
     // Allocate and initialize signal watch
     n00b_conduit_signal_watch_t *watch =
-        n00b_alloc(n00b_conduit_signal_watch_t);
+        n00b_alloc_with_opts(n00b_conduit_signal_watch_t,
+            &(n00b_alloc_opts_t){.allocator = c->allocator});
 
     watch->signum = signum;
     n00b_atomic_store(&watch->raise_count, (uint64_t)0);

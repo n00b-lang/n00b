@@ -141,7 +141,8 @@ n00b_conduit_listen_tcp(n00b_conduit_t *c, n00b_conduit_io_backend_t *io,
         }
     }
 
-    n00b_conduit_listener_t *listener = n00b_alloc(n00b_conduit_listener_t);
+    n00b_conduit_listener_t *listener = n00b_alloc_with_opts(n00b_conduit_listener_t,
+                                           &(n00b_alloc_opts_t){.allocator = c->allocator});
 
     listener->conduit     = c;
     listener->io          = io;
@@ -160,7 +161,8 @@ n00b_conduit_listen_tcp(n00b_conduit_t *c, n00b_conduit_io_backend_t *io,
 
     // Register with I/O backend for read events (accept readiness).
     // Wrap in a variant so the IO dispatch loop can discriminate.
-    n00b_conduit_io_target_t *target = n00b_alloc(n00b_conduit_io_target_t);
+    n00b_conduit_io_target_t *target = n00b_alloc_with_opts(n00b_conduit_io_target_t,
+                                          &(n00b_alloc_opts_t){.allocator = c->allocator});
     _n00b_variant_set_ptr(target, n00b_conduit_listener_t *, listener);
     n00b_conduit_io_watch(io, fd, N00B_CONDUIT_IO_READ, target);
 

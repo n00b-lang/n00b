@@ -92,6 +92,7 @@ struct n00b_earley_item_t {
     bool                double_dot;        /**< Dot at both NT and rule end. */
     bool                null_prediction;   /**< Predicted from nullable NT. */
     bool                no_reprocessing;   /**< Skip reprocessing. */
+    bool                from_completion;   /**< Created by completer — skip FIRST filter. */
     bool                leo_item;          /**< True if Leo-optimized item. */
     n00b_earley_item_t *leo_direct_parent; /**< Direct parent for Leo items. */
 
@@ -126,7 +127,6 @@ struct n00b_earley_state_t {
     void                                *cache;        /**< Memoization cache. */
     n00b_list_t(n00b_earley_item_ptr_t)  items;        /**< Items in this Earley set. */
     n00b_item_map_t                      item_map;     /**< Dedup map for items. */
-    uint64_t                            *predicted_nts; /**< Bitset of predicted NTs. */
     n00b_earley_item_t                 **leo_table;    /**< Leo optimization table. */
     int                                  id;           /**< Earley set ID. */
 };

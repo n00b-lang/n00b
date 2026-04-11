@@ -173,10 +173,13 @@ poll_grow(poll_ctx_t *ctx)
         new_capacity = POLL_INITIAL_CAPACITY;
     }
 
-    struct pollfd *new_fds = n00b_alloc_array(struct pollfd, new_capacity);
+    n00b_allocator_t *sp = (n00b_allocator_t *)&n00b_get_runtime()->system_pool;
+    struct pollfd *new_fds = n00b_alloc_array_with_opts(struct pollfd, new_capacity,
+                                 &(n00b_alloc_opts_t){.allocator = sp});
 
     n00b_conduit_io_target_t **new_targets =
-        n00b_alloc_array(n00b_conduit_io_target_t *, new_capacity);
+        n00b_alloc_array_with_opts(n00b_conduit_io_target_t *, new_capacity,
+            &(n00b_alloc_opts_t){.allocator = sp});
 
     // Copy existing data
     if (ctx->fds && ctx->count > 0) {
@@ -264,7 +267,9 @@ poll_is_internal_fd(poll_ctx_t *ctx, int fd)
 static void *
 poll_init(n00b_conduit_t *c)
 {
-    poll_ctx_t *ctx = n00b_alloc(poll_ctx_t);
+    n00b_allocator_t *sp = (n00b_allocator_t *)&n00b_get_runtime()->system_pool;
+    poll_ctx_t *ctx = n00b_alloc_with_opts(poll_ctx_t,
+                          &(n00b_alloc_opts_t){.allocator = sp});
     if (!ctx) {
         return nullptr;
     }
@@ -437,7 +442,9 @@ poll_timer_add(void *vctx, n00b_conduit_timer_t *timer)
         return false;
     }
 
-    poll_timer_t *pt = n00b_alloc(poll_timer_t);
+    n00b_allocator_t *sp = (n00b_allocator_t *)&n00b_get_runtime()->system_pool;
+    poll_timer_t *pt = n00b_alloc_with_opts(poll_timer_t,
+                           &(n00b_alloc_opts_t){.allocator = sp});
     if (!pt) {
         return false;
     }
@@ -666,7 +673,9 @@ poll_signal_add(void *vctx, n00b_conduit_signal_watch_t *watch)
         return false;
     }
 
-    poll_signal_t *ps = n00b_alloc(poll_signal_t);
+    n00b_allocator_t *sp = (n00b_allocator_t *)&n00b_get_runtime()->system_pool;
+    poll_signal_t *ps = n00b_alloc_with_opts(poll_signal_t,
+                            &(n00b_alloc_opts_t){.allocator = sp});
     if (!ps) {
         return false;
     }
@@ -770,7 +779,9 @@ poll_proc_add(void *vctx, n00b_conduit_proc_watch_t *watch)
         return false;
     }
 
-    poll_proc_t *pp = n00b_alloc(poll_proc_t);
+    n00b_allocator_t *sp = (n00b_allocator_t *)&n00b_get_runtime()->system_pool;
+    poll_proc_t *pp = n00b_alloc_with_opts(poll_proc_t,
+                          &(n00b_alloc_opts_t){.allocator = sp});
     if (!pp) {
         close(pidfd);
         return false;
@@ -909,7 +920,9 @@ poll_vnode_add(void *vctx, n00b_conduit_vnode_watch_t *watch)
         return false;
     }
 
-    poll_vnode_t *pv = n00b_alloc(poll_vnode_t);
+    n00b_allocator_t *sp = (n00b_allocator_t *)&n00b_get_runtime()->system_pool;
+    poll_vnode_t *pv = n00b_alloc_with_opts(poll_vnode_t,
+                           &(n00b_alloc_opts_t){.allocator = sp});
     if (!pv) {
         inotify_rm_watch(ctx->inotify_fd, wd);
         return false;
@@ -1034,7 +1047,9 @@ poll_user_event_add(void *vctx, n00b_conduit_user_event_t *event)
         return false;
     }
 
-    poll_user_event_t *pe = n00b_alloc(poll_user_event_t);
+    n00b_allocator_t *sp = (n00b_allocator_t *)&n00b_get_runtime()->system_pool;
+    poll_user_event_t *pe = n00b_alloc_with_opts(poll_user_event_t,
+                                &(n00b_alloc_opts_t){.allocator = sp});
     if (!pe) {
         close(efd);
         return false;

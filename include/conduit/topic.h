@@ -293,8 +293,10 @@ typedef struct n00b_conduit_topic_base {
                                  n00b_conduit_inbox_t(T)  *inbox,                              \
                                  n00b_conduit_sub_config_t config)                             \
     {                                                                                          \
-        n00b_conduit_subscription_t(T) *sub =                                                  \
-            n00b_alloc(n00b_conduit_subscription_t(T));                                        \
+        n00b_conduit_subscription_t(T) *sub = n00b_alloc_with_opts(                              \
+            n00b_conduit_subscription_t(T),                                                    \
+            &(n00b_alloc_opts_t){.allocator =                                                  \
+                ((n00b_conduit_topic_base_t *)topic)->conduit->allocator});                    \
         static _Atomic(uint64_t) next_handle = 1;                                             \
         sub->handle           = n00b_atomic_add(&next_handle, 1);                              \
         sub->inbox            = inbox;                                                         \
@@ -343,7 +345,7 @@ typedef struct n00b_conduit_topic_base {
         n00b_conduit_topic_t(T) *_tp =                                                         \
             (n00b_conduit_topic_t(T) *)n00b_result_get(_tr);                         \
         _tp->subscriptions =                                                                   \
-            n00b_list_new(n00b_conduit_subscription_t(T) *);                                   \
+            n00b_list_new(n00b_conduit_subscription_t(T) *, c->allocator);                     \
         _tp->inbox = nullptr;                                                                  \
                                                                                                \
         /* Create a done topic (payload = n00b_conduit_topic_base_t *). */                     \
@@ -356,7 +358,7 @@ typedef struct n00b_conduit_topic_base {
             auto *_done = (n00b_conduit_topic_t(n00b_conduit_topic_base_t *) *)                \
                 n00b_result_get(_dtr);                                               \
             _done->subscriptions = n00b_list_new(                                              \
-                n00b_conduit_subscription_t(n00b_conduit_topic_base_t *) *);                   \
+                n00b_conduit_subscription_t(n00b_conduit_topic_base_t *) *, c->allocator);     \
             _done->inbox = nullptr;                                                            \
             /* Done topics do NOT get their own done topics. */                                \
             n00b_conduit_topic_base_t *_done_base =                                            \

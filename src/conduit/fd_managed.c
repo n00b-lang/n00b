@@ -102,8 +102,11 @@ n00b_conduit_fd_manage(n00b_conduit_t *c, n00b_conduit_io_backend_t *io,
         return n00b_result_ok(n00b_conduit_fd_owner_t *, (n00b_conduit_fd_owner_t *)existing);
     }
 
-    // Allocate owner
-    n00b_conduit_fd_owner_t *owner = n00b_alloc(n00b_conduit_fd_owner_t);
+    // Allocate from the system pool — fd owners are accessed by IO
+    // threads and must not be relocated by the GC.
+    n00b_allocator_t *sp = (n00b_allocator_t *)&n00b_get_runtime()->system_pool;
+    n00b_conduit_fd_owner_t *owner = n00b_alloc_with_opts(n00b_conduit_fd_owner_t,
+                                        &(n00b_alloc_opts_t){.allocator = sp});
 
     owner->conduit       = c;
     owner->io            = io;
@@ -516,10 +519,13 @@ n00b_conduit_fd_write_submit(n00b_conduit_fd_owner_t *owner,
 
     // Copy the data into a GC-managed buffer so the caller can free
     // or reuse their original immediately.
-    uint8_t *copy = n00b_alloc_array(uint8_t, len);
+    n00b_allocator_t *sp = (n00b_allocator_t *)&n00b_get_runtime()->system_pool;
+    uint8_t *copy = n00b_alloc_array_with_opts(uint8_t, len,
+                        &(n00b_alloc_opts_t){.allocator = sp});
     memcpy(copy, data, len);
 
-    n00b_conduit_write_entry_t *entry = n00b_alloc(n00b_conduit_write_entry_t);
+    n00b_conduit_write_entry_t *entry = n00b_alloc_with_opts(n00b_conduit_write_entry_t,
+                                            &(n00b_alloc_opts_t){.allocator = sp});
     entry->data        = copy;
     entry->total_len   = len;
     entry->bytes_sent  = 0;

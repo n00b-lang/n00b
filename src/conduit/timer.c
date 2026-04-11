@@ -13,7 +13,8 @@
 static n00b_conduit_timer_t *
 timer_alloc(n00b_conduit_t *c, uint32_t interval_ms, bool repeating)
 {
-    n00b_conduit_timer_t *timer = n00b_alloc(n00b_conduit_timer_t);
+    n00b_conduit_timer_t *timer = n00b_alloc_with_opts(n00b_conduit_timer_t,
+                                      &(n00b_alloc_opts_t){.allocator = c->allocator});
 
     timer->id          = n00b_atomic_add(&c->next_timer_id, 1);
     timer->interval_ms = interval_ms;

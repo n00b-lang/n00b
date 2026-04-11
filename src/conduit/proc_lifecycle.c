@@ -25,7 +25,8 @@ n00b_conduit_proc_topic(n00b_conduit_t *c, pid_t pid, uint32_t events)
 
     // Allocate and initialize the watch struct.
     n00b_conduit_proc_watch_t *watch =
-        n00b_alloc(n00b_conduit_proc_watch_t);
+        n00b_alloc_with_opts(n00b_conduit_proc_watch_t,
+            &(n00b_alloc_opts_t){.allocator = c->allocator});
 
     watch->pid  = pid;
     watch->ops  = events;

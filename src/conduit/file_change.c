@@ -24,7 +24,8 @@ n00b_conduit_file_change_topic(n00b_conduit_t *c, int fd, uint32_t events)
 
     // Allocate and initialize the watch struct.
     n00b_conduit_vnode_watch_t *watch =
-        n00b_alloc(n00b_conduit_vnode_watch_t);
+        n00b_alloc_with_opts(n00b_conduit_vnode_watch_t,
+            &(n00b_alloc_opts_t){.allocator = c->allocator});
 
     watch->fd   = fd;
     watch->ops  = events;

@@ -634,16 +634,46 @@ add_one_nt_prediction(n00b_earley_parser_t *p,
                       n00b_nonterm_t       *nt,
                       int                   rule_ix)
 {
-    n00b_earley_item_t *ei            = new_earley_item();
     int32_t             rule_global_ix = nt->rule_ids.data[rule_ix];
+    n00b_parse_rule_t  *rule           = n00b_get_rule(p->grammar, rule_global_ix);
+
+    // Fast dedup: probe the item_map before allocating.
+    int32_t lr0 = p->grammar->lr0_predict_state
+                  ? p->grammar->lr0_predict_state[nt->id]
+                  : -1;
+
+    n00b_earley_item_t probe = {0};
+    probe.start_item      = &probe;
+    probe.rule            = rule;
+    probe.ruleset_id      = nt->id;
+    probe.rule_index      = rule_ix;
+    probe.lr0_state_id    = lr0;
+
+    // Replicate set_next_action's null_prediction logic for the probe.
+    if (n00b_list_len(rule->contents) > 0
+        && rule->contents.data[0].kind == N00B_MATCH_NT) {
+        n00b_nonterm_t *fnt = n00b_get_nonterm(p->grammar,
+                                                rule->contents.data[0].nt_id);
+        if (fnt && fnt->nullable) {
+            probe.null_prediction = true;
+        }
+    }
+
+    n00b_earley_item_t *existing =
+        item_map_find(&p->current_state->item_map, &probe);
+
+    if (existing) {
+        register_prediction(p, predictor, existing);
+        return;
+    }
+
+    n00b_earley_item_t *ei = new_earley_item();
 
     ei->ruleset_id   = nt->id;
-    ei->rule         = n00b_get_rule(p->grammar, rule_global_ix);
+    ei->rule         = rule;
     ei->rule_index   = rule_ix;
     ei->start_item   = ei;
-    ei->lr0_state_id = p->grammar->lr0_predict_state
-                       ? p->grammar->lr0_predict_state[nt->id]
-                       : -1;
+    ei->lr0_state_id = lr0;
 
     if (predictor) {
         n00b_earley_item_t *prestart = predictor->start_item;
@@ -683,45 +713,17 @@ predict_nt(n00b_earley_parser_t *p,
 {
     size_t n = n00b_list_len(nt->rule_ids);
 
-    n00b_token_info_t *tok = p->current_state->token;
+    // FIRST-set filtering: skip prediction if the current token
+    // can't start this NT.  But don't filter predictions triggered
+    // by completions — those are mid-rule and need to proceed
+    // regardless of the current token.
+    if (!ei || !ei->from_completion) {
+        n00b_token_info_t *tok = p->current_state->token;
 
-    if (tok && tok->tid != N00B_TOK_EOF && !nt_first_matches(nt, tok->tid)) {
-        return;
-    }
-
-    n00b_earley_state_t *state = p->current_state;
-
-    if (!state->predicted_nts) {
-        state->predicted_nts = n00b_alloc_array(
-            uint64_t, (size_t)p->grammar->lc_words_per_nt);
-    }
-
-    size_t   bit  = (size_t)nt->id;
-    size_t   word = bit / 64;
-    uint64_t mask = (uint64_t)1 << (bit % 64);
-
-    if (state->predicted_nts[word] & mask) {
-        n00b_earley_item_t probe = {0};
-
-        probe.start_item = &probe;
-
-        for (size_t i = 0; i < n; i++) {
-            int32_t rule_ix = nt->rule_ids.data[i];
-
-            probe.rule = n00b_get_rule(p->grammar, rule_ix);
-
-            n00b_earley_item_t *existing
-                = item_map_find(&state->item_map, &probe);
-
-            if (existing) {
-                register_prediction(p, ei, existing);
-            }
+        if (tok && tok->tid != N00B_TOK_EOF && !nt_first_matches(nt, tok->tid)) {
+            return;
         }
-
-        return;
     }
-
-    state->predicted_nts[word] |= mask;
 
     for (size_t i = 0; i < n; i++) {
         add_one_nt_prediction(p, ei, nt, (int)i);
@@ -894,9 +896,10 @@ add_one_completion(n00b_earley_parser_t *p,
     n00b_earley_item_t *ei           = new_earley_item();
     n00b_earley_item_t *parent_start = parent_ei->start_item;
 
-    ei->start_item    = parent_start;
-    ei->cursor        = parent_ei->cursor + 1;
-    ei->previous_scan = parent_ei;
+    ei->start_item      = parent_start;
+    ei->cursor          = parent_ei->cursor + 1;
+    ei->previous_scan   = parent_ei;
+    ei->from_completion = true;
     ei->group_top     = parent_ei->group_top;
     ei->my_penalty    = parent_ei->my_penalty;
     ei->sub_penalties = parent_ei->sub_penalties + cur->penalty;
@@ -1453,12 +1456,6 @@ run_parsing_mainloop(n00b_earley_parser_t *p)
         enter_next_state(p);
         process_current_state(p);
 
-        // Leo optimization is disabled when the grammar uses EBNF groups.
-        // Groups create left-recursive alternatives (e.g., (plus-expr '+')?
-        // in plus-expr -> (plus-expr '+')? minus-expr) that need intermediate
-        // completed items to be present for the group's operator terminal to
-        // be scannable.  Leo collapses those intermediates, breaking binary
-        // operators.
         if (!p->grammar->has_groups) {
             compute_leo_table(p);
         }

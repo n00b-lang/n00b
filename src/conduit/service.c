@@ -103,7 +103,8 @@ n00b_conduit_service_new(n00b_conduit_t *c)
         return n00b_result_ok(n00b_conduit_service_t *, c->service);
     }
 
-    n00b_conduit_service_t *svc = n00b_alloc(n00b_conduit_service_t);
+    n00b_conduit_service_t *svc = n00b_alloc_with_opts(n00b_conduit_service_t,
+                                      &(n00b_alloc_opts_t){.allocator = c->allocator});
     if (!svc) {
         return n00b_result_err(n00b_conduit_service_t *, N00B_CONDUIT_ERR_ALLOC);
     }
@@ -145,7 +146,8 @@ n00b_conduit_service_start(n00b_conduit_service_t *svc)
 
     // Build a descriptive name: "io:<backend_name>"
     size_t name_len = 3 + io_name->u8_bytes + 1;
-    char *name_buf = n00b_alloc_array(char, name_len);
+    char *name_buf = n00b_alloc_array_with_opts(char, name_len,
+                         &(n00b_alloc_opts_t){.allocator = svc->conduit->allocator});
     memcpy(name_buf, "io:", 3);
     memcpy(name_buf + 3, io_name->data, io_name->u8_bytes);
     name_buf[3 + io_name->u8_bytes] = '\0';
@@ -181,7 +183,8 @@ n00b_conduit_service_add_io(n00b_conduit_service_t   *svc,
 
     n00b_string_t *io_name = ops->name ? ops->name() : n00b_string_from_raw("io", 2);
     size_t name_len = 3 + io_name->u8_bytes + 1;
-    char *name_buf = n00b_alloc_array(char, name_len);
+    char *name_buf = n00b_alloc_array_with_opts(char, name_len,
+                         &(n00b_alloc_opts_t){.allocator = svc->conduit->allocator});
     memcpy(name_buf, "io:", 3);
     memcpy(name_buf + 3, io_name->data, io_name->u8_bytes);
     name_buf[3 + io_name->u8_bytes] = '\0';

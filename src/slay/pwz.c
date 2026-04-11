@@ -301,30 +301,6 @@ expand_group_nt(n00b_pwz_parser_t *p, n00b_grammar_t *g, int64_t nt_id)
 
         pwz_exp_t *seq = make_seq_exp(p, nt->name->data, nt_id, (int32_t)i,
                                       children, nchildren);
-        // Reset is below; we accumulate body rules temporarily.
-        (void)seq;
-    }
-
-    // Simpler approach: rebuild using the group's min/max directly.
-    // Reset the body_alt we made above — we'll build directly into `alt`.
-    n00b_list_clear(body_alt->alt.alts);
-
-    // Build body rules into body_alt.
-    for (size_t i = 0; i < n00b_list_len(nt->rule_ids); i++) {
-        int32_t            rule_ix = nt->rule_ids.data[i];
-        n00b_parse_rule_t *rule    = n00b_get_rule(g, rule_ix);
-
-        if (rule->penalty_rule) {
-            continue;
-        }
-
-        pwz_exp_ptr_t *children;
-        int32_t        nchildren;
-
-        build_seq_children(p, rule, &children, &nchildren);
-
-        pwz_exp_t *seq = make_seq_exp(p, nt->name->data, nt_id, (int32_t)i,
-                                      children, nchildren);
         alt_add(body_alt, seq);
     }
 
@@ -342,16 +318,16 @@ expand_group_nt(n00b_pwz_parser_t *p, n00b_grammar_t *g, int64_t nt_id)
         alt_add(alt, empty_seq);
     }
     else if (grp->min == 0 && grp->max == 0) {
-        // Star: Alt(Seq(body, self_ref), empty)
+        // Star (left-recursive): Alt(Seq(self, body), empty)
         for (size_t i = 0; i < body_nalts; i++) {
             pwz_exp_t *body_seq = body_alt->alt.alts.data[i];
             int32_t    nc       = body_seq->seq.nchildren;
             int32_t    new_nc   = nc + 1;
 
             pwz_exp_ptr_t *new_children = n00b_alloc_array(pwz_exp_ptr_t, new_nc);
-            memcpy(new_children, body_seq->seq.children,
+            new_children[0] = alt; // self-reference (left-recursive)
+            memcpy(new_children + 1, body_seq->seq.children,
                    (size_t)nc * sizeof(pwz_exp_ptr_t));
-            new_children[nc] = alt; // self-reference
 
             pwz_exp_t *rep_seq = make_seq_exp(p, nt->name->data, nt_id,
                                               body_seq->seq.rule_ix,
@@ -362,43 +338,26 @@ expand_group_nt(n00b_pwz_parser_t *p, n00b_grammar_t *g, int64_t nt_id)
         alt_add(alt, empty_seq);
     }
     else if (grp->min == 1 && grp->max == 0) {
-        // Plus: Alt(Seq(body, star_ref), body)
-        pwz_exp_t *star_alt = make_alt_exp(p, nt_id);
-
+        // Plus (left-recursive): Alt(Seq(self, body), body)
         for (size_t i = 0; i < body_nalts; i++) {
             pwz_exp_t *body_seq = body_alt->alt.alts.data[i];
             int32_t    nc       = body_seq->seq.nchildren;
             int32_t    new_nc   = nc + 1;
 
             pwz_exp_ptr_t *new_children = n00b_alloc_array(pwz_exp_ptr_t, new_nc);
-            memcpy(new_children, body_seq->seq.children,
+            new_children[0] = alt; // self-reference (left-recursive)
+            memcpy(new_children + 1, body_seq->seq.children,
                    (size_t)nc * sizeof(pwz_exp_ptr_t));
-            new_children[nc] = star_alt;
-
-            pwz_exp_t *rep_seq = make_seq_exp(p, nt->name->data, nt_id,
-                                              body_seq->seq.rule_ix,
-                                              new_children, new_nc);
-            alt_add(star_alt, rep_seq);
-        }
-
-        pwz_exp_t *star_empty = make_seq_exp(p, nt->name->data, nt_id, -1, NULL, 0);
-        alt_add(star_alt, star_empty);
-
-        // Plus: Seq(body, star) for each body alt.
-        for (size_t i = 0; i < body_nalts; i++) {
-            pwz_exp_t *body_seq = body_alt->alt.alts.data[i];
-            int32_t    nc       = body_seq->seq.nchildren;
-            int32_t    new_nc   = nc + 1;
-
-            pwz_exp_ptr_t *new_children = n00b_alloc_array(pwz_exp_ptr_t, new_nc);
-            memcpy(new_children, body_seq->seq.children,
-                   (size_t)nc * sizeof(pwz_exp_ptr_t));
-            new_children[nc] = star_alt;
 
             pwz_exp_t *rep_seq = make_seq_exp(p, nt->name->data, nt_id,
                                               body_seq->seq.rule_ix,
                                               new_children, new_nc);
             alt_add(alt, rep_seq);
+        }
+
+        // Base case: just the body itself.
+        for (size_t i = 0; i < body_nalts; i++) {
+            alt_add(alt, body_alt->alt.alts.data[i]);
         }
     }
     else {
@@ -505,15 +464,14 @@ rule_first_matches(n00b_parse_rule_t *rule, int64_t token_id)
 // ============================================================================
 
 static void
-d_d(n00b_pwz_parser_t *p, int32_t pos, n00b_token_info_t *tok,
-    pwz_cxt_t *cxt, pwz_exp_t *exp);
-static void
-d_d_prime(n00b_pwz_parser_t *p, int32_t pos, n00b_token_info_t *tok,
-          pwz_mem_t *mem, pwz_exp_t *exp);
-static void
-d_u(n00b_pwz_parser_t *p, int32_t pos, pwz_exp_t *result, pwz_mem_t *mem);
-static void
-d_u_prime(n00b_pwz_parser_t *p, int32_t pos, pwz_exp_t *result, pwz_cxt_t *cxt);
+d_d(n00b_pwz_parser_t *p, int32_t pos, n00b_token_info_t *tok, pwz_cxt_t *cxt, pwz_exp_t *exp);
+static void d_d_prime(n00b_pwz_parser_t *p,
+                      int32_t            pos,
+                      n00b_token_info_t *tok,
+                      pwz_mem_t         *mem,
+                      pwz_exp_t         *exp);
+static void d_u(n00b_pwz_parser_t *p, int32_t pos, pwz_exp_t *result, pwz_mem_t *mem);
+static void d_u_prime(n00b_pwz_parser_t *p, int32_t pos, pwz_exp_t *result, pwz_cxt_t *cxt);
 
 static bool
 token_matches(n00b_token_info_t *tok, pwz_exp_t *exp)
@@ -533,9 +491,7 @@ token_matches(n00b_token_info_t *tok, pwz_exp_t *exp)
         {
             n00b_string_t *val = n00b_option_get(tok->value);
             uint32_t       pos = 0;
-            int32_t        cp  = n00b_unicode_utf8_decode(val->data,
-                                                           (uint32_t)val->u8_bytes,
-                                                          &pos);
+            int32_t cp = n00b_unicode_utf8_decode(val->data, (uint32_t)val->u8_bytes, &pos);
             return cp >= 0 && n00b_codepoint_matches_class(cp, exp->cls.cc);
         }
 
@@ -548,8 +504,7 @@ token_matches(n00b_token_info_t *tok, pwz_exp_t *exp)
 }
 
 static void
-d_d(n00b_pwz_parser_t *p, int32_t pos, n00b_token_info_t *tok,
-    pwz_cxt_t *cxt, pwz_exp_t *exp)
+d_d(n00b_pwz_parser_t *p, int32_t pos, n00b_token_info_t *tok, pwz_cxt_t *cxt, pwz_exp_t *exp)
 {
     if (exp->mem && exp->mem->start_pos == pos) {
         exp->mem->parents = alloc_cxt_node(p, cxt, exp->mem->parents);
@@ -571,8 +526,11 @@ d_d(n00b_pwz_parser_t *p, int32_t pos, n00b_token_info_t *tok,
 }
 
 static void
-d_d_prime(n00b_pwz_parser_t *p, int32_t pos, n00b_token_info_t *tok,
-          pwz_mem_t *mem, pwz_exp_t *exp)
+d_d_prime(n00b_pwz_parser_t *p,
+          int32_t            pos,
+          n00b_token_info_t *tok,
+          pwz_mem_t         *mem,
+          pwz_exp_t         *exp)
 {
     switch (exp->kind) {
     case PWZ_TOK:
@@ -584,8 +542,7 @@ d_d_prime(n00b_pwz_parser_t *p, int32_t pos, n00b_token_info_t *tok,
             result->kind    = exp->kind;
             result->tok.tid = tok->tid;
 
-            n00b_list_push(p->worklist_swap,
-                           ((pwz_zipper_t){.result = result, .mem = mem}));
+            n00b_list_push(p->worklist_swap, ((pwz_zipper_t){.result = result, .mem = mem}));
         }
 
         break;
@@ -616,17 +573,7 @@ d_d_prime(n00b_pwz_parser_t *p, int32_t pos, n00b_token_info_t *tok,
             seq_cxt->seq.right   = exp->seq.children + 1;
             seq_cxt->seq.nright  = exp->seq.nchildren - 1;
 
-            pwz_mem_t *child_mem = alloc_mem(p);
-
-            child_mem->start_pos = pos;
-            child_mem->parents   = alloc_cxt_node(p, seq_cxt, NULL);
-
-            pwz_cxt_t *alt_cxt = alloc_cxt(p);
-
-            alt_cxt->kind    = PWZ_CXT_ALT;
-            alt_cxt->alt.mem = child_mem;
-
-            d_d(p, pos, tok, alt_cxt, exp->seq.children[0]);
+            d_d(p, pos, tok, seq_cxt, exp->seq.children[0]);
         }
 
         break;
@@ -658,10 +605,9 @@ d_d_prime(n00b_pwz_parser_t *p, int32_t pos, n00b_token_info_t *tok,
         for (size_t i = 0; i < nalts; i++) {
             pwz_exp_t *alt_child = exp->alt.alts.data[i];
 
-            if (can_filter_alts && alt_child->kind == PWZ_SEQ
-                && alt_child->seq.nt_id >= 0 && alt_child->seq.rule_ix >= 0) {
-                n00b_nonterm_t *nt = n00b_get_nonterm(p->grammar,
-                                                      alt_child->seq.nt_id);
+            if (can_filter_alts && alt_child->kind == PWZ_SEQ && alt_child->seq.nt_id >= 0
+                && alt_child->seq.rule_ix >= 0) {
+                n00b_nonterm_t *nt = n00b_get_nonterm(p->grammar, alt_child->seq.nt_id);
 
                 if (nt && alt_child->seq.rule_ix < (int32_t)n00b_list_len(nt->rule_ids)) {
                     int32_t            rix  = nt->rule_ids.data[alt_child->seq.rule_ix];
@@ -690,25 +636,7 @@ static void
 d_u(n00b_pwz_parser_t *p, int32_t pos, pwz_exp_t *result, pwz_mem_t *mem)
 {
     if (mem->end_pos != PWZ_POS_BOTTOM) {
-        if (pos > mem->end_pos) {
-            // Seed-growing (left-recursion).
-            mem->end_pos = pos;
-            mem->result  = result;
-
-            if (!mem->in_progress) {
-                mem->in_progress = true;
-
-                pwz_cxt_node_t *node = mem->parents;
-
-                while (node) {
-                    d_u_prime(p, pos, mem->result, node->cxt);
-                    node = node->next;
-                }
-
-                mem->in_progress = false;
-            }
-        }
-        else if (pos == mem->end_pos) {
+        if (pos == mem->end_pos) {
             // Same-position ambiguity: mutate in place.
             pwz_exp_t *existing = mem->result;
 
@@ -726,12 +654,18 @@ d_u(n00b_pwz_parser_t *p, int32_t pos, pwz_exp_t *result, pwz_mem_t *mem)
                 n00b_list_push(existing->alt.alts, copy);
                 n00b_list_push(existing->alt.alts, result);
             }
+
+            return;
         }
 
-        return;
+        // Later-position completion (left-recursion grew the seed).
+        // Skip if already propagating this memo (re-entrant guard).
+        if (mem->in_progress) {
+            return;
+        }
     }
 
-    // First completion.
+    // First completion, or longer left-recursive match.
     mem->end_pos     = pos;
     mem->result      = result;
     mem->in_progress = true;
@@ -800,19 +734,7 @@ d_u_prime(n00b_pwz_parser_t *p, int32_t pos, pwz_exp_t *result, pwz_cxt_t *cxt)
             new_seq_cxt->seq.right   = cxt->seq.right + 1;
             new_seq_cxt->seq.nright  = cxt->seq.nright - 1;
 
-            n00b_token_info_t *next_tok = get_token(p, pos);
-
-            pwz_mem_t *child_mem = alloc_mem(p);
-
-            child_mem->start_pos = pos;
-            child_mem->parents   = alloc_cxt_node(p, new_seq_cxt, NULL);
-
-            pwz_cxt_t *alt_cxt = alloc_cxt(p);
-
-            alt_cxt->kind    = PWZ_CXT_ALT;
-            alt_cxt->alt.mem = child_mem;
-
-            d_d(p, pos, next_tok, alt_cxt, cxt->seq.right[0]);
+            d_d(p, pos, get_token(p, pos), new_seq_cxt, cxt->seq.right[0]);
         }
 
         break;
@@ -847,27 +769,10 @@ init_parse(n00b_pwz_parser_t *p)
     top_cxt->kind    = PWZ_CXT_TOP;
     mem_top->parents = alloc_cxt_node(p, top_cxt, NULL);
 
-    pwz_cxt_t *seq_cxt = alloc_cxt(p);
-
-    seq_cxt->kind        = PWZ_CXT_SEQ;
-    seq_cxt->seq.mem     = mem_top;
-    seq_cxt->seq.name    = "";
-    seq_cxt->seq.nt_id   = -1;
-    seq_cxt->seq.rule_ix = -1;
-    seq_cxt->seq.left    = NULL;
-    seq_cxt->seq.nleft   = 0;
-    seq_cxt->seq.right   = NULL;
-    seq_cxt->seq.nright  = 0;
-
-    pwz_mem_t *child_mem = alloc_mem(p);
-
-    child_mem->start_pos = 0;
-    child_mem->parents   = alloc_cxt_node(p, seq_cxt, NULL);
-
     pwz_cxt_t *alt_cxt = alloc_cxt(p);
 
     alt_cxt->kind    = PWZ_CXT_ALT;
-    alt_cxt->alt.mem = child_mem;
+    alt_cxt->alt.mem = mem_top;
 
     n00b_token_info_t *tok = get_token(p, 0);
 
@@ -881,11 +786,11 @@ run_parse(n00b_pwz_parser_t *p)
         return true;
     }
 
-    for (int32_t pos = 0; ; pos++) {
+    for (int32_t pos = 0;; pos++) {
         // Swap worklists.
         n00b_list_t(pwz_zipper_t) tmp = p->worklist;
-        p->worklist      = p->worklist_swap;
-        p->worklist_swap = tmp;
+        p->worklist                   = p->worklist_swap;
+        p->worklist_swap              = tmp;
         n00b_list_clear(p->worklist_swap);
         n00b_list_clear(p->tops);
 
@@ -899,7 +804,7 @@ run_parse(n00b_pwz_parser_t *p)
 
         // Check if there's a next token (drives the termination condition).
         n00b_token_info_t *next_check = n00b_stream_get(p->stream, complete_pos);
-        bool have_next = (next_check != NULL);
+        bool               have_next  = (next_check != NULL);
 
         for (size_t i = 0; i < wl_len; i++) {
             pwz_zipper_t *z = &p->worklist.data[i];
@@ -910,8 +815,6 @@ run_parse(n00b_pwz_parser_t *p)
             return n00b_list_len(p->tops) > 0;
         }
     }
-
-    return n00b_list_len(p->tops) > 0;
 }
 
 // ============================================================================
@@ -938,8 +841,7 @@ make_epsilon_node(int32_t pos)
 }
 
 static n00b_parse_tree_t *
-make_nt_node(n00b_grammar_t *g, int64_t nt_id, int32_t rule_index,
-             int32_t start, int32_t end)
+make_nt_node(n00b_grammar_t *g, int64_t nt_id, int32_t rule_index, int32_t start, int32_t end)
 {
     n00b_nonterm_t *nt = n00b_get_nonterm(g, nt_id);
     n00b_nt_node_t  pn = {0};
@@ -977,8 +879,7 @@ typedef struct {
 } tree_convert_state_t;
 
 static n00b_parse_tree_t *
-convert_exp_to_tree(n00b_pwz_parser_t *p, pwz_exp_t *exp,
-                    tree_convert_state_t *st)
+convert_exp_to_tree(n00b_pwz_parser_t *p, pwz_exp_t *exp, tree_convert_state_t *st)
 {
     if (!exp || exp == p->exp_bottom) {
         return make_epsilon_node(st->pos);
@@ -1011,8 +912,7 @@ convert_exp_to_tree(n00b_pwz_parser_t *p, pwz_exp_t *exp,
                     return make_group_node(exp->seq.name, start, start);
                 }
 
-                return make_nt_node(p->grammar, exp->seq.nt_id,
-                                    exp->seq.rule_ix, start, start);
+                return make_nt_node(p->grammar, exp->seq.nt_id, exp->seq.rule_ix, start, start);
             }
 
             return make_epsilon_node(start);
@@ -1020,12 +920,10 @@ convert_exp_to_tree(n00b_pwz_parser_t *p, pwz_exp_t *exp,
 
         // Collect children into a temporary list.
         n00b_list_t(n00b_parse_tree_ptr_t) children
-            = n00b_list_new_cap_private(n00b_parse_tree_ptr_t,
-                                        exp->seq.nchildren);
+            = n00b_list_new_cap_private(n00b_parse_tree_ptr_t, exp->seq.nchildren);
 
         for (int32_t i = 0; i < exp->seq.nchildren; i++) {
-            n00b_parse_tree_t *child
-                = convert_exp_to_tree(p, exp->seq.children[i], st);
+            n00b_parse_tree_t *child = convert_exp_to_tree(p, exp->seq.children[i], st);
             n00b_list_push(children, child);
         }
 
@@ -1040,8 +938,7 @@ convert_exp_to_tree(n00b_pwz_parser_t *p, pwz_exp_t *exp,
                 tree = make_group_node(exp->seq.name, start, end);
             }
             else {
-                tree = make_nt_node(p->grammar, exp->seq.nt_id,
-                                    exp->seq.rule_ix, start, end);
+                tree = make_nt_node(p->grammar, exp->seq.nt_id, exp->seq.rule_ix, start, end);
             }
         }
         else {
@@ -1060,7 +957,7 @@ convert_exp_to_tree(n00b_pwz_parser_t *p, pwz_exp_t *exp,
             pn.id    = exp->seq.nt_id;
             pn.start = start;
             pn.end   = end;
-            tree = n00b_tree_node(n00b_nt_node_t, n00b_token_info_t *, pn);
+            tree     = n00b_tree_node(n00b_nt_node_t, n00b_token_info_t *, pn);
         }
 
         size_t nch = n00b_list_len(children);
@@ -1087,16 +984,14 @@ convert_exp_to_tree(n00b_pwz_parser_t *p, pwz_exp_t *exp,
 
         // Multiple ambiguous alternatives — convert all and pick the best
         // using the grammar's disambiguator.
-        n00b_tree_disambig_fn_t disambig
-            = n00b_get_disambiguator(p->grammar);
+        n00b_tree_disambig_fn_t disambig = n00b_get_disambiguator(p->grammar);
 
         n00b_parse_tree_t *best     = NULL;
         int32_t            best_pos = st->pos;
 
         for (size_t i = 0; i < nalts; i++) {
             int32_t            saved_pos = st->pos;
-            n00b_parse_tree_t *candidate
-                = convert_exp_to_tree(p, exp->alt.alts.data[i], st);
+            n00b_parse_tree_t *candidate = convert_exp_to_tree(p, exp->alt.alts.data[i], st);
 
             if (!best || disambig(candidate, best) < 0) {
                 best     = candidate;
@@ -1169,8 +1064,7 @@ find_top_ambiguity(pwz_exp_t *exp)
         return exp;
     }
 
-    if (exp->kind == PWZ_SEQ && exp->seq.nt_id == -1
-        && exp->seq.nchildren == 1) {
+    if (exp->kind == PWZ_SEQ && exp->seq.nt_id == -1 && exp->seq.nchildren == 1) {
         return find_top_ambiguity(exp->seq.children[0]);
     }
 
@@ -1178,10 +1072,10 @@ find_top_ambiguity(pwz_exp_t *exp)
 }
 
 static void
-enumerate_trees(n00b_pwz_parser_t   *p,
-                pwz_exp_t           *top_result,
+enumerate_trees(n00b_pwz_parser_t      *p,
+                pwz_exp_t              *top_result,
                 n00b_parse_tree_ptr_t **out,
-                int32_t              *out_count)
+                int32_t                *out_count)
 {
     int32_t total = count_trees_in_exp(top_result);
 
@@ -1202,7 +1096,7 @@ enumerate_trees(n00b_pwz_parser_t   *p,
 
         for (size_t i = 0; i < nalts; i++) {
             tree_convert_state_t st = {.pos = 0, .parser = p};
-            (*out)[i] = convert_exp_to_tree(p, amb->alt.alts.data[i], &st);
+            (*out)[i]               = convert_exp_to_tree(p, amb->alt.alts.data[i], &st);
         }
 
         return;
@@ -1296,8 +1190,7 @@ n00b_pwz_reset(n00b_pwz_parser_t *p)
 }
 
 bool
-n00b_pwz_parse(n00b_pwz_parser_t   *p,
-               n00b_token_stream_t *ts)
+n00b_pwz_parse(n00b_pwz_parser_t *p, n00b_token_stream_t *ts)
 {
     n00b_pwz_reset(p);
 
@@ -1357,8 +1250,7 @@ n00b_pwz_get_trees(n00b_pwz_parser_t *p)
         p->result_trees = n00b_array_new(n00b_parse_tree_ptr_t, (int32_t)ntops);
 
         for (size_t i = 0; i < ntops; i++) {
-            n00b_array_set(p->result_trees, (int32_t)i,
-                           build_result_tree(p, p->tops.data[i]));
+            n00b_array_set(p->result_trees, (int32_t)i, build_result_tree(p, p->tops.data[i]));
         }
     }
 
@@ -1382,10 +1274,9 @@ n00b_pwz_get_forest(n00b_pwz_parser_t *p)
 // ============================================================================
 
 n00b_parse_forest_t
-n00b_pwz_parse_grammar(n00b_grammar_t      *g,
-                        n00b_token_stream_t *ts)
+n00b_pwz_parse_grammar(n00b_grammar_t *g, n00b_token_stream_t *ts)
 {
-    n00b_pwz_parser_t *p = n00b_pwz_new(g);
+    n00b_pwz_parser_t *p  = n00b_pwz_new(g);
     bool               ok = n00b_pwz_parse(p, ts);
 
     if (!ok) {

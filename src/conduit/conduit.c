@@ -38,17 +38,21 @@ n00b_conduit_new(void)
     c->allocator = cpool;
 
     n00b_dict_untyped_init(&c->int_topics,
+                           .allocator     = cpool,
                            .skip_obj_hash = true,
                            .hash          = n00b_hash_word);
-    n00b_dict_untyped_init(&c->str_topics);
+    n00b_dict_untyped_init(&c->str_topics,
+                           .allocator     = cpool);
     n00b_dict_untyped_init(&c->fd_owners,
+                           .allocator     = cpool,
                            .skip_obj_hash = true,
                            .hash          = n00b_hash_word);
     n00b_dict_untyped_init(&c->listeners,
+                           .allocator     = cpool,
                            .skip_obj_hash = true,
                            .hash          = n00b_hash_word);
 
-    c->io_backends = n00b_list_new(n00b_conduit_io_backend_t *);
+    c->io_backends = n00b_list_new(n00b_conduit_io_backend_t *, cpool);
 
     n00b_atomic_store(&c->next_generation, 1);
     n00b_atomic_store(&c->next_claim_id, 1);
@@ -167,7 +171,9 @@ n00b_conduit_topic_get(n00b_conduit_t *c, n00b_conduit_uri_t uri,
     }
 
     // Create new topic, sized for the caller's typed topic struct.
-    n00b_conduit_topic_base_t *topic = (n00b_conduit_topic_base_t *)n00b_alloc_array(uint8_t, topic_size);
+    n00b_conduit_topic_base_t *topic = (n00b_conduit_topic_base_t *)
+        n00b_alloc_array_with_opts(uint8_t, topic_size,
+            &(n00b_alloc_opts_t){.allocator = c->allocator});
     if (!topic) {
         return n00b_result_err(n00b_conduit_topic_base_t *, N00B_CONDUIT_ERR_ALLOC);
     }
@@ -263,7 +269,7 @@ n00b_conduit_topic_ensure_done(n00b_conduit_topic_base_t *topic)
             n00b_result_get(r);
 
     done->subscriptions = n00b_list_new(
-        n00b_conduit_subscription_t(n00b_conduit_topic_base_t *) *);
+        n00b_conduit_subscription_t(n00b_conduit_topic_base_t *) *, c->allocator);
     done->inbox = nullptr;
 
     // Done topics don't get their own done topics.
@@ -359,7 +365,8 @@ n00b_conduit_backend_by_name(n00b_conduit_t *c, n00b_string_t *name)
 static n00b_result_t(n00b_conduit_publisher_t *)
 publisher_alloc(n00b_conduit_t *c, n00b_conduit_topic_base_t *topic)
 {
-    n00b_conduit_publisher_t *pub = n00b_alloc(n00b_conduit_publisher_t);
+    n00b_conduit_publisher_t *pub = n00b_alloc_with_opts(n00b_conduit_publisher_t,
+                                       &(n00b_alloc_opts_t){.allocator = c->allocator});
     if (!pub) {
         return n00b_result_err(n00b_conduit_publisher_t *, N00B_CONDUIT_ERR_ALLOC);
     }

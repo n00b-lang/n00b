@@ -110,8 +110,9 @@ typedef struct {
 static void *
 kqueue_init(n00b_conduit_t *c)
 {
+    n00b_allocator_t *sp = (n00b_allocator_t *)&n00b_get_runtime()->system_pool;
     kqueue_ctx_t *ctx = n00b_alloc_with_opts(kqueue_ctx_t,
-                            &(n00b_alloc_opts_t){.allocator = c->allocator});
+                            &(n00b_alloc_opts_t){.allocator = sp});
     if (!ctx) {
         return nullptr;
     }

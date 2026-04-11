@@ -22,7 +22,8 @@ n00b_conduit_user_event_new(n00b_conduit_t *c)
 
     uint64_t event_id = n00b_atomic_add(&c->next_user_event_id, 1) + 1;
 
-    n00b_conduit_user_event_t *event = n00b_alloc(n00b_conduit_user_event_t);
+    n00b_conduit_user_event_t *event = n00b_alloc_with_opts(n00b_conduit_user_event_t,
+                                         &(n00b_alloc_opts_t){.allocator = c->allocator});
 
     event->event_id = event_id;
     n00b_atomic_store(&event->trigger_count, (uint64_t)0);

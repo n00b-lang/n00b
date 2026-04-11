@@ -239,20 +239,16 @@ n00b_init(n00b_runtime_t *rt, int argc, char *argv[]) _kargs
 
     n00b_type_registry_init();
 
-    // Conduit infrastructure pool: non-hidden so the GC scans its
-    // pages for heap pointers, keeping subscription objects alive.
-    // Not __system so STW checks apply normally.
-    n00b_allocator_t *cpool = n00b_pool_init(&rt->conduit_pool,
-                                              .name = "conduit_pool");
+    // Conduit infrastructure pool: hidden from GC so the copying
+    // collector never scans or relocates conduit objects.  Objects
+    // that need GC tracing are registered as roots explicitly.
+    n00b_pool_init(&rt->conduit_pool,
+                   .hidden = true,
+                   .name   = "conduit_pool");
 
-    // sub_map must live in the GC arena (not the conduit pool) so the
-    // copying collector can update value pointers when it relocates
-    // subscription objects.
     rt->sub_map = n00b_alloc(n00b_dict_untyped_t);
     n00b_dict_untyped_init(rt->sub_map,
                            .skip_obj_hash = true);
-
-    n00b_gc_register_root(rt->sub_map);
 
     n00b_str_registry_init();
     n00b_theme_init();
@@ -277,24 +273,16 @@ n00b_init(n00b_runtime_t *rt, int argc, char *argv[]) _kargs
             if (n00b_option_is_set(io_opt)) {
                 n00b_conduit_svc_thread_t *svc_thread = n00b_option_get(io_opt);
 
-                // Only manage stdout/stderr via the conduit when they
-                // are TTYs.  When redirected to pipes (e.g. test
-                // harnesses), epoll-based fd management causes memory
-                // growth and GC interaction issues.
-                if (isatty(1)) {
-                    auto out_r = n00b_conduit_fd_manage(
-                        rt->default_conduit, svc_thread->io, 1, false);
-                    if (n00b_result_is_ok(out_r)) {
-                        rt->stdout_owner = n00b_result_get(out_r);
-                    }
+                auto out_r = n00b_conduit_fd_manage(
+                    rt->default_conduit, svc_thread->io, 1, false);
+                if (n00b_result_is_ok(out_r)) {
+                    rt->stdout_owner = n00b_result_get(out_r);
                 }
 
-                if (isatty(2)) {
-                    auto err_r = n00b_conduit_fd_manage(
-                        rt->default_conduit, svc_thread->io, 2, false);
-                    if (n00b_result_is_ok(err_r)) {
-                        rt->stderr_owner = n00b_result_get(err_r);
-                    }
+                auto err_r = n00b_conduit_fd_manage(
+                    rt->default_conduit, svc_thread->io, 2, false);
+                if (n00b_result_is_ok(err_r)) {
+                    rt->stderr_owner = n00b_result_get(err_r);
                 }
             }
 
