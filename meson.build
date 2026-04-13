@@ -291,6 +291,7 @@ n00b_core = [
     'src/core/type_registry.c',
     'src/core/builtin_types.c',
     'src/core/sha256.c',
+    'src/util/path.c',
 ]
 
 # ============================================================================
@@ -858,6 +859,12 @@ conduit_test = executable('test_conduit',
     kwargs: test_common_kwargs,
 )
 test('conduit', conduit_test, suite: 'unit')
+
+path_test = executable('test_path',
+    ['test/unit/test_path.c'],
+    kwargs: test_common_kwargs,
+)
+test('path', path_test, suite: 'unit')
 
 publisher_test = executable('test_publisher',
     ['test/unit/test_publisher.c'],
