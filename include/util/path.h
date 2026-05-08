@@ -13,9 +13,22 @@
 #include "text/strings/string_ops.h"
 
 #include <unistd.h>
+#ifndef _WIN32
 #include <pwd.h>
+#endif
 #include <sys/stat.h>
 #include <stdlib.h>
+
+#ifdef _WIN32
+// mingw's <sys/stat.h> doesn't define these; supply non-conflicting values
+// so n00b_file_kind compiles. Windows stat() will never return them.
+#ifndef S_IFLNK
+#define S_IFLNK 0xA000
+#endif
+#ifndef S_IFSOCK
+#define S_IFSOCK 0xC000
+#endif
+#endif
 
 typedef enum {
     N00B_FK_NOT_FOUND       = 0,
@@ -165,8 +178,15 @@ n00b_path_simple_join(n00b_string_t *p1, n00b_string_t *p2)
 static inline n00b_string_t *
 n00b_get_user_name(void)
 {
+#ifdef _WIN32
+    const char *name = getenv("USERNAME");
+    if (!name) name = getenv("USER");
+    if (!name) name = "user";
+    return n00b_string_from_cstr(name);
+#else
     struct passwd *pw = getpwuid(getuid());
     return n00b_string_from_cstr(pw->pw_name);
+#endif
 }
 
 static inline n00b_list_t(n00b_string_t *) *
