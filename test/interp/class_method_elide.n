@@ -1,0 +1,9 @@
+class Circle {
+  r: int
+}
+method circumference() -> int {
+  self.r * 6
+}
+var c = Circle(7)
+print(c.circumference())
+0

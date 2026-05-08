@@ -1,0 +1,12 @@
+class Vec {
+  x: int
+  y: int
+}
+method Vec.init(a: int, b: int) {
+  self.x = a + 1
+  self.y = b + 1
+}
+var v = Vec(10, 20)
+print(v.x)
+print(v.y)
+0

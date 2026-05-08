@@ -111,10 +111,10 @@
        %"for" <for-var-list> %"in" <for-in-target-list> <body>
 
 
-<for-stmt> @scope("for") @loop($3, $4) @declares($1) @infer("$1 unify i64") ::=
+<for-stmt> @scope("for") @loop($3, $4) @declares($1) @infer("$1 unify int") ::=
        %"for" <for-var-list> %"in" <range> <body>
-       
-<for-stmt> @scope("for") @loop($3, $4) @declares($1) @infer("$1 unify i64") ::=       
+
+<for-stmt> @scope("for") @loop($3, $4) @declares($1) @infer("$1 unify int") ::=
        %"for" <for-var-list> %"from" <range> <body>
 
 <for-var-list> ::= %IDENTIFIER
@@ -175,7 +175,7 @@
 <case-expr-list> @infer("$0 unify $2") ::=
            <case-expr-item> %"," <case-expr-list>
 
-<case-expr-item> @infer("$0 unify $2 unify i64") ::= <expression> <range-sep> <expression>
+<case-expr-item> @infer("$0 unify $2 unify int") ::= <expression> <range-sep> <expression>
 <case-expr-item> @infer("$0")             ::= <expression>
 
 <case-else> ::= %"else" <case-body>
@@ -185,8 +185,8 @@
 # Range
 # ============================================================================
 
-<range> @infer("array[$1]") ::= <range-parts>
-<range-parts> @infer("$0 unify $2 unify i64") ::= <expression> <range-sep> <expression>
+<range> @infer("$0") ::= <range-parts>
+<range-parts> @infer("$0 unify $2 unify int") ::= <expression> <range-sep> <expression>
 
 <range-sep> ::= %"to" | %"," | %":"
 
@@ -202,7 +202,7 @@
 # Assert
 # ============================================================================
 
-<assert-stmt> @type($1) ::= %"assert" <expression>
+<assert-stmt> ::= %"assert" <expression>
 
 # ============================================================================
 # Use
@@ -241,7 +241,7 @@
 # Typed without initializer:
 <sym-decl> @declares($0, $2) @infer("$0 unify $2") ::= <id-list> %":" <type-spec>
 # Untyped with initializer: name is $0, value is $2
-<sym-decl> @declares($0) @assigns($0, $2) ::= <id-list> <assign-op> <expression>
+<sym-decl> @declares($0) @assigns($0, $2) @infer("$0 unify $2") ::= <id-list> <assign-op> <expression>
 # Untyped without initializer:
 <sym-decl> @declares($0) ::= <id-list>
 
@@ -264,6 +264,12 @@
 # $3=param-decl, $4=where-clause, $5=return-type, $6=body
 <func-def> @scope("function", $2) @declares($2, "function") ::=
     <func-mod>* <func-kind> %IDENTIFIER <param-decl> <where-clause>? <return-type>? <body>
+# Method with explicit class: method ClassName.methodName(...)
+# $0=func-mods, $1="method", $2=method-name, $3=param-decl, ...
+<func-def> @scope("function", $2) @declares($2, "function") ::=
+    <func-mod>* %"method" <method-name> <param-decl> <where-clause>? <return-type>? <body>
+
+<method-name> ::= %IDENTIFIER %"." %IDENTIFIER
 
 <func-kind> ::= %"func" | %"method"
 <func-mod> ::= %"private" | %"once"
@@ -650,8 +656,17 @@
 <set-entries> @infer("set[$0] unify $1") ::= <expression> %"," <set-entries>
 <set-entries> @infer("set[$0]")          ::= <expression>
 
+# Positional tuples (legacy, may be deprecated).
 <tuple-or-paren> @infer("`t")  @notrivia($1) ::= %"(" <expression> %"," <expr-comma-list> %")" (%"'" <type-spec>)?
+# Parenthesized expression (grouping).
 <tuple-or-paren>               @notrivia($1) ::= %"(" <expression> %")" (%"'" <type-spec>)?
+# Named tuples: (name: expr, name: expr, ...)
+<tuple-or-paren> @record($1) @notrivia($1) ::= %"(" <named-field-list> %")" (%"'" <type-spec>)?
+
+<named-field-list> ::= <named-field> %"," <named-field-list>
+                     | <named-field>
+
+<named-field> ::= %IDENTIFIER %":" <expression>
 
 <expr-comma-list> ::= <expression> %"," <expr-comma-list>
                     | <expression>

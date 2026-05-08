@@ -65,3 +65,4 @@ AGENTS.md
 .inspector-gadget/
 plans/
 test/data/resharp/
+.aider*

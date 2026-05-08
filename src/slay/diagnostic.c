@@ -282,6 +282,72 @@ tc_err_code(n00b_tc_err_kind_t kind)
 }
 
 void
+n00b_diag_merge(n00b_diag_ctx_t *dst, n00b_diag_ctx_t *src)
+{
+    if (!dst || !src) {
+        return;
+    }
+
+    size_t n = n00b_list_len(src->diags);
+
+    for (size_t i = 0; i < n; i++) {
+        n00b_diagnostic_t d = n00b_list_get(src->diags, i);
+        n00b_list_push(dst->diags, d);
+
+        if (d.severity == N00B_DIAG_ERROR) {
+            dst->error_count++;
+        }
+        else if (d.severity == N00B_DIAG_WARNING) {
+            dst->warning_count++;
+        }
+    }
+}
+
+void
+n00b_diag_import_parse_error(n00b_diag_ctx_t *ctx,
+                             uint32_t         error_line,
+                             uint32_t         error_col,
+                             const char      *got_text,
+                             const char      *expected_msg,
+                             const char      *filename)
+{
+    if (!ctx) {
+        return;
+    }
+
+    // Build message: "parse error at line N:M: unexpected 'X'"
+    // followed by expected tokens if available.
+    char buf[512];
+    int  off = 0;
+
+    if (got_text) {
+        off = snprintf(buf, sizeof(buf), "unexpected token '%s'", got_text);
+    }
+    else {
+        off = snprintf(buf, sizeof(buf), "unexpected end of input");
+    }
+
+    if (expected_msg && off < (int)sizeof(buf) - 2) {
+        snprintf(buf + off, sizeof(buf) - (size_t)off, "; %s", expected_msg);
+    }
+
+    n00b_diag_span_t span = {0};
+    span.start_line = error_line;
+    span.start_col  = error_col;
+    span.end_line   = error_line;
+    span.end_col    = error_col;
+
+    (void)filename; // TODO: set span.file when n00b_option_some API is available
+
+    n00b_diag_push(ctx,
+                   N00B_DIAG_ERROR,
+                   N00B_STAGE_PARSE,
+                   r"P001",
+                   n00b_string_from_cstr(buf),
+                   span);
+}
+
+void
 n00b_diag_import_tc_errors(n00b_diag_ctx_t *ctx, n00b_tc_ctx_t *tc_ctx)
 {
     if (!ctx || !tc_ctx || !tc_ctx->errors) {

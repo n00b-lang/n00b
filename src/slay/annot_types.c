@@ -6,6 +6,7 @@
 #include "internal/slay/annot_phases.h"
 #include "slay/infer_expr.h"
 #include "typecheck/unify.h"
+#include "typecheck/construct.h"
 #include "adt/variant.h"
 
 void
@@ -26,6 +27,7 @@ annot_phase_types_post(n00b_annot_walk_ctx_t *ctx, annot_node_ctx_t *nc)
 
         if (a->kind == N00B_ANNOT_INFER) {
             has_infer = true;
+
 
             n00b_tc_type_t *t = n00b_infer_eval_ex(
                 ctx->tc_ctx, ctx->symtab, ctx->grammar,
@@ -202,7 +204,12 @@ annot_phase_types_post(n00b_annot_walk_ctx_t *ctx, annot_node_ctx_t *nc)
             break;
         }
 
-        n00b_tc_fn_t fn = n00b_variant_get(resolved->kind, n00b_tc_fn_t);
+        // Instantiate the callee's type so each call site gets fresh
+        // type variables. This prevents print(42); print("hello") from
+        // over-constraining a shared Var. Direct recursive calls could
+        // skip this, but for now we always instantiate.
+        n00b_tc_type_t *inst = n00b_tc_instantiate(ctx->tc_ctx, resolved);
+        n00b_tc_fn_t fn = n00b_variant_get(inst->kind, n00b_tc_fn_t);
 
         n00b_parse_tree_t *args_node
             = n00b_tree_resolve_child_ref(

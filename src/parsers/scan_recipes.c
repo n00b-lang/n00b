@@ -510,5 +510,10 @@ n00b_scan_identifier(n00b_scanner_t *s)
         n00b_scan_advance(s);
     }
 
+    // Optional trailing '?' (predicate convention: is_set?, ok?, etc.)
+    if (!n00b_scan_at_eof(s) && n00b_scan_peek(s, 0) == '?') {
+        n00b_scan_advance(s);
+    }
+
     return n00b_option_set(n00b_string_t *,n00b_scan_extract(s));
 }

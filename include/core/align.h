@@ -10,7 +10,7 @@
 #include <stdint.h>
 
 #if !defined(N00B_ALIGN)
-#define N00B_ALIGN 16
+#define N00B_ALIGN 32
 #endif
 
 /** @brief Cached system page size (set during runtime init). */

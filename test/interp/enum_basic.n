@@ -1,0 +1,9 @@
+enum Color {
+  Red,
+  Green,
+  Blue
+}
+print(Color.Red)
+print(Color.Green)
+print(Color.Blue)
+0

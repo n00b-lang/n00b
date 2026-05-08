@@ -1,0 +1,5 @@
+var o = some(42)
+print(o)
+assert o.is_set?()
+print(o.unwrap())
+0

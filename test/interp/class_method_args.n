@@ -1,0 +1,10 @@
+class Rect {
+  w: int
+  h: int
+}
+method Rect.scale(factor: int) -> int {
+  self.w * self.h * factor
+}
+var r = Rect(5, 3)
+print(r.scale(2))
+0

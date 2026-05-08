@@ -1062,16 +1062,11 @@ main(int argc, char **argv)
 
     test_grammar_loads();
 
-    static const n00b_parse_mode_t modes[] = {
-        N00B_PARSE_MODE_PWZ_ONLY,
-        N00B_PARSE_MODE_EARLEY_ONLY,
-    };
-
-    for (size_t i = 0; i < sizeof(modes) / sizeof(modes[0]); i++) {
-        current_mode = modes[i];
-        printf("  --- parser: %s ---\n", mode_name(current_mode));
-        run_all_tests();
-    }
+    // Run in default mode only. Earley is for error diagnostics on
+    // failed parses — not for producing trees that feed annotation walks.
+    current_mode = N00B_PARSE_MODE_DEFAULT;
+    printf("  --- parser: %s ---\n", mode_name(current_mode));
+    run_all_tests();
 
     printf("All cf_label tests passed.\n");
     n00b_shutdown();

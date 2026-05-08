@@ -185,8 +185,9 @@ typedef n00b_variant_t(
  * @endcode
  */
 struct n00b_tc_type_s {
-    n00b_tc_type_t  *forward; /**< Union-find link (nullptr = root). */
-    n00b_tc_kind_t   kind;    /**< Which kind + kind-specific data. */
+    n00b_tc_type_t  *forward;  /**< Union-find link (nullptr = root). */
+    n00b_tc_kind_t   kind;     /**< Which kind + kind-specific data. */
+    void            *user_data; /**< Language-specific metadata (e.g., sym entry for classes/tuples). */
 };
 
 // ============================================================================

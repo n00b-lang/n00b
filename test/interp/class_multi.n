@@ -1,0 +1,7 @@
+class Rect {
+  w: int
+  h: int
+}
+var r = Rect(5, 3)
+print(r.w * r.h)
+0

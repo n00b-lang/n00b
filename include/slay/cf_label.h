@@ -71,6 +71,9 @@ typedef n00b_dict_t(uintptr_t, n00b_tc_type_t *) n00b_node_types_t;
 /**
  * @brief Result of a full annotation walk (symtab + control flow labels).
  */
+// Forward declare — full definition in diagnostic.h.
+struct n00b_diag_ctx_s;
+
 typedef struct {
     n00b_symtab_t                    *symtab;
     n00b_cf_labels_t                 *cf_labels;      /**< `n00b_parse_tree_t *` -> `n00b_cf_label_t *` */
@@ -78,6 +81,7 @@ typedef struct {
     n00b_list_t(n00b_sym_entry_t *)  *params;         /**< Parameter symbols for DFG entry defs. */
     n00b_node_types_t                *node_types;      /**< Parse node → resolved type. */
     n00b_list_t(n00b_sym_entry_t *)  *shadowed_entries; /**< Entries that shadow outer-scope decls. */
+    struct n00b_diag_ctx_s           *diag;           /**< Diagnostic accumulator (may be NULL). */
 } n00b_annot_result_t;
 
 // ============================================================================

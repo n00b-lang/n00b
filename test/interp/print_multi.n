@@ -1,0 +1,4 @@
+print("hello")
+print(42)
+print(true)
+print(3.14)

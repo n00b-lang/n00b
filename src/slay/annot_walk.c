@@ -12,6 +12,7 @@
 
 #include "internal/slay/annot_phases.h"
 #include "slay/n00b_parse.h"
+#include "slay/diagnostic.h"
 
 // ============================================================================
 // DFS walk
@@ -185,6 +186,11 @@ n00b_annot_result_t *
 n00b_annot_walk_tree_full_ex(n00b_grammar_t             *g,
                              n00b_parse_tree_t          *tree,
                              n00b_translate_type_spec_fn ts_fn)
+_kargs {
+    n00b_symtab_t          *symtab;
+    n00b_tc_ctx_t          *tc_ctx;
+    struct n00b_diag_ctx_s *diag;
+}
 {
     if (!g || !tree) {
         return NULL;
@@ -204,11 +210,16 @@ n00b_annot_walk_tree_full_ex(n00b_grammar_t             *g,
         = n00b_alloc(n00b_list_t(n00b_sym_entry_t *));
     *shadowed_entries = n00b_list_new_private(n00b_sym_entry_t *);
 
+    n00b_symtab_t     *st = (kargs->symtab) ? kargs->symtab : n00b_symtab_new();
+    n00b_tc_ctx_t     *tc = (kargs->tc_ctx) ? kargs->tc_ctx : n00b_tc_ctx_new();
+    n00b_diag_ctx_t   *dg = (kargs->diag) ? kargs->diag : n00b_diag_ctx_new();
+
     n00b_annot_walk_ctx_t ctx = {
-        .symtab              = n00b_symtab_new(),
+        .symtab              = st,
         .grammar             = g,
         .cf_labels           = labels,
-        .tc_ctx              = n00b_tc_ctx_new(),
+        .tc_ctx              = tc,
+        .diag                = dg,
         .params              = params,
         .node_types          = node_types,
         .shadowed_entries    = shadowed_entries,
@@ -221,6 +232,7 @@ n00b_annot_walk_tree_full_ex(n00b_grammar_t             *g,
     result->symtab           = ctx.symtab;
     result->cf_labels        = ctx.cf_labels;
     result->tc_ctx           = ctx.tc_ctx;
+    result->diag             = ctx.diag;
     result->params           = ctx.params;
     result->node_types       = ctx.node_types;
     result->shadowed_entries = ctx.shadowed_entries;

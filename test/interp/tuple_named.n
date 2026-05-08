@@ -1,0 +1,5 @@
+var t = (x: 10, y: 20)
+print(t.x)
+print(t.y)
+print(t.x + t.y)
+0

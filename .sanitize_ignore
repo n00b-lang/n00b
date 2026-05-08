@@ -1,0 +1,3 @@
+# AddressSanitizer ignore-list for n00b builds.
+# Empty by default — add `fun:foo` or `src:path/to/file.c` lines to
+# suppress instrumentation for specific symbols/files.

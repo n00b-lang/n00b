@@ -248,6 +248,15 @@ if conf_cocoa
   deps += cocoa_dep
 endif
 
+# macOS Security.framework + CoreFoundation are needed by the ACME
+# HTTPS shim's trust verifier (acme_trust_macos.c).  These are
+# always-shipped Apple frameworks, so unconditional on darwin.
+if target_os == 'darwin'
+  acme_trust_dep = dependency('appleframeworks',
+      modules: ['Security', 'CoreFoundation'])
+  deps += acme_trust_dep
+endif
+
 if conf_notcurses
   notcurses_dep = dependency('notcurses', version: '>=3.0.10', required: false)
   conf_notcurses = notcurses_dep.found()
@@ -269,6 +278,15 @@ endif
 
 mir_proj = subproject('mir')
 mir_dep  = mir_proj.get_variable('mir_dep')
+
+# picotls + picoquic for the QUIC module.  Built but not yet linked into
+# libn00b — the QUIC code that consumes them ships in a follow-up after
+# the Phase 1 framer / UDP / types slice.  See docs/quic/vendored.md.
+picotls_proj           = subproject('picotls')
+picotls_minicrypto_dep = picotls_proj.get_variable('picotls_minicrypto_dep')
+
+picoquic_proj = subproject('picoquic')
+picoquic_dep  = picoquic_proj.get_variable('picoquic_core_dep')
 
 n00b_core = [
     'src/core/init.c',
@@ -301,6 +319,7 @@ n00b_core = [
 n00b_adt = [
     'src/adt/dict_untyped.c',
     'src/adt/dict.c',
+    'src/adt/heap.c',
 ]
 
 python3 = find_program('python3')
@@ -453,6 +472,7 @@ n00b_conduit = [
     'src/conduit/fd_managed.c',
     'src/conduit/fd_writer.c',
     'src/conduit/socket.c',
+    'src/conduit/socket_udp.c',
     'src/conduit/file.c',
     'src/conduit/timer.c',
     'src/conduit/user_event.c',
@@ -500,6 +520,91 @@ if target_os == 'windows'
     advapi_dep = cc.find_library('advapi32', required: true)
     deps += [winsock_dep, sync_dep, advapi_dep]
 endif
+
+# ============================================================================
+# QUIC transport (Phase 1 — picoquic-independent slice)
+#
+# This source list contains only the picoquic-independent pieces of the QUIC
+# module: the wire framer (RFC 9000 §16 varint + 1-byte type tag), the
+# error code translator, and the public stats / channel-state types.  The
+# picoquic-dependent pieces (endpoint, conn, chan, qlog, trust backends,
+# secret providers) land in a follow-up that wires up the vendored
+# picoquic + picotls under subprojects/.  See docs/quic/vendored.md.
+# ============================================================================
+
+n00b_quic = [
+    'src/quic/types.c',
+    'src/quic/framer.c',
+    'src/quic/trust.c',
+    'src/quic/secret.c',
+    'src/quic/endpoint.c',
+    'src/quic/conn.c',
+    'src/quic/chan.c',
+
+    # Phase 2 — ACME HTTPS shim (vanilla sockets + picotls + OS trust).
+    'src/quic/acme_http.c',
+    'src/quic/acme_tls.c',
+
+    # Phase 2 — JWS encoder + base64url + JWK helpers (ACME RFC 8555 § 6.2).
+    'src/quic/jws.c',
+
+    # Phase 2 — ACME state machine (RFC 8555).  Phase 2.3a covers
+    # session_open + new_account; orders / authz / finalize land later.
+    'src/quic/acme.c',
+
+    # Phase 2 — PKCS#10 CSR builder (DER + ECDSA-P-256).
+    'src/quic/acme_csr.c',
+
+    # Phase 2 — Cert provisioner abstraction + static / acme /
+    # external implementations (design doc § 10).
+    'src/quic/cert_provisioner.c',
+    'src/quic/cert_provisioner_static.c',
+    'src/quic/cert_provisioner_acme.c',
+    'src/quic/cert_provisioner_external.c',
+
+    # Phase 2 — Shared RCU-style atomic-swap helper used by both the
+    # cert store and the sticky-secret module.
+    'src/quic/rcu.c',
+
+    # Phase 2 — Cert store with RCU-style atomic swap + SNI matching
+    # (design doc § 6).
+    'src/quic/cert_store.c',
+
+    # Phase 2 — Sticky secret (stateless-reset + address-validation
+    # token rotation; design doc § 7).
+    'src/quic/sticky_secret.c',
+
+    # Phase 2 — LB-CID encoding (draft-ietf-quic-load-balancers,
+    # block-cipher mode w/ 16-byte fixed CIDs; design doc § 8).
+    'src/quic/lb_cid.c',
+
+    # Phase 2 — Deployment manifest + preflight (design doc § 9).
+    'src/quic/manifest.c',
+    'src/quic/preflight.c',
+
+    # Phase 2 — DNS providers + DNS-01 challenge wrapper (design § 5.4).
+    'src/quic/dns_provider_manual.c',
+    'src/quic/dns_cloudflare.c',
+    'src/quic/dns_route53.c',
+    'src/quic/dns_gcp.c',
+    'src/quic/acme_dns01.c',
+
+    # Phase 2 — Per-cnx SNI routing via picotls callbacks
+    # (audit-tail item #12; design § 6).
+    'src/quic/picotls_sni.c',
+
+    # Phase 3 — Trust→picotls verify-cert bridge (deliverable § 5).
+    'src/quic/picotls_verify.c',
+]
+
+if target_os == 'linux'
+    n00b_quic += 'src/quic/acme_trust_linux.c'
+elif target_os != 'darwin'
+    n00b_quic += 'src/quic/acme_trust_stub.c'
+endif
+# darwin's acme_trust_macos.m is built as a separate static library
+# so it can go through the Objective-C compiler — Apple's framework
+# headers use attribute extensions ncc cannot parse.
 
 # ============================================================================
 # Virtual Filesystem
@@ -583,6 +688,7 @@ n00b_slay = [
     'src/slay/transform.c',
     'src/slay/codegen.c',
     'src/slay/codegen_mir.c',
+    'src/slay/codegen_builtins.c',
 ]
 
 # ============================================================================
@@ -620,6 +726,22 @@ n00b_logic = [
 ]
 
 # ============================================================================
+# Machine Learning primitives
+# ============================================================================
+
+n00b_ml = [
+    'src/ml/ml_core.c',
+    'src/ml/ml_io.c',
+    'src/ml/ml_train.c',
+    'src/ml/ml_score.c',
+    'src/ml/ml_inspect.c',
+    'src/ml/ml_monitor.c',
+    'src/ml/ml_layered.c',
+    'src/ml/ml_eval.c',
+    'src/ml/ml_presets.c',
+]
+
+# ============================================================================
 # Type checker
 # ============================================================================
 
@@ -629,6 +751,19 @@ n00b_typecheck = [
     'src/typecheck/unify.c',
     'src/typecheck/print.c',
     'src/typecheck/hash.c',
+]
+
+# ============================================================================
+# Language Server Protocol framework
+# ============================================================================
+
+n00b_lsp = [
+    'src/lsp/uri.c',
+    'src/lsp/position.c',
+    'src/lsp/document.c',
+    'src/lsp/jsonrpc.c',
+    'src/lsp/protocol.c',
+    'src/lsp/server.c',
 ]
 
 n00b_objfile = [
@@ -656,7 +791,7 @@ n00b_objfile = [
     'src/compiler/objfile/dwarf_build.c',
 ]
 
-n00b_dll_src = n00b_core + n00b_adt + n00b_text + n00b_display + n00b_conduit + n00b_vfs + n00b_parsers + n00b_logic + n00b_slay + n00b_typecheck + n00b_compiler + n00b_objfile
+n00b_dll_src = n00b_core + n00b_adt + n00b_text + n00b_display + n00b_conduit + n00b_quic + n00b_vfs + n00b_parsers + n00b_logic + n00b_ml + n00b_slay + n00b_typecheck + n00b_compiler + n00b_objfile + n00b_lsp
 
 # Build generated unicode tables with --no-ncc (they are pure data,
 # no ncc extensions, and parsing them is extremely expensive).
@@ -736,10 +871,36 @@ if conf_notcurses
   link_whole_libs += n00b_notcurses_lib
 endif
 
+# ACME trust verifier (macOS): built as a separate static lib so the
+# .m file goes through the system Objective-C compiler (which knows
+# how to parse Apple framework headers).  Body is plain C; the .m
+# extension is purely the routing trick.
+if target_os == 'darwin'
+  acme_trust_macos_args = [
+      '-g',
+      '-Wno-unused-parameter',
+      '-Wno-unused-function',
+      '-Wno-unknown-pragmas',
+      '-fno-omit-frame-pointer',
+      '-fPIC',
+      '-Wno-atomic-alignment',
+      '-DN00B_HOST_OS=' + host_machine.system(),
+      '-DN00B_HOST_CPU=' + host_machine.cpu_family(),
+  ]
+  n00b_acme_trust_macos = static_library('n00b_acme_trust_macos',
+      ['src/quic/acme_trust_macos.m'],
+      include_directories: incdir,
+      dependencies: deps,
+      objc_args: acme_trust_macos_args,
+      link_args: link_args,
+  )
+  link_whole_libs += n00b_acme_trust_macos
+endif
+
 n00b = static_library('n00b',
     n00b_dll_src,
     include_directories: incdir,
-    dependencies: deps + [libdl_dep, mir_dep],
+    dependencies: deps + [libdl_dep, mir_dep, picoquic_dep],
     c_args: exe_c_args,
     link_args: link_args,
     link_whole: link_whole_libs,
@@ -749,9 +910,57 @@ n00b = static_library('n00b',
 test_common_kwargs = {
     'include_directories': incdir,
     'c_args': exe_c_args,
+    # `exe_link_args` carries the sanitizer link-line entries
+    # (`-fsanitize=address` / `-fsanitize=undefined`) when those are
+    # enabled at configure time, plus LTO flags.  Without this, tests
+    # built off this kwarg block would link a libn00b that *was*
+    # compiled with sanitizer hooks but no runtime, producing
+    # `__ubsan_handle_*`-not-found at link time.  Phase 2 audit item
+    # #9.
     'link_args': exe_link_args,
     'link_with': [n00b],
+    # libn00b now references picoquic symbols (endpoint, conn, chan).
+    # Static-library deps don't propagate transitively in meson, so
+    # every test that links libn00b also needs picoquic_dep on its
+    # link line.  picoquic_dep brings the include path along too,
+    # which makes test code that drives picoquic directly Just Work.
+    'dependencies': [picoquic_dep],
 }
+
+# Alias kept for clarity at QUIC test sites that drive picoquic
+# explicitly; structurally identical to test_common_kwargs today.
+quic_test_kwargs = test_common_kwargs
+
+# QUIC echo demo — exercises the full transport end-to-end.
+quic_echo = executable('quic_echo',
+    ['examples/quic_echo/main.c'],
+    include_directories: incdir,
+    link_with: [n00b],
+    dependencies: [picoquic_dep],
+    c_args: exe_c_args,
+    link_args: link_args,
+)
+
+# Manifest-driven managed server (Phase 2 deliverable § 13.1).
+quic_server_managed = executable('quic_server_managed',
+    ['examples/quic_server_managed/main.c'],
+    include_directories: incdir,
+    link_with: [n00b],
+    dependencies: [picoquic_dep],
+    c_args: exe_c_args,
+    link_args: link_args,
+)
+
+# One-shot ACME cert acquisition demo (manual DNS-01 provider).
+# Used by docs/quic/le_staging.md for manual interop verification.
+quic_acme_demo = executable('quic_acme_demo',
+    ['examples/quic_acme_demo/main.c'],
+    include_directories: incdir,
+    link_with: [n00b],
+    dependencies: [picoquic_dep],
+    c_args: exe_c_args,
+    link_args: link_args,
+)
 
 
 array_test = executable('test_array',
@@ -838,6 +1047,229 @@ dict_test = executable('test_dict',
 )
 test('dict', dict_test, suite: 'unit')
 
+heap_test = executable('test_heap',
+    ['test/unit/test_heap.c'],
+    kwargs: test_common_kwargs,
+)
+test('heap', heap_test, suite: 'unit')
+
+stats_test = executable('test_stats',
+    ['test/unit/test_stats.c'],
+    kwargs: test_common_kwargs,
+)
+test('stats', stats_test, suite: 'unit')
+
+# ============================================================================
+# QUIC tests
+# ============================================================================
+
+quic_framer_test = executable('test_quic_framer',
+    ['test/unit/test_quic_framer.c'],
+    kwargs: test_common_kwargs,
+)
+test('quic_framer', quic_framer_test, suite: 'unit')
+
+quic_framer_fuzz_test = executable('test_quic_framer_fuzz',
+    ['test/unit/test_quic_framer_fuzz.c'],
+    kwargs: test_common_kwargs,
+)
+test('quic_framer_fuzz', quic_framer_fuzz_test, suite: 'unit', timeout: 60)
+
+quic_trust_test = executable('test_quic_trust',
+    ['test/unit/test_quic_trust.c'],
+    kwargs: test_common_kwargs,
+)
+test('quic_trust', quic_trust_test, suite: 'unit')
+
+quic_secret_test = executable('test_quic_secret',
+    ['test/unit/test_quic_secret.c'],
+    kwargs: test_common_kwargs,
+)
+test('quic_secret', quic_secret_test, suite: 'unit')
+
+quic_acme_http_test = executable('test_quic_acme_http',
+    ['test/unit/test_quic_acme_http.c'],
+    kwargs: test_common_kwargs,
+)
+test('quic_acme_http', quic_acme_http_test, suite: 'unit')
+
+# JWS encoder + ECDSA-P-256 sign + base64url + JWK thumbprint.
+quic_jws_test = executable('test_quic_jws',
+    ['test/unit/test_quic_jws.c'],
+    kwargs: test_common_kwargs,
+)
+test('quic_jws', quic_jws_test, suite: 'unit')
+
+# ACME end-to-end (Phase 2.3a): directory + newNonce + newAccount.
+# Skipped unless STEPCA_DIR_URL is in the env — start the fixture via
+# `test/fixtures/stepca/start.sh` to populate it.
+quic_acme_session_test = executable('test_quic_acme_session',
+    ['test/unit/test_quic_acme_session.c'],
+    kwargs: test_common_kwargs,
+)
+test('quic_acme_session', quic_acme_session_test,
+     suite: 'unit', timeout: 30)
+
+# CSR builder.  In-process structural test always runs; external
+# `openssl req -verify` runs when an openssl binary is available.
+quic_acme_csr_test = executable('test_quic_acme_csr',
+    ['test/unit/test_quic_acme_csr.c'],
+    kwargs: test_common_kwargs,
+)
+test('quic_acme_csr', quic_acme_csr_test, suite: 'unit')
+
+# Orchestrator smoke test (argument validation; live cert acquisition
+# is deferred to the Phase 2 deployment playbook because HTTP-01
+# validation needs port 80).
+quic_acme_orchestrator_test = executable('test_quic_acme_orchestrator',
+    ['test/unit/test_quic_acme_orchestrator.c'],
+    kwargs: test_common_kwargs,
+)
+test('quic_acme_orchestrator', quic_acme_orchestrator_test, suite: 'unit')
+
+quic_cert_provisioner_test = executable('test_quic_cert_provisioner',
+    ['test/unit/test_quic_cert_provisioner.c'],
+    kwargs: test_common_kwargs,
+)
+# Tests look up the fixture via N00B_SOURCE_ROOT; meson exposes this
+# automatically via env when set in test_common_kwargs would propagate
+# to children.  Easier: pass the project source root directly here.
+test('quic_cert_provisioner', quic_cert_provisioner_test,
+     suite: 'unit',
+     env: {'N00B_SOURCE_ROOT': meson.project_source_root()})
+
+quic_cert_store_test = executable('test_quic_cert_store',
+    ['test/unit/test_quic_cert_store.c'],
+    kwargs: test_common_kwargs,
+)
+test('quic_cert_store', quic_cert_store_test, suite: 'unit')
+
+# Endpoint hot-reload (cert + key swap).
+quic_endpoint_reload_test = executable('test_quic_endpoint_reload',
+    ['test/unit/test_quic_endpoint_reload.c'],
+    kwargs: test_common_kwargs,
+)
+test('quic_endpoint_reload', quic_endpoint_reload_test, suite: 'unit')
+
+# Sticky secret (stateless-reset / address-validation token rotation).
+quic_sticky_secret_test = executable('test_quic_sticky_secret',
+    ['test/unit/test_quic_sticky_secret.c'],
+    kwargs: test_common_kwargs,
+)
+test('quic_sticky_secret', quic_sticky_secret_test, suite: 'unit')
+
+# LB-CID encoding (block-cipher mode, 16-byte fixed CID).
+quic_lb_cid_test = executable('test_quic_lb_cid',
+    ['test/unit/test_quic_lb_cid.c'],
+    kwargs: test_common_kwargs,
+)
+test('quic_lb_cid', quic_lb_cid_test, suite: 'unit')
+
+# Phase 2 fuzz tests — property tests across base64url, PEM, X.509
+# validity walker, LB-CID decoder.  Same shape as the Phase 1
+# framer fuzz: deterministic seed, ~5k iters per target.
+quic_phase2_fuzz_test = executable('test_quic_phase2_fuzz',
+    ['test/unit/test_quic_phase2_fuzz.c'],
+    kwargs: test_common_kwargs,
+)
+test('quic_phase2_fuzz', quic_phase2_fuzz_test,
+     suite: 'unit', timeout: 120)
+
+# Manifest + preflight (design doc § 9).
+quic_manifest_test = executable('test_quic_manifest',
+    ['test/unit/test_quic_manifest.c'],
+    kwargs: test_common_kwargs,
+)
+test('quic_manifest', quic_manifest_test, suite: 'unit')
+
+# DNS providers (manual + cloudflare) + DNS-01 challenge wrapper.
+quic_dns_provider_test = executable('test_quic_dns_provider',
+    ['test/unit/test_quic_dns_provider.c'],
+    kwargs: test_common_kwargs,
+)
+test('quic_dns_provider', quic_dns_provider_test, suite: 'unit')
+
+# Per-cnx SNI routing (cert store wired into picotls callbacks).
+quic_sni_routing_test = executable('test_quic_sni_routing',
+    ['test/unit/test_quic_sni_routing.c'],
+    kwargs: test_common_kwargs,
+)
+test('quic_sni_routing', quic_sni_routing_test, suite: 'unit')
+
+# Phase 3 § 5 — trust→picotls verify-cert bridge end-to-end.
+quic_trust_bridge_test = executable('test_quic_trust_bridge',
+    ['test/unit/test_quic_trust_bridge.c'],
+    kwargs: test_common_kwargs,
+)
+test('quic_trust_bridge', quic_trust_bridge_test, suite: 'unit')
+
+# Phase 3 § 5.3 tail — mid-handshake-reload no-tear property.
+quic_reload_race_test = executable('test_quic_reload_race',
+    ['test/unit/test_quic_reload_race.c'],
+    kwargs: test_common_kwargs,
+)
+test('quic_reload_race', quic_reload_race_test, suite: 'unit')
+
+# Live network integration test: skipped unless N00B_TEST_NETWORK=1.
+# Hits Let's Encrypt's staging directory; verifies real TLS handshake
+# through OS trust + HTTP/1.1 parse against a real ACME endpoint.
+quic_acme_http_network_test = executable('test_quic_acme_http_network',
+    ['test/unit/test_quic_acme_http_network.c'],
+    kwargs: test_common_kwargs,
+)
+test('quic_acme_http_network', quic_acme_http_network_test,
+     suite: 'unit', timeout: 60)
+
+quic_endpoint_test = executable('test_quic_endpoint',
+    ['test/unit/test_quic_endpoint.c'],
+    kwargs: quic_test_kwargs,
+)
+test('quic_endpoint', quic_endpoint_test, suite: 'unit')
+
+quic_conn_test = executable('test_quic_conn',
+    ['test/unit/test_quic_conn.c'],
+    kwargs: test_common_kwargs,
+)
+test('quic_conn', quic_conn_test, suite: 'unit')
+
+quic_chan_test = executable('test_quic_chan',
+    ['test/unit/test_quic_chan.c'],
+    kwargs: test_common_kwargs,
+)
+test('quic_chan', quic_chan_test, suite: 'unit')
+
+quic_chan_recv_test = executable('test_quic_chan_recv',
+    ['test/unit/test_quic_chan_recv.c'],
+    kwargs: test_common_kwargs,
+)
+test('quic_chan_recv', quic_chan_recv_test, suite: 'unit')
+
+quic_handshake_test = executable('test_quic_handshake',
+    ['test/unit/test_quic_handshake.c'],
+    kwargs: quic_test_kwargs,
+)
+test('quic_handshake', quic_handshake_test, suite: 'unit', timeout: 30)
+
+quic_accept_test = executable('test_quic_accept',
+    ['test/unit/test_quic_accept.c'],
+    kwargs: quic_test_kwargs,
+)
+test('quic_accept', quic_accept_test, suite: 'unit', timeout: 30)
+
+quic_qlog_test = executable('test_quic_qlog',
+    ['test/unit/test_quic_qlog.c'],
+    kwargs: quic_test_kwargs,
+)
+test('quic_qlog', quic_qlog_test, suite: 'unit', timeout: 30)
+
+# Perf harness — built but not registered as a CI test (it's
+# benchmarking, not assertion-based).  Run manually with
+# `./build_debug/perf_quic_stream_scaling`.
+perf_quic_stream_scaling = executable('perf_quic_stream_scaling',
+    ['test/perf/perf_quic_stream_scaling.c'],
+    kwargs: quic_test_kwargs,
+)
+
 # ============================================================================
 # Conduit tests
 # ============================================================================
@@ -903,6 +1335,12 @@ if target_os == 'windows'
     )
     test('io_windows', io_windows_test, suite: 'unit')
 endif
+
+conduit_udp_test = executable('test_conduit_udp',
+    ['test/unit/test_conduit_udp.c'],
+    kwargs: test_common_kwargs,
+)
+test('conduit_udp', conduit_udp_test, suite: 'unit')
 
 signal_test = executable('test_signal',
     ['test/unit/test_signal.c'],
@@ -1093,6 +1531,16 @@ logic_easy_test = executable('test_logic_easy',
 test('logic_easy', logic_easy_test, suite: 'unit')
 
 # ============================================================================
+# ML tests
+# ============================================================================
+
+ml_test = executable('test_ml',
+    ['test/unit/test_ml.c'],
+    kwargs: test_common_kwargs,
+)
+test('ml', ml_test, suite: 'unit')
+
+# ============================================================================
 # Parser tests
 # ============================================================================
 
@@ -1226,6 +1674,59 @@ json_tokenizer_test = executable('test_json_tokenizer',
     kwargs: test_common_kwargs,
 )
 test('json_tokenizer', json_tokenizer_test, suite: 'unit')
+
+# ============================================================================
+# LSP framework tests
+# ============================================================================
+
+lsp_uri_test = executable('test_lsp_uri',
+    ['test/unit/test_lsp_uri.c'],
+    kwargs: test_common_kwargs,
+)
+test('lsp_uri', lsp_uri_test, suite: 'unit')
+
+lsp_position_test = executable('test_lsp_position',
+    ['test/unit/test_lsp_position.c'],
+    kwargs: test_common_kwargs,
+)
+test('lsp_position', lsp_position_test, suite: 'unit')
+
+lsp_document_test = executable('test_lsp_document',
+    ['test/unit/test_lsp_document.c'],
+    kwargs: test_common_kwargs,
+)
+test('lsp_document', lsp_document_test, suite: 'unit')
+
+lsp_jsonrpc_test = executable('test_lsp_jsonrpc',
+    ['test/unit/test_lsp_jsonrpc.c'],
+    kwargs: test_common_kwargs,
+)
+test('lsp_jsonrpc', lsp_jsonrpc_test, suite: 'unit')
+
+lsp_server_test = executable('test_lsp_server',
+    ['test/unit/test_lsp_server.c'],
+    kwargs: test_common_kwargs,
+)
+test('lsp_server', lsp_server_test, suite: 'unit')
+
+# nccd backend lib (defined here so the test target below can link it).
+nccd_backend_lib = static_library('nccd_backend',
+    [
+        'src/tools/nccd_tokenize.c',
+        'src/tools/nccd_features.c',
+        'src/tools/nccd_backend.c',
+    ],
+    include_directories: incdir + [include_directories('src/tools')],
+    c_args: exe_c_args,
+)
+
+nccd_features_test = executable('test_nccd_features',
+    ['test/unit/test_nccd_features.c'],
+    include_directories: incdir + [include_directories('src/tools')],
+    c_args: exe_c_args,
+    link_with: [nccd_backend_lib, n00b],
+)
+test('nccd_features', nccd_features_test, suite: 'unit')
 
 cf_label_test = executable('test_cf_label',
     ['test/unit/test_cf_label.c'],
@@ -1544,9 +2045,30 @@ if target_os != 'windows'
     )
 endif
 
+# nccd — the ncc Language Server.
+# Phase 2: lexical-only ncc backend (semantic tokens, outline,
+# bracket-balance diagnostics).  The backend lib is defined earlier
+# (alongside the test target that links it).
+nccd = executable('nccd',
+    ['src/tools/nccd.c'],
+    include_directories: incdir + [include_directories('src/tools')],
+    c_args: exe_c_args,
+    link_with: [nccd_backend_lib, n00b],
+    install: true,
+)
+
 # ============================================================================
 # Integration tests
 # ============================================================================
+
+# Interpreter integration tests (shell runner invokes the n00b binary).
+test('interp', find_program('bash'),
+    args: [meson.project_source_root() / 'test/interp/run_tests.sh',
+           n00b_exe],
+    suite: 'interp',
+    workdir: meson.project_source_root(),
+    timeout: 120,
+)
 
 hash_test = executable('test_hash',
     ['test/integration/test_hash.c'],
@@ -1692,6 +2214,81 @@ foreach name : objfile_test_names
     )
     test('objfile_' + name, exe, suite: 'unit')
 endforeach
+
+# ============================================================================
+# Examples (Mac-only — ObjC + libxpc)
+# ============================================================================
+
+if target_os == 'darwin'
+    example_objc_args = [
+        '-g',
+        '-Wno-unused-parameter',
+        '-Wno-unused-function',
+        '-Wno-unknown-pragmas',
+        '-fno-omit-frame-pointer',
+        '-Wno-atomic-alignment',
+        '-fobjc-arc',
+    ]
+
+    example_inc = [include_directories('examples/crayon_shared'), incdir]
+
+    # ObjC libxpc subscriber — no n00b types, plain Apple toolchain.
+    # Also hosts the xpc_dictionary_apply shim that hides Apple's block
+    # syntax behind a plain-C function pointer.
+    n00b_crayon_xpc = static_library('n00b_crayon_xpc',
+        ['examples/crayon_shared/crayon_subscriber.m',
+         'examples/crayon_shared/crayon_xpc_apply.m'],
+        include_directories: example_inc,
+        objc_args: example_objc_args,
+    )
+
+    # C bridges + features — touch n00b's _generic_struct macros, must
+    # compile via ncc with the same flags as the rest of the project.
+    n00b_crayon_helpers = static_library('n00b_crayon_helpers',
+        ['examples/crayon_shared/crayon_xpc_to_json.c',
+         'examples/crayon_shared/crayon_features.c'],
+        include_directories: example_inc,
+        c_args: exe_c_args + ['-fblocks'],
+    )
+
+    crayon_dump = executable('crayon_dump',
+        ['examples/crayon_dump/main.m'],
+        include_directories: example_inc,
+        link_with: n00b_crayon_xpc,
+        objc_args: example_objc_args,
+        link_args: ['-framework', 'Foundation'],
+    )
+
+    crayon_dev_activity = executable('crayon_dev_activity',
+        ['examples/crayon_dev_activity/main.c'],
+        include_directories: example_inc,
+        link_with: [n00b_crayon_xpc, n00b_crayon_helpers],
+        link_whole: [n00b],
+        c_args: exe_c_args + ['-fblocks'],
+        link_args: link_args,
+        dependencies: deps,
+    )
+
+    crayon_interp_lang = executable('crayon_interp_lang',
+        ['examples/crayon_interp_lang/main.c'],
+        include_directories: example_inc,
+        link_with: [n00b_crayon_xpc, n00b_crayon_helpers],
+        link_whole: [n00b],
+        c_args: exe_c_args + ['-fblocks'],
+        link_args: link_args,
+        dependencies: deps,
+    )
+
+    crayon_api_crud = executable('crayon_api_crud',
+        ['examples/crayon_api_crud/main.c'],
+        include_directories: example_inc,
+        link_with: [n00b_crayon_xpc, n00b_crayon_helpers],
+        link_whole: [n00b],
+        c_args: exe_c_args + ['-fblocks'],
+        link_args: link_args,
+        dependencies: deps,
+    )
+endif
 
 # ============================================================================
 # Documentation (Doxygen)

@@ -1,0 +1,9 @@
+enum Status {
+  Ok: 0,
+  Error: 1,
+  Unknown: 99
+}
+print(Status.Ok)
+print(Status.Error)
+print(Status.Unknown)
+0

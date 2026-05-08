@@ -1,0 +1,4 @@
+var e = err("not found")
+print(e)
+assert !e.ok?()
+0

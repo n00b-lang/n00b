@@ -1,0 +1,3 @@
+var s = "foo"
+print(s + "bar")
+0

@@ -1,0 +1,3 @@
+assert "hello" == "hello"
+assert "abc" == "abc"
+0

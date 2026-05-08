@@ -69,8 +69,12 @@ typedef n00b_cg_session_t n00b_codegen_t;
 /**
  * @brief Machine-level type tags for codegen values.
  *
- * These map 1:1 to MIR types. Languages provide a `type_map` callback
- * to translate their type system into these tags.
+ * Numeric types map 1:1 to MIR types. Pointer-typed tags (STRING
+ * through PTR) all map to MIR_T_P but carry semantic information so
+ * the codegen can dispatch operators and builtins correctly.
+ *
+ * Languages provide a `type_map` callback to translate their type
+ * system into these tags.
  */
 typedef enum {
     N00B_CG_I8,
@@ -83,9 +87,16 @@ typedef enum {
     N00B_CG_U64,
     N00B_CG_F32,
     N00B_CG_F64,
-    N00B_CG_PTR,
-    N00B_CG_BOOL,  /**< Backed by I64, semantically boolean. */
-    N00B_CG_VOID,
+    N00B_CG_STRING,  /**< n00b_string_t *, backed by MIR_T_P. */
+    N00B_CG_LIST,    /**< n00b_list_t *, backed by MIR_T_P. */
+    N00B_CG_DICT,    /**< n00b_dict_t *, backed by MIR_T_P. */
+    N00B_CG_RESULT,  /**< result[T] *, backed by MIR_T_P. */
+    N00B_CG_OPTION,  /**< option[T] / maybe[T] *, backed by MIR_T_P. */
+    N00B_CG_FUNC,    /**< Function pointer, backed by MIR_T_P. */
+    N00B_CG_NIL,     /**< Nil value (nullptr), backed by MIR_T_P. */
+    N00B_CG_PTR,     /**< Generic/unknown pointer, backed by MIR_T_P. */
+    N00B_CG_BOOL,    /**< Backed by I64, semantically boolean. */
+    N00B_CG_VOID,    /**< No value (void return). */
 } n00b_cg_type_tag_t;
 
 // ============================================================================
@@ -438,6 +449,7 @@ _kargs {
     n00b_annot_result_t *annot;
     const char          *func_name;
     bool                *ok;
+    n00b_cg_type_tag_t  *out_type;  /**< Out: type tag of last expression. */
 };
 
 // ============================================================================
@@ -532,11 +544,31 @@ n00b_cg_val_t n00b_codegen_lower(n00b_cg_session_t *session,
 n00b_cg_type_tag_t n00b_codegen_node_type(n00b_cg_session_t *session,
                                             n00b_parse_tree_t *node);
 
+/**
+ * @brief Get the full type-checker type for a parse tree node.
+ *
+ * Unlike `n00b_codegen_node_type` which flattens to a tag, this returns
+ * the raw `n00b_tc_type_t *` from the annotation result. Useful when
+ * codegen needs the inner type parameter (e.g., T in result[T]).
+ *
+ * @return The resolved type, or NULL if not found.
+ */
+n00b_tc_type_t *n00b_codegen_node_tc_type(n00b_cg_session_t *session,
+                                            n00b_parse_tree_t *node);
+
 n00b_cf_label_t *n00b_codegen_cf_label(n00b_cg_session_t *session,
                                          n00b_parse_tree_t *node);
 
 n00b_grammar_t      *n00b_codegen_grammar(n00b_cg_session_t *session);
 n00b_annot_result_t *n00b_codegen_annot(n00b_cg_session_t *session);
+
+/**
+ * @brief Set (or replace) the session-level annotation result.
+ *
+ * Returns the previous value so callers can restore it.
+ */
+n00b_annot_result_t *n00b_codegen_set_annot(n00b_cg_session_t   *session,
+                                             n00b_annot_result_t *annot);
 n00b_diag_ctx_t     *n00b_codegen_diagnostics(n00b_cg_session_t *session);
 void                *n00b_codegen_get_user_data(n00b_cg_session_t *session);
 
@@ -735,7 +767,8 @@ bool n00b_cg_emit_func_from_tree(n00b_cg_session_t *session,
                                    n00b_parse_tree_t *tree,
                                    const char         *func_name)
 _kargs {
-    n00b_cg_type_tag_t ret;
+    n00b_cg_type_tag_t  ret;
+    n00b_cg_type_tag_t *result_type;  /**< Out: type of last expression. */
 };
 
 int64_t n00b_codegen_eval_tree(n00b_grammar_t    *grammar,

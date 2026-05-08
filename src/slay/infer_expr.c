@@ -29,8 +29,13 @@
 #include "slay/infer_expr.h"
 #include "slay/annot_walk.h"
 #include "slay/tree_util.h"
+#include "typecheck/context.h"
+#include "typecheck/construct.h"
+#include <stdio.h>
 #include "slay/annotation.h"
 #include "slay/cf_label.h"
+#include "slay/parse_tree.h"
+#include "slay/token.h"
 #include "internal/slay/grammar_internal.h"
 #include "core/alloc.h"
 #include "adt/list.h"
@@ -536,7 +541,101 @@ parse_type_primary(infer_ctx_t *ctx)
             }
         }
 
-        // Not a function type (yet?) — return a fresh variable.
+        // Named type (class/record) used as constructor — return itself.
+        // This handles class constructors like Point(10, 20).
+        if (n00b_variant_is_type(resolved->kind, n00b_tc_prim_t)
+            || n00b_variant_is_type(resolved->kind, n00b_tc_record_t)
+            || n00b_variant_is_type(resolved->kind, n00b_tc_tuple_t)) {
+            return resolved;
+        }
+
+        // Not a function type — check if this is a method call.
+        // The callee child is a member-access postfix-expr (expr.method).
+        // Extract the receiver type and method name, then resolve
+        // the return type based on the receiver's type.
+        {
+            n00b_parse_tree_t *callee_node =
+                n00b_tree_get_nth_nt_child(ctx->node, index);
+
+            if (callee_node) {
+                // Look for a '.' token in the callee to detect member access.
+                size_t cnc = n00b_tree_num_children(callee_node);
+                bool found_dot = false;
+                n00b_parse_tree_t *receiver_node = NULL;
+                n00b_string_t *method_name = NULL;
+
+                for (size_t ci = 0; ci < cnc; ci++) {
+                    n00b_parse_tree_t *cc = n00b_tree_child(callee_node, ci);
+
+                    if (n00b_tree_is_leaf(cc)) {
+                        n00b_token_info_t *ti = n00b_parse_node_token(cc);
+
+                        if (ti && n00b_option_is_set(ti->value)) {
+                            n00b_string_t *tv = n00b_option_get(ti->value);
+
+                            if (tv->u8_bytes == 1 && tv->data[0] == '.') {
+                                found_dot = true;
+                            }
+                            else if (found_dot && !method_name) {
+                                method_name = tv;
+                            }
+                        }
+                    }
+                    else if (!found_dot) {
+                        receiver_node = cc;
+                    }
+                }
+
+                if (found_dot && receiver_node && method_name) {
+                    // Get receiver's type from node_types.
+                    bool rfound = false;
+                    uintptr_t rk = (uintptr_t)receiver_node;
+                    n00b_tc_type_t *recv_type =
+                        n00b_dict_get(ctx->node_types, rk, &rfound);
+
+                    if (rfound && recv_type) {
+                        n00b_tc_type_t *rr = recv_type;
+
+                        while (rr->forward) {
+                            rr = rr->forward;
+                        }
+
+                        // Resolve method return types for known parameterized types.
+                        if (n00b_variant_is_type(rr->kind, n00b_tc_param_t)) {
+                            auto p = n00b_variant_get(rr->kind, n00b_tc_param_t);
+
+                            bool is_option = (p.name && p.name->u8_bytes == 6
+                                              && memcmp(p.name->data, "option", 6) == 0);
+                            bool is_result = (p.name && p.name->u8_bytes == 6
+                                              && memcmp(p.name->data, "result", 6) == 0);
+
+                            if (is_option || is_result) {
+                                // is_set?(), ok?(), is_ok?() → bool
+                                if ((method_name->u8_bytes == 7
+                                     && memcmp(method_name->data, "is_set?", 7) == 0)
+                                    || (method_name->u8_bytes == 3
+                                        && memcmp(method_name->data, "ok?", 3) == 0)
+                                    || (method_name->u8_bytes == 5
+                                        && memcmp(method_name->data, "is_ok?", 5) == 0)) {
+                                    return n00b_tc_prim(ctx->tc_ctx, r"bool");
+                                }
+
+                                // unwrap() → inner type T
+                                if (method_name->u8_bytes == 6
+                                    && memcmp(method_name->data, "unwrap", 6) == 0) {
+                                    if (p.params
+                                        && n00b_list_len(*p.params) > 0) {
+                                        return n00b_list_get(*p.params, 0);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Truly unknown — return a fresh variable.
         return n00b_tc_fresh_var(ctx->tc_ctx);
     }
 

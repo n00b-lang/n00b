@@ -64,7 +64,7 @@ typedef struct {
 // Diagnostic context (accumulator)
 // ============================================================================
 
-typedef struct {
+typedef struct n00b_diag_ctx_s {
     n00b_list_t(n00b_diagnostic_t) diags;
     int32_t                         error_count;
     int32_t                         warning_count;
@@ -128,6 +128,18 @@ void n00b_diag_print_all(n00b_diag_ctx_t *ctx,
                          const char      *filename);
 
 // ============================================================================
+// Merge
+// ============================================================================
+
+/**
+ * @brief Merge all diagnostics from @p src into @p dst.
+ *
+ * Copies every entry from src's list into dst, updating error/warning counts.
+ * The src context is not modified or freed.
+ */
+void n00b_diag_merge(n00b_diag_ctx_t *dst, n00b_diag_ctx_t *src);
+
+// ============================================================================
 // Import from type checker
 // ============================================================================
 
@@ -142,6 +154,26 @@ void n00b_diag_print_all(n00b_diag_ctx_t *ctx,
  */
 void n00b_diag_import_tc_errors(n00b_diag_ctx_t *ctx,
                                 n00b_tc_ctx_t   *tc_ctx);
+
+/**
+ * @brief Import a parse error into the diagnostic context.
+ *
+ * Converts an Earley diagnostic (error location + expected tokens) into
+ * a formatted `n00b_diagnostic_t` with code "P001".
+ *
+ * @param ctx       Diagnostic context to push into.
+ * @param error_line    Line number of the parse failure.
+ * @param error_col     Column number of the parse failure.
+ * @param got_text      Text of the unexpected token (may be NULL).
+ * @param expected_msg  Formatted "expected X, Y, or Z" string (may be NULL).
+ * @param filename      Source filename for span (may be NULL).
+ */
+void n00b_diag_import_parse_error(n00b_diag_ctx_t *ctx,
+                                  uint32_t         error_line,
+                                  uint32_t         error_col,
+                                  const char      *got_text,
+                                  const char      *expected_msg,
+                                  const char      *filename);
 
 // ============================================================================
 // Span helpers

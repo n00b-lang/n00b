@@ -805,6 +805,62 @@ extern bool n00b_load_builtins(n00b_grammar_t *g, n00b_cg_session_t *session);
 // Run mode: parse → annotate → codegen → JIT → execute
 // ============================================================================
 
+// Walk a parse tree and emit diagnostics for error recovery nodes.
+// Returns the number of error nodes found.
+static int
+collect_parse_errors(n00b_diag_ctx_t *diag, n00b_grammar_t *g,
+                     n00b_parse_tree_t *node)
+{
+    if (!node || n00b_tree_is_leaf(node)) {
+        return 0;
+    }
+
+    int count = 0;
+    n00b_nt_node_t *pn = &n00b_tree_node_value(node);
+
+    if (pn->penalty > 0 && (pn->missing || pn->bad_prefix)) {
+        n00b_diag_span_t span = n00b_diag_span_from_node(node);
+        char msg[256];
+
+        if (pn->missing) {
+            // The node's name tells us what was expected.
+            const char *nt_name = pn->name ? pn->name->data : "token";
+            snprintf(msg, sizeof(msg),
+                     "missing expected '%s'", nt_name);
+            n00b_diag_push(diag, N00B_DIAG_ERROR, N00B_STAGE_PARSE,
+                           r"P002", n00b_string_from_cstr(msg), span);
+        }
+        else if (pn->bad_prefix) {
+            n00b_parse_tree_t *tok = n00b_pt_first_token(node);
+            const char *got = tok ? n00b_pt_token_text(tok) : NULL;
+
+            if (got) {
+                snprintf(msg, sizeof(msg),
+                         "unexpected '%s' before '%s'",
+                         got, pn->name ? pn->name->data : "here");
+            }
+            else {
+                snprintf(msg, sizeof(msg),
+                         "unexpected token before '%s'",
+                         pn->name ? pn->name->data : "here");
+            }
+
+            n00b_diag_push(diag, N00B_DIAG_ERROR, N00B_STAGE_PARSE,
+                           r"P003", n00b_string_from_cstr(msg), span);
+        }
+
+        count++;
+    }
+
+    size_t nc = n00b_tree_num_children(node);
+
+    for (size_t i = 0; i < nc; i++) {
+        count += collect_parse_errors(diag, g, n00b_tree_child(node, i));
+    }
+
+    return count;
+}
+
 static int
 run_file(n00b_grammar_t *g, n00b_string_t *source_file, bool verbose, debug_opts_t *dbg)
 {
@@ -813,6 +869,9 @@ run_file(n00b_grammar_t *g, n00b_string_t *source_file, bool verbose, debug_opts
     if (!buf) {
         return 1;
     }
+
+    // Create diagnostic accumulator early — all stages feed into this.
+    n00b_diag_ctx_t *diag_ctx = n00b_diag_ctx_new();
 
     // Pre-parse debug output.
     if (dbg->show_grammar) {
@@ -878,47 +937,47 @@ run_file(n00b_grammar_t *g, n00b_string_t *source_file, bool verbose, debug_opts
         else {
             printf("Parse FAILED.\n");
 
-            n00b_earley_diagnostics_t diag = {0};
-            n00b_earley_extract_diagnostics(earley, &diag);
-            fprintf(stderr,
-                    "Error at line %u, col %u",
-                    diag.error_loc.line,
-                    diag.error_loc.column);
+            n00b_earley_diagnostics_t ediag = {0};
+            n00b_earley_extract_diagnostics(earley, &ediag);
 
-            if (diag.error_loc.got && diag.error_loc.got->data) {
-                fprintf(stderr,
-                        ": got '%.*s'",
-                        (int)diag.error_loc.got->u8_bytes,
-                        diag.error_loc.got->data);
-            }
+            // Build expected-tokens string for the diagnostic.
+            char expected_buf[512] = {0};
 
-            fprintf(stderr, "\n");
+            if (ediag.expected_count > 0) {
+                int off = snprintf(expected_buf, sizeof(expected_buf), "expected");
 
-            if (diag.expected_count > 0) {
-                fprintf(stderr, "Expected:");
-
-                for (int32_t i = 0; i < diag.expected_count; i++) {
-                    n00b_string_t *tname = n00b_get_terminal_name(g, diag.expected_ids[i]);
+                for (int32_t i = 0; i < ediag.expected_count
+                         && off < (int)sizeof(expected_buf) - 20; i++) {
+                    n00b_string_t *tname = n00b_get_terminal_name(
+                        g, ediag.expected_ids[i]);
 
                     if (tname && tname->data) {
-                        fprintf(stderr, " %.*s", (int)tname->u8_bytes, tname->data);
-                    }
-                    else {
-                        fprintf(stderr, " tid=%lld", (long long)diag.expected_ids[i]);
+                        off += snprintf(expected_buf + off,
+                                        sizeof(expected_buf) - (size_t)off,
+                                        " %.*s", (int)tname->u8_bytes,
+                                        tname->data);
                     }
                 }
-
-                fprintf(stderr, "\n");
             }
 
-            if (diag.expected_ids)
-                n00b_free(diag.expected_ids);
-            if (diag.expected_desc)
-                n00b_free(diag.expected_desc);
-            if (diag.active_ctx)
-                n00b_free(diag.active_ctx);
+            n00b_diag_import_parse_error(
+                diag_ctx,
+                ediag.error_loc.line, ediag.error_loc.column,
+                (ediag.error_loc.got && ediag.error_loc.got->data)
+                    ? ediag.error_loc.got->data : NULL,
+                expected_buf[0] ? expected_buf : NULL,
+                source_file ? source_file->data : NULL);
+
+            if (ediag.expected_ids)  n00b_free(ediag.expected_ids);
+            if (ediag.expected_desc) n00b_free(ediag.expected_desc);
+            if (ediag.active_ctx)    n00b_free(ediag.active_ctx);
 
             n00b_earley_free(earley);
+
+            // Print the diagnostic and exit.
+            n00b_diag_print_all(diag_ctx, buf->data,
+                                source_file ? source_file->data : NULL);
+            n00b_diag_ctx_free(diag_ctx);
             return 1;
         }
 
@@ -937,20 +996,44 @@ run_file(n00b_grammar_t *g, n00b_string_t *source_file, bool verbose, debug_opts
         r = n00b_grammar_parse(g, ts, mode);
 
         if (!n00b_parse_result_ok(r)) {
-            n00b_string_t *err = n00b_parse_result_error_string(r);
-            n00b_eprintf("Parse failed: «#»", err);
-
+            n00b_error_location_t eloc = n00b_parse_result_error_location(r);
             n00b_string_t *expected = n00b_parse_result_expected_string(r);
 
-            if (expected->u8_bytes > 0) {
-                n00b_eprintf("Expected: «#»", expected);
+            const char *got_str = (eloc.got && eloc.got->data)
+                ? eloc.got->data : NULL;
+            char expected_buf[512] = {0};
+
+            if (expected && expected->u8_bytes > 0) {
+                snprintf(expected_buf, sizeof(expected_buf),
+                         "expected %.*s",
+                         (int)expected->u8_bytes, expected->data);
             }
 
+            n00b_diag_import_parse_error(
+                diag_ctx, eloc.line, eloc.column,
+                got_str,
+                expected_buf[0] ? expected_buf : NULL,
+                source_file ? source_file->data : NULL);
+
+            n00b_diag_print_all(diag_ctx, buf->data,
+                                source_file ? source_file->data : NULL);
             n00b_parse_result_free(r);
+            n00b_diag_ctx_free(diag_ctx);
             return 1;
         }
 
-        tree               = n00b_parse_result_tree(r);
+        tree = n00b_parse_result_tree(r);
+
+        // Check for error-recovered parse. Walk the tree to find error
+        // nodes and emit diagnostics, then bail before codegen.
+        if (n00b_parse_result_repaired(r)) {
+            collect_parse_errors(diag_ctx, g, tree);
+            n00b_diag_print_all(diag_ctx, buf->data,
+                                source_file ? source_file->data : NULL);
+            n00b_parse_result_free(r);
+            n00b_diag_ctx_free(diag_ctx);
+            return 1;
+        }
         int32_t tree_count = n00b_parse_result_tree_count(r);
 
         if (!dbg->quiet) {
@@ -978,12 +1061,14 @@ run_file(n00b_grammar_t *g, n00b_string_t *source_file, bool verbose, debug_opts
     // Annotation walk.
     n00b_annot_result_t *ar = n00b_compile_walk(g, tree);
 
-    // Diagnostic accumulator.
-    n00b_diag_ctx_t *diag_ctx = n00b_diag_ctx_new();
-
-    // Import type-check errors (always, for the final diagnostic print).
+    // Import type-check errors into the main diagnostic context.
     if (ar && ar->tc_ctx) {
         n00b_diag_import_tc_errors(diag_ctx, ar->tc_ctx);
+    }
+
+    // Merge annotation-walk diagnostics into the main context.
+    if (ar && ar->diag) {
+        n00b_diag_merge(diag_ctx, ar->diag);
     }
 
     // Symbol table.
@@ -1075,6 +1160,13 @@ run_file(n00b_grammar_t *g, n00b_string_t *source_file, bool verbose, debug_opts
         }
     }
 
+    // Bail before codegen if there are any errors from earlier stages.
+    if (n00b_diag_has_errors(diag_ctx)) {
+        n00b_diag_print_all(diag_ctx, buf->data, source_file->data);
+        n00b_diag_ctx_free(diag_ctx);
+        return 1;
+    }
+
     // Codegen + JIT + execute.
     n00b_dict_untyped_t *embed_reg = n00b_embed_registry_new();
     n00b_ffi_embed_register(embed_reg);
@@ -1089,6 +1181,13 @@ run_file(n00b_grammar_t *g, n00b_string_t *source_file, bool verbose, debug_opts
     int64_t run_result = n00b_cg_session_run_module(session, tree, .annot = ar, .ok = &run_ok);
 
     int exit_code;
+
+    // Merge codegen diagnostics into the main context.
+    n00b_diag_ctx_t *cg_diag = n00b_codegen_diagnostics(session);
+
+    if (cg_diag) {
+        n00b_diag_merge(diag_ctx, cg_diag);
+    }
 
     if (run_ok) {
         if (verbose) {
