@@ -111,7 +111,7 @@ extern "C" {
 #define XXH_STATIC_LINKING_ONLY
 /* make all functions private */
 #undef XXH_PUBLIC_API
-#if defined(__GNUC__)
+#if defined(__GNUC__) && !defined(XXH_NO_INTRINSICS)
 #define XXH_PUBLIC_API static __inline __attribute__((unused))
 #elif defined(__cplusplus) \
     || (defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 199901L) /* C99 */)
@@ -2920,7 +2920,7 @@ XXH64_hashFromCanonical(const XXH64_canonical_t *src)
 #define XXH_unlikely(x) (x)
 #endif
 
-#if defined(__GNUC__)
+#if defined(__GNUC__) && !defined(XXH_NO_INTRINSICS)
 #if defined(__AVX2__)
 #include <immintrin.h>
 #elif defined(__SSE2__)
@@ -2930,7 +2930,7 @@ XXH64_hashFromCanonical(const XXH64_canonical_t *src)
 #include <arm_neon.h>
 #undef inline
 #endif
-#elif defined(_MSC_VER)
+#elif defined(_MSC_VER) && !defined(XXH_NO_INTRINSICS)
 #include <intrin.h>
 #endif
 
@@ -3070,7 +3070,9 @@ enum XXH_VECTOR_TYPE /* fake enum */
 #endif
 
 #ifndef XXH_VECTOR /* can be defined on command line */
-#if defined(__AVX512F__)
+#if defined(XXH_NO_INTRINSICS)
+#define XXH_VECTOR XXH_SCALAR
+#elif defined(__AVX512F__)
 #define XXH_VECTOR XXH_AVX512
 #elif defined(__AVX2__)
 #define XXH_VECTOR XXH_AVX2

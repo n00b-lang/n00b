@@ -2,8 +2,6 @@
  * file_change.c - Filesystem change monitoring implementation for conduit
  */
 
-#ifndef _WIN32
-
 #include "conduit/conduit.h"
 #include "conduit/file_change.h"
 #include "conduit/io.h"
@@ -156,5 +154,3 @@ n00b_conduit_vnode_fire(n00b_conduit_vnode_watch_t *watch, uint32_t ops)
         n00b_conduit_topic_close(watch->topic);
     }
 }
-
-#endif // !_WIN32

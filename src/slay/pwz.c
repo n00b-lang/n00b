@@ -14,6 +14,7 @@
 #include "internal/slay/unicode_class.h"
 #include "text/unicode/encoding.h"
 #include "core/alloc.h"
+#include "core/gc.h"
 #include "adt/array.h"
 #include "adt/list.h"
 #include "text/strings/string_ops.h"
@@ -690,31 +691,46 @@ d_u_prime(n00b_pwz_parser_t *p, int32_t pos, pwz_exp_t *result, pwz_cxt_t *cxt)
 
     case PWZ_CXT_SEQ: {
         if (cxt->seq.nright == 0) {
-            int32_t total = cxt->seq.nleft + 1;
+            int32_t        total      = cxt->seq.nleft + 1;
+            pwz_exp_ptr_t *children   = NULL;
+            pwz_exp_t     *seq_result = NULL;
 
-            pwz_exp_ptr_t *children = n00b_alloc_array(pwz_exp_ptr_t, total);
-
+            n00b_gc_register_root(p);
+            n00b_gc_register_root(result);
+            n00b_gc_register_root(cxt);
+            n00b_gc_register_root(children);
+            n00b_gc_register_root(seq_result);
+            children = n00b_alloc_array(pwz_exp_ptr_t, total);
             for (int32_t i = 0; i < cxt->seq.nleft; i++) {
                 children[i] = cxt->seq.left[i];
             }
-
             children[cxt->seq.nleft] = result;
 
-            pwz_exp_t *seq_result = alloc_result_exp(p);
-
+            seq_result                = alloc_result_exp(p);
             seq_result->kind          = PWZ_SEQ;
             seq_result->seq.name      = cxt->seq.name;
             seq_result->seq.nt_id     = cxt->seq.nt_id;
             seq_result->seq.rule_ix   = cxt->seq.rule_ix;
             seq_result->seq.children  = children;
             seq_result->seq.nchildren = total;
-
             d_u(p, pos, seq_result, cxt->seq.mem);
+            n00b_gc_unregister_root(seq_result);
+            n00b_gc_unregister_root(children);
+            n00b_gc_unregister_root(cxt);
+            n00b_gc_unregister_root(result);
+            n00b_gc_unregister_root(p);
         }
         else {
-            int32_t new_nleft = cxt->seq.nleft + 1;
+            int32_t        new_nleft   = cxt->seq.nleft + 1;
+            pwz_exp_ptr_t *new_left    = NULL;
+            pwz_cxt_t     *new_seq_cxt = NULL;
 
-            pwz_exp_ptr_t *new_left = n00b_alloc_array(pwz_exp_ptr_t, new_nleft);
+            n00b_gc_register_root(p);
+            n00b_gc_register_root(result);
+            n00b_gc_register_root(cxt);
+            n00b_gc_register_root(new_left);
+            n00b_gc_register_root(new_seq_cxt);
+            new_left = n00b_alloc_array(pwz_exp_ptr_t, new_nleft);
 
             for (int32_t i = 0; i < cxt->seq.nleft; i++) {
                 new_left[i] = cxt->seq.left[i];
@@ -722,7 +738,7 @@ d_u_prime(n00b_pwz_parser_t *p, int32_t pos, pwz_exp_t *result, pwz_cxt_t *cxt)
 
             new_left[cxt->seq.nleft] = result;
 
-            pwz_cxt_t *new_seq_cxt = alloc_cxt(p);
+            new_seq_cxt = alloc_cxt(p);
 
             new_seq_cxt->kind        = PWZ_CXT_SEQ;
             new_seq_cxt->seq.mem     = cxt->seq.mem;
@@ -733,8 +749,12 @@ d_u_prime(n00b_pwz_parser_t *p, int32_t pos, pwz_exp_t *result, pwz_cxt_t *cxt)
             new_seq_cxt->seq.nleft   = new_nleft;
             new_seq_cxt->seq.right   = cxt->seq.right + 1;
             new_seq_cxt->seq.nright  = cxt->seq.nright - 1;
-
             d_d(p, pos, get_token(p, pos), new_seq_cxt, cxt->seq.right[0]);
+            n00b_gc_unregister_root(new_seq_cxt);
+            n00b_gc_unregister_root(new_left);
+            n00b_gc_unregister_root(cxt);
+            n00b_gc_unregister_root(result);
+            n00b_gc_unregister_root(p);
         }
 
         break;

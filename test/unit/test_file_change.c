@@ -4,9 +4,14 @@
 
 #include <stdio.h>
 #include <assert.h>
-#include <unistd.h>
 #include <fcntl.h>
 #include <sys/stat.h>
+#ifdef _WIN32
+#include <io.h>
+#include "internal/win32_sockets.h"
+#else
+#include <unistd.h>
+#endif
 
 #include "n00b.h"
 #include "conduit/conduit.h"
@@ -14,6 +19,61 @@
 #include "conduit/file_change.h"
 #include "core/alloc.h"
 #include "core/runtime.h"
+
+static int
+test_file_close(int fd)
+{
+#ifdef _WIN32
+    return _close(fd);
+#else
+    return close(fd);
+#endif
+}
+
+static void
+test_skip_or_fail(const char *message)
+{
+#ifdef _WIN32
+    fprintf(stderr, "  [FAIL] %s\n", message);
+    assert(false);
+#else
+    printf("  [SKIP] %s\n", message);
+#endif
+}
+
+static int
+test_file_write(int fd, const char *data, unsigned int len)
+{
+#ifdef _WIN32
+    return _write(fd, data, len);
+#else
+    return (int)write(fd, data, len);
+#endif
+}
+
+static void
+test_file_sync(int fd)
+{
+#ifdef _WIN32
+    (void)_commit(fd);
+#else
+    fsync(fd);
+#endif
+}
+
+static int
+test_file_temp_open(char *path, size_t path_len)
+{
+#ifdef _WIN32
+    snprintf(path, path_len, "n00b_test_fc_%lu.tmp",
+             (unsigned long)GetCurrentProcessId());
+    return _open(path, _O_RDWR | _O_CREAT | _O_TRUNC | _O_BINARY,
+                 _S_IREAD | _S_IWRITE);
+#else
+    snprintf(path, path_len, "/tmp/n00b_test_fc_XXXXXX");
+    return mkstemp(path);
+#endif
+}
 
 // ============================================================================
 // 1. Create file change topic and verify
@@ -26,14 +86,27 @@ test_file_change_topic(void)
     assert(n00b_result_is_ok(cr));
     n00b_conduit_t *c = n00b_result_get(cr);
 
-    // Use stdin as a cheap open fd (we just need a valid fd for topic creation).
-    int fd = STDIN_FILENO;
+    n00b_result_t(n00b_conduit_io_backend_t *) ir = n00b_conduit_io_new_default(c);
+    assert(n00b_result_is_ok(ir));
+    n00b_conduit_io_backend_t *io = n00b_result_get(ir);
+
+    char tmppath[256];
+    int  fd = test_file_temp_open(tmppath, sizeof(tmppath));
+    if (fd < 0) {
+        test_skip_or_fail("file_change topic (temp file failed)");
+        n00b_conduit_io_destroy(io);
+        n00b_conduit_destroy(c);
+        return;
+    }
 
     n00b_result_t(n00b_conduit_topic_base_t *) tr =
         n00b_conduit_file_change_topic(c, fd, N00B_CONDUIT_VNODE_WRITE);
 
     if (n00b_result_is_err(tr)) {
-        printf("  [SKIP] file_change topic (not supported on this backend)\n");
+        test_skip_or_fail("file_change topic (not supported on this backend)");
+        test_file_close(fd);
+        remove(tmppath);
+        n00b_conduit_io_destroy(io);
         n00b_conduit_destroy(c);
         return;
     }
@@ -46,6 +119,9 @@ test_file_change_topic(void)
     assert(n00b_conduit_file_change_fd(topic) == fd);
 
     n00b_conduit_file_change_unwatch(c, fd);
+    test_file_close(fd);
+    remove(tmppath);
+    n00b_conduit_io_destroy(io);
     n00b_conduit_destroy(c);
     printf("  [PASS] file_change topic\n");
 }
@@ -61,7 +137,18 @@ test_file_change_same_topic(void)
     assert(n00b_result_is_ok(cr));
     n00b_conduit_t *c = n00b_result_get(cr);
 
-    int fd = STDIN_FILENO;
+    n00b_result_t(n00b_conduit_io_backend_t *) ir = n00b_conduit_io_new_default(c);
+    assert(n00b_result_is_ok(ir));
+    n00b_conduit_io_backend_t *io = n00b_result_get(ir);
+
+    char tmppath[256];
+    int  fd = test_file_temp_open(tmppath, sizeof(tmppath));
+    if (fd < 0) {
+        test_skip_or_fail("file_change same topic (temp file failed)");
+        n00b_conduit_io_destroy(io);
+        n00b_conduit_destroy(c);
+        return;
+    }
 
     n00b_result_t(n00b_conduit_topic_base_t *) tr1 =
         n00b_conduit_file_change_topic(c, fd, N00B_CONDUIT_VNODE_WRITE);
@@ -69,7 +156,10 @@ test_file_change_same_topic(void)
         n00b_conduit_file_change_topic(c, fd, N00B_CONDUIT_VNODE_ALL);
 
     if (n00b_result_is_err(tr1) || n00b_result_is_err(tr2)) {
-        printf("  [SKIP] file_change same topic (not supported)\n");
+        test_skip_or_fail("file_change same topic (not supported)");
+        test_file_close(fd);
+        remove(tmppath);
+        n00b_conduit_io_destroy(io);
         n00b_conduit_destroy(c);
         return;
     }
@@ -79,6 +169,9 @@ test_file_change_same_topic(void)
     assert(t1 == t2);
 
     n00b_conduit_file_change_unwatch(c, fd);
+    test_file_close(fd);
+    remove(tmppath);
+    n00b_conduit_io_destroy(io);
     n00b_conduit_destroy(c);
     printf("  [PASS] file_change same topic\n");
 }
@@ -118,10 +211,10 @@ test_file_change_write_event(void)
     n00b_conduit_io_backend_t *io = n00b_result_get(ir);
 
     // Create a temp file.
-    char tmppath[] = "/tmp/n00b_test_fc_XXXXXX";
-    int fd = mkstemp(tmppath);
+    char tmppath[256];
+    int  fd = test_file_temp_open(tmppath, sizeof(tmppath));
     if (fd < 0) {
-        printf("  [SKIP] file_change write event (mkstemp failed)\n");
+        test_skip_or_fail("file_change write event (temp file failed)");
         n00b_conduit_io_destroy(io);
         n00b_conduit_destroy(c);
         return;
@@ -131,9 +224,9 @@ test_file_change_write_event(void)
         n00b_conduit_file_change_topic(c, fd, N00B_CONDUIT_VNODE_WRITE);
 
     if (n00b_result_is_err(tr)) {
-        printf("  [SKIP] file_change write event (backend not supported)\n");
-        close(fd);
-        unlink(tmppath);
+        test_skip_or_fail("file_change write event (backend not supported)");
+        test_file_close(fd);
+        remove(tmppath);
         n00b_conduit_io_destroy(io);
         n00b_conduit_destroy(c);
         return;
@@ -153,8 +246,8 @@ test_file_change_write_event(void)
 
     // Write to the file to trigger the event.
     const char *data = "hello\n";
-    (void)write(fd, data, 6);
-    fsync(fd);
+    (void)test_file_write(fd, data, 6);
+    test_file_sync(fd);
 
     // Poll until we get the write event.
     bool got_message = false;
@@ -168,10 +261,10 @@ test_file_change_write_event(void)
     }
 
     if (!got_message) {
-        printf("  [SKIP] file_change write event (no event delivered)\n");
+        test_skip_or_fail("file_change write event (no event delivered)");
         n00b_conduit_file_change_unwatch(c, fd);
-        close(fd);
-        unlink(tmppath);
+        test_file_close(fd);
+        remove(tmppath);
         n00b_conduit_io_destroy(io);
         n00b_conduit_destroy(c);
         return;
@@ -184,8 +277,8 @@ test_file_change_write_event(void)
     assert(msg->payload.events & N00B_CONDUIT_VNODE_WRITE);
 
     n00b_conduit_file_change_unwatch(c, fd);
-    close(fd);
-    unlink(tmppath);
+    test_file_close(fd);
+    remove(tmppath);
     n00b_conduit_io_destroy(io);
     n00b_conduit_destroy(c);
     printf("  [PASS] file_change write event\n");

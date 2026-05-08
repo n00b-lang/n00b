@@ -21,8 +21,11 @@
 #include <stdint.h>
 #include <stdbool.h>
 #ifdef _WIN32
-#include <winsock2.h>
-#include <ws2tcpip.h>
+typedef int socklen_t;
+struct sockaddr_storage {
+    uint64_t __n00b_align;
+    char     __n00b_storage[120];
+};
 #else
 #include <sys/socket.h>
 #include <netinet/in.h>

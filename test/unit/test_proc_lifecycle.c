@@ -4,8 +4,13 @@
 
 #include <stdio.h>
 #include <assert.h>
+#include <string.h>
+#ifdef _WIN32
+#include "internal/win32_sockets.h"
+#else
 #include <unistd.h>
 #include <sys/wait.h>
+#endif
 
 #include "n00b.h"
 #include "conduit/conduit.h"
@@ -13,6 +18,95 @@
 #include "conduit/proc_lifecycle.h"
 #include "core/alloc.h"
 #include "core/runtime.h"
+
+typedef struct {
+    pid_t pid;
+#ifdef _WIN32
+    HANDLE process;
+    HANDLE thread;
+#endif
+} test_child_t;
+
+static pid_t
+test_current_pid(void)
+{
+#ifdef _WIN32
+    return (pid_t)GetCurrentProcessId();
+#else
+    return getpid();
+#endif
+}
+
+static void
+test_skip_or_fail(const char *message)
+{
+#ifdef _WIN32
+    fprintf(stderr, "  [FAIL] %s\n", message);
+    assert(false);
+#else
+    printf("  [SKIP] %s\n", message);
+#endif
+}
+
+static bool
+test_spawn_exit_child(test_child_t *child)
+{
+    memset(child, 0, sizeof(*child));
+#ifdef _WIN32
+    STARTUPINFOA si;
+    PROCESS_INFORMATION pi;
+    memset(&si, 0, sizeof(si));
+    memset(&pi, 0, sizeof(pi));
+    si.cb = sizeof(si);
+
+    char cmdline[] = "cmd.exe /C exit 42";
+    if (!CreateProcessA(nullptr, cmdline, nullptr, nullptr, FALSE, 0,
+                        nullptr, nullptr, &si, &pi)) {
+        return false;
+    }
+
+    child->pid     = (pid_t)pi.dwProcessId;
+    child->process = pi.hProcess;
+    child->thread  = pi.hThread;
+    return child->pid > 0;
+#else
+    pid_t pid = fork();
+    if (pid < 0) {
+        return false;
+    }
+
+    if (pid == 0) {
+        _exit(42);
+    }
+
+    child->pid = pid;
+    return true;
+#endif
+}
+
+static void
+test_wait_child(test_child_t *child)
+{
+    if (!child || child->pid <= 0) {
+        return;
+    }
+#ifdef _WIN32
+    if (child->process) {
+        WaitForSingleObject(child->process, INFINITE);
+    }
+    if (child->thread) {
+        CloseHandle(child->thread);
+        child->thread = nullptr;
+    }
+    if (child->process) {
+        CloseHandle(child->process);
+        child->process = nullptr;
+    }
+#else
+    waitpid(child->pid, nullptr, 0);
+#endif
+    child->pid = 0;
+}
 
 // ============================================================================
 // 1. Create process topic and verify
@@ -25,13 +119,18 @@ test_proc_topic(void)
     assert(n00b_result_is_ok(cr));
     n00b_conduit_t *c = n00b_result_get(cr);
 
+    n00b_result_t(n00b_conduit_io_backend_t *) ir = n00b_conduit_io_new_default(c);
+    assert(n00b_result_is_ok(ir));
+    n00b_conduit_io_backend_t *io = n00b_result_get(ir);
+
     // Watch our own pid — we won't get events but the topic should create.
-    pid_t pid = getpid();
+    pid_t pid = test_current_pid();
     n00b_result_t(n00b_conduit_topic_base_t *) tr =
         n00b_conduit_proc_topic(c, pid, N00B_CONDUIT_PROC_EXIT);
 
     if (n00b_result_is_err(tr)) {
-        printf("  [SKIP] proc topic (not supported on this backend)\n");
+        test_skip_or_fail("proc topic (not supported on this backend)");
+        n00b_conduit_io_destroy(io);
         n00b_conduit_destroy(c);
         return;
     }
@@ -44,6 +143,7 @@ test_proc_topic(void)
     assert(n00b_conduit_proc_pid(topic) == pid);
 
     n00b_conduit_proc_unwatch(c, pid);
+    n00b_conduit_io_destroy(io);
     n00b_conduit_destroy(c);
     printf("  [PASS] proc topic\n");
 }
@@ -59,14 +159,19 @@ test_proc_same_topic(void)
     assert(n00b_result_is_ok(cr));
     n00b_conduit_t *c = n00b_result_get(cr);
 
-    pid_t pid = getpid();
+    n00b_result_t(n00b_conduit_io_backend_t *) ir = n00b_conduit_io_new_default(c);
+    assert(n00b_result_is_ok(ir));
+    n00b_conduit_io_backend_t *io = n00b_result_get(ir);
+
+    pid_t pid = test_current_pid();
     n00b_result_t(n00b_conduit_topic_base_t *) tr1 =
         n00b_conduit_proc_topic(c, pid, N00B_CONDUIT_PROC_EXIT);
     n00b_result_t(n00b_conduit_topic_base_t *) tr2 =
         n00b_conduit_proc_topic(c, pid, N00B_CONDUIT_PROC_ALL);
 
     if (n00b_result_is_err(tr1) || n00b_result_is_err(tr2)) {
-        printf("  [SKIP] proc same topic (not supported)\n");
+        test_skip_or_fail("proc same topic (not supported)");
+        n00b_conduit_io_destroy(io);
         n00b_conduit_destroy(c);
         return;
     }
@@ -76,6 +181,7 @@ test_proc_same_topic(void)
     assert(t1 == t2);
 
     n00b_conduit_proc_unwatch(c, pid);
+    n00b_conduit_io_destroy(io);
     n00b_conduit_destroy(c);
     printf("  [PASS] proc same topic\n");
 }
@@ -117,26 +223,22 @@ test_proc_child_exit(void)
     assert(n00b_result_is_ok(ir));
     n00b_conduit_io_backend_t *io = n00b_result_get(ir);
 
-    pid_t child = fork();
-    if (child < 0) {
-        printf("  [SKIP] proc child exit (fork failed)\n");
+    test_child_t child_info;
+    if (!test_spawn_exit_child(&child_info)) {
+        test_skip_or_fail("proc child exit (spawn failed)");
         n00b_conduit_io_destroy(io);
         n00b_conduit_destroy(c);
         return;
     }
 
-    if (child == 0) {
-        // Child: exit immediately with status 42.
-        _exit(42);
-    }
-
     // Parent: watch the child.
+    pid_t child = child_info.pid;
     n00b_result_t(n00b_conduit_topic_base_t *) tr =
         n00b_conduit_proc_topic(c, child, N00B_CONDUIT_PROC_EXIT);
 
     if (n00b_result_is_err(tr)) {
-        printf("  [SKIP] proc child exit (backend not supported)\n");
-        waitpid(child, nullptr, 0);
+        test_skip_or_fail("proc child exit (backend not supported)");
+        test_wait_child(&child_info);
         n00b_conduit_io_destroy(io);
         n00b_conduit_destroy(c);
         return;
@@ -165,9 +267,8 @@ test_proc_child_exit(void)
     }
 
     if (!got_message) {
-        // Some backends may not deliver proc events in CI.
-        printf("  [SKIP] proc child exit (no event delivered)\n");
-        waitpid(child, nullptr, 0);
+        test_skip_or_fail("proc child exit (no event delivered)");
+        test_wait_child(&child_info);
         n00b_conduit_proc_unwatch(c, child);
         n00b_conduit_io_destroy(io);
         n00b_conduit_destroy(c);
@@ -180,7 +281,7 @@ test_proc_child_exit(void)
     assert(msg->payload.events & N00B_CONDUIT_PROC_EXIT);
 
     // Reap the child.
-    waitpid(child, nullptr, 0);
+    test_wait_child(&child_info);
 
     n00b_conduit_proc_unwatch(c, child);
     n00b_conduit_io_destroy(io);

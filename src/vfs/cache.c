@@ -10,6 +10,12 @@
 #include <time.h>
 #include <stdio.h>
 
+#ifdef _WIN32
+#define N00B_CACHE_MKDIR(path, mode) mkdir(path)
+#else
+#define N00B_CACHE_MKDIR(path, mode) mkdir(path, mode)
+#endif
+
 #define INITIAL_ENTRIES 16
 
 // ============================================================================
@@ -183,7 +189,7 @@ n00b_vfs_cache_new(n00b_string_t *cache_dir, n00b_vfs_backend_t *backend,
     const char *cdir = str_cstr(cache_dir);
     struct stat st;
     if (stat(cdir, &st) < 0) {
-        if (mkdir(cdir, 0755) < 0) {
+        if (N00B_CACHE_MKDIR(cdir, 0755) < 0) {
             return n00b_result_err(n00b_vfs_cache_t *, N00B_VFS_ERR_IO);
         }
     }

@@ -7,6 +7,11 @@ N00B_CROSS=${N00B_CROSS:-}
 N00B_JOBS=${N00B_JOBS:-}
 N00B_NATIVE=${N00B_NATIVE:-0}
 
+function fail {
+    echo "ERROR: $*" >&2
+    exit 1
+}
+
 # Default to a C23-capable compiler if CC is not set.
 if [[ -z "${CC}" ]] && [[ -x /usr/local/bin/clang ]] ; then
     export CC=/usr/local/bin/clang
@@ -158,7 +163,10 @@ function build_n00b {
        fi
    fi
 
-   meson compile -C ${build_dir} ${jobs_flag}
+   if ! meson compile -C ${build_dir} ${jobs_flag}; then
+       echo "Build compile failed."
+       exit 1
+   fi
 
    if [[ ${N00B_TEST} -ne 0 ]] ; then
        local test_jobs_flag=""
@@ -189,23 +197,174 @@ function build_n00b {
 # N00B_CROSS=linux-x86_64     — cross-compile for one specific target
 # ============================================================================
 
+function clang_version_at_least_22_1 {
+    local clang_bin=$1
+    local version_line
+    version_line=$("${clang_bin}" --version 2>/dev/null | sed -n '1p')
+
+    if [[ ! "${version_line}" =~ clang[[:space:]]+version[[:space:]]+([0-9]+)\.([0-9]+)\.([0-9]+) ]]; then
+        return 1
+    fi
+
+    local major=${BASH_REMATCH[1]}
+    local minor=${BASH_REMATCH[2]}
+
+    if (( major > 22 )); then
+        return 0
+    fi
+
+    if (( major == 22 && minor >= 1 )); then
+        return 0
+    fi
+
+    return 1
+}
+
+function find_windows_toolchain {
+    WINDOWS_CLANG=""
+    WINDOWS_AR=""
+    WINDOWS_STRIP=""
+    WINDOWS_WINDRES=""
+
+    local candidate_root=""
+    if [[ -n "${N00B_LLVM_MINGW:-}" ]]; then
+        candidate_root="${N00B_LLVM_MINGW}"
+    elif [[ -n "${LLVM_MINGW:-}" ]]; then
+        candidate_root="${LLVM_MINGW}"
+    fi
+
+    if [[ -n "${candidate_root}" ]]; then
+        local bin_dir="${candidate_root}/bin"
+        WINDOWS_CLANG="${bin_dir}/clang"
+        WINDOWS_AR="${bin_dir}/llvm-ar"
+        WINDOWS_STRIP="${bin_dir}/llvm-strip"
+        WINDOWS_WINDRES="${bin_dir}/llvm-windres"
+    else
+        local clang_path=""
+        clang_path=$(command -v x86_64-w64-mingw32-clang 2>/dev/null || true)
+        if [[ -z "${clang_path}" ]]; then
+            clang_path=$(command -v clang 2>/dev/null || true)
+        fi
+        if [[ -n "${clang_path}" ]]; then
+            local bin_dir
+            bin_dir=$(cd "$(dirname "${clang_path}")" && pwd)
+            WINDOWS_CLANG="${clang_path}"
+            WINDOWS_AR="${bin_dir}/llvm-ar"
+            WINDOWS_STRIP="${bin_dir}/llvm-strip"
+            WINDOWS_WINDRES="${bin_dir}/llvm-windres"
+        fi
+    fi
+
+    if [[ ! -x "${WINDOWS_CLANG}" ]] ; then
+        local msg="Windows cross build requires llvm-mingw clang. Set LLVM_MINGW or N00B_LLVM_MINGW to the llvm-mingw install directory."
+        if [[ "${N00B_CROSS}" == "all" ]] ; then
+            echo "  [SKIP] windows-x86_64 — ${msg}"
+            return 1
+        fi
+        fail "${msg}"
+    fi
+
+    if [[ ! -x "${WINDOWS_AR}" ]] ; then
+        local msg="Windows cross build requires llvm-ar from the llvm-mingw toolchain. Set LLVM_MINGW or N00B_LLVM_MINGW."
+        if [[ "${N00B_CROSS}" == "all" ]] ; then
+            echo "  [SKIP] windows-x86_64 — ${msg}"
+            return 1
+        fi
+        fail "${msg}"
+    fi
+
+    if [[ ! -x "${WINDOWS_STRIP}" ]] ; then
+        local msg="Windows cross build requires llvm-strip from the llvm-mingw toolchain. Set LLVM_MINGW or N00B_LLVM_MINGW."
+        if [[ "${N00B_CROSS}" == "all" ]] ; then
+            echo "  [SKIP] windows-x86_64 — ${msg}"
+            return 1
+        fi
+        fail "${msg}"
+    fi
+
+    if [[ ! -x "${WINDOWS_WINDRES}" ]]; then
+        WINDOWS_WINDRES=""
+    fi
+
+    if ! clang_version_at_least_22_1 "${WINDOWS_CLANG}"; then
+        "${WINDOWS_CLANG}" --version || true
+        local msg="Windows cross build requires llvm-mingw Clang 22.1.0 or newer."
+        if [[ "${N00B_CROSS}" == "all" ]] ; then
+            echo "  [SKIP] windows-x86_64 — ${msg}"
+            return 1
+        fi
+        fail "${msg}"
+    fi
+}
+
+function write_windows_cross_file {
+    local build_dir=$1
+    local cross_file="/tmp/n00b-${build_dir}-$$.cross"
+
+    {
+        echo "[binaries]"
+        echo "c = ['${NCC_PATH}', '--target=x86_64-w64-windows-gnu']"
+        echo "ar = '${WINDOWS_AR}'"
+        echo "strip = '${WINDOWS_STRIP}'"
+        if [[ -n "${WINDOWS_WINDRES}" ]]; then
+            echo "windres = '${WINDOWS_WINDRES}'"
+        fi
+        echo
+        echo "[properties]"
+        echo "needs_exe_wrapper = true"
+        echo
+        echo "[host_machine]"
+        echo "system = 'windows'"
+        echo "cpu_family = 'x86_64'"
+        echo "cpu = 'x86_64'"
+        echo "endian = 'little'"
+    } > "${cross_file}"
+
+    echo "${cross_file}"
+}
+
 function cross_compile_target {
     local cross_file=$1
     local target_name=$(basename ${cross_file} .cross)
     local build_dir="build_cross_${target_name}"
+    local effective_cross_file="${cross_file}"
+    local cross_cc=""
 
-    # Extract the C compiler path from the cross file.
-    local cross_cc=$(python3 -c "
-import configparser, pathlib, os
+    if [[ "${target_name}" == "windows-x86_64" ]] ; then
+        if ! find_windows_toolchain ; then
+            return 0
+        fi
+        effective_cross_file=$(write_windows_cross_file "${build_dir}")
+        cross_cc="${NCC_PATH}"
+    else
+        # Extract the C compiler path from the cross file.
+        cross_cc=$(python3 -c "
+import ast, configparser, os, pathlib
 p = pathlib.Path('${cross_file}')
 cp = configparser.ConfigParser()
 cp.read(p)
 tc = cp.get('constants', 'toolchain', fallback='/usr').strip().strip(\"'\")
-c_val = cp.get('binaries', 'c', fallback='').strip().strip(\"'\")
-# Handle 'toolchain / ...' path expressions
-c_val = c_val.replace('toolchain / ', tc + '/')
+c_val = cp.get('binaries', 'c', fallback='').strip()
+if c_val.startswith('toolchain / '):
+    leaf = c_val[len('toolchain / '):].strip()
+    try:
+        leaf = ast.literal_eval(leaf)
+    except Exception:
+        leaf = leaf.strip(\"'\")
+    c_val = os.path.join(tc, leaf)
+elif c_val.startswith('['):
+    try:
+        c_val = ast.literal_eval(c_val)[0]
+    except Exception:
+        c_val = ''
+else:
+    try:
+        c_val = ast.literal_eval(c_val)
+    except Exception:
+        c_val = c_val.strip(\"'\")
 print(c_val)
 " 2>/dev/null)
+    fi
 
     if [[ -z "${cross_cc}" ]] || [[ ! -x "${cross_cc}" ]] ; then
         echo "  [SKIP] ${target_name} — cross-compiler not found: ${cross_cc:-<empty>}"
@@ -219,16 +378,27 @@ print(c_val)
     fi
 
     if [[ ! -d ${build_dir} ]] ; then
-        CC=${NCC_PATH} \
-        meson setup --cross-file ${cross_file} \
-            --buildtype=${N00B_BUILD_TYPE} $(all_options) ${build_dir} .
+        if [[ -n "${WINDOWS_CLANG:-}" ]]; then
+            NCC_COMPILER=${WINDOWS_CLANG} \
+            CC=${NCC_PATH} \
+            meson setup --cross-file ${effective_cross_file} \
+                --buildtype=${N00B_BUILD_TYPE} $(all_options) ${build_dir} .
+        else
+            CC=${NCC_PATH} \
+            meson setup --cross-file ${effective_cross_file} \
+                --buildtype=${N00B_BUILD_TYPE} $(all_options) ${build_dir} .
+        fi
         if [[ $? -ne 0 ]] ; then
             echo "  [FAIL] ${target_name} — meson setup failed"
             return 1
         fi
     fi
 
-    meson compile -C ${build_dir}
+    if [[ -n "${WINDOWS_CLANG:-}" ]]; then
+        NCC_COMPILER=${WINDOWS_CLANG} meson compile -C ${build_dir}
+    else
+        meson compile -C ${build_dir}
+    fi
     if [[ $? -ne 0 ]] ; then
         echo "  [FAIL] ${target_name} — compile failed"
         return 1
@@ -266,8 +436,8 @@ function cross_compile {
 }
 
 ensure_ncc
-build_n00b $*
-
 if [[ -n "${N00B_CROSS}" ]] ; then
     cross_compile
+else
+    build_n00b $*
 fi

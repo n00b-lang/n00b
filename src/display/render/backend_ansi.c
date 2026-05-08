@@ -230,24 +230,21 @@ ansi_init(n00b_conduit_topic_t(n00b_buffer_t *) *output)
     ctx->buf_used   = 0;
     ctx->cursor_visible = true;
 
-    // Try to get terminal size.
 #ifdef _WIN32
-    CONSOLE_SCREEN_BUFFER_INFO csbi;
-    if (GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &csbi)) {
-        ctx->cols = csbi.srWindow.Right - csbi.srWindow.Left + 1;
-        ctx->rows = csbi.srWindow.Bottom - csbi.srWindow.Top + 1;
-    }
+    ctx->cols = 80;
+    ctx->rows = 25;
 #else
+    // Try to get terminal size.
     struct winsize ws;
     if (ioctl(ctx->fd, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0) {
         ctx->cols = ws.ws_col;
         ctx->rows = ws.ws_row;
     }
-#endif
     else {
         ctx->cols = 80;
         ctx->rows = 25;
     }
+#endif
 
 #ifndef _WIN32
     {
@@ -334,14 +331,8 @@ ansi_get_size(void *vctx)
 {
     ansi_ctx_t *ctx = vctx;
 
+#ifndef _WIN32
     // Re-query terminal size.
-#ifdef _WIN32
-    CONSOLE_SCREEN_BUFFER_INFO csbi;
-    if (GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &csbi)) {
-        ctx->cols = csbi.srWindow.Right - csbi.srWindow.Left + 1;
-        ctx->rows = csbi.srWindow.Bottom - csbi.srWindow.Top + 1;
-    }
-#else
     struct winsize ws;
     if (ioctl(ctx->fd, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0) {
         ctx->cols = ws.ws_col;

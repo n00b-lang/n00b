@@ -2,6 +2,9 @@
 
 #define XXH_INLINE_ALL
 #define N00B_HASH_INTERNAL
+#ifdef _WIN32
+#define XXH_VECTOR 0
+#endif
 
 #include "n00b.h"
 

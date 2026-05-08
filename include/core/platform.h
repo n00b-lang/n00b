@@ -7,6 +7,8 @@
  */
 #pragma once
 
+#include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 // ============================================================================
 // Platform detection
@@ -39,15 +41,131 @@
 // Windows
 // ============================================================================
 
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#ifndef _WIN32_WINNT
-#define _WIN32_WINNT 0x0602  // Windows 8 (for WaitOnAddress)
-#endif
-#include <windows.h>
+// Keep Windows SDK headers out of public n00b headers. The ncc parser sees
+// preprocessed headers, and windows.h pulls in compiler intrinsic headers that
+// are not part of n00b's supported source grammar. The declarations below cover
+// the small Win32 surface used by inline runtime helpers.
+typedef unsigned long DWORD;
+typedef unsigned long ULONG;
+typedef long          LONG;
+typedef unsigned short USHORT;
+typedef unsigned char  BOOLEAN;
+typedef int           BOOL;
+typedef void         *HANDLE;
+typedef void         *PVOID;
+typedef uintptr_t     UINT_PTR;
+typedef uintptr_t     ULONG_PTR;
+typedef size_t        SIZE_T;
 
-// Missing POSIX types
+#ifndef TRUE
+#define TRUE 1
+#endif
+#ifndef FALSE
+#define FALSE 0
+#endif
+#ifndef INFINITE
+#define INFINITE 0xffffffffUL
+#endif
+#ifndef ERROR_TIMEOUT
+#define ERROR_TIMEOUT 1460L
+#endif
+
+#define MEM_COMMIT              0x00001000UL
+#define MEM_RESERVE             0x00002000UL
+#define MEM_RELEASE             0x00008000UL
+#define PAGE_NOACCESS           0x01UL
+#define PAGE_READONLY           0x02UL
+#define PAGE_READWRITE          0x04UL
+#define PAGE_WRITECOPY          0x08UL
+#define PAGE_EXECUTE            0x10UL
+#define PAGE_EXECUTE_READ       0x20UL
+#define PAGE_EXECUTE_READWRITE  0x40UL
+#define PAGE_EXECUTE_WRITECOPY  0x80UL
+
+typedef union _LARGE_INTEGER {
+    struct {
+        DWORD LowPart;
+        long  HighPart;
+    };
+    long long QuadPart;
+} LARGE_INTEGER;
+
+typedef struct _SYSTEM_INFO {
+    union {
+        DWORD dwOemId;
+        struct {
+            unsigned short wProcessorArchitecture;
+            unsigned short wReserved;
+        };
+    };
+    DWORD     dwPageSize;
+    void     *lpMinimumApplicationAddress;
+    void     *lpMaximumApplicationAddress;
+    ULONG_PTR dwActiveProcessorMask;
+    DWORD     dwNumberOfProcessors;
+    DWORD     dwProcessorType;
+    DWORD     dwAllocationGranularity;
+    unsigned short wProcessorLevel;
+    unsigned short wProcessorRevision;
+} SYSTEM_INFO;
+
+typedef struct _MEMORY_BASIC_INFORMATION {
+    void  *BaseAddress;
+    void  *AllocationBase;
+    DWORD  AllocationProtect;
+    SIZE_T RegionSize;
+    DWORD  State;
+    DWORD  Protect;
+    DWORD  Type;
+} MEMORY_BASIC_INFORMATION;
+
+typedef struct _FILETIME {
+    DWORD dwLowDateTime;
+    DWORD dwHighDateTime;
+} FILETIME;
+
+typedef struct _NT_TIB {
+    void           *ExceptionList;
+    void           *StackBase;
+    void           *StackLimit;
+    void           *SubSystemTib;
+    void           *FiberData;
+    void           *ArbitraryUserPointer;
+    struct _NT_TIB *Self;
+} NT_TIB;
+
+void   *VirtualAlloc(void *addr, SIZE_T size, DWORD allocation_type, DWORD protect);
+BOOL    VirtualFree(void *addr, SIZE_T size, DWORD free_type);
+SIZE_T  VirtualQuery(const void *addr, MEMORY_BASIC_INFORMATION *buffer, SIZE_T len);
+void    GetSystemInfo(SYSTEM_INFO *info);
+DWORD   GetCurrentThreadId(void);
+DWORD   GetCurrentProcessId(void);
+DWORD   FlsAlloc(void *callback);
+void   *FlsGetValue(DWORD key);
+BOOL    FlsSetValue(DWORD key, void *value);
+void    Sleep(DWORD ms);
+unsigned long long GetTickCount64(void);
+void    GetSystemTimeAsFileTime(FILETIME *time);
+BOOL    QueryPerformanceFrequency(LARGE_INTEGER *freq);
+BOOL    QueryPerformanceCounter(LARGE_INTEGER *count);
+BOOL    WaitOnAddress(volatile void *address, void *compare_address, SIZE_T address_size, DWORD ms);
+void    WakeByAddressAll(void *address);
+void    WakeByAddressSingle(void *address);
+DWORD   GetLastError(void);
+BOOLEAN SystemFunction036(void *buffer, ULONG len);
+
+#define RtlGenRandom SystemFunction036
+
+#if defined(__x86_64__) || defined(_M_X64)
+static inline NT_TIB *
+NtCurrentTeb(void)
+{
+    void *teb;
+    __asm__ volatile("movq %%gs:0x30, %0" : "=r"(teb));
+    return (NT_TIB *)teb;
+}
+#endif
+
 typedef intptr_t ssize_t;
 
 /** @brief Thread identifier type (Windows). */
@@ -84,10 +202,10 @@ base_tls_set(base_tls_key_t key, void *value)
 }
 
 /** @brief One-time initialization type (Windows). */
-typedef INIT_ONCE base_once_t;
+typedef void *base_once_t;
 
 /** @brief Static initializer for @ref base_once_t. */
-#define BASE_ONCE_INIT INIT_ONCE_STATIC_INIT
+#define BASE_ONCE_INIT nullptr
 
 /** @brief Process identifier type (Windows). */
 typedef DWORD base_pid_t;

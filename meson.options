@@ -74,10 +74,9 @@ option('enable_cocoa',
 option('enable_notcurses',
     type: 'boolean',
     value: true,
-    description: 'Build the notcurses rendering backend (requires notcurses >= 3.0.0).')
+    description: 'Build the notcurses rendering backend (requires notcurses >= 3.0.10).')
 
 option('enable_freetype',
     type: 'boolean',
     value: true,
     description: 'Build with FreeType font rendering (required for pixel text in notcurses).')
-

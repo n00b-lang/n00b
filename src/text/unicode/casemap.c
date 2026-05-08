@@ -121,7 +121,10 @@ full_map_cp(n00b_codepoint_t cp,
     }
 
     // Fall back to simple mapping
-    n00b_codepoint_t mapped = simple_map(cp, simple_index, simple_index_len, simple_data);
+    n00b_codepoint_t mapped = simple_map(cp,
+                                         simple_index,
+                                         simple_index_len,
+                                         simple_data);
     return n00b_unicode_utf8_encode(mapped, buf);
 }
 
@@ -313,7 +316,11 @@ n00b_unicode_casefold_raw(n00b_allocator_t *allocator, const char *data, int64_t
             }
         }
         else {
-            out_pos += n00b_unicode_utf8_encode((n00b_codepoint_t)cp, out + out_pos);
+            n00b_codepoint_t mapped = simple_map((n00b_codepoint_t)cp,
+                                                 n00b_unicode_casefold_simple_index,
+                                                 n00b_unicode_casefold_simple_index_len,
+                                                 n00b_unicode_casefold_simple_data);
+            out_pos += n00b_unicode_utf8_encode(mapped, out + out_pos);
         }
     }
 

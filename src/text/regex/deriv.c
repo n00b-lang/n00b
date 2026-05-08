@@ -509,26 +509,21 @@ dfa_get_or_create_state(n00b_regex_dfa_t *dfa, uint32_t node_id, bool is_initial
         }
     }
 
-    // Compute NullKind
+    // Compute NullKind.  Pending lookaround positions only make a state
+    // nullable when the node is also always nullable; otherwise they remain
+    // metadata for later nullable states.
     n00b_regex_null_kind_t null_kind;
-    if ((flags & N00B_RE_SF_PENDING_NULLABLE) && n_pending > 0) {
-        // Has pending nullable positions from lookarounds — even if not always-nullable
-        if ((flags & N00B_RE_SF_ALWAYS_NULLABLE) && !(n_pending == 1 && pending_ranges[0].lo == 0)) {
-            // Always nullable AND has pending: use PENDING to cover both
-            null_kind = N00B_RE_NULL_PENDING;
-        }
-        else if (n_pending == 1 && pending_ranges[0].lo == 1 && pending_ranges[0].hi == 1) {
-            null_kind = N00B_RE_NULL_PREV;
-        }
-        else {
-            null_kind = N00B_RE_NULL_PENDING;
-        }
-    }
-    else if (!(flags & N00B_RE_SF_ALWAYS_NULLABLE)) {
+    if (!(flags & N00B_RE_SF_ALWAYS_NULLABLE)) {
         null_kind = N00B_RE_NULL_NOT;
     }
-    else {
+    else if (!(flags & N00B_RE_SF_PENDING_NULLABLE)) {
         null_kind = N00B_RE_NULL_CURRENT;
+    }
+    else if (n_pending == 1 && pending_ranges[0].lo == 1 && pending_ranges[0].hi == 1) {
+        null_kind = N00B_RE_NULL_PREV;
+    }
+    else {
+        null_kind = N00B_RE_NULL_PENDING;
     }
 
     n00b_regex_dfa_state_t state = {

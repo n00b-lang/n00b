@@ -9,12 +9,9 @@
 #include "conduit/io.h"
 #include <errno.h>
 #include <string.h>
+
 #ifdef _WIN32
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#include <winsock2.h>
-#include <ws2tcpip.h>
+#include "internal/win32_sockets.h"
 #define N00B_CLOSE_SOCKET(fd) closesocket((SOCKET)(fd))
 #define N00B_SOCK_ERRNO       WSAGetLastError()
 #define N00B_EWOULDBLOCK      WSAEWOULDBLOCK
@@ -100,7 +97,7 @@ n00b_conduit_listen_tcp(n00b_conduit_t *c, n00b_conduit_io_backend_t *io,
 
     int fd = (int)socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) {
-        return n00b_result_err(n00b_conduit_listener_t *, errno);
+        return n00b_result_err(n00b_conduit_listener_t *, N00B_SOCK_ERRNO);
     }
 
     int opt = 1;
@@ -122,7 +119,7 @@ n00b_conduit_listen_tcp(n00b_conduit_t *c, n00b_conduit_io_backend_t *io,
 
     if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
         N00B_CLOSE_SOCKET(fd);
-        return n00b_result_err(n00b_conduit_listener_t *, errno);
+        return n00b_result_err(n00b_conduit_listener_t *, N00B_SOCK_ERRNO);
     }
 
     if (backlog <= 0) {
@@ -130,7 +127,7 @@ n00b_conduit_listen_tcp(n00b_conduit_t *c, n00b_conduit_io_backend_t *io,
     }
     if (listen(fd, backlog) < 0) {
         N00B_CLOSE_SOCKET(fd);
-        return n00b_result_err(n00b_conduit_listener_t *, errno);
+        return n00b_result_err(n00b_conduit_listener_t *, N00B_SOCK_ERRNO);
     }
 
     {
@@ -215,7 +212,11 @@ n00b_conduit_listener_dispatch(n00b_conduit_listener_t *listener, uint32_t io_op
                                      &addr_len);
         if (client_fd < 0) {
             int err = N00B_SOCK_ERRNO;
-            if (err == N00B_EWOULDBLOCK || err == EAGAIN) {
+            if (err == N00B_EWOULDBLOCK
+#ifndef _WIN32
+                || err == EAGAIN
+#endif
+            ) {
                 break;
             }
 #ifndef _WIN32
@@ -417,7 +418,7 @@ n00b_conduit_conn_tcp(n00b_conduit_t *c, n00b_conduit_io_backend_t *io,
 
     int fd = (int)socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) {
-        return n00b_result_err(n00b_conduit_conn_t *, errno);
+        return n00b_result_err(n00b_conduit_conn_t *, N00B_SOCK_ERRNO);
     }
 
     {

@@ -34,7 +34,7 @@ n00b_random_bytes(char *bufptr, size_t len)
 #define n00b_random_bytes(bufptr, len) arc4random_buf(bufptr, len)
 #elif defined(_WIN32)
 #include "core/platform.h"
-#include <ntsecapi.h>
+#include <stdlib.h>
 
 static inline void
 n00b_random_bytes(char *bufptr, size_t len)

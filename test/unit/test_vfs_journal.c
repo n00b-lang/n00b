@@ -2,7 +2,12 @@
 #include <assert.h>
 #include <string.h>
 #include <stdlib.h>
+#ifdef _WIN32
+#include <direct.h>
+#include <process.h>
+#else
 #include <unistd.h>
+#endif
 #include <sys/stat.h>
 
 #include "n00b.h"
@@ -87,20 +92,55 @@ journal_contains(const char *op, const char *path)
 // ============================================================================
 
 static char tmp_dir[256];
+#ifdef _WIN32
+static int  tmp_dir_id = 0;
+#endif
+
+#ifdef _WIN32
+static void
+remove_child(const char *name)
+{
+    char path[512];
+    snprintf(path, sizeof(path), "%s/%s", tmp_dir, name);
+    (void)remove(path);
+}
+#endif
 
 static void
 make_tmpdir(void)
 {
+#ifdef _WIN32
+    snprintf(tmp_dir, sizeof(tmp_dir),
+             "n00b_vfs_journal_%d_%d", _getpid(), tmp_dir_id++);
+    assert(_mkdir(tmp_dir) == 0);
+#else
     snprintf(tmp_dir, sizeof(tmp_dir), "/tmp/n00b_vfs_journal_XXXXXX");
     assert(mkdtemp(tmp_dir) != nullptr);
+#endif
 }
 
 static void
 rm_tmpdir(void)
 {
+#ifdef _WIN32
+    remove_child("test.txt");
+    remove_child("read.txt");
+    remove_child("del.txt");
+    remove_child("old.txt");
+    remove_child("new.txt");
+    remove_child("stat.txt");
+    remove_child("round.txt");
+    {
+        char path[512];
+        snprintf(path, sizeof(path), "%s/subdir", tmp_dir);
+        (void)_rmdir(path);
+    }
+    (void)_rmdir(tmp_dir);
+#else
     char cmd[512];
     snprintf(cmd, sizeof(cmd), "rm -rf %s", tmp_dir);
     (void)system(cmd);
+#endif
 }
 
 // ============================================================================

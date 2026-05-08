@@ -10,7 +10,7 @@
  *
  * ### Build requirements
  *
- * - **notcurses >= 3.0.0** (required, gated on `enable_notcurses`)
+ * - **notcurses >= 3.0.10** (required, gated on `enable_notcurses`)
  * - **FreeType 2** (optional, gated on `enable_freetype`)
  *
  * ### Related modules

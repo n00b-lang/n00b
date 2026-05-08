@@ -298,6 +298,9 @@ struct n00b_conduit_fd_owner {
     n00b_conduit_io_backend_t   *io;             /**< I/O backend */
     int                          fd;             /**< Managed file descriptor */
     bool                         close_on_done;  /**< Close FD when done */
+#ifdef _WIN32
+    bool                         win_socket;     /**< True when fd is a Winsock SOCKET */
+#endif
 
     _Atomic(int)                 state;          /**< n00b_conduit_fd_state_t */
 

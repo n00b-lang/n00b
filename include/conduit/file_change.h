@@ -6,7 +6,8 @@
  * deleted, renamed, etc. They use integer URIs with the @c N00B_CONDUIT_TAG_VNODE
  * tag.
  *
- * Supported on kqueue (macOS/BSD) and Linux (inotify). Not available on Windows.
+ * Supported on kqueue (macOS/BSD), Linux (inotify), and Windows directory
+ * notifications.
  *
  * Usage:
  * @code
@@ -22,8 +23,6 @@
  * @endcode
  */
 #pragma once
-
-#ifndef _WIN32
 
 #include "conduit/conduit.h"
 #include "conduit/io.h"
@@ -157,5 +156,3 @@ n00b_conduit_file_change_register(n00b_conduit_t *c,
 extern void
 n00b_conduit_file_change_unregister(n00b_conduit_t *c,
                                      n00b_conduit_vnode_watch_t *watch);
-
-#endif // !_WIN32

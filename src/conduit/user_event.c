@@ -3,7 +3,7 @@
  */
 
 #if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) \
- || defined(__NetBSD__) || defined(__linux__)
+ || defined(__NetBSD__) || defined(__linux__) || defined(_WIN32)
 
 #include "conduit/conduit.h"
 #include "conduit/user_event.h"

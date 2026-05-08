@@ -1,10 +1,9 @@
 /**
  * @file signal.h
- * @brief Unix signal handling for the conduit system.
+ * @brief Signal handling for the conduit system.
  *
- * Signals are topics that fire when a Unix signal is raised.
+ * Signals are topics that fire when a platform signal is raised.
  * They use integer URIs with the @c N00B_CONDUIT_TAG_SIGNAL tag.
- * Unix-only (not available on Windows).
  *
  * Usage:
  * @code
@@ -17,8 +16,6 @@
  * @endcode
  */
 #pragma once
-
-#ifndef _WIN32
 
 #include "conduit/conduit.h"
 #include "conduit/io.h"
@@ -66,7 +63,7 @@ typedef n00b_conduit_inbox_t(n00b_conduit_signal_payload_t)
 // ============================================================================
 
 /**
- * @brief Get the topic for a Unix signal.
+ * @brief Get the topic for a platform signal.
  * @param c      Conduit instance.
  * @param signum Signal number.
  * @return Ok(topic) that will fire when the signal is raised.
@@ -179,5 +176,3 @@ n00b_conduit_signal_unregister(n00b_conduit_t *c,
  */
 extern void
 n00b_conduit_signal_fire(n00b_conduit_signal_watch_t *watch);
-
-#endif // !_WIN32

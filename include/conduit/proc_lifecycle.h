@@ -6,7 +6,7 @@
  * receives a signal. They use integer URIs with the @c N00B_CONDUIT_TAG_PROC
  * tag.
  *
- * Supported on kqueue (macOS/BSD) and Linux (pidfd). Not available on Windows.
+ * Supported on kqueue (macOS/BSD), Linux (pidfd), and Windows process waits.
  *
  * Usage:
  * @code
@@ -20,8 +20,6 @@
  * @endcode
  */
 #pragma once
-
-#ifndef _WIN32
 
 #include "conduit/conduit.h"
 #include "conduit/io.h"
@@ -156,5 +154,3 @@ n00b_conduit_proc_register(n00b_conduit_t *c,
 extern void
 n00b_conduit_proc_unregister(n00b_conduit_t *c,
                               n00b_conduit_proc_watch_t *watch);
-
-#endif // !_WIN32

@@ -2,7 +2,11 @@
 #include <assert.h>
 #include <string.h>
 #include <stdlib.h>
+#ifdef _WIN32
+#include "internal/win32_sockets.h"
+#else
 #include <unistd.h>
+#endif
 #include <sys/stat.h>
 #include <fcntl.h>
 
@@ -21,15 +25,25 @@ static char tmp_dir[256];
 static void
 make_tmpdir(void)
 {
+#ifdef _WIN32
+    snprintf(tmp_dir, sizeof(tmp_dir), "n00b_vfs_local_%lu",
+             (unsigned long)GetCurrentProcessId());
+    assert(mkdir(tmp_dir) == 0);
+#else
     snprintf(tmp_dir, sizeof(tmp_dir), "/tmp/n00b_vfs_local_XXXXXX");
     assert(mkdtemp(tmp_dir) != nullptr);
+#endif
 }
 
 static void
 rm_tmpdir(void)
 {
     char cmd[512];
+#ifdef _WIN32
+    snprintf(cmd, sizeof(cmd), "rmdir /S /Q %s", tmp_dir);
+#else
     snprintf(cmd, sizeof(cmd), "rm -rf %s", tmp_dir);
+#endif
     (void)system(cmd);
 }
 
@@ -195,12 +209,12 @@ test_local_link(void)
     n00b_string_t *root = n00b_string_from_cstr(tmp_dir);
     n00b_vfs_backend_t *be = n00b_result_get(n00b_vfs_backend_local_new(root));
 
-    assert(be->ops->supports_link(be->ctx));
-
     n00b_string_t *target = n00b_string_from_cstr("original.txt");
     n00b_string_t *lnk    = n00b_string_from_cstr("linked.txt");
 
     be->ops->put(be->ctx, target, n00b_buffer_from_cstr("shared"));
+
+    assert(be->ops->supports_link(be->ctx));
 
     n00b_result_t(bool) lr = be->ops->link(be->ctx, target, lnk);
     assert(n00b_result_is_ok(lr));
@@ -224,7 +238,9 @@ test_local_link(void)
     struct stat s1, s2;
     assert(stat(p1, &s1) == 0);
     assert(stat(p2, &s2) == 0);
+#ifndef _WIN32
     assert(s1.st_ino == s2.st_ino);
+#endif
 
     n00b_vfs_backend_cleanup(be);
     rm_tmpdir();
