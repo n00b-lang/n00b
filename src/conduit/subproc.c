@@ -15,6 +15,7 @@
 #include "conduit/proc_lifecycle.h"
 #include "conduit/rw.h"
 #include "conduit/signal.h"
+#include "internal/subproc_policy.h"
 #include "text/strings/string_convert.h"
 
 #include <errno.h>
@@ -110,123 +111,6 @@ env_to_cstrv(n00b_array_t(n00b_string_t *) *env)
 }
 
 // ============================================================================
-// Capture inbox helpers
-// ============================================================================
-
-/**
- * Create a capture inbox and subscribe it to @p upstream.
- * Returns the inbox; stores the subscription handle in @p out_sub.
- */
-static n00b_conduit_inbox_t(n00b_buffer_t *) *
-wire_capture(n00b_conduit_t *c,
-             n00b_conduit_topic_t(n00b_buffer_t *) *upstream,
-             n00b_buffer_t **accum,
-             n00b_conduit_sub_handle_t *out_sub)
-{
-    if (!upstream || !accum) {
-        return nullptr;
-    }
-
-    // Replace the empty sentinel with a real growable buffer.
-    if ((*accum)->alloc_len == 0) {
-        *accum = n00b_buffer_empty();
-    }
-
-    n00b_conduit_inbox_t(n00b_buffer_t *) *inbox =
-        n00b_alloc(n00b_conduit_inbox_t(n00b_buffer_t *));
-    n00b_conduit_inbox_init(n00b_buffer_t *, inbox, c,
-                            N00B_CONDUIT_BP_UNBOUNDED, 0);
-
-    *out_sub = n00b_conduit_subscribe(n00b_buffer_t *, upstream, inbox,
-                                      .operations = N00B_CONDUIT_OP_ALL);
-
-    return inbox;
-}
-
-/**
- * Drain all pending messages from a capture inbox into the
- * accumulation buffer.
- */
-static void
-drain_capture(n00b_conduit_inbox_t(n00b_buffer_t *) *inbox,
-              n00b_buffer_t *accum)
-{
-    if (!inbox || !accum) {
-        return;
-    }
-
-    n00b_conduit_message_t(n00b_buffer_t *) *msg;
-    while ((msg = n00b_conduit_inbox_pop_msg(n00b_buffer_t *, inbox)) != nullptr) {
-        n00b_buffer_t *buf = msg->payload;
-        if (buf && buf->byte_len > 0) {
-            n00b_buffer_concat(accum, buf);
-        }
-    }
-}
-
-// ============================================================================
-// Transform chain helper
-// ============================================================================
-
-/**
- * If @p specs is non-null and non-empty, build a transform chain from
- * @p source and return the chain's final output topic.  Otherwise
- * return @p source unchanged.
- *
- * The specs array holds `n00b_conduit_xform_spec_base_t *` elements
- * (stored as `void *` in the user-facing array type).
- */
-static n00b_conduit_topic_t(n00b_buffer_t *) *
-apply_xform_chain(n00b_conduit_t *c,
-                  n00b_conduit_topic_t(n00b_buffer_t *) *source,
-                  n00b_array_t(void *) *specs)
-{
-    if (!source) {
-        return nullptr;
-    }
-    if (!specs || specs->len == 0) {
-        return source;
-    }
-
-    n00b_conduit_topic_base_t *out =
-        n00b_conduit_chain_from_specs(
-            c,
-            (n00b_conduit_topic_base_t *)source,
-            (const n00b_conduit_xform_spec_base_t **)specs->data,
-            specs->len);
-
-    return out
-        ? (n00b_conduit_topic_t(n00b_buffer_t *) *)out
-        : source;
-}
-
-// ============================================================================
-// User subscription wiring helper
-// ============================================================================
-
-/**
- * Subscribe each user-supplied inbox in @p subs to @p source.
- */
-static void
-wire_user_subs(n00b_conduit_t *c,
-               n00b_conduit_topic_t(n00b_buffer_t *) *source,
-               n00b_array_t(n00b_subproc_buf_inbox_t *) *subs)
-{
-    if (!source || !subs) {
-        return;
-    }
-
-    for (size_t i = 0; i < subs->len; i++) {
-        n00b_subproc_buf_inbox_t *inbox = subs->data[i];
-        if (!inbox) {
-            continue;
-        }
-        n00b_conduit_subscribe(n00b_buffer_t *, source, inbox,
-                                .operations = N00B_CONDUIT_OP_ALL);
-    }
-}
-
-// ============================================================================
 // I/O wiring helper
 // ============================================================================
 
@@ -270,10 +154,10 @@ wire_io(n00b_subproc_t *sp)
     // topics subscribe to these.
 
     n00b_conduit_topic_t(n00b_buffer_t *) *stdout_out =
-        apply_xform_chain(sp->conduit, stdout_raw, sp->stdout_xforms);
+        n00b_subproc_apply_xform_chain(sp->conduit, stdout_raw, sp->stdout_xforms);
 
     n00b_conduit_topic_t(n00b_buffer_t *) *stderr_out =
-        apply_xform_chain(sp->conduit, stderr_raw, sp->stderr_xforms);
+        n00b_subproc_apply_xform_chain(sp->conduit, stderr_raw, sp->stderr_xforms);
 
     // Store effective topics for accessor functions.
     sp->eff_stdout_topic = (n00b_conduit_topic_base_t *)stdout_out;
@@ -282,14 +166,14 @@ wire_io(n00b_subproc_t *sp)
     // -- Capture (subscribes to post-xform output topics) --
 
     if ((f & N00B_SUBPROC_CAP_STDOUT) && stdout_out) {
-        sp->cap_stdout = wire_capture(sp->conduit, stdout_out,
+        sp->cap_stdout = n00b_subproc_wire_capture(sp->conduit, stdout_out,
                                       &sp->buf_stdout,
                                       &sp->cap_stdout_sub);
     }
 
     if ((f & N00B_SUBPROC_CAP_STDERR) && !(f & N00B_SUBPROC_MERGE_OUTPUT)
         && stderr_out) {
-        sp->cap_stderr = wire_capture(sp->conduit, stderr_out,
+        sp->cap_stderr = n00b_subproc_wire_capture(sp->conduit, stderr_out,
                                       &sp->buf_stderr,
                                       &sp->cap_stderr_sub);
     }
@@ -303,7 +187,7 @@ wire_io(n00b_subproc_t *sp)
 
     if ((f & N00B_SUBPROC_PROXY_STDOUT) && stdout_out) {
         n00b_conduit_topic_t(n00b_buffer_t *) *proxy_src =
-            apply_xform_chain(sp->conduit, stdout_out, sp->proxy_xforms);
+            n00b_subproc_apply_xform_chain(sp->conduit, stdout_out, sp->proxy_xforms);
         auto r = n00b_conduit_fd_writer_new(sp->conduit, proxy_src,
                                             STDOUT_FILENO);
         if (n00b_result_is_ok(r)) {
@@ -314,7 +198,7 @@ wire_io(n00b_subproc_t *sp)
     if ((f & N00B_SUBPROC_PROXY_STDERR) && !(f & N00B_SUBPROC_MERGE_OUTPUT)
         && stderr_out) {
         n00b_conduit_topic_t(n00b_buffer_t *) *proxy_src =
-            apply_xform_chain(sp->conduit, stderr_out, sp->proxy_xforms);
+            n00b_subproc_apply_xform_chain(sp->conduit, stderr_out, sp->proxy_xforms);
         auto r = n00b_conduit_fd_writer_new(sp->conduit, proxy_src,
                                             STDERR_FILENO);
         if (n00b_result_is_ok(r)) {
@@ -325,7 +209,7 @@ wire_io(n00b_subproc_t *sp)
              && stdout_out) {
         // Merged: proxy stderr to parent stderr using stdout's output.
         n00b_conduit_topic_t(n00b_buffer_t *) *proxy_src =
-            apply_xform_chain(sp->conduit, stdout_out, sp->proxy_xforms);
+            n00b_subproc_apply_xform_chain(sp->conduit, stdout_out, sp->proxy_xforms);
         auto r = n00b_conduit_fd_writer_new(sp->conduit, proxy_src,
                                             STDERR_FILENO);
         if (n00b_result_is_ok(r)) {
@@ -352,7 +236,7 @@ wire_io(n00b_subproc_t *sp)
 
             // Apply stdin_xforms (injection point 4) if present.
             n00b_conduit_topic_t(n00b_buffer_t *) *stdin_src =
-                apply_xform_chain(sp->conduit, parent_stdin_raw, sp->stdin_xforms);
+                n00b_subproc_apply_xform_chain(sp->conduit, parent_stdin_raw, sp->stdin_xforms);
 
             // Wire an fd_writer that writes to the child's stdin FD.
             auto r = n00b_conduit_fd_writer_new(sp->conduit, stdin_src,
@@ -365,8 +249,8 @@ wire_io(n00b_subproc_t *sp)
 
     // -- User-supplied subscriptions (wired before gate opens) --
 
-    wire_user_subs(sp->conduit, stdout_out, sp->stdout_subs);
-    wire_user_subs(sp->conduit, stderr_out, sp->stderr_subs);
+    n00b_subproc_wire_user_subs(sp->conduit, stdout_out, sp->stdout_subs);
+    n00b_subproc_wire_user_subs(sp->conduit, stderr_out, sp->stderr_subs);
 
     // stdin observation topic: create when we need to observe data flowing
     // into the child's stdin (cap_stdin or stdin_subs).  Data is published
@@ -377,7 +261,7 @@ wire_io(n00b_subproc_t *sp)
         sp->stdin_obs_topic = n00b_conduit_topic_init(
             n00b_buffer_t *, sp->conduit,
             N00B_CONDUIT_URI_USER_EVENT(0));
-        wire_user_subs(sp->conduit, sp->stdin_obs_topic, sp->stdin_subs);
+        n00b_subproc_wire_user_subs(sp->conduit, sp->stdin_obs_topic, sp->stdin_subs);
     }
 }
 
@@ -534,17 +418,15 @@ update_done_flags_from_topic(n00b_subproc_t *sp, n00b_conduit_topic_base_t *clos
     }
 
     if (sp->eff_stdout_topic && closed == sp->eff_stdout_topic) {
-        sp->done_flags |= N00B_SUBPROC_DONE_F_STDOUT_EOF
-                        | N00B_SUBPROC_DONE_F_STDOUT_DRAIN;
+        n00b_subproc_note_stdout_done(sp);
     }
     else if (sp->eff_stderr_topic
              && sp->eff_stderr_topic != sp->eff_stdout_topic
              && closed == sp->eff_stderr_topic) {
-        sp->done_flags |= N00B_SUBPROC_DONE_F_STDERR_EOF
-                        | N00B_SUBPROC_DONE_F_STDERR_DRAIN;
+        n00b_subproc_note_stderr_done(sp);
     }
     else if (closed == sp->proc_topic) {
-        sp->done_flags |= N00B_SUBPROC_DONE_F_PROC_EXIT;
+        n00b_subproc_note_proc_done(sp);
     }
 }
 
@@ -591,25 +473,6 @@ drain_done_inbox(n00b_subproc_t *sp)
                 n00b_conduit_topic_base_t *, sp->done_inbox)) != nullptr) {
         update_done_flags_from_topic(sp, msg->payload);
     }
-}
-
-/**
- * Check if the done condition is met.
- */
-static bool
-done_condition_met(n00b_subproc_t *sp)
-{
-    switch (sp->done_condition) {
-    case N00B_SUBPROC_DONE_IO_DRAINED:
-        return (sp->done_flags & sp->required_mask) == sp->required_mask;
-    case N00B_SUBPROC_DONE_PROC_EXIT:
-        return (sp->done_flags & N00B_SUBPROC_DONE_F_PROC_EXIT) != 0;
-    case N00B_SUBPROC_DONE_STDOUT_EOF:
-        return (sp->done_flags & N00B_SUBPROC_DONE_F_STDOUT_EOF) != 0;
-    case N00B_SUBPROC_DONE_CUSTOM:
-        return sp->done_fn && sp->done_fn(sp, sp->done_fn_ctx);
-    }
-    return false;
 }
 
 // ============================================================================
@@ -933,20 +796,14 @@ spawn_pipe_mode(n00b_subproc_t *sp)
     }
 
     // Compute required_mask for done-inbox.
-    uint32_t mask = N00B_SUBPROC_DONE_F_PROC_EXIT;
-    if (n00b_option_is_set(sp->stdout_owner)) {
-        mask |= N00B_SUBPROC_DONE_F_STDOUT_EOF;
-    }
-    if (n00b_option_is_set(sp->stderr_owner)
-        && (!n00b_option_is_set(sp->stdout_owner)
-            || n00b_option_get(sp->stderr_owner)
-                != n00b_option_get(sp->stdout_owner))) {
-        mask |= N00B_SUBPROC_DONE_F_STDERR_EOF;
-    }
-    if (sp->stdin_inject) {
-        mask |= N00B_SUBPROC_DONE_F_STDIN_DONE;
-    }
-    sp->required_mask = mask;
+    bool wait_stdout = n00b_option_is_set(sp->stdout_owner);
+    bool wait_stderr = n00b_option_is_set(sp->stderr_owner)
+                       && (!n00b_option_is_set(sp->stdout_owner)
+                           || n00b_option_get(sp->stderr_owner)
+                              != n00b_option_get(sp->stdout_owner));
+    sp->required_mask = n00b_subproc_completion_mask(wait_stdout,
+                                                     wait_stderr,
+                                                     sp->stdin_inject != nullptr);
 
     // Wire capture and proxy subscriptions.
     wire_io(sp);
@@ -959,7 +816,7 @@ spawn_pipe_mode(n00b_subproc_t *sp)
 
     // Wire stdin capture to the observation topic (if both exist).
     if ((f & N00B_SUBPROC_CAP_STDIN) && sp->stdin_obs_topic) {
-        sp->cap_stdin = wire_capture(sp->conduit, sp->stdin_obs_topic,
+        sp->cap_stdin = n00b_subproc_wire_capture(sp->conduit, sp->stdin_obs_topic,
                                      &sp->buf_stdin,
                                      &sp->cap_stdin_sub);
     }
@@ -1270,20 +1127,14 @@ spawn_pty_mode(n00b_subproc_t *sp)
 
     // Compute required_mask for done-inbox (same logic as pipe mode,
     // but stdout/stderr may share an owner).
-    uint32_t mask = N00B_SUBPROC_DONE_F_PROC_EXIT;
-    if (n00b_option_is_set(sp->stdout_owner)) {
-        mask |= N00B_SUBPROC_DONE_F_STDOUT_EOF;
-    }
-    if (n00b_option_is_set(sp->stderr_owner)
-        && (!n00b_option_is_set(sp->stdout_owner)
-            || n00b_option_get(sp->stderr_owner)
-                != n00b_option_get(sp->stdout_owner))) {
-        mask |= N00B_SUBPROC_DONE_F_STDERR_EOF;
-    }
-    if (sp->stdin_inject) {
-        mask |= N00B_SUBPROC_DONE_F_STDIN_DONE;
-    }
-    sp->required_mask = mask;
+    bool wait_stdout = n00b_option_is_set(sp->stdout_owner);
+    bool wait_stderr = n00b_option_is_set(sp->stderr_owner)
+                       && (!n00b_option_is_set(sp->stdout_owner)
+                           || n00b_option_get(sp->stderr_owner)
+                              != n00b_option_get(sp->stdout_owner));
+    sp->required_mask = n00b_subproc_completion_mask(wait_stdout,
+                                                     wait_stderr,
+                                                     sp->stdin_inject != nullptr);
 
     // Reuse all existing wiring — capture, proxy, xforms, done-inbox,
     // signals all work identically through the FD owner abstraction.
@@ -1293,7 +1144,7 @@ spawn_pty_mode(n00b_subproc_t *sp)
 
     // Wire stdin capture (same as pipe mode).
     if ((f & N00B_SUBPROC_CAP_STDIN) && sp->stdin_obs_topic) {
-        sp->cap_stdin = wire_capture(sp->conduit, sp->stdin_obs_topic,
+        sp->cap_stdin = n00b_subproc_wire_capture(sp->conduit, sp->stdin_obs_topic,
                                      &sp->buf_stdin,
                                      &sp->cap_stdin_sub);
     }
@@ -1488,11 +1339,11 @@ n00b_subproc_wait(n00b_subproc_t *sp) _kargs
         drain_done_inbox(sp);
 
         // 5. Drain capture inboxes so captured data is up to date.
-        drain_capture(sp->cap_stdout, sp->buf_stdout);
-        drain_capture(sp->cap_stderr, sp->buf_stderr);
+        n00b_subproc_drain_capture(sp->cap_stdout, sp->buf_stdout);
+        n00b_subproc_drain_capture(sp->cap_stderr, sp->buf_stderr);
 
         // 6. Check if done.
-        if (done_condition_met(sp)) {
+        if (n00b_subproc_done_condition_met(sp)) {
             break;
         }
 
@@ -1528,7 +1379,7 @@ n00b_subproc_wait(n00b_subproc_t *sp) _kargs
                     }
                 }
                 atomic_store(&sp->exited, true);
-                sp->done_flags |= N00B_SUBPROC_DONE_F_PROC_EXIT;
+                n00b_subproc_note_proc_done(sp);
                 break;
             }
         }
@@ -1556,7 +1407,7 @@ n00b_subproc_wait(n00b_subproc_t *sp) _kargs
                     sp->term_signal = n00b_option_set(int, WTERMSIG(status));
                 }
                 atomic_store(&sp->exited, true);
-                sp->done_flags |= N00B_SUBPROC_DONE_F_PROC_EXIT;
+                n00b_subproc_note_proc_done(sp);
             }
             break;
         }
@@ -1574,9 +1425,9 @@ n00b_subproc_close(n00b_subproc_t *sp)
     sp->closed = true;
 
     // Drain any remaining capture data before tearing down.
-    drain_capture(sp->cap_stdout, sp->buf_stdout);
-    drain_capture(sp->cap_stderr, sp->buf_stderr);
-    drain_capture(sp->cap_stdin, sp->buf_stdin);
+    n00b_subproc_drain_capture(sp->cap_stdout, sp->buf_stdout);
+    n00b_subproc_drain_capture(sp->cap_stderr, sp->buf_stderr);
+    n00b_subproc_drain_capture(sp->cap_stdin, sp->buf_stdin);
 
     // Cancel capture subscriptions.
     if (sp->cap_stdout_sub) {
@@ -1773,21 +1624,21 @@ n00b_subproc_restore_terminal(n00b_subproc_t *sp)
 n00b_buffer_t *
 n00b_subproc_stdout(n00b_subproc_t *sp)
 {
-    drain_capture(sp->cap_stdout, sp->buf_stdout);
+    n00b_subproc_drain_capture(sp->cap_stdout, sp->buf_stdout);
     return sp->buf_stdout;
 }
 
 n00b_buffer_t *
 n00b_subproc_stderr(n00b_subproc_t *sp)
 {
-    drain_capture(sp->cap_stderr, sp->buf_stderr);
+    n00b_subproc_drain_capture(sp->cap_stderr, sp->buf_stderr);
     return sp->buf_stderr;
 }
 
 n00b_buffer_t *
 n00b_subproc_stdin_capture(n00b_subproc_t *sp)
 {
-    drain_capture(sp->cap_stdin, sp->buf_stdin);
+    n00b_subproc_drain_capture(sp->cap_stdin, sp->buf_stdin);
     return sp->buf_stdin;
 }
 

@@ -191,7 +191,7 @@ n00b_forward_alloc(n00b_collect_t *ctx, n00b_inline_hdr_t *old)
 
     n00b_inline_hdr_t *result;
     void              *scan_start;
-    bool               no_scan;
+    [[maybe_unused]] bool no_scan;
     uint32_t           nwords;
 
     if (ctx->from_space->vtable.metadata_pool) {
@@ -588,9 +588,11 @@ n00b_scan_thread_stacks(n00b_collect_t *ctx)
         // Some basic sanity checking. The stack should always, always be word
         // aligned.
 
+#ifndef _WIN32
         if (((uint64_t)top) < t->stack_map->start) {
             top = (uint64_t *)t->stack_map->start;
         }
+#endif
 
         top  = (uint64_t *)n00b_align_ceil((uint64_t)top, 0x08);
         base = (uint64_t *)n00b_align_floor((uint64_t)base, 0x08);

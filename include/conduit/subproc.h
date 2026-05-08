@@ -3,9 +3,10 @@
  * @brief High-level subprocess management built on conduit primitives.
  *
  * Provides configurable spawning, monitoring, and communication with
- * child processes.  Supports pipe and PTY modes, I/O capture and
+ * child processes.  Supports pipe mode on all platforms, PTY mode on POSIX
+ * and Windows, I/O capture and
  * proxying via conduit pub/sub, transform pipeline injection, and
- * smart completion detection via a unified done-inbox.
+ * smart completion detection through shared done flags.
  *
  * @details
  * This is a **user-facing I/O abstraction**, not a conduit module.
@@ -19,7 +20,7 @@
  * | Transforms           | `n00b_conduit_xform_t` pipeline            |
  * | Exit detection       | `n00b_conduit_proc_topic()`                |
  * | Signal handling      | `n00b_conduit_signal_topic()`              |
- * | Completion           | Unified done-inbox                         |
+ * | Completion           | Shared done flags plus platform events     |
  * | Event loop           | `n00b_conduit_service_t`                   |
  *
  * ## Usage modes
@@ -36,11 +37,8 @@
  * - `n00b_array_t(n00b_string_t *)` for argument/environment lists
  * - No `char *` crosses the public API boundary
  *
- * @pre  Windows is not supported (`#ifndef _WIN32` guard).
  */
 #pragma once
-
-#ifndef _WIN32
 
 #include "n00b.h"
 #include "adt/result.h"
@@ -58,14 +56,31 @@
 #include "text/strings/string_ops.h"
 
 #include <sys/types.h>
+#include <signal.h>
+#ifdef _WIN32
+#include "core/platform.h"
+struct termios {
+    int _n00b_unused;
+};
+struct winsize {
+    unsigned short ws_row;
+    unsigned short ws_col;
+    unsigned short ws_xpixel;
+    unsigned short ws_ypixel;
+};
+#else
 #include <termios.h>
 #include <sys/ioctl.h>
+#endif
 
 // ============================================================================
 // Forward declarations
 // ============================================================================
 
 typedef struct n00b_subproc n00b_subproc_t;
+#ifdef _WIN32
+typedef struct n00b_subproc_win_state n00b_subproc_win_state_t;
+#endif
 
 // ============================================================================
 // Flags
@@ -101,7 +116,7 @@ typedef enum {
 // ============================================================================
 
 /**
- * @brief Completion condition for the done-inbox wait loop.
+ * @brief Completion condition for the subprocess wait loop.
  */
 typedef enum {
     /** Wait for process exit AND all I/O fully flushed (default). */
@@ -132,7 +147,11 @@ typedef enum {
 // ============================================================================
 
 /**
- * @brief Pre-exec hook invoked in child between fork() and exec().
+ * @brief Hook invoked immediately before the child process starts.
+ *
+ * On POSIX this runs in the child between fork() and exec(). On Windows
+ * it runs in the parent immediately before CreateProcessA(), because
+ * Windows has no fork/exec child phase.
  */
 typedef void (*n00b_pre_exec_hook_t)(void *param);
 
@@ -199,7 +218,7 @@ struct n00b_subproc {
     n00b_buffer_t                 *stdin_inject;   /**< Initial stdin data (null = none) */
     n00b_string_t                 *cwd;           /**< Working directory (null = inherit) */
     struct termios                *termcap;        /**< PTY terminal settings (null = inherit) */
-    n00b_pre_exec_hook_t           pre_exec_hook; /**< Child pre-exec callback */
+    n00b_pre_exec_hook_t           pre_exec_hook; /**< Pre-start callback */
     void                          *hook_param;    /**< Hook user data */
     n00b_duration_t               *timeout;       /**< Timeout (null = no limit) */
     n00b_subproc_done_t            done_condition; /**< Completion condition */
@@ -254,16 +273,18 @@ struct n00b_subproc {
     n00b_buffer_t                 *buf_stdout;    /**< Accumulated stdout capture */
     n00b_buffer_t                 *buf_stderr;    /**< Accumulated stderr capture */
 
-    // -- Done-inbox (unified completion) --
+    // -- Completion state --
     //
-    // One inbox subscribed to the done_topics of each watched resource
-    // (stdout read topic, stderr read topic, proc lifecycle topic).
-    // Each done message carries the originating topic pointer as payload.
+    // POSIX uses one inbox subscribed to the done_topics of each watched
+    // resource (stdout read topic, stderr read topic, proc lifecycle
+    // topic). Each done message carries the originating topic pointer as
+    // payload. Windows updates the same done_flags and required_mask from
+    // Win32 process waits and pipe EOF events.
     //
     // The proc_inbox is a separate typed inbox that receives the actual
-    // proc exit event (carrying exit_status).  When we see the exit event,
-    // we extract exit_status, then close the proc topic — which fires the
-    // proc done_topic → the done_inbox receives it.
+    // proc exit event on POSIX (carrying exit_status).  When POSIX sees the
+    // exit event, it extracts exit_status, then closes the proc topic, which
+    // fires the proc done_topic and notifies the done_inbox.
 
     n00b_conduit_inbox_t(n00b_conduit_topic_base_t *) *done_inbox;
     n00b_conduit_sub_handle_t      done_stdout_sub;  /**< Sub to stdout read done_topic */
@@ -306,6 +327,10 @@ struct n00b_subproc {
     bool                           errored;
     bool                           timed_out;
     bool                           termcap_saved; /**< initial_termcap is valid */
+
+#ifdef _WIN32
+    n00b_subproc_win_state_t      *win; /**< Private Windows backend state */
+#endif
 };
 
 // ============================================================================
@@ -342,7 +367,7 @@ struct n00b_subproc {
  * @kw done_condition   Completion condition (default: IO_DRAINED).
  * @kw done_fn          Custom completion predicate.
  * @kw done_fn_ctx      Context for done_fn.
- * @kw pre_exec_hook    Child pre-exec callback.
+ * @kw pre_exec_hook    Pre-start callback.
  * @kw hook_param       Hook user data.
  * @kw stdout_xforms    Transform chain for stdout.
  * @kw stderr_xforms    Transform chain for stderr.
@@ -400,7 +425,7 @@ extern void n00b_subproc_init(n00b_subproc_t *sp)
  * @brief Spawn the subprocess (non-blocking).
  *
  * Sets up pipes/PTY, forks, configures child, registers managed FDs,
- * wires transforms/subscriptions/done-inbox.  Returns after the
+ * wires transforms, subscriptions, and completion state. Returns after the
  * child is ready to exec.
  *
  * @details
@@ -421,7 +446,7 @@ extern n00b_result_t(bool) n00b_subproc_spawn(n00b_subproc_t *sp);
 /**
  * @brief Spawn and wait for completion (blocking).
  *
- * Calls `spawn()`, blocks on the done-inbox until the completion
+ * Calls `spawn()`, blocks until the completion
  * condition is met or timeout expires, applies timeout_policy if
  * needed, then calls `close()` (unless detached).
  *
@@ -431,7 +456,7 @@ extern n00b_result_t(bool) n00b_subproc_spawn(n00b_subproc_t *sp);
 extern n00b_result_t(bool) n00b_subproc_run(n00b_subproc_t *sp);
 
 /**
- * @brief Block on the done-inbox until completion condition is met.
+ * @brief Block until the completion condition is met.
  *
  * For use after `n00b_subproc_spawn()` in async workflows.
  *
@@ -601,5 +626,3 @@ n00b_subproc_stderr_topic(n00b_subproc_t *sp);
  */
 extern n00b_conduit_topic_t(n00b_buffer_t *) *
 n00b_subproc_stdin_topic(n00b_subproc_t *sp);
-
-#endif /* !_WIN32 */

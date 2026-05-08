@@ -87,6 +87,8 @@ c_args = [
 
 if target_os != 'windows'
   c_args += '-fPIC'
+else
+  c_args += '-DXXH_NO_INTRINSICS=1'
 endif
 
 if using_glibc
@@ -95,6 +97,8 @@ endif
 
 if target_os == 'darwin'
     link_args = ['-target', target_arch + '-' + target_os]
+elif target_os == 'windows'
+    link_args = ['-static', '-Wl,--stack,16777216']
 else
     link_args = []
 endif
@@ -175,7 +179,7 @@ int main(void) {
   return a[0];
 }
 '''
-if cc.compiles(vector_builtins_check, name: 'vector_size(16)')
+if target_os != 'windows' and cc.compiles(vector_builtins_check, name: 'vector_size(16)')
   c_args = c_args + ['-DN00B_HAVE_VECTOR_BUILTINS']
 endif
 
@@ -245,7 +249,7 @@ if conf_cocoa
 endif
 
 if conf_notcurses
-  notcurses_dep = dependency('notcurses', version: '>=3.0.0', required: false)
+  notcurses_dep = dependency('notcurses', version: '>=3.0.10', required: false)
   conf_notcurses = notcurses_dep.found()
 endif
 
@@ -451,6 +455,9 @@ n00b_conduit = [
     'src/conduit/file.c',
     'src/conduit/timer.c',
     'src/conduit/user_event.c',
+    'src/conduit/signal.c',
+    'src/conduit/proc_lifecycle.c',
+    'src/conduit/file_change.c',
     # Pipeline / transforms
     'src/conduit/xform.c',
     'src/conduit/xform_linebuf.c',
@@ -467,9 +474,6 @@ n00b_conduit = [
 if target_os != 'windows'
     n00b_conduit += [
         'src/conduit/io_poll.c',
-        'src/conduit/signal.c',
-        'src/conduit/proc_lifecycle.c',
-        'src/conduit/file_change.c',
         'src/conduit/subproc.c',
     ]
 endif
@@ -486,10 +490,14 @@ if target_os == 'linux'
     endif
 endif
 if target_os == 'windows'
-    n00b_conduit += 'src/conduit/io_wsa.c'
-    ws2_dep = cc.find_library('ws2_32', required: true)
+    n00b_conduit += [
+        'src/conduit/io_wsa.c',
+        'src/conduit/subproc_windows.c',
+    ]
+    winsock_dep = cc.find_library('ws2_32', required: true)
     sync_dep = cc.find_library('synchronization', required: true)
-    deps += [ws2_dep, sync_dep]
+    advapi_dep = cc.find_library('advapi32', required: true)
+    deps += [winsock_dep, sync_dep, advapi_dep]
 endif
 
 # ============================================================================
@@ -660,9 +668,17 @@ gen_unicode_lib = static_library('n00b_gen_unicode',
 
 # Build md4c vendor implementation with --no-ncc (it's 10K+ lines of
 # pure C; parsing it through ncc's packrat parser OOMs in constrained
-# environments like Docker cross-builds).
+# environments like Docker cross-builds). The upstream linenoise source is
+# POSIX-only, so Windows builds use a small non-interactive fallback.
+vendor_sources = ['src/vendor/md4c.c']
+if target_os == 'windows'
+  vendor_sources += 'src/vendor/linenoise_windows.c'
+else
+  vendor_sources += 'src/vendor/linenoise.c'
+endif
+
 n00b_vendor_lib = static_library('n00b_vendor',
-    ['src/vendor/md4c.c', 'src/vendor/linenoise.c'],
+    vendor_sources,
     include_directories: incdir,
     c_args: exe_c_args + ['--no-ncc'],
     link_args: link_args,
@@ -732,6 +748,7 @@ n00b = static_library('n00b',
 test_common_kwargs = {
     'include_directories': incdir,
     'c_args': exe_c_args,
+    'link_args': exe_link_args,
     'link_with': [n00b],
 }
 
@@ -860,43 +877,49 @@ io_test = executable('test_io',
 )
 test('io', io_test, suite: 'unit')
 
-fd_managed_test = executable('test_fd_managed',
-    ['test/unit/test_fd_managed.c'],
-    kwargs: test_common_kwargs,
-)
-test('fd_managed', fd_managed_test, suite: 'unit')
-
 socket_test = executable('test_socket',
     ['test/unit/test_socket.c'],
     kwargs: test_common_kwargs,
 )
 test('socket', socket_test, suite: 'unit')
 
-if target_os != 'windows'
-    signal_test = executable('test_signal',
-        ['test/unit/test_signal.c'],
-        kwargs: test_common_kwargs,
-    )
-    test('signal', signal_test, suite: 'unit')
+fd_managed_test = executable('test_fd_managed',
+    ['test/unit/test_fd_managed.c'],
+    kwargs: test_common_kwargs,
+)
+test('fd_managed', fd_managed_test, suite: 'unit')
 
-    proc_lifecycle_test = executable('test_proc_lifecycle',
-        ['test/unit/test_proc_lifecycle.c'],
+if target_os == 'windows'
+    io_windows_test = executable('test_io_windows',
+        ['test/unit/test_io_windows.c'],
         kwargs: test_common_kwargs,
     )
-    test('proc_lifecycle', proc_lifecycle_test, suite: 'unit')
-
-    file_change_test = executable('test_file_change',
-        ['test/unit/test_file_change.c'],
-        kwargs: test_common_kwargs,
-    )
-    test('file_change', file_change_test, suite: 'unit')
-
-    subproc_test = executable('test_subproc',
-        ['test/unit/test_subproc.c'],
-        kwargs: test_common_kwargs,
-    )
-    test('subproc', subproc_test, suite: 'unit', timeout: 120)
+    test('io_windows', io_windows_test, suite: 'unit')
 endif
+
+signal_test = executable('test_signal',
+    ['test/unit/test_signal.c'],
+    kwargs: test_common_kwargs,
+)
+test('signal', signal_test, suite: 'unit')
+
+proc_lifecycle_test = executable('test_proc_lifecycle',
+    ['test/unit/test_proc_lifecycle.c'],
+    kwargs: test_common_kwargs,
+)
+test('proc_lifecycle', proc_lifecycle_test, suite: 'unit')
+
+file_change_test = executable('test_file_change',
+    ['test/unit/test_file_change.c'],
+    kwargs: test_common_kwargs,
+)
+test('file_change', file_change_test, suite: 'unit')
+
+subproc_test = executable('test_subproc',
+    ['test/unit/test_subproc.c'],
+    kwargs: test_common_kwargs,
+)
+test('subproc', subproc_test, suite: 'unit', timeout: 120)
 
 timer_test = executable('test_timer',
     ['test/unit/test_timer.c'],
@@ -996,7 +1019,12 @@ regex_resharp_test = executable('test_regex_resharp',
     ['test/unit/test_regex_resharp.c'],
     kwargs: test_common_kwargs,
 )
-test('regex_resharp', regex_resharp_test, suite: 'unit', timeout: 300)
+test('regex_resharp', regex_resharp_test,
+    suite: 'unit',
+    timeout: 300,
+    env: {
+        'N00B_RESHARP_TEST_DIR': meson.current_source_dir() / 'test/data/resharp/tests',
+    })
 
 # ============================================================================
 # Logic / constraint solver tests
@@ -1005,6 +1033,7 @@ test('regex_resharp', regex_resharp_test, suite: 'unit', timeout: 300)
 logic_test_kwargs = {
     'include_directories': incdir + [include_directories('test/unit')],
     'c_args': exe_c_args,
+    'link_args': exe_link_args,
     'link_with': [n00b],
 }
 
@@ -1261,6 +1290,7 @@ mir_test = executable('test_mir',
     ['test/unit/test_mir.c'],
     include_directories: incdir,
     c_args: exe_c_args,
+    link_args: exe_link_args,
     link_with: [n00b],
     dependencies: [mir_dep],
 )
@@ -1270,6 +1300,7 @@ codegen_test = executable('test_codegen',
     ['test/unit/test_codegen.c'],
     include_directories: incdir,
     c_args: exe_c_args,
+    link_args: exe_link_args,
     link_with: [n00b],
     dependencies: [mir_dep],
 )
@@ -1480,6 +1511,7 @@ n00b_dev = executable('n00b_dev',
     ['src/tools/n00b_dev.c', 'src/tools/n00b_repl.c'],
     include_directories: incdir,
     c_args: exe_c_args,
+    link_args: exe_link_args,
     link_whole: [n00b],
     dependencies: [mir_dep],
     install: true,
@@ -1490,17 +1522,20 @@ n00b_exe = executable('n00b',
     ['src/tools/n00b.c', 'src/tools/n00b_repl.c'],
     include_directories: incdir,
     c_args: exe_c_args,
+    link_args: exe_link_args,
     link_whole: [n00b],
     dependencies: [mir_dep],
     install: true,
 )
 
-# VFS journaling daemon / demo
-vfs_journal = executable('vfs_journal',
-    ['src/tools/vfs_journal.c'],
-    kwargs: test_common_kwargs,
-    install: false,
-)
+if target_os != 'windows'
+    # VFS journaling depends on POSIX daemon, signal, and frontend behavior.
+    vfs_journal = executable('vfs_journal',
+        ['src/tools/vfs_journal.c'],
+        kwargs: test_common_kwargs,
+        install: false,
+    )
+endif
 
 # ============================================================================
 # Integration tests
@@ -1589,6 +1624,7 @@ test('vfs_journal', vfs_journal_test, suite: 'unit')
 unicode_test_kwargs = {
     'include_directories': incdir + [include_directories('test/unit')],
     'c_args': exe_c_args,
+    'link_args': exe_link_args,
     'link_with': [n00b],
 }
 
@@ -1613,6 +1649,7 @@ endforeach
 str_test_kwargs = {
     'include_directories': incdir + [include_directories('test/unit')],
     'c_args': exe_c_args,
+    'link_args': exe_link_args,
     'link_with': [n00b],
 }
 

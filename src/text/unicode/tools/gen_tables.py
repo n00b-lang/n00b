@@ -10,6 +10,7 @@ Usage:
 import argparse
 import hashlib
 import os
+import shutil
 import struct
 import sys
 import urllib.request
@@ -75,27 +76,120 @@ SPECIAL_FILES = {
     "IdnaMappingTable.txt": "https://www.unicode.org/Public/idna/{version}/IdnaMappingTable.txt",
 }
 
+GENERATED_FILES = [
+    "gen_age.c",
+    "gen_bidi_brackets.c",
+    "gen_bidi_class.c",
+    "gen_blocks.c",
+    "gen_casemap.c",
+    "gen_categories.c",
+    "gen_collation.c",
+    "gen_combining.c",
+    "gen_composition.c",
+    "gen_confusables.c",
+    "gen_decomposition.c",
+    "gen_eaw.c",
+    "gen_emoji.c",
+    "gen_grapheme.c",
+    "gen_identifiers.c",
+    "gen_idna.c",
+    "gen_joining.c",
+    "gen_linebreak.c",
+    "gen_normprops.c",
+    "gen_numeric.c",
+    "gen_proplist.c",
+    "gen_script_extensions.c",
+    "gen_scripts.c",
+    "gen_sentbreak.c",
+    "gen_wordbreak.c",
+]
+
+REQUIRED_CACHE_FILES = (
+    [f.replace("/", "_") for f in UNICODE_FILES]
+    + [f.replace("/", "_") for f in TEST_FILES]
+    + list(SPECIAL_FILES.keys())
+)
+
+REQUIRED_TEST_DATA_FILES = [f.split("/")[-1] for f in TEST_FILES] + ["CollationTest.zip"]
+
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
+def fail(message):
+    raise SystemExit(f"ERROR: {message}")
+
+
+def require_nonempty_file(path, label):
+    if not path.exists():
+        fail(f"missing {label}: {path}")
+    if not path.is_file():
+        fail(f"{label} is not a file: {path}")
+    if path.stat().st_size == 0:
+        fail(f"empty {label}: {path}")
+
+
 def download_file(url, dest):
     """Download a file if not already cached."""
-    if dest.exists():
+    if dest.exists() and not dest.is_file():
+        fail(f"Unicode cache path is not a file: {dest}")
+    if dest.exists() and dest.stat().st_size > 0:
         print(f"  cached: {dest.name}")
         return
+
     print(f"  downloading: {url}")
     dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_name(dest.name + ".tmp")
     try:
         req = urllib.request.Request(url, headers={
             "User-Agent": "Mozilla/5.0 (unicode-gen-tables/1.0)"
         })
         with urllib.request.urlopen(req) as resp:
-            with open(dest, "wb") as f:
-                f.write(resp.read())
+            data = resp.read()
+        if not data:
+            fail(f"downloaded empty Unicode data file: {url}")
+        with open(tmp, "wb") as f:
+            f.write(data)
+        tmp.replace(dest)
     except Exception as e:
-        print(f"  WARNING: failed to download {url}: {e}")
+        try:
+            tmp.unlink()
+        except FileNotFoundError:
+            pass
+        fail(f"failed to download required Unicode data {url}: {e}")
+
+
+def copy_cached_file(src, dest):
+    """Populate generated test data from the required cache."""
+    if dest.exists() and not dest.is_file():
+        fail(f"Unicode test data path is not a file: {dest}")
+    if dest.exists() and dest.stat().st_size > 0:
+        print(f"  cached: {dest.name}")
+        return
+
+    require_nonempty_file(src, "Unicode cache file")
+    print(f"  copying: {dest}")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_name(dest.name + ".tmp")
+    shutil.copyfile(src, tmp)
+    tmp.replace(dest)
+
+
+def validate_inputs(cache_dir, test_data_dir):
+    for name in REQUIRED_CACHE_FILES:
+        require_nonempty_file(cache_dir / name, "Unicode cache file")
+    for name in REQUIRED_TEST_DATA_FILES:
+        require_nonempty_file(test_data_dir / name, "Unicode test data file")
+
+    for path in (cache_dir / "CollationTest.zip", test_data_dir / "CollationTest.zip"):
+        if not zipfile.is_zipfile(path):
+            fail(f"invalid Unicode collation zip: {path}")
+
+
+def validate_generated_outputs(out_dir):
+    for name in GENERATED_FILES:
+        require_nonempty_file(out_dir / name, "generated Unicode table")
 
 
 def download_all(version, cache_dir, test_data_dir):
@@ -110,18 +204,18 @@ def download_all(version, cache_dir, test_data_dir):
 
     for f in TEST_FILES:
         url = f"{base}/{f}"
-        # Test data goes into test/data/
-        dest_name = f.split("/")[-1]
-        download_file(url, test_data_dir / dest_name)
-        # Also cache for our parsing
-        download_file(url, cache_dir / f.replace("/", "_"))
+        cache_dest = cache_dir / f.replace("/", "_")
+        download_file(url, cache_dest)
+        copy_cached_file(cache_dest, test_data_dir / f.split("/")[-1])
 
     for name, url_template in SPECIAL_FILES.items():
         url = url_template.format(version=version)
-        download_file(url, cache_dir / name)
+        cache_dest = cache_dir / name
+        download_file(url, cache_dest)
         if name == "CollationTest.zip":
-            # Also put in test/data/
-            download_file(url, test_data_dir / name)
+            copy_cached_file(cache_dest, test_data_dir / name)
+
+    validate_inputs(cache_dir, test_data_dir)
 
     print("Download complete.")
 
@@ -131,8 +225,7 @@ def parse_semicolon_file(path, fields=None):
     Yields (codepoint_or_range, [field_values]).
     codepoint_or_range is (start, end) tuple.
     """
-    if not path.exists():
-        return
+    require_nonempty_file(path, "Unicode input file")
     with open(path, "r", encoding="utf-8") as f:
         for line in f:
             line = line.split("#")[0].strip()
@@ -157,8 +250,7 @@ def parse_semicolon_file(path, fields=None):
 def parse_unicode_data(path):
     """Parse UnicodeData.txt which has a special format with ranges."""
     entries = {}
-    if not path.exists():
-        return entries
+    require_nonempty_file(path, "Unicode input file")
     with open(path, "r", encoding="utf-8") as f:
         prev_range_start = None
         for line in f:
@@ -532,51 +624,51 @@ def gen_script_extensions(cache_dir, out_dir):
     # Build abbreviation → full-name map from PropertyValueAliases.txt
     abbrev_map = {}
     pva_path = cache_dir / "PropertyValueAliases.txt"
-    if pva_path.exists():
-        with open(pva_path, "r") as f:
-            for line in f:
-                line = line.split("#")[0].strip()
-                if not line:
-                    continue
-                parts = [p.strip() for p in line.split(";")]
-                if len(parts) >= 3 and parts[0] == "sc":
-                    abbr = parts[1]  # 4-letter abbreviation
-                    full = parts[2]  # Full name
-                    abbrev_map[abbr] = full
+    require_nonempty_file(pva_path, "Unicode input file")
+    with open(pva_path, "r") as f:
+        for line in f:
+            line = line.split("#")[0].strip()
+            if not line:
+                continue
+            parts = [p.strip() for p in line.split(";")]
+            if len(parts) >= 3 and parts[0] == "sc":
+                abbr = parts[1]  # 4-letter abbreviation
+                full = parts[2]  # Full name
+                abbrev_map[abbr] = full
 
     # Parse ScriptExtensions.txt
     scext = SparseMapping("unicode_script_ext")
     path = cache_dir / "ScriptExtensions.txt"
-    if path.exists():
-        with open(path, "r") as f:
-            for line in f:
-                line = line.split("#")[0].strip()
-                if not line:
-                    continue
-                parts = [p.strip() for p in line.split(";")]
-                if len(parts) < 2:
-                    continue
-                cp_field = parts[0]
-                abbrs = parts[1].split()
+    require_nonempty_file(path, "Unicode input file")
+    with open(path, "r") as f:
+        for line in f:
+            line = line.split("#")[0].strip()
+            if not line:
+                continue
+            parts = [p.strip() for p in line.split(";")]
+            if len(parts) < 2:
+                continue
+            cp_field = parts[0]
+            abbrs = parts[1].split()
 
-                # Map abbreviations to script indices
-                indices = []
-                for abbr in abbrs:
-                    full = abbrev_map.get(abbr, abbr)
-                    if full in SCRIPT_MAP:
-                        indices.append(SCRIPT_MAP[full])
+            # Map abbreviations to script indices
+            indices = []
+            for abbr in abbrs:
+                full = abbrev_map.get(abbr, abbr)
+                if full in SCRIPT_MAP:
+                    indices.append(SCRIPT_MAP[full])
 
-                if not indices:
-                    continue
+            if not indices:
+                continue
 
-                indices.sort()
+            indices.sort()
 
-                if ".." in cp_field:
-                    start, end = cp_field.split("..")
-                    for cp in range(int(start, 16), int(end, 16) + 1):
-                        scext.add(cp, indices)
-                else:
-                    scext.add(int(cp_field, 16), indices)
+            if ".." in cp_field:
+                start, end = cp_field.split("..")
+                for cp in range(int(start, 16), int(end, 16) + 1):
+                    scext.add(cp, indices)
+            else:
+                scext.add(int(cp_field, 16), indices)
 
     # Find Common and Inherited indices
     common_idx = SCRIPT_MAP.get("Common", 0)
@@ -711,25 +803,26 @@ def gen_joining(cache_dir, out_dir):
     table = TwoStageTable("unicode_jt", "uint8_t", JOINING_TYPE_MAP["U"])
 
     # ArabicShaping.txt has format: cp ; name ; joining_type ; joining_group
-    if (cache_dir / "ArabicShaping.txt").exists():
-        with open(cache_dir / "ArabicShaping.txt", "r") as f:
-            for line in f:
-                line = line.split("#")[0].strip()
-                if not line:
-                    continue
-                parts = [p.strip() for p in line.split(";")]
-                if len(parts) >= 3:
-                    cp_str = parts[0]
-                    jt = parts[2]
-                    if ".." in cp_str:
-                        start, end = cp_str.split("..")
-                        for cp in range(int(start, 16), int(end, 16) + 1):
-                            if jt in JOINING_TYPE_MAP:
-                                table.set(cp, JOINING_TYPE_MAP[jt])
-                    else:
-                        cp = int(cp_str, 16)
+    path = cache_dir / "ArabicShaping.txt"
+    require_nonempty_file(path, "Unicode input file")
+    with open(path, "r") as f:
+        for line in f:
+            line = line.split("#")[0].strip()
+            if not line:
+                continue
+            parts = [p.strip() for p in line.split(";")]
+            if len(parts) >= 3:
+                cp_str = parts[0]
+                jt = parts[2]
+                if ".." in cp_str:
+                    start, end = cp_str.split("..")
+                    for cp in range(int(start, 16), int(end, 16) + 1):
                         if jt in JOINING_TYPE_MAP:
                             table.set(cp, JOINING_TYPE_MAP[jt])
+                else:
+                    cp = int(cp_str, 16)
+                    if jt in JOINING_TYPE_MAP:
+                        table.set(cp, JOINING_TYPE_MAP[jt])
 
     table.generate_c(out_dir / "gen_joining.c")
 
@@ -1004,30 +1097,31 @@ def gen_casemap(cache_dir, out_dir):
     full_lower = SparseMapping("unicode_full_lower")
     full_title = SparseMapping("unicode_full_title")
 
-    if (cache_dir / "SpecialCasing.txt").exists():
-        with open(cache_dir / "SpecialCasing.txt", "r") as f:
-            for line in f:
-                line = line.split("#")[0].strip()
-                if not line:
-                    continue
-                parts = [p.strip() for p in line.split(";")]
-                if len(parts) < 4:
-                    continue
-                # Skip conditional mappings (have a 5th field with conditions)
-                if len(parts) >= 5 and parts[4].strip():
-                    continue
+    path = cache_dir / "SpecialCasing.txt"
+    require_nonempty_file(path, "Unicode input file")
+    with open(path, "r") as f:
+        for line in f:
+            line = line.split("#")[0].strip()
+            if not line:
+                continue
+            parts = [p.strip() for p in line.split(";")]
+            if len(parts) < 4:
+                continue
+            # Skip conditional mappings (have a 5th field with conditions)
+            if len(parts) >= 5 and parts[4].strip():
+                continue
 
-                cp = int(parts[0], 16)
-                lower_cps = [int(x, 16) for x in parts[1].split()] if parts[1].strip() else []
-                title_cps = [int(x, 16) for x in parts[2].split()] if parts[2].strip() else []
-                upper_cps = [int(x, 16) for x in parts[3].split()] if parts[3].strip() else []
+            cp = int(parts[0], 16)
+            lower_cps = [int(x, 16) for x in parts[1].split()] if parts[1].strip() else []
+            title_cps = [int(x, 16) for x in parts[2].split()] if parts[2].strip() else []
+            upper_cps = [int(x, 16) for x in parts[3].split()] if parts[3].strip() else []
 
-                if lower_cps:
-                    full_lower.add(cp, lower_cps)
-                if title_cps:
-                    full_title.add(cp, title_cps)
-                if upper_cps:
-                    full_upper.add(cp, upper_cps)
+            if lower_cps:
+                full_lower.add(cp, lower_cps)
+            if title_cps:
+                full_title.add(cp, title_cps)
+            if upper_cps:
+                full_upper.add(cp, upper_cps)
 
     # Case folding from CaseFolding.txt
     simple_fold = SparseMapping("unicode_casefold_simple")
@@ -1083,21 +1177,21 @@ def gen_confusables(cache_dir, out_dir):
     confusables = SparseMapping("unicode_confusable")
 
     path = cache_dir / "confusables.txt"
-    if path.exists():
-        with open(path, "r") as f:
-            for line in f:
-                line = line.split("#")[0].strip()
-                if not line:
-                    continue
-                parts = [p.strip() for p in line.split(";")]
-                if len(parts) < 3:
-                    continue
-                # Format: source ; target ; type
-                src_cps = [int(x, 16) for x in parts[0].split()]
-                tgt_cps = [int(x, 16) for x in parts[1].split()]
+    require_nonempty_file(path, "Unicode input file")
+    with open(path, "r") as f:
+        for line in f:
+            line = line.split("#")[0].strip()
+            if not line:
+                continue
+            parts = [p.strip() for p in line.split(";")]
+            if len(parts) < 3:
+                continue
+            # Format: source ; target ; type
+            src_cps = [int(x, 16) for x in parts[0].split()]
+            tgt_cps = [int(x, 16) for x in parts[1].split()]
 
-                if len(src_cps) == 1:
-                    confusables.add(src_cps[0], tgt_cps)
+            if len(src_cps) == 1:
+                confusables.add(src_cps[0], tgt_cps)
 
     confusables.generate_c(out_dir / "gen_confusables.c")
 
@@ -1134,19 +1228,18 @@ def gen_idna(cache_dir, out_dir):
     mapping = SparseMapping("unicode_idna_map")
 
     path = cache_dir / "IdnaMappingTable.txt"
-    if path.exists():
-        for (start, end), fields in parse_semicolon_file(path):
-            if not fields:
-                continue
-            status = fields[0]
-            if status in idna_status_map:
-                status_table.set_range(start, end, idna_status_map[status])
+    for (start, end), fields in parse_semicolon_file(path):
+        if not fields:
+            continue
+        status = fields[0]
+        if status in idna_status_map:
+            status_table.set_range(start, end, idna_status_map[status])
 
-                # If there's a mapping
-                if len(fields) > 1 and fields[1].strip():
-                    map_cps = [int(x, 16) for x in fields[1].split()]
-                    for cp in range(start, end + 1):
-                        mapping.add(cp, map_cps)
+            # If there's a mapping
+            if len(fields) > 1 and fields[1].strip():
+                map_cps = [int(x, 16) for x in fields[1].split()]
+                for cp in range(start, end + 1):
+                    mapping.add(cp, map_cps)
 
     status_table.generate_c(out_dir / "gen_idna.c")
     mapping.generate_c(out_dir / "gen_idna.c", append=True)
@@ -1164,14 +1257,7 @@ def gen_collation(cache_dir, out_dir):
     contractions = {}  # tuple of cps → list of (p, s, t)
 
     path = cache_dir / "allkeys.txt"
-    if not path.exists():
-        print("  WARNING: allkeys.txt not found, skipping collation")
-        with open(out_dir / "gen_collation.c", "w") as f:
-            f.write("// Auto-generated by gen_tables.py — do not edit\n")
-            f.write('#include "text/unicode/types.h"\n\n')
-            f.write("const uint32_t n00b_unicode_ducet_count = 0;\n")
-            f.write("const uint32_t n00b_unicode_contraction_count = 0;\n")
-        return
+    require_nonempty_file(path, "Unicode input file")
 
     with open(path, "r") as f:
         for line in f:
@@ -1341,6 +1427,8 @@ def main():
     gen_identifiers(cache_dir, out_dir)
     gen_idna(cache_dir, out_dir)
     gen_collation(cache_dir, out_dir)
+
+    validate_generated_outputs(out_dir)
 
     print("\nAll tables generated successfully.")
 

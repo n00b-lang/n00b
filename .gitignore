@@ -60,3 +60,8 @@ docker/sdk/
 # Vendored subproject sources (cloned at build time)
 /subprojects/mir/
 /subprojects/ncc/
+
+AGENTS.md
+.inspector-gadget/
+plans/
+test/data/resharp/

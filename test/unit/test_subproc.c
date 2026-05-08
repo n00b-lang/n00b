@@ -7,6 +7,8 @@
 #include <stdio.h>
 #include <assert.h>
 #include <string.h>
+#include <stdint.h>
+#include <stdlib.h>
 #include <unistd.h>
 #include <sys/wait.h>
 
@@ -2245,11 +2247,776 @@ main(int argc, char *argv[])
 #else /* _WIN32 */
 
 #include <stdio.h>
+#include <assert.h>
+#include <string.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <errno.h>
+
+#include "n00b.h"
+#include "conduit/subproc.h"
+#include "conduit/conduit.h"
+#include "conduit/io.h"
+#include "conduit/xform_linebuf.h"
+#include "core/buffer.h"
+#include "core/runtime.h"
+#include "internal/win32_sockets.h"
+
+static const char *g_test_exe;
+
+static n00b_conduit_t *
+make_conduit(void)
+{
+    n00b_result_t(n00b_conduit_t *) cr = n00b_conduit_new();
+    assert(n00b_result_is_ok(cr));
+    return n00b_result_get(cr);
+}
+
+static n00b_conduit_io_backend_t *
+make_io(n00b_conduit_t *c)
+{
+    n00b_result_t(n00b_conduit_io_backend_t *) ir = n00b_conduit_io_new_default(c);
+    assert(n00b_result_is_ok(ir));
+    return n00b_result_get(ir);
+}
+
+static n00b_array_t(n00b_string_t *)
+cmd_args(const char *script)
+{
+    n00b_array_t(n00b_string_t *) args = n00b_array_new(n00b_string_t *, 2);
+    n00b_array_set(args, 0, n00b_string_from_cstr("/C"));
+    n00b_array_set(args, 1, n00b_string_from_cstr(script));
+    return args;
+}
+
+static bool
+buffer_contains(n00b_buffer_t *buf, const char *needle)
+{
+    if (!buf || !needle) {
+        return false;
+    }
+    size_t n = strlen(needle);
+    if (n == 0) {
+        return true;
+    }
+    for (size_t i = 0; i + n <= buf->byte_len; i++) {
+        if (memcmp(buf->data + i, needle, n) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool
+read_pipe_available(HANDLE pipe, char *buf, size_t cap, DWORD *read_out)
+{
+    DWORD available = 0;
+    DWORD ignored   = 0;
+    if (!PeekNamedPipe(pipe, nullptr, 0, nullptr, &available, &ignored)) {
+        *read_out = 0;
+        DWORD err = GetLastError();
+        return err == ERROR_BROKEN_PIPE
+            || err == ERROR_HANDLE_EOF
+            || err == ERROR_NO_DATA
+            || err == ERROR_PIPE_NOT_CONNECTED;
+    }
+    if (available == 0) {
+        *read_out = 0;
+        return true;
+    }
+    if (available >= cap) {
+        available = (DWORD)cap - 1;
+    }
+    if (!ReadFile(pipe, buf, available, read_out, nullptr)) {
+        *read_out = 0;
+        return false;
+    }
+    buf[*read_out] = '\0';
+    return true;
+}
+
+static int
+windows_write_handle_child(int argc, char **argv)
+{
+    if (argc < 3) {
+        return 2;
+    }
+
+    uintptr_t   raw     = (uintptr_t)strtoull(argv[2], nullptr, 10);
+    HANDLE      handle  = (HANDLE)raw;
+    const char *payload = "unexpected-inherited-handle";
+    DWORD       written = 0;
+    if (!WriteFile(handle, payload, (DWORD)strlen(payload), &written, nullptr)) {
+        return 3;
+    }
+
+    return written == strlen(payload) ? 0 : 4;
+}
+
+static int
+windows_raw_argv_child(int argc, char **argv)
+{
+    if (argc == 2 && strcmp(argv[0], "raw-argv-sentinel") == 0
+        && strcmp(argv[1], "--win-raw-argv-child") == 0) {
+        printf("raw-argv-ok\n");
+        return 0;
+    }
+
+    printf("raw-argv-mismatch argc=%d\n", argc);
+    for (int i = 0; i < argc; i++) {
+        printf("argv[%d]=%s\n", i, argv[i]);
+    }
+    return 5;
+}
+
+static bool
+inbox_contains(n00b_conduit_inbox_t(n00b_buffer_t *) *inbox, const char *needle)
+{
+    n00b_conduit_message_t(n00b_buffer_t *) *msg;
+    while ((msg = n00b_conduit_inbox_pop_msg(n00b_buffer_t *, inbox)) != nullptr) {
+        if (buffer_contains(msg->payload, needle)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void
+windows_hook_fn(void *param)
+{
+    int *count = param;
+    if (count) {
+        *count += 1;
+    }
+}
+
+static void
+test_windows_init_defaults(void)
+{
+    n00b_conduit_t *c = make_conduit();
+    n00b_subproc_t sp = {};
+    n00b_subproc_init(&sp,
+        .cmd     = n00b_string_from_cstr("cmd.exe"),
+        .conduit = c);
+
+    assert(!n00b_subproc_is_spawned(&sp));
+    assert(!n00b_subproc_exited(&sp));
+    assert((sp.flags & N00B_SUBPROC_MERGE_OUTPUT) != 0);
+
+    n00b_conduit_destroy(c);
+    printf("  [PASS] windows init defaults\n");
+}
+
+static void
+test_windows_raw_argv_uses_cmd_executable(void)
+{
+    n00b_conduit_t *c = make_conduit();
+    n00b_conduit_io_backend_t *io = make_io(c);
+    n00b_array_t(n00b_string_t *) args = n00b_array_new(n00b_string_t *, 2);
+    n00b_array_set(args, 0, n00b_string_from_cstr("raw-argv-sentinel"));
+    n00b_array_set(args, 1, n00b_string_from_cstr("--win-raw-argv-child"));
+
+    n00b_subproc_t sp = {};
+    n00b_subproc_init(&sp,
+        .cmd            = n00b_string_from_cstr(g_test_exe),
+        .conduit        = c,
+        .io             = io,
+        .args           = &args,
+        .raw_argv       = true,
+        .capture_stdout = true,
+        .merge          = false);
+
+    n00b_result_t(bool) r = n00b_subproc_run(&sp);
+    assert(n00b_result_is_ok(r));
+    assert(buffer_contains(n00b_subproc_stdout(&sp), "raw-argv-ok"));
+
+    n00b_result_t(int) ec = n00b_subproc_exit_code(&sp);
+    assert(n00b_result_is_ok(ec));
+    assert(n00b_result_get(ec) == 0);
+
+    n00b_conduit_io_destroy(io);
+    n00b_conduit_destroy(c);
+    printf("  [PASS] windows raw argv uses cmd executable\n");
+}
+
+static void
+test_windows_does_not_inherit_unlisted_handles(void)
+{
+    HANDLE read_pipe  = nullptr;
+    HANDLE write_pipe = nullptr;
+    SECURITY_ATTRIBUTES sa = {
+        .nLength              = sizeof(sa),
+        .lpSecurityDescriptor = nullptr,
+        .bInheritHandle       = TRUE,
+    };
+    assert(CreatePipe(&read_pipe, &write_pipe, &sa, 0));
+    assert(SetHandleInformation(read_pipe, HANDLE_FLAG_INHERIT, 0));
+
+    char handle_arg[64];
+    snprintf(handle_arg, sizeof(handle_arg), "%llu",
+             (unsigned long long)(uintptr_t)write_pipe);
+
+    n00b_conduit_t *c = make_conduit();
+    n00b_conduit_io_backend_t *io = make_io(c);
+    n00b_array_t(n00b_string_t *) args = n00b_array_new(n00b_string_t *, 2);
+    n00b_array_set(args, 0, n00b_string_from_cstr("--win-write-handle-child"));
+    n00b_array_set(args, 1, n00b_string_from_cstr(handle_arg));
+
+    n00b_subproc_t sp = {};
+    n00b_subproc_init(&sp,
+        .cmd            = n00b_string_from_cstr(g_test_exe),
+        .conduit        = c,
+        .io             = io,
+        .args           = &args,
+        .capture_stdout = true);
+
+    n00b_result_t(bool) r = n00b_subproc_run(&sp);
+    assert(n00b_result_is_ok(r));
+    CloseHandle(write_pipe);
+
+    char  buf[256];
+    DWORD nread = 0;
+    assert(read_pipe_available(read_pipe, buf, sizeof(buf), &nread));
+    assert(nread == 0);
+
+    n00b_result_t(int) ec = n00b_subproc_exit_code(&sp);
+    assert(n00b_result_is_ok(ec));
+    assert(n00b_result_get(ec) != 0);
+
+    CloseHandle(read_pipe);
+    n00b_conduit_io_destroy(io);
+    n00b_conduit_destroy(c);
+    printf("  [PASS] windows blocks unrelated inheritable handles\n");
+}
+
+static void
+test_windows_custom_env_does_not_search_parent_path(void)
+{
+    n00b_conduit_t *c = make_conduit();
+    n00b_conduit_io_backend_t *io = make_io(c);
+    n00b_array_t(n00b_string_t *) args = cmd_args("echo custom-env-ran");
+    n00b_array_t(n00b_string_t *) env = n00b_array_new(n00b_string_t *, 3);
+    n00b_array_set(env, 0, n00b_string_from_cstr("PATH=C:\\not-a-real-path"));
+    n00b_array_set(env, 1, n00b_string_from_cstr("SystemRoot=C:\\Windows"));
+    n00b_array_set(env, 2, n00b_string_from_cstr("ComSpec=C:\\Windows\\System32\\cmd.exe"));
+
+    n00b_subproc_t sp = {};
+    n00b_subproc_init(&sp,
+        .cmd            = n00b_string_from_cstr("cmd.exe"),
+        .conduit        = c,
+        .io             = io,
+        .args           = &args,
+        .env            = &env,
+        .capture_stdout = true);
+
+    n00b_result_t(bool) r = n00b_subproc_run(&sp);
+    assert(n00b_result_is_err(r));
+    assert(n00b_subproc_errored(&sp));
+
+    n00b_conduit_io_destroy(io);
+    n00b_conduit_destroy(c);
+    printf("  [PASS] windows custom env avoids parent PATH search\n");
+}
+
+static void
+test_windows_default_stdout_inherits_parent_handle(void)
+{
+    HANDLE old_stdout = GetStdHandle(STD_OUTPUT_HANDLE);
+    HANDLE read_pipe  = nullptr;
+    HANDLE write_pipe = nullptr;
+    SECURITY_ATTRIBUTES sa = {
+        .nLength              = sizeof(sa),
+        .lpSecurityDescriptor = nullptr,
+        .bInheritHandle       = TRUE,
+    };
+    assert(CreatePipe(&read_pipe, &write_pipe, &sa, 0));
+    assert(SetHandleInformation(read_pipe, HANDLE_FLAG_INHERIT, 0));
+    assert(SetStdHandle(STD_OUTPUT_HANDLE, write_pipe));
+
+    n00b_conduit_t *c = make_conduit();
+    n00b_conduit_io_backend_t *io = make_io(c);
+    n00b_array_t(n00b_string_t *) args = cmd_args("echo default-output-visible");
+
+    n00b_subproc_t sp = {};
+    n00b_subproc_init(&sp,
+        .cmd     = n00b_string_from_cstr("cmd.exe"),
+        .conduit = c,
+        .io      = io,
+        .args    = &args);
+
+    n00b_result_t(bool) r = n00b_subproc_run(&sp);
+    assert(SetStdHandle(STD_OUTPUT_HANDLE, old_stdout));
+    CloseHandle(write_pipe);
+    assert(n00b_result_is_ok(r));
+
+    char  buf[256];
+    DWORD nread = 0;
+    assert(read_pipe_available(read_pipe, buf, sizeof(buf), &nread));
+    assert(nread > 0);
+    assert(strstr(buf, "default-output-visible") != nullptr);
+
+    CloseHandle(read_pipe);
+    n00b_conduit_io_destroy(io);
+    n00b_conduit_destroy(c);
+    printf("  [PASS] windows default stdout inherits parent handle\n");
+}
+
+static void
+test_windows_invalid_cwd_reports_setup_error(void)
+{
+    n00b_conduit_t *c = make_conduit();
+    n00b_conduit_io_backend_t *io = make_io(c);
+    n00b_array_t(n00b_string_t *) args = cmd_args("exit /b 0");
+
+    n00b_subproc_t sp = {};
+    n00b_subproc_init(&sp,
+        .cmd     = n00b_string_from_cstr("cmd.exe"),
+        .conduit = c,
+        .io      = io,
+        .args    = &args,
+        .cwd     = n00b_string_from_cstr("Z:\\n00b-test-missing-cwd"));
+
+    n00b_result_t(bool) r = n00b_subproc_spawn(&sp);
+    assert(n00b_result_is_err(r));
+    assert(n00b_result_get_err(r) == ENOTDIR);
+    assert(n00b_subproc_errored(&sp));
+
+    n00b_subproc_close(&sp);
+    n00b_conduit_io_destroy(io);
+    n00b_conduit_destroy(c);
+    printf("  [PASS] windows invalid cwd reports setup error\n");
+}
+
+static void
+test_windows_run_capture(void)
+{
+    n00b_conduit_t *c = make_conduit();
+    n00b_conduit_io_backend_t *io = make_io(c);
+    n00b_array_t(n00b_string_t *) args = cmd_args("echo hello");
+
+    n00b_subproc_t sp = {};
+    n00b_subproc_init(&sp,
+        .cmd            = n00b_string_from_cstr("cmd.exe"),
+        .conduit        = c,
+        .io             = io,
+        .args           = &args,
+        .capture_stdout = true);
+
+    n00b_result_t(bool) r = n00b_subproc_run(&sp);
+    assert(n00b_result_is_ok(r));
+    assert(buffer_contains(n00b_subproc_stdout(&sp), "hello"));
+
+    n00b_result_t(int) ec = n00b_subproc_exit_code(&sp);
+    assert(n00b_result_is_ok(ec));
+    assert(n00b_result_get(ec) == 0);
+
+    n00b_conduit_io_destroy(io);
+    n00b_conduit_destroy(c);
+    printf("  [PASS] windows run capture\n");
+}
+
+static void
+test_windows_topic_subscription(void)
+{
+    n00b_conduit_t *c = make_conduit();
+    n00b_conduit_io_backend_t *io = make_io(c);
+    n00b_array_t(n00b_string_t *) args = cmd_args("echo topic-ok");
+
+    n00b_subproc_buf_inbox_t *inbox = n00b_alloc(n00b_subproc_buf_inbox_t);
+    n00b_conduit_inbox_init(n00b_buffer_t *, inbox, c,
+                            N00B_CONDUIT_BP_UNBOUNDED, 0);
+    n00b_array_t(n00b_subproc_buf_inbox_t *) subs =
+        n00b_array_new(n00b_subproc_buf_inbox_t *, 1);
+    n00b_array_set(subs, 0, inbox);
+
+    n00b_subproc_t sp = {};
+    n00b_subproc_init(&sp,
+        .cmd            = n00b_string_from_cstr("cmd.exe"),
+        .conduit        = c,
+        .io             = io,
+        .args           = &args,
+        .capture_stdout = true,
+        .stdout_subs    = &subs);
+
+    assert(n00b_subproc_stdout_topic(&sp) == nullptr);
+
+    n00b_result_t(bool) r = n00b_subproc_spawn(&sp);
+    assert(n00b_result_is_ok(r));
+    assert(n00b_subproc_stdout_topic(&sp) != nullptr);
+
+    r = n00b_subproc_wait(&sp);
+    assert(n00b_result_is_ok(r));
+    assert(buffer_contains(n00b_subproc_stdout(&sp), "topic-ok"));
+    assert(inbox_contains(inbox, "topic-ok"));
+
+    n00b_subproc_close(&sp);
+    n00b_conduit_io_destroy(io);
+    n00b_conduit_destroy(c);
+    printf("  [PASS] windows topic subscription\n");
+}
+
+static void
+test_windows_linebuf_xform(void)
+{
+    n00b_conduit_t *c = make_conduit();
+    n00b_conduit_io_backend_t *io = make_io(c);
+    n00b_array_t(n00b_string_t *) args = cmd_args("echo alpha & echo beta");
+
+    n00b_array_t(void *) xforms = n00b_array_new(void *, 1);
+    n00b_array_set(xforms, 0,
+                   (void *)&n00b_conduit_linebuf_default_spec);
+
+    n00b_subproc_t sp = {};
+    n00b_subproc_init(&sp,
+        .cmd            = n00b_string_from_cstr("cmd.exe"),
+        .conduit        = c,
+        .io             = io,
+        .args           = &args,
+        .capture_stdout = true,
+        .stdout_xforms  = &xforms);
+
+    n00b_result_t(bool) r = n00b_subproc_run(&sp);
+    assert(n00b_result_is_ok(r));
+    assert(buffer_contains(n00b_subproc_stdout(&sp), "alpha"));
+    assert(buffer_contains(n00b_subproc_stdout(&sp), "beta"));
+
+    n00b_conduit_io_destroy(io);
+    n00b_conduit_destroy(c);
+    printf("  [PASS] windows linebuf xform\n");
+}
+
+static void
+test_windows_proxy_stdout(void)
+{
+    n00b_conduit_t *c = make_conduit();
+    n00b_conduit_io_backend_t *io = make_io(c);
+    n00b_array_t(n00b_string_t *) args = cmd_args("echo proxy-ok");
+
+    n00b_subproc_t sp = {};
+    n00b_subproc_init(&sp,
+        .cmd          = n00b_string_from_cstr("cmd.exe"),
+        .conduit      = c,
+        .io           = io,
+        .args         = &args,
+        .proxy_stdout = true);
+
+    n00b_result_t(bool) r = n00b_subproc_run(&sp);
+    assert(n00b_result_is_ok(r));
+    n00b_result_t(int) ec = n00b_subproc_exit_code(&sp);
+    assert(n00b_result_is_ok(ec));
+    assert(n00b_result_get(ec) == 0);
+
+    n00b_conduit_io_destroy(io);
+    n00b_conduit_destroy(c);
+    printf("  [PASS] windows proxy stdout\n");
+}
+
+static void
+test_windows_stdout_eof_done(void)
+{
+    n00b_conduit_t *c = make_conduit();
+    n00b_conduit_io_backend_t *io = make_io(c);
+    n00b_array_t(n00b_string_t *) args = cmd_args("echo eof-ok");
+
+    n00b_subproc_t sp = {};
+    n00b_subproc_init(&sp,
+        .cmd            = n00b_string_from_cstr("cmd.exe"),
+        .conduit        = c,
+        .io             = io,
+        .args           = &args,
+        .capture_stdout = true,
+        .done_condition = N00B_SUBPROC_DONE_STDOUT_EOF,
+        .timeout_policy = N00B_SUBPROC_TIMEOUT_DETACH);
+
+    n00b_result_t(bool) r = n00b_subproc_run(&sp);
+    assert(n00b_result_is_ok(r));
+    assert(buffer_contains(n00b_subproc_stdout(&sp), "eof-ok"));
+
+    n00b_conduit_io_destroy(io);
+    n00b_conduit_destroy(c);
+    printf("  [PASS] windows stdout EOF done\n");
+}
+
+static void
+test_windows_stdout_eof_before_exit(void)
+{
+    n00b_conduit_t *c = make_conduit();
+    n00b_conduit_io_backend_t *io = make_io(c);
+    n00b_array_t(n00b_string_t *) args = n00b_array_new(n00b_string_t *, 1);
+    n00b_array_set(args, 0, n00b_string_from_cstr("--win-close-stdout-child"));
+
+    n00b_subproc_t sp = {};
+    n00b_subproc_init(&sp,
+        .cmd            = n00b_string_from_cstr(g_test_exe),
+        .conduit        = c,
+        .io             = io,
+        .args           = &args,
+        .capture_stdout = true,
+        .done_condition = N00B_SUBPROC_DONE_STDOUT_EOF);
+
+    n00b_result_t(bool) r = n00b_subproc_spawn(&sp);
+    if (n00b_result_is_err(r)) {
+        printf("  [SKIP] windows stdout EOF before exit (spawn err=%d)\n",
+               n00b_result_get_err(r));
+        n00b_conduit_io_destroy(io);
+        n00b_conduit_destroy(c);
+        return;
+    }
+
+    n00b_duration_t timeout = {.tv_sec = 0, .tv_nsec = 750000000};
+    r = n00b_subproc_wait(&sp, .timeout = &timeout);
+    assert(n00b_result_is_ok(r));
+    assert(n00b_result_get(r));
+    assert(buffer_contains(n00b_subproc_stdout(&sp), "eof-still-running"));
+
+    if (!n00b_subproc_exited(&sp)) {
+        n00b_subproc_kill(&sp);
+        sp.done_condition = N00B_SUBPROC_DONE_PROC_EXIT;
+        sp.done_flags     = 0;
+        n00b_duration_t kill_timeout = {.tv_sec = 2, .tv_nsec = 0};
+        n00b_subproc_wait(&sp, .timeout = &kill_timeout);
+    }
+
+    n00b_subproc_close(&sp);
+    n00b_conduit_io_destroy(io);
+    n00b_conduit_destroy(c);
+    printf("  [PASS] windows stdout EOF before exit\n");
+}
+
+static void
+test_windows_stdin_xform(void)
+{
+    n00b_conduit_t *c = make_conduit();
+    n00b_conduit_io_backend_t *io = make_io(c);
+    n00b_array_t(n00b_string_t *) args = cmd_args("more");
+    n00b_buffer_t *inject = n00b_buffer_from_cstr("stdin-xform\n");
+
+    n00b_array_t(void *) xforms = n00b_array_new(void *, 1);
+    n00b_array_set(xforms, 0,
+                   (void *)&n00b_conduit_linebuf_default_spec);
+
+    n00b_subproc_t sp = {};
+    n00b_subproc_init(&sp,
+        .cmd            = n00b_string_from_cstr("cmd.exe"),
+        .conduit        = c,
+        .io             = io,
+        .args           = &args,
+        .capture_stdout = true,
+        .capture_stdin  = true,
+        .stdin_inject   = inject,
+        .stdin_xforms   = &xforms);
+
+    n00b_result_t(bool) r = n00b_subproc_run(&sp);
+    assert(n00b_result_is_ok(r));
+    assert(buffer_contains(n00b_subproc_stdin_capture(&sp), "stdin-xform"));
+    assert(buffer_contains(n00b_subproc_stdout(&sp), "stdin-xform"));
+
+    n00b_conduit_io_destroy(io);
+    n00b_conduit_destroy(c);
+    printf("  [PASS] windows stdin xform\n");
+}
+
+static void
+test_windows_proxy_stdin_pipe(void)
+{
+    HANDLE old_stdin = GetStdHandle(STD_INPUT_HANDLE);
+    HANDLE parent_read = nullptr;
+    HANDLE parent_write = nullptr;
+    SECURITY_ATTRIBUTES sa = {
+        .nLength              = sizeof(sa),
+        .lpSecurityDescriptor = nullptr,
+        .bInheritHandle       = TRUE,
+    };
+    assert(CreatePipe(&parent_read, &parent_write, &sa, 0));
+
+    const char *input = "proxy-stdin\n";
+    DWORD written = 0;
+    assert(WriteFile(parent_write, input, (DWORD)strlen(input),
+                     &written, nullptr));
+    CloseHandle(parent_write);
+    assert(SetStdHandle(STD_INPUT_HANDLE, parent_read));
+
+    n00b_conduit_t *c = make_conduit();
+    n00b_conduit_io_backend_t *io = make_io(c);
+    n00b_array_t(n00b_string_t *) args = cmd_args("more");
+
+    n00b_subproc_t sp = {};
+    n00b_subproc_init(&sp,
+        .cmd            = n00b_string_from_cstr("cmd.exe"),
+        .conduit        = c,
+        .io             = io,
+        .args           = &args,
+        .capture_stdout = true,
+        .capture_stdin  = true,
+        .proxy_stdin    = true,
+        .close_stdin    = true);
+
+    n00b_result_t(bool) r = n00b_subproc_run(&sp);
+    assert(n00b_result_is_ok(r));
+    assert(buffer_contains(n00b_subproc_stdin_capture(&sp), "proxy-stdin"));
+    assert(buffer_contains(n00b_subproc_stdout(&sp), "proxy-stdin"));
+
+    n00b_conduit_io_destroy(io);
+    n00b_conduit_destroy(c);
+    assert(SetStdHandle(STD_INPUT_HANDLE, old_stdin));
+    CloseHandle(parent_read);
+    printf("  [PASS] windows proxy stdin pipe\n");
+}
+
+static void
+test_windows_pre_exec_hook(void)
+{
+    n00b_conduit_t *c = make_conduit();
+    n00b_conduit_io_backend_t *io = make_io(c);
+    n00b_array_t(n00b_string_t *) args = cmd_args("exit /b 0");
+
+    int hook_count = 0;
+    n00b_subproc_t sp = {};
+    n00b_subproc_init(&sp,
+        .cmd           = n00b_string_from_cstr("cmd.exe"),
+        .conduit       = c,
+        .io            = io,
+        .args          = &args,
+        .pre_exec_hook = windows_hook_fn,
+        .hook_param    = &hook_count);
+
+    n00b_result_t(bool) r = n00b_subproc_run(&sp);
+    assert(n00b_result_is_ok(r));
+    assert(hook_count == 1);
+
+    n00b_conduit_io_destroy(io);
+    n00b_conduit_destroy(c);
+    printf("  [PASS] windows pre exec hook\n");
+}
+
+static void
+test_windows_pty_capture(void)
+{
+    n00b_conduit_t *c = make_conduit();
+    n00b_conduit_io_backend_t *io = make_io(c);
+    n00b_array_t(n00b_string_t *) args = cmd_args("echo pty-output");
+
+    n00b_subproc_t sp = {};
+    n00b_subproc_init(&sp,
+        .cmd            = n00b_string_from_cstr("cmd.exe"),
+        .conduit        = c,
+        .io             = io,
+        .args           = &args,
+        .pty            = true,
+        .capture_stdout = true,
+        .capture_stderr = true);
+
+    n00b_result_t(bool) r = n00b_subproc_run(&sp);
+    assert(n00b_result_is_ok(r));
+    assert(n00b_subproc_exited(&sp));
+    assert(buffer_contains(n00b_subproc_stdout(&sp), "pty-output"));
+    assert(buffer_contains(n00b_subproc_stderr(&sp), "pty-output"));
+
+    n00b_conduit_io_destroy(io);
+    n00b_conduit_destroy(c);
+    printf("  [PASS] windows pty capture\n");
+}
+
+static void
+test_windows_nonzero_exit(void)
+{
+    n00b_conduit_t *c = make_conduit();
+    n00b_conduit_io_backend_t *io = make_io(c);
+    n00b_array_t(n00b_string_t *) args = cmd_args("exit /b 7");
+
+    n00b_subproc_t sp = {};
+    n00b_subproc_init(&sp,
+        .cmd     = n00b_string_from_cstr("cmd.exe"),
+        .conduit = c,
+        .io      = io,
+        .args    = &args);
+
+    n00b_result_t(bool) r = n00b_subproc_run(&sp);
+    assert(n00b_result_is_ok(r));
+    n00b_result_t(int) ec = n00b_subproc_exit_code(&sp);
+    assert(n00b_result_is_ok(ec));
+    assert(n00b_result_get(ec) == 7);
+
+    n00b_conduit_io_destroy(io);
+    n00b_conduit_destroy(c);
+    printf("  [PASS] windows nonzero exit\n");
+}
+
+static void
+test_windows_bad_command(void)
+{
+    n00b_conduit_t *c = make_conduit();
+    n00b_conduit_io_backend_t *io = make_io(c);
+
+    n00b_subproc_t sp = {};
+    n00b_subproc_init(&sp,
+        .cmd     = n00b_string_from_cstr("definitely-not-a-real-command.exe"),
+        .conduit = c,
+        .io      = io);
+
+    n00b_result_t(bool) r = n00b_subproc_spawn(&sp);
+    assert(n00b_result_is_err(r));
+    assert(n00b_subproc_errored(&sp));
+
+    n00b_conduit_io_destroy(io);
+    n00b_conduit_destroy(c);
+    printf("  [PASS] windows bad command\n");
+}
+
+#define RUN_WINDOWS_TEST(fn)                 \
+    do {                                     \
+        printf("  [RUN] %s\n", #fn);         \
+        fflush(stdout);                      \
+        fn();                                \
+        fflush(stdout);                      \
+    } while (0)
 
 int
-main(void)
+main(int argc, char *argv[])
 {
-    printf("test_subproc: skipped (Windows not supported)\n");
+    if (argc > 1 && strcmp(argv[1], "--win-write-handle-child") == 0) {
+        return windows_write_handle_child(argc, argv);
+    }
+    if (argc > 1 && strcmp(argv[1], "--win-raw-argv-child") == 0) {
+        return windows_raw_argv_child(argc, argv);
+    }
+    if (argc > 1 && strcmp(argv[1], "--win-close-stdout-child") == 0) {
+        printf("eof-still-running\n");
+        fflush(stdout);
+        CloseHandle(GetStdHandle(STD_OUTPUT_HANDLE));
+        Sleep(2000);
+        return 0;
+    }
+
+    g_test_exe = argv[0];
+
+    n00b_runtime_t rt;
+    n00b_init(&rt, argc, argv);
+
+    printf("test_subproc:\n");
+    fflush(stdout);
+
+    RUN_WINDOWS_TEST(test_windows_init_defaults);
+    RUN_WINDOWS_TEST(test_windows_raw_argv_uses_cmd_executable);
+    RUN_WINDOWS_TEST(test_windows_does_not_inherit_unlisted_handles);
+    RUN_WINDOWS_TEST(test_windows_custom_env_does_not_search_parent_path);
+    RUN_WINDOWS_TEST(test_windows_default_stdout_inherits_parent_handle);
+    RUN_WINDOWS_TEST(test_windows_invalid_cwd_reports_setup_error);
+    RUN_WINDOWS_TEST(test_windows_run_capture);
+    RUN_WINDOWS_TEST(test_windows_topic_subscription);
+    RUN_WINDOWS_TEST(test_windows_linebuf_xform);
+    RUN_WINDOWS_TEST(test_windows_proxy_stdout);
+    RUN_WINDOWS_TEST(test_windows_stdout_eof_done);
+    RUN_WINDOWS_TEST(test_windows_stdout_eof_before_exit);
+    RUN_WINDOWS_TEST(test_windows_stdin_xform);
+    RUN_WINDOWS_TEST(test_windows_proxy_stdin_pipe);
+    RUN_WINDOWS_TEST(test_windows_pre_exec_hook);
+    RUN_WINDOWS_TEST(test_windows_pty_capture);
+    RUN_WINDOWS_TEST(test_windows_nonzero_exit);
+    RUN_WINDOWS_TEST(test_windows_bad_command);
+
+    printf("All Windows subproc tests passed.\n");
+    n00b_shutdown();
     return 0;
 }
 

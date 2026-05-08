@@ -11,23 +11,30 @@
 
 #ifdef _WIN32
 
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
 #ifndef _WIN32_WINNT
 #define _WIN32_WINNT 0x0602
 #endif
 
-#include <winsock2.h>
-#include <ws2tcpip.h>
-#include <windows.h>
+// Directory watches need path recovery from CRT file descriptors; keep them
+// independent from process watches so each backend hook can be enabled safely.
+#define N00B_WSA_ENABLE_PROC_WATCHES  1
+#define N00B_WSA_ENABLE_VNODE_WATCHES 1
+
+#include "internal/win32_sockets.h"
 
 #include "conduit/io.h"
+#include "conduit/signal.h"
 #include "conduit/timer.h"
 #include "conduit/user_event.h"
+#include "core/runtime.h"
 #include "core/stw.h"
 
+#if N00B_WSA_ENABLE_VNODE_WATCHES
 #include <io.h>
+#include <wchar.h>
+#include <wctype.h>
+#endif
+#include <signal.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -43,30 +50,50 @@ typedef struct wsa_timer {
     struct wsa_timer     *next;
 } wsa_timer_t;
 
+typedef struct wsa_ctx wsa_ctx_t;
+
+// ============================================================================
+// Signal monitoring
+// ============================================================================
+
+typedef struct wsa_signal {
+    n00b_conduit_signal_watch_t *watch;
+    wsa_ctx_t                   *ctx;
+    struct wsa_signal           *next;
+    struct wsa_signal           *global_next;
+} wsa_signal_t;
+
 // ============================================================================
 // Process monitoring
 // ============================================================================
 
+#if N00B_WSA_ENABLE_PROC_WATCHES
 typedef struct wsa_proc {
     n00b_conduit_proc_watch_t *watch;
+    wsa_ctx_t                 *ctx;
     HANDLE                     proc_handle;
     HANDLE                     wait_handle;
     volatile LONG              fired;
     struct wsa_proc           *next;
 } wsa_proc_t;
+#endif
 
 // ============================================================================
 // Vnode (directory change) monitoring
 // ============================================================================
 
+#if N00B_WSA_ENABLE_VNODE_WATCHES
 typedef struct wsa_vnode {
     n00b_conduit_vnode_watch_t *watch;
     HANDLE                      dir_handle;
     OVERLAPPED                  overlapped;
     uint8_t                     buf[4096];
+    wchar_t                     file_name[MAX_PATH];
+    bool                        filter_file_name;
     volatile LONG               fired;
     struct wsa_vnode           *next;
 } wsa_vnode_t;
+#endif
 
 // ============================================================================
 // User events
@@ -84,19 +111,30 @@ typedef struct wsa_user_event {
 
 #define WSA_INITIAL_CAPACITY 64
 
-typedef struct {
+struct wsa_ctx {
     n00b_conduit_t   *conduit;
     WSAPOLLFD        *pollfds;
     n00b_conduit_io_target_t **targets;
     int               nfds;
     int               cap;
     wsa_timer_t      *timers;
+    wsa_signal_t     *signals;
+#if N00B_WSA_ENABLE_PROC_WATCHES
     wsa_proc_t       *procs;
+#endif
+#if N00B_WSA_ENABLE_VNODE_WATCHES
     wsa_vnode_t      *vnodes;
+#endif
     wsa_user_event_t *user_events;
     SOCKET            wakeup_rd;
     SOCKET            wakeup_wr;
-} wsa_ctx_t;
+};
+
+static n00b_allocator_t *
+wsa_backend_allocator(void)
+{
+    return (n00b_allocator_t *)&n00b_get_runtime()->system_pool;
+}
 
 // ============================================================================
 // Monotonic time helper
@@ -194,6 +232,138 @@ wsa_drain_wakeup(wsa_ctx_t *ctx)
 }
 
 // ============================================================================
+// Signal support
+// ============================================================================
+
+#define WSA_SIGNAL_MAX 64
+
+static volatile sig_atomic_t g_wsa_signal_pending[WSA_SIGNAL_MAX];
+static wsa_signal_t         *g_wsa_signal_watches;
+
+static bool
+wsa_signal_supported(int signum)
+{
+    switch (signum) {
+    case SIGABRT:
+    case SIGFPE:
+    case SIGILL:
+    case SIGINT:
+    case SIGSEGV:
+    case SIGTERM:
+#ifdef SIGBREAK
+    case SIGBREAK:
+#endif
+        return true;
+    default:
+        return false;
+    }
+}
+
+static void
+wsa_signal_handler(int signum)
+{
+    if (signum > 0 && signum < WSA_SIGNAL_MAX) {
+        g_wsa_signal_pending[signum] = 1;
+        for (wsa_signal_t *ws = g_wsa_signal_watches; ws; ws = ws->global_next) {
+            if (ws->watch && ws->watch->signum == signum && ws->ctx) {
+                wsa_wakeup(ws->ctx);
+            }
+        }
+    }
+    signal(signum, wsa_signal_handler);
+}
+
+static bool
+wsa_signal_add(void *vctx, n00b_conduit_signal_watch_t *watch)
+{
+    wsa_ctx_t *ctx = vctx;
+    if (!ctx || !watch || !wsa_signal_supported(watch->signum)) {
+        return false;
+    }
+
+    n00b_allocator_t *sp = wsa_backend_allocator();
+    wsa_signal_t     *ws = n00b_alloc_with_opts(wsa_signal_t,
+                           &(n00b_alloc_opts_t){.allocator = sp});
+    if (!ws) {
+        return false;
+    }
+
+    if (signal(watch->signum, wsa_signal_handler) == SIG_ERR) {
+        return false;
+    }
+
+    ws->watch       = watch;
+    ws->ctx         = ctx;
+    ws->next        = ctx->signals;
+    ws->global_next = g_wsa_signal_watches;
+    ctx->signals    = ws;
+    g_wsa_signal_watches = ws;
+    return true;
+}
+
+static void
+wsa_restore_signal_if_unused(int signum)
+{
+    for (wsa_signal_t *ws = g_wsa_signal_watches; ws; ws = ws->global_next) {
+        if (ws->watch && ws->watch->signum == signum) {
+            return;
+        }
+    }
+    signal(signum, SIG_DFL);
+}
+
+static void
+wsa_signal_remove(void *vctx, n00b_conduit_signal_watch_t *watch)
+{
+    wsa_ctx_t *ctx = vctx;
+    if (!ctx || !watch) {
+        return;
+    }
+
+    wsa_signal_t **pp = &ctx->signals;
+    while (*pp) {
+        if ((*pp)->watch == watch) {
+            wsa_signal_t *ws = *pp;
+            *pp = ws->next;
+
+            wsa_signal_t **gpp = &g_wsa_signal_watches;
+            while (*gpp) {
+                if (*gpp == ws) {
+                    *gpp = ws->global_next;
+                    break;
+                }
+                gpp = &(*gpp)->global_next;
+            }
+
+            wsa_restore_signal_if_unused(watch->signum);
+            return;
+        }
+        pp = &(*pp)->next;
+    }
+}
+
+static void
+wsa_process_signals(wsa_ctx_t *ctx)
+{
+    if (!ctx) {
+        return;
+    }
+
+    for (int signum = 1; signum < WSA_SIGNAL_MAX; signum++) {
+        if (!g_wsa_signal_pending[signum]) {
+            continue;
+        }
+        g_wsa_signal_pending[signum] = 0;
+
+        for (wsa_signal_t *ws = ctx->signals; ws; ws = ws->next) {
+            if (ws->watch && ws->watch->signum == signum) {
+                n00b_conduit_signal_fire(ws->watch);
+            }
+        }
+    }
+}
+
+// ============================================================================
 // FD set helpers
 // ============================================================================
 
@@ -288,7 +458,9 @@ n00b_wsa_ensure_init(void)
 static void *
 wsa_init(n00b_conduit_t *c)
 {
-    wsa_ctx_t *ctx = n00b_alloc(wsa_ctx_t);
+    n00b_allocator_t *sp  = wsa_backend_allocator();
+    wsa_ctx_t        *ctx = n00b_alloc_with_opts(wsa_ctx_t,
+                            &(n00b_alloc_opts_t){.allocator = sp});
     if (!ctx) return nullptr;
 
     ctx->conduit     = c;
@@ -297,8 +469,13 @@ wsa_init(n00b_conduit_t *c)
     ctx->nfds        = 0;
     ctx->cap         = 0;
     ctx->timers      = nullptr;
+    ctx->signals     = nullptr;
+#if N00B_WSA_ENABLE_PROC_WATCHES
     ctx->procs       = nullptr;
+#endif
+#if N00B_WSA_ENABLE_VNODE_WATCHES
     ctx->vnodes      = nullptr;
+#endif
     ctx->user_events = nullptr;
     ctx->wakeup_rd   = INVALID_SOCKET;
     ctx->wakeup_wr   = INVALID_SOCKET;
@@ -329,6 +506,11 @@ wsa_cleanup(void *vctx)
     if (ctx->wakeup_rd != INVALID_SOCKET) closesocket(ctx->wakeup_rd);
     if (ctx->wakeup_wr != INVALID_SOCKET) closesocket(ctx->wakeup_wr);
 
+    while (ctx->signals) {
+        wsa_signal_remove(ctx, ctx->signals->watch);
+    }
+
+#if N00B_WSA_ENABLE_PROC_WATCHES
     // Clean up process watches
     for (wsa_proc_t *pp = ctx->procs; pp; pp = pp->next) {
         if (pp->wait_handle) {
@@ -338,7 +520,9 @@ wsa_cleanup(void *vctx)
             CloseHandle(pp->proc_handle);
         }
     }
+#endif
 
+#if N00B_WSA_ENABLE_VNODE_WATCHES
     // Clean up vnode watches
     for (wsa_vnode_t *vn = ctx->vnodes; vn; vn = vn->next) {
         if (vn->dir_handle != INVALID_HANDLE_VALUE) {
@@ -346,6 +530,7 @@ wsa_cleanup(void *vctx)
             CloseHandle(vn->dir_handle);
         }
     }
+#endif
 
     // Clean up user events
     for (wsa_user_event_t *ue = ctx->user_events; ue; ue = ue->next) {
@@ -433,7 +618,9 @@ wsa_timer_add(void *vctx, n00b_conduit_timer_t *timer)
     wsa_ctx_t *ctx = vctx;
     if (!ctx || !timer) return false;
 
-    wsa_timer_t *wt = n00b_alloc(wsa_timer_t);
+    n00b_allocator_t *sp = wsa_backend_allocator();
+    wsa_timer_t      *wt = n00b_alloc_with_opts(wsa_timer_t,
+                           &(n00b_alloc_opts_t){.allocator = sp});
     if (!wt) return false;
 
     wt->timer     = timer;
@@ -504,12 +691,16 @@ wsa_process_timers(wsa_ctx_t *ctx, int timeout_ms)
 // Process monitoring
 // ============================================================================
 
+#if N00B_WSA_ENABLE_PROC_WATCHES
 static VOID CALLBACK
 wsa_proc_wait_callback(PVOID param, BOOLEAN timed_out)
 {
     (void)timed_out;
     wsa_proc_t *wp = param;
-    InterlockedExchange(&wp->fired, 1);
+    wp->fired = 1;
+    if (wp->ctx) {
+        wsa_wakeup(wp->ctx);
+    }
 }
 
 static bool
@@ -522,13 +713,16 @@ wsa_proc_add(void *vctx, n00b_conduit_proc_watch_t *watch)
                             FALSE, (DWORD)watch->pid);
     if (!ph) return false;
 
-    wsa_proc_t *wp = n00b_alloc(wsa_proc_t);
+    n00b_allocator_t *sp = wsa_backend_allocator();
+    wsa_proc_t       *wp = n00b_alloc_with_opts(wsa_proc_t,
+                           &(n00b_alloc_opts_t){.allocator = sp});
     if (!wp) {
         CloseHandle(ph);
         return false;
     }
 
     wp->watch       = watch;
+    wp->ctx         = ctx;
     wp->proc_handle = ph;
     wp->wait_handle = NULL;
     wp->fired       = 0;
@@ -570,20 +764,23 @@ static void
 wsa_process_procs(wsa_ctx_t *ctx)
 {
     for (wsa_proc_t *wp = ctx->procs; wp; wp = wp->next) {
-        if (!InterlockedCompareExchange(&wp->fired, 0, 1)) {
+        if (!wp->fired) {
             continue;
         }
+        wp->fired = 0;
         DWORD exit_code = 0;
         GetExitCodeProcess(wp->proc_handle, &exit_code);
         n00b_conduit_proc_fire(wp->watch, N00B_CONDUIT_PROC_EXIT,
                                (int)exit_code);
     }
 }
+#endif
 
 // ============================================================================
 // Vnode monitoring (ReadDirectoryChangesW)
 // ============================================================================
 
+#if N00B_WSA_ENABLE_VNODE_WATCHES
 static void
 wsa_start_directory_watch(wsa_vnode_t *vn);
 
@@ -608,14 +805,24 @@ wsa_vnode_add(void *vctx, n00b_conduit_vnode_watch_t *watch)
     if (attrs == INVALID_FILE_ATTRIBUTES) return false;
 
     wchar_t dir_path[MAX_PATH];
+    wchar_t file_name[MAX_PATH];
+    bool    filter_file_name = false;
+    file_name[0] = L'\0';
     if (attrs & FILE_ATTRIBUTE_DIRECTORY) {
-        wcscpy_s(dir_path, MAX_PATH, wpath);
+        wcsncpy(dir_path, wpath, MAX_PATH - 1);
+        dir_path[MAX_PATH - 1] = L'\0';
     } else {
         // Get parent directory
-        wcscpy_s(dir_path, MAX_PATH, wpath);
+        wcsncpy(dir_path, wpath, MAX_PATH - 1);
+        dir_path[MAX_PATH - 1] = L'\0';
         wchar_t *last_sep = wcsrchr(dir_path, L'\\');
         if (!last_sep) last_sep = wcsrchr(dir_path, L'/');
-        if (last_sep) *last_sep = L'\0';
+        if (last_sep && last_sep[1] != L'\0') {
+            wcsncpy(file_name, last_sep + 1, MAX_PATH - 1);
+            file_name[MAX_PATH - 1] = L'\0';
+            filter_file_name = true;
+            *last_sep = L'\0';
+        }
         else return false;
     }
 
@@ -626,7 +833,9 @@ wsa_vnode_add(void *vctx, n00b_conduit_vnode_watch_t *watch)
                              NULL);
     if (dir == INVALID_HANDLE_VALUE) return false;
 
-    wsa_vnode_t *vn = n00b_alloc(wsa_vnode_t);
+    n00b_allocator_t *sp = wsa_backend_allocator();
+    wsa_vnode_t      *vn = n00b_alloc_with_opts(wsa_vnode_t,
+                           &(n00b_alloc_opts_t){.allocator = sp});
     if (!vn) {
         CloseHandle(dir);
         return false;
@@ -637,15 +846,41 @@ wsa_vnode_add(void *vctx, n00b_conduit_vnode_watch_t *watch)
     vn->fired      = 0;
     vn->next       = ctx->vnodes;
     ctx->vnodes    = vn;
+    vn->filter_file_name = filter_file_name;
+    wcsncpy(vn->file_name, file_name, MAX_PATH - 1);
+    vn->file_name[MAX_PATH - 1] = L'\0';
     memset(&vn->overlapped, 0, sizeof(vn->overlapped));
 
     wsa_start_directory_watch(vn);
     return true;
 }
 
+static bool
+wsa_file_name_matches(wsa_vnode_t *vn, FILE_NOTIFY_INFORMATION *info)
+{
+    if (!vn->filter_file_name) {
+        return true;
+    }
+
+    size_t expected_len = wcslen(vn->file_name);
+    size_t actual_len   = info->FileNameLength / sizeof(wchar_t);
+    if (actual_len != expected_len) {
+        return false;
+    }
+
+    for (size_t i = 0; i < actual_len; i++) {
+        if (towlower(info->FileName[i]) != towlower(vn->file_name[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static void
 wsa_start_directory_watch(wsa_vnode_t *vn)
 {
+    memset(&vn->overlapped, 0, sizeof(vn->overlapped));
+
     DWORD filter = FILE_NOTIFY_CHANGE_FILE_NAME
                  | FILE_NOTIFY_CHANGE_DIR_NAME
                  | FILE_NOTIFY_CHANGE_ATTRIBUTES
@@ -691,18 +926,20 @@ wsa_process_vnodes(wsa_ctx_t *ctx)
         uint32_t ops = 0;
 
         for (;;) {
-            switch (info->Action) {
-            case FILE_ACTION_ADDED:
-            case FILE_ACTION_RENAMED_NEW_NAME:
-                ops |= N00B_CONDUIT_VNODE_WRITE;
-                break;
-            case FILE_ACTION_REMOVED:
-            case FILE_ACTION_RENAMED_OLD_NAME:
-                ops |= N00B_CONDUIT_VNODE_DELETE;
-                break;
-            case FILE_ACTION_MODIFIED:
-                ops |= N00B_CONDUIT_VNODE_WRITE;
-                break;
+            if (wsa_file_name_matches(vn, info)) {
+                switch (info->Action) {
+                case FILE_ACTION_ADDED:
+                case FILE_ACTION_RENAMED_NEW_NAME:
+                    ops |= N00B_CONDUIT_VNODE_WRITE;
+                    break;
+                case FILE_ACTION_REMOVED:
+                case FILE_ACTION_RENAMED_OLD_NAME:
+                    ops |= N00B_CONDUIT_VNODE_DELETE;
+                    break;
+                case FILE_ACTION_MODIFIED:
+                    ops |= N00B_CONDUIT_VNODE_WRITE;
+                    break;
+                }
             }
 
             if (info->NextEntryOffset == 0) break;
@@ -718,6 +955,7 @@ wsa_process_vnodes(wsa_ctx_t *ctx)
         wsa_start_directory_watch(vn);
     }
 }
+#endif
 
 // ============================================================================
 // User events
@@ -732,7 +970,9 @@ wsa_user_event_add(void *vctx, n00b_conduit_user_event_t *event)
     HANDLE evt = CreateEventW(NULL, FALSE, FALSE, NULL); // Auto-reset
     if (!evt) return false;
 
-    wsa_user_event_t *we = n00b_alloc(wsa_user_event_t);
+    n00b_allocator_t  *sp = wsa_backend_allocator();
+    wsa_user_event_t  *we = n00b_alloc_with_opts(wsa_user_event_t,
+                            &(n00b_alloc_opts_t){.allocator = sp});
     if (!we) {
         CloseHandle(evt);
         return false;
@@ -816,8 +1056,13 @@ wsa_wait(void *vctx, n00b_conduit_io_event_t *events, int max_events,
 
     // Post-poll processing
     wsa_process_timers(ctx, 0);
+    wsa_process_signals(ctx);
+#if N00B_WSA_ENABLE_PROC_WATCHES
     wsa_process_procs(ctx);
+#endif
+#if N00B_WSA_ENABLE_VNODE_WATCHES
     wsa_process_vnodes(ctx);
+#endif
     wsa_process_user_events(ctx);
 
     if (n == 0) return 0;
@@ -863,12 +1108,22 @@ static const n00b_conduit_io_ops_t wsa_ops = {
     .name               = wsa_name,
     .timer_add          = wsa_timer_add,
     .timer_remove       = wsa_timer_remove,
-    .signal_add         = nullptr,
-    .signal_remove      = nullptr,
+    .signal_add         = wsa_signal_add,
+    .signal_remove      = wsa_signal_remove,
+#if N00B_WSA_ENABLE_PROC_WATCHES
     .proc_add           = wsa_proc_add,
     .proc_remove        = wsa_proc_remove,
+#else
+    .proc_add           = nullptr,
+    .proc_remove        = nullptr,
+#endif
+#if N00B_WSA_ENABLE_VNODE_WATCHES
     .vnode_add          = wsa_vnode_add,
     .vnode_remove       = wsa_vnode_remove,
+#else
+    .vnode_add          = nullptr,
+    .vnode_remove       = nullptr,
+#endif
     .user_event_add     = wsa_user_event_add,
     .user_event_remove  = wsa_user_event_remove,
     .user_event_trigger = wsa_user_event_trigger,

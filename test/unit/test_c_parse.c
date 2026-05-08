@@ -7,6 +7,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "test_portability.h"
+
 #include "n00b.h"
 #include "core/alloc.h"
 #include "core/buffer.h"
@@ -741,6 +743,46 @@ test_complex_patterns(void)
 }
 
 // ============================================================================
+// Test 13: Windows/MSVC declarations
+// ============================================================================
+
+static void
+test_windows_msvc_decls(void)
+{
+    if (!shared_grammar) {
+        printf("  [SKIP] windows_msvc_decls (no grammar)\n");
+        return;
+    }
+
+    const char *src =
+        "__declspec(dllexport) int __stdcall exported_fn(__int64 value);\n"
+        "typedef int (__cdecl *callback_t)(__int32 value);\n"
+        "typedef int __m64 __attribute__((__vector_size__(8)));\n"
+        "__forceinline __int64 add64(__int64 a, __int64 b) {\n"
+        "    return a + b;\n"
+        "}\n"
+        "__m64 make_m64(void) {\n"
+        "    return __extension__ (__m64){ 0LL };\n"
+        "}\n";
+
+    n00b_parse_result_t *r = parse_c_source(shared_grammar, src);
+
+    if (!n00b_parse_result_ok(r)) {
+        n00b_string_t *err = n00b_parse_result_error_string(r);
+        fprintf(stderr, "  windows_msvc_decls: %.*s\n",
+                (int)err->u8_bytes, err->data);
+    }
+
+    assert(n00b_parse_result_ok(r));
+
+    n00b_parse_tree_t *tree = n00b_parse_result_tree(r);
+    assert(tree != NULL);
+
+    n00b_parse_result_free(r);
+    printf("  [PASS] windows_msvc_decls\n");
+}
+
+// ============================================================================
 // main
 // ============================================================================
 
@@ -766,6 +808,7 @@ main(int argc, char **argv)
     test_nested_typedef_scopes();
     test_multi_typedef();
     test_complex_patterns();
+    test_windows_msvc_decls();
 
     // Annotation walk on parsed C code.
     test_annot_walk_c_typedef();

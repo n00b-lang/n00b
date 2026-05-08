@@ -5,7 +5,9 @@
 #include <stdio.h>
 #include <string.h>
 #include <errno.h>
-#ifndef _WIN32
+#ifdef _WIN32
+#include "internal/win32_sockets.h"
+#else
 #include <dlfcn.h>
 #endif
 #include "n00b.h"
@@ -102,8 +104,41 @@ n00b_renderer_load(n00b_string_t *path)
     }
 
 #ifdef _WIN32
-    (void)path;
-    return n00b_result_err(n00b_renderer_vtable_ptr_t, ENOTSUP);
+    HMODULE handle = LoadLibraryA(path->data);
+    if (!handle) {
+        fprintf(stderr, "n00b: failed to load renderer '%s'\n", path->data);
+        return n00b_result_err(n00b_renderer_vtable_ptr_t, ENOENT);
+    }
+
+    const n00b_renderer_plugin_t *plugin =
+        (const n00b_renderer_plugin_t *)GetProcAddress(handle,
+                                                       "n00b_renderer_plugin");
+
+    if (!plugin) {
+        fprintf(stderr, "n00b: no n00b_renderer_plugin symbol in '%s'\n",
+                path->data);
+        FreeLibrary(handle);
+        return n00b_result_err(n00b_renderer_vtable_ptr_t, ENOENT);
+    }
+
+    if (plugin->abi_version != N00B_RENDERER_ABI_VERSION) {
+        fprintf(stderr,
+                "n00b: ABI version mismatch in '%s': expected %u, got %u\n",
+                path->data, N00B_RENDERER_ABI_VERSION, plugin->abi_version);
+        FreeLibrary(handle);
+        return n00b_result_err(n00b_renderer_vtable_ptr_t, EPROTO);
+    }
+
+    if (!plugin->vtable || !plugin->name) {
+        fprintf(stderr, "n00b: invalid plugin in '%s'\n", path->data);
+        FreeLibrary(handle);
+        return n00b_result_err(n00b_renderer_vtable_ptr_t, EINVAL);
+    }
+
+    n00b_renderer_register(n00b_string_from_cstr(plugin->name),
+                            plugin->vtable);
+
+    return n00b_result_ok(n00b_renderer_vtable_ptr_t, plugin->vtable);
 #else
     void *handle = dlopen(path->data, RTLD_NOW | RTLD_LOCAL);
     if (!handle) {
@@ -178,7 +213,11 @@ n00b_renderer_load_by_name(n00b_string_t *name)
         buf[sizeof(buf) - 1] = '\0';
 
         char *saveptr = nullptr;
+#ifdef _WIN32
+        char *dir     = strtok_r(buf, ";", &saveptr);
+#else
         char *dir     = strtok_r(buf, ":", &saveptr);
+#endif
 
         while (dir) {
             snprintf(path_buf, sizeof(path_buf),
@@ -190,7 +229,11 @@ n00b_renderer_load_by_name(n00b_string_t *name)
             if (n00b_result_is_ok(res)) {
                 return res;
             }
+#ifdef _WIN32
+            dir = strtok_r(nullptr, ";", &saveptr);
+#else
             dir = strtok_r(nullptr, ":", &saveptr);
+#endif
         }
     }
 

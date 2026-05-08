@@ -7,7 +7,12 @@
 
 #include <stdio.h>
 #include <assert.h>
+#ifdef _WIN32
+#include <fcntl.h>
+#include <io.h>
+#else
 #include <unistd.h>
+#endif
 #include <string.h>
 
 #include "n00b.h"
@@ -21,6 +26,26 @@
 // 1. Manage and lookup FD owner
 // ============================================================================
 
+static int
+test_pipe_create(int fds[2])
+{
+#ifdef _WIN32
+    return _pipe(fds, 4096, _O_BINARY);
+#else
+    return pipe(fds);
+#endif
+}
+
+static int
+test_fd_close(int fd)
+{
+#ifdef _WIN32
+    return _close(fd);
+#else
+    return close(fd);
+#endif
+}
+
 static void
 test_fd_manage_lookup(void)
 {
@@ -33,7 +58,7 @@ test_fd_manage_lookup(void)
     n00b_conduit_io_backend_t *io = n00b_result_get(ir);
 
     int fds[2];
-    int rc = pipe(fds);
+    int rc = test_pipe_create(fds);
     assert(rc == 0);
 
     // Manage the read end (do NOT auto-close — we close manually).
@@ -51,8 +76,8 @@ test_fd_manage_lookup(void)
     auto missing_opt = n00b_conduit_fd_get_owner(c, fds[1]);
     assert(!n00b_option_is_set(missing_opt));
 
-    close(fds[0]);
-    close(fds[1]);
+    test_fd_close(fds[0]);
+    test_fd_close(fds[1]);
     n00b_conduit_io_destroy(io);
     n00b_conduit_destroy(c);
     printf("  [PASS] FD manage/lookup\n");
@@ -74,7 +99,7 @@ test_fd_owner_topics(void)
     n00b_conduit_io_backend_t *io = n00b_result_get(ir);
 
     int fds[2];
-    int rc = pipe(fds);
+    int rc = test_pipe_create(fds);
     assert(rc == 0);
 
     auto manage_r = n00b_conduit_fd_manage(c, io, fds[0], false);
@@ -91,8 +116,8 @@ test_fd_owner_topics(void)
     assert(rt != st);
     assert(wt != st);
 
-    close(fds[0]);
-    close(fds[1]);
+    test_fd_close(fds[0]);
+    test_fd_close(fds[1]);
     n00b_conduit_io_destroy(io);
     n00b_conduit_destroy(c);
     printf("  [PASS] FD owner topics\n");

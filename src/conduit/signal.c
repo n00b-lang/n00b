@@ -1,8 +1,6 @@
 /*
- * signal.c - Unix signal handling implementation for conduit
+ * signal.c - signal handling implementation for conduit
  */
-
-#ifndef _WIN32
 
 #include "conduit/conduit.h"
 #include "conduit/signal.h"
@@ -176,5 +174,3 @@ n00b_conduit_signal_fire(n00b_conduit_signal_watch_t *watch)
 
     n00b_conduit_publish_yield(pub);
 }
-
-#endif // !_WIN32

@@ -15,6 +15,21 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef _WIN32
+static char *
+n00b_rust_strndup(const char *s, size_t n)
+{
+    char *result = malloc(n + 1);
+    if (!result) {
+        return nullptr;
+    }
+    memcpy(result, s, n);
+    result[n] = '\0';
+    return result;
+}
+#define strndup n00b_rust_strndup
+#endif
+
 // ============================================================================
 // Backref list
 // ============================================================================

@@ -65,6 +65,32 @@ TEST(test_binary_properties)
     ASSERT(!n00b_unicode_has_property('g', N00B_UNICODE_PROP_HEX_DIGIT));
 }
 
+TEST(test_ascii_changes_when_casefolded)
+{
+    ASSERT(n00b_unicode_has_property('A',
+                                     N00B_UNICODE_PROP_CHANGES_WHEN_CASEFOLDED));
+    ASSERT(n00b_unicode_has_property('Z',
+                                     N00B_UNICODE_PROP_CHANGES_WHEN_CASEFOLDED));
+    ASSERT(!n00b_unicode_has_property('a',
+                                      N00B_UNICODE_PROP_CHANGES_WHEN_CASEFOLDED));
+    ASSERT(!n00b_unicode_has_property('z',
+                                      N00B_UNICODE_PROP_CHANGES_WHEN_CASEFOLDED));
+
+    ASSERT(n00b_unicode_has_property('a',
+                                     N00B_UNICODE_PROP_CHANGES_WHEN_CASEMAPPED));
+}
+
+TEST(test_ascii_table_only_properties)
+{
+    ASSERT(n00b_unicode_has_property('0', N00B_UNICODE_PROP_EMOJI));
+    ASSERT(n00b_unicode_has_property('9', N00B_UNICODE_PROP_EMOJI));
+    ASSERT(n00b_unicode_has_property('#', N00B_UNICODE_PROP_EMOJI_COMPONENT));
+    ASSERT(n00b_unicode_has_property('*', N00B_UNICODE_PROP_EMOJI_COMPONENT));
+    ASSERT(n00b_unicode_has_property('A', N00B_UNICODE_PROP_GRAPHEME_BASE));
+    ASSERT(n00b_unicode_has_property('i', N00B_UNICODE_PROP_SOFT_DOTTED));
+    ASSERT(n00b_unicode_has_property('j', N00B_UNICODE_PROP_SOFT_DOTTED));
+}
+
 TEST(test_id_properties)
 {
     ASSERT(n00b_unicode_has_property('A', N00B_UNICODE_PROP_ID_START));
@@ -194,6 +220,8 @@ static void run_tests(void)
     RUN_TEST(test_east_asian_width);
     RUN_TEST(test_char_width);
     RUN_TEST(test_binary_properties);
+    RUN_TEST(test_ascii_changes_when_casefolded);
+    RUN_TEST(test_ascii_table_only_properties);
     RUN_TEST(test_id_properties);
     RUN_TEST(test_display_width);
     RUN_TEST(test_joining_type);

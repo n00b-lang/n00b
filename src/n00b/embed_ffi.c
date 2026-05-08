@@ -4,7 +4,7 @@
  *        generates MIR wrapper functions.
  *
  * Each binding maps a n00b function name to a C symbol.  The handler:
- * 1. Resolves the C symbol via dlsym(RTLD_DEFAULT, ...).
+ * 1. Resolves the C symbol from the current process.
  * 2. Generates a MIR wrapper that accepts n00b-level parameters,
  *    performs any conversions (cstr, ptr+len), constructs a kargs
  *    struct if the C function uses _kargs, and calls the C function.
@@ -22,9 +22,14 @@
 #include "core/type_info.h"
 #include "parsers/scan_recipes.h"
 
-#include <dlfcn.h>
 #include <stdio.h>
 #include <string.h>
+
+#ifdef _WIN32
+#include "internal/win32_sockets.h"
+#else
+#include <dlfcn.h>
+#endif
 
 // ============================================================================
 // FFI tokenizer — handles identifiers, numbers, strings, punctuation.
@@ -785,6 +790,65 @@ str_cstr(n00b_string_t *s, char *buf, size_t bufsz)
     return buf;
 }
 
+static void *
+lookup_process_symbol(const char *name)
+{
+#ifdef _WIN32
+    const char *delim = strchr(name, '!');
+    if (!delim) {
+        delim = strchr(name, ':');
+    }
+
+    if (delim && delim != name && delim[1] != '\0') {
+        char module_name[260];
+        size_t module_len = (size_t)(delim - name);
+        if (module_len >= sizeof(module_name)) {
+            module_len = sizeof(module_name) - 1;
+        }
+        memcpy(module_name, name, module_len);
+        module_name[module_len] = '\0';
+
+        HMODULE module = GetModuleHandleA(module_name);
+        if (!module) {
+            module = LoadLibraryA(module_name);
+        }
+        return module ? (void *)GetProcAddress(module, delim + 1) : nullptr;
+    }
+
+    HMODULE main_module = GetModuleHandleA(nullptr);
+    if (main_module) {
+        FARPROC proc = GetProcAddress(main_module, name);
+        if (proc) {
+            return (void *)proc;
+        }
+    }
+
+    static const char *default_modules[] = {
+        "n00b.dll",
+        "libn00b.dll",
+        "ucrtbase.dll",
+        "msvcrt.dll",
+        "kernel32.dll",
+        nullptr,
+    };
+
+    for (int i = 0; default_modules[i]; i++) {
+        HMODULE module = GetModuleHandleA(default_modules[i]);
+        if (!module) {
+            continue;
+        }
+        FARPROC proc = GetProcAddress(module, name);
+        if (proc) {
+            return (void *)proc;
+        }
+    }
+
+    return nullptr;
+#else
+    return dlsym(RTLD_DEFAULT, name);
+#endif
+}
+
 // ============================================================================
 // MIR wrapper generation
 // ============================================================================
@@ -806,11 +870,16 @@ generate_wrapper(n00b_cg_session_t *s, ffi_binding_t *b)
     str_cstr(b->c_name, c_name, sizeof(c_name));
 
     // Resolve the C function address.
-    void *c_addr = dlsym(RTLD_DEFAULT, c_name);
+    void *c_addr = lookup_process_symbol(c_name);
 
     if (!c_addr) {
+#ifdef _WIN32
+        fprintf(stderr, "ffi: GetProcAddress failed for '%s'\n",
+                c_name);
+#else
         fprintf(stderr, "ffi: dlsym failed for '%s': %s\n",
                 c_name, dlerror());
+#endif
         return;
     }
 

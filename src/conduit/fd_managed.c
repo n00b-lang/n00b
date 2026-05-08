@@ -16,25 +16,11 @@
 #include <limits.h>
 #include <string.h>
 #ifdef _WIN32
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#include <winsock2.h>
-#define N00B_FD_READ(fd, buf, len)    recv((SOCKET)(fd), (char *)(buf), (int)(len), 0)
-#define N00B_FD_WRITE(fd, buf, len)   send((SOCKET)(fd), (const char *)(buf), (int)(len), 0)
-#define N00B_FD_CLOSE(fd)             closesocket((SOCKET)(fd))
-#define N00B_FD_ERRNO                 WSAGetLastError()
-#define N00B_FD_EAGAIN               WSAEWOULDBLOCK
-#define N00B_FD_EPIPE                WSAECONNRESET
+#include "internal/win32_sockets.h"
+#include <io.h>
 #else
 #include <fcntl.h>
 #include <unistd.h>
-#define N00B_FD_READ(fd, buf, len)    read((fd), (buf), (len))
-#define N00B_FD_WRITE(fd, buf, len)   write((fd), (buf), (len))
-#define N00B_FD_CLOSE(fd)             close((fd))
-#define N00B_FD_ERRNO                 errno
-#define N00B_FD_EAGAIN               EAGAIN
-#define N00B_FD_EPIPE                EPIPE
 #endif
 
 #ifndef PIPE_BUF
@@ -42,6 +28,114 @@
 #endif
 
 #define READ_BUF_SIZE 4096
+
+#ifdef _WIN32
+static bool
+fd_is_winsock_socket(int fd)
+{
+    int type = 0;
+    int len  = sizeof(type);
+    return getsockopt((SOCKET)fd, SOL_SOCKET, SO_TYPE,
+                      (char *)&type, &len) == 0;
+}
+
+static void
+fd_owner_make_nonblocking(n00b_conduit_fd_owner_t *owner)
+{
+    if (!owner->win_socket) {
+        return;
+    }
+
+    u_long mode = 1;
+    ioctlsocket((SOCKET)owner->fd, FIONBIO, &mode);
+}
+
+static int
+fd_chunk_len(size_t len)
+{
+    return len > INT_MAX ? INT_MAX : (int)len;
+}
+#endif
+
+static ssize_t
+fd_owner_read_raw(n00b_conduit_fd_owner_t *owner, void *buf, size_t len)
+{
+#ifdef _WIN32
+    if (owner->win_socket) {
+        return (ssize_t)recv((SOCKET)owner->fd, (char *)buf, fd_chunk_len(len), 0);
+    }
+    return (ssize_t)_read(owner->fd, buf, (unsigned int)fd_chunk_len(len));
+#else
+    return read(owner->fd, buf, len);
+#endif
+}
+
+static ssize_t
+fd_owner_write_raw(n00b_conduit_fd_owner_t *owner, const void *buf, size_t len)
+{
+#ifdef _WIN32
+    if (owner->win_socket) {
+        return (ssize_t)send((SOCKET)owner->fd, (const char *)buf,
+                             fd_chunk_len(len), 0);
+    }
+    return (ssize_t)_write(owner->fd, buf, (unsigned int)fd_chunk_len(len));
+#else
+    return write(owner->fd, buf, len);
+#endif
+}
+
+static int
+fd_owner_last_error(n00b_conduit_fd_owner_t *owner)
+{
+#ifdef _WIN32
+    return owner->win_socket ? WSAGetLastError() : errno;
+#else
+    (void)owner;
+    return errno;
+#endif
+}
+
+static bool
+fd_owner_error_is_would_block(n00b_conduit_fd_owner_t *owner, int err)
+{
+#ifdef _WIN32
+    if (owner->win_socket) {
+        return err == WSAEWOULDBLOCK;
+    }
+#else
+    if (err == EINTR) {
+        return true;
+    }
+#endif
+    return err == EAGAIN || err == EWOULDBLOCK;
+}
+
+static bool
+fd_owner_error_is_pipe_closed(n00b_conduit_fd_owner_t *owner, int err)
+{
+#ifdef _WIN32
+    if (owner->win_socket) {
+        return err == WSAECONNRESET;
+    }
+#else
+    (void)owner;
+#endif
+    return err == EPIPE;
+}
+
+static void
+fd_owner_close_raw(n00b_conduit_fd_owner_t *owner)
+{
+#ifdef _WIN32
+    if (owner->win_socket) {
+        closesocket((SOCKET)owner->fd);
+        return;
+    }
+    _close(owner->fd);
+#else
+    close(owner->fd);
+#endif
+}
 
 // ============================================================================
 // on_first_subscribe callback for FD read topics
@@ -112,6 +206,9 @@ n00b_conduit_fd_manage(n00b_conduit_t *c, n00b_conduit_io_backend_t *io,
     owner->io            = io;
     owner->fd            = fd;
     owner->close_on_done = close_on_done;
+#ifdef _WIN32
+    owner->win_socket    = fd_is_winsock_socket(fd);
+#endif
     n00b_atomic_store(&owner->state, N00B_CONDUIT_FD_ACTIVE);
     n00b_atomic_store(&owner->read_pos, 0);
     n00b_atomic_store(&owner->write_pos, 0);
@@ -162,14 +259,13 @@ n00b_conduit_fd_manage(n00b_conduit_t *c, n00b_conduit_io_backend_t *io,
     owner->wq_tail = nullptr;
 
     // Make FD non-blocking
-#ifdef _WIN32
-    u_long mode = 1;
-    ioctlsocket((SOCKET)fd, FIONBIO, &mode);
-#else
+#ifndef _WIN32
     int flags = fcntl(fd, F_GETFL, 0);
     if (flags >= 0) {
         fcntl(fd, F_SETFL, flags | O_NONBLOCK);
     }
+#else
+    fd_owner_make_nonblocking(owner);
 #endif
 
     n00b_runtime_t *_rt = n00b_get_runtime();
@@ -283,7 +379,7 @@ n00b_conduit_fd_owner_close(n00b_conduit_fd_owner_t *owner)
     n00b_atomic_store(&owner->state, N00B_CONDUIT_FD_CLOSED);
 
     if (owner->close_on_done) {
-        N00B_FD_CLOSE(owner->fd);
+        fd_owner_close_raw(owner);
     }
 }
 
@@ -357,7 +453,7 @@ transition_state(n00b_conduit_fd_owner_t *owner, bool read_closed, bool write_cl
     if (n00b_atomic_load(&owner->state) == N00B_CONDUIT_FD_CLOSED) {
         publish_status(owner, N00B_CONDUIT_FD_ST_CLOSED, 0);
         if (owner->close_on_done) {
-            N00B_FD_CLOSE(owner->fd);
+            fd_owner_close_raw(owner);
         }
     }
 }
@@ -388,7 +484,7 @@ fd_owner_do_reads(n00b_conduit_fd_owner_t *owner)
     uint8_t buf[READ_BUF_SIZE];
 
     while (1) {
-        ssize_t n = N00B_FD_READ(owner->fd, buf, sizeof(buf));
+        ssize_t n = fd_owner_read_raw(owner, buf, sizeof(buf));
 
         if (n > 0) {
             n00b_atomic_add(&owner->read_pos, (uint64_t)n);
@@ -423,12 +519,8 @@ fd_owner_do_reads(n00b_conduit_fd_owner_t *owner)
         }
 
         // n < 0 -- error
-        int read_err = N00B_FD_ERRNO;
-        if (read_err == N00B_FD_EAGAIN || read_err == EWOULDBLOCK
-#ifndef _WIN32
-            || read_err == EINTR
-#endif
-            ) {
+        int read_err = fd_owner_last_error(owner);
+        if (fd_owner_error_is_would_block(owner, read_err)) {
             break; // Normal: no more data available right now
         }
 
@@ -657,9 +749,9 @@ fd_owner_do_writes(n00b_conduit_fd_owner_t *owner)
 
         while (remaining > 0) {
             size_t  chunk = remaining < PIPE_BUF ? remaining : PIPE_BUF;
-            ssize_t n     = N00B_FD_WRITE(owner->fd,
-                                          entry->data + entry->bytes_sent,
-                                          chunk);
+            ssize_t n     = fd_owner_write_raw(owner,
+                                               entry->data + entry->bytes_sent,
+                                               chunk);
 
             if (n > 0) {
                 uint64_t pos = n00b_atomic_add(&owner->write_pos, (uint64_t)n);
@@ -677,24 +769,20 @@ fd_owner_do_writes(n00b_conduit_fd_owner_t *owner)
             }
 
             if (n < 0) {
-                int write_err = N00B_FD_ERRNO;
-                if (write_err == N00B_FD_EAGAIN || write_err == EWOULDBLOCK
-#ifndef _WIN32
-                    || write_err == EINTR
-#endif
-                    ) {
+                int write_err = fd_owner_last_error(owner);
+                if (fd_owner_error_is_would_block(owner, write_err)) {
                     // Can't write more right now — leave entry at head,
                     // next WRITE readiness will continue.
                     blocked = true;
                     break;
                 }
 
-                if (write_err == N00B_FD_EPIPE) {
+                if (fd_owner_error_is_pipe_closed(owner, write_err)) {
                     publish_status(owner, N00B_CONDUIT_FD_ST_WRITE_EPIPE,
-                                   N00B_FD_EPIPE);
+                                   write_err);
                     transition_state(owner, false, true);
                     error   = true;
-                    err_code = N00B_FD_EPIPE;
+                    err_code = write_err;
                     break;
                 }
 
@@ -1109,7 +1197,7 @@ n00b_fd_owner_write(n00b_conduit_fd_owner_t *owner,
     }
 
     if (done->payload.error) {
-        if (done->payload.error_code == N00B_FD_EPIPE) {
+        if (fd_owner_error_is_pipe_closed(owner, done->payload.error_code)) {
             return n00b_result_err(int, N00B_CONDUIT_ERR_EPIPE);
         }
         return n00b_result_err(int, N00B_CONDUIT_ERR_IO);

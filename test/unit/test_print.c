@@ -11,9 +11,15 @@
 #include <stdio.h>
 #include <assert.h>
 #include <string.h>
+
+#ifdef _WIN32
+#include <fcntl.h>
+#include <io.h>
+#else
 #include <unistd.h>
 #include <fcntl.h>
 #include <poll.h>
+#endif
 
 #include "n00b.h"
 #include "conduit/print.h"
@@ -42,12 +48,42 @@ typedef struct {
 
 static _Atomic(uint64_t) test_pipe_id = 1;
 
+static int
+test_pipe_create(int fds[2])
+{
+#ifdef _WIN32
+    return _pipe(fds, 4096, _O_BINARY);
+#else
+    return pipe(fds);
+#endif
+}
+
+static int
+test_fd_close(int fd)
+{
+#ifdef _WIN32
+    return _close(fd);
+#else
+    return close(fd);
+#endif
+}
+
+static int
+test_fd_read(int fd, char *buf, int len)
+{
+#ifdef _WIN32
+    return _read(fd, buf, (unsigned int)len);
+#else
+    return (int)read(fd, buf, (size_t)len);
+#endif
+}
+
 static test_pipe_t
 make_test_pipe(void)
 {
     test_pipe_t tp = {0};
     int fds[2];
-    int rc = pipe(fds);
+    int rc = test_pipe_create(fds);
     assert(rc == 0);
 
     tp.read_fd  = fds[0];
@@ -69,13 +105,23 @@ make_test_pipe(void)
     return tp;
 }
 
-// Read available bytes from a pipe read end (non-blocking after poll).
-// Since conduit writes are synchronous, data is in the pipe when we
-// get here.  We poll briefly then read what's available without
-// blocking on EOF (the fd_writer still holds the write fd open).
+// Read bytes written by the synchronous fd_writer after the test closes the
+// pipe write end. POSIX keeps the old poll/nonblocking path; Windows CRT pipes
+// are read until EOF.
 static int
 read_pipe(int fd, char *buf, int max_len)
 {
+#ifdef _WIN32
+    int total = 0;
+    while (total < max_len) {
+        int n = test_fd_read(fd, buf + total, max_len - total);
+        if (n <= 0) break;
+        total += n;
+    }
+
+    buf[total] = '\0';
+    return total;
+#else
     struct pollfd pfd = { .fd = fd, .events = POLLIN };
     int rc = poll(&pfd, 1, 2000);  // 2s timeout
     if (rc <= 0) {
@@ -97,6 +143,7 @@ read_pipe(int fd, char *buf, int max_len)
     fcntl(fd, F_SETFL, flags);
     buf[total] = '\0';
     return total;
+#endif
 }
 
 // ============================================================================
@@ -227,7 +274,7 @@ test_print_basic(void)
     n00b_print(msg, .topic = tp.topic);
 
     // Close write end to signal EOF, then read.
-    close(tp.write_fd);
+    test_fd_close(tp.write_fd);
 
     char buf[256];
     int n = read_pipe(tp.read_fd, buf, 255);
@@ -235,7 +282,7 @@ test_print_basic(void)
     assert(n == 6);
     assert(memcmp(buf, "hello\n", 6) == 0);
 
-    close(tp.read_fd);
+    test_fd_close(tp.read_fd);
     printf("  [PASS] print basic\n");
 }
 
@@ -254,7 +301,7 @@ test_print_custom_end(void)
 
     n00b_print(msg, .topic = tp.topic, .end = n00b_option_set(n00b_string_t *, end_str));
 
-    close(tp.write_fd);
+    test_fd_close(tp.write_fd);
 
     char buf[256];
     int n = read_pipe(tp.read_fd, buf, 255);
@@ -262,7 +309,7 @@ test_print_custom_end(void)
     assert(n == 7);
     assert(memcmp(buf, "world!\n", 7) == 0);
 
-    close(tp.read_fd);
+    test_fd_close(tp.read_fd);
     printf("  [PASS] print custom end\n");
 }
 
@@ -280,7 +327,7 @@ test_print_int64(void)
 
     n00b_print(val, .topic = tp.topic);
 
-    close(tp.write_fd);
+    test_fd_close(tp.write_fd);
 
     char buf[256];
     int n = read_pipe(tp.read_fd, buf, 255);
@@ -288,7 +335,7 @@ test_print_int64(void)
     assert(n > 0);
     assert(memcmp(buf, "-99\n", 4) == 0);
 
-    close(tp.read_fd);
+    test_fd_close(tp.read_fd);
     printf("  [PASS] print int64\n");
 }
 
@@ -303,7 +350,7 @@ test_print_null(void)
 
     n00b_print(nullptr, .topic = tp.topic);
 
-    close(tp.write_fd);
+    test_fd_close(tp.write_fd);
 
     char buf[256];
     int n = read_pipe(tp.read_fd, buf, 255);
@@ -311,7 +358,7 @@ test_print_null(void)
     assert(n == 7);
     assert(memcmp(buf, "(null)\n", 7) == 0);
 
-    close(tp.read_fd);
+    test_fd_close(tp.read_fd);
     printf("  [PASS] print null\n");
 }
 
@@ -360,7 +407,7 @@ test_printf_basic(void)
 
     n00b_printf("Hello [|#|]!", name, .topic = tp.topic);
 
-    close(tp.write_fd);
+    test_fd_close(tp.write_fd);
 
     char buf[256];
     int n = read_pipe(tp.read_fd, buf, 255);
@@ -368,7 +415,7 @@ test_printf_basic(void)
     assert(n == 13);
     assert(memcmp(buf, "Hello World!\n", 13) == 0);
 
-    close(tp.read_fd);
+    test_fd_close(tp.read_fd);
     printf("  [PASS] printf basic\n");
 }
 
@@ -385,7 +432,7 @@ test_printf_no_newline(void)
 
     n00b_printf("ok", .topic = tp.topic, .end = n00b_option_set(n00b_string_t *, empty));
 
-    close(tp.write_fd);
+    test_fd_close(tp.write_fd);
 
     char buf[256];
     int n = read_pipe(tp.read_fd, buf, 255);
@@ -393,7 +440,7 @@ test_printf_no_newline(void)
     assert(n == 2);
     assert(memcmp(buf, "ok", 2) == 0);
 
-    close(tp.read_fd);
+    test_fd_close(tp.read_fd);
     printf("  [PASS] printf no newline\n");
 }
 
@@ -408,7 +455,7 @@ test_printf_topic(void)
 
     n00b_printf("err", .topic = tp.topic);
 
-    close(tp.write_fd);
+    test_fd_close(tp.write_fd);
 
     char buf[256];
     int n = read_pipe(tp.read_fd, buf, 255);
@@ -416,7 +463,7 @@ test_printf_topic(void)
     assert(n == 4);
     assert(memcmp(buf, "err\n", 4) == 0);
 
-    close(tp.read_fd);
+    test_fd_close(tp.read_fd);
     printf("  [PASS] printf topic\n");
 }
 

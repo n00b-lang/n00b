@@ -28,7 +28,7 @@
 #define N00B_TUPLE_ITEM(X, count) typeof(X) constexpr_paste("item_", count);
 
 /** @internal Emit one designated initializer: .item_<count> = val, */
-#define N00B_TUPLE_SET(val, count) n00b_tuple_item(constexpr_eval(count)) = val,
+#define N00B_TUPLE_SET(val, count) n00b_tuple_item(count) = val,
 
 // ============================================================================
 // Public API
@@ -57,7 +57,7 @@
  * @brief Access tuple element by index.
  *
  * @param tup  Tuple value.
- * @param i    Zero-based element index (must be a compile-time constant).
+ * @param i    Zero-based element index (must be an integer literal).
  * @return The element value.
  */
-#define n00b_tuple_get(tup, i) ((tup)n00b_tuple_item(constexpr_eval(i)))
+#define n00b_tuple_get(tup, i) ((tup)n00b_tuple_item(i))

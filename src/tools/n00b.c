@@ -11,11 +11,16 @@
 // diagnostic output on top of normal execution.
 
 #include <assert.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef _WIN32
+#include <process.h>
+#else
 #include <unistd.h>
 #include <sys/wait.h>
+#endif
 
 #include "n00b.h"
 #include "core/alloc.h"
@@ -76,6 +81,229 @@ typedef struct {
 } debug_opts_t;
 
 // ============================================================================
+// Compile helpers
+// ============================================================================
+
+static const char *
+compile_compiler(void)
+{
+    const char *env = getenv("N00B_COMPILER");
+
+    if (env && *env) {
+        return env;
+    }
+
+    return "clang";
+}
+
+static unsigned long
+compile_process_id(void)
+{
+#ifdef _WIN32
+    return (unsigned long)_getpid();
+#else
+    return (unsigned long)getpid();
+#endif
+}
+
+static bool
+compile_temp_path(char *buf, size_t buf_len, const char *stem, int index, const char *suffix)
+{
+    const char *dir = getenv("TMPDIR");
+
+#ifdef _WIN32
+    if (!dir || !*dir) {
+        dir = getenv("TEMP");
+    }
+    if (!dir || !*dir) {
+        dir = getenv("TMP");
+    }
+#endif
+    if (!dir || !*dir) {
+#ifdef _WIN32
+        dir = ".";
+#else
+        dir = "/tmp";
+#endif
+    }
+
+    size_t      dir_len = strlen(dir);
+    const char *sep     = "";
+
+    if (dir_len > 0) {
+        char last = dir[dir_len - 1];
+
+        if (last != '/' && last != '\\') {
+            sep = "/";
+        }
+    }
+
+    int n = snprintf(buf,
+                     buf_len,
+                     "%s%sn00b_%s_%lu_%d%s",
+                     dir,
+                     sep,
+                     stem,
+                     compile_process_id(),
+                     index,
+                     suffix);
+
+    return n > 0 && (size_t)n < buf_len;
+}
+
+static int
+compile_spawn_wait(const char **argv)
+{
+    const char *program = argv[0];
+
+#ifdef _WIN32
+    int argc = 0;
+
+    while (argv[argc]) {
+        argc++;
+    }
+
+    const char **spawn_argv = calloc((size_t)argc + 1, sizeof(char *));
+
+    if (!spawn_argv) {
+        fprintf(stderr, "error: cannot allocate compiler argument list\n");
+        return 1;
+    }
+
+    for (int i = 0; i < argc; i++) {
+        const char *arg = argv[i];
+        bool        q   = false;
+
+        if (!arg || !*arg) {
+            q = true;
+        }
+        else {
+            for (const char *p = arg; *p; p++) {
+                if (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r'
+                    || *p == '"') {
+                    q = true;
+                    break;
+                }
+            }
+        }
+
+        if (!q) {
+            size_t len = strlen(arg);
+            char  *dup = malloc(len + 1);
+
+            if (!dup) {
+                fprintf(stderr, "error: cannot allocate compiler argument\n");
+                for (int j = 0; j < i; j++) {
+                    free((void *)spawn_argv[j]);
+                }
+                free(spawn_argv);
+                return 1;
+            }
+
+            memcpy(dup, arg, len + 1);
+            spawn_argv[i] = dup;
+            continue;
+        }
+
+        size_t len = arg ? strlen(arg) : 0;
+        char  *out = malloc(len * 2 + 3);
+
+        if (!out) {
+            fprintf(stderr, "error: cannot allocate compiler argument\n");
+            for (int j = 0; j < i; j++) {
+                free((void *)spawn_argv[j]);
+            }
+            free(spawn_argv);
+            return 1;
+        }
+
+        char  *dst        = out;
+        size_t backslashes = 0;
+
+        *dst++ = '"';
+
+        for (size_t j = 0; j < len; j++) {
+            char ch = arg[j];
+
+            if (ch == '\\') {
+                backslashes++;
+                continue;
+            }
+
+            if (ch == '"') {
+                while (backslashes--) {
+                    *dst++ = '\\';
+                    *dst++ = '\\';
+                }
+                *dst++ = '\\';
+                *dst++ = '"';
+                backslashes = 0;
+                continue;
+            }
+
+            while (backslashes--) {
+                *dst++ = '\\';
+            }
+            backslashes = 0;
+            *dst++      = ch;
+        }
+
+        while (backslashes--) {
+            *dst++ = '\\';
+            *dst++ = '\\';
+        }
+
+        *dst++ = '"';
+        *dst   = '\0';
+
+        spawn_argv[i] = out;
+    }
+
+    spawn_argv[argc] = NULL;
+
+    intptr_t rc = _spawnvp(_P_WAIT, program, spawn_argv);
+
+    for (int i = 0; i < argc; i++) {
+        free((void *)spawn_argv[i]);
+    }
+    free(spawn_argv);
+
+    if (rc == -1) {
+        fprintf(stderr, "error: spawn(%s) failed: %s\n", program, strerror(errno));
+        return 127;
+    }
+
+    return (int)rc;
+#else
+    pid_t pid = fork();
+
+    if (pid < 0) {
+        fprintf(stderr, "error: fork() failed: %s\n", strerror(errno));
+        return 1;
+    }
+
+    if (pid == 0) {
+        execvp(program, (char *const *)argv);
+        fprintf(stderr, "error: execvp(%s) failed: %s\n", program, strerror(errno));
+        _exit(127);
+    }
+
+    int status;
+
+    if (waitpid(pid, &status, 0) < 0) {
+        fprintf(stderr, "error: waitpid() failed: %s\n", strerror(errno));
+        return 1;
+    }
+
+    if (WIFEXITED(status)) {
+        return WEXITSTATUS(status);
+    }
+
+    return 1;
+#endif
+}
+
+// ============================================================================
 // Token dumping (ported from n00b_dev.c)
 // ============================================================================
 
@@ -96,13 +324,17 @@ dump_tokens(n00b_token_stream_t *ts)
 
         if (n00b_option_is_set(tok->value)) {
             n00b_string_t *val = n00b_option_get(tok->value);
-            text = val->data;
-            tlen = val->u8_bytes;
+            text               = val->data;
+            tlen               = val->u8_bytes;
         }
 
         printf("%4d  tid=%-20lld L%u:C%u  \"%.*s\"\n",
-               index++, (long long)tok->tid, tok->line, tok->column,
-               (int)tlen, text);
+               index++,
+               (long long)tok->tid,
+               tok->line,
+               tok->column,
+               (int)tlen,
+               text);
     }
 }
 
@@ -114,14 +346,22 @@ static const char *
 sym_kind_str(n00b_sym_kind_t kind)
 {
     switch (kind) {
-    case N00B_SYM_VARIABLE:   return "var";
-    case N00B_SYM_FUNCTION:   return "func";
-    case N00B_SYM_TYPEDEF:    return "type";
-    case N00B_SYM_TAG:        return "tag";
-    case N00B_SYM_ENUM_CONST: return "enum";
-    case N00B_SYM_LABEL:      return "label";
-    case N00B_SYM_PARAM:      return "param";
-    default:                  return "?";
+    case N00B_SYM_VARIABLE:
+        return "var";
+    case N00B_SYM_FUNCTION:
+        return "func";
+    case N00B_SYM_TYPEDEF:
+        return "type";
+    case N00B_SYM_TAG:
+        return "tag";
+    case N00B_SYM_ENUM_CONST:
+        return "enum";
+    case N00B_SYM_LABEL:
+        return "label";
+    case N00B_SYM_PARAM:
+        return "param";
+    default:
+        return "?";
     }
 }
 
@@ -135,8 +375,8 @@ dump_symtab_recursive(n00b_parse_tree_t *t, int depth)
     n00b_nt_node_t *pn = &n00b_tree_node_value(t);
 
     if (pn->scope) {
-        n00b_scope_t *scope = pn->scope;
-        int indent = scope->depth;
+        n00b_scope_t *scope  = pn->scope;
+        int           indent = scope->depth;
 
         for (int i = 0; i < indent; i++) {
             printf("  ");
@@ -144,7 +384,8 @@ dump_symtab_recursive(n00b_parse_tree_t *t, int depth)
 
         if (scope->name && scope->name->data && scope->name->u8_bytes > 0) {
             printf("scope \"%.*s\" (depth %d):\n",
-                   (int)scope->name->u8_bytes, scope->name->data,
+                   (int)scope->name->u8_bytes,
+                   scope->name->data,
                    scope->depth);
         }
         else {
@@ -176,14 +417,17 @@ dump_symtab_recursive(n00b_parse_tree_t *t, int depth)
                 n00b_string_t *ts = n00b_tc_type_to_string(entry->type_var);
                 printf("%-6s %.*s : %.*s  line %u",
                        sym_kind_str(entry->kind),
-                       (int)entry->name->u8_bytes, entry->name->data,
-                       (int)ts->u8_bytes, ts->data,
+                       (int)entry->name->u8_bytes,
+                       entry->name->data,
+                       (int)ts->u8_bytes,
+                       ts->data,
                        line);
             }
             else {
                 printf("%-6s %.*s  line %u",
                        sym_kind_str(entry->kind),
-                       (int)entry->name->u8_bytes, entry->name->data,
+                       (int)entry->name->u8_bytes,
+                       entry->name->data,
                        line);
             }
 
@@ -191,8 +435,7 @@ dump_symtab_recursive(n00b_parse_tree_t *t, int depth)
                 n00b_scope_t *es = entry->exposed_scope;
 
                 if (es->name && es->name->data && es->name->u8_bytes > 0) {
-                    printf("  [exposes \"%.*s\"]",
-                           (int)es->name->u8_bytes, es->name->data);
+                    printf("  [exposes \"%.*s\"]", (int)es->name->u8_bytes, es->name->data);
                 }
                 else {
                     printf("  [exposes scope]");
@@ -260,8 +503,7 @@ load_n00b_grammar(n00b_string_t *grammar_file)
         f = fopen(grammar_file->data, "r");
 
         if (!f) {
-            n00b_eprintf("error: cannot open grammar file '«#»'",
-                          grammar_file);
+            n00b_eprintf("error: cannot open grammar file '«#»'", grammar_file);
             return NULL;
         }
     }
@@ -390,86 +632,165 @@ build_commander(void)
     n00b_cmdr_set_name(c, r"n00b");
 
     // Root-level flags.
-    n00b_cmdr_add_flag(c, n00b_string_empty(), r"--help",
-                        N00B_CMDR_TYPE_BOOL, false, r"Show help message");
+    n00b_cmdr_add_flag(c,
+                       n00b_string_empty(),
+                       r"--help",
+                       N00B_CMDR_TYPE_BOOL,
+                       false,
+                       r"Show help message");
     n00b_cmdr_add_flag_alias(c, n00b_string_empty(), r"--help", r"-h");
 
-    n00b_cmdr_add_flag(c, n00b_string_empty(), r"--version",
-                        N00B_CMDR_TYPE_BOOL, false, r"Show version");
+    n00b_cmdr_add_flag(c,
+                       n00b_string_empty(),
+                       r"--version",
+                       N00B_CMDR_TYPE_BOOL,
+                       false,
+                       r"Show version");
     n00b_cmdr_add_flag_alias(c, n00b_string_empty(), r"--version", r"-V");
 
-    n00b_cmdr_add_flag(c, n00b_string_empty(), r"--verbose",
-                        N00B_CMDR_TYPE_BOOL, false, r"Verbose output");
+    n00b_cmdr_add_flag(c,
+                       n00b_string_empty(),
+                       r"--verbose",
+                       N00B_CMDR_TYPE_BOOL,
+                       false,
+                       r"Verbose output");
     n00b_cmdr_add_flag_alias(c, n00b_string_empty(), r"--verbose", r"-v");
 
     // Debug flags.
-    n00b_cmdr_add_flag(c, n00b_string_empty(), r"--debug-tokens",
-                        N00B_CMDR_TYPE_BOOL, false, r"Dump token stream");
-    n00b_cmdr_add_flag(c, n00b_string_empty(), r"--debug-grammar",
-                        N00B_CMDR_TYPE_BOOL, false, r"Print grammar");
-    n00b_cmdr_add_flag(c, n00b_string_empty(), r"--debug-states",
-                        N00B_CMDR_TYPE_BOOL, false, r"Dump Earley parse states");
-    n00b_cmdr_add_flag(c, n00b_string_empty(), r"--debug-lr0",
-                        N00B_CMDR_TYPE_BOOL, false, r"Print LR(0) table");
-    n00b_cmdr_add_flag(c, n00b_string_empty(), r"--debug-cfg",
-                        N00B_CMDR_TYPE_BOOL, false, r"Show control flow graph");
-    n00b_cmdr_add_flag(c, n00b_string_empty(), r"--debug-cdg",
-                        N00B_CMDR_TYPE_BOOL, false,
-                        r"Show control dependence graph");
-    n00b_cmdr_add_flag(c, n00b_string_empty(), r"--debug-dfg",
-                        N00B_CMDR_TYPE_BOOL, false, r"Show data flow graph");
-    n00b_cmdr_add_flag(c, n00b_string_empty(), r"--debug-labels",
-                        N00B_CMDR_TYPE_BOOL, false, r"Show CF labels");
-    n00b_cmdr_add_flag(c, n00b_string_empty(), r"--debug-symtab",
-                        N00B_CMDR_TYPE_BOOL, false, r"Dump symbol table");
+    n00b_cmdr_add_flag(c,
+                       n00b_string_empty(),
+                       r"--debug-tokens",
+                       N00B_CMDR_TYPE_BOOL,
+                       false,
+                       r"Dump token stream");
+    n00b_cmdr_add_flag(c,
+                       n00b_string_empty(),
+                       r"--debug-grammar",
+                       N00B_CMDR_TYPE_BOOL,
+                       false,
+                       r"Print grammar");
+    n00b_cmdr_add_flag(c,
+                       n00b_string_empty(),
+                       r"--debug-states",
+                       N00B_CMDR_TYPE_BOOL,
+                       false,
+                       r"Dump Earley parse states");
+    n00b_cmdr_add_flag(c,
+                       n00b_string_empty(),
+                       r"--debug-lr0",
+                       N00B_CMDR_TYPE_BOOL,
+                       false,
+                       r"Print LR(0) table");
+    n00b_cmdr_add_flag(c,
+                       n00b_string_empty(),
+                       r"--debug-cfg",
+                       N00B_CMDR_TYPE_BOOL,
+                       false,
+                       r"Show control flow graph");
+    n00b_cmdr_add_flag(c,
+                       n00b_string_empty(),
+                       r"--debug-cdg",
+                       N00B_CMDR_TYPE_BOOL,
+                       false,
+                       r"Show control dependence graph");
+    n00b_cmdr_add_flag(c,
+                       n00b_string_empty(),
+                       r"--debug-dfg",
+                       N00B_CMDR_TYPE_BOOL,
+                       false,
+                       r"Show data flow graph");
+    n00b_cmdr_add_flag(c,
+                       n00b_string_empty(),
+                       r"--debug-labels",
+                       N00B_CMDR_TYPE_BOOL,
+                       false,
+                       r"Show CF labels");
+    n00b_cmdr_add_flag(c,
+                       n00b_string_empty(),
+                       r"--debug-symtab",
+                       N00B_CMDR_TYPE_BOOL,
+                       false,
+                       r"Dump symbol table");
     n00b_cmdr_add_flag_alias(c, n00b_string_empty(), r"--debug-symtab", r"-s");
-    n00b_cmdr_add_flag(c, n00b_string_empty(), r"--debug-analyze",
-                        N00B_CMDR_TYPE_BOOL, false, r"Run analysis pass");
+    n00b_cmdr_add_flag(c,
+                       n00b_string_empty(),
+                       r"--debug-analyze",
+                       N00B_CMDR_TYPE_BOOL,
+                       false,
+                       r"Run analysis pass");
     n00b_cmdr_add_flag_alias(c, n00b_string_empty(), r"--debug-analyze", r"-a");
-    n00b_cmdr_add_flag(c, n00b_string_empty(), r"--debug-typecheck",
-                        N00B_CMDR_TYPE_BOOL, false, r"Run type checking");
-    n00b_cmdr_add_flag_alias(c, n00b_string_empty(),
-                              r"--debug-typecheck", r"-t");
-    n00b_cmdr_add_flag(c, n00b_string_empty(), r"--debug-all",
-                        N00B_CMDR_TYPE_BOOL, false,
-                        r"Enable all debug outputs");
-    n00b_cmdr_add_flag(c, n00b_string_empty(), r"--debug-earley",
-                        N00B_CMDR_TYPE_BOOL, false, r"Force Earley parser");
-    n00b_cmdr_add_flag(c, n00b_string_empty(), r"--debug-pwz",
-                        N00B_CMDR_TYPE_BOOL, false, r"Force PWZ parser");
-    n00b_cmdr_add_flag(c, n00b_string_empty(), r"--debug-grammar-file",
-                        N00B_CMDR_TYPE_WORD, true,
-                        r"Custom grammar file path");
-    n00b_cmdr_add_flag(c, n00b_string_empty(), r"--quiet",
-                        N00B_CMDR_TYPE_BOOL, false,
-                        r"Suppress non-essential output");
+    n00b_cmdr_add_flag(c,
+                       n00b_string_empty(),
+                       r"--debug-typecheck",
+                       N00B_CMDR_TYPE_BOOL,
+                       false,
+                       r"Run type checking");
+    n00b_cmdr_add_flag_alias(c, n00b_string_empty(), r"--debug-typecheck", r"-t");
+    n00b_cmdr_add_flag(c,
+                       n00b_string_empty(),
+                       r"--debug-all",
+                       N00B_CMDR_TYPE_BOOL,
+                       false,
+                       r"Enable all debug outputs");
+    n00b_cmdr_add_flag(c,
+                       n00b_string_empty(),
+                       r"--debug-earley",
+                       N00B_CMDR_TYPE_BOOL,
+                       false,
+                       r"Force Earley parser");
+    n00b_cmdr_add_flag(c,
+                       n00b_string_empty(),
+                       r"--debug-pwz",
+                       N00B_CMDR_TYPE_BOOL,
+                       false,
+                       r"Force PWZ parser");
+    n00b_cmdr_add_flag(c,
+                       n00b_string_empty(),
+                       r"--debug-grammar-file",
+                       N00B_CMDR_TYPE_WORD,
+                       true,
+                       r"Custom grammar file path");
+    n00b_cmdr_add_flag(c,
+                       n00b_string_empty(),
+                       r"--quiet",
+                       N00B_CMDR_TYPE_BOOL,
+                       false,
+                       r"Suppress non-essential output");
     n00b_cmdr_add_flag_alias(c, n00b_string_empty(), r"--quiet", r"-q");
 
     // Root positional args (for bare `n00b foo.n` → repl with file).
-    n00b_cmdr_add_positional(c, n00b_string_empty(), r"file",
-                              N00B_CMDR_TYPE_WORD, 0, -1);
+    n00b_cmdr_add_positional(c, n00b_string_empty(), r"file", N00B_CMDR_TYPE_WORD, 0, -1);
 
     // compile subcommand.
     n00b_cmdr_add_command(c, r"compile", r"Compile n00b source files");
-    n00b_cmdr_add_positional(c, r"compile", r"file",
-                              N00B_CMDR_TYPE_WORD, 1, -1);
-    n00b_cmdr_add_flag(c, r"compile", r"--output",
-                        N00B_CMDR_TYPE_WORD, true, r"Output binary path");
+    n00b_cmdr_add_positional(c, r"compile", r"file", N00B_CMDR_TYPE_WORD, 1, -1);
+    n00b_cmdr_add_flag(c,
+                       r"compile",
+                       r"--output",
+                       N00B_CMDR_TYPE_WORD,
+                       true,
+                       r"Output binary path");
     n00b_cmdr_add_flag_alias(c, r"compile", r"--output", r"-o");
-    n00b_cmdr_add_flag(c, r"compile", r"--lib-dir",
-                        N00B_CMDR_TYPE_WORD, true, r"libn00b.a directory");
-    n00b_cmdr_add_flag(c, r"compile", r"--keep-objects",
-                        N00B_CMDR_TYPE_BOOL, false, r"Keep .o files");
+    n00b_cmdr_add_flag(c,
+                       r"compile",
+                       r"--lib-dir",
+                       N00B_CMDR_TYPE_WORD,
+                       true,
+                       r"libn00b.a directory");
+    n00b_cmdr_add_flag(c,
+                       r"compile",
+                       r"--keep-objects",
+                       N00B_CMDR_TYPE_BOOL,
+                       false,
+                       r"Keep .o files");
 
     // run subcommand.
     n00b_cmdr_add_command(c, r"run", r"Run n00b source files");
-    n00b_cmdr_add_positional(c, r"run", r"file",
-                              N00B_CMDR_TYPE_WORD, 1, -1);
+    n00b_cmdr_add_positional(c, r"run", r"file", N00B_CMDR_TYPE_WORD, 1, -1);
 
     // repl subcommand.
     n00b_cmdr_add_command(c, r"repl", r"Interactive REPL");
-    n00b_cmdr_add_positional(c, r"repl", r"file",
-                              N00B_CMDR_TYPE_WORD, 0, -1);
+    n00b_cmdr_add_positional(c, r"repl", r"file", N00B_CMDR_TYPE_WORD, 0, -1);
 
     // help subcommand.
     n00b_cmdr_add_command(c, r"help", r"Show detailed help");
@@ -478,16 +799,14 @@ build_commander(void)
 }
 
 // Defined in n00b_repl.c (shared between n00b and n00b_dev executables).
-extern bool n00b_load_builtins(n00b_grammar_t    *g,
-                                n00b_cg_session_t *session);
+extern bool n00b_load_builtins(n00b_grammar_t *g, n00b_cg_session_t *session);
 
 // ============================================================================
 // Run mode: parse → annotate → codegen → JIT → execute
 // ============================================================================
 
 static int
-run_file(n00b_grammar_t *g, n00b_string_t *source_file, bool verbose,
-         debug_opts_t *dbg)
+run_file(n00b_grammar_t *g, n00b_string_t *source_file, bool verbose, debug_opts_t *dbg)
 {
     n00b_buffer_t *buf = read_source_file(source_file);
 
@@ -528,7 +847,7 @@ run_file(n00b_grammar_t *g, n00b_string_t *source_file, bool verbose,
         printf("=== Earley Parse (with state dump) ===\n");
 
         n00b_earley_parser_t *earley = n00b_earley_new(g);
-        bool ok = n00b_earley_parse(earley, ts);
+        bool                  ok     = n00b_earley_parse(earley, ts);
 
         printf("\n=== Earley States ===\n");
         n00b_parser_print_states(earley, stdout, true);
@@ -541,8 +860,8 @@ run_file(n00b_grammar_t *g, n00b_string_t *source_file, bool verbose,
                 printf("Parse OK — %d completion(s)\n\n", count);
             }
 
-            n00b_parse_forest_t forest = n00b_earley_get_forest(earley);
-            int32_t tree_count = n00b_parse_forest_count(&forest);
+            n00b_parse_forest_t forest     = n00b_earley_get_forest(earley);
+            int32_t             tree_count = n00b_parse_forest_count(&forest);
 
             if (tree_count > 0) {
                 tree = n00b_parse_forest_best(&forest);
@@ -561,11 +880,14 @@ run_file(n00b_grammar_t *g, n00b_string_t *source_file, bool verbose,
 
             n00b_earley_diagnostics_t diag = {0};
             n00b_earley_extract_diagnostics(earley, &diag);
-            fprintf(stderr, "Error at line %u, col %u",
-                    diag.error_loc.line, diag.error_loc.column);
+            fprintf(stderr,
+                    "Error at line %u, col %u",
+                    diag.error_loc.line,
+                    diag.error_loc.column);
 
             if (diag.error_loc.got && diag.error_loc.got->data) {
-                fprintf(stderr, ": got '%.*s'",
+                fprintf(stderr,
+                        ": got '%.*s'",
                         (int)diag.error_loc.got->u8_bytes,
                         diag.error_loc.got->data);
             }
@@ -576,25 +898,25 @@ run_file(n00b_grammar_t *g, n00b_string_t *source_file, bool verbose,
                 fprintf(stderr, "Expected:");
 
                 for (int32_t i = 0; i < diag.expected_count; i++) {
-                    n00b_string_t *tname = n00b_get_terminal_name(
-                        g, diag.expected_ids[i]);
+                    n00b_string_t *tname = n00b_get_terminal_name(g, diag.expected_ids[i]);
 
                     if (tname && tname->data) {
-                        fprintf(stderr, " %.*s",
-                                (int)tname->u8_bytes, tname->data);
+                        fprintf(stderr, " %.*s", (int)tname->u8_bytes, tname->data);
                     }
                     else {
-                        fprintf(stderr, " tid=%lld",
-                                (long long)diag.expected_ids[i]);
+                        fprintf(stderr, " tid=%lld", (long long)diag.expected_ids[i]);
                     }
                 }
 
                 fprintf(stderr, "\n");
             }
 
-            if (diag.expected_ids)  n00b_free(diag.expected_ids);
-            if (diag.expected_desc) n00b_free(diag.expected_desc);
-            if (diag.active_ctx)    n00b_free(diag.active_ctx);
+            if (diag.expected_ids)
+                n00b_free(diag.expected_ids);
+            if (diag.expected_desc)
+                n00b_free(diag.expected_desc);
+            if (diag.active_ctx)
+                n00b_free(diag.active_ctx);
 
             n00b_earley_free(earley);
             return 1;
@@ -603,10 +925,10 @@ run_file(n00b_grammar_t *g, n00b_string_t *source_file, bool verbose,
         n00b_earley_free(earley);
     }
     else {
-        n00b_parse_mode_t mode = dbg->parse_mode;
-        const char *mode_name  = (mode == N00B_PARSE_MODE_EARLEY_ONLY) ? "earley"
-                               : (mode == N00B_PARSE_MODE_PWZ_ONLY)    ? "pwz"
-                                                                       : "default";
+        n00b_parse_mode_t mode      = dbg->parse_mode;
+        const char       *mode_name = (mode == N00B_PARSE_MODE_EARLEY_ONLY) ? "earley"
+                                    : (mode == N00B_PARSE_MODE_PWZ_ONLY)    ? "pwz"
+                                                                            : "default";
 
         if (!dbg->quiet) {
             printf("=== Parse (mode: %s) ===\n", mode_name);
@@ -628,7 +950,7 @@ run_file(n00b_grammar_t *g, n00b_string_t *source_file, bool verbose,
             return 1;
         }
 
-        tree = n00b_parse_result_tree(r);
+        tree               = n00b_parse_result_tree(r);
         int32_t tree_count = n00b_parse_result_tree_count(r);
 
         if (!dbg->quiet) {
@@ -679,12 +1001,10 @@ run_file(n00b_grammar_t *g, n00b_string_t *source_file, bool verbose,
     }
 
     // CFG / CDG / DFG + Analysis.
-    bool need_graphs = dbg->show_cfg || dbg->show_cdg || dbg->show_dfg
-                     || dbg->run_analyze;
+    bool need_graphs = dbg->show_cfg || dbg->show_cdg || dbg->show_dfg || dbg->run_analyze;
 
     if (need_graphs && ar && ar->cf_labels) {
-        n00b_cfg_t *cfg = n00b_build_cfg(ar->cf_labels, tree, r"module",
-                                            ar->symtab);
+        n00b_cfg_t *cfg = n00b_build_cfg(ar->cf_labels, tree, r"module", ar->symtab);
 
         if (cfg) {
             if (dbg->show_cfg) {
@@ -759,16 +1079,14 @@ run_file(n00b_grammar_t *g, n00b_string_t *source_file, bool verbose,
     n00b_dict_untyped_t *embed_reg = n00b_embed_registry_new();
     n00b_ffi_embed_register(embed_reg);
 
-    n00b_cg_session_t *session = n00b_cg_session_new(
-        g, .type_map = n00b_type_map,
-           .embed_registry = embed_reg);
+    n00b_cg_session_t *session
+        = n00b_cg_session_new(g, .type_map = n00b_type_map, .embed_registry = embed_reg);
 
     // Load builtins (print, etc.) before the user module.
     n00b_load_builtins(g, session);
 
     bool    run_ok     = false;
-    int64_t run_result = n00b_cg_session_run_module(
-        session, tree, .annot = ar, .ok = &run_ok);
+    int64_t run_result = n00b_cg_session_run_module(session, tree, .annot = ar, .ok = &run_ok);
 
     int exit_code;
 
@@ -810,29 +1128,32 @@ run_file(n00b_grammar_t *g, n00b_string_t *source_file, bool verbose,
 // ============================================================================
 
 static int
-compile_files(n00b_grammar_t      *g,
-              n00b_cmdr_result_t  *result,
-              bool                 verbose)
+compile_files(n00b_grammar_t *g, n00b_cmdr_result_t *result, bool verbose)
 {
-    int          nargs       = n00b_cmdr_arg_count(result);
-    n00b_string_t *output    = n00b_cmdr_flag_str(result, r"--output");
-    n00b_string_t *lib_dir_s = n00b_cmdr_flag_str(result, r"--lib-dir");
-    bool keep_objects        = n00b_cmdr_flag_bool(result, r"--keep-objects");
+#ifdef _WIN32
+    (void)g;
+    (void)result;
+    (void)verbose;
+    fprintf(stderr, "error: compile mode is not supported on Windows yet\n");
+    return 1;
+#endif
 
-    const char *lib_dir = (lib_dir_s && lib_dir_s->u8_bytes > 0)
-                          ? lib_dir_s->data : NULL;
+    int            nargs        = n00b_cmdr_arg_count(result);
+    n00b_string_t *output       = n00b_cmdr_flag_str(result, r"--output");
+    n00b_string_t *lib_dir_s    = n00b_cmdr_flag_str(result, r"--lib-dir");
+    bool           keep_objects = n00b_cmdr_flag_bool(result, r"--keep-objects");
+
+    const char *lib_dir = (lib_dir_s && lib_dir_s->u8_bytes > 0) ? lib_dir_s->data : NULL;
 
     // Default output name: first source file with extension stripped.
     char output_path[1024];
 
     if (output && output->u8_bytes > 0) {
-        snprintf(output_path, sizeof(output_path), "%.*s",
-                 (int)output->u8_bytes, output->data);
+        snprintf(output_path, sizeof(output_path), "%.*s", (int)output->u8_bytes, output->data);
     }
     else {
         n00b_string_t *first = n00b_cmdr_arg_str(result, 0);
-        snprintf(output_path, sizeof(output_path), "%.*s",
-                 (int)first->u8_bytes, first->data);
+        snprintf(output_path, sizeof(output_path), "%.*s", (int)first->u8_bytes, first->data);
 
         // Strip .n extension.
         char *dot = strrchr(output_path, '.');
@@ -840,6 +1161,10 @@ compile_files(n00b_grammar_t      *g,
         if (dot) {
             *dot = '\0';
         }
+
+#ifdef _WIN32
+        strncat(output_path, ".exe", sizeof(output_path) - strlen(output_path) - 1);
+#endif
     }
 
     // Allocate arrays for object file paths.
@@ -852,9 +1177,9 @@ compile_files(n00b_grammar_t      *g,
     n00b_dict_untyped_t *compile_embed_reg = n00b_embed_registry_new();
     n00b_ffi_embed_register(compile_embed_reg);
 
-    n00b_cg_session_t *session = n00b_cg_session_new(
-        g, .type_map = n00b_type_map,
-           .embed_registry = compile_embed_reg);
+    n00b_cg_session_t *session = n00b_cg_session_new(g,
+                                                     .type_map       = n00b_type_map,
+                                                     .embed_registry = compile_embed_reg);
 
     // Load builtins (print, etc.) before user modules.
     n00b_load_builtins(g, session);
@@ -862,7 +1187,7 @@ compile_files(n00b_grammar_t      *g,
     // Compile each source file.
     for (int i = 0; i < nargs; i++) {
         n00b_string_t *source_file = n00b_cmdr_arg_str(result, i);
-        n00b_buffer_t *buf = read_source_file(source_file);
+        n00b_buffer_t *buf         = read_source_file(source_file);
 
         if (!buf) {
             n00b_eprintf("error: cannot read '«#»'", source_file);
@@ -874,8 +1199,7 @@ compile_files(n00b_grammar_t      *g,
         n00b_token_stream_t *ts      = n00b_token_stream_new(scanner);
 
         // Parse.
-        n00b_parse_result_t *r = n00b_grammar_parse(g, ts,
-                                                      N00B_PARSE_MODE_DEFAULT);
+        n00b_parse_result_t *r = n00b_grammar_parse(g, ts, N00B_PARSE_MODE_DEFAULT);
 
         if (!n00b_parse_result_ok(r)) {
             n00b_string_t *err = n00b_parse_result_error_string(r);
@@ -890,8 +1214,7 @@ compile_files(n00b_grammar_t      *g,
         n00b_annot_result_t *ar = n00b_compile_walk(g, tree);
 
         // Compile to machine code.
-        n00b_module_code_t *mod = n00b_cg_session_compile_module(
-            session, tree, .annot = ar);
+        n00b_module_code_t *mod = n00b_cg_session_compile_module(session, tree, .annot = ar);
 
         if (!mod) {
             n00b_eprintf("error: codegen failed for '«#»'", source_file);
@@ -903,21 +1226,24 @@ compile_files(n00b_grammar_t      *g,
         n00b_buffer_t *obj_buf = n00b_emit_object_file(mod);
 
         if (!obj_buf) {
-            n00b_eprintf("error: object file emission failed for '«#»'",
-                          source_file);
+            n00b_eprintf("error: object file emission failed for '«#»'", source_file);
             n00b_parse_result_free(r);
             goto fail;
         }
 
         // Write .o to a temp file.
         char obj_path[1024];
-        snprintf(obj_path, sizeof(obj_path), "/tmp/n00b_%d.o", i);
+
+        if (!compile_temp_path(obj_path, sizeof(obj_path), "module", i, ".o")) {
+            n00b_eprintf("error: cannot create temporary object path");
+            n00b_parse_result_free(r);
+            goto fail;
+        }
 
         FILE *fp = fopen(obj_path, "wb");
 
         if (!fp) {
-            n00b_eprintf("error: cannot write '«#»'",
-                          n00b_string_from_cstr(obj_path));
+            n00b_eprintf("error: cannot write '«#»'", n00b_string_from_cstr(obj_path));
             n00b_parse_result_free(r);
             goto fail;
         }
@@ -933,27 +1259,38 @@ compile_files(n00b_grammar_t      *g,
 
         if (verbose) {
             printf("  compiled %.*s -> %s\n",
-                   (int)source_file->u8_bytes, source_file->data, obj_path);
+                   (int)source_file->u8_bytes,
+                   source_file->data,
+                   obj_path);
         }
     }
 
     // Generate startup shim.
     {
-        const char *startup_src =
-            "#include <stdint.h>\n"
-            "extern void n00b_init_simple(int, char**);\n"
-            "extern void n00b_shutdown(void);\n"
-            "extern int64_t _main(void);\n"
-            "int main(int argc, char **argv) {\n"
-            "    n00b_init_simple(argc, argv);\n"
-            "    int64_t r = _main();\n"
-            "    n00b_shutdown();\n"
-            "    return (int)r;\n"
-            "}\n";
+        const char *startup_src
+            = "#include <stdint.h>\n"
+              "extern void n00b_init_simple(int, char**);\n"
+              "extern void n00b_shutdown(void);\n"
+              "extern int64_t _main(void);\n"
+              "int main(int argc, char **argv) {\n"
+              "    n00b_init_simple(argc, argv);\n"
+              "    int64_t r = _main();\n"
+              "    n00b_shutdown();\n"
+              "    return (int)r;\n"
+              "}\n";
 
         // Write startup source to temp file.
-        const char *startup_c = "/tmp/n00b_startup.c";
-        FILE *fp = fopen(startup_c, "w");
+        char startup_c_buf[1024];
+        char startup_o_buf[1024];
+
+        if (!compile_temp_path(startup_c_buf, sizeof(startup_c_buf), "startup", 0, ".c")
+            || !compile_temp_path(startup_o_buf, sizeof(startup_o_buf), "startup", 0, ".o")) {
+            n00b_eprintf("error: cannot create temporary startup path");
+            goto fail;
+        }
+
+        const char *startup_c = startup_c_buf;
+        FILE       *fp        = fopen(startup_c, "w");
 
         if (!fp) {
             n00b_eprintf("error: cannot write startup shim");
@@ -964,24 +1301,23 @@ compile_files(n00b_grammar_t      *g,
         fclose(fp);
 
         // Compile startup shim via clang.
-        const char *startup_o = "/tmp/n00b_startup.o";
+        const char *startup_o = startup_o_buf;
+        const char *compiler  = compile_compiler();
 
-        pid_t pid = fork();
+        const char *argv[8];
+        int         ai = 0;
 
-        if (pid < 0) {
-            n00b_eprintf("error: fork() failed for startup compilation");
-            goto fail;
-        }
+        argv[ai++] = compiler;
+#ifdef _WIN32
+        argv[ai++] = "--target=x86_64-w64-windows-gnu";
+#endif
+        argv[ai++] = "-c";
+        argv[ai++] = "-o";
+        argv[ai++] = startup_o;
+        argv[ai++] = startup_c;
+        argv[ai]   = NULL;
 
-        if (pid == 0) {
-            execlp("clang", "clang", "-c", "-o", startup_o, startup_c, NULL);
-            _exit(127);
-        }
-
-        int status;
-        waitpid(pid, &status, 0);
-
-        if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        if (compile_spawn_wait(argv) != 0) {
             n00b_eprintf("error: startup shim compilation failed");
             goto fail;
         }
@@ -991,7 +1327,7 @@ compile_files(n00b_grammar_t      *g,
         n_objs++;
 
         // Clean up temp .c file.
-        unlink(startup_c);
+        remove(startup_c);
     }
 
     // Link everything.
@@ -1011,7 +1347,7 @@ compile_files(n00b_grammar_t      *g,
     // Clean up temp .o files.
     if (!keep_objects) {
         for (int i = 0; i < n_objs; i++) {
-            unlink(obj_paths[i]);
+            remove(obj_paths[i]);
         }
     }
     else {
@@ -1034,7 +1370,7 @@ compile_files(n00b_grammar_t      *g,
 fail:
     for (int i = 0; i < n_objs; i++) {
         if (!keep_objects) {
-            unlink(obj_paths[i]);
+            remove(obj_paths[i]);
         }
 
         free(obj_paths_m[i]);
@@ -1075,8 +1411,7 @@ main(int argc, char **argv)
         return rc;
     }
 
-    n00b_cmdr_result_t *result = n00b_cmdr_parse(cmdr, argc - 1,
-                                                   (const char **)&argv[1]);
+    n00b_cmdr_result_t *result = n00b_cmdr_parse(cmdr, argc - 1, (const char **)&argv[1]);
 
     if (!result || !result->ok) {
         int32_t nerr = n00b_cmdr_error_count(result);
@@ -1161,8 +1496,7 @@ main(int argc, char **argv)
         dbg.run_typecheck = true;
     }
 
-    n00b_string_t *grammar_file = n00b_cmdr_flag_str(result,
-                                                       r"--debug-grammar-file");
+    n00b_string_t *grammar_file = n00b_cmdr_flag_str(result, r"--debug-grammar-file");
 
     // help subcommand.
     if (strcmp(mode, "help") == 0) {
@@ -1175,6 +1509,14 @@ main(int argc, char **argv)
 
     // compile subcommand.
     if (strcmp(mode, "compile") == 0) {
+#ifdef _WIN32
+        fprintf(stderr, "error: compile mode is not supported on Windows yet\n");
+        n00b_cmdr_result_free(result);
+        n00b_cmdr_free(cmdr);
+        n00b_shutdown();
+        return 1;
+#endif
+
         n00b_grammar_t *g = load_n00b_grammar(grammar_file);
 
         if (!g) {
@@ -1215,8 +1557,8 @@ main(int argc, char **argv)
 
         // Run the first file.  (Future: JIT all files into one session,
         // then execute the first file's _main.)
-        n00b_string_t *first = n00b_cmdr_arg_str(result, 0);
-        int exit_code = run_file(g, first, verbose, &dbg);
+        n00b_string_t *first     = n00b_cmdr_arg_str(result, 0);
+        int            exit_code = run_file(g, first, verbose, &dbg);
 
         n00b_grammar_free(g);
         n00b_cmdr_result_free(result);

@@ -2,12 +2,12 @@
  * proc_lifecycle.c - Process lifecycle monitoring implementation for conduit
  */
 
-#ifndef _WIN32
-
 #include "conduit/conduit.h"
 #include "conduit/proc_lifecycle.h"
 #include "conduit/io.h"
+#ifndef _WIN32
 #include <sys/wait.h>
+#endif
 
 // ============================================================================
 // Process Watch Creation
@@ -148,9 +148,13 @@ n00b_conduit_proc_fire(n00b_conduit_proc_watch_t *watch,
     // status.  The IO backend (kqueue/pidfd) may not provide it in
     // the portable W* format.
     if (ops & N00B_CONDUIT_PROC_EXIT) {
+#ifdef _WIN32
+        msg->payload.exit_status = exit_status;
+#else
         int wstatus = 0;
         pid_t w = waitpid(watch->pid, &wstatus, WNOHANG);
         msg->payload.exit_status = (w > 0) ? wstatus : exit_status;
+#endif
     }
     else {
         msg->payload.exit_status = 0;
@@ -170,5 +174,3 @@ n00b_conduit_proc_fire(n00b_conduit_proc_watch_t *watch,
         n00b_conduit_topic_close(watch->topic);
     }
 }
-
-#endif // !_WIN32

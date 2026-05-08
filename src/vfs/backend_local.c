@@ -10,6 +10,31 @@
 #include <errno.h>
 #include <time.h>
 
+#ifdef _WIN32
+#include "internal/win32_sockets.h"
+#ifndef ENOTSUP
+#define ENOTSUP 129
+#endif
+#ifndef S_ISLNK
+#define S_ISLNK(mode) 0
+#endif
+#define N00B_LOCAL_MKDIR(path, mode) mkdir(path)
+static int
+n00b_local_link(const char *target, const char *link_path)
+{
+    if (CreateHardLinkA(link_path, target, nullptr)) {
+        return 0;
+    }
+
+    errno = EIO;
+    return -1;
+}
+#define N00B_LOCAL_LINK(target, link_path) n00b_local_link(target, link_path)
+#else
+#define N00B_LOCAL_MKDIR(path, mode) mkdir(path, mode)
+#define N00B_LOCAL_LINK(target, link_path) link(target, link_path)
+#endif
+
 // ============================================================================
 // Internal context
 // ============================================================================
@@ -65,8 +90,53 @@ errno_to_vfs_err(int e)
     case EPERM:   return N00B_VFS_ERR_PERMISSION;
     case ENOSPC:  return N00B_VFS_ERR_NO_SPACE;
     case EXDEV:   return N00B_VFS_ERR_CROSS_DEVICE;
+#ifdef ENOTSUP
+    case ENOTSUP: return N00B_VFS_ERR_NOT_SUPPORTED;
+#endif
     default:      return N00B_VFS_ERR_IO;
     }
+}
+
+static uint64_t
+stat_atime_ns(const struct stat *st)
+{
+#ifdef __APPLE__
+    return (uint64_t)st->st_atimespec.tv_sec * 1000000000ULL
+         + (uint64_t)st->st_atimespec.tv_nsec;
+#elif defined(_WIN32)
+    return (uint64_t)st->st_atime * 1000000000ULL;
+#else
+    return (uint64_t)st->st_atim.tv_sec * 1000000000ULL
+         + (uint64_t)st->st_atim.tv_nsec;
+#endif
+}
+
+static uint64_t
+stat_mtime_ns(const struct stat *st)
+{
+#ifdef __APPLE__
+    return (uint64_t)st->st_mtimespec.tv_sec * 1000000000ULL
+         + (uint64_t)st->st_mtimespec.tv_nsec;
+#elif defined(_WIN32)
+    return (uint64_t)st->st_mtime * 1000000000ULL;
+#else
+    return (uint64_t)st->st_mtim.tv_sec * 1000000000ULL
+         + (uint64_t)st->st_mtim.tv_nsec;
+#endif
+}
+
+static uint64_t
+stat_ctime_ns(const struct stat *st)
+{
+#ifdef __APPLE__
+    return (uint64_t)st->st_ctimespec.tv_sec * 1000000000ULL
+         + (uint64_t)st->st_ctimespec.tv_nsec;
+#elif defined(_WIN32)
+    return (uint64_t)st->st_ctime * 1000000000ULL;
+#else
+    return (uint64_t)st->st_ctim.tv_sec * 1000000000ULL
+         + (uint64_t)st->st_ctim.tv_nsec;
+#endif
 }
 
 // ============================================================================
@@ -236,21 +306,9 @@ local_stat(void *ctx, n00b_string_t *path)
         kind = N00B_VFS_OBJ_FILE;
     }
 
-#ifdef __APPLE__
-    uint64_t atime_ns = (uint64_t)st.st_atimespec.tv_sec * 1000000000ULL
-                      + (uint64_t)st.st_atimespec.tv_nsec;
-    uint64_t mtime_ns = (uint64_t)st.st_mtimespec.tv_sec * 1000000000ULL
-                      + (uint64_t)st.st_mtimespec.tv_nsec;
-    uint64_t ctime_ns = (uint64_t)st.st_ctimespec.tv_sec * 1000000000ULL
-                      + (uint64_t)st.st_ctimespec.tv_nsec;
-#else
-    uint64_t atime_ns = (uint64_t)st.st_atim.tv_sec * 1000000000ULL
-                      + (uint64_t)st.st_atim.tv_nsec;
-    uint64_t mtime_ns = (uint64_t)st.st_mtim.tv_sec * 1000000000ULL
-                      + (uint64_t)st.st_mtim.tv_nsec;
-    uint64_t ctime_ns = (uint64_t)st.st_ctim.tv_sec * 1000000000ULL
-                      + (uint64_t)st.st_ctim.tv_nsec;
-#endif
+    uint64_t atime_ns = stat_atime_ns(&st);
+    uint64_t mtime_ns = stat_mtime_ns(&st);
+    uint64_t ctime_ns = stat_ctime_ns(&st);
 
     return n00b_result_ok(n00b_vfs_obj_stat_t, ((n00b_vfs_obj_stat_t){
         .kind     = kind,
@@ -323,15 +381,7 @@ local_list(void *ctx, n00b_string_t *prefix, n00b_string_t *continuation,
                                    ? N00B_VFS_OBJ_DIR
                                    : N00B_VFS_OBJ_FILE;
             entries[ix].size = (uint64_t)st.st_size;
-#ifdef __APPLE__
-            entries[ix].mtime_ns =
-                (uint64_t)st.st_mtimespec.tv_sec * 1000000000ULL
-                + (uint64_t)st.st_mtimespec.tv_nsec;
-#else
-            entries[ix].mtime_ns =
-                (uint64_t)st.st_mtim.tv_sec * 1000000000ULL
-                + (uint64_t)st.st_mtim.tv_nsec;
-#endif
+            entries[ix].mtime_ns = stat_mtime_ns(&st);
         }
 
         ix++;
@@ -368,7 +418,7 @@ local_mkdir(void *ctx, n00b_string_t *path)
     local_ctx_t *lc   = ctx;
     char        *full = join_path(lc, path);
 
-    if (mkdir(full, 0755) < 0) {
+    if (N00B_LOCAL_MKDIR(full, 0755) < 0) {
         return n00b_result_err(bool, errno_to_vfs_err(errno));
     }
 
@@ -403,7 +453,7 @@ local_link(void *ctx, n00b_string_t *target, n00b_string_t *link_path)
     char        *tgt_full  = join_path(lc, target);
     char        *link_full = join_path(lc, link_path);
 
-    if (link(tgt_full, link_full) < 0) {
+    if (N00B_LOCAL_LINK(tgt_full, link_full) < 0) {
         return n00b_result_err(bool, errno_to_vfs_err(errno));
     }
 

@@ -113,8 +113,8 @@ typedef enum {
  */
 typedef struct {
     uint32_t            id;       /**< MIR_reg_t or label index. */
-    n00b_cg_val_kind_t  kind : 8;
-    n00b_cg_type_tag_t  type_tag : 8;
+    uint8_t             kind;     /**< n00b_cg_val_kind_t. */
+    uint8_t             type_tag; /**< n00b_cg_type_tag_t. */
     uint16_t            _pad;
     uint64_t            aux;      /**< Immediate value, displacement, or label handle. */
 } n00b_cg_val_t;

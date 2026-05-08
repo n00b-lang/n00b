@@ -1,66 +1,288 @@
 /**
  * @file n00b_compile_link.c
- * @brief Link .o files into an executable via clang.
+ * @brief Link .o files into an executable via a compiler driver.
  */
 
 #include "n00b.h"
 #include "n00b/n00b_compile_binary.h"
 
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
+
+#ifdef _WIN32
+#include <process.h>
+#else
 #include <sys/wait.h>
-#include <errno.h>
+#include <unistd.h>
+#endif
+
+static bool
+file_readable(const char *path)
+{
+    if (!path || !*path) {
+        return false;
+    }
+
+    FILE *f = fopen(path, "rb");
+
+    if (!f) {
+        return false;
+    }
+
+    fclose(f);
+    return true;
+}
+
+static bool
+join_path(char *buf, size_t buf_len, const char *dir, const char *leaf)
+{
+    if (!buf || buf_len == 0 || !dir || !leaf) {
+        return false;
+    }
+
+    size_t      dir_len = strlen(dir);
+    const char *sep     = "";
+
+    if (dir_len > 0) {
+        char last = dir[dir_len - 1];
+
+        if (last != '/' && last != '\\') {
+            sep = "/";
+        }
+    }
+
+    int n = snprintf(buf, buf_len, "%s%s%s", dir, sep, leaf);
+
+    return n > 0 && (size_t)n < buf_len;
+}
 
 static const char *
 find_lib_dir(const char *hint)
 {
-    if (hint && access(hint, R_OK) == 0) {
+    static char lib_path[1024];
+
+    if (hint && join_path(lib_path, sizeof(lib_path), hint, "libn00b.a")
+        && file_readable(lib_path)) {
         return hint;
     }
 
-    // Check N00B_LIB_DIR environment variable.
     const char *env = getenv("N00B_LIB_DIR");
 
-    if (env && access(env, R_OK) == 0) {
+    if (env && join_path(lib_path, sizeof(lib_path), env, "libn00b.a")
+        && file_readable(lib_path)) {
         return env;
     }
 
-    // Check relative to executable: ../lib/
-    // (common install layout: bin/n00b, lib/libn00b.a)
-    char path[1024];
-
-    snprintf(path, sizeof(path), "../lib/libn00b.a");
-
-    if (access(path, R_OK) == 0) {
+    if (file_readable("../lib/libn00b.a")) {
         return "../lib";
     }
 
-    // Check build directory.
-    snprintf(path, sizeof(path), "build_debug/libn00b.a");
-
-    if (access(path, R_OK) == 0) {
+    if (file_readable("build_debug/libn00b.a")) {
         return "build_debug";
+    }
+
+    if (file_readable("build_cross_windows-x86_64/libn00b.a")) {
+        return "build_cross_windows-x86_64";
     }
 
     return NULL;
 }
 
-int
-n00b_link_binary(const char **obj_paths, int n_objs,
-                 const char *output, const char *lib_dir)
+static const char *
+find_compiler(void)
 {
+    const char *env = getenv("N00B_COMPILER");
+
+    if (env && *env) {
+        return env;
+    }
+
+    return "clang";
+}
+
+static int
+run_linker(const char *compiler, const char **argv)
+{
+#ifdef _WIN32
+    int argc = 0;
+
+    while (argv[argc]) {
+        argc++;
+    }
+
+    const char **spawn_argv = calloc((size_t)argc + 1, sizeof(char *));
+
+    if (!spawn_argv) {
+        fprintf(stderr, "n00b compile: cannot allocate linker argument list\n");
+        return 1;
+    }
+
+    for (int i = 0; i < argc; i++) {
+        const char *arg = argv[i];
+        bool        q   = false;
+
+        if (!arg || !*arg) {
+            q = true;
+        }
+        else {
+            for (const char *p = arg; *p; p++) {
+                if (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r'
+                    || *p == '"') {
+                    q = true;
+                    break;
+                }
+            }
+        }
+
+        if (!q) {
+            size_t len = strlen(arg);
+            char  *dup = malloc(len + 1);
+
+            if (!dup) {
+                fprintf(stderr, "n00b compile: cannot allocate linker argument\n");
+                for (int j = 0; j < i; j++) {
+                    free((void *)spawn_argv[j]);
+                }
+                free(spawn_argv);
+                return 1;
+            }
+
+            memcpy(dup, arg, len + 1);
+            spawn_argv[i] = dup;
+            continue;
+        }
+
+        size_t len = arg ? strlen(arg) : 0;
+        char  *out = malloc(len * 2 + 3);
+
+        if (!out) {
+            fprintf(stderr, "n00b compile: cannot allocate linker argument\n");
+            for (int j = 0; j < i; j++) {
+                free((void *)spawn_argv[j]);
+            }
+            free(spawn_argv);
+            return 1;
+        }
+
+        char  *dst         = out;
+        size_t backslashes = 0;
+
+        *dst++ = '"';
+
+        for (size_t j = 0; j < len; j++) {
+            char ch = arg[j];
+
+            if (ch == '\\') {
+                backslashes++;
+                continue;
+            }
+
+            if (ch == '"') {
+                while (backslashes--) {
+                    *dst++ = '\\';
+                    *dst++ = '\\';
+                }
+                *dst++ = '\\';
+                *dst++ = '"';
+                backslashes = 0;
+                continue;
+            }
+
+            while (backslashes--) {
+                *dst++ = '\\';
+            }
+            backslashes = 0;
+            *dst++      = ch;
+        }
+
+        while (backslashes--) {
+            *dst++ = '\\';
+            *dst++ = '\\';
+        }
+
+        *dst++ = '"';
+        *dst   = '\0';
+
+        spawn_argv[i] = out;
+    }
+
+    spawn_argv[argc] = NULL;
+
+    intptr_t rc = _spawnvp(_P_WAIT, compiler, spawn_argv);
+
+    for (int i = 0; i < argc; i++) {
+        free((void *)spawn_argv[i]);
+    }
+    free(spawn_argv);
+
+    if (rc == -1) {
+        fprintf(stderr, "n00b compile: spawn(%s) failed: %s\n", compiler, strerror(errno));
+        return 127;
+    }
+
+    return (int)rc;
+#else
+    pid_t pid = fork();
+
+    if (pid < 0) {
+        fprintf(stderr, "n00b compile: fork() failed: %s\n", strerror(errno));
+        return 1;
+    }
+
+    if (pid == 0) {
+        execvp(compiler, (char *const *)argv);
+        fprintf(stderr, "n00b compile: execvp(%s) failed: %s\n", compiler, strerror(errno));
+        _exit(127);
+    }
+
+    int status;
+
+    if (waitpid(pid, &status, 0) < 0) {
+        fprintf(stderr, "n00b compile: waitpid() failed: %s\n", strerror(errno));
+        return 1;
+    }
+
+    if (WIFEXITED(status)) {
+        return WEXITSTATUS(status);
+    }
+
+    return 1;
+#endif
+}
+
+int
+n00b_link_binary(const char **obj_paths, int n_objs, const char *output, const char *lib_dir)
+{
+#ifdef _WIN32
+    (void)obj_paths;
+    (void)n_objs;
+    (void)output;
+    (void)lib_dir;
+    fprintf(stderr, "n00b compile: Windows linking is not supported in this build\n");
+    return 1;
+#endif
+
     const char *resolved_lib_dir = find_lib_dir(lib_dir);
+    const char *compiler         = find_compiler();
 
-    // Build argv for clang.
-    // clang -o <output> obj1.o obj2.o ... -L<lib_dir> -ln00b
-    //       -lpthread -lm -ldl [-framework CoreFoundation on macOS]
-    int max_args = n_objs + 20;
-    const char **argv = malloc(sizeof(const char *) * (size_t)(max_args + 1));
-    int ai = 0;
+    if (!resolved_lib_dir) {
+        fprintf(stderr, "n00b compile: cannot find libn00b.a; set N00B_LIB_DIR or --lib-dir\n");
+        return 1;
+    }
 
-    argv[ai++] = "clang";
+    int          max_args = n_objs + 40;
+    const char **argv     = malloc(sizeof(const char *) * (size_t)(max_args + 1));
+    int          ai       = 0;
+
+    argv[ai++] = compiler;
+#ifdef _WIN32
+    argv[ai++] = "--target=x86_64-w64-windows-gnu";
+    argv[ai++] = "-static";
+    argv[ai++] = "-Wl,--stack,16777216";
+    argv[ai++] = "-Wl,--subsystem,console";
+#endif
     argv[ai++] = "-o";
     argv[ai++] = output;
 
@@ -70,56 +292,30 @@ n00b_link_binary(const char **obj_paths, int n_objs,
 
     char lib_flag[1024];
 
-    if (resolved_lib_dir) {
-        snprintf(lib_flag, sizeof(lib_flag), "-L%s", resolved_lib_dir);
-        argv[ai++] = lib_flag;
-    }
+    snprintf(lib_flag, sizeof(lib_flag), "-L%s", resolved_lib_dir);
+    argv[ai++] = lib_flag;
 
     argv[ai++] = "-ln00b";
     argv[ai++] = "-lpthread";
     argv[ai++] = "-lm";
 
-#ifdef __APPLE__
+#if defined(_WIN32)
+    argv[ai++] = "-lws2_32";
+    argv[ai++] = "-lsynchronization";
+    argv[ai++] = "-ladvapi32";
+#elif defined(__APPLE__)
     argv[ai++] = "-framework";
     argv[ai++] = "CoreFoundation";
     argv[ai++] = "-framework";
     argv[ai++] = "AppKit";
 #else
+    argv[ai++] = "-latomic";
     argv[ai++] = "-ldl";
 #endif
 
     argv[ai] = NULL;
 
-    pid_t pid = fork();
-
-    if (pid < 0) {
-        fprintf(stderr, "n00b compile: fork() failed: %s\n", strerror(errno));
-        free(argv);
-        return 1;
-    }
-
-    if (pid == 0) {
-        // Child: exec clang.
-        execvp("clang", (char *const *)argv);
-        fprintf(stderr, "n00b compile: execvp(clang) failed: %s\n",
-                strerror(errno));
-        _exit(127);
-    }
-
-    // Parent: wait for clang.
+    int rc = run_linker(compiler, argv);
     free(argv);
-
-    int status;
-
-    if (waitpid(pid, &status, 0) < 0) {
-        fprintf(stderr, "n00b compile: waitpid() failed: %s\n",
-                strerror(errno));
-        return 1;
-    }
-
-    if (WIFEXITED(status)) {
-        return WEXITSTATUS(status);
-    }
-
-    return 1;
+    return rc;
 }
