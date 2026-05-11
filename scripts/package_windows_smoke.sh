@@ -31,7 +31,6 @@ esac
 [ -f "test/windows_smoke.ps1" ] || fail "missing test/windows_smoke.ps1"
 [ -f "test/samples/hello.n" ] || fail "missing test/samples/hello.n"
 [ -f "grammars/n00b.bnf" ] || fail "missing grammars/n00b.bnf"
-[ -d "test/data/resharp/tests" ] || fail "missing test/data/resharp/tests"
 
 SMOKE_TESTS="
 test_array.exe
@@ -61,7 +60,6 @@ test_regex_charset.exe
 test_regex_parse.exe
 test_regex_match.exe
 test_regex_api.exe
-test_regex_resharp.exe
 test_io.exe
 test_io_windows.exe
 test_signal.exe
@@ -214,7 +212,6 @@ fi
 mkdir -p "$OUT_DIR/tests"
 mkdir -p "$OUT_DIR/grammars"
 mkdir -p "$OUT_DIR/test/data"
-mkdir -p "$OUT_DIR/test-data/resharp"
 
 cp "$BUILD_DIR/n00b.exe" "$OUT_DIR/"
 cp "$BUILD_DIR/libn00b.a" "$OUT_DIR/"
@@ -228,9 +225,6 @@ extract_collation_test_data "test/data/CollationTest.zip" "$OUT_DIR/test/data"
 for data in $COLLATION_TEST_DATA; do
     [ -s "$OUT_DIR/test/data/$data" ] || fail "missing bundled Unicode test data: $data"
 done
-cp -R test/data/resharp/tests "$OUT_DIR/test-data/resharp/"
-cp test/data/resharp/LICENSE "$OUT_DIR/test-data/resharp/"
-cp test/data/resharp/README.md "$OUT_DIR/test-data/resharp/"
 
 for exe in $SMOKE_TESTS; do
     cp "$BUILD_DIR/$exe" "$OUT_DIR/tests/"

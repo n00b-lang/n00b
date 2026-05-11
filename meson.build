@@ -87,9 +87,12 @@ c_args = [
 
 if target_os != 'windows'
   c_args += '-fPIC'
-else
-  c_args += '-DXXH_NO_INTRINSICS=1'
 endif
+# ncc cannot tokenize the libgcc/clang SIMD intrinsic headers xxhash
+# pulls in (compound-literal vector casts in mmintrin.h). Disable
+# xxhash's intrinsic paths unconditionally — its scalar fallback is
+# still fast.
+c_args += '-DXXH_NO_INTRINSICS=1'
 
 if using_glibc
   c_args = c_args + ['-D_GNU_SOURCE']
@@ -248,15 +251,6 @@ if conf_cocoa
   deps += cocoa_dep
 endif
 
-# macOS Security.framework + CoreFoundation are needed by the ACME
-# HTTPS shim's trust verifier (acme_trust_macos.c).  These are
-# always-shipped Apple frameworks, so unconditional on darwin.
-if target_os == 'darwin'
-  acme_trust_dep = dependency('appleframeworks',
-      modules: ['Security', 'CoreFoundation'])
-  deps += acme_trust_dep
-endif
-
 if conf_notcurses
   notcurses_dep = dependency('notcurses', version: '>=3.0.10', required: false)
   conf_notcurses = notcurses_dep.found()
@@ -278,15 +272,6 @@ endif
 
 mir_proj = subproject('mir')
 mir_dep  = mir_proj.get_variable('mir_dep')
-
-# picotls + picoquic for the QUIC module.  Built but not yet linked into
-# libn00b — the QUIC code that consumes them ships in a follow-up after
-# the Phase 1 framer / UDP / types slice.  See docs/quic/vendored.md.
-picotls_proj           = subproject('picotls')
-picotls_minicrypto_dep = picotls_proj.get_variable('picotls_minicrypto_dep')
-
-picoquic_proj = subproject('picoquic')
-picoquic_dep  = picoquic_proj.get_variable('picoquic_core_dep')
 
 n00b_core = [
     'src/core/init.c',
@@ -520,60 +505,6 @@ if target_os == 'windows'
 endif
 
 # ============================================================================
-# QUIC transport (Phase 1 — picoquic-independent slice)
-#
-# This source list contains only the picoquic-independent pieces of the QUIC
-# module: the wire framer (RFC 9000 §16 varint + 1-byte type tag), the
-# error code translator, and the public stats / channel-state types.  The
-# picoquic-dependent pieces (endpoint, conn, chan, qlog, trust backends,
-# secret providers) land in a follow-up that wires up the vendored
-# picoquic + picotls under subprojects/.  See docs/quic/vendored.md.
-# ============================================================================
-
-n00b_quic = [
-
-    # Phase 2 — ACME HTTPS shim (vanilla sockets + picotls + OS trust).
-
-    # Phase 2 — JWS encoder + base64url + JWK helpers (ACME RFC 8555 § 6.2).
-
-    # Phase 2 — ACME state machine (RFC 8555).  Phase 2.3a covers
-    # session_open + new_account; orders / authz / finalize land later.
-
-    # Phase 2 — PKCS#10 CSR builder (DER + ECDSA-P-256).
-
-    # Phase 2 — Cert provisioner abstraction + static / acme /
-    # external implementations (design doc § 10).
-
-    # Phase 2 — Shared RCU-style atomic-swap helper used by both the
-    # cert store and the sticky-secret module.
-
-    # Phase 2 — Cert store with RCU-style atomic swap + SNI matching
-    # (design doc § 6).
-
-    # Phase 2 — Sticky secret (stateless-reset + address-validation
-    # token rotation; design doc § 7).
-
-    # Phase 2 — LB-CID encoding (draft-ietf-quic-load-balancers,
-    # block-cipher mode w/ 16-byte fixed CIDs; design doc § 8).
-
-    # Phase 2 — Deployment manifest + preflight (design doc § 9).
-
-    # Phase 2 — DNS providers + DNS-01 challenge wrapper (design § 5.4).
-
-    # Phase 2 — Per-cnx SNI routing via picotls callbacks
-    # (audit-tail item #12; design § 6).
-
-    # Phase 3 — Trust→picotls verify-cert bridge (deliverable § 5).
-]
-
-if target_os == 'linux'
-elif target_os != 'darwin'
-endif
-# darwin's acme_trust_macos.m is built as a separate static library
-# so it can go through the Objective-C compiler — Apple's framework
-# headers use attribute extensions ncc cannot parse.
-
-# ============================================================================
 # Virtual Filesystem
 # ============================================================================
 
@@ -693,13 +624,6 @@ n00b_logic = [
 ]
 
 # ============================================================================
-# Machine Learning primitives
-# ============================================================================
-
-n00b_ml = [
-]
-
-# ============================================================================
 # Type checker
 # ============================================================================
 
@@ -709,13 +633,6 @@ n00b_typecheck = [
     'src/typecheck/unify.c',
     'src/typecheck/print.c',
     'src/typecheck/hash.c',
-]
-
-# ============================================================================
-# Language Server Protocol framework
-# ============================================================================
-
-n00b_lsp = [
 ]
 
 n00b_objfile = [
@@ -743,7 +660,7 @@ n00b_objfile = [
     'src/compiler/objfile/dwarf_build.c',
 ]
 
-n00b_dll_src = n00b_core + n00b_adt + n00b_text + n00b_display + n00b_conduit + n00b_quic + n00b_vfs + n00b_parsers + n00b_logic + n00b_ml + n00b_slay + n00b_typecheck + n00b_compiler + n00b_objfile + n00b_lsp
+n00b_dll_src = n00b_core + n00b_adt + n00b_text + n00b_display + n00b_conduit + n00b_vfs + n00b_parsers + n00b_logic + n00b_slay + n00b_typecheck + n00b_compiler + n00b_objfile
 
 # Build generated unicode tables with --no-ncc (they are pure data,
 # no ncc extensions, and parsing them is extremely expensive).
@@ -823,36 +740,10 @@ if conf_notcurses
   link_whole_libs += n00b_notcurses_lib
 endif
 
-# ACME trust verifier (macOS): built as a separate static lib so the
-# .m file goes through the system Objective-C compiler (which knows
-# how to parse Apple framework headers).  Body is plain C; the .m
-# extension is purely the routing trick.
-if target_os == 'darwin'
-  acme_trust_macos_args = [
-      '-g',
-      '-Wno-unused-parameter',
-      '-Wno-unused-function',
-      '-Wno-unknown-pragmas',
-      '-fno-omit-frame-pointer',
-      '-fPIC',
-      '-Wno-atomic-alignment',
-      '-DN00B_HOST_OS=' + host_machine.system(),
-      '-DN00B_HOST_CPU=' + host_machine.cpu_family(),
-  ]
-  n00b_acme_trust_macos = static_library('n00b_acme_trust_macos',
-      ['src/quic/acme_trust_macos.m'],
-      include_directories: incdir,
-      dependencies: deps,
-      objc_args: acme_trust_macos_args,
-      link_args: link_args,
-  )
-  link_whole_libs += n00b_acme_trust_macos
-endif
-
 n00b = static_library('n00b',
     n00b_dll_src,
     include_directories: incdir,
-    dependencies: deps + [libdl_dep, mir_dep, picoquic_dep],
+    dependencies: deps + [libdl_dep, mir_dep],
     c_args: exe_c_args,
     link_args: link_args,
     link_whole: link_whole_libs,
@@ -871,17 +762,7 @@ test_common_kwargs = {
     # #9.
     'link_args': exe_link_args,
     'link_with': [n00b],
-    # libn00b now references picoquic symbols (endpoint, conn, chan).
-    # Static-library deps don't propagate transitively in meson, so
-    # every test that links libn00b also needs picoquic_dep on its
-    # link line.  picoquic_dep brings the include path along too,
-    # which makes test code that drives picoquic directly Just Work.
-    'dependencies': [picoquic_dep],
 }
-
-# Alias kept for clarity at QUIC test sites that drive picoquic
-# explicitly; structurally identical to test_common_kwargs today.
-quic_test_kwargs = test_common_kwargs
 
 # QUIC echo demo — exercises the full transport end-to-end.
 
@@ -1015,9 +896,9 @@ test('dict', dict_test, suite: 'unit')
 
 # DNS providers (manual + cloudflare) + DNS-01 challenge wrapper.
 
-# Per-cnx SNI routing (cert store wired into picotls callbacks).
+# (removed: QUIC SNI routing — WIP, lives on another branch)
 
-# Phase 3 § 5 — trust→picotls verify-cert bridge end-to-end.
+# (removed: QUIC trust→picotls bridge — WIP, lives on another branch)
 
 # Phase 3 § 5.3 tail — mid-handshake-reload no-tear property.
 
@@ -1219,17 +1100,6 @@ regex_api_test = executable('test_regex_api',
     kwargs: test_common_kwargs,
 )
 test('regex_api', regex_api_test, suite: 'unit')
-
-regex_resharp_test = executable('test_regex_resharp',
-    ['test/unit/test_regex_resharp.c'],
-    kwargs: test_common_kwargs,
-)
-test('regex_resharp', regex_resharp_test,
-    suite: 'unit',
-    timeout: 300,
-    env: {
-        'N00B_RESHARP_TEST_DIR': meson.current_source_dir() / 'test/data/resharp/tests',
-    })
 
 # ============================================================================
 # Logic / constraint solver tests
