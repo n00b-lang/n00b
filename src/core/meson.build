@@ -1,0 +1,25 @@
+# Sources for the n00b core: allocators, GC, threading primitives,
+# strings core, type registry, sha256, etc.
+
+n00b_core_src = files(
+    'init.c',
+    'thread.c',
+    'mmaps.c',
+    'alloc.c',
+    'arena.c',
+    'pool.c',
+    'memory_info.c',
+    'hash.c',
+    'stw.c',
+    'gc.c',
+    'buffer.c',
+    'data_lock.c',
+    'string.c',
+    'lock_accounting.c',
+    'mutex.c',
+    'rwlock.c',
+    'condition.c',
+    'type_registry.c',
+    'builtin_types.c',
+    'sha256.c',
+)

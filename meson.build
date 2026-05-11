@@ -273,38 +273,14 @@ endif
 mir_proj = subproject('mir')
 mir_dep  = mir_proj.get_variable('mir_dep')
 
-n00b_core = [
-    'src/core/init.c',
-    'src/core/thread.c',
-    'src/core/mmaps.c',
-    'src/core/alloc.c',
-    'src/core/arena.c',
-    'src/core/pool.c',
-    'src/core/memory_info.c',
-    'src/core/hash.c',
-    'src/core/stw.c',
-    'src/core/gc.c',
-    'src/core/buffer.c',
-    'src/core/data_lock.c',
-    'src/core/string.c',
-    'src/core/lock_accounting.c',
-    'src/core/mutex.c',
-    'src/core/rwlock.c',
-    'src/core/condition.c',
-    'src/core/type_registry.c',
-    'src/core/builtin_types.c',
-    'src/core/sha256.c',
-    'src/util/path.c',
-]
+subdir('src/core')
+subdir('src/util')
 
 # ============================================================================
 # Abstract data types
 # ============================================================================
 
-n00b_adt = [
-    'src/adt/dict_untyped.c',
-    'src/adt/dict.c',
-]
+subdir('src/adt')
 
 python3 = find_program('python3')
 
@@ -352,258 +328,43 @@ gen_unicode_tables = custom_target('gen_unicode_tables',
 # Text processing (unicode + strings)
 # ============================================================================
 
-n00b_text = [
-    # Unicode algorithms
-    'src/text/unicode/encoding.c',
-    'src/text/unicode/properties.c',
-    'src/text/unicode/casemap.c',
-    'src/text/unicode/normalization.c',
-    'src/text/unicode/segmentation.c',
-    'src/text/unicode/linebreak.c',
-    'src/text/unicode/bidi.c',
-    'src/text/unicode/collation.c',
-    'src/text/unicode/identifiers.c',
-    'src/text/unicode/security.c',
-    'src/text/unicode/idna.c',
-    'src/text/unicode/emoji.c',
-    'src/text/unicode/query.c',
-    # String formatting, styling, rendering
-    'src/text/strings/string_ops.c',
-    'src/text/strings/string_convert.c',
-    'src/text/strings/fptostr.c',
-    'src/text/strings/fmt_numbers.c',
-    'src/text/strings/ansi.c',
-    'src/text/strings/markdown.c',
-    'src/text/strings/style_ops.c',
-    'src/text/strings/string_style.c',
-    'src/text/strings/style_registry.c',
-    'src/text/strings/rich_desc.c',
-    'src/text/strings/format_spec.c',
-    'src/text/strings/format.c',
-    'src/text/strings/md_render.c',
-    'src/text/strings/md_lines.c',
-    'src/text/strings/theme.c',
-    # Regex engine (Brzozowski symbolic derivatives)
-    'src/text/regex/charset.c',
-    'src/text/regex/node.c',
-    'src/text/regex/parse.c',
-    'src/text/regex/deriv.c',
-    'src/text/regex/match.c',
-    'src/text/regex/optimize.c',
-    'src/text/regex/regex.c',
-]
+subdir('src/text')
 
 # ============================================================================
 # Display (render + table + layout + hexdump)
 # ============================================================================
 
-n00b_display = [
-    'src/display/layout.c',
-    'src/display/hexdump.c',
-    # Render engine
-    'src/display/render/cell.c',
-    'src/display/render/border_themes.c',
-    'src/display/render/plane.c',
-    'src/display/render/box.c',
-    'src/display/render/composite.c',
-    'src/display/render/canvas.c',
-    'src/display/render/backend_stream.c',
-    'src/display/render/backend_ansi.c',
-    'src/display/render/backend_ansi_inline.c',
-    'src/display/render/backend_dumb.c',
-    'src/display/render/draw_cmd.c',
-    'src/display/render/font_metrics.c',
-    'src/display/render/backend_registry.c',
-    'src/display/render/cocoa_init_bridge.c',
-    # Widget system
-    'src/display/widget.c',
-    'src/display/focus.c',
-    'src/display/event_loop.c',
-    'src/display/mouse.c',
-    'src/display/widgets/label.c',
-    'src/display/widgets/divider.c',
-    'src/display/widgets/spacer.c',
-    'src/display/widgets/progress.c',
-    'src/display/widgets/button.c',
-    'src/display/widgets/checkbox.c',
-    'src/display/widgets/input.c',
-    'src/display/widgets/box.c',
-    'src/display/widgets/switch.c',
-    'src/display/widgets/radio.c',
-    'src/display/widgets/link.c',
-    'src/display/widgets/list_widget.c',
-    'src/display/widgets/selectionlist.c',
-    'src/display/widgets/breadcrumb.c',
-    # Table
-    'src/display/table/table.c',
-    'src/display/table/table_layout.c',
-    'src/display/table/table_render.c',
-    'src/display/table/table_styles.c',
-]
+subdir('src/display')
 
 # ============================================================================
 # Conduit pub/sub system
 # ============================================================================
 
-n00b_conduit = [
-    'src/conduit/conduit.c',
-    'src/conduit/subscription.c',
-    'src/conduit/thread_lifecycle.c',
-    'src/conduit/service.c',
-    # IO core
-    'src/conduit/io.c',
-    # Managed FDs
-    'src/conduit/fd_managed.c',
-    'src/conduit/fd_writer.c',
-    'src/conduit/socket.c',
-    'src/conduit/file.c',
-    'src/conduit/timer.c',
-    'src/conduit/user_event.c',
-    'src/conduit/signal.c',
-    'src/conduit/proc_lifecycle.c',
-    'src/conduit/file_change.c',
-    # Pipeline / transforms
-    'src/conduit/xform.c',
-    'src/conduit/xform_linebuf.c',
-    'src/conduit/xform_ansi_strip.c',
-    'src/conduit/xform_render.c',
-    'src/conduit/xform_hexdump.c',
-    'src/conduit/xform_json.c',
-    'src/conduit/xform_http.c',
-    # Print API
-    'src/conduit/print.c',
-]
-
-# Platform-conditional IO backends
-if target_os != 'windows'
-    n00b_conduit += [
-        'src/conduit/io_poll.c',
-        'src/conduit/subproc.c',
-    ]
-endif
-
-if target_os == 'darwin' or target_os in ['freebsd', 'openbsd', 'netbsd']
-    n00b_conduit += 'src/conduit/io_kqueue.c'
-endif
-if target_os == 'linux'
-    n00b_conduit += 'src/conduit/io_epoll.c'
-    liburing_dep = dependency('liburing', required: false)
-    if liburing_dep.found()
-        n00b_conduit += 'src/conduit/io_uring.c'
-        deps += liburing_dep
-    endif
-endif
-if target_os == 'windows'
-    n00b_conduit += [
-        'src/conduit/io_wsa.c',
-        'src/conduit/subproc_windows.c',
-    ]
-    winsock_dep = cc.find_library('ws2_32', required: true)
-    sync_dep = cc.find_library('synchronization', required: true)
-    advapi_dep = cc.find_library('advapi32', required: true)
-    deps += [winsock_dep, sync_dep, advapi_dep]
-endif
+subdir('src/conduit')
 
 # ============================================================================
 # Virtual Filesystem
 # ============================================================================
 
-n00b_vfs = [
-    'src/vfs/types.c',
-    'src/vfs/backend.c',
-    'src/vfs/backend_memory.c',
-    'src/vfs/backend_local.c',
-    'src/vfs/hooks.c',
-    'src/vfs/vfs.c',
-    'src/vfs/cache.c',
-    'src/vfs/frontend.c',
-]
-
-if target_os == 'linux'
-    n00b_vfs += 'src/vfs/frontend_nfs.c'
-endif
-
-if target_os == 'darwin'
-    fuse_dep_opt = dependency('fuse', required: false)
-    if fuse_dep_opt.found()
-        n00b_vfs += 'src/vfs/frontend_fuse.c'
-        deps += fuse_dep_opt
-        exe_c_args += ['-DN00B_HAVE_FUSE=1']
-    endif
-endif
+subdir('src/vfs')
 
 # ============================================================================
 # Parsers
 # ============================================================================
 
-n00b_parsers = [
-    'src/parsers/ijson.c',
-    'src/parsers/json.c',
-    'src/parsers/scanner.c',
-    'src/parsers/token_stream.c',
-    'src/parsers/scan_recipes.c',
-    'src/parsers/tokenizer_registry.c',
-    'src/parsers/text_tokenizer.c',
-    'src/parsers/shell_tokenizer.c',
-    'src/parsers/lisp_tokenizer.c',
-    'src/parsers/json_tokenizer.c',
-]
+subdir('src/parsers')
 
 # ============================================================================
 # Slay grammar / parser toolkit
 # ============================================================================
 
-n00b_slay = [
-    'src/slay/token.c',
-    'src/slay/annotation.c',
-    'src/slay/grammar.c',
-    'src/slay/unicode_class.c',
-    'src/slay/parse_tree.c',
-    'src/slay/parse_forest.c',
-    'src/slay/pwz.c',
-    'src/slay/bnf.c',
-    'src/slay/earley.c',
-    'src/slay/earley_forest.c',
-    'src/slay/n00b_parse.c',
-    'src/slay/commander.c',
-    'src/slay/commander_tok.c',
-    'src/slay/commander_json.c',
-    'src/slay/symtab.c',
-    'src/slay/tree_util.c',
-    'src/slay/annot_walk.c',
-    'src/slay/annot_scope.c',
-    'src/slay/annot_symtab.c',
-    'src/slay/annot_cf.c',
-    'src/slay/annot_types.c',
-    'src/slay/infer_expr.c',
-    'src/slay/cfg.c',
-    'src/slay/cdg.c',
-    'src/slay/dfg.c',
-    'src/slay/diagnostic.c',
-    'src/slay/analyze.c',
-    'src/slay/debug.c',
-    'src/slay/c_tokenizer.c',
-    'src/slay/transform.c',
-    'src/slay/codegen.c',
-    'src/slay/codegen_mir.c',
-    'src/slay/codegen_builtins.c',
-]
+subdir('src/slay')
 
 # ============================================================================
 # N00b compiler (language-specific)
 # ============================================================================
 
-n00b_compiler = [
-    'src/n00b/n00b_tokenizer.c',
-    'src/n00b/n00b_type_spec.c',
-    'src/n00b/n00b_compile.c',
-    'src/n00b/n00b_module_loader.c',
-    'src/n00b/n00b_type_map.c',
-    'src/n00b/embed.c',
-    'src/n00b/embed_ffi.c',
-    'src/n00b/n00b_objfile_emit.c',
-    'src/n00b/n00b_compile_link.c',
-]
+subdir('src/n00b')
 
 libdl_dep = cc.find_library('dl', required: false)
 
@@ -611,56 +372,34 @@ libdl_dep = cc.find_library('dl', required: false)
 # Logic / constraint solver
 # ============================================================================
 
-n00b_logic = [
-    'src/logic/clpfd_domain.c',
-    'src/logic/clpfd_store.c',
-    'src/logic/clpfd_label.c',
-    'src/logic/asp_intern.c',
-    'src/logic/asp_relation.c',
-    'src/logic/asp_rule.c',
-    'src/logic/asp_engine.c',
-    'src/logic/logic_program.c',
-    'src/logic/logic_dsl.c',
-]
+subdir('src/logic')
 
 # ============================================================================
 # Type checker
 # ============================================================================
 
-n00b_typecheck = [
-    'src/typecheck/construct.c',
-    'src/typecheck/context.c',
-    'src/typecheck/unify.c',
-    'src/typecheck/print.c',
-    'src/typecheck/hash.c',
-]
+subdir('src/typecheck')
 
-n00b_objfile = [
-    'src/compiler/objfile/bstream.c',
-    'src/compiler/objfile/writer.c',
-    'src/compiler/objfile/abstract.c',
-    'src/compiler/objfile/md5.c',
-    'src/compiler/objfile/demangle.c',
-    'src/compiler/objfile/demangle_rust.c',
-    'src/compiler/objfile/elf.c',
-    'src/compiler/objfile/elf_query.c',
-    'src/compiler/objfile/elf_helpers.c',
-    'src/compiler/objfile/elf_build.c',
-    'src/compiler/objfile/macho.c',
-    'src/compiler/objfile/macho_query.c',
-    'src/compiler/objfile/macho_helpers.c',
-    'src/compiler/objfile/macho_build.c',
-    'src/compiler/objfile/pe.c',
-    'src/compiler/objfile/pe_query.c',
-    'src/compiler/objfile/pe_helpers.c',
-    'src/compiler/objfile/pe_build.c',
-    'src/compiler/objfile/dwarf.c',
-    'src/compiler/objfile/dwarf_query.c',
-    'src/compiler/objfile/dwarf_codegen.c',
-    'src/compiler/objfile/dwarf_build.c',
-]
+subdir('src/compiler/objfile')
 
-n00b_dll_src = n00b_core + n00b_adt + n00b_text + n00b_display + n00b_conduit + n00b_vfs + n00b_parsers + n00b_logic + n00b_slay + n00b_typecheck + n00b_compiler + n00b_objfile
+# Aggregate per-module source lists into the libn00b source set. Each
+# entry above (`subdir('src/<mod>')`) is responsible for declaring a
+# `n00b_<mod>_src` variable; we just glue them together here.
+n00b_dll_src = (
+    n00b_core_src +
+    n00b_util_src +
+    n00b_adt_src +
+    n00b_text_src +
+    n00b_display_src +
+    n00b_conduit_src +
+    n00b_vfs_src +
+    n00b_parsers_src +
+    n00b_logic_src +
+    n00b_slay_src +
+    n00b_typecheck_src +
+    n00b_compiler_src +
+    n00b_objfile_src
+)
 
 # Build generated unicode tables with --no-ncc (they are pure data,
 # no ncc extensions, and parsing them is extremely expensive).
