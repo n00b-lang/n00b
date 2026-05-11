@@ -1,0 +1,68 @@
+# Conduit pub/sub system — core API plus platform-conditional IO
+# backends and the Windows-specific subprocess implementation.
+#
+# This subdir adds to the top-level `deps` variable (Linux liburing,
+# Windows ws2_32/synchronization/advapi32) — meson's subdir() inlines
+# this file into the parent scope so those modifications are visible
+# to the rest of the build.
+
+n00b_conduit_src = files(
+    'conduit.c',
+    'subscription.c',
+    'thread_lifecycle.c',
+    'service.c',
+    # IO core
+    'io.c',
+    # Managed FDs
+    'fd_managed.c',
+    'fd_writer.c',
+    'socket.c',
+    'file.c',
+    'timer.c',
+    'user_event.c',
+    'signal.c',
+    'proc_lifecycle.c',
+    'file_change.c',
+    # Pipeline / transforms
+    'xform.c',
+    'xform_linebuf.c',
+    'xform_ansi_strip.c',
+    'xform_render.c',
+    'xform_hexdump.c',
+    'xform_json.c',
+    'xform_http.c',
+    # Print API
+    'print.c',
+)
+
+# Platform-conditional IO backends.
+if target_os != 'windows'
+    n00b_conduit_src += files(
+        'io_poll.c',
+        'subproc.c',
+    )
+endif
+
+if target_os == 'darwin' or target_os in ['freebsd', 'openbsd', 'netbsd']
+    n00b_conduit_src += files('io_kqueue.c')
+endif
+
+if target_os == 'linux'
+    n00b_conduit_src += files('io_epoll.c')
+    liburing_dep = dependency('liburing', required: false)
+    if liburing_dep.found()
+        n00b_conduit_src += files('io_uring.c')
+        deps += liburing_dep
+    endif
+endif
+
+if target_os == 'windows'
+    n00b_conduit_src += files(
+        'io_wsa.c',
+        'subproc_windows.c',
+    )
+    winsock_dep = cc.find_library('ws2_32', required: true)
+    sync_dep    = cc.find_library('synchronization', required: true)
+    advapi_dep  = cc.find_library('advapi32', required: true)
+    deps += [winsock_dep, sync_dep, advapi_dep]
+endif

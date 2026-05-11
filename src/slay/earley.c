@@ -1665,10 +1665,31 @@ n00b_earley_extract_diagnostics(n00b_earley_parser_t      *p,
         return;
     }
 
+    // Find the first state where error recovery was needed.
+    // Walk forward looking for the earliest state with penalized items.
+    // If no penalty items exist, fall back to the furthest scan-ready state.
+    int32_t nstates     = (int32_t)n00b_list_len(p->states);
+    int32_t first_error = -1;
+
+    for (int32_t s = 1; s < nstates; s++) {
+        n00b_earley_state_t *state = p->states.data[s];
+
+        for (size_t i = 0; i < n00b_list_len(state->items); i++) {
+            n00b_earley_item_t *ei = state->items.data[i];
+
+            if (ei->my_penalty > 0) {
+                first_error = s;
+                goto found_first;
+            }
+        }
+    }
+
+found_first:;
+
     // Walk backward to find the furthest state with scan-ready items.
     int32_t last_ok = -1;
 
-    for (int32_t s = (int32_t)n00b_list_len(p->states) - 1; s >= 0; s--) {
+    for (int32_t s = nstates - 1; s >= 0; s--) {
         n00b_earley_state_t *state = p->states.data[s];
 
         for (size_t i = 0; i < n00b_list_len(state->items); i++) {
@@ -1694,21 +1715,26 @@ found:
 
     n00b_grammar_t *g = p->grammar;
 
-    // Determine where the actual failure is.
-    //
-    // last_ok has scan items.  If last_ok+1 exists in the chart, then
-    // at least one scan at last_ok succeeded — the real failure token
-    // is at last_ok+1 (the parser couldn't continue from there).
-    // Otherwise no scan succeeded at last_ok and it IS the failure.
-    int32_t nstates  = (int32_t)n00b_list_len(p->states);
-    int32_t fail_pos = last_ok;
+    // Use the first error location if available, otherwise the furthest
+    // scan-ready position.
+    int32_t fail_pos;
 
-    if (last_ok + 1 < nstates) {
-        fail_pos = last_ok + 1;
+    if (first_error >= 0) {
+        fail_pos = first_error;
+    }
+    else {
+        fail_pos = last_ok;
+
+        if (last_ok + 1 < nstates) {
+            fail_pos = last_ok + 1;
+        }
     }
 
+    // The scan state for "expected" tokens is the state BEFORE the failure.
+    int32_t scan_pos = fail_pos > 0 ? fail_pos - 1 : 0;
+
     n00b_earley_state_t *fail_state = p->states.data[fail_pos];
-    n00b_earley_state_t *scan_state = p->states.data[last_ok];
+    n00b_earley_state_t *scan_state = p->states.data[scan_pos];
 
     // "got" comes from the failure position's token.
     if (fail_state->token) {

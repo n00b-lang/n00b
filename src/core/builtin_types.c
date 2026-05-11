@@ -2,6 +2,7 @@
 #include "core/type_info.h"
 #include "core/string.h"
 #include "core/buffer.h"
+#include "slay/codegen_builtins.h"
 #include "core/hash.h"
 #include "adt/dict_untyped.h"
 #include "adt/interval_tree.h"
@@ -185,4 +186,36 @@ n00b_register_builtin_types(void)
 
     // n00b_ffi_module_t — embed literal type with install() method.
     n00b_ffi_module_type_register();
+
+    // Interpreter runtime types for option/result.
+    N00B_TYPE_REGISTER(n00b_rt_option_t,
+        N00B_CORE_METHOD(N00B_BI_TO_STRING, n00b_builtin_print_option),
+    );
+    N00B_TYPE_REGISTER(n00b_rt_result_t,
+        N00B_CORE_METHOD(N00B_BI_TO_STRING, n00b_builtin_print_result),
+    );
+
+    // Extension methods for option.
+    n00b_type_add_method(typehash(n00b_rt_option_t *), &(n00b_method_t){
+        .fn   = (n00b_vtable_entry)n00b_builtin_option_unwrap,
+        .name = "unwrap",
+    });
+    n00b_type_add_method(typehash(n00b_rt_option_t *), &(n00b_method_t){
+        .fn   = (n00b_vtable_entry)n00b_builtin_option_is_set,
+        .name = "is_set?",
+    });
+
+    // Extension methods for result.
+    n00b_type_add_method(typehash(n00b_rt_result_t *), &(n00b_method_t){
+        .fn   = (n00b_vtable_entry)n00b_builtin_result_unwrap,
+        .name = "unwrap",
+    });
+    n00b_type_add_method(typehash(n00b_rt_result_t *), &(n00b_method_t){
+        .fn   = (n00b_vtable_entry)n00b_builtin_result_is_ok,
+        .name = "ok?",
+    });
+    n00b_type_add_method(typehash(n00b_rt_result_t *), &(n00b_method_t){
+        .fn   = (n00b_vtable_entry)n00b_builtin_result_is_ok,
+        .name = "is_ok?",
+    });
 }

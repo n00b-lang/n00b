@@ -1,0 +1,10 @@
+class Point {
+  x: int
+  y: int
+}
+method Point.area() -> int {
+  self.x * self.y
+}
+var p = Point(3, 4)
+print(p.area())
+0

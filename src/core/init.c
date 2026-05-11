@@ -249,6 +249,7 @@ n00b_init(n00b_runtime_t *rt, int argc, char *argv[]) _kargs
     rt->sub_map = n00b_alloc(n00b_dict_untyped_t);
     n00b_dict_untyped_init(rt->sub_map,
                            .skip_obj_hash = true);
+    n00b_gc_register_root(rt->sub_map);
 
     n00b_str_registry_init();
     n00b_theme_init();

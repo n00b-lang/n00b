@@ -1,0 +1,4 @@
+var o = none()
+print(o)
+assert !o.is_set?()
+0

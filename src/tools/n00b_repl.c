@@ -399,14 +399,55 @@ eval_and_print(n00b_repl_state_t   *state,
                n00b_parse_tree_t   *tree,
                n00b_annot_result_t *annot)
 {
-    bool    ok  = false;
-    int64_t val = n00b_cg_session_eval_tree(state->session, tree,
-                                              .annot = annot, .ok = &ok);
+    bool               ok       = false;
+    n00b_cg_type_tag_t ret_type = N00B_CG_VOID;
+    int64_t            val      = n00b_cg_session_eval_tree(
+        state->session, tree,
+        .annot = annot, .ok = &ok, .out_type = &ret_type);
 
-    if (ok) {
-        printf("=> %lld\n", (long long)val);
-    } else {
+    if (!ok) {
         fprintf(stderr, "error: codegen/JIT failed\n");
+        return;
+    }
+
+    switch (ret_type) {
+    case N00B_CG_VOID:
+        // Void-producing statement (print, assign, etc.) — no output.
+        break;
+
+    case N00B_CG_BOOL:
+        printf("=> %s\n", val ? "true" : "false");
+        break;
+
+    case N00B_CG_STRING: {
+        n00b_string_t *s = (n00b_string_t *)(uintptr_t)val;
+
+        if (s && s->data) {
+            printf("=> \"%.*s\"\n", (int)s->u8_bytes, s->data);
+        }
+        else {
+            printf("=> nil\n");
+        }
+
+        break;
+    }
+
+    case N00B_CG_NIL:
+        printf("=> nil\n");
+        break;
+
+    case N00B_CG_F32:
+    case N00B_CG_F64: {
+        double d;
+        memcpy(&d, &val, sizeof(d));
+        printf("=> %g\n", d);
+        break;
+    }
+
+    default:
+        // All integer types.
+        printf("=> %lld\n", (long long)val);
+        break;
     }
 }
 
@@ -456,16 +497,7 @@ process_parsed_input(n00b_repl_state_t   *state,
             //
             // Actually, to avoid double-emission, just eval the
             // full tree which will skip func-defs (cur_func != NULL).
-            bool    ok  = false;
-            int64_t val = n00b_cg_session_eval_tree(state->session, tree,
-                                                      .annot = annot,
-                                                      .ok    = &ok);
-
-            if (ok) {
-                printf("=> %lld\n", (long long)val);
-            } else {
-                fprintf(stderr, "error: codegen/JIT failed\n");
-            }
+            eval_and_print(state, tree, annot);
         } else {
             // Pure expressions: eval the whole tree directly.
             eval_and_print(state, tree, annot);

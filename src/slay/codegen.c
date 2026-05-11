@@ -12,9 +12,11 @@
 #include "n00b/n00b_compile_binary.h"
 #include "n00b/embed.h"
 #include "n00b/embed_ffi.h"
+#include "slay/codegen_builtins.h"
 #include "core/alloc.h"
 #include "core/hash.h"
 #include "core/type_info.h"
+#include "typecheck/unify.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -127,6 +129,14 @@ static const struct {
 static n00b_cg_val_t codegen_func_def(n00b_cg_session_t *s, n00b_parse_tree_t *node);
 static n00b_cg_val_t codegen_assert_stmt(n00b_cg_session_t *s, n00b_parse_tree_t *node);
 static n00b_cg_val_t codegen_comptime(n00b_cg_session_t *s, n00b_parse_tree_t *node);
+static n00b_cg_val_t codegen_enum_stmt(n00b_cg_session_t *s, n00b_parse_tree_t *node);
+static n00b_cg_val_t codegen_class_decl(n00b_cg_session_t *s, n00b_parse_tree_t *node);
+static n00b_cg_val_t codegen_tuple(n00b_cg_session_t *s, n00b_parse_tree_t *node);
+static n00b_class_layout_t *compute_class_layout(n00b_cg_session_t *s, n00b_scope_t *scope);
+static void    *n00b_builtin_obj_alloc(int64_t size);
+static uint64_t n00b_builtin_field_get(void *obj, int64_t offset);
+static void     n00b_builtin_field_set(void *obj, int64_t offset, uint64_t value);
+static int32_t  layout_field_index(n00b_class_layout_t *layout, const char *name, size_t name_len);
 
 // ============================================================================
 // Internal: install default operators on a session
@@ -210,6 +220,9 @@ n00b_cg_session_new(n00b_grammar_t *grammar) _kargs
         n00b_codegen_register(s, "func-def", codegen_func_def);
         n00b_codegen_register(s, "assert-stmt", codegen_assert_stmt);
         n00b_codegen_register(s, "comptime-stmt", codegen_comptime);
+        n00b_codegen_register(s, "enum-stmt", codegen_enum_stmt);
+        n00b_codegen_register(s, "class-decl", codegen_class_decl);
+        n00b_codegen_register(s, "tuple-or-paren", codegen_tuple);
     }
 
     return s;
@@ -514,6 +527,26 @@ n00b_codegen_node_type(n00b_cg_session_t *s, n00b_parse_tree_t *node)
     return N00B_CG_I64;
 }
 
+n00b_tc_type_t *
+n00b_codegen_node_tc_type(n00b_cg_session_t *s, n00b_parse_tree_t *node)
+{
+    n00b_annot_result_t *a = current_annot(s);
+
+    if (!a || !a->node_types) {
+        return NULL;
+    }
+
+    bool            found;
+    uintptr_t       key  = (uintptr_t)node;
+    n00b_tc_type_t *type = n00b_dict_get(a->node_types, key, &found);
+
+    if (!found || !type) {
+        return NULL;
+    }
+
+    return n00b_tc_find(type);
+}
+
 n00b_cf_label_t *
 n00b_codegen_cf_label(n00b_cg_session_t *s, n00b_parse_tree_t *node)
 {
@@ -538,6 +571,14 @@ n00b_codegen_annot(n00b_cg_session_t *s)
     return current_annot(s);
 }
 
+n00b_annot_result_t *
+n00b_codegen_set_annot(n00b_cg_session_t *s, n00b_annot_result_t *annot)
+{
+    n00b_annot_result_t *prev = s->annot;
+    s->annot = annot;
+    return prev;
+}
+
 n00b_diag_ctx_t *
 n00b_codegen_diagnostics(n00b_cg_session_t *s)
 {
@@ -548,6 +589,28 @@ void *
 n00b_codegen_get_user_data(n00b_cg_session_t *s)
 {
     return s->user_data;
+}
+
+// Emit a codegen-stage diagnostic.
+// Uses n00b_diag_push which allocates strings. When calling during
+// the codegen tree walk, the GC allocation can trigger conduit crashes
+// (known infrastructure issue). For now, we also set the diag error
+// count directly as a fallback.
+static void
+codegen_error(n00b_cg_session_t *s, n00b_parse_tree_t *node,
+              const char *code, const char *msg)
+{
+    n00b_diag_span_t span = n00b_diag_span_from_node(node);
+
+    fprintf(stderr, "error[%s]: %s", code, msg);
+
+    if (span.start_line > 0) {
+        fprintf(stderr, " (line %u, col %u)", span.start_line, span.start_col);
+    }
+
+    fprintf(stderr, "\n");
+
+    s->has_codegen_errors = true;
 }
 
 // ============================================================================
@@ -575,11 +638,13 @@ default_literal_parser(n00b_cg_session_t *s,
     if (type_tag == N00B_CG_BOOL || (len == 4 && memcmp(text, "true", 4) == 0)
         || (len == 5 && memcmp(text, "false", 5) == 0)) {
         bool val = (len == 4 && memcmp(text, "true", 4) == 0);
-        return _n00b_cg_const_i64(s, val ? 1 : 0);
+        return _n00b_cg_const_bool(s, val);
     }
 
-    // String literals: type is PTR, or text starts with a quote char.
-    if (type_tag == N00B_CG_PTR || (len >= 2 && (text[0] == '"' || text[0] == '\''))) {
+    // String literals: type is STRING (or legacy PTR), or text starts
+    // with a quote char.
+    if (type_tag == N00B_CG_STRING || type_tag == N00B_CG_PTR
+        || (len >= 2 && (text[0] == '"' || text[0] == '\''))) {
         // Strip quotes if present.
         const char *str_data = buf;
         size_t      str_len  = len;
@@ -592,7 +657,11 @@ default_literal_parser(n00b_cg_session_t *s,
         // Create an n00b_string_t so the value is a managed object.
         n00b_string_t *str_obj = n00b_string_from_raw(str_data, (int64_t)str_len);
 
-        return _n00b_cg_const_ptr(s, str_obj);
+        return (n00b_cg_val_t){
+            .kind     = N00B_CG_VAL_IMM,
+            .type_tag = N00B_CG_STRING,
+            .aux      = (uint64_t)(uintptr_t)str_obj,
+        };
     }
 
     if (type_tag == N00B_CG_F64) {
@@ -735,6 +804,11 @@ codegen_operator(n00b_cg_session_t *s, n00b_parse_tree_t *node)
     }
 
     if (n_operands == 1) {
+        // Unary '-' is negation, not subtraction.
+        if (sem_op == N00B_CG_OP_SUB) {
+            sem_op = N00B_CG_OP_NEG;
+        }
+
         n00b_cg_val_t a = codegen_walk(s, operands[0]);
         return n00b_cg_emit_unop(s, (n00b_cg_semantic_op_t)sem_op, a);
     }
@@ -810,14 +884,14 @@ codegen_embed(n00b_cg_session_t *s, n00b_parse_tree_t *node)
     // TODO: If no modifier, try to get the type from inference.
     // For now, without a modifier we can't dispatch.
     if (!modifier) {
-        fprintf(stderr,
-                "embed: no modifier specified and type inference not yet "
-                "implemented for embed literals\n");
+        codegen_error(s, node, "CG001",
+                      "embed literal: no type modifier specified");
         return N00B_CG_VOID_VAL;
     }
 
     if (!s->embed_registry) {
-        fprintf(stderr, "embed: no embed registry on session\n");
+        codegen_error(s, node, "CG002",
+                      "embed literal: no embed registry configured");
         return N00B_CG_VOID_VAL;
     }
 
@@ -932,13 +1006,112 @@ codegen_branch(n00b_cg_session_t *s, n00b_cf_label_t *cf)
     return N00B_CG_VOID_VAL;
 }
 
-static n00b_cg_val_t
-codegen_loop(n00b_cg_session_t *s, n00b_cf_label_t *cf)
+// Check if a for-loop's condition is a range node (for x in start to end).
+static bool
+is_range_loop(n00b_cf_label_t *cf)
+{
+    if (!cf->cond) {
+        return false;
+    }
+
+    return n00b_pt_is_nt(cf->cond, "range");
+}
+
+// Extract the loop variable name from a for-stmt node.
+// for-stmt children: 'for', for-var-list, 'in'/'from', range/target, body
+static const char *
+extract_loop_var_name(n00b_cg_session_t *s, n00b_cf_label_t *cf)
+{
+    n00b_parse_tree_t *self = cf->self;
+    size_t nc = n00b_pt_num_children(self);
+
+    for (size_t i = 0; i < nc; i++) {
+        n00b_parse_tree_t *child = n00b_pt_get_child(self, i);
+
+        if (child && n00b_pt_is_nt(child, "for-var-list")) {
+            n00b_parse_tree_t *tok = n00b_pt_first_token(child);
+
+            if (tok) {
+                const char *text = n00b_pt_token_text(tok);
+                size_t      len  = n00b_pt_token_text_len(tok);
+
+                if (text && len > 0) {
+                    char *buf = n00b_alloc_size(1, len + 1);
+                    memcpy(buf, text, len);
+                    buf[len] = '\0';
+                    return buf;
+                }
+            }
+        }
+    }
+
+    return NULL;
+}
+
+// Extract start and end expressions from a range node.
+// range -> range-parts -> expression, range-sep, expression
+static bool
+extract_range_bounds(n00b_cg_session_t  *s,
+                     n00b_parse_tree_t  *range_node,
+                     n00b_parse_tree_t **start_out,
+                     n00b_parse_tree_t **end_out)
+{
+    // range -> range-parts (single child or direct)
+    n00b_parse_tree_t *parts = range_node;
+
+    // Descend through range to range-parts if needed.
+    size_t nc = n00b_pt_num_children(parts);
+
+    for (size_t i = 0; i < nc; i++) {
+        n00b_parse_tree_t *child = n00b_pt_get_child(parts, i);
+
+        if (child && n00b_pt_is_nt(child, "range-parts")) {
+            parts = child;
+            break;
+        }
+    }
+
+    // range-parts has children: expression, range-sep, expression
+    // Find the first two non-token, non-group NTs that are expressions.
+    n00b_parse_tree_t *exprs[2] = {NULL, NULL};
+    int n_exprs = 0;
+
+    nc = n00b_pt_num_children(parts);
+
+    for (size_t i = 0; i < nc && n_exprs < 2; i++) {
+        n00b_parse_tree_t *child = n00b_pt_get_child(parts, i);
+
+        if (!child || n00b_pt_is_token(child)) {
+            continue;
+        }
+
+        if (n00b_pt_is_group(child)) {
+            continue;
+        }
+
+        // Skip range-sep nodes.
+        if (n00b_pt_is_nt(child, "range-sep")) {
+            continue;
+        }
+
+        exprs[n_exprs++] = child;
+    }
+
+    if (n_exprs < 2) {
+        return false;
+    }
+
+    *start_out = exprs[0];
+    *end_out   = exprs[1];
+    return true;
+}
+
+// Push a loop entry onto the loop stack.
+static void
+push_loop(n00b_cg_session_t *s, n00b_cg_val_t break_label,
+          n00b_cg_val_t continue_label)
 {
     n00b_cg_module_t *m = s->active_module;
-
-    n00b_cg_val_t continue_label = n00b_cg_label_new(s);
-    n00b_cg_val_t break_label    = n00b_cg_label_new(s);
 
     if (m->loop_depth >= m->loop_cap) {
         int32_t               new_cap = m->loop_cap ? m->loop_cap * 2 : 8;
@@ -949,6 +1122,7 @@ codegen_loop(n00b_cg_session_t *s, n00b_cf_label_t *cf)
                    m->loop_stack,
                    sizeof(n00b_cg_loop_entry_t) * (size_t)m->loop_depth);
         }
+
         m->loop_stack = new_stack;
         m->loop_cap   = new_cap;
     }
@@ -957,6 +1131,74 @@ codegen_loop(n00b_cg_session_t *s, n00b_cf_label_t *cf)
         .break_label    = break_label,
         .continue_label = continue_label,
     };
+}
+
+static n00b_cg_val_t
+codegen_loop(n00b_cg_session_t *s, n00b_cf_label_t *cf)
+{
+    n00b_cg_module_t *m = s->active_module;
+
+    // Check if this is a for-in-range loop.
+    if (is_range_loop(cf)) {
+        const char *var_name = extract_loop_var_name(s, cf);
+
+        n00b_parse_tree_t *start_node = NULL;
+        n00b_parse_tree_t *end_node   = NULL;
+
+        if (!var_name || !extract_range_bounds(s, cf->cond,
+                                                &start_node, &end_node)) {
+            return N00B_CG_VOID_VAL;
+        }
+
+        // Evaluate start and end bounds.
+        n00b_cg_val_t start_val = codegen_walk(s, start_node);
+        n00b_cg_val_t end_val   = codegen_walk(s, end_node);
+
+        // Create the loop variable, initialize to start.
+        n00b_cg_val_t loop_var = n00b_cg_local(s, var_name,
+                                                .type = N00B_CG_I64);
+        n00b_cg_store(s, loop_var, start_val);
+
+        // Store end in a temp so it's not re-evaluated each iteration.
+        n00b_cg_val_t end_tmp = n00b_cg_temp(s, N00B_CG_I64);
+        n00b_cg_store(s, end_tmp, end_val);
+
+        n00b_cg_val_t test_label     = n00b_cg_label_new(s);
+        n00b_cg_val_t break_label    = n00b_cg_label_new(s);
+        n00b_cg_val_t continue_label = n00b_cg_label_new(s);
+
+        push_loop(s, break_label, continue_label);
+
+        // Test: loop_var < end
+        n00b_cg_label_here(s, test_label);
+        n00b_cg_val_t cond = n00b_cg_emit_binop(s, N00B_CG_OP_LT,
+                                                  loop_var, end_tmp);
+        n00b_cg_emit_bf(s, cond, break_label);
+
+        // Body.
+        if (cf->then_body) {
+            codegen_walk(s, cf->then_body);
+        }
+
+        // Continue: increment and jump to test.
+        n00b_cg_label_here(s, continue_label);
+        n00b_cg_val_t one = _n00b_cg_const_i64(s, 1);
+        n00b_cg_val_t inc = n00b_cg_emit_binop(s, N00B_CG_OP_ADD,
+                                                loop_var, one);
+        n00b_cg_store(s, loop_var, inc);
+        n00b_cg_emit_jmp(s, test_label);
+
+        n00b_cg_label_here(s, break_label);
+
+        m->loop_depth--;
+        return N00B_CG_VOID_VAL;
+    }
+
+    // While-style loop: condition + body.
+    n00b_cg_val_t continue_label = n00b_cg_label_new(s);
+    n00b_cg_val_t break_label    = n00b_cg_label_new(s);
+
+    push_loop(s, break_label, continue_label);
 
     n00b_cg_label_here(s, continue_label);
 
@@ -1079,6 +1321,7 @@ find_compound_op(n00b_parse_tree_t *self_node)
     return NULL;
 }
 
+// Track semantic type tags for local variables.
 static n00b_cg_val_t
 codegen_assign(n00b_cg_session_t *s, n00b_cf_label_t *cf)
 {
@@ -1086,6 +1329,171 @@ codegen_assign(n00b_cg_session_t *s, n00b_cf_label_t *cf)
 
     if (cf->then_body) {
         value = codegen_walk(s, cf->then_body);
+    }
+
+    // Check for field assignment: self.x = val or obj.field = val.
+    // The cf->cond is the <expression> wrapping the LHS. We need to
+    // find the innermost postfix-expr that has a '.' token.
+    if (cf->cond) {
+        // Walk down expression wrappers to find the postfix-expr with a dot.
+        n00b_parse_tree_t *dot_node = NULL;
+        {
+            n00b_parse_tree_t *walk_stack[64];
+            int walk_sp = 0;
+            walk_stack[walk_sp++] = cf->cond;
+
+            while (walk_sp > 0 && !dot_node) {
+                n00b_parse_tree_t *cur = walk_stack[--walk_sp];
+
+                if (!cur || n00b_pt_is_token(cur)) {
+                    continue;
+                }
+
+                // Check if this node has a '.' token child.
+                size_t cnc = n00b_pt_num_children(cur);
+
+                for (size_t ci = 0; ci < cnc; ci++) {
+                    n00b_parse_tree_t *cc = n00b_pt_get_child(cur, ci);
+
+                    if (n00b_pt_is_token(cc)) {
+                        const char *ct = n00b_pt_token_text(cc);
+                        size_t ctl = n00b_pt_token_text_len(cc);
+
+                        if (ctl == 1 && ct[0] == '.') {
+                            dot_node = cur;
+                            break;
+                        }
+                    }
+                }
+
+                if (!dot_node) {
+                    // Push children for deeper search.
+                    for (size_t ci = 0; ci < cnc && walk_sp < 63; ci++) {
+                        n00b_parse_tree_t *cc = n00b_pt_get_child(cur, ci);
+
+                        if (cc && !n00b_pt_is_token(cc)) {
+                            walk_stack[walk_sp++] = cc;
+                        }
+                    }
+                }
+            }
+        }
+
+        bool has_dot = false;
+        n00b_parse_tree_t *fa_lhs = NULL;
+        const char *fa_field = NULL;
+        size_t fa_field_len = 0;
+
+        if (dot_node) {
+            size_t anc = n00b_pt_num_children(dot_node);
+
+            for (size_t i = 0; i < anc; i++) {
+                n00b_parse_tree_t *child = n00b_pt_get_child(dot_node, i);
+
+                if (n00b_pt_is_token(child)) {
+                    const char *t = n00b_pt_token_text(child);
+                    size_t tl = n00b_pt_token_text_len(child);
+
+                    if (tl == 1 && t[0] == '.') {
+                        has_dot = true;
+                    }
+                    else if (has_dot && tl > 0) {
+                        fa_field = t;
+                        fa_field_len = tl;
+                    }
+                }
+                else if (!has_dot) {
+                    fa_lhs = child;
+                }
+            }
+        }
+
+        if (has_dot && fa_lhs && fa_field && fa_field_len > 0) {
+            // Field assignment: evaluate receiver, find layout, emit field_set.
+            n00b_cg_val_t obj = codegen_walk(s, fa_lhs);
+
+            if (obj.kind != N00B_CG_VAL_VOID) {
+                n00b_annot_result_t *ar = current_annot(s);
+                n00b_sym_entry_t *type_sym = NULL;
+
+                if (ar && ar->symtab) {
+                    // Try type-based lookup.
+                    n00b_tc_type_t *lhs_type = n00b_codegen_node_tc_type(s, fa_lhs);
+
+                    if (lhs_type
+                        && n00b_variant_is_type(lhs_type->kind, n00b_tc_prim_t)) {
+                        n00b_tc_prim_t prim = n00b_variant_get(
+                            lhs_type->kind, n00b_tc_prim_t);
+
+                        if (prim.name && prim.name->u8_bytes > 0) {
+                            type_sym = n00b_symtab_lookup_any(
+                                ar->symtab, n00b_string_empty(), prim.name);
+                        }
+                    }
+
+                    // Fallback for self inside method.
+                    if (!type_sym) {
+                        n00b_parse_tree_t *vt = n00b_pt_first_token(fa_lhs);
+
+                        if (vt) {
+                            const char *vn = n00b_pt_token_text(vt);
+                            size_t vl = n00b_pt_token_text_len(vt);
+
+                            if (vn && vl == 4 && memcmp(vn, "self", 4) == 0) {
+                                n00b_cg_module_t *m = s->active_module;
+
+                                if (m && m->cur_func) {
+                                    const char *fname = m->cur_func->u.func->name;
+                                    const char *dollar = strchr(fname, '$');
+
+                                    if (dollar) {
+                                        size_t clen = (size_t)(dollar - fname);
+                                        n00b_string_t *cname = n00b_string_from_raw(
+                                            fname, (int64_t)clen);
+                                        type_sym = n00b_symtab_lookup_any(
+                                            ar->symtab, n00b_string_empty(),
+                                            cname);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (type_sym && type_sym->exposed_scope) {
+                    if (!type_sym->class_layout) {
+                        type_sym->class_layout = compute_class_layout(
+                            s, type_sym->exposed_scope);
+                    }
+
+                    n00b_class_layout_t *layout = type_sym->class_layout;
+
+                    if (layout) {
+                        int32_t fidx = layout_field_index(
+                            layout, fa_field, fa_field_len);
+
+                        if (fidx >= 0) {
+                            n00b_cg_type_tag_t set_pt[] = {
+                                N00B_CG_I64, N00B_CG_I64, N00B_CG_I64};
+                            n00b_cg_import_func(
+                                s, "n00b_builtin_field_set",
+                                (void *)n00b_builtin_field_set,
+                                .ret = N00B_CG_VOID,
+                                .param_types = set_pt,
+                                .n_params = 3);
+                            n00b_cg_val_t offset_arg = _n00b_cg_const_i64(
+                                s, (int64_t)layout->field_offsets[fidx]);
+                            n00b_cg_val_t set_args[] = {
+                                obj, offset_arg, value};
+                            n00b_cg_emit_call(
+                                s, "n00b_builtin_field_set",
+                                set_args, 3, .ret = N00B_CG_VOID);
+                            return value;
+                        }
+                    }
+                }
+            }
+        }
     }
 
     if (cf->cond) {
@@ -1203,10 +1611,18 @@ codegen_varref(n00b_cg_session_t *s, n00b_cf_label_t *cf)
 
                 MIR_reg_t reg = MIR_reg(s->mir_ctx, buf, func);
 
+                // Try node_types first (has the properly unified type
+                // from the annotation walk). If not found, look up
+                // the sym entry and try to resolve through the type
+                // system. The symtab entry's type_var may not be
+                // unified for variables declared without explicit types.
+                n00b_cg_type_tag_t tag = n00b_codegen_node_type(s, cf->self);
+
+
                 return (n00b_cg_val_t){
                     .id       = (uint32_t)reg,
                     .kind     = N00B_CG_VAL_REG,
-                    .type_tag = n00b_codegen_node_type(s, cf->self),
+                    .type_tag = tag,
                 };
             }
         }
@@ -1223,35 +1639,112 @@ static n00b_cg_val_t
 codegen_unwrap_result(n00b_cg_session_t *s, n00b_cf_label_t *cf)
 {
     // Grammar: <postfix-expr> ::= <postfix-expr> %"!"
-    // Child $0 is the operand (a result value).
-    // For now, just evaluate the operand and return it.
-    // Once the type system is fully wired, this will check the
-    // is_ok field and either extract .ok or trigger early return.
+    // Evaluate the operand, then call the appropriate unwrap helper.
+    // For now: aborts on err/none. TODO: propagation in result/option-
+    // returning functions.
+    n00b_cg_val_t operand = N00B_CG_VOID_VAL;
     size_t nc = n00b_pt_num_children(cf->self);
 
     for (size_t i = 0; i < nc; i++) {
         n00b_parse_tree_t *child = n00b_pt_get_child(cf->self, i);
 
         if (!n00b_pt_is_token(child)) {
-            return codegen_walk(s, child);
+            operand = codegen_walk(s, child);
+            break;
         }
     }
 
-    return N00B_CG_VOID_VAL;
+    if (operand.kind == N00B_CG_VAL_VOID) {
+        return N00B_CG_VOID_VAL;
+    }
+
+    // Dispatch based on the operand's type tag.
+    const char *name;
+    void       *addr;
+
+    if (operand.type_tag == N00B_CG_OPTION) {
+        name = "n00b_builtin_option_unwrap";
+        addr = (void *)n00b_builtin_option_unwrap;
+    }
+    else if (operand.type_tag == N00B_CG_RESULT) {
+        name = "n00b_builtin_result_unwrap";
+        addr = (void *)n00b_builtin_result_unwrap;
+    }
+    else {
+        // Not an option or result — just pass through.
+        return operand;
+    }
+
+    n00b_cg_type_tag_t pt[] = {N00B_CG_I64};
+    n00b_cg_import_func(s, name, addr,
+                         .ret = N00B_CG_I64,
+                         .param_types = pt, .n_params = 1);
+    return n00b_cg_emit_call(s, name, &operand, 1, .ret = N00B_CG_I64);
 }
 
 // ============================================================================
 // CF_CALL: function call via control flow label
 // ============================================================================
 
+// Check if a callee node is a method call (has a '.' token child).
+// If so, return the receiver subtree and the method name.
+static bool
+is_method_call(n00b_parse_tree_t  *callee,
+               n00b_parse_tree_t **receiver_out,
+               const char        **method_out)
+{
+    if (!callee || n00b_pt_is_token(callee)) {
+        return false;
+    }
+
+    // Look for a '.' token among children. If found, the child before
+    // it is the receiver and the token after it is the method name.
+    size_t nc = n00b_pt_num_children(callee);
+    bool   found_dot = false;
+
+    for (size_t i = 0; i < nc; i++) {
+        n00b_parse_tree_t *child = n00b_pt_get_child(callee, i);
+
+        if (n00b_pt_is_token(child)) {
+            const char *text = n00b_pt_token_text(child);
+            size_t      len  = n00b_pt_token_text_len(child);
+
+            if (text && len == 1 && text[0] == '.') {
+                found_dot = true;
+                continue;
+            }
+
+            // Token after '.' is the method name.
+            if (found_dot && text && len > 0) {
+                char *buf = n00b_alloc_size(1, len + 1);
+                memcpy(buf, text, len);
+                buf[len] = '\0';
+                *method_out = buf;
+            }
+        }
+        else if (!found_dot) {
+            *receiver_out = child;
+        }
+    }
+
+    return found_dot && *receiver_out && *method_out;
+}
+
 static n00b_cg_val_t
 codegen_call_cf(n00b_cg_session_t *s, n00b_cf_label_t *cf)
 {
     // CF_CALL has: cond = callee node, then_body = args node.
-    // Extract function name from the callee.
-    const char *func_name = NULL;
+    // Check for method call (expr.name) vs plain function call (name).
+    const char        *func_name = NULL;
+    n00b_parse_tree_t *receiver  = NULL;
+    const char        *method    = NULL;
+    n00b_cg_val_t      recv_val  = N00B_CG_VOID_VAL;
 
-    if (cf->cond) {
+    if (cf->cond && is_method_call(cf->cond, &receiver, &method)) {
+        recv_val  = codegen_walk(s, receiver);
+        func_name = method;
+    }
+    else if (cf->cond) {
         n00b_parse_tree_t *name_tok = n00b_pt_first_token(cf->cond);
 
         if (name_tok) {
@@ -1272,11 +1765,13 @@ codegen_call_cf(n00b_cg_session_t *s, n00b_cf_label_t *cf)
     }
 
     // Collect arguments from the args node.
-    // call-args has: expression ("," expression)* with groups from
-    // the quantifier. We DFS through groups but evaluate any
-    // non-token, non-group NT as an argument expression.
+    // For method calls, the receiver is the implicit first argument.
     n00b_cg_val_t args[32];
     int32_t       n_args = 0;
+
+    if (recv_val.kind != N00B_CG_VAL_VOID) {
+        args[n_args++] = recv_val;
+    }
 
     if (cf->then_body) {
         n00b_parse_tree_t *arg_stack[64];
@@ -1318,6 +1813,164 @@ codegen_call_cf(n00b_cg_session_t *s, n00b_cf_label_t *cf)
 
             if (val.kind != N00B_CG_VAL_VOID) {
                 args[n_args++] = val;
+            }
+        }
+    }
+
+    // Check for built-in functions before falling through to generic
+    // MIR call emission.
+    n00b_cg_val_t builtin_result;
+
+    if (n00b_codegen_builtin_call(s, func_name, args, n_args,
+                                   &builtin_result)) {
+        return builtin_result;
+    }
+
+    // For method calls, try vtable dispatch (builtin methods).
+    if (recv_val.kind != N00B_CG_VAL_VOID) {
+        if (n00b_codegen_method_dispatch(s, func_name, args, n_args,
+                                          &builtin_result)) {
+            return builtin_result;
+        }
+    }
+
+    // For method calls, try class method dispatch (static binding).
+    if (recv_val.kind != N00B_CG_VAL_VOID && receiver) {
+        n00b_annot_result_t *ar = current_annot(s);
+
+        if (ar && ar->symtab) {
+            n00b_tc_type_t *recv_type = n00b_codegen_node_tc_type(s, receiver);
+            n00b_sym_entry_t *type_sym = NULL;
+
+            if (recv_type
+                && n00b_variant_is_type(recv_type->kind, n00b_tc_prim_t)) {
+                n00b_tc_prim_t prim = n00b_variant_get(
+                    recv_type->kind, n00b_tc_prim_t);
+
+                if (prim.name && prim.name->u8_bytes > 0) {
+                    type_sym = n00b_symtab_lookup_any(
+                        ar->symtab, n00b_string_empty(), prim.name);
+                }
+            }
+
+            if (type_sym && type_sym->exposed_scope
+                && type_sym->exposed_scope->scope_tag
+                && (type_sym->exposed_scope->scope_tag->u8_bytes == 5
+                     && memcmp(type_sym->exposed_scope->scope_tag->data,
+                               "class", 5) == 0)) {
+                if (!type_sym->class_layout) {
+                    type_sym->class_layout = compute_class_layout(
+                        s, type_sym->exposed_scope);
+                }
+
+                n00b_class_layout_t *layout = type_sym->class_layout;
+
+                if (layout) {
+                    // Find the method in the layout.
+                    for (uint32_t mi = 0; mi < layout->n_methods; mi++) {
+                        if (strcmp(layout->method_names[mi], func_name) == 0) {
+                            // Emit direct call to the mangled MIR function.
+                            // args[0] is already the receiver (self).
+                            n00b_cg_type_tag_t ret = n00b_codegen_node_type(
+                                s, cf->self);
+
+                            if (ret == N00B_CG_PTR) {
+                                ret = N00B_CG_I64;
+                            }
+
+                            return n00b_cg_emit_call(
+                                s, layout->method_mir_names[mi],
+                                args, n_args, .ret = ret);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Check for class constructor call.
+    // Only for classes (scope_tag == "class"), not tuples.
+    {
+        n00b_annot_result_t *ar = current_annot(s);
+
+        if (ar && ar->symtab) {
+            n00b_string_t *fn_str = n00b_string_from_cstr(func_name);
+            n00b_sym_entry_t *sym = n00b_symtab_lookup_any(
+                ar->symtab, n00b_string_empty(), fn_str);
+
+            // Guard: only classes, not tuples.
+            bool is_class = sym && sym->exposed_scope
+                && sym->exposed_scope->scope_tag
+                && (sym->exposed_scope->scope_tag->u8_bytes == 5
+                     && memcmp(sym->exposed_scope->scope_tag->data,
+                               "class", 5) == 0);
+
+            if (is_class) {
+                if (!sym->class_layout) {
+                    sym->class_layout = compute_class_layout(
+                        s, sym->exposed_scope);
+                }
+
+                n00b_class_layout_t *layout = sym->class_layout;
+
+                // Allocate instance.
+                n00b_cg_type_tag_t alloc_pt[] = {N00B_CG_I64};
+                n00b_cg_import_func(s, "n00b_builtin_obj_alloc",
+                                     (void *)n00b_builtin_obj_alloc,
+                                     .ret = N00B_CG_I64,
+                                     .param_types = alloc_pt, .n_params = 1);
+                n00b_cg_val_t size_arg = _n00b_cg_const_i64(
+                    s, (int64_t)layout->instance_size);
+                n00b_cg_val_t obj = n00b_cg_emit_call(
+                    s, "n00b_builtin_obj_alloc", &size_arg, 1,
+                    .ret = N00B_CG_I64);
+                obj.type_tag = N00B_CG_PTR;
+
+                if (layout->has_init) {
+                    // Call init: ClassName$init(obj, arg0, arg1, ...)
+                    // Find the init method's MIR name.
+                    const char *init_mir = NULL;
+
+                    for (uint32_t mi = 0; mi < layout->n_methods; mi++) {
+                        if (strcmp(layout->method_names[mi], "init") == 0) {
+                            init_mir = layout->method_mir_names[mi];
+                            break;
+                        }
+                    }
+
+                    if (init_mir) {
+                        // Build args: [obj, original_args...]
+                        n00b_cg_val_t init_args[n_args + 1];
+                        init_args[0] = obj;
+
+                        for (int32_t i = 0; i < n_args; i++) {
+                            init_args[i + 1] = args[i];
+                        }
+
+                                        n00b_cg_emit_call(s, init_mir, init_args, n_args + 1,
+                                           .ret = N00B_CG_I64);
+                    }
+                }
+                else {
+                    // No init — auto-assign positional args to fields.
+                    n00b_cg_type_tag_t set_pt[] = {
+                        N00B_CG_I64, N00B_CG_I64, N00B_CG_I64};
+                    n00b_cg_import_func(s, "n00b_builtin_field_set",
+                                         (void *)n00b_builtin_field_set,
+                                         .ret = N00B_CG_VOID,
+                                         .param_types = set_pt, .n_params = 3);
+
+                    for (int32_t i = 0; i < n_args
+                             && (uint32_t)i < layout->n_fields; i++) {
+                        n00b_cg_val_t offset_arg = _n00b_cg_const_i64(
+                            s, (int64_t)layout->field_offsets[i]);
+                        n00b_cg_val_t set_args[] = {obj, offset_arg, args[i]};
+                        n00b_cg_emit_call(s, "n00b_builtin_field_set",
+                                           set_args, 3, .ret = N00B_CG_VOID);
+                    }
+                }
+
+                return obj;
             }
         }
     }
@@ -1548,14 +2201,571 @@ codegen_switch(n00b_cg_session_t *s, n00b_cf_label_t *cf)
 }
 
 // ============================================================================
+// Named tuple handler
+// ============================================================================
+
+static n00b_cg_val_t
+codegen_tuple(n00b_cg_session_t *s, n00b_parse_tree_t *node)
+{
+    // Check if this is a named tuple (has named-field-list child)
+    // or a parenthesized expression (just walk children).
+    n00b_parse_tree_t *field_list = NULL;
+    size_t nc = n00b_pt_num_children(node);
+
+    for (size_t i = 0; i < nc; i++) {
+        n00b_parse_tree_t *child = n00b_pt_get_child(node, i);
+
+        if (child && n00b_pt_is_nt(child, "named-field-list")) {
+            field_list = child;
+            break;
+        }
+    }
+
+    if (!field_list) {
+        // Parenthesized expression or positional tuple — walk children.
+        return codegen_children_default(s, node);
+    }
+
+    // Named tuple: collect field names and values via DFS through
+    // named-field-list -> named-field nodes.
+    const char    *names[32];
+    n00b_cg_val_t  values[32];
+    int32_t        n_fields = 0;
+
+    n00b_parse_tree_t *stack[64];
+    int                sp = 0;
+
+    stack[sp++] = field_list;
+
+    while (sp > 0 && n_fields < 32) {
+        n00b_parse_tree_t *cur = stack[--sp];
+
+        if (!cur || n00b_pt_is_token(cur)) {
+            continue;
+        }
+
+        if (n00b_pt_is_nt(cur, "named-field")) {
+            // named-field: IDENTIFIER ":" expression
+            const char *fname = NULL;
+            size_t fname_len = 0;
+            n00b_cg_val_t fval = N00B_CG_VOID_VAL;
+
+            size_t fnc = n00b_pt_num_children(cur);
+            bool past_colon = false;
+
+            for (size_t j = 0; j < fnc; j++) {
+                n00b_parse_tree_t *fc = n00b_pt_get_child(cur, j);
+
+                if (n00b_pt_is_token(fc)) {
+                    const char *t = n00b_pt_token_text(fc);
+                    size_t tl = n00b_pt_token_text_len(fc);
+
+                    if (tl == 1 && t[0] == ':') {
+                        past_colon = true;
+                    }
+                    else if (!past_colon && !fname) {
+                        fname = t;
+                        fname_len = tl;
+                    }
+                }
+                else if (past_colon) {
+                    fval = codegen_walk(s, fc);
+                }
+            }
+
+            if (fname && fname_len > 0 && fval.kind != N00B_CG_VAL_VOID) {
+                char *name_buf = n00b_alloc_size(1, fname_len + 1);
+                memcpy(name_buf, fname, fname_len);
+                name_buf[fname_len] = '\0';
+                names[n_fields] = name_buf;
+                values[n_fields] = fval;
+                n_fields++;
+            }
+
+            continue;
+        }
+
+        // Push children in reverse for L-to-R order.
+        size_t cnc = n00b_pt_num_children(cur);
+
+        for (size_t i = cnc; i > 0; i--) {
+            if (sp < 64) {
+                stack[sp++] = n00b_pt_get_child(cur, i - 1);
+            }
+        }
+    }
+
+    if (n_fields == 0) {
+        return N00B_CG_VOID_VAL;
+    }
+
+    // Look up the structural tuple type created by the annotation walk's
+    // @record handler. Build the same name it used.
+    size_t name_len = 7; // "$$tuple"
+
+    for (int32_t i = 0; i < n_fields; i++) {
+        name_len += 1 + strlen(names[i]); // "$" + name
+    }
+
+    char *tuple_name = n00b_alloc_size(1, name_len + 1);
+    char *p = tuple_name;
+
+    memcpy(p, "$$tuple", 7);
+    p += 7;
+
+    for (int32_t i = 0; i < n_fields; i++) {
+        *p++ = '$';
+        size_t fl = strlen(names[i]);
+        memcpy(p, names[i], fl);
+        p += fl;
+    }
+
+    *p = '\0';
+
+    n00b_annot_result_t *ar = current_annot(s);
+    n00b_sym_entry_t *tuple_sym = NULL;
+
+    if (ar && ar->symtab) {
+        n00b_string_t *tname = n00b_string_from_cstr(tuple_name);
+        tuple_sym = n00b_symtab_lookup_any(ar->symtab,
+                                            n00b_string_empty(), tname);
+
+        // Compute field layout if not done yet.
+        if (tuple_sym && tuple_sym->exposed_scope && !tuple_sym->class_layout) {
+            tuple_sym->class_layout = compute_class_layout(s,
+                                          tuple_sym->exposed_scope);
+        }
+    }
+
+    n00b_class_layout_t *layout = tuple_sym ? tuple_sym->class_layout : NULL;
+    int64_t instance_size = layout ? (int64_t)layout->instance_size
+                                   : (int64_t)(n_fields * 8);
+
+    n00b_cg_type_tag_t alloc_pt[] = {N00B_CG_I64};
+    n00b_cg_import_func(s, "n00b_builtin_obj_alloc",
+                         (void *)n00b_builtin_obj_alloc,
+                         .ret = N00B_CG_I64,
+                         .param_types = alloc_pt, .n_params = 1);
+    n00b_cg_val_t size_arg = _n00b_cg_const_i64(s, instance_size);
+    n00b_cg_val_t obj = n00b_cg_emit_call(
+        s, "n00b_builtin_obj_alloc", &size_arg, 1, .ret = N00B_CG_I64);
+    obj.type_tag = N00B_CG_PTR;
+
+    n00b_cg_type_tag_t set_pt[] = {N00B_CG_I64, N00B_CG_I64, N00B_CG_I64};
+    n00b_cg_import_func(s, "n00b_builtin_field_set",
+                         (void *)n00b_builtin_field_set,
+                         .ret = N00B_CG_VOID,
+                         .param_types = set_pt, .n_params = 3);
+
+    for (int32_t i = 0; i < n_fields; i++) {
+        int64_t offset = layout ? (int64_t)layout->field_offsets[i]
+                                : (int64_t)(i * 8);
+        n00b_cg_val_t offset_arg = _n00b_cg_const_i64(s, offset);
+        n00b_cg_val_t set_args[] = {obj, offset_arg, values[i]};
+        n00b_cg_emit_call(s, "n00b_builtin_field_set",
+                           set_args, 3, .ret = N00B_CG_VOID);
+    }
+
+    return obj;
+}
+
+// ============================================================================
+// Class declaration handler
+// ============================================================================
+
+// Compute field layout for a class from its exposed scope.
+// All fields are 8 bytes (uint64_t) for the interpreter.
+static n00b_class_layout_t *
+compute_class_layout(n00b_cg_session_t *s, n00b_scope_t *scope)
+{
+    // Count fields. Skip type entries, and the class's own var entry
+    // (which has exposed_scope set or matches the scope name).
+    int32_t n_fields = 0;
+
+    for (n00b_sym_entry_t *e = scope->first_in_scope; e; e = e->next_in_scope) {
+        if (e->kind != N00B_SYM_VARIABLE && e->kind != N00B_SYM_PARAM) {
+            continue;
+        }
+
+        // Skip the class's own entry (has exposed_scope or name matches scope).
+        if (e->exposed_scope) {
+            continue;
+        }
+
+        if (scope->name && e->name
+            && e->name->u8_bytes == scope->name->u8_bytes
+            && memcmp(e->name->data, scope->name->data,
+                      e->name->u8_bytes) == 0) {
+            continue;
+        }
+
+        n_fields++;
+    }
+
+    n00b_class_layout_t *layout = n00b_alloc(n00b_class_layout_t);
+    layout->n_fields      = (uint32_t)n_fields;
+    layout->field_names   = n00b_alloc_array(const char *, (size_t)n_fields);
+    layout->field_offsets  = n00b_alloc_array(uint32_t, (size_t)n_fields);
+
+    // Collect fields into a temp array so we can reverse the scope chain
+    // order (scope chain is newest-first, we want declaration order).
+    n00b_sym_entry_t *field_entries[n_fields];
+    int32_t fe_count = 0;
+
+    for (n00b_sym_entry_t *e = scope->first_in_scope; e; e = e->next_in_scope) {
+        if (e->kind != N00B_SYM_VARIABLE && e->kind != N00B_SYM_PARAM) {
+            continue;
+        }
+
+        if (e->exposed_scope) {
+            continue;
+        }
+
+        if (scope->name && e->name
+            && e->name->u8_bytes == scope->name->u8_bytes
+            && memcmp(e->name->data, scope->name->data,
+                      e->name->u8_bytes) == 0) {
+            continue;
+        }
+
+        field_entries[fe_count++] = e;
+    }
+
+    // Reverse to get declaration order.
+    for (int32_t i = 0; i < fe_count / 2; i++) {
+        n00b_sym_entry_t *tmp = field_entries[i];
+        field_entries[i] = field_entries[fe_count - 1 - i];
+        field_entries[fe_count - 1 - i] = tmp;
+    }
+
+    // All fields are 8 bytes, sequentially laid out.
+    for (int32_t idx = 0; idx < fe_count; idx++) {
+        n00b_sym_entry_t *e = field_entries[idx];
+        char *name = n00b_alloc_size(1, e->name->u8_bytes + 1);
+        memcpy(name, e->name->data, e->name->u8_bytes);
+        name[e->name->u8_bytes] = '\0';
+
+        layout->field_names[idx]  = name;
+        layout->field_offsets[idx] = (uint32_t)(idx * 8);
+    }
+
+    layout->instance_size = (uint32_t)(n_fields * 8);
+
+    // Collect methods (N00B_SYM_FUNCTION with is_method).
+    int32_t n_methods = 0;
+
+    for (n00b_sym_entry_t *e = scope->first_in_scope; e; e = e->next_in_scope) {
+        if (e->kind == N00B_SYM_FUNCTION && e->is_method) {
+            n_methods++;
+        }
+    }
+
+    if (n_methods > 0) {
+        layout->n_methods        = (uint32_t)n_methods;
+        layout->method_names     = n00b_alloc_array(const char *, (size_t)n_methods);
+        layout->method_mir_names = n00b_alloc_array(const char *, (size_t)n_methods);
+
+        // Get the class name from the scope name for mangling.
+        const char *cname = scope->name ? scope->name->data : "";
+        size_t cname_len  = scope->name ? scope->name->u8_bytes : 0;
+
+        int32_t mi = 0;
+
+        for (n00b_sym_entry_t *e = scope->first_in_scope; e; e = e->next_in_scope) {
+            if (e->kind != N00B_SYM_FUNCTION || !e->is_method) {
+                continue;
+            }
+
+            // Unmangled method name.
+            char *mname = n00b_alloc_size(1, e->name->u8_bytes + 1);
+            memcpy(mname, e->name->data, e->name->u8_bytes);
+            mname[e->name->u8_bytes] = '\0';
+            layout->method_names[mi] = mname;
+
+            // Mangled MIR name: ClassName$methodName.
+            size_t mir_len = cname_len + 1 + e->name->u8_bytes;
+            char *mir_name = n00b_alloc_size(1, mir_len + 1);
+            memcpy(mir_name, cname, cname_len);
+            mir_name[cname_len] = '$';
+            memcpy(mir_name + cname_len + 1, e->name->data, e->name->u8_bytes);
+            mir_name[mir_len] = '\0';
+            layout->method_mir_names[mi] = mir_name;
+
+            if (e->name->u8_bytes == 4
+                && memcmp(e->name->data, "init", 4) == 0) {
+                layout->has_init = true;
+            }
+
+            mi++;
+        }
+    }
+
+    return layout;
+}
+
+// Look up a field index by name in a class layout.
+static int32_t
+layout_field_index(n00b_class_layout_t *layout, const char *name, size_t name_len)
+{
+    for (uint32_t i = 0; i < layout->n_fields; i++) {
+        if (strlen(layout->field_names[i]) == name_len
+            && memcmp(layout->field_names[i], name, name_len) == 0) {
+            return (int32_t)i;
+        }
+    }
+
+    return -1;
+}
+
+// C runtime: allocate a class instance (zeroed).
+static void *
+n00b_builtin_obj_alloc(int64_t size)
+{
+    return n00b_alloc_size(1, (size_t)size);
+}
+
+// C runtime: read a field from an object at a byte offset.
+static uint64_t
+n00b_builtin_field_get(void *obj, int64_t offset)
+{
+    return *(uint64_t *)((char *)obj + offset);
+}
+
+// C runtime: write a field in an object at a byte offset.
+static void
+n00b_builtin_field_set(void *obj, int64_t offset, uint64_t value)
+{
+    *(uint64_t *)((char *)obj + offset) = value;
+}
+
+static n00b_cg_val_t
+codegen_class_decl(n00b_cg_session_t *s, n00b_parse_tree_t *node)
+{
+    // Find the class name. The @declares annotation already created
+    // a sym entry. The class name is the identifier following "class".
+    // Use n00b_pt_find_child_by_nt to find concrete-class or
+    // parameterized-class, then extract the first token (the name).
+    // Search children manually — n00b_pt_find_child_by_nt may have
+    // string encoding issues with ncc-compiled code.
+    n00b_parse_tree_t *class_node = NULL;
+    size_t nc = n00b_pt_num_children(node);
+
+    for (size_t i = 0; i < nc; i++) {
+        n00b_parse_tree_t *child = n00b_pt_get_child(node, i);
+
+        if (n00b_pt_is_nt(child, "concrete-class")
+            || n00b_pt_is_nt(child, "parameterized-class")) {
+            class_node = child;
+            break;
+        }
+    }
+
+    if (!class_node) {
+        return N00B_CG_VOID_VAL;
+    }
+
+    n00b_parse_tree_t *name_tok = n00b_pt_first_token(class_node);
+
+    if (!name_tok) {
+        return N00B_CG_VOID_VAL;
+    }
+
+    const char *class_name = n00b_pt_token_text(name_tok);
+    size_t      class_len  = n00b_pt_token_text_len(name_tok);
+
+    if (!class_name || class_len == 0) {
+        return N00B_CG_VOID_VAL;
+    }
+
+    // Look up the class symbol to get its exposed_scope.
+    n00b_annot_result_t *ar = current_annot(s);
+
+    if (!ar || !ar->symtab) {
+        return N00B_CG_VOID_VAL;
+    }
+
+    n00b_string_t *name_str = n00b_string_from_raw(class_name, (int64_t)class_len);
+    n00b_sym_entry_t *sym = n00b_symtab_lookup_any(ar->symtab,
+                                                     n00b_string_empty(), name_str);
+
+    if (!sym || !sym->exposed_scope) {
+        return N00B_CG_VOID_VAL;
+    }
+
+    // Compute the field layout.
+    n00b_class_layout_t *layout = compute_class_layout(s, sym->exposed_scope);
+    sym->class_layout = layout;
+
+    // Back-link from type to sym entry so field access can find the layout.
+    // This is a fallback for cases where the type-based lookup doesn't work.
+    if (sym->type_var) {
+        n00b_tc_type_t *root = n00b_tc_find(sym->type_var);
+        root->user_data = sym;
+    }
+
+    return N00B_CG_VOID_VAL;
+}
+
+// ============================================================================
+// Enum statement handler
+// ============================================================================
+
+static n00b_cg_val_t
+codegen_enum_stmt(n00b_cg_session_t *s, n00b_parse_tree_t *node)
+{
+    // Grammar: <enum-stmt> ::= <enum-prefix> IDENTIFIER? { <enum-items> }
+    // Walk enum-items, assign auto-incrementing values (or explicit ones),
+    // and store on the sym_entry's const_value.
+    n00b_annot_result_t *ar = current_annot(s);
+
+    if (!ar || !ar->symtab) {
+        return N00B_CG_VOID_VAL;
+    }
+
+    // Find the enum-items child.
+    n00b_parse_tree_t *items_node = NULL;
+    size_t nc = n00b_pt_num_children(node);
+
+    for (size_t i = 0; i < nc; i++) {
+        n00b_parse_tree_t *child = n00b_pt_get_child(node, i);
+
+        if (child && n00b_pt_is_nt(child, "enum-items")) {
+            items_node = child;
+            break;
+        }
+    }
+
+    if (!items_node) {
+        return N00B_CG_VOID_VAL;
+    }
+
+    // DFS through enum-items to find all enum-item nodes.
+    // Each enum-item has: IDENTIFIER [enum-value?]
+    n00b_parse_tree_t *stack[128];
+    int                sp = 0;
+    int64_t            next_val = 0;
+
+    stack[sp++] = items_node;
+
+    while (sp > 0) {
+        n00b_parse_tree_t *cur = stack[--sp];
+
+        if (!cur || n00b_pt_is_token(cur)) {
+            continue;
+        }
+
+        if (n00b_pt_is_nt(cur, "enum-item")) {
+            // Extract member name (first token).
+            n00b_parse_tree_t *name_tok = n00b_pt_first_token(cur);
+
+            if (!name_tok) {
+                continue;
+            }
+
+            const char *name_raw = n00b_pt_token_text(name_tok);
+            size_t      name_len = n00b_pt_token_text_len(name_tok);
+
+            if (!name_raw || name_len == 0) {
+                continue;
+            }
+
+            // Check for explicit value (enum-value child).
+            int64_t val = next_val;
+            size_t  item_nc = n00b_pt_num_children(cur);
+
+            for (size_t j = 0; j < item_nc; j++) {
+                n00b_parse_tree_t *vc = n00b_pt_get_child(cur, j);
+
+                if (vc && n00b_pt_is_nt(vc, "enum-value")) {
+                    // enum-value has: ":" or "=" then a simple-lit.
+                    n00b_parse_tree_t *lit_tok = NULL;
+                    size_t vnc = n00b_pt_num_children(vc);
+
+                    for (size_t k = 0; k < vnc; k++) {
+                        n00b_parse_tree_t *vcc = n00b_pt_get_child(vc, k);
+
+                        if (vcc && n00b_pt_is_token(vcc)) {
+                            const char *t = n00b_pt_token_text(vcc);
+                            size_t tl = n00b_pt_token_text_len(vcc);
+
+                            // Skip ":" and "=" tokens.
+                            if (tl == 1 && (t[0] == ':' || t[0] == '=')) {
+                                continue;
+                            }
+
+                            lit_tok = vcc;
+                            break;
+                        }
+                        else if (vcc && !n00b_pt_is_token(vcc)) {
+                            // simple-lit wrapper — get its token.
+                            lit_tok = n00b_pt_first_token(vcc);
+                            break;
+                        }
+                    }
+
+                    if (lit_tok) {
+                        const char *vt = n00b_pt_token_text(lit_tok);
+                        size_t vtl = n00b_pt_token_text_len(lit_tok);
+
+                        if (vt && vtl > 0) {
+                            char vbuf[vtl + 1];
+                            memcpy(vbuf, vt, vtl);
+                            vbuf[vtl] = '\0';
+                            val = strtoll(vbuf, NULL, 0);
+                        }
+                    }
+
+                    break;
+                }
+            }
+
+            // Find the symbol entry and set its const_value.
+            n00b_string_t *member_name = n00b_string_from_raw(name_raw,
+                                                               (int64_t)name_len);
+            n00b_sym_entry_t *entry = n00b_symtab_lookup_any(
+                ar->symtab, n00b_string_empty(), member_name);
+
+            if (entry) {
+                // Store the integer value as a heap-allocated int64_t.
+                int64_t *heap_val = n00b_alloc_size(1, sizeof(int64_t));
+                *heap_val = val;
+                entry->const_value = n00b_option_set(void *, heap_val);
+                entry->kind = N00B_SYM_ENUM_CONST;
+            }
+
+            next_val = val + 1;
+            continue; // Don't recurse into enum-item children.
+        }
+
+        // Push children in reverse for left-to-right traversal.
+        size_t cnc = n00b_pt_num_children(cur);
+
+        for (size_t i = cnc; i > 0; i--) {
+            if (sp < 128) {
+                stack[sp++] = n00b_pt_get_child(cur, i - 1);
+            }
+        }
+    }
+
+    return N00B_CG_VOID_VAL;
+}
+
+// ============================================================================
 // Assert statement handler
 // ============================================================================
 
 // Runtime assert failure: called when assert expression is false.
 static void
-n00b_assert_fail_impl(void)
+n00b_assert_fail_impl(int64_t line)
 {
-    fprintf(stderr, "n00b: assertion failed\n");
+    if (line > 0) {
+        fprintf(stderr, "n00b: assertion failed at line %lld\n",
+                (long long)line);
+    }
+    else {
+        fprintf(stderr, "n00b: assertion failed\n");
+    }
+
     abort();
 }
 
@@ -1563,9 +2773,21 @@ static n00b_cg_val_t
 codegen_assert_stmt(n00b_cg_session_t *s, n00b_parse_tree_t *node)
 {
     // Grammar: <assert-stmt> ::= %"assert" <expression>
-    // Evaluate the expression; if false, call abort helper.
+    // Evaluate the expression; if false, call abort helper with line number.
     size_t        nc   = n00b_pt_num_children(node);
     n00b_cg_val_t cond = N00B_CG_VOID_VAL;
+
+    // Extract line number from the "assert" keyword token.
+    int64_t line = 0;
+    n00b_parse_tree_t *first_tok = n00b_pt_first_token(node);
+
+    if (first_tok) {
+        n00b_token_info_t *tok = n00b_parse_node_token(first_tok);
+
+        if (tok) {
+            line = (int64_t)tok->line;
+        }
+    }
 
     for (size_t i = 0; i < nc; i++) {
         n00b_parse_tree_t *child = n00b_pt_get_child(node, i);
@@ -1584,12 +2806,15 @@ codegen_assert_stmt(n00b_cg_session_t *s, n00b_parse_tree_t *node)
     n00b_cg_val_t ok_label = n00b_cg_label_new(s);
     n00b_cg_emit_bt(s, cond, ok_label);
 
-    // Call abort helper.
-    n00b_cg_import_func(s,
-                        "n00b_assert_fail",
-                        (void *)n00b_assert_fail_impl,
+    // Call abort helper with line number.
+    n00b_cg_type_tag_t pt[] = {N00B_CG_I64};
+    n00b_cg_import_func(s, "n00b_assert_fail",
+                          (void *)n00b_assert_fail_impl,
+                          .ret = N00B_CG_VOID,
+                          .param_types = pt, .n_params = 1);
+    n00b_cg_val_t line_arg = _n00b_cg_const_i64(s, line);
+    n00b_cg_emit_call(s, "n00b_assert_fail", &line_arg, 1,
                         .ret = N00B_CG_VOID);
-    n00b_cg_emit_call(s, "n00b_assert_fail", NULL, 0, .ret = N00B_CG_VOID);
 
     n00b_cg_label_here(s, ok_label);
 
@@ -1768,14 +2993,18 @@ comptime_walk_stmt(n00b_cg_session_t *s, n00b_parse_tree_t *node)
                             fn(obj);
                         }
                         else {
-                            fprintf(stderr,
-                                    "comptime: no method '%s' on object '%s'\n",
-                                    mbuf,
-                                    nbuf);
+                            char errbuf[256];
+                            snprintf(errbuf, sizeof(errbuf),
+                                     "comptime: no method '%s' on object '%s'",
+                                     mbuf, nbuf);
+                            codegen_error(s, cf->self, "CG003", errbuf);
                         }
                     }
                     else {
-                        fprintf(stderr, "comptime: variable '%s' not found\n", nbuf);
+                        char errbuf[256];
+                        snprintf(errbuf, sizeof(errbuf),
+                                 "comptime: variable '%s' not found", nbuf);
+                        codegen_error(s, cf->self, "CG004", errbuf);
                     }
                 }
 
@@ -1878,6 +3107,7 @@ codegen_func_def(n00b_cg_session_t *s, n00b_parse_tree_t *node)
     n00b_parse_tree_t *param_decl    = NULL;
     n00b_parse_tree_t *body_node     = NULL;
     n00b_parse_tree_t *ret_type_node = NULL;
+    bool               saw_method_kw = false;
 
     size_t nc          = n00b_pt_num_children(node);
     bool   saw_func_kw = false;
@@ -1894,9 +3124,14 @@ codegen_func_def(n00b_cg_session_t *s, n00b_parse_tree_t *node)
             }
 
             // Check for "func" or "method" keyword.
-            if ((tl == 4 && memcmp(tt, "func", 4) == 0)
-                || (tl == 6 && memcmp(tt, "method", 6) == 0)) {
+            if (tl == 4 && memcmp(tt, "func", 4) == 0) {
                 saw_func_kw = true;
+                continue;
+            }
+
+            if (tl == 6 && memcmp(tt, "method", 6) == 0) {
+                saw_func_kw    = true;
+                saw_method_kw  = true;
                 continue;
             }
 
@@ -1932,10 +3167,14 @@ codegen_func_def(n00b_cg_session_t *s, n00b_parse_tree_t *node)
                     const char *ftt = n00b_pt_token_text(ft);
                     size_t      ftl = n00b_pt_token_text_len(ft);
 
-                    if (ftt
-                        && ((ftl == 4 && memcmp(ftt, "func", 4) == 0)
-                            || (ftl == 6 && memcmp(ftt, "method", 6) == 0))) {
+                    if (ftt && ftl == 4 && memcmp(ftt, "func", 4) == 0) {
                         saw_func_kw = true;
+                        continue;
+                    }
+
+                    if (ftt && ftl == 6 && memcmp(ftt, "method", 6) == 0) {
+                        saw_func_kw   = true;
+                        saw_method_kw = true;
                         continue;
                     }
                 }
@@ -1944,6 +3183,52 @@ codegen_func_def(n00b_cg_session_t *s, n00b_parse_tree_t *node)
             }
 
             if (!func_name) {
+                // Check for <method-name> NT: ClassName.methodName
+                if (n00b_pt_is_nt(child, "method-name")) {
+                    // Extract class name and method name from the NT.
+                    const char *mn_class = NULL;
+                    size_t      mn_class_len = 0;
+                    const char *mn_method = NULL;
+                    size_t      mn_method_len = 0;
+
+                    size_t mnc = n00b_pt_num_children(child);
+
+                    for (size_t mi = 0; mi < mnc; mi++) {
+                        n00b_parse_tree_t *mc = n00b_pt_get_child(child, mi);
+
+                        if (!n00b_pt_is_token(mc)) {
+                            continue;
+                        }
+
+                        const char *mt = n00b_pt_token_text(mc);
+                        size_t mtl = n00b_pt_token_text_len(mc);
+
+                        if (mtl == 1 && mt[0] == '.') {
+                            continue;
+                        }
+
+                        if (!mn_class) {
+                            mn_class = mt;
+                            mn_class_len = mtl;
+                        }
+                        else if (!mn_method) {
+                            mn_method = mt;
+                            mn_method_len = mtl;
+                        }
+                    }
+
+                    if (mn_class && mn_method) {
+                        // Build mangled name: ClassName$methodName
+                        size_t mlen = mn_class_len + 1 + mn_method_len;
+                        char *mbuf = n00b_alloc_size(1, mlen + 1);
+                        memcpy(mbuf, mn_class, mn_class_len);
+                        mbuf[mn_class_len] = '$';
+                        memcpy(mbuf + mn_class_len + 1, mn_method, mn_method_len);
+                        mbuf[mlen] = '\0';
+                        func_name = mbuf;
+                    }
+                }
+
                 continue;
             }
 
@@ -2080,6 +3365,62 @@ codegen_func_def(n00b_cg_session_t *s, n00b_parse_tree_t *node)
     if (m->cur_func != NULL) {
         // Inside a wrapper — func was already emitted in the pre-scan.
         return N00B_CG_VOID_VAL;
+    }
+
+    // For bare method declarations (method keyword, no dotted name),
+    // look up the mangled name from the annotation walk's symtab.
+    if (saw_method_kw && func_name && !strchr(func_name, '$')) {
+        n00b_annot_result_t *ar = current_annot(s);
+
+        if (ar && ar->symtab) {
+            // The annotation walk created a mangled entry ClassName$methodName.
+            // Look it up by scanning all scopes for a matching method sym.
+            size_t fn_len = strlen(func_name);
+            n00b_namespace_t *ns = &ar->symtab->namespaces[0]; // default ns
+
+            for (int32_t si = 0; si < ns->all_count; si++) {
+                n00b_scope_t *sc = ns->all_scopes[si];
+
+                for (n00b_sym_entry_t *e = sc->first_in_scope; e; e = e->next_in_scope) {
+                    if (e->kind == N00B_SYM_FUNCTION && e->is_method
+                        && e->name && e->name->u8_bytes > fn_len + 1) {
+                        const char *d = memchr(e->name->data, '$', e->name->u8_bytes);
+
+                        if (d && (size_t)(e->name->u8_bytes - (d - e->name->data) - 1) == fn_len
+                            && memcmp(d + 1, func_name, fn_len) == 0) {
+                            char *mbuf = n00b_alloc_size(1, e->name->u8_bytes + 1);
+                            memcpy(mbuf, e->name->data, e->name->u8_bytes);
+                            mbuf[e->name->u8_bytes] = '\0';
+                            func_name = mbuf;
+                            goto found_mangled;
+                        }
+                    }
+                }
+            }
+            found_mangled:;
+        }
+    }
+
+    // Check if this is a method (mangled name contains '$').
+    bool is_method_def = false;
+
+    for (const char *p = func_name; *p; p++) {
+        if (*p == '$') {
+            is_method_def = true;
+            break;
+        }
+    }
+
+    // For methods, prepend implicit `self` parameter.
+    if (is_method_def && n_params < 31) {
+        for (int32_t i = n_params; i > 0; i--) {
+            param_names[i] = param_names[i - 1];
+            param_types[i] = param_types[i - 1];
+        }
+
+        param_names[0] = "self";
+        param_types[0] = N00B_CG_I64; // Pointer to instance.
+        n_params++;
     }
 
     // Top-level emit: not inside any function.
@@ -2230,6 +3571,207 @@ codegen_walk(n00b_cg_session_t *s, n00b_parse_tree_t *node)
             return codegen_call_cf(s, cf);
         case N00B_CF_CAPTURE:
             break;
+        }
+    }
+
+    // Member access: expr.name
+    // Handles: enum constants (Color.Red), class field access (p.x).
+    if (n00b_pt_is_nt(node, "postfix-expr")) {
+        size_t mnc = n00b_pt_num_children(node);
+        bool has_dot = false;
+        n00b_parse_tree_t *lhs_node = NULL;
+        const char *rhs_name = NULL;
+        size_t rhs_len = 0;
+
+        for (size_t i = 0; i < mnc; i++) {
+            n00b_parse_tree_t *child = n00b_pt_get_child(node, i);
+
+            if (n00b_pt_is_token(child)) {
+                const char *t = n00b_pt_token_text(child);
+                size_t tl = n00b_pt_token_text_len(child);
+
+                if (tl == 1 && t[0] == '.') {
+                    has_dot = true;
+                }
+                else if (has_dot && tl > 0) {
+                    rhs_name = t;
+                    rhs_len = tl;
+                }
+            }
+            else if (!has_dot) {
+                lhs_node = child;
+            }
+        }
+
+        if (has_dot && lhs_node && rhs_name && rhs_len > 0) {
+            n00b_annot_result_t *ar = current_annot(s);
+
+            if (ar && ar->symtab) {
+                // First try: LHS is a type/enum name with exposed_scope
+                // (e.g., Color.Red).
+                n00b_parse_tree_t *lhs_tok = n00b_pt_first_token(lhs_node);
+
+                if (lhs_tok) {
+                    const char *lhs_name = n00b_pt_token_text(lhs_tok);
+                    size_t lhs_len = n00b_pt_token_text_len(lhs_tok);
+
+                    if (lhs_name && lhs_len > 0) {
+                        n00b_string_t *lhs_str = n00b_string_from_raw(
+                            lhs_name, (int64_t)lhs_len);
+                        n00b_sym_entry_t *sym = n00b_symtab_lookup_any(
+                            ar->symtab, n00b_string_empty(), lhs_str);
+
+                        if (sym && sym->exposed_scope) {
+                            n00b_string_t *rhs_str = n00b_string_from_raw(
+                                rhs_name, (int64_t)rhs_len);
+                            n00b_sym_entry_t *member = NULL;
+
+                            for (n00b_sym_entry_t *e = sym->exposed_scope->first_in_scope;
+                                 e; e = e->next_in_scope) {
+                                if (e->name
+                                    && e->name->u8_bytes == rhs_str->u8_bytes
+                                    && memcmp(e->name->data, rhs_str->data,
+                                              rhs_str->u8_bytes) == 0) {
+                                    member = e;
+                                    break;
+                                }
+                            }
+
+                            // Enum constant access.
+                            if (member && n00b_option_is_set(member->const_value)) {
+                                int64_t *valp = n00b_option_get(member->const_value);
+                                return _n00b_cg_const_i64(s, *valp);
+                            }
+                        }
+                    }
+                }
+
+                // Second try: LHS is an instance variable, RHS is a field.
+                // Resolve LHS type via the type system, find the class
+                // sym entry by type name, and get the field layout.
+                n00b_cg_val_t obj_val = codegen_walk(s, lhs_node);
+
+                if (obj_val.kind != N00B_CG_VAL_VOID) {
+                    // Get the LHS type from the annotation result.
+                    n00b_tc_type_t *lhs_type = n00b_codegen_node_tc_type(s, lhs_node);
+                    n00b_class_layout_t *layout = NULL;
+                    n00b_sym_entry_t *type_sym = NULL;
+
+                    if (lhs_type) {
+                        // If the type is a named Prim (class name),
+                        // look up the class sym entry by name.
+                        if (n00b_variant_is_type(lhs_type->kind, n00b_tc_prim_t)) {
+                            n00b_tc_prim_t prim = n00b_variant_get(
+                                lhs_type->kind, n00b_tc_prim_t);
+
+                            if (prim.name && prim.name->u8_bytes > 0) {
+                                type_sym = n00b_symtab_lookup_any(
+                                    ar->symtab, n00b_string_empty(),
+                                    prim.name);
+                            }
+                        }
+                        else if (n00b_variant_is_type(lhs_type->kind, n00b_tc_record_t)) {
+                            n00b_tc_record_t rec = n00b_variant_get(
+                                lhs_type->kind, n00b_tc_record_t);
+
+                            if (rec.name && rec.name->u8_bytes > 0) {
+                                type_sym = n00b_symtab_lookup_any(
+                                    ar->symtab, n00b_string_empty(),
+                                    rec.name);
+                            }
+                        }
+                    }
+
+                    // Fallback: look up the variable, check user_data.
+                    if (!type_sym) {
+                        n00b_parse_tree_t *var_tok = n00b_pt_first_token(lhs_node);
+
+                        if (var_tok) {
+                            const char *vn = n00b_pt_token_text(var_tok);
+                            size_t vl = n00b_pt_token_text_len(var_tok);
+
+                            if (vn && vl > 0) {
+                                n00b_string_t *vstr = n00b_string_from_raw(
+                                    vn, (int64_t)vl);
+                                n00b_sym_entry_t *var_sym = n00b_symtab_lookup_any(
+                                    ar->symtab, n00b_string_empty(), vstr);
+
+                                if (var_sym && var_sym->type_var) {
+                                    n00b_tc_type_t *root = n00b_tc_find(var_sym->type_var);
+
+                                    if (root->user_data) {
+                                        type_sym = (n00b_sym_entry_t *)root->user_data;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Fallback for `self`: inside a method, derive
+                    // the class name from the current function name
+                    // (mangled as ClassName$methodName).
+                    if (!type_sym) {
+                        n00b_parse_tree_t *var_tok = n00b_pt_first_token(lhs_node);
+
+                        if (var_tok) {
+                            const char *vn = n00b_pt_token_text(var_tok);
+                            size_t vl = n00b_pt_token_text_len(var_tok);
+
+                            if (vn && vl == 4 && memcmp(vn, "self", 4) == 0) {
+                                n00b_cg_module_t *m = s->active_module;
+
+                                if (m && m->cur_func) {
+                                    const char *fname = m->cur_func->u.func->name;
+                                    const char *dollar = strchr(fname, '$');
+
+                                    if (dollar) {
+                                        size_t clen = (size_t)(dollar - fname);
+                                        n00b_string_t *cname = n00b_string_from_raw(
+                                            fname, (int64_t)clen);
+                                        type_sym = n00b_symtab_lookup_any(
+                                            ar->symtab, n00b_string_empty(),
+                                            cname);
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if (type_sym && type_sym->exposed_scope) {
+                        if (!type_sym->class_layout) {
+                            type_sym->class_layout = compute_class_layout(
+                                s, type_sym->exposed_scope);
+                        }
+                        layout = type_sym->class_layout;
+                    }
+
+                    if (layout) {
+                        int32_t fidx = layout_field_index(
+                            layout, rhs_name, rhs_len);
+
+                        if (fidx >= 0) {
+                            n00b_cg_type_tag_t get_pt[] = {
+                                N00B_CG_I64, N00B_CG_I64};
+                            n00b_cg_import_func(
+                                s, "n00b_builtin_field_get",
+                                (void *)n00b_builtin_field_get,
+                                .ret = N00B_CG_I64,
+                                .param_types = get_pt,
+                                .n_params = 2);
+                            n00b_cg_val_t offset_arg =
+                                _n00b_cg_const_i64(
+                                    s,
+                                    (int64_t)layout->field_offsets[fidx]);
+                            n00b_cg_val_t get_args[] = {
+                                obj_val, offset_arg};
+                            return n00b_cg_emit_call(
+                                s, "n00b_builtin_field_get",
+                                get_args, 2,
+                                .ret = N00B_CG_I64);
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -2643,6 +4185,13 @@ n00b_cg_emit_func_from_tree(n00b_cg_session_t *s,
 
     n00b_cg_val_t result = n00b_codegen_lower(s, tree);
 
+    // Report the type of the last expression to the caller.
+    if (kargs->result_type) {
+        *kargs->result_type = (result.kind != N00B_CG_VAL_VOID)
+                              ? result.type_tag
+                              : N00B_CG_VOID;
+    }
+
     if (result.kind != N00B_CG_VAL_VOID) {
         n00b_cg_emit_ret(s, result);
     }
@@ -2823,7 +4372,14 @@ n00b_cg_session_eval_tree(n00b_cg_session_t *s, n00b_parse_tree_t *tree) _kargs
     }
 
     // Emit the tree as a function.
-    bool emit_ok = n00b_cg_emit_func_from_tree(s, tree, fname, .ret = N00B_CG_I64);
+    n00b_cg_type_tag_t last_type = N00B_CG_VOID;
+    bool emit_ok = n00b_cg_emit_func_from_tree(s, tree, fname,
+                                                 .ret = N00B_CG_I64,
+                                                 .result_type = &last_type);
+
+    if (kargs->out_type) {
+        *kargs->out_type = last_type;
+    }
 
     if (!emit_ok) {
         return 0;
@@ -3013,6 +4569,13 @@ n00b_cg_session_run_module(n00b_cg_session_t *s, n00b_parse_tree_t *tree) _kargs
     bool emit_ok = n00b_cg_emit_func_from_tree(s, tree, entry, .ret = N00B_CG_I64);
 
     if (!emit_ok) {
+        // Finish the MIR module to leave the context in a clean state,
+        // but don't compile or JIT it.
+        if (m->state == N00B_CG_MOD_BUILDING) {
+            MIR_finish_module(s->mir_ctx);
+            m->state = N00B_CG_MOD_FINISHED;
+        }
+
         return 0;
     }
 

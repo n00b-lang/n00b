@@ -1,0 +1,5 @@
+var r = ok(42)
+print(r)
+assert r.ok?()
+print(r.unwrap())
+0

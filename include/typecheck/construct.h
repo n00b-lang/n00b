@@ -177,3 +177,19 @@ extern n00b_tc_type_t *n00b_tc_tuple(n00b_tc_ctx_t *ctx, n00b_tc_type_t *+)
  */
 extern n00b_tc_field_t n00b_tc_field(n00b_string_t *name, n00b_tc_type_t *type)
     _kargs { bool has_default = false; };
+
+/**
+ * @brief Instantiate a type scheme — deep-copy with fresh type variables.
+ *
+ * Creates a structural copy of @p t where every Var node is replaced
+ * with a fresh Var. Prim, Param, Fn, Record, Tuple, and Sum nodes
+ * are recursively copied. Shared Vars within the type map to the
+ * same fresh Var (preserving internal constraints like `(T, T) -> T`).
+ *
+ * This is standard type scheme instantiation for polymorphic lookup.
+ *
+ * @param ctx  Type-checking context (for fresh var allocation).
+ * @param t    Type to instantiate.
+ * @return     Fresh copy with new type variables.
+ */
+extern n00b_tc_type_t *n00b_tc_instantiate(n00b_tc_ctx_t *ctx, n00b_tc_type_t *t);

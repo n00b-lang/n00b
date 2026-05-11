@@ -53,6 +53,7 @@ typedef enum {
     N00B_ANNOT_PENALTY,
     N00B_ANNOT_NOTRIVIA,
     N00B_ANNOT_EXPOSES,
+    N00B_ANNOT_RECORD,    /**< @record($fields) — create structural record type from named fields. */
     N00B_ANNOT_NONE,
 } n00b_annot_kind_t;
 

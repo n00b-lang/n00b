@@ -67,29 +67,49 @@ n00b_type_map(n00b_cg_session_t *session, n00b_tc_type_t *type)
         if (n00b_unicode_str_eq(name, r"bool")) {
             return N00B_CG_BOOL;
         }
-        if (n00b_unicode_str_eq(name, r"nil")
-            || n00b_unicode_str_eq(name, r"void")) {
+        if (n00b_unicode_str_eq(name, r"nil")) {
+            return N00B_CG_NIL;
+        }
+        if (n00b_unicode_str_eq(name, r"void")) {
             return N00B_CG_VOID;
         }
         if (n00b_unicode_str_eq(name, r"string")) {
-            return N00B_CG_PTR;
+            return N00B_CG_STRING;
         }
 
         // Unknown primitive: default to I64.
         return N00B_CG_I64;
     }
 
-    // Param (list[T], dict[K,V], ref[T], maybe[T], ...): heap-allocated.
+    // Parameterized types: dispatch by constructor name.
     if (n00b_variant_is_type(type->kind, n00b_tc_param_t)) {
+        n00b_tc_param_t param = n00b_variant_get(type->kind, n00b_tc_param_t);
+
+        if (param.name) {
+            if (n00b_unicode_str_eq(param.name, r"list")) {
+                return N00B_CG_LIST;
+            }
+            if (n00b_unicode_str_eq(param.name, r"dict")) {
+                return N00B_CG_DICT;
+            }
+            if (n00b_unicode_str_eq(param.name, r"result")) {
+                return N00B_CG_RESULT;
+            }
+            if (n00b_unicode_str_eq(param.name, r"maybe")
+                || n00b_unicode_str_eq(param.name, r"option")) {
+                return N00B_CG_OPTION;
+            }
+        }
+
         return N00B_CG_PTR;
     }
 
-    // Fn (function pointer): pointer.
+    // Function types.
     if (n00b_variant_is_type(type->kind, n00b_tc_fn_t)) {
-        return N00B_CG_PTR;
+        return N00B_CG_FUNC;
     }
 
-    // Record, Tuple, Sum: heap-allocated.
+    // Record, Tuple, Sum: heap-allocated, generic pointer for now.
     if (n00b_variant_is_type(type->kind, n00b_tc_record_t)
         || n00b_variant_is_type(type->kind, n00b_tc_tuple_t)
         || n00b_variant_is_type(type->kind, n00b_tc_sum_t)) {

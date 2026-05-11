@@ -283,3 +283,135 @@ n00b_tc_tuple(n00b_tc_ctx_t *ctx, n00b_tc_type_t *+)
     _n00b_variant_set_ptr(&t->kind, n00b_tc_tuple_t, tup);
     return t;
 }
+
+// ============================================================================
+// Type scheme instantiation
+// ============================================================================
+
+// Map from original Var pointer to fresh Var, for preserving internal sharing.
+#define INST_MAP_CAP 32
+
+typedef struct {
+    n00b_tc_type_t *orig;
+    n00b_tc_type_t *fresh;
+} inst_map_entry_t;
+
+typedef struct {
+    n00b_tc_ctx_t    *ctx;
+    inst_map_entry_t  entries[INST_MAP_CAP];
+    int32_t           count;
+} inst_ctx_t;
+
+static n00b_tc_type_t *
+inst_lookup(inst_ctx_t *ic, n00b_tc_type_t *orig)
+{
+    for (int32_t i = 0; i < ic->count; i++) {
+        if (ic->entries[i].orig == orig) {
+            return ic->entries[i].fresh;
+        }
+    }
+
+    return NULL;
+}
+
+static void
+inst_insert(inst_ctx_t *ic, n00b_tc_type_t *orig, n00b_tc_type_t *fresh)
+{
+    if (ic->count < INST_MAP_CAP) {
+        ic->entries[ic->count++] = (inst_map_entry_t){orig, fresh};
+    }
+}
+
+static n00b_tc_type_t *inst_rec(inst_ctx_t *ic, n00b_tc_type_t *t);
+
+static n00b_list_t(n00b_tc_type_t *) *
+inst_list(inst_ctx_t *ic, n00b_list_t(n00b_tc_type_t *) *src)
+{
+    if (!src) {
+        return NULL;
+    }
+
+    size_t n = n00b_list_len(*src);
+    n00b_list_t(n00b_tc_type_t *) *dst = n00b_alloc(n00b_list_t(n00b_tc_type_t *));
+    *dst = n00b_list_new_private(n00b_tc_type_t *);
+
+    for (size_t i = 0; i < n; i++) {
+        n00b_tc_type_t *elem = n00b_list_get(*src, i);
+        n00b_list_push(*dst, inst_rec(ic, elem));
+    }
+
+    return dst;
+}
+
+static n00b_tc_type_t *
+inst_rec(inst_ctx_t *ic, n00b_tc_type_t *t)
+{
+    if (!t) {
+        return NULL;
+    }
+
+    // Follow union-find chain.
+    while (t->forward) {
+        t = t->forward;
+    }
+
+    // Var: map to fresh var (preserving sharing).
+    if (n00b_variant_is_type(t->kind, n00b_tc_var_t)) {
+        n00b_tc_type_t *existing = inst_lookup(ic, t);
+
+        if (existing) {
+            return existing;
+        }
+
+        n00b_tc_type_t *fresh = n00b_tc_fresh_var(ic->ctx);
+        inst_insert(ic, t, fresh);
+        return fresh;
+    }
+
+    // Prim: no internal type vars, return as-is.
+    if (n00b_variant_is_type(t->kind, n00b_tc_prim_t)) {
+        return t;
+    }
+
+    // Fn: instantiate params, return, vargs, kargs.
+    if (n00b_variant_is_type(t->kind, n00b_tc_fn_t)) {
+        n00b_tc_fn_t fn = n00b_variant_get(t->kind, n00b_tc_fn_t);
+
+        n00b_tc_type_t *nt  = n00b_alloc(n00b_tc_type_t);
+        n00b_tc_fn_t    nfn = {
+            .positional  = inst_list(ic, fn.positional),
+            .vargs_type  = inst_rec(ic, fn.vargs_type),
+            .kargs_type  = inst_rec(ic, fn.kargs_type),
+            .return_type = inst_rec(ic, fn.return_type),
+        };
+        _n00b_variant_set_ptr(&nt->kind, n00b_tc_fn_t, nfn);
+        return nt;
+    }
+
+    // Param: instantiate type parameters.
+    if (n00b_variant_is_type(t->kind, n00b_tc_param_t)) {
+        n00b_tc_param_t p = n00b_variant_get(t->kind, n00b_tc_param_t);
+
+        n00b_tc_type_t  *nt = n00b_alloc(n00b_tc_type_t);
+        n00b_tc_param_t  np = {
+            .name   = p.name,
+            .params = inst_list(ic, p.params),
+        };
+        _n00b_variant_set_ptr(&nt->kind, n00b_tc_param_t, np);
+        return nt;
+    }
+
+    // Record, Tuple, Sum: return as-is for now (no polymorphic records yet).
+    return t;
+}
+
+n00b_tc_type_t *
+n00b_tc_instantiate(n00b_tc_ctx_t *ctx, n00b_tc_type_t *t)
+{
+    if (!ctx || !t) {
+        return t;
+    }
+
+    inst_ctx_t ic = {.ctx = ctx, .count = 0};
+    return inst_rec(&ic, t);
+}

@@ -87,9 +87,12 @@ c_args = [
 
 if target_os != 'windows'
   c_args += '-fPIC'
-else
-  c_args += '-DXXH_NO_INTRINSICS=1'
 endif
+# ncc cannot tokenize the libgcc/clang SIMD intrinsic headers xxhash
+# pulls in (compound-literal vector casts in mmintrin.h). Disable
+# xxhash's intrinsic paths unconditionally — its scalar fallback is
+# still fast.
+c_args += '-DXXH_NO_INTRINSICS=1'
 
 if using_glibc
   c_args = c_args + ['-D_GNU_SOURCE']
@@ -270,37 +273,14 @@ endif
 mir_proj = subproject('mir')
 mir_dep  = mir_proj.get_variable('mir_dep')
 
-n00b_core = [
-    'src/core/init.c',
-    'src/core/thread.c',
-    'src/core/mmaps.c',
-    'src/core/alloc.c',
-    'src/core/arena.c',
-    'src/core/pool.c',
-    'src/core/memory_info.c',
-    'src/core/hash.c',
-    'src/core/stw.c',
-    'src/core/gc.c',
-    'src/core/buffer.c',
-    'src/core/data_lock.c',
-    'src/core/string.c',
-    'src/core/lock_accounting.c',
-    'src/core/mutex.c',
-    'src/core/rwlock.c',
-    'src/core/condition.c',
-    'src/core/type_registry.c',
-    'src/core/builtin_types.c',
-    'src/core/sha256.c',
-]
+subdir('src/core')
+subdir('src/util')
 
 # ============================================================================
 # Abstract data types
 # ============================================================================
 
-n00b_adt = [
-    'src/adt/dict_untyped.c',
-    'src/adt/dict.c',
-]
+subdir('src/adt')
 
 python3 = find_program('python3')
 
@@ -348,257 +328,43 @@ gen_unicode_tables = custom_target('gen_unicode_tables',
 # Text processing (unicode + strings)
 # ============================================================================
 
-n00b_text = [
-    # Unicode algorithms
-    'src/text/unicode/encoding.c',
-    'src/text/unicode/properties.c',
-    'src/text/unicode/casemap.c',
-    'src/text/unicode/normalization.c',
-    'src/text/unicode/segmentation.c',
-    'src/text/unicode/linebreak.c',
-    'src/text/unicode/bidi.c',
-    'src/text/unicode/collation.c',
-    'src/text/unicode/identifiers.c',
-    'src/text/unicode/security.c',
-    'src/text/unicode/idna.c',
-    'src/text/unicode/emoji.c',
-    'src/text/unicode/query.c',
-    # String formatting, styling, rendering
-    'src/text/strings/string_ops.c',
-    'src/text/strings/string_convert.c',
-    'src/text/strings/fptostr.c',
-    'src/text/strings/fmt_numbers.c',
-    'src/text/strings/ansi.c',
-    'src/text/strings/markdown.c',
-    'src/text/strings/style_ops.c',
-    'src/text/strings/string_style.c',
-    'src/text/strings/style_registry.c',
-    'src/text/strings/rich_desc.c',
-    'src/text/strings/format_spec.c',
-    'src/text/strings/format.c',
-    'src/text/strings/md_render.c',
-    'src/text/strings/md_lines.c',
-    'src/text/strings/theme.c',
-    # Regex engine (Brzozowski symbolic derivatives)
-    'src/text/regex/charset.c',
-    'src/text/regex/node.c',
-    'src/text/regex/parse.c',
-    'src/text/regex/deriv.c',
-    'src/text/regex/match.c',
-    'src/text/regex/optimize.c',
-    'src/text/regex/regex.c',
-]
+subdir('src/text')
 
 # ============================================================================
 # Display (render + table + layout + hexdump)
 # ============================================================================
 
-n00b_display = [
-    'src/display/layout.c',
-    'src/display/hexdump.c',
-    # Render engine
-    'src/display/render/cell.c',
-    'src/display/render/border_themes.c',
-    'src/display/render/plane.c',
-    'src/display/render/box.c',
-    'src/display/render/composite.c',
-    'src/display/render/canvas.c',
-    'src/display/render/backend_stream.c',
-    'src/display/render/backend_ansi.c',
-    'src/display/render/backend_ansi_inline.c',
-    'src/display/render/backend_dumb.c',
-    'src/display/render/draw_cmd.c',
-    'src/display/render/font_metrics.c',
-    'src/display/render/backend_registry.c',
-    'src/display/render/cocoa_init_bridge.c',
-    # Widget system
-    'src/display/widget.c',
-    'src/display/focus.c',
-    'src/display/event_loop.c',
-    'src/display/mouse.c',
-    'src/display/widgets/label.c',
-    'src/display/widgets/divider.c',
-    'src/display/widgets/spacer.c',
-    'src/display/widgets/progress.c',
-    'src/display/widgets/button.c',
-    'src/display/widgets/checkbox.c',
-    'src/display/widgets/input.c',
-    'src/display/widgets/box.c',
-    'src/display/widgets/switch.c',
-    'src/display/widgets/radio.c',
-    'src/display/widgets/link.c',
-    'src/display/widgets/list_widget.c',
-    'src/display/widgets/selectionlist.c',
-    'src/display/widgets/breadcrumb.c',
-    # Table
-    'src/display/table/table.c',
-    'src/display/table/table_layout.c',
-    'src/display/table/table_render.c',
-    'src/display/table/table_styles.c',
-]
+subdir('src/display')
 
 # ============================================================================
 # Conduit pub/sub system
 # ============================================================================
 
-n00b_conduit = [
-    'src/conduit/conduit.c',
-    'src/conduit/subscription.c',
-    'src/conduit/thread_lifecycle.c',
-    'src/conduit/service.c',
-    # IO core
-    'src/conduit/io.c',
-    # Managed FDs
-    'src/conduit/fd_managed.c',
-    'src/conduit/fd_writer.c',
-    'src/conduit/socket.c',
-    'src/conduit/file.c',
-    'src/conduit/timer.c',
-    'src/conduit/user_event.c',
-    'src/conduit/signal.c',
-    'src/conduit/proc_lifecycle.c',
-    'src/conduit/file_change.c',
-    # Pipeline / transforms
-    'src/conduit/xform.c',
-    'src/conduit/xform_linebuf.c',
-    'src/conduit/xform_ansi_strip.c',
-    'src/conduit/xform_render.c',
-    'src/conduit/xform_hexdump.c',
-    'src/conduit/xform_json.c',
-    'src/conduit/xform_http.c',
-    # Print API
-    'src/conduit/print.c',
-]
-
-# Platform-conditional IO backends
-if target_os != 'windows'
-    n00b_conduit += [
-        'src/conduit/io_poll.c',
-        'src/conduit/subproc.c',
-    ]
-endif
-
-if target_os == 'darwin' or target_os in ['freebsd', 'openbsd', 'netbsd']
-    n00b_conduit += 'src/conduit/io_kqueue.c'
-endif
-if target_os == 'linux'
-    n00b_conduit += 'src/conduit/io_epoll.c'
-    liburing_dep = dependency('liburing', required: false)
-    if liburing_dep.found()
-        n00b_conduit += 'src/conduit/io_uring.c'
-        deps += liburing_dep
-    endif
-endif
-if target_os == 'windows'
-    n00b_conduit += [
-        'src/conduit/io_wsa.c',
-        'src/conduit/subproc_windows.c',
-    ]
-    winsock_dep = cc.find_library('ws2_32', required: true)
-    sync_dep = cc.find_library('synchronization', required: true)
-    advapi_dep = cc.find_library('advapi32', required: true)
-    deps += [winsock_dep, sync_dep, advapi_dep]
-endif
+subdir('src/conduit')
 
 # ============================================================================
 # Virtual Filesystem
 # ============================================================================
 
-n00b_vfs = [
-    'src/vfs/types.c',
-    'src/vfs/backend.c',
-    'src/vfs/backend_memory.c',
-    'src/vfs/backend_local.c',
-    'src/vfs/hooks.c',
-    'src/vfs/vfs.c',
-    'src/vfs/cache.c',
-    'src/vfs/frontend.c',
-]
-
-if target_os == 'linux'
-    n00b_vfs += 'src/vfs/frontend_nfs.c'
-endif
-
-if target_os == 'darwin'
-    fuse_dep_opt = dependency('fuse', required: false)
-    if fuse_dep_opt.found()
-        n00b_vfs += 'src/vfs/frontend_fuse.c'
-        deps += fuse_dep_opt
-        exe_c_args += ['-DN00B_HAVE_FUSE=1']
-    endif
-endif
+subdir('src/vfs')
 
 # ============================================================================
 # Parsers
 # ============================================================================
 
-n00b_parsers = [
-    'src/parsers/ijson.c',
-    'src/parsers/json.c',
-    'src/parsers/scanner.c',
-    'src/parsers/token_stream.c',
-    'src/parsers/scan_recipes.c',
-    'src/parsers/tokenizer_registry.c',
-    'src/parsers/text_tokenizer.c',
-    'src/parsers/shell_tokenizer.c',
-    'src/parsers/lisp_tokenizer.c',
-    'src/parsers/json_tokenizer.c',
-]
+subdir('src/parsers')
 
 # ============================================================================
 # Slay grammar / parser toolkit
 # ============================================================================
 
-n00b_slay = [
-    'src/slay/token.c',
-    'src/slay/annotation.c',
-    'src/slay/grammar.c',
-    'src/slay/unicode_class.c',
-    'src/slay/parse_tree.c',
-    'src/slay/parse_forest.c',
-    'src/slay/pwz.c',
-    'src/slay/bnf.c',
-    'src/slay/earley.c',
-    'src/slay/earley_forest.c',
-    'src/slay/n00b_parse.c',
-    'src/slay/commander.c',
-    'src/slay/commander_tok.c',
-    'src/slay/commander_json.c',
-    'src/slay/symtab.c',
-    'src/slay/tree_util.c',
-    'src/slay/annot_walk.c',
-    'src/slay/annot_scope.c',
-    'src/slay/annot_symtab.c',
-    'src/slay/annot_cf.c',
-    'src/slay/annot_types.c',
-    'src/slay/infer_expr.c',
-    'src/slay/cfg.c',
-    'src/slay/cdg.c',
-    'src/slay/dfg.c',
-    'src/slay/diagnostic.c',
-    'src/slay/analyze.c',
-    'src/slay/debug.c',
-    'src/slay/c_tokenizer.c',
-    'src/slay/transform.c',
-    'src/slay/codegen.c',
-    'src/slay/codegen_mir.c',
-]
+subdir('src/slay')
 
 # ============================================================================
 # N00b compiler (language-specific)
 # ============================================================================
 
-n00b_compiler = [
-    'src/n00b/n00b_tokenizer.c',
-    'src/n00b/n00b_type_spec.c',
-    'src/n00b/n00b_compile.c',
-    'src/n00b/n00b_module_loader.c',
-    'src/n00b/n00b_type_map.c',
-    'src/n00b/embed.c',
-    'src/n00b/embed_ffi.c',
-    'src/n00b/n00b_objfile_emit.c',
-    'src/n00b/n00b_compile_link.c',
-]
+subdir('src/n00b')
 
 libdl_dep = cc.find_library('dl', required: false)
 
@@ -606,56 +372,34 @@ libdl_dep = cc.find_library('dl', required: false)
 # Logic / constraint solver
 # ============================================================================
 
-n00b_logic = [
-    'src/logic/clpfd_domain.c',
-    'src/logic/clpfd_store.c',
-    'src/logic/clpfd_label.c',
-    'src/logic/asp_intern.c',
-    'src/logic/asp_relation.c',
-    'src/logic/asp_rule.c',
-    'src/logic/asp_engine.c',
-    'src/logic/logic_program.c',
-    'src/logic/logic_dsl.c',
-]
+subdir('src/logic')
 
 # ============================================================================
 # Type checker
 # ============================================================================
 
-n00b_typecheck = [
-    'src/typecheck/construct.c',
-    'src/typecheck/context.c',
-    'src/typecheck/unify.c',
-    'src/typecheck/print.c',
-    'src/typecheck/hash.c',
-]
+subdir('src/typecheck')
 
-n00b_objfile = [
-    'src/compiler/objfile/bstream.c',
-    'src/compiler/objfile/writer.c',
-    'src/compiler/objfile/abstract.c',
-    'src/compiler/objfile/md5.c',
-    'src/compiler/objfile/demangle.c',
-    'src/compiler/objfile/demangle_rust.c',
-    'src/compiler/objfile/elf.c',
-    'src/compiler/objfile/elf_query.c',
-    'src/compiler/objfile/elf_helpers.c',
-    'src/compiler/objfile/elf_build.c',
-    'src/compiler/objfile/macho.c',
-    'src/compiler/objfile/macho_query.c',
-    'src/compiler/objfile/macho_helpers.c',
-    'src/compiler/objfile/macho_build.c',
-    'src/compiler/objfile/pe.c',
-    'src/compiler/objfile/pe_query.c',
-    'src/compiler/objfile/pe_helpers.c',
-    'src/compiler/objfile/pe_build.c',
-    'src/compiler/objfile/dwarf.c',
-    'src/compiler/objfile/dwarf_query.c',
-    'src/compiler/objfile/dwarf_codegen.c',
-    'src/compiler/objfile/dwarf_build.c',
-]
+subdir('src/compiler/objfile')
 
-n00b_dll_src = n00b_core + n00b_adt + n00b_text + n00b_display + n00b_conduit + n00b_vfs + n00b_parsers + n00b_logic + n00b_slay + n00b_typecheck + n00b_compiler + n00b_objfile
+# Aggregate per-module source lists into the libn00b source set. Each
+# entry above (`subdir('src/<mod>')`) is responsible for declaring a
+# `n00b_<mod>_src` variable; we just glue them together here.
+n00b_dll_src = (
+    n00b_core_src +
+    n00b_util_src +
+    n00b_adt_src +
+    n00b_text_src +
+    n00b_display_src +
+    n00b_conduit_src +
+    n00b_vfs_src +
+    n00b_parsers_src +
+    n00b_logic_src +
+    n00b_slay_src +
+    n00b_typecheck_src +
+    n00b_compiler_src +
+    n00b_objfile_src
+)
 
 # Build generated unicode tables with --no-ncc (they are pure data,
 # no ncc extensions, and parsing them is extremely expensive).
@@ -748,9 +492,23 @@ n00b = static_library('n00b',
 test_common_kwargs = {
     'include_directories': incdir,
     'c_args': exe_c_args,
+    # `exe_link_args` carries the sanitizer link-line entries
+    # (`-fsanitize=address` / `-fsanitize=undefined`) when those are
+    # enabled at configure time, plus LTO flags.  Without this, tests
+    # built off this kwarg block would link a libn00b that *was*
+    # compiled with sanitizer hooks but no runtime, producing
+    # `__ubsan_handle_*`-not-found at link time.  Phase 2 audit item
+    # #9.
     'link_args': exe_link_args,
     'link_with': [n00b],
 }
+
+# QUIC echo demo — exercises the full transport end-to-end.
+
+# Manifest-driven managed server (Phase 2 deliverable § 13.1).
+
+# One-shot ACME cert acquisition demo (manual DNS-01 provider).
+# Used by docs/quic/le_staging.md for manual interop verification.
 
 
 array_test = executable('test_array',
@@ -837,6 +595,67 @@ dict_test = executable('test_dict',
 )
 test('dict', dict_test, suite: 'unit')
 
+
+
+# ============================================================================
+# QUIC tests
+# ============================================================================
+
+
+
+
+
+
+# JWS encoder + ECDSA-P-256 sign + base64url + JWK thumbprint.
+
+# ACME end-to-end (Phase 2.3a): directory + newNonce + newAccount.
+# Skipped unless STEPCA_DIR_URL is in the env — start the fixture via
+# `test/fixtures/stepca/start.sh` to populate it.
+
+# CSR builder.  In-process structural test always runs; external
+# `openssl req -verify` runs when an openssl binary is available.
+
+# Orchestrator smoke test (argument validation; live cert acquisition
+# is deferred to the Phase 2 deployment playbook because HTTP-01
+# validation needs port 80).
+
+
+
+# Endpoint hot-reload (cert + key swap).
+
+# Sticky secret (stateless-reset / address-validation token rotation).
+
+# LB-CID encoding (block-cipher mode, 16-byte fixed CID).
+
+# Phase 2 fuzz tests — property tests across base64url, PEM, X.509
+# validity walker, LB-CID decoder.  Same shape as the Phase 1
+# framer fuzz: deterministic seed, ~5k iters per target.
+
+# Manifest + preflight (design doc § 9).
+
+# DNS providers (manual + cloudflare) + DNS-01 challenge wrapper.
+
+# (removed: QUIC SNI routing — WIP, lives on another branch)
+
+# (removed: QUIC trust→picotls bridge — WIP, lives on another branch)
+
+# Phase 3 § 5.3 tail — mid-handshake-reload no-tear property.
+
+# Live network integration test: skipped unless N00B_TEST_NETWORK=1.
+# Hits Let's Encrypt's staging directory; verifies real TLS handshake
+# through OS trust + HTTP/1.1 parse against a real ACME endpoint.
+
+
+
+
+
+
+
+
+# Perf harness — built but not registered as a CI test (it's
+# benchmarking, not assertion-based).  Run manually with
+# `./build_debug/perf_quic_stream_scaling`.
+
 # ============================================================================
 # Conduit tests
 # ============================================================================
@@ -858,6 +677,12 @@ conduit_test = executable('test_conduit',
     kwargs: test_common_kwargs,
 )
 test('conduit', conduit_test, suite: 'unit')
+
+path_test = executable('test_path',
+    ['test/unit/test_path.c'],
+    kwargs: test_common_kwargs,
+)
+test('path', path_test, suite: 'unit')
 
 publisher_test = executable('test_publisher',
     ['test/unit/test_publisher.c'],
@@ -894,8 +719,8 @@ if target_os == 'windows'
         ['test/unit/test_io_windows.c'],
         kwargs: test_common_kwargs,
     )
-    test('io_windows', io_windows_test, suite: 'unit')
 endif
+
 
 signal_test = executable('test_signal',
     ['test/unit/test_signal.c'],
@@ -1015,17 +840,6 @@ regex_api_test = executable('test_regex_api',
 )
 test('regex_api', regex_api_test, suite: 'unit')
 
-regex_resharp_test = executable('test_regex_resharp',
-    ['test/unit/test_regex_resharp.c'],
-    kwargs: test_common_kwargs,
-)
-test('regex_resharp', regex_resharp_test,
-    suite: 'unit',
-    timeout: 300,
-    env: {
-        'N00B_RESHARP_TEST_DIR': meson.current_source_dir() / 'test/data/resharp/tests',
-    })
-
 # ============================================================================
 # Logic / constraint solver tests
 # ============================================================================
@@ -1084,6 +898,11 @@ logic_easy_test = executable('test_logic_easy',
     kwargs: logic_test_kwargs,
 )
 test('logic_easy', logic_easy_test, suite: 'unit')
+
+# ============================================================================
+# ML tests
+# ============================================================================
+
 
 # ============================================================================
 # Parser tests
@@ -1219,6 +1038,24 @@ json_tokenizer_test = executable('test_json_tokenizer',
     kwargs: test_common_kwargs,
 )
 test('json_tokenizer', json_tokenizer_test, suite: 'unit')
+
+# ============================================================================
+# LSP framework tests
+# ============================================================================
+
+
+
+
+
+
+# nccd backend lib (defined here so the test target below can link it).
+nccd_backend_lib = static_library('nccd_backend',
+    [
+    ],
+    include_directories: incdir + [include_directories('src/tools')],
+    c_args: exe_c_args,
+)
+
 
 cf_label_test = executable('test_cf_label',
     ['test/unit/test_cf_label.c'],
@@ -1481,7 +1318,6 @@ if conf_cocoa
       objc_args: cocoa_objc_args,
       link_with: [n00b],
   )
-  test('cocoa_backend', cocoa_test, suite: 'unit')
 endif
 
 if conf_notcurses
@@ -1489,7 +1325,6 @@ if conf_notcurses
       ['test/unit/test_notcurses_backend.c'],
       kwargs: test_common_kwargs,
   )
-  test('notcurses_backend', notcurses_test, suite: 'unit')
 endif
 
 # Table CLI tool
@@ -1537,9 +1372,16 @@ if target_os != 'windows'
     )
 endif
 
+# nccd — the ncc Language Server.
+# Phase 2: lexical-only ncc backend (semantic tokens, outline,
+# bracket-balance diagnostics).  The backend lib is defined earlier
+# (alongside the test target that links it).
+
 # ============================================================================
 # Integration tests
 # ============================================================================
+
+# Interpreter integration tests (shell runner invokes the n00b binary).
 
 hash_test = executable('test_hash',
     ['test/integration/test_hash.c'],
@@ -1685,6 +1527,54 @@ foreach name : objfile_test_names
     )
     test('objfile_' + name, exe, suite: 'unit')
 endforeach
+
+# ============================================================================
+# Examples (Mac-only — ObjC + libxpc)
+# ============================================================================
+
+if target_os == 'darwin'
+    example_objc_args = [
+        '-g',
+        '-Wno-unused-parameter',
+        '-Wno-unused-function',
+        '-Wno-unknown-pragmas',
+        '-fno-omit-frame-pointer',
+        '-Wno-atomic-alignment',
+        '-fobjc-arc',
+    ]
+
+    example_inc = [include_directories('examples/crayon_shared'), incdir]
+
+    # ObjC libxpc subscriber — no n00b types, plain Apple toolchain.
+    # Also hosts the xpc_dictionary_apply shim that hides Apple's block
+    # syntax behind a plain-C function pointer.
+    n00b_crayon_xpc = static_library('n00b_crayon_xpc',
+        ['examples/crayon_shared/crayon_subscriber.m',
+         'examples/crayon_shared/crayon_xpc_apply.m'],
+        include_directories: example_inc,
+        objc_args: example_objc_args,
+    )
+
+    # C bridges + features — touch n00b's _generic_struct macros, must
+    # compile via ncc with the same flags as the rest of the project.
+    n00b_crayon_helpers = static_library('n00b_crayon_helpers',
+        ['examples/crayon_shared/crayon_xpc_to_json.c',
+         'examples/crayon_shared/crayon_features.c'],
+        include_directories: example_inc,
+        c_args: exe_c_args + ['-fblocks'],
+    )
+
+    crayon_dump = executable('crayon_dump',
+        ['examples/crayon_dump/main.m'],
+        include_directories: example_inc,
+        link_with: n00b_crayon_xpc,
+        objc_args: example_objc_args,
+        link_args: ['-framework', 'Foundation'],
+    )
+
+
+
+endif
 
 # ============================================================================
 # Documentation (Doxygen)

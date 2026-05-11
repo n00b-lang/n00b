@@ -42,6 +42,7 @@ typedef struct {
     n00b_grammar_t                   *grammar;
     n00b_cf_labels_t                 *cf_labels;
     n00b_tc_ctx_t                    *tc_ctx;      /**< Type-checking context for fresh vars. */
+    struct n00b_diag_ctx_s           *diag;        /**< Diagnostic accumulator (may be NULL). */
     n00b_list_t(n00b_sym_entry_t *)  *params;            /**< Accumulated parameter symbols. */
     n00b_node_types_t                *node_types;         /**< Parse node → resolved type. */
     n00b_list_t(n00b_sym_entry_t *)  *shadowed_entries;   /**< Entries that shadow outer decls. */
@@ -114,4 +115,9 @@ n00b_annot_result_t *n00b_annot_walk_tree_full(n00b_grammar_t    *g,
  */
 n00b_annot_result_t *n00b_annot_walk_tree_full_ex(n00b_grammar_t             *g,
                                                     n00b_parse_tree_t          *tree,
-                                                    n00b_translate_type_spec_fn ts_fn);
+                                                    n00b_translate_type_spec_fn ts_fn)
+_kargs {
+    n00b_symtab_t          *symtab;   /**< Pre-populated symtab (NULL = create fresh). */
+    n00b_tc_ctx_t          *tc_ctx;   /**< Pre-populated type context (NULL = create fresh). */
+    struct n00b_diag_ctx_s *diag;     /**< Pre-populated diag context (NULL = create fresh). */
+};

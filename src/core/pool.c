@@ -133,7 +133,13 @@ pool_free(n00b_pool_t *pool, void *ptr)
     assert(entry->list_index <= N00B_NUM_FREE_LISTS);
 
     if (entry->list_index == N00B_NUM_FREE_LISTS) {
-        n00b_pool_page_t *page = ((n00b_pool_page_t *)entry) - 1;
+        /* `entry` sits at offset n00b_align(sizeof(n00b_pool_page_t))
+         * past the page header (see `new_page_entry`).  Decrementing
+         * a `n00b_pool_page_t *` by 1 only walks back
+         * `sizeof(n00b_pool_page_t)` bytes, which is wrong when that
+         * is smaller than N00B_ALIGN. */
+        n00b_pool_page_t *page = (n00b_pool_page_t *)(((char *)entry)
+                                                     - n00b_align(sizeof(n00b_pool_page_t)));
         delete_one_page_entry(pool, page);
         return;
     }

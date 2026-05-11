@@ -1,0 +1,16 @@
+# MIR JIT (https://github.com/vnmakarov/mir).
+#
+# Upstream is GNUmakefile/CMake-based, not meson. We overlay our own
+# meson.build via subprojects/packagefiles/mir/ so meson can drive the
+# build the same way as any other subproject — no manual cloning or
+# build.sh shell-out needed.
+
+[wrap-git]
+url = https://github.com/vnmakarov/mir.git
+revision = 99c65079038f3ba9242ef646f308c266cfd7a8e5
+depth = 1
+patch_directory = mir
+clone-recursive = false
+
+[provide]
+mir = mir_dep

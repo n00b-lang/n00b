@@ -982,6 +982,8 @@ bnf_walk_annotation(n00b_nt_node_t *pn, void *children, void *thunk)
         // @declares($name, $type)
         // @declares($name, "kind")           — sym_kind without type
         // @declares($name, $type, "kind")    — sym_kind with type
+        info->type_ref = N00B_CHILD_NONE;
+
         if (args && args->len >= 1) {
             info->name_ref = parse_child_ref(slist_get(args, 0));
         }
@@ -1319,6 +1321,13 @@ bnf_walk_annotation(n00b_nt_node_t *pn, void *children, void *thunk)
     }
     else if (str_eq_lit(annot_str, r"exposes")) {
         info->kind = N00B_ANNOT_EXPOSES;
+    }
+    else if (str_eq_lit(annot_str, r"record")) {
+        info->kind = N00B_ANNOT_RECORD;
+
+        if (args && args->len >= 1) {
+            info->name_ref = parse_child_ref(slist_get(args, 0));
+        }
     }
 
     if (args_r) {

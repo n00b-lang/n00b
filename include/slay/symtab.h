@@ -49,6 +49,24 @@ typedef struct n00b_scope_t      n00b_scope_t;
 typedef struct n00b_namespace_t  n00b_namespace_t;
 typedef struct n00b_symtab_t     n00b_symtab_t;
 
+/**
+ * @brief Compiled class/struct layout descriptor.
+ *
+ * Computed during codegen from the class declaration. Stores field
+ * offsets and total instance size for direct memory access.
+ */
+typedef struct {
+    const char **field_names;      /**< Field names in declaration order. */
+    uint32_t    *field_offsets;     /**< Byte offset of each field within instance. */
+    uint32_t     n_fields;         /**< Number of fields. */
+    uint32_t     instance_size;    /**< Total allocation size in bytes. */
+    uint64_t     type_hash;        /**< Type registry hash (from typehash). */
+    const char **method_names;     /**< Method names (unmangled): "area", "init", ... */
+    const char **method_mir_names; /**< Mangled MIR names: "Point$area", "Point$init", ... */
+    uint32_t     n_methods;        /**< Number of methods. */
+    bool         has_init;         /**< True if an "init" method exists. */
+} n00b_class_layout_t;
+
 // ============================================================================
 // Symbol entry
 // ============================================================================
@@ -80,6 +98,8 @@ struct n00b_sym_entry_t {
     n00b_string_t       *visibility;   /**< "public", "private", or "protected" (from @visibility). */
     n00b_string_t       *inherits_name; /**< Parent class name (from @inherits). */
     n00b_list_t(n00b_string_t *) *implements; /**< Interface names (from @implements). */
+    n00b_option_t(void *)  const_value; /**< Compile-time constant (enum members, const decls). */
+    n00b_class_layout_t   *class_layout; /**< Compiled field layout (classes/structs only). */
 };
 
 // ============================================================================

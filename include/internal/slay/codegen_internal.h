@@ -137,6 +137,7 @@ struct n00b_cg_session_t {
 
     // Diagnostics
     n00b_diag_ctx_t          *diag;
+    bool                      has_codegen_errors;
     void                     *user_data;
 };
 

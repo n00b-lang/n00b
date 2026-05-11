@@ -1,0 +1,12 @@
+enum Dir {
+  North,
+  South,
+  East,
+  West
+}
+var d = Dir.East
+assert d == Dir.East
+assert d == 2
+assert d != Dir.West
+print("enum compare works")
+0

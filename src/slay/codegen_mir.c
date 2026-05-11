@@ -11,6 +11,7 @@
 
 #include "n00b.h"
 #include "internal/slay/codegen_internal.h"
+#include "slay/codegen_builtins.h"
 #include "core/alloc.h"
 
 #include <stdio.h>
@@ -25,19 +26,31 @@ MIR_type_t
 n00b_cg_mir_type(n00b_cg_type_tag_t tag)
 {
     switch (tag) {
-    case N00B_CG_I8:   return MIR_T_I8;
-    case N00B_CG_I16:  return MIR_T_I16;
-    case N00B_CG_I32:  return MIR_T_I32;
-    case N00B_CG_I64:  return MIR_T_I64;
-    case N00B_CG_U8:   return MIR_T_U8;
-    case N00B_CG_U16:  return MIR_T_U16;
-    case N00B_CG_U32:  return MIR_T_U32;
-    case N00B_CG_U64:  return MIR_T_U64;
-    case N00B_CG_F32:  return MIR_T_F;
-    case N00B_CG_F64:  return MIR_T_D;
-    case N00B_CG_PTR:  return MIR_T_P;
-    case N00B_CG_BOOL: return MIR_T_I64;
-    case N00B_CG_VOID: return MIR_T_I64; // No void MIR type; use I64 placeholder.
+    case N00B_CG_I8:     return MIR_T_I8;
+    case N00B_CG_I16:    return MIR_T_I16;
+    case N00B_CG_I32:    return MIR_T_I32;
+    case N00B_CG_I64:    return MIR_T_I64;
+    case N00B_CG_U8:     return MIR_T_U8;
+    case N00B_CG_U16:    return MIR_T_U16;
+    case N00B_CG_U32:    return MIR_T_U32;
+    case N00B_CG_U64:    return MIR_T_U64;
+    case N00B_CG_F32:    return MIR_T_F;
+    case N00B_CG_F64:    return MIR_T_D;
+    // All pointer-like types use I64 at the MIR level. On 64-bit
+    // architectures pointers fit in i64, and MIR's type verifier is
+    // strict about mixing MIR_T_P with MIR_T_I64 within a function.
+    // The semantic pointer distinction is carried by n00b_cg_val_t's
+    // type_tag field, not by MIR's type system.
+    case N00B_CG_STRING:
+    case N00B_CG_LIST:
+    case N00B_CG_DICT:
+    case N00B_CG_RESULT:
+    case N00B_CG_OPTION:
+    case N00B_CG_FUNC:
+    case N00B_CG_NIL:
+    case N00B_CG_PTR:    return MIR_T_I64;
+    case N00B_CG_BOOL:   return MIR_T_I64;
+    case N00B_CG_VOID:   return MIR_T_I64; // No void MIR type; use I64 placeholder.
     }
 
     return MIR_T_I64;
@@ -118,7 +131,7 @@ static inline bool
 is_signed_int(n00b_cg_type_tag_t t)
 {
     return t == N00B_CG_I8 || t == N00B_CG_I16 || t == N00B_CG_I32
-        || t == N00B_CG_I64 || t == N00B_CG_BOOL || t == N00B_CG_PTR;
+        || t == N00B_CG_I64 || t == N00B_CG_BOOL;
 }
 
 static inline bool
@@ -217,6 +230,51 @@ n00b_cg_emit_binop(n00b_cg_session_t    *s,
                     n00b_cg_val_t          a,
                     n00b_cg_val_t          b)
 {
+    // String operations: dispatch to C runtime helpers instead of
+    // MIR arithmetic instructions.
+    if (a.type_tag == N00B_CG_STRING) {
+        switch (op) {
+        case N00B_CG_OP_ADD: {
+            n00b_cg_type_tag_t pt[] = {N00B_CG_I64, N00B_CG_I64};
+            n00b_cg_import_func(s, "n00b_builtin_str_concat",
+                                 (void *)n00b_builtin_str_concat,
+                                 .ret = N00B_CG_I64,
+                                 .param_types = pt, .n_params = 2);
+            n00b_cg_val_t args[] = {a, b};
+            n00b_cg_val_t r = n00b_cg_emit_call(
+                s, "n00b_builtin_str_concat", args, 2,
+                .ret = N00B_CG_I64);
+            r.type_tag = N00B_CG_STRING;
+            return r;
+        }
+        case N00B_CG_OP_EQ: {
+            n00b_cg_type_tag_t pt[] = {N00B_CG_I64, N00B_CG_I64};
+            n00b_cg_import_func(s, "n00b_builtin_str_eq",
+                                 (void *)n00b_builtin_str_eq,
+                                 .ret = N00B_CG_I64,
+                                 .param_types = pt, .n_params = 2);
+            n00b_cg_val_t args[] = {a, b};
+            return n00b_cg_emit_call(
+                s, "n00b_builtin_str_eq", args, 2,
+                .ret = N00B_CG_I64);
+        }
+        case N00B_CG_OP_NE: {
+            n00b_cg_type_tag_t pt[] = {N00B_CG_I64, N00B_CG_I64};
+            n00b_cg_import_func(s, "n00b_builtin_str_eq",
+                                 (void *)n00b_builtin_str_eq,
+                                 .ret = N00B_CG_I64,
+                                 .param_types = pt, .n_params = 2);
+            n00b_cg_val_t args[] = {a, b};
+            n00b_cg_val_t eq = n00b_cg_emit_call(
+                s, "n00b_builtin_str_eq", args, 2,
+                .ret = N00B_CG_I64);
+            return n00b_cg_emit_unop(s, N00B_CG_OP_LOGICAL_NOT, eq);
+        }
+        default:
+            return N00B_CG_VOID_VAL;
+        }
+    }
+
     n00b_cg_module_t  *m = s->active_module;
     n00b_cg_type_tag_t result_type = a.type_tag;
 
@@ -1106,6 +1164,13 @@ _kargs {
 }
 {
     n00b_cg_module_t *m = s->active_module;
+
+    // Check if already imported in this module.
+    n00b_cg_import_t *existing = n00b_cg_find_import(s, name);
+
+    if (existing) {
+        return;
+    }
 
     // Create proto.
     MIR_item_t proto = n00b_cg_get_or_create_proto(s, name, kargs->ret,

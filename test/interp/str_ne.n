@@ -1,0 +1,3 @@
+assert "hello" != "world"
+assert "abc" != "def"
+0
