@@ -74,7 +74,12 @@ new_dict_untyped_store(n00b_dict_untyped_t *d, uint32_t alloc_items)
     result            = n00b_alloc_flex_with_opts(n00b_dict_untyped_store_t,
                                                   n00b_dict_untyped_bucket_t,
                                                   alloc_items,
-                                                  &(n00b_alloc_opts_t){.allocator = d->allocator});
+                                                  &(n00b_alloc_opts_t){
+                                                      .allocator = d->allocator,
+                                                      .scan_kind = d->scan_kind,
+                                                      .scan_cb   = d->scan_cb,
+                                                      .scan_user = d->scan_user,
+                                                  });
     result->last_slot = alloc_items - 1;
     result->threshold = resize_threshold(alloc_items);
 
@@ -551,10 +556,13 @@ try_again:
 extern void
 n00b_dict_untyped_init(n00b_dict_untyped_t *dict) _kargs
 {
-    uint32_t          start_capacity = N00B_DICT_MIN_SIZE;
-    n00b_allocator_t *allocator      = nullptr;
-    n00b_hash_fn      hash           = nullptr;
-    bool              skip_obj_hash  = false;
+    uint32_t             start_capacity = N00B_DICT_MIN_SIZE;
+    n00b_allocator_t    *allocator      = nullptr;
+    n00b_hash_fn         hash           = nullptr;
+    bool                 skip_obj_hash  = false;
+    n00b_gc_scan_kind_t  scan_kind      = N00B_GC_SCAN_KIND_DEFAULT;
+    n00b_gc_scan_cb_t    scan_cb        = nullptr;
+    void                *scan_user      = nullptr;
 }
 {
     // This is also the set initializer now.
@@ -573,6 +581,9 @@ n00b_dict_untyped_init(n00b_dict_untyped_t *dict) _kargs
         .length          = 0,
         .futex           = 0,
         .skip_obj_hash   = skip_obj_hash,
+        .scan_kind       = scan_kind,
+        .scan_cb         = scan_cb,
+        .scan_user       = scan_user,
     };
 
     dict->store = new_dict_untyped_store(dict, start_capacity);

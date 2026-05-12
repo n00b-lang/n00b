@@ -14,6 +14,7 @@
 #pragma once
 
 #include "n00b.h"
+#include "core/gc_map.h"
 
 /**
  * @brief Immutable UTF-8 string with optional styling.
@@ -51,10 +52,13 @@ struct n00b_string_t {
  */
 extern void n00b_string_init(n00b_string_t *self)
     _kargs {
-        const char       *src       = nullptr;
-        int64_t           byte_len  = -1;
-        n00b_allocator_t *allocator = nullptr;
-        int64_t          *cp_count  = nullptr;
+        const char          *src       = nullptr;
+        int64_t              byte_len  = -1;
+        n00b_allocator_t    *allocator = nullptr;
+        int64_t             *cp_count  = nullptr;
+        n00b_gc_scan_kind_t  scan_kind = N00B_GC_SCAN_KIND_NONE;
+        n00b_gc_scan_cb_t    scan_cb   = nullptr;
+        void                *scan_user = nullptr;
     };
 
 /**

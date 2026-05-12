@@ -36,6 +36,7 @@
 #include "core/macros.h"
 #include "core/atomic.h"
 #include "core/align.h"
+#include "core/gc_map.h"
 #include "adt/array.h"
 #include "core/data_lock.h"
 #include "adt/option.h"
@@ -61,11 +62,14 @@
  */
 #define n00b_list_t(T)                                                                         \
     _generic_struct n00b_list_tid(T) {                                                         \
-        T                *data;                                                                \
-        size_t            len;                                                                 \
-        size_t            cap;                                                                 \
-        n00b_rwlock_t    *lock;                                                                \
-        n00b_allocator_t *allocator;                                                           \
+        T                   *data;                                                             \
+        size_t               len;                                                              \
+        size_t               cap;                                                              \
+        n00b_rwlock_t       *lock;                                                             \
+        n00b_allocator_t    *allocator;                                                        \
+        n00b_gc_scan_kind_t  scan_kind;                                                        \
+        n00b_gc_scan_cb_t    scan_cb;                                                          \
+        void                *scan_user;                                                        \
     }
 
 // ============================================================================
@@ -83,7 +87,9 @@
 
 /**
  * @internal Grow backing store to at least @p needed elements (power-of-2).
- *           MUST be called within a locked context.
+ *           MUST be called within a locked context.  Re-applies the
+ *           list's stored scan_kind / scan_cb / scan_user to the new
+ *           backing store so the GC sees the same shape across grows.
  */
 #define _n00b_list_ensure_cap(xptr, needed)                                                    \
     do {                                                                                       \
@@ -92,7 +98,12 @@
             size_t               _bl_nc = n00b_align_closest_pow2_ceil(_bl_need);              \
             typeof((xptr)->data) _bl_nd = n00b_alloc_size_with_opts(                           \
                 _bl_nc, sizeof(*(xptr)->data),                                                 \
-                &(n00b_alloc_opts_t){.allocator = (xptr)->allocator});                         \
+                &(n00b_alloc_opts_t){                                                          \
+                    .allocator = (xptr)->allocator,                                            \
+                    .scan_kind = (xptr)->scan_kind,                                            \
+                    .scan_cb   = (xptr)->scan_cb,                                              \
+                    .scan_user = (xptr)->scan_user,                                            \
+                });                                                                            \
             if ((xptr)->len > 0) {                                                             \
                 memcpy(_bl_nd, (xptr)->data, (xptr)->len * sizeof(*(xptr)->data));             \
             }                                                                                  \
@@ -124,13 +135,16 @@
 
 #define _n00b_list_new_sel(T, locked, ...)                                                     \
     ({                                                                                         \
+        n00b_alloc_opts_t _bl_o = (n00b_alloc_opts_t){__VA_ARGS__};                            \
         (n00b_list_t(T)){                                                                      \
-            .data = n00b_alloc_array_with_opts(T, N00B_DEFAULT_LIST_SZ,                        \
-                        N00B_ALLOC_OPTS(__VA_ARGS__)),                                          \
-            .len  = 0,                                                                         \
-            .cap  = N00B_DEFAULT_LIST_SZ,                                                      \
-            .lock = (locked) ? n00b_data_lock_new() : (n00b_rwlock_t *)nullptr,                \
-            __VA_OPT__(.allocator = __VA_ARGS__,)                                              \
+            .data = n00b_alloc_array_with_opts(T, N00B_DEFAULT_LIST_SZ, &_bl_o),               \
+            .len       = 0,                                                                    \
+            .cap       = N00B_DEFAULT_LIST_SZ,                                                 \
+            .lock      = (locked) ? n00b_data_lock_new() : (n00b_rwlock_t *)nullptr,           \
+            .allocator = _bl_o.allocator,                                                      \
+            .scan_kind = _bl_o.scan_kind,                                                      \
+            .scan_cb   = _bl_o.scan_cb,                                                        \
+            .scan_user = _bl_o.scan_user,                                                      \
         };                                                                                     \
     })
 
@@ -148,13 +162,16 @@
 #define _n00b_list_new_cap_sel(T, N, locked, ...)                                              \
     ({                                                                                         \
         size_t _bl_rc = n00b_align_closest_pow2_ceil(n00b_max((size_t)(N), (size_t)1));        \
+        n00b_alloc_opts_t _bl_o = (n00b_alloc_opts_t){__VA_ARGS__};                            \
         (n00b_list_t(T)){                                                                      \
-            .data = n00b_alloc_array_with_opts(T, _bl_rc,                                      \
-                        N00B_ALLOC_OPTS(__VA_ARGS__)),                                          \
-            .len  = 0,                                                                         \
-            .cap  = _bl_rc,                                                                    \
-            .lock = (locked) ? n00b_data_lock_new() : (n00b_rwlock_t *)nullptr,                \
-            __VA_OPT__(.allocator = __VA_ARGS__,)                                              \
+            .data = n00b_alloc_array_with_opts(T, _bl_rc, &_bl_o),                             \
+            .len       = 0,                                                                    \
+            .cap       = _bl_rc,                                                               \
+            .lock      = (locked) ? n00b_data_lock_new() : (n00b_rwlock_t *)nullptr,           \
+            .allocator = _bl_o.allocator,                                                      \
+            .scan_kind = _bl_o.scan_kind,                                                      \
+            .scan_cb   = _bl_o.scan_cb,                                                        \
+            .scan_user = _bl_o.scan_user,                                                      \
         };                                                                                     \
     })
 
@@ -443,11 +460,19 @@
         size_t    _bl_tc  = n00b_align_closest_pow2_ceil(n00b_max(_bl_tl, (size_t)1));         \
         typeof(a) _bl_new = {                                                                  \
             .data = n00b_alloc_size_with_opts(_bl_tc, sizeof(*_bl_ap->data),                    \
-                        &(n00b_alloc_opts_t){.allocator = _bl_ap->allocator}),                 \
+                        &(n00b_alloc_opts_t){                                                  \
+                            .allocator = _bl_ap->allocator,                                    \
+                            .scan_kind = _bl_ap->scan_kind,                                    \
+                            .scan_cb   = _bl_ap->scan_cb,                                      \
+                            .scan_user = _bl_ap->scan_user,                                    \
+                        }),                                                                    \
             .len       = _bl_tl,                                                               \
             .cap       = _bl_tc,                                                               \
-            .lock      = _bl_ap->lock ? n00b_data_lock_new() : (n00b_rwlock_t *)nullptr,                        \
+            .lock      = _bl_ap->lock ? n00b_data_lock_new() : (n00b_rwlock_t *)nullptr,       \
             .allocator = _bl_ap->allocator,                                                    \
+            .scan_kind = _bl_ap->scan_kind,                                                    \
+            .scan_cb   = _bl_ap->scan_cb,                                                      \
+            .scan_user = _bl_ap->scan_user,                                                    \
         };                                                                                     \
         if (_bl_ap->len > 0) {                                                                 \
             memcpy(_bl_new.data, _bl_ap->data, _bl_ap->len * sizeof(*_bl_ap->data));           \
@@ -549,11 +574,19 @@
         size_t    _bl_nc  = n00b_max(_bl_sp->cap, (size_t)1);                                  \
         typeof(x) _bl_new = {                                                                  \
             .data = n00b_alloc_size_with_opts(_bl_nc, sizeof(*_bl_sp->data),                    \
-                        &(n00b_alloc_opts_t){.allocator = _bl_sp->allocator}),                 \
+                        &(n00b_alloc_opts_t){                                                  \
+                            .allocator = _bl_sp->allocator,                                    \
+                            .scan_kind = _bl_sp->scan_kind,                                    \
+                            .scan_cb   = _bl_sp->scan_cb,                                      \
+                            .scan_user = _bl_sp->scan_user,                                    \
+                        }),                                                                    \
             .len       = _bl_sp->len,                                                          \
             .cap       = _bl_nc,                                                               \
-            .lock      = _bl_sp->lock ? n00b_data_lock_new() : (n00b_rwlock_t *)nullptr,                        \
+            .lock      = _bl_sp->lock ? n00b_data_lock_new() : (n00b_rwlock_t *)nullptr,       \
             .allocator = _bl_sp->allocator,                                                    \
+            .scan_kind = _bl_sp->scan_kind,                                                    \
+            .scan_cb   = _bl_sp->scan_cb,                                                      \
+            .scan_user = _bl_sp->scan_user,                                                    \
         };                                                                                     \
         if (_bl_sp->len > 0) {                                                                 \
             memcpy(_bl_new.data, _bl_sp->data, _bl_sp->len * sizeof(*_bl_sp->data));           \

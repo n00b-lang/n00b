@@ -11,4 +11,5 @@ n00b_parsers_src = files(
     'shell_tokenizer.c',
     'lisp_tokenizer.c',
     'json_tokenizer.c',
+    'toml.c',
 )

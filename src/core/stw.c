@@ -109,6 +109,28 @@ _n00b_stop_the_world(char *loc)
         n00b_atomic_or(&t->self_lock, N00B_STW);
     }
 
+    // Wait for every other live thread to enter a state where its
+    // callee-saved registers are spilled to its scanned stack: either
+    // BLOCKING (called wait_for_stw_release, which setjmp'd) or
+    // SUSPEND (cooperatively suspended at a known-safe point and
+    // setjmp'd then).  Without this barrier the world isn't actually
+    // stopped — the initiator returns and the GC proceeds while other
+    // threads are still running with live heap pointers in registers
+    // the GC can't see.  Plain busy-wait: threads flip their bit at
+    // their next checkin / safepoint, which is generally microseconds.
+    n = N00B_THREADS_MAX;
+    while (n--) {
+        t = n00b_atomic_load(&rt->threads[n].thread);
+        if (!t || t == n00b_thread_self()) {
+            continue;
+        }
+        while ((n00b_atomic_load(&t->self_lock)
+                & (N00B_BLOCKING | N00B_SUSPEND))
+               == 0) {
+            // spin
+        }
+    }
+
     rt->stw_nesting = 1;
 
     _n00b_thread_resume(loc);
@@ -159,7 +181,7 @@ void
 n00b_wait_for_stw_release(void)
 {
     n00b_runtime_t *rt = n00b_get_runtime();
-    jmp_buf         save_state;
+    jmp_buf         save_state = {0};
 
     n00b_capture_stack_top(n00b_thread_self());
     int32_t cur = n00b_atomic_load(&rt->stw);
@@ -168,9 +190,14 @@ n00b_wait_for_stw_release(void)
         return;
     }
 
-    n00b_atomic_or(&__n00b_thread_self.self_lock, N00B_BLOCKING);
-
     if (!setjmp(save_state)) {
+        // setjmp must capture callee-saved registers BEFORE we
+        // announce N00B_BLOCKING — the STW initiator uses that bit
+        // to decide save_state is ready to scan.  Swapping the order
+        // races: initiator sees the bit, scans an uninitialised
+        // save_state.
+        n00b_atomic_or(&__n00b_thread_self.self_lock, N00B_BLOCKING);
+
         while (cur != N00B_NO_OWNER) {
             // Use the version that doesn't check the STW when it's
             // signaled!
@@ -193,7 +220,10 @@ n00b_thread_checkin(void)
     }
 
     if (n00b_atomic_load(&__n00b_thread_self.self_lock) & N00B_STW) {
-        n00b_atomic_or(&__n00b_thread_self.self_lock, N00B_BLOCKING);
+        // n00b_wait_for_stw_release sets N00B_BLOCKING itself, after
+        // setjmp has captured callee-saved registers.  Setting it here
+        // first races: the STW initiator may see the bit and start
+        // scanning before save_state is initialised.
         n00b_wait_for_stw_release();
     }
 }

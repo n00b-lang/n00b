@@ -1072,7 +1072,8 @@ win_wire_io(n00b_subproc_t *sp)
 
         if (n00b_subproc_xforms_requested(sp->stdin_xforms)) {
             win_state(sp)->stdin_xform_inbox =
-                n00b_alloc(n00b_conduit_inbox_t(n00b_buffer_t *));
+                n00b_alloc_with_opts(n00b_conduit_inbox_t(n00b_buffer_t *),
+                    &(n00b_alloc_opts_t){.allocator = sp->conduit->allocator});
             n00b_conduit_inbox_init(n00b_buffer_t *,
                                     win_state(sp)->stdin_xform_inbox,
                                     sp->conduit,

@@ -40,10 +40,10 @@ typedef struct {
  * circular include dependency.
  */
 struct n00b_condition_thread_state_t {
-    n00b_condition_t *current_cv;
-    uint64_t          wait_predicate;
-    void             *thread_param;
-    char             *wait_loc;
+    _Atomic(n00b_condition_t *) current_cv;
+    uint64_t                    wait_predicate;
+    void                       *thread_param;
+    char                       *wait_loc;
 };
 
 /**
@@ -63,6 +63,7 @@ struct n00b_thread_record_t {
     n00b_lock_base_t                 *lock_wait_target;///< Lock we are currently blocked on.
     char                             *lock_wait_loc;   ///< Source location of the wait.
     char                             *lock_wait_trace; ///< Backtrace at wait (debug).
+    n00b_string_t                    *regex_last_detail; ///< Last regex compile error detail (per-thread).
 };
 
 struct n00b_thread_t {

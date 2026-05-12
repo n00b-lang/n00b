@@ -118,6 +118,12 @@ extern bool n00b_lock_release_accounting(n00b_lock_base_t *lock, char *loc);
 extern void n00b_register_lock_wait(n00b_thread_t *thread, void *lock, char *loc);
 extern void _n00b_wait_done(n00b_thread_t *thread, char *loc);
 
+/* Scrub every thread's exclusive-lock chain of entries whose
+ * address falls within [lo, hi).  Call from an allocator's destroy
+ * callback before its pages are unmapped so the chain can't be left
+ * holding dangling pointers into freed memory. */
+extern void n00b_lock_chains_scrub_range(uint64_t lo, uint64_t hi);
+
 #define n00b_wait_done(thread) _n00b_wait_done((thread), N00B_LOC_STRING())
 
 // Debug/inspection functions.

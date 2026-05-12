@@ -55,6 +55,12 @@ struct n00b_runtime_t {
     n00b_arena_t               *default_arena; // GC'd arena (when using default allocator)
     n00b_pool_t                 system_pool;   // System pool for root list & lock records.
     n00b_list_t(n00b_gc_root_t) gc_roots;      // User-registered GC roots.
+    /* Non-hidden, non-arena allocators (e.g. caller-owned pools created
+     * with `hidden = false`).  The GC walks every page of each pool in
+     * this list during a collect so pointers FROM pool memory INTO the
+     * default arena get traced/forwarded.  Hidden pools are NOT in
+     * this list.  Backed by system_pool. */
+    n00b_list_t(n00b_allocator_t *) scannable_pools;
     n00b_list_t(n00b_finalizer_info_t *) finalizers; // Global finalizer list (system_pool-backed).
     n00b_dict_untyped_t        *type_registry;     // typehash -> n00b_type_info_t *
     n00b_pool_t                 conduit_pool;      // Pool for conduit infra (registered as GC root).
@@ -70,6 +76,8 @@ struct n00b_runtime_t {
     n00b_futex_t                stw;
     uint32_t                    stw_nesting;
     const char                 *theme_name;    // Active theme name (set during init).
+    n00b_unicode_ctx_t         *unicode_ctx;   // Phase 4.5 unicode subsystem state.
+    n00b_regex_ctx_t           *regex_ctx;     // Regex port-side caches.
 };
 
 /**

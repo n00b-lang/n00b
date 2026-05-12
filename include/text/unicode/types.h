@@ -16,6 +16,12 @@
 /** @brief A Unicode codepoint (U+0000..U+10FFFF). */
 typedef uint32_t n00b_codepoint_t;
 
+/** @brief An inclusive `[lo, hi]` codepoint range (both endpoints inclusive). */
+typedef struct n00b_codepoint_pair_t {
+    n00b_codepoint_t lo; /**< First codepoint in the range (inclusive). */
+    n00b_codepoint_t hi; /**< Last codepoint in the range (inclusive). */
+} n00b_codepoint_pair_t;
+
 // ===========================================================================
 // General_Category (field 2 of UnicodeData.txt)
 // ===========================================================================

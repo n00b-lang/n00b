@@ -1,204 +1,337 @@
 /**
- * @file regex.h
- * @brief Public API for the n00b regex engine.
+ * @file include/text/regex/regex.h
+ * @brief Public n00b regex API surface.
  *
- * A non-backtracking, O(n) regex engine based on Brzozowski symbolic
- * derivatives with lazy DFA construction. Supports standard regex plus
- * extension operators (`&` intersection, `~` complement, `_` wildcard).
+ * Phase 9 of the regex port (see `~/dd/n00b_regex_port_plan.md` § 4).
+ * This is the only n00b-regex header that uses the `n00b_*` symbol
+ * prefix — everything in `include/internal/regex/` stays un-prefixed
+ * because it is internal vocabulary.
  *
- * Usage:
- * @code
- *     n00b_string_t *pat = n00b_string_from_cstr("\\w+");
- *     auto r = n00b_regex_new(pat);
- *     if (n00b_result_is_ok(r)) {
- *         n00b_regex_t *re = n00b_result_get(r);
- *         bool hit = n00b_regex_is_match(re, input);
- *     }
- * @endcode
+ * The compiled `n00b_regex_t` is opaque: callers see only a typedef'd
+ * forward declaration here.  Construction is via `n00b_regex_new`,
+ * which returns `n00b_result_t(n00b_regex_t *)`.  On failure, the
+ * `result.err` carries the `n00b_regex_error_kind_t` value cast to
+ * `int` (per D14); a thread-local detail set during compile and
+ * cleared on the next compile call is exposed via
+ * `n00b_regex_err_detail()`.
+ *
+ * Whole-input matchers (`n00b_regex_is_match`, `_count`, `_matches`,
+ * `_anchored`, `_replace`, `_split`) return natural types (D1).  A
+ * capacity-exceeded or other internal failure during the scan calls
+ * `n00b_panic` (D9) rather than propagating an error code.
+ *
+ * Streaming (`_stream`, `_stream_chunk`) and seeking (`_seek_fwd`,
+ * `_seek_rev`) have their own resumable cursor type.
+ *
+ * Companion source: `src/text/regex/public.c`.
  */
 #pragma once
 
 #include "n00b.h"
 #include "core/string.h"
-#include "core/data_lock.h"
+#include "core/alloc.h"
 #include "adt/list.h"
 #include "adt/result.h"
-#include "text/regex/charset.h"
-#include "text/regex/node.h"
-#include "text/regex/parse.h"
-#include "text/regex/optimize.h"
+#include "adt/option.h"
 
-// ============================================================================
-// DFA state flags and NullKind (matches resharp's StateFlags/NullKind)
-// ============================================================================
+#include <stdint.h>
+#include <stddef.h>
+#include <stdbool.h>
 
-/** @brief How a state is nullable — affects match boundary computation. */
+// ---------------------------------------------------------------------------
+// Error kinds + accessors  (D14: int err in n00b_result_t + side-channel)
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Error kind carried in `n00b_result_t.err` from `n00b_regex_new`.
+ */
 typedef enum {
-    N00B_RE_NULL_CURRENT  = 0,  /**< Nullable at current position (offset 0). */
-    N00B_RE_NULL_PREV     = 1,  /**< Nullable at previous position (offset 1). */
-    N00B_RE_NULL_BOTH_01  = 2,  /**< Nullable at both current and previous. */
-    N00B_RE_NULL_PENDING  = 4,  /**< Complex pending nullable positions. */
-    N00B_RE_NULL_NOT      = 255, /**< Not nullable. */
-} n00b_regex_null_kind_t;
+    N00B_RE_ERR_OK                 = 0,
+    N00B_RE_ERR_PARSE              = 1,
+    N00B_RE_ERR_ALGEBRA            = 2,
+    N00B_RE_ERR_CAPACITY_EXCEEDED  = 3,
+    N00B_RE_ERR_PATTERN_TOO_LARGE  = 4,
+    N00B_RE_ERR_SERIALIZE          = 5,
+} n00b_regex_error_kind_t;
 
-/** @brief Per-state flags (matches resharp's StateFlags). */
+/**
+ * @brief Static generic message for an error kind.
+ *
+ * @param kind  `n00b_regex_error_kind_t` value cast to int (matches the
+ *              `n00b_result_t.err` shape).
+ * @return      Heap-owned `n00b_string_t *` (GC-managed).
+ */
+n00b_string_t *n00b_regex_err_str(int kind);
+
+/**
+ * @brief Thread-local detail set during the most recent compile attempt.
+ *
+ * Populated on every `n00b_regex_new` call (success or failure) — set to
+ * `nullptr` on success, set to a heap-owned `n00b_string_t *` describing
+ * the offending position / kind on failure.  Cleared at the start of
+ * every `n00b_regex_new` call.
+ *
+ * @return  Last compile detail, or `nullptr` if the last compile
+ *          succeeded (or no compile has run on this thread).
+ */
+n00b_string_t *n00b_regex_err_detail(void);
+
+// ---------------------------------------------------------------------------
+// Unicode mode
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Unicode handling mode for pattern compilation.
+ *
+ * @note `N00B_RE_UNICODE_DEFAULT` enables UTF-8-aware character classes
+ *       without full Unicode-property tables.  `_FULL` adds the property
+ *       tables; `_JAVASCRIPT` selects ASCII-only `\d` / `\w` / `\s`.
+ */
 typedef enum {
-    N00B_RE_SF_NONE               = 0,
-    N00B_RE_SF_INITIAL            = 1,
-    N00B_RE_SF_ANCHOR_NULLABLE    = 4,   /**< Nullable due to anchor deps. */
-    N00B_RE_SF_CAN_SKIP           = 8,
-    N00B_RE_SF_BEGIN_NULLABLE     = 16,  /**< Nullable at Begin location. */
-    N00B_RE_SF_END_NULLABLE       = 32,  /**< Nullable at End location. */
-    N00B_RE_SF_ALWAYS_NULLABLE    = 64,  /**< Always nullable. */
-    N00B_RE_SF_PENDING_NULLABLE   = 128, /**< Has pending nullable positions. */
-} n00b_regex_state_flags_t;
+    N00B_RE_UNICODE_ASCII      = 0,
+    N00B_RE_UNICODE_DEFAULT    = 1,
+    N00B_RE_UNICODE_FULL       = 2,
+    N00B_RE_UNICODE_JAVASCRIPT = 3,
+} n00b_regex_unicode_mode_t;
 
-// ============================================================================
-// Pending nullable position range
-// ============================================================================
+// ---------------------------------------------------------------------------
+// Match record
+// ---------------------------------------------------------------------------
 
-/** @brief A range [lo, hi] of relative nullable positions. */
-typedef struct n00b_regex_pending_range_t {
-    uint16_t lo;
-    uint16_t hi;
-} n00b_regex_pending_range_t;
-
-// ============================================================================
-// DFA types
-// ============================================================================
-
-/** @brief One DFA state. */
-typedef struct n00b_regex_dfa_state_t {
-    uint32_t                    node_id;        /**< Regex node this state represents. */
-    n00b_regex_state_flags_t    flags;          /**< State flags. */
-    n00b_regex_null_kind_t      null_kind;      /**< How this state is nullable. */
-    int32_t                    *transitions;    /**< State IDs indexed by minterm_id.
-                                                     -1 = not yet computed (lazy). */
-    uint16_t                    n_transitions;  /**< Size of transitions (== minterm count). */
-    n00b_regex_pending_range_t *pending_ranges; /**< Pending nullable position ranges. */
-    uint16_t                    n_pending;      /**< Number of pending ranges. */
-    int32_t                     min_pending;    /**< Minimum pending nullable offset. */
-    uint8_t                     skip_map[16];   /**< 128-bit bitmap: which ASCII bytes cause
-                                                     a non-self-loop, non-dead transition.
-                                                     Only valid when can_skip is true. */
-    uint8_t                     dead_map[16];   /**< 128-bit bitmap: which ASCII bytes cause
-                                                     a transition to the dead state (state 0).
-                                                     Used by skip loop to stop on dead bytes. */
-    bool                        can_skip;       /**< True if skip_map is usable for skipping. */
-} n00b_regex_dfa_state_t;
-
-/** @brief A lazy or fully-compiled DFA. */
-typedef struct n00b_regex_dfa_t {
-    n00b_list_t(n00b_regex_dfa_state_t) states;
-    n00b_dict_t(uint32_t, uint32_t)    *node_to_state;
-    n00b_regex_builder_t               *builder;
-    n00b_regex_minterm_table_t         *minterms;
-    n00b_dict_t(uint64_t, uint32_t)    *deriv_cache;
-    int32_t                            *anchor_transitions; /**< Separate cache for End-location anchor transitions. */
-    uint32_t                           *flat_transitions;   /**< Flat table: state * n_minterms + mt → next state.
-                                                                 Only valid when is_flat is true. */
-    uint32_t                            anchor_trans_size;
-    uint32_t                            start_state;
-    uint16_t                            n_minterms_cached;  /**< Cached minterm count for flat table indexing. */
-    uint8_t                             mt_log2;            /**< log2(n_minterms_padded) for bit-shift indexing. */
-    bool                                is_flat;            /**< True if flat_transitions is populated. */
-    bool                                hit_state_limit;    /**< True if state creation hit the lazy limit. */
-    n00b_rwlock_t                      *lock;
-} n00b_regex_dfa_t;
-
-// ============================================================================
-// Compiled regex handle
-// ============================================================================
-
-/** @brief A compiled regex — opaque, reusable, thread-safe after compile. */
-typedef struct n00b_regex_t {
-    n00b_regex_solver_t        *solver;
-    n00b_regex_builder_t       *builder;
-    n00b_regex_minterm_table_t *minterms;
-    n00b_regex_dfa_t           *forward_dfa;
-    n00b_regex_dfa_t           *reverse_dfa;
-    n00b_string_t              *pattern;
-    bool                        is_full_dfa;
-    bool                        has_anchors; /**< Root pattern depends on anchors (^, $). */
-    n00b_regex_optimizations_t  optimizations; /**< Pre-computed match-time optimizations. */
-} n00b_regex_t;
-
-/** @brief A single match result — a slice of the input. */
-typedef struct n00b_regex_match_t {
-    int64_t index;   /**< Byte offset into the input string. */
-    int64_t length;  /**< Byte length of the match. */
+/**
+ * @brief Half-open byte-offset range `[start, end)` into the matched input.
+ */
+typedef struct {
+    int64_t start;
+    int64_t end;
 } n00b_regex_match_t;
 
-// ============================================================================
-// Public API
-// ============================================================================
+// ---------------------------------------------------------------------------
+// Compiled regex (opaque; reach members via getters)
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Opaque compiled regex handle.  Construct via `n00b_regex_new`.
+ *
+ * The underlying engine-level struct lives in
+ * `include/internal/regex/regex.h` and is intentionally invisible to
+ * callers of the public API.
+ */
+typedef struct n00b_regex_t n00b_regex_t;
+
+/** @brief Default threshold for `n00b_regex_compile`'s DFA state cap. */
+#define N00B_RE_DFA_THRESHOLD       10000u
+/** @brief Sentinel meaning "engine default" for `max_dfa_capacity`. */
+#define N00B_RE_DEFAULT_MAX_DFA_CAP 0u
+
+// ---------------------------------------------------------------------------
+// Construction
+// ---------------------------------------------------------------------------
 
 /**
  * @brief Compile a regex pattern.
  *
- * @param pattern  The regex pattern (UTF-8 n00b_string_t).
+ * On success returns `n00b_result_ok(n00b_regex_t *, re)`.  On failure
+ * returns `n00b_result_err(n00b_regex_t *, kind)` where @c kind is an
+ * `n00b_regex_error_kind_t` value cast to int; per-thread error detail
+ * is available via `n00b_regex_err_detail()` until the next call.
  *
- * @kw case_insensitive  Case-insensitive matching (default: false).
- * @kw multiline         ^ and $ match line boundaries (default: false).
- * @kw dot_all           . matches newlines (default: false).
+ * @param pattern             UTF-8 pattern string.
  *
- * @return On success, result_ok with a regex handle.
- *         On failure, result_err with parse error code.
+ * @kw case_insensitive       Case-insensitive matching (default: false).
+ * @kw multiline              `^` / `$` match line boundaries (default:
+ *                            **true** — matches upstream resharp; this
+ *                            **diverges** from PCRE / Python / JavaScript
+ *                            conventions which default to false).
+ * @kw dot_matches_newline    `.` matches `\n` (default: false).
+ * @kw ignore_whitespace      Ignore unescaped whitespace in the pattern
+ *                            (default: false).
+ * @kw hardened               Disable rules that can blow up the DFA size
+ *                            (default: false).
+ * @kw unbounded_size         Allow unbounded DFA growth (default: false).
+ * @kw precompile             Force full DFA at construction (default: false).
+ * @kw unicode                Unicode mode (default:
+ *                            `N00B_RE_UNICODE_DEFAULT`).
+ * @kw max_dfa_capacity       Cap on lazy DFA states (default: engine
+ *                            default — `N00B_RE_DEFAULT_MAX_DFA_CAP`).
+ * @kw lookahead_context_max  Cap on lookaround context (default: 0 =
+ *                            engine default).
+ * @kw allocator              Allocator for the compiled regex (default:
+ *                            runtime default, i.e. GC arena).
  */
 n00b_result_t(n00b_regex_t *)
 n00b_regex_new(n00b_string_t *pattern) _kargs {
-    bool case_insensitive = false;
-    bool multiline        = false;
-    bool dot_all          = false;
+    bool                       case_insensitive      = false;
+    bool                       multiline             = true;
+    bool                       dot_matches_newline   = false;
+    bool                       ignore_whitespace     = false;
+    bool                       hardened              = false;
+    bool                       unbounded_size        = false;
+    bool                       precompile            = false;
+    n00b_regex_unicode_mode_t  unicode               = N00B_RE_UNICODE_DEFAULT;
+    size_t                     max_dfa_capacity      = N00B_RE_DEFAULT_MAX_DFA_CAP;
+    uint32_t                   lookahead_context_max = 0;
+    n00b_allocator_t          *allocator             = nullptr;
 };
 
-/** @brief Test if the pattern matches anywhere in @p input. */
+// ---------------------------------------------------------------------------
+// Whole-input matching (the 80% surface).
+//
+// Per D1: each function returns its natural type.  Internal failure
+// during the scan (capacity exceeded, etc.) calls `n00b_panic` (D9)
+// rather than propagating an error code.
+// ---------------------------------------------------------------------------
+
+/** @brief Boolean is-match over the whole input. */
 bool n00b_regex_is_match(n00b_regex_t *re, n00b_string_t *input);
 
-/** @brief Count non-overlapping matches. */
+/** @brief Count of non-overlapping leftmost matches. */
 int64_t n00b_regex_count(n00b_regex_t *re, n00b_string_t *input);
 
-/**
- * @brief Find all non-overlapping matches.
- * @return A list of n00b_regex_match_t. Empty list if no matches.
- */
+/** @brief List of every non-overlapping leftmost match. */
 n00b_list_t(n00b_regex_match_t) *
 n00b_regex_matches(n00b_regex_t *re, n00b_string_t *input);
 
-/**
- * @brief Replace all non-overlapping matches with @p replacement.
- * @param replacement Replacement string. `$0` expands to the matched text.
- * @return A new string with replacements applied.
- */
+/** @brief Anchored find: at most one match starting at offset 0. */
+n00b_option_t(n00b_regex_match_t)
+n00b_regex_anchored(n00b_regex_t *re, n00b_string_t *input);
+
+/** @brief Replace every leftmost match with @p replacement. */
 n00b_string_t *
-n00b_regex_replace(n00b_regex_t  *re,
-                   n00b_string_t *input,
+n00b_regex_replace(n00b_regex_t *re, n00b_string_t *input,
                    n00b_string_t *replacement);
 
-/**
- * @brief Split @p input on matches of the pattern.
- * @return A list of n00b_string_t * segments.
- */
+/** @brief Split @p input on every match; empty trailing field is included. */
 n00b_list_t(n00b_string_t *) *
 n00b_regex_split(n00b_regex_t *re, n00b_string_t *input);
 
-/** @brief Default DFA state threshold for precompilation. */
-#define N00B_RE_DFA_THRESHOLD 10000
+// ---------------------------------------------------------------------------
+// Compile (force full DFA expansion)
+// ---------------------------------------------------------------------------
 
 /**
- * @brief Force-compile the full DFA (bidirectional BFS).
+ * @brief Eagerly expand the lazy DFA up to @p max_states new states.
  *
- * Uses resharp's bidirectional BFS: reverse phase from the end-location
- * transitions, then forward phase from the start state. Aborts if the
- * state count exceeds the threshold.
+ * Subsequent matches reuse the precomputed transition table.  A no-op
+ * when the DFA has already reached @p max_states.
  *
- * After successful completion, matching is pure table lookups.
- *
- * @kw max_states  Safety limit on number of DFA states (default: N00B_RE_DFA_THRESHOLD).
+ * @kw max_states  Cap on newly-materialised states (default:
+ *                 `N00B_RE_DFA_THRESHOLD`).
  */
 void n00b_regex_compile(n00b_regex_t *re) _kargs {
     uint32_t max_states = N00B_RE_DFA_THRESHOLD;
 };
 
-/** @brief Check whether the DFA is fully compiled. */
-bool n00b_regex_is_compiled(n00b_regex_t *re);
+/** @brief True iff the DFA has been compiled (precomputed). */
+bool n00b_regex_is_compiled(const n00b_regex_t *re);
+
+// ---------------------------------------------------------------------------
+// Streaming (shortest-match, left-to-right)
+// ---------------------------------------------------------------------------
+
+/** @brief Per-match callback type for `n00b_regex_stream`. */
+typedef void (*n00b_regex_match_cb_t)(void *ctx, n00b_regex_match_t m);
+
+/**
+ * @brief Whole-input shortest-match streamer.
+ *
+ * If @p on_match is non-null, each match is delivered via callback and
+ * an empty list is returned (no list allocation).  Otherwise the
+ * matches are collected into a returned list.
+ *
+ * @kw on_match  Per-match callback (default: nullptr).
+ * @kw ctx       Opaque context passed to @p on_match (default: nullptr).
+ */
+n00b_list_t(n00b_regex_match_t) *
+n00b_regex_stream(n00b_regex_t *re, n00b_string_t *input) _kargs {
+    n00b_regex_match_cb_t  on_match = nullptr;
+    void                  *ctx      = nullptr;
+};
+
+/**
+ * @brief Resumable cursor for chunked input.
+ *
+ * Opaque.  Allocated once via `n00b_regex_cursor_new` or
+ * `n00b_regex_cursor_at`, then threaded across `n00b_regex_stream_chunk`
+ * / `n00b_regex_seek_fwd` / `n00b_regex_seek_rev` calls.
+ */
+typedef struct n00b_regex_cursor_t n00b_regex_cursor_t;
+
+/** @brief Allocate a fresh cursor at offset 0. */
+n00b_regex_cursor_t *n00b_regex_cursor_new(n00b_regex_t *re);
+
+/** @brief Allocate a fresh cursor positioned at @p offset. */
+n00b_regex_cursor_t *n00b_regex_cursor_at(n00b_regex_t *re, size_t offset);
+
+/** @brief Current absolute offset of the cursor. */
+size_t n00b_regex_cursor_pos(const n00b_regex_cursor_t *c);
+
+/**
+ * @brief Feed @p chunk_len bytes from @p chunk through the streaming
+ *        DFA, advancing @p cursor in place.
+ *
+ * Each shortest-match end (in absolute input offsets) is delivered
+ * via @p on_end.
+ *
+ * Streaming necessarily takes raw bytes; chunks may not align to UTF-8
+ * codepoint boundaries.  Callers reading from `n00b_string_t` should
+ * extract bytes via the string's underlying buffer.
+ *
+ * The returned `n00b_result_t(int)` carries an
+ * `n00b_regex_error_kind_t` value cast to int in `.err`; on success the
+ * `.ok` value is 0 (unused).
+ */
+n00b_result_t(int)
+n00b_regex_stream_chunk(n00b_regex_t        *re,
+                        const uint8_t       *chunk,
+                        size_t               chunk_len,
+                        n00b_regex_cursor_t *cursor,
+                        void               (*on_end)(void *ctx, size_t end),
+                        void                *ctx);
+
+// ---------------------------------------------------------------------------
+// Seek (cursor scans over a contiguous buffer)
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Advance @p cursor forward to the next match in @p input.
+ *
+ * Returns `n00b_option_set(...)` with the match on hit; the cursor's
+ * position is advanced to the match end.  Returns `n00b_option_none(...)`
+ * if no further match exists.
+ */
+n00b_option_t(n00b_regex_match_t)
+n00b_regex_seek_fwd(n00b_regex_t        *re,
+                    n00b_string_t       *input,
+                    n00b_regex_cursor_t *cursor);
+
+/**
+ * @brief Advance @p cursor backward to the previous match in @p input.
+ *
+ * Returns `n00b_option_set(...)` with the match on hit; the cursor's
+ * position is rewound to the match start.  Returns
+ * `n00b_option_none(...)` if no further match exists.
+ */
+n00b_option_t(n00b_regex_match_t)
+n00b_regex_seek_rev(n00b_regex_t        *re,
+                    n00b_string_t       *input,
+                    n00b_regex_cursor_t *cursor);
+
+// ---------------------------------------------------------------------------
+// Utilities
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Return @p literal with regex meta-characters backslash-escaped.
+ *
+ * The returned string is heap-owned (GC-managed).
+ */
+n00b_string_t *n00b_regex_escape(n00b_string_t *literal);
+
+/**
+ * @brief Return the original pattern source for @p re.
+ *
+ * The returned string is heap-owned (GC-managed) and equal to the
+ * argument that was passed to `n00b_regex_new`.
+ */
+n00b_string_t *n00b_regex_pattern(const n00b_regex_t *re);

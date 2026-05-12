@@ -55,6 +55,10 @@ typedef struct n00b_static_header_t  n00b_static_header_t;
 typedef enum n00b_dt_kind_t          n00b_dt_kind_t;
 typedef struct n00b_finalizer_info_t n00b_finalizer_info_t;
 typedef struct n00b_gc_root_t        n00b_gc_root_t;
+typedef struct n00b_gc_map_t         n00b_gc_map_t;
+enum n00b_gc_scan_kind_t : uint8_t;
+typedef enum n00b_gc_scan_kind_t     n00b_gc_scan_kind_t;
+typedef void (*n00b_gc_scan_cb_t)(n00b_gc_map_t *, void *);
 // First two are for anything that is an absolute size / length and
 // should always be a natural number.
 //
@@ -133,6 +137,8 @@ typedef struct n00b_unicode_normalizer_s     n00b_unicode_normalizer_t;
 typedef struct n00b_unicode_idna_result_t    n00b_unicode_idna_result_t;
 typedef struct n00b_unicode_bidi_para_s      n00b_unicode_bidi_para_t;
 typedef struct n00b_cp_filter_t              n00b_cp_filter_t;
+typedef struct n00b_unicode_ctx_t            n00b_unicode_ctx_t;
+typedef struct n00b_regex_ctx_t              n00b_regex_ctx_t;
 
 // Table module forward declarations.
 typedef struct n00b_table_t                  n00b_table_t;

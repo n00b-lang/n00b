@@ -10,7 +10,6 @@
 
 #define N00B_MEM_INTERNAL_API
 #define N00B_USE_INTERNAL_API
-#define N00B_DISABLE_NOSCAN
 
 #include <string.h>
 #include <assert.h>
@@ -41,6 +40,8 @@
 static void n00b_collect_setup(n00b_collect_t *, n00b_arena_t *);
 static void n00b_scan_memory_range(n00b_collect_t *, void *, size_t);
 static void n00b_process_worklist(n00b_collect_t *);
+static bool n00b_visit_possible_pointer(n00b_collect_t *ctx, uint64_t **base,
+                                         size_t i, bool base_checked);
 static void n00b_collection_cleanup(n00b_collect_t *);
 static void n00b_process_finalizers(n00b_collect_t *);
 static void n00b_scan_thread_stacks(n00b_collect_t *);
@@ -48,6 +49,9 @@ static void n00b_scan_runtime(n00b_collect_t *);
 static void n00b_scan_roots(n00b_collect_t *);
 static void n00b_add_alloc_to_worklist(n00b_alloc_info_t  ainfo,
                                        n00b_collect_t    *ctx);
+static void n00b_add_range_strided_to_worklist(void *start, uint64_t nwords,
+                                                uint64_t stride, uint64_t offset,
+                                                n00b_collect_t *ctx);
 static void n00b_add_range_to_worklist(void *start, uint32_t nwords,
                                        n00b_collect_t *ctx);
 
@@ -193,12 +197,14 @@ n00b_forward_alloc(n00b_collect_t *ctx, n00b_inline_hdr_t *old)
     void              *scan_start;
     [[maybe_unused]] bool no_scan;
     uint32_t           nwords;
+    n00b_gc_scan_kind_t scan_kind;
 
     if (ctx->from_space->vtable.metadata_pool) {
         n00b_oob_hdr_t *old_oob = n00b_to_mem_metadata_record(old);
         result     = n00b_forward_mdata(ctx, old_oob, new);
         scan_start = ((n00b_oob_hdr_t *)result)->user_ptr;
         no_scan    = old_oob->no_scan;
+        scan_kind  = (n00b_gc_scan_kind_t)old_oob->scan_kind;
         nwords     = (old_oob->alloc_len - arena_overhead(ctx->from_space))
                          / sizeof(void *);
     }
@@ -206,17 +212,54 @@ n00b_forward_alloc(n00b_collect_t *ctx, n00b_inline_hdr_t *old)
         result     = n00b_forward_inline(ctx, old, new);
         scan_start = (char *)new + arena_overhead(ctx->to_space);
         no_scan    = new->no_scan;
+        scan_kind  = (n00b_gc_scan_kind_t)new->scan_kind;
         nwords     = (old->alloc_len - arena_overhead(ctx->from_space))
                          / sizeof(void *);
     }
 
 #if defined(N00B_DISABLE_NOSCAN)
-    n00b_add_range_to_worklist(scan_start, nwords, ctx);
+    bool do_scan = true;
 #else
-    if (!no_scan) {
-        n00b_add_range_to_worklist(scan_start, nwords, ctx);
-    }
+    bool do_scan = !no_scan;
 #endif
+
+    if (do_scan) {
+        if (scan_kind == N00B_GC_SCAN_KIND_EVERY_OTHER) {
+            n00b_add_range_strided_to_worklist(scan_start, nwords, 2, 0, ctx);
+        }
+        else if (scan_kind == N00B_GC_SCAN_KIND_CALLBACK) {
+            n00b_gc_scan_cb_t cb;
+            void             *user;
+            if (ctx->from_space->vtable.metadata_pool) {
+                n00b_oob_hdr_t *old_oob = n00b_to_mem_metadata_record(old);
+                cb   = old_oob->scan_cb;
+                user = old_oob->scan_user;
+            } else {
+                cb   = new->scan_cb;
+                user = new->scan_user;
+            }
+            if (cb) {
+                n00b_allocator_t *wpool = (n00b_allocator_t *)&ctx->work_pool;
+                uint64_t  bm_words = n00b_gc_map_word_count(nwords);
+                uint64_t *bitmap   = n00b_alloc_array_with_opts(uint64_t, bm_words,
+                                         &(n00b_alloc_opts_t){.allocator = wpool});
+                for (uint64_t bi = 0; bi < bm_words; bi++) bitmap[bi] = 0;
+                n00b_gc_map_t m = {.user_ptr = scan_start, .num_words = nwords,
+                                   .bitmap = bitmap};
+                cb(&m, user);
+                for (uint64_t bi = 0; bi < nwords; bi++) {
+                    if (n00b_gc_map_is_set(&m, bi)) {
+                        n00b_add_range_strided_to_worklist(
+                            (char *)scan_start + bi * sizeof(void *),
+                            1, 0, 0, ctx);
+                    }
+                }
+            }
+        }
+        else {
+            n00b_add_range_to_worklist(scan_start, nwords, ctx);
+        }
+    }
 
     return result;
 }
@@ -304,14 +347,32 @@ n00b_add_range_to_worklist(void *start, uint32_t nwords, n00b_collect_t *ctx)
                                  &(n00b_alloc_opts_t){.allocator = (n00b_allocator_t *)&ctx->work_pool});
     entry->start     = start;
     entry->num_words = nwords;
+    entry->stride    = 0;  // 0 == legacy scan-every-word
+    entry->offset    = 0;
+    n00b_list_push(ctx->worklist, entry);
+}
+
+static void
+n00b_add_range_strided_to_worklist(void *start, uint64_t nwords,
+                                   uint64_t stride, uint64_t offset,
+                                   n00b_collect_t *ctx)
+{
+    n00b_gc_wl_item_t *entry;
+    entry = n00b_alloc_with_opts(n00b_gc_wl_item_t,
+                                 &(n00b_alloc_opts_t){.allocator = (n00b_allocator_t *)&ctx->work_pool});
+    entry->start     = start;
+    entry->num_words = nwords;
+    entry->stride    = stride;
+    entry->offset    = offset;
     n00b_list_push(ctx->worklist, entry);
 }
 
 static void
 n00b_add_alloc_to_worklist(n00b_alloc_info_t ainfo, n00b_collect_t *ctx)
 {
-    void     *start;
-    uint32_t  n;
+    void              *start;
+    uint32_t           n;
+    n00b_gc_scan_kind_t kind;
 
     if (ainfo.kind == n00b_alloc_oob) {
         n00b_oob_hdr_t *oob = ainfo.hdr.oob;
@@ -324,6 +385,7 @@ n00b_add_alloc_to_worklist(n00b_alloc_info_t ainfo, n00b_collect_t *ctx)
                     / sizeof(void *);
         }
         start = oob->user_ptr;
+        kind  = (n00b_gc_scan_kind_t)oob->scan_kind;
     }
     else {
         n00b_inline_hdr_t *hdr = ainfo.hdr.in_line;
@@ -336,8 +398,47 @@ n00b_add_alloc_to_worklist(n00b_alloc_info_t ainfo, n00b_collect_t *ctx)
                     / sizeof(void *);
         }
         start = (char *)hdr + arena_overhead(ctx->from_space);
+        kind  = (n00b_gc_scan_kind_t)hdr->scan_kind;
     }
 
+    if (kind == N00B_GC_SCAN_KIND_EVERY_OTHER) {
+        n00b_add_range_strided_to_worklist(start, n, 2, 0, ctx);
+        return;
+    }
+
+    if (kind == N00B_GC_SCAN_KIND_CALLBACK) {
+        n00b_gc_scan_cb_t cb;
+        void             *user;
+        if (ainfo.kind == n00b_alloc_oob) {
+            cb   = ainfo.hdr.oob->scan_cb;
+            user = ainfo.hdr.oob->scan_user;
+        } else {
+            cb   = ainfo.hdr.in_line->scan_cb;
+            user = ainfo.hdr.in_line->scan_user;
+        }
+        if (cb) {
+            n00b_allocator_t *wpool = (n00b_allocator_t *)&ctx->work_pool;
+            uint64_t  bm_words = n00b_gc_map_word_count(n);
+            uint64_t *bitmap   = n00b_alloc_array_with_opts(uint64_t, bm_words,
+                                     &(n00b_alloc_opts_t){.allocator = wpool});
+            for (uint64_t bi = 0; bi < bm_words; bi++) bitmap[bi] = 0;
+            n00b_gc_map_t m = {.user_ptr = start, .num_words = n,
+                               .bitmap = bitmap};
+            cb(&m, user);
+            /* Visit only marked words.  Add each as its own length-1
+             * worklist entry to reuse the existing scan infrastructure. */
+            for (uint64_t bi = 0; bi < n; bi++) {
+                if (n00b_gc_map_is_set(&m, bi)) {
+                    n00b_add_range_strided_to_worklist((char *)start
+                                                            + bi * sizeof(void *),
+                                                       1, 0, 0, ctx);
+                }
+            }
+            return;
+        }
+    }
+
+    /* ALL / DEFAULT fall through to a plain scan over every word. */
     n00b_add_range_to_worklist(start, n, ctx);
 }
 
@@ -348,7 +449,18 @@ n00b_process_worklist(n00b_collect_t *ctx)
 
     while (n00b_list_len(ctx->worklist) > 0) {
         item = n00b_option_get(n00b_list_pop_front(n00b_gc_wl_item_t *, ctx->worklist));
-        n00b_scan_memory_range(ctx, item->start, item->num_words);
+        if (item->stride == 0) {
+            n00b_scan_memory_range(ctx, item->start, item->num_words);
+        } else {
+            /* Strided scan: visit slots at indices offset, offset+stride,
+             * offset+2*stride, ... while in [0, num_words). */
+            uint64_t **base = (uint64_t **)item->start;
+            for (uint64_t i = item->offset;
+                 i < item->num_words;
+                 i += item->stride) {
+                n00b_visit_possible_pointer(ctx, base, i, false);
+            }
+        }
         n00b_free(item);
     }
 }
@@ -608,6 +720,25 @@ n00b_scan_thread_stacks(n00b_collect_t *ctx)
         n00b_scan_memory_range(ctx,
                                (void *)t,
                                sizeof(n00b_thread_t) / sizeof(void *));
+        // Scan the thread RECORD too — it lives in `rt->threads[i]` and
+        // holds pointers into the GC heap that nothing else scans:
+        // `exclusive_locks` / `read_locks` (heads of per-thread lock
+        // accounting chains, where each in-heap `n00b_mutex_t` /
+        // `n00b_rwlock_t` lives inside a relocatable allocation — e.g.
+        // an embedded field of a GC-allocated `Regex`), `lock_wait_target`,
+        // and `regex_last_detail` (per-thread error string).
+        //
+        // Without this scan, after a collection that relocates a heap
+        // lock, the chain head still points at the old (freed) address,
+        // and the next `n00b_lock_acquire_accounting` walks one step
+        // into freed memory.  Reproducible by running `regex_count_all`
+        // in a tight loop over a multi-hundred-KB haystack — the SIMD
+        // match path generates enough GC pressure to force a collection
+        // mid-lock, after ~1000 iterations.
+        n00b_scan_memory_range(ctx,
+                               (void *)&rt->threads[i],
+                               sizeof(n00b_thread_record_t)
+                                   / sizeof(void *));
     }
 }
 
@@ -866,6 +997,20 @@ n00b_collection_cleanup(n00b_collect_t *ctx)
                                 ctx->from_space->segment_end,
                                 ctx->from_space,
                                 .file = ctx->from_space->vtable.debug_name);
+
+    /* Scrub thread lock chains of any entries that live inside the
+     * old from-space segments we're about to unmap.  Locks embedded
+     * in default-arena allocations (Regex::inner_lock and friends)
+     * would otherwise leave dangling heads on rt->threads[i].
+     * exclusive_locks. */
+    extern void n00b_lock_chains_scrub_range(uint64_t lo, uint64_t hi);
+    n00b_segment_t *seg = (n00b_segment_t *)old_segments;
+    while (seg) {
+        uintptr_t seg_lo = (uintptr_t)seg;
+        uintptr_t seg_hi = seg_lo + seg->size;
+        n00b_lock_chains_scrub_range(seg_lo, seg_hi);
+        seg = seg->next_segment;
+    }
 
     n00b_allocator_destroy((n00b_allocator_t *)&ctx->work_pool);
     n00b_allocator_destroy((n00b_allocator_t *)ctx->to_space);

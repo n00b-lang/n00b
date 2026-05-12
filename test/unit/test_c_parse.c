@@ -12,6 +12,7 @@
 #include "n00b.h"
 #include "core/alloc.h"
 #include "core/buffer.h"
+#include "core/gc.h"
 #include "core/runtime.h"
 #include "adt/option.h"
 #include "parsers/scan_recipes.h"
@@ -352,6 +353,10 @@ test_grammar_loads(void)
 {
     shared_grammar = load_c_grammar();
     assert(shared_grammar != NULL);
+    // File-scope static: the GC doesn't auto-scan the test binary's
+    // BSS, so register the cell explicitly so a later collect can
+    // forward the pointer when the grammar object moves.
+    n00b_gc_register_root(shared_grammar);
     printf("  [PASS] grammar_loads\n");
 }
 

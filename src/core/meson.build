@@ -2,6 +2,7 @@
 # strings core, type registry, sha256, etc.
 
 n00b_core_src = files(
+    'exit.c',
     'init.c',
     'thread.c',
     'mmaps.c',
@@ -12,6 +13,7 @@ n00b_core_src = files(
     'hash.c',
     'stw.c',
     'gc.c',
+    'gc_map.c',
     'buffer.c',
     'file_map.c',
     'file.c',

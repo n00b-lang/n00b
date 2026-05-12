@@ -25,6 +25,8 @@
 #include "core/type_info.h"
 #include "text/strings/style_registry.h"
 #include "text/strings/theme.h"
+#include "text/unicode/ctx.h"
+#include "text/regex/ctx.h"
 #include "core/string.h"
 #include "core/buffer.h"
 #include "conduit/conduit.h"
@@ -224,6 +226,7 @@ n00b_init(n00b_runtime_t *rt, int argc, char *argv[]) _kargs
     n00b_allocator_t *rpool = (n00b_allocator_t *)&rt->system_pool;
     rt->gc_roots            = n00b_list_new(n00b_gc_root_t, rpool);
     rt->finalizers          = n00b_list_new_private(n00b_finalizer_info_t *, rpool);
+    rt->scannable_pools     = n00b_list_new(n00b_allocator_t *, rpool);
 
     setup_threads(rt, max_threads);
 
@@ -250,6 +253,26 @@ n00b_init(n00b_runtime_t *rt, int argc, char *argv[]) _kargs
     n00b_dict_untyped_init(rt->sub_map,
                            .skip_obj_hash = true);
     n00b_gc_register_root(rt->sub_map);
+
+    // Unicode subsystem: bundle of per-property range tables / by-name
+    // caches / segmentation tables.  Allocated eagerly so accessors
+    // can deref unconditionally; per-subsystem tables are still lazy
+    // (each `*_ensure_init` builds its own slice array on first use).
+    rt->unicode_ctx = n00b_alloc(n00b_unicode_ctx_t);
+    n00b_gc_register_root(rt->unicode_ctx);
+
+    // Regex subsystem: port-side caches (named pairset interning,
+    // precomputed \w table, case-fold equivalence index).
+    rt->regex_ctx = n00b_alloc(n00b_regex_ctx_t);
+    n00b_gc_register_root(rt->regex_ctx);
+
+    n00b_gc_register_root(rt->type_registry);
+    n00b_gc_register_root(rt->default_conduit);
+    n00b_gc_register_root(rt->default_service);
+    n00b_gc_register_root(rt->stdout_owner);
+    n00b_gc_register_root(rt->stderr_owner);
+    n00b_gc_register_root(rt->stdout_topic);
+    n00b_gc_register_root(rt->stderr_topic);
 
     n00b_str_registry_init();
     n00b_theme_init();

@@ -19,6 +19,7 @@
 
 #include "n00b.h"
 #include "core/alloc.h"
+#include "core/gc_map.h"
 #include "adt/stack.h"
 #include "adt/result.h"
 #include "core/data_lock.h"
@@ -62,8 +63,11 @@
     _generic_struct n00b_interval_tree_tid(D) {                                                \
         n00b_interval_node_t(D) *root;                                                         \
         n00b_stack_t(void *) stack;                                                            \
-        n00b_allocator_t *allocator;                                                           \
-        n00b_rwlock_t *lock;                                                                   \
+        n00b_allocator_t    *allocator;                                                        \
+        n00b_rwlock_t       *lock;                                                              \
+        n00b_gc_scan_kind_t  scan_kind;                                                        \
+        n00b_gc_scan_cb_t    scan_cb;                                                          \
+        void                *scan_user;                                                        \
     }
 
 // ============================================================================
@@ -178,11 +182,13 @@
 #define _n00b_interval_tree_init_impl(tree, ...)                                               \
     do {                                                                                       \
         auto _iti_t = (tree);                                                                  \
-        n00b_allocator_t *_iti_alloc = nullptr;                                                \
-        __VA_OPT__(_iti_alloc = __VA_ARGS__;)                                                  \
+        n00b_alloc_opts_t _iti_o = (n00b_alloc_opts_t){__VA_ARGS__};                           \
         _iti_t->root = nullptr;                                                                \
-        _iti_t->stack = n00b_stack_new_private(void *, _iti_alloc);                            \
-        _iti_t->allocator = _iti_alloc;                                                        \
+        _iti_t->stack = n00b_stack_new_private(void *, .allocator = _iti_o.allocator);         \
+        _iti_t->allocator = _iti_o.allocator;                                                  \
+        _iti_t->scan_kind = _iti_o.scan_kind;                                                  \
+        _iti_t->scan_cb   = _iti_o.scan_cb;                                                    \
+        _iti_t->scan_user = _iti_o.scan_user;                                                  \
         _iti_t->lock = n00b_data_lock_new();                                                   \
     } while (0)
 
@@ -215,7 +221,12 @@
                                                                                                \
             _ii_np _ii_node = (_ii_np)n00b_alloc_with_opts(                                    \
                 typeof(*_ii_tree->root),                                                       \
-                &(n00b_alloc_opts_t){.allocator = _ii_tree->allocator});                       \
+                &(n00b_alloc_opts_t){                                                          \
+                    .allocator = _ii_tree->allocator,                                          \
+                    .scan_kind = _ii_tree->scan_kind,                                          \
+                    .scan_cb   = _ii_tree->scan_cb,                                            \
+                    .scan_user = _ii_tree->scan_user,                                          \
+                });                                                                            \
                                                                                                \
             _ii_node->low = _ii_lo;                                                            \
             _ii_node->high = _ii_hi;                                                           \

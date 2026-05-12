@@ -1,11 +1,23 @@
 #include "text/unicode/segmentation.h"
 #include "text/unicode/encoding.h"
 #include "text/unicode/properties.h"
+#include "text/unicode/ctx.h"
+#include "core/atomic.h"
+#include "core/runtime.h"
+#include "core/rt_access.h"
 #include "internal/text/unicode/raw.h"
 #include "core/alloc.h"
 #include "internal/text/unicode/tables.h"
 #include <string.h>
 #include <assert.h>
+
+// Per-runtime unicode subsystem context.  See properties.c for the
+// rationale.
+static inline n00b_unicode_ctx_t *
+_uctx(void)
+{
+    return n00b_get_runtime()->unicode_ctx;
+}
 
 // External generated tables
 extern const uint16_t n00b_unicode_gcb_stage1[];
@@ -16,6 +28,9 @@ extern const uint8_t  n00b_unicode_wb_stage2[];
 
 extern const uint16_t n00b_unicode_sb_stage1[];
 extern const uint8_t  n00b_unicode_sb_stage2[];
+
+extern const uint16_t n00b_unicode_lb_stage1[];
+extern const uint8_t  n00b_unicode_lb_stage2[];
 
 static inline n00b_unicode_gcb_t
 get_gcb(n00b_codepoint_t cp)
@@ -874,4 +889,532 @@ uint32_t
 n00b_unicode_grapheme_count(n00b_string_t *s)
 {
     return n00b_unicode_grapheme_count_raw(s->data, s->u8_bytes);
+}
+
+// ===========================================================================
+// Range enumeration: turn per-codepoint break property tables into sorted,
+// merged range arrays.
+//
+// Strategy: do a single 0..0x10FFFF sweep per property class on first call,
+// behind a CAS-based one-shot init guard. Two passes per class: pass 1
+// counts how many merged ranges each enum value will produce; pass 2 fills
+// a single shared backing array, slicing it per value. The surrogate hole
+// (U+D800..U+DFFF) is excluded; U+D7FF and U+E000 are merged across the hole
+// to mirror the canonical UCD range presentation.
+//
+// Init pattern: an `_Atomic int` state machine with three states
+//   0 = uninit, 1 = init in progress, 2 = ready.
+// One thread CASes 0->1 and runs the build; others spin on state == 2.
+// (Pure atomic CAS rather than `n00b_mutex_t`, because n00b mutexes have no
+// static initializer and would themselves require a lazy-init dance; the
+// data here is read-only after publication, so CAS leader-wait is sufficient.)
+// ===========================================================================
+
+// Range slice type is the canonical `n00b_unicode_range_slice_t` from
+// text/unicode/ctx.h; per-class slice arrays live on the unicode ctx.
+
+// Lookup a Line_Break value by codepoint, mirroring the per-class getters
+// already defined above for gcb/wb/sb. Kept local; the public getter
+// `n00b_unicode_line_break()` is not part of segmentation.h's surface
+// (Phase 4.5c owns query.h-side per-codepoint accessors).
+static inline n00b_unicode_lb_t
+get_lb(n00b_codepoint_t cp)
+{
+    if (cp >= 0x110000)
+        return N00B_UNICODE_LB_XX;
+    return (n00b_unicode_lb_t)N00B_UNICODE_LOOKUP(n00b_unicode_lb_stage1,
+                                                  n00b_unicode_lb_stage2,
+                                                  cp);
+}
+
+// One-shot init helpers ----------------------------------------------------
+
+// Spin until @p state reaches 2. Used by losers of the CAS race.
+static inline void
+wait_for_init(_Atomic int *state)
+{
+    while (n00b_atomic_load(state) != 2) {
+        // Brief spin; init is bounded (single sweep over 0..0x10FFFF).
+    }
+}
+
+// Try to claim the init slot. Returns true if this thread should run init,
+// false if another thread already finished it (or is finishing it).
+static inline bool
+claim_init(_Atomic int *state)
+{
+    int expected = 0;
+    if (n00b_atomic_cas(state, &expected, 1)) {
+        return true;
+    }
+    wait_for_init(state);
+    return false;
+}
+
+// Publish "init done" so spinners can proceed.
+static inline void
+publish_init(_Atomic int *state)
+{
+    n00b_atomic_store(state, 2);
+}
+
+// ---------------------------------------------------------------------------
+// Generic two-pass build: pass 1 counts merged ranges per value; pass 2
+// fills a single backing array and records per-value slices.
+//
+// `get` is a callback returning the enum value for a codepoint, but we
+// inline-specialize via macros below to avoid an indirect call per cp.
+// ---------------------------------------------------------------------------
+
+#define DEFINE_BREAK_RANGES(NAME, ENUM_T, GETTER, N_VALUES_EXPR)                             \
+    enum { NAME##_n_values = (N_VALUES_EXPR) };                                              \
+                                                                                             \
+    static void                                                                              \
+    NAME##_build(void)                                                                       \
+    {                                                                                        \
+        n00b_unicode_ctx_t *ctx = _uctx();                                                   \
+        size_t           counts[NAME##_n_values]    = {};                                    \
+        bool             have_prev[NAME##_n_values] = {};                                    \
+        n00b_codepoint_t prev_hi[NAME##_n_values]   = {};                                    \
+                                                                                             \
+        /* Pass 1: count merged ranges per value. */                                         \
+        for (n00b_codepoint_t cp = 0; cp <= 0x10FFFFu; cp++) {                               \
+            if (cp >= 0xD800u && cp <= 0xDFFFu)                                              \
+                continue;                                                                    \
+            ENUM_T v = GETTER(cp);                                                           \
+            if ((unsigned)v >= (unsigned)NAME##_n_values)                                    \
+                continue;                                                                    \
+            if (have_prev[(unsigned)v]                                                       \
+                && (cp == prev_hi[(unsigned)v] + 1                                           \
+                    || (cp == 0xE000u && prev_hi[(unsigned)v] == 0xD7FFu))) {                \
+                prev_hi[(unsigned)v] = cp;                                                   \
+            }                                                                                \
+            else {                                                                           \
+                counts[(unsigned)v]++;                                                       \
+                prev_hi[(unsigned)v]   = cp;                                                 \
+                have_prev[(unsigned)v] = true;                                               \
+            }                                                                                \
+        }                                                                                    \
+                                                                                             \
+        size_t total = 0;                                                                    \
+        for (size_t i = 0; i < NAME##_n_values; i++)                                         \
+            total += counts[i];                                                              \
+                                                                                             \
+        n00b_codepoint_pair_t *backing = nullptr;                                            \
+        if (total > 0) {                                                                     \
+            backing = n00b_alloc_array(n00b_codepoint_pair_t, total);                        \
+        }                                                                                    \
+                                                                                             \
+        /* Allocate per-class slice array on the unicode ctx. */                             \
+        n00b_unicode_range_slice_t *slices                                                   \
+            = n00b_alloc_array(n00b_unicode_range_slice_t, NAME##_n_values);                 \
+                                                                                             \
+        /* Slice the backing array, one slice per value. */                                  \
+        size_t off = 0;                                                                      \
+        size_t write_pos[NAME##_n_values];                                                   \
+        for (size_t i = 0; i < NAME##_n_values; i++) {                                       \
+            slices[i].ranges = backing ? backing + off : nullptr;                            \
+            slices[i].len    = counts[i];                                                    \
+            write_pos[i]     = off;                                                          \
+            off += counts[i];                                                                \
+        }                                                                                    \
+                                                                                             \
+        /* Pass 2: fill the backing array. */                                                \
+        for (size_t i = 0; i < NAME##_n_values; i++)                                         \
+            have_prev[i] = false;                                                            \
+                                                                                             \
+        for (n00b_codepoint_t cp = 0; cp <= 0x10FFFFu; cp++) {                               \
+            if (cp >= 0xD800u && cp <= 0xDFFFu)                                              \
+                continue;                                                                    \
+            ENUM_T v = GETTER(cp);                                                           \
+            if ((unsigned)v >= (unsigned)NAME##_n_values)                                    \
+                continue;                                                                    \
+            unsigned vi = (unsigned)v;                                                       \
+            if (have_prev[vi]) {                                                             \
+                n00b_codepoint_pair_t *last = backing + write_pos[vi] - 1;                   \
+                if (cp == last->hi + 1                                                       \
+                    || (cp == 0xE000u && last->hi == 0xD7FFu)) {                             \
+                    last->hi = cp;                                                           \
+                    continue;                                                                \
+                }                                                                            \
+            }                                                                                \
+            backing[write_pos[vi]].lo = cp;                                                  \
+            backing[write_pos[vi]].hi = cp;                                                  \
+            write_pos[vi]++;                                                                 \
+            have_prev[vi] = true;                                                            \
+        }                                                                                    \
+                                                                                             \
+        ctx->NAME##_backing = backing;                                                       \
+        ctx->NAME##_slices  = slices;                                                        \
+    }                                                                                        \
+                                                                                             \
+    static inline void                                                                       \
+    NAME##_ensure_init(void)                                                                 \
+    {                                                                                        \
+        n00b_unicode_ctx_t *ctx = _uctx();                                                   \
+        if (n00b_atomic_load(&ctx->NAME##_state) == 2)                                       \
+            return;                                                                          \
+        if (claim_init(&ctx->NAME##_state)) {                                                \
+            NAME##_build();                                                                  \
+            publish_init(&ctx->NAME##_state);                                                \
+        }                                                                                    \
+    }
+
+DEFINE_BREAK_RANGES(gcb,
+                    n00b_unicode_gcb_t,
+                    get_gcb,
+                    N00B_UNICODE_GCB_INCB_LINKER + 1)
+
+DEFINE_BREAK_RANGES(wb,
+                    n00b_unicode_wb_t,
+                    get_wb,
+                    N00B_UNICODE_WB_WSEGSPACE + 1)
+
+DEFINE_BREAK_RANGES(sb,
+                    n00b_unicode_sb_t,
+                    get_sb,
+                    N00B_UNICODE_SB_SCONTINUE + 1)
+
+DEFINE_BREAK_RANGES(lb,
+                    n00b_unicode_lb_t,
+                    get_lb,
+                    N00B_UNICODE_LB_VI + 1)
+
+void
+n00b_unicode_grapheme_break_ranges(n00b_unicode_gcb_t            v,
+                                   const n00b_codepoint_pair_t **out,
+                                   size_t                       *len)
+{
+    if ((unsigned)v >= (unsigned)gcb_n_values) {
+        *out = nullptr;
+        *len = 0;
+        return;
+    }
+    gcb_ensure_init();
+    n00b_unicode_ctx_t *ctx = _uctx();
+    *out = ctx->gcb_slices[(unsigned)v].ranges;
+    *len = ctx->gcb_slices[(unsigned)v].len;
+}
+
+void
+n00b_unicode_word_break_ranges(n00b_unicode_wb_t             v,
+                               const n00b_codepoint_pair_t **out,
+                               size_t                       *len)
+{
+    if ((unsigned)v >= (unsigned)wb_n_values) {
+        *out = nullptr;
+        *len = 0;
+        return;
+    }
+    wb_ensure_init();
+    n00b_unicode_ctx_t *ctx = _uctx();
+    *out = ctx->wb_slices[(unsigned)v].ranges;
+    *len = ctx->wb_slices[(unsigned)v].len;
+}
+
+void
+n00b_unicode_sentence_break_ranges(n00b_unicode_sb_t             v,
+                                   const n00b_codepoint_pair_t **out,
+                                   size_t                       *len)
+{
+    if ((unsigned)v >= (unsigned)sb_n_values) {
+        *out = nullptr;
+        *len = 0;
+        return;
+    }
+    sb_ensure_init();
+    n00b_unicode_ctx_t *ctx = _uctx();
+    *out = ctx->sb_slices[(unsigned)v].ranges;
+    *len = ctx->sb_slices[(unsigned)v].len;
+}
+
+void
+n00b_unicode_line_break_ranges(n00b_unicode_lb_t             v,
+                               const n00b_codepoint_pair_t **out,
+                               size_t                       *len)
+{
+    if ((unsigned)v >= (unsigned)lb_n_values) {
+        *out = nullptr;
+        *len = 0;
+        return;
+    }
+    lb_ensure_init();
+    n00b_unicode_ctx_t *ctx = _uctx();
+    *out = ctx->lb_slices[(unsigned)v].ranges;
+    *len = ctx->lb_slices[(unsigned)v].len;
+}
+
+// ===========================================================================
+// Property-name -> enum lookups for segmentation properties
+//
+// Used by regex \p{...} resolution. Loose matching per UAX #44 LM3:
+// case-insensitive (ASCII fold) and ignoring whitespace, underscores, and
+// hyphens. Both abbreviation and long forms are accepted, per
+// PropertyValueAliases.txt.
+// ===========================================================================
+
+static inline unsigned char
+_seg_ascii_lower(unsigned char c)
+{
+    return (c >= 'A' && c <= 'Z') ? (unsigned char)(c + ('a' - 'A')) : c;
+}
+
+static bool
+loose_eq(const char *a, const char *b)
+{
+    while (*a && *b) {
+        while (*a == ' ' || *a == '_' || *a == '-') {
+            a++;
+        }
+        while (*b == ' ' || *b == '_' || *b == '-') {
+            b++;
+        }
+        if (!*a || !*b) {
+            break;
+        }
+        unsigned char ca = (unsigned char)*a++;
+        unsigned char cb = (unsigned char)*b++;
+        if (_seg_ascii_lower(ca) != _seg_ascii_lower(cb)) {
+            return false;
+        }
+    }
+    while (*a == ' ' || *a == '_' || *a == '-') {
+        a++;
+    }
+    while (*b == ' ' || *b == '_' || *b == '-') {
+        b++;
+    }
+    return *a == 0 && *b == 0;
+}
+
+// ---------------------------------------------------------------------------
+// Grapheme_Cluster_Break names. Both abbreviation and long forms per
+// PropertyValueAliases.txt.
+// ---------------------------------------------------------------------------
+
+typedef struct {
+    const char        *name;
+    n00b_unicode_gcb_t value;
+} _gcb_name_t;
+
+static const _gcb_name_t _gcb_names[] = {
+    {"Other",              N00B_UNICODE_GCB_OTHER},  {"XX", N00B_UNICODE_GCB_OTHER},
+    {"CR",                 N00B_UNICODE_GCB_CR},
+    {"LF",                 N00B_UNICODE_GCB_LF},
+    {"Control",            N00B_UNICODE_GCB_CONTROL}, {"CN", N00B_UNICODE_GCB_CONTROL},
+    {"Extend",             N00B_UNICODE_GCB_EXTEND},  {"EX", N00B_UNICODE_GCB_EXTEND},
+    {"ZWJ",                N00B_UNICODE_GCB_ZWJ},
+    {"Regional_Indicator", N00B_UNICODE_GCB_REGIONAL_INDICATOR},
+    {"RI",                 N00B_UNICODE_GCB_REGIONAL_INDICATOR},
+    {"Prepend",            N00B_UNICODE_GCB_PREPEND}, {"PP", N00B_UNICODE_GCB_PREPEND},
+    {"SpacingMark",        N00B_UNICODE_GCB_SPACINGMARK},
+    {"SM",                 N00B_UNICODE_GCB_SPACINGMARK},
+    {"L",                  N00B_UNICODE_GCB_L},
+    {"V",                  N00B_UNICODE_GCB_V},
+    {"T",                  N00B_UNICODE_GCB_T},
+    {"LV",                 N00B_UNICODE_GCB_LV},
+    {"LVT",                N00B_UNICODE_GCB_LVT},
+    // Indic_Conjunct_Break extension (Unicode 15.1+).
+    {"InCB_Consonant",     N00B_UNICODE_GCB_INCB_CONSONANT},
+    {"Consonant",          N00B_UNICODE_GCB_INCB_CONSONANT},
+    {"InCB_Extend",        N00B_UNICODE_GCB_INCB_EXTEND},
+    {"InCB_Linker",        N00B_UNICODE_GCB_INCB_LINKER},
+    {"Linker",             N00B_UNICODE_GCB_INCB_LINKER},
+};
+
+bool
+n00b_unicode_gcb_by_name(const char *name, n00b_unicode_gcb_t *out)
+{
+    if (!name) {
+        return false;
+    }
+    for (size_t i = 0; i < sizeof(_gcb_names) / sizeof(_gcb_names[0]); i++) {
+        if (loose_eq(_gcb_names[i].name, name)) {
+            if (out) {
+                *out = _gcb_names[i].value;
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
+// ---------------------------------------------------------------------------
+// Word_Break names.
+// ---------------------------------------------------------------------------
+
+typedef struct {
+    const char       *name;
+    n00b_unicode_wb_t value;
+} _wb_name_t;
+
+static const _wb_name_t _wb_names[] = {
+    {"Other",              N00B_UNICODE_WB_OTHER},  {"XX", N00B_UNICODE_WB_OTHER},
+    {"CR",                 N00B_UNICODE_WB_CR},
+    {"LF",                 N00B_UNICODE_WB_LF},
+    {"Newline",            N00B_UNICODE_WB_NEWLINE}, {"NL", N00B_UNICODE_WB_NEWLINE},
+    {"Extend",             N00B_UNICODE_WB_EXTEND},
+    {"ZWJ",                N00B_UNICODE_WB_ZWJ},
+    {"Regional_Indicator", N00B_UNICODE_WB_REGIONAL_INDICATOR},
+    {"RI",                 N00B_UNICODE_WB_REGIONAL_INDICATOR},
+    {"Format",             N00B_UNICODE_WB_FORMAT}, {"FO", N00B_UNICODE_WB_FORMAT},
+    {"Katakana",           N00B_UNICODE_WB_KATAKANA},
+    {"KA",                 N00B_UNICODE_WB_KATAKANA},
+    {"Hebrew_Letter",      N00B_UNICODE_WB_HEBREW_LETTER},
+    {"HL",                 N00B_UNICODE_WB_HEBREW_LETTER},
+    {"ALetter",            N00B_UNICODE_WB_ALETTER},
+    {"LE",                 N00B_UNICODE_WB_ALETTER},
+    {"Single_Quote",       N00B_UNICODE_WB_SINGLE_QUOTE},
+    {"SQ",                 N00B_UNICODE_WB_SINGLE_QUOTE},
+    {"Double_Quote",       N00B_UNICODE_WB_DOUBLE_QUOTE},
+    {"DQ",                 N00B_UNICODE_WB_DOUBLE_QUOTE},
+    {"MidNumLet",          N00B_UNICODE_WB_MIDNUMLET},
+    {"MB",                 N00B_UNICODE_WB_MIDNUMLET},
+    {"MidLetter",          N00B_UNICODE_WB_MIDLETTER},
+    {"ML",                 N00B_UNICODE_WB_MIDLETTER},
+    {"MidNum",             N00B_UNICODE_WB_MIDNUM},
+    {"MN",                 N00B_UNICODE_WB_MIDNUM},
+    {"Numeric",            N00B_UNICODE_WB_NUMERIC},
+    {"NU",                 N00B_UNICODE_WB_NUMERIC},
+    {"ExtendNumLet",       N00B_UNICODE_WB_EXTENDNUMLET},
+    {"EX",                 N00B_UNICODE_WB_EXTENDNUMLET},
+    {"WSegSpace",          N00B_UNICODE_WB_WSEGSPACE},
+};
+
+bool
+n00b_unicode_wb_by_name(const char *name, n00b_unicode_wb_t *out)
+{
+    if (!name) {
+        return false;
+    }
+    for (size_t i = 0; i < sizeof(_wb_names) / sizeof(_wb_names[0]); i++) {
+        if (loose_eq(_wb_names[i].name, name)) {
+            if (out) {
+                *out = _wb_names[i].value;
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
+// ---------------------------------------------------------------------------
+// Sentence_Break names.
+// ---------------------------------------------------------------------------
+
+typedef struct {
+    const char       *name;
+    n00b_unicode_sb_t value;
+} _sb_name_t;
+
+static const _sb_name_t _sb_names[] = {
+    {"Other",     N00B_UNICODE_SB_OTHER},     {"XX", N00B_UNICODE_SB_OTHER},
+    {"CR",        N00B_UNICODE_SB_CR},
+    {"LF",        N00B_UNICODE_SB_LF},
+    {"Extend",    N00B_UNICODE_SB_EXTEND},    {"EX", N00B_UNICODE_SB_EXTEND},
+    {"Sep",       N00B_UNICODE_SB_SEP},       {"SE", N00B_UNICODE_SB_SEP},
+    {"Format",    N00B_UNICODE_SB_FORMAT},    {"FO", N00B_UNICODE_SB_FORMAT},
+    {"Sp",        N00B_UNICODE_SB_SP},
+    {"Lower",     N00B_UNICODE_SB_LOWER},     {"LO", N00B_UNICODE_SB_LOWER},
+    {"Upper",     N00B_UNICODE_SB_UPPER},     {"UP", N00B_UNICODE_SB_UPPER},
+    {"OLetter",   N00B_UNICODE_SB_OLETTER},   {"LE", N00B_UNICODE_SB_OLETTER},
+    {"Numeric",   N00B_UNICODE_SB_NUMERIC},   {"NU", N00B_UNICODE_SB_NUMERIC},
+    {"ATerm",     N00B_UNICODE_SB_ATERM},     {"AT", N00B_UNICODE_SB_ATERM},
+    {"STerm",     N00B_UNICODE_SB_STERM},     {"ST", N00B_UNICODE_SB_STERM},
+    {"Close",     N00B_UNICODE_SB_CLOSE},     {"CL", N00B_UNICODE_SB_CLOSE},
+    {"SContinue", N00B_UNICODE_SB_SCONTINUE}, {"SC", N00B_UNICODE_SB_SCONTINUE},
+};
+
+bool
+n00b_unicode_sb_by_name(const char *name, n00b_unicode_sb_t *out)
+{
+    if (!name) {
+        return false;
+    }
+    for (size_t i = 0; i < sizeof(_sb_names) / sizeof(_sb_names[0]); i++) {
+        if (loose_eq(_sb_names[i].name, name)) {
+            if (out) {
+                *out = _sb_names[i].value;
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
+// ---------------------------------------------------------------------------
+// Line_Break names.
+// ---------------------------------------------------------------------------
+
+typedef struct {
+    const char       *name;
+    n00b_unicode_lb_t value;
+} _lb_name_t;
+
+static const _lb_name_t _lb_names[] = {
+    {"Unknown",                      N00B_UNICODE_LB_XX},  {"XX", N00B_UNICODE_LB_XX},
+    {"Mandatory_Break",              N00B_UNICODE_LB_BK},  {"BK", N00B_UNICODE_LB_BK},
+    {"Carriage_Return",              N00B_UNICODE_LB_CR},  {"CR", N00B_UNICODE_LB_CR},
+    {"Line_Feed",                    N00B_UNICODE_LB_LF},  {"LF", N00B_UNICODE_LB_LF},
+    {"Combining_Mark",               N00B_UNICODE_LB_CM},  {"CM", N00B_UNICODE_LB_CM},
+    {"Next_Line",                    N00B_UNICODE_LB_NL},  {"NL", N00B_UNICODE_LB_NL},
+    {"Surrogate",                    N00B_UNICODE_LB_SG},  {"SG", N00B_UNICODE_LB_SG},
+    {"Word_Joiner",                  N00B_UNICODE_LB_WJ},  {"WJ", N00B_UNICODE_LB_WJ},
+    {"ZWSpace",                      N00B_UNICODE_LB_ZW},  {"ZW", N00B_UNICODE_LB_ZW},
+    {"Glue",                         N00B_UNICODE_LB_GL},  {"GL", N00B_UNICODE_LB_GL},
+    {"Space",                        N00B_UNICODE_LB_SP},  {"SP", N00B_UNICODE_LB_SP},
+    {"ZWJ",                          N00B_UNICODE_LB_ZWJ},
+    {"Break_Both",                   N00B_UNICODE_LB_B2},  {"B2", N00B_UNICODE_LB_B2},
+    {"Break_After",                  N00B_UNICODE_LB_BA},  {"BA", N00B_UNICODE_LB_BA},
+    {"Break_Before",                 N00B_UNICODE_LB_BB},  {"BB", N00B_UNICODE_LB_BB},
+    {"Hyphen",                       N00B_UNICODE_LB_HY},  {"HY", N00B_UNICODE_LB_HY},
+    {"Contingent_Break",             N00B_UNICODE_LB_CB},  {"CB", N00B_UNICODE_LB_CB},
+    {"Close_Punctuation",            N00B_UNICODE_LB_CL},  {"CL", N00B_UNICODE_LB_CL},
+    {"Close_Parenthesis",            N00B_UNICODE_LB_CP},  {"CP", N00B_UNICODE_LB_CP},
+    {"Exclamation",                  N00B_UNICODE_LB_EX},  {"EX", N00B_UNICODE_LB_EX},
+    {"Inseparable",                  N00B_UNICODE_LB_IN},  {"IN", N00B_UNICODE_LB_IN},
+    {"Nonstarter",                   N00B_UNICODE_LB_NS},  {"NS", N00B_UNICODE_LB_NS},
+    {"Open_Punctuation",             N00B_UNICODE_LB_OP},  {"OP", N00B_UNICODE_LB_OP},
+    {"Quotation",                    N00B_UNICODE_LB_QU},  {"QU", N00B_UNICODE_LB_QU},
+    {"Infix_Numeric",                N00B_UNICODE_LB_IS},  {"IS", N00B_UNICODE_LB_IS},
+    {"Numeric",                      N00B_UNICODE_LB_NU},  {"NU", N00B_UNICODE_LB_NU},
+    {"Postfix_Numeric",              N00B_UNICODE_LB_PO},  {"PO", N00B_UNICODE_LB_PO},
+    {"Prefix_Numeric",               N00B_UNICODE_LB_PR},  {"PR", N00B_UNICODE_LB_PR},
+    {"Break_Symbols",                N00B_UNICODE_LB_SY},  {"SY", N00B_UNICODE_LB_SY},
+    {"Ambiguous",                    N00B_UNICODE_LB_AI},  {"AI", N00B_UNICODE_LB_AI},
+    {"Alphabetic",                   N00B_UNICODE_LB_AL},  {"AL", N00B_UNICODE_LB_AL},
+    {"Conditional_Japanese_Starter", N00B_UNICODE_LB_CJ},  {"CJ", N00B_UNICODE_LB_CJ},
+    {"E_Base",                       N00B_UNICODE_LB_EB},  {"EB", N00B_UNICODE_LB_EB},
+    {"E_Modifier",                   N00B_UNICODE_LB_EM},  {"EM", N00B_UNICODE_LB_EM},
+    {"H2",                           N00B_UNICODE_LB_H2},
+    {"H3",                           N00B_UNICODE_LB_H3},
+    {"Hebrew_Letter",                N00B_UNICODE_LB_HL},  {"HL", N00B_UNICODE_LB_HL},
+    {"Ideographic",                  N00B_UNICODE_LB_ID},  {"ID", N00B_UNICODE_LB_ID},
+    {"JL",                           N00B_UNICODE_LB_JL},
+    {"JT",                           N00B_UNICODE_LB_JT},
+    {"JV",                           N00B_UNICODE_LB_JV},
+    {"Regional_Indicator",           N00B_UNICODE_LB_RI},  {"RI", N00B_UNICODE_LB_RI},
+    {"Complex_Context",              N00B_UNICODE_LB_SA},  {"SA", N00B_UNICODE_LB_SA},
+    {"Aksara",                       N00B_UNICODE_LB_AK},  {"AK", N00B_UNICODE_LB_AK},
+    {"Aksara_Prebase",               N00B_UNICODE_LB_AP},  {"AP", N00B_UNICODE_LB_AP},
+    {"Aksara_Start",                 N00B_UNICODE_LB_AS},  {"AS", N00B_UNICODE_LB_AS},
+    {"Virama_Final",                 N00B_UNICODE_LB_VF},  {"VF", N00B_UNICODE_LB_VF},
+    {"Virama",                       N00B_UNICODE_LB_VI},  {"VI", N00B_UNICODE_LB_VI},
+};
+
+bool
+n00b_unicode_lb_by_name(const char *name, n00b_unicode_lb_t *out)
+{
+    if (!name) {
+        return false;
+    }
+    for (size_t i = 0; i < sizeof(_lb_names) / sizeof(_lb_names[0]); i++) {
+        if (loose_eq(_lb_names[i].name, name)) {
+            if (out) {
+                *out = _lb_names[i].value;
+            }
+            return true;
+        }
+    }
+    return false;
 }

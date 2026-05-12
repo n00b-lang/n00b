@@ -27,6 +27,7 @@
 #include <assert.h>
 
 #include "core/macros.h"
+#include "core/gc_map.h"
 #include "core/data_lock.h"
 
 // ============================================================================
@@ -42,11 +43,14 @@
  */
 #define n00b_array_t(T)                                                                        \
     _generic_struct n00b_array_tid(T) {                                                        \
-        T                *data;                                                                \
-        size_t            len;                                                                 \
-        size_t            cap;                                                                 \
-        n00b_rwlock_t    *lock;                                                                \
-        n00b_allocator_t *allocator;                                                           \
+        T                   *data;                                                             \
+        size_t               len;                                                              \
+        size_t               cap;                                                              \
+        n00b_rwlock_t       *lock;                                                             \
+        n00b_allocator_t    *allocator;                                                        \
+        n00b_gc_scan_kind_t  scan_kind;                                                        \
+        n00b_gc_scan_cb_t    scan_cb;                                                          \
+        void                *scan_user;                                                        \
     }
 
 // ============================================================================
@@ -73,13 +77,16 @@
 
 #define _n00b_array_new_sel(T, N, locked, ...)                                                 \
     ({                                                                                         \
+        n00b_alloc_opts_t _bl_o = (n00b_alloc_opts_t){__VA_ARGS__};                            \
         (n00b_array_t(T)){                                                                     \
-            .len  = 0,                                                                         \
-            .cap  = N,                                                                         \
-            .data = n00b_alloc_array_with_opts(T, (N),                                         \
-                        N00B_ALLOC_OPTS(__VA_ARGS__)),                                          \
-            .lock = (locked) ? n00b_data_lock_new() : nullptr,                                 \
-            __VA_OPT__(.allocator = __VA_ARGS__,)                                              \
+            .len       = 0,                                                                    \
+            .cap       = N,                                                                    \
+            .data      = n00b_alloc_array_with_opts(T, (N), &_bl_o),                           \
+            .lock      = (locked) ? n00b_data_lock_new() : nullptr,                            \
+            .allocator = _bl_o.allocator,                                                      \
+            .scan_kind = _bl_o.scan_kind,                                                      \
+            .scan_cb   = _bl_o.scan_cb,                                                        \
+            .scan_user = _bl_o.scan_user,                                                      \
         };                                                                                     \
     })
 

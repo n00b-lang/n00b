@@ -30,6 +30,7 @@
 #include "core/macros.h"
 #include "core/atomic.h"
 #include "core/align.h"
+#include "core/gc_map.h"
 #include "core/data_lock.h"
 #include "adt/option.h"
 
@@ -47,11 +48,14 @@
 
 #define n00b_stack_t(T)                                                                            \
     _generic_struct n00b_stack_tid(T) {                                                            \
-        T                *data;                                                                    \
-        size_t            len;                                                                     \
-        size_t            cap;                                                                     \
-        n00b_rwlock_t    *lock;                                                                    \
-        n00b_allocator_t *allocator;                                                               \
+        T                   *data;                                                                 \
+        size_t               len;                                                                  \
+        size_t               cap;                                                                  \
+        n00b_rwlock_t       *lock;                                                                 \
+        n00b_allocator_t    *allocator;                                                            \
+        n00b_gc_scan_kind_t  scan_kind;                                                            \
+        n00b_gc_scan_cb_t    scan_cb;                                                              \
+        void                *scan_user;                                                            \
     }
 
 // ============================================================================
@@ -71,7 +75,12 @@
             size_t               _bl_nc = n00b_align_closest_pow2_ceil(_bl_need);                   \
             typeof((xptr)->data) _bl_nd = n00b_alloc_size_with_opts(                               \
                 _bl_nc, sizeof(*(xptr)->data),                                                     \
-                &(n00b_alloc_opts_t){.allocator = (xptr)->allocator});                             \
+                &(n00b_alloc_opts_t){                                                              \
+                    .allocator = (xptr)->allocator,                                                \
+                    .scan_kind = (xptr)->scan_kind,                                                \
+                    .scan_cb   = (xptr)->scan_cb,                                                  \
+                    .scan_user = (xptr)->scan_user,                                                \
+                });                                                                                \
             if ((xptr)->len > 0) {                                                                 \
                 memcpy(_bl_nd, (xptr)->data, (xptr)->len * sizeof(*(xptr)->data));                  \
             }                                                                                      \
@@ -102,13 +111,16 @@
 
 #define _n00b_stack_new_sel(T, locked, ...)                                                        \
     ({                                                                                             \
+        n00b_alloc_opts_t _bl_o = (n00b_alloc_opts_t){__VA_ARGS__};                                \
         (n00b_stack_t(T)){                                                                         \
-            .data = n00b_alloc_array_with_opts(T, N00B_DEFAULT_STACK_SZ,                           \
-                        N00B_ALLOC_OPTS(__VA_ARGS__)),                                              \
-            .len  = 0,                                                                             \
-            .cap  = N00B_DEFAULT_STACK_SZ,                                                         \
-            .lock = (locked) ? n00b_data_lock_new() : nullptr,                                     \
-            __VA_OPT__(.allocator = __VA_ARGS__,)                                                  \
+            .data = n00b_alloc_array_with_opts(T, N00B_DEFAULT_STACK_SZ, &_bl_o),                  \
+            .len       = 0,                                                                        \
+            .cap       = N00B_DEFAULT_STACK_SZ,                                                    \
+            .lock      = (locked) ? n00b_data_lock_new() : nullptr,                                \
+            .allocator = _bl_o.allocator,                                                          \
+            .scan_kind = _bl_o.scan_kind,                                                          \
+            .scan_cb   = _bl_o.scan_cb,                                                            \
+            .scan_user = _bl_o.scan_user,                                                          \
         };                                                                                         \
     })
 
@@ -126,13 +138,16 @@
 #define _n00b_stack_new_cap_sel(T, N, locked, ...)                                                 \
     ({                                                                                             \
         size_t _bl_rc = n00b_align_closest_pow2_ceil(n00b_max((size_t)(N), (size_t)1));             \
+        n00b_alloc_opts_t _bl_o = (n00b_alloc_opts_t){__VA_ARGS__};                                \
         (n00b_stack_t(T)){                                                                         \
-            .data = n00b_alloc_array_with_opts(T, _bl_rc,                                          \
-                        N00B_ALLOC_OPTS(__VA_ARGS__)),                                              \
-            .len  = 0,                                                                             \
-            .cap  = _bl_rc,                                                                        \
-            .lock = (locked) ? n00b_data_lock_new() : nullptr,                                     \
-            __VA_OPT__(.allocator = __VA_ARGS__,)                                                  \
+            .data = n00b_alloc_array_with_opts(T, _bl_rc, &_bl_o),                                 \
+            .len       = 0,                                                                        \
+            .cap       = _bl_rc,                                                                   \
+            .lock      = (locked) ? n00b_data_lock_new() : nullptr,                                \
+            .allocator = _bl_o.allocator,                                                          \
+            .scan_kind = _bl_o.scan_kind,                                                          \
+            .scan_cb   = _bl_o.scan_cb,                                                            \
+            .scan_user = _bl_o.scan_user,                                                          \
         };                                                                                         \
     })
 

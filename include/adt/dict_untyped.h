@@ -11,6 +11,7 @@
 #include <stdint.h>
 #include "n00b.h"
 #include "core/alloc.h"
+#include "core/gc_map.h"
 #include "core/hash.h"
 
 #define N00B_DICT_UNTYPED_MIN_SIZE_LOG 4
@@ -47,6 +48,13 @@ struct n00b_dict_untyped_t {
     _Atomic n00b_isize_t                 length;  // Items in dict
     n00b_futex_t                         futex;
     uint32_t                             skip_obj_hash : 1;
+    // GC scan shape for the bucket-array backing store.  Buckets hold
+    // key+value pointer fields, so the default is DEFAULT (legacy
+    // conservative scan).  Caller can override with a CALLBACK +
+    // struct_field descriptor when the bucket layout warrants it.
+    n00b_gc_scan_kind_t                  scan_kind;
+    n00b_gc_scan_cb_t                    scan_cb;
+    void                                *scan_user;
 };
 
 struct n00b_dict_untyped_item_t {
@@ -133,10 +141,13 @@ _n00b_dict_untyped_cas(n00b_dict_untyped_t *d,
 extern void
 n00b_dict_untyped_init(n00b_dict_untyped_t *dict) _kargs
 {
-    uint32_t          start_capacity = N00B_DICT_MIN_SIZE;
-    n00b_allocator_t *allocator      = nullptr;
-    n00b_hash_fn      hash           = nullptr;
-    bool              skip_obj_hash  = false;
+    uint32_t             start_capacity = N00B_DICT_MIN_SIZE;
+    n00b_allocator_t    *allocator      = nullptr;
+    n00b_hash_fn         hash           = nullptr;
+    bool                 skip_obj_hash  = false;
+    n00b_gc_scan_kind_t  scan_kind      = N00B_GC_SCAN_KIND_DEFAULT;
+    n00b_gc_scan_cb_t    scan_cb        = nullptr;
+    void                *scan_user      = nullptr;
 };
 
 /**

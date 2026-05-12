@@ -289,7 +289,9 @@ wire_done_inbox(n00b_subproc_t *sp)
     n00b_conduit_t *c = sp->conduit;
 
     // Create the unified done-inbox.
-    sp->done_inbox = n00b_alloc(n00b_conduit_inbox_t(n00b_conduit_topic_base_t *));
+    sp->done_inbox = n00b_alloc_with_opts(
+        n00b_conduit_inbox_t(n00b_conduit_topic_base_t *),
+        &(n00b_alloc_opts_t){.allocator = c->allocator});
     n00b_conduit_inbox_init(n00b_conduit_topic_base_t *, sp->done_inbox, c,
                             N00B_CONDUIT_BP_UNBOUNDED, 0);
 

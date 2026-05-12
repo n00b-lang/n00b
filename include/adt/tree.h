@@ -16,6 +16,7 @@
 
 #include "n00b.h"
 #include "core/alloc.h"
+#include "core/gc_map.h"
 #include <string.h>
 
 /** @brief Default initial capacity for a node's children array. */
@@ -43,6 +44,9 @@
                 struct n00b_tree_tid(N, L) **children;                                         \
                 size_t num_children;                                                           \
                 size_t capacity;                                                               \
+                n00b_gc_scan_kind_t scan_kind;                                                 \
+                n00b_gc_scan_cb_t   scan_cb;                                                   \
+                void               *scan_user;                                                 \
             } node;                                                                            \
             L leaf;                                                                            \
         };                                                                                     \
@@ -61,14 +65,20 @@
  */
 #define n00b_tree_node(N, L, val, ...)                                                         \
     ({                                                                                         \
-        n00b_tree_t(N, L) *_bt = n00b_alloc(n00b_tree_t(N, L));                                  \
+        n00b_alloc_opts_t _bt_o = (n00b_alloc_opts_t){__VA_ARGS__};                            \
+        n00b_tree_t(N, L) *_bt = n00b_alloc(n00b_tree_t(N, L));                                \
         if (_bt) {                                                                             \
             _bt->is_leaf    = false;                                                           \
             _bt->node.value = (val);                                                           \
             _bt->node.children                                                                 \
-                = n00b_alloc_array(n00b_tree_t(N, L) *, N00B_TREE_INITIAL_CAPACITY);    \
+                = n00b_alloc_array_with_opts(n00b_tree_t(N, L) *,                              \
+                                             N00B_TREE_INITIAL_CAPACITY,                       \
+                                             &_bt_o);                                          \
             _bt->node.num_children = 0;                                                        \
             _bt->node.capacity     = N00B_TREE_INITIAL_CAPACITY;                               \
+            _bt->node.scan_kind    = _bt_o.scan_kind;                                          \
+            _bt->node.scan_cb      = _bt_o.scan_cb;                                            \
+            _bt->node.scan_user    = _bt_o.scan_user;                                          \
         }                                                                                      \
         _bt;                                                                                   \
     })
@@ -94,12 +104,18 @@
 // Internal: grow children array
 // ============================================================================
 
-/** @internal Grow a node's children array to @p new_cap entries. */
+/** @internal Grow a node's children array to @p new_cap entries.
+ *  Re-applies the node's stored scan_kind / cb / user to the new array. */
 #define _n00b_tree_grow_children(_ptr, _new_cap)                                               \
     do {                                                                                       \
         size_t _old_n   = (_ptr)->node.num_children;                                           \
         size_t _elem_sz = sizeof(*(_ptr)->node.children);                                      \
-        void  *_new_buf = n00b_alloc_size((_new_cap), _elem_sz);                               \
+        void  *_new_buf = n00b_alloc_size_with_opts((_new_cap), _elem_sz,                      \
+                              &(n00b_alloc_opts_t){                                            \
+                                  .scan_kind = (_ptr)->node.scan_kind,                         \
+                                  .scan_cb   = (_ptr)->node.scan_cb,                           \
+                                  .scan_user = (_ptr)->node.scan_user,                         \
+                              });                                                              \
         if (_old_n > 0) {                                                                      \
             memcpy(_new_buf, (_ptr)->node.children, _old_n * _elem_sz);                        \
         }                                                                                      \

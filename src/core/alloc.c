@@ -67,6 +67,21 @@ _n00b_alloc_raw(size_t             n,
         n00b_thread_checkin();
     }
 
+    /* Map scan_kind == NONE onto the legacy no_scan switch so the GC's
+     * worklist add-path (which checks no_scan) skips scanning this
+     * allocation. */
+    if (opts->scan_kind == N00B_GC_SCAN_KIND_NONE) {
+        opts->no_scan = true;
+    }
+    /* CALLBACK requires the OOB-metadata path so scan_cb / scan_user
+     * survive forwarding (the inline header has no room for the cb
+     * pointer reliably across compaction). */
+    if (opts->scan_kind == N00B_GC_SCAN_KIND_CALLBACK
+        && opts->allocator->metadata_pool == nullptr) {
+        assert(opts->allocator->metadata_pool != nullptr
+               && "scan_kind=CALLBACK requires an allocator with OOB metadata");
+    }
+
     uint64_t request  = n * sz;
     bool     is_array = n > 1;
 
@@ -108,6 +123,9 @@ _n00b_alloc_raw(size_t             n,
             .no_scan         = opts->no_scan,
             .mem_debug       = opts->mem_debug,
             .mem_debug_taint = opts->debug_taint,
+            .scan_kind       = opts->scan_kind,
+            .scan_cb         = opts->scan_cb,
+            .scan_user       = opts->scan_user,
             .hcur            = hdr,
             .file_name       = location,
         };

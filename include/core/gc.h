@@ -114,10 +114,18 @@ extern void _n00b_gc_unregister_root(void *addr);
 
 /**
  * @brief Work-list entry: a memory range that still needs scanning.
+ *
+ * `stride == 0` requests the legacy "every word in [0, num_words)" scan.
+ * `stride > 0` requests a strided visit: words at indices
+ * `offset, offset+stride, offset+2*stride, ...` while in
+ * `[0, num_words)`.  Used by EVERY_OTHER (stride=2) and by GC clients
+ * that want a struct-array pattern without a per-allocation callback.
  */
 typedef struct {
     void     *start;
-    uint32_t  num_words;
+    uint64_t  num_words;
+    uint64_t  stride;
+    uint64_t  offset;
 } n00b_gc_wl_item_t;
 
 /**

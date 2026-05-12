@@ -3,6 +3,7 @@
 #include "n00b.h"
 #include "core/macros.h"
 #include "core/alloc.h"
+#include "core/gc_map.h"
 #include "core/hash.h"
 
 #include <stdint.h>
@@ -47,6 +48,12 @@ typedef struct __n00b_internal_type_erased_store_t {
 #define n00b_dict_tid(k, v) typeid("dict", k, v)
 
 // The futex is only for migrations.
+//
+// The `scan_kind` / `scan_cb` / `scan_user` triple is the GC scan shape
+// applied uniformly to the bucket, keys, and values backing arrays
+// (and re-applied on every store migration / resize).  `n00b_dict_bucket_t`
+// itself has no pointer fields, so dict callers concerned about POD
+// keys/values usually want `scan_kind = N00B_GC_SCAN_KIND_NONE`.
 #define N00B_BASE_DICT_FIELDS                                                                  \
     n00b_hash_fn         fn;                                                                   \
     n00b_allocator_t    *allocator;                                                            \
@@ -56,7 +63,10 @@ typedef struct __n00b_internal_type_erased_store_t {
     n00b_futex_t         futex;                                                                \
     uint8_t              cache         : 1;                                                    \
     uint8_t              lock          : 1;                                                    \
-    uint8_t              skip_obj_hash : 1;
+    uint8_t              skip_obj_hash : 1;                                                    \
+    n00b_gc_scan_kind_t  scan_kind;                                                            \
+    n00b_gc_scan_cb_t    scan_cb;                                                              \
+    void                *scan_user;
 
 typedef struct _n00b_dict_internal_t {
     _Atomic(void **) store;
@@ -172,10 +182,13 @@ extern n00b_size_t n00b_dict_internal_len(_n00b_dict_internal_t *);
 extern void
 _n00b_dict_internal_init(_n00b_dict_internal_t *, uint16_t ksz, uint16_t vsz) _kargs
 {
-    n00b_allocator_t *allocator      = nullptr;
-    uint32_t          start_capacity = N00B_DICT_MIN_SIZE;
-    n00b_hash_fn      hash           = nullptr;
-    bool              skip_obj_hash  = false;
+    n00b_allocator_t    *allocator      = nullptr;
+    uint32_t             start_capacity = N00B_DICT_MIN_SIZE;
+    n00b_hash_fn         hash           = nullptr;
+    bool                 skip_obj_hash  = false;
+    n00b_gc_scan_kind_t  scan_kind      = N00B_GC_SCAN_KIND_DEFAULT;
+    n00b_gc_scan_cb_t    scan_cb        = nullptr;
+    void                *scan_user      = nullptr;
 };
 
 extern void *_n00b_dict_internal_put(_n00b_dict_internal_t *d,

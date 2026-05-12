@@ -83,15 +83,21 @@ new_dict_store(_n00b_dict_internal_t *d, uint32_t alloc_items,
     result = n00b_alloc_with_opts(__n00b_internal_type_erased_store_t,
                                   &(n00b_alloc_opts_t){.allocator = d->allocator});
 
+    // Re-apply the dict's stored scan shape to every backing-store
+    // alloc.  Migrations / resizes (which also call new_dict_store)
+    // therefore inherit the same shape automatically.
+    n00b_alloc_opts_t _store_opts = {
+        .allocator = d->allocator,
+        .scan_kind = d->scan_kind,
+        .scan_cb   = d->scan_cb,
+        .scan_user = d->scan_user,
+    };
+
     result->buckets = n00b_alloc_array_with_opts(n00b_dict_bucket_t,
                                                   alloc_items,
-                                                  &(n00b_alloc_opts_t){.allocator = d->allocator});
-    result->keys    = n00b_alloc_size_with_opts(alloc_items,
-                                                ksz,
-                                                &(n00b_alloc_opts_t){.allocator = d->allocator});
-    result->values  = n00b_alloc_size_with_opts(alloc_items,
-                                                vsz,
-                                                &(n00b_alloc_opts_t){.allocator = d->allocator});
+                                                  &_store_opts);
+    result->keys    = n00b_alloc_size_with_opts(alloc_items, ksz, &_store_opts);
+    result->values  = n00b_alloc_size_with_opts(alloc_items, vsz, &_store_opts);
 
     result->last_slot = alloc_items - 1;
     result->threshold = resize_threshold(alloc_items);
@@ -607,10 +613,13 @@ try_again:
 extern void
 _n00b_dict_internal_init(_n00b_dict_internal_t *dict, uint16_t ksz, uint16_t vsz) _kargs
 {
-    n00b_allocator_t *allocator      = nullptr;
-    uint32_t          start_capacity = N00B_DICT_MIN_SIZE;
-    n00b_hash_fn      hash           = nullptr;
-    bool              skip_obj_hash  = false;
+    n00b_allocator_t    *allocator      = nullptr;
+    uint32_t             start_capacity = N00B_DICT_MIN_SIZE;
+    n00b_hash_fn         hash           = nullptr;
+    bool                 skip_obj_hash  = false;
+    n00b_gc_scan_kind_t  scan_kind      = N00B_GC_SCAN_KIND_DEFAULT;
+    n00b_gc_scan_cb_t    scan_cb        = nullptr;
+    void                *scan_user      = nullptr;
 }
 {
     if (start_capacity < N00B_DICT_MIN_SIZE) {
@@ -627,6 +636,9 @@ _n00b_dict_internal_init(_n00b_dict_internal_t *dict, uint16_t ksz, uint16_t vsz
         .length          = 0,
         .futex           = 0,
         .skip_obj_hash   = skip_obj_hash,
+        .scan_kind       = scan_kind,
+        .scan_cb         = scan_cb,
+        .scan_user       = scan_user,
     };
 
     __n00b_internal_type_erased_store_t *s = new_dict_store(dict, start_capacity, ksz, vsz);
