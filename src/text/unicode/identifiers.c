@@ -8,16 +8,26 @@
 extern const uint16_t n00b_unicode_id_status_stage1[];
 extern const uint8_t  n00b_unicode_id_status_stage2[];
 
+/* UAX #31 recommends XID_Start / XID_Continue over plain ID_Start /
+ * ID_Continue for new language designs — XID_* is closed under NFKC
+ * normalization, so `is_id_start(x)` and `is_id_start(NFKC(x))` agree
+ * for any character that would normalize to a sequence headed by an
+ * identifier start.  The two property sets differ by a tiny handful
+ * of NFKC-unstable letters; XID_* is the version you want.
+ *
+ * We route the canonical predicates through the XID variants and
+ * keep `is_xid_*` as explicit synonyms for callers that want to be
+ * loud about the choice. */
 bool
 n00b_unicode_is_id_start(n00b_codepoint_t cp)
 {
-    return n00b_unicode_has_property(cp, N00B_UNICODE_PROP_ID_START);
+    return n00b_unicode_has_property(cp, N00B_UNICODE_PROP_XID_START);
 }
 
 bool
 n00b_unicode_is_id_continue(n00b_codepoint_t cp)
 {
-    return n00b_unicode_has_property(cp, N00B_UNICODE_PROP_ID_CONTINUE);
+    return n00b_unicode_has_property(cp, N00B_UNICODE_PROP_XID_CONTINUE);
 }
 
 bool

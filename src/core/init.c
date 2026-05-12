@@ -98,7 +98,19 @@ setup_fd_limit(n00b_runtime_t *rt, rlim_t fd_limit)
 static inline void
 setup_threads(n00b_runtime_t *rt, unsigned int max_threads)
 {
-    // TODO: Dynamic value for max_threads
+    if (max_threads == 0) {
+        max_threads = N00B_THREADS_MAX;
+    }
+    rt->max_threads = (uint32_t)max_threads;
+    /* Allocate from system_pool (hidden from GC, non-moving) so other
+     * threads can safely read slot state without STW coordination. */
+    n00b_allocator_t *rpool = (n00b_allocator_t *)&rt->system_pool;
+    rt->threads = n00b_alloc_array_with_opts(
+        n00b_thread_record_t, (int64_t)max_threads,
+        &(n00b_alloc_opts_t){.allocator = rpool});
+    /* Zero-initialize all slots — the field is "fresh" by default. */
+    memset(rt->threads, 0,
+           sizeof(n00b_thread_record_t) * (size_t)max_threads);
 
     rt->next_thread_slot = 0;
     n00b_thread_init(.runtime = rt);
@@ -136,6 +148,22 @@ n00b_shutdown(void)
 {
     n00b_runtime_t *rt = n00b_get_runtime();
     if (!rt) return;
+
+    /* Signal any blocking futex waiters to break out — they'll see
+     * `shutdown_started == true` and return false instead of
+     * looping while the thread they're waiting on is being reaped. */
+    n00b_atomic_store(&rt->shutdown_started, true);
+
+    /* Drain the per-runtime HTTP connection pool before tearing
+     * down the conduit (close-fns may release fds that the conduit
+     * tracks). */
+    n00b_http_connection_pool_t *pool =
+        n00b_atomic_load(&rt->http_connection_pool);
+    if (pool) {
+        extern void
+            n00b_http_connection_pool_close(n00b_http_connection_pool_t *);
+        n00b_http_connection_pool_close(pool);
+    }
 
     n00b_conduit_t *c = rt->default_conduit;
     if (c) {

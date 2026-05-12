@@ -5,6 +5,10 @@
 
 **/bin/
 **/lib/
+# Vendored upstream subprojects ship their library sources in `lib/`.
+# Allow those back in.
+!subprojects/*/lib/
+!subprojects/*/lib/**
 
 # Compiled objects (shouldn't appear outside build/ but just in case)
 *.o
@@ -54,8 +58,9 @@ src/unicode/generated/
 *.profraw
 *.profdata
 
-# Docker SDK tarballs
+# Docker SDK tarballs + per-run extracted logs
 docker/sdk/
+docker/_linux_logs/
 
 # Vendored subproject sources (cloned at build time)
 /subprojects/mir/

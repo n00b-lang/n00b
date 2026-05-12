@@ -1,0 +1,109 @@
+# Bitnami Keycloak Helm chart values for the Phase 5 § 5.5 fixture.
+#
+# Pin chart version in run.sh; values here drive the per-install
+# config.  Realm import via extraStartupArgs + a ConfigMap that
+# carries both realm JSONs.
+#
+# Production deployments would point at a real database (postgres,
+# mariadb) and TLS-front the externalIP via Envoy/cert-manager;
+# this fixture uses the chart's default ephemeral H2 DB and HTTP
+# only — sufficient for the in-cluster smoke.
+
+auth:
+  adminUser: admin
+  adminPassword: phase5-admin-pw
+
+# Image override: in late 2025 Bitnami stopped publishing free images
+# under `docker.io/bitnami/<name>` and mirrored their final image set
+# under `docker.io/bitnamilegacy/<name>` while pushing customers to a
+# paid catalog.  Charts still reference the old `bitnami/` repo, so
+# every install fails with "manifest unknown" until you redirect the
+# image refs to bitnamilegacy.  The chart's NOTES.txt also fires a
+# tripwire ("Unrecognized images") whenever you swap in a non-default
+# image — `global.security.allowInsecureImages: true` is the
+# bypass-knob the chart authors document for this exact scenario.
+# This is the single supported pattern for keeping the free chart
+# pipeline working; revisit if/when we migrate off Bitnami's chart.
+global:
+  security:
+    allowInsecureImages: true
+image:
+  registry: docker.io
+  repository: bitnamilegacy/keycloak
+  tag: 26.3.2-debian-12-r0
+
+# Bundled Postgres sub-chart (Bitnami chart 24.x rejects the H2-in-
+# memory mode at the chart-level NOTES.txt validation step — you have
+# to point at a real DB).  Smallest viable footprint for the smoke;
+# ephemeral storage so we don't fight PVC provisioners.
+postgresql:
+  enabled: true
+  image:
+    registry: docker.io
+    repository: bitnamilegacy/postgresql
+    tag: 17.4.0-debian-12-r17
+  auth:
+    postgresPassword: phase5-pg-pw
+    password: phase5-pg-pw
+  primary:
+    persistence:
+      enabled: false
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+
+# Single replica + reduced resources so the Keycloak boot finishes
+# in CI's memory budget.
+replicaCount: 1
+resources:
+  requests:
+    cpu: 250m
+    memory: 768Mi
+  limits:
+    cpu: 1000m
+    memory: 1536Mi
+
+# HTTP only inside the cluster (chart default: tls.enabled=false,
+# production=false).  Operators that want HTTPS at the Keycloak
+# ingress wire it via Envoy in 5.6+ (cert-manager A) or expose it
+# directly with a real cert (variant B).  The legacy `proxy: edge`
+# knob is removed in Keycloak 26 (chart 24.9.0 ships KC 26.3.x); we
+# rely on `production: false` (default) to keep HTTP enabled.
+httpRelativePath: "/"
+
+# Mount the realm JSON ConfigMap at /opt/bitnami/keycloak/data/import/
+# and tell Keycloak to import-on-start.  The Bitnami chart exposes
+# this directly via @param extraStartupArgs (it's appended to
+# `kc.sh start ...`); no need for a KEYCLOAK_EXTRA_ARGS shim.
+extraStartupArgs: "--import-realm"
+
+extraVolumes:
+  - name: realm-import
+    configMap:
+      name: phase5-keycloak-realms
+
+extraVolumeMounts:
+  - name: realm-import
+    mountPath: /opt/bitnami/keycloak/data/import
+    readOnly: true
+
+# Don't try to provision PVCs — boot-time speed > durability.
+persistence:
+  enabled: false
+
+# Probes: bump initialDelay so the realm import has time to land
+# before kubectl wait declares the pod ready.
+readinessProbe:
+  initialDelaySeconds: 60
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 60
+livenessProbe:
+  initialDelaySeconds: 120
+  periodSeconds: 15
+  timeoutSeconds: 5
+  failureThreshold: 30

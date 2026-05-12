@@ -1,0 +1,92 @@
+{
+  "realm": "tenant-alpha",
+  "enabled": true,
+  "displayName": "Tenant Alpha",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "resetPasswordAllowed": false,
+  "editUsernameAllowed": false,
+  "bruteForceProtected": false,
+  "accessTokenLifespan": 3600,
+  "ssoSessionIdleTimeout": 1800,
+  "ssoSessionMaxLifespan": 28800,
+  "roles": {
+    "realm": [
+      { "name": "admin",    "description": "Full read/write" },
+      { "name": "user",     "description": "Standard read/write" },
+      { "name": "readonly", "description": "Read-only" }
+    ]
+  },
+  "users": [
+    { "username": "alice",
+      "enabled": true, "emailVerified": true,
+      "firstName": "Alice", "lastName": "Alpha",
+      "email": "alice@tenant-alpha.example",
+      "credentials": [{ "type": "password", "value": "alice-pw", "temporary": false }],
+      "realmRoles": ["admin"]
+    },
+    { "username": "bob",
+      "enabled": true, "emailVerified": true,
+      "firstName": "Bob", "lastName": "Alpha",
+      "email": "bob@tenant-alpha.example",
+      "credentials": [{ "type": "password", "value": "bob-pw", "temporary": false }],
+      "realmRoles": ["user"]
+    },
+    { "username": "carol",
+      "enabled": true, "emailVerified": true,
+      "firstName": "Carol", "lastName": "Alpha",
+      "email": "carol@tenant-alpha.example",
+      "credentials": [{ "type": "password", "value": "carol-pw", "temporary": false }],
+      "realmRoles": ["readonly"]
+    },
+    { "username": "dave",
+      "enabled": true, "emailVerified": true,
+      "firstName": "Dave", "lastName": "Alpha",
+      "email": "dave@tenant-alpha.example",
+      "credentials": [{ "type": "password", "value": "dave-pw", "temporary": false }],
+      "realmRoles": ["user"]
+    }
+  ],
+  "clients": [
+    {
+      "clientId": "phase5-greeter",
+      "enabled": true,
+      "publicClient": false,
+      "secret": "phase5-alpha-secret",
+      "directAccessGrantsEnabled": true,
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "attributes": {
+        "dpop.bound.access.tokens": "true"
+      },
+      "protocolMappers": [
+        {
+          "name": "audience-phase5-alpha",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "phase5-alpha",
+            "id.token.claim": "false",
+            "access.token.claim": "true"
+          }
+        },
+        {
+          "name": "realm-roles-as-role-claim",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-realm-role-mapper",
+          "consentRequired": false,
+          "config": {
+            "multivalued": "false",
+            "userinfo.token.claim": "true",
+            "access.token.claim": "true",
+            "claim.name": "role",
+            "jsonType.label": "String"
+          }
+        }
+      ]
+    }
+  ]
+}

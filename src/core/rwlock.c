@@ -199,7 +199,7 @@ _n00b_rw_read_lock(n00b_rwlock_t *lock, char *loc)
     n00b_thread_suspend(stw_ctx);
 
     value = n00b_atomic_load(&lock->futex);
-    do {
+    while (true) {
         if (value & N00B_RW_W_LOCK) {
             n00b_register_lock_wait(thread, lock, loc);
             n00b_futex_wait(&lock->futex, value, 0);
@@ -209,9 +209,25 @@ _n00b_rw_read_lock(n00b_rwlock_t *lock, char *loc)
             continue;
         }
 
+        /* Bugfix: the previous `do { ... } while (cas(..., desired))`
+         * form skipped this assignment when the W_LOCK branch did
+         * `continue` — `continue` in a do-while jumps to the loop
+         * condition, so the cas would run with the *previous*
+         * iteration's `desired` (or the initial 0 on first pass).
+         * That caused two failure modes:
+         *   1. After waking from a W_LOCK wait, the cas would attempt
+         *      `value -> 0`, swallowing the reader-count increment.
+         *   2. The subsequent reader-unlock would underflow the count
+         *      to UINT_MAX, pinning W_LOCK + a huge reader count and
+         *      deadlocking every later acquirer.
+         * Recomputing `desired` immediately before each cas attempt
+         * keeps the count math correct. */
         desired = value + 1;
-
-    } while (!n00b_cas((volatile _Atomic(uint32_t) *)&lock->futex, &value, desired));
+        if (n00b_cas((volatile _Atomic(uint32_t) *)&lock->futex,
+                     &value, desired)) {
+            break;
+        }
+    }
 
     n00b_thread_resume(stw_ctx);
     register_read(lock, thread, desired, nullptr, loc);

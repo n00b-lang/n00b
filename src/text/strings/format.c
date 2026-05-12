@@ -68,21 +68,45 @@ typedef struct {
     int32_t cap;
 } outbuf_t;
 
+// Maximum bytes we'll consume from a single substitution.  Anything
+// larger almost certainly means the caller passed a raw C string
+// where an n00b_string_t * was expected (see
+// MEMORY.md → feedback_printf_cstring_trap.md): the fallback path
+// would interpret the C string bytes as a struct header and read a
+// garbage u8_bytes field.  64 MiB is well above any legitimate single
+// substitution we expect.
+#define OUTBUF_MAX_APPEND ((int32_t)(64 * 1024 * 1024))
+
 static void
 outbuf_append(outbuf_t *ob, const char *data, int32_t data_len)
 {
-    if (ob->len + data_len > ob->cap) {
-        int32_t new_cap = ob->cap ? ob->cap * 2 : 256;
-        while (new_cap < ob->len + data_len) {
+    // Defend against int32 overflow in the sizing loop.  Reject
+    // implausibly large data_len (negative or > our hard cap) — the
+    // alternative is a hang, since `while (new_cap < ob->len +
+    // data_len) new_cap *= 2;` never terminates when data_len wraps
+    // negative.
+    if (data_len <= 0 || data_len > OUTBUF_MAX_APPEND) {
+        return;
+    }
+    int64_t needed = (int64_t)ob->len + (int64_t)data_len;
+    if (needed > OUTBUF_MAX_APPEND) {
+        return;
+    }
+    if ((int32_t)needed > ob->cap) {
+        int64_t new_cap = ob->cap ? (int64_t)ob->cap * 2 : 256;
+        while (new_cap < needed) {
             new_cap *= 2;
         }
-        char *new_buf = n00b_alloc_array(char, new_cap);
+        if (new_cap > OUTBUF_MAX_APPEND) {
+            new_cap = OUTBUF_MAX_APPEND;
+        }
+        char *new_buf = n00b_alloc_array(char, (int32_t)new_cap);
         if (ob->buf) {
             memcpy(new_buf, ob->buf, ob->len);
             n00b_free(ob->buf);
         }
         ob->buf = new_buf;
-        ob->cap = new_cap;
+        ob->cap = (int32_t)new_cap;
     }
     memcpy(ob->buf + ob->len, data, data_len);
     ob->len += data_len;
@@ -323,11 +347,30 @@ _n00b_format_impl(const char *desc_data, int32_t desc_len,
                         have_str = true;
                     }
                     else {
-                        // No vtable — treat as n00b_string_t *.
-                        // This covers static rstr literals and other
+                        // No vtable — treat as n00b_string_t *.  This
+                        // covers static rstr literals and other
                         // unmanaged string pointers that lack alloc
                         // metadata for vtable lookup.
-                        sub_str  = (n00b_string_t *)arg;
+                        //
+                        // Defensive: if the bytes at this address
+                        // don't look like a plausible n00b_string_t
+                        // header (oversize u8_bytes), surface a
+                        // diagnostic placeholder instead of flowing
+                        // garbage into outbuf_append.  Without this
+                        // check, a raw `const char *` passed where an
+                        // `n00b_string_t *` was expected (the
+                        // canonical n00b_printf misuse) used to hang
+                        // the format engine.  See MEMORY.md →
+                        // feedback_printf_cstring_trap.md.
+                        n00b_string_t *cand = (n00b_string_t *)arg;
+                        if (cand->u8_bytes > (size_t)OUTBUF_MAX_APPEND
+                            || !cand->data) {
+                            sub_str = n00b_string_from_cstr(
+                                "<bad-string-arg>");
+                        }
+                        else {
+                            sub_str = cand;
+                        }
                         have_str = true;
                     }
                 }

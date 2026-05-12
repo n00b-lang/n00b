@@ -1266,9 +1266,21 @@ scan_class(n00b_earley_parser_t *p, n00b_earley_item_t *ei)
 static inline void
 scan_set(n00b_earley_parser_t *p, n00b_earley_item_t *ei)
 {
-    // TODO: set matching not yet implemented
+    /* N00B_MATCH_SET (set-of-terminals match) is reserved in the
+     * grammar type system (n00b_match_t.set_items is `void *` —
+     * shape not pinned down) but no BNF parser or vendored grammar
+     * produces it today.  PWZ has the same gap (pwz.c:224 falls
+     * through silently).  Until a real consumer lands — and decides
+     * whether set_items holds a list of terminal IDs, a bitset, or
+     * something else — we abort loudly rather than silently
+     * parse-fail, so the first grammar that emits SET surfaces the
+     * gap immediately. */
     (void)p;
     (void)ei;
+    /* Matches the existing in-file fatal-error idiom (assert.h).  When
+     * grammar parsing emits SET for the first time, this assertion
+     * fires with a clear message instead of silent parse-fail. */
+    assert(0 && "scan_set: N00B_MATCH_SET reserved but not implemented");
 }
 
 // ============================================================================

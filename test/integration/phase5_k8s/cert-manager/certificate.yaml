@@ -1,0 +1,44 @@
+# Phase 5 § 5.6 — Certificate resource for n00b's TLS endpoint.
+#
+# cert-manager watches Certificate CRs, creates the ACME Order +
+# Authorization + Challenge against the referenced issuer, and
+# deposits the resulting cert + key into the named Secret.  The
+# n00b deployment mounts that Secret in 5.6+.
+#
+# `commonName` + `dnsNames` use an in-cluster Service FQDN
+# (`n00b-phase5.default.svc.cluster.local`) instead of a fake
+# fixture hostname.  Why: cert-manager does a "self-check" GET
+# against the challenge URL before submitting to the ACME server,
+# and Pebble's validator does its own GET — both need to resolve
+# the hostname.  An in-cluster Service FQDN is *already* in
+# kube-dns, no CoreDNS patches or per-pod hostAliases needed.
+# The accompanying ExternalName Service (see `n00b-svc.yaml`)
+# aliases this name to ingress-nginx so the HTTP traffic ends up
+# at the cert-manager-spawned challenge solver.  The cert chain
+# that arrives in the Secret is signed by Pebble's *runtime* CA
+# (fetchable via /roots/0 from Pebble's mgmt API).
+
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: n00b-phase5-cert
+  namespace: default
+spec:
+  secretName: n00b-phase5-tls
+  commonName: n00b-phase5.default.svc.cluster.local
+  dnsNames:
+    - n00b-phase5.default.svc.cluster.local
+  duration: 720h         # 30 days; Pebble's "default" profile is 90d
+  renewBefore: 168h      # renew 7 days before expiry
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
+  usages:
+    - server auth
+    - digital signature
+    - key encipherment
+  issuerRef:
+    name: phase5-pebble
+    kind: ClusterIssuer
+    group: cert-manager.io

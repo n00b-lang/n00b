@@ -133,7 +133,9 @@ n00b_conduit_file_open(n00b_conduit_t *c, n00b_conduit_io_backend_t *io,
     }
 
     // Allocate file handle
-    n00b_conduit_file_t *f = n00b_alloc(n00b_conduit_file_t);
+    n00b_conduit_file_t *f = n00b_alloc_with_opts(
+        n00b_conduit_file_t,
+        &(n00b_alloc_opts_t){.allocator = c->allocator});
 
     f->conduit    = c;
     f->io         = io;

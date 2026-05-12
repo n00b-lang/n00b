@@ -245,9 +245,17 @@ n00b_futex_timed_wait_for_value(volatile n00b_futex_t *futex, uint32_t v32, int6
         cur = n00b_atomic_load(futex);
         // If some other thread is canceled, the check doesn't matter
         // anyway.
-        // TODO: Check for program exiting.
         if (cur == v32) {
             return true;
+        }
+        // Bail out if the program is exiting — the thread we're
+        // waiting on may have already been reaped, and continuing
+        // to wait would block shutdown.  Surfaces as a timeout to
+        // the caller, which is the closest meaningful semantic.
+        if (n00b_option_is_set(n00b_default_runtime)
+            && n00b_atomic_load(
+                &n00b_option_get(n00b_default_runtime)->shutdown_started)) {
+            return false;
         }
         now = n00b_ns_timestamp();
         remaining -= (now - start); // Subtract time elapsed.
@@ -286,6 +294,13 @@ n00b_futex_wait_on_mask(n00b_futex_t *futex, uint32_t mask)
     while (!(cur & mask)) {
         n00b_futex_wait(futex, cur, 0);
         cur = n00b_atomic_load(futex);
-        // TODO: Check for program exiting.
+        // Bail on shutdown so a teardown doesn't wedge waiting for
+        // a wake that's never coming.  Same shape as the timed-wait
+        // variant above.
+        if (n00b_option_is_set(n00b_default_runtime)
+            && n00b_atomic_load(
+                &n00b_option_get(n00b_default_runtime)->shutdown_started)) {
+            return;
+        }
     }
 }

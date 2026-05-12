@@ -1,0 +1,872 @@
+/*
+ * http_h1.c — HTTP/1.1 transport for the n00b HTTP client.
+ *
+ * Phase 6 chunk 2.  Successor to `acme_http.c`; chunk 11 retires
+ * the old shim.  This file currently holds the header bag + the
+ * response parser; chunk 2.2 adds the request builder and the
+ * `request → wire bytes → response` driver that wraps the existing
+ * `n00b_acme_tls_round_trip` TLS layer.
+ *
+ * Layout:
+ *   §1   Header bag (case-insensitive ASCII)
+ *   §2   Response parsing (status line + headers + Content-Length /
+ *        Transfer-Encoding: chunked + Connection keep-alive)
+ *
+ * RFC references:
+ *   - RFC 9110 (HTTP semantics)
+ *   - RFC 9112 (HTTP/1.1 message syntax) — esp. § 9.6 (persistence)
+ *   - RFC 7230 (legacy chunked transfer-coding rules; carried over
+ *     in 9112 § 7.1)
+ */
+
+#define N00B_USE_INTERNAL_API
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <strings.h>
+#include <ctype.h>
+
+#include "n00b.h"
+#include "core/alloc.h"
+#include "core/runtime.h"
+#include "core/buffer.h"
+#include "core/string.h"
+#include "adt/list.h"
+#include "adt/result.h"
+#include "internal/net/http/http_url.h"
+#include "internal/net/http/http_h1.h"
+#include "internal/net/http/http_pool.h"
+#include "internal/net/quic/acme_tls.h"
+#include "net/quic/quic_types.h"
+#include "net/http/http_auth.h"
+
+/* ===========================================================================
+ * §1   Header bag
+ * =========================================================================== */
+
+typedef struct h1_header_node {
+    char *name;   /* lowercased, NUL-terminated */
+    char *value;  /* NUL-terminated, value bytes verbatim */
+} h1_header_node_t;
+
+struct n00b_http_h1_headers {
+    n00b_list_t(h1_header_node_t *) *items;
+    n00b_allocator_t                *allocator;
+};
+
+static n00b_allocator_t *
+default_pool(void)
+{
+    return (n00b_allocator_t *)&n00b_get_runtime()->conduit_pool;
+}
+
+static char *
+h1_strdup(const char *s, size_t len, n00b_allocator_t *allocator)
+{
+    char *out = n00b_alloc_array_with_opts(char,
+                                           (int64_t)len + 1,
+                                           &(n00b_alloc_opts_t){
+                                               .allocator = allocator,
+                                               .no_scan   = true,
+                                           });
+    if (len > 0) {
+        memcpy(out, s, len);
+    }
+    out[len] = '\0';
+    return out;
+}
+
+static void
+h1_lowercase(char *s)
+{
+    for (; *s; s++) {
+        if (*s >= 'A' && *s <= 'Z') {
+            *s = (char)(*s + ('a' - 'A'));
+        }
+    }
+}
+
+n00b_http_h1_headers_t *
+n00b_http_h1_headers_new()
+    _kargs {
+        n00b_allocator_t *allocator = nullptr;
+    }
+{
+    n00b_allocator_t *a = allocator ? allocator : default_pool();
+    n00b_http_h1_headers_t *h = n00b_alloc_with_opts(
+        n00b_http_h1_headers_t,
+        &(n00b_alloc_opts_t){.allocator = a});
+    h->items = n00b_alloc_with_opts(
+        n00b_list_t(h1_header_node_t *),
+        &(n00b_alloc_opts_t){.allocator = a});
+    *h->items           = n00b_list_new(h1_header_node_t *);
+    h->items->allocator = a;
+    h->allocator        = a;
+    return h;
+}
+
+void
+n00b_http_h1_headers_set(n00b_http_h1_headers_t *h,
+                         const char             *name,
+                         const char             *value)
+{
+    if (!h || !name || !value) {
+        return;
+    }
+    size_t name_len  = strlen(name);
+    size_t value_len = strlen(value);
+
+    /* Find existing entry (case-insensitive). */
+    size_t n_items = (size_t)n00b_list_len(*h->items);
+    for (size_t i = 0; i < n_items; i++) {
+        h1_header_node_t *cur = n00b_list_get(*h->items, i);
+        if (strlen(cur->name) == name_len
+            && strncasecmp(cur->name, name, name_len) == 0) {
+            cur->value = h1_strdup(value, value_len, h->allocator);
+            return;
+        }
+    }
+
+    /* Append new entry. */
+    h1_header_node_t *node = n00b_alloc_with_opts(
+        h1_header_node_t,
+        &(n00b_alloc_opts_t){.allocator = h->allocator});
+    node->name = h1_strdup(name, name_len, h->allocator);
+    h1_lowercase(node->name);
+    node->value = h1_strdup(value, value_len, h->allocator);
+    n00b_list_push(*h->items, node);
+}
+
+const char *
+n00b_http_h1_headers_get_cstr(n00b_http_h1_headers_t *h, const char *name)
+{
+    if (!h || !name) {
+        return nullptr;
+    }
+    size_t name_len = strlen(name);
+    size_t n_items  = (size_t)n00b_list_len(*h->items);
+    for (size_t i = 0; i < n_items; i++) {
+        h1_header_node_t *cur = n00b_list_get(*h->items, i);
+        if (strlen(cur->name) == name_len
+            && strncasecmp(cur->name, name, name_len) == 0) {
+            return cur->value;
+        }
+    }
+    return nullptr;
+}
+
+size_t
+n00b_http_h1_headers_len(n00b_http_h1_headers_t *h)
+{
+    if (!h) return 0;
+    return (size_t)n00b_list_len(*h->items);
+}
+
+bool
+n00b_http_h1_headers_at(n00b_http_h1_headers_t *h,
+                        size_t                  idx,
+                        const char            **name_out,
+                        const char            **value_out)
+{
+    if (!h || idx >= (size_t)n00b_list_len(*h->items)) {
+        return false;
+    }
+    h1_header_node_t *cur = n00b_list_get(*h->items, idx);
+    if (name_out)  *name_out  = cur->name;
+    if (value_out) *value_out = cur->value;
+    return true;
+}
+
+/* ===========================================================================
+ * §2   Response parsing
+ * =========================================================================== */
+
+static size_t
+find_crlfcrlf(const char *buf, size_t len)
+{
+    for (size_t i = 0; i + 4 <= len; i++) {
+        if (buf[i] == '\r' && buf[i + 1] == '\n'
+            && buf[i + 2] == '\r' && buf[i + 3] == '\n') {
+            return i;
+        }
+    }
+    return (size_t)-1;
+}
+
+static bool
+parse_status_line(const char       *line,
+                  size_t            len,
+                  int              *status_out,
+                  uint8_t          *minor_out,
+                  char            **status_text_out,
+                  n00b_allocator_t *allocator)
+{
+    /* "HTTP/1.X SSS REASON" — minimum length is "HTTP/1.X SSS". */
+    if (len < 12) return false;
+    if (memcmp(line, "HTTP/1.", 7) != 0) return false;
+    char minor_c = line[7];
+    if (minor_c != '0' && minor_c != '1') return false;
+    size_t i = 8;
+    while (i < len && line[i] == ' ') i++;
+    if (i + 3 > len) return false;
+    if (line[i]     < '0' || line[i]     > '9'
+        || line[i + 1] < '0' || line[i + 1] > '9'
+        || line[i + 2] < '0' || line[i + 2] > '9') {
+        return false;
+    }
+    int s = (line[i] - '0') * 100
+          + (line[i + 1] - '0') * 10
+          + (line[i + 2] - '0');
+    if (s < 100 || s > 599) return false;
+    *status_out = s;
+    *minor_out  = (uint8_t)(minor_c - '0');
+
+    i += 3;
+    while (i < len && line[i] == ' ') i++;
+    *status_text_out = h1_strdup(line + i, len - i, allocator);
+    return true;
+}
+
+static bool
+parse_headers(const char             *buf,
+              size_t                  len,
+              n00b_http_h1_headers_t *h,
+              n00b_allocator_t       *allocator)
+{
+    size_t i = 0;
+    while (i < len) {
+        size_t eol         = i;
+        bool   crlf_termed = false;
+        while (eol < len) {
+            if (eol + 1 < len && buf[eol] == '\r' && buf[eol + 1] == '\n') {
+                crlf_termed = true;
+                break;
+            }
+            eol++;
+        }
+        if (eol == i) break;             /* empty line */
+
+        size_t colon = i;
+        while (colon < eol && buf[colon] != ':') colon++;
+        if (colon == eol) return false;  /* no `:` → malformed */
+
+        size_t v_start = colon + 1;
+        while (v_start < eol
+               && (buf[v_start] == ' ' || buf[v_start] == '\t')) {
+            v_start++;
+        }
+        size_t v_end = eol;
+        while (v_end > v_start
+               && (buf[v_end - 1] == ' ' || buf[v_end - 1] == '\t')) {
+            v_end--;
+        }
+
+        char *name  = h1_strdup(buf + i, colon - i, allocator);
+        char *value = h1_strdup(buf + v_start, v_end - v_start, allocator);
+        n00b_http_h1_headers_set(h, name, value);
+
+        i = crlf_termed ? eol + 2 : len;
+    }
+    return true;
+}
+
+static bool
+decode_chunked(const char       *src,
+               size_t            src_len,
+               n00b_buffer_t    *out,
+               n00b_allocator_t *allocator)
+{
+    size_t i = 0;
+    while (i < src_len) {
+        size_t line_end = i;
+        while (line_end + 1 < src_len
+               && !(src[line_end] == '\r' && src[line_end + 1] == '\n')) {
+            line_end++;
+        }
+        if (line_end + 1 >= src_len) return false;
+
+        size_t chunk_size = 0;
+        for (size_t j = i; j < line_end && src[j] != ';'; j++) {
+            char c = src[j];
+            int  v;
+            if (c >= '0' && c <= '9') v = c - '0';
+            else if (c >= 'a' && c <= 'f') v = c - 'a' + 10;
+            else if (c >= 'A' && c <= 'F') v = c - 'A' + 10;
+            else if (c == ' ' || c == '\t') continue;
+            else return false;
+            chunk_size = (chunk_size << 4) | (size_t)v;
+            if (chunk_size > (1u << 28)) return false;
+        }
+
+        size_t body_start = line_end + 2;
+
+        if (chunk_size == 0) return true;     /* trailers ignored */
+
+        if (body_start + chunk_size + 2 > src_len) return false;
+
+        n00b_buffer_t *piece = n00b_buffer_from_bytes(
+            (char *)(src + body_start), (int64_t)chunk_size,
+            .allocator = allocator);
+        n00b_buffer_concat(out, piece);
+
+        i = body_start + chunk_size;
+        if (i + 1 >= src_len || src[i] != '\r' || src[i + 1] != '\n') {
+            return false;
+        }
+        i += 2;
+    }
+    return true;
+}
+
+static bool
+compute_keep_alive(uint8_t            http_minor,
+                   const char        *connection)
+{
+    /* RFC 9112 § 9.6:
+     *   - HTTP/1.1 default = keep-alive unless Connection: close.
+     *   - HTTP/1.0 default = close unless Connection: keep-alive.
+     * Header value is a comma-separated list; case-insensitive. */
+    bool default_keep = (http_minor >= 1);
+    if (!connection) return default_keep;
+    /* Tokenize on `,` and check for the close / keep-alive directives. */
+    bool        saw_close = false;
+    bool        saw_keep  = false;
+    const char *p         = connection;
+    while (*p) {
+        while (*p == ' ' || *p == '\t' || *p == ',') p++;
+        const char *tok_start = p;
+        while (*p && *p != ',') p++;
+        const char *tok_end = p;
+        while (tok_end > tok_start
+               && (tok_end[-1] == ' ' || tok_end[-1] == '\t')) {
+            tok_end--;
+        }
+        size_t toklen = (size_t)(tok_end - tok_start);
+        if (toklen == 5 && strncasecmp(tok_start, "close", 5) == 0) {
+            saw_close = true;
+        } else if (toklen == 10
+                   && strncasecmp(tok_start, "keep-alive", 10) == 0) {
+            saw_keep = true;
+        }
+    }
+    if (saw_close) return false;
+    if (saw_keep)  return true;
+    return default_keep;
+}
+
+n00b_result_t(n00b_http_h1_response_t *)
+n00b_http_h1_response_parse(n00b_buffer_t *raw)
+    _kargs {
+        n00b_allocator_t *allocator = nullptr;
+    }
+{
+    if (!raw || !raw->data || raw->byte_len == 0) {
+        return n00b_result_err(n00b_http_h1_response_t *,
+                               N00B_HTTP_ERR_NULL_ARG);
+    }
+    n00b_allocator_t *a = allocator ? allocator : default_pool();
+
+    const char *buf = raw->data;
+    size_t      len = raw->byte_len;
+
+    /* Status line. */
+    size_t status_end = 0;
+    while (status_end + 1 < len
+           && !(buf[status_end] == '\r' && buf[status_end + 1] == '\n')) {
+        status_end++;
+    }
+    if (status_end + 1 >= len) {
+        return n00b_result_err(n00b_http_h1_response_t *,
+                               N00B_HTTP_ERR_BAD_RESPONSE);
+    }
+
+    n00b_http_h1_response_t *resp = n00b_alloc_with_opts(
+        n00b_http_h1_response_t,
+        &(n00b_alloc_opts_t){.allocator = a});
+    resp->headers = n00b_http_h1_headers_new(.allocator = a);
+
+    char *status_text = nullptr;
+    if (!parse_status_line(buf, status_end,
+                           &resp->status, &resp->http_minor,
+                           &status_text, a)) {
+        return n00b_result_err(n00b_http_h1_response_t *,
+                               N00B_HTTP_ERR_BAD_RESPONSE);
+    }
+    resp->status_text = n00b_string_from_cstr(status_text, .allocator = a);
+
+    /* Headers. */
+    size_t hdr_end = find_crlfcrlf(buf, len);
+    if (hdr_end == (size_t)-1) {
+        return n00b_result_err(n00b_http_h1_response_t *,
+                               N00B_HTTP_ERR_BAD_RESPONSE);
+    }
+    if (!parse_headers(buf + status_end + 2,
+                       hdr_end - (status_end + 2),
+                       resp->headers, a)) {
+        return n00b_result_err(n00b_http_h1_response_t *,
+                               N00B_HTTP_ERR_BAD_RESPONSE);
+    }
+
+    /* Body. */
+    const char *body_start = buf + hdr_end + 4;
+    size_t      body_len   = len - (hdr_end + 4);
+
+    const char *cl = n00b_http_h1_headers_get_cstr(resp->headers,
+                                                    "content-length");
+    const char *te = n00b_http_h1_headers_get_cstr(resp->headers,
+                                                    "transfer-encoding");
+
+    resp->body = n00b_buffer_empty(.allocator = a);
+
+    if (te && strcasecmp(te, "chunked") == 0) {
+        if (!decode_chunked(body_start, body_len, resp->body, a)) {
+            return n00b_result_err(n00b_http_h1_response_t *,
+                                   N00B_HTTP_ERR_BAD_RESPONSE);
+        }
+    } else if (cl) {
+        size_t n = (size_t)strtoull(cl, nullptr, 10);
+        if (n > body_len) n = body_len;
+        if (n > 0) {
+            n00b_buffer_t *bb = n00b_buffer_from_bytes(
+                (char *)body_start, (int64_t)n,
+                .allocator = a);
+            n00b_buffer_concat(resp->body, bb);
+        }
+    } else if (body_len > 0) {
+        /* No Content-Length and no Transfer-Encoding: read to EOF. */
+        n00b_buffer_t *bb = n00b_buffer_from_bytes(
+            (char *)body_start, (int64_t)body_len,
+            .allocator = a);
+        n00b_buffer_concat(resp->body, bb);
+    }
+
+    /* Connection persistence. */
+    const char *conn = n00b_http_h1_headers_get_cstr(resp->headers,
+                                                      "connection");
+    resp->keep_alive = compute_keep_alive(resp->http_minor, conn);
+
+    return n00b_result_ok(n00b_http_h1_response_t *, resp);
+}
+
+/* ===========================================================================
+ * §3   Request builder
+ *
+ * Allocates from the supplied allocator (or the per-runtime conduit
+ * pool) and grows the request buffer incrementally.  Generates the
+ * exact bytes a server will see on the wire — `Content-Length` and
+ * `Host` are derived from the parsed URL + body length, never trusted
+ * from caller-supplied headers.
+ *
+ * "Built-in" headers (Host, User-Agent, Accept, Connection,
+ * Content-Type, Content-Length) can be overridden by the caller via
+ * @p extra; we use a small lookup table to skip the built-in line
+ * when the caller has already set the same name (case-insensitive).
+ * =========================================================================== */
+
+static void
+append_cstr(n00b_buffer_t *out, const char *s, n00b_allocator_t *a)
+{
+    size_t l = strlen(s);
+    if (l == 0) return;
+    n00b_buffer_t *piece = n00b_buffer_from_bytes((char *)s, (int64_t)l,
+                                                   .allocator = a);
+    n00b_buffer_concat(out, piece);
+}
+
+static void
+append_fmt(n00b_buffer_t *out, n00b_allocator_t *a, const char *fmt, ...)
+{
+    char    line[1024];
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(line, sizeof(line), fmt, ap);
+    va_end(ap);
+    if (n <= 0) return;
+    if ((size_t)n >= sizeof(line)) n = (int)sizeof(line) - 1;
+    n00b_buffer_t *piece = n00b_buffer_from_bytes(line, (int64_t)n,
+                                                   .allocator = a);
+    n00b_buffer_concat(out, piece);
+}
+
+static bool
+extra_has(n00b_http_h1_headers_t *extra, const char *name)
+{
+    return extra && n00b_http_h1_headers_get_cstr(extra, name) != nullptr;
+}
+
+n00b_buffer_t *
+n00b_http_h1_request_build(n00b_http_url_t *url)
+    _kargs {
+        const char             *method       = "GET";
+        n00b_buffer_t          *body         = nullptr;
+        const char             *content_type = nullptr;
+        n00b_http_h1_headers_t *extra        = nullptr;
+        const char             *user_agent   = "n00b-http/0.1";
+        bool                    keep_alive   = false;
+        n00b_allocator_t       *allocator    = nullptr;
+    }
+{
+    n00b_allocator_t *a   = allocator ? allocator : default_pool();
+    n00b_buffer_t    *req = n00b_buffer_empty(.allocator = a);
+
+    /* Path-and-query slug for the request line. */
+    const char *path = url->path && url->path->u8_bytes
+                            ? url->path->data : "/";
+    if (url->query && url->query->u8_bytes > 0) {
+        append_fmt(req, a, "%s %s?%s HTTP/1.1\r\n",
+                   method, path, url->query->data);
+    } else {
+        append_fmt(req, a, "%s %s HTTP/1.1\r\n", method, path);
+    }
+
+    /* Host: include explicit port only if non-default OR caller used
+     * an IPv6 literal (always re-bracket so the wire form is parseable
+     * by the receiver). */
+    if (!extra_has(extra, "Host")) {
+        bool needs_port = url->has_explicit_port && url->port != 443;
+        if (url->is_ipv6_literal) {
+            if (needs_port) {
+                append_fmt(req, a, "Host: [%s]:%u\r\n",
+                           url->host->data, (unsigned)url->port);
+            } else {
+                append_fmt(req, a, "Host: [%s]\r\n", url->host->data);
+            }
+        } else if (needs_port) {
+            append_fmt(req, a, "Host: %s:%u\r\n",
+                       url->host->data, (unsigned)url->port);
+        } else {
+            append_fmt(req, a, "Host: %s\r\n", url->host->data);
+        }
+    }
+
+    if (!extra_has(extra, "User-Agent")) {
+        append_fmt(req, a, "User-Agent: %s\r\n", user_agent);
+    }
+    if (!extra_has(extra, "Accept")) {
+        append_cstr(req, "Accept: */*\r\n", a);
+    }
+    if (!extra_has(extra, "Connection")) {
+        append_cstr(req,
+                    keep_alive ? "Connection: keep-alive\r\n"
+                               : "Connection: close\r\n",
+                    a);
+    }
+
+    if (body) {
+        if (content_type && !extra_has(extra, "Content-Type")) {
+            append_fmt(req, a, "Content-Type: %s\r\n", content_type);
+        }
+        if (!extra_has(extra, "Content-Length")) {
+            append_fmt(req, a, "Content-Length: %zu\r\n",
+                       (size_t)n00b_buffer_len(body));
+        }
+    }
+
+    if (extra) {
+        size_t n = n00b_http_h1_headers_len(extra);
+        for (size_t i = 0; i < n; i++) {
+            const char *name;
+            const char *value;
+            if (n00b_http_h1_headers_at(extra, i, &name, &value)) {
+                append_fmt(req, a, "%s: %s\r\n", name, value);
+            }
+        }
+    }
+
+    append_cstr(req, "\r\n", a);
+
+    if (body) {
+        n00b_buffer_concat(req, body);
+    }
+    return req;
+}
+
+/* ===========================================================================
+ * §4   Round trip
+ * =========================================================================== */
+
+/* Linear case-insensitive header-bytes scan.  Returns nullptr if
+ * @p name isn't present in [@p p, @p p + len). */
+static const char *
+find_header(const char *p, size_t len, const char *name, size_t *out_vlen)
+{
+    size_t nlen = strlen(name);
+    /* Walk lines until end-of-headers. */
+    size_t i = 0;
+    while (i + 1 < len && !(p[i] == '\r' && p[i + 1] == '\n')) {
+        size_t line_end = i;
+        while (line_end + 1 < len
+               && !(p[line_end] == '\r' && p[line_end + 1] == '\n')) {
+            line_end++;
+        }
+        if (line_end > i + nlen + 1
+            && (size_t)(line_end - i) > nlen + 1
+            && strncasecmp(p + i, name, nlen) == 0
+            && p[i + nlen] == ':') {
+            size_t v = i + nlen + 1;
+            while (v < line_end && (p[v] == ' ' || p[v] == '\t')) v++;
+            *out_vlen = (size_t)(line_end - v);
+            return p + v;
+        }
+        i = line_end + 2;
+    }
+    return nullptr;
+}
+
+/* Decide whether the bytes accumulated so far form a complete
+ * HTTP/1.1 response.  Returns:
+ *   1 — complete; safe to stop reading + parse
+ *   0 — need more bytes
+ *  -1 — protocol error (no Content-Length / no Transfer-Encoding;
+ *       caller must read until peer close to find the boundary). */
+static int
+h1_response_complete(const char *bytes, size_t len)
+{
+    /* Locate end-of-headers (CRLF CRLF). */
+    if (len < 4) return 0;
+    const char *eoh = nullptr;
+    for (size_t i = 0; i + 4 <= len; i++) {
+        if (bytes[i] == '\r' && bytes[i + 1] == '\n'
+            && bytes[i + 2] == '\r' && bytes[i + 3] == '\n') {
+            eoh = bytes + i + 4;
+            break;
+        }
+    }
+    if (!eoh) return 0;
+    size_t header_len = (size_t)(eoh - bytes);
+    /* Skip the status line (first \r\n) for header scan. */
+    const char *hp = bytes;
+    size_t hl = header_len;
+    for (size_t i = 0; i + 1 < hl; i++) {
+        if (hp[i] == '\r' && hp[i + 1] == '\n') {
+            hp = bytes + i + 2;
+            hl = header_len - (i + 2);
+            break;
+        }
+    }
+
+    size_t vlen = 0;
+    const char *cl = find_header(hp, hl, "Content-Length", &vlen);
+    const char *te = find_header(hp, hl, "Transfer-Encoding", &vlen);
+
+    if (te && vlen >= 7
+        && strncasecmp(te, "chunked", 7) == 0) {
+        /* Walk the chunked-body frames properly so a literal
+         * "0\r\n\r\n" byte sequence inside a chunk's payload doesn't
+         * spuriously look like the terminator.  Each frame is:
+         *   <hex-size> [;ext]* CRLF <size bytes> CRLF
+         * The terminator is a frame with size 0; any trailers follow
+         * up to the final empty CRLF.  Returns 0 (need more) on a
+         * truncated frame, 1 on a complete terminator, and stays 0
+         * on a chunk-with-trailers — read-until-close still wins
+         * there. */
+        size_t pos = (size_t)(eoh - bytes);
+        while (pos < len) {
+            /* Find size-line CRLF. */
+            size_t eol = pos;
+            while (eol + 1 < len
+                   && !(bytes[eol] == '\r' && bytes[eol + 1] == '\n')) {
+                eol++;
+            }
+            if (eol + 1 >= len) return 0;       /* size line truncated */
+            /* Parse hex size up to ';' or end-of-line. */
+            size_t   chunk_size = 0;
+            size_t   p          = pos;
+            bool     have_digit = false;
+            while (p < eol && bytes[p] != ';') {
+                char ch = bytes[p];
+                int  d  = -1;
+                if (ch >= '0' && ch <= '9')      d = ch - '0';
+                else if (ch >= 'a' && ch <= 'f') d = ch - 'a' + 10;
+                else if (ch >= 'A' && ch <= 'F') d = ch - 'A' + 10;
+                else break;
+                chunk_size = (chunk_size << 4) | (size_t)d;
+                have_digit = true;
+                p++;
+            }
+            if (!have_digit) return 0;           /* malformed; wait */
+            size_t data_off = eol + 2;
+            if (chunk_size == 0) {
+                /* Terminator: optional trailers terminated by CRLF. */
+                if (data_off + 1 >= len) return 0;
+                /* Walk trailer lines until empty line. */
+                size_t t = data_off;
+                while (t + 1 < len) {
+                    if (bytes[t] == '\r' && bytes[t + 1] == '\n') {
+                        return 1;
+                    }
+                    /* Skip trailer line. */
+                    while (t + 1 < len
+                           && !(bytes[t] == '\r' && bytes[t + 1] == '\n')) {
+                        t++;
+                    }
+                    if (t + 1 >= len) return 0;
+                    t += 2;
+                }
+                return 0;
+            }
+            /* Need data_off + chunk_size + 2 (CRLF after data) bytes. */
+            if (data_off + chunk_size + 2 > len) return 0;
+            if (bytes[data_off + chunk_size] != '\r'
+                || bytes[data_off + chunk_size + 1] != '\n') {
+                return -1;                       /* protocol violation */
+            }
+            pos = data_off + chunk_size + 2;
+        }
+        return 0;
+    }
+    if (cl) {
+        char    nbuf[24];
+        size_t  nl = vlen < sizeof(nbuf) - 1 ? vlen : sizeof(nbuf) - 1;
+        memcpy(nbuf, cl, nl); nbuf[nl] = '\0';
+        size_t  declared = (size_t)strtoul(nbuf, nullptr, 10);
+        size_t  body_have = len - header_len;
+        return body_have >= declared ? 1 : 0;
+    }
+    /* Neither Content-Length nor Transfer-Encoding — message
+     * boundary is the connection close.  Caller cannot pool. */
+    return -1;
+}
+
+n00b_result_t(n00b_http_h1_response_t *)
+n00b_http_h1_round_trip(n00b_http_url_t *url)
+    _kargs {
+        const char                  *method       = "GET";
+        n00b_buffer_t               *body         = nullptr;
+        const char                  *content_type = nullptr;
+        n00b_http_h1_headers_t      *extra        = nullptr;
+        int32_t                      timeout_ms   = 30000;
+        n00b_http_connection_pool_t *pool         = nullptr;
+        n00b_http_auth_t            *auth         = nullptr;
+        n00b_allocator_t            *allocator    = nullptr;
+    }
+{
+    if (!url) {
+        return n00b_result_err(n00b_http_h1_response_t *,
+                               N00B_HTTP_ERR_NULL_ARG);
+    }
+    n00b_allocator_t *a = allocator ? allocator : default_pool();
+    bool keep_alive_intent = (pool != nullptr);
+
+    /* mTLS handshake material — extracted from the auth helper if
+     * present.  Pool keying uses the auth pointer so identities don't
+     * cross-contaminate (see pool_subkey_for_auth). */
+    n00b_acme_tls_client_auth_t  mtls_auth_storage;
+    n00b_acme_tls_client_auth_t *mtls_auth = nullptr;
+    if (auth && auth->mtls_key && auth->mtls_cert_chain_der
+        && auth->mtls_cert_chain_count > 0
+        && auth->mtls_cert_chain_lens) {
+        mtls_auth_storage.cert_chain_der   = auth->mtls_cert_chain_der;
+        mtls_auth_storage.cert_chain_lens  = auth->mtls_cert_chain_lens;
+        mtls_auth_storage.cert_chain_count = auth->mtls_cert_chain_count;
+        mtls_auth_storage.key              = auth->mtls_key;
+        mtls_auth = &mtls_auth_storage;
+    }
+
+    /* Pool bucket key includes a subkey derived from the auth pointer
+     * so two requests with different mTLS identities — or one with
+     * mTLS and one without — never share an idle connection. */
+    n00b_string_t *bucket_origin = url->origin;
+    if (auth) {
+        char auth_tag[40];
+        snprintf(auth_tag, sizeof(auth_tag), "|auth=%p", (void *)auth);
+        size_t orig_len = url->origin->u8_bytes;
+        size_t tag_len  = strlen(auth_tag);
+        char *buf = n00b_alloc_array(char, orig_len + tag_len + 1,
+                                     .allocator = a);
+        memcpy(buf, url->origin->data, orig_len);
+        memcpy(buf + orig_len, auth_tag, tag_len);
+        buf[orig_len + tag_len] = '\0';
+        bucket_origin = n00b_string_from_raw(buf,
+                                             (int64_t)(orig_len + tag_len),
+                                             .allocator = a);
+    }
+
+    /* Try the pool first (if enabled). */
+    n00b_acme_tls_conn_t *conn = nullptr;
+    if (pool) {
+        void *u = n00b_http_connection_pool_acquire(
+            pool, bucket_origin, N00B_HTTP_CONNECTION_POOL_TRANSPORT_H1);
+        if (u) {
+            conn = (n00b_acme_tls_conn_t *)u;
+            if (!n00b_acme_tls_alive(conn)) {
+                n00b_acme_tls_close(conn);
+                conn = nullptr;
+            }
+        }
+    }
+    if (!conn) {
+        int rc = n00b_acme_tls_connect_ex(url->host->data, url->port,
+                                          timeout_ms, mtls_auth, &conn);
+        if (rc != N00B_QUIC_OK) {
+            return n00b_result_err(n00b_http_h1_response_t *, rc);
+        }
+    }
+
+    n00b_buffer_t *req = n00b_http_h1_request_build(
+        url,
+        .method       = method,
+        .body         = body,
+        .content_type = content_type,
+        .extra        = extra,
+        .keep_alive   = keep_alive_intent,
+        .allocator    = a);
+
+    int rc = n00b_acme_tls_send(conn, req, timeout_ms);
+    if (rc != N00B_QUIC_OK) {
+        n00b_acme_tls_close(conn);
+        return n00b_result_err(n00b_http_h1_response_t *, rc);
+    }
+
+    /* Read until the response message boundary is detected (per
+     * Content-Length / chunked) OR the peer closes. */
+    n00b_buffer_t *raw = n00b_buffer_empty(.allocator = a);
+    bool peer_closed   = false;
+    bool boundary_seen = false;
+    bool read_to_eof   = false;
+    while (!peer_closed && !boundary_seen) {
+        n00b_buffer_t *chunk = nullptr;
+        rc = n00b_acme_tls_recv(conn, 64 * 1024, &chunk,
+                                 &peer_closed, timeout_ms);
+        if (rc != N00B_QUIC_OK) {
+            n00b_acme_tls_close(conn);
+            return n00b_result_err(n00b_http_h1_response_t *, rc);
+        }
+        if (chunk && chunk->byte_len > 0) {
+            n00b_buffer_concat(raw, chunk);
+            int complete = h1_response_complete(raw->data,
+                                                 (size_t)raw->byte_len);
+            if (complete == 1) boundary_seen = true;
+            else if (complete == -1) read_to_eof = true;
+        }
+        if (read_to_eof && !peer_closed) {
+            /* No way to tell when the response ends; keep reading
+             * until the peer FINs.  This forces close-after-this on
+             * the connection regardless of keep-alive intent. */
+            keep_alive_intent = false;
+            continue;
+        }
+    }
+
+    auto pres = n00b_http_h1_response_parse(raw, .allocator = a);
+    if (n00b_result_is_err(pres)) {
+        n00b_acme_tls_close(conn);
+        return pres;
+    }
+    n00b_http_h1_response_t *resp = n00b_result_get(pres);
+
+    /* Pool the connection if both sides agreed on keep-alive AND
+     * the peer didn't FIN AND the message boundary was clean.  Use
+     * the same bucket_origin we acquired with so reuse honors the
+     * mTLS-identity scoping. */
+    if (pool && keep_alive_intent && resp->keep_alive
+        && boundary_seen && !peer_closed) {
+        n00b_http_connection_pool_release(
+            pool, bucket_origin, N00B_HTTP_CONNECTION_POOL_TRANSPORT_H1,
+            conn,
+            (n00b_http_connection_pool_close_fn)n00b_acme_tls_close);
+    } else {
+        n00b_acme_tls_close(conn);
+    }
+    return n00b_result_ok(n00b_http_h1_response_t *, resp);
+}

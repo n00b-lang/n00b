@@ -45,6 +45,9 @@ typedef enum : uint16_t {
     N00B_CONDUIT_TAG_USER_EVENT,
     N00B_CONDUIT_TAG_XFORM,        /**< Pipeline transform */
     N00B_CONDUIT_TAG_DONE,         /**< Completion notification topic */
+    N00B_CONDUIT_TAG_UDP_RECV,     /**< UDP socket recv (datagram in) */
+    N00B_CONDUIT_TAG_QUIC_ACCEPT,  /**< QUIC server endpoint: new conn accepted */
+    N00B_CONDUIT_TAG_QUIC_OUTBOUND,/**< QUIC endpoint: outbound queued sends */
 } n00b_conduit_int_uri_tag_t;
 
 /** @brief Mask for extracting URI tag (top 16 bits) */
@@ -150,6 +153,15 @@ n00b_conduit_str_uri(n00b_string_t *s)
 /** @brief Convenience: create a completion topic URI */
 #define N00B_CONDUIT_URI_DONE(id) \
     n00b_conduit_int_uri(N00B_CONDUIT_TAG_DONE, (uint64_t)(id))
+/** @brief Convenience: create a UDP recv URI */
+#define N00B_CONDUIT_URI_UDP_RECV(id) \
+    n00b_conduit_int_uri(N00B_CONDUIT_TAG_UDP_RECV, (uint64_t)(id))
+/** @brief Convenience: create a QUIC accept URI */
+#define N00B_CONDUIT_URI_QUIC_ACCEPT(id) \
+    n00b_conduit_int_uri(N00B_CONDUIT_TAG_QUIC_ACCEPT, (uint64_t)(id))
+/** @brief Convenience: create a QUIC outbound-send URI */
+#define N00B_CONDUIT_URI_QUIC_OUTBOUND(id) \
+    n00b_conduit_int_uri(N00B_CONDUIT_TAG_QUIC_OUTBOUND, (uint64_t)(id))
 
 // ============================================================================
 // Publisher policies

@@ -1,0 +1,24 @@
+[Unit]
+Description=pebble-challtestsrv (fake DNS + HTTP/HTTPS for ACME challenge testing)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Disable HTTP-01 / HTTPS-01 / TLS-ALPN-01 listeners — we only
+# use DNS-01 in this fixture, and challtestsrv's HTTP-01 listener
+# would race the n00b service if we left it on.  Also bind the
+# DNS server on 127.0.0.1 so it's local-only.
+ExecStart=/usr/local/bin/pebble-challtestsrv \
+    -dnsserver "127.0.0.1:8053" \
+    -doh "" \
+    -http01 "" \
+    -https01 "" \
+    -tlsalpn01 "" \
+    -management "127.0.0.1:8055"
+Restart=on-failure
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

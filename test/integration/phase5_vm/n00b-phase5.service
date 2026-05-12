@@ -1,0 +1,31 @@
+# Phase 5 § 5.9 — bare-VM playbook systemd unit.
+#
+# One-shot service: the demo's `--loopback` mode runs server +
+# client in the same process and exits 0 on success.  The K8s
+# fixture runs the same binary inside a Job; the bare-VM fixture
+# runs it under systemd to exercise the same operator path
+# real deployments take (journalctl observability, on-failure
+# restarts, cap_net_bind_service if the operator binds port 443).
+#
+# `Type=oneshot` + `RemainAfterExit=no` matches the smoke's
+# semantics: success is "ExecStart returned 0," nothing else.
+# Real deployments would use `Type=notify` + a long-running
+# server process; the unit shipped to operators in 5.15's
+# playbook docs is the production-shaped variant.
+
+[Unit]
+Description=n00b Phase 5 demo (loopback smoke)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=no
+ExecStart=/usr/local/bin/quic_phase5_demo --loopback
+Environment=LB_CID_SERVER_ID=1
+StandardOutput=journal
+StandardError=journal
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target

@@ -51,6 +51,10 @@ typedef struct {
  * Join root directory and relative path with a '/'.
  * Returns a heap-allocated NUL-terminated C string.
  * Handles empty @p rel as "the root directory itself".
+ *
+ * If @p lc->root already ends with '/' (e.g. root="/" — used by the
+ * runtime default VFS mount), the joining slash is suppressed to
+ * avoid emitting "//rel".
  */
 static char *
 join_path(local_ctx_t *lc, n00b_string_t *rel)
@@ -58,7 +62,7 @@ join_path(local_ctx_t *lc, n00b_string_t *rel)
     size_t rlen = lc->root->u8_bytes;
     size_t plen = rel->u8_bytes;
 
-    // Empty relative path -> return root directory (no trailing slash).
+    // Empty relative path -> return root directory as-is.
     if (plen == 0) {
         char *buf = n00b_alloc_array(char, rlen + 1);
         memcpy(buf, lc->root->data, rlen);
@@ -66,14 +70,19 @@ join_path(local_ctx_t *lc, n00b_string_t *rel)
         return buf;
     }
 
-    // root + '/' + path + '\0'
-    size_t total = rlen + 1 + plen + 1;
+    bool   root_ends_slash = rlen > 0 && lc->root->data[rlen - 1] == '/';
+    size_t sep_len         = root_ends_slash ? 0 : 1;
+
+    // root + (maybe '/') + path + '\0'
+    size_t total = rlen + sep_len + plen + 1;
     char  *buf   = n00b_alloc_array(char, total);
 
     memcpy(buf, lc->root->data, rlen);
-    buf[rlen] = '/';
-    memcpy(buf + rlen + 1, rel->data, plen);
-    buf[rlen + 1 + plen] = '\0';
+    if (sep_len) {
+        buf[rlen] = '/';
+    }
+    memcpy(buf + rlen + sep_len, rel->data, plen);
+    buf[rlen + sep_len + plen] = '\0';
 
     return buf;
 }

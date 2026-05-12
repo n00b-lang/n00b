@@ -1,0 +1,26 @@
+# Phase 5 § 5.6 — ExternalName Service that puts the cert-manager
+# challenge hostname in cluster DNS without patching CoreDNS.
+#
+# kube-dns auto-resolves `<svc>.<ns>.svc.cluster.local` for any
+# ClusterIP / ExternalName Service we declare, so by creating this
+# alias we get our challenge hostname into the cluster's resolver
+# *via* the standard K8s primitive.  Both Pebble's validator and
+# cert-manager's pre-submit self-check then resolve the hostname
+# without any per-pod hostAliases or CoreDNS surgery.
+#
+# The CNAME points at ingress-nginx-controller's in-cluster FQDN;
+# DNS-resolved IP is therefore ingress-nginx's ClusterIP, so HTTP
+# traffic reaches ingress-nginx, which routes by Host header to
+# the cert-manager-spawned challenge solver Pod.
+#
+# In 5.7+ this same Service grows a real selector pointing at the
+# n00b deployment; the FQDN stays stable across phases.
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: n00b-phase5
+  namespace: default
+spec:
+  type: ExternalName
+  externalName: ingress-nginx-controller.ingress-nginx.svc.cluster.local

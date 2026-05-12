@@ -89,7 +89,22 @@ function ensure_ncc {
         return 0
     fi
 
-    # 2. System ncc in PATH.
+    # 2. In-tree subproject build, if already cached.  This is the
+    #    binary the n00b build was tested against — strictly preferred
+    #    over whatever ncc happens to be on PATH (which can drift from
+    #    the in-tree build when developers update n00b without running
+    #    `make install` for ncc).  Set N00B_USE_SYSTEM_NCC=1 to
+    #    explicitly opt back into the PATH-resolved binary.
+    if [[ "${N00B_USE_SYSTEM_NCC:-0}" -eq 0 ]] ; then
+        local cached_ncc="${N00B_ROOT}/subprojects/ncc/build_release/ncc"
+        if [[ -x "${cached_ncc}" ]] ; then
+            export NCC_PATH="${cached_ncc}"
+            return 0
+        fi
+    fi
+
+    # 3. System ncc in PATH (opt-in via N00B_USE_SYSTEM_NCC=1, or fallback
+    #    when the in-tree build hasn't been produced yet).
     local system_ncc
     system_ncc=$(which ncc 2>/dev/null || true)
     if [[ -n "${system_ncc}" ]] ; then
@@ -97,7 +112,7 @@ function ensure_ncc {
         return 0
     fi
 
-    # 3. Build from subproject.
+    # 4. Build from subproject (cold start: no in-tree build, no system ncc).
     ensure_ncc_subproject
     build_ncc
 }

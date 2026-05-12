@@ -1,0 +1,45 @@
+# Caddyfile for the n00b H3 client interop smoke test.
+#
+# Caddy 2.6+ enables HTTP/3 automatically when serving HTTPS, so we
+# don't need any experimental flag.  We advertise the full protocol
+# set explicitly so a regression in defaults doesn't silently
+# disable h3.
+
+{
+	# `disable_redirects` keeps Caddy's automatic certificate
+	# issuance (we rely on `tls internal` to mint a leaf at startup)
+	# but turns off the HTTP→HTTPS redirect handler that would
+	# otherwise try to bind port 80 inside the container.
+	#
+	# `disable_certs` (which we'd want if Caddy auto-issued for the
+	# wrong name) is NOT what we want — we depend on the leaf to
+	# pin against.
+	auto_https disable_redirects
+	servers {
+		protocols h1 h2 h3
+	}
+	log {
+		level WARN
+	}
+}
+
+# `tls internal` triggers Caddy's internal CA: it auto-generates a
+# leaf cert at startup signed by an ephemeral CA private to /data
+# (mounted as tmpfs, so each container start is fresh).
+#
+# `localhost` matches the SAN Caddy issues by default for its
+# internal CA, so curl --resolve localhost:PORT:127.0.0.1 verifies
+# correctly when the test pins via SPKI / fingerprint.
+https://localhost:{$CADDY_PORT} {
+	tls internal
+
+	# `/` returns the canonical body the smoke test asserts on.
+	# Heredoc preserves the trailing newline.
+	@root path /
+	respond @root <<HTML
+		hello-from-caddy
+		HTML 200
+
+	# Anything else: clean 404 so the test can distinguish.
+	respond "not-found" 404
+}

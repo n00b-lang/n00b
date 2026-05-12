@@ -32,6 +32,7 @@ docker run --rm \
     --memory="${DOCKER_MEM}" \
     --memory-swap="${DOCKER_MEM}" \
     -v "$PROJECT_ROOT:/src:ro" \
+    -v "$PROJECT_ROOT/docker/_linux_logs:/logs" \
     -e N00B_TEST="${N00B_TEST:-0}" \
     -e N00B_CLEAN=1 \
     -e N00B_NATIVE=1 \
@@ -51,7 +52,44 @@ docker run --rm \
         cp build/ncc /usr/local/bin/ncc
         cd /
 
-        # Step 2: Build n00b using the freshly-built ncc.
+        # Step 2: Build n00b using the freshly-built ncc.  Force the
+        # build to use /usr/local/bin/ncc; the cached
+        # subprojects/ncc/build_release/ncc is the host (macOS) binary
+        # when the developer ran `bash build.sh` before invoking this
+        # cross-build, and ELF/Mach-O do not mix.
         cp -a /src /build && cd /build
-        bash build.sh build_linux
+        rm -rf /build/subprojects/ncc/build_release
+        export NCC_PATH=/usr/local/bin/ncc
+
+        # When running tests, start a session DBus + a headless
+        # gnome-keyring so test_quic_secret_libsecret can exchange
+        # a credential with a real Secret Service daemon.  Without
+        # this wrapper the libsecret test would log "SKIP".
+        if [ "${N00B_TEST:-0}" = "1" ] && command -v dbus-run-session >/dev/null; then
+            exec dbus-run-session -- bash -c "
+                # Unlock the keyring with an empty password (headless
+                # CI mode).  gnome-keyring-daemon --unlock reads the
+                # password from stdin and prints the bus addresses to
+                # stdout for export; we ignore them because the
+                # SECRETS service registers itself on the session bus
+                # which is already set up by dbus-run-session.
+                printf \"\\n\" | gnome-keyring-daemon \
+                    --start --foreground \
+                    --components=secrets >/dev/null 2>&1 &
+                # Give the daemon a moment to register on the bus.
+                for _ in 1 2 3 4 5; do
+                    if dbus-send --session --print-reply \
+                        --dest=org.freedesktop.secrets \
+                        /org/freedesktop/secrets \
+                        org.freedesktop.DBus.Peer.Ping \
+                        >/dev/null 2>&1; then break; fi
+                    sleep 0.5
+                done
+                bash build.sh build_linux
+                cp -a build_linux/meson-logs /logs/ 2>/dev/null || true
+            "
+        else
+            bash build.sh build_linux
+            cp -a build_linux/meson-logs /logs/ 2>/dev/null || true
+        fi
     '

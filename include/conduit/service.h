@@ -24,6 +24,7 @@
 #include "conduit/conduit.h"
 #include "conduit/io.h"
 #include "core/thread.h"
+#include "core/condition.h"
 
 // ============================================================================
 // Constants
@@ -39,7 +40,18 @@
 typedef enum {
     N00B_CONDUIT_SVC_IO,       /**< Runs an IO backend poll loop */
     N00B_CONDUIT_SVC_SIGNAL,   /**< Dedicated signal handler thread */
+    N00B_CONDUIT_SVC_WORKER,   /**< Drains the service's job queue */
 } n00b_conduit_svc_role_t;
+
+/**
+ * @brief Function signature for `n00b_conduit_service_submit` work
+ *        items.
+ *
+ * @param arg  The opaque pointer the caller handed to submit().
+ *             The work function owns @p arg's lifetime — the
+ *             service does not free it.
+ */
+typedef void (*n00b_conduit_work_fn)(void *arg);
 
 // ============================================================================
 // Service thread
@@ -58,12 +70,24 @@ typedef struct n00b_conduit_svc_thread {
 // Service pool
 // ============================================================================
 
+/* Forward decl for the worker job queue. */
+typedef struct n00b_conduit_job n00b_conduit_job_t;
+
 struct n00b_conduit_service {
     n00b_conduit_t              *conduit;
     n00b_conduit_svc_thread_t   *threads[N00B_CONDUIT_MAX_SERVICE_THREADS];
     _Atomic(int)                 num_threads;
     _Atomic(bool)                started;
     _Atomic(bool)                shutdown;
+
+    /* Work-item queue (chunk-5 async dispatcher).  Lazy-init: the
+     * first `n00b_conduit_service_submit` call adds a worker thread
+     * if none exist yet.  Workers wait on `job_cv`; submit pushes a
+     * job + signals.  Drained on stop. */
+    n00b_conduit_job_t          *job_head;
+    n00b_conduit_job_t          *job_tail;
+    n00b_condition_t             job_cv;
+    _Atomic(int)                 worker_threads;
 };
 
 // ============================================================================
@@ -129,6 +153,39 @@ n00b_conduit_svc_thread_io(n00b_conduit_svc_thread_t *st)
     if (!st) return n00b_option_none(n00b_conduit_io_backend_t *);
     return n00b_option_from_nullable(n00b_conduit_io_backend_t *, st->io);
 }
+
+/**
+ * @brief Submit a work item for execution on a worker thread.
+ *
+ * The first call lazy-spawns a single worker thread; subsequent
+ * calls reuse it.  Use `n00b_conduit_service_add_worker` to bring
+ * up additional workers when concurrency demands it.
+ *
+ * Work items run in FIFO order.  Each work item is fire-and-forget:
+ * @p fn is responsible for any synchronization back to the caller
+ * (typically by writing into a result struct + signaling a
+ * condition variable, or by publishing on a conduit topic).
+ *
+ * @param svc Service pool.  Must be `start`-ed.
+ * @param fn  Work function.  Required.
+ * @param arg Opaque argument.  Borrowed; @p fn owns lifetime.
+ *
+ * @return Ok(true) on success.  Err on null args, on @p svc not
+ *         started, or when worker spawn fails.
+ */
+extern n00b_result_t(bool)
+n00b_conduit_service_submit(n00b_conduit_service_t *svc,
+                            n00b_conduit_work_fn    fn,
+                            void                   *arg);
+
+/**
+ * @brief Add an additional worker thread to the service.
+ *
+ * Workers share the job queue; multiple workers run jobs in
+ * parallel.  Returns Ok(svc_thread) on success.
+ */
+extern n00b_result_t(n00b_conduit_svc_thread_t *)
+n00b_conduit_service_add_worker(n00b_conduit_service_t *svc);
 
 /**
  * @brief Get the default IO service thread.

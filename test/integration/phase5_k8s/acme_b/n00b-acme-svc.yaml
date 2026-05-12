@@ -1,0 +1,44 @@
+# Phase 5 § 5.7 — Service + Ingress for the n00b-direct-ACME demo
+# Pod (variant B).
+#
+# Replaces the cert-manager-fronts ExternalName Service.  This time
+# n00b owns the HTTP-01 endpoint itself: the demo Pod runs an
+# embedded HTTP/1.1 server on port 80 that answers
+# `/.well-known/acme-challenge/<token>` with the key-authz the
+# n00b ACME library hands it via the challenge provider.  Pebble
+# validates by GET'ing that URL — kube-dns resolves the FQDN
+# `n00b-phase5.default.svc.cluster.local` to this Service's
+# ClusterIP, which kube-proxy routes straight to the demo Pod
+# (no ingress-nginx in the path — variant B is simpler than
+# variant A in that regard).
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: n00b-phase5
+  namespace: default
+  labels:
+    app: n00b-acme-direct
+spec:
+  type: ClusterIP
+  selector:
+    app: n00b-acme-direct
+  # Without a readinessProbe the Pod is considered "ready" the
+  # moment its container starts, but kube-proxy's EndpointSlice
+  # propagation lags ≥1s, leaving a window where Pebble's
+  # validator hits the Service VIP and gets connection refused
+  # (no endpoints yet).  publishNotReadyAddresses bypasses the
+  # ready filter — for a one-shot Job that's exactly the
+  # behaviour we want; the demo binary listens before it asks
+  # Pebble to validate, so unreadiness here is purely a
+  # propagation race, not a real outage.
+  publishNotReadyAddresses: true
+  ports:
+    - name: http
+      port: 80
+      # Pod listens on 8080 internally (no privileged-port
+      # capability); the Service maps 80 → 8080 so Pebble's
+      # HTTP-01 GET (which always probes :80) still reaches the
+      # Pod's responder.
+      targetPort: 8080
+      protocol: TCP

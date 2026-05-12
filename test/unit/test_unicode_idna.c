@@ -108,6 +108,101 @@ TEST(test_hebrew_geresh)
     ASSERT(r.value->u8_bytes > 0);
 }
 
+// --- ToUnicode (Punycode decode) tests ---
+
+TEST(test_to_unicode_xn_label)
+{
+    // xn--mnchen-3ya.de → münchen.de (Punycode round-trip)
+    n00b_unicode_idna_result_t r = n00b_unicode_idna_to_unicode(
+        r"xn--mnchen-3ya.de", .allocator = nullptr);
+    ASSERT_EQ(r.error, N00B_UNICODE_IDNA_OK);
+    ASSERT_STR_EQ(r.value->data, "m\xC3\xBCnchen.de");
+}
+
+TEST(test_ascii_roundtrip)
+{
+    // ASCII domain → ToASCII → ToUnicode → original
+    n00b_unicode_idna_result_t a = n00b_unicode_idna_to_ascii(
+        r"example.com", .allocator = nullptr);
+    ASSERT_EQ(a.error, N00B_UNICODE_IDNA_OK);
+    n00b_unicode_idna_result_t u = n00b_unicode_idna_to_unicode(
+        a.value, .allocator = nullptr);
+    ASSERT_EQ(u.error, N00B_UNICODE_IDNA_OK);
+    ASSERT_STR_EQ(u.value->data, "example.com");
+}
+
+TEST(test_unicode_roundtrip)
+{
+    // Unicode domain → ToASCII → ToUnicode → original
+    n00b_unicode_idna_result_t a = n00b_unicode_idna_to_ascii(
+        r"m\xC3\xBCnchen.de", .allocator = nullptr);
+    ASSERT_EQ(a.error, N00B_UNICODE_IDNA_OK);
+    n00b_unicode_idna_result_t u = n00b_unicode_idna_to_unicode(
+        a.value, .allocator = nullptr);
+    ASSERT_EQ(u.error, N00B_UNICODE_IDNA_OK);
+    ASSERT_STR_EQ(u.value->data, "m\xC3\xBCnchen.de");
+}
+
+TEST(test_multi_label_decode)
+{
+    // xn--mnchen-3ya.example.com → münchen.example.com
+    n00b_unicode_idna_result_t r = n00b_unicode_idna_to_unicode(
+        r"xn--mnchen-3ya.example.com", .allocator = nullptr);
+    ASSERT_EQ(r.error, N00B_UNICODE_IDNA_OK);
+    ASSERT_STR_EQ(r.value->data, "m\xC3\xBCnchen.example.com");
+}
+
+TEST(test_invalid_punycode)
+{
+    // xn-- followed by characters that are not valid Punycode digits.
+    n00b_unicode_idna_result_t r = n00b_unicode_idna_to_unicode(
+        r"xn--!!.com", .allocator = nullptr);
+    ASSERT_EQ(r.error, N00B_UNICODE_IDNA_PUNYCODE_ERROR);
+}
+
+TEST(test_leading_hyphen)
+{
+    // Label starting with hyphen is invalid.
+    n00b_unicode_idna_result_t r = n00b_unicode_idna_to_ascii(
+        r"-bad.com", .allocator = nullptr);
+    ASSERT_EQ(r.error, N00B_UNICODE_IDNA_PROCESSING_ERROR);
+}
+
+TEST(test_trailing_hyphen)
+{
+    n00b_unicode_idna_result_t r = n00b_unicode_idna_to_ascii(
+        r"bad-.com", .allocator = nullptr);
+    ASSERT_EQ(r.error, N00B_UNICODE_IDNA_PROCESSING_ERROR);
+}
+
+TEST(test_double_hyphen_pos_3_4)
+{
+    // Labels with hyphens at positions 3 and 4 are reserved for ACE.  A
+    // non-xn-- label that already has the "--" at that position is rejected.
+    n00b_unicode_idna_result_t r = n00b_unicode_idna_to_ascii(
+        r"ab--cd.com", .allocator = nullptr);
+    ASSERT_EQ(r.error, N00B_UNICODE_IDNA_PROCESSING_ERROR);
+}
+
+TEST(test_uppercase_xn_prefix)
+{
+    // "XN--mnchen-3ya" must also decode (case-insensitive ACE prefix).
+    n00b_unicode_idna_result_t r = n00b_unicode_idna_to_unicode(
+        r"XN--mnchen-3ya.de", .allocator = nullptr);
+    ASSERT_EQ(r.error, N00B_UNICODE_IDNA_OK);
+    ASSERT_STR_EQ(r.value->data, "m\xC3\xBCnchen.de");
+}
+
+TEST(test_punycode_with_no_basic_chars)
+{
+    // "xn--g6w" decodes to U+6E2C (測, UTF-8 0xE6 0xB8 0xAC): an all-non-ASCII
+    // label exercises the no-basic-codepoint branch of the Punycode decoder.
+    n00b_unicode_idna_result_t r = n00b_unicode_idna_to_unicode(
+        r"xn--g6w.example", .allocator = nullptr);
+    ASSERT_EQ(r.error, N00B_UNICODE_IDNA_OK);
+    ASSERT_STR_EQ(r.value->data, "\xE6\xB8\xAC.example");
+}
+
 static void run_tests(void)
 {
     RUN_TEST(test_ascii_passthrough);
@@ -121,6 +216,16 @@ static void run_tests(void)
     RUN_TEST(test_middle_dot_invalid);
     RUN_TEST(test_arabic_digit_mix);
     RUN_TEST(test_hebrew_geresh);
+    RUN_TEST(test_to_unicode_xn_label);
+    RUN_TEST(test_ascii_roundtrip);
+    RUN_TEST(test_unicode_roundtrip);
+    RUN_TEST(test_multi_label_decode);
+    RUN_TEST(test_invalid_punycode);
+    RUN_TEST(test_leading_hyphen);
+    RUN_TEST(test_trailing_hyphen);
+    RUN_TEST(test_double_hyphen_pos_3_4);
+    RUN_TEST(test_uppercase_xn_prefix);
+    RUN_TEST(test_punycode_with_no_basic_chars);
 }
 
 TEST_MAIN()

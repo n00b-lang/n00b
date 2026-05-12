@@ -1,0 +1,320 @@
+/**
+ * @file http_client.h
+ * @brief Public HTTP client API for n00b (Phase 6).
+ *
+ * Single entry point for issuing HTTP requests over h3 or h1 with
+ * automatic transport selection, fallback, and per-runtime
+ * connection pooling.  HTTPS only.
+ *
+ * @code
+ *   auto rr = n00b_http_request_sync(n00b_string_from_cstr(
+ *       "https://api.example.com/v1/widgets"));
+ *   if (n00b_result_is_ok(rr)) {
+ *       n00b_http_response_t *resp = n00b_result_get(rr);
+ *       int status = n00b_http_response_status(resp);
+ *       n00b_buffer_t *body = n00b_http_response_body(resp);
+ *       …
+ *   }
+ * @endcode
+ *
+ * The conduit-shaped variant `n00b_http_request` (returns a topic so
+ * sync + async share one entry point) lands in the next sub-chunk;
+ * this header ships the synchronous form first so callers have a
+ * stable surface to write against immediately.
+ *
+ * @see ~/dd/quic_6.md § 4 + § 5.
+ */
+#pragma once
+
+#include <stdint.h>
+#include <stdbool.h>
+#include "n00b.h"
+#include "core/buffer.h"
+#include "core/string.h"
+#include "adt/result.h"
+#include "conduit/conduit.h"
+#include "conduit/topic.h"
+#include "conduit/inbox.h"
+#include "conduit/subscription.h"
+#include "conduit/rw.h"
+#include "net/quic/quic_types.h"
+
+/* ----------------------------------------------------------------- */
+/* Response                                                          */
+/* ----------------------------------------------------------------- */
+
+/**
+ * @brief Negotiated transport for an HTTP response.
+ *
+ * Purely informational — useful for verbose logging / dashboards.
+ */
+typedef enum : uint8_t {
+    N00B_HTTP_TRANSPORT_UNKNOWN = 0,
+    N00B_HTTP_TRANSPORT_H1      = 1,  /**< HTTP/1.1 over TCP+TLS */
+    N00B_HTTP_TRANSPORT_H3      = 3,  /**< HTTP/3 over QUIC      */
+} n00b_http_transport_t;
+
+/** @brief Opaque parsed HTTP response. */
+typedef struct n00b_http_response n00b_http_response_t;
+
+/** @brief Numeric status code (100..599). */
+extern int n00b_http_response_status(n00b_http_response_t *resp);
+
+/** @brief Response body bytes.  Never nullptr; empty body = empty buffer. */
+extern n00b_buffer_t *
+n00b_http_response_body(n00b_http_response_t *resp);
+
+/**
+ * @brief Case-insensitive header lookup.
+ *
+ * @param resp  Response.
+ * @param name  Header name, any case.
+ * @return  Header value as a freshly heap-allocated buffer, or
+ *          nullptr if absent.  Last-wins on duplicates.
+ */
+extern n00b_buffer_t *
+n00b_http_response_header(n00b_http_response_t *resp,
+                           n00b_string_t        *name);
+
+/**
+ * @brief Case-insensitive header lookup returning a NUL-terminated
+ *        C string (convenience for ACME-style callers that pass the
+ *        value to `strcmp`, `strtoul`, etc).
+ *
+ * @param resp  Response.
+ * @param name  Header name (NUL-terminated, any case).
+ * @return  Borrowed pointer into a freshly allocated string with
+ *          the header value bytes + a trailing NUL.  nullptr if
+ *          the header is absent.
+ */
+extern const char *
+n00b_http_response_header_cstr(n00b_http_response_t *resp,
+                                const char           *name);
+
+/**
+ * @brief Number of response headers (insertion-order).
+ */
+extern size_t n00b_http_response_n_headers(n00b_http_response_t *resp);
+
+/**
+ * @brief Read the i-th header pair.
+ *
+ * @param resp     Response.
+ * @param idx      Zero-based index in [0, n_headers).
+ * @param name_out Borrowed lowercased header name (NUL-terminated).
+ * @param value_out Borrowed value (NUL-terminated).
+ * @return  true if @p idx is in range, false otherwise.
+ */
+extern bool
+n00b_http_response_header_at(n00b_http_response_t *resp,
+                              size_t                idx,
+                              n00b_string_t       **name_out,
+                              n00b_buffer_t       **value_out);
+
+/** @brief Negotiated transport (H1 or H3). */
+extern n00b_http_transport_t
+n00b_http_response_transport(n00b_http_response_t *resp);
+
+/**
+ * @brief Transport-level error code (0 on success).
+ *
+ * For successful HTTP responses (any status, including 4xx/5xx) this
+ * is 0 and `n00b_http_response_status()` carries the status.  For
+ * transport failures (DNS, TCP/TLS handshake, timeout, etc.) the
+ * status is 0 and this carries the negative `n00b_quic_err_t` or
+ * `n00b_http_err_t` code.  Pattern lets the topic-shaped dispatcher
+ * publish either outcome through a single payload type.
+ */
+extern int32_t
+n00b_http_response_error(n00b_http_response_t *resp);
+
+/* Generate the typed-conduit machinery (message / inbox / subscription
+ * / topic / read-write helpers) for `n00b_http_response_t *` payloads.
+ * After this, callers can use `n00b_conduit_read(n00b_http_response_t *,
+ * topic, .timeout_ms = ...)` for sync semantics and
+ * `n00b_conduit_subscribe(n00b_http_response_t *, ...)` for async. */
+N00B_CONDUIT_FULL_IMPL(n00b_http_response_t *);
+N00B_CONDUIT_RW_IMPL(n00b_http_response_t *);
+
+/* ----------------------------------------------------------------- */
+/* Request                                                           */
+/* ----------------------------------------------------------------- */
+
+/* Forward-declared so we don't pull internal h1 types into the
+ * public header.  Built via the chunk-2 internal API; chunk 12
+ * exposes a public header bag if callers want to construct one
+ * without using the chunk-2 internal header. */
+typedef struct n00b_http_h1_headers      n00b_http_h1_headers_t;
+typedef struct n00b_quic_trust           n00b_quic_trust_t;
+typedef struct n00b_http_cookie_jar      n00b_http_cookie_jar_t;
+typedef struct n00b_http_auth            n00b_http_auth_t;
+typedef struct n00b_http_connection_pool n00b_http_connection_pool_t;
+
+/**
+ * @brief Issue a synchronous HTTPS request.
+ *
+ * Selects the transport per the kwargs (h3-first by default with
+ * sequential h1 fallback), threads the round-trip through the
+ * per-runtime connection pool (see
+ * `n00b_http_get_connection_pool()`), and returns the parsed
+ * response.
+ *
+ * @param url  Absolute HTTPS URL.  Required.
+ *
+ * @kw method        Method verb.  Default `"GET"`.
+ * @kw body          Optional request body.
+ * @kw content_type  Required if @p body is non-NULL.  No default —
+ *                   callers pick (e.g. `"application/json"`).
+ * @kw extra         Optional caller-supplied headers (chunk 2 bag).
+ * @kw prefer_h3     When true, race h3 first; on err / timeout fall
+ *                   back to h1.  Default true.
+ * @kw h3_handshake_ms  Per-call deadline for the h3 handshake before
+ *                      falling back to h1.  Default 1500.
+ * @kw timeout_ms    Per-call wall-clock deadline including transport.
+ *                   Default 30000.
+ * @kw trust         Optional trust handle.  Default nullptr →
+ *                   system trust.  The picotls→OS trust bridge is
+ *                   wired for both h1 (via `acme_tls.c`) and h3
+ *                   (via `picotls_verify.c`); pass an explicit
+ *                   `n00b_quic_trust_pinned(...)` for self-signed
+ *                   test fixtures.
+ * @kw follow_redirects  Default false.  When true, dispatcher
+ *                   follows 3xx Location through up to
+ *                   @p max_redirects hops, applying RFC 9110
+ *                   § 15.4 method-preservation rules (301/302/303
+ *                   collapse to GET + drop body; 307/308 preserve
+ *                   method + body).  Location resolution implements
+ *                   RFC 3986 § 5 (transform-references): absolute
+ *                   URI, network-path (`//host/foo`), absolute path,
+ *                   relative path, and `..` segment removal — full
+ *                   resolver, not the chunk-7 minimal subset.
+ *                   Cross-scheme redirects to anything other than
+ *                   `https://` are rejected.
+ * @kw max_redirects Cap on hops when @p follow_redirects is true.
+ *                   Default 5.
+ * @kw auto_decompress  Default true.  Advertises
+ *                   `Accept-Encoding: gzip, deflate` (+ `br` /
+ *                   `zstd` if their libraries dlopen) and
+ *                   transparently decompresses responses that
+ *                   carry a matching `Content-Encoding`.
+ * @kw body_encoding Optional codec for request-body compression.
+ *                   `"gzip"` / `"deflate"` / nullptr / `"identity"`.
+ *                   When set the dispatcher compresses @p body
+ *                   and adds a `Content-Encoding:` header.
+ * @kw cookie_jar    Optional jar.  When set, the dispatcher
+ *                   attaches matching cookies via `Cookie:` and
+ *                   updates the jar from `Set-Cookie:` responses.
+ * @kw auth          Optional auth helper (Bearer + DPoP + mTLS
+ *                   storage + response verifier).
+ * @kw allocator     Default per-runtime conduit pool.
+ *
+ * @return  Result with the populated response, or err carrying
+ *          either an `n00b_quic_err_t` (transport failure) or an
+ *          `n00b_http_err_t` (URL / wire-format failure) — both are
+ *          negative ints so callers can switch on the value
+ *          uniformly.
+ */
+extern n00b_result_t(n00b_http_response_t *)
+n00b_http_request_sync(n00b_string_t *url)
+    _kargs {
+        n00b_string_t          *method            = nullptr;
+        n00b_buffer_t          *body              = nullptr;
+        n00b_string_t          *content_type      = nullptr;
+        n00b_http_h1_headers_t *extra             = nullptr;
+        bool                    prefer_h3         = true;
+        int32_t                 h3_handshake_ms   = 1500;
+        int32_t                 timeout_ms        = 30000;
+        n00b_quic_trust_t      *trust             = nullptr;
+        bool                    follow_redirects  = false;
+        int32_t                 max_redirects     = 5;
+        bool                    auto_decompress   = true;
+        n00b_string_t          *body_encoding     = nullptr;
+        n00b_http_cookie_jar_t *cookie_jar        = nullptr;
+        n00b_http_auth_t       *auth              = nullptr;
+        n00b_http_connection_pool_t *pool         = nullptr;
+        n00b_allocator_t       *allocator         = nullptr;
+    };
+
+/* ----------------------------------------------------------------- */
+/* Topic-shaped request                                              */
+/* ----------------------------------------------------------------- */
+
+/**
+ * @brief Issue an HTTPS request, returning a one-shot topic.
+ *
+ * Sync + async share this entry point:
+ *
+ * - **Sync use** — block until the response lands:
+ *   @code
+ *     auto tr = n00b_http_request(c, url);
+ *     n00b_conduit_topic_t(n00b_http_response_t *) *t = n00b_result_get(tr);
+ *     auto rr = n00b_conduit_read(n00b_http_response_t *, t,
+ *                                  .timeout_ms = 30000);
+ *     n00b_conduit_message_t(n00b_http_response_t *) *m = n00b_result_get(rr);
+ *     n00b_http_response_t *resp = m->payload;
+ *   @endcode
+ *
+ * - **Async use** — subscribe and let the conduit IO loop drive:
+ *   @code
+ *     auto tr = n00b_http_request(c, url);
+ *     n00b_conduit_subscribe(n00b_http_response_t *, t, my_inbox, .operations = ALL);
+ *     // ... drive the conduit; my_inbox receives the response ...
+ *   @endcode
+ *
+ * The dispatcher spawns a worker thread per request that runs the
+ * sync round-trip (chunk-1 URL parse → chunk-3 h3 with chunk-5
+ * race+fallback → chunk-2 h1) and publishes the response on the
+ * returned topic exactly once.  The topic is closed after the publish
+ * (the done-topic fires for any subscribers waiting on that signal).
+ *
+ * On transport failure the worker still publishes a response — with
+ * status = 0 and `n00b_http_response_error()` carrying the negative
+ * error code.  Callers pattern-match on
+ * `n00b_http_response_error() == 0 && status == X`.
+ *
+ * Same kwargs as `n00b_http_request_sync`.
+ */
+extern n00b_result_t(n00b_conduit_topic_t(n00b_http_response_t *) *)
+n00b_http_request(n00b_conduit_t *c, n00b_string_t *url)
+    _kargs {
+        n00b_string_t          *method            = nullptr;
+        n00b_buffer_t          *body              = nullptr;
+        n00b_string_t          *content_type      = nullptr;
+        n00b_http_h1_headers_t *extra             = nullptr;
+        bool                    prefer_h3         = true;
+        int32_t                 h3_handshake_ms   = 1500;
+        int32_t                 timeout_ms        = 30000;
+        n00b_quic_trust_t      *trust             = nullptr;
+        bool                    follow_redirects  = false;
+        int32_t                 max_redirects     = 5;
+        bool                    auto_decompress   = true;
+        n00b_string_t          *body_encoding     = nullptr;
+        n00b_http_cookie_jar_t *cookie_jar        = nullptr;
+        n00b_http_auth_t       *auth              = nullptr;
+        n00b_http_connection_pool_t *pool         = nullptr;
+        n00b_allocator_t       *allocator         = nullptr;
+    };
+
+/* ----------------------------------------------------------------- */
+/* Loss cache (h3 → h1 sticky downgrade)                             */
+/* ----------------------------------------------------------------- */
+
+/**
+ * @brief Reset the per-runtime h3 loss cache.
+ *
+ * The dispatcher remembers origins where h3 failed (handshake,
+ * timeout) for `N00B_HTTP_LOSS_CACHE_TTL_MS` so subsequent calls to
+ * the same origin skip h3 immediately.  Tests use this to clear
+ * state between runs; production code never needs to call it.
+ */
+extern void n00b_http_loss_cache_reset(void);
+
+/* ----------------------------------------------------------------- */
+/* Redirect helpers (test-visible)                                   */
+/* ----------------------------------------------------------------- */
+
+/** @brief True iff @p status is a 3xx redirect chunk-7 follows. */
+extern bool n00b_http_status_is_redirect(int status);
+
+/** @brief True iff @p status preserves the original method+body. */
+extern bool n00b_http_status_preserves_method(int status);

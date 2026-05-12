@@ -39,13 +39,6 @@ N00B_BUILD_BOOTSTRAP=1 bash build.sh                             # force bootstr
 N00B_CLEAN=1 N00B_BUILD_BOOTSTRAP=1 N00B_TEST=1 bash build.sh   # clean all + test
 ```
 
-After an initial build:
-```bash
-meson compile -C build_debug test_tuple                  # rebuild one target
-meson test -C build_debug --print-errorlogs tuple        # run one test
-meson test -C build_debug --print-errorlogs --suite unit # run unit suite
-```
-
 See `docs/best_practices.md` § Building for build options and bootstrap-only builds.
 
 ## Documentation rules

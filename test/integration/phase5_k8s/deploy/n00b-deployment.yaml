@@ -1,0 +1,32 @@
+# Phase 5 § 5.4 — Job (one-shot) running the demo's --loopback as the
+# baseline K8s smoke.  Subsequent sub-phases (5.5+) replace this with
+# a long-running Deployment + Keycloak-fronted services; for 5.4 we
+# just want to prove the cross-compiled image runs cleanly inside the
+# cluster.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: n00b-phase5
+  namespace: default
+  labels:
+    app: n00b-phase5
+spec:
+  template:
+    metadata:
+      labels:
+        app: n00b-phase5
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: demo
+          image: n00b-phase5-demo:latest
+          imagePullPolicy: IfNotPresent
+          args: ["--loopback"]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+  backoffLimit: 0

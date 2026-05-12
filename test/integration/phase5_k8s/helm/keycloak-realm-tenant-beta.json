@@ -1,0 +1,74 @@
+{
+  "realm": "tenant-beta",
+  "enabled": true,
+  "displayName": "Tenant Beta",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "accessTokenLifespan": 3600,
+  "roles": {
+    "realm": [
+      { "name": "admin",    "description": "Full read/write" },
+      { "name": "user",     "description": "Standard read/write" },
+      { "name": "readonly", "description": "Read-only" }
+    ]
+  },
+  "users": [
+    { "username": "alice",
+      "enabled": true, "emailVerified": true,
+      "firstName": "Alice", "lastName": "Beta",
+      "email": "alice@tenant-beta.example",
+      "credentials": [{ "type": "password", "value": "alice-pw", "temporary": false }],
+      "realmRoles": ["admin"]
+    },
+    { "username": "eve",
+      "enabled": true, "emailVerified": true,
+      "firstName": "Eve", "lastName": "Beta",
+      "email": "eve@tenant-beta.example",
+      "credentials": [{ "type": "password", "value": "eve-pw", "temporary": false }],
+      "realmRoles": ["user"]
+    },
+    { "username": "frank",
+      "enabled": true, "emailVerified": true,
+      "firstName": "Frank", "lastName": "Beta",
+      "email": "frank@tenant-beta.example",
+      "credentials": [{ "type": "password", "value": "frank-pw", "temporary": false }],
+      "realmRoles": ["readonly"]
+    },
+    { "username": "grace",
+      "enabled": true, "emailVerified": true,
+      "firstName": "Grace", "lastName": "Beta",
+      "email": "grace@tenant-beta.example",
+      "credentials": [{ "type": "password", "value": "grace-pw", "temporary": false }],
+      "realmRoles": ["user"]
+    }
+  ],
+  "clients": [
+    {
+      "clientId": "phase5-mtls",
+      "enabled": true,
+      "publicClient": false,
+      "secret": "phase5-beta-secret",
+      "directAccessGrantsEnabled": true,
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "attributes": {
+        "tls.client.certificate.bound.access.tokens": "true"
+      },
+      "protocolMappers": [
+        {
+          "name": "audience-phase5-beta",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "phase5-beta",
+            "id.token.claim": "false",
+            "access.token.claim": "true"
+          }
+        }
+      ]
+    }
+  ]
+}

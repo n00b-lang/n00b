@@ -28,6 +28,7 @@ else {
 }
 
 $env:N00B_LIB_DIR = $BundleDir
+$env:N00B_RESHARP_TEST_DIR = Join-Path $BundleDir 'test-data\resharp\tests'
 $env:PATH = "$BundleDir;$env:PATH"
 
 $Results = [System.Collections.Generic.List[object]]::new()
@@ -230,6 +231,7 @@ $TestNames = @(
     'test_regex_parse.exe',
     'test_regex_match.exe',
     'test_regex_api.exe',
+    'test_regex_resharp.exe',
     'test_io.exe',
     'test_io_windows.exe',
     'test_signal.exe',

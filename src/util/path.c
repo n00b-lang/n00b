@@ -16,68 +16,12 @@
 #endif
 
 #include <dirent.h>
-#ifndef _WIN32
 #include <pwd.h>
-#endif
 #include <sys/types.h>
 #include <unistd.h>
 #include <limits.h>
 #include <string.h>
 #include <stdlib.h>
-
-#ifdef _WIN32
-// ============================================================================
-// Windows POSIX shims — minimal stubs so the rest of this file compiles.
-// Behavior of POSIX-only operations on Windows is best-effort:
-//   - lstat() falls back to stat() (no symlink kind on Windows here)
-//   - readlink() / getgroups() return failure
-//   - geteuid() returns 0
-//   - mkdir() drops the mode argument
-// ============================================================================
-#include <direct.h>
-
-#ifndef S_IXUSR
-#define S_IXUSR 0100
-#endif
-#ifndef S_IXGRP
-#define S_IXGRP 0010
-#endif
-#ifndef S_IXOTH
-#define S_IXOTH 0001
-#endif
-#ifndef NGROUPS_MAX
-#define NGROUPS_MAX 32
-#endif
-
-typedef int n00b_uid_t;
-typedef int n00b_gid_t;
-#define uid_t n00b_uid_t
-#define gid_t n00b_gid_t
-
-static inline int n00b_lstat_compat(const char *p, struct stat *st) {
-    return stat(p, st);
-}
-#define lstat(p, st) n00b_lstat_compat((p), (st))
-
-static inline int n00b_readlink_compat(const char *p, char *b, size_t n) {
-    (void)p; (void)b; (void)n;
-    errno = EINVAL;
-    return -1;
-}
-#define readlink(p, b, n) n00b_readlink_compat((p), (b), (n))
-
-static inline n00b_uid_t n00b_geteuid_compat(void) { return 0; }
-#define geteuid() n00b_geteuid_compat()
-
-static inline int n00b_getgroups_compat(int n, n00b_gid_t *g) {
-    (void)n; (void)g;
-    return 0;
-}
-#define getgroups(n, g) n00b_getgroups_compat((n), (g))
-
-// Windows mkdir() takes only one argument; drop the mode.
-#define mkdir(p, m) _mkdir(p)
-#endif // _WIN32
 
 // ============================================================================
 // Helpers
@@ -247,42 +191,27 @@ n00b_string_t *
 n00b_get_user_dir(n00b_string_t *user)
 {
     n00b_string_t *result;
-#ifndef _WIN32
     struct passwd *pw;
-#endif
 
     if (user == nullptr) {
         const char *home = getenv("HOME");
-#ifdef _WIN32
-        if (!home) home = getenv("USERPROFILE");
-#endif
 
         if (home) {
             result = n00b_string_from_cstr(home);
         }
         else {
-#ifndef _WIN32
             pw = getpwent();
             result = (pw == nullptr)
                 ? n00b_string_from_cstr("/")
                 : n00b_string_from_cstr(pw->pw_dir);
-#else
-            result = n00b_string_from_cstr("C:\\");
-#endif
         }
     }
     else {
-#ifndef _WIN32
         pw = getpwnam(user->data);
         if (pw == nullptr) {
             return user;
         }
         result = n00b_string_from_cstr(pw->pw_dir);
-#else
-        // Looking up other users' home dirs isn't a portable concept on
-        // Windows. Match the Unix fallback when the user is unknown.
-        return user;
-#endif
     }
 
     return remove_extra_slashes(result);
@@ -671,23 +600,6 @@ n00b_app_path(void)
 {
     char buf[PROC_PIDPATHINFO_MAXSIZE];
     proc_pidpath(getpid(), buf, PROC_PIDPATHINFO_MAXSIZE);
-    return n00b_resolve_path(n00b_string_from_cstr(buf));
-}
-#elif defined(_WIN32)
-// Forward-declare GetModuleFileNameA rather than #include <windows.h>:
-// windows.h transitively pulls in MMX intrinsic headers that ncc cannot
-// tokenize (compound-literal vector casts in mmintrin.h).
-#define N00B_WIN_MAX_PATH 260
-extern unsigned long __stdcall
-GetModuleFileNameA(void *hModule, char *lpFilename, unsigned long nSize);
-
-n00b_string_t *
-n00b_app_path(void)
-{
-    char buf[N00B_WIN_MAX_PATH];
-    unsigned long n = GetModuleFileNameA(NULL, buf, N00B_WIN_MAX_PATH);
-    if (n == 0 || n == N00B_WIN_MAX_PATH) return n00b_string_from_cstr(".");
-    buf[n] = 0;
     return n00b_resolve_path(n00b_string_from_cstr(buf));
 }
 #else
