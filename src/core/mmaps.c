@@ -127,29 +127,50 @@ n00b_mmap_lookup(n00b_mmap_ctx_t *ctx, void *addr)
         return n00b_option_none(n00b_mmap_info_t *);
     }
 
+    /* Walk the interval tree directly so we keep traversing past
+     * `n00b_alloc_range_t` sub-range entries until we hit the segment-
+     * level `n00b_mmap_info_t *` covering the same address.  Sub-ranges
+     * registered by headerless allocators (pools) frequently overlap the
+     * address range of arena segments after many mmap()/munmap() cycles,
+     * and `interval_search_any` would otherwise return the sub-range
+     * node and cause the lookup to incorrectly report "no mmap" for a
+     * managed segment that is still registered. */
+    mmap_tree_t      *tree   = ctx->mmap_tree;
+    n00b_mmap_info_t *result = nullptr;
+
     mmap_read_lock(ctx);
+    n00b_data_read_lock(tree->lock);
 
-    // Use search_any to avoid allocating a temp stack per call.
-    // This is called per potential pointer during GC collection.
-    auto r = n00b_interval_search_any(ctx->mmap_tree, start, end);
+    if (tree->root != nullptr) {
+        n00b_stack_clear(tree->stack);
+        n00b_stack_push(tree->stack, (void *)tree->root);
+        while (n00b_stack_len(tree->stack) != 0) {
+            mmap_node_t *n = (mmap_node_t *)n00b_option_get(
+                n00b_stack_pop(void *, tree->stack));
+            if (n->low < end && start < n->high
+                && n00b_variant_is_type(n->data, n00b_mmap_info_t *)) {
+                result = n00b_variant_get(n->data, n00b_mmap_info_t *);
+                break;
+            }
+            if (n->left != nullptr
+                && n->left->maximum > start
+                && n->left->minimum < end) {
+                n00b_stack_push(tree->stack, (void *)n->left);
+            }
+            if (n->right != nullptr
+                && n->right->maximum > start
+                && n->right->minimum < end) {
+                n00b_stack_push(tree->stack, (void *)n->right);
+            }
+        }
+    }
 
+    n00b_data_unlock(tree->lock);
     mmap_read_unlock(ctx);
 
-    if (n00b_result_is_err(r)) {
-        return n00b_option_none(n00b_mmap_info_t *);
+    if (result) {
+        return n00b_option_set(n00b_mmap_info_t *, result);
     }
-
-    mmap_node_t *node = n00b_result_get(r);
-
-    if (!node) {
-        return n00b_option_none(n00b_mmap_info_t *);
-    }
-
-    if (n00b_variant_is_type(node->data, n00b_mmap_info_t *)) {
-        return n00b_option_set(n00b_mmap_info_t *,
-                                n00b_variant_get(node->data, n00b_mmap_info_t *));
-    }
-
     return n00b_option_none(n00b_mmap_info_t *);
 }
 
