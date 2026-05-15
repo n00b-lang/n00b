@@ -182,7 +182,6 @@ static const char *k_known_order[] = {
     "CHALK_VERSION",
     "TIMESTAMP_WHEN_CHALKED",
     "HASH",
-    "METADATA_HASH",
     "METADATA_ID",
     "ATTESTATION",
 };
@@ -280,18 +279,18 @@ n00b_chalk_mark_finalize(n00b_chalk_mark_t *mark,
         mark_put(mark->dict, "ATTESTATION", mark->attestation);
     }
 
-    // ---- METADATA_HASH + METADATA_ID (derived from normalize) ----------
+    // ---- METADATA_ID (derived from normalize sha256) -------------------
+    // METADATA_HASH is intentionally NOT emitted. chalk's system plugin
+    // (system.nim:66-75) makes METADATA_ID validation mandatory but
+    // METADATA_HASH validation conditional on presence — leaving it out
+    // is safe and keeps the mark smaller.
     n00b_buffer_t       *norm = n00b_chalk_normalize(mark->dict);
     n00b_sha256_digest_t mhw;
     n00b_sha256_hash(norm->data, norm->byte_len, mhw);
     uint8_t mh_bytes[32];
     sha256_words_to_bytes(mhw, mh_bytes);
 
-    n00b_string_t *meta_hex = sha256_to_hex_string(mh_bytes);
-    n00b_string_t *meta_id  = n00b_chalk_id_format_sha256(mh_bytes);
-
-    mark_put(mark->dict, "METADATA_HASH",
-             n00b_json_string_new(meta_hex->data));
+    n00b_string_t *meta_id = n00b_chalk_id_format_sha256(mh_bytes);
     mark_put(mark->dict, "METADATA_ID",
              n00b_json_string_new(meta_id->data));
 
