@@ -22,4 +22,5 @@ n00b_chalk_src = files(
     'macho.c',
     'lang_table.c',
     'source.c',
+    'elf.c',
 )

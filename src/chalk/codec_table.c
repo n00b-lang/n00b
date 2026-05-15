@@ -103,6 +103,20 @@ const n00b_chalk_codec_entry_t n00b_chalk_codec_table[] = {
         .extract_buffer = n00b_chalk_source_extract_buffer,
         .hash_buffer    = n00b_chalk_source_hash_buffer,
     },
+    {
+        .codec          = N00B_CHALK_CODEC_ELF,
+        .insert_buffer  = n00b_chalk_elf_insert_buffer,
+        .delete_buffer  = n00b_chalk_elf_delete_buffer,
+        .extract_buffer = n00b_chalk_elf_extract_buffer,
+        .hash_buffer    = n00b_chalk_elf_hash_buffer,
+    },
+    {
+        .codec          = N00B_CHALK_CODEC_ELF_FALLBACK,
+        .insert_buffer  = nullptr, // fallback codec doesn't insert
+        .delete_buffer  = nullptr,
+        .extract_buffer = n00b_chalk_elf_fallback_extract_buffer,
+        .hash_buffer    = n00b_chalk_elf_fallback_hash_buffer,
+    },
     { .codec = N00B_CHALK_CODEC_NONE },
 };
 
@@ -276,6 +290,8 @@ n00b_chalk_hash_buffer(n00b_buffer_t *bytes)
             return n00b_chalk_certs_##suffix args;                           \
         case N00B_CHALK_CODEC_SOURCE:                                        \
             return n00b_chalk_source_##suffix args;                          \
+        case N00B_CHALK_CODEC_ELF:                                           \
+            return n00b_chalk_elf_##suffix args;                             \
         default: break;                                                      \
         }                                                                    \
     } while (0)
