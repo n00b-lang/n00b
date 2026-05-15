@@ -82,18 +82,22 @@ fmt_dec(uint64_t v, char out[24])
 // Entry collection
 // -----------------------------------------------------------------------
 
+// Per-entry hash context. The streaming hash holds, at any moment,
+// at most: the sorted-name table + the current entry's name + a
+// fixed-size streaming chunk (or a single codec-detected entry's
+// full bytes when a chalkable artifact is nested inside the zip).
 typedef struct {
-    char    *name;
-    size_t   name_len;
-    uint8_t *bytes;
-    size_t   bytes_len;
-} zip_entry_t;
+    char     *name;
+    size_t    name_len;
+    zip_int64_t index;
+    zip_uint64_t size;
+} zip_entry_ref_t;
 
 static int
-entry_cmp(const void *a, const void *b)
+entry_ref_cmp(const void *a, const void *b)
 {
-    const zip_entry_t *pa = (const zip_entry_t *)a;
-    const zip_entry_t *pb = (const zip_entry_t *)b;
+    const zip_entry_ref_t *pa = (const zip_entry_ref_t *)a;
+    const zip_entry_ref_t *pb = (const zip_entry_ref_t *)b;
     size_t n = pa->name_len < pb->name_len ? pa->name_len : pb->name_len;
     int c = memcmp(pa->name, pb->name, n);
     if (c != 0) return c;
@@ -102,22 +106,21 @@ entry_cmp(const void *a, const void *b)
     return 0;
 }
 
-// Read all archive entries (skipping `chalk.json`) into a fresh array.
-// Each entry's bytes pass through the chalk codec dispatcher's
-// hash_buffer when a codec claims them — that's the in-process
-// sub-scan: nested artifacts contribute their unchalked-form bytes,
-// not their raw chalked bytes.
+#define N00B_CHALK_ZIP_CHUNK (64 * 1024)
+
+// Walk the archive once: collect (name, index, size) refs for the
+// entries we'll hash. Does NOT read entry content. O(num_entries)
+// metadata only.
 static bool
-read_entries(struct zip_t *zip, zip_entry_t **out_entries,
+list_entries(struct zip_t *zip, zip_entry_ref_t **out_refs,
              size_t *out_n, bool *out_had_chalk_json)
 {
     zip_int64_t count = zip_get_num_entries(zip, 0);
     if (count < 0) return false;
     *out_had_chalk_json = false;
 
-    // Worst case: all entries kept.
-    zip_entry_t *entries = n00b_alloc_array(zip_entry_t, (size_t)count);
-    size_t       n       = 0;
+    zip_entry_ref_t *refs = n00b_alloc_array(zip_entry_ref_t, (size_t)count);
+    size_t           n    = 0;
 
     for (zip_int64_t i = 0; i < count; i++) {
         zip_stat_t st;
@@ -127,71 +130,108 @@ read_entries(struct zip_t *zip, zip_entry_t **out_entries,
             *out_had_chalk_json = true;
             continue;
         }
-        // Skip directory entries (zero-length, name ends in '/').
         size_t nl = strlen(st.name);
         if (nl > 0 && st.name[nl - 1] == '/') continue;
-
-        zip_file_t *zf = zip_fopen_index(zip, (zip_uint64_t)i, 0);
-        if (!zf) continue;
-
-        uint8_t *buf = (uint8_t *)n00b_alloc_array(char, (size_t)st.size + 1);
-        zip_int64_t got = zip_fread(zf, buf, st.size);
-        zip_fclose(zf);
-        if (got < 0 || (zip_uint64_t)got != st.size) continue;
-
-        // Recursive sub-scan: if a libchalk codec claims these bytes,
-        // hash through its hash_buffer (which returns the SHA-256 of
-        // the unchalked form). Otherwise feed the bytes verbatim.
-        n00b_buffer_t *as_buf
-            = n00b_buffer_from_bytes((char *)buf, (int64_t)st.size);
-        n00b_chalk_codec_id_t cid = n00b_chalk_codec_detect(as_buf, nullptr);
-        const n00b_chalk_codec_entry_t *ent = n00b_chalk_codec_entry(cid);
-        if (ent && ent->hash_buffer) {
-            auto hr = ent->hash_buffer(as_buf);
-            if (n00b_result_is_ok(hr)) {
-                n00b_buffer_t *h = n00b_result_get(hr);
-                buf      = (uint8_t *)h->data;
-                got      = (zip_int64_t)h->byte_len;
-            }
-        }
 
         char *name_copy = n00b_alloc_array(char, nl + 1);
         memcpy(name_copy, st.name, nl + 1);
 
-        entries[n].name      = name_copy;
-        entries[n].name_len  = nl;
-        entries[n].bytes     = buf;
-        entries[n].bytes_len = (size_t)got;
+        refs[n].name     = name_copy;
+        refs[n].name_len = nl;
+        refs[n].index    = i;
+        refs[n].size     = st.size;
         n++;
     }
-
-    qsort(entries, n, sizeof(zip_entry_t), entry_cmp);
-    *out_entries = entries;
-    *out_n       = n;
+    qsort(refs, n, sizeof(zip_entry_ref_t), entry_ref_cmp);
+    *out_refs = refs;
+    *out_n    = n;
     return true;
 }
 
-static n00b_buffer_t *
-hash_entries(zip_entry_t *entries, size_t n)
+// Stream a single entry into the running sha256 context. Reads in
+// fixed chunks; resident bytes at any moment are bounded by the
+// chunk size (64 KiB).
+static bool
+stream_entry_into_hash(struct zip_t *zip, zip_uint64_t index,
+                       zip_uint64_t size, n00b_sha256_ctx_t *ctx)
 {
-    n00b_sha256_ctx_t ctx;
-    n00b_sha256_init(&ctx);
-
-    char dec[24];
-    size_t dl = fmt_dec((uint64_t)n, dec);
-    n00b_sha256_update(&ctx, dec, dl);
-
-    for (size_t i = 0; i < n; i++) {
-        dl = fmt_dec((uint64_t)entries[i].name_len, dec);
-        n00b_sha256_update(&ctx, dec, dl);
-        n00b_sha256_update(&ctx, entries[i].name, entries[i].name_len);
-
-        dl = fmt_dec((uint64_t)entries[i].bytes_len, dec);
-        n00b_sha256_update(&ctx, dec, dl);
-        n00b_sha256_update(&ctx, entries[i].bytes, entries[i].bytes_len);
+    zip_file_t *zf = zip_fopen_index(zip, index, 0);
+    if (!zf) return false;
+    uint8_t chunk[N00B_CHALK_ZIP_CHUNK];
+    zip_uint64_t remaining = size;
+    while (remaining > 0) {
+        zip_uint64_t want = remaining > N00B_CHALK_ZIP_CHUNK
+                                ? N00B_CHALK_ZIP_CHUNK : remaining;
+        zip_int64_t got = zip_fread(zf, chunk, want);
+        if (got < 0) { zip_fclose(zf); return false; }
+        if (got == 0) break;
+        n00b_sha256_update(ctx, chunk, (size_t)got);
+        remaining -= (zip_uint64_t)got;
     }
+    zip_fclose(zf);
+    return true;
+}
+
+// For entries that match a libchalk codec, we still need the full
+// bytes — codecs require parse-once access to compute their
+// unchalked-form hash. Read the entry into RAM, run the codec's
+// hash_buffer, then feed the 32-byte digest into the outer chain.
+// Returns the per-entry "content length" to use in the canonical
+// concatenation (matches chalk's hashZipPath semantics).
+static bool
+hash_codec_entry(struct zip_t *zip, zip_uint64_t index, zip_uint64_t size,
+                 n00b_chalk_codec_id_t cid, n00b_sha256_ctx_t *ctx,
+                 uint64_t *out_payload_len)
+{
+    zip_file_t *zf = zip_fopen_index(zip, index, 0);
+    if (!zf) return false;
+    uint8_t *buf = (uint8_t *)n00b_alloc_array(char, (size_t)size);
+    zip_int64_t got = zip_fread(zf, buf, size);
+    zip_fclose(zf);
+    if (got < 0 || (zip_uint64_t)got != size) return false;
+
+    n00b_buffer_t *as_buf = n00b_buffer_from_bytes((char *)buf, (int64_t)size);
+    const n00b_chalk_codec_entry_t *ent = n00b_chalk_codec_entry(cid);
+    if (ent && ent->hash_buffer) {
+        auto hr = ent->hash_buffer(as_buf);
+        if (n00b_result_is_ok(hr)) {
+            n00b_buffer_t *h = n00b_result_get(hr);
+            n00b_sha256_update(ctx, h->data, h->byte_len);
+            *out_payload_len = (uint64_t)h->byte_len;
+            return true;
+        }
+    }
+    // Fall through: codec refused; feed raw bytes.
+    n00b_sha256_update(ctx, buf, (size_t)size);
+    *out_payload_len = (uint64_t)size;
+    return true;
+}
+
+// Returns N00B_CHALK_CODEC_NONE if first ≤8 bytes don't match any
+// known magic. Done with one libzip read; allocates a tiny stack
+// buffer, no full-entry materialization.
+static n00b_chalk_codec_id_t
+detect_entry_codec(struct zip_t *zip, zip_uint64_t index, zip_uint64_t size)
+{
+    if (size < 4) return N00B_CHALK_CODEC_NONE;
+    zip_file_t *zf = zip_fopen_index(zip, index, 0);
+    if (!zf) return N00B_CHALK_CODEC_NONE;
+    uint8_t head[64] = {0};
+    zip_uint64_t want = size > sizeof(head) ? sizeof(head) : size;
+    zip_int64_t got = zip_fread(zf, head, want);
+    zip_fclose(zf);
+    if (got <= 0) return N00B_CHALK_CODEC_NONE;
+    n00b_buffer_t probe = (n00b_buffer_t){ .data = (char *)head,
+                                           .byte_len = (size_t)got,
+                                           .alloc_len = (size_t)got };
+    return n00b_chalk_codec_detect(&probe, nullptr);
+}
+
+static n00b_buffer_t *
+finalize_ctx(n00b_sha256_ctx_t *ctx)
+{
     n00b_sha256_digest_t words;
-    n00b_sha256_finalize(&ctx, words);
+    n00b_sha256_finalize(ctx, words);
     uint8_t bytes[32];
     for (int i = 0; i < 8; i++) {
         uint32_t w = words[i];
@@ -201,6 +241,56 @@ hash_entries(zip_entry_t *entries, size_t n)
         bytes[i * 4 + 3] = (uint8_t)(w & 0xff);
     }
     return n00b_buffer_from_bytes((char *)bytes, 32);
+}
+
+// Stream the canonical-form hash without ever holding more than one
+// entry at a time (or, for codec-matching entries, that one entry's
+// bytes). For a 5 GB jar with no nested artifacts, peak resident is
+// the chunk size; with one 200 MB nested ELF, peak is 200 MB.
+static n00b_buffer_t *
+hash_archive_streaming(struct zip_t *zip)
+{
+    zip_entry_ref_t *refs = nullptr;
+    size_t           n    = 0;
+    bool             dummy;
+    if (!list_entries(zip, &refs, &n, &dummy)) return nullptr;
+
+    n00b_sha256_ctx_t ctx;
+    n00b_sha256_init(&ctx);
+
+    char dec[24];
+    size_t dl = fmt_dec((uint64_t)n, dec);
+    n00b_sha256_update(&ctx, dec, dl);
+
+    for (size_t i = 0; i < n; i++) {
+        dl = fmt_dec((uint64_t)refs[i].name_len, dec);
+        n00b_sha256_update(&ctx, dec, dl);
+        n00b_sha256_update(&ctx, refs[i].name, refs[i].name_len);
+
+        n00b_chalk_codec_id_t cid = detect_entry_codec(zip, refs[i].index,
+                                                       refs[i].size);
+        uint64_t payload_len;
+        if (cid != N00B_CHALK_CODEC_NONE) {
+            // Nested chalkable artifact — has to be materialized so
+            // the codec can compute its unchalked-form hash.
+            if (!hash_codec_entry(zip, refs[i].index, refs[i].size, cid,
+                                  &ctx, &payload_len)) return nullptr;
+            dl = fmt_dec(payload_len, dec);
+        }
+        else {
+            // Non-codec entry — stream straight through the hash.
+            dl = fmt_dec((uint64_t)refs[i].size, dec);
+            // Decimal length goes before the payload bytes in chalk's
+            // canonical format; we already know the size from
+            // zip_stat.
+            n00b_sha256_update(&ctx, dec, dl);
+            if (!stream_entry_into_hash(zip, refs[i].index, refs[i].size,
+                                        &ctx)) return nullptr;
+            continue;
+        }
+        n00b_sha256_update(&ctx, dec, dl);
+    }
+    return finalize_ctx(&ctx);
 }
 
 // -----------------------------------------------------------------------
@@ -257,16 +347,10 @@ n00b_chalk_zip_hash_buffer(n00b_buffer_t *bytes)
     struct zip_t *z   = open_zip_buffer(bytes, false, &src);
     if (!z) return n00b_result_err(n00b_buffer_t *, 2);
 
-    zip_entry_t *entries = nullptr;
-    size_t       n       = 0;
-    bool         dummy   = false;
-    if (!read_entries(z, &entries, &n, &dummy)) {
-        zip_close(z);
-        return n00b_result_err(n00b_buffer_t *, 3);
-    }
-    n00b_buffer_t *h = hash_entries(entries, n);
+    n00b_buffer_t *h = hash_archive_streaming(z);
     zip_close(z);
     zip_source_free(src);
+    if (!h) return n00b_result_err(n00b_buffer_t *, 3);
     return n00b_result_ok(n00b_buffer_t *, h);
 }
 
