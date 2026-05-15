@@ -11,4 +11,6 @@ n00b_chalk_src = files(
     'sidecar.c',
     'certs.c',
     'macos_wrap.c',
+    'gguf_core.c',
+    'gguf.c',
 )
