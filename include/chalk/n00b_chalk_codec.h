@@ -7,6 +7,9 @@
  */
 
 #include <n00b.h>
+#include "parsers/json.h"
+#include "adt/dict.h"
+#include "adt/result.h"
 
 /** Identifies one of the supported codec implementations. */
 typedef enum {
@@ -44,7 +47,7 @@ typedef struct {
 typedef struct {
     n00b_chalk_codec_id_t codec;
     n00b_chalk_out_kind_t source;
-    n00b_dict_t(n00b_string_t *, n00b_json_t *) * mark;
+    n00b_dict_t(n00b_string_t *, n00b_json_node_t *) * mark;
 } n00b_chalk_extract_result_t;
 
 /** Forward-declare the mark handle so codec headers can mention it

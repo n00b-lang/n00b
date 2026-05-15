@@ -7,6 +7,8 @@
  *  table (\x05) excluding keys named MAGIC, SIGNATURE, SIGN_PARAMS. */
 
 #include <n00b.h>
+#include "parsers/json.h"
+#include "adt/dict.h"
 
 n00b_buffer_t *
-    n00b_chalk_normalize(n00b_dict_t(n00b_string_t *, n00b_json_t *) *dict);
+    n00b_chalk_normalize(n00b_dict_t(n00b_string_t *, n00b_json_node_t *) *dict);

@@ -7,6 +7,7 @@
  *  `src/chalk/codec_table.c`. */
 
 #include <n00b.h>
+#include "adt/result.h"
 #include <chalk/n00b_chalk_codec.h>
 #include <chalk/n00b_chalk_mark.h>
 
