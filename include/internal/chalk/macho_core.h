@@ -24,7 +24,7 @@
  */
 #pragma once
 
-#include "internal/chalk/macho_parse.h"
+#include "compiler/objfile/macho.h"
 
 // ============================================================================
 // On-disk note_command struct (40 bytes, NOT in macho_types.h yet).
@@ -80,7 +80,7 @@ typedef struct {
  *         free(); do not free .payload).  NULL if @p bin has no
  *         LC_NOTE commands or on allocation failure.
  */
-extern chalk_macho_note_t *chalk_macho_get_notes(macho_binary_t *bin,
+extern chalk_macho_note_t *chalk_macho_get_notes(n00b_macho_binary_t *bin,
                                                   size_t *out_count);
 
 /// Code-signature classification for `chalk_macho_signature_kind`.
@@ -103,7 +103,7 @@ typedef enum {
  *
  * Reads from bin->stream->buf, no allocation.
  */
-extern chalk_macho_sig_kind_t chalk_macho_signature_kind(macho_binary_t *bin);
+extern chalk_macho_sig_kind_t chalk_macho_signature_kind(n00b_macho_binary_t *bin);
 
 /**
  * @brief Find the chalk LC_NOTE and copy its payload into a freshly-
@@ -114,7 +114,7 @@ extern chalk_macho_sig_kind_t chalk_macho_signature_kind(macho_binary_t *bin);
  * @return malloc'd payload bytes (caller frees), or NULL if no chalk
  *         note is present.
  */
-extern uint8_t *chalk_macho_get_chalk_payload(macho_binary_t *bin,
+extern uint8_t *chalk_macho_get_chalk_payload(n00b_macho_binary_t *bin,
                                               size_t *out_size);
 
 // ============================================================================
@@ -141,7 +141,7 @@ typedef enum {
 //
 // These functions mutate the raw bytes inside the binary's stream
 // buffer.  After a successful call, callers MUST treat the parsed
-// `macho_binary_t *bin` as stale: the load command pointers,
+// `n00b_macho_binary_t *bin` as stale: the load command pointers,
 // segment/section offsets, etc. all refer to pre-mutation data.
 // Reparse the stream (or call chalk_macho_get_buffer() to retrieve
 // the new bytes and write them out) before further use.
@@ -191,9 +191,9 @@ typedef enum {
  *         CHALK_MACHO_ERR_FAT for fat binaries.
  *         CHALK_MACHO_ERR_BAD_NOTE if structure is malformed.
  */
-extern chalk_macho_status_t chalk_macho_strip_signature(macho_binary_t *bin);
+extern chalk_macho_status_t chalk_macho_strip_signature(n00b_macho_binary_t *bin);
 
-extern chalk_macho_status_t chalk_macho_add_note(macho_binary_t *bin,
+extern chalk_macho_status_t chalk_macho_add_note(n00b_macho_binary_t *bin,
                                                   const uint8_t *payload,
                                                   size_t payload_size);
 
@@ -217,7 +217,7 @@ extern chalk_macho_status_t chalk_macho_add_note(macho_binary_t *bin,
  *
  * @post On success, bin's parsed structs are STALE.
  */
-extern chalk_macho_status_t chalk_macho_remove_note(macho_binary_t *bin);
+extern chalk_macho_status_t chalk_macho_remove_note(n00b_macho_binary_t *bin);
 
 /**
  * @brief Compute the chalk "unchalked hash" of a binary.
@@ -236,7 +236,7 @@ extern chalk_macho_status_t chalk_macho_remove_note(macho_binary_t *bin);
  *                  hex digest on success.
  * @return CHALK_MACHO_OK on success, or CHALK_MACHO_ERR_*.
  */
-extern chalk_macho_status_t chalk_macho_unchalked_hash(macho_binary_t *bin,
+extern chalk_macho_status_t chalk_macho_unchalked_hash(n00b_macho_binary_t *bin,
                                                        char out_hex[65]);
 
 /**
@@ -250,5 +250,5 @@ extern chalk_macho_status_t chalk_macho_unchalked_hash(macho_binary_t *bin,
  * @return Pointer into bin->stream's backing buffer (NOT owned;
  *         lifetime tied to the parsed binary).  NULL on error.
  */
-extern const uint8_t *chalk_macho_get_buffer(macho_binary_t *bin,
+extern const uint8_t *chalk_macho_get_buffer(n00b_macho_binary_t *bin,
                                              size_t *out_size);

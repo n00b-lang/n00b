@@ -16,8 +16,6 @@ n00b_chalk_src = files(
     'gguf.c',
     'safetensors_core.c',
     'safetensors.c',
-    'macho_stream.c',
-    'macho_parse.c',
     'macho_core.c',
     'macho.c',
     'lang_table.c',

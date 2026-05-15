@@ -2,7 +2,7 @@
  *
  *  Adapter from the lifted Mach-O core (macho_core.c / macho_parse.c
  *  / macho_stream.c) to the libchalk codec entry points. Buffer mode
- *  end-to-end. The lifted core expects a parsed macho_fat_t handle;
+ *  end-to-end. The lifted core expects a parsed n00b_macho_fat_t handle;
  *  every entry point here builds one from a fresh buffer copy. */
 
 #include "n00b.h"
@@ -11,9 +11,9 @@
 #include "core/alloc.h"
 #include "chalk/n00b_chalk.h"
 #include "internal/chalk/macho_core.h"
-#include "internal/chalk/macho_parse.h"
-#include "internal/chalk/macho_stream.h"
-#include "internal/chalk/macho_types.h"
+#include "compiler/objfile/macho.h"
+#include "compiler/objfile/bstream.h"
+#include "compiler/objfile/macho_types.h"
 #include "internal/chalk/mark_internal.h"
 #include "internal/chalk/sidecar_internal.h"
 
@@ -43,26 +43,26 @@ hex_to_bytes32(const char *hex, uint8_t out[32])
     return true;
 }
 
-// Parse the input buffer into a fresh macho_fat_t. Returns NULL on
+// Parse the input buffer into a fresh n00b_macho_fat_t. Returns NULL on
 // parse failure.
-static macho_fat_t *
+static n00b_macho_fat_t *
 parse_buffer(n00b_buffer_t *bytes)
 {
     if (!bytes) return nullptr;
     n00b_buffer_t  *copy = n00b_buffer_from_bytes(bytes->data,
                                                    (int64_t)bytes->byte_len);
-    macho_stream_t *s    = macho_stream_new(copy);
+    n00b_bstream_t *s    = n00b_bstream_new(copy);
     if (!s) return nullptr;
-    auto pr = macho_parse(s);
+    auto pr = n00b_macho_parse(s);
     if (n00b_result_is_err(pr)) return nullptr;
-    return (macho_fat_t *)n00b_result_get(pr);
+    return (n00b_macho_fat_t *)n00b_result_get(pr);
 }
 
 // Extract the first binary slice from a parsed fat. The codec
 // supports single-binary inputs only; multi-arch fat handling is a
 // later refinement.
-static macho_binary_t *
-first_binary(macho_fat_t *fat)
+static n00b_macho_binary_t *
+first_binary(n00b_macho_fat_t *fat)
 {
     if (!fat || fat->count == 0) return nullptr;
     return fat->binaries[0];
@@ -75,9 +75,9 @@ first_binary(macho_fat_t *fat)
 n00b_result_t(n00b_buffer_t *)
 n00b_chalk_macho_hash_buffer(n00b_buffer_t *bytes)
 {
-    macho_fat_t *fat = parse_buffer(bytes);
+    n00b_macho_fat_t *fat = parse_buffer(bytes);
     if (!fat) return n00b_result_err(n00b_buffer_t *, 1);
-    macho_binary_t *bin = first_binary(fat);
+    n00b_macho_binary_t *bin = first_binary(fat);
     if (!bin) return n00b_result_err(n00b_buffer_t *, 2);
     char hex[65];
     if (chalk_macho_unchalked_hash(bin, hex) != CHALK_MACHO_OK) {
@@ -95,9 +95,9 @@ n00b_result_t(n00b_chalk_io_result_t *)
 n00b_chalk_macho_insert_buffer(n00b_buffer_t *bytes, n00b_chalk_mark_t *mark)
 {
     if (!bytes || !mark) return n00b_result_err(n00b_chalk_io_result_t *, 1);
-    macho_fat_t *fat = parse_buffer(bytes);
+    n00b_macho_fat_t *fat = parse_buffer(bytes);
     if (!fat) return n00b_result_err(n00b_chalk_io_result_t *, 2);
-    macho_binary_t *bin = first_binary(fat);
+    n00b_macho_binary_t *bin = first_binary(fat);
     if (!bin) return n00b_result_err(n00b_chalk_io_result_t *, 3);
 
     // Remove any pre-existing chalk note so the unchalked-hash + new
@@ -141,9 +141,9 @@ n00b_result_t(n00b_chalk_io_result_t *)
 n00b_chalk_macho_delete_buffer(n00b_buffer_t *bytes)
 {
     if (!bytes) return n00b_result_err(n00b_chalk_io_result_t *, 1);
-    macho_fat_t *fat = parse_buffer(bytes);
+    n00b_macho_fat_t *fat = parse_buffer(bytes);
     if (!fat) return n00b_result_err(n00b_chalk_io_result_t *, 2);
-    macho_binary_t *bin = first_binary(fat);
+    n00b_macho_binary_t *bin = first_binary(fat);
     if (!bin) return n00b_result_err(n00b_chalk_io_result_t *, 3);
 
     chalk_macho_status_t s = chalk_macho_remove_note(bin);
@@ -166,9 +166,9 @@ n00b_result_t(n00b_chalk_extract_result_t *)
 n00b_chalk_macho_extract_buffer(n00b_buffer_t *bytes)
 {
     if (!bytes) return n00b_result_err(n00b_chalk_extract_result_t *, 1);
-    macho_fat_t *fat = parse_buffer(bytes);
+    n00b_macho_fat_t *fat = parse_buffer(bytes);
     if (!fat) return n00b_result_err(n00b_chalk_extract_result_t *, 2);
-    macho_binary_t *bin = first_binary(fat);
+    n00b_macho_binary_t *bin = first_binary(fat);
     if (!bin) return n00b_result_err(n00b_chalk_extract_result_t *, 3);
     size_t   payload_len;
     uint8_t *payload = chalk_macho_get_chalk_payload(bin, &payload_len);
@@ -182,9 +182,9 @@ n00b_chalk_macho_extract_buffer(n00b_buffer_t *bytes)
 n00b_chalk_macho_sig_kind_t
 n00b_chalk_macho_signature_kind(n00b_buffer_t *bytes)
 {
-    macho_fat_t *fat = parse_buffer(bytes);
+    n00b_macho_fat_t *fat = parse_buffer(bytes);
     if (!fat) return N00B_CHALK_MACHO_SIG_NONE;
-    macho_binary_t *bin = first_binary(fat);
+    n00b_macho_binary_t *bin = first_binary(fat);
     if (!bin) return N00B_CHALK_MACHO_SIG_NONE;
     switch (chalk_macho_signature_kind(bin)) {
     case CHALK_MACHO_SIG_NONE:      return N00B_CHALK_MACHO_SIG_NONE;
@@ -198,9 +198,9 @@ n00b_chalk_macho_signature_kind(n00b_buffer_t *bytes)
 n00b_result_t(n00b_buffer_t *)
 n00b_chalk_macho_strip_signature(n00b_buffer_t *bytes)
 {
-    macho_fat_t *fat = parse_buffer(bytes);
+    n00b_macho_fat_t *fat = parse_buffer(bytes);
     if (!fat) return n00b_result_err(n00b_buffer_t *, 1);
-    macho_binary_t *bin = first_binary(fat);
+    n00b_macho_binary_t *bin = first_binary(fat);
     if (!bin) return n00b_result_err(n00b_buffer_t *, 2);
     if (chalk_macho_strip_signature(bin) != CHALK_MACHO_OK) {
         return n00b_result_err(n00b_buffer_t *, 3);

@@ -16,7 +16,7 @@
 #include "core/alloc.h"
 #include "core/sha256.h"
 #include "internal/chalk/macho_core.h"
-#include "internal/chalk/macho_types.h"
+#include "compiler/objfile/macho_types.h"
 
 #include <string.h>
 
@@ -206,12 +206,12 @@ typedef struct {
 
 // Forward declaration — defined further down with the rest of the
 // command-walking helpers.
-static size_t command_offset(macho_binary_t *bin, uint32_t index);
+static size_t command_offset(n00b_macho_binary_t *bin, uint32_t index);
 
 // Find an LC_SEGMENT_64 command by name.  Returns the index in
 // bin->commands[], or -1 if absent.
 static int
-find_segment_index(macho_binary_t *bin, const char *segname)
+find_segment_index(n00b_macho_binary_t *bin, const char *segname)
 {
     size_t want_len = strlen(segname);
 
@@ -220,7 +220,7 @@ find_segment_index(macho_binary_t *bin, const char *segname)
     }
 
     for (uint32_t i = 0; i < bin->num_commands; i++) {
-        macho_command_t *cmd = &bin->commands[i];
+        n00b_macho_command_t *cmd = &bin->commands[i];
 
         if (cmd->cmd != LC_SEGMENT_64
             || !cmd->raw_data
@@ -241,7 +241,7 @@ find_segment_index(macho_binary_t *bin, const char *segname)
 
 // Find the LC_CODE_SIGNATURE command index, or -1.
 static int
-find_code_signature_index(macho_binary_t *bin)
+find_code_signature_index(n00b_macho_binary_t *bin)
 {
     for (uint32_t i = 0; i < bin->num_commands; i++) {
         if (bin->commands[i].cmd == LC_CODE_SIGNATURE) {
@@ -253,7 +253,7 @@ find_code_signature_index(macho_binary_t *bin)
 }
 
 static void
-compute_layout(macho_binary_t *bin, macho_layout_t *out)
+compute_layout(n00b_macho_binary_t *bin, macho_layout_t *out)
 {
     out->header_off    = bin->fat_offset;
     out->lc_off        = out->header_off + MACHO_HEADER_SIZE;
@@ -261,7 +261,7 @@ compute_layout(macho_binary_t *bin, macho_layout_t *out)
     out->first_section = SIZE_MAX;
 
     for (uint32_t i = 0; i < bin->num_segments; i++) {
-        macho_segment_t *seg = &bin->segments[i];
+        n00b_macho_segment_t *seg = &bin->segments[i];
 
         for (uint32_t j = 0; j < seg->nsects; j++) {
             uint32_t sec_off = seg->sections[j].offset;
@@ -280,10 +280,10 @@ compute_layout(macho_binary_t *bin, macho_layout_t *out)
 // Locate the chalk LC_NOTE command in bin->commands[].  Returns the
 // index, or -1 if absent.
 static int
-find_chalk_command_index(macho_binary_t *bin)
+find_chalk_command_index(n00b_macho_binary_t *bin)
 {
     for (uint32_t i = 0; i < bin->num_commands; i++) {
-        macho_command_t *cmd = &bin->commands[i];
+        n00b_macho_command_t *cmd = &bin->commands[i];
 
         if (cmd->cmd != LC_NOTE) {
             continue;
@@ -326,7 +326,7 @@ find_chalk_command_index(macho_binary_t *bin)
 // Compute the LC region offset (within the binary's stream buffer)
 // of the i-th command.  Walks commands[0..i-1] summing cmdsize.
 static size_t
-command_offset(macho_binary_t *bin, uint32_t index)
+command_offset(n00b_macho_binary_t *bin, uint32_t index)
 {
     size_t off = bin->fat_offset + MACHO_HEADER_SIZE;
 
@@ -390,7 +390,7 @@ be_u32(const uint8_t *p)
 }
 
 chalk_macho_sig_kind_t
-chalk_macho_signature_kind(macho_binary_t *bin)
+chalk_macho_signature_kind(n00b_macho_binary_t *bin)
 {
     if (!bin || !bin->stream || !bin->stream->buf) {
         return CHALK_MACHO_SIG_NONE;
@@ -410,7 +410,7 @@ chalk_macho_signature_kind(macho_binary_t *bin)
         return CHALK_MACHO_SIG_NONE;
     }
 
-    macho_command_t *cmd = &bin->commands[sig_cmd_idx];
+    n00b_macho_command_t *cmd = &bin->commands[sig_cmd_idx];
 
     if (!cmd->raw_data || cmd->raw_data->byte_len < 16) {
         return CHALK_MACHO_SIG_MALFORMED;
@@ -480,7 +480,7 @@ chalk_macho_signature_kind(macho_binary_t *bin)
 }
 
 chalk_macho_note_t *
-chalk_macho_get_notes(macho_binary_t *bin, size_t *out_count)
+chalk_macho_get_notes(n00b_macho_binary_t *bin, size_t *out_count)
 {
     if (out_count) {
         *out_count = 0;
@@ -512,7 +512,7 @@ chalk_macho_get_notes(macho_binary_t *bin, size_t *out_count)
     size_t out_i = 0;
 
     for (uint32_t i = 0; i < bin->num_commands; i++) {
-        macho_command_t *cmd = &bin->commands[i];
+        n00b_macho_command_t *cmd = &bin->commands[i];
 
         if (cmd->cmd != LC_NOTE) {
             continue;
@@ -550,7 +550,7 @@ chalk_macho_get_notes(macho_binary_t *bin, size_t *out_count)
 }
 
 uint8_t *
-chalk_macho_get_chalk_payload(macho_binary_t *bin, size_t *out_size)
+chalk_macho_get_chalk_payload(n00b_macho_binary_t *bin, size_t *out_size)
 {
     if (out_size) {
         *out_size = 0;
@@ -604,7 +604,7 @@ chalk_macho_get_chalk_payload(macho_binary_t *bin, size_t *out_size)
 // ============================================================================
 
 static chalk_macho_status_t
-add_note_replace_existing(macho_binary_t *bin, int cmd_idx,
+add_note_replace_existing(n00b_macho_binary_t *bin, int cmd_idx,
                           const uint8_t *payload, size_t payload_size)
 {
     n00b_buffer_t *buf = bin->stream->buf;
@@ -632,7 +632,7 @@ add_note_replace_existing(macho_binary_t *bin, int cmd_idx,
 }
 
 static chalk_macho_status_t
-add_note_insert(macho_binary_t *bin,
+add_note_insert(n00b_macho_binary_t *bin,
                 const uint8_t *payload, size_t payload_size)
 {
     n00b_buffer_t  *buf = bin->stream->buf;
@@ -748,9 +748,9 @@ add_note_insert(macho_binary_t *bin,
     // the array (we keep things simple and assume one extra slot is
     // ok — chalk's typical workflow does at most one add_note +
     // remove_note on a parsed binary).
-    macho_command_t *grown = (macho_command_t *)realloc(
+    n00b_macho_command_t *grown = (n00b_macho_command_t *)realloc(
         bin->commands,
-        (bin->num_commands + 1) * sizeof(macho_command_t));
+        (bin->num_commands + 1) * sizeof(n00b_macho_command_t));
 
     if (!grown) {
         return CHALK_MACHO_ERR_INTERNAL;
@@ -758,7 +758,7 @@ add_note_insert(macho_binary_t *bin,
 
     bin->commands = grown;
 
-    macho_command_t *new_cmd = &bin->commands[bin->num_commands];
+    n00b_macho_command_t *new_cmd = &bin->commands[bin->num_commands];
 
     new_cmd->cmd      = LC_NOTE;
     new_cmd->cmdsize  = MACHO_NOTE_CMD_SIZE;
@@ -790,7 +790,7 @@ add_note_insert(macho_binary_t *bin,
 // ============================================================================
 
 chalk_macho_status_t
-chalk_macho_strip_signature(macho_binary_t *bin)
+chalk_macho_strip_signature(n00b_macho_binary_t *bin)
 {
     if (!bin) {
         return CHALK_MACHO_ERR_NULL_BINARY;
@@ -815,7 +815,7 @@ chalk_macho_strip_signature(macho_binary_t *bin)
 
     // Read dataoff/datasize from the LC's raw_data.  linkedit_data_command
     // layout: cmd(4) cmdsize(4) dataoff(4) datasize(4) — total 16 bytes.
-    macho_command_t *sig_cmd = &bin->commands[sig_idx];
+    n00b_macho_command_t *sig_cmd = &bin->commands[sig_idx];
 
     if (!sig_cmd->raw_data || sig_cmd->raw_data->byte_len < 16
         || sig_cmd->cmdsize != 16) {
@@ -889,7 +889,7 @@ chalk_macho_strip_signature(macho_binary_t *bin)
         memmove(&bin->commands[sig_idx],
                 &bin->commands[sig_idx + 1],
                 ((size_t)bin->num_commands - sig_idx - 1)
-                  * sizeof(macho_command_t));
+                  * sizeof(n00b_macho_command_t));
     }
 
     // Zero the now-vacated last slot.
@@ -906,7 +906,7 @@ chalk_macho_strip_signature(macho_binary_t *bin)
 }
 
 chalk_macho_status_t
-chalk_macho_add_note(macho_binary_t *bin,
+chalk_macho_add_note(n00b_macho_binary_t *bin,
                      const uint8_t *payload, size_t payload_size)
 {
     if (!bin) {
@@ -958,7 +958,7 @@ chalk_macho_add_note(macho_binary_t *bin,
 // ============================================================================
 
 chalk_macho_status_t
-chalk_macho_remove_note(macho_binary_t *bin)
+chalk_macho_remove_note(n00b_macho_binary_t *bin)
 {
     if (!bin) {
         return CHALK_MACHO_ERR_NULL_BINARY;
@@ -980,7 +980,7 @@ chalk_macho_remove_note(macho_binary_t *bin)
     }
 
     n00b_buffer_t   *buf      = bin->stream->buf;
-    macho_command_t *chalk_cmd = &bin->commands[idx];
+    n00b_macho_command_t *chalk_cmd = &bin->commands[idx];
     size_t           cmd_off  = command_offset(bin, (uint32_t)idx);
     size_t           old_lc_end = bin->fat_offset + MACHO_HEADER_SIZE
                                 + bin->header.sizeofcmds;
@@ -1062,7 +1062,7 @@ chalk_macho_remove_note(macho_binary_t *bin)
         memmove(&bin->commands[idx],
                 &bin->commands[idx + 1],
                 ((size_t)bin->num_commands - idx - 1)
-                  * sizeof(macho_command_t));
+                  * sizeof(n00b_macho_command_t));
     }
 
     bin->commands[bin->num_commands - 1].cmd      = 0;
@@ -1133,7 +1133,7 @@ hex_encode(const uint8_t *src, size_t n, char *dst)
 }
 
 chalk_macho_status_t
-chalk_macho_unchalked_hash(macho_binary_t *bin, char out_hex[65])
+chalk_macho_unchalked_hash(n00b_macho_binary_t *bin, char out_hex[65])
 {
     if (!bin || !out_hex) {
         return CHALK_MACHO_ERR_NULL_BINARY;
@@ -1144,7 +1144,7 @@ chalk_macho_unchalked_hash(macho_binary_t *bin, char out_hex[65])
     }
 
     // Canonicalize the binary on a clone:
-    //   1. Parse the bytes into a fresh macho_fat_t.
+    //   1. Parse the bytes into a fresh n00b_macho_fat_t.
     //   2. Run strip_signature on it (drop linker-applied sig).
     //   3. Run add_note with a 32-byte zero payload (this also
     //      removes any existing chalk note and re-adds the canonical
@@ -1164,27 +1164,27 @@ chalk_macho_unchalked_hash(macho_binary_t *bin, char out_hex[65])
         return CHALK_MACHO_ERR_INTERNAL;
     }
 
-    macho_stream_t *clone_stream = macho_stream_new(clone);
+    n00b_bstream_t *clone_stream = n00b_bstream_new(clone);
 
     if (!clone_stream) {
         (void)(clone);
         return CHALK_MACHO_ERR_INTERNAL;
     }
 
-    auto pr = macho_parse(clone_stream);
+    auto pr = n00b_macho_parse(clone_stream);
 
     if (n00b_result_is_err(pr)) {
-        macho_stream_free(clone_stream);
+        /* n00b_bstream_t has no explicit free */ (void)(clone_stream);
         return CHALK_MACHO_ERR_INTERNAL;
     }
 
-    macho_fat_t    *clone_fat = (macho_fat_t *)n00b_result_get(pr);
-    macho_binary_t *clone_bin = clone_fat->binaries[0];
+    n00b_macho_fat_t    *clone_fat = (n00b_macho_fat_t *)n00b_result_get(pr);
+    n00b_macho_binary_t *clone_bin = clone_fat->binaries[0];
 
     chalk_macho_status_t st = chalk_macho_strip_signature(clone_bin);
 
     if (st != CHALK_MACHO_OK) {
-        chalk_macho_free(clone_fat);
+        /* GC-managed; no-op */ (void)(clone_fat);
         return st;
     }
 
@@ -1193,7 +1193,7 @@ chalk_macho_unchalked_hash(macho_binary_t *bin, char out_hex[65])
     st = chalk_macho_add_note(clone_bin, kZeros, SHA256_DIGEST_LEN);
 
     if (st != CHALK_MACHO_OK) {
-        chalk_macho_free(clone_fat);
+        /* GC-managed; no-op */ (void)(clone_fat);
         return st;
     }
 
@@ -1203,7 +1203,7 @@ chalk_macho_unchalked_hash(macho_binary_t *bin, char out_hex[65])
     SHA256((const unsigned char *)out->data,
            out->byte_len, digest);
 
-    chalk_macho_free(clone_fat);
+    /* GC-managed; no-op */ (void)(clone_fat);
 
     hex_encode(digest, SHA256_DIGEST_LEN, out_hex);
     return CHALK_MACHO_OK;
@@ -1214,7 +1214,7 @@ chalk_macho_unchalked_hash(macho_binary_t *bin, char out_hex[65])
 // ============================================================================
 
 const uint8_t *
-chalk_macho_get_buffer(macho_binary_t *bin, size_t *out_size)
+chalk_macho_get_buffer(n00b_macho_binary_t *bin, size_t *out_size)
 {
     if (out_size) {
         *out_size = 0;
