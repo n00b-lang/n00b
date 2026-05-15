@@ -1574,50 +1574,6 @@ endforeach
 # Examples (Mac-only — ObjC + libxpc)
 # ============================================================================
 
-if target_os == 'darwin'
-    example_objc_args = [
-        '-g',
-        '-Wno-unused-parameter',
-        '-Wno-unused-function',
-        '-Wno-unknown-pragmas',
-        '-fno-omit-frame-pointer',
-        '-Wno-atomic-alignment',
-        '-fobjc-arc',
-    ]
-
-    example_inc = [include_directories('examples/crayon_shared'), incdir]
-
-    # ObjC libxpc subscriber — no n00b types, plain Apple toolchain.
-    # Also hosts the xpc_dictionary_apply shim that hides Apple's block
-    # syntax behind a plain-C function pointer.
-    n00b_crayon_xpc = static_library('n00b_crayon_xpc',
-        ['examples/crayon_shared/crayon_subscriber.m',
-         'examples/crayon_shared/crayon_xpc_apply.m'],
-        include_directories: example_inc,
-        objc_args: example_objc_args,
-    )
-
-    # C bridges + features — touch n00b's _generic_struct macros, must
-    # compile via ncc with the same flags as the rest of the project.
-    n00b_crayon_helpers = static_library('n00b_crayon_helpers',
-        ['examples/crayon_shared/crayon_xpc_to_json.c',
-         'examples/crayon_shared/crayon_features.c'],
-        include_directories: example_inc,
-        c_args: exe_c_args + ['-fblocks'],
-    )
-
-    crayon_dump = executable('crayon_dump',
-        ['examples/crayon_dump/main.m'],
-        include_directories: example_inc,
-        link_with: n00b_crayon_xpc,
-        objc_args: example_objc_args,
-        link_args: ['-framework', 'Foundation'],
-    )
-
-
-
-endif
-
 # ============================================================================
 # Documentation (Doxygen)
 # ============================================================================
