@@ -23,6 +23,7 @@ n00b_chalk_src = files(
     'lang_table.c',
     'source.c',
     'elf.c',
+    'elf_fallback.c',
     'zip.c',
     'pe.c',
 )
