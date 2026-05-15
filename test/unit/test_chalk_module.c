@@ -572,6 +572,78 @@ test_oracle_pyc_roundtrip(void)
            " errors)\n");
 }
 
+// Same flow, but for the source codec. The fixture is a small Python
+// script with a shebang; libchalk inserts a mark as a trailing
+// comment, then chalk extract is asked to validate.
+static void
+test_oracle_source_roundtrip(void)
+{
+    if (!getenv("CHALK_ORACLE_BINARY")) {
+        printf("  [SKIP] oracle_source_roundtrip (CHALK_ORACLE_BINARY unset)\n");
+        return;
+    }
+
+    const char script[] = "#!/usr/bin/env python\n"
+                          "print('hello from libchalk oracle test')\n";
+    auto bytes = n00b_buffer_from_bytes((char *)script, sizeof(script) - 1);
+    auto mark  = n00b_chalk_mark_new();
+    auto ir    = n00b_chalk_source_insert_buffer(bytes, mark);
+    if (n00b_result_is_err(ir)) {
+        printf("  [SKIP] oracle_source_roundtrip (insert failed)\n");
+        return;
+    }
+    n00b_chalk_io_result_t *io = n00b_result_get(ir);
+
+    const char *needle = "{ \"MAGIC\" : ";
+    const char *m = mem_find(io->bytes->data, io->bytes->byte_len,
+                              needle, strlen(needle));
+    assert(m);
+    const char *err = nullptr;
+    size_t mlen = io->bytes->byte_len - (size_t)(m - io->bytes->data);
+    n00b_json_node_t *embedded = n00b_json_parse(m, mlen, &err);
+    assert(embedded && embedded->type == N00B_JSON_OBJECT);
+    int64_t libc_ts = json_obj_get_int(embedded, "TIMESTAMP_WHEN_CHALKED");
+    assert(libc_ts > 0);
+
+    char path[256];
+    snprintf(path, sizeof(path), "/tmp/n00b_chalk_oracle_test.py");
+    auto path_str = n00b_string_from_cstr(path);
+    auto wr = n00b_chalk_write_file(path_str, io->bytes);
+    if (n00b_result_is_err(wr)) {
+        printf("  [SKIP] oracle_source_roundtrip (file write failed)\n");
+        return;
+    }
+
+    n00b_buffer_t *oracle_out = run_oracle(libc_ts, path);
+    if (!oracle_out) {
+        printf("  [SKIP] oracle_source_roundtrip (oracle unavailable)\n");
+        return;
+    }
+
+    const char *fail = mem_find(oracle_out->data, oracle_out->byte_len,
+                                 "doesn't validate", 16);
+    const char *miss = mem_find(oracle_out->data, oracle_out->byte_len,
+                                 "doesn't match", 13);
+    if (fail || miss) {
+        printf("  [FAIL] oracle_source_roundtrip: validation error\n");
+        size_t n = oracle_out->byte_len > 1024 ? 1024 : oracle_out->byte_len;
+        fwrite(oracle_out->data, 1, n, stdout);
+        printf("\n");
+        assert(0);
+    }
+    const char *ok = mem_find(oracle_out->data, oracle_out->byte_len,
+                               "Chalk mark extracted", 20);
+    if (!ok) {
+        printf("  [FAIL] oracle_source_roundtrip: 'Chalk mark extracted'"
+               " not found\n");
+        size_t n = oracle_out->byte_len > 1024 ? 1024 : oracle_out->byte_len;
+        fwrite(oracle_out->data, 1, n, stdout);
+        printf("\n");
+        assert(0);
+    }
+    printf("  [PASS] oracle_source_roundtrip (extract succeeded)\n");
+}
+
 // -----------------------------------------------------------------------
 // Main
 // -----------------------------------------------------------------------
@@ -603,6 +675,7 @@ main(int argc, char *argv[])
 
     printf("== oracle round-trip ==\n");
     test_oracle_pyc_roundtrip();
+    test_oracle_source_roundtrip();
 
     printf("All chalk module tests passed.\n");
     return 0;
