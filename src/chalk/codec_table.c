@@ -68,6 +68,13 @@ const n00b_chalk_codec_entry_t n00b_chalk_codec_table[] = {
         .extract_buffer = n00b_chalk_certs_extract_buffer,
         .hash_buffer    = n00b_chalk_certs_hash_buffer,
     },
+    {
+        .codec          = N00B_CHALK_CODEC_MACOS_WRAP,
+        .insert_buffer  = n00b_chalk_macos_wrap_insert_buffer,
+        .delete_buffer  = n00b_chalk_macos_wrap_delete_buffer,
+        .extract_buffer = n00b_chalk_macos_wrap_extract_buffer,
+        .hash_buffer    = n00b_chalk_macos_wrap_hash_buffer,
+    },
     { .codec = N00B_CHALK_CODEC_NONE },
 };
 

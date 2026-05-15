@@ -10,4 +10,5 @@ n00b_chalk_src = files(
     'pyc.c',
     'sidecar.c',
     'certs.c',
+    'macos_wrap.c',
 )
