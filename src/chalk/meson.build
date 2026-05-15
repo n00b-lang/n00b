@@ -6,4 +6,6 @@ n00b_chalk_src = files(
     'base32v.c',
     'normalize.c',
     'mark.c',
+    'codec_table.c',
+    'pyc.c',
 )
