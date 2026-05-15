@@ -3,5 +3,7 @@
 # SafeTensors / ZIP / Python .pyc / source / sidecar / certs.
 
 n00b_chalk_src = files(
-    'init.c',
+    'base32v.c',
+    'normalize.c',
+    'mark.c',
 )
