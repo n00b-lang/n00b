@@ -82,6 +82,13 @@ const n00b_chalk_codec_entry_t n00b_chalk_codec_table[] = {
         .extract_buffer = n00b_chalk_gguf_extract_buffer,
         .hash_buffer    = n00b_chalk_gguf_hash_buffer,
     },
+    {
+        .codec          = N00B_CHALK_CODEC_SAFETENSORS,
+        .insert_buffer  = n00b_chalk_safetensors_insert_buffer,
+        .delete_buffer  = n00b_chalk_safetensors_delete_buffer,
+        .extract_buffer = n00b_chalk_safetensors_extract_buffer,
+        .hash_buffer    = n00b_chalk_safetensors_hash_buffer,
+    },
     { .codec = N00B_CHALK_CODEC_NONE },
 };
 

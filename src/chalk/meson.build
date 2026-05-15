@@ -13,4 +13,6 @@ n00b_chalk_src = files(
     'macos_wrap.c',
     'gguf_core.c',
     'gguf.c',
+    'safetensors_core.c',
+    'safetensors.c',
 )
