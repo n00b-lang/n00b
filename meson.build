@@ -276,6 +276,13 @@ endif
 mir_proj = subproject('mir')
 mir_dep  = mir_proj.get_variable('mir_dep')
 
+# libzip — required by src/chalk/zip.c for the ZIP codec.
+libzip_dep = dependency('libzip', required: false)
+if libzip_dep.found()
+  exe_c_args = exe_c_args + ['-DN00B_HAVE_LIBZIP=1']
+  deps += libzip_dep
+endif
+
 subdir('src/core')
 subdir('src/util')
 

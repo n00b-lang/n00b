@@ -23,4 +23,5 @@ n00b_chalk_src = files(
     'lang_table.c',
     'source.c',
     'elf.c',
+    'zip.c',
 )
