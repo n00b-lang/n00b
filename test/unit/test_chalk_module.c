@@ -29,6 +29,9 @@
 #include "conduit/subproc.h"
 #include "adt/array.h"
 #include "chalk/n00b_chalk.h"
+#include "compiler/objfile/pe.h"
+#include "compiler/objfile/pe_build.h"
+#include "compiler/objfile/pe_types.h"
 #include "internal/chalk/base32v.h"
 #include "internal/chalk/normalize.h"
 #include "internal/chalk/mark_internal.h"
@@ -286,6 +289,53 @@ test_roundtrip_sidecar(void)
     assert(del->kind == N00B_CHALK_OUT_SIDECAR);
     assert(del->bytes->byte_len == 0);
     printf("  [PASS] roundtrip_sidecar\n");
+}
+
+// PE round-trip: build a minimal valid PE in-memory via n00b's PE
+// builder, then drive it through libchalk insert → extract → delete
+// and verify (a) the mark we put in comes back out and (b) delete
+// produces a buffer that parses back to a no-.chalk PE.
+static void
+test_roundtrip_pe(void)
+{
+    auto bin = n00b_pe_binary_new(N00B_PE_MACHINE_AMD64,
+                                    N00B_PE_SUBSYSTEM_WINDOWS_CUI);
+    // Add a tiny .text section so the PE has at least one user
+    // section beyond the chalk codec's later addition.
+    n00b_pe_section_t *text = n00b_pe_add_section(bin, ".text",
+                                                    N00B_PE_SCN_CNT_CODE
+                                                    | N00B_PE_SCN_MEM_READ
+                                                    | N00B_PE_SCN_MEM_EXECUTE);
+    char text_bytes[16] = {0};
+    text->content      = n00b_buffer_from_bytes(text_bytes, sizeof(text_bytes));
+    text->raw_size     = sizeof(text_bytes);
+    text->virtual_size = sizeof(text_bytes);
+
+    auto br = n00b_pe_build(bin);
+    ASSERT_OK(br);
+    n00b_buffer_t *bytes = n00b_result_get(br);
+
+    auto mark = n00b_chalk_mark_new();
+    auto ir   = n00b_chalk_pe_insert_buffer(bytes, mark);
+    ASSERT_OK(ir);
+    n00b_chalk_io_result_t *io = n00b_result_get(ir);
+    assert(io->kind == N00B_CHALK_OUT_IN_BAND);
+
+    auto er = n00b_chalk_pe_extract_buffer(io->bytes);
+    ASSERT_OK(er);
+    check_extract_has_six(n00b_result_get(er));
+
+    auto dr = n00b_chalk_pe_delete_buffer(io->bytes);
+    ASSERT_OK(dr);
+    n00b_chalk_io_result_t *del = n00b_result_get(dr);
+
+    // After delete, re-parse the result and confirm .chalk is gone.
+    n00b_bstream_t *re_bs = n00b_bstream_new(del->bytes);
+    auto re_pr = n00b_pe_parse(re_bs);
+    ASSERT_OK(re_pr);
+    n00b_pe_binary_t *re_bin = n00b_result_get(re_pr);
+    assert(n00b_pe_section_by_name(re_bin, ".chalk") == nullptr);
+    printf("  [PASS] roundtrip_pe\n");
 }
 
 static void
@@ -668,6 +718,7 @@ main(int argc, char *argv[])
     test_roundtrip_pyc();
     test_roundtrip_sidecar();
     test_roundtrip_source();
+    test_roundtrip_pe();
 
     printf("== detection ==\n");
     test_detect_by_extension();

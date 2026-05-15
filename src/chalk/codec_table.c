@@ -124,6 +124,13 @@ const n00b_chalk_codec_entry_t n00b_chalk_codec_table[] = {
         .extract_buffer = n00b_chalk_zip_extract_buffer,
         .hash_buffer    = n00b_chalk_zip_hash_buffer,
     },
+    {
+        .codec          = N00B_CHALK_CODEC_PE,
+        .insert_buffer  = n00b_chalk_pe_insert_buffer,
+        .delete_buffer  = n00b_chalk_pe_delete_buffer,
+        .extract_buffer = n00b_chalk_pe_extract_buffer,
+        .hash_buffer    = n00b_chalk_pe_hash_buffer,
+    },
     { .codec = N00B_CHALK_CODEC_NONE },
 };
 
@@ -179,6 +186,11 @@ n00b_chalk_codec_detect(n00b_buffer_t *bytes, n00b_string_t *hint_path)
         if (has_extension(hint_path, ".safetensors")) {
             return N00B_CHALK_CODEC_SAFETENSORS;
         }
+        if (has_extension(hint_path, ".exe")
+            || has_extension(hint_path, ".dll")
+            || has_extension(hint_path, ".sys")) {
+            return N00B_CHALK_CODEC_PE;
+        }
     }
 
     if (!bytes || bytes->byte_len < 4) {
@@ -207,6 +219,17 @@ n00b_chalk_codec_detect(n00b_buffer_t *bytes, n00b_string_t *hint_path)
     if (starts_with(b, n,
                     (const uint8_t *)"-----BEGIN CERTIFICATE-----", 27)) {
         return N00B_CHALK_CODEC_SIDECAR_CERT;
+    }
+    // PE: "MZ" at byte 0, then "PE\0\0" at file offset 0x3c (e_lfanew).
+    if (n >= 0x40 && b[0] == 'M' && b[1] == 'Z') {
+        uint32_t pe_off = (uint32_t)b[0x3c]
+                        | ((uint32_t)b[0x3d] << 8)
+                        | ((uint32_t)b[0x3e] << 16)
+                        | ((uint32_t)b[0x3f] << 24);
+        if ((size_t)pe_off + 4 <= n
+            && memcmp(b + pe_off, "PE\0\0", 4) == 0) {
+            return N00B_CHALK_CODEC_PE;
+        }
     }
     if (starts_with(b, n, (const uint8_t *)"#!", 2)) {
         return N00B_CHALK_CODEC_SOURCE;
@@ -301,6 +324,8 @@ n00b_chalk_hash_buffer(n00b_buffer_t *bytes)
             return n00b_chalk_elf_##suffix args;                             \
         case N00B_CHALK_CODEC_ZIP:                                           \
             return n00b_chalk_zip_##suffix args;                             \
+        case N00B_CHALK_CODEC_PE:                                            \
+            return n00b_chalk_pe_##suffix args;                              \
         default: break;                                                      \
         }                                                                    \
     } while (0)

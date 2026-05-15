@@ -24,4 +24,5 @@ n00b_chalk_src = files(
     'source.c',
     'elf.c',
     'zip.c',
+    'pe.c',
 )

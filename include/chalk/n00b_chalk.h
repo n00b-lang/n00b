@@ -23,3 +23,4 @@
 #include <chalk/n00b_chalk_source.h>
 #include <chalk/n00b_chalk_sidecar.h>
 #include <chalk/n00b_chalk_certs.h>
+#include <chalk/n00b_chalk_pe.h>

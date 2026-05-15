@@ -25,6 +25,7 @@ typedef enum {
     N00B_CHALK_CODEC_SOURCE,
     N00B_CHALK_CODEC_SIDECAR_MODEL,
     N00B_CHALK_CODEC_SIDECAR_CERT,
+    N00B_CHALK_CODEC_PE,
 } n00b_chalk_codec_id_t;
 
 /** Discriminates artifact-bytes output (in-band) from sidecar-file
