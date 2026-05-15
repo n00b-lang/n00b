@@ -7,6 +7,7 @@ n00b_chalk_src = files(
     'normalize.c',
     'mark.c',
     'codec_table.c',
+    'file_io.c',
     'pyc.c',
     'sidecar.c',
     'certs.c',

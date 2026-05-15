@@ -212,32 +212,30 @@ n00b_chalk_macho_strip_signature(n00b_buffer_t *bytes)
                                                   (int64_t)out_len));
 }
 
-// File-mode stubs.
+#include "internal/chalk/file_io.h"
+
 n00b_result_t(n00b_chalk_io_result_t *)
 n00b_chalk_macho_insert_file(n00b_string_t *path, n00b_chalk_mark_t *mark)
 {
-    (void)path;
-    (void)mark;
-    return n00b_result_err(n00b_chalk_io_result_t *, 1);
+    return n00b_chalk_file_insert_via(path, mark,
+                                      n00b_chalk_macho_insert_buffer);
 }
 
 n00b_result_t(n00b_chalk_io_result_t *)
 n00b_chalk_macho_delete_file(n00b_string_t *path)
 {
-    (void)path;
-    return n00b_result_err(n00b_chalk_io_result_t *, 1);
+    return n00b_chalk_file_delete_via(path, n00b_chalk_macho_delete_buffer);
 }
 
 n00b_result_t(n00b_chalk_extract_result_t *)
 n00b_chalk_macho_extract_file(n00b_string_t *path)
 {
-    (void)path;
-    return n00b_result_err(n00b_chalk_extract_result_t *, 1);
+    return n00b_chalk_file_extract_via(path,
+                                       n00b_chalk_macho_extract_buffer);
 }
 
 n00b_result_t(n00b_buffer_t *)
 n00b_chalk_macho_hash_file(n00b_string_t *path)
 {
-    (void)path;
-    return n00b_result_err(n00b_buffer_t *, 1);
+    return n00b_chalk_file_hash_via(path, n00b_chalk_macho_hash_buffer);
 }

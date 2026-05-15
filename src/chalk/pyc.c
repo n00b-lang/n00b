@@ -274,33 +274,34 @@ n00b_chalk_pyc_extract_buffer(n00b_buffer_t *bytes)
     return n00b_result_ok(n00b_chalk_extract_result_t *, r);
 }
 
-// File-mode entry points: deferred until the n00b file-API glue lands
-// alongside the next codec batch.
+// File-mode entry points: read bytes via the VFS helper, dispatch
+// to the buffer-mode entry point, write the result back.
+#include "internal/chalk/file_io.h"
+
 n00b_result_t(n00b_chalk_io_result_t *)
 n00b_chalk_pyc_insert_file(n00b_string_t *path, n00b_chalk_mark_t *mark)
 {
-    (void)path;
-    (void)mark;
-    return n00b_result_err(n00b_chalk_io_result_t *, 1);
+    return n00b_chalk_file_insert_via(path, mark,
+                                      n00b_chalk_pyc_insert_buffer);
 }
 
 n00b_result_t(n00b_chalk_io_result_t *)
 n00b_chalk_pyc_delete_file(n00b_string_t *path)
 {
-    (void)path;
-    return n00b_result_err(n00b_chalk_io_result_t *, 1);
+    return n00b_chalk_file_delete_via(path,
+                                      n00b_chalk_pyc_delete_buffer);
 }
 
 n00b_result_t(n00b_chalk_extract_result_t *)
 n00b_chalk_pyc_extract_file(n00b_string_t *path)
 {
-    (void)path;
-    return n00b_result_err(n00b_chalk_extract_result_t *, 1);
+    return n00b_chalk_file_extract_via(path,
+                                       n00b_chalk_pyc_extract_buffer);
 }
 
 n00b_result_t(n00b_buffer_t *)
 n00b_chalk_pyc_hash_file(n00b_string_t *path)
 {
-    (void)path;
-    return n00b_result_err(n00b_buffer_t *, 1);
+    return n00b_chalk_file_hash_via(path,
+                                    n00b_chalk_pyc_hash_buffer);
 }

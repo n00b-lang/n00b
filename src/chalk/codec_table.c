@@ -246,35 +246,60 @@ n00b_chalk_hash_buffer(n00b_buffer_t *bytes)
     return e->hash_buffer(bytes);
 }
 
-// File-mode entry points: stubbed until per-codec file adapters land.
-// They need n00b's file API plumbing which the upcoming codec commits
-// will integrate.
+// File-mode dispatcher: detect by path extension, route to the
+// matching codec's *_file entry point.
+#include "internal/chalk/file_io.h"
+
+#define DISPATCH_FILE_TO(codec, suffix, args)                                \
+    do {                                                                     \
+        switch (codec) {                                                     \
+        case N00B_CHALK_CODEC_PYC:                                           \
+            return n00b_chalk_pyc_##suffix args;                             \
+        case N00B_CHALK_CODEC_MACHO:                                         \
+            return n00b_chalk_macho_##suffix args;                           \
+        case N00B_CHALK_CODEC_MACOS_WRAP:                                    \
+            return n00b_chalk_macos_wrap_##suffix args;                      \
+        case N00B_CHALK_CODEC_GGUF:                                          \
+            return n00b_chalk_gguf_##suffix args;                            \
+        case N00B_CHALK_CODEC_SAFETENSORS:                                   \
+            return n00b_chalk_safetensors_##suffix args;                     \
+        case N00B_CHALK_CODEC_SIDECAR_MODEL:                                 \
+            return n00b_chalk_sidecar_##suffix args;                         \
+        case N00B_CHALK_CODEC_SIDECAR_CERT:                                  \
+            return n00b_chalk_certs_##suffix args;                           \
+        default: break;                                                      \
+        }                                                                    \
+    } while (0)
+
 n00b_result_t(n00b_chalk_io_result_t *)
 n00b_chalk_insert_file(n00b_string_t *path, n00b_chalk_mark_t *mark)
 {
-    (void)path;
-    (void)mark;
+    n00b_chalk_codec_id_t id = n00b_chalk_codec_detect(nullptr, path);
+    DISPATCH_FILE_TO(id, insert_file, (path, mark));
     return n00b_result_err(n00b_chalk_io_result_t *, 1);
 }
 
 n00b_result_t(n00b_chalk_io_result_t *)
 n00b_chalk_delete_file(n00b_string_t *path)
 {
-    (void)path;
+    n00b_chalk_codec_id_t id = n00b_chalk_codec_detect(nullptr, path);
+    DISPATCH_FILE_TO(id, delete_file, (path));
     return n00b_result_err(n00b_chalk_io_result_t *, 1);
 }
 
 n00b_result_t(n00b_chalk_extract_result_t *)
 n00b_chalk_extract_file(n00b_string_t *path)
 {
-    (void)path;
+    n00b_chalk_codec_id_t id = n00b_chalk_codec_detect(nullptr, path);
+    DISPATCH_FILE_TO(id, extract_file, (path));
     return n00b_result_err(n00b_chalk_extract_result_t *, 1);
 }
 
 n00b_result_t(n00b_buffer_t *)
 n00b_chalk_hash_file(n00b_string_t *path)
 {
-    (void)path;
+    n00b_chalk_codec_id_t id = n00b_chalk_codec_detect(nullptr, path);
+    DISPATCH_FILE_TO(id, hash_file, (path));
     return n00b_result_err(n00b_buffer_t *, 1);
 }
 

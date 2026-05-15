@@ -168,32 +168,37 @@ n00b_chalk_sidecar_extract_sidecar_buffer(n00b_buffer_t *sidecar_bytes)
                                           N00B_CHALK_CODEC_SIDECAR_MODEL);
 }
 
-// File-mode stubs (deferred with the rest of the file API plumbing).
+#include "internal/chalk/file_io.h"
+
 n00b_result_t(n00b_chalk_io_result_t *)
 n00b_chalk_sidecar_insert_file(n00b_string_t *path, n00b_chalk_mark_t *mark)
 {
-    (void)path;
-    (void)mark;
-    return n00b_result_err(n00b_chalk_io_result_t *, 1);
+    return n00b_chalk_file_insert_via(path, mark,
+                                      n00b_chalk_sidecar_insert_buffer);
 }
 
 n00b_result_t(n00b_chalk_io_result_t *)
 n00b_chalk_sidecar_delete_file(n00b_string_t *path)
 {
-    (void)path;
-    return n00b_result_err(n00b_chalk_io_result_t *, 1);
+    return n00b_chalk_file_delete_via(path,
+                                      n00b_chalk_sidecar_delete_buffer);
 }
 
+// Extract reads the sidecar at <path>.chalk (not the artifact bytes).
 n00b_result_t(n00b_chalk_extract_result_t *)
 n00b_chalk_sidecar_extract_file(n00b_string_t *path)
 {
-    (void)path;
-    return n00b_result_err(n00b_chalk_extract_result_t *, 1);
+    auto rr = n00b_chalk_read_sidecar(path);
+    if (n00b_result_is_err(rr)) {
+        return n00b_result_err(n00b_chalk_extract_result_t *, 1);
+    }
+    return n00b_chalk_sidecar_parse_bytes(n00b_result_get(rr),
+                                          N00B_CHALK_CODEC_SIDECAR_MODEL);
 }
 
 n00b_result_t(n00b_buffer_t *)
 n00b_chalk_sidecar_hash_file(n00b_string_t *path)
 {
-    (void)path;
-    return n00b_result_err(n00b_buffer_t *, 1);
+    return n00b_chalk_file_hash_via(path,
+                                    n00b_chalk_sidecar_hash_buffer);
 }
