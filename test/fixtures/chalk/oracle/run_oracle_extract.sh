@@ -31,5 +31,9 @@ ART=$2
 printf '%s' "$TS" > "$HOME/.chalk-oracle-ts"
 trap 'rm -f "$HOME/.chalk-oracle-ts"' EXIT
 
-# Run chalk extract; suppress non-essential logging.
-"$CHALK_ORACLE_BINARY" --log-level=error extract "$ART" 2>/dev/null
+# Chalk routes its mark report to a configured sink (default: a log
+# file under ~/.local/chalk). Validation errors are on stderr at info+
+# log level. We capture both streams; tests look for libchalk-written
+# CHALK_ID / METADATA_ID values in the combined output, which appear
+# both in chalk's mark trace logs and in any validation error.
+"$CHALK_ORACLE_BINARY" --log-level=info extract "$ART" 2>&1

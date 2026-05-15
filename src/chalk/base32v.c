@@ -93,33 +93,37 @@ n00b_chalk_base32v_encode(const uint8_t *data, size_t len)
     return n00b_string_from_raw(out, op);
 }
 
-n00b_string_t *
-n00b_chalk_id_format_sha256(const uint8_t sha256[32])
+static n00b_string_t *
+slice_format(n00b_string_t *full)
 {
-    // First 20 chars of base32v(sha256) → first 12.5 bytes are consumed
-    // (8 bits/char * 20 / 5 = 32 5-bit chunks = 160 bits = 20 bytes,
-    // but we only need 100 bits). Encoding 32 bytes produces 52 chars;
-    // we slice [0:20] and reformat as 6-4-4-6.
-    n00b_string_t *full = n00b_chalk_base32v_encode(sha256, 32);
-
     char out[24];
-    // 6 + 1 + 4 + 1 + 4 + 1 + 6 = 23 chars + NUL
-    for (int i = 0; i < 6; i++) {
-        out[i] = full->data[i];
-    }
-    out[6] = '-';
-    for (int i = 0; i < 4; i++) {
-        out[7 + i] = full->data[6 + i];
-    }
+    for (int i = 0; i < 6; i++)  out[i]      = full->data[i];
+    out[6]  = '-';
+    for (int i = 0; i < 4; i++)  out[7 + i]  = full->data[6 + i];
     out[11] = '-';
-    for (int i = 0; i < 4; i++) {
-        out[12 + i] = full->data[10 + i];
-    }
+    for (int i = 0; i < 4; i++)  out[12 + i] = full->data[10 + i];
     out[16] = '-';
-    for (int i = 0; i < 6; i++) {
-        out[17 + i] = full->data[14 + i];
-    }
+    for (int i = 0; i < 6; i++)  out[17 + i] = full->data[14 + i];
     out[23] = '\0';
-
     return n00b_string_from_raw(out, 23);
+}
+
+// METADATA_ID input: 32 raw SHA-256 bytes.
+n00b_string_t *
+n00b_chalk_id_format_sha256_bytes(const uint8_t sha256[32])
+{
+    return slice_format(n00b_chalk_base32v_encode(sha256, 32));
+}
+
+// CHALK_ID input: the 64-char lowercase hex string of the SHA-256.
+n00b_string_t *
+n00b_chalk_id_format_sha256_hex(const uint8_t sha256[32])
+{
+    static const char hexd[] = "0123456789abcdef";
+    uint8_t hex[64];
+    for (int i = 0; i < 32; i++) {
+        hex[i * 2]     = (uint8_t)hexd[(sha256[i] >> 4) & 0xf];
+        hex[i * 2 + 1] = (uint8_t)hexd[sha256[i] & 0xf];
+    }
+    return slice_format(n00b_chalk_base32v_encode(hex, 64));
 }

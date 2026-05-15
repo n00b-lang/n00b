@@ -261,7 +261,11 @@ n00b_chalk_mark_finalize(n00b_chalk_mark_t *mark,
     const uint8_t *unchalked = (const uint8_t *)unchalked_sha256_32->data;
 
     // ---- CHALK_ID + HASH (derived from unchalked digest) ---------------
-    n00b_string_t *chalk_id_str = n00b_chalk_id_format_sha256(unchalked);
+    // CHALK_ID = idFormat(hex(sha256)) per chalk's defaultChalkId, which
+    // calls idFormat directly on the codec's getUnchalkedHash return value
+    // — and every codec's hook returns a hex string (chalk/src/plugins/
+    // codecPythonPyc.nim:83, etc.).
+    n00b_string_t *chalk_id_str = n00b_chalk_id_format_sha256_hex(unchalked);
     n00b_string_t *hash_hex_str = sha256_to_hex_string(unchalked);
 
     // ---- Static keys ---------------------------------------------------
@@ -290,7 +294,9 @@ n00b_chalk_mark_finalize(n00b_chalk_mark_t *mark,
     uint8_t mh_bytes[32];
     sha256_words_to_bytes(mhw, mh_bytes);
 
-    n00b_string_t *meta_id = n00b_chalk_id_format_sha256(mh_bytes);
+    // METADATA_ID = idFormat(raw sha256 bytes) per chalkjson.nim:525,
+    // which passes the raw Sha256Digest to idFormat directly.
+    n00b_string_t *meta_id = n00b_chalk_id_format_sha256_bytes(mh_bytes);
     mark_put(mark->dict, "METADATA_ID",
              n00b_json_string_new(meta_id->data));
 
