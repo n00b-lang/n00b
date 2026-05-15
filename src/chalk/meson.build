@@ -8,4 +8,6 @@ n00b_chalk_src = files(
     'mark.c',
     'codec_table.c',
     'pyc.c',
+    'sidecar.c',
+    'certs.c',
 )

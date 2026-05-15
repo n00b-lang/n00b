@@ -11,6 +11,7 @@
 #include "core/string.h"
 #include "chalk/n00b_chalk.h"
 #include "internal/chalk/codec_table.h"
+#include "internal/chalk/sidecar_internal.h"
 
 #include <string.h>
 
@@ -52,6 +53,20 @@ const n00b_chalk_codec_entry_t n00b_chalk_codec_table[] = {
         .delete_buffer  = n00b_chalk_pyc_delete_buffer,
         .extract_buffer = n00b_chalk_pyc_extract_buffer,
         .hash_buffer    = n00b_chalk_pyc_hash_buffer,
+    },
+    {
+        .codec          = N00B_CHALK_CODEC_SIDECAR_MODEL,
+        .insert_buffer  = n00b_chalk_sidecar_insert_buffer,
+        .delete_buffer  = n00b_chalk_sidecar_delete_buffer,
+        .extract_buffer = n00b_chalk_sidecar_extract_buffer,
+        .hash_buffer    = n00b_chalk_sidecar_hash_buffer,
+    },
+    {
+        .codec          = N00B_CHALK_CODEC_SIDECAR_CERT,
+        .insert_buffer  = n00b_chalk_certs_insert_buffer,
+        .delete_buffer  = n00b_chalk_certs_delete_buffer,
+        .extract_buffer = n00b_chalk_certs_extract_buffer,
+        .hash_buffer    = n00b_chalk_certs_hash_buffer,
     },
     { .codec = N00B_CHALK_CODEC_NONE },
 };
@@ -238,6 +253,10 @@ n00b_chalk_hash_file(n00b_string_t *path)
 n00b_result_t(n00b_chalk_extract_result_t *)
 n00b_chalk_extract_sidecar_buffer(n00b_buffer_t *sidecar_bytes)
 {
-    (void)sidecar_bytes;
-    return n00b_result_err(n00b_chalk_extract_result_t *, 1);
+    // No way to know whether the sidecar is for a model or a cert
+    // from just the bytes; default to CODEC_SIDECAR_MODEL. Callers
+    // that know the origin should call the per-codec entry point
+    // (e.g. n00b_chalk_sidecar_extract_sidecar_buffer).
+    return n00b_chalk_sidecar_parse_bytes(sidecar_bytes,
+                                          N00B_CHALK_CODEC_SIDECAR_MODEL);
 }
