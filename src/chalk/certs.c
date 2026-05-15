@@ -41,17 +41,18 @@ n00b_chalk_certs_hash_buffer(n00b_buffer_t *bytes)
 
 #include "internal/chalk/file_io.h"
 
+// Certs use the same sidecar streaming path as the model-sidecar
+// codec — only the codec id stamped in extract differs.
 n00b_result_t(n00b_chalk_io_result_t *)
 n00b_chalk_certs_insert_file(n00b_string_t *path, n00b_chalk_mark_t *mark)
 {
-    return n00b_chalk_file_insert_via(path, mark,
-                                      n00b_chalk_certs_insert_buffer);
+    return n00b_chalk_sidecar_insert_file(path, mark);
 }
 
 n00b_result_t(n00b_chalk_io_result_t *)
 n00b_chalk_certs_delete_file(n00b_string_t *path)
 {
-    return n00b_chalk_file_delete_via(path, n00b_chalk_certs_delete_buffer);
+    return n00b_chalk_sidecar_delete_file(path);
 }
 
 n00b_result_t(n00b_chalk_extract_result_t *)

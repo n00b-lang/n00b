@@ -170,18 +170,55 @@ n00b_chalk_sidecar_extract_sidecar_buffer(n00b_buffer_t *sidecar_bytes)
 
 #include "internal/chalk/file_io.h"
 
+// Streaming insert: we only need the artifact's unchalked SHA-256
+// to finalize CHALK_ID — the artifact bytes themselves don't go
+// into the sidecar. Stream-hash the file, finalize, write sidecar.
+// Peak resident: one chunk + the mark JSON. No artifact in RAM.
 n00b_result_t(n00b_chalk_io_result_t *)
 n00b_chalk_sidecar_insert_file(n00b_string_t *path, n00b_chalk_mark_t *mark)
 {
-    return n00b_chalk_file_insert_via(path, mark,
-                                      n00b_chalk_sidecar_insert_buffer);
+    if (!path || !mark) return n00b_result_err(n00b_chalk_io_result_t *, 1);
+    auto hr = n00b_chalk_hash_file_stream(path);
+    if (n00b_result_is_err(hr)) {
+        return n00b_result_err(n00b_chalk_io_result_t *, 2);
+    }
+    n00b_buffer_t *hash_buf = n00b_result_get(hr);
+    auto fin = n00b_chalk_mark_finalize(mark, hash_buf);
+    if (n00b_result_is_err(fin)) {
+        return n00b_result_err(n00b_chalk_io_result_t *, 3);
+    }
+    n00b_buffer_t *encoded = n00b_result_get(fin);
+    auto wr = n00b_chalk_write_sidecar(path, encoded);
+    if (n00b_result_is_err(wr)) {
+        return n00b_result_err(n00b_chalk_io_result_t *, 4);
+    }
+    auto r = (n00b_chalk_io_result_t *)n00b_alloc(n00b_chalk_io_result_t);
+    r->kind           = N00B_CHALK_OUT_SIDECAR;
+    r->bytes          = encoded;
+    r->sidecar_suffix = n00b_string_from_cstr(".chalk");
+    return n00b_result_ok(n00b_chalk_io_result_t *, r);
 }
 
+// Streaming delete: we only need to remove the sidecar — the
+// artifact bytes are irrelevant. No file read at all.
 n00b_result_t(n00b_chalk_io_result_t *)
 n00b_chalk_sidecar_delete_file(n00b_string_t *path)
 {
-    return n00b_chalk_file_delete_via(path,
-                                      n00b_chalk_sidecar_delete_buffer);
+    if (!path) return n00b_result_err(n00b_chalk_io_result_t *, 1);
+    auto dr = n00b_chalk_delete_sidecar(path);
+    if (n00b_result_is_err(dr)) {
+        // Treat "sidecar absent" as success — nothing to do.
+        auto r = (n00b_chalk_io_result_t *)n00b_alloc(n00b_chalk_io_result_t);
+        r->kind           = N00B_CHALK_OUT_SIDECAR;
+        r->bytes          = n00b_buffer_from_bytes("", 0);
+        r->sidecar_suffix = n00b_string_from_cstr(".chalk");
+        return n00b_result_ok(n00b_chalk_io_result_t *, r);
+    }
+    auto r = (n00b_chalk_io_result_t *)n00b_alloc(n00b_chalk_io_result_t);
+    r->kind           = N00B_CHALK_OUT_SIDECAR;
+    r->bytes          = n00b_buffer_from_bytes("", 0);
+    r->sidecar_suffix = n00b_string_from_cstr(".chalk");
+    return n00b_result_ok(n00b_chalk_io_result_t *, r);
 }
 
 // Extract reads the sidecar at <path>.chalk (not the artifact bytes).
