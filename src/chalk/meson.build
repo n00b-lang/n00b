@@ -20,4 +20,6 @@ n00b_chalk_src = files(
     'macho_parse.c',
     'macho_core.c',
     'macho.c',
+    'lang_table.c',
+    'source.c',
 )

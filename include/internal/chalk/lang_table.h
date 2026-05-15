@@ -8,17 +8,11 @@
 
 #include <n00b.h>
 
-typedef struct {
-    n00b_string_t *ext;
-    n00b_string_t *lang;
-    n00b_string_t *comment_open;
-    n00b_string_t *comment_close;
-} n00b_chalk_lang_entry_t;
+/** Look up the language for a file extension or shebang interpreter
+ *  name. `ext` is the byte sequence (no leading dot), `ext_len` its
+ *  length. Returns NULL if unknown. The result is a static string. */
+const char *n00b_chalk_lang_lookup_ext(const char *ext, size_t ext_len);
 
-extern const n00b_chalk_lang_entry_t *n00b_chalk_lang_table;
-extern const size_t                   n00b_chalk_lang_table_len;
-
-/** Detect language given a file extension (with leading dot) or a
- *  shebang interpreter name (no path). Returns NULL when unknown. */
-const n00b_chalk_lang_entry_t *
-    n00b_chalk_lang_detect(n00b_string_t *ext, n00b_string_t *shebang_interp);
+/** Look up the comment prefix for a language name. NUL-terminated
+ *  static result. NULL if unknown. */
+const char *n00b_chalk_lang_lookup_comment(const char *lang);
