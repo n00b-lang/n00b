@@ -41,14 +41,7 @@ static n00b_pe_binary_t *
 parse_pe(n00b_buffer_t *bytes)
 {
     if (!bytes) return nullptr;
-    // Defensive copy: n00b_pe_parse stores the stream/buffer
-    // reference in the parsed binary; if the caller passed a buffer
-    // that some other parser handle already owns, parse-state
-    // collisions are observed. Copying here costs an allocation but
-    // keeps the parsed binary self-contained.
-    n00b_buffer_t *copy = n00b_buffer_from_bytes(bytes->data,
-                                                  (int64_t)bytes->byte_len);
-    n00b_bstream_t *bs = n00b_bstream_new(copy);
+    n00b_bstream_t *bs = n00b_bstream_new(bytes);
     if (!bs) return nullptr;
     auto pr = n00b_pe_parse(bs);
     if (n00b_result_is_err(pr)) return nullptr;
