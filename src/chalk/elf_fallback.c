@@ -89,5 +89,6 @@ n00b_chalk_elf_fallback_extract_file(n00b_string_t *path)
 n00b_result_t(n00b_buffer_t *)
 n00b_chalk_elf_fallback_hash_file(n00b_string_t *path)
 {
-    return n00b_chalk_file_hash_via(path, n00b_chalk_elf_fallback_hash_buffer);
+    // Plain SHA-256 of the file — fallback has no canonical form.
+    return n00b_chalk_hash_file_stream(path);
 }

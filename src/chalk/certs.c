@@ -68,5 +68,6 @@ n00b_chalk_certs_extract_file(n00b_string_t *path)
 n00b_result_t(n00b_buffer_t *)
 n00b_chalk_certs_hash_file(n00b_string_t *path)
 {
-    return n00b_chalk_file_hash_via(path, n00b_chalk_certs_hash_buffer);
+    // Plain SHA-256 of the cert bytes — no transformation needed.
+    return n00b_chalk_hash_file_stream(path);
 }

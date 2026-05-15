@@ -199,6 +199,9 @@ n00b_chalk_sidecar_extract_file(n00b_string_t *path)
 n00b_result_t(n00b_buffer_t *)
 n00b_chalk_sidecar_hash_file(n00b_string_t *path)
 {
-    return n00b_chalk_file_hash_via(path,
-                                    n00b_chalk_sidecar_hash_buffer);
+    // The sidecar codec's unchalked hash is plain SHA-256 of the
+    // artifact bytes (no canonical-form transformation). Streaming
+    // keeps the resident set at one 64 KiB chunk regardless of
+    // artifact size — e.g. a 50 GB ONNX file stays at ~64 KiB.
+    return n00b_chalk_hash_file_stream(path);
 }

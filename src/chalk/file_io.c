@@ -10,6 +10,7 @@
 #include "core/buffer.h"
 #include "core/string.h"
 #include "core/alloc.h"
+#include "core/sha256.h"
 #include "vfs/vfs.h"
 #include "vfs/backend_local.h"
 #include "vfs/types.h"
@@ -198,4 +199,65 @@ n00b_chalk_file_hash_via(n00b_string_t            *path,
     auto rr = n00b_chalk_read_file(path);
     if (n00b_result_is_err(rr)) return n00b_result_err(n00b_buffer_t *, 1);
     return buf_hash(n00b_result_get(rr));
+}
+
+// -----------------------------------------------------------------------
+// Streaming SHA-256 of a file. Reads in fixed 64 KiB chunks and feeds
+// each chunk to n00b_sha256_update. The maximum resident chunk is the
+// chunk size itself, regardless of file size.
+//
+// This is the right primitive for codecs whose unchalked hash is
+// "sha256 of the file contents" (certs, model sidecar, elf_fallback).
+// For codecs that compute a canonical-form hash (chalk-aware
+// transformation of the bytes), this won't apply.
+// -----------------------------------------------------------------------
+
+#define N00B_CHALK_HASH_CHUNK (64 * 1024)
+
+n00b_result_t(n00b_buffer_t *)
+n00b_chalk_hash_file_stream(n00b_string_t *path)
+{
+    n00b_vfs_t *vfs = get_vfs();
+    if (!vfs || !path) return n00b_result_err(n00b_buffer_t *, 1);
+
+    auto sr = n00b_vfs_stat(vfs, path);
+    if (n00b_result_is_err(sr)) return n00b_result_err(n00b_buffer_t *, 2);
+    n00b_vfs_obj_stat_t st = n00b_result_get(sr);
+
+    auto fr = n00b_vfs_open(vfs, path, N00B_VFS_O_R);
+    if (n00b_result_is_err(fr)) return n00b_result_err(n00b_buffer_t *, 3);
+    n00b_vfs_fh_t fh = n00b_result_get(fr);
+
+    n00b_sha256_ctx_t ctx;
+    n00b_sha256_init(&ctx);
+
+    uint64_t remaining = st.size;
+    while (remaining > 0) {
+        uint64_t want = remaining > N00B_CHALK_HASH_CHUNK
+                            ? N00B_CHALK_HASH_CHUNK : remaining;
+        auto rr = n00b_vfs_read(vfs, fh, want);
+        if (n00b_result_is_err(rr)) {
+            n00b_vfs_close(vfs, fh);
+            return n00b_result_err(n00b_buffer_t *, 4);
+        }
+        n00b_buffer_t *chunk = n00b_result_get(rr);
+        if (!chunk || chunk->byte_len == 0) break;
+        n00b_sha256_update(&ctx, chunk->data, chunk->byte_len);
+        remaining -= chunk->byte_len;
+        if (chunk->byte_len < want) break;
+    }
+    n00b_vfs_close(vfs, fh);
+
+    n00b_sha256_digest_t words;
+    n00b_sha256_finalize(&ctx, words);
+    uint8_t bytes[32];
+    for (int i = 0; i < 8; i++) {
+        uint32_t w   = words[i];
+        bytes[i * 4]     = (uint8_t)((w >> 24) & 0xff);
+        bytes[i * 4 + 1] = (uint8_t)((w >> 16) & 0xff);
+        bytes[i * 4 + 2] = (uint8_t)((w >> 8) & 0xff);
+        bytes[i * 4 + 3] = (uint8_t)(w & 0xff);
+    }
+    return n00b_result_ok(n00b_buffer_t *,
+                          n00b_buffer_from_bytes((char *)bytes, 32));
 }

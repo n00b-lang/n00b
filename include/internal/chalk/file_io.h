@@ -62,3 +62,14 @@ n00b_result_t(n00b_chalk_extract_result_t *)
 n00b_result_t(n00b_buffer_t *)
     n00b_chalk_file_hash_via(n00b_string_t            *path,
                              n00b_chalk_buf_hash_fn_t  buf_hash);
+
+/** Streaming SHA-256 of a file. Reads the file in fixed-size chunks
+ *  (no full-file buffer) and returns the 32 raw digest bytes.
+ *
+ *  Use this from a codec's `_hash_file` entry point whenever the
+ *  codec's unchalked hash is "sha256 over the file contents" — i.e.
+ *  the codec doesn't need to parse / transform / reshape the bytes
+ *  to compute the canonical-unchalked form. Applies to certs,
+ *  sidecar, and elf_fallback today. */
+n00b_result_t(n00b_buffer_t *)
+    n00b_chalk_hash_file_stream(n00b_string_t *path);

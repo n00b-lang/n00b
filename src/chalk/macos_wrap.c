@@ -79,9 +79,24 @@ is_macho_magic(n00b_buffer_t *b)
         || m == 0xcafebabe || m == 0xbebafeca;
 }
 
+// Quick detect: the first 12 bytes of k_prefix are "#!/bin/bash\n",
+// which is sufficient to distinguish a chalked bash-wrapped Mach-O
+// from anything else. Full ~600-byte prefix validation happens in
+// parse_wrapped() which compares the entire header during operations.
+#define K_PREFIX_QUICK 12
+
+static bool
+quick_prefix_match(n00b_buffer_t *b)
+{
+    if (!b || b->byte_len < K_PREFIX_QUICK) return false;
+    return memcmp(b->data, k_prefix, K_PREFIX_QUICK) == 0;
+}
+
 static bool
 starts_with_prefix(n00b_buffer_t *b)
 {
+    // Full-prefix check used by parse_wrapped to confirm the body
+    // matches our wrapper template exactly.
     size_t plen = sizeof(k_prefix) - 1;
     if (!b || b->byte_len < plen) return false;
     return memcmp(b->data, k_prefix, plen) == 0;
@@ -309,7 +324,7 @@ n00b_chalk_macos_wrap_insert_buffer(n00b_buffer_t *bytes,
     }
 
     n00b_buffer_t *macho;
-    if (starts_with_prefix(bytes)) {
+    if (quick_prefix_match(bytes)) {
         // Already wrapped — re-mark the existing binary.
         auto parsed = parse_wrapped(bytes);
         if (!parsed.valid) {
@@ -344,7 +359,7 @@ n00b_result_t(n00b_chalk_io_result_t *)
 n00b_chalk_macos_wrap_delete_buffer(n00b_buffer_t *bytes)
 {
     if (!bytes) return n00b_result_err(n00b_chalk_io_result_t *, 1);
-    if (!starts_with_prefix(bytes)) {
+    if (!quick_prefix_match(bytes)) {
         // Already un-wrapped — nothing to do.
         auto r = (n00b_chalk_io_result_t *)
                      n00b_alloc(n00b_chalk_io_result_t);
@@ -382,7 +397,7 @@ n00b_result_t(n00b_buffer_t *)
 n00b_chalk_macos_wrap_hash_buffer(n00b_buffer_t *bytes)
 {
     if (!bytes) return n00b_result_err(n00b_buffer_t *, 1);
-    if (starts_with_prefix(bytes)) {
+    if (quick_prefix_match(bytes)) {
         auto parsed = parse_wrapped(bytes);
         if (!parsed.valid) {
             return n00b_result_err(n00b_buffer_t *, 2);

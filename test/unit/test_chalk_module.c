@@ -240,11 +240,20 @@ check_extract_has_six(n00b_chalk_extract_result_t *r)
 static void
 test_roundtrip_pyc(void)
 {
-    // Minimal .pyc body: magic header + 4 bytes timestamp + 4 bytes size
-    // + a tiny code object. We don't actually parse it; we just need
-    // bytes that the pyc codec can scan past.
+    // Minimal .pyc fixture. CPython's 16-byte header layout:
+    //   bytes [0..1]  magic version word (varies per Python version)
+    //   bytes [2..3]  always "\r\n" — the loader's sanity check
+    //   bytes [4..7]  flags
+    //   bytes [8..11] timestamp
+    //   bytes [12..15] source size
+    // libchalk's looks_like_pyc() rejects anything missing the
+    // "\r\n" sentinel at bytes [2..3].
     uint8_t fixture[64];
     memset(fixture, 0xab, sizeof(fixture));
+    fixture[0] = 0xa7;  // Python 3.11-ish magic
+    fixture[1] = 0x0d;
+    fixture[2] = '\r';
+    fixture[3] = '\n';
     auto bytes = n00b_buffer_from_bytes((char *)fixture, sizeof(fixture));
 
     auto mark = n00b_chalk_mark_new();

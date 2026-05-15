@@ -25,6 +25,26 @@
 #define MAGIC_LEN      16
 
 // -----------------------------------------------------------------------
+// .pyc sanity check.
+//
+// Every CPython .pyc magic word ends with the bytes "\r\n" at offsets
+// 2..3 — this is intentional in CPython's loader as a quick sanity
+// signal. We use the same check to fail-fast on non-.pyc input
+// passed to the buffer entry points; without this guard, an
+// arbitrary buffer would trigger an unbounded find_magic scan.
+// -----------------------------------------------------------------------
+
+static bool
+looks_like_pyc(n00b_buffer_t *bytes)
+{
+    // .pyc header is 16 bytes (magic + flags + ts + size). Reject
+    // anything smaller; reject anything whose magic doesn't end in
+    // "\r\n" (the canonical CPython sanity sentinel).
+    return bytes && bytes->byte_len >= 16
+        && bytes->data[2] == '\r' && bytes->data[3] == '\n';
+}
+
+// -----------------------------------------------------------------------
 // Mark scan helpers (also useful to other in-band codecs; we'll lift
 // them into mark.c when source/macho_wrap need them).
 // -----------------------------------------------------------------------
@@ -178,7 +198,7 @@ pre_len(n00b_buffer_t *bytes)
 n00b_result_t(n00b_buffer_t *)
 n00b_chalk_pyc_hash_buffer(n00b_buffer_t *bytes)
 {
-    if (!bytes) return n00b_result_err(n00b_buffer_t *, 1);
+    if (!looks_like_pyc(bytes)) return n00b_result_err(n00b_buffer_t *, 1);
     size_t plen = pre_len(bytes);
     return n00b_result_ok(n00b_buffer_t *, sha256_of(bytes->data, plen));
 }
@@ -186,7 +206,7 @@ n00b_chalk_pyc_hash_buffer(n00b_buffer_t *bytes)
 n00b_result_t(n00b_chalk_io_result_t *)
 n00b_chalk_pyc_insert_buffer(n00b_buffer_t *bytes, n00b_chalk_mark_t *mark)
 {
-    if (!bytes || !mark) {
+    if (!mark || !looks_like_pyc(bytes)) {
         return n00b_result_err(n00b_chalk_io_result_t *, 1);
     }
 
@@ -233,7 +253,9 @@ n00b_chalk_pyc_insert_buffer(n00b_buffer_t *bytes, n00b_chalk_mark_t *mark)
 n00b_result_t(n00b_chalk_io_result_t *)
 n00b_chalk_pyc_delete_buffer(n00b_buffer_t *bytes)
 {
-    if (!bytes) return n00b_result_err(n00b_chalk_io_result_t *, 1);
+    if (!looks_like_pyc(bytes)) {
+        return n00b_result_err(n00b_chalk_io_result_t *, 1);
+    }
 
     size_t ms, me;
     n00b_buffer_t *out;
@@ -254,7 +276,9 @@ n00b_chalk_pyc_delete_buffer(n00b_buffer_t *bytes)
 n00b_result_t(n00b_chalk_extract_result_t *)
 n00b_chalk_pyc_extract_buffer(n00b_buffer_t *bytes)
 {
-    if (!bytes) return n00b_result_err(n00b_chalk_extract_result_t *, 1);
+    if (!looks_like_pyc(bytes)) {
+        return n00b_result_err(n00b_chalk_extract_result_t *, 1);
+    }
     size_t ms, me;
     if (!locate_mark(bytes, &ms, &me)) {
         return n00b_result_err(n00b_chalk_extract_result_t *, 2);
