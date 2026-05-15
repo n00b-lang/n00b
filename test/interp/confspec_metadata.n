@@ -1,0 +1,12 @@
+confspec {
+    root Config {
+        field port {
+        }
+    }
+    named servers Server {
+    }
+}
+
+print(confspec_section_count())
+print(confspec_field_count())
+0

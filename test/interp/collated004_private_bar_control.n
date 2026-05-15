@@ -1,0 +1,7 @@
+use collated004_private_bar_dep from "modules"
+
+func foo() -> int {
+    return 7
+}
+
+print(foo())

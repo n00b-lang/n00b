@@ -1,0 +1,11 @@
+class Box {
+  value: int
+  other: int
+}
+
+var b = Box(1, 2)
+~b.value = 10
+b.other = 20
+print(b.value)
+print(b.other)
+0

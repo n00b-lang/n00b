@@ -1,0 +1,4 @@
+print("before missing use")
+use definitely_missing_module
+print("after missing use")
+0

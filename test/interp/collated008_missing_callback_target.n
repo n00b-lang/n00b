@@ -1,0 +1,2 @@
+var cb = func missing_target
+print(call(cb))

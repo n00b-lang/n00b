@@ -1,0 +1,12 @@
+class Box {
+  value: int
+}
+
+method Box.add(amount: int = 5) -> int {
+  return self.value + amount
+}
+
+var b = Box(10)
+print(b.add())
+print(b.add(7))
+0

@@ -1,0 +1,10 @@
+func reject_value(value: int) -> bool {
+    return false
+}
+
+parameter var broken {
+    default: 5
+    validator: func reject_value
+}
+
+0

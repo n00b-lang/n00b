@@ -1,0 +1,14 @@
+func provide_string() -> string {
+    return "ready"
+}
+
+func add_half(value: f64) -> f64 {
+    return value + 0.5
+}
+
+var string_cb = func provide_string
+
+print(call(func provide_string))
+print(call(string_cb))
+print(call(func add_half, 1.5))
+0

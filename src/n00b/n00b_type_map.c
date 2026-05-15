@@ -33,8 +33,7 @@ n00b_type_map(n00b_cg_session_t *session, n00b_tc_type_t *type)
             return N00B_CG_I64;
         }
 
-        if (n00b_unicode_str_eq(name, r"int")
-            || n00b_unicode_str_eq(name, r"i64")) {
+        if (n00b_unicode_str_eq(name, r"int") || n00b_unicode_str_eq(name, r"i64")) {
             return N00B_CG_I64;
         }
         if (n00b_unicode_str_eq(name, r"i8")) {
@@ -91,6 +90,9 @@ n00b_type_map(n00b_cg_session_t *session, n00b_tc_type_t *type)
             }
             if (n00b_unicode_str_eq(param.name, r"dict")) {
                 return N00B_CG_DICT;
+            }
+            if (n00b_unicode_str_eq(param.name, r"set")) {
+                return N00B_CG_SET;
             }
             if (n00b_unicode_str_eq(param.name, r"result")) {
                 return N00B_CG_RESULT;

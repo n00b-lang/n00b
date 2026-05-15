@@ -68,8 +68,10 @@ n00b_cg_module_t *n00b_module_load(n00b_cg_session_t *session,
  * @param grammar  Grammar used for parsing.
  * @param tree     Root of the parse tree to scan.
  * @param annot    Annotation result from the walk.
+ * @param caller_path  Directory of the importing file (for relative lookup).
  */
-void n00b_resolve_use_stmts(n00b_cg_session_t   *session,
+bool n00b_resolve_use_stmts(n00b_cg_session_t   *session,
                              n00b_grammar_t       *grammar,
                              n00b_parse_tree_t    *tree,
-                             n00b_annot_result_t  *annot);
+                             n00b_annot_result_t  *annot,
+                             const char           *caller_path);

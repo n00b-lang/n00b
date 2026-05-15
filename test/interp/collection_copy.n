@@ -1,0 +1,16 @@
+var xs = [1, 2]
+var ys: list[int] = copy(xs)
+
+ys[0] = 9
+
+print(xs[0])
+print(ys[0])
+
+var d = {1: 2}
+var e: dict[int, int] = copy(d)
+
+e[1] = 7
+
+print(d[1])
+print(e[1])
+0

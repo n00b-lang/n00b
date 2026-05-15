@@ -1,0 +1,3 @@
+use collated007_public_foo_dep from "modules"
+
+print(foo())

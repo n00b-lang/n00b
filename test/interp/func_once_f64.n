@@ -1,0 +1,7 @@
+once func cached_float() -> f64 {
+    return 1.5
+}
+
+print(cached_float())
+print(cached_float())
+0

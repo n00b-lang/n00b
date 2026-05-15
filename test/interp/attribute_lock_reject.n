@@ -1,0 +1,9 @@
+class Box {
+  value: int
+}
+
+var b = Box(1)
+~b.value = 10
+b.value = 11
+print(b.value)
+0

@@ -1,0 +1,5 @@
+extern n00b_missing_symbol_for_test() -> int {
+}
+
+print(n00b_missing_symbol_for_test())
+0

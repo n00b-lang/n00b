@@ -15,7 +15,9 @@
 #include "n00b.h"
 #include "core/alloc.h"
 #include "core/runtime.h"
+#include "internal/slay/codegen_internal.h"
 #include "slay/codegen.h"
+#include "slay/codegen_builtins.h"
 
 // ============================================================================
 // 1. Builder: add two i64 values, interpret
@@ -26,11 +28,12 @@ test_builder_add_interp(void)
 {
     n00b_codegen_t *cg = n00b_codegen_new(NULL);
 
-    n00b_cg_begin_func(cg, "add",
-                        .ret         = N00B_CG_I64,
-                        .param_names = (const char *[]){"x", "y"},
-                        .param_types = (n00b_cg_type_tag_t[]){N00B_CG_I64, N00B_CG_I64},
-                        .n_params    = 2);
+    n00b_cg_begin_func(cg,
+                       "add",
+                       .ret         = N00B_CG_I64,
+                       .param_names = (const char *[]){"x", "y"},
+                       .param_types = (n00b_cg_type_tag_t[]){N00B_CG_I64, N00B_CG_I64},
+                       .n_params    = 2);
 
     n00b_cg_val_t x = n00b_cg_param(cg, 0);
     n00b_cg_val_t y = n00b_cg_param(cg, 1);
@@ -49,7 +52,7 @@ test_builder_add_interp(void)
     // Another test.
     args[0].i = -10;
     args[1].i = 25;
-    ok = n00b_codegen_interpret(cg, "add", &result, args, 2);
+    ok        = n00b_codegen_interpret(cg, "add", &result, args, 2);
     assert(ok);
     assert(result.i == 15);
 
@@ -66,11 +69,12 @@ test_builder_add_jit(void)
 {
     n00b_codegen_t *cg = n00b_codegen_new(NULL);
 
-    n00b_cg_begin_func(cg, "add",
-                        .ret         = N00B_CG_I64,
-                        .param_names = (const char *[]){"x", "y"},
-                        .param_types = (n00b_cg_type_tag_t[]){N00B_CG_I64, N00B_CG_I64},
-                        .n_params    = 2);
+    n00b_cg_begin_func(cg,
+                       "add",
+                       .ret         = N00B_CG_I64,
+                       .param_names = (const char *[]){"x", "y"},
+                       .param_types = (n00b_cg_type_tag_t[]){N00B_CG_I64, N00B_CG_I64},
+                       .n_params    = 2);
 
     n00b_cg_val_t x = n00b_cg_param(cg, 0);
     n00b_cg_val_t y = n00b_cg_param(cg, 1);
@@ -101,59 +105,60 @@ test_builder_arithmetic(void)
     n00b_codegen_t *cg = n00b_codegen_new(NULL);
 
     // sub(x, y) = x - y
-    n00b_cg_begin_func(cg, "sub",
-                        .ret         = N00B_CG_I64,
-                        .param_names = (const char *[]){"x", "y"},
-                        .param_types = (n00b_cg_type_tag_t[]){N00B_CG_I64, N00B_CG_I64},
-                        .n_params    = 2);
-    n00b_cg_emit_ret(cg, n00b_cg_emit_sub(cg, n00b_cg_param(cg, 0),
-                                             n00b_cg_param(cg, 1)));
+    n00b_cg_begin_func(cg,
+                       "sub",
+                       .ret         = N00B_CG_I64,
+                       .param_names = (const char *[]){"x", "y"},
+                       .param_types = (n00b_cg_type_tag_t[]){N00B_CG_I64, N00B_CG_I64},
+                       .n_params    = 2);
+    n00b_cg_emit_ret(cg, n00b_cg_emit_sub(cg, n00b_cg_param(cg, 0), n00b_cg_param(cg, 1)));
     n00b_cg_end_func(cg);
 
     // mul(x, y) = x * y
-    n00b_cg_begin_func(cg, "mul",
-                        .ret         = N00B_CG_I64,
-                        .param_names = (const char *[]){"x", "y"},
-                        .param_types = (n00b_cg_type_tag_t[]){N00B_CG_I64, N00B_CG_I64},
-                        .n_params    = 2);
-    n00b_cg_emit_ret(cg, n00b_cg_emit_mul(cg, n00b_cg_param(cg, 0),
-                                             n00b_cg_param(cg, 1)));
+    n00b_cg_begin_func(cg,
+                       "mul",
+                       .ret         = N00B_CG_I64,
+                       .param_names = (const char *[]){"x", "y"},
+                       .param_types = (n00b_cg_type_tag_t[]){N00B_CG_I64, N00B_CG_I64},
+                       .n_params    = 2);
+    n00b_cg_emit_ret(cg, n00b_cg_emit_mul(cg, n00b_cg_param(cg, 0), n00b_cg_param(cg, 1)));
     n00b_cg_end_func(cg);
 
     // div(x, y) = x / y
-    n00b_cg_begin_func(cg, "div_fn",
-                        .ret         = N00B_CG_I64,
-                        .param_names = (const char *[]){"x", "y"},
-                        .param_types = (n00b_cg_type_tag_t[]){N00B_CG_I64, N00B_CG_I64},
-                        .n_params    = 2);
-    n00b_cg_emit_ret(cg, n00b_cg_emit_div(cg, n00b_cg_param(cg, 0),
-                                             n00b_cg_param(cg, 1)));
+    n00b_cg_begin_func(cg,
+                       "div_fn",
+                       .ret         = N00B_CG_I64,
+                       .param_names = (const char *[]){"x", "y"},
+                       .param_types = (n00b_cg_type_tag_t[]){N00B_CG_I64, N00B_CG_I64},
+                       .n_params    = 2);
+    n00b_cg_emit_ret(cg, n00b_cg_emit_div(cg, n00b_cg_param(cg, 0), n00b_cg_param(cg, 1)));
     n00b_cg_end_func(cg);
 
     // mod(x, y) = x % y
-    n00b_cg_begin_func(cg, "mod_fn",
-                        .ret         = N00B_CG_I64,
-                        .param_names = (const char *[]){"x", "y"},
-                        .param_types = (n00b_cg_type_tag_t[]){N00B_CG_I64, N00B_CG_I64},
-                        .n_params    = 2);
-    n00b_cg_emit_ret(cg, n00b_cg_emit_mod(cg, n00b_cg_param(cg, 0),
-                                             n00b_cg_param(cg, 1)));
+    n00b_cg_begin_func(cg,
+                       "mod_fn",
+                       .ret         = N00B_CG_I64,
+                       .param_names = (const char *[]){"x", "y"},
+                       .param_types = (n00b_cg_type_tag_t[]){N00B_CG_I64, N00B_CG_I64},
+                       .n_params    = 2);
+    n00b_cg_emit_ret(cg, n00b_cg_emit_mod(cg, n00b_cg_param(cg, 0), n00b_cg_param(cg, 1)));
     n00b_cg_end_func(cg);
 
     // neg(x) = -x
-    n00b_cg_begin_func(cg, "neg_fn",
-                        .ret         = N00B_CG_I64,
-                        .param_names = (const char *[]){"x"},
-                        .param_types = (n00b_cg_type_tag_t[]){N00B_CG_I64},
-                        .n_params    = 1);
+    n00b_cg_begin_func(cg,
+                       "neg_fn",
+                       .ret         = N00B_CG_I64,
+                       .param_names = (const char *[]){"x"},
+                       .param_types = (n00b_cg_type_tag_t[]){N00B_CG_I64},
+                       .n_params    = 1);
     n00b_cg_emit_ret(cg, n00b_cg_emit_neg(cg, n00b_cg_param(cg, 0)));
     n00b_cg_end_func(cg);
 
     typedef int64_t (*binop_fn)(int64_t, int64_t);
     typedef int64_t (*unop_fn)(int64_t);
 
-    binop_fn sub = (binop_fn)n00b_codegen_jit(cg, "sub");
-    binop_fn mul = (binop_fn)n00b_codegen_jit(cg, "mul");
+    binop_fn sub    = (binop_fn)n00b_codegen_jit(cg, "sub");
+    binop_fn mul    = (binop_fn)n00b_codegen_jit(cg, "mul");
     binop_fn div_fn = (binop_fn)n00b_codegen_jit(cg, "div_fn");
     binop_fn mod_fn = (binop_fn)n00b_codegen_jit(cg, "mod_fn");
     unop_fn  neg_fn = (unop_fn)n00b_codegen_jit(cg, "neg_fn");
@@ -178,22 +183,22 @@ test_builder_comparisons(void)
 {
     n00b_codegen_t *cg = n00b_codegen_new(NULL);
 
-    n00b_cg_begin_func(cg, "lt",
-                        .ret         = N00B_CG_I64,
-                        .param_names = (const char *[]){"x", "y"},
-                        .param_types = (n00b_cg_type_tag_t[]){N00B_CG_I64, N00B_CG_I64},
-                        .n_params    = 2);
-    n00b_cg_emit_ret(cg, n00b_cg_emit_lt(cg, n00b_cg_param(cg, 0),
-                                            n00b_cg_param(cg, 1)));
+    n00b_cg_begin_func(cg,
+                       "lt",
+                       .ret         = N00B_CG_I64,
+                       .param_names = (const char *[]){"x", "y"},
+                       .param_types = (n00b_cg_type_tag_t[]){N00B_CG_I64, N00B_CG_I64},
+                       .n_params    = 2);
+    n00b_cg_emit_ret(cg, n00b_cg_emit_lt(cg, n00b_cg_param(cg, 0), n00b_cg_param(cg, 1)));
     n00b_cg_end_func(cg);
 
-    n00b_cg_begin_func(cg, "eq",
-                        .ret         = N00B_CG_I64,
-                        .param_names = (const char *[]){"x", "y"},
-                        .param_types = (n00b_cg_type_tag_t[]){N00B_CG_I64, N00B_CG_I64},
-                        .n_params    = 2);
-    n00b_cg_emit_ret(cg, n00b_cg_emit_eq(cg, n00b_cg_param(cg, 0),
-                                            n00b_cg_param(cg, 1)));
+    n00b_cg_begin_func(cg,
+                       "eq",
+                       .ret         = N00B_CG_I64,
+                       .param_names = (const char *[]){"x", "y"},
+                       .param_types = (n00b_cg_type_tag_t[]){N00B_CG_I64, N00B_CG_I64},
+                       .n_params    = 2);
+    n00b_cg_emit_ret(cg, n00b_cg_emit_eq(cg, n00b_cg_param(cg, 0), n00b_cg_param(cg, 1)));
     n00b_cg_end_func(cg);
 
     typedef int64_t (*cmp_fn)(int64_t, int64_t);
@@ -222,11 +227,12 @@ test_builder_branches(void)
     n00b_codegen_t *cg = n00b_codegen_new(NULL);
 
     // max(x, y) = x > y ? x : y
-    n00b_cg_begin_func(cg, "max",
-                        .ret         = N00B_CG_I64,
-                        .param_names = (const char *[]){"x", "y"},
-                        .param_types = (n00b_cg_type_tag_t[]){N00B_CG_I64, N00B_CG_I64},
-                        .n_params    = 2);
+    n00b_cg_begin_func(cg,
+                       "max",
+                       .ret         = N00B_CG_I64,
+                       .param_names = (const char *[]){"x", "y"},
+                       .param_types = (n00b_cg_type_tag_t[]){N00B_CG_I64, N00B_CG_I64},
+                       .n_params    = 2);
 
     n00b_cg_val_t x = n00b_cg_param(cg, 0);
     n00b_cg_val_t y = n00b_cg_param(cg, 1);
@@ -265,18 +271,19 @@ test_builder_loops(void)
     n00b_codegen_t *cg = n00b_codegen_new(NULL);
 
     // sum(n) = 1 + 2 + ... + n
-    n00b_cg_begin_func(cg, "sum",
-                        .ret         = N00B_CG_I64,
-                        .param_names = (const char *[]){"n"},
-                        .param_types = (n00b_cg_type_tag_t[]){N00B_CG_I64},
-                        .n_params    = 1);
+    n00b_cg_begin_func(cg,
+                       "sum",
+                       .ret         = N00B_CG_I64,
+                       .param_names = (const char *[]){"n"},
+                       .param_types = (n00b_cg_type_tag_t[]){N00B_CG_I64},
+                       .n_params    = 1);
 
     n00b_cg_val_t n   = n00b_cg_param(cg, 0);
     n00b_cg_val_t acc = n00b_cg_local(cg, "acc");
     n00b_cg_val_t i   = n00b_cg_local(cg, "i");
 
     n00b_cg_store(cg, acc, _n00b_cg_const_i64(cg, 0));
-    n00b_cg_store(cg, i,   _n00b_cg_const_i64(cg, 1));
+    n00b_cg_store(cg, i, _n00b_cg_const_i64(cg, 1));
 
     n00b_cg_val_t loop_top  = n00b_cg_label_new(cg);
     n00b_cg_val_t loop_exit = n00b_cg_label_new(cg);
@@ -284,16 +291,13 @@ test_builder_loops(void)
     n00b_cg_label_here(cg, loop_top);
 
     // while (i <= n)
-    n00b_cg_val_t cond = n00b_cg_emit_le(cg, n00b_cg_load(cg, i),
-                                           n00b_cg_load(cg, n));
+    n00b_cg_val_t cond = n00b_cg_emit_le(cg, n00b_cg_load(cg, i), n00b_cg_load(cg, n));
     n00b_cg_emit_bf(cg, cond, loop_exit);
 
     // acc += i
-    n00b_cg_store(cg, acc, n00b_cg_emit_add(cg, n00b_cg_load(cg, acc),
-                                               n00b_cg_load(cg, i)));
+    n00b_cg_store(cg, acc, n00b_cg_emit_add(cg, n00b_cg_load(cg, acc), n00b_cg_load(cg, i)));
     // i++
-    n00b_cg_store(cg, i, n00b_cg_emit_add(cg, n00b_cg_load(cg, i),
-                                             _n00b_cg_const_i64(cg, 1)));
+    n00b_cg_store(cg, i, n00b_cg_emit_add(cg, n00b_cg_load(cg, i), _n00b_cg_const_i64(cg, 1)));
 
     n00b_cg_emit_jmp(cg, loop_top);
     n00b_cg_label_here(cg, loop_exit);
@@ -360,11 +364,12 @@ test_builder_double(void)
 {
     n00b_codegen_t *cg = n00b_codegen_new(NULL);
 
-    n00b_cg_begin_func(cg, "dadd",
-                        .ret         = N00B_CG_F64,
-                        .param_names = (const char *[]){"x", "y"},
-                        .param_types = (n00b_cg_type_tag_t[]){N00B_CG_F64, N00B_CG_F64},
-                        .n_params    = 2);
+    n00b_cg_begin_func(cg,
+                       "dadd",
+                       .ret         = N00B_CG_F64,
+                       .param_names = (const char *[]){"x", "y"},
+                       .param_types = (n00b_cg_type_tag_t[]){N00B_CG_F64, N00B_CG_F64},
+                       .n_params    = 2);
 
     n00b_cg_val_t x = n00b_cg_param(cg, 0);
     n00b_cg_val_t y = n00b_cg_param(cg, 1);
@@ -400,23 +405,25 @@ test_builder_import(void)
 {
     n00b_codegen_t *cg = n00b_codegen_new(NULL);
 
-    n00b_cg_import_func(cg, "external_add", (void *)external_add,
-                          .ret         = N00B_CG_I64,
-                          .param_types = (n00b_cg_type_tag_t[]){N00B_CG_I64, N00B_CG_I64},
-                          .n_params    = 2);
-
-    n00b_cg_begin_func(cg, "use_ext",
+    n00b_cg_import_func(cg,
+                        "external_add",
+                        (void *)external_add,
                         .ret         = N00B_CG_I64,
-                        .param_names = (const char *[]){"x", "y"},
                         .param_types = (n00b_cg_type_tag_t[]){N00B_CG_I64, N00B_CG_I64},
                         .n_params    = 2);
+
+    n00b_cg_begin_func(cg,
+                       "use_ext",
+                       .ret         = N00B_CG_I64,
+                       .param_names = (const char *[]){"x", "y"},
+                       .param_types = (n00b_cg_type_tag_t[]){N00B_CG_I64, N00B_CG_I64},
+                       .n_params    = 2);
 
     n00b_cg_val_t x = n00b_cg_param(cg, 0);
     n00b_cg_val_t y = n00b_cg_param(cg, 1);
 
     n00b_cg_val_t args[2] = {x, y};
-    n00b_cg_val_t result = n00b_cg_emit_call(cg, "external_add", args, 2,
-                                               .ret = N00B_CG_I64);
+    n00b_cg_val_t result  = n00b_cg_emit_call(cg, "external_add", args, 2, .ret = N00B_CG_I64);
     n00b_cg_emit_ret(cg, result);
     n00b_cg_end_func(cg);
 
@@ -424,7 +431,7 @@ test_builder_import(void)
     use_ext_fn fn = (use_ext_fn)n00b_codegen_jit(cg, "use_ext");
     assert(fn != NULL);
 
-    assert(fn(1, 2) == 103);  // 1 + 2 + 100
+    assert(fn(1, 2) == 103); // 1 + 2 + 100
     assert(fn(0, 0) == 100);
     assert(fn(-50, -50) == 0);
 
@@ -442,36 +449,37 @@ test_builder_internal_call(void)
     n00b_codegen_t *cg = n00b_codegen_new(NULL);
 
     // Define helper: double_it(x) = x * 2
-    n00b_cg_begin_func(cg, "double_it",
-                        .ret         = N00B_CG_I64,
-                        .param_names = (const char *[]){"x"},
-                        .param_types = (n00b_cg_type_tag_t[]){N00B_CG_I64},
-                        .n_params    = 1);
+    n00b_cg_begin_func(cg,
+                       "double_it",
+                       .ret         = N00B_CG_I64,
+                       .param_names = (const char *[]){"x"},
+                       .param_types = (n00b_cg_type_tag_t[]){N00B_CG_I64},
+                       .n_params    = 1);
     n00b_cg_val_t x = n00b_cg_param(cg, 0);
     n00b_cg_emit_ret(cg, n00b_cg_emit_mul(cg, x, _n00b_cg_const_i64(cg, 2)));
     n00b_cg_end_func(cg);
 
     // Caller: call_double(x) = double_it(x) + 1
-    n00b_cg_begin_func(cg, "call_double",
-                        .ret         = N00B_CG_I64,
-                        .param_names = (const char *[]){"x"},
-                        .param_types = (n00b_cg_type_tag_t[]){N00B_CG_I64},
-                        .n_params    = 1);
-    n00b_cg_val_t arg = n00b_cg_param(cg, 0);
+    n00b_cg_begin_func(cg,
+                       "call_double",
+                       .ret         = N00B_CG_I64,
+                       .param_names = (const char *[]){"x"},
+                       .param_types = (n00b_cg_type_tag_t[]){N00B_CG_I64},
+                       .n_params    = 1);
+    n00b_cg_val_t arg          = n00b_cg_param(cg, 0);
     n00b_cg_val_t call_args[1] = {arg};
-    n00b_cg_val_t doubled = n00b_cg_emit_call(cg, "double_it", call_args, 1,
-                                                .ret = N00B_CG_I64);
-    n00b_cg_emit_ret(cg, n00b_cg_emit_add(cg, doubled,
-                                             _n00b_cg_const_i64(cg, 1)));
+    n00b_cg_val_t doubled
+        = n00b_cg_emit_call(cg, "double_it", call_args, 1, .ret = N00B_CG_I64);
+    n00b_cg_emit_ret(cg, n00b_cg_emit_add(cg, doubled, _n00b_cg_const_i64(cg, 1)));
     n00b_cg_end_func(cg);
 
     typedef int64_t (*call_fn)(int64_t);
     call_fn fn = (call_fn)n00b_codegen_jit(cg, "call_double");
     assert(fn != NULL);
 
-    assert(fn(5) == 11);   // 5 * 2 + 1
-    assert(fn(0) == 1);    // 0 * 2 + 1
-    assert(fn(-3) == -5);  // -3 * 2 + 1
+    assert(fn(5) == 11);  // 5 * 2 + 1
+    assert(fn(0) == 1);   // 0 * 2 + 1
+    assert(fn(-3) == -5); // -3 * 2 + 1
 
     n00b_codegen_free(cg);
     printf("  [PASS] builder_internal_call\n");
@@ -487,33 +495,33 @@ test_builder_bitwise(void)
     n00b_codegen_t *cg = n00b_codegen_new(NULL);
 
     // and(x, y) = x & y
-    n00b_cg_begin_func(cg, "band",
-                        .ret         = N00B_CG_I64,
-                        .param_names = (const char *[]){"x", "y"},
-                        .param_types = (n00b_cg_type_tag_t[]){N00B_CG_I64, N00B_CG_I64},
-                        .n_params    = 2);
-    n00b_cg_emit_ret(cg, n00b_cg_emit_and(cg, n00b_cg_param(cg, 0),
-                                             n00b_cg_param(cg, 1)));
+    n00b_cg_begin_func(cg,
+                       "band",
+                       .ret         = N00B_CG_I64,
+                       .param_names = (const char *[]){"x", "y"},
+                       .param_types = (n00b_cg_type_tag_t[]){N00B_CG_I64, N00B_CG_I64},
+                       .n_params    = 2);
+    n00b_cg_emit_ret(cg, n00b_cg_emit_and(cg, n00b_cg_param(cg, 0), n00b_cg_param(cg, 1)));
     n00b_cg_end_func(cg);
 
     // or(x, y) = x | y
-    n00b_cg_begin_func(cg, "bor",
-                        .ret         = N00B_CG_I64,
-                        .param_names = (const char *[]){"x", "y"},
-                        .param_types = (n00b_cg_type_tag_t[]){N00B_CG_I64, N00B_CG_I64},
-                        .n_params    = 2);
-    n00b_cg_emit_ret(cg, n00b_cg_emit_or(cg, n00b_cg_param(cg, 0),
-                                            n00b_cg_param(cg, 1)));
+    n00b_cg_begin_func(cg,
+                       "bor",
+                       .ret         = N00B_CG_I64,
+                       .param_names = (const char *[]){"x", "y"},
+                       .param_types = (n00b_cg_type_tag_t[]){N00B_CG_I64, N00B_CG_I64},
+                       .n_params    = 2);
+    n00b_cg_emit_ret(cg, n00b_cg_emit_or(cg, n00b_cg_param(cg, 0), n00b_cg_param(cg, 1)));
     n00b_cg_end_func(cg);
 
     // shl(x, y) = x << y
-    n00b_cg_begin_func(cg, "bshl",
-                        .ret         = N00B_CG_I64,
-                        .param_names = (const char *[]){"x", "y"},
-                        .param_types = (n00b_cg_type_tag_t[]){N00B_CG_I64, N00B_CG_I64},
-                        .n_params    = 2);
-    n00b_cg_emit_ret(cg, n00b_cg_emit_shl(cg, n00b_cg_param(cg, 0),
-                                             n00b_cg_param(cg, 1)));
+    n00b_cg_begin_func(cg,
+                       "bshl",
+                       .ret         = N00B_CG_I64,
+                       .param_names = (const char *[]){"x", "y"},
+                       .param_types = (n00b_cg_type_tag_t[]){N00B_CG_I64, N00B_CG_I64},
+                       .n_params    = 2);
+    n00b_cg_emit_ret(cg, n00b_cg_emit_shl(cg, n00b_cg_param(cg, 0), n00b_cg_param(cg, 1)));
     n00b_cg_end_func(cg);
 
     typedef int64_t (*binop_fn)(int64_t, int64_t);
@@ -540,17 +548,18 @@ test_builder_fibonacci(void)
     n00b_codegen_t *cg = n00b_codegen_new(NULL);
 
     // fib(n) = n <= 1 ? n : fib(n-1) + fib(n-2)
-    n00b_cg_begin_func(cg, "fib",
-                        .ret         = N00B_CG_I64,
-                        .param_names = (const char *[]){"n"},
-                        .param_types = (n00b_cg_type_tag_t[]){N00B_CG_I64},
-                        .n_params    = 1);
+    n00b_cg_begin_func(cg,
+                       "fib",
+                       .ret         = N00B_CG_I64,
+                       .param_names = (const char *[]){"n"},
+                       .param_types = (n00b_cg_type_tag_t[]){N00B_CG_I64},
+                       .n_params    = 1);
 
     n00b_cg_val_t n = n00b_cg_param(cg, 0);
 
     // if n <= 1, return n
-    n00b_cg_val_t cond      = n00b_cg_emit_le(cg, n, _n00b_cg_const_i64(cg, 1));
-    n00b_cg_val_t recurse   = n00b_cg_label_new(cg);
+    n00b_cg_val_t cond    = n00b_cg_emit_le(cg, n, _n00b_cg_const_i64(cg, 1));
+    n00b_cg_val_t recurse = n00b_cg_label_new(cg);
 
     n00b_cg_emit_bf(cg, cond, recurse);
     n00b_cg_emit_ret(cg, n);
@@ -560,14 +569,12 @@ test_builder_fibonacci(void)
     // fib(n-1)
     n00b_cg_val_t nm1      = n00b_cg_emit_sub(cg, n, _n00b_cg_const_i64(cg, 1));
     n00b_cg_val_t args1[1] = {nm1};
-    n00b_cg_val_t r1       = n00b_cg_emit_call(cg, "fib", args1, 1,
-                                                 .ret = N00B_CG_I64);
+    n00b_cg_val_t r1       = n00b_cg_emit_call(cg, "fib", args1, 1, .ret = N00B_CG_I64);
 
     // fib(n-2)
     n00b_cg_val_t nm2      = n00b_cg_emit_sub(cg, n, _n00b_cg_const_i64(cg, 2));
     n00b_cg_val_t args2[1] = {nm2};
-    n00b_cg_val_t r2       = n00b_cg_emit_call(cg, "fib", args2, 1,
-                                                 .ret = N00B_CG_I64);
+    n00b_cg_val_t r2       = n00b_cg_emit_call(cg, "fib", args2, 1, .ret = N00B_CG_I64);
 
     n00b_cg_emit_ret(cg, n00b_cg_emit_add(cg, r1, r2));
     n00b_cg_end_func(cg);
@@ -587,7 +594,66 @@ test_builder_fibonacci(void)
 }
 
 // ============================================================================
-// 13. Operator mapping
+// 13. Runtime callback handle
+// ============================================================================
+
+static bool
+test_runtime_callback_invoke(void *target, MIR_val_t *result, MIR_val_t *args, int32_t n_args)
+{
+    int64_t delta = target ? *(int64_t *)target : 0;
+
+    if (!result || !args || n_args != 1) {
+        return false;
+    }
+
+    result->i = args[0].i + delta;
+    return true;
+}
+
+static void
+test_runtime_callback_handle(void)
+{
+    n00b_codegen_t *cg = n00b_codegen_new(NULL);
+
+    n00b_cg_begin_func(cg,
+                       "bump",
+                       .ret         = N00B_CG_I64,
+                       .param_names = (const char *[]){"value"},
+                       .param_types = (n00b_cg_type_tag_t[]){N00B_CG_I64},
+                       .n_params    = 1);
+
+    n00b_cg_val_t value = n00b_cg_param(cg, 0);
+    n00b_cg_emit_ret(cg, n00b_cg_emit_add(cg, value, _n00b_cg_const_i64(cg, 1)));
+    n00b_cg_end_func(cg);
+
+    int64_t            callback_delta = 1;
+    n00b_rt_callback_t cb             = {
+        .target        = &callback_delta,
+        .invoke        = test_runtime_callback_invoke,
+        .func_name     = "bump",
+        .has_signature = true,
+        .ret_type      = N00B_CG_I64,
+        .param_types   = {N00B_CG_I64},
+        .n_params      = 1,
+    };
+
+    assert(cb.target != NULL);
+    assert(cb.invoke != NULL);
+
+    MIR_val_t warm_args[1] = {{.i = 0}};
+    MIR_val_t warm_result  = {0};
+    bool      ok           = n00b_codegen_interpret(cg, "bump", &warm_result, warm_args, 1);
+
+    assert(ok);
+    assert(warm_result.i == 1);
+    assert(n00b_builtin_callback_call1(&cb, 41) == 42);
+
+    n00b_codegen_free(cg);
+    printf("  [PASS] runtime_callback_handle\n");
+}
+
+// ============================================================================
+// 14. Operator mapping
 // ============================================================================
 
 static void
@@ -619,7 +685,7 @@ test_operator_mapping(void)
 }
 
 // ============================================================================
-// 14. Dump (smoke test)
+// 15. Dump (smoke test)
 // ============================================================================
 
 static void
@@ -671,6 +737,7 @@ main(int argc, char **argv)
     test_builder_internal_call();
     test_builder_bitwise();
     test_builder_fibonacci();
+    test_runtime_callback_handle();
     test_operator_mapping();
     test_dump();
 

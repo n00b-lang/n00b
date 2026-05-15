@@ -1,0 +1,10 @@
+comptime {
+    ffi_mod = [=[
+        ffi_strlen : (string -> cstr) -> i64 = strlen
+    ]=]'ffi
+
+    ffi_mod.install()
+}
+
+print(ffi_strlen("chalk"))
+0

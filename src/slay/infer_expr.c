@@ -226,6 +226,35 @@ get_child_type(infer_ctx_t *ctx, int32_t index)
     return found ? t : NULL;
 }
 
+static bool
+node_contains_slice_range(n00b_parse_tree_t *node)
+{
+    if (!node) {
+        return false;
+    }
+
+    if (n00b_pt_is_token(node)) {
+        const char *text = n00b_pt_token_text(node);
+        size_t      len  = n00b_pt_token_text_len(node);
+
+        return text && len == 1 && text[0] == ':';
+    }
+
+    if (n00b_pt_is_nt(node, "range-sep")) {
+        return true;
+    }
+
+    size_t nc = n00b_pt_num_children(node);
+
+    for (size_t i = 0; i < nc; i++) {
+        if (node_contains_slice_range(n00b_pt_get_child(node, i))) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 // ============================================================================
 // Recursive-descent parser
 // ============================================================================
@@ -639,11 +668,12 @@ parse_type_primary(infer_ctx_t *ctx)
         return n00b_tc_fresh_var(ctx->tc_ctx);
     }
 
-    // unwrap_result($N) — unwrap result[T]: unify child with result[`t],
-    // return `t.
+    // unwrap_result($N) — unwrap result[T] or option[T] and return `t.
     //
-    // Constrains the operand to be result[T] for some T, then returns T.
-    // Used by the `!` postfix operator.
+    // Used by the `!` postfix operator.  If the operand type is already
+    // known to be result[T] or option[T], return T.  For an unknown operand,
+    // keep the historical result[T] constraint so the type checker has a
+    // concrete propagation shape to solve.
     if (match_kw(ctx, "unwrap_result")) {
         if (!match_char(ctx, '(') || !match_char(ctx, '$')) {
             ctx->error = true;
@@ -670,6 +700,27 @@ parse_type_primary(infer_ctx_t *ctx)
             if (child && ctx->node_types) {
                 uintptr_t key = (uintptr_t)child;
                 n00b_dict_put(ctx->node_types, key, operand_type);
+            }
+        }
+
+        n00b_tc_type_t *resolved_operand = operand_type;
+
+        while (resolved_operand && resolved_operand->forward) {
+            resolved_operand = resolved_operand->forward;
+        }
+
+        if (resolved_operand
+            && n00b_variant_is_type(resolved_operand->kind, n00b_tc_param_t)) {
+            auto p = n00b_variant_get(resolved_operand->kind, n00b_tc_param_t);
+
+            bool is_option = (p.name && p.name->u8_bytes == 6
+                              && memcmp(p.name->data, "option", 6) == 0);
+            bool is_result = (p.name && p.name->u8_bytes == 6
+                              && memcmp(p.name->data, "result", 6) == 0);
+
+            if ((is_option || is_result) && p.params
+                && n00b_list_len(*p.params) > 0) {
+                return n00b_list_get(*p.params, 0);
             }
         }
 
@@ -703,7 +754,7 @@ parse_type_primary(infer_ctx_t *ctx)
     //
     // For list[T], array[T], set[T] → T  (first param).
     // For dict[K,V] → V (last param — the value type).
-    // For string → i32 (character code).
+    // For string → string (single grapheme or substring).
     // For anything else → fresh type variable.
     if (match_kw(ctx, "element_of")) {
         if (!match_char(ctx, '(') || !match_char(ctx, '$')) {
@@ -730,12 +781,19 @@ parse_type_primary(infer_ctx_t *ctx)
             resolved = resolved->forward;
         }
 
+        bool is_slice = node_contains_slice_range(ctx->node);
+
         // Parameterized: list[T] → T, dict[K,V] → V.
         if (n00b_variant_is_type(resolved->kind, n00b_tc_param_t)) {
             auto param = n00b_variant_get(resolved->kind, n00b_tc_param_t);
 
             if (param.params && n00b_list_len(*param.params) > 0) {
                 size_t nparams = n00b_list_len(*param.params);
+
+                if (is_slice && param.name
+                    && n00b_unicode_str_eq(param.name, r"list")) {
+                    return resolved;
+                }
 
                 // dict[K,V] → V (last param).
                 if (param.name
@@ -748,12 +806,12 @@ parse_type_primary(infer_ctx_t *ctx)
             }
         }
 
-        // string → i32 (character indexing).
+        // string → string (single grapheme or substring).
         if (n00b_variant_is_type(resolved->kind, n00b_tc_prim_t)) {
             auto prim = n00b_variant_get(resolved->kind, n00b_tc_prim_t);
 
             if (prim.name && n00b_unicode_str_eq(prim.name, r"string")) {
-                return n00b_tc_prim(ctx->tc_ctx, r"i32");
+                return n00b_tc_prim(ctx->tc_ctx, r"string");
             }
         }
 

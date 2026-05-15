@@ -1,0 +1,7 @@
+private func secret() -> int {
+    return 99
+}
+
+func visible() -> int {
+    return 1
+}

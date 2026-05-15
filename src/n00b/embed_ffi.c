@@ -203,6 +203,28 @@ extract_id(n00b_parse_tree_t *node)
     return n00b_string_from_raw(text, (int64_t)tlen);
 }
 
+static void
+ffi_collect_tokens(n00b_parse_tree_t  *node,
+                   n00b_parse_tree_t **out,
+                   int32_t             max,
+                   int32_t            *count)
+{
+    if (!node || !out || !count || *count >= max) {
+        return;
+    }
+
+    if (n00b_pt_is_token(node)) {
+        out[(*count)++] = node;
+        return;
+    }
+
+    size_t nc = n00b_pt_num_children(node);
+
+    for (size_t i = 0; i < nc && *count < max; i++) {
+        ffi_collect_tokens(n00b_pt_get_child(node, i), out, max, count);
+    }
+}
+
 // ============================================================================
 // FFI binding representation
 // ============================================================================
@@ -445,53 +467,70 @@ parse_binding(n00b_parse_tree_t *bind_node)
             // If no <param> NTs found (possibly eliminated too),
             // check if there are bare IDENTIFIER tokens between
             // '(' and ')' that represent params.
-            size_t snc   = n00b_pt_num_children(sig);
-            bool   in_pl = false;
+            n00b_parse_tree_t *sig_tokens[128];
+            int32_t            sig_ntokens = 0;
+            bool               in_pl       = false;
+            bool               in_conv     = false;
+            ffi_param_t        fallback[64];
+            int32_t     fallback_n = 0;
 
-            for (size_t si = 0; si < snc; si++) {
-                n00b_parse_tree_t *sch = n00b_pt_get_child(sig, si);
+            ffi_collect_tokens(sig, sig_tokens, 128, &sig_ntokens);
 
-                if (n00b_pt_is_token(sch)) {
-                    const char *t = n00b_pt_token_text(sch);
-                    size_t      l = n00b_pt_token_text_len(sch);
+            for (int32_t si = 0; si < sig_ntokens && fallback_n < 64; si++) {
+                const char *t = n00b_pt_token_text(sig_tokens[si]);
+                size_t      l = n00b_pt_token_text_len(sig_tokens[si]);
 
-                    if (l == 1 && t[0] == '(') { in_pl = true; continue; }
-                    if (l == 1 && t[0] == ')') { break; }
-
-                    if (in_pl && t && l > 0 && t[0] != ',') {
-                        // Bare token param — allocate/grow params array.
-                        int idx = b.param_count++;
-                        if (idx == 0) {
-                            b.params = n00b_alloc_array(ffi_param_t, 16);
-                        }
-                        b.params[idx].n00b_type =
-                            n00b_string_from_raw(t, (int64_t)l);
-                        b.params[idx].conv = FFI_CONV_NONE;
-
-                    }
+                if (!t || l == 0) {
+                    continue;
                 }
-                else {
-                    // NT child (group node?) — recurse tokens from it.
-                    n00b_parse_tree_t *tok = n00b_pt_first_token(sch);
-                    if (tok && in_pl) {
-                        const char *t = n00b_pt_token_text(tok);
-                        size_t      l = n00b_pt_token_text_len(tok);
 
-                        if (t && l > 0 && t[0] != ',' && t[0] != '('
-                            && t[0] != ')') {
-                            int idx = b.param_count++;
-                            if (idx == 0) {
-                                b.params = n00b_alloc_array(ffi_param_t, 16);
-                            }
-                            b.params[idx].n00b_type =
-                                n00b_string_from_raw(t, (int64_t)l);
-                            b.params[idx].conv = FFI_CONV_NONE;
+                if (l == 1 && t[0] == '(') {
+                    in_pl = true;
+                    continue;
+                }
+                if (l == 1 && t[0] == ')') {
+                    break;
+                }
+                if (!in_pl || (l == 1 && (t[0] == ',' || t[0] == ':'))) {
+                    continue;
+                }
+                if (l == 2 && memcmp(t, "->", 2) == 0) {
+                    in_conv = true;
+                    continue;
+                }
+                if (l == 3 && memcmp(t, "len", 3) == 0) {
+                    continue;
+                }
 
-                            fprintf(stderr,
-                                    "[DEBUG] group-token param: '%.*s'\n",
-                                    (int)l, t);
-                        }
+                if (in_conv && fallback_n > 0) {
+                    ffi_param_t *p = &fallback[fallback_n - 1];
+
+                    if (l == 4 && memcmp(t, "cstr", 4) == 0) {
+                        p->conv   = FFI_CONV_CSTR;
+                        p->c_type = n00b_string_from_cstr("cstr");
                     }
+                    else if (l == 3 && memcmp(t, "ptr", 3) == 0) {
+                        p->conv   = FFI_CONV_PTR_LEN;
+                        p->c_type = n00b_string_from_cstr("ptr");
+                    }
+
+                    in_conv = false;
+                    continue;
+                }
+
+                fallback[fallback_n++] = (ffi_param_t){
+                    .n00b_type = n00b_string_from_raw(t, (int64_t)l),
+                    .c_type    = NULL,
+                    .conv      = FFI_CONV_NONE,
+                };
+            }
+
+            if (fallback_n > 0) {
+                b.params      = n00b_alloc_array(ffi_param_t, (size_t)fallback_n);
+                b.param_count = fallback_n;
+
+                for (int32_t i = 0; i < fallback_n; i++) {
+                    b.params[i] = fallback[i];
                 }
             }
         }
@@ -626,8 +665,8 @@ ffi_mir_type(n00b_string_t *type_name)
         return MIR_T_U16;
     }
 
-    // Pointer types: string, buffer, ptr, or any reference.
-    return MIR_T_P;
+    // Pointer-like values are carried as 64-bit words in this MIR backend.
+    return MIR_T_I64;
 }
 
 // Size of a kargs field in bytes based on its FFI type name.
@@ -853,21 +892,39 @@ lookup_process_symbol(const char *name)
 // MIR wrapper generation
 // ============================================================================
 
-static void
+static bool
 generate_wrapper(n00b_cg_session_t *s, ffi_binding_t *b)
 {
     n00b_cg_module_t *m = s->active_module;
 
     if (!m) {
         fprintf(stderr, "ffi: no active module for wrapper generation\n");
-        return;
+        return false;
     }
 
-    char n00b_name[256];
-    char c_name[256];
+    char n00b_name_buf[256];
+    char c_name_buf[256];
 
-    str_cstr(b->n00b_name, n00b_name, sizeof(n00b_name));
-    str_cstr(b->c_name, c_name, sizeof(c_name));
+    str_cstr(b->n00b_name, n00b_name_buf, sizeof(n00b_name_buf));
+    str_cstr(b->c_name, c_name_buf, sizeof(c_name_buf));
+
+    size_t n00b_name_len = strlen(n00b_name_buf);
+    size_t c_name_len    = strlen(c_name_buf);
+    char  *n00b_name     = n00b_alloc_size(1, n00b_name_len + 1);
+    char  *c_name        = n00b_alloc_size(1, c_name_len + 1);
+
+    memcpy(n00b_name, n00b_name_buf, n00b_name_len + 1);
+    memcpy(c_name, c_name_buf, c_name_len + 1);
+
+    char import_name_buf[560];
+    snprintf(import_name_buf,
+             sizeof(import_name_buf),
+             "__n00b_ffi_import_%s_%s",
+             n00b_name,
+             c_name);
+    size_t import_name_len = strlen(import_name_buf);
+    char  *import_name     = n00b_alloc_size(1, import_name_len + 1);
+    memcpy(import_name, import_name_buf, import_name_len + 1);
 
     // Resolve the C function address.
     void *c_addr = lookup_process_symbol(c_name);
@@ -880,7 +937,7 @@ generate_wrapper(n00b_cg_session_t *s, ffi_binding_t *b)
         fprintf(stderr, "ffi: dlsym failed for '%s': %s\n",
                 c_name, dlerror());
 #endif
-        return;
+        return false;
     }
 
     // Count C-level parameters (conversions expand n00b params).
@@ -907,7 +964,7 @@ generate_wrapper(n00b_cg_session_t *s, ffi_binding_t *b)
     // ----------------------------------------------------------------
     // Import the C function symbol.
     // ----------------------------------------------------------------
-    MIR_item_t c_import = MIR_new_import(s->mir_ctx, c_name);
+    MIR_item_t c_import = MIR_new_import(s->mir_ctx, import_name);
 
     // Also register the address in the module's import table so
     // MIR_load_external() can resolve it at link time.
@@ -924,7 +981,7 @@ generate_wrapper(n00b_cg_session_t *s, ffi_binding_t *b)
     }
 
     m->imports[m->import_count++] = (n00b_cg_import_t){
-        .name   = c_name,
+        .name   = import_name,
         .proto  = nullptr,  // Filled below.
         .import = c_import,
         .addr   = c_addr,
@@ -951,7 +1008,7 @@ generate_wrapper(n00b_cg_session_t *s, ffi_binding_t *b)
         memcpy(pn, pname, 32);
 
         if (b->params[i].conv == FFI_CONV_VARARGS) {
-            vars[vi] = (MIR_var_t){.type = MIR_T_P, .name = "vargs"};
+            vars[vi] = (MIR_var_t){.type = MIR_T_I64, .name = "vargs"};
         }
         else {
             vars[vi] = (MIR_var_t){
@@ -988,11 +1045,11 @@ generate_wrapper(n00b_cg_session_t *s, ffi_binding_t *b)
         memcpy(name_copy, pn, 32);
 
         if (b->params[i].conv == FFI_CONV_PTR_LEN) {
-            c_vars[ci++] = (MIR_var_t){.type = MIR_T_P,   .name = "ptr"};
+            c_vars[ci++] = (MIR_var_t){.type = MIR_T_I64, .name = "ptr"};
             c_vars[ci++] = (MIR_var_t){.type = MIR_T_I64, .name = "len"};
         }
         else if (b->params[i].conv == FFI_CONV_CSTR) {
-            c_vars[ci++] = (MIR_var_t){.type = MIR_T_P, .name = name_copy};
+            c_vars[ci++] = (MIR_var_t){.type = MIR_T_I64, .name = name_copy};
         }
         else if (b->params[i].conv != FFI_CONV_VARARGS) {
             c_vars[ci++] = (MIR_var_t){
@@ -1002,7 +1059,7 @@ generate_wrapper(n00b_cg_session_t *s, ffi_binding_t *b)
     }
 
     if (has_kargs) {
-        c_vars[ci++] = (MIR_var_t){.type = MIR_T_P, .name = "kargs"};
+        c_vars[ci++] = (MIR_var_t){.type = MIR_T_I64, .name = "kargs"};
     }
 
     MIR_type_t *c_res_types = nullptr;
@@ -1106,44 +1163,38 @@ generate_wrapper(n00b_cg_session_t *s, ffi_binding_t *b)
 
         switch (b->params[i].conv) {
         case FFI_CONV_CSTR: {
-            // n00b_string_t* → char* : load the .data field.
-            // n00b_string_t layout: { ..., char data[]; }
-            // offsetof(n00b_string_t, data) — we need this offset.
-            // n00b_string_t has: u8_bytes (int64_t), cp_count (int64_t),
-            // flags, then data.  But it's simpler to use the actual
-            // offsetof computed at compile time.
+            // n00b_string_t* -> char*: load the data pointer field.
             size_t data_off = offsetof(n00b_string_t, data);
 
             MIR_reg_t cstr_reg = MIR_new_func_reg(s->mir_ctx, wfunc,
-                                                     MIR_T_P, "cstr_tmp");
-            // cstr_tmp = &string->data  (base + data_off)
+                                                     MIR_T_I64, "cstr_tmp");
             MIR_append_insn(s->mir_ctx, wrapper,
-                MIR_new_insn(s->mir_ctx, MIR_ADD,
+                MIR_new_insn(s->mir_ctx, MIR_MOV,
                     MIR_new_reg_op(s->mir_ctx, cstr_reg),
-                    MIR_new_reg_op(s->mir_ctx, preg),
-                    MIR_new_int_op(s->mir_ctx, (int64_t)data_off)));
+                    MIR_new_mem_op(s->mir_ctx, MIR_T_I64,
+                                    (MIR_disp_t)data_off,
+                                    preg, 0, 1)));
 
             ops[oi++] = MIR_new_reg_op(s->mir_ctx, cstr_reg);
             break;
         }
 
         case FFI_CONV_PTR_LEN: {
-            // n00b_string_t* or n00b_buffer_t* → (ptr, len) pair.
-            // Extract .data pointer and .u8_bytes length.
+            // n00b_string_t* or n00b_buffer_t* -> (ptr, len) pair.
             size_t data_off   = offsetof(n00b_string_t, data);
             size_t bytes_off  = offsetof(n00b_string_t, u8_bytes);
 
             MIR_reg_t ptr_reg = MIR_new_func_reg(s->mir_ctx, wfunc,
-                                                    MIR_T_P, "ptr_tmp");
+                                                    MIR_T_I64, "ptr_tmp");
             MIR_reg_t len_reg = MIR_new_func_reg(s->mir_ctx, wfunc,
                                                     MIR_T_I64, "len_tmp");
 
-            // ptr_tmp = &obj->data
             MIR_append_insn(s->mir_ctx, wrapper,
-                MIR_new_insn(s->mir_ctx, MIR_ADD,
+                MIR_new_insn(s->mir_ctx, MIR_MOV,
                     MIR_new_reg_op(s->mir_ctx, ptr_reg),
-                    MIR_new_reg_op(s->mir_ctx, preg),
-                    MIR_new_int_op(s->mir_ctx, (int64_t)data_off)));
+                    MIR_new_mem_op(s->mir_ctx, MIR_T_I64,
+                                    (MIR_disp_t)data_off,
+                                    preg, 0, 1)));
 
             // len_tmp = obj->u8_bytes (load from memory)
             MIR_append_insn(s->mir_ctx, wrapper,
@@ -1187,7 +1238,100 @@ generate_wrapper(n00b_cg_session_t *s, ffi_binding_t *b)
     }
 
     MIR_finish_func(s->mir_ctx);
+    return true;
+}
 
+static bool
+ffi_type_is(const char *type, const char *want)
+{
+    return type && want && strcmp(type, want) == 0;
+}
+
+static ffi_param_t
+ffi_param_from_extern_type(const char *type)
+{
+    ffi_param_t p = {0};
+
+    if (ffi_type_is(type, "cstring")) {
+        p.n00b_type = n00b_string_from_cstr("string");
+        p.c_type    = n00b_string_from_cstr("cstr");
+        p.conv      = FFI_CONV_CSTR;
+        return p;
+    }
+
+    if (ffi_type_is(type, "cint")) {
+        type = "int";
+    }
+    else if (ffi_type_is(type, "csize_t")) {
+        type = "u64";
+    }
+    else if (!type || ffi_type_is(type, "cvoid")) {
+        type = "void";
+    }
+
+    p.n00b_type = n00b_string_from_cstr(type);
+    p.c_type    = n00b_string_from_cstr(type);
+    p.conv      = FFI_CONV_NONE;
+    return p;
+}
+
+static ffi_return_t
+ffi_return_from_extern_type(const char *type)
+{
+    ffi_return_t r = {0};
+
+    if (!type || ffi_type_is(type, "void") || ffi_type_is(type, "cvoid")) {
+        r.n00b_type = n00b_string_from_cstr("void");
+        r.c_type    = n00b_string_from_cstr("void");
+        r.is_void   = true;
+        return r;
+    }
+
+    if (ffi_type_is(type, "cstring")) {
+        type = "ptr";
+    }
+    else if (ffi_type_is(type, "cint")) {
+        type = "int";
+    }
+    else if (ffi_type_is(type, "csize_t")) {
+        type = "u64";
+    }
+
+    r.n00b_type = n00b_string_from_cstr(type);
+    r.c_type    = n00b_string_from_cstr(type);
+    r.is_void   = false;
+    return r;
+}
+
+bool
+n00b_ffi_install_simple(n00b_cg_session_t *session,
+                        const char        *n00b_name,
+                        const char        *c_name,
+                        const char       **param_types,
+                        int32_t            param_count,
+                        const char        *ret_type)
+{
+    if (!session || !n00b_name || n00b_name[0] == '\0') {
+        return false;
+    }
+
+    ffi_binding_t b = {0};
+
+    b.n00b_name = n00b_string_from_cstr(n00b_name);
+    b.c_name    = n00b_string_from_cstr(c_name && c_name[0] ? c_name : n00b_name);
+    b.ret       = ffi_return_from_extern_type(ret_type);
+
+    if (param_count > 0) {
+        b.params = n00b_alloc_array(ffi_param_t, (size_t)param_count);
+
+        for (int32_t i = 0; i < param_count; i++) {
+            b.params[i] = ffi_param_from_extern_type(param_types ? param_types[i] : "int");
+        }
+    }
+
+    b.param_count = param_count;
+
+    return generate_wrapper(session, &b);
 }
 
 // ============================================================================
@@ -1268,11 +1412,15 @@ n00b_ffi_module_install(n00b_ffi_module_t *self)
 
     ffi_binding_t *bindings = (ffi_binding_t *)self->bindings;
 
+    bool ok = true;
+
     for (int32_t i = 0; i < self->binding_count; i++) {
-        generate_wrapper(s, &bindings[i]);
+        if (!generate_wrapper(s, &bindings[i])) {
+            ok = false;
+        }
     }
 
-    self->installed = true;
+    self->installed = ok;
 }
 
 // ============================================================================

@@ -1,0 +1,8 @@
+func with_default(x: int = 7) -> int {
+    return x
+}
+
+print(with_default())
+print(with_default(9))
+print(with_default(x = 11))
+0

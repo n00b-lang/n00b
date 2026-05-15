@@ -1,0 +1,4 @@
+use collated007_public_foo_dep from "modules"
+use collated007_private_foo_dep from "modules"
+
+print(foo())

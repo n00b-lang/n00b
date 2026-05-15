@@ -1,0 +1,7 @@
+func bump(v: option[int]) -> option[int] {
+  var x = v!
+  return some(x + 1)
+}
+
+print(bump(none()))
+0

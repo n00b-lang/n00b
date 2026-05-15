@@ -1,0 +1,64 @@
+var x = 1
+var hit = 0
+
+switch x {
+  case 1:
+    hit = 10
+  case 10 to 15:
+    hit = 20
+  case 20, 21:
+    hit = 30
+  else:
+    hit = 40
+}
+
+print(hit)
+
+x = 12
+hit = 0
+
+switch x {
+  case 1:
+    hit = 10
+  case 10 to 15:
+    hit = 20
+  case 20, 21:
+    hit = 30
+  else:
+    hit = 40
+}
+
+print(hit)
+
+x = 21
+hit = 0
+
+switch x {
+  case 1:
+    hit = 10
+  case 10 to 15:
+    hit = 20
+  case 20, 21:
+    hit = 30
+  else:
+    hit = 40
+}
+
+print(hit)
+
+x = 99
+hit = 0
+
+switch x {
+  case 1:
+    hit = 10
+  case 10 to 15:
+    hit = 20
+  case 20, 21:
+    hit = 30
+  else:
+    hit = 40
+}
+
+print(hit)
+0

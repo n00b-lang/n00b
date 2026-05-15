@@ -1,0 +1,8 @@
+once func init() -> int {
+    print(1)
+    return 7
+}
+
+print(init())
+print(init())
+0

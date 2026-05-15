@@ -1,0 +1,11 @@
+func accepts_answer(value: int) -> bool {
+    return value == 42
+}
+
+parameter var configured {
+    default: 42
+    validator: func accepts_answer
+}
+
+print(configured)
+0

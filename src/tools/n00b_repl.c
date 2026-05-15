@@ -665,7 +665,12 @@ n00b_repl_run(n00b_grammar_t *grammar)
         }
 
         // Resolve use statements (load imported modules).
-        n00b_resolve_use_stmts(state.session, grammar, tree, annot);
+        if (!n00b_resolve_use_stmts(state.session, grammar, tree, annot, NULL)) {
+            n00b_parse_result_free(parse_result);
+            repl_buf_reset(&state);
+            prompt = "n00b> ";
+            continue;
+        }
 
         // Process the parsed input: route func-defs vs expressions.
         process_parsed_input(&state, tree, annot);

@@ -1,0 +1,6 @@
+var xs = [7, 8, 9]
+
+print(xs[0])
+print(xs[1])
+print(xs[2])
+0

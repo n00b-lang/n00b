@@ -1,0 +1,4 @@
+use basic_dep from "modules"
+
+print(dep_value())
+0

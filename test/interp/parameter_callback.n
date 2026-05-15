@@ -1,0 +1,10 @@
+func provide_answer() -> int {
+    return 7
+}
+
+parameter var generated {
+    callback: func provide_answer
+}
+
+print(generated)
+0

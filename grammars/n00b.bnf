@@ -34,12 +34,11 @@
                    | <expression-stmt>
                    | <class-decl>
                    | <interface-decl>
-# extern blocks, confspecs and sections are going to go into our new minilang literal.
-#                   | <extern-block>
-#                   | <confspec-block>
+# extern blocks and sections are going to go into our new minilang literal.
+                   | <extern-block>
+                   | <confspec-block>
 #                   | <section-stmt>
-# We're going to try to use the logic subsystem to avoid this.
-#                   | <lock-attr-stmt>
+                   | <lock-attr-stmt>
 
 
 # Bodies always create a nested (block) scope.
@@ -64,6 +63,7 @@
                          | <use-stmt>
                          | <assign-stmt>
                          | <binop-assign-stmt>
+                         | <lock-attr-stmt>
                          | <expression-stmt>
 #                        | <section-stmt>
 
@@ -211,10 +211,10 @@
 <use-stmt> @declares($1, "module") ::= %"use" <member-chain> (%"from" %STRING_LIT)?
 
 # ============================================================================
-# Lock attribute (~) Temporarily? disabled; might be able to get away w/o it.
+# Lock attribute (~)
 # ============================================================================
 
-# <lock-attr-stmt> ::= %"~" <assign-or-expr>
+<lock-attr-stmt> @assigns($1, $3) ::= %"~" <expression> <assign-op> <expression>
 
 <assign-or-expr> @infer("$0 unify $2") ::= <expression> <assign-op> <expression>
 <assign-or-expr> @infer("$0 unify $2") ::= <expression> <binop-assign-op> <expression>
@@ -328,27 +328,27 @@
 # # Extern block
 # # ============================================================================
 
-# <extern-block> @scope("extern", $1) @declares($1) ::= %"extern" %IDENTIFIER <extern-signature> <extern-body>
+<extern-block> @scope("extern", $1) @declares($1) ::= %"extern" %IDENTIFIER <extern-signature> <extern-body>
 
-# <extern-signature> ::= %"(" <extern-params> %")" %"->" <extern-type-id>
-#                       | %"(" %")" %"->" <extern-type-id>
+<extern-signature> ::= %"(" <extern-params> %")" %"->" <extern-type-id>
+                      | %"(" %")" %"->" <extern-type-id>
 
-# <extern-params> ::= <extern-type-id> %"," <extern-params>
-#                   | <extern-type-id>
+<extern-params> ::= <extern-type-id> %"," <extern-params>
+                  | <extern-type-id>
 
-# <extern-type-id> ::= %IDENTIFIER
+<extern-type-id> ::= %IDENTIFIER
 
-# <extern-body> ::= <block-start> <extern-stmts>? <block-end>
-# <extern-stmts> ::= <extern-stmt> (<eos>+ <extern-stmt>)*
-# <extern-stmt> ::= <extern-local>
-#                 | <extern-dll>
-#                 | <extern-box>
-#                 | <extern-pure>
-#                 | <extern-holds>
-#                 | <extern-allocs>
+<extern-body> ::= <block-start> <extern-stmts>? <block-end>
+<extern-stmts> ::= <extern-stmt> (<eos>+ <extern-stmt>)*
+<extern-stmt> ::= <extern-local>
+                | <extern-dll>
+                | <extern-box>
+                | <extern-pure>
+                | <extern-holds>
+                | <extern-allocs>
 
-# <extern-local> @declares($2) ::= %"local" %":" %IDENTIFIER %"(" <local-formals> %")" <return-type>?
-#                  | %"local" %":" %IDENTIFIER %"(" %")" <return-type>?
+<extern-local> @declares($2) ::= %"local" %":" %IDENTIFIER %"(" <local-formals> %")" <return-type>?
+                 | %"local" %":" %IDENTIFIER %"(" %")" <return-type>?
 
 <local-formals> ::= <formal-param> %"," <local-formals>
                   | <formal-param> %"," <vargs-param>
@@ -385,60 +385,63 @@
 <param-body> ::= <block-start> <param-props> <block-end>
 <param-props> ::= <param-prop> (<eos>+ <param-prop>)*
 
-<param-prop> ::= %IDENTIFIER %":" <param-propname>
+<param-prop> ::= %"default" %":" <expression>
+               | %"validator" %":" <callback-lit>
+               | %"callback" %":" <callback-lit>
+               | %IDENTIFIER %":" <param-propname>
 <param-propname> ::= %"callback" | %"default" | %"validator"
 
 # # ============================================================================
 # # Config spec
 # # ============================================================================
 
-# <confspec-block> @scope("confspec") ::= %"confspec" <block-start> <confspec-sections> <block-end>
+<confspec-block> @scope("confspec") ::= %"confspec" <block-start> <confspec-sections> <block-end>
 
-# <confspec-sections> ::= (<eos>* <section-type> <section-body>)*
+<confspec-sections> ::= (<eos>* <section-type> <section-body>)*
 
 # # named: $0=named, $1=IDENTIFIER (section name), $2=IDENTIFIER (type name)
 # # singleton: $0=singleton, $1=IDENTIFIER (section name), $2=IDENTIFIER (type name)
 # # root: $0=root, $1=IDENTIFIER (type name)
-# <section-type> @declares($1) ::= %"named" %IDENTIFIER %IDENTIFIER
-# <section-type> @declares($1) ::= %"singleton" %IDENTIFIER %IDENTIFIER
-# <section-type> ::= %"root" %IDENTIFIER
+<section-type> @declares($1) ::= %"named" %IDENTIFIER %IDENTIFIER
+<section-type> @declares($1) ::= %"singleton" %IDENTIFIER %IDENTIFIER
+<section-type> ::= %"root" %IDENTIFIER
 
 # # root doesn't take a section name, just a type name.
 # # named/singleton take: section_name type_name
 
-# <section-body> @scope("section") ::= <block-start> <section-items>? <block-end>
+<section-body> @scope("section") ::= <block-start> <section-items>? <block-end>
 
-# <section-items> ::= <section-item> (<eos>+ <section-item>)*
-# <section-item> ::= <field-spec> | <section-property>
+<section-items> ::= <section-item> (<eos>+ <section-item>)*
+<section-item> ::= <field-spec> | <section-property>
 
-# <field-spec> @scope("field", $1) @declares($1) ::= %"field" %IDENTIFIER <field-body>
-# <field-body> ::= <block-start> <eos>* <field-props>? <block-end>
+<field-spec> @scope("field", $1) @declares($1) ::= %"field" %IDENTIFIER <field-body>
+<field-body> ::= <block-start> <eos>* <field-props>? <block-end>
 
-# <field-props> ::= <field-prop> (<eos>+ <field-prop>)*
-# <field-prop> ::= <field-type> | <field-default> | <field-require> | <field-choice>
-#                | <field-exclusions> | <field-lock> | <field-validator> | <field-hidden> | <field-range>
+<field-props> ::= <field-prop> (<eos>+ <field-prop>)*
+<field-prop> ::= <field-type> | <field-default> | <field-require> | <field-choice>
+               | <field-exclusions> | <field-lock> | <field-validator> | <field-hidden> | <field-range>
 
-# <field-type>        ::= %"type" %":" <type-spec>
-#                      |  %"type" %":" %"->" %IDENTIFIER
-# <field-default>     ::= %"default" %":" %IDENTIFIER
-#                      |  %"default" %":" <literal>
-# <field-require>     ::= %"require" %":" %IDENTIFIER
-#                      |  %"require" %":" <bool-lit>
-# <field-choice>      ::= %"choice" %":"  %IDENTIFIER
-# <field-exclusions>  ::= %"exclusions" %":" %IDENTIFIER (%"," %IDENTIFIER)*
-# <field-lock>        ::= %"lock" %":" %IDENTIFIER
-#                      |  %"lock" %":" <bool-lit>
-# <field-validator>   ::= %"validator" %":" %IDENTIFIER
-#                      |  %"validator" %":" <callback-lit>
-# <field-hidden>      ::= %"hidden" %":" %IDENTIFIER
-#                      | %"hidden" %":" <bool-lit>
-# <field-range>       ::= %"range" %":" <field-range-item> %":" <field-range-item>
-# <field-range-item>  ::= %IDENTIFIER
-#                       | %INT_LIT
-#                       | %HEX_LIT
+<field-type>        ::= %"type" %":" <type-spec>
+                     |  %"type" %":" %"->" %IDENTIFIER
+<field-default>     ::= %"default" %":" %IDENTIFIER
+                     |  %"default" %":" <literal>
+<field-require>     ::= %"require" %":" %IDENTIFIER
+                     |  %"require" %":" <bool-lit>
+<field-choice>      ::= %"choice" %":"  %IDENTIFIER
+<field-exclusions>  ::= %"exclusions" %":" %IDENTIFIER (%"," %IDENTIFIER)*
+<field-lock>        ::= %"lock" %":" %IDENTIFIER
+                     |  %"lock" %":" <bool-lit>
+<field-validator>   ::= %"validator" %":" %IDENTIFIER
+                     |  %"validator" %":" <callback-lit>
+<field-hidden>      ::= %"hidden" %":" %IDENTIFIER
+                     | %"hidden" %":" <bool-lit>
+<field-range>       ::= %"range" %":" <field-range-item> %":" <field-range-item>
+<field-range-item>  ::= %IDENTIFIER
+                      | %INT_LIT
+                      | %HEX_LIT
 
-# <section-property> ::= %IDENTIFIER %":" <literal>
-#                      | %IDENTIFIER %":" <id-comma-list>
+<section-property> ::= %IDENTIFIER %":" <literal>
+                     | %IDENTIFIER %":" <id-comma-list>
 
 # Section property names: user_def_ok, allow/allowed, require/required,
 # hide/hidden, validator

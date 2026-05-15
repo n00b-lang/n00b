@@ -1,0 +1,10 @@
+comptime {
+    ffi_mod = [=[
+        ffi_strlen_inferred : (string -> cstr) -> i64 = strlen
+    ]=]
+
+    ffi_mod.install()
+}
+
+print(ffi_strlen_inferred("n00b"))
+0

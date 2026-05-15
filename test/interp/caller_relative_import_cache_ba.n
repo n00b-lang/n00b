@@ -1,0 +1,5 @@
+use b_entry from "caller_relative_import_cache/b"
+use a_entry from "caller_relative_import_cache/a"
+
+print(b_value())
+print(a_value())

@@ -69,9 +69,10 @@ typedef n00b_cg_session_t n00b_codegen_t;
 /**
  * @brief Machine-level type tags for codegen values.
  *
- * Numeric types map 1:1 to MIR types. Pointer-typed tags (STRING
- * through PTR) all map to MIR_T_P but carry semantic information so
- * the codegen can dispatch operators and builtins correctly.
+ * Numeric types map 1:1 to MIR types. Pointer-like tags (STRING
+ * through PTR) currently use MIR_T_I64 at the MIR level on 64-bit
+ * targets and carry semantic information so the codegen can dispatch
+ * operators and builtins correctly.
  *
  * Languages provide a `type_map` callback to translate their type
  * system into these tags.
@@ -87,16 +88,17 @@ typedef enum {
     N00B_CG_U64,
     N00B_CG_F32,
     N00B_CG_F64,
-    N00B_CG_STRING,  /**< n00b_string_t *, backed by MIR_T_P. */
-    N00B_CG_LIST,    /**< n00b_list_t *, backed by MIR_T_P. */
-    N00B_CG_DICT,    /**< n00b_dict_t *, backed by MIR_T_P. */
-    N00B_CG_RESULT,  /**< result[T] *, backed by MIR_T_P. */
-    N00B_CG_OPTION,  /**< option[T] / maybe[T] *, backed by MIR_T_P. */
-    N00B_CG_FUNC,    /**< Function pointer, backed by MIR_T_P. */
-    N00B_CG_NIL,     /**< Nil value (nullptr), backed by MIR_T_P. */
-    N00B_CG_PTR,     /**< Generic/unknown pointer, backed by MIR_T_P. */
-    N00B_CG_BOOL,    /**< Backed by I64, semantically boolean. */
-    N00B_CG_VOID,    /**< No value (void return). */
+    N00B_CG_STRING, /**< n00b_string_t *, represented as MIR_T_I64. */
+    N00B_CG_LIST,   /**< n00b_list_t *, represented as MIR_T_I64. */
+    N00B_CG_DICT,   /**< n00b_dict_t *, represented as MIR_T_I64. */
+    N00B_CG_SET,    /**< n00b runtime set object, represented as MIR_T_I64. */
+    N00B_CG_RESULT, /**< result[T] *, represented as MIR_T_I64. */
+    N00B_CG_OPTION, /**< option[T] / maybe[T] *, represented as MIR_T_I64. */
+    N00B_CG_FUNC,   /**< Function pointer, represented as MIR_T_I64. */
+    N00B_CG_NIL,    /**< Nil value (nullptr), represented as MIR_T_I64. */
+    N00B_CG_PTR,    /**< Generic/unknown pointer, represented as MIR_T_I64. */
+    N00B_CG_BOOL,   /**< Backed by I64, semantically boolean. */
+    N00B_CG_VOID,   /**< No value (void return). */
 } n00b_cg_type_tag_t;
 
 // ============================================================================
@@ -123,11 +125,11 @@ typedef enum {
  * Designed to be passed by value (16 bytes).
  */
 typedef struct {
-    uint32_t            id;       /**< MIR_reg_t or label index. */
-    uint8_t             kind;     /**< n00b_cg_val_kind_t. */
-    uint8_t             type_tag; /**< n00b_cg_type_tag_t. */
-    uint16_t            _pad;
-    uint64_t            aux;      /**< Immediate value, displacement, or label handle. */
+    uint32_t id;       /**< MIR_reg_t or label index. */
+    uint8_t  kind;     /**< n00b_cg_val_kind_t. */
+    uint8_t  type_tag; /**< n00b_cg_type_tag_t. */
+    uint16_t _pad;
+    uint64_t aux;      /**< Immediate value, displacement, or label handle. */
 } n00b_cg_val_t;
 
 /** @brief Sentinel void value. */
@@ -174,8 +176,8 @@ typedef enum {
 
 /** @brief How a variable should be stored. */
 typedef enum {
-    N00B_CG_STORE_REG,  /**< In a MIR register. */
-    N00B_CG_STORE_MEM,  /**< In memory (alloca). */
+    N00B_CG_STORE_REG, /**< In a MIR register. */
+    N00B_CG_STORE_MEM, /**< In memory (alloca). */
 } n00b_cg_storage_t;
 
 // ============================================================================
@@ -184,10 +186,10 @@ typedef enum {
 
 /** @brief Lifecycle state of a codegen module. */
 typedef enum {
-    N00B_CG_MOD_BUILDING,   /**< Accepting emit operations. */
-    N00B_CG_MOD_FINISHED,   /**< MIR_finish_module called. */
-    N00B_CG_MOD_LINKED,     /**< MIR_link called. */
-    N00B_CG_MOD_COMPILED,   /**< MIR_gen called, function pointers valid. */
+    N00B_CG_MOD_BUILDING, /**< Accepting emit operations. */
+    N00B_CG_MOD_FINISHED, /**< MIR_finish_module called. */
+    N00B_CG_MOD_LINKED,   /**< MIR_link called. */
+    N00B_CG_MOD_COMPILED, /**< MIR_gen called, function pointers valid. */
 } n00b_cg_module_state_t;
 
 // ============================================================================
@@ -198,27 +200,27 @@ typedef enum {
  * @brief Type mapping callback: language type -> machine type tag.
  */
 typedef n00b_cg_type_tag_t (*n00b_cg_type_map_fn)(n00b_cg_session_t *session,
-                                                    n00b_tc_type_t    *type);
+                                                  n00b_tc_type_t    *type);
 
 /**
  * @brief Per-NT codegen handler: emit code for a node, return result value.
  */
 typedef n00b_cg_val_t (*n00b_cg_handler_fn)(n00b_cg_session_t *session,
-                                              n00b_parse_tree_t *node);
+                                            n00b_parse_tree_t *node);
 
 /**
  * @brief Literal parser: token text -> immediate value.
  */
-typedef n00b_cg_val_t (*n00b_cg_literal_fn)(n00b_cg_session_t  *session,
-                                              n00b_parse_tree_t  *node,
-                                              n00b_string_t      *lit_kind,
-                                              n00b_cg_type_tag_t  type_tag);
+typedef n00b_cg_val_t (*n00b_cg_literal_fn)(n00b_cg_session_t *session,
+                                            n00b_parse_tree_t *node,
+                                            n00b_string_t     *lit_kind,
+                                            n00b_cg_type_tag_t type_tag);
 
 /**
  * @brief Storage policy: register vs memory per symbol.
  */
 typedef n00b_cg_storage_t (*n00b_cg_storage_fn)(n00b_cg_session_t *session,
-                                                  n00b_sym_entry_t  *sym);
+                                                n00b_sym_entry_t  *sym);
 
 // ============================================================================
 // Import table
@@ -234,14 +236,14 @@ typedef n00b_tc_type_t *(*n00b_cg_type_builder_fn)(n00b_tc_ctx_t *ctx);
  * Used both for manual imports and linker-section auto-registration.
  */
 typedef struct {
-    const char              *name;
-    void                    *addr;
-    n00b_cg_type_tag_t       ret;
-    n00b_cg_type_tag_t      *param_types;
-    int32_t                  n_params;
-    bool                     is_vararg;
-    n00b_cg_type_builder_fn  type_builder;
-    n00b_tc_type_t          *resolved_type;
+    const char             *name;
+    void                   *addr;
+    n00b_cg_type_tag_t      ret;
+    n00b_cg_type_tag_t     *param_types;
+    int32_t                 n_params;
+    bool                    is_vararg;
+    n00b_cg_type_builder_fn type_builder;
+    n00b_tc_type_t         *resolved_type;
 } n00b_cg_import_entry_t;
 
 /**
@@ -275,30 +277,26 @@ typedef struct {
  * @param builder    Type builder callback (or `NULL`).
  * @param ...        Parameter type tags (e.g., `N00B_CG_I64, N00B_CG_PTR`).
  */
-#define N00B_CG_EXPORT(sym, func_ptr, ret_type, builder, ...)          \
-    static n00b_cg_type_tag_t _n00b_ffi_pt_##sym[]                     \
-        = {__VA_ARGS__};                                               \
-    static const n00b_cg_import_entry_t                                \
-    _n00b_ffi_##sym _N00B_FFI_SECTION = {                              \
-        .name         = #sym,                                          \
-        .addr         = (void *)(func_ptr),                            \
-        .ret          = (ret_type),                                    \
-        .param_types  = _n00b_ffi_pt_##sym,                            \
-        .n_params     = (int32_t)(sizeof(_n00b_ffi_pt_##sym)           \
-                        / sizeof(n00b_cg_type_tag_t)),                 \
-        .type_builder = (builder),                                     \
+#define N00B_CG_EXPORT(sym, func_ptr, ret_type, builder, ...)                                  \
+    static n00b_cg_type_tag_t           _n00b_ffi_pt_##sym[]              = {__VA_ARGS__};     \
+    static const n00b_cg_import_entry_t _n00b_ffi_##sym _N00B_FFI_SECTION = {                  \
+        .name         = #sym,                                                                  \
+        .addr         = (void *)(func_ptr),                                                    \
+        .ret          = (ret_type),                                                            \
+        .param_types  = _n00b_ffi_pt_##sym,                                                    \
+        .n_params     = (int32_t)(sizeof(_n00b_ffi_pt_##sym) / sizeof(n00b_cg_type_tag_t)),    \
+        .type_builder = (builder),                                                             \
     }
 
 /** @brief Like N00B_CG_EXPORT but for zero-parameter functions. */
-#define N00B_CG_EXPORT0(sym, func_ptr, ret_type, builder)              \
-    static const n00b_cg_import_entry_t                                \
-    _n00b_ffi_##sym _N00B_FFI_SECTION = {                              \
-        .name         = #sym,                                          \
-        .addr         = (void *)(func_ptr),                            \
-        .ret          = (ret_type),                                    \
-        .param_types  = NULL,                                          \
-        .n_params     = 0,                                             \
-        .type_builder = (builder),                                     \
+#define N00B_CG_EXPORT0(sym, func_ptr, ret_type, builder)                                      \
+    static const n00b_cg_import_entry_t _n00b_ffi_##sym _N00B_FFI_SECTION = {                  \
+        .name         = #sym,                                                                  \
+        .addr         = (void *)(func_ptr),                                                    \
+        .ret          = (ret_type),                                                            \
+        .param_types  = NULL,                                                                  \
+        .n_params     = 0,                                                                     \
+        .type_builder = (builder),                                                             \
     }
 
 // ============================================================================
@@ -312,11 +310,11 @@ typedef struct {
  * handler), auto-inferred (has semantic annotations), or unhandled.
  */
 typedef struct {
-    const char **unhandled_nts;     /**< NT names with no handler or inference. */
+    const char **unhandled_nts;    /**< NT names with no handler or inference. */
     int32_t      unhandled_count;
-    const char **auto_inferred;     /**< NT names handled by auto-inference. */
+    const char **auto_inferred;    /**< NT names handled by auto-inference. */
     int32_t      auto_inferred_count;
-    const char **explicit_handled;  /**< NT names with explicit handlers. */
+    const char **explicit_handled; /**< NT names with explicit handlers. */
     int32_t      explicit_count;
 } n00b_cg_audit_t;
 
@@ -341,15 +339,16 @@ typedef struct {
  * @kw user_data       User-defined context pointer (NULL).
  * @kw embed_registry  Pre-built embed handler registry (NULL = allocate new).
  */
-n00b_cg_session_t *n00b_cg_session_new(n00b_grammar_t *grammar)
-_kargs {
-    n00b_cg_import_table_t  *imports;
-    n00b_cg_type_map_fn      type_map;
-    n00b_cg_literal_fn       literal_parser;
-    n00b_cg_storage_fn       storage_policy;
-    n00b_cg_handler_fn       default_handler;
-    void                    *user_data;
-    n00b_dict_untyped_t     *embed_registry;
+n00b_cg_session_t *
+n00b_cg_session_new(n00b_grammar_t *grammar) _kargs
+{
+    n00b_cg_import_table_t *imports;
+    n00b_cg_type_map_fn     type_map;
+    n00b_cg_literal_fn      literal_parser;
+    n00b_cg_storage_fn      storage_policy;
+    n00b_cg_handler_fn      default_handler;
+    void                   *user_data;
+    n00b_dict_untyped_t    *embed_registry;
 };
 
 /**
@@ -367,8 +366,9 @@ void n00b_cg_session_free(n00b_cg_session_t *session);
  * Equivalent to `n00b_cg_session_new()` but with the old parameter names.
  * Creates a session and an initial module named `module_name` (default "main").
  */
-n00b_codegen_t *n00b_codegen_new(n00b_grammar_t *grammar)
-_kargs {
+n00b_codegen_t *
+n00b_codegen_new(n00b_grammar_t *grammar) _kargs
+{
     n00b_annot_result_t *annot;
     n00b_cg_type_map_fn  type_map;
     n00b_cg_literal_fn   literal_parser;
@@ -396,8 +396,7 @@ void n00b_codegen_free(n00b_codegen_t *cg);
  * @param name     Module name (e.g., "repl_0", "mypackage.mymod").
  * @return The new module (also set as the session's active module).
  */
-n00b_cg_module_t *n00b_cg_module_new(n00b_cg_session_t *session,
-                                      const char         *name);
+n00b_cg_module_t *n00b_cg_module_new(n00b_cg_session_t *session, const char *name);
 
 /**
  * @brief Finish, link, and JIT-compile a module.
@@ -409,20 +408,17 @@ n00b_cg_module_t *n00b_cg_module_new(n00b_cg_session_t *session,
  * @param entry_func  Name of the entry function to return a pointer to (or NULL).
  * @return Function pointer for `entry_func`, or NULL if no entry or on error.
  */
-void *n00b_cg_module_compile(n00b_cg_module_t *module,
-                              const char        *entry_func);
+void *n00b_cg_module_compile(n00b_cg_module_t *module, const char *entry_func);
 
 /**
  * @brief Set the active module for emit operations.
  */
-void n00b_cg_set_active_module(n00b_cg_session_t *session,
-                                n00b_cg_module_t  *module);
+void n00b_cg_set_active_module(n00b_cg_session_t *session, n00b_cg_module_t *module);
 
 /**
  * @brief Set the annotation result on a module (for tree-walk codegen).
  */
-void n00b_cg_module_set_annot(n00b_cg_module_t    *module,
-                                n00b_annot_result_t *annot);
+void n00b_cg_module_set_annot(n00b_cg_module_t *module, n00b_annot_result_t *annot);
 
 // ============================================================================
 // Eval convenience (REPL primary path)
@@ -443,13 +439,13 @@ void n00b_cg_module_set_annot(n00b_cg_module_t    *module,
  *
  * @return The int64_t result of execution (0 on error).
  */
-int64_t n00b_cg_session_eval_tree(n00b_cg_session_t *session,
-                                   n00b_parse_tree_t  *tree)
-_kargs {
+int64_t
+n00b_cg_session_eval_tree(n00b_cg_session_t *session, n00b_parse_tree_t *tree) _kargs
+{
     n00b_annot_result_t *annot;
     const char          *func_name;
     bool                *ok;
-    n00b_cg_type_tag_t  *out_type;  /**< Out: type tag of last expression. */
+    n00b_cg_type_tag_t  *out_type; /**< Out: type tag of last expression. */
 };
 
 // ============================================================================
@@ -472,9 +468,9 @@ _kargs {
  *
  * @return The int64_t result of execution (0 on error).
  */
-int64_t n00b_cg_session_run_module(n00b_cg_session_t *session,
-                                     n00b_parse_tree_t  *tree)
-_kargs {
+int64_t
+n00b_cg_session_run_module(n00b_cg_session_t *session, n00b_parse_tree_t *tree) _kargs
+{
     n00b_annot_result_t *annot;
     const char          *entry_name;
     bool                *ok;
@@ -488,31 +484,31 @@ _kargs {
  * @brief Register a codegen handler by NT name.
  * @return True if NT was found in grammar, false otherwise.
  */
-bool n00b_codegen_register(n00b_cg_session_t  *session,
-                            const char          *nt_name,
-                            n00b_cg_handler_fn   handler);
+bool n00b_codegen_register(n00b_cg_session_t *session,
+                           const char        *nt_name,
+                           n00b_cg_handler_fn handler);
 
 /**
  * @brief Register a codegen handler by NT id.
  * @return True if NT id is valid, false otherwise.
  */
-bool n00b_codegen_register_by_id(n00b_cg_session_t  *session,
-                                  int64_t              nt_id,
-                                  n00b_cg_handler_fn   handler);
+bool n00b_codegen_register_by_id(n00b_cg_session_t *session,
+                                 int64_t            nt_id,
+                                 n00b_cg_handler_fn handler);
 
 /**
  * @brief Register an operator token -> semantic op mapping.
  */
-void n00b_codegen_map_operator(n00b_cg_session_t     *session,
-                                const char             *token_text,
-                                n00b_cg_semantic_op_t   op);
+void n00b_codegen_map_operator(n00b_cg_session_t    *session,
+                               const char           *token_text,
+                               n00b_cg_semantic_op_t op);
 
 // ============================================================================
 // Pre-flight audit
 // ============================================================================
 
 n00b_cg_audit_t n00b_codegen_audit(n00b_cg_session_t *session);
-void n00b_cg_audit_free(n00b_cg_audit_t *audit);
+void            n00b_cg_audit_free(n00b_cg_audit_t *audit);
 
 // ============================================================================
 // Operator lookup (for testing / handler use)
@@ -534,15 +530,13 @@ bool n00b_codegen_emit(n00b_cg_session_t *session, n00b_parse_tree_t *tree);
 /**
  * @brief Lower a single child node (for use within handlers).
  */
-n00b_cg_val_t n00b_codegen_lower(n00b_cg_session_t *session,
-                                   n00b_parse_tree_t *child);
+n00b_cg_val_t n00b_codegen_lower(n00b_cg_session_t *session, n00b_parse_tree_t *child);
 
 // ============================================================================
 // Queries (for use in handlers)
 // ============================================================================
 
-n00b_cg_type_tag_t n00b_codegen_node_type(n00b_cg_session_t *session,
-                                            n00b_parse_tree_t *node);
+n00b_cg_type_tag_t n00b_codegen_node_type(n00b_cg_session_t *session, n00b_parse_tree_t *node);
 
 /**
  * @brief Get the full type-checker type for a parse tree node.
@@ -553,11 +547,9 @@ n00b_cg_type_tag_t n00b_codegen_node_type(n00b_cg_session_t *session,
  *
  * @return The resolved type, or NULL if not found.
  */
-n00b_tc_type_t *n00b_codegen_node_tc_type(n00b_cg_session_t *session,
-                                            n00b_parse_tree_t *node);
+n00b_tc_type_t *n00b_codegen_node_tc_type(n00b_cg_session_t *session, n00b_parse_tree_t *node);
 
-n00b_cf_label_t *n00b_codegen_cf_label(n00b_cg_session_t *session,
-                                         n00b_parse_tree_t *node);
+n00b_cf_label_t *n00b_codegen_cf_label(n00b_cg_session_t *session, n00b_parse_tree_t *node);
 
 n00b_grammar_t      *n00b_codegen_grammar(n00b_cg_session_t *session);
 n00b_annot_result_t *n00b_codegen_annot(n00b_cg_session_t *session);
@@ -568,7 +560,7 @@ n00b_annot_result_t *n00b_codegen_annot(n00b_cg_session_t *session);
  * Returns the previous value so callers can restore it.
  */
 n00b_annot_result_t *n00b_codegen_set_annot(n00b_cg_session_t   *session,
-                                             n00b_annot_result_t *annot);
+                                            n00b_annot_result_t *annot);
 n00b_diag_ctx_t     *n00b_codegen_diagnostics(n00b_cg_session_t *session);
 void                *n00b_codegen_get_user_data(n00b_cg_session_t *session);
 
@@ -576,13 +568,14 @@ void                *n00b_codegen_get_user_data(n00b_cg_session_t *session);
 // Builder API: Function scope
 // ============================================================================
 
-void n00b_cg_begin_func(n00b_cg_session_t *session, const char *name)
-_kargs {
-    n00b_cg_type_tag_t   ret;
-    const char         **param_names;
-    n00b_cg_type_tag_t  *param_types;
-    int32_t              n_params;
-    bool                 is_vararg;
+void
+n00b_cg_begin_func(n00b_cg_session_t *session, const char *name) _kargs
+{
+    n00b_cg_type_tag_t  ret;
+    const char        **param_names;
+    n00b_cg_type_tag_t *param_types;
+    int32_t             n_params;
+    bool                is_vararg;
 };
 
 void n00b_cg_end_func(n00b_cg_session_t *session);
@@ -593,29 +586,29 @@ n00b_cg_val_t n00b_cg_param(n00b_cg_session_t *session, int32_t index);
 // Builder API: Locals
 // ============================================================================
 
-n00b_cg_val_t n00b_cg_local(n00b_cg_session_t *session, const char *name)
-_kargs {
+n00b_cg_val_t
+n00b_cg_local(n00b_cg_session_t *session, const char *name) _kargs
+{
     n00b_cg_type_tag_t type;
 };
 
-void n00b_cg_store(n00b_cg_session_t *session, n00b_cg_val_t dst, n00b_cg_val_t src);
+void          n00b_cg_store(n00b_cg_session_t *session, n00b_cg_val_t dst, n00b_cg_val_t src);
 n00b_cg_val_t n00b_cg_load(n00b_cg_session_t *session, n00b_cg_val_t var);
 
 // ============================================================================
 // Builder API: Constants
 // ============================================================================
 
-#define n00b_cg_const(cg, value)                    \
-    _Generic((value),                               \
-        int64_t:  _n00b_cg_const_i64,              \
-        int32_t:  _n00b_cg_const_i32,              \
-        uint64_t: _n00b_cg_const_u64,              \
-        double:   _n00b_cg_const_f64,              \
-        float:    _n00b_cg_const_f32,              \
-        bool:     _n00b_cg_const_bool,             \
-        void *:   _n00b_cg_const_ptr,              \
-        default:  _n00b_cg_const_i64               \
-    )(cg, value)
+#define n00b_cg_const(cg, value)                                                               \
+    _Generic((value),                                                                          \
+        int64_t: _n00b_cg_const_i64,                                                           \
+        int32_t: _n00b_cg_const_i32,                                                           \
+        uint64_t: _n00b_cg_const_u64,                                                          \
+        double: _n00b_cg_const_f64,                                                            \
+        float: _n00b_cg_const_f32,                                                             \
+        bool: _n00b_cg_const_bool,                                                             \
+        void *: _n00b_cg_const_ptr,                                                            \
+        default: _n00b_cg_const_i64)(cg, value)
 
 n00b_cg_val_t _n00b_cg_const_i64(n00b_cg_session_t *s, int64_t v);
 n00b_cg_val_t _n00b_cg_const_i32(n00b_cg_session_t *s, int32_t v);
@@ -650,16 +643,15 @@ n00b_cg_val_t n00b_cg_emit_le(n00b_cg_session_t *s, n00b_cg_val_t a, n00b_cg_val
 n00b_cg_val_t n00b_cg_emit_gt(n00b_cg_session_t *s, n00b_cg_val_t a, n00b_cg_val_t b);
 n00b_cg_val_t n00b_cg_emit_ge(n00b_cg_session_t *s, n00b_cg_val_t a, n00b_cg_val_t b);
 
-n00b_cg_val_t n00b_cg_emit_convert(n00b_cg_session_t  *s,
-                                     n00b_cg_val_t        src,
-                                     n00b_cg_type_tag_t   dst_type);
+n00b_cg_val_t
+n00b_cg_emit_convert(n00b_cg_session_t *s, n00b_cg_val_t src, n00b_cg_type_tag_t dst_type);
 
 // ============================================================================
 // Builder API: Control flow
 // ============================================================================
 
 n00b_cg_val_t n00b_cg_label_new(n00b_cg_session_t *session);
-void n00b_cg_label_here(n00b_cg_session_t *session, n00b_cg_val_t label);
+void          n00b_cg_label_here(n00b_cg_session_t *session, n00b_cg_val_t label);
 
 void n00b_cg_emit_jmp(n00b_cg_session_t *session, n00b_cg_val_t label);
 void n00b_cg_emit_bt(n00b_cg_session_t *session, n00b_cg_val_t cond, n00b_cg_val_t label);
@@ -672,19 +664,21 @@ void n00b_cg_emit_ret_void(n00b_cg_session_t *session);
 // Builder API: Function calls
 // ============================================================================
 
-n00b_cg_val_t n00b_cg_emit_call(n00b_cg_session_t *session,
-                                  const char         *func_name,
-                                  n00b_cg_val_t      *args,
-                                  int32_t             n_args)
-_kargs {
+n00b_cg_val_t
+n00b_cg_emit_call(n00b_cg_session_t *session,
+                  const char        *func_name,
+                  n00b_cg_val_t     *args,
+                  int32_t            n_args) _kargs
+{
     n00b_cg_type_tag_t ret;
 };
 
-n00b_cg_val_t n00b_cg_emit_call_indirect(n00b_cg_session_t *session,
-                                           n00b_cg_val_t       func_ptr,
-                                           n00b_cg_val_t      *args,
-                                           int32_t             n_args)
-_kargs {
+n00b_cg_val_t
+n00b_cg_emit_call_indirect(n00b_cg_session_t *session,
+                           n00b_cg_val_t      func_ptr,
+                           n00b_cg_val_t     *args,
+                           int32_t            n_args) _kargs
+{
     n00b_cg_type_tag_t ret;
 };
 
@@ -692,17 +686,19 @@ _kargs {
 // Builder API: Memory
 // ============================================================================
 
-n00b_cg_val_t n00b_cg_emit_mem_load(n00b_cg_session_t  *session,
-                                      n00b_cg_val_t        addr,
-                                      n00b_cg_type_tag_t   type)
-_kargs {
+n00b_cg_val_t
+n00b_cg_emit_mem_load(n00b_cg_session_t *session,
+                      n00b_cg_val_t      addr,
+                      n00b_cg_type_tag_t type) _kargs
+{
     int64_t offset;
 };
 
-void n00b_cg_emit_mem_store(n00b_cg_session_t *session,
-                             n00b_cg_val_t       addr,
-                             n00b_cg_val_t       value)
-_kargs {
+void
+n00b_cg_emit_mem_store(n00b_cg_session_t *session,
+                       n00b_cg_val_t      addr,
+                       n00b_cg_val_t      value) _kargs
+{
     int64_t offset;
 };
 
@@ -712,14 +708,13 @@ n00b_cg_val_t n00b_cg_emit_alloca(n00b_cg_session_t *session, int64_t size);
 // Builder API: Imports (per-module, for backward compat)
 // ============================================================================
 
-void n00b_cg_import_func(n00b_cg_session_t *session,
-                          const char         *name,
-                          void               *addr)
-_kargs {
-    n00b_cg_type_tag_t   ret;
-    n00b_cg_type_tag_t  *param_types;
-    int32_t              n_params;
-    bool                 is_vararg;
+void
+n00b_cg_import_func(n00b_cg_session_t *session, const char *name, void *addr) _kargs
+{
+    n00b_cg_type_tag_t  ret;
+    n00b_cg_type_tag_t *param_types;
+    int32_t             n_params;
+    bool                is_vararg;
 };
 
 // ============================================================================
@@ -735,25 +730,23 @@ _kargs {
 n00b_cg_import_table_t *n00b_cg_collect_exports(void);
 
 n00b_cg_import_table_t *n00b_cg_import_table_new(void);
-void n00b_cg_import_table_add(n00b_cg_import_table_t *table,
-                               n00b_cg_import_entry_t  entry);
+void n00b_cg_import_table_add(n00b_cg_import_table_t *table, n00b_cg_import_entry_t entry);
 void n00b_cg_import_table_free(n00b_cg_import_table_t *table);
 
 /**
  * @brief Resolve n00b type-checker types for all entries with a type_builder.
  */
-void n00b_cg_import_table_resolve_types(n00b_cg_import_table_t *table,
-                                         n00b_tc_ctx_t           *ctx);
+void n00b_cg_import_table_resolve_types(n00b_cg_import_table_t *table, n00b_tc_ctx_t *ctx);
 
 // ============================================================================
 // Execution modes (backward compat — operate on session's initial module)
 // ============================================================================
 
 bool n00b_codegen_interpret(n00b_cg_session_t *session,
-                             const char         *func_name,
-                             void               *result,
-                             void               *args,
-                             int32_t             n_args);
+                            const char        *func_name,
+                            void              *result,
+                            void              *args,
+                            int32_t            n_args);
 
 void *n00b_codegen_jit(n00b_cg_session_t *session, const char *func_name);
 
@@ -763,17 +756,18 @@ void n00b_codegen_dump(n00b_cg_session_t *session, FILE *f);
 // Convenience helpers (backward compat)
 // ============================================================================
 
-bool n00b_cg_emit_func_from_tree(n00b_cg_session_t *session,
-                                   n00b_parse_tree_t *tree,
-                                   const char         *func_name)
-_kargs {
+bool
+n00b_cg_emit_func_from_tree(n00b_cg_session_t *session,
+                            n00b_parse_tree_t *tree,
+                            const char        *func_name) _kargs
+{
     n00b_cg_type_tag_t  ret;
-    n00b_cg_type_tag_t *result_type;  /**< Out: type of last expression. */
+    n00b_cg_type_tag_t *result_type; /**< Out: type of last expression. */
 };
 
-int64_t n00b_codegen_eval_tree(n00b_grammar_t    *grammar,
-                                 n00b_parse_tree_t *tree)
-_kargs {
+int64_t
+n00b_codegen_eval_tree(n00b_grammar_t *grammar, n00b_parse_tree_t *tree) _kargs
+{
     n00b_annot_result_t *annot;
     n00b_cg_type_map_fn  type_map;
     const char          *func_name;
@@ -802,8 +796,7 @@ n00b_sym_entry_t *n00b_cg_module_lookup(n00b_cg_module_t *m, const char *name);
  * @brief Find a cached module by fully-qualified name.
  * @return The module, or NULL if not in cache.
  */
-n00b_cg_module_t *n00b_cg_session_find_module(n00b_cg_session_t *s,
-                                                const char         *fqn);
+n00b_cg_module_t *n00b_cg_session_find_module(n00b_cg_session_t *s, const char *fqn);
 
 // ============================================================================
 // Session debug/dump

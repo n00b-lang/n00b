@@ -1,0 +1,12 @@
+use callback_shadow_dep from "modules"
+
+func invoke_shadowed_callback() -> int {
+    return call(func f)
+}
+
+func f() -> int {
+    return 2
+}
+
+print(invoke_shadowed_callback())
+print(f())

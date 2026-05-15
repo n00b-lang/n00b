@@ -1,0 +1,4 @@
+use private_dep from "modules"
+
+print(secret())
+0

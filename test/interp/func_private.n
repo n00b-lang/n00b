@@ -1,0 +1,6 @@
+private func secret() -> int {
+    return 1
+}
+
+print(secret())
+0

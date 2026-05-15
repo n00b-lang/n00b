@@ -1,0 +1,6 @@
+var xs = [1, 2, 3]
+var empty = []
+
+print(len(xs))
+print(len(empty))
+0

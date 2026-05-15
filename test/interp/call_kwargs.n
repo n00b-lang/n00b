@@ -1,0 +1,6 @@
+func identity(x: int) -> int {
+    return x
+}
+
+print(identity(x = 42))
+0

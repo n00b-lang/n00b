@@ -1,0 +1,3 @@
+func b_dep_value() -> int {
+    return 222
+}

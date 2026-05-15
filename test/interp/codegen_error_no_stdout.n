@@ -1,0 +1,5 @@
+use private_dep from "modules"
+
+print("before private call")
+print(secret())
+0

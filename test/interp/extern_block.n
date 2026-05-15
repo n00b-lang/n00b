@@ -1,0 +1,5 @@
+extern strlen(cstring) -> int {
+}
+
+print(strlen("extern"))
+0

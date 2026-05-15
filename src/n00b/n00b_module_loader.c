@@ -6,6 +6,7 @@
 #include "n00b.h"
 #include "n00b/n00b_module_loader.h"
 #include "n00b/n00b_compile.h"
+#include "n00b/n00b_compile_binary.h"
 #include "n00b/n00b_tokenizer.h"
 #include "n00b/n00b_type_map.h"
 #include "typecheck/unify.h"
@@ -146,11 +147,12 @@ static void
 push_loading_stack(n00b_cg_session_t *s, const char *fqn)
 {
     if (s->loading_depth >= s->loading_cap) {
-        int32_t new_cap = s->loading_cap ? s->loading_cap * 2 : 16;
+        int32_t      new_cap   = s->loading_cap ? s->loading_cap * 2 : 16;
         const char **new_stack = n00b_alloc_array(const char *, (size_t)new_cap);
 
         if (s->loading_stack) {
-            memcpy(new_stack, s->loading_stack,
+            memcpy(new_stack,
+                   s->loading_stack,
                    sizeof(const char *) * (size_t)s->loading_depth);
         }
 
@@ -169,13 +171,60 @@ pop_loading_stack(n00b_cg_session_t *s)
     }
 }
 
+static char *
+module_dirname_dup(const char *path)
+{
+    if (!path || !path[0]) {
+        return strdup(".");
+    }
+
+    const char *slash = strrchr(path, '/');
+
+    if (!slash) {
+        return strdup(".");
+    }
+
+    if (slash == path) {
+        return strdup("/");
+    }
+
+    size_t len = (size_t)(slash - path);
+    char  *dir = malloc(len + 1);
+
+    if (!dir) {
+        return NULL;
+    }
+
+    memcpy(dir, path, len);
+    dir[len] = '\0';
+    return dir;
+}
+
+static char *
+module_cache_key_dup(const char *path)
+{
+    if (!path || !path[0]) {
+        return NULL;
+    }
+
+    char resolved[PATH_MAX];
+
+    if (realpath(path, resolved)) {
+        return strdup(resolved);
+    }
+
+    return strdup(path);
+}
+
 // ============================================================================
 // Path construction: try to find "package/module.n" in search dirs
 // ============================================================================
 
 static char *
-find_module_file(const char *module_name, const char *package,
-                 const char *from_path, const char *caller_path)
+find_module_file(const char *module_name,
+                 const char *package,
+                 const char *from_path,
+                 const char *caller_path)
 {
     char candidate[PATH_MAX];
 
@@ -183,12 +232,15 @@ find_module_file(const char *module_name, const char *package,
     if (from_path && from_path[0]) {
         // Build: from_path / module_name.n
         if (from_path[0] == '/' || !caller_path) {
-            snprintf(candidate, sizeof(candidate), "%s/%s.n",
-                     from_path, module_name);
+            snprintf(candidate, sizeof(candidate), "%s/%s.n", from_path, module_name);
         }
         else {
-            snprintf(candidate, sizeof(candidate), "%s/%s/%s.n",
-                     caller_path, from_path, module_name);
+            snprintf(candidate,
+                     sizeof(candidate),
+                     "%s/%s/%s.n",
+                     caller_path,
+                     from_path,
+                     module_name);
         }
 
         struct stat st;
@@ -202,8 +254,7 @@ find_module_file(const char *module_name, const char *package,
             snprintf(candidate, sizeof(candidate), "%s", from_path);
         }
         else {
-            snprintf(candidate, sizeof(candidate), "%s/%s",
-                     caller_path, from_path);
+            snprintf(candidate, sizeof(candidate), "%s/%s", caller_path, from_path);
         }
 
         if (stat(candidate, &st) == 0 && S_ISREG(st.st_mode)) {
@@ -232,7 +283,7 @@ find_module_file(const char *module_name, const char *package,
         if (pi + mlen + 3 < sizeof(rel_path)) {
             memcpy(rel_path + pi, module_name, mlen);
             pi += mlen;
-            memcpy(rel_path + pi, ".n", 3);  // includes NUL
+            memcpy(rel_path + pi, ".n", 3); // includes NUL
         }
         else {
             rel_path[pi] = '\0';
@@ -319,10 +370,8 @@ extract_func_name(n00b_parse_tree_t *func_def_node)
         }
 
         // Skip grammar keywords.
-        if (n00b_unicode_str_eq(val, r"private")
-            || n00b_unicode_str_eq(val, r"once")
-            || n00b_unicode_str_eq(val, r"func")
-            || n00b_unicode_str_eq(val, r"method")) {
+        if (n00b_unicode_str_eq(val, r"private") || n00b_unicode_str_eq(val, r"once")
+            || n00b_unicode_str_eq(val, r"func") || n00b_unicode_str_eq(val, r"method")) {
             continue;
         }
 
@@ -387,8 +436,7 @@ is_func_private(n00b_parse_tree_t *func_def_node)
         }
 
         // Once we hit "func" or "method" there are no more modifiers.
-        if (n00b_unicode_str_eq(val, r"func")
-            || n00b_unicode_str_eq(val, r"method")) {
+        if (n00b_unicode_str_eq(val, r"func") || n00b_unicode_str_eq(val, r"method")) {
             break;
         }
     }
@@ -419,14 +467,14 @@ is_func_private(n00b_parse_tree_t *func_def_node)
 //
 // Returns the count, writes into caller-provided arrays.
 static int32_t
-extract_params(n00b_grammar_t     *grammar,
-               n00b_parse_tree_t  *func_def_node,
-               const char        **out_names,
-               int32_t             cap)
+extract_params(n00b_grammar_t    *grammar,
+               n00b_parse_tree_t *func_def_node,
+               const char       **out_names,
+               int32_t            cap)
 {
     // Find <param-decl>.
-    n00b_parse_tree_t *param_decl = n00b_tree_find_child_by_nt_name(
-        grammar, func_def_node, r"param-decl");
+    n00b_parse_tree_t *param_decl
+        = n00b_tree_find_child_by_nt_name(grammar, func_def_node, r"param-decl");
 
     if (!param_decl) {
         return 0;
@@ -440,14 +488,14 @@ extract_params(n00b_grammar_t     *grammar,
         bool found = false;
 
         n00b_string_t *fp_key = n00b_string_from_cstr("formal-param");
-        fp_id = n00b_dict_get(grammar->nt_map, fp_key, &found);
+        fp_id                 = n00b_dict_get(grammar->nt_map, fp_key, &found);
         if (!found) {
             fp_id = -1;
         }
 
-        found = false;
+        found                 = false;
         n00b_string_t *vp_key = n00b_string_from_cstr("vargs-param");
-        vp_id = n00b_dict_get(grammar->nt_map, vp_key, &found);
+        vp_id                 = n00b_dict_get(grammar->nt_map, vp_key, &found);
         if (!found) {
             vp_id = -1;
         }
@@ -539,9 +587,12 @@ emit_func_def(n00b_cg_session_t *session,
 
     *out_is_private = is_func_private(func_def_node);
 
+    if (*out_is_private && session->active_module) {
+        n00b_cg_module_mark_private_func(session->active_module, fname);
+    }
+
     // Find the <body> child.
-    n00b_parse_tree_t *body = n00b_tree_find_child_by_nt_name(
-        grammar, func_def_node, r"body");
+    n00b_parse_tree_t *body = n00b_tree_find_child_by_nt_name(grammar, func_def_node, r"body");
 
     if (!body) {
         fprintf(stderr, "warning: func-def '%s' has no body\n", fname);
@@ -550,24 +601,22 @@ emit_func_def(n00b_cg_session_t *session,
 
     // Extract parameter names.
     const char *param_names[64];
-    int32_t     n_params = extract_params(grammar, func_def_node,
-                                          param_names, 64);
+    int32_t     n_params = extract_params(grammar, func_def_node, param_names, 64);
 
     // Build type array from annotation symtab when available.
     n00b_cg_type_tag_t param_types[64];
     n00b_cg_type_tag_t ret_type = N00B_CG_I64;
 
-    n00b_annot_result_t *annot = session->active_module
-                                    ? session->active_module->annot
-                                    : session->annot;
+    n00b_annot_result_t *annot
+        = session->active_module ? session->active_module->annot : session->annot;
 
     for (int32_t i = 0; i < n_params; i++) {
         param_types[i] = N00B_CG_I64;
 
         if (annot && annot->symtab && session->type_map) {
-            n00b_string_t *pname = n00b_string_from_cstr(param_names[i]);
-            n00b_sym_entry_t *sym = n00b_symtab_lookup_any(
-                annot->symtab, n00b_string_empty(), pname);
+            n00b_string_t    *pname = n00b_string_from_cstr(param_names[i]);
+            n00b_sym_entry_t *sym
+                = n00b_symtab_lookup_any(annot->symtab, n00b_string_empty(), pname);
 
             if (sym && sym->type_var) {
                 param_types[i] = session->type_map(session, sym->type_var);
@@ -577,9 +626,9 @@ emit_func_def(n00b_cg_session_t *session,
 
     // Extract return type from <return-type> child if present.
     if (annot && annot->symtab && session->type_map) {
-        n00b_string_t *sname = n00b_string_from_cstr(fname);
-        n00b_sym_entry_t *fsym = n00b_symtab_lookup_any(
-            annot->symtab, n00b_string_empty(), sname);
+        n00b_string_t    *sname = n00b_string_from_cstr(fname);
+        n00b_sym_entry_t *fsym
+            = n00b_symtab_lookup_any(annot->symtab, n00b_string_empty(), sname);
 
         if (fsym && fsym->type_var) {
             n00b_tc_type_t *ftype = n00b_tc_find(fsym->type_var);
@@ -595,11 +644,12 @@ emit_func_def(n00b_cg_session_t *session,
     }
 
     // Emit: begin_func → lower body → ret → end_func.
-    n00b_cg_begin_func(session, fname,
-                        .ret         = ret_type,
-                        .param_names = n_params > 0 ? param_names : NULL,
-                        .param_types = n_params > 0 ? param_types : NULL,
-                        .n_params    = n_params);
+    n00b_cg_begin_func(session,
+                       fname,
+                       .ret         = ret_type,
+                       .param_names = n_params > 0 ? param_names : NULL,
+                       .param_types = n_params > 0 ? param_types : NULL,
+                       .n_params    = n_params);
 
     n00b_cg_val_t result = n00b_codegen_lower(session, body);
 
@@ -625,12 +675,12 @@ typedef struct {
 // Returns the number of functions successfully emitted.
 // Populates func_info[] with name and visibility for each emitted function.
 static int32_t
-emit_module_functions(n00b_cg_session_t  *session,
-                      n00b_grammar_t     *grammar,
-                      n00b_parse_tree_t  *node,
+emit_module_functions(n00b_cg_session_t   *session,
+                      n00b_grammar_t      *grammar,
+                      n00b_parse_tree_t   *node,
                       emitted_func_info_t *func_info,
-                      int32_t             info_cap,
-                      int32_t             info_pos)
+                      int32_t              info_cap,
+                      int32_t              info_pos)
 {
     if (!node || n00b_tree_is_leaf(node)) {
         return info_pos;
@@ -645,8 +695,7 @@ emit_module_functions(n00b_cg_session_t  *session,
         if (nt && n00b_unicode_str_eq(nt->name, r"func-def")) {
             bool is_priv = false;
 
-            if (emit_func_def(session, grammar, node, &is_priv)
-                && info_pos < info_cap) {
+            if (emit_func_def(session, grammar, node, &is_priv) && info_pos < info_cap) {
                 func_info[info_pos].name       = extract_func_name(node);
                 func_info[info_pos].is_private = is_priv;
                 info_pos++;
@@ -660,9 +709,12 @@ emit_module_functions(n00b_cg_session_t  *session,
     size_t nc = n00b_tree_num_children(node);
 
     for (size_t i = 0; i < nc; i++) {
-        info_pos = emit_module_functions(session, grammar,
+        info_pos = emit_module_functions(session,
+                                         grammar,
                                          n00b_tree_child(node, i),
-                                         func_info, info_cap, info_pos);
+                                         func_info,
+                                         info_cap,
+                                         info_pos);
     }
 
     return info_pos;
@@ -674,11 +726,11 @@ emit_module_functions(n00b_cg_session_t  *session,
 
 n00b_cg_module_t *
 n00b_module_load(n00b_cg_session_t *session,
-                  n00b_grammar_t     *grammar,
-                  const char          *module_name,
-                  const char          *package,
-                  const char          *from_path,
-                  const char          *caller_path)
+                 n00b_grammar_t    *grammar,
+                 const char        *module_name,
+                 const char        *package,
+                 const char        *from_path,
+                 const char        *caller_path)
 {
     if (!session || !grammar || !module_name) {
         return NULL;
@@ -694,25 +746,36 @@ n00b_module_load(n00b_cg_session_t *session,
         snprintf(fqn, sizeof(fqn), "%s", module_name);
     }
 
-    // Check cache.
-    n00b_cg_module_t *cached = n00b_cg_session_find_module(session, fqn);
-
-    if (cached) {
-        return cached;
-    }
-
-    // Cycle detection.
-    if (is_on_loading_stack(session, fqn)) {
-        fprintf(stderr, "error: circular import detected: '%s'\n", fqn);
-        return NULL;
-    }
-
     // Find the file.
-    char *file_path = find_module_file(module_name, package,
-                                       from_path, caller_path);
+    char *file_path = find_module_file(module_name, package, from_path, caller_path);
 
     if (!file_path) {
         fprintf(stderr, "error: cannot find module '%s'\n", fqn);
+        return NULL;
+    }
+
+    char *cache_key = module_cache_key_dup(file_path);
+
+    if (!cache_key) {
+        fprintf(stderr, "error: cannot cache module '%s' (%s)\n", fqn, file_path);
+        free(file_path);
+        return NULL;
+    }
+
+    // Check cache after caller-relative path resolution.
+    n00b_cg_module_t *cached = n00b_cg_session_find_module(session, cache_key);
+
+    if (cached) {
+        free(cache_key);
+        free(file_path);
+        return cached;
+    }
+
+    // Cycle detection uses the same resolved file identity as the cache.
+    if (is_on_loading_stack(session, cache_key)) {
+        fprintf(stderr, "error: circular import detected: '%s'\n", fqn);
+        free(cache_key);
+        free(file_path);
         return NULL;
     }
 
@@ -722,6 +785,7 @@ n00b_module_load(n00b_cg_session_t *session,
 
     if (!source) {
         fprintf(stderr, "error: cannot read '%s'\n", file_path);
+        free(cache_key);
         free(file_path);
         return NULL;
     }
@@ -732,18 +796,17 @@ n00b_module_load(n00b_cg_session_t *session,
     n00b_token_stream_t *ts  = n00b_token_stream_new(sc);
 
     // Parse.
-    n00b_parse_result_t *pr = n00b_grammar_parse(grammar, ts,
-                                                  N00B_PARSE_MODE_DEFAULT);
+    n00b_parse_result_t *pr = n00b_grammar_parse(grammar, ts, N00B_PARSE_MODE_DEFAULT);
 
     if (!pr || !n00b_parse_result_ok(pr)) {
-        fprintf(stderr, "error: parse failed for module '%s' (%s)\n",
-                fqn, file_path);
+        fprintf(stderr, "error: parse failed for module '%s' (%s)\n", fqn, file_path);
 
         if (pr) {
             n00b_parse_result_free(pr);
         }
 
         free(source);
+        free(cache_key);
         free(file_path);
 
         return NULL;
@@ -758,55 +821,70 @@ n00b_module_load(n00b_cg_session_t *session,
         fprintf(stderr, "error: annotation walk failed for module '%s'\n", fqn);
         n00b_parse_result_free(pr);
         free(source);
+        free(cache_key);
         free(file_path);
 
         return NULL;
     }
 
     // Push onto loading stack for cycle detection.
-    char *fqn_copy = strdup(fqn);
-    push_loading_stack(session, fqn_copy);
+    push_loading_stack(session, cache_key);
+
+    char *file_dir = module_dirname_dup(file_path);
+
+    if (!file_dir) {
+        pop_loading_stack(session);
+        n00b_parse_result_free(pr);
+        free(source);
+        free(cache_key);
+        free(file_path);
+        return NULL;
+    }
 
     // Recursively resolve nested use statements.
-    n00b_resolve_use_stmts(session, grammar, tree, annot);
+    if (!n00b_resolve_use_stmts(session, grammar, tree, annot, file_dir)) {
+        pop_loading_stack(session);
+        n00b_parse_result_free(pr);
+        free(file_dir);
+        free(source);
+        free(cache_key);
+        free(file_path);
+        return NULL;
+    }
 
     // Pop loading stack.
     pop_loading_stack(session);
+    free(file_dir);
 
-    // Create module and emit functions into it.
-    n00b_cg_module_t *m = n00b_cg_module_new(session, fqn_copy);
-    m->annot = annot;
+    n00b_module_code_t *compiled
+        = n00b_cg_session_compile_module(session, tree, .annot = annot);
 
-    // Walk the tree for func-def nodes and emit each as a MIR function.
-    // Track which are private so we only export public symbols.
-    emitted_func_info_t func_info[256];
-    int32_t n_funcs = emit_module_functions(session, grammar, tree,
-                                             func_info, 256, 0);
-
-    // Compile the module (link + JIT all emitted functions).
-    // Pass NULL as entry_func — we don't execute, just make functions
-    // available for cross-module calls.
-    n00b_cg_module_compile(m, NULL);
-
-    if (n_funcs > 0) {
-        fprintf(stderr, "info: loaded module '%s' (%d function%s)\n",
-                fqn, n_funcs, n_funcs == 1 ? "" : "s");
+    if (!compiled) {
+        fprintf(stderr, "error: codegen failed for module '%s'\n", fqn);
+        n00b_parse_result_free(pr);
+        free(source);
+        free(cache_key);
+        free(file_path);
+        return NULL;
     }
 
-    // Merge only public function symbols into session global scope.
-    // We do this directly rather than calling n00b_cg_session_merge_module
-    // because we need to filter out private functions.
-    for (int32_t i = 0; i < n_funcs; i++) {
-        if (!func_info[i].is_private && func_info[i].name) {
-            n00b_string_t *sname = n00b_string_from_cstr(func_info[i].name);
+    n00b_cg_module_t *m = session->active_module;
 
-            n00b_symtab_add(session->global_scope, n00b_string_empty(),
-                             sname, N00B_SYM_FUNCTION, NULL);
-        }
+    if (!m) {
+        fprintf(stderr, "error: module '%s' did not produce codegen state\n", fqn);
+        n00b_parse_result_free(pr);
+        free(source);
+        free(cache_key);
+        free(file_path);
+        return NULL;
     }
+
+    char *fqn_copy = strdup(fqn);
+
+    m->name = fqn_copy;
 
     // Cache.
-    n00b_dict_untyped_put(session->module_cache, fqn_copy, m);
+    n00b_dict_untyped_put(session->module_cache, cache_key, m);
 
     // Cleanup (parse result, source — but NOT annot, owned by module).
     n00b_parse_result_free(pr);
@@ -879,8 +957,7 @@ extract_from_path(n00b_grammar_t *grammar, n00b_parse_tree_t *use_node)
 
             // Skip "from" keyword — we want the STRING_LIT value.
             if (val->u8_bytes > 0
-                && !(val->u8_bytes == 4
-                     && memcmp(val->data, "from", 4) == 0)) {
+                && !(val->u8_bytes == 4 && memcmp(val->data, "from", 4) == 0)) {
                 return val->data;
             }
         }
@@ -890,13 +967,14 @@ extract_from_path(n00b_grammar_t *grammar, n00b_parse_tree_t *use_node)
 }
 
 // Recursive tree walker: find all use-stmt nodes and resolve them.
-static void
-walk_for_use_stmts(n00b_cg_session_t  *session,
-                   n00b_grammar_t      *grammar,
-                   n00b_parse_tree_t   *node)
+static bool
+walk_for_use_stmts(n00b_cg_session_t *session,
+                   n00b_grammar_t    *grammar,
+                   n00b_parse_tree_t *node,
+                   const char        *caller_path)
 {
     if (!node || n00b_tree_is_leaf(node)) {
-        return;
+        return true;
     }
 
     n00b_nt_node_t *pn = &n00b_tree_node_value(node);
@@ -910,13 +988,14 @@ walk_for_use_stmts(n00b_cg_session_t  *session,
             n00b_parse_tree_t *mc_node = n00b_tree_get_nth_nt_child(node, 0);
 
             if (mc_node) {
-                char chain_buf[512];
-                int32_t chain_len = n00b_tree_extract_member_chain(
-                    mc_node, chain_buf, (int32_t)sizeof(chain_buf));
+                char    chain_buf[512];
+                int32_t chain_len = n00b_tree_extract_member_chain(mc_node,
+                                                                   chain_buf,
+                                                                   (int32_t)sizeof(chain_buf));
 
                 if (chain_len > 0) {
                     // Decompose: last component = module, rest = package.
-                    char *last_dot = strrchr(chain_buf, '.');
+                    char       *last_dot = strrchr(chain_buf, '.');
                     const char *mod_name;
                     const char *pkg = NULL;
 
@@ -933,12 +1012,18 @@ walk_for_use_stmts(n00b_cg_session_t  *session,
                     const char *from_path = extract_from_path(grammar, node);
 
                     // Load the module.
-                    n00b_module_load(session, grammar, mod_name, pkg,
-                                     from_path, NULL);
+                    if (!n00b_module_load(session,
+                                          grammar,
+                                          mod_name,
+                                          pkg,
+                                          from_path,
+                                          caller_path)) {
+                        return false;
+                    }
                 }
             }
 
-            return;  // Don't recurse into use-stmt children.
+            return true; // Don't recurse into use-stmt children.
         }
     }
 
@@ -946,21 +1031,26 @@ walk_for_use_stmts(n00b_cg_session_t  *session,
     size_t nc = n00b_tree_num_children(node);
 
     for (size_t i = 0; i < nc; i++) {
-        walk_for_use_stmts(session, grammar, n00b_tree_child(node, i));
+        if (!walk_for_use_stmts(session, grammar, n00b_tree_child(node, i), caller_path)) {
+            return false;
+        }
     }
+
+    return true;
 }
 
-void
+bool
 n00b_resolve_use_stmts(n00b_cg_session_t   *session,
-                        n00b_grammar_t       *grammar,
-                        n00b_parse_tree_t    *tree,
-                        n00b_annot_result_t  *annot)
+                       n00b_grammar_t      *grammar,
+                       n00b_parse_tree_t   *tree,
+                       n00b_annot_result_t *annot,
+                       const char          *caller_path)
 {
-    (void)annot;  // Available for future use (e.g., checking sym entries).
+    (void)annot; // Available for future use (e.g., checking sym entries).
 
     if (!session || !grammar || !tree) {
-        return;
+        return false;
     }
 
-    walk_for_use_stmts(session, grammar, tree);
+    return walk_for_use_stmts(session, grammar, tree, caller_path);
 }

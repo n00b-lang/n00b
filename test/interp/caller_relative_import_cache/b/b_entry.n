@@ -1,0 +1,5 @@
+use dep
+
+func b_value() -> int {
+    return b_dep_value()
+}

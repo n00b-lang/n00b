@@ -289,6 +289,8 @@ n00b_diag_merge(n00b_diag_ctx_t *dst, n00b_diag_ctx_t *src)
     }
 
     size_t n = n00b_list_len(src->diags);
+    int32_t merged_errors = 0;
+    int32_t merged_warnings = 0;
 
     for (size_t i = 0; i < n; i++) {
         n00b_diagnostic_t d = n00b_list_get(src->diags, i);
@@ -296,10 +298,20 @@ n00b_diag_merge(n00b_diag_ctx_t *dst, n00b_diag_ctx_t *src)
 
         if (d.severity == N00B_DIAG_ERROR) {
             dst->error_count++;
+            merged_errors++;
         }
         else if (d.severity == N00B_DIAG_WARNING) {
             dst->warning_count++;
+            merged_warnings++;
         }
+    }
+
+    if (src->error_count > merged_errors) {
+        dst->error_count += src->error_count - merged_errors;
+    }
+
+    if (src->warning_count > merged_warnings) {
+        dst->warning_count += src->warning_count - merged_warnings;
     }
 }
 

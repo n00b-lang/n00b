@@ -15,54 +15,118 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 N00B="${1:-./build_debug/n00b}"
+TEST_TIMEOUT="${N00B_INTERP_TIMEOUT:-60s}"
+JOBS="${N00B_INTERP_JOBS:-${N00B_JOBS:-}}"
 
 if [ ! -x "$N00B" ]; then
     echo "error: n00b binary not found at $N00B"
     exit 1
 fi
 
-PASS=0
-FAIL=0
-ERRORS=""
+if [ -z "$JOBS" ]; then
+    if command -v nproc >/dev/null 2>&1; then
+        JOBS="$(nproc)"
+    else
+        JOBS=4
+    fi
 
-for test_file in "$SCRIPT_DIR"/*.n; do
-    [ -f "$test_file" ] || continue
+    if [ "$JOBS" -gt 8 ]; then
+        JOBS=8
+    fi
+fi
+
+TMP_BASE="${TMPDIR:-/tmp}"
+RUN_TMP="$(mktemp -d "$TMP_BASE/n00b-interp.XXXXXX")"
+trap 'rm -rf "$RUN_TMP"' EXIT
+
+run_one() {
+    local test_file="$1"
+    local name expected_file exit_file expected_exit actual_exit
+    local out_file err_file result_file
 
     name="$(basename "${test_file%.n}")"
     expected_file="$SCRIPT_DIR/$name.expected"
     exit_file="$SCRIPT_DIR/$name.exit"
+    out_file="$RUN_TMP/$name.out"
+    err_file="$RUN_TMP/$name.err"
+    result_file="$RUN_TMP/$name.result"
 
-    # Default expected exit code is 0.
     expected_exit=0
     if [ -f "$exit_file" ]; then
         expected_exit="$(cat "$exit_file" | tr -d '[:space:]')"
     fi
 
-    # Run the test, capture stdout and exit code.
-    actual_out=""
     actual_exit=0
-    actual_out=$("$N00B" --quiet "$test_file" 2>/dev/null) || actual_exit=$?
-
-    # Check exit code.
-    if [ "$actual_exit" -ne "$expected_exit" ]; then
-        FAIL=$((FAIL + 1))
-        ERRORS="$ERRORS  FAIL $name: exit code $actual_exit (expected $expected_exit)\n"
-        continue
+    if command -v timeout >/dev/null 2>&1; then
+        timeout "$TEST_TIMEOUT" "$N00B" run --quiet "$test_file" \
+            >"$out_file" 2>"$err_file" || actual_exit=$?
+    else
+        "$N00B" run --quiet "$test_file" >"$out_file" 2>"$err_file" \
+            || actual_exit=$?
     fi
 
-    # Check stdout if .expected file exists.
+    if [ "$actual_exit" -ne "$expected_exit" ]; then
+        {
+            echo "FAIL"
+            if [ "$actual_exit" -eq 124 ]; then
+                echo "  FAIL $name: timed out after $TEST_TIMEOUT"
+            else
+                echo "  FAIL $name: exit code $actual_exit (expected $expected_exit)"
+            fi
+        } >"$result_file"
+        return 0
+    fi
+
     if [ -f "$expected_file" ]; then
-        expected_out="$(cat "$expected_file")"
-        if [ "$actual_out" != "$expected_out" ]; then
-            FAIL=$((FAIL + 1))
-            ERRORS="$ERRORS  FAIL $name: stdout mismatch\n"
-            ERRORS="$ERRORS    expected: $(head -3 "$expected_file")\n"
-            ERRORS="$ERRORS    actual:   $(echo "$actual_out" | head -3)\n"
-            continue
+        if ! cmp -s "$expected_file" "$out_file"; then
+            {
+                echo "FAIL"
+                echo "  FAIL $name: stdout mismatch"
+                echo "    expected bytes: $(wc -c <"$expected_file" | tr -d '[:space:]')"
+                echo "    actual bytes:   $(wc -c <"$out_file" | tr -d '[:space:]')"
+                echo "    expected: $(head -3 "$expected_file")"
+                echo "    actual:   $(head -3 "$out_file")"
+            } >"$result_file"
+            return 0
         fi
     fi
 
-    PASS=$((PASS + 1))
+    echo "PASS" >"$result_file"
+}
+
+export SCRIPT_DIR N00B TEST_TIMEOUT RUN_TMP
+export -f run_one
+
+PASS=0
+FAIL=0
+ERRORS=""
+
+TEST_FILES=()
+while IFS= read -r test_file; do
+    TEST_FILES+=("$test_file")
+done < <(find "$SCRIPT_DIR" -maxdepth 1 -type f -name '*.n' | sort)
+
+if [ "${#TEST_FILES[@]}" -gt 0 ]; then
+    printf '%s\0' "${TEST_FILES[@]}" \
+        | xargs -0 -n1 -P "$JOBS" bash -c 'run_one "$0"'
+fi
+
+for test_file in "${TEST_FILES[@]}"; do
+    name="$(basename "${test_file%.n}")"
+    result_file="$RUN_TMP/$name.result"
+
+    if [ ! -f "$result_file" ]; then
+        FAIL=$((FAIL + 1))
+        ERRORS="$ERRORS  FAIL $name: runner did not write a result\n"
+        continue
+    fi
+
+    if [ "$(sed -n '1p' "$result_file")" = "PASS" ]; then
+        PASS=$((PASS + 1))
+    else
+        FAIL=$((FAIL + 1))
+        ERRORS="$ERRORS$(sed -n '2,$p' "$result_file")\n"
+    fi
 done
 
 TOTAL=$((PASS + FAIL))

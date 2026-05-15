@@ -1,0 +1,38 @@
+var i = 7
+var s = "word"
+var b = true
+var hit = 0
+
+typeof i {
+  case bool:
+    hit = 1
+  case int:
+    hit = 2
+  else:
+    hit = 3
+}
+
+print(hit)
+
+typeof s {
+  case int, bool:
+    hit = 4
+  case string:
+    hit = 5
+  else:
+    hit = 6
+}
+
+print(hit)
+
+typeof b {
+  case int:
+    hit = 7
+  case string:
+    hit = 8
+  else:
+    hit = 9
+}
+
+print(hit)
+0

@@ -95,7 +95,10 @@ endif
 c_args += '-DXXH_NO_INTRINSICS=1'
 
 if using_glibc
-  c_args = c_args + ['-D_GNU_SOURCE']
+  c_args = c_args + [
+    '-D_GNU_SOURCE',
+    '-DN00B_NCC_GLIBC_ASSERT_SHIM',
+  ]
 endif
 
 if target_os == 'darwin'
@@ -406,7 +409,7 @@ n00b_dll_src = (
 gen_unicode_lib = static_library('n00b_gen_unicode',
     gen_unicode_tables,
     include_directories: incdir,
-    c_args: exe_c_args + ['--no-ncc'],
+    c_args: exe_c_args + ['--no-ncc', '-UN00B_NCC_GLIBC_ASSERT_SHIM'],
     link_args: link_args,
 )
 
@@ -424,7 +427,7 @@ endif
 n00b_vendor_lib = static_library('n00b_vendor',
     vendor_sources,
     include_directories: incdir,
-    c_args: exe_c_args + ['--no-ncc'],
+    c_args: exe_c_args + ['--no-ncc', '-UN00B_NCC_GLIBC_ASSERT_SHIM'],
     link_args: link_args,
 )
 
@@ -1143,6 +1146,19 @@ codegen_test = executable('test_codegen',
 )
 test('codegen', codegen_test, suite: 'unit', workdir: meson.project_source_root())
 
+codegen_coverage_test = executable('test_codegen_coverage',
+    ['test/unit/test_codegen_coverage.c'],
+    include_directories: incdir,
+    c_args: exe_c_args,
+    link_args: exe_link_args,
+    link_with: [n00b],
+    dependencies: [mir_dep],
+)
+test('codegen_coverage', codegen_coverage_test,
+    suite: 'unit',
+    workdir: meson.project_source_root(),
+)
+
 # ============================================================================
 # Render / layout tests
 # ============================================================================
@@ -1382,6 +1398,29 @@ endif
 # ============================================================================
 
 # Interpreter integration tests (shell runner invokes the n00b binary).
+if not meson.is_cross_build()
+  bash_prog = find_program('bash', required: true)
+  test('n00b_interp',
+      bash_prog,
+      args: [
+          files('test/interp/run_tests.sh'),
+          n00b_exe.full_path(),
+      ],
+      suite: 'integration',
+      workdir: meson.project_source_root(),
+      timeout: 600,
+  )
+  test('n00b_compile_cache',
+      bash_prog,
+      args: [
+          files('test/integration/run_compile_cache_tests.sh'),
+          n00b_exe.full_path(),
+      ],
+      suite: 'integration',
+      workdir: meson.project_source_root(),
+      timeout: 120,
+  )
+endif
 
 hash_test = executable('test_hash',
     ['test/integration/test_hash.c'],

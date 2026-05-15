@@ -1,0 +1,13 @@
+func bump(value: int) -> int {
+    return value + 1
+}
+
+func apply_once(f: (int) -> int, value: int) -> int {
+    return call(f, value)
+}
+
+var cb = func bump
+
+print(call(cb, 4))
+print(apply_once(cb, 9))
+0

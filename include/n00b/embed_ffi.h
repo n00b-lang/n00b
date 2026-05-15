@@ -64,6 +64,21 @@ extern void n00b_ffi_embed_register(n00b_dict_untyped_t *registry);
 extern void n00b_ffi_module_install(n00b_ffi_module_t *self);
 
 /**
+ * @brief Install one simple C symbol binding directly into a codegen session.
+ *
+ * This supports the legacy `extern name(types) -> type {}` syntax.  The
+ * n00b-side wrapper name and C symbol name are the same unless `c_name` is
+ * provided.  Supported parameter spellings include direct integer/pointer
+ * types and `cstring`, which accepts a n00b `string` and passes a C string.
+ */
+extern bool n00b_ffi_install_simple(n00b_cg_session_t *session,
+                                    const char        *n00b_name,
+                                    const char        *c_name,
+                                    const char       **param_types,
+                                    int32_t            param_count,
+                                    const char        *ret_type);
+
+/**
  * @brief Register the `n00b_ffi_module_t` type and its `install` method.
  *
  * Called during startup (after type registry init) so that comptime

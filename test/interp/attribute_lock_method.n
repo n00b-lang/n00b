@@ -1,0 +1,17 @@
+class Box {
+  value: int
+}
+
+method Box.lock_value(v: int) {
+  ~self.value = v
+}
+
+method Box.set_value(v: int) {
+  self.value = v
+}
+
+var b = Box(1)
+b.lock_value(7)
+print(b.value)
+b.set_value(8)
+0

@@ -1,0 +1,10 @@
+func provide_label() -> string {
+    return "generated"
+}
+
+parameter var label {
+    callback: func provide_label
+}
+
+print(label)
+0

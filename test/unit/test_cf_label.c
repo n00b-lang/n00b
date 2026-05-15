@@ -35,6 +35,35 @@
 // ============================================================================
 
 static bool
+c_ident_start(uint8_t b)
+{
+    return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || b == '_';
+}
+
+static bool
+c_ident_continue(uint8_t b)
+{
+    return c_ident_start(b) || (b >= '0' && b <= '9');
+}
+
+static n00b_option_t(n00b_string_t *)
+c_scan_identifier(n00b_scanner_t *s)
+{
+    if (n00b_scan_at_eof(s) || !c_ident_start(n00b_scan_peek_byte(s, 0))) {
+        return n00b_option_none(n00b_string_t *);
+    }
+
+    n00b_scan_mark(s);
+    n00b_scan_advance(s);
+
+    while (!n00b_scan_at_eof(s) && c_ident_continue(n00b_scan_peek_byte(s, 0))) {
+        n00b_scan_advance(s);
+    }
+
+    return n00b_option_set(n00b_string_t *, n00b_scan_extract(s));
+}
+
+static bool
 c_tokenize(n00b_scanner_t *s)
 {
 restart:
@@ -82,7 +111,7 @@ restart:
     }
 
     if ((cp >= 'a' && cp <= 'z') || (cp >= 'A' && cp <= 'Z') || cp == '_') {
-        n00b_option_t(n00b_string_t *) id_val = n00b_scan_identifier(s);
+        n00b_option_t(n00b_string_t *) id_val = c_scan_identifier(s);
 
         if (n00b_option_is_set(id_val)) {
             n00b_token_err_t err = n00b_scan_emit(s, .contents = id_val);

@@ -1,0 +1,12 @@
+once func imported_init() -> int {
+    print(1)
+    return 7
+}
+
+func imported_default(x: int = 11) -> int {
+    return x
+}
+
+func imported_count(*items: int) -> int {
+    return len(items)
+}

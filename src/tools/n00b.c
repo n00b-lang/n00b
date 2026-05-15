@@ -12,6 +12,7 @@
 
 #include <assert.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -19,6 +20,8 @@
 #include <process.h>
 #else
 #include <unistd.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 #include <sys/wait.h>
 #endif
 
@@ -36,6 +39,7 @@
 #include "n00b/embed.h"
 #include "n00b/embed_ffi.h"
 #include "n00b/n00b_compile.h"
+#include "n00b/n00b_module_loader.h"
 #include "n00b/n00b_type_map.h"
 #include "slay/bnf.h"
 #include "slay/cf_label.h"
@@ -79,6 +83,12 @@ typedef struct {
     bool              quiet;
     n00b_parse_mode_t parse_mode;
 } debug_opts_t;
+
+static bool compile_resolve_source_imports(n00b_cg_session_t   *session,
+                                           n00b_grammar_t      *g,
+                                           n00b_string_t       *source_file,
+                                           n00b_parse_tree_t   *tree,
+                                           n00b_annot_result_t *annot);
 
 // ============================================================================
 // Compile helpers
@@ -179,8 +189,7 @@ compile_spawn_wait(const char **argv)
         }
         else {
             for (const char *p = arg; *p; p++) {
-                if (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r'
-                    || *p == '"') {
+                if (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r' || *p == '"') {
                     q = true;
                     break;
                 }
@@ -217,7 +226,7 @@ compile_spawn_wait(const char **argv)
             return 1;
         }
 
-        char  *dst        = out;
+        char  *dst         = out;
         size_t backslashes = 0;
 
         *dst++ = '"';
@@ -235,8 +244,8 @@ compile_spawn_wait(const char **argv)
                     *dst++ = '\\';
                     *dst++ = '\\';
                 }
-                *dst++ = '\\';
-                *dst++ = '"';
+                *dst++      = '\\';
+                *dst++      = '"';
                 backslashes = 0;
                 continue;
             }
@@ -488,6 +497,36 @@ read_source_file(n00b_string_t *path)
     free(raw);
 
     return buf;
+}
+
+static char *
+source_dirname_dup(n00b_string_t *path)
+{
+    if (!path || !path->data || path->u8_bytes <= 0) {
+        return strdup(".");
+    }
+
+    const char *data  = path->data;
+    const char *slash = strrchr(data, '/');
+
+    if (!slash) {
+        return strdup(".");
+    }
+
+    if (slash == data) {
+        return strdup("/");
+    }
+
+    size_t len = (size_t)(slash - data);
+    char  *dir = malloc(len + 1);
+
+    if (!dir) {
+        return NULL;
+    }
+
+    memcpy(dir, data, len);
+    dir[len] = '\0';
+    return dir;
 }
 
 // ============================================================================
@@ -783,6 +822,18 @@ build_commander(void)
                        N00B_CMDR_TYPE_BOOL,
                        false,
                        r"Keep .o files");
+    n00b_cmdr_add_flag(c,
+                       r"compile",
+                       r"--cache-dir",
+                       N00B_CMDR_TYPE_WORD,
+                       true,
+                       r"Directory for compile cache artifacts");
+    n00b_cmdr_add_flag(c,
+                       r"compile",
+                       r"--cache-only",
+                       N00B_CMDR_TYPE_BOOL,
+                       false,
+                       r"Store or restore compile cache metadata without linking");
 
     // run subcommand.
     n00b_cmdr_add_command(c, r"run", r"Run n00b source files");
@@ -808,45 +859,54 @@ extern bool n00b_load_builtins(n00b_grammar_t *g, n00b_cg_session_t *session);
 // Walk a parse tree and emit diagnostics for error recovery nodes.
 // Returns the number of error nodes found.
 static int
-collect_parse_errors(n00b_diag_ctx_t *diag, n00b_grammar_t *g,
-                     n00b_parse_tree_t *node)
+collect_parse_errors(n00b_diag_ctx_t *diag, n00b_grammar_t *g, n00b_parse_tree_t *node)
 {
     if (!node || n00b_tree_is_leaf(node)) {
         return 0;
     }
 
-    int count = 0;
-    n00b_nt_node_t *pn = &n00b_tree_node_value(node);
+    int             count = 0;
+    n00b_nt_node_t *pn    = &n00b_tree_node_value(node);
 
     if (pn->penalty > 0 && (pn->missing || pn->bad_prefix)) {
         n00b_diag_span_t span = n00b_diag_span_from_node(node);
-        char msg[256];
+        char             msg[256];
 
         if (pn->missing) {
             // The node's name tells us what was expected.
             const char *nt_name = pn->name ? pn->name->data : "token";
-            snprintf(msg, sizeof(msg),
-                     "missing expected '%s'", nt_name);
-            n00b_diag_push(diag, N00B_DIAG_ERROR, N00B_STAGE_PARSE,
-                           r"P002", n00b_string_from_cstr(msg), span);
+            snprintf(msg, sizeof(msg), "missing expected '%s'", nt_name);
+            n00b_diag_push(diag,
+                           N00B_DIAG_ERROR,
+                           N00B_STAGE_PARSE,
+                           r"P002",
+                           n00b_string_from_cstr(msg),
+                           span);
         }
         else if (pn->bad_prefix) {
             n00b_parse_tree_t *tok = n00b_pt_first_token(node);
-            const char *got = tok ? n00b_pt_token_text(tok) : NULL;
+            const char        *got = tok ? n00b_pt_token_text(tok) : NULL;
 
             if (got) {
-                snprintf(msg, sizeof(msg),
+                snprintf(msg,
+                         sizeof(msg),
                          "unexpected '%s' before '%s'",
-                         got, pn->name ? pn->name->data : "here");
+                         got,
+                         pn->name ? pn->name->data : "here");
             }
             else {
-                snprintf(msg, sizeof(msg),
+                snprintf(msg,
+                         sizeof(msg),
                          "unexpected token before '%s'",
                          pn->name ? pn->name->data : "here");
             }
 
-            n00b_diag_push(diag, N00B_DIAG_ERROR, N00B_STAGE_PARSE,
-                           r"P003", n00b_string_from_cstr(msg), span);
+            n00b_diag_push(diag,
+                           N00B_DIAG_ERROR,
+                           N00B_STAGE_PARSE,
+                           r"P003",
+                           n00b_string_from_cstr(msg),
+                           span);
         }
 
         count++;
@@ -946,37 +1006,41 @@ run_file(n00b_grammar_t *g, n00b_string_t *source_file, bool verbose, debug_opts
             if (ediag.expected_count > 0) {
                 int off = snprintf(expected_buf, sizeof(expected_buf), "expected");
 
-                for (int32_t i = 0; i < ediag.expected_count
-                         && off < (int)sizeof(expected_buf) - 20; i++) {
-                    n00b_string_t *tname = n00b_get_terminal_name(
-                        g, ediag.expected_ids[i]);
+                for (int32_t i = 0;
+                     i < ediag.expected_count && off < (int)sizeof(expected_buf) - 20;
+                     i++) {
+                    n00b_string_t *tname = n00b_get_terminal_name(g, ediag.expected_ids[i]);
 
                     if (tname && tname->data) {
                         off += snprintf(expected_buf + off,
                                         sizeof(expected_buf) - (size_t)off,
-                                        " %.*s", (int)tname->u8_bytes,
+                                        " %.*s",
+                                        (int)tname->u8_bytes,
                                         tname->data);
                     }
                 }
             }
 
-            n00b_diag_import_parse_error(
-                diag_ctx,
-                ediag.error_loc.line, ediag.error_loc.column,
-                (ediag.error_loc.got && ediag.error_loc.got->data)
-                    ? ediag.error_loc.got->data : NULL,
-                expected_buf[0] ? expected_buf : NULL,
-                source_file ? source_file->data : NULL);
+            n00b_diag_import_parse_error(diag_ctx,
+                                         ediag.error_loc.line,
+                                         ediag.error_loc.column,
+                                         (ediag.error_loc.got && ediag.error_loc.got->data)
+                                             ? ediag.error_loc.got->data
+                                             : NULL,
+                                         expected_buf[0] ? expected_buf : NULL,
+                                         source_file ? source_file->data : NULL);
 
-            if (ediag.expected_ids)  n00b_free(ediag.expected_ids);
-            if (ediag.expected_desc) n00b_free(ediag.expected_desc);
-            if (ediag.active_ctx)    n00b_free(ediag.active_ctx);
+            if (ediag.expected_ids)
+                n00b_free(ediag.expected_ids);
+            if (ediag.expected_desc)
+                n00b_free(ediag.expected_desc);
+            if (ediag.active_ctx)
+                n00b_free(ediag.active_ctx);
 
             n00b_earley_free(earley);
 
             // Print the diagnostic and exit.
-            n00b_diag_print_all(diag_ctx, buf->data,
-                                source_file ? source_file->data : NULL);
+            n00b_diag_print_all(diag_ctx, buf->data, source_file ? source_file->data : NULL);
             n00b_diag_ctx_free(diag_ctx);
             return 1;
         }
@@ -996,27 +1060,28 @@ run_file(n00b_grammar_t *g, n00b_string_t *source_file, bool verbose, debug_opts
         r = n00b_grammar_parse(g, ts, mode);
 
         if (!n00b_parse_result_ok(r)) {
-            n00b_error_location_t eloc = n00b_parse_result_error_location(r);
-            n00b_string_t *expected = n00b_parse_result_expected_string(r);
+            n00b_error_location_t eloc     = n00b_parse_result_error_location(r);
+            n00b_string_t        *expected = n00b_parse_result_expected_string(r);
 
-            const char *got_str = (eloc.got && eloc.got->data)
-                ? eloc.got->data : NULL;
-            char expected_buf[512] = {0};
+            const char *got_str = (eloc.got && eloc.got->data) ? eloc.got->data : NULL;
+            char        expected_buf[512] = {0};
 
             if (expected && expected->u8_bytes > 0) {
-                snprintf(expected_buf, sizeof(expected_buf),
+                snprintf(expected_buf,
+                         sizeof(expected_buf),
                          "expected %.*s",
-                         (int)expected->u8_bytes, expected->data);
+                         (int)expected->u8_bytes,
+                         expected->data);
             }
 
-            n00b_diag_import_parse_error(
-                diag_ctx, eloc.line, eloc.column,
-                got_str,
-                expected_buf[0] ? expected_buf : NULL,
-                source_file ? source_file->data : NULL);
+            n00b_diag_import_parse_error(diag_ctx,
+                                         eloc.line,
+                                         eloc.column,
+                                         got_str,
+                                         expected_buf[0] ? expected_buf : NULL,
+                                         source_file ? source_file->data : NULL);
 
-            n00b_diag_print_all(diag_ctx, buf->data,
-                                source_file ? source_file->data : NULL);
+            n00b_diag_print_all(diag_ctx, buf->data, source_file ? source_file->data : NULL);
             n00b_parse_result_free(r);
             n00b_diag_ctx_free(diag_ctx);
             return 1;
@@ -1028,8 +1093,7 @@ run_file(n00b_grammar_t *g, n00b_string_t *source_file, bool verbose, debug_opts
         // nodes and emit diagnostics, then bail before codegen.
         if (n00b_parse_result_repaired(r)) {
             collect_parse_errors(diag_ctx, g, tree);
-            n00b_diag_print_all(diag_ctx, buf->data,
-                                source_file ? source_file->data : NULL);
+            n00b_diag_print_all(diag_ctx, buf->data, source_file ? source_file->data : NULL);
             n00b_parse_result_free(r);
             n00b_diag_ctx_free(diag_ctx);
             return 1;
@@ -1177,6 +1241,11 @@ run_file(n00b_grammar_t *g, n00b_string_t *source_file, bool verbose, debug_opts
     // Load builtins (print, etc.) before the user module.
     n00b_load_builtins(g, session);
 
+    if (!compile_resolve_source_imports(session, g, source_file, tree, ar)) {
+        n00b_diag_ctx_free(diag_ctx);
+        return 1;
+    }
+
     bool    run_ok     = false;
     int64_t run_result = n00b_cg_session_run_module(session, tree, .annot = ar, .ok = &run_ok);
 
@@ -1226,6 +1295,403 @@ run_file(n00b_grammar_t *g, n00b_string_t *source_file, bool verbose, debug_opts
 // Compile mode: parse → codegen → .o → link
 // ============================================================================
 
+static uint64_t
+compile_source_hash(n00b_buffer_t *buf)
+{
+    uint64_t h = 1469598103934665603ULL;
+
+    if (!buf || !buf->data) {
+        return h;
+    }
+
+    for (uint64_t i = 0; i < buf->byte_len; i++) {
+        h ^= (uint8_t)buf->data[i];
+        h *= 1099511628211ULL;
+    }
+
+    return h;
+}
+
+static bool
+tree_has_nt(n00b_grammar_t *g, n00b_parse_tree_t *node, const char *nt_name)
+{
+    (void)g;
+
+    if (!node || !nt_name || n00b_pt_is_token(node)) {
+        return false;
+    }
+
+    if (n00b_pt_is_nt(node, nt_name)) {
+        return true;
+    }
+
+    size_t nc = n00b_pt_num_children(node);
+
+    for (size_t i = 0; i < nc; i++) {
+        if (tree_has_nt(g, n00b_pt_get_child(node, i), nt_name)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static n00b_parse_result_t *
+compile_parse_source(n00b_grammar_t *g, n00b_string_t *source_file, n00b_buffer_t *buf)
+{
+    n00b_scanner_t      *scanner = n00b_scanner_new(buf, n00b_lang_tokenize, g);
+    n00b_token_stream_t *ts      = n00b_token_stream_new(scanner);
+    n00b_parse_result_t *r       = n00b_grammar_parse(g, ts, N00B_PARSE_MODE_DEFAULT);
+
+    if (!n00b_parse_result_ok(r)) {
+        n00b_string_t *err = n00b_parse_result_error_string(r);
+        n00b_eprintf("Parse failed for '«#»': «#»", source_file, err);
+        n00b_parse_result_free(r);
+        return NULL;
+    }
+
+    return r;
+}
+
+typedef struct {
+    n00b_parse_result_t *parsed;
+    n00b_parse_tree_t   *tree;
+    n00b_annot_result_t *annot;
+    bool                 has_use;
+} compile_prepared_source_t;
+
+static compile_prepared_source_t *
+compile_prepare_source(n00b_grammar_t *g, n00b_string_t *source_file, n00b_buffer_t *buf)
+{
+    n00b_parse_result_t *parsed = compile_parse_source(g, source_file, buf);
+
+    if (!parsed) {
+        return NULL;
+    }
+
+    n00b_parse_tree_t *tree = n00b_parse_result_tree(parsed);
+
+    if (!tree) {
+        n00b_parse_result_free(parsed);
+        return NULL;
+    }
+
+    compile_prepared_source_t *prepared = n00b_alloc(compile_prepared_source_t);
+    prepared->parsed                    = parsed;
+    prepared->tree                      = tree;
+    prepared->has_use                   = tree_has_nt(g, tree, "use-stmt");
+    prepared->annot                     = n00b_compile_walk(g, tree);
+
+    return prepared;
+}
+
+static void
+compile_prepared_source_free(compile_prepared_source_t *prepared)
+{
+    if (!prepared || !prepared->parsed) {
+        return;
+    }
+
+    n00b_parse_result_free(prepared->parsed);
+    prepared->parsed = NULL;
+}
+
+static bool
+compile_resolve_source_imports(n00b_cg_session_t   *session,
+                               n00b_grammar_t      *g,
+                               n00b_string_t       *source_file,
+                               n00b_parse_tree_t   *tree,
+                               n00b_annot_result_t *annot)
+{
+    char *source_dir = source_dirname_dup(source_file);
+
+    if (!source_dir) {
+        return false;
+    }
+
+    bool ok = n00b_resolve_use_stmts(session, g, tree, annot, source_dir);
+
+    free(source_dir);
+    return ok;
+}
+
+static bool
+compile_reject_use_if_present(n00b_grammar_t            *g,
+                              n00b_string_t             *source_file,
+                              compile_prepared_source_t *prepared)
+{
+    (void)g;
+
+    if (!prepared || !prepared->has_use) {
+        return true;
+    }
+
+    fprintf(stderr,
+            "error: compile mode does not support `use` imports yet for '%.*s'\n",
+            (int)source_file->u8_bytes,
+            source_file->data);
+    return false;
+}
+
+static bool
+compile_ensure_cache_dir(const char *cache_dir)
+{
+    if (!cache_dir || !*cache_dir) {
+        return false;
+    }
+
+    if (mkdir(cache_dir, 0700) == 0) {
+        return true;
+    }
+
+    if (errno == EEXIST) {
+        struct stat st;
+
+        return lstat(cache_dir, &st) == 0 && S_ISDIR(st.st_mode) && !S_ISLNK(st.st_mode);
+    }
+
+    return false;
+}
+
+static bool
+compile_cache_path(char *buf, size_t buf_len, const char *cache_dir, uint64_t hash)
+{
+    const char *sep = "/";
+    size_t      len = strlen(cache_dir);
+
+    if (len > 0 && (cache_dir[len - 1] == '/' || cache_dir[len - 1] == '\\')) {
+        sep = "";
+    }
+
+    int n = snprintf(buf,
+                     buf_len,
+                     "%s%s%016llx.n00bcache",
+                     cache_dir,
+                     sep,
+                     (unsigned long long)hash);
+
+    return n > 0 && (size_t)n < buf_len;
+}
+
+static bool
+compile_cache_hit(const char *path, uint64_t hash, uint64_t size)
+{
+    int fd = open(path, O_RDONLY | O_NOFOLLOW);
+
+    if (fd < 0) {
+        return false;
+    }
+
+    FILE *fp = fdopen(fd, "r");
+
+    if (!fp) {
+        close(fd);
+        return false;
+    }
+
+    char               line[512];
+    bool               saw_magic          = false;
+    bool               saw_source         = false;
+    bool               saw_module         = false;
+    bool               saw_hash           = false;
+    bool               saw_size           = false;
+    bool               saw_public_symbols = false;
+    bool               saw_dependencies   = false;
+    bool               saw_ffi            = false;
+    uint64_t           got_hash           = 0;
+    uint64_t           got_size           = 0;
+    unsigned long long parsed;
+
+    while (fgets(line, sizeof(line), fp)) {
+        if (strcmp(line, "N00B_MIR_CACHE_V1\n") == 0) {
+            saw_magic = true;
+        }
+        else if (strncmp(line, "source=", 7) == 0) {
+            saw_source = true;
+        }
+        else if (strcmp(line, "module=_main\n") == 0) {
+            saw_module = true;
+        }
+        else if (sscanf(line, "hash=%llx", &parsed) == 1) {
+            got_hash = (uint64_t)parsed;
+            saw_hash = true;
+        }
+        else if (sscanf(line, "size=%llu", &parsed) == 1) {
+            got_size = (uint64_t)parsed;
+            saw_size = true;
+        }
+        else if (strncmp(line, "public_symbols=", 15) == 0) {
+            saw_public_symbols = true;
+        }
+        else if (strncmp(line, "dependencies=", 13) == 0) {
+            saw_dependencies = true;
+        }
+        else if (strncmp(line, "ffi_declarations=", 17) == 0) {
+            saw_ffi = true;
+        }
+    }
+
+    bool read_ok = !ferror(fp);
+
+    if (fclose(fp) != 0) {
+        read_ok = false;
+    }
+
+    return read_ok && saw_magic && saw_source && saw_module && saw_hash && saw_size
+        && saw_public_symbols && saw_dependencies && saw_ffi && got_hash == hash
+        && got_size == size;
+}
+
+static bool
+compile_cache_write(const char *path, n00b_string_t *source_file, uint64_t hash, uint64_t size)
+{
+    char tmp_path[1088];
+    int  fd = -1;
+
+    for (int i = 0; i < 100; i++) {
+        int n = snprintf(tmp_path, sizeof(tmp_path), "%s.tmp.%ld.%d", path, (long)getpid(), i);
+
+        if (n <= 0 || (size_t)n >= sizeof(tmp_path)) {
+            return false;
+        }
+
+        fd = open(tmp_path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0600);
+
+        if (fd >= 0) {
+            break;
+        }
+
+        if (errno != EEXIST) {
+            return false;
+        }
+    }
+
+    if (fd < 0) {
+        return false;
+    }
+
+    FILE *fp = fdopen(fd, "w");
+
+    if (!fp) {
+        close(fd);
+        unlink(tmp_path);
+        return false;
+    }
+
+    bool ok = fprintf(fp, "N00B_MIR_CACHE_V1\n") >= 0
+           && fprintf(fp, "source=%.*s\n", (int)source_file->u8_bytes, source_file->data) >= 0
+           && fprintf(fp, "module=_main\n") >= 0
+           && fprintf(fp, "hash=%016llx\n", (unsigned long long)hash) >= 0
+           && fprintf(fp, "size=%llu\n", (unsigned long long)size) >= 0
+           && fprintf(fp, "public_symbols=_main\n") >= 0 && fprintf(fp, "dependencies=\n") >= 0
+           && fprintf(fp, "ffi_declarations=\n") >= 0;
+
+    if (fclose(fp) != 0) {
+        ok = false;
+    }
+
+    if (!ok) {
+        unlink(tmp_path);
+        return false;
+    }
+
+    if (rename(tmp_path, path) != 0) {
+        unlink(tmp_path);
+        return false;
+    }
+
+    return true;
+}
+
+static bool
+compile_cache_build(n00b_grammar_t            *g,
+                    n00b_cg_session_t         *session,
+                    n00b_string_t             *source_file,
+                    compile_prepared_source_t *prepared)
+{
+    if (!prepared) {
+        return false;
+    }
+
+    if (!compile_resolve_source_imports(session,
+                                        g,
+                                        source_file,
+                                        prepared->tree,
+                                        prepared->annot)) {
+        return false;
+    }
+
+    n00b_module_code_t *mod
+        = n00b_cg_session_compile_module(session, prepared->tree, .annot = prepared->annot);
+    bool ok = mod != NULL;
+
+    if (!ok) {
+        n00b_eprintf("error: codegen failed for '«#»'", source_file);
+    }
+
+    return ok;
+}
+
+static bool
+compile_cache_process(n00b_grammar_t    *g,
+                      n00b_cg_session_t *session,
+                      n00b_string_t     *source_file,
+                      n00b_buffer_t     *buf,
+                      const char        *cache_dir,
+                      bool               verbose)
+{
+    if (!compile_ensure_cache_dir(cache_dir)) {
+        n00b_eprintf("error: cannot create compile cache directory");
+        return false;
+    }
+
+    uint64_t hash = compile_source_hash(buf);
+    uint64_t size = buf ? buf->byte_len : 0;
+    char     path[1024];
+
+    if (!compile_cache_path(path, sizeof(path), cache_dir, hash)) {
+        n00b_eprintf("error: compile cache path is too long");
+        return false;
+    }
+
+    if (compile_cache_hit(path, hash, size)) {
+        if (verbose) {
+            printf("cache restored %s\n", path);
+        }
+
+        return true;
+    }
+
+    compile_prepared_source_t *prepared = compile_prepare_source(g, source_file, buf);
+
+    if (!prepared) {
+        return false;
+    }
+
+    if (!compile_reject_use_if_present(g, source_file, prepared)) {
+        compile_prepared_source_free(prepared);
+        return false;
+    }
+
+    bool built = compile_cache_build(g, session, source_file, prepared);
+    compile_prepared_source_free(prepared);
+
+    if (!built) {
+        return false;
+    }
+
+    if (!compile_cache_write(path, source_file, hash, size)) {
+        n00b_eprintf("error: cannot write compile cache artifact");
+        return false;
+    }
+
+    if (verbose) {
+        printf("cache stored %s\n", path);
+    }
+
+    return true;
+}
+
 static int
 compile_files(n00b_grammar_t *g, n00b_cmdr_result_t *result, bool verbose)
 {
@@ -1240,9 +1706,20 @@ compile_files(n00b_grammar_t *g, n00b_cmdr_result_t *result, bool verbose)
     int            nargs        = n00b_cmdr_arg_count(result);
     n00b_string_t *output       = n00b_cmdr_flag_str(result, r"--output");
     n00b_string_t *lib_dir_s    = n00b_cmdr_flag_str(result, r"--lib-dir");
+    n00b_string_t *cache_dir_s  = n00b_cmdr_flag_str(result, r"--cache-dir");
     bool           keep_objects = n00b_cmdr_flag_bool(result, r"--keep-objects");
+    bool           cache_only   = n00b_cmdr_flag_bool(result, r"--cache-only");
+
+    if (nargs > 1) {
+        fprintf(stderr,
+                "error: compile mode currently supports exactly one input file; got %d\n",
+                nargs);
+        return 1;
+    }
 
     const char *lib_dir = (lib_dir_s && lib_dir_s->u8_bytes > 0) ? lib_dir_s->data : NULL;
+    const char *cache_dir
+        = (cache_dir_s && cache_dir_s->u8_bytes > 0) ? cache_dir_s->data : ".n00b-cache";
 
     // Default output name: first source file with extension stripped.
     char output_path[1024];
@@ -1293,31 +1770,41 @@ compile_files(n00b_grammar_t *g, n00b_cmdr_result_t *result, bool verbose)
             goto fail;
         }
 
-        // Tokenize.
-        n00b_scanner_t      *scanner = n00b_scanner_new(buf, n00b_lang_tokenize, g);
-        n00b_token_stream_t *ts      = n00b_token_stream_new(scanner);
+        if (cache_only) {
+            if (!compile_cache_process(g, session, source_file, buf, cache_dir, verbose)) {
+                goto fail;
+            }
 
-        // Parse.
-        n00b_parse_result_t *r = n00b_grammar_parse(g, ts, N00B_PARSE_MODE_DEFAULT);
+            continue;
+        }
 
-        if (!n00b_parse_result_ok(r)) {
-            n00b_string_t *err = n00b_parse_result_error_string(r);
-            n00b_eprintf("Parse failed for '«#»': «#»", source_file, err);
-            n00b_parse_result_free(r);
+        compile_prepared_source_t *prepared = compile_prepare_source(g, source_file, buf);
+
+        if (!prepared) {
             goto fail;
         }
 
-        n00b_parse_tree_t *tree = n00b_parse_result_tree(r);
+        if (!compile_reject_use_if_present(g, source_file, prepared)) {
+            compile_prepared_source_free(prepared);
+            goto fail;
+        }
 
-        // Annotation walk.
-        n00b_annot_result_t *ar = n00b_compile_walk(g, tree);
+        if (!compile_resolve_source_imports(session,
+                                            g,
+                                            source_file,
+                                            prepared->tree,
+                                            prepared->annot)) {
+            compile_prepared_source_free(prepared);
+            goto fail;
+        }
 
         // Compile to machine code.
-        n00b_module_code_t *mod = n00b_cg_session_compile_module(session, tree, .annot = ar);
+        n00b_module_code_t *mod
+            = n00b_cg_session_compile_module(session, prepared->tree, .annot = prepared->annot);
 
         if (!mod) {
             n00b_eprintf("error: codegen failed for '«#»'", source_file);
-            n00b_parse_result_free(r);
+            compile_prepared_source_free(prepared);
             goto fail;
         }
 
@@ -1326,7 +1813,7 @@ compile_files(n00b_grammar_t *g, n00b_cmdr_result_t *result, bool verbose)
 
         if (!obj_buf) {
             n00b_eprintf("error: object file emission failed for '«#»'", source_file);
-            n00b_parse_result_free(r);
+            compile_prepared_source_free(prepared);
             goto fail;
         }
 
@@ -1335,7 +1822,7 @@ compile_files(n00b_grammar_t *g, n00b_cmdr_result_t *result, bool verbose)
 
         if (!compile_temp_path(obj_path, sizeof(obj_path), "module", i, ".o")) {
             n00b_eprintf("error: cannot create temporary object path");
-            n00b_parse_result_free(r);
+            compile_prepared_source_free(prepared);
             goto fail;
         }
 
@@ -1343,7 +1830,7 @@ compile_files(n00b_grammar_t *g, n00b_cmdr_result_t *result, bool verbose)
 
         if (!fp) {
             n00b_eprintf("error: cannot write '«#»'", n00b_string_from_cstr(obj_path));
-            n00b_parse_result_free(r);
+            compile_prepared_source_free(prepared);
             goto fail;
         }
 
@@ -1354,7 +1841,7 @@ compile_files(n00b_grammar_t *g, n00b_cmdr_result_t *result, bool verbose)
         obj_paths[n_objs]   = obj_paths_m[n_objs];
         n_objs++;
 
-        n00b_parse_result_free(r);
+        compile_prepared_source_free(prepared);
 
         if (verbose) {
             printf("  compiled %.*s -> %s\n",
@@ -1362,6 +1849,13 @@ compile_files(n00b_grammar_t *g, n00b_cmdr_result_t *result, bool verbose)
                    source_file->data,
                    obj_path);
         }
+    }
+
+    if (cache_only) {
+        free(obj_paths);
+        free(obj_paths_m);
+        n00b_cg_session_free(session);
+        return 0;
     }
 
     // Generate startup shim.

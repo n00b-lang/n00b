@@ -1,0 +1,12 @@
+var xs = [1, 2, 8, 9, 5]
+var mid: list[int] = xs[1:4]
+var tail: list[int] = xs[2:]
+var head: list[int] = xs[:2]
+var all: list[int] = xs[:]
+
+print(len(mid))
+print(mid[1])
+print(tail[0])
+print(head[1])
+print(len(all))
+0

@@ -1,0 +1,6 @@
+func bad(v: result[int]) -> int {
+  return v!
+}
+
+print(bad(ok(1)))
+0

@@ -1,0 +1,20 @@
+interface Runner {
+    run: () -> int
+}
+
+class Job {
+    value: int
+}
+
+method Job.run() -> int {
+    self.value
+}
+
+func accepts_runner(r: Runner) -> int {
+    return 1
+}
+
+var job = Job(12)
+print(accepts_runner(job))
+print(job.run())
+0

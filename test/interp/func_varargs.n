@@ -1,0 +1,7 @@
+func count(*items: int) -> int {
+    return len(items)
+}
+
+print(count())
+print(count(1, 2, 3))
+0

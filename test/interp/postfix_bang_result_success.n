@@ -1,0 +1,7 @@
+func bump(v: result[int]) -> result[int] {
+  var x = v!
+  return ok(x + 1)
+}
+
+print(bump(ok(41)).unwrap())
+0

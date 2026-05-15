@@ -1,0 +1,7 @@
+use meta_dep from "modules"
+
+print(imported_init())
+print(imported_init())
+print(imported_default())
+print(imported_count(1, 2, 3))
+0
