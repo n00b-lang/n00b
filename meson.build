@@ -530,6 +530,12 @@ array_test = executable('test_array',
 )
 test('array', array_test, suite: 'unit')
 
+chalk_module_test = executable('test_chalk_module',
+    ['test/unit/test_chalk_module.c'],
+    kwargs: test_common_kwargs,
+)
+test('chalk_module', chalk_module_test, suite: 'unit')
+
 list_test = executable('test_list',
     ['test/unit/test_list.c'],
     kwargs: test_common_kwargs,

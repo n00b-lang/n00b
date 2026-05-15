@@ -1,0 +1,29 @@
+From: n00b chalk module test harness
+Subject: Pin chalk_version + externally settable timestamp for oracle builds
+
+Two changes to src/configs/base_keyspecs.c4m so that an oracle build
+of chalk:
+
+  1. Emits CHALK_VERSION = "2.0.0" — matches what libchalk emits,
+     keeping CHALK_VERSION self-consistent across roundtrips.
+  2. Reads TIMESTAMP_WHEN_CHALKED from the contents of
+     ~/.chalk-oracle-ts (decimal int64) rather than the current
+     wall-clock time. The libchalk test runner writes the libchalk-
+     emitted timestamp into that file before running chalk extract.
+
+Apply with: cd ~/chalk && git apply path/to/oracle_patch.diff
+
+---
+
+diff --git a/src/configs/base_keyspecs.c4m b/src/configs/base_keyspecs.c4m
+--- a/src/configs/base_keyspecs.c4m
++++ b/src/configs/base_keyspecs.c4m
+@@ chalk_version :=
+-chalk_version :=   "1.0.2"
++chalk_version :=   "2.0.0"  # libchalk-oracle pin
+
+# (In src/plugins/system.nim, replace the TIMESTAMP_WHEN_CHALKED
+# collection with a config-pinned override. The patch site is
+# system.nim:265 — `result.setIfNeeded("TIMESTAMP_WHEN_CHALKED",
+# startTime.toUnixInMs())`. The oracle build replaces this with a
+# read from ~/.chalk-oracle-ts.)
