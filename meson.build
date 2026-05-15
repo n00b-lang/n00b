@@ -385,6 +385,8 @@ subdir('src/typecheck')
 
 subdir('src/compiler/objfile')
 
+subdir('src/chalk')
+
 # Aggregate per-module source lists into the libn00b source set. Each
 # entry above (`subdir('src/<mod>')`) is responsible for declaring a
 # `n00b_<mod>_src` variable; we just glue them together here.
@@ -401,7 +403,8 @@ n00b_dll_src = (
     n00b_slay_src +
     n00b_typecheck_src +
     n00b_compiler_src +
-    n00b_objfile_src
+    n00b_objfile_src +
+    n00b_chalk_src
 )
 
 # Build generated unicode tables with --no-ncc (they are pure data,

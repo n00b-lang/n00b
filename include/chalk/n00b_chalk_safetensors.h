@@ -1,0 +1,26 @@
+#pragma once
+
+/** @file n00b_chalk_safetensors.h — SafeTensors model file codec. */
+
+#include <n00b.h>
+#include <chalk/n00b_chalk_codec.h>
+
+n00b_result_t(n00b_chalk_io_result_t *)
+    n00b_chalk_safetensors_insert_buffer(n00b_buffer_t *bytes,
+                                         n00b_chalk_mark_t *mark);
+n00b_result_t(n00b_chalk_io_result_t *)
+    n00b_chalk_safetensors_delete_buffer(n00b_buffer_t *bytes);
+n00b_result_t(n00b_chalk_extract_result_t *)
+    n00b_chalk_safetensors_extract_buffer(n00b_buffer_t *bytes);
+n00b_result_t(n00b_buffer_t *)
+    n00b_chalk_safetensors_hash_buffer(n00b_buffer_t *bytes);
+
+n00b_result_t(n00b_chalk_io_result_t *)
+    n00b_chalk_safetensors_insert_file(n00b_string_t *path,
+                                       n00b_chalk_mark_t *mark);
+n00b_result_t(n00b_chalk_io_result_t *)
+    n00b_chalk_safetensors_delete_file(n00b_string_t *path);
+n00b_result_t(n00b_chalk_extract_result_t *)
+    n00b_chalk_safetensors_extract_file(n00b_string_t *path);
+n00b_result_t(n00b_buffer_t *)
+    n00b_chalk_safetensors_hash_file(n00b_string_t *path);
