@@ -276,6 +276,13 @@ endif
 mir_proj = subproject('mir')
 mir_dep  = mir_proj.get_variable('mir_dep')
 
+# libzip — required by src/chalk/zip.c for the ZIP codec.
+libzip_dep = dependency('libzip', required: false)
+if libzip_dep.found()
+  exe_c_args = exe_c_args + ['-DN00B_HAVE_LIBZIP=1']
+  deps += libzip_dep
+endif
+
 subdir('src/core')
 subdir('src/util')
 
@@ -385,6 +392,8 @@ subdir('src/typecheck')
 
 subdir('src/compiler/objfile')
 
+subdir('src/chalk')
+
 # Aggregate per-module source lists into the libn00b source set. Each
 # entry above (`subdir('src/<mod>')`) is responsible for declaring a
 # `n00b_<mod>_src` variable; we just glue them together here.
@@ -401,7 +410,8 @@ n00b_dll_src = (
     n00b_slay_src +
     n00b_typecheck_src +
     n00b_compiler_src +
-    n00b_objfile_src
+    n00b_objfile_src +
+    n00b_chalk_src
 )
 
 # Build generated unicode tables with --no-ncc (they are pure data,
@@ -520,6 +530,12 @@ array_test = executable('test_array',
 )
 test('array', array_test, suite: 'unit')
 
+chalk_module_test = executable('test_chalk_module',
+    ['test/unit/test_chalk_module.c'],
+    kwargs: test_common_kwargs,
+)
+test('chalk_module', chalk_module_test, suite: 'unit')
+
 list_test = executable('test_list',
     ['test/unit/test_list.c'],
     kwargs: test_common_kwargs,
@@ -573,6 +589,12 @@ buffer_test = executable('test_buffer',
     kwargs: test_common_kwargs,
 )
 test('buffer', buffer_test, suite: 'unit')
+
+file_io_test = executable('test_file_io',
+    ['test/unit/test_file_io.c'],
+    kwargs: test_common_kwargs,
+)
+test('file_io', file_io_test, suite: 'unit')
 
 mutex_test = executable('test_mutex',
     ['test/unit/test_mutex.c'],
@@ -1570,50 +1592,6 @@ endforeach
 # ============================================================================
 # Examples (Mac-only — ObjC + libxpc)
 # ============================================================================
-
-if target_os == 'darwin'
-    example_objc_args = [
-        '-g',
-        '-Wno-unused-parameter',
-        '-Wno-unused-function',
-        '-Wno-unknown-pragmas',
-        '-fno-omit-frame-pointer',
-        '-Wno-atomic-alignment',
-        '-fobjc-arc',
-    ]
-
-    example_inc = [include_directories('examples/crayon_shared'), incdir]
-
-    # ObjC libxpc subscriber — no n00b types, plain Apple toolchain.
-    # Also hosts the xpc_dictionary_apply shim that hides Apple's block
-    # syntax behind a plain-C function pointer.
-    n00b_crayon_xpc = static_library('n00b_crayon_xpc',
-        ['examples/crayon_shared/crayon_subscriber.m',
-         'examples/crayon_shared/crayon_xpc_apply.m'],
-        include_directories: example_inc,
-        objc_args: example_objc_args,
-    )
-
-    # C bridges + features — touch n00b's _generic_struct macros, must
-    # compile via ncc with the same flags as the rest of the project.
-    n00b_crayon_helpers = static_library('n00b_crayon_helpers',
-        ['examples/crayon_shared/crayon_xpc_to_json.c',
-         'examples/crayon_shared/crayon_features.c'],
-        include_directories: example_inc,
-        c_args: exe_c_args + ['-fblocks'],
-    )
-
-    crayon_dump = executable('crayon_dump',
-        ['examples/crayon_dump/main.m'],
-        include_directories: example_inc,
-        link_with: n00b_crayon_xpc,
-        objc_args: example_objc_args,
-        link_args: ['-framework', 'Foundation'],
-    )
-
-
-
-endif
 
 # ============================================================================
 # Documentation (Doxygen)

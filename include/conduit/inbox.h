@@ -167,6 +167,9 @@ n00b_conduit_sys_queue_count(n00b_conduit_sys_queue_t *q)
         if (!inbox) return nullptr;                                                            \
         n00b_conduit_message_t(T) *head = n00b_atomic_load(&inbox->head);                      \
         if (!head) return nullptr;                                                             \
+        /* Pair with the release fence in push so the plain         */                         \
+        /* `prev->header.next = msg` write becomes visible here.    */                         \
+        __c11_atomic_thread_fence(__ATOMIC_ACQUIRE);                                           \
         n00b_conduit_message_t(T) *next =                                                      \
             (n00b_conduit_message_t(T) *)head->header.next;                                    \
         if (next) {                                                                            \
@@ -174,11 +177,25 @@ n00b_conduit_sys_queue_count(n00b_conduit_sys_queue_t *q)
         } else {                                                                               \
             n00b_conduit_message_t(T) *expected = head;                                        \
             if (n00b_atomic_cas(&inbox->head, &expected, nullptr)) {                           \
+                /* head was solo. Try to nullify tail too. If tail   */                        \
+                /* moved (concurrent push raced us), the push has    */                        \
+                /* either set head->next or is about to — spin for   */                        \
+                /* the link and restore head. Without this recovery  */                        \
+                /* the queue leaks: head=null, tail=new_msg, new_msg */                        \
+                /* unreachable.                                       */                       \
                 expected = head;                                                               \
-                n00b_atomic_cas(&inbox->tail, &expected, nullptr);                             \
+                if (!n00b_atomic_cas(&inbox->tail, &expected, nullptr)) {                      \
+                    while ((next = (n00b_conduit_message_t(T) *)head->header.next)             \
+                           == nullptr) {                                                       \
+                        __c11_atomic_thread_fence(__ATOMIC_ACQUIRE);                           \
+                    }                                                                          \
+                    n00b_atomic_store(&inbox->head, next);                                     \
+                }                                                                              \
             } else {                                                                           \
                 while ((next = (n00b_conduit_message_t(T) *)head->header.next)                 \
-                       == nullptr) {}                                                          \
+                       == nullptr) {                                                           \
+                    __c11_atomic_thread_fence(__ATOMIC_ACQUIRE);                               \
+                }                                                                              \
                 n00b_atomic_store(&inbox->head, next);                                         \
             }                                                                                  \
         }                                                                                      \
@@ -209,6 +226,12 @@ n00b_conduit_sys_queue_count(n00b_conduit_sys_queue_t *q)
             n00b_atomic_read_then_set(&inbox->tail, msg);                                      \
         if (prev) {                                                                            \
             prev->header.next = (n00b_conduit_msg_hdr_t *)msg;                                 \
+            /* Release-ordering fence so a concurrent pop that       */                        \
+            /* observed our tail update will also see the next link  */                        \
+            /* once it spins for it. Plain stores can be reordered   */                        \
+            /* on arm64 — without this the pop's spin-recovery loop  */                        \
+            /* could starve.                                          */                       \
+            __c11_atomic_thread_fence(__ATOMIC_RELEASE);                                       \
         } else {                                                                               \
             n00b_atomic_store(&inbox->head, msg);                                              \
         }                                                                                      \

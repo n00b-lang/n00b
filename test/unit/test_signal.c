@@ -144,7 +144,13 @@ test_signal_delivery(void)
                                       .operations = N00B_CONDUIT_OP_ALL);
     assert(handle != N00B_CONDUIT_INVALID_SUB_HANDLE);
 
-    raise(N00B_TEST_SIGNAL_ONE);
+    // kill(getpid(), ...) instead of raise() because raise() targets
+    // the calling thread (POSIX equiv: pthread_kill(pthread_self())).
+    // macOS kqueue's EVFILT_SIGNAL only fires on process-level signal
+    // delivery; a thread-directed signal whose disposition is SIG_IGN
+    // never reaches that point. kill(getpid()) delivers to the
+    // process and works uniformly across kqueue/epoll/poll backends.
+    kill(getpid(), N00B_TEST_SIGNAL_ONE);
 
     bool got_message = false;
     for (int attempts = 0; attempts < 50; attempts++) {

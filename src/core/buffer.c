@@ -1,6 +1,9 @@
 #define N00B_USE_INTERNAL_API
 #include <stdio.h>
 #include <string.h>
+#ifndef _WIN32
+#include <sys/mman.h>
+#endif
 
 #include "n00b.h"
 #include "core/alloc.h"
@@ -107,7 +110,15 @@ n00b_buffer_init(n00b_buffer_t *obj) _kargs
         if (hex != nullptr) {
             return;
         }
-        obj->data = ptr;
+        obj->data      = ptr;
+        // .ptr transfers ownership: the buffer's free path will
+        // n00b_free this pointer. Record alloc_len so resize-in-place
+        // up to `length` doesn't pointlessly reallocate. Anything
+        // larger than `length` still goes through the grow path. If
+        // `length` is wrong (caller passed a smaller allocation),
+        // grow-then-free will fault — same risk that existed before,
+        // documented in the .ptr kwarg's @post.
+        obj->alloc_len = length;
     }
 
     if (hex != nullptr) {
@@ -658,7 +669,17 @@ n00b_buffer_free(n00b_buffer_t *buf)
     }
 
     if (buf->data) {
-        n00b_free(buf->data);
+        if (buf->flags & N00B_BUF_F_MMAP) {
+#ifndef _WIN32
+            munmap(buf->data, buf->byte_len);
+#endif
+        }
+        else if (buf->flags & N00B_BUF_F_BORROWED) {
+            // Borrowed pointer — owner frees, we don't touch it.
+        }
+        else {
+            n00b_free(buf->data);
+        }
     }
 
     buf->data      = nullptr;

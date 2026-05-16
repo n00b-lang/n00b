@@ -486,6 +486,9 @@ n00b_scan_number(n00b_scanner_t *s,
 
 n00b_option_t(n00b_string_t *)
 n00b_scan_identifier(n00b_scanner_t *s)
+    _kargs {
+        bool allow_underscore_start;
+    }
 {
     if (n00b_scan_at_eof(s)) {
         return n00b_option_none(n00b_string_t *);
@@ -493,7 +496,8 @@ n00b_scan_identifier(n00b_scanner_t *s)
 
     n00b_codepoint_t cp = n00b_scan_peek(s, 0);
 
-    if (!n00b_unicode_is_id_start(cp)) {
+    if (!n00b_unicode_is_id_start(cp)
+        && !(kargs->allow_underscore_start && cp == '_')) {
         return n00b_option_none(n00b_string_t *);
     }
 

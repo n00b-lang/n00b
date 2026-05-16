@@ -371,7 +371,8 @@ restart:
     // Identifiers / keywords
     // -----------------------------------------------------------------
     if ((cp >= 'a' && cp <= 'z') || (cp >= 'A' && cp <= 'Z') || cp == '_') {
-        n00b_option_t(n00b_string_t *) id_val = n00b_scan_identifier(s);
+        n00b_option_t(n00b_string_t *) id_val = n00b_scan_identifier(s,
+                                       .allow_underscore_start = true);
 
         if (n00b_option_is_set(id_val)) {
             // Try as a keyword first (hashes the text, checks grammar).

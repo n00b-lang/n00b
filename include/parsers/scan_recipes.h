@@ -94,10 +94,24 @@ extern bool n00b_scan_number(n00b_scanner_t *s,
 // ============================================================================
 
 /**
- * @brief Scan an identifier (ID_Start followed by ID_Continue*).
+ * @brief Scan an identifier (XID_Start followed by XID_Continue*).
  *
- * Uses Unicode UAX#31 character properties.
+ * Uses Unicode UAX #31 character properties (XID_* variants — the
+ * NFKC-stable subset).  Strict Unicode identifiers cannot start with
+ * `_` (Connector Punctuation, in XID_Continue but not XID_Start);
+ * use `.allow_underscore_start = true` for the C/Python/Rust
+ * convention that lets identifiers begin with one or more
+ * underscores.
  *
- * @return Extracted text, or none if no ID_Start at cursor.
+ * @kw allow_underscore_start  Default: false.  When true, the
+ *     scanner additionally accepts `_` as a valid identifier-start
+ *     character.  Continue characters still come from
+ *     XID_Continue (which already includes `_`).
+ *
+ * @return Extracted text, or none if no valid starter at cursor.
  */
-extern n00b_option_t(n00b_string_t *) n00b_scan_identifier(n00b_scanner_t *s);
+extern n00b_option_t(n00b_string_t *)
+n00b_scan_identifier(n00b_scanner_t *s)
+    _kargs {
+        bool allow_underscore_start;
+    };

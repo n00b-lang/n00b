@@ -72,6 +72,22 @@
 #define N00B_ERR_BUFFER_BAD_INIT   (-3)
 
 // ============================================================================
+// Buffer flags
+// ============================================================================
+
+/** Buffer data was obtained via mmap(2) — finalize via munmap. The
+ *  buffer aliases the mapping; mutation (resize/append/concat) is
+ *  not supported and asserts. Set by n00b_file_mmap(). */
+#define N00B_BUF_F_MMAP            (1 << 0)
+
+/** Buffer borrows its `data` pointer from another allocation (e.g.
+ *  a sub-slice of an mmap'd buffer). Finalizer must not free the
+ *  pointer — the parent allocation owns it. The borrower's lifetime
+ *  must not outlive the owner; in n00b's GC model that's enforced
+ *  by keeping a reference to the parent live. */
+#define N00B_BUF_F_BORROWED        (1 << 1)
+
+// ============================================================================
 // Type declarations for option/result returns
 // ============================================================================
 
