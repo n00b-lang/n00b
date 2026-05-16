@@ -1,0 +1,218 @@
+/**
+ * @file file.h
+ * @brief Unified file API over conduit-stream + mmap substrates.
+ *
+ * One read/write/seek surface for both event-driven streaming I/O
+ * (conduit `fd_owner` underneath) and random-access mmap'd buffers
+ * (`core/file_map.h` underneath). Callers pick the substrate at open
+ * time; everything afterwards is uniform.
+ *
+ *  - `N00B_FILE_KIND_STREAM`: forward-only, suited to hashes, scans,
+ *    and any sequential consumer. Memory profile bounded by the
+ *    conduit accumulator's chunk size, regardless of file size.
+ *  - `N00B_FILE_KIND_MMAP`: full random access, zero-copy slicing
+ *    via `n00b_file_as_buffer()`. Resident set ≈ pages actually
+ *    touched (kernel demand-pages).
+ *  - `N00B_FILE_KIND_AUTO`: regular files → MMAP (read-only) or
+ *    STREAM (writable); pipes/sockets/devices → STREAM.
+ *
+ * Read semantics: `n00b_file_read(f, max_n)` returns up to `max_n`
+ * bytes, possibly fewer (short read or near-EOF). Returns a zero-byte
+ * buffer at EOF; subsequent calls remain at EOF.
+ *
+ * Seek semantics: STREAM supports forward-only seeks (negative or
+ * absolute-into-past returns `EINVAL`); MMAP supports full seeking
+ * including SEEK_END. The substrate kind is queryable via
+ * `n00b_file_get_kind` for callers that need to know.
+ *
+ * Async-read semantics: STREAM forwards to `n00b_conduit_read_async`
+ * on the FD's read_topic. MMAP performs the read synchronously and
+ * pushes the result to the caller's inbox before returning (the
+ * "async contract" is the inbox delivery, not deferred work).
+ */
+#pragma once
+
+#include "n00b.h"
+#include "core/buffer.h"
+#include "core/string.h"
+#include "adt/result.h"
+#include "conduit/conduit.h"
+#include "conduit/fd_managed.h"
+#include "conduit/rw.h"
+
+#ifndef _WIN32
+#include <stdio.h>  /* SEEK_SET / SEEK_CUR / SEEK_END */
+#endif
+
+// Forward declaration — struct definition lives in src/core/file.c.
+typedef struct n00b_file n00b_file_t;
+
+// ============================================================================
+// Substrate
+// ============================================================================
+
+typedef enum {
+    /** Pick STREAM for non-regular files and writable opens, MMAP for
+     *  read-only opens of regular files. */
+    N00B_FILE_KIND_AUTO,
+    /** Event-driven stream over a conduit-managed FD. */
+    N00B_FILE_KIND_STREAM,
+    /** Random-access mmap of the entire file. */
+    N00B_FILE_KIND_MMAP,
+} n00b_file_kind_t;
+
+// ============================================================================
+// Mode flags (bitmask)
+// ============================================================================
+
+typedef enum {
+    N00B_FILE_READ     = 1 << 0,
+    N00B_FILE_WRITE    = 1 << 1,
+    N00B_FILE_CREATE   = 1 << 2,
+    N00B_FILE_TRUNCATE = 1 << 3,
+    N00B_FILE_APPEND   = 1 << 4,
+} n00b_file_mode_flag_t;
+
+#define N00B_FILE_R  (N00B_FILE_READ)
+#define N00B_FILE_W  (N00B_FILE_WRITE | N00B_FILE_CREATE | N00B_FILE_TRUNCATE)
+#define N00B_FILE_RW (N00B_FILE_READ | N00B_FILE_WRITE | N00B_FILE_CREATE)
+
+// ============================================================================
+// Open / close
+// ============================================================================
+
+/**
+ * @brief Open a file.
+ *
+ * @param path  NUL-terminated path (the n00b_string_t's `data` field
+ *              is treated as a C string).
+ *
+ * @kw mode      Bitmask of `N00B_FILE_*` flags. Default: read-only.
+ * @kw kind      Substrate to use. Default: AUTO.
+ * @kw populate  MMAP only: pass `MAP_POPULATE` so pages are
+ *               pre-faulted (Linux). Default: false. Ignored for
+ *               STREAM and on non-Linux.
+ *
+ * @return Ok(file) on success, Err(errno) on `open`/`fstat`/`mmap`
+ * failure, Err(`ENOSYS`) if MMAP requested but not supported on this
+ * platform (Windows), or Err(`EINVAL`) on inconsistent args.
+ */
+extern n00b_result_t(n00b_file_t *)
+n00b_file_open(n00b_string_t *path) _kargs
+{
+    uint32_t         mode     = N00B_FILE_R;
+    n00b_file_kind_t kind     = N00B_FILE_KIND_AUTO;
+    bool             populate = false;
+};
+
+/** @brief Close the file and release substrate resources. Safe on null. */
+extern void n00b_file_close(n00b_file_t *f);
+
+// ============================================================================
+// Read / write / seek
+// ============================================================================
+
+/**
+ * @brief Read up to `max_n` bytes.
+ *
+ * STREAM: blocks until at least one byte arrives or EOF/error;
+ * returns whatever the conduit handed back (possibly less than
+ * `max_n`).
+ *
+ * MMAP: returns a slice of the underlying buffer at the current
+ * position with length `min(max_n, remaining)`; advances `pos`. The
+ * returned buffer is a fresh `n00b_buffer_t` wrapping the same bytes
+ * (no copy) — its lifetime is tied to the parent mmap'd buffer.
+ *
+ * Both: returns a zero-byte buffer at EOF. Caller may loop until
+ * `n00b_file_at_eof(f)` returns true.
+ *
+ * @return Ok(chunk) on success (chunk may be empty), Err(errno) on
+ * I/O failure.
+ */
+extern n00b_result_t(n00b_buffer_t *) n00b_file_read(n00b_file_t *f, size_t max_n);
+
+/**
+ * @brief Write `n` bytes from `p`.
+ *
+ * STREAM: blocks until the conduit's write queue acknowledges
+ * completion. Returns the bytes-written count from the kernel.
+ *
+ * MMAP (writable only): memcpys into the mapping at the current
+ * position, advances `pos`, returns `n`. `EROFS` for read-only mmap.
+ *
+ * @return Ok(bytes_written) or Err(errno).
+ */
+extern n00b_result_t(size_t)
+n00b_file_write(n00b_file_t *f, const void *p, size_t n);
+
+/**
+ * @brief Move the read/write position.
+ *
+ * STREAM: forward-only. Absolute or `SEEK_CUR`-with-positive-offset
+ * targets are honored by discarding bytes; backward seeks and
+ * `SEEK_END` return `EINVAL`.
+ *
+ * MMAP: full random access including SEEK_END.
+ *
+ * @return Ok(new_pos) or Err(errno).
+ */
+extern n00b_result_t(int64_t)
+n00b_file_seek(n00b_file_t *f, int64_t off, int whence);
+
+/** @brief Current position. */
+extern int64_t n00b_file_tell(n00b_file_t *f);
+
+/** @brief File size in bytes, or -1 if unknown (STREAM over a pipe). */
+extern int64_t n00b_file_size(n00b_file_t *f);
+
+/** @brief True iff the next `read` is guaranteed to return 0 bytes. */
+extern bool n00b_file_at_eof(n00b_file_t *f);
+
+/** @brief Substrate currently in use (AUTO resolves at open time). */
+extern n00b_file_kind_t n00b_file_get_kind(n00b_file_t *f);
+
+// ============================================================================
+// MMAP escape hatch
+// ============================================================================
+
+/**
+ * @brief Get the underlying mmap'd buffer (MMAP substrate only).
+ *
+ * Useful for parsers that want to bstream the whole file with full
+ * random access. The buffer is the *whole* mapping — independent of
+ * the file's current `pos`. Returned buffer aliases the mapping;
+ * lifetime tied to the file (or until the buffer is reachable via GC).
+ *
+ * @return Ok(buf) on MMAP, Err(`ENOTSUP`) on STREAM.
+ */
+extern n00b_result_t(n00b_buffer_t *) n00b_file_as_buffer(n00b_file_t *f);
+
+// ============================================================================
+// Async read
+// ============================================================================
+
+/**
+ * @brief Subscribe-style read.
+ *
+ * STREAM: forwards to `n00b_conduit_read_async` on the FD's
+ * read_topic; the returned inbox+handle observe future arrivals as
+ * the IO thread reads them.
+ *
+ * MMAP: synchronously reads up to `max_n` bytes (as for
+ * `n00b_file_read`), pushes a message carrying the buffer to
+ * `inbox`, returns Ok({inbox, INVALID_HANDLE}). The handle is
+ * `N00B_CONDUIT_INVALID_SUB_HANDLE` because no real subscription
+ * exists; `n00b_conduit_sub_cancel` on the invalid handle is a
+ * documented no-op.
+ *
+ * In both cases the caller drains the inbox via the usual pop /
+ * condition_wait loop and treats the returned handle uniformly
+ * (cancel is safe).
+ *
+ * @return Ok({inbox, handle}) or Err(errno).
+ */
+extern n00b_result_t(n00b_conduit_async_read_t(n00b_buffer_t *))
+n00b_file_read_async(n00b_file_t                           *f,
+                     size_t                                 max_n,
+                     n00b_conduit_inbox_t(n00b_buffer_t *) *inbox);

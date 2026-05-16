@@ -80,13 +80,12 @@ n00b_load_builtins(n00b_grammar_t *g, n00b_cg_session_t *session)
     long len = ftell(f);
     fseek(f, 0, SEEK_SET);
 
-    char *raw = malloc((size_t)len + 1);
+    char *raw = n00b_alloc_array(char, (size_t)len + 1);
     fread(raw, 1, (size_t)len, f);
     raw[len] = '\0';
     fclose(f);
 
     n00b_buffer_t *buf = n00b_buffer_from_bytes(raw, (int64_t)len);
-    free(raw);
 
     // Tokenize.
     n00b_scanner_t      *scanner = n00b_scanner_new(buf, n00b_lang_tokenize, g);
@@ -177,7 +176,15 @@ repl_buf_append(n00b_repl_state_t *state, const char *line)
             new_cap = 1024;
         }
 
-        state->input_buf = realloc(state->input_buf, new_cap);
+        // GC-managed grow: allocate, copy, drop the old reference.
+        // The old buffer becomes unreachable and is collected. Avoids
+        // raw realloc (n00b policy: no malloc/realloc/free outside
+        // bootstrap).
+        char *new_buf = n00b_alloc_array(char, new_cap);
+        if (state->input_buf && state->input_len > 0) {
+            memcpy(new_buf, state->input_buf, state->input_len);
+        }
+        state->input_buf = new_buf;
         state->input_cap = new_cap;
     }
 
@@ -686,7 +693,7 @@ n00b_repl_run(n00b_grammar_t *grammar)
     }
 
     n00b_cg_session_free(state.session);
-    free(state.input_buf);
+    // state.input_buf is GC-managed (see grow path above); no free.
 
     return 0;
 }

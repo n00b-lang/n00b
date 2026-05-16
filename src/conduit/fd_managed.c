@@ -375,6 +375,16 @@ n00b_conduit_fd_owner_close(n00b_conduit_fd_owner_t *owner)
     n00b_conduit_topic_close(owner->status_topic);
     n00b_conduit_topic_close(owner->wreq_topic);
 
+    // Remove from the conduit's fd_owners registry. Without this,
+    // OS fd reuse on a subsequent open(2) → n00b_conduit_fd_manage
+    // would return this stale closed owner instead of building a
+    // fresh one — silently breaking the new fd's reads. Match the
+    // explicit removal in n00b_conduit_file_close (conduit/file.c).
+    if (owner->conduit) {
+        n00b_dict_untyped_remove(&owner->conduit->fd_owners,
+                                 (void *)(intptr_t)owner->fd);
+    }
+
     // Transition to fully closed.
     n00b_atomic_store(&owner->state, N00B_CONDUIT_FD_CLOSED);
 
@@ -512,8 +522,16 @@ fd_owner_do_reads(n00b_conduit_fd_owner_t *owner)
         }
 
         if (n == 0) {
-            // EOF
+            // EOF. Publish the status event (for status-topic
+            // subscribers), then close the read_topic so its
+            // subscribers see TOPIC_CLOSED *after* every prior chunk
+            // they were delivered. The close is what gives
+            // single-topic ordering between data and end-of-stream
+            // — without it, a subscriber that sees the status EOF
+            // event has no guarantee that the last chunks have
+            // already landed in its read inbox.
             publish_status(owner, N00B_CONDUIT_FD_ST_READ_EOF, 0);
+            n00b_conduit_topic_close(owner->read_topic);
             transition_state(owner, true, false);
             break;
         }
@@ -524,8 +542,10 @@ fd_owner_do_reads(n00b_conduit_fd_owner_t *owner)
             break; // Normal: no more data available right now
         }
 
-        // Real error
+        // Real error. Close the read_topic so subscribers stop
+        // waiting on it (same ordering reasoning as the EOF path).
         publish_status(owner, N00B_CONDUIT_FD_ST_READ_ERR, read_err);
+        n00b_conduit_topic_close(owner->read_topic);
         transition_state(owner, true, false);
         break;
     }

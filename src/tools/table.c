@@ -34,17 +34,13 @@
 /*
  * Process C-style escape sequences in a separator string.
  * Handles: \t \n \r \\
- * Returns a newly allocated (malloc'd) string; caller must free.
+ * Returns a GC-managed string; no free needed.
  */
 static char *
 process_escapes(const char *src)
 {
     size_t len = strlen(src);
-    char  *dst = malloc(len + 1);
-
-    if (!dst) {
-        return nullptr;
-    }
+    char  *dst = n00b_alloc_array(char, len + 1);
 
     size_t j = 0;
 
@@ -140,11 +136,7 @@ read_all(FILE *fp, size_t *out_len)
 {
     size_t cap = 4096;
     size_t len = 0;
-    char  *buf = malloc(cap);
-
-    if (!buf) {
-        return nullptr;
-    }
+    char  *buf = n00b_alloc_array(char, cap);
 
     for (;;) {
         size_t n = fread(buf + len, 1, cap - len, fp);
@@ -155,14 +147,10 @@ read_all(FILE *fp, size_t *out_len)
         }
 
         if (len == cap) {
+            // GC-managed grow: alloc + memcpy + drop old.
             cap *= 2;
-            char *tmp = realloc(buf, cap);
-
-            if (!tmp) {
-                free(buf);
-                return nullptr;
-            }
-
+            char *tmp = n00b_alloc_array(char, cap);
+            memcpy(tmp, buf, len);
             buf = tmp;
         }
     }
@@ -398,7 +386,7 @@ main(int argc, char **argv)
     }
 
     if (!input_raw || input_len == 0) {
-        free(input_raw);
+        /* input_raw is GC-managed. */
         fprintf(stderr, "Error: no input\n");
         return 1;
     }
@@ -406,7 +394,7 @@ main(int argc, char **argv)
     // Build n00b_string_t from raw input.
     n00b_string_t *input = n00b_string_from_raw(input_raw,
                                                  (int64_t)input_len);
-    free(input_raw);
+    /* input_raw is GC-managed. */
 
     // Process separator arguments.
     n00b_string_t *rsep_ptr = nullptr;
@@ -415,7 +403,7 @@ main(int argc, char **argv)
         char *processed = process_escapes(row_sep_raw);
         rsep_ptr = n00b_string_from_raw(processed,
                                          (int64_t)strlen(processed));
-        free(processed);
+        /* processed is GC-managed. */
     }
 
     n00b_string_t *csep_ptr = nullptr;
@@ -424,7 +412,7 @@ main(int argc, char **argv)
         char *processed = process_escapes(col_sep_raw);
         csep_ptr = n00b_string_from_raw(processed,
                                          (int64_t)strlen(processed));
-        free(processed);
+        /* processed is GC-managed. */
     }
 
     // Look up style preset.

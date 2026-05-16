@@ -41,3 +41,11 @@ typedef enum {
 
 n00b_chalk_pe_sig_kind_t
     n00b_chalk_pe_signature_kind(n00b_buffer_t *bytes);
+
+/** Strip the Authenticode certificate table so the caller can re-sign
+ *  after their own modifications. Returns artifact bytes with the
+ *  certificate array cleared in the parsed binary; rebuilds without
+ *  the attribute-certificate data directory entry. Mirrors
+ *  n00b_chalk_macho_strip_signature. */
+n00b_result_t(n00b_buffer_t *)
+    n00b_chalk_pe_strip_signature(n00b_buffer_t *bytes);

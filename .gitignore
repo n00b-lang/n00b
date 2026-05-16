@@ -66,3 +66,6 @@ AGENTS.md
 plans/
 test/data/resharp/
 .aider*
+
+# Created by chalk-tool when oracle round-trip tests run.
+chalk-reports.jsonl

@@ -590,6 +590,12 @@ buffer_test = executable('test_buffer',
 )
 test('buffer', buffer_test, suite: 'unit')
 
+file_io_test = executable('test_file_io',
+    ['test/unit/test_file_io.c'],
+    kwargs: test_common_kwargs,
+)
+test('file_io', file_io_test, suite: 'unit')
+
 mutex_test = executable('test_mutex',
     ['test/unit/test_mutex.c'],
     kwargs: test_common_kwargs,

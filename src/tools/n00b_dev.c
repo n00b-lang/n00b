@@ -97,13 +97,12 @@ load_n00b_grammar(const char *grammar_file)
     long len = ftell(f);
     fseek(f, 0, SEEK_SET);
 
-    char *buf = malloc((size_t)len + 1);
+    char *buf = n00b_alloc_array(char, (size_t)len + 1);
     fread(buf, 1, (size_t)len, f);
     buf[len] = '\0';
     fclose(f);
 
     n00b_string_t *bnf_text = n00b_string_from_cstr(buf);
-    free(buf);
 
     n00b_grammar_t *g = n00b_grammar_new();
     n00b_grammar_set_error_recovery(g, false);
@@ -137,7 +136,7 @@ read_file(const char *path, size_t *out_len)
     long len = ftell(f);
     fseek(f, 0, SEEK_SET);
 
-    char *buf = malloc((size_t)len + 1);
+    char *buf = n00b_alloc_array(char, (size_t)len + 1);
     fread(buf, 1, (size_t)len, f);
     buf[len] = '\0';
     fclose(f);
@@ -546,7 +545,7 @@ main(int argc, char **argv)
             }
 
             n00b_parse_result_free(r);
-            free(src);
+            /* src is GC-managed (read_file uses n00b_alloc_array). */
             return 1;
         }
 
@@ -636,7 +635,7 @@ main(int argc, char **argv)
             n00b_diag_print_all(diag_ctx, src, source_file);
             n00b_diag_ctx_free(diag_ctx);
             n00b_parse_result_free(r);
-            free(src);
+            /* src is GC-managed (read_file uses n00b_alloc_array). */
             n00b_shutdown();
 
             return run_ok ? 0 : 1;
@@ -731,13 +730,13 @@ main(int argc, char **argv)
 
         n00b_parse_result_free(r);
 
-        free(src);
+        /* src is GC-managed (read_file uses n00b_alloc_array). */
         n00b_shutdown();
 
         return exit_code;
     }
 
-    free(src);
+    /* src is GC-managed. */
 
     n00b_shutdown();
     return 0;

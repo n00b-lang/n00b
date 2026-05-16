@@ -13,6 +13,8 @@ n00b_core_src = files(
     'stw.c',
     'gc.c',
     'buffer.c',
+    'file_map.c',
+    'file.c',
     'data_lock.c',
     'string.c',
     'lock_accounting.c',

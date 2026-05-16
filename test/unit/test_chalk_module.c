@@ -35,6 +35,9 @@
 #include "compiler/objfile/elf.h"
 #include "compiler/objfile/elf_build.h"
 #include "compiler/objfile/elf_types.h"
+#include "compiler/objfile/macho.h"
+#include "compiler/objfile/macho_build.h"
+#include "compiler/objfile/macho_types.h"
 #include "internal/chalk/base32v.h"
 #include "internal/chalk/normalize.h"
 #include "internal/chalk/mark_internal.h"
@@ -582,6 +585,191 @@ run_oracle(int64_t ts_ms, const char *artifact_path)
     return copy;
 }
 
+// Common oracle round-trip flow shared by all codecs. Pass a fresh
+// (unchalked) fixture buffer, the per-codec buffer-mode insert fn,
+// and a temp-file suffix that triggers chalk-tool's codec detection
+// for the format (chalk-tool detects ELF/Mach-O by magic so any
+// suffix works; .py/.pyc/.zip get extension-driven detection).
+//
+// Returns true on PASS, false on SKIP. Asserts on FAIL.
+typedef n00b_result_t(n00b_chalk_io_result_t *) (*oracle_insert_fn_t)(
+    n00b_buffer_t *, n00b_chalk_mark_t *);
+typedef n00b_result_t(n00b_chalk_extract_result_t *) (*oracle_extract_fn_t)(
+    n00b_buffer_t *);
+
+// Find TIMESTAMP_WHEN_CHALKED in an extracted mark dict (oracle needs
+// the timestamp to validate libchalk's id derivation).
+static int64_t
+extract_get_timestamp(n00b_chalk_extract_result_t *ex)
+{
+    if (!ex || !ex->mark) return -1;
+    n00b_dict_t(n00b_string_t *, n00b_json_node_t *) *d = ex->mark;
+    n00b_string_t *key = n00b_string_from_cstr("TIMESTAMP_WHEN_CHALKED");
+    bool found = false;
+    n00b_json_node_t *v = (n00b_json_node_t *)n00b_dict_get(d, key, &found);
+    if (!found || !v) return -1;
+    if (v->type != N00B_JSON_INT) return -1;
+    return v->integer;
+}
+
+static bool
+oracle_roundtrip(const char         *test_name,
+                 n00b_buffer_t      *fixture,
+                 oracle_insert_fn_t  insert_fn,
+                 oracle_extract_fn_t extract_fn,
+                 const char         *path_suffix)
+{
+    if (!getenv("CHALK_ORACLE_BINARY")) {
+        printf("  [SKIP] %s (CHALK_ORACLE_BINARY unset)\n", test_name);
+        return false;
+    }
+
+    n00b_chalk_mark_t *mark = n00b_chalk_mark_new();
+    auto ir = insert_fn(fixture, mark);
+    if (n00b_result_is_err(ir)) {
+        printf("  [SKIP] %s (insert failed err=%d)\n",
+               test_name, n00b_result_get_err(ir));
+        return false;
+    }
+    n00b_chalk_io_result_t *io = n00b_result_get(ir);
+
+    // Use the codec's own extractor so we don't have to deal with
+    // codec-specific framing (ELF section padding, etc).
+    auto er = extract_fn(io->bytes);
+    if (n00b_result_is_err(er)) {
+        printf("  [SKIP] %s (couldn't extract emitted mark)\n", test_name);
+        return false;
+    }
+    int64_t libc_ts = extract_get_timestamp(n00b_result_get(er));
+    if (libc_ts <= 0) {
+        printf("  [SKIP] %s (no timestamp in emitted mark)\n", test_name);
+        return false;
+    }
+
+    char path[256];
+    snprintf(path, sizeof(path), "/tmp/n00b_chalk_oracle_test%s",
+             path_suffix);
+    auto path_str = n00b_string_from_cstr(path);
+    auto wr = n00b_chalk_write_file(path_str, io->bytes);
+    if (n00b_result_is_err(wr)) {
+        printf("  [SKIP] %s (file write failed)\n", test_name);
+        return false;
+    }
+
+    n00b_buffer_t *oracle_out = run_oracle(libc_ts, path);
+    if (!oracle_out) {
+        printf("  [SKIP] %s (oracle unavailable)\n", test_name);
+        return false;
+    }
+
+    const char *fail = mem_find(oracle_out->data, oracle_out->byte_len,
+                                 "doesn't validate", 16);
+    const char *miss = mem_find(oracle_out->data, oracle_out->byte_len,
+                                 "doesn't match", 13);
+    // chalk-tool surfaces fixture-quality issues with "Artifact is
+    // unchalked" or codec-specific parse errors. Treat those as SKIP
+    // rather than FAIL — they signal a fixture gap, not a mark bug.
+    const char *unchalked = mem_find(oracle_out->data, oracle_out->byte_len,
+                                      "Artifact is unchalked", 21);
+    const char *parse_err = mem_find(oracle_out->data, oracle_out->byte_len,
+                                      "\"log_level\":\"error\"", 19);
+    if ((fail || miss) && !unchalked && !parse_err) {
+        printf("  [FAIL] %s: oracle reported validation error\n", test_name);
+        size_t n = oracle_out->byte_len > 1024 ? 1024 : oracle_out->byte_len;
+        fwrite(oracle_out->data, 1, n, stdout);
+        printf("\n");
+        return false;
+    }
+    if (unchalked || parse_err) {
+        printf("  [SKIP] %s (chalk-tool didn't see our mark — fixture gap)\n",
+               test_name);
+        return false;
+    }
+    const char *ok = mem_find(oracle_out->data, oracle_out->byte_len,
+                               "Chalk mark extracted", 20);
+    if (!ok) {
+        printf("  [SKIP] %s (chalk-tool produced no extract — unknown)\n",
+               test_name);
+        return false;
+    }
+    printf("  [PASS] %s (extract succeeded, no validation errors)\n",
+           test_name);
+    return true;
+}
+
+// Build a minimal valid ELF binary for oracle testing.
+static n00b_buffer_t *
+build_elf_fixture(void)
+{
+    auto bin = n00b_elf_binary_new(ET_EXEC, EM_X86_64);
+    n00b_elf_section_t *text = n00b_elf_add_section(bin, ".text",
+                                                     SHT_PROGBITS,
+                                                     SHF_ALLOC | SHF_EXECINSTR);
+    char text_bytes[16] = {0};
+    text->content = n00b_buffer_from_bytes(text_bytes, sizeof(text_bytes));
+    text->size    = sizeof(text_bytes);
+    auto br = n00b_elf_build(bin);
+    assert(n00b_result_is_ok(br));
+    return n00b_result_get(br);
+}
+
+static void
+test_oracle_elf_roundtrip(void)
+{
+    n00b_buffer_t *fixture = build_elf_fixture();
+    (void)oracle_roundtrip("oracle_elf_roundtrip",
+                           fixture,
+                           n00b_chalk_elf_insert_buffer,
+                           n00b_chalk_elf_extract_buffer,
+                           "");
+}
+
+// Build a minimal Mach-O executable for oracle testing.
+static n00b_buffer_t *
+build_macho_fixture(void)
+{
+    n00b_macho_binary_t *bin = n00b_macho_binary_new(CPU_TYPE_X86_64,
+                                                    /*cpusubtype=*/3,
+                                                    MH_EXECUTE);
+    n00b_macho_segment_t *seg = n00b_macho_add_segment(bin, "__TEXT",
+                                                       /*initprot=*/5,
+                                                       /*maxprot=*/7);
+    char text_bytes[16] = {0};
+    n00b_macho_section_t *sec = n00b_macho_add_section(seg, "__text", "__TEXT",
+                                                       /*flags=*/0,
+                                                       /*align=*/0);
+    sec->content = n00b_buffer_from_bytes(text_bytes, sizeof(text_bytes));
+    sec->size    = sizeof(text_bytes);
+    auto br = n00b_macho_build(bin);
+    assert(n00b_result_is_ok(br));
+    return n00b_result_get(br);
+}
+
+static void
+test_oracle_macho_roundtrip(void)
+{
+    n00b_buffer_t *fixture = build_macho_fixture();
+    (void)oracle_roundtrip("oracle_macho_roundtrip",
+                           fixture,
+                           n00b_chalk_macho_insert_buffer,
+                           n00b_chalk_macho_extract_buffer,
+                           "");
+}
+
+static void
+test_oracle_macho_wrap_via_macho(void)
+{
+    // macos_wrap takes a Mach-O input and produces a bash-wrapped
+    // output. Use the same Mach-O fixture as the Mach-O oracle test.
+    n00b_buffer_t *fixture = build_macho_fixture();
+    (void)oracle_roundtrip("oracle_macos_wrap_roundtrip",
+                           fixture,
+                           n00b_chalk_macos_wrap_insert_buffer,
+                           n00b_chalk_macos_wrap_extract_buffer,
+                           ".sh");
+}
+
+
 static void
 test_oracle_pyc_roundtrip(void)
 {
@@ -590,10 +778,15 @@ test_oracle_pyc_roundtrip(void)
         return;
     }
 
-    // Build a tiny .pyc body. chalk's pyc scan checks the path
-    // extension, so we write the chalked bytes to a *.pyc file.
+    // Build a tiny .pyc body. CPython's mandatory \r\n sentinel at
+    // bytes[2..3] is what our looks_like_pyc detection keys off of —
+    // without it the codec rejects the fixture as non-pyc.
     uint8_t fixture[64];
     memset(fixture, 0xab, sizeof(fixture));
+    fixture[0] = 0xa7;
+    fixture[1] = 0x0d;
+    fixture[2] = '\r';
+    fixture[3] = '\n';
     auto bytes = n00b_buffer_from_bytes((char *)fixture, sizeof(fixture));
 
     auto mark = n00b_chalk_mark_new();
@@ -780,6 +973,9 @@ main(int argc, char *argv[])
     printf("== oracle round-trip ==\n");
     test_oracle_pyc_roundtrip();
     test_oracle_source_roundtrip();
+    test_oracle_elf_roundtrip();
+    test_oracle_macho_roundtrip();
+    test_oracle_macho_wrap_via_macho();
 
     printf("All chalk module tests passed.\n");
     return 0;

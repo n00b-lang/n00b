@@ -488,13 +488,12 @@ read_source_file(n00b_string_t *path)
     long len = ftell(f);
     fseek(f, 0, SEEK_SET);
 
-    char *raw = malloc((size_t)len + 1);
+    char *raw = n00b_alloc_array(char, (size_t)len + 1);
     fread(raw, 1, (size_t)len, f);
     raw[len] = '\0';
     fclose(f);
 
     n00b_buffer_t *buf = n00b_buffer_from_bytes(raw, (int64_t)len);
-    free(raw);
 
     return buf;
 }
@@ -584,13 +583,12 @@ load_n00b_grammar(n00b_string_t *grammar_file)
     long len = ftell(f);
     fseek(f, 0, SEEK_SET);
 
-    char *buf = malloc((size_t)len + 1);
+    char *buf = n00b_alloc_array(char, (size_t)len + 1);
     fread(buf, 1, (size_t)len, f);
     buf[len] = '\0';
     fclose(f);
 
     n00b_string_t *bnf_text = n00b_string_from_cstr(buf);
-    free(buf);
 
     n00b_grammar_t *g = n00b_grammar_new();
     n00b_grammar_set_error_recovery(g, false);
@@ -1745,8 +1743,8 @@ compile_files(n00b_grammar_t *g, n00b_cmdr_result_t *result, bool verbose)
 
     // Allocate arrays for object file paths.
     // +1 for the startup shim.
-    const char **obj_paths   = calloc((size_t)(nargs + 1), sizeof(const char *));
-    char       **obj_paths_m = calloc((size_t)(nargs + 1), sizeof(char *)); // owned copies
+    const char **obj_paths   = n00b_alloc_array(const char *, nargs + 1);
+    char       **obj_paths_m = n00b_alloc_array(char *, nargs + 1);
     int          n_objs      = 0;
 
     // Create a codegen session with FFI embed support.
@@ -1837,8 +1835,12 @@ compile_files(n00b_grammar_t *g, n00b_cmdr_result_t *result, bool verbose)
         fwrite(obj_buf->data, 1, obj_buf->byte_len, fp);
         fclose(fp);
 
-        obj_paths_m[n_objs] = strdup(obj_path);
-        obj_paths[n_objs]   = obj_paths_m[n_objs];
+        // GC-managed string copy of obj_path.
+        size_t opl = strlen(obj_path);
+        char  *dup = n00b_alloc_array(char, opl + 1);
+        memcpy(dup, obj_path, opl + 1);
+        obj_paths_m[n_objs] = dup;
+        obj_paths[n_objs]   = dup;
         n_objs++;
 
         compile_prepared_source_free(prepared);
@@ -1915,8 +1917,11 @@ compile_files(n00b_grammar_t *g, n00b_cmdr_result_t *result, bool verbose)
             goto fail;
         }
 
-        obj_paths_m[n_objs] = strdup(startup_o);
-        obj_paths[n_objs]   = obj_paths_m[n_objs];
+        size_t sol = strlen(startup_o);
+        char  *sdup = n00b_alloc_array(char, sol + 1);
+        memcpy(sdup, startup_o, sol + 1);
+        obj_paths_m[n_objs] = sdup;
+        obj_paths[n_objs]   = sdup;
         n_objs++;
 
         // Clean up temp .c file.
@@ -1952,11 +1957,11 @@ compile_files(n00b_grammar_t *g, n00b_cmdr_result_t *result, bool verbose)
     }
 
     for (int i = 0; i < n_objs; i++) {
-        free(obj_paths_m[i]);
+        /* obj_paths_m[i] is GC-managed. */
     }
 
-    free(obj_paths);
-    free(obj_paths_m);
+    /* obj_paths is GC-managed. */
+    /* obj_paths_m is GC-managed. */
     n00b_cg_session_free(session);
     return 0;
 
@@ -1966,11 +1971,11 @@ fail:
             remove(obj_paths[i]);
         }
 
-        free(obj_paths_m[i]);
+        /* obj_paths_m[i] is GC-managed. */
     }
 
-    free(obj_paths);
-    free(obj_paths_m);
+    /* obj_paths is GC-managed. */
+    /* obj_paths_m is GC-managed. */
     n00b_cg_session_free(session);
     return 1;
 }
