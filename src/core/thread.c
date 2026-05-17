@@ -8,6 +8,11 @@
 #include <io.h>
 #endif
 
+#ifdef __APPLE__
+#include <mach/mach.h>
+#include <mach/mach_vm.h>
+#endif
+
 #define __N00B_THREAD_INTERNAL
 
 #include "n00b.h"
@@ -185,6 +190,55 @@ n00b_capture_stack_base(n00b_thread_t *thread, n00b_runtime_t *runtime)
     }
 #else
     if (!n00b_atomic_load(&runtime->live_threads)) {
+#ifdef __APPLE__
+        // pthread_get_stackaddr_np and the env-walking heuristic both
+        // miss the main thread's true stack top on macOS — pthread
+        // reports the pthread-managed region (below where the kernel
+        // placed argv/envp and main()'s frame), and env-walking only
+        // covers the env-string area, which isn't always the
+        // highest-addressed page in the stack mapping.  Either way,
+        // any local in main's frame can end up *above* the registered
+        // stack_map range, and the GC's stack-root scan misses it.
+        // The mach_vm region containing a known stack address IS the
+        // full stack, so use that.
+        // Pick an anchor that's actually inside the main thread's
+        // real stack region.  On macOS the kernel-set-up main stack
+        // is *above* what pthread_get_stackaddr_np reports, and also
+        // above where the argv/envp strings live, so a local in this
+        // function (in the pthread region) and argv[0] / envp[0] (in
+        // the strings region) both miss it.  The argv array itself
+        // (`runtime->argv.data` — the C `argv` pointer value passed to
+        // main) lives at the very top of main's actual stack frame
+        // area, so that's the anchor that gets mach_vm_region_recurse
+        // to return the right region.
+        char anchor;
+        char *anchor_p = (char *)runtime->argv.data;
+        if (!anchor_p) {
+            anchor_p = (char *)&anchor;
+        }
+        mach_vm_address_t region_addr = (mach_vm_address_t)anchor_p;
+        mach_vm_size_t    region_size = 0;
+        natural_t                       depth = 0;
+        vm_region_submap_info_data_64_t info;
+        mach_msg_type_number_t          info_count = VM_REGION_SUBMAP_INFO_COUNT_64;
+        kern_return_t                   kr;
+        kr = mach_vm_region_recurse(mach_task_self(), &region_addr,
+                                    &region_size, &depth,
+                                    (vm_region_recurse_info_t)&info,
+                                    &info_count);
+        (void)0;
+        if (kr == KERN_SUCCESS) {
+            lowest  = (char *)(uintptr_t)region_addr;
+            highest = lowest + region_size;
+            size    = region_size;
+        }
+        else {
+            pthread_t ptid = pthread_self();
+            highest        = pthread_get_stackaddr_np(ptid);
+            size           = pthread_get_stacksize_np(ptid);
+            lowest         = highest - size;
+        }
+#else
         struct rlimit rlimit;
         getrlimit(RLIMIT_STACK, &rlimit);
         size = rlimit.rlim_cur;
@@ -199,6 +253,7 @@ n00b_capture_stack_base(n00b_thread_t *thread, n00b_runtime_t *runtime)
         highest = p + strlen(p) + 1 + sizeof(void *);
         highest = (char *)(((uint64_t)highest) & ~(sizeof(void *) - 1));
         lowest  = highest - size;
+#endif
     }
     else {
 #if defined(__linux__)

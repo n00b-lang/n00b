@@ -24,6 +24,11 @@ typedef uint64_t n00b_alloc_type_info_t;
     uint32_t               mem_debug       : 1;                                                \
     uint32_t               mem_debug_taint : 1;                                                \
     uint32_t               moved           : 1;                                                \
+    /* Per-allocation GC scan shape; see core/gc_map.h.                                        \
+     * 3 bits covers DEFAULT (0) through CALLBACK (4) with room. */                            \
+    uint32_t               scan_kind       : 3;                                                \
+    n00b_gc_scan_cb_t      scan_cb;                                                            \
+    void                  *scan_user;                                                          \
     n00b_uint128_t         cached_hash
 
 // The header is inline with allocations, and is used when we don't

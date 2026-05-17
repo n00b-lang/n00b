@@ -1,3 +1,4 @@
+#include <stdio.h>
 #include "n00b.h"
 #include "core/alloc.h"
 #include "core/arena.h"
@@ -67,6 +68,21 @@ _n00b_alloc_raw(size_t             n,
         n00b_thread_checkin();
     }
 
+    /* Map scan_kind == NONE onto the legacy no_scan switch so the GC's
+     * worklist add-path (which checks no_scan) skips scanning this
+     * allocation. */
+    if (opts->scan_kind == N00B_GC_SCAN_KIND_NONE) {
+        opts->no_scan = true;
+    }
+    /* CALLBACK requires the OOB-metadata path so scan_cb / scan_user
+     * survive forwarding (the inline header has no room for the cb
+     * pointer reliably across compaction). */
+    if (opts->scan_kind == N00B_GC_SCAN_KIND_CALLBACK
+        && opts->allocator->metadata_pool == nullptr) {
+        assert(opts->allocator->metadata_pool != nullptr
+               && "scan_kind=CALLBACK requires an allocator with OOB metadata");
+    }
+
     uint64_t request  = n * sz;
     bool     is_array = n > 1;
 
@@ -108,6 +124,9 @@ _n00b_alloc_raw(size_t             n,
             .no_scan         = opts->no_scan,
             .mem_debug       = opts->mem_debug,
             .mem_debug_taint = opts->debug_taint,
+            .scan_kind       = opts->scan_kind,
+            .scan_cb         = opts->scan_cb,
+            .scan_user       = opts->scan_user,
             .hcur            = hdr,
             .file_name       = location,
         };
@@ -125,7 +144,10 @@ _n00b_alloc_raw(size_t             n,
         n00b_mmap_register_range(r,
                                  (char *)r + request,
                                  n00b_mmap_pool,
-                                 .allocator = opts->allocator);
+                                 .allocator = opts->allocator,
+                                 .scan_kind = opts->scan_kind,
+                                 .scan_cb   = opts->scan_cb,
+                                 .scan_user = opts->scan_user);
     }
 
     assert(!(((uint64_t)r) & (N00B_ALIGN - 1)));
@@ -363,12 +385,23 @@ type_cleanup:;
     }
     n00b_type_info_t *tinfo = n00b_option_get(tinfo_opt);
 
-    // Free the lock if the type has a registered lock_offset.
+    // Free the lock if the type has a registered lock_offset.  Guard
+    // the deref: with external_metadata pools, tinfo is set even for
+    // pool allocs whose user_ptr offset doesn't actually point to a
+    // heap-allocated lock pointer (the type may have been allocated
+    // raw into pool memory without n00b_*_init populating .lock).
+    // Confirm `*lock_ptr` resolves to a tracked allocation header
+    // before freeing.
     if (n00b_option_is_set(tinfo->lock_offset)) {
         uint32_t        offset   = n00b_option_get(tinfo->lock_offset);
         n00b_rwlock_t **lock_ptr = (n00b_rwlock_t **)((char *)ptr + offset);
-        if (*lock_ptr) {
-            n00b_free(*lock_ptr);
+        n00b_rwlock_t  *lock_val = *lock_ptr;
+        if (lock_val) {
+            n00b_alloc_info_t lock_info = n00b_find_alloc_info(lock_val);
+            if (lock_info.kind == n00b_alloc_oob
+                || lock_info.kind == n00b_alloc_inline) {
+                n00b_free(lock_val);
+            }
             *lock_ptr = nullptr;
         }
     }
@@ -384,11 +417,14 @@ void
 n00b_allocator_destroy(n00b_allocator_t *allocator)
 {
     if (allocator->metadata_pool) {
-        n00b_allocator_destroy(allocator->metadata_pool);
-        // Only free the pool struct if it was heap-allocated (i.e.,
-        // it's a real pool, not an arena whose struct lives in mmap).
-        if (allocator->metadata_pool->__md_pool) {
-            free(allocator->metadata_pool);
+        // Sample the `__md_pool` flag *before* the recursive destroy:
+        // arena/pool destroys can unmap the struct itself, so reading
+        // through the pointer afterwards is a use-after-free.
+        bool was_md_pool = allocator->metadata_pool->__md_pool;
+        n00b_allocator_t *md = allocator->metadata_pool;
+        n00b_allocator_destroy(md);
+        if (was_md_pool) {
+            free(md);
         }
         allocator->metadata_pool = nullptr;
     }

@@ -6,6 +6,7 @@
 #include <unistd.h>
 #endif
 #include <assert.h>
+#include <stdio.h>
 
 #include "n00b.h"
 #include "core/alloc_mdata.h"
@@ -13,9 +14,15 @@
 #include "core/memory_info.h"
 #include "core/mmaps.h"
 #include "core/atomic.h"
+
+/* Forward decl to avoid pulling in lock_common.h (and its
+ * transitive thread-id dependency) at this layer. */
+extern void n00b_lock_chains_scrub_range(uint64_t lo, uint64_t hi);
 #include "adt/llstack.h"
+#include "adt/list.h"
 #include "core/align.h"
 #include "core/pool.h"
+#include "core/runtime.h"
 #include "util/math.h"
 
 static inline void
@@ -119,6 +126,22 @@ pool_destroy(n00b_pool_t *pool)
     n00b_pool_page_t *entry = pool->page_table;
     n00b_pool_page_t *next;
 
+    /* Scrub the lock chains FIRST, walking the page table, so that
+     * the scrubber can chase chain links without ever reading from
+     * a freed page.  Pool pages can hold n00b_mutex_t /
+     * n00b_rwlock_t (e.g. as fields of an in-pool Regex), and
+     * `n00b_lock_acquire_accounting` threads those onto each
+     * thread's exclusive-lock chain.  The owning regex's teardown
+     * destroys the pool without releasing them, so the chain would
+     * otherwise be left with dangling pointers into freed memory. */
+    n00b_pool_page_t *scrub = entry;
+    while (scrub) {
+        uintptr_t pg_lo = (uintptr_t)scrub;
+        uintptr_t pg_hi = pg_lo + n00b_page_size;
+        n00b_lock_chains_scrub_range(pg_lo, pg_hi);
+        scrub = scrub->next;
+    }
+
     while (entry) {
         next = entry->next;
         n00b_safe_munmap(entry, n00b_page_size);
@@ -210,6 +233,10 @@ n00b_pool_init(n00b_pool_t *pool) _kargs
     for (int i = 0; i < N00B_NUM_FREE_LISTS; i++) {
         n00b_llstack_init(&pool->free_lists[i]);
     }
+
+    /* Registration in rt->scannable_pools is handled by
+     * n00b_allocator_setup (so both pools and arenas go through one
+     * code path).  No additional bookkeeping here. */
 
     return (n00b_allocator_t *)pool;
 }

@@ -125,17 +125,21 @@ base_wait(n00b_condition_t *cv,
     // Enqueue ourselves on the CV's waiter list.
     n00b_list_push(cv->waiters, thread);
 
-    n00b_stw_suspend_ctx stw_ctx;
-    uint32_t             epoch;
-
-    n00b_thread_suspend(stw_ctx);
     n00b_register_lock_wait(thread, cv, loc);
+    uint32_t epoch;
 
     _n00b_condition_unlock(cv, loc);
 
     do {
-        // Block on our own futex until notifier sets it to 1.
+        // Suspend ONLY across the futex syscall (the period during
+        // which we genuinely can't check in).  Per stw.c, while
+        // suspended we may not touch heap memory or locks; the rest
+        // of this loop dereferences `cv`, so suspend/resume must wrap
+        // just the kernel call.
+        n00b_stw_suspend_ctx stw_ctx = {0};
+        n00b_thread_suspend(stw_ctx);
         n00b_futex_wait(&thread->cv_wake, 0, timeout);
+        n00b_thread_resume(stw_ctx);
 
         if (n00b_atomic_load(&thread->cv_wake) == 0) {
             // Spurious wake or timeout — cv_wake still 0.
@@ -150,7 +154,6 @@ base_wait(n00b_condition_t *cv,
                     // (list has its own rwlock, safe outside CV mutex).
                     (void)n00b_list_remove_all(cv->waiters, thread);
                     n00b_wait_done(thread);
-                    n00b_thread_resume(stw_ctx);
                     return (void *)~0ULL;
                 }
             }
@@ -208,7 +211,6 @@ base_wait(n00b_condition_t *cv,
 
     _n00b_condition_lock(cv, loc);
     n00b_wait_done(thread);
-    n00b_thread_resume(stw_ctx);
 
     if (wake_unlocked) {
         _n00b_condition_unlock(cv, loc);

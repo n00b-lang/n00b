@@ -95,10 +95,11 @@ n00b_cp_filter_t n00b_filter_eaw(n00b_unicode_eaw_t eaw);
 n00b_array_t(n00b_codepoint_t)
 n00b_cp_query_n(const n00b_cp_filter_t *filters, int nfilters) _kargs
 {
-    n00b_codepoint_t  range_start = 0;
-    n00b_codepoint_t  range_end   = 0x10FFFF;
-    size_t            max_results = 0;
-    n00b_allocator_t *allocator   = nullptr;
+    n00b_codepoint_t  range_start        = 0;
+    n00b_codepoint_t  range_end          = 0x10FFFF;
+    size_t            max_results        = 0;
+    n00b_allocator_t *allocator          = nullptr;
+    bool              include_surrogates = false;
 };
 
 /** @brief OR query: returns codepoints matching ANY given filter.
@@ -116,10 +117,11 @@ n00b_cp_query_n(const n00b_cp_filter_t *filters, int nfilters) _kargs
 n00b_array_t(n00b_codepoint_t)
 n00b_cp_query_any_n(const n00b_cp_filter_t *filters, int nfilters) _kargs
 {
-    n00b_codepoint_t  range_start = 0;
-    n00b_codepoint_t  range_end   = 0x10FFFF;
-    size_t            max_results = 0;
-    n00b_allocator_t *allocator   = nullptr;
+    n00b_codepoint_t  range_start        = 0;
+    n00b_codepoint_t  range_end          = 0x10FFFF;
+    size_t            max_results        = 0;
+    n00b_allocator_t *allocator          = nullptr;
+    bool              include_surrogates = false;
 };
 
 // ===========================================================================
@@ -162,3 +164,57 @@ n00b_option_t(const char *) n00b_unicode_cp_name(n00b_codepoint_t cp);
  */
 n00b_option_t(n00b_codepoint_t)
 n00b_unicode_cp_from_name(const char *name);
+
+// ===========================================================================
+// Property-name -> enum lookups (for regex \p{...} resolution)
+//
+// These take a property/script/block/category/bidi name (as written in
+// `\p{...}` in a regex) and return the corresponding enum value via an
+// out parameter. Matching is "loose" per UAX #44 LM3: case-insensitive
+// (ASCII fold) and ignoring whitespace, underscores, and hyphens.
+//
+// All return false (and leave *out unchanged) if the name does not match.
+// All accept @c nullptr for @p name (return false) and @p out (skip write).
+// ===========================================================================
+
+/** @brief Look up a General_Category by name (e.g. "Lu", "Letter_Uppercase").
+ *  @details Accepts both the two-letter abbreviation and the long name with
+ *           Unicode loose matching. Does NOT resolve the merged categories
+ *           ("L", "M", "N", "P", "S", "Z", "C", "LC") -- caller handles
+ *           those.
+ *  @param name  The property-value name to look up.
+ *  @param out   Out-parameter receiving the enum value on success.
+ *  @return      True on a match, false otherwise.
+ */
+bool n00b_unicode_gc_by_name(const char *name, n00b_unicode_gc_t *out);
+
+/** @brief Look up a Script by name (e.g. "Latin", "Greek").
+ *  @param name  The property-value name to look up.
+ *  @param out   Out-parameter receiving the enum value on success.
+ *  @return      True on a match, false otherwise.
+ */
+bool n00b_unicode_script_by_name(const char *name, n00b_unicode_script_t *out);
+
+/** @brief Look up a Block by name (e.g. "Basic Latin").
+ *  @param name  The property-value name to look up.
+ *  @param out   Out-parameter receiving the enum value on success.
+ *  @return      True on a match, false otherwise.
+ */
+bool n00b_unicode_block_by_name(const char *name, n00b_unicode_block_t *out);
+
+/** @brief Look up a binary property by name (e.g. "Alphabetic", "WSpace").
+ *  @param name  The property name to look up.
+ *  @param out   Out-parameter receiving the enum value on success.
+ *  @return      True on a match, false otherwise.
+ */
+bool n00b_unicode_property_by_name(const char            *name,
+                                   n00b_unicode_property_t *out);
+
+/** @brief Look up a Bidi_Class by name (abbrev or long, e.g. "L",
+ *         "European_Number").
+ *  @param name  The property-value name to look up.
+ *  @param out   Out-parameter receiving the enum value on success.
+ *  @return      True on a match, false otherwise.
+ */
+bool n00b_unicode_bidi_class_by_name(const char                *name,
+                                     n00b_unicode_bidi_class_t *out);

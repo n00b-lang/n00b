@@ -153,7 +153,8 @@ typedef n00b_conduit_inbox_t(n00b_conduit_fd_stream_payload_t)
 #define n00b_conduit_fd_status_inbox_new(c)                                    \
     ({                                                                         \
         n00b_conduit_fd_status_inbox_t *_inbox =                               \
-            n00b_alloc(n00b_conduit_fd_status_inbox_t);                        \
+            n00b_alloc_with_opts(n00b_conduit_fd_status_inbox_t,               \
+                &(n00b_alloc_opts_t){.allocator = (c)->allocator});            \
         n00b_conduit_inbox_init(n00b_conduit_fd_status_payload_t,              \
                                 _inbox, c, N00B_CONDUIT_BP_UNBOUNDED, 0);      \
         _inbox;                                                                \
@@ -163,7 +164,8 @@ typedef n00b_conduit_inbox_t(n00b_conduit_fd_stream_payload_t)
 #define n00b_conduit_fd_write_inbox_new(c)                                     \
     ({                                                                         \
         n00b_conduit_fd_write_inbox_t *_inbox =                                \
-            n00b_alloc(n00b_conduit_fd_write_inbox_t);                         \
+            n00b_alloc_with_opts(n00b_conduit_fd_write_inbox_t,                \
+                &(n00b_alloc_opts_t){.allocator = (c)->allocator});            \
         n00b_conduit_inbox_init(n00b_conduit_fd_write_payload_t,               \
                                 _inbox, c, N00B_CONDUIT_BP_UNBOUNDED, 0);      \
         _inbox;                                                                \
@@ -173,7 +175,8 @@ typedef n00b_conduit_inbox_t(n00b_conduit_fd_stream_payload_t)
 #define n00b_conduit_fd_write_req_inbox_new(c)                                 \
     ({                                                                         \
         n00b_conduit_fd_write_req_inbox_t *_inbox =                            \
-            n00b_alloc(n00b_conduit_fd_write_req_inbox_t);                     \
+            n00b_alloc_with_opts(n00b_conduit_fd_write_req_inbox_t,            \
+                &(n00b_alloc_opts_t){.allocator = (c)->allocator});            \
         n00b_conduit_inbox_init(n00b_conduit_fd_write_req_payload_t,           \
                                 _inbox, c, N00B_CONDUIT_BP_UNBOUNDED, 0);      \
         _inbox;                                                                \
@@ -183,7 +186,8 @@ typedef n00b_conduit_inbox_t(n00b_conduit_fd_stream_payload_t)
 #define n00b_conduit_fd_write_done_inbox_new(c)                                \
     ({                                                                         \
         n00b_conduit_fd_write_done_inbox_t *_inbox =                           \
-            n00b_alloc(n00b_conduit_fd_write_done_inbox_t);                    \
+            n00b_alloc_with_opts(n00b_conduit_fd_write_done_inbox_t,           \
+                &(n00b_alloc_opts_t){.allocator = (c)->allocator});            \
         n00b_conduit_inbox_init(n00b_conduit_fd_write_done_payload_t,          \
                                 _inbox, c, N00B_CONDUIT_BP_UNBOUNDED, 0);      \
         _inbox;                                                                \
@@ -193,7 +197,8 @@ typedef n00b_conduit_inbox_t(n00b_conduit_fd_stream_payload_t)
 #define n00b_conduit_fd_stream_inbox_new(c)                                    \
     ({                                                                         \
         n00b_conduit_fd_stream_inbox_t *_inbox =                               \
-            n00b_alloc(n00b_conduit_fd_stream_inbox_t);                        \
+            n00b_alloc_with_opts(n00b_conduit_fd_stream_inbox_t,               \
+                &(n00b_alloc_opts_t){.allocator = (c)->allocator});            \
         n00b_conduit_inbox_init(n00b_conduit_fd_stream_payload_t,              \
                                 _inbox, c, N00B_CONDUIT_BP_UNBOUNDED, 0);      \
         _inbox;                                                                \

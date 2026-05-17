@@ -1072,7 +1072,8 @@ n00b_conduit_stream_reader_new(n00b_conduit_t *c, n00b_conduit_fd_owner_t *owner
 
     reader->internal_inbox = ({
         n00b_conduit_inbox_t(n00b_buffer_t *) *_inbox =
-            n00b_alloc(n00b_conduit_inbox_t(n00b_buffer_t *));
+            n00b_alloc_with_opts(n00b_conduit_inbox_t(n00b_buffer_t *),
+                &(n00b_alloc_opts_t){.allocator = c->allocator});
         n00b_conduit_inbox_init(n00b_buffer_t *,
                                 _inbox, c, N00B_CONDUIT_BP_UNBOUNDED, 0);
         _inbox;

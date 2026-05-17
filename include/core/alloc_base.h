@@ -80,6 +80,9 @@ struct n00b_mmap_info_t {
  * unified mmap interval tree.
  */
 typedef struct {
-    void     *start;
-    uint32_t  len;
+    void               *start;
+    uint32_t            len;
+    n00b_gc_scan_kind_t scan_kind;
+    n00b_gc_scan_cb_t   scan_cb;
+    void               *scan_user;
 } n00b_alloc_range_t;

@@ -217,8 +217,14 @@
             return n00b_result_err(                                            \
                 n00b_conduit_xform_t(T_in, T_out) *,                           \
                 N00B_CONDUIT_ERR_NULL_ARG);                                    \
+        /* Allocate xf from the conduit's pool (hidden from GC) so the     \
+         * worker thread's parameter pointer stays valid across collections. \
+         * The default arena would relocate xf and the worker's              \
+         * function-arg slot — held only in stack at worst — could miss      \
+         * forwarding, leaving a stale heap pointer. */                       \
         n00b_conduit_xform_t(T_in, T_out) *xf =                               \
-            n00b_alloc(n00b_conduit_xform_t(T_in, T_out));                     \
+            n00b_alloc_with_opts(n00b_conduit_xform_t(T_in, T_out),           \
+                &(n00b_alloc_opts_t){.allocator = (c)->allocator});           \
         if (!xf)                                                               \
             return n00b_result_err(                                            \
                 n00b_conduit_xform_t(T_in, T_out) *,                           \
@@ -250,7 +256,8 @@
             n00b_list_new(n00b_conduit_subscription_t(T_out) *);              \
         xf->topic->inbox = nullptr;                                            \
         /* Create input inbox */                                               \
-        xf->inbox = n00b_alloc(n00b_conduit_inbox_t(T_in));                    \
+        xf->inbox = n00b_alloc_with_opts(n00b_conduit_inbox_t(T_in),           \
+            &(n00b_alloc_opts_t){.allocator = (c)->allocator});                \
         n00b_conduit_inbox_init(T_in, xf->inbox, c,                           \
             xf->backpressure, xf->inbox_limit);                                \
         xf->inbox_cv = &xf->inbox->cv;                                        \

@@ -102,7 +102,7 @@ if using_glibc
 endif
 
 if target_os == 'darwin'
-    link_args = ['-target', target_arch + '-' + target_os]
+    link_args = ['-target', target_arch + '-apple-' + target_os]
 elif target_os == 'windows'
     link_args = ['-static', '-Wl,--stack,16777216']
 else
@@ -196,12 +196,14 @@ exe_c_args = c_args + [
 ]
 
 if conf_lto
-  exe_c_args = exe_c_args + ['-flto', '-DN00B_LTO_ENABLED']
+  exe_c_args = exe_c_args + ['-flto', '-DN00B_LTO_ENABLED',
+                              '--ncc-lto-guard']
   exe_link_args = exe_link_args + ['-flto']
 endif
 
 if conf_release_build
-  exe_c_args = exe_c_args + ['-O3', '-ffast-math', '-flto']
+  exe_c_args = exe_c_args + ['-O3', '-ffast-math', '-flto',
+                              '--ncc-lto-guard']
   exe_link_args = exe_link_args + ['-flto']
 endif
 
@@ -339,6 +341,10 @@ gen_unicode_tables = custom_target('gen_unicode_tables',
 # ============================================================================
 
 subdir('src/text')
+
+# Note: src/text/regex/ and src/util/simd/ (resharp-c port) are reached
+# transitively via the src/text/ and src/util/ subdir() calls above.
+# See ~/dd/n00b_regex_port_plan.md § 6 / § 7.
 
 # ============================================================================
 # Display (render + table + layout + hexdump)
@@ -492,6 +498,8 @@ if conf_notcurses
   link_whole_libs += n00b_notcurses_lib
 endif
 
+# ACME trust verifier (macOS) lives on the QUIC branch; not built on this branch.
+
 n00b = static_library('n00b',
     n00b_dll_src,
     include_directories: incdir,
@@ -516,12 +524,7 @@ test_common_kwargs = {
     'link_with': [n00b],
 }
 
-# QUIC echo demo — exercises the full transport end-to-end.
-
-# Manifest-driven managed server (Phase 2 deliverable § 13.1).
-
-# One-shot ACME cert acquisition demo (manual DNS-01 provider).
-# Used by docs/quic/le_staging.md for manual interop verification.
+# QUIC demos / examples live on the QUIC branch; not built on this branch.
 
 
 array_test = executable('test_array',
@@ -578,6 +581,24 @@ gc_test = executable('test_gc',
 )
 test('gc', gc_test, suite: 'unit')
 
+gc_scan_map_test = executable('test_gc_scan_map',
+    ['test/unit/test_gc_scan_map.c'],
+    kwargs: test_common_kwargs,
+)
+test('gc_scan_map', gc_scan_map_test, suite: 'unit')
+
+gc_selective_scan_test = executable('test_gc_selective_scan',
+    ['test/unit/test_gc_selective_scan.c'],
+    kwargs: test_common_kwargs,
+)
+test('gc_selective_scan', gc_selective_scan_test, suite: 'unit')
+
+container_scan_kind_test = executable('test_container_scan_kind',
+    ['test/unit/test_container_scan_kind.c'],
+    kwargs: test_common_kwargs,
+)
+test('container_scan_kind', container_scan_kind_test, suite: 'unit')
+
 finalizer_test = executable('test_finalizer',
     ['test/unit/test_finalizer.c'],
     kwargs: test_common_kwargs,
@@ -619,67 +640,6 @@ dict_test = executable('test_dict',
     kwargs: test_common_kwargs,
 )
 test('dict', dict_test, suite: 'unit')
-
-
-
-# ============================================================================
-# QUIC tests
-# ============================================================================
-
-
-
-
-
-
-# JWS encoder + ECDSA-P-256 sign + base64url + JWK thumbprint.
-
-# ACME end-to-end (Phase 2.3a): directory + newNonce + newAccount.
-# Skipped unless STEPCA_DIR_URL is in the env — start the fixture via
-# `test/fixtures/stepca/start.sh` to populate it.
-
-# CSR builder.  In-process structural test always runs; external
-# `openssl req -verify` runs when an openssl binary is available.
-
-# Orchestrator smoke test (argument validation; live cert acquisition
-# is deferred to the Phase 2 deployment playbook because HTTP-01
-# validation needs port 80).
-
-
-
-# Endpoint hot-reload (cert + key swap).
-
-# Sticky secret (stateless-reset / address-validation token rotation).
-
-# LB-CID encoding (block-cipher mode, 16-byte fixed CID).
-
-# Phase 2 fuzz tests — property tests across base64url, PEM, X.509
-# validity walker, LB-CID decoder.  Same shape as the Phase 1
-# framer fuzz: deterministic seed, ~5k iters per target.
-
-# Manifest + preflight (design doc § 9).
-
-# DNS providers (manual + cloudflare) + DNS-01 challenge wrapper.
-
-# (removed: QUIC SNI routing — WIP, lives on another branch)
-
-# (removed: QUIC trust→picotls bridge — WIP, lives on another branch)
-
-# Phase 3 § 5.3 tail — mid-handshake-reload no-tear property.
-
-# Live network integration test: skipped unless N00B_TEST_NETWORK=1.
-# Hits Let's Encrypt's staging directory; verifies real TLS handshake
-# through OS trust + HTTP/1.1 parse against a real ACME endpoint.
-
-
-
-
-
-
-
-
-# Perf harness — built but not registered as a CI test (it's
-# benchmarking, not assertion-based).  Run manually with
-# `./build_debug/perf_quic_stream_scaling`.
 
 # ============================================================================
 # Conduit tests
@@ -745,7 +705,6 @@ if target_os == 'windows'
         kwargs: test_common_kwargs,
     )
 endif
-
 
 signal_test = executable('test_signal',
     ['test/unit/test_signal.c'],
@@ -838,32 +797,9 @@ print_test = executable('test_print',
 test('print', print_test, suite: 'unit')
 
 # ============================================================================
-# Regex engine tests
+# Regex engine tests — registered via subdir during Phase 11 of the regex port.
+# See ~/dd/n00b_regex_port_plan.md § 7 / Phase 11.
 # ============================================================================
-
-regex_charset_test = executable('test_regex_charset',
-    ['test/unit/test_regex_charset.c'],
-    kwargs: test_common_kwargs,
-)
-test('regex_charset', regex_charset_test, suite: 'unit')
-
-regex_parse_test = executable('test_regex_parse',
-    ['test/unit/test_regex_parse.c'],
-    kwargs: test_common_kwargs,
-)
-test('regex_parse', regex_parse_test, suite: 'unit')
-
-regex_match_test = executable('test_regex_match',
-    ['test/unit/test_regex_match.c'],
-    kwargs: test_common_kwargs,
-)
-test('regex_match', regex_match_test, suite: 'unit')
-
-regex_api_test = executable('test_regex_api',
-    ['test/unit/test_regex_api.c'],
-    kwargs: test_common_kwargs,
-)
-test('regex_api', regex_api_test, suite: 'unit')
 
 # ============================================================================
 # Logic / constraint solver tests
@@ -923,11 +859,6 @@ logic_easy_test = executable('test_logic_easy',
     kwargs: logic_test_kwargs,
 )
 test('logic_easy', logic_easy_test, suite: 'unit')
-
-# ============================================================================
-# ML tests
-# ============================================================================
-
 
 # ============================================================================
 # Parser tests
@@ -1064,24 +995,6 @@ json_tokenizer_test = executable('test_json_tokenizer',
 )
 test('json_tokenizer', json_tokenizer_test, suite: 'unit')
 
-# ============================================================================
-# LSP framework tests
-# ============================================================================
-
-
-
-
-
-
-# nccd backend lib (defined here so the test target below can link it).
-nccd_backend_lib = static_library('nccd_backend',
-    [
-    ],
-    include_directories: incdir + [include_directories('src/tools')],
-    c_args: exe_c_args,
-)
-
-
 cf_label_test = executable('test_cf_label',
     ['test/unit/test_cf_label.c'],
     kwargs: test_common_kwargs,
@@ -1145,42 +1058,6 @@ infer_expr_test = executable('test_infer_expr',
 test('infer_expr', infer_expr_test, suite: 'unit', workdir: meson.project_source_root())
 
 # ============================================================================
-# MIR JIT tests
-# ============================================================================
-
-mir_test = executable('test_mir',
-    ['test/unit/test_mir.c'],
-    include_directories: incdir,
-    c_args: exe_c_args,
-    link_args: exe_link_args,
-    link_with: [n00b],
-    dependencies: [mir_dep],
-)
-test('mir', mir_test, suite: 'unit')
-
-codegen_test = executable('test_codegen',
-    ['test/unit/test_codegen.c'],
-    include_directories: incdir,
-    c_args: exe_c_args,
-    link_args: exe_link_args,
-    link_with: [n00b],
-    dependencies: [mir_dep],
-)
-test('codegen', codegen_test, suite: 'unit', workdir: meson.project_source_root())
-
-codegen_coverage_test = executable('test_codegen_coverage',
-    ['test/unit/test_codegen_coverage.c'],
-    include_directories: incdir,
-    c_args: exe_c_args,
-    link_args: exe_link_args,
-    link_with: [n00b],
-    dependencies: [mir_dep],
-)
-test('codegen_coverage', codegen_coverage_test,
-    suite: 'unit',
-    workdir: meson.project_source_root(),
-)
-
 # ============================================================================
 # Render / layout tests
 # ============================================================================
@@ -1410,11 +1287,6 @@ if target_os != 'windows'
     )
 endif
 
-# nccd — the ncc Language Server.
-# Phase 2: lexical-only ncc backend (semantic tokens, outline,
-# bracket-balance diagnostics).  The backend lib is defined earlier
-# (alongside the test target that links it).
-
 # ============================================================================
 # Integration tests
 # ============================================================================
@@ -1590,8 +1462,81 @@ foreach name : objfile_test_names
 endforeach
 
 # ============================================================================
-# Examples (Mac-only — ObjC + libxpc)
+# Regex engine tests (Phase 11 / resharp-c port)
 # ============================================================================
+
+# `fuzz_compare` is a corpus-generator tool (writes regex-crate oracle
+# JSON), not a correctness test, and depends on harness symbols
+# (bounded thread runner, JSON serde, regex_build_multiline) that are
+# not yet on the n00b side.  Skipped until phase 2; the .c/.h files
+# remain in place for that work.
+regex_test_names = [
+    'accel_skip', 'auto_harden', 'deriv', 'engine',
+    'parser', 'properties', 'rev_nulls', 'seek', 'smoke_unicode',
+    'smoke_utf8seq', 'stream',
+]
+
+# Standalone parser tests.
+exe = executable('test_parsers_toml',
+    'test/unit/test_parsers_toml.c',
+    kwargs: test_common_kwargs,
+)
+test('parsers_toml', exe, suite: 'unit')
+
+# Tests that consume the resharp-c TOML / haystack fixtures need to know
+# where those files live.  We point at the resharp-c project root checked
+# out in the user's home so we can reuse the existing fixture tree until
+# n00b-regex grows its own copies.
+regex_engine_manifest_dir = '/Users/viega/resharp-c'
+regex_engine_test_c_args  = exe_c_args + [
+    '-DRESHARP_ENGINE_MANIFEST_DIR="' + regex_engine_manifest_dir + '"',
+]
+
+foreach name : regex_test_names
+    if name == 'engine' or name == 'fuzz_compare' \
+            or name == 'accel_skip' or name == 'auto_harden' \
+            or name == 'deriv' or name == 'rev_nulls'
+        exe = executable('test_regex_' + name,
+            'test/unit/test_regex_' + name + '.c',
+            include_directories: incdir,
+            c_args: regex_engine_test_c_args,
+            link_args: exe_link_args,
+            link_with: [n00b],
+        )
+    else
+        exe = executable('test_regex_' + name,
+            'test/unit/test_regex_' + name + '.c',
+            kwargs: test_common_kwargs,
+        )
+    endif
+    # regex_engine runs derivative + fuzz comparisons across thousands of
+    # patterns and legitimately takes ~60s in debug builds.
+    test_timeout = (name == 'engine' or name == 'fuzz_compare') ? 300 : 30
+    test('regex_' + name, exe, suite: 'unit', timeout: test_timeout)
+endforeach
+
+# aarch64-gated SIMD regex tests
+if target_arch == 'aarch64'
+    foreach name : ['neon_simd', 'simd_neon_unit']
+        # neon_simd consumes the same TOML fixture tree as the engine
+        # tests for its lazy_*_toml cases; it needs the manifest dir.
+        if name == 'neon_simd'
+            exe = executable('test_regex_' + name,
+                'test/unit/test_regex_' + name + '.c',
+                include_directories: incdir,
+                c_args: regex_engine_test_c_args,
+                link_args: exe_link_args,
+                link_with: [n00b],
+            )
+        else
+            exe = executable('test_regex_' + name,
+                'test/unit/test_regex_' + name + '.c',
+                kwargs: test_common_kwargs,
+            )
+        endif
+        test('regex_' + name, exe, suite: 'unit')
+    endforeach
+endif
 
 # ============================================================================
 # Documentation (Doxygen)

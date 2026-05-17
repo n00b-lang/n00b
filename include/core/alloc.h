@@ -71,21 +71,31 @@ n00b_mmap_is_gc_scannable(n00b_mmap_info_t *map)
 /*
  * allocator      Allocator to use (nullptr = runtime default).
  * no_scan        If true, GC will not scan this allocation for pointers.
+ *                Legacy switch; superseded by scan_kind when scan_kind
+ *                != N00B_GC_SCAN_KIND_DEFAULT.
  * mem_debug      Enable memory debugging for this allocation.
  * debug_taint    Taint freed memory with a debug pattern.
  * finalizer      Finalizer callback to run when the object is collected
  *                    or freed. Registered at allocation time, avoiding the
  *                    header lookup that n00b_add_finalizer() requires.
  * finalizer_data Opaque pointer passed to @p finalizer when invoked.
+ * scan_kind      Per-allocation GC scan shape (see core/gc_map.h).
+ *                DEFAULT (0) falls back to the no_scan switch above.
+ * scan_cb        Callback invoked by the GC when scan_kind == CALLBACK.
+ *                Requires an allocator with OOB metadata (asserted).
+ * scan_user      Opaque pointer passed to scan_cb.
  */
 
 typedef struct {
-    n00b_allocator_t *allocator;
-    bool              no_scan;
-    bool              mem_debug;
-    bool              debug_taint;
-    n00b_finalizer_t  finalizer;
-    void             *finalizer_data;
+    n00b_allocator_t   *allocator;
+    bool                no_scan;
+    bool                mem_debug;
+    bool                debug_taint;
+    n00b_finalizer_t    finalizer;
+    void               *finalizer_data;
+    n00b_gc_scan_kind_t scan_kind;
+    n00b_gc_scan_cb_t   scan_cb;
+    void               *scan_user;
 } n00b_alloc_opts_t;
 
 extern const n00b_alloc_opts_t _n00b_default_alloc_opts;

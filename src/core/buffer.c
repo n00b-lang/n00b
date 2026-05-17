@@ -59,16 +59,22 @@ _buffer_create(int64_t length, n00b_allocator_t *allocator)
 void
 n00b_buffer_init(n00b_buffer_t *obj) _kargs
 {
-    int64_t           length    = -1;
-    char             *raw       = nullptr;
-    n00b_string_t    *hex       = nullptr;
-    char             *ptr       = nullptr;
-    n00b_allocator_t *allocator = nullptr;
-    bool              no_lock   = false;
+    int64_t              length    = -1;
+    char                *raw       = nullptr;
+    n00b_string_t       *hex       = nullptr;
+    char                *ptr       = nullptr;
+    n00b_allocator_t    *allocator = nullptr;
+    bool                 no_lock   = false;
+    n00b_gc_scan_kind_t  scan_kind = N00B_GC_SCAN_KIND_NONE;
+    n00b_gc_scan_cb_t    scan_cb   = nullptr;
+    void                *scan_user = nullptr;
 }
 {
     obj->lock      = no_lock ? nullptr : n00b_data_lock_new();
     obj->allocator = allocator;
+    obj->scan_kind = scan_kind;
+    obj->scan_cb   = scan_cb;
+    obj->scan_user = scan_user;
 
     if (raw == nullptr && hex == nullptr && ptr == nullptr) {
         if (length < 0) {
@@ -87,7 +93,13 @@ n00b_buffer_init(n00b_buffer_t *obj) _kargs
 
     if (length == 0) {
         obj->alloc_len = N00B_EMPTY_BUFFER_ALLOC;
-        obj->data      = n00b_alloc_array_with_opts(char, obj->alloc_len, &(n00b_alloc_opts_t){.allocator = obj->allocator});
+        obj->data      = n00b_alloc_array_with_opts(char, obj->alloc_len,
+                                                    &(n00b_alloc_opts_t){
+                                                        .allocator = obj->allocator,
+                                                        .scan_kind = obj->scan_kind,
+                                                        .scan_cb   = obj->scan_cb,
+                                                        .scan_user = obj->scan_user,
+                                                    });
         obj->byte_len  = 0;
         return;
     }
@@ -95,7 +107,13 @@ n00b_buffer_init(n00b_buffer_t *obj) _kargs
     if (length > 0 && ptr == nullptr) {
         int64_t alloc_len = n00b_align_closest_pow2_ceil(length);
 
-        obj->data      = n00b_alloc_array_with_opts(char, alloc_len, &(n00b_alloc_opts_t){.allocator = obj->allocator});
+        obj->data      = n00b_alloc_array_with_opts(char, alloc_len,
+                                                    &(n00b_alloc_opts_t){
+                                                        .allocator = obj->allocator,
+                                                        .scan_kind = obj->scan_kind,
+                                                        .scan_cb   = obj->scan_cb,
+                                                        .scan_user = obj->scan_user,
+                                                    });
         obj->alloc_len = alloc_len;
     }
 
@@ -191,7 +209,13 @@ n00b_buffer_resize(n00b_buffer_t *buffer, uint64_t new_sz)
     }
 
     uint64_t new_alloc_sz = n00b_align_closest_pow2_ceil(new_sz);
-    char    *new_data = n00b_alloc_array_with_opts(char, new_alloc_sz, &(n00b_alloc_opts_t){.allocator = buffer->allocator});
+    char    *new_data = n00b_alloc_array_with_opts(char, new_alloc_sz,
+                                                   &(n00b_alloc_opts_t){
+                                                       .allocator = buffer->allocator,
+                                                       .scan_kind = buffer->scan_kind,
+                                                       .scan_cb   = buffer->scan_cb,
+                                                       .scan_user = buffer->scan_user,
+                                                   });
 
     memcpy(new_data, buffer->data, buffer->byte_len);
 

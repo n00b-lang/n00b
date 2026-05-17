@@ -227,6 +227,75 @@ n00b_lock_release_accounting(n00b_lock_base_t *lock, char *loc)
     return unlock;
 }
 
+// Unlink any locks in this thread's exclusive-lock chain whose
+// address falls within `[lo, hi)` — used when a non-hidden allocator
+// (typically a per-regex compile pool) is about to unmap its pages.
+// Without this scrub, the chain holds dangling pointers into freed
+// memory and the next n00b_lock_acquire_accounting crashes when it
+// dereferences `top_held->prev_thread_lock`.
+//
+// Locks aren't released here in the normal sense (we don't update
+// `lock->data` — the lock is about to vanish).  We only patch the
+// chain pointers to skip the dying entry.
+void
+n00b_lock_chains_scrub_range(uint64_t lo, uint64_t hi)
+{
+    n00b_runtime_t *rt = n00b_get_runtime();
+    if (!rt) return;
+
+    /* Fast path: if no thread has any chain entries we can skip the
+     * whole scrub.  This is the common case (only the regex builder
+     * holds locks, and only briefly). */
+    bool any = false;
+    for (int i = 0; i < N00B_THREADS_MAX; i++) {
+        if (n00b_atomic_load(&rt->threads[i].exclusive_locks)) {
+            any = true;
+            break;
+        }
+    }
+    if (!any) return;
+
+    for (int i = 0; i < N00B_THREADS_MAX; i++) {
+        n00b_thread_record_t *rec = &rt->threads[i];
+        n00b_lock_base_t     *cur = n00b_atomic_load(&rec->exclusive_locks);
+
+        /* Bounded walk — a chain that's been corrupted (e.g. by an
+         * earlier dangling `next_thread_lock` overwritten with random
+         * bytes) can form a cycle when we follow it through partially
+         * freed memory.  Cap the walk so we don't spin forever; a
+         * real chain doesn't get nearly this deep. */
+        int budget = 256;
+        while (cur && budget-- > 0) {
+            uintptr_t addr = (uintptr_t)cur;
+            n00b_lock_base_t *next = (n00b_lock_base_t *)
+                n00b_atomic_load(&cur->next_thread_lock);
+            if (addr >= lo && addr < hi) {
+                /* Unlink `cur` from the chain. */
+                n00b_lock_base_t *prev = (n00b_lock_base_t *)
+                    n00b_atomic_load(&cur->prev_thread_lock);
+                if (prev) {
+                    atomic_store(&prev->next_thread_lock, next);
+                }
+                else {
+                    /* `cur` was the head. */
+                    n00b_atomic_store(&rec->exclusive_locks, next);
+                }
+                if (next) {
+                    atomic_store(&next->prev_thread_lock, prev);
+                }
+            }
+            cur = next;
+        }
+        /* If the walk hit the budget, the chain is in an unrecoverable
+         * state — there's a cycle or it's pointing into freed memory.
+         * Drop the whole head; better an empty chain than a corrupt
+         * one that segfaults next acquire. */
+        if (cur != nullptr) {
+            n00b_atomic_store(&rec->exclusive_locks, (n00b_lock_base_t *)nullptr);
+        }
+    }
+}
+
 static inline void
 show_lock_logs(n00b_lock_log_t *log, FILE *f)
 {

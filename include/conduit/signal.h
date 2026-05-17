@@ -123,7 +123,8 @@ n00b_conduit_topic_is_signal(n00b_conduit_topic_base_t *topic)
 #define n00b_conduit_signal_inbox_new(c)                                       \
     ({                                                                         \
         n00b_conduit_signal_inbox_t *_inbox =                                  \
-            n00b_alloc(n00b_conduit_signal_inbox_t);                           \
+            n00b_alloc_with_opts(n00b_conduit_signal_inbox_t,                  \
+                &(n00b_alloc_opts_t){.allocator = (c)->allocator});            \
         n00b_conduit_inbox_init(n00b_conduit_signal_payload_t,                 \
                                 _inbox, c, N00B_CONDUIT_BP_UNBOUNDED, 0);      \
         _inbox;                                                                \

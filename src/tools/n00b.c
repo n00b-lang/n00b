@@ -1854,8 +1854,7 @@ compile_files(n00b_grammar_t *g, n00b_cmdr_result_t *result, bool verbose)
     }
 
     if (cache_only) {
-        free(obj_paths);
-        free(obj_paths_m);
+        /* obj_paths and obj_paths_m are GC-managed. */
         n00b_cg_session_free(session);
         return 0;
     }

@@ -51,7 +51,7 @@ extern void n00b_thread_start(void);
 
 #define n00b_run_blocking(...)                                                                 \
     {                                                                                          \
-        jmp_buf save_state;                                                                    \
+        jmp_buf save_state = {0};                                                              \
         if (!setjmp(save_state)) {                                                             \
             n00b_capture_stack_top(n00b_thread_self());                                        \
             _n00b_thread_suspend(N00B_LOC_STRING());                                           \

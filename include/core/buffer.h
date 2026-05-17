@@ -35,6 +35,7 @@
 
 #include "n00b.h"
 #include "core/alloc.h"
+#include "core/gc_map.h"
 #include "core/atomic.h"
 #include "core/align.h"
 #include "adt/option.h"
@@ -107,12 +108,18 @@
  * All access is protected by a spinlock.
  */
 struct n00b_buffer_t {
-    char             *data;
-    size_t            byte_len;
-    size_t            alloc_len;
-    n00b_rwlock_t    *lock;
-    n00b_allocator_t *allocator;
-    int32_t           flags;
+    char                *data;
+    size_t               byte_len;
+    size_t               alloc_len;
+    n00b_rwlock_t       *lock;
+    n00b_allocator_t    *allocator;
+    int32_t              flags;
+    // GC scan shape for the byte-data backing store.  Default NONE —
+    // buffers hold raw bytes, never heap pointers; the conservative
+    // scanner must not be allowed to forward random byte patterns.
+    n00b_gc_scan_kind_t  scan_kind;
+    n00b_gc_scan_cb_t    scan_cb;
+    void                *scan_user;
 };
 
 
@@ -166,6 +173,9 @@ struct n00b_buffer_t {
  * @kw hex       Hex-encoded string to decode.
  * @kw ptr       Adopt an existing data pointer (no copy).
  * @kw allocator Allocator to use for internal allocations.
+ * @kw scan_kind GC scan shape for the byte backing store (default NONE).
+ * @kw scan_cb   Custom scan callback (only used when scan_kind=CALLBACK).
+ * @kw scan_user Opaque user pointer for scan_cb.
  *
  * @pre @p buf is non-nullptr and uninitialized.
  * @post @p buf is ready for use; lock is initialized.
@@ -175,12 +185,15 @@ struct n00b_buffer_t {
 extern void
 n00b_buffer_init(n00b_buffer_t *buf) _kargs
 {
-    int64_t           length    = -1;
-    char             *raw       = nullptr;
-    n00b_string_t    *hex       = nullptr;
-    char             *ptr       = nullptr;
-    n00b_allocator_t *allocator = nullptr;
-    bool              no_lock   = false;
+    int64_t              length    = -1;
+    char                *raw       = nullptr;
+    n00b_string_t       *hex       = nullptr;
+    char                *ptr       = nullptr;
+    n00b_allocator_t    *allocator = nullptr;
+    bool                 no_lock   = false;
+    n00b_gc_scan_kind_t  scan_kind = N00B_GC_SCAN_KIND_NONE;
+    n00b_gc_scan_cb_t    scan_cb   = nullptr;
+    void                *scan_user = nullptr;
 };
 
 /**

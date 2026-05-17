@@ -67,7 +67,12 @@ struct n00b_defer_ll_t {
 #endif
 
 #define n00b_defer(defer_block)                                                \
-    n00b_defer_ll_t n00b_defer_node(__LINE__);                                 \
+    /* zero-init: reading an uninitialized `guard` below is UB, and at      */ \
+    /* -O1+ the optimizer exploits it — observed in release builds         */ \
+    /* collapsing the entire enclosing function (e.g. n00b_buffer_resize)  */ \
+    /* to `prologue; bl _lock; brk #1` because reverse-propagation through */ \
+    /* the computed-goto chain decides every path traps.                   */ \
+    n00b_defer_ll_t n00b_defer_node(__LINE__) = {0};                           \
     if (n00b_defer_node(__LINE__).guard != N00B_DEFER_INIT) {                  \
         n00b_defer_node(__LINE__).guard       = N00B_DEFER_INIT;               \
         n00b_defer_node(__LINE__).next_target = __n00b_defer_list.next_target; \

@@ -35,6 +35,7 @@
 #pragma once
 
 #include "n00b.h"
+#include "core/gc_map.h"
 #include "core/data_lock.h"
 
 // ============================================================================
@@ -55,8 +56,11 @@
     _generic_struct n00b_linked_list_tid(T) {                                                  \
         n00b_linked_list_node_t(T) *head;                                                      \
         n00b_linked_list_node_t(T) *tail;                                                      \
-        n00b_rwlock_t    *lock;                                                                \
-        n00b_allocator_t *allocator;                                                           \
+        n00b_rwlock_t       *lock;                                                              \
+        n00b_allocator_t    *allocator;                                                        \
+        n00b_gc_scan_kind_t  scan_kind;                                                        \
+        n00b_gc_scan_cb_t    scan_cb;                                                          \
+        void                *scan_user;                                                        \
     }
 
 #define n00b_linked_list_zero(list)                                                            \
@@ -70,7 +74,12 @@
         n00b_data_write_lock(_l->lock);                                                        \
         typeof(*(_l->head)) *nodep                                                             \
             = n00b_alloc_with_opts(typeof(*(_l->head)),                                        \
-                                   &(n00b_alloc_opts_t){.allocator = _l->allocator});          \
+                                   &(n00b_alloc_opts_t){                                       \
+                                       .allocator = _l->allocator,                             \
+                                       .scan_kind = _l->scan_kind,                             \
+                                       .scan_cb   = _l->scan_cb,                               \
+                                       .scan_user = _l->scan_user,                             \
+                                   });                                                         \
         nodep->contents = (item);                                                              \
         nodep->prev     = _l->tail;                                                            \
         nodep->next     = nullptr;                                                             \
@@ -116,7 +125,12 @@
         n00b_data_write_lock(_l->lock);                                                        \
         typeof(*(_l->head)) *nodep                                                             \
             = n00b_alloc_with_opts(typeof(*(_l->head)),                                        \
-                                   &(n00b_alloc_opts_t){.allocator = _l->allocator});          \
+                                   &(n00b_alloc_opts_t){                                       \
+                                       .allocator = _l->allocator,                             \
+                                       .scan_kind = _l->scan_kind,                             \
+                                       .scan_cb   = _l->scan_cb,                               \
+                                       .scan_user = _l->scan_user,                             \
+                                   });                                                         \
         nodep->contents = (item);                                                              \
         nodep->next     = _l->head;                                                            \
         nodep->prev     = nullptr;                                                             \
