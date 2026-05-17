@@ -333,7 +333,8 @@ static bool build_partial_graph(RegexBuilder *b, NodeId start, size_t budget,
     n00b_dict_t(NodeId, size_t) *idx = n00b_alloc_with_opts(
         n00b_dict_t(NodeId, size_t),
         &(n00b_alloc_opts_t){.allocator = alloc});
-    n00b_dict_init(idx, .skip_obj_hash = true, .allocator = alloc);
+    n00b_dict_init(idx, .skip_obj_hash = true, .allocator = alloc,
+                   .scan_kind = N00B_GC_SCAN_KIND_NONE);
 
     GraphBuildCtx ctx = {
         .g        = out,

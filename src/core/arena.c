@@ -13,6 +13,7 @@
 #include "core/mmaps.h"
 #include "core/align.h"
 #include "core/arena.h"
+#include <stdio.h>
 #include "core/atomic.h"
 #include "core/gc.h"
 #include "core/thread.h"

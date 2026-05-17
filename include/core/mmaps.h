@@ -258,8 +258,11 @@ n00b_safe_munmap(void *addr, size_t size)
 extern void
 n00b_mmap_register_range(void *start, void *end, n00b_mmap_rec_kind_t kind) _kargs
 {
-    n00b_allocator_t *allocator = nullptr;
-    const char       *file      = nullptr;
+    n00b_allocator_t    *allocator = nullptr;
+    const char          *file      = nullptr;
+    n00b_gc_scan_kind_t  scan_kind = N00B_GC_SCAN_KIND_DEFAULT;
+    n00b_gc_scan_cb_t    scan_cb   = nullptr;
+    void                *scan_user = nullptr;
 };
 
 /**

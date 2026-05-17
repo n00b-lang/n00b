@@ -409,7 +409,7 @@ TSetIdSet_new_alloc(n00b_allocator_t *allocator)
 {
     TSetIdSet *s = n00b_alloc_with_opts(
         TSetIdSet, &(n00b_alloc_opts_t){.allocator = allocator});
-    n00b_dict_init(&s->impl, .skip_obj_hash = true, .allocator = allocator);
+    n00b_dict_init(&s->impl, .skip_obj_hash = true, .allocator = allocator, .scan_kind = N00B_GC_SCAN_KIND_NONE);
     return s;
 }
 
@@ -445,7 +445,7 @@ NodeIdSet_new_alloc(n00b_allocator_t *allocator)
 {
     NodeIdSet *s = n00b_alloc_with_opts(
         NodeIdSet, &(n00b_alloc_opts_t){.allocator = allocator});
-    n00b_dict_init(&s->impl, .skip_obj_hash = true, .allocator = allocator);
+    n00b_dict_init(&s->impl, .skip_obj_hash = true, .allocator = allocator, .scan_kind = N00B_GC_SCAN_KIND_NONE);
     return s;
 }
 
@@ -490,7 +490,7 @@ NodeU16Map_new_alloc(n00b_allocator_t *allocator)
 {
     NodeU16Map *m = n00b_alloc_with_opts(
         NodeU16Map, &(n00b_alloc_opts_t){.allocator = allocator});
-    n00b_dict_init(&m->impl, .skip_obj_hash = true, .allocator = allocator);
+    n00b_dict_init(&m->impl, .skip_obj_hash = true, .allocator = allocator, .scan_kind = N00B_GC_SCAN_KIND_NONE);
     return m;
 }
 
@@ -531,7 +531,7 @@ NodeU8Map_new_alloc(n00b_allocator_t *allocator)
 {
     NodeU8Map *m = n00b_alloc_with_opts(
         NodeU8Map, &(n00b_alloc_opts_t){.allocator = allocator});
-    n00b_dict_init(&m->impl, .skip_obj_hash = true, .allocator = allocator);
+    n00b_dict_init(&m->impl, .skip_obj_hash = true, .allocator = allocator, .scan_kind = N00B_GC_SCAN_KIND_NONE);
     return m;
 }
 
@@ -572,7 +572,7 @@ NodeUSizeMap_new_alloc(n00b_allocator_t *allocator)
 {
     NodeUSizeMap *m = n00b_alloc_with_opts(
         NodeUSizeMap, &(n00b_alloc_opts_t){.allocator = allocator});
-    n00b_dict_init(&m->impl, .skip_obj_hash = true, .allocator = allocator);
+    n00b_dict_init(&m->impl, .skip_obj_hash = true, .allocator = allocator, .scan_kind = N00B_GC_SCAN_KIND_NONE);
     return m;
 }
 
@@ -613,7 +613,7 @@ U16Set_new_alloc(n00b_allocator_t *allocator)
 {
     U16Set *s = n00b_alloc_with_opts(
         U16Set, &(n00b_alloc_opts_t){.allocator = allocator});
-    n00b_dict_init(&s->impl, .skip_obj_hash = true, .allocator = allocator);
+    n00b_dict_init(&s->impl, .skip_obj_hash = true, .allocator = allocator, .scan_kind = N00B_GC_SCAN_KIND_NONE);
     return s;
 }
 
@@ -771,7 +771,7 @@ TRegexIdSet_new_alloc(n00b_allocator_t *allocator)
 {
     TRegexIdSet *s = n00b_alloc_with_opts(
         TRegexIdSet, &(n00b_alloc_opts_t){.allocator = allocator});
-    n00b_dict_init(&s->impl, .skip_obj_hash = true, .allocator = allocator);
+    n00b_dict_init(&s->impl, .skip_obj_hash = true, .allocator = allocator, .scan_kind = N00B_GC_SCAN_KIND_NONE);
     return s;
 }
 

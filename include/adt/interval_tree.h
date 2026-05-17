@@ -16,6 +16,8 @@
  */
 #pragma once
 #include <stdint.h>
+#include <stdio.h>
+#include <assert.h>
 
 #include "n00b.h"
 #include "core/alloc.h"
@@ -69,6 +71,20 @@
         n00b_gc_scan_cb_t    scan_cb;                                                          \
         void                *scan_user;                                                        \
     }
+
+/* All n00b_interval_node_t(D) share the same prefix layout up through
+ * left/right.  This lets non-parameterized helpers (invariant check,
+ * augment repair) operate on any tree by casting through this struct. */
+typedef struct _n00b_itree_nbase_t {
+    uint64_t                       low;
+    uint64_t                       high;
+    uint64_t                       height;
+    uint64_t                       maximum;
+    uint64_t                       minimum;
+    struct _n00b_itree_nbase_t    *left;
+    struct _n00b_itree_nbase_t    *right;
+    /* data follows */
+} _n00b_itree_nbase_t;
 
 // ============================================================================
 // Helper: derive node-pointer type from a tree pointer expression
@@ -184,7 +200,14 @@
         auto _iti_t = (tree);                                                                  \
         n00b_alloc_opts_t _iti_o = (n00b_alloc_opts_t){__VA_ARGS__};                           \
         _iti_t->root = nullptr;                                                                \
-        _iti_t->stack = n00b_stack_new_private(void *, .allocator = _iti_o.allocator);         \
+        /* Pre-size the descent stack large enough that growth never occurs                    \
+         * during insert/delete/search. The stack is shared across all tree                    \
+         * ops and is not reentrant; growth would call n00b_free on the old                    \
+         * buffer, which can recurse into n00b_mmap_by_address -> n00b_mmap_lookup             \
+         * -> n00b_interval_search_any on the same tree, clobbering the                        \
+         * caller's descent state. AVL depth is bounded by 1.44 * log2(N+2),                   \
+         * so 256 covers any plausible tree size. */                                            \
+        _iti_t->stack = n00b_stack_new_cap_private(void *, 256, .allocator = _iti_o.allocator);\
         _iti_t->allocator = _iti_o.allocator;                                                  \
         _iti_t->scan_kind = _iti_o.scan_kind;                                                  \
         _iti_t->scan_cb   = _iti_o.scan_cb;                                                    \
@@ -233,6 +256,12 @@
             _ii_node->minimum = _ii_lo;                                                        \
             _ii_node->maximum = _ii_hi;                                                        \
             _ii_node->height = 1;                                                              \
+            /* Pool allocations may not be fully zeroed (pool_free's     \
+             * memset is sized as ix*64, not (1<<ix)*64, so bytes past   \
+             * byte 64 retain stale data — including the right pointer  \
+             * at offset 64).  Initialize the structural fields. */     \
+            _ii_node->left = nullptr;                                                          \
+            _ii_node->right = nullptr;                                                         \
             _ii_node->data = (dval);                                                           \
                                                                                                \
             if (_ii_tree->root == nullptr) {                                                   \

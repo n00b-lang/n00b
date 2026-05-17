@@ -1,6 +1,8 @@
 #define N00B_MEM_INTERNAL_API
 
 #include "n00b.h"
+#include "core/arena.h"
+#include "core/runtime.h"
 #include "core/mmaps.h"
 #include "core/alloc_mdata.h"
 #include "core/alloc.h"
@@ -201,8 +203,11 @@ n00b_mmap_delete_ranges(n00b_mmap_ctx_t *ctx, uint64_t start, uint64_t end)
 void
 n00b_mmap_register_range(void *startp, void *endp, n00b_mmap_rec_kind_t kind) _kargs
 {
-    n00b_allocator_t *allocator = nullptr;
-    const char       *file      = nullptr;
+    n00b_allocator_t    *allocator = nullptr;
+    const char          *file      = nullptr;
+    n00b_gc_scan_kind_t  scan_kind = N00B_GC_SCAN_KIND_DEFAULT;
+    n00b_gc_scan_cb_t    scan_cb   = nullptr;
+    void                *scan_user = nullptr;
 }
 {
     n00b_runtime_t  *rt  = n00b_get_runtime();
@@ -215,8 +220,11 @@ n00b_mmap_register_range(void *startp, void *endp, n00b_mmap_rec_kind_t kind) _k
     uint64_t end   = (uint64_t)endp;
 
     *range = (n00b_alloc_range_t){
-        .start = startp,
-        .len   = (uint32_t)(end - start),
+        .start     = startp,
+        .len       = (uint32_t)(end - start),
+        .scan_kind = scan_kind,
+        .scan_cb   = scan_cb,
+        .scan_user = scan_user,
     };
 
     n00b_mmap_data_t data = n00b_variant_set(n00b_mmap_data_t, n00b_alloc_range_t *, range);

@@ -1509,7 +1509,10 @@ foreach name : regex_test_names
             kwargs: test_common_kwargs,
         )
     endif
-    test('regex_' + name, exe, suite: 'unit')
+    # regex_engine runs derivative + fuzz comparisons across thousands of
+    # patterns and legitimately takes ~60s in debug builds.
+    test_timeout = (name == 'engine' or name == 'fuzz_compare') ? 300 : 30
+    test('regex_' + name, exe, suite: 'unit', timeout: test_timeout)
 endforeach
 
 # aarch64-gated SIMD regex tests

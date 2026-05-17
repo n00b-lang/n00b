@@ -263,7 +263,8 @@ static NodeIdHashSet *nodeid_hashset_new(n00b_allocator_t *allocator)
 {
     NodeIdHashSet *m = n00b_alloc_with_opts(
         NodeIdHashSet, &(n00b_alloc_opts_t){.allocator = allocator});
-    n00b_dict_init(m, .skip_obj_hash = true, .allocator = allocator);
+    n00b_dict_init(m, .skip_obj_hash = true, .allocator = allocator,
+                   .scan_kind = N00B_GC_SCAN_KIND_NONE);
     return m;
 }
 

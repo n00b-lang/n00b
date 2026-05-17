@@ -6,6 +6,7 @@
 #include <unistd.h>
 #endif
 #include <assert.h>
+#include <stdio.h>
 
 #include "n00b.h"
 #include "core/alloc_mdata.h"

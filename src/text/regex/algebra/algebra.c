@@ -345,7 +345,8 @@ metadata_builder_new(n00b_allocator_t *allocator)
     mb.nb          = nulls_builder_new(allocator);
     mb.index       = n00b_alloc_with_opts(
         MetadataIndexMap, &(n00b_alloc_opts_t){.allocator = allocator});
-    n00b_dict_init(mb.index, .skip_obj_hash = true, .allocator = allocator);
+    n00b_dict_init(mb.index, .skip_obj_hash = true, .allocator = allocator,
+                   .scan_kind = N00B_GC_SCAN_KIND_NONE);
     mb.array = (MetadataVec){};
     Metadata zero = (Metadata){ METAFLAGS_ZERO, NULLS_ID_EMPTY };
     metadata_vec_push(&mb.array, zero, allocator);
@@ -775,7 +776,8 @@ NodeIdHashSet_new(n00b_allocator_t *allocator)
 {
     NodeIdHashSet *s = n00b_alloc_with_opts(
         NodeIdHashSet, &(n00b_alloc_opts_t){.allocator = allocator});
-    n00b_dict_init(s, .skip_obj_hash = true, .allocator = allocator);
+    n00b_dict_init(s, .skip_obj_hash = true, .allocator = allocator,
+                   .scan_kind = N00B_GC_SCAN_KIND_NONE);
     return s;
 }
 
@@ -785,7 +787,8 @@ NodeIdHashMap_new(n00b_allocator_t *allocator)
 {
     NodeIdHashMap *m = n00b_alloc_with_opts(
         NodeIdHashMap, &(n00b_alloc_opts_t){.allocator = allocator});
-    n00b_dict_init(m, .skip_obj_hash = true, .allocator = allocator);
+    n00b_dict_init(m, .skip_obj_hash = true, .allocator = allocator,
+                   .scan_kind = N00B_GC_SCAN_KIND_NONE);
     return m;
 }
 
@@ -810,7 +813,8 @@ NodeIdU32Map_new(n00b_allocator_t *allocator)
 {
     NodeIdU32Map *m = n00b_alloc_with_opts(
         NodeIdU32Map, &(n00b_alloc_opts_t){.allocator = allocator});
-    n00b_dict_init(m, .skip_obj_hash = true, .allocator = allocator);
+    n00b_dict_init(m, .skip_obj_hash = true, .allocator = allocator,
+                   .scan_kind = N00B_GC_SCAN_KIND_NONE);
     return m;
 }
 
@@ -1429,11 +1433,13 @@ regex_builder_new(n00b_allocator_t *allocator)
     inst->array        = (VecNodeKey){};
     inst->index        = n00b_alloc_with_opts(
         NodeKeyMap, &(n00b_alloc_opts_t){.allocator = allocator});
-    n00b_dict_init(inst->index, .skip_obj_hash = true, .allocator = allocator);
+    n00b_dict_init(inst->index, .skip_obj_hash = true, .allocator = allocator,
+                   .scan_kind = N00B_GC_SCAN_KIND_NONE);
     inst->cache_empty  = n00b_alloc_with_opts(
         NodeFlagsMap, &(n00b_alloc_opts_t){.allocator = allocator});
     n00b_dict_init(inst->cache_empty, .skip_obj_hash = true,
-                   .allocator = allocator);
+                   .allocator = allocator,
+                   .scan_kind = N00B_GC_SCAN_KIND_NONE);
     inst->tr_array     = (VecTRegex){};
     inst->tr_cache     = n00b_alloc_with_opts(
         TRegexMap, &(n00b_alloc_opts_t){.allocator = allocator});
@@ -1452,11 +1458,13 @@ regex_builder_new(n00b_allocator_t *allocator)
     inst->mk_binary_memo = n00b_alloc_with_opts(
         PairTRMap, &(n00b_alloc_opts_t){.allocator = allocator});
     n00b_dict_init(inst->mk_binary_memo, .skip_obj_hash = true,
-                   .allocator = allocator);
+                   .allocator = allocator,
+                   .scan_kind = N00B_GC_SCAN_KIND_NONE);
     inst->clean_cache  = n00b_alloc_with_opts(
         PairTSetTRMap, &(n00b_alloc_opts_t){.allocator = allocator});
     n00b_dict_init(inst->clean_cache, .skip_obj_hash = true,
-                   .allocator = allocator);
+                   .allocator = allocator,
+                   .scan_kind = N00B_GC_SCAN_KIND_NONE);
 
     NodeKey def = (NodeKey){
         .kind = KIND_PRED, .left = NODE_ID_MISSING,
@@ -1705,7 +1713,8 @@ regex_builder_mk_binary(RegexBuilder *self, TRegexId left,
     self->mk_binary_memo = n00b_alloc_with_opts(
         PairTRMap, &(n00b_alloc_opts_t){.allocator = self->allocator});
     n00b_dict_init(self->mk_binary_memo, .skip_obj_hash = true,
-                   .allocator = self->allocator);
+                   .allocator = self->allocator,
+                   .scan_kind = N00B_GC_SCAN_KIND_NONE);
     return regex_builder_mk_binary_inner(self, left, right, apply, ctx);
 }
 
@@ -1866,7 +1875,8 @@ regex_builder_max_lookahead_body_len(const RegexBuilder *self, NodeId node_id)
 {
     NodeFlagsMap *visited = n00b_alloc_with_opts(
         NodeFlagsMap, &(n00b_alloc_opts_t){.allocator = self->allocator});
-    n00b_dict_init(visited, .skip_obj_hash = true, .allocator = self->allocator);
+    n00b_dict_init(visited, .skip_obj_hash = true, .allocator = self->allocator,
+                   .scan_kind = N00B_GC_SCAN_KIND_NONE);
     VecNodeId stack = (VecNodeId){};
     VecNodeId_push(&stack, node_id, self->allocator);
     uint32_t best = 0;

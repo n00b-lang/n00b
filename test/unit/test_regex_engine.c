@@ -332,14 +332,14 @@ run_file(const char *filename)
         if (tc->vs_regex) {
             Regex *re = regex_new(tc->pattern);
             assert(re != nullptr);
-            n00b_list_t(Match) got = n00b_list_new_private(Match);
+            n00b_list_t(Match) got = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
             n00b_regex_engine_err_t rc =
                 regex_find_all(re, (const uint8_t *)tc->input,
                                tc->input_len, &got);
             assert(rc == N00B_REGEX_ENGINE_ERR_NONE);
             RegexRef *rx = regex_ref_new(tc->pattern);
             assert(rx != nullptr);
-            n00b_list_t(Match) exp = n00b_list_new_private(Match);
+            n00b_list_t(Match) exp = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
             n00b_regex_engine_err_t rc2 =
                 regex_ref_find_all(rx, (const uint8_t *)tc->input,
                                    tc->input_len, &exp);
@@ -357,7 +357,7 @@ run_file(const char *filename)
                 continue; // compile-time error
             }
             if (tc->input_len != 0) {
-                n00b_list_t(Match) got = n00b_list_new_private(Match);
+                n00b_list_t(Match) got = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
                 n00b_regex_engine_err_t rc =
                     regex_find_all(re, (const uint8_t *)tc->input,
                                    tc->input_len, &got);
@@ -399,7 +399,7 @@ run_file(const char *filename)
                 assert(matches_equal(&anc, 1, tc->matches, tc->matches_len));
             }
         } else {
-            n00b_list_t(Match) got = n00b_list_new_private(Match);
+            n00b_list_t(Match) got = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
             n00b_regex_engine_err_t rc =
                 regex_find_all(re, (const uint8_t *)tc->input,
                                tc->input_len, &got);
@@ -446,7 +446,7 @@ run_file_javascript(const char *filename)
                     filename, tc->name, tc->pattern);
             abort();
         }
-        n00b_list_t(Match) got = n00b_list_new_private(Match);
+        n00b_list_t(Match) got = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
         n00b_regex_engine_err_t rc =
             regex_find_all(re, (const uint8_t *)tc->input, tc->input_len, &got);
         assert(rc == N00B_REGEX_ENGINE_ERR_NONE);
@@ -471,13 +471,13 @@ check_vs_regex(const char *pattern, const uint8_t *input, size_t input_len)
         fprintf(stderr, "failed compile %s\n", pattern);
         abort();
     }
-    n00b_list_t(Match) got = n00b_list_new_private(Match);
+    n00b_list_t(Match) got = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
     assert(regex_find_all(re, input, input_len, &got)
            == N00B_REGEX_ENGINE_ERR_NONE);
 
     RegexRef *rx = regex_ref_new(pattern);
     assert(rx != nullptr);
-    n00b_list_t(Match) exp = n00b_list_new_private(Match);
+    n00b_list_t(Match) exp = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
     assert(regex_ref_find_all(rx, input, input_len, &exp)
            == N00B_REGEX_ENGINE_ERR_NONE);
 
@@ -529,7 +529,7 @@ TEST(intersect_narrow_with_widened_term_is_sound)
         Regex *re = regex_with_options(pats[pi], regex_options_default());
         assert(re != nullptr);
         for (size_t ii = 0; ii < sizeof inputs / sizeof inputs[0]; ++ii) {
-            n00b_list_t(Match) got = n00b_list_new_private(Match);
+            n00b_list_t(Match) got = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
             assert(regex_find_all(re, (const uint8_t *)inputs[ii],
                                   strlen(inputs[ii]), &got)
                    == N00B_REGEX_ENGINE_ERR_NONE);
@@ -554,8 +554,8 @@ TEST(precompiled_matches_lazy)
     Regex *pre_re  = regex_with_options(pattern, pre_opts);
     assert(lazy_re && pre_re);
 
-    n00b_list_t(Match) a = n00b_list_new_private(Match);
-    n00b_list_t(Match) b = n00b_list_new_private(Match);
+    n00b_list_t(Match) a = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
+    n00b_list_t(Match) b = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
     assert(regex_find_all(lazy_re, input, input_len, &a)
            == N00B_REGEX_ENGINE_ERR_NONE);
     assert(regex_find_all(pre_re, input, input_len, &b)
@@ -582,8 +582,8 @@ TEST(precompiled_complex)
     Regex *lazy_re = regex_with_options(pattern, lazy_opts);
     Regex *pre_re  = regex_with_options(pattern, pre_opts);
     assert(lazy_re && pre_re);
-    n00b_list_t(Match) a = n00b_list_new_private(Match);
-    n00b_list_t(Match) b = n00b_list_new_private(Match);
+    n00b_list_t(Match) a = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
+    n00b_list_t(Match) b = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
     assert(regex_find_all(lazy_re, input, input_len, &a)
            == N00B_REGEX_ENGINE_ERR_NONE);
     assert(regex_find_all(pre_re, input, input_len, &b)
@@ -631,14 +631,14 @@ TEST(space_newline_space)
                                   UNICODE_MODE_JAVASCRIPT);
         Regex *re = regex_with_options(pats[pi], opts);
         REQUIRE(re != nullptr, "regex_with_options returned NULL");
-        n00b_list_t(Match) m1 = n00b_list_new_private(Match);
+        n00b_list_t(Match) m1 = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
         REQUIRE(regex_find_all(re, bytes, hlen, &m1)
                     == N00B_REGEX_ENGINE_ERR_NONE,
                 "regex_find_all failed");
         n00b_list_free(m1);
         struct timespec t0, t1;
         clock_gettime(CLOCK_MONOTONIC, &t0);
-        n00b_list_t(Match) m2 = n00b_list_new_private(Match);
+        n00b_list_t(Match) m2 = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
         REQUIRE(regex_find_all(re, bytes, hlen, &m2)
                     == N00B_REGEX_ENGINE_ERR_NONE,
                 "regex_find_all failed");
@@ -716,8 +716,8 @@ check_literal_equiv(const char *pattern, const char *input)
     n00b_regex_engine_err_t err =
         regex_from_node(b, node, regex_options_default(), re_dfa);
     assert(err == N00B_REGEX_ENGINE_ERR_NONE);
-    n00b_list_t(Match) a  = n00b_list_new_private(Match);
-    n00b_list_t(Match) bm = n00b_list_new_private(Match);
+    n00b_list_t(Match) a  = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
+    n00b_list_t(Match) bm = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
     size_t input_len = strlen(input);
     assert(regex_find_all(re_literal, (const uint8_t *)input,
                           input_len, &a)
@@ -767,7 +767,7 @@ TEST(dictionary_context_small)
 {
     Regex *re = regex_new(".{0,10}(abc|def|ghi|jkl)");
     assert(re != nullptr);
-    n00b_list_t(Match) m = n00b_list_new_private(Match);
+    n00b_list_t(Match) m = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
     assert(regex_find_all(re, (const uint8_t *)"def;jkl;ghi", 11, &m)
            == N00B_REGEX_ENGINE_ERR_NONE);
     assert(n00b_list_len(m) != 0);
@@ -779,7 +779,7 @@ TEST(dictionary_context_small_both)
 {
     Regex *re = regex_new(".{0,10}(abc|def|ghi|jkl).{0,10}");
     assert(re != nullptr);
-    n00b_list_t(Match) m = n00b_list_new_private(Match);
+    n00b_list_t(Match) m = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
     assert(regex_find_all(re, (const uint8_t *)"def;jkl;ghi", 11, &m)
            == N00B_REGEX_ENGINE_ERR_NONE);
     assert(n00b_list_len(m) != 0);
@@ -791,7 +791,7 @@ TEST(dictionary_context_small_suffix)
 {
     Regex *re = regex_new("(abc|def|ghi|jkl).{0,10}");
     assert(re != nullptr);
-    n00b_list_t(Match) m = n00b_list_new_private(Match);
+    n00b_list_t(Match) m = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
     assert(regex_find_all(re, (const uint8_t *)"def;jkl;ghi", 11, &m)
            == N00B_REGEX_ENGINE_ERR_NONE);
     assert(n00b_list_len(m) != 0);
@@ -840,7 +840,7 @@ TEST(dictionary_context_medium)
 
     Regex *re = regex_new(pat);
     REQUIRE(re != nullptr, "regex_new returned NULL");
-    n00b_list_t(Match) m = n00b_list_new_private(Match);
+    n00b_list_t(Match) m = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
     const char *input = "hello Zoroastrianism's world";
     REQUIRE(regex_find_all(re, (const uint8_t *)input, strlen(input), &m)
                 == N00B_REGEX_ENGINE_ERR_NONE,
@@ -862,7 +862,7 @@ TEST(capacity_exceeded_at_match)
     opts.max_dfa_capacity = 4;
     Regex *re = regex_with_options("a.*b.*c.*d", opts);
     assert(re != nullptr);
-    n00b_list_t(Match) m = n00b_list_new_private(Match);
+    n00b_list_t(Match) m = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
     n00b_regex_engine_err_t rc =
         regex_find_all(re, (const uint8_t *)"a___b___c___d", 13, &m);
     if (rc != N00B_REGEX_ENGINE_ERR_CAPACITY_EXCEEDED) {
@@ -896,7 +896,7 @@ TEST(unanchored_search_false_positive)
                                    strlen(cases[i].input), &has, &anc)
                == N00B_REGEX_ENGINE_ERR_NONE);
         assert(!has);
-        n00b_list_t(Match) spans = n00b_list_new_private(Match);
+        n00b_list_t(Match) spans = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
         assert(regex_find_all(re, (const uint8_t *)cases[i].input,
                               strlen(cases[i].input), &spans)
                == N00B_REGEX_ENGINE_ERR_NONE);
@@ -912,7 +912,7 @@ TEST(opts_unicode_false)
         regex_options_unicode(regex_options_default(), UNICODE_MODE_ASCII);
     Regex *re = regex_with_options("\\w+", opts);
     assert(re != nullptr);
-    n00b_list_t(Match) m = n00b_list_new_private(Match);
+    n00b_list_t(Match) m = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
     const char *cafe = "café"; // 5 bytes (UTF-8)
     assert(regex_find_all(re, (const uint8_t *)cafe, strlen(cafe), &m)
            == N00B_REGEX_ENGINE_ERR_NONE);
@@ -924,7 +924,7 @@ TEST(opts_unicode_false)
 
     Regex *re_u = regex_new("\\w+");
     assert(re_u != nullptr);
-    n00b_list_t(Match) mu = n00b_list_new_private(Match);
+    n00b_list_t(Match) mu = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
     assert(regex_find_all(re_u, (const uint8_t *)cafe, strlen(cafe), &mu)
            == N00B_REGEX_ENGINE_ERR_NONE);
     assert(n00b_list_len(mu) == 1);
@@ -940,7 +940,7 @@ TEST(opts_case_insensitive)
         regex_options_case_insensitive(regex_options_default(), true);
     Regex *re = regex_with_options("hello", opts);
     assert(re != nullptr);
-    n00b_list_t(Match) m = n00b_list_new_private(Match);
+    n00b_list_t(Match) m = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
     assert(regex_find_all(re, (const uint8_t *)"Hello HELLO hello", 17, &m)
            == N00B_REGEX_ENGINE_ERR_NONE);
     assert(n00b_list_len(m) == 3);
@@ -954,7 +954,7 @@ TEST(opts_dot_matches_new_line)
         regex_options_dot_matches_new_line(regex_options_default(), true);
     Regex *re = regex_with_options("a.b", opts);
     assert(re != nullptr);
-    n00b_list_t(Match) m = n00b_list_new_private(Match);
+    n00b_list_t(Match) m = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
     assert(regex_find_all(re, (const uint8_t *)"a\nb", 3, &m)
            == N00B_REGEX_ENGINE_ERR_NONE);
     assert(n00b_list_len(m) == 1);
@@ -965,7 +965,7 @@ TEST(opts_dot_matches_new_line)
 
     Regex *re2 = regex_new("a.b");
     assert(re2 != nullptr);
-    n00b_list_t(Match) m2 = n00b_list_new_private(Match);
+    n00b_list_t(Match) m2 = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
     assert(regex_find_all(re2, (const uint8_t *)"a\nb", 3, &m2)
            == N00B_REGEX_ENGINE_ERR_NONE);
     assert(n00b_list_len(m2) == 0);
@@ -977,7 +977,7 @@ TEST(opts_dot_all_inline_flag)
 {
     Regex *re = regex_new("(?s)a.b");
     assert(re != nullptr);
-    n00b_list_t(Match) m = n00b_list_new_private(Match);
+    n00b_list_t(Match) m = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
     assert(regex_find_all(re, (const uint8_t *)"a\nb", 3, &m)
            == N00B_REGEX_ENGINE_ERR_NONE);
     assert(n00b_list_len(m) == 1);
@@ -989,13 +989,13 @@ TEST(opts_dot_all_scoped_group)
 {
     Regex *re = regex_new("(?s:a.b).c");
     assert(re != nullptr);
-    n00b_list_t(Match) m = n00b_list_new_private(Match);
+    n00b_list_t(Match) m = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
     assert(regex_find_all(re, (const uint8_t *)"a\nbxc", 5, &m)
            == N00B_REGEX_ENGINE_ERR_NONE);
     assert(n00b_list_len(m) == 1);
     n00b_list_free(m);
 
-    n00b_list_t(Match) m2 = n00b_list_new_private(Match);
+    n00b_list_t(Match) m2 = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
     assert(regex_find_all(re, (const uint8_t *)"a\nb\nc", 5, &m2)
            == N00B_REGEX_ENGINE_ERR_NONE);
     assert(n00b_list_len(m2) == 0);
@@ -1009,7 +1009,7 @@ TEST(opts_ignore_whitespace)
         regex_options_ignore_whitespace(regex_options_default(), true);
     Regex *re = regex_with_options("hello \\ world", opts);
     assert(re != nullptr);
-    n00b_list_t(Match) m = n00b_list_new_private(Match);
+    n00b_list_t(Match) m = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
     assert(regex_find_all(re, (const uint8_t *)"hello world", 11, &m)
            == N00B_REGEX_ENGINE_ERR_NONE);
     assert(n00b_list_len(m) == 1);
@@ -1053,14 +1053,14 @@ TEST(word_match_lengths_en_sampled)
 
     Regex *re = regex_with_options(pattern, opts);
     REQUIRE(re != nullptr, "regex_with_options returned NULL");
-    n00b_list_t(Match) got = n00b_list_new_private(Match);
+    n00b_list_t(Match) got = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
     REQUIRE(regex_find_all(re, (const uint8_t *)input, in_len, &got)
                 == N00B_REGEX_ENGINE_ERR_NONE,
             "regex_find_all failed");
 
     RegexRef *rx = regex_ref_new_unicode(pattern, false);
     REQUIRE(rx != nullptr, "regex_ref_new_unicode returned NULL");
-    n00b_list_t(Match) exp = n00b_list_new_private(Match);
+    n00b_list_t(Match) exp = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
     REQUIRE(regex_ref_find_all(rx, (const uint8_t *)input, in_len, &exp)
                 == N00B_REGEX_ENGINE_ERR_NONE,
             "regex_ref_find_all failed");
@@ -1124,7 +1124,7 @@ run_file_hardened(const char *filename)
         if (re == nullptr) {
             continue;
         }
-        n00b_list_t(Match) got = n00b_list_new_private(Match);
+        n00b_list_t(Match) got = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
         n00b_regex_engine_err_t rc =
             regex_find_all(re, (const uint8_t *)tc->input,
                            tc->input_len, &got);
@@ -1170,8 +1170,8 @@ TEST(hardened_pathological)
                                                 regex_options_default(),
                                                 true));
     assert(re_hardened != nullptr);
-    n00b_list_t(Match) a = n00b_list_new_private(Match);
-    n00b_list_t(Match) b = n00b_list_new_private(Match);
+    n00b_list_t(Match) a = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
+    n00b_list_t(Match) b = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
     assert(regex_find_all(re_normal, (const uint8_t *)input, 1000, &a)
            == N00B_REGEX_ENGINE_ERR_NONE);
     assert(regex_find_all(re_hardened, (const uint8_t *)input, 1000, &b)
@@ -1194,8 +1194,8 @@ check_hardened_vs_normal(const char *pattern, const uint8_t *input, size_t len)
     }
     Regex *re_n = regex_new(pattern);
     assert(re_n != nullptr);
-    n00b_list_t(Match) normal   = n00b_list_new_private(Match);
-    n00b_list_t(Match) hardened = n00b_list_new_private(Match);
+    n00b_list_t(Match) normal   = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
+    n00b_list_t(Match) hardened = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
     assert(regex_find_all(re_n, input, len, &normal)
            == N00B_REGEX_ENGINE_ERR_NONE);
     assert(regex_find_all(re_s, input, len, &hardened)
@@ -1259,7 +1259,7 @@ TEST(hardened_bounded_repeat_tail)
     for (size_t i = 0; i < sizeof cases / sizeof cases[0]; ++i) {
         RegexRef *re_ref = regex_ref_new(cases[i].pattern);
         assert(re_ref != nullptr);
-        n00b_list_t(Match) expected = n00b_list_new_private(Match);
+        n00b_list_t(Match) expected = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
         assert(regex_ref_find_all(re_ref, (const uint8_t *)cases[i].input,
                                   cases[i].len, &expected)
                == N00B_REGEX_ENGINE_ERR_NONE);
@@ -1267,7 +1267,7 @@ TEST(hardened_bounded_repeat_tail)
             cases[i].pattern,
             regex_options_hardened(regex_options_default(), true));
         assert(re_u != nullptr);
-        n00b_list_t(Match) got = n00b_list_new_private(Match);
+        n00b_list_t(Match) got = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
         assert(regex_find_all(re_u, (const uint8_t *)cases[i].input,
                               cases[i].len, &got)
                == N00B_REGEX_ENGINE_ERR_NONE);
@@ -1314,8 +1314,8 @@ TEST(range_prefix_correctness)
             regex_options_hardened(regex_options_default(), true));
         assert(re_h != nullptr);
         for (size_t ii = 0; ii < sizeof inputs / sizeof inputs[0]; ++ii) {
-            n00b_list_t(Match) normal   = n00b_list_new_private(Match);
-            n00b_list_t(Match) hardened = n00b_list_new_private(Match);
+            n00b_list_t(Match) normal   = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
+            n00b_list_t(Match) hardened = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
             assert(regex_find_all(re, inputs[ii].bytes, inputs[ii].len,
                                   &normal)
                    == N00B_REGEX_ENGINE_ERR_NONE);
@@ -1362,8 +1362,8 @@ TEST(range_prefix_random_haystack)
                 patterns[pi],
                 regex_options_hardened(regex_options_default(), true));
             assert(re_s != nullptr);
-            n00b_list_t(Match) n = n00b_list_new_private(Match);
-            n00b_list_t(Match) h = n00b_list_new_private(Match);
+            n00b_list_t(Match) n = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
+            n00b_list_t(Match) h = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
             assert(regex_find_all(re, input, 256, &n)
                    == N00B_REGEX_ENGINE_ERR_NONE);
             assert(regex_find_all(re_s, input, 256, &h)
@@ -1393,7 +1393,7 @@ TEST(hardened_nullable_empty_after_dedup)
     for (size_t i = 0; i < sizeof cases / sizeof cases[0]; ++i) {
         Regex *re_n = regex_new(cases[i].pat);
         assert(re_n != nullptr);
-        n00b_list_t(Match) normal = n00b_list_new_private(Match);
+        n00b_list_t(Match) normal = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
         size_t input_len = strlen(cases[i].input);
         assert(regex_find_all(re_n, (const uint8_t *)cases[i].input,
                               input_len, &normal)
@@ -1403,7 +1403,7 @@ TEST(hardened_nullable_empty_after_dedup)
             cases[i].pat,
             regex_options_hardened(regex_options_default(), true));
         assert(re_h != nullptr);
-        n00b_list_t(Match) hardened = n00b_list_new_private(Match);
+        n00b_list_t(Match) hardened = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
         assert(regex_find_all(re_h, (const uint8_t *)cases[i].input,
                               input_len, &hardened)
                == N00B_REGEX_ENGINE_ERR_NONE);
@@ -1444,7 +1444,7 @@ TEST(hardened_cross_validate_all_toml)
             if (regex_is_hardened(re)) {
                 activated++;
             }
-            n00b_list_t(Match) got = n00b_list_new_private(Match);
+            n00b_list_t(Match) got = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
             assert(regex_find_all(re, (const uint8_t *)tc->input,
                                   tc->input_len, &got)
                    == N00B_REGEX_ENGINE_ERR_NONE);
@@ -1521,7 +1521,7 @@ TEST(word_boundary_inference)
 {
     Regex *re = regex_new("<.*(?<=<)bg");
     assert(re != nullptr);
-    n00b_list_t(Match) ms = n00b_list_new_private(Match);
+    n00b_list_t(Match) ms = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
     assert(regex_find_all(re, (const uint8_t *)"<bg", 3, &ms)
            == N00B_REGEX_ENGINE_ERR_NONE);
     assert(n00b_list_len(ms) == 1);
@@ -1546,7 +1546,7 @@ TEST(word_boundaries_loop)
     Regex *re = regex_new(
         "\\(\\?[:=!]|\\)|\\{\\d+\\b,?\\d*\\}|[+*]\\?|[()$^+*?.]");
     assert(re != nullptr);
-    n00b_list_t(Match) m = n00b_list_new_private(Match);
+    n00b_list_t(Match) m = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
     assert(regex_find_all(re, (const uint8_t *)"$", 1, &m)
            == N00B_REGEX_ENGINE_ERR_NONE);
     n00b_list_free(m);
@@ -1581,7 +1581,7 @@ TEST(fwd_la_2)
         regex_options_unicode(regex_options_default(), UNICODE_MODE_ASCII);
     Regex *re = regex_with_options(pattern, opts);
     assert(re != nullptr);
-    n00b_list_t(Match) m = n00b_list_new_private(Match);
+    n00b_list_t(Match) m = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
     assert(regex_find_all(re, hay, haylen, &m)
            == N00B_REGEX_ENGINE_ERR_NONE);
     n00b_list_free(m);
@@ -1602,7 +1602,7 @@ TEST(fwd_la_2_js)
         regex_options_unicode(regex_options_default(), UNICODE_MODE_ASCII);
     Regex *re = regex_with_options(pattern, opts);
     assert(re != nullptr);
-    n00b_list_t(Match) m = n00b_list_new_private(Match);
+    n00b_list_t(Match) m = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
     assert(regex_find_all(re, hay, use, &m)
            == N00B_REGEX_ENGINE_ERR_NONE);
     n00b_list_free(m);
@@ -1624,7 +1624,7 @@ TEST(fwd_la_3)
         regex_options_unicode(regex_options_default(), UNICODE_MODE_ASCII);
     Regex *re = regex_with_options(pattern, opts);
     assert(re != nullptr);
-    n00b_list_t(Match) m = n00b_list_new_private(Match);
+    n00b_list_t(Match) m = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
     assert(regex_find_all(re, hay, use, &m)
            == N00B_REGEX_ENGINE_ERR_NONE);
     n00b_list_free(m);
@@ -1652,8 +1652,8 @@ TEST(hardened_long_word)
     assert(re_h != nullptr);
     Regex *re_n = regex_new(p);
     assert(re_n != nullptr);
-    n00b_list_t(Match) a = n00b_list_new_private(Match);
-    n00b_list_t(Match) b = n00b_list_new_private(Match);
+    n00b_list_t(Match) a = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
+    n00b_list_t(Match) b = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
     assert(regex_find_all(re_n, input, input_len, &a)
            == N00B_REGEX_ENGINE_ERR_NONE);
     assert(regex_find_all(re_h, input, input_len, &b)
@@ -1678,7 +1678,7 @@ TEST(no_progress)
         memcpy(hay + i * unit_len, unit, unit_len);
     }
     hay[total] = '\0';
-    n00b_list_t(Match) m = n00b_list_new_private(Match);
+    n00b_list_t(Match) m = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
     assert(regex_find_all(re, (const uint8_t *)hay, total, &m)
            == N00B_REGEX_ENGINE_ERR_NONE);
     assert(n00b_list_len(m) != 0);
@@ -1716,7 +1716,7 @@ TEST(light_depth_pass_bdfa_prefix_falls_through_to_potential)
             memcpy(hay + k * unit_len, unit, unit_len);
         }
         hay[total] = '\0';
-        n00b_list_t(Match) m = n00b_list_new_private(Match);
+        n00b_list_t(Match) m = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
         assert(regex_find_all(re, (const uint8_t *)hay, total, &m)
                == N00B_REGEX_ENGINE_ERR_NONE);
         assert(n00b_list_len(m) == 100);
@@ -1744,7 +1744,7 @@ TEST(assets_path_js_unicode_uses_rev_literal)
             memcpy(hay + k * unit_len, unit, unit_len);
         }
         hay[total] = '\0';
-        n00b_list_t(Match) m = n00b_list_new_private(Match);
+        n00b_list_t(Match) m = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
         assert(regex_find_all(re, (const uint8_t *)hay, total, &m)
                == N00B_REGEX_ENGINE_ERR_NONE);
         assert(n00b_list_len(m) == 100);
@@ -1759,7 +1759,7 @@ TEST(lookahead_alternation_with_end_of_line)
     assert(re != nullptr);
     const uint8_t *input = (const uint8_t *)"xa xb x\nxc x";
     size_t input_len = 12;
-    n00b_list_t(Match) m = n00b_list_new_private(Match);
+    n00b_list_t(Match) m = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
     assert(regex_find_all(re, input, input_len, &m)
            == N00B_REGEX_ENGINE_ERR_NONE);
     size_t expected[] = {0, 6, 11};
@@ -1783,7 +1783,7 @@ TEST(rev_bot_skip_terminates_fast)
     assert(re != nullptr);
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);
-    n00b_list_t(Match) m = n00b_list_new_private(Match);
+    n00b_list_t(Match) m = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
     assert(regex_find_all(re, big, big_len, &m)
            == N00B_REGEX_ENGINE_ERR_NONE);
     clock_gettime(CLOCK_MONOTONIC, &t1);
@@ -1807,7 +1807,7 @@ TEST(is_match_agrees_with_find_all_for_lookahead)
     const uint8_t *hay0 = (const uint8_t *)"xa xb x\nxc x";
     size_t hay0_len = 12;
     bool im = false;
-    n00b_list_t(Match) m = n00b_list_new_private(Match);
+    n00b_list_t(Match) m = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
     assert(regex_is_match(re, hay0, hay0_len, &im)
            == N00B_REGEX_ENGINE_ERR_NONE);
     assert(regex_find_all(re, hay0, hay0_len, &m)
@@ -1824,7 +1824,7 @@ TEST(is_match_agrees_with_find_all_for_lookahead)
     };
     for (size_t i = 0; i < 3; ++i) {
         bool im2 = false;
-        n00b_list_t(Match) m2 = n00b_list_new_private(Match);
+        n00b_list_t(Match) m2 = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
         assert(regex_is_match(re, hays[i].bytes, hays[i].len, &im2)
                == N00B_REGEX_ENGINE_ERR_NONE);
         assert(regex_find_all(re, hays[i].bytes, hays[i].len, &m2)
@@ -1858,7 +1858,7 @@ TEST(alternation_prefix_soundness_bulk)
         }
     }
     assert(!found_dfn);
-    n00b_list_t(Match) m = n00b_list_new_private(Match);
+    n00b_list_t(Match) m = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
     assert(regex_find_all(re, hay, total1, &m)
            == N00B_REGEX_ENGINE_ERR_NONE);
     assert(n00b_list_len(m) == 500);
@@ -1875,7 +1875,7 @@ TEST(alternation_prefix_soundness_bulk)
     for (int i = 0; i < 200; ++i) {
         memcpy(hay2 + i * u2len, unit2, u2len);
     }
-    n00b_list_t(Match) m2 = n00b_list_new_private(Match);
+    n00b_list_t(Match) m2 = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
     assert(regex_find_all(re2, hay2, total2, &m2)
            == N00B_REGEX_ENGINE_ERR_NONE);
     assert(n00b_list_len(m2) == 200);
@@ -1898,8 +1898,8 @@ TEST(trailing_dollar_after_top_star_pruned)
     const uint8_t *hay2 = (const uint8_t *)"abc def ghi\njkl mno\npqr";
     size_t h2  = 23;
 
-    n00b_list_t(Match) a = n00b_list_new_private(Match);
-    n00b_list_t(Match) b = n00b_list_new_private(Match);
+    n00b_list_t(Match) a = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
+    n00b_list_t(Match) b = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
     assert(regex_find_all(with_d, hay, hl, &a)
            == N00B_REGEX_ENGINE_ERR_NONE);
     assert(regex_find_all(without_d, hay, hl, &b)
@@ -1908,8 +1908,8 @@ TEST(trailing_dollar_after_top_star_pruned)
     n00b_list_free(a);
     n00b_list_free(b);
 
-    n00b_list_t(Match) c = n00b_list_new_private(Match);
-    n00b_list_t(Match) d = n00b_list_new_private(Match);
+    n00b_list_t(Match) c = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
+    n00b_list_t(Match) d = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
     assert(regex_find_all(with_d, hay2, h2, &c)
            == N00B_REGEX_ENGINE_ERR_NONE);
     assert(regex_find_all(without_d, hay2, h2, &d)
@@ -1930,7 +1930,7 @@ TEST(empty_language_short_circuits)
     uint8_t *big = n00b_alloc_array(uint8_t, big_len);
     assert(big != nullptr);
     memset(big, 'x', big_len);
-    n00b_list_t(Match) m = n00b_list_new_private(Match);
+    n00b_list_t(Match) m = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
     assert(regex_find_all(re, big, big_len, &m)
            == N00B_REGEX_ENGINE_ERR_NONE);
     assert(n00b_list_len(m) == 0);
@@ -1941,7 +1941,7 @@ TEST(empty_language_short_circuits)
            == N00B_REGEX_ENGINE_ERR_NONE);
     assert(!im);
 
-    n00b_list_t(Match) m2 = n00b_list_new_private(Match);
+    n00b_list_t(Match) m2 = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
     assert(regex_find_all(re, (const uint8_t *)"", 0, &m2)
            == N00B_REGEX_ENGINE_ERR_NONE);
     assert(n00b_list_len(m2) == 0);
@@ -1990,7 +1990,7 @@ TEST(rev_literal_search)
 {
     Regex *re = regex_new("[\\s\\S]+(?<=x)foo[\\s\\S]+");
     assert(re != nullptr);
-    n00b_list_t(Match) m = n00b_list_new_private(Match);
+    n00b_list_t(Match) m = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
     assert(regex_find_all(re, (const uint8_t *)"axfoo def", 9, &m)
            == N00B_REGEX_ENGINE_ERR_NONE);
     assert(n00b_list_len(m) == 1);
@@ -2032,7 +2032,7 @@ TEST(probe_alt)
         memcpy(hay + i * ulen, unit, ulen);
     }
     hay[total] = '\0';
-    n00b_list_t(Match) ms = n00b_list_new_private(Match);
+    n00b_list_t(Match) ms = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
     assert(regex_find_all(re, (const uint8_t *)hay, total, &ms)
            == N00B_REGEX_ENGINE_ERR_NONE);
     size_t counts[3] = {0, 0, 0};
@@ -2065,7 +2065,7 @@ TEST(probe_nettv)
     assert(re != nullptr);
     const uint8_t *hay = (const uint8_t *)"xyz NETTV/3.1 abc NETTV/3.1 end";
     size_t hl = 31;
-    n00b_list_t(Match) ms = n00b_list_new_private(Match);
+    n00b_list_t(Match) ms = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
     assert(regex_find_all(re, hay, hl, &ms)
            == N00B_REGEX_ENGINE_ERR_NONE);
     const char *kind = regex_prefix_kind_name(re);
@@ -2283,7 +2283,7 @@ TEST(accel_skip_lazy)
         opts.max_dfa_capacity = 10000;
         Regex *re = regex_with_options(tc->pattern, opts);
         assert(re != nullptr);
-        n00b_list_t(Match) got = n00b_list_new_private(Match);
+        n00b_list_t(Match) got = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
         assert(regex_find_all(re, (const uint8_t *)tc->input,
                               tc->input_len, &got)
                == N00B_REGEX_ENGINE_ERR_NONE);
@@ -2431,8 +2431,8 @@ TEST(auto_harden_toml)
                 {(const uint8_t *)"|  |\n| a |\n|  |", 15},
             };
             for (size_t ii = 0; ii < 4; ++ii) {
-                n00b_list_t(Match) a = n00b_list_new_private(Match);
-                n00b_list_t(Match) b = n00b_list_new_private(Match);
+                n00b_list_t(Match) a = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
+                n00b_list_t(Match) b = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
                 assert(regex_find_all(re, inputs[ii].bytes,
                                       inputs[ii].len, &a)
                        == N00B_REGEX_ENGINE_ERR_NONE);
@@ -2588,7 +2588,7 @@ TEST(hardened_always_nullable_empty_matches)
         Regex *re = regex_with_options(cases[i].pat, opts);
         assert(re != nullptr);
         assert(regex_is_hardened(re));
-        n00b_list_t(Match) got = n00b_list_new_private(Match);
+        n00b_list_t(Match) got = n00b_list_new_private(Match, .scan_kind = N00B_GC_SCAN_KIND_NONE);
         assert(regex_find_all(re, cases[i].input, cases[i].in_len, &got)
                == N00B_REGEX_ENGINE_ERR_NONE);
         assert(list_matches_equal(&got, cases[i].expected, cases[i].exp_len));

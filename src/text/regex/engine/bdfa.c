@@ -164,7 +164,8 @@ static NodeU16Dict *node_u16_dict_new(n00b_allocator_t *allocator)
 {
     NodeU16Dict *m = n00b_alloc_with_opts(
         NodeU16Dict, &(n00b_alloc_opts_t){.allocator = allocator});
-    n00b_dict_init(m, .skip_obj_hash = true, .allocator = allocator);
+    n00b_dict_init(m, .skip_obj_hash = true, .allocator = allocator,
+                   .scan_kind = N00B_GC_SCAN_KIND_NONE);
     return m;
 }
 

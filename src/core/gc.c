@@ -16,6 +16,7 @@
 #include <setjmp.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 
 #include "n00b.h"
 #include "core/gc.h"
@@ -572,9 +573,22 @@ n00b_visit_possible_pointer(n00b_collect_t *ctx,
                     n00b_alloc_range_t *range = n00b_variant_get(
                         rnode->data, n00b_alloc_range_t *);
 
-                    n00b_add_range_to_worklist(range->start,
-                                              range->len / sizeof(void *),
-                                              ctx);
+                    // Headerless pool allocations carry their scan
+                    // shape on the alloc_range_t record (there is no
+                    // inline header or OOB entry where it could live).
+                    // Honour NONE here: many pool callers (notably the
+                    // regex pipeline's POD dicts and arrays) need their
+                    // data to be invisible to the conservative scanner.
+                    if (range->scan_kind == N00B_GC_SCAN_KIND_NONE) {
+                        break;
+                    }
+                    uint32_t nwords = range->len / sizeof(void *);
+                    if (range->scan_kind == N00B_GC_SCAN_KIND_EVERY_OTHER) {
+                        n00b_add_range_strided_to_worklist(range->start,
+                                                            nwords, 2, 0, ctx);
+                    } else {
+                        n00b_add_range_to_worklist(range->start, nwords, ctx);
+                    }
                     break;
                 }
             }

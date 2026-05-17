@@ -258,7 +258,8 @@ solver_new(n00b_allocator_t *allocator)
     // raw key bits is the only correct choice.  skip_obj_hash = true with
     // hash = nullptr routes compute_hash() through n00b_hash_raw(key, ksz).
     n00b_dict_init(&s->cache->inner, .skip_obj_hash = true,
-                   .allocator = allocator);
+                   .allocator = allocator,
+                   .scan_kind = N00B_GC_SCAN_KIND_NONE);
 
     (void)solver_init_entry(s, solver_empty()); // 0
     (void)solver_init_entry(s, solver_full());  // 1
