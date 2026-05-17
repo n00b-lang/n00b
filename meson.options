@@ -80,3 +80,20 @@ option('enable_freetype',
     type: 'boolean',
     value: true,
     description: 'Build with FreeType font rendering (required for pixel text in notcurses).')
+
+# ----------------------------------------------------------------------
+# n00b_attest module — signer backends
+# ----------------------------------------------------------------------
+# TODO(WP-002): this option is a placeholder declared in WP-001 Phase 1
+# so the value space is reserved on the build surface before any signer
+# backend ships. It is intentionally NOT consumed by any meson logic in
+# this WP — there are no backends yet, and the choice has no effect on
+# the produced libn00b. WP-002 (signing) wires the first real value
+# ('file') through to a conditional `n00b_attest_src` extension and
+# starts switching on the value here. Until then this is a no-op knob.
+option('attest_backend',
+    type: 'combo',
+    choices: ['none', 'file', 'env', 'keychain', 'op', 'vault',
+              'aws_sm', 'gcp_sm', 'az_kv'],
+    value: 'none',
+    description: 'n00b_attest signer backend (no-op placeholder; WP-001 reserves the option name, WP-002 wires the first real value).')

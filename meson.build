@@ -462,6 +462,12 @@ subdir('src/data')
 subdir('src/net/quic')
 subdir('src/net/http')
 
+# ============================================================================
+# Attestation (in-toto Statement + DSSE envelopes; signers / verifier
+# arrive in later WPs — see .agents/work-plans/wp-001-* / WP-002 plan).
+# ============================================================================
+
+subdir('src/attest')
 # Aggregate per-module source lists into the libn00b source set. Each
 # entry above (`subdir('src/<mod>')`) is responsible for declaring a
 # `n00b_<mod>_src` variable; we just glue them together here.
@@ -483,7 +489,8 @@ n00b_dll_src = (
     n00b_ml_src +
     n00b_data_src +
     n00b_quic_src +
-    n00b_http_src
+    n00b_http_src +
+    n00b_attest_src
 )
 
 # Build generated unicode tables with --no-ncc (they are pure data,
@@ -622,6 +629,30 @@ chalk_module_test = executable('test_chalk_module',
     kwargs: test_common_kwargs,
 )
 test('chalk_module', chalk_module_test, suite: 'unit')
+
+attest_module_test = executable('test_attest_module',
+    ['test/unit/test_attest_module.c'],
+    kwargs: test_common_kwargs,
+)
+test('attest_module', attest_module_test, suite: 'unit')
+
+attest_statement_roundtrip_test = executable('test_attest_statement_roundtrip',
+    ['test/unit/test_attest_statement_roundtrip.c'],
+    kwargs: test_common_kwargs,
+)
+test('attest_statement_roundtrip', attest_statement_roundtrip_test, suite: 'unit')
+
+attest_dsse_roundtrip_test = executable('test_attest_dsse_roundtrip',
+    ['test/unit/test_attest_dsse_roundtrip.c'],
+    kwargs: test_common_kwargs,
+)
+test('attest_dsse_roundtrip', attest_dsse_roundtrip_test, suite: 'unit')
+
+attest_arena_lifecycle_test = executable('test_attest_arena_lifecycle',
+    ['test/unit/test_attest_arena_lifecycle.c'],
+    kwargs: test_common_kwargs,
+)
+test('attest_arena_lifecycle', attest_arena_lifecycle_test, suite: 'unit')
 
 list_test = executable('test_list',
     ['test/unit/test_list.c'],
