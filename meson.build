@@ -400,6 +400,12 @@ subdir('src/compiler/objfile')
 
 subdir('src/chalk')
 
+# ============================================================================
+# Machine learning (feature-hashed binary logistic regression)
+# ============================================================================
+
+subdir('src/ml')
+
 # Aggregate per-module source lists into the libn00b source set. Each
 # entry above (`subdir('src/<mod>')`) is responsible for declaring a
 # `n00b_<mod>_src` variable; we just glue them together here.
@@ -417,7 +423,8 @@ n00b_dll_src = (
     n00b_typecheck_src +
     n00b_compiler_src +
     n00b_objfile_src +
-    n00b_chalk_src
+    n00b_chalk_src +
+    n00b_ml_src
 )
 
 # Build generated unicode tables with --no-ncc (they are pure data,
@@ -1225,6 +1232,28 @@ event_normalize_test = executable('test_event_normalize',
     kwargs: test_common_kwargs,
 )
 test('event_normalize', event_normalize_test, suite: 'unit')
+
+# ============================================================================
+# Machine learning tests (heap + stats supporting primitives + ml)
+# ============================================================================
+
+heap_test = executable('test_heap',
+    ['test/unit/test_heap.c'],
+    kwargs: test_common_kwargs,
+)
+test('heap', heap_test, suite: 'unit')
+
+stats_test = executable('test_stats',
+    ['test/unit/test_stats.c'],
+    kwargs: test_common_kwargs,
+)
+test('stats', stats_test, suite: 'unit')
+
+ml_test = executable('test_ml',
+    ['test/unit/test_ml.c'],
+    kwargs: test_common_kwargs,
+)
+test('ml', ml_test, suite: 'unit')
 
 if conf_cocoa
   cocoa_test = executable('test_cocoa_backend',
