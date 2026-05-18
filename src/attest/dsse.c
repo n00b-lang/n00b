@@ -18,16 +18,16 @@
  * form). The architecture text in docs/attest/02-architecture.md §5.2
  * agrees with this; no drift surfaced during implementation.
  *
- * Base64 (RFC 4648 with '=' padding) is implemented inline in this
- * file as a file-scope static. libn00b does not currently expose a
- * first-class base64 primitive (a grep over include/ + src/core + src/util
- * turns up nothing); libchalk's macos_wrap codec carries the same
- * inline implementation. This is flagged in the sub-agent return so
- * the orchestrator can decide whether to lift it into a shared
- * libn00b util in a later WP.
+ * Base64 (RFC 4648 with '=' padding) is delegated to the
+ * libn00b util `n00b_base64_*` (include/util/base64.h, lifted in
+ * WP-002 Phase 1; thin wrapper around picotls's `ptls_base64_*`
+ * primitives). The dsse.c-local inline encoder/decoder removed in
+ * that same lift — libchalk's `src/chalk/macos_wrap.c` now consumes
+ * the same util.
  */
 
 #include <attest/n00b_attest.h>
+#include <util/base64.h>
 
 #include "core/buffer.h"
 #include "core/string.h"
@@ -41,14 +41,10 @@
 #include <string.h>
 
 // ---------------------------------------------------------------------------
-// Module-domain error codes.
+// Module-domain error codes are now declared in
+// `include/attest/n00b_attest_error.h` (V-2 fix during WP-002 Phase 3 — see
+// D-031 A-1 closure). The umbrella header pulls them in.
 // ---------------------------------------------------------------------------
-
-#define N00B_ATTEST_ERR_DSSE_BAD_INPUT       (-2001)
-#define N00B_ATTEST_ERR_DSSE_NO_PAYLOAD      (-2002)
-#define N00B_ATTEST_ERR_DSSE_BAD_JSON        (-2003)
-#define N00B_ATTEST_ERR_DSSE_WRONG_TYPE      (-2004)
-#define N00B_ATTEST_ERR_DSSE_BAD_BASE64      (-2005)
 
 // ---------------------------------------------------------------------------
 // DSSE constants.
@@ -61,128 +57,29 @@ static const char k_dsse_pae_prefix[]   = "DSSEv1";
 // Private type.
 //
 // The envelope holds a borrowed pointer to the payload buffer per D-030
-// W-3 (no copy, no allocator threading on set_payload).
+// W-3 (no copy, no allocator threading on set_payload), plus a parallel
+// pair of lists carrying the (keyid, sig) signature entries appended via
+// `n00b_attest_envelope_add_signature` / `n00b_attest_envelope_sign`. The
+// per-entry shape (D-016) is `{ "keyid": "<hex>", "sig": "<base64>" }` —
+// algorithm-agnostic; the envelope code does not interpret either field.
+//
+// We use parallel lists rather than a struct array because the existing
+// `subject_entry_t` precedent in `statement.c` uses the same shape and the
+// number of signatures per envelope is small (typically 1 — the multi-
+// signer flow FR-11 is deferred). No header break.
 // ---------------------------------------------------------------------------
 
 struct n00b_attest_envelope {
-    n00b_buffer_t    *payload;    // borrowed; lifetime managed by caller
-    n00b_allocator_t *allocator;  // for everything the envelope itself produces
+    n00b_buffer_t    *payload;     // borrowed; lifetime managed by caller
+    n00b_allocator_t *allocator;   // for everything the envelope itself produces
+
+    // signature_keyids[i] paired with signature_sigs[i]; both lists grow
+    // together via `n00b_attest_envelope_add_signature`. Stored as private
+    // copies — the caller may free the inputs immediately after the call.
+    n00b_list_t(n00b_string_t *) signature_keyids;
+    n00b_list_t(n00b_buffer_t *) signature_sigs;
+    bool signatures_initialized;
 };
-
-// ---------------------------------------------------------------------------
-// Base64 (RFC 4648, '=' padded).
-// ---------------------------------------------------------------------------
-
-static const char k_b64_alphabet[64] =
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-    "abcdefghijklmnopqrstuvwxyz"
-    "0123456789+/";
-
-static n00b_string_t *
-base64_encode(const uint8_t   *data,
-              size_t           len,
-              n00b_allocator_t *allocator)
-{
-    size_t triples = len / 3;
-    size_t rem     = len - triples * 3;
-    size_t outlen  = triples * 4 + (rem ? 4 : 0);
-
-    char *out = n00b_alloc_array_with_opts(char,
-                                           outlen,
-                                           &(n00b_alloc_opts_t){
-                                               .allocator = allocator,
-                                           });
-    size_t op = 0;
-    size_t ip = 0;
-    for (size_t i = 0; i < triples; i++) {
-        uint32_t v = ((uint32_t)data[ip]     << 16)
-                   | ((uint32_t)data[ip + 1] << 8)
-                   | (uint32_t)data[ip + 2];
-        ip += 3;
-        out[op++] = k_b64_alphabet[(v >> 18) & 0x3f];
-        out[op++] = k_b64_alphabet[(v >> 12) & 0x3f];
-        out[op++] = k_b64_alphabet[(v >> 6)  & 0x3f];
-        out[op++] = k_b64_alphabet[v & 0x3f];
-    }
-    if (rem == 1) {
-        uint32_t v = (uint32_t)data[ip] << 16;
-        out[op++] = k_b64_alphabet[(v >> 18) & 0x3f];
-        out[op++] = k_b64_alphabet[(v >> 12) & 0x3f];
-        out[op++] = '=';
-        out[op++] = '=';
-    }
-    else if (rem == 2) {
-        uint32_t v = ((uint32_t)data[ip]     << 16)
-                   | ((uint32_t)data[ip + 1] << 8);
-        out[op++] = k_b64_alphabet[(v >> 18) & 0x3f];
-        out[op++] = k_b64_alphabet[(v >> 12) & 0x3f];
-        out[op++] = k_b64_alphabet[(v >> 6)  & 0x3f];
-        out[op++] = '=';
-    }
-    return n00b_string_from_raw(out,
-                                (int64_t)outlen,
-                                .allocator = allocator);
-}
-
-static int
-b64_dec_char(char c)
-{
-    if (c >= 'A' && c <= 'Z') return c - 'A';
-    if (c >= 'a' && c <= 'z') return c - 'a' + 26;
-    if (c >= '0' && c <= '9') return c - '0' + 52;
-    if (c == '+') return 62;
-    if (c == '/') return 63;
-    return -1;
-}
-
-static n00b_buffer_t *
-base64_decode(const char       *src,
-              size_t            len,
-              n00b_allocator_t *allocator)
-{
-    // Trim trailing whitespace.
-    while (len > 0 && (src[len - 1] == '\n' || src[len - 1] == '\r'
-                       || src[len - 1] == ' '  || src[len - 1] == '\t')) {
-        len--;
-    }
-    if ((len & 3) != 0) {
-        return nullptr;
-    }
-    if (len == 0) {
-        return n00b_buffer_from_bytes(nullptr,
-                                      0,
-                                      .allocator = allocator);
-    }
-
-    size_t pad = 0;
-    if (src[len - 1] == '=') pad++;
-    if (len > 1 && src[len - 2] == '=') pad++;
-    size_t out_len = (len / 4) * 3 - pad;
-    uint8_t *out = (uint8_t *)n00b_alloc_array_with_opts(
-        char,
-        out_len,
-        &(n00b_alloc_opts_t){
-            .allocator = allocator,
-        });
-    size_t op = 0;
-    for (size_t i = 0; i < len; i += 4) {
-        int a = b64_dec_char(src[i]);
-        int b = b64_dec_char(src[i + 1]);
-        int c = src[i + 2] == '=' ? 0 : b64_dec_char(src[i + 2]);
-        int d = src[i + 3] == '=' ? 0 : b64_dec_char(src[i + 3]);
-        if (a < 0 || b < 0 || c < 0 || d < 0) {
-            return nullptr;
-        }
-        uint32_t v = ((uint32_t)a << 18) | ((uint32_t)b << 12)
-                   | ((uint32_t)c << 6)  | (uint32_t)d;
-        if (op < out_len) out[op++] = (uint8_t)((v >> 16) & 0xff);
-        if (op < out_len) out[op++] = (uint8_t)((v >> 8) & 0xff);
-        if (op < out_len) out[op++] = (uint8_t)(v & 0xff);
-    }
-    return n00b_buffer_from_bytes((char *)out,
-                                  (int64_t)out_len,
-                                  .allocator = allocator);
-}
 
 // ---------------------------------------------------------------------------
 // Decimal-ASCII helpers (PAE length fields).
@@ -212,6 +109,26 @@ dec_ascii_write(char *dst, size_t v, size_t n)
 // Public surface.
 // ---------------------------------------------------------------------------
 
+// Lazy-initialize the signature lists on first append. We don't
+// build them in `_envelope_new` because every envelope produced
+// pre-Phase-3 went without — the lazy-init keeps the construct-
+// then-discard fast path (the existing roundtrip test pattern)
+// unchanged while making the lists available the moment a
+// signature is appended.
+static void
+ensure_signatures_initialized(n00b_attest_envelope_t *env,
+                              n00b_allocator_t       *alloc_for_call)
+{
+    if (env->signatures_initialized) {
+        return;
+    }
+    env->signature_keyids = n00b_list_new(n00b_string_t *,
+                                          .allocator = alloc_for_call);
+    env->signature_sigs   = n00b_list_new(n00b_buffer_t *,
+                                          .allocator = alloc_for_call);
+    env->signatures_initialized = true;
+}
+
 n00b_attest_envelope_t *
 n00b_attest_envelope_new() _kargs
 {
@@ -223,8 +140,9 @@ n00b_attest_envelope_new() _kargs
         &(n00b_alloc_opts_t){
             .allocator = allocator,
         });
-    env->payload   = nullptr;
-    env->allocator = allocator;
+    env->payload                = nullptr;
+    env->allocator              = allocator;
+    env->signatures_initialized = false;
     return env;
 }
 
@@ -260,9 +178,13 @@ n00b_attest_envelope_serialize(n00b_attest_envelope_t *env) _kargs
 
     n00b_allocator_t *alloc_for_call = allocator ? allocator : env->allocator;
 
-    n00b_string_t *b64 = base64_encode((const uint8_t *)env->payload->data,
-                                       env->payload->byte_len,
-                                       alloc_for_call);
+    auto enc_r = n00b_base64_encode(env->payload,
+                                    .allocator = alloc_for_call);
+    if (n00b_result_is_err(enc_r)) {
+        return n00b_result_err(n00b_buffer_t *,
+                               N00B_ATTEST_ERR_DSSE_BAD_INPUT);
+    }
+    n00b_string_t *b64 = n00b_result_get(enc_r);
 
     // NUL-terminate the base64 string for n00b_json_string_new.
     char *b64_cstr = n00b_alloc_array_with_opts(
@@ -281,9 +203,56 @@ n00b_attest_envelope_serialize(n00b_attest_envelope_t *env) _kargs
     n00b_json_object_put(root,
                          "payload",
                          n00b_json_string_new(b64_cstr));
-    // WP-001: signatures is always emitted as []. The per-entry shape
-    // (keyid + sig opaque strings, D-016) lands in WP-002.
-    n00b_json_object_put(root, "signatures", n00b_json_array_new());
+
+    // WP-002 Phase 3: emit each appended `{keyid, sig}` pair into the
+    // `signatures[]` array. The per-entry shape (D-016) is
+    // `{ "keyid": "<hex>", "sig": "<base64>" }` — algorithm-agnostic.
+    // If no signatures were appended the array is emitted empty
+    // (matching the WP-001 behavior for envelopes that go through
+    // serialize without signing — e.g., the existing roundtrip test).
+    n00b_json_node_t *sigs_arr = n00b_json_array_new();
+    if (env->signatures_initialized) {
+        size_t nsigs = env->signature_keyids.len;
+        for (size_t i = 0; i < nsigs; i++) {
+            n00b_string_t *kid = env->signature_keyids.data[i];
+            n00b_buffer_t *sig = env->signature_sigs.data[i];
+
+            // Base64-encode the sig bytes per DSSE wire shape.
+            auto sig_enc_r = n00b_base64_encode(sig,
+                                                .allocator = alloc_for_call);
+            if (n00b_result_is_err(sig_enc_r)) {
+                return n00b_result_err(n00b_buffer_t *,
+                                       N00B_ATTEST_ERR_DSSE_BAD_INPUT);
+            }
+            n00b_string_t *sig_b64 = n00b_result_get(sig_enc_r);
+
+            // NUL-terminate keyid + sig_b64 so the JSON helpers can
+            // ingest them (`n00b_json_string_new` takes `const char *`).
+            char *kid_cstr = n00b_alloc_array_with_opts(
+                char,
+                kid->u8_bytes + 1,
+                &(n00b_alloc_opts_t){.allocator = alloc_for_call});
+            memcpy(kid_cstr, kid->data, kid->u8_bytes);
+            kid_cstr[kid->u8_bytes] = '\0';
+
+            char *sig_b64_cstr = n00b_alloc_array_with_opts(
+                char,
+                sig_b64->u8_bytes + 1,
+                &(n00b_alloc_opts_t){.allocator = alloc_for_call});
+            memcpy(sig_b64_cstr, sig_b64->data, sig_b64->u8_bytes);
+            sig_b64_cstr[sig_b64->u8_bytes] = '\0';
+
+            n00b_json_node_t *entry = n00b_json_object_new();
+            n00b_json_object_put(entry,
+                                 "keyid",
+                                 n00b_json_string_new(kid_cstr));
+            n00b_json_object_put(entry,
+                                 "sig",
+                                 n00b_json_string_new(sig_b64_cstr));
+            n00b_json_array_push(sigs_arr, entry);
+        }
+    }
+    n00b_json_object_put(root, "signatures", sigs_arr);
 
     char *encoded = n00b_json_encode(root, .pretty = false);
     if (encoded == nullptr) {
@@ -336,13 +305,17 @@ n00b_attest_envelope_parse(n00b_buffer_t *bytes) _kargs
     n00b_attest_envelope_t *env = n00b_attest_envelope_new(
         .allocator = allocator);
 
-    n00b_buffer_t *decoded = base64_decode(payload_node->string,
-                                           strlen(payload_node->string),
-                                           env->allocator);
-    if (decoded == nullptr) {
+    // `payload_node->string` is a NUL-terminated `char *` from the
+    // JSON parser. Wrap it as an n00b_string_t for the base64 util.
+    n00b_string_t *b64_in = n00b_string_from_cstr(payload_node->string,
+                                                  .allocator = env->allocator);
+    auto dec_r = n00b_base64_decode(b64_in,
+                                    .allocator = env->allocator);
+    if (n00b_result_is_err(dec_r)) {
         return n00b_result_err(n00b_attest_envelope_t *,
                                N00B_ATTEST_ERR_DSSE_BAD_BASE64);
     }
+    n00b_buffer_t *decoded = n00b_result_get(dec_r);
 
     // The decoded payload is owned by `allocator` (per the @kw on
     // _envelope_parse). Storing it as the envelope's borrowed payload
@@ -424,4 +397,106 @@ n00b_attest_envelope_pae_bytes(n00b_attest_envelope_t *env) _kargs
                                                 (int64_t)total,
                                                 .allocator = alloc_for_call);
     return n00b_result_ok(n00b_buffer_t *, out);
+}
+
+// ---------------------------------------------------------------------------
+// Envelope signature population (Phase 3).
+//
+// `_add_signature` is the low-level entry point: appends a pre-computed
+// `{keyid, sig}` pair to the envelope. Stores PRIVATE COPIES of both
+// inputs — the caller may free `keyid` and `sig` immediately after the
+// call. `_sign` is the high-level composition: it computes the PAE
+// bytes, runs the signer over them, fetches the cached keyid from the
+// signer, and dispatches the pair through `_add_signature`.
+//
+// Errors are surfaced through the same `N00B_ATTEST_ERR_*` namespace as
+// the rest of the module. The signer's `N00B_ATTEST_ERR_SIGN_FAILED`
+// propagates verbatim when sign fails.
+// ---------------------------------------------------------------------------
+
+n00b_result_t(bool)
+n00b_attest_envelope_add_signature(n00b_attest_envelope_t *env,
+                                   n00b_string_t          *keyid,
+                                   n00b_buffer_t          *sig) _kargs
+{
+    n00b_allocator_t *allocator = nullptr;
+}
+{
+    if (env == nullptr || keyid == nullptr || sig == nullptr) {
+        return n00b_result_err(bool, N00B_ATTEST_ERR_DSSE_BAD_INPUT);
+    }
+    if (keyid->u8_bytes == 0 || sig->byte_len == 0) {
+        return n00b_result_err(bool, N00B_ATTEST_ERR_DSSE_BAD_INPUT);
+    }
+
+    n00b_allocator_t *alloc_for_call = allocator ? allocator : env->allocator;
+
+    ensure_signatures_initialized(env, alloc_for_call);
+
+    // Store private copies — the caller may free `keyid` / `sig`
+    // immediately after this call (per the header's doxygen). The
+    // copies are owned by the envelope's effective allocator.
+    n00b_string_t *kid_copy = n00b_string_from_raw(keyid->data,
+                                                   (int64_t)keyid->u8_bytes,
+                                                   .allocator = alloc_for_call);
+    n00b_buffer_t *sig_copy = n00b_buffer_from_bytes(sig->data,
+                                                     (int64_t)sig->byte_len,
+                                                     .allocator = alloc_for_call);
+
+    n00b_list_push(env->signature_keyids, kid_copy);
+    n00b_list_push(env->signature_sigs, sig_copy);
+    return n00b_result_ok(bool, true);
+}
+
+n00b_result_t(bool)
+n00b_attest_envelope_sign(n00b_attest_envelope_t *env,
+                          n00b_attest_signer_t   *signer) _kargs
+{
+    n00b_allocator_t *allocator = nullptr;
+}
+{
+    if (env == nullptr || signer == nullptr) {
+        return n00b_result_err(bool, N00B_ATTEST_ERR_DSSE_BAD_INPUT);
+    }
+    if (env->payload == nullptr) {
+        return n00b_result_err(bool, N00B_ATTEST_ERR_DSSE_NO_PAYLOAD);
+    }
+
+    n00b_allocator_t *alloc_for_call = allocator ? allocator : env->allocator;
+
+    // PAE the envelope. Failures propagate via the envelope-domain
+    // error namespace (e.g., NO_PAYLOAD if the caller forgot
+    // _set_payload — but we already checked above).
+    auto pae_r = n00b_attest_envelope_pae_bytes(env,
+                                                .allocator = alloc_for_call);
+    if (n00b_result_is_err(pae_r)) {
+        return n00b_result_err(bool, n00b_result_get_err(pae_r));
+    }
+    n00b_buffer_t *pae = n00b_result_get(pae_r);
+
+    // Sign the PAE bytes. Failures propagate through the signer-domain
+    // error namespace (typically N00B_ATTEST_ERR_SIGN_FAILED).
+    auto sig_r = n00b_attest_signer_sign(signer,
+                                         pae,
+                                         .allocator = alloc_for_call);
+    if (n00b_result_is_err(sig_r)) {
+        return n00b_result_err(bool, n00b_result_get_err(sig_r));
+    }
+    n00b_buffer_t *sig = n00b_result_get(sig_r);
+
+    // Fetch the cached keyid (SHA-256 of SPKI DER, hex-encoded per
+    // D-039 — the file backend computes + caches at load time, so
+    // this is a pointer lookup, NOT a recomputation).
+    n00b_string_t *keyid = n00b_attest_signer_keyid(signer);
+    if (keyid == nullptr) {
+        return n00b_result_err(bool, N00B_ATTEST_ERR_DSSE_BAD_INPUT);
+    }
+
+    // Dispatch through the low-level entry so multi-signer flows
+    // (FR-11, deferred) can use the same path against pre-computed
+    // signatures.
+    return n00b_attest_envelope_add_signature(env,
+                                              keyid,
+                                              sig,
+                                              .allocator = alloc_for_call);
 }

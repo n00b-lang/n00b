@@ -32,13 +32,10 @@
 #include <string.h>
 
 // ---------------------------------------------------------------------------
-// Module-domain error codes (negative to avoid collision with errno).
+// Module-domain error codes (negative to avoid collision with errno) are now
+// declared in `include/attest/n00b_attest_error.h` (V-2 fix during WP-002
+// Phase 3 — see D-031 A-1 closure). The umbrella header pulls them in.
 // ---------------------------------------------------------------------------
-
-#define N00B_ATTEST_ERR_STMT_BAD_INPUT       (-1001)
-#define N00B_ATTEST_ERR_STMT_MISSING_FIELD   (-1002)
-#define N00B_ATTEST_ERR_STMT_BAD_JSON        (-1003)
-#define N00B_ATTEST_ERR_STMT_WRONG_TYPE      (-1004)
 
 // ---------------------------------------------------------------------------
 // in-toto Statement v1 constants.
@@ -80,7 +77,7 @@ struct n00b_attest_statement {
 // Helpers.
 // ---------------------------------------------------------------------------
 
-static const char k_hex_lower[16] = "0123456789abcdef";
+static const char k_hex_lower[] = "0123456789abcdef";
 
 static n00b_string_t *
 hex_encode_bytes(const uint8_t *data, size_t len, n00b_allocator_t *allocator)

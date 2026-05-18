@@ -5,6 +5,7 @@ subdir('simd')
 n00b_util_src = (
     files(
         'assert.c',
+        'base64.c',
         'path.c',
     )
     + n00b_util_simd_src

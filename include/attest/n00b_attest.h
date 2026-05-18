@@ -43,8 +43,11 @@
  */
 #define N00B_ATTEST_API_VERSION 1
 
+#include <attest/n00b_attest_error.h>
 #include <attest/n00b_attest_statement.h>
+#include <attest/n00b_attest_signer.h>
 #include <attest/n00b_attest_dsse.h>
+#include <attest/n00b_attest_cli.h>
 
 /**
  * @brief Module init stub.

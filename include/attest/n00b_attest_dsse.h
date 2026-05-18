@@ -36,6 +36,7 @@
 #include <n00b.h>
 #include "adt/result.h"
 #include <attest/n00b_attest_statement.h>
+#include <attest/n00b_attest_signer.h>
 
 /**
  * @brief Opaque DSSE envelope handle.
@@ -196,6 +197,96 @@ n00b_attest_envelope_get_payload(n00b_attest_envelope_t *env);
  */
 extern n00b_result_t(n00b_buffer_t *)
 n00b_attest_envelope_pae_bytes(n00b_attest_envelope_t *env) _kargs
+{
+    n00b_allocator_t *allocator = nullptr;
+};
+
+/**
+ * @brief Append one `{keyid, sig}` entry to the envelope's
+ *        `signatures[]` list.
+ *
+ * Low-level signature-population entry point. The caller supplies
+ * a pre-computed signature (typically obtained by calling
+ * @ref n00b_attest_signer_sign on this envelope's PAE bytes); the
+ * envelope stores the keyid + signature bytes opaquely on its
+ * internal list and emits them in the rendered JSON at
+ * @ref n00b_attest_envelope_serialize time. The shape is
+ * deliberately algorithm-agnostic (D-016): the per-entry layout
+ * is `{ "keyid": "<hex>", "sig": "<base64>" }` and the same shape
+ * carries Ed25519, ECDSA P-256, or any later algorithm without a
+ * header break.
+ *
+ * @param env    The envelope to mutate.
+ * @param keyid  Opaque caller-defined key identifier (typically a
+ *               hex-encoded SHA-256 of the 44-byte
+ *               SubjectPublicKeyInfo DER per D-039 — the cosign /
+ *               sigstore convention; supersedes D-033 OQ-3's
+ *               raw-pubkey form). For the file backend this is the
+ *               value returned by @ref n00b_attest_signer_keyid.
+ *               The envelope stores a private copy; the caller may
+ *               free `keyid` immediately after this call.
+ * @param sig    The signature bytes (64 bytes for Ed25519). The
+ *               envelope stores a private copy; the caller may
+ *               free `sig` immediately after this call.
+ *
+ * @kw allocator  Optional allocator (defaults to the runtime
+ *                allocator); owns the private copies the envelope
+ *                stores.
+ *
+ * @return `n00b_result_ok(bool, true)` on success;
+ *         `n00b_result_err(bool, ...)` if `env`, `keyid`, or
+ *         `sig` is null, or if either input is empty.
+ *
+ * @pre `env` was returned by @ref n00b_attest_envelope_new and
+ *      has had a payload attached.
+ */
+extern n00b_result_t(bool)
+n00b_attest_envelope_add_signature(n00b_attest_envelope_t *env,
+                                   n00b_string_t          *keyid,
+                                   n00b_buffer_t          *sig) _kargs
+{
+    n00b_allocator_t *allocator = nullptr;
+};
+
+/**
+ * @brief Sign the envelope with a resolved signer and append the
+ *        resulting signature to its `signatures[]` list.
+ *
+ * High-level signature-population entry point. Computes the PAE
+ * bytes via @ref n00b_attest_envelope_pae_bytes, calls
+ * @ref n00b_attest_signer_sign on those bytes, fetches the
+ * signer's pre-computed keyid via @ref n00b_attest_signer_keyid
+ * (SHA-256 of the 44-byte SPKI DER, hex-encoded per D-039 — the
+ * cosign/sigstore-convention form; supersedes the prior D-033
+ * OQ-3 "SHA-256 of raw pubkey" form), and dispatches the
+ * `{keyid, sig}` pair through
+ * @ref n00b_attest_envelope_add_signature. Implemented in terms
+ * of the low-level entry point so multi-signer envelopes (FR-11,
+ * deferred to a later WP) can populate by repeatedly calling the
+ * low-level surface against pre-computed signatures.
+ *
+ * @param env     The envelope to sign.
+ * @param signer  The signer handle.
+ *
+ * @kw allocator  Optional allocator (defaults to the runtime
+ *                allocator); owns every byte produced (PAE bytes,
+ *                signature bytes, keyid string, the envelope's
+ *                internal copies).
+ *
+ * @return `n00b_result_ok(bool, true)` on success;
+ *         `n00b_result_err(bool, ...)` if `env` or `signer` is
+ *         null, if PAE-byte construction fails, or if the
+ *         signer's sign vtable returns an error (propagated via
+ *         the same error-code namespace as
+ *         @ref n00b_attest_signer_sign).
+ *
+ * @pre `env` was returned by @ref n00b_attest_envelope_new and
+ *      has had a payload attached; `signer` was returned by
+ *      @ref n00b_attest_signer_resolve and has not been released.
+ */
+extern n00b_result_t(bool)
+n00b_attest_envelope_sign(n00b_attest_envelope_t *env,
+                          n00b_attest_signer_t   *signer) _kargs
 {
     n00b_allocator_t *allocator = nullptr;
 };

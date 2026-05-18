@@ -314,6 +314,14 @@ picotls_minicrypto_dep = picotls_proj.get_variable('picotls_minicrypto_dep')
 picoquic_proj = subproject('picoquic')
 picoquic_dep  = picoquic_proj.get_variable('picoquic_core_dep')
 
+# Monocypher (vendored, CC0 / BSD-2 dual): Ed25519 signing primitive
+# for the n00b_attest signer vertical (WP-002).  In-tree copy at
+# subprojects/monocypher/, sized down to the four files we actually
+# use (monocypher{,-ed25519}.{h,c}).  See subprojects/monocypher/
+# README.n00b.md for the integration shape rationale.
+monocypher_proj = subproject('monocypher')
+monocypher_dep  = monocypher_proj.get_variable('monocypher_dep')
+
 # zlib for HTTP/1.1 + H3 Content-Encoding decompression (gzip/deflate).
 # brotli + zstd are dlopen'd at runtime in src/net/http/http_compression.c.
 if target_os == 'darwin'
@@ -581,7 +589,7 @@ endif
 n00b = static_library('n00b',
     n00b_dll_src,
     include_directories: incdir,
-    dependencies: deps + [libdl_dep, mir_dep, picoquic_dep],
+    dependencies: deps + [libdl_dep, mir_dep, picoquic_dep, monocypher_dep],
     c_args: exe_c_args,
     link_args: link_args,
     link_whole: link_whole_libs,
@@ -604,7 +612,10 @@ test_common_kwargs = {
     # Static-library deps don't propagate transitively in meson, so
     # every test that links libn00b also needs picoquic_dep on its
     # link line.  picoquic_dep brings the include path along too.
-    'dependencies': [picoquic_dep],
+    # monocypher_dep is added for the same reason: libn00b's attest
+    # sources (Phase 2+) will reference crypto_ed25519_* and the
+    # attest_monocypher_smoke test calls those primitives directly.
+    'dependencies': [picoquic_dep, monocypher_dep],
 }
 
 # Alias kept for clarity at QUIC test sites that drive picoquic
@@ -653,6 +664,66 @@ attest_arena_lifecycle_test = executable('test_attest_arena_lifecycle',
     kwargs: test_common_kwargs,
 )
 test('attest_arena_lifecycle', attest_arena_lifecycle_test, suite: 'unit')
+
+attest_base64_test = executable('test_attest_base64',
+    ['test/unit/test_attest_base64.c'],
+    kwargs: test_common_kwargs,
+)
+test('attest_base64', attest_base64_test, suite: 'unit')
+
+attest_monocypher_smoke_test = executable('test_attest_monocypher_smoke',
+    ['test/unit/test_attest_monocypher_smoke.c'],
+    kwargs: test_common_kwargs,
+)
+test('attest_monocypher_smoke', attest_monocypher_smoke_test, suite: 'unit')
+
+attest_signer_resolve_test = executable('test_attest_signer_resolve',
+    ['test/unit/test_attest_signer_resolve.c'],
+    kwargs: test_common_kwargs,
+)
+test('attest_signer_resolve', attest_signer_resolve_test, suite: 'unit')
+
+attest_signer_release_test = executable('test_attest_signer_release',
+    ['test/unit/test_attest_signer_release.c'],
+    kwargs: test_common_kwargs,
+)
+test('attest_signer_release', attest_signer_release_test, suite: 'unit')
+
+attest_signer_sign_test = executable('test_attest_signer_sign',
+    ['test/unit/test_attest_signer_sign.c'],
+    kwargs: test_common_kwargs,
+)
+test('attest_signer_sign', attest_signer_sign_test, suite: 'unit')
+
+attest_signer_keyid_test = executable('test_attest_signer_keyid',
+    ['test/unit/test_attest_signer_keyid.c'],
+    kwargs: test_common_kwargs,
+)
+test('attest_signer_keyid', attest_signer_keyid_test, suite: 'unit')
+
+attest_envelope_sign_test = executable('test_attest_envelope_sign',
+    ['test/unit/test_attest_envelope_sign.c'],
+    kwargs: test_common_kwargs,
+)
+test('attest_envelope_sign', attest_envelope_sign_test, suite: 'unit')
+
+attest_err_str_test = executable('test_attest_err_str',
+    ['test/unit/test_attest_err_str.c'],
+    kwargs: test_common_kwargs,
+)
+test('attest_err_str', attest_err_str_test, suite: 'unit')
+
+attest_cli_sign_test = executable('test_attest_cli_sign',
+    ['test/unit/test_attest_cli_sign.c'],
+    kwargs: test_common_kwargs,
+)
+test('attest_cli_sign', attest_cli_sign_test, suite: 'unit')
+
+attest_signer_arena_test = executable('test_attest_signer_arena',
+    ['test/unit/test_attest_signer_arena.c'],
+    kwargs: test_common_kwargs,
+)
+test('attest_signer_arena', attest_signer_arena_test, suite: 'unit')
 
 list_test = executable('test_list',
     ['test/unit/test_list.c'],
@@ -1424,6 +1495,15 @@ endif
 # Table CLI tool
 table_tool = executable('n00b_table',
     ['src/tools/table.c'],
+    kwargs: test_common_kwargs,
+    install: true,
+)
+
+# n00b-attest CLI binary (sign verb; other verbs are forward-roadmap
+# stubs surfacing in --help and emitting "not yet implemented" + exit 1
+# per DF-004 disposition (a)).
+n00b_attest_tool = executable('n00b-attest',
+    ['src/tools/n00b-attest.c'],
     kwargs: test_common_kwargs,
     install: true,
 )

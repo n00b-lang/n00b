@@ -431,10 +431,14 @@ terminal step of an unmodified build pipeline.
 DSSE envelopes carry per-signature metadata: `keyid` (an opaque
 caller-defined identifier the verifier uses to resolve the public
 key) and optionally `cert` (X.509 cert chain when using FR-7).
-Our `keyid` convention is a 16-byte truncated SHA-256 of the SPKI
-DER encoding of the public key, hex-encoded. This is stable across
-serialization roundtrips and lets a verifier look up the public
-key in a keyring without parsing the envelope payload.
+Our `keyid` convention is the full SHA-256 of the SPKI DER
+encoding of the public key, hex-encoded (= 64 hex characters),
+matching the cosign / sigstore ecosystem convention. Per D-039
+(resolves DF-003) (D-039 is not yet logged; the orchestrator will
+log it after this dispatch returns clean — pre-stage the
+reference in source comments and the spec text). This is stable
+across serialization roundtrips and lets a verifier look up the
+public key in a keyring without parsing the envelope payload.
 
 ## 6. The signer abstraction
 
@@ -443,12 +447,19 @@ typedef struct n00b_attest_signer n00b_attest_signer_t;
 
 /* Resolve a signer. With no arguments, walks the default discovery
  * chain (FR-SM-2). With .ref set, uses that backend URI directly.
- * Returns Err on resolution failure with a structured n00b error. */
+ * Returns Err on resolution failure with a structured n00b error.
+ *
+ * Note: per D-035 part 2 the n00b-attest module uses the project-
+ * local `T * = nullptr` shape for optional pointer kwargs rather
+ * than the cross-project canonical `n00b_option_t(T) =
+ * n00b_option_none(T)`. Cross-project normalization is a later
+ * cleanup WP per D-035; until then the as-implemented signature
+ * for `.ref` is `n00b_string_t *ref = nullptr`. */
 extern n00b_result_t(n00b_attest_signer_t *)
 n00b_attest_signer_resolve(void) _kargs
 {
-    n00b_option_t(n00b_string_t *) ref       = n00b_option_none(n00b_string_t *);
-    n00b_allocator_t              *allocator = nullptr;
+    n00b_string_t    *ref       = nullptr;
+    n00b_allocator_t *allocator = nullptr;
 };
 
 /* Sign arbitrary bytes; returns the signature bytes as a buffer. */

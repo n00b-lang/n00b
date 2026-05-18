@@ -1,21 +1,62 @@
-/* src/attest/n00b_attest_module.c — Phase-1 module stub.
+/* src/attest/n00b_attest_module.c — module-init entry point.
  *
- * Sole purpose: expose a single symbol (`n00b_attest_module_init`)
- * so the meson hookup laid down in this WP is exercised
- * end-to-end by the build smoke. If the module is mis-routed,
- * the link of the libn00b static archive (which aggregates the
- * `n00b_attest_src` list per the top-level meson.build) will
- * fail to surface this symbol and the smoke fails.
+ * `n00b_attest_module_init` is the single authoritative entry
+ * point that wires up every in-tree backend's vtable + resolver
+ * registration. The host caller (test binary, CLI entry, etc.)
+ * is responsible for calling this function exactly once during
+ * process startup before any signer-resolve happens; this is
+ * the standard libn00b module-init pattern and does NOT use
+ * `[[gnu::constructor]]` (which the api-guidelines §4.3
+ * explicitly bans for caching caller state).
  *
- * No allocations. No globals. No constructors. The Statement
- * builder, the DSSE envelope encoder/decoder, and the rest of
- * the surface declared in `include/attest/` arrive in WP-001
- * Phase 2 as proper `.c` translation units.
+ * Phase 1's stub body has graduated to a real init body: it
+ * populates the file backend's vtable (per architecture §6.1,
+ * `n00b_string_t *scheme;` is on the vtable, so the vtable
+ * cannot be a file-scope `static const` constant — it must be
+ * filled at runtime) and registers the backend with the
+ * resolver.
+ *
+ * Calling this function more than once is idempotent in
+ * practice for WP-002's single in-tree backend (the file
+ * backend will be re-registered with itself, causing the
+ * registration list to grow by one but not changing
+ * resolve-time behavior since the linear search hits the
+ * first match). A future hardening pass can add an
+ * already-initialized guard if multi-call becomes a real
+ * concern; WP-002 leaves the single-call convention
+ * unenforced because the host caller owns the lifecycle.
+ *
+ * No globals beyond the registration list, no allocations
+ * tied to a caller arena (the scheme strings live for the
+ * process lifetime; no caller state is captured). Per
+ * api-guidelines §10.9 this is the correct shape for
+ * module-init.
  */
 
 #include <attest/n00b_attest.h>
 
+#include "internal/attest/backends.h"
+#include "internal/attest/backends/file.h"
+#include "util/panic.h"
+
 void
 n00b_attest_module_init(void)
 {
+    // Populate the file-backend vtable's fields. The vtable
+    // instance is declared in `backends/file.c`; its fields are
+    // mutable until init returns, then read-only for the process
+    // lifetime.
+    _n00b_attest_backend_file_init();
+
+    // Wire the populated vtable into the resolver. Registration
+    // failure is unrecoverable per `n00b-code-auditor` W-4 + user
+    // disposition: there is no sensible recovery (every subsequent
+    // signer-resolve would fail with UNSUPPORTED_SCHEME), so we
+    // surface the failure immediately with a diagnostic.
+    n00b_result_t(bool) r =
+        n00b_attest_register_backend(&n00b_attest_backend_file);
+    if (n00b_result_is_err(r)) {
+        n00b_panic(
+            "n00b_attest_module_init: failed to register file backend");
+    }
 }
