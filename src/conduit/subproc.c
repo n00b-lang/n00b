@@ -824,7 +824,8 @@ spawn_pipe_mode(n00b_subproc_t *sp)
     }
     else if ((f & N00B_SUBPROC_CAP_STDIN) && sp->buf_stdin->alloc_len == 0) {
         // No observation topic (no stdin_owner) — still init the buffer.
-        sp->buf_stdin = n00b_buffer_empty();
+        sp->buf_stdin = n00b_buffer_empty(
+            .allocator = sp->conduit->allocator);
     }
 
     // Inject stdin data if configured.
@@ -1151,7 +1152,8 @@ spawn_pty_mode(n00b_subproc_t *sp)
                                      &sp->cap_stdin_sub);
     }
     else if ((f & N00B_SUBPROC_CAP_STDIN) && sp->buf_stdin->alloc_len == 0) {
-        sp->buf_stdin = n00b_buffer_empty();
+        sp->buf_stdin = n00b_buffer_empty(
+            .allocator = sp->conduit->allocator);
     }
 
     // Inject stdin data if configured.

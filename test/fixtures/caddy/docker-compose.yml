@@ -1,0 +1,33 @@
+# docker-compose stub for the caddy H3 interop fixture.
+#
+# This file is consumed by start.sh, which fills in the published port
+# and a unique container name via env-vars.  Don't `docker compose up`
+# this directly — start.sh handles port allocation, readiness probing,
+# and cert-fingerprint capture.
+#
+# Image pinning: see test/fixtures/README-h3.md for the rationale and
+# update procedure.
+
+services:
+  caddy:
+    # Caddy 2.9.1 — ships HTTP/3 enabled by default.  Pinned digest
+    # below for reproducibility; update via README-h3.md "Updating
+    # pinned image versions".
+    image: caddy:2.9.1
+    container_name: ${CADDY_CONTAINER:-n00b-test-caddy}
+    # Caddy listens on a single port for TCP (h1/h2) and UDP (h3).
+    # start.sh picks an ephemeral host port and binds both protocols
+    # to that same port on 127.0.0.1.
+    ports:
+      - "127.0.0.1:${CADDY_PORT}:${CADDY_PORT}/tcp"
+      - "127.0.0.1:${CADDY_PORT}:${CADDY_PORT}/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+    environment:
+      # Caddyfile substitutes {$CADDY_PORT} from this.
+      CADDY_PORT: ${CADDY_PORT}
+    # Caddy's internal CA writes to /data; ephemeral is fine for tests.
+    tmpfs:
+      - /data
+      - /config
+    restart: "no"

@@ -1040,7 +1040,8 @@ n00b_conduit_stream_reader_process(n00b_conduit_stream_reader_t *reader)
         n00b_buffer_t *buf = msg->payload;
         if (buf && buf->byte_len > 0) {
             if (!reader->accum) {
-                reader->accum = n00b_buffer_empty();
+                reader->accum = n00b_buffer_empty(
+                    .allocator = reader->conduit->allocator);
             }
             n00b_buffer_concat(reader->accum, buf);
         }
@@ -1064,16 +1065,17 @@ n00b_conduit_stream_reader_new(n00b_conduit_t *c, n00b_conduit_fd_owner_t *owner
         return n00b_result_err(n00b_conduit_stream_reader_t *, EINVAL);
     }
 
-    n00b_conduit_stream_reader_t *reader =
-        n00b_alloc(n00b_conduit_stream_reader_t);
+    n00b_conduit_stream_reader_t *reader = n00b_alloc_with_opts(
+        n00b_conduit_stream_reader_t,
+        &(n00b_alloc_opts_t){.allocator = c->allocator});
 
     reader->conduit = c;
     reader->owner   = owner;
 
     reader->internal_inbox = ({
-        n00b_conduit_inbox_t(n00b_buffer_t *) *_inbox =
-            n00b_alloc_with_opts(n00b_conduit_inbox_t(n00b_buffer_t *),
-                &(n00b_alloc_opts_t){.allocator = c->allocator});
+         n00b_conduit_inbox_t(n00b_buffer_t *) *_inbox =
+             n00b_alloc_with_opts(n00b_conduit_inbox_t(n00b_buffer_t *),
+                 &(n00b_alloc_opts_t){.allocator = c->allocator});
         n00b_conduit_inbox_init(n00b_buffer_t *,
                                 _inbox, c, N00B_CONDUIT_BP_UNBOUNDED, 0);
         _inbox;
@@ -1119,8 +1121,9 @@ n00b_conduit_stream_read(n00b_conduit_stream_reader_t *reader, size_t nbytes,
         return;
     }
 
-    n00b_conduit_stream_request_t *req =
-        n00b_alloc(n00b_conduit_stream_request_t);
+    n00b_conduit_stream_request_t *req = n00b_alloc_with_opts(
+        n00b_conduit_stream_request_t,
+        &(n00b_alloc_opts_t){.allocator = reader->conduit->allocator});
 
     req->requested     = nbytes;
     req->delimiter     = 0;
@@ -1151,8 +1154,9 @@ n00b_conduit_stream_read_until(n00b_conduit_stream_reader_t *reader,
         return;
     }
 
-    n00b_conduit_stream_request_t *req =
-        n00b_alloc(n00b_conduit_stream_request_t);
+    n00b_conduit_stream_request_t *req = n00b_alloc_with_opts(
+        n00b_conduit_stream_request_t,
+        &(n00b_alloc_opts_t){.allocator = reader->conduit->allocator});
 
     req->requested     = 0;
     req->delimiter     = delimiter;

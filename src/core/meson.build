@@ -26,4 +26,5 @@ n00b_core_src = files(
     'type_registry.c',
     'builtin_types.c',
     'sha256.c',
+    'sha512.c',  # SHA-384 + SHA-512 (FIPS 180-4) — needed by RS384/RS512 JWS.
 )

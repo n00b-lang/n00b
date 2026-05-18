@@ -1,0 +1,66 @@
+# Phase 5 § 5.7 — Job that runs `quic_acme_http01_demo` against
+# the in-cluster Pebble.  On success the Job's Pod prints
+# "ACME OK: cert acquired (N bytes)" and exits 0; the fixture
+# script's `kubectl wait --for=condition=Complete` returns clean.
+#
+# Trust: the runtime image bakes Pebble's Mini-CA into the system
+# trust store (see Dockerfile § 5.7 step), so n00b's ACME HTTPS
+# client (which validates via OpenSSL's default-path X509_STORE)
+# trusts Pebble's directory TLS endpoint without per-Pod overrides.
+# This image is fixture-only; production builds wouldn't include
+# the Pebble CA.
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: n00b-acme-direct
+  namespace: default
+  labels:
+    app: n00b-acme-direct
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app: n00b-acme-direct
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: demo
+          image: n00b-phase5-demo:latest
+          imagePullPolicy: IfNotPresent
+          command: ["/usr/local/bin/quic_acme_http01_demo"]
+          args:
+            # Bind 8080 inside the Pod (non-privileged port; the
+            # default container security context can't bind <1024
+            # without CAP_NET_BIND_SERVICE); the Service maps
+            # 80 → 8080 so Pebble's HTTP-01 GET still hits :80
+            # at the Service VIP and reaches us.
+            - "--directory"
+            - "https://pebble.pebble.svc:14000/dir"
+            - "--domain"
+            - "n00b-phase5.default.svc.cluster.local"
+            - "--listen-port"
+            - "8080"
+            - "--out"
+            - "/tmp/n00b-acme-cert.pem"
+          env:
+            # K8s only: kube-proxy's EndpointSlice → iptables
+            # propagation lags Pod-Ready by a second or two.
+            # Demo's settle window absorbs the gap before the
+            # ACME flow signals Pebble; the fixture's smoke
+            # used to fail flakily without it (see Phase 5
+            # § 5.7 progress entry, "EndpointSlice race").
+            - name: ACME_DEMO_SETTLE_MS
+              value: "3000"
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi

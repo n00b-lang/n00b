@@ -446,7 +446,7 @@ n00b_debug_locks_stream(FILE *stream)
 {
     n00b_runtime_t *rt = n00b_get_runtime();
 
-    for (int i = 0; i < N00B_THREADS_MAX; i++) {
+    for (uint32_t i = 0; i < rt->max_threads; i++) {
         n00b_thread_record_t *rec = &rt->threads[i];
         n00b_thread_t        *t   = n00b_atomic_load(&rec->thread);
 

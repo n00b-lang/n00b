@@ -1,0 +1,44 @@
+# Phase 5 § 5.6 — ClusterIssuer pointing at the in-cluster Pebble
+# ACME server.
+#
+# `acme.caBundle` is the base64-encoded Pebble Mini-CA cert (the
+# cert that signs Pebble's *directory* TLS endpoint).
+# cert-manager uses this to verify the TLS connection to
+# https://pebble.pebble.svc:14000/dir; without it the directory
+# fetch fails with "x509: certificate signed by unknown authority".
+#
+# The encoded blob below is the upstream Pebble repo's
+# test/certs/pebble.minica.pem (vendored under
+# test/integration/phase5_k8s/pebble/) — public test crypto, no
+# secret material involved; safe to inline.
+#
+# email is required by RFC 8555 + by Pebble.  Real LE for prod
+# would point at someone reachable; the fixture uses a sentinel.
+#
+# We use a `pod` HTTP-01 solver instead of `ingress`: the kind
+# cluster doesn't ship an ingress controller, and Pebble's
+# challenge-validator hits httpPort=5002 by config — both Pebble
+# and cert-manager's solver-pod live on the same kube-dns +
+# CNI network, so the challenge resolves in-cluster end-to-end.
+
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: phase5-pebble
+spec:
+  acme:
+    server: https://pebble.pebble.svc:14000/dir
+    email: phase5-fixture@example.invalid
+    privateKeySecretRef:
+      name: phase5-pebble-account-key
+    caBundle: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSURQekNDQWllZ0F3SUJBZ0lJVTBYbTlVRmRReFV3RFFZSktvWklodmNOQVFFTEJRQXdJREVlTUJ3R0ExVUUKQXhNVmJXbHVhV05oSUhKdmIzUWdZMkVnTlRNME5XVTJNQ0FYRFRJMU1Ea3dNekl6TkRBd05Wb1lEekl4TWpVdwpPVEF6TWpNME1EQTFXakFnTVI0d0hBWURWUVFERXhWdGFXNXBZMkVnY205dmRDQmpZU0ExTXpRMVpUWXdnZ0VpCk1BMEdDU3FHU0liM0RRRUJBUVVBQTRJQkR3QXdnZ0VLQW9JQkFRQzVXZ1pOb1ZKYW5kajQza2tMeVU1MHZ6Q1oKYWxvenZkUm8zT0ZpS29EdG1xS1BOV1JOTzJoQzlBVU54VERKY281MVljNDJ1L1dWM2ZQYmJoU3puVGlPT1Z0bgpBam02aXE0STVuWllsdEdHWmV0R0RPUVdyNzh5MmdXWStTRzA3OE11T08yaHlESWlLdFZjM3hpWFlBKzhIbHV1CjlGOEticVNTMWg1NXl4WjliODdlS1IrQjB6dTJhaHpCQ0lIS21LV2djNk4xM2w3YUR4eFkzRDZ1cThndEpSVTAKdG91bXlMYmR6R2N1cFZ2amJqRFAxMW5sMDdSRVNEV0JMRzEvZzNrdEp2cUlhNEJXZ1UySE1oNHJORDZ5OE9EMwpIeTNIOE1ZNkNFbEwrTU9DYkZKaldxaHRPeGVGeVpaVjlxM2tZbms5Q0F1UUpLTUVHdU40R1U2dHpoVzFBZ01CCkFBR2plekI1TUE0R0ExVWREd0VCL3dRRUF3SUNoREFUQmdOVkhTVUVEREFLQmdnckJnRUZCUWNEQVRBU0JnTlYKSFJNQkFmOEVDREFHQVFIL0FnRUFNQjBHQTFVZERnUVdCQlN1OFJHcEVyZ1lVb1luUXV3Q3ErL2dnVGlFakRBZgpCZ05WSFNNRUdEQVdnQlN1OFJHcEVyZ1lVb1luUXV3Q3ErL2dnVGlFakRBTkJna3Foa2lHOXcwQkFRc0ZBQU9DCkFRRUFYRFZZb3YxK2Y2RUw3UzQxTGhZUWtFWC9HeU5OenNFdnF4RTlVMCszSXJpNUpma2NOT2lBOU85TDZaK1kKYnFjc1hWOTNzM3ZpNHI0V1NXdWMvL3dIeUpZclZlNSt0SzRubEZwYkpPdmZCVXRub0JEeUtOeFh6WkN4RkpWaApmOXVjOFVlalJmUU1GYkRiaFdZL3g4M3k5QkR1ZkpISHEzMk9qQ0lON2dwMlVSOHJuZll2bHo3Wmc0cWtKQnNuCkRHNGR3ZCtwUlRDRldKT1ZJRzBKb05oSzNabUU3b0oxTjRIMzhYa1ozMU5QY01rc0t4cHNMTElTOSttb3NadGcKNG9sTDd0TVBKa2x4NVphZU1GYUtSRHE0R2R4a2J3NCtPNHZSZ05tM1o4QVhXS2tuT2RmZ2RwcUxVUFBoUmNQNAp2MWxoeTcxRWhCdVhYd1JRSnJ5MGxUZEYrdz09Ci0tLS0tRU5EIENFUlRJRklDQVRFLS0tLS0K
+    solvers:
+      - http01:
+          # Use the in-cluster ingress-nginx controller (installed
+          # by run.sh § 5.6).  cert-manager creates a temporary
+          # Ingress for the challenge hostname; ingress-nginx
+          # routes based on the Host header so Pebble (which has
+          # the challenge hostname pinned to ingress-nginx via
+          # /etc/hosts hostAliases) reaches the right solver Pod.
+          ingress:
+            ingressClassName: nginx

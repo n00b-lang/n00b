@@ -37,6 +37,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         gcc-mingw-w64-x86-64 \
     && rm -rf /var/lib/apt/lists/*
 
+# ── libsecret-1 (Linux secret-handle bridge) + headless test deps ───────────
+# libsecret-1-dev gives us the headers + lib; gnome-keyring + dbus + at-spi
+# are needed to spin up a Secret Service daemon at test time so the bridge
+# can actually exchange a credential.  test_quic_secret_libsecret SKIPs when
+# no daemon is reachable; in CI we wrap test runs with dbus-run-session and
+# pre-unlock the keyring so the full happy path is exercised.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libsecret-1-dev libglib2.0-dev \
+        gnome-keyring dbus-x11 \
+    && rm -rf /var/lib/apt/lists/*
+
 # ── macOS cross-compiler (osxcross, only if SDK tarball provided) ────────────
 #
 # To enable macOS cross-compilation:

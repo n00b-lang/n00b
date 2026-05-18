@@ -1,0 +1,25 @@
+# Phase 5 § 5.4 — kind cluster topology for the K8s playbook fixture.
+#
+# 1 control plane + 3 workers; multi-replica deployments in 5.8 (Envoy
+# LB-CID) need >= 2 worker nodes to actually exercise cross-pod routing.
+# extraPortMappings on the control-plane node expose the n00b QUIC
+# service + /metrics surface to the host so the run.sh assertions can
+# reach them without an in-cluster kubectl exec round-trip.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: n00b-phase5
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      # Mapped at the host so the assertion script can curl /metrics
+      # directly.  443 is the canonical n00b QUIC ingress; 30090 is the
+      # NodePort range stand-in for the Prom listener.
+      - containerPort: 30443
+        hostPort: 30443
+        protocol: UDP
+      - containerPort: 30090
+        hostPort: 30090
+        protocol: TCP
+  - role: worker
+  - role: worker
+  - role: worker

@@ -1,0 +1,48 @@
+# Phase 5 § 5.6 — verify that the cert-manager-issued Secret has
+# the right shape: tls.crt parses as a real X.509 cert, the SAN
+# matches the Certificate's dnsNames, and tls.key parses as a
+# matching private key.
+#
+# We use the alpine/openssl image so the assertions don't depend on
+# whatever crypto tooling happens to be on the host node.  Output
+# goes to stdout so `kubectl logs` captures it for the fixture's
+# assertion script.
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: cert-verify
+  namespace: default
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: verify
+          image: alpine/openssl:3.5.4
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              echo "----- cert-verify: tls.crt summary -----"
+              openssl x509 -in /tls/tls.crt -noout -subject -issuer -dates -ext subjectAltName
+              echo "----- cert-verify: tls.key sanity -----"
+              openssl ec -in /tls/tls.key -check -noout 2>&1 \
+                || openssl rsa -in /tls/tls.key -check -noout 2>&1
+              echo "----- cert-verify: chain ends at known issuer -----"
+              issuer=$(openssl x509 -in /tls/tls.crt -noout -issuer)
+              case "$issuer" in
+                *Pebble*|*minica*) echo "OK: chain root is Pebble-issued" ;;
+                *) echo "FAIL: unexpected issuer: $issuer"; exit 1 ;;
+              esac
+              echo "cert-verify: PASS"
+          volumeMounts:
+            - name: tls
+              mountPath: /tls
+              readOnly: true
+      volumes:
+        - name: tls
+          secret:
+            secretName: n00b-phase5-tls

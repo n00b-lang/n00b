@@ -1,0 +1,134 @@
+# Phase 5 § 5.6 — Pebble (in-cluster ACME server) for the
+# cert-manager-fronts variant fixture.
+#
+# Pebble is the Let's Encrypt project's tiny RFC 8555 ACME server,
+# explicitly intended for testing.  cert-manager talks to it the
+# same way it talks to LE proper, so the fixture exercises the
+# full ACME order/auth/cert path without burning real-world rate
+# limits.
+#
+# We pin to the upstream `ghcr.io/letsencrypt/pebble:latest` image
+# (the container is the bare binary at /app — no shell, no embedded
+# certs) and mount:
+#   - the ACME-spec config JSON (rewritten to point at /pebble/certs/),
+#   - Pebble's Mini-CA TLS cert + key as a Secret.
+# The ConfigMap + Secret are populated from the vendored files in
+# this directory at fixture-run time (see run.sh).
+#
+# Pebble's *runtime* CA (the one that signs ACME-issued certs) is
+# generated at boot and is *not* the Mini-CA above; it's published
+# at https://pebble:15000/roots/0 for clients of the issued certs to
+# fetch.  cert-manager only needs to trust the directory's TLS
+# cert (the Mini-CA), which it gets via the ClusterIssuer's
+# acme.caBundle.
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: pebble
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pebble
+  namespace: pebble
+  labels:
+    app: pebble
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pebble
+  template:
+    metadata:
+      labels:
+        app: pebble
+    spec:
+      # No hostAliases / CoreDNS surgery: the challenge hostname
+      # (`n00b-phase5.default.svc.cluster.local`) is registered as
+      # an ExternalName Service in default namespace (see
+      # cert-manager/n00b-svc.yaml), so kube-dns resolves it for
+      # both Pebble's validator and cert-manager's self-check via
+      # the standard cluster DNS path.  The CNAME points at
+      # ingress-nginx-controller's in-cluster FQDN, so the
+      # resolved IP is ingress-nginx's ClusterIP and the GET ends
+      # up routed by Host header to the cert-manager-spawned
+      # challenge solver Pod.
+      containers:
+        - name: pebble
+          image: ghcr.io/letsencrypt/pebble:latest
+          # No `-dnsserver` flag: that would point Pebble's HTTP-01
+          # validator at a custom DNS resolver and bypass the
+          # hostAliases-injected /etc/hosts entry below.  Default
+          # resolver consults /etc/hosts first, which is exactly
+          # what we want.
+          args:
+            - "-config"
+            - "/pebble/config/pebble-config.json"
+          env:
+            # Speed knobs only.  We deliberately do *not* set
+            # PEBBLE_VA_ALWAYS_VALID — the fixture exercises real
+            # HTTP-01 validation against the ingress-nginx-routed
+            # challenge solver Pod.
+            - name: PEBBLE_AUTHZREUSE
+              value: "100"
+            - name: PEBBLE_VA_NOSLEEP
+              value: "1"
+          ports:
+            - name: acme
+              containerPort: 14000
+            - name: mgmt
+              containerPort: 15000
+            - name: http01
+              containerPort: 5002
+            - name: tls01
+              containerPort: 5001
+          readinessProbe:
+            tcpSocket:
+              port: 14000
+            initialDelaySeconds: 2
+            periodSeconds: 3
+          volumeMounts:
+            - name: config
+              mountPath: /pebble/config
+              readOnly: true
+            - name: certs
+              mountPath: /pebble/certs
+              readOnly: true
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+      volumes:
+        - name: config
+          configMap:
+            name: pebble-config
+        - name: certs
+          secret:
+            secretName: pebble-certs
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pebble
+  namespace: pebble
+spec:
+  type: ClusterIP
+  selector:
+    app: pebble
+  ports:
+    - name: acme
+      port: 14000
+      targetPort: 14000
+    - name: mgmt
+      port: 15000
+      targetPort: 15000
+    - name: http01
+      port: 5002
+      targetPort: 5002
+    - name: tls01
+      port: 5001
+      targetPort: 5001

@@ -1,0 +1,56 @@
+# Phase 5 § 5.10 — bare-VM uacme + DNS-01 cert-renewal unit.
+#
+# One-shot service: drives the full ACME order/auth/challenge/
+# finalize/cert flow against the in-fixture Pebble (variant A
+# of the bare-VM playbook).  Real deployments wrap this in a
+# `*.timer` that fires daily; the fixture exercises a single
+# pass.
+#
+# The DNS-01 hook talks to pebble-challtestsrv's management
+# API; Pebble's validator queries challtestsrv's DNS server.
+# Both pieces are local to the container.
+#
+# `ExecStartPost` would normally `systemctl reload n00b-phase5`
+# — n00b's runtime watches the cert directory via inotify and
+# hot-reloads on rename — but the fixture only verifies cert
+# acquisition end-to-end, so we drop the reload.
+
+[Unit]
+Description=n00b TLS cert renewal via uacme + DNS-01 (Phase 5 fixture)
+After=network-online.target pebble.service pebble-challtestsrv.service
+Wants=network-online.target
+Requires=pebble.service pebble-challtestsrv.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=no
+TimeoutStartSec=180
+StandardOutput=journal
+StandardError=journal
+
+# uacme sequence: register account (`-y` auto-accepts the ACME
+# ToS) → issue cert (drives the DNS-01 challenge via the hook).
+# Real deployments wrap the `issue` step in a *.timer that fires
+# daily; uacme is idempotent — it short-circuits if the existing
+# cert has > 30 days of validity.
+ExecStartPre=/usr/bin/uacme -y -c /var/lib/n00b/uacme \
+    -a https://localhost:14000/dir new noreply@example.invalid
+ExecStart=/usr/bin/uacme -y -v -c /var/lib/n00b/uacme \
+    -a https://localhost:14000/dir \
+    -h /usr/local/bin/dns01-hook.sh \
+    issue n00b.test.example
+# uacme writes cert + key under
+# /var/lib/n00b/uacme/n00b.test.example/{cert.pem,key.pem}.
+# Copy into the place the n00b service expects + lock the
+# permissions so only the n00b user reads the key in
+# production.  The fixture image runs everything as root so
+# permissions are advisory here.
+ExecStartPost=/bin/install -m 644 \
+    /var/lib/n00b/uacme/n00b.test.example/cert.pem \
+    /var/lib/n00b/tls/cert.pem
+ExecStartPost=/bin/install -m 600 \
+    /var/lib/n00b/uacme/private/n00b.test.example/key.pem \
+    /var/lib/n00b/tls/key.pem
+
+[Install]
+WantedBy=multi-user.target

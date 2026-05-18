@@ -28,7 +28,9 @@
 typedef struct n00b_runtime_t n00b_runtime_t;
 
 // Forward declarations to avoid circular includes.
-typedef struct n00b_conduit_service    n00b_conduit_service_t;
+typedef struct n00b_conduit_service        n00b_conduit_service_t;
+typedef struct n00b_http_connection_pool   n00b_http_connection_pool_t;
+typedef struct n00b_acme_tls_state         n00b_acme_tls_state_t;
 
 /**
  * @brief Variant type for the unified mmap interval tree.
@@ -51,6 +53,11 @@ struct n00b_runtime_t {
     _Atomic uint32_t            next_thread_slot;
     _Atomic uint32_t            live_threads;
     _Atomic bool                startup_complete;
+    /* Set by `n00b_shutdown` before tearing anything down.  Spin-wait
+     * helpers (`n00b_futex_wait_for_value`, `n00b_futex_wait_on_mask`)
+     * check this and break out instead of looping forever when the
+     * thread they were waiting on is being reaped during shutdown. */
+    _Atomic bool                shutdown_started;
     _Atomic(n00b_allocator_t *) default_allocator;
     n00b_arena_t               *default_arena; // GC'd arena (when using default allocator)
     n00b_pool_t                 system_pool;   // System pool for root list & lock records.
@@ -71,13 +78,30 @@ struct n00b_runtime_t {
     n00b_conduit_fd_owner_t    *stderr_owner;      // Managed fd 2.
     n00b_conduit_topic_base_t  *stdout_topic;      // Typed stdout buffer topic.
     n00b_conduit_topic_base_t  *stderr_topic;      // Typed stderr buffer topic.
-    n00b_thread_record_t        threads[N00B_THREADS_MAX];
+    /* Thread slot table.  Sized at init time per the @c max_threads
+     * kwarg (defaults to @c N00B_THREADS_MAX).  Allocated from
+     * @c system_pool so that other threads can read it safely
+     * (non-moving, hidden from GC).  @c max_threads is the number of
+     * slots and the modulo used for slot acquisition. */
+    uint32_t                    max_threads;
+    n00b_thread_record_t       *threads;
     n00b_base_allocator_t       slab_allocator;
     n00b_futex_t                stw;
     uint32_t                    stw_nesting;
     const char                 *theme_name;    // Active theme name (set during init).
     n00b_unicode_ctx_t         *unicode_ctx;   // Phase 4.5 unicode subsystem state.
     n00b_regex_ctx_t           *regex_ctx;     // Regex port-side caches.
+    /* Per-runtime HTTP connection pool — populated lazily on first
+     * `n00b_http_request_sync` / `n00b_http_request` call via
+     * `n00b_http_get_connection_pool(runtime)`.  Drained at runtime
+     * shutdown.  See include/internal/net/http/http_pool.h for the
+     * pool API. */
+    _Atomic(n00b_http_connection_pool_t *) http_connection_pool;
+    /* Per-runtime picotls base context + chain verifier for the h1
+     * TLS transport (see src/net/quic/acme_tls.c).  Lazy-initialized
+     * on first connect; the slot holds an opaque pointer because the
+     * underlying picotls types aren't part of n00b's public surface. */
+    _Atomic(n00b_acme_tls_state_t *)       acme_tls_state;
 };
 
 /**

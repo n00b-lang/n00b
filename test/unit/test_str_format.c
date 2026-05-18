@@ -125,6 +125,34 @@ TEST(test_cformat_convenience)
     ASSERT_STR_EQ(r->data, "hello test");
 }
 
+// Regression: the C-string trap.  Passing a raw `const char *` to a
+// no-format-spec «#» substitution used to make the format engine
+// interpret the C string bytes as an n00b_string_t header, read a
+// garbage u8_bytes field, and infinite-loop outbuf_append's sizing
+// loop.  See MEMORY.md → feedback_printf_cstring_trap.md.
+//
+// We exercise the post-fix path by constructing a fake n00b_string_t
+// with a deliberately oversized u8_bytes — the exact shape the trap
+// produces — and asserting the format engine emits the diagnostic
+// placeholder instead of hanging or reading past the buffer.
+TEST(test_format_subst_oversized_u8bytes_fallback)
+{
+    struct {
+        char  *data;
+        size_t u8_bytes;
+        size_t codepoints;
+        void  *styling;
+    } fake = {
+        .data       = "x",
+        .u8_bytes   = (size_t)0xffffffffULL,
+        .codepoints = 1,
+        .styling    = NULL,
+    };
+
+    n00b_string_t *r = n00b_cformat("[|#|]", (n00b_string_t *)&fake);
+    ASSERT_STR_EQ(r->data, "<bad-string-arg>");
+}
+
 // ===================================================================
 // Runner
 // ===================================================================
@@ -143,6 +171,7 @@ run_tests(void)
     RUN_TEST(test_guillemet_bold);
     RUN_TEST(test_reset_clears_styles);
     RUN_TEST(test_cformat_convenience);
+    RUN_TEST(test_format_subst_oversized_u8bytes_fallback);
 }
 
 TEST_MAIN()

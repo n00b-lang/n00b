@@ -1,0 +1,13 @@
+# Don't copy host build artifacts into the container — they're
+# host-toolchain specific (meson cache, ninja deps, dylibs vs sos,
+# pre-built host-arch binaries the container can't run).
+build_debug/
+build_release/
+subprojects/ncc/build_release/
+subprojects/ncc/build_debug/
+subprojects/picoquic/build/
+subprojects/picotls/build/
+.cache/
+.vscode/
+*.dSYM/
+.git/

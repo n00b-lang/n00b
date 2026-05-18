@@ -309,7 +309,9 @@ n00b_conduit_conn_from_fd(n00b_conduit_t *c, n00b_conduit_io_backend_t *io,
         return n00b_result_err(n00b_conduit_conn_t *, EINVAL);
     }
 
-    n00b_conduit_conn_t *conn = n00b_alloc(n00b_conduit_conn_t);
+    n00b_conduit_conn_t *conn = n00b_alloc_with_opts(
+        n00b_conduit_conn_t,
+        &(n00b_alloc_opts_t){.allocator = c->allocator});
 
     conn->conduit         = c;
     conn->fd              = fd;
@@ -429,7 +431,9 @@ n00b_conduit_conn_tcp(n00b_conduit_t *c, n00b_conduit_io_backend_t *io,
         }
     }
 
-    n00b_conduit_conn_t *conn = n00b_alloc(n00b_conduit_conn_t);
+    n00b_conduit_conn_t *conn = n00b_alloc_with_opts(
+        n00b_conduit_conn_t,
+        &(n00b_alloc_opts_t){.allocator = c->allocator});
 
     conn->conduit         = c;
     conn->fd              = fd;

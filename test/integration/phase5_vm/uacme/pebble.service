@@ -1,0 +1,23 @@
+[Unit]
+Description=Pebble (RFC 8555 ACME server)
+After=network-online.target pebble-challtestsrv.service
+Wants=network-online.target
+Requires=pebble-challtestsrv.service
+
+[Service]
+Type=simple
+# `-dnsserver 127.0.0.1:8053` points Pebble's DNS-01 validator at
+# pebble-challtestsrv's DNS server; the TXT records the uacme hook
+# publishes via challtestsrv's management API are then visible to
+# Pebble's validator.
+Environment=PEBBLE_VA_NOSLEEP=1
+Environment=PEBBLE_AUTHZREUSE=100
+ExecStart=/usr/local/bin/pebble \
+    -config /etc/pebble/config.json \
+    -dnsserver 127.0.0.1:8053
+Restart=on-failure
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

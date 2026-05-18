@@ -92,7 +92,9 @@ win_state(n00b_subproc_t *sp)
         return nullptr;
     }
     if (!sp->win) {
-        sp->win = n00b_alloc(n00b_subproc_win_state_t);
+        sp->win = n00b_alloc_with_opts(
+            n00b_subproc_win_state_t,
+            &(n00b_alloc_opts_t){.allocator = sp->conduit->allocator});
         memset(sp->win, 0, sizeof(*sp->win));
         sp->win->stdin_xform_sub = N00B_CONDUIT_INVALID_SUB_HANDLE;
     }

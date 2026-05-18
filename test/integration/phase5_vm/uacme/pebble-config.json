@@ -1,0 +1,24 @@
+{
+  "pebble": {
+    "listenAddress": "127.0.0.1:14000",
+    "managementListenAddress": "127.0.0.1:15000",
+    "certificate": "/etc/pebble/cert.pem",
+    "privateKey": "/etc/pebble/key.pem",
+    "httpPort": 5002,
+    "tlsPort": 5001,
+    "ocspResponderURL": "",
+    "externalAccountBindingRequired": false,
+    "domainBlocklist": ["blocked-domain.example"],
+    "retryAfter": {
+      "authz": 3,
+      "order": 5
+    },
+    "keyAlgorithm": "ecdsa",
+    "profiles": {
+      "default": {
+        "description": "default profile",
+        "validityPeriod": 7776000
+      }
+    }
+  }
+}

@@ -1,0 +1,72 @@
+# Phase 5 § 5.11 — ZITADEL Helm chart values for the alternate-IdP
+# fixture.  Stays small and self-contained: HTTP-only (no ingress
+# / TLS termination — same as the Keycloak fixture's posture);
+# bundled PostgreSQL sub-chart, ephemeral storage; one replica.
+#
+# Real deployments would point at a real Postgres + run multiple
+# replicas behind an ingress controller; the playbook docs in
+# `docs/quic/playbook_k8s.md` § "ZITADEL" call out the exact
+# fields to flip.
+
+zitadel:
+  configmapConfig:
+    # Allow plain HTTP on the cluster network — the smoke doesn't
+    # set up TLS in front of ZITADEL.  Production deployments
+    # always have an ingress controller terminating TLS, so
+    # ExternalSecure flips to true with a real domain.
+    ExternalSecure: false
+    ExternalDomain: zitadel.zitadel.svc.cluster.local
+    ExternalPort: 8080
+    TLS:
+      Enabled: false
+    # Skip the default IAM admin email validation — fixture
+    # accounts use `.invalid` placeholders that ZITADEL's
+    # production-mode email check rejects.
+    DefaultInstance:
+      LoginPolicy:
+        AllowRegister: false
+
+  # Master key required by ZITADEL for at-rest encryption.  Real
+  # deployments generate this via `openssl rand -base64 32` and
+  # store in a managed Secret; the fixture pins a known value so
+  # the install is deterministic.  *Not for production.*
+  # 32 bytes exactly — ZITADEL fails fast on any other length.
+  masterkey: "MasterkeyMustHave32Chars00000000"
+  masterkeyOverwriteOnUpgrade: false
+
+# NOTE: bundled `postgresql.enabled=true` doesn't work with the
+# chart's pre-install init hook — the hook runs *before* any
+# main-resources deploy (per Helm's hook ordering), so the init
+# job hits NXDOMAIN trying to resolve the bundled-Postgres
+# Service that hasn't been created yet.  The chart maintainers
+# document this implicitly: their CI installs Postgres as a
+# separate release, then this chart pointing at it via DSN.
+# run.sh follows that pattern.
+postgresql:
+  enabled: false
+
+# Pass the external-Postgres DSN to ZITADEL via the documented
+# env-var path; the chart's `Database.Postgres.*` configmap fields
+# are ignored when this env var is present.
+env:
+  - name: ZITADEL_DATABASE_POSTGRES_DSN
+    valueFrom:
+      secretKeyRef:
+        name: zitadel-pg-dsn
+        key: dsn
+
+# Single replica for the smoke; production runs >= 2 with sticky
+# session affinity (or stateless via shared Postgres).
+replicaCount: 1
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 768Mi
+  limits:
+    cpu: 1000m
+    memory: 1536Mi
+
+# Don't try to provision PVCs.
+persistence:
+  enabled: false

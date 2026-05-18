@@ -349,7 +349,10 @@ n00b_diag_import_parse_error(n00b_diag_ctx_t *ctx,
     span.end_line   = error_line;
     span.end_col    = error_col;
 
-    (void)filename; // TODO: set span.file when n00b_option_some API is available
+    if (filename && *filename) {
+        span.file = n00b_option_set(n00b_string_t *,
+                                    n00b_string_from_cstr(filename));
+    }
 
     n00b_diag_push(ctx,
                    N00B_DIAG_ERROR,

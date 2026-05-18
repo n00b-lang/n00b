@@ -25,13 +25,15 @@ typedef struct n00b_conduit_topic_base n00b_conduit_topic_base_t;
 #define n00b_conduit_topic_t(T) struct typeid("n00b_conduit_topic", T)
 typedef struct n00b_conduit_fd_owner n00b_conduit_fd_owner_t;
 typedef struct n00b_conduit_listener n00b_conduit_listener_t;
+typedef struct n00b_conduit_udp      n00b_conduit_udp_t;
 
 // ============================================================================
-// IO watch target -- variant discriminating fd_owner vs listener
+// IO watch target -- variant discriminating fd_owner vs listener vs UDP socket
 // ============================================================================
 
 typedef n00b_variant_t(n00b_conduit_fd_owner_t *,
-                       n00b_conduit_listener_t *) n00b_conduit_io_target_t;
+                       n00b_conduit_listener_t *,
+                       n00b_conduit_udp_t *) n00b_conduit_io_target_t;
 
 // ============================================================================
 // Error codes (offset to avoid collision with core n00b_err_t values)

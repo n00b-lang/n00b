@@ -1,6 +1,9 @@
 #include "vfs/vfs.h"
+#include "vfs/backend_local.h"
 #include "core/alloc.h"
+#include "core/runtime.h"
 
+#include <stdatomic.h>
 #include <string.h>
 
 #define INITIAL_MOUNTS      4
@@ -1093,3 +1096,4 @@ n00b_vfs_rename(n00b_vfs_t *vfs, n00b_string_t *old_path,
     return m_old->backend->ops->rename(m_old->backend->ctx,
                                         old_bpath, new_bpath);
 }
+

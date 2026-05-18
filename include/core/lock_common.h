@@ -13,6 +13,7 @@
 #include "n00b.h"
 #include "core/atomic.h"
 #include "core/alloc_mdata.h"
+#include "core/thread.h"
 
 /**
  * @brief Fields common to every lock type.

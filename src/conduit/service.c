@@ -8,7 +8,16 @@
 #include "conduit/service.h"
 #include "core/alloc.h"
 #include "core/runtime.h"
+#include "core/condition.h"
 #include <string.h>
+
+/* Internal job-queue types — declared opaque in the header so
+ * service.h doesn't pull in private layout. */
+struct n00b_conduit_job {
+    n00b_conduit_work_fn  fn;
+    void                 *arg;
+    struct n00b_conduit_job *next;
+};
 
 // ============================================================================
 // Thread entry points
@@ -24,6 +33,52 @@ io_thread_loop(void *raw)
         (void)n00b_conduit_io_poll(st->io, 500);
     }
 
+    return nullptr;
+}
+
+/* Pop the head of @p svc's job queue.  Caller must hold the
+ * job_cv lock.  Returns nullptr when the queue is empty. */
+static n00b_conduit_job_t *
+worker_pop(n00b_conduit_service_t *svc)
+{
+    n00b_conduit_job_t *j = svc->job_head;
+    if (!j) return nullptr;
+    svc->job_head = j->next;
+    if (!svc->job_head) svc->job_tail = nullptr;
+    j->next = nullptr;
+    return j;
+}
+
+static void *
+worker_thread_loop(void *raw)
+{
+    n00b_conduit_svc_thread_t *st  = raw;
+    n00b_conduit_service_t    *svc = st->conduit->service;
+
+    while (true) {
+        n00b_conduit_job_t *job = nullptr;
+
+        n00b_condition_lock(&svc->job_cv);
+        while (!svc->job_head
+               && !n00b_atomic_load(&st->stop)
+               && !n00b_conduit_is_shutdown(st->conduit)) {
+            /* 500ms safety net so a stop request that races with the
+             * predicate check still wakes the worker reasonably soon. */
+            n00b_condition_wait(&svc->job_cv,
+                                .timeout = 500 * 1000 * 1000LL);
+        }
+        if (n00b_atomic_load(&st->stop)
+            || n00b_conduit_is_shutdown(st->conduit)) {
+            n00b_condition_unlock(&svc->job_cv);
+            break;
+        }
+        job = worker_pop(svc);
+        n00b_condition_unlock(&svc->job_cv);
+
+        if (job && job->fn) {
+            job->fn(job->arg);
+        }
+    }
     return nullptr;
 }
 
@@ -113,6 +168,10 @@ n00b_conduit_service_new(n00b_conduit_t *c)
     n00b_atomic_store(&svc->num_threads, 0);
     n00b_atomic_store(&svc->started, false);
     n00b_atomic_store(&svc->shutdown, false);
+    n00b_atomic_store(&svc->worker_threads, 0);
+    svc->job_head = nullptr;
+    svc->job_tail = nullptr;
+    n00b_condition_init(&svc->job_cv);
 
     for (int i = 0; i < N00B_CONDUIT_MAX_SERVICE_THREADS; i++) {
         svc->threads[i] = nullptr;
@@ -192,6 +251,96 @@ n00b_conduit_service_add_io(n00b_conduit_service_t   *svc,
     return add_thread(svc, N00B_CONDUIT_SVC_IO, ops, name_buf);
 }
 
+n00b_result_t(n00b_conduit_svc_thread_t *)
+n00b_conduit_service_add_worker(n00b_conduit_service_t *svc)
+{
+    if (!svc) {
+        return n00b_result_err(n00b_conduit_svc_thread_t *,
+                               N00B_CONDUIT_ERR_NULL_ARG);
+    }
+
+    int n = n00b_atomic_load(&svc->num_threads);
+    if (n >= N00B_CONDUIT_MAX_SERVICE_THREADS) {
+        return n00b_result_err(n00b_conduit_svc_thread_t *,
+                               N00B_CONDUIT_ERR_REGISTRY_FULL);
+    }
+
+    /* Workers don't own an IO backend.  Allocate the thread record
+     * directly without going through `add_thread`. */
+    n00b_conduit_svc_thread_t *st = n00b_alloc_with_opts(
+        n00b_conduit_svc_thread_t,
+        &(n00b_alloc_opts_t){.allocator = svc->conduit->allocator});
+    st->conduit = svc->conduit;
+    st->role    = N00B_CONDUIT_SVC_WORKER;
+    st->io      = nullptr;
+    st->name    = "worker";
+    n00b_atomic_store(&st->stop, false);
+
+    while (1) {
+        n = n00b_atomic_load(&svc->num_threads);
+        if (n >= N00B_CONDUIT_MAX_SERVICE_THREADS) {
+            return n00b_result_err(n00b_conduit_svc_thread_t *,
+                                   N00B_CONDUIT_ERR_REGISTRY_FULL);
+        }
+        int expected = n;
+        if (n00b_atomic_cas(&svc->num_threads, &expected, n + 1)) {
+            svc->threads[n] = st;
+            break;
+        }
+    }
+
+    auto sr = n00b_thread_spawn(worker_thread_loop, st);
+    if (n00b_result_is_err(sr)) {
+        svc->threads[n] = nullptr;
+        n00b_atomic_add(&svc->num_threads, -1);
+        return n00b_result_err(n00b_conduit_svc_thread_t *,
+                               N00B_CONDUIT_ERR_ALLOC);
+    }
+    st->thread = n00b_result_get(sr);
+    n00b_atomic_add(&svc->worker_threads, 1);
+
+    return n00b_result_ok(n00b_conduit_svc_thread_t *, st);
+}
+
+n00b_result_t(bool)
+n00b_conduit_service_submit(n00b_conduit_service_t *svc,
+                            n00b_conduit_work_fn    fn,
+                            void                   *arg)
+{
+    if (!svc || !fn) {
+        return n00b_result_err(bool, N00B_CONDUIT_ERR_NULL_ARG);
+    }
+
+    /* Lazy-spawn the first worker on demand. */
+    if (n00b_atomic_load(&svc->worker_threads) == 0) {
+        auto wr = n00b_conduit_service_add_worker(svc);
+        if (n00b_result_is_err(wr)) {
+            return n00b_result_err(bool, n00b_result_get_err(wr));
+        }
+    }
+
+    n00b_conduit_job_t *job = n00b_alloc_with_opts(
+        n00b_conduit_job_t,
+        &(n00b_alloc_opts_t){.allocator = svc->conduit->allocator});
+    job->fn   = fn;
+    job->arg  = arg;
+    job->next = nullptr;
+
+    n00b_condition_lock(&svc->job_cv);
+    if (svc->job_tail) {
+        svc->job_tail->next = job;
+    } else {
+        svc->job_head = job;
+    }
+    svc->job_tail = job;
+    /* Wake exactly one waiter — preserves ordering and avoids the
+     * thundering-herd that notify_all causes when multiple workers
+     * race for one item. */
+    n00b_condition_notify(&svc->job_cv, .auto_unlock = true);
+
+    return n00b_result_ok(bool, true);
+}
+
 void
 n00b_conduit_service_stop(n00b_conduit_service_t *svc)
 {
@@ -212,6 +361,11 @@ n00b_conduit_service_stop(n00b_conduit_service_t *svc)
             }
         }
     }
+
+    /* Wake any sleeping workers so they observe the stop flag. */
+    n00b_condition_lock(&svc->job_cv);
+    n00b_condition_notify(&svc->job_cv,
+                          .all = true, .auto_unlock = true);
 
     // Join all threads.
     for (int i = 0; i < n; i++) {

@@ -39,7 +39,7 @@ n00b_thread_slot_acquire(n00b_runtime_t *rt, n00b_thread_t *ptr)
 
     do {
         candidate = n00b_atomic_add(&rt->next_thread_slot, 1);
-        candidate %= N00B_THREADS_MAX;
+        candidate %= rt->max_threads;
         expected = nullptr;
     } while (!n00b_cas(&rt->threads[candidate].thread, &expected, ptr));
 

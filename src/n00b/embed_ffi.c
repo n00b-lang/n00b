@@ -113,7 +113,8 @@ ffi_tokenize(n00b_scanner_t *s)
     // try as fixed-text first (matches grammar keywords like %"kw"),
     // fall back to IDENTIFIER literal type.
     if ((b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || b == '_') {
-        n00b_option_t(n00b_string_t *) id = n00b_scan_identifier(s);
+        n00b_option_t(n00b_string_t *) id = n00b_scan_identifier(s,
+                                   .allow_underscore_start = true);
 
         if (n00b_option_is_set(id)) {
             n00b_token_err_t err = n00b_scan_emit(s, .contents = id);

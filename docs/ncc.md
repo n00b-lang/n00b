@@ -302,6 +302,69 @@ futex-based synchronization. Subsequent calls are no-ops.
 > process-global singletons, which conflicts with this design. The transform
 > is retained for user code that genuinely needs single-init semantics.
 
+### `@rpc("svc/method")` &mdash; QUIC RPC Annotation
+
+**Status: Complete (Phase 4 § 4.5).  Used by the QUIC RPC layer.**
+
+```c
+extern n00b_result_t(GreetReply *)
+greet_hello(GreetRequest *req, n00b_rpc_ctx_t *ctx)
+    @rpc("greet.v1.Greeter/Hello");
+```
+
+Marks a C function as an RPC method.  ncc generates three sibling
+external declarations per annotated function:
+
+1. **Dispatcher** &mdash; decodes a CBOR request buffer, invokes the
+   user handler, encodes the response.  `static`-scope helper named
+   `_n00b_rpc_dispatch__<svc>__<method>`.  Emitted at the **definition**
+   site only.
+2. **Constructor** &mdash; runs at process start (via
+   `__attribute__((constructor))`) and registers the dispatcher in
+   the runtime registry via `n00b_rpc_register(...)`.  Emitted at
+   the **definition** site only.
+3. **Client stub** &mdash; the public callable.  Encodes the request
+   to CBOR, dispatches via `n00b_rpc_call_unary` / `_server_stream`
+   / `_client_stream` / `_bidi`, and decodes the reply.  Named
+   `n00b_rpc_call_<svc>__<method>` (no leading underscore).
+   Declarations (the header path) emit only an `extern` prototype for
+   this symbol; the body is emitted at the definition site &mdash; so a
+   single header may be included by many TUs without duplicate-symbol
+   errors at link.
+
+The annotation's quoted string is `<package>.<service>/<method>`:
+package and service are dotted lower-case-style identifiers; method
+is a single identifier.  The package + service component is mangled
+into the C symbol by replacing dots with `_` and the slash with
+`__`.  See `docs/quic/rpc.md` § "Generated symbols" for the full
+naming reference.
+
+#### Stream shapes
+
+ncc inspects the user's return type and first parameter to pick one
+of four templates:
+
+| Return                                    | First param                  | Shape         |
+|-------------------------------------------|------------------------------|---------------|
+| `n00b_result_t(T *)`                       | `U *`                        | unary         |
+| `n00b_result_t(n00b_rpc_stream_t(T) *)`    | `U *`                        | server-stream |
+| `n00b_result_t(T *)`                       | `n00b_rpc_stream_t(U) *`     | client-stream |
+| `n00b_result_t(n00b_rpc_stream_t(T) *)`    | `n00b_rpc_stream_t(U) *`     | bidi          |
+
+#### Restrictions (v0)
+
+- The function must take a `n00b_rpc_ctx_t *` parameter.
+- The return type must be `n00b_result_t(...)`.
+- `static` functions cannot be `@rpc`-annotated.
+- `_kargs` + `@rpc` on the same function is rejected at parse time.
+- The method string must be `<package>.<service>/<method>` with
+  exactly one `/`; each component must be a valid C identifier
+  (the package may be dotted).
+
+The `@rpc` transform runs **first** in the pipeline so the
+synthesized dispatcher / stub bodies flow through `generic_struct`,
+`typeid`, `option`, and `kargs_vargs` lowering naturally.
+
 ### `package` &mdash; Namespace Prefixing
 
 **Status: Implementation exists but is deferred. Do not use.**
@@ -528,6 +591,7 @@ Tests cover: `constexpr`, `typeid`, `kw_args`, `rstr`, `error` propagation,
 | `!` (bang) | `expr!` | **Complete** | Yes &mdash; result types |
 | `r"..."` | `r"«b»bold«/b»"` | **Complete** | Yes &mdash; all styled text |
 | `once` | `once void f() { }` | **Complete** | No &mdash; conflicts with multi-runtime |
+| `@rpc(...)` | `f(...) @rpc("svc/m");` | **Complete** | Yes &mdash; QUIC RPC layer (Phase 4 § 4.5) |
 | `package` | `package name;` | **Deferred** | No &mdash; design needs rework |
 | `--modernize` | CLI flag | **Complete** | Tooling only |
 

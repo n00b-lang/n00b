@@ -171,6 +171,15 @@ deliver_io_event(n00b_conduit_io_backend_t *io, n00b_conduit_io_event_t *event)
         n00b_conduit_listener_dispatch(listener, event->ops);
         return;
     }
+
+    if (target && _n00b_variant_is_type_ptr(target, n00b_conduit_udp_t *)) {
+        n00b_conduit_udp_t *udp =
+            _n00b_variant_get_ptr(target, n00b_conduit_udp_t *);
+        extern void n00b_conduit_udp_dispatch(n00b_conduit_udp_t *,
+                                              uint32_t io_ops);
+        n00b_conduit_udp_dispatch(udp, event->ops);
+        return;
+    }
 }
 
 n00b_result_t(int)

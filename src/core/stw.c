@@ -93,7 +93,7 @@ _n00b_stop_the_world(char *loc)
 
     assert(n00b_atomic_load(&rt->stw) == (uint32_t)tid);
 
-    int n = N00B_THREADS_MAX;
+    int n = (int)rt->max_threads;
 
     // Loop through every single thread and add the STW bit to their
     // state, which will alert them to go wait on the STW.
@@ -118,17 +118,16 @@ _n00b_stop_the_world(char *loc)
     // threads are still running with live heap pointers in registers
     // the GC can't see.  Plain busy-wait: threads flip their bit at
     // their next checkin / safepoint, which is generally microseconds.
-    n = N00B_THREADS_MAX;
+    n = (int)rt->max_threads;
+
     while (n--) {
         t = n00b_atomic_load(&rt->threads[n].thread);
         if (!t || t == n00b_thread_self()) {
             continue;
         }
-        while ((n00b_atomic_load(&t->self_lock)
-                & (N00B_BLOCKING | N00B_SUSPEND))
-               == 0) {
-            // spin
-        }
+
+        while (!(n00b_atomic_load(&t->self_lock) & (N00B_SUSPEND | N00B_BLOCKING)))
+            ;
     }
 
     rt->stw_nesting = 1;
@@ -154,7 +153,7 @@ _n00b_restart_the_world(char *loc)
     }
 
     n00b_barrier();
-    int n = N00B_THREADS_MAX;
+    int n = (int)rt->max_threads;
 
     n00b_thread_t *t;
 

@@ -256,6 +256,16 @@ if conf_cocoa
   deps += cocoa_dep
 endif
 
+# macOS Security.framework + CoreFoundation: needed by the ACME trust
+# verifier (acme_trust_macos.m) and Keychain secret bridge
+# (secret_keychain.m).  Always-shipped Apple frameworks; unconditional
+# on darwin.
+if target_os == 'darwin'
+  acme_trust_dep = dependency('appleframeworks',
+      modules: ['Security', 'CoreFoundation'])
+  deps += acme_trust_dep
+endif
+
 if conf_notcurses
   notcurses_dep = dependency('notcurses', version: '>=3.0.10', required: false)
   conf_notcurses = notcurses_dep.found()
@@ -284,6 +294,21 @@ if libzip_dep.found()
   exe_c_args = exe_c_args + ['-DN00B_HAVE_LIBZIP=1']
   deps += libzip_dep
 endif
+
+# picotls + picoquic vendored subprojects.  Required by the QUIC stack
+# (src/net/quic) and HTTP/3 client (src/net/http).  See
+# docs/net/quic/vendored.md for the upstream-tracking pin file.
+picotls_proj           = subproject('picotls')
+picotls_minicrypto_dep = picotls_proj.get_variable('picotls_minicrypto_dep')
+
+picoquic_proj = subproject('picoquic')
+picoquic_dep  = picoquic_proj.get_variable('picoquic_core_dep')
+
+# zlib for HTTP/1.1 + H3 Content-Encoding decompression (gzip/deflate).
+# brotli + zstd are dlopen'd at runtime in src/net/http/http_compression.c.
+zlib_dep = dependency('zlib', required: true)
+deps += zlib_dep
+
 
 subdir('src/core')
 subdir('src/util')
@@ -315,6 +340,7 @@ gen_unicode_file_names = [
     'gen_idna.c',
     'gen_joining.c',
     'gen_linebreak.c',
+    'gen_names.c',
     'gen_normprops.c',
     'gen_numeric.c',
     'gen_proplist.c',
@@ -406,6 +432,13 @@ subdir('src/chalk')
 
 subdir('src/ml')
 
+# ============================================================================
+# Networking: QUIC stack (phases 1-5) + HTTP/1.1+H3 client (phase 6)
+# ============================================================================
+
+subdir('src/net/quic')
+subdir('src/net/http')
+
 # Aggregate per-module source lists into the libn00b source set. Each
 # entry above (`subdir('src/<mod>')`) is responsible for declaring a
 # `n00b_<mod>_src` variable; we just glue them together here.
@@ -424,7 +457,9 @@ n00b_dll_src = (
     n00b_compiler_src +
     n00b_objfile_src +
     n00b_chalk_src +
-    n00b_ml_src
+    n00b_ml_src +
+    n00b_quic_src +
+    n00b_http_src
 )
 
 # Build generated unicode tables with --no-ncc (they are pure data,
@@ -455,6 +490,11 @@ n00b_vendor_lib = static_library('n00b_vendor',
 )
 
 link_whole_libs = [gen_unicode_lib, n00b_vendor_lib]
+
+# QUIC's macOS ObjC bridges (ACME trust verifier, Keychain secret provider)
+# are declared in src/net/quic/meson.build and exposed via the array below;
+# fold them in once link_whole_libs exists.
+link_whole_libs += n00b_quic_link_whole_libs
 
 # Build the Cocoa backend as a separate ObjC static library (macOS only).
 # ObjC files cannot go through ncc's C parser, so we compile them with
@@ -505,12 +545,12 @@ if conf_notcurses
   link_whole_libs += n00b_notcurses_lib
 endif
 
-# ACME trust verifier (macOS) lives on the QUIC branch; not built on this branch.
-
+# macOS ACME trust verifier + Keychain secret provider ObjC bridges
+# are declared in src/net/quic/meson.build (per-subdir build files).
 n00b = static_library('n00b',
     n00b_dll_src,
     include_directories: incdir,
-    dependencies: deps + [libdl_dep, mir_dep],
+    dependencies: deps + [libdl_dep, mir_dep, picoquic_dep],
     c_args: exe_c_args,
     link_args: link_args,
     link_whole: link_whole_libs,
@@ -529,9 +569,22 @@ test_common_kwargs = {
     # #9.
     'link_args': exe_link_args,
     'link_with': [n00b],
+    # libn00b now references picoquic symbols (endpoint, conn, chan).
+    # Static-library deps don't propagate transitively in meson, so
+    # every test that links libn00b also needs picoquic_dep on its
+    # link line.  picoquic_dep brings the include path along too.
+    'dependencies': [picoquic_dep],
 }
 
-# QUIC demos / examples live on the QUIC branch; not built on this branch.
+# Alias kept for clarity at QUIC test sites that drive picoquic
+# explicitly; structurally identical to test_common_kwargs.
+quic_test_kwargs = test_common_kwargs
+
+# QUIC demo executables — each lives in its own per-subdir meson.build.
+subdir('examples/quic_echo')
+subdir('examples/quic_server_managed')
+subdir('examples/quic_acme_demo')
+subdir('examples/quic_acme_http01_demo')
 
 
 array_test = executable('test_array',
@@ -1488,6 +1541,965 @@ foreach name : objfile_test_names
         kwargs: test_common_kwargs,
     )
     test('objfile_' + name, exe, suite: 'unit')
+endforeach
+
+# Crayon ObjC/libxpc examples (Mac-only) live on the ML sibling branch
+# along with examples/crayon_shared/.  They re-land with that branch.
+
+# ============================================================================
+# test_heap and test_stats live with the adt/heap.c source on a
+# different feature branch; not built in this QUIC branch.
+
+# ============================================================================
+# QUIC tests
+# ============================================================================
+
+quic_framer_test = executable('test_quic_framer',
+    ['test/unit/test_quic_framer.c'],
+    kwargs: test_common_kwargs,
+)
+test('quic_framer', quic_framer_test, suite: 'unit')
+
+quic_framer_fuzz_test = executable('test_quic_framer_fuzz',
+    ['test/unit/test_quic_framer_fuzz.c'],
+    kwargs: test_common_kwargs,
+)
+test('quic_framer_fuzz', quic_framer_fuzz_test, suite: 'unit', timeout: 60)
+
+quic_trust_test = executable('test_quic_trust',
+    ['test/unit/test_quic_trust.c'],
+    kwargs: test_common_kwargs,
+)
+test('quic_trust', quic_trust_test, suite: 'unit')
+
+quic_secret_test = executable('test_quic_secret',
+    ['test/unit/test_quic_secret.c'],
+    kwargs: test_common_kwargs,
+)
+test('quic_secret', quic_secret_test, suite: 'unit')
+
+# Linux-only libsecret bridge.  Compiled and registered only when
+# pkg-config locates libsecret-1; the test SKIPs (exit 77) when no
+# Secret Service daemon is reachable at run-time, so the suite still
+# passes on Linux hosts without gnome-keyring / kwallet.
+if have_libsecret
+    quic_secret_libsecret_kwargs = {}
+    foreach _k, _v : test_common_kwargs
+        if _k == 'dependencies'
+            quic_secret_libsecret_kwargs += {_k: _v + [libsecret_dep]}
+        else
+            quic_secret_libsecret_kwargs += {_k: _v}
+        endif
+    endforeach
+    quic_secret_libsecret_test = executable(
+        'test_quic_secret_libsecret',
+        ['test/unit/test_quic_secret_libsecret.c'],
+        kwargs: quic_secret_libsecret_kwargs,
+    )
+    test('quic_secret_libsecret', quic_secret_libsecret_test, suite: 'unit')
+endif
+
+# test_quic_acme_http removed in Phase 6 chunk 11 — its coverage
+# (URL parser, header bag, response parser) is replaced by
+# test_http_url, test_http_h1, and test_http_compression.
+
+# JWS encoder + ECDSA-P-256 sign + base64url + JWK thumbprint.
+quic_jws_test = executable('test_quic_jws',
+    ['test/unit/test_quic_jws.c'],
+    kwargs: test_common_kwargs,
+)
+test('quic_jws', quic_jws_test, suite: 'unit')
+
+# Phase 3 § 6 — JWT verifier: compact JWS parse, ES256 verify,
+# claim validation, alg refusals.  RS256 verify (rsa_verify.c) is
+# exercised inline through the JSON dispatch in jwt.c.
+quic_jwt_test = executable('test_quic_jwt',
+    ['test/unit/test_quic_jwt.c'],
+    kwargs: test_common_kwargs,
+)
+test('quic_jwt', quic_jwt_test, suite: 'unit')
+
+# Phase 3 § 7 — OIDC discovery + JWKS cache.  Offline-only;
+# live-IdP tests live in the Phase 3.10 fixture suite.
+quic_oidc_test = executable('test_quic_oidc',
+    ['test/unit/test_quic_oidc.c'],
+    kwargs: test_common_kwargs,
+)
+test('quic_oidc', quic_oidc_test, suite: 'unit')
+
+# Phase 3 § 8 — DPoP issue + verify (RFC 9449).
+quic_dpop_test = executable('test_quic_dpop',
+    ['test/unit/test_quic_dpop.c'],
+    kwargs: test_common_kwargs,
+)
+test('quic_dpop', quic_dpop_test, suite: 'unit')
+
+# SHA-512 / SHA-384 — FIPS 180-4 vectors validate the new
+# core/sha512.c that underpins RS384/RS512 JWS verification.
+sha512_test = executable('test_sha512',
+    ['test/unit/test_sha512.c'],
+    kwargs: test_common_kwargs,
+)
+test('sha512', sha512_test, suite: 'unit')
+
+# Phase 3 § 9 — mTLS-bound tokens (RFC 8705).
+quic_mtls_token_test = executable('test_quic_mtls_token',
+    ['test/unit/test_quic_mtls_token.c'],
+    kwargs: test_common_kwargs,
+)
+test('quic_mtls_token', quic_mtls_token_test, suite: 'unit')
+
+# Phase 3 § 10 — per-channel auth policy.
+quic_auth_policy_test = executable('test_quic_auth_policy',
+    ['test/unit/test_quic_auth_policy.c'],
+    kwargs: test_common_kwargs,
+)
+test('quic_auth_policy', quic_auth_policy_test, suite: 'unit')
+
+# Phase 3 § 12 / § 10.2 — audit log shape + JSONL sink.
+quic_audit_test = executable('test_quic_audit',
+    ['test/unit/test_quic_audit.c'],
+    kwargs: test_common_kwargs,
+)
+test('quic_audit', quic_audit_test, suite: 'unit')
+
+# Phase 5 § 5.1 — Prometheus metrics registry + listener.
+quic_metrics_test = executable('test_quic_metrics',
+    ['test/unit/test_quic_metrics.c'],
+    kwargs: test_common_kwargs,
+)
+test('quic_metrics', quic_metrics_test, suite: 'unit')
+
+# Phase 6 chunk 1 — HTTPS URL parser.
+http_url_test = executable('test_http_url',
+    ['test/unit/test_http_url.c'],
+    kwargs: test_common_kwargs,
+)
+test('http_url', http_url_test, suite: 'unit')
+
+# Phase 6 chunk 2 — HTTP/1.1 response parser + request builder
+# (sub-chunks 2.1 + 2.2).
+http_h1_test = executable('test_http_h1',
+    ['test/unit/test_http_h1.c'],
+    kwargs: test_common_kwargs,
+)
+test('http_h1', http_h1_test, suite: 'unit')
+
+# Phase 6 chunk 2.3 — live-network smoke for the h1 round-trip
+# path.  Skipped unless N00B_TEST_NET=1 (3 endpoints, 2-of-3
+# tolerant gate per ~/dd/quic_6.md § 8.2).
+http_h1_network_test = executable('test_http_h1_network',
+    ['test/unit/test_http_h1_network.c'],
+    kwargs: test_common_kwargs,
+)
+test('http_h1_network', http_h1_network_test,
+     suite: 'unit', timeout: 60)
+
+# Phase 6 chunk 3 — h3 round-trip primitive (argument validation
+# + DNS failure path; full end-to-end exercises through the
+# existing Caddy fixture when chunk 5's dispatcher lands).
+http_h3_test = executable('test_http_h3',
+    ['test/unit/test_http_h3.c'],
+    kwargs: test_common_kwargs,
+)
+test('http_h3', http_h3_test, suite: 'unit', timeout: 30)
+
+# Phase 6 chunk 3 — h3 informational network smoke (skipped unless
+# N00B_TEST_NET=1).  Tolerant of trust-bridge gaps until chunk 9.
+http_h3_network_test = executable('test_http_h3_network',
+    ['test/unit/test_http_h3_network.c'],
+    kwargs: test_common_kwargs,
+)
+test('http_h3_network', http_h3_network_test,
+     suite: 'unit', timeout: 60)
+
+# Phase 6 chunk 4 — connection pool.
+http_pool_test = executable('test_http_pool',
+    ['test/unit/test_http_pool.c'],
+    kwargs: test_common_kwargs,
+)
+test('http_pool', http_pool_test, suite: 'unit')
+
+# Minimal rwlock reader/writer contention repro.
+rwlock_contention_test = executable('test_rwlock_contention',
+    ['test/unit/test_rwlock_contention.c'],
+    kwargs: test_common_kwargs,
+)
+test('rwlock_contention', rwlock_contention_test, suite: 'unit', timeout: 30)
+
+# PoC for the picotls CertificateVerify gap (see audit).
+tls_certverify_gap_test = executable('test_tls_certverify_gap',
+    ['test/unit/test_tls_certverify_gap.c'],
+    kwargs: test_common_kwargs,
+)
+test('tls_certverify_gap', tls_certverify_gap_test, suite: 'unit',
+     timeout: 10)
+
+# In-process mTLS client-auth handshake test (both matched-key
+# and mismatched-key paths).
+acme_tls_mtls_test = executable('test_acme_tls_mtls',
+    ['test/unit/test_acme_tls_mtls.c'],
+    kwargs: test_common_kwargs,
+)
+test('acme_tls_mtls', acme_tls_mtls_test, suite: 'unit', timeout: 10)
+
+# RSA-PSS-SHA256 sign+verify roundtrip — math-level coverage for the
+# new n00b_rsa_sign_pss_sha256 primitive.  Schoolbook bn_powmod with
+# the full 2048-bit private exponent is slow under -O0; bump the
+# timeout accordingly.
+rsa_pss_roundtrip_test = executable('test_rsa_pss_roundtrip',
+    ['test/unit/test_rsa_pss_roundtrip.c'],
+    kwargs: test_common_kwargs,
+)
+test('rsa_pss_roundtrip', rsa_pss_roundtrip_test, suite: 'unit', timeout: 60)
+
+# End-to-end QUIC mTLS handshake (loopback) — covers the h3 / picoquic
+# side of n00b_picotls_install_client_auth, including the server-side
+# verify_sign installation that catches forged client CertificateVerify.
+quic_mtls_handshake_test = executable('test_quic_mtls_handshake',
+    ['test/unit/test_quic_mtls_handshake.c'],
+    kwargs: test_common_kwargs,
+)
+test('quic_mtls_handshake', quic_mtls_handshake_test, suite: 'unit',
+     timeout: 30)
+
+# Phase 6 chunk 5 — public dispatcher (synchronous form;
+# topic-shaped variant follows in a sub-chunk).
+http_client_test = executable('test_http_client',
+    ['test/unit/test_http_client.c'],
+    kwargs: test_common_kwargs,
+)
+test('http_client', http_client_test, suite: 'unit', timeout: 30)
+
+# Phase 6 chunk 5 — live-network smoke for the dispatcher.
+# Skipped unless N00B_TEST_NET=1.
+http_client_network_test = executable('test_http_client_network',
+    ['test/unit/test_http_client_network.c'],
+    kwargs: test_common_kwargs,
+)
+test('http_client_network', http_client_network_test,
+     suite: 'unit', timeout: 90)
+
+# Phase 6 chunk 6 — Alt-Svc parser + cache.
+http_alt_svc_test = executable('test_http_alt_svc',
+    ['test/unit/test_http_alt_svc.c'],
+    kwargs: test_common_kwargs,
+)
+test('http_alt_svc', http_alt_svc_test, suite: 'unit')
+
+# Phase 6 chunk 8 — compression.
+http_compression_test = executable('test_http_compression',
+    ['test/unit/test_http_compression.c'],
+    kwargs: test_common_kwargs,
+)
+test('http_compression', http_compression_test, suite: 'unit')
+
+# Phase 6 chunk 9 — cookies.
+http_cookies_test = executable('test_http_cookies',
+    ['test/unit/test_http_cookies.c'],
+    kwargs: test_common_kwargs,
+)
+test('http_cookies', http_cookies_test, suite: 'unit')
+
+# Phase 6 chunk 10 — auth helper.
+http_auth_test = executable('test_http_auth',
+    ['test/unit/test_http_auth.c'],
+    kwargs: test_common_kwargs,
+)
+test('http_auth', http_auth_test, suite: 'unit')
+
+# Phase 4 § 4.1 — CBOR encoder + decoder (RFC 8949).  Unit tests
+# cover Appendix A vectors + n00b round-trips + decoder hardening +
+# a light in-process fuzz smoke.  Dedicated libFuzzer harness lives
+# at `test/fuzz/fuzz_quic_cbor.c`; built ad-hoc with Clang's
+# `-fsanitize=fuzzer` rather than wired into the standard build.
+quic_cbor_test = executable('test_quic_cbor',
+    ['test/unit/test_quic_cbor.c'],
+    kwargs: test_common_kwargs,
+)
+test('quic_cbor', quic_cbor_test, suite: 'unit', timeout: 60)
+
+# Phase 4 § 4.2 — QPACK (RFC 9204): encoder, decoder, dynamic table,
+# huffman, encoder/decoder stream protocol.  RFC examples + 1000-msg
+# stress.  A libFuzzer harness lives at `test/fuzz/fuzz_quic_qpack.c`,
+# built ad-hoc.
+quic_qpack_test = executable('test_quic_qpack',
+    ['test/unit/test_quic_qpack.c'],
+    kwargs: test_common_kwargs,
+)
+test('quic_qpack', quic_qpack_test, suite: 'unit', timeout: 60)
+
+# Phase 4 § 4.8 — RPC cancel/deadline ctx.  Tests local primitive only;
+# wire signaling lands in 4.6 RPC unary.
+quic_rpc_ctx_test = executable('test_quic_rpc_ctx',
+    ['test/unit/test_quic_rpc_ctx.c'],
+    kwargs: test_common_kwargs,
+)
+test('quic_rpc_ctx', quic_rpc_ctx_test, suite: 'unit')
+
+# Phase 4 § 4.10 — RPC status enum: name lookup, HTTP-class
+# mapping, QUIC-err → status bridge, gRPC numeric alignment.
+quic_rpc_status_test = executable('test_quic_rpc_status',
+    ['test/unit/test_quic_rpc_status.c'],
+    kwargs: test_common_kwargs,
+)
+test('quic_rpc_status', quic_rpc_status_test, suite: 'unit')
+
+# Phase 4 § 4.6 — RPC unary call: end-to-end in-process round-trip.
+# Spins up an H3 client + server pair on UDP/lo, attaches the RPC
+# dispatcher, and exercises register/lookup, success, application
+# error, UNIMPLEMENTED, deadline-already-expired, and client-cancel
+# mid-flight.
+quic_rpc_unary_test = executable('test_quic_rpc_unary',
+    ['test/unit/test_quic_rpc_unary.c'],
+    kwargs: quic_test_kwargs,
+)
+test('quic_rpc_unary', quic_rpc_unary_test, suite: 'unit', timeout: 60)
+
+# Phase 4 § 4.7 — Streaming RPC: server-stream / client-stream / bidi
+# end-to-end loopback.  Mirrors the unary test scaffold but exercises
+# the streaming wire shapes (multiple DATA frames + early-publish on
+# the H3 server side + the n00b_rpc_stream_t(T) FIFO).
+quic_rpc_streaming_test = executable('test_quic_rpc_streaming',
+    ['test/unit/test_quic_rpc_streaming.c'],
+    kwargs: quic_test_kwargs,
+)
+test('quic_rpc_streaming', quic_rpc_streaming_test,
+     suite: 'unit', timeout: 90)
+
+# Phase 4 § 4.9 — RPC auth wiring (per-channel + per-call).
+# Server-side dispatcher consults manifest auth.policies[] +
+# rpc.services[] to gate inbound RPCs; per-call n00b-rpc-policy
+# header lets a request opt into a stricter policy (downgrades
+# rejected).  Audit emits one event per dispatch.
+quic_rpc_auth_test = executable('test_quic_rpc_auth',
+    ['test/unit/test_quic_rpc_auth.c',
+     'test/fixtures/synthetic_idp.c'],
+    include_directories: incdir + [include_directories('test/fixtures')],
+    c_args: exe_c_args,
+    link_args: exe_link_args,
+    link_with: [n00b],
+    dependencies: [picoquic_dep],
+)
+test('quic_rpc_auth', quic_rpc_auth_test, suite: 'unit', timeout: 90)
+
+# Phase 4 § 4.3 — H3 frame encoder + decoder (RFC 9114).
+# Frame round-trip + truncated input + oversized + malformed.
+quic_h3_frame_test = executable('test_quic_h3_frame',
+    ['test/unit/test_quic_h3_frame.c'],
+    kwargs: test_common_kwargs,
+)
+test('quic_h3_frame', quic_h3_frame_test, suite: 'unit')
+
+# Phase 4 § 4.3 — Docker-gated H3 GET / smoke against the caddy
+# fixture in `test/fixtures/caddy/`.  Run after:
+#   eval "$(bash test/fixtures/caddy/start.sh)"
+# Skips cleanly when N00B_TEST_DOCKER is unset.
+quic_h3_caddy_smoke_test = executable('test_quic_h3_caddy_smoke',
+    ['test/unit/test_quic_h3_caddy_smoke.c'],
+    kwargs: quic_test_kwargs,
+)
+test('quic_h3_caddy_smoke', quic_h3_caddy_smoke_test,
+     suite: 'interop', timeout: 60)
+
+# Phase 4 § 4.4 — In-process H3 server loopback (client + server
+# endpoint pair on UDP/lo).  Exercises GET, POST, 404, server reset,
+# and GOAWAY emission on close.
+quic_h3_server_loopback_test = executable('test_quic_h3_server_loopback',
+    ['test/unit/test_quic_h3_server_loopback.c'],
+    kwargs: quic_test_kwargs,
+)
+test('quic_h3_server_loopback', quic_h3_server_loopback_test,
+     suite: 'unit', timeout: 60)
+
+# Phase 4 § 4.4 — Docker-gated H3 GET / + POST /echo smoke against
+# the nginx-quic fixture in `test/fixtures/nginx-quic/`.  Run after:
+#   eval "$(bash test/fixtures/nginx-quic/start.sh)"
+# Skips cleanly when N00B_TEST_DOCKER is unset.
+quic_h3_nginx_smoke_test = executable('test_quic_h3_nginx_smoke',
+    ['test/unit/test_quic_h3_nginx_smoke.c'],
+    kwargs: quic_test_kwargs,
+)
+test('quic_h3_nginx_smoke', quic_h3_nginx_smoke_test,
+     suite: 'interop', timeout: 60)
+
+# Phase 3 § 7 + § 10.10 — synthetic in-process IdP fixture wired
+# end-to-end (OIDC + JWT + DPoP + mTLS-bound + policy + audit).
+quic_synthetic_idp_test = executable('test_quic_synthetic_idp',
+    ['test/unit/test_quic_synthetic_idp.c',
+     'test/fixtures/synthetic_idp.c'],
+    include_directories: incdir + [include_directories('test/fixtures')],
+    c_args: exe_c_args,
+    link_args: exe_link_args,
+    link_with: [n00b],
+    dependencies: [picoquic_dep],
+)
+test('quic_synthetic_idp', quic_synthetic_idp_test, suite: 'unit')
+
+# Phase 3.10 manual interop — gated by KEYCLOAK_ISSUER + friends.
+# Not run in CI (real-IdP interop is once-per-release per the
+# Phase 2 LE-staging precedent).  Build it always so it doesn't
+# bit-rot, but the test itself prints [SKIP] when the env isn't set.
+quic_keycloak_interop_test = executable('test_quic_keycloak_interop',
+    ['test/unit/test_quic_keycloak_interop.c'],
+    kwargs: test_common_kwargs,
+)
+test('quic_keycloak_interop', quic_keycloak_interop_test,
+     suite: 'unit', timeout: 60)
+
+# Phase 3.11 — quic_oidc_demo example: manifest → OIDC + policy
+# realization → eval against a synthetic-IdP-minted token.
+quic_oidc_demo = executable('quic_oidc_demo',
+    ['examples/quic_oidc_demo/main.c',
+     'test/fixtures/synthetic_idp.c'],
+    include_directories: incdir + [include_directories('test/fixtures')],
+    c_args: exe_c_args,
+    link_args: exe_link_args,
+    link_with: [n00b],
+    dependencies: [picoquic_dep],
+)
+
+# Phase 4 § 4.12 — quic_rpc_demo example: end-to-end H3+CBOR+@rpc demo
+# with auth wired through the synthetic IdP.  Doubles as the smoke
+# subject for `test_quic_rpc_demo_smoke`.
+quic_rpc_demo = executable('quic_rpc_demo',
+    ['examples/quic_rpc_demo/main.c',
+     'examples/quic_rpc_demo/greet.c',
+     'test/fixtures/synthetic_idp.c'],
+    include_directories: incdir + [include_directories('test/fixtures')],
+    c_args: exe_c_args,
+    link_args: exe_link_args,
+    link_with: [n00b],
+    dependencies: [picoquic_dep],
+)
+
+# Phase 5 § 5.3 — quic_phase5_demo: multi-tenant + observability demo.
+# Loopback exercises 5 RPCs across 2 synthetic IdPs through the tenant
+# resolver, then scrapes /metrics to verify the registry is populated.
+quic_phase5_demo = executable('quic_phase5_demo',
+    ['examples/quic_phase5_demo/main.c',
+     'examples/quic_phase5_demo/services.c',
+     'examples/quic_phase5_demo/tenant_resolver.c',
+     'test/fixtures/synthetic_idp.c'],
+    include_directories: incdir + [include_directories('test/fixtures')],
+    c_args: exe_c_args,
+    link_args: exe_link_args,
+    link_with: [n00b],
+    dependencies: [picoquic_dep],
+)
+
+quic_phase5_demo_smoke_test = executable('test_quic_phase5_demo_smoke',
+    ['test/unit/test_quic_phase5_demo_smoke.c'],
+    kwargs: test_common_kwargs,
+)
+test('quic_phase5_demo_smoke', quic_phase5_demo_smoke_test,
+     suite: 'unit', timeout: 90,
+     env: {'N00B_QUIC_PHASE5_DEMO_BIN': quic_phase5_demo.full_path()},
+     depends: [quic_phase5_demo])
+
+# Phase 5 § 5.4 — K8s playbook fixture smoke (kind + n00b deploy).
+# Gated on N00B_TEST_KIND=1 + kind/kubectl/docker on PATH.
+quic_phase5_k8s_test = executable('test_quic_phase5_k8s_smoke',
+    ['test/unit/test_quic_phase5_k8s_smoke.c'],
+    kwargs: test_common_kwargs,
+)
+test('quic_phase5_k8s_smoke', quic_phase5_k8s_test,
+     suite: 'integration', timeout: 1200,
+     env: {'N00B_PHASE5_K8S_SCRIPT':
+           meson.project_source_root() / 'test/integration/phase5_k8s/run.sh'})
+
+# Phase 5 § 5.9 — bare-VM playbook fixture smoke (privileged
+# container with systemd PID-1 + n00b unit).  Gated on
+# N00B_TEST_VM=1 + docker on PATH.
+quic_phase5_vm_test = executable('test_quic_phase5_vm_smoke',
+    ['test/unit/test_quic_phase5_vm_smoke.c'],
+    kwargs: test_common_kwargs,
+)
+test('quic_phase5_vm_smoke', quic_phase5_vm_test,
+     suite: 'integration', timeout: 1200,
+     env: {'N00B_PHASE5_VM_SCRIPT':
+           meson.project_source_root() / 'test/integration/phase5_vm/run.sh'})
+
+# Phase 5 § 5.10 — bare-VM uacme + DNS-01 fixture smoke
+# (privileged container with systemd PID-1 + Pebble +
+# pebble-challtestsrv + uacme oneshot).  Same gate as 5.9.
+quic_phase5_vm_uacme_test = executable('test_quic_phase5_vm_uacme_smoke',
+    ['test/unit/test_quic_phase5_vm_uacme_smoke.c'],
+    kwargs: test_common_kwargs,
+)
+test('quic_phase5_vm_uacme_smoke', quic_phase5_vm_uacme_test,
+     suite: 'integration', timeout: 1200,
+     env: {'N00B_PHASE5_VM_UACME_SCRIPT':
+           meson.project_source_root() / 'test/integration/phase5_vm/uacme/run.sh'})
+
+# Phase 5 § 5.11 — ZITADEL alternate-IdP fixture smoke (kind +
+# Helm + ZITADEL chart).  Gated on N00B_TEST_KIND_ZITADEL=1 +
+# kind/kubectl/docker/helm on PATH.
+quic_phase5_zitadel_test = executable('test_quic_phase5_zitadel_smoke',
+    ['test/unit/test_quic_phase5_zitadel_smoke.c'],
+    kwargs: test_common_kwargs,
+)
+test('quic_phase5_zitadel_smoke', quic_phase5_zitadel_test,
+     suite: 'integration', timeout: 1500,
+     env: {'N00B_PHASE5_ZITADEL_SCRIPT':
+           meson.project_source_root() / 'test/integration/phase5_k8s/zitadel/run.sh'})
+
+# Smoke for the demo: forks `quic_rpc_demo --loopback` as a subprocess,
+# asserts the canonical Hello + Stream output appears.  The demo binary
+# path is passed via the N00B_QUIC_RPC_DEMO_BIN env var (set on the
+# test invocation below).
+quic_rpc_demo_smoke_test = executable('test_quic_rpc_demo_smoke',
+    ['test/unit/test_quic_rpc_demo_smoke.c'],
+    kwargs: test_common_kwargs,
+)
+test('quic_rpc_demo_smoke', quic_rpc_demo_smoke_test,
+     suite: 'unit', timeout: 90,
+     env: {'N00B_QUIC_RPC_DEMO_BIN': quic_rpc_demo.full_path()},
+     depends: [quic_rpc_demo])
+
+# ACME end-to-end (Phase 2.3a): directory + newNonce + newAccount.
+# Skipped unless STEPCA_DIR_URL is in the env — start the fixture via
+# `test/fixtures/stepca/start.sh` to populate it.
+quic_acme_session_test = executable('test_quic_acme_session',
+    ['test/unit/test_quic_acme_session.c'],
+    kwargs: test_common_kwargs,
+)
+test('quic_acme_session', quic_acme_session_test,
+     suite: 'unit', timeout: 30)
+
+# CSR builder.  In-process structural test always runs; external
+# `openssl req -verify` runs when an openssl binary is available.
+quic_acme_csr_test = executable('test_quic_acme_csr',
+    ['test/unit/test_quic_acme_csr.c'],
+    kwargs: test_common_kwargs,
+)
+test('quic_acme_csr', quic_acme_csr_test, suite: 'unit')
+
+# Orchestrator smoke test (argument validation; live cert acquisition
+# is deferred to the Phase 2 deployment playbook because HTTP-01
+# validation needs port 80).
+quic_acme_orchestrator_test = executable('test_quic_acme_orchestrator',
+    ['test/unit/test_quic_acme_orchestrator.c'],
+    kwargs: test_common_kwargs,
+)
+test('quic_acme_orchestrator', quic_acme_orchestrator_test, suite: 'unit')
+
+quic_cert_provisioner_test = executable('test_quic_cert_provisioner',
+    ['test/unit/test_quic_cert_provisioner.c'],
+    kwargs: test_common_kwargs,
+)
+# Tests look up the fixture via N00B_SOURCE_ROOT; meson exposes this
+# automatically via env when set in test_common_kwargs would propagate
+# to children.  Easier: pass the project source root directly here.
+test('quic_cert_provisioner', quic_cert_provisioner_test,
+     suite: 'unit',
+     env: {'N00B_SOURCE_ROOT': meson.project_source_root()})
+
+quic_cert_store_test = executable('test_quic_cert_store',
+    ['test/unit/test_quic_cert_store.c'],
+    kwargs: test_common_kwargs,
+)
+test('quic_cert_store', quic_cert_store_test, suite: 'unit')
+
+# Endpoint hot-reload (cert + key swap).
+quic_endpoint_reload_test = executable('test_quic_endpoint_reload',
+    ['test/unit/test_quic_endpoint_reload.c'],
+    kwargs: test_common_kwargs,
+)
+test('quic_endpoint_reload', quic_endpoint_reload_test, suite: 'unit')
+
+# Sticky secret (stateless-reset / address-validation token rotation).
+quic_sticky_secret_test = executable('test_quic_sticky_secret',
+    ['test/unit/test_quic_sticky_secret.c'],
+    kwargs: test_common_kwargs,
+)
+test('quic_sticky_secret', quic_sticky_secret_test, suite: 'unit')
+
+# LB-CID encoding (block-cipher mode, 16-byte fixed CID).
+quic_lb_cid_test = executable('test_quic_lb_cid',
+    ['test/unit/test_quic_lb_cid.c'],
+    kwargs: test_common_kwargs,
+)
+test('quic_lb_cid', quic_lb_cid_test, suite: 'unit')
+
+# Phase 2 fuzz tests — property tests across base64url, PEM, X.509
+# validity walker, LB-CID decoder.  Same shape as the Phase 1
+# framer fuzz: deterministic seed, ~5k iters per target.
+quic_phase2_fuzz_test = executable('test_quic_phase2_fuzz',
+    ['test/unit/test_quic_phase2_fuzz.c'],
+    kwargs: test_common_kwargs,
+)
+test('quic_phase2_fuzz', quic_phase2_fuzz_test,
+     suite: 'unit', timeout: 120)
+
+# Manifest + preflight (design doc § 9).
+quic_manifest_test = executable('test_quic_manifest',
+    ['test/unit/test_quic_manifest.c'],
+    kwargs: test_common_kwargs,
+)
+test('quic_manifest', quic_manifest_test, suite: 'unit')
+
+# DNS providers (manual + cloudflare) + DNS-01 challenge wrapper.
+quic_dns_provider_test = executable('test_quic_dns_provider',
+    ['test/unit/test_quic_dns_provider.c'],
+    kwargs: test_common_kwargs,
+)
+test('quic_dns_provider', quic_dns_provider_test, suite: 'unit')
+
+# Per-cnx SNI routing (cert store wired into picotls callbacks).
+quic_sni_routing_test = executable('test_quic_sni_routing',
+    ['test/unit/test_quic_sni_routing.c'],
+    kwargs: test_common_kwargs,
+)
+test('quic_sni_routing', quic_sni_routing_test, suite: 'unit')
+
+# Phase 3 § 5 — trust→picotls verify-cert bridge end-to-end.
+quic_trust_bridge_test = executable('test_quic_trust_bridge',
+    ['test/unit/test_quic_trust_bridge.c'],
+    kwargs: test_common_kwargs,
+)
+test('quic_trust_bridge', quic_trust_bridge_test, suite: 'unit')
+
+# Phase 3 § 5.3 tail — mid-handshake-reload no-tear property.
+quic_reload_race_test = executable('test_quic_reload_race',
+    ['test/unit/test_quic_reload_race.c'],
+    kwargs: test_common_kwargs,
+)
+test('quic_reload_race', quic_reload_race_test, suite: 'unit')
+
+# test_quic_acme_http_network removed in Phase 6 chunk 11 — its
+# Let's-Encrypt-staging coverage runs through test_quic_acme_session
+# (which now goes through n00b_http_request_sync) when the
+# STEPCA_LEAF_FP env var is set; the basic h1 round-trip against
+# public endpoints is exercised by test_http_h1_network.
+
+quic_endpoint_test = executable('test_quic_endpoint',
+    ['test/unit/test_quic_endpoint.c'],
+    kwargs: quic_test_kwargs,
+)
+test('quic_endpoint', quic_endpoint_test, suite: 'unit')
+
+quic_conn_test = executable('test_quic_conn',
+    ['test/unit/test_quic_conn.c'],
+    kwargs: test_common_kwargs,
+)
+test('quic_conn', quic_conn_test, suite: 'unit')
+
+quic_chan_test = executable('test_quic_chan',
+    ['test/unit/test_quic_chan.c'],
+    kwargs: test_common_kwargs,
+)
+test('quic_chan', quic_chan_test, suite: 'unit')
+
+quic_chan_recv_test = executable('test_quic_chan_recv',
+    ['test/unit/test_quic_chan_recv.c'],
+    kwargs: test_common_kwargs,
+)
+test('quic_chan_recv', quic_chan_recv_test, suite: 'unit')
+
+quic_handshake_test = executable('test_quic_handshake',
+    ['test/unit/test_quic_handshake.c'],
+    kwargs: quic_test_kwargs,
+)
+test('quic_handshake', quic_handshake_test, suite: 'unit', timeout: 30)
+
+quic_accept_test = executable('test_quic_accept',
+    ['test/unit/test_quic_accept.c'],
+    kwargs: quic_test_kwargs,
+)
+test('quic_accept', quic_accept_test, suite: 'unit', timeout: 30)
+
+quic_qlog_test = executable('test_quic_qlog',
+    ['test/unit/test_quic_qlog.c'],
+    kwargs: quic_test_kwargs,
+)
+test('quic_qlog', quic_qlog_test, suite: 'unit', timeout: 30)
+
+# Perf harness — built but not registered as a CI test (it's
+# benchmarking, not assertion-based).  Run manually with
+# `./build_debug/perf_quic_stream_scaling`.
+perf_quic_stream_scaling = executable('perf_quic_stream_scaling',
+    ['test/perf/perf_quic_stream_scaling.c'],
+    kwargs: quic_test_kwargs,
+)
+
+# ============================================================================
+# Conduit tests
+# ============================================================================
+
+
+
+
+
+
+
+
+
+
+if target_os == 'windows'
+endif
+
+conduit_udp_test = executable('test_conduit_udp',
+    ['test/unit/test_conduit_udp.c'],
+    kwargs: test_common_kwargs,
+)
+test('conduit_udp', conduit_udp_test, suite: 'unit')
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# ============================================================================
+# Regex engine tests
+# ============================================================================
+
+
+
+
+
+regex_resharp_test = executable('test_regex_resharp',
+    ['test/unit/test_regex_resharp.c'],
+    kwargs: test_common_kwargs,
+)
+test('regex_resharp', regex_resharp_test,
+    suite: 'unit',
+    timeout: 300,
+    env: {
+        'N00B_RESHARP_TEST_DIR': meson.current_source_dir() / 'test/data/resharp/tests',
+    })
+
+# ============================================================================
+# Logic / constraint solver tests
+# ============================================================================
+
+logic_test_kwargs = {
+    'include_directories': incdir + [include_directories('test/unit')],
+    'c_args': exe_c_args,
+    'link_args': exe_link_args,
+    'link_with': [n00b],
+}
+
+
+
+
+
+
+
+
+
+# ============================================================================
+# ML tests live on the ML feature branch; not built in this QUIC branch.
+# ============================================================================
+
+# ============================================================================
+# Parser tests
+# ============================================================================
+
+
+
+
+
+# Slay tests commented out temporarily due to in-progress header changes
+# scanner_test = executable('test_scanner',
+#     ['test/unit/test_scanner.c'],
+#     kwargs: test_common_kwargs,
+# )
+# test('scanner', scanner_test, suite: 'unit')
+#
+# ============================================================================
+# Slay grammar tests
+# ============================================================================
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# ============================================================================
+# LSP framework tests
+# ============================================================================
+
+# LSP and nccd_* tests live on a different feature branch (the LSP
+# initiative); not built in this QUIC branch.
+
+
+
+
+
+# ============================================================================
+# Type checker tests
+# ============================================================================
+
+
+# ============================================================================
+# Analysis tests
+# ============================================================================
+
+
+
+
+
+# ============================================================================
+# MIR JIT tests
+# ============================================================================
+
+
+
+# ============================================================================
+# Render / layout tests
+# ============================================================================
+
+
+
+
+
+
+
+# Widget tests
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# Table tests
+
+
+
+
+
+# cocoa_backend + notcurses_backend tests are declared earlier (from main's
+# meson.build); the dedup pass missed the duplicate copies that came in with
+# the QUIC-branch test section.  Drop the duplicates here.
+
+# Table CLI tool
+
+# Widget visual demo tool
+
+# N00b dev tool (parse + annotate n00b source files, REPL)
+
+# N00b main executable (compile, run, repl)
+
+if target_os != 'windows'
+    # VFS journaling depends on POSIX daemon, signal, and frontend behavior.
+endif
+
+# nccd (the ncc Language Server) and its lsp/ + nccd_* sources live
+# on a different feature branch.  Not built in this QUIC branch.
+
+# ============================================================================
+# Integration tests
+# ============================================================================
+
+# Interpreter integration tests (shell runner invokes the n00b binary).
+test('interp', find_program('bash'),
+    args: [meson.project_source_root() / 'test/interp/run_tests.sh',
+           n00b_exe],
+    suite: 'interp',
+    workdir: meson.project_source_root(),
+    timeout: 120,
+)
+
+
+
+
+
+
+
+
+# ============================================================================
+# VFS tests
+# ============================================================================
+
+
+
+
+
+
+# ============================================================================
+# Unicode tests
+# ============================================================================
+
+unicode_test_kwargs = {
+    'include_directories': incdir + [include_directories('test/unit')],
+    'c_args': exe_c_args,
+    'link_args': exe_link_args,
+    'link_with': [n00b],
+}
+
+unicode_test_names = [
+    'bidi', 'casemap', 'collation', 'emoji', 'encoding',
+    'identifiers', 'idna', 'iter', 'linebreak', 'normalization',
+    'properties', 'security', 'segmentation',
+]
+
+foreach name : unicode_test_names
+endforeach
+
+# ============================================================================
+# String tests
+# ============================================================================
+
+str_test_kwargs = {
+    'include_directories': incdir + [include_directories('test/unit')],
+    'c_args': exe_c_args,
+    'link_args': exe_link_args,
+    'link_with': [n00b],
+}
+
+str_test_names = [
+    'string_ops', 'string_convert', 'fptostr', 'fmt_numbers',
+    'ansi', 'markdown', 'style_ops', 'string_style',
+    'style_registry', 'rich_desc', 'format_spec',
+    'format', 'md_render', 'md_lines',
+]
+
+foreach name : str_test_names
+endforeach
+
+# ============================================================================
+# Object file (LIEF) tests
+# ============================================================================
+
+objfile_test_names = [
+    'types', 'bstream', 'writer', 'detect', 'elf', 'elf_build',
+    'macho', 'macho_build', 'pe', 'pe_build', 'demangle',
+    'abstract', 'dwarf',
+]
+
+foreach name : objfile_test_names
 endforeach
 
 # ============================================================================
