@@ -12,9 +12,17 @@
  *   - DSSE codes       (-2001 .. -2005)
  *   - Signer codes     (-4001 .. -4007)
  *
- * Sixteen codes total. Unknown codes return a documented fallback
- * string (per the api-guidelines § 5 contract that domain-specific
- * `*_err_str` accessors cover the full namespace).
+ * WP-003 Phase 2 extends the namespace with five verifier codes
+ * (-5001 .. -5005) per D-046 (supersedes D-044 OQ-2's original
+ * Phase 3 phase assignment). WP-003 Phase 3 (D-047 W-1) adds two
+ * runtime-check-path codes (-5006, -5007) under the `_VERIFY_*`
+ * prefix and migrates three placeholder callsites that Phase 2
+ * temporarily routed through @ref N00B_ATTEST_ERR_VERIFIER_KEY_NOT_FOUND.
+ * Total now twenty-three codes.
+ *
+ * Unknown codes return a documented fallback string (per the
+ * api-guidelines § 5 contract that domain-specific `*_err_str`
+ * accessors cover the full namespace).
  *
  * Implementation note: we use a `switch` statement against the
  * macro values rather than an array because the codes are non-
@@ -70,6 +78,26 @@ n00b_attest_err_str(n00b_err_t err)
         return r"signer: signing primitive failed";
     case N00B_ATTEST_ERR_NOT_IMPLEMENTED:
         return r"signer: code path not yet implemented";
+
+    // Verifier domain (-5001 .. -5005), WP-003 Phase 2 per D-046.
+    case N00B_ATTEST_ERR_VERIFIER_UNSUPPORTED_SCHEME:
+        return r"verifier: URI scheme has no registered backend";
+    case N00B_ATTEST_ERR_VERIFIER_KEY_NOT_FOUND:
+        return r"verifier: key not found at the referenced URI";
+    case N00B_ATTEST_ERR_VERIFIER_PEM_PARSE_FAILED:
+        return r"verifier: PEM container parse failed";
+    case N00B_ATTEST_ERR_VERIFIER_DER_PARSE_FAILED:
+        return r"verifier: DER structure parse failed";
+    case N00B_ATTEST_ERR_VERIFIER_UNSUPPORTED_ALGORITHM:
+        return r"verifier: key algorithm not supported";
+
+    // Verify check-path domain (-5006 .. -5007), WP-003 Phase 3
+    // per D-047 W-1. `_VERIFY_*` prefix flags runtime-check-path
+    // errors; `_VERIFIER_*` (above) flags resolver-edge errors.
+    case N00B_ATTEST_ERR_VERIFY_BAD_SIG_LENGTH:
+        return r"verify: signature length does not match algorithm";
+    case N00B_ATTEST_ERR_VERIFY_BAD_INPUT:
+        return r"verify: bad or missing input argument";
 
     default:
         return r"unknown attest error code";

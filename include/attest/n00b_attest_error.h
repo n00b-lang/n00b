@@ -26,6 +26,7 @@
  *   -1001 … -1099  Statement builder / parser
  *   -2001 … -2099  DSSE envelope encode / decode
  *   -4001 … -4099  Signer abstraction
+ *   -5001 … -5099  Verifier abstraction
  *
  * All codes are negative integers to avoid `errno` collision per
  * the libn00b convention (api-guidelines § 5.1).
@@ -181,6 +182,186 @@
  * not-yet-wired pubkey-resolver entry points).
  */
 #define N00B_ATTEST_ERR_NOT_IMPLEMENTED       (-4007)
+
+// ===========================================================================
+// Verifier abstraction (-5001 … -5099).
+//
+// Established by D-044 OQ-2 as the verifier-domain namespace; the
+// first five codes land in WP-003 Phase 2 per D-046 (which
+// supersedes D-044 OQ-2's original Phase 3 phase assignment).
+// Phase 3 of WP-003 adds the runtime-check-path codes
+// @ref N00B_ATTEST_ERR_VERIFY_BAD_SIG_LENGTH (-5006) and
+// @ref N00B_ATTEST_ERR_VERIFY_BAD_INPUT (-5007) under the
+// `_VERIFY_*` prefix (D-047 W-1); see the "Verifier check-path
+// errors" sub-section header for the prefix-split rationale.
+// ===========================================================================
+
+/**
+ * @brief Module-domain error: the verifier resolver's URI scheme
+ *        is not served by any registered verifier backend.
+ *
+ * Surfaces on @ref n00b_attest_verifier_resolve when the `ref`
+ * URI's scheme (`file`, `keychain`, `oci`, etc.) does not match
+ * any verifier backend registered with the resolver. WP-003
+ * ships only the `file://` verifier backend; later WPs lift this
+ * to additional schemes. Symmetric with @ref
+ * N00B_ATTEST_ERR_UNSUPPORTED_SCHEME on the signer side.
+ */
+#define N00B_ATTEST_ERR_VERIFIER_UNSUPPORTED_SCHEME    (-5001)
+
+/**
+ * @brief Module-domain error: a verifier backend could not find
+ *        the referenced public key.
+ *
+ * For the file verifier backend this surfaces when the file path
+ * resolved from the URI does not exist or is not readable.
+ *
+ * @note Phase 2 of WP-003 used this code as a placeholder for
+ * three machinery-failure paths on the check / registration
+ * edges. Phase 3 (D-047 W-1) migrated all three callsites to the
+ * dedicated @ref N00B_ATTEST_ERR_VERIFY_BAD_INPUT (-5007) and
+ * @ref N00B_ATTEST_ERR_VERIFY_BAD_SIG_LENGTH (-5006) codes, so
+ * post-Phase-3 this code only surfaces on the resolver edge for
+ * its original intent ("backend looked, key isn't there").
+ */
+#define N00B_ATTEST_ERR_VERIFIER_KEY_NOT_FOUND         (-5002)
+
+/**
+ * @brief Module-domain error: a verifier-backend PEM container
+ *        failed to parse.
+ *
+ * Surfaces when the file verifier backend reads an SPKI PEM
+ * whose armor lines are missing or carry the wrong label
+ * (D-044 OQ-3: strict `-----BEGIN PUBLIC KEY-----` only), or
+ * whose base64 body is not decodable. Distinct from @ref
+ * N00B_ATTEST_ERR_VERIFIER_DER_PARSE_FAILED (which surfaces
+ * after PEM decoding when the inner DER does not walk to a
+ * well-formed SubjectPublicKeyInfo). Symmetric with @ref
+ * N00B_ATTEST_ERR_PEM_PARSE_FAILED on the signer side.
+ */
+#define N00B_ATTEST_ERR_VERIFIER_PEM_PARSE_FAILED      (-5003)
+
+/**
+ * @brief Module-domain error: a verifier-backend DER-encoded
+ *        structure failed to parse against the expected shape.
+ *
+ * Surfaces from the file verifier backend's SPKI walk when the
+ * inner SubjectPublicKeyInfo DER does not match the expected
+ * `SEQUENCE { SEQUENCE { OID }, BIT STRING }` shape, or when
+ * the BIT STRING's unused-bits indicator is non-zero, or when
+ * the BIT STRING content length is not the expected 33 bytes
+ * for an Ed25519 SPKI. Symmetric with @ref
+ * N00B_ATTEST_ERR_DER_PARSE_FAILED on the signer side.
+ */
+#define N00B_ATTEST_ERR_VERIFIER_DER_PARSE_FAILED      (-5004)
+
+/**
+ * @brief Module-domain error: the loaded public key's algorithm
+ *        is not supported by the resolver.
+ *
+ * The verifier abstraction is algorithm-agnostic at the public
+ * surface (D-016) but each backend's load path identifies the
+ * concrete algorithm at parse time. The WP-003 file verifier
+ * backend supports only id-Ed25519 (OID `1.3.101.112`); any
+ * other AlgorithmIdentifier surfaces this error. A later WP
+ * adds ECDSA P-256 (id-ecPublicKey + secp256r1) without
+ * breaking the surface. Symmetric with @ref
+ * N00B_ATTEST_ERR_UNSUPPORTED_ALGORITHM on the signer side.
+ */
+#define N00B_ATTEST_ERR_VERIFIER_UNSUPPORTED_ALGORITHM (-5005)
+
+// ===========================================================================
+// Verifier check-path errors (-5006 … -5099).
+//
+// **Prefix split (D-047).** The -5001..-5005 codes above use the
+// `_VERIFIER_*` prefix and tag the resolver / load-path errors —
+// abstraction-layer concerns surfaced at @ref
+// n00b_attest_verifier_resolve time (URI scheme, file-not-found,
+// PEM container parse, SPKI DER parse, AlgorithmIdentifier). The
+// -5006/-5007 codes below use the `_VERIFY_*` prefix and tag the
+// runtime check-path errors — action-layer concerns surfaced
+// during @ref n00b_attest_verifier_check (Ed25519 signature length
+// not 64 bytes, null pointer inputs, registration-list capacity
+// exceeded).
+//
+// This split mirrors the existing namespace split between
+// -1001..-1004 (`_STMT_*`) and -2001..-2005 (`_DSSE_*`): the prefix
+// reflects which subsystem-action emits the code, so
+// `n00b_attest_err_str` output and audit logs preserve the
+// resolver-vs-check distinction without callers having to consult
+// the numeric range.
+//
+// Phase 3 of WP-003 introduces both codes plus migrates the three
+// placeholder callsites that Phase 2 left holding @ref
+// N00B_ATTEST_ERR_VERIFIER_KEY_NOT_FOUND per D-046 (`Phase 3 adds
+// any additional codes it needs`).
+// ===========================================================================
+
+/**
+ * @brief Module-domain error: a signature buffer passed to the
+ *        verifier check path is not exactly 64 bytes (the
+ *        Ed25519 signature length).
+ *
+ * @details Surfaces from the file verifier backend's check path
+ * (@ref n00b_attest_verifier_check) when the `sig` buffer's
+ * `byte_len` is not exactly 64. The verify routine requires a
+ * fixed-size input; a malformed-length sig is a machinery failure
+ * (the caller handed the verifier a sig buffer that the algorithm
+ * cannot consume), NOT a verdict — collapsing this into
+ * @c Ok(false) would conflate "machinery cannot process the sig"
+ * with "machinery processed the sig and reached a definitive no"
+ * and break Phase 4's 3-code exit shape (D-044 OQ-1).
+ *
+ * A later WP that introduces ECDSA P-256 may extend this code's
+ * semantics to cover both Ed25519 (64-byte) and ECDSA-P-256
+ * (typically 64-byte raw or 70-72-byte DER) sig-length failures,
+ * since the backend identifies the expected length from the
+ * loaded key's algorithm. The code's name therefore intentionally
+ * does NOT bake in the Ed25519 length — it documents the
+ * "signature buffer length does not match the algorithm's
+ * expected length" failure shape, which is algorithm-parametric.
+ */
+#define N00B_ATTEST_ERR_VERIFY_BAD_SIG_LENGTH          (-5006)
+
+/**
+ * @brief Module-domain error: a verifier check or registration
+ *        entry point received a null pointer input or hit the
+ *        registration-list capacity ceiling.
+ *
+ * @details A single code covers two distinct machinery-failure
+ * conditions on the verifier subsystem's runtime-action surface,
+ * enumerated here because §10.3 requires the full set of
+ * triggering conditions to be in the doxygen:
+ *
+ *   - **Null pointer inputs to @ref n00b_attest_verifier_check.**
+ *     A null `verifier`, `bytes`, or `sig` argument to the file
+ *     verifier backend's `check` vtable entry surfaces this code.
+ *     Phase 2 used @ref N00B_ATTEST_ERR_VERIFIER_KEY_NOT_FOUND as
+ *     a placeholder; Phase 3 (D-047 W-1) migrated the callsite to
+ *     this dedicated code so audit logs can distinguish
+ *     resolver-edge "key not found" from check-edge "caller
+ *     handed me null."
+ *
+ *   - **Registration-list capacity exceeded in @ref
+ *     n00b_attest_register_verifier_backend.** When the resolver's
+ *     fixed-capacity registration list
+ *     (`N00B_ATTEST_MAX_REGISTERED_VERIFIER_BACKENDS`) is full and
+ *     another backend is registered, this code surfaces. Phase 2
+ *     used @ref N00B_ATTEST_ERR_VERIFIER_KEY_NOT_FOUND as a
+ *     placeholder; Phase 3 migrated the callsite to this code.
+ *
+ * Both conditions are caller / wiring errors (the runtime can do
+ * nothing useful in response) rather than verdicts, so routing
+ * through @c Err is correct per D-044 OQ-1.
+ *
+ * A null `backend` or null `backend->scheme` argument to @ref
+ * n00b_attest_register_verifier_backend also surfaces this code
+ * (it falls under the "null pointer input" condition above) — the
+ * registration entry point and the check entry point share both
+ * the prefix (`_VERIFY_*` = runtime action) and the code value
+ * because each is a runtime-action input-validation failure.
+ */
+#define N00B_ATTEST_ERR_VERIFY_BAD_INPUT               (-5007)
 
 /**
  * @brief Look up a human-readable string for an n00b_attest

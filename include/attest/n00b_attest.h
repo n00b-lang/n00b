@@ -46,6 +46,7 @@
 #include <attest/n00b_attest_error.h>
 #include <attest/n00b_attest_statement.h>
 #include <attest/n00b_attest_signer.h>
+#include <attest/n00b_attest_verifier.h>
 #include <attest/n00b_attest_dsse.h>
 #include <attest/n00b_attest_cli.h>
 

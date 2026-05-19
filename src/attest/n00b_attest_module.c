@@ -37,26 +37,45 @@
 
 #include "internal/attest/backends.h"
 #include "internal/attest/backends/file.h"
+#include "internal/attest/verifier_backends.h"
+#include "internal/attest/verifier_backends/file.h"
 #include "util/panic.h"
 
 void
 n00b_attest_module_init(void)
 {
-    // Populate the file-backend vtable's fields. The vtable
-    // instance is declared in `backends/file.c`; its fields are
-    // mutable until init returns, then read-only for the process
-    // lifetime.
+    // Populate the file signer-backend vtable's fields. The
+    // vtable instance is declared in `backends/file.c`; its
+    // fields are mutable until init returns, then read-only for
+    // the process lifetime.
     _n00b_attest_backend_file_init();
 
-    // Wire the populated vtable into the resolver. Registration
-    // failure is unrecoverable per `n00b-code-auditor` W-4 + user
-    // disposition: there is no sensible recovery (every subsequent
-    // signer-resolve would fail with UNSUPPORTED_SCHEME), so we
-    // surface the failure immediately with a diagnostic.
+    // Wire the populated signer vtable into the resolver.
+    // Registration failure is unrecoverable per `n00b-code-
+    // auditor` W-4 + user disposition: there is no sensible
+    // recovery (every subsequent signer-resolve would fail with
+    // UNSUPPORTED_SCHEME), so we surface the failure immediately
+    // with a diagnostic.
     n00b_result_t(bool) r =
         n00b_attest_register_backend(&n00b_attest_backend_file);
     if (n00b_result_is_err(r)) {
         n00b_panic(
             "n00b_attest_module_init: failed to register file backend");
+    }
+
+    // WP-003 Phase 2: populate and register the file verifier-
+    // backend vtable. Same fast-fail-via-`n00b_panic` shape per
+    // D-042 W-4 — a verifier-backend registration failure means
+    // every subsequent verifier-resolve would fail with
+    // _VERIFIER_UNSUPPORTED_SCHEME.
+    _n00b_attest_verifier_backend_file_init();
+
+    n00b_result_t(bool) v =
+        n00b_attest_register_verifier_backend(
+            &n00b_attest_verifier_backend_file);
+    if (n00b_result_is_err(v)) {
+        n00b_panic(
+            "n00b_attest_module_init: failed to register file "
+            "verifier backend");
     }
 }

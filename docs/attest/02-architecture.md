@@ -345,17 +345,28 @@ signer signs.
 signature. Multi-signer envelopes are built by calling
 `envelope_sign` multiple times with different signer handles.
 
-`n00b_attest_envelope_verify(env, pubkey_resolver, .opts)`
-verifies all signatures and returns one of:
-- `OK` (every signature verified)
-- `OK_PARTIAL` (at least one verified, at least one did not)
-- `FAIL_NO_SIGNATURES`
-- `FAIL_NO_KEY_MATCH` (no signature could be matched to a known
-  pubkey)
-- `FAIL_VERIFY` (a signature was matched and failed)
+`n00b_attest_envelope_verify(env, verifier, .opts)` consumes
+the WP-003 verifier surface (§9) and returns
+`n00b_result_t(bool)` per D-044 OQ-4: `Ok(true)` = at least
+one matching-keyid signature verified (sigstore "any-passes"
+per D-044 Q3); `Ok(false)` = verdict failure (no matching
+keyid, empty `signatures[]`, all matching-keyid signatures
+mismatched the payload); `Err(...)` = machinery failure
+(malformed envelope, scheme mismatch, missing key file,
+etc.). A low-level `n00b_attest_envelope_verify_signature(env,
+idx, verifier, .opts)` exposes single-entry verification for
+callers that want explicit per-signature semantics.
 
-`OK_PARTIAL` is for the two-party-signoff use case where one
-signer may not be trusted at verification time but another is.
+The richer verdict-enum shape (`OK` / `OK_PARTIAL` /
+`FAIL_NO_SIGNATURES` / `FAIL_NO_KEY_MATCH` /
+`FAIL_VERIFY` / `FAIL_SUBJECT_MISMATCH`) + per-signature
+verdict list + parsed-Statement carry-along is reserved
+for the future multi-pubkey resolver WP per §9.1; that
+WP brings up `n00b_attest_verify(env, resolver) →
+n00b_result_t(n00b_attest_verify_result_t *)` for the
+two-party-signoff use case (`OK_PARTIAL`) where one
+signer may not be trusted at verification time but
+another is.
 
 ### 5.3 Chalk integration: envelope → in-binary mark
 
@@ -433,12 +444,10 @@ caller-defined identifier the verifier uses to resolve the public
 key) and optionally `cert` (X.509 cert chain when using FR-7).
 Our `keyid` convention is the full SHA-256 of the SPKI DER
 encoding of the public key, hex-encoded (= 64 hex characters),
-matching the cosign / sigstore ecosystem convention. Per D-039
-(resolves DF-003) (D-039 is not yet logged; the orchestrator will
-log it after this dispatch returns clean — pre-stage the
-reference in source comments and the spec text). This is stable
-across serialization roundtrips and lets a verifier look up the
-public key in a keyring without parsing the envelope payload.
+matching the cosign / sigstore ecosystem convention per D-039
+(resolves DF-003). This is stable across serialization
+roundtrips and lets a verifier look up the public key in a
+keyring without parsing the envelope payload.
 
 ## 6. The signer abstraction
 
@@ -556,10 +565,33 @@ lifetime is auditable.)
 
 ## 7. Public-key resolution for verification
 
-`n00b_attest_pubkey_resolver_t` is the verifier-side dual of the
-signer abstraction. The resolver maps `keyid` → public key bytes.
+Verifier resolution mirrors the signer abstraction (§6). A
+`n00b_attest_verifier_t` is constructed by
+`n00b_attest_verifier_resolve(.ref = uri, …)`, which dispatches the
+URI through a registered backend (currently `file://<absolute-path>`
+only — RFC 5280 PEM `PUBLIC KEY` body per RFC 8410 for Ed25519).
+Per D-044 Q1, this WP ships only the file backend; future backends
+(`op://`, `env://`, keystore lookup by `keyid`, embedded-in-envelope)
+plug into the same vtable shape. Per D-035 OQ-4 the file backend
+accepts both `file:<path>` (FR-SM-1 strict, mirrored from the signer
+side) and `file:///<path>` (RFC 3986) forms.
 
-Resolution sources, in priority order:
+The verifier's `keyid` is computed at load time as the
+lowercase-hex SHA-256 of the 44-byte SPKI DER (per D-039 + the
+cosign / sigstore convention; identical to how the signer computes
+its keyid for byte-equal cross-WP matching against signed
+envelopes). See §9 for the public verifier-surface declarations.
+
+Verifier handles are released via `n00b_attest_verifier_release` —
+symmetric with `n00b_attest_signer_release`; no zeroization needed
+(public-key bytes are not secret) but the entry point exists for
+caller-uniform lifetime management.
+
+### 7.1 Future: multi-source resolver
+
+A `n00b_attest_pubkey_resolver_t` is reserved for a future WP that
+maps `keyid → public key bytes` through multiple sources in
+priority order:
 
 1. **Caller-provided in-memory keyring** (passed at resolver
    construction).
@@ -567,12 +599,14 @@ Resolution sources, in priority order:
    and `$XDG_CONFIG_HOME/n00b-attest/keyring/`. Each file is a
    PEM-encoded SPKI public key; the resolver indexes them by
    their computed `keyid`.
-3. **(Phase 2)** CO-hosted public-key directory — optional,
-   never required.
+3. **CO-hosted public-key directory** — optional, never required.
 
 The resolver returns `NOT_FOUND` (not `FAIL`) when no key matches
 a given `keyid`, so the caller can distinguish "no key registered"
-from "key registered but signature wouldn't verify."
+from "key registered but signature wouldn't verify." WP-003 ships
+single-pubkey-per-verify; the multi-pubkey resolver dispatch lands
+in the future resolver WP, paired with the richer verify-result
+type described in §9.1.
 
 ## 8. OCI registry client
 
@@ -665,7 +699,106 @@ Per NFR-5:
 
 ## 9. Verifier surface
 
-The public verifier API is intentionally small:
+The public verifier API mirrors the signer surface (§6) in shape:
+a small set of entry points for resolve / check / pubkey / keyid /
+release, paired with a low-level and a high-level envelope-verify
+wrapper. The file-URI resolver edge that drives the resolve entry
+point is described in §7.
+
+```c
+/* Resolve a verifier from a backend URI (file://-only in WP-003;
+ * future backends per §7). With no arguments, walks the default
+ * discovery chain (FR-VM-2); in WP-003 the chain is empty and a
+ * null `ref` returns N00B_ATTEST_ERR_VERIFIER_KEY_NOT_FOUND. */
+extern n00b_result_t(n00b_attest_verifier_t *)
+n00b_attest_verifier_resolve() _kargs
+{
+    n00b_string_t    *ref       = nullptr;
+    n00b_allocator_t *allocator = nullptr;
+};
+
+/* Algorithm-agnostic byte-string verify (the backend dispatches
+ * to Ed25519 etc. from the loaded SPKI AlgorithmIdentifier OID).
+ * Ok(true)/Ok(false) is the verify verdict; Err is reserved for
+ * machinery failures (null inputs, wrong-length sig, OOM). */
+extern n00b_result_t(bool)
+n00b_attest_verifier_check(n00b_attest_verifier_t *verifier,
+                           n00b_buffer_t          *bytes,
+                           n00b_buffer_t          *sig) _kargs
+{
+    n00b_allocator_t *allocator = nullptr;
+};
+
+/* Allocation-free getters: SPKI DER + lowercase-hex keyid are
+ * pre-computed at load time and live on the verifier state. The
+ * returned buffer / string is owned by the verifier and remains
+ * valid until n00b_attest_verifier_release(). */
+extern n00b_buffer_t *
+n00b_attest_verifier_pubkey_spki_der(n00b_attest_verifier_t *verifier);
+
+extern n00b_string_t *
+n00b_attest_verifier_keyid(n00b_attest_verifier_t *verifier);
+
+/* Release; no crypto_wipe (public-key bytes are not secret). */
+extern void
+n00b_attest_verifier_release(n00b_attest_verifier_t *verifier);
+```
+
+The envelope-level verify surface composes through a single
+verifier handle (per D-041, the verify dual of
+`n00b_attest_envelope_sign`):
+
+```c
+/* Low-level single-signature verify. Re-derives the envelope's
+ * PAE bytes and runs n00b_attest_verifier_check against the
+ * entry at `idx`. Does NOT compare keyid — single-entry
+ * verification is "verify THIS index, no policy"; keyid-match
+ * policy lives in the high-level wrapper below. */
+extern n00b_result_t(bool)
+n00b_attest_envelope_verify_signature(n00b_attest_envelope_t *env,
+                                      size_t                  idx,
+                                      n00b_attest_verifier_t *verifier) _kargs
+{
+    n00b_allocator_t *allocator = nullptr;
+};
+
+/* High-level: derive PAE once, walk signatures[], succeed if any
+ * entry whose keyid matches the verifier's keyid verifies.
+ * Sigstore-style "any-matching-signature-passes" semantics per
+ * D-044 Q3. */
+extern n00b_result_t(bool)
+n00b_attest_envelope_verify(n00b_attest_envelope_t *env,
+                            n00b_attest_verifier_t *verifier) _kargs
+{
+    n00b_allocator_t *allocator = nullptr;
+};
+```
+
+**Verdict / machinery split** (D-044 OQ-1 (b)): `Ok(true)` =
+verified; `Ok(false)` = did not verify (verdict failure — empty
+`signatures[]`, no matching keyid, signature mismatch, tampered
+payload); `Err(...)` = machinery failure (null inputs, malformed
+envelope, wrong-length signature buffer, missing file, unsupported
+scheme, etc.). The five resolver / load-path errors and the two
+check-path errors live in the `-5001 … -5007` namespace per D-046.
+The CLI maps these to exit codes 0 / 1 / 2 respectively per §10.
+
+**Keyid-match policy** (high-level wrapper): for each
+`signatures[i]` entry, if `verifier.keyid` does NOT match
+`entry.keyid` (byte-equal string compare on the canonical
+lowercase-hex form per D-039), the entry is **skipped silently**
+(no `_check` call). Documented as deliberate policy: there is no
+point invoking the underlying crypto check against a signature
+the keyid says won't match — doing so wastes CPU and risks
+muddying timing-side-channel posture. A future WP that wants to
+surface skipped-entry diagnostics (per the §9.1 future-result
+shape) may add a richer report type.
+
+### 9.1 Future: resolver + verify-report
+
+A future WP brings up a richer verify surface for the
+multi-pubkey / multi-source case, paired with the multi-source
+resolver from §7.1:
 
 ```c
 extern n00b_result_t(n00b_attest_verify_result_t *)
@@ -673,35 +806,36 @@ n00b_attest_verify(n00b_attest_envelope_t        *envelope,
                    n00b_attest_pubkey_resolver_t *resolver) _kargs
 {
     /* If unset, subject-match is enforced. Disable only for
-     * inspection-only flows where you knowingly want to read a
-     * payload without binding it to a candidate artifact. */
-    bool                                  require_subject_match = true;
+     * inspection-only flows where you knowingly want to read
+     * a payload without binding it to a candidate artifact. */
+    bool                            require_subject_match = true;
 
-    /* If set, the envelope's Statement.subject.digest.sha256 must
-     * equal this digest. Otherwise the call only verifies the
-     * signature and the (parsed) Statement is returned for the
-     * caller to compare itself. */
-    n00b_option_t(n00b_buffer_t *)        expected_subject_digest =
-                                            n00b_option_none(n00b_buffer_t *);
+    /* If set, the envelope's Statement.subject.digest.sha256
+     * must equal this digest. */
+    n00b_option_t(n00b_buffer_t *)  expected_subject_digest =
+                                      n00b_option_none(n00b_buffer_t *);
 
-    n00b_allocator_t                     *allocator = nullptr;
+    n00b_allocator_t               *allocator = nullptr;
 };
 ```
 
-`n00b_attest_verify_result_t` carries: overall verdict (an enum
-covering `OK`, `OK_PARTIAL`, `FAIL_NO_SIGNATURES`,
+`n00b_attest_verify_result_t` will carry: overall verdict (an
+enum covering `OK`, `OK_PARTIAL`, `FAIL_NO_SIGNATURES`,
 `FAIL_NO_KEY_MATCH`, `FAIL_VERIFY`, `FAIL_SUBJECT_MISMATCH`),
-per-signature verdict list, the parsed Statement, and any
-structured errors encountered along the way. The CLI's `n00b-
-attest verify` wraps this; downstream policy engines link
-directly.
+per-signature verdict list (including diagnostics for entries
+the WP-003 high-level wrapper currently skips silently on
+keyid mismatch), the parsed Statement, and any structured
+errors encountered along the way. The CLI's `n00b-attest
+verify` gains a `--keyring <dir>` arg in that WP for the
+multi-source resolver; the current `--key <uri>`
+single-verifier flag (per §10) is the WP-003-shipped subset.
 
-Note that the result type is itself a heap object owned by the
-caller; the outer `n00b_result_t(n00b_attest_verify_result_t *)`
+The result type is itself a heap object owned by the caller;
+the outer `n00b_result_t(n00b_attest_verify_result_t *)`
 distinguishes "verification machinery itself failed" (e.g., a
-resolver I/O error, an out-of-memory) from "verification ran and
-the envelope was rejected" — which is communicated through the
-result struct's verdict field, not as an `Err`.
+resolver I/O error, an out-of-memory) from "verification ran
+and the envelope was rejected" — which is communicated through
+the result struct's verdict field, not as an `Err`.
 
 ## 10. CLI shape
 
@@ -709,7 +843,7 @@ result struct's verdict field, not as an `Err`.
 
 ```
 n00b-attest sign       --predicate file.json --subject name:digest [--signer URI] [--out env.dsse]
-n00b-attest verify     --envelope env.dsse --keyring dir [--expected-subject sha256:...]
+n00b-attest verify     --envelope env.dsse --key file:///path/to/pub.pem
 n00b-attest inspect    --envelope env.dsse [--json]
 n00b-attest push       --envelope env.dsse --image foo/bar@sha256:... [--registry ghcr.io]
 n00b-attest pull       --image foo/bar@sha256:... --predicate-type slsa-provenance [--out env.dsse]
@@ -723,6 +857,12 @@ n00b-attest rotate     [--backend ...]
 n00b-attest list-keys  [--keyring dir]
 ```
 
+The `verify` verb in WP-003 ships the single-`--key` subset of
+the verifier surface (§9); the multi-source `--keyring <dir>` form
+lands in the future resolver WP per §9.1. The single-pubkey form
+covers the common case (artifact + known-good pubkey) and is the
+CLI dual of the `sign` verb's single-`--key` form.
+
 `mark` / `unmark` / `extract` delegate to libchalk's
 `insert_file` / `delete_file` / `extract_file` with the
 ATTESTATION-JSON shape n00b_attest defines. `harvest` walks an
@@ -731,6 +871,28 @@ every file, reporting which are chalked and which aren't.
 
 The CLI is a thin wrapper around the library calls. No business
 logic lives here; everything is in `include/private/attest/`.
+
+### 10.1 Exit codes
+
+Per D-044 OQ-1 (b), verbs that produce a verdict-shaped result
+(currently only `verify`) map the library's `n00b_result_t(bool)`
+return to three exit codes:
+
+- **0** — `Ok(true)` — operation succeeded (e.g., signature
+  verified).
+- **1** — `Ok(false)` — verdict failure (e.g., signature didn't
+  verify; no matching keyid in `signatures[]`; empty
+  `signatures[]`; tampered payload). The operation completed
+  normally; the answer was "no."
+- **2** — `Err(...)` — machinery failure (e.g., malformed
+  envelope, missing key file, unsupported URI scheme, OOM).
+  The operation could not run to a verdict; a structured
+  diagnostic is written to stderr naming the underlying
+  error code.
+
+Verbs that return only `Ok(true)` / `Err(...)` (e.g., `sign`)
+collapse to exits 0 and non-zero respectively; the 3-code
+shape is verdict-specific.
 
 ## 11. Threading and concurrency
 
@@ -769,10 +931,12 @@ queue.
 
 ## 13. Versioning and ABI
 
-`include/n00b/attest.h` and `attest_cabi.h` carry a `#define
-N00B_ATTEST_API_VERSION` integer. ABI breaks bump the major; the
-library exposes both old and new symbols via versioned symbol
-names for one release after a break.
+`include/attest/n00b_attest.h` (ncc-flavor public surface) and
+`include/attest/n00b_attest_cabi.h` (flat-C non-ncc surface)
+carry a `#define N00B_ATTEST_API_VERSION` integer per the §1
+layout block. ABI breaks bump the major; the library exposes
+both old and new symbols via versioned symbol names for one
+release after a break.
 
 The on-the-wire formats (DSSE, in-toto Statement, OCI manifest)
 are spec-defined and don't move on our cadence. The

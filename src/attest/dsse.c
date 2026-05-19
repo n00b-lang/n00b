@@ -35,6 +35,7 @@
 #include "core/runtime.h"
 #include "parsers/json.h"
 #include "adt/result.h"
+#include "text/strings/string_ops.h"  // n00b_unicode_str_eq
 
 #include "internal/attest/json_util.h"
 
@@ -305,12 +306,23 @@ n00b_attest_envelope_parse(n00b_buffer_t *bytes) _kargs
     n00b_attest_envelope_t *env = n00b_attest_envelope_new(
         .allocator = allocator);
 
+    // Allocator threading symmetry with the write side (D-041): a
+    // single `alloc_for_call` local sourced from the caller's
+    // optional `allocator` kwarg (falling back to `env->allocator`,
+    // which `_envelope_new` set from the same kwarg). All allocating
+    // calls below — string materialization, base64 decode,
+    // `ensure_signatures_initialized` — thread this single local.
+    // Mirrors the `alloc_for_call = allocator ? allocator :
+    // env->allocator` pattern used by `_serialize`, `_pae_bytes`,
+    // `_add_signature`, and `_sign`.
+    n00b_allocator_t *alloc_for_call = allocator ? allocator : env->allocator;
+
     // `payload_node->string` is a NUL-terminated `char *` from the
     // JSON parser. Wrap it as an n00b_string_t for the base64 util.
     n00b_string_t *b64_in = n00b_string_from_cstr(payload_node->string,
-                                                  .allocator = env->allocator);
+                                                  .allocator = alloc_for_call);
     auto dec_r = n00b_base64_decode(b64_in,
-                                    .allocator = env->allocator);
+                                    .allocator = alloc_for_call);
     if (n00b_result_is_err(dec_r)) {
         return n00b_result_err(n00b_attest_envelope_t *,
                                N00B_ATTEST_ERR_DSSE_BAD_BASE64);
@@ -322,7 +334,145 @@ n00b_attest_envelope_parse(n00b_buffer_t *bytes) _kargs
     // is correct — `decoded` lives in the same allocator scope as the
     // envelope.
     env->payload = decoded;
+
+    // WP-003 Phase 1 (DF-006 closure): reconstruct `signatures[]`.
+    // Symmetry with the write side per D-041 — reuse
+    // `ensure_signatures_initialized` (the lazy-init helper used by
+    // `_add_signature`) and append into the SAME parallel keyid/sig
+    // lists, threading the same `alloc_for_call` local through every
+    // new allocation per D-042. The parser does NOT validate
+    // algorithm or keyid shape (D-016 + D-039): it preserves bytes
+    // verbatim and lets the verifier (future Phase 2/3) interpret.
+    //
+    // Failure modes:
+    //   - Field missing entirely  → empty signatures list (NOT an
+    //     error; matches WP-001 round-trip where the field was
+    //     absent because no signing had occurred).
+    //   - Field is `[]`           → empty signatures list.
+    //   - Field present but not an array, or any entry malformed
+    //     (non-object, missing keyid/sig, non-string fields)
+    //                             → BAD_JSON.
+    //   - Per-entry sig field is not valid base64 → BAD_BASE64.
+    //     Mirrors the top-level payload-base64 precedent so audit
+    //     logs can distinguish structural-JSON failures (missing
+    //     field, wrong type) from base64-content failures
+    //     regardless of nesting depth.
+    n00b_json_node_t *sigs_node = n00b_attest_json_obj_lookup(root,
+                                                              r"signatures");
+    if (sigs_node != nullptr) {
+        if (sigs_node->type != N00B_JSON_ARRAY) {
+            return n00b_result_err(n00b_attest_envelope_t *,
+                                   N00B_ATTEST_ERR_DSSE_BAD_JSON);
+        }
+        size_t nsigs = sigs_node->array.len;
+        if (nsigs > 0) {
+            ensure_signatures_initialized(env, alloc_for_call);
+            for (size_t i = 0; i < nsigs; i++) {
+                n00b_json_node_t *entry = sigs_node->array.data[i];
+                if (entry == nullptr || entry->type != N00B_JSON_OBJECT) {
+                    return n00b_result_err(n00b_attest_envelope_t *,
+                                           N00B_ATTEST_ERR_DSSE_BAD_JSON);
+                }
+                n00b_json_node_t *kid_node = n00b_attest_json_obj_lookup(
+                    entry,
+                    r"keyid");
+                n00b_json_node_t *sig_node = n00b_attest_json_obj_lookup(
+                    entry,
+                    r"sig");
+                if (kid_node == nullptr
+                    || kid_node->type != N00B_JSON_STRING
+                    || sig_node == nullptr
+                    || sig_node->type != N00B_JSON_STRING) {
+                    return n00b_result_err(n00b_attest_envelope_t *,
+                                           N00B_ATTEST_ERR_DSSE_BAD_JSON);
+                }
+
+                // Materialize keyid as an allocator-owned
+                // n00b_string_t; same private-copy discipline as the
+                // write-side `_add_signature` path.
+                n00b_string_t *kid_copy = n00b_string_from_cstr(
+                    kid_node->string,
+                    .allocator = alloc_for_call);
+
+                // Base64-decode the wire sig field into an allocator-
+                // owned buffer. Malformed base64 surfaces as
+                // BAD_BASE64 (NOT BAD_JSON), mirroring the top-level
+                // payload-base64 precedent above: structural-JSON
+                // failures (missing field, wrong type) stay BAD_JSON,
+                // base64-content failures become BAD_BASE64
+                // regardless of nesting depth. Audit logs preserve
+                // the structural-vs-content distinction.
+                n00b_string_t *sig_b64 = n00b_string_from_cstr(
+                    sig_node->string,
+                    .allocator = alloc_for_call);
+                auto sig_dec_r = n00b_base64_decode(
+                    sig_b64,
+                    .allocator = alloc_for_call);
+                if (n00b_result_is_err(sig_dec_r)) {
+                    return n00b_result_err(n00b_attest_envelope_t *,
+                                           N00B_ATTEST_ERR_DSSE_BAD_BASE64);
+                }
+                n00b_buffer_t *sig_copy = n00b_result_get(sig_dec_r);
+
+                n00b_list_push(env->signature_keyids, kid_copy);
+                n00b_list_push(env->signature_sigs, sig_copy);
+            }
+        }
+    }
+
     return n00b_result_ok(n00b_attest_envelope_t *, env);
+}
+
+// WP-003 Phase 1 — public accessors for the parsed (or built)
+// `signatures[]` list. These borrow into the envelope's internal
+// parallel-list storage; the doxygen in the header is the
+// authoritative borrow-semantics contract. The count accessor is
+// allocation-free; the two getters bounds-check and return
+// `N00B_ATTEST_ERR_DSSE_BAD_INPUT` for OOB / null env. No new
+// error codes added this phase (reuses the existing DSSE codes).
+
+size_t
+n00b_attest_envelope_signature_count(n00b_attest_envelope_t *env)
+{
+    if (env == nullptr) {
+        return 0;
+    }
+    if (!env->signatures_initialized) {
+        return 0;
+    }
+    return (size_t)env->signature_keyids.len;
+}
+
+n00b_result_t(n00b_string_t *)
+n00b_attest_envelope_get_signature_keyid(n00b_attest_envelope_t *env,
+                                         size_t                  idx)
+{
+    if (env == nullptr || !env->signatures_initialized) {
+        return n00b_result_err(n00b_string_t *,
+                               N00B_ATTEST_ERR_DSSE_BAD_INPUT);
+    }
+    if (idx >= (size_t)env->signature_keyids.len) {
+        return n00b_result_err(n00b_string_t *,
+                               N00B_ATTEST_ERR_DSSE_BAD_INPUT);
+    }
+    return n00b_result_ok(n00b_string_t *,
+                          env->signature_keyids.data[idx]);
+}
+
+n00b_result_t(n00b_buffer_t *)
+n00b_attest_envelope_get_signature_sig(n00b_attest_envelope_t *env,
+                                       size_t                  idx)
+{
+    if (env == nullptr || !env->signatures_initialized) {
+        return n00b_result_err(n00b_buffer_t *,
+                               N00B_ATTEST_ERR_DSSE_BAD_INPUT);
+    }
+    if (idx >= (size_t)env->signature_sigs.len) {
+        return n00b_result_err(n00b_buffer_t *,
+                               N00B_ATTEST_ERR_DSSE_BAD_INPUT);
+    }
+    return n00b_result_ok(n00b_buffer_t *,
+                          env->signature_sigs.data[idx]);
 }
 
 n00b_result_t(n00b_buffer_t *)
@@ -499,4 +649,189 @@ n00b_attest_envelope_sign(n00b_attest_envelope_t *env,
                                               keyid,
                                               sig,
                                               .allocator = alloc_for_call);
+}
+
+// ---------------------------------------------------------------------------
+// Envelope signature verification (Phase 3).
+//
+// `_verify_signature` is the low-level entry point: re-derives PAE,
+// fetches `{keyid, sig}` at `idx`, and runs the crypto check
+// through `_verifier_check`. NO keyid-match (single-entry semantic
+// is "verify THIS index, no policy"; keyid-match policy lives in
+// `_verify` below). `_verify` is the high-level composition: it
+// derives PAE ONCE at the top, fetches the verifier's keyid ONCE,
+// then walks `signatures[]` running the keyid-match-then-check
+// policy per D-044 Q3 (sigstore "any-signature-passes"). The two
+// wrappers are the duals of `_envelope_add_signature` and
+// `_envelope_sign` per D-041 (storage + idiom symmetry).
+//
+// **Verdict vs. machinery (D-044 OQ-1).** Both wrappers preserve
+// the `Ok(true)` / `Ok(false)` / `Err(...)` three-way semantic:
+// the crypto verdict rides the Ok-channel, the machinery failure
+// rides the Err-channel. Phase 4's 3-code exit shape (exit 0 =
+// Ok(true), exit 1 = Ok(false), exit 2 = Err) depends on this
+// distinction; **do NOT collapse `Ok(false)` into `Err`** under
+// any code path here.
+// ---------------------------------------------------------------------------
+
+n00b_result_t(bool)
+n00b_attest_envelope_verify_signature(n00b_attest_envelope_t *env,
+                                      size_t                  idx,
+                                      n00b_attest_verifier_t *verifier) _kargs
+{
+    n00b_allocator_t *allocator = nullptr;
+}
+{
+    if (env == nullptr || verifier == nullptr) {
+        return n00b_result_err(bool, N00B_ATTEST_ERR_DSSE_BAD_INPUT);
+    }
+    if (idx >= n00b_attest_envelope_signature_count(env)) {
+        return n00b_result_err(bool, N00B_ATTEST_ERR_DSSE_BAD_INPUT);
+    }
+
+    n00b_allocator_t *alloc_for_call = allocator ? allocator : env->allocator;
+
+    // Fetch the entry's keyid + sig via the Phase 1 getters. The
+    // bounds check above + the getters' own null-env / OOB guards
+    // are belt-and-suspenders here; we already know `idx` is in
+    // range and `env` is non-null, so neither getter will Err in
+    // practice.
+    auto kid_r = n00b_attest_envelope_get_signature_keyid(env, idx);
+    if (n00b_result_is_err(kid_r)) {
+        return n00b_result_err(bool, n00b_result_get_err(kid_r));
+    }
+    auto sig_r = n00b_attest_envelope_get_signature_sig(env, idx);
+    if (n00b_result_is_err(sig_r)) {
+        return n00b_result_err(bool, n00b_result_get_err(sig_r));
+    }
+    n00b_buffer_t *sig = n00b_result_get(sig_r);
+
+    // Re-derive PAE bytes. Single-entry verification re-derives
+    // per call (the entry point is self-contained); callers
+    // verifying multiple entries on the same envelope should use
+    // `_envelope_verify` (which derives once and walks).
+    auto pae_r = n00b_attest_envelope_pae_bytes(env,
+                                                .allocator = alloc_for_call);
+    if (n00b_result_is_err(pae_r)) {
+        return n00b_result_err(bool, n00b_result_get_err(pae_r));
+    }
+    n00b_buffer_t *pae = n00b_result_get(pae_r);
+
+    // Pass-through: the verdict (Ok(true) / Ok(false)) and any
+    // machinery failure (Err) propagate verbatim from
+    // `_verifier_check`. Do NOT collapse Ok(false) into Err.
+    return n00b_attest_verifier_check(verifier,
+                                      pae,
+                                      sig,
+                                      .allocator = alloc_for_call);
+}
+
+n00b_result_t(bool)
+n00b_attest_envelope_verify(n00b_attest_envelope_t *env,
+                            n00b_attest_verifier_t *verifier) _kargs
+{
+    n00b_allocator_t *allocator = nullptr;
+}
+{
+    if (env == nullptr || verifier == nullptr) {
+        return n00b_result_err(bool, N00B_ATTEST_ERR_DSSE_BAD_INPUT);
+    }
+
+    // Architecture §9 FAIL_NO_SIGNATURES: an envelope with no
+    // signature entries is rejected with Ok(false). The verify
+    // machinery did run (we inspected the count); the verdict is
+    // "envelope was rejected." Routing this through Err would
+    // conflate "no signatures to check" (verdict) with "machinery
+    // could not check" (failure).
+    size_t nsigs = n00b_attest_envelope_signature_count(env);
+    if (nsigs == 0) {
+        return n00b_result_ok(bool, false);
+    }
+
+    n00b_allocator_t *alloc_for_call = allocator ? allocator : env->allocator;
+
+    // Derive PAE ONCE at the top. Per-entry re-derivation would
+    // multiply allocator pressure by N for an N-signature
+    // envelope; the high-level wrapper trades the low-level
+    // wrapper's self-containment for a single PAE allocation.
+    auto pae_r = n00b_attest_envelope_pae_bytes(env,
+                                                .allocator = alloc_for_call);
+    if (n00b_result_is_err(pae_r)) {
+        return n00b_result_err(bool, n00b_result_get_err(pae_r));
+    }
+    n00b_buffer_t *pae = n00b_result_get(pae_r);
+
+    // Fetch the verifier's keyid ONCE. Same rationale as PAE: the
+    // verifier's keyid is a pointer-stable cached value (D-039);
+    // re-fetching per entry is harmless but unnecessary.
+    n00b_string_t *verifier_kid = n00b_attest_verifier_keyid(verifier);
+    if (verifier_kid == nullptr) {
+        // Should not happen for a verifier returned by
+        // `_verifier_resolve`, but defensive: route through Err
+        // (machinery failure, not verdict).
+        return n00b_result_err(bool, N00B_ATTEST_ERR_DSSE_BAD_INPUT);
+    }
+
+    // Walk: keyid-match-then-check policy per D-044 Q3. Non-
+    // matching entries skip silently; matching entries dispatch
+    // to `_verifier_check`. Short-circuit on first Ok(true);
+    // propagate Err immediately; continue on Ok(false).
+    //
+    // Plan deviation note (per Phase 3 prompt rationale): the
+    // high-level wrapper calls `_verifier_check` directly with
+    // the pre-derived `pae` buffer rather than dispatching
+    // through `_envelope_verify_signature`. The low-level wrapper
+    // re-derives PAE per call (self-contained); calling it from
+    // the walk would re-derive PAE N times, defeating the
+    // once-at-top optimization. The low-level wrapper remains
+    // for callers who want single-entry verification without
+    // owning a pre-derived PAE buffer.
+    for (size_t i = 0; i < nsigs; i++) {
+        auto kid_r = n00b_attest_envelope_get_signature_keyid(env, i);
+        if (n00b_result_is_err(kid_r)) {
+            return n00b_result_err(bool, n00b_result_get_err(kid_r));
+        }
+        n00b_string_t *entry_kid = n00b_result_get(kid_r);
+
+        // D-039 keyid equality. Both keyids are produced by the
+        // same `lowercase-hex(SHA-256(SPKI DER))` derivation, so
+        // they are pure 64-char ASCII hex strings. `n00b_unicode_str_eq`
+        // with its `.normalize = false` + `.case_sensitive = true`
+        // defaults is bit-equivalent to `memcmp` on ASCII inputs
+        // — the Unicode-aware comparison layer is a no-op here
+        // because the keyids contain no characters that would
+        // canonicalize differently.
+        if (!n00b_unicode_str_eq(verifier_kid, entry_kid)) {
+            continue;  // skip silently per Known Deferral 1
+        }
+
+        auto sig_r = n00b_attest_envelope_get_signature_sig(env, i);
+        if (n00b_result_is_err(sig_r)) {
+            return n00b_result_err(bool, n00b_result_get_err(sig_r));
+        }
+        n00b_buffer_t *entry_sig = n00b_result_get(sig_r);
+
+        auto check_r = n00b_attest_verifier_check(verifier,
+                                                  pae,
+                                                  entry_sig,
+                                                  .allocator = alloc_for_call);
+        if (n00b_result_is_err(check_r)) {
+            // Machinery failure aborts the walk. Phase 4's exit
+            // shape will surface this as exit-code-2 (the
+            // verdict cases — Ok(true) and Ok(false) — surface
+            // as 0 and 1).
+            return n00b_result_err(bool, n00b_result_get_err(check_r));
+        }
+        if (n00b_result_get(check_r)) {
+            // First matching-keyid entry that verifies wins;
+            // sigstore "any-passes" semantics complete on the
+            // first success.
+            return n00b_result_ok(bool, true);
+        }
+        // Ok(false) — this entry did not verify; continue to the
+        // next entry (a different matching-keyid sig might).
+    }
+
+    // Walk completed with no matching-keyid entry verifying.
+    return n00b_result_ok(bool, false);
 }

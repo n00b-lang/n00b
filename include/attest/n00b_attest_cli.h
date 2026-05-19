@@ -14,29 +14,33 @@
  * shim, NOT here.
  *
  * Library-API-first (WP-002 plan §727): regression-test-shaped
- * artifacts (the test under `test/unit/test_attest_cli_sign.c`)
- * drive these cores directly via in-memory buffers; the verb
- * cores never read from `stdin`, never write to `stdout`, and
- * never `open()` a file path. Path-binding belongs to the shim.
+ * artifacts (the tests under `test/unit/test_attest_cli_sign.c`
+ * and `test/unit/test_attest_cli_verify.c`) drive these cores
+ * directly via in-memory buffers; the verb cores never read from
+ * `stdin`, never write to `stdout`, and never `open()` a file
+ * path. Path-binding belongs to the shim.
  *
  * # Scope
  *
- * Only the `sign` verb is wired in WP-002. Other verbs (`verify`,
- * `inspect`, `push`, `pull`, ...) are registered with commander
- * as not-yet-implemented stubs in the binary so `--help`
- * discovery lists them (DF-004 disposition (a) per user direction
- * 2026-05-18); their library-shaped cores arrive in later WPs.
+ * WP-002 wired the `sign` verb; WP-003 Phase 4 wires the `verify`
+ * verb. Other verbs (`inspect`, `push`, `pull`, ...) are
+ * registered with commander as not-yet-implemented stubs in the
+ * binary so `--help` discovery lists them (DF-004 disposition (a)
+ * per user direction 2026-05-18); their library-shaped cores
+ * arrive in later WPs.
  *
  * # Allocator discipline
  *
  * Each core accepts `.allocator = nullptr` and threads it into
  * every downstream call (Statement parse, envelope construction,
- * signer resolve, envelope sign, envelope serialize). Threading
- * an arena through here keeps every byte the verb produces in
- * that arena (FR-21 / FR-22). Per D-042 part W-2 the signer's
- * resolve-time allocator inherits forward into `_sign`, so the
- * CLI sees arena-attributed signatures without re-threading the
- * sign call site itself.
+ * signer resolve, envelope sign, envelope serialize on the sign
+ * side; envelope parse, verifier resolve, envelope verify on the
+ * verify side). Threading an arena through here keeps every byte
+ * the verb produces in that arena (FR-21 / FR-22). Per D-042 part
+ * W-2 the signer's / verifier's resolve-time allocator inherits
+ * forward into subsequent calls against the resolved handle, so
+ * the CLI sees arena-attributed signatures / verify-scratch
+ * without re-threading every downstream call site.
  */
 
 #include <n00b.h>
@@ -44,6 +48,7 @@
 #include <attest/n00b_attest_statement.h>
 #include <attest/n00b_attest_dsse.h>
 #include <attest/n00b_attest_signer.h>
+#include <attest/n00b_attest_verifier.h>
 
 /**
  * @brief Run the `sign` verb's library-shaped core: parse a
@@ -134,6 +139,112 @@
 extern n00b_result_t(n00b_buffer_t *)
 n00b_attest_cli_sign(n00b_buffer_t *statement_bytes,
                      n00b_string_t *key_uri) _kargs
+{
+    n00b_allocator_t *allocator = nullptr;
+};
+
+/**
+ * @brief Run the `verify` verb's library-shaped core: parse a DSSE
+ *        envelope, resolve the verifier, run the any-passes
+ *        verification, release the verifier, and propagate the
+ *        verdict.
+ *
+ * The body is the substrate the `n00b-attest verify` shim sits on.
+ * Inputs are already-bound buffers / strings; the output is a
+ * verdict-encoding @ref n00b_result_t(bool). The shim handles
+ * stdin/file binding around this core; it also translates the
+ * return into Phase 4's three-code exit shape (D-044 OQ-1 (b)):
+ * `Ok(true)` → exit 0, `Ok(false)` → exit 1, `Err(...)` → exit 2.
+ *
+ * The core composes the high-level building blocks landed in
+ * WP-003 Phase 1 + Phase 2 + Phase 3:
+ *   1. @ref n00b_attest_envelope_parse — Envelope JSON bytes →
+ *      envelope handle. Phase 1's parser reconstructs
+ *      `signatures[]` from the wire JSON (DF-006 closure) so the
+ *      subsequent verify call sees the appended `{keyid, sig}`
+ *      pairs.
+ *   2. @ref n00b_attest_verifier_resolve — load the verifier from
+ *      the URI. Per D-042 W-2 the verifier remembers the
+ *      resolve-time allocator; subsequent verify calls inherit it.
+ *   3. @ref n00b_attest_envelope_verify — sigstore-style
+ *      any-matching-keyid-passes verification (D-041 high-level
+ *      wrapper, dual of `n00b_attest_envelope_sign`).
+ *   4. @ref n00b_attest_verifier_release — symmetric lifetime
+ *      cleanup; runs even on early-Err paths (defensive-release
+ *      mirror of the signer side).
+ *
+ * ## Verdict pass-through
+ *
+ * The core does NOT collapse `Ok(false)` into `Err`: the verify
+ * surface deliberately keeps the verdict on the `Ok` channel and
+ * the machinery-failure on the `Err` channel (D-044 OQ-1 (b),
+ * @ref n00b_attest_envelope_verify). Phase 4's 3-code exit shape
+ * depends on this distinction; callers MUST preserve it.
+ *
+ * @param envelope_bytes  In-memory DSSE envelope JSON bytes
+ *                        (typically the stdin contents or the
+ *                        contents of `--envelope <path>`).
+ * @param key_uri         Verifier URI (e.g.,
+ *                        `file:///etc/n00b-attest/ci.pub.pem`).
+ *                        Per FR-VM-1 the file backend is the only
+ *                        in-scope scheme in WP-003; unknown
+ *                        schemes propagate the resolver's
+ *                        @ref N00B_ATTEST_ERR_VERIFIER_UNSUPPORTED_SCHEME.
+ *
+ * @kw allocator  Optional allocator (defaults to the runtime
+ *                allocator); owns every byte the verb produces
+ *                (parsed envelope handle, verifier state, PAE
+ *                bytes, any check-path scratch).
+ *
+ * @return Verdict-encoding `n00b_result_t(bool)`:
+ *         - `n00b_result_ok(bool, true)` — at least one entry in
+ *           the envelope's `signatures[]` whose `keyid` matched
+ *           the verifier's keyid verified under the verifier's
+ *           public key.
+ *         - `n00b_result_ok(bool, false)` — no matching-keyid
+ *           entry verified (either no entry has a matching keyid,
+ *           or every matching-keyid entry returned `Ok(false)`,
+ *           or `signatures[]` is empty, or the envelope's payload
+ *           bytes are not the bytes that were signed — tampered
+ *           payload). **Verdict, NOT Err.**
+ *         - `n00b_result_err(...)` propagating the first failing
+ *           step's machinery error code:
+ *           - @ref N00B_ATTEST_ERR_DSSE_BAD_INPUT for null /
+ *             empty `envelope_bytes`.
+ *           - @ref N00B_ATTEST_ERR_DSSE_BAD_JSON /
+ *             @ref N00B_ATTEST_ERR_DSSE_WRONG_TYPE /
+ *             @ref N00B_ATTEST_ERR_DSSE_BAD_BASE64 — envelope-parse
+ *             failures.
+ *           - @ref N00B_ATTEST_ERR_VERIFIER_UNSUPPORTED_SCHEME /
+ *             @ref N00B_ATTEST_ERR_VERIFIER_KEY_NOT_FOUND /
+ *             @ref N00B_ATTEST_ERR_VERIFIER_PEM_PARSE_FAILED /
+ *             @ref N00B_ATTEST_ERR_VERIFIER_DER_PARSE_FAILED /
+ *             @ref N00B_ATTEST_ERR_VERIFIER_UNSUPPORTED_ALGORITHM
+ *             — verifier-resolve failures.
+ *           - @ref N00B_ATTEST_ERR_VERIFY_BAD_INPUT /
+ *             @ref N00B_ATTEST_ERR_VERIFY_BAD_SIG_LENGTH —
+ *             check-path machinery failures from the per-entry
+ *             dispatch.
+ *
+ * @pre @ref n00b_attest_module_init has been called (the host
+ *      tool binary or test must register the in-tree backends
+ *      before invoking this core).
+ * @post On every return path (success, verdict-false, or Err) the
+ *       internally-resolved verifier handle has been released. The
+ *       caller owns nothing produced inside this entry point.
+ *
+ * @note Defensive release: if `_envelope_parse` succeeds but
+ *       `_verifier_resolve` fails, the parsed envelope is
+ *       GC-managed and needs no explicit release; the verifier
+ *       handle was never constructed. If `_verifier_resolve`
+ *       succeeds but `_envelope_verify` returns `Err`, the
+ *       verifier IS live and IS released before this entry point
+ *       returns — mirror of the signer side's release-on-error
+ *       pattern in @ref n00b_attest_cli_sign.
+ */
+extern n00b_result_t(bool)
+n00b_attest_cli_verify(n00b_buffer_t *envelope_bytes,
+                       n00b_string_t *key_uri) _kargs
 {
     n00b_allocator_t *allocator = nullptr;
 };

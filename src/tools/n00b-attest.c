@@ -3,18 +3,27 @@
  * Thin shim around the library-shaped verb cores declared in
  * `include/attest/n00b_attest_cli.h`. Parses argv via
  * slay/commander (D-033 OQ-4), binds stdin / stdout / file paths
- * around the verb core, and dispatches.
+ * around the verb cores, and dispatches.
  *
  * Argv shape (per `docs/attest/02-architecture.md` §10 + D-023):
  *
  *     n00b-attest <verb> [args]
  *
- * Only the `sign` verb is wired in WP-002. Other verbs (`verify`,
- * `inspect`, `push`, `pull`, etc.) are registered as commander
- * subcommands so they appear in `--help` discovery, but each
- * invocation prints a "not yet implemented" diagnostic to stderr
- * and exits 1 (DF-004 disposition (a) per user direction
- * 2026-05-18). Their library-shaped cores arrive in later WPs.
+ * WP-002 wired the `sign` verb; WP-003 Phase 4 wires the `verify`
+ * verb. Other verbs (`inspect`, `push`, `pull`, etc.) are
+ * registered as commander subcommands so they appear in `--help`
+ * discovery, but each invocation prints a "not yet implemented"
+ * diagnostic to stderr and exits 1 (DF-004 disposition (a) per
+ * user direction 2026-05-18). Their library-shaped cores arrive
+ * in later WPs.
+ *
+ * The `verify` verb uses a 3-code exit shape (D-044 OQ-1 (b)):
+ *   - exit 0 — Ok(true): the envelope verified.
+ *   - exit 1 — Ok(false): verdict failure (signature didn't
+ *     verify, no matching keyid, empty signatures[], tampered
+ *     payload, etc.).
+ *   - exit 2 — Err(...): machinery failure (malformed envelope,
+ *     scheme mismatch, missing file, etc.).
  *
  * Library-API-first (WP-002 plan §727): every line of business
  * logic lives behind the library surface; this file is purely
@@ -63,7 +72,11 @@ typedef struct {
 // `r"..."` rich-string literals materialize at runtime through
 // the n00b allocator (they are NOT C-language constant
 // expressions usable in a `static` initializer).
-static verb_stub_t k_pending_verbs[12];
+//
+// WP-003 Phase 4 promoted `verify` out of this table to a real
+// commander-registered subcommand backed by
+// `n00b_attest_cli_verify`; the array shrank 12 → 11.
+static verb_stub_t k_pending_verbs[11];
 static size_t      k_num_pending_verbs = 0;
 
 static void
@@ -74,9 +87,6 @@ build_pending_verbs(void)
     }
     size_t i = 0;
 
-    k_pending_verbs[i++] = (verb_stub_t){
-        r"verify",
-        r"(not yet implemented) Verify a DSSE envelope against a keyring"};
     k_pending_verbs[i++] = (verb_stub_t){
         r"inspect",
         r"(not yet implemented) Inspect a DSSE envelope without verifying"};
@@ -228,6 +238,23 @@ build_commander(void)
                        true,
                        r"Write envelope JSON to this path (default: stdout)");
 
+    // verify subcommand (WP-003 Phase 4).
+    n00b_cmdr_add_command(c,
+                          r"verify",
+                          r"Verify a DSSE envelope against a public key");
+    n00b_cmdr_add_flag(c,
+                       r"verify",
+                       r"--key",
+                       N00B_CMDR_TYPE_WORD,
+                       true,
+                       r"Verifier URI (e.g., file:///path/to/pubkey.pem)");
+    n00b_cmdr_add_flag(c,
+                       r"verify",
+                       r"--envelope",
+                       N00B_CMDR_TYPE_WORD,
+                       true,
+                       r"Read envelope JSON from this path (default: stdin)");
+
     // Forward-roadmap stubs — registered so `--help` discovery lists
     // them, but invocation routes through the not-yet-implemented
     // diagnostic in `main` (DF-004 disposition (a)).
@@ -358,6 +385,89 @@ verb_sign(n00b_cmdr_result_t *result)
 }
 
 // ---------------------------------------------------------------------------
+// `verify` verb shim — binds I/O around the library core.
+// ---------------------------------------------------------------------------
+//
+// 3-code exit shape per D-044 OQ-1 (b):
+//   - Ok(true)  → return 0  (verified).
+//   - Ok(false) → return 1  (verdict failure).
+//   - Err(...)  → return 2  (machinery failure).
+//
+// `verb_sign` returns `1` on every non-zero path; `verb_verify`
+// deliberately keeps the verdict/Err axes distinct so wrapping
+// shell scripts can tell signature failure (auditable) apart from
+// machinery failure (malformed input / missing file).
+static int
+verb_verify(n00b_cmdr_result_t *result)
+{
+    // Required: --key.
+    if (!n00b_cmdr_flag_present(result, r"--key")) {
+        n00b_eprintf("n00b-attest verify: missing required --key <uri>");
+        return 2;
+    }
+    n00b_string_t *key_uri = n00b_cmdr_flag_str(result, r"--key");
+    if (key_uri == nullptr || key_uri->u8_bytes == 0) {
+        n00b_eprintf("n00b-attest verify: --key <uri> may not be empty");
+        return 2;
+    }
+
+    // Optional: --envelope (default stdin). Mirrors the
+    // sign-side --statement default per D-033 OQ-5.
+    n00b_string_t *env_path = nullptr;
+    if (n00b_cmdr_flag_present(result, r"--envelope")) {
+        env_path = n00b_cmdr_flag_str(result, r"--envelope");
+        if (env_path == nullptr || env_path->u8_bytes == 0) {
+            n00b_eprintf(
+                "n00b-attest verify: --envelope <path> may not be empty");
+            return 2;
+        }
+    }
+    else {
+        // Path-based stdin access (same rationale as verb_sign's
+        // /dev/stdin fallback — n00b has no canonical stdin helper
+        // yet; the ergonomics gap is tracked at WP-002 closeout).
+        env_path = n00b_string_from_cstr("/dev/stdin");
+    }
+
+    auto read_r = read_all_from_path(env_path);
+    if (n00b_result_is_err(read_r)) {
+        n00b_err_t code = n00b_result_get_err(read_r);
+        n00b_eprintf("n00b-attest verify: cannot read envelope '«#»' "
+                     "(errno «#»)",
+                     env_path,
+                     (int64_t)code);
+        return 2;
+    }
+    n00b_buffer_t *env_bytes = n00b_result_get(read_r);
+
+    if (env_bytes == nullptr || env_bytes->byte_len == 0) {
+        n00b_eprintf("n00b-attest verify: empty envelope input");
+        return 2;
+    }
+
+    // Dispatch through the library-shaped verb core.
+    auto r = n00b_attest_cli_verify(env_bytes, key_uri);
+    if (n00b_result_is_err(r)) {
+        // Machinery failure → exit 2.
+        print_attest_error_diagnostic("verify failed",
+                                      n00b_result_get_err(r));
+        return 2;
+    }
+
+    if (n00b_result_get(r) == true) {
+        // Verdict-true → exit 0 (no stdout output; verify produces
+        // no envelope artifact, only a verdict).
+        return 0;
+    }
+
+    // Verdict-false → exit 1. Emit a structured stderr line so
+    // log scrapers can distinguish the "the signature did not
+    // verify" case from the silent-pass.
+    n00b_eprintf("n00b-attest verify: signature did not verify");
+    return 1;
+}
+
+// ---------------------------------------------------------------------------
 // --help / usage text.
 // ---------------------------------------------------------------------------
 
@@ -368,7 +478,8 @@ print_usage(void)
         "Usage: n00b-attest <verb> [args]\n"
         "\n"
         "Verbs:\n"
-        "  sign       Sign an in-toto Statement into a DSSE envelope");
+        "  sign       Sign an in-toto Statement into a DSSE envelope\n"
+        "  verify     Verify a DSSE envelope against a public key");
     for (size_t i = 0; i < k_num_pending_verbs; i++) {
         n00b_string_t *vname = k_pending_verbs[i].name;
         n00b_string_t *vdoc  = k_pending_verbs[i].doc;
@@ -387,6 +498,18 @@ print_usage(void)
         "(default: stdin)\n"
         "  --out <path>       Write envelope JSON to path "
         "(default: stdout)\n"
+        "\n"
+        "verify flags:\n"
+        "  --key <uri>        Verifier URI (required, e.g. "
+        "file:///path/to/pubkey.pem)\n"
+        "  --envelope <path>  Read envelope JSON from path "
+        "(default: stdin)\n"
+        "\n"
+        "verify exit codes:\n"
+        "  0  verified\n"
+        "  1  verdict failure (signature did not verify)\n"
+        "  2  machinery failure (malformed envelope, missing key, "
+        "etc.)\n"
         "\n"
         "Global flags:\n"
         "  -h, --help         Show this help message");
@@ -453,9 +576,13 @@ main(int argc, char **argv)
     }
 
     int rc;
-    n00b_string_t *sign_name = r"sign";
+    n00b_string_t *sign_name   = r"sign";
+    n00b_string_t *verify_name = r"verify";
     if (n00b_unicode_str_eq(cmd, sign_name)) {
         rc = verb_sign(result);
+    }
+    else if (n00b_unicode_str_eq(cmd, verify_name)) {
+        rc = verb_verify(result);
     }
     else {
         // DF-004 (a): the verb is in the forward roadmap (registered

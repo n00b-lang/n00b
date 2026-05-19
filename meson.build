@@ -707,6 +707,15 @@ attest_envelope_sign_test = executable('test_attest_envelope_sign',
 )
 test('attest_envelope_sign', attest_envelope_sign_test, suite: 'unit')
 
+attest_envelope_signatures_roundtrip_test = executable(
+    'test_attest_envelope_signatures_roundtrip',
+    ['test/unit/test_attest_envelope_signatures_roundtrip.c'],
+    kwargs: test_common_kwargs,
+)
+test('attest_envelope_signatures_roundtrip',
+     attest_envelope_signatures_roundtrip_test,
+     suite: 'unit')
+
 attest_err_str_test = executable('test_attest_err_str',
     ['test/unit/test_attest_err_str.c'],
     kwargs: test_common_kwargs,
@@ -724,6 +733,45 @@ attest_signer_arena_test = executable('test_attest_signer_arena',
     kwargs: test_common_kwargs,
 )
 test('attest_signer_arena', attest_signer_arena_test, suite: 'unit')
+
+attest_verifier_resolve_test = executable('test_attest_verifier_resolve',
+    ['test/unit/test_attest_verifier_resolve.c'],
+    kwargs: test_common_kwargs,
+)
+test('attest_verifier_resolve', attest_verifier_resolve_test, suite: 'unit')
+
+attest_verifier_keyid_test = executable('test_attest_verifier_keyid',
+    ['test/unit/test_attest_verifier_keyid.c'],
+    kwargs: test_common_kwargs,
+)
+test('attest_verifier_keyid', attest_verifier_keyid_test, suite: 'unit')
+
+attest_envelope_verify_signature_test = executable(
+    'test_attest_envelope_verify_signature',
+    ['test/unit/test_attest_envelope_verify_signature.c'],
+    kwargs: test_common_kwargs,
+)
+test('attest_envelope_verify_signature',
+     attest_envelope_verify_signature_test,
+     suite: 'unit')
+
+attest_envelope_verify_test = executable('test_attest_envelope_verify',
+    ['test/unit/test_attest_envelope_verify.c'],
+    kwargs: test_common_kwargs,
+)
+test('attest_envelope_verify', attest_envelope_verify_test, suite: 'unit')
+
+attest_cli_verify_test = executable('test_attest_cli_verify',
+    ['test/unit/test_attest_cli_verify.c'],
+    kwargs: test_common_kwargs,
+)
+test('attest_cli_verify', attest_cli_verify_test, suite: 'unit')
+
+attest_verifier_arena_test = executable('test_attest_verifier_arena',
+    ['test/unit/test_attest_verifier_arena.c'],
+    kwargs: test_common_kwargs,
+)
+test('attest_verifier_arena', attest_verifier_arena_test, suite: 'unit')
 
 list_test = executable('test_list',
     ['test/unit/test_list.c'],

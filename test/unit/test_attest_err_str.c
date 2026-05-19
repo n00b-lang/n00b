@@ -60,6 +60,15 @@ static const n00b_err_t k_attest_codes[] = {
     N00B_ATTEST_ERR_UNSUPPORTED_ALGORITHM,
     N00B_ATTEST_ERR_SIGN_FAILED,
     N00B_ATTEST_ERR_NOT_IMPLEMENTED,
+    // Verifier domain (WP-003 Phase 2 per D-046).
+    N00B_ATTEST_ERR_VERIFIER_UNSUPPORTED_SCHEME,
+    N00B_ATTEST_ERR_VERIFIER_KEY_NOT_FOUND,
+    N00B_ATTEST_ERR_VERIFIER_PEM_PARSE_FAILED,
+    N00B_ATTEST_ERR_VERIFIER_DER_PARSE_FAILED,
+    N00B_ATTEST_ERR_VERIFIER_UNSUPPORTED_ALGORITHM,
+    // Verify check-path domain (WP-003 Phase 3 per D-047 W-1).
+    N00B_ATTEST_ERR_VERIFY_BAD_SIG_LENGTH,
+    N00B_ATTEST_ERR_VERIFY_BAD_INPUT,
 };
 
 // Every base64-util code defined in the project.
@@ -88,11 +97,16 @@ static void
 test_attest_every_code_returns_nonempty(void)
 {
     size_t n = sizeof(k_attest_codes) / sizeof(k_attest_codes[0]);
-    // Expected post-WP-002-Phase-3 count: 16. If a future WP adds
-    // a code without updating this list, the value here drifts —
-    // a starting-point sanity check that pins the table size at
-    // its current cardinality.
-    assert(n == 16);
+    // Expected post-WP-003-Phase-3 count: 23. Bumped from 16 by
+    // D-046 (which authorized Phase 2 to introduce the first five
+    // verifier-domain codes -5001..-5005, taking the count to 21);
+    // bumped from 21 by D-047 W-1 (which authorized Phase 3 to
+    // introduce the two runtime-check-path codes -5006/-5007
+    // under the `_VERIFY_*` prefix, taking the count to 23). If a
+    // future WP adds a code without updating this list, the value
+    // here drifts — a starting-point sanity check that pins the
+    // table size at its current cardinality.
+    assert(n == 23);
     for (size_t i = 0; i < n; i++) {
         n00b_string_t *s = n00b_attest_err_str(k_attest_codes[i]);
         assert_nonempty(s, "attest", k_attest_codes[i]);

@@ -139,3 +139,65 @@ n00b_attest_cli_sign(n00b_buffer_t *statement_bytes,
 
     return ser_r;
 }
+
+n00b_result_t(bool)
+n00b_attest_cli_verify(n00b_buffer_t *envelope_bytes,
+                       n00b_string_t *key_uri) _kargs
+{
+    n00b_allocator_t *allocator = nullptr;
+}
+{
+    if (envelope_bytes == nullptr || envelope_bytes->byte_len == 0) {
+        return n00b_result_err(bool, N00B_ATTEST_ERR_DSSE_BAD_INPUT);
+    }
+    if (key_uri == nullptr || key_uri->u8_bytes == 0) {
+        // No verifier URI to dispatch on; this is the resolver's
+        // "empty discovery chain" branch surfaced one frame up —
+        // mirrors the signer-side _KEY_NOT_FOUND treatment on the
+        // verifier-domain code namespace.
+        return n00b_result_err(bool,
+                               N00B_ATTEST_ERR_VERIFIER_KEY_NOT_FOUND);
+    }
+
+    // 1. Parse the envelope. Per Phase 1 (DF-006 closure) the
+    // parser reconstructs `signatures[]` from the wire JSON so the
+    // subsequent verify call sees the appended `{keyid, sig}`
+    // pairs. The parsed envelope is GC-managed — no explicit
+    // release needed on any return path.
+    auto parse_r = n00b_attest_envelope_parse(envelope_bytes,
+                                              .allocator = allocator);
+    if (n00b_result_is_err(parse_r)) {
+        return n00b_result_err(bool, n00b_result_get_err(parse_r));
+    }
+    n00b_attest_envelope_t *env = n00b_result_get(parse_r);
+
+    // 2. Resolve the verifier. Per D-042 W-2 the verifier
+    // remembers this allocator and inherits it forward into
+    // subsequent `_envelope_verify` scratch.
+    auto resolve_r = n00b_attest_verifier_resolve(.ref       = key_uri,
+                                                  .allocator = allocator);
+    if (n00b_result_is_err(resolve_r)) {
+        // Verifier never constructed; nothing to release. The
+        // parsed envelope is GC-managed.
+        return n00b_result_err(bool, n00b_result_get_err(resolve_r));
+    }
+    n00b_attest_verifier_t *verifier = n00b_result_get(resolve_r);
+
+    // 3. High-level verify: sigstore-style any-matching-keyid-
+    // passes (D-041 high-level wrapper; D-044 Q3 disposition).
+    // Returns the verdict on Ok and machinery failures on Err;
+    // both shapes must propagate unchanged so Phase 4's 3-code
+    // exit shape (D-044 OQ-1 (b)) sees the verdict/Err split.
+    auto verify_r = n00b_attest_envelope_verify(env,
+                                                verifier,
+                                                .allocator = allocator);
+
+    // 4. **Defensive release**: the verifier is live regardless of
+    // whether `_envelope_verify` returned Ok(true), Ok(false), or
+    // Err — mirror of the signer-side release-on-error pattern in
+    // `n00b_attest_cli_sign`. Release BEFORE returning so no
+    // return path leaks the verifier's cached buffers.
+    n00b_attest_verifier_release(verifier);
+
+    return verify_r;
+}
