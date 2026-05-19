@@ -773,6 +773,131 @@ attest_verifier_arena_test = executable('test_attest_verifier_arena',
 )
 test('attest_verifier_arena', attest_verifier_arena_test, suite: 'unit')
 
+attest_oci_client_resolve_test = executable('test_attest_oci_client_resolve',
+    ['test/unit/test_attest_oci_client_resolve.c'],
+    kwargs: test_common_kwargs,
+)
+test('attest_oci_client_resolve', attest_oci_client_resolve_test, suite: 'unit')
+
+# WP-004 Phase 4 hardening — FR-22 arena friendliness for the OCI
+# client surface. Mirrors the WP-002 / WP-003 arena-test precedent
+# (test_attest_signer_arena / test_attest_verifier_arena): N=50
+# resolve + in-memory op + release through one arena, GC-collect,
+# assert arena-used drops back. Always-runs (no Docker / no network).
+attest_oci_arena_test = executable('test_attest_oci_arena',
+    ['test/unit/test_attest_oci_arena.c'],
+    kwargs: test_common_kwargs,
+)
+test('attest_oci_arena', attest_oci_arena_test, suite: 'unit')
+
+# WP-004 Phase 4 hardening — redirect-policy delegation regression.
+# Verifies the OCI client correctly stores per-call kwargs
+# (`redirect_host_allowlist`, `allow_redirects`) on the handle so
+# libn00b's dispatcher can pick them up once the matching surface
+# lifts. Always-runs.
+attest_oci_redirect_policy_test = executable(
+    'test_attest_oci_redirect_policy',
+    ['test/unit/test_attest_oci_redirect_policy.c'],
+    kwargs: test_common_kwargs,
+)
+test('attest_oci_redirect_policy',
+     attest_oci_redirect_policy_test,
+     suite: 'unit')
+
+# WP-004 Phase 4 hardening — per-call body-size cap surface. Asserts
+# the size-cap error codes are wired and the fetcher kwarg blocks
+# parse correctly with both `max_size` and `timeout_ms`. Always-runs.
+attest_oci_size_caps_test = executable('test_attest_oci_size_caps',
+    ['test/unit/test_attest_oci_size_caps.c'],
+    kwargs: test_common_kwargs,
+)
+test('attest_oci_size_caps', attest_oci_size_caps_test, suite: 'unit')
+
+attest_oci_manifest_test = executable('test_attest_oci_manifest',
+    ['test/unit/test_attest_oci_manifest.c'],
+    kwargs: test_common_kwargs,
+)
+test('attest_oci_manifest', attest_oci_manifest_test, suite: 'unit')
+
+attest_oci_push_smoke_test = executable('test_attest_oci_push_smoke',
+    ['test/unit/test_attest_oci_push_smoke.c'],
+    kwargs: test_common_kwargs,
+)
+# WP-004 Phase 2 trailing addition (DF-012): Docker-gated full
+# HEAD/POST/PUT/PUT push against the zot fixture in
+# test/fixtures/zot/.  N00B_TEST_ZOT_SRC_ROOT carries the absolute
+# repo-root path so the test can find start.sh / stop.sh without
+# depending on the user-side `eval $(start.sh)` pre-step that the
+# caddy/nginx-quic smokes use.  Skips cleanly when N00B_TEST_DOCKER
+# is unset.
+test('attest_oci_push_smoke', attest_oci_push_smoke_test,
+     suite: 'unit',
+     timeout: 90,
+     env: {
+         'N00B_TEST_ZOT_SRC_ROOT': meson.current_source_dir(),
+     })
+
+# WP-004 Phase 3: discover-side smoke against zot. Pushes two
+# envelopes with distinct predicate-types and asserts list_referrers
+# returns both. Skips cleanly when N00B_TEST_DOCKER is unset.
+attest_oci_discover_smoke_test = executable('test_attest_oci_discover_smoke',
+    ['test/unit/test_attest_oci_discover_smoke.c'],
+    kwargs: test_common_kwargs,
+)
+test('attest_oci_discover_smoke', attest_oci_discover_smoke_test,
+     suite: 'unit',
+     timeout: 90,
+     env: {
+         'N00B_TEST_ZOT_SRC_ROOT': meson.current_source_dir(),
+     })
+
+# WP-004 Phase 3: pull-side smoke against zot. Pushes one envelope,
+# pulls it back, asserts byte-identical; also verifies the post-
+# filter rejects non-matching predicate-types.
+attest_oci_pull_smoke_test = executable('test_attest_oci_pull_smoke',
+    ['test/unit/test_attest_oci_pull_smoke.c'],
+    kwargs: test_common_kwargs,
+)
+test('attest_oci_pull_smoke', attest_oci_pull_smoke_test,
+     suite: 'unit',
+     timeout: 90,
+     env: {
+         'N00B_TEST_ZOT_SRC_ROOT': meson.current_source_dir(),
+     })
+
+# WP-004 Phase 3: the headline cross-WP end-to-end smoke against
+# zot. Chains sign -> push -> discover -> pull -> verify against
+# a real OCI registry; passing this test means the entire
+# n00b-attestation producer-to-consumer path is wired.
+attest_oci_end_to_end_smoke_test = executable(
+    'test_attest_oci_end_to_end_smoke',
+    ['test/unit/test_attest_oci_end_to_end_smoke.c'],
+    kwargs: test_common_kwargs,
+)
+test('attest_oci_end_to_end_smoke', attest_oci_end_to_end_smoke_test,
+     suite: 'unit',
+     timeout: 120,
+     env: {
+         'N00B_TEST_ZOT_SRC_ROOT': meson.current_source_dir(),
+     })
+
+# DF-013 regression: caller-supplied trust handle threaded through the
+# h1 transport.  Same zot fixture as attest_oci_push_smoke, but the
+# test exercises the libn00b-core path (n00b_http_request_sync ->
+# n00b_http_h1_round_trip -> n00b_acme_tls_connect_ex) directly via a
+# GET /v2/ rather than the attest-module OCI push surface.  Skips
+# cleanly when N00B_TEST_DOCKER is unset.
+h1_pinned_trust_test = executable('test_h1_pinned_trust',
+    ['test/unit/test_h1_pinned_trust.c'],
+    kwargs: test_common_kwargs,
+)
+test('h1_pinned_trust', h1_pinned_trust_test,
+     suite: 'unit',
+     timeout: 60,
+     env: {
+         'N00B_TEST_ZOT_SRC_ROOT': meson.current_source_dir(),
+     })
+
 list_test = executable('test_list',
     ['test/unit/test_list.c'],
     kwargs: test_common_kwargs,
@@ -1065,6 +1190,12 @@ print_test = executable('test_print',
     kwargs: test_common_kwargs,
 )
 test('print', print_test, suite: 'unit')
+
+std_streams_test = executable('test_std_streams',
+    ['test/unit/test_std_streams.c'],
+    kwargs: test_common_kwargs,
+)
+test('std_streams', std_streams_test, suite: 'unit')
 
 # ============================================================================
 # Regex engine tests — registered via subdir during Phase 11 of the regex port.
@@ -1601,7 +1732,7 @@ endif
 # Interpreter integration tests (shell runner invokes the n00b binary).
 if not meson.is_cross_build()
   bash_prog = find_program('bash', required: true)
-  test('interp',
+  test('n00b_interp',
       bash_prog,
       args: [
           files('test/interp/run_tests.sh'),
@@ -2662,9 +2793,14 @@ endif
 # Integration tests
 # ============================================================================
 
-# Interpreter integration tests live in the `interp` suite registered
-# earlier in this file (search for `test('interp', ...)`).  The older
-# `find_program('bash')` registration here was a duplicate.
+# Interpreter integration tests (shell runner invokes the n00b binary).
+test('interp', find_program('bash'),
+    args: [meson.project_source_root() / 'test/interp/run_tests.sh',
+           n00b_exe],
+    suite: 'interp',
+    workdir: meson.project_source_root(),
+    timeout: 120,
+)
 
 
 

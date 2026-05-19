@@ -304,6 +304,7 @@ n00b_init(n00b_runtime_t *rt, int argc, char *argv[]) _kargs
     n00b_gc_register_root(rt->type_registry);
     n00b_gc_register_root(rt->default_conduit);
     n00b_gc_register_root(rt->default_service);
+    n00b_gc_register_root(rt->stdin_owner);
     n00b_gc_register_root(rt->stdout_owner);
     n00b_gc_register_root(rt->stderr_owner);
     n00b_gc_register_root(rt->stdout_topic);
@@ -331,6 +332,18 @@ n00b_init(n00b_runtime_t *rt, int argc, char *argv[]) _kargs
 
             if (n00b_option_is_set(io_opt)) {
                 n00b_conduit_svc_thread_t *svc_thread = n00b_option_get(io_opt);
+
+                // Managed fd 0 (stdin). Reads stay quiescent until the
+                // first subscriber attaches to owner->read_topic — see
+                // n00b_conduit_fd_manage / on_first_subscribe. Owning
+                // fd 0 here means n00b_stdin() can hand a ready-to-use
+                // owner to consumers without each one repeating the
+                // manage-fd dance.
+                auto in_r = n00b_conduit_fd_manage(
+                    rt->default_conduit, svc_thread->io, 0, false);
+                if (n00b_result_is_ok(in_r)) {
+                    rt->stdin_owner = n00b_result_get(in_r);
+                }
 
                 auto out_r = n00b_conduit_fd_manage(
                     rt->default_conduit, svc_thread->io, 1, false);
