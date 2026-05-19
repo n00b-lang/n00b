@@ -69,7 +69,11 @@ docker/_linux_logs/
 AGENTS.md
 .inspector-gadget/
 plans/
-test/data/resharp/
+# Sub-directories of test/data/resharp/ that hold large generated corpora;
+# the test/data/resharp/tests/*.toml fixtures the regex_resharp test reads
+# are tracked.
+test/data/resharp/haystacks/
+test/data/resharp/regexes/
 .aider*
 
 # Created by chalk-tool when oracle round-trip tests run.

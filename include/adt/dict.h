@@ -107,6 +107,15 @@ typedef struct _n00b_dict_internal_t {
 #define _n00b_ditem_type(dict_ptr, field_name) typeof((dict_ptr)->store->field_name[0])
 #define n00b_dict_init(dict, ...) _n00b_wrap_dict_call(init, dict __VA_OPT__(, __VA_ARGS__))
 
+/**
+ * @brief Drop every entry in-place without reallocating the backing store.
+ *
+ * Use for memo dicts whose lifetime is "one logical operation, then thrown
+ * away": clears the dict in O(buckets) without freeing/reallocating the
+ * bucket/key/value arrays.  Not safe under concurrent mutation.
+ */
+#define n00b_dict_clear(dict) _n00b_wrap_dict_call(clear, dict)
+
 #define n00b_dict_put(dict, key, value) _n00b_wrap_dict_call(put, dict, &(key), &(value))
 #define n00b_dict_get(dict, key, found)                                                        \
     ({                                                                                         \
@@ -169,6 +178,7 @@ typedef struct _n00b_dict_internal_t {
 // This private interface (from here, down) is untyped, and thus internal.
 extern void       _n00b_finalize_dict(_n00b_dict_internal_t *);
 extern n00b_size_t n00b_dict_internal_len(_n00b_dict_internal_t *);
+extern void       _n00b_dict_internal_clear(_n00b_dict_internal_t *, uint16_t ksz, uint16_t vsz);
 
 /**
  * @brief Initialize an untyped dictionary.

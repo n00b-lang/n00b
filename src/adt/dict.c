@@ -664,3 +664,34 @@ _n00b_finalize_dict(_n00b_dict_internal_t *d)
         n00b_free(s);
     }
 }
+
+/*
+ * Drop every live entry without reallocating the backing store.
+ *
+ * Buckets are POD (`hv == 0` is the empty-slot sentinel — see
+ * `bucket_reserved`), so a single memset of the bucket array re-empties
+ * the dict.  Keys/values stay as garbage and are overwritten on next put.
+ *
+ * Use this when a memo dict's lifetime is "one logical operation, then
+ * thrown away" — reallocating a fresh dict per operation works
+ * functionally but allocates ~1 KB of bucket/key/value storage on every
+ * call; with the regex algebra's `mk_binary` issuing tens of thousands
+ * of clears during compile of an adversarial intersection pattern that
+ * adds up to multi-GB of GC-managed scratch.
+ *
+ * Not safe under concurrent mutation.
+ */
+extern void
+_n00b_dict_internal_clear(_n00b_dict_internal_t *d, uint16_t ksz, uint16_t vsz)
+{
+    (void)ksz;
+    (void)vsz;
+    __n00b_internal_type_erased_store_t *s =
+        (__n00b_internal_type_erased_store_t *)n00b_atomic_load(&d->store);
+    if (!s) return;
+
+    uint32_t cap = s->last_slot + 1u;
+    memset(s->buckets, 0, (size_t)cap * sizeof(n00b_dict_bucket_t));
+    n00b_atomic_store(&s->used_count, 0u);
+    n00b_atomic_store(&d->length, (n00b_isize_t)0);
+}
