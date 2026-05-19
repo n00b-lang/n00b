@@ -304,14 +304,23 @@ n00b_thread_launcher(void *raw)
     n00b_thread_init(.runtime = rt, .acquired_slot = bundle->tid);
     n00b_capture_stack_top(&__n00b_thread_self);
 
+    // Cache fn/arg locally before signalling the spawner.  Once we set
+    // bundle->ready, the spawner may continue and the bundle (allocated in
+    // the pinned system_pool — see n00b_thread_spawn) is no longer
+    // strictly needed by either side; freeing it after the worker call
+    // closes the leak introduced by moving allocation out of the GC arena.
+    void *(*fn)(void *) = bundle->fn;
+    void   *arg         = bundle->arg;
+
     // Signal spawner that we are initialized.
     n00b_atomic_store(&bundle->ready, 1);
     n00b_futex_wake(&bundle->ready, true);
 
-    void *result = bundle->fn(bundle->arg);
+    void *result   = fn(arg);
     bundle->result = result;
 
     n00b_thread_destroy();
+    n00b_free(bundle);
     return result;
 }
 
@@ -327,7 +336,18 @@ n00b_thread_spawn(void *(*fn)(void *), void *arg)
     n00b_thread_t *placeholder = (n00b_thread_t *)(uintptr_t)1;
     uint32_t       slot        = n00b_thread_slot_acquire(rt, placeholder);
 
-    n00b_tbundle_t *bundle = n00b_alloc(n00b_tbundle_t);
+    // Allocate the bundle from system_pool (pinned, non-movable) rather
+    // than the GC default arena.  Between pthread_create() and the worker's
+    // call to n00b_thread_init(), the new thread holds `bundle` in a
+    // register that the GC's stack-scan cannot see (the thread isn't
+    // registered with the runtime yet).  If GC fires on any other thread
+    // during that window and moves the bundle in the default arena, the
+    // worker's register copy goes stale — its first deref of `bundle->fn`
+    // or `bundle->arg` then reads garbage and dispatches into nowhere.
+    // The system_pool never moves, closing this race.
+    n00b_tbundle_t *bundle = n00b_alloc_with_opts(
+        n00b_tbundle_t,
+        &(n00b_alloc_opts_t){.allocator = (n00b_allocator_t *)&rt->system_pool});
     if (!bundle) {
         n00b_atomic_store(&rt->threads[slot].thread, (n00b_thread_t *)nullptr);
         return n00b_result_err(n00b_thread_t *, ENOMEM);

@@ -2693,14 +2693,17 @@ engine_test_slurp_file(const char *path, size_t *out_len)
         close(fd);
         return nullptr;
     }
-    size_t         size = (size_t)st.st_size;
-    n00b_buffer_t *buf  = n00b_buffer_new((int64_t)size);
+    size_t size = (size_t)st.st_size;
+    // Allocate the output buffer up front and read directly into it.
+    // The previous implementation used an intermediate n00b_buffer_t,
+    // which left the buf pointer at risk across the second allocation —
+    // conservative GC sometimes failed to forward the local on the
+    // stack, leaving it dangling after the from-space was unmapped.
+    char *out = n00b_alloc_array(char, size + 1);
     if (size > 0) {
-        n00b_buffer_resize(buf, size);
-        char  *dst   = buf->data;
         size_t total = 0;
         while (total < size) {
-            ssize_t r = read(fd, dst + total, size - total);
+            ssize_t r = read(fd, out + total, size - total);
             if (r <= 0) break;
             total += (size_t)r;
         }
@@ -2710,9 +2713,6 @@ engine_test_slurp_file(const char *path, size_t *out_len)
         }
     }
     close(fd);
-
-    char *out = n00b_alloc_array(char, size + 1);
-    if (size > 0) memcpy(out, buf->data, size);
     out[size] = '\0';
     if (out_len) *out_len = size;
     return out;
