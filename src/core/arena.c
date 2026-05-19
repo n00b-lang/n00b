@@ -145,6 +145,24 @@ n00b_arena_alloc(n00b_arena_t *arena, uint64_t request, void *ignore)
             }
             already_collected = true;
             n00b_restart_the_world();
+            /* The conservative GC's stack scan can rewrite `found_value`
+             * on this frame to a forwarded position (it looks like a
+             * heap pointer; `scan_for_header` finds the previous
+             * allocation's inline-header guard and forwards that alloc,
+             * translating `found_value` to the corresponding to-space
+             * offset).  After that, `found_value` may even happen to
+             * match the new `arena->next_alloc`, but `desired_value`
+             * was computed from the pre-collect `found_value` and is
+             * stale.  If we let the CAS run as-is, it can spuriously
+             * succeed and write a small `desired_value` back into
+             * `arena->next_alloc` — leaving the bump pointer *inside*
+             * live allocations.
+             *
+             * Recompute both from the current atomic state before the
+             * CAS.  `continue` in a do-while goes to the while-condition
+             * (the CAS), so we re-read here explicitly. */
+            found_value   = n00b_atomic_load(&arena->next_alloc);
+            desired_value = found_value + request;
         }
     } while (!n00b_atomic_cas(&arena->next_alloc, &found_value, desired_value));
     n00b_atomic_add(&arena->alloc_count, 1);
