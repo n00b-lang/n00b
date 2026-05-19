@@ -91,7 +91,7 @@ test_b64url_decode_rejects_garbage(void)
 static void
 test_secret_ecdsa_p256_signs_and_verifies(void)
 {
-    n00b_string_t *uri = n00b_string_from_cstr("ephemeral:signer");
+    n00b_buffer_t *uri = n00b_buffer_from_cstr("ephemeral:signer");
     auto r1 = n00b_quic_secret_open(uri);
     assert(n00b_result_is_ok(r1));
     n00b_quic_secret_t *s = n00b_result_get(r1);

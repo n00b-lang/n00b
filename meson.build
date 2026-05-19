@@ -605,6 +605,12 @@ list_test = executable('test_list',
 )
 test('list', list_test, suite: 'unit')
 
+ring_test = executable('test_ring',
+    ['test/unit/test_ring.c'],
+    kwargs: test_common_kwargs,
+)
+test('ring', ring_test, suite: 'unit')
+
 stack_test = executable('test_stack',
     ['test/unit/test_stack.c'],
     kwargs: test_common_kwargs,
