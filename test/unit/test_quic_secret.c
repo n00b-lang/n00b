@@ -18,7 +18,7 @@
 static void
 test_secret_ephemeral_lifecycle(void)
 {
-    n00b_string_t *uri = n00b_string_from_cstr("ephemeral:test-key");
+    n00b_buffer_t *uri = n00b_buffer_from_cstr("ephemeral:test-key");
 
     auto r = n00b_quic_secret_open(uri);
     assert(n00b_result_is_ok(r));
@@ -89,7 +89,7 @@ test_secret_uri_refusals(void)
 static void
 test_secret_ephemeral_sign(void)
 {
-    n00b_string_t *uri = n00b_string_from_cstr("ephemeral:signer");
+    n00b_buffer_t *uri = n00b_buffer_from_cstr("ephemeral:signer");
     auto r1 = n00b_quic_secret_open(uri);
     assert(n00b_result_is_ok(r1));
     n00b_quic_secret_t *s = n00b_result_get(r1);
