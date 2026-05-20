@@ -37,11 +37,20 @@
  * no `fopen` / `fread` / `fwrite` / `fprintf` / `stdin` /
  * `stdout` / `stderr` / `strerror` / `strcmp`. Path-based reads
  * and writes go through `n00b_file_open` + `n00b_file_read` +
- * `n00b_file_write` + `n00b_file_close`; stdin and stdout are
- * accessed via the POSIX `/dev/stdin` and `/dev/stdout` paths
- * fed into the same primitives (n00b has no canonical
- * stdin/stdout helper yet — see flagged_for_orchestrator at
- * WP-002 closeout); diagnostics go through `n00b_eprintf`.
+ * `n00b_file_write` + `n00b_file_close`; diagnostics go through
+ * `n00b_eprintf`.
+ *
+ * Default-stdout writes go through the runtime-managed fd-1
+ * owner via `n00b_stdout()` + `n00b_fd_owner_write` (D-062 / DF-007
+ * part B). This is the same owner that `n00b_printf` reaches and
+ * avoids re-managing fd 1 through a `/dev/stdout` `n00b_file_open`
+ * dup. Default-stdin reads still go through `n00b_file_open` on
+ * the POSIX `/dev/stdin` path: the `core/std_streams.h` header
+ * itself recommends the file-open path for bulk reads, and using
+ * `n00b_stdin()` directly would require ~40 lines of inbox /
+ * subscription / TOPIC_CLOSED-drain boilerplate per call site
+ * (the read path lacks an fd-owner-level read-all helper — see
+ * `flagged_for_orchestrator` notes attached to D-062's dispatch).
  */
 
 #include "n00b.h"
@@ -50,9 +59,12 @@
 #include "core/runtime.h"
 #include "core/alloc.h"
 #include "core/file.h"
+#include "core/std_streams.h"
 #include "conduit/print.h"
+#include "conduit/fd_managed.h"
 #include "text/strings/string_ops.h"
 #include "slay/commander.h"
+#include "parsers/json.h"
 #include "attest/n00b_attest.h"
 
 // ---------------------------------------------------------------------------
@@ -75,8 +87,10 @@ typedef struct {
 //
 // WP-003 Phase 4 promoted `verify` out of this table to a real
 // commander-registered subcommand backed by
-// `n00b_attest_cli_verify`; the array shrank 12 → 11.
-static verb_stub_t k_pending_verbs[11];
+// `n00b_attest_cli_verify`; the array shrank 12 → 11. WP-004
+// Phase 2 promoted `push` similarly, shrinking the array to 10.
+// WP-004 Phase 3 promoted `discover` + `pull`, shrinking it to 8.
+static verb_stub_t k_pending_verbs[8];
 static size_t      k_num_pending_verbs = 0;
 
 static void
@@ -90,15 +104,6 @@ build_pending_verbs(void)
     k_pending_verbs[i++] = (verb_stub_t){
         r"inspect",
         r"(not yet implemented) Inspect a DSSE envelope without verifying"};
-    k_pending_verbs[i++] = (verb_stub_t){
-        r"push",
-        r"(not yet implemented) Push an envelope to an OCI 1.1 registry"};
-    k_pending_verbs[i++] = (verb_stub_t){
-        r"pull",
-        r"(not yet implemented) Pull an envelope from an OCI 1.1 registry"};
-    k_pending_verbs[i++] = (verb_stub_t){
-        r"discover",
-        r"(not yet implemented) Discover envelopes on an OCI registry"};
     k_pending_verbs[i++] = (verb_stub_t){
         r"mark",
         r"(not yet implemented) Mark a binary artifact with an envelope"};
@@ -159,6 +164,34 @@ read_all_from_path(n00b_string_t *path)
     }
     n00b_file_close(f);
     return n00b_result_ok(n00b_buffer_t *, acc);
+}
+
+// Write every byte of `buf` to the process's stdout via the
+// runtime-managed fd-1 owner. Reaches the same owner that
+// `n00b_printf(.fd = 1)` reaches; avoids the `/dev/stdout`
+// `n00b_file_open` indirection (which would dup fd 1 and create
+// a parallel owner). D-062 / DF-007 part B migration.
+//
+// `n00b_fd_owner_write` internally loops over short writes and
+// EAGAIN until either the entry is fully drained or a fatal
+// write error surfaces, so a single call is sufficient. Returns
+// Ok(true) on success; Err(errno) on stdout unavailable or write
+// failure (e.g., EPIPE on a closed downstream).
+static n00b_result_t(bool)
+write_buffer_to_stdout(n00b_buffer_t *buf)
+{
+    n00b_conduit_fd_owner_t *owner = n00b_stdout();
+    if (owner == nullptr) {
+        return n00b_result_err(bool, EBADF);
+    }
+    if (buf == nullptr || buf->byte_len == 0) {
+        return n00b_result_ok(bool, true);
+    }
+    auto wr = n00b_fd_owner_write(owner, buf->data, buf->byte_len);
+    if (n00b_result_is_err(wr)) {
+        return n00b_result_err(bool, (int)n00b_result_get_err(wr));
+    }
+    return n00b_result_ok(bool, true);
 }
 
 // Write every byte of `buf` to the given path. Returns Ok(true)
@@ -255,6 +288,87 @@ build_commander(void)
                        true,
                        r"Read envelope JSON from this path (default: stdin)");
 
+    // push subcommand (WP-004 Phase 2).
+    n00b_cmdr_add_command(c,
+                          r"push",
+                          r"Push a DSSE envelope to an OCI 1.1 registry as a referrer");
+    n00b_cmdr_add_flag(c,
+                       r"push",
+                       r"--envelope",
+                       N00B_CMDR_TYPE_WORD,
+                       true,
+                       r"Read envelope JSON from this path (default: stdin)");
+    n00b_cmdr_add_flag(c,
+                       r"push",
+                       r"--image",
+                       N00B_CMDR_TYPE_WORD,
+                       true,
+                       r"OCI image reference (e.g., ghcr.io/foo/bar@sha256:...)");
+    n00b_cmdr_add_flag(c,
+                       r"push",
+                       r"--registry",
+                       N00B_CMDR_TYPE_WORD,
+                       true,
+                       r"Registry hostname override (e.g., ghcr.io)");
+
+    // discover subcommand (WP-004 Phase 3).
+    n00b_cmdr_add_command(c,
+                          r"discover",
+                          r"List recorded attestations for an OCI image digest");
+    n00b_cmdr_add_flag(c,
+                       r"discover",
+                       r"--image",
+                       N00B_CMDR_TYPE_WORD,
+                       true,
+                       r"OCI image reference (e.g., ghcr.io/foo/bar@sha256:...)");
+    n00b_cmdr_add_flag(c,
+                       r"discover",
+                       r"--registry",
+                       N00B_CMDR_TYPE_WORD,
+                       true,
+                       r"Registry hostname override (e.g., ghcr.io)");
+    n00b_cmdr_add_flag(c,
+                       r"discover",
+                       r"--artifact-type",
+                       N00B_CMDR_TYPE_WORD,
+                       true,
+                       r"OCI artifactType filter (default: no filter)");
+    n00b_cmdr_add_flag(c,
+                       r"discover",
+                       r"--json",
+                       N00B_CMDR_TYPE_BOOL,
+                       false,
+                       r"Emit JSON instead of human-readable text");
+
+    // pull subcommand (WP-004 Phase 3).
+    n00b_cmdr_add_command(c,
+                          r"pull",
+                          r"Pull a DSSE envelope from an OCI 1.1 registry");
+    n00b_cmdr_add_flag(c,
+                       r"pull",
+                       r"--image",
+                       N00B_CMDR_TYPE_WORD,
+                       true,
+                       r"OCI image reference (e.g., ghcr.io/foo/bar@sha256:...)");
+    n00b_cmdr_add_flag(c,
+                       r"pull",
+                       r"--predicate-type",
+                       N00B_CMDR_TYPE_WORD,
+                       true,
+                       r"Predicate-type URI to filter on (required)");
+    n00b_cmdr_add_flag(c,
+                       r"pull",
+                       r"--registry",
+                       N00B_CMDR_TYPE_WORD,
+                       true,
+                       r"Registry hostname override (e.g., ghcr.io)");
+    n00b_cmdr_add_flag(c,
+                       r"pull",
+                       r"--out",
+                       N00B_CMDR_TYPE_WORD,
+                       true,
+                       r"Write envelope bytes to this path (default: stdout)");
+
     // Forward-roadmap stubs — registered so `--help` discovery lists
     // them, but invocation routes through the not-yet-implemented
     // diagnostic in `main` (DF-004 disposition (a)).
@@ -321,13 +435,15 @@ verb_sign(n00b_cmdr_result_t *result)
         }
     }
     else {
-        // Fallback path-based stdin access. n00b currently lacks
-        // a canonical stdin-reading helper; `/dev/stdin` is
-        // POSIX-portable across macOS and Linux (the two
-        // platforms n00b targets) and dispatches through the
-        // same `n00b_file_open` machinery as any other path.
-        // Tracking the ergonomics gap as a deferral at WP-002
-        // closeout.
+        // Default-stdin: path-based `/dev/stdin` open. The
+        // `n00b_stdin()` accessor exists (D-061), but its FD owner
+        // exposes only Layer-1 topic-subscribe / Layer-2
+        // stream-reader primitives — no fd-owner-level "read all
+        // until EOF" helper. Going through `n00b_file_open` on
+        // `/dev/stdin` reuses `core/file.c`'s already-wired
+        // subscription + TOPIC_CLOSED-drain machinery. The
+        // `core/std_streams.h` header itself recommends this
+        // path for bulk-read consumers (D-062 / DF-007 part B).
         stmt_path = n00b_string_from_cstr("/dev/stdin");
     }
 
@@ -356,29 +472,35 @@ verb_sign(n00b_cmdr_result_t *result)
     }
     n00b_buffer_t *envelope_json = n00b_result_get(r);
 
-    // Optional: --out (default stdout).
-    n00b_string_t *out_path = nullptr;
+    // Optional: --out (default stdout). When --out is not given we
+    // reach the runtime-managed fd-1 owner directly via
+    // `n00b_stdout()` (D-062 / DF-007 part B); when --out IS given
+    // we go through the path-based file API.
     if (n00b_cmdr_flag_present(result, r"--out")) {
-        out_path = n00b_cmdr_flag_str(result, r"--out");
+        n00b_string_t *out_path = n00b_cmdr_flag_str(result, r"--out");
         if (out_path == nullptr || out_path->u8_bytes == 0) {
             n00b_eprintf("n00b-attest sign: --out <path> may not be empty");
             return 1;
         }
+        auto wr_r = write_all_to_path(out_path, envelope_json);
+        if (n00b_result_is_err(wr_r)) {
+            n00b_err_t code = n00b_result_get_err(wr_r);
+            n00b_eprintf("n00b-attest sign: cannot write envelope to '«#»' "
+                         "(errno «#»)",
+                         out_path,
+                         (int64_t)code);
+            return 1;
+        }
     }
     else {
-        // Fallback path-based stdout access — same rationale as
-        // the stdin fallback above.
-        out_path = n00b_string_from_cstr("/dev/stdout");
-    }
-
-    auto wr_r = write_all_to_path(out_path, envelope_json);
-    if (n00b_result_is_err(wr_r)) {
-        n00b_err_t code = n00b_result_get_err(wr_r);
-        n00b_eprintf("n00b-attest sign: cannot write envelope to '«#»' "
-                     "(errno «#»)",
-                     out_path,
-                     (int64_t)code);
-        return 1;
+        auto wr_r = write_buffer_to_stdout(envelope_json);
+        if (n00b_result_is_err(wr_r)) {
+            n00b_err_t code = n00b_result_get_err(wr_r);
+            n00b_eprintf("n00b-attest sign: cannot write envelope to stdout "
+                         "(errno «#»)",
+                         (int64_t)code);
+            return 1;
+        }
     }
 
     return 0;
@@ -423,9 +545,9 @@ verb_verify(n00b_cmdr_result_t *result)
         }
     }
     else {
-        // Path-based stdin access (same rationale as verb_sign's
-        // /dev/stdin fallback — n00b has no canonical stdin helper
-        // yet; the ergonomics gap is tracked at WP-002 closeout).
+        // Default-stdin: `/dev/stdin` via `n00b_file_open`. See the
+        // matching block in `verb_sign` for the rationale (D-062 /
+        // DF-007 part B kept the read path on the file API).
         env_path = n00b_string_from_cstr("/dev/stdin");
     }
 
@@ -468,6 +590,306 @@ verb_verify(n00b_cmdr_result_t *result)
 }
 
 // ---------------------------------------------------------------------------
+// `push` verb shim — binds I/O around the library core.
+// ---------------------------------------------------------------------------
+//
+// Two-code exit shape per §10.1 (verbs that return only Ok/Err):
+//   - Ok(manifest_digest) → return 0 (print digest to stdout).
+//   - Err(...)            → return 1 (structured diagnostic to stderr).
+//
+// No verdict shape here — the push either uploaded the referrer
+// or it didn't. There's no "signed but didn't verify" axis on the
+// producer side.
+static int
+verb_push(n00b_cmdr_result_t *result)
+{
+    // Required: --image.
+    if (!n00b_cmdr_flag_present(result, r"--image")) {
+        n00b_eprintf("n00b-attest push: missing required --image <ref>");
+        return 1;
+    }
+    n00b_string_t *image_ref = n00b_cmdr_flag_str(result, r"--image");
+    if (image_ref == nullptr || image_ref->u8_bytes == 0) {
+        n00b_eprintf("n00b-attest push: --image <ref> may not be empty");
+        return 1;
+    }
+
+    // Optional: --registry override.
+    n00b_string_t *registry_override = nullptr;
+    if (n00b_cmdr_flag_present(result, r"--registry")) {
+        registry_override = n00b_cmdr_flag_str(result, r"--registry");
+        if (registry_override == nullptr || registry_override->u8_bytes == 0) {
+            n00b_eprintf(
+                "n00b-attest push: --registry <host> may not be empty");
+            return 1;
+        }
+    }
+
+    // Optional: --envelope (default stdin).
+    n00b_string_t *env_path = nullptr;
+    if (n00b_cmdr_flag_present(result, r"--envelope")) {
+        env_path = n00b_cmdr_flag_str(result, r"--envelope");
+        if (env_path == nullptr || env_path->u8_bytes == 0) {
+            n00b_eprintf(
+                "n00b-attest push: --envelope <path> may not be empty");
+            return 1;
+        }
+    }
+    else {
+        // Default-stdin: `/dev/stdin` via `n00b_file_open`. Matches
+        // verb_sign / verb_verify's read-path handling (D-062 /
+        // DF-007 part B left the read sites on the file API).
+        env_path = n00b_string_from_cstr("/dev/stdin");
+    }
+
+    auto read_r = read_all_from_path(env_path);
+    if (n00b_result_is_err(read_r)) {
+        n00b_err_t code = n00b_result_get_err(read_r);
+        n00b_eprintf("n00b-attest push: cannot read envelope '«#»' "
+                     "(errno «#»)",
+                     env_path,
+                     (int64_t)code);
+        return 1;
+    }
+    n00b_buffer_t *env_bytes = n00b_result_get(read_r);
+
+    if (env_bytes == nullptr || env_bytes->byte_len == 0) {
+        n00b_eprintf("n00b-attest push: empty envelope input");
+        return 1;
+    }
+
+    // Dispatch through the library-shaped verb core.
+    auto r = n00b_attest_cli_push(env_bytes,
+                                   image_ref,
+                                   .registry_override = registry_override);
+    if (n00b_result_is_err(r)) {
+        print_attest_error_diagnostic("push failed",
+                                      n00b_result_get_err(r));
+        return 1;
+    }
+    n00b_string_t *manifest_digest = n00b_result_get(r);
+
+    // Print the manifest digest to stdout (one line, `sha256:<hex>
+    // \n`). `.fd = 1` is explicit so ncc's transform packs the
+    // leading variadic args into the vargs struct — bare
+    // `n00b_printf(fmt, arg)` calls bypass the transform under the
+    // current ncc release (D-043 retrospective finding).
+    n00b_printf("«#»", manifest_digest, .fd = 1);
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// `discover` verb shim — binds I/O around the library core.
+// ---------------------------------------------------------------------------
+//
+// Two-code exit shape: Ok(list) → 0 (even when list is empty);
+// Err → 1 with structured diagnostic. Empty list emits the
+// "no attestations found" line on stdout (not stderr) so the
+// output channel is consistent across populated / empty cases.
+static int
+verb_discover(n00b_cmdr_result_t *result)
+{
+    if (!n00b_cmdr_flag_present(result, r"--image")) {
+        n00b_eprintf("n00b-attest discover: missing required --image <ref>");
+        return 1;
+    }
+    n00b_string_t *image_ref = n00b_cmdr_flag_str(result, r"--image");
+    if (image_ref == nullptr || image_ref->u8_bytes == 0) {
+        n00b_eprintf("n00b-attest discover: --image <ref> may not be empty");
+        return 1;
+    }
+
+    n00b_string_t *registry_override = nullptr;
+    if (n00b_cmdr_flag_present(result, r"--registry")) {
+        registry_override = n00b_cmdr_flag_str(result, r"--registry");
+        if (registry_override == nullptr
+            || registry_override->u8_bytes == 0) {
+            n00b_eprintf("n00b-attest discover: --registry <host> may not be empty");
+            return 1;
+        }
+    }
+
+    n00b_string_t *artifact_type = nullptr;
+    if (n00b_cmdr_flag_present(result, r"--artifact-type")) {
+        artifact_type = n00b_cmdr_flag_str(result, r"--artifact-type");
+        if (artifact_type == nullptr || artifact_type->u8_bytes == 0) {
+            n00b_eprintf("n00b-attest discover: --artifact-type may not be empty");
+            return 1;
+        }
+    }
+
+    bool json_out = n00b_cmdr_flag_bool(result, r"--json");
+
+    auto r = n00b_attest_cli_discover(image_ref,
+                                       .registry_override = registry_override,
+                                       .artifact_type     = artifact_type);
+    if (n00b_result_is_err(r)) {
+        print_attest_error_diagnostic("discover failed",
+                                      n00b_result_get_err(r));
+        return 1;
+    }
+    n00b_list_t(n00b_attest_oci_referrer_t *) *refs = n00b_result_get(r);
+
+    if (json_out) {
+        // Build a canonical (compact) JSON array of objects via the
+        // n00b JSON encoder. Per D-024 the wire form is .pretty=false.
+        n00b_json_node_t *arr = n00b_json_array_new();
+        size_t nrefs = refs->len;
+        for (size_t i = 0; i < nrefs; i++) {
+            n00b_attest_oci_referrer_t *e = refs->data[i];
+            if (e == nullptr) {
+                continue;
+            }
+            n00b_json_node_t *obj = n00b_json_object_new();
+            if (e->manifest_digest != nullptr) {
+                // Materialize NUL-terminated copies for the JSON
+                // encoder (its string-set primitive expects C strings).
+                char *mdg = n00b_alloc_array(char,
+                                             e->manifest_digest->u8_bytes + 1);
+                memcpy(mdg,
+                       e->manifest_digest->data,
+                       e->manifest_digest->u8_bytes);
+                mdg[e->manifest_digest->u8_bytes] = '\0';
+                n00b_json_object_put(obj, "manifest_digest",
+                                     n00b_json_string_new(mdg));
+            }
+            if (e->predicate_type != nullptr) {
+                char *pt = n00b_alloc_array(char,
+                                            e->predicate_type->u8_bytes + 1);
+                memcpy(pt,
+                       e->predicate_type->data,
+                       e->predicate_type->u8_bytes);
+                pt[e->predicate_type->u8_bytes] = '\0';
+                n00b_json_object_put(obj, "predicate_type",
+                                     n00b_json_string_new(pt));
+            }
+            if (e->signer_keyid != nullptr) {
+                char *sk = n00b_alloc_array(char,
+                                            e->signer_keyid->u8_bytes + 1);
+                memcpy(sk,
+                       e->signer_keyid->data,
+                       e->signer_keyid->u8_bytes);
+                sk[e->signer_keyid->u8_bytes] = '\0';
+                n00b_json_object_put(obj, "signer_keyid",
+                                     n00b_json_string_new(sk));
+            }
+            n00b_json_array_push(arr, obj);
+        }
+        char *encoded = n00b_json_encode(arr, .pretty = false);
+        n00b_string_t *enc_s = encoded != nullptr
+                                   ? n00b_string_from_cstr(encoded)
+                                   : r"[]";
+        n00b_printf("«#»", enc_s, .fd = 1);
+        return 0;
+    }
+
+    if (refs->len == 0) {
+        n00b_printf("no attestations found", .fd = 1);
+        return 0;
+    }
+
+    // Plain text: one line per referrer, tab-separated columns.
+    for (size_t i = 0; i < refs->len; i++) {
+        n00b_attest_oci_referrer_t *e = refs->data[i];
+        if (e == nullptr) {
+            continue;
+        }
+        n00b_string_t *mdg = e->manifest_digest != nullptr
+                                 ? e->manifest_digest
+                                 : r"(missing)";
+        n00b_string_t *pt = e->predicate_type != nullptr
+                                ? e->predicate_type
+                                : r"(missing)";
+        n00b_string_t *sk = e->signer_keyid != nullptr
+                                ? e->signer_keyid
+                                : r"(missing)";
+        n00b_printf("«#»\t«#»\t«#»", mdg, pt, sk, .fd = 1);
+    }
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// `pull` verb shim — binds I/O around the library core.
+// ---------------------------------------------------------------------------
+//
+// Two-code exit shape: Ok(envelope) → 0 (write bytes to --out or
+// stdout); Err → 1 with structured diagnostic.
+static int
+verb_pull(n00b_cmdr_result_t *result)
+{
+    if (!n00b_cmdr_flag_present(result, r"--image")) {
+        n00b_eprintf("n00b-attest pull: missing required --image <ref>");
+        return 1;
+    }
+    n00b_string_t *image_ref = n00b_cmdr_flag_str(result, r"--image");
+    if (image_ref == nullptr || image_ref->u8_bytes == 0) {
+        n00b_eprintf("n00b-attest pull: --image <ref> may not be empty");
+        return 1;
+    }
+
+    if (!n00b_cmdr_flag_present(result, r"--predicate-type")) {
+        n00b_eprintf("n00b-attest pull: missing required --predicate-type <URI>");
+        return 1;
+    }
+    n00b_string_t *predicate_type = n00b_cmdr_flag_str(result,
+                                                       r"--predicate-type");
+    if (predicate_type == nullptr || predicate_type->u8_bytes == 0) {
+        n00b_eprintf("n00b-attest pull: --predicate-type may not be empty");
+        return 1;
+    }
+
+    n00b_string_t *registry_override = nullptr;
+    if (n00b_cmdr_flag_present(result, r"--registry")) {
+        registry_override = n00b_cmdr_flag_str(result, r"--registry");
+        if (registry_override == nullptr
+            || registry_override->u8_bytes == 0) {
+            n00b_eprintf("n00b-attest pull: --registry <host> may not be empty");
+            return 1;
+        }
+    }
+
+    auto r = n00b_attest_cli_pull(image_ref,
+                                   predicate_type,
+                                   .registry_override = registry_override);
+    if (n00b_result_is_err(r)) {
+        print_attest_error_diagnostic("pull failed",
+                                      n00b_result_get_err(r));
+        return 1;
+    }
+    n00b_buffer_t *envelope = n00b_result_get(r);
+
+    // Default-stdout: runtime fd-1 owner (D-062 / DF-007 part B).
+    // Path-based --out goes through the file API as before.
+    if (n00b_cmdr_flag_present(result, r"--out")) {
+        n00b_string_t *out_path = n00b_cmdr_flag_str(result, r"--out");
+        if (out_path == nullptr || out_path->u8_bytes == 0) {
+            n00b_eprintf("n00b-attest pull: --out <path> may not be empty");
+            return 1;
+        }
+        auto wr_r = write_all_to_path(out_path, envelope);
+        if (n00b_result_is_err(wr_r)) {
+            n00b_err_t code = n00b_result_get_err(wr_r);
+            n00b_eprintf("n00b-attest pull: cannot write envelope to '«#»' "
+                         "(errno «#»)",
+                         out_path,
+                         (int64_t)code);
+            return 1;
+        }
+    }
+    else {
+        auto wr_r = write_buffer_to_stdout(envelope);
+        if (n00b_result_is_err(wr_r)) {
+            n00b_err_t code = n00b_result_get_err(wr_r);
+            n00b_eprintf("n00b-attest pull: cannot write envelope to stdout "
+                         "(errno «#»)",
+                         (int64_t)code);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
 // --help / usage text.
 // ---------------------------------------------------------------------------
 
@@ -479,7 +901,10 @@ print_usage(void)
         "\n"
         "Verbs:\n"
         "  sign       Sign an in-toto Statement into a DSSE envelope\n"
-        "  verify     Verify a DSSE envelope against a public key");
+        "  verify     Verify a DSSE envelope against a public key\n"
+        "  push       Push a DSSE envelope to an OCI 1.1 registry as a referrer\n"
+        "  discover   List recorded attestations for an OCI image digest\n"
+        "  pull       Pull a DSSE envelope from an OCI 1.1 registry");
     for (size_t i = 0; i < k_num_pending_verbs; i++) {
         n00b_string_t *vname = k_pending_verbs[i].name;
         n00b_string_t *vdoc  = k_pending_verbs[i].doc;
@@ -510,6 +935,26 @@ print_usage(void)
         "  1  verdict failure (signature did not verify)\n"
         "  2  machinery failure (malformed envelope, missing key, "
         "etc.)\n"
+        "\n"
+        "push flags:\n"
+        "  --image <ref>      OCI image reference (required, e.g. "
+        "ghcr.io/foo/bar@sha256:...)\n"
+        "  --envelope <path>  Read envelope JSON from path "
+        "(default: stdin)\n"
+        "  --registry <host>  Registry hostname override (e.g. ghcr.io)\n"
+        "\n"
+        "discover flags:\n"
+        "  --image <ref>           OCI image reference (required)\n"
+        "  --registry <host>       Registry hostname override\n"
+        "  --artifact-type <type>  Server-side artifactType filter\n"
+        "  --json                  Emit JSON instead of text\n"
+        "\n"
+        "pull flags:\n"
+        "  --image <ref>            OCI image reference (required)\n"
+        "  --predicate-type <URI>   Predicate-type to filter on (required)\n"
+        "  --registry <host>        Registry hostname override\n"
+        "  --out <path>             Write envelope bytes to path "
+        "(default: stdout)\n"
         "\n"
         "Global flags:\n"
         "  -h, --help         Show this help message");
@@ -576,13 +1021,25 @@ main(int argc, char **argv)
     }
 
     int rc;
-    n00b_string_t *sign_name   = r"sign";
-    n00b_string_t *verify_name = r"verify";
+    n00b_string_t *sign_name     = r"sign";
+    n00b_string_t *verify_name   = r"verify";
+    n00b_string_t *push_name     = r"push";
+    n00b_string_t *discover_name = r"discover";
+    n00b_string_t *pull_name     = r"pull";
     if (n00b_unicode_str_eq(cmd, sign_name)) {
         rc = verb_sign(result);
     }
     else if (n00b_unicode_str_eq(cmd, verify_name)) {
         rc = verb_verify(result);
+    }
+    else if (n00b_unicode_str_eq(cmd, push_name)) {
+        rc = verb_push(result);
+    }
+    else if (n00b_unicode_str_eq(cmd, discover_name)) {
+        rc = verb_discover(result);
+    }
+    else if (n00b_unicode_str_eq(cmd, pull_name)) {
+        rc = verb_pull(result);
     }
     else {
         // DF-004 (a): the verb is in the forward roadmap (registered
