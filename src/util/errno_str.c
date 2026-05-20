@@ -14,16 +14,21 @@
  * # Coverage rationale
  *
  * Every POSIX.1-2008 portable errno value is in the table. The
- * set was assembled by walking the IEEE Std 1003.1-2008
+ * portable set was assembled by walking the IEEE Std 1003.1-2008
  * "<errno.h>" page (the normative reference) and cross-checking
  * against the macOS `sys/errno.h` and Linux `asm-generic/errno*.h`
- * headers. Codes that are defined on both platforms with
- * identical semantics are covered; codes that are platform-
- * specific (Linux: `ECHRNG`, `ENONET`, ...; macOS: `ENOATTR`,
- * `EBADRPC`, ...) are deliberately NOT covered — they fall
- * through to the unknown-code fallback, since the accessor cannot
- * promise a stable description across platforms for codes whose
- * very existence is platform-specific.
+ * headers.
+ *
+ * In addition, Linux-only (`ECHRNG`, `EL2NSYNC`, ...) and
+ * macOS/BSD-only (`ENOATTR`, `EBADRPC`, ...) extensions are
+ * covered under `#ifdef <CODE>` guards so that on each platform
+ * the accessor returns a stable description for every errno macro
+ * the platform's `<errno.h>` actually defines. Codes that are not
+ * `#define`d on the host platform fall through to the
+ * unknown-code fallback. The guard pattern means a single source
+ * file compiles cleanly on Linux, macOS, and any other libc that
+ * defines a subset of these macros — no per-platform `#ifdef
+ * __linux__` block needed.
  *
  * # Sign handling
  *
@@ -248,12 +253,417 @@ n00b_errno_str(int errno_val)
         return r"disk quota exceeded";
     case ECANCELED:
         return r"operation canceled";
+#if defined(EOWNERDEAD)
     case EOWNERDEAD:
         return r"owner died";
+#endif
+#if defined(ENOTRECOVERABLE)
     case ENOTRECOVERABLE:
         return r"state not recoverable";
+#endif
+
+    // ---- Linux-only extensions (under #ifdef guards) -----------
+    // The Linux generic kernel headers define a large supplemental
+    // set of errno codes covering legacy STREAMS, XENIX
+    // compatibility, RPC, networking, and key-management. Each is
+    // guarded so the source compiles unmodified on macOS / BSD.
+#if defined(ECHRNG)
+    case ECHRNG:
+        return r"channel number out of range";
+#endif
+#if defined(EL2NSYNC)
+    case EL2NSYNC:
+        return r"level 2 not synchronized";
+#endif
+#if defined(EL3HLT)
+    case EL3HLT:
+        return r"level 3 halted";
+#endif
+#if defined(EL3RST)
+    case EL3RST:
+        return r"level 3 reset";
+#endif
+#if defined(ELNRNG)
+    case ELNRNG:
+        return r"link number out of range";
+#endif
+#if defined(EUNATCH)
+    case EUNATCH:
+        return r"protocol driver not attached";
+#endif
+#if defined(ENOCSI)
+    case ENOCSI:
+        return r"no csi structure available";
+#endif
+#if defined(EL2HLT)
+    case EL2HLT:
+        return r"level 2 halted";
+#endif
+#if defined(EBADE)
+    case EBADE:
+        return r"invalid exchange";
+#endif
+#if defined(EBADR)
+    case EBADR:
+        return r"invalid request descriptor";
+#endif
+#if defined(EXFULL)
+    case EXFULL:
+        return r"exchange full";
+#endif
+#if defined(ENOANO)
+    case ENOANO:
+        return r"no anode";
+#endif
+#if defined(EBADRQC)
+    case EBADRQC:
+        return r"invalid request code";
+#endif
+#if defined(EBADSLT)
+    case EBADSLT:
+        return r"invalid slot";
+#endif
+#if defined(EDEADLOCK) && EDEADLOCK != EDEADLK
+    case EDEADLOCK:
+        return r"resource deadlock avoided";
+#endif
+#if defined(EBFONT)
+    case EBFONT:
+        return r"bad font file format";
+#endif
+#if defined(ENONET)
+    case ENONET:
+        return r"machine is not on the network";
+#endif
+#if defined(ENOPKG)
+    case ENOPKG:
+        return r"package not installed";
+#endif
+#if defined(EREMOTE)
+    case EREMOTE:
+        return r"object is remote";
+#endif
+#if defined(EADV)
+    case EADV:
+        return r"advertise error";
+#endif
+#if defined(ESRMNT)
+    case ESRMNT:
+        return r"srmount error";
+#endif
+#if defined(ECOMM)
+    case ECOMM:
+        return r"communication error on send";
+#endif
+#if defined(EDOTDOT)
+    case EDOTDOT:
+        return r"rfs specific error";
+#endif
+#if defined(ENOTUNIQ)
+    case ENOTUNIQ:
+        return r"name not unique on network";
+#endif
+#if defined(EBADFD)
+    case EBADFD:
+        return r"file descriptor in bad state";
+#endif
+#if defined(EREMCHG)
+    case EREMCHG:
+        return r"remote address changed";
+#endif
+#if defined(ELIBACC)
+    case ELIBACC:
+        return r"can not access a needed shared library";
+#endif
+#if defined(ELIBBAD)
+    case ELIBBAD:
+        return r"accessing a corrupted shared library";
+#endif
+#if defined(ELIBSCN)
+    case ELIBSCN:
+        return r".lib section in a.out corrupted";
+#endif
+#if defined(ELIBMAX)
+    case ELIBMAX:
+        return r"attempting to link in too many shared libraries";
+#endif
+#if defined(ELIBEXEC)
+    case ELIBEXEC:
+        return r"cannot exec a shared library directly";
+#endif
+#if defined(ERESTART)
+    case ERESTART:
+        return r"interrupted system call should be restarted";
+#endif
+#if defined(ESTRPIPE)
+    case ESTRPIPE:
+        return r"streams pipe error";
+#endif
+#if defined(EUSERS)
+    case EUSERS:
+        return r"too many users";
+#endif
+#if defined(ESHUTDOWN)
+    case ESHUTDOWN:
+        return r"cannot send after transport endpoint shutdown";
+#endif
+#if defined(ETOOMANYREFS)
+    case ETOOMANYREFS:
+        return r"too many references: cannot splice";
+#endif
+#if defined(EHOSTDOWN)
+    case EHOSTDOWN:
+        return r"host is down";
+#endif
+#if defined(EUCLEAN)
+    case EUCLEAN:
+        return r"structure needs cleaning";
+#endif
+#if defined(ENOTNAM)
+    case ENOTNAM:
+        return r"not a xenix named type file";
+#endif
+#if defined(ENAVAIL)
+    case ENAVAIL:
+        return r"no xenix semaphores available";
+#endif
+#if defined(EISNAM)
+    case EISNAM:
+        return r"is a named type file";
+#endif
+#if defined(EREMOTEIO)
+    case EREMOTEIO:
+        return r"remote i/o error";
+#endif
+#if defined(ENOMEDIUM)
+    case ENOMEDIUM:
+        return r"no medium found";
+#endif
+#if defined(EMEDIUMTYPE)
+    case EMEDIUMTYPE:
+        return r"wrong medium type";
+#endif
+#if defined(ENOKEY)
+    case ENOKEY:
+        return r"required key not available";
+#endif
+#if defined(EKEYEXPIRED)
+    case EKEYEXPIRED:
+        return r"key has expired";
+#endif
+#if defined(EKEYREVOKED)
+    case EKEYREVOKED:
+        return r"key has been revoked";
+#endif
+#if defined(EKEYREJECTED)
+    case EKEYREJECTED:
+        return r"key was rejected by service";
+#endif
+#if defined(ERFKILL)
+    case ERFKILL:
+        return r"operation not possible due to rf-kill";
+#endif
+#if defined(EHWPOISON)
+    case EHWPOISON:
+        return r"memory page has hardware error";
+#endif
+
+    // ---- macOS / BSD-only extensions (under #ifdef guards) -----
+    // The macOS and BSD `<sys/errno.h>` headers add extensions
+    // covering extended attributes, ONC RPC, Mach-O loader errors,
+    // and Apple-specific codes. Each is guarded so the source
+    // compiles unmodified on Linux.
+#if defined(ENOATTR)
+    case ENOATTR:
+        return r"attribute not found";
+#endif
+#if defined(EBADRPC)
+    case EBADRPC:
+        return r"rpc struct is bad";
+#endif
+#if defined(ERPCMISMATCH)
+    case ERPCMISMATCH:
+        return r"rpc version wrong";
+#endif
+#if defined(EPROGUNAVAIL)
+    case EPROGUNAVAIL:
+        return r"rpc prog not available";
+#endif
+#if defined(EPROGMISMATCH)
+    case EPROGMISMATCH:
+        return r"rpc program version wrong";
+#endif
+#if defined(EPROCUNAVAIL)
+    case EPROCUNAVAIL:
+        return r"bad procedure for rpc program";
+#endif
+#if defined(EFTYPE)
+    case EFTYPE:
+        return r"inappropriate file type or format";
+#endif
+#if defined(EAUTH)
+    case EAUTH:
+        return r"authentication error";
+#endif
+#if defined(ENEEDAUTH)
+    case ENEEDAUTH:
+        return r"need authenticator";
+#endif
+#if defined(EPWROFF)
+    case EPWROFF:
+        return r"device power is off";
+#endif
+#if defined(EDEVERR)
+    case EDEVERR:
+        return r"device error";
+#endif
+#if defined(EBADEXEC)
+    case EBADEXEC:
+        return r"bad executable";
+#endif
+#if defined(EBADARCH)
+    case EBADARCH:
+        return r"bad cpu type in executable";
+#endif
+#if defined(ESHLIBVERS)
+    case ESHLIBVERS:
+        return r"shared library version mismatch";
+#endif
+#if defined(EBADMACHO)
+    case EBADMACHO:
+        return r"malformed mach-o file";
+#endif
+#if defined(ENOPOLICY)
+    case ENOPOLICY:
+        return r"no such policy";
+#endif
+#if defined(EQFULL)
+    case EQFULL:
+        return r"interface output queue is full";
+#endif
+#if defined(EPROCLIM)
+    case EPROCLIM:
+        return r"too many processes";
+#endif
+#if defined(EPFNOSUPPORT)
+    case EPFNOSUPPORT:
+        return r"protocol family not supported";
+#endif
+#if defined(ESOCKTNOSUPPORT)
+    case ESOCKTNOSUPPORT:
+        return r"socket type not supported";
+#endif
+#if defined(ENOTCAPABLE)
+    case ENOTCAPABLE:
+        return r"capabilities insufficient";
+#endif
 
     default:
         return r"unknown errno value";
+    }
+}
+
+#include <netdb.h>
+
+n00b_string_t *
+n00b_gai_str(int rc)
+{
+    // `getaddrinfo` sign conventions vary across libcs (BSD/macOS
+    // uses positive small ints; glibc historically uses negatives).
+    // Fold the sign so a single accessor serves both conventions.
+    if (rc < 0) {
+        rc = -rc;
+    }
+
+    switch (rc) {
+    case 0:
+        return r"no error";
+
+    // ---- POSIX.1 EAI_* core -----------------------------------
+#if defined(EAI_BADFLAGS)
+    case EAI_BADFLAGS:
+        return r"invalid value for ai_flags";
+#endif
+#if defined(EAI_NONAME)
+    case EAI_NONAME:
+        return r"host or service not known";
+#endif
+#if defined(EAI_AGAIN)
+    case EAI_AGAIN:
+        return r"temporary failure in name resolution";
+#endif
+#if defined(EAI_FAIL)
+    case EAI_FAIL:
+        return r"non-recoverable failure in name resolution";
+#endif
+#if defined(EAI_FAMILY)
+    case EAI_FAMILY:
+        return r"address family not supported";
+#endif
+#if defined(EAI_SOCKTYPE)
+    case EAI_SOCKTYPE:
+        return r"socket type not supported";
+#endif
+#if defined(EAI_SERVICE)
+    case EAI_SERVICE:
+        return r"service not supported for socket type";
+#endif
+#if defined(EAI_MEMORY)
+    case EAI_MEMORY:
+        return r"memory allocation failure";
+#endif
+#if defined(EAI_SYSTEM)
+    case EAI_SYSTEM:
+        return r"system error (see errno)";
+#endif
+#if defined(EAI_OVERFLOW)
+    case EAI_OVERFLOW:
+        return r"argument buffer overflow";
+#endif
+
+    // ---- BSD / GNU extensions ---------------------------------
+#if defined(EAI_NODATA) && (!defined(EAI_NONAME) || EAI_NODATA != EAI_NONAME)
+    case EAI_NODATA:
+        return r"no address associated with host";
+#endif
+#if defined(EAI_ADDRFAMILY)
+    case EAI_ADDRFAMILY:
+        return r"address family for host not supported";
+#endif
+#if defined(EAI_BADHINTS)
+    case EAI_BADHINTS:
+        return r"invalid value for hints";
+#endif
+#if defined(EAI_PROTOCOL)
+    case EAI_PROTOCOL:
+        return r"resolved protocol is unknown";
+#endif
+#if defined(EAI_INPROGRESS)
+    case EAI_INPROGRESS:
+        return r"processing request in progress";
+#endif
+#if defined(EAI_CANCELED)
+    case EAI_CANCELED:
+        return r"request canceled";
+#endif
+#if defined(EAI_NOTCANCELED)
+    case EAI_NOTCANCELED:
+        return r"request not canceled";
+#endif
+#if defined(EAI_ALLDONE)
+    case EAI_ALLDONE:
+        return r"all requests done";
+#endif
+#if defined(EAI_INTR)
+    case EAI_INTR:
+        return r"interrupted by a signal";
+#endif
+#if defined(EAI_IDN_ENCODE)
+    case EAI_IDN_ENCODE:
+        return r"parameter string not correctly encoded";
+#endif
+
+    default:
+        return r"unknown getaddrinfo error";
     }
 }

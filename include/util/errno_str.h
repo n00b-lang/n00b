@@ -41,14 +41,14 @@
  *
  * # Coverage
  *
- * Every POSIX.1-2008 portable errno value is covered. The exact
- * set is enumerated in the implementation and tested for non-empty
- * output in the regression test. Linux-only and BSD-only
- * extensions are NOT in the coverage table because they are not
- * portable; on platforms where they are defined they fall through
- * to the unknown-code fallback string. The fallback string is
- * documented and non-empty so callers that always interpolate the
- * result get a sensible default.
+ * Every POSIX.1-2008 portable errno value is covered. In addition,
+ * Linux-only and macOS/BSD-only extensions are covered under
+ * `#ifdef <CODE>` guards, so on each platform the implementation
+ * gives a stable description for every errno macro the platform's
+ * `<errno.h>` actually defines. Codes that are not `#define`d on
+ * the host platform fall through to the unknown-code fallback.
+ * The fallback string is documented and non-empty so callers that
+ * always interpolate the result get a sensible default.
  *
  * # Relationship to libc `strerror`
  *
@@ -59,6 +59,13 @@
  * a larger n00b-style diagnostic format. Callers that need the
  * platform's exact `strerror()` text should NOT use this
  * primitive.
+ *
+ * # `getaddrinfo` companion
+ *
+ * `getaddrinfo` errors live in a disjoint code space (`EAI_*`),
+ * not POSIX errno. The companion accessor @ref n00b_gai_str is
+ * declared in this header and mirrors the same shape — a pure
+ * lookup over `EAI_*` macros that returns a rich-string literal.
  */
 
 #include <n00b.h>
@@ -106,3 +113,45 @@
  */
 extern n00b_string_t *
 n00b_errno_str(int errno_val);
+
+/**
+ * @brief Look up a short human-readable string for a `getaddrinfo`
+ *        return code (`EAI_*`).
+ *
+ * @param rc  A return code from `getaddrinfo(3)` /
+ *            `getnameinfo(3)`. These live in a code space disjoint
+ *            from POSIX errno (`EAI_NONAME`, `EAI_AGAIN`, ...);
+ *            the sign convention is implementation-defined per
+ *            platform (BSD/macOS uses positive small integers;
+ *            glibc historically uses negative integers). Callers
+ *            should pass the integer they received from
+ *            `getaddrinfo` verbatim. The accessor folds the sign
+ *            before lookup, mirroring @ref n00b_errno_str.
+ *
+ * @return A non-null `n00b_string_t *` containing a short
+ *         description. The returned string is a rich-string
+ *         literal with process-lifetime storage; the caller must
+ *         NOT free it. Unknown codes return a documented fallback
+ *         string of the form `r"unknown getaddrinfo error"`. The
+ *         special value `EAI_SYSTEM` (where the underlying error
+ *         is in `errno`) returns its own description; callers that
+ *         want the `errno`-side detail should follow up with
+ *         @ref n00b_errno_str on the saved `errno` value.
+ *
+ * @details Pure lookup — no allocator threading, no failure modes.
+ * The accessor is the §2.10-clean replacement for libc
+ * `gai_strerror()` at libn00b call sites.
+ *
+ * The covered set spans POSIX.1 (`EAI_BADFLAGS`, `EAI_NONAME`,
+ * `EAI_AGAIN`, `EAI_FAIL`, `EAI_FAMILY`, `EAI_SOCKTYPE`,
+ * `EAI_SERVICE`, `EAI_MEMORY`, `EAI_SYSTEM`, `EAI_OVERFLOW`) plus
+ * BSD/GNU extensions (`EAI_NODATA`, `EAI_ADDRFAMILY`,
+ * `EAI_BADHINTS`, `EAI_PROTOCOL`) under `#ifdef` guards. Codes
+ * absent on the host platform fall through to the fallback.
+ *
+ * @note As with @ref n00b_errno_str, the output text is short and
+ * lowercase for embedding inside a larger n00b-style diagnostic
+ * format. It is NOT byte-equivalent to `gai_strerror()`.
+ */
+extern n00b_string_t *
+n00b_gai_str(int rc);

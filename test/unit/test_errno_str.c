@@ -31,6 +31,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <errno.h>
+#include <netdb.h>
 
 #include "n00b.h"
 #include "core/string.h"
@@ -139,6 +140,158 @@ static const int k_errno_codes[] = {
     EDESTADDRREQ,
 };
 
+// Platform-extension errno codes that should produce a stable
+// description on at least one supported platform. Each entry is
+// guarded so the table only includes codes the host actually
+// `#define`s; the sample is hand-maintained to track the cases in
+// `util/errno_str.c`.
+//
+// This list intentionally trades exhaustiveness for breadth — it
+// picks ~10 codes from each platform-extension family so a
+// regression that drops a case is easy to localize without binding
+// the test against the full ~50-entry table.
+static const int k_errno_ext_codes[] = {
+    // Linux-only family (XENIX / STREAMS / RPC / kernel key mgmt).
+#if defined(ECHRNG)
+    ECHRNG,
+#endif
+#if defined(EL2NSYNC)
+    EL2NSYNC,
+#endif
+#if defined(EBADE)
+    EBADE,
+#endif
+#if defined(EBADR)
+    EBADR,
+#endif
+#if defined(ENOPKG)
+    ENOPKG,
+#endif
+#if defined(EBADFD)
+    EBADFD,
+#endif
+#if defined(ELIBACC)
+    ELIBACC,
+#endif
+#if defined(ERESTART)
+    ERESTART,
+#endif
+#if defined(EHOSTDOWN)
+    EHOSTDOWN,
+#endif
+#if defined(ESHUTDOWN)
+    ESHUTDOWN,
+#endif
+#if defined(ENOKEY)
+    ENOKEY,
+#endif
+#if defined(EKEYEXPIRED)
+    EKEYEXPIRED,
+#endif
+#if defined(ERFKILL)
+    ERFKILL,
+#endif
+#if defined(EHWPOISON)
+    EHWPOISON,
+#endif
+    // macOS / BSD-only family (extended attributes / ONC RPC / Mach-O).
+#if defined(ENOATTR)
+    ENOATTR,
+#endif
+#if defined(EBADRPC)
+    EBADRPC,
+#endif
+#if defined(ERPCMISMATCH)
+    ERPCMISMATCH,
+#endif
+#if defined(EPROGUNAVAIL)
+    EPROGUNAVAIL,
+#endif
+#if defined(EPROGMISMATCH)
+    EPROGMISMATCH,
+#endif
+#if defined(EPROCUNAVAIL)
+    EPROCUNAVAIL,
+#endif
+#if defined(EFTYPE)
+    EFTYPE,
+#endif
+#if defined(EAUTH)
+    EAUTH,
+#endif
+#if defined(ENEEDAUTH)
+    ENEEDAUTH,
+#endif
+#if defined(EPWROFF)
+    EPWROFF,
+#endif
+#if defined(EDEVERR)
+    EDEVERR,
+#endif
+#if defined(EBADEXEC)
+    EBADEXEC,
+#endif
+#if defined(EBADARCH)
+    EBADARCH,
+#endif
+#if defined(ESHLIBVERS)
+    ESHLIBVERS,
+#endif
+#if defined(EBADMACHO)
+    EBADMACHO,
+#endif
+#if defined(ENOPOLICY)
+    ENOPOLICY,
+#endif
+#if defined(EQFULL)
+    EQFULL,
+#endif
+};
+
+// Representative sample of getaddrinfo `EAI_*` return codes.
+// Same hand-maintained / sampling discipline as the errno table.
+static const int k_gai_codes[] = {
+#if defined(EAI_BADFLAGS)
+    EAI_BADFLAGS,
+#endif
+#if defined(EAI_NONAME)
+    EAI_NONAME,
+#endif
+#if defined(EAI_AGAIN)
+    EAI_AGAIN,
+#endif
+#if defined(EAI_FAIL)
+    EAI_FAIL,
+#endif
+#if defined(EAI_FAMILY)
+    EAI_FAMILY,
+#endif
+#if defined(EAI_SOCKTYPE)
+    EAI_SOCKTYPE,
+#endif
+#if defined(EAI_SERVICE)
+    EAI_SERVICE,
+#endif
+#if defined(EAI_MEMORY)
+    EAI_MEMORY,
+#endif
+#if defined(EAI_SYSTEM)
+    EAI_SYSTEM,
+#endif
+#if defined(EAI_OVERFLOW)
+    EAI_OVERFLOW,
+#endif
+#if defined(EAI_ADDRFAMILY)
+    EAI_ADDRFAMILY,
+#endif
+#if defined(EAI_BADHINTS)
+    EAI_BADHINTS,
+#endif
+#if defined(EAI_PROTOCOL)
+    EAI_PROTOCOL,
+#endif
+};
+
 static void
 assert_nonempty(n00b_string_t *s, const char *ctx, int code)
 {
@@ -243,6 +396,124 @@ test_errno_accessor_is_pure(void)
     printf("  [PASS] errno_accessor_is_pure\n");
 }
 
+static void
+test_errno_platform_extensions_return_nonempty(void)
+{
+    // Platform-extension errno codes (Linux-only or macOS/BSD-only)
+    // each return a non-empty description on the platforms where
+    // they are defined. The table itself is `#ifdef`-filtered so
+    // we only test codes the host actually has.
+    size_t n = sizeof(k_errno_ext_codes) / sizeof(k_errno_ext_codes[0]);
+    // At least one platform-extension family must be covered on
+    // every supported build platform; pin the sample size.
+    assert(n >= 5);
+    for (size_t i = 0; i < n; i++) {
+        n00b_string_t *s = n00b_errno_str(k_errno_ext_codes[i]);
+        assert_nonempty(s, "errno-ext", k_errno_ext_codes[i]);
+
+        // Platform-extension codes must produce a *non-fallback*
+        // description on the platforms where they exist — a stale
+        // entry that fell out of the switch would silently regress
+        // to the fallback string. Compare byte-distinct against
+        // the documented unknown-code fallback.
+        n00b_string_t *fallback = n00b_errno_str(0x7fffffff);
+        bool same_len  = s->u8_bytes == fallback->u8_bytes;
+        bool same_data = same_len
+                      && memcmp(s->data, fallback->data, s->u8_bytes) == 0;
+        if (same_data) {
+            fprintf(stderr,
+                    "FAIL: errno-ext code %d fell through to fallback\n",
+                    k_errno_ext_codes[i]);
+            assert(0);
+        }
+    }
+    printf("  [PASS] errno_platform_extensions_return_nonempty (%zu codes)\n",
+           n);
+}
+
+static void
+test_gai_every_code_returns_nonempty(void)
+{
+    size_t n = sizeof(k_gai_codes) / sizeof(k_gai_codes[0]);
+    // POSIX.1 mandates ~10 EAI_* codes on every POSIX system.
+    assert(n >= 8);
+    for (size_t i = 0; i < n; i++) {
+        n00b_string_t *s = n00b_gai_str(k_gai_codes[i]);
+        assert_nonempty(s, "gai", k_gai_codes[i]);
+
+        // Same fallback-distinctness check as the errno test:
+        // every covered code must produce a non-fallback string.
+        n00b_string_t *fallback = n00b_gai_str(0x7fffffff);
+        bool same_len  = s->u8_bytes == fallback->u8_bytes;
+        bool same_data = same_len
+                      && memcmp(s->data, fallback->data, s->u8_bytes) == 0;
+        if (same_data) {
+            fprintf(stderr,
+                    "FAIL: gai code %d fell through to fallback\n",
+                    k_gai_codes[i]);
+            assert(0);
+        }
+    }
+    printf("  [PASS] gai_every_code_returns_nonempty (%zu codes)\n", n);
+}
+
+static void
+test_gai_zero_returns_no_error(void)
+{
+    // Code 0 (no error) is distinct from the unknown-code fallback,
+    // mirroring n00b_errno_str's contract.
+    n00b_string_t *zero    = n00b_gai_str(0);
+    n00b_string_t *unknown = n00b_gai_str(0x7fffffff);
+    assert_nonempty(zero, "gai-zero", 0);
+    assert_nonempty(unknown, "gai-unknown", 0x7fffffff);
+
+    bool same_len  = zero->u8_bytes == unknown->u8_bytes;
+    bool same_data = same_len
+                  && memcmp(zero->data, unknown->data, zero->u8_bytes) == 0;
+    assert(!same_data);
+    printf("  [PASS] gai_zero_returns_no_error\n");
+}
+
+static void
+test_gai_unknown_code_returns_fallback(void)
+{
+    n00b_string_t *s = n00b_gai_str(0x7fffffff);
+    assert_nonempty(s, "gai-unknown", 0x7fffffff);
+    printf("  [PASS] gai_unknown_code_returns_fallback\n");
+}
+
+static void
+test_gai_sign_folding(void)
+{
+    // `getaddrinfo`'s sign convention varies: BSD/macOS uses
+    // positive `EAI_*`, glibc historically uses negatives. The
+    // accessor folds the sign so callers can pass the raw rc.
+    size_t n = sizeof(k_gai_codes) / sizeof(k_gai_codes[0]);
+    for (size_t i = 0; i < n; i++) {
+        int            code = k_gai_codes[i];
+        n00b_string_t *pos  = n00b_gai_str(code);
+        n00b_string_t *neg  = n00b_gai_str(-code);
+        assert(pos != nullptr && neg != nullptr);
+        assert(pos->u8_bytes == neg->u8_bytes);
+        assert(memcmp(pos->data, neg->data, pos->u8_bytes) == 0);
+    }
+    printf("  [PASS] gai_sign_folding\n");
+}
+
+static void
+test_gai_accessor_is_pure(void)
+{
+    size_t n = sizeof(k_gai_codes) / sizeof(k_gai_codes[0]);
+    for (size_t i = 0; i < n; i++) {
+        n00b_string_t *a = n00b_gai_str(k_gai_codes[i]);
+        n00b_string_t *b = n00b_gai_str(k_gai_codes[i]);
+        assert(a != nullptr && b != nullptr);
+        assert(a->u8_bytes == b->u8_bytes);
+        assert(memcmp(a->data, b->data, a->u8_bytes) == 0);
+    }
+    printf("  [PASS] gai_accessor_is_pure\n");
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -254,6 +525,13 @@ main(int argc, char *argv[])
     test_errno_unknown_code_returns_fallback();
     test_errno_sign_folding();
     test_errno_accessor_is_pure();
-    printf("All n00b_errno_str tests passed.\n");
+    test_errno_platform_extensions_return_nonempty();
+    printf("== n00b_gai_str ==\n");
+    test_gai_every_code_returns_nonempty();
+    test_gai_zero_returns_no_error();
+    test_gai_unknown_code_returns_fallback();
+    test_gai_sign_folding();
+    test_gai_accessor_is_pure();
+    printf("All n00b_errno_str / n00b_gai_str tests passed.\n");
     return 0;
 }

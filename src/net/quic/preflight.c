@@ -29,6 +29,7 @@
 #include "net/quic/secret.h"
 #include "internal/net/quic/cert_provisioner.h"
 #include "internal/net/quic/cert_provisioner_common.h"
+#include "util/errno_str.h"
 
 /* ===========================================================================
  * Allocator + finding builders
@@ -109,7 +110,7 @@ check_port_bind(finding_buf_t *fb, const n00b_buffer_t *host_buf, uint16_t port)
         char detail[256];
         snprintf(detail, sizeof(detail),
                  "Cannot resolve bind host: %s",
-                 gai_strerror(rc));
+                 n00b_gai_str(rc)->data);
         fb_push(fb, check_id, N00B_QUIC_PREFLIGHT_ERROR, detail,
                 "Check `bind_host` in the manifest; use a literal "
                 "IPv4 (\"0.0.0.0\") or IPv6 (\"::\") wildcard for "
@@ -132,7 +133,7 @@ check_port_bind(finding_buf_t *fb, const n00b_buffer_t *host_buf, uint16_t port)
     if (bind(fd, res->ai_addr, res->ai_addrlen) != 0) {
         char detail[256];
         snprintf(detail, sizeof(detail),
-                 "bind() failed: %s", strerror(errno));
+                 "bind() failed: %s", n00b_errno_str(errno)->data);
         const char *remediation = (errno == EACCES)
             ? "Privileged port (<1024); run with elevated capabilities "
               "(e.g., setcap cap_net_bind_service=+ep on Linux) or "
@@ -177,7 +178,7 @@ check_metrics_bind(finding_buf_t                      *fb,
         char detail[256];
         snprintf(detail, sizeof(detail),
                  "Cannot resolve metrics bind host '%s': %s",
-                 host, gai_strerror(rc));
+                 host, n00b_gai_str(rc)->data);
         fb_push(fb, check_id, N00B_QUIC_PREFLIGHT_ERROR, detail,
                 "Check `observability.metrics.bind_host`; use a "
                 "literal IPv4/IPv6 wildcard or loopback.");
@@ -196,7 +197,7 @@ check_metrics_bind(finding_buf_t                      *fb,
     if (bind(fd, res->ai_addr, res->ai_addrlen) != 0) {
         char detail[256];
         snprintf(detail, sizeof(detail),
-                 "metrics bind() failed: %s", strerror(errno));
+                 "metrics bind() failed: %s", n00b_errno_str(errno)->data);
         const char *remediation = (errno == EACCES)
             ? "Pick a non-privileged port (>= 1024) for metrics."
             : (errno == EADDRINUSE)
@@ -388,7 +389,7 @@ check_acme_directory(finding_buf_t       *fb,
         char detail[512];
         snprintf(detail, sizeof(detail),
                  "Cannot resolve ACME directory host '%s': %s",
-                 host_buf, gai_strerror(rc));
+                 host_buf, n00b_gai_str(rc)->data);
         fb_push(fb, check_id, N00B_QUIC_PREFLIGHT_WARN, detail,
                 "Check DNS, or run preflight again with network "
                 "access.");
@@ -475,7 +476,7 @@ check_idp(finding_buf_t *fb, const n00b_quic_manifest_idp_t *idp)
         char detail[512];
         snprintf(detail, sizeof(detail),
                  "Cannot resolve IdP host '%s': %s",
-                 host_buf, gai_strerror(rc));
+                 host_buf, n00b_gai_str(rc)->data);
         fb_push(fb, check_id, N00B_QUIC_PREFLIGHT_WARN, detail,
                 "Check DNS, or run preflight again with network access.");
         return;

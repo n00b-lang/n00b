@@ -58,6 +58,7 @@
 #include "slay/diagnostic.h"
 #include "slay/analyze.h"
 #include "internal/slay/earley_internal.h"
+#include "util/errno_str.h"
 #include "typecheck/types.h"
 #include "typecheck/print.h"
 
@@ -278,7 +279,9 @@ compile_spawn_wait(const char **argv)
     free(spawn_argv);
 
     if (rc == -1) {
-        fprintf(stderr, "error: spawn(%s) failed: %s\n", program, strerror(errno));
+        n00b_eprintf("error: spawn(«#») failed: «#»",
+                     n00b_string_from_cstr(program),
+                     n00b_errno_str(errno));
         return 127;
     }
 
@@ -287,20 +290,22 @@ compile_spawn_wait(const char **argv)
     pid_t pid = fork();
 
     if (pid < 0) {
-        fprintf(stderr, "error: fork() failed: %s\n", strerror(errno));
+        n00b_eprintf("error: fork() failed: «#»", n00b_errno_str(errno));
         return 1;
     }
 
     if (pid == 0) {
         execvp(program, (char *const *)argv);
-        fprintf(stderr, "error: execvp(%s) failed: %s\n", program, strerror(errno));
+        n00b_eprintf("error: execvp(«#») failed: «#»",
+                     n00b_string_from_cstr(program),
+                     n00b_errno_str(errno));
         _exit(127);
     }
 
     int status;
 
     if (waitpid(pid, &status, 0) < 0) {
-        fprintf(stderr, "error: waitpid() failed: %s\n", strerror(errno));
+        n00b_eprintf("error: waitpid() failed: «#»", n00b_errno_str(errno));
         return 1;
     }
 

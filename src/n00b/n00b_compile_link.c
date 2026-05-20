@@ -5,6 +5,9 @@
 
 #include "n00b.h"
 #include "n00b/n00b_compile_binary.h"
+#include "util/errno_str.h"
+#include "core/string.h"
+#include "conduit/print.h"
 
 #include <errno.h>
 #include <stdio.h>
@@ -218,7 +221,9 @@ run_linker(const char *compiler, const char **argv)
     free(spawn_argv);
 
     if (rc == -1) {
-        fprintf(stderr, "n00b compile: spawn(%s) failed: %s\n", compiler, strerror(errno));
+        n00b_eprintf("n00b compile: spawn(«#») failed: «#»",
+                     n00b_string_from_cstr(compiler),
+                     n00b_errno_str(errno));
         return 127;
     }
 
@@ -227,20 +232,24 @@ run_linker(const char *compiler, const char **argv)
     pid_t pid = fork();
 
     if (pid < 0) {
-        fprintf(stderr, "n00b compile: fork() failed: %s\n", strerror(errno));
+        n00b_eprintf("n00b compile: fork() failed: «#»",
+                     n00b_errno_str(errno));
         return 1;
     }
 
     if (pid == 0) {
         execvp(compiler, (char *const *)argv);
-        fprintf(stderr, "n00b compile: execvp(%s) failed: %s\n", compiler, strerror(errno));
+        n00b_eprintf("n00b compile: execvp(«#») failed: «#»",
+                     n00b_string_from_cstr(compiler),
+                     n00b_errno_str(errno));
         _exit(127);
     }
 
     int status;
 
     if (waitpid(pid, &status, 0) < 0) {
-        fprintf(stderr, "n00b compile: waitpid() failed: %s\n", strerror(errno));
+        n00b_eprintf("n00b compile: waitpid() failed: «#»",
+                     n00b_errno_str(errno));
         return 1;
     }
 
