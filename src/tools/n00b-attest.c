@@ -42,15 +42,12 @@
  *
  * Default-stdout writes go through the runtime-managed fd-1
  * owner via `n00b_stdout()` + `n00b_fd_owner_write` (D-062 / DF-007
- * part B). This is the same owner that `n00b_printf` reaches and
- * avoids re-managing fd 1 through a `/dev/stdout` `n00b_file_open`
- * dup. Default-stdin reads still go through `n00b_file_open` on
- * the POSIX `/dev/stdin` path: the `core/std_streams.h` header
- * itself recommends the file-open path for bulk reads, and using
- * `n00b_stdin()` directly would require ~40 lines of inbox /
- * subscription / TOPIC_CLOSED-drain boilerplate per call site
- * (the read path lacks an fd-owner-level read-all helper — see
- * `flagged_for_orchestrator` notes attached to D-062's dispatch).
+ * part B). Default-stdin reads go through the runtime-managed fd-0
+ * owner via `n00b_stdin()` + `n00b_fd_owner_read_all`, the
+ * read-side analogue of `n00b_fd_owner_write` added alongside the
+ * stdout migration. Both helpers reach the same fd owners the
+ * conduit substrate manages internally, avoiding a `/dev/std*`
+ * `n00b_file_open` dup-and-reparent round-trip.
  */
 
 #include "n00b.h"
@@ -134,8 +131,9 @@ build_pending_verbs(void)
 // ---------------------------------------------------------------------------
 
 // Read every byte from the given path into a freshly-allocated
-// n00b_buffer_t. Used both for `--statement <path>` and (when
-// `path` is `/dev/stdin`) for the default stdin fallback.
+// n00b_buffer_t. Used for explicit `--statement <path>` /
+// `--envelope <path>` arguments; the default-stdin fallback uses
+// `read_all_from_stdin` (the runtime-managed fd-0 owner path).
 //
 // Returns Ok(buffer) on success; Err(errno) propagated from the
 // underlying `n00b_file_open` / `n00b_file_read` failure.
@@ -164,6 +162,27 @@ read_all_from_path(n00b_string_t *path)
     }
     n00b_file_close(f);
     return n00b_result_ok(n00b_buffer_t *, acc);
+}
+
+// Read every byte from the process's stdin via the runtime-managed
+// fd-0 owner. Reaches the same owner the conduit substrate manages
+// internally; avoids the `/dev/stdin` `n00b_file_open` indirection
+// (which would dup fd 0 and create a parallel owner). D-062 /
+// DF-007 part B migration.
+//
+// `n00b_fd_owner_read_all` subscribes to the owner's read topic,
+// blocks on the inbox CV until TOPIC_CLOSED arrives, and returns the
+// accumulated bytes as a single buffer. Returns Ok(buffer) on
+// success; Err(N00B_CONDUIT_ERR_*) on stdin unavailable or read
+// failure.
+static n00b_result_t(n00b_buffer_t *)
+read_all_from_stdin(void)
+{
+    n00b_conduit_fd_owner_t *owner = n00b_stdin();
+    if (owner == nullptr) {
+        return n00b_result_err(n00b_buffer_t *, EBADF);
+    }
+    return n00b_fd_owner_read_all(owner);
 }
 
 // Write every byte of `buf` to the process's stdout via the
@@ -433,30 +452,32 @@ verb_sign(n00b_cmdr_result_t *result)
                 "n00b-attest sign: --statement <path> may not be empty");
             return 1;
         }
+
+        auto read_r = read_all_from_path(stmt_path);
+        if (n00b_result_is_err(read_r)) {
+            n00b_err_t code = n00b_result_get_err(read_r);
+            n00b_eprintf("n00b-attest sign: cannot read Statement '«#»' "
+                         "(errno «#»)",
+                         stmt_path,
+                         (int64_t)code);
+            return 1;
+        }
+        stmt_bytes = n00b_result_get(read_r);
     }
     else {
-        // Default-stdin: path-based `/dev/stdin` open. The
-        // `n00b_stdin()` accessor exists (D-061), but its FD owner
-        // exposes only Layer-1 topic-subscribe / Layer-2
-        // stream-reader primitives — no fd-owner-level "read all
-        // until EOF" helper. Going through `n00b_file_open` on
-        // `/dev/stdin` reuses `core/file.c`'s already-wired
-        // subscription + TOPIC_CLOSED-drain machinery. The
-        // `core/std_streams.h` header itself recommends this
-        // path for bulk-read consumers (D-062 / DF-007 part B).
-        stmt_path = n00b_string_from_cstr("/dev/stdin");
+        // Default-stdin: reach the runtime-managed fd-0 owner via
+        // `n00b_stdin()` + `n00b_fd_owner_read_all` (D-062 / DF-007
+        // part B). Same owner the conduit substrate uses internally.
+        auto read_r = read_all_from_stdin();
+        if (n00b_result_is_err(read_r)) {
+            n00b_err_t code = n00b_result_get_err(read_r);
+            n00b_eprintf("n00b-attest sign: cannot read Statement from stdin "
+                         "(errno «#»)",
+                         (int64_t)code);
+            return 1;
+        }
+        stmt_bytes = n00b_result_get(read_r);
     }
-
-    auto read_r = read_all_from_path(stmt_path);
-    if (n00b_result_is_err(read_r)) {
-        n00b_err_t code = n00b_result_get_err(read_r);
-        n00b_eprintf("n00b-attest sign: cannot read Statement '«#»' "
-                     "(errno «#»)",
-                     stmt_path,
-                     (int64_t)code);
-        return 1;
-    }
-    stmt_bytes = n00b_result_get(read_r);
 
     if (stmt_bytes == nullptr || stmt_bytes->byte_len == 0) {
         n00b_eprintf("n00b-attest sign: empty Statement input");
@@ -535,32 +556,40 @@ verb_verify(n00b_cmdr_result_t *result)
 
     // Optional: --envelope (default stdin). Mirrors the
     // sign-side --statement default per D-033 OQ-5.
-    n00b_string_t *env_path = nullptr;
+    n00b_buffer_t *env_bytes = nullptr;
     if (n00b_cmdr_flag_present(result, r"--envelope")) {
-        env_path = n00b_cmdr_flag_str(result, r"--envelope");
+        n00b_string_t *env_path = n00b_cmdr_flag_str(result, r"--envelope");
         if (env_path == nullptr || env_path->u8_bytes == 0) {
             n00b_eprintf(
                 "n00b-attest verify: --envelope <path> may not be empty");
             return 2;
         }
+
+        auto read_r = read_all_from_path(env_path);
+        if (n00b_result_is_err(read_r)) {
+            n00b_err_t code = n00b_result_get_err(read_r);
+            n00b_eprintf("n00b-attest verify: cannot read envelope '«#»' "
+                         "(errno «#»)",
+                         env_path,
+                         (int64_t)code);
+            return 2;
+        }
+        env_bytes = n00b_result_get(read_r);
     }
     else {
-        // Default-stdin: `/dev/stdin` via `n00b_file_open`. See the
-        // matching block in `verb_sign` for the rationale (D-062 /
-        // DF-007 part B kept the read path on the file API).
-        env_path = n00b_string_from_cstr("/dev/stdin");
+        // Default-stdin: reach the runtime-managed fd-0 owner via
+        // `n00b_stdin()` + `n00b_fd_owner_read_all` (D-062 / DF-007
+        // part B). Matches `verb_sign`'s default-stdin handling.
+        auto read_r = read_all_from_stdin();
+        if (n00b_result_is_err(read_r)) {
+            n00b_err_t code = n00b_result_get_err(read_r);
+            n00b_eprintf("n00b-attest verify: cannot read envelope from stdin "
+                         "(errno «#»)",
+                         (int64_t)code);
+            return 2;
+        }
+        env_bytes = n00b_result_get(read_r);
     }
-
-    auto read_r = read_all_from_path(env_path);
-    if (n00b_result_is_err(read_r)) {
-        n00b_err_t code = n00b_result_get_err(read_r);
-        n00b_eprintf("n00b-attest verify: cannot read envelope '«#»' "
-                     "(errno «#»)",
-                     env_path,
-                     (int64_t)code);
-        return 2;
-    }
-    n00b_buffer_t *env_bytes = n00b_result_get(read_r);
 
     if (env_bytes == nullptr || env_bytes->byte_len == 0) {
         n00b_eprintf("n00b-attest verify: empty envelope input");
@@ -626,32 +655,40 @@ verb_push(n00b_cmdr_result_t *result)
     }
 
     // Optional: --envelope (default stdin).
-    n00b_string_t *env_path = nullptr;
+    n00b_buffer_t *env_bytes = nullptr;
     if (n00b_cmdr_flag_present(result, r"--envelope")) {
-        env_path = n00b_cmdr_flag_str(result, r"--envelope");
+        n00b_string_t *env_path = n00b_cmdr_flag_str(result, r"--envelope");
         if (env_path == nullptr || env_path->u8_bytes == 0) {
             n00b_eprintf(
                 "n00b-attest push: --envelope <path> may not be empty");
             return 1;
         }
+
+        auto read_r = read_all_from_path(env_path);
+        if (n00b_result_is_err(read_r)) {
+            n00b_err_t code = n00b_result_get_err(read_r);
+            n00b_eprintf("n00b-attest push: cannot read envelope '«#»' "
+                         "(errno «#»)",
+                         env_path,
+                         (int64_t)code);
+            return 1;
+        }
+        env_bytes = n00b_result_get(read_r);
     }
     else {
-        // Default-stdin: `/dev/stdin` via `n00b_file_open`. Matches
-        // verb_sign / verb_verify's read-path handling (D-062 /
-        // DF-007 part B left the read sites on the file API).
-        env_path = n00b_string_from_cstr("/dev/stdin");
+        // Default-stdin: reach the runtime-managed fd-0 owner via
+        // `n00b_stdin()` + `n00b_fd_owner_read_all` (D-062 / DF-007
+        // part B). Matches verb_sign / verb_verify's default-stdin path.
+        auto read_r = read_all_from_stdin();
+        if (n00b_result_is_err(read_r)) {
+            n00b_err_t code = n00b_result_get_err(read_r);
+            n00b_eprintf("n00b-attest push: cannot read envelope from stdin "
+                         "(errno «#»)",
+                         (int64_t)code);
+            return 1;
+        }
+        env_bytes = n00b_result_get(read_r);
     }
-
-    auto read_r = read_all_from_path(env_path);
-    if (n00b_result_is_err(read_r)) {
-        n00b_err_t code = n00b_result_get_err(read_r);
-        n00b_eprintf("n00b-attest push: cannot read envelope '«#»' "
-                     "(errno «#»)",
-                     env_path,
-                     (int64_t)code);
-        return 1;
-    }
-    n00b_buffer_t *env_bytes = n00b_result_get(read_r);
 
     if (env_bytes == nullptr || env_bytes->byte_len == 0) {
         n00b_eprintf("n00b-attest push: empty envelope input");
