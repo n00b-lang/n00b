@@ -581,6 +581,114 @@ test_wildcard_matching(void)
             n00b_string_from_cstr("foo.example.com"), al));
     }
 
+    /* ---- IDN / UTS-46 sub-cases (deferral-B promotion) ---------- */
+    /* The Punycode form of `例え` is `xn--r8jz45g`, so the canonical
+     * ACE forms of `例え.com` and `xn--r8jz45g.com` are byte-equal.
+     * The matcher canonicalizes both sides through
+     * `n00b_unicode_idna_to_ascii` before compare; Unicode and
+     * already-Punycode entries therefore cross-match in either
+     * direction. */
+
+    /* [7i] Unicode wildcard + Unicode host. */
+    {
+        const char *entries[] = {"*.例え.com"};
+        auto       *al        = build_allowlist(entries, 1);
+        assert(host_in_allowlist(
+            n00b_string_from_cstr("foo.例え.com"), al));
+    }
+
+    /* [7j] Unicode wildcard + Punycode host. */
+    {
+        const char *entries[] = {"*.例え.com"};
+        auto       *al        = build_allowlist(entries, 1);
+        assert(host_in_allowlist(
+            n00b_string_from_cstr("foo.xn--r8jz45g.com"), al));
+    }
+
+    /* [7k] Punycode wildcard + Unicode host. */
+    {
+        const char *entries[] = {"*.xn--r8jz45g.com"};
+        auto       *al        = build_allowlist(entries, 1);
+        assert(host_in_allowlist(
+            n00b_string_from_cstr("foo.例え.com"), al));
+    }
+
+    /* [7l] IDN apex rejection: the wildcard does NOT match the
+     *      apex (same rule as ASCII cand #6, preserved post-IDNA). */
+    {
+        const char *entries[] = {"*.例え.com"};
+        auto       *al        = build_allowlist(entries, 1);
+        assert(!host_in_allowlist(
+            n00b_string_from_cstr("例え.com"), al));
+        assert(!host_in_allowlist(
+            n00b_string_from_cstr("xn--r8jz45g.com"), al));
+    }
+
+    /* [7m] IDN cross-domain rejection: `*.例え.com` does NOT
+     *      match a host whose label differs in Unicode form
+     *      (`別` → `xn--gcr`, not `xn--r8jz45g`). */
+    {
+        const char *entries[] = {"*.例え.com"};
+        auto       *al        = build_allowlist(entries, 1);
+        assert(!host_in_allowlist(
+            n00b_string_from_cstr("foo.別.com"), al));
+    }
+
+    /* [7n] Malformed-IDN entry skip: an entry with invalid UTF-8
+     *      after the `*.` is silently skipped; the rest of the
+     *      allowlist is still scanned and other entries still
+     *      trip. */
+    {
+        n00b_list_t(n00b_string_t *) *al =
+            n00b_alloc(n00b_list_t(n00b_string_t *));
+        *al = n00b_list_new(n00b_string_t *);
+        /* `*.<ff><fe>.com` — invalid UTF-8 in the DOMAIN portion. */
+        const char bad[] = {'*', '.', (char)0xff, (char)0xfe, '.',
+                            'c', 'o', 'm'};
+        n00b_list_push(*al,
+                       n00b_string_from_raw(bad, (int64_t)sizeof(bad)));
+        /* A valid wildcard alongside the malformed entry. */
+        n00b_list_push(*al, n00b_string_from_cstr("*.example.com"));
+        assert(host_in_allowlist(
+            n00b_string_from_cstr("foo.example.com"), al));
+        /* And the malformed entry alone produces no match. */
+        n00b_list_t(n00b_string_t *) *al2 =
+            n00b_alloc(n00b_list_t(n00b_string_t *));
+        *al2 = n00b_list_new(n00b_string_t *);
+        n00b_list_push(*al2,
+                       n00b_string_from_raw(bad, (int64_t)sizeof(bad)));
+        assert(!host_in_allowlist(
+            n00b_string_from_cstr("foo.example.com"), al2));
+    }
+
+    /* [7o] Mixed IDN allowlist: `[example.com, *.例え.com]`
+     *      matches both `example.com` and `foo.例え.com`, but
+     *      rejects `例え.com` (apex of the wildcard) and
+     *      `foo.bar.com` (not in the list). */
+    {
+        const char *entries[] = {"example.com", "*.例え.com"};
+        auto       *al        = build_allowlist(entries, 2);
+        assert(host_in_allowlist(
+            n00b_string_from_cstr("example.com"), al));
+        assert(host_in_allowlist(
+            n00b_string_from_cstr("foo.例え.com"), al));
+        assert(!host_in_allowlist(
+            n00b_string_from_cstr("例え.com"), al));
+        assert(!host_in_allowlist(
+            n00b_string_from_cstr("foo.bar.com"), al));
+    }
+
+    /* [7p] ASCII case-insensitivity preserved post-IDNA: an
+     *      uppercase wildcard still matches the lowercase host.
+     *      UTS-46 lowercases ASCII as part of `to_ascii`, so the
+     *      canonical forms are identical bytes here. */
+    {
+        const char *entries[] = {"*.EXAMPLE.COM"};
+        auto       *al        = build_allowlist(entries, 1);
+        assert(host_in_allowlist(
+            n00b_string_from_cstr("foo.example.com"), al));
+    }
+
     printf("  [PASS] wildcard_matching\n");
 }
 

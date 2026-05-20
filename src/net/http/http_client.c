@@ -41,6 +41,7 @@
 #include "internal/net/http/http_cookies.h"
 #include "internal/net/http/http_compression.h"
 #include "internal/net/http/http_client.h"
+#include "text/unicode/idna.h"
 
 /* ===========================================================================
  * §1   Per-runtime state
@@ -582,25 +583,79 @@ host_eq_ascii_ci(const char *a, size_t alen,
     return true;
 }
 
+/* IDNA / UTS-46 canonicalization of a domain string for allowlist
+ * matching.  Collapses every failure mode into a single "skip"
+ * signal: returns `nullptr` iff
+ *
+ *   - input is null or empty (callers don't pass empty here; this is
+ *     defensive against pathological allowlist entries), OR
+ *   - `n00b_unicode_idna_to_ascii` reports any non-OK error code
+ *     (`_DISALLOWED`, `_BIDI_ERROR`, `_PUNYCODE_ERROR`, `_LABEL_TOO_LONG`,
+ *     `_DOMAIN_TOO_LONG`, `_CONTEXTJ_ERROR`, `_CONTEXTO_ERROR`,
+ *     `_LEADING_COMBINING`, `_EMPTY_LABEL`, `_INVALID_ACE`,
+ *     `_PROCESSING_ERROR`), OR
+ *   - the result string is empty for a non-empty input (the IDNA
+ *     primitive returns OK with an empty value when the UTF-8 decode
+ *     breaks mid-stream on an invalid sequence; treat that as
+ *     malformed too rather than letting it match anything).
+ *
+ * On success returns the ACE form (pure-ASCII Punycode where
+ * needed, byte-identical for already-ASCII inputs modulo
+ * UTS-46 case folding).
+ *
+ * The result is transient — allocated on the runtime default
+ * allocator, immediately consumed by a byte compare, then dropped
+ * to the GC.  The matcher's documented "side-effect-free" contract
+ * is preserved at the API boundary; transient internal allocations
+ * are within scope per § 4.4 (the GC reclaims them). */
+static n00b_string_t *
+idna_canonicalize_or_null(const char *src, size_t src_len)
+{
+    if (!src || src_len == 0) return nullptr;
+
+    n00b_string_t *in = n00b_string_from_raw(src, (int64_t)src_len);
+    n00b_unicode_idna_result_t r = n00b_unicode_idna_to_ascii(in);
+    if (r.error != N00B_UNICODE_IDNA_OK) return nullptr;
+    if (!r.value || r.value->u8_bytes == 0) return nullptr;
+    return r.value;
+}
+
 /* Returns true iff @p host (already lowercased by the URL parser
- * per RFC 3986 § 3.2.2) is matched by some entry in @p allowlist.
+ * per RFC 3986 § 3.2.2, but NOT yet IDNA-canonicalized) is matched
+ * by some entry in @p allowlist.  Both sides are run through UTS-46
+ * `to_ascii` so Unicode and Punycode forms compare equal in either
+ * direction.
  *
  * Two entry shapes are recognized:
  *
- *   - Exact entries (no `*` anywhere): matched via ASCII-CI byte
- *     equality, identical to the pre-wildcard semantics.
+ *   - Exact entries (no `*` anywhere): canonicalize the whole
+ *     entry, then ASCII-CI byte-compare against the canonicalized
+ *     host.  Pure-ASCII entries land at the same bytes they would
+ *     have hit pre-IDNA (ASCII is a fixed point of `to_ascii`
+ *     modulo case folding), preserving the cand-#6 contract
+ *     byte-identically.
  *
  *   - Wildcard entries (`*.DOMAIN` with at least one label after
- *     the dot, e.g. `*.example.com`): match any host of the form
- *     `X.DOMAIN` for some non-empty `X` (ASCII-CI, same case-fold
- *     primitive as the exact path).  The apex `DOMAIN` itself is
- *     NOT matched — callers who want the apex too add a second
- *     non-wildcard entry `DOMAIN`.
+ *     the dot, e.g. `*.example.com` or `*.例え.com`): classify on
+ *     the RAW bytes (the `*.` prefix is literal ASCII and must NOT
+ *     be fed to the IDNA pipeline — it would reject `*` as
+ *     disallowed), then canonicalize only the `DOMAIN` portion
+ *     after the `*.`.  Match any host of the form `X.DOMAIN` for
+ *     some non-empty `X` after both sides are canonicalized.  The
+ *     apex `DOMAIN` itself is NOT matched.
  *
  *   - Any other `*` placement (`foo.*.com`, `**.example.com`,
- *     `*example.com`, bare `*`) is malformed and silently skipped
- *     (no match for that entry; no crash, no abort), matching the
- *     existing tolerance for null entries above.
+ *     `*example.com`, bare `*`) is malformed and silently skipped.
+ *
+ * IDNA-error handling:
+ *
+ *   - Host canonicalization failure → return false immediately.  A
+ *     host that cannot be IDNA-canonicalized cannot belong to any
+ *     allowlist.  In practice the URL parser will not produce one;
+ *     this is defensive.
+ *   - Entry canonicalization failure (exact-side or DOMAIN-portion)
+ *     → skip that entry, continue scanning the rest of the list.
+ *     Same skip-as-malformed semantics as cand #6.
  *
  * An empty allowlist (0 entries) returns false — "no hosts
  * permitted".  A nullptr allowlist is *not* passed here; the
@@ -611,6 +666,15 @@ host_in_allowlist(n00b_string_t                *host,
                   n00b_list_t(n00b_string_t *) *allowlist)
 {
     if (!host || !allowlist) return false;
+
+    /* Canonicalize the host once.  Any failure → no allowlist
+     * entry can match. */
+    n00b_string_t *chost = idna_canonicalize_or_null(host->data,
+                                                     host->u8_bytes);
+    if (!chost) return false;
+    const char *hdat = chost->data;
+    size_t      hlen = chost->u8_bytes;
+
     /* Lists are value types; the kwarg is a pointer to the
      * caller's lvalue.  The list macros expect lvalue access so we
      * dereference at every call site. */
@@ -621,7 +685,7 @@ host_in_allowlist(n00b_string_t                *host,
         size_t      elen = entry->u8_bytes;
         const char *edat = entry->data;
 
-        /* Classify: scan for any `*` byte. */
+        /* Classify on the raw entry bytes: scan for any `*` byte. */
         bool   has_star      = false;
         size_t first_star_at = 0;
         for (size_t k = 0; k < elen; k++) {
@@ -633,9 +697,12 @@ host_in_allowlist(n00b_string_t                *host,
         }
 
         if (!has_star) {
-            /* Exact path — unchanged from pre-wildcard semantics. */
-            if (host_eq_ascii_ci(host->data, host->u8_bytes,
-                                  edat, elen)) {
+            /* Exact path — canonicalize the whole entry, then
+             * ASCII-CI compare against the canonical host. */
+            n00b_string_t *centry = idna_canonicalize_or_null(edat, elen);
+            if (!centry) continue;
+            if (host_eq_ascii_ci(hdat, hlen,
+                                  centry->data, centry->u8_bytes)) {
                 return true;
             }
             continue;
@@ -660,17 +727,35 @@ host_in_allowlist(n00b_string_t                *host,
         }
         if (further_star) continue;                 /* e.g. `**.example.com` */
 
-        /* `suffix = ".DOMAIN"` — the entry sans the leading `*`. */
-        const char *suffix     = edat + 1;
-        size_t      suffix_len = elen - 1;
+        /* Canonicalize the DOMAIN portion only — the `*.` prefix
+         * is literal ASCII and would be rejected by the IDNA
+         * pipeline.  `domain` is everything after the `.`. */
+        const char *domain     = edat + 2;
+        size_t      domain_len = elen - 2;
+        n00b_string_t *cdomain = idna_canonicalize_or_null(domain,
+                                                           domain_len);
+        if (!cdomain) continue;
+
+        /* Form the canonical suffix `.<canonical-DOMAIN>` in a
+         * tiny stack buffer.  Canonical ASCII domains cap at 253
+         * bytes per IDNA (`_DOMAIN_TOO_LONG` rejects above that),
+         * so 256 is sufficient. */
+        char   suffix_buf[260];
+        size_t cdomain_len = cdomain->u8_bytes;
+        if (cdomain_len + 1 > sizeof(suffix_buf)) continue;
+        suffix_buf[0] = '.';
+        memcpy(suffix_buf + 1, cdomain->data, cdomain_len);
+        const char *suffix     = suffix_buf;
+        size_t      suffix_len = cdomain_len + 1;
 
         /* Strict-greater length + ASCII-CI tail match.  The strict
          * inequality guarantees at least one wildcarded-label byte
          * sits before the leading `.` in `suffix`, so the `.` acts
          * as the label boundary without an explicit leading-byte
-         * check. */
-        if (host->u8_bytes <= suffix_len) continue;
-        const char *tail = host->data + (host->u8_bytes - suffix_len);
+         * check.  Punycode-encoded labels are pure ASCII, so the
+         * invariant survives canonicalization unchanged. */
+        if (hlen <= suffix_len) continue;
+        const char *tail = hdat + (hlen - suffix_len);
         if (host_eq_ascii_ci(tail, suffix_len, suffix, suffix_len)) {
             return true;
         }

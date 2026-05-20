@@ -20,25 +20,32 @@
 
 /**
  * @brief Test if @p host matches any entry in @p allowlist, with
- *        wildcard support.
+ *        wildcard + IDN support.
  *
  * @param host       Host string from the parsed URL's authority
  *                   component.  Assumed already lowercased per
- *                   RFC 3986 § 3.2.2 (the URL parser does this).
+ *                   RFC 3986 § 3.2.2 (the URL parser does this);
+ *                   IDNA canonicalization happens inside this
+ *                   matcher.  May contain Unicode labels or
+ *                   already-Punycode (`xn--…`) labels in any mix.
  * @param allowlist  Pointer to a `n00b_list_t(n00b_string_t *)`
  *                   lvalue.  Each entry is either an exact host
  *                   (no `*`), a wildcard of the form `*.DOMAIN`
  *                   with at least one label after the leading
- *                   `*.`, or malformed (silently skipped).
+ *                   `*.`, or malformed (silently skipped).  The
+ *                   `DOMAIN` portion of a wildcard entry may be
+ *                   Unicode or Punycode.
  *
  * @return `true` on the first matching entry; `false` if the loop
  *         exhausts without a match (including the empty-allowlist
- *         case).
+ *         case), or if the host cannot be IDNA-canonicalized.
  *
  * @pre  @p allowlist may be `nullptr` (returns false defensively)
  *       but in production the caller checks
  *       `redirect_host_allowlist != nullptr` before this call.
- * @post Side-effect-free.  No allocations on any code path.
+ * @post Side-effect-free at the API boundary.  Internally
+ *       allocates transient ACE-form strings on the runtime
+ *       default allocator; the GC reclaims them.
  *
  * @details Wildcard semantics:
  *
@@ -49,8 +56,22 @@
  *   - Only a single leading `*.` is supported.  `foo.*.com`,
  *     `**.example.com`, `*example.com`, and bare `*` are malformed
  *     and silently skipped.
- *   - Exact-match entries behave identically to the pre-wildcard
- *     dispatcher (ASCII case-insensitive byte equality).
+ *   - Exact-match entries behave identically to the pre-IDN
+ *     dispatcher on pure-ASCII input (ASCII Punycode is a fixed
+ *     point of UTS-46 `to_ascii` modulo case folding).
+ *
+ * @details IDN semantics:
+ *
+ *   - Both the host and the canonicalizable portion of each entry
+ *     (the whole entry for exact match; the `DOMAIN` after `*.`
+ *     for a wildcard) are passed through @ref
+ *     n00b_unicode_idna_to_ascii.  Comparison happens in ACE
+ *     (Punycode) space using the existing ASCII-CI primitive.
+ *   - A wildcard's `*.` prefix is literal ASCII and is NOT fed
+ *     to the IDNA pipeline.
+ *   - IDNA failure on the host → returns false (no allowlist
+ *     entry can match).  IDNA failure on a single entry → skip
+ *     that entry, keep scanning.
  */
 extern bool
 host_in_allowlist(n00b_string_t                *host,

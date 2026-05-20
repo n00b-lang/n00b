@@ -270,7 +270,8 @@ typedef enum {
  *                              wide state). Each entry is one of:
  *
  *                                - An exact host (no `*`) —
- *                                  matched ASCII-CI byte equality.
+ *                                  matched ASCII-CI byte equality
+ *                                  in ACE / Punycode space.
  *                                - A wildcard `*.DOMAIN` with at
  *                                  least one label after the
  *                                  leading `*.` — matches any host
@@ -284,6 +285,22 @@ typedef enum {
  *                                  bare `*`) — malformed and
  *                                  silently skipped.
  *
+ *                              **IDN / UTS-46 support.**  Both the
+ *                              next-hop host and each entry are
+ *                              IDNA-canonicalized via @ref
+ *                              n00b_unicode_idna_to_ascii before
+ *                              comparison; for a wildcard entry,
+ *                              only the `DOMAIN` portion after the
+ *                              literal `*.` is canonicalized.
+ *                              Unicode (`*.例え.com`) and Punycode
+ *                              (`*.xn--r8jz45g.com`) forms cross-
+ *                              match in either direction.  Pure-
+ *                              ASCII entries behave byte-identically
+ *                              to the pre-IDN matcher.  Entries
+ *                              whose canonicalizable portion fails
+ *                              IDNA are silently skipped like any
+ *                              other malformed entry.
+ *
  *                              Threading is full end-to-end as of
  *                              the DF-014/15 + Phase-5 closeout
  *                              lifts: libn00b's @ref
@@ -291,9 +308,9 @@ typedef enum {
  *                              matching per-call kwarg and the OCI
  *                              client forwards the stored list
  *                              verbatim.  Entries are stored
- *                              as-passed; classification happens
- *                              per-entry at match time, not at
- *                              insertion.
+ *                              as-passed; classification +
+ *                              canonicalization happen per-entry
+ *                              at match time, not at insertion.
  * @kw allocator                Optional allocator (defaults to the
  *                              runtime allocator). Owns the returned
  *                              client handle plus every byte the

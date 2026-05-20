@@ -243,6 +243,24 @@ typedef struct n00b_http_connection_pool n00b_http_connection_pool_t;
  *                       that entry; the request is not aborted on
  *                       a malformed entry alone).
  *
+ *                   **IDN / UTS-46 support.**  Both the next-hop
+ *                   host and the canonicalizable portion of each
+ *                   entry (the whole entry for exact match; the
+ *                   `DOMAIN` after `*.` for a wildcard) are run
+ *                   through UTS-46 `to_ascii` before comparison.
+ *                   Unicode (`*.例え.com`) and Punycode
+ *                   (`*.xn--r8jz45g.com`) forms cross-match in
+ *                   either direction.  The `*.` prefix of a
+ *                   wildcard is literal ASCII and is NOT fed to
+ *                   the IDNA pipeline.  Pure-ASCII entries behave
+ *                   byte-identically to the pre-IDN matcher (ASCII
+ *                   Punycode is a fixed point of `to_ascii`).
+ *                   Entries whose canonicalizable portion fails
+ *                   IDNA (disallowed codepoints, BIDI / CONTEXTJ
+ *                   violations, oversize labels, malformed UTF-8,
+ *                   …) are silently skipped like any other
+ *                   malformed entry.
+ *
  *                   An empty list (0 entries) means "no hosts
  *                   permitted" — every redirect is rejected.
  *                   Disallowed redirects surface as
