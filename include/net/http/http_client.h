@@ -221,13 +221,31 @@ typedef struct n00b_http_connection_pool n00b_http_connection_pool_t;
  *                   Optional list of hosts the dispatcher is
  *                   permitted to follow a 3xx redirect to.  Default
  *                   nullptr = no filter (existing redirect-follow
- *                   semantics unchanged).  Hosts are compared
- *                   case-insensitive ASCII against the URL
- *                   authority host extracted from the Location
- *                   header — port, path, scheme, and fragment do
- *                   not participate.  An empty list (0 entries)
- *                   means "no hosts permitted" — every redirect is
- *                   rejected.  Disallowed redirects surface as
+ *                   semantics unchanged).  Each entry is one of:
+ *
+ *                     - An exact host (no `*`) — matched against
+ *                       the next-hop authority host by ASCII
+ *                       case-insensitive byte equality (port, path,
+ *                       scheme, and fragment do not participate).
+ *                     - A wildcard `*.DOMAIN` with at least one
+ *                       label after the leading `*.` (e.g.
+ *                       `*.example.com`) — matches any host of the
+ *                       form `X.DOMAIN` for non-empty `X`, with the
+ *                       same ASCII-CI semantics.  Both
+ *                       `foo.example.com` and `a.b.example.com`
+ *                       match `*.example.com`.  The apex
+ *                       `example.com` does NOT match `*.example.com`;
+ *                       to permit the apex too, add a second
+ *                       non-wildcard entry `example.com`.
+ *                     - Anything else (`foo.*.com`, `**.example.com`,
+ *                       `*example.com`, bare `*`) — malformed; the
+ *                       entry is silently skipped (no match for
+ *                       that entry; the request is not aborted on
+ *                       a malformed entry alone).
+ *
+ *                   An empty list (0 entries) means "no hosts
+ *                   permitted" — every redirect is rejected.
+ *                   Disallowed redirects surface as
  *                   `N00B_HTTP_ERR_HOST_REDIRECT_NOT_ALLOWED`
  *                   (-10).  Only consulted when
  *                   `follow_redirects = true`; when redirect-follow

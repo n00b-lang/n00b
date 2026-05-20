@@ -267,20 +267,33 @@ typedef enum {
  *                              to. `nullptr` means "no host
  *                              allowlisting" (per D-051 OQ-7: this
  *                              is a per-call kwarg, not process-
- *                              wide state). **Storage-only at
- *                              WP-004 Phase 4:** the kwarg's value
- *                              is preserved on the client handle
- *                              for forward-compat with a libn00b
- *                              lift, but libn00b's @ref
- *                              n00b_http_request_sync does NOT yet
- *                              carry a matching per-call
- *                              `redirect_host_allowlist` kwarg, so
- *                              the dispatcher cannot enforce the
- *                              allowlist today. Tracked as **DF-015**
- *                              (libn00b lift); once libn00b lifts
- *                              the surface, the OCI client will
- *                              thread the stored list through
- *                              without an API change.
+ *                              wide state). Each entry is one of:
+ *
+ *                                - An exact host (no `*`) —
+ *                                  matched ASCII-CI byte equality.
+ *                                - A wildcard `*.DOMAIN` with at
+ *                                  least one label after the
+ *                                  leading `*.` — matches any host
+ *                                  of the form `X.DOMAIN` for
+ *                                  non-empty `X`.  The apex
+ *                                  `DOMAIN` itself is NOT matched;
+ *                                  add a second non-wildcard entry
+ *                                  `DOMAIN` to permit it.
+ *                                - Anything else (`foo.*.com`,
+ *                                  `**.example.com`, `*example.com`,
+ *                                  bare `*`) — malformed and
+ *                                  silently skipped.
+ *
+ *                              Threading is full end-to-end as of
+ *                              the DF-014/15 + Phase-5 closeout
+ *                              lifts: libn00b's @ref
+ *                              n00b_http_request_sync carries the
+ *                              matching per-call kwarg and the OCI
+ *                              client forwards the stored list
+ *                              verbatim.  Entries are stored
+ *                              as-passed; classification happens
+ *                              per-entry at match time, not at
+ *                              insertion.
  * @kw allocator                Optional allocator (defaults to the
  *                              runtime allocator). Owns the returned
  *                              client handle plus every byte the

@@ -40,6 +40,7 @@
 #include "internal/net/http/http_pool.h"
 #include "internal/net/http/http_cookies.h"
 #include "internal/net/http/http_compression.h"
+#include "internal/net/http/http_client.h"
 
 /* ===========================================================================
  * §1   Per-runtime state
@@ -582,11 +583,30 @@ host_eq_ascii_ci(const char *a, size_t alen,
 }
 
 /* Returns true iff @p host (already lowercased by the URL parser
- * per RFC 3986 § 3.2.2) is present in @p allowlist.  An empty
- * allowlist (0 entries) returns false — "no hosts permitted".  A
- * nullptr allowlist is *not* passed here; the caller checks
- * `redirect_host_allowlist != nullptr` before calling this. */
-static bool
+ * per RFC 3986 § 3.2.2) is matched by some entry in @p allowlist.
+ *
+ * Two entry shapes are recognized:
+ *
+ *   - Exact entries (no `*` anywhere): matched via ASCII-CI byte
+ *     equality, identical to the pre-wildcard semantics.
+ *
+ *   - Wildcard entries (`*.DOMAIN` with at least one label after
+ *     the dot, e.g. `*.example.com`): match any host of the form
+ *     `X.DOMAIN` for some non-empty `X` (ASCII-CI, same case-fold
+ *     primitive as the exact path).  The apex `DOMAIN` itself is
+ *     NOT matched — callers who want the apex too add a second
+ *     non-wildcard entry `DOMAIN`.
+ *
+ *   - Any other `*` placement (`foo.*.com`, `**.example.com`,
+ *     `*example.com`, bare `*`) is malformed and silently skipped
+ *     (no match for that entry; no crash, no abort), matching the
+ *     existing tolerance for null entries above.
+ *
+ * An empty allowlist (0 entries) returns false — "no hosts
+ * permitted".  A nullptr allowlist is *not* passed here; the
+ * caller checks `redirect_host_allowlist != nullptr` before
+ * calling this. */
+bool
 host_in_allowlist(n00b_string_t                *host,
                   n00b_list_t(n00b_string_t *) *allowlist)
 {
@@ -598,8 +618,60 @@ host_in_allowlist(n00b_string_t                *host,
     for (size_t i = 0; i < n; i++) {
         n00b_string_t *entry = n00b_list_get(*allowlist, i);
         if (!entry) continue;
-        if (host_eq_ascii_ci(host->data, host->u8_bytes,
-                              entry->data, entry->u8_bytes)) {
+        size_t      elen = entry->u8_bytes;
+        const char *edat = entry->data;
+
+        /* Classify: scan for any `*` byte. */
+        bool   has_star      = false;
+        size_t first_star_at = 0;
+        for (size_t k = 0; k < elen; k++) {
+            if (edat[k] == '*') {
+                has_star      = true;
+                first_star_at = k;
+                break;
+            }
+        }
+
+        if (!has_star) {
+            /* Exact path — unchanged from pre-wildcard semantics. */
+            if (host_eq_ascii_ci(host->data, host->u8_bytes,
+                                  edat, elen)) {
+                return true;
+            }
+            continue;
+        }
+
+        /* Wildcard candidate.  Accept iff:
+         *   - the first (and only) `*` is at offset 0,
+         *   - byte 1 is `.`,
+         *   - there is at least one more byte after the dot
+         *     (the DOMAIN part is non-empty),
+         *   - no further `*` appears in the entry. */
+        if (first_star_at != 0) continue;          /* e.g. `foo.*.com` */
+        if (elen < 3)            continue;          /* `*` or `*.`   */
+        if (edat[1] != '.')      continue;          /* e.g. `*example.com` */
+
+        bool further_star = false;
+        for (size_t k = 1; k < elen; k++) {
+            if (edat[k] == '*') {
+                further_star = true;
+                break;
+            }
+        }
+        if (further_star) continue;                 /* e.g. `**.example.com` */
+
+        /* `suffix = ".DOMAIN"` — the entry sans the leading `*`. */
+        const char *suffix     = edat + 1;
+        size_t      suffix_len = elen - 1;
+
+        /* Strict-greater length + ASCII-CI tail match.  The strict
+         * inequality guarantees at least one wildcarded-label byte
+         * sits before the leading `.` in `suffix`, so the `.` acts
+         * as the label boundary without an explicit leading-byte
+         * check. */
+        if (host->u8_bytes <= suffix_len) continue;
+        const char *tail = host->data + (host->u8_bytes - suffix_len);
+        if (host_eq_ascii_ci(tail, suffix_len, suffix, suffix_len)) {
             return true;
         }
     }

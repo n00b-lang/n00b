@@ -66,6 +66,7 @@
 #include "net/quic/trust.h"
 #include "net/http/http_client.h"
 #include "internal/net/http/http_url.h"
+#include "internal/net/http/http_client.h"
 
 /* ------------------------------------------------------------------ */
 /* [1] Error codes map to non-empty strings.                           */
@@ -437,6 +438,153 @@ teardown:
 }
 
 /* ------------------------------------------------------------------ */
+/* [7] Wildcard allowlist matching (candidate #6).                     */
+/*                                                                     */
+/* Exercises `host_in_allowlist` directly via the internal header.     */
+/* The matcher is small + side-effect-free; testing at this layer      */
+/* avoids spinning a redirect mock for what is purely a string-shape  */
+/* classification.                                                     */
+/* ------------------------------------------------------------------ */
+
+static n00b_list_t(n00b_string_t *) *
+build_allowlist(const char *const *entries, size_t n)
+{
+    n00b_list_t(n00b_string_t *) *out =
+        n00b_alloc(n00b_list_t(n00b_string_t *));
+    *out = n00b_list_new(n00b_string_t *);
+    for (size_t i = 0; i < n; i++) {
+        n00b_list_push(*out, n00b_string_from_cstr(entries[i]));
+    }
+    return out;
+}
+
+static void
+test_wildcard_matching(void)
+{
+    /* [7a] *.example.com matches foo.example.com (single label). */
+    {
+        const char *entries[] = {"*.example.com"};
+        auto       *al        = build_allowlist(entries, 1);
+        assert(host_in_allowlist(n00b_string_from_cstr("foo.example.com"),
+                                  al));
+    }
+
+    /* [7b] *.example.com matches foo.bar.example.com (multiple labels;
+     *      wildcard absorbs the whole subdomain tree). */
+    {
+        const char *entries[] = {"*.example.com"};
+        auto       *al        = build_allowlist(entries, 1);
+        assert(host_in_allowlist(
+            n00b_string_from_cstr("foo.bar.example.com"), al));
+    }
+
+    /* [7c] *.example.com does NOT match the apex example.com. */
+    {
+        const char *entries[] = {"*.example.com"};
+        auto       *al        = build_allowlist(entries, 1);
+        assert(!host_in_allowlist(n00b_string_from_cstr("example.com"),
+                                   al));
+    }
+
+    /* [7d] *.example.com does NOT match notexample.com (no label
+     *      boundary on the left of the suffix). */
+    {
+        const char *entries[] = {"*.example.com"};
+        auto       *al        = build_allowlist(entries, 1);
+        assert(!host_in_allowlist(n00b_string_from_cstr("notexample.com"),
+                                   al));
+    }
+
+    /* [7e] *.example.com does NOT match evil-example.com (no leading
+     *      dot on the suffix-side). */
+    {
+        const char *entries[] = {"*.example.com"};
+        auto       *al        = build_allowlist(entries, 1);
+        assert(!host_in_allowlist(
+            n00b_string_from_cstr("evil-example.com"), al));
+    }
+
+    /* [7f] Mixed allowlist [example.com, *.example.com] matches both
+     *      apex and subdomains. */
+    {
+        const char *entries[] = {"example.com", "*.example.com"};
+        auto       *al        = build_allowlist(entries, 2);
+        assert(host_in_allowlist(n00b_string_from_cstr("example.com"),
+                                  al));
+        assert(host_in_allowlist(n00b_string_from_cstr("foo.example.com"),
+                                  al));
+        assert(host_in_allowlist(
+            n00b_string_from_cstr("a.b.example.com"), al));
+        assert(!host_in_allowlist(
+            n00b_string_from_cstr("evil.com"), al));
+    }
+
+    /* [7g] Malformed entries are silently skipped — no match, no
+     *      crash.  Each malformed-only allowlist returns false for
+     *      every host. */
+    {
+        const char *bads[] = {
+            "*example.com",     /* * not followed by dot */
+            "foo.*.com",        /* * not at offset 0 */
+            "*",                /* bare star */
+            "**.example.com",   /* double star */
+            "*.",               /* * . with empty domain */
+        };
+        for (size_t i = 0; i < sizeof(bads) / sizeof(bads[0]); i++) {
+            const char *entries[] = {bads[i]};
+            auto       *al        = build_allowlist(entries, 1);
+            assert(!host_in_allowlist(
+                n00b_string_from_cstr("foo.example.com"), al));
+            assert(!host_in_allowlist(
+                n00b_string_from_cstr("example.com"), al));
+            /* Defensive: also doesn't match anything weird. */
+            assert(!host_in_allowlist(
+                n00b_string_from_cstr("anything.com"), al));
+        }
+    }
+
+    /* [7h] ASCII case-insensitive: *.EXAMPLE.COM matches
+     *      foo.example.com (case-fold preserved from exact path). */
+    {
+        const char *entries[] = {"*.EXAMPLE.COM"};
+        auto       *al        = build_allowlist(entries, 1);
+        assert(host_in_allowlist(n00b_string_from_cstr("foo.example.com"),
+                                  al));
+        /* And the reverse: entry lowercase, host uppercase. */
+    }
+    {
+        const char *entries[] = {"*.example.com"};
+        auto       *al        = build_allowlist(entries, 1);
+        assert(host_in_allowlist(n00b_string_from_cstr("FOO.EXAMPLE.COM"),
+                                  al));
+    }
+
+    /* Empty allowlist still returns false. */
+    {
+        n00b_list_t(n00b_string_t *) *al =
+            n00b_alloc(n00b_list_t(n00b_string_t *));
+        *al = n00b_list_new(n00b_string_t *);
+        assert(!host_in_allowlist(
+            n00b_string_from_cstr("foo.example.com"), al));
+    }
+
+    /* Exact-match backward compat: existing exact entries behave
+     * identically to pre-task. */
+    {
+        const char *entries[] = {"example.com"};
+        auto       *al        = build_allowlist(entries, 1);
+        assert(host_in_allowlist(n00b_string_from_cstr("example.com"),
+                                  al));
+        assert(host_in_allowlist(n00b_string_from_cstr("EXAMPLE.COM"),
+                                  al));
+        assert(!host_in_allowlist(
+            n00b_string_from_cstr("foo.example.com"), al));
+    }
+
+    printf("  [PASS] wildcard_matching\n");
+}
+
+/* ------------------------------------------------------------------ */
 /* Main.                                                               */
 /* ------------------------------------------------------------------ */
 
@@ -454,6 +602,7 @@ main(int argc, char **argv)
     test_err_strings();
     test_codes_distinct();
     test_kargs_acceptance();
+    test_wildcard_matching();
 
     /* Integration sub-cases — gated by N00B_TEST_DOCKER=1. */
     const char *gate = getenv("N00B_TEST_DOCKER");
