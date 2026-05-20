@@ -85,5 +85,11 @@ n00b_llstack_pop_node(n00b_llstack_t *llstack) _kargs
         desired.head = node->next;
     } while (!n00b_atomic_cas(llstack, &expected, desired));
 
+    /* pool_free zeroes the entire entry before pushing; the push then
+     * stamps the first sizeof(void*) bytes with the freelist link.
+     * Restore the all-zero payload by clearing the link slot before
+     * handing the node back, so callers can rely on the contract that
+     * a freshly-popped entry's bytes are all zero. */
+    node->next = nullptr;
     return node;
 }

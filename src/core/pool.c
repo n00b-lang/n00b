@@ -168,7 +168,13 @@ pool_free(n00b_pool_t *pool, void *ptr)
     }
 
     unsigned int ix = entry->list_index;
-    memset(entry, 0, ix << N00B_POST_ROUND_SHIFT);
+    /* Entry size at bucket index ix is (1u << ix) << POST_ROUND_SHIFT
+     * bytes — the same formula pool_alloc uses to derive ix from the
+     * rounded size.  Earlier the memset used `ix << POST_ROUND_SHIFT`,
+     * which under-zeros the tail of every bucket (and zeros 0 bytes
+     * at ix=0); freshly-popped entries then return non-zero bytes,
+     * silently violating the documented zero-fill contract. */
+    memset(entry, 0, (1u << ix) << N00B_POST_ROUND_SHIFT);
     n00b_llstack_node_t *node_ptr = (n00b_llstack_node_t *)entry;
 
     n00b_llstack_push_node(&pool->free_lists[ix], node_ptr);

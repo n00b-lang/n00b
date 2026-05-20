@@ -1382,13 +1382,13 @@ endif
 # Interpreter integration tests (shell runner invokes the n00b binary).
 if not meson.is_cross_build()
   bash_prog = find_program('bash', required: true)
-  test('n00b_interp',
+  test('interp',
       bash_prog,
       args: [
           files('test/interp/run_tests.sh'),
           n00b_exe.full_path(),
       ],
-      suite: 'integration',
+      suite: 'interp',
       workdir: meson.project_source_root(),
       timeout: 600,
   )
@@ -2429,14 +2429,9 @@ endif
 # Integration tests
 # ============================================================================
 
-# Interpreter integration tests (shell runner invokes the n00b binary).
-test('interp', find_program('bash'),
-    args: [meson.project_source_root() / 'test/interp/run_tests.sh',
-           n00b_exe],
-    suite: 'interp',
-    workdir: meson.project_source_root(),
-    timeout: 120,
-)
+# Interpreter integration tests live in the `interp` suite registered
+# earlier in this file (search for `test('interp', ...)`).  The older
+# `find_program('bash')` registration here was a duplicate.
 
 
 

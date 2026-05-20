@@ -112,7 +112,7 @@ entry_ref_cmp(const void *a, const void *b)
 // entries we'll hash. Does NOT read entry content. O(num_entries)
 // metadata only.
 static bool
-list_entries(struct zip_t *zip, zip_entry_ref_t **out_refs,
+list_entries(zip_t *zip, zip_entry_ref_t **out_refs,
              size_t *out_n, bool *out_had_chalk_json)
 {
     zip_int64_t count = zip_get_num_entries(zip, 0);
@@ -152,7 +152,7 @@ list_entries(struct zip_t *zip, zip_entry_ref_t **out_refs,
 // fixed chunks; resident bytes at any moment are bounded by the
 // chunk size (64 KiB).
 static bool
-stream_entry_into_hash(struct zip_t *zip, zip_uint64_t index,
+stream_entry_into_hash(zip_t *zip, zip_uint64_t index,
                        zip_uint64_t size, n00b_sha256_ctx_t *ctx)
 {
     zip_file_t *zf = zip_fopen_index(zip, index, 0);
@@ -179,7 +179,7 @@ stream_entry_into_hash(struct zip_t *zip, zip_uint64_t index,
 // Returns the per-entry "content length" to use in the canonical
 // concatenation (matches chalk's hashZipPath semantics).
 static bool
-hash_codec_entry(struct zip_t *zip, zip_uint64_t index, zip_uint64_t size,
+hash_codec_entry(zip_t *zip, zip_uint64_t index, zip_uint64_t size,
                  n00b_chalk_codec_id_t cid, n00b_sha256_ctx_t *ctx,
                  uint64_t *out_payload_len)
 {
@@ -211,7 +211,7 @@ hash_codec_entry(struct zip_t *zip, zip_uint64_t index, zip_uint64_t size,
 // known magic. Done with one libzip read; allocates a tiny stack
 // buffer, no full-entry materialization.
 static n00b_chalk_codec_id_t
-detect_entry_codec(struct zip_t *zip, zip_uint64_t index, zip_uint64_t size)
+detect_entry_codec(zip_t *zip, zip_uint64_t index, zip_uint64_t size)
 {
     if (size < 4) return N00B_CHALK_CODEC_NONE;
     zip_file_t *zf = zip_fopen_index(zip, index, 0);
@@ -248,7 +248,7 @@ finalize_ctx(n00b_sha256_ctx_t *ctx)
 // bytes). For a 5 GB jar with no nested artifacts, peak resident is
 // the chunk size; with one 200 MB nested ELF, peak is 200 MB.
 static n00b_buffer_t *
-hash_archive_streaming(struct zip_t *zip)
+hash_archive_streaming(zip_t *zip)
 {
     zip_entry_ref_t *refs = nullptr;
     size_t           n    = 0;
@@ -297,7 +297,7 @@ hash_archive_streaming(struct zip_t *zip)
 // libzip glue: open an in-memory buffer for read.
 // -----------------------------------------------------------------------
 
-static struct zip_t *
+static zip_t *
 open_zip_buffer(n00b_buffer_t *bytes, bool writable, zip_source_t **out_src)
 {
     zip_error_t err = {0};
@@ -307,7 +307,7 @@ open_zip_buffer(n00b_buffer_t *bytes, bool writable, zip_source_t **out_src)
         &err);
     if (!src) return nullptr;
     int flags = writable ? 0 : ZIP_RDONLY;
-    struct zip_t *z = zip_open_from_source(src, flags, &err);
+    zip_t *z = zip_open_from_source(src, flags, &err);
     if (!z) { zip_source_free(src); return nullptr; }
     if (out_src) *out_src = src;
     return z;
@@ -316,7 +316,7 @@ open_zip_buffer(n00b_buffer_t *bytes, bool writable, zip_source_t **out_src)
 // Build a buffer of the zip's bytes by closing into a writable zip
 // over a buffer source whose data we can fetch back.
 static n00b_buffer_t *
-zip_to_buffer(struct zip_t *z, zip_source_t *src)
+zip_to_buffer(zip_t *z, zip_source_t *src)
 {
     // Keep the source alive across close.
     zip_source_keep(src);
@@ -344,7 +344,7 @@ n00b_chalk_zip_hash_buffer(n00b_buffer_t *bytes)
 {
     if (!bytes) return n00b_result_err(n00b_buffer_t *, 1);
     zip_source_t *src = nullptr;
-    struct zip_t *z   = open_zip_buffer(bytes, false, &src);
+    zip_t *z   = open_zip_buffer(bytes, false, &src);
     if (!z) return n00b_result_err(n00b_buffer_t *, 2);
 
     n00b_buffer_t *h = hash_archive_streaming(z);
@@ -373,7 +373,7 @@ n00b_chalk_zip_insert_buffer(n00b_buffer_t *bytes, n00b_chalk_mark_t *mark)
 
     // Second pass: open the buffer writable, replace/add chalk.json.
     zip_source_t *src = nullptr;
-    struct zip_t *z   = open_zip_buffer(bytes, true, &src);
+    zip_t *z   = open_zip_buffer(bytes, true, &src);
     if (!z) return n00b_result_err(n00b_chalk_io_result_t *, 4);
 
     zip_int64_t idx = zip_name_locate(z, CHALK_JSON_NAME, 0);
@@ -409,7 +409,7 @@ n00b_chalk_zip_delete_buffer(n00b_buffer_t *bytes)
 {
     if (!bytes) return n00b_result_err(n00b_chalk_io_result_t *, 1);
     zip_source_t *src = nullptr;
-    struct zip_t *z   = open_zip_buffer(bytes, true, &src);
+    zip_t *z   = open_zip_buffer(bytes, true, &src);
     if (!z) return n00b_result_err(n00b_chalk_io_result_t *, 2);
     zip_int64_t idx = zip_name_locate(z, CHALK_JSON_NAME, 0);
     if (idx >= 0) zip_delete(z, (zip_uint64_t)idx);
@@ -428,7 +428,7 @@ n00b_chalk_zip_extract_buffer(n00b_buffer_t *bytes)
 {
     if (!bytes) return n00b_result_err(n00b_chalk_extract_result_t *, 1);
     zip_source_t *src = nullptr;
-    struct zip_t *z   = open_zip_buffer(bytes, false, &src);
+    zip_t *z   = open_zip_buffer(bytes, false, &src);
     if (!z) return n00b_result_err(n00b_chalk_extract_result_t *, 2);
 
     zip_int64_t idx = zip_name_locate(z, CHALK_JSON_NAME, 0);

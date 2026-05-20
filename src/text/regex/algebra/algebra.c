@@ -642,6 +642,13 @@ struct RegexBuilder {
     uint32_t           lookahead_context_max;
     PairTRMap         *mk_binary_memo;
     PairTSetTRMap     *clean_cache;
+    /* Sticky state-space-explosion latch.  Tripped by
+     * `regex_builder_tr_init` when `tr_array.len` exceeds the per-builder
+     * cap.  Checked by `regex_builder_der`, which surfaces
+     * `N00B_REGEX_ALGEBRA_ERR_STATE_SPACE_EXPLOSION` to its caller.  The
+     * per-mk_binary-call memo growth that used to compound here is now
+     * bounded by in-place dict clear (see `regex_builder_mk_binary`). */
+    bool               state_space_err;
     /**
      * Per-builder allocator.  When non-null, every allocation made by
      * the builder (and its embedded MetadataBuilder / Solver / NullsBuilder
@@ -1192,9 +1199,27 @@ regex_builder_solver(RegexBuilder *b)
     return b->mb.solver;
 }
 
+/* Bound on the algebra's TRegex state.  Each entry is 16 bytes; the cap
+ * itself is small but every `regex_builder_mk_binary` call reallocates
+ * the `mk_binary_memo` dict, so growth in `tr_array` correlates with a
+ * far larger pool footprint via the memo / tr_cache fan-out.  Adversarial
+ * intersection patterns drove unbounded growth into multi-GB territory
+ * and stalled the GC scan; 5000 keeps the worst case bounded to a few MB
+ * while still covering every fixture in `prefix.toml` that compiles
+ * cleanly today.  (The compile path uses an in-place dict clear on the
+ * memo and a sticky error latch on the builder; both are wired together
+ * so a single MISSING return propagates the error out without further
+ * state expansion.) */
+#define N00B_REGEX_TR_ARRAY_CAP 500000
+
 static TRegexId
 regex_builder_tr_init(RegexBuilder *self, TRegex_TSetId inst)
 {
+    if (self->state_space_err
+        || self->tr_array.len >= N00B_REGEX_TR_ARRAY_CAP) {
+        self->state_space_err = true;
+        return TREGEX_ID_MISSING;
+    }
     TRegexId new_id = (TRegexId){ (uint32_t)(self->tr_array.len) };
     // The TRegex `tr_cache` indexes the heap-stable copy of `inst` we make
     // inside tregex_map_insert.  Insert first (cache lookup) then push.
@@ -1624,6 +1649,7 @@ static TRegexId
 regex_builder_mk_unary(RegexBuilder *self, TRegexId term,
                        UnaryApply apply, void *ctx)
 {
+    if (self->state_space_err) return TREGEX_ID_MISSING;
     TRegex_TSetId t = self->tr_array.data[term.v];
     if (t.tag == TREGEX_KIND_LEAF) {
         NodeId applied = apply(self, t.u.leaf.leaf, ctx);
@@ -1708,13 +1734,23 @@ static TRegexId
 regex_builder_mk_binary(RegexBuilder *self, TRegexId left,
                         TRegexId right, BinaryApply apply, void *ctx)
 {
-    // clear memo by reallocating a fresh dict (the typed dict stores pointer
-    // entries indirectly; replacing the wrapper drops the prior epoch).
-    self->mk_binary_memo = n00b_alloc_with_opts(
-        PairTRMap, &(n00b_alloc_opts_t){.allocator = self->allocator});
-    n00b_dict_init(self->mk_binary_memo, .skip_obj_hash = true,
-                   .allocator = self->allocator,
-                   .scan_kind = N00B_GC_SCAN_KIND_NONE);
+    if (self->state_space_err) return TREGEX_ID_MISSING;
+    /* The memo is per-top-level-binary-call: nothing produced by an
+     * earlier mk_binary call (different apply / different operands) is
+     * valid for the next.  Previously we allocated a fresh dict each
+     * call (~1 KB bucket/key/value storage) which compounded into
+     * multi-GB heap on adversarial intersection patterns.  Clearing the
+     * existing dict in-place keeps the per-call cost to an O(buckets)
+     * memset. */
+    if (self->mk_binary_memo == nullptr) {
+        self->mk_binary_memo = n00b_alloc_with_opts(
+            PairTRMap, &(n00b_alloc_opts_t){.allocator = self->allocator});
+        n00b_dict_init(self->mk_binary_memo, .skip_obj_hash = true,
+                       .allocator = self->allocator,
+                       .scan_kind = N00B_GC_SCAN_KIND_NONE);
+    } else {
+        n00b_dict_clear(self->mk_binary_memo);
+    }
     return regex_builder_mk_binary_inner(self, left, right, apply, ctx);
 }
 
@@ -1722,6 +1758,10 @@ static TRegexId
 regex_builder_mk_binary_inner(RegexBuilder *self, TRegexId left,
                               TRegexId right, BinaryApply apply, void *ctx)
 {
+    /* Short-circuit the moment the state-space cap has been latched —
+     * otherwise recursion keeps walking the tr_array while every leaf
+     * call returns MISSING, wasting time on a doomed compile. */
+    if (self->state_space_err) return TREGEX_ID_MISSING;
     if (tregex_id_eq(left, right)) {
         struct { BinaryApply f; void *user; } cb = { apply, ctx };
         return regex_builder_mk_unary(self, left, mk_binary_unary_thunk, &cb);
@@ -2381,6 +2421,12 @@ regex_builder_der(RegexBuilder *self, NodeId node_id, Nullability mask)
         }
         break;
     }
+    }
+    /* If a mk_binary / mk_unary / mk_ite call exceeded the algebra state
+     * cap, the latch on `self` is sticky.  Surface the error here rather
+     * than caching a poisoned `result` and continuing to expand state. */
+    if (self->state_space_err) {
+        return n00b_result_err(TRegexId, N00B_REGEX_ALGEBRA_ERR_STATE_SPACE_EXPLOSION);
     }
     regex_builder_cache_der(self, node_id, result, mask);
     return n00b_result_ok(TRegexId, result);

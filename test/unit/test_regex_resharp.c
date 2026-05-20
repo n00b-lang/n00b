@@ -44,6 +44,7 @@ typedef struct {
     bool    has_matches;
     bool    has_end_positions;
     bool    expect_error;
+    bool    anchored;
     int     line_number;
 } test_case_t;
 
@@ -399,6 +400,22 @@ parse_test_file(const char *path, test_case_t *tests, int max_tests)
             }
         }
 
+        if (strncmp(trimmed, "anchored", 8) == 0
+            && (trimmed[8] == ' ' || trimmed[8] == '=')) {
+            const char *eq = strchr(trimmed, '=');
+            if (eq) {
+                eq = skip_ws(eq + 1);
+                if (strncmp(eq, "true", 4) == 0) {
+                    cur->anchored = true;
+                }
+                while (*p && *p != '\n')
+                    p++;
+                if (*p == '\n')
+                    p++;
+                continue;
+            }
+        }
+
         p = (*eol) ? eol + 1 : eol;
     }
 
@@ -531,7 +548,40 @@ run_match_test(const test_case_t *tc, const char *file)
     alarm(PER_TEST_TIMEOUT);
 #endif
 
-    if (tc->has_matches) {
+    if (tc->has_matches && tc->anchored) {
+        /* find_anchored: at most one match starting at offset 0. */
+        auto opt = n00b_regex_anchored(re, input);
+        int32_t got_n = n00b_option_is_set(opt) ? 1 : 0;
+        if (got_n != tc->n_matches) {
+            if (skip_known_unsupported(tc, file)) return;
+            fprintf(stderr,
+                    "  [FAIL] %s:%d pattern='%s' input='%.40s%s' (anchored)\n"
+                    "         expected %d matches, got %d\n",
+                    file, tc->line_number, tc->pattern, tc->input,
+                    strlen(tc->input) > 40 ? "..." : "",
+                    tc->n_matches, got_n);
+            total_fail++;
+            return;
+        }
+        if (got_n == 1) {
+            n00b_regex_match_t got = n00b_option_get(opt);
+            if (got.start != tc->match_starts[0]
+                || got.end != tc->match_ends[0]) {
+                if (skip_known_unsupported(tc, file)) return;
+                fprintf(stderr,
+                        "  [FAIL] %s:%d pattern='%s' input='%.40s%s' (anchored)\n"
+                        "         expected [%" PRId64 ",%" PRId64 "] got [%" PRId64 ",%" PRId64 "]\n",
+                        file, tc->line_number, tc->pattern, tc->input,
+                        strlen(tc->input) > 40 ? "..." : "",
+                        tc->match_starts[0], tc->match_ends[0],
+                        got.start, got.end);
+                total_fail++;
+                return;
+            }
+        }
+        total_pass++;
+    }
+    else if (tc->has_matches) {
         auto     results = n00b_regex_matches(re, input);
         uint32_t n       = (uint32_t)results->len;
 
@@ -703,13 +753,19 @@ main(int argc, char **argv)
     if (!test_dir || !*test_dir) {
         test_dir = "test/data/resharp/tests";
     }
+    /* tests06_nullable_positions (= resharp-c's `rev_nulls.toml`) tests
+     * the `collect_rev_nulls_debug` API — null positions returned during
+     * reverse matching.  resharp-c has its own `rev_nulls_test` binary
+     * for it; n00b's regex doesn't expose that API surface (and the
+     * `end_positions` field this parser reads has different semantics
+     * — forward-match end offsets, not reverse-null positions).  Skip
+     * the file rather than mis-port it. */
     const char *files[] = {
         "tests01.toml",
         "tests02_lookaround.toml",
         "tests03_boolean.toml",
         "tests04_anchors.toml",
         "tests05_match_end.toml",
-        "tests06_nullable_positions.toml",
         "tests07_unsupported.toml",
         "tests08_semantics.toml",
     };

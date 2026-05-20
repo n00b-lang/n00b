@@ -163,6 +163,19 @@ n00b_arena_alloc(n00b_arena_t *arena, uint64_t request, void *ignore)
              * (the CAS), so we re-read here explicitly. */
             found_value   = n00b_atomic_load(&arena->next_alloc);
             desired_value = found_value + request;
+            /* Re-check arena_changed against the recomputed desired:
+             * the swap can put next_alloc near the new (possibly
+             * smaller) segment_end, and we MUST NOT let the CAS bump
+             * the pointer past it — that's how a 4 MB dict_store can
+             * get assigned a slot whose tail falls outside the
+             * segment, with a subsequent GC trying to memcpy off the
+             * end of mapped memory.  add_arena_segment here and let
+             * the CAS fail; the next iteration reloads against the
+             * fresh segment. */
+            if (arena_changed(arena, desired_value)) {
+                n00b_add_arena_segment(arena, request);
+                continue;
+            }
         }
     } while (!n00b_atomic_cas(&arena->next_alloc, &found_value, desired_value));
     n00b_atomic_add(&arena->alloc_count, 1);
