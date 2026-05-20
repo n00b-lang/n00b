@@ -671,6 +671,16 @@ attest_base64_test = executable('test_attest_base64',
 )
 test('attest_base64', attest_base64_test, suite: 'unit')
 
+# n00b core util — `n00b_errno_str` POSIX errno-to-string helper.
+# WP-004 Phase 5 closeout (DF-008 fix); PR-shaped libn00b lift
+# matching the WP-002 wqw `n00b_stdin()/stdout()/stderr()` precedent
+# (D-061).
+errno_str_test = executable('test_errno_str',
+    ['test/unit/test_errno_str.c'],
+    kwargs: test_common_kwargs,
+)
+test('errno_str', errno_str_test, suite: 'unit')
+
 attest_monocypher_smoke_test = executable('test_attest_monocypher_smoke',
     ['test/unit/test_attest_monocypher_smoke.c'],
     kwargs: test_common_kwargs,
