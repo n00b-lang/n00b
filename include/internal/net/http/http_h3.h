@@ -70,6 +70,18 @@ typedef struct n00b_http_connection_pool n00b_http_connection_pool_t;
  *                   back on clean completion (CONNECTED-state conn
  *                   only).  When NULL the round-trip is fully
  *                   stateless — every call pays the QUIC handshake.
+ * @kw max_body_size Optional per-call response-body byte cap.
+ *                   Default 0 = no cap (existing callers see
+ *                   identical behavior).  When non-zero, after the
+ *                   response materializes we compare
+ *                   `body->byte_len` to the cap and surface
+ *                   `N00B_HTTP_ERR_RESPONSE_TOO_LARGE` (-9) on
+ *                   overrun.  The h3 layer accumulates DATA frames
+ *                   inside picoquic before surfacing them; the
+ *                   public dispatcher gives the h1 path the
+ *                   cheaper-to-enforce slot (it can short-circuit
+ *                   on Content-Length).  h3's slot is symmetric so
+ *                   callers don't have to special-case transport.
  * @kw allocator     Default per-runtime conduit pool.
  *
  * @return  Result with the populated `n00b_h3_response_t *` on
@@ -97,5 +109,8 @@ n00b_http_h3_round_trip(n00b_http_url_t *url)
          *  presentation.  See `http_h1.h` for the matching wiring on
          *  the h1 path; same shape applies here. */
         n00b_http_auth_t            *auth         = nullptr;
+        /** Per-call response-body byte cap.  Default 0 = no cap.
+         *  See @c http_h3.h prose above for the symmetry note. */
+        uint64_t                     max_body_size = 0;
         n00b_allocator_t            *allocator    = nullptr;
     };

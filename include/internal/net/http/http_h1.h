@@ -228,13 +228,24 @@ n00b_http_h1_request_build(n00b_http_url_t *url)
  * @kw content_type  Required if @p body is non-NULL.
  * @kw extra         Optional caller headers.
  * @kw timeout_ms    Hard deadline.  Default 30000.
+ * @kw max_body_size Optional per-call response-body byte cap.
+ *                   Default 0 = no cap (existing callers see
+ *                   identical behavior).  When non-zero, the
+ *                   receive loop aborts as soon as the accumulated
+ *                   response bytes (status line + headers + body)
+ *                   would push past the cap and surfaces
+ *                   `N00B_HTTP_ERR_RESPONSE_TOO_LARGE` (-9).  Also
+ *                   short-circuits before reading any body bytes
+ *                   when an advertised `Content-Length` exceeds
+ *                   the cap.
  * @kw allocator     Default per-runtime conduit pool.
  *
  * @return  Result with the parsed response on success, or one of the
  *          `n00b_quic_err_t` codes from the underlying TLS shim
  *          (negative ints — e.g. `N00B_QUIC_ERR_HANDSHAKE`,
  *          `N00B_QUIC_ERR_TIMEOUT`).  Wire-format errors come back as
- *          `N00B_HTTP_ERR_BAD_RESPONSE` from the parser.
+ *          `N00B_HTTP_ERR_BAD_RESPONSE` from the parser; over-cap
+ *          bodies as `N00B_HTTP_ERR_RESPONSE_TOO_LARGE`.
  *          HTTP 4xx / 5xx are **ok**, not errors — the caller
  *          interprets status codes.
  */
@@ -273,5 +284,13 @@ n00b_http_h1_round_trip(n00b_http_url_t *url)
          *  same handle into both transports so they agree on the
          *  verdict for any given trust handle. */
         n00b_quic_trust_t           *trust        = nullptr;
+        /** Per-call response-body byte cap.  Default 0 = no cap.
+         *  When non-zero, the receive loop aborts as soon as the
+         *  accumulated wire bytes (status line + headers + body)
+         *  would exceed the cap and surfaces
+         *  `N00B_HTTP_ERR_RESPONSE_TOO_LARGE`.  An advertised
+         *  `Content-Length` greater than the cap short-circuits
+         *  before any body bytes are read. */
+        uint64_t                     max_body_size = 0;
         n00b_allocator_t            *allocator    = nullptr;
     };

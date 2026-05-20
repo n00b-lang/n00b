@@ -561,8 +561,58 @@ resolve_location(n00b_http_url_t  *current,
     return n00b_string_from_raw(buf, (int64_t)total, .allocator = a);
 }
 
+/* ASCII-case-insensitive byte compare of two host strings.  Host
+ * comparison for the redirect allowlist is intentionally
+ * structural — we compare against the URL's authority host (no
+ * port, no path, no fragment) so callers don't have to encode the
+ * port to permit a host running on a non-default port. */
+static bool
+host_eq_ascii_ci(const char *a, size_t alen,
+                 const char *b, size_t blen)
+{
+    if (alen != blen) return false;
+    for (size_t i = 0; i < alen; i++) {
+        unsigned char ca = (unsigned char)a[i];
+        unsigned char cb = (unsigned char)b[i];
+        if (ca >= 'A' && ca <= 'Z') ca = (unsigned char)(ca - 'A' + 'a');
+        if (cb >= 'A' && cb <= 'Z') cb = (unsigned char)(cb - 'A' + 'a');
+        if (ca != cb) return false;
+    }
+    return true;
+}
+
+/* Returns true iff @p host (already lowercased by the URL parser
+ * per RFC 3986 § 3.2.2) is present in @p allowlist.  An empty
+ * allowlist (0 entries) returns false — "no hosts permitted".  A
+ * nullptr allowlist is *not* passed here; the caller checks
+ * `redirect_host_allowlist != nullptr` before calling this. */
+static bool
+host_in_allowlist(n00b_string_t                *host,
+                  n00b_list_t(n00b_string_t *) *allowlist)
+{
+    if (!host || !allowlist) return false;
+    /* Lists are value types; the kwarg is a pointer to the
+     * caller's lvalue.  The list macros expect lvalue access so we
+     * dereference at every call site. */
+    size_t n = n00b_list_len(*allowlist);
+    for (size_t i = 0; i < n; i++) {
+        n00b_string_t *entry = n00b_list_get(*allowlist, i);
+        if (!entry) continue;
+        if (host_eq_ascii_ci(host->data, host->u8_bytes,
+                              entry->data, entry->u8_bytes)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /* Single-shot dispatch (no redirect follow).  Factored out so the
- * redirect loop can call it repeatedly with adjusted args. */
+ * redirect loop can call it repeatedly with adjusted args.
+ *
+ * `max_body_size` is threaded into both transports so the caller's
+ * per-call body cap (DF-014) is enforced before the body
+ * materializes past the limit.  0 = no cap, preserving existing
+ * behavior for callers who don't pass the kwarg. */
 static n00b_result_t(n00b_http_response_t *)
 dispatch_once(n00b_http_url_t             *u,
               const char                  *method_str,
@@ -575,38 +625,49 @@ dispatch_once(n00b_http_url_t             *u,
               n00b_quic_trust_t           *trust,
               n00b_http_connection_pool_t *pool,
               n00b_http_auth_t            *auth,
+              uint64_t                     max_body_size,
               n00b_allocator_t            *a)
 {
     if (prefer_h3 && !loss_cache_h3_blocked(u->origin)) {
         auto rr = n00b_http_h3_round_trip(
             u,
-            .method       = method_str,
-            .body         = body,
-            .content_type = ct_str,
-            .extra        = extra,
-            .handshake_ms = h3_handshake_ms,
-            .await_ms     = timeout_ms,
-            .trust        = trust,
-            .pool         = pool,
-            .auth         = auth,
-            .allocator    = a);
+            .method        = method_str,
+            .body          = body,
+            .content_type  = ct_str,
+            .extra         = extra,
+            .handshake_ms  = h3_handshake_ms,
+            .await_ms      = timeout_ms,
+            .trust         = trust,
+            .pool          = pool,
+            .auth          = auth,
+            .max_body_size = max_body_size,
+            .allocator     = a);
         if (n00b_result_is_ok(rr)) {
             return n00b_result_ok(n00b_http_response_t *,
                                    build_from_h3(n00b_result_get(rr), a));
+        }
+        /* An over-cap response on the h3 path is a policy verdict,
+         * not an h3-transport failure — don't poison the loss cache
+         * (the h1 path would hit the same cap).  Surface the error
+         * directly so callers see a single, distinguishable code. */
+        int32_t h3_err = (int32_t)n00b_result_get_err(rr);
+        if (h3_err == N00B_HTTP_ERR_RESPONSE_TOO_LARGE) {
+            return n00b_result_err(n00b_http_response_t *, h3_err);
         }
         loss_cache_record(u->origin);
     }
     auto rr1 = n00b_http_h1_round_trip(
         u,
-        .method       = method_str,
-        .body         = body,
-        .content_type = ct_str,
-        .extra        = extra,
-        .timeout_ms   = timeout_ms,
-        .pool         = pool,
-        .auth         = auth,
-        .trust        = trust,
-        .allocator    = a);
+        .method        = method_str,
+        .body          = body,
+        .content_type  = ct_str,
+        .extra         = extra,
+        .timeout_ms    = timeout_ms,
+        .pool          = pool,
+        .auth          = auth,
+        .trust         = trust,
+        .max_body_size = max_body_size,
+        .allocator     = a);
     if (n00b_result_is_err(rr1)) {
         return n00b_result_err(n00b_http_response_t *,
                                 n00b_result_get_err(rr1));
@@ -633,6 +694,8 @@ n00b_http_request_sync(n00b_string_t *url)
         n00b_http_cookie_jar_t *cookie_jar        = nullptr;
         n00b_http_auth_t       *auth              = nullptr;
         n00b_http_connection_pool_t *pool         = nullptr;
+        uint64_t                max_body_size     = 0;
+        n00b_list_t(n00b_string_t *) *redirect_host_allowlist = nullptr;
         n00b_allocator_t       *allocator         = nullptr;
     }
 {
@@ -729,6 +792,7 @@ n00b_http_request_sync(n00b_string_t *url)
                                  trust,
                                  pool,
                                  auth,
+                                 max_body_size,
                                  a);
         if (n00b_result_is_err(rr)) return rr;
         n00b_http_response_t *resp = n00b_result_get(rr);
@@ -803,6 +867,28 @@ n00b_http_request_sync(n00b_string_t *url)
             return n00b_result_ok(n00b_http_response_t *, resp);
         }
 
+        /* Host-allowlist enforcement (DF-015): when the caller
+         * supplied a non-null `redirect_host_allowlist`, the next
+         * hop's authority host must be in the list.  We parse the
+         * resolved URL to extract the canonical host (already
+         * lowercased by the parser per RFC 3986 § 3.2.2) so the
+         * comparison is structural and not bytewise-string. */
+        if (redirect_host_allowlist) {
+            auto next_ur = n00b_http_url_parse(next_url, .allocator = a);
+            if (n00b_result_is_err(next_ur)) {
+                return n00b_result_err(
+                    n00b_http_response_t *,
+                    n00b_result_get_err(next_ur));
+            }
+            n00b_http_url_t *next_u = n00b_result_get(next_ur);
+            if (!host_in_allowlist(next_u->host,
+                                    redirect_host_allowlist)) {
+                return n00b_result_err(
+                    n00b_http_response_t *,
+                    N00B_HTTP_ERR_HOST_REDIRECT_NOT_ALLOWED);
+            }
+        }
+
         /* Method preservation per RFC 9110 § 15.4. */
         if (!status_preserves_method(resp->status)) {
             /* 301/302/303 → GET, drop body. */
@@ -861,6 +947,8 @@ typedef struct {
     n00b_http_cookie_jar_t                               *cookie_jar;
     n00b_http_auth_t                                     *auth;
     n00b_http_connection_pool_t                          *pool;
+    uint64_t                                              max_body_size;
+    n00b_list_t(n00b_string_t *)                         *redirect_host_allowlist;
     n00b_allocator_t                                     *allocator;
 } http_worker_args_t;
 
@@ -911,22 +999,24 @@ http_worker_main(void *arg)
 
     auto rr = n00b_http_request_sync(
         a->url,
-        .method           = a->method,
-        .body             = a->body,
-        .content_type     = a->content_type,
-        .extra            = a->extra,
-        .prefer_h3        = a->prefer_h3,
-        .h3_handshake_ms  = a->h3_handshake_ms,
-        .timeout_ms       = a->timeout_ms,
-        .trust            = a->trust,
-        .follow_redirects = a->follow_redirects,
-        .max_redirects    = a->max_redirects,
-        .auto_decompress  = a->auto_decompress,
-        .body_encoding    = a->body_encoding,
-        .cookie_jar       = a->cookie_jar,
-        .auth             = a->auth,
-        .pool             = a->pool,
-        .allocator        = a->allocator);
+        .method                  = a->method,
+        .body                    = a->body,
+        .content_type            = a->content_type,
+        .extra                   = a->extra,
+        .prefer_h3               = a->prefer_h3,
+        .h3_handshake_ms         = a->h3_handshake_ms,
+        .timeout_ms              = a->timeout_ms,
+        .trust                   = a->trust,
+        .follow_redirects        = a->follow_redirects,
+        .max_redirects           = a->max_redirects,
+        .auto_decompress         = a->auto_decompress,
+        .body_encoding           = a->body_encoding,
+        .cookie_jar              = a->cookie_jar,
+        .auth                    = a->auth,
+        .pool                    = a->pool,
+        .max_body_size           = a->max_body_size,
+        .redirect_host_allowlist = a->redirect_host_allowlist,
+        .allocator               = a->allocator);
 
     n00b_http_response_t *resp;
     if (n00b_result_is_ok(rr)) {
@@ -1010,6 +1100,8 @@ n00b_http_request(n00b_conduit_t *c, n00b_string_t *url)
         n00b_http_cookie_jar_t *cookie_jar        = nullptr;
         n00b_http_auth_t       *auth              = nullptr;
         n00b_http_connection_pool_t *pool         = nullptr;
+        uint64_t                max_body_size     = 0;
+        n00b_list_t(n00b_string_t *) *redirect_host_allowlist = nullptr;
         n00b_allocator_t       *allocator         = nullptr;
     }
 {
@@ -1060,25 +1152,27 @@ n00b_http_request(n00b_conduit_t *c, n00b_string_t *url)
     http_worker_args_t *wargs = n00b_alloc_with_opts(
         http_worker_args_t,
         &(n00b_alloc_opts_t){.allocator = a});
-    wargs->c                = c;
-    wargs->topic            = topic;
-    wargs->url              = url;
-    wargs->method           = method;
-    wargs->body             = body;
-    wargs->content_type     = content_type;
-    wargs->extra            = extra;
-    wargs->prefer_h3        = prefer_h3;
-    wargs->h3_handshake_ms  = h3_handshake_ms;
-    wargs->timeout_ms       = timeout_ms;
-    wargs->trust            = trust;
-    wargs->follow_redirects = follow_redirects;
-    wargs->max_redirects    = max_redirects;
-    wargs->auto_decompress  = auto_decompress;
-    wargs->body_encoding    = body_encoding;
-    wargs->cookie_jar       = cookie_jar;
-    wargs->auth             = auth;
-    wargs->pool             = pool;
-    wargs->allocator        = a;
+    wargs->c                       = c;
+    wargs->topic                   = topic;
+    wargs->url                     = url;
+    wargs->method                  = method;
+    wargs->body                    = body;
+    wargs->content_type            = content_type;
+    wargs->extra                   = extra;
+    wargs->prefer_h3               = prefer_h3;
+    wargs->h3_handshake_ms         = h3_handshake_ms;
+    wargs->timeout_ms              = timeout_ms;
+    wargs->trust                   = trust;
+    wargs->follow_redirects        = follow_redirects;
+    wargs->max_redirects           = max_redirects;
+    wargs->auto_decompress         = auto_decompress;
+    wargs->body_encoding           = body_encoding;
+    wargs->cookie_jar              = cookie_jar;
+    wargs->auth                    = auth;
+    wargs->pool                    = pool;
+    wargs->max_body_size           = max_body_size;
+    wargs->redirect_host_allowlist = redirect_host_allowlist;
+    wargs->allocator               = a;
 
     /* Defer the worker spawn until the first subscriber attaches.
      * The conduit topic's on_first_subscribe hook fires from inside

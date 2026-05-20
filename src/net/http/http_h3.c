@@ -213,6 +213,9 @@ n00b_http_h3_round_trip(n00b_http_url_t *url)
         n00b_quic_trust_t           *trust        = nullptr;
         n00b_http_connection_pool_t *pool         = nullptr;
         n00b_http_auth_t            *auth         = nullptr;
+        /** Per-call response-body byte cap.  Default 0 = no cap.
+         *  See @c http_h3.h prose above for the symmetry note. */
+        uint64_t                     max_body_size = 0;
         n00b_allocator_t            *allocator    = nullptr;
     }
 {
@@ -477,6 +480,20 @@ n00b_http_h3_round_trip(n00b_http_url_t *url)
         return n00b_result_err(n00b_h3_response_t *, err);
     }
     n00b_h3_response_t *resp = n00b_result_get(respr);
+
+    /* Per-call response-body cap enforcement (DF-014).  The h3 layer
+     * already accumulated DATA frames inside picoquic, so we surface
+     * the cap as a post-await check that mirrors the h1 path's
+     * `N00B_HTTP_ERR_RESPONSE_TOO_LARGE` semantics.  Streaming-cap
+     * enforcement (cancel the stream mid-flight) is a future lift
+     * that would require pushing the cap into `n00b_h3_request_await`
+     * itself. */
+    if (max_body_size > 0 && resp && resp->body
+        && (uint64_t)resp->body->byte_len > max_body_size) {
+        h3_pool_entry_close(&entry_storage);
+        return n00b_result_err(n00b_h3_response_t *,
+                                N00B_HTTP_ERR_RESPONSE_TOO_LARGE);
+    }
 
     /* Decide: pool the connection, or close it.
      *

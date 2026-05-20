@@ -34,6 +34,17 @@ typedef enum : int32_t {
 
     /* Response-side codes (chunk 2). */
     N00B_HTTP_ERR_BAD_RESPONSE         = -8,
+
+    /* Per-call policy codes (DF-014 / DF-015 lift). */
+    /** Response body exceeded the caller-supplied `max_body_size`
+     *  cap.  Raised before the body accumulator allocates past the
+     *  cap, so the wire bytes never materialize past the limit. */
+    N00B_HTTP_ERR_RESPONSE_TOO_LARGE   = -9,
+    /** A 3xx redirect's Location header pointed at a host that is
+     *  not present in the caller-supplied
+     *  `redirect_host_allowlist`.  Raised before the next hop is
+     *  dispatched so no traffic ever leaves for a disallowed host. */
+    N00B_HTTP_ERR_HOST_REDIRECT_NOT_ALLOWED = -10,
 } n00b_http_err_t;
 
 /**

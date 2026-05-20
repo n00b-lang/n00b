@@ -319,6 +319,9 @@ n00b_http_err_str(n00b_http_err_t err)
     case N00B_HTTP_ERR_HOST_INVALID:       return "invalid host";
     case N00B_HTTP_ERR_PORT_INVALID:       return "invalid port";
     case N00B_HTTP_ERR_BAD_RESPONSE:       return "malformed HTTP response";
+    case N00B_HTTP_ERR_RESPONSE_TOO_LARGE: return "response body exceeded max_body_size cap";
+    case N00B_HTTP_ERR_HOST_REDIRECT_NOT_ALLOWED:
+        return "redirect Location host not in caller's allowlist";
     }
     return "unknown error";
 }

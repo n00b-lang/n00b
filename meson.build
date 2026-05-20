@@ -2138,6 +2138,20 @@ http_client_test = executable('test_http_client',
 )
 test('http_client', http_client_test, suite: 'unit', timeout: 30)
 
+# DF-014 + DF-015 — per-call max_body_size + redirect_host_allowlist
+# kwargs.  Substrate cases run unconditionally; integration leg
+# requires N00B_TEST_DOCKER=1 (uses the zot fixture).
+http_per_call_caps_test = executable('test_http_per_call_caps',
+    ['test/unit/test_http_per_call_caps.c'],
+    kwargs: test_common_kwargs,
+)
+test('http_per_call_caps', http_per_call_caps_test,
+     suite: 'unit',
+     timeout: 60,
+     env: {
+         'N00B_TEST_ZOT_SRC_ROOT': meson.current_source_dir(),
+     })
+
 # Phase 6 chunk 5 — live-network smoke for the dispatcher.
 # Skipped unless N00B_TEST_NET=1.
 http_client_network_test = executable('test_http_client_network',
