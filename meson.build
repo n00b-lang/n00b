@@ -1207,6 +1207,12 @@ std_streams_test = executable('test_std_streams',
 )
 test('std_streams', std_streams_test, suite: 'unit')
 
+fd_owner_read_all_test = executable('test_fd_owner_read_all',
+    ['test/unit/test_fd_owner_read_all.c'],
+    kwargs: test_common_kwargs,
+)
+test('fd_owner_read_all', fd_owner_read_all_test, suite: 'unit')
+
 # ============================================================================
 # Regex engine tests — registered via subdir during Phase 11 of the regex port.
 # See ~/dd/n00b_regex_port_plan.md § 7 / Phase 11.
