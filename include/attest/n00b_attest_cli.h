@@ -49,6 +49,7 @@
 #include <attest/n00b_attest_dsse.h>
 #include <attest/n00b_attest_signer.h>
 #include <attest/n00b_attest_verifier.h>
+#include <attest/n00b_attest_oci.h>
 
 /**
  * @brief Run the `sign` verb's library-shaped core: parse a
@@ -247,4 +248,263 @@ n00b_attest_cli_verify(n00b_buffer_t *envelope_bytes,
                        n00b_string_t *key_uri) _kargs
 {
     n00b_allocator_t *allocator = nullptr;
+};
+
+/**
+ * @brief Run the `push` verb's library-shaped core: parse an OCI
+ *        image reference, resolve OCI auth, construct an OCI
+ *        client, derive the signer keyid + predicate type from
+ *        the envelope, and push the envelope as a referrer
+ *        manifest.
+ *
+ * The body is the substrate the `n00b-attest push` shim sits on.
+ * Inputs are already-bound buffers / strings; the output is the
+ * canonical manifest digest (`sha256:<hex>`) the registry stored
+ * the referrer under. The shim handles `--envelope <path>` and
+ * `--image foo/bar@sha256:...` flag parsing around this core.
+ *
+ * ## Composition
+ *
+ * The core composes the high-level building blocks landed in
+ * WP-001, WP-002, WP-003, and WP-004 Phase 1:
+ *   1. @ref n00b_attest_oci_url_parse (internal) — parse the
+ *      `[<registry>/]<name>@sha256:<digest>` shape.
+ *   2. @ref n00b_attest_oci_auth_resolve — walk the auth-source
+ *      chain (caller, registries.json, anonymous).
+ *   3. @ref n00b_attest_oci_client_new — bind the registry origin
+ *      + auth + per-request defaults.
+ *   4. @ref n00b_attest_envelope_parse + @ref
+ *      n00b_attest_envelope_get_signature_keyid — extract the
+ *      signer's keyid for the manifest annotation. The annotation
+ *      captures `signatures[0].keyid` only (a fast-path filter;
+ *      the envelope's `signatures[]` is authoritative for
+ *      multi-signer envelopes).
+ *   5. @ref n00b_attest_envelope_get_payload + @ref
+ *      n00b_attest_statement_parse + @ref
+ *      n00b_attest_statement_get_predicate_type — extract the
+ *      predicate type URI for the manifest annotation (skipped
+ *      when @c predicate_type is supplied by the caller).
+ *   6. @ref n00b_attest_oci_push_attestation — orchestrate the
+ *      HEAD subject + POST/PUT blob + PUT manifest sequence.
+ *
+ * ## Defensive release discipline
+ *
+ * The push verb core holds TWO handles in flight: the OCI client
+ * handle + the OCI auth handle. **Both are released on every
+ * return path, including Err.** Mirror of the verify-side
+ * release-on-error pattern (WP-003 Phase 4 precedent in @ref
+ * n00b_attest_cli_verify).
+ *
+ * @param envelope_bytes  In-memory DSSE envelope JSON bytes
+ *                        (typically the stdin contents or the
+ *                        contents of `--envelope <path>`).
+ *                        Required.
+ * @param image_ref       OCI image reference. Either
+ *                        `<host>/<name>@sha256:<digest>` (with
+ *                        registry prefix) or `<name>@sha256:
+ *                        <digest>` (delegating registry to the
+ *                        kwarg / default). Tag-form refs are
+ *                        currently NOT supported — the subject
+ *                        identity must be digest-pinned at push
+ *                        time. Required.
+ *
+ * @kw registry_override  Optional registry hostname override
+ *                        (e.g. `r"ghcr.io"`). When set the
+ *                        override replaces the registry parsed
+ *                        from @p image_ref; when null the parsed
+ *                        registry is used. If neither is
+ *                        available the verb returns
+ *                        @ref N00B_ATTEST_ERR_OCI_BAD_URL.
+ * @kw predicate_type     Optional predicate-type URI override. When
+ *                        null the verb derives the value from the
+ *                        envelope payload's Statement via
+ *                        @ref n00b_attest_statement_parse. Supply
+ *                        when the caller already has the URI in
+ *                        hand and wants to skip the parse step.
+ * @kw allocator          Optional allocator (defaults to the
+ *                        runtime allocator); owns every byte the
+ *                        verb produces.
+ *
+ * @return `n00b_result_ok(n00b_string_t *, manifest_digest)` on
+ *         success — the canonical `sha256:<hex>` digest of the
+ *         uploaded artifact manifest, as confirmed by the
+ *         registry (or computed locally when the registry omitted
+ *         `Docker-Content-Digest`). Err legs:
+ *         - @ref N00B_ATTEST_ERR_DSSE_BAD_INPUT — null /
+ *           empty `envelope_bytes`, or envelope-walk failed to
+ *           extract a signer keyid.
+ *         - @ref N00B_ATTEST_ERR_OCI_BAD_URL — null
+ *           `image_ref`, malformed image reference (per
+ *           `_url_parse`'s structural rules), tag-form ref
+ *           without `@sha256:` pinning, or no registry available
+ *           after applying the override.
+ *         - @ref N00B_ATTEST_ERR_OCI_HTTP_ERROR — transport or
+ *           non-success status on any of the HEAD / POST / PUT
+ *           sub-steps inside `_push_attestation`.
+ *         - @ref N00B_ATTEST_ERR_OCI_BEARER_TOKEN_FAILED — bearer
+ *           token-exchange flow failed on any sub-step.
+ *         - @ref N00B_ATTEST_ERR_OCI_AUTH_SOURCE_NOT_FOUND — no
+ *           auth source yielded credentials when the auth chain
+ *           was explicitly restricted to non-anonymous sources.
+ *         - @ref N00B_ATTEST_ERR_OCI_MANIFEST_DIGEST_MISMATCH —
+ *           registry-reported manifest digest disagreed with the
+ *           locally-computed digest (integrity concern).
+ *         - Statement / envelope parse errors propagated from
+ *           the envelope-walk step (the WP-001 / WP-002
+ *           namespaces).
+ *
+ *         Phase 2 ships bare-code Err legs per D-053; richer Err
+ *         payloads are deferred to the libn00b typed-Err-payload
+ *         future lift (DF-011).
+ *
+ * @pre @ref n00b_attest_module_init has been called (the host
+ *      tool binary or test must register the in-tree backends
+ *      before invoking this core).
+ * @post On every return path (success or Err) the internally-
+ *       constructed OCI client and auth handles have been
+ *       released. The caller owns nothing produced inside this
+ *       entry point besides the returned manifest digest.
+ */
+extern n00b_result_t(n00b_string_t *)
+n00b_attest_cli_push(n00b_buffer_t *envelope_bytes,
+                     n00b_string_t *image_ref) _kargs
+{
+    n00b_string_t    *registry_override = nullptr;
+    n00b_string_t    *predicate_type    = nullptr;
+    n00b_allocator_t *allocator         = nullptr;
+};
+
+/**
+ * @brief Run the `discover` verb's library-shaped core: list
+ *        attestations recorded for an OCI image digest.
+ *
+ * Composes:
+ *   1. @ref n00b_attest_oci_url_parse — parse the image ref.
+ *   2. @ref n00b_attest_oci_auth_resolve — resolve auth.
+ *   3. @ref n00b_attest_oci_client_new — construct client.
+ *   4. @ref n00b_attest_oci_list_referrers — fetch referrers, with
+ *      optional server-side @c artifact_type filter (D-051 OQ-3
+ *      BOTH).
+ *
+ * # Defensive release discipline
+ *
+ * Mirror of @ref n00b_attest_cli_push: BOTH the OCI client handle
+ * and the OCI auth handle are released on every return path
+ * including Err.
+ *
+ * # Empty referrers list is not an error
+ *
+ * Per OCI distribution-spec § 4.5, an image with no recorded
+ * referrers may return 200 OK + empty `manifests[]`, OR 404. Both
+ * shapes surface as `Ok([])` from this entry point; the binary-side
+ * shim emits "no attestations found" + exit 0 in either case.
+ *
+ * @param image_ref  OCI image reference. Either
+ *                   `<host>/<name>@sha256:<digest>` (with registry
+ *                   prefix) or `<name>@sha256:<digest>` (delegating
+ *                   registry to the kwarg). Tag-form refs are NOT
+ *                   supported — discover requires digest-pinning.
+ *                   Required.
+ *
+ * @kw registry_override  Optional registry hostname override.
+ * @kw artifact_type      Optional server-side artifact-type filter
+ *                        (e.g. `r"application/vnd.in-toto+dsse"`).
+ *                        When null, no filter is applied at the
+ *                        server.
+ * @kw allocator          Optional allocator.
+ *
+ * @return `n00b_result_ok(n00b_list_t(n00b_attest_oci_referrer_t *)
+ *         *, list)` on success — the list may be empty. Err legs
+ *         route through the OCI / DSSE / Statement domain codes
+ *         propagated from sub-step calls (per @ref
+ *         n00b_attest_oci_list_referrers).
+ *
+ * @pre @ref n00b_attest_module_init has been called.
+ * @post Both the internally-constructed OCI client and auth handles
+ *       have been released. The returned list is owned by the
+ *       caller's allocator.
+ */
+extern n00b_result_t(n00b_list_t(n00b_attest_oci_referrer_t *) *)
+n00b_attest_cli_discover(n00b_string_t *image_ref) _kargs
+{
+    n00b_string_t    *registry_override = nullptr;
+    n00b_string_t    *artifact_type     = nullptr;
+    n00b_allocator_t *allocator         = nullptr;
+};
+
+/**
+ * @brief Run the `pull` verb's library-shaped core: fetch a DSSE
+ *        envelope from an OCI 1.1 registry by predicate-type
+ *        narrowing.
+ *
+ * Composes:
+ *   1. @ref n00b_attest_oci_url_parse — parse the image ref.
+ *   2. @ref n00b_attest_oci_auth_resolve — resolve auth.
+ *   3. @ref n00b_attest_oci_client_new — construct client.
+ *   4. @ref n00b_attest_oci_list_referrers with
+ *      `.artifact_type = r"application/vnd.in-toto+dsse"` —
+ *      server-side narrowing to in-toto+dsse envelopes (D-051 OQ-3
+ *      BOTH, server-side half).
+ *   5. Client-side post-filter on the referrer's `predicate_type`
+ *      annotation (D-051 OQ-3 BOTH, client-side half — defense-in-
+ *      depth in case the registry ignores the `?artifactType=`
+ *      query).
+ *   6. Pick the FIRST matching entry — multi-attestation with the
+ *      same predicate-type is allowed but `pull` returns one. (See
+ *      flagged_for_orchestrator on the choice point.)
+ *   7. @ref n00b_attest_oci_pull_envelope — fetch the envelope
+ *      bytes.
+ *
+ * # Defensive release discipline
+ *
+ * Mirror of @ref n00b_attest_cli_push: BOTH the OCI client handle
+ * and the OCI auth handle are released on every return path
+ * including Err.
+ *
+ * # Pull does NOT verify
+ *
+ * The returned envelope is byte-equal to what was pushed; no
+ * signature check is performed. Callers who want verification
+ * chain @ref n00b_attest_cli_verify on the returned bytes.
+ *
+ * @param image_ref       OCI image reference (must be digest-pinned).
+ *                        Required.
+ * @param predicate_type  Required predicate-type URI to filter on
+ *                        (e.g.
+ *                        `r"https://slsa.dev/provenance/v1"`). Per
+ *                        the plan's choice "force the flag explicit
+ *                        to avoid ambiguity"; null surfaces as
+ *                        @ref N00B_ATTEST_ERR_STMT_BAD_INPUT.
+ *                        Required.
+ *
+ * @kw registry_override  Optional registry hostname override.
+ * @kw allocator          Optional allocator.
+ *
+ * @return `n00b_result_ok(n00b_buffer_t *, envelope_bytes)` on
+ *         success — byte-identical to the envelope pushed via
+ *         @ref n00b_attest_cli_push. Err legs:
+ *         - @ref N00B_ATTEST_ERR_OCI_NO_MATCHING_REFERRER — the
+ *           post-filter found no entry matching the requested
+ *           predicate-type.
+ *         - @ref N00B_ATTEST_ERR_OCI_BLOB_DIGEST_MISMATCH — fetched
+ *           envelope bytes hash to a different sha256 than the
+ *           manifest declared.
+ *         - @ref N00B_ATTEST_ERR_OCI_BLOB_TOO_LARGE — envelope
+ *           exceeded the 1 MiB size cap (NFR-5).
+ *         - @ref N00B_ATTEST_ERR_OCI_BAD_REFERRER_INDEX — referrer
+ *           manifest shape did not match spec §8.2.
+ *         - Other OCI / DSSE / Statement domain codes propagated
+ *           from sub-step calls.
+ *
+ * @pre @ref n00b_attest_module_init has been called.
+ * @post Both the internally-constructed OCI client and auth handles
+ *       have been released. The returned buffer is owned by the
+ *       caller's allocator.
+ */
+extern n00b_result_t(n00b_buffer_t *)
+n00b_attest_cli_pull(n00b_string_t *image_ref,
+                     n00b_string_t *predicate_type) _kargs
+{
+    n00b_string_t    *registry_override = nullptr;
+    n00b_allocator_t *allocator         = nullptr;
 };

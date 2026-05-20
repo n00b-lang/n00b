@@ -27,6 +27,7 @@
  *   -2001 … -2099  DSSE envelope encode / decode
  *   -4001 … -4099  Signer abstraction
  *   -5001 … -5099  Verifier abstraction
+ *   -6001 … -6099  OCI integration (registry client + auth)
  *
  * All codes are negative integers to avoid `errno` collision per
  * the libn00b convention (api-guidelines § 5.1).
@@ -362,6 +363,245 @@
  * because each is a runtime-action input-validation failure.
  */
 #define N00B_ATTEST_ERR_VERIFY_BAD_INPUT               (-5007)
+
+// ===========================================================================
+// OCI integration (-6001 … -6099).
+//
+// Established by D-051 OQ-6 as the OCI-domain namespace; the
+// `-3001..` block was intentionally skipped to maintain numeric
+// spacing between subsystem ranges. The first four codes land in
+// WP-004 Phase 1 (this WP's first implementation phase). WP-004
+// Phase 2 reclaims -6002 as `_OCI_MANIFEST_DIGEST_MISMATCH` (per
+// D-046's phase-introduces-codes-when-it-uses-them rule + the
+// Phase 1 W-2 retirement of `_OCI_TLS_HANDSHAKE` at -6002 which
+// left the slot open). The network-timeout distinction (-6006)
+// remains reserved-but-not-declared until a verb shim needs it.
+// The OCI client is algorithm-agnostic by D-016, so no
+// algorithm-tag leakage appears in the code names.
+// ===========================================================================
+
+/**
+ * @brief Module-domain error: a constructed registry URL or parsed
+ *        image reference is malformed.
+ *
+ * @details Surfaces from @ref n00b_attest_oci_client_new when the
+ * registry URL is null, empty, or does not start with `https://`
+ * (the OCI client enforces HTTPS — plain HTTP at the underlying
+ * libn00b layer is rejected). Also surfaces from
+ * `n00b_attest_oci_url_parse` (internal helper) when the input
+ * reference is null, empty, missing the required digest-or-tag
+ * suffix, has an empty name, or is otherwise structurally invalid
+ * per OCI distribution-spec § 4.1. Phase 2's push verb composes
+ * on top of `n00b_attest_oci_url_parse`; the same code surfaces
+ * from the push edge when the user-supplied `--image` ref does
+ * not parse.
+ */
+#define N00B_ATTEST_ERR_OCI_BAD_URL                    (-6001)
+
+/**
+ * @brief Module-domain error: the registry's claimed manifest
+ *        digest disagrees with the locally-computed digest.
+ *
+ * @details Surfaces from
+ * @ref n00b_attest_oci_manifest_upload when the OCI registry's
+ * `Docker-Content-Digest` response header is present AND its value
+ * does not byte-equal the SHA-256 the client computed locally over
+ * the same manifest bytes. This is a real integrity concern — the
+ * registry transformed the manifest in transit (whitespace
+ * normalization, key reordering, codec round-trip, or worse) — and
+ * surfaces as a distinct code so callers can distinguish it from
+ * generic transport / HTTP-layer failures.
+ *
+ * When the registry omits the `Docker-Content-Digest` header
+ * entirely (non-strict mode) the client falls back to the
+ * locally-computed digest without surfacing this code; the cross-
+ * check fires only when both digests are present and disagree.
+ *
+ * Phase 2 of WP-004 introduces this code (D-046 — phase introduces
+ * codes when it uses them). Slotted at -6002 (one of the two slots
+ * vacated by D-053 W-2's retirement of the unused Phase-1 codes
+ * `_OCI_TLS_HANDSHAKE` and `_OCI_NETWORK_TIMEOUT`).
+ */
+#define N00B_ATTEST_ERR_OCI_MANIFEST_DIGEST_MISMATCH   (-6002)
+
+/**
+ * @brief Module-domain error: an HTTP-layer failure during an OCI
+ *        request that prevented a parseable response.
+ *
+ * @details Surfaces from @ref n00b_attest_oci_request when the
+ * underlying libn00b HTTPS dispatcher returned a transport-level
+ * error (no parseable HTTP response) or surfaced a transport
+ * failure via a status-0 response. The OCI substrate ships a bare
+ * error code at this WP — HTTP status code and response body are
+ * NOT carried in the result type itself. DF-011 tracks the libn00b
+ * typed-Err-payload future lift that will enable richer Err
+ * context. Verb shims that need specific user-facing diagnostics
+ * (4xx / 5xx status code, registry-side response body, headers)
+ * inspect the libn00b @c n00b_http_response_t handle directly via
+ * per-call state.
+ *
+ * At the substrate layer @ref n00b_attest_oci_request returns the
+ * response on the Ok channel even for 4xx / 5xx; this code surfaces
+ * only when no parseable response was obtained (or, in Phase 2+
+ * verb shims, when a higher-level shim has decided the status is
+ * unrecoverable at its scope and explicitly maps to this code).
+ */
+#define N00B_ATTEST_ERR_OCI_HTTP_ERROR                 (-6003)
+
+/**
+ * @brief Module-domain error: the OCI distribution-spec § 5
+ *        bearer-token-exchange flow failed.
+ *
+ * @details Surfaces from `n00b_attest_oci_request` when:
+ *
+ *   - The original request received a 401 with a
+ *     `WWW-Authenticate: Bearer` challenge.
+ *   - The request helper performed a second un-authenticated GET
+ *     against the realm URL (passing `service` + `scope` query
+ *     params).
+ *   - That second request returned 401, OR
+ *   - That second request returned 200 but the JSON body did NOT
+ *     parse, OR
+ *   - The parsed JSON did NOT carry a `"token"` or `"access_token"`
+ *     field of string type, OR
+ *   - The retry of the original request with the obtained token
+ *     ALSO returned 401.
+ *
+ * All four sub-conditions surface through this single code; the
+ * `WWW-Authenticate` parse failure (challenge header missing
+ * `realm=`) routes through this code as well — a registry that
+ * sent a 401 without a parseable challenge has effectively
+ * declined token-exchange.
+ */
+#define N00B_ATTEST_ERR_OCI_BEARER_TOKEN_FAILED        (-6004)
+
+/**
+ * @brief Module-domain error: no auth source yielded usable
+ *        credentials.
+ *
+ * @details Surfaces from @ref n00b_attest_oci_auth_resolve under
+ * two conditions:
+ *
+ *   - The caller restricted the source chain to a subset that
+ *     did not include @ref N00B_ATTEST_OCI_AUTH_ANONYMOUS, and
+ *     none of the listed sources produced a credential. (The
+ *     default chain always terminates in @c ANONYMOUS, so this
+ *     condition only surfaces when the caller passed an explicit
+ *     non-trivial `.sources` list.)
+ *
+ *   - The caller listed one of the future-WP sources
+ *     (@ref N00B_ATTEST_OCI_AUTH_CRED_HELPER or @ref
+ *     N00B_ATTEST_OCI_AUTH_KEYCHAIN) and no earlier source in the
+ *     chain produced a credential. Both future sources are declared
+ *     NOW for forward-compat per D-051 OQ-1 but their resolver
+ *     bodies surface this code until the Tier-2 follow-on WP
+ *     ships them.
+ *
+ * Malformed `registries.json` (the @ref
+ * N00B_ATTEST_OCI_AUTH_REGISTRIES_JSON source) ALSO routes
+ * through this code rather than a dedicated BAD_JSON code: the
+ * user's broader auth resolution may still succeed via another
+ * source (anonymous fallback), so the resolver treats malformed
+ * JSON as "this source did not yield credentials" rather than a
+ * fatal parse failure.
+ */
+#define N00B_ATTEST_ERR_OCI_AUTH_SOURCE_NOT_FOUND      (-6005)
+
+/**
+ * @brief Module-domain error: no referrer in the OCI referrers index
+ *        matched the caller's predicate-type filter.
+ *
+ * @details Surfaces from @ref n00b_attest_cli_pull when the
+ * server-side `?artifactType=` query narrowed the referrers list to
+ * the in-toto+dsse subset, and the verb-core's client-side post-
+ * filter on the caller-supplied @c predicate_type rejected every
+ * remaining entry. The empty-after-filter outcome is treated as Err
+ * (not Ok with a null envelope) because pull's semantic is "return
+ * the envelope" — no envelope means the verb cannot satisfy the
+ * request. Discover (which has no predicate-type narrowing) treats
+ * an empty referrers list as @c Ok([]).
+ *
+ * WP-004 Phase 3 introduces this code (D-046 — phase introduces
+ * codes when it uses them). Slotted at -6006 (the slot vacated by
+ * Phase 1 W-2's retirement of `_OCI_NETWORK_TIMEOUT`).
+ */
+#define N00B_ATTEST_ERR_OCI_NO_MATCHING_REFERRER       (-6006)
+
+/**
+ * @brief Module-domain error: a fetched blob exceeded the caller's
+ *        size cap.
+ *
+ * @details Surfaces from @ref n00b_attest_oci_pull_envelope when the
+ * envelope blob's body bytes exceed the configured `max_size` cap
+ * (default 1 MiB per NFR-5; typical envelopes are <= 50 KB per
+ * NFR-6, so the default is comfortable). The cap exists to bound
+ * the discover/pull-side memory budget against malicious or
+ * misconfigured referrer manifests pointing at outsized blobs.
+ *
+ * WP-004 Phase 3 introduces this code (D-046).
+ */
+#define N00B_ATTEST_ERR_OCI_BLOB_TOO_LARGE             (-6007)
+
+/**
+ * @brief Module-domain error: a fetched blob's locally-computed
+ *        SHA-256 disagrees with the digest the caller requested.
+ *
+ * @details Surfaces from @ref n00b_attest_oci_pull_envelope when the
+ * envelope blob's actual bytes hash to a different `sha256:<hex>`
+ * than the digest passed in (or learned from the manifest's
+ * `layers[0].digest`). Symmetric to push's
+ * @ref N00B_ATTEST_ERR_OCI_MANIFEST_DIGEST_MISMATCH; together they
+ * bracket the registry-round-trip integrity invariant.
+ *
+ * WP-004 Phase 3 introduces this code (D-046).
+ */
+#define N00B_ATTEST_ERR_OCI_BLOB_DIGEST_MISMATCH       (-6008)
+
+/**
+ * @brief Module-domain error: a referrer manifest or referrers
+ *        index could not be interpreted as the expected OCI shape.
+ *
+ * @details Surfaces from @ref n00b_attest_oci_list_referrers when
+ * the server returned 200 OK but the response body is not a
+ * well-formed OCI image index (missing `manifests[]` array,
+ * malformed JSON, etc.), and from @ref n00b_attest_oci_pull_envelope
+ * when the referrer manifest's `layers[]` does not match the
+ * spec §8.2 single-in-toto+json-layer shape.
+ *
+ * Distinct from @ref N00B_ATTEST_ERR_OCI_HTTP_ERROR because the
+ * registry's transport layer behaved correctly — the failure mode
+ * is application-level shape mismatch; this distinction makes it
+ * easier to discriminate "registry is broken" from "we don't know
+ * how to read this registry's index format" during audit.
+ *
+ * WP-004 Phase 3 introduces this code (D-046).
+ */
+#define N00B_ATTEST_ERR_OCI_BAD_REFERRER_INDEX         (-6009)
+
+/**
+ * @brief Module-domain error: a registry response body exceeded
+ *        the per-call size cap.
+ *
+ * @details Surfaces from @ref n00b_attest_oci_list_referrers when
+ * one page of the referrers-index pagination response exceeds the
+ * Phase-4 hardening cap of 1 MiB per page (NFR-5). The cap exists
+ * to bound the discover/pull-side memory budget against malicious
+ * or misconfigured registries that emit oversized referrers
+ * pages.
+ *
+ * Distinct from @ref N00B_ATTEST_ERR_OCI_BLOB_TOO_LARGE which is
+ * emitted by the symmetric blob / manifest fetch path; the two
+ * codes bracket the response-shape vs blob-content size-cap
+ * surfaces respectively.
+ *
+ * WP-004 Phase 4 introduces this code (D-046 — phase introduces
+ * codes when it uses them). The n00b-attest-side enforcement
+ * mirrors the Phase-3 `generic_fetch` precedent because libn00b's
+ * @ref n00b_http_request_sync does NOT (yet) carry a per-call
+ * `max_body_size` kwarg; lifting the enforcement into libn00b is
+ * tracked as DF-014.
+ */
+#define N00B_ATTEST_ERR_OCI_RESPONSE_TOO_LARGE         (-6010)
 
 /**
  * @brief Look up a human-readable string for an n00b_attest

@@ -235,6 +235,15 @@ _kargs {
     return n00b_result_ok(bool, true);
 }
 
+n00b_string_t *
+n00b_attest_statement_get_predicate_type(n00b_attest_statement_t *st)
+{
+    if (st == nullptr) {
+        return nullptr;
+    }
+    return st->predicate_type;
+}
+
 n00b_result_t(bool)
 n00b_attest_statement_set_predicate_json(n00b_attest_statement_t *st,
                                          n00b_buffer_t           *predicate_json)

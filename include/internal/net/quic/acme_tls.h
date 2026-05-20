@@ -17,6 +17,7 @@
 #include <stdint.h>
 #include "n00b.h"
 #include "core/buffer.h"
+#include "net/quic/trust.h"
 
 /**
  * @brief One synchronous TLS round-trip.
@@ -94,24 +95,49 @@ n00b_acme_tls_connect(const char            *host,
                       n00b_acme_tls_conn_t **out_conn);
 
 /**
- * @brief Like @c n00b_acme_tls_connect but with mTLS client material.
+ * @brief Like @c n00b_acme_tls_connect but with mTLS client material
+ *        and an optional caller-supplied trust handle.
  *
  * When @p auth is non-NULL the handshake will respond to the server's
  * CertificateRequest by presenting @p auth->cert_chain_der and signing
  * CertificateVerify with @p auth->key.  Currently only ECDSA-P-256
  * client keys are supported.
  *
- * When @p auth is NULL this is equivalent to @c n00b_acme_tls_connect.
+ * When @p auth is NULL the handshake will not present a client cert.
+ *
+ * @param host        ASCII hostname; used for SNI + cert verification.
+ * @param port        TCP port (typically 443).
+ * @param timeout_ms  Hard wall-clock deadline for connect + handshake.
+ * @param auth        Optional mTLS client material; pass @c nullptr
+ *                    for standard (server-only) TLS.
+ * @param trust       Optional trust handle that overrides the default
+ *                    system-trust verification path during the
+ *                    handshake's `verify_certificate` callback.  When
+ *                    @c nullptr (the default), the system trust store
+ *                    is consulted via the same code path that has
+ *                    always been used by this entry point — behavior
+ *                    is byte-identical to the pre-trust-threading
+ *                    form.  When non-@c nullptr, the cert-verify cb
+ *                    dispatches through `n00b_quic_trust_verify` so
+ *                    the caller's backend (pinned-fingerprint for
+ *                    test fixtures, system+extras for corporate PKI,
+ *                    etc.) decides the verdict.  The trust handle is
+ *                    borrowed; it must outlive the connection (or any
+ *                    subsequent pool-reuse window).
+ * @param out_conn    Out: freshly opened TLS connection on success;
+ *                    @c nullptr on error.
  *
  * @return  N00B_QUIC_OK on success.  Negative `n00b_quic_err_t` on
  *          transport / handshake failure (which includes "server
- *          demanded a client cert and we couldn't present one").
+ *          demanded a client cert and we couldn't present one" and
+ *          "the trust backend rejected the presented chain").
  */
 extern int
 n00b_acme_tls_connect_ex(const char                       *host,
                          uint16_t                          port,
                          int32_t                           timeout_ms,
                          const n00b_acme_tls_client_auth_t *auth,
+                         n00b_quic_trust_t                *trust,
                          n00b_acme_tls_conn_t            **out_conn);
 
 /**

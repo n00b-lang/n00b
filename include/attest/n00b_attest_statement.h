@@ -218,3 +218,31 @@ n00b_attest_statement_parse(n00b_buffer_t *bytes) _kargs
 {
     n00b_allocator_t *allocator = nullptr;
 };
+
+/**
+ * @brief Borrow the predicateType URI of a Statement.
+ *
+ * Bounds-checked alias-read. Returned pointer aliases the
+ * Statement's internal storage — callers MUST NOT free it.
+ *
+ * @param st  The Statement builder (constructed via
+ *            @ref n00b_attest_statement_new or @ref
+ *            n00b_attest_statement_parse).
+ *
+ * @return The predicateType URI as a borrowed
+ *         @c n00b_string_t *, or `nullptr` if @p st is null
+ *         or no predicate type has been set yet.
+ *
+ * @note **Borrow semantics.** The returned pointer remains valid
+ *       for as long as the Statement itself remains live — i.e.,
+ *       until the Statement's owning allocator is released. The
+ *       Statement module does not currently expose a per-handle
+ *       free / release; the aliased lifetime is governed by the
+ *       allocator passed at construction or parse time.
+ *
+ * @note No `_kargs`, no allocator threading: pointer alias only.
+ *       Mirrors the alias-read pattern used by the DSSE
+ *       @ref n00b_attest_envelope_get_signature_keyid surface.
+ */
+extern n00b_string_t *
+n00b_attest_statement_get_predicate_type(n00b_attest_statement_t *st);

@@ -18,7 +18,18 @@
  * runtime-check-path codes (-5006, -5007) under the `_VERIFY_*`
  * prefix and migrates three placeholder callsites that Phase 2
  * temporarily routed through @ref N00B_ATTEST_ERR_VERIFIER_KEY_NOT_FOUND.
- * Total now twenty-three codes.
+ * WP-004 Phase 1 (per D-051 OQ-6) adds four OCI-domain codes
+ * (-6001, -6003, -6004, -6005). WP-004 Phase 2 reclaims -6002 as
+ * `_OCI_MANIFEST_DIGEST_MISMATCH` (per D-046's
+ * phase-introduces-codes-at-the-implementing-phase rule + the
+ * Phase 1 W-2 retirement of `_OCI_TLS_HANDSHAKE` at -6002, which
+ * left the slot open). WP-004 Phase 3 adds four codes — -6006
+ * `_OCI_NO_MATCHING_REFERRER`, -6007 `_OCI_BLOB_TOO_LARGE`, -6008
+ * `_OCI_BLOB_DIGEST_MISMATCH`, -6009 `_OCI_BAD_REFERRER_INDEX` —
+ * per D-046 (phase introduces codes when it uses them). WP-004
+ * Phase 4 adds -6010 `_OCI_RESPONSE_TOO_LARGE` for the per-call
+ * size cap on `_list_referrers` pagination (NFR-5 + D-046). Total
+ * now thirty-three codes.
  *
  * Unknown codes return a documented fallback string (per the
  * api-guidelines § 5 contract that domain-specific `*_err_str`
@@ -98,6 +109,38 @@ n00b_attest_err_str(n00b_err_t err)
         return r"verify: signature length does not match algorithm";
     case N00B_ATTEST_ERR_VERIFY_BAD_INPUT:
         return r"verify: bad or missing input argument";
+
+    // OCI integration (-6001, -6003, -6004, -6005), WP-004 Phase 1
+    // per D-051 OQ-6. The TLS-handshake (-6002) and network-timeout
+    // (-6006) codes are reserved-but-not-declared per D-046 strict;
+    // Phase 2/3 reintroduces them when verb shims emit the
+    // distinction.
+    case N00B_ATTEST_ERR_OCI_BAD_URL:
+        return r"oci: malformed registry URL or image reference";
+    case N00B_ATTEST_ERR_OCI_MANIFEST_DIGEST_MISMATCH:
+        return r"oci: registry-reported manifest digest does not match locally-computed digest";
+    case N00B_ATTEST_ERR_OCI_HTTP_ERROR:
+        return r"oci: registry returned an HTTP error response";
+    case N00B_ATTEST_ERR_OCI_BEARER_TOKEN_FAILED:
+        return r"oci: bearer token exchange failed";
+    case N00B_ATTEST_ERR_OCI_AUTH_SOURCE_NOT_FOUND:
+        return r"oci: no auth source yielded credentials";
+
+    // OCI integration (-6006 .. -6009), WP-004 Phase 3 per D-046
+    // (phase introduces codes when it uses them).
+    case N00B_ATTEST_ERR_OCI_NO_MATCHING_REFERRER:
+        return r"oci: no referrer matched the requested predicate-type";
+    case N00B_ATTEST_ERR_OCI_BLOB_TOO_LARGE:
+        return r"oci: fetched blob exceeded the configured size cap";
+    case N00B_ATTEST_ERR_OCI_BLOB_DIGEST_MISMATCH:
+        return r"oci: fetched blob's SHA-256 disagrees with requested digest";
+    case N00B_ATTEST_ERR_OCI_BAD_REFERRER_INDEX:
+        return r"oci: referrers index or referrer manifest has malformed OCI shape";
+
+    // OCI integration (-6010), WP-004 Phase 4 per D-046 (phase
+    // introduces codes when it uses them).
+    case N00B_ATTEST_ERR_OCI_RESPONSE_TOO_LARGE:
+        return r"oci: registry response body exceeded the per-call size cap";
 
     default:
         return r"unknown attest error code";

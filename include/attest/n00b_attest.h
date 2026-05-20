@@ -49,6 +49,7 @@
 #include <attest/n00b_attest_verifier.h>
 #include <attest/n00b_attest_dsse.h>
 #include <attest/n00b_attest_cli.h>
+#include <attest/n00b_attest_oci.h>
 
 /**
  * @brief Module init stub.

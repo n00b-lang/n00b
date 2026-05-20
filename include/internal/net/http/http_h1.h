@@ -242,6 +242,8 @@ n00b_http_h1_request_build(n00b_http_url_t *url)
 typedef struct n00b_http_connection_pool n00b_http_connection_pool_t;
 /* Forward decl — public auth helper from net/http/http_auth.h. */
 typedef struct n00b_http_auth            n00b_http_auth_t;
+/* Forward decl — public trust handle from net/quic/trust.h. */
+typedef struct n00b_quic_trust           n00b_quic_trust_t;
 
 extern n00b_result_t(n00b_http_h1_response_t *)
 n00b_http_h1_round_trip(n00b_http_url_t *url)
@@ -258,5 +260,18 @@ n00b_http_h1_round_trip(n00b_http_url_t *url)
          *  requests with different mTLS identities never share a
          *  connection. */
         n00b_http_auth_t            *auth         = nullptr;
+        /** Optional trust handle.  Default @c nullptr — the
+         *  round-trip falls through to the OS system trust store
+         *  (byte-identical to the pre-trust-threading default).  Pass
+         *  an explicit handle (e.g. @c n00b_quic_trust_pinned for
+         *  self-signed test fixtures, or @c n00b_quic_trust_with_extra
+         *  for corporate PKI on top of the system store) to override
+         *  the verify_certificate verdict.  The trust handle is
+         *  borrowed; it must outlive the connection.  This is the h1
+         *  twin of the trust kwarg on @c n00b_http_h3_round_trip; the
+         *  public @c n00b_http_request_sync dispatcher forwards the
+         *  same handle into both transports so they agree on the
+         *  verdict for any given trust handle. */
+        n00b_quic_trust_t           *trust        = nullptr;
         n00b_allocator_t            *allocator    = nullptr;
     };

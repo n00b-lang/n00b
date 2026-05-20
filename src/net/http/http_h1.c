@@ -38,6 +38,7 @@
 #include "internal/net/http/http_pool.h"
 #include "internal/net/quic/acme_tls.h"
 #include "net/quic/quic_types.h"
+#include "net/quic/trust.h"
 #include "net/http/http_auth.h"
 
 /* ===========================================================================
@@ -613,14 +614,49 @@ find_header(const char *p, size_t len, const char *name, size_t *out_vlen)
     return nullptr;
 }
 
+/* Parse a 3-digit HTTP status code from the status line bytes.  The
+ * status-line shape is `HTTP/1.X SSS REASON` (RFC 9112 § 4); we walk
+ * to the first space and then read three decimal digits.  Returns 0
+ * if the status-line bytes are malformed (caller treats it the same
+ * as "no boundary yet"). */
+static int
+parse_status_for_completion(const char *bytes, size_t len)
+{
+    /* Skip the "HTTP/1.X " prefix.  Anything shorter than that won't
+     * have a parseable status. */
+    if (len < 12) return 0;
+    size_t i = 0;
+    while (i < len && bytes[i] != ' ' && bytes[i] != '\r') i++;
+    if (i + 4 > len) return 0;
+    while (i < len && bytes[i] == ' ') i++;
+    if (i + 3 > len) return 0;
+    if (bytes[i] < '0' || bytes[i] > '9'
+        || bytes[i + 1] < '0' || bytes[i + 1] > '9'
+        || bytes[i + 2] < '0' || bytes[i + 2] > '9') {
+        return 0;
+    }
+    return (bytes[i] - '0') * 100
+         + (bytes[i + 1] - '0') * 10
+         + (bytes[i + 2] - '0');
+}
+
 /* Decide whether the bytes accumulated so far form a complete
  * HTTP/1.1 response.  Returns:
  *   1 — complete; safe to stop reading + parse
  *   0 — need more bytes
  *  -1 — protocol error (no Content-Length / no Transfer-Encoding;
- *       caller must read until peer close to find the boundary). */
+ *       caller must read until peer close to find the boundary).
+ *
+ * RFC 9112 § 6.3: HEAD responses and 1xx / 204 / 304 status codes are
+ * always terminated by the empty line after the header block,
+ * regardless of any Content-Length or Transfer-Encoding fields the
+ * server may carry over from the resource description.  Failing to
+ * honor that case sends the reader into a forever-wait for body
+ * bytes that will never arrive — manifesting at the libn00b call
+ * site as N00B_QUIC_ERR_TIMEOUT (-10) on what should be a quick
+ * HEAD round-trip. */
 static int
-h1_response_complete(const char *bytes, size_t len)
+h1_response_complete(const char *bytes, size_t len, bool was_head)
 {
     /* Locate end-of-headers (CRLF CRLF). */
     if (len < 4) return 0;
@@ -634,6 +670,20 @@ h1_response_complete(const char *bytes, size_t len)
     }
     if (!eoh) return 0;
     size_t header_len = (size_t)(eoh - bytes);
+
+    /* HEAD response — boundary IS end-of-headers per RFC 9112 § 6.3
+     * case 1.  Decided before scanning Content-Length / Transfer-
+     * Encoding so any such advisory header is ignored. */
+    if (was_head) return 1;
+
+    /* Status codes that never carry a body — same RFC 9112 § 6.3
+     * case 1 boundary rule applies. */
+    int status = parse_status_for_completion(bytes, len);
+    if (status == 204 || status == 304
+        || (status >= 100 && status < 200)) {
+        return 1;
+    }
+
     /* Skip the status line (first \r\n) for header scan. */
     const char *hp = bytes;
     size_t hl = header_len;
@@ -738,6 +788,7 @@ n00b_http_h1_round_trip(n00b_http_url_t *url)
         int32_t                      timeout_ms   = 30000;
         n00b_http_connection_pool_t *pool         = nullptr;
         n00b_http_auth_t            *auth         = nullptr;
+        n00b_quic_trust_t           *trust        = nullptr;
         n00b_allocator_t            *allocator    = nullptr;
     }
 {
@@ -747,6 +798,13 @@ n00b_http_h1_round_trip(n00b_http_url_t *url)
     }
     n00b_allocator_t *a = allocator ? allocator : default_pool();
     bool keep_alive_intent = (pool != nullptr);
+    /* HEAD responses have no body regardless of Content-Length /
+     * Transfer-Encoding (RFC 9112 § 6.3 case 1).  Capture that here
+     * so the read-completion check short-circuits at end-of-headers
+     * instead of hanging forever waiting for body bytes that the
+     * server will never send. */
+    bool was_head = (method != nullptr
+                     && strcasecmp(method, "HEAD") == 0);
 
     /* mTLS handshake material — extracted from the auth helper if
      * present.  Pool keying uses the auth pointer so identities don't
@@ -797,7 +855,8 @@ n00b_http_h1_round_trip(n00b_http_url_t *url)
     }
     if (!conn) {
         int rc = n00b_acme_tls_connect_ex(url->host->data, url->port,
-                                          timeout_ms, mtls_auth, &conn);
+                                          timeout_ms, mtls_auth,
+                                          trust, &conn);
         if (rc != N00B_QUIC_OK) {
             return n00b_result_err(n00b_http_h1_response_t *, rc);
         }
@@ -835,7 +894,8 @@ n00b_http_h1_round_trip(n00b_http_url_t *url)
         if (chunk && chunk->byte_len > 0) {
             n00b_buffer_concat(raw, chunk);
             int complete = h1_response_complete(raw->data,
-                                                 (size_t)raw->byte_len);
+                                                 (size_t)raw->byte_len,
+                                                 was_head);
             if (complete == 1) boundary_seen = true;
             else if (complete == -1) read_to_eof = true;
         }

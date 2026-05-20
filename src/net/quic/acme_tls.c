@@ -35,6 +35,7 @@
 #include "core/runtime.h"
 #include "core/buffer.h"
 #include "net/quic/quic_types.h"
+#include "net/quic/trust.h"
 #include "internal/net/quic/acme_tls.h"
 #include "internal/net/quic/trust_system.h"
 #include "internal/net/quic/picotls_certverify.h"
@@ -81,6 +82,12 @@ static ptls_get_time_t the_get_time = {.cb = get_time_cb};
 typedef struct {
     ptls_verify_certificate_t super;
     const char               *server_name;  /* set per-handshake */
+    /* Optional caller-supplied trust handle.  When non-NULL the cb
+     * dispatches through `n00b_quic_trust_verify` instead of the
+     * default system-trust path.  Borrowed pointer; the connection
+     * struct that owns this `acme_verify_t` is responsible for not
+     * outliving the trust handle. */
+    n00b_quic_trust_t        *trust;
 } acme_verify_t;
 
 static int
@@ -94,14 +101,20 @@ acme_verify_cb(ptls_verify_certificate_t *self_,
                ptls_iovec_t              *certs,
                size_t                     num_certs)
 {
-    (void)self_;
     (void)tls;
 
     if (num_certs == 0) {
         return PTLS_ALERT_BAD_CERTIFICATE;
     }
 
-    /* Materialize a DER pointer array for the platform verifier. */
+    /* picotls hands us back the verifier pointer we registered on the
+     * ctx.  Recover it so we can route through any caller-supplied
+     * trust handle.  Module-shared `the_verifier` has `trust = NULL`
+     * (no behavior change for the default path); a per-call verifier
+     * carries the trust pointer set up by `n00b_acme_tls_connect_ex`. */
+    acme_verify_t *self = (acme_verify_t *)self_;
+
+    /* Materialize a DER pointer array for the verifier. */
     enum { K_STACK = 16 };
     const uint8_t *stack_ptrs[K_STACK];
     size_t         stack_lens[K_STACK];
@@ -128,10 +141,28 @@ acme_verify_cb(ptls_verify_certificate_t *self_,
         lens[i] = certs[i].len;
     }
 
-    int rc = n00b_quic_trust_system_verify_chain(ptrs, lens, num_certs,
-                                                 server_name);
-    if (rc != N00B_QUIC_OK) {
-        return PTLS_ALERT_BAD_CERTIFICATE;
+    if (self && self->trust != nullptr) {
+        /* Caller-supplied trust path — dispatch through the
+         * `n00b_quic_trust_t` vtable.  Pinned-fingerprint, system,
+         * system+extras, etc. all flow through the same entry point
+         * the h3 path uses, so the two transports agree on the
+         * verdict for any given trust handle. */
+        n00b_result_t(bool) tr = n00b_quic_trust_verify(self->trust,
+                                                       ptrs, lens,
+                                                       num_certs,
+                                                       server_name);
+        if (n00b_result_is_err(tr)) {
+            return PTLS_ALERT_BAD_CERTIFICATE;
+        }
+    } else {
+        /* Default path — consult the OS trust store via the
+         * pre-existing helper.  Byte-identical to the original
+         * pre-trust-threading behavior. */
+        int rc = n00b_quic_trust_system_verify_chain(ptrs, lens, num_certs,
+                                                     server_name);
+        if (rc != N00B_QUIC_OK) {
+            return PTLS_ALERT_BAD_CERTIFICATE;
+        }
     }
 
     /* Install the CertificateVerify check.  picotls calls verify_sign
@@ -152,14 +183,17 @@ acme_verify_cb(ptls_verify_certificate_t *self_,
  * actually verify get offered, so servers don't pick one we'd be
  * forced to silently accept.
  *
- * The verifier struct itself carries no per-call state (read-only
- * function pointer + algos list).  Kept module-local because it's
- * referenced by the per-runtime base ctx through a non-const field
- * type. */
+ * The module-shared verifier carries `trust = NULL`, which selects the
+ * default system-trust path in `acme_verify_cb`.  Calls that supply a
+ * caller-side `n00b_quic_trust_t *` get a per-call verifier wired into
+ * a per-call ptls_context_t (see `per_call_ctx_t` below); the
+ * module-shared form is read-only and used only by the default
+ * (system-trust) path. */
 static acme_verify_t the_verifier = {
     .super       = {.cb = acme_verify_cb,
                     .algos = n00b_picotls_supported_sig_algs},
     .server_name = nullptr,
+    .trust       = nullptr,
 };
 
 /* ===========================================================================
@@ -348,14 +382,27 @@ flush_send(int sockfd, ptls_buffer_t *encbuf, int32_t timeout_ms)
  * a connection open across requests for keep-alive pooling.
  * ========================================================================= */
 
-/* Per-call picotls context for mTLS connections.  Lives alongside the
- * conn so its address remains stable for the picotls `tls->ctx`
- * back-reference.  Built from `get_base_state()->base_ctx` with
- * client-auth fields overlaid via
- * `n00b_picotls_install_client_auth`. */
+/* Per-call picotls context.  Lives alongside the conn so its address
+ * remains stable for the picotls `tls->ctx` back-reference.  Built
+ * from `get_base_state()->base_ctx` with optional client-auth fields
+ * overlaid via `n00b_picotls_install_client_auth` and/or a per-call
+ * verifier that dispatches through a caller-supplied trust handle.
+ *
+ * The struct exists when ANY per-call override is needed (mTLS
+ * material, caller-supplied trust, or both).  Connections with no
+ * overrides alias the per-runtime base ctx directly with no per-call
+ * allocation. */
 typedef struct {
     ptls_context_t                     ctx;
     n00b_picotls_client_auth_storage_t auth_storage;
+    /* Per-call verifier.  Populated only when the caller supplied a
+     * trust handle to `n00b_acme_tls_connect_ex`.  Its address is
+     * pinned by living inside the per-call ctx struct, so it remains
+     * stable for the picotls ctx's `verify_certificate` field for the
+     * connection's lifetime.  Per-connection state — preserves the
+     * §10.9 invariant that the module-shared `the_verifier` carries
+     * no caller-mutable per-call state. */
+    acme_verify_t                      verifier;
 } per_call_ctx_t;
 
 struct n00b_acme_tls_conn {
@@ -386,16 +433,23 @@ do_handshake_until_done(n00b_acme_tls_conn_t *c, int64_t deadline);
 static int
 flush_send(int sockfd, ptls_buffer_t *encbuf, int32_t timeout_ms);
 
-/* Build a per-call ptls_context_t with mTLS material overlaid onto
- * the per-runtime base ctx via the shared installer in
- * picotls_certverify.c.  Returns NULL on allocation failure or bad
- * inputs.  When @p auth is NULL, returns NULL (caller uses the base
- * ctx directly). */
+/* Build a per-call ptls_context_t.  Called when the connection needs
+ * to override at least one of:
+ *   - the verify_certificate handle (caller-supplied trust)
+ *   - the certificates / sign_certificate hooks (mTLS material)
+ *
+ * Returns NULL on allocation failure or when @p auth is non-NULL but
+ * malformed.  When both @p auth and @p trust are NULL the caller is
+ * expected to skip this path entirely and alias the base ctx
+ * directly. */
 static per_call_ctx_t *
-build_per_call_ctx(const n00b_acme_tls_client_auth_t *auth)
+build_per_call_ctx(const n00b_acme_tls_client_auth_t *auth,
+                   n00b_quic_trust_t                 *trust)
 {
-    if (!auth || !auth->key || auth->cert_chain_count == 0
-        || !auth->cert_chain_der || !auth->cert_chain_lens) {
+    if (auth && (!auth->key || auth->cert_chain_count == 0
+                 || !auth->cert_chain_der || !auth->cert_chain_lens)) {
+        /* Caller passed mTLS material but it's malformed — refuse
+         * rather than silently dropping it. */
         return nullptr;
     }
     n00b_acme_tls_state_t *base = get_base_state();
@@ -405,13 +459,27 @@ build_per_call_ctx(const n00b_acme_tls_client_auth_t *auth)
         per_call_ctx_t,
         &(n00b_alloc_opts_t){.allocator = tls_alloc()});
     pcctx->ctx = base->base_ctx;                  /* shallow copy */
-    if (n00b_picotls_install_client_auth(&pcctx->ctx,
-                                         auth->cert_chain_der,
-                                         auth->cert_chain_lens,
-                                         auth->cert_chain_count,
-                                         auth->key,
-                                         &pcctx->auth_storage) != 0) {
-        return nullptr;
+
+    if (trust != nullptr) {
+        /* Populate the per-call verifier and point the per-call ctx
+         * at it (overriding the module-shared `the_verifier` for this
+         * connection only). */
+        pcctx->verifier.super.cb    = acme_verify_cb;
+        pcctx->verifier.super.algos = n00b_picotls_supported_sig_algs;
+        pcctx->verifier.server_name = nullptr;
+        pcctx->verifier.trust       = trust;
+        pcctx->ctx.verify_certificate = &pcctx->verifier.super;
+    }
+
+    if (auth) {
+        if (n00b_picotls_install_client_auth(&pcctx->ctx,
+                                             auth->cert_chain_der,
+                                             auth->cert_chain_lens,
+                                             auth->cert_chain_count,
+                                             auth->key,
+                                             &pcctx->auth_storage) != 0) {
+            return nullptr;
+        }
     }
     return pcctx;
 }
@@ -423,7 +491,7 @@ n00b_acme_tls_connect(const char            *host,
                       n00b_acme_tls_conn_t **out_conn)
 {
     return n00b_acme_tls_connect_ex(host, port, timeout_ms, nullptr,
-                                    out_conn);
+                                    nullptr, out_conn);
 }
 
 int
@@ -431,20 +499,24 @@ n00b_acme_tls_connect_ex(const char                       *host,
                          uint16_t                          port,
                          int32_t                           timeout_ms,
                          const n00b_acme_tls_client_auth_t *auth,
+                         n00b_quic_trust_t                *trust,
                          n00b_acme_tls_conn_t            **out_conn)
 {
     if (!host || !out_conn) return N00B_QUIC_ERR_NULL_ARG;
     *out_conn = nullptr;
 
-    /* Resolve the picotls context.  Either:
-     *   - mTLS path: build a per-call ctx with the caller's cert
-     *     chain + sign_certificate callback.  Lives alongside the conn.
-     *   - default path: alias the per-runtime base ctx; no per-call
-     *     allocation. */
+    /* Resolve the picotls context.  Three cases:
+     *   - any per-call override (mTLS auth and/or caller-supplied
+     *     trust): build a per-call ctx that lives alongside the conn.
+     *   - default path (no auth, no trust): alias the per-runtime
+     *     base ctx with no per-call allocation.  The base ctx routes
+     *     verify_certificate through the module-shared `the_verifier`
+     *     which consults the OS trust store — byte-identical to the
+     *     pre-trust-threading default. */
     per_call_ctx_t *pcctx = nullptr;
     ptls_context_t *ctx_for_new = nullptr;
-    if (auth) {
-        pcctx = build_per_call_ctx(auth);
+    if (auth || trust) {
+        pcctx = build_per_call_ctx(auth, trust);
         if (!pcctx) return N00B_QUIC_ERR_INVALID_ARG;
         ctx_for_new = &pcctx->ctx;
     } else {

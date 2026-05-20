@@ -605,6 +605,7 @@ dispatch_once(n00b_http_url_t             *u,
         .timeout_ms   = timeout_ms,
         .pool         = pool,
         .auth         = auth,
+        .trust        = trust,
         .allocator    = a);
     if (n00b_result_is_err(rr1)) {
         return n00b_result_err(n00b_http_response_t *,
