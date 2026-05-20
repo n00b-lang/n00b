@@ -101,6 +101,21 @@ struct n00b_h3_request {
 
     bool                     local_fin_sent;
     bool                     peer_fin_seen;
+
+    /* ---- Per-call response-body cap (mid-stream enforcement). -----------
+     *
+     * `max_body_size = 0` means "no cap" (existing callers see identical
+     * behavior).  When non-zero, the frame processor enforces the cap on
+     * each DATA frame and on the response's `content-length` header
+     * (when present) — overrun resets the stream with
+     * `N00B_H3_ERR_EXCESSIVE_LOAD` and flips the request into the RESET
+     * state with `body_cap_exceeded = true` so callers can distinguish
+     * cap-driven resets from peer-initiated resets.
+     *
+     * Set via `n00b_h3_request_await`'s `.max_body_size` kwarg (or by
+     * direct field write from a higher layer; see http_h3.c). */
+    uint64_t                 max_body_size;
+    bool                     body_cap_exceeded;
 };
 
 /* ===========================================================================

@@ -72,16 +72,18 @@ typedef struct n00b_http_connection_pool n00b_http_connection_pool_t;
  *                   stateless — every call pays the QUIC handshake.
  * @kw max_body_size Optional per-call response-body byte cap.
  *                   Default 0 = no cap (existing callers see
- *                   identical behavior).  When non-zero, after the
- *                   response materializes we compare
- *                   `body->byte_len` to the cap and surface
- *                   `N00B_HTTP_ERR_RESPONSE_TOO_LARGE` (-9) on
- *                   overrun.  The h3 layer accumulates DATA frames
- *                   inside picoquic before surfacing them; the
- *                   public dispatcher gives the h1 path the
- *                   cheaper-to-enforce slot (it can short-circuit
- *                   on Content-Length).  h3's slot is symmetric so
- *                   callers don't have to special-case transport.
+ *                   identical behavior).  When non-zero, the h3
+ *                   receive loop enforces the cap mid-stream:
+ *                   a `content-length` response header that exceeds
+ *                   the cap short-circuits before any DATA bytes are
+ *                   accepted, and DATA-frame accumulation is bounded
+ *                   per-frame.  On overrun the stream is reset with
+ *                   `H3_EXCESSIVE_LOAD` (RFC 9114 § 8.1) and the
+ *                   call returns `N00B_HTTP_ERR_RESPONSE_TOO_LARGE`
+ *                   (-9).  A post-await backstop catches any path
+ *                   that escapes the mid-stream guard.  Mirrors h1's
+ *                   two-layered enforcement so callers see identical
+ *                   semantics across transports.
  * @kw allocator     Default per-runtime conduit pool.
  *
  * @return  Result with the populated `n00b_h3_response_t *` on

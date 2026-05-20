@@ -2312,6 +2312,20 @@ quic_h3_server_loopback_test = executable('test_quic_h3_server_loopback',
 test('quic_h3_server_loopback', quic_h3_server_loopback_test,
      suite: 'unit', timeout: 60)
 
+# WP-004 Phase 5 closeout — h3 mid-stream `max_body_size` enforcement
+# regression (DF-014 lift).  Pins the receive-loop guard introduced on
+# top of sub-agent 5 (`uq ae`)'s post-await check: a server that sends
+# (or declares via `content-length`) a body larger than the caller's
+# cap must trigger an `H3_EXCESSIVE_LOAD` stream reset before any
+# excess bytes accumulate.  Uses the same in-process loopback fixture
+# as `test_quic_h3_server_loopback`.
+http_h3_max_body_cap_test = executable('test_http_h3_max_body_cap',
+    ['test/unit/test_http_h3_max_body_cap.c'],
+    kwargs: quic_test_kwargs,
+)
+test('http_h3_max_body_cap', http_h3_max_body_cap_test,
+     suite: 'unit', timeout: 60)
+
 # Phase 4 § 4.4 — Docker-gated H3 GET / + POST /echo smoke against
 # the nginx-quic fixture in `test/fixtures/nginx-quic/`.  Run after:
 #   eval "$(bash test/fixtures/nginx-quic/start.sh)"

@@ -473,21 +473,39 @@ n00b_http_h3_round_trip(n00b_http_url_t *url)
     }
     n00b_h3_request_t *req = n00b_result_get(reqr);
 
-    auto respr = n00b_h3_request_await(req, .deadline_ms = await_ms);
+    auto respr = n00b_h3_request_await(req,
+                                       .deadline_ms   = await_ms,
+                                       .max_body_size = max_body_size);
     if (n00b_result_is_err(respr)) {
         int err = (int)n00b_result_get_err(respr);
+        /* Mid-stream cap enforcement: the receive loop reset the
+         * stream with `H3_EXCESSIVE_LOAD` before the body could
+         * accumulate past the cap.  `n00b_h3_request_await` returned
+         * `LOCAL_RESET`; the request flag tells us this was a cap
+         * trip (vs. some other local reset).  Translate to the
+         * HTTP-layer code so callers see identical semantics across
+         * h1 and h3. */
+        if (max_body_size > 0
+            && err == N00B_QUIC_ERR_LOCAL_RESET
+            && n00b_h3_request_body_cap_exceeded(req)) {
+            h3_pool_entry_close(&entry_storage);
+            return n00b_result_err(n00b_h3_response_t *,
+                                    N00B_HTTP_ERR_RESPONSE_TOO_LARGE);
+        }
         h3_pool_entry_close(&entry_storage);
         return n00b_result_err(n00b_h3_response_t *, err);
     }
     n00b_h3_response_t *resp = n00b_result_get(respr);
 
-    /* Per-call response-body cap enforcement (DF-014).  The h3 layer
-     * already accumulated DATA frames inside picoquic, so we surface
-     * the cap as a post-await check that mirrors the h1 path's
-     * `N00B_HTTP_ERR_RESPONSE_TOO_LARGE` semantics.  Streaming-cap
-     * enforcement (cancel the stream mid-flight) is a future lift
-     * that would require pushing the cap into `n00b_h3_request_await`
-     * itself. */
+    /* Per-call response-body cap backstop (DF-014).  The mid-stream
+     * guard inside `n00b_h3_request_await` is the primary enforcement
+     * point — it resets the stream before the body grows past the cap
+     * and surfaces `RESPONSE_TOO_LARGE` via the LOCAL_RESET path above.
+     * This post-await check stays as a defensive backstop: if a future
+     * change to the body-receive loop fails to trip the mid-stream
+     * guard for some reason (frame batching, off-by-one, etc.), the
+     * cap still fires here.  Cost is one comparison against an already-
+     * materialized buffer length. */
     if (max_body_size > 0 && resp && resp->body
         && (uint64_t)resp->body->byte_len > max_body_size) {
         h3_pool_entry_close(&entry_storage);

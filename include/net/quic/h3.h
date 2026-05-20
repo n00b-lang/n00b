@@ -454,25 +454,50 @@ extern n00b_result_t(n00b_h3_request_t *)
  *
  * @kw deadline_ms    Maximum wall-clock time to wait, milliseconds.
  *                    Default 10000.  -1 = wait indefinitely.
+ * @kw drive          When false, the await loop does NOT pump the
+ *                    endpoint via `n00b_quic_endpoint_run_once`.
+ *                    Default: true (await drives the endpoint
+ *                    itself, which is fine for single-call test
+ *                    patterns).
+ * @kw max_body_size  Per-call response-body byte cap.  Default
+ *                    0 = no cap.  When non-zero, the receive loop
+ *                    enforces the cap on each DATA-frame append AND
+ *                    on a `content-length` response header (when the
+ *                    server sent one).  Overrun resets the stream
+ *                    with `N00B_H3_ERR_EXCESSIVE_LOAD` and the await
+ *                    returns `N00B_QUIC_ERR_LOCAL_RESET`; callers
+ *                    inspect `n00b_h3_request_body_cap_exceeded` to
+ *                    distinguish cap-driven resets from peer resets.
  *
  * @return Result: ok with the populated response;
  *         err(@c N00B_QUIC_ERR_TIMEOUT) on deadline expiry;
  *         err(@c N00B_QUIC_ERR_PEER_RESET) if the peer reset the
  *         stream;
+ *         err(@c N00B_QUIC_ERR_LOCAL_RESET) if the local cap fired
+ *         (see `n00b_h3_request_body_cap_exceeded`);
  *         err(@c N00B_QUIC_ERR_PROTOCOL) on a malformed response.
  */
 extern n00b_result_t(n00b_h3_response_t *)
     n00b_h3_request_await(n00b_h3_request_t *req)
     _kargs {
-        int32_t deadline_ms = 10000;
-        /* When false, the await loop does NOT pump the endpoint via
-         * `n00b_quic_endpoint_run_once`.  Callers that already have an
-         * external driver thread pumping the endpoint should set this
-         * to false; otherwise multiple await threads would race
-         * inside picoquic.  Default: true (await drives the endpoint
-         * itself, which is fine for single-call test patterns). */
-        bool    drive       = true;
+        int32_t  deadline_ms   = 10000;
+        bool     drive         = true;
+        uint64_t max_body_size = 0;
     };
+
+/**
+ * @brief Did the local `max_body_size` cap fire on this request?
+ *
+ * True when the receive loop reset the stream because the server's
+ * response body (or its declared `content-length`) exceeded the
+ * caller-supplied cap.  Always false when no cap was set.
+ *
+ * Pairs with `n00b_h3_request_await`'s `LOCAL_RESET` return to
+ * disambiguate cap-driven resets from other local resets (none today;
+ * exists for forward-compat).
+ */
+extern bool
+n00b_h3_request_body_cap_exceeded(n00b_h3_request_t *req);
 
 /**
  * @brief Cancel a request (RESET_STREAM with @c REQUEST_CANCELLED).
