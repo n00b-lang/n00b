@@ -114,7 +114,11 @@ typedef struct _n00b_dict_internal_t {
  * away": clears the dict in O(buckets) without freeing/reallocating the
  * bucket/key/value arrays.  Not safe under concurrent mutation.
  */
-#define n00b_dict_clear(dict) _n00b_wrap_dict_call(clear, dict)
+#define n00b_dict_clear(dict)                                                                  \
+    ({                                                                                         \
+        _n00b_dict_structural_check(dict);                                                     \
+        _n00b_dict_internal_clear((_n00b_dict_internal_t *)(dict));                            \
+    })
 
 #define n00b_dict_put(dict, key, value) _n00b_wrap_dict_call(put, dict, &(key), &(value))
 #define n00b_dict_get(dict, key, found)                                                        \
@@ -178,7 +182,7 @@ typedef struct _n00b_dict_internal_t {
 // This private interface (from here, down) is untyped, and thus internal.
 extern void       _n00b_finalize_dict(_n00b_dict_internal_t *);
 extern n00b_size_t n00b_dict_internal_len(_n00b_dict_internal_t *);
-extern void       _n00b_dict_internal_clear(_n00b_dict_internal_t *, uint16_t ksz, uint16_t vsz);
+extern void       _n00b_dict_internal_clear(_n00b_dict_internal_t *);
 
 /**
  * @brief Initialize an untyped dictionary.
@@ -190,7 +194,7 @@ extern void       _n00b_dict_internal_clear(_n00b_dict_internal_t *, uint16_t ks
  * @kw skip_obj_hash  If true, use the raw key bits instead of calling the hash function.
  */
 extern void
-_n00b_dict_internal_init(_n00b_dict_internal_t *, uint16_t ksz, uint16_t vsz) _kargs
+_n00b_dict_internal_init(_n00b_dict_internal_t *, size_t ksz, size_t vsz) _kargs
 {
     n00b_allocator_t    *allocator      = nullptr;
     uint32_t             start_capacity = N00B_DICT_MIN_SIZE;

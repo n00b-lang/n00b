@@ -611,7 +611,7 @@ try_again:
 }
 
 extern void
-_n00b_dict_internal_init(_n00b_dict_internal_t *dict, uint16_t ksz, uint16_t vsz) _kargs
+_n00b_dict_internal_init(_n00b_dict_internal_t *dict, size_t ksz, size_t vsz) _kargs
 {
     n00b_allocator_t    *allocator      = nullptr;
     uint32_t             start_capacity = N00B_DICT_MIN_SIZE;
@@ -682,10 +682,8 @@ _n00b_finalize_dict(_n00b_dict_internal_t *d)
  * Not safe under concurrent mutation.
  */
 extern void
-_n00b_dict_internal_clear(_n00b_dict_internal_t *d, uint16_t ksz, uint16_t vsz)
+_n00b_dict_internal_clear(_n00b_dict_internal_t *d)
 {
-    (void)ksz;
-    (void)vsz;
     __n00b_internal_type_erased_store_t *s =
         (__n00b_internal_type_erased_store_t *)n00b_atomic_load(&d->store);
     if (!s) return;
