@@ -170,7 +170,11 @@ jb_put_kv(j_builder_t *jb, const char *key, n00b_json_node_t *value, bool first)
     jb_putc(jb, '"');
     jb_put_cstr(jb, key);
     jb_put_cstr(jb, "\" : ");
-    char *encoded = n00b_json_encode(value);
+    // Canonical mode produces byte-stable output independent of
+    // dict-insertion order — required so the ATTESTATION subtree
+    // (and any other nested object value) round-trips byte-stably
+    // through libchalk parse + reserialize.
+    char *encoded = n00b_json_encode(value, .canonical = true);
     jb_put_cstr(jb, encoded);
 }
 

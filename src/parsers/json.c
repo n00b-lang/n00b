@@ -591,7 +591,21 @@ typedef struct {
     int    indent;
     int    depth;
     bool   error;
+    bool   canonical;
 } json_encoder_t;
+
+typedef struct {
+    const char             *key;
+    const n00b_json_node_t *value;
+} json_kv_pair_t;
+
+static int
+json_kv_cmp(const void *a, const void *b)
+{
+    const json_kv_pair_t *pa = (const json_kv_pair_t *)a;
+    const json_kv_pair_t *pb = (const json_kv_pair_t *)b;
+    return strcmp(pa->key, pb->key);
+}
 
 static void
 enc_ensure(json_encoder_t *e, size_t needed)
@@ -755,21 +769,50 @@ encode_value(json_encoder_t *e, const n00b_json_node_t *val)
         size_t n = (size_t)n00b_atomic_load(&val->object->length);
         if (n > 0) {
             e->depth++;
-            size_t count = 0;
             n00b_dict_untyped_store_t *store =
                 n00b_atomic_load(&val->object->store);
             uint32_t last = store->last_slot;
-            for (uint32_t i = 0; i <= last; i++) {
-                n00b_dict_untyped_bucket_t *b = &store->buckets[i];
-                uint32_t flags = n00b_atomic_load(&b->flags);
-                if (b->hv == 0 || (flags & 4)) continue;
-                if (count > 0) enc_char(e, ',');
-                enc_newline_indent(e);
-                encode_string(e, (const char *)b->key);
-                enc_char(e, ':');
-                if (e->pretty) enc_char(e, ' ');
-                encode_value(e, (const n00b_json_node_t *)b->value);
-                count++;
+
+            if (e->canonical) {
+                // Canonical mode: collect (key, value) pairs into a
+                // temp array, sort lexicographically by key, then
+                // emit in sorted order. Produces byte-stable output
+                // for downstream consumers that hash / compare the
+                // wire form (e.g. libchalk's ATTESTATION subtree).
+                json_kv_pair_t *pairs = n00b_alloc_array(json_kv_pair_t, n);
+                size_t live = 0;
+                for (uint32_t i = 0; i <= last; i++) {
+                    n00b_dict_untyped_bucket_t *b = &store->buckets[i];
+                    uint32_t flags = n00b_atomic_load(&b->flags);
+                    if (b->hv == 0 || (flags & 4)) continue;
+                    if (live >= n) break;
+                    pairs[live].key   = (const char *)b->key;
+                    pairs[live].value = (const n00b_json_node_t *)b->value;
+                    live++;
+                }
+                qsort(pairs, live, sizeof(json_kv_pair_t), json_kv_cmp);
+                for (size_t i = 0; i < live; i++) {
+                    if (i > 0) enc_char(e, ',');
+                    enc_newline_indent(e);
+                    encode_string(e, pairs[i].key);
+                    enc_char(e, ':');
+                    if (e->pretty) enc_char(e, ' ');
+                    encode_value(e, pairs[i].value);
+                }
+            } else {
+                size_t count = 0;
+                for (uint32_t i = 0; i <= last; i++) {
+                    n00b_dict_untyped_bucket_t *b = &store->buckets[i];
+                    uint32_t flags = n00b_atomic_load(&b->flags);
+                    if (b->hv == 0 || (flags & 4)) continue;
+                    if (count > 0) enc_char(e, ',');
+                    enc_newline_indent(e);
+                    encode_string(e, (const char *)b->key);
+                    enc_char(e, ':');
+                    if (e->pretty) enc_char(e, ' ');
+                    encode_value(e, (const n00b_json_node_t *)b->value);
+                    count++;
+                }
             }
             e->depth--;
             enc_newline_indent(e);
@@ -787,18 +830,20 @@ encode_value(json_encoder_t *e, const n00b_json_node_t *val)
 char *
 n00b_json_encode(const n00b_json_node_t *val) _kargs
 {
-    bool pretty = false;
-    int  indent = 2;
+    bool pretty    = false;
+    int  indent    = 2;
+    bool canonical = false;
 }
 {
     json_encoder_t e = {
-        .buf    = nullptr,
-        .len    = 0,
-        .cap    = 0,
-        .pretty = pretty,
-        .indent = indent > 0 ? indent : 2,
-        .depth  = 0,
-        .error  = false,
+        .buf       = nullptr,
+        .len       = 0,
+        .cap       = 0,
+        .pretty    = pretty,
+        .indent    = indent > 0 ? indent : 2,
+        .depth     = 0,
+        .error     = false,
+        .canonical = canonical,
     };
 
     encode_value(&e, val);

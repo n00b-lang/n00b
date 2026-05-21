@@ -328,10 +328,12 @@ extract_attestation_node(n00b_dict_t(n00b_string_t *, n00b_json_node_t *) *d)
 
 // The golden ATTESTATION JSON bytes for [A]. Built by the
 // (validated) Phase 1 builder against the fixed inputs above.
-// Field order: envelope_digest, predicate_types, registry_hint,
-// signer_keyid, envelopes — per docs/attest/04-in-container-
-// identity.md §1 + the WP-005 plan §Phase-1 ordered-string-concat
-// disposition.
+// Field order: LEXICOGRAPHIC (canonical) — envelope_digest,
+// envelopes, predicate_types, registry_hint, signer_keyid. Same
+// order libchalk's n00b_json_encode(.canonical = true) re-emits
+// the subtree in; chosen so the wire bytes round-trip
+// byte-stably through libchalk parse + reserialize. Per the
+// WP-005 plan §Phase-1 canonical-field-order disposition.
 //
 // envelope_digest = sha256:<hex>(envelope_wire_bytes_for_fixture).
 // We compute this dynamically in the test (the envelope wire
@@ -368,17 +370,17 @@ test_bundled_mode_golden(void)
     char expected[16 * 1024];
     int  n = snprintf(expected, sizeof(expected),
         "{\"envelope_digest\":\"%s\","
+        "\"envelopes\":[{\"envelope_base64\":\"%s\","
+        "\"predicate_type\":\"%s\"}],"
         "\"predicate_types\":[\"%s\"],"
         "\"registry_hint\":\"%s\","
-        "\"signer_keyid\":\"%s\","
-        "\"envelopes\":[{\"predicate_type\":\"%s\","
-        "\"envelope_base64\":\"%s\"}]}",
+        "\"signer_keyid\":\"%s\"}",
         wire_digest,
+        wire_b64->data,
+        k_predicate_type,
         k_predicate_type,
         k_registry_hint,
-        k_signer_keyid,
-        k_predicate_type,
-        wire_b64->data);
+        k_signer_keyid);
     assert(n > 0 && (size_t)n < sizeof(expected));
 
     // Mark the fixture ELF.
@@ -456,6 +458,9 @@ test_lazy_mode_golden(void)
     const char *wire_digest = sha256_prefixed_hex_static(
         (const uint8_t *)wire->data, (size_t)wire->byte_len);
 
+    // Canonical (lexicographic) field order: envelope_digest,
+    // predicate_types, registry_hint, signer_keyid. No envelopes[]
+    // in lazy mode.
     char expected[2048];
     int  n = snprintf(expected, sizeof(expected),
         "{\"envelope_digest\":\"%s\","
@@ -524,18 +529,21 @@ test_no_registry_hint_golden(void)
     ASSERT_OK(wire_b64_r);
     n00b_string_t *wire_b64 = n00b_result_get(wire_b64_r);
 
+    // Canonical (lexicographic) field order: envelope_digest,
+    // envelopes, predicate_types, signer_keyid. No registry_hint
+    // in this sub-test (omission verifier).
     char expected[16 * 1024];
     int  n = snprintf(expected, sizeof(expected),
         "{\"envelope_digest\":\"%s\","
+        "\"envelopes\":[{\"envelope_base64\":\"%s\","
+        "\"predicate_type\":\"%s\"}],"
         "\"predicate_types\":[\"%s\"],"
-        "\"signer_keyid\":\"%s\","
-        "\"envelopes\":[{\"predicate_type\":\"%s\","
-        "\"envelope_base64\":\"%s\"}]}",
+        "\"signer_keyid\":\"%s\"}",
         wire_digest,
+        wire_b64->data,
         k_predicate_type,
-        k_signer_keyid,
         k_predicate_type,
-        wire_b64->data);
+        k_signer_keyid);
     assert(n > 0 && (size_t)n < sizeof(expected));
 
     n00b_buffer_t *elf_bytes = build_elf_fixture();

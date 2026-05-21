@@ -20,27 +20,34 @@ binaries) or the envelope digest + registry hint (lazy mode,
 for size-sensitive cases).
 
 Concretely, the mark's `ATTESTATION` field (a JSON tree
-libchalk passes through verbatim) carries:
+libchalk passes through verbatim) carries the following fields.
+**Field order is lexicographic (canonical)** — the producer
+emits in lexicographic order and libchalk's
+`n00b_json_encode(.canonical = true)` re-emits in the same
+order, so the wire bytes round-trip byte-stably through libchalk
+parse + reserialize. Required by downstream consumers that
+hash / sign / compare the ATTESTATION subtree bytes.
 
 ```json
 {
   "envelope_digest":   "sha256:...",
-  "predicate_types":   ["https://slsa.dev/provenance/v1",
-                        "https://schemas.crashoverride.com/attestation/sbom/v1"],
-  "registry_hint":     "ghcr.io",
-  "signer_keyid":      "ab12cd34ef567890ab12cd34ef567890",
 
   // Present in bundled mode, absent in lazy mode:
   "envelopes": [
     {
-      "predicate_type":  "https://slsa.dev/provenance/v1",
-      "envelope_base64": "<DSSE bytes>"
+      "envelope_base64": "<DSSE bytes>",
+      "predicate_type":  "https://slsa.dev/provenance/v1"
     },
     {
-      "predicate_type":  "https://schemas.crashoverride.com/attestation/sbom/v1",
-      "envelope_base64": "..."
+      "envelope_base64": "...",
+      "predicate_type":  "https://schemas.crashoverride.com/attestation/sbom/v1"
     }
-  ]
+  ],
+
+  "predicate_types":   ["https://slsa.dev/provenance/v1",
+                        "https://schemas.crashoverride.com/attestation/sbom/v1"],
+  "registry_hint":     "ghcr.io",
+  "signer_keyid":      "ab12cd34ef567890ab12cd34ef567890"
 }
 ```
 

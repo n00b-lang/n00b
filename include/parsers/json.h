@@ -144,12 +144,20 @@ n00b_json_node_t *n00b_json_parse(const char *input, size_t input_len,
  * @brief Encode a JSON value tree to text.
  *
  * @param val The root value to encode.
- * @kw pretty  Enable indented output (default false).
- * @kw indent  Indent width in spaces (default 2).
+ * @kw pretty     Enable indented output (default false).
+ * @kw indent     Indent width in spaces (default 2).
+ * @kw canonical  Emit object keys in lexicographic (codepoint-sort)
+ *                order so the output is byte-stable across runs and
+ *                independent of dictionary insertion order (default
+ *                false; current behavior preserved). Required by
+ *                downstream consumers that compute hashes / signatures
+ *                over the JSON wire form — e.g. libchalk's
+ *                ATTESTATION subtree round-trip through extract.
  *
  * @return NUL-terminated JSON text, or nullptr on error.
  */
 extern char *n00b_json_encode(const n00b_json_node_t *val) _kargs {
-    bool pretty = false;
-    int  indent = 2;
+    bool pretty    = false;
+    int  indent    = 2;
+    bool canonical = false;
 };

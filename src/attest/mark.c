@@ -246,13 +246,21 @@ sha256_prefixed_hex(const uint8_t   *bytes,
 // ---------------------------------------------------------------------------
 // ATTESTATION JSON builder (D-056 — ordered string concatenation).
 //
-// Field order, byte-stable, per docs/attest/04-in-container-identity.md §1:
+// Field order, byte-stable, LEXICOGRAPHIC (canonical / RFC-8785-style)
+// — matches the order libchalk's n00b_json_encode(.canonical = true)
+// re-emits the subtree in, so the ATTESTATION JSON round-trips
+// byte-stably through libchalk parse + reserialize:
 //
 //   envelope_digest
+//   envelopes       (only when bundled mode)
 //   predicate_types
 //   registry_hint   (only when non-null)
 //   signer_keyid
-//   envelopes       (only when bundled mode)
+//
+// Entries within envelopes[] also use lexicographic field order:
+//
+//   envelope_base64
+//   predicate_type
 //
 // Each envelope contributes (a) its base64-of-wire bytes, (b) the
 // predicate type from its embedded Statement, and (c) its keyid
@@ -444,9 +452,38 @@ build_attestation_json(const per_envelope_t *envs,
         o += (n);                                                       \
     } while (0)
 
+    // Field order is LEXICOGRAPHIC (canonical / RFC-8785-style) so
+    // the wire output is byte-stable across the libchalk
+    // parse-then-reserialize round-trip (libchalk emits in
+    // canonical order via n00b_json_encode(.canonical = true)).
+    // Order: envelope_digest, envelopes, predicate_types,
+    // registry_hint (optional), signer_keyid.
+    // Each entry within envelopes[] also uses lexicographic order
+    // (envelope_base64, predicate_type).
     APPEND_LIT("{\"envelope_digest\":\"");
     o += json_escape_into(out + o, env0_digest->data, env0_digest->u8_bytes);
-    APPEND_LIT("\",\"predicate_types\":[");
+    APPEND_LIT("\"");
+
+    if (bundled) {
+        APPEND_LIT(",\"envelopes\":[");
+        for (size_t i = 0; i < n_envs; i++) {
+            APPEND_LIT("{\"envelope_base64\":\"");
+            o += json_escape_into(out + o,
+                                  envs[i].envelope_base64->data,
+                                  envs[i].envelope_base64->u8_bytes);
+            APPEND_LIT("\",\"predicate_type\":\"");
+            o += json_escape_into(out + o,
+                                  envs[i].predicate_type->data,
+                                  envs[i].predicate_type->u8_bytes);
+            APPEND_LIT("\"}");
+            if (i + 1 < n_envs) {
+                APPEND_LIT(",");
+            }
+        }
+        APPEND_LIT("]");
+    }
+
+    APPEND_LIT(",\"predicate_types\":[");
     for (size_t i = 0; i < n_envs; i++) {
         APPEND_LIT("\"");
         o += json_escape_into(out + o,
@@ -472,25 +509,6 @@ build_attestation_json(const per_envelope_t *envs,
         o += json_escape_into(out + o, sk_data, sk_len);
     }
     APPEND_LIT("\"");
-
-    if (bundled) {
-        APPEND_LIT(",\"envelopes\":[");
-        for (size_t i = 0; i < n_envs; i++) {
-            APPEND_LIT("{\"predicate_type\":\"");
-            o += json_escape_into(out + o,
-                                  envs[i].predicate_type->data,
-                                  envs[i].predicate_type->u8_bytes);
-            APPEND_LIT("\",\"envelope_base64\":\"");
-            o += json_escape_into(out + o,
-                                  envs[i].envelope_base64->data,
-                                  envs[i].envelope_base64->u8_bytes);
-            APPEND_LIT("\"}");
-            if (i + 1 < n_envs) {
-                APPEND_LIT(",");
-            }
-        }
-        APPEND_LIT("]");
-    }
 
     APPEND_LIT("}");
 
