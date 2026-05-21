@@ -621,20 +621,19 @@ idna_canonicalize_or_null(const char *src, size_t src_len)
     return r.value;
 }
 
-/* Returns true iff @p host (already lowercased by the URL parser
- * per RFC 3986 § 3.2.2, but NOT yet IDNA-canonicalized) is matched
- * by some entry in @p allowlist.  Both sides are run through UTS-46
- * `to_ascii` so Unicode and Punycode forms compare equal in either
- * direction.
+/* Returns true iff @p host (assumed already pure-ASCII canonical
+ * form — lowercased + UTS-46 ToASCII applied by the URL parser per
+ * DF-X) is matched by some entry in @p allowlist.  Entries are run
+ * through UTS-46 `to_ascii` so Unicode-authored entries cross-match
+ * the ACE-form host.
  *
  * Two entry shapes are recognized:
  *
  *   - Exact entries (no `*` anywhere): canonicalize the whole
- *     entry, then ASCII-CI byte-compare against the canonicalized
- *     host.  Pure-ASCII entries land at the same bytes they would
- *     have hit pre-IDNA (ASCII is a fixed point of `to_ascii`
- *     modulo case folding), preserving the cand-#6 contract
- *     byte-identically.
+ *     entry, then ASCII-CI byte-compare against the host.
+ *     Pure-ASCII entries land at the same bytes they would have hit
+ *     pre-IDNA (ASCII is a fixed point of `to_ascii` modulo case
+ *     folding), preserving the cand-#6 contract byte-identically.
  *
  *   - Wildcard entries (`*.DOMAIN` with at least one label after
  *     the dot, e.g. `*.example.com` or `*.例え.com`): classify on
@@ -642,18 +641,14 @@ idna_canonicalize_or_null(const char *src, size_t src_len)
  *     be fed to the IDNA pipeline — it would reject `*` as
  *     disallowed), then canonicalize only the `DOMAIN` portion
  *     after the `*.`.  Match any host of the form `X.DOMAIN` for
- *     some non-empty `X` after both sides are canonicalized.  The
- *     apex `DOMAIN` itself is NOT matched.
+ *     some non-empty `X` after the entry's `DOMAIN` is
+ *     canonicalized.  The apex `DOMAIN` itself is NOT matched.
  *
  *   - Any other `*` placement (`foo.*.com`, `**.example.com`,
  *     `*example.com`, bare `*`) is malformed and silently skipped.
  *
  * IDNA-error handling:
  *
- *   - Host canonicalization failure → return false immediately.  A
- *     host that cannot be IDNA-canonicalized cannot belong to any
- *     allowlist.  In practice the URL parser will not produce one;
- *     this is defensive.
  *   - Entry canonicalization failure (exact-side or DOMAIN-portion)
  *     → skip that entry, continue scanning the rest of the list.
  *     Same skip-as-malformed semantics as cand #6.
@@ -661,20 +656,26 @@ idna_canonicalize_or_null(const char *src, size_t src_len)
  * An empty allowlist (0 entries) returns false — "no hosts
  * permitted".  A nullptr allowlist is *not* passed here; the
  * caller checks `redirect_host_allowlist != nullptr` before
- * calling this. */
+ * calling this.
+ *
+ * DF-X note: prior versions of this matcher ran the host through
+ * `idna_canonicalize_or_null` here.  That step is now redundant
+ * because the URL parser canonicalizes the host upstream at parse
+ * time; the host bytes that reach this function are guaranteed to
+ * be the ACE form already.  Removing the host-side pass eliminates
+ * the per-call canonicalization cost while preserving the contract
+ * (host and entries still meet in ACE space). */
 bool
 host_in_allowlist(n00b_string_t                *host,
                   n00b_list_t(n00b_string_t *) *allowlist)
 {
     if (!host || !allowlist) return false;
 
-    /* Canonicalize the host once.  Any failure → no allowlist
-     * entry can match. */
-    n00b_string_t *chost = idna_canonicalize_or_null(host->data,
-                                                     host->u8_bytes);
-    if (!chost) return false;
-    const char *hdat = chost->data;
-    size_t      hlen = chost->u8_bytes;
+    /* DF-X: the URL parser delivers `host` in canonical ACE form
+     * already, so we compare against the host bytes directly. */
+    const char *hdat = host->data;
+    size_t      hlen = host->u8_bytes;
+    if (hlen == 0) return false;
 
     /* Lists are value types; the kwarg is a pointer to the
      * caller's lvalue.  The list macros expect lvalue access so we

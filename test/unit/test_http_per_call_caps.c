@@ -584,20 +584,14 @@ test_wildcard_matching(void)
     /* ---- IDN / UTS-46 sub-cases (deferral-B promotion) ---------- */
     /* The Punycode form of `例え` is `xn--r8jz45g`, so the canonical
      * ACE forms of `例え.com` and `xn--r8jz45g.com` are byte-equal.
-     * The matcher canonicalizes both sides through
-     * `n00b_unicode_idna_to_ascii` before compare; Unicode and
-     * already-Punycode entries therefore cross-match in either
-     * direction. */
+     * Post-DF-X the URL parser canonicalizes the host upstream; the
+     * matcher now assumes ACE-form input on the host side and
+     * canonicalizes only entries.  These cases use the ACE-form
+     * host directly (the form the URL parser would emit) to match
+     * the new contract; Unicode/Punycode authorship on the entry
+     * side still cross-matches the canonical host. */
 
-    /* [7i] Unicode wildcard + Unicode host. */
-    {
-        const char *entries[] = {"*.例え.com"};
-        auto       *al        = build_allowlist(entries, 1);
-        assert(host_in_allowlist(
-            n00b_string_from_cstr("foo.例え.com"), al));
-    }
-
-    /* [7j] Unicode wildcard + Punycode host. */
+    /* [7i] Unicode wildcard + canonical (ACE-form) host. */
     {
         const char *entries[] = {"*.例え.com"};
         auto       *al        = build_allowlist(entries, 1);
@@ -605,12 +599,23 @@ test_wildcard_matching(void)
             n00b_string_from_cstr("foo.xn--r8jz45g.com"), al));
     }
 
-    /* [7k] Punycode wildcard + Unicode host. */
+    /* [7j] Unicode wildcard + canonical (ACE-form) host (same as
+     *      [7i]; pre-DF-X this leg passed a Unicode host directly,
+     *      now subsumed by [7i]).  Kept as a redundant assertion
+     *      for explicit cross-match coverage. */
+    {
+        const char *entries[] = {"*.例え.com"};
+        auto       *al        = build_allowlist(entries, 1);
+        assert(host_in_allowlist(
+            n00b_string_from_cstr("foo.xn--r8jz45g.com"), al));
+    }
+
+    /* [7k] Punycode wildcard + canonical (ACE-form) host. */
     {
         const char *entries[] = {"*.xn--r8jz45g.com"};
         auto       *al        = build_allowlist(entries, 1);
         assert(host_in_allowlist(
-            n00b_string_from_cstr("foo.例え.com"), al));
+            n00b_string_from_cstr("foo.xn--r8jz45g.com"), al));
     }
 
     /* [7l] IDN apex rejection: the wildcard does NOT match the
@@ -618,8 +623,6 @@ test_wildcard_matching(void)
     {
         const char *entries[] = {"*.例え.com"};
         auto       *al        = build_allowlist(entries, 1);
-        assert(!host_in_allowlist(
-            n00b_string_from_cstr("例え.com"), al));
         assert(!host_in_allowlist(
             n00b_string_from_cstr("xn--r8jz45g.com"), al));
     }
@@ -631,7 +634,7 @@ test_wildcard_matching(void)
         const char *entries[] = {"*.例え.com"};
         auto       *al        = build_allowlist(entries, 1);
         assert(!host_in_allowlist(
-            n00b_string_from_cstr("foo.別.com"), al));
+            n00b_string_from_cstr("foo.xn--gcr.com"), al));
     }
 
     /* [7n] Malformed-IDN entry skip: an entry with invalid UTF-8
@@ -662,18 +665,19 @@ test_wildcard_matching(void)
     }
 
     /* [7o] Mixed IDN allowlist: `[example.com, *.例え.com]`
-     *      matches both `example.com` and `foo.例え.com`, but
-     *      rejects `例え.com` (apex of the wildcard) and
-     *      `foo.bar.com` (not in the list). */
+     *      matches both `example.com` and the canonical
+     *      `foo.xn--r8jz45g.com` (ACE form of `foo.例え.com`),
+     *      but rejects `xn--r8jz45g.com` (apex of the wildcard)
+     *      and `foo.bar.com` (not in the list). */
     {
         const char *entries[] = {"example.com", "*.例え.com"};
         auto       *al        = build_allowlist(entries, 2);
         assert(host_in_allowlist(
             n00b_string_from_cstr("example.com"), al));
         assert(host_in_allowlist(
-            n00b_string_from_cstr("foo.例え.com"), al));
+            n00b_string_from_cstr("foo.xn--r8jz45g.com"), al));
         assert(!host_in_allowlist(
-            n00b_string_from_cstr("例え.com"), al));
+            n00b_string_from_cstr("xn--r8jz45g.com"), al));
         assert(!host_in_allowlist(
             n00b_string_from_cstr("foo.bar.com"), al));
     }

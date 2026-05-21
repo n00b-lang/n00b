@@ -272,6 +272,94 @@ test_long_path_query(void)
     printf("  [PASS] longer path + query partitioning\n");
 }
 
+/* ------------------------------------------------------------------ */
+/* DF-X — IDNA / UTS-46 canonicalization of DNS-label hosts at parse  */
+/* time.  Post-lift, `parsed_url->host` is always pure ASCII (ACE     */
+/* form for non-ASCII labels, lowercased ASCII for ASCII labels,     */
+/* IPv4 dotted-quads + IPv6 literals byte-identical to input).       */
+/* ------------------------------------------------------------------ */
+
+static void
+test_idn_ascii_passthrough(void)
+{
+    /* Pure-ASCII input → byte-identical to current behavior.  This
+     * is the backward-compat invariant: ASCII domains are a fixed
+     * point of UTS-46 ToASCII modulo case folding, which we already
+     * applied. */
+    n00b_http_url_t *u = parse_ok("https://example.com/");
+    assert(streq(u->host, "example.com"));
+    printf("  [PASS] IDN: ASCII passthrough\n");
+}
+
+static void
+test_idn_mixed_case_ascii(void)
+{
+    /* Sanity check: case-folding still applies on the IDNA path. */
+    n00b_http_url_t *u = parse_ok("https://EXAMPLE.com/");
+    assert(streq(u->host, "example.com"));
+    printf("  [PASS] IDN: mixed-case ASCII lowercased\n");
+}
+
+static void
+test_idn_unicode_hostname(void)
+{
+    /* Non-ASCII host → ACE / Punycode form.  `例え` is the test
+     * fixture used by deferral-B; its Punycode is `xn--r8jz45g`. */
+    n00b_http_url_t *u = parse_ok("https://例え.com/");
+    assert(streq(u->host, "xn--r8jz45g.com"));
+    printf("  [PASS] IDN: Unicode host -> ACE form\n");
+}
+
+static void
+test_idn_already_ace(void)
+{
+    /* Idempotent: an already-ACE host parses to itself.  This
+     * confirms UTS-46 ToASCII recognizes `xn--…` labels and
+     * re-encodes them without re-Punycoding. */
+    n00b_http_url_t *u = parse_ok("https://xn--r8jz45g.com/");
+    assert(streq(u->host, "xn--r8jz45g.com"));
+    printf("  [PASS] IDN: already-ACE input is idempotent\n");
+}
+
+static void
+test_idn_ipv4_literal_passthrough(void)
+{
+    /* IPv4 dotted-quad is a fixed point of UTS-46 (each octet is
+     * a valid pure-ASCII DNS label).  Host bytes survive
+     * byte-identically — no `xn--` mangling. */
+    n00b_http_url_t *u = parse_ok("https://192.168.1.1/");
+    assert(streq(u->host, "192.168.1.1"));
+    assert(!u->is_ipv6_literal);
+    printf("  [PASS] IDN: IPv4 dotted-quad bypasses IDNA\n");
+}
+
+static void
+test_idn_ipv6_literal_bypasses(void)
+{
+    /* IPv6 literal payload is hex digits + `:` + `.` + `%`; the
+     * parser bypasses IDNA for the bracketed form. */
+    n00b_http_url_t *u = parse_ok("https://[::1]/");
+    assert(u->is_ipv6_literal);
+    assert(streq(u->host, "::1"));
+    printf("  [PASS] IDN: IPv6 literal bypasses IDNA\n");
+}
+
+static void
+test_idn_invalid_utf8_rejected(void)
+{
+    /* Invalid UTF-8 in the host slice → UTS-46 returns
+     * `_PROCESSING_ERROR` (DF-Y contract), which the parser maps
+     * to `N00B_HTTP_ERR_HOST_INVALID`.  No silent fallback to
+     * raw bytes. */
+    const char bad[] = {'h', 't', 't', 'p', 's', ':', '/', '/',
+                        (char)0xff, (char)0xfe, '.', 'c', 'o', 'm', '/'};
+    n00b_string_t *u  = n00b_string_from_raw(bad, (int64_t)sizeof(bad));
+    auto           r  = n00b_http_url_parse(u);
+    assert(n00b_result_is_err(r));
+    assert((int32_t)n00b_result_get_err(r) == N00B_HTTP_ERR_HOST_INVALID);
+    printf("  [PASS] IDN: invalid UTF-8 host -> HOST_INVALID\n");
+}
+
 static void
 test_err_str_round_trip(void)
 {
@@ -323,6 +411,13 @@ main(int argc, char **argv)
     test_reject_bad_port();
     test_null_input();
     test_long_path_query();
+    test_idn_ascii_passthrough();
+    test_idn_mixed_case_ascii();
+    test_idn_unicode_hostname();
+    test_idn_already_ace();
+    test_idn_ipv4_literal_passthrough();
+    test_idn_ipv6_literal_bypasses();
+    test_idn_invalid_utf8_rejected();
     test_err_str_round_trip();
     printf("All test_http_url tests passed.\n");
 

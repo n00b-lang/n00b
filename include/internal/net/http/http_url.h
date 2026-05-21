@@ -56,8 +56,24 @@ typedef enum : int32_t {
  * supported.
  *
  * @c host         Host without IPv6 brackets.  For `https://[::1]:8443/`
- *                 this is `"::1"`, not `"[::1]"`.  Lowercased per
- *                 RFC 3986 § 3.2.2 (case-insensitive host comparison).
+ *                 this is `"::1"`, not `"[::1]"`.  Always pure ASCII
+ *                 post-parse:
+ *
+ *                 - DNS-label hosts pass through UTS #46 ToASCII at
+ *                   parse time (DF-X), so Unicode labels arrive as
+ *                   `xn--…` Punycode.  Pure-ASCII labels are
+ *                   byte-identical to their raw input modulo
+ *                   UTS-46 case-folding (lowercased).
+ *                 - IPv4 dotted-quads are a fixed point of UTS-46
+ *                   (each octet `0-255` is a valid ASCII DNS label)
+ *                   and survive unchanged.
+ *                 - IPv6 literals bypass IDNA and are lowercased
+ *                   per RFC 3986 § 3.2.2.
+ *
+ *                 Downstream consumers (allowlist matcher, cookie
+ *                 jar, Host header, TLS SNI, `getaddrinfo`,
+ *                 alt-svc) therefore see a canonical ACE-form host
+ *                 without re-running IDNA themselves.
  * @c is_ipv6_literal  True iff the authority used the `[…]` form.
  * @c port              Effective port — explicit value if present,
  *                      otherwise 443 (the HTTPS default).
@@ -104,7 +120,14 @@ typedef struct n00b_http_url {
  *                                               contains `user[:pass]@`
  *                                               (RFC 9110 § 4.2.4)
  *          - `N00B_HTTP_ERR_HOST_EMPTY`         if the host is empty
- *          - `N00B_HTTP_ERR_HOST_INVALID`       for malformed IPv6 literal
+ *          - `N00B_HTTP_ERR_HOST_INVALID`       for a malformed IPv6
+ *                                               literal OR a DNS-label
+ *                                               host that UTS #46 ToASCII
+ *                                               rejects (invalid UTF-8,
+ *                                               disallowed codepoint,
+ *                                               BIDI rule violation,
+ *                                               label / domain too long,
+ *                                               Punycode failure, etc.)
  *          - `N00B_HTTP_ERR_PORT_INVALID`       for a non-decimal,
  *                                               zero, or out-of-range port
  *          - `N00B_HTTP_ERR_INVALID_URL`        for any other shape error
