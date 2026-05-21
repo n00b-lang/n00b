@@ -198,6 +198,13 @@ n00b_shutdown(void)
 }
 
 void
+n00b_exit(int code)
+{
+    n00b_shutdown();
+    exit(code);
+}
+
+void
 n00b_init(n00b_runtime_t *rt, int argc, char *argv[]) _kargs
 {
     n00b_allocator_t *allocator       = nullptr;

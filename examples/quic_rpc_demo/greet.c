@@ -4,9 +4,7 @@
  * The handler functions are annotated with `@rpc(...)` so ncc emits both
  * the dispatcher and the constructor-registrar at this site.  The CBOR
  * encode/decode hooks (per request/response/stream-item type) are
- * referenced by the ncc-generated dispatcher + client stub via typeid-
- * mangled names; we provide concrete implementations here that call the
- * Phase 4.1 CBOR codec.
+ * referenced directly by the ncc-generated dispatcher + client stub.
  *
  * Wire shape per RPC:
  *

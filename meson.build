@@ -433,6 +433,12 @@ subdir('src/chalk')
 subdir('src/ml')
 
 # ============================================================================
+# Data formats: local landing sinks and readers
+# ============================================================================
+
+subdir('src/data')
+
+# ============================================================================
 # Networking: QUIC stack (phases 1-5) + HTTP/1.1+H3 client (phase 6)
 # ============================================================================
 
@@ -458,6 +464,7 @@ n00b_dll_src = (
     n00b_objfile_src +
     n00b_chalk_src +
     n00b_ml_src +
+    n00b_data_src +
     n00b_quic_src +
     n00b_http_src
 )
@@ -682,6 +689,12 @@ file_io_test = executable('test_file_io',
     kwargs: test_common_kwargs,
 )
 test('file_io', file_io_test, suite: 'unit')
+
+parquet_flat_test = executable('test_parquet_flat',
+    ['test/unit/test_parquet_flat.c'],
+    kwargs: test_common_kwargs,
+)
+test('parquet_flat', parquet_flat_test, suite: 'unit')
 
 mutex_test = executable('test_mutex',
     ['test/unit/test_mutex.c'],
@@ -941,6 +954,12 @@ json_test = executable('test_json',
     kwargs: test_common_kwargs,
 )
 test('json', json_test, suite: 'unit')
+
+json_contract_test = executable('test_json_contract',
+    ['test/unit/test_json_contract.c'],
+    kwargs: test_common_kwargs,
+)
+test('json_contract', json_contract_test, suite: 'unit')
 
 xform_json_test = executable('test_xform_json',
     ['test/unit/test_xform_json.c'],
@@ -1813,6 +1832,19 @@ http_auth_test = executable('test_http_auth',
     kwargs: test_common_kwargs,
 )
 test('http_auth', http_auth_test, suite: 'unit')
+
+# Local HTTP/1 service/router.
+http_service_test = executable('test_http_service',
+    ['test/unit/test_http_service.c'],
+    kwargs: test_common_kwargs,
+)
+test('http_service', http_service_test, suite: 'unit')
+
+http_json_parquet_test = executable('test_http_json_parquet',
+    ['test/unit/test_http_json_parquet.c'],
+    kwargs: test_common_kwargs,
+)
+test('http_json_parquet', http_json_parquet_test, suite: 'unit')
 
 # Phase 4 § 4.1 — CBOR encoder + decoder (RFC 8949).  Unit tests
 # cover Appendix A vectors + n00b round-trips + decoder hardening +

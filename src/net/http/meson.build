@@ -13,4 +13,5 @@ n00b_http_src = files(
     'http_compression.c',  # chunk 8 — Content-Encoding decompression
     'http_cookies.c',      # chunk 9 — RFC 6265-bis cookie jar
     'http_auth.c',         # chunk 10 — Bearer + DPoP + mTLS hooks
+    'http_service.c',      # local HTTP/1 service/router
 )

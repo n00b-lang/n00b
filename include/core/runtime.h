@@ -148,6 +148,15 @@ extern void n00b_init_simple(int argc, char *argv[]);
 extern void n00b_shutdown(void);
 
 /**
+ * @brief Shut down the runtime and terminate the process.
+ * @param code Process exit status.
+ *
+ * Prefer this over calling `exit()` directly from n00b-aware programs,
+ * so conduit IO and other runtime services get a chance to drain.
+ */
+extern void n00b_exit(int code);
+
+/**
  * @brief Get the runtime's default allocator.
  * @return Pointer to the default allocator.
  */
