@@ -1,7 +1,12 @@
 N00B_BUILD_TYPE=${N00B_BUILD_TYPE:-debug}
 N00B_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 N00B_CLEAN=${N00B_CLEAN:-0}
+N00B_BUILD_TARGETS=${N00B_BUILD_TARGETS:-}
 N00B_TEST=${N00B_TEST:-0}
+N00B_TEST_FAIL_FAST=${N00B_TEST_FAIL_FAST:-0}
+N00B_TEST_SUITES=${N00B_TEST_SUITES:-}
+N00B_TEST_NO_SUITES=${N00B_TEST_NO_SUITES:-}
+N00B_TESTS=${N00B_TESTS:-}
 N00B_DOCS=${N00B_DOCS:-0}
 N00B_CROSS=${N00B_CROSS:-}
 N00B_JOBS=${N00B_JOBS:-}
@@ -157,9 +162,14 @@ function all_options {
 
 function build_n00b {
    local build_dir=${1:-build_${N00B_BUILD_TYPE}}
-   local jobs_flag=""
+   local compile_args=(-C "${build_dir}")
    if [[ -n "${N00B_JOBS}" ]] ; then
-       jobs_flag="-j ${N00B_JOBS}"
+       compile_args+=(-j "${N00B_JOBS}")
+   fi
+   if [[ -n "${N00B_BUILD_TARGETS}" ]] ; then
+       local requested_build_targets=()
+       read -r -a requested_build_targets <<< "${N00B_BUILD_TARGETS}"
+       compile_args+=("${requested_build_targets[@]}")
    fi
 
    if [[ ${N00B_CLEAN} -ne 0 ]] && [[ -d ${build_dir} ]] ; then
@@ -178,17 +188,44 @@ function build_n00b {
        fi
    fi
 
-   if ! meson compile -C ${build_dir} ${jobs_flag}; then
+   if ! meson compile "${compile_args[@]}"; then
        echo "Build compile failed."
        exit 1
    fi
 
    if [[ ${N00B_TEST} -ne 0 ]] ; then
-       local test_jobs_flag=""
+       local meson_test_args=(--print-errorlogs --timeout-multiplier 3)
        if [[ -n "${N00B_JOBS}" ]] ; then
-           test_jobs_flag="--num-processes ${N00B_JOBS}"
+           meson_test_args+=(--num-processes "${N00B_JOBS}")
        fi
-       meson test -C ${build_dir} --print-errorlogs --timeout-multiplier 3 ${test_jobs_flag}
+       if [[ ${N00B_TEST_FAIL_FAST} -ne 0 ]] ; then
+           meson_test_args+=(--maxfail "${N00B_TEST_FAIL_FAST}")
+       fi
+       if [[ -n "${N00B_BUILD_TARGETS}" && -n "${N00B_TESTS}" ]] ; then
+           meson_test_args+=(--no-rebuild)
+       fi
+       if [[ -n "${N00B_TEST_SUITES}" ]] ; then
+           local requested_suites=()
+           read -r -a requested_suites <<< "${N00B_TEST_SUITES}"
+           local suite
+           for suite in "${requested_suites[@]}" ; do
+               meson_test_args+=(--suite "${suite}")
+           done
+       fi
+       if [[ -n "${N00B_TEST_NO_SUITES}" ]] ; then
+           local skipped_suites=()
+           read -r -a skipped_suites <<< "${N00B_TEST_NO_SUITES}"
+           local no_suite
+           for no_suite in "${skipped_suites[@]}" ; do
+               meson_test_args+=(--no-suite "${no_suite}")
+           done
+       fi
+       if [[ -n "${N00B_TESTS}" ]] ; then
+           local requested_tests=()
+           read -r -a requested_tests <<< "${N00B_TESTS}"
+           meson_test_args+=("${requested_tests[@]}")
+       fi
+       meson test -C "${build_dir}" "${meson_test_args[@]}"
        if [[ $? -ne 0 ]] ; then
            echo "Tests failed."
            exit 1
@@ -196,7 +233,12 @@ function build_n00b {
    fi
 
    if [[ ${N00B_DOCS} -ne 0 ]] ; then
-       meson compile -C ${build_dir} ${jobs_flag} docs
+       local docs_args=(-C "${build_dir}")
+       if [[ -n "${N00B_JOBS}" ]] ; then
+           docs_args+=(-j "${N00B_JOBS}")
+       fi
+       docs_args+=(docs)
+       meson compile "${docs_args[@]}"
        if [[ $? -ne 0 ]] ; then
            echo "Documentation generation failed."
            exit 1

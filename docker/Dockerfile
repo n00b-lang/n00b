@@ -6,28 +6,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         git wget ca-certificates gnupg lsb-release \
     && rm -rf /var/lib/apt/lists/*
 
-# Try clang-22 from apt.llvm.org; fall back to clang-20 then clang-19.
+# ncc currently requires Clang 22.1.0+ for C23 #embed / --embed-dir.
 RUN wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key \
         | gpg --dearmor -o /etc/apt/keyrings/llvm.gpg \
     && echo "deb [signed-by=/etc/apt/keyrings/llvm.gpg] \
-        http://apt.llvm.org/plucky/ llvm-toolchain-plucky main" \
+        http://apt.llvm.org/plucky/ llvm-toolchain-plucky-22 main" \
         > /etc/apt/sources.list.d/llvm.list \
     && apt-get update \
-    && if apt-get install -y --no-install-recommends clang-22 lld-22 2>/dev/null; then \
-           ln -sf /usr/bin/clang-22   /usr/bin/clang   && \
-           ln -sf /usr/bin/clang++-22 /usr/bin/clang++ ; \
-       elif apt-get install -y --no-install-recommends clang-20 lld-20 2>/dev/null; then \
-           ln -sf /usr/bin/clang-20   /usr/bin/clang   && \
-           ln -sf /usr/bin/clang++-20 /usr/bin/clang++ ; \
-       elif apt-get install -y --no-install-recommends clang-19 lld-19 2>/dev/null; then \
-           ln -sf /usr/bin/clang-19   /usr/bin/clang   && \
-           ln -sf /usr/bin/clang++-19 /usr/bin/clang++ ; \
-       else \
-           echo "ERROR: no usable clang version found" >&2 && exit 1; \
-       fi \
+    && apt-get install -y --no-install-recommends clang-22 lld-22 \
+    && ln -sf /usr/bin/clang-22   /usr/bin/clang \
+    && ln -sf /usr/bin/clang++-22 /usr/bin/clang++ \
     && rm -rf /var/lib/apt/lists/*
 
-# meson >= 1.6.0 (repo version may be too old)
+# meson >= 1.6.0 (repo version may be too old).
 RUN pip3 install --break-system-packages 'meson>=1.6.0'
 
 RUN clang --version && meson --version

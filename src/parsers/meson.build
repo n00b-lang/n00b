@@ -3,6 +3,7 @@
 n00b_parsers_src = files(
     'ijson.c',
     'json.c',
+    'json_contract.c',
     'scanner.c',
     'token_stream.c',
     'scan_recipes.c',
