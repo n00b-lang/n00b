@@ -91,6 +91,22 @@ static const n00b_err_t k_attest_codes[] = {
     // them). Per-call size cap on `_list_referrers` pagination per
     // NFR-5.
     N00B_ATTEST_ERR_OCI_RESPONSE_TOO_LARGE,
+    // Chalk integration domain (WP-005 Phase 1 per D-046 — phase
+    // introduces codes when it uses them). One `_BAD_REGISTRY_HINT`
+    // validation code, four IC-5 sentinels (`_NO_MARK`, `_NO_
+    // ATTESTATION`, `_MALFORMED_ATTESTATION`, `_CODEC_LOOKUP_FAILED`),
+    // three libchalk-dispatch passthroughs (`_INSERT_FAILED`,
+    // `_EXTRACT_FAILED`, `_DELETE_FAILED`), and `_BAD_ENVELOPE` for
+    // structurally malformed input envelopes.
+    N00B_ATTEST_ERR_CHALK_BAD_REGISTRY_HINT,
+    N00B_ATTEST_ERR_CHALK_NO_MARK,
+    N00B_ATTEST_ERR_CHALK_NO_ATTESTATION,
+    N00B_ATTEST_ERR_CHALK_MALFORMED_ATTESTATION,
+    N00B_ATTEST_ERR_CHALK_CODEC_LOOKUP_FAILED,
+    N00B_ATTEST_ERR_CHALK_INSERT_FAILED,
+    N00B_ATTEST_ERR_CHALK_EXTRACT_FAILED,
+    N00B_ATTEST_ERR_CHALK_DELETE_FAILED,
+    N00B_ATTEST_ERR_CHALK_BAD_ENVELOPE,
 };
 
 // Every base64-util code defined in the project.
@@ -137,10 +153,14 @@ test_attest_every_code_returns_nonempty(void)
     // bumped from 32 by D-046 for WP-004 Phase 4 to introduce
     // `_OCI_RESPONSE_TOO_LARGE` (-6010) for the per-call size cap
     // on `_list_referrers` pagination per NFR-5, taking the count
-    // to 33. If a future WP adds a code without updating this list,
-    // the value here drifts — a starting-point sanity check that
-    // pins the table size at its current cardinality.
-    assert(n == 33);
+    // to 33; bumped from 33 by D-046 for WP-005 Phase 1 to introduce
+    // nine chalk-integration codes (`_CHALK_BAD_REGISTRY_HINT`,
+    // four IC-5 sentinels, three libchalk-dispatch passthroughs,
+    // and `_CHALK_BAD_ENVELOPE`), taking the count to 42. If a
+    // future WP adds a code without updating this list, the value
+    // here drifts — a starting-point sanity check that pins the
+    // table size at its current cardinality.
+    assert(n == 42);
     for (size_t i = 0; i < n; i++) {
         n00b_string_t *s = n00b_attest_err_str(k_attest_codes[i]);
         assert_nonempty(s, "attest", k_attest_codes[i]);

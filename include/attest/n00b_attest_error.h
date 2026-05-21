@@ -28,6 +28,7 @@
  *   -4001 … -4099  Signer abstraction
  *   -5001 … -5099  Verifier abstraction
  *   -6001 … -6099  OCI integration (registry client + auth)
+ *   -7001 … -7099  Chalk integration (mark / unmark / extract)
  *
  * All codes are negative integers to avoid `errno` collision per
  * the libn00b convention (api-guidelines § 5.1).
@@ -602,6 +603,218 @@
  * tracked as DF-014.
  */
 #define N00B_ATTEST_ERR_OCI_RESPONSE_TOO_LARGE         (-6010)
+
+// ===========================================================================
+// Chalk integration (-7001 … -7099).
+//
+// Established by WP-005 Phase 1 as the chalk-integration namespace
+// for the `n00b_attest_mark_artifact` / `_unmark` /
+// `_extract_from_artifact` library surface. The block carries:
+//
+//   - `_CHALK_BAD_REGISTRY_HINT` (-7001): the caller-supplied
+//     `registry_hint` failed `n00b_attest_oci_url_parse`.
+//   - IC-5 sentinel quartet (-7002 .. -7005): `_CHALK_NO_MARK`,
+//     `_CHALK_NO_ATTESTATION`, `_CHALK_MALFORMED_ATTESTATION`,
+//     `_CHALK_CODEC_LOOKUP_FAILED`. Per the IC-5 spec
+//     (`docs/attest/01-requirements.md`) the four cases are
+//     reported as four distinct Err codes rather than a
+//     discriminated Ok-payload enum: the four cases all carry no
+//     useful Ok value, so the Err shape is semantically correct
+//     (and mirrors the `n00b_result_t(T) → Err(err_t)` precedent
+//     across the rest of the n00b_attest module).
+//   - libchalk-dispatch passthrough Err codes (-7006 .. -7008):
+//     `_CHALK_INSERT_FAILED`, `_CHALK_EXTRACT_FAILED`,
+//     `_CHALK_DELETE_FAILED` — surfaced when libchalk's
+//     `n00b_chalk_insert_file` / `_extract_file` / `_delete_file`
+//     return an Err for a reason that is NOT IC-5-(i..iv).
+//   - `_CHALK_BAD_ENVELOPE` (-7009): an input envelope in the
+//     caller-supplied `envelopes[]` list is malformed (failed
+//     `n00b_attest_envelope_get_payload` or
+//     `n00b_attest_statement_get_predicate_type`).
+// ===========================================================================
+
+/**
+ * @brief Module-domain error: the caller-supplied @c registry_hint
+ *        kwarg on @ref n00b_attest_mark_artifact failed to parse
+ *        as an OCI image reference.
+ *
+ * @details Surfaces from @ref n00b_attest_mark_artifact when the
+ * `.registry_hint` kwarg is non-null AND
+ * `n00b_attest_oci_url_parse` returns an Err leg against the same
+ * bytes. The mark is NOT inserted in this case — validation runs
+ * BEFORE any libchalk dispatch so a malformed hint cannot land in
+ * a binary's ATTESTATION JSON.
+ *
+ * Per WP-005 Phase 1 disposed scope the validated value is the
+ * FULL image reference (e.g. `ghcr.io/myorg/myrepo:tag` or the
+ * digest-pinned form). Hints that omit both digest and tag are
+ * rejected (`n00b_attest_oci_url_parse` enforces explicit
+ * pinning).
+ */
+#define N00B_ATTEST_ERR_CHALK_BAD_REGISTRY_HINT        (-7001)
+
+/**
+ * @brief Module-domain error: IC-5 case (i) — the artifact carries
+ *        no chalk mark.
+ *
+ * @details Surfaces from @ref n00b_attest_extract_from_artifact
+ * when the artifact's codec dispatch succeeded but
+ * `n00b_chalk_extract_file` reports that no chalk mark is present
+ * in the artifact bytes (e.g., an ELF binary that was never
+ * marked, or a Mach-O whose `LC_NOTE` does not carry a chalk
+ * owner). Per IC-5 in `docs/attest/01-requirements.md` this is
+ * one of the four "no usable attestation" sentinels callers must
+ * be able to distinguish.
+ *
+ * @note `_unmark` is also a possible producer in principle, but
+ * the current `_unmark` body uses libchalk's `_delete_file` whose
+ * Err code shape does not currently distinguish "no mark to
+ * delete" from "delete failed for some other reason"; the unmark
+ * path routes through @ref N00B_ATTEST_ERR_CHALK_DELETE_FAILED
+ * instead. A future libchalk lift may split the unmark surface.
+ */
+#define N00B_ATTEST_ERR_CHALK_NO_MARK                  (-7002)
+
+/**
+ * @brief Module-domain error: IC-5 case (ii) — the artifact carries
+ *        a chalk mark but the mark has no `ATTESTATION` field.
+ *
+ * @details Surfaces from @ref n00b_attest_extract_from_artifact
+ * when `n00b_chalk_extract_file` returned a mark dict but the
+ * dict does not contain the `ATTESTATION` key. Per the chalk
+ * mark contract (`include/chalk/n00b_chalk_mark.h`) the
+ * `ATTESTATION` key is optional; a marked binary that was chalked
+ * by libchalk without any attest data attached produces this
+ * sentinel.
+ */
+#define N00B_ATTEST_ERR_CHALK_NO_ATTESTATION           (-7003)
+
+/**
+ * @brief Module-domain error: IC-5 case (iii) — the artifact's
+ *        mark has an `ATTESTATION` field but its content is not
+ *        a well-formed ATTESTATION JSON tree.
+ *
+ * @details Surfaces from @ref n00b_attest_extract_from_artifact
+ * when the mark's `ATTESTATION` slot is present but its contents
+ * cannot be interpreted as the canonical ATTESTATION JSON shape
+ * documented in `docs/attest/04-in-container-identity.md` §1.
+ * Concretely, the slot is malformed when:
+ *
+ *   - The slot's JSON node is not an object.
+ *   - A required field is missing or has the wrong JSON type
+ *     (e.g., `envelope_digest` is not a string, `predicate_types`
+ *     is not an array of strings).
+ *   - The `envelopes[]` array (bundled mode) contains an entry
+ *     whose `envelope_base64` does not base64-decode, or whose
+ *     decoded bytes do not parse as a DSSE envelope.
+ *
+ * The IC-5 mapping deliberately separates "structurally malformed"
+ * (this code) from "no ATTESTATION at all" (@ref
+ * N00B_ATTEST_ERR_CHALK_NO_ATTESTATION) so consumers can
+ * distinguish "the producer never attached attestation data" from
+ * "the producer attached something, but it isn't valid."
+ */
+#define N00B_ATTEST_ERR_CHALK_MALFORMED_ATTESTATION    (-7004)
+
+/**
+ * @brief Module-domain error: IC-5 case (iv) — the artifact's
+ *        bytes do not match any libchalk codec.
+ *
+ * @details Surfaces from @ref n00b_attest_extract_from_artifact
+ * when `n00b_chalk_detect_file` returns
+ * @c N00B_CHALK_CODEC_NONE. The path's content (read by libchalk)
+ * does not match any of ELF / Mach-O / PE / GGUF / SafeTensors /
+ * ZIP / PyC / source / sidecar.
+ *
+ * @note This is a machinery condition — the caller handed the
+ * library bytes the library cannot reason about — distinct from
+ * the verdict-shaped IC-5 cases (i..iii) where the library DID
+ * understand the bytes but could not extract usable attestation.
+ * The Phase-2 CLI verb shim (`extract`) maps this to exit code 2
+ * (machinery failure) while (i..iii) collapse to exit 1
+ * (no-verdict).
+ */
+#define N00B_ATTEST_ERR_CHALK_CODEC_LOOKUP_FAILED      (-7005)
+
+/**
+ * @brief Module-domain error: libchalk's `n00b_chalk_insert_file`
+ *        returned an Err leg during @ref n00b_attest_mark_artifact.
+ *
+ * @details Surfaces from @ref n00b_attest_mark_artifact when the
+ * pre-flight steps (registry_hint validation, ATTESTATION JSON
+ * build, `n00b_chalk_mark_new`, `_mark_set_attestation`) all
+ * succeeded but `n00b_chalk_insert_file` itself returned an Err
+ * leg. Phase 1 ships a bare-code passthrough — the libchalk Err
+ * code shape (`1` = read failed, `2` = codec-insert failed, `3` =
+ * write failed per `n00b_chalk_file_insert_via` in
+ * `src/chalk/file_io.c`) is opaque at this layer; richer
+ * diagnostic distinction would require a libchalk public-Err lift
+ * outside Phase 1's scope.
+ */
+#define N00B_ATTEST_ERR_CHALK_INSERT_FAILED            (-7006)
+
+/**
+ * @brief Module-domain error: libchalk's `n00b_chalk_extract_file`
+ *        returned an Err leg for a reason that is NOT one of the
+ *        IC-5 sentinel cases (i..iv).
+ *
+ * @details Surfaces from @ref n00b_attest_extract_from_artifact
+ * when `n00b_chalk_extract_file` returned an Err leg AFTER the
+ * codec was successfully detected (i.e., `_CHALK_CODEC_LOOKUP_
+ * FAILED` would not apply). The libchalk Err shape today is
+ * opaque (numeric codec-specific code per
+ * `src/chalk/file_io.c:1`); the n00b-attest wrapper maps "no
+ * chalk section / no mark found" to @ref
+ * N00B_ATTEST_ERR_CHALK_NO_MARK (IC-5 (i)) and everything else
+ * to this code. A future libchalk public-Err lift could split
+ * this further (e.g., parse errors vs file-read errors).
+ */
+#define N00B_ATTEST_ERR_CHALK_EXTRACT_FAILED           (-7007)
+
+/**
+ * @brief Module-domain error: libchalk's `n00b_chalk_delete_file`
+ *        returned an Err leg during @ref n00b_attest_unmark.
+ *
+ * @details Surfaces from @ref n00b_attest_unmark when libchalk's
+ * `n00b_chalk_delete_file` returned an Err leg. As with `_INSERT_
+ * FAILED` and `_EXTRACT_FAILED`, Phase 1 ships a bare-code
+ * passthrough — the libchalk Err codes are not currently
+ * differentiated at this layer.
+ *
+ * @note The "no mark to delete" condition also routes through
+ * this code rather than `_CHALK_NO_MARK`. Splitting that out
+ * requires a libchalk lift that exposes a distinct "nothing to
+ * delete" Err code on the delete path.
+ */
+#define N00B_ATTEST_ERR_CHALK_DELETE_FAILED            (-7008)
+
+/**
+ * @brief Module-domain error: one of the input envelopes in the
+ *        @c envelopes positional arg of @ref
+ *        n00b_attest_mark_artifact is malformed.
+ *
+ * @details Surfaces from @ref n00b_attest_mark_artifact when the
+ * ATTESTATION JSON builder cannot extract the required per-
+ * envelope fields. Concretely, the builder needs each envelope's:
+ *
+ *   - Payload bytes (`n00b_attest_envelope_get_payload`) — used
+ *     to parse the Statement and to compute the
+ *     `envelope_digest` of envelope[0].
+ *   - Statement predicate type
+ *     (`n00b_attest_statement_get_predicate_type`) — used to
+ *     populate the `predicate_types[]` array and the per-
+ *     envelope `predicate_type` slot in `envelopes[]` (bundled
+ *     mode).
+ *
+ * If any envelope's payload cannot be borrowed (e.g., the
+ * envelope was constructed via @ref n00b_attest_envelope_new but
+ * never had a payload attached) or its inner Statement cannot be
+ * parsed / lacks a predicateType field, this Err surfaces.
+ *
+ * Mark insertion is NOT attempted in this case; the artifact's
+ * bytes are not touched.
+ */
+#define N00B_ATTEST_ERR_CHALK_BAD_ENVELOPE             (-7009)
 
 /**
  * @brief Look up a human-readable string for an n00b_attest

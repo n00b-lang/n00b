@@ -50,6 +50,7 @@
 #include <attest/n00b_attest_dsse.h>
 #include <attest/n00b_attest_cli.h>
 #include <attest/n00b_attest_oci.h>
+#include <attest/n00b_attest_mark.h>
 
 /**
  * @brief Module init stub.

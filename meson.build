@@ -891,6 +891,45 @@ test('attest_oci_end_to_end_smoke', attest_oci_end_to_end_smoke_test,
          'N00B_TEST_ZOT_SRC_ROOT': meson.current_source_dir(),
      })
 
+# WP-005 Phase 1: ATTESTATION JSON builder byte-stability golden
+# test. Three sub-tests (bundled+hint, lazy, no hint) cover the
+# canonical-field-order disposition (D-056) + the per-mode shape
+# transitions. Always-runs.
+attest_mark_attestation_json_test = executable(
+    'test_attest_mark_attestation_json',
+    ['test/unit/test_attest_mark_attestation_json.c'],
+    kwargs: test_common_kwargs,
+)
+test('attest_mark_attestation_json',
+     attest_mark_attestation_json_test,
+     suite: 'unit')
+
+# WP-005 Phase 1: `n00b_attest_mark_artifact` IC-4 hash contract +
+# registry_hint validation. Always-runs. Builds a tiny ELF fixture
+# in-process via libn00b's ELF builder (no fixture binary checked
+# in).
+attest_mark_artifact_test = executable(
+    'test_attest_mark_artifact',
+    ['test/unit/test_attest_mark_artifact.c'],
+    kwargs: test_common_kwargs,
+)
+test('attest_mark_artifact',
+     attest_mark_artifact_test,
+     suite: 'unit')
+
+# WP-005 Phase 1: `n00b_attest_extract_from_artifact` IC-5 sentinel
+# discrimination across all four cases (i..iv). Always-runs. Uses
+# ELF + Mach-O fixtures built in-process plus a non-binary blob for
+# the IC-5-(iv) case.
+attest_extract_from_artifact_test = executable(
+    'test_attest_extract_from_artifact',
+    ['test/unit/test_attest_extract_from_artifact.c'],
+    kwargs: test_common_kwargs,
+)
+test('attest_extract_from_artifact',
+     attest_extract_from_artifact_test,
+     suite: 'unit')
+
 # DF-013 regression: caller-supplied trust handle threaded through the
 # h1 transport.  Same zot fixture as attest_oci_push_smoke, but the
 # test exercises the libn00b-core path (n00b_http_request_sync ->
@@ -1748,7 +1787,7 @@ endif
 # Interpreter integration tests (shell runner invokes the n00b binary).
 if not meson.is_cross_build()
   bash_prog = find_program('bash', required: true)
-  test('n00b_interp',
+  test('interp',
       bash_prog,
       args: [
           files('test/interp/run_tests.sh'),
@@ -2837,17 +2876,9 @@ endif
 # Integration tests
 # ============================================================================
 
-# Interpreter integration tests (shell runner invokes the n00b binary).
-test('interp', find_program('bash'),
-    args: [meson.project_source_root() / 'test/interp/run_tests.sh',
-           n00b_exe],
-    suite: 'interp',
-    workdir: meson.project_source_root(),
-    timeout: 120,
-)
-
-
-
+# Interpreter integration tests live in the `interp` suite registered
+# earlier in this file (search for `test('interp', ...)`).  The older
+# `find_program('bash')` registration here was a duplicate.
 
 
 

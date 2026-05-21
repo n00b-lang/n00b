@@ -11,6 +11,7 @@
 #include "core/string.h"
 #include "chalk/n00b_chalk.h"
 #include "internal/chalk/codec_table.h"
+#include "internal/chalk/file_io.h"
 #include "internal/chalk/sidecar_internal.h"
 
 #include <string.h>
@@ -193,6 +194,18 @@ n00b_chalk_codec_detect(n00b_buffer_t *bytes, n00b_string_t *hint_path)
         }
     }
 
+    // Content sniff. If no bytes were supplied but a path was, read
+    // the file so the file-mode dispatchers (e.g. `n00b_chalk_hash_file`,
+    // `n00b_chalk_insert_file`) can recognize formats that lack a
+    // canonical extension on disk — most notably ELF and Mach-O.
+    n00b_buffer_t *sniffed = nullptr;
+    if (!bytes && hint_path) {
+        auto sr = n00b_chalk_read_file(hint_path);
+        if (n00b_result_is_ok(sr)) {
+            sniffed = n00b_result_get(sr);
+            bytes   = sniffed;
+        }
+    }
     if (!bytes || bytes->byte_len < 4) {
         return N00B_CHALK_CODEC_NONE;
     }

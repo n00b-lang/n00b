@@ -28,8 +28,15 @@
  * `_OCI_BLOB_DIGEST_MISMATCH`, -6009 `_OCI_BAD_REFERRER_INDEX` —
  * per D-046 (phase introduces codes when it uses them). WP-004
  * Phase 4 adds -6010 `_OCI_RESPONSE_TOO_LARGE` for the per-call
- * size cap on `_list_referrers` pagination (NFR-5 + D-046). Total
- * now thirty-three codes.
+ * size cap on `_list_referrers` pagination (NFR-5 + D-046). WP-005
+ * Phase 1 opens the `-7001..-7099` chalk-integration block per
+ * D-046 (phase introduces codes when it uses them) with nine codes:
+ * `_CHALK_BAD_REGISTRY_HINT`, four IC-5 sentinels (`_CHALK_NO_MARK`,
+ * `_CHALK_NO_ATTESTATION`, `_CHALK_MALFORMED_ATTESTATION`,
+ * `_CHALK_CODEC_LOOKUP_FAILED`), three libchalk-dispatch passthroughs
+ * (`_CHALK_INSERT_FAILED`, `_CHALK_EXTRACT_FAILED`,
+ * `_CHALK_DELETE_FAILED`), and `_CHALK_BAD_ENVELOPE`. Total now
+ * forty-two codes.
  *
  * Unknown codes return a documented fallback string (per the
  * api-guidelines § 5 contract that domain-specific `*_err_str`
@@ -141,6 +148,26 @@ n00b_attest_err_str(n00b_err_t err)
     // introduces codes when it uses them).
     case N00B_ATTEST_ERR_OCI_RESPONSE_TOO_LARGE:
         return r"oci: registry response body exceeded the per-call size cap";
+
+    // Chalk integration (-7001 .. -7009), WP-005 Phase 1.
+    case N00B_ATTEST_ERR_CHALK_BAD_REGISTRY_HINT:
+        return r"chalk: registry_hint failed OCI image-reference parse";
+    case N00B_ATTEST_ERR_CHALK_NO_MARK:
+        return r"chalk: artifact carries no chalk mark";
+    case N00B_ATTEST_ERR_CHALK_NO_ATTESTATION:
+        return r"chalk: chalk mark has no ATTESTATION field";
+    case N00B_ATTEST_ERR_CHALK_MALFORMED_ATTESTATION:
+        return r"chalk: ATTESTATION JSON is structurally invalid";
+    case N00B_ATTEST_ERR_CHALK_CODEC_LOOKUP_FAILED:
+        return r"chalk: artifact bytes do not match any libchalk codec";
+    case N00B_ATTEST_ERR_CHALK_INSERT_FAILED:
+        return r"chalk: libchalk insert_file dispatch returned an error";
+    case N00B_ATTEST_ERR_CHALK_EXTRACT_FAILED:
+        return r"chalk: libchalk extract_file dispatch returned an error";
+    case N00B_ATTEST_ERR_CHALK_DELETE_FAILED:
+        return r"chalk: libchalk delete_file dispatch returned an error";
+    case N00B_ATTEST_ERR_CHALK_BAD_ENVELOPE:
+        return r"chalk: input envelope is structurally malformed";
 
     default:
         return r"unknown attest error code";
