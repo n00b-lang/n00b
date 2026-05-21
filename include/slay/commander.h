@@ -62,16 +62,29 @@ typedef enum {
     N00B_CMDR_VAL_INT,   /**< 64-bit integer value. */
     N00B_CMDR_VAL_FLOAT, /**< Double-precision float value. */
     N00B_CMDR_VAL_STR,   /**< String value (GC-managed). */
+    N00B_CMDR_VAL_LIST,  /**< List of string values (multi-flag). */
 } n00b_cmdr_val_tag_t;
 
-/** @brief A tagged value from a parsed flag. */
+/**
+ * @brief A tagged value from a parsed flag.
+ *
+ * For flags declared with @c n00b_cmdr_add_flag_multi (or
+ * @c "multi": true in the JSON spec), the value tag is
+ * @c N00B_CMDR_VAL_LIST and the active union member is @c list — a
+ * @c n00b_list_t(n00b_string_t *) holding each occurrence (or
+ * comma-separated element) in order.
+ *
+ * For single-valued flags the union member follows @c tag in the
+ * same shape as it always has.
+ */
 typedef struct n00b_cmdr_val {
     n00b_cmdr_val_tag_t tag;
     union {
-        bool          b;
-        int64_t       i;
-        double        f;
-        n00b_string_t *s;
+        bool                          b;
+        int64_t                       i;
+        double                        f;
+        n00b_string_t                *s;
+        n00b_list_t(n00b_string_t *)  list;
     };
 } n00b_cmdr_val_t;
 
@@ -87,6 +100,12 @@ typedef struct n00b_cmdr_arg {
  *
  * Flags that take a value (takes_value == true) accept both
  * "--flag value" and "--flag=value" syntax.
+ *
+ * When @c multi is true, repeated occurrences accumulate into a
+ * @c N00B_CMDR_VAL_LIST value, and the value-parse site splits an
+ * unescaped `,` separator into multiple elements (with `\,` → literal
+ * `,`). Default is false: repeated occurrences are last-write-wins
+ * and the raw value is preserved verbatim.
  */
 typedef struct n00b_cmdr_flag_spec {
     n00b_string_t       *name;        /**< Long name including dashes (e.g., "--output"). */
@@ -96,6 +115,7 @@ typedef struct n00b_cmdr_flag_spec {
     n00b_string_t       *doc;         /**< Human-readable description, or empty. */
     int64_t             terminal_id; /**< Grammar terminal ID (set during finalize). */
     bool                has_short;   /**< True if short_name is set. */
+    bool                multi;       /**< Repeatable + comma-split flag (see above). */
 } n00b_cmdr_flag_spec_t;
 
 /**
@@ -189,6 +209,9 @@ n00b_cmdr_t *n00b_cmdr_from_bnf(n00b_string_t *bnf, n00b_string_t *start_symbol)
  *   - `"type"`: "bool" | "int" | "integer" | "float" | "number" | "word"
  *   - `"doc"`: (string) Description.
  *   - `"short"`: (string) Short alias (e.g., "-v").
+ *   - `"multi"`: (bool) If true, the flag is repeatable and comma-split;
+ *     repeats and comma-separated values accumulate into a list value
+ *     (see @ref n00b_cmdr_add_flag_multi). Default: false.
  *
  * Each command object supports:
  *   - `"doc"`: (string) Description.
@@ -247,6 +270,35 @@ void n00b_cmdr_add_subcommand(n00b_cmdr_t *c, n00b_string_t *parent,
 void n00b_cmdr_add_flag(n00b_cmdr_t *c, n00b_string_t *command,
                          n00b_string_t *flag_name, n00b_cmdr_arg_type_t type,
                          bool takes_value, n00b_string_t *doc);
+
+/**
+ * @brief Add a repeatable / comma-split flag to a command.
+ *
+ * Identical to @ref n00b_cmdr_add_flag except that the resulting flag's
+ * spec has @c multi set to true. At parse time:
+ *
+ * - Each occurrence on the command line (e.g. `--out a --out b`)
+ *   appends one element to the value list.
+ * - A single occurrence with comma-separated values (`--out=a,b,c`)
+ *   appends each element to the list. Backslash-escaped commas
+ *   (`a\,b`) are treated as a literal `,` inside one element.
+ * - Mixed forms compose: `--out=a,b --out c` yields a 3-element list.
+ *
+ * The resulting flag's value tag is @c N00B_CMDR_VAL_LIST and the
+ * list is retrieved with @ref n00b_cmdr_flag_list. The flag is always
+ * value-taking; @c takes_value is implicit.
+ *
+ * @param c           Commander instance.
+ * @param command     Command name, or empty for global.
+ * @param flag_name   Flag name including dashes (e.g., "--out").
+ * @param value_type  Type tag (currently informative; values are
+ *                    stored as strings inside the list).
+ * @param doc         Description string.
+ */
+void n00b_cmdr_add_flag_multi(n00b_cmdr_t *c, n00b_string_t *command,
+                               n00b_string_t *flag_name,
+                               n00b_cmdr_arg_type_t value_type,
+                               n00b_string_t *doc);
 
 /**
  * @brief Add a short alias for an existing flag.
@@ -357,6 +409,26 @@ int64_t n00b_cmdr_flag_int(n00b_cmdr_result_t *r, n00b_string_t *flag);
  * @return Boolean value, or false if not present.
  */
 bool n00b_cmdr_flag_bool(n00b_cmdr_result_t *r, n00b_string_t *flag);
+
+/**
+ * @brief Get a multi-flag's value as a list of strings.
+ *
+ * For flags declared via @ref n00b_cmdr_add_flag_multi (or @c "multi": true
+ * in the JSON spec), returns the accumulated list of values in order of
+ * appearance. Both repeated occurrences and comma-split elements within a
+ * single occurrence contribute.
+ *
+ * @param r     Parse result.
+ * @param flag  Flag name (long or short).
+ * @return Pointer to the value list, or @c nullptr if the flag was not
+ *         present, was not declared multi, or the underlying value tag
+ *         is not @c N00B_CMDR_VAL_LIST.
+ *
+ * @post The returned list (if non-null) is owned by @p r and lives until
+ *       @ref n00b_cmdr_result_free is called.
+ */
+n00b_list_t(n00b_string_t *) *n00b_cmdr_flag_list(n00b_cmdr_result_t *r,
+                                                    n00b_string_t *flag);
 
 /**
  * @brief Get the number of positional arguments.

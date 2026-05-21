@@ -322,6 +322,41 @@ cstr_to_n00b(const char *s)
     return n00b_string_from_cstr(s);
 }
 
+// Read a "true"/"false" literal from a JSON <value> node, returning
+// fallback if the value is absent or unrecognized.
+static bool
+json_value_as_bool(n00b_parse_tree_t *value, bool fallback)
+{
+    if (!value) {
+        return fallback;
+    }
+
+    char *text = json_tree_text(value);
+
+    if (!text) {
+        return fallback;
+    }
+
+    // Trim leading whitespace -- the <value> rule wraps the literal.
+    char *p = text;
+
+    while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') {
+        p++;
+    }
+
+    bool result = fallback;
+
+    if (strncmp(p, "true", 4) == 0) {
+        result = true;
+    }
+    else if (strncmp(p, "false", 5) == 0) {
+        result = false;
+    }
+
+    n00b_free(text);
+    return result;
+}
+
 static void
 json_process_option(const char *flag_name, n00b_parse_tree_t *value, void *ctx)
 {
@@ -330,6 +365,7 @@ json_process_option(const char *flag_name, n00b_parse_tree_t *value, void *ctx)
 
     n00b_cmdr_arg_type_t type = N00B_CMDR_TYPE_BOOL;
     bool takes_value          = false;
+    bool multi                = false;
     char *doc                 = NULL;
     char *short_name          = NULL;
     char *type_str            = NULL;
@@ -354,11 +390,29 @@ json_process_option(const char *flag_name, n00b_parse_tree_t *value, void *ctx)
         if (short_val) {
             short_name = json_value_as_string(short_val);
         }
+
+        n00b_parse_tree_t *multi_val = json_find_member(obj, "multi");
+
+        if (multi_val) {
+            multi = json_value_as_bool(multi_val, false);
+        }
     }
 
-    n00b_cmdr_add_flag(oc->c, cstr_to_n00b(oc->cmd_name),
-                        cstr_to_n00b(flag_name), type, takes_value,
-                        cstr_to_n00b(doc));
+    if (multi) {
+        // A multi flag is always value-taking; type informs eventual
+        // coercion but the substrate currently stores strings.
+        n00b_cmdr_arg_type_t mt = (type == N00B_CMDR_TYPE_BOOL)
+                                    ? N00B_CMDR_TYPE_WORD
+                                    : type;
+        n00b_cmdr_add_flag_multi(oc->c, cstr_to_n00b(oc->cmd_name),
+                                  cstr_to_n00b(flag_name), mt,
+                                  cstr_to_n00b(doc));
+    }
+    else {
+        n00b_cmdr_add_flag(oc->c, cstr_to_n00b(oc->cmd_name),
+                            cstr_to_n00b(flag_name), type, takes_value,
+                            cstr_to_n00b(doc));
+    }
 
     if (short_name) {
         n00b_cmdr_add_flag_alias(oc->c, cstr_to_n00b(oc->cmd_name),

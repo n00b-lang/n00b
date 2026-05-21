@@ -439,6 +439,234 @@ test_error_queries(void)
 }
 
 // ============================================================================
+// Multi-flag substrate (DF-023): repeatable + comma-split flags.
+// ============================================================================
+
+// Build a commander whose `--out` flag is declared `multi`.
+static n00b_cmdr_t *
+build_multi_commander(void)
+{
+    n00b_cmdr_t *c = n00b_cmdr_new();
+
+    n00b_cmdr_set_name(c, r"multi-test");
+
+    n00b_cmdr_add_flag_multi(c, n00b_string_empty(), r"--out",
+                              N00B_CMDR_TYPE_WORD, r"Output paths");
+    n00b_cmdr_add_flag_alias(c, n00b_string_empty(), r"--out", r"-o");
+
+    // A second non-multi flag so we can check it stays last-write-wins.
+    n00b_cmdr_add_flag(c, n00b_string_empty(), r"--name",
+                        N00B_CMDR_TYPE_WORD, true, r"Single-shot name");
+
+    n00b_cmdr_add_positional(c, n00b_string_empty(), r"arg",
+                              N00B_CMDR_TYPE_WORD, 0, -1);
+
+    return c;
+}
+
+static void
+expect_list_eq(n00b_list_t(n00b_string_t *) *list, const char *const *expected,
+               size_t expected_n, const char *label)
+{
+    assert(list != NULL);
+    assert(list->len == expected_n);
+
+    for (size_t i = 0; i < expected_n; i++) {
+        n00b_string_t *got = list->data[i];
+        assert(got != NULL);
+        assert(got->data != NULL);
+
+        if (strcmp(got->data, expected[i]) != 0) {
+            fprintf(stderr,
+                    "  [FAIL] %s: index %zu expected \"%s\" got \"%s\"\n",
+                    label, i, expected[i], got->data);
+            assert(false);
+        }
+    }
+}
+
+// 15. Multi-flag repeat: --out a --out b --out c -> [a, b, c]
+static void
+test_multi_repeat(void)
+{
+    n00b_cmdr_t *c = build_multi_commander();
+
+    const char *argv[] = {"--out", "a", "--out", "b", "--out", "c"};
+    n00b_cmdr_result_t *r = n00b_cmdr_parse(c, 6, argv);
+
+    assert(r != NULL);
+    assert(r->ok);
+
+    n00b_list_t(n00b_string_t *) *got = n00b_cmdr_flag_list(r, r"--out");
+    const char *expected[] = {"a", "b", "c"};
+    expect_list_eq(got, expected, 3, "multi_repeat");
+
+    // Alias resolves to the same value.
+    assert(n00b_cmdr_flag_list(r, r"-o") == got);
+
+    n00b_cmdr_result_free(r);
+    n00b_cmdr_free(c);
+    printf("  [PASS] multi_repeat\n");
+}
+
+// 16. Comma-split: --out=a,b,c -> [a, b, c]
+static void
+test_multi_comma_split(void)
+{
+    n00b_cmdr_t *c = build_multi_commander();
+
+    const char *argv[] = {"--out=a,b,c"};
+    n00b_cmdr_result_t *r = n00b_cmdr_parse(c, 1, argv);
+
+    assert(r != NULL);
+    assert(r->ok);
+
+    n00b_list_t(n00b_string_t *) *got = n00b_cmdr_flag_list(r, r"--out");
+    const char *expected[] = {"a", "b", "c"};
+    expect_list_eq(got, expected, 3, "multi_comma_split");
+
+    n00b_cmdr_result_free(r);
+    n00b_cmdr_free(c);
+    printf("  [PASS] multi_comma_split\n");
+}
+
+// 17. Mixed: --out=a,b --out c -> [a, b, c]
+static void
+test_multi_mixed(void)
+{
+    n00b_cmdr_t *c = build_multi_commander();
+
+    const char *argv[] = {"--out=a,b", "--out", "c"};
+    n00b_cmdr_result_t *r = n00b_cmdr_parse(c, 3, argv);
+
+    assert(r != NULL);
+    assert(r->ok);
+
+    n00b_list_t(n00b_string_t *) *got = n00b_cmdr_flag_list(r, r"--out");
+    const char *expected[] = {"a", "b", "c"};
+    expect_list_eq(got, expected, 3, "multi_mixed");
+
+    n00b_cmdr_result_free(r);
+    n00b_cmdr_free(c);
+    printf("  [PASS] multi_mixed\n");
+}
+
+// 18. Escaped comma: --out a\,b --out c -> ["a,b", "c"]
+static void
+test_multi_escaped_comma(void)
+{
+    n00b_cmdr_t *c = build_multi_commander();
+
+    // C-string "a\\,b" -> the bytes a, \, ,, b -- i.e. the user typed
+    // a literal backslash-comma in their argv.
+    const char *argv[] = {"--out", "a\\,b", "--out", "c"};
+    n00b_cmdr_result_t *r = n00b_cmdr_parse(c, 4, argv);
+
+    assert(r != NULL);
+    assert(r->ok);
+
+    n00b_list_t(n00b_string_t *) *got = n00b_cmdr_flag_list(r, r"--out");
+    const char *expected[] = {"a,b", "c"};
+    expect_list_eq(got, expected, 2, "multi_escaped_comma");
+
+    n00b_cmdr_result_free(r);
+    n00b_cmdr_free(c);
+    printf("  [PASS] multi_escaped_comma\n");
+}
+
+// 19. Single value, multi flag: --out a -> [a] (length 1)
+static void
+test_multi_single_value(void)
+{
+    n00b_cmdr_t *c = build_multi_commander();
+
+    const char *argv[] = {"--out", "a"};
+    n00b_cmdr_result_t *r = n00b_cmdr_parse(c, 2, argv);
+
+    assert(r != NULL);
+    assert(r->ok);
+
+    n00b_list_t(n00b_string_t *) *got = n00b_cmdr_flag_list(r, r"--out");
+    const char *expected[] = {"a"};
+    expect_list_eq(got, expected, 1, "multi_single_value");
+
+    n00b_cmdr_result_free(r);
+    n00b_cmdr_free(c);
+    printf("  [PASS] multi_single_value\n");
+}
+
+// 20. Not present: no --out -> n00b_cmdr_flag_list returns nullptr.
+static void
+test_multi_not_present(void)
+{
+    n00b_cmdr_t *c = build_multi_commander();
+
+    const char *argv[] = {"--name", "ignored"};
+    n00b_cmdr_result_t *r = n00b_cmdr_parse(c, 2, argv);
+
+    assert(r != NULL);
+    assert(r->ok);
+
+    assert(n00b_cmdr_flag_list(r, r"--out") == nullptr);
+    assert(n00b_cmdr_flag_list(r, r"-o") == nullptr);
+
+    n00b_cmdr_result_free(r);
+    n00b_cmdr_free(c);
+    printf("  [PASS] multi_not_present\n");
+}
+
+// 21. Non-multi flag, repeat: --name a --name b -> "b" (last-write-wins).
+static void
+test_non_multi_last_write_wins(void)
+{
+    n00b_cmdr_t *c = build_multi_commander();
+
+    const char *argv[] = {"--name", "a", "--name", "b"};
+    n00b_cmdr_result_t *r = n00b_cmdr_parse(c, 4, argv);
+
+    assert(r != NULL);
+    assert(r->ok);
+
+    n00b_string_t *got = n00b_cmdr_flag_str(r, r"--name");
+    assert(got != NULL);
+    assert(got->data != NULL);
+    assert(strcmp(got->data, "b") == 0);
+
+    // A non-multi flag has no list representation.
+    assert(n00b_cmdr_flag_list(r, r"--name") == nullptr);
+
+    n00b_cmdr_result_free(r);
+    n00b_cmdr_free(c);
+    printf("  [PASS] non_multi_last_write_wins\n");
+}
+
+// 22. JSON spec round-trip: "multi": true → --out=a,b → [a, b]
+//
+// The JSON-spec parser (`n00b_cmdr_from_json` → embedded BNF →
+// Earley) hangs / crashes on any non-trivial JSON input on this
+// dispatch's baseline (test commander binary timed out at 90s when
+// the test invoked the loader; lldb showed lr0_goto_lookup reading
+// past the LR0 goto table during the JSON parse). This is a
+// pre-existing libn00b-core regression in the BNF/Earley
+// integration, surfaced for the first time by this dispatch's
+// added test — slay's JSON-spec entry point had no existing
+// callers (only n00b_cmdr_from_bnf is currently exercised, and via
+// programmatic builder tests). Surfacing as a flagged item for
+// the orchestrator; the multi-flag substrate is fully exercised by
+// the seven preceding tests (repeat, comma-split, mixed,
+// escaped-comma, single-value, not-present, non-multi
+// last-write-wins), and the JSON path's "multi": true honoring
+// is verified by code-inspection of json_process_option in
+// commander_json.c (read & forwarded into n00b_cmdr_add_flag_multi).
+static void
+test_multi_json_round_trip(void)
+{
+    printf("  [SKIP] multi_json_round_trip "
+            "(n00b_cmdr_from_json itself is non-functional on this "
+            "baseline; flagged_for_orchestrator)\n");
+}
+
+// ============================================================================
 // main
 // ============================================================================
 
@@ -464,6 +692,16 @@ main(int argc, char *argv[])
     test_tokenizer();
     test_bnf_mode();
     test_error_queries();
+
+    // DF-023: multi-flag substrate (repeat + comma-split + escapes).
+    test_multi_repeat();
+    test_multi_comma_split();
+    test_multi_mixed();
+    test_multi_escaped_comma();
+    test_multi_single_value();
+    test_multi_not_present();
+    test_non_multi_last_write_wins();
+    test_multi_json_round_trip();
 
     printf("All commander tests passed.\n");
 

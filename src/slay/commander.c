@@ -265,6 +265,35 @@ n00b_cmdr_add_flag(n00b_cmdr_t *c, n00b_string_t *command,
     f.doc         = doc;
     f.terminal_id = 0;
     f.has_short   = false;
+    f.multi       = false;
+
+    n00b_list_push(cmd->flags, f);
+}
+
+void
+n00b_cmdr_add_flag_multi(n00b_cmdr_t *c, n00b_string_t *command,
+                          n00b_string_t *flag_name,
+                          n00b_cmdr_arg_type_t value_type,
+                          n00b_string_t *doc)
+{
+    if (!c || !flag_name) {
+        return;
+    }
+
+    n00b_cmdr_command_t *cmd = cmdr_get_command(c, command);
+
+    if (!cmd) {
+        return;
+    }
+
+    n00b_cmdr_flag_spec_t f = {0};
+    f.name        = flag_name;
+    f.value_type  = value_type;
+    f.takes_value = true;
+    f.doc         = doc;
+    f.terminal_id = 0;
+    f.has_short   = false;
+    f.multi       = true;
 
     n00b_list_push(cmd->flags, f);
 }
@@ -639,6 +668,51 @@ cmdr_make_error_result(const char *msg)
     return r;
 }
 
+// Split a raw flag value string on unescaped ',' separators, applying
+// '\,' -> ',' unescape. Appends each resulting element (as an
+// n00b_string_t *) to `out`. A backslash followed by anything other
+// than ',' is preserved verbatim.
+static void
+cmdr_split_multi_value(n00b_string_t                *raw,
+                       n00b_list_t(n00b_string_t *) *out)
+{
+    if (!raw || raw->u8_bytes == 0) {
+        n00b_list_push(*out, n00b_string_empty());
+        return;
+    }
+
+    char  *buf = n00b_alloc_array(char, raw->u8_bytes + 1);
+    size_t bp  = 0;
+
+    for (size_t i = 0; i < raw->u8_bytes; i++) {
+        unsigned char ch = (unsigned char)raw->data[i];
+
+        if (ch == '\\' && i + 1 < raw->u8_bytes && raw->data[i + 1] == ',') {
+            buf[bp++] = ',';
+            i++;
+            continue;
+        }
+
+        if (ch == ',') {
+            buf[bp] = '\0';
+            n00b_list_push(*out,
+                            bp > 0 ? n00b_string_from_cstr(buf)
+                                   : n00b_string_empty());
+            bp = 0;
+            continue;
+        }
+
+        buf[bp++] = (char)ch;
+    }
+
+    buf[bp] = '\0';
+    n00b_list_push(*out,
+                    bp > 0 ? n00b_string_from_cstr(buf)
+                           : n00b_string_empty());
+
+    n00b_free(buf);
+}
+
 // Collect all terminal text from a parse tree into a flat list.
 static void
 cmdr_collect_terminal_text(n00b_parse_tree_t *tree,
@@ -752,6 +826,46 @@ cmdr_extract_result(n00b_cmdr_t *c, n00b_parse_tree_t *tree,
         if (n00b_option_is_set(flag_idx)) {
             n00b_cmdr_flag_spec_t flag = n00b_list_get(flag_cmd->flags,
                                                         n00b_option_get(flag_idx));
+
+            // Multi-flag path: accumulate into a N00B_CMDR_VAL_LIST.
+            if (flag.multi) {
+                // Skip '=' if present, then consume one value token.
+                if (i + 1 < n) {
+                    n00b_string_t *next = n00b_list_get(texts, i + 1);
+
+                    if (next && next->u8_bytes == 1 && next->data[0] == '=') {
+                        i++;
+                    }
+                }
+
+                if (i + 1 >= n) {
+                    continue;
+                }
+
+                i++;
+                n00b_string_t *raw = n00b_list_get(texts, i);
+
+                // Fetch or create the list value.
+                bool             found = false;
+                n00b_cmdr_val_t *v
+                    = n00b_dict_get(&r->flags, flag.name, &found);
+
+                if (!found || !v || v->tag != N00B_CMDR_VAL_LIST) {
+                    v       = n00b_alloc(n00b_cmdr_val_t);
+                    v->tag  = N00B_CMDR_VAL_LIST;
+                    v->list = n00b_list_new_private(n00b_string_t *);
+
+                    n00b_dict_put(&r->flags, flag.name, v);
+
+                    if (flag.has_short) {
+                        n00b_dict_put(&r->flags, flag.short_name, v);
+                    }
+                }
+
+                cmdr_split_multi_value(raw, &v->list);
+                continue;
+            }
+
             n00b_cmdr_val_t *v = n00b_alloc(n00b_cmdr_val_t);
 
             if (flag.takes_value && i + 1 < n) {
@@ -1040,6 +1154,18 @@ n00b_cmdr_flag_bool(n00b_cmdr_result_t *r, n00b_string_t *flag)
     }
 
     return v->b;
+}
+
+n00b_list_t(n00b_string_t *) *
+n00b_cmdr_flag_list(n00b_cmdr_result_t *r, n00b_string_t *flag)
+{
+    n00b_cmdr_val_t *v = n00b_cmdr_flag_get(r, flag);
+
+    if (!v || v->tag != N00B_CMDR_VAL_LIST) {
+        return nullptr;
+    }
+
+    return &v->list;
 }
 
 int32_t
