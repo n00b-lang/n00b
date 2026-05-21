@@ -137,7 +137,18 @@ struct n00b_attest_oci_auth {
 typedef struct n00b_attest_oci_image_ref {
     /** Registry hostname (with optional `:port`), or `nullptr` if
      *  the input omitted the prefix. Owned by the parser's
-     *  allocator. */
+     *  allocator.
+     *
+     *  **Form: raw, NOT IDNA-canonicalized.** The parser slices
+     *  the registry substring verbatim from the input image ref.
+     *  Downstream consumers that build a wire URL (e.g. via
+     *  `build_registry_origin` in `src/attest/cli.c`) get the
+     *  URL parser's DF-X IDNA canonicalization for free; consumers
+     *  that compare this field directly against another host
+     *  string (e.g. `n00b_attest_oci_auth_resolve`'s `.registry`
+     *  kwarg lookup against `registries.json` keys) must
+     *  re-canonicalize at compare time. The auth-side helper does
+     *  this internally (DF-J, 2026-05-20). */
     n00b_string_t *registry;
     /** Repository name (e.g. `"foo/bar"`). Required (never
      *  `nullptr` on success). */

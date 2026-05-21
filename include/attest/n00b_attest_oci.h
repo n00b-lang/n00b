@@ -358,6 +358,19 @@ n00b_attest_oci_client_new(n00b_string_t *registry_url)
  *                hostname). When `nullptr` the resolver returns
  *                the first non-empty credential found in any source.
  *                Default `nullptr`.
+ *
+ *                **IDN / UTS-46 support (DF-J, 2026-05-20).** The
+ *                filter is matched against `registries.json` keys
+ *                under IDNA canonicalization via @ref
+ *                n00b_unicode_idna_to_ascii: pure-ASCII filters
+ *                behave byte-identically (modulo UTS-46 case
+ *                folding); a Unicode filter (`例え.com`) cross-
+ *                matches a Punycode JSON key (`xn--r8jz45g.com`)
+ *                and vice versa. The optional `:port` suffix is
+ *                preserved verbatim across canonicalization. The
+ *                helper's fast path is raw byte equality so the
+ *                dominant ASCII case has no per-call IDNA cost;
+ *                IDNA is only invoked when the byte compare fails.
  * @kw sources    Optional ordered list of @ref
  *                n00b_attest_oci_auth_source_t enum values
  *                indicating which sources to walk and in what

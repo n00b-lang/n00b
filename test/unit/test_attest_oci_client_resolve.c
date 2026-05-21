@@ -480,6 +480,152 @@ test_url_parse_malformed(void)
 }
 
 // ---------------------------------------------------------------------------
+// Test cases — DF-J IDN host-canonicalization symmetry for the
+// `registries.json` lookup.
+//
+// Pre-DF-J the `auth_from_registries_json` helper compared the
+// caller's `registry_filter` against each JSON key via raw byte
+// memcmp; that would silently fail to match when one side was
+// authored in Unicode (`例え.com`) and the other in Punycode
+// (`xn--r8jz45g.com`). DF-J introduces an IDNA-canonicalized
+// compare with a raw-byte fast path; these tests cover both the
+// fast path and the cross-encoding match in both directions.
+// ---------------------------------------------------------------------------
+
+static void
+test_auth_resolve_idn_unicode_filter_punycode_key(void)
+{
+    // Filter is `例え.com` (Unicode); JSON key is the Punycode
+    // form `xn--r8jz45g.com`. Pre-DF-J these would not match.
+    char *tempdir = make_tempdir();
+    write_registries_json(
+        tempdir,
+        "{ \"xn--r8jz45g.com\": { \"token\": \"idn-token-bytes\" } }\n");
+
+    assert(setenv("XDG_CONFIG_HOME", tempdir, 1) == 0);
+
+    n00b_list_t(n00b_attest_oci_auth_source_t) chain =
+        n00b_list_new(n00b_attest_oci_auth_source_t);
+    n00b_list_push(chain, N00B_ATTEST_OCI_AUTH_REGISTRIES_JSON);
+
+    n00b_string_t *filter = n00b_string_from_cstr("例え.com");
+    auto r = n00b_attest_oci_auth_resolve(.sources  = &chain,
+                                          .registry = filter);
+    ASSERT_OK(r);
+    n00b_attest_oci_auth_t *a = n00b_result_get(r);
+    assert(a != nullptr);
+    assert(a->source == N00B_ATTEST_OCI_AUTH_REGISTRIES_JSON);
+    assert(a->bearer_token != nullptr);
+    assert(a->bearer_token->byte_len == strlen("idn-token-bytes"));
+    assert(memcmp(a->bearer_token->data,
+                  "idn-token-bytes",
+                  a->bearer_token->byte_len)
+           == 0);
+    n00b_attest_oci_auth_release(a);
+
+    unsetenv("XDG_CONFIG_HOME");
+    cleanup_tempdir(tempdir);
+    free(tempdir);
+    printf("  [PASS] auth_resolve_idn_unicode_filter_punycode_key\n");
+}
+
+static void
+test_auth_resolve_idn_punycode_filter_unicode_key(void)
+{
+    // Filter is the Punycode form (`xn--r8jz45g.com`); JSON key is
+    // the Unicode form (`例え.com`). Symmetric to the prior test.
+    char *tempdir = make_tempdir();
+    write_registries_json(
+        tempdir,
+        "{ \"例え.com\": { \"token\": \"idn-token-bytes-2\" } }\n");
+
+    assert(setenv("XDG_CONFIG_HOME", tempdir, 1) == 0);
+
+    n00b_list_t(n00b_attest_oci_auth_source_t) chain =
+        n00b_list_new(n00b_attest_oci_auth_source_t);
+    n00b_list_push(chain, N00B_ATTEST_OCI_AUTH_REGISTRIES_JSON);
+
+    n00b_string_t *filter = n00b_string_from_cstr("xn--r8jz45g.com");
+    auto r = n00b_attest_oci_auth_resolve(.sources  = &chain,
+                                          .registry = filter);
+    ASSERT_OK(r);
+    n00b_attest_oci_auth_t *a = n00b_result_get(r);
+    assert(a != nullptr);
+    assert(a->source == N00B_ATTEST_OCI_AUTH_REGISTRIES_JSON);
+    assert(a->bearer_token != nullptr);
+    assert(a->bearer_token->byte_len == strlen("idn-token-bytes-2"));
+    n00b_attest_oci_auth_release(a);
+
+    unsetenv("XDG_CONFIG_HOME");
+    cleanup_tempdir(tempdir);
+    free(tempdir);
+    printf("  [PASS] auth_resolve_idn_punycode_filter_unicode_key\n");
+}
+
+static void
+test_auth_resolve_idn_ascii_with_port(void)
+{
+    // Pure-ASCII host:port — must continue to work byte-identically.
+    // Exercises the `:port` split path inside the canonicalizer.
+    char *tempdir = make_tempdir();
+    write_registries_json(
+        tempdir,
+        "{ \"localhost:5000\": { \"token\": \"port-token\" } }\n");
+
+    assert(setenv("XDG_CONFIG_HOME", tempdir, 1) == 0);
+
+    n00b_list_t(n00b_attest_oci_auth_source_t) chain =
+        n00b_list_new(n00b_attest_oci_auth_source_t);
+    n00b_list_push(chain, N00B_ATTEST_OCI_AUTH_REGISTRIES_JSON);
+
+    n00b_string_t *filter = n00b_string_from_cstr("localhost:5000");
+    auto r = n00b_attest_oci_auth_resolve(.sources  = &chain,
+                                          .registry = filter);
+    ASSERT_OK(r);
+    n00b_attest_oci_auth_t *a = n00b_result_get(r);
+    assert(a != nullptr);
+    assert(a->bearer_token != nullptr);
+    assert(a->bearer_token->byte_len == strlen("port-token"));
+    n00b_attest_oci_auth_release(a);
+
+    unsetenv("XDG_CONFIG_HOME");
+    cleanup_tempdir(tempdir);
+    free(tempdir);
+    printf("  [PASS] auth_resolve_idn_ascii_with_port\n");
+}
+
+static void
+test_auth_resolve_idn_no_match_falls_through(void)
+{
+    // A genuinely different host (different domain) still does NOT
+    // match. Pre/post-DF-J this should both return no credentials
+    // when REGISTRIES_JSON is the only source listed.
+    char *tempdir = make_tempdir();
+    write_registries_json(
+        tempdir,
+        "{ \"ghcr.io\": { \"token\": \"abc123\" } }\n");
+
+    assert(setenv("XDG_CONFIG_HOME", tempdir, 1) == 0);
+
+    n00b_list_t(n00b_attest_oci_auth_source_t) chain =
+        n00b_list_new(n00b_attest_oci_auth_source_t);
+    n00b_list_push(chain, N00B_ATTEST_OCI_AUTH_REGISTRIES_JSON);
+
+    n00b_string_t *filter = n00b_string_from_cstr("例え.com");
+    auto r = n00b_attest_oci_auth_resolve(.sources  = &chain,
+                                          .registry = filter);
+    // No matching key + no ANONYMOUS fallback in the explicit chain
+    // -> source-not-found.
+    assert(n00b_result_is_err(r));
+    assert(n00b_result_get_err(r) == N00B_ATTEST_ERR_OCI_AUTH_SOURCE_NOT_FOUND);
+
+    unsetenv("XDG_CONFIG_HOME");
+    cleanup_tempdir(tempdir);
+    free(tempdir);
+    printf("  [PASS] auth_resolve_idn_no_match_falls_through\n");
+}
+
+// ---------------------------------------------------------------------------
 // main.
 // ---------------------------------------------------------------------------
 
@@ -500,6 +646,10 @@ main(int argc, char *argv[])
     test_auth_resolve_cred_helper_not_found();
     test_auth_resolve_keychain_not_found();
     test_auth_resolve_default_chain_lands_on_anonymous();
+    test_auth_resolve_idn_unicode_filter_punycode_key();
+    test_auth_resolve_idn_punycode_filter_unicode_key();
+    test_auth_resolve_idn_ascii_with_port();
+    test_auth_resolve_idn_no_match_falls_through();
     test_url_parse_registry_digest();
     test_url_parse_no_registry_digest();
     test_url_parse_no_registry_tag();
