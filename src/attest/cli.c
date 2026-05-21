@@ -654,3 +654,105 @@ pull_release_auth_only_err:
     n00b_attest_oci_auth_release(auth);
     return n00b_result_err(n00b_buffer_t *, err_code);
 }
+
+/* ------------------------------------------------------------------
+ * Mark verb (WP-005 Phase 2).
+ *
+ * Composes:
+ *   1. Walk envelope_bytes_list; for each blob run
+ *      `n00b_attest_envelope_parse` to materialize an envelope
+ *      handle.
+ *   2. Dispatch through `n00b_attest_mark_artifact`, forwarding the
+ *      `bundled`, `registry_hint`, and `allocator` kwargs verbatim.
+ *
+ * No long-lived handles to release (no OCI client, no signer, no
+ * verifier). The parsed envelopes are GC-managed by the per-call
+ * allocator.
+ * ------------------------------------------------------------------ */
+
+n00b_result_t(n00b_attest_mark_result_t *)
+n00b_attest_cli_mark(n00b_string_t                *artifact_path,
+                     n00b_list_t(n00b_buffer_t *) *envelope_bytes_list) _kargs
+{
+    bool              bundled       = true;
+    n00b_string_t    *registry_hint = nullptr;
+    n00b_allocator_t *allocator     = nullptr;
+}
+{
+    if (artifact_path == nullptr || artifact_path->u8_bytes == 0
+        || envelope_bytes_list == nullptr) {
+        return n00b_result_err(n00b_attest_mark_result_t *,
+                               N00B_ATTEST_ERR_DSSE_BAD_INPUT);
+    }
+
+    size_t n_blobs = (size_t)n00b_list_len(*envelope_bytes_list);
+    if (n_blobs == 0) {
+        return n00b_result_err(n00b_attest_mark_result_t *,
+                               N00B_ATTEST_ERR_DSSE_BAD_INPUT);
+    }
+
+    // Materialize the envelope-handle list from the wire-bytes
+    // blobs. Per-blob parse errors propagate verbatim (DSSE_BAD_JSON
+    // / _WRONG_TYPE / _BAD_BASE64); a null blob surfaces as
+    // DSSE_BAD_INPUT (the caller's invariant violation).
+    n00b_list_t(n00b_attest_envelope_t *) envs =
+        n00b_list_new(n00b_attest_envelope_t *);
+    for (size_t i = 0; i < n_blobs; i++) {
+        n00b_buffer_t *blob = n00b_list_get(*envelope_bytes_list,
+                                            (int64_t)i);
+        if (blob == nullptr || blob->byte_len == 0) {
+            return n00b_result_err(n00b_attest_mark_result_t *,
+                                   N00B_ATTEST_ERR_DSSE_BAD_INPUT);
+        }
+        auto pr = n00b_attest_envelope_parse(blob,
+                                              .allocator = allocator);
+        if (n00b_result_is_err(pr)) {
+            return n00b_result_err(n00b_attest_mark_result_t *,
+                                   n00b_result_get_err(pr));
+        }
+        n00b_list_push(envs, n00b_result_get(pr));
+    }
+
+    return n00b_attest_mark_artifact(artifact_path,
+                                      &envs,
+                                      .bundled       = bundled,
+                                      .registry_hint = registry_hint,
+                                      .allocator     = allocator);
+}
+
+/* ------------------------------------------------------------------
+ * Unmark verb (WP-005 Phase 2).
+ *
+ * Direct passthrough to `n00b_attest_unmark`. The wrapper exists to
+ * preserve the library-API-first verb-core pattern (D-044) — the
+ * shim in n00b-attest.c calls only the `_cli_*` family.
+ * ------------------------------------------------------------------ */
+
+n00b_result_t(bool)
+n00b_attest_cli_unmark(n00b_string_t *artifact_path) _kargs
+{
+    n00b_allocator_t *allocator = nullptr;
+}
+{
+    return n00b_attest_unmark(artifact_path,
+                               .allocator = allocator);
+}
+
+/* ------------------------------------------------------------------
+ * Extract verb (WP-005 Phase 2).
+ *
+ * Direct passthrough to `n00b_attest_extract_from_artifact`. The
+ * shim maps the four IC-5 Err codes onto the §10.1 exit-code split
+ * (0 = mark + valid ATTESTATION, 1 = no usable verdict, 2 =
+ * machinery failure).
+ * ------------------------------------------------------------------ */
+
+n00b_result_t(n00b_attest_extract_result_t *)
+n00b_attest_cli_extract(n00b_string_t *artifact_path) _kargs
+{
+    n00b_allocator_t *allocator = nullptr;
+}
+{
+    return n00b_attest_extract_from_artifact(artifact_path,
+                                              .allocator = allocator);
+}

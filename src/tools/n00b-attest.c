@@ -62,6 +62,7 @@
 #include "text/strings/string_ops.h"
 #include "slay/commander.h"
 #include "parsers/json.h"
+#include "util/base64.h"
 #include "attest/n00b_attest.h"
 
 // ---------------------------------------------------------------------------
@@ -87,7 +88,12 @@ typedef struct {
 // `n00b_attest_cli_verify`; the array shrank 12 → 11. WP-004
 // Phase 2 promoted `push` similarly, shrinking the array to 10.
 // WP-004 Phase 3 promoted `discover` + `pull`, shrinking it to 8.
-static verb_stub_t k_pending_verbs[8];
+// WP-005 Phase 2 promoted `mark` + `unmark` + `extract`, shrinking
+// the array to 5. The remaining stubs are `inspect`, `harvest`,
+// `setup`, `rotate`, `list-keys`. (Per 2026-05-20 disposition the
+// `harvest` verb is deferred to a future WP-015 "Cut H" and stays a
+// stub through WP-005.)
+static verb_stub_t k_pending_verbs[5];
 static size_t      k_num_pending_verbs = 0;
 
 static void
@@ -101,15 +107,6 @@ build_pending_verbs(void)
     k_pending_verbs[i++] = (verb_stub_t){
         r"inspect",
         r"(not yet implemented) Inspect a DSSE envelope without verifying"};
-    k_pending_verbs[i++] = (verb_stub_t){
-        r"mark",
-        r"(not yet implemented) Mark a binary artifact with an envelope"};
-    k_pending_verbs[i++] = (verb_stub_t){
-        r"unmark",
-        r"(not yet implemented) Remove the attestation mark from an artifact"};
-    k_pending_verbs[i++] = (verb_stub_t){
-        r"extract",
-        r"(not yet implemented) Extract an attestation mark from an artifact"};
     k_pending_verbs[i++] = (verb_stub_t){
         r"harvest",
         r"(not yet implemented) Walk an OCI image's layers for marks"};
@@ -387,6 +384,63 @@ build_commander(void)
                        N00B_CMDR_TYPE_WORD,
                        true,
                        r"Write envelope bytes to this path (default: stdout)");
+
+    // mark subcommand (WP-005 Phase 2).
+    n00b_cmdr_add_command(c,
+                          r"mark",
+                          r"Mark an artifact in place with a DSSE envelope ATTESTATION tree");
+    n00b_cmdr_add_flag(c,
+                       r"mark",
+                       r"--artifact",
+                       N00B_CMDR_TYPE_WORD,
+                       true,
+                       r"Filesystem path to the artifact to mark (required)");
+    n00b_cmdr_add_flag(c,
+                       r"mark",
+                       r"--envelope",
+                       N00B_CMDR_TYPE_WORD,
+                       true,
+                       r"DSSE envelope JSON path (default: read one envelope from stdin)");
+    n00b_cmdr_add_flag(c,
+                       r"mark",
+                       r"--lazy",
+                       N00B_CMDR_TYPE_BOOL,
+                       false,
+                       r"Record only envelope digest+predicate-type (default: bundled)");
+    n00b_cmdr_add_flag(c,
+                       r"mark",
+                       r"--registry-hint",
+                       N00B_CMDR_TYPE_WORD,
+                       true,
+                       r"OCI image reference to record (e.g., ghcr.io/foo/bar:tag)");
+
+    // unmark subcommand (WP-005 Phase 2).
+    n00b_cmdr_add_command(c,
+                          r"unmark",
+                          r"Remove the chalk mark from an artifact in place");
+    n00b_cmdr_add_flag(c,
+                       r"unmark",
+                       r"--artifact",
+                       N00B_CMDR_TYPE_WORD,
+                       true,
+                       r"Filesystem path to the artifact to unmark (required)");
+
+    // extract subcommand (WP-005 Phase 2).
+    n00b_cmdr_add_command(c,
+                          r"extract",
+                          r"Extract the ATTESTATION tree from an artifact's chalk mark");
+    n00b_cmdr_add_flag(c,
+                       r"extract",
+                       r"--artifact",
+                       N00B_CMDR_TYPE_WORD,
+                       true,
+                       r"Filesystem path to the artifact to extract (required)");
+    n00b_cmdr_add_flag(c,
+                       r"extract",
+                       r"--json",
+                       N00B_CMDR_TYPE_BOOL,
+                       false,
+                       r"Emit canonical JSON instead of a human-readable table");
 
     // Forward-roadmap stubs — registered so `--help` discovery lists
     // them, but invocation routes through the not-yet-implemented
@@ -927,6 +981,343 @@ verb_pull(n00b_cmdr_result_t *result)
 }
 
 // ---------------------------------------------------------------------------
+// `mark` verb shim — binds I/O around the library core.
+// ---------------------------------------------------------------------------
+//
+// Two-code exit shape per §10.1 (mark/unmark collapse to Ok/Err):
+//   - Ok  → return 0 (silent success).
+//   - Err → return 1 with structured diagnostic on stderr.
+//
+// CLI shape:
+//   n00b-attest mark --artifact <path>
+//                    [--envelope <path>]   (default: read one from stdin)
+//                    [--lazy]              (default: bundled)
+//                    [--registry-hint <ref>]
+//
+// Note: slay's flag substrate doesn't currently support repeatable
+// `--envelope` (each occurrence overwrites the previous). The
+// library-shaped core (`n00b_attest_cli_mark`) DOES accept a list
+// of envelope-bytes blobs to preserve the CR-13 multi-envelope
+// contract; callers needing multi-envelope marking can drive the
+// library directly, or wait for the slay repeatable-flag lift.
+// Flagged for orchestrator follow-up.
+static int
+verb_mark(n00b_cmdr_result_t *result)
+{
+    // Required: --artifact.
+    if (!n00b_cmdr_flag_present(result, r"--artifact")) {
+        n00b_eprintf("n00b-attest mark: missing required --artifact <path>");
+        return 1;
+    }
+    n00b_string_t *artifact_path = n00b_cmdr_flag_str(result, r"--artifact");
+    if (artifact_path == nullptr || artifact_path->u8_bytes == 0) {
+        n00b_eprintf("n00b-attest mark: --artifact <path> may not be empty");
+        return 1;
+    }
+
+    // Read envelope bytes: from --envelope <path> if supplied, else
+    // a single envelope from stdin (matches WP-002 sign precedent).
+    n00b_buffer_t *env_bytes = nullptr;
+    if (n00b_cmdr_flag_present(result, r"--envelope")) {
+        n00b_string_t *env_path = n00b_cmdr_flag_str(result, r"--envelope");
+        if (env_path == nullptr || env_path->u8_bytes == 0) {
+            n00b_eprintf(
+                "n00b-attest mark: --envelope <path> may not be empty");
+            return 1;
+        }
+        auto read_r = read_all_from_path(env_path);
+        if (n00b_result_is_err(read_r)) {
+            n00b_err_t code = n00b_result_get_err(read_r);
+            n00b_eprintf("n00b-attest mark: cannot read envelope '«#»' "
+                         "(errno «#»)",
+                         env_path,
+                         (int64_t)code);
+            return 1;
+        }
+        env_bytes = n00b_result_get(read_r);
+    }
+    else {
+        // Default-stdin: reach the runtime-managed fd-0 owner via
+        // `n00b_stdin()` + `n00b_fd_owner_read_all` (D-062 / DF-007
+        // part B).
+        auto read_r = read_all_from_stdin();
+        if (n00b_result_is_err(read_r)) {
+            n00b_err_t code = n00b_result_get_err(read_r);
+            n00b_eprintf("n00b-attest mark: cannot read envelope from stdin "
+                         "(errno «#»)",
+                         (int64_t)code);
+            return 1;
+        }
+        env_bytes = n00b_result_get(read_r);
+    }
+
+    if (env_bytes == nullptr || env_bytes->byte_len == 0) {
+        n00b_eprintf("n00b-attest mark: empty envelope input");
+        return 1;
+    }
+
+    // Build the single-entry envelope-bytes list and dispatch.
+    n00b_list_t(n00b_buffer_t *) envs = n00b_list_new(n00b_buffer_t *);
+    n00b_list_push(envs, env_bytes);
+
+    bool bundled = !n00b_cmdr_flag_bool(result, r"--lazy");
+
+    n00b_string_t *registry_hint = nullptr;
+    if (n00b_cmdr_flag_present(result, r"--registry-hint")) {
+        registry_hint = n00b_cmdr_flag_str(result, r"--registry-hint");
+        if (registry_hint == nullptr || registry_hint->u8_bytes == 0) {
+            n00b_eprintf(
+                "n00b-attest mark: --registry-hint <ref> may not be empty");
+            return 1;
+        }
+    }
+
+    auto r = n00b_attest_cli_mark(artifact_path,
+                                   &envs,
+                                   .bundled       = bundled,
+                                   .registry_hint = registry_hint);
+    if (n00b_result_is_err(r)) {
+        print_attest_error_diagnostic("mark failed",
+                                      n00b_result_get_err(r));
+        return 1;
+    }
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// `unmark` verb shim — binds I/O around the library core.
+// ---------------------------------------------------------------------------
+//
+// Two-code exit shape per §10.1: Ok → 0; Err → 1.
+static int
+verb_unmark(n00b_cmdr_result_t *result)
+{
+    if (!n00b_cmdr_flag_present(result, r"--artifact")) {
+        n00b_eprintf("n00b-attest unmark: missing required --artifact <path>");
+        return 1;
+    }
+    n00b_string_t *artifact_path = n00b_cmdr_flag_str(result, r"--artifact");
+    if (artifact_path == nullptr || artifact_path->u8_bytes == 0) {
+        n00b_eprintf("n00b-attest unmark: --artifact <path> may not be empty");
+        return 1;
+    }
+
+    auto r = n00b_attest_cli_unmark(artifact_path);
+    if (n00b_result_is_err(r)) {
+        print_attest_error_diagnostic("unmark failed",
+                                      n00b_result_get_err(r));
+        return 1;
+    }
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// `extract` verb shim — binds I/O around the library core.
+// ---------------------------------------------------------------------------
+//
+// Three-code exit shape per §10.1 (verdict-shaped):
+//   - exit 0 — mark present + valid ATTESTATION (Ok with envelopes).
+//   - exit 1 — no useful verdict (no mark / no ATTESTATION /
+//     malformed ATTESTATION); IC-5 sentinels (i), (ii), (iii).
+//   - exit 2 — machinery failure (codec lookup failed, filesystem
+//     error, EXTRACT_FAILED); IC-5 sentinel (iv) + others.
+//
+// Codec lookup failure ((iv)) routes to exit 2 because the artifact
+// is structurally not a recognizable binary — that is a machinery
+// failure (the caller fed us something the toolchain cannot reason
+// about), not a verdict-actionable answer.
+//
+// Output (Ok case):
+//   - human-readable (default): tab-separated table on stdout.
+//   - --json: canonical JSON object on stdout per the WP-005 P2
+//     extract --json shape disposition (unchalked_sha256,
+//     registry_hint, signer_keyid, predicate_types[], envelopes[]).
+static int
+verb_extract(n00b_cmdr_result_t *result)
+{
+    if (!n00b_cmdr_flag_present(result, r"--artifact")) {
+        n00b_eprintf("n00b-attest extract: missing required --artifact <path>");
+        return 2;
+    }
+    n00b_string_t *artifact_path = n00b_cmdr_flag_str(result, r"--artifact");
+    if (artifact_path == nullptr || artifact_path->u8_bytes == 0) {
+        n00b_eprintf("n00b-attest extract: --artifact <path> may not be empty");
+        return 2;
+    }
+
+    bool json_out = n00b_cmdr_flag_bool(result, r"--json");
+
+    auto r = n00b_attest_cli_extract(artifact_path);
+    if (n00b_result_is_err(r)) {
+        n00b_err_t code = n00b_result_get_err(r);
+        print_attest_error_diagnostic("extract failed", code);
+        // §10.1 verdict-shaped split: IC-5 (i)(ii)(iii) → no useful
+        // verdict (exit 1); (iv) + EXTRACT_FAILED + DSSE_BAD_INPUT
+        // → machinery failure (exit 2).
+        switch (code) {
+        case N00B_ATTEST_ERR_CHALK_NO_MARK:
+        case N00B_ATTEST_ERR_CHALK_NO_ATTESTATION:
+        case N00B_ATTEST_ERR_CHALK_MALFORMED_ATTESTATION:
+            return 1;
+        default:
+            return 2;
+        }
+    }
+
+    n00b_attest_extract_result_t *row = n00b_result_get(r);
+
+    if (json_out) {
+        // Build the canonical JSON object per the WP-005 P2 disposition.
+        // Field ordering is the encoder's canonical order (lexicographic).
+        n00b_json_node_t *obj = n00b_json_object_new();
+
+        if (row->unchalked_hash_hex != nullptr) {
+            char *uh = n00b_alloc_array(char,
+                                        row->unchalked_hash_hex->u8_bytes + 1);
+            memcpy(uh,
+                   row->unchalked_hash_hex->data,
+                   row->unchalked_hash_hex->u8_bytes);
+            uh[row->unchalked_hash_hex->u8_bytes] = '\0';
+            n00b_json_object_put(obj, "unchalked_sha256",
+                                 n00b_json_string_new(uh));
+        }
+        else {
+            n00b_json_object_put(obj, "unchalked_sha256",
+                                 n00b_json_null_new());
+        }
+
+        if (row->registry_hint != nullptr) {
+            char *rh = n00b_alloc_array(char,
+                                        row->registry_hint->u8_bytes + 1);
+            memcpy(rh,
+                   row->registry_hint->data,
+                   row->registry_hint->u8_bytes);
+            rh[row->registry_hint->u8_bytes] = '\0';
+            n00b_json_object_put(obj, "registry_hint",
+                                 n00b_json_string_new(rh));
+        }
+        else {
+            n00b_json_object_put(obj, "registry_hint",
+                                 n00b_json_null_new());
+        }
+
+        if (row->signer_keyid != nullptr) {
+            char *sk = n00b_alloc_array(char,
+                                        row->signer_keyid->u8_bytes + 1);
+            memcpy(sk,
+                   row->signer_keyid->data,
+                   row->signer_keyid->u8_bytes);
+            sk[row->signer_keyid->u8_bytes] = '\0';
+            n00b_json_object_put(obj, "signer_keyid",
+                                 n00b_json_string_new(sk));
+        }
+        else {
+            n00b_json_object_put(obj, "signer_keyid",
+                                 n00b_json_string_new(""));
+        }
+
+        n00b_json_node_t *pt_arr = n00b_json_array_new();
+        if (row->predicate_types != nullptr) {
+            size_t npt = (size_t)row->predicate_types->len;
+            for (size_t i = 0; i < npt; i++) {
+                n00b_string_t *pt = row->predicate_types->data[i];
+                if (pt == nullptr) {
+                    continue;
+                }
+                char *p = n00b_alloc_array(char, pt->u8_bytes + 1);
+                memcpy(p, pt->data, pt->u8_bytes);
+                p[pt->u8_bytes] = '\0';
+                n00b_json_array_push(pt_arr, n00b_json_string_new(p));
+            }
+        }
+        n00b_json_object_put(obj, "predicate_types", pt_arr);
+
+        n00b_json_node_t *env_arr = n00b_json_array_new();
+        if (row->envelopes != nullptr) {
+            size_t nev = (size_t)row->envelopes->len;
+            for (size_t i = 0; i < nev; i++) {
+                n00b_attest_envelope_t *env = row->envelopes->data[i];
+                if (env == nullptr) {
+                    continue;
+                }
+                // Predicate type (from the parallel predicate_types
+                // list — guaranteed parallel by the extractor).
+                n00b_string_t *pt = nullptr;
+                if (row->predicate_types != nullptr
+                    && i < (size_t)row->predicate_types->len) {
+                    pt = row->predicate_types->data[i];
+                }
+
+                // Base64-encode the envelope's canonical wire bytes.
+                auto ser_r = n00b_attest_envelope_serialize(env);
+                if (n00b_result_is_err(ser_r)) {
+                    n00b_eprintf("n00b-attest extract: re-serialize failed");
+                    return 2;
+                }
+                n00b_buffer_t *wire = n00b_result_get(ser_r);
+                auto b64_r = n00b_base64_encode(wire);
+                if (n00b_result_is_err(b64_r)) {
+                    n00b_eprintf("n00b-attest extract: base64 encode failed");
+                    return 2;
+                }
+                n00b_string_t *b64 = n00b_result_get(b64_r);
+
+                n00b_json_node_t *eobj = n00b_json_object_new();
+                if (pt != nullptr) {
+                    char *p = n00b_alloc_array(char, pt->u8_bytes + 1);
+                    memcpy(p, pt->data, pt->u8_bytes);
+                    p[pt->u8_bytes] = '\0';
+                    n00b_json_object_put(eobj, "predicate_type",
+                                         n00b_json_string_new(p));
+                }
+                char *b = n00b_alloc_array(char, b64->u8_bytes + 1);
+                memcpy(b, b64->data, b64->u8_bytes);
+                b[b64->u8_bytes] = '\0';
+                n00b_json_object_put(eobj, "envelope_base64",
+                                     n00b_json_string_new(b));
+                n00b_json_array_push(env_arr, eobj);
+            }
+        }
+        n00b_json_object_put(obj, "envelopes", env_arr);
+
+        // Canonical encode per D-024 + the `.canonical = true` lift
+        // (commit `no 2d`) — byte-stable output.
+        char *encoded = n00b_json_encode(obj, .canonical = true);
+        n00b_string_t *enc_s = encoded != nullptr
+                                   ? n00b_string_from_cstr(encoded)
+                                   : r"{}";
+        n00b_printf("«#»", enc_s, .fd = 1);
+        return 0;
+    }
+
+    // Human-readable (default): tab-separated table.
+    n00b_string_t *uh = row->unchalked_hash_hex != nullptr
+                            ? row->unchalked_hash_hex
+                            : r"(missing)";
+    n00b_string_t *rh = row->registry_hint != nullptr
+                            ? row->registry_hint
+                            : r"(none)";
+    n00b_string_t *sk = row->signer_keyid != nullptr
+                            ? row->signer_keyid
+                            : r"(missing)";
+    n00b_printf("unchalked_sha256\t«#»", uh, .fd = 1);
+    n00b_printf("registry_hint\t«#»", rh, .fd = 1);
+    n00b_printf("signer_keyid\t«#»", sk, .fd = 1);
+
+    if (row->predicate_types != nullptr) {
+        size_t npt = (size_t)row->predicate_types->len;
+        for (size_t i = 0; i < npt; i++) {
+            n00b_string_t *pt = row->predicate_types->data[i];
+            if (pt == nullptr) {
+                continue;
+            }
+            n00b_printf("predicate_type\t«#»", pt, .fd = 1);
+        }
+    }
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
 // --help / usage text.
 // ---------------------------------------------------------------------------
 
@@ -941,7 +1332,10 @@ print_usage(void)
         "  verify     Verify a DSSE envelope against a public key\n"
         "  push       Push a DSSE envelope to an OCI 1.1 registry as a referrer\n"
         "  discover   List recorded attestations for an OCI image digest\n"
-        "  pull       Pull a DSSE envelope from an OCI 1.1 registry");
+        "  pull       Pull a DSSE envelope from an OCI 1.1 registry\n"
+        "  mark       Mark an artifact in place with a DSSE envelope ATTESTATION tree\n"
+        "  unmark     Remove the chalk mark from an artifact in place\n"
+        "  extract    Extract the ATTESTATION tree from an artifact's chalk mark");
     for (size_t i = 0; i < k_num_pending_verbs; i++) {
         n00b_string_t *vname = k_pending_verbs[i].name;
         n00b_string_t *vdoc  = k_pending_verbs[i].doc;
@@ -992,6 +1386,28 @@ print_usage(void)
         "  --registry <host>        Registry hostname override\n"
         "  --out <path>             Write envelope bytes to path "
         "(default: stdout)\n"
+        "\n"
+        "mark flags:\n"
+        "  --artifact <path>        Artifact filesystem path (required)\n"
+        "  --envelope <path>        Envelope JSON path "
+        "(default: read one from stdin)\n"
+        "  --lazy                   Record only digest+predicate-type "
+        "(default: bundled)\n"
+        "  --registry-hint <ref>    OCI image reference recorded in the mark\n"
+        "\n"
+        "unmark flags:\n"
+        "  --artifact <path>        Artifact filesystem path (required)\n"
+        "\n"
+        "extract flags:\n"
+        "  --artifact <path>        Artifact filesystem path (required)\n"
+        "  --json                   Emit canonical JSON instead of "
+        "a human-readable table\n"
+        "\n"
+        "extract exit codes:\n"
+        "  0  mark present + valid ATTESTATION (envelopes returned)\n"
+        "  1  no useful verdict (no mark / no ATTESTATION / "
+        "malformed ATTESTATION)\n"
+        "  2  machinery failure (codec lookup failed, filesystem error)\n"
         "\n"
         "Global flags:\n"
         "  -h, --help         Show this help message");
@@ -1063,6 +1479,9 @@ main(int argc, char **argv)
     n00b_string_t *push_name     = r"push";
     n00b_string_t *discover_name = r"discover";
     n00b_string_t *pull_name     = r"pull";
+    n00b_string_t *mark_name     = r"mark";
+    n00b_string_t *unmark_name   = r"unmark";
+    n00b_string_t *extract_name  = r"extract";
     if (n00b_unicode_str_eq(cmd, sign_name)) {
         rc = verb_sign(result);
     }
@@ -1077,6 +1496,15 @@ main(int argc, char **argv)
     }
     else if (n00b_unicode_str_eq(cmd, pull_name)) {
         rc = verb_pull(result);
+    }
+    else if (n00b_unicode_str_eq(cmd, mark_name)) {
+        rc = verb_mark(result);
+    }
+    else if (n00b_unicode_str_eq(cmd, unmark_name)) {
+        rc = verb_unmark(result);
+    }
+    else if (n00b_unicode_str_eq(cmd, extract_name)) {
+        rc = verb_extract(result);
     }
     else {
         // DF-004 (a): the verb is in the forward roadmap (registered

@@ -930,6 +930,44 @@ test('attest_extract_from_artifact',
      attest_extract_from_artifact_test,
      suite: 'unit')
 
+# WP-005 Phase 2: `n00b_attest_cli_mark` end-to-end regression
+# (envelope-bytes → parse → mark dispatch). Always-runs; exercises
+# the IC-4 unchalked-hash contract through the Phase-2 wrapper,
+# --lazy mode, the CR-13 multi-envelope contract, and input
+# validation.
+attest_cli_mark_test = executable(
+    'test_attest_cli_mark',
+    ['test/unit/test_attest_cli_mark.c'],
+    kwargs: test_common_kwargs,
+)
+test('attest_cli_mark',
+     attest_cli_mark_test,
+     suite: 'unit')
+
+# WP-005 Phase 2: `n00b_attest_cli_unmark` mark→unmark→extract
+# round-trip. Always-runs; post-unmark extract must surface the
+# IC-5 (i) CHALK_NO_MARK sentinel.
+attest_cli_unmark_test = executable(
+    'test_attest_cli_unmark',
+    ['test/unit/test_attest_cli_unmark.c'],
+    kwargs: test_common_kwargs,
+)
+test('attest_cli_unmark',
+     attest_cli_unmark_test,
+     suite: 'unit')
+
+# WP-005 Phase 2: `n00b_attest_cli_extract` mark→extract round-trip.
+# Always-runs; covers bundled-mode round-trip, lazy-mode round-trip,
+# no-mark sentinel, and input validation.
+attest_cli_extract_test = executable(
+    'test_attest_cli_extract',
+    ['test/unit/test_attest_cli_extract.c'],
+    kwargs: test_common_kwargs,
+)
+test('attest_cli_extract',
+     attest_cli_extract_test,
+     suite: 'unit')
+
 # DF-013 regression: caller-supplied trust handle threaded through the
 # h1 transport.  Same zot fixture as attest_oci_push_smoke, but the
 # test exercises the libn00b-core path (n00b_http_request_sync ->

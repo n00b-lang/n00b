@@ -50,6 +50,7 @@
 #include <attest/n00b_attest_signer.h>
 #include <attest/n00b_attest_verifier.h>
 #include <attest/n00b_attest_oci.h>
+#include <attest/n00b_attest_mark.h>
 
 /**
  * @brief Run the `sign` verb's library-shaped core: parse a
@@ -507,4 +508,163 @@ n00b_attest_cli_pull(n00b_string_t *image_ref,
 {
     n00b_string_t    *registry_override = nullptr;
     n00b_allocator_t *allocator         = nullptr;
+};
+
+/**
+ * @brief Run the `mark` verb's library-shaped core: parse a list of
+ *        DSSE envelope wire-byte buffers, dispatch through
+ *        @ref n00b_attest_mark_artifact, and return the mark result
+ *        carrying the IC-4 unchalked SHA-256.
+ *
+ * The body is the substrate the `n00b-attest mark` shim sits on.
+ * Inputs are already-bound: an artifact path string plus a list of
+ * `n00b_buffer_t *` envelope-bytes blobs (each blob is the
+ * canonical wire JSON of one DSSE envelope, as produced by
+ * @ref n00b_attest_envelope_serialize or @ref n00b_attest_cli_sign).
+ * The shim handles `--artifact`, repeated `--envelope <path>` flags
+ * (or stdin fallback), `--lazy`, and `--registry-hint` argv binding
+ * around this core.
+ *
+ * ## Composition
+ *
+ *   1. Walk @p envelope_bytes_list; for each entry call
+ *      @ref n00b_attest_envelope_parse to materialize an envelope
+ *      handle.
+ *   2. Dispatch through @ref n00b_attest_mark_artifact with the
+ *      reconstructed envelope list and the caller-supplied kwargs.
+ *
+ * ## No defensive release ceremony
+ *
+ * The verb holds no long-lived handles (no OCI client, no signer,
+ * no verifier). Standard `n00b_buffer_t *` / `n00b_attest_envelope_t *`
+ * lifecycle applies — every byte the verb produces is owned by the
+ * caller's allocator.
+ *
+ * @param artifact_path        Filesystem path to the artifact to
+ *                             mark. Required; null/empty surfaces
+ *                             as @ref N00B_ATTEST_ERR_DSSE_BAD_INPUT.
+ * @param envelope_bytes_list  List of `n00b_buffer_t *` envelope
+ *                             wire-byte blobs (each entry is one
+ *                             DSSE envelope JSON). The CR-13
+ *                             multi-envelope use case (a build
+ *                             attestation paired with an SBOM
+ *                             attestation) is the primary motivator
+ *                             for accepting a list rather than a
+ *                             single envelope. Required; null/empty
+ *                             surfaces as
+ *                             @ref N00B_ATTEST_ERR_DSSE_BAD_INPUT.
+ *
+ * @kw bundled        Bundled-vs-lazy ATTESTATION JSON shape;
+ *                    defaults to `true` (envelopes' wire bytes
+ *                    folded into the mark's `envelopes[]` array).
+ *                    `false` records only digest + predicate type
+ *                    per envelope; the verifier fetches envelopes
+ *                    out-of-band (typically via @c registry_hint +
+ *                    WP-004's `_pull_envelope`). Forwarded verbatim
+ *                    to @ref n00b_attest_mark_artifact.
+ * @kw registry_hint  Optional full OCI image reference (e.g.
+ *                    `r"ghcr.io/myorg/myrepo:tag"`) recorded in the
+ *                    mark's `registry_hint` field. Validated at
+ *                    mark time via @c n00b_attest_oci_url_parse;
+ *                    invalid refs surface as
+ *                    @ref N00B_ATTEST_ERR_CHALK_BAD_REGISTRY_HINT
+ *                    BEFORE the artifact bytes are touched.
+ *                    Forwarded verbatim to
+ *                    @ref n00b_attest_mark_artifact.
+ * @kw allocator      Optional allocator (defaults to runtime).
+ *                    Threaded through every downstream call.
+ *
+ * @return `n00b_result_ok(n00b_attest_mark_result_t *, row)` on
+ *         success. Err legs propagate the first failing step's
+ *         error code:
+ *         - @ref N00B_ATTEST_ERR_DSSE_BAD_INPUT — null/empty
+ *           @p artifact_path, null/empty @p envelope_bytes_list,
+ *           a null entry inside the list, or a null entry's bytes
+ *           failed envelope-parse.
+ *         - Envelope-parse errors (@ref
+ *           N00B_ATTEST_ERR_DSSE_BAD_JSON / @ref
+ *           N00B_ATTEST_ERR_DSSE_WRONG_TYPE / @ref
+ *           N00B_ATTEST_ERR_DSSE_BAD_BASE64) propagated from
+ *           @ref n00b_attest_envelope_parse.
+ *         - @c _CHALK_BAD_REGISTRY_HINT / @c _CHALK_BAD_ENVELOPE /
+ *           @c _CHALK_INSERT_FAILED propagated from
+ *           @ref n00b_attest_mark_artifact.
+ *
+ * @pre @ref n00b_attest_module_init has been called.
+ * @post On Ok, the artifact's bytes have been rewritten in place
+ *       (in-band codecs) or a sidecar file has been written
+ *       (sidecar codecs). On Err the artifact's bytes are not
+ *       touched (validation runs before any byte-mutating op).
+ */
+extern n00b_result_t(n00b_attest_mark_result_t *)
+n00b_attest_cli_mark(n00b_string_t                *artifact_path,
+                     n00b_list_t(n00b_buffer_t *) *envelope_bytes_list) _kargs
+{
+    bool              bundled       = true;
+    n00b_string_t    *registry_hint = nullptr;
+    n00b_allocator_t *allocator     = nullptr;
+};
+
+/**
+ * @brief Run the `unmark` verb's library-shaped core: direct
+ *        passthrough to @ref n00b_attest_unmark.
+ *
+ * The body is the substrate the `n00b-attest unmark` shim sits on.
+ * Inputs are already-bound; the shim binds the positional
+ * `<artifact>` argument around this core.
+ *
+ * @param artifact_path  Filesystem path to the artifact. Required;
+ *                       null/empty surfaces as
+ *                       @ref N00B_ATTEST_ERR_DSSE_BAD_INPUT.
+ *
+ * @kw allocator  Optional allocator (defaults to runtime). Threaded
+ *                through libchalk's read/unmark/write dispatch.
+ *
+ * @return `n00b_result_ok(bool, true)` on success;
+ *         `n00b_result_err(bool, ...)` propagating the
+ *         @ref n00b_attest_unmark error code on failure.
+ *
+ * @pre @ref n00b_attest_module_init has been called.
+ */
+extern n00b_result_t(bool)
+n00b_attest_cli_unmark(n00b_string_t *artifact_path) _kargs
+{
+    n00b_allocator_t *allocator = nullptr;
+};
+
+/**
+ * @brief Run the `extract` verb's library-shaped core: direct
+ *        passthrough to @ref n00b_attest_extract_from_artifact.
+ *
+ * The body is the substrate the `n00b-attest extract` shim sits on.
+ * Inputs are already-bound; the shim binds the positional
+ * `<artifact>` argument plus `--json` formatting decisions around
+ * this core. The IC-5 sentinel discrimination (four Err legs) is
+ * preserved unchanged from @ref n00b_attest_extract_from_artifact;
+ * the shim maps the four codes onto the §10.1 exit-code split.
+ *
+ * @param artifact_path  Filesystem path to the artifact. Required;
+ *                       null/empty surfaces as
+ *                       @ref N00B_ATTEST_ERR_DSSE_BAD_INPUT.
+ *
+ * @kw allocator  Optional allocator (defaults to runtime). Threaded
+ *                through libchalk's read/extract dispatch plus the
+ *                ATTESTATION JSON parse + base64 decode.
+ *
+ * @return `n00b_result_ok(n00b_attest_extract_result_t *, row)` on
+ *         success; Err legs propagate the IC-5 sentinels (@ref
+ *         N00B_ATTEST_ERR_CHALK_NO_MARK / @ref
+ *         N00B_ATTEST_ERR_CHALK_NO_ATTESTATION / @ref
+ *         N00B_ATTEST_ERR_CHALK_MALFORMED_ATTESTATION / @ref
+ *         N00B_ATTEST_ERR_CHALK_CODEC_LOOKUP_FAILED) plus
+ *         @ref N00B_ATTEST_ERR_CHALK_EXTRACT_FAILED and
+ *         @ref N00B_ATTEST_ERR_DSSE_BAD_INPUT.
+ *
+ * @pre @ref n00b_attest_module_init has been called.
+ * @post The artifact's bytes are NOT modified.
+ */
+extern n00b_result_t(n00b_attest_extract_result_t *)
+n00b_attest_cli_extract(n00b_string_t *artifact_path) _kargs
+{
+    n00b_allocator_t *allocator = nullptr;
 };
