@@ -454,7 +454,7 @@ extern chalk_st_t *chalk_st_parse(const uint8_t *bytes, size_t length) {
     }
     st->bytes = (uint8_t *)n00b_alloc_array(char, length);
     if (!st->bytes) {
-        /* free(st); — GC handles cleanup. */
+        n00b_free(st);
         return NULL;
     }
     memcpy(st->bytes, bytes, length);
@@ -468,8 +468,8 @@ extern void chalk_st_free(chalk_st_t *st) {
     if (!st) {
         return;
     }
-    /* free(st->bytes); — GC handles cleanup. */
-    /* free(st); — GC handles cleanup. */
+    n00b_free(st->bytes);
+    n00b_free(st);
 }
 
 // =============================================================================
@@ -563,7 +563,7 @@ static chalk_st_status_t replace_header(chalk_st_t *st,
         memcpy(fresh + 8 + new_header_len,
                st->bytes + old_data_off, data_len);
     }
-    /* free(st->bytes); — GC handles cleanup. */
+    n00b_free(st->bytes);
     st->bytes       = fresh;
     st->length      = new_total;
     st->capacity    = new_total;
@@ -594,7 +594,7 @@ extern chalk_st_status_t chalk_st_set_chalk(chalk_st_t *st,
     size_t worst = hdr_len + escaped_len + 64;
     char  *out   = n00b_alloc_array(char, worst);
     if (!out) {
-        /* free(escaped); — GC handles cleanup. */
+        n00b_free(escaped);
         return CHALK_ST_ERR_INTERNAL;
     }
     size_t op = 0;
@@ -612,17 +612,17 @@ extern chalk_st_status_t chalk_st_set_chalk(chalk_st_t *st,
         size_t suffix_off = (size_t)(cv_end - hdr);
         memcpy(out + op, hdr + suffix_off, hdr_len - suffix_off);
         op += hdr_len - suffix_off;
-        /* free(escaped); — GC handles cleanup. */
+        n00b_free(escaped);
         chalk_st_status_t st_ = replace_header(st, out, op);
-        /* free(out); — GC handles cleanup. */
+        n00b_free(out);
         return st_;
     }
 
     // 2. No existing chalk.  Find or create __metadata__.
     const char *p = skip_ws(hdr, hdr_end);
     if (p >= hdr_end || *p != '{') {
-        /* free(escaped); — GC handles cleanup. */
-        /* free(out); — GC handles cleanup. */
+        n00b_free(escaped);
+        n00b_free(out);
         return CHALK_ST_ERR_NOT_OBJECT;
     }
     const char *mk, *mv_start, *mv_end, *mrm_lo, *mrm_hi;
@@ -631,8 +631,8 @@ extern chalk_st_status_t chalk_st_set_chalk(chalk_st_t *st,
         // __metadata__ exists.  Inject `,"chalk":"<escaped>"` just
         // before the closing '}' (or as the sole member if empty).
         if (mv_start >= mv_end || *mv_start != '{' || *(mv_end - 1) != '}') {
-            /* free(escaped); — GC handles cleanup. */
-            /* free(out); — GC handles cleanup. */
+            n00b_free(escaped);
+            n00b_free(out);
             return CHALK_ST_ERR_BAD_HEADER;
         }
 
@@ -668,8 +668,8 @@ extern chalk_st_status_t chalk_st_set_chalk(chalk_st_t *st,
         // object.  Keeping the new key first reads the same JSON the
         // hand-rolled scanner finds on the next pass.
         if (*p != '{') {
-            /* free(escaped); — GC handles cleanup. */
-            /* free(out); — GC handles cleanup. */
+            n00b_free(escaped);
+            n00b_free(out);
             return CHALK_ST_ERR_NOT_OBJECT;
         }
         size_t lead_len = (size_t)(p - hdr) + 1;  // include '{'
@@ -697,9 +697,9 @@ extern chalk_st_status_t chalk_st_set_chalk(chalk_st_t *st,
         op += hdr_len - suffix_off;
     }
 
-    /* free(escaped); — GC handles cleanup. */
+    n00b_free(escaped);
     chalk_st_status_t r = replace_header(st, out, op);
-    /* free(out); — GC handles cleanup. */
+    n00b_free(out);
     return r;
 }
 
@@ -723,7 +723,7 @@ extern chalk_st_status_t chalk_st_remove_chalk(chalk_st_t *st) {
     memcpy(out, hdr, lo_off);
     memcpy(out + lo_off, hdr + hi_off, hdr_len - hi_off);
     chalk_st_status_t r = replace_header(st, out, new_len);
-    /* free(out); — GC handles cleanup. */
+    n00b_free(out);
     return r;
 }
 
@@ -790,7 +790,7 @@ extern chalk_st_status_t chalk_st_unchalked_hash(chalk_st_t *st,
     uint8_t digest[CHALK_ST_SHA256_DIGEST_LEN];
     SHA256(canon, canon_len, digest);
     if (canon != st->bytes) {
-        /* free(canon); — GC handles cleanup. */
+        n00b_free(canon);
     }
 
     static const char hex[] = "0123456789abcdef";

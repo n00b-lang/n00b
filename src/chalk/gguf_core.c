@@ -262,7 +262,7 @@ extern chalk_gguf_t *chalk_gguf_parse(const uint8_t *bytes, size_t length) {
     }
     g->bytes        = (uint8_t *)n00b_alloc_array(char, length);
     if (!g->bytes) {
-        /* free(g) — GC handles cleanup. */
+        n00b_free(g);
         return NULL;
     }
     memcpy(g->bytes, bytes, length);
@@ -355,8 +355,8 @@ extern void chalk_gguf_free(chalk_gguf_t *g) {
     if (!g) {
         return;
     }
-    /* free(g->bytes) — GC handles cleanup. */
-    /* free(g) — GC handles cleanup. */
+    n00b_free(g->bytes);
+    n00b_free(g);
 }
 
 // =============================================================================
@@ -497,12 +497,12 @@ static chalk_gguf_status_t rebuild(chalk_gguf_t *g,
     }
 
     if (op != new_total) {
-        /* free(out) — GC handles cleanup. */
+        n00b_free(out);
         return CHALK_GGUF_ERR_INTERNAL;
     }
 
     // Replace handle's buffer and re-parse offsets.
-    /* free(g->bytes) — GC handles cleanup. */
+    n00b_free(g->bytes);
     g->bytes        = out;
     g->length       = new_total;
     g->capacity     = new_total;
@@ -617,7 +617,7 @@ extern chalk_gguf_status_t chalk_gguf_unchalked_hash(chalk_gguf_t *g,
     uint8_t digest[CHALK_GGUF_SHA256_LEN];
     SHA256(canon, canon_len, digest);
     if (canon != g->bytes) {
-        /* free(canon) — GC handles cleanup. */
+        n00b_free(canon);
     }
 
     static const char hex[] = "0123456789abcdef";

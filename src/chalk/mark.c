@@ -93,7 +93,16 @@ n00b_chalk_mark_new(void)
 void
 n00b_chalk_mark_free(n00b_chalk_mark_t *m)
 {
-    (void)m; // GC owns it; nothing to do.
+    // mark_new allocates m + m->dict through n00b's pluggable
+    // allocator surface. Pair with n00b_free here for correctness
+    // under any backing (GC: no-op; arena/refcount/etc: explicit
+    // cleanup). m->attestation is a borrowed pointer set by
+    // n00b_chalk_mark_set_attestation; caller owns its lifetime.
+    if (!m) return;
+    if (m->dict) {
+        n00b_free(m->dict);
+    }
+    n00b_free(m);
 }
 
 n00b_result_t(bool)
