@@ -34,10 +34,13 @@
  *        osslsigncode are installed); cleanly SKIPped otherwise.
  *
  *    [7] (WP-005 P3-fixups sub-deliverable 3B) Sysinternals
- *        `pendmoves.exe` round-trip. Runs only when the
+ *        `sigcheck64.exe` round-trip. Runs only when the
  *        download-and-SHA-256-verify custom_target succeeded
  *        (network reachable + zip + extracted-exe SHAs both pin-
- *        verified); cleanly SKIPped otherwise.
+ *        verified); cleanly SKIPped otherwise. (Swapped from
+ *        pendmoves.exe 2026-05-21: pendmoves ships PE32 only,
+ *        n00b_pe_parse requires PE32+; sigcheck64.exe is the
+ *        64-bit variant.)
  *
  *  Test-file conventions per D-030.
  */
@@ -344,7 +347,7 @@ static void
 test_sysinternals_real_binary(void)
 {
     /* WP-005 P3-fixups sub-deliverable 3B. */
-    roundtrip_signed_pe("pendmoves.exe", "Sysinternals pendmoves.exe");
+    roundtrip_signed_pe("sigcheck64.exe", "Sysinternals sigcheck64.exe");
 }
 
 int

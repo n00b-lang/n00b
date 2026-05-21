@@ -709,9 +709,12 @@ test('pkcs7_signed_data', pkcs7_signed_data_test, suite: 'unit',
 # Hybrid fixture wiring (per user kickoff Q3 disposition):
 #   A. mingw-w64 + osslsigncode self-generated hello.exe.signed
 #      (gated on toolchain availability; SKIPs cleanly when absent).
-#   B. Sysinternals pendmoves.exe (downloaded + SHA-256-verified at
+#   B. Sysinternals sigcheck64.exe (downloaded + SHA-256-verified at
 #      configure time; NOT committed; SKIPs cleanly when network
-#      unavailable).
+#      unavailable). Previously pendmoves.exe — swapped 2026-05-21
+#      because pendmoves ships only as PE32 (32-bit) and n00b_pe_parse
+#      requires PE32+. sigcheck64.exe is the 64-bit variant from the
+#      Sigcheck.zip distribution.
 #   C. Always-runs synthetic in-memory PE blob cases as the primary.
 #
 # Each custom_target's helper script emits an EMPTY placeholder when
@@ -745,20 +748,20 @@ pe_hello_exe_signed = custom_target('pe_hello_exe_signed',
                         'test/unit/data/pkcs7_fixture_key.pem',
                         'test/fixtures/pe/sign_hello_exe.sh'),
 )
-pe_pendmoves = custom_target('pe_pendmoves',
-    output: 'pendmoves.exe',
+pe_sigcheck = custom_target('pe_sigcheck',
+    output: 'sigcheck64.exe',
     command: [
-        meson.project_source_root() / 'test' / 'fixtures' / 'pe' / 'fetch_pendmoves.sh',
+        meson.project_source_root() / 'test' / 'fixtures' / 'pe' / 'fetch_sigcheck.sh',
         '@OUTPUT@',
     ],
-    depend_files: files('test/fixtures/pe/fetch_pendmoves.sh'),
+    depend_files: files('test/fixtures/pe/fetch_sigcheck.sh'),
 )
 pe_cert_table_emit_test = executable('test_pe_cert_table_emit',
     ['test/unit/test_pe_cert_table_emit.c'],
     kwargs: test_common_kwargs,
 )
 test('pe_cert_table_emit', pe_cert_table_emit_test, suite: 'unit',
-     depends: [pe_hello_exe, pe_hello_exe_signed, pe_pendmoves],
+     depends: [pe_hello_exe, pe_hello_exe_signed, pe_sigcheck],
      workdir: meson.current_build_dir())
 
 attest_monocypher_smoke_test = executable('test_attest_monocypher_smoke',
