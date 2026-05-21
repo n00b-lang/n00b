@@ -645,3 +645,61 @@ n00b_rsa_sign_pss_sha256(const uint8_t *rsa_n,  size_t rsa_n_len,
     *inout_sig_len = emLen;
     return N00B_QUIC_OK;
 }
+
+/* ===========================================================================
+ * EMSA-PKCS1-v1_5 sign (RFC 8017 § 8.2.1) — SHA-256 only.
+ *
+ * Companion to the verify-side `n00b_rsa_verify_pkcs1_v15` for the
+ * Authenticode + PKCS#7 SignedData callers. The verify side handles
+ * RS256/RS384/RS512; the sign side here ships RS256 only since
+ * Authenticode v1 + RFC 5652 default-content-types both standardize
+ * on SHA-256 for the SignerInfo MessageDigest.
+ *
+ * Public surface declared in `include/util/rsa_sign.h`.
+ * =========================================================================== */
+
+int
+n00b_rsa_sign_pkcs1_v15_sha256(const uint8_t *rsa_n,  size_t rsa_n_len,
+                               const uint8_t *rsa_d,  size_t rsa_d_len,
+                               const uint8_t *msg,    size_t msg_len,
+                               uint8_t       *out_sig, size_t *inout_sig_len)
+{
+    if (!rsa_n || rsa_n_len == 0 || !rsa_d || rsa_d_len == 0
+        || !msg || !out_sig || !inout_sig_len
+        || *inout_sig_len < rsa_n_len) {
+        return N00B_QUIC_ERR_INVALID_ARG;
+    }
+
+    /* mHash = SHA-256(msg). */
+    uint8_t mHash[32];
+    sha256_be(msg, msg_len, mHash);
+
+    /* EM = 0x00 || 0x01 || PS || 0x00 || DI_SHA256 || mHash. */
+    const size_t emLen = rsa_n_len;
+    if (emLen < sizeof(DI_SHA256) + 32 + 11) {
+        /* PS must be >= 8; total fixed overhead = 11 + T. */
+        return N00B_QUIC_ERR_INVALID_ARG;
+    }
+
+    n00b_allocator_t *al = (n00b_allocator_t *)&n00b_get_runtime()->conduit_pool;
+    uint8_t          *em = n00b_alloc_array_with_opts(
+        uint8_t,
+        (int64_t)emLen,
+        &(n00b_alloc_opts_t){.allocator = al, .no_scan = true});
+
+    if (build_em(em, emLen, DI_SHA256, sizeof(DI_SHA256), mHash, 32) != 0) {
+        return N00B_QUIC_ERR_INVALID_ARG;
+    }
+
+    /* sig = EM^d mod n. */
+    bn_t em_bn, n_bn, d_bn, s_bn;
+    if (bn_from_bytes(&em_bn, em, emLen) != 0
+        || bn_from_bytes(&n_bn, rsa_n, rsa_n_len) != 0
+        || bn_from_bytes(&d_bn, rsa_d, rsa_d_len) != 0) {
+        return N00B_QUIC_ERR_INVALID_ARG;
+    }
+    bn_powmod(&s_bn, &em_bn, &d_bn, &n_bn);
+    bn_to_bytes(&s_bn, out_sig, emLen);
+    *inout_sig_len = emLen;
+    return N00B_QUIC_OK;
+}

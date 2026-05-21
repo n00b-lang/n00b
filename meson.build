@@ -681,6 +681,31 @@ errno_str_test = executable('test_errno_str',
 )
 test('errno_str', errno_str_test, suite: 'unit')
 
+# n00b core util — DER (X.690) encoder regression test.
+# WP-005 Phase 3.
+der_encode_test = executable('test_der_encode',
+    ['test/unit/test_der_encode.c'],
+    kwargs: test_common_kwargs,
+)
+test('der_encode', der_encode_test, suite: 'unit')
+
+# n00b core util — PKCS#7 SignedData builder regression test.
+# WP-005 Phase 3. Round-trips via picotls's read-side ASN.1
+# validator.
+pkcs7_signed_data_test = executable('test_pkcs7_signed_data',
+    ['test/unit/test_pkcs7_signed_data.c'],
+    kwargs: test_common_kwargs,
+)
+test('pkcs7_signed_data', pkcs7_signed_data_test, suite: 'unit')
+
+# n00b core PE — Authenticode certificate-table emit round-trip.
+# WP-005 Phase 3.
+pe_cert_table_emit_test = executable('test_pe_cert_table_emit',
+    ['test/unit/test_pe_cert_table_emit.c'],
+    kwargs: test_common_kwargs,
+)
+test('pe_cert_table_emit', pe_cert_table_emit_test, suite: 'unit')
+
 attest_monocypher_smoke_test = executable('test_attest_monocypher_smoke',
     ['test/unit/test_attest_monocypher_smoke.c'],
     kwargs: test_common_kwargs,
