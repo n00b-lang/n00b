@@ -456,24 +456,32 @@ test_macho_roundtrip(void)
                "configure-time compile produces a Mach-O)\n");
         return;
     }
-    printf("  [SKIP] macho_roundtrip (real-binary fixture loaded "
-           "successfully (%lld bytes); libchalk Mach-O insert path "
-           "trips ASan when called on real macOS-clang Mach-O. "
-           "Investigation pending. ELF sub-cases exercise the "
-           "wrapper end-to-end.)\n",
-           (long long)macho_bytes->byte_len);
-    return;
-    // (Dead code below — kept commented so a future agent can
-    // restore once libchalk's Mach-O insert is fixed.)
-    //
-    // auto er = n00b_attest_extract_from_artifact(path_str);
-    // ASSERT_OK(er);
-    // n00b_attest_extract_result_t *xrow = n00b_result_get(er);
-    // assert(xrow->bundled == true);
-    // assert(n00b_list_len(*xrow->envelopes) == 1);
-    // printf("  [PASS] macho_roundtrip\n");
-    // unlink(path);
-    // free(path);
+    char *path = write_tempfile(macho_bytes,
+                                 "n00b_attest_extract_macho",
+                                 nullptr);
+    n00b_string_t *path_str = n00b_string_from_cstr(path);
+    n00b_attest_envelope_t *env = build_fixture_envelope();
+    n00b_list_t(n00b_attest_envelope_t *) envs =
+        n00b_list_new(n00b_attest_envelope_t *);
+    n00b_list_push(envs, env);
+
+    auto mr = n00b_attest_mark_artifact(path_str, &envs);
+    ASSERT_OK(mr);
+    n00b_attest_mark_result_t *row = n00b_result_get(mr);
+    assert(row != nullptr);
+    assert(row->unchalked_sha256_32 != nullptr);
+    assert(row->unchalked_sha256_32->byte_len == 32);
+
+    auto er = n00b_attest_extract_from_artifact(path_str);
+    ASSERT_OK(er);
+    n00b_attest_extract_result_t *xrow = n00b_result_get(er);
+    assert(xrow->bundled == true);
+    assert(n00b_list_len(*xrow->envelopes) == 1);
+
+    printf("  [PASS] macho_roundtrip\n");
+
+    unlink(path);
+    free(path);
 }
 
 int

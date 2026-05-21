@@ -744,16 +744,24 @@ add_note_insert(n00b_macho_binary_t *bin,
         return CHALK_MACHO_ERR_INTERNAL;
     }
 
-    // Sync bin->commands[]: append the new LC_NOTE entry.  realloc
-    // the array (we keep things simple and assume one extra slot is
-    // ok — chalk's typical workflow does at most one add_note +
-    // remove_note on a parsed binary).
-    n00b_macho_command_t *grown = (n00b_macho_command_t *)realloc(
-        bin->commands,
-        (bin->num_commands + 1) * sizeof(n00b_macho_command_t));
+    // Sync bin->commands[]: append the new LC_NOTE entry. The
+    // original array is GC-allocated (by n00b_macho_parse via
+    // n00b_alloc_array); we CANNOT libc-realloc it (would trigger
+    // "pointer being freed was not allocated" abort under malloc's
+    // ownership check). Allocate a fresh GC array, copy the
+    // existing entries, and let the GC reclaim the old array when
+    // unreachable.
+    n00b_macho_command_t *grown = n00b_alloc_array(
+        n00b_macho_command_t, bin->num_commands + 1);
 
     if (!grown) {
         return CHALK_MACHO_ERR_INTERNAL;
+    }
+
+    if (bin->num_commands > 0 && bin->commands) {
+        memcpy(grown,
+               bin->commands,
+               (size_t)bin->num_commands * sizeof(n00b_macho_command_t));
     }
 
     bin->commands = grown;
