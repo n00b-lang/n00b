@@ -440,7 +440,8 @@ teardown:
 /* ------------------------------------------------------------------ */
 /* [7] Wildcard allowlist matching (candidate #6).                     */
 /*                                                                     */
-/* Exercises `host_in_allowlist` directly via the internal header.     */
+/* Exercises `n00b_http_host_in_allowlist` directly via the internal   */
+/* header.                                                             */
 /* The matcher is small + side-effect-free; testing at this layer      */
 /* avoids spinning a redirect mock for what is purely a string-shape  */
 /* classification.                                                     */
@@ -465,7 +466,7 @@ test_wildcard_matching(void)
     {
         const char *entries[] = {"*.example.com"};
         auto       *al        = build_allowlist(entries, 1);
-        assert(host_in_allowlist(n00b_string_from_cstr("foo.example.com"),
+        assert(n00b_http_host_in_allowlist(n00b_string_from_cstr("foo.example.com"),
                                   al));
     }
 
@@ -474,7 +475,7 @@ test_wildcard_matching(void)
     {
         const char *entries[] = {"*.example.com"};
         auto       *al        = build_allowlist(entries, 1);
-        assert(host_in_allowlist(
+        assert(n00b_http_host_in_allowlist(
             n00b_string_from_cstr("foo.bar.example.com"), al));
     }
 
@@ -482,7 +483,7 @@ test_wildcard_matching(void)
     {
         const char *entries[] = {"*.example.com"};
         auto       *al        = build_allowlist(entries, 1);
-        assert(!host_in_allowlist(n00b_string_from_cstr("example.com"),
+        assert(!n00b_http_host_in_allowlist(n00b_string_from_cstr("example.com"),
                                    al));
     }
 
@@ -491,7 +492,7 @@ test_wildcard_matching(void)
     {
         const char *entries[] = {"*.example.com"};
         auto       *al        = build_allowlist(entries, 1);
-        assert(!host_in_allowlist(n00b_string_from_cstr("notexample.com"),
+        assert(!n00b_http_host_in_allowlist(n00b_string_from_cstr("notexample.com"),
                                    al));
     }
 
@@ -500,7 +501,7 @@ test_wildcard_matching(void)
     {
         const char *entries[] = {"*.example.com"};
         auto       *al        = build_allowlist(entries, 1);
-        assert(!host_in_allowlist(
+        assert(!n00b_http_host_in_allowlist(
             n00b_string_from_cstr("evil-example.com"), al));
     }
 
@@ -509,13 +510,13 @@ test_wildcard_matching(void)
     {
         const char *entries[] = {"example.com", "*.example.com"};
         auto       *al        = build_allowlist(entries, 2);
-        assert(host_in_allowlist(n00b_string_from_cstr("example.com"),
+        assert(n00b_http_host_in_allowlist(n00b_string_from_cstr("example.com"),
                                   al));
-        assert(host_in_allowlist(n00b_string_from_cstr("foo.example.com"),
+        assert(n00b_http_host_in_allowlist(n00b_string_from_cstr("foo.example.com"),
                                   al));
-        assert(host_in_allowlist(
+        assert(n00b_http_host_in_allowlist(
             n00b_string_from_cstr("a.b.example.com"), al));
-        assert(!host_in_allowlist(
+        assert(!n00b_http_host_in_allowlist(
             n00b_string_from_cstr("evil.com"), al));
     }
 
@@ -533,12 +534,12 @@ test_wildcard_matching(void)
         for (size_t i = 0; i < sizeof(bads) / sizeof(bads[0]); i++) {
             const char *entries[] = {bads[i]};
             auto       *al        = build_allowlist(entries, 1);
-            assert(!host_in_allowlist(
+            assert(!n00b_http_host_in_allowlist(
                 n00b_string_from_cstr("foo.example.com"), al));
-            assert(!host_in_allowlist(
+            assert(!n00b_http_host_in_allowlist(
                 n00b_string_from_cstr("example.com"), al));
             /* Defensive: also doesn't match anything weird. */
-            assert(!host_in_allowlist(
+            assert(!n00b_http_host_in_allowlist(
                 n00b_string_from_cstr("anything.com"), al));
         }
     }
@@ -548,14 +549,14 @@ test_wildcard_matching(void)
     {
         const char *entries[] = {"*.EXAMPLE.COM"};
         auto       *al        = build_allowlist(entries, 1);
-        assert(host_in_allowlist(n00b_string_from_cstr("foo.example.com"),
+        assert(n00b_http_host_in_allowlist(n00b_string_from_cstr("foo.example.com"),
                                   al));
         /* And the reverse: entry lowercase, host uppercase. */
     }
     {
         const char *entries[] = {"*.example.com"};
         auto       *al        = build_allowlist(entries, 1);
-        assert(host_in_allowlist(n00b_string_from_cstr("FOO.EXAMPLE.COM"),
+        assert(n00b_http_host_in_allowlist(n00b_string_from_cstr("FOO.EXAMPLE.COM"),
                                   al));
     }
 
@@ -564,7 +565,7 @@ test_wildcard_matching(void)
         n00b_list_t(n00b_string_t *) *al =
             n00b_alloc(n00b_list_t(n00b_string_t *));
         *al = n00b_list_new(n00b_string_t *);
-        assert(!host_in_allowlist(
+        assert(!n00b_http_host_in_allowlist(
             n00b_string_from_cstr("foo.example.com"), al));
     }
 
@@ -573,11 +574,11 @@ test_wildcard_matching(void)
     {
         const char *entries[] = {"example.com"};
         auto       *al        = build_allowlist(entries, 1);
-        assert(host_in_allowlist(n00b_string_from_cstr("example.com"),
+        assert(n00b_http_host_in_allowlist(n00b_string_from_cstr("example.com"),
                                   al));
-        assert(host_in_allowlist(n00b_string_from_cstr("EXAMPLE.COM"),
+        assert(n00b_http_host_in_allowlist(n00b_string_from_cstr("EXAMPLE.COM"),
                                   al));
-        assert(!host_in_allowlist(
+        assert(!n00b_http_host_in_allowlist(
             n00b_string_from_cstr("foo.example.com"), al));
     }
 
@@ -595,7 +596,7 @@ test_wildcard_matching(void)
     {
         const char *entries[] = {"*.例え.com"};
         auto       *al        = build_allowlist(entries, 1);
-        assert(host_in_allowlist(
+        assert(n00b_http_host_in_allowlist(
             n00b_string_from_cstr("foo.xn--r8jz45g.com"), al));
     }
 
@@ -606,7 +607,7 @@ test_wildcard_matching(void)
     {
         const char *entries[] = {"*.例え.com"};
         auto       *al        = build_allowlist(entries, 1);
-        assert(host_in_allowlist(
+        assert(n00b_http_host_in_allowlist(
             n00b_string_from_cstr("foo.xn--r8jz45g.com"), al));
     }
 
@@ -614,7 +615,7 @@ test_wildcard_matching(void)
     {
         const char *entries[] = {"*.xn--r8jz45g.com"};
         auto       *al        = build_allowlist(entries, 1);
-        assert(host_in_allowlist(
+        assert(n00b_http_host_in_allowlist(
             n00b_string_from_cstr("foo.xn--r8jz45g.com"), al));
     }
 
@@ -623,7 +624,7 @@ test_wildcard_matching(void)
     {
         const char *entries[] = {"*.例え.com"};
         auto       *al        = build_allowlist(entries, 1);
-        assert(!host_in_allowlist(
+        assert(!n00b_http_host_in_allowlist(
             n00b_string_from_cstr("xn--r8jz45g.com"), al));
     }
 
@@ -633,7 +634,7 @@ test_wildcard_matching(void)
     {
         const char *entries[] = {"*.例え.com"};
         auto       *al        = build_allowlist(entries, 1);
-        assert(!host_in_allowlist(
+        assert(!n00b_http_host_in_allowlist(
             n00b_string_from_cstr("foo.xn--gcr.com"), al));
     }
 
@@ -652,7 +653,7 @@ test_wildcard_matching(void)
                        n00b_string_from_raw(bad, (int64_t)sizeof(bad)));
         /* A valid wildcard alongside the malformed entry. */
         n00b_list_push(*al, n00b_string_from_cstr("*.example.com"));
-        assert(host_in_allowlist(
+        assert(n00b_http_host_in_allowlist(
             n00b_string_from_cstr("foo.example.com"), al));
         /* And the malformed entry alone produces no match. */
         n00b_list_t(n00b_string_t *) *al2 =
@@ -660,7 +661,7 @@ test_wildcard_matching(void)
         *al2 = n00b_list_new(n00b_string_t *);
         n00b_list_push(*al2,
                        n00b_string_from_raw(bad, (int64_t)sizeof(bad)));
-        assert(!host_in_allowlist(
+        assert(!n00b_http_host_in_allowlist(
             n00b_string_from_cstr("foo.example.com"), al2));
     }
 
@@ -672,13 +673,13 @@ test_wildcard_matching(void)
     {
         const char *entries[] = {"example.com", "*.例え.com"};
         auto       *al        = build_allowlist(entries, 2);
-        assert(host_in_allowlist(
+        assert(n00b_http_host_in_allowlist(
             n00b_string_from_cstr("example.com"), al));
-        assert(host_in_allowlist(
+        assert(n00b_http_host_in_allowlist(
             n00b_string_from_cstr("foo.xn--r8jz45g.com"), al));
-        assert(!host_in_allowlist(
+        assert(!n00b_http_host_in_allowlist(
             n00b_string_from_cstr("xn--r8jz45g.com"), al));
-        assert(!host_in_allowlist(
+        assert(!n00b_http_host_in_allowlist(
             n00b_string_from_cstr("foo.bar.com"), al));
     }
 
@@ -689,7 +690,7 @@ test_wildcard_matching(void)
     {
         const char *entries[] = {"*.EXAMPLE.COM"};
         auto       *al        = build_allowlist(entries, 1);
-        assert(host_in_allowlist(
+        assert(n00b_http_host_in_allowlist(
             n00b_string_from_cstr("foo.example.com"), al));
     }
 

@@ -83,5 +83,5 @@
  *     scanning the rest of the list.
  */
 extern bool
-host_in_allowlist(n00b_string_t                *host,
-                  n00b_list_t(n00b_string_t *) *allowlist);
+n00b_http_host_in_allowlist(n00b_string_t                *host,
+                            n00b_list_t(n00b_string_t *) *allowlist);

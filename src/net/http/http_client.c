@@ -666,8 +666,8 @@ idna_canonicalize_or_null(const char *src, size_t src_len)
  * the per-call canonicalization cost while preserving the contract
  * (host and entries still meet in ACE space). */
 bool
-host_in_allowlist(n00b_string_t                *host,
-                  n00b_list_t(n00b_string_t *) *allowlist)
+n00b_http_host_in_allowlist(n00b_string_t                *host,
+                            n00b_list_t(n00b_string_t *) *allowlist)
 {
     if (!host || !allowlist) return false;
 
@@ -1040,8 +1040,8 @@ n00b_http_request_sync(n00b_string_t *url)
                     n00b_result_get_err(next_ur));
             }
             n00b_http_url_t *next_u = n00b_result_get(next_ur);
-            if (!host_in_allowlist(next_u->host,
-                                    redirect_host_allowlist)) {
+            if (!n00b_http_host_in_allowlist(next_u->host,
+                                             redirect_host_allowlist)) {
                 return n00b_result_err(
                     n00b_http_response_t *,
                     N00B_HTTP_ERR_HOST_REDIRECT_NOT_ALLOWED);

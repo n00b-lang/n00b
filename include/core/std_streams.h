@@ -1,3 +1,5 @@
+#pragma once
+
 /**
  * @file std_streams.h
  * @brief Public accessors for the runtime's managed stdin / stdout / stderr.
@@ -34,7 +36,6 @@
  * refused `fd_manage`'s `dup`/`fcntl` setup.  Callers may treat a
  * `nullptr` return as "this stream is unavailable on this process."
  */
-#pragma once
 
 #include "n00b.h"
 #include "core/runtime.h"
