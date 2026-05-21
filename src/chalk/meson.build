@@ -24,4 +24,6 @@ n00b_chalk_src = files(
     'elf_fallback.c',
     'zip.c',
     'pe.c',
+    'resign_pe.c',
+    'resign_identity.c',
 )

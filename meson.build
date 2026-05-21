@@ -764,6 +764,22 @@ test('pe_cert_table_emit', pe_cert_table_emit_test, suite: 'unit',
      depends: [pe_hello_exe, pe_hello_exe_signed, pe_sigcheck],
      workdir: meson.current_build_dir())
 
+# WP-005 Phase 4 — libchalk PE re-sign end-to-end regression.
+# Uses the same Sysinternals sigcheck64.exe fixture (downloaded
+# into the build dir by the existing pe_sigcheck custom_target)
+# and the committed pkcs7_fixture_{cert,key}.pem PEMs (resolved
+# via MESON_SOURCE_ROOT, which meson sets for every test run).
+# workdir = build dir so sigcheck64.exe resolves; the PEM
+# fixtures come from the source tree.
+chalk_pe_resign_test = executable('test_chalk_pe_resign',
+    ['test/unit/test_chalk_pe_resign.c'],
+    kwargs: test_common_kwargs,
+)
+test('chalk_pe_resign', chalk_pe_resign_test, suite: 'unit',
+     depends: [pe_sigcheck],
+     env: {'MESON_SOURCE_ROOT': meson.project_source_root()},
+     workdir: meson.current_build_dir())
+
 attest_monocypher_smoke_test = executable('test_attest_monocypher_smoke',
     ['test/unit/test_attest_monocypher_smoke.c'],
     kwargs: test_common_kwargs,
