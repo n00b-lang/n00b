@@ -395,12 +395,11 @@ build_commander(void)
                        N00B_CMDR_TYPE_WORD,
                        true,
                        r"Filesystem path to the artifact to mark (required)");
-    n00b_cmdr_add_flag(c,
-                       r"mark",
-                       r"--envelope",
-                       N00B_CMDR_TYPE_WORD,
-                       true,
-                       r"DSSE envelope JSON path (default: read one envelope from stdin)");
+    n00b_cmdr_add_flag_multi(c,
+                             r"mark",
+                             r"--envelope",
+                             N00B_CMDR_TYPE_WORD,
+                             r"DSSE envelope JSON path (repeatable; accepts comma-separated values; default: read one envelope from stdin)");
     n00b_cmdr_add_flag(c,
                        r"mark",
                        r"--lazy",
@@ -990,17 +989,22 @@ verb_pull(n00b_cmdr_result_t *result)
 //
 // CLI shape:
 //   n00b-attest mark --artifact <path>
-//                    [--envelope <path>]   (default: read one from stdin)
+//                    [--envelope <path>]   (repeatable; comma-separated
+//                                            values accepted; default:
+//                                            read one envelope from stdin)
 //                    [--lazy]              (default: bundled)
 //                    [--registry-hint <ref>]
 //
-// Note: slay's flag substrate doesn't currently support repeatable
-// `--envelope` (each occurrence overwrites the previous). The
-// library-shaped core (`n00b_attest_cli_mark`) DOES accept a list
-// of envelope-bytes blobs to preserve the CR-13 multi-envelope
-// contract; callers needing multi-envelope marking can drive the
-// library directly, or wait for the slay repeatable-flag lift.
-// Flagged for orchestrator follow-up.
+// `--envelope` is registered via `n00b_cmdr_add_flag_multi` (DF-023
+// slay multi-flag lift). Each occurrence appends one path; comma-
+// separated values within a single occurrence each append one path
+// (backslash-escaped `\,` is a literal comma inside one element).
+// Zero `--envelope` occurrences fall back to a single envelope read
+// from stdin (WP-002 sign precedent). The accumulated paths are read
+// into a `n00b_list_t(n00b_buffer_t *)` and forwarded to
+// `n00b_attest_cli_mark`, which has always honored the CR-13
+// multi-envelope contract; this retrofit restores that contract at
+// the shim layer.
 static int
 verb_mark(n00b_cmdr_result_t *result)
 {
@@ -1015,26 +1019,44 @@ verb_mark(n00b_cmdr_result_t *result)
         return 1;
     }
 
-    // Read envelope bytes: from --envelope <path> if supplied, else
-    // a single envelope from stdin (matches WP-002 sign precedent).
-    n00b_buffer_t *env_bytes = nullptr;
+    // Read envelope bytes: from one-or-more --envelope <path>
+    // occurrences (post-DF-023, the flag is multi: repeatable +
+    // comma-split), else a single envelope from stdin (matches
+    // WP-002 sign precedent).
+    n00b_list_t(n00b_buffer_t *) envs = n00b_list_new(n00b_buffer_t *);
     if (n00b_cmdr_flag_present(result, r"--envelope")) {
-        n00b_string_t *env_path = n00b_cmdr_flag_str(result, r"--envelope");
-        if (env_path == nullptr || env_path->u8_bytes == 0) {
+        n00b_list_t(n00b_string_t *) *env_paths
+            = n00b_cmdr_flag_list(result, r"--envelope");
+        if (env_paths == nullptr || env_paths->len == 0) {
             n00b_eprintf(
                 "n00b-attest mark: --envelope <path> may not be empty");
             return 1;
         }
-        auto read_r = read_all_from_path(env_path);
-        if (n00b_result_is_err(read_r)) {
-            n00b_err_t code = n00b_result_get_err(read_r);
-            n00b_eprintf("n00b-attest mark: cannot read envelope '«#»' "
-                         "(errno «#»)",
-                         env_path,
-                         (int64_t)code);
-            return 1;
+        size_t n_paths = (size_t)env_paths->len;
+        for (size_t i = 0; i < n_paths; i++) {
+            n00b_string_t *env_path = env_paths->data[i];
+            if (env_path == nullptr || env_path->u8_bytes == 0) {
+                n00b_eprintf(
+                    "n00b-attest mark: --envelope <path> may not be empty");
+                return 1;
+            }
+            auto read_r = read_all_from_path(env_path);
+            if (n00b_result_is_err(read_r)) {
+                n00b_err_t code = n00b_result_get_err(read_r);
+                n00b_eprintf("n00b-attest mark: cannot read envelope '«#»' "
+                             "(errno «#»)",
+                             env_path,
+                             (int64_t)code);
+                return 1;
+            }
+            n00b_buffer_t *env_bytes = n00b_result_get(read_r);
+            if (env_bytes == nullptr || env_bytes->byte_len == 0) {
+                n00b_eprintf("n00b-attest mark: empty envelope '«#»'",
+                             env_path);
+                return 1;
+            }
+            n00b_list_push(envs, env_bytes);
         }
-        env_bytes = n00b_result_get(read_r);
     }
     else {
         // Default-stdin: reach the runtime-managed fd-0 owner via
@@ -1048,17 +1070,13 @@ verb_mark(n00b_cmdr_result_t *result)
                          (int64_t)code);
             return 1;
         }
-        env_bytes = n00b_result_get(read_r);
+        n00b_buffer_t *env_bytes = n00b_result_get(read_r);
+        if (env_bytes == nullptr || env_bytes->byte_len == 0) {
+            n00b_eprintf("n00b-attest mark: empty envelope input");
+            return 1;
+        }
+        n00b_list_push(envs, env_bytes);
     }
-
-    if (env_bytes == nullptr || env_bytes->byte_len == 0) {
-        n00b_eprintf("n00b-attest mark: empty envelope input");
-        return 1;
-    }
-
-    // Build the single-entry envelope-bytes list and dispatch.
-    n00b_list_t(n00b_buffer_t *) envs = n00b_list_new(n00b_buffer_t *);
-    n00b_list_push(envs, env_bytes);
 
     bool bundled = !n00b_cmdr_flag_bool(result, r"--lazy");
 
@@ -1390,7 +1408,8 @@ print_usage(void)
         "mark flags:\n"
         "  --artifact <path>        Artifact filesystem path (required)\n"
         "  --envelope <path>        Envelope JSON path "
-        "(default: read one from stdin)\n"
+        "(repeatable; comma-separated values accepted; "
+        "default: read one from stdin)\n"
         "  --lazy                   Record only digest+predicate-type "
         "(default: bundled)\n"
         "  --registry-hint <ref>    OCI image reference recorded in the mark\n"

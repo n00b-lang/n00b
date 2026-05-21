@@ -33,6 +33,25 @@
  *        empty list, and a list with a null entry all return
  *        `N00B_ATTEST_ERR_DSSE_BAD_INPUT`.
  *
+ *    [E] Shim-level multi-envelope via parse-then-dispatch (WP-005
+ *        retrofit, post-DF-023 slay multi-flag lift): four cases
+ *        covering `--envelope` registered as a multi flag and
+ *        accessed via `n00b_cmdr_flag_list`. `verb_mark` itself is
+ *        static to the n00b-attest binary, so the test rebuilds the
+ *        same flag-registration shape, parses a synthesized command
+ *        string via `n00b_cmdr_parse_string`, reads back the flag
+ *        list, materializes envelope-bytes from on-disk fixtures, and
+ *        forwards through `n00b_attest_cli_mark`. Sub-cases:
+ *
+ *          [E1] repeat:        --envelope <e1> --envelope <e2>
+ *          [E2] comma-split:   --envelope <e1>,<e2>
+ *          [E3] mixed:         --envelope <e1>,<e2> --envelope <e3>
+ *          [E4] single value:  --envelope <e1>
+ *
+ *        Each case asserts the parsed list length matches the
+ *        expected envelope count and that `n00b_attest_cli_mark`
+ *        succeeds with the materialized envelope-bytes list.
+ *
  *  Test-file carve-out (D-030) applies — libc I/O for the tempfile
  *  setup and stdout logging is acceptable per the established
  *  test-file precedent. The fixture envelope reuses the
@@ -51,7 +70,9 @@
 #include "core/string.h"
 #include "core/runtime.h"
 #include "text/strings/string_ops.h"
+#include "text/strings/format.h"
 #include "attest/n00b_attest.h"
+#include "slay/commander.h"
 
 #include "chalk/n00b_chalk.h"
 #include "compiler/objfile/elf.h"
@@ -80,6 +101,14 @@ static const char k_statement_sbom[] =
     "\"digest\":{\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}}],"
     "\"predicateType\":\"https://spdx.dev/Document\","
     "\"predicate\":{\"spdxVersion\":\"SPDX-2.3\"}}";
+
+// Third predicate-type for the shim-level mixed case (test [E3]).
+static const char k_statement_vuln[] =
+    "{\"_type\":\"https://in-toto.io/Statement/v1\","
+    "\"subject\":[{\"name\":\"hello.elf\","
+    "\"digest\":{\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}}],"
+    "\"predicateType\":\"https://in-toto.io/attestation/vuln/v0.1\","
+    "\"predicate\":{\"scanner\":{\"uri\":\"test\"}}}";
 
 static const char k_signer_keyid[]
     = "06e3fd8fda29bb60ab59557de61edb0aecdb231134be30e75b455f8e1b792fa9";
@@ -330,6 +359,239 @@ test_cli_mark_null_inputs(void)
     free(path);
 }
 
+// ---------------------------------------------------------------------------
+// [E] Shim-level multi-envelope (parse-then-dispatch).
+// ---------------------------------------------------------------------------
+//
+// `verb_mark` in src/tools/n00b-attest.c is file-static, so the test
+// cannot call it directly (audit fix V-5b). Instead, the test builds
+// a commander whose `mark` subcommand registers `--envelope` as a
+// multi flag (mirroring the production registration), parses a
+// synthesized command string via `n00b_cmdr_parse_string`, retrieves
+// the envelope-path list via `n00b_cmdr_flag_list`, materializes
+// envelope-bytes from on-disk tempfiles, and forwards to
+// `n00b_attest_cli_mark`. The materialization mirrors the production
+// `verb_mark` body's per-path read-and-accumulate loop one-to-one.
+
+// Write an envelope-bytes blob to a tempfile and return the malloc'd path.
+// Caller owns the path string (libc free) and the on-disk file (unlink).
+static char *
+write_envelope_tempfile(const char *stmt_json, size_t stmt_len,
+                        const char *prefix)
+{
+    n00b_buffer_t *bytes = build_envelope_bytes(stmt_json, stmt_len);
+    char tmpl[128];
+    snprintf(tmpl, sizeof(tmpl), "/tmp/%s_XXXXXX.json", prefix);
+    char *path = strdup(tmpl);
+    int   fd   = mkstemps(path, 5);  // ".json" suffix is 5 chars.
+    assert(fd >= 0);
+    ssize_t n = write(fd, bytes->data, (size_t)bytes->byte_len);
+    assert(n == bytes->byte_len);
+    close(fd);
+    return path;
+}
+
+// Build a commander whose `mark` subcommand mirrors the production
+// flag registration (the slice this test exercises is the multi
+// `--envelope`; other flags are registered for fidelity).
+static n00b_cmdr_t *
+build_mark_commander(void)
+{
+    n00b_cmdr_t *c = n00b_cmdr_new();
+    n00b_cmdr_set_name(c, r"n00b-attest");
+
+    n00b_cmdr_add_command(c, r"mark",
+                          r"Mark an artifact in place with a DSSE envelope ATTESTATION tree");
+    n00b_cmdr_add_flag(c, r"mark", r"--artifact",
+                       N00B_CMDR_TYPE_WORD, true,
+                       r"Filesystem path to the artifact to mark (required)");
+    n00b_cmdr_add_flag_multi(c, r"mark", r"--envelope",
+                             N00B_CMDR_TYPE_WORD,
+                             r"DSSE envelope JSON path (repeatable; accepts comma-separated values)");
+    n00b_cmdr_add_flag(c, r"mark", r"--lazy",
+                       N00B_CMDR_TYPE_BOOL, false,
+                       r"Record only envelope digest+predicate-type");
+    n00b_cmdr_add_flag(c, r"mark", r"--registry-hint",
+                       N00B_CMDR_TYPE_WORD, true,
+                       r"OCI image reference to record");
+    return c;
+}
+
+// Drive the shim-side parse-then-dispatch path: given a synthesized
+// command string, parse via the commander, materialize the envelope-
+// bytes list from the parsed paths, and dispatch through
+// `n00b_attest_cli_mark`. Returns the parsed list length on success
+// (asserts inside on parse/mark failure).
+static int
+parse_and_dispatch(n00b_cmdr_t *c, n00b_string_t *cmdline,
+                   n00b_string_t *artifact_path)
+{
+    n00b_cmdr_result_t *r = n00b_cmdr_parse_string(c, cmdline);
+    assert(r != nullptr);
+    if (!r->ok) {
+        int32_t nerr = n00b_cmdr_error_count(r);
+        for (int32_t i = 0; i < nerr; i++) {
+            fprintf(stderr, "  parse error: %s\n",
+                    n00b_cmdr_error_get(r, i)->data);
+        }
+        assert(r->ok);
+    }
+
+    assert(n00b_cmdr_flag_present(r, r"--envelope"));
+    n00b_list_t(n00b_string_t *) *env_paths
+        = n00b_cmdr_flag_list(r, r"--envelope");
+    assert(env_paths != nullptr);
+    int parsed_count = (int)env_paths->len;
+
+    // Materialize envelope-bytes list (mirrors verb_mark body).
+    n00b_list_t(n00b_buffer_t *) envs = n00b_list_new(n00b_buffer_t *);
+    for (size_t i = 0; i < (size_t)env_paths->len; i++) {
+        n00b_string_t *env_path = env_paths->data[i];
+        assert(env_path != nullptr && env_path->u8_bytes > 0);
+        n00b_buffer_t *bytes = slurp_file(env_path->data);
+        assert(bytes != nullptr && bytes->byte_len > 0);
+        n00b_list_push(envs, bytes);
+    }
+
+    auto mr = n00b_attest_cli_mark(artifact_path, &envs);
+    ASSERT_OK(mr);
+
+    n00b_cmdr_result_free(r);
+    return parsed_count;
+}
+
+// [E1] Repeat at shim: --envelope <e1> --envelope <e2> → list-of-2.
+static void
+test_shim_multi_envelope_repeat(void)
+{
+    n00b_buffer_t *elf_bytes = build_elf_fixture();
+    char          *art_path  = write_elf_tempfile(elf_bytes,
+                                                   "n00b_attest_shim_repeat");
+    n00b_string_t *art_str   = n00b_string_from_cstr(art_path);
+
+    char *e1 = write_envelope_tempfile(
+        k_statement_provenance, sizeof(k_statement_provenance) - 1,
+        "n00b_attest_env_prov");
+    char *e2 = write_envelope_tempfile(
+        k_statement_sbom, sizeof(k_statement_sbom) - 1,
+        "n00b_attest_env_sbom");
+
+    n00b_cmdr_t   *c       = build_mark_commander();
+    n00b_string_t *cmdline = n00b_cformat(
+        "mark --artifact «#» --envelope «#» --envelope «#»",
+        art_str,
+        n00b_string_from_cstr(e1),
+        n00b_string_from_cstr(e2));
+
+    int parsed = parse_and_dispatch(c, cmdline, art_str);
+    assert(parsed == 2);
+
+    n00b_cmdr_free(c);
+    printf("  [PASS] shim_multi_envelope_repeat\n");
+    unlink(e1); free(e1);
+    unlink(e2); free(e2);
+    unlink(art_path); free(art_path);
+}
+
+// [E2] Comma-split at shim: --envelope <e1>,<e2> → list-of-2.
+static void
+test_shim_multi_envelope_comma_split(void)
+{
+    n00b_buffer_t *elf_bytes = build_elf_fixture();
+    char          *art_path  = write_elf_tempfile(elf_bytes,
+                                                   "n00b_attest_shim_csplit");
+    n00b_string_t *art_str   = n00b_string_from_cstr(art_path);
+
+    char *e1 = write_envelope_tempfile(
+        k_statement_provenance, sizeof(k_statement_provenance) - 1,
+        "n00b_attest_env_prov");
+    char *e2 = write_envelope_tempfile(
+        k_statement_sbom, sizeof(k_statement_sbom) - 1,
+        "n00b_attest_env_sbom");
+
+    n00b_cmdr_t   *c       = build_mark_commander();
+    n00b_string_t *cmdline = n00b_cformat(
+        "mark --artifact «#» --envelope «#»,«#»",
+        art_str,
+        n00b_string_from_cstr(e1),
+        n00b_string_from_cstr(e2));
+
+    int parsed = parse_and_dispatch(c, cmdline, art_str);
+    assert(parsed == 2);
+
+    n00b_cmdr_free(c);
+    printf("  [PASS] shim_multi_envelope_comma_split\n");
+    unlink(e1); free(e1);
+    unlink(e2); free(e2);
+    unlink(art_path); free(art_path);
+}
+
+// [E3] Mixed at shim: --envelope <e1>,<e2> --envelope <e3> → list-of-3.
+static void
+test_shim_multi_envelope_mixed(void)
+{
+    n00b_buffer_t *elf_bytes = build_elf_fixture();
+    char          *art_path  = write_elf_tempfile(elf_bytes,
+                                                   "n00b_attest_shim_mixed");
+    n00b_string_t *art_str   = n00b_string_from_cstr(art_path);
+
+    char *e1 = write_envelope_tempfile(
+        k_statement_provenance, sizeof(k_statement_provenance) - 1,
+        "n00b_attest_env_prov");
+    char *e2 = write_envelope_tempfile(
+        k_statement_sbom, sizeof(k_statement_sbom) - 1,
+        "n00b_attest_env_sbom");
+    char *e3 = write_envelope_tempfile(
+        k_statement_vuln, sizeof(k_statement_vuln) - 1,
+        "n00b_attest_env_vuln");
+
+    n00b_cmdr_t   *c       = build_mark_commander();
+    n00b_string_t *cmdline = n00b_cformat(
+        "mark --artifact «#» --envelope «#»,«#» --envelope «#»",
+        art_str,
+        n00b_string_from_cstr(e1),
+        n00b_string_from_cstr(e2),
+        n00b_string_from_cstr(e3));
+
+    int parsed = parse_and_dispatch(c, cmdline, art_str);
+    assert(parsed == 3);
+
+    n00b_cmdr_free(c);
+    printf("  [PASS] shim_multi_envelope_mixed\n");
+    unlink(e1); free(e1);
+    unlink(e2); free(e2);
+    unlink(e3); free(e3);
+    unlink(art_path); free(art_path);
+}
+
+// [E4] Single value with multi flag: --envelope <e1> → list-of-1.
+static void
+test_shim_multi_envelope_single(void)
+{
+    n00b_buffer_t *elf_bytes = build_elf_fixture();
+    char          *art_path  = write_elf_tempfile(elf_bytes,
+                                                   "n00b_attest_shim_single");
+    n00b_string_t *art_str   = n00b_string_from_cstr(art_path);
+
+    char *e1 = write_envelope_tempfile(
+        k_statement_provenance, sizeof(k_statement_provenance) - 1,
+        "n00b_attest_env_prov");
+
+    n00b_cmdr_t   *c       = build_mark_commander();
+    n00b_string_t *cmdline = n00b_cformat(
+        "mark --artifact «#» --envelope «#»",
+        art_str,
+        n00b_string_from_cstr(e1));
+
+    int parsed = parse_and_dispatch(c, cmdline, art_str);
+    assert(parsed == 1);
+
+    n00b_cmdr_free(c);
+    printf("  [PASS] shim_multi_envelope_single\n");
+    unlink(e1); free(e1);
+    unlink(art_path); free(art_path);
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -341,6 +603,14 @@ main(int argc, char *argv[])
     test_cli_mark_lazy_mode();
     test_cli_mark_multi_envelope();
     test_cli_mark_null_inputs();
+
+    // [E] Shim-level multi-envelope via parse-then-dispatch (WP-005
+    // retrofit, post-DF-023 slay multi-flag lift).
+    test_shim_multi_envelope_repeat();
+    test_shim_multi_envelope_comma_split();
+    test_shim_multi_envelope_mixed();
+    test_shim_multi_envelope_single();
+
     printf("All n00b_attest CLI mark tests passed.\n");
     return 0;
 }
