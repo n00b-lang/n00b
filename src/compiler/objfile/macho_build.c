@@ -581,11 +581,17 @@ n00b_macho_build(n00b_macho_binary_t *bin)
 
     bool has_pagezero  = (bin->header.filetype == MH_EXECUTE);
     bool has_text      = false;
-    bool has_linkedit  = (bin->num_symbols > 0 || bin->num_bindings > 0
-                          || bin->num_rebases > 0 || bin->num_exports > 0
-                          || bin->function_starts
-                          || (bin->data_in_code
-                              && bin->data_in_code->count > 0));
+    // __LINKEDIT is ALWAYS emitted, even when empty. Real-world
+    // clang/ld output always includes a __LINKEDIT segment, and
+    // downstream consumers (notably libchalk's add_note path which
+    // needs a __LINKEDIT to grow the chalk note into) depend on
+    // its presence. An empty __LINKEDIT has filesize=0 and vmsize=0
+    // and adds no observable behavior change for symbol-less builds
+    // beyond a single 72-byte LC_SEGMENT_64 command.
+    bool has_linkedit  = true;
+    (void)0;  // (the prior gating predicate kept as a comment for
+              //  future readers — see git history if you need the
+              //  exact symbol-count/binding-count/etc. predicate.)
     bool has_symtab    = bin->num_symbols > 0;
     bool has_main      = bin->entrypoint != 0;
     bool has_dylinker  = bin->dylinker && bin->dylinker->data && bin->dylinker->u8_bytes > 0;
