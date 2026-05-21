@@ -291,6 +291,73 @@ n00b_der_encode_tagged(uint32_t tag, n00b_buffer_t *content) _kargs
 };
 
 /**
+ * @brief Wrap pre-encoded content in a context-specific [n] IMPLICIT tag
+ *        (X.690 §8.14.3).
+ *
+ * Differs from @ref n00b_der_encode_tagged (which is EXPLICIT —
+ * the content's tag is preserved and a new outer tag is added) by
+ * **REPLACING** the content's outer identifier-octet rather than
+ * nesting. Per X.690 §8.14.3 / X.680 §31, an IMPLICIT tag inherits
+ * the primitive/constructed bit of the content's underlying ASN.1
+ * type (X.690 §8.14.3.1: "the encoding ... shall be derived from the
+ * encoding for the type of the implicitly-tagged type, with the
+ * identifier octets replaced by those of the implicit tag").
+ *
+ * The encoder reads the input's leading tag byte to determine
+ * constructed-vs-primitive:
+ *
+ * - **Primitive** content (e.g. OCTET STRING under `[0] IMPLICIT`):
+ *   the new identifier octet is `0x80 | (tag & 0x1F)` —
+ *   context-specific class, primitive bit clear.
+ * - **Constructed** content (e.g. SEQUENCE or SET under `[0] IMPLICIT`):
+ *   the new identifier octet is `0xA0 | (tag & 0x1F)` —
+ *   context-specific class, constructed bit set.
+ *
+ * Detection: the high two bits of the content's leading byte give
+ * the class (universal/application/context/private); the next bit
+ * gives primitive/constructed. For libn00b's encoder outputs the
+ * leading byte is always a universal-class identifier (tags 0x01..
+ * 0x18) for primitives, or `0x30` / `0x31` for SEQUENCE / SET — so
+ * inspecting bit 5 (`0x20`, the constructed flag) of the leading
+ * byte is sufficient.
+ *
+ * @param tag      Tag number in [0, 30]. (High tag numbers > 30
+ *                 require multi-byte identifier encoding per X.690
+ *                 §8.1.2.4.2; not supported in v1 since the
+ *                 PKCS#7 / Authenticode callers all use single-byte
+ *                 tags.)
+ * @param content  Pre-encoded inner TLV bytes. The leading
+ *                 identifier octet is read for the constructed-bit
+ *                 decision, then dropped from the output (replaced
+ *                 by the new context-specific identifier). The
+ *                 length octets and value bytes pass through
+ *                 unchanged.
+ *
+ * @kw allocator  Optional allocator (default: runtime).
+ *
+ * @return A new `n00b_buffer_t *` carrying
+ *         `(0x80|tag) || L || V` (primitive) or
+ *         `(0xA0|tag) || L || V` (constructed).
+ *         Returns an empty buffer with a primitive zero-length TLV
+ *         when @p content is nullptr.
+ *
+ * @details
+ *
+ * Use cases:
+ * - RFC 5652 §10.2.3 PKCS#7 SignedData `certificates [0] IMPLICIT
+ *   CertificateSet` — constructed; the wrapped SET-of-Certificate
+ *   becomes `[0] IMPLICIT` SET.
+ * - RFC 5652 §10.2.4 `crls [1] IMPLICIT RevocationInfoChoices`.
+ * - Authenticode SpcSpOpusInfo `programName [0] IMPLICIT ... `
+ *   (when the inner is a CHOICE of primitive strings).
+ */
+extern n00b_buffer_t *
+n00b_der_encode_implicit_tagged(uint32_t tag, n00b_buffer_t *content) _kargs
+{
+    n00b_allocator_t *allocator = nullptr;
+};
+
+/**
  * @brief DER-encode a UTF8String (X.680 §41; X.690 §8.21).
  *
  * @param s  The string. A nullptr or empty string yields

@@ -691,20 +691,75 @@ test('der_encode', der_encode_test, suite: 'unit')
 
 # n00b core util — PKCS#7 SignedData builder regression test.
 # WP-005 Phase 3. Round-trips via picotls's read-side ASN.1
-# validator.
+# validator. Post WP-005 P3-fixups sub-deliverable 4: loads
+# committed PEM cert+key fixtures via picotls's PEM decoder, so
+# the test needs `workdir: meson.project_source_root()` to
+# resolve `test/unit/data/pkcs7_fixture_*.pem` relative to the
+# source tree.
 pkcs7_signed_data_test = executable('test_pkcs7_signed_data',
     ['test/unit/test_pkcs7_signed_data.c'],
     kwargs: test_common_kwargs,
 )
-test('pkcs7_signed_data', pkcs7_signed_data_test, suite: 'unit')
+test('pkcs7_signed_data', pkcs7_signed_data_test, suite: 'unit',
+     workdir: meson.project_source_root())
 
 # n00b core PE — Authenticode certificate-table emit round-trip.
-# WP-005 Phase 3.
+# WP-005 Phase 3 + P3-fixups sub-deliverable 3.
+#
+# Hybrid fixture wiring (per user kickoff Q3 disposition):
+#   A. mingw-w64 + osslsigncode self-generated hello.exe.signed
+#      (gated on toolchain availability; SKIPs cleanly when absent).
+#   B. Sysinternals pendmoves.exe (downloaded + SHA-256-verified at
+#      configure time; NOT committed; SKIPs cleanly when network
+#      unavailable).
+#   C. Always-runs synthetic in-memory PE blob cases as the primary.
+#
+# Each custom_target's helper script emits an EMPTY placeholder when
+# its precondition fails (toolchain absent, network unavailable, SHA
+# mismatch) so the meson rule still produces its declared output;
+# the runtime test checks file size and SKIPs the case if empty.
+
+mingw_gcc      = find_program('x86_64-w64-mingw32-gcc', required: false)
+osslsigncode   = find_program('osslsigncode',           required: false)
+pe_hello_exe = custom_target('pe_hello_exe',
+    output: 'hello.exe',
+    command: [
+        meson.project_source_root() / 'test' / 'fixtures' / 'pe' / 'build_hello_exe.sh',
+        meson.project_source_root() / 'test' / 'unit' / 'data' / 'hello.c',
+        '@OUTPUT@',
+    ],
+    depend_files: files('test/unit/data/hello.c',
+                        'test/fixtures/pe/build_hello_exe.sh'),
+)
+pe_hello_exe_signed = custom_target('pe_hello_exe_signed',
+    output: 'hello.exe.signed',
+    input: pe_hello_exe,
+    command: [
+        meson.project_source_root() / 'test' / 'fixtures' / 'pe' / 'sign_hello_exe.sh',
+        '@INPUT@',
+        meson.project_source_root() / 'test' / 'unit' / 'data' / 'pkcs7_fixture_cert.pem',
+        meson.project_source_root() / 'test' / 'unit' / 'data' / 'pkcs7_fixture_key.pem',
+        '@OUTPUT@',
+    ],
+    depend_files: files('test/unit/data/pkcs7_fixture_cert.pem',
+                        'test/unit/data/pkcs7_fixture_key.pem',
+                        'test/fixtures/pe/sign_hello_exe.sh'),
+)
+pe_pendmoves = custom_target('pe_pendmoves',
+    output: 'pendmoves.exe',
+    command: [
+        meson.project_source_root() / 'test' / 'fixtures' / 'pe' / 'fetch_pendmoves.sh',
+        '@OUTPUT@',
+    ],
+    depend_files: files('test/fixtures/pe/fetch_pendmoves.sh'),
+)
 pe_cert_table_emit_test = executable('test_pe_cert_table_emit',
     ['test/unit/test_pe_cert_table_emit.c'],
     kwargs: test_common_kwargs,
 )
-test('pe_cert_table_emit', pe_cert_table_emit_test, suite: 'unit')
+test('pe_cert_table_emit', pe_cert_table_emit_test, suite: 'unit',
+     depends: [pe_hello_exe, pe_hello_exe_signed, pe_pendmoves],
+     workdir: meson.current_build_dir())
 
 attest_monocypher_smoke_test = executable('test_attest_monocypher_smoke',
     ['test/unit/test_attest_monocypher_smoke.c'],

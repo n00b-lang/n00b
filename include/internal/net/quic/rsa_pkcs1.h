@@ -1,22 +1,30 @@
 /**
- * @file rsa_verify.h
+ * @file rsa_pkcs1.h
  * @internal
- * @brief Minimal RSA-PKCS1-v1_5 signature verification.
+ * @brief Hand-rolled RSA PKCS#1-v1.5 + PSS sign/verify primitives.
  *
- * Phase 3 § 6 hand-rolls RSA verify (RS256/RS384/RS512) because
- * picotls-minicrypto vendors only ECDSA via uECC + symmetric
- * primitives via cifra.  No RSA primitives ship with the project
- * by default.
+ * Phase 3 hand-rolls these because picotls-minicrypto vendors only
+ * ECDSA via uECC + symmetric primitives via cifra. No RSA primitives
+ * ship with the project by default.
  *
- * Scope (v1):
- *   - PKCS#1 v1.5 only.  PSS is documented as a follow-up.
- *   - Public-key operation only (we never sign with RSA).
- *   - Modulus sizes 1024..4096 bits.
- *   - Public exponents up to 8 bytes (covers 65537 = 0x010001 +
- *     anything else operators might use).
+ * # Scope
+ *
+ *   - RSA-PKCS1-v1.5 **verify** (RS256/RS384/RS512). Used by the
+ *     QUIC JWT / OIDC path.
+ *   - RSA-PSS **verify** + **sign** (rsa_pss_rsae_sha256). Used by
+ *     the TLS 1.3 CertificateVerify path and the
+ *     `test_rsa_pss_roundtrip` math regression.
+ *   - RSA-PKCS1-v1.5 SHA-256 **sign**. Public-surface declared in
+ *     `include/util/rsa_sign.h`; the implementation is colocated in
+ *     this file's translation unit because it shares the schoolbook
+ *     bignum + Knuth-D modular-reduction machinery and the DI_SHA256
+ *     prefix with the verify side.
+ *
+ * Modulus sizes 1024..4096 bits. Public exponents up to 8 bytes
+ * (covers 65537 = 0x010001 + anything else operators might use).
  *
  * The implementation is straightforward schoolbook bignum + Knuth-D
- * modular reduction.  Small public exponent → ~17 modexp iterations
+ * modular reduction. Small public exponent → ~17 modexp iterations
  * for the canonical e=65537; speed is not critical.
  */
 #pragma once

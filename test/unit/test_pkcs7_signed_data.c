@@ -1,32 +1,39 @@
 /** @file test/unit/test_pkcs7_signed_data.c — PKCS#7 SignedData builder regression.
  *
- *  WP-005 Phase 3 regression test for the new PKCS#7 SignedData
- *  builder (include/util/pkcs7.h, src/util/pkcs7.c). The test:
+ *  WP-005 Phase 3 regression test for the PKCS#7 SignedData builder
+ *  (include/util/pkcs7.h, src/util/pkcs7.c).
  *
- *    [1] Constructs an `SpcIndirectDataContent` blob from a
- *        canned 32-byte Authenticode-hash. Verifies it parses
- *        cleanly via picotls's `ptls_asn1_validation` (round-trip
- *        validity).
+ *  Fixture path (post WP-005 P3-fixups, sub-deliverable 4):
+ *    - `test/unit/data/pkcs7_fixture_cert.pem` — X.509 cert,
+ *      openssl-generated once (`openssl req -x509 -newkey rsa:2048
+ *      -nodes -days 365 -subj '/CN=n00b-attest test fixture'`).
+ *    - `test/unit/data/pkcs7_fixture_key.pem` — companion PKCS#8
+ *      private key (RSA-2048, unencrypted; the CN explicitly marks
+ *      this as test material).
  *
- *    [2] Builds a complete PKCS#7 SignedData blob:
- *        - Single test certificate (a self-constructed minimal
- *          DER blob — we don't need a real X.509 for the round-
- *          trip parse; the SignedData carries it as opaque bytes
- *          and the validator only walks the outer structure).
- *        - A hand-built issuer DN (an empty `Name` SEQUENCE OF
- *          RDN — well-formed DER even when empty).
- *        - A small serial.
- *        - The Authenticode SignedData content type OID
- *          (1.3.6.1.4.1.311.2.1.4) over the SpcIndirectDataContent
- *          from [1].
- *        - RSA-2048 sign key from the existing
- *          test_rsa_pss_roundtrip fixture (rsa_n, rsa_d).
- *
- *    [3] Asserts the produced DER parses cleanly via
+ *  At runtime the test:
+ *    [1] Decodes the PEM cert into DER bytes via picotls's
+ *        `ptls_load_pem_objects` (label "CERTIFICATE").
+ *    [2] Decodes the PEM key into DER PKCS#8 via
+ *        `ptls_load_pem_objects` (label "PRIVATE KEY"), then parses
+ *        the PKCS#8 envelope manually using picotls's
+ *        `ptls_asn1_get_expected_type_and_length` to reach the
+ *        inner RSAPrivateKey OCTET STRING, and extracts the (n, d)
+ *        big-endian byte slices.
+ *    [3] Constructs an `SpcIndirectDataContent` blob from a canned
+ *        32-byte Authenticode hash; verifies it parses cleanly via
+ *        picotls's `ptls_asn1_validation` (round-trip validity).
+ *    [4] Builds a complete PKCS#7 SignedData blob using the loaded
+ *        cert + key:
+ *          - n00b_pkcs7_signed_data_add_certificate(cert)
+ *          - n00b_pkcs7_signed_data_add_signer(... n, d ...)
+ *        Asserts the produced DER parses cleanly via
  *        `ptls_asn1_validation` end-to-end.
+ *    [5] Asserts API error paths:
+ *          - serialize() before set_content() / add_signer() errors.
  *
- *    [4] Asserts API error paths:
- *        - serialize() before set_content() / add_signer() errors.
+ *  D-049: the test is hermetic — both PEM files are committed
+ *  fixtures, no runtime openssl invocation.
  *
  *  Test-file conventions per D-030.
  */
@@ -34,6 +41,7 @@
 #include <assert.h>
 #include <stdio.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "n00b.h"
@@ -44,57 +52,9 @@
 #include <util/der_encode.h>
 #include <util/pkcs7.h>
 
+#include "picotls.h"
 #include "picotls/asn1.h"
-
-/* --- RSA-2048 test keypair (shared with test_rsa_pss_roundtrip) ----- */
-static const uint8_t rsa_n[256] = {
-    0xB5, 0xAD, 0x75, 0x90, 0x16, 0x4B, 0x5A, 0xD9, 0x47, 0x13, 0x60, 0x83,
-    0x3E, 0x77, 0x16, 0xD6, 0x93, 0x05, 0x4A, 0x77, 0xC2, 0xCF, 0x28, 0x66,
-    0xA4, 0x67, 0x26, 0xB5, 0x2D, 0x44, 0x6B, 0x64, 0x99, 0xF2, 0x13, 0x27,
-    0xE1, 0x0E, 0x69, 0xDF, 0xEC, 0x94, 0x83, 0x5B, 0xC0, 0x65, 0xB0, 0xA0,
-    0x2E, 0xAD, 0xFE, 0x6F, 0x60, 0x39, 0x1C, 0x24, 0xF3, 0x07, 0x82, 0xF1,
-    0xFE, 0xCF, 0xB4, 0xBD, 0x46, 0x9D, 0x3E, 0x2A, 0x2C, 0x09, 0xB0, 0xAB,
-    0xBA, 0x95, 0x5E, 0xD5, 0xF5, 0x60, 0x3A, 0x6A, 0x39, 0xC2, 0x9B, 0x41,
-    0x67, 0xEB, 0x10, 0xB4, 0x98, 0x6C, 0x30, 0x63, 0x42, 0x74, 0x22, 0xE2,
-    0xF0, 0x4D, 0x84, 0x43, 0x8A, 0x0E, 0xD7, 0x51, 0x98, 0xC1, 0x31, 0x8B,
-    0x14, 0xEE, 0x7C, 0xCB, 0x51, 0xF4, 0x9F, 0xAF, 0x73, 0xF1, 0x8E, 0x3A,
-    0x1A, 0x1F, 0xD1, 0x2A, 0xA1, 0xD8, 0x5F, 0x1E, 0xF7, 0x86, 0x62, 0xF4,
-    0xA9, 0xF7, 0x17, 0x5E, 0x70, 0x6B, 0xE4, 0x1A, 0x40, 0x4C, 0xC0, 0x25,
-    0xD9, 0xF7, 0xAF, 0x72, 0x37, 0xC9, 0x93, 0x7C, 0x73, 0x58, 0xA0, 0xE9,
-    0xAB, 0x4E, 0xF9, 0x52, 0xF1, 0xD9, 0x46, 0x0E, 0x65, 0x9A, 0xEA, 0x0A,
-    0xA3, 0xAD, 0xFD, 0x78, 0xFE, 0xDD, 0x8A, 0x14, 0xCD, 0x23, 0xA1, 0xDF,
-    0x69, 0x3E, 0x1D, 0xD8, 0x5B, 0x7D, 0x38, 0xD0, 0x85, 0x6D, 0x39, 0x6F,
-    0x1C, 0x8E, 0x58, 0x58, 0x30, 0x9C, 0x3C, 0x18, 0xE8, 0xD7, 0x21, 0xC7,
-    0x39, 0x5D, 0x94, 0x10, 0x4B, 0x39, 0x97, 0x29, 0x07, 0x99, 0x42, 0x3B,
-    0x18, 0xF5, 0x41, 0xED, 0xEF, 0x87, 0x15, 0xC5, 0xA7, 0xC1, 0x32, 0xB7,
-    0xC8, 0x86, 0x9F, 0x3A, 0x64, 0xA8, 0xAC, 0xD1, 0xA9, 0xE6, 0x6C, 0x4F,
-    0xAE, 0x22, 0x51, 0x36, 0x7A, 0xE8, 0x22, 0x38, 0x7A, 0xE2, 0xC1, 0x34,
-    0xD9, 0x43, 0x52, 0x11,
-};
-static const uint8_t rsa_d[256] = {
-    0x1E, 0xE1, 0xB1, 0x4E, 0x20, 0xBC, 0x06, 0x61, 0x50, 0x97, 0x96, 0x9C,
-    0x38, 0x8D, 0xFD, 0xAF, 0xD3, 0xA5, 0xDE, 0x96, 0xA4, 0xE2, 0x99, 0xB7,
-    0x78, 0xD2, 0x9F, 0xDD, 0xC4, 0x28, 0x11, 0x29, 0x34, 0x91, 0xD5, 0x77,
-    0xBD, 0xE5, 0xB9, 0x51, 0x7A, 0xE1, 0x73, 0xC2, 0xB0, 0xDD, 0x98, 0x3C,
-    0x62, 0x32, 0xE9, 0x40, 0xFD, 0x56, 0x37, 0xD6, 0x80, 0x09, 0x12, 0xD5,
-    0x17, 0xBF, 0x2E, 0xB5, 0xCD, 0xBF, 0x04, 0xC6, 0x1E, 0x5E, 0x37, 0x4D,
-    0xB9, 0x95, 0x92, 0x5D, 0x44, 0x2C, 0x6B, 0x41, 0x8B, 0x37, 0xED, 0x34,
-    0x1C, 0xF9, 0xF4, 0x08, 0xFE, 0xAF, 0xC5, 0x39, 0xDA, 0x1D, 0xEB, 0xA0,
-    0x2F, 0xC0, 0xBD, 0x6E, 0xCD, 0x94, 0xE0, 0x3C, 0xDA, 0x7E, 0x5C, 0x71,
-    0x8B, 0xC9, 0x4E, 0x25, 0x31, 0x75, 0x27, 0x7F, 0xA7, 0x71, 0xB3, 0xFF,
-    0x64, 0x59, 0x6C, 0x30, 0x96, 0xFA, 0x34, 0x90, 0xC1, 0x7A, 0x9E, 0x25,
-    0x77, 0x50, 0x14, 0x1F, 0x82, 0x5C, 0x38, 0xB6, 0x67, 0xB8, 0x7B, 0xAB,
-    0x29, 0xDB, 0x3F, 0xF3, 0xDE, 0x1B, 0xFD, 0x07, 0xA6, 0x1A, 0xB1, 0x3E,
-    0x01, 0x88, 0xA2, 0x33, 0xB9, 0x48, 0x94, 0xB2, 0x9C, 0x35, 0xA4, 0xA3,
-    0x7E, 0xAD, 0xD4, 0x31, 0x26, 0x84, 0x27, 0x4F, 0x3D, 0xB0, 0xAB, 0x1F,
-    0x11, 0x67, 0x72, 0x7A, 0x4D, 0x30, 0xED, 0xBF, 0x5E, 0x3E, 0x5E, 0xF0,
-    0x20, 0x3F, 0xE3, 0xB9, 0x7D, 0x1C, 0x20, 0xC4, 0x19, 0xC0, 0x56, 0xD4,
-    0x9C, 0x27, 0x0D, 0x07, 0xAA, 0xDD, 0x1B, 0x6E, 0x87, 0xAF, 0x7A, 0xE6,
-    0xD8, 0xEE, 0x11, 0xA4, 0xB1, 0x05, 0xC8, 0xA5, 0x17, 0x95, 0xAC, 0x74,
-    0xBE, 0xE3, 0x7D, 0xD5, 0x19, 0xE7, 0xCD, 0x65, 0xDD, 0x13, 0x3E, 0x2A,
-    0xA1, 0x92, 0xF3, 0x63, 0x32, 0x12, 0x28, 0x39, 0x45, 0x7E, 0xD6, 0x00,
-    0x44, 0x2D, 0x95, 0xC1,
-};
+#include "picotls/pembase64.h"
 
 /* 32-byte fake Authenticode hash for the test fixture. */
 static const uint8_t k_authentihash[32] = {
@@ -103,6 +63,138 @@ static const uint8_t k_authentihash[32] = {
     0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18,
     0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F, 0x20,
 };
+
+/* --- PEM fixture path resolution ----------------------------------- */
+/* The test binary runs out of build_debug/ but the data files live in
+ * test/unit/data/ relative to the source tree. Build runs from the
+ * source dir, so a relative path resolves correctly. */
+static const char k_cert_pem_path[] = "test/unit/data/pkcs7_fixture_cert.pem";
+static const char k_key_pem_path[]  = "test/unit/data/pkcs7_fixture_key.pem";
+
+/* Load PEM file, return DER bytes via ptls_load_pem_objects. */
+static ptls_iovec_t
+load_pem(const char *path, const char *label)
+{
+    ptls_iovec_t vec = {0};
+    size_t       n   = 0;
+    int rc = ptls_load_pem_objects(path, label, &vec, 1, &n);
+    if (rc != 0 || n != 1) {
+        fprintf(stderr, "ptls_load_pem_objects(%s, %s) failed: rc=%d n=%zu\n",
+                path, label, rc, n);
+        fprintf(stderr, "  (the test binary must run from the source-tree "
+                        "root so the relative path resolves)\n");
+        assert(0);
+    }
+    return vec;
+}
+
+/* Walk a PKCS#8 PrivateKeyInfo to find the inner RSAPrivateKey, then
+ * extract (n, d) as big-endian byte slices. Picotls's read-side
+ * ASN.1 primitives (asn1.h) provide the type+length walker; we use
+ * it to step the structure:
+ *
+ *   PKCS#8 PrivateKeyInfo ::= SEQUENCE {
+ *       version                   INTEGER (0),
+ *       privateKeyAlgorithm       AlgorithmIdentifier,
+ *       privateKey                OCTET STRING        -- contains RSAPrivateKey
+ *   }
+ *
+ *   RSAPrivateKey ::= SEQUENCE {
+ *       version           INTEGER (0),
+ *       modulus           INTEGER,   -- n
+ *       publicExponent    INTEGER,   -- e
+ *       privateExponent   INTEGER,   -- d
+ *       prime1            INTEGER,   -- p
+ *       prime2            INTEGER,   -- q
+ *       exponent1         INTEGER,   -- dP
+ *       exponent2         INTEGER,   -- dQ
+ *       coefficient       INTEGER    -- qInv
+ *   }
+ */
+static void
+extract_rsa_nd(const uint8_t *der, size_t der_len,
+               const uint8_t **out_n, size_t *out_n_len,
+               const uint8_t **out_d, size_t *out_d_len)
+{
+    uint32_t length            = 0;
+    int      indefinite_length = 0;
+    size_t   last_byte         = 0;
+    int      decode_error      = 0;
+    size_t   idx;
+
+    /* Outer PKCS#8 SEQUENCE. */
+    idx = ptls_asn1_get_expected_type_and_length(
+        der, der_len, 0, 0x30,
+        &length, &indefinite_length, &last_byte, &decode_error, NULL);
+    assert(decode_error == 0);
+
+    /* version INTEGER 0. */
+    idx = ptls_asn1_get_expected_type_and_length(
+        der, der_len, idx, 0x02,
+        &length, &indefinite_length, &last_byte, &decode_error, NULL);
+    assert(decode_error == 0);
+    idx = last_byte;  /* skip the INTEGER content */
+
+    /* privateKeyAlgorithm SEQUENCE — skip. */
+    idx = ptls_asn1_get_expected_type_and_length(
+        der, der_len, idx, 0x30,
+        &length, &indefinite_length, &last_byte, &decode_error, NULL);
+    assert(decode_error == 0);
+    idx = last_byte;  /* skip the SEQUENCE body */
+
+    /* privateKey OCTET STRING (contains the RSAPrivateKey SEQUENCE). */
+    idx = ptls_asn1_get_expected_type_and_length(
+        der, der_len, idx, 0x04,
+        &length, &indefinite_length, &last_byte, &decode_error, NULL);
+    assert(decode_error == 0);
+
+    /* The OCTET STRING's content starts at idx; the RSAPrivateKey
+     * SEQUENCE begins at byte idx. */
+    size_t inner_off = idx;
+
+    /* RSAPrivateKey SEQUENCE. */
+    inner_off = ptls_asn1_get_expected_type_and_length(
+        der, der_len, inner_off, 0x30,
+        &length, &indefinite_length, &last_byte, &decode_error, NULL);
+    assert(decode_error == 0);
+
+    /* version INTEGER 0. */
+    inner_off = ptls_asn1_get_expected_type_and_length(
+        der, der_len, inner_off, 0x02,
+        &length, &indefinite_length, &last_byte, &decode_error, NULL);
+    assert(decode_error == 0);
+    inner_off = last_byte;
+
+    /* modulus n — INTEGER. The integer content begins at inner_off
+     * and has length `length`. RFC 8017 RSAPrivateKey integers may
+     * carry a leading 0x00 sign byte when the high bit of the
+     * magnitude is set; the RSA primitives in n00b_rsa_sign_*
+     * tolerate the leading zero (they skip leading-zero pad bytes
+     * during bn_from_bytes), so we forward the raw INTEGER content
+     * verbatim. */
+    inner_off = ptls_asn1_get_expected_type_and_length(
+        der, der_len, inner_off, 0x02,
+        &length, &indefinite_length, &last_byte, &decode_error, NULL);
+    assert(decode_error == 0);
+    *out_n     = der + inner_off;
+    *out_n_len = length;
+    inner_off  = last_byte;
+
+    /* publicExponent e — INTEGER. Skip. */
+    inner_off = ptls_asn1_get_expected_type_and_length(
+        der, der_len, inner_off, 0x02,
+        &length, &indefinite_length, &last_byte, &decode_error, NULL);
+    assert(decode_error == 0);
+    inner_off = last_byte;
+
+    /* privateExponent d — INTEGER. */
+    inner_off = ptls_asn1_get_expected_type_and_length(
+        der, der_len, inner_off, 0x02,
+        &length, &indefinite_length, &last_byte, &decode_error, NULL);
+    assert(decode_error == 0);
+    *out_d     = der + inner_off;
+    *out_d_len = length;
+}
 
 static void
 test_spc_indirect_data(void)
@@ -125,6 +217,31 @@ test_spc_indirect_data(void)
 static void
 test_signed_data_roundtrip(void)
 {
+    /* Load committed PEM fixtures. */
+    ptls_iovec_t cert_der = load_pem(k_cert_pem_path, "CERTIFICATE");
+    ptls_iovec_t key_der  = load_pem(k_key_pem_path,  "PRIVATE KEY");
+    fprintf(stderr,
+            "[pkcs7] loaded cert (%zu bytes DER) + key (%zu bytes DER) "
+            "from committed PEM fixtures\n",
+            cert_der.len, key_der.len);
+
+    /* Extract raw (n, d) from the PKCS#8 envelope. */
+    const uint8_t *n_bytes = NULL;
+    size_t         n_len   = 0;
+    const uint8_t *d_bytes = NULL;
+    size_t         d_len   = 0;
+    extract_rsa_nd(key_der.base, key_der.len,
+                   &n_bytes, &n_len, &d_bytes, &d_len);
+    assert(n_bytes != NULL);
+    assert(d_bytes != NULL);
+    /* 2048-bit RSA → 256-byte modulus, possibly with a leading 0x00
+     * INTEGER sign byte → 257 bytes of INTEGER content. */
+    assert(n_len == 256 || n_len == 257);
+    fprintf(stderr,
+            "[pkcs7] extracted RSA (n=%zu bytes, d=%zu bytes) "
+            "from PKCS#8\n",
+            n_len, d_len);
+
     /* Build the SpcIndirectDataContent over our canned hash. */
     n00b_buffer_t *hash = n00b_buffer_from_bytes((char *)k_authentihash, 32);
     n00b_buffer_t *spc  = n00b_pkcs7_build_spc_indirect_data(hash);
@@ -136,13 +253,9 @@ test_signed_data_roundtrip(void)
         spc_oid_arcs,
         sizeof(spc_oid_arcs) / sizeof(uint32_t));
 
-    /* Hand-built minimal cert. For round-trip parse purposes, the
-     * cert bytes only need to be a valid DER blob inside the
-     * SignedData certificates field. We use an empty SEQUENCE
-     * (0x30 0x00) which is a valid (degenerate) DER element. The
-     * SignedData validator walks only the outer structure. */
-    uint8_t empty_seq[] = { 0x30, 0x00 };
-    n00b_buffer_t *cert = n00b_buffer_from_bytes((char *)empty_seq, 2);
+    /* Real X.509 cert from the openssl-generated PEM fixture. */
+    n00b_buffer_t *cert = n00b_buffer_from_bytes((char *)cert_der.base,
+                                                 (int64_t)cert_der.len);
 
     /* Issuer DN: minimum is an empty Name (SEQUENCE OF RDN, empty). */
     n00b_buffer_t *issuer_dn = n00b_der_encode_sequence(NULL, 0);
@@ -162,8 +275,8 @@ test_signed_data_roundtrip(void)
         issuer_dn,
         serial_bytes, sizeof(serial_bytes),
         spc,
-        rsa_n, sizeof(rsa_n),
-        rsa_d, sizeof(rsa_d));
+        n_bytes, n_len,
+        d_bytes, d_len);
     if (n00b_result_is_err(sr)) {
         fprintf(stderr, "add_signer failed with err=%d\n",
                 n00b_result_get_err(sr));
@@ -195,6 +308,11 @@ test_signed_data_roundtrip(void)
 
     fprintf(stderr, "[pkcs7] full SignedData round-trip parse "
                     "(%zu bytes): OK\n", der->byte_len);
+
+    /* picotls's ptls_load_pem_objects allocates via libc malloc; the
+     * test owns the iovec lifetimes per picotls convention. */
+    free(cert_der.base);
+    free(key_der.base);
 }
 
 static void

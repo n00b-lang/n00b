@@ -46,6 +46,8 @@
 #include "core/runtime.h"
 #include <util/der_encode.h>
 
+#include "picotls/asn1.h"
+
 #define ASSERT_BYTES(buf, expected, expected_len) do {                    \
         assert((buf) != NULL);                                            \
         assert((buf)->byte_len == (expected_len));                        \
@@ -255,6 +257,59 @@ test_context_tag(void)
     fprintf(stderr, "[der] context-specific [0] wrapper: OK\n");
 }
 
+static void
+test_implicit_tag_primitive(void)
+{
+    /* [0] IMPLICIT OCTET STRING "hello":
+     *   underlying OCTET STRING "hello"  -> 0x04 0x05 'h' 'e' 'l' 'l' 'o'
+     *   IMPLICIT replaces 0x04 with 0x80 (context-specific, primitive)
+     *   -> 0x80 0x05 'h' 'e' 'l' 'l' 'o'
+     */
+    n00b_buffer_t *raw = n00b_buffer_from_bytes((char *)"hello", 5);
+    n00b_buffer_t *oct = n00b_der_encode_octet_string(raw);
+    /* Confirm the underlying is primitive (high-bit nibble has the
+     * 0x20 constructed-bit clear). */
+    assert(((uint8_t)oct->data[0] & 0x20) == 0);
+
+    n00b_buffer_t *t = n00b_der_encode_implicit_tagged(0, oct);
+    const uint8_t exp[] = { 0x80, 0x05, 'h', 'e', 'l', 'l', 'o' };
+    ASSERT_BYTES(t, exp, sizeof(exp));
+    fprintf(stderr, "[der] [0] IMPLICIT (primitive) wrapper: OK\n");
+}
+
+static void
+test_implicit_tag_constructed(void)
+{
+    /* [0] IMPLICIT SEQUENCE { INTEGER 1, INTEGER 2 }:
+     *   underlying SEQUENCE                  -> 0x30 0x06 0x02 0x01 0x01 0x02 0x01 0x02
+     *   IMPLICIT replaces 0x30 with 0xA0 (context-specific, constructed)
+     *   -> 0xA0 0x06 0x02 0x01 0x01 0x02 0x01 0x02
+     */
+    n00b_buffer_t *one = n00b_der_encode_integer(1);
+    n00b_buffer_t *two = n00b_der_encode_integer(2);
+    n00b_buffer_t *elems[2] = { one, two };
+    n00b_buffer_t *seq = n00b_der_encode_sequence(elems, 2);
+    /* Confirm the underlying is constructed (0x30 = SEQUENCE — high
+     * nibble's 0x20 bit is set). */
+    assert(((uint8_t)seq->data[0] & 0x20) != 0);
+
+    n00b_buffer_t *t = n00b_der_encode_implicit_tagged(0, seq);
+    const uint8_t exp[] = {
+        0xA0, 0x06,
+        0x02, 0x01, 0x01,
+        0x02, 0x01, 0x02
+    };
+    ASSERT_BYTES(t, exp, sizeof(exp));
+
+    /* The IMPLICIT-tagged constructed form is itself a constructed
+     * context-specific element — picotls's ASN.1 walker should
+     * accept it as a top-level structure. */
+    int rc = ptls_asn1_validation((const uint8_t *)t->data,
+                                  t->byte_len, NULL);
+    assert(rc == 0);
+    fprintf(stderr, "[der] [0] IMPLICIT (constructed) wrapper: OK\n");
+}
+
 int
 main(int argc, char **argv)
 {
@@ -271,6 +326,8 @@ main(int argc, char **argv)
     test_null_encoding();
     test_bit_string();
     test_context_tag();
+    test_implicit_tag_primitive();
+    test_implicit_tag_constructed();
 
     fprintf(stderr, "All DER encoder regression tests passed.\n");
     return 0;

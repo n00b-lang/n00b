@@ -31,7 +31,7 @@
 #include "net/quic/quic_types.h"
 #include "net/quic/jwt.h"
 #include "internal/net/quic/jws.h"
-#include "internal/net/quic/rsa_verify.h"
+#include "internal/net/quic/rsa_pkcs1.h"
 
 #include "uECC.h"
 

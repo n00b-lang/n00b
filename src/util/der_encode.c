@@ -358,6 +358,63 @@ n00b_der_encode_tagged(uint32_t tag, n00b_buffer_t *content) _kargs
 }
 
 // ---------------------------------------------------------------------------
+// Context-specific [n] IMPLICIT-tag wrapper
+// ---------------------------------------------------------------------------
+//
+// X.690 §8.14.3 — an IMPLICIT-tagged value inherits the
+// primitive/constructed bit of its underlying type's encoding, but
+// replaces the identifier octets with the implicit tag's. So we
+// peek at the leading byte of @p content to decide whether the new
+// identifier should set the constructed flag (0x20) or not, then
+// drop the old identifier octet from the output and prepend the
+// new one. The length octets and value bytes pass through unchanged.
+
+n00b_buffer_t *
+n00b_der_encode_implicit_tagged(uint32_t tag, n00b_buffer_t *content) _kargs
+{
+    n00b_allocator_t *allocator = nullptr;
+}
+{
+    if (content == nullptr || content->byte_len < 1) {
+        /* Empty content → emit a primitive zero-length context-
+         * specific tag (matches the libn00b convention that
+         * "missing inner" stays primitive, since constructed
+         * empties don't appear in the PKCS#7 / Authenticode
+         * shapes that drive this API). */
+        uint8_t ident = (uint8_t)(0x80 | (tag & 0x1F));
+        return emit_tlv(ident, nullptr, 0, allocator);
+    }
+
+    /* Read the underlying-type's identifier to determine the
+     * primitive-vs-constructed bit. X.690 §8.1.2.5: bit 6 (mask
+     * 0x20) of the identifier octet is set when the encoding is
+     * constructed. */
+    uint8_t  underlying_ident = (uint8_t)content->data[0];
+    bool     constructed      = (underlying_ident & 0x20) != 0;
+    uint8_t  ident            = (uint8_t)((constructed ? 0xA0 : 0x80)
+                                          | (tag & 0x1F));
+
+    /* The output is `(new-ident) || L || V` — i.e. the existing
+     * TLV with its leading identifier octet swapped out. We can
+     * walk past the leading byte and re-emit the rest verbatim via
+     * `emit_tlv` ... except emit_tlv re-encodes the length, which
+     * could differ from the embedded length octets if the caller's
+     * input wasn't strictly minimal. Avoid that: just copy the
+     * caller's bytes wholesale and patch byte 0.
+     *
+     * (libn00b's own encoders always emit DER-minimal lengths, so
+     * the re-encode would be byte-identical — but copying is
+     * cheaper and side-steps the dependency on caller minimality.)
+     */
+    n00b_buffer_t *out = n00b_buffer_new((int64_t)content->byte_len,
+                                         .allocator = allocator);
+    n00b_buffer_resize(out, content->byte_len);
+    memcpy(out->data, content->data, content->byte_len);
+    out->data[0] = (char)ident;
+    return out;
+}
+
+// ---------------------------------------------------------------------------
 // UTF8String
 // ---------------------------------------------------------------------------
 

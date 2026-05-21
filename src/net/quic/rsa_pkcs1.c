@@ -1,5 +1,15 @@
 /*
- * rsa_verify.c — RSA-PKCS1-v1_5 signature verification.
+ * rsa_pkcs1.c — RSA PKCS#1-v1.5 + PSS sign/verify primitives.
+ *
+ * Public surface:
+ *   - n00b_rsa_verify_pkcs1_v15      (internal/net/quic/rsa_pkcs1.h)
+ *   - n00b_rsa_verify_pss_sha256     (internal/net/quic/rsa_pkcs1.h)
+ *   - n00b_rsa_sign_pss_sha256       (internal/net/quic/rsa_pkcs1.h)
+ *   - n00b_rsa_sign_pkcs1_v15_sha256 (util/rsa_sign.h — public)
+ *
+ * Sign + verify share this translation unit because they share the
+ * schoolbook bignum + Knuth-D modular-reduction machinery, the
+ * DigestInfo SHA-256 prefix, and the EMSA-PKCS1 padding builder.
  *
  * Bignum design:
  *   - 32-bit words, little-endian word order (word[0] = least
@@ -30,7 +40,8 @@
 #include "core/sha256.h"
 #include "core/sha512.h"
 #include "net/quic/quic_types.h"
-#include "internal/net/quic/rsa_verify.h"
+#include "internal/net/quic/rsa_pkcs1.h"
+#include "util/rsa_sign.h"
 
 /* RS384 / RS512 need SHA-384 / SHA-512.  n00b has SHA-256 only; the
  * cifra SHA-512 is reachable from the picotls subproject but not

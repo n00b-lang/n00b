@@ -348,16 +348,14 @@ n00b_pkcs7_signed_data_serialize(n00b_pkcs7_signed_data_t *sd)
 
     /* --- certificates [0] IMPLICIT CertificateSet. ---
      *
-     * RFC 5652 §10.2.3 / §5.1: implicit-tagged. We model this with
-     * the same [0] wrapper as for explicit-tagged because the
-     * difference between explicit and implicit tagging at the
-     * encoded-byte level for a SET-OF inside a SEQUENCE is just
-     * the choice of identifier-octet — and the consumer (ptls_asn1
-     * validation, openssl, signtool) all accept the explicit
-     * shape we emit (it round-trips as a constructed [0] holding
-     * the certs). For strict-Authenticode this would need to be
-     * the implicit form; deferred per "no new deferrals" exception
-     * for the standards-compat clean-up sub-WP.
+     * RFC 5652 §10.2.3 / §5.1: implicit-tagged. The underlying
+     * SET-of-Certificate is constructed, so the [0] IMPLICIT
+     * identifier byte is `0xA0`. `n00b_der_encode_implicit_tagged`
+     * encapsulates the X.690 §8.14.3 rule (replace the underlying
+     * identifier with the context-specific tag, preserving the
+     * primitive/constructed bit from the underlying type) — this
+     * matches strict-Authenticode parsers + osslsigncode + openssl
+     * cms exactly.
      */
     n00b_buffer_t *certs_set = nullptr;
     if (sd->n_certs > 0) {
@@ -371,14 +369,8 @@ n00b_pkcs7_signed_data_serialize(n00b_pkcs7_signed_data_t *sd)
         /* CertificateSet is a SET of Certificate per RFC 5652. */
         n00b_buffer_t *raw_set = n00b_der_encode_set(
             cert_elements, sd->n_certs, .allocator = allocator);
-        /* Replace the leading 0x31 (SET) with the context-specific
-         * [0] IMPLICIT identifier (0xA0). The body length octets
-         * and content are byte-stable. */
-        certs_set = n00b_buffer_new((int64_t)raw_set->byte_len,
-                                    .allocator = allocator);
-        n00b_buffer_resize(certs_set, raw_set->byte_len);
-        memcpy(certs_set->data, raw_set->data, raw_set->byte_len);
-        certs_set->data[0] = (char)0xA0;
+        certs_set = n00b_der_encode_implicit_tagged(
+            0, raw_set, .allocator = allocator);
     }
 
     /* --- signerInfos SET OF SignerInfo. ---

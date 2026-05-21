@@ -4,13 +4,22 @@
  * @file util/rsa_sign.h
  * @brief RSA-PKCS1-v1_5 SHA-256 signing primitive.
  *
- * Companion to the verify-only surface in
- * `internal/net/quic/rsa_verify.h`. The Phase 3 Authenticode work
+ * Companion to the verify surface in
+ * `internal/net/quic/rsa_pkcs1.h`. The Phase 3 Authenticode work
  * needs to sign SignerInfo digests with the signer's RSA private
  * key under PKCS#1 v1.5 SHA-256 (the RFC 5652 default + the
  * Authenticode v1 spec's required algorithm) — there is no
  * existing libn00b sign primitive for that combination (the
  * existing `n00b_rsa_sign_pss_sha256` is PSS, not PKCS1 v1.5).
+ *
+ * # Implementation locality
+ *
+ * The implementation lives in `src/net/quic/rsa_pkcs1.c`, sharing
+ * the schoolbook bignum + Knuth-D modular-reduction machinery,
+ * the DigestInfo SHA-256 prefix, and the EMSA-PKCS1 padding
+ * builder with the verify path. The colocation is intentional —
+ * sign and verify are dual operations over the same primitive
+ * substrate.
  *
  * # Symbol prefix
  *
