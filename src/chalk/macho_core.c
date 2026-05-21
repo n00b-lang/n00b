@@ -502,12 +502,18 @@ chalk_macho_get_notes(n00b_macho_binary_t *bin, size_t *out_count)
         return NULL;
     }
 
-    chalk_macho_note_t *notes = (chalk_macho_note_t *)calloc(
-        count, sizeof(*notes));
-
+    // GC-allocated array. The previous code used calloc()+free();
+    // that violated the project's allocator discipline (libc malloc
+    // and n00b's GC can't share pointers — same class as the
+    // realloc-on-GC bug fixed in the prior commit). Switched to
+    // n00b_alloc_array so the GC owns the lifetime; the matching
+    // free() at the end of this function is dropped, and so is the
+    // caller's free at the use site in chalk_macho_get_chalk_payload.
+    chalk_macho_note_t *notes = n00b_alloc_array(chalk_macho_note_t, count);
     if (!notes) {
         return NULL;
     }
+    memset(notes, 0, count * sizeof(*notes));
 
     size_t out_i = 0;
 
@@ -542,7 +548,7 @@ chalk_macho_get_notes(n00b_macho_binary_t *bin, size_t *out_count)
     *out_count = out_i;
 
     if (out_i == 0) {
-        free(notes);
+        // GC reclaims `notes` when unreachable; no free() here.
         return NULL;
     }
 
@@ -571,7 +577,14 @@ chalk_macho_get_chalk_payload(n00b_macho_binary_t *bin, size_t *out_size)
 
     for (size_t i = 0; i < count; i++) {
         if (data_owner_is_chalk(notes[i].data_owner) && notes[i].payload) {
-            payload = (uint8_t *)malloc(notes[i].payload_size);
+            // GC-allocated payload (previously libc-malloc'd, which
+            // mismatched the GC discipline AND leaked at the only
+            // caller — n00b_chalk_macho_extract_buffer fed the
+            // pointer to n00b_buffer_from_bytes which copies, then
+            // dropped the source pointer without freeing). Switching
+            // to n00b_alloc_array fixes both: caller no longer needs
+            // to free, GC reclaims when unreachable.
+            payload = n00b_alloc_array(uint8_t, notes[i].payload_size);
 
             if (payload) {
                 memcpy(payload, notes[i].payload, notes[i].payload_size);
@@ -582,7 +595,7 @@ chalk_macho_get_chalk_payload(n00b_macho_binary_t *bin, size_t *out_size)
         }
     }
 
-    free(notes);
+    // GC reclaims `notes` when unreachable; no free() here.
     return payload;
 }
 
