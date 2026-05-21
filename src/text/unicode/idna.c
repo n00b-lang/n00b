@@ -667,7 +667,9 @@ map_and_normalize(n00b_allocator_t          *allocator,
     while (pos < num_bytes) {
         int32_t cp = n00b_unicode_utf8_decode(domain, num_bytes, &pos);
         if (cp < 0) {
-            break;
+            if (err) *err = N00B_UNICODE_IDNA_PROCESSING_ERROR;
+            n00b_free(mapped);
+            return nullptr;
         }
 
         uint8_t status = get_idna_status((n00b_codepoint_t)cp);

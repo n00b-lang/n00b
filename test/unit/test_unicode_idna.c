@@ -203,6 +203,85 @@ TEST(test_punycode_with_no_basic_chars)
     ASSERT_STR_EQ(r.value->data, "\xE6\xB8\xAC.example");
 }
 
+// --- DF-Y: invalid UTF-8 must yield _PROCESSING_ERROR, not OK + empty ---
+//
+// Pre-DF-Y, the `map_and_normalize` helper silently `break`ed out of its
+// decode loop on `n00b_unicode_utf8_decode() < 0`, leaving `*err` at OK
+// and handing the caller an empty normalized string.  Callers got
+// `error == OK && value->u8_bytes == 0` — indistinguishable from "you
+// passed me empty input."  The contract now mirrors `domain_is_bidi`'s
+// precedent: invalid UTF-8 sets `*err = _PROCESSING_ERROR` and returns
+// nullptr from the helper, which propagates up as an empty-value result
+// with the correct error code.
+
+TEST(test_invalid_utf8_truncated_multibyte)
+{
+    // 0xC3 is the lead byte for a 2-byte sequence (e.g. é = 0xC3 0xA9),
+    // but there's no continuation byte — truncated mid-stream.
+    n00b_string_t *in = n00b_string_from_raw("\xC3", 1, .allocator = nullptr);
+    n00b_unicode_idna_result_t r = n00b_unicode_idna_to_ascii(in,
+                                                              .allocator = nullptr);
+    ASSERT_EQ(r.error, N00B_UNICODE_IDNA_PROCESSING_ERROR);
+}
+
+TEST(test_invalid_utf8_lone_continuation)
+{
+    // 0x80 is a continuation byte (0b10xxxxxx) with no leading byte —
+    // illegal at stream start.
+    n00b_string_t *in = n00b_string_from_raw("\x80", 1, .allocator = nullptr);
+    n00b_unicode_idna_result_t r = n00b_unicode_idna_to_ascii(in,
+                                                              .allocator = nullptr);
+    ASSERT_EQ(r.error, N00B_UNICODE_IDNA_PROCESSING_ERROR);
+}
+
+TEST(test_invalid_utf8_lone_surrogate)
+{
+    // 0xED 0xA0 0x80 is the (illegal-per-RFC-3629) UTF-8 encoding of
+    // U+D800, the low end of the surrogate range.  The decoder must
+    // reject it.
+    n00b_string_t *in = n00b_string_from_raw("\xED\xA0\x80", 3,
+                                             .allocator = nullptr);
+    n00b_unicode_idna_result_t r = n00b_unicode_idna_to_ascii(in,
+                                                              .allocator = nullptr);
+    ASSERT_EQ(r.error, N00B_UNICODE_IDNA_PROCESSING_ERROR);
+}
+
+TEST(test_invalid_utf8_overlong)
+{
+    // 0xC0 0x80 is the overlong (2-byte) encoding of NUL — illegal per
+    // RFC 3629 §4.  Decoder must reject.
+    n00b_string_t *in = n00b_string_from_raw("\xC0\x80", 2,
+                                             .allocator = nullptr);
+    n00b_unicode_idna_result_t r = n00b_unicode_idna_to_ascii(in,
+                                                              .allocator = nullptr);
+    ASSERT_EQ(r.error, N00B_UNICODE_IDNA_PROCESSING_ERROR);
+}
+
+TEST(test_invalid_utf8_mixed_with_ascii_prefix)
+{
+    // Valid ASCII prefix followed by invalid UTF-8 — the decode loop
+    // must still trip on the second byte, not silently accept the
+    // partial prefix.
+    n00b_string_t *in = n00b_string_from_raw("abc\xC3", 4,
+                                             .allocator = nullptr);
+    n00b_unicode_idna_result_t r = n00b_unicode_idna_to_ascii(in,
+                                                              .allocator = nullptr);
+    ASSERT_EQ(r.error, N00B_UNICODE_IDNA_PROCESSING_ERROR);
+}
+
+TEST(test_valid_ascii_baseline_post_df_y)
+{
+    // Baseline: the fix must not regress the happy path.  Pure-ASCII
+    // input that contains no invalid bytes still returns OK + the
+    // identical canonical form.
+    n00b_unicode_idna_result_t r
+        = n00b_unicode_idna_to_ascii(r"example.com", .allocator = nullptr);
+    ASSERT_EQ(r.error, N00B_UNICODE_IDNA_OK);
+    ASSERT(r.value != nullptr);
+    ASSERT(r.value->u8_bytes > 0);
+    ASSERT_STR_EQ(r.value->data, "example.com");
+}
+
 static void run_tests(void)
 {
     RUN_TEST(test_ascii_passthrough);
@@ -226,6 +305,12 @@ static void run_tests(void)
     RUN_TEST(test_double_hyphen_pos_3_4);
     RUN_TEST(test_uppercase_xn_prefix);
     RUN_TEST(test_punycode_with_no_basic_chars);
+    RUN_TEST(test_invalid_utf8_truncated_multibyte);
+    RUN_TEST(test_invalid_utf8_lone_continuation);
+    RUN_TEST(test_invalid_utf8_lone_surrogate);
+    RUN_TEST(test_invalid_utf8_overlong);
+    RUN_TEST(test_invalid_utf8_mixed_with_ascii_prefix);
+    RUN_TEST(test_valid_ascii_baseline_post_df_y);
 }
 
 TEST_MAIN()

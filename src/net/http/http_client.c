@@ -593,11 +593,7 @@ host_eq_ascii_ci(const char *a, size_t alen,
  *     (`_DISALLOWED`, `_BIDI_ERROR`, `_PUNYCODE_ERROR`, `_LABEL_TOO_LONG`,
  *     `_DOMAIN_TOO_LONG`, `_CONTEXTJ_ERROR`, `_CONTEXTO_ERROR`,
  *     `_LEADING_COMBINING`, `_EMPTY_LABEL`, `_INVALID_ACE`,
- *     `_PROCESSING_ERROR`), OR
- *   - the result string is empty for a non-empty input (the IDNA
- *     primitive returns OK with an empty value when the UTF-8 decode
- *     breaks mid-stream on an invalid sequence; treat that as
- *     malformed too rather than letting it match anything).
+ *     `_PROCESSING_ERROR`).
  *
  * On success returns the ACE form (pure-ASCII Punycode where
  * needed, byte-identical for already-ASCII inputs modulo
@@ -607,7 +603,12 @@ host_eq_ascii_ci(const char *a, size_t alen,
  * allocator, immediately consumed by a byte compare, then dropped
  * to the GC.  The matcher's documented "side-effect-free" contract
  * is preserved at the API boundary; transient internal allocations
- * are within scope per § 4.4 (the GC reclaims them). */
+ * are within scope per § 4.4 (the GC reclaims them).
+ *
+ * Contract note: as of DF-Y, `n00b_unicode_idna_to_ascii` returns
+ * `_PROCESSING_ERROR` (not OK + empty) on invalid-UTF-8 input, so
+ * the matcher no longer needs to second-guess an OK return with an
+ * empty `u8_bytes`. */
 static n00b_string_t *
 idna_canonicalize_or_null(const char *src, size_t src_len)
 {
@@ -616,7 +617,7 @@ idna_canonicalize_or_null(const char *src, size_t src_len)
     n00b_string_t *in = n00b_string_from_raw(src, (int64_t)src_len);
     n00b_unicode_idna_result_t r = n00b_unicode_idna_to_ascii(in);
     if (r.error != N00B_UNICODE_IDNA_OK) return nullptr;
-    if (!r.value || r.value->u8_bytes == 0) return nullptr;
+    if (!r.value) return nullptr;
     return r.value;
 }
 
