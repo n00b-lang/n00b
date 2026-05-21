@@ -548,7 +548,7 @@ chalk_macho_get_notes(n00b_macho_binary_t *bin, size_t *out_count)
     *out_count = out_i;
 
     if (out_i == 0) {
-        // GC reclaims `notes` when unreachable; no free() here.
+        n00b_free(notes);
         return NULL;
     }
 
@@ -577,13 +577,10 @@ chalk_macho_get_chalk_payload(n00b_macho_binary_t *bin, size_t *out_size)
 
     for (size_t i = 0; i < count; i++) {
         if (data_owner_is_chalk(notes[i].data_owner) && notes[i].payload) {
-            // GC-allocated payload (previously libc-malloc'd, which
-            // mismatched the GC discipline AND leaked at the only
-            // caller — n00b_chalk_macho_extract_buffer fed the
-            // pointer to n00b_buffer_from_bytes which copies, then
-            // dropped the source pointer without freeing). Switching
-            // to n00b_alloc_array fixes both: caller no longer needs
-            // to free, GC reclaims when unreachable.
+            // n00b_alloc_array goes through the in-context
+            // allocator (GC, arena, refcount, etc.); pair with
+            // n00b_free at the caller site for correct lifetime
+            // semantics under pluggable allocators.
             payload = n00b_alloc_array(uint8_t, notes[i].payload_size);
 
             if (payload) {
@@ -595,7 +592,7 @@ chalk_macho_get_chalk_payload(n00b_macho_binary_t *bin, size_t *out_size)
         }
     }
 
-    // GC reclaims `notes` when unreachable; no free() here.
+    n00b_free(notes);
     return payload;
 }
 
@@ -758,12 +755,13 @@ add_note_insert(n00b_macho_binary_t *bin,
     }
 
     // Sync bin->commands[]: append the new LC_NOTE entry. The
-    // original array is GC-allocated (by n00b_macho_parse via
-    // n00b_alloc_array); we CANNOT libc-realloc it (would trigger
+    // original array is allocated by n00b_macho_parse via
+    // n00b_alloc_array. We CANNOT libc-realloc it (would trigger
     // "pointer being freed was not allocated" abort under malloc's
-    // ownership check). Allocate a fresh GC array, copy the
-    // existing entries, and let the GC reclaim the old array when
-    // unreachable.
+    // ownership check). Allocate a fresh array through n00b's
+    // pluggable-allocator surface, copy the existing entries,
+    // n00b_free the old one (no-op under GC; correct under
+    // arena/refcount/other allocators), reassign.
     n00b_macho_command_t *grown = n00b_alloc_array(
         n00b_macho_command_t, bin->num_commands + 1);
 
@@ -771,13 +769,17 @@ add_note_insert(n00b_macho_binary_t *bin,
         return CHALK_MACHO_ERR_INTERNAL;
     }
 
-    if (bin->num_commands > 0 && bin->commands) {
+    n00b_macho_command_t *old_commands = bin->commands;
+    if (bin->num_commands > 0 && old_commands) {
         memcpy(grown,
-               bin->commands,
+               old_commands,
                (size_t)bin->num_commands * sizeof(n00b_macho_command_t));
     }
 
     bin->commands = grown;
+    if (old_commands) {
+        n00b_free(old_commands);
+    }
 
     n00b_macho_command_t *new_cmd = &bin->commands[bin->num_commands];
 

@@ -192,6 +192,10 @@ n00b_chalk_macho_extract_buffer(n00b_buffer_t *bytes)
     if (!payload) return n00b_result_err(n00b_chalk_extract_result_t *, 4);
     n00b_buffer_t *payload_buf = n00b_buffer_from_bytes((char *)payload,
                                                          (int64_t)payload_len);
+    // n00b_buffer_from_bytes copies; we own `payload`'s lifetime
+    // and must free it explicitly to support pluggable allocators
+    // (no-op under GC; correct under arena/refcount/etc.).
+    n00b_free(payload);
     return n00b_chalk_sidecar_parse_bytes(payload_buf,
                                           N00B_CHALK_CODEC_MACHO);
 }
