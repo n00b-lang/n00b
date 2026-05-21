@@ -796,6 +796,16 @@ n00b_unicode_idna_to_ascii_raw(n00b_allocator_t          *allocator,
         uint32_t save_pos = pos;
         if (pos < norm_bytes) {
             cp = n00b_unicode_utf8_decode(normalized->data, norm_bytes, &pos);
+            if (cp < 0) {
+                // Defensive symmetry with map_and_normalize / domain_is_bidi:
+                // invalid UTF-8 here is unreachable under current contracts
+                // (map_and_normalize produces NFC output and domain_is_bidi
+                // pre-validates), but check anyway so a future invariant
+                // break can't silently scan past bad bytes.
+                if (err) *err = N00B_UNICODE_IDNA_PROCESSING_ERROR;
+                n00b_free(result);
+                return n00b_string_empty(.allocator = allocator);
+            }
         }
 
         bool is_dot = (cp == '.' || cp == 0x3002 || cp == 0xFF0E
