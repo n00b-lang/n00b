@@ -4,13 +4,21 @@
  * Each finding is structured (check id, severity, detail,
  * remediation) so an LLM-driven ops loop can read the report,
  * apply fixes, and re-run.  See `~/dd/quic_2.md` § 9.3.
+ *
+ * Finding strings (`check`, `detail`, `remediation`) are constructed
+ * at the callsite via `n00b_cformat` / `n00b_string_from_cstr` and
+ * passed as `n00b_string_t *` directly into `fb_push`.  The earlier
+ * "snprintf into char[256] then `n00b_string_from_cstr` inside
+ * `fb_push`" pattern is gone, which removes silent truncation and
+ * lets us speak the project's rich-format vocabulary (incl. `«#»`
+ * substitutions of `n00b_errno_str(errno)` etc.) directly.
  */
 
 #define N00B_USE_INTERNAL_API
 #include <errno.h>
 #include <netdb.h>
 #include <netinet/in.h>
-#include <stdio.h>
+#include <stdio.h>      /* snprintf for libc-bound buffers (port_str, candidate) */
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -66,20 +74,34 @@ fb_init(finding_buf_t *fb)
     fb->allocator = pf_alloc();
 }
 
+/* Push a new finding into the buffer.
+ *
+ * Strings (`check`, optional `detail`, optional `remediation`) are
+ * `n00b_string_t *` constructed at the callsite via rich-format
+ * helpers; this helper just snapshots them into the finding record.
+ *
+ * `detail` and `remediation` default to `nullptr` per the
+ * pointer-as-kwarg-default policy (D-035 part 2 carve-out; see
+ * `feedback_n00b_option_t_exception.md`).  `fb_push` is a `static`
+ * internal helper rather than a public n00b-attest API, so this
+ * usage is by stylistic consistency with the surrounding code, not
+ * by direct mandate of the exception's public-API motivation. */
 static void
 fb_push(finding_buf_t                  *fb,
-        const char                     *check,
-        n00b_quic_preflight_severity_t  severity,
-        const char                     *detail,
-        const char                     *remediation)
+        n00b_string_t                  *check,
+        n00b_quic_preflight_severity_t  severity)
+    _kargs {
+        n00b_string_t *detail      = nullptr;
+        n00b_string_t *remediation = nullptr;
+    }
 {
     n00b_quic_preflight_finding_t *f = n00b_alloc_with_opts(
         n00b_quic_preflight_finding_t,
         &(n00b_alloc_opts_t){.allocator = pf_alloc()});
-    f->check       = check       ? n00b_string_from_cstr(check)       : nullptr;
+    f->check       = check;
     f->severity    = severity;
-    f->detail      = detail      ? n00b_string_from_cstr(detail)      : nullptr;
-    f->remediation = remediation ? n00b_string_from_cstr(remediation) : nullptr;
+    f->detail      = detail;
+    f->remediation = remediation;
     n00b_list_push(*fb, f);
 }
 
@@ -90,10 +112,11 @@ fb_push(finding_buf_t                  *fb,
 static void
 check_port_bind(finding_buf_t *fb, const n00b_buffer_t *host_buf, uint16_t port)
 {
-    const char *host = host_buf ? (const char *)host_buf->data : "";
-    char check_id[256];
-    snprintf(check_id, sizeof(check_id),
-             "port-bind:%s:%u", host, (unsigned)port);
+    n00b_string_t *host = host_buf
+        ? n00b_string_from_cstr((const char *)host_buf->data)
+        : n00b_string_from_cstr("");
+    n00b_string_t *check_id =
+        n00b_cformat("port-bind:«#»:«#»", host, (int64_t)port);
 
     char port_str[8];
     snprintf(port_str, sizeof(port_str), "%u", (unsigned)port);
@@ -105,16 +128,16 @@ check_port_bind(finding_buf_t *fb, const n00b_buffer_t *host_buf, uint16_t port)
     hints.ai_flags    = AI_PASSIVE;
 
     struct addrinfo *res = nullptr;
-    int rc = getaddrinfo(host, port_str, &hints, &res);
+    int rc = getaddrinfo(host_buf ? (const char *)host_buf->data : "",
+                         port_str, &hints, &res);
     if (rc != 0 || !res) {
-        char detail[256];
-        snprintf(detail, sizeof(detail),
-                 "Cannot resolve bind host: %s",
-                 n00b_gai_str(rc)->data);
-        fb_push(fb, check_id, N00B_QUIC_PREFLIGHT_ERROR, detail,
-                "Check `bind_host` in the manifest; use a literal "
-                "IPv4 (\"0.0.0.0\") or IPv6 (\"::\") wildcard for "
-                "all-interfaces binds.");
+        fb_push(fb, check_id, N00B_QUIC_PREFLIGHT_ERROR,
+                .detail = n00b_cformat("Cannot resolve bind host: «#»",
+                                       n00b_gai_str(rc)),
+                .remediation = n00b_string_from_cstr(
+                    "Check `bind_host` in the manifest; use a literal "
+                    "IPv4 (\"0.0.0.0\") or IPv6 (\"::\") wildcard for "
+                    "all-interfaces binds."));
         return;
     }
 
@@ -122,28 +145,31 @@ check_port_bind(finding_buf_t *fb, const n00b_buffer_t *host_buf, uint16_t port)
     if (fd < 0) {
         freeaddrinfo(res);
         fb_push(fb, check_id, N00B_QUIC_PREFLIGHT_ERROR,
-                "socket() failed",
-                "Check process limits (ulimit -n) and kernel-side "
-                "socket creation policies.");
+                .detail = n00b_string_from_cstr("socket() failed"),
+                .remediation = n00b_string_from_cstr(
+                    "Check process limits (ulimit -n) and kernel-side "
+                    "socket creation policies."));
         return;
     }
     int yes = 1;
     setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
 
     if (bind(fd, res->ai_addr, res->ai_addrlen) != 0) {
-        char detail[256];
-        snprintf(detail, sizeof(detail),
-                 "bind() failed: %s", n00b_errno_str(errno)->data);
-        const char *remediation = (errno == EACCES)
-            ? "Privileged port (<1024); run with elevated capabilities "
-              "(e.g., setcap cap_net_bind_service=+ep on Linux) or "
-              "configure the OS to allow binding."
-            : (errno == EADDRINUSE)
-                  ? "Another process already holds this port; identify "
-                    "with `lsof -i :PORT` and resolve."
-                  : "Inspect kernel networking state.";
+        int saved_errno = errno;
+        n00b_string_t *detail = n00b_cformat("bind() failed: «#»",
+                                             n00b_errno_str(saved_errno));
+        n00b_string_t *remediation = (saved_errno == EACCES)
+            ? n00b_string_from_cstr(
+                "Privileged port (<1024); run with elevated capabilities "
+                "(e.g., setcap cap_net_bind_service=+ep on Linux) or "
+                "configure the OS to allow binding.")
+            : (saved_errno == EADDRINUSE)
+                  ? n00b_string_from_cstr(
+                      "Another process already holds this port; identify "
+                      "with `lsof -i :PORT` and resolve.")
+                  : n00b_string_from_cstr("Inspect kernel networking state.");
         fb_push(fb, check_id, N00B_QUIC_PREFLIGHT_ERROR,
-                detail, remediation);
+                .detail = detail, .remediation = remediation);
         close(fd);
         freeaddrinfo(res);
         return;
@@ -151,7 +177,7 @@ check_port_bind(finding_buf_t *fb, const n00b_buffer_t *host_buf, uint16_t port)
     close(fd);
     freeaddrinfo(res);
     fb_push(fb, check_id, N00B_QUIC_PREFLIGHT_INFO,
-            "bind() succeeded", nullptr);
+            .detail = n00b_string_from_cstr("bind() succeeded"));
 }
 
 /* Phase 5 § 5.2 — TCP-bind sanity for the metrics listener. */
@@ -159,11 +185,11 @@ static void
 check_metrics_bind(finding_buf_t                      *fb,
                    const n00b_quic_manifest_metrics_t *m)
 {
-    const char *host = m->bind_host ? (const char *)m->bind_host->data
-                                    : "::1";
-    char check_id[128];
-    snprintf(check_id, sizeof(check_id),
-             "metrics-bind:%s:%u", host, (unsigned)m->bind_port);
+    const char    *host_cstr = m->bind_host ? (const char *)m->bind_host->data
+                                            : "::1";
+    n00b_string_t *host      = n00b_string_from_cstr(host_cstr);
+    n00b_string_t *check_id  =
+        n00b_cformat("metrics-bind:«#»:«#»", host, (int64_t)m->bind_port);
 
     char port_str[8];
     snprintf(port_str, sizeof(port_str), "%u", (unsigned)m->bind_port);
@@ -173,38 +199,44 @@ check_metrics_bind(finding_buf_t                      *fb,
     hints.ai_family   = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
     hints.ai_flags    = AI_PASSIVE;
-    int rc = getaddrinfo(host, port_str, &hints, &res);
+    int rc = getaddrinfo(host_cstr, port_str, &hints, &res);
     if (rc != 0 || !res) {
-        char detail[256];
-        snprintf(detail, sizeof(detail),
-                 "Cannot resolve metrics bind host '%s': %s",
-                 host, n00b_gai_str(rc)->data);
-        fb_push(fb, check_id, N00B_QUIC_PREFLIGHT_ERROR, detail,
-                "Check `observability.metrics.bind_host`; use a "
-                "literal IPv4/IPv6 wildcard or loopback.");
+        fb_push(fb, check_id, N00B_QUIC_PREFLIGHT_ERROR,
+                .detail = n00b_cformat(
+                    "Cannot resolve metrics bind host '«#»': «#»",
+                    host, n00b_gai_str(rc)),
+                .remediation = n00b_string_from_cstr(
+                    "Check `observability.metrics.bind_host`; use a "
+                    "literal IPv4/IPv6 wildcard or loopback."));
         return;
     }
     int fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
     if (fd < 0) {
         freeaddrinfo(res);
         fb_push(fb, check_id, N00B_QUIC_PREFLIGHT_ERROR,
-                "socket() failed for metrics bind",
-                "Check process FD ulimit.");
+                .detail = n00b_string_from_cstr(
+                    "socket() failed for metrics bind"),
+                .remediation = n00b_string_from_cstr(
+                    "Check process FD ulimit."));
         return;
     }
     int yes = 1;
     setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
     if (bind(fd, res->ai_addr, res->ai_addrlen) != 0) {
-        char detail[256];
-        snprintf(detail, sizeof(detail),
-                 "metrics bind() failed: %s", n00b_errno_str(errno)->data);
-        const char *remediation = (errno == EACCES)
-            ? "Pick a non-privileged port (>= 1024) for metrics."
-            : (errno == EADDRINUSE)
-                  ? "Another process holds the metrics port; "
-                    "use `lsof -i :PORT` to identify it."
-                  : "Inspect kernel networking state.";
-        fb_push(fb, check_id, N00B_QUIC_PREFLIGHT_ERROR, detail, remediation);
+        int saved_errno = errno;
+        n00b_string_t *detail = n00b_cformat(
+            "metrics bind() failed: «#»", n00b_errno_str(saved_errno));
+        n00b_string_t *remediation = (saved_errno == EACCES)
+            ? n00b_string_from_cstr(
+                "Pick a non-privileged port (>= 1024) for metrics.")
+            : (saved_errno == EADDRINUSE)
+                  ? n00b_string_from_cstr(
+                      "Another process holds the metrics port; "
+                      "use `lsof -i :PORT` to identify it.")
+                  : n00b_string_from_cstr(
+                      "Inspect kernel networking state.");
+        fb_push(fb, check_id, N00B_QUIC_PREFLIGHT_ERROR,
+                .detail = detail, .remediation = remediation);
         close(fd);
         freeaddrinfo(res);
         return;
@@ -212,7 +244,7 @@ check_metrics_bind(finding_buf_t                      *fb,
     close(fd);
     freeaddrinfo(res);
     fb_push(fb, check_id, N00B_QUIC_PREFLIGHT_INFO,
-            "metrics bind() succeeded", nullptr);
+            .detail = n00b_string_from_cstr("metrics bind() succeeded"));
 }
 
 static void
@@ -220,30 +252,33 @@ check_static_cert(finding_buf_t                       *fb,
                   const n00b_buffer_t                 *ep_id,
                   const n00b_quic_manifest_cert_t     *cert)
 {
-    char check_id[256];
-    snprintf(check_id, sizeof(check_id),
-             "cert-static:%s", ep_id ? (const char *)ep_id->data : "?");
+    n00b_string_t *ep_id_s = n00b_string_from_cstr(
+        ep_id ? (const char *)ep_id->data : "?");
+    n00b_string_t *check_id = n00b_cformat("cert-static:«#»", ep_id_s);
 
     auto fr = n00b_certp_load_file(cert->chain_pem_path
                                    ? cert->chain_pem_path->data : nullptr);
     if (!n00b_result_is_ok(fr)) {
-        char detail[512];
-        snprintf(detail, sizeof(detail),
-                 "Cannot read chain_pem_path '%s'",
-                 cert->chain_pem_path ? (const char *)cert->chain_pem_path->data
-                                      : "?");
-        fb_push(fb, check_id, N00B_QUIC_PREFLIGHT_ERROR, detail,
-                "Make the file readable by the n00b-server process; "
-                "check ownership and SELinux/AppArmor labels.");
+        n00b_string_t *path_s = n00b_string_from_cstr(
+            cert->chain_pem_path ? (const char *)cert->chain_pem_path->data
+                                 : "?");
+        fb_push(fb, check_id, N00B_QUIC_PREFLIGHT_ERROR,
+                .detail = n00b_cformat(
+                    "Cannot read chain_pem_path '«#»'", path_s),
+                .remediation = n00b_string_from_cstr(
+                    "Make the file readable by the n00b-server process; "
+                    "check ownership and SELinux/AppArmor labels."));
         return;
     }
     n00b_buffer_t *pem = n00b_result_get(fr);
     auto dr = n00b_certp_pem_first_cert_to_der(pem);
     if (!n00b_result_is_ok(dr)) {
         fb_push(fb, check_id, N00B_QUIC_PREFLIGHT_ERROR,
-                "chain_pem_path doesn't contain a parseable PEM "
-                "CERTIFICATE block",
-                "Verify with `openssl x509 -in <path> -text -noout`.");
+                .detail = n00b_string_from_cstr(
+                    "chain_pem_path doesn't contain a parseable PEM "
+                    "CERTIFICATE block"),
+                .remediation = n00b_string_from_cstr(
+                    "Verify with `openssl x509 -in <path> -text -noout`."));
         return;
     }
     n00b_buffer_t *der = n00b_result_get(dr);
@@ -252,8 +287,10 @@ check_static_cert(finding_buf_t                       *fb,
                                   (size_t)der->byte_len,
                                   &nb, &na) != 0) {
         fb_push(fb, check_id, N00B_QUIC_PREFLIGHT_ERROR,
-                "Could not parse Validity period from leaf cert",
-                "Verify the cert isn't malformed.");
+                .detail = n00b_string_from_cstr(
+                    "Could not parse Validity period from leaf cert"),
+                .remediation = n00b_string_from_cstr(
+                    "Verify the cert isn't malformed."));
         return;
     }
     struct timeval tv;
@@ -261,25 +298,31 @@ check_static_cert(finding_buf_t                       *fb,
     int64_t now_ms = (int64_t)tv.tv_sec * 1000;
     if (now_ms < nb) {
         fb_push(fb, check_id, N00B_QUIC_PREFLIGHT_ERROR,
-                "Cert is not yet valid (notBefore is in the future)",
-                "Wait or replace the cert.");
+                .detail = n00b_string_from_cstr(
+                    "Cert is not yet valid (notBefore is in the future)"),
+                .remediation = n00b_string_from_cstr(
+                    "Wait or replace the cert."));
         return;
     }
     if (now_ms > na) {
         fb_push(fb, check_id, N00B_QUIC_PREFLIGHT_ERROR,
-                "Cert has already expired",
-                "Renew or replace the cert.");
+                .detail = n00b_string_from_cstr(
+                    "Cert has already expired"),
+                .remediation = n00b_string_from_cstr(
+                    "Renew or replace the cert."));
         return;
     }
     /* Soft-warn if the cert expires within 30 days. */
     int64_t margin_ms = (int64_t)30 * 24 * 60 * 60 * 1000;
     if (now_ms > na - margin_ms) {
         fb_push(fb, check_id, N00B_QUIC_PREFLIGHT_WARN,
-                "Cert expires within 30 days",
-                "Schedule a renewal soon.");
+                .detail = n00b_string_from_cstr(
+                    "Cert expires within 30 days"),
+                .remediation = n00b_string_from_cstr(
+                    "Schedule a renewal soon."));
     } else {
         fb_push(fb, check_id, N00B_QUIC_PREFLIGHT_INFO,
-                "Cert is valid", nullptr);
+                .detail = n00b_string_from_cstr("Cert is valid"));
     }
 }
 
@@ -288,21 +331,25 @@ check_external_argv(finding_buf_t                          *fb,
                     const n00b_buffer_t                    *ep_id,
                     n00b_list_t(n00b_buffer_t *)           *argv)
 {
-    char check_id[256];
-    snprintf(check_id, sizeof(check_id),
-             "cert-external:%s", ep_id ? (const char *)ep_id->data : "?");
+    n00b_string_t *ep_id_s = n00b_string_from_cstr(
+        ep_id ? (const char *)ep_id->data : "?");
+    n00b_string_t *check_id = n00b_cformat("cert-external:«#»", ep_id_s);
 
     if (!argv || n00b_list_len(*argv) == 0) {
         fb_push(fb, check_id, N00B_QUIC_PREFLIGHT_ERROR,
-                "External cert provisioner has no argv[0]",
-                "Add the command name to the manifest's argv array.");
+                .detail = n00b_string_from_cstr(
+                    "External cert provisioner has no argv[0]"),
+                .remediation = n00b_string_from_cstr(
+                    "Add the command name to the manifest's argv array."));
         return;
     }
     n00b_buffer_t *cmd_buf = n00b_list_get(*argv, 0);
     if (!cmd_buf || cmd_buf->byte_len == 0) {
         fb_push(fb, check_id, N00B_QUIC_PREFLIGHT_ERROR,
-                "External cert provisioner has no argv[0]",
-                "Add the command name to the manifest's argv array.");
+                .detail = n00b_string_from_cstr(
+                    "External cert provisioner has no argv[0]"),
+                .remediation = n00b_string_from_cstr(
+                    "Add the command name to the manifest's argv array."));
         return;
     }
     const char *cmd = cmd_buf->data;
@@ -311,19 +358,22 @@ check_external_argv(finding_buf_t                          *fb,
      * relative; otherwise search PATH. */
     if (strchr(cmd, '/')) {
         if (access(cmd, X_OK) != 0) {
-            char detail[512];
-            snprintf(detail, sizeof(detail),
-                     "argv[0] '%s' is not executable", cmd);
-            fb_push(fb, check_id, N00B_QUIC_PREFLIGHT_ERROR, detail,
-                    "Check the file's permission bits (chmod +x).");
+            fb_push(fb, check_id, N00B_QUIC_PREFLIGHT_ERROR,
+                    .detail = n00b_cformat(
+                        "argv[0] '«#»' is not executable",
+                        n00b_string_from_cstr(cmd)),
+                    .remediation = n00b_string_from_cstr(
+                        "Check the file's permission bits (chmod +x)."));
             return;
         }
     } else {
         const char *path_env = getenv("PATH");
         if (!path_env) {
             fb_push(fb, check_id, N00B_QUIC_PREFLIGHT_WARN,
-                    "PATH not set; cannot validate argv[0] location",
-                    "Set PATH or use an absolute path in argv[0].");
+                    .detail = n00b_string_from_cstr(
+                        "PATH not set; cannot validate argv[0] location"),
+                    .remediation = n00b_string_from_cstr(
+                        "Set PATH or use an absolute path in argv[0]."));
             return;
         }
         bool found = false;
@@ -339,16 +389,19 @@ check_external_argv(finding_buf_t                          *fb,
             }
         }
         if (!found) {
-            char detail[512];
-            snprintf(detail, sizeof(detail),
-                     "argv[0] '%s' not found in PATH", cmd);
-            fb_push(fb, check_id, N00B_QUIC_PREFLIGHT_ERROR, detail,
-                    "Install the binary, or pass an absolute path in argv[0].");
+            fb_push(fb, check_id, N00B_QUIC_PREFLIGHT_ERROR,
+                    .detail = n00b_cformat(
+                        "argv[0] '«#»' not found in PATH",
+                        n00b_string_from_cstr(cmd)),
+                    .remediation = n00b_string_from_cstr(
+                        "Install the binary, or pass an absolute path "
+                        "in argv[0]."));
             return;
         }
     }
     fb_push(fb, check_id, N00B_QUIC_PREFLIGHT_INFO,
-            "External cert command is executable", nullptr);
+            .detail = n00b_string_from_cstr(
+                "External cert command is executable"));
 }
 
 static void
@@ -356,14 +409,17 @@ check_acme_directory(finding_buf_t       *fb,
                      const n00b_buffer_t *ep_id,
                      const n00b_buffer_t *directory_url_buf)
 {
-    char check_id[256];
-    snprintf(check_id, sizeof(check_id),
-             "cert-acme-directory:%s", ep_id ? (const char *)ep_id->data : "?");
+    n00b_string_t *ep_id_s = n00b_string_from_cstr(
+        ep_id ? (const char *)ep_id->data : "?");
+    n00b_string_t *check_id =
+        n00b_cformat("cert-acme-directory:«#»", ep_id_s);
     if (!directory_url_buf || directory_url_buf->byte_len < 8
         || memcmp(directory_url_buf->data, "https://", 8) != 0) {
         fb_push(fb, check_id, N00B_QUIC_PREFLIGHT_ERROR,
-                "ACME directory_url must start with https://",
-                "Use the canonical URL for your ACME provider.");
+                .detail = n00b_string_from_cstr(
+                    "ACME directory_url must start with https://"),
+                .remediation = n00b_string_from_cstr(
+                    "Use the canonical URL for your ACME provider."));
         return;
     }
     const char *directory_url = directory_url_buf->data;
@@ -376,7 +432,8 @@ check_acme_directory(finding_buf_t       *fb,
     char host_buf[256];
     if (host_len >= sizeof(host_buf)) {
         fb_push(fb, check_id, N00B_QUIC_PREFLIGHT_ERROR,
-                "directory_url host part is implausibly long", nullptr);
+                .detail = n00b_string_from_cstr(
+                    "directory_url host part is implausibly long"));
         return;
     }
     memcpy(host_buf, host_start, host_len);
@@ -386,49 +443,53 @@ check_acme_directory(finding_buf_t       *fb,
     hints.ai_socktype = SOCK_STREAM;
     int rc = getaddrinfo(host_buf, "443", &hints, &res);
     if (rc != 0) {
-        char detail[512];
-        snprintf(detail, sizeof(detail),
-                 "Cannot resolve ACME directory host '%s': %s",
-                 host_buf, n00b_gai_str(rc)->data);
-        fb_push(fb, check_id, N00B_QUIC_PREFLIGHT_WARN, detail,
-                "Check DNS, or run preflight again with network "
-                "access.");
+        fb_push(fb, check_id, N00B_QUIC_PREFLIGHT_WARN,
+                .detail = n00b_cformat(
+                    "Cannot resolve ACME directory host '«#»': «#»",
+                    n00b_string_from_cstr(host_buf),
+                    n00b_gai_str(rc)),
+                .remediation = n00b_string_from_cstr(
+                    "Check DNS, or run preflight again with network "
+                    "access."));
         return;
     }
     if (res) freeaddrinfo(res);
     fb_push(fb, check_id, N00B_QUIC_PREFLIGHT_INFO,
-            "ACME directory host resolves", nullptr);
+            .detail = n00b_string_from_cstr(
+                "ACME directory host resolves"));
 }
 
 static void
 check_secret_uri(finding_buf_t       *fb,
-                 const char          *check_id,
+                 n00b_string_t       *check_id,
                  const n00b_buffer_t *uri)
 {
     if (!uri) {
         fb_push(fb, check_id, N00B_QUIC_PREFLIGHT_ERROR,
-                "Secret URI is missing",
-                "Add the URI to the manifest.");
+                .detail = n00b_string_from_cstr("Secret URI is missing"),
+                .remediation = n00b_string_from_cstr(
+                    "Add the URI to the manifest."));
         return;
     }
     auto r = n00b_quic_secret_open((n00b_buffer_t *)uri);
     if (!n00b_result_is_ok(r)) {
         int err = (int)n00b_result_get_err(r);
-        char detail[512];
-        snprintf(detail, sizeof(detail),
-                 "Cannot open secret URI '%s': %s",
-                 (const char *)uri->data,
-                 n00b_quic_err_str((n00b_quic_err_t)err));
-        fb_push(fb, check_id, N00B_QUIC_PREFLIGHT_ERROR, detail,
-                "Check the secret-provider configuration "
-                "(Keychain ACL / KMS policy / vault token / etc.) "
-                "and that the URI scheme is registered.");
+        fb_push(fb, check_id, N00B_QUIC_PREFLIGHT_ERROR,
+                .detail = n00b_cformat(
+                    "Cannot open secret URI '«#»': «#»",
+                    n00b_string_from_cstr((const char *)uri->data),
+                    n00b_string_from_cstr(
+                        n00b_quic_err_str((n00b_quic_err_t)err))),
+                .remediation = n00b_string_from_cstr(
+                    "Check the secret-provider configuration "
+                    "(Keychain ACL / KMS policy / vault token / etc.) "
+                    "and that the URI scheme is registered."));
         return;
     }
     n00b_quic_secret_t *sec = n00b_result_get(r);
     n00b_quic_secret_close(sec);
     fb_push(fb, check_id, N00B_QUIC_PREFLIGHT_INFO,
-            "Secret URI opens cleanly", nullptr);
+            .detail = n00b_string_from_cstr("Secret URI opens cleanly"));
 }
 
 /* ===========================================================================
@@ -438,20 +499,25 @@ check_secret_uri(finding_buf_t       *fb,
 static void
 check_idp(finding_buf_t *fb, const n00b_quic_manifest_idp_t *idp)
 {
-    char check_id[256];
-    snprintf(check_id, sizeof(check_id), "auth-idp:%s",
-             idp->id ? (const char *)idp->id->data : "?");
+    n00b_string_t *id_s = n00b_string_from_cstr(
+        idp->id ? (const char *)idp->id->data : "?");
+    n00b_string_t *check_id = n00b_cformat("auth-idp:«#»", id_s);
 
     if (!idp->id) {
         fb_push(fb, check_id, N00B_QUIC_PREFLIGHT_ERROR,
-                "IdP entry missing 'id'", "Add an `id` to the IdP.");
+                .detail = n00b_string_from_cstr(
+                    "IdP entry missing 'id'"),
+                .remediation = n00b_string_from_cstr(
+                    "Add an `id` to the IdP."));
         return;
     }
     if (!idp->issuer || idp->issuer->byte_len < 8
         || memcmp(idp->issuer->data, "https://", 8) != 0) {
         fb_push(fb, check_id, N00B_QUIC_PREFLIGHT_ERROR,
-                "IdP issuer must start with https://",
-                "Use the canonical issuer URL for your IdP.");
+                .detail = n00b_string_from_cstr(
+                    "IdP issuer must start with https://"),
+                .remediation = n00b_string_from_cstr(
+                    "Use the canonical issuer URL for your IdP."));
         return;
     }
     /* DNS resolution of the host portion (same pattern as ACME). */
@@ -461,8 +527,10 @@ check_idp(finding_buf_t *fb, const n00b_quic_manifest_idp_t *idp)
                                    : strlen(host_start);
     if (host_len == 0 || host_len >= 256) {
         fb_push(fb, check_id, N00B_QUIC_PREFLIGHT_ERROR,
-                "IdP issuer host is empty or implausibly long",
-                "Check the issuer URL.");
+                .detail = n00b_string_from_cstr(
+                    "IdP issuer host is empty or implausibly long"),
+                .remediation = n00b_string_from_cstr(
+                    "Check the issuer URL."));
         return;
     }
     char host_buf[256];
@@ -473,17 +541,18 @@ check_idp(finding_buf_t *fb, const n00b_quic_manifest_idp_t *idp)
     hints.ai_socktype = SOCK_STREAM;
     int rc = getaddrinfo(host_buf, "443", &hints, &res);
     if (rc != 0) {
-        char detail[512];
-        snprintf(detail, sizeof(detail),
-                 "Cannot resolve IdP host '%s': %s",
-                 host_buf, n00b_gai_str(rc)->data);
-        fb_push(fb, check_id, N00B_QUIC_PREFLIGHT_WARN, detail,
-                "Check DNS, or run preflight again with network access.");
+        fb_push(fb, check_id, N00B_QUIC_PREFLIGHT_WARN,
+                .detail = n00b_cformat(
+                    "Cannot resolve IdP host '«#»': «#»",
+                    n00b_string_from_cstr(host_buf),
+                    n00b_gai_str(rc)),
+                .remediation = n00b_string_from_cstr(
+                    "Check DNS, or run preflight again with network access."));
         return;
     }
     if (res) freeaddrinfo(res);
     fb_push(fb, check_id, N00B_QUIC_PREFLIGHT_INFO,
-            "IdP issuer host resolves", nullptr);
+            .detail = n00b_string_from_cstr("IdP issuer host resolves"));
 }
 
 static void
@@ -491,20 +560,24 @@ check_policy(finding_buf_t                       *fb,
              const n00b_quic_manifest_policy_t   *pol,
              const n00b_quic_manifest_t          *m)
 {
-    char check_id[256];
-    snprintf(check_id, sizeof(check_id), "auth-policy:%s",
-             pol->id ? (const char *)pol->id->data : "?");
+    n00b_string_t *id_s = n00b_string_from_cstr(
+        pol->id ? (const char *)pol->id->data : "?");
+    n00b_string_t *check_id = n00b_cformat("auth-policy:«#»", id_s);
 
     if (!pol->id) {
         fb_push(fb, check_id, N00B_QUIC_PREFLIGHT_ERROR,
-                "policy entry missing 'id'",
-                "Add a unique `id` to each policy.");
+                .detail = n00b_string_from_cstr(
+                    "policy entry missing 'id'"),
+                .remediation = n00b_string_from_cstr(
+                    "Add a unique `id` to each policy."));
         return;
     }
     if (!pol->idp) {
         fb_push(fb, check_id, N00B_QUIC_PREFLIGHT_ERROR,
-                "policy entry missing 'idp'",
-                "Reference an IdP from `auth.idps` by id.");
+                .detail = n00b_string_from_cstr(
+                    "policy entry missing 'idp'"),
+                .remediation = n00b_string_from_cstr(
+                    "Reference an IdP from `auth.idps` by id."));
         return;
     }
     /* The referenced idp must be defined. */
@@ -518,13 +591,14 @@ check_policy(finding_buf_t                       *fb,
         }
     }
     if (!found) {
-        char detail[512];
-        snprintf(detail, sizeof(detail),
-                 "policy '%s' references undefined idp '%s'",
-                 (const char *)pol->id->data,
-                 (const char *)pol->idp->data);
-        fb_push(fb, check_id, N00B_QUIC_PREFLIGHT_ERROR, detail,
-                "Add the idp to `auth.idps[]` or correct the reference.");
+        fb_push(fb, check_id, N00B_QUIC_PREFLIGHT_ERROR,
+                .detail = n00b_cformat(
+                    "policy '«#»' references undefined idp '«#»'",
+                    n00b_string_from_cstr((const char *)pol->id->data),
+                    n00b_string_from_cstr((const char *)pol->idp->data)),
+                .remediation = n00b_string_from_cstr(
+                    "Add the idp to `auth.idps[]` or correct the "
+                    "reference."));
         return;
     }
     /* Audience-empty WARN — a policy with no audience will accept
@@ -532,13 +606,16 @@ check_policy(finding_buf_t                       *fb,
      * for whom; that's almost always a misconfiguration. */
     if (n00b_quic_mfbuf_empty(pol->audience)) {
         fb_push(fb, check_id, N00B_QUIC_PREFLIGHT_WARN,
-                "policy has no audience requirement",
-                "Set `audience` to your service identifier so tokens "
-                "minted for other services aren't accepted.");
+                .detail = n00b_string_from_cstr(
+                    "policy has no audience requirement"),
+                .remediation = n00b_string_from_cstr(
+                    "Set `audience` to your service identifier so tokens "
+                    "minted for other services aren't accepted."));
     }
 
     fb_push(fb, check_id, N00B_QUIC_PREFLIGHT_INFO,
-            "policy idp reference resolves", nullptr);
+            .detail = n00b_string_from_cstr(
+                "policy idp reference resolves"));
 }
 
 /* ===========================================================================
@@ -550,23 +627,26 @@ check_rpc_service(finding_buf_t                          *fb,
                   const n00b_quic_manifest_rpc_service_t *svc,
                   const n00b_quic_manifest_t             *m)
 {
-    char check_id[256];
-    snprintf(check_id, sizeof(check_id),
-             "rpc-service:%s",
-             svc->id ? (const char *)svc->id->data : "(unnamed)");
+    n00b_string_t *id_s = n00b_string_from_cstr(
+        svc->id ? (const char *)svc->id->data : "(unnamed)");
+    n00b_string_t *check_id = n00b_cformat("rpc-service:«#»", id_s);
 
     if (!svc->id) {
         fb_push(fb, check_id, N00B_QUIC_PREFLIGHT_ERROR,
-                "rpc.services entry missing 'id'",
-                "Set `id` to the gRPC-style service name "
-                "(e.g., `pkg.v1.Service`).");
+                .detail = n00b_string_from_cstr(
+                    "rpc.services entry missing 'id'"),
+                .remediation = n00b_string_from_cstr(
+                    "Set `id` to the gRPC-style service name "
+                    "(e.g., `pkg.v1.Service`)."));
         return;
     }
     if (!svc->auth_policy) {
         fb_push(fb, check_id, N00B_QUIC_PREFLIGHT_ERROR,
-                "rpc.services entry missing 'auth_policy'",
-                "Reference an `auth.policies[].id` so inbound calls "
-                "are gated by a defined policy.");
+                .detail = n00b_string_from_cstr(
+                    "rpc.services entry missing 'auth_policy'"),
+                .remediation = n00b_string_from_cstr(
+                    "Reference an `auth.policies[].id` so inbound calls "
+                    "are gated by a defined policy."));
         return;
     }
     bool found = false;
@@ -579,18 +659,21 @@ check_rpc_service(finding_buf_t                          *fb,
         }
     }
     if (!found) {
-        char detail[512];
-        snprintf(detail, sizeof(detail),
-                 "rpc.service '%s' references undefined auth_policy '%s'",
-                 (const char *)svc->id->data,
-                 (const char *)svc->auth_policy->data);
-        fb_push(fb, check_id, N00B_QUIC_PREFLIGHT_ERROR, detail,
-                "Add the policy to `auth.policies[]` or correct "
-                "the reference.");
+        fb_push(fb, check_id, N00B_QUIC_PREFLIGHT_ERROR,
+                .detail = n00b_cformat(
+                    "rpc.service '«#»' references undefined "
+                    "auth_policy '«#»'",
+                    n00b_string_from_cstr((const char *)svc->id->data),
+                    n00b_string_from_cstr(
+                        (const char *)svc->auth_policy->data)),
+                .remediation = n00b_string_from_cstr(
+                    "Add the policy to `auth.policies[]` or correct "
+                    "the reference."));
         return;
     }
     fb_push(fb, check_id, N00B_QUIC_PREFLIGHT_INFO,
-            "rpc service auth_policy reference resolves", nullptr);
+            .detail = n00b_string_from_cstr(
+                "rpc service auth_policy reference resolves"));
 }
 
 /* ===========================================================================
@@ -615,28 +698,28 @@ n00b_quic_preflight(n00b_quic_manifest_t *m)
 
         check_port_bind(&fb, ep->bind_host, ep->bind_port);
 
+        n00b_string_t *ep_id_s = n00b_string_from_cstr(
+            ep->id ? (const char *)ep->id->data : "?");
+
         switch (ep->cert.kind) {
         case N00B_QUIC_MANIFEST_CERT_STATIC: {
             check_static_cert(&fb, ep->id, &ep->cert);
-            char check_id[256];
-            snprintf(check_id, sizeof(check_id),
-                     "cert-static-key:%s", ep->id);
+            n00b_string_t *check_id =
+                n00b_cformat("cert-static-key:«#»", ep_id_s);
             check_secret_uri(&fb, check_id, ep->cert.key_secret_uri);
             break;
         }
         case N00B_QUIC_MANIFEST_CERT_EXTERNAL: {
             check_external_argv(&fb, ep->id, ep->cert.argv);
-            char check_id[256];
-            snprintf(check_id, sizeof(check_id),
-                     "cert-external-key:%s", ep->id);
+            n00b_string_t *check_id =
+                n00b_cformat("cert-external-key:«#»", ep_id_s);
             check_secret_uri(&fb, check_id, ep->cert.key_secret_uri);
             break;
         }
         case N00B_QUIC_MANIFEST_CERT_ACME: {
             check_acme_directory(&fb, ep->id, ep->cert.directory_url);
-            char check_id[256];
-            snprintf(check_id, sizeof(check_id),
-                     "cert-acme-key:%s", ep->id);
+            n00b_string_t *check_id =
+                n00b_cformat("cert-acme-key:«#»", ep_id_s);
             check_secret_uri(&fb, check_id, ep->cert.account_key_uri);
             break;
         }

@@ -692,6 +692,220 @@ test_preflight_metrics_bind(void)
     printf("  [PASS] preflight surfaces metrics-bind ERROR on bad host\n");
 }
 
+/* ============================================================================
+ * Phase 5 deferral-E regression — fb_push lift to n00b_string_t *.
+ *
+ * Spot-checks that the byte-content of finding strings produced by
+ * representative callsite patterns is preserved post-lift:
+ *   - literal-only `check` / `detail` / `remediation` (acme non-https)
+ *   - `n00b_cformat(...)`-built `check` with `«#»` substitution
+ *     (cert-static:<ep_id>, cert-static-key:<ep_id>)
+ *   - INFO finding with `nullptr` remediation (port-bind:..:0 success)
+ *   - WARN with formatted detail + literal remediation (policy w/o
+ *     audience)
+ *
+ * Per the deferral-E task definition: every callsite's finding-record
+ * `check`, `detail`, `remediation` must be string-identical pre-/post-
+ * lift modulo (a) edge cases where the old snprintf would have
+ * truncated 256-byte buffers (which are now correct, not regressed),
+ * and (b) the latent `"cert-{static,external,acme}-key:%s", ep->id`
+ * bug in the walker which formatted a `n00b_buffer_t *` pointer
+ * instead of `ep->id->data` — that one is now correct, which is an
+ * improvement, not a regression.
+ * ============================================================================ */
+
+static n00b_quic_preflight_finding_t *
+find_finding_with_check_prefix(n00b_quic_preflight_report_t *rep,
+                               const char                   *prefix)
+{
+    for (size_t i = 0; i < n00b_list_len(*rep->findings); i++) {
+        n00b_quic_preflight_finding_t *f = n00b_list_get(*rep->findings, i);
+        if (f->check && f->check->data
+            && strncmp(f->check->data, prefix, strlen(prefix)) == 0) {
+            return f;
+        }
+    }
+    return nullptr;
+}
+
+static void
+test_fb_push_lift_check_strings_byte_identical(void)
+{
+    /* A non-https ACME directory_url is the simplest path that lands
+     * (a) a non-format check id ("cert-acme-directory:e3") and
+     * (b) literal-only detail + remediation. */
+    const char *json =
+        "{"
+        " \"version\": 1, \"service_name\": \"pf-dE\","
+        " \"endpoints\": [{"
+        "   \"id\": \"e3\", \"bind_host\": \"127.0.0.1\","
+        "   \"bind_port\": 0, \"alpn\": [\"h3\"],"
+        "   \"cert\": {"
+        "     \"kind\": \"acme\","
+        "     \"directory_url\": \"ftp://wrong-scheme/directory\","
+        "     \"subject_names\": [\"x.example\"],"
+        "     \"challenge\": \"http-01\","
+        "     \"account_key_uri\": \"ephemeral:acct\","
+        "     \"contact_email\": \"x@y\""
+        "   }"
+        " }]"
+        "}";
+    auto r = n00b_quic_manifest_load_json(mk_json(json));
+    assert(n00b_result_is_ok(r));
+    auto pr = n00b_quic_preflight(n00b_result_get(r));
+    assert(n00b_result_is_ok(pr));
+    n00b_quic_preflight_report_t *rep = n00b_result_get(pr);
+
+    /* Pattern 1: cert-acme-directory: literal-only check + detail +
+     * remediation. */
+    n00b_quic_preflight_finding_t *acme =
+        find_finding_with_check_prefix(rep, "cert-acme-directory:");
+    assert(acme);
+    assert(acme->severity == N00B_QUIC_PREFLIGHT_ERROR);
+    assert(strcmp(acme->check->data, "cert-acme-directory:e3") == 0);
+    assert(acme->detail
+           && strcmp(acme->detail->data,
+                     "ACME directory_url must start with https://") == 0);
+    assert(acme->remediation
+           && strcmp(acme->remediation->data,
+                     "Use the canonical URL for your ACME provider.") == 0);
+
+    /* Pattern 2: cert-acme-key check id — was previously the latent-
+     * bug callsite (snprintf(..., "cert-acme-key:%s", ep->id)
+     * formatting a buffer pointer).  Post-lift it correctly embeds
+     * the endpoint id. */
+    n00b_quic_preflight_finding_t *acme_key =
+        find_finding_with_check_prefix(rep, "cert-acme-key:");
+    assert(acme_key);
+    assert(strcmp(acme_key->check->data, "cert-acme-key:e3") == 0);
+
+    /* Pattern 3: port-bind INFO — successful bind on 127.0.0.1:0
+     * produces a literal "bind() succeeded" detail with nullptr
+     * remediation. */
+    n00b_quic_preflight_finding_t *pb =
+        find_finding_with_check_prefix(rep, "port-bind:");
+    assert(pb);
+    assert(pb->severity == N00B_QUIC_PREFLIGHT_INFO);
+    assert(strcmp(pb->check->data, "port-bind:127.0.0.1:0") == 0);
+    assert(pb->detail
+           && strcmp(pb->detail->data, "bind() succeeded") == 0);
+    assert(pb->remediation == nullptr);
+
+    printf("  [PASS] fb_push lift: byte-identical check/detail/"
+           "remediation across 3 callsite patterns\n");
+}
+
+static void
+test_fb_push_lift_static_cert_format_and_walker_key(void)
+{
+    /* Static-cert path exercises:
+     *   - cert-static:<ep_id>           (cformat in check_static_cert)
+     *   - cert-static-key:<ep_id>       (cformat in the top-level walker;
+     *                                    formerly the latent-bug site)
+     * with a non-existent chain_pem_path, which produces a literal
+     * `cert-static:<ep>` ERROR (with a formatted detail) and an
+     * `ephemeral:` secret-uri INFO. */
+    const char *json =
+        "{"
+        " \"version\": 1, \"service_name\": \"pf-dE2\","
+        " \"endpoints\": [{"
+        "   \"id\": \"ep-walker\","
+        "   \"bind_host\": \"127.0.0.1\","
+        "   \"bind_port\": 0,"
+        "   \"alpn\": [\"h3\"],"
+        "   \"cert\": {"
+        "     \"kind\": \"static\","
+        "     \"chain_pem_path\": \"/nonexistent/pf-dE-fixture\","
+        "     \"key_secret_uri\": \"ephemeral:pf-dE\""
+        "   }"
+        " }]"
+        "}";
+    auto r = n00b_quic_manifest_load_json(mk_json(json));
+    assert(n00b_result_is_ok(r));
+    auto pr = n00b_quic_preflight(n00b_result_get(r));
+    n00b_quic_preflight_report_t *rep = n00b_result_get(pr);
+
+    /* cert-static:<ep_id> finding. */
+    n00b_quic_preflight_finding_t *cs =
+        find_finding_with_check_prefix(rep, "cert-static:");
+    assert(cs);
+    assert(cs->severity == N00B_QUIC_PREFLIGHT_ERROR);
+    assert(strcmp(cs->check->data, "cert-static:ep-walker") == 0);
+    /* Detail is formatted via `n00b_cformat("Cannot read chain_pem_path '«#»'", path_s)`. */
+    assert(cs->detail
+           && strcmp(cs->detail->data,
+                     "Cannot read chain_pem_path "
+                     "'/nonexistent/pf-dE-fixture'") == 0);
+
+    /* cert-static-key:<ep_id> finding — the walker-side check id.
+     * (Pre-lift this had a latent `%s` of a buffer pointer; post-lift
+     * it correctly embeds `ep_id->data`.) */
+    n00b_quic_preflight_finding_t *cs_key =
+        find_finding_with_check_prefix(rep, "cert-static-key:");
+    assert(cs_key);
+    assert(strcmp(cs_key->check->data, "cert-static-key:ep-walker") == 0);
+
+    printf("  [PASS] fb_push lift: cformat-built check ids + walker-"
+           "side key check id are correctly substituted\n");
+}
+
+static void
+test_fb_push_lift_warn_policy_no_audience(void)
+{
+    /* Audience-empty WARN: the policy check produces a WARN finding
+     * whose check id is `auth-policy:<id>` (cformat) and whose detail
+     * + remediation are pure literals. */
+    const char *json =
+        "{"
+        " \"version\": 1, \"service_name\": \"pf-dE3\","
+        " \"endpoints\": [{"
+        "   \"id\": \"e\", \"bind_host\": \"127.0.0.1\","
+        "   \"bind_port\": 0, \"alpn\": [\"h3\"],"
+        "   \"cert\": {"
+        "     \"kind\": \"static\","
+        "     \"chain_pem_path\": \"/tmp/x.pem\","
+        "     \"key_secret_uri\": \"ephemeral:pf-dE3\""
+        "   }"
+        " }],"
+        " \"auth\": {"
+        "   \"idps\": [{"
+        "     \"id\": \"idp-a\","
+        "     \"issuer\": \"https://accounts.example/\","
+        "     \"claims\": {\"sub\": \"sub\"}"
+        "   }],"
+        "   \"policies\": [{"
+        "     \"id\": \"pol-a\","
+        "     \"idp\": \"idp-a\""
+        "   }]"
+        " }"
+        "}";
+    auto r = n00b_quic_manifest_load_json(mk_json(json));
+    assert(n00b_result_is_ok(r));
+    auto pr = n00b_quic_preflight(n00b_result_get(r));
+    n00b_quic_preflight_report_t *rep = n00b_result_get(pr);
+
+    /* Look for the WARN finding on auth-policy:pol-a. */
+    bool found_warn = false;
+    for (size_t i = 0; i < n00b_list_len(*rep->findings); i++) {
+        n00b_quic_preflight_finding_t *f = n00b_list_get(*rep->findings, i);
+        if (f->severity == N00B_QUIC_PREFLIGHT_WARN
+            && f->check
+            && strcmp(f->check->data, "auth-policy:pol-a") == 0) {
+            assert(f->detail
+                   && strcmp(f->detail->data,
+                             "policy has no audience requirement") == 0);
+            assert(f->remediation
+                   && strstr(f->remediation->data,
+                             "Set `audience`") != nullptr);
+            found_warn = true;
+            break;
+        }
+    }
+    assert(found_warn);
+    printf("  [PASS] fb_push lift: WARN auth-policy audience-empty "
+           "detail/remediation are byte-identical literals\n");
+}
+
 /* ============================================================================ */
 
 int
@@ -718,6 +932,10 @@ main(int argc, char **argv)
     test_preflight_rpc_service_dangling_policy();
     test_parse_observability_metrics();
     test_preflight_metrics_bind();
+    /* Phase 5 deferral-E regression — fb_push lift. */
+    test_fb_push_lift_check_strings_byte_identical();
+    test_fb_push_lift_static_cert_format_and_walker_key();
+    test_fb_push_lift_warn_policy_no_audience();
     printf("All quic_manifest tests passed.\n");
 
     n00b_shutdown();
