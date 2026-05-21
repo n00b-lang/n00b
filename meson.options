@@ -30,8 +30,8 @@ option(
 option(
     'use_asan',
     type: 'feature',
-    value: 'auto',
-    description: 'Use address sanitizer',
+    value: 'disabled',
+    description: 'Use address sanitizer. Default off — n00b does its own memory management, so ASAN provides limited signal and significantly slows the test suite. Opt in explicitly via `-Duse_asan=enabled` (or N00B_BUILD_ASAN=1 via build.sh).',
 )
 
 option(

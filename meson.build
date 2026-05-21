@@ -3114,12 +3114,17 @@ foreach name : regex_test_names
         )
     endif
     # regex_engine runs derivative + fuzz comparisons across thousands of
-    # patterns and legitimately takes ~60s in debug builds.
-    test_timeout = (name == 'engine' or name == 'fuzz_compare') ? 300 : 30
+    # patterns and legitimately takes ~60s in debug builds (often longer
+    # under host load). The `engine` and `fuzz_compare` cases are tagged
+    # `suite: 'long'` so build.sh's default `add_test_no_suite long` (when
+    # `N00B_TEST_ALL=0` and no explicit suites/tests requested) excludes
+    # them; opt in via `N00B_TEST_ALL=1` or `--all-tests`.
     if name == 'engine' or name == 'fuzz_compare'
         test_suite = ['unit', 'long']
+        test_timeout = 300
     else
         test_suite = 'unit'
+        test_timeout = 30
     endif
     test('regex_' + name, exe, suite: test_suite, timeout: test_timeout)
 endforeach
