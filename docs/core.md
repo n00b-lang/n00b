@@ -271,6 +271,10 @@ void _n00b_gc_unregister_root(void *addr);
 2. All registered thread stacks
 3. `n00b_runtime_t::argv` and `envp`
 
+Exact stack maps and descriptor-backed static objects are documented in
+[`docs/gc_stack_maps.md`](gc_stack_maps.md). The default runtime path remains
+conservative unless a thread opts into an exact stack policy.
+
 ### Finalizers
 
 Objects that hold external resources (locks, file descriptors, etc.)

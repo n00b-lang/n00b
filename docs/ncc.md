@@ -264,6 +264,12 @@ Rich text strings with inline styling markup using guillemet delimiters
 compound literals with pre-parsed style information, so there is no
 runtime parsing cost.
 
+Generated static objects that need GC visibility should follow the stack-map
+and static-descriptor runtime contract in
+[`docs/gc_stack_maps.md`](gc_stack_maps.md). The current r-string transform may
+continue using its supported static representation until ncc is updated to emit
+descriptor-backed statics.
+
 **Supported markup:**
 
 | Tag | Meaning |
