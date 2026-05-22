@@ -39,6 +39,7 @@
  */
 
 #include <n00b.h>
+#include "adt/option.h"
 #include "adt/result.h"
 
 /**
@@ -230,22 +231,24 @@ n00b_attest_statement_parse(n00b_buffer_t *bytes) _kargs
  *            n00b_attest_statement_parse).
  *
  * @return The predicateType URI as a borrowed
- *         @c n00b_string_t *, or `nullptr` if @p st is null
- *         or no predicate type has been set yet.
+ *         @c n00b_string_t * wrapped in @c n00b_option_t, or
+ *         @c n00b_option_none(n00b_string_t *) if @p st is null or
+ *         no predicate type has been set yet.
  *
- * @note **Borrow semantics.** The returned pointer remains valid
- *       for as long as the Statement itself remains live — i.e.,
- *       until the Statement's owning allocator is released. The
- *       Statement module does not currently expose a per-handle
- *       free / release; the aliased lifetime is governed by the
- *       allocator passed at construction or parse time.
+ * @note **Borrow semantics.** The returned pointer (once unwrapped
+ *       via @ref n00b_option_get) remains valid for as long as the
+ *       Statement itself remains live — i.e., until the Statement's
+ *       owning allocator is released. The Statement module does not
+ *       currently expose a per-handle free / release; the aliased
+ *       lifetime is governed by the allocator passed at construction
+ *       or parse time.
  *
  * @note No `_kargs`, no allocator threading: pointer alias only.
  *       Mirrors the alias-read pattern used by the DSSE
  *       @ref n00b_attest_envelope_get_signature_keyid surface.
  */
-extern n00b_string_t *
-n00b_attest_statement_get_predicate_type(n00b_attest_statement_t *st);
+extern n00b_option_t(n00b_string_t *)
+    n00b_attest_statement_get_predicate_type(n00b_attest_statement_t *st);
 
 /**
  * @brief Borrow / clone the SHA-256 digest hex string of the
@@ -273,8 +276,9 @@ n00b_attest_statement_get_predicate_type(n00b_attest_statement_t *st);
  *                owning allocator, or the runtime default if the
  *                Statement was constructed without one).
  *
- * @return The lowercase-hex SHA-256 string (64 chars). Returns
- *         `nullptr` when:
+ * @return The lowercase-hex SHA-256 string (64 chars) wrapped in
+ *         @c n00b_option_t. Returns @c n00b_option_none(n00b_string_t *)
+ *         when:
  *           - `st` is null,
  *           - `subject_index` is out of range,
  *           - the subject has no sha256 digest entry.
@@ -282,19 +286,20 @@ n00b_attest_statement_get_predicate_type(n00b_attest_statement_t *st);
  * @pre `st` was returned by @ref n00b_attest_statement_new or
  *      @ref n00b_attest_statement_parse.
  *
- * @post The returned string lives in the allocator named by the
- *       `.allocator` kwarg (or the Statement's owning allocator
- *       when the kwarg is absent). It has `u8_bytes == 64` and
- *       `codepoints == 64` for any valid sha256 digest entry.
+ * @post The returned string (once unwrapped via @ref n00b_option_get)
+ *       lives in the allocator named by the `.allocator` kwarg (or
+ *       the Statement's owning allocator when the kwarg is absent).
+ *       It has `u8_bytes == 64` and `codepoints == 64` for any valid
+ *       sha256 digest entry.
  *
  * @note Only the first sha256 entry is returned — multi-digest
  *       subjects (e.g., both sha256 and sha512) are honored by the
  *       JSON shape but only sha256 is exercised this WP. Other
  *       digest algorithms are not surfaced through this accessor.
  */
-extern n00b_string_t *
-n00b_attest_subject_get_digest_sha256(n00b_attest_statement_t *st,
-                                      size_t                   subject_index)
+extern n00b_option_t(n00b_string_t *)
+    n00b_attest_subject_get_digest_sha256(n00b_attest_statement_t *st,
+                                          size_t subject_index)
 _kargs {
     n00b_allocator_t *allocator = nullptr;
 };

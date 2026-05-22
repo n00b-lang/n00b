@@ -235,31 +235,31 @@ _kargs {
     return n00b_result_ok(bool, true);
 }
 
-n00b_string_t *
-n00b_attest_statement_get_predicate_type(n00b_attest_statement_t *st)
+n00b_option_t(n00b_string_t *)
+    n00b_attest_statement_get_predicate_type(n00b_attest_statement_t *st)
 {
-    if (st == nullptr) {
-        return nullptr;
+    if (st == nullptr || st->predicate_type == nullptr) {
+        return n00b_option_none(n00b_string_t *);
     }
-    return st->predicate_type;
+    return n00b_option_set(n00b_string_t *, st->predicate_type);
 }
 
-n00b_string_t *
-n00b_attest_subject_get_digest_sha256(n00b_attest_statement_t *st,
-                                      size_t                   subject_index)
+n00b_option_t(n00b_string_t *)
+    n00b_attest_subject_get_digest_sha256(n00b_attest_statement_t *st,
+                                          size_t subject_index)
 _kargs {
     n00b_allocator_t *allocator = nullptr;
 }
 {
     if (st == nullptr) {
-        return nullptr;
+        return n00b_option_none(n00b_string_t *);
     }
     if (subject_index >= st->subjects.len) {
-        return nullptr;
+        return n00b_option_none(n00b_string_t *);
     }
     subject_entry_t *entry = st->subjects.data[subject_index];
     if (entry == nullptr) {
-        return nullptr;
+        return n00b_option_none(n00b_string_t *);
     }
 
     // Threading rule: prefer the call-site allocator kwarg; if absent,
@@ -277,10 +277,11 @@ _kargs {
         if (memcmp(alg->data, "sha256", 6) != 0) continue;
 
         n00b_string_t *hex = entry->digest_hexes.data[i];
-        if (hex == nullptr) return nullptr;
-        return copy_string(hex, alloc_for_call);
+        if (hex == nullptr) return n00b_option_none(n00b_string_t *);
+        return n00b_option_set(n00b_string_t *,
+                               copy_string(hex, alloc_for_call));
     }
-    return nullptr;
+    return n00b_option_none(n00b_string_t *);
 }
 
 n00b_result_t(bool)

@@ -345,7 +345,13 @@ n00b_attest_cli_push(n00b_buffer_t *envelope_bytes,
                                    n00b_result_get_err(st_r));
         }
         n00b_attest_statement_t *st = n00b_result_get(st_r);
-        use_predicate_type = n00b_attest_statement_get_predicate_type(st);
+        n00b_option_t(n00b_string_t *) pt_opt
+            = n00b_attest_statement_get_predicate_type(st);
+        if (!n00b_option_is_set(pt_opt)) {
+            return n00b_result_err(n00b_string_t *,
+                                   N00B_ATTEST_ERR_STMT_MISSING_FIELD);
+        }
+        use_predicate_type = n00b_option_get(pt_opt);
         if (use_predicate_type == nullptr
             || use_predicate_type->u8_bytes == 0) {
             return n00b_result_err(n00b_string_t *,

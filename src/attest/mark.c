@@ -325,7 +325,12 @@ prep_envelope(n00b_attest_envelope_t *env,
         return n00b_result_err(int, N00B_ATTEST_ERR_CHALK_BAD_ENVELOPE);
     }
     n00b_attest_statement_t *st = n00b_result_get(st_r);
-    n00b_string_t *pt = n00b_attest_statement_get_predicate_type(st);
+    n00b_option_t(n00b_string_t *) pt_opt
+        = n00b_attest_statement_get_predicate_type(st);
+    if (!n00b_option_is_set(pt_opt)) {
+        return n00b_result_err(int, N00B_ATTEST_ERR_CHALK_BAD_ENVELOPE);
+    }
+    n00b_string_t *pt = n00b_option_get(pt_opt);
     if (pt == nullptr || pt->u8_bytes == 0) {
         return n00b_result_err(int, N00B_ATTEST_ERR_CHALK_BAD_ENVELOPE);
     }

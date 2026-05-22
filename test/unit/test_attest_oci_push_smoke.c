@@ -557,8 +557,10 @@ main(int argc, char **argv)
     n00b_buffer_t *payload = n00b_result_get(pl_r);
     auto st_r = n00b_attest_statement_parse(payload);
     assert(!n00b_result_is_err(st_r));
-    n00b_string_t *predicate_type = n00b_attest_statement_get_predicate_type(
-        n00b_result_get(st_r));
+    n00b_option_t(n00b_string_t *) pt_opt
+        = n00b_attest_statement_get_predicate_type(n00b_result_get(st_r));
+    assert(n00b_option_is_set(pt_opt));
+    n00b_string_t *predicate_type = n00b_option_get(pt_opt);
     assert(predicate_type != nullptr && predicate_type->u8_bytes > 0);
 
     // 6. Run the full HEAD + POST + PUT (blob) + PUT (manifest)

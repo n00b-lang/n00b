@@ -1156,16 +1156,16 @@ n00b_cmdr_flag_bool(n00b_cmdr_result_t *r, n00b_string_t *flag)
     return v->b;
 }
 
-n00b_list_t(n00b_string_t *) *
-n00b_cmdr_flag_list(n00b_cmdr_result_t *r, n00b_string_t *flag)
+n00b_option_t(n00b_list_t(n00b_string_t *) *)
+    n00b_cmdr_flag_list(n00b_cmdr_result_t *r, n00b_string_t *flag)
 {
     n00b_cmdr_val_t *v = n00b_cmdr_flag_get(r, flag);
 
     if (!v || v->tag != N00B_CMDR_VAL_LIST) {
-        return nullptr;
+        return n00b_option_none(n00b_list_t(n00b_string_t *) *);
     }
 
-    return &v->list;
+    return n00b_option_set(n00b_list_t(n00b_string_t *) *, &v->list);
 }
 
 int32_t

@@ -1014,8 +1014,14 @@ verb_mark(n00b_cmdr_result_t *result)
     // WP-002 sign precedent).
     n00b_list_t(n00b_buffer_t *) envs = n00b_list_new(n00b_buffer_t *);
     if (n00b_cmdr_flag_present(result, r"--envelope")) {
-        n00b_list_t(n00b_string_t *) *env_paths
+        n00b_option_t(n00b_list_t(n00b_string_t *) *) env_paths_opt
             = n00b_cmdr_flag_list(result, r"--envelope");
+        if (!n00b_option_is_set(env_paths_opt)) {
+            n00b_eprintf(
+                "n00b-attest mark: --envelope <path> may not be empty");
+            return 1;
+        }
+        n00b_list_t(n00b_string_t *) *env_paths = n00b_option_get(env_paths_opt);
         if (env_paths == nullptr || env_paths->len == 0) {
             n00b_eprintf(
                 "n00b-attest mark: --envelope <path> may not be empty");

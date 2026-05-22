@@ -26,6 +26,7 @@
 #include "parsers/token_stream.h"
 #include "adt/dict.h"
 #include "adt/list.h"
+#include "adt/option.h"
 
 // ============================================================================
 // Token type indices (used as n00b_cmdr_t.tok_ids[] indices)
@@ -420,15 +421,17 @@ bool n00b_cmdr_flag_bool(n00b_cmdr_result_t *r, n00b_string_t *flag);
  *
  * @param r     Parse result.
  * @param flag  Flag name (long or short).
- * @return Pointer to the value list, or @c nullptr if the flag was not
- *         present, was not declared multi, or the underlying value tag
- *         is not @c N00B_CMDR_VAL_LIST.
+ * @return The accumulated value list wrapped in @c n00b_option_t. Returns
+ *         @c n00b_option_none(n00b_list_t(n00b_string_t *) *) if the flag
+ *         was not present, was not declared multi, or the underlying value
+ *         tag is not @c N00B_CMDR_VAL_LIST.
  *
- * @post The returned list (if non-null) is owned by @p r and lives until
- *       @ref n00b_cmdr_result_free is called.
+ * @post The returned list (once unwrapped via @ref n00b_option_get) is
+ *       owned by @p r and lives until @ref n00b_cmdr_result_free is
+ *       called.
  */
-n00b_list_t(n00b_string_t *) *n00b_cmdr_flag_list(n00b_cmdr_result_t *r,
-                                                    n00b_string_t *flag);
+n00b_option_t(n00b_list_t(n00b_string_t *) *)
+    n00b_cmdr_flag_list(n00b_cmdr_result_t *r, n00b_string_t *flag);
 
 /**
  * @brief Get the number of positional arguments.

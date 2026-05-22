@@ -214,7 +214,10 @@ test_elf_round_trip_no_resign(void)
     ASSERT_OK(sr);
     n00b_attest_statement_t *parsed_stmt = n00b_result_get(sr);
 
-    n00b_string_t *got = n00b_attest_subject_get_digest_sha256(parsed_stmt, 0);
+    n00b_option_t(n00b_string_t *) got_opt
+        = n00b_attest_subject_get_digest_sha256(parsed_stmt, 0);
+    assert(n00b_option_is_set(got_opt));
+    n00b_string_t *got = n00b_option_get(got_opt);
     assert(got != nullptr);
     assert(got->u8_bytes == 64);
 

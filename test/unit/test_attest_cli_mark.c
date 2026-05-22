@@ -438,8 +438,10 @@ parse_and_dispatch(n00b_cmdr_t *c, n00b_string_t *cmdline,
     }
 
     assert(n00b_cmdr_flag_present(r, r"--envelope"));
-    n00b_list_t(n00b_string_t *) *env_paths
+    n00b_option_t(n00b_list_t(n00b_string_t *) *) env_paths_opt
         = n00b_cmdr_flag_list(r, r"--envelope");
+    assert(n00b_option_is_set(env_paths_opt));
+    n00b_list_t(n00b_string_t *) *env_paths = n00b_option_get(env_paths_opt);
     assert(env_paths != nullptr);
     int parsed_count = (int)env_paths->len;
 

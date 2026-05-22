@@ -452,8 +452,10 @@ main(int argc, char **argv)
     n00b_buffer_t *payload = n00b_result_get(pl_r);
     auto st_r = n00b_attest_statement_parse(payload);
     assert(!n00b_result_is_err(st_r));
-    n00b_string_t *predicate_type = n00b_attest_statement_get_predicate_type(
-        n00b_result_get(st_r));
+    n00b_option_t(n00b_string_t *) pt_opt
+        = n00b_attest_statement_get_predicate_type(n00b_result_get(st_r));
+    assert(n00b_option_is_set(pt_opt));
+    n00b_string_t *predicate_type = n00b_option_get(pt_opt);
 
     auto push_r = n00b_attest_oci_push_attestation(
         client, repo, subject_digest, envelope,

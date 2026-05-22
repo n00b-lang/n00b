@@ -497,12 +497,18 @@ test_multi_repeat(void)
     assert(r != NULL);
     assert(r->ok);
 
-    n00b_list_t(n00b_string_t *) *got = n00b_cmdr_flag_list(r, r"--out");
+    n00b_option_t(n00b_list_t(n00b_string_t *) *) got_opt
+        = n00b_cmdr_flag_list(r, r"--out");
+    assert(n00b_option_is_set(got_opt));
+    n00b_list_t(n00b_string_t *) *got = n00b_option_get(got_opt);
     const char *expected[] = {"a", "b", "c"};
     expect_list_eq(got, expected, 3, "multi_repeat");
 
     // Alias resolves to the same value.
-    assert(n00b_cmdr_flag_list(r, r"-o") == got);
+    n00b_option_t(n00b_list_t(n00b_string_t *) *) alias_opt
+        = n00b_cmdr_flag_list(r, r"-o");
+    assert(n00b_option_is_set(alias_opt));
+    assert(n00b_option_get(alias_opt) == got);
 
     n00b_cmdr_result_free(r);
     n00b_cmdr_free(c);
@@ -521,7 +527,10 @@ test_multi_comma_split(void)
     assert(r != NULL);
     assert(r->ok);
 
-    n00b_list_t(n00b_string_t *) *got = n00b_cmdr_flag_list(r, r"--out");
+    n00b_option_t(n00b_list_t(n00b_string_t *) *) got_opt
+        = n00b_cmdr_flag_list(r, r"--out");
+    assert(n00b_option_is_set(got_opt));
+    n00b_list_t(n00b_string_t *) *got = n00b_option_get(got_opt);
     const char *expected[] = {"a", "b", "c"};
     expect_list_eq(got, expected, 3, "multi_comma_split");
 
@@ -542,7 +551,10 @@ test_multi_mixed(void)
     assert(r != NULL);
     assert(r->ok);
 
-    n00b_list_t(n00b_string_t *) *got = n00b_cmdr_flag_list(r, r"--out");
+    n00b_option_t(n00b_list_t(n00b_string_t *) *) got_opt
+        = n00b_cmdr_flag_list(r, r"--out");
+    assert(n00b_option_is_set(got_opt));
+    n00b_list_t(n00b_string_t *) *got = n00b_option_get(got_opt);
     const char *expected[] = {"a", "b", "c"};
     expect_list_eq(got, expected, 3, "multi_mixed");
 
@@ -565,7 +577,10 @@ test_multi_escaped_comma(void)
     assert(r != NULL);
     assert(r->ok);
 
-    n00b_list_t(n00b_string_t *) *got = n00b_cmdr_flag_list(r, r"--out");
+    n00b_option_t(n00b_list_t(n00b_string_t *) *) got_opt
+        = n00b_cmdr_flag_list(r, r"--out");
+    assert(n00b_option_is_set(got_opt));
+    n00b_list_t(n00b_string_t *) *got = n00b_option_get(got_opt);
     const char *expected[] = {"a,b", "c"};
     expect_list_eq(got, expected, 2, "multi_escaped_comma");
 
@@ -586,7 +601,10 @@ test_multi_single_value(void)
     assert(r != NULL);
     assert(r->ok);
 
-    n00b_list_t(n00b_string_t *) *got = n00b_cmdr_flag_list(r, r"--out");
+    n00b_option_t(n00b_list_t(n00b_string_t *) *) got_opt
+        = n00b_cmdr_flag_list(r, r"--out");
+    assert(n00b_option_is_set(got_opt));
+    n00b_list_t(n00b_string_t *) *got = n00b_option_get(got_opt);
     const char *expected[] = {"a"};
     expect_list_eq(got, expected, 1, "multi_single_value");
 
@@ -607,8 +625,8 @@ test_multi_not_present(void)
     assert(r != NULL);
     assert(r->ok);
 
-    assert(n00b_cmdr_flag_list(r, r"--out") == nullptr);
-    assert(n00b_cmdr_flag_list(r, r"-o") == nullptr);
+    assert(!n00b_option_is_set(n00b_cmdr_flag_list(r, r"--out")));
+    assert(!n00b_option_is_set(n00b_cmdr_flag_list(r, r"-o")));
 
     n00b_cmdr_result_free(r);
     n00b_cmdr_free(c);
@@ -633,7 +651,7 @@ test_non_multi_last_write_wins(void)
     assert(strcmp(got->data, "b") == 0);
 
     // A non-multi flag has no list representation.
-    assert(n00b_cmdr_flag_list(r, r"--name") == nullptr);
+    assert(!n00b_option_is_set(n00b_cmdr_flag_list(r, r"--name")));
 
     n00b_cmdr_result_free(r);
     n00b_cmdr_free(c);

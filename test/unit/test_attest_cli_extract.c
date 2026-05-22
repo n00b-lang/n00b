@@ -187,7 +187,10 @@ test_cli_extract_bundled_round_trip(void)
     auto st_r = n00b_attest_statement_parse(payload);
     ASSERT_OK(st_r);
     n00b_attest_statement_t *st = n00b_result_get(st_r);
-    n00b_string_t *pt = n00b_attest_statement_get_predicate_type(st);
+    n00b_option_t(n00b_string_t *) pt_opt
+        = n00b_attest_statement_get_predicate_type(st);
+    assert(n00b_option_is_set(pt_opt));
+    n00b_string_t *pt = n00b_option_get(pt_opt);
     assert(pt != nullptr);
     assert(n00b_unicode_str_eq(pt, expected_pt));
 
