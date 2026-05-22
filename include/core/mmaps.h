@@ -183,6 +183,19 @@ n00b_mmap_by_address(void *addr) _kargs
     n00b_runtime_t *runtime = n00b_get_runtime();
 };
 
+/**
+ * @brief Look up a registered allocation/static-object sub-range by address.
+ * @param addr Address to look up.
+ * @return     Optional range descriptor covering @p addr.
+ *
+ * @kw runtime Runtime whose mmap context to use.
+ */
+extern n00b_option_t(n00b_alloc_range_t *)
+n00b_mmap_range_by_address(void *addr) _kargs
+{
+    n00b_runtime_t *runtime = n00b_get_runtime();
+};
+
 typedef n00b_option_t(n00b_allocator_t *) n00b_allocator_opt_t;
 
 /**
@@ -255,7 +268,7 @@ n00b_safe_munmap(void *addr, size_t size)
  * @kw allocator Allocator owning the sub-range.
  * @kw file      Debug file name.
  */
-extern void
+extern n00b_alloc_range_t *
 n00b_mmap_register_range(void *start, void *end, n00b_mmap_rec_kind_t kind) _kargs
 {
     n00b_allocator_t    *allocator = nullptr;
@@ -263,7 +276,42 @@ n00b_mmap_register_range(void *start, void *end, n00b_mmap_rec_kind_t kind) _kar
     n00b_gc_scan_kind_t  scan_kind = N00B_GC_SCAN_KIND_DEFAULT;
     n00b_gc_scan_cb_t    scan_cb   = nullptr;
     void                *scan_user = nullptr;
+    n00b_alloc_type_info_t tinfo    = 0;
+    uint64_t             object_id = 0;
+    uint32_t             flags     = 0;
 };
+
+/**
+ * @brief Register a static object descriptor in the global mmap/range tree.
+ * @param start Object start address.
+ * @param len   Object size in bytes.
+ * @param tinfo Runtime type hash for the object, or 0 when unknown.
+ * @param loc   Source location string.
+ *
+ * @kw scan_kind GC scan shape for the object's words.
+ * @kw scan_cb   Optional callback used when scan_kind == CALLBACK.
+ * @kw scan_user Opaque callback data.
+ * @kw object_id Stable generated-object identity, if available.
+ * @kw flags     Reserved descriptor flags for generated-code contracts.
+ */
+extern n00b_alloc_range_t *
+_n00b_static_object_register(void *start,
+                             size_t len,
+                             n00b_alloc_type_info_t tinfo,
+                             const char *loc) _kargs
+{
+    n00b_gc_scan_kind_t scan_kind = N00B_GC_SCAN_KIND_DEFAULT;
+    n00b_gc_scan_cb_t   scan_cb   = nullptr;
+    void               *scan_user = nullptr;
+    uint64_t            object_id = 0;
+    uint32_t            flags     = 0;
+};
+
+#define n00b_static_object_register(start, len, tinfo, ...)                                   \
+    _n00b_static_object_register((start),                                                     \
+                                 (len),                                                       \
+                                 (tinfo),                                                     \
+                                 N00B_LOC_STRING() __VA_OPT__(, __VA_ARGS__))
 
 /**
  * @brief Delete all sub-ranges overlapping [start, end).
