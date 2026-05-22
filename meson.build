@@ -714,15 +714,17 @@ x509_walk_test = executable('test_x509_walk',
 test('x509_walk', x509_walk_test, suite: 'unit',
      workdir: meson.project_source_root())
 
-# n00b-attest util — shared XDG path resolver regression test.
-# WP-005 mid-stream cleanup lift. Exercises XDG_CONFIG_HOME-set,
-# XDG_CONFIG_HOME-unset/HOME-fallback, composite suffix, and
-# nullptr-suffix paths. No filesystem dependencies.
-n00b_attest_xdg_test = executable('test_n00b_attest_xdg',
-    ['test/unit/test_n00b_attest_xdg.c'],
+# libn00b core util — XDG Base Directory + typed-variadic path
+# join + n00b_path_canonical regression. Exercises the spec matrix
+# (var set / unset / empty) for each `_home()` variant, asserts
+# `_runtime_dir()` returns nullptr when unset, exercises the
+# variadic builder, and verifies the canonical combined resolver
+# composes env-vars, tilde expansion, and absolute rooting.
+path_xdg_test = executable('test_path_xdg',
+    ['test/unit/test_path_xdg.c'],
     kwargs: test_common_kwargs,
 )
-test('n00b_attest_xdg', n00b_attest_xdg_test, suite: 'unit')
+test('path_xdg', path_xdg_test, suite: 'unit')
 
 # n00b core PE — Authenticode certificate-table emit round-trip.
 # WP-005 Phase 3 + P3-fixups sub-deliverable 3.

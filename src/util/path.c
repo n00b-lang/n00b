@@ -877,6 +877,333 @@ n00b_rename(n00b_string_t *from, n00b_string_t *to)
 // List directory
 // ============================================================================
 
+// ============================================================================
+// Typed-variadic path join
+// ============================================================================
+//
+// User direction 2026-05-21: "if we use our typed varargs, we don't
+// really need the array version. The implementation could even do a
+// list wrapper around the input for join." The variadic accepts a
+// required leading component plus zero or more `n00b_string_t *`
+// pieces, packs them into a by-value private-list lvalue, and
+// delegates to the existing list-based `n00b_path_join` core.
+
+n00b_string_t *
+n00b_path_join_v(n00b_string_t *first, n00b_string_t * +)
+{
+    n00b_list_t(n00b_string_t *) parts =
+        n00b_list_new_private(n00b_string_t *);
+
+    n00b_list_push(parts, first);
+
+    unsigned int count = n00b_remaining_vargs(vargs);
+    for (unsigned int i = 0; i < count; i++) {
+        n00b_string_t *piece = (n00b_string_t *)n00b_vargs_next(vargs);
+        n00b_list_push(parts, piece);
+    }
+
+    return n00b_path_join(&parts);
+}
+
+// ============================================================================
+// XDG Base Directory resolvers
+// ============================================================================
+//
+// Per https://specifications.freedesktop.org/basedir-spec/latest/ —
+// the `*_HOME` variants fall back to a `$HOME/`-relative default
+// when the corresponding env var is unset or empty; `XDG_RUNTIME_DIR`
+// has no spec-mandated fallback. Trailing slashes are stripped per
+// the spec's "no trailing slash" convention.
+//
+// `getenv` use here matches the existing path-module pattern at
+// `acquire_base_tmp_dir` and `n00b_get_program_search_path`.
+
+static n00b_string_t *
+xdg_home_or_fallback(const char *env_name, const char *home_relative)
+{
+    const char *v = getenv(env_name);
+    if (v != nullptr && v[0] != '\0') {
+        return remove_extra_slashes(n00b_string_from_cstr(v));
+    }
+    // Spec: empty $XDG_*_HOME = treated as unset, use $HOME-relative
+    // fallback. n00b_get_user_dir(nullptr) returns $HOME (or pwent
+    // fallback), already with trailing slashes stripped.
+    return remove_extra_slashes(
+        n00b_cformat("«#»«#»",
+                     n00b_get_user_dir(nullptr),
+                     n00b_string_from_cstr(home_relative)));
+}
+
+n00b_string_t *
+n00b_xdg_config_home(void)
+{
+    return xdg_home_or_fallback("XDG_CONFIG_HOME", "/.config");
+}
+
+n00b_string_t *
+n00b_xdg_data_home(void)
+{
+    return xdg_home_or_fallback("XDG_DATA_HOME", "/.local/share");
+}
+
+n00b_string_t *
+n00b_xdg_cache_home(void)
+{
+    return xdg_home_or_fallback("XDG_CACHE_HOME", "/.cache");
+}
+
+n00b_string_t *
+n00b_xdg_state_home(void)
+{
+    return xdg_home_or_fallback("XDG_STATE_HOME", "/.local/state");
+}
+
+n00b_string_t *
+n00b_xdg_runtime_dir(void)
+{
+    const char *v = getenv("XDG_RUNTIME_DIR");
+    if (v == nullptr || v[0] == '\0') {
+        return nullptr;
+    }
+    return remove_extra_slashes(n00b_string_from_cstr(v));
+}
+
+// Shared helper: join base + app + variadic-tail pieces into a list
+// and delegate to n00b_path_join. base = nullptr (e.g. runtime-dir
+// unset) propagates nullptr.
+static n00b_string_t *
+xdg_join_under(n00b_string_t *base,
+               n00b_string_t *app,
+               n00b_vargs_t  *tail_vargs)
+{
+    if (base == nullptr) {
+        return nullptr;
+    }
+
+    n00b_list_t(n00b_string_t *) parts =
+        n00b_list_new_private(n00b_string_t *);
+
+    n00b_list_push(parts, base);
+    n00b_list_push(parts, app);
+
+    unsigned int count = n00b_remaining_vargs(tail_vargs);
+    for (unsigned int i = 0; i < count; i++) {
+        n00b_string_t *piece =
+            (n00b_string_t *)n00b_vargs_next(tail_vargs);
+        n00b_list_push(parts, piece);
+    }
+
+    return n00b_path_join(&parts);
+}
+
+n00b_string_t *
+n00b_xdg_config_path(n00b_string_t *app, n00b_string_t * +)
+{
+    return xdg_join_under(n00b_xdg_config_home(), app, vargs);
+}
+
+n00b_string_t *
+n00b_xdg_data_path(n00b_string_t *app, n00b_string_t * +)
+{
+    return xdg_join_under(n00b_xdg_data_home(), app, vargs);
+}
+
+n00b_string_t *
+n00b_xdg_cache_path(n00b_string_t *app, n00b_string_t * +)
+{
+    return xdg_join_under(n00b_xdg_cache_home(), app, vargs);
+}
+
+n00b_string_t *
+n00b_xdg_state_path(n00b_string_t *app, n00b_string_t * +)
+{
+    return xdg_join_under(n00b_xdg_state_home(), app, vargs);
+}
+
+n00b_string_t *
+n00b_xdg_runtime_path(n00b_string_t *app, n00b_string_t * +)
+{
+    return xdg_join_under(n00b_xdg_runtime_dir(), app, vargs);
+}
+
+// ============================================================================
+// n00b_path_canonical — combined env-var + tilde + absolute + realpath
+// ============================================================================
+//
+// Composes the four canonicalization steps in order:
+//   1. $VAR / ${VAR} env-var expansion (when expand_env_vars).
+//   2. Leading ~ / ~user tilde expansion (when expand_tilde).
+//   3. Absolute-rooting via cwd (when make_absolute).
+//   4. realpath() symlink resolution (when resolve_symlinks).
+//
+// Env-var expansion is the only genuinely new piece; it walks the
+// input scanning for `$NAME` or `${NAME}` markers, resolves each
+// via getenv (matching the module's existing pattern), and emits
+// the empty string for unresolved names.
+
+static bool
+is_env_var_char(char c, bool first)
+{
+    if (c == '_') return true;
+    if (c >= 'A' && c <= 'Z') return true;
+    if (c >= 'a' && c <= 'z') return true;
+    if (!first && c >= '0' && c <= '9') return true;
+    return false;
+}
+
+static n00b_string_t *
+expand_env_vars_impl(n00b_string_t *in)
+{
+    if (in == nullptr || in->u8_bytes == 0) {
+        return in;
+    }
+
+    // Scratch buffer: worst-case the result is bounded by
+    // (input bytes) + (sum of env-var values). We don't know the
+    // upper bound a priori; build with a power-of-two grow.
+    size_t cap = (size_t)in->u8_bytes * 2 + 16;
+    char  *buf = n00b_alloc_array(char, cap);
+    size_t off = 0;
+
+    for (size_t i = 0; i < (size_t)in->u8_bytes; ) {
+        char c = in->data[i];
+
+        if (c != '$') {
+            if (off + 1 >= cap) {
+                cap *= 2;
+                char *nb = n00b_alloc_array(char, cap);
+                memcpy(nb, buf, off);
+                buf = nb;
+            }
+            buf[off++] = c;
+            i++;
+            continue;
+        }
+
+        // `$` — try to parse a name.
+        size_t name_start;
+        size_t name_end;
+        size_t consumed;
+        bool   braced = false;
+
+        if (i + 1 < (size_t)in->u8_bytes && in->data[i + 1] == '{') {
+            // ${NAME}
+            braced     = true;
+            name_start = i + 2;
+            name_end   = name_start;
+            while (name_end < (size_t)in->u8_bytes
+                   && in->data[name_end] != '}') {
+                name_end++;
+            }
+            if (name_end >= (size_t)in->u8_bytes) {
+                // No closing brace; emit `$` literally and continue.
+                if (off + 1 >= cap) {
+                    cap *= 2;
+                    char *nb = n00b_alloc_array(char, cap);
+                    memcpy(nb, buf, off);
+                    buf = nb;
+                }
+                buf[off++] = '$';
+                i++;
+                continue;
+            }
+            consumed = (name_end - i) + 1; // include closing `}`
+        }
+        else {
+            // $NAME — accept [A-Za-z_][A-Za-z0-9_]*.
+            name_start = i + 1;
+            if (name_start >= (size_t)in->u8_bytes
+                || !is_env_var_char(in->data[name_start], true)) {
+                // Lone `$` — emit literally.
+                if (off + 1 >= cap) {
+                    cap *= 2;
+                    char *nb = n00b_alloc_array(char, cap);
+                    memcpy(nb, buf, off);
+                    buf = nb;
+                }
+                buf[off++] = '$';
+                i++;
+                continue;
+            }
+            name_end = name_start + 1;
+            while (name_end < (size_t)in->u8_bytes
+                   && is_env_var_char(in->data[name_end], false)) {
+                name_end++;
+            }
+            consumed = name_end - i;
+        }
+
+        // Look up the env var and emit its value.
+        size_t name_len = name_end - name_start;
+        char   name_buf[256];
+        if (name_len < sizeof(name_buf)) {
+            memcpy(name_buf, in->data + name_start, name_len);
+            name_buf[name_len] = '\0';
+            const char *val = getenv(name_buf);
+            if (val != nullptr) {
+                size_t val_len = strlen(val);
+                while (off + val_len + 1 >= cap) {
+                    cap *= 2;
+                    char *nb = n00b_alloc_array(char, cap);
+                    memcpy(nb, buf, off);
+                    buf = nb;
+                }
+                memcpy(buf + off, val, val_len);
+                off += val_len;
+            }
+            // Unset / unknown → emit nothing (POSIX-shell convention).
+        }
+        // name_len >= sizeof(name_buf): pathological; emit nothing.
+
+        i += consumed;
+        (void)braced;
+    }
+
+    buf[off] = '\0';
+    return n00b_string_from_raw(buf, (int64_t)off);
+}
+
+n00b_string_t *
+_n00b_path_canonical(n00b_string_t *p) _kargs
+{
+    bool expand_env_vars  = true;
+    bool expand_tilde     = true;
+    bool make_absolute    = true;
+    bool resolve_symlinks = false;
+}
+{
+    if (p == nullptr) {
+        return nullptr;
+    }
+
+    n00b_string_t *cur = p;
+
+    if (expand_env_vars) {
+        cur = expand_env_vars_impl(cur);
+    }
+
+    if (expand_tilde && cur != nullptr && cur->u8_bytes > 0
+        && cur->data[0] == '~') {
+        cur = n00b_path_tilde_expand(cur);
+    }
+
+    if (make_absolute && cur != nullptr && cur->u8_bytes > 0
+        && cur->data[0] != '/') {
+        cur = n00b_path_simple_join(n00b_get_current_directory(), cur);
+    }
+
+    if (resolve_symlinks && cur != nullptr) {
+        char  buf[PATH_MAX + 1];
+        char *r = realpath(cur->data, buf);
+        if (r != nullptr) {
+            cur = n00b_string_from_cstr(r);
+        }
+        // realpath failure (e.g., path doesn't exist): preserve cur.
+    }
+
+    return cur;
+}
+
 n00b_list_t(n00b_string_t *) *
 _n00b_list_directory(n00b_string_t *dir) _kargs
 {

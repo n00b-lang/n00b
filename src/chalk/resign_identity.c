@@ -19,11 +19,11 @@
  *  ptls_load_pem_objects (project-wide PEM decoder, P3 fix-ups
  *  dispatch).
  *
- *  XDG store path lookup is delegated to the shared
- *  `n00b_attest_xdg_path` helper
- *  (include/attest/n00b_attest_xdg.h) per the same lift; the
- *  caller composes `signing-identities/<name>.<suffix>` and
- *  threads it through.
+ *  XDG store path lookup is delegated to libn00b core's
+ *  `n00b_xdg_config_path` typed-variadic builder
+ *  (include/util/path.h), which composes
+ *  `$XDG_CONFIG_HOME/n00b-attest/signing-identities/<name>.<ext>`
+ *  (or the `$HOME/.config/...` fallback per XDG spec) in one call.
  *
  *  Test-file conventions per D-030. */
 
@@ -35,7 +35,8 @@
 #include "chalk/n00b_chalk_resign.h"
 #include "adt/result.h"
 #include "util/x509_walk.h"
-#include "attest/n00b_attest_xdg.h"
+#include "util/path.h"
+#include "text/strings/format.h"
 
 #include "picotls.h"
 #include "picotls/pembase64.h"
@@ -176,13 +177,12 @@ find_char(n00b_string_t *s, char c, size_t start)
 }
 
 // ---------------------------------------------------------------------------
-// XDG store path resolution — the WP-005 mid-stream cleanup lift
-// (pre-P5) extracted the byte-identical clone of
-// src/attest/oci/auth.c's resolve_registries_json_path into the
-// shared helper `n00b_attest_xdg_path` (D-052; see
-// include/attest/n00b_attest_xdg.h). The caller composes the
-// `signing-identities/<name>.<suffix>` relative path and threads it
-// through.
+// XDG store path resolution — delegated to libn00b core's
+// `n00b_xdg_config_path` typed-variadic builder (include/util/path.h).
+// The store:// branch below composes the cert and key paths with
+// per-call one-liners; the byte layout matches the pre-lift clones
+// in src/attest/oci/auth.c (registries.json) and the prior
+// n00b_attest_xdg_path helper exactly.
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
@@ -365,51 +365,25 @@ n00b_chalk_signer_identity_resolve(n00b_string_t *uri) _kargs
                                    N00B_CHALK_ERR_SIGNER_IDENTITY_NOT_FOUND);
         }
         size_t name_len = uri->u8_bytes - name_off;
+        n00b_string_t *name = n00b_string_from_raw(uri->data + name_off,
+                                                   (int64_t)name_len,
+                                                   .allocator = allocator);
 
-        // Compose "signing-identities/<name>.cert.pem" and
-        // "signing-identities/<name>.key.pem" suffixes; the shared
-        // helper joins them under `$XDG_CONFIG_HOME/n00b-attest/`
-        // (D-052). The byte layout matches the pre-lift
-        // `xdg_signing_identity_path` clone exactly.
-        static const char k_prefix[]    = "signing-identities/";
-        static const char k_cert_ext[]  = ".cert.pem";
-        static const char k_key_ext[]   = ".key.pem";
-        size_t            prefix_len    = sizeof(k_prefix)   - 1;
-        size_t            cert_ext_len  = sizeof(k_cert_ext) - 1;
-        size_t            key_ext_len   = sizeof(k_key_ext)  - 1;
+        // One logical call per path-lookup: the leaf filename
+        // `<name>.cert.pem` / `<name>.key.pem` is composed via
+        // n00b_cformat, then n00b_xdg_config_path joins it under
+        // `$XDG_CONFIG_HOME/n00b-attest/signing-identities/`. Byte
+        // layout matches the pre-lift `xdg_signing_identity_path`
+        // clone exactly.
+        n00b_string_t *cert_path = n00b_xdg_config_path(
+            r"n00b-attest",
+            r"signing-identities",
+            n00b_cformat("«#».cert.pem", name));
+        n00b_string_t *key_path = n00b_xdg_config_path(
+            r"n00b-attest",
+            r"signing-identities",
+            n00b_cformat("«#».key.pem", name));
 
-        size_t cert_suffix_total = prefix_len + name_len + cert_ext_len;
-        char  *cert_suffix_buf   = n00b_alloc_array_with_opts(
-            char,
-            cert_suffix_total + 1,
-            &(n00b_alloc_opts_t){.allocator = allocator});
-        memcpy(cert_suffix_buf, k_prefix, prefix_len);
-        memcpy(cert_suffix_buf + prefix_len, uri->data + name_off, name_len);
-        memcpy(cert_suffix_buf + prefix_len + name_len, k_cert_ext, cert_ext_len);
-        cert_suffix_buf[cert_suffix_total] = '\0';
-        n00b_string_t *cert_suffix = n00b_string_from_raw(
-            cert_suffix_buf,
-            (int64_t)cert_suffix_total,
-            .allocator = allocator);
-
-        size_t key_suffix_total = prefix_len + name_len + key_ext_len;
-        char  *key_suffix_buf   = n00b_alloc_array_with_opts(
-            char,
-            key_suffix_total + 1,
-            &(n00b_alloc_opts_t){.allocator = allocator});
-        memcpy(key_suffix_buf, k_prefix, prefix_len);
-        memcpy(key_suffix_buf + prefix_len, uri->data + name_off, name_len);
-        memcpy(key_suffix_buf + prefix_len + name_len, k_key_ext, key_ext_len);
-        key_suffix_buf[key_suffix_total] = '\0';
-        n00b_string_t *key_suffix = n00b_string_from_raw(
-            key_suffix_buf,
-            (int64_t)key_suffix_total,
-            .allocator = allocator);
-
-        n00b_string_t *cert_path = n00b_attest_xdg_path(
-            cert_suffix, .allocator = allocator);
-        n00b_string_t *key_path = n00b_attest_xdg_path(
-            key_suffix, .allocator = allocator);
         if (cert_path == nullptr || key_path == nullptr) {
             return n00b_result_err(n00b_chalk_signer_identity_t *,
                                    N00B_CHALK_ERR_SIGNER_IDENTITY_NOT_FOUND);

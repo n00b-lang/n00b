@@ -42,11 +42,13 @@
  * registries.json read uses libn00b's n00b_file_open / read
  * surface; the JSON parse uses n00b_json_parse.
  *
- * The registries.json path lookup is delegated to the shared
- * `n00b_attest_xdg_path` helper (include/attest/n00b_attest_xdg.h)
- * per the WP-005 mid-stream cleanup lift; the `getenv` exception
- * (D-052) now lives in the helper's implementation. A future
- * libn00b `n00b_getenv` lift (DF-010) eliminates the exception
+ * The registries.json path lookup is delegated to libn00b core's
+ * `n00b_xdg_config_path` typed-variadic builder
+ * (include/util/path.h), which composes
+ * `$XDG_CONFIG_HOME/n00b-attest/registries.json` (or the
+ * `$HOME/.config/...` fallback per the XDG Base Directory spec).
+ * The `getenv` exception (D-052) now lives in libn00b core; a
+ * future libn00b `n00b_getenv` lift removes the exception
  * project-wide.
  */
 
@@ -54,7 +56,6 @@
 #include "internal/attest/json_util.h"
 #include <attest/n00b_attest_oci.h>
 #include <attest/n00b_attest_error.h>
-#include <attest/n00b_attest_xdg.h>
 
 #include "core/string.h"
 #include "core/buffer.h"
@@ -65,19 +66,20 @@
 #include "adt/dict_untyped.h"
 #include "adt/list.h"
 #include "text/unicode/idna.h"
+#include "util/path.h"
 
 #include <stdatomic.h>
 #include <string.h>
 
 // ---------------------------------------------------------------------------
-// Helpers — registries.json path resolution lifted to the shared
-// `n00b_attest_xdg_path` helper (include/attest/n00b_attest_xdg.h)
-// per the WP-005 mid-stream cleanup lift. The byte-identical clone
-// pattern that previously lived here is now codified in one place,
-// shared with src/chalk/resign_identity.c. The suffix
-// `"registries.json"` flows through verbatim; the helper resolves
+// Helpers — registries.json path resolution lifted to libn00b core's
+// `n00b_xdg_config_path` typed-variadic builder (include/util/path.h).
+// The byte-identical clone pattern that previously lived here is now
+// codified in libn00b core, shared with src/chalk/resign_identity.c.
+// The app namespace `"n00b-attest"` and the leaf `"registries.json"`
+// flow through as variadic pieces; the builder resolves
 // `$XDG_CONFIG_HOME/n00b-attest/registries.json` or
-// `$HOME/.config/n00b-attest/registries.json` per D-052.
+// `$HOME/.config/n00b-attest/registries.json` per the XDG spec.
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
@@ -287,9 +289,8 @@ static n00b_attest_oci_auth_t *
 auth_from_registries_json(n00b_string_t    *registry_filter,
                           n00b_allocator_t *alloc_for_call)
 {
-    n00b_string_t *path = n00b_attest_xdg_path(
-        n00b_string_from_cstr("registries.json", .allocator = alloc_for_call),
-        .allocator = alloc_for_call);
+    n00b_string_t *path = n00b_xdg_config_path(r"n00b-attest",
+                                               r"registries.json");
     if (path == nullptr) {
         return nullptr;
     }
