@@ -701,6 +701,24 @@ current_allocator_test = executable('test_current_allocator',
 )
 test('current_allocator', current_allocator_test, suite: 'unit')
 
+runtime_heap_size_test = executable('test_runtime_heap_size',
+    ['test/unit/test_runtime_heap_size.c'],
+    kwargs: test_common_kwargs,
+)
+test('runtime_heap_size_default', runtime_heap_size_test,
+     args: ['default'],
+     suite: 'unit')
+test('runtime_heap_size_kwarg', runtime_heap_size_test,
+     args: ['kwarg', '67108864'],
+     suite: 'unit')
+test('runtime_heap_size_env', runtime_heap_size_test,
+     args: ['env', '67108864'],
+     env: {'N00B_DEFAULT_HEAP_SIZE': '64M'},
+     suite: 'unit')
+test('runtime_heap_size_invalid', runtime_heap_size_test,
+     args: ['invalid'],
+     suite: 'unit')
+
 buffer_test = executable('test_buffer',
     ['test/unit/test_buffer.c'],
     kwargs: test_common_kwargs,

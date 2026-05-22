@@ -21,6 +21,12 @@
 #define N00B_DEFAULT_SCRATCH_ARENA_SIZE (1 << 25) // 32M
 #endif
 
+#define N00B_DEFAULT_HEAP_SIZE_ENV "N00B_DEFAULT_HEAP_SIZE"
+
+#ifndef N00B_DEFAULT_HEAP_SIZE_MIN
+#define N00B_DEFAULT_HEAP_SIZE_MIN N00B_DEFAULT_SCRATCH_ARENA_SIZE
+#endif
+
 struct n00b_segment_t {
     uint64_t        size;
     n00b_segment_t *next_segment;

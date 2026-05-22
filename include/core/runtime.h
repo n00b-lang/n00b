@@ -111,6 +111,10 @@ struct n00b_runtime_t {
  * @param argv Argument vector from main().
  *
  * @kw allocator    Allocator to use (nullptr = GC'd arena).
+ * @kw default_heap_size Initial runtime default heap size in bytes. A nonzero
+ *      value overrides `N00B_DEFAULT_HEAP_SIZE`, must be a power-of-two byte
+ *      count, must be page-aligned, and must be at least
+ *      `N00B_DEFAULT_HEAP_SIZE_MIN`.
  * @kw envp         Environment pointer (nullptr = inherit).
  * @kw numeric_locale Numeric locale string ("" = default).
  * @kw fd_limit     File descriptor limit (0 = don't change, <0 = don't set).
@@ -125,6 +129,7 @@ extern void
 n00b_init(n00b_runtime_t *rt, int argc, char *argv[]) _kargs
 {
     n00b_allocator_t *allocator       = nullptr; // nullptr = use a GC'd arena
+    uint64_t          default_heap_size = 0; // 0 = env/default
     char             **envp           = nullptr;
     char              *numeric_locale = "";
     int                fd_limit       = 0; // Less than 0 = "don't set"

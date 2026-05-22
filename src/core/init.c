@@ -1,6 +1,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <locale.h>
+#include <stdint.h>
+#include <string.h>
 #ifndef _WIN32
 #include <unistd.h>
 #include <termios.h>
@@ -19,6 +21,7 @@
 #include "core/mmaps.h"
 #include "core/alloc.h"
 #include "core/arena.h"
+#include "core/exit.h"
 #include "core/random.h"
 #include "core/stw.h"
 #include "core/gc.h"
@@ -43,6 +46,190 @@ extern void n00b_mmaps_initialize(n00b_mmap_ctx_t *ctx);
 
 typedef n00b_option_t(n00b_runtime_t *) opt_rt_t;
 opt_rt_t n00b_default_runtime = n00b_option_none(n00b_runtime_t *);
+
+static bool
+n00b_init_is_pow2(uint64_t value)
+{
+    return value != 0 && (value & (value - UINT64_C(1))) == 0;
+}
+
+[[noreturn]] static void
+n00b_init_default_heap_abort(const char *source,
+                             const char *value,
+                             const char *reason)
+{
+    fprintf(stderr,
+            "n00b_init: invalid default heap size from %s (%s): %s\n",
+            source == nullptr ? "unknown" : source,
+            value == nullptr ? "unset" : value,
+            reason == nullptr ? "invalid" : reason);
+    n00b_abort();
+}
+
+[[noreturn]] static void
+n00b_init_default_heap_numeric_abort(const char *source,
+                                     uint64_t    value,
+                                     const char *reason)
+{
+    fprintf(stderr,
+            "n00b_init: invalid default heap size from %s (%llu): %s\n",
+            source == nullptr ? "unknown" : source,
+            (unsigned long long)value,
+            reason == nullptr ? "invalid" : reason);
+    n00b_abort();
+}
+
+[[noreturn]] static void
+n00b_init_default_heap_allocator_abort(void)
+{
+    fprintf(stderr,
+            "n00b_init: default_heap_size cannot be combined with a "
+            "custom default allocator\n");
+    n00b_abort();
+}
+
+static const char *
+n00b_init_env_value(char *envp[], const char *name)
+{
+    size_t name_len = strlen(name);
+
+    if (envp != nullptr) {
+        for (char **cursor = envp; *cursor != nullptr; cursor++) {
+            if (strncmp(*cursor, name, name_len) == 0 &&
+                (*cursor)[name_len] == '=') {
+                return *cursor + name_len + 1u;
+            }
+        }
+        return nullptr;
+    }
+
+    return getenv(name);
+}
+
+static uint64_t
+n00b_init_parse_heap_size(const char *source, const char *value)
+{
+    if (value == nullptr || *value == '\0') {
+        n00b_init_default_heap_abort(source, value, "missing value");
+    }
+
+    uint64_t parsed = 0;
+    const char *cursor = value;
+    if (*cursor < '0' || *cursor > '9') {
+        n00b_init_default_heap_abort(
+            source,
+            value,
+            "expected decimal byte count with optional K/M/G suffix");
+    }
+
+    while (*cursor >= '0' && *cursor <= '9') {
+        uint64_t digit = (uint64_t)(*cursor - '0');
+        if (parsed > (UINT64_MAX - digit) / 10u) {
+            n00b_init_default_heap_abort(source, value, "size overflow");
+        }
+        parsed = parsed * 10u + digit;
+        cursor++;
+    }
+
+    uint64_t multiplier = 1;
+    if (*cursor != '\0') {
+        switch (*cursor) {
+        case 'k':
+        case 'K':
+            multiplier = UINT64_C(1) << 10;
+            break;
+        case 'm':
+        case 'M':
+            multiplier = UINT64_C(1) << 20;
+            break;
+        case 'g':
+        case 'G':
+            multiplier = UINT64_C(1) << 30;
+            break;
+        default:
+            n00b_init_default_heap_abort(source, value, "unknown size suffix");
+        }
+        cursor++;
+        if (*cursor == 'b' || *cursor == 'B') {
+            cursor++;
+        }
+        if (*cursor != '\0') {
+            n00b_init_default_heap_abort(
+                source,
+                value,
+                "trailing characters after size suffix");
+        }
+    }
+
+    if (parsed > UINT64_MAX / multiplier) {
+        n00b_init_default_heap_abort(source, value, "size overflow");
+    }
+
+    uint64_t bytes = parsed * multiplier;
+    if (!n00b_init_is_pow2(bytes)) {
+        n00b_init_default_heap_abort(
+            source,
+            value,
+            "size must be a power-of-two byte count");
+    }
+    if (bytes < N00B_DEFAULT_HEAP_SIZE_MIN) {
+        n00b_init_default_heap_abort(
+            source,
+            value,
+            "size is below N00B_DEFAULT_HEAP_SIZE_MIN");
+    }
+    if (n00b_page_size != 0 && bytes % n00b_page_size != 0) {
+        n00b_init_default_heap_abort(
+            source,
+            value,
+            "size must be page-aligned");
+    }
+
+    return bytes;
+}
+
+static uint64_t
+n00b_init_validate_heap_size(const char *source, uint64_t value)
+{
+    if (!n00b_init_is_pow2(value)) {
+        n00b_init_default_heap_numeric_abort(
+            source,
+            value,
+            "size must be a power-of-two byte count");
+    }
+    if (value < N00B_DEFAULT_HEAP_SIZE_MIN) {
+        n00b_init_default_heap_numeric_abort(
+            source,
+            value,
+            "size is below N00B_DEFAULT_HEAP_SIZE_MIN");
+    }
+    if (n00b_page_size != 0 && value % n00b_page_size != 0) {
+        n00b_init_default_heap_numeric_abort(
+            source,
+            value,
+            "size must be page-aligned");
+    }
+
+    return value;
+}
+
+static uint64_t
+n00b_init_resolve_default_heap_size(uint64_t explicit_size, char *envp[])
+{
+    if (explicit_size != 0) {
+        return n00b_init_validate_heap_size("default_heap_size kwarg",
+                                            explicit_size);
+    }
+
+    const char *env_value = n00b_init_env_value(envp,
+                                                N00B_DEFAULT_HEAP_SIZE_ENV);
+    if (env_value != nullptr) {
+        return n00b_init_parse_heap_size(N00B_DEFAULT_HEAP_SIZE_ENV, env_value);
+    }
+
+    return n00b_init_validate_heap_size("N00B_DEFAULT_SCRATCH_ARENA_SIZE",
+                                        N00B_DEFAULT_SCRATCH_ARENA_SIZE);
+}
 
 static inline void
 setup_envp(n00b_runtime_t *rt, char *envp[])
@@ -208,6 +395,7 @@ void
 n00b_init(n00b_runtime_t *rt, int argc, char *argv[]) _kargs
 {
     n00b_allocator_t *allocator       = nullptr;
+    uint64_t          default_heap_size = 0;
     char             **envp           = nullptr;
     char              *numeric_locale = "";
     int                fd_limit       = 0;
@@ -266,11 +454,17 @@ n00b_init(n00b_runtime_t *rt, int argc, char *argv[]) _kargs
     setup_threads(rt, max_threads);
 
     if (allocator) {
+        if (default_heap_size != 0) {
+            n00b_init_default_heap_allocator_abort();
+        }
         rt->default_allocator = allocator;
         rt->default_arena     = nullptr;
     }
     else {
-        rt->default_arena     = n00b_new_arena(.use_gc = true,
+        uint64_t heap_size =
+            n00b_init_resolve_default_heap_size(default_heap_size, envp);
+        rt->default_arena     = n00b_new_arena(.size   = heap_size,
+                                                .use_gc = true,
                                                 .name   = "default");
         rt->default_allocator = (n00b_allocator_t *)rt->default_arena;
     }

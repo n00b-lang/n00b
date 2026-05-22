@@ -26,6 +26,16 @@ Do not cache raw pointers to default-arena objects in unscanned memory.
 The collector can move default-arena allocations and only rewrites
 pointers it sees while scanning.
 
+The default heap size can be set explicitly with `n00b_init(...,
+.default_heap_size = bytes)` or, when that kwarg is unset, with the
+`N00B_DEFAULT_HEAP_SIZE` environment variable. Accepted environment
+values are decimal byte counts with optional `K`, `M`, or `G` suffixes
+(`64M`, `128M`, etc.). Overrides must resolve to a power-of-two byte
+size, must be page-aligned, and must be at least
+`N00B_DEFAULT_HEAP_SIZE_MIN`; invalid or undersized values abort during
+`n00b_init()` with a clear configuration error. An explicit kwarg wins
+over the environment.
+
 ## Explicit Allocators
 
 Most higher-level allocating APIs accept `.allocator`. Prefer that when
