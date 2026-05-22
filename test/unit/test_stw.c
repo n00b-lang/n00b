@@ -10,6 +10,15 @@
 #include "core/thread.h"
 
 static _Atomic uint32_t worker_resume_bits;
+static _Atomic uint32_t worker_blocking_stage;
+static _Atomic uint32_t worker_blocking_bits;
+static _Atomic uint32_t worker_blocking_after_bits;
+
+enum {
+    WORKER_BLOCKING_INIT = 0,
+    WORKER_BLOCKING_READY,
+    WORKER_BLOCKING_RELEASE,
+};
 
 static uint32_t
 self_lock_bits(void)
@@ -56,6 +65,68 @@ test_stw_owner_not_left_suspended(void)
     printf("  [PASS] STW owner is not left suspended\n");
 }
 
+static void
+test_wait_for_stw_release_clears_blocking_without_owner(void)
+{
+    assert_no_stw_bits();
+
+    n00b_wait_for_stw_release();
+
+    assert_no_stw_bits();
+
+    printf("  [PASS] wait_for_stw_release clears BLOCKING without owner\n");
+}
+
+static void *
+worker_checkin_during_stw(void *arg)
+{
+    (void)arg;
+
+    atomic_store(&worker_blocking_stage, WORKER_BLOCKING_READY);
+
+    while (atomic_load(&worker_blocking_stage) == WORKER_BLOCKING_READY) {
+        n00b_thread_checkin();
+    }
+
+    atomic_store(&worker_blocking_after_bits, self_lock_bits());
+
+    return nullptr;
+}
+
+static void
+test_stw_checkin_sets_and_clears_blocking(void)
+{
+    atomic_store(&worker_blocking_stage, WORKER_BLOCKING_INIT);
+    atomic_store(&worker_blocking_bits, UINT32_MAX);
+    atomic_store(&worker_blocking_after_bits, UINT32_MAX);
+
+    auto result = n00b_thread_spawn(worker_checkin_during_stw, nullptr);
+    assert(n00b_result_is_ok(result));
+
+    n00b_thread_t *thread = n00b_result_get(result);
+
+    while (atomic_load(&worker_blocking_stage) != WORKER_BLOCKING_READY) {
+    }
+
+    n00b_stop_the_world();
+
+    uint32_t bits = n00b_atomic_load(&thread->self_lock);
+    atomic_store(&worker_blocking_bits, bits);
+
+    assert(bits & N00B_STW);
+    assert(bits & N00B_BLOCKING);
+
+    atomic_store(&worker_blocking_stage, WORKER_BLOCKING_RELEASE);
+    n00b_restart_the_world();
+
+    n00b_thread_join(thread);
+
+    bits = atomic_load(&worker_blocking_after_bits);
+    assert((bits & (N00B_STW | N00B_BLOCKING | N00B_SUSPEND)) == 0);
+
+    printf("  [PASS] STW checkin sets and clears BLOCKING\n");
+}
+
 static void *
 worker_suspend_resume(void *arg)
 {
@@ -97,6 +168,8 @@ main(int argc, char **argv)
     printf("test_stw:\n");
     test_suspend_resume_clears_suspend();
     test_stw_owner_not_left_suspended();
+    test_wait_for_stw_release_clears_blocking_without_owner();
+    test_stw_checkin_sets_and_clears_blocking();
     test_spawned_thread_resume_clears_suspend();
     printf("All STW tests passed.\n");
 
