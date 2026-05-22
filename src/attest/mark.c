@@ -97,12 +97,11 @@
 #include "core/runtime.h"
 #include "parsers/json.h"
 #include "util/base64.h"
+#include "util/path.h"
 
 #include <chalk/n00b_chalk.h>
 
 #include <string.h>
-#include <errno.h>
-#include <unistd.h>
 
 // ---------------------------------------------------------------------------
 // Local helpers — string copy + JSON escape + decimal encoding (mirror the
@@ -798,7 +797,8 @@ n00b_attest_unmark(n00b_string_t *artifact_path)
         n00b_string_t *sc_path = sidecar_path_for(artifact_path,
                                                    alloc_for_call);
         if (io->bytes == nullptr || io->bytes->byte_len == 0) {
-            if (unlink((const char *)sc_path->data) != 0 && errno != ENOENT) {
+            auto ur = n00b_file_unlink(sc_path, .ignore_missing = true);
+            if (n00b_result_is_err(ur)) {
                 return n00b_result_err(bool,
                                        N00B_ATTEST_ERR_CHALK_DELETE_FAILED);
             }

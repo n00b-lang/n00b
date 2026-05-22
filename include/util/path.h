@@ -242,6 +242,36 @@ n00b_find_command_paths(n00b_string_t *cmd,
 
 extern n00b_result_t(n00b_string_t *) n00b_rename(n00b_string_t *from,
                                                    n00b_string_t *to);
+
+/**
+ * @brief Remove a filesystem entry (libc `unlink` wrapper).
+ *
+ * Thin allocator-aware libn00b wrapper around POSIX `unlink(2)`.
+ * Centralizes the `unlink + errno` pattern so consumer code never has
+ * to reach for `<unistd.h>` / `<errno.h>` directly (cf. §11 — the
+ * `n00b<->POSIX` line is contained here).
+ *
+ * @param path  Path to remove. Must be non-null.
+ *
+ * @kw ignore_missing  If `true`, an `ENOENT` from the underlying
+ *                     `unlink` is reported as `Ok(false)` rather than
+ *                     an error. Use this for idempotent delete
+ *                     semantics (e.g. a sidecar that may already be
+ *                     absent). Default: `false`.
+ *
+ * @return `Ok(true)` on a successful removal. `Ok(false)` when the
+ *         target was absent and `ignore_missing` was `true`.
+ *         `Err(<errno>)` carrying the POSIX errno on any other
+ *         failure.
+ */
+extern n00b_result_t(bool)
+_n00b_file_unlink(n00b_string_t *path) _kargs {
+    bool ignore_missing = false;
+};
+
+#define n00b_file_unlink(p, ...) \
+    _n00b_file_unlink(p __VA_OPT__(,) __VA_ARGS__)
+
 extern n00b_list_t(n00b_string_t *) *n00b_path_parts(n00b_string_t *p);
 
 extern n00b_list_t(n00b_string_t *) *

@@ -417,10 +417,12 @@ n00b_chalk_signer_identity_release(n00b_chalk_signer_identity_t *id)
     // for them.
     if (id->key_der != nullptr && id->key_der->data != nullptr
         && id->key_der->byte_len > 0) {
+        /* Security scrub — not a zero-init; memset intentional. */
         memset(id->key_der->data, 0, id->key_der->byte_len);
         id->key_der->byte_len = 0;
     }
     if (id->serial_bytes != nullptr && id->serial_len > 0) {
+        /* Security scrub — not a zero-init; memset intentional. */
         memset(id->serial_bytes, 0, id->serial_len);
     }
     id->rsa_n     = nullptr;

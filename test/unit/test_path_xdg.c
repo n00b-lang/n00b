@@ -21,9 +21,11 @@
  */
 
 #include <assert.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "n00b.h"
 #include "util/path.h"
@@ -172,6 +174,41 @@ test_path_join_v(void)
 }
 
 static void
+test_file_unlink(void)
+{
+    fprintf(stderr, "[xdg] file_unlink smoke\n");
+
+    // Build a unique tmp path: /tmp/n00b-unlink-test-<pid>.
+    char path_buf[128];
+    snprintf(path_buf, sizeof(path_buf),
+             "/tmp/n00b-unlink-test-%d", (int)getpid());
+
+    // Create the file via libc (test scaffolding allowed per D-030).
+    FILE *fp = fopen(path_buf, "w");
+    assert(fp != NULL);
+    fputs("hi\n", fp);
+    fclose(fp);
+
+    // Case 1: existing file removed → Ok(true).
+    n00b_string_t *p = n00b_string_from_cstr(path_buf);
+    auto r1 = n00b_file_unlink(p);
+    assert(n00b_result_is_ok(r1));
+    assert(n00b_result_get(r1) == true);
+
+    // Case 2: missing file + ignore_missing → Ok(false).
+    auto r2 = n00b_file_unlink(p, .ignore_missing = true);
+    assert(n00b_result_is_ok(r2));
+    assert(n00b_result_get(r2) == false);
+
+    // Case 3: missing file + default ignore_missing=false → Err(ENOENT).
+    auto r3 = n00b_file_unlink(p);
+    assert(n00b_result_is_err(r3));
+    assert(n00b_result_get_err(r3) == ENOENT);
+
+    fprintf(stderr, "  [PASS]\n");
+}
+
+static void
 test_path_canonical(void)
 {
     fprintf(stderr, "[xdg] path_canonical\n");
@@ -223,6 +260,7 @@ main(int argc, char **argv)
     test_xdg_config_path();
     test_path_join_v();
     test_path_canonical();
+    test_file_unlink();
 
     fprintf(stderr, "All path_xdg regression tests passed.\n");
     return 0;

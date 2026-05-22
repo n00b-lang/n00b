@@ -832,36 +832,19 @@ verb_discover(n00b_cmdr_result_t *result)
             }
             n00b_json_node_t *obj = n00b_json_object_new();
             if (e->manifest_digest != nullptr) {
-                // Materialize NUL-terminated copies for the JSON
-                // encoder (its string-set primitive expects C strings).
-                char *mdg = n00b_alloc_array(char,
-                                             e->manifest_digest->u8_bytes + 1);
-                memcpy(mdg,
-                       e->manifest_digest->data,
-                       e->manifest_digest->u8_bytes);
-                mdg[e->manifest_digest->u8_bytes] = '\0';
-                n00b_json_object_put(obj, "manifest_digest",
-                                     n00b_json_string_new(mdg));
+                n00b_json_object_put(
+                    obj, "manifest_digest",
+                    n00b_json_string_new_from_n00b(e->manifest_digest));
             }
             if (e->predicate_type != nullptr) {
-                char *pt = n00b_alloc_array(char,
-                                            e->predicate_type->u8_bytes + 1);
-                memcpy(pt,
-                       e->predicate_type->data,
-                       e->predicate_type->u8_bytes);
-                pt[e->predicate_type->u8_bytes] = '\0';
-                n00b_json_object_put(obj, "predicate_type",
-                                     n00b_json_string_new(pt));
+                n00b_json_object_put(
+                    obj, "predicate_type",
+                    n00b_json_string_new_from_n00b(e->predicate_type));
             }
             if (e->signer_keyid != nullptr) {
-                char *sk = n00b_alloc_array(char,
-                                            e->signer_keyid->u8_bytes + 1);
-                memcpy(sk,
-                       e->signer_keyid->data,
-                       e->signer_keyid->u8_bytes);
-                sk[e->signer_keyid->u8_bytes] = '\0';
-                n00b_json_object_put(obj, "signer_keyid",
-                                     n00b_json_string_new(sk));
+                n00b_json_object_put(
+                    obj, "signer_keyid",
+                    n00b_json_string_new_from_n00b(e->signer_keyid));
             }
             n00b_json_array_push(arr, obj);
         }
@@ -1190,14 +1173,9 @@ verb_extract(n00b_cmdr_result_t *result)
         n00b_json_node_t *obj = n00b_json_object_new();
 
         if (row->unchalked_hash_hex != nullptr) {
-            char *uh = n00b_alloc_array(char,
-                                        row->unchalked_hash_hex->u8_bytes + 1);
-            memcpy(uh,
-                   row->unchalked_hash_hex->data,
-                   row->unchalked_hash_hex->u8_bytes);
-            uh[row->unchalked_hash_hex->u8_bytes] = '\0';
-            n00b_json_object_put(obj, "unchalked_sha256",
-                                 n00b_json_string_new(uh));
+            n00b_json_object_put(
+                obj, "unchalked_sha256",
+                n00b_json_string_new_from_n00b(row->unchalked_hash_hex));
         }
         else {
             n00b_json_object_put(obj, "unchalked_sha256",
@@ -1205,14 +1183,9 @@ verb_extract(n00b_cmdr_result_t *result)
         }
 
         if (row->registry_hint != nullptr) {
-            char *rh = n00b_alloc_array(char,
-                                        row->registry_hint->u8_bytes + 1);
-            memcpy(rh,
-                   row->registry_hint->data,
-                   row->registry_hint->u8_bytes);
-            rh[row->registry_hint->u8_bytes] = '\0';
-            n00b_json_object_put(obj, "registry_hint",
-                                 n00b_json_string_new(rh));
+            n00b_json_object_put(
+                obj, "registry_hint",
+                n00b_json_string_new_from_n00b(row->registry_hint));
         }
         else {
             n00b_json_object_put(obj, "registry_hint",
@@ -1220,14 +1193,9 @@ verb_extract(n00b_cmdr_result_t *result)
         }
 
         if (row->signer_keyid != nullptr) {
-            char *sk = n00b_alloc_array(char,
-                                        row->signer_keyid->u8_bytes + 1);
-            memcpy(sk,
-                   row->signer_keyid->data,
-                   row->signer_keyid->u8_bytes);
-            sk[row->signer_keyid->u8_bytes] = '\0';
-            n00b_json_object_put(obj, "signer_keyid",
-                                 n00b_json_string_new(sk));
+            n00b_json_object_put(
+                obj, "signer_keyid",
+                n00b_json_string_new_from_n00b(row->signer_keyid));
         }
         else {
             n00b_json_object_put(obj, "signer_keyid",
@@ -1242,10 +1210,8 @@ verb_extract(n00b_cmdr_result_t *result)
                 if (pt == nullptr) {
                     continue;
                 }
-                char *p = n00b_alloc_array(char, pt->u8_bytes + 1);
-                memcpy(p, pt->data, pt->u8_bytes);
-                p[pt->u8_bytes] = '\0';
-                n00b_json_array_push(pt_arr, n00b_json_string_new(p));
+                n00b_json_array_push(pt_arr,
+                                     n00b_json_string_new_from_n00b(pt));
             }
         }
         n00b_json_object_put(obj, "predicate_types", pt_arr);
@@ -1282,17 +1248,11 @@ verb_extract(n00b_cmdr_result_t *result)
 
                 n00b_json_node_t *eobj = n00b_json_object_new();
                 if (pt != nullptr) {
-                    char *p = n00b_alloc_array(char, pt->u8_bytes + 1);
-                    memcpy(p, pt->data, pt->u8_bytes);
-                    p[pt->u8_bytes] = '\0';
                     n00b_json_object_put(eobj, "predicate_type",
-                                         n00b_json_string_new(p));
+                                         n00b_json_string_new_from_n00b(pt));
                 }
-                char *b = n00b_alloc_array(char, b64->u8_bytes + 1);
-                memcpy(b, b64->data, b64->u8_bytes);
-                b[b64->u8_bytes] = '\0';
                 n00b_json_object_put(eobj, "envelope_base64",
-                                     n00b_json_string_new(b));
+                                     n00b_json_string_new_from_n00b(b64));
                 n00b_json_array_push(env_arr, eobj);
             }
         }

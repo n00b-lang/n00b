@@ -74,6 +74,25 @@ n00b_json_string_new(const char *val)
 }
 
 n00b_json_node_t *
+n00b_json_string_new_from_n00b(n00b_string_t *s)
+{
+    n00b_json_node_t *v = n00b_alloc(n00b_json_node_t);
+    v->type = N00B_JSON_STRING;
+
+    if (s != nullptr) {
+        size_t len  = (size_t)s->u8_bytes;
+        char  *copy = n00b_alloc_array(char, len + 1);
+        if (len > 0) {
+            memcpy(copy, s->data, len);
+        }
+        copy[len] = '\0';
+        v->string = copy;
+    }
+
+    return v;
+}
+
+n00b_json_node_t *
 n00b_json_array_new(void)
 {
     n00b_json_node_t *v = n00b_alloc(n00b_json_node_t);

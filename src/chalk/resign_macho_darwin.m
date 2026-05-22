@@ -1,3 +1,22 @@
+/* -------------------------------------------------------------------------
+ * resign_macho_darwin.m — plain-C / ObjC ABI shim for the macOS Mach-O
+ * re-sign body. This is the ONLY libchalk source file that:
+ *
+ *   - Compiles through Apple's ObjC compiler (not ncc).
+ *   - Includes <Security/Security.h>, <CoreFoundation/CoreFoundation.h>,
+ *     <spawn.h>, <stdio.h>, and other POSIX/CoreFoundation headers.
+ *   - Uses NULL (not nullptr), errno, fopen/fread/fclose, fprintf, and
+ *     plain `const char *` parameters throughout.
+ *
+ * This file MUST NOT include n00b.h or any ncc-extended header (which
+ * would carry _kargs / _generic_struct / r"..."-literal extensions that
+ * Apple's clang front-end cannot parse). All n00b-side state crosses
+ * the boundary through `include/internal/chalk/resign_macho_raw.h` —
+ * a pure-C header with opaque forward declarations.
+ *
+ * Same shim pattern as src/net/quic/{acme_trust_macos,secret_keychain}.m.
+ * ------------------------------------------------------------------------- */
+
 /*
  * resign_macho_darwin.m — macOS Mach-O re-sign body (WP-005 P5).
  *

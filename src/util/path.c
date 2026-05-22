@@ -902,6 +902,33 @@ n00b_rename(n00b_string_t *from, n00b_string_t *to)
 }
 
 // ============================================================================
+// Unlink
+// ============================================================================
+//
+// `n00b_file_unlink` is the canonical libn00b wrapper for POSIX
+// `unlink(2)`. It is the project's "n00b<->POSIX line" for delete
+// semantics — consumer modules must not reach for `<unistd.h>` /
+// `<errno.h>` to perform a remove, since the wrapper is here. The
+// `ignore_missing` kwarg gives idempotent delete semantics for the
+// common "remove if present" case.
+
+n00b_result_t(bool)
+_n00b_file_unlink(n00b_string_t *path) _kargs
+{
+    bool ignore_missing = false;
+}
+{
+    if (unlink(path->data) == 0) {
+        return n00b_result_ok(bool, true);
+    }
+    int err = errno;
+    if (err == ENOENT && ignore_missing) {
+        return n00b_result_ok(bool, false);
+    }
+    return n00b_result_err(bool, err);
+}
+
+// ============================================================================
 // List directory
 // ============================================================================
 

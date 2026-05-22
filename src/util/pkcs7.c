@@ -79,6 +79,13 @@ typedef struct signer_node {
 } signer_node_t;
 
 struct n00b_pkcs7_signed_data {
+    /* Instance-stash of the caller's allocator, set at construction and
+     * forwarded on every subsequent `_add_*` / `_serialize` call. This is
+     * the multi-call builder pattern: the per-call kwarg cannot be
+     * re-supplied without changing the public surface, so the handle
+     * carries the allocator. The §4.3 ban on stashed allocators targets
+     * module-globals/statics; an instance field on a per-handle struct
+     * is the intended escape hatch for builder APIs. */
     n00b_allocator_t *allocator;
     n00b_buffer_t    *content_type_oid;   // pre-encoded OID TLV
     n00b_buffer_t    *content_bytes;      // inner bytes (may be null)
