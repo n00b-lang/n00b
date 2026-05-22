@@ -256,7 +256,10 @@ n00b_forward_alloc(n00b_collect_t *ctx, n00b_inline_hdr_t *old)
     n00b_gc_scan_kind_t scan_kind;
 
     if (ctx->from_space->vtable.metadata_pool) {
-        n00b_oob_hdr_t *old_oob = n00b_to_mem_metadata_record(old);
+        n00b_option_t(n00b_oob_hdr_t *) old_oob_opt =
+            n00b_to_mem_metadata_record(old);
+        assert(n00b_option_is_set(old_oob_opt));
+        n00b_oob_hdr_t *old_oob = n00b_option_get(old_oob_opt);
         result     = n00b_forward_mdata(ctx, old_oob, new);
         scan_start = ((n00b_oob_hdr_t *)result)->user_ptr;
         no_scan    = old_oob->no_scan;
@@ -287,7 +290,10 @@ n00b_forward_alloc(n00b_collect_t *ctx, n00b_inline_hdr_t *old)
             n00b_gc_scan_cb_t cb;
             void             *user;
             if (ctx->from_space->vtable.metadata_pool) {
-                n00b_oob_hdr_t *old_oob = n00b_to_mem_metadata_record(old);
+                n00b_option_t(n00b_oob_hdr_t *) old_oob_opt =
+                    n00b_to_mem_metadata_record(old);
+                assert(n00b_option_is_set(old_oob_opt));
+                n00b_oob_hdr_t *old_oob = n00b_option_get(old_oob_opt);
                 cb   = old_oob->scan_cb;
                 user = old_oob->scan_user;
             } else {

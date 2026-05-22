@@ -338,12 +338,12 @@ _n00b_format_impl(const char *desc_data, int32_t desc_len,
                     have_str = true;
                 }
                 else {
-                    n00b_vtable_entry to_str =
+                    n00b_option_t(n00b_vtable_entry) to_str_opt =
                         n00b_obj_core_method(arg, N00B_BI_TO_STRING);
 
-                    if (to_str) {
+                    if (n00b_option_is_set(to_str_opt)) {
                         typedef n00b_string_t *(*to_string_fn)(void *);
-                        sub_str  = ((to_string_fn)to_str)(arg);
+                        sub_str  = ((to_string_fn)n00b_option_get(to_str_opt))(arg);
                         have_str = true;
                     }
                     else {

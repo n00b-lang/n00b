@@ -30,11 +30,12 @@ n00b_to_string(void *obj)
         return n00b_string_from_raw("(null)", 6);
     }
 
-    n00b_vtable_entry fn = n00b_obj_core_method(obj, N00B_BI_TO_STRING);
+    n00b_option_t(n00b_vtable_entry) fn_opt =
+        n00b_obj_core_method(obj, N00B_BI_TO_STRING);
 
-    if (fn) {
+    if (n00b_option_is_set(fn_opt)) {
         typedef n00b_string_t *(*to_string_fn)(void *);
-        return ((to_string_fn)fn)(obj);
+        return ((to_string_fn)n00b_option_get(fn_opt))(obj);
     }
 
     // Fallback: "<typename@0xADDR>"

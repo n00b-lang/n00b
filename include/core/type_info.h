@@ -107,19 +107,22 @@ extern bool n00b_type_add_method(uint64_t type_hash, const n00b_method_t *method
  * @brief Look up a core vtable entry for a managed object.
  * @param obj  Pointer to a managed allocation.
  * @param slot Core vtable slot index.
- * @return The function pointer, or nullptr if the slot is empty or the
- *         object's type is unregistered.
+ * @return The function pointer wrapped in `n00b_option_t`, or
+ *         `n00b_option_none` if the object's type is unregistered, the
+ *         slot index is out of range, or the slot is empty (vtable entry
+ *         is nullptr).
  */
-static inline n00b_vtable_entry
-n00b_obj_core_method(void *obj, enum n00b_builtin_type_fn slot)
+static inline n00b_option_t(n00b_vtable_entry)
+    n00b_obj_core_method(void *obj, enum n00b_builtin_type_fn slot)
 {
     auto info_opt = n00b_type_info_for(obj);
 
     if (!n00b_option_is_set(info_opt) || slot >= N00B_BI_NUM_FUNCS) {
-        return nullptr;
+        return n00b_option_none(n00b_vtable_entry);
     }
 
-    return n00b_option_get(info_opt)->core_vtable[slot];
+    return n00b_option_from_nullable(n00b_vtable_entry,
+                                     n00b_option_get(info_opt)->core_vtable[slot]);
 }
 
 // ============================================================================
