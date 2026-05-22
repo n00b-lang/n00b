@@ -16,11 +16,14 @@ and passes options that `meson setup` alone will not have.
 # Normal build:
 bash build.sh
 
-# Build and run all tests:
+# Build and run the default test set:
 N00B_TEST=1 bash build.sh
 
-# Clean rebuild with tests:
+# Clean rebuild with the default test set:
 N00B_CLEAN=1 N00B_TEST=1 bash build.sh
+
+# Include tests tagged long:
+bash build.sh --all-tests
 
 # After an initial build, rebuild individual targets:
 meson compile -C build_debug test_buffer
@@ -28,6 +31,12 @@ meson compile -C build_debug test_buffer
 # Run a specific test (after initial build):
 meson test -C build_debug --print-errorlogs buffer
 ```
+
+The default `N00B_TEST=1` path skips Meson tests tagged `long`.
+Use `bash build.sh --all-tests` or `N00B_TEST_ALL=1 N00B_TEST=1 bash build.sh`
+before merging broad changes, release candidates, or changes that touch a
+long-test area directly.  Targeted test runs are not filtered, so
+`N00B_TEST=1 N00B_TESTS=regex_engine bash build.sh` still runs that test.
 
 If you change anything under `bootstrap/`, you must force a bootstrap
 rebuild:
