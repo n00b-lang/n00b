@@ -1448,7 +1448,7 @@ if not meson.is_cross_build()
           files('test/interp/run_tests.sh'),
           n00b_exe.full_path(),
       ],
-      suite: 'interp',
+      suite: ['interp', 'long'],
       workdir: meson.project_source_root(),
       timeout: 600,
   )
@@ -1458,7 +1458,7 @@ if not meson.is_cross_build()
           files('test/integration/run_compile_cache_tests.sh'),
           n00b_exe.full_path(),
       ],
-      suite: 'integration',
+      suite: ['integration', 'long'],
       workdir: meson.project_source_root(),
       timeout: 120,
   )
@@ -1817,7 +1817,8 @@ rsa_pss_roundtrip_test = executable('test_rsa_pss_roundtrip',
     ['test/unit/test_rsa_pss_roundtrip.c'],
     kwargs: test_common_kwargs,
 )
-test('rsa_pss_roundtrip', rsa_pss_roundtrip_test, suite: 'unit', timeout: 60)
+test('rsa_pss_roundtrip', rsa_pss_roundtrip_test,
+     suite: ['unit', 'long'], timeout: 60)
 
 # End-to-end QUIC mTLS handshake (loopback) — covers the h3 / picoquic
 # side of n00b_picotls_install_client_auth, including the server-side
@@ -2072,7 +2073,7 @@ quic_phase5_demo_smoke_test = executable('test_quic_phase5_demo_smoke',
     kwargs: test_common_kwargs,
 )
 test('quic_phase5_demo_smoke', quic_phase5_demo_smoke_test,
-     suite: 'unit', timeout: 90,
+     suite: ['unit', 'long'], timeout: 90,
      env: {'N00B_QUIC_PHASE5_DEMO_BIN': quic_phase5_demo.full_path()},
      depends: [quic_phase5_demo])
 
@@ -2083,7 +2084,7 @@ quic_phase5_k8s_test = executable('test_quic_phase5_k8s_smoke',
     kwargs: test_common_kwargs,
 )
 test('quic_phase5_k8s_smoke', quic_phase5_k8s_test,
-     suite: 'integration', timeout: 1200,
+     suite: ['integration', 'long'], timeout: 1200,
      env: {'N00B_PHASE5_K8S_SCRIPT':
            meson.project_source_root() / 'test/integration/phase5_k8s/run.sh'})
 
@@ -2095,7 +2096,7 @@ quic_phase5_vm_test = executable('test_quic_phase5_vm_smoke',
     kwargs: test_common_kwargs,
 )
 test('quic_phase5_vm_smoke', quic_phase5_vm_test,
-     suite: 'integration', timeout: 1200,
+     suite: ['integration', 'long'], timeout: 1200,
      env: {'N00B_PHASE5_VM_SCRIPT':
            meson.project_source_root() / 'test/integration/phase5_vm/run.sh'})
 
@@ -2107,7 +2108,7 @@ quic_phase5_vm_uacme_test = executable('test_quic_phase5_vm_uacme_smoke',
     kwargs: test_common_kwargs,
 )
 test('quic_phase5_vm_uacme_smoke', quic_phase5_vm_uacme_test,
-     suite: 'integration', timeout: 1200,
+     suite: ['integration', 'long'], timeout: 1200,
      env: {'N00B_PHASE5_VM_UACME_SCRIPT':
            meson.project_source_root() / 'test/integration/phase5_vm/uacme/run.sh'})
 
@@ -2119,7 +2120,7 @@ quic_phase5_zitadel_test = executable('test_quic_phase5_zitadel_smoke',
     kwargs: test_common_kwargs,
 )
 test('quic_phase5_zitadel_smoke', quic_phase5_zitadel_test,
-     suite: 'integration', timeout: 1500,
+     suite: ['integration', 'long'], timeout: 1500,
      env: {'N00B_PHASE5_ZITADEL_SCRIPT':
            meson.project_source_root() / 'test/integration/phase5_k8s/zitadel/run.sh'})
 
@@ -2132,7 +2133,7 @@ quic_rpc_demo_smoke_test = executable('test_quic_rpc_demo_smoke',
     kwargs: test_common_kwargs,
 )
 test('quic_rpc_demo_smoke', quic_rpc_demo_smoke_test,
-     suite: 'unit', timeout: 90,
+     suite: ['unit', 'long'], timeout: 90,
      env: {'N00B_QUIC_RPC_DEMO_BIN': quic_rpc_demo.full_path()},
      depends: [quic_rpc_demo])
 
@@ -2209,7 +2210,7 @@ quic_phase2_fuzz_test = executable('test_quic_phase2_fuzz',
     kwargs: test_common_kwargs,
 )
 test('quic_phase2_fuzz', quic_phase2_fuzz_test,
-     suite: 'unit', timeout: 120)
+     suite: ['unit', 'long'], timeout: 120)
 
 # Manifest + preflight (design doc § 9).
 quic_manifest_test = executable('test_quic_manifest',
@@ -2352,7 +2353,7 @@ regex_resharp_test = executable('test_regex_resharp',
     kwargs: test_common_kwargs,
 )
 test('regex_resharp', regex_resharp_test,
-    suite: 'unit',
+    suite: ['unit', 'long'],
     timeout: 300,
     env: {
         'N00B_RESHARP_TEST_DIR': meson.current_source_dir() / 'test/data/resharp/tests',
@@ -2627,7 +2628,12 @@ foreach name : regex_test_names
     # regex_engine runs derivative + fuzz comparisons across thousands of
     # patterns and legitimately takes ~60s in debug builds.
     test_timeout = (name == 'engine' or name == 'fuzz_compare') ? 300 : 30
-    test('regex_' + name, exe, suite: 'unit', timeout: test_timeout)
+    if name == 'engine' or name == 'fuzz_compare'
+        test_suite = ['unit', 'long']
+    else
+        test_suite = 'unit'
+    endif
+    test('regex_' + name, exe, suite: test_suite, timeout: test_timeout)
 endforeach
 
 # aarch64-gated SIMD regex tests

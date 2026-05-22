@@ -7,15 +7,93 @@ N00B_TEST_FAIL_FAST=${N00B_TEST_FAIL_FAST:-0}
 N00B_TEST_SUITES=${N00B_TEST_SUITES:-}
 N00B_TEST_NO_SUITES=${N00B_TEST_NO_SUITES:-}
 N00B_TESTS=${N00B_TESTS:-}
+N00B_TEST_ALL=${N00B_TEST_ALL:-0}
 N00B_DOCS=${N00B_DOCS:-0}
 N00B_CROSS=${N00B_CROSS:-}
 N00B_JOBS=${N00B_JOBS:-}
 N00B_NATIVE=${N00B_NATIVE:-0}
+N00B_BUILD_ARGS=()
 
 function fail {
     echo "ERROR: $*" >&2
     exit 1
 }
+
+function usage {
+    cat <<'EOF'
+Usage: bash build.sh [options] [build_dir]
+
+Options:
+  --test        Build and run the default test set.
+  --all-tests   Build and run all tests, including tests tagged long.
+  --help        Show this help.
+
+Environment:
+  N00B_TEST=1          Run tests after building. Long tests are skipped by default.
+  N00B_TEST_ALL=1      Include tests tagged long.
+  N00B_TESTS="..."     Pass explicit Meson test names; targeted tests are not filtered.
+  N00B_TEST_SUITES     Pass explicit Meson suites.
+  N00B_TEST_NO_SUITES  Pass explicit Meson suites to skip.
+EOF
+}
+
+function parse_args {
+    while [[ $# -gt 0 ]] ; do
+        case "$1" in
+            --test)
+                N00B_TEST=1
+                ;;
+            --all-tests)
+                N00B_TEST=1
+                N00B_TEST_ALL=1
+                ;;
+            --help|-h)
+                usage
+                exit 0
+                ;;
+            --)
+                shift
+                N00B_BUILD_ARGS+=("$@")
+                break
+                ;;
+            --*)
+                fail "unknown option: $1"
+                ;;
+            *)
+                N00B_BUILD_ARGS+=("$1")
+                ;;
+        esac
+        shift
+    done
+}
+
+function add_test_no_suite {
+    local suite=$1
+    local current
+    for current in ${N00B_TEST_NO_SUITES}; do
+        if [[ "${current}" == "${suite}" ]] ; then
+            return 0
+        fi
+    done
+    if [[ -n "${N00B_TEST_NO_SUITES}" ]] ; then
+        N00B_TEST_NO_SUITES="${N00B_TEST_NO_SUITES} ${suite}"
+    else
+        N00B_TEST_NO_SUITES="${suite}"
+    fi
+}
+
+function test_suite_requested {
+    local suite=$1
+    local current
+    for current in ${N00B_TEST_SUITES}; do
+        if [[ "${current}" == "${suite}" ]] ; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+parse_args "$@"
 
 # Default to a C23-capable compiler if CC is not set.
 if [[ -z "${CC}" ]] && [[ -x /usr/local/bin/clang ]] ; then
@@ -195,6 +273,9 @@ function build_n00b {
 
    if [[ ${N00B_TEST} -ne 0 ]] ; then
        local meson_test_args=(--print-errorlogs --timeout-multiplier 3)
+       if [[ ${N00B_TEST_ALL} -eq 0 && -z "${N00B_TESTS}" && -z "${N00B_TEST_NO_SUITES}" ]] && ! test_suite_requested long ; then
+           add_test_no_suite long
+       fi
        if [[ -n "${N00B_JOBS}" ]] ; then
            meson_test_args+=(--num-processes "${N00B_JOBS}")
        fi
@@ -496,5 +577,5 @@ ensure_ncc
 if [[ -n "${N00B_CROSS}" ]] ; then
     cross_compile
 else
-    build_n00b $*
+    build_n00b "${N00B_BUILD_ARGS[@]}"
 fi
