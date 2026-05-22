@@ -174,11 +174,13 @@ void
 n00b_tc_register_iface(n00b_tc_ctx_t *ctx, n00b_string_t *name,
                          n00b_tc_iface_param_t +)
 {
-    // Build the params list.
+    // Build the params list. Canonical idiom: populate the
+    // scan-info-threaded lvalue first, then struct-copy into the heap
+    // shell after population is complete — keeps the heap allocation
+    // out of any window where a GC trigger (from n00b_logic_const etc.)
+    // could see a zero-scan-info heap blob.
     n00b_list_t(n00b_tc_iface_param_t) params =
         n00b_list_new_private(n00b_tc_iface_param_t);
-    n00b_list_t(n00b_tc_iface_param_t) *params_ptr =
-        n00b_alloc(n00b_list_t(n00b_tc_iface_param_t));
 
     unsigned int count = n00b_remaining_vargs(vargs);
     for (unsigned int i = 0; i < count; i++) {
@@ -195,6 +197,8 @@ n00b_tc_register_iface(n00b_tc_ctx_t *ctx, n00b_string_t *name,
                              (n00b_dl_sym_t[]){iface_sym, param_sym, idx_sym});
     }
 
+    n00b_list_t(n00b_tc_iface_param_t) *params_ptr =
+        n00b_alloc(n00b_list_t(n00b_tc_iface_param_t));
     *params_ptr = params;
 
     n00b_tc_iface_t iface = {
@@ -212,10 +216,10 @@ n00b_tc_register_impl(n00b_tc_ctx_t *ctx,
                         n00b_string_t *iface_name,
                         n00b_tc_type_t *+)
 {
-    // Collect bindings.
+    // Collect bindings. Canonical idiom: populate the
+    // scan-info-threaded lvalue first, then struct-copy into the heap
+    // shell after population is complete.
     n00b_list_t(n00b_tc_type_t *) bindings = n00b_list_new_private(n00b_tc_type_t *);
-    n00b_list_t(n00b_tc_type_t *) *bindings_ptr =
-        n00b_alloc(n00b_list_t(n00b_tc_type_t *));
 
     unsigned int count = n00b_remaining_vargs(vargs);
     for (unsigned int i = 0; i < count; i++) {
@@ -223,6 +227,8 @@ n00b_tc_register_impl(n00b_tc_ctx_t *ctx,
         n00b_list_push(bindings, b);
     }
 
+    n00b_list_t(n00b_tc_type_t *) *bindings_ptr =
+        n00b_alloc(n00b_list_t(n00b_tc_type_t *));
     *bindings_ptr = bindings;
 
     n00b_tc_impl_t impl = {

@@ -318,12 +318,11 @@ parse_type_primary(infer_ctx_t *ctx)
                 return NULL;
             }
 
-            // Collect type parameters.
+            // Collect type parameters. Canonical idiom: build into a
+            // fully scan-info-threaded lvalue, then struct-copy into
+            // the heap-allocated shell after population is complete.
             n00b_list_t(n00b_tc_type_t *) params
                 = n00b_list_new_private(n00b_tc_type_t *);
-            n00b_list_t(n00b_tc_type_t *) *params_ptr
-                = n00b_alloc(n00b_list_t(n00b_tc_type_t *));
-            *params_ptr = params;
 
             bool first = true;
 
@@ -387,7 +386,7 @@ parse_type_primary(infer_ctx_t *ctx)
                                                 gc);
 
                                         if (gt) {
-                                            n00b_list_push(*params_ptr, gt);
+                                            n00b_list_push(params, gt);
                                         }
                                     }
                                 }
@@ -400,7 +399,7 @@ parse_type_primary(infer_ctx_t *ctx)
                                     ctx->tc_ctx, ctx->grammar, sc);
 
                                 if (st) {
-                                    n00b_list_push(*params_ptr, st);
+                                    n00b_list_push(params, st);
                                 }
                             }
                         }
@@ -411,7 +410,7 @@ parse_type_primary(infer_ctx_t *ctx)
                     n00b_tc_type_t *p = parse_type_expr(ctx);
 
                     if (p) {
-                        n00b_list_push(*params_ptr, p);
+                        n00b_list_push(params, p);
                     }
                 }
             }
@@ -421,7 +420,12 @@ parse_type_primary(infer_ctx_t *ctx)
                 return NULL;
             }
 
-            // Build parameterized type.
+            // Build parameterized type. Heap-allocate the shell now
+            // (after population) and struct-copy the lvalue in.
+            n00b_list_t(n00b_tc_type_t *) *params_ptr
+                = n00b_alloc(n00b_list_t(n00b_tc_type_t *));
+            *params_ptr = params;
+
             n00b_tc_type_t *t = n00b_alloc(n00b_tc_type_t);
             t->forward = nullptr;
             n00b_tc_ctx_register(ctx->tc_ctx, t);
@@ -727,12 +731,15 @@ parse_type_primary(infer_ctx_t *ctx)
         // Build result[`t] and unify with operand.
         n00b_tc_type_t *t_var = n00b_tc_fresh_var(ctx->tc_ctx);
 
+        // Canonical idiom: populate the scan-info-threaded lvalue
+        // first, then struct-copy into the heap-allocated shell.
         n00b_list_t(n00b_tc_type_t *) params
             = n00b_list_new_private(n00b_tc_type_t *);
+        n00b_list_push(params, t_var);
+
         n00b_list_t(n00b_tc_type_t *) *params_ptr
             = n00b_alloc(n00b_list_t(n00b_tc_type_t *));
         *params_ptr = params;
-        n00b_list_push(*params_ptr, t_var);
 
         n00b_tc_type_t *result_type = n00b_alloc(n00b_tc_type_t);
         result_type->forward = nullptr;
@@ -828,24 +835,23 @@ parse_type_primary(infer_ctx_t *ctx)
 
     // Check for parameterized: name[type_list].
     if (match_char(ctx, '[')) {
-        // Collect type parameters.
+        // Collect type parameters. Canonical idiom: populate the
+        // scan-info-threaded lvalue first, then struct-copy into the
+        // heap-allocated shell after population is complete.
         n00b_list_t(n00b_tc_type_t *) params
             = n00b_list_new_private(n00b_tc_type_t *);
-        n00b_list_t(n00b_tc_type_t *) *params_ptr
-            = n00b_alloc(n00b_list_t(n00b_tc_type_t *));
-        *params_ptr = params;
 
         n00b_tc_type_t *first = parse_type_expr(ctx);
 
         if (first) {
-            n00b_list_push(*params_ptr, first);
+            n00b_list_push(params, first);
         }
 
         while (match_char(ctx, ',')) {
             n00b_tc_type_t *p = parse_type_expr(ctx);
 
             if (p) {
-                n00b_list_push(*params_ptr, p);
+                n00b_list_push(params, p);
             }
         }
 
@@ -853,6 +859,10 @@ parse_type_primary(infer_ctx_t *ctx)
             ctx->error = true;
             return NULL;
         }
+
+        n00b_list_t(n00b_tc_type_t *) *params_ptr
+            = n00b_alloc(n00b_list_t(n00b_tc_type_t *));
+        *params_ptr = params;
 
         // Build parameterized type manually.
         n00b_tc_type_t *t = n00b_alloc(n00b_tc_type_t);
@@ -909,15 +919,17 @@ parse_type_expr(infer_ctx_t *ctx)
                 return lhs;
             }
 
-            // Build a sum type with lhs and rhs.
+            // Build a sum type with lhs and rhs. Canonical idiom:
+            // populate the scan-info-threaded lvalue first, then
+            // struct-copy into the heap-allocated shell.
             n00b_list_t(n00b_tc_type_t *) variants
                 = n00b_list_new_private(n00b_tc_type_t *);
+            n00b_list_push(variants, lhs);
+            n00b_list_push(variants, rhs);
+
             n00b_list_t(n00b_tc_type_t *) *var_ptr
                 = n00b_alloc(n00b_list_t(n00b_tc_type_t *));
             *var_ptr = variants;
-
-            n00b_list_push(*var_ptr, lhs);
-            n00b_list_push(*var_ptr, rhs);
 
             n00b_tc_type_t *t = n00b_alloc(n00b_tc_type_t);
             t->forward = nullptr;

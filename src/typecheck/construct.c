@@ -106,11 +106,18 @@ n00b_tc_param(n00b_tc_ctx_t *ctx, n00b_string_t *name, n00b_tc_type_t *+)
         n00b_list_push(params, p);
     }
 
+    // Canonical idiom: heap-allocate the list shell and struct-copy
+    // the fully-populated lvalue in BEFORE the heap shell becomes
+    // reachable through param.params, so the GC never sees a
+    // zero-scan-info heap blob.
+    n00b_list_t(n00b_tc_type_t *) *params_ptr =
+        n00b_alloc(n00b_list_t(n00b_tc_type_t *));
+    *params_ptr = params;
+
     n00b_tc_param_t param = {
         .name   = name,
-        .params = n00b_alloc(n00b_list_t(n00b_tc_type_t *)),
+        .params = params_ptr,
     };
-    *param.params = params;
 
     _n00b_variant_set_ptr(&t->kind, n00b_tc_param_t, param);
     return t;
@@ -143,13 +150,18 @@ n00b_tc_fn(n00b_tc_ctx_t *ctx, n00b_tc_type_t *+)
         n00b_list_push(positional, p);
     }
 
+    // Canonical idiom: heap-allocate + struct-copy BEFORE the heap
+    // shell is reachable through fn.positional.
+    n00b_list_t(n00b_tc_type_t *) *positional_ptr =
+        n00b_alloc(n00b_list_t(n00b_tc_type_t *));
+    *positional_ptr = positional;
+
     n00b_tc_fn_t fn = {
-        .positional  = n00b_alloc(n00b_list_t(n00b_tc_type_t *)),
+        .positional  = positional_ptr,
         .vargs_type  = kargs->variadic,
         .kargs_type  = kargs->kwonly,
         .return_type = kargs->returns,
     };
-    *fn.positional = positional;
 
     _n00b_variant_set_ptr(&t->kind, n00b_tc_fn_t, fn);
     return t;
@@ -172,10 +184,15 @@ n00b_tc_sum(n00b_tc_ctx_t *ctx, n00b_tc_type_t *+)
         n00b_list_push(variants, v);
     }
 
+    // Canonical idiom: heap-allocate + struct-copy BEFORE the heap
+    // shell is reachable through sum.variants.
+    n00b_list_t(n00b_tc_type_t *) *variants_ptr =
+        n00b_alloc(n00b_list_t(n00b_tc_type_t *));
+    *variants_ptr = variants;
+
     n00b_tc_sum_t sum = {
-        .variants = n00b_alloc(n00b_list_t(n00b_tc_type_t *)),
+        .variants = variants_ptr,
     };
-    *sum.variants = variants;
 
     _n00b_variant_set_ptr(&t->kind, n00b_tc_sum_t, sum);
     return t;
@@ -231,23 +248,31 @@ n00b_tc_record(n00b_tc_ctx_t *ctx, n00b_string_t *name, n00b_tc_field_t +)
         }
     }
 
+    // Canonical idiom: heap-allocate + struct-copy each list BEFORE
+    // the heap shell becomes reachable through rec.
+    n00b_list_t(n00b_string_t *) *field_names_ptr =
+        n00b_alloc(n00b_list_t(n00b_string_t *));
+    *field_names_ptr = field_names;
+
+    n00b_list_t(n00b_tc_type_t *) *field_types_ptr =
+        n00b_alloc(n00b_list_t(n00b_tc_type_t *));
+    *field_types_ptr = field_types;
+
+    n00b_list_t(bool) *field_has_default_ptr = nullptr;
+    if (any_default) {
+        field_has_default_ptr = n00b_alloc(n00b_list_t(bool));
+        *field_has_default_ptr = field_has_default;
+    }
+
     n00b_tc_record_t rec = {
         .name              = name,
         .type_params       = nullptr,
-        .field_names       = n00b_alloc(n00b_list_t(n00b_string_t *)),
-        .field_types       = n00b_alloc(n00b_list_t(n00b_tc_type_t *)),
-        .field_has_default = any_default
-                                 ? n00b_alloc(n00b_list_t(bool))
-                                 : nullptr,
+        .field_names       = field_names_ptr,
+        .field_types       = field_types_ptr,
+        .field_has_default = field_has_default_ptr,
         .open              = kargs->open,
         .ordered           = kargs->ordered,
     };
-
-    *rec.field_names = field_names;
-    *rec.field_types = field_types;
-    if (any_default) {
-        *rec.field_has_default = field_has_default;
-    }
 
     _n00b_variant_set_ptr(&t->kind, n00b_tc_record_t, rec);
     return t;
@@ -273,12 +298,17 @@ n00b_tc_tuple(n00b_tc_ctx_t *ctx, n00b_tc_type_t *+)
         n00b_list_push(elements, e);
     }
 
+    // Canonical idiom: heap-allocate + struct-copy BEFORE the heap
+    // shell becomes reachable through tup.elements.
+    n00b_list_t(n00b_tc_type_t *) *elements_ptr =
+        n00b_alloc(n00b_list_t(n00b_tc_type_t *));
+    *elements_ptr = elements;
+
     n00b_tc_tuple_t tup = {
-        .elements = n00b_alloc(n00b_list_t(n00b_tc_type_t *)),
+        .elements = elements_ptr,
         .min_len  = (uint16_t)n00b_list_len(elements),
         .open     = kargs->open,
     };
-    *tup.elements = elements;
 
     _n00b_variant_set_ptr(&t->kind, n00b_tc_tuple_t, tup);
     return t;
@@ -332,14 +362,18 @@ inst_list(inst_ctx_t *ic, n00b_list_t(n00b_tc_type_t *) *src)
     }
 
     size_t n = n00b_list_len(*src);
-    n00b_list_t(n00b_tc_type_t *) *dst = n00b_alloc(n00b_list_t(n00b_tc_type_t *));
-    *dst = n00b_list_new_private(n00b_tc_type_t *);
+
+    // Canonical idiom: populate a fully scan-info-threaded lvalue
+    // first, then struct-copy into the heap-allocated return shell.
+    n00b_list_t(n00b_tc_type_t *) lst = n00b_list_new_private(n00b_tc_type_t *);
 
     for (size_t i = 0; i < n; i++) {
         n00b_tc_type_t *elem = n00b_list_get(*src, i);
-        n00b_list_push(*dst, inst_rec(ic, elem));
+        n00b_list_push(lst, inst_rec(ic, elem));
     }
 
+    n00b_list_t(n00b_tc_type_t *) *dst = n00b_alloc(n00b_list_t(n00b_tc_type_t *));
+    *dst = lst;
     return dst;
 }
 

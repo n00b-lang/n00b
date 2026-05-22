@@ -1348,11 +1348,17 @@ n00b_list_t(size_t) *regex_collect_rev_nulls_debug(const Regex *r,
         return nullptr;
     }
     size_t n = n00b_list_len(*r->inner->nulls);
-    n00b_list_t(size_t) *out = n00b_alloc(n00b_list_t(size_t));
-    *out = n00b_list_new_private(size_t, .scan_kind = N00B_GC_SCAN_KIND_NONE);
+
+    // Canonical idiom: populate a fully scan-info-threaded lvalue
+    // first, then struct-copy into the heap-allocated return shell.
+    n00b_list_t(size_t) lst =
+        n00b_list_new_private(size_t, .scan_kind = N00B_GC_SCAN_KIND_NONE);
     for (size_t i = 0; i < n; ++i) {
-        n00b_list_push(*out, n00b_list_get(*r->inner->nulls, i));
+        n00b_list_push(lst, n00b_list_get(*r->inner->nulls, i));
     }
+
+    n00b_list_t(size_t) *out = n00b_alloc(n00b_list_t(size_t));
+    *out = lst;
     n00b_mutex_unlock((n00b_mutex_t *)&r->inner_lock);
     return out;
 }
