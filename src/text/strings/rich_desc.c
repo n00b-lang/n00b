@@ -4,6 +4,7 @@
 #include "adt/dict_untyped.h"
 #include "core/gc.h"
 #include "core/hash.h"
+#include "core/runtime.h"
 #include "vendor/xxhash.h"
 #include <string.h>
 #include <ctype.h>
@@ -15,14 +16,25 @@
 
 static n00b_dict_untyped_t *rich_desc_cache = nullptr;
 
+static n00b_allocator_t *
+rich_desc_allocator(void)
+{
+    return (n00b_allocator_t *)&n00b_get_runtime()->system_pool;
+}
+
 void
 n00b_rich_desc_cache_init(void)
 {
     if (!rich_desc_cache) {
-        rich_desc_cache = n00b_alloc(n00b_dict_untyped_t);
+        n00b_allocator_t *allocator = rich_desc_allocator();
+
+        rich_desc_cache = n00b_alloc_with_opts(
+            n00b_dict_untyped_t,
+            &(n00b_alloc_opts_t){.allocator = allocator});
         n00b_dict_untyped_init(rich_desc_cache,
                                 .hash           = n00b_hash_word,
-                                .skip_obj_hash  = true);
+                                .skip_obj_hash  = true,
+                                .allocator      = allocator);
         n00b_gc_register_root(rich_desc_cache);
     }
 }
@@ -112,6 +124,7 @@ typedef struct {
     int32_t              count;
     int32_t              cap;
     int32_t              auto_index; // next auto-substitution index
+    n00b_allocator_t    *allocator;
 } seg_list_t;
 
 static void
@@ -119,8 +132,10 @@ seg_push(seg_list_t *sl, n00b_rich_segment_t seg)
 {
     if (sl->count >= sl->cap) {
         int32_t new_cap          = sl->cap ? sl->cap * 2 : 16;
-        n00b_rich_segment_t *new = n00b_alloc_array(n00b_rich_segment_t,
-                                                     new_cap);
+        n00b_rich_segment_t *new = n00b_alloc_array_with_opts(
+            n00b_rich_segment_t,
+            new_cap,
+            &(n00b_alloc_opts_t){.allocator = sl->allocator});
         if (sl->segs) {
             memcpy(new, sl->segs, sl->count * sizeof(n00b_rich_segment_t));
             n00b_free(sl->segs);
@@ -133,9 +148,12 @@ seg_push(seg_list_t *sl, n00b_rich_segment_t seg)
 
 // Copy a NUL-terminated tag name from [start, start+len).
 static char *
-dup_tag(const char *start, int len)
+dup_tag(const char *start, int len, n00b_allocator_t *allocator)
 {
-    char *t = n00b_alloc_array(char, len + 1);
+    char *t = n00b_alloc_array_with_opts(
+        char,
+        len + 1,
+        &(n00b_alloc_opts_t){.allocator = allocator});
     memcpy(t, start, len);
     t[len] = '\0';
     return t;
@@ -203,7 +221,7 @@ emit_tag(seg_list_t *sl, const char *tag_body, int tag_len)
             }
 
             if (rest_len > 0 && rest[0] == ':') {
-                seg.tag = dup_tag(rest + 1, rest_len - 1);
+                seg.tag = dup_tag(rest + 1, rest_len - 1, sl->allocator);
             }
         }
 
@@ -222,7 +240,7 @@ emit_tag(seg_list_t *sl, const char *tag_body, int tag_len)
 
     // --- Role: starts with '@' ---
     if (name[0] == '@') {
-        char *tag_name = dup_tag(name, name_len);
+        char *tag_name = dup_tag(name, name_len, sl->allocator);
         seg_push(sl,
                  (n00b_rich_segment_t){
                      .kind = is_close ? N00B_RICH_ROLE_OFF : N00B_RICH_ROLE_ON,
@@ -234,7 +252,7 @@ emit_tag(seg_list_t *sl, const char *tag_body, int tag_len)
     // --- Inline property? ---
     int prop_off = lookup_prop(name, name_len);
     if (prop_off >= 0) {
-        char *tag_name = dup_tag(name, name_len);
+        char *tag_name = dup_tag(name, name_len, sl->allocator);
         seg_push(sl,
                  (n00b_rich_segment_t){
                      .kind   = is_close ? N00B_RICH_PROP_OFF : N00B_RICH_PROP_ON,
@@ -247,7 +265,7 @@ emit_tag(seg_list_t *sl, const char *tag_body, int tag_len)
     // --- Text case tag? ---
     int case_val = lookup_case(name, name_len);
     if (case_val >= 0) {
-        char *tag_name = dup_tag(name, name_len);
+        char *tag_name = dup_tag(name, name_len, sl->allocator);
         seg_push(sl,
                  (n00b_rich_segment_t){
                      .kind   = is_close ? N00B_RICH_PROP_OFF : N00B_RICH_PROP_ON,
@@ -259,7 +277,7 @@ emit_tag(seg_list_t *sl, const char *tag_body, int tag_len)
     }
 
     // --- Named style (default) ---
-    char *tag_name = dup_tag(name, name_len);
+    char *tag_name = dup_tag(name, name_len, sl->allocator);
     seg_push(sl,
              (n00b_rich_segment_t){
                  .kind = is_close ? N00B_RICH_STYLE_OFF : N00B_RICH_STYLE_ON,
@@ -285,7 +303,9 @@ emit_text(seg_list_t *sl, const char *desc, int start, int end)
 static n00b_rich_desc_t *
 do_parse(const char *desc, int32_t desc_len)
 {
-    seg_list_t sl = {};
+    seg_list_t sl = {
+        .allocator = rich_desc_allocator(),
+    };
     int        i  = 0;
     int        text_start = 0;
 
@@ -355,7 +375,10 @@ do_parse(const char *desc, int32_t desc_len)
 
     // Build result.
     n00b_rich_desc_t *result =
-        n00b_alloc_flex(n00b_rich_desc_t, n00b_rich_segment_t, sl.count);
+        n00b_alloc_flex_with_opts(n00b_rich_desc_t,
+                                  n00b_rich_segment_t,
+                                  sl.count,
+                                  &(n00b_alloc_opts_t){.allocator = sl.allocator});
     result->num_segments = sl.count;
     if (sl.count > 0) {
         memcpy(result->segments, sl.segs,

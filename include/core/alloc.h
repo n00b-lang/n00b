@@ -62,9 +62,112 @@ n00b_mmap_is_gc_scannable(n00b_mmap_info_t *map)
     return true;
 }
 
+/** @brief Thread-local fallback allocator for implicit allocations. */
+extern thread_local n00b_allocator_t *__n00b_current_allocator;
+
+/**
+ * @brief Get the current thread's scoped allocator override.
+ * @return Current override, or nullptr when this thread uses the runtime default.
+ *
+ * The returned allocator is only a fallback for APIs whose allocator
+ * argument is nullptr.  Explicit `.allocator` kwargs always take
+ * precedence over this thread-local override.
+ */
+static inline n00b_allocator_t *
+n00b_current_allocator(void)
+{
+    return __n00b_current_allocator;
+}
+
+/**
+ * @brief Install a current allocator override for this thread.
+ * @param allocator Allocator to use for implicit allocations, or nullptr.
+ * @return The previous thread-local allocator override.
+ *
+ * Use this low-level setter only when the previous value is restored on
+ * every exit path.  The scoped helpers below are preferred for normal use.
+ */
+extern n00b_allocator_t *n00b_set_current_allocator(n00b_allocator_t *allocator);
+
+/**
+ * @brief Alias for @ref n00b_set_current_allocator.
+ * @param allocator Allocator to install for this thread.
+ * @return The previous thread-local allocator override.
+ */
+static inline n00b_allocator_t *
+n00b_push_current_allocator(n00b_allocator_t *allocator)
+{
+    return n00b_set_current_allocator(allocator);
+}
+
+/**
+ * @brief Restore a prior thread-local allocator override.
+ * @param previous Value returned by @ref n00b_set_current_allocator.
+ */
+extern void n00b_restore_current_allocator(n00b_allocator_t *previous);
+
+/**
+ * @brief Guard object for scoped current-allocator overrides.
+ *
+ * Prefer `n00b_with_allocator(allocator) { ... }` or a local variable
+ * annotated with `[[gnu::cleanup(n00b_allocator_scope_exit)]]`.
+ */
+typedef struct {
+    n00b_allocator_t *previous;
+    bool              active;
+    bool              run;
+} n00b_allocator_scope_t;
+
+/**
+ * @brief Enter a scoped current-allocator override.
+ * @param allocator Allocator to use for implicit allocations in this thread.
+ * @return Guard that restores the previous override when exited.
+ *
+ * @pre @p allocator must outlive every allocation made from it.
+ * @post Implicit allocations in this thread use @p allocator until restored.
+ */
+extern n00b_allocator_scope_t n00b_allocator_scope_enter(n00b_allocator_t *allocator);
+
+/**
+ * @brief Exit a scoped current-allocator override.
+ * @param scope Guard returned by @ref n00b_allocator_scope_enter.
+ *
+ * This function is cleanup-safe and idempotent for inactive scopes.
+ */
+extern void n00b_allocator_scope_exit(n00b_allocator_scope_t *scope);
+
+#define _N00B_WITH_ALLOCATOR(_scope_name, _allocator)                                          \
+    for ([[gnu::cleanup(n00b_allocator_scope_exit)]]                                           \
+         n00b_allocator_scope_t _scope_name = n00b_allocator_scope_enter((_allocator));         \
+         _scope_name.run;                                                                      \
+         _scope_name.run = false)
+
+/**
+ * @brief Run a block with a thread-local allocator fallback.
+ *
+ * Example:
+ *
+ * ```c
+ * n00b_with_allocator((n00b_allocator_t *)scratch) {
+ *     n00b_string_t *tmp = n00b_cformat("frame [|#|]", frame_name);
+ * }
+ * ```
+ *
+ * Only allocations that would otherwise use the runtime default are
+ * redirected.  Explicit `.allocator` kwargs still win.  Objects allocated
+ * in the scope must not escape unless the scoped allocator outlives them;
+ * restore the prior allocator before resetting or destroying scratch
+ * arenas/pools.
+ */
+#define n00b_with_allocator(_allocator)                                                        \
+    _N00B_WITH_ALLOCATOR(N00B_CONCAT(_bl_allocator_scope_, __COUNTER__), _allocator)
+
 #define n00b_ensure_allocator(allocator_var)                                                   \
     if (!(allocator_var)) {                                                                    \
-        (allocator_var) = n00b_atomic_load(&n00b_get_runtime()->default_allocator);            \
+        (allocator_var) = n00b_current_allocator();                                            \
+        if (!(allocator_var)) {                                                                \
+            (allocator_var) = n00b_atomic_load(&n00b_get_runtime()->default_allocator);        \
+        }                                                                                      \
         assert(allocator_var);                                                                 \
     }
 
