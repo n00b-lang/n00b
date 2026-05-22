@@ -52,13 +52,13 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <signal.h>
-#include <assert.h>
 #include <stdatomic.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
 #include "n00b.h"
+#include "util/assert.h"
 #include "core/runtime.h"
 #include "core/string.h"
 #include "core/time.h"
@@ -321,7 +321,8 @@ run_server_with(server_opts_t opts)
      * keep the conn pointers and walk their channels each iteration. */
     n00b_option_t(n00b_conduit_topic_base_t *) atopic_opt =
         n00b_quic_endpoint_accept_topic(server);
-    assert(n00b_option_is_set(atopic_opt));
+    n00b_require(n00b_option_is_set(atopic_opt),
+                 "server accept topic must be set");
     n00b_conduit_topic_base_t *atopic = n00b_option_get(atopic_opt);
     n00b_quic_accept_inbox_t *ainbox = n00b_quic_accept_inbox_new(g_conduit);
     n00b_quic_accept_subscribe(atopic, ainbox,
@@ -575,7 +576,8 @@ run_loopback(void)
 
     n00b_option_t(n00b_conduit_topic_base_t *) atopic_opt =
         n00b_quic_endpoint_accept_topic(server);
-    assert(n00b_option_is_set(atopic_opt));
+    n00b_require(n00b_option_is_set(atopic_opt),
+                 "server accept topic must be set");
     n00b_conduit_topic_base_t *atopic = n00b_option_get(atopic_opt);
     n00b_quic_accept_inbox_t *ainbox = n00b_quic_accept_inbox_new(g_conduit);
     n00b_quic_accept_subscribe(atopic, ainbox,
