@@ -91,11 +91,19 @@ unless every pointer to them is visible to the collector.
 
 ## Pools
 
-Pools allocate from pages and are useful for stable, allocator-owned
-service state, fixed-size churn, and subsystems that need non-moving
-addresses. Conduit-owned memory and similar lifecycle state should use
-the owning conduit or subsystem allocator explicitly, not a temporary
-scoped scratch allocator.
+There are two pool-like memory allocators in the checked-in runtime:
+
+- `n00b_pool_t` from `core/pool.h` is the reusable pool allocator. It
+  owns pages, divides them into power-of-two size classes, and uses free
+  lists for reuse.
+- `runtime->slab_allocator` is internal runtime plumbing. It is a hidden,
+  system allocator whose allocation path maps memory directly; callers
+  should not treat it as the normal pool API.
+
+Use `n00b_pool_t` for stable, allocator-owned service state, fixed-size
+churn, and subsystems that need non-moving addresses. Conduit-owned
+memory and similar lifecycle state should use the owning conduit or
+subsystem allocator explicitly, not a temporary scoped scratch allocator.
 
 Destroy a pool only after all objects and cross-thread references backed
 by it are gone. If pool memory stores pointers to GC-managed objects, make
@@ -104,10 +112,11 @@ rooting/ownership that keeps pointer rewriting correct.
 
 ## System And Hidden Allocators
 
-`system_pool` and the slab allocator are internal runtime allocators.
-They are hidden from GC and suitable for runtime metadata, root records,
-locks, and caches that need stable addresses. Do not use them for ordinary
-user objects that need GC traversal.
+`system_pool` is a runtime-owned `n00b_pool_t`. The slab allocator is a
+separate internal runtime allocator. Both are hidden from GC and suitable
+for runtime metadata, root records, locks, and caches that need stable
+addresses. Do not use them for ordinary user objects that need GC
+traversal.
 
 Hidden allocators are invisible to the GC. Use them only for data that is
 opaque to the collector or for runtime-owned metadata whose reachable
