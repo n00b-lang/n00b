@@ -174,6 +174,67 @@ n00b_mmap_lookup(n00b_mmap_ctx_t *ctx, void *addr)
     return n00b_option_none(n00b_mmap_info_t *);
 }
 
+// clang-format off
+n00b_option_t(n00b_alloc_range_t *)
+n00b_mmap_range_by_address(void *addr) _kargs
+{
+    n00b_runtime_t *runtime = n00b_get_runtime();
+}
+// clang-format on
+{
+    uint64_t start = (uint64_t)addr;
+    uint64_t end   = start + 1;
+
+    if (end < start) {
+        return n00b_option_none(n00b_alloc_range_t *);
+    }
+
+    n00b_mmap_ctx_t   *ctx        = n00b_global_mem_map(runtime);
+    mmap_tree_t        *tree       = ctx->mmap_tree;
+    n00b_alloc_range_t *result     = nullptr;
+    uint64_t            result_len = UINT64_MAX;
+
+    mmap_read_lock(ctx);
+    n00b_data_read_lock(tree->lock);
+
+    if (tree->root != nullptr) {
+        n00b_stack_clear(tree->stack);
+        n00b_stack_push(tree->stack, (void *)tree->root);
+        while (n00b_stack_len(tree->stack) != 0) {
+            mmap_node_t *n = (mmap_node_t *)n00b_option_get(
+                n00b_stack_pop(void *, tree->stack));
+
+            if (n->low < end && start < n->high
+                && n00b_variant_is_type(n->data, n00b_alloc_range_t *)) {
+                uint64_t len = n->high - n->low;
+
+                if (len < result_len) {
+                    result     = n00b_variant_get(n->data, n00b_alloc_range_t *);
+                    result_len = len;
+                }
+            }
+            if (n->left != nullptr
+                && n->left->maximum > start
+                && n->left->minimum < end) {
+                n00b_stack_push(tree->stack, (void *)n->left);
+            }
+            if (n->right != nullptr
+                && n->right->maximum > start
+                && n->right->minimum < end) {
+                n00b_stack_push(tree->stack, (void *)n->right);
+            }
+        }
+    }
+
+    n00b_data_unlock(tree->lock);
+    mmap_read_unlock(ctx);
+
+    if (result) {
+        return n00b_option_set(n00b_alloc_range_t *, result);
+    }
+    return n00b_option_none(n00b_alloc_range_t *);
+}
+
 // ============================================================================
 // Initialization
 // ============================================================================
@@ -221,14 +282,17 @@ n00b_mmap_delete_ranges(n00b_mmap_ctx_t *ctx, uint64_t start, uint64_t end)
     }
 }
 
-void
+n00b_alloc_range_t *
 n00b_mmap_register_range(void *startp, void *endp, n00b_mmap_rec_kind_t kind) _kargs
 {
-    n00b_allocator_t    *allocator = nullptr;
-    const char          *file      = nullptr;
-    n00b_gc_scan_kind_t  scan_kind = N00B_GC_SCAN_KIND_DEFAULT;
-    n00b_gc_scan_cb_t    scan_cb   = nullptr;
-    void                *scan_user = nullptr;
+    n00b_allocator_t      *allocator = nullptr;
+    const char            *file      = nullptr;
+    n00b_gc_scan_kind_t    scan_kind = N00B_GC_SCAN_KIND_DEFAULT;
+    n00b_gc_scan_cb_t      scan_cb   = nullptr;
+    void                  *scan_user = nullptr;
+    n00b_alloc_type_info_t tinfo     = 0;
+    uint64_t               object_id = 0;
+    uint32_t               flags     = 0;
 }
 {
     n00b_runtime_t  *rt  = n00b_get_runtime();
@@ -240,12 +304,20 @@ n00b_mmap_register_range(void *startp, void *endp, n00b_mmap_rec_kind_t kind) _k
     uint64_t start = (uint64_t)startp;
     uint64_t end   = (uint64_t)endp;
 
+    assert(end > start);
+
     *range = (n00b_alloc_range_t){
         .start     = startp,
-        .len       = (uint32_t)(end - start),
-        .scan_kind = scan_kind,
+        .tinfo     = tinfo,
         .scan_cb   = scan_cb,
         .scan_user = scan_user,
+        .allocator = allocator,
+        .file      = file,
+        .object_id = object_id,
+        .len       = end - start,
+        .kind      = kind,
+        .scan_kind = scan_kind,
+        .flags     = flags,
     };
 
     n00b_mmap_data_t data = n00b_variant_set(n00b_mmap_data_t, n00b_alloc_range_t *, range);
@@ -253,7 +325,50 @@ n00b_mmap_register_range(void *startp, void *endp, n00b_mmap_rec_kind_t kind) _k
     mmap_write_lock(ctx);
     auto range_r = n00b_interval_insert(ctx->mmap_tree, start, end, data);
     assert(n00b_result_is_ok(range_r));
+    range->tree_node = n00b_result_get(range_r);
     mmap_write_unlock(ctx);
+
+    return range;
+}
+
+// clang-format off
+n00b_alloc_range_t *
+_n00b_static_object_register(void *startp,
+                             size_t len,
+                             n00b_alloc_type_info_t tinfo,
+                             const char *loc) _kargs
+{
+    n00b_gc_scan_kind_t scan_kind = N00B_GC_SCAN_KIND_DEFAULT;
+    n00b_gc_scan_cb_t   scan_cb   = nullptr;
+    void               *scan_user = nullptr;
+    uint64_t            object_id = 0;
+    uint32_t            flags     = 0;
+}
+// clang-format on
+{
+    assert(startp);
+    assert(len > 0);
+
+    char *endp = (char *)startp + len;
+    assert(endp > (char *)startp);
+
+    auto map_opt = n00b_mmap_by_address(startp);
+    assert(n00b_option_is_set(map_opt));
+
+    n00b_mmap_info_t *map = n00b_option_get(map_opt);
+    assert(map->kind == n00b_mmap_static);
+    assert((uint64_t)endp <= map->end);
+
+    return n00b_mmap_register_range(startp,
+                                    endp,
+                                    n00b_mmap_static,
+                                    .file      = loc,
+                                    .tinfo     = tinfo,
+                                    .scan_kind = scan_kind,
+                                    .scan_cb   = scan_cb,
+                                    .scan_user = scan_user,
+                                    .object_id = object_id,
+                                    .flags     = flags);
 }
 
 // ============================================================================

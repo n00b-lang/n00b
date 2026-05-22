@@ -20,6 +20,7 @@
 
 #include "n00b.h"
 #include "core/gc.h"
+#include "core/gc_stack.h"
 #include "core/alloc_mdata.h"
 #include "core/alloc.h"
 #include "core/memory_info.h"
@@ -28,8 +29,6 @@
 #include "core/thread.h"
 #include "core/align.h"
 #include "core/mmaps.h"
-#include "adt/interval_tree.h"
-#include "adt/variant.h"
 #include "core/runtime.h"
 #include "core/pool.h"
 #include "adt/dict_untyped.h"
@@ -53,8 +52,64 @@ static void n00b_add_alloc_to_worklist(n00b_alloc_info_t  ainfo,
 static void n00b_add_range_strided_to_worklist(void *start, uint64_t nwords,
                                                 uint64_t stride, uint64_t offset,
                                                 n00b_collect_t *ctx);
-static void n00b_add_range_to_worklist(void *start, uint32_t nwords,
+static void n00b_add_range_to_worklist(void *start, uint64_t nwords,
                                        n00b_collect_t *ctx);
+static bool n00b_add_alloc_range_to_worklist(n00b_collect_t      *ctx,
+                                             n00b_alloc_range_t  *range);
+
+// ============================================================================
+// Exact stack-map frame publication
+// ============================================================================
+
+n00b_gc_stack_policy_t
+n00b_gc_stack_get_policy(void)
+{
+    return (n00b_gc_stack_policy_t)n00b_thread_self()->gc_stack_policy;
+}
+
+n00b_gc_stack_policy_t
+n00b_gc_stack_set_policy(n00b_gc_stack_policy_t policy)
+{
+    assert(policy <= N00B_GC_STACK_EXACT_ONLY);
+
+    n00b_thread_t         *thread = n00b_thread_self();
+    n00b_gc_stack_policy_t old    = (n00b_gc_stack_policy_t)thread->gc_stack_policy;
+
+    thread->gc_stack_policy = (uint32_t)policy;
+    return old;
+}
+
+void
+n00b_gc_stack_push(n00b_gc_stack_frame_t *frame, const n00b_gc_stack_map_t *map,
+                   void **roots)
+{
+    assert(frame);
+    assert(map);
+    assert(!map->num_roots || roots);
+
+    n00b_thread_t *thread = n00b_thread_self();
+
+    *frame = (n00b_gc_stack_frame_t){
+        .prev  = thread->gc_stack_top,
+        .map   = map,
+        .roots = roots,
+    };
+    thread->gc_stack_top = frame;
+}
+
+void
+n00b_gc_stack_pop(n00b_gc_stack_frame_t *frame)
+{
+    assert(frame);
+
+    n00b_thread_t *thread = n00b_thread_self();
+
+    assert(thread->gc_stack_top == frame);
+    thread->gc_stack_top = frame->prev;
+    frame->prev          = nullptr;
+    frame->map           = nullptr;
+    frame->roots         = nullptr;
+}
 
 // ============================================================================
 // Helpers
@@ -341,7 +396,7 @@ n00b_register_visit(n00b_collect_t    *ctx,
 // ============================================================================
 
 static void
-n00b_add_range_to_worklist(void *start, uint32_t nwords, n00b_collect_t *ctx)
+n00b_add_range_to_worklist(void *start, uint64_t nwords, n00b_collect_t *ctx)
 {
     n00b_gc_wl_item_t *entry;
     entry = n00b_alloc_with_opts(n00b_gc_wl_item_t,
@@ -351,6 +406,76 @@ n00b_add_range_to_worklist(void *start, uint32_t nwords, n00b_collect_t *ctx)
     entry->stride    = 0;  // 0 == legacy scan-every-word
     entry->offset    = 0;
     n00b_list_push(ctx->worklist, entry);
+}
+
+static void
+n00b_add_scan_range_to_worklist(n00b_collect_t       *ctx,
+                                void                 *start,
+                                uint64_t              nwords,
+                                n00b_gc_scan_kind_t   scan_kind,
+                                n00b_gc_scan_cb_t     scan_cb,
+                                void                 *scan_user)
+{
+    if (!nwords || scan_kind == N00B_GC_SCAN_KIND_NONE) {
+        return;
+    }
+
+    if (scan_kind == N00B_GC_SCAN_KIND_EVERY_OTHER) {
+        n00b_add_range_strided_to_worklist(start, nwords, 2, 0, ctx);
+        return;
+    }
+
+    if (scan_kind == N00B_GC_SCAN_KIND_CALLBACK && scan_cb) {
+        n00b_allocator_t *wpool = (n00b_allocator_t *)&ctx->work_pool;
+        uint64_t          bm_words = n00b_gc_map_word_count(nwords);
+        uint64_t         *bitmap   = n00b_alloc_array_with_opts(
+            uint64_t,
+            bm_words,
+            &(n00b_alloc_opts_t){.allocator = wpool});
+
+        for (uint64_t bi = 0; bi < bm_words; bi++) {
+            bitmap[bi] = 0;
+        }
+
+        n00b_gc_map_t m = {.user_ptr = start,
+                           .num_words = nwords,
+                           .bitmap    = bitmap};
+        scan_cb(&m, scan_user);
+
+        for (uint64_t bi = 0; bi < nwords; bi++) {
+            if (n00b_gc_map_is_set(&m, bi)) {
+                n00b_add_range_strided_to_worklist((char *)start
+                                                       + bi * sizeof(void *),
+                                                   1,
+                                                   0,
+                                                   0,
+                                                   ctx);
+            }
+        }
+        return;
+    }
+
+    n00b_add_range_to_worklist(start, nwords, ctx);
+}
+
+static bool
+n00b_add_alloc_range_to_worklist(n00b_collect_t *ctx, n00b_alloc_range_t *range)
+{
+    bool found = false;
+
+    n00b_dict_untyped_get(&ctx->memos, range, &found);
+    if (found) {
+        return false;
+    }
+
+    n00b_dict_untyped_add(&ctx->memos, range, range);
+    n00b_add_scan_range_to_worklist(ctx,
+                                    range->start,
+                                    range->len / sizeof(void *),
+                                    range->scan_kind,
+                                    range->scan_cb,
+                                    range->scan_user);
+    return true;
 }
 
 static void
@@ -543,54 +668,22 @@ n00b_visit_possible_pointer(n00b_collect_t *ctx,
     auto ainfo = n00b_find_alloc_info(word);
 
     if (ainfo.kind != n00b_alloc_oob && ainfo.kind != n00b_alloc_inline) {
-        // Static objects bail if the pointer isn't to the front of the object.
         if (mmap->kind == n00b_mmap_static) {
+            auto range_opt = n00b_mmap_range_by_address((void *)word);
+
+            if (n00b_option_is_set(range_opt)) {
+                n00b_add_alloc_range_to_worklist(ctx, n00b_option_get(range_opt));
+            }
             return false;
         }
 
         ainfo = n00b_find_alloc_info(word, .scan_for_header = true);
 
         if (ainfo.kind != n00b_alloc_oob && ainfo.kind != n00b_alloc_inline) {
-            // Unified mmap tree fallback for non-header allocations.
-            // Search for sub-range entries (n00b_alloc_range_t *) that
-            // cover this word.
-            n00b_runtime_t  *rt   = n00b_get_runtime();
-            n00b_mmap_ctx_t *mctx = n00b_global_mem_map(rt);
+            auto range_opt = n00b_mmap_range_by_address((void *)word);
 
-            n00b_allocator_t *wpool = (n00b_allocator_t *)&ctx->work_pool;
-            n00b_stack_t(void *) range_hits = n00b_stack_new_private(void *, wpool);
-
-            (void)n00b_interval_search(mctx->mmap_tree,
-                                        (uint64_t)word,
-                                        (uint64_t)word + 1,
-                                        &range_hits);
-
-            while (n00b_stack_len(range_hits) > 0) {
-                auto rnode = (n00b_interval_node_t(n00b_mmap_data_t) *)
-                    n00b_option_get(n00b_stack_pop(void *, range_hits));
-
-                if (n00b_variant_is_type(rnode->data, n00b_alloc_range_t *)) {
-                    n00b_alloc_range_t *range = n00b_variant_get(
-                        rnode->data, n00b_alloc_range_t *);
-
-                    // Headerless pool allocations carry their scan
-                    // shape on the alloc_range_t record (there is no
-                    // inline header or OOB entry where it could live).
-                    // Honour NONE here: many pool callers (notably the
-                    // regex pipeline's POD dicts and arrays) need their
-                    // data to be invisible to the conservative scanner.
-                    if (range->scan_kind == N00B_GC_SCAN_KIND_NONE) {
-                        break;
-                    }
-                    uint32_t nwords = range->len / sizeof(void *);
-                    if (range->scan_kind == N00B_GC_SCAN_KIND_EVERY_OTHER) {
-                        n00b_add_range_strided_to_worklist(range->start,
-                                                            nwords, 2, 0, ctx);
-                    } else {
-                        n00b_add_range_to_worklist(range->start, nwords, ctx);
-                    }
-                    break;
-                }
+            if (n00b_option_is_set(range_opt)) {
+                n00b_add_alloc_range_to_worklist(ctx, n00b_option_get(range_opt));
             }
 
             return false;
@@ -700,6 +793,49 @@ n00b_scan_thread_stacks(n00b_collect_t *ctx)
             continue;
         }
 
+        n00b_gc_stack_policy_t stack_policy =
+            (n00b_gc_stack_policy_t)t->gc_stack_policy;
+        bool exact_stack_scanned = false;
+
+        if (stack_policy != N00B_GC_STACK_CONSERVATIVE) {
+            n00b_gc_stack_frame_t *frame = (n00b_gc_stack_frame_t *)t->gc_stack_top;
+
+            if (frame) {
+                exact_stack_scanned = true;
+            }
+
+            while (frame) {
+                const n00b_gc_stack_map_t *map = frame->map;
+
+                assert(map);
+                assert(map->num_slots == 0 || map->slots);
+                assert(map->num_roots == 0 || frame->roots);
+
+                for (uint32_t si = 0; si < map->num_slots; si++) {
+                    const n00b_gc_stack_slot_t *slot = &map->slots[si];
+
+                    assert(slot->root_index < map->num_roots);
+
+                    if (!slot->num_words) {
+                        continue;
+                    }
+
+                    void *addr = frame->roots[slot->root_index];
+                    if (addr) {
+                        n00b_scan_memory_range(ctx, addr, slot->num_words);
+                    }
+                }
+
+                frame = frame->prev;
+            }
+        }
+
+        if (stack_policy == N00B_GC_STACK_EXACT_ONLY
+            || (stack_policy == N00B_GC_STACK_EXACT_WITH_FALLBACK
+                && exact_stack_scanned)) {
+            goto scan_thread_state;
+        }
+
         // Since n00b_scan_memory_range cares about aligned words, we will
         // convert the stack bounds to pointers to the type uint64_t; that
         // way we can subtract the pointers.
@@ -730,6 +866,8 @@ n00b_scan_thread_stacks(n00b_collect_t *ctx)
         assert(num_words > 0);
 
         n00b_scan_memory_range(ctx, top, num_words);
+
+scan_thread_state:
         // Scan the thread structure while we're here.
         n00b_scan_memory_range(ctx,
                                (void *)t,

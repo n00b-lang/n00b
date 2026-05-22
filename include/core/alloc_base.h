@@ -74,15 +74,24 @@ struct n00b_mmap_info_t {
 };
 
 /**
- * @brief Sub-range record for headerless allocations within larger mappings.
+ * @brief Sub-range record for headerless allocations and described static objects.
  *
  * Stored as a variant alternative alongside `n00b_mmap_info_t *` in the
- * unified mmap interval tree.
+ * unified mmap interval tree.  The range carries enough scan and identity
+ * metadata for GC and memory-test APIs without requiring an inline allocation
+ * header at the object's address.
  */
 typedef struct {
-    void               *start;
-    uint32_t            len;
-    n00b_gc_scan_kind_t scan_kind;
-    n00b_gc_scan_cb_t   scan_cb;
-    void               *scan_user;
+    void                    *start;
+    void                    *tree_node;
+    n00b_alloc_type_info_t   tinfo;
+    n00b_gc_scan_cb_t        scan_cb;
+    void                    *scan_user;
+    n00b_allocator_t        *allocator;
+    const char              *file;
+    uint64_t                 object_id;
+    uint64_t                 len;
+    n00b_mmap_rec_kind_t     kind;
+    n00b_gc_scan_kind_t      scan_kind;
+    uint32_t                 flags;
 } n00b_alloc_range_t;

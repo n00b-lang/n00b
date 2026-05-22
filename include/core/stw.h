@@ -43,6 +43,9 @@ extern void _n00b_thread_resume(char *loc);
 /** @brief Check in with the STW subsystem (called after futex waits). */
 extern void n00b_thread_checkin(void);
 
+/** @brief Wait for an active STW owner to release the world. */
+extern void n00b_wait_for_stw_release(void);
+
 /** @brief Register the calling thread with the STW subsystem. */
 extern void n00b_thread_start(void);
 
