@@ -179,7 +179,7 @@ const struct timespec stw_check_timeout = {
 void
 n00b_wait_for_stw_release(void)
 {
-    n00b_runtime_t *rt = n00b_get_runtime();
+    n00b_runtime_t *rt         = n00b_get_runtime();
     jmp_buf         save_state = {0};
 
     n00b_capture_stack_top(n00b_thread_self());
@@ -244,8 +244,10 @@ _n00b_thread_suspend(char *loc)
 void
 _n00b_thread_resume(char *loc)
 {
-    // Threads can try to resume during a STW. We should Go ahead and
-    // turn of 'SUSPEND', but then we will hit the STW when we do the
+    (void)loc;
+
+    // Threads can try to resume during a STW. We should go ahead and
+    // turn off 'SUSPEND', but then we will hit the STW when we do the
     // check-in at the end.
     //
     // However, the STW thread should quick-return; it shouldn't have
@@ -255,8 +257,12 @@ _n00b_thread_resume(char *loc)
     // If that happens, the system will deadlock.
     n00b_runtime_t *rt = n00b_get_runtime();
 
+    n00b_atomic_and(&__n00b_thread_self.self_lock, ~N00B_SUSPEND);
+
     int val = n00b_atomic_load(&rt->stw);
     if (val == get_tid()) {
         return;
     }
+
+    n00b_thread_checkin();
 }

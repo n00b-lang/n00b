@@ -702,6 +702,12 @@ mutex_test = executable('test_mutex',
 )
 test('mutex', mutex_test, suite: 'unit')
 
+stw_test = executable('test_stw',
+    ['test/unit/test_stw.c'],
+    kwargs: test_common_kwargs,
+)
+test('stw', stw_test, suite: 'unit')
+
 rwlock_test = executable('test_rwlock',
     ['test/unit/test_rwlock.c'],
     kwargs: test_common_kwargs,
