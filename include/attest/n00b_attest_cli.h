@@ -571,8 +571,14 @@ n00b_attest_cli_pull(n00b_string_t *image_ref,
  *                    BEFORE the artifact bytes are touched.
  *                    Forwarded verbatim to
  *                    @ref n00b_attest_mark_artifact.
- * @kw allocator      Optional allocator (defaults to runtime).
- *                    Threaded through every downstream call.
+ * @kw allocator       Optional allocator (defaults to runtime).
+ *                     Threaded through every downstream call.
+ * @kw signer_identity Optional resolved signer identity. Forwarded
+ *                     verbatim to @ref n00b_attest_mark_artifact;
+ *                     see that function's @c signer_identity doc
+ *                     for the codec-conditional dispatch shape and
+ *                     URI grammar. `nullptr` (default) selects no
+ *                     re-sign.
  *
  * @return `n00b_result_ok(n00b_attest_mark_result_t *, row)` on
  *         success. Err legs propagate the first failing step's
@@ -587,22 +593,27 @@ n00b_attest_cli_pull(n00b_string_t *image_ref,
  *           N00B_ATTEST_ERR_DSSE_BAD_BASE64) propagated from
  *           @ref n00b_attest_envelope_parse.
  *         - @c _CHALK_BAD_REGISTRY_HINT / @c _CHALK_BAD_ENVELOPE /
- *           @c _CHALK_INSERT_FAILED propagated from
- *           @ref n00b_attest_mark_artifact.
+ *           @c _CHALK_INSERT_FAILED / @c _CHALK_RESIGN_FAILED
+ *           propagated from @ref n00b_attest_mark_artifact.
  *
  * @pre @ref n00b_attest_module_init has been called.
  * @post On Ok, the artifact's bytes have been rewritten in place
  *       (in-band codecs) or a sidecar file has been written
  *       (sidecar codecs). On Err the artifact's bytes are not
- *       touched (validation runs before any byte-mutating op).
+ *       touched (validation runs before any byte-mutating op),
+ *       except for @ref N00B_ATTEST_ERR_CHALK_RESIGN_FAILED where
+ *       the mark insertion succeeded but the re-sign step failed
+ *       — the artifact carries the mark but lacks a platform
+ *       signature.
  */
 extern n00b_result_t(n00b_attest_mark_result_t *)
 n00b_attest_cli_mark(n00b_string_t                *artifact_path,
                      n00b_list_t(n00b_buffer_t *) *envelope_bytes_list) _kargs
 {
-    bool              bundled       = true;
-    n00b_string_t    *registry_hint = nullptr;
-    n00b_allocator_t *allocator     = nullptr;
+    bool                          bundled         = true;
+    n00b_string_t                *registry_hint   = nullptr;
+    n00b_allocator_t             *allocator       = nullptr;
+    n00b_chalk_signer_identity_t *signer_identity = nullptr;
 };
 
 /**

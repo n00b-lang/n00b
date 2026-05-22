@@ -817,6 +817,32 @@
 #define N00B_ATTEST_ERR_CHALK_BAD_ENVELOPE             (-7009)
 
 /**
+ * @brief Module-domain error: libchalk's PE / Mach-O re-sign
+ *        dispatch returned an Err leg during @ref
+ *        n00b_attest_mark_artifact.
+ *
+ * @details Surfaces from @ref n00b_attest_mark_artifact when the
+ * caller-supplied @c signer_identity kwarg is non-null AND the
+ * artifact's codec is PE or Mach-O AND the post-insert
+ * @c n00b_chalk_pe_resign / @c n00b_chalk_macho_resign call
+ * returned @c N00B_CHALK_ERR_RESIGN_FAILED. The libchalk-side Err
+ * code carries no further discrimination today (parse failure,
+ * hash failure, build failure, write failure, codesign(1) bridge
+ * failure, etc. all collapse to the single code); a future
+ * libchalk lift may split it.
+ *
+ * @note When this code surfaces, the mark HAS been inserted —
+ * the artifact's bytes are rewritten with the chalk mark in
+ * place. Only the post-insert signature step failed. Callers
+ * that need atomicity of mark + sign should snapshot the
+ * pre-mark bytes themselves and restore on this Err.
+ *
+ * WP-005 Phase 6 introduces this code (D-046 — phase introduces
+ * codes when it uses them).
+ */
+#define N00B_ATTEST_ERR_CHALK_RESIGN_FAILED            (-7010)
+
+/**
  * @brief Look up a human-readable string for an n00b_attest
  *        module-domain error code.
  *

@@ -103,6 +103,7 @@
 #include "adt/list.h"
 
 #include <chalk/n00b_chalk_codec.h>
+#include <chalk/n00b_chalk_resign.h>
 
 #include <attest/n00b_attest_dsse.h>
 #include <attest/n00b_attest_error.h>
@@ -287,12 +288,33 @@ typedef struct n00b_attest_extract_result {
  *                    `nullptr` (default) omits the field from
  *                    the JSON (the verifier falls back to
  *                    discovery via subject digest).
- * @kw allocator      Optional allocator (defaults to the runtime
- *                    allocator). Threaded through every internal
- *                    allocation (libchalk dispatch, JSON build,
- *                    base64 encode); the returned row type and
- *                    its embedded buffer / string fields all live
- *                    in this allocator.
+ * @kw allocator       Optional allocator (defaults to the runtime
+ *                     allocator). Threaded through every internal
+ *                     allocation (libchalk dispatch, JSON build,
+ *                     base64 encode); the returned row type and
+ *                     its embedded buffer / string fields all live
+ *                     in this allocator.
+ * @kw signer_identity Optional resolved signer identity. When
+ *                     non-null AND the codec is PE or Mach-O, the
+ *                     mark insertion is followed by a re-sign
+ *                     dispatch (`n00b_chalk_pe_resign` /
+ *                     `n00b_chalk_macho_resign`) that hashes the
+ *                     post-mark bytes, builds an Authenticode /
+ *                     Mach-O signature with the supplied identity,
+ *                     and writes the signed binary back. For ELF
+ *                     and all other codecs the kwarg is ignored
+ *                     (the re-sign step is skipped regardless of
+ *                     its value). `nullptr` (default) selects no
+ *                     re-sign: the mark is inserted but no
+ *                     platform signature is added.
+ *
+ *                     Identity URIs are resolved by the caller via
+ *                     `n00b_chalk_signer_identity_resolve` —
+ *                     supported URI shapes are
+ *                     `file://cert.pem,file://key.pem` (paired PEM
+ *                     files) and `store://<name>` (XDG store).
+ *                     `n00b_chalk_signer_identity_release` must be
+ *                     called by the caller on success or failure.
  *
  * @return `n00b_result_ok(n00b_attest_mark_result_t *, row)` on
  *         success — the row carries the pre-insert unchalked
@@ -312,6 +334,15 @@ typedef struct n00b_attest_extract_result {
  *           (codec mismatch, file-read failure, codec-internal
  *           failure, file-write failure; the libchalk Err code
  *           shape is not currently differentiated at this layer).
+ *         - @ref N00B_ATTEST_ERR_CHALK_RESIGN_FAILED — the
+ *           post-insert re-sign dispatch
+ *           (`n00b_chalk_pe_resign` or `n00b_chalk_macho_resign`)
+ *           returned `N00B_CHALK_ERR_RESIGN_FAILED`. The artifact
+ *           HAS been mark-inserted at this point (the bytes are
+ *           rewritten on disk); only the post-insert signature
+ *           step failed. Callers that need atomicity of mark + sign
+ *           should snapshot the pre-mark bytes themselves and
+ *           restore on this Err.
  *         - @ref N00B_ATTEST_ERR_DSSE_BAD_INPUT — a null
  *           envelope was passed in the `envelopes` list, or the
  *           `envelopes` list itself was null/empty, or
@@ -326,16 +357,22 @@ typedef struct n00b_attest_extract_result {
  *
  * @post On Ok, the artifact's bytes have been rewritten in place
  *       (in-band codecs) or a sidecar file has been written
- *       (sidecar codecs). On Err, the artifact's bytes are not
- *       touched (validation runs before any libchalk dispatch).
+ *       (sidecar codecs). For PE / Mach-O artifacts with a
+ *       non-null @c signer_identity, the post-mark bytes have
+ *       additionally been re-signed in place. On Err, the
+ *       artifact's bytes are not touched UNLESS the Err code is
+ *       @ref N00B_ATTEST_ERR_CHALK_RESIGN_FAILED — in that case
+ *       the mark insertion succeeded and the bytes are rewritten
+ *       but unsigned.
  */
 extern n00b_result_t(n00b_attest_mark_result_t *)
 n00b_attest_mark_artifact(n00b_string_t                       *artifact_path,
                           n00b_list_t(n00b_attest_envelope_t *) *envelopes)
     _kargs {
-        bool              bundled       = true;
-        n00b_string_t    *registry_hint = nullptr;
-        n00b_allocator_t *allocator     = nullptr;
+        bool                          bundled         = true;
+        n00b_string_t                *registry_hint   = nullptr;
+        n00b_allocator_t             *allocator       = nullptr;
+        n00b_chalk_signer_identity_t *signer_identity = nullptr;
     };
 
 /**

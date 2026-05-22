@@ -674,9 +674,10 @@ n00b_result_t(n00b_attest_mark_result_t *)
 n00b_attest_cli_mark(n00b_string_t                *artifact_path,
                      n00b_list_t(n00b_buffer_t *) *envelope_bytes_list) _kargs
 {
-    bool              bundled       = true;
-    n00b_string_t    *registry_hint = nullptr;
-    n00b_allocator_t *allocator     = nullptr;
+    bool                          bundled         = true;
+    n00b_string_t                *registry_hint   = nullptr;
+    n00b_allocator_t             *allocator       = nullptr;
+    n00b_chalk_signer_identity_t *signer_identity = nullptr;
 }
 {
     if (artifact_path == nullptr || artifact_path->u8_bytes == 0
@@ -715,9 +716,10 @@ n00b_attest_cli_mark(n00b_string_t                *artifact_path,
 
     return n00b_attest_mark_artifact(artifact_path,
                                       &envs,
-                                      .bundled       = bundled,
-                                      .registry_hint = registry_hint,
-                                      .allocator     = allocator);
+                                      .bundled         = bundled,
+                                      .registry_hint   = registry_hint,
+                                      .allocator       = allocator,
+                                      .signer_identity = signer_identity);
 }
 
 /* ------------------------------------------------------------------

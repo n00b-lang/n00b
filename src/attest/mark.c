@@ -1,4 +1,5 @@
-/* src/attest/mark.c — n00b_attest ↔ libchalk bridge (WP-005 Phase 1).
+/* src/attest/mark.c — n00b_attest ↔ libchalk bridge (WP-005 Phase 1 +
+ *                       Phase 6 signer_identity dispatch).
  *
  * Implements the three "Cut M" library entry points declared in
  * `include/attest/n00b_attest_mark.h`:
@@ -609,9 +610,10 @@ n00b_result_t(n00b_attest_mark_result_t *)
 n00b_attest_mark_artifact(n00b_string_t                       *artifact_path,
                           n00b_list_t(n00b_attest_envelope_t *) *envelopes)
     _kargs {
-        bool              bundled       = true;
-        n00b_string_t    *registry_hint = nullptr;
-        n00b_allocator_t *allocator     = nullptr;
+        bool                          bundled         = true;
+        n00b_string_t                *registry_hint   = nullptr;
+        n00b_allocator_t             *allocator       = nullptr;
+        n00b_chalk_signer_identity_t *signer_identity = nullptr;
     }
 {
     n00b_allocator_t *alloc_for_call = allocator;
@@ -732,6 +734,55 @@ n00b_attest_mark_artifact(n00b_string_t                       *artifact_path,
             return n00b_result_err(n00b_attest_mark_result_t *,
                                    N00B_ATTEST_ERR_CHALK_INSERT_FAILED);
         }
+    }
+
+    // (5c) Post-insert re-sign dispatch (WP-005 Phase 6).
+    //
+    // When the caller supplied a non-null signer_identity AND the
+    // codec is PE or Mach-O, dispatch the corresponding libchalk
+    // re-sign primitive against the now-rewritten artifact bytes.
+    // ELF and all other codecs (ZIP, .pyc, GGUF, safetensors,
+    // source, sidecar) do not have a platform signature concept on
+    // the mark surface and are skipped regardless of identity.
+    //
+    // The re-sign reads the post-mark bytes from disk, computes
+    // the platform-specific code hash, builds the signature blob,
+    // and writes the signed binary back in place. Sidecar codecs
+    // are not affected (`io->kind == N00B_CHALK_OUT_SIDECAR` means
+    // the artifact bytes themselves were never rewritten; the
+    // signer would have nothing to operate on).
+    //
+    // We detect the codec on the original (pre-insert) artifact
+    // bytes because (a) it costs us nothing — `_detect_buffer` is
+    // a magic-byte scan we already amortized via the insert path
+    // — and (b) post-insert detection over an in-band-rewritten
+    // binary returns the same codec id (the chalk section is an
+    // additive transform that does not change the file's magic).
+    if (signer_identity != nullptr
+        && io->kind == N00B_CHALK_OUT_IN_BAND) {
+        n00b_chalk_codec_id_t codec = n00b_chalk_detect_buffer(artifact_bytes,
+                                                                artifact_path);
+        if (codec == N00B_CHALK_CODEC_PE) {
+            auto rsr = n00b_chalk_pe_resign(artifact_path,
+                                             .signer_identity = signer_identity,
+                                             .allocator       = alloc_for_call);
+            if (n00b_result_is_err(rsr)) {
+                return n00b_result_err(n00b_attest_mark_result_t *,
+                                       N00B_ATTEST_ERR_CHALK_RESIGN_FAILED);
+            }
+        }
+        else if (codec == N00B_CHALK_CODEC_MACHO) {
+            auto rsr = n00b_chalk_macho_resign(artifact_path,
+                                                .signer_identity = signer_identity,
+                                                .allocator       = alloc_for_call);
+            if (n00b_result_is_err(rsr)) {
+                return n00b_result_err(n00b_attest_mark_result_t *,
+                                       N00B_ATTEST_ERR_CHALK_RESIGN_FAILED);
+            }
+        }
+        // All other codecs: no platform-signature step. The
+        // `signer_identity` kwarg is documented as ignored for
+        // those codecs (per `_mark_artifact`'s @kw doc).
     }
 
     // (6) Assemble the row type. We copy the pre-insert hash into

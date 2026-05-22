@@ -412,6 +412,12 @@ build_commander(void)
                        N00B_CMDR_TYPE_WORD,
                        true,
                        r"OCI image reference to record (e.g., ghcr.io/foo/bar:tag)");
+    n00b_cmdr_add_flag(c,
+                       r"mark",
+                       r"--signer-identity",
+                       N00B_CMDR_TYPE_WORD,
+                       true,
+                       r"Signer identity URI for post-mark PE/Mach-O re-sign (file://cert.pem,file://key.pem or store://<name>)");
 
     // unmark subcommand (WP-005 Phase 2).
     n00b_cmdr_add_command(c,
@@ -1073,10 +1079,36 @@ verb_mark(n00b_cmdr_result_t *result)
         }
     }
 
+    // Optional signer identity (WP-005 Phase 6). Resolve once,
+    // thread into mark, release on every exit path. The resolver
+    // accepts nullptr URI as Ok(nullptr) — that is the "no resign"
+    // mode also selected by omitting the flag.
+    n00b_chalk_signer_identity_t *signer_identity = nullptr;
+    if (n00b_cmdr_flag_present(result, r"--signer-identity")) {
+        n00b_string_t *uri = n00b_cmdr_flag_str(result, r"--signer-identity");
+        if (uri == nullptr || uri->u8_bytes == 0) {
+            n00b_eprintf(
+                "n00b-attest mark: --signer-identity <uri> may not be empty");
+            return 1;
+        }
+        auto ir = n00b_chalk_signer_identity_resolve(uri);
+        if (n00b_result_is_err(ir)) {
+            n00b_eprintf("n00b-attest mark: cannot resolve signer identity "
+                         "(code «#»)",
+                         (int64_t)n00b_result_get_err(ir));
+            return 1;
+        }
+        signer_identity = n00b_result_get(ir);
+    }
+
     auto r = n00b_attest_cli_mark(artifact_path,
                                    &envs,
-                                   .bundled       = bundled,
-                                   .registry_hint = registry_hint);
+                                   .bundled         = bundled,
+                                   .registry_hint   = registry_hint,
+                                   .signer_identity = signer_identity);
+    // Release the resolved identity before returning, on every
+    // path. `_release` is safe on nullptr.
+    n00b_chalk_signer_identity_release(signer_identity);
     if (n00b_result_is_err(r)) {
         print_attest_error_diagnostic("mark failed",
                                       n00b_result_get_err(r));
@@ -1373,6 +1405,10 @@ print_usage(void)
         "  --lazy                   Record only digest+predicate-type "
         "(default: bundled)\n"
         "  --registry-hint <ref>    OCI image reference recorded in the mark\n"
+        "  --signer-identity <uri>  Signer identity URI for post-mark "
+        "PE/Mach-O re-sign\n"
+        "                           (file://cert.pem,file://key.pem or "
+        "store://<name>)\n"
         "\n"
         "unmark flags:\n"
         "  --artifact <path>        Artifact filesystem path (required)\n"

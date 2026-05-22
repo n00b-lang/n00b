@@ -1085,6 +1085,59 @@ test('attest_extract_from_artifact',
      attest_extract_from_artifact_test,
      suite: 'unit')
 
+# WP-005 Phase 6: end-to-end mark + extract regression on the ELF
+# codec (no resign step — the no-resign dispatch path on a
+# signer_identity = nullptr call). Always-runs. Builds a tiny ELF
+# fixture in-process via libn00b's ELF builder. IC-4 invariant
+# verified end-to-end: the SHA-256 of the pre-mark artifact bytes
+# equals the extracted envelope's subject.digest.sha256.
+attest_mark_elf_e2e_test = executable(
+    'test_attest_mark_elf_e2e',
+    ['test/unit/test_attest_mark_elf_e2e.c'],
+    kwargs: test_common_kwargs,
+)
+test('attest_mark_elf_e2e',
+     attest_mark_elf_e2e_test,
+     suite: 'unit')
+
+# WP-005 Phase 6: end-to-end mark + Authenticode resign regression
+# on the PE codec (cross-platform Authenticode signing — the P4
+# resign primitive is deterministic and runs on any host). Always-
+# runs. Uses an in-test synthetic PE32+ binary (`n00b_pe_binary_new`)
+# and the committed PEM fixtures resolved via MESON_SOURCE_ROOT.
+# IC-4 invariant verified end-to-end.
+attest_mark_pe_e2e_test = executable(
+    'test_attest_mark_pe_e2e',
+    ['test/unit/test_attest_mark_pe_e2e.c'],
+    kwargs: test_common_kwargs,
+)
+test('attest_mark_pe_e2e',
+     attest_mark_pe_e2e_test,
+     suite: 'unit',
+     env: {'MESON_SOURCE_ROOT': meson.project_source_root()},
+     workdir: meson.current_build_dir())
+
+# WP-005 Phase 6: end-to-end mark + Mach-O resign regression,
+# host-gated to macOS (the resign body relies on the
+# Security-framework / codesign(1) bridge). Uses the committed
+# test/unit/data/hello.macho fixture + the PEM fixtures resolved
+# via MESON_SOURCE_ROOT. IC-4 invariant verified end-to-end; the
+# post-resign bytes are additionally checked via
+# /usr/bin/codesign --verify --deep --strict (non-fatal SKIP on
+# tooling failure).
+if host_machine.system() == 'darwin'
+    attest_mark_macho_e2e_test = executable(
+        'test_attest_mark_macho_e2e_macos',
+        ['test/unit/test_attest_mark_macho_e2e_macos.c'],
+        kwargs: test_common_kwargs,
+    )
+    test('attest_mark_macho_e2e_macos',
+         attest_mark_macho_e2e_test,
+         suite: 'unit',
+         env: {'MESON_SOURCE_ROOT': meson.project_source_root()},
+         workdir: meson.project_source_root())
+endif
+
 # WP-005 Phase 2: `n00b_attest_cli_mark` end-to-end regression
 # (envelope-bytes → parse → mark dispatch). Always-runs; exercises
 # the IC-4 unchalked-hash contract through the Phase-2 wrapper,

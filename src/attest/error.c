@@ -35,8 +35,10 @@
  * `_CHALK_NO_ATTESTATION`, `_CHALK_MALFORMED_ATTESTATION`,
  * `_CHALK_CODEC_LOOKUP_FAILED`), three libchalk-dispatch passthroughs
  * (`_CHALK_INSERT_FAILED`, `_CHALK_EXTRACT_FAILED`,
- * `_CHALK_DELETE_FAILED`), and `_CHALK_BAD_ENVELOPE`. Total now
- * forty-two codes.
+ * `_CHALK_DELETE_FAILED`), and `_CHALK_BAD_ENVELOPE`. WP-005 Phase
+ * 6 adds one code — `_CHALK_RESIGN_FAILED` (-7010) for the
+ * post-insert PE / Mach-O re-sign dispatch failure path. Total now
+ * forty-three codes.
  *
  * Unknown codes return a documented fallback string (per the
  * api-guidelines § 5 contract that domain-specific `*_err_str`
@@ -168,6 +170,10 @@ n00b_attest_err_str(n00b_err_t err)
         return r"chalk: libchalk delete_file dispatch returned an error";
     case N00B_ATTEST_ERR_CHALK_BAD_ENVELOPE:
         return r"chalk: input envelope is structurally malformed";
+
+    // Chalk integration (-7010), WP-005 Phase 6.
+    case N00B_ATTEST_ERR_CHALK_RESIGN_FAILED:
+        return r"chalk: libchalk PE/Mach-O re-sign dispatch returned an error";
 
     default:
         return r"unknown attest error code";
