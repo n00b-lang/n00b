@@ -154,31 +154,6 @@ write_tempfile(n00b_buffer_t *bytes, const char *prefix)
     return path;
 }
 
-// Extract the subject[0].digest.sha256 hex (64 chars) from the
-// raw Statement payload bytes via a textual scan — the public
-// Statement API does not currently expose a subject-getter, so
-// we operate directly on the payload's UTF-8 bytes (the in-toto
-// Statement v1 format is JSON; we look for the "sha256":"..." pair
-// inside subject[0].digest). Returns a pointer into the buffer on
-// success; nullptr on failure.
-static const char *
-find_subject_sha256_hex(const char *json, size_t len)
-{
-    static const char key[] = "\"sha256\":\"";
-    const char *p   = json;
-    const char *end = json + len;
-    while (p + sizeof(key) - 1 < end) {
-        if (memcmp(p, key, sizeof(key) - 1) == 0) {
-            const char *hex = p + sizeof(key) - 1;
-            if (hex + 64 <= end) {
-                return hex;
-            }
-        }
-        p++;
-    }
-    return nullptr;
-}
-
 static void
 test_elf_round_trip_no_resign(void)
 {
@@ -228,20 +203,20 @@ test_elf_round_trip_no_resign(void)
 
     // (5) Recover the extracted envelope's Statement bytes and
     // assert the embedded subject.digest.sha256 equals the
-    // pre-mark hash we recorded BEFORE step (3). We use a textual
-    // scan over the payload — the public Statement API has no
-    // subject-getter, but the JSON shape is well-known.
+    // pre-mark hash we recorded BEFORE step (3). DF-028 closure:
+    // the typed accessor n00b_attest_subject_get_digest_sha256
+    // replaces the previous textual JSON scan over the payload.
     n00b_attest_envelope_t *out_env = exrow->envelopes->data[0];
     auto pr = n00b_attest_envelope_get_payload(out_env);
     ASSERT_OK(pr);
     n00b_buffer_t *pay = n00b_result_get(pr);
-    // Confirm the Statement parses cleanly via the public API.
     auto sr = n00b_attest_statement_parse(pay);
     ASSERT_OK(sr);
+    n00b_attest_statement_t *parsed_stmt = n00b_result_get(sr);
 
-    const char *digest_hex = find_subject_sha256_hex(pay->data,
-                                                     (size_t)pay->byte_len);
-    assert(digest_hex != nullptr);
+    n00b_string_t *got = n00b_attest_subject_get_digest_sha256(parsed_stmt, 0);
+    assert(got != nullptr);
+    assert(got->u8_bytes == 64);
 
     // Convert pre_mark_hash to hex and compare.
     static const char hex[] = "0123456789abcdef";
@@ -252,11 +227,11 @@ test_elf_round_trip_no_resign(void)
     }
     expected_hex[64] = '\0';
 
-    int cmp = memcmp(digest_hex, expected_hex, 64);
+    int cmp = memcmp(got->data, expected_hex, 64);
     if (cmp != 0) {
         fprintf(stderr, "  digest mismatch:\n    extracted: %.64s\n"
                         "    pre-mark : %s\n",
-                digest_hex, expected_hex);
+                got->data, expected_hex);
         assert(0);
     }
 

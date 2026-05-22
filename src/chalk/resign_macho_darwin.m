@@ -168,22 +168,134 @@ resign_adhoc(const char *path)
 }
 
 /* -------------------------------------------------------------------------
+ * CF helper: release a CFTypeRef if non-NULL. Avoids the repeated
+ * `if (x) CFRelease(x)` boilerplate at every cleanup point.
+ * ------------------------------------------------------------------------- */
+static inline void
+cf_release_if(CFTypeRef ref)
+{
+    if (ref) {
+        CFRelease(ref);
+    }
+}
+
+/* -------------------------------------------------------------------------
+ * Build a temporary keychain path: $TMPDIR/n00b_chalk_resign_<pid>_<ns>.keychain.
+ *
+ * The trailing nanoseconds component keeps two concurrent invocations
+ * from colliding. Writes into the supplied buffer (caller-sized).
+ * Returns 0 on success, non-zero on a buffer-overflow guard.
+ * ------------------------------------------------------------------------- */
+static int
+make_temp_keychain_path(char *out, size_t out_sz)
+{
+    const char *tmp = getenv("TMPDIR");
+    if (!tmp || !*tmp) {
+        tmp = "/tmp";
+    }
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    const char *sep = (tmp[strlen(tmp) - 1] == '/') ? "" : "/";
+    int rc = snprintf(out,
+                      out_sz,
+                      "%s%sn00b_chalk_resign_%d_%lld.keychain",
+                      tmp,
+                      sep,
+                      (int)getpid(),
+                      (long long)ts.tv_nsec);
+    if (rc <= 0 || (size_t)rc >= out_sz) {
+        return -1;
+    }
+    return 0;
+}
+
+/* -------------------------------------------------------------------------
+ * Extract the subject CN from a SecCertificateRef as a malloc'd C
+ * string. Returns NULL on failure. Caller frees with free().
+ *
+ * Uses SecCertificateCopySubjectSummary as the public-API path; this
+ * returns the most-specific subject component (CN if present, else
+ * O / OU). For test fixtures generated with
+ * `-subj "/CN=n00b-attest test fixture"` the summary equals the CN.
+ * ------------------------------------------------------------------------- */
+static char *
+copy_cert_subject_cn(SecCertificateRef cert)
+{
+    if (!cert) {
+        return NULL;
+    }
+    CFStringRef summary = SecCertificateCopySubjectSummary(cert);
+    if (!summary) {
+        return NULL;
+    }
+    CFIndex len = CFStringGetLength(summary);
+    CFIndex max = CFStringGetMaximumSizeForEncoding(len, kCFStringEncodingUTF8) + 1;
+    char   *out = (char *)malloc((size_t)max);
+    if (!out) {
+        CFRelease(summary);
+        return NULL;
+    }
+    if (!CFStringGetCString(summary, out, max, kCFStringEncodingUTF8)) {
+        free(out);
+        CFRelease(summary);
+        return NULL;
+    }
+    CFRelease(summary);
+    return out;
+}
+
+/* -------------------------------------------------------------------------
  * Real-identity signing path.
  *
- * 1. Create a temporary keychain at $TMPDIR/n00b_chalk_resign_<pid>_<ns>.keychain.
- * 2. Build a CFData from the cert DER bytes and a CFData from the
- *    PKCS#8 key DER bytes (we keep the key DER intact — the
- *    PKCS#8-encoded form is what SecItemImport accepts).
- * 3. SecItemImport(cert_data, format=X509Cert, keyParams={keychain=kc}).
- * 4. SecItemImport(key_data,  format=PKCS8,    keyParams={keychain=kc,
- *                                                          passphrase=""}).
- * 5. Look up the matching SecIdentityRef in the temp keychain.
- * 6. Extract the cert's subject CN string.
- * 7. Invoke `codesign -s <CN> --keychain <kc> <path>`.
- * 8. Release CF types in reverse order.
- * 9. Delete the temp keychain file (it's a self-contained file).
+ * Steps (each can fail empirically; the failure path emits a precise
+ * stderr line + falls back to ad-hoc rather than leaving the binary
+ * unsigned):
+ *
+ * 1. Pull cert + key DER pointer-pairs out of the opaque identity via
+ *    the `_raw` accessors (defined in src/chalk/resign_identity.c).
+ * 2. Create a fresh temporary keychain at
+ *    $TMPDIR/n00b_chalk_resign_<pid>_<ns>.keychain.
+ * 3. Wrap cert + key DER bytes in CFData.
+ * 4. SecItemImport(cert_data, format=X509Cert, type=Cert, keychain=kc).
+ * 5. SecItemImport(key_data,  format=WrappedPKCS8, type=PrivateKey,
+ *                  keychain=kc, passphrase=""). picotls's PEM decoder
+ *                  emits raw PKCS#8 DER, so kSecFormatWrappedPKCS8 is
+ *                  the format that matches the bytes.
+ * 6. SecIdentityCreateWithCertificate(kc, cert) → SecIdentityRef. This
+ *    binds the cert to the just-imported key.
+ * 7. SecIdentityCopyCertificate → cert ref → SecCertificateCopySubjectSummary
+ *    → C string. That string is the `codesign -s <CN>` argument.
+ * 8. Invoke `codesign --force --sign <CN> --keychain <kc> <path>`.
+ * 9. Release CF types in reverse order, then SecKeychainDelete on the
+ *    temp keychain so we don't leave it in the user's keychain list.
  *
  * Returns 0 on success, non-zero on failure.
+ *
+ * # Empirical-fallback rule (per DF-027 dispatch)
+ *
+ * If any Security-framework call fails on this host, emit a precise
+ * stderr line naming the call + OSStatus, then fall back to
+ * resign_adhoc(path). The fallback is honest: the caller gets a
+ * signed binary (just not Gatekeeper-acceptable) plus a diagnostic
+ * that explains why the real-identity path was bypassed.
+ *
+ * # SDK-deprecation notes
+ *
+ * - `SecKeychainCreate` / `SecKeychainDelete` are tagged
+ *   `API_DEPRECATED(...)` as of macOS 10.10 but still ship on macOS
+ *   15.x and remain the only public-SDK path to a *file-backed*
+ *   keychain. The modern `SecKeychain`-free APIs (`SecItemAdd` with
+ *   kSecUseDataProtectionKeychain) target the iCloud-style data-
+ *   protection keychain, which `codesign(1)` can't enumerate.
+ * - `SecItemImport` accepts a `keychain` parameter via its
+ *   SecItemImportExportKeyParameters struct; the parameter is the
+ *   `SecKeychainRef` we just created.
+ *
+ * Both deprecations are documented above as inline comments and
+ * silenced at the call sites with `#pragma clang diagnostic
+ * ignored "-Wdeprecated-declarations"` push/pop pairs — no global
+ * suppression at the meson level, so unrelated deprecations still
+ * produce diagnostics.
  * ------------------------------------------------------------------------- */
 static int
 resign_with_identity(const char                   *path,
@@ -194,32 +306,260 @@ resign_with_identity(const char                   *path,
         return -1;
     }
 
-    /* The identity stashes the PKCS#8 key DER in a buffer (not
-     * exposed via an accessor — only the (n, d) byte slices are
-     * exported). For the SecItemImport path we'd need the raw
-     * PKCS#8 PEM/DER. The opaque struct stores the PKCS#8 DER
-     * already; future ergonomics WP will expose an accessor.
-     *
-     * For now, this code path is the simple shape that works for
-     * the ad-hoc and `store://` cases. The `file://cert,file://key`
-     * path requires accessor extension; future WP scope. The
-     * dispatch's "no new deferrals" rule applies to features
-     * listed in the WP-005 plan §Phase 5 dispositions, not to
-     * downstream accessor surface — that's lifted in P6 / future
-     * ergonomics.
-     *
-     * Until the PKCS#8 accessor lands, real-identity resign falls
-     * back to ad-hoc signing with a warning. The strip-only
-     * fallback in the non-macOS branch is the documented
-     * cross-platform behavior; on macOS, ad-hoc signing is the
-     * closest equivalent.
-     */
-    fprintf(stderr,
-            "[n00b_chalk] warning: macOS real-identity Mach-O re-sign "
-            "requires a PKCS#8 key accessor that is not yet exposed; "
-            "falling back to ad-hoc signing for: %s\n",
-            path);
-    return resign_adhoc(path);
+    /* (1) Pull cert + key DER bytes via the _raw accessors. */
+    const uint8_t *cert_bytes = NULL;
+    size_t         cert_len   = 0;
+    const uint8_t *key_bytes  = NULL;
+    size_t         key_len    = 0;
+    _n00b_chalk_signer_identity_cert_der_raw(id, &cert_bytes, &cert_len);
+    _n00b_chalk_signer_identity_key_der_raw(id, &key_bytes, &key_len);
+
+    if (cert_bytes == NULL || cert_len == 0
+        || key_bytes == NULL || key_len == 0) {
+        fprintf(stderr,
+                "[n00b_chalk] warning: macOS real-identity re-sign: "
+                "cert/key DER bytes unavailable on the identity handle "
+                "(cert_len=%zu, key_len=%zu); falling back to ad-hoc "
+                "signing for: %s\n",
+                cert_len, key_len, path);
+        return resign_adhoc(path);
+    }
+
+    /* (2) Build the temp keychain path + a random-bytes password. */
+    char kc_path[1024];
+    if (make_temp_keychain_path(kc_path, sizeof(kc_path)) != 0) {
+        fprintf(stderr,
+                "[n00b_chalk] warning: macOS real-identity re-sign: "
+                "could not compose temp keychain path; falling back "
+                "to ad-hoc for: %s\n", path);
+        return resign_adhoc(path);
+    }
+
+    /* Empty password — SecKeychainCreate accepts a zero-length
+     * password when promptUser is false. The keychain is scoped to
+     * this process and deleted at exit; no real secrecy needed. */
+    const char *pw_bytes = "";
+    UInt32      pw_len   = 0;
+
+    /* SecKeychainCreate is deprecated since macOS 10.10 (per
+     * Apple's <Security/SecKeychain.h> annotation) but remains the
+     * only public-SDK path to a file-backed legacy keychain that
+     * codesign(1) can enumerate. Suppress only the deprecation
+     * warning at the call site — global suppression in
+     * meson.build would mask future, unrelated deprecations. */
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    SecKeychainRef kc = NULL;
+    OSStatus       st = SecKeychainCreate(kc_path,
+                                          pw_len,
+                                          pw_bytes,
+                                          FALSE,  /* promptUser */
+                                          NULL,   /* initialAccess */
+                                          &kc);
+#pragma clang diagnostic pop
+    if (st != errSecSuccess || kc == NULL) {
+        fprintf(stderr,
+                "[n00b_chalk] warning: macOS real-identity re-sign: "
+                "SecKeychainCreate failed (OSStatus=%d); falling back "
+                "to ad-hoc for: %s\n",
+                (int)st, path);
+        /* nothing to clean up; kc is NULL on failure */
+        return resign_adhoc(path);
+    }
+
+    int rc = -1;
+
+    /* (3) Wrap cert + key bytes in CFData. */
+    CFDataRef cert_data = CFDataCreate(kCFAllocatorDefault,
+                                       cert_bytes,
+                                       (CFIndex)cert_len);
+    CFDataRef key_data  = CFDataCreate(kCFAllocatorDefault,
+                                       key_bytes,
+                                       (CFIndex)key_len);
+    if (!cert_data || !key_data) {
+        fprintf(stderr,
+                "[n00b_chalk] warning: macOS real-identity re-sign: "
+                "CFDataCreate failed; falling back to ad-hoc for: %s\n",
+                path);
+        goto cleanup;
+    }
+
+    /* (4) Import the cert. SecItemImport et al. are tagged
+     * API_DEPRECATED for the file-keychain code path; same
+     * justification as SecKeychainCreate above. */
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    SecExternalFormat   cert_fmt   = kSecFormatX509Cert;
+    SecExternalItemType cert_type  = kSecItemTypeCertificate;
+    CFArrayRef          cert_items = NULL;
+    SecItemImportExportKeyParameters cert_params = {};
+    cert_params.version            = SEC_KEY_IMPORT_EXPORT_PARAMS_VERSION;
+    cert_params.flags              = 0;
+    cert_params.passphrase         = NULL;
+    cert_params.alertTitle         = NULL;
+    cert_params.alertPrompt        = NULL;
+    cert_params.accessRef          = NULL;
+    cert_params.keyUsage           = NULL;
+    cert_params.keyAttributes      = NULL;
+
+    st = SecItemImport(cert_data,
+                       NULL,           /* fileNameOrExtension */
+                       &cert_fmt,
+                       &cert_type,
+                       0,              /* flags */
+                       &cert_params,
+                       kc,             /* importKeychain */
+                       &cert_items);
+#pragma clang diagnostic pop
+    if (st != errSecSuccess || !cert_items || CFArrayGetCount(cert_items) == 0) {
+        fprintf(stderr,
+                "[n00b_chalk] warning: macOS real-identity re-sign: "
+                "SecItemImport(cert, kSecFormatX509Cert) failed "
+                "(OSStatus=%d); falling back to ad-hoc for: %s\n",
+                (int)st, path);
+        cf_release_if(cert_items);
+        goto cleanup;
+    }
+
+    /* (5) Import the PKCS#8 private key. picotls's PEM decoder
+     * emits raw PKCS#8 PrivateKeyInfo bytes for "PRIVATE KEY"
+     * blocks, which is exactly the kSecFormatWrappedPKCS8 wire
+     * shape. The empty-passphrase CFString is required even
+     * though the key bytes are not actually encrypted —
+     * SecItemImport returns errSecPassphraseRequired without it. */
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    SecExternalFormat   key_fmt   = kSecFormatWrappedPKCS8;
+    SecExternalItemType key_type  = kSecItemTypePrivateKey;
+    CFArrayRef          key_items = NULL;
+
+    CFStringRef empty_pw_str = CFSTR("");
+    SecItemImportExportKeyParameters key_params = {};
+    key_params.version             = SEC_KEY_IMPORT_EXPORT_PARAMS_VERSION;
+    key_params.flags               = 0;
+    key_params.passphrase          = empty_pw_str;
+    key_params.alertTitle          = NULL;
+    key_params.alertPrompt         = NULL;
+    key_params.accessRef           = NULL;
+    key_params.keyUsage            = NULL;
+    key_params.keyAttributes       = NULL;
+
+    st = SecItemImport(key_data,
+                       NULL,
+                       &key_fmt,
+                       &key_type,
+                       0,
+                       &key_params,
+                       kc,
+                       &key_items);
+    if (st != errSecSuccess) {
+        /* Second try: some SDK versions reject WrappedPKCS8 for an
+         * unencrypted PrivateKeyInfo and require kSecFormatOpenSSL
+         * (which matches RSA PRIVATE KEY DER, not PKCS#8). Try
+         * kSecFormatUnknown and let the framework auto-detect. */
+        key_fmt = kSecFormatUnknown;
+        cf_release_if(key_items);
+        key_items = NULL;
+        st = SecItemImport(key_data,
+                           NULL,
+                           &key_fmt,
+                           &key_type,
+                           0,
+                           &key_params,
+                           kc,
+                           &key_items);
+    }
+#pragma clang diagnostic pop
+    if (st != errSecSuccess || !key_items || CFArrayGetCount(key_items) == 0) {
+        fprintf(stderr,
+                "[n00b_chalk] warning: macOS real-identity re-sign: "
+                "SecItemImport(key) failed (OSStatus=%d); falling back "
+                "to ad-hoc for: %s\n",
+                (int)st, path);
+        cf_release_if(key_items);
+        CFRelease(cert_items);
+        goto cleanup;
+    }
+
+    /* (6) Bind cert + key into a SecIdentityRef.
+     * SecIdentityCreateWithCertificate searches the supplied
+     * keychain (we restrict to our temp keychain) for a matching
+     * private key. */
+    SecCertificateRef cert_ref = (SecCertificateRef)CFArrayGetValueAtIndex(
+        cert_items, 0);
+    SecIdentityRef    ident    = NULL;
+    /* The "keychainOrArray" arg accepts a single keychain or a
+     * CFArray. We pass the single ref. */
+    st = SecIdentityCreateWithCertificate((CFTypeRef)kc, cert_ref, &ident);
+    if (st != errSecSuccess || !ident) {
+        fprintf(stderr,
+                "[n00b_chalk] warning: macOS real-identity re-sign: "
+                "SecIdentityCreateWithCertificate failed (OSStatus=%d); "
+                "falling back to ad-hoc for: %s\n",
+                (int)st, path);
+        cf_release_if(ident);
+        CFRelease(key_items);
+        CFRelease(cert_items);
+        goto cleanup;
+    }
+
+    /* (7) Extract the subject CN as a C string for codesign -s. */
+    char *cn = copy_cert_subject_cn(cert_ref);
+    if (!cn) {
+        fprintf(stderr,
+                "[n00b_chalk] warning: macOS real-identity re-sign: "
+                "could not extract cert subject CN; falling back to "
+                "ad-hoc for: %s\n", path);
+        CFRelease(ident);
+        CFRelease(key_items);
+        CFRelease(cert_items);
+        goto cleanup;
+    }
+
+    /* (8) Invoke codesign(1) with the identity CN + temp keychain. */
+    rc = run_codesign(cn, kc_path, path);
+    if (rc != 0) {
+        fprintf(stderr,
+                "[n00b_chalk] warning: macOS real-identity re-sign: "
+                "codesign(1) returned %d for identity '%s'; falling "
+                "back to ad-hoc for: %s\n",
+                rc, cn, path);
+    }
+
+    free(cn);
+    CFRelease(ident);
+    CFRelease(key_items);
+    CFRelease(cert_items);
+
+    /* On a non-zero codesign rc the binary still has the prior (or
+     * no) signature; ad-hoc is the safer fallback. */
+    if (rc != 0) {
+        rc = resign_adhoc(path);
+    }
+
+cleanup:
+    cf_release_if(key_data);
+    cf_release_if(cert_data);
+
+    /* SecKeychainDelete both removes the keychain from the
+     * search list and deletes the on-disk file. We always do this
+     * — leaving it would clutter the test host's keychain list.
+     * Same deprecation rationale as SecKeychainCreate above. */
+    if (kc) {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+        SecKeychainDelete(kc);
+#pragma clang diagnostic pop
+        CFRelease(kc);
+    }
+
+    /* If we never made it to step 8 (rc still -1 from initial
+     * value) the goto'd to cleanup paths each printed a precise
+     * warning + we still need to actually sign. */
+    if (rc == -1) {
+        rc = resign_adhoc(path);
+    }
+    return rc;
 }
 
 /* -------------------------------------------------------------------------

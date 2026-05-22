@@ -244,6 +244,45 @@ n00b_attest_statement_get_predicate_type(n00b_attest_statement_t *st)
     return st->predicate_type;
 }
 
+n00b_string_t *
+n00b_attest_subject_get_digest_sha256(n00b_attest_statement_t *st,
+                                      size_t                   subject_index)
+_kargs {
+    n00b_allocator_t *allocator = nullptr;
+}
+{
+    if (st == nullptr) {
+        return nullptr;
+    }
+    if (subject_index >= st->subjects.len) {
+        return nullptr;
+    }
+    subject_entry_t *entry = st->subjects.data[subject_index];
+    if (entry == nullptr) {
+        return nullptr;
+    }
+
+    // Threading rule: prefer the call-site allocator kwarg; if absent,
+    // use the one captured at builder construction time (matches the
+    // pattern used by _add_subject / _set_predicate_*).
+    n00b_allocator_t *alloc_for_call = allocator ? allocator : st->allocator;
+
+    // Walk the parallel digest_algs / digest_hexes arrays looking
+    // for the first sha256 entry. Linear scan is fine — subjects
+    // carry at most a handful of digest algs each.
+    for (size_t i = 0; i < entry->digest_algs.len; i++) {
+        n00b_string_t *alg = entry->digest_algs.data[i];
+        if (alg == nullptr) continue;
+        if (alg->u8_bytes != 6) continue;
+        if (memcmp(alg->data, "sha256", 6) != 0) continue;
+
+        n00b_string_t *hex = entry->digest_hexes.data[i];
+        if (hex == nullptr) return nullptr;
+        return copy_string(hex, alloc_for_call);
+    }
+    return nullptr;
+}
+
 n00b_result_t(bool)
 n00b_attest_statement_set_predicate_json(n00b_attest_statement_t *st,
                                          n00b_buffer_t           *predicate_json)

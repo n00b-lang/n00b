@@ -167,24 +167,6 @@ slurp_path(const char *path)
     return out;
 }
 
-static const char *
-find_subject_sha256_hex(const char *json, size_t len)
-{
-    static const char key[] = "\"sha256\":\"";
-    const char *p   = json;
-    const char *end = json + len;
-    while (p + sizeof(key) - 1 < end) {
-        if (memcmp(p, key, sizeof(key) - 1) == 0) {
-            const char *hex = p + sizeof(key) - 1;
-            if (hex + 64 <= end) {
-                return hex;
-            }
-        }
-        p++;
-    }
-    return nullptr;
-}
-
 static void
 test_pe_round_trip_with_resign(void)
 {
@@ -253,10 +235,12 @@ test_pe_round_trip_with_resign(void)
     n00b_buffer_t *pay = n00b_result_get(pr);
     auto sr = n00b_attest_statement_parse(pay);
     ASSERT_OK(sr);
+    n00b_attest_statement_t *parsed_stmt = n00b_result_get(sr);
 
-    const char *digest_hex = find_subject_sha256_hex(pay->data,
-                                                     (size_t)pay->byte_len);
-    assert(digest_hex != nullptr);
+    // DF-028 closure: typed accessor replaces textual JSON scan.
+    n00b_string_t *got = n00b_attest_subject_get_digest_sha256(parsed_stmt, 0);
+    assert(got != nullptr);
+    assert(got->u8_bytes == 64);
 
     static const char hex[] = "0123456789abcdef";
     char expected_hex[65];
@@ -265,11 +249,11 @@ test_pe_round_trip_with_resign(void)
         expected_hex[i * 2 + 1] = hex[pre_mark_hash[i] & 0xf];
     }
     expected_hex[64] = '\0';
-    int cmp = memcmp(digest_hex, expected_hex, 64);
+    int cmp = memcmp(got->data, expected_hex, 64);
     if (cmp != 0) {
         fprintf(stderr, "  digest mismatch:\n    extracted: %.64s\n"
                         "    pre-mark : %s\n",
-                digest_hex, expected_hex);
+                got->data, expected_hex);
         assert(0);
     }
 

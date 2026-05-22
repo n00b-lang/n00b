@@ -140,6 +140,53 @@ _n00b_chalk_signer_identity_rsa(n00b_chalk_signer_identity_t *id,
 }
 
 // ---------------------------------------------------------------------------
+// Raw (pure-C) accessors for the .m bridge.
+//
+// Declared in `internal/chalk/resign_macho_raw.h` so the
+// Objective-C compiler (which cannot parse the ncc-extended
+// `resign_identity_internal.h`) can read the cert + key DER
+// pointer-pair from the opaque handle. Behavior mirrors the
+// typed accessors above: writes NULL / 0 on a nullptr handle
+// (matches the existing typed-accessor null-handling pattern).
+// ---------------------------------------------------------------------------
+
+void
+_n00b_chalk_signer_identity_cert_der_raw(n00b_chalk_signer_identity_t *id,
+                                         const uint8_t              **out_bytes,
+                                         size_t                       *out_len)
+{
+    if (!id || !id->cert_der) {
+        *out_bytes = nullptr;
+        *out_len   = 0;
+        return;
+    }
+    *out_bytes = (const uint8_t *)id->cert_der->data;
+    *out_len   = id->cert_der->byte_len;
+}
+
+void
+_n00b_chalk_signer_identity_key_der_raw(n00b_chalk_signer_identity_t *id,
+                                        const uint8_t              **out_bytes,
+                                        size_t                       *out_len)
+{
+    // Mirrors the cert-DER accessor; the PKCS#8 key DER is the
+    // raw payload SecItemImport accepts under
+    // kSecFormatWrappedPKCS8 (the format picotls's PEM decoder
+    // emits for "PRIVATE KEY" PEM blocks). When the identity has
+    // been scrubbed via n00b_chalk_signer_identity_release, the
+    // backing buffer's byte_len is zeroed; we surface that as the
+    // "no key bytes available" signal the .m file uses to fall
+    // back to ad-hoc.
+    if (!id || !id->key_der || id->key_der->byte_len == 0) {
+        *out_bytes = nullptr;
+        *out_len   = 0;
+        return;
+    }
+    *out_bytes = (const uint8_t *)id->key_der->data;
+    *out_len   = id->key_der->byte_len;
+}
+
+// ---------------------------------------------------------------------------
 // URI parsing — internal helpers
 // ---------------------------------------------------------------------------
 

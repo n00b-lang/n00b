@@ -246,3 +246,55 @@ n00b_attest_statement_parse(n00b_buffer_t *bytes) _kargs
  */
 extern n00b_string_t *
 n00b_attest_statement_get_predicate_type(n00b_attest_statement_t *st);
+
+/**
+ * @brief Borrow / clone the SHA-256 digest hex string of the
+ *        Statement's `subject[subject_index]`.
+ *
+ * Returns the lowercase-hex encoding of the 32-byte SHA-256 digest
+ * stored in `subject[subject_index].digest.sha256` of the in-toto
+ * Statement v1 shape (FR-3 / D-024). The accessor is the typed
+ * replacement for the textual JSON scan the P6 E2E tests previously
+ * used to verify the IC-4 invariant (DF-028).
+ *
+ * The returned string is allocated through the `.allocator` kwarg
+ * (or the Statement's owning allocator if the kwarg is absent), so
+ * the caller may keep it past the Statement's lifetime if they
+ * route allocators accordingly. The bytes are an independent copy,
+ * not a borrow.
+ *
+ * @param st             The Statement (constructed via
+ *                       @ref n00b_attest_statement_new or
+ *                       @ref n00b_attest_statement_parse).
+ * @param subject_index  Zero-based index into `subject[]`.
+ *
+ * @kw allocator  Optional allocator for the returned hex string
+ *                (defaults to `nullptr` — use the Statement's
+ *                owning allocator, or the runtime default if the
+ *                Statement was constructed without one).
+ *
+ * @return The lowercase-hex SHA-256 string (64 chars). Returns
+ *         `nullptr` when:
+ *           - `st` is null,
+ *           - `subject_index` is out of range,
+ *           - the subject has no sha256 digest entry.
+ *
+ * @pre `st` was returned by @ref n00b_attest_statement_new or
+ *      @ref n00b_attest_statement_parse.
+ *
+ * @post The returned string lives in the allocator named by the
+ *       `.allocator` kwarg (or the Statement's owning allocator
+ *       when the kwarg is absent). It has `u8_bytes == 64` and
+ *       `codepoints == 64` for any valid sha256 digest entry.
+ *
+ * @note Only the first sha256 entry is returned — multi-digest
+ *       subjects (e.g., both sha256 and sha512) are honored by the
+ *       JSON shape but only sha256 is exercised this WP. Other
+ *       digest algorithms are not surfaced through this accessor.
+ */
+extern n00b_string_t *
+n00b_attest_subject_get_digest_sha256(n00b_attest_statement_t *st,
+                                      size_t                   subject_index)
+_kargs {
+    n00b_allocator_t *allocator = nullptr;
+};
