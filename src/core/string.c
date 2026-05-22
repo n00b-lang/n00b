@@ -69,13 +69,19 @@ n00b_string_from_raw(const char *src, int64_t byte_len)
         int64_t          *cp_count  = nullptr;
     }
 {
-    (void)allocator;
     (void)cp_count;
-    return n00b_new_kargs(n00b_string_t, string,
-                          .src       = src,
-                          .byte_len  = byte_len,
-                          .allocator = kargs->allocator,
-                          .cp_count  = kargs->cp_count);
+    n00b_allocator_t *resolved_allocator = allocator;
+
+    n00b_ensure_allocator(resolved_allocator);
+
+    return n00b_alloc_with_opts(
+        n00b_string_t,
+        &(n00b_alloc_opts_t){.allocator = resolved_allocator},
+        n00b_kargs(string,
+                   .src       = src,
+                   .byte_len  = byte_len,
+                   .allocator = resolved_allocator,
+                   .cp_count  = kargs->cp_count));
 }
 
 n00b_string_t *

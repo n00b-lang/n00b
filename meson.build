@@ -707,6 +707,12 @@ finalizer_test = executable('test_finalizer',
 )
 test('finalizer', finalizer_test, suite: 'unit')
 
+current_allocator_test = executable('test_current_allocator',
+    ['test/unit/test_current_allocator.c'],
+    kwargs: test_common_kwargs,
+)
+test('current_allocator', current_allocator_test, suite: 'unit')
+
 buffer_test = executable('test_buffer',
     ['test/unit/test_buffer.c'],
     kwargs: test_common_kwargs,

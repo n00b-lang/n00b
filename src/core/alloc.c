@@ -18,7 +18,43 @@
 
 extern uint64_t         n00b_gc_guard;
 const n00b_alloc_opts_t _n00b_default_alloc_opts = {};
+thread_local n00b_allocator_t *__n00b_current_allocator = nullptr;
 static void             n00b_run_and_remove_finalizers(void *ptr);
+
+n00b_allocator_t *
+n00b_set_current_allocator(n00b_allocator_t *allocator)
+{
+    n00b_allocator_t *previous = __n00b_current_allocator;
+    __n00b_current_allocator   = allocator;
+    return previous;
+}
+
+void
+n00b_restore_current_allocator(n00b_allocator_t *previous)
+{
+    __n00b_current_allocator = previous;
+}
+
+n00b_allocator_scope_t
+n00b_allocator_scope_enter(n00b_allocator_t *allocator)
+{
+    return (n00b_allocator_scope_t){
+        .previous = n00b_set_current_allocator(allocator),
+        .active   = true,
+        .run      = true,
+    };
+}
+
+void
+n00b_allocator_scope_exit(n00b_allocator_scope_t *scope)
+{
+    if (!scope || !scope->active) {
+        return;
+    }
+
+    n00b_restore_current_allocator(scope->previous);
+    scope->active = false;
+}
 
 static inline void
 n00b_alloc_add_inline_header(n00b_inline_hdr_t **hdrp,

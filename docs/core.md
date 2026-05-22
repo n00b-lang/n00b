@@ -95,6 +95,9 @@ Linux uses `SYS_futex`; macOS uses `__ulock_wait2()` / `__ulock_wake()`.
 
 ## Memory allocation
 
+For allocator choice and lifetime guidance, see
+[`docs/allocation.md`](allocation.md).
+
 ### Public API &mdash; `core/alloc.h`
 
 Always use these macros &mdash; never call `_n00b_alloc_raw()` directly:
@@ -141,6 +144,42 @@ resource_t *r = n00b_alloc(resource_t,
                            .finalizer      = my_cleanup,
                            .finalizer_data = extra_info);
 ```
+
+### Thread-local scoped allocator fallback
+
+`n00b_with_allocator(allocator) { ... }` installs a thread-local
+allocator fallback for the current block.  `n00b_ensure_allocator()`
+resolves allocators in this order:
+
+1. Explicit `.allocator` kwargs.
+2. The current thread's scoped allocator.
+3. The runtime default allocator.
+
+Use this for bounded scratch work where all objects allocated in the
+scope are temporary:
+
+```c
+n00b_with_allocator((n00b_allocator_t *)scratch_arena) {
+    n00b_string_t *tmp = n00b_cformat("decoded [|#|]", field_name);
+    // Use tmp only inside the scope, or make sure scratch_arena outlives it.
+}
+```
+
+The override is thread-local: n00b worker threads and the main thread
+have independent current allocators.  Restore the previous allocator
+before resetting or destroying a scratch arena/pool.  Objects allocated
+from the scoped allocator must not escape the block unless that
+allocator outlives every escaped object.
+
+GC visibility still follows the allocator's normal mmap and scan
+metadata.  A scoped allocator pointer to an arena header does not by
+itself make the collector descend into the whole arena, but any pointer
+to a visible scratch allocation found in scanned roots, thread stacks, or
+thread records can cause that scratch allocation to be scanned.  Pointers
+stored inside it can therefore keep other GC objects live until the
+scratch references are gone or the scratch allocator is reset/destroyed.
+Use hidden/no-scan allocator settings only when the caller also accounts
+for the resulting tracing and pointer-rewrite behavior.
 
 ### Allocator interface &mdash; `core/alloc_base.h`
 
