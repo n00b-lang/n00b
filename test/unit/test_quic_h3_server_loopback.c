@@ -399,8 +399,13 @@ test_get_basic(void)
     }
     int rc = 0;
 
-    auto reqr = n00b_h3_client_request(L.client_h3, "GET", "https",
-                                       "localhost", "/");
+    auto reqr = n00b_h3_client_request(
+        L.client_h3,
+        (n00b_h3_request_spec_t){
+            .method    = "GET",
+            .authority = "localhost",
+            .path      = "/",
+        });
     if (n00b_result_is_err(reqr)) {
         printf("  [FAIL] get_basic: client_request err=%d\n",
                n00b_result_get_err(reqr));
@@ -427,8 +432,13 @@ test_get_basic(void)
     }
 
     /* Respond 200 "ok\n". */
-    auto rr = n00b_h3_inbound_request_respond(ireq, 200, nullptr, 0,
-                                              (const uint8_t *)"ok\n", 3);
+    auto rr = n00b_h3_inbound_request_respond(
+        ireq,
+        (n00b_h3_response_spec_t){
+            .status   = 200,
+            .body     = (const uint8_t *)"ok\n",
+            .body_len = 3,
+        });
     if (n00b_result_is_err(rr)) {
         printf("  [FAIL] get_basic: respond err=%d\n",
                n00b_result_get_err(rr));
@@ -477,10 +487,15 @@ test_post_with_body(void)
     const char *payload = "ping";
     size_t      paylen  = strlen(payload);
 
-    auto reqr = n00b_h3_client_request(L.client_h3, "POST", "https",
-                                       "localhost", "/",
-                                       .body     = (const uint8_t *)payload,
-                                       .body_len = paylen);
+    auto reqr = n00b_h3_client_request(
+        L.client_h3,
+        (n00b_h3_request_spec_t){
+            .method    = "POST",
+            .authority = "localhost",
+            .path      = "/",
+            .body      = (const uint8_t *)payload,
+            .body_len  = paylen,
+        });
     if (n00b_result_is_err(reqr)) {
         printf("  [FAIL] post_with_body: client_request err=%d\n",
                n00b_result_get_err(reqr));
@@ -504,8 +519,12 @@ test_post_with_body(void)
     }
 
     auto rr = n00b_h3_inbound_request_respond(
-        ireq, 200, nullptr, 0,
-        (const uint8_t *)bodybuf->data, (size_t)bodybuf->byte_len);
+        ireq,
+        (n00b_h3_response_spec_t){
+            .status   = 200,
+            .body     = (const uint8_t *)bodybuf->data,
+            .body_len = (size_t)bodybuf->byte_len,
+        });
     if (n00b_result_is_err(rr)) {
         printf("  [FAIL] post_with_body: respond err=%d\n",
                n00b_result_get_err(rr));
@@ -550,8 +569,13 @@ test_status_404(void)
     }
     int rc = 0;
 
-    auto reqr = n00b_h3_client_request(L.client_h3, "GET", "https",
-                                       "localhost", "/missing");
+    auto reqr = n00b_h3_client_request(
+        L.client_h3,
+        (n00b_h3_request_spec_t){
+            .method    = "GET",
+            .authority = "localhost",
+            .path      = "/missing",
+        });
     if (n00b_result_is_err(reqr)) {
         printf("  [FAIL] status_404: client_request err=%d\n",
                n00b_result_get_err(reqr));
@@ -565,8 +589,9 @@ test_status_404(void)
         rc = 1; goto done;
     }
 
-    auto rr = n00b_h3_inbound_request_respond(ireq, 404, nullptr, 0,
-                                              nullptr, 0);
+    auto rr = n00b_h3_inbound_request_respond(
+        ireq,
+        (n00b_h3_response_spec_t){ .status = 404 });
     if (n00b_result_is_err(rr)) {
         printf("  [FAIL] status_404: respond err=%d\n",
                n00b_result_get_err(rr));
@@ -611,8 +636,13 @@ test_server_reset(void)
     }
     int rc = 0;
 
-    auto reqr = n00b_h3_client_request(L.client_h3, "GET", "https",
-                                       "localhost", "/");
+    auto reqr = n00b_h3_client_request(
+        L.client_h3,
+        (n00b_h3_request_spec_t){
+            .method    = "GET",
+            .authority = "localhost",
+            .path      = "/",
+        });
     if (n00b_result_is_err(reqr)) {
         printf("  [FAIL] server_reset: client_request err=%d\n",
                n00b_result_get_err(reqr));
@@ -668,8 +698,13 @@ test_goaway_on_close(void)
     int rc = 0;
 
     /* First request: succeeds normally. */
-    auto reqr1 = n00b_h3_client_request(L.client_h3, "GET", "https",
-                                        "localhost", "/");
+    auto reqr1 = n00b_h3_client_request(
+        L.client_h3,
+        (n00b_h3_request_spec_t){
+            .method    = "GET",
+            .authority = "localhost",
+            .path      = "/",
+        });
     if (n00b_result_is_err(reqr1)) {
         printf("  [FAIL] goaway_on_close: req1 err=%d\n",
                n00b_result_get_err(reqr1));
@@ -682,8 +717,13 @@ test_goaway_on_close(void)
         printf("  [FAIL] goaway_on_close: req1 server never received\n");
         rc = 1; goto done;
     }
-    auto rr1 = n00b_h3_inbound_request_respond(ireq1, 200, nullptr, 0,
-                                                (const uint8_t *)"ok\n", 3);
+    auto rr1 = n00b_h3_inbound_request_respond(
+        ireq1,
+        (n00b_h3_response_spec_t){
+            .status   = 200,
+            .body     = (const uint8_t *)"ok\n",
+            .body_len = 3,
+        });
     if (n00b_result_is_err(rr1)) {
         printf("  [FAIL] goaway_on_close: req1 respond err=%d\n",
                n00b_result_get_err(rr1));
@@ -727,8 +767,13 @@ test_goaway_on_close(void)
      * If client_request itself returns err (because the client saw
      * GOAWAY before we issued it and refuses to open new streams past
      * the limit), that's also a pass. */
-    auto reqr2 = n00b_h3_client_request(L.client_h3, "GET", "https",
-                                        "localhost", "/again");
+    auto reqr2 = n00b_h3_client_request(
+        L.client_h3,
+        (n00b_h3_request_spec_t){
+            .method    = "GET",
+            .authority = "localhost",
+            .path      = "/again",
+        });
     if (n00b_result_is_err(reqr2)) {
         int32_t e = n00b_result_get_err(reqr2);
         printf("  [PASS] goaway_on_close (req2 refused at issue: err=%d %s)\n",

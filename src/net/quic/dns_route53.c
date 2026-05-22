@@ -419,10 +419,19 @@ r53_close(n00b_quic_dns_provider_t *self)
 }
 
 n00b_result_t(n00b_quic_dns_provider_t *)
-n00b_quic_dns_provider_route53(const char *access_key,
-                               const char *secret_key,
-                               const char *session_token,
-                               const char *hosted_zone_id)
+n00b_quic_dns_provider_route53(n00b_quic_dns_route53_config_t config)
+{
+    return n00b_quic_dns_provider_route53_raw(config.access_key,
+                                             config.secret_key,
+                                             config.session_token,
+                                             config.hosted_zone_id);
+}
+
+n00b_result_t(n00b_quic_dns_provider_t *)
+n00b_quic_dns_provider_route53_raw(const char *access_key,
+                                   const char *secret_key,
+                                   const char *session_token,
+                                   const char *hosted_zone_id)
 {
     if (!access_key || !secret_key || !hosted_zone_id ||
         access_key[0] == '\0' || secret_key[0] == '\0' ||

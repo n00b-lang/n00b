@@ -369,6 +369,12 @@ n00b_quic_endpoint_accept_topic(n00b_quic_endpoint_t *ep);
  */
 extern uint16_t n00b_quic_endpoint_local_port(n00b_quic_endpoint_t *ep);
 
+typedef struct {
+    const uint8_t *cert_der_bytes;
+    size_t         cert_der_len;
+    const char    *key_pem_path;
+} n00b_quic_cert_reload_t;
+
 /**
  * @brief Hot-reload the server cert + key on a listening endpoint.
  *
@@ -387,16 +393,8 @@ extern uint16_t n00b_quic_endpoint_local_port(n00b_quic_endpoint_t *ep);
  * failures.  Per-cnx atomic swap via picotls's `on_client_hello`
  * hook is a Phase 2 follow-up.
  *
- * @param ep              Endpoint (must have been created with `listen=true`).
- *
- * @kw cert_der_bytes     New cert chain — DER bytes of the leaf
- *                        certificate.  Borrowed; copied internally.
- * @kw cert_der_len       Length of @p cert_der_bytes in bytes.
- * @kw key_pem_path       Path to the new private key (PEM PKCS#8).
- *                        picotls reads, parses, and closes the file
- *                        before this call returns.
- *
- * All three kwargs are required.
+ * @param ep      Endpoint (must have been created with `listen=true`).
+ * @param reload  New cert chain DER bytes and private-key PEM path.
  *
  * @return Result: ok(true) on success;
  *         err(@c N00B_QUIC_ERR_INVALID_ARG) on missing args or
@@ -405,7 +403,17 @@ extern uint16_t n00b_quic_endpoint_local_port(n00b_quic_endpoint_t *ep);
  *         new key.
  */
 extern n00b_result_t(bool)
-n00b_quic_endpoint_reload_cert(n00b_quic_endpoint_t *ep)
+n00b_quic_endpoint_reload_cert(n00b_quic_endpoint_t *ep,
+                               n00b_quic_cert_reload_t reload);
+
+/**
+ * @brief Low-level cert reload API.
+ *
+ * Most callers should prefer `n00b_quic_endpoint_reload_cert` so the
+ * required reload fields are grouped at the call site.
+ */
+extern n00b_result_t(bool)
+n00b_quic_endpoint_reload_cert_raw(n00b_quic_endpoint_t *ep)
     _kargs {
         const uint8_t *cert_der_bytes = nullptr;
         size_t         cert_der_len   = 0;

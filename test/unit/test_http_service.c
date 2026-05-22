@@ -132,7 +132,7 @@ hello_handler(n00b_http_request_t *req,
     state->seen++;
     assert(s_eq(n00b_http_request_method(req), "GET"));
     assert(s_eq(n00b_http_request_path(req), "/hello"));
-    n00b_http_response_writer_text(resp, r"hello", r"text/plain");
+    n00b_http_response_writer_text(resp, r"hello");
 }
 
 static void
@@ -147,6 +147,20 @@ echo_handler(n00b_http_request_t *req,
     assert(s_eq(n00b_http_request_header(req, r"x-test"), "yes"));
     n00b_http_response_writer_body(resp, n00b_http_request_body(req));
     n00b_http_response_writer_header(resp, r"content-type", r"text/plain");
+}
+
+static void
+meta_handler(n00b_http_request_t *req,
+             n00b_http_response_writer_t *resp,
+             void *user_data)
+{
+    handler_state_t *state = user_data;
+    state->seen++;
+    assert(s_eq(n00b_http_request_method(req), "GET"));
+    assert(s_eq(n00b_http_request_path(req), "/meta"));
+    n00b_http_response_writer_text(resp,
+                                   r"{\"ok\":true}",
+                                   .content_type = r"application/json");
 }
 
 static void
@@ -266,6 +280,112 @@ test_body_limit(void)
     printf("  [PASS] body limit and repeat shutdown\n");
 }
 
+static void
+test_content_length_overflow(void)
+{
+    n00b_http_service_t *svc = n00b_http_service_new(.bind_port = 0);
+    auto sr = n00b_http_service_start(svc);
+    assert(n00b_result_is_ok(sr));
+
+    char *resp = http_round_trip(n00b_http_service_port(svc),
+                                 "POST /x HTTP/1.1\r\n"
+                                 "Host: 127.0.0.1\r\n"
+                                 "Content-Length: 18446744073709551616\r\n"
+                                 "\r\n");
+    assert(status_code(resp) == 400);
+    n00b_http_service_stop(svc);
+    printf("  [PASS] content-length overflow rejected\n");
+}
+
+static void
+test_route_metadata_and_discovery(void)
+{
+    handler_state_t state = {};
+
+    n00b_http_service_t *svc = n00b_http_service_new(.bind_port = 0);
+    auto rr = n00b_http_get(svc,
+                            (n00b_http_endpoint_t){
+                                .path = r"/meta",
+                                .handler = meta_handler,
+                                .user_data = &state,
+                                .id = r"getMeta",
+                                .summary = r"Get metadata",
+                                .tags = n00b_http_tags(r"metadata"),
+                                .query = n00b_http_params(
+                                    n00b_http_query_param(
+                                        r"verbose",
+                                        .schema_json = r"{\"type\":\"boolean\"}",
+                                        .description = r"include optional details")),
+                                .responses = n00b_http_responses(
+                                    n00b_http_json_response(
+                                        200,
+                                        .description = r"metadata response",
+                                        .schema_json = r"{\"type\":\"object\",\"required\":[\"ok\"]}")),
+                            });
+    assert(n00b_result_is_ok(rr));
+    rr = n00b_http_service_route(svc, r"GET", r"/legacy",
+                                 hello_handler, nullptr);
+    assert(n00b_result_is_ok(rr));
+
+    auto dr = n00b_http_discover(svc,
+                                 (n00b_http_discovery_doc_t){
+                                     .service_id = r"test-service",
+                                     .name = r"Test Service",
+                                     .version = r"1.2.3",
+                                     .api_version = r"v1",
+                                     .schemas = n00b_http_schemas(
+                                         r"/schemas/test.json"),
+                                     .capabilities = n00b_http_capabilities(
+                                         r"metadata.read"),
+                                 });
+    assert(n00b_result_is_ok(dr));
+    auto sr = n00b_http_service_start(svc);
+    assert(n00b_result_is_ok(sr));
+
+    char *resp = http_round_trip(n00b_http_service_port(svc),
+                                 "GET /meta?verbose=true HTTP/1.1\r\n"
+                                 "Host: 127.0.0.1\r\n"
+                                 "\r\n");
+    assert(status_code(resp) == 200);
+    assert(strstr(body_ptr(resp), "\"ok\":true") != nullptr);
+    assert(state.seen == 1);
+
+    resp = http_round_trip(n00b_http_service_port(svc),
+                           "GET /openapi.json HTTP/1.1\r\n"
+                           "Host: 127.0.0.1\r\n"
+                           "\r\n");
+    assert(status_code(resp) == 200);
+    assert(strstr(body_ptr(resp), "\"openapi\":\"3.1.0\"") != nullptr);
+    assert(strstr(body_ptr(resp), "\"/meta\"") != nullptr);
+    assert(strstr(body_ptr(resp), "\"/legacy\"") != nullptr);
+    assert(strstr(body_ptr(resp), "\"/openapi.json\"") != nullptr);
+    assert(strstr(body_ptr(resp), "\"/.well-known/openapi.json\"") != nullptr);
+    assert(strstr(body_ptr(resp), "\"/.well-known/test-service\"") != nullptr);
+    assert(strstr(body_ptr(resp), "\"operationId\":\"getMeta\"") != nullptr);
+    assert(strstr(body_ptr(resp), "\"operationId\":\"getOpenAPI\"") != nullptr);
+    assert(strstr(body_ptr(resp), "\"operationId\":\"getWellKnownService\"") != nullptr);
+    assert(strstr(body_ptr(resp), "\"verbose\"") != nullptr);
+
+    resp = http_round_trip(n00b_http_service_port(svc),
+                           "GET /.well-known/openapi.json HTTP/1.1\r\n"
+                           "Host: 127.0.0.1\r\n"
+                           "\r\n");
+    assert(status_code(resp) == 200);
+    assert(strstr(body_ptr(resp), "\"/meta\"") != nullptr);
+
+    resp = http_round_trip(n00b_http_service_port(svc),
+                           "GET /.well-known/test-service HTTP/1.1\r\n"
+                           "Host: 127.0.0.1\r\n"
+                           "\r\n");
+    assert(status_code(resp) == 200);
+    assert(strstr(body_ptr(resp), "\"service\":\"test-service\"") != nullptr);
+    assert(strstr(body_ptr(resp), "\"openapi\":\"/openapi.json\"") != nullptr);
+    assert(strstr(body_ptr(resp), "\"metadata.read\"") != nullptr);
+
+    n00b_http_service_stop(svc);
+    printf("  [PASS] route metadata and discovery\n");
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -283,5 +403,7 @@ main(int argc, char *argv[])
     test_404_and_405();
     test_header_limit();
     test_body_limit();
+    test_content_length_overflow();
+    test_route_metadata_and_discovery();
     return 0;
 }

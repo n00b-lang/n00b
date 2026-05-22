@@ -438,7 +438,11 @@ client_setup(demo_client_t *c, uint16_t server_port)
         fprintf(stderr, "client: handshake didn't complete\n");
         return false;
     }
-    c->chan = n00b_rpc_channel_new(c->h3, "https", "127.0.0.1");
+    c->chan = n00b_rpc_channel_new(
+        (n00b_rpc_channel_spec_t){
+            .h3        = c->h3,
+            .authority = "127.0.0.1",
+        });
     if (!c->chan) return false;
 
     /* DPoP signer for the vault calls. */

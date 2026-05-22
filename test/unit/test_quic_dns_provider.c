@@ -58,14 +58,21 @@ static void
 test_cloudflare_args(void)
 {
     /* Missing args. */
-    assert(n00b_result_is_err(n00b_quic_dns_provider_cloudflare(NULL, "z")));
-    assert(n00b_result_is_err(n00b_quic_dns_provider_cloudflare("t", NULL)));
-    assert(n00b_result_is_err(n00b_quic_dns_provider_cloudflare("", "z")));
-    assert(n00b_result_is_err(n00b_quic_dns_provider_cloudflare("t", "")));
+    assert(n00b_result_is_err(n00b_quic_dns_provider_cloudflare(
+        (n00b_quic_dns_cloudflare_config_t){ .zone_id = "z" })));
+    assert(n00b_result_is_err(n00b_quic_dns_provider_cloudflare(
+        (n00b_quic_dns_cloudflare_config_t){ .api_token = "t" })));
+    assert(n00b_result_is_err(n00b_quic_dns_provider_cloudflare(
+        (n00b_quic_dns_cloudflare_config_t){ .api_token = "", .zone_id = "z" })));
+    assert(n00b_result_is_err(n00b_quic_dns_provider_cloudflare(
+        (n00b_quic_dns_cloudflare_config_t){ .api_token = "t", .zone_id = "" })));
 
     /* Successful construction (without making network calls). */
     auto r = n00b_quic_dns_provider_cloudflare(
-        "tok-fake", "00112233445566778899aabbccddeeff");
+        (n00b_quic_dns_cloudflare_config_t){
+            .api_token = "tok-fake",
+            .zone_id   = "00112233445566778899aabbccddeeff",
+        });
     assert(n00b_result_is_ok(r));
     n00b_quic_dns_provider_t *p = n00b_result_get(r);
     assert(strcmp(p->name, "cloudflare") == 0);
@@ -216,17 +223,26 @@ static void
 test_route53_args(void)
 {
     /* Missing args. */
-    assert(n00b_result_is_err(n00b_quic_dns_provider_route53(NULL, "s", NULL, "z")));
-    assert(n00b_result_is_err(n00b_quic_dns_provider_route53("a", NULL, NULL, "z")));
-    assert(n00b_result_is_err(n00b_quic_dns_provider_route53("a", "s", NULL, NULL)));
-    assert(n00b_result_is_err(n00b_quic_dns_provider_route53("", "s", NULL, "z")));
+    assert(n00b_result_is_err(n00b_quic_dns_provider_route53(
+        (n00b_quic_dns_route53_config_t){ .secret_key = "s", .hosted_zone_id = "z" })));
+    assert(n00b_result_is_err(n00b_quic_dns_provider_route53(
+        (n00b_quic_dns_route53_config_t){ .access_key = "a", .hosted_zone_id = "z" })));
+    assert(n00b_result_is_err(n00b_quic_dns_provider_route53(
+        (n00b_quic_dns_route53_config_t){ .access_key = "a", .secret_key = "s" })));
+    assert(n00b_result_is_err(n00b_quic_dns_provider_route53(
+        (n00b_quic_dns_route53_config_t){
+            .access_key = "",
+            .secret_key = "s",
+            .hosted_zone_id = "z",
+        })));
 
     /* Successful construction (no network calls). */
     auto r = n00b_quic_dns_provider_route53(
-        "AKIAIOSFODNN7EXAMPLE",
-        "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
-        NULL,
-        "Z0123456789ABCDEFGHIJ");
+        (n00b_quic_dns_route53_config_t){
+            .access_key     = "AKIAIOSFODNN7EXAMPLE",
+            .secret_key     = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+            .hosted_zone_id = "Z0123456789ABCDEFGHIJ",
+        });
     assert(n00b_result_is_ok(r));
     n00b_quic_dns_provider_t *p = n00b_result_get(r);
     assert(strcmp(p->name, "route53") == 0);
@@ -286,10 +302,17 @@ test_route53_sigv4_reference(void)
 static void
 test_gcp_args(void)
 {
-    assert(n00b_result_is_err(n00b_quic_dns_provider_gcp(NULL, "z")));
-    assert(n00b_result_is_err(n00b_quic_dns_provider_gcp("p", NULL)));
-    assert(n00b_result_is_err(n00b_quic_dns_provider_gcp("", "z")));
-    auto r = n00b_quic_dns_provider_gcp("my-proj-123", "main-zone");
+    assert(n00b_result_is_err(n00b_quic_dns_provider_gcp(
+        (n00b_quic_dns_gcp_config_t){ .managed_zone = "z" })));
+    assert(n00b_result_is_err(n00b_quic_dns_provider_gcp(
+        (n00b_quic_dns_gcp_config_t){ .project_id = "p" })));
+    assert(n00b_result_is_err(n00b_quic_dns_provider_gcp(
+        (n00b_quic_dns_gcp_config_t){ .project_id = "", .managed_zone = "z" })));
+    auto r = n00b_quic_dns_provider_gcp(
+        (n00b_quic_dns_gcp_config_t){
+            .project_id   = "my-proj-123",
+            .managed_zone = "main-zone",
+        });
     assert(n00b_result_is_ok(r));
     n00b_quic_dns_provider_t *p = n00b_result_get(r);
     assert(strcmp(p->name, "gcp") == 0);
@@ -312,7 +335,11 @@ test_cloudflare_live_optional(void)
                "         N00B_CLOUDFLARE_API_TOKEN, _ZONE_ID, _TEST_FQDN\n");
         return;
     }
-    auto r = n00b_quic_dns_provider_cloudflare(tok, zone);
+    auto r = n00b_quic_dns_provider_cloudflare(
+        (n00b_quic_dns_cloudflare_config_t){
+            .api_token = tok,
+            .zone_id   = zone,
+        });
     assert(n00b_result_is_ok(r));
     n00b_quic_dns_provider_t *p = n00b_result_get(r);
 

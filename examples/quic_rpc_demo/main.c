@@ -468,7 +468,11 @@ client_setup(demo_client_t *c, n00b_synthetic_idp_t *idp)
         n00b_h3_client_drive(c->h3);
     }
 
-    c->chan = n00b_rpc_channel_new(c->h3, "https", "quic-test.n00b.local");
+    c->chan = n00b_rpc_channel_new(
+        (n00b_rpc_channel_spec_t){
+            .h3        = c->h3,
+            .authority = "quic-test.n00b.local",
+        });
     if (!c->chan) {
         fprintf(stderr, "client: rpc_channel_new failed\n");
         return false;

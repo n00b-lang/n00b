@@ -221,7 +221,15 @@ cf_close(n00b_quic_dns_provider_t *self)
 }
 
 n00b_result_t(n00b_quic_dns_provider_t *)
-n00b_quic_dns_provider_cloudflare(const char *api_token, const char *zone_id)
+n00b_quic_dns_provider_cloudflare(n00b_quic_dns_cloudflare_config_t config)
+{
+    return n00b_quic_dns_provider_cloudflare_raw(config.api_token,
+                                                config.zone_id);
+}
+
+n00b_result_t(n00b_quic_dns_provider_t *)
+n00b_quic_dns_provider_cloudflare_raw(const char *api_token,
+                                      const char *zone_id)
 {
     if (!api_token || !zone_id ||
         api_token[0] == '\0' || zone_id[0] == '\0') {

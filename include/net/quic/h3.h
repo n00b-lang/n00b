@@ -134,6 +134,48 @@ typedef struct {
     n00b_buffer_t    *body;
 } n00b_h3_response_t;
 
+typedef struct {
+    const n00b_h3_header_t *items;
+    size_t                  count;
+} n00b_h3_header_list_t;
+
+#define n00b_h3_headers(...)                                                  \
+    ((n00b_h3_header_list_t){                                                 \
+        .items = (n00b_h3_header_t []){__VA_ARGS__},                          \
+        .count = sizeof((n00b_h3_header_t []){__VA_ARGS__}) /                 \
+                 sizeof(n00b_h3_header_t)})
+
+typedef struct {
+    const char            *method;
+    const char            *scheme;
+    const char            *authority;
+    const char            *path;
+    n00b_h3_header_list_t  headers;
+    const uint8_t         *body;
+    size_t                 body_len;
+    bool                   keep_open;
+} n00b_h3_request_spec_t;
+
+typedef struct {
+    const uint8_t *body;
+    size_t         body_len;
+    bool           fin;
+} n00b_h3_data_t;
+
+typedef struct {
+    uint16_t               status;
+    n00b_h3_header_list_t  headers;
+    bool                   fin;
+} n00b_h3_response_headers_t;
+
+typedef struct {
+    uint16_t               status;
+    n00b_h3_header_list_t  headers;
+    const uint8_t         *body;
+    size_t                 body_len;
+    bool                   keep_open;
+} n00b_h3_response_spec_t;
+
 /* ===========================================================================
  * Frame encoder / decoder
  *
@@ -364,30 +406,33 @@ n00b_h3_client_peer_settings(n00b_h3_client_t *client);
  * @brief Issue a request.
  *
  * Builds the HEADERS frame, optionally appends a DATA frame, and
- * (when @c fin = true) FINs the request stream.  Does NOT block on
- * the response — call `n00b_h3_request_await` to drain.
+ * (unless `request.keep_open` is true) FINs the request stream.  Does
+ * NOT block on the response — call `n00b_h3_request_await` to drain.
  *
- * @param client    H3 client.
- * @param method    HTTP method ("GET", "POST", ...).
- * @param scheme    URL scheme ("https", "http").
- * @param authority Host authority ("localhost:443").
- * @param path      Path-and-query ("/", "/foo?bar=1").
- *
- * @kw extra_headers   Optional pointer to additional headers (other
- *                     than the four pseudo-headers).  Default nullptr.
- * @kw n_extra         Number of entries in @p extra_headers.
- * @kw body            Request body bytes.  Default nullptr.
- * @kw body_len        Length of @p body.
- * @kw fin             FIN the stream after the body.  Default true.
+ * @param client   H3 client.
+ * @param request  Request descriptor. Required: `method`, `authority`.
+ *                 Defaults: `scheme = "https"`, `path = "/"`,
+ *                 `keep_open = false`.
  *
  * @return Result: ok with a new request handle.
  */
 extern n00b_result_t(n00b_h3_request_t *)
     n00b_h3_client_request(n00b_h3_client_t *client,
-                           const char       *method,
-                           const char       *scheme,
-                           const char       *authority,
-                           const char       *path)
+                           n00b_h3_request_spec_t request);
+
+/**
+ * @brief Low-level request API.
+ *
+ * Most callers should prefer `n00b_h3_client_request`; this raw form is
+ * useful when a caller already has separate pseudo-header fields and wants
+ * the old explicit argument shape.
+ */
+extern n00b_result_t(n00b_h3_request_t *)
+    n00b_h3_client_request_raw(n00b_h3_client_t *client,
+                               const char       *method,
+                               const char       *scheme,
+                               const char       *authority,
+                               const char       *path)
     _kargs {
         const n00b_h3_header_t *extra_headers = nullptr;
         size_t                  n_extra       = 0;
@@ -454,22 +499,24 @@ extern uint64_t n00b_h3_request_stream_id(n00b_h3_request_t *req);
 /**
  * @brief Append another DATA frame to a request stream.
  *
- * Use after `n00b_h3_client_request(..., .fin = false)` to push more
- * body bytes; set @p fin to true to FIN the stream after this DATA frame.
+ * Use after `n00b_h3_client_request(... .keep_open = true)` to push more
+ * body bytes; set `data.fin` to true to FIN the stream after this DATA frame.
  *
  * @param req       Request handle.
- * @param body      Bytes to send.
- * @param body_len  Length of @p body.
- * @param fin       FIN the request after sending these bytes.
+ * @param data      DATA-frame descriptor.
  *
  * @return ok(true) on success; err on closed/reset stream or transport
  *         failure.
  */
 extern n00b_result_t(bool)
 n00b_h3_request_send_data(n00b_h3_request_t *req,
-                          const uint8_t     *body,
-                          size_t             body_len,
-                          bool               fin);
+                          n00b_h3_data_t      data);
+
+extern n00b_result_t(bool)
+n00b_h3_request_send_data_raw(n00b_h3_request_t *req,
+                              const uint8_t     *body,
+                              size_t             body_len,
+                              bool               fin);
 
 /**
  * @brief Has the response HEADERS frame been parsed?
@@ -727,13 +774,8 @@ n00b_h3_inbound_request_peer_addr(n00b_h3_inbound_request_t *req,
  * stream after the body.
  *
  * @param req       Inbound request.
- * @param status    HTTP status code (e.g. 200, 404).
- * @param headers   Extra response headers (may be nullptr if n_headers=0).
- * @param n_headers Number of entries in @p headers.
- * @param body      Response body bytes (may be nullptr if body_len=0).
- * @param body_len  Length of @p body.
- *
- * @kw fin  FIN the response stream after the body.  Default true.
+ * @param response  Response descriptor. `keep_open = false` FINs the
+ *                  response stream after the body.
  *
  * @return ok(true) on success;
  *         err(@c N00B_QUIC_ERR_PROTOCOL) on a malformed-status
@@ -741,11 +783,15 @@ n00b_h3_inbound_request_peer_addr(n00b_h3_inbound_request_t *req,
  */
 extern n00b_result_t(bool)
     n00b_h3_inbound_request_respond(n00b_h3_inbound_request_t *req,
-                                    uint16_t                   status,
-                                    const n00b_h3_header_t    *headers,
-                                    size_t                     n_headers,
-                                    const uint8_t             *body,
-                                    size_t                     body_len)
+                                    n00b_h3_response_spec_t    response);
+
+extern n00b_result_t(bool)
+    n00b_h3_inbound_request_respond_raw(n00b_h3_inbound_request_t *req,
+                                        uint16_t                   status,
+                                        const n00b_h3_header_t    *headers,
+                                        size_t                     n_headers,
+                                        const uint8_t             *body,
+                                        size_t                     body_len)
     _kargs {
         bool fin = true;
     };
@@ -772,21 +818,21 @@ n00b_h3_inbound_request_reset(n00b_h3_inbound_request_t *req,
 /**
  * @brief Send the response HEADERS frame.
  *
- * @param req       Inbound request.
- * @param status    HTTP status code.
- * @param headers   Extra response headers.
- * @param n_headers Number of entries in @p headers.
- *
- * @kw fin  FIN the stream after the HEADERS.  Default false (the
- *          handler will follow up with DATA frames).
+ * @param req      Inbound request.
+ * @param headers  Response HEADERS descriptor. `headers.fin = false`
+ *                 leaves room for DATA frames.
  *
  * @return ok(true) on success.
  */
 extern n00b_result_t(bool)
     n00b_h3_inbound_request_send_headers(n00b_h3_inbound_request_t *req,
-                                         uint16_t                   status,
-                                         const n00b_h3_header_t    *headers,
-                                         size_t                     n_headers)
+                                         n00b_h3_response_headers_t headers);
+
+extern n00b_result_t(bool)
+    n00b_h3_inbound_request_send_headers_raw(n00b_h3_inbound_request_t *req,
+                                             uint16_t                   status,
+                                             const n00b_h3_header_t    *headers,
+                                             size_t                     n_headers)
     _kargs {
         bool fin = false;
     };
@@ -794,16 +840,18 @@ extern n00b_result_t(bool)
 /**
  * @brief Send a DATA frame on the response stream.
  *
- * @param req      Inbound request (HEADERS must already have been sent).
- * @param body     Bytes to send.
- * @param body_len Length of @p body.
- * @param fin      FIN the stream after this DATA frame.
+ * @param req   Inbound request (HEADERS must already have been sent).
+ * @param data  DATA-frame descriptor.
  */
 extern n00b_result_t(bool)
 n00b_h3_inbound_request_send_data(n00b_h3_inbound_request_t *req,
-                                  const uint8_t             *body,
-                                  size_t                     body_len,
-                                  bool                       fin);
+                                  n00b_h3_data_t             data);
+
+extern n00b_result_t(bool)
+n00b_h3_inbound_request_send_data_raw(n00b_h3_inbound_request_t *req,
+                                      const uint8_t             *body,
+                                      size_t                     body_len,
+                                      bool                       fin);
 
 /**
  * @brief Consume up to @p max bytes of the inbound DATA stream.

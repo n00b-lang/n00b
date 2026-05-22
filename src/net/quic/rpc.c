@@ -371,9 +371,17 @@ struct n00b_rpc_channel {
 };
 
 n00b_rpc_channel_t *
-n00b_rpc_channel_new(n00b_h3_client_t *h3,
-                     const char       *scheme,
-                     const char       *authority)
+n00b_rpc_channel_new(n00b_rpc_channel_spec_t spec)
+{
+    return n00b_rpc_channel_new_raw(spec.h3,
+                                    spec.scheme ? spec.scheme : "https",
+                                    spec.authority);
+}
+
+n00b_rpc_channel_t *
+n00b_rpc_channel_new_raw(n00b_h3_client_t *h3,
+                         const char       *scheme,
+                         const char       *authority)
 {
     if (!h3 || !scheme || !authority) return nullptr;
     n00b_rpc_channel_t *c = n00b_alloc_with_opts(
@@ -590,12 +598,16 @@ n00b_rpc_call_unary(n00b_rpc_ctx_t     *ctx,
     char *path = make_path(full_method);
 
     auto reqr = n00b_h3_client_request(
-        chan->h3, "POST", chan->scheme, chan->authority, path,
-        .extra_headers = extras,
-        .n_extra       = n_extras,
-        .body          = body,
-        .body_len      = body_len,
-        .fin           = true);
+        chan->h3,
+        (n00b_h3_request_spec_t){
+            .method    = "POST",
+            .scheme    = chan->scheme,
+            .authority = chan->authority,
+            .path      = path,
+            .headers   = { .items = extras, .count = n_extras },
+            .body      = body,
+            .body_len  = body_len,
+        });
     if (n00b_result_is_err(reqr)) {
         return n00b_result_err(n00b_buffer_t *, n00b_result_get_err(reqr));
     }
@@ -786,7 +798,11 @@ respond_with_status(n00b_h3_inbound_request_t *ireq,
     };
 
     (void)n00b_h3_inbound_request_respond(
-        ireq, (uint16_t)http, hdrs, n_hdrs, nullptr, 0);
+        ireq,
+        (n00b_h3_response_spec_t){
+            .status  = (uint16_t)http,
+            .headers = { .items = hdrs, .count = n_hdrs },
+        });
 }
 
 static void
@@ -814,7 +830,13 @@ respond_with_ok(n00b_h3_inbound_request_t *ireq, n00b_buffer_t *resp_cbor)
         body_len = (size_t)resp_cbor->byte_len;
     }
     (void)n00b_h3_inbound_request_respond(
-        ireq, 200, hdrs, n_hdrs, body, body_len);
+        ireq,
+        (n00b_h3_response_spec_t){
+            .status   = 200,
+            .headers  = { .items = hdrs, .count = n_hdrs },
+            .body     = body,
+            .body_len = body_len,
+        });
 }
 
 /* Forward decls for the auth-wiring helpers (defined below). */
@@ -2179,12 +2201,16 @@ n00b_rpc_call_server_stream(n00b_rpc_ctx_t     *ctx,
     size_t         body_len = req_cbor ? (size_t)req_cbor->byte_len : 0;
 
     auto reqr = n00b_h3_client_request(
-        chan->h3, "POST", chan->scheme, chan->authority, path,
-        .extra_headers = extras,
-        .n_extra       = n_extras,
-        .body          = body,
-        .body_len      = body_len,
-        .fin           = true);
+        chan->h3,
+        (n00b_h3_request_spec_t){
+            .method    = "POST",
+            .scheme    = chan->scheme,
+            .authority = chan->authority,
+            .path      = path,
+            .headers   = { .items = extras, .count = n_extras },
+            .body      = body,
+            .body_len  = body_len,
+        });
     if (n00b_result_is_err(reqr)) {
         return n00b_result_err(n00b_rpc_stream_t(n00b_buffer_t *) *,
                                n00b_result_get_err(reqr));
@@ -2237,13 +2263,18 @@ client_send_pump_main(void *arg)
         n00b_buffer_t *item = n00b_result_get(rr);
         if (!item) {
             /* End-of-stream: FIN. */
-            (void)n00b_h3_request_send_data(p->req, nullptr, 0, true);
+            (void)n00b_h3_request_send_data(
+                p->req,
+                (n00b_h3_data_t){ .fin = true });
             atomic_store(&p->done, 1);
             return nullptr;
         }
         auto sr = n00b_h3_request_send_data(
-            p->req, (const uint8_t *)item->data, (size_t)item->byte_len,
-            /*fin*/ false);
+            p->req,
+            (n00b_h3_data_t){
+                .body     = (const uint8_t *)item->data,
+                .body_len = (size_t)item->byte_len,
+            });
         if (n00b_result_is_err(sr)) {
             p->send_err      = true;
             p->send_err_code = n00b_result_get_err(sr);
@@ -2309,10 +2340,15 @@ n00b_rpc_call_client_stream(n00b_rpc_ctx_t                     *ctx,
 
     /* Open without FIN; the send-pump drains @p in onto the wire. */
     auto reqr = n00b_h3_client_request(
-        chan->h3, "POST", chan->scheme, chan->authority, path,
-        .extra_headers = extras,
-        .n_extra       = n_extras,
-        .fin           = false);
+        chan->h3,
+        (n00b_h3_request_spec_t){
+            .method    = "POST",
+            .scheme    = chan->scheme,
+            .authority = chan->authority,
+            .path      = path,
+            .headers   = { .items = extras, .count = n_extras },
+            .keep_open = true,
+        });
     if (n00b_result_is_err(reqr)) {
         return n00b_result_err(n00b_buffer_t *, n00b_result_get_err(reqr));
     }
@@ -2425,10 +2461,15 @@ n00b_rpc_call_bidi(n00b_rpc_ctx_t                     *ctx,
     char            *path     = make_path(full_method);
 
     auto reqr = n00b_h3_client_request(
-        chan->h3, "POST", chan->scheme, chan->authority, path,
-        .extra_headers = extras,
-        .n_extra       = n_extras,
-        .fin           = false);
+        chan->h3,
+        (n00b_h3_request_spec_t){
+            .method    = "POST",
+            .scheme    = chan->scheme,
+            .authority = chan->authority,
+            .path      = path,
+            .headers   = { .items = extras, .count = n_extras },
+            .keep_open = true,
+        });
     if (n00b_result_is_err(reqr)) {
         return n00b_result_err(n00b_rpc_stream_t(n00b_buffer_t *) *,
                                n00b_result_get_err(reqr));
@@ -2552,7 +2593,11 @@ server_send_pump_main(void *arg)
         .value_len = 1,
     };
     (void)n00b_h3_inbound_request_send_headers(
-        s->ireq, 200, hdrs, n_hdrs, .fin = false);
+        s->ireq,
+        (n00b_h3_response_headers_t){
+            .status  = 200,
+            .headers = { .items = hdrs, .count = n_hdrs },
+        });
 
     while (atomic_load(&s->shutdown) == 0) {
         if (s->ctx && n00b_rpc_ctx_is_cancelled(s->ctx)) {
@@ -2572,12 +2617,17 @@ server_send_pump_main(void *arg)
         n00b_buffer_t *item = n00b_result_get(rr);
         if (!item) {
             /* Clean end of stream: FIN. */
-            (void)n00b_h3_inbound_request_send_data(s->ireq, nullptr, 0, true);
+            (void)n00b_h3_inbound_request_send_data(
+                s->ireq,
+                (n00b_h3_data_t){ .fin = true });
             return nullptr;
         }
         (void)n00b_h3_inbound_request_send_data(
-            s->ireq, (const uint8_t *)item->data, (size_t)item->byte_len,
-            /*fin*/ false);
+            s->ireq,
+            (n00b_h3_data_t){
+                .body     = (const uint8_t *)item->data,
+                .body_len = (size_t)item->byte_len,
+            });
     }
     return nullptr;
 }

@@ -166,7 +166,7 @@ landing_handler(n00b_http_request_t *req,
 
     if (!root) {
         n00b_http_response_writer_status(resp, 400);
-        n00b_http_response_writer_text(resp, r"bad json", r"text/plain");
+        n00b_http_response_writer_text(resp, r"bad json");
         return;
     }
 
@@ -209,8 +209,7 @@ landing_handler(n00b_http_request_t *req,
     if (!n00b_json_contract_ok(contract)) {
         n00b_http_response_writer_status(resp, 422);
         n00b_http_response_writer_text(resp,
-                                       n00b_json_contract_summary(contract),
-                                       r"text/plain");
+                                       n00b_json_contract_summary(contract));
         return;
     }
 
@@ -229,20 +228,22 @@ landing_handler(n00b_http_request_t *req,
     auto ar = n00b_parquet_writer_add_row(state->writer, row);
     if (n00b_result_is_err(ar)) {
         n00b_http_response_writer_status(resp, 500);
-        n00b_http_response_writer_text(resp, r"parquet add failed", r"text/plain");
+        n00b_http_response_writer_text(resp, r"parquet add failed");
         return;
     }
 
     auto wr = n00b_parquet_writer_write_file(state->writer, state->path);
     if (n00b_result_is_err(wr)) {
         n00b_http_response_writer_status(resp, 500);
-        n00b_http_response_writer_text(resp, r"parquet write failed", r"text/plain");
+        n00b_http_response_writer_text(resp, r"parquet write failed");
         return;
     }
 
     state->accepted++;
     n00b_http_response_writer_status(resp, 202);
-    n00b_http_response_writer_text(resp, r"{\"accepted\":1}", r"application/json");
+    n00b_http_response_writer_text(resp,
+                                   r"{\"accepted\":1}",
+                                   .content_type = r"application/json");
 }
 
 static n00b_http_service_t *
@@ -339,4 +340,3 @@ main(int argc, char *argv[])
     test_bad_json_and_contract_failure();
     return 0;
 }
-
