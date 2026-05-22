@@ -203,7 +203,7 @@ load_pem_object(n00b_string_t    *path,
 {
     if (path == nullptr) return nullptr;
 
-    ptls_iovec_t vec = {0};
+    ptls_iovec_t vec = {};
     size_t       n   = 0;
     int rc = ptls_load_pem_objects((const char *)path->data, label, &vec, 1, &n);
     if (rc != 0 || n != 1 || vec.base == nullptr || vec.len == 0) {

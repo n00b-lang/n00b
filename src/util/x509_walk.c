@@ -58,13 +58,13 @@ n00b_x509_extract_issuer_serial(const uint8_t  *der,
     // Outer Certificate SEQUENCE.
     idx = ptls_asn1_get_expected_type_and_length(
         der, der_len, 0, 0x30,
-        &length, &indefinite_length, &last_byte, &decode_error, NULL);
+        &length, &indefinite_length, &last_byte, &decode_error, nullptr);
     if (decode_error != 0) return false;
 
     // tbsCertificate SEQUENCE.
     idx = ptls_asn1_get_expected_type_and_length(
         der, der_len, idx, 0x30,
-        &length, &indefinite_length, &last_byte, &decode_error, NULL);
+        &length, &indefinite_length, &last_byte, &decode_error, nullptr);
     if (decode_error != 0) return false;
 
     // Optional version [0] EXPLICIT — tag 0xA0 (context-specific
@@ -74,7 +74,7 @@ n00b_x509_extract_issuer_serial(const uint8_t  *der,
         size_t version_last = 0;
         idx = ptls_asn1_get_expected_type_and_length(
             der, der_len, idx, 0xA0,
-            &length, &indefinite_length, &version_last, &decode_error, NULL);
+            &length, &indefinite_length, &version_last, &decode_error, nullptr);
         if (decode_error != 0) return false;
         idx = version_last;
     }
@@ -82,7 +82,7 @@ n00b_x509_extract_issuer_serial(const uint8_t  *der,
     // serialNumber INTEGER.
     size_t serial_content_off = ptls_asn1_get_expected_type_and_length(
         der, der_len, idx, 0x02,
-        &length, &indefinite_length, &last_byte, &decode_error, NULL);
+        &length, &indefinite_length, &last_byte, &decode_error, nullptr);
     if (decode_error != 0) return false;
     *serial_bytes = der + serial_content_off;
     *serial_len   = (size_t)length;
@@ -91,7 +91,7 @@ n00b_x509_extract_issuer_serial(const uint8_t  *der,
     // signature AlgorithmIdentifier SEQUENCE — skip.
     idx = ptls_asn1_get_expected_type_and_length(
         der, der_len, idx, 0x30,
-        &length, &indefinite_length, &last_byte, &decode_error, NULL);
+        &length, &indefinite_length, &last_byte, &decode_error, nullptr);
     if (decode_error != 0) return false;
     idx = last_byte;
 
@@ -101,7 +101,7 @@ n00b_x509_extract_issuer_serial(const uint8_t  *der,
     size_t issuer_start = idx;
     idx = ptls_asn1_get_expected_type_and_length(
         der, der_len, idx, 0x30,
-        &length, &indefinite_length, &last_byte, &decode_error, NULL);
+        &length, &indefinite_length, &last_byte, &decode_error, nullptr);
     if (decode_error != 0) return false;
     *issuer_dn_start     = der + issuer_start;
     *issuer_dn_total_len = last_byte - issuer_start;
@@ -147,47 +147,47 @@ n00b_x509_extract_rsa_pkcs8_nd(const uint8_t  *der,
     // Outer PKCS#8 SEQUENCE.
     idx = ptls_asn1_get_expected_type_and_length(
         der, der_len, 0, 0x30,
-        &length, &indefinite_length, &last_byte, &decode_error, NULL);
+        &length, &indefinite_length, &last_byte, &decode_error, nullptr);
     if (decode_error != 0) return false;
 
     // version INTEGER 0.
     idx = ptls_asn1_get_expected_type_and_length(
         der, der_len, idx, 0x02,
-        &length, &indefinite_length, &last_byte, &decode_error, NULL);
+        &length, &indefinite_length, &last_byte, &decode_error, nullptr);
     if (decode_error != 0) return false;
     idx = last_byte;
 
     // privateKeyAlgorithm SEQUENCE — skip.
     idx = ptls_asn1_get_expected_type_and_length(
         der, der_len, idx, 0x30,
-        &length, &indefinite_length, &last_byte, &decode_error, NULL);
+        &length, &indefinite_length, &last_byte, &decode_error, nullptr);
     if (decode_error != 0) return false;
     idx = last_byte;
 
     // privateKey OCTET STRING (contains the RSAPrivateKey SEQUENCE).
     idx = ptls_asn1_get_expected_type_and_length(
         der, der_len, idx, 0x04,
-        &length, &indefinite_length, &last_byte, &decode_error, NULL);
+        &length, &indefinite_length, &last_byte, &decode_error, nullptr);
     if (decode_error != 0) return false;
     size_t inner_off = idx;
 
     // RSAPrivateKey SEQUENCE.
     inner_off = ptls_asn1_get_expected_type_and_length(
         der, der_len, inner_off, 0x30,
-        &length, &indefinite_length, &last_byte, &decode_error, NULL);
+        &length, &indefinite_length, &last_byte, &decode_error, nullptr);
     if (decode_error != 0) return false;
 
     // version INTEGER 0.
     inner_off = ptls_asn1_get_expected_type_and_length(
         der, der_len, inner_off, 0x02,
-        &length, &indefinite_length, &last_byte, &decode_error, NULL);
+        &length, &indefinite_length, &last_byte, &decode_error, nullptr);
     if (decode_error != 0) return false;
     inner_off = last_byte;
 
     // modulus n INTEGER.
     inner_off = ptls_asn1_get_expected_type_and_length(
         der, der_len, inner_off, 0x02,
-        &length, &indefinite_length, &last_byte, &decode_error, NULL);
+        &length, &indefinite_length, &last_byte, &decode_error, nullptr);
     if (decode_error != 0) return false;
     *out_n     = der + inner_off;
     *out_n_len = length;
@@ -196,14 +196,14 @@ n00b_x509_extract_rsa_pkcs8_nd(const uint8_t  *der,
     // publicExponent e INTEGER — skip.
     inner_off = ptls_asn1_get_expected_type_and_length(
         der, der_len, inner_off, 0x02,
-        &length, &indefinite_length, &last_byte, &decode_error, NULL);
+        &length, &indefinite_length, &last_byte, &decode_error, nullptr);
     if (decode_error != 0) return false;
     inner_off = last_byte;
 
     // privateExponent d INTEGER.
     inner_off = ptls_asn1_get_expected_type_and_length(
         der, der_len, inner_off, 0x02,
-        &length, &indefinite_length, &last_byte, &decode_error, NULL);
+        &length, &indefinite_length, &last_byte, &decode_error, nullptr);
     if (decode_error != 0) return false;
     *out_d     = der + inner_off;
     *out_d_len = length;

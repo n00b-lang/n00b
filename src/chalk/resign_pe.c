@@ -36,6 +36,7 @@
 #include "core/string.h"
 #include "core/alloc.h"
 #include "core/file.h"
+#include "conduit/print.h"
 #include "compiler/objfile/pe.h"
 #include "compiler/objfile/pe_build.h"
 #include "compiler/objfile/pe_types.h"
@@ -233,10 +234,8 @@ n00b_chalk_pe_resign(n00b_string_t *path) _kargs
         if (!write_file_full(path, stripped)) {
             return n00b_result_err(bool, N00B_CHALK_ERR_RESIGN_FAILED);
         }
-        fprintf(stderr,
-                "[n00b_chalk] warning: PE re-signed in strip-only mode; "
-                "binary is no longer Authenticode-signed: %.*s\n",
-                (int)path->u8_bytes, path->data);
+        n00b_eprintf("[n00b_chalk] warning: PE re-signed in strip-only mode; binary is no longer Authenticode-signed: «#»",
+                     path);
         return n00b_result_ok(bool, true);
     }
 

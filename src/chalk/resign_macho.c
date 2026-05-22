@@ -54,10 +54,10 @@
 #include "core/string.h"
 #include "core/alloc.h"
 #include "core/file.h"
+#include "conduit/print.h"
 #include "chalk/n00b_chalk_resign.h"
 #include "chalk/n00b_chalk_macho.h"
 
-#include <stdio.h>
 #include <stdint.h>
 #include <string.h>
 
@@ -150,12 +150,8 @@ strip_only_resign(n00b_string_t *path, n00b_allocator_t *alloc)
         return n00b_result_err(bool, N00B_CHALK_ERR_RESIGN_FAILED);
     }
 
-    fprintf(stderr,
-            "[n00b_chalk] warning: Mach-O re-signed in strip-only mode; "
-            "binary is no longer codesigned. Cross-platform Mach-O "
-            "code-signing is not implemented; this build is non-loadable "
-            "on macOS Gatekeeper-enforcing environments: %.*s\n",
-            (int)path->u8_bytes, path->data);
+    n00b_eprintf("[n00b_chalk] warning: Mach-O re-signed in strip-only mode; binary is no longer codesigned. Cross-platform Mach-O code-signing is not implemented; this build is non-loadable on macOS Gatekeeper-enforcing environments: «#»",
+                 path);
     return n00b_result_ok(bool, true);
 }
 

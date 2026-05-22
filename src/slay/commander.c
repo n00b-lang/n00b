@@ -286,7 +286,7 @@ n00b_cmdr_add_flag_multi(n00b_cmdr_t *c, n00b_string_t *command,
         return;
     }
 
-    n00b_cmdr_flag_spec_t f = {0};
+    n00b_cmdr_flag_spec_t f = {};
     f.name        = flag_name;
     f.value_type  = value_type;
     f.takes_value = true;
