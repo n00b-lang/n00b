@@ -68,6 +68,7 @@ docker/_linux_logs/
 /subprojects/ncc/
 
 AGENTS.md
+.agents/
 .inspector-gadget/
 plans/
 # Sub-directories of test/data/resharp/ that hold large generated corpora;
