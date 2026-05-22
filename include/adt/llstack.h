@@ -55,10 +55,24 @@ n00b_llstack_push_node(n00b_llstack_t *llstack, n00b_llstack_node_t *item)
 
 /**
  * @brief Pop a node from the lock-free stack.
- * @param llstack Stack to pop from.
- * @return        Popped node, or nullptr if empty.
  *
- * @kw found Pointer to bool; set to false if the stack was empty (may be nullptr).
+ * @param llstack Stack to pop from.
+ *
+ * @kw found  Optional pointer to bool. If supplied, written `true` when
+ *            a node was popped and `false` when the stack was empty.
+ *            The `found` out-parameter — NOT the return value — is the
+ *            authoritative presence signal (per §5.4: no
+ *            nullptr-as-absent sentinel). Defaults to `nullptr` (the
+ *            caller doesn't care about empty-vs-nonempty disambiguation).
+ *
+ * @return    The popped node when `*found` was set to true (or when the
+ *            caller did not pass `.found` and the stack was non-empty).
+ *            Returns `nullptr` when the stack was empty. Callers MAY
+ *            rely on the `nullptr` return alone if they know the
+ *            stack's nodes are never themselves `nullptr` (the typical
+ *            case for caller-owned pool nodes); callers who store
+ *            `nullptr` as a legitimate node value MUST use the
+ *            `.found` kwarg to disambiguate.
  */
 static inline void *
 n00b_llstack_pop_node(n00b_llstack_t *llstack) _kargs

@@ -75,10 +75,21 @@ extern void *_n00b_dict_untyped_put(n00b_dict_untyped_t *d, void *key, void *val
 
 /**
  * @brief Look up a key.
+ *
  * @param d     Dictionary to search.
  * @param key   Key to look up.
- * @param found Set to true if found, false otherwise.
- * @return      The value, or nullptr if not found.
+ * @param found Set to true iff the key was present; set to false otherwise.
+ *              The `found` out-parameter — NOT the return value — is the
+ *              authoritative presence signal. This is consistent with
+ *              §5.4's "no nullptr-as-absent sentinel" rule: an untyped
+ *              dict legitimately stores `nullptr` as a value, so a
+ *              `nullptr` return is ambiguous in isolation.
+ * @return      The stored value when @p found is set to true. When
+ *              @p found is set to false the return value is
+ *              **unspecified** and MUST be ignored. The stored value MAY
+ *              legitimately be `nullptr` if `nullptr` was the value
+ *              previously `_put`; callers MUST disambiguate via the
+ *              `found` flag, not by comparing the return to `nullptr`.
  */
 extern void *_n00b_dict_untyped_get(n00b_dict_untyped_t *d, void *key, bool *found);
 
