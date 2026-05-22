@@ -167,8 +167,10 @@ sweep(int n_streams)
                                   picoquic_tp_initial_max_streams_bidi,
                                   max_streams);
 
-    n00b_conduit_topic_base_t *atopic =
+    n00b_option_t(n00b_conduit_topic_base_t *) atopic_opt =
         n00b_quic_endpoint_accept_topic(server);
+    assert(n00b_option_is_set(atopic_opt));
+    n00b_conduit_topic_base_t *atopic = n00b_option_get(atopic_opt);
     n00b_quic_accept_inbox_t *ainbox = n00b_quic_accept_inbox_new(c);
     n00b_quic_accept_subscribe(atopic, ainbox,
                                .operations = N00B_CONDUIT_OP_ALL);

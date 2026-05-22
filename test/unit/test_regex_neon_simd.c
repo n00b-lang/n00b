@@ -559,9 +559,10 @@ neon_resolve_fixture(const char *filename)
 static bool
 neon_opt_bool(const n00b_toml_node_t *t, const char *key)
 {
-    n00b_toml_node_t *v = n00b_toml_table_get_cstr(t, key);
-    if (v == nullptr) return false;
-    return n00b_toml_as_bool(v);
+    n00b_option_t(n00b_toml_node_t *) v_opt
+        = n00b_toml_table_get_cstr(t, key);
+    if (!n00b_option_is_set(v_opt)) return false;
+    return n00b_toml_as_bool(n00b_option_get(v_opt));
 }
 
 static void
@@ -572,8 +573,10 @@ run_toml_lazy(const char *filename)
     auto r = n00b_toml_parse_file(path_s);
     assert(n00b_result_is_ok(r));
     n00b_toml_node_t *root  = n00b_result_get(r);
-    n00b_toml_node_t *arr   = n00b_toml_table_array_of(root, "test");
-    assert(arr != nullptr);
+    n00b_option_t(n00b_toml_node_t *) arr_opt
+        = n00b_toml_table_array_of(root, "test");
+    assert(n00b_option_is_set(arr_opt));
+    n00b_toml_node_t *arr = n00b_option_get(arr_opt);
     size_t n = n00b_toml_array_len(arr);
 
     for (size_t i = 0; i < n; ++i) {
@@ -585,16 +588,23 @@ run_toml_lazy(const char *filename)
             continue;
         }
 
-        n00b_toml_node_t *pv = n00b_toml_table_get_cstr(t, "pattern");
-        assert(pv != nullptr && n00b_toml_type(pv) == N00B_TOML_STRING);
+        n00b_option_t(n00b_toml_node_t *) pv_opt
+            = n00b_toml_table_get_cstr(t, "pattern");
+        assert(n00b_option_is_set(pv_opt));
+        n00b_toml_node_t *pv = n00b_option_get(pv_opt);
+        assert(n00b_toml_type(pv) == N00B_TOML_STRING);
         const char *pattern = n00b_toml_as_string(pv)->data;
 
-        n00b_toml_node_t *iv = n00b_toml_table_get_cstr(t, "input");
+        n00b_option_t(n00b_toml_node_t *) iv_opt
+            = n00b_toml_table_get_cstr(t, "input");
         const char *input = "";
         size_t      input_len = 0;
-        if (iv != nullptr && n00b_toml_type(iv) == N00B_TOML_STRING) {
-            input     = n00b_toml_as_string(iv)->data;
-            input_len = (size_t)n00b_toml_as_string(iv)->u8_bytes;
+        if (n00b_option_is_set(iv_opt)) {
+            n00b_toml_node_t *iv = n00b_option_get(iv_opt);
+            if (n00b_toml_type(iv) == N00B_TOML_STRING) {
+                input     = n00b_toml_as_string(iv)->data;
+                input_len = (size_t)n00b_toml_as_string(iv)->u8_bytes;
+            }
         }
 
         // Rust's `match Regex::with_options(...)` — on compile error, skip.
@@ -610,10 +620,18 @@ run_toml_lazy(const char *filename)
         }
 
         // Compare against `matches = [[start, end], ...]`.
-        n00b_toml_node_t *mv = n00b_toml_table_get_cstr(t, "matches");
+        n00b_option_t(n00b_toml_node_t *) mv_opt
+            = n00b_toml_table_get_cstr(t, "matches");
+        n00b_toml_node_t *mv = nullptr;
         size_t exp_n = 0;
-        if (mv != nullptr && n00b_toml_type(mv) == N00B_TOML_ARRAY) {
-            exp_n = n00b_toml_array_len(mv);
+        if (n00b_option_is_set(mv_opt)) {
+            mv = n00b_option_get(mv_opt);
+            if (n00b_toml_type(mv) == N00B_TOML_ARRAY) {
+                exp_n = n00b_toml_array_len(mv);
+            }
+            else {
+                mv = nullptr;
+            }
         }
         size_t glen = n00b_list_len(got);
         bool ok = (glen == exp_n);

@@ -98,7 +98,8 @@ static n00b_jwk_t *
 resolve_via_set(void *ctx, const char *kid, const char *alg)
 {
     (void)alg;
-    return n00b_jwk_set_lookup((n00b_jwk_set_t *)ctx, kid);
+    n00b_option_t(n00b_jwk_t *) k = n00b_jwk_set_lookup((n00b_jwk_set_t *)ctx, kid);
+    return n00b_option_is_set(k) ? n00b_option_get(k) : nullptr;
 }
 
 static void
@@ -230,10 +231,14 @@ test_jwks_lookup(void)
     assert(n00b_result_is_ok(sr));
     n00b_jwk_set_t *set = n00b_result_get(sr);
     assert(set->count == 1);
-    assert(n00b_jwk_set_lookup(set, "k1") != nullptr);
-    assert(n00b_jwk_set_lookup(set, "k-nonexistent") == nullptr);
+    n00b_option_t(n00b_jwk_t *) k1 = n00b_jwk_set_lookup(set, "k1");
+    assert(n00b_option_is_set(k1));
+    n00b_option_t(n00b_jwk_t *) k_no = n00b_jwk_set_lookup(set, "k-nonexistent");
+    assert(!n00b_option_is_set(k_no));
     /* Single-key fallback when no kid passed. */
-    assert(n00b_jwk_set_lookup(set, nullptr) == set->keys[0]);
+    n00b_option_t(n00b_jwk_t *) k_fb = n00b_jwk_set_lookup(set, nullptr);
+    assert(n00b_option_is_set(k_fb));
+    assert(n00b_option_get(k_fb) == set->keys[0]);
     printf("  [PASS] JWKS parse + lookup-by-kid\n");
 }
 

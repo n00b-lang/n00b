@@ -66,15 +66,23 @@ main(int argc, char **argv)
         auto r = n00b_toml_parse(src);
         assert(n00b_result_is_ok(r));
         n00b_toml_node_t *root = n00b_result_get(r);
-        n00b_toml_node_t *arr  = n00b_toml_table_array_of(root, "test");
-        assert(arr != nullptr);
+        n00b_option_t(n00b_toml_node_t *) arr_opt
+            = n00b_toml_table_array_of(root, "test");
+        assert(n00b_option_is_set(arr_opt));
+        n00b_toml_node_t *arr = n00b_option_get(arr_opt);
         assert(n00b_toml_array_len(arr) == 2);
 
         n00b_toml_node_t *t0 = n00b_toml_array_get(arr, 0);
-        n00b_toml_node_t *name0 = n00b_toml_table_get_cstr(t0, "name");
-        n00b_toml_node_t *pat0  = n00b_toml_table_get_cstr(t0, "pattern");
-        assert(name0 && n00b_toml_type(name0) == N00B_TOML_STRING);
-        assert(pat0  && n00b_toml_type(pat0)  == N00B_TOML_STRING);
+        n00b_option_t(n00b_toml_node_t *) name0_opt
+            = n00b_toml_table_get_cstr(t0, "name");
+        n00b_option_t(n00b_toml_node_t *) pat0_opt
+            = n00b_toml_table_get_cstr(t0, "pattern");
+        assert(n00b_option_is_set(name0_opt));
+        assert(n00b_option_is_set(pat0_opt));
+        n00b_toml_node_t *name0 = n00b_option_get(name0_opt);
+        n00b_toml_node_t *pat0  = n00b_option_get(pat0_opt);
+        assert(n00b_toml_type(name0) == N00B_TOML_STRING);
+        assert(n00b_toml_type(pat0)  == N00B_TOML_STRING);
         assert(strcmp(n00b_toml_as_string(name0)->data, "hello") == 0);
         assert(strcmp(n00b_toml_as_string(pat0)->data,  "a+")    == 0);
         printf("PASS: aot-readback\n");

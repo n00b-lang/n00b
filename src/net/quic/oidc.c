@@ -281,15 +281,18 @@ n00b_oidc_get_key(n00b_oidc_t *o, const char *kid)
         }
     }
 
-    n00b_jwk_t *k = n00b_jwk_set_lookup(o->cached_jwks, kid);
-    if (!k && o->jwks_uri) {
+    n00b_option_t(n00b_jwk_t *) k_opt = n00b_jwk_set_lookup(o->cached_jwks, kid);
+    if (!n00b_option_is_set(k_opt) && o->jwks_uri) {
         /* Miss-then-refresh: RFC 7517 § 4.5 expects this. */
         if (refresh_jwks(o) == 0) {
-            k = n00b_jwk_set_lookup(o->cached_jwks, kid);
+            k_opt = n00b_jwk_set_lookup(o->cached_jwks, kid);
         }
     }
     n00b_data_unlock(o->mu);
-    return k;
+    /* The caller's contract is the n00b_jwt_resolve_key_fn callback
+     * typedef (kept as bare-pointer-return per §5.4 callback-contract
+     * carve-out); map option_t back to nullable. */
+    return n00b_option_is_set(k_opt) ? n00b_option_get(k_opt) : nullptr;
 }
 
 void

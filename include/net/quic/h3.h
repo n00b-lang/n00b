@@ -557,13 +557,20 @@ extern uint16_t n00b_h3_request_status(n00b_h3_request_t *req);
 /**
  * @brief Borrowed pointer to the response headers (excluding `:status`).
  *
- * Valid only after `n00b_h3_request_headers_received` returns true.
- *
  * @param req    Request handle.
  * @param n_out  Optional out-arg; populated with the header count.
  *
- * @return Borrowed pointer to a header array, or nullptr if HEADERS
- *         haven't arrived yet.
+ * @pre `n00b_h3_request_headers_received(req)` has returned `true`.
+ *      That readiness function is the authoritative presence signal;
+ *      callers MUST check it before invoking this accessor.
+ *
+ * @return Borrowed pointer to a header array. Returns `nullptr` as a
+ *         defensive-not-asserted fallback when the precondition is
+ *         violated (HEADERS frame has not arrived); the canonical
+ *         pattern is to check `_headers_received` first, not to
+ *         disambiguate on the nullptr return (per §5.4 — not a
+ *         sentinel-nullable contract; a precondition-violation
+ *         hedge).
  */
 extern const n00b_h3_header_t *
 n00b_h3_request_response_headers(n00b_h3_request_t *req, size_t *n_out);

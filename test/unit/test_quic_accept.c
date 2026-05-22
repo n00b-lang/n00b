@@ -68,14 +68,14 @@ test_accept_topic_exists(void)
     }
     n00b_quic_endpoint_t *server = n00b_result_get(sr);
 
-    assert(n00b_quic_endpoint_accept_topic(server) != nullptr);
+    assert(n00b_option_is_set(n00b_quic_endpoint_accept_topic(server)));
 
     auto cur = n00b_quic_endpoint_new(c, io,
                                       .bind_host = "127.0.0.1",
                                       .alpn      = "n00b-test/1");
     n00b_quic_endpoint_t *client = n00b_result_get(cur);
     /* Client (non-listen) endpoint has no accept topic. */
-    assert(n00b_quic_endpoint_accept_topic(client) == nullptr);
+    assert(!n00b_option_is_set(n00b_quic_endpoint_accept_topic(client)));
 
     n00b_quic_endpoint_close(client);
     n00b_quic_endpoint_close(server);
@@ -116,8 +116,10 @@ test_multi_accept_and_unlink(void)
     }
     n00b_quic_endpoint_t *server = n00b_result_get(sr);
 
-    n00b_conduit_topic_base_t *atopic =
+    n00b_option_t(n00b_conduit_topic_base_t *) atopic_opt =
         n00b_quic_endpoint_accept_topic(server);
+    assert(n00b_option_is_set(atopic_opt));
+    n00b_conduit_topic_base_t *atopic = n00b_option_get(atopic_opt);
     n00b_quic_accept_inbox_t *ainbox = n00b_quic_accept_inbox_new(c);
     n00b_quic_accept_subscribe(atopic, ainbox,
                                .operations = N00B_CONDUIT_OP_ALL);

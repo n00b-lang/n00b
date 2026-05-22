@@ -245,12 +245,13 @@ n00b_h3_server_new(n00b_quic_endpoint_t *endpoint,
     if (!endpoint || !conduit) {
         return n00b_result_err(n00b_h3_server_t *, N00B_QUIC_ERR_NULL_ARG);
     }
-    n00b_conduit_topic_base_t *atopic =
+    n00b_option_t(n00b_conduit_topic_base_t *) atopic_opt =
         n00b_quic_endpoint_accept_topic(endpoint);
-    if (!atopic) {
+    if (!n00b_option_is_set(atopic_opt)) {
         /* Endpoint isn't in listen mode. */
         return n00b_result_err(n00b_h3_server_t *, N00B_QUIC_ERR_INVALID_ARG);
     }
+    n00b_conduit_topic_base_t *atopic = n00b_option_get(atopic_opt);
 
     n00b_h3_server_t *server = n00b_alloc_with_opts(n00b_h3_server_t,
                                     &(n00b_alloc_opts_t){
