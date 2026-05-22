@@ -47,14 +47,19 @@ split_on_slash(n00b_string_t *s)
     ensure_cached();
 
     n00b_array_t(n00b_string_t *) arr = n00b_unicode_str_split(s, cached_slash);
-    n00b_list_t(n00b_string_t *) *result = n00b_alloc(n00b_list_t(n00b_string_t *));
-    *result = n00b_list_new(n00b_string_t *);
+    // Canonical idiom: build the list as a fully-initialized lvalue
+    // (scan_kind / scan_cb / scan_user / allocator threaded), populate,
+    // then struct-copy into the heap-allocated return shell.
+    n00b_list_t(n00b_string_t *) lst = n00b_list_new(n00b_string_t *);
     size_t n = n00b_array_len(arr);
 
     for (size_t i = 0; i < n; i++) {
-        n00b_list_push(*result, n00b_array_get(arr, i));
+        n00b_list_push(lst, n00b_array_get(arr, i));
     }
 
+    n00b_list_t(n00b_string_t *) *result =
+        n00b_alloc(n00b_list_t(n00b_string_t *));
+    *result = lst;
     return result;
 }
 
@@ -291,17 +296,19 @@ n00b_path_tilde_expand(n00b_string_t *in)
         home_parts = split_on_slash(n00b_get_user_dir(username));
     }
 
-    n00b_list_t(n00b_string_t *) *combined = n00b_alloc(n00b_list_t(n00b_string_t *));
-    *combined = n00b_list_new(n00b_string_t *);
+    // Canonical idiom: the list is internally-scoped (passed to
+    // internal_normalize_and_join which only reads it), so use a
+    // by-value lvalue and pass `&lst` to the consumer.
+    n00b_list_t(n00b_string_t *) combined = n00b_list_new(n00b_string_t *);
 
     for (size_t i = 0; i < n00b_list_len(*home_parts); i++) {
-        n00b_list_push(*combined, n00b_list_get(*home_parts, i));
+        n00b_list_push(combined, n00b_list_get(*home_parts, i));
     }
     for (size_t i = 0; i < n00b_list_len(*parts); i++) {
-        n00b_list_push(*combined, n00b_list_get(*parts, i));
+        n00b_list_push(combined, n00b_list_get(*parts, i));
     }
 
-    return internal_normalize_and_join(combined);
+    return internal_normalize_and_join(&combined);
 }
 
 n00b_string_t *
@@ -555,8 +562,13 @@ _n00b_path_walk(n00b_string_t *dir) _kargs
     bool follow_links   = false;
 }
 {
-    n00b_list_t(n00b_string_t *) *result = n00b_alloc(n00b_list_t(n00b_string_t *));
-    *result = n00b_list_new(n00b_string_t *);
+    // Canonical idiom for by-pointer return: build the list as a
+    // fully scan-info-threaded lvalue, populate via internal_path_walk
+    // (which pushes via the result pointer), then struct-copy the
+    // populated lvalue into the heap-allocated return shell. The
+    // struct-copy carries scan_kind / scan_cb / scan_user / allocator
+    // into the heap allocation so the GC sees the correct shape.
+    n00b_list_t(n00b_string_t *) lst = n00b_list_new(n00b_string_t *);
 
     n00b_walk_ctx ctx = {
         .sc_proc                 = n00b_string_from_cstr("/proc/"),
@@ -568,11 +580,15 @@ _n00b_path_walk(n00b_string_t *dir) _kargs
         .ignore_special          = ignore_special,
         .done_with_safety_checks = false,
         .have_recursed           = false,
-        .result                  = result,
+        .result                  = &lst,
         .resolved                = n00b_resolve_path(dir),
     };
 
     internal_path_walk(&ctx);
+
+    n00b_list_t(n00b_string_t *) *result =
+        n00b_alloc(n00b_list_t(n00b_string_t *));
+    *result = lst;
     return result;
 }
 
@@ -696,40 +712,47 @@ n00b_path_remove_extension(n00b_string_t *s)
 n00b_list_t(n00b_string_t *) *
 n00b_path_parts(n00b_string_t *p)
 {
-    n00b_list_t(n00b_string_t *) *result = n00b_alloc(n00b_list_t(n00b_string_t *));
-    *result = n00b_list_new(n00b_string_t *);
+    // Canonical idiom for by-pointer return: populate a fully
+    // scan-info-threaded lvalue first, then struct-copy into the
+    // heap-allocated return shell so the GC sees the threaded
+    // scan_kind / scan_cb / scan_user / allocator on the heap struct.
+    n00b_list_t(n00b_string_t *) lst = n00b_list_new(n00b_string_t *);
 
-    if (!p || !p->u8_bytes) return result;
+    if (p && p->u8_bytes) {
+        n00b_string_t *resolved = n00b_resolve_path(p);
 
-    n00b_string_t *resolved = n00b_resolve_path(p);
+        if (p->data[p->u8_bytes - 1] == '/'
+            || resolved->data[resolved->u8_bytes - 1] == '/') {
+            n00b_list_push(lst, resolved);
+            n00b_list_push(lst, n00b_string_empty());
+            n00b_list_push(lst, n00b_string_empty());
+        }
+        else {
+            int n = rfind_slash(resolved);
 
-    if (p->data[p->u8_bytes - 1] == '/'
-        || resolved->data[resolved->u8_bytes - 1] == '/') {
-        n00b_list_push(*result, resolved);
-        n00b_list_push(*result, n00b_string_empty());
-        n00b_list_push(*result, n00b_string_empty());
-        return result;
+            n00b_list_push(lst, n00b_unicode_str_slice(resolved, 0, n));
+
+            n00b_string_t *filename =
+                n00b_unicode_str_slice(resolved, n + 1, resolved->codepoints);
+
+            int dot = rfind_period(filename);
+
+            if (dot == -1) {
+                n00b_list_push(lst, filename);
+                n00b_list_push(lst, n00b_string_empty());
+            }
+            else {
+                n00b_list_push(lst, n00b_unicode_str_slice(filename, 0, dot));
+                n00b_list_push(lst,
+                               n00b_unicode_str_slice(filename, dot + 1,
+                                                      filename->codepoints));
+            }
+        }
     }
 
-    int n = rfind_slash(resolved);
-
-    n00b_list_push(*result, n00b_unicode_str_slice(resolved, 0, n));
-
-    n00b_string_t *filename =
-        n00b_unicode_str_slice(resolved, n + 1, resolved->codepoints);
-
-    int dot = rfind_period(filename);
-
-    if (dot == -1) {
-        n00b_list_push(*result, filename);
-        n00b_list_push(*result, n00b_string_empty());
-        return result;
-    }
-
-    n00b_list_push(*result, n00b_unicode_str_slice(filename, 0, dot));
-    n00b_list_push(*result,
-                   n00b_unicode_str_slice(filename, dot + 1,
-                                          filename->codepoints));
+    n00b_list_t(n00b_string_t *) *result =
+        n00b_alloc(n00b_list_t(n00b_string_t *));
+    *result = lst;
     return result;
 }
 
@@ -741,8 +764,10 @@ n00b_list_t(n00b_string_t *) *
 n00b_find_file_in_program_path(n00b_string_t *cmd,
                                 n00b_list_t(n00b_string_t *) *path_list)
 {
-    n00b_list_t(n00b_string_t *) *result = n00b_alloc(n00b_list_t(n00b_string_t *));
-    *result = n00b_list_new(n00b_string_t *);
+    // Canonical idiom for by-pointer return: populate a fully
+    // scan-info-threaded lvalue first, then struct-copy into the
+    // heap-allocated return shell.
+    n00b_list_t(n00b_string_t *) lst = n00b_list_new(n00b_string_t *);
 
     if (!path_list) {
         path_list = n00b_get_program_search_path();
@@ -760,13 +785,16 @@ n00b_find_file_in_program_path(n00b_string_t *cmd,
         switch (n00b_get_file_kind(full_path)) {
         case N00B_FK_IS_REG_FILE:
         case N00B_FK_IS_FLINK:
-            n00b_list_push(*result, full_path);
+            n00b_list_push(lst, full_path);
             break;
         default:
             break;
         }
     }
 
+    n00b_list_t(n00b_string_t *) *result =
+        n00b_alloc(n00b_list_t(n00b_string_t *));
+    *result = lst;
     return result;
 }
 
@@ -1219,48 +1247,55 @@ _n00b_list_directory(n00b_string_t *dir) _kargs
     dir         = n00b_resolve_path(dir);
     DIR *dirent = opendir(dir->data);
 
-    n00b_list_t(n00b_string_t *) *result = n00b_alloc(n00b_list_t(n00b_string_t *));
-    *result = n00b_list_new(n00b_string_t *);
+    // Canonical idiom for by-pointer return: populate a fully
+    // scan-info-threaded lvalue first, then struct-copy into the
+    // heap-allocated return shell at the end.
+    n00b_list_t(n00b_string_t *) lst = n00b_list_new(n00b_string_t *);
 
-    if (!dirent) return result;
-
-    if (extension && extension->codepoints && extension->data[0] != '.') {
-        extension = n00b_cformat(".«#»", extension);
-    }
-
-    while (true) {
-        struct dirent *entry = readdir(dirent);
-
-        if (!entry) {
-            closedir(dirent);
-            return result;
+    if (dirent) {
+        if (extension && extension->codepoints && extension->data[0] != '.') {
+            extension = n00b_cformat(".«#»", extension);
         }
 
-        if (!strcmp(entry->d_name, "..") || !strcmp(entry->d_name, "."))
-            continue;
+        while (true) {
+            struct dirent *entry = readdir(dirent);
 
-        if (!dot_files && *entry->d_name == '.')
-            continue;
+            if (!entry) {
+                closedir(dirent);
+                break;
+            }
 
-        n00b_string_t *fname = n00b_string_from_cstr(entry->d_name);
-        n00b_string_t *full  = n00b_path_simple_join(dir, fname);
-        struct stat    file_info;
-        bool           add = false;
+            if (!strcmp(entry->d_name, "..") || !strcmp(entry->d_name, "."))
+                continue;
 
-        if (lstat(full->data, &file_info) != 0) continue;
+            if (!dot_files && *entry->d_name == '.')
+                continue;
 
-        switch (file_info.st_mode & S_IFMT) {
-        case S_IFREG: add = files;       break;
-        case S_IFDIR: add = directories;  break;
-        case S_IFLNK: add = links;       break;
-        default:      add = specials;     break;
+            n00b_string_t *fname = n00b_string_from_cstr(entry->d_name);
+            n00b_string_t *full  = n00b_path_simple_join(dir, fname);
+            struct stat    file_info;
+            bool           add = false;
+
+            if (lstat(full->data, &file_info) != 0) continue;
+
+            switch (file_info.st_mode & S_IFMT) {
+            case S_IFREG: add = files;       break;
+            case S_IFDIR: add = directories;  break;
+            case S_IFLNK: add = links;       break;
+            default:      add = specials;     break;
+            }
+
+            if (!add) continue;
+
+            if (extension && !n00b_unicode_str_ends_with(fname, extension))
+                continue;
+
+            n00b_list_push(lst, full_path ? full : fname);
         }
-
-        if (!add) continue;
-
-        if (extension && !n00b_unicode_str_ends_with(fname, extension))
-            continue;
-
-        n00b_list_push(*result, full_path ? full : fname);
     }
+
+    n00b_list_t(n00b_string_t *) *result =
+        n00b_alloc(n00b_list_t(n00b_string_t *));
+    *result = lst;
+    return result;
 }

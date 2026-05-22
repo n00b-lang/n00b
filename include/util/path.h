@@ -351,19 +351,25 @@ n00b_get_program_search_path(void)
 {
     const char *path = getenv("PATH");
 
-    n00b_list_t(n00b_string_t *) *result = n00b_alloc(n00b_list_t(n00b_string_t *));
-    *result = n00b_list_new(n00b_string_t *);
+    // Canonical idiom: build a fully scan-info-threaded list as an
+    // lvalue first, then struct-copy into a heap-allocated result so
+    // the GC sees the threaded scan_kind / scan_cb / scan_user /
+    // allocator fields on the heap struct. See list.h _n00b_list_new_sel.
+    n00b_list_t(n00b_string_t *) lst = n00b_list_new(n00b_string_t *);
 
-    if (!path) return result;
+    if (path) {
+        n00b_string_t *ps = n00b_string_from_cstr(path);
+        n00b_array_t(n00b_string_t *) parts =
+            n00b_unicode_str_split(ps, n00b_string_from_cstr(":"));
 
-    n00b_string_t *ps = n00b_string_from_cstr(path);
-    n00b_array_t(n00b_string_t *) parts =
-        n00b_unicode_str_split(ps, n00b_string_from_cstr(":"));
-
-    for (size_t i = 0; i < n00b_array_len(parts); i++) {
-        n00b_list_push(*result, n00b_array_get(parts, i));
+        for (size_t i = 0; i < n00b_array_len(parts); i++) {
+            n00b_list_push(lst, n00b_array_get(parts, i));
+        }
     }
 
+    n00b_list_t(n00b_string_t *) *result =
+        n00b_alloc(n00b_list_t(n00b_string_t *));
+    *result = lst;
     return result;
 }
 

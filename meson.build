@@ -726,6 +726,23 @@ path_xdg_test = executable('test_path_xdg',
 )
 test('path_xdg', path_xdg_test, suite: 'unit')
 
+# libn00b core util — path-module anti-pattern sweep regression
+# (pre-WP-005 P5). Exercises each of the seven swept functions
+# (`split_on_slash` transitively via resolve_path, `n00b_resolve_path`,
+# `n00b_path_walk`, `n00b_path_parts`, `n00b_find_file_in_program_path`,
+# `n00b_list_directory`, `n00b_get_program_search_path`) and asserts
+# push-after-return + readback works on each returned list — which
+# forces `_n00b_list_ensure_cap` to read the list's scan-info /
+# allocator fields. If a future commit reintroduces the
+# `n00b_alloc(n00b_list_t(T)) + *p = n00b_list_new(T)` anti-pattern,
+# scan-info is zero-initialized and the grow path either picks the
+# wrong allocator or fails the readback identity check.
+path_antipattern_sweep_test = executable('test_path_antipattern_sweep',
+    ['test/unit/test_path_antipattern_sweep.c'],
+    kwargs: test_common_kwargs,
+)
+test('path_antipattern_sweep', path_antipattern_sweep_test, suite: 'unit')
+
 # n00b core PE — Authenticode certificate-table emit round-trip.
 # WP-005 Phase 3 + P3-fixups sub-deliverable 3.
 #
