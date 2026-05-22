@@ -703,6 +703,27 @@ pkcs7_signed_data_test = executable('test_pkcs7_signed_data',
 test('pkcs7_signed_data', pkcs7_signed_data_test, suite: 'unit',
      workdir: meson.project_source_root())
 
+# n00b core util — X.509 + PKCS#8 read-side walker regression test.
+# WP-005 mid-stream cleanup lift. Loads the committed PEM cert+key
+# fixtures and exercises both walkers. Needs `workdir:
+# meson.project_source_root()` to resolve the relative PEM paths.
+x509_walk_test = executable('test_x509_walk',
+    ['test/unit/test_x509_walk.c'],
+    kwargs: test_common_kwargs,
+)
+test('x509_walk', x509_walk_test, suite: 'unit',
+     workdir: meson.project_source_root())
+
+# n00b-attest util — shared XDG path resolver regression test.
+# WP-005 mid-stream cleanup lift. Exercises XDG_CONFIG_HOME-set,
+# XDG_CONFIG_HOME-unset/HOME-fallback, composite suffix, and
+# nullptr-suffix paths. No filesystem dependencies.
+n00b_attest_xdg_test = executable('test_n00b_attest_xdg',
+    ['test/unit/test_n00b_attest_xdg.c'],
+    kwargs: test_common_kwargs,
+)
+test('n00b_attest_xdg', n00b_attest_xdg_test, suite: 'unit')
+
 # n00b core PE — Authenticode certificate-table emit round-trip.
 # WP-005 Phase 3 + P3-fixups sub-deliverable 3.
 #

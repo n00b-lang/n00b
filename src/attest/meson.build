@@ -12,6 +12,7 @@ n00b_attest_src = files(
     'dsse.c',
     'error.c',
     'json_util.c',
+    'n00b_attest_xdg.c',
     'signer.c',
     'cli.c',
     'backends/file.c',

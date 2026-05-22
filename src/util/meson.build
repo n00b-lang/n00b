@@ -10,6 +10,7 @@ n00b_util_src = (
         'errno_str.c',
         'path.c',
         'pkcs7.c',
+        'x509_walk.c',
     )
     + n00b_util_simd_src
 )

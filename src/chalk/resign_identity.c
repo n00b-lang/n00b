@@ -10,13 +10,20 @@
  *     `$XDG_CONFIG_HOME/n00b-attest/signing-identities/`
  *     (mirrors D-052's `registries.json` convention).
  *
- *  The cert is parsed as X.509 DER via picotls's read-side ASN.1
- *  walker to extract the issuer DN and serial number; the key is
- *  parsed as a PKCS#8 PrivateKeyInfo to extract the (n, d)
- *  RSA-private-key big-endian byte slices. The PKCS#8 walk is
- *  the same pattern as test/unit/test_pkcs7_signed_data.c — the
- *  P3 fix-ups dispatch landed picotls's ptls_load_pem_objects as
- *  the project-wide PEM decoder.
+ *  The cert is parsed as X.509 DER and the key as a PKCS#8
+ *  PrivateKeyInfo via the shared read-side walkers in
+ *  include/util/x509_walk.h (`n00b_x509_extract_issuer_serial`,
+ *  `n00b_x509_extract_rsa_pkcs8_nd`) — lifted from this file by
+ *  the WP-005 mid-stream cleanup so P5 (Mach-O re-sign) can
+ *  consume the same surface. PEM decoding remains via picotls's
+ *  ptls_load_pem_objects (project-wide PEM decoder, P3 fix-ups
+ *  dispatch).
+ *
+ *  XDG store path lookup is delegated to the shared
+ *  `n00b_attest_xdg_path` helper
+ *  (include/attest/n00b_attest_xdg.h) per the same lift; the
+ *  caller composes `signing-identities/<name>.<suffix>` and
+ *  threads it through.
  *
  *  Test-file conventions per D-030. */
 
@@ -27,13 +34,14 @@
 #include "core/file.h"
 #include "chalk/n00b_chalk_resign.h"
 #include "adt/result.h"
+#include "util/x509_walk.h"
+#include "attest/n00b_attest_xdg.h"
 
 #include "picotls.h"
-#include "picotls/asn1.h"
 #include "picotls/pembase64.h"
 
 #include <stdint.h>
-#include <stdlib.h>   // getenv (D-052 libc exception for env-var config discovery)
+#include <stdlib.h>   // free() — picotls returns libc-allocated DER buffers (D-039 part 1)
 #include <string.h>
 
 // ---------------------------------------------------------------------------
@@ -168,61 +176,14 @@ find_char(n00b_string_t *s, char c, size_t start)
 }
 
 // ---------------------------------------------------------------------------
-// XDG store path resolution — mirrors src/attest/oci/auth.c's
-// resolve_registries_json_path (D-052). Returns
-// `<base>/<name>.cert.pem` or `<base>/<name>.key.pem` depending on
-// `suffix`.
+// XDG store path resolution — the WP-005 mid-stream cleanup lift
+// (pre-P5) extracted the byte-identical clone of
+// src/attest/oci/auth.c's resolve_registries_json_path into the
+// shared helper `n00b_attest_xdg_path` (D-052; see
+// include/attest/n00b_attest_xdg.h). The caller composes the
+// `signing-identities/<name>.<suffix>` relative path and threads it
+// through.
 // ---------------------------------------------------------------------------
-
-static n00b_string_t *
-xdg_signing_identity_path(const char       *name,
-                          size_t            name_len,
-                          const char       *suffix,
-                          n00b_allocator_t *alloc)
-{
-    // getenv() per D-052 (project-local libc exception for env-var
-    // config discovery). Future libn00b n00b_getenv lift = DF-010.
-    const char *xdg = getenv("XDG_CONFIG_HOME");
-    const char *base;
-    const char *base_suffix;
-    size_t      base_len;
-    size_t      base_suffix_len;
-
-    if (xdg != nullptr && xdg[0] != '\0') {
-        base            = xdg;
-        base_len        = strlen(xdg);
-        base_suffix     = "/n00b-attest/signing-identities/";
-        base_suffix_len = strlen(base_suffix);
-    } else {
-        const char *home = getenv("HOME");
-        if (home == nullptr || home[0] == '\0') {
-            return nullptr;
-        }
-        base            = home;
-        base_len        = strlen(home);
-        base_suffix     = "/.config/n00b-attest/signing-identities/";
-        base_suffix_len = strlen(base_suffix);
-    }
-
-    size_t suffix_len = strlen(suffix);
-    size_t total_len  = base_len + base_suffix_len + name_len + suffix_len;
-    char  *buf        = n00b_alloc_array_with_opts(
-        char,
-        total_len + 1,
-        &(n00b_alloc_opts_t){.allocator = alloc});
-    size_t off = 0;
-    memcpy(buf + off, base, base_len);
-    off += base_len;
-    memcpy(buf + off, base_suffix, base_suffix_len);
-    off += base_suffix_len;
-    memcpy(buf + off, name, name_len);
-    off += name_len;
-    memcpy(buf + off, suffix, suffix_len);
-    off += suffix_len;
-    buf[total_len] = '\0';
-
-    return n00b_string_from_raw(buf, (int64_t)total_len, .allocator = alloc);
-}
 
 // ---------------------------------------------------------------------------
 // PEM load — uses picotls's ptls_load_pem_objects with a libc-
@@ -257,181 +218,6 @@ load_pem_object(n00b_string_t    *path,
 }
 
 // ---------------------------------------------------------------------------
-// X.509 cert walker — extracts the tbsCertificate.issuer DER blob
-// and the tbsCertificate.serialNumber raw INTEGER content bytes.
-//
-//   Certificate ::= SEQUENCE {
-//       tbsCertificate       SEQUENCE {
-//           version          [0] EXPLICIT Version DEFAULT v1,
-//           serialNumber     CertificateSerialNumber,  -- INTEGER
-//           signature        AlgorithmIdentifier,
-//           issuer           Name,
-//           validity         Validity,
-//           subject          Name,
-//           ...
-//       },
-//       ...
-//   }
-//
-// Returns true on success; false if the parse walks off the end.
-// ---------------------------------------------------------------------------
-
-static bool
-extract_cert_issuer_serial(const uint8_t  *der,
-                           size_t          der_len,
-                           const uint8_t **issuer_dn_start,
-                           size_t         *issuer_dn_total_len,
-                           const uint8_t **serial_bytes,
-                           size_t         *serial_len)
-{
-    uint32_t length            = 0;
-    int      indefinite_length = 0;
-    size_t   last_byte         = 0;
-    int      decode_error      = 0;
-    size_t   idx;
-
-    // Outer Certificate SEQUENCE.
-    idx = ptls_asn1_get_expected_type_and_length(
-        der, der_len, 0, 0x30,
-        &length, &indefinite_length, &last_byte, &decode_error, NULL);
-    if (decode_error != 0) return false;
-
-    // tbsCertificate SEQUENCE.
-    idx = ptls_asn1_get_expected_type_and_length(
-        der, der_len, idx, 0x30,
-        &length, &indefinite_length, &last_byte, &decode_error, NULL);
-    if (decode_error != 0) return false;
-
-    // Optional version [0] EXPLICIT — tag 0xA0 (context-specific
-    // constructed, [0]). If present, skip; if absent, the next
-    // tag is the serialNumber INTEGER 0x02.
-    if (idx < der_len && der[idx] == 0xA0) {
-        size_t version_last = 0;
-        idx = ptls_asn1_get_expected_type_and_length(
-            der, der_len, idx, 0xA0,
-            &length, &indefinite_length, &version_last, &decode_error, NULL);
-        if (decode_error != 0) return false;
-        idx = version_last;
-    }
-
-    // serialNumber INTEGER.
-    size_t serial_content_off = ptls_asn1_get_expected_type_and_length(
-        der, der_len, idx, 0x02,
-        &length, &indefinite_length, &last_byte, &decode_error, NULL);
-    if (decode_error != 0) return false;
-    *serial_bytes = der + serial_content_off;
-    *serial_len   = (size_t)length;
-    idx = last_byte;
-
-    // signature AlgorithmIdentifier SEQUENCE — skip.
-    idx = ptls_asn1_get_expected_type_and_length(
-        der, der_len, idx, 0x30,
-        &length, &indefinite_length, &last_byte, &decode_error, NULL);
-    if (decode_error != 0) return false;
-    idx = last_byte;
-
-    // issuer Name SEQUENCE — capture the TLV (tag + length +
-    // content) for use as the SignerInfo IssuerAndSerialNumber's
-    // issuer field.
-    size_t issuer_start = idx;
-    idx = ptls_asn1_get_expected_type_and_length(
-        der, der_len, idx, 0x30,
-        &length, &indefinite_length, &last_byte, &decode_error, NULL);
-    if (decode_error != 0) return false;
-    *issuer_dn_start     = der + issuer_start;
-    *issuer_dn_total_len = last_byte - issuer_start;
-
-    return true;
-}
-
-// ---------------------------------------------------------------------------
-// PKCS#8 walker — extracts the inner RSAPrivateKey's (n, d) byte
-// slices. Mirrors the extract_rsa_nd helper in
-// test/unit/test_pkcs7_signed_data.c. Returns true on success.
-// ---------------------------------------------------------------------------
-
-static bool
-extract_rsa_nd_from_pkcs8(const uint8_t  *der,
-                          size_t          der_len,
-                          const uint8_t **out_n,
-                          size_t         *out_n_len,
-                          const uint8_t **out_d,
-                          size_t         *out_d_len)
-{
-    uint32_t length            = 0;
-    int      indefinite_length = 0;
-    size_t   last_byte         = 0;
-    int      decode_error      = 0;
-    size_t   idx;
-
-    // Outer PKCS#8 SEQUENCE.
-    idx = ptls_asn1_get_expected_type_and_length(
-        der, der_len, 0, 0x30,
-        &length, &indefinite_length, &last_byte, &decode_error, NULL);
-    if (decode_error != 0) return false;
-
-    // version INTEGER 0.
-    idx = ptls_asn1_get_expected_type_and_length(
-        der, der_len, idx, 0x02,
-        &length, &indefinite_length, &last_byte, &decode_error, NULL);
-    if (decode_error != 0) return false;
-    idx = last_byte;
-
-    // privateKeyAlgorithm SEQUENCE — skip.
-    idx = ptls_asn1_get_expected_type_and_length(
-        der, der_len, idx, 0x30,
-        &length, &indefinite_length, &last_byte, &decode_error, NULL);
-    if (decode_error != 0) return false;
-    idx = last_byte;
-
-    // privateKey OCTET STRING (contains the RSAPrivateKey SEQUENCE).
-    idx = ptls_asn1_get_expected_type_and_length(
-        der, der_len, idx, 0x04,
-        &length, &indefinite_length, &last_byte, &decode_error, NULL);
-    if (decode_error != 0) return false;
-    size_t inner_off = idx;
-
-    // RSAPrivateKey SEQUENCE.
-    inner_off = ptls_asn1_get_expected_type_and_length(
-        der, der_len, inner_off, 0x30,
-        &length, &indefinite_length, &last_byte, &decode_error, NULL);
-    if (decode_error != 0) return false;
-
-    // version INTEGER 0.
-    inner_off = ptls_asn1_get_expected_type_and_length(
-        der, der_len, inner_off, 0x02,
-        &length, &indefinite_length, &last_byte, &decode_error, NULL);
-    if (decode_error != 0) return false;
-    inner_off = last_byte;
-
-    // modulus n INTEGER.
-    inner_off = ptls_asn1_get_expected_type_and_length(
-        der, der_len, inner_off, 0x02,
-        &length, &indefinite_length, &last_byte, &decode_error, NULL);
-    if (decode_error != 0) return false;
-    *out_n     = der + inner_off;
-    *out_n_len = length;
-    inner_off  = last_byte;
-
-    // publicExponent e INTEGER — skip.
-    inner_off = ptls_asn1_get_expected_type_and_length(
-        der, der_len, inner_off, 0x02,
-        &length, &indefinite_length, &last_byte, &decode_error, NULL);
-    if (decode_error != 0) return false;
-    inner_off = last_byte;
-
-    // privateExponent d INTEGER.
-    inner_off = ptls_asn1_get_expected_type_and_length(
-        der, der_len, inner_off, 0x02,
-        &length, &indefinite_length, &last_byte, &decode_error, NULL);
-    if (decode_error != 0) return false;
-    *out_d     = der + inner_off;
-    *out_d_len = length;
-
-    return true;
-}
-
-// ---------------------------------------------------------------------------
 // Compose: cert PEM + key PEM → resolved identity handle.
 // ---------------------------------------------------------------------------
 
@@ -456,12 +242,12 @@ build_identity_from_pem(n00b_string_t    *cert_path,
     size_t         issuer_dn_total    = 0;
     const uint8_t *serial_bytes       = nullptr;
     size_t         serial_len         = 0;
-    if (!extract_cert_issuer_serial((const uint8_t *)cert_der->data,
-                                    cert_der->byte_len,
-                                    &issuer_dn_start,
-                                    &issuer_dn_total,
-                                    &serial_bytes,
-                                    &serial_len)) {
+    if (!n00b_x509_extract_issuer_serial((const uint8_t *)cert_der->data,
+                                         cert_der->byte_len,
+                                         &issuer_dn_start,
+                                         &issuer_dn_total,
+                                         &serial_bytes,
+                                         &serial_len)) {
         *err_out = N00B_CHALK_ERR_KEY_PARSE_FAILED;
         return nullptr;
     }
@@ -470,10 +256,10 @@ build_identity_from_pem(n00b_string_t    *cert_path,
     size_t         n_len   = 0;
     const uint8_t *d_bytes = nullptr;
     size_t         d_len   = 0;
-    if (!extract_rsa_nd_from_pkcs8((const uint8_t *)key_der->data,
-                                   key_der->byte_len,
-                                   &n_bytes, &n_len,
-                                   &d_bytes, &d_len)) {
+    if (!n00b_x509_extract_rsa_pkcs8_nd((const uint8_t *)key_der->data,
+                                        key_der->byte_len,
+                                        &n_bytes, &n_len,
+                                        &d_bytes, &d_len)) {
         *err_out = N00B_CHALK_ERR_KEY_PARSE_FAILED;
         return nullptr;
     }
@@ -579,10 +365,51 @@ n00b_chalk_signer_identity_resolve(n00b_string_t *uri) _kargs
                                    N00B_CHALK_ERR_SIGNER_IDENTITY_NOT_FOUND);
         }
         size_t name_len = uri->u8_bytes - name_off;
-        n00b_string_t *cert_path = xdg_signing_identity_path(
-            uri->data + name_off, name_len, ".cert.pem", allocator);
-        n00b_string_t *key_path = xdg_signing_identity_path(
-            uri->data + name_off, name_len, ".key.pem", allocator);
+
+        // Compose "signing-identities/<name>.cert.pem" and
+        // "signing-identities/<name>.key.pem" suffixes; the shared
+        // helper joins them under `$XDG_CONFIG_HOME/n00b-attest/`
+        // (D-052). The byte layout matches the pre-lift
+        // `xdg_signing_identity_path` clone exactly.
+        static const char k_prefix[]    = "signing-identities/";
+        static const char k_cert_ext[]  = ".cert.pem";
+        static const char k_key_ext[]   = ".key.pem";
+        size_t            prefix_len    = sizeof(k_prefix)   - 1;
+        size_t            cert_ext_len  = sizeof(k_cert_ext) - 1;
+        size_t            key_ext_len   = sizeof(k_key_ext)  - 1;
+
+        size_t cert_suffix_total = prefix_len + name_len + cert_ext_len;
+        char  *cert_suffix_buf   = n00b_alloc_array_with_opts(
+            char,
+            cert_suffix_total + 1,
+            &(n00b_alloc_opts_t){.allocator = allocator});
+        memcpy(cert_suffix_buf, k_prefix, prefix_len);
+        memcpy(cert_suffix_buf + prefix_len, uri->data + name_off, name_len);
+        memcpy(cert_suffix_buf + prefix_len + name_len, k_cert_ext, cert_ext_len);
+        cert_suffix_buf[cert_suffix_total] = '\0';
+        n00b_string_t *cert_suffix = n00b_string_from_raw(
+            cert_suffix_buf,
+            (int64_t)cert_suffix_total,
+            .allocator = allocator);
+
+        size_t key_suffix_total = prefix_len + name_len + key_ext_len;
+        char  *key_suffix_buf   = n00b_alloc_array_with_opts(
+            char,
+            key_suffix_total + 1,
+            &(n00b_alloc_opts_t){.allocator = allocator});
+        memcpy(key_suffix_buf, k_prefix, prefix_len);
+        memcpy(key_suffix_buf + prefix_len, uri->data + name_off, name_len);
+        memcpy(key_suffix_buf + prefix_len + name_len, k_key_ext, key_ext_len);
+        key_suffix_buf[key_suffix_total] = '\0';
+        n00b_string_t *key_suffix = n00b_string_from_raw(
+            key_suffix_buf,
+            (int64_t)key_suffix_total,
+            .allocator = allocator);
+
+        n00b_string_t *cert_path = n00b_attest_xdg_path(
+            cert_suffix, .allocator = allocator);
+        n00b_string_t *key_path = n00b_attest_xdg_path(
+            key_suffix, .allocator = allocator);
         if (cert_path == nullptr || key_path == nullptr) {
             return n00b_result_err(n00b_chalk_signer_identity_t *,
                                    N00B_CHALK_ERR_SIGNER_IDENTITY_NOT_FOUND);

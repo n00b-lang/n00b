@@ -42,18 +42,19 @@
  * registries.json read uses libn00b's n00b_file_open / read
  * surface; the JSON parse uses n00b_json_parse.
  *
- * `getenv` is authorized for env-var config discovery per D-052
- * (project-local libc exception; scoped: read-side only,
- * getenv-only, n00b-attest-only; each call site cites D-052
- * inline). A future libn00b `n00b_getenv` lift (DF-010) makes
- * this exception unnecessary; when that surface ships, the
- * call sites below migrate to it.
+ * The registries.json path lookup is delegated to the shared
+ * `n00b_attest_xdg_path` helper (include/attest/n00b_attest_xdg.h)
+ * per the WP-005 mid-stream cleanup lift; the `getenv` exception
+ * (D-052) now lives in the helper's implementation. A future
+ * libn00b `n00b_getenv` lift (DF-010) eliminates the exception
+ * project-wide.
  */
 
 #include "internal/attest/oci/registry.h"
 #include "internal/attest/json_util.h"
 #include <attest/n00b_attest_oci.h>
 #include <attest/n00b_attest_error.h>
+#include <attest/n00b_attest_xdg.h>
 
 #include "core/string.h"
 #include "core/buffer.h"
@@ -66,64 +67,18 @@
 #include "text/unicode/idna.h"
 
 #include <stdatomic.h>
-#include <stdlib.h>  // getenv
 #include <string.h>
 
 // ---------------------------------------------------------------------------
-// Helpers — registries.json path resolution.
-//
-// Per the header doxygen + D-051 OQ-1 framing the resolver looks up
-// `$XDG_CONFIG_HOME/n00b-attest/registries.json` (fall back to
-// `$HOME/.config/n00b-attest/registries.json` when XDG_CONFIG_HOME
-// is unset). Missing file is NOT an error — the resolver returns
-// nullptr from this helper and the caller falls through to the
-// next source.
+// Helpers — registries.json path resolution lifted to the shared
+// `n00b_attest_xdg_path` helper (include/attest/n00b_attest_xdg.h)
+// per the WP-005 mid-stream cleanup lift. The byte-identical clone
+// pattern that previously lived here is now codified in one place,
+// shared with src/chalk/resign_identity.c. The suffix
+// `"registries.json"` flows through verbatim; the helper resolves
+// `$XDG_CONFIG_HOME/n00b-attest/registries.json` or
+// `$HOME/.config/n00b-attest/registries.json` per D-052.
 // ---------------------------------------------------------------------------
-
-static n00b_string_t *
-resolve_registries_json_path(n00b_allocator_t *alloc_for_call)
-{
-    // getenv() per D-052 (project-local libc exception for env-var
-    // config discovery). Future libn00b `n00b_getenv` lift = DF-010.
-    const char *xdg = getenv("XDG_CONFIG_HOME");
-    if (xdg != nullptr && xdg[0] != '\0') {
-        // $XDG_CONFIG_HOME/n00b-attest/registries.json
-        size_t xdg_len     = strlen(xdg);
-        const char  suffix[]   = "/n00b-attest/registries.json";
-        size_t suffix_len  = sizeof(suffix) - 1;
-        size_t total_len   = xdg_len + suffix_len;
-        char  *buf = n00b_alloc_array_with_opts(
-            char,
-            total_len + 1,
-            &(n00b_alloc_opts_t){.allocator = alloc_for_call});
-        memcpy(buf, xdg, xdg_len);
-        memcpy(buf + xdg_len, suffix, suffix_len);
-        buf[total_len] = '\0';
-        return n00b_string_from_raw(buf,
-                                    (int64_t)total_len,
-                                    .allocator = alloc_for_call);
-    }
-    // getenv() per D-052 (project-local libc exception); same
-    // authorization as the XDG_CONFIG_HOME site above.
-    const char *home = getenv("HOME");
-    if (home == nullptr || home[0] == '\0') {
-        return nullptr;
-    }
-    size_t home_len    = strlen(home);
-    const char  suffix[]   = "/.config/n00b-attest/registries.json";
-    size_t suffix_len  = sizeof(suffix) - 1;
-    size_t total_len   = home_len + suffix_len;
-    char  *buf = n00b_alloc_array_with_opts(
-        char,
-        total_len + 1,
-        &(n00b_alloc_opts_t){.allocator = alloc_for_call});
-    memcpy(buf, home, home_len);
-    memcpy(buf + home_len, suffix, suffix_len);
-    buf[total_len] = '\0';
-    return n00b_string_from_raw(buf,
-                                (int64_t)total_len,
-                                .allocator = alloc_for_call);
-}
 
 // ---------------------------------------------------------------------------
 // Helpers — read a file in full to a buffer.
@@ -332,7 +287,9 @@ static n00b_attest_oci_auth_t *
 auth_from_registries_json(n00b_string_t    *registry_filter,
                           n00b_allocator_t *alloc_for_call)
 {
-    n00b_string_t *path = resolve_registries_json_path(alloc_for_call);
+    n00b_string_t *path = n00b_attest_xdg_path(
+        n00b_string_from_cstr("registries.json", .allocator = alloc_for_call),
+        .allocator = alloc_for_call);
     if (path == nullptr) {
         return nullptr;
     }
