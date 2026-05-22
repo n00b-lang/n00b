@@ -535,6 +535,10 @@ link_whole_libs = [gen_unicode_lib, n00b_vendor_lib]
 # fold them in once link_whole_libs exists.
 link_whole_libs += n00b_quic_link_whole_libs
 
+# libchalk's macOS ObjC bridge (Mach-O re-sign via codesign(1) shim) —
+# same pattern as the QUIC bridges above.
+link_whole_libs += n00b_chalk_link_whole_libs
+
 # Build the Cocoa backend as a separate ObjC static library (macOS only).
 # ObjC files cannot go through ncc's C parser, so we compile them with
 # the system ObjC compiler directly (similar to the vendor library pattern).
@@ -819,6 +823,18 @@ test('chalk_pe_resign', chalk_pe_resign_test, suite: 'unit',
      depends: [pe_sigcheck],
      env: {'MESON_SOURCE_ROOT': meson.project_source_root()},
      workdir: meson.current_build_dir())
+
+# WP-005 P5: Mach-O re-sign regression test. Always-runs; on macOS
+# exercises the SecCodeSigner / codesign(1) bridge; on non-macOS
+# exercises the strip-only fallback. Fixture: test/unit/data/hello.macho
+# (committed). MESON_SOURCE_ROOT lets the test resolve the fixture path.
+chalk_macho_resign_test = executable('test_chalk_macho_resign',
+    ['test/unit/test_chalk_macho_resign.c'],
+    kwargs: test_common_kwargs,
+)
+test('chalk_macho_resign', chalk_macho_resign_test, suite: 'unit',
+     env: {'MESON_SOURCE_ROOT': meson.project_source_root()},
+     workdir: meson.project_source_root())
 
 attest_monocypher_smoke_test = executable('test_attest_monocypher_smoke',
     ['test/unit/test_attest_monocypher_smoke.c'],

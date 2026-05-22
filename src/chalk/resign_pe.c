@@ -42,28 +42,13 @@
 #include "compiler/objfile/bstream.h"
 #include "chalk/n00b_chalk_resign.h"
 #include "internal/chalk/file_io.h"
+#include "internal/chalk/resign_identity_internal.h"
 #include "util/pkcs7.h"
 #include "util/der_encode.h"
 
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>
-
-// Internal accessors from resign_identity.c.
-extern n00b_buffer_t *
-_n00b_chalk_signer_identity_cert_der(n00b_chalk_signer_identity_t *id);
-extern n00b_buffer_t *
-_n00b_chalk_signer_identity_issuer_dn(n00b_chalk_signer_identity_t *id);
-extern void
-_n00b_chalk_signer_identity_serial(n00b_chalk_signer_identity_t *id,
-                                   const uint8_t              **bytes,
-                                   size_t                       *len);
-extern void
-_n00b_chalk_signer_identity_rsa(n00b_chalk_signer_identity_t *id,
-                                const uint8_t              **n_bytes,
-                                size_t                       *n_len,
-                                const uint8_t              **d_bytes,
-                                size_t                       *d_len);
 
 // Authenticode SpcIndirectDataContent OID 1.3.6.1.4.1.311.2.1.4.
 static uint32_t k_spc_indirect_data_oid_arcs[] = {
@@ -311,19 +296,7 @@ n00b_chalk_pe_resign(n00b_string_t *path) _kargs
     return n00b_result_ok(bool, true);
 }
 
-// Mach-O re-sign body lands in WP-005 Phase 5. The declaration
-// here is the pre-P5 stub — it returns the failure code so
-// callers can distinguish "Mach-O re-sign not yet shipped" from
-// a real failure.
-n00b_result_t(bool)
-n00b_chalk_macho_resign(n00b_string_t *path) _kargs
-{
-    n00b_chalk_signer_identity_t *signer_identity = nullptr;
-    n00b_allocator_t             *allocator       = nullptr;
-}
-{
-    (void)path;
-    (void)signer_identity;
-    (void)allocator;
-    return n00b_result_err(bool, N00B_CHALK_ERR_RESIGN_FAILED);
-}
+// Mach-O re-sign body lives in resign_macho.c (cross-platform
+// dispatcher + non-macOS strip-only body) + resign_macho_darwin.m
+// (Security-framework body on macOS). The P4 pre-stub was removed
+// in P5; do not re-add a no-op stub here.

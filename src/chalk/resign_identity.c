@@ -33,6 +33,8 @@
 #include "core/alloc.h"
 #include "core/file.h"
 #include "chalk/n00b_chalk_resign.h"
+#include "internal/chalk/resign_identity_internal.h"
+#include "internal/chalk/resign_macho_raw.h"
 #include "adt/result.h"
 #include "util/x509_walk.h"
 #include "util/path.h"

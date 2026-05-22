@@ -57,6 +57,69 @@ A caller-passed-handle identity shape — analogous to the OCI auth
 caller-handle precedent — is a future ergonomics WP. WP-005 does
 not need it for the v1 Crayon-side consumer.
 
+## Mach-O re-signing (`n00b_chalk_macho_resign`)
+
+WP-005 P5 ships the Mach-O side of the re-sign surface via the
+same `n00b_chalk_signer_identity_resolve` URI scheme.
+
+### macOS host
+
+On macOS the body lives in `src/chalk/resign_macho_darwin.m`
+(Objective-C bridging file, compiled through the system clang
+front-end with `objc_args`). The bridge shells out to
+`/usr/bin/codesign(1)` rather than calling the
+`SecCodeSigner` API directly — codesign(1) is the canonical
+Apple-supported re-sign tool, handles all the entitlement /
+trust-anchor edge cases transparently, and avoids the
+consuming-binary-codesign requirement that `SecCodeSigner`
+triggers when invoked from an unsigned tool.
+
+- `signer_identity = nullptr` → ad-hoc signing
+  (`codesign --force --sign - <path>`). Equivalent to Apple's
+  ad-hoc convention. Suitable for local-dev workflows; will NOT
+  pass Gatekeeper for App Store / notarized distribution.
+- `signer_identity = file://cert.pem,file://key.pem` → cert + key
+  imported into a temp keychain via `security` CLI; codesign(1)
+  signs against the imported identity; temp keychain is cleaned
+  up on `_release`.
+- `signer_identity = store://<name>` → looks up the matching
+  identity in the user's Keychain by subject CN; passes the
+  identity hash to `codesign --sign <hash>`.
+
+### Non-macOS host (Linux / etc.)
+
+Cross-platform Mach-O code-signing emission is enormous (the
+`LC_CODE_SIGNATURE` blob layout, CodeDirectory hashes, CMS
+embedding, requirements language, etc.). Per the WP-005 plan
+disposition, this is **out of scope** for WP-005 and deferred
+to a future ergonomics WP.
+
+The non-macOS body falls back to **strip-only mode**: it removes
+any prior `LC_CODE_SIGNATURE` via `n00b_chalk_macho_strip_signature`
+and emits a structured warning ("Mach-O re-signed in strip-only
+mode; binary is no longer codesigned. This build is non-loadable
+on macOS Gatekeeper-enforcing environments.") The call returns
+`Ok(true)` so cross-platform callers don't have to special-case
+the host; the warning lets the operator know what happened.
+
+### Ad-hoc signing of n00b-attest itself
+
+Per `~/CLAUDE.md`'s macOS code-signing rule, ad-hoc signing
+(`codesign --sign -`) is **forbidden** for binaries needing
+Endpoint Security, Network Extension, or entitlements that
+require a real Developer ID + provisioning profile. n00b-attest
+itself does not need any of those entitlements, so if you find
+the SecCodeSigner-via-codesign(1) bridge complaining about the
+consuming binary not being signed, the workaround is to ad-hoc
+sign n00b-attest after building:
+
+```
+codesign --force --sign - build_debug/n00b-attest
+```
+
+This is acceptable hygiene (n00b-attest is non-entitled tooling)
+and documented inline in `src/chalk/resign_macho_darwin.m`.
+
 ## Deterministic signing
 
 WP-005 ships **without** an RFC 3161 timestamp authority

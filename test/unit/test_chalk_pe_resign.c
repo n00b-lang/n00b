@@ -442,20 +442,22 @@ test_identity_resolver_errors(void)
 }
 
 /* ----------------------------------------------------------------
- * Test 5: macho re-sign declaration is a P5 stub.
+ * Test 5: macho re-sign rejects obvious-invalid inputs.
  *
- * Calls n00b_chalk_macho_resign and asserts it returns
- * _RESIGN_FAILED (the P4 declaration-only stub).
+ * Calls n00b_chalk_macho_resign with /dev/null (not a Mach-O)
+ * and asserts it returns _RESIGN_FAILED. Full positive-path
+ * coverage lives in test_chalk_macho_resign.c which exercises
+ * the bridge against test/unit/data/hello.macho.
  * ---------------------------------------------------------------- */
 static void
-test_macho_resign_is_p5_stub(void)
+test_macho_resign_rejects_non_macho(void)
 {
-    fprintf(stderr, "[resign-test] macho_resign P5 stub returns failure\n");
+    fprintf(stderr, "[resign-test] macho_resign rejects non-Mach-O input\n");
     n00b_string_t *path = n00b_string_from_cstr("/dev/null");
     auto rr = n00b_chalk_macho_resign(path);
     assert(n00b_result_is_err(rr));
     assert(n00b_result_get_err(rr) == N00B_CHALK_ERR_RESIGN_FAILED);
-    fprintf(stderr, "  [PASS] macho_resign P5 stub\n");
+    fprintf(stderr, "  [PASS] macho_resign rejects non-Mach-O input\n");
 }
 
 int
@@ -465,7 +467,7 @@ main(int argc, char **argv)
 
     fprintf(stderr, "test_chalk_pe_resign:\n");
     test_identity_resolver_errors();
-    test_macho_resign_is_p5_stub();
+    test_macho_resign_rejects_non_macho();
     test_strip_only_mode();
     test_deterministic_signing();
     test_real_binary_resign();
