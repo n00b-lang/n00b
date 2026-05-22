@@ -20,6 +20,7 @@
 
 #include "n00b.h"
 #include "core/gc.h"
+#include "core/gc_stack.h"
 #include "core/alloc_mdata.h"
 #include "core/alloc.h"
 #include "core/memory_info.h"
@@ -55,6 +56,60 @@ static void n00b_add_range_strided_to_worklist(void *start, uint64_t nwords,
                                                 n00b_collect_t *ctx);
 static void n00b_add_range_to_worklist(void *start, uint32_t nwords,
                                        n00b_collect_t *ctx);
+
+// ============================================================================
+// Exact stack-map frame publication
+// ============================================================================
+
+n00b_gc_stack_policy_t
+n00b_gc_stack_get_policy(void)
+{
+    return (n00b_gc_stack_policy_t)n00b_thread_self()->gc_stack_policy;
+}
+
+n00b_gc_stack_policy_t
+n00b_gc_stack_set_policy(n00b_gc_stack_policy_t policy)
+{
+    assert(policy <= N00B_GC_STACK_EXACT_ONLY);
+
+    n00b_thread_t         *thread = n00b_thread_self();
+    n00b_gc_stack_policy_t old    = (n00b_gc_stack_policy_t)thread->gc_stack_policy;
+
+    thread->gc_stack_policy = (uint32_t)policy;
+    return old;
+}
+
+void
+n00b_gc_stack_push(n00b_gc_stack_frame_t *frame, const n00b_gc_stack_map_t *map,
+                   void **roots)
+{
+    assert(frame);
+    assert(map);
+    assert(!map->num_roots || roots);
+
+    n00b_thread_t *thread = n00b_thread_self();
+
+    *frame = (n00b_gc_stack_frame_t){
+        .prev  = thread->gc_stack_top,
+        .map   = map,
+        .roots = roots,
+    };
+    thread->gc_stack_top = frame;
+}
+
+void
+n00b_gc_stack_pop(n00b_gc_stack_frame_t *frame)
+{
+    assert(frame);
+
+    n00b_thread_t *thread = n00b_thread_self();
+
+    assert(thread->gc_stack_top == frame);
+    thread->gc_stack_top = frame->prev;
+    frame->prev          = nullptr;
+    frame->map           = nullptr;
+    frame->roots         = nullptr;
+}
 
 // ============================================================================
 // Helpers
@@ -700,6 +755,49 @@ n00b_scan_thread_stacks(n00b_collect_t *ctx)
             continue;
         }
 
+        n00b_gc_stack_policy_t stack_policy =
+            (n00b_gc_stack_policy_t)t->gc_stack_policy;
+        bool exact_stack_scanned = false;
+
+        if (stack_policy != N00B_GC_STACK_CONSERVATIVE) {
+            n00b_gc_stack_frame_t *frame = (n00b_gc_stack_frame_t *)t->gc_stack_top;
+
+            if (frame) {
+                exact_stack_scanned = true;
+            }
+
+            while (frame) {
+                const n00b_gc_stack_map_t *map = frame->map;
+
+                assert(map);
+                assert(map->num_slots == 0 || map->slots);
+                assert(map->num_roots == 0 || frame->roots);
+
+                for (uint32_t si = 0; si < map->num_slots; si++) {
+                    const n00b_gc_stack_slot_t *slot = &map->slots[si];
+
+                    assert(slot->root_index < map->num_roots);
+
+                    if (!slot->num_words) {
+                        continue;
+                    }
+
+                    void *addr = frame->roots[slot->root_index];
+                    if (addr) {
+                        n00b_scan_memory_range(ctx, addr, slot->num_words);
+                    }
+                }
+
+                frame = frame->prev;
+            }
+        }
+
+        if (stack_policy == N00B_GC_STACK_EXACT_ONLY
+            || (stack_policy == N00B_GC_STACK_EXACT_WITH_FALLBACK
+                && exact_stack_scanned)) {
+            goto scan_thread_state;
+        }
+
         // Since n00b_scan_memory_range cares about aligned words, we will
         // convert the stack bounds to pointers to the type uint64_t; that
         // way we can subtract the pointers.
@@ -730,6 +828,8 @@ n00b_scan_thread_stacks(n00b_collect_t *ctx)
         assert(num_words > 0);
 
         n00b_scan_memory_range(ctx, top, num_words);
+
+scan_thread_state:
         // Scan the thread structure while we're here.
         n00b_scan_memory_range(ctx,
                                (void *)t,

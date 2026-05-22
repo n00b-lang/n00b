@@ -677,6 +677,12 @@ gc_scan_map_test = executable('test_gc_scan_map',
 )
 test('gc_scan_map', gc_scan_map_test, suite: 'unit')
 
+gc_stack_test = executable('test_gc_stack',
+    ['test/unit/test_gc_stack.c'],
+    kwargs: test_common_kwargs,
+)
+test('gc_stack', gc_stack_test, suite: 'unit')
+
 gc_selective_scan_test = executable('test_gc_selective_scan',
     ['test/unit/test_gc_selective_scan.c'],
     kwargs: test_common_kwargs,

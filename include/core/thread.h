@@ -82,6 +82,8 @@ struct n00b_thread_t {
     n00b_memperm_pipe_t   memperm_pipe;
     n00b_futex_t          self_lock;
     n00b_futex_t          cv_wake;      ///< Per-thread futex for CV notification.
+    struct n00b_gc_stack_frame_t *gc_stack_top; ///< Top compiler-published exact GC frame.
+    uint32_t              gc_stack_policy; ///< n00b_gc_stack_policy_t value.
     n00b_thread_record_t *record;       ///< Pointer into rt->threads[slot].
     n00b_option_t(pthread_attr_t) pthread_attrs;
 };
