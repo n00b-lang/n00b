@@ -262,7 +262,7 @@ test_mid_stream_data_cap(void)
     }
     int rc = 0;
 
-    auto reqr = n00b_h3_client_request(L.client_h3, "GET", "https",
+    auto reqr = n00b_h3_client_request_raw(L.client_h3, "GET", "https",
                                        "localhost", "/big");
     if (n00b_result_is_err(reqr)) {
         printf("  [FAIL] mid_stream_data_cap: client_request err=%d\n",
@@ -278,7 +278,7 @@ test_mid_stream_data_cap(void)
     }
 
     /* Server replies with a 4-byte body. */
-    auto rr = n00b_h3_inbound_request_respond(ireq, 200, nullptr, 0,
+    auto rr = n00b_h3_inbound_request_respond_raw(ireq, 200, nullptr, 0,
                                               (const uint8_t *)"abcd", 4);
     if (n00b_result_is_err(rr)) {
         printf("  [FAIL] mid_stream_data_cap: respond err=%d\n",
@@ -378,7 +378,7 @@ test_content_length_short_circuit(void)
     }
     int rc = 0;
 
-    auto reqr = n00b_h3_client_request(L.client_h3, "GET", "https",
+    auto reqr = n00b_h3_client_request_raw(L.client_h3, "GET", "https",
                                        "localhost", "/cl");
     if (n00b_result_is_err(reqr)) {
         printf("  [FAIL] content_length_short_circuit: req err=%d\n",
@@ -407,7 +407,7 @@ test_content_length_short_circuit(void)
           .value     = (const uint8_t *)"10000",
           .value_len = 5 },
     };
-    auto rr = n00b_h3_inbound_request_respond(ireq, 200, hdrs, 1,
+    auto rr = n00b_h3_inbound_request_respond_raw(ireq, 200, hdrs, 1,
                                               (const uint8_t *)"x", 1);
     if (n00b_result_is_err(rr)) {
         printf("  [FAIL] content_length_short_circuit: respond err=%d\n",
@@ -483,7 +483,7 @@ test_cap_not_tripped(void)
     }
     int rc = 0;
 
-    auto reqr = n00b_h3_client_request(L.client_h3, "GET", "https",
+    auto reqr = n00b_h3_client_request_raw(L.client_h3, "GET", "https",
                                        "localhost", "/small");
     if (n00b_result_is_err(reqr)) {
         printf("  [FAIL] cap_not_tripped: client_request err=%d\n",
@@ -497,7 +497,7 @@ test_cap_not_tripped(void)
         printf("  [FAIL] cap_not_tripped: server never received\n");
         rc = 1; goto done;
     }
-    auto rr = n00b_h3_inbound_request_respond(ireq, 200, nullptr, 0,
+    auto rr = n00b_h3_inbound_request_respond_raw(ireq, 200, nullptr, 0,
                                               (const uint8_t *)"abcd", 4);
     if (n00b_result_is_err(rr)) {
         printf("  [FAIL] cap_not_tripped: respond err=%d\n",
@@ -571,7 +571,7 @@ test_cap_zero_passes_through(void)
     }
     int rc = 0;
 
-    auto reqr = n00b_h3_client_request(L.client_h3, "GET", "https",
+    auto reqr = n00b_h3_client_request_raw(L.client_h3, "GET", "https",
                                        "localhost", "/zero");
     if (n00b_result_is_err(reqr)) {
         printf("  [FAIL] cap_zero_passes_through: req err=%d\n",
@@ -585,7 +585,7 @@ test_cap_zero_passes_through(void)
         printf("  [FAIL] cap_zero_passes_through: never received\n");
         rc = 1; goto done;
     }
-    auto rr = n00b_h3_inbound_request_respond(ireq, 200, nullptr, 0,
+    auto rr = n00b_h3_inbound_request_respond_raw(ireq, 200, nullptr, 0,
                                               (const uint8_t *)"abcd", 4);
     if (n00b_result_is_err(rr)) {
         printf("  [FAIL] cap_zero_passes_through: respond err=%d\n",
