@@ -139,8 +139,8 @@ write_synthetic_pe(const char *suffix)
     assert(built != nullptr);
     assert(built->byte_len > 0);
 
-    char tmpl[64];
-    snprintf(tmpl, sizeof(tmpl), "synthetic_pe_e2e_%s_XXXXXX.exe", suffix);
+    char tmpl[128];
+    snprintf(tmpl, sizeof(tmpl), "/tmp/synthetic_pe_e2e_%s_XXXXXX.exe", suffix);
     int fd = mkstemps(tmpl, 4);
     assert(fd >= 0);
     ssize_t w = write(fd, built->data, built->byte_len);

@@ -146,7 +146,7 @@ _n00b_chalk_signer_identity_rsa(n00b_chalk_signer_identity_t *id,
 // Objective-C compiler (which cannot parse the ncc-extended
 // `resign_identity_internal.h`) can read the cert + key DER
 // pointer-pair from the opaque handle. Behavior mirrors the
-// typed accessors above: writes NULL / 0 on a nullptr handle
+// typed accessors above: writes nullptr / 0 on a nullptr handle
 // (matches the existing typed-accessor null-handling pattern).
 // ---------------------------------------------------------------------------
 
