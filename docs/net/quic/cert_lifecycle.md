@@ -71,10 +71,13 @@ When `should_renew(current)` returns `true`, the supervisor calls
 `acquire()` again, then:
 
 ```c
-n00b_quic_endpoint_reload_cert(ep,
-    .cert_der_bytes = …new cert leaf DER…,
-    .cert_der_len   = …,
-    .key_pem_path   = …new key path…);
+n00b_quic_endpoint_reload_cert(
+    ep,
+    (n00b_quic_cert_reload_t){
+        .cert_der_bytes = …new cert leaf DER…,
+        .cert_der_len   = …,
+        .key_pem_path   = …new key path…,
+    });
 ```
 
 Already-handshaked connections continue with their negotiated
@@ -105,10 +108,13 @@ while (running) {
         auto next = provisioner->acquire(provisioner);
         if (n00b_result_is_ok(next)) {
             current = n00b_result_get(next);
-            n00b_quic_endpoint_reload_cert(ep,
-                .cert_der_bytes = …,
-                .cert_der_len   = …,
-                .key_pem_path   = …);
+            n00b_quic_endpoint_reload_cert(
+                ep,
+                (n00b_quic_cert_reload_t){
+                    .cert_der_bytes = …,
+                    .cert_der_len   = …,
+                    .key_pem_path   = …,
+                });
         } else {
             /* log + back off; old cert is still valid until expiry */
         }

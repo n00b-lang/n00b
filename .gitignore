@@ -42,6 +42,7 @@ Desktop.ini
 # ── VCS ──────────────────────────────────────────────────────────────────────
 # jujutsu internals (the .jj dirs)
 **/.jj/
+.workspaces/
 
 # Python
 **/__pycache__/

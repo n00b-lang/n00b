@@ -243,7 +243,11 @@ loop_setup(rpc_loop_t *L)
         n00b_h3_server_drive(L->h3_server);
     }
 
-    L->rpc_chan = n00b_rpc_channel_new(L->h3_client, "https", "localhost");
+    L->rpc_chan = n00b_rpc_channel_new(
+        (n00b_rpc_channel_spec_t){
+            .h3        = L->h3_client,
+            .authority = "localhost",
+        });
     if (!L->rpc_chan) goto fail;
     return true;
 
@@ -741,11 +745,14 @@ concur_call_main(void *arg)
     /* Issue the request via the H3 client (the rpc_call_unary path
      * always pumps internally; we want the driver to pump). */
     auto reqr = n00b_h3_client_request(
-        a->L->h3_client, "POST", "https", "localhost",
-        "/svc.v1.Echo/Echo",
-        .body     = (const uint8_t *)"hello",
-        .body_len = 5,
-        .fin      = true);
+        a->L->h3_client,
+        (n00b_h3_request_spec_t){
+            .method    = "POST",
+            .authority = "localhost",
+            .path      = "/svc.v1.Echo/Echo",
+            .body      = (const uint8_t *)"hello",
+            .body_len  = 5,
+        });
     if (n00b_result_is_err(reqr)) {
         atomic_store(&a->done, 1);
         return nullptr;

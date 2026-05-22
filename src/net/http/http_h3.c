@@ -454,12 +454,15 @@ n00b_http_h3_round_trip(n00b_http_url_t *url)
     };
 
     auto reqr = n00b_h3_client_request(
-        h3, method, "https", authority, path_buf,
-        .extra_headers = xhdrs,
-        .n_extra       = n_extra,
-        .body          = body ? (const uint8_t *)body->data : nullptr,
-        .body_len      = body ? (size_t)body->byte_len : 0,
-        .fin           = true);
+        h3,
+        (n00b_h3_request_spec_t){
+            .method    = method,
+            .authority = authority,
+            .path      = path_buf,
+            .headers   = { .items = xhdrs, .count = n_extra },
+            .body      = body ? (const uint8_t *)body->data : nullptr,
+            .body_len  = body ? (size_t)body->byte_len : 0,
+        });
     if (n00b_result_is_err(reqr)) {
         int err = (int)n00b_result_get_err(reqr);
         h3_pool_entry_close(&entry_storage);

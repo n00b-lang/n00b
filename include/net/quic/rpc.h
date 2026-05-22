@@ -53,6 +53,12 @@ typedef struct n00b_quic_auth_policy n00b_quic_auth_policy_t;
 typedef struct n00b_jwt_verifier n00b_jwt_verifier_t;
 typedef struct n00b_rpc_auth_credentials n00b_rpc_auth_credentials_t;
 
+typedef struct {
+    n00b_h3_client_t *h3;
+    const char       *scheme;
+    const char       *authority;
+} n00b_rpc_channel_spec_t;
+
 /**
  * @brief Opaque handle to an RPC channel (a QUIC channel running H3 + RPC).
  *
@@ -79,17 +85,19 @@ typedef struct n00b_rpc_server n00b_rpc_server_t;
  * `:scheme` and `:authority` strings are duplicated into the runtime's
  * conduit_pool so the caller may free their own copies.
  *
- * @param h3         Connected H3 client.
- * @param scheme     `:scheme` pseudo-header value (typically "https").
- * @param authority  `:authority` pseudo-header value (host[:port]).
+ * @param spec        Connected H3 client plus authority. `scheme`
+ *                    defaults to "https".
  *
  * @return Allocated channel; nullptr on @p h3 / @p scheme / @p authority
  *         being null.
  */
 extern n00b_rpc_channel_t *
-n00b_rpc_channel_new(n00b_h3_client_t *h3,
-                     const char       *scheme,
-                     const char       *authority);
+n00b_rpc_channel_new(n00b_rpc_channel_spec_t spec);
+
+extern n00b_rpc_channel_t *
+n00b_rpc_channel_new_raw(n00b_h3_client_t *h3,
+                         const char       *scheme,
+                         const char       *authority);
 
 /** @brief Borrowed pointer to the underlying H3 client (diagnostic). */
 extern n00b_h3_client_t *

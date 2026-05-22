@@ -17,6 +17,10 @@ endif
 
 target_os = host_machine.system()
 target_arch = host_machine.cpu_family()
+macos_sdk = ''
+if target_os == 'darwin'
+  macos_sdk = run_command('xcrun', '--sdk', 'macosx', '--show-sdk-path', check: true).stdout().strip()
+endif
 
 cc = meson.get_compiler('c')
 vcpkg_inc = get_option('vcpkg_inc')
@@ -102,7 +106,8 @@ if using_glibc
 endif
 
 if target_os == 'darwin'
-    link_args = ['-target', target_arch + '-apple-' + target_os]
+    link_args = ['-target', target_arch + '-apple-' + target_os,
+                 '-isysroot', macos_sdk]
 elif target_os == 'windows'
     link_args = ['-static', '-Wl,--stack,16777216']
 else
@@ -235,25 +240,28 @@ endif
 exe_link_args = exe_link_args + ['-w']
 
 libatomic_dep = cc.find_library('atomic', required: false)
-libmath_dep = cc.find_library('m', required: false)
+libmath_dep = declare_dependency()
+if host_machine.system() != 'darwin'
+  libmath_dep = cc.find_library('m', required: false)
+endif
 libthreads_dep = dependency('threads', required: true)
 
 deps = [
   libmath_dep,
   libthreads_dep,
 ]
-
-libatomic_dep = cc.find_library('atomic', required: false)
-libmath_dep = cc.find_library('m', required: false)
-libthreads_dep = dependency('threads', required: true)
 if libatomic_dep.found()
   deps = deps + [libatomic_dep]
 endif
 
 if conf_cocoa
-  cocoa_dep = dependency('appleframeworks',
-      modules: ['Cocoa', 'CoreText', 'CoreGraphics', 'QuartzCore'])
-  deps += cocoa_dep
+  cocoa_dep = declare_dependency(link_args: [
+    '-framework', 'Cocoa',
+    '-framework', 'CoreText',
+    '-framework', 'CoreGraphics',
+    '-framework', 'QuartzCore',
+  ])
+  deps = deps + [cocoa_dep]
 endif
 
 # macOS Security.framework + CoreFoundation: needed by the ACME trust
@@ -261,9 +269,11 @@ endif
 # (secret_keychain.m).  Always-shipped Apple frameworks; unconditional
 # on darwin.
 if target_os == 'darwin'
-  acme_trust_dep = dependency('appleframeworks',
-      modules: ['Security', 'CoreFoundation'])
-  deps += acme_trust_dep
+  acme_trust_dep = declare_dependency(link_args: [
+    '-framework', 'Security',
+    '-framework', 'CoreFoundation',
+  ])
+  deps = deps + [acme_trust_dep]
 endif
 
 if conf_notcurses
@@ -306,8 +316,12 @@ picoquic_dep  = picoquic_proj.get_variable('picoquic_core_dep')
 
 # zlib for HTTP/1.1 + H3 Content-Encoding decompression (gzip/deflate).
 # brotli + zstd are dlopen'd at runtime in src/net/http/http_compression.c.
-zlib_dep = dependency('zlib', required: true)
-deps += zlib_dep
+if target_os == 'darwin'
+  zlib_dep = declare_dependency(link_args: [macos_sdk / 'usr/lib/libz.tbd'])
+else
+  zlib_dep = dependency('zlib', required: true)
+endif
+deps = deps + [zlib_dep]
 
 
 subdir('src/core')
@@ -408,7 +422,10 @@ subdir('src/slay')
 
 subdir('src/n00b')
 
-libdl_dep = cc.find_library('dl', required: false)
+libdl_dep = declare_dependency()
+if target_os != 'darwin'
+  libdl_dep = cc.find_library('dl', required: false)
+endif
 
 # ============================================================================
 # Logic / constraint solver

@@ -1199,6 +1199,20 @@ ireq_emit_data_internal(n00b_h3_inbound_request_t *req,
 
 n00b_result_t(bool)
 n00b_h3_inbound_request_respond(n00b_h3_inbound_request_t *req,
+                                n00b_h3_response_spec_t    response)
+{
+    return n00b_h3_inbound_request_respond_raw(
+        req,
+        response.status,
+        response.headers.items,
+        response.headers.count,
+        response.body,
+        response.body_len,
+        .fin = !response.keep_open);
+}
+
+n00b_result_t(bool)
+n00b_h3_inbound_request_respond_raw(n00b_h3_inbound_request_t *req,
                                 uint16_t                   status,
                                 const n00b_h3_header_t    *headers,
                                 size_t                     n_headers,
@@ -1256,6 +1270,18 @@ n00b_h3_inbound_request_respond(n00b_h3_inbound_request_t *req,
 
 n00b_result_t(bool)
 n00b_h3_inbound_request_send_headers(n00b_h3_inbound_request_t *req,
+                                     n00b_h3_response_headers_t headers)
+{
+    return n00b_h3_inbound_request_send_headers_raw(
+        req,
+        headers.status,
+        headers.headers.items,
+        headers.headers.count,
+        .fin = headers.fin);
+}
+
+n00b_result_t(bool)
+n00b_h3_inbound_request_send_headers_raw(n00b_h3_inbound_request_t *req,
                                      uint16_t                   status,
                                      const n00b_h3_header_t    *headers,
                                      size_t                     n_headers) _kargs
@@ -1286,9 +1312,19 @@ n00b_h3_inbound_request_send_headers(n00b_h3_inbound_request_t *req,
 
 n00b_result_t(bool)
 n00b_h3_inbound_request_send_data(n00b_h3_inbound_request_t *req,
-                                  const uint8_t             *body,
-                                  size_t                     body_len,
-                                  bool                       fin)
+                                  n00b_h3_data_t             data)
+{
+    return n00b_h3_inbound_request_send_data_raw(req,
+                                                data.body,
+                                                data.body_len,
+                                                data.fin);
+}
+
+n00b_result_t(bool)
+n00b_h3_inbound_request_send_data_raw(n00b_h3_inbound_request_t *req,
+                                      const uint8_t             *body,
+                                      size_t                     body_len,
+                                      bool                       fin)
 {
     if (!req) return n00b_result_err(bool, N00B_QUIC_ERR_NULL_ARG);
     if (!body && body_len > 0) {

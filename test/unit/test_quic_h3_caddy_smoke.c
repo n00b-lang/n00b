@@ -188,8 +188,13 @@ main(int argc, char **argv)
         n00b_h3_client_drive(h3);
     }
 
-    auto reqr = n00b_h3_client_request(h3, "GET", "https",
-                                        authority, "/");
+    auto reqr = n00b_h3_client_request(
+        h3,
+        (n00b_h3_request_spec_t){
+            .method    = "GET",
+            .authority = authority,
+            .path      = "/",
+        });
     if (n00b_result_is_err(reqr)) {
         printf("  [FAIL] h3_request: %d\n", n00b_result_get_err(reqr));
         n00b_h3_client_close(h3);

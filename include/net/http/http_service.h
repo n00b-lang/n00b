@@ -26,6 +26,120 @@ typedef void (*n00b_http_handler_fn)(n00b_http_request_t         *req,
                                      n00b_http_response_writer_t *resp,
                                      void                        *user_data);
 
+typedef struct {
+    n00b_string_t *name;
+    n00b_string_t *location;
+    bool           required;
+    n00b_string_t *schema_json;
+    n00b_string_t *description;
+} n00b_http_param_spec_t;
+
+typedef struct {
+    n00b_string_t *content_type;
+    n00b_string_t *schema_json;
+    bool           required;
+} n00b_http_body_spec_t;
+
+typedef struct {
+    uint16_t       status;
+    n00b_string_t *description;
+    n00b_string_t *content_type;
+    n00b_string_t *schema_json;
+} n00b_http_response_spec_t;
+
+typedef struct {
+    n00b_string_t        *method;
+    n00b_string_t        *path;
+    n00b_http_handler_fn  handler;
+    void                 *user_data;
+
+    n00b_string_t        *operation_id;
+    n00b_string_t        *summary;
+    n00b_string_t       **tags;
+    size_t                tag_count;
+
+    n00b_http_param_spec_t    *query_params;
+    size_t                     query_param_count;
+    n00b_http_body_spec_t      request_body;
+    n00b_http_response_spec_t *responses;
+    size_t                     response_count;
+} n00b_http_route_spec_t;
+
+typedef struct {
+    n00b_string_t  *service_id;
+    n00b_string_t  *service_name;
+    n00b_string_t  *service_version;
+    n00b_string_t  *api_version;
+    n00b_string_t  *openapi_path;
+    n00b_string_t  *health_path;
+    n00b_string_t **schema_paths;
+    size_t          schema_path_count;
+    n00b_string_t **capabilities;
+    size_t          capability_count;
+} n00b_http_discovery_info_t;
+
+typedef struct {
+    n00b_string_t **items;
+    size_t          count;
+} n00b_http_string_list_t;
+
+typedef struct {
+    n00b_http_param_spec_t *items;
+    size_t                  count;
+} n00b_http_param_list_t;
+
+typedef struct {
+    n00b_http_response_spec_t *items;
+    size_t                     count;
+} n00b_http_response_list_t;
+
+typedef struct {
+    n00b_string_t             *method;
+    n00b_string_t             *path;
+    n00b_http_handler_fn       handler;
+    void                      *user_data;
+
+    n00b_string_t             *id;
+    n00b_string_t             *summary;
+    n00b_http_string_list_t    tags;
+    n00b_http_param_list_t     query;
+    n00b_http_body_spec_t      body;
+    n00b_http_response_list_t  responses;
+} n00b_http_endpoint_t;
+
+typedef struct {
+    n00b_string_t            *service_id;
+    n00b_string_t            *name;
+    n00b_string_t            *version;
+    n00b_string_t            *api_version;
+    n00b_string_t            *openapi_path;
+    n00b_string_t            *health_path;
+    n00b_http_string_list_t   schemas;
+    n00b_http_string_list_t   capabilities;
+} n00b_http_discovery_doc_t;
+
+#define n00b_http_strings(...)                                               \
+    ((n00b_http_string_list_t){                                              \
+        .items = (n00b_string_t *[]){__VA_ARGS__},                           \
+        .count = sizeof((n00b_string_t *[]){__VA_ARGS__}) /                  \
+                 sizeof(n00b_string_t *)})
+
+#define n00b_http_tags(...) n00b_http_strings(__VA_ARGS__)
+#define n00b_http_schemas(...) n00b_http_strings(__VA_ARGS__)
+#define n00b_http_capabilities(...) n00b_http_strings(__VA_ARGS__)
+
+#define n00b_http_params(...)                                                \
+    ((n00b_http_param_list_t){                                               \
+        .items = (n00b_http_param_spec_t []){__VA_ARGS__},                   \
+        .count = sizeof((n00b_http_param_spec_t []){__VA_ARGS__}) /          \
+                 sizeof(n00b_http_param_spec_t)})
+
+#define n00b_http_responses(...)                                             \
+    ((n00b_http_response_list_t){                                            \
+        .items = (n00b_http_response_spec_t []){__VA_ARGS__},                \
+        .count = sizeof((n00b_http_response_spec_t []){__VA_ARGS__}) /       \
+                 sizeof(n00b_http_response_spec_t)})
+
 /**
  * @brief Create a local HTTP service.
  *
@@ -50,7 +164,66 @@ n00b_http_service_new()
     };
 
 /**
- * @brief Register an exact method/path route.
+ * @brief Build a query parameter doc entry.
+ */
+extern n00b_http_param_spec_t
+n00b_http_query_param(n00b_string_t *name)
+    _kargs {
+        bool           required    = false;
+        n00b_string_t *schema_json = nullptr;
+        n00b_string_t *description = nullptr;
+    };
+
+/**
+ * @brief Build a JSON request body doc entry.
+ */
+extern n00b_http_body_spec_t
+n00b_http_json_body(n00b_string_t *schema_json)
+    _kargs {
+        bool required = true;
+    };
+
+/**
+ * @brief Build a JSON response doc entry.
+ */
+extern n00b_http_response_spec_t
+n00b_http_json_response(uint16_t status)
+    _kargs {
+        n00b_string_t *description = nullptr;
+        n00b_string_t *schema_json = nullptr;
+    };
+
+/**
+ * @brief Register an exact method/path route with documentation metadata.
+ *
+ * This is the main route registration API. It keeps the service code compact
+ * while still giving n00b enough metadata to generate OpenAPI.
+ */
+extern n00b_result_t(bool)
+n00b_http_route(n00b_http_service_t *svc,
+                n00b_http_endpoint_t endpoint);
+
+extern n00b_result_t(bool)
+n00b_http_get(n00b_http_service_t *svc,
+              n00b_http_endpoint_t endpoint);
+
+extern n00b_result_t(bool)
+n00b_http_post(n00b_http_service_t *svc,
+               n00b_http_endpoint_t endpoint);
+
+/**
+ * @brief Mount local service discovery endpoints.
+ *
+ * Registers `GET /openapi.json`, `GET /.well-known/openapi.json`, and
+ * `GET /.well-known/<service-id>` unless custom paths are provided in @p doc.
+ * Must be called before `n00b_http_service_start`.
+ */
+extern n00b_result_t(bool)
+n00b_http_discover(n00b_http_service_t       *svc,
+                   n00b_http_discovery_doc_t  doc);
+
+/**
+ * @brief Register an exact method/path route without documentation metadata.
  *
  * Routes must be registered before `n00b_http_service_start`.
  */
@@ -60,6 +233,28 @@ n00b_http_service_route(n00b_http_service_t *svc,
                         n00b_string_t       *path,
                         n00b_http_handler_fn handler,
                         void                *user_data);
+
+/**
+ * @brief Low-level route descriptor API.
+ *
+ * n00b copies the route spec structure and array fields, but string values are
+ * retained by pointer. Most callers should prefer `n00b_http_get`,
+ * `n00b_http_post`, or `n00b_http_route`.
+ */
+extern n00b_result_t(bool)
+n00b_http_service_route_spec(n00b_http_service_t           *svc,
+                             const n00b_http_route_spec_t *spec);
+
+/**
+ * @brief Low-level service discovery descriptor API.
+ *
+ * Registers `GET /openapi.json`, `GET /.well-known/openapi.json`, and
+ * `GET /.well-known/<service-id>` unless custom paths are provided in @p info.
+ * Most callers should prefer `n00b_http_discover`.
+ */
+extern n00b_result_t(bool)
+n00b_http_service_enable_discovery(n00b_http_service_t                 *svc,
+                                   const n00b_http_discovery_info_t   *info);
 
 extern n00b_result_t(bool)
 n00b_http_service_start(n00b_http_service_t *svc);
@@ -100,5 +295,7 @@ n00b_http_response_writer_body(n00b_http_response_writer_t *resp,
 
 extern void
 n00b_http_response_writer_text(n00b_http_response_writer_t *resp,
-                               n00b_string_t               *body,
-                               n00b_string_t               *content_type);
+                               n00b_string_t               *body)
+    _kargs {
+        n00b_string_t *content_type = nullptr;
+    };

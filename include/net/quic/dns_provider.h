@@ -34,6 +34,23 @@
 
 typedef struct n00b_quic_dns_provider n00b_quic_dns_provider_t;
 
+typedef struct {
+    const char *api_token;
+    const char *zone_id;
+} n00b_quic_dns_cloudflare_config_t;
+
+typedef struct {
+    const char *access_key;
+    const char *secret_key;
+    const char *session_token;
+    const char *hosted_zone_id;
+} n00b_quic_dns_route53_config_t;
+
+typedef struct {
+    const char *project_id;
+    const char *managed_zone;
+} n00b_quic_dns_gcp_config_t;
+
 struct n00b_quic_dns_provider {
     /** @brief Diagnostic name (logs / preflight reports). */
     const char *name;
@@ -96,17 +113,17 @@ n00b_quic_dns_provider_manual(void);
 /**
  * @brief Construct the Cloudflare DNS provider.
  *
- * @param api_token  Cloudflare API token with `Zone:DNS:Edit`
- *                   permission scoped to @p zone_id.  Borrowed;
- *                   copied internally.
- * @param zone_id    Cloudflare zone identifier (the 32-char hex
- *                   string in the Cloudflare dashboard URL).
+ * @param config  Cloudflare API token plus zone identifier.  Strings are
+ *                borrowed and copied internally.
  *
  * @return Owned provider; close with the trait's close() hook.
  */
 extern n00b_result_t(n00b_quic_dns_provider_t *)
-n00b_quic_dns_provider_cloudflare(const char *api_token,
-                                  const char *zone_id);
+n00b_quic_dns_provider_cloudflare(n00b_quic_dns_cloudflare_config_t config);
+
+extern n00b_result_t(n00b_quic_dns_provider_t *)
+n00b_quic_dns_provider_cloudflare_raw(const char *api_token,
+                                      const char *zone_id);
 
 /* ===========================================================================
  * Route53: AWS Signature Version 4
@@ -115,13 +132,7 @@ n00b_quic_dns_provider_cloudflare(const char *api_token,
 /**
  * @brief Construct the Route53 DNS provider with static AWS credentials.
  *
- * @param access_key      AWS access key ID (e.g., AKIA...).
- * @param secret_key      AWS secret access key.
- * @param session_token   Optional session token for STS-issued
- *                        temporary credentials.  Pass nullptr when
- *                        using long-term IAM credentials.
- * @param hosted_zone_id  Route53 hosted-zone ID (e.g., Z0123456789ABC)
- *                        for the zone that holds the DNS names.
+ * @param config  AWS credential fields and hosted-zone ID.
  *
  * Phase 2 v1 ships static credentials only.  Production deployments
  * typically use IMDSv2 / pod-identity to obtain temporary creds —
@@ -132,10 +143,13 @@ n00b_quic_dns_provider_cloudflare(const char *api_token,
  * is hardcoded in the impl.
  */
 extern n00b_result_t(n00b_quic_dns_provider_t *)
-n00b_quic_dns_provider_route53(const char *access_key,
-                               const char *secret_key,
-                               const char *session_token,
-                               const char *hosted_zone_id);
+n00b_quic_dns_provider_route53(n00b_quic_dns_route53_config_t config);
+
+extern n00b_result_t(n00b_quic_dns_provider_t *)
+n00b_quic_dns_provider_route53_raw(const char *access_key,
+                                   const char *secret_key,
+                                   const char *session_token,
+                                   const char *hosted_zone_id);
 
 /* ===========================================================================
  * GCP Cloud DNS: metadata-server / env-var token
@@ -144,9 +158,7 @@ n00b_quic_dns_provider_route53(const char *access_key,
 /**
  * @brief Construct the GCP Cloud DNS provider.
  *
- * @param project_id     GCP project ID (e.g., "my-project-123").
- * @param managed_zone   Managed-zone *name* (not DNS name) that
- *                       holds the records.
+ * @param config  GCP project ID and managed-zone *name* (not DNS name).
  *
  * Authentication: the provider fetches a short-lived OAuth2
  * access token from the GCE metadata server (any GCP-managed
@@ -161,5 +173,8 @@ n00b_quic_dns_provider_route53(const char *access_key,
  * with Phase 3 (RSA support arrives alongside JWT verify).
  */
 extern n00b_result_t(n00b_quic_dns_provider_t *)
-n00b_quic_dns_provider_gcp(const char *project_id,
-                           const char *managed_zone);
+n00b_quic_dns_provider_gcp(n00b_quic_dns_gcp_config_t config);
+
+extern n00b_result_t(n00b_quic_dns_provider_t *)
+n00b_quic_dns_provider_gcp_raw(const char *project_id,
+                               const char *managed_zone);

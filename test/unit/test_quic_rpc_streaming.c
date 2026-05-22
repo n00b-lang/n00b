@@ -229,7 +229,11 @@ loop_setup(rpc_loop_t *L)
         n00b_h3_server_drive(L->h3_server);
     }
 
-    L->rpc_chan = n00b_rpc_channel_new(L->h3_client, "https", "localhost");
+    L->rpc_chan = n00b_rpc_channel_new(
+        (n00b_rpc_channel_spec_t){
+            .h3        = L->h3_client,
+            .authority = "localhost",
+        });
     if (!L->rpc_chan) goto fail;
     return true;
 

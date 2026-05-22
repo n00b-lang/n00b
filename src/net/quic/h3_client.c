@@ -298,6 +298,26 @@ n00b_h3_client_peer_settings(n00b_h3_client_t *client)
 
 n00b_result_t(n00b_h3_request_t *)
 n00b_h3_client_request(n00b_h3_client_t *client,
+                       n00b_h3_request_spec_t request)
+{
+    const char *scheme = request.scheme ? request.scheme : "https";
+    const char *path   = request.path ? request.path : "/";
+
+    return n00b_h3_client_request_raw(
+        client,
+        request.method,
+        scheme,
+        request.authority,
+        path,
+        .extra_headers = request.headers.items,
+        .n_extra       = request.headers.count,
+        .body          = request.body,
+        .body_len      = request.body_len,
+        .fin           = !request.keep_open);
+}
+
+n00b_result_t(n00b_h3_request_t *)
+n00b_h3_client_request_raw(n00b_h3_client_t *client,
                        const char       *method,
                        const char       *scheme,
                        const char       *authority,
@@ -538,9 +558,19 @@ n00b_h3_request_cancel(n00b_h3_request_t *req)
 
 n00b_result_t(bool)
 n00b_h3_request_send_data(n00b_h3_request_t *req,
-                          const uint8_t     *body,
-                          size_t             body_len,
-                          bool               fin)
+                          n00b_h3_data_t      data)
+{
+    return n00b_h3_request_send_data_raw(req,
+                                         data.body,
+                                         data.body_len,
+                                         data.fin);
+}
+
+n00b_result_t(bool)
+n00b_h3_request_send_data_raw(n00b_h3_request_t *req,
+                              const uint8_t     *body,
+                              size_t             body_len,
+                              bool               fin)
 {
     if (!req) return n00b_result_err(bool, N00B_QUIC_ERR_NULL_ARG);
     if (!body && body_len > 0) {

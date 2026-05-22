@@ -776,7 +776,18 @@ n00b_quic_endpoint_local_port(n00b_quic_endpoint_t *ep)
  * =========================================================================== */
 
 n00b_result_t(bool)
-n00b_quic_endpoint_reload_cert(n00b_quic_endpoint_t *ep) _kargs
+n00b_quic_endpoint_reload_cert(n00b_quic_endpoint_t *ep,
+                               n00b_quic_cert_reload_t reload)
+{
+    return n00b_quic_endpoint_reload_cert_raw(
+        ep,
+        .cert_der_bytes = reload.cert_der_bytes,
+        .cert_der_len   = reload.cert_der_len,
+        .key_pem_path   = reload.key_pem_path);
+}
+
+n00b_result_t(bool)
+n00b_quic_endpoint_reload_cert_raw(n00b_quic_endpoint_t *ep) _kargs
 {
     const uint8_t *cert_der_bytes = nullptr;
     size_t         cert_der_len   = 0;

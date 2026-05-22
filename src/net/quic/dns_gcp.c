@@ -241,8 +241,15 @@ gcp_close(n00b_quic_dns_provider_t *self)
 }
 
 n00b_result_t(n00b_quic_dns_provider_t *)
-n00b_quic_dns_provider_gcp(const char *project_id,
-                           const char *managed_zone)
+n00b_quic_dns_provider_gcp(n00b_quic_dns_gcp_config_t config)
+{
+    return n00b_quic_dns_provider_gcp_raw(config.project_id,
+                                         config.managed_zone);
+}
+
+n00b_result_t(n00b_quic_dns_provider_t *)
+n00b_quic_dns_provider_gcp_raw(const char *project_id,
+                               const char *managed_zone)
 {
     if (!project_id || !managed_zone ||
         project_id[0] == '\0' || managed_zone[0] == '\0') {

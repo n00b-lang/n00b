@@ -94,9 +94,11 @@ test_reload_swaps_cert(void)
     /* Step 2: hot-reload to cert B + key B. */
     auto rr = n00b_quic_endpoint_reload_cert(
         ep,
-        .cert_der_bytes = n00b_quic_reload_cert_der,
-        .cert_der_len   = n00b_quic_reload_cert_der_len,
-        .key_pem_path   = key_b);
+        (n00b_quic_cert_reload_t){
+            .cert_der_bytes = n00b_quic_reload_cert_der,
+            .cert_der_len   = n00b_quic_reload_cert_der_len,
+            .key_pem_path   = key_b,
+        });
     assert(n00b_result_is_ok(rr));
 
     /* Step 3: cert chain is now cert B. */
@@ -114,12 +116,17 @@ test_reload_swaps_cert(void)
 
     /* Step 4: argument validation. */
     /* Missing cert bytes. */
-    auto e1 = n00b_quic_endpoint_reload_cert(ep, .key_pem_path = key_b);
+    auto e1 = n00b_quic_endpoint_reload_cert(
+        ep,
+        (n00b_quic_cert_reload_t){ .key_pem_path = key_b });
     assert(n00b_result_is_err(e1));
     /* Missing key path. */
-    auto e2 = n00b_quic_endpoint_reload_cert(ep,
-        .cert_der_bytes = n00b_quic_reload_cert_der,
-        .cert_der_len   = n00b_quic_reload_cert_der_len);
+    auto e2 = n00b_quic_endpoint_reload_cert(
+        ep,
+        (n00b_quic_cert_reload_t){
+            .cert_der_bytes = n00b_quic_reload_cert_der,
+            .cert_der_len   = n00b_quic_reload_cert_der_len,
+        });
     assert(n00b_result_is_err(e2));
     printf("  [PASS] reload with missing args returns error\n");
 
@@ -129,10 +136,13 @@ test_reload_swaps_cert(void)
                                       .bind_host = "127.0.0.1",
                                       .alpn      = "n00b-reload/1");
     n00b_quic_endpoint_t *client = n00b_result_get(cur);
-    auto e3 = n00b_quic_endpoint_reload_cert(client,
-        .cert_der_bytes = n00b_quic_reload_cert_der,
-        .cert_der_len   = n00b_quic_reload_cert_der_len,
-        .key_pem_path   = key_b);
+    auto e3 = n00b_quic_endpoint_reload_cert(
+        client,
+        (n00b_quic_cert_reload_t){
+            .cert_der_bytes = n00b_quic_reload_cert_der,
+            .cert_der_len   = n00b_quic_reload_cert_der_len,
+            .key_pem_path   = key_b,
+        });
     assert(n00b_result_is_err(e3));
     assert(n00b_result_get_err(e3) == N00B_QUIC_ERR_INVALID_ARG);
     printf("  [PASS] reload on non-listening endpoint rejected\n");
@@ -246,10 +256,13 @@ test_reload_with_live_handshake(void)
     (void)c1;
 
     /* === Reload === */
-    auto rrr = n00b_quic_endpoint_reload_cert(server,
-        .cert_der_bytes = n00b_quic_reload_cert_der,
-        .cert_der_len   = n00b_quic_reload_cert_der_len,
-        .key_pem_path   = key_b);
+    auto rrr = n00b_quic_endpoint_reload_cert(
+        server,
+        (n00b_quic_cert_reload_t){
+            .cert_der_bytes = n00b_quic_reload_cert_der,
+            .cert_der_len   = n00b_quic_reload_cert_der_len,
+            .key_pem_path   = key_b,
+        });
     assert(n00b_result_is_ok(rrr));
     /* Server is still alive after reload — driving its loop doesn't
      * crash (this is the "endpoint stays viable" promise). */
@@ -281,10 +294,13 @@ test_reload_with_live_handshake(void)
      * server receive it; reload now and continue. */
     n00b_quic_endpoint_run_once(client, 5);
     n00b_quic_endpoint_run_once(server, 5);
-    auto rrr2 = n00b_quic_endpoint_reload_cert(server,
-        .cert_der_bytes = n00b_quic_test_cert_der,
-        .cert_der_len   = n00b_quic_test_cert_der_len,
-        .key_pem_path   = key_a);  /* swap back — third reload */
+    auto rrr2 = n00b_quic_endpoint_reload_cert(
+        server,
+        (n00b_quic_cert_reload_t){
+            .cert_der_bytes = n00b_quic_test_cert_der,
+            .cert_der_len   = n00b_quic_test_cert_der_len,
+            .key_pem_path   = key_a,  /* swap back — third reload */
+        });
     assert(n00b_result_is_ok(rrr2));
     /* Drive to terminal.  Outcome is undefined per the docstring,
      * but no crash. */
