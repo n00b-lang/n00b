@@ -327,9 +327,10 @@ test_build_with_section_data(void)
     n00b_macho_binary_t *parsed = n00b_result_get(r2);
 
     // Find __text section in __TEXT segment.
-    n00b_macho_section_t *parsed_sec = n00b_macho_section_by_name(
-        parsed, "__TEXT", "__text");
-    assert(parsed_sec != nullptr);
+    n00b_option_t(n00b_macho_section_t *) parsed_sec_opt
+        = n00b_macho_section_by_name(parsed, "__TEXT", "__text");
+    assert(n00b_option_is_set(parsed_sec_opt));
+    n00b_macho_section_t *parsed_sec = n00b_option_get(parsed_sec_opt);
     assert(parsed_sec->size == sizeof(code));
     assert(parsed_sec->content != nullptr);
     assert(n00b_buffer_len(parsed_sec->content) == sizeof(code));
@@ -376,13 +377,15 @@ test_build_with_data_segment(void)
     assert(n00b_macho_has_segment(parsed, "__TEXT"));
     assert(n00b_macho_has_segment(parsed, "__DATA"));
 
-    n00b_macho_segment_t *parsed_text = n00b_macho_segment_by_name(
-        parsed, "__TEXT");
-    n00b_macho_segment_t *parsed_data = n00b_macho_segment_by_name(
-        parsed, "__DATA");
+    n00b_option_t(n00b_macho_segment_t *) parsed_text_opt
+        = n00b_macho_segment_by_name(parsed, "__TEXT");
+    n00b_option_t(n00b_macho_segment_t *) parsed_data_opt
+        = n00b_macho_segment_by_name(parsed, "__DATA");
 
-    assert(parsed_text != nullptr);
-    assert(parsed_data != nullptr);
+    assert(n00b_option_is_set(parsed_text_opt));
+    assert(n00b_option_is_set(parsed_data_opt));
+    n00b_macho_segment_t *parsed_text = n00b_option_get(parsed_text_opt);
+    n00b_macho_segment_t *parsed_data = n00b_option_get(parsed_data_opt);
 
     // __DATA should come after __TEXT in memory.
     assert(parsed_data->vmaddr > parsed_text->vmaddr);
@@ -552,9 +555,10 @@ test_build_with_bindings(void)
     // Should have bindings.
     assert(parsed->num_bindings >= 1);
 
-    n00b_macho_binding_t *found = n00b_macho_binding_by_symbol(
-        parsed, "_printf");
-    assert(found != nullptr);
+    n00b_option_t(n00b_macho_binding_t *) found_opt
+        = n00b_macho_binding_by_symbol(parsed, "_printf");
+    assert(n00b_option_is_set(found_opt));
+    n00b_macho_binding_t *found = n00b_option_get(found_opt);
     assert(found->library_ordinal == 1);
 
     printf("  [PASS] build_with_bindings\n");
@@ -590,13 +594,16 @@ test_build_with_exports(void)
 
     assert(parsed->num_exports >= 2);
 
-    n00b_macho_export_t *main_exp = n00b_macho_export_by_name(parsed, "_main");
-    assert(main_exp != nullptr);
+    n00b_option_t(n00b_macho_export_t *) main_exp_opt
+        = n00b_macho_export_by_name(parsed, "_main");
+    assert(n00b_option_is_set(main_exp_opt));
+    n00b_macho_export_t *main_exp = n00b_option_get(main_exp_opt);
     assert(main_exp->address == 0x1000);
 
-    n00b_macho_export_t *helper_exp = n00b_macho_export_by_name(
-        parsed, "_helper");
-    assert(helper_exp != nullptr);
+    n00b_option_t(n00b_macho_export_t *) helper_exp_opt
+        = n00b_macho_export_by_name(parsed, "_helper");
+    assert(n00b_option_is_set(helper_exp_opt));
+    n00b_macho_export_t *helper_exp = n00b_option_get(helper_exp_opt);
     assert(helper_exp->address == 0x1100);
 
     printf("  [PASS] build_with_exports\n");
@@ -698,8 +705,10 @@ test_round_trip(void)
 
     // Verify symbol.
     assert(parsed->num_symbols >= 1);
-    n00b_macho_symbol_t *main_sym = n00b_macho_symbol_by_name(parsed, "_main");
-    assert(main_sym != nullptr);
+    n00b_option_t(n00b_macho_symbol_t *) main_sym_opt
+        = n00b_macho_symbol_by_name(parsed, "_main");
+    assert(n00b_option_is_set(main_sym_opt));
+    n00b_macho_symbol_t *main_sym = n00b_option_get(main_sym_opt);
     assert(main_sym->value == 0x100001000ULL);
 
     // Verify segment structure.
@@ -708,9 +717,10 @@ test_round_trip(void)
     assert(n00b_macho_has_segment(parsed, "__LINKEDIT"));
 
     // Verify section content.
-    n00b_macho_section_t *parsed_sec = n00b_macho_section_by_name(
-        parsed, "__TEXT", "__text");
-    assert(parsed_sec != nullptr);
+    n00b_option_t(n00b_macho_section_t *) parsed_sec_opt
+        = n00b_macho_section_by_name(parsed, "__TEXT", "__text");
+    assert(n00b_option_is_set(parsed_sec_opt));
+    n00b_macho_section_t *parsed_sec = n00b_option_get(parsed_sec_opt);
     assert(parsed_sec->content != nullptr);
     assert(n00b_buffer_len(parsed_sec->content) == sizeof(code));
     assert(memcmp(parsed_sec->content->data, code, sizeof(code)) == 0);
@@ -760,14 +770,16 @@ test_build_fat(void)
     assert(parsed->count == 2);
 
     // Find each architecture.
-    n00b_macho_binary_t *parsed_arm64 = n00b_macho_fat_by_cputype(
-        parsed, CPU_TYPE_ARM64);
-    assert(parsed_arm64 != nullptr);
+    n00b_option_t(n00b_macho_binary_t *) parsed_arm64_opt
+        = n00b_macho_fat_by_cputype(parsed, CPU_TYPE_ARM64);
+    assert(n00b_option_is_set(parsed_arm64_opt));
+    n00b_macho_binary_t *parsed_arm64 = n00b_option_get(parsed_arm64_opt);
     assert(parsed_arm64->header.cputype == (uint32_t)CPU_TYPE_ARM64);
 
-    n00b_macho_binary_t *parsed_x86 = n00b_macho_fat_by_cputype(
-        parsed, CPU_TYPE_X86_64);
-    assert(parsed_x86 != nullptr);
+    n00b_option_t(n00b_macho_binary_t *) parsed_x86_opt
+        = n00b_macho_fat_by_cputype(parsed, CPU_TYPE_X86_64);
+    assert(n00b_option_is_set(parsed_x86_opt));
+    n00b_macho_binary_t *parsed_x86 = n00b_option_get(parsed_x86_opt);
     assert(parsed_x86->header.cputype == (uint32_t)CPU_TYPE_X86_64);
 
     printf("  [PASS] build_fat\n");
@@ -832,8 +844,10 @@ test_build_with_build_version(void)
     n00b_macho_binary_t *parsed = n00b_result_get(r2);
     assert(n00b_macho_has_build_version(parsed));
 
-    n00b_macho_build_version_t *bv = n00b_macho_get_build_version(parsed);
-    assert(bv != nullptr);
+    n00b_option_t(n00b_macho_build_version_t *) bv_opt
+        = n00b_macho_get_build_version(parsed);
+    assert(n00b_option_is_set(bv_opt));
+    n00b_macho_build_version_t *bv = n00b_option_get(bv_opt);
     assert(bv->platform == PLATFORM_MACOS);
     assert(bv->minos == 0x000D0000);
     assert(bv->sdk == 0x000E0000);
@@ -875,17 +889,20 @@ test_build_with_rpaths(void)
     assert(n00b_macho_has_rpath(parsed));
     assert(parsed->num_rpaths == 2);
 
-    n00b_string_t *rp0 = n00b_macho_rpath_at(parsed, 0);
-    n00b_string_t *rp1 = n00b_macho_rpath_at(parsed, 1);
+    n00b_option_t(n00b_string_t *) rp0_opt = n00b_macho_rpath_at(parsed, 0);
+    n00b_option_t(n00b_string_t *) rp1_opt = n00b_macho_rpath_at(parsed, 1);
 
-    assert(rp0 != nullptr && rp0->data != nullptr);
+    assert(n00b_option_is_set(rp0_opt));
+    n00b_string_t *rp0 = n00b_option_get(rp0_opt);
+    assert(rp0->data != nullptr);
     assert(strcmp(rp0->data, "@executable_path/../Frameworks") == 0);
-    assert(rp1 != nullptr && rp1->data != nullptr);
+    assert(n00b_option_is_set(rp1_opt));
+    n00b_string_t *rp1 = n00b_option_get(rp1_opt);
+    assert(rp1->data != nullptr);
     assert(strcmp(rp1->data, "/usr/local/lib") == 0);
 
-    // Out of bounds returns nullptr.
-    n00b_string_t *rp2 = n00b_macho_rpath_at(parsed, 2);
-    assert(rp2 == nullptr);
+    // Out of bounds returns none.
+    assert(!n00b_option_is_set(n00b_macho_rpath_at(parsed, 2)));
 
     printf("  [PASS] build_with_rpaths\n");
 }
@@ -916,8 +933,10 @@ test_build_with_version_min(void)
     n00b_macho_binary_t *parsed = n00b_result_get(r2);
     assert(n00b_macho_has_version_min(parsed));
 
-    n00b_macho_version_min_t *vm = n00b_macho_get_version_min(parsed);
-    assert(vm != nullptr);
+    n00b_option_t(n00b_macho_version_min_t *) vm_opt
+        = n00b_macho_get_version_min(parsed);
+    assert(n00b_option_is_set(vm_opt));
+    n00b_macho_version_min_t *vm = n00b_option_get(vm_opt);
     assert(vm->cmd == LC_VERSION_MIN_MACOSX);
     assert(vm->version == 0x000B0000);
     assert(vm->sdk == 0x000C0000);
@@ -996,8 +1015,10 @@ test_build_with_data_in_code(void)
     n00b_macho_binary_t *parsed = n00b_result_get(r2);
     assert(n00b_macho_has_data_in_code(parsed));
 
-    n00b_macho_data_in_code_t *dic = n00b_macho_get_data_in_code(parsed);
-    assert(dic != nullptr);
+    n00b_option_t(n00b_macho_data_in_code_t *) dic_opt
+        = n00b_macho_get_data_in_code(parsed);
+    assert(n00b_option_is_set(dic_opt));
+    n00b_macho_data_in_code_t *dic = n00b_option_get(dic_opt);
     assert(dic->count == 2);
     assert(dic->entries[0].offset == 0x1000);
     assert(dic->entries[0].length == 4);
@@ -1034,8 +1055,10 @@ test_build_with_encryption_info(void)
     n00b_macho_binary_t *parsed = n00b_result_get(r2);
     assert(n00b_macho_has_encryption_info(parsed));
 
-    n00b_macho_encryption_info_t *ei = n00b_macho_get_encryption_info(parsed);
-    assert(ei != nullptr);
+    n00b_option_t(n00b_macho_encryption_info_t *) ei_opt
+        = n00b_macho_get_encryption_info(parsed);
+    assert(n00b_option_is_set(ei_opt));
+    n00b_macho_encryption_info_t *ei = n00b_option_get(ei_opt);
     assert(ei->cryptoff == 0x4000);
     assert(ei->cryptsize == 0x8000);
     assert(ei->cryptid == 1);
@@ -1234,7 +1257,10 @@ test_parse_real_build_version(void)
 
     // Modern macOS binaries should have LC_BUILD_VERSION.
     if (n00b_macho_has_build_version(bin)) {
-        n00b_macho_build_version_t *bv = n00b_macho_get_build_version(bin);
+        n00b_option_t(n00b_macho_build_version_t *) bv_opt
+            = n00b_macho_get_build_version(bin);
+        assert(n00b_option_is_set(bv_opt));
+        n00b_macho_build_version_t *bv = n00b_option_get(bv_opt);
         printf("    platform: %u, minos: 0x%x, sdk: 0x%x, tools: %u\n",
                bv->platform, bv->minos, bv->sdk, bv->num_tools);
         assert(bv->platform > 0);

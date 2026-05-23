@@ -339,15 +339,18 @@ test_parse_real_binary(void)
     assert(bin->num_segments > 0);
 
     // Query API: __TEXT segment.
-    n00b_macho_segment_t *text = n00b_macho_segment_by_name(bin, "__TEXT");
-    assert(text != nullptr);
+    n00b_option_t(n00b_macho_segment_t *) text_opt
+        = n00b_macho_segment_by_name(bin, "__TEXT");
+    assert(n00b_option_is_set(text_opt));
+    n00b_macho_segment_t *text = n00b_option_get(text_opt);
 
     // Query API: __LINKEDIT segment.
     assert(n00b_macho_has_segment(bin, "__LINKEDIT"));
 
     // Query API: LC_SEGMENT_64 command.
-    n00b_macho_command_t *seg_cmd = n00b_macho_command_by_type(bin, LC_SEGMENT_64);
-    assert(seg_cmd != nullptr);
+    n00b_option_t(n00b_macho_command_t *) seg_cmd_opt
+        = n00b_macho_command_by_type(bin, LC_SEGMENT_64);
+    assert(n00b_option_is_set(seg_cmd_opt));
 
     // Should have some symbols.
     printf("    cputype: 0x%x, filetype: %u, ncmds: %u\n",
@@ -363,9 +366,11 @@ test_parse_real_binary(void)
 
     // Query API: check for libSystem via substring match.
     if (bin->num_dylibs > 0) {
-        n00b_macho_dylib_t *libsys = n00b_macho_dylib_by_name(bin, "libSystem");
+        n00b_option_t(n00b_macho_dylib_t *) libsys_opt
+            = n00b_macho_dylib_by_name(bin, "libSystem");
 
-        if (libsys) {
+        if (n00b_option_is_set(libsys_opt)) {
+            n00b_macho_dylib_t *libsys = n00b_option_get(libsys_opt);
             printf("    libSystem found: %s\n", libsys->name->data);
         }
     }
@@ -482,11 +487,13 @@ test_segment_by_name(void)
 
     n00b_macho_binary_t *bin = n00b_result_get(r);
 
-    n00b_macho_segment_t *text = n00b_macho_segment_by_name(bin, "__TEXT");
-    assert(text != nullptr);
+    n00b_option_t(n00b_macho_segment_t *) text_opt
+        = n00b_macho_segment_by_name(bin, "__TEXT");
+    assert(n00b_option_is_set(text_opt));
+    n00b_macho_segment_t *text = n00b_option_get(text_opt);
     assert(text->vmaddr == 0x100000000ULL);
 
-    assert(n00b_macho_segment_by_name(bin, "__DATA") == nullptr);
+    assert(!n00b_option_is_set(n00b_macho_segment_by_name(bin, "__DATA")));
 
     printf("  [PASS] segment_by_name\n");
 }
@@ -506,12 +513,16 @@ test_symbol_by_name(void)
 
     n00b_macho_binary_t *bin = n00b_result_get(r);
 
-    n00b_macho_symbol_t *main_sym = n00b_macho_symbol_by_name(bin, "_main");
-    assert(main_sym != nullptr);
+    n00b_option_t(n00b_macho_symbol_t *) main_opt
+        = n00b_macho_symbol_by_name(bin, "_main");
+    assert(n00b_option_is_set(main_opt));
+    n00b_macho_symbol_t *main_sym = n00b_option_get(main_opt);
     assert(main_sym->value == 0x100001000ULL);
 
-    n00b_macho_symbol_t *helper = n00b_macho_symbol_by_name(bin, "_helper");
-    assert(helper != nullptr);
+    n00b_option_t(n00b_macho_symbol_t *) helper_opt
+        = n00b_macho_symbol_by_name(bin, "_helper");
+    assert(n00b_option_is_set(helper_opt));
+    n00b_macho_symbol_t *helper = n00b_option_get(helper_opt);
     assert(helper->value == 0x100001100ULL);
 
     printf("  [PASS] symbol_by_name\n");
@@ -533,15 +544,14 @@ test_dylib_by_name(void)
     n00b_macho_binary_t *bin = n00b_result_get(r);
 
     // Substring match.
-    n00b_macho_dylib_t *lib = n00b_macho_dylib_by_name(bin, "libSystem");
-    assert(lib != nullptr);
+    assert(n00b_option_is_set(n00b_macho_dylib_by_name(bin, "libSystem")));
 
     // Full path should also work.
-    lib = n00b_macho_dylib_by_name(bin, "/usr/lib/libSystem.B.dylib");
-    assert(lib != nullptr);
+    assert(n00b_option_is_set(
+        n00b_macho_dylib_by_name(bin, "/usr/lib/libSystem.B.dylib")));
 
     // Non-existent.
-    assert(n00b_macho_dylib_by_name(bin, "libFoo") == nullptr);
+    assert(!n00b_option_is_set(n00b_macho_dylib_by_name(bin, "libFoo")));
 
     printf("  [PASS] dylib_by_name\n");
 }
@@ -561,12 +571,16 @@ test_command_by_type(void)
 
     n00b_macho_binary_t *bin = n00b_result_get(r);
 
-    n00b_macho_command_t *seg = n00b_macho_command_by_type(bin, LC_SEGMENT_64);
-    assert(seg != nullptr);
+    n00b_option_t(n00b_macho_command_t *) seg_opt
+        = n00b_macho_command_by_type(bin, LC_SEGMENT_64);
+    assert(n00b_option_is_set(seg_opt));
+    n00b_macho_command_t *seg = n00b_option_get(seg_opt);
     assert(seg->cmd == LC_SEGMENT_64);
 
-    n00b_macho_command_t *dylib = n00b_macho_command_by_type(bin, LC_LOAD_DYLIB);
-    assert(dylib != nullptr);
+    n00b_option_t(n00b_macho_command_t *) dylib_opt
+        = n00b_macho_command_by_type(bin, LC_LOAD_DYLIB);
+    assert(n00b_option_is_set(dylib_opt));
+    n00b_macho_command_t *dylib = n00b_option_get(dylib_opt);
     assert(dylib->cmd == LC_LOAD_DYLIB);
 
     printf("  [PASS] command_by_type\n");
@@ -587,13 +601,15 @@ test_not_found_returns_null(void)
 
     n00b_macho_binary_t *bin = n00b_result_get(r);
 
-    assert(n00b_macho_segment_by_name(bin, "__DATA") == nullptr);
-    assert(n00b_macho_section_by_name(bin, "__TEXT", "__text") == nullptr);
-    assert(n00b_macho_symbol_by_name(bin, "_nosuch") == nullptr);
-    assert(n00b_macho_dylib_by_name(bin, "libFoo") == nullptr);
-    assert(n00b_macho_export_by_name(bin, "_nosuch") == nullptr);
-    assert(n00b_macho_binding_by_symbol(bin, "_nosuch") == nullptr);
-    assert(n00b_macho_command_by_type(bin, LC_LOAD_DYLIB) == nullptr);
+    assert(!n00b_option_is_set(n00b_macho_segment_by_name(bin, "__DATA")));
+    assert(!n00b_option_is_set(
+        n00b_macho_section_by_name(bin, "__TEXT", "__text")));
+    assert(!n00b_option_is_set(n00b_macho_symbol_by_name(bin, "_nosuch")));
+    assert(!n00b_option_is_set(n00b_macho_dylib_by_name(bin, "libFoo")));
+    assert(!n00b_option_is_set(n00b_macho_export_by_name(bin, "_nosuch")));
+    assert(!n00b_option_is_set(n00b_macho_binding_by_symbol(bin, "_nosuch")));
+    assert(!n00b_option_is_set(
+        n00b_macho_command_by_type(bin, LC_LOAD_DYLIB)));
 
     // Predicates.
     assert(n00b_macho_has_segment(bin, "__TEXT"));
@@ -602,10 +618,11 @@ test_not_found_returns_null(void)
     assert(!n00b_macho_has_entrypoint(bin));
 
     // nullptr safety.
-    assert(n00b_macho_segment_by_name(nullptr, "__TEXT") == nullptr);
-    assert(n00b_macho_symbol_by_name(nullptr, "_main") == nullptr);
+    assert(!n00b_option_is_set(n00b_macho_segment_by_name(nullptr, "__TEXT")));
+    assert(!n00b_option_is_set(n00b_macho_symbol_by_name(nullptr, "_main")));
     assert(!n00b_macho_has_entrypoint(nullptr));
-    assert(n00b_macho_fat_by_cputype(nullptr, CPU_TYPE_X86_64) == nullptr);
+    assert(!n00b_option_is_set(
+        n00b_macho_fat_by_cputype(nullptr, CPU_TYPE_X86_64)));
 
     printf("  [PASS] not_found_returns_null\n");
 }
@@ -705,16 +722,20 @@ test_code_signature_real(void)
         assert(bin->code_signature->datasize > 0);
 
         // Parsed code signature should exist.
-        n00b_macho_code_signature_parsed_t *csp = n00b_macho_get_code_signature(bin);
-        assert(csp != nullptr);
+        n00b_option_t(n00b_macho_code_signature_parsed_t *) csp_opt
+            = n00b_macho_get_code_signature(bin);
+        assert(n00b_option_is_set(csp_opt));
+        n00b_macho_code_signature_parsed_t *csp = n00b_option_get(csp_opt);
         assert(csp->num_blobs > 0);
 
         // Code directory should be parsed.
         assert(csp->code_directory != nullptr);
 
         // /usr/bin/true has identifier "com.apple.true".
-        n00b_string_t *ident = n00b_macho_codesign_identifier(bin);
-        assert(ident != nullptr);
+        n00b_option_t(n00b_string_t *) ident_opt
+            = n00b_macho_codesign_identifier(bin);
+        assert(n00b_option_is_set(ident_opt));
+        n00b_string_t *ident = n00b_option_get(ident_opt);
         assert(strstr(ident->data, "com.apple.true") != nullptr);
 
         // Version should be >= 0x20000 (CodeDirectory v2).
@@ -879,8 +900,10 @@ test_code_signature_synthetic(void)
     assert(bin->code_signature->datasize == sb_total);
 
     // Verify parsed code signature
-    n00b_macho_code_signature_parsed_t *csp = n00b_macho_get_code_signature(bin);
-    assert(csp != nullptr);
+    n00b_option_t(n00b_macho_code_signature_parsed_t *) csp_opt
+        = n00b_macho_get_code_signature(bin);
+    assert(n00b_option_is_set(csp_opt));
+    n00b_macho_code_signature_parsed_t *csp = n00b_option_get(csp_opt);
     assert(csp->num_blobs == 2);
 
     // Verify code directory
@@ -891,22 +914,24 @@ test_code_signature_synthetic(void)
     assert(csp->code_directory->page_size == 4096);
 
     // Verify identifier
-    n00b_string_t *id = n00b_macho_codesign_identifier(bin);
-    assert(id != nullptr);
+    n00b_option_t(n00b_string_t *) id_opt = n00b_macho_codesign_identifier(bin);
+    assert(n00b_option_is_set(id_opt));
+    n00b_string_t *id = n00b_option_get(id_opt);
     assert(strcmp(id->data, "test.codesig") == 0);
 
     // Verify entitlements
-    n00b_string_t *ent_str = n00b_macho_get_entitlements(bin);
-    assert(ent_str != nullptr);
+    n00b_option_t(n00b_string_t *) ent_opt = n00b_macho_get_entitlements(bin);
+    assert(n00b_option_is_set(ent_opt));
+    n00b_string_t *ent_str = n00b_option_get(ent_opt);
     assert(strstr(ent_str->data, "<plist>") != nullptr);
     assert(strstr(ent_str->data, "test") != nullptr);
 
-    // Verify query functions on binary without code sig return nullptr
+    // Verify query functions on binary without code sig return none
     n00b_macho_binary_t empty = {0};
-    assert(n00b_macho_get_code_signature(&empty) == nullptr);
-    assert(n00b_macho_get_entitlements(&empty) == nullptr);
-    assert(n00b_macho_codesign_identifier(&empty) == nullptr);
-    assert(n00b_macho_codesign_team_id(&empty) == nullptr);
+    assert(!n00b_option_is_set(n00b_macho_get_code_signature(&empty)));
+    assert(!n00b_option_is_set(n00b_macho_get_entitlements(&empty)));
+    assert(!n00b_option_is_set(n00b_macho_codesign_identifier(&empty)));
+    assert(!n00b_option_is_set(n00b_macho_codesign_team_id(&empty)));
 
     printf("  [PASS] code_signature_synthetic\n");
 }

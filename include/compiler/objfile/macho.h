@@ -391,33 +391,35 @@ extern n00b_result_t(n00b_macho_binary_t *) n00b_macho_parse_single(
 // Query API
 // ============================================================================
 
-/// Find a segment by name (e.g. "__TEXT"), or nullptr.
-extern n00b_macho_segment_t *n00b_macho_segment_by_name(
-    n00b_macho_binary_t *bin, const char *name);
+/// Find a segment by name (e.g. "__TEXT"); none if not found.
+extern n00b_option_t(n00b_macho_segment_t *)
+    n00b_macho_segment_by_name(n00b_macho_binary_t *bin, const char *name);
 
-/// Find a section by segment + section name, or nullptr.
-extern n00b_macho_section_t *n00b_macho_section_by_name(
-    n00b_macho_binary_t *bin, const char *segname, const char *sectname);
+/// Find a section by segment + section name; none if not found.
+extern n00b_option_t(n00b_macho_section_t *)
+    n00b_macho_section_by_name(n00b_macho_binary_t *bin,
+                               const char *segname,
+                               const char *sectname);
 
-/// Find a symbol by name, or nullptr.
-extern n00b_macho_symbol_t  *n00b_macho_symbol_by_name(
-    n00b_macho_binary_t *bin, const char *name);
+/// Find a symbol by name; none if not found.
+extern n00b_option_t(n00b_macho_symbol_t *)
+    n00b_macho_symbol_by_name(n00b_macho_binary_t *bin, const char *name);
 
-/// Find a dylib by substring match on its path, or nullptr.
-extern n00b_macho_dylib_t   *n00b_macho_dylib_by_name(
-    n00b_macho_binary_t *bin, const char *name);
+/// Find a dylib by substring match on its path; none if not found.
+extern n00b_option_t(n00b_macho_dylib_t *)
+    n00b_macho_dylib_by_name(n00b_macho_binary_t *bin, const char *name);
 
-/// Find an export by name, or nullptr.
-extern n00b_macho_export_t  *n00b_macho_export_by_name(
-    n00b_macho_binary_t *bin, const char *name);
+/// Find an export by name; none if not found.
+extern n00b_option_t(n00b_macho_export_t *)
+    n00b_macho_export_by_name(n00b_macho_binary_t *bin, const char *name);
 
-/// Find a binding by symbol name, or nullptr.
-extern n00b_macho_binding_t *n00b_macho_binding_by_symbol(
-    n00b_macho_binary_t *bin, const char *name);
+/// Find a binding by symbol name; none if not found.
+extern n00b_option_t(n00b_macho_binding_t *)
+    n00b_macho_binding_by_symbol(n00b_macho_binary_t *bin, const char *name);
 
-/// Find the first load command with the given type, or nullptr.
-extern n00b_macho_command_t *n00b_macho_command_by_type(
-    n00b_macho_binary_t *bin, uint32_t cmd);
+/// Find the first load command with the given type; none if not found.
+extern n00b_option_t(n00b_macho_command_t *)
+    n00b_macho_command_by_type(n00b_macho_binary_t *bin, uint32_t cmd);
 
 /// True if a segment with the given name exists.
 extern bool                  n00b_macho_has_segment(
@@ -431,53 +433,57 @@ extern bool                  n00b_macho_has_dylib(
 extern bool                  n00b_macho_has_entrypoint(
     n00b_macho_binary_t *bin);
 
-/// Find a binary within a fat container by CPU type, or nullptr.
-extern n00b_macho_binary_t  *n00b_macho_fat_by_cputype(
-    n00b_macho_fat_t *fat, uint32_t cputype);
+/// Find a binary within a fat container by CPU type; none if not found.
+extern n00b_option_t(n00b_macho_binary_t *)
+    n00b_macho_fat_by_cputype(n00b_macho_fat_t *fat, uint32_t cputype);
 
 /// True if the binary has an LC_BUILD_VERSION.
 extern bool n00b_macho_has_build_version(n00b_macho_binary_t *bin);
 
-/// Get the build version info, or nullptr.
-extern n00b_macho_build_version_t *n00b_macho_get_build_version(
-    n00b_macho_binary_t *bin);
+/// Get the build version info; none if no LC_BUILD_VERSION.
+extern n00b_option_t(n00b_macho_build_version_t *)
+    n00b_macho_get_build_version(n00b_macho_binary_t *bin);
 
 /// True if the binary has at least one LC_RPATH.
 extern bool n00b_macho_has_rpath(n00b_macho_binary_t *bin);
 
-/// Get the rpath at the given index, or nullptr.
-extern n00b_string_t *n00b_macho_rpath_at(n00b_macho_binary_t *bin, uint32_t idx);
+/// Get the rpath at the given index; none if out of range.
+extern n00b_option_t(n00b_string_t *)
+    n00b_macho_rpath_at(n00b_macho_binary_t *bin, uint32_t idx);
 
 /// True if the binary has a version min command.
 extern bool n00b_macho_has_version_min(n00b_macho_binary_t *bin);
 
-/// Get the version min info, or nullptr.
-extern n00b_macho_version_min_t *n00b_macho_get_version_min(
-    n00b_macho_binary_t *bin);
+/// Get the version min info; none if no version min command.
+extern n00b_option_t(n00b_macho_version_min_t *)
+    n00b_macho_get_version_min(n00b_macho_binary_t *bin);
 
 /// True if the binary has LC_DATA_IN_CODE.
 extern bool n00b_macho_has_data_in_code(n00b_macho_binary_t *bin);
 
-/// Get the data-in-code info, or nullptr.
-extern n00b_macho_data_in_code_t *n00b_macho_get_data_in_code(
-    n00b_macho_binary_t *bin);
+/// Get the data-in-code info; none if no LC_DATA_IN_CODE.
+extern n00b_option_t(n00b_macho_data_in_code_t *)
+    n00b_macho_get_data_in_code(n00b_macho_binary_t *bin);
 
 /// True if the binary has LC_ENCRYPTION_INFO_64.
 extern bool n00b_macho_has_encryption_info(n00b_macho_binary_t *bin);
 
-/// Get the encryption info, or nullptr.
-extern n00b_macho_encryption_info_t *n00b_macho_get_encryption_info(
-    n00b_macho_binary_t *bin);
+/// Get the encryption info; none if no LC_ENCRYPTION_INFO_64.
+extern n00b_option_t(n00b_macho_encryption_info_t *)
+    n00b_macho_get_encryption_info(n00b_macho_binary_t *bin);
 
-/// Get the parsed code signature, or nullptr.
-extern n00b_macho_code_signature_parsed_t *n00b_macho_get_code_signature(
-    n00b_macho_binary_t *bin);
+/// Get the parsed code signature; none if no code signature.
+extern n00b_option_t(n00b_macho_code_signature_parsed_t *)
+    n00b_macho_get_code_signature(n00b_macho_binary_t *bin);
 
-/// Get entitlements plist XML string, or nullptr.
-extern n00b_string_t *n00b_macho_get_entitlements(n00b_macho_binary_t *bin);
+/// Get entitlements plist XML string; none if no entitlements.
+extern n00b_option_t(n00b_string_t *)
+    n00b_macho_get_entitlements(n00b_macho_binary_t *bin);
 
-/// Get code signing identifier, or nullptr.
-extern n00b_string_t *n00b_macho_codesign_identifier(n00b_macho_binary_t *bin);
+/// Get code signing identifier; none if no code directory.
+extern n00b_option_t(n00b_string_t *)
+    n00b_macho_codesign_identifier(n00b_macho_binary_t *bin);
 
-/// Get code signing team ID, or nullptr.
-extern n00b_string_t *n00b_macho_codesign_team_id(n00b_macho_binary_t *bin);
+/// Get code signing team ID; none if no code directory.
+extern n00b_option_t(n00b_string_t *)
+    n00b_macho_codesign_team_id(n00b_macho_binary_t *bin);
