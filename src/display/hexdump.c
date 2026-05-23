@@ -234,14 +234,14 @@ n00b_hexdump_destroy(n00b_hexdump_t *hd)
     n00b_free(hd);
 }
 
-n00b_buffer_t *
+n00b_option_t(n00b_buffer_t *)
 n00b_hexdump_feed(n00b_hexdump_t *hd, n00b_buffer_t *buf)
 {
-    if (!hd || !buf) return nullptr;
+    if (!hd || !buf) return n00b_option_none(n00b_buffer_t *);
 
     int64_t  in_len  = 0;
     char    *in_data = n00b_buffer_to_c(buf, &in_len);
-    if (in_len <= 0) return nullptr;
+    if (in_len <= 0) return n00b_option_none(n00b_buffer_t *);
 
     const uint8_t *p   = (const uint8_t *)in_data;
     const uint8_t *end = p + in_len;
@@ -280,13 +280,13 @@ n00b_hexdump_feed(n00b_hexdump_t *hd, n00b_buffer_t *buf)
         }
     }
 
-    return out;
+    return n00b_option_from_nullable(n00b_buffer_t *, out);
 }
 
-n00b_buffer_t *
+n00b_option_t(n00b_buffer_t *)
 n00b_hexdump_flush(n00b_hexdump_t *hd)
 {
-    if (!hd || hd->line_offset == 0) return nullptr;
+    if (!hd || hd->line_offset == 0) return n00b_option_none(n00b_buffer_t *);
 
     char *line_out = n00b_alloc_array_with_opts(char, hd->line_width + 1,
                                                 &(n00b_alloc_opts_t){.allocator = hd->allocator});
@@ -298,7 +298,7 @@ n00b_hexdump_flush(n00b_hexdump_t *hd)
     hd->display_offset += hd->line_offset;
     hd->line_offset = 0;
 
-    return out;
+    return n00b_option_set(n00b_buffer_t *, out);
 }
 
 void
@@ -309,13 +309,13 @@ n00b_hexdump_reset(n00b_hexdump_t *hd)
     hd->display_offset = hd->start_offset;
 }
 
-n00b_buffer_t *
+n00b_option_t(n00b_buffer_t *)
 n00b_hexdump_set_width(n00b_hexdump_t *hd, uint32_t width)
 {
-    if (!hd) return nullptr;
+    if (!hd) return n00b_option_none(n00b_buffer_t *);
 
     // Flush partial line before changing layout.
-    n00b_buffer_t *flushed = n00b_hexdump_flush(hd);
+    n00b_option_t(n00b_buffer_t *) flushed = n00b_hexdump_flush(hd);
 
     hd->width = (width > 0) ? width : N00B_HEX_DEFAULT_WIDTH;
     recalc_layout(hd);
@@ -327,27 +327,36 @@ n00b_hexdump_set_width(n00b_hexdump_t *hd, uint32_t width)
     return flushed;
 }
 
-n00b_buffer_t *
+n00b_option_t(n00b_buffer_t *)
 n00b_hexdump_buf(n00b_buffer_t *buf)
     _kargs {
         uint32_t width  = 0;
         int64_t  offset = 0;
     }
 {
-    if (!buf || n00b_buffer_len(buf) == 0) return nullptr;
+    if (!buf || n00b_buffer_len(buf) == 0) {
+        return n00b_option_none(n00b_buffer_t *);
+    }
 
     n00b_hexdump_t *hd = n00b_hexdump_new(
         .width = width, .start_offset = offset, .sequential = true);
-    if (!hd) return nullptr;
+    if (!hd) return n00b_option_none(n00b_buffer_t *);
 
-    n00b_buffer_t *lines = n00b_hexdump_feed(hd, buf);
-    n00b_buffer_t *tail  = n00b_hexdump_flush(hd);
+    n00b_option_t(n00b_buffer_t *) lines_opt = n00b_hexdump_feed(hd, buf);
+    n00b_option_t(n00b_buffer_t *) tail_opt  = n00b_hexdump_flush(hd);
 
     n00b_hexdump_destroy(hd);
 
-    if (!lines && !tail) return nullptr;
-    if (!lines) return tail;
-    if (!tail) return lines;
+    bool have_lines = n00b_option_is_set(lines_opt);
+    bool have_tail  = n00b_option_is_set(tail_opt);
 
-    return n00b_buffer_add(lines, tail);
+    if (!have_lines && !have_tail) {
+        return n00b_option_none(n00b_buffer_t *);
+    }
+    if (!have_lines) return tail_opt;
+    if (!have_tail)  return lines_opt;
+
+    n00b_buffer_t *lines = n00b_option_get(lines_opt);
+    n00b_buffer_t *tail  = n00b_option_get(tail_opt);
+    return n00b_option_set(n00b_buffer_t *, n00b_buffer_add(lines, tail));
 }

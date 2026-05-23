@@ -18,13 +18,14 @@
  *
  * ```c
  * n00b_hexdump_t *hd = n00b_hexdump_new(.width = 80);
- * n00b_buffer_t  *out = n00b_hexdump_feed(hd, data_buf);
- * n00b_buffer_t  *tail = n00b_hexdump_flush(hd);
+ * n00b_option_t(n00b_buffer_t *) out  = n00b_hexdump_feed(hd, data_buf);
+ * n00b_option_t(n00b_buffer_t *) tail = n00b_hexdump_flush(hd);
  * ```
  */
 #pragma once
 
 #include "core/buffer.h"
+#include "adt/option.h"
 
 // ============================================================================
 // Layout constants (ported from slop/h4x0r)
@@ -144,20 +145,20 @@ n00b_hexdump_destroy(n00b_hexdump_t *hd);
  *
  * @param hd  Hex dump state.
  * @param buf Input data.
- * @return    Caller-owned buffer with complete formatted lines,
- *            or nullptr if no complete lines were produced.
+ * @return    Some(caller-owned buffer with complete formatted lines),
+ *            or None if no complete lines were produced.
  */
-extern n00b_buffer_t *
+extern n00b_option_t(n00b_buffer_t *)
 n00b_hexdump_feed(n00b_hexdump_t *hd, n00b_buffer_t *buf);
 
 /**
  * @brief Flush any buffered partial line.
  *
  * @param hd Hex dump state.
- * @return   Caller-owned buffer with the final line, or nullptr
- *           if nothing was buffered.
+ * @return   Some(caller-owned buffer with the final line), or
+ *           None if nothing was buffered.
  */
-extern n00b_buffer_t *
+extern n00b_option_t(n00b_buffer_t *)
 n00b_hexdump_flush(n00b_hexdump_t *hd);
 
 /**
@@ -178,9 +179,9 @@ n00b_hexdump_reset(n00b_hexdump_t *hd);
  *
  * @param hd    Hex dump state.
  * @param width New terminal width (0 = default).
- * @return      Flushed partial line, or nullptr.
+ * @return      Some(flushed partial line), or None.
  */
-extern n00b_buffer_t *
+extern n00b_option_t(n00b_buffer_t *)
 n00b_hexdump_set_width(n00b_hexdump_t *hd, uint32_t width);
 
 /**
@@ -201,10 +202,10 @@ n00b_hexdump_calc_cpl(uint32_t width);
  * @param buf   Data to format.
  * @kw width    Terminal width (0 = default).
  * @kw offset   Starting display address.
- * @return      Caller-owned buffer with the complete hex dump,
- *              or nullptr if @p buf is empty.
+ * @return      Some(caller-owned buffer with the complete hex dump),
+ *              or None if @p buf is empty.
  */
-extern n00b_buffer_t *
+extern n00b_option_t(n00b_buffer_t *)
 n00b_hexdump_buf(n00b_buffer_t *buf) _kargs {
     uint32_t width   = 0;
     int64_t  offset  = 0;
