@@ -64,6 +64,16 @@ struct n00b_gc_map_t {
 // n00b_gc_struct_array_t is declared in n00b.h because ncc-generated static
 // descriptor code may reference it while including only the umbrella header.
 
+/**
+ * @brief Descriptor for `n00b_gc_scan_cb_struct_layout`.
+ *
+ * Represents an array of `count` elements, each `stride` words wide, with
+ * `offset_count` pointer words per element. `offsets` is an array of word
+ * offsets relative to the start of one element.
+ */
+// n00b_gc_struct_layout_t is declared in n00b.h because ncc-generated static
+// descriptor code may reference it while including only the umbrella header.
+
 /** @brief Number of uint64_t words needed to hold a bitmap for
  *  @p num_words allocation words. */
 static inline uint64_t
@@ -84,6 +94,7 @@ extern void n00b_gc_map_unmark_range(n00b_gc_map_t *m, uint64_t start, uint64_t 
 extern void n00b_gc_map_mark_stride(n00b_gc_map_t *m, uint64_t start, uint64_t stride, uint64_t count);
 extern void n00b_gc_map_mark_every_other(n00b_gc_map_t *m, uint64_t start_offset);
 extern void n00b_gc_map_mark_struct_field(n00b_gc_map_t *m, uint64_t base, uint64_t stride, uint64_t offset, uint64_t count);
+extern void n00b_gc_map_mark_struct_layout(n00b_gc_map_t *m, const n00b_gc_struct_layout_t *layout);
 
 /// Built-in scan callbacks.  Prefer the matching fixed `scan_kind`
 /// enum value when it is sufficient — it lets the GC skip the
@@ -94,3 +105,4 @@ extern void n00b_gc_scan_cb_none(n00b_gc_map_t *m, void *user);
 extern void n00b_gc_scan_cb_every_other(n00b_gc_map_t *m, void *user);
 /// n00b_gc_scan_cb_struct_field is declared in n00b.h because generated
 /// static descriptor code may reference it through the umbrella header only.
+/// n00b_gc_scan_cb_struct_layout is declared in n00b.h for the same reason.

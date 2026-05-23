@@ -6,6 +6,19 @@
 #include "core/type_info.h"
 #include "core/pool.h"
 
+static char *
+n00b_registry_strdup(n00b_allocator_t *sp, const char *s)
+{
+    if (!s) {
+        return nullptr;
+    }
+
+    size_t len  = strlen(s);
+    char  *copy = n00b_alloc_array_with_opts(char, len + 1, &(n00b_alloc_opts_t){.allocator = sp});
+    memcpy(copy, s, len + 1);
+    return copy;
+}
+
 void
 n00b_type_registry_init(void)
 {
@@ -43,21 +56,9 @@ n00b_type_register(uint64_t type_hash, const n00b_type_info_t *info)
 
     *copy = *info;
 
-    // Intern the name string.
-    if (info->name) {
-        size_t len  = strlen(info->name);
-        char  *name = n00b_alloc_array_with_opts(char, len + 1, &(n00b_alloc_opts_t){.allocator = sp});
-        memcpy(name, info->name, len + 1);
-        copy->name = name;
-    }
-
-    // Intern literal_modifier if present.
-    if (info->literal_modifier) {
-        size_t len = strlen(info->literal_modifier);
-        char  *mod = n00b_alloc_array_with_opts(char, len + 1, &(n00b_alloc_opts_t){.allocator = sp});
-        memcpy(mod, info->literal_modifier, len + 1);
-        copy->literal_modifier = mod;
-    }
+    copy->name                 = n00b_registry_strdup(sp, info->name);
+    copy->literal_modifier     = n00b_registry_strdup(sp, info->literal_modifier);
+    copy->static_layout.reason = n00b_registry_strdup(sp, info->static_layout.reason);
 
     // ext_vtable starts as none.
     copy->ext_vtable = n00b_option_none(n00b_array_t(n00b_method_t) *);
@@ -81,6 +82,59 @@ n00b_type_lookup(uint64_t type_hash)
                                                     &found);
     return found ? n00b_option_set(n00b_type_info_t *, info)
                  : n00b_option_none(n00b_type_info_t *);
+}
+
+n00b_static_layout_opt_t
+n00b_type_static_layout(uint64_t type_hash)
+{
+    auto info_opt = n00b_type_lookup(type_hash);
+
+    if (!n00b_option_is_set(info_opt)) {
+        return n00b_option_none(n00b_static_layout_info_t *);
+    }
+
+    n00b_type_info_t *info = n00b_option_get(info_opt);
+    return n00b_option_set(n00b_static_layout_info_t *, &info->static_layout);
+}
+
+bool
+n00b_type_static_layout_allowed(uint64_t type_hash)
+{
+    auto layout_opt = n00b_type_static_layout(type_hash);
+
+    if (!n00b_option_is_set(layout_opt)) {
+        return false;
+    }
+
+    switch (n00b_option_get(layout_opt)->policy) {
+    case N00B_STATIC_LAYOUT_PLAIN:
+    case N00B_STATIC_LAYOUT_FIXUP:
+    case N00B_STATIC_LAYOUT_CONSTRUCTOR_IMAGE:
+        return true;
+    default:
+        return false;
+    }
+}
+
+const char *
+n00b_static_layout_policy_name(n00b_static_layout_policy_t policy)
+{
+    switch (policy) {
+    case N00B_STATIC_LAYOUT_DEFAULT_DENY:
+        return "default-deny";
+    case N00B_STATIC_LAYOUT_FORBIDDEN:
+        return "forbidden";
+    case N00B_STATIC_LAYOUT_TRANSIENT:
+        return "transient";
+    case N00B_STATIC_LAYOUT_PLAIN:
+        return "plain";
+    case N00B_STATIC_LAYOUT_FIXUP:
+        return "fixup";
+    case N00B_STATIC_LAYOUT_CONSTRUCTOR_IMAGE:
+        return "constructor-image";
+    default:
+        return "unknown";
+    }
 }
 
 uint64_t

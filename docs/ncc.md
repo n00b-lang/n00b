@@ -287,6 +287,29 @@ Tags can nest. Roles (prefixed with `@`) and named styles like `«em»` are
 **deferred** &mdash; they store a tag name that the rendering system resolves
 at display time, enabling theme-aware styling.
 
+### `ncc_static_image(...)` &mdash; Constructor-Backed Static Images
+
+**Status: Initial real target supported for `n00b_buffer_t`.**
+
+```c
+const n00b_buffer_t *raw = ncc_static_image("payload");
+const n00b_buffer_t *hex = ncc_static_image(.hex = "6869");
+const n00b_buffer_t *buf = ncc_static_image(.raw = "raw", .length = 3);
+const n00b_buffer_t *lit = b"payload";
+```
+
+The transform asks the n00b build-time static initializer helper to materialize
+the object as C declarations. For buffers, the helper emits descriptor-backed
+static payload bytes, a readonly `n00b_buffer_t`, scan metadata, dependency
+metadata, and response metadata. No runtime constructor is called for the
+generated static object.
+
+Arguments must currently be string, integer, or boolean literals. Mutable
+block-scope targets are rejected; block-scope uses should target `const`
+objects. `b"..."` is shorthand for a readonly static `n00b_buffer_t` byte
+payload and must target `n00b_buffer_t *`. Broader container images such as
+dictionaries remain future work.
+
 ### `once` &mdash; Single Initialization
 
 **Status: Complete (prototype). Available but not used in this codebase.**

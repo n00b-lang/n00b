@@ -127,13 +127,112 @@ typedef struct n00b_static_object_desc_t {
     uint32_t                flags;
 } n00b_static_object_desc_t;
 
+#define N00B_STATIC_IMAGE_CONTRACT_VERSION 1u
+
+typedef enum n00b_static_image_payload_kind_t : uint8_t {
+    N00B_STATIC_IMAGE_PAYLOAD_NONE  = 0,
+    N00B_STATIC_IMAGE_PAYLOAD_BYTES = 1,
+} n00b_static_image_payload_kind_t;
+
+typedef enum n00b_static_image_endian_t : uint8_t {
+    N00B_STATIC_IMAGE_ENDIAN_UNKNOWN = 0,
+    N00B_STATIC_IMAGE_ENDIAN_LITTLE  = 1,
+    N00B_STATIC_IMAGE_ENDIAN_BIG     = 2,
+} n00b_static_image_endian_t;
+
+#if defined(__BYTE_ORDER__) && defined(__ORDER_BIG_ENDIAN__) \
+    && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+#define N00B_STATIC_IMAGE_HOST_ENDIAN N00B_STATIC_IMAGE_ENDIAN_BIG
+#else
+#define N00B_STATIC_IMAGE_HOST_ENDIAN N00B_STATIC_IMAGE_ENDIAN_LITTLE
+#endif
+
+#define N00B_STATIC_IMAGE_ABI_INIT                                                            \
+    {                                                                                          \
+        .version       = N00B_STATIC_IMAGE_CONTRACT_VERSION,                                   \
+        .pointer_bytes = (uint8_t)sizeof(void *),                                               \
+        .size_t_bytes  = (uint8_t)sizeof(size_t),                                               \
+        .char_bits     = 8,                                                                     \
+        .endian        = N00B_STATIC_IMAGE_HOST_ENDIAN,                                        \
+    }
+
+typedef struct n00b_static_image_abi_t {
+    uint32_t version;
+    uint8_t  pointer_bytes;
+    uint8_t  size_t_bytes;
+    uint8_t  char_bits;
+    uint8_t  endian;
+} n00b_static_image_abi_t;
+
+typedef enum n00b_static_init_arg_kind_t : uint8_t {
+    N00B_STATIC_INIT_ARG_NONE  = 0,
+    N00B_STATIC_INIT_ARG_BYTES = 1,
+    N00B_STATIC_INIT_ARG_INT   = 2,
+    N00B_STATIC_INIT_ARG_BOOL  = 3,
+} n00b_static_init_arg_kind_t;
+
+typedef struct n00b_static_init_arg_t {
+    const char                    *name;
+    n00b_static_init_arg_kind_t    kind;
+    union {
+        struct {
+            const void *data;
+            uint64_t    len;
+        } bytes;
+        int64_t integer;
+        bool    boolean;
+    };
+} n00b_static_init_arg_t;
+
+typedef struct n00b_static_image_request_t {
+    uint32_t                         version;
+    uint64_t                         type_hash;
+    const char                      *type_name;
+    const char                      *symbol_prefix;
+    const char                      *entry_attr;
+    n00b_static_image_payload_kind_t payload_kind;
+    const void                      *payload;
+    uint64_t                         payload_len;
+    const n00b_static_init_arg_t    *args;
+    uint64_t                         arg_count;
+    n00b_static_image_abi_t          target_abi;
+    uint32_t                         object_flags;
+    n00b_gc_scan_kind_t              required_scan_kind;
+} n00b_static_image_request_t;
+
+typedef struct n00b_static_image_dependency_t {
+    const n00b_static_object_desc_t *desc;
+    uint64_t                         relocation_offset;
+    const char                      *role;
+} n00b_static_image_dependency_t;
+
+typedef struct n00b_static_image_response_t {
+    uint32_t                               version;
+    const n00b_static_image_request_t     *request;
+    const void                            *object_start;
+    uint64_t                               object_len;
+    n00b_gc_scan_kind_t                    scan_kind;
+    n00b_gc_scan_cb_t                      scan_cb;
+    void                                  *scan_user;
+    const n00b_static_image_dependency_t  *dependencies;
+    uint64_t                               dependency_count;
+} n00b_static_image_response_t;
+
 typedef struct {
     uint64_t stride;
     uint64_t offset;
     uint64_t count;
 } n00b_gc_struct_array_t;
 
+typedef struct {
+    uint64_t        stride;
+    uint64_t        count;
+    uint64_t        offset_count;
+    const uint64_t *offsets;
+} n00b_gc_struct_layout_t;
+
 extern void n00b_gc_scan_cb_struct_field(n00b_gc_map_t *m, void *user);
+extern void n00b_gc_scan_cb_struct_layout(n00b_gc_map_t *m, void *user);
 // First two are for anything that is an absolute size / length and
 // should always be a natural number.
 //

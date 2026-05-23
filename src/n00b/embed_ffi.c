@@ -1432,6 +1432,7 @@ void
 n00b_ffi_module_type_register(void)
 {
     N00B_TYPE_REGISTER(n00b_ffi_module_t,
+        N00B_TYPE_STATIC_TRANSIENT("ffi modules bind compiler and dynamic symbol state"),
         .literal_kind     = N00B_LIT_PREFIX,
         .literal_modifier = "ffi",
     );

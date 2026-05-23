@@ -69,11 +69,36 @@ test(void)
 }
 '''
 
+if target_os == 'darwin'
+  n00b_static_object_entry_attr = '__attribute__((section("__DATA,n00b_stobj"),used))'
+elif target_os == 'windows'
+  n00b_static_object_entry_attr = '__attribute__((section(".n00bs$m"),used))'
+else
+  n00b_static_object_entry_attr = '__attribute__((section("n00b_stobj"),used,retain))'
+endif
+
+n00b_rstr_template_plain = '({static n00b_string_t $0={.u8_bytes=$1,.data=$2,.codepoints=$3,.styling=((void*)0)};static const n00b_static_object_desc_t $6={.start=(const void*)&$0,.len=(uint64_t)sizeof($0),.tinfo=$4,.scan_kind=$10,.scan_cb=$11,.scan_user=$12,.object_id=$8,.file=__FILE__,.flags=$9};static const n00b_static_object_desc_t * const $7 $13=&$6;&$0;})'
+n00b_rstr_template_styled = '({$0 static n00b_string_t $1={.u8_bytes=$2,.data=$3,.codepoints=$4,.styling=$5};static const n00b_static_object_desc_t $8={.start=(const void*)&$1,.len=(uint64_t)sizeof($1),.tinfo=$6,.scan_kind=$12,.scan_cb=$13,.scan_user=$14,.object_id=$10,.file=__FILE__,.flags=$11};static const n00b_static_object_desc_t * const $9 $15=&$8;&$1;})'
+n00b_rstr_static_ref_template_plain = 'static n00b_string_t $0={.u8_bytes=$1,.data=$2,.codepoints=$3,.styling=((void*)0)};static const n00b_static_object_desc_t $6={.start=(const void*)&$0,.len=(uint64_t)sizeof($0),.tinfo=$4,.scan_kind=$10,.scan_cb=$11,.scan_user=$12,.object_id=$8,.file=__FILE__,.flags=$9};static const n00b_static_object_desc_t * const $7 $13=&$6;'
+n00b_rstr_static_ref_template_styled = '$0 static n00b_string_t $1={.u8_bytes=$2,.data=$3,.codepoints=$4,.styling=$5};static const n00b_static_object_desc_t $8={.start=(const void*)&$1,.len=(uint64_t)sizeof($1),.tinfo=$6,.scan_kind=$12,.scan_cb=$13,.scan_user=$14,.object_id=$10,.file=__FILE__,.flags=$11};static const n00b_static_object_desc_t * const $9 $15=&$8;'
+n00b_array_literal_data_template = '$13 static $0 $1[]={$3};static const n00b_static_object_desc_t $15={.start=(const void*)$1,.len=(uint64_t)sizeof($1),.tinfo=$4,.scan_kind=$6,.scan_cb=$7,.scan_user=$8,.object_id=$17,.file=__FILE__,.flags=$18};static const n00b_static_object_desc_t * const $16 $19=&$15;'
+
 c_args = [
   '--ncc-vargs-type=n00b_vargs_t',
   '--ncc-rstr-string-type=n00b_string_t',
-  '--ncc-rstr-template-plain=({static n00b_string_t $0={.u8_bytes=$1,.data=$2,.codepoints=$3,.styling=((void*)0)};&$0;})',
-  '--ncc-rstr-template-styled=({$0 static n00b_string_t $1={.u8_bytes=$2,.data=$3,.codepoints=$4,.styling=$5};&$1;})',
+  '--ncc-rstr-text-style-type=n00b_text_style_t',
+  '--ncc-rstr-style-record-type=n00b_style_record_t',
+  '--ncc-static-object-entry-attr=' + n00b_static_object_entry_attr,
+  '--ncc-rstr-template-plain=' + n00b_rstr_template_plain,
+  '--ncc-rstr-template-styled=' + n00b_rstr_template_styled,
+  '--ncc-rstr-static-ref-template-plain=' + n00b_rstr_static_ref_template_plain,
+  '--ncc-rstr-static-ref-template-styled=' + n00b_rstr_static_ref_template_styled,
+  '--ncc-rstr-static-ref-expr-plain=&$0',
+  '--ncc-rstr-static-ref-expr-styled=&$1',
+  '--ncc-array-literal-data-template=' + n00b_array_literal_data_template,
+  '--ncc-array-literal-data-expr=$1',
+  '-include',
+  'n00b.h',
   '-Wextra',
   '-g',
   '-std=c23',
@@ -625,6 +650,31 @@ test_common_kwargs = {
 # Alias kept for clarity at QUIC test sites that drive picoquic
 # explicitly; structurally identical to test_common_kwargs.
 quic_test_kwargs = test_common_kwargs
+
+n00b_static_init_helper = executable('n00b-static-init-helper',
+    ['src/tools/n00b-static-init-helper.c'],
+    include_directories: incdir,
+    c_args: exe_c_args,
+    link_args: exe_link_args,
+    link_with: [n00b],
+    dependencies: [picoquic_dep, monocypher_dep],
+)
+
+n00b_static_init_helper_ready = custom_target(
+    'n00b-static-init-helper-ready',
+    output: 'n00b_static_init_helper_ready.h',
+    command: [
+        python3,
+        '-c',
+        'import pathlib, sys; pathlib.Path(sys.argv[1]).write_text("/* generated */\\n")',
+        '@OUTPUT@',
+    ],
+    depends: n00b_static_init_helper,
+)
+
+n00b_static_init_helper_flags = [
+    '--ncc-static-init-helper=' + n00b_static_init_helper.full_path(),
+]
 
 # QUIC demo executables — each lives in its own per-subdir meson.build.
 subdir('examples/quic_echo')
@@ -1267,6 +1317,32 @@ static_descriptor_test = executable('test_static_descriptor',
 )
 test('static_descriptor', static_descriptor_test, suite: 'unit')
 
+static_object_sections_test = executable('test_static_object_sections',
+    [
+      'test/unit/test_static_object_sections.c',
+      'test/unit/test_static_object_sections_extra.c',
+    ],
+    kwargs: test_common_kwargs,
+)
+test('static_object_sections', static_object_sections_test, suite: 'unit')
+
+ncc_static_objects_test = executable('test_ncc_static_objects',
+    ['test/unit/test_ncc_static_objects.c'],
+    kwargs: test_common_kwargs,
+)
+test('ncc_static_objects', ncc_static_objects_test, suite: 'unit')
+
+ncc_static_images_test = executable('test_ncc_static_images',
+    [
+      'test/unit/test_ncc_static_images.c',
+      n00b_static_init_helper_ready,
+    ],
+    kwargs: test_common_kwargs + {
+        'c_args': exe_c_args + n00b_static_init_helper_flags,
+    },
+)
+test('ncc_static_images', ncc_static_images_test, suite: 'unit')
+
 gc_selective_scan_test = executable('test_gc_selective_scan',
     ['test/unit/test_gc_selective_scan.c'],
     kwargs: test_common_kwargs,
@@ -1354,6 +1430,12 @@ type_registry_test = executable('test_type_registry',
     kwargs: test_common_kwargs,
 )
 test('type_registry', type_registry_test, suite: 'unit')
+
+type_static_layout_test = executable('test_type_static_layout',
+    ['test/unit/test_type_static_layout.c'],
+    kwargs: test_common_kwargs,
+)
+test('type_static_layout', type_static_layout_test, suite: 'unit')
 
 type_hash_test = executable('test_type_hash',
     ['test/unit/test_type_hash.c'],

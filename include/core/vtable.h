@@ -49,6 +49,7 @@ enum n00b_builtin_type_fn {
     N00B_BI_GC_MAP,
     N00B_BI_RENDER,
     N00B_BI_HASH,
+    N00B_BI_STATIC_INITIALIZER,
     N00B_BI_NUM_FUNCS,
 };
 

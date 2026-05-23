@@ -21,6 +21,7 @@
 #include "core/thread.h"
 #include "core/arena.h"
 #include "core/runtime.h"
+#include "core/static_objects.h"
 #include "adt/interval_tree.h"
 #include "adt/variant.h"
 #include "text/unicode/encoding.h"
@@ -96,6 +97,7 @@ void
 n00b_load_static_ranges(void)
 {
     dl_iterate_phdr(n00b_extract_lib_info, nullptr);
+    (void)n00b_static_objects_register_all();
 }
 
 #elifdef __APPLE__
@@ -137,6 +139,8 @@ n00b_on_lib_load(const struct mach_header *hdr, intptr_t slide)
         start += command->cmdsize;
         command = (void *)start;
     }
+
+    (void)n00b_static_objects_register_macho_image(hdr, slide);
 }
 
 void
@@ -149,8 +153,7 @@ n00b_load_static_ranges(void)
 void
 n00b_load_static_ranges(void)
 {
-    // TODO: Implement PE image enumeration for Windows.
-    // For now, only runtime-allocated regions are tracked.
+    (void)n00b_static_objects_register_all();
 }
 
 #else

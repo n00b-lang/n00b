@@ -146,6 +146,29 @@ n00b_gc_map_mark_struct_field(n00b_gc_map_t *m,
     n00b_gc_map_mark_stride(m, base + offset, stride, count);
 }
 
+void
+n00b_gc_map_mark_struct_layout(n00b_gc_map_t *m, const n00b_gc_struct_layout_t *layout)
+{
+    if (!layout || layout->count == 0 || layout->offset_count == 0) {
+        return;
+    }
+
+    assert(layout->stride > 0);
+    assert(layout->offsets != nullptr);
+
+    for (uint64_t i = 0; i < layout->count; i++) {
+        uint64_t base = i * layout->stride;
+
+        for (uint64_t j = 0; j < layout->offset_count; j++) {
+            uint64_t offset = layout->offsets[j];
+
+            assert(offset < layout->stride);
+            assert(base + offset < m->num_words);
+            n00b_gc_map_mark(m, base + offset);
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Built-in callbacks.
 // ---------------------------------------------------------------------------
@@ -178,4 +201,10 @@ n00b_gc_scan_cb_struct_field(n00b_gc_map_t *m, void *user)
 {
     n00b_gc_struct_array_t *desc = (n00b_gc_struct_array_t *)user;
     n00b_gc_map_mark_struct_field(m, 0, desc->stride, desc->offset, desc->count);
+}
+
+void
+n00b_gc_scan_cb_struct_layout(n00b_gc_map_t *m, void *user)
+{
+    n00b_gc_map_mark_struct_layout(m, (const n00b_gc_struct_layout_t *)user);
 }

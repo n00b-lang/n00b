@@ -99,9 +99,13 @@ fallback policy unless the boundary is proven not to hide live GC pointers.
 
 ## Static Object Descriptors
 
-Generated static objects that need GC visibility should be registered with
-`n00b_static_object_register()` after runtime initialization and before a
-collection can observe the object:
+Generated static objects that need GC visibility should publish a
+`n00b_static_object_desc_t` and place a pointer to that descriptor in the
+runtime static-object linker section. `n00b_static_objects_register_all()`
+enumerates the section and registers each descriptor with the mmap/range tree.
+
+Manual registration is still available for tests and hand-written runtime
+objects:
 
 ```c
 n00b_alloc_range_t *range = n00b_static_object_register(
@@ -157,6 +161,39 @@ scan policies that match their actual pointer fields. For example,
 `n00b_string_t` is a mixed struct, so a descriptor-based string object should
 not be registered with `ALL` unless every scalar word is known not to contain
 pointer-shaped data.
+
+## Static Image Initializers
+
+Constructor-backed static images are built before the final C compile, not at
+runtime startup. ncc sends a `n00b_static_image_request_t` to the
+`n00b-static-init-helper` build tool, including type hash/name, symbol prefix,
+literal arguments, target ABI stamp, mutability flags, and the required GC scan
+kind. The helper calls the registered type's static initializer vtable slot and
+returns ordinary C declarations plus the initializer expression.
+
+`n00b_buffer_t` is the first supported real target. Its static initializer
+accepts:
+
+```c
+const n00b_buffer_t *literal = b"payload";
+const n00b_buffer_t *hex     = ncc_static_image(.hex = "6869");
+```
+
+| Argument | Kind | Meaning |
+|----------|------|---------|
+| positional bytes | string literal bytes | Raw buffer payload. |
+| `.raw` | string literal bytes | Raw buffer payload. |
+| `.hex` | string literal bytes | Hex-encoded payload to decode at build time. |
+| `.length` | integer literal | Required/expected byte length, or zero-filled length when no payload is given. |
+| `.no_lock` | boolean literal | Accepted for constructor compatibility; static readonly buffers are emitted lockless. |
+
+`b"..."` is shorthand for a readonly static `n00b_buffer_t` byte payload. It
+supports ordinary C string escapes and adjacent ordinary string literal
+concatenation. The generated buffer image is readonly, descriptor-backed, and
+borrowed from static payload bytes. Unsupported registered types, mutable
+block-scope targets, bad literal argument kinds, ABI mismatches, and missing
+static initializer vtable slots are rejected at build time with ncc
+source-positioned diagnostics.
 
 ## Unsupported Generated Statics
 
