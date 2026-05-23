@@ -7,8 +7,6 @@
  */
 #pragma once
 
-#include <setjmp.h>
-
 #include "n00b.h"
 #include "core/thread.h"
 #include "core/macros.h"
@@ -54,13 +52,13 @@ extern void n00b_thread_start(void);
 
 #define n00b_run_blocking(...)                                                                 \
     {                                                                                          \
-        jmp_buf save_state = {0};                                                              \
-        if (!setjmp(save_state)) {                                                             \
+        n00b_jmp_buf_t save_state = {};                                                        \
+        if (!n00b_setjmp(&save_state)) {                                                       \
             n00b_capture_stack_top(n00b_thread_self());                                        \
             _n00b_thread_suspend(N00B_LOC_STRING());                                           \
             __VA_ARGS__;                                                                       \
             _n00b_thread_resume(N00B_LOC_STRING());                                            \
-            longjmp(save_state, 1);                                                            \
+            n00b_longjmp(&save_state, 1);                                                      \
         }                                                                                      \
         else {                                                                                 \
             n00b_thread_checkin();                                                             \
@@ -68,8 +66,8 @@ extern void n00b_thread_start(void);
     }
 
 typedef struct {
-    volatile jmp_buf save_state;
-    volatile void   *jmp_target;
+    n00b_jmp_buf_t save_state;
+    volatile void  *jmp_target;
 } n00b_stw_suspend_ctx;
 
 #define n00b_jmp_paste(x, y) x##y
@@ -82,7 +80,7 @@ typedef struct {
     }                                                                                          \
     if (n00b_atomic_load(&n00b_get_runtime()->stw) != (uint32_t)t->id_info.parts.id) {           \
         ctx.jmp_target = nullptr;                                                              \
-        if (!setjmp((void *)ctx.save_state)) {                                                 \
+        if (!n00b_setjmp(&ctx.save_state)) {                                                   \
             n00b_capture_stack_top(n00b_thread_self());                                        \
             _n00b_thread_suspend(N00B_LOC_STRING());                                           \
         }                                                                                      \
@@ -99,10 +97,10 @@ typedef struct {
         }                                                                                      \
         if (n00b_atomic_load(&n00b_get_runtime()->stw) != (uint32_t)t->id_info.parts.id) {                      \
             ctx.jmp_target = &&n00b_jmp_label(__LINE__);                                       \
-                                                                                               \
+                                                                                              \
             _n00b_thread_resume(N00B_LOC_STRING());                                            \
                                                                                                \
-            longjmp((void *)ctx.save_state, 1);                                                \
+            n00b_longjmp(&ctx.save_state, 1);                                                  \
             n00b_jmp_label(__LINE__) :;                                                        \
         }                                                                                      \
     }

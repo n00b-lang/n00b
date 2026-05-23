@@ -90,6 +90,7 @@ struct n00b_runtime_t {
     n00b_thread_record_t       *threads;
     n00b_base_allocator_t       slab_allocator;
     n00b_futex_t                stw;
+    n00b_futex_t                stw_generation;
     uint32_t                    stw_nesting;
     const char                 *theme_name;    // Active theme name (set during init).
     n00b_unicode_ctx_t         *unicode_ctx;   // Phase 4.5 unicode subsystem state.

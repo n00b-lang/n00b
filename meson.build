@@ -1253,6 +1253,14 @@ gc_stack_test = executable('test_gc_stack',
 )
 test('gc_stack', gc_stack_test, suite: 'unit')
 
+gc_stack_nonlocal_test = executable('test_gc_stack_nonlocal',
+    ['test/unit/test_gc_stack_nonlocal.c'],
+    kwargs: test_common_kwargs + {
+        'c_args': exe_c_args + ['--ncc-gc-stack-maps'],
+    },
+)
+test('gc_stack_nonlocal', gc_stack_nonlocal_test, suite: 'unit')
+
 static_descriptor_test = executable('test_static_descriptor',
     ['test/unit/test_static_descriptor.c'],
     kwargs: test_common_kwargs,
@@ -1288,6 +1296,12 @@ buffer_test = executable('test_buffer',
     kwargs: test_common_kwargs,
 )
 test('buffer', buffer_test, suite: 'unit')
+
+marshal_test = executable('test_marshal',
+    ['test/unit/test_marshal.c'],
+    kwargs: test_common_kwargs,
+)
+test('marshal', marshal_test, suite: 'unit')
 
 file_io_test = executable('test_file_io',
     ['test/unit/test_file_io.c'],
@@ -1449,6 +1463,12 @@ xform_test = executable('test_xform',
     kwargs: test_common_kwargs,
 )
 test('xform', xform_test, suite: 'unit')
+
+xform_marshal_test = executable('test_xform_marshal',
+    ['test/unit/test_xform_marshal.c'],
+    kwargs: test_common_kwargs,
+)
+test('xform_marshal', xform_marshal_test, suite: 'unit')
 
 xform_linebuf_test = executable('test_xform_linebuf',
     ['test/unit/test_xform_linebuf.c'],
@@ -2969,7 +2989,9 @@ test('conduit_udp', conduit_udp_test, suite: 'unit')
 
 regex_resharp_test = executable('test_regex_resharp',
     ['test/unit/test_regex_resharp.c'],
-    kwargs: test_common_kwargs,
+    kwargs: test_common_kwargs + {
+        'c_args': exe_c_args + ['--ncc-no-gc-stack-maps'],
+    },
 )
 test('regex_resharp', regex_resharp_test,
     suite: ['unit', 'long'],

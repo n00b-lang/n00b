@@ -108,7 +108,7 @@ n00b_alloc_info_exists(n00b_alloc_info_t info)
 // "\xcc400b1e\xcc" on little endian machines (byte swapped on on big endian)
 #define N00B_STATIC_MAGIC 0xcc653162303034ccUL
 
-struct n00b_static_header_t {
+typedef struct n00b_static_header_t {
     // We need to have the static magic be the same as starting from the guard
     // of n00b_inline_hdr_t, so there will generally be an extra word of
     // padding after alloc_loc, since we align to 16 byte boundaries.
@@ -117,7 +117,7 @@ struct n00b_static_header_t {
     uint64_t static_magic;
     n00b_core_alloc_info_fields;
     char data[0];
-};
+} n00b_static_header_t;
 
 #define N00B_ALLOC_HDR_SZ ((sizeof(n00b_inline_hdr_t) + N00B_ALIGN - 1) & ~(N00B_ALIGN - 1))
 

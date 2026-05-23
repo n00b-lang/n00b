@@ -115,6 +115,35 @@ n00b_gc_stack_pop(n00b_gc_stack_frame_t *frame)
     frame->roots         = nullptr;
 }
 
+n00b_jmp_buf_t *
+n00b_gc_stack_prepare_jmp(n00b_jmp_buf_t *ctx)
+{
+    assert(ctx);
+
+    n00b_thread_t *thread = n00b_thread_self();
+    assert(thread);
+
+    ctx->n00b_thread        = thread;
+    ctx->n00b_gc_stack_top = thread->gc_stack_top;
+    return ctx;
+}
+
+void
+n00b_gc_stack_restore(n00b_gc_stack_frame_t *top)
+{
+    n00b_thread_self()->gc_stack_top = top;
+}
+
+[[noreturn]] void
+n00b_longjmp(n00b_jmp_buf_t *ctx, int value)
+{
+    assert(ctx);
+    assert(ctx->n00b_thread == n00b_thread_self());
+
+    n00b_gc_stack_restore(ctx->n00b_gc_stack_top);
+    longjmp(ctx->n00b_jmp_env, value ? value : 1);
+}
+
 // ============================================================================
 // Helpers
 // ============================================================================
@@ -1288,14 +1317,14 @@ n00b_collect_internal(n00b_arena_t *arena)
 void
 n00b_collect(n00b_arena_t *arena)
 {
-    jmp_buf                            register_spill;
+    n00b_jmp_buf_t                     register_spill = {};
     [[maybe_unused]] volatile uint64_t top  = 0;
     volatile n00b_thread_t            *self = n00b_thread_self();
 
     self->stack_top = (void *)&top;
 
-    if (!setjmp(register_spill)) {
+    if (!n00b_setjmp(&register_spill)) {
         n00b_collect_internal(arena);
-        longjmp(register_spill, 1);
+        n00b_longjmp(&register_spill, 1);
     }
 }

@@ -167,14 +167,7 @@ n00b_shutdown(void)
 
     n00b_conduit_t *c = rt->default_conduit;
     if (c) {
-        n00b_atomic_store(&c->shutdown, true);
-
-        n00b_list_foreach(c->io_backends, p) {
-            n00b_conduit_io_backend_t *io = *p;
-            if (io) {
-                n00b_conduit_io_shutdown(io);
-            }
-        }
+        n00b_conduit_destroy(c);
     }
 
     n00b_stop_the_world();
@@ -231,8 +224,9 @@ n00b_init(n00b_runtime_t *rt, int argc, char *argv[]) _kargs
 
     assert(rt);
     *rt = (n00b_runtime_t){
-        .stw         = N00B_NO_OWNER,
-        .stw_nesting = 0,
+        .stw            = N00B_NO_OWNER,
+        .stw_generation = 0,
+        .stw_nesting    = 0,
     };
 
     if (!n00b_option_is_set(n00b_default_runtime)) {

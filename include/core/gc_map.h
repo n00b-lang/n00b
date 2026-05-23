@@ -61,11 +61,8 @@ struct n00b_gc_map_t {
  * elements, each `stride` words wide, where the pointer field sits at
  * word `offset` within the element.
  */
-typedef struct {
-    uint64_t stride;
-    uint64_t offset;
-    uint64_t count;
-} n00b_gc_struct_array_t;
+// n00b_gc_struct_array_t is declared in n00b.h because ncc-generated static
+// descriptor code may reference it while including only the umbrella header.
 
 /** @brief Number of uint64_t words needed to hold a bitmap for
  *  @p num_words allocation words. */
@@ -95,5 +92,5 @@ extern void n00b_gc_map_mark_struct_field(n00b_gc_map_t *m, uint64_t base, uint6
 extern void n00b_gc_scan_cb_all(n00b_gc_map_t *m, void *user);
 extern void n00b_gc_scan_cb_none(n00b_gc_map_t *m, void *user);
 extern void n00b_gc_scan_cb_every_other(n00b_gc_map_t *m, void *user);
-/// Caller passes user = &(n00b_gc_struct_array_t){ stride, offset, count }.
-extern void n00b_gc_scan_cb_struct_field(n00b_gc_map_t *m, void *user);
+/// n00b_gc_scan_cb_struct_field is declared in n00b.h because generated
+/// static descriptor code may reference it through the umbrella header only.

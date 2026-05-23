@@ -8,7 +8,6 @@
  */
 #pragma once
 
-#include <setjmp.h>
 #include <stdio.h>
 #include "n00b.h"
 #include "core/atomic.h"

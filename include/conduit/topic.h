@@ -295,6 +295,9 @@ typedef struct n00b_conduit_topic_base {
                 sys->header.type  = type;                                                      \
                 sys->header.topic = (n00b_conduit_topic_base_t *)topic;                        \
                 n00b_conduit_sys_queue_push(sub->sys_queue, sys);                              \
+                if (sub->inbox) {                                                              \
+                    n00b_condition_notify(&sub->inbox->cv, .auto_unlock = true);               \
+                }                                                                               \
             }                                                                                  \
         }                                                                                      \
     }                                                                                          \

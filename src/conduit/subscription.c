@@ -9,6 +9,7 @@
 #include "conduit/conduit.h"
 #include "core/runtime.h"
 #include "core/time.h"
+#include "core/condition.h"
 #include <string.h>
 
 // ============================================================================
@@ -38,6 +39,18 @@ typedef struct _n00b_conduit_sub_base {
     n00b_conduit_topic_base_t   *topic;
     void                        *next_for_topic;
 } _n00b_conduit_sub_base_t;
+
+typedef struct _n00b_conduit_inbox_base {
+    _Atomic(void *)                 head;
+    _Atomic(void *)                 tail;
+    n00b_conduit_backpressure_t     backpressure;
+    uint32_t                        limit;
+    _Atomic(uint32_t)               count;
+    n00b_conduit_sys_queue_t        sys_queue;
+    n00b_condition_t                cv;
+    n00b_conduit_t                 *conduit;
+    const char                     *name;
+} _n00b_conduit_inbox_base_t;
 
 // ============================================================================
 // Global handle → subscription map
@@ -98,6 +111,12 @@ sub_send_sys_message(_n00b_conduit_sub_base_t *sub, n00b_conduit_msg_type_t type
     msg->header.next       = nullptr;
 
     n00b_conduit_sys_queue_push(sub->sys_queue, msg);
+
+    if (sub->inbox) {
+        _n00b_conduit_inbox_base_t *inbox = sub->inbox;
+
+        n00b_condition_notify(&inbox->cv, .auto_unlock = true);
+    }
 }
 
 // ============================================================================

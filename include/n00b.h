@@ -21,6 +21,7 @@
 #include <string.h> // IWYU pragma: export
 #include <errno.h>  // IWYU pragma: export
 #include <signal.h>
+#include <setjmp.h>
 
 #if defined(_WIN32) && !defined(__CYGWIN__)
 typedef struct { int si_signo; int si_status; int si_pid; } siginfo_t;
@@ -50,8 +51,7 @@ typedef struct n00b_mmap_info_t       n00b_mmap_info_t;
 typedef struct n00b_arena_t          n00b_arena_t;
 typedef uint64_t                     n00b_alloc_type_info_t;
 typedef struct n00b_inline_hdr_t     n00b_inline_hdr_t;
-typedef struct n00b_oob_hdr_t n00b_oob_hdr_t;
-typedef struct n00b_static_header_t  n00b_static_header_t;
+typedef struct n00b_oob_hdr_t        n00b_oob_hdr_t;
 typedef enum n00b_dt_kind_t          n00b_dt_kind_t;
 typedef struct n00b_finalizer_info_t n00b_finalizer_info_t;
 typedef struct n00b_gc_root_t        n00b_gc_root_t;
@@ -59,6 +59,81 @@ typedef struct n00b_gc_map_t         n00b_gc_map_t;
 enum n00b_gc_scan_kind_t : uint8_t;
 typedef enum n00b_gc_scan_kind_t     n00b_gc_scan_kind_t;
 typedef void (*n00b_gc_scan_cb_t)(n00b_gc_map_t *, void *);
+
+typedef enum {
+    N00B_GC_STACK_CONSERVATIVE = 0,
+    N00B_GC_STACK_EXACT_WITH_FALLBACK,
+    N00B_GC_STACK_EXACT_ONLY,
+} n00b_gc_stack_policy_t;
+
+typedef struct {
+    uint32_t root_index;
+    uint32_t num_words;
+} n00b_gc_stack_slot_t;
+
+typedef struct {
+    uint32_t                    num_roots;
+    uint32_t                    num_slots;
+    uint32_t                    flags;
+    const n00b_gc_stack_slot_t *slots;
+    const char                 *function_name;
+    const char                 *file_name;
+    uint32_t                    line;
+} n00b_gc_stack_map_t;
+
+typedef struct n00b_gc_stack_frame_t {
+    struct n00b_gc_stack_frame_t *prev;
+    const n00b_gc_stack_map_t    *map;
+    void                        **roots;
+} n00b_gc_stack_frame_t;
+
+typedef struct n00b_jmp_buf_t {
+    jmp_buf                 n00b_jmp_env;
+    struct n00b_thread_t   *n00b_thread;
+    n00b_gc_stack_frame_t  *n00b_gc_stack_top;
+} n00b_jmp_buf_t;
+
+extern n00b_gc_stack_policy_t n00b_gc_stack_get_policy(void);
+extern n00b_gc_stack_policy_t n00b_gc_stack_set_policy(n00b_gc_stack_policy_t policy);
+extern void
+n00b_gc_stack_push(n00b_gc_stack_frame_t *frame, const n00b_gc_stack_map_t *map, void **roots);
+extern void n00b_gc_stack_pop(n00b_gc_stack_frame_t *frame);
+extern n00b_jmp_buf_t *n00b_gc_stack_prepare_jmp(n00b_jmp_buf_t *ctx);
+extern void n00b_gc_stack_restore(n00b_gc_stack_frame_t *top);
+[[noreturn]] extern void n00b_longjmp(n00b_jmp_buf_t *ctx, int value);
+
+// Supported non-local-exit interface for code compiled with GC stack maps.
+// The checkpoint records the current published frame chain; the jump restores
+// it before transferring control so skipped cleanup frames are not scanned.
+// Checkpoints must be jumped to only from the same thread that created them.
+#define n00b_setjmp(ctx) setjmp(n00b_gc_stack_prepare_jmp((ctx))->n00b_jmp_env)
+
+enum n00b_static_object_flags_t : uint32_t {
+    N00B_STATIC_OBJECT_F_NONE     = 0,
+    N00B_STATIC_OBJECT_F_READONLY = 1u << 0,
+    N00B_STATIC_OBJECT_F_MUTABLE  = 1u << 1,
+};
+typedef enum n00b_static_object_flags_t n00b_static_object_flags_t;
+
+typedef struct n00b_static_object_desc_t {
+    const void             *start;
+    uint64_t                len;
+    n00b_alloc_type_info_t  tinfo;
+    n00b_gc_scan_kind_t     scan_kind;
+    n00b_gc_scan_cb_t       scan_cb;
+    void                   *scan_user;
+    uint64_t                object_id;
+    const char             *file;
+    uint32_t                flags;
+} n00b_static_object_desc_t;
+
+typedef struct {
+    uint64_t stride;
+    uint64_t offset;
+    uint64_t count;
+} n00b_gc_struct_array_t;
+
+extern void n00b_gc_scan_cb_struct_field(n00b_gc_map_t *m, void *user);
 // First two are for anything that is an absolute size / length and
 // should always be a natural number.
 //
