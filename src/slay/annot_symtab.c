@@ -679,8 +679,14 @@ annot_phase_symtab(n00b_annot_walk_ctx_t *ctx, annot_node_ctx_t *nc)
 
                 if (iface_name && iface_name->u8_bytes > 0) {
                     if (!nc->last_sym->implements) {
+                        // Canonical idiom: build the scan-info-threaded
+                        // lvalue first, then struct-copy into the heap
+                        // shell.
+                        n00b_list_t(n00b_string_t *) impl_lst
+                            = n00b_list_new(n00b_string_t *);
                         nc->last_sym->implements
                             = n00b_alloc(n00b_list_t(n00b_string_t *));
+                        *nc->last_sym->implements = impl_lst;
                     }
 
                     n00b_list_push(*nc->last_sym->implements, iface_name);

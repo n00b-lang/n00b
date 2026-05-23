@@ -600,29 +600,31 @@ n00b_subproc_is_spawned(n00b_subproc_t *sp)
  * @brief Get the effective stdout output topic (post-xforms).
  *
  * Returns the topic that capture, proxy, and user subscriptions see.
- * Valid after spawn; nullptr before spawn or if stdout is not captured/proxied.
+ * Valid after spawn; returns `n00b_option_none` before spawn or if
+ * stdout is not captured/proxied.
  *
  * @note Adding subscriptions after spawn may miss early data — prefer
  *       passing inboxes via `stdout_subs` at init time for race-free wiring.
  */
-extern n00b_conduit_topic_t(n00b_buffer_t *) *
-n00b_subproc_stdout_topic(n00b_subproc_t *sp);
+extern n00b_option_t(n00b_conduit_topic_t(n00b_buffer_t *) *)
+    n00b_subproc_stdout_topic(n00b_subproc_t *sp);
 
 /**
  * @brief Get the effective stderr output topic (post-xforms).
  *
  * Same semantics as `n00b_subproc_stdout_topic` but for stderr.
- * Returns nullptr when merge is active (stderr flows through stdout topic).
+ * Returns `n00b_option_none` when merge is active (stderr flows
+ * through stdout topic) or stderr is not captured.
  */
-extern n00b_conduit_topic_t(n00b_buffer_t *) *
-n00b_subproc_stderr_topic(n00b_subproc_t *sp);
+extern n00b_option_t(n00b_conduit_topic_t(n00b_buffer_t *) *)
+    n00b_subproc_stderr_topic(n00b_subproc_t *sp);
 
 /**
  * @brief Get the child stdin write topic (raw FD layer).
  *
- * Returns the stdin fd_owner's read topic if stdin is managed, nullptr
- * otherwise.  For observing data written to child stdin, prefer using
- * `stdin_subs` at init time.
+ * Returns the stdin fd_owner's read topic if stdin is managed, or
+ * `n00b_option_none` otherwise.  For observing data written to child
+ * stdin, prefer using `stdin_subs` at init time.
  */
-extern n00b_conduit_topic_t(n00b_buffer_t *) *
-n00b_subproc_stdin_topic(n00b_subproc_t *sp);
+extern n00b_option_t(n00b_conduit_topic_t(n00b_buffer_t *) *)
+    n00b_subproc_stdin_topic(n00b_subproc_t *sp);

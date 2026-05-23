@@ -141,11 +141,11 @@ n00b_focus_mgr_rebuild(n00b_focus_mgr_t *fm)
     }
 }
 
-n00b_plane_t *
+n00b_option_t(n00b_plane_t *)
 n00b_focus_mgr_next(n00b_focus_mgr_t *fm)
 {
     if (fm->count == 0) {
-        return nullptr;
+        return n00b_option_none(n00b_plane_t *);
     }
 
     blur_current(fm);
@@ -156,14 +156,14 @@ n00b_focus_mgr_next(n00b_focus_mgr_t *fm)
     }
 
     focus_current(fm);
-    return fm->focusable[fm->current];
+    return n00b_option_set(n00b_plane_t *, fm->focusable[fm->current]);
 }
 
-n00b_plane_t *
+n00b_option_t(n00b_plane_t *)
 n00b_focus_mgr_prev(n00b_focus_mgr_t *fm)
 {
     if (fm->count == 0) {
-        return nullptr;
+        return n00b_option_none(n00b_plane_t *);
     }
 
     blur_current(fm);
@@ -176,7 +176,7 @@ n00b_focus_mgr_prev(n00b_focus_mgr_t *fm)
     }
 
     focus_current(fm);
-    return fm->focusable[fm->current];
+    return n00b_option_set(n00b_plane_t *, fm->focusable[fm->current]);
 }
 
 bool
@@ -193,11 +193,11 @@ n00b_focus_mgr_set(n00b_focus_mgr_t *fm, n00b_plane_t *plane)
     return false;
 }
 
-n00b_plane_t *
+n00b_option_t(n00b_plane_t *)
 n00b_focus_mgr_current(n00b_focus_mgr_t *fm)
 {
     if (fm->current < fm->count) {
-        return fm->focusable[fm->current];
+        return n00b_option_set(n00b_plane_t *, fm->focusable[fm->current]);
     }
-    return nullptr;
+    return n00b_option_none(n00b_plane_t *);
 }

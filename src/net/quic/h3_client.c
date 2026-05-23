@@ -724,6 +724,27 @@ parse_status(const uint8_t *value, size_t len)
     return n;
 }
 
+/* Mark the request as body-cap-exceeded and reset the underlying QUIC
+ * stream with `H3_EXCESSIVE_LOAD` (RFC 9114 § 8.1).  Used by the
+ * mid-stream `max_body_size` enforcement in `process_request_frame`:
+ * fires both for a `content-length` header that advertises an
+ * oversized body and for DATA-frame accumulation that pushes total
+ * bytes past the cap.
+ *
+ * Pre: caller holds the appropriate locks (drive_request_streams runs
+ *      under client->lock; process_request_frame is downstream of
+ *      that). */
+static void
+req_trip_body_cap(n00b_h3_request_t *req)
+{
+    if (req->chan) {
+        n00b_quic_chan_reset(req->chan,
+                             (uint64_t)N00B_H3_ERR_EXCESSIVE_LOAD);
+    }
+    req->body_cap_exceeded = true;
+    req->state             = N00B_H3_REQ_STATE_RESET;
+}
+
 static n00b_result_t(bool)
 process_request_frame(n00b_h3_request_t      *req,
                       const n00b_h3_frame_t  *frame)
@@ -798,10 +819,66 @@ process_request_frame(n00b_h3_request_t      *req,
         req->resp_headers   = resp;
         req->resp_n_headers = body_headers_count;
         req->state          = N00B_H3_REQ_STATE_HEADERS_RECVD;
+
+        /* Per-call body cap: Content-Length short-circuit.
+         *
+         * RFC 9114 doesn't require `content-length` in H3 (DATA-frame
+         * payload lengths are on the wire), but cooperative servers
+         * still emit it.  When the cap is set AND the server declared a
+         * `content-length` larger than the cap, abort before we accept
+         * any DATA-frame bytes.  Mirrors h1's two-layered enforcement.
+         *
+         * Skip when status is 1xx/204/304 (no-body responses), where
+         * content-length is informational rather than reflective of
+         * payload that's about to land. */
+        if (req->max_body_size > 0
+            && !(status >= 100 && status < 200)
+            && status != 204 && status != 304) {
+            for (size_t i = 0; i < n_fields; i++) {
+                if (fields[i].name_len != 14) continue;
+                /* Case-insensitive compare: H3 header names are
+                 * lowercase on the wire per RFC 9114 § 4.2, but we
+                 * keep tolerance for defensive parsing. */
+                bool match = true;
+                static const char k[] = "content-length";
+                for (size_t j = 0; j < 14; j++) {
+                    char c = (char)fields[i].name[j];
+                    if (c >= 'A' && c <= 'Z') c = (char)(c + ('a' - 'A'));
+                    if (c != k[j]) { match = false; break; }
+                }
+                if (!match) continue;
+
+                /* Parse decimal value (bounded scratch buf — overflow
+                 * means the declared length is necessarily greater
+                 * than any plausible cap). */
+                char   nbuf[24];
+                size_t nl = fields[i].value_len < sizeof(nbuf) - 1
+                                ? fields[i].value_len : sizeof(nbuf) - 1;
+                memcpy(nbuf, fields[i].value, nl);
+                nbuf[nl] = '\0';
+                uint64_t declared = (uint64_t)strtoull(nbuf, nullptr, 10);
+                if (declared > req->max_body_size) {
+                    req_trip_body_cap(req);
+                    return n00b_result_ok(bool, true);
+                }
+                break;
+            }
+        }
     } else if (frame->type == N00B_H3_FRAME_DATA) {
         /* Append to the request body buffer. */
         if (frame->body_len > 0) {
             size_t old = (size_t)req->resp_body->byte_len;
+
+            /* Per-call body cap: streaming guard.  Computed BEFORE the
+             * buffer grows so we never let the cap be exceeded by even
+             * a single byte. */
+            if (req->max_body_size > 0
+                && (uint64_t)old + (uint64_t)frame->body_len
+                       > req->max_body_size) {
+                req_trip_body_cap(req);
+                return n00b_result_ok(bool, true);
+            }
+
             n00b_buffer_resize(req->resp_body,
                                 (uint64_t)(old + frame->body_len));
             memcpy((uint8_t *)req->resp_body->data + old,
@@ -827,6 +904,16 @@ n00b_h3_request_feed(n00b_h3_request_t *req,
         return n00b_result_err(bool, N00B_QUIC_ERR_NULL_ARG);
     }
 
+    /* Already terminal (DONE or RESET): silently drop the bytes.
+     * Defensive against late arrivals after a body-cap trip; without
+     * this guard `drive_request_streams` could re-enter feed for a
+     * second chunk of the same stream and process DATA past the
+     * cap. */
+    if (req->state == N00B_H3_REQ_STATE_DONE
+        || req->state == N00B_H3_REQ_STATE_RESET) {
+        return n00b_result_ok(bool, true);
+    }
+
     req_recv_append(req, bytes, len);
 
     /* Try to parse as many frames as possible. */
@@ -846,6 +933,14 @@ n00b_h3_request_feed(n00b_h3_request_t *req,
             return dr;
         }
         req_recv_consume(req, frame.consumed);
+
+        /* `process_request_frame` may have tripped the per-call body
+         * cap and flipped the request into RESET.  Stop draining
+         * additional frames — the stream is dead and any further
+         * DATA accumulation would just be wasted work. */
+        if (req->state == N00B_H3_REQ_STATE_RESET) {
+            return n00b_result_ok(bool, true);
+        }
     }
 
     if (fin) {
@@ -1121,6 +1216,15 @@ drive_request_streams(n00b_h3_client_t *client)
             if (n00b_result_is_err(fr)) {
                 return fr;
             }
+            /* The body-cap guard inside `process_request_frame` may
+             * have tripped state into RESET.  Stop draining further
+             * bytes for this request — the stream is dead. */
+            if (req->state == N00B_H3_REQ_STATE_RESET) {
+                break;
+            }
+        }
+        if (req->state == N00B_H3_REQ_STATE_RESET) {
+            continue;
         }
         bool peer_fin = n00b_quic_chan_recv_fin(req->chan);
         if (peer_fin && !req->peer_fin_seen) {
@@ -1187,12 +1291,30 @@ now_ms(void)
 n00b_result_t(n00b_h3_response_t *)
 n00b_h3_request_await(n00b_h3_request_t *req) _kargs
 {
-    int32_t deadline_ms = 10000;
-    bool    drive       = true;
+    int32_t  deadline_ms   = 10000;
+    bool     drive         = true;
+    /* Per-call response-body byte cap (mid-stream enforcement).  0 =
+     * no cap (existing callers see identical behavior).  When set, the
+     * receive loop checks the cap on each DATA-frame append and on a
+     * `content-length` response header (when the server sent one);
+     * overrun resets the stream with `H3_EXCESSIVE_LOAD` and the await
+     * returns `N00B_QUIC_ERR_LOCAL_RESET`.  Callers (e.g.,
+     * http_h3.c) inspect `n00b_h3_request_body_cap_exceeded` to
+     * distinguish cap-driven resets from peer-initiated ones and
+     * translate to their preferred error namespace. */
+    uint64_t max_body_size = 0;
 }
 {
     if (!req) {
         return n00b_result_err(n00b_h3_response_t *, N00B_QUIC_ERR_NULL_ARG);
+    }
+
+    /* Stamp the cap on the request so `process_request_frame` (downstream
+     * of `n00b_h3_client_drive`) can honor it mid-stream.  A non-zero
+     * value already present on the struct (e.g., from a future direct
+     * setter) is preserved when the kwarg is 0. */
+    if (max_body_size > 0) {
+        req->max_body_size = max_body_size;
     }
 
     int64_t start  = now_ms();
@@ -1224,8 +1346,21 @@ n00b_h3_request_await(n00b_h3_request_t *req) _kargs
             return n00b_result_ok(n00b_h3_response_t *, resp);
         }
         if (req->state == N00B_H3_REQ_STATE_RESET) {
-            return n00b_result_err(n00b_h3_response_t *,
-                                    N00B_QUIC_ERR_PEER_RESET);
+            /* Distinguish the two reset causes:
+             *
+             *   - body_cap_exceeded == true: WE reset the stream
+             *     because the server's response body exceeded the
+             *     caller-supplied cap.  Surface `LOCAL_RESET` so the
+             *     caller can disambiguate via
+             *     `n00b_h3_request_body_cap_exceeded`.
+             *
+             *   - body_cap_exceeded == false: peer-initiated reset.
+             *     Preserve the historical `PEER_RESET` shape so
+             *     existing callers see identical behavior. */
+            n00b_quic_err_t code = req->body_cap_exceeded
+                                       ? N00B_QUIC_ERR_LOCAL_RESET
+                                       : N00B_QUIC_ERR_PEER_RESET;
+            return n00b_result_err(n00b_h3_response_t *, code);
         }
 
         int64_t elapsed = now_ms() - start;
@@ -1234,4 +1369,14 @@ n00b_h3_request_await(n00b_h3_request_t *req) _kargs
                                     N00B_QUIC_ERR_TIMEOUT);
         }
     }
+}
+
+bool
+n00b_h3_request_body_cap_exceeded(n00b_h3_request_t *req)
+{
+    if (!req) return false;
+    n00b_data_write_lock(req->lock);
+    bool b = req->body_cap_exceeded;
+    n00b_data_unlock(req->lock);
+    return b;
 }

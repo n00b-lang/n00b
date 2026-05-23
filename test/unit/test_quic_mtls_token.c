@@ -89,7 +89,8 @@ static n00b_jwk_t *
 resolve_via_set(void *ctx, const char *kid, const char *alg)
 {
     (void)alg;
-    return n00b_jwk_set_lookup((n00b_jwk_set_t *)ctx, kid);
+    n00b_option_t(n00b_jwk_t *) k = n00b_jwk_set_lookup((n00b_jwk_set_t *)ctx, kid);
+    return n00b_option_is_set(k) ? n00b_option_get(k) : nullptr;
 }
 
 /* Build a JWT with cnf.x5t#S256 set to the SHA-256 of the test cert. */

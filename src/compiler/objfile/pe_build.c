@@ -793,12 +793,77 @@ n00b_pe_build(n00b_pe_binary_t *bin)
     }
 
     // ========================================================================
+    // Phase 4b: Certificate table (Authenticode WIN_CERTIFICATE entries)
+    //
+    // WP-005 Phase 3. For each parsed n00b_pe_certificate_t in
+    // bin->certificates, emit the WIN_CERTIFICATE header
+    // (dwLength + wRevision + wCertificateType + bCertificate[])
+    // and pad to 8-byte alignment. Append after the last section's
+    // raw data. Update data_dirs[N00B_PE_DD_CERTIFICATE] to point
+    // at the cert table's file offset + total size.
+    //
+    // The Authenticode hash excludes this region (per Microsoft's
+    // "Authenticode_PE.docx" pseudocode), so its emission is
+    // independent of the hash already stamped in the PE.
+    // ========================================================================
+
+    uint32_t cert_table_off  = 0;
+    uint32_t cert_table_size = 0;
+
+    if (bin->num_certificates > 0) {
+        // Align the cert-table start to 8 bytes (Authenticode
+        // requirement: WIN_CERTIFICATE entries are 8-byte aligned,
+        // and the table itself is naturally aligned).
+        n00b_writer_setpos(w, total_file);
+        n00b_writer_align(w, 8);
+        cert_table_off = (uint32_t)n00b_writer_pos(w);
+
+        for (uint32_t i = 0; i < bin->num_certificates; i++) {
+            n00b_pe_certificate_t *cert = &bin->certificates[i];
+
+            uint32_t data_len = 0;
+            if (cert->raw_data != nullptr) {
+                data_len = (uint32_t)n00b_buffer_len(cert->raw_data);
+            }
+
+            // dwLength counts the entire WIN_CERTIFICATE structure:
+            // 4 (dwLength) + 2 (wRevision) + 2 (wCertificateType)
+            // + data_len. Padding to 8-byte alignment is NOT
+            // included in dwLength per the Authenticode spec.
+            uint32_t entry_len = 4 + 2 + 2 + data_len;
+
+            n00b_writer_write_u32(w, entry_len);
+            n00b_writer_write_u16(w, cert->revision);
+            n00b_writer_write_u16(w, cert->certificate_type);
+            if (cert->raw_data != nullptr) {
+                n00b_writer_write_buffer(w, cert->raw_data);
+            }
+
+            // Pad to 8-byte alignment (zero-fill).
+            n00b_writer_align(w, 8);
+        }
+
+        cert_table_size = (uint32_t)n00b_writer_pos(w) - cert_table_off;
+
+        // Patch data_dirs[N00B_PE_DD_CERTIFICATE]. For the cert
+        // table only, VirtualAddress is a file offset (not an RVA).
+        n00b_writer_patch_u32(w,
+                              dd_start + N00B_PE_DD_CERTIFICATE * 8,
+                              cert_table_off);
+        n00b_writer_patch_u32(w,
+                              dd_start + N00B_PE_DD_CERTIFICATE * 8 + 4,
+                              cert_table_size);
+    }
+
+    // ========================================================================
     // Phase 5: Finalize
     // ========================================================================
 
     // Ensure the writer position is at the end of the file so that
     // n00b_writer_finalize() does not truncate the buffer.
-    n00b_writer_setpos(w, total_file);
+    if (cert_table_size == 0) {
+        n00b_writer_setpos(w, total_file);
+    }
 
     if (w->error) {
         return n00b_result_err(n00b_buffer_t *, N00B_ERR_BUILD);

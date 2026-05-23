@@ -314,6 +314,14 @@ picotls_minicrypto_dep = picotls_proj.get_variable('picotls_minicrypto_dep')
 picoquic_proj = subproject('picoquic')
 picoquic_dep  = picoquic_proj.get_variable('picoquic_core_dep')
 
+# Monocypher (vendored, CC0 / BSD-2 dual): Ed25519 signing primitive
+# for the n00b_attest signer vertical (WP-002).  In-tree copy at
+# subprojects/monocypher/, sized down to the four files we actually
+# use (monocypher{,-ed25519}.{h,c}).  See subprojects/monocypher/
+# README.n00b.md for the integration shape rationale.
+monocypher_proj = subproject('monocypher')
+monocypher_dep  = monocypher_proj.get_variable('monocypher_dep')
+
 # zlib for HTTP/1.1 + H3 Content-Encoding decompression (gzip/deflate).
 # brotli + zstd are dlopen'd at runtime in src/net/http/http_compression.c.
 if target_os == 'darwin'
@@ -462,6 +470,12 @@ subdir('src/data')
 subdir('src/net/quic')
 subdir('src/net/http')
 
+# ============================================================================
+# Attestation (in-toto Statement + DSSE envelopes; signers / verifier
+# arrive in later WPs — see .agents/work-plans/wp-001-* / WP-002 plan).
+# ============================================================================
+
+subdir('src/attest')
 # Aggregate per-module source lists into the libn00b source set. Each
 # entry above (`subdir('src/<mod>')`) is responsible for declaring a
 # `n00b_<mod>_src` variable; we just glue them together here.
@@ -483,7 +497,8 @@ n00b_dll_src = (
     n00b_ml_src +
     n00b_data_src +
     n00b_quic_src +
-    n00b_http_src
+    n00b_http_src +
+    n00b_attest_src
 )
 
 # Build generated unicode tables with --no-ncc (they are pure data,
@@ -519,6 +534,10 @@ link_whole_libs = [gen_unicode_lib, n00b_vendor_lib]
 # are declared in src/net/quic/meson.build and exposed via the array below;
 # fold them in once link_whole_libs exists.
 link_whole_libs += n00b_quic_link_whole_libs
+
+# libchalk's macOS ObjC bridge (Mach-O re-sign via codesign(1) shim) —
+# same pattern as the QUIC bridges above.
+link_whole_libs += n00b_chalk_link_whole_libs
 
 # Build the Cocoa backend as a separate ObjC static library (macOS only).
 # ObjC files cannot go through ncc's C parser, so we compile them with
@@ -574,7 +593,7 @@ endif
 n00b = static_library('n00b',
     n00b_dll_src,
     include_directories: incdir,
-    dependencies: deps + [libdl_dep, mir_dep, picoquic_dep],
+    dependencies: deps + [libdl_dep, mir_dep, picoquic_dep, monocypher_dep],
     c_args: exe_c_args,
     link_args: link_args,
     link_whole: link_whole_libs,
@@ -597,7 +616,10 @@ test_common_kwargs = {
     # Static-library deps don't propagate transitively in meson, so
     # every test that links libn00b also needs picoquic_dep on its
     # link line.  picoquic_dep brings the include path along too.
-    'dependencies': [picoquic_dep],
+    # monocypher_dep is added for the same reason: libn00b's attest
+    # sources (Phase 2+) will reference crypto_ed25519_* and the
+    # attest_monocypher_smoke test calls those primitives directly.
+    'dependencies': [picoquic_dep, monocypher_dep],
 }
 
 # Alias kept for clarity at QUIC test sites that drive picoquic
@@ -622,6 +644,554 @@ chalk_module_test = executable('test_chalk_module',
     kwargs: test_common_kwargs,
 )
 test('chalk_module', chalk_module_test, suite: 'unit')
+
+attest_module_test = executable('test_attest_module',
+    ['test/unit/test_attest_module.c'],
+    kwargs: test_common_kwargs,
+)
+test('attest_module', attest_module_test, suite: 'unit')
+
+attest_statement_roundtrip_test = executable('test_attest_statement_roundtrip',
+    ['test/unit/test_attest_statement_roundtrip.c'],
+    kwargs: test_common_kwargs,
+)
+test('attest_statement_roundtrip', attest_statement_roundtrip_test, suite: 'unit')
+
+attest_dsse_roundtrip_test = executable('test_attest_dsse_roundtrip',
+    ['test/unit/test_attest_dsse_roundtrip.c'],
+    kwargs: test_common_kwargs,
+)
+test('attest_dsse_roundtrip', attest_dsse_roundtrip_test, suite: 'unit')
+
+attest_arena_lifecycle_test = executable('test_attest_arena_lifecycle',
+    ['test/unit/test_attest_arena_lifecycle.c'],
+    kwargs: test_common_kwargs,
+)
+test('attest_arena_lifecycle', attest_arena_lifecycle_test, suite: 'unit')
+
+attest_base64_test = executable('test_attest_base64',
+    ['test/unit/test_attest_base64.c'],
+    kwargs: test_common_kwargs,
+)
+test('attest_base64', attest_base64_test, suite: 'unit')
+
+# n00b core util — `n00b_errno_str` POSIX errno-to-string helper.
+# WP-004 Phase 5 closeout (DF-008 fix); PR-shaped libn00b lift
+# matching the WP-002 wqw `n00b_stdin()/stdout()/stderr()` precedent
+# (D-061).
+errno_str_test = executable('test_errno_str',
+    ['test/unit/test_errno_str.c'],
+    kwargs: test_common_kwargs,
+)
+test('errno_str', errno_str_test, suite: 'unit')
+
+# n00b core util — DER (X.690) encoder regression test.
+# WP-005 Phase 3.
+der_encode_test = executable('test_der_encode',
+    ['test/unit/test_der_encode.c'],
+    kwargs: test_common_kwargs,
+)
+test('der_encode', der_encode_test, suite: 'unit')
+
+# n00b core util — PKCS#7 SignedData builder regression test.
+# WP-005 Phase 3. Round-trips via picotls's read-side ASN.1
+# validator. Post WP-005 P3-fixups sub-deliverable 4: loads
+# committed PEM cert+key fixtures via picotls's PEM decoder, so
+# the test needs `workdir: meson.project_source_root()` to
+# resolve `test/unit/data/pkcs7_fixture_*.pem` relative to the
+# source tree.
+pkcs7_signed_data_test = executable('test_pkcs7_signed_data',
+    ['test/unit/test_pkcs7_signed_data.c'],
+    kwargs: test_common_kwargs,
+)
+test('pkcs7_signed_data', pkcs7_signed_data_test, suite: 'unit',
+     workdir: meson.project_source_root())
+
+# n00b core util — X.509 + PKCS#8 read-side walker regression test.
+# WP-005 mid-stream cleanup lift. Loads the committed PEM cert+key
+# fixtures and exercises both walkers. Needs `workdir:
+# meson.project_source_root()` to resolve the relative PEM paths.
+x509_walk_test = executable('test_x509_walk',
+    ['test/unit/test_x509_walk.c'],
+    kwargs: test_common_kwargs,
+)
+test('x509_walk', x509_walk_test, suite: 'unit',
+     workdir: meson.project_source_root())
+
+# libn00b core util — XDG Base Directory + typed-variadic path
+# join + n00b_path_canonical regression. Exercises the spec matrix
+# (var set / unset / empty) for each `_home()` variant, asserts
+# `_runtime_dir()` returns nullptr when unset, exercises the
+# variadic builder, and verifies the canonical combined resolver
+# composes env-vars, tilde expansion, and absolute rooting.
+path_xdg_test = executable('test_path_xdg',
+    ['test/unit/test_path_xdg.c'],
+    kwargs: test_common_kwargs,
+)
+test('path_xdg', path_xdg_test, suite: 'unit')
+
+# libn00b core util — path-module anti-pattern sweep regression
+# (pre-WP-005 P5). Exercises each of the seven swept functions
+# (`split_on_slash` transitively via resolve_path, `n00b_resolve_path`,
+# `n00b_path_walk`, `n00b_path_parts`, `n00b_find_file_in_program_path`,
+# `n00b_list_directory`, `n00b_get_program_search_path`) and asserts
+# push-after-return + readback works on each returned list — which
+# forces `_n00b_list_ensure_cap` to read the list's scan-info /
+# allocator fields. If a future commit reintroduces the
+# `n00b_alloc(n00b_list_t(T)) + *p = n00b_list_new(T)` anti-pattern,
+# scan-info is zero-initialized and the grow path either picks the
+# wrong allocator or fails the readback identity check.
+path_antipattern_sweep_test = executable('test_path_antipattern_sweep',
+    ['test/unit/test_path_antipattern_sweep.c'],
+    kwargs: test_common_kwargs,
+)
+test('path_antipattern_sweep', path_antipattern_sweep_test, suite: 'unit')
+
+# n00b core PE — Authenticode certificate-table emit round-trip.
+# WP-005 Phase 3 + P3-fixups sub-deliverable 3.
+#
+# Hybrid fixture wiring (per user kickoff Q3 disposition):
+#   A. mingw-w64 + osslsigncode self-generated hello.exe.signed
+#      (gated on toolchain availability; SKIPs cleanly when absent).
+#   B. Sysinternals sigcheck64.exe (downloaded + SHA-256-verified at
+#      configure time; NOT committed; SKIPs cleanly when network
+#      unavailable). Previously pendmoves.exe — swapped 2026-05-21
+#      because pendmoves ships only as PE32 (32-bit) and n00b_pe_parse
+#      requires PE32+. sigcheck64.exe is the 64-bit variant from the
+#      Sigcheck.zip distribution.
+#   C. Always-runs synthetic in-memory PE blob cases as the primary.
+#
+# Each custom_target's helper script emits an EMPTY placeholder when
+# its precondition fails (toolchain absent, network unavailable, SHA
+# mismatch) so the meson rule still produces its declared output;
+# the runtime test checks file size and SKIPs the case if empty.
+
+mingw_gcc      = find_program('x86_64-w64-mingw32-gcc', required: false)
+osslsigncode   = find_program('osslsigncode',           required: false)
+pe_hello_exe = custom_target('pe_hello_exe',
+    output: 'hello.exe',
+    command: [
+        meson.project_source_root() / 'test' / 'fixtures' / 'pe' / 'build_hello_exe.sh',
+        meson.project_source_root() / 'test' / 'unit' / 'data' / 'hello.c',
+        '@OUTPUT@',
+    ],
+    depend_files: files('test/unit/data/hello.c',
+                        'test/fixtures/pe/build_hello_exe.sh'),
+)
+pe_hello_exe_signed = custom_target('pe_hello_exe_signed',
+    output: 'hello.exe.signed',
+    input: pe_hello_exe,
+    command: [
+        meson.project_source_root() / 'test' / 'fixtures' / 'pe' / 'sign_hello_exe.sh',
+        '@INPUT@',
+        meson.project_source_root() / 'test' / 'unit' / 'data' / 'pkcs7_fixture_cert.pem',
+        meson.project_source_root() / 'test' / 'unit' / 'data' / 'pkcs7_fixture_key.pem',
+        '@OUTPUT@',
+    ],
+    depend_files: files('test/unit/data/pkcs7_fixture_cert.pem',
+                        'test/unit/data/pkcs7_fixture_key.pem',
+                        'test/fixtures/pe/sign_hello_exe.sh'),
+)
+pe_sigcheck = custom_target('pe_sigcheck',
+    output: 'sigcheck64.exe',
+    command: [
+        meson.project_source_root() / 'test' / 'fixtures' / 'pe' / 'fetch_sigcheck.sh',
+        '@OUTPUT@',
+    ],
+    depend_files: files('test/fixtures/pe/fetch_sigcheck.sh'),
+)
+pe_cert_table_emit_test = executable('test_pe_cert_table_emit',
+    ['test/unit/test_pe_cert_table_emit.c'],
+    kwargs: test_common_kwargs,
+)
+test('pe_cert_table_emit', pe_cert_table_emit_test, suite: 'unit',
+     depends: [pe_hello_exe, pe_hello_exe_signed, pe_sigcheck],
+     workdir: meson.current_build_dir())
+
+# WP-005 Phase 4 — libchalk PE re-sign end-to-end regression.
+# Uses the same Sysinternals sigcheck64.exe fixture (downloaded
+# into the build dir by the existing pe_sigcheck custom_target)
+# and the committed pkcs7_fixture_{cert,key}.pem PEMs (resolved
+# via MESON_SOURCE_ROOT, which meson sets for every test run).
+# workdir = build dir so sigcheck64.exe resolves; the PEM
+# fixtures come from the source tree.
+chalk_pe_resign_test = executable('test_chalk_pe_resign',
+    ['test/unit/test_chalk_pe_resign.c'],
+    kwargs: test_common_kwargs,
+)
+test('chalk_pe_resign', chalk_pe_resign_test, suite: 'unit',
+     depends: [pe_sigcheck],
+     env: {'MESON_SOURCE_ROOT': meson.project_source_root()},
+     workdir: meson.current_build_dir())
+
+# WP-005 P5: Mach-O re-sign regression test. Always-runs; on macOS
+# exercises the SecCodeSigner / codesign(1) bridge; on non-macOS
+# exercises the strip-only fallback. Fixture: test/unit/data/hello.macho
+# (committed). MESON_SOURCE_ROOT lets the test resolve the fixture path.
+chalk_macho_resign_test = executable('test_chalk_macho_resign',
+    ['test/unit/test_chalk_macho_resign.c'],
+    kwargs: test_common_kwargs,
+)
+test('chalk_macho_resign', chalk_macho_resign_test, suite: 'unit',
+     env: {'MESON_SOURCE_ROOT': meson.project_source_root()},
+     workdir: meson.project_source_root())
+
+attest_monocypher_smoke_test = executable('test_attest_monocypher_smoke',
+    ['test/unit/test_attest_monocypher_smoke.c'],
+    kwargs: test_common_kwargs,
+)
+test('attest_monocypher_smoke', attest_monocypher_smoke_test, suite: 'unit')
+
+attest_signer_resolve_test = executable('test_attest_signer_resolve',
+    ['test/unit/test_attest_signer_resolve.c'],
+    kwargs: test_common_kwargs,
+)
+test('attest_signer_resolve', attest_signer_resolve_test, suite: 'unit')
+
+attest_signer_release_test = executable('test_attest_signer_release',
+    ['test/unit/test_attest_signer_release.c'],
+    kwargs: test_common_kwargs,
+)
+test('attest_signer_release', attest_signer_release_test, suite: 'unit')
+
+attest_signer_sign_test = executable('test_attest_signer_sign',
+    ['test/unit/test_attest_signer_sign.c'],
+    kwargs: test_common_kwargs,
+)
+test('attest_signer_sign', attest_signer_sign_test, suite: 'unit')
+
+attest_signer_keyid_test = executable('test_attest_signer_keyid',
+    ['test/unit/test_attest_signer_keyid.c'],
+    kwargs: test_common_kwargs,
+)
+test('attest_signer_keyid', attest_signer_keyid_test, suite: 'unit')
+
+attest_envelope_sign_test = executable('test_attest_envelope_sign',
+    ['test/unit/test_attest_envelope_sign.c'],
+    kwargs: test_common_kwargs,
+)
+test('attest_envelope_sign', attest_envelope_sign_test, suite: 'unit')
+
+attest_envelope_signatures_roundtrip_test = executable(
+    'test_attest_envelope_signatures_roundtrip',
+    ['test/unit/test_attest_envelope_signatures_roundtrip.c'],
+    kwargs: test_common_kwargs,
+)
+test('attest_envelope_signatures_roundtrip',
+     attest_envelope_signatures_roundtrip_test,
+     suite: 'unit')
+
+attest_err_str_test = executable('test_attest_err_str',
+    ['test/unit/test_attest_err_str.c'],
+    kwargs: test_common_kwargs,
+)
+test('attest_err_str', attest_err_str_test, suite: 'unit')
+
+attest_cli_sign_test = executable('test_attest_cli_sign',
+    ['test/unit/test_attest_cli_sign.c'],
+    kwargs: test_common_kwargs,
+)
+test('attest_cli_sign', attest_cli_sign_test, suite: 'unit')
+
+attest_signer_arena_test = executable('test_attest_signer_arena',
+    ['test/unit/test_attest_signer_arena.c'],
+    kwargs: test_common_kwargs,
+)
+test('attest_signer_arena', attest_signer_arena_test, suite: 'unit')
+
+attest_verifier_resolve_test = executable('test_attest_verifier_resolve',
+    ['test/unit/test_attest_verifier_resolve.c'],
+    kwargs: test_common_kwargs,
+)
+test('attest_verifier_resolve', attest_verifier_resolve_test, suite: 'unit')
+
+attest_verifier_keyid_test = executable('test_attest_verifier_keyid',
+    ['test/unit/test_attest_verifier_keyid.c'],
+    kwargs: test_common_kwargs,
+)
+test('attest_verifier_keyid', attest_verifier_keyid_test, suite: 'unit')
+
+attest_envelope_verify_signature_test = executable(
+    'test_attest_envelope_verify_signature',
+    ['test/unit/test_attest_envelope_verify_signature.c'],
+    kwargs: test_common_kwargs,
+)
+test('attest_envelope_verify_signature',
+     attest_envelope_verify_signature_test,
+     suite: 'unit')
+
+attest_envelope_verify_test = executable('test_attest_envelope_verify',
+    ['test/unit/test_attest_envelope_verify.c'],
+    kwargs: test_common_kwargs,
+)
+test('attest_envelope_verify', attest_envelope_verify_test, suite: 'unit')
+
+attest_cli_verify_test = executable('test_attest_cli_verify',
+    ['test/unit/test_attest_cli_verify.c'],
+    kwargs: test_common_kwargs,
+)
+test('attest_cli_verify', attest_cli_verify_test, suite: 'unit')
+
+attest_verifier_arena_test = executable('test_attest_verifier_arena',
+    ['test/unit/test_attest_verifier_arena.c'],
+    kwargs: test_common_kwargs,
+)
+test('attest_verifier_arena', attest_verifier_arena_test, suite: 'unit')
+
+attest_oci_client_resolve_test = executable('test_attest_oci_client_resolve',
+    ['test/unit/test_attest_oci_client_resolve.c'],
+    kwargs: test_common_kwargs,
+)
+test('attest_oci_client_resolve', attest_oci_client_resolve_test, suite: 'unit')
+
+# WP-004 Phase 4 hardening — FR-22 arena friendliness for the OCI
+# client surface. Mirrors the WP-002 / WP-003 arena-test precedent
+# (test_attest_signer_arena / test_attest_verifier_arena): N=50
+# resolve + in-memory op + release through one arena, GC-collect,
+# assert arena-used drops back. Always-runs (no Docker / no network).
+attest_oci_arena_test = executable('test_attest_oci_arena',
+    ['test/unit/test_attest_oci_arena.c'],
+    kwargs: test_common_kwargs,
+)
+test('attest_oci_arena', attest_oci_arena_test, suite: 'unit')
+
+# WP-004 Phase 4 hardening — redirect-policy delegation regression.
+# Verifies the OCI client correctly stores per-call kwargs
+# (`redirect_host_allowlist`, `allow_redirects`) on the handle so
+# libn00b's dispatcher can pick them up once the matching surface
+# lifts. Always-runs.
+attest_oci_redirect_policy_test = executable(
+    'test_attest_oci_redirect_policy',
+    ['test/unit/test_attest_oci_redirect_policy.c'],
+    kwargs: test_common_kwargs,
+)
+test('attest_oci_redirect_policy',
+     attest_oci_redirect_policy_test,
+     suite: 'unit')
+
+# WP-004 Phase 4 hardening — per-call body-size cap surface. Asserts
+# the size-cap error codes are wired and the fetcher kwarg blocks
+# parse correctly with both `max_size` and `timeout_ms`. Always-runs.
+attest_oci_size_caps_test = executable('test_attest_oci_size_caps',
+    ['test/unit/test_attest_oci_size_caps.c'],
+    kwargs: test_common_kwargs,
+)
+test('attest_oci_size_caps', attest_oci_size_caps_test, suite: 'unit')
+
+attest_oci_manifest_test = executable('test_attest_oci_manifest',
+    ['test/unit/test_attest_oci_manifest.c'],
+    kwargs: test_common_kwargs,
+)
+test('attest_oci_manifest', attest_oci_manifest_test, suite: 'unit')
+
+attest_oci_push_smoke_test = executable('test_attest_oci_push_smoke',
+    ['test/unit/test_attest_oci_push_smoke.c'],
+    kwargs: test_common_kwargs,
+)
+# WP-004 Phase 2 trailing addition (DF-012): Docker-gated full
+# HEAD/POST/PUT/PUT push against the zot fixture in
+# test/fixtures/zot/.  N00B_TEST_ZOT_SRC_ROOT carries the absolute
+# repo-root path so the test can find start.sh / stop.sh without
+# depending on the user-side `eval $(start.sh)` pre-step that the
+# caddy/nginx-quic smokes use.  Skips cleanly when N00B_TEST_DOCKER
+# is unset.
+test('attest_oci_push_smoke', attest_oci_push_smoke_test,
+     suite: 'unit',
+     timeout: 90,
+     env: {
+         'N00B_TEST_ZOT_SRC_ROOT': meson.current_source_dir(),
+     })
+
+# WP-004 Phase 3: discover-side smoke against zot. Pushes two
+# envelopes with distinct predicate-types and asserts list_referrers
+# returns both. Skips cleanly when N00B_TEST_DOCKER is unset.
+attest_oci_discover_smoke_test = executable('test_attest_oci_discover_smoke',
+    ['test/unit/test_attest_oci_discover_smoke.c'],
+    kwargs: test_common_kwargs,
+)
+test('attest_oci_discover_smoke', attest_oci_discover_smoke_test,
+     suite: 'unit',
+     timeout: 90,
+     env: {
+         'N00B_TEST_ZOT_SRC_ROOT': meson.current_source_dir(),
+     })
+
+# WP-004 Phase 3: pull-side smoke against zot. Pushes one envelope,
+# pulls it back, asserts byte-identical; also verifies the post-
+# filter rejects non-matching predicate-types.
+attest_oci_pull_smoke_test = executable('test_attest_oci_pull_smoke',
+    ['test/unit/test_attest_oci_pull_smoke.c'],
+    kwargs: test_common_kwargs,
+)
+test('attest_oci_pull_smoke', attest_oci_pull_smoke_test,
+     suite: 'unit',
+     timeout: 90,
+     env: {
+         'N00B_TEST_ZOT_SRC_ROOT': meson.current_source_dir(),
+     })
+
+# WP-004 Phase 3: the headline cross-WP end-to-end smoke against
+# zot. Chains sign -> push -> discover -> pull -> verify against
+# a real OCI registry; passing this test means the entire
+# n00b-attestation producer-to-consumer path is wired.
+attest_oci_end_to_end_smoke_test = executable(
+    'test_attest_oci_end_to_end_smoke',
+    ['test/unit/test_attest_oci_end_to_end_smoke.c'],
+    kwargs: test_common_kwargs,
+)
+test('attest_oci_end_to_end_smoke', attest_oci_end_to_end_smoke_test,
+     suite: 'unit',
+     timeout: 120,
+     env: {
+         'N00B_TEST_ZOT_SRC_ROOT': meson.current_source_dir(),
+     })
+
+# WP-005 Phase 1: ATTESTATION JSON builder byte-stability golden
+# test. Three sub-tests (bundled+hint, lazy, no hint) cover the
+# canonical-field-order disposition (D-056) + the per-mode shape
+# transitions. Always-runs.
+attest_mark_attestation_json_test = executable(
+    'test_attest_mark_attestation_json',
+    ['test/unit/test_attest_mark_attestation_json.c'],
+    kwargs: test_common_kwargs,
+)
+test('attest_mark_attestation_json',
+     attest_mark_attestation_json_test,
+     suite: 'unit')
+
+# WP-005 Phase 1: `n00b_attest_mark_artifact` IC-4 hash contract +
+# registry_hint validation. Always-runs. Builds a tiny ELF fixture
+# in-process via libn00b's ELF builder (no fixture binary checked
+# in).
+attest_mark_artifact_test = executable(
+    'test_attest_mark_artifact',
+    ['test/unit/test_attest_mark_artifact.c'],
+    kwargs: test_common_kwargs,
+)
+test('attest_mark_artifact',
+     attest_mark_artifact_test,
+     suite: 'unit')
+
+# WP-005 Phase 1: `n00b_attest_extract_from_artifact` IC-5 sentinel
+# discrimination across all four cases (i..iv). Always-runs. Uses
+# ELF + Mach-O fixtures built in-process plus a non-binary blob for
+# the IC-5-(iv) case.
+attest_extract_from_artifact_test = executable(
+    'test_attest_extract_from_artifact',
+    ['test/unit/test_attest_extract_from_artifact.c'],
+    kwargs: test_common_kwargs,
+)
+test('attest_extract_from_artifact',
+     attest_extract_from_artifact_test,
+     suite: 'unit')
+
+# WP-005 Phase 6: end-to-end mark + extract regression on the ELF
+# codec (no resign step — the no-resign dispatch path on a
+# signer_identity = nullptr call). Always-runs. Builds a tiny ELF
+# fixture in-process via libn00b's ELF builder. IC-4 invariant
+# verified end-to-end: the SHA-256 of the pre-mark artifact bytes
+# equals the extracted envelope's subject.digest.sha256.
+attest_mark_elf_e2e_test = executable(
+    'test_attest_mark_elf_e2e',
+    ['test/unit/test_attest_mark_elf_e2e.c'],
+    kwargs: test_common_kwargs,
+)
+test('attest_mark_elf_e2e',
+     attest_mark_elf_e2e_test,
+     suite: 'unit')
+
+# WP-005 Phase 6: end-to-end mark + Authenticode resign regression
+# on the PE codec (cross-platform Authenticode signing — the P4
+# resign primitive is deterministic and runs on any host). Always-
+# runs. Uses an in-test synthetic PE32+ binary (`n00b_pe_binary_new`)
+# and the committed PEM fixtures resolved via MESON_SOURCE_ROOT.
+# IC-4 invariant verified end-to-end.
+attest_mark_pe_e2e_test = executable(
+    'test_attest_mark_pe_e2e',
+    ['test/unit/test_attest_mark_pe_e2e.c'],
+    kwargs: test_common_kwargs,
+)
+test('attest_mark_pe_e2e',
+     attest_mark_pe_e2e_test,
+     suite: 'unit',
+     env: {'MESON_SOURCE_ROOT': meson.project_source_root()},
+     workdir: meson.current_build_dir())
+
+# WP-005 Phase 6: end-to-end mark + Mach-O resign regression,
+# host-gated to macOS (the resign body relies on the
+# Security-framework / codesign(1) bridge). Uses the committed
+# test/unit/data/hello.macho fixture + the PEM fixtures resolved
+# via MESON_SOURCE_ROOT. IC-4 invariant verified end-to-end; the
+# post-resign bytes are additionally checked via
+# /usr/bin/codesign --verify --deep --strict (non-fatal SKIP on
+# tooling failure).
+if host_machine.system() == 'darwin'
+    attest_mark_macho_e2e_test = executable(
+        'test_attest_mark_macho_e2e_macos',
+        ['test/unit/test_attest_mark_macho_e2e_macos.c'],
+        kwargs: test_common_kwargs,
+    )
+    test('attest_mark_macho_e2e_macos',
+         attest_mark_macho_e2e_test,
+         suite: 'unit',
+         env: {'MESON_SOURCE_ROOT': meson.project_source_root()},
+         workdir: meson.project_source_root())
+endif
+
+# WP-005 Phase 2: `n00b_attest_cli_mark` end-to-end regression
+# (envelope-bytes → parse → mark dispatch). Always-runs; exercises
+# the IC-4 unchalked-hash contract through the Phase-2 wrapper,
+# --lazy mode, the CR-13 multi-envelope contract, and input
+# validation.
+attest_cli_mark_test = executable(
+    'test_attest_cli_mark',
+    ['test/unit/test_attest_cli_mark.c'],
+    kwargs: test_common_kwargs,
+)
+test('attest_cli_mark',
+     attest_cli_mark_test,
+     suite: 'unit')
+
+# WP-005 Phase 2: `n00b_attest_cli_unmark` mark→unmark→extract
+# round-trip. Always-runs; post-unmark extract must surface the
+# IC-5 (i) CHALK_NO_MARK sentinel.
+attest_cli_unmark_test = executable(
+    'test_attest_cli_unmark',
+    ['test/unit/test_attest_cli_unmark.c'],
+    kwargs: test_common_kwargs,
+)
+test('attest_cli_unmark',
+     attest_cli_unmark_test,
+     suite: 'unit')
+
+# WP-005 Phase 2: `n00b_attest_cli_extract` mark→extract round-trip.
+# Always-runs; covers bundled-mode round-trip, lazy-mode round-trip,
+# no-mark sentinel, and input validation.
+attest_cli_extract_test = executable(
+    'test_attest_cli_extract',
+    ['test/unit/test_attest_cli_extract.c'],
+    kwargs: test_common_kwargs,
+)
+test('attest_cli_extract',
+     attest_cli_extract_test,
+     suite: 'unit')
+
+# DF-013 regression: caller-supplied trust handle threaded through the
+# h1 transport.  Same zot fixture as attest_oci_push_smoke, but the
+# test exercises the libn00b-core path (n00b_http_request_sync ->
+# n00b_http_h1_round_trip -> n00b_acme_tls_connect_ex) directly via a
+# GET /v2/ rather than the attest-module OCI push surface.  Skips
+# cleanly when N00B_TEST_DOCKER is unset.
+h1_pinned_trust_test = executable('test_h1_pinned_trust',
+    ['test/unit/test_h1_pinned_trust.c'],
+    kwargs: test_common_kwargs,
+)
+test('h1_pinned_trust', h1_pinned_trust_test,
+     suite: 'unit',
+     timeout: 60,
+     env: {
+         'N00B_TEST_ZOT_SRC_ROOT': meson.current_source_dir(),
+     })
 
 list_test = executable('test_list',
     ['test/unit/test_list.c'],
@@ -915,6 +1485,18 @@ print_test = executable('test_print',
     kwargs: test_common_kwargs,
 )
 test('print', print_test, suite: 'unit')
+
+std_streams_test = executable('test_std_streams',
+    ['test/unit/test_std_streams.c'],
+    kwargs: test_common_kwargs,
+)
+test('std_streams', std_streams_test, suite: 'unit')
+
+fd_owner_read_all_test = executable('test_fd_owner_read_all',
+    ['test/unit/test_fd_owner_read_all.c'],
+    kwargs: test_common_kwargs,
+)
+test('fd_owner_read_all', fd_owner_read_all_test, suite: 'unit')
 
 # ============================================================================
 # Regex engine tests — registered via subdir during Phase 11 of the regex port.
@@ -1397,6 +1979,15 @@ table_tool = executable('n00b_table',
     install: true,
 )
 
+# n00b-attest CLI binary (sign verb; other verbs are forward-roadmap
+# stubs surfacing in --help and emitting "not yet implemented" + exit 1
+# per DF-004 disposition (a)).
+n00b_attest_tool = executable('n00b-attest',
+    ['src/tools/n00b-attest.c'],
+    kwargs: test_common_kwargs,
+    install: true,
+)
+
 # Widget visual demo tool
 widget_demo = executable('widget_demo',
     ['src/tools/widget_demo.c'],
@@ -1838,6 +2429,20 @@ http_client_test = executable('test_http_client',
 )
 test('http_client', http_client_test, suite: 'unit', timeout: 30)
 
+# DF-014 + DF-015 — per-call max_body_size + redirect_host_allowlist
+# kwargs.  Substrate cases run unconditionally; integration leg
+# requires N00B_TEST_DOCKER=1 (uses the zot fixture).
+http_per_call_caps_test = executable('test_http_per_call_caps',
+    ['test/unit/test_http_per_call_caps.c'],
+    kwargs: test_common_kwargs,
+)
+test('http_per_call_caps', http_per_call_caps_test,
+     suite: 'unit',
+     timeout: 60,
+     env: {
+         'N00B_TEST_ZOT_SRC_ROOT': meson.current_source_dir(),
+     })
+
 # Phase 6 chunk 5 — live-network smoke for the dispatcher.
 # Skipped unless N00B_TEST_NET=1.
 http_client_network_test = executable('test_http_client_network',
@@ -1990,6 +2595,20 @@ quic_h3_server_loopback_test = executable('test_quic_h3_server_loopback',
     kwargs: quic_test_kwargs,
 )
 test('quic_h3_server_loopback', quic_h3_server_loopback_test,
+     suite: 'unit', timeout: 60)
+
+# WP-004 Phase 5 closeout — h3 mid-stream `max_body_size` enforcement
+# regression (DF-014 lift).  Pins the receive-loop guard introduced on
+# top of sub-agent 5 (`uq ae`)'s post-await check: a server that sends
+# (or declares via `content-length`) a body larger than the caller's
+# cap must trigger an `H3_EXCESSIVE_LOAD` stream reset before any
+# excess bytes accumulate.  Uses the same in-process loopback fixture
+# as `test_quic_h3_server_loopback`.
+http_h3_max_body_cap_test = executable('test_http_h3_max_body_cap',
+    ['test/unit/test_http_h3_max_body_cap.c'],
+    kwargs: quic_test_kwargs,
+)
+test('http_h3_max_body_cap', http_h3_max_body_cap_test,
      suite: 'unit', timeout: 60)
 
 # Phase 4 § 4.4 — Docker-gated H3 GET / + POST /echo smoke against
@@ -2511,9 +3130,6 @@ endif
 
 
 
-
-
-
 # ============================================================================
 # VFS tests
 # ============================================================================
@@ -2626,12 +3242,17 @@ foreach name : regex_test_names
         )
     endif
     # regex_engine runs derivative + fuzz comparisons across thousands of
-    # patterns and legitimately takes ~60s in debug builds.
-    test_timeout = (name == 'engine' or name == 'fuzz_compare') ? 300 : 30
+    # patterns and legitimately takes ~60s in debug builds (often longer
+    # under host load). The `engine` and `fuzz_compare` cases are tagged
+    # `suite: 'long'` so build.sh's default `add_test_no_suite long` (when
+    # `N00B_TEST_ALL=0` and no explicit suites/tests requested) excludes
+    # them; opt in via `N00B_TEST_ALL=1` or `--all-tests`.
     if name == 'engine' or name == 'fuzz_compare'
         test_suite = ['unit', 'long']
+        test_timeout = 300
     else
         test_suite = 'unit'
+        test_timeout = 30
     endif
     test('regex_' + name, exe, suite: test_suite, timeout: test_timeout)
 endforeach

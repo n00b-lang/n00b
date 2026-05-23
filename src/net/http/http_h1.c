@@ -38,6 +38,7 @@
 #include "internal/net/http/http_pool.h"
 #include "internal/net/quic/acme_tls.h"
 #include "net/quic/quic_types.h"
+#include "net/quic/trust.h"
 #include "net/http/http_auth.h"
 
 /* ===========================================================================
@@ -613,14 +614,49 @@ find_header(const char *p, size_t len, const char *name, size_t *out_vlen)
     return nullptr;
 }
 
+/* Parse a 3-digit HTTP status code from the status line bytes.  The
+ * status-line shape is `HTTP/1.X SSS REASON` (RFC 9112 § 4); we walk
+ * to the first space and then read three decimal digits.  Returns 0
+ * if the status-line bytes are malformed (caller treats it the same
+ * as "no boundary yet"). */
+static int
+parse_status_for_completion(const char *bytes, size_t len)
+{
+    /* Skip the "HTTP/1.X " prefix.  Anything shorter than that won't
+     * have a parseable status. */
+    if (len < 12) return 0;
+    size_t i = 0;
+    while (i < len && bytes[i] != ' ' && bytes[i] != '\r') i++;
+    if (i + 4 > len) return 0;
+    while (i < len && bytes[i] == ' ') i++;
+    if (i + 3 > len) return 0;
+    if (bytes[i] < '0' || bytes[i] > '9'
+        || bytes[i + 1] < '0' || bytes[i + 1] > '9'
+        || bytes[i + 2] < '0' || bytes[i + 2] > '9') {
+        return 0;
+    }
+    return (bytes[i] - '0') * 100
+         + (bytes[i + 1] - '0') * 10
+         + (bytes[i + 2] - '0');
+}
+
 /* Decide whether the bytes accumulated so far form a complete
  * HTTP/1.1 response.  Returns:
  *   1 — complete; safe to stop reading + parse
  *   0 — need more bytes
  *  -1 — protocol error (no Content-Length / no Transfer-Encoding;
- *       caller must read until peer close to find the boundary). */
+ *       caller must read until peer close to find the boundary).
+ *
+ * RFC 9112 § 6.3: HEAD responses and 1xx / 204 / 304 status codes are
+ * always terminated by the empty line after the header block,
+ * regardless of any Content-Length or Transfer-Encoding fields the
+ * server may carry over from the resource description.  Failing to
+ * honor that case sends the reader into a forever-wait for body
+ * bytes that will never arrive — manifesting at the libn00b call
+ * site as N00B_QUIC_ERR_TIMEOUT (-10) on what should be a quick
+ * HEAD round-trip. */
 static int
-h1_response_complete(const char *bytes, size_t len)
+h1_response_complete(const char *bytes, size_t len, bool was_head)
 {
     /* Locate end-of-headers (CRLF CRLF). */
     if (len < 4) return 0;
@@ -634,6 +670,20 @@ h1_response_complete(const char *bytes, size_t len)
     }
     if (!eoh) return 0;
     size_t header_len = (size_t)(eoh - bytes);
+
+    /* HEAD response — boundary IS end-of-headers per RFC 9112 § 6.3
+     * case 1.  Decided before scanning Content-Length / Transfer-
+     * Encoding so any such advisory header is ignored. */
+    if (was_head) return 1;
+
+    /* Status codes that never carry a body — same RFC 9112 § 6.3
+     * case 1 boundary rule applies. */
+    int status = parse_status_for_completion(bytes, len);
+    if (status == 204 || status == 304
+        || (status >= 100 && status < 200)) {
+        return 1;
+    }
+
     /* Skip the status line (first \r\n) for header scan. */
     const char *hp = bytes;
     size_t hl = header_len;
@@ -738,6 +788,15 @@ n00b_http_h1_round_trip(n00b_http_url_t *url)
         int32_t                      timeout_ms   = 30000;
         n00b_http_connection_pool_t *pool         = nullptr;
         n00b_http_auth_t            *auth         = nullptr;
+        n00b_quic_trust_t           *trust        = nullptr;
+        /** Per-call response-body byte cap.  Default 0 = no cap.
+         *  When non-zero, the receive loop aborts as soon as the
+         *  accumulated wire bytes (status line + headers + body)
+         *  would exceed the cap and surfaces
+         *  `N00B_HTTP_ERR_RESPONSE_TOO_LARGE`.  An advertised
+         *  `Content-Length` greater than the cap short-circuits
+         *  before any body bytes are read. */
+        uint64_t                     max_body_size = 0;
         n00b_allocator_t            *allocator    = nullptr;
     }
 {
@@ -747,6 +806,13 @@ n00b_http_h1_round_trip(n00b_http_url_t *url)
     }
     n00b_allocator_t *a = allocator ? allocator : default_pool();
     bool keep_alive_intent = (pool != nullptr);
+    /* HEAD responses have no body regardless of Content-Length /
+     * Transfer-Encoding (RFC 9112 § 6.3 case 1).  Capture that here
+     * so the read-completion check short-circuits at end-of-headers
+     * instead of hanging forever waiting for body bytes that the
+     * server will never send. */
+    bool was_head = (method != nullptr
+                     && strcasecmp(method, "HEAD") == 0);
 
     /* mTLS handshake material — extracted from the auth helper if
      * present.  Pool keying uses the auth pointer so identities don't
@@ -797,7 +863,8 @@ n00b_http_h1_round_trip(n00b_http_url_t *url)
     }
     if (!conn) {
         int rc = n00b_acme_tls_connect_ex(url->host->data, url->port,
-                                          timeout_ms, mtls_auth, &conn);
+                                          timeout_ms, mtls_auth,
+                                          trust, &conn);
         if (rc != N00B_QUIC_OK) {
             return n00b_result_err(n00b_http_h1_response_t *, rc);
         }
@@ -819,11 +886,27 @@ n00b_http_h1_round_trip(n00b_http_url_t *url)
     }
 
     /* Read until the response message boundary is detected (per
-     * Content-Length / chunked) OR the peer closes. */
+     * Content-Length / chunked) OR the peer closes.
+     *
+     * When `max_body_size` is non-zero we also short-circuit two
+     * paths so a hostile / buggy peer can never push us past the
+     * caller-supplied cap:
+     *
+     *   (a) Once the header block lands we sniff `Content-Length`
+     *       and bail if it advertises more body bytes than the cap.
+     *       This is a cheap up-front check that avoids reading a
+     *       single body byte for an oversized declared body.
+     *   (b) On every recv chunk we recompute `body_bytes = wire -
+     *       header` and bail if it exceeds the cap.  Covers
+     *       chunked responses + responses with no `Content-Length`
+     *       (read-to-EOF) where the up-front sniff has nothing to
+     *       sniff. */
     n00b_buffer_t *raw = n00b_buffer_empty(.allocator = a);
     bool peer_closed   = false;
     bool boundary_seen = false;
     bool read_to_eof   = false;
+    size_t header_len  = 0;       /* 0 = end-of-headers not yet seen */
+    bool   cl_checked  = false;   /* Content-Length already sniffed? */
     while (!peer_closed && !boundary_seen) {
         n00b_buffer_t *chunk = nullptr;
         rc = n00b_acme_tls_recv(conn, 64 * 1024, &chunk,
@@ -834,8 +917,74 @@ n00b_http_h1_round_trip(n00b_http_url_t *url)
         }
         if (chunk && chunk->byte_len > 0) {
             n00b_buffer_concat(raw, chunk);
+
+            /* (a) End-of-headers sniff: locate CRLFCRLF once.  We
+             *     then peek `Content-Length` and short-circuit if the
+             *     server's advertised body would push past the cap.
+             *     Done once-only on the chunk that first contains the
+             *     header terminator. */
+            if (max_body_size > 0 && header_len == 0) {
+                const char *bytes = raw->data;
+                size_t      len   = (size_t)raw->byte_len;
+                for (size_t i = 0; i + 4 <= len; i++) {
+                    if (bytes[i] == '\r' && bytes[i + 1] == '\n'
+                        && bytes[i + 2] == '\r' && bytes[i + 3] == '\n') {
+                        header_len = i + 4;
+                        break;
+                    }
+                }
+                if (header_len > 0 && !cl_checked && !was_head) {
+                    cl_checked = true;
+                    /* Skip past the status line to the headers. */
+                    const char *hp = bytes;
+                    size_t      hl = header_len;
+                    for (size_t i = 0; i + 1 < hl; i++) {
+                        if (hp[i] == '\r' && hp[i + 1] == '\n') {
+                            hp = bytes + i + 2;
+                            hl = header_len - (i + 2);
+                            break;
+                        }
+                    }
+                    size_t      vlen = 0;
+                    const char *cl   = find_header(hp, hl,
+                                                   "Content-Length",
+                                                   &vlen);
+                    if (cl) {
+                        char   nbuf[24];
+                        size_t nl = vlen < sizeof(nbuf) - 1
+                                        ? vlen : sizeof(nbuf) - 1;
+                        memcpy(nbuf, cl, nl);
+                        nbuf[nl] = '\0';
+                        uint64_t declared = (uint64_t)strtoull(
+                            nbuf, nullptr, 10);
+                        if (declared > max_body_size) {
+                            n00b_acme_tls_close(conn);
+                            return n00b_result_err(
+                                n00b_http_h1_response_t *,
+                                N00B_HTTP_ERR_RESPONSE_TOO_LARGE);
+                        }
+                    }
+                }
+            }
+
+            /* (b) Streaming guard: body bytes accumulated so far.
+             *     Once the header block has landed we know how much
+             *     of the buffer is body, so any further growth past
+             *     the cap aborts immediately. */
+            if (max_body_size > 0 && header_len > 0 && !was_head) {
+                uint64_t body_have = (uint64_t)raw->byte_len
+                                     - (uint64_t)header_len;
+                if (body_have > max_body_size) {
+                    n00b_acme_tls_close(conn);
+                    return n00b_result_err(
+                        n00b_http_h1_response_t *,
+                        N00B_HTTP_ERR_RESPONSE_TOO_LARGE);
+                }
+            }
+
             int complete = h1_response_complete(raw->data,
-                                                 (size_t)raw->byte_len);
+                                                 (size_t)raw->byte_len,
+                                                 was_head);
             if (complete == 1) boundary_seen = true;
             else if (complete == -1) read_to_eof = true;
         }

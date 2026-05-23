@@ -820,10 +820,10 @@ test_topic_accessors(void)
         .capture_stdout = true,
         .merge          = false);
 
-    // Before spawn, topics should be null.
-    assert(n00b_subproc_stdout_topic(&sp) == nullptr);
-    assert(n00b_subproc_stderr_topic(&sp) == nullptr);
-    assert(n00b_subproc_stdin_topic(&sp) == nullptr);
+    // Before spawn, topics should be n00b_option_none.
+    assert(!n00b_option_is_set(n00b_subproc_stdout_topic(&sp)));
+    assert(!n00b_option_is_set(n00b_subproc_stderr_topic(&sp)));
+    assert(!n00b_option_is_set(n00b_subproc_stdin_topic(&sp)));
 
     n00b_result_t(bool) r = n00b_subproc_spawn(&sp);
     if (n00b_result_is_err(r)) {
@@ -833,8 +833,8 @@ test_topic_accessors(void)
         return;
     }
 
-    // After spawn with capture_stdout, stdout topic should be non-null.
-    assert(n00b_subproc_stdout_topic(&sp) != nullptr);
+    // After spawn with capture_stdout, stdout topic should be set.
+    assert(n00b_option_is_set(n00b_subproc_stdout_topic(&sp)));
 
     n00b_subproc_wait(&sp);
     n00b_subproc_close(&sp);
@@ -2638,11 +2638,11 @@ test_windows_topic_subscription(void)
         .capture_stdout = true,
         .stdout_subs    = &subs);
 
-    assert(n00b_subproc_stdout_topic(&sp) == nullptr);
+    assert(!n00b_option_is_set(n00b_subproc_stdout_topic(&sp)));
 
     n00b_result_t(bool) r = n00b_subproc_spawn(&sp);
     assert(n00b_result_is_ok(r));
-    assert(n00b_subproc_stdout_topic(&sp) != nullptr);
+    assert(n00b_option_is_set(n00b_subproc_stdout_topic(&sp)));
 
     r = n00b_subproc_wait(&sp);
     assert(n00b_result_is_ok(r));

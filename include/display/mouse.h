@@ -18,6 +18,7 @@
 #pragma once
 
 #include "n00b.h"
+#include "adt/option.h"
 #include "display/render/canvas.h"
 #include "display/render/plane.h"
 #include "display/event.h"
@@ -37,13 +38,14 @@
  * @param y         Pixel row in the plane's parent coordinate space.
  * @param cell_px_w Pixels per cell column.
  * @param cell_px_h Pixels per cell row.
- * @return          Deepest hit plane, or nullptr if no hit.
+ * @return          Some(deepest hit plane), or None if no hit.
  */
-extern n00b_plane_t *n00b_mouse_hit_test(n00b_plane_t *plane,
-                                          int32_t       x,
-                                          int32_t       y,
-                                          int32_t       cell_px_w,
-                                          int32_t       cell_px_h);
+extern n00b_option_t(n00b_plane_t *)
+n00b_mouse_hit_test(n00b_plane_t *plane,
+                    int32_t       x,
+                    int32_t       y,
+                    int32_t       cell_px_w,
+                    int32_t       cell_px_h);
 
 // ====================================================================
 // Event routing
@@ -87,6 +89,6 @@ extern void n00b_canvas_release_mouse(n00b_canvas_t *c);
 /**
  * @brief Get the plane currently capturing mouse events.
  * @param c Canvas.
- * @return  Capturing plane, or nullptr.
+ * @return  Some(capturing plane), or None if no capture is active.
  */
-extern n00b_plane_t *n00b_canvas_get_mouse_capture(n00b_canvas_t *c);
+extern n00b_option_t(n00b_plane_t *) n00b_canvas_get_mouse_capture(n00b_canvas_t *c);

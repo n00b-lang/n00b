@@ -49,24 +49,27 @@ test_hit_test_basic(void)
     n00b_plane_t *plane = make_plane(5, 3, 10, 4);
 
     // Inside hit.
-    n00b_plane_t *hit = n00b_mouse_hit_test(plane, 7, 4, 1, 1);
-    assert(hit == plane);
+    n00b_option_t(n00b_plane_t *) hit_opt =
+        n00b_mouse_hit_test(plane, 7, 4, 1, 1);
+    assert(n00b_option_is_set(hit_opt));
+    assert(n00b_option_get(hit_opt) == plane);
 
     // Outside — left of plane.
-    hit = n00b_mouse_hit_test(plane, 2, 4, 1, 1);
-    assert(hit == nullptr);
+    hit_opt = n00b_mouse_hit_test(plane, 2, 4, 1, 1);
+    assert(!n00b_option_is_set(hit_opt));
 
     // Outside — below plane.
-    hit = n00b_mouse_hit_test(plane, 7, 8, 1, 1);
-    assert(hit == nullptr);
+    hit_opt = n00b_mouse_hit_test(plane, 7, 8, 1, 1);
+    assert(!n00b_option_is_set(hit_opt));
 
     // Edge: top-left corner.
-    hit = n00b_mouse_hit_test(plane, 5, 3, 1, 1);
-    assert(hit == plane);
+    hit_opt = n00b_mouse_hit_test(plane, 5, 3, 1, 1);
+    assert(n00b_option_is_set(hit_opt));
+    assert(n00b_option_get(hit_opt) == plane);
 
     // Edge: just past bottom-right.
-    hit = n00b_mouse_hit_test(plane, 15, 7, 1, 1);
-    assert(hit == nullptr);
+    hit_opt = n00b_mouse_hit_test(plane, 15, 7, 1, 1);
+    assert(!n00b_option_is_set(hit_opt));
 
     n00b_plane_destroy(plane);
     printf("  PASS: hit_test_basic\n");
@@ -85,12 +88,15 @@ test_hit_test_depth(void)
     n00b_plane_add_child(parent, child, 5, 5);
 
     // Hit the child area — should return child (deeper).
-    n00b_plane_t *hit = n00b_mouse_hit_test(parent, 7, 7, 1, 1);
-    assert(hit == child);
+    n00b_option_t(n00b_plane_t *) hit_opt =
+        n00b_mouse_hit_test(parent, 7, 7, 1, 1);
+    assert(n00b_option_is_set(hit_opt));
+    assert(n00b_option_get(hit_opt) == child);
 
     // Hit outside child but inside parent.
-    hit = n00b_mouse_hit_test(parent, 2, 2, 1, 1);
-    assert(hit == parent);
+    hit_opt = n00b_mouse_hit_test(parent, 2, 2, 1, 1);
+    assert(n00b_option_is_set(hit_opt));
+    assert(n00b_option_get(hit_opt) == parent);
 
     n00b_plane_remove_child(parent, child);
     n00b_plane_destroy(child);
@@ -107,11 +113,12 @@ test_hit_test_miss(void)
 {
     n00b_plane_t *plane = make_plane(10, 10, 5, 5);
 
-    n00b_plane_t *hit = n00b_mouse_hit_test(plane, 0, 0, 1, 1);
-    assert(hit == nullptr);
+    n00b_option_t(n00b_plane_t *) hit_opt =
+        n00b_mouse_hit_test(plane, 0, 0, 1, 1);
+    assert(!n00b_option_is_set(hit_opt));
 
-    hit = n00b_mouse_hit_test(plane, 20, 20, 1, 1);
-    assert(hit == nullptr);
+    hit_opt = n00b_mouse_hit_test(plane, 20, 20, 1, 1);
+    assert(!n00b_option_is_set(hit_opt));
 
     n00b_plane_destroy(plane);
     printf("  PASS: hit_test_miss\n");
@@ -127,8 +134,9 @@ test_hit_test_invisible(void)
     n00b_plane_t *plane = make_plane(0, 0, 10, 10);
     n00b_plane_set_visible(plane, false);
 
-    n00b_plane_t *hit = n00b_mouse_hit_test(plane, 5, 5, 1, 1);
-    assert(hit == nullptr);
+    n00b_option_t(n00b_plane_t *) hit_opt =
+        n00b_mouse_hit_test(plane, 5, 5, 1, 1);
+    assert(!n00b_option_is_set(hit_opt));
 
     n00b_plane_destroy(plane);
     printf("  PASS: hit_test_invisible\n");
@@ -146,13 +154,16 @@ test_capture(void)
 
     n00b_plane_t *plane = make_plane(0, 0, 10, 10);
 
-    assert(n00b_canvas_get_mouse_capture(&canvas) == nullptr);
+    assert(!n00b_option_is_set(n00b_canvas_get_mouse_capture(&canvas)));
 
     n00b_canvas_capture_mouse(&canvas, plane);
-    assert(n00b_canvas_get_mouse_capture(&canvas) == plane);
+    n00b_option_t(n00b_plane_t *) cap_opt =
+        n00b_canvas_get_mouse_capture(&canvas);
+    assert(n00b_option_is_set(cap_opt));
+    assert(n00b_option_get(cap_opt) == plane);
 
     n00b_canvas_release_mouse(&canvas);
-    assert(n00b_canvas_get_mouse_capture(&canvas) == nullptr);
+    assert(!n00b_option_is_set(n00b_canvas_get_mouse_capture(&canvas)));
 
     n00b_plane_destroy(plane);
     printf("  PASS: capture\n");

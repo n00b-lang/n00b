@@ -31,6 +31,7 @@
 #include <stddef.h>
 
 #include "n00b.h"
+#include "adt/option.h"
 #include "adt/result.h"
 #include "core/buffer.h"
 #include "core/string.h"
@@ -84,11 +85,25 @@ n00b_jwk_set_parse(const char *json);
  * @brief Look up a JWK by `kid`.  Linear scan; JWKS holds 1-10 keys
  *        in practice.
  *
- * @return The matching JWK, or nullptr if @p kid isn't present.
- *         When @p kid is nullptr, returns the first key that has no
- *         kid (degenerate fallback for IdPs that omit kids).
+ * @param set The JWKS to search.
+ * @param kid The key id to look up, or nullptr to request the
+ *            degenerate kid-less fallback (returns the single key
+ *            in a one-key set, or the unique kid-less key if exactly
+ *            one is present; otherwise none — see implementation
+ *            notes in `src/net/quic/jwt.c` for the confused-deputy
+ *            rationale).
+ *
+ * @return The matching JWK wrapped in @c n00b_option_t. Returns
+ *         @c n00b_option_none(n00b_jwk_t *) when:
+ *           - @p set is nullptr,
+ *           - @p kid is non-nullptr but not present in @p set,
+ *           - @p kid is nullptr and the kid-less-fallback rules don't
+ *             yield exactly one candidate.
+ *
+ * @post Once unwrapped via @ref n00b_option_get the returned pointer
+ *       is borrowed (owned by @p set's backing storage).
  */
-extern n00b_jwk_t *
+extern n00b_option_t(n00b_jwk_t *)
 n00b_jwk_set_lookup(n00b_jwk_set_t *set, const char *kid);
 
 /**
@@ -133,6 +148,25 @@ typedef struct n00b_jwt_verifier n00b_jwt_verifier_t;
  * whose `kty`/`crv` are compatible with @p alg.  Return nullptr if
  * no key can be found — verification fails with
  * `N00B_QUIC_ERR_AUTH_KEY_NOT_FOUND`.
+ *
+ * @note **Callback-contract decision (deliberate).** Unlike library
+ *       accessors that return @c n00b_option_t(T *) for "absent vs.
+ *       present" disambiguation (per §5.4 of the n00b API
+ *       guidelines), this typedef intentionally retains the
+ *       `nullptr`-as-absent contract. The signature is implemented
+ *       by USER CODE (every JWKS-resolution strategy in the
+ *       project provides its own implementation: see
+ *       @c resolve_via_set in test/unit/test_quic_jwt.c et al., and
+ *       the OIDC wrapper in src/net/quic/oidc.c). Migrating the
+ *       typedef to @c n00b_option_t(n00b_jwk_t *) would break every
+ *       external implementer with no semantic gain — `kid` lookup
+ *       has no ambiguous-value case (the result is either "the
+ *       matching JWK" or "no key"). The library code that INVOKES
+ *       this callback maps nullptr to
+ *       @c N00B_QUIC_ERR_AUTH_KEY_NOT_FOUND at the boundary; that
+ *       error-conversion layer is where option semantics would
+ *       conceptually apply, but the callback-contract surface
+ *       remains a flat nullable pointer by design.
  */
 typedef n00b_jwk_t *(*n00b_jwt_resolve_key_fn)(void       *ctx,
                                                const char *kid,

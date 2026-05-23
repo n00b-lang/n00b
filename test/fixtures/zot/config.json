@@ -1,0 +1,25 @@
+{
+  "storage": {
+    "rootDirectory": "/var/lib/registry"
+  },
+  "http": {
+    "address": "0.0.0.0",
+    "port": "${ZOT_PORT}",
+    "tls": {
+      "cert": "/etc/zot/certs/server.crt",
+      "key": "/etc/zot/certs/server.key"
+    },
+    "accessControl": {
+      "repositories": {
+        "**": {
+          "policies": [],
+          "defaultPolicy": [],
+          "anonymousPolicy": ["read", "create"]
+        }
+      }
+    }
+  },
+  "log": {
+    "level": "warn"
+  }
+}

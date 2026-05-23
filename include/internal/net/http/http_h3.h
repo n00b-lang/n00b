@@ -70,6 +70,20 @@ typedef struct n00b_http_connection_pool n00b_http_connection_pool_t;
  *                   back on clean completion (CONNECTED-state conn
  *                   only).  When NULL the round-trip is fully
  *                   stateless — every call pays the QUIC handshake.
+ * @kw max_body_size Optional per-call response-body byte cap.
+ *                   Default 0 = no cap (existing callers see
+ *                   identical behavior).  When non-zero, the h3
+ *                   receive loop enforces the cap mid-stream:
+ *                   a `content-length` response header that exceeds
+ *                   the cap short-circuits before any DATA bytes are
+ *                   accepted, and DATA-frame accumulation is bounded
+ *                   per-frame.  On overrun the stream is reset with
+ *                   `H3_EXCESSIVE_LOAD` (RFC 9114 § 8.1) and the
+ *                   call returns `N00B_HTTP_ERR_RESPONSE_TOO_LARGE`
+ *                   (-9).  A post-await backstop catches any path
+ *                   that escapes the mid-stream guard.  Mirrors h1's
+ *                   two-layered enforcement so callers see identical
+ *                   semantics across transports.
  * @kw allocator     Default per-runtime conduit pool.
  *
  * @return  Result with the populated `n00b_h3_response_t *` on
@@ -97,5 +111,8 @@ n00b_http_h3_round_trip(n00b_http_url_t *url)
          *  presentation.  See `http_h1.h` for the matching wiring on
          *  the h1 path; same shape applies here. */
         n00b_http_auth_t            *auth         = nullptr;
+        /** Per-call response-body byte cap.  Default 0 = no cap.
+         *  See @c http_h3.h prose above for the symmetry note. */
+        uint64_t                     max_body_size = 0;
         n00b_allocator_t            *allocator    = nullptr;
     };

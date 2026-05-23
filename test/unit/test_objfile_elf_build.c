@@ -309,14 +309,18 @@ test_build_with_symtab(void)
     // Verify symbols.
     assert(parsed->num_symtab == 3);
 
-    n00b_elf_symbol_t *main_sym = n00b_elf_symtab_by_name(parsed, "main");
-    assert(main_sym != nullptr);
+    n00b_option_t(n00b_elf_symbol_t *) main_sym_opt
+        = n00b_elf_symtab_by_name(parsed, "main");
+    assert(n00b_option_is_set(main_sym_opt));
+    n00b_elf_symbol_t *main_sym = n00b_option_get(main_sym_opt);
     assert(main_sym->value == 0x401000);
     assert(main_sym->size == 100);
     assert(N00B_ELF64_ST_TYPE(main_sym->info) == STT_FUNC);
 
-    n00b_elf_symbol_t *data_sym = n00b_elf_symtab_by_name(parsed, "data_var");
-    assert(data_sym != nullptr);
+    n00b_option_t(n00b_elf_symbol_t *) data_sym_opt
+        = n00b_elf_symtab_by_name(parsed, "data_var");
+    assert(n00b_option_is_set(data_sym_opt));
+    n00b_elf_symbol_t *data_sym = n00b_option_get(data_sym_opt);
     assert(data_sym->value == 0x402000);
     assert(N00B_ELF64_ST_TYPE(data_sym->info) == STT_OBJECT);
 
@@ -363,8 +367,10 @@ test_build_with_section_data(void)
 
     n00b_elf_binary_t *parsed = n00b_result_get(r2);
 
-    n00b_elf_section_t *parsed_text = n00b_elf_section_by_name(parsed, ".text");
-    assert(parsed_text != nullptr);
+    n00b_option_t(n00b_elf_section_t *) parsed_text_opt
+        = n00b_elf_section_by_name(parsed, ".text");
+    assert(n00b_option_is_set(parsed_text_opt));
+    n00b_elf_section_t *parsed_text = n00b_option_get(parsed_text_opt);
     assert(parsed_text->size == 4);
     assert(parsed_text->content != nullptr);
     assert(n00b_buffer_len(parsed_text->content) == 4);
@@ -409,9 +415,10 @@ test_build_with_dynamic(void)
     assert(parsed->num_dynamic >= 4);
 
     // Check DT_NEEDED is preserved.
-    n00b_elf_dynamic_t *needed = n00b_elf_dynamic_by_tag(parsed, DT_NEEDED);
-    assert(needed != nullptr);
-    assert(needed->value == 1);
+    n00b_option_t(n00b_elf_dynamic_t *) needed_opt
+        = n00b_elf_dynamic_by_tag(parsed, DT_NEEDED);
+    assert(n00b_option_is_set(needed_opt));
+    assert(n00b_option_get(needed_opt)->value == 1);
 
     // Should have .dynamic section.
     assert(n00b_elf_has_section(parsed, ".dynamic"));
@@ -580,11 +587,8 @@ test_build_with_dynsym(void)
 
     assert(parsed->num_dynsym == 3);
 
-    n00b_elf_symbol_t *puts_sym = n00b_elf_dynsym_by_name(parsed, "puts");
-    assert(puts_sym != nullptr);
-
-    n00b_elf_symbol_t *exit_sym = n00b_elf_dynsym_by_name(parsed, "exit");
-    assert(exit_sym != nullptr);
+    assert(n00b_option_is_set(n00b_elf_dynsym_by_name(parsed, "puts")));
+    assert(n00b_option_is_set(n00b_elf_dynsym_by_name(parsed, "exit")));
 
     // Should have .dynsym and .dynstr sections.
     assert(n00b_elf_has_section(parsed, ".dynsym"));
@@ -640,12 +644,15 @@ test_round_trip(void)
     assert(parsed->header.machine == EM_X86_64);
     assert(parsed->num_symtab == 2);
 
-    n00b_elf_symbol_t *start = n00b_elf_symtab_by_name(parsed, "_start");
-    assert(start != nullptr);
-    assert(start->value == 0x401000);
+    n00b_option_t(n00b_elf_symbol_t *) start_opt
+        = n00b_elf_symtab_by_name(parsed, "_start");
+    assert(n00b_option_is_set(start_opt));
+    assert(n00b_option_get(start_opt)->value == 0x401000);
 
-    n00b_elf_section_t *parsed_text = n00b_elf_section_by_name(parsed, ".text");
-    assert(parsed_text != nullptr);
+    n00b_option_t(n00b_elf_section_t *) parsed_text_opt
+        = n00b_elf_section_by_name(parsed, ".text");
+    assert(n00b_option_is_set(parsed_text_opt));
+    n00b_elf_section_t *parsed_text = n00b_option_get(parsed_text_opt);
     assert(parsed_text->content != nullptr);
     assert(n00b_buffer_len(parsed_text->content) == sizeof(code));
     assert(memcmp(parsed_text->content->data, code, sizeof(code)) == 0);
@@ -694,17 +701,18 @@ test_build_combined_symtab_dynsym(void)
     assert(parsed->num_dynsym == 2);
 
     // Verify symtab symbols.
-    n00b_elf_symbol_t *lf = n00b_elf_symtab_by_name(parsed, "local_func");
-    assert(lf != nullptr);
-    assert(lf->value == 0x1000);
+    n00b_option_t(n00b_elf_symbol_t *) lf_opt
+        = n00b_elf_symtab_by_name(parsed, "local_func");
+    assert(n00b_option_is_set(lf_opt));
+    assert(n00b_option_get(lf_opt)->value == 0x1000);
 
-    n00b_elf_symbol_t *gf = n00b_elf_symtab_by_name(parsed, "global_func");
-    assert(gf != nullptr);
-    assert(gf->value == 0x1010);
+    n00b_option_t(n00b_elf_symbol_t *) gf_opt
+        = n00b_elf_symtab_by_name(parsed, "global_func");
+    assert(n00b_option_is_set(gf_opt));
+    assert(n00b_option_get(gf_opt)->value == 0x1010);
 
     // Verify dynsym symbols.
-    n00b_elf_symbol_t *puts_sym = n00b_elf_dynsym_by_name(parsed, "puts");
-    assert(puts_sym != nullptr);
+    assert(n00b_option_is_set(n00b_elf_dynsym_by_name(parsed, "puts")));
 
     // Verify both section types present.
     assert(n00b_elf_has_section(parsed, ".symtab"));
@@ -756,9 +764,9 @@ test_build_hash_table_round_trip(void)
 
     // All dynsym symbols should be findable.
     assert(parsed->num_dynsym == 4);
-    assert(n00b_elf_dynsym_by_name(parsed, "foo") != nullptr);
-    assert(n00b_elf_dynsym_by_name(parsed, "bar") != nullptr);
-    assert(n00b_elf_dynsym_by_name(parsed, "baz") != nullptr);
+    assert(n00b_option_is_set(n00b_elf_dynsym_by_name(parsed, "foo")));
+    assert(n00b_option_is_set(n00b_elf_dynsym_by_name(parsed, "bar")));
+    assert(n00b_option_is_set(n00b_elf_dynsym_by_name(parsed, "baz")));
 
     printf("  [PASS] build_hash_table_round_trip\n");
 }

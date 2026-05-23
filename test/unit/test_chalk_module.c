@@ -342,7 +342,7 @@ test_roundtrip_elf(void)
     auto re_pr = n00b_elf_parse(re_bs);
     ASSERT_OK(re_pr);
     n00b_elf_binary_t *re_bin = n00b_result_get(re_pr);
-    assert(n00b_elf_section_by_name(re_bin, ".chalk.mark") == nullptr);
+    assert(!n00b_option_is_set(n00b_elf_section_by_name(re_bin, ".chalk.mark")));
     printf("  [PASS] roundtrip_elf\n");
 }
 

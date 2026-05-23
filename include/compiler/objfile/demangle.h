@@ -11,6 +11,7 @@
 
 #include "n00b.h"
 #include "core/string.h"
+#include "adt/option.h"
 
 /**
  * @brief Demangle a symbol name, auto-detecting the mangling scheme.
@@ -39,12 +40,12 @@ extern n00b_string_t *n00b_demangle_itanium(const char *mangled);
  * @brief Demangle a Rust v0 mangled name.
  *
  * Handles `_R...` symbols per RFC 2603.
- * Returns nullptr on parse failure.
  *
  * @param mangled  NUL-terminated mangled symbol name.
- * @return Demangled name, or nullptr on failure.
+ * @return Some(demangled name) on success; none on parse failure or if
+ *         @p mangled is nullptr.
  */
-extern n00b_string_t *n00b_demangle_rust(const char *mangled);
+extern n00b_option_t(n00b_string_t *) n00b_demangle_rust(const char *mangled);
 
 /**
  * @brief Check whether a symbol name appears to be mangled.

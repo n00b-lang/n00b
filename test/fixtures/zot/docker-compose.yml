@@ -1,0 +1,38 @@
+# docker-compose stub for the zot OCI registry fixture (WP-004 Phase 2
+# real-traffic push smoke).
+#
+# Driven by start.sh (port allocation, cert generation, config.json
+# rendering, readiness probe via GET /v2/, fingerprint capture).  Don't
+# `docker compose up` directly — start.sh renders config.json with the
+# chosen port + writes it into ZOT_CERT_DIR alongside the generated
+# server.crt + server.key.
+#
+# Image pinning: project-zot/zot v2.1.6 is the current LTS as of
+# 2026-05-19; refresh by bumping the tag below.  zot's release cadence
+# is conservative; pin to a specific patch tag for reproducibility.
+
+services:
+  zot:
+    # `project-zot/zot:v2.1.6` ships OCI distribution-spec 1.1 referrer
+    # support out of the box; we use that for the WP-004 push verb's
+    # `subject` field semantics.  The `-linux-amd64` suffix is omitted
+    # because Docker Desktop's amd64-on-arm64 emulation handles the
+    # arch translation transparently on the user's M-series Mac.
+    image: ghcr.io/project-zot/zot:v2.1.6
+    container_name: ${ZOT_CONTAINER:-n00b-test-zot}
+    # zot listens on a single HTTPS port for OCI v2 traffic.  start.sh
+    # picks an ephemeral host port and binds it to that same port on
+    # 127.0.0.1 inside the container.
+    ports:
+      - "127.0.0.1:${ZOT_PORT}:${ZOT_PORT}/tcp"
+    volumes:
+      # start.sh renders config.json with ZOT_PORT and writes it into
+      # ZOT_CERT_DIR alongside the generated cert + key.
+      - ${ZOT_CERT_DIR}/config.json:/etc/zot/config.json:ro
+      - ${ZOT_CERT_DIR}:/etc/zot/certs:ro
+    # Override the default command so zot picks up our mounted config.
+    command: ["serve", "/etc/zot/config.json"]
+    # Registry storage is in-memory / per-run; ephemeral is fine.
+    tmpfs:
+      - /var/lib/registry
+    restart: "no"

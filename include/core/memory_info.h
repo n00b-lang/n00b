@@ -193,20 +193,22 @@ extern void n00b_debug_memory_info(bool all);
 /**
  * @brief Cast an inline header to the out-of-band metadata record.
  *
- * Returns @c nullptr if @p info is null or has the inline guard bit set
- * (meaning it is a true inline header, not an aliased OOB record).
+ * Returns @c n00b_option_none if @p info is null or has the inline guard
+ * bit set (meaning it is a true inline header, not an aliased OOB record);
+ * otherwise wraps the OOB record in @c n00b_option_set.
  *
  * @param info  Pointer to an inline header (may actually be OOB).
- * @return      The OOB record, or @c nullptr.
+ * @return      The OOB record wrapped in `n00b_option_t`, or
+ *              `n00b_option_none` when @p info is null or genuinely inline.
  */
-static inline n00b_oob_hdr_t *
-n00b_to_mem_metadata_record(n00b_inline_hdr_t *info)
+static inline n00b_option_t(n00b_oob_hdr_t *)
+    n00b_to_mem_metadata_record(n00b_inline_hdr_t *info)
 {
     if (!info || (info->guard & 1)) {
-        return nullptr;
+        return n00b_option_none(n00b_oob_hdr_t *);
     }
 
-    return (n00b_oob_hdr_t *)info;
+    return n00b_option_set(n00b_oob_hdr_t *, (n00b_oob_hdr_t *)info);
 }
 #endif
 

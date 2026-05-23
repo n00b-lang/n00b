@@ -24,6 +24,7 @@
 #include "chalk/n00b_chalk.h"
 #include "internal/chalk/mark_internal.h"
 #include "internal/chalk/sidecar_internal.h" // n00b_chalk_sha256_buffer
+#include <util/base64.h>
 
 #include <string.h>
 
@@ -103,88 +104,37 @@ starts_with_prefix(n00b_buffer_t *b)
 }
 
 // -----------------------------------------------------------------------
-// Base64 (RFC 4648, with '=' padding)
+// Base64 (RFC 4648, with '=' padding) — delegated to the libn00b util
+// `n00b_base64_*` (include/util/base64.h, lifted in WP-002 Phase 1
+// from the previously-inline copy this file carried). The two thin
+// adapters below preserve macos_wrap's original `char *` /
+// `n00b_buffer_t *` shapes so the surrounding wrapper-parsing /
+// wrapper-building code does not have to thread a result type.
 // -----------------------------------------------------------------------
-
-static const char k_b64_alphabet[64] =
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-    "abcdefghijklmnopqrstuvwxyz"
-    "0123456789+/";
 
 static n00b_string_t *
 base64_encode_bytes(const uint8_t *data, size_t len)
 {
-    size_t triples = len / 3;
-    size_t rem     = len - triples * 3;
-    size_t outlen  = triples * 4 + (rem ? 4 : 0);
-    char  *out     = n00b_alloc_array(char, outlen);
-    size_t op      = 0;
-    size_t ip      = 0;
-    for (size_t i = 0; i < triples; i++) {
-        uint32_t v = ((uint32_t)data[ip] << 16)
-                   | ((uint32_t)data[ip + 1] << 8)
-                   | (uint32_t)data[ip + 2];
-        ip += 3;
-        out[op++] = k_b64_alphabet[(v >> 18) & 0x3f];
-        out[op++] = k_b64_alphabet[(v >> 12) & 0x3f];
-        out[op++] = k_b64_alphabet[(v >> 6)  & 0x3f];
-        out[op++] = k_b64_alphabet[v & 0x3f];
+    n00b_buffer_t *in  = n00b_buffer_from_bytes((char *)data, (int64_t)len);
+    auto           r   = n00b_base64_encode(in);
+    // The encoder cannot fail for any well-formed input; surface a
+    // null in the unreachable case so the caller's own error paths
+    // (parse_wrapped's "ret = r" pattern) still hold.
+    if (n00b_result_is_err(r)) {
+        return nullptr;
     }
-    if (rem == 1) {
-        uint32_t v = (uint32_t)data[ip] << 16;
-        out[op++] = k_b64_alphabet[(v >> 18) & 0x3f];
-        out[op++] = k_b64_alphabet[(v >> 12) & 0x3f];
-        out[op++] = '=';
-        out[op++] = '=';
-    }
-    else if (rem == 2) {
-        uint32_t v = ((uint32_t)data[ip] << 16) | ((uint32_t)data[ip + 1] << 8);
-        out[op++] = k_b64_alphabet[(v >> 18) & 0x3f];
-        out[op++] = k_b64_alphabet[(v >> 12) & 0x3f];
-        out[op++] = k_b64_alphabet[(v >> 6)  & 0x3f];
-        out[op++] = '=';
-    }
-    return n00b_string_from_raw(out, (int64_t)outlen);
-}
-
-static int
-b64_dec_char(char c)
-{
-    if (c >= 'A' && c <= 'Z') return c - 'A';
-    if (c >= 'a' && c <= 'z') return c - 'a' + 26;
-    if (c >= '0' && c <= '9') return c - '0' + 52;
-    if (c == '+') return 62;
-    if (c == '/') return 63;
-    return -1;
+    return n00b_result_get(r);
 }
 
 static n00b_buffer_t *
 base64_decode(const char *src, size_t len)
 {
-    // Trim trailing whitespace.
-    while (len > 0 && (src[len - 1] == '\n' || src[len - 1] == '\r'
-                       || src[len - 1] == ' '  || src[len - 1] == '\t')) {
-        len--;
+    n00b_string_t *in = n00b_string_from_raw(src, (int64_t)len);
+    auto           r  = n00b_base64_decode(in);
+    if (n00b_result_is_err(r)) {
+        return nullptr;
     }
-    size_t pad = 0;
-    if (len > 0 && src[len - 1] == '=') pad++;
-    if (len > 1 && src[len - 2] == '=') pad++;
-    size_t out_len = (len / 4) * 3 - pad;
-    uint8_t *out = (uint8_t *)n00b_alloc_array(char, out_len);
-    size_t op = 0;
-    for (size_t i = 0; i < len; i += 4) {
-        int a = b64_dec_char(src[i]);
-        int b = b64_dec_char(src[i + 1]);
-        int c = src[i + 2] == '=' ? 0 : b64_dec_char(src[i + 2]);
-        int d = src[i + 3] == '=' ? 0 : b64_dec_char(src[i + 3]);
-        if (a < 0 || b < 0 || c < 0 || d < 0) return nullptr;
-        uint32_t v = ((uint32_t)a << 18) | ((uint32_t)b << 12)
-                   | ((uint32_t)c << 6)  | (uint32_t)d;
-        if (op < out_len) out[op++] = (uint8_t)((v >> 16) & 0xff);
-        if (op < out_len) out[op++] = (uint8_t)((v >> 8) & 0xff);
-        if (op < out_len) out[op++] = (uint8_t)(v & 0xff);
-    }
-    return n00b_buffer_from_bytes((char *)out, (int64_t)out_len);
+    return n00b_result_get(r);
 }
 
 // -----------------------------------------------------------------------

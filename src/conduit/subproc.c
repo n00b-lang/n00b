@@ -1674,25 +1674,31 @@ n00b_subproc_term_signal(n00b_subproc_t *sp)
 // Topic accessors
 // ============================================================================
 
-n00b_conduit_topic_t(n00b_buffer_t *) *
-n00b_subproc_stdout_topic(n00b_subproc_t *sp)
+n00b_option_t(n00b_conduit_topic_t(n00b_buffer_t *) *)
+    n00b_subproc_stdout_topic(n00b_subproc_t *sp)
 {
-    return (n00b_conduit_topic_t(n00b_buffer_t *) *)sp->eff_stdout_topic;
+    return n00b_option_from_nullable(
+        n00b_conduit_topic_t(n00b_buffer_t *) *,
+        (n00b_conduit_topic_t(n00b_buffer_t *) *)sp->eff_stdout_topic);
 }
 
-n00b_conduit_topic_t(n00b_buffer_t *) *
-n00b_subproc_stderr_topic(n00b_subproc_t *sp)
+n00b_option_t(n00b_conduit_topic_t(n00b_buffer_t *) *)
+    n00b_subproc_stderr_topic(n00b_subproc_t *sp)
 {
-    return (n00b_conduit_topic_t(n00b_buffer_t *) *)sp->eff_stderr_topic;
+    return n00b_option_from_nullable(
+        n00b_conduit_topic_t(n00b_buffer_t *) *,
+        (n00b_conduit_topic_t(n00b_buffer_t *) *)sp->eff_stderr_topic);
 }
 
-n00b_conduit_topic_t(n00b_buffer_t *) *
-n00b_subproc_stdin_topic(n00b_subproc_t *sp)
+n00b_option_t(n00b_conduit_topic_t(n00b_buffer_t *) *)
+    n00b_subproc_stdin_topic(n00b_subproc_t *sp)
 {
     if (!n00b_option_is_set(sp->stdin_owner)) {
-        return nullptr;
+        return n00b_option_none(n00b_conduit_topic_t(n00b_buffer_t *) *);
     }
-    return n00b_conduit_fd_read_topic_typed(n00b_option_get(sp->stdin_owner));
+    return n00b_option_from_nullable(
+        n00b_conduit_topic_t(n00b_buffer_t *) *,
+        n00b_conduit_fd_read_topic_typed(n00b_option_get(sp->stdin_owner)));
 }
 
 #endif /* !_WIN32 */

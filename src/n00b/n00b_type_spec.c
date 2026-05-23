@@ -242,15 +242,11 @@ static n00b_tc_type_t *
 build_kargs_record(n00b_tc_ctx_t *ctx, n00b_grammar_t *g,
                    n00b_parse_tree_t *kargs_node)
 {
+    // Canonical idiom: populate the scan-info-threaded lvalues
+    // first, then struct-copy each into its heap shell after
+    // population is complete.
     n00b_list_t(n00b_string_t *) names = n00b_list_new_private(n00b_string_t *);
-    n00b_list_t(n00b_string_t *) *names_ptr =
-        n00b_alloc(n00b_list_t(n00b_string_t *));
-    *names_ptr = names;
-
     n00b_list_t(n00b_tc_type_t *) types = n00b_list_new_private(n00b_tc_type_t *);
-    n00b_list_t(n00b_tc_type_t *) *types_ptr =
-        n00b_alloc(n00b_list_t(n00b_tc_type_t *));
-    *types_ptr = types;
 
     // Walk children looking for <tspec-field> nodes.
     size_t nc = n00b_tree_num_children(kargs_node);
@@ -285,8 +281,8 @@ build_kargs_record(n00b_tc_ctx_t *ctx, n00b_grammar_t *g,
 
                         n00b_tc_type_t *ftype = ft ? translate(ctx, g, ft) : nullptr;
 
-                        n00b_list_push(*names_ptr, fname);
-                        n00b_list_push(*types_ptr, ftype);
+                        n00b_list_push(names, fname);
+                        n00b_list_push(types, ftype);
                     }
                 }
             }
@@ -307,11 +303,20 @@ build_kargs_record(n00b_tc_ctx_t *ctx, n00b_grammar_t *g,
 
                 n00b_tc_type_t *ftype = ft ? translate(ctx, g, ft) : nullptr;
 
-                n00b_list_push(*names_ptr, fname);
-                n00b_list_push(*types_ptr, ftype);
+                n00b_list_push(names, fname);
+                n00b_list_push(types, ftype);
             }
         }
     }
+
+    // Heap-allocate the list shells now (after population) and
+    // struct-copy the fully-initialized lvalues in.
+    n00b_list_t(n00b_string_t *) *names_ptr =
+        n00b_alloc(n00b_list_t(n00b_string_t *));
+    *names_ptr = names;
+    n00b_list_t(n00b_tc_type_t *) *types_ptr =
+        n00b_alloc(n00b_list_t(n00b_tc_type_t *));
+    *types_ptr = types;
 
     // Build Record type with ordered=false.
     n00b_tc_type_t *t = n00b_alloc(n00b_tc_type_t);
@@ -469,10 +474,9 @@ translate(n00b_tc_ctx_t *ctx, n00b_grammar_t *g, n00b_parse_tree_t *node)
     // <union-tspec> → union or single type (lower tier, | allowed).
     if (n00b_unicode_str_eq(nt->name, r"union-tspec")) {
         // Collect all <one-tspec> children. If more than one, build a Sum.
+        // Canonical idiom: populate the scan-info-threaded lvalue, then
+        // struct-copy into the heap shell after population.
         n00b_list_t(n00b_tc_type_t *) variants = n00b_list_new_private(n00b_tc_type_t *);
-        n00b_list_t(n00b_tc_type_t *) *var_ptr =
-            n00b_alloc(n00b_list_t(n00b_tc_type_t *));
-        *var_ptr = variants;
 
         size_t nc = n00b_tree_num_children(node);
 
@@ -500,7 +504,7 @@ translate(n00b_tc_ctx_t *ctx, n00b_grammar_t *g, n00b_parse_tree_t *node)
                     n00b_tc_type_t *t = translate(ctx, g, gchild);
 
                     if (t) {
-                        n00b_list_push(*var_ptr, t);
+                        n00b_list_push(variants, t);
                     }
                 }
 
@@ -510,19 +514,23 @@ translate(n00b_tc_ctx_t *ctx, n00b_grammar_t *g, n00b_parse_tree_t *node)
             n00b_tc_type_t *t = translate(ctx, g, child);
 
             if (t) {
-                n00b_list_push(*var_ptr, t);
+                n00b_list_push(variants, t);
             }
         }
 
-        size_t nv = n00b_list_len(*var_ptr);
+        size_t nv = n00b_list_len(variants);
 
         if (nv == 0) {
             return nullptr;
         }
 
         if (nv == 1) {
-            return n00b_list_get(*var_ptr, 0);
+            return n00b_list_get(variants, 0);
         }
+
+        n00b_list_t(n00b_tc_type_t *) *var_ptr =
+            n00b_alloc(n00b_list_t(n00b_tc_type_t *));
+        *var_ptr = variants;
 
         // Build Sum type.
         n00b_tc_type_t *t = n00b_alloc(n00b_tc_type_t);
@@ -617,13 +625,15 @@ translate(n00b_tc_ctx_t *ctx, n00b_grammar_t *g, n00b_parse_tree_t *node)
             return prim ? prim : n00b_tc_prim(ctx, name);
         }
 
-        // Collect parameters.
+        // Collect parameters. Canonical idiom: populate the
+        // scan-info-threaded lvalue first, then struct-copy into the
+        // heap shell after population is complete.
         n00b_list_t(n00b_tc_type_t *) params = n00b_list_new_private(n00b_tc_type_t *);
+        collect_tspec_list(ctx, g, tspec_list, &params);
+
         n00b_list_t(n00b_tc_type_t *) *params_ptr =
             n00b_alloc(n00b_list_t(n00b_tc_type_t *));
         *params_ptr = params;
-
-        collect_tspec_list(ctx, g, tspec_list, params_ptr);
 
         // Build the Param type manually (can't use typed vargs from here).
         n00b_tc_type_t *t = n00b_alloc(n00b_tc_type_t);
@@ -644,17 +654,17 @@ translate(n00b_tc_ctx_t *ctx, n00b_grammar_t *g, n00b_parse_tree_t *node)
     // <tspec-func> — ( params ) -> ret
     if (n00b_unicode_str_eq(nt->name, r"tspec-func")) {
         // Collect positional params from <tspec-func-params>.
+        // Canonical idiom: populate the scan-info-threaded lvalue
+        // first, then struct-copy into the heap shell after
+        // population is complete.
         n00b_list_t(n00b_tc_type_t *) positional = n00b_list_new_private(n00b_tc_type_t *);
-        n00b_list_t(n00b_tc_type_t *) *pos_ptr =
-            n00b_alloc(n00b_list_t(n00b_tc_type_t *));
-        *pos_ptr = positional;
 
         n00b_parse_tree_t *func_params = n00b_tree_find_child_by_nt_name(g, node, r"tspec-func-params");
         n00b_tc_type_t    *vargs_type  = nullptr;
         n00b_tc_type_t    *kargs_type  = nullptr;
 
         if (func_params) {
-            collect_tspec_list(ctx, g, func_params, pos_ptr);
+            collect_tspec_list(ctx, g, func_params, &positional);
 
             // Extract vargs: <tspec-vargs> → * <one-tspec>
             n00b_parse_tree_t *vargs_node = n00b_tree_find_child_by_nt_name(g, func_params,
@@ -702,6 +712,12 @@ translate(n00b_tc_ctx_t *ctx, n00b_grammar_t *g, n00b_parse_tree_t *node)
                 ret_type = translate(ctx, g, type_spec);
             }
         }
+
+        // Heap-allocate the positional list shell now (after
+        // population) and struct-copy the lvalue in.
+        n00b_list_t(n00b_tc_type_t *) *pos_ptr =
+            n00b_alloc(n00b_list_t(n00b_tc_type_t *));
+        *pos_ptr = positional;
 
         // Build function type manually.
         n00b_tc_type_t *t = n00b_alloc(n00b_tc_type_t);

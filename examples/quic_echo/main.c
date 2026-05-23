@@ -58,6 +58,7 @@
 #include <arpa/inet.h>
 
 #include "n00b.h"
+#include "util/assert.h"
 #include "core/runtime.h"
 #include "core/string.h"
 #include "core/time.h"
@@ -318,8 +319,11 @@ run_server_with(server_opts_t opts)
      * endpoint's accept-default callback wraps each new picoquic_cnx
      * as `n00b_quic_conn_t` and publishes here.  Subscribers (us)
      * keep the conn pointers and walk their channels each iteration. */
-    n00b_conduit_topic_base_t *atopic =
+    n00b_option_t(n00b_conduit_topic_base_t *) atopic_opt =
         n00b_quic_endpoint_accept_topic(server);
+    n00b_require(n00b_option_is_set(atopic_opt),
+                 "server accept topic must be set");
+    n00b_conduit_topic_base_t *atopic = n00b_option_get(atopic_opt);
     n00b_quic_accept_inbox_t *ainbox = n00b_quic_accept_inbox_new(g_conduit);
     n00b_quic_accept_subscribe(atopic, ainbox,
                                .operations = N00B_CONDUIT_OP_ALL);
@@ -570,8 +574,11 @@ run_loopback(void)
                                      .key_pem_path   = key_pem_path);
     n00b_quic_endpoint_t *server = n00b_result_get(sr);
 
-    n00b_conduit_topic_base_t *atopic =
+    n00b_option_t(n00b_conduit_topic_base_t *) atopic_opt =
         n00b_quic_endpoint_accept_topic(server);
+    n00b_require(n00b_option_is_set(atopic_opt),
+                 "server accept topic must be set");
+    n00b_conduit_topic_base_t *atopic = n00b_option_get(atopic_opt);
     n00b_quic_accept_inbox_t *ainbox = n00b_quic_accept_inbox_new(g_conduit);
     n00b_quic_accept_subscribe(atopic, ainbox,
                                .operations = N00B_CONDUIT_OP_ALL);

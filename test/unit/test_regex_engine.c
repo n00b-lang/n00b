@@ -2754,16 +2754,22 @@ dup_cstr(const char *s)
 static char *
 dup_opt_str(const n00b_toml_node_t *t, const char *key)
 {
-    n00b_toml_node_t *v = n00b_toml_table_get_cstr(t, key);
-    if (v == nullptr || n00b_toml_type(v) != N00B_TOML_STRING) return nullptr;
+    n00b_option_t(n00b_toml_node_t *) v_opt
+        = n00b_toml_table_get_cstr(t, key);
+    if (!n00b_option_is_set(v_opt)) return nullptr;
+    n00b_toml_node_t *v = n00b_option_get(v_opt);
+    if (n00b_toml_type(v) != N00B_TOML_STRING) return nullptr;
     return dup_n00b_string(n00b_toml_as_string(v));
 }
 
 static char *
 dup_required_str(const n00b_toml_node_t *t, const char *key)
 {
-    n00b_toml_node_t *v = n00b_toml_table_get_cstr(t, key);
-    n00b_require(v != nullptr,            "TOML: missing required key");
+    n00b_option_t(n00b_toml_node_t *) v_opt
+        = n00b_toml_table_get_cstr(t, key);
+    n00b_require(n00b_option_is_set(v_opt),
+                 "TOML: missing required key");
+    n00b_toml_node_t *v = n00b_option_get(v_opt);
     n00b_require(n00b_toml_type(v) == N00B_TOML_STRING,
                  "TOML: required key is not a string");
     return dup_n00b_string(n00b_toml_as_string(v));
@@ -2772,9 +2778,10 @@ dup_required_str(const n00b_toml_node_t *t, const char *key)
 static bool
 get_opt_bool(const n00b_toml_node_t *t, const char *key, bool dflt)
 {
-    n00b_toml_node_t *v = n00b_toml_table_get_cstr(t, key);
-    if (v == nullptr) return dflt;
-    return n00b_toml_as_bool(v);
+    n00b_option_t(n00b_toml_node_t *) v_opt
+        = n00b_toml_table_get_cstr(t, key);
+    if (!n00b_option_is_set(v_opt)) return dflt;
+    return n00b_toml_as_bool(n00b_option_get(v_opt));
 }
 
 // Same path-resolve story as make_path but with a "tests" subdir, mirroring
@@ -2800,8 +2807,10 @@ parse_matches(const n00b_toml_node_t *t, Match **out, size_t *out_len)
 {
     *out     = nullptr;
     *out_len = 0;
-    n00b_toml_node_t *mv = n00b_toml_table_get_cstr(t, "matches");
-    if (mv == nullptr) return;
+    n00b_option_t(n00b_toml_node_t *) mv_opt
+        = n00b_toml_table_get_cstr(t, "matches");
+    if (!n00b_option_is_set(mv_opt)) return;
+    n00b_toml_node_t *mv = n00b_option_get(mv_opt);
     n00b_require(n00b_toml_type(mv) == N00B_TOML_ARRAY,
                  "matches must be an array");
     size_t mn = n00b_toml_array_len(mv);
@@ -2835,7 +2844,10 @@ load_test_array(const char *filename)
     }
     n00b_require(n00b_result_is_ok(r), "n00b_toml_parse_file failed");
     n00b_toml_node_t *root = n00b_result_get(r);
-    return n00b_toml_table_array_of(root, "test");
+    n00b_option_t(n00b_toml_node_t *) arr_opt
+        = n00b_toml_table_array_of(root, "test");
+    if (!n00b_option_is_set(arr_opt)) return nullptr;
+    return n00b_option_get(arr_opt);
 }
 
 TestCase *
@@ -2857,9 +2869,11 @@ engine_test_load_tests(const char *filename, size_t *out_len)
         }
         out[i].pattern = dup_required_str(t, "pattern");
 
-        n00b_toml_node_t *iv = n00b_toml_table_get_cstr(t, "input");
-        if (iv != nullptr && n00b_toml_type(iv) == N00B_TOML_STRING) {
-            n00b_string_t *s = n00b_toml_as_string(iv);
+        n00b_option_t(n00b_toml_node_t *) iv_opt
+            = n00b_toml_table_get_cstr(t, "input");
+        if (n00b_option_is_set(iv_opt)
+            && n00b_toml_type(n00b_option_get(iv_opt)) == N00B_TOML_STRING) {
+            n00b_string_t *s = n00b_toml_as_string(n00b_option_get(iv_opt));
             size_t sl = (size_t)s->u8_bytes;
             out[i].input = n00b_alloc_array(char, sl + 1);
             if (sl > 0) memcpy(out[i].input, s->data, sl);
@@ -2935,7 +2949,9 @@ engine_test_load_prefix_tests(size_t *out_len)
 
         size_t cn = 0;
         for (size_t k = 0; k < sizeof KIND_KEYS / sizeof KIND_KEYS[0]; ++k) {
-            if (n00b_toml_table_get_cstr(t, KIND_KEYS[k]) != nullptr) cn++;
+            if (n00b_option_is_set(n00b_toml_table_get_cstr(t, KIND_KEYS[k]))) {
+                cn++;
+            }
         }
         if (cn == 0) {
             out[i].checks_len = 0;
@@ -2948,8 +2964,9 @@ engine_test_load_prefix_tests(size_t *out_len)
         out[i].expects = n00b_alloc_array(char *, cn);
         size_t idx = 0;
         for (size_t k = 0; k < sizeof KIND_KEYS / sizeof KIND_KEYS[0]; ++k) {
-            n00b_toml_node_t *v = n00b_toml_table_get_cstr(t, KIND_KEYS[k]);
-            if (v == nullptr) continue;
+            n00b_option_t(n00b_toml_node_t *) v_opt
+                = n00b_toml_table_get_cstr(t, KIND_KEYS[k]);
+            if (!n00b_option_is_set(v_opt)) continue;
             size_t kl = strlen(KIND_KEYS[k]);
             out[i].kinds[idx] = n00b_alloc_array(char, kl + 1);
             memcpy(out[i].kinds[idx], KIND_KEYS[k], kl + 1);
@@ -2976,9 +2993,11 @@ engine_test_load_auto_harden_tests(size_t *out_len)
     for (size_t i = 0; i < n; ++i) {
         n00b_toml_node_t *t = n00b_toml_array_get(arr, i);
         out[i].pattern = dup_required_str(t, "pattern");
-        n00b_toml_node_t *h = n00b_toml_table_get_cstr(t, "hardened");
-        n00b_require(h != nullptr, "auto_harden: missing 'hardened'");
-        out[i].hardened = n00b_toml_as_bool(h);
+        n00b_option_t(n00b_toml_node_t *) h_opt
+            = n00b_toml_table_get_cstr(t, "hardened");
+        n00b_require(n00b_option_is_set(h_opt),
+                     "auto_harden: missing 'hardened'");
+        out[i].hardened = n00b_toml_as_bool(n00b_option_get(h_opt));
     }
     *out_len = n;
     return out;
@@ -2993,8 +3012,11 @@ parse_deriv_step_array(const n00b_toml_node_t *t, const char *key,
 {
     *out = nullptr;
     *out_len = 0;
-    n00b_toml_node_t *v = n00b_toml_table_get_cstr(t, key);
-    if (v == nullptr || n00b_toml_type(v) != N00B_TOML_ARRAY) return;
+    n00b_option_t(n00b_toml_node_t *) v_opt
+        = n00b_toml_table_get_cstr(t, key);
+    if (!n00b_option_is_set(v_opt)) return;
+    n00b_toml_node_t *v = n00b_option_get(v_opt);
+    if (n00b_toml_type(v) != N00B_TOML_ARRAY) return;
     size_t n = n00b_toml_array_len(v);
     if (n == 0) return;
     char **arr = n00b_alloc_array(char *, n);
@@ -3022,8 +3044,11 @@ parse_nulls_array(const n00b_toml_node_t *t, const char *key,
     *out = nullptr;
     *out_len = 0;
     *out_set = false;
-    n00b_toml_node_t *v = n00b_toml_table_get_cstr(t, key);
-    if (v == nullptr || n00b_toml_type(v) != N00B_TOML_ARRAY) return;
+    n00b_option_t(n00b_toml_node_t *) v_opt
+        = n00b_toml_table_get_cstr(t, key);
+    if (!n00b_option_is_set(v_opt)) return;
+    n00b_toml_node_t *v = n00b_option_get(v_opt);
+    if (n00b_toml_type(v) != N00B_TOML_ARRAY) return;
     size_t n = n00b_toml_array_len(v);
     *out_set = true;
     if (n == 0) return;
@@ -3055,9 +3080,11 @@ engine_test_load_deriv_tests(size_t *out_len)
         out[i].pattern = dup_required_str(t, "pattern");
         out[i].ignore  = get_opt_bool(t, "ignore", false);
 
-        n00b_toml_node_t *iv = n00b_toml_table_get_cstr(t, "input");
-        if (iv != nullptr && n00b_toml_type(iv) == N00B_TOML_STRING) {
-            n00b_string_t *s = n00b_toml_as_string(iv);
+        n00b_option_t(n00b_toml_node_t *) iv_opt
+            = n00b_toml_table_get_cstr(t, "input");
+        if (n00b_option_is_set(iv_opt)
+            && n00b_toml_type(n00b_option_get(iv_opt)) == N00B_TOML_STRING) {
+            n00b_string_t *s = n00b_toml_as_string(n00b_option_get(iv_opt));
             size_t sl = (size_t)s->u8_bytes;
             out[i].input = n00b_alloc_array(char, sl + 1);
             if (sl > 0) memcpy(out[i].input, s->data, sl);
@@ -3095,21 +3122,25 @@ engine_test_load_accel_skip_tests(size_t *out_len)
         n00b_toml_node_t *t = n00b_toml_array_get(arr, i);
         out[i].pattern = dup_required_str(t, "pattern");
 
-        n00b_toml_node_t *iv = n00b_toml_table_get_cstr(t, "input");
-        n00b_require(iv != nullptr, "accel_skip: missing 'input'");
-        n00b_string_t *s = n00b_toml_as_string(iv);
+        n00b_option_t(n00b_toml_node_t *) iv_opt
+            = n00b_toml_table_get_cstr(t, "input");
+        n00b_require(n00b_option_is_set(iv_opt),
+                     "accel_skip: missing 'input'");
+        n00b_string_t *s = n00b_toml_as_string(n00b_option_get(iv_opt));
         size_t sl = (size_t)s->u8_bytes;
         out[i].input = n00b_alloc_array(char, sl + 1);
         if (sl > 0) memcpy(out[i].input, s->data, sl);
         out[i].input[sl] = '\0';
         out[i].input_len = sl;
 
-        n00b_toml_node_t *mv = n00b_toml_table_get_cstr(t, "matches");
-        if (mv == nullptr) {
+        n00b_option_t(n00b_toml_node_t *) mv_opt
+            = n00b_toml_table_get_cstr(t, "matches");
+        if (!n00b_option_is_set(mv_opt)) {
             out[i].matches     = nullptr;
             out[i].matches_len = 0;
         }
         else {
+            n00b_toml_node_t *mv = n00b_option_get(mv_opt);
             n00b_require(n00b_toml_type(mv) == N00B_TOML_ARRAY,
                          "matches must be an array");
             size_t mn = n00b_toml_array_len(mv);

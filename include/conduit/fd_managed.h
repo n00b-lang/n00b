@@ -586,6 +586,49 @@ n00b_fd_owner_write(n00b_conduit_fd_owner_t *owner,
                     const void *data, size_t len);
 
 /**
+ * @brief Blocking bulk-read: drain an FD owner's read topic to EOF.
+ *
+ * Subscribes to the owner's read topic, accumulates every published
+ * `n00b_buffer_t *` chunk into a freshly-allocated buffer, and returns
+ * once the IO thread signals end-of-stream (TOPIC_CLOSED on the read
+ * inbox's sys queue, or an empty-payload chunk).  The function blocks
+ * the calling thread on the inbox's condition variable while it waits
+ * for chunks, releasing the inbox CV mutex between waits so the IO
+ * thread can notify on close.
+ *
+ * This is the read-side analogue of @ref n00b_fd_owner_write — both
+ * are blocking convenience wrappers around the underlying Layer 1
+ * primitives so callers don't have to manage subscription /
+ * `TOPIC_CLOSED`-drain machinery by hand.
+ *
+ * @param owner  FD owner whose read topic to drain.
+ *
+ * @kw allocator Allocator for the returned buffer (default: runtime).
+ *
+ * @return @c Ok(buffer) on success — buffer is empty if the stream
+ *         was already at EOF.  @c Err(code) on failure, where @p code
+ *         is an `N00B_CONDUIT_ERR_*` code:
+ *         - `N00B_CONDUIT_ERR_NULL_ARG` — @p owner is null.
+ *         - `N00B_CONDUIT_ERR_FD_CLOSED` — read side already closed.
+ *         - `N00B_CONDUIT_ERR_ALLOC` — could not allocate inbox or
+ *           subscribe to the read topic.
+ *         - `N00B_CONDUIT_ERR_IO` — IO thread reported a read error
+ *           (status event with @c N00B_CONDUIT_FD_ST_READ_ERR).
+ *
+ * @pre  @p owner is non-null and was returned by
+ *       @ref n00b_conduit_fd_manage; the owner's read side has not
+ *       been closed.
+ * @post On Ok, the returned buffer owns its bytes and is independent
+ *       of @p owner's internal state.  The subscription is cancelled
+ *       before return; the inbox is GC-reachable until the next sweep.
+ */
+extern n00b_result_t(n00b_buffer_t *)
+n00b_fd_owner_read_all(n00b_conduit_fd_owner_t *owner) _kargs
+{
+    n00b_allocator_t *allocator = nullptr;
+};
+
+/**
  * @brief Process pending data in a stream reader.
  */
 extern void

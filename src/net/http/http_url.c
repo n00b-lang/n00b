@@ -13,10 +13,18 @@
  *     reject explicitly.
  *   - HTTPS only: § 2.2 of the Phase 6 plan rejects `http://` here
  *     so blunders never reach the transport.
+ *   - UTS #46 IDNA ToASCII for DNS-label hosts (DF-X): non-ASCII host
+ *     labels are converted to their ACE / Punycode form at parse
+ *     time, so every downstream consumer (allowlist matcher, cookie
+ *     jar, Host header, TLS SNI, getaddrinfo, alt-svc) sees a pure-
+ *     ASCII canonical host.  IPv4 dotted-quads survive byte-
+ *     identically (UTS-46 is a fixed point on them); IPv6 literals
+ *     bypass IDNA entirely (`[::1]` is bracketed-hex, not a DNS
+ *     label).
  *
- * Anything past tokenization (percent-decoding hosts, IDN ToASCII,
- * canonical path normalization) is deferred to the transport layer
- * where the input is actually about to be transmitted.
+ * Path / query canonicalization (percent-decode, dot-segment
+ * removal) remains a transport-layer concern; URLs are tokenized
+ * here but not normalized beyond authority.
  */
 
 #define N00B_USE_INTERNAL_API
@@ -30,6 +38,7 @@
 #include "core/buffer.h"
 #include "adt/result.h"
 #include "internal/net/http/http_url.h"
+#include "text/unicode/idna.h"
 
 /* ----------------------------------------------------------------- */
 /* Local helpers                                                     */
@@ -62,9 +71,11 @@ copy_slice(const char *p, size_t len, n00b_allocator_t *allocator)
 static n00b_string_t *
 lowercase_ascii_slice(const char *p, size_t len, n00b_allocator_t *allocator)
 {
-    /* RFC 3986 § 3.2.2: scheme + host comparisons are case-insensitive
-     * on ASCII.  Hosts with non-ASCII bytes are passed through verbatim
-     * (IDN handling is the transport layer's problem).
+    /* RFC 3986 § 3.2.2: scheme + IP-literal host comparisons are
+     * case-insensitive on ASCII.  Used for the scheme slice and for
+     * IPv6-literal host payloads (hex digits + `:` + `.` + `%`),
+     * where IDNA does not apply.  DNS-label hosts are handled by
+     * `canonicalize_host_slice` below, which runs UTS #46 ToASCII.
      *
      * We lowercase into a scratch buffer and then construct the
      * (immutable) n00b_string_t — never mutate a string after init. */
@@ -80,6 +91,34 @@ lowercase_ascii_slice(const char *p, size_t len, n00b_allocator_t *allocator)
         tmp[i] = (c >= 'A' && c <= 'Z') ? (char)(c + ('a' - 'A')) : (char)c;
     }
     return n00b_string_from_raw(tmp, (int64_t)len, .allocator = allocator);
+}
+
+/* Canonicalize a DNS-label host slice to its UTS #46 ASCII-Compatible
+ * Encoding (ACE / Punycode) form.  Pure-ASCII labels are emitted
+ * byte-identically (modulo UTS-46 case-folding, which lowercases the
+ * ASCII alphabet); non-ASCII labels become `xn--…` Punycode; IPv4
+ * dotted-quads are a fixed point of the function (each octet 0-255
+ * is a valid pure-ASCII DNS label, leaving the input unchanged).
+ *
+ * Returns nullptr iff UTS-46 reports any error (invalid UTF-8,
+ * disallowed codepoint, BIDI rule violation, label/domain too long,
+ * Punycode failure, etc.).  Callers in this file map a nullptr
+ * return to `N00B_HTTP_ERR_HOST_INVALID` — a bad-IDN host is a
+ * parse-time failure, not a silent fallback to raw bytes.
+ *
+ * IPv6 literals are bracketed-hex and must NOT be passed here; the
+ * parser dispatches to `lowercase_ascii_slice` for that branch. */
+static n00b_string_t *
+canonicalize_host_slice(const char *p, size_t len, n00b_allocator_t *allocator)
+{
+    n00b_string_t *raw = n00b_string_from_raw(p, (int64_t)len,
+                                              .allocator = allocator);
+    if (!raw) return nullptr;
+    n00b_unicode_idna_result_t r = n00b_unicode_idna_to_ascii(raw,
+                                                              .allocator = allocator);
+    if (r.error != N00B_UNICODE_IDNA_OK) return nullptr;
+    if (!r.value || r.value->u8_bytes == 0) return nullptr;
+    return r.value;
 }
 
 static n00b_string_t *
@@ -285,12 +324,28 @@ n00b_http_url_parse(n00b_string_t *url)
         }
     }
 
+    /* Canonicalize the host before constructing the result.  IPv6
+     * literals are bracketed-hex and bypass IDNA; DNS-label hosts
+     * (including IPv4 dotted-quads, which are a fixed point of
+     * UTS-46) go through `canonicalize_host_slice`.  A failed IDNA
+     * pass collapses the URL parse with `N00B_HTTP_ERR_HOST_INVALID`
+     * — bad-IDN hosts never reach a transport. */
+    n00b_string_t *host_str;
+    if (is_ipv6) {
+        host_str = lowercase_ascii_slice(host_start, host_len, allocator);
+    } else {
+        host_str = canonicalize_host_slice(host_start, host_len, allocator);
+        if (!host_str) {
+            return n00b_result_err(n00b_http_url_t *,
+                                   N00B_HTTP_ERR_HOST_INVALID);
+        }
+    }
+
     /* Build result. */
     n00b_http_url_t *u = n00b_alloc(n00b_http_url_t,
                                     .allocator = allocator);
     u->scheme            = lowercase_ascii_slice("https", 5, allocator);
-    u->host              = lowercase_ascii_slice(host_start, host_len,
-                                                 allocator);
+    u->host              = host_str;
     u->is_ipv6_literal   = is_ipv6;
     u->port              = port;
     u->has_explicit_port = has_explicit_port;
@@ -319,6 +374,9 @@ n00b_http_err_str(n00b_http_err_t err)
     case N00B_HTTP_ERR_HOST_INVALID:       return "invalid host";
     case N00B_HTTP_ERR_PORT_INVALID:       return "invalid port";
     case N00B_HTTP_ERR_BAD_RESPONSE:       return "malformed HTTP response";
+    case N00B_HTTP_ERR_RESPONSE_TOO_LARGE: return "response body exceeded max_body_size cap";
+    case N00B_HTTP_ERR_HOST_REDIRECT_NOT_ALLOWED:
+        return "redirect Location host not in caller's allowlist";
     }
     return "unknown error";
 }

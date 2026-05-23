@@ -40,6 +40,8 @@
 #include "internal/net/http/http_pool.h"
 #include "internal/net/http/http_cookies.h"
 #include "internal/net/http/http_compression.h"
+#include "internal/net/http/http_client.h"
+#include "text/unicode/idna.h"
 
 /* ===========================================================================
  * §1   Per-runtime state
@@ -561,8 +563,215 @@ resolve_location(n00b_http_url_t  *current,
     return n00b_string_from_raw(buf, (int64_t)total, .allocator = a);
 }
 
+/* ASCII-case-insensitive byte compare of two host strings.  Host
+ * comparison for the redirect allowlist is intentionally
+ * structural — we compare against the URL's authority host (no
+ * port, no path, no fragment) so callers don't have to encode the
+ * port to permit a host running on a non-default port. */
+static bool
+host_eq_ascii_ci(const char *a, size_t alen,
+                 const char *b, size_t blen)
+{
+    if (alen != blen) return false;
+    for (size_t i = 0; i < alen; i++) {
+        unsigned char ca = (unsigned char)a[i];
+        unsigned char cb = (unsigned char)b[i];
+        if (ca >= 'A' && ca <= 'Z') ca = (unsigned char)(ca - 'A' + 'a');
+        if (cb >= 'A' && cb <= 'Z') cb = (unsigned char)(cb - 'A' + 'a');
+        if (ca != cb) return false;
+    }
+    return true;
+}
+
+/* IDNA / UTS-46 canonicalization of a domain string for allowlist
+ * matching.  Collapses every failure mode into a single "skip"
+ * signal: returns `nullptr` iff
+ *
+ *   - input is null or empty (callers don't pass empty here; this is
+ *     defensive against pathological allowlist entries), OR
+ *   - `n00b_unicode_idna_to_ascii` reports any non-OK error code
+ *     (`_DISALLOWED`, `_BIDI_ERROR`, `_PUNYCODE_ERROR`, `_LABEL_TOO_LONG`,
+ *     `_DOMAIN_TOO_LONG`, `_CONTEXTJ_ERROR`, `_CONTEXTO_ERROR`,
+ *     `_LEADING_COMBINING`, `_EMPTY_LABEL`, `_INVALID_ACE`,
+ *     `_PROCESSING_ERROR`).
+ *
+ * On success returns the ACE form (pure-ASCII Punycode where
+ * needed, byte-identical for already-ASCII inputs modulo
+ * UTS-46 case folding).
+ *
+ * The result is transient — allocated on the runtime default
+ * allocator, immediately consumed by a byte compare, then dropped
+ * to the GC.  The matcher's documented "side-effect-free" contract
+ * is preserved at the API boundary; transient internal allocations
+ * are within scope per § 4.4 (the GC reclaims them).
+ *
+ * Contract note: as of DF-Y, `n00b_unicode_idna_to_ascii` returns
+ * `_PROCESSING_ERROR` (not OK + empty) on invalid-UTF-8 input, so
+ * the matcher no longer needs to second-guess an OK return with an
+ * empty `u8_bytes`. */
+static n00b_string_t *
+idna_canonicalize_or_null(const char *src, size_t src_len)
+{
+    if (!src || src_len == 0) return nullptr;
+
+    n00b_string_t *in = n00b_string_from_raw(src, (int64_t)src_len);
+    n00b_unicode_idna_result_t r = n00b_unicode_idna_to_ascii(in);
+    if (r.error != N00B_UNICODE_IDNA_OK) return nullptr;
+    if (!r.value) return nullptr;
+    return r.value;
+}
+
+/* Returns true iff @p host (assumed already pure-ASCII canonical
+ * form — lowercased + UTS-46 ToASCII applied by the URL parser per
+ * DF-X) is matched by some entry in @p allowlist.  Entries are run
+ * through UTS-46 `to_ascii` so Unicode-authored entries cross-match
+ * the ACE-form host.
+ *
+ * Two entry shapes are recognized:
+ *
+ *   - Exact entries (no `*` anywhere): canonicalize the whole
+ *     entry, then ASCII-CI byte-compare against the host.
+ *     Pure-ASCII entries land at the same bytes they would have hit
+ *     pre-IDNA (ASCII is a fixed point of `to_ascii` modulo case
+ *     folding), preserving the cand-#6 contract byte-identically.
+ *
+ *   - Wildcard entries (`*.DOMAIN` with at least one label after
+ *     the dot, e.g. `*.example.com` or `*.例え.com`): classify on
+ *     the RAW bytes (the `*.` prefix is literal ASCII and must NOT
+ *     be fed to the IDNA pipeline — it would reject `*` as
+ *     disallowed), then canonicalize only the `DOMAIN` portion
+ *     after the `*.`.  Match any host of the form `X.DOMAIN` for
+ *     some non-empty `X` after the entry's `DOMAIN` is
+ *     canonicalized.  The apex `DOMAIN` itself is NOT matched.
+ *
+ *   - Any other `*` placement (`foo.*.com`, `**.example.com`,
+ *     `*example.com`, bare `*`) is malformed and silently skipped.
+ *
+ * IDNA-error handling:
+ *
+ *   - Entry canonicalization failure (exact-side or DOMAIN-portion)
+ *     → skip that entry, continue scanning the rest of the list.
+ *     Same skip-as-malformed semantics as cand #6.
+ *
+ * An empty allowlist (0 entries) returns false — "no hosts
+ * permitted".  A nullptr allowlist is *not* passed here; the
+ * caller checks `redirect_host_allowlist != nullptr` before
+ * calling this.
+ *
+ * DF-X note: prior versions of this matcher ran the host through
+ * `idna_canonicalize_or_null` here.  That step is now redundant
+ * because the URL parser canonicalizes the host upstream at parse
+ * time; the host bytes that reach this function are guaranteed to
+ * be the ACE form already.  Removing the host-side pass eliminates
+ * the per-call canonicalization cost while preserving the contract
+ * (host and entries still meet in ACE space). */
+bool
+n00b_http_host_in_allowlist(n00b_string_t                *host,
+                            n00b_list_t(n00b_string_t *) *allowlist)
+{
+    if (!host || !allowlist) return false;
+
+    /* DF-X: the URL parser delivers `host` in canonical ACE form
+     * already, so we compare against the host bytes directly. */
+    const char *hdat = host->data;
+    size_t      hlen = host->u8_bytes;
+    if (hlen == 0) return false;
+
+    /* Lists are value types; the kwarg is a pointer to the
+     * caller's lvalue.  The list macros expect lvalue access so we
+     * dereference at every call site. */
+    size_t n = n00b_list_len(*allowlist);
+    for (size_t i = 0; i < n; i++) {
+        n00b_string_t *entry = n00b_list_get(*allowlist, i);
+        if (!entry) continue;
+        size_t      elen = entry->u8_bytes;
+        const char *edat = entry->data;
+
+        /* Classify on the raw entry bytes: scan for any `*` byte. */
+        bool   has_star      = false;
+        size_t first_star_at = 0;
+        for (size_t k = 0; k < elen; k++) {
+            if (edat[k] == '*') {
+                has_star      = true;
+                first_star_at = k;
+                break;
+            }
+        }
+
+        if (!has_star) {
+            /* Exact path — canonicalize the whole entry, then
+             * ASCII-CI compare against the canonical host. */
+            n00b_string_t *centry = idna_canonicalize_or_null(edat, elen);
+            if (!centry) continue;
+            if (host_eq_ascii_ci(hdat, hlen,
+                                  centry->data, centry->u8_bytes)) {
+                return true;
+            }
+            continue;
+        }
+
+        /* Wildcard candidate.  Accept iff:
+         *   - the first (and only) `*` is at offset 0,
+         *   - byte 1 is `.`,
+         *   - there is at least one more byte after the dot
+         *     (the DOMAIN part is non-empty),
+         *   - no further `*` appears in the entry. */
+        if (first_star_at != 0) continue;          /* e.g. `foo.*.com` */
+        if (elen < 3)            continue;          /* `*` or `*.`   */
+        if (edat[1] != '.')      continue;          /* e.g. `*example.com` */
+
+        bool further_star = false;
+        for (size_t k = 1; k < elen; k++) {
+            if (edat[k] == '*') {
+                further_star = true;
+                break;
+            }
+        }
+        if (further_star) continue;                 /* e.g. `**.example.com` */
+
+        /* Canonicalize the DOMAIN portion only — the `*.` prefix
+         * is literal ASCII and would be rejected by the IDNA
+         * pipeline.  `domain` is everything after the `.`. */
+        const char *domain     = edat + 2;
+        size_t      domain_len = elen - 2;
+        n00b_string_t *cdomain = idna_canonicalize_or_null(domain,
+                                                           domain_len);
+        if (!cdomain) continue;
+
+        /* Form the canonical suffix `.<canonical-DOMAIN>` in a
+         * tiny stack buffer.  Canonical ASCII domains cap at 253
+         * bytes per IDNA (`_DOMAIN_TOO_LONG` rejects above that),
+         * so 256 is sufficient. */
+        char   suffix_buf[260];
+        size_t cdomain_len = cdomain->u8_bytes;
+        if (cdomain_len + 1 > sizeof(suffix_buf)) continue;
+        suffix_buf[0] = '.';
+        memcpy(suffix_buf + 1, cdomain->data, cdomain_len);
+        const char *suffix     = suffix_buf;
+        size_t      suffix_len = cdomain_len + 1;
+
+        /* Strict-greater length + ASCII-CI tail match.  The strict
+         * inequality guarantees at least one wildcarded-label byte
+         * sits before the leading `.` in `suffix`, so the `.` acts
+         * as the label boundary without an explicit leading-byte
+         * check.  Punycode-encoded labels are pure ASCII, so the
+         * invariant survives canonicalization unchanged. */
+        if (hlen <= suffix_len) continue;
+        const char *tail = hdat + (hlen - suffix_len);
+        if (host_eq_ascii_ci(tail, suffix_len, suffix, suffix_len)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /* Single-shot dispatch (no redirect follow).  Factored out so the
- * redirect loop can call it repeatedly with adjusted args. */
+ * redirect loop can call it repeatedly with adjusted args.
+ *
+ * `max_body_size` is threaded into both transports so the caller's
+ * per-call body cap (DF-014) is enforced before the body
+ * materializes past the limit.  0 = no cap, preserving existing
+ * behavior for callers who don't pass the kwarg. */
 static n00b_result_t(n00b_http_response_t *)
 dispatch_once(n00b_http_url_t             *u,
               const char                  *method_str,
@@ -575,37 +784,49 @@ dispatch_once(n00b_http_url_t             *u,
               n00b_quic_trust_t           *trust,
               n00b_http_connection_pool_t *pool,
               n00b_http_auth_t            *auth,
+              uint64_t                     max_body_size,
               n00b_allocator_t            *a)
 {
     if (prefer_h3 && !loss_cache_h3_blocked(u->origin)) {
         auto rr = n00b_http_h3_round_trip(
             u,
-            .method       = method_str,
-            .body         = body,
-            .content_type = ct_str,
-            .extra        = extra,
-            .handshake_ms = h3_handshake_ms,
-            .await_ms     = timeout_ms,
-            .trust        = trust,
-            .pool         = pool,
-            .auth         = auth,
-            .allocator    = a);
+            .method        = method_str,
+            .body          = body,
+            .content_type  = ct_str,
+            .extra         = extra,
+            .handshake_ms  = h3_handshake_ms,
+            .await_ms      = timeout_ms,
+            .trust         = trust,
+            .pool          = pool,
+            .auth          = auth,
+            .max_body_size = max_body_size,
+            .allocator     = a);
         if (n00b_result_is_ok(rr)) {
             return n00b_result_ok(n00b_http_response_t *,
                                    build_from_h3(n00b_result_get(rr), a));
+        }
+        /* An over-cap response on the h3 path is a policy verdict,
+         * not an h3-transport failure — don't poison the loss cache
+         * (the h1 path would hit the same cap).  Surface the error
+         * directly so callers see a single, distinguishable code. */
+        int32_t h3_err = (int32_t)n00b_result_get_err(rr);
+        if (h3_err == N00B_HTTP_ERR_RESPONSE_TOO_LARGE) {
+            return n00b_result_err(n00b_http_response_t *, h3_err);
         }
         loss_cache_record(u->origin);
     }
     auto rr1 = n00b_http_h1_round_trip(
         u,
-        .method       = method_str,
-        .body         = body,
-        .content_type = ct_str,
-        .extra        = extra,
-        .timeout_ms   = timeout_ms,
-        .pool         = pool,
-        .auth         = auth,
-        .allocator    = a);
+        .method        = method_str,
+        .body          = body,
+        .content_type  = ct_str,
+        .extra         = extra,
+        .timeout_ms    = timeout_ms,
+        .pool          = pool,
+        .auth          = auth,
+        .trust         = trust,
+        .max_body_size = max_body_size,
+        .allocator     = a);
     if (n00b_result_is_err(rr1)) {
         return n00b_result_err(n00b_http_response_t *,
                                 n00b_result_get_err(rr1));
@@ -632,6 +853,8 @@ n00b_http_request_sync(n00b_string_t *url)
         n00b_http_cookie_jar_t *cookie_jar        = nullptr;
         n00b_http_auth_t       *auth              = nullptr;
         n00b_http_connection_pool_t *pool         = nullptr;
+        uint64_t                max_body_size     = 0;
+        n00b_list_t(n00b_string_t *) *redirect_host_allowlist = nullptr;
         n00b_allocator_t       *allocator         = nullptr;
     }
 {
@@ -728,6 +951,7 @@ n00b_http_request_sync(n00b_string_t *url)
                                  trust,
                                  pool,
                                  auth,
+                                 max_body_size,
                                  a);
         if (n00b_result_is_err(rr)) return rr;
         n00b_http_response_t *resp = n00b_result_get(rr);
@@ -802,6 +1026,28 @@ n00b_http_request_sync(n00b_string_t *url)
             return n00b_result_ok(n00b_http_response_t *, resp);
         }
 
+        /* Host-allowlist enforcement (DF-015): when the caller
+         * supplied a non-null `redirect_host_allowlist`, the next
+         * hop's authority host must be in the list.  We parse the
+         * resolved URL to extract the canonical host (already
+         * lowercased by the parser per RFC 3986 § 3.2.2) so the
+         * comparison is structural and not bytewise-string. */
+        if (redirect_host_allowlist) {
+            auto next_ur = n00b_http_url_parse(next_url, .allocator = a);
+            if (n00b_result_is_err(next_ur)) {
+                return n00b_result_err(
+                    n00b_http_response_t *,
+                    n00b_result_get_err(next_ur));
+            }
+            n00b_http_url_t *next_u = n00b_result_get(next_ur);
+            if (!n00b_http_host_in_allowlist(next_u->host,
+                                             redirect_host_allowlist)) {
+                return n00b_result_err(
+                    n00b_http_response_t *,
+                    N00B_HTTP_ERR_HOST_REDIRECT_NOT_ALLOWED);
+            }
+        }
+
         /* Method preservation per RFC 9110 § 15.4. */
         if (!status_preserves_method(resp->status)) {
             /* 301/302/303 → GET, drop body. */
@@ -860,6 +1106,8 @@ typedef struct {
     n00b_http_cookie_jar_t                               *cookie_jar;
     n00b_http_auth_t                                     *auth;
     n00b_http_connection_pool_t                          *pool;
+    uint64_t                                              max_body_size;
+    n00b_list_t(n00b_string_t *)                         *redirect_host_allowlist;
     n00b_allocator_t                                     *allocator;
 } http_worker_args_t;
 
@@ -910,22 +1158,24 @@ http_worker_main(void *arg)
 
     auto rr = n00b_http_request_sync(
         a->url,
-        .method           = a->method,
-        .body             = a->body,
-        .content_type     = a->content_type,
-        .extra            = a->extra,
-        .prefer_h3        = a->prefer_h3,
-        .h3_handshake_ms  = a->h3_handshake_ms,
-        .timeout_ms       = a->timeout_ms,
-        .trust            = a->trust,
-        .follow_redirects = a->follow_redirects,
-        .max_redirects    = a->max_redirects,
-        .auto_decompress  = a->auto_decompress,
-        .body_encoding    = a->body_encoding,
-        .cookie_jar       = a->cookie_jar,
-        .auth             = a->auth,
-        .pool             = a->pool,
-        .allocator        = a->allocator);
+        .method                  = a->method,
+        .body                    = a->body,
+        .content_type            = a->content_type,
+        .extra                   = a->extra,
+        .prefer_h3               = a->prefer_h3,
+        .h3_handshake_ms         = a->h3_handshake_ms,
+        .timeout_ms              = a->timeout_ms,
+        .trust                   = a->trust,
+        .follow_redirects        = a->follow_redirects,
+        .max_redirects           = a->max_redirects,
+        .auto_decompress         = a->auto_decompress,
+        .body_encoding           = a->body_encoding,
+        .cookie_jar              = a->cookie_jar,
+        .auth                    = a->auth,
+        .pool                    = a->pool,
+        .max_body_size           = a->max_body_size,
+        .redirect_host_allowlist = a->redirect_host_allowlist,
+        .allocator               = a->allocator);
 
     n00b_http_response_t *resp;
     if (n00b_result_is_ok(rr)) {
@@ -1009,6 +1259,8 @@ n00b_http_request(n00b_conduit_t *c, n00b_string_t *url)
         n00b_http_cookie_jar_t *cookie_jar        = nullptr;
         n00b_http_auth_t       *auth              = nullptr;
         n00b_http_connection_pool_t *pool         = nullptr;
+        uint64_t                max_body_size     = 0;
+        n00b_list_t(n00b_string_t *) *redirect_host_allowlist = nullptr;
         n00b_allocator_t       *allocator         = nullptr;
     }
 {
@@ -1059,25 +1311,27 @@ n00b_http_request(n00b_conduit_t *c, n00b_string_t *url)
     http_worker_args_t *wargs = n00b_alloc_with_opts(
         http_worker_args_t,
         &(n00b_alloc_opts_t){.allocator = a});
-    wargs->c                = c;
-    wargs->topic            = topic;
-    wargs->url              = url;
-    wargs->method           = method;
-    wargs->body             = body;
-    wargs->content_type     = content_type;
-    wargs->extra            = extra;
-    wargs->prefer_h3        = prefer_h3;
-    wargs->h3_handshake_ms  = h3_handshake_ms;
-    wargs->timeout_ms       = timeout_ms;
-    wargs->trust            = trust;
-    wargs->follow_redirects = follow_redirects;
-    wargs->max_redirects    = max_redirects;
-    wargs->auto_decompress  = auto_decompress;
-    wargs->body_encoding    = body_encoding;
-    wargs->cookie_jar       = cookie_jar;
-    wargs->auth             = auth;
-    wargs->pool             = pool;
-    wargs->allocator        = a;
+    wargs->c                       = c;
+    wargs->topic                   = topic;
+    wargs->url                     = url;
+    wargs->method                  = method;
+    wargs->body                    = body;
+    wargs->content_type            = content_type;
+    wargs->extra                   = extra;
+    wargs->prefer_h3               = prefer_h3;
+    wargs->h3_handshake_ms         = h3_handshake_ms;
+    wargs->timeout_ms              = timeout_ms;
+    wargs->trust                   = trust;
+    wargs->follow_redirects        = follow_redirects;
+    wargs->max_redirects           = max_redirects;
+    wargs->auto_decompress         = auto_decompress;
+    wargs->body_encoding           = body_encoding;
+    wargs->cookie_jar              = cookie_jar;
+    wargs->auth                    = auth;
+    wargs->pool                    = pool;
+    wargs->max_body_size           = max_body_size;
+    wargs->redirect_host_allowlist = redirect_host_allowlist;
+    wargs->allocator               = a;
 
     /* Defer the worker spawn until the first subscriber attaches.
      * The conduit topic's on_first_subscribe hook fires from inside

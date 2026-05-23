@@ -93,7 +93,16 @@ n00b_chalk_mark_new(void)
 void
 n00b_chalk_mark_free(n00b_chalk_mark_t *m)
 {
-    (void)m; // GC owns it; nothing to do.
+    // mark_new allocates m + m->dict through n00b's pluggable
+    // allocator surface. Pair with n00b_free here for correctness
+    // under any backing (GC: no-op; arena/refcount/etc: explicit
+    // cleanup). m->attestation is a borrowed pointer set by
+    // n00b_chalk_mark_set_attestation; caller owns its lifetime.
+    if (!m) return;
+    if (m->dict) {
+        n00b_free(m->dict);
+    }
+    n00b_free(m);
 }
 
 n00b_result_t(bool)
@@ -170,7 +179,11 @@ jb_put_kv(j_builder_t *jb, const char *key, n00b_json_node_t *value, bool first)
     jb_putc(jb, '"');
     jb_put_cstr(jb, key);
     jb_put_cstr(jb, "\" : ");
-    char *encoded = n00b_json_encode(value);
+    // Canonical mode produces byte-stable output independent of
+    // dict-insertion order — required so the ATTESTATION subtree
+    // (and any other nested object value) round-trips byte-stably
+    // through libchalk parse + reserialize.
+    char *encoded = n00b_json_encode(value, .canonical = true);
     jb_put_cstr(jb, encoded);
 }
 

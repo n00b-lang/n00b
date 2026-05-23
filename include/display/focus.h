@@ -10,14 +10,15 @@
  *
  * ```c
  * n00b_focus_mgr_t *fm = n00b_focus_mgr_new(canvas);
- * n00b_focus_mgr_next(fm);   // Tab
- * n00b_focus_mgr_prev(fm);   // Shift+Tab
- * n00b_plane_t *cur = n00b_focus_mgr_current(fm);
+ * (void)n00b_focus_mgr_next(fm);   // Tab
+ * (void)n00b_focus_mgr_prev(fm);   // Shift+Tab
+ * n00b_option_t(n00b_plane_t *) cur = n00b_focus_mgr_current(fm);
  * ```
  */
 #pragma once
 
 #include "n00b.h"
+#include "adt/option.h"
 #include "display/render/plane.h"
 #include "display/render/canvas.h"
 #include "display/widget.h"
@@ -72,15 +73,15 @@ extern void n00b_focus_mgr_rebuild(n00b_focus_mgr_t *fm);
 
 /**
  * @brief Move focus to the next focusable widget (Tab).
- * @return The newly focused plane, or nullptr if no focusable widgets.
+ * @return Some(newly focused plane), or None if no focusable widgets.
  */
-extern n00b_plane_t *n00b_focus_mgr_next(n00b_focus_mgr_t *fm);
+extern n00b_option_t(n00b_plane_t *) n00b_focus_mgr_next(n00b_focus_mgr_t *fm);
 
 /**
  * @brief Move focus to the previous focusable widget (Shift+Tab).
- * @return The newly focused plane, or nullptr if no focusable widgets.
+ * @return Some(newly focused plane), or None if no focusable widgets.
  */
-extern n00b_plane_t *n00b_focus_mgr_prev(n00b_focus_mgr_t *fm);
+extern n00b_option_t(n00b_plane_t *) n00b_focus_mgr_prev(n00b_focus_mgr_t *fm);
 
 /**
  * @brief Set focus to a specific plane.
@@ -90,6 +91,6 @@ extern bool n00b_focus_mgr_set(n00b_focus_mgr_t *fm, n00b_plane_t *plane);
 
 /**
  * @brief Get the currently focused plane.
- * @return The focused plane, or nullptr if none.
+ * @return Some(focused plane), or None if no plane is focused.
  */
-extern n00b_plane_t *n00b_focus_mgr_current(n00b_focus_mgr_t *fm);
+extern n00b_option_t(n00b_plane_t *) n00b_focus_mgr_current(n00b_focus_mgr_t *fm);

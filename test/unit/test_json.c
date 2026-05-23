@@ -223,6 +223,37 @@ test_json_encode_pretty(void)
     printf("  [PASS] json encode pretty\n");
 }
 
+static void
+test_json_string_new_from_n00b(void)
+{
+    // [1] Non-empty source string round-trips through encode/parse.
+    n00b_string_t    *s = n00b_string_from_cstr("hello-from-n00b");
+    n00b_json_node_t *n = n00b_json_string_new_from_n00b(s);
+    assert(n != nullptr);
+    assert(n00b_json_is_string(n));
+    assert(n->string != nullptr);
+    assert(strcmp(n->string, "hello-from-n00b") == 0);
+
+    // The copy must be independent of the source `n00b_string_t`.
+    assert(n->string != s->data);
+
+    // [2] Empty source string yields a JSON empty string.
+    n00b_string_t    *e = n00b_string_from_cstr("");
+    n00b_json_node_t *en = n00b_json_string_new_from_n00b(e);
+    assert(en != nullptr);
+    assert(n00b_json_is_string(en));
+    assert(en->string != nullptr);
+    assert(en->string[0] == '\0');
+
+    // [3] nullptr source — mirror n00b_json_string_new(nullptr) shape.
+    n00b_json_node_t *nn = n00b_json_string_new_from_n00b(nullptr);
+    assert(nn != nullptr);
+    assert(n00b_json_is_string(nn));
+    assert(nn->string == nullptr);
+
+    printf("  [PASS] json string_new_from_n00b\n");
+}
+
 // ============================================================================
 // main
 // ============================================================================
@@ -243,6 +274,7 @@ main(int argc, char *argv[])
     test_json_parse_errors();    fflush(stdout);
     test_json_encode_roundtrip(); fflush(stdout);
     test_json_encode_pretty();   fflush(stdout);
+    test_json_string_new_from_n00b(); fflush(stdout);
 
     printf("All json tests passed.\n");
     n00b_shutdown();

@@ -32,6 +32,7 @@
 #include "core/buffer.h"
 #include "core/string.h"
 #include "adt/result.h"
+#include "adt/list.h"
 #include "conduit/conduit.h"
 #include "conduit/topic.h"
 #include "conduit/inbox.h"
@@ -206,13 +207,75 @@ typedef struct n00b_http_connection_pool n00b_http_connection_pool_t;
  *                   updates the jar from `Set-Cookie:` responses.
  * @kw auth          Optional auth helper (Bearer + DPoP + mTLS
  *                   storage + response verifier).
+ * @kw max_body_size Optional per-call response-body byte cap.
+ *                   Default 0 = no cap (existing callers see
+ *                   identical behavior).  When non-zero, the
+ *                   dispatcher threads the cap into both the h1
+ *                   and h3 round-trip primitives; on overrun the
+ *                   call returns `N00B_HTTP_ERR_RESPONSE_TOO_LARGE`
+ *                   (-9).  Enforced before the cookie-jar /
+ *                   auto-decompress / redirect-follow seams, so
+ *                   the oversized body never materializes past the
+ *                   cap to those consumers.
+ * @kw redirect_host_allowlist
+ *                   Optional list of hosts the dispatcher is
+ *                   permitted to follow a 3xx redirect to.  Default
+ *                   nullptr = no filter (existing redirect-follow
+ *                   semantics unchanged).  Each entry is one of:
+ *
+ *                     - An exact host (no `*`) — matched against
+ *                       the next-hop authority host by ASCII
+ *                       case-insensitive byte equality (port, path,
+ *                       scheme, and fragment do not participate).
+ *                     - A wildcard `*.DOMAIN` with at least one
+ *                       label after the leading `*.` (e.g.
+ *                       `*.example.com`) — matches any host of the
+ *                       form `X.DOMAIN` for non-empty `X`, with the
+ *                       same ASCII-CI semantics.  Both
+ *                       `foo.example.com` and `a.b.example.com`
+ *                       match `*.example.com`.  The apex
+ *                       `example.com` does NOT match `*.example.com`;
+ *                       to permit the apex too, add a second
+ *                       non-wildcard entry `example.com`.
+ *                     - Anything else (`foo.*.com`, `**.example.com`,
+ *                       `*example.com`, bare `*`) — malformed; the
+ *                       entry is silently skipped (no match for
+ *                       that entry; the request is not aborted on
+ *                       a malformed entry alone).
+ *
+ *                   **IDN / UTS-46 support.**  Both the next-hop
+ *                   host and the canonicalizable portion of each
+ *                   entry (the whole entry for exact match; the
+ *                   `DOMAIN` after `*.` for a wildcard) are run
+ *                   through UTS-46 `to_ascii` before comparison.
+ *                   Unicode (`*.例え.com`) and Punycode
+ *                   (`*.xn--r8jz45g.com`) forms cross-match in
+ *                   either direction.  The `*.` prefix of a
+ *                   wildcard is literal ASCII and is NOT fed to
+ *                   the IDNA pipeline.  Pure-ASCII entries behave
+ *                   byte-identically to the pre-IDN matcher (ASCII
+ *                   Punycode is a fixed point of `to_ascii`).
+ *                   Entries whose canonicalizable portion fails
+ *                   IDNA (disallowed codepoints, BIDI / CONTEXTJ
+ *                   violations, oversize labels, malformed UTF-8,
+ *                   …) are silently skipped like any other
+ *                   malformed entry.
+ *
+ *                   An empty list (0 entries) means "no hosts
+ *                   permitted" — every redirect is rejected.
+ *                   Disallowed redirects surface as
+ *                   `N00B_HTTP_ERR_HOST_REDIRECT_NOT_ALLOWED`
+ *                   (-10).  Only consulted when
+ *                   `follow_redirects = true`; when redirect-follow
+ *                   is off, 3xx responses pass through to the
+ *                   caller as-is (no allowlist check).
  * @kw allocator     Default per-runtime conduit pool.
  *
  * @return  Result with the populated response, or err carrying
  *          either an `n00b_quic_err_t` (transport failure) or an
- *          `n00b_http_err_t` (URL / wire-format failure) — both are
- *          negative ints so callers can switch on the value
- *          uniformly.
+ *          `n00b_http_err_t` (URL / wire-format / policy failure)
+ *          — both are negative ints so callers can switch on the
+ *          value uniformly.
  */
 extern n00b_result_t(n00b_http_response_t *)
 n00b_http_request_sync(n00b_string_t *url)
@@ -232,6 +295,8 @@ n00b_http_request_sync(n00b_string_t *url)
         n00b_http_cookie_jar_t *cookie_jar        = nullptr;
         n00b_http_auth_t       *auth              = nullptr;
         n00b_http_connection_pool_t *pool         = nullptr;
+        uint64_t                max_body_size     = 0;
+        n00b_list_t(n00b_string_t *) *redirect_host_allowlist = nullptr;
         n00b_allocator_t       *allocator         = nullptr;
     };
 
@@ -292,6 +357,8 @@ n00b_http_request(n00b_conduit_t *c, n00b_string_t *url)
         n00b_http_cookie_jar_t *cookie_jar        = nullptr;
         n00b_http_auth_t       *auth              = nullptr;
         n00b_http_connection_pool_t *pool         = nullptr;
+        uint64_t                max_body_size     = 0;
+        n00b_list_t(n00b_string_t *) *redirect_host_allowlist = nullptr;
         n00b_allocator_t       *allocator         = nullptr;
     };
 

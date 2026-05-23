@@ -13,6 +13,7 @@
 #include "display/event.h"
 #include "display/widget.h"
 #include "display/focus.h"
+#include "adt/option.h"
 
 // -------------------------------------------------------------------
 // Hit testing
@@ -43,15 +44,15 @@ plane_full_pixel_size(n00b_plane_t *plane,
     *out_h = h;
 }
 
-n00b_plane_t *
+n00b_option_t(n00b_plane_t *)
 n00b_mouse_hit_test(n00b_plane_t *plane, int32_t x, int32_t y,
                      int32_t cell_px_w, int32_t cell_px_h)
 {
     if (!plane) {
-        return nullptr;
+        return n00b_option_none(n00b_plane_t *);
     }
     if (!(plane->flags & N00B_PLANE_VISIBLE)) {
-        return nullptr;
+        return n00b_option_none(n00b_plane_t *);
     }
 
     // Check if (x, y) is within this plane's full bounding box
@@ -62,7 +63,7 @@ n00b_mouse_hit_test(n00b_plane_t *plane, int32_t x, int32_t y,
     plane_full_pixel_size(plane, cell_px_w, cell_px_h, &pw, &ph);
 
     if (x < px || x >= px + pw || y < py || y >= py + ph) {
-        return nullptr;
+        return n00b_option_none(n00b_plane_t *);
     }
 
     // Convert to plane-local coordinates for child testing.
@@ -73,16 +74,16 @@ n00b_mouse_hit_test(n00b_plane_t *plane, int32_t x, int32_t y,
     if (plane->children.data) {
         for (size_t i = plane->children.len; i > 0; i--) {
             n00b_plane_t *child = plane->children.data[i - 1];
-            n00b_plane_t *hit   = n00b_mouse_hit_test(child, lx, ly,
-                                                        cell_px_w, cell_px_h);
-            if (hit) {
-                return hit;
+            n00b_option_t(n00b_plane_t *) hit_opt =
+                n00b_mouse_hit_test(child, lx, ly, cell_px_w, cell_px_h);
+            if (n00b_option_is_set(hit_opt)) {
+                return hit_opt;
             }
         }
     }
 
     // No child hit — return this plane.
-    return plane;
+    return n00b_option_set(n00b_plane_t *, plane);
 }
 
 // -------------------------------------------------------------------
@@ -113,10 +114,12 @@ n00b_mouse_route_event(n00b_canvas_t          *canvas,
         if (canvas->planes.data) {
             for (size_t i = canvas->planes.len; i > 0; i--) {
                 n00b_plane_t *p = canvas->planes.data[i - 1];
-                target = n00b_mouse_hit_test(p, event->mouse.x,
-                                              event->mouse.y,
-                                              cpw, cph);
-                if (target) {
+                n00b_option_t(n00b_plane_t *) hit_opt =
+                    n00b_mouse_hit_test(p, event->mouse.x,
+                                         event->mouse.y,
+                                         cpw, cph);
+                if (n00b_option_is_set(hit_opt)) {
+                    target = n00b_option_get(hit_opt);
                     break;
                 }
             }
@@ -185,8 +188,9 @@ n00b_canvas_release_mouse(n00b_canvas_t *c)
     }
 }
 
-n00b_plane_t *
+n00b_option_t(n00b_plane_t *)
 n00b_canvas_get_mouse_capture(n00b_canvas_t *c)
 {
-    return c ? c->mouse_capture : nullptr;
+    if (!c) return n00b_option_none(n00b_plane_t *);
+    return n00b_option_from_nullable(n00b_plane_t *, c->mouse_capture);
 }

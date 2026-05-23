@@ -46,9 +46,10 @@ n00b_quic_src = files(
     'picotls_verify.c',
     'picotls_certverify.c',
 
-    # Phase 3 — JWT, RSA verify, JWKS/OIDC, DPoP, mTLS, policy, audit.
+    # Phase 3 — JWT, RSA primitives (PKCS#1-v1.5 + PSS sign/verify),
+    # JWKS/OIDC, DPoP, mTLS, policy, audit.
     'jwt.c',
-    'rsa_verify.c',
+    'rsa_pkcs1.c',
     'oidc.c',
     'dpop.c',
     'mtls_token.c',

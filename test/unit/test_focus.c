@@ -9,6 +9,7 @@
 #include "core/alloc.h"
 #include "core/runtime.h"
 #include "core/string.h"
+#include "adt/option.h"
 #include "display/render/backend.h"
 #include "display/render/canvas.h"
 #include "display/render/plane.h"
@@ -103,9 +104,9 @@ test_focus_empty(void)
     n00b_focus_mgr_t *fm = n00b_focus_mgr_new(&canvas);
 
     assert(fm->count == 0);
-    assert(n00b_focus_mgr_current(fm) == nullptr);
-    assert(n00b_focus_mgr_next(fm) == nullptr);
-    assert(n00b_focus_mgr_prev(fm) == nullptr);
+    assert(!n00b_option_is_set(n00b_focus_mgr_current(fm)));
+    assert(!n00b_option_is_set(n00b_focus_mgr_next(fm)));
+    assert(!n00b_option_is_set(n00b_focus_mgr_prev(fm)));
 
     n00b_focus_mgr_destroy(fm);
     n00b_canvas_destroy(&canvas);
@@ -153,24 +154,31 @@ test_focus_tab_cycle(void)
     assert(fm->count == 3);
 
     // Auto-focused on first.
-    assert(n00b_focus_mgr_current(fm) == f1);
+    n00b_option_t(n00b_plane_t *) cur_opt = n00b_focus_mgr_current(fm);
+    assert(n00b_option_is_set(cur_opt));
+    assert(n00b_option_get(cur_opt) == f1);
     assert(f1->widget_state == N00B_WSTATE_FOCUSED);
 
     // Tab to second.
-    n00b_plane_t *next = n00b_focus_mgr_next(fm);
-    assert(next == f2);
-    assert(n00b_focus_mgr_current(fm) == f2);
+    n00b_option_t(n00b_plane_t *) next_opt = n00b_focus_mgr_next(fm);
+    assert(n00b_option_is_set(next_opt));
+    assert(n00b_option_get(next_opt) == f2);
+    cur_opt = n00b_focus_mgr_current(fm);
+    assert(n00b_option_is_set(cur_opt));
+    assert(n00b_option_get(cur_opt) == f2);
     assert(f1->widget_state == N00B_WSTATE_NORMAL);
     assert(f2->widget_state == N00B_WSTATE_FOCUSED);
 
     // Tab to third.
-    next = n00b_focus_mgr_next(fm);
-    assert(next == f3);
+    next_opt = n00b_focus_mgr_next(fm);
+    assert(n00b_option_is_set(next_opt));
+    assert(n00b_option_get(next_opt) == f3);
     assert(f3->widget_state == N00B_WSTATE_FOCUSED);
 
     // Tab wraps to first.
-    next = n00b_focus_mgr_next(fm);
-    assert(next == f1);
+    next_opt = n00b_focus_mgr_next(fm);
+    assert(n00b_option_is_set(next_opt));
+    assert(n00b_option_get(next_opt) == f1);
     assert(f1->widget_state == N00B_WSTATE_FOCUSED);
     assert(f3->widget_state == N00B_WSTATE_NORMAL);
 
@@ -210,17 +218,21 @@ test_focus_shift_tab(void)
 
     n00b_focus_mgr_t *fm = n00b_focus_mgr_new(&canvas);
 
-    assert(n00b_focus_mgr_current(fm) == f1);
+    n00b_option_t(n00b_plane_t *) cur_opt = n00b_focus_mgr_current(fm);
+    assert(n00b_option_is_set(cur_opt));
+    assert(n00b_option_get(cur_opt) == f1);
 
     // Prev wraps to last.
-    n00b_plane_t *prev = n00b_focus_mgr_prev(fm);
-    assert(prev == f2);
+    n00b_option_t(n00b_plane_t *) prev_opt = n00b_focus_mgr_prev(fm);
+    assert(n00b_option_is_set(prev_opt));
+    assert(n00b_option_get(prev_opt) == f2);
     assert(f2->widget_state == N00B_WSTATE_FOCUSED);
     assert(f1->widget_state == N00B_WSTATE_NORMAL);
 
     // Prev again → back to first.
-    prev = n00b_focus_mgr_prev(fm);
-    assert(prev == f1);
+    prev_opt = n00b_focus_mgr_prev(fm);
+    assert(n00b_option_is_set(prev_opt));
+    assert(n00b_option_get(prev_opt) == f1);
 
     n00b_focus_mgr_destroy(fm);
     n00b_canvas_destroy(&canvas);
@@ -261,7 +273,9 @@ test_focus_set(void)
     // Set focus to f2 directly.
     bool ok = n00b_focus_mgr_set(fm, f2);
     assert(ok);
-    assert(n00b_focus_mgr_current(fm) == f2);
+    n00b_option_t(n00b_plane_t *) cur_opt = n00b_focus_mgr_current(fm);
+    assert(n00b_option_is_set(cur_opt));
+    assert(n00b_option_get(cur_opt) == f2);
     assert(f2->widget_state == N00B_WSTATE_FOCUSED);
     assert(f1->widget_state == N00B_WSTATE_NORMAL);
 
@@ -269,7 +283,9 @@ test_focus_set(void)
     n00b_plane_t *nf = make_nonfocusable_plane();
     ok = n00b_focus_mgr_set(fm, nf);
     assert(!ok);
-    assert(n00b_focus_mgr_current(fm) == f2);
+    cur_opt = n00b_focus_mgr_current(fm);
+    assert(n00b_option_is_set(cur_opt));
+    assert(n00b_option_get(cur_opt) == f2);
 
     n00b_focus_mgr_destroy(fm);
     n00b_canvas_destroy(&canvas);

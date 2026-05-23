@@ -34,6 +34,7 @@
 #include "n00b.h"
 #include "core/alloc.h"
 #include "core/string.h"
+#include "adt/option.h"
 #include "adt/result.h"
 #include "adt/list.h"
 #include "adt/dict.h"
@@ -145,21 +146,46 @@ extern n00b_toml_node_t *
 n00b_toml_array_get(const n00b_toml_node_t *v, size_t i);
 
 /**
- * @brief Table lookup by key.  Returns nullptr if @p key is not present.
- *        Panics on type mismatch.
+ * @brief Table lookup by key.
+ *
+ * @param v   Table node (must be `N00B_TOML_TABLE`).
+ * @param key Key to look up.
+ *
+ * @return The bound value wrapped in @c n00b_option_t. Returns
+ *         @c n00b_option_none(n00b_toml_node_t *) if @p key is not
+ *         present in @p v.
+ *
+ * @pre @p v has type `N00B_TOML_TABLE`. Panics on type mismatch.
+ *
+ * @post Once unwrapped via @ref n00b_option_get, the returned node is
+ *       borrowed (owned by @p v's transitive child graph).
  */
-extern n00b_toml_node_t *
+extern n00b_option_t(n00b_toml_node_t *)
 n00b_toml_table_get(const n00b_toml_node_t *v, n00b_string_t *key);
 
-/** @brief As `n00b_toml_table_get` but with a C-string key. */
-extern n00b_toml_node_t *
+/**
+ * @brief As @ref n00b_toml_table_get but with a C-string key.
+ *
+ * @return The bound value wrapped in @c n00b_option_t, or
+ *         @c n00b_option_none(n00b_toml_node_t *) if @p key is not
+ *         present in @p v.
+ */
+extern n00b_option_t(n00b_toml_node_t *)
 n00b_toml_table_get_cstr(const n00b_toml_node_t *v, const char *key);
 
 /**
  * @brief Look up `[[name]]` array-of-tables in the root table.
- *        Returns the implicit `N00B_TOML_ARRAY` whose elements are the
- *        individual table entries, or nullptr if no `[[name]]` headers
- *        with this name were seen.  Panics on type mismatch.
+ *
+ * @param v    Root table node (must be `N00B_TOML_TABLE`).
+ * @param name `[[name]]` header to look up.
+ *
+ * @return The implicit `N00B_TOML_ARRAY` whose elements are the
+ *         individual table entries, wrapped in @c n00b_option_t.
+ *         Returns @c n00b_option_none(n00b_toml_node_t *) if no
+ *         `[[name]]` headers with this name were seen.
+ *
+ * @pre The looked-up value (if present) has type `N00B_TOML_ARRAY`.
+ *      Panics on type mismatch.
  */
-extern n00b_toml_node_t *
+extern n00b_option_t(n00b_toml_node_t *)
 n00b_toml_table_array_of(const n00b_toml_node_t *v, const char *name);

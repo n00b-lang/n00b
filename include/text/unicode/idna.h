@@ -18,6 +18,13 @@
  *  @param domain  The Unicode domain name to convert.
  *  @kw allocator  Optional allocator (defaults to the runtime allocator).
  *  @return A result containing the ACE domain string and an error code.
+ *
+ *  @details On invalid UTF-8 in the input (truncated multi-byte sequence,
+ *  overlong encoding, lone surrogate, lone continuation byte, etc.) the
+ *  error code is `N00B_UNICODE_IDNA_PROCESSING_ERROR` and the result value
+ *  is an empty string; callers must check `.error` rather than relying on
+ *  the value being non-empty.  An `N00B_UNICODE_IDNA_OK` return on a
+ *  non-empty input is guaranteed to carry a non-empty ACE form.
  */
 n00b_unicode_idna_result_t
 n00b_unicode_idna_to_ascii(n00b_string_t *domain) _kargs

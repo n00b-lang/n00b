@@ -11,6 +11,7 @@
 #include "core/alloc.h"
 #include "core/buffer.h"
 #include "core/runtime.h"
+#include "adt/option.h"
 
 // ============================================================================
 // Helpers
@@ -66,8 +67,9 @@ test_basic_format(void)
     const uint8_t data[] = "Hello, world!";
     n00b_buffer_t *buf = make_buf(data, 13);
 
-    n00b_buffer_t *out = n00b_hexdump_buf(buf, .width = 80);
-    assert(out != nullptr);
+    n00b_option_t(n00b_buffer_t *) out_opt = n00b_hexdump_buf(buf, .width = 80);
+    assert(n00b_option_is_set(out_opt));
+    n00b_buffer_t *out = n00b_option_get(out_opt);
 
     char *s = buf_to_str(out);
     assert(s != nullptr);
@@ -90,8 +92,9 @@ test_exact_line(void)
     for (int i = 0; i < 16; i++) data[i] = (uint8_t)i;
 
     n00b_buffer_t *buf = make_buf(data, 16);
-    n00b_buffer_t *out = n00b_hexdump_buf(buf, .width = 80);
-    assert(out != nullptr);
+    n00b_option_t(n00b_buffer_t *) out_opt = n00b_hexdump_buf(buf, .width = 80);
+    assert(n00b_option_is_set(out_opt));
+    n00b_buffer_t *out = n00b_option_get(out_opt);
 
     char *s = buf_to_str(out);
     // Should have exactly one newline.
@@ -120,8 +123,9 @@ test_multi_line(void)
     for (int i = 0; i < 33; i++) data[i] = (uint8_t)(0x40 + i);
 
     n00b_buffer_t *buf = make_buf(data, 33);
-    n00b_buffer_t *out = n00b_hexdump_buf(buf, .width = 80);
-    assert(out != nullptr);
+    n00b_option_t(n00b_buffer_t *) out_opt = n00b_hexdump_buf(buf, .width = 80);
+    assert(n00b_option_is_set(out_opt));
+    n00b_buffer_t *out = n00b_option_get(out_opt);
 
     char *s = buf_to_str(out);
     int nl_count = 0;
@@ -150,15 +154,18 @@ test_streaming(void)
     // First chunk: 10 bytes (partial line).
     uint8_t chunk1[10];
     memset(chunk1, 'A', 10);
-    n00b_buffer_t *out1 = n00b_hexdump_feed(hd, make_buf(chunk1, 10));
+    n00b_option_t(n00b_buffer_t *) out1_opt =
+        n00b_hexdump_feed(hd, make_buf(chunk1, 10));
     // No complete line yet.
-    assert(out1 == nullptr);
+    assert(!n00b_option_is_set(out1_opt));
 
     // Second chunk: 10 bytes (completes first line + 4 bytes into next).
     uint8_t chunk2[10];
     memset(chunk2, 'B', 10);
-    n00b_buffer_t *out2 = n00b_hexdump_feed(hd, make_buf(chunk2, 10));
-    assert(out2 != nullptr);
+    n00b_option_t(n00b_buffer_t *) out2_opt =
+        n00b_hexdump_feed(hd, make_buf(chunk2, 10));
+    assert(n00b_option_is_set(out2_opt));
+    n00b_buffer_t *out2 = n00b_option_get(out2_opt);
 
     char *s2 = buf_to_str(out2);
     // Should have exactly 1 complete line.
@@ -169,8 +176,9 @@ test_streaming(void)
     assert(nl == 1);
 
     // Flush the remaining 4 bytes.
-    n00b_buffer_t *tail = n00b_hexdump_flush(hd);
-    assert(tail != nullptr);
+    n00b_option_t(n00b_buffer_t *) tail_opt = n00b_hexdump_flush(hd);
+    assert(n00b_option_is_set(tail_opt));
+    n00b_buffer_t *tail = n00b_option_get(tail_opt);
 
     char *st = buf_to_str(tail);
     assert(strstr(st, "00000010") != nullptr);
@@ -185,8 +193,10 @@ test_start_offset(void)
     const uint8_t data[] = "test";
     n00b_buffer_t *buf = make_buf(data, 4);
 
-    n00b_buffer_t *out = n00b_hexdump_buf(buf, .width = 80, .offset = 0x1000);
-    assert(out != nullptr);
+    n00b_option_t(n00b_buffer_t *) out_opt =
+        n00b_hexdump_buf(buf, .width = 80, .offset = 0x1000);
+    assert(n00b_option_is_set(out_opt));
+    n00b_buffer_t *out = n00b_option_get(out_opt);
 
     char *s = buf_to_str(out);
     assert(strstr(s, "00001000") != nullptr);
@@ -198,8 +208,8 @@ static void
 test_empty_input(void)
 {
     n00b_buffer_t *buf = n00b_buffer_empty();
-    n00b_buffer_t *out = n00b_hexdump_buf(buf);
-    assert(out == nullptr);
+    n00b_option_t(n00b_buffer_t *) out_opt = n00b_hexdump_buf(buf);
+    assert(!n00b_option_is_set(out_opt));
 
     printf("  [PASS] empty input\n");
 }
@@ -207,11 +217,12 @@ test_empty_input(void)
 static void
 test_null_input(void)
 {
-    n00b_buffer_t *out = n00b_hexdump_feed(nullptr, nullptr);
-    assert(out == nullptr);
+    n00b_option_t(n00b_buffer_t *) out_opt =
+        n00b_hexdump_feed(nullptr, nullptr);
+    assert(!n00b_option_is_set(out_opt));
 
-    n00b_buffer_t *out2 = n00b_hexdump_flush(nullptr);
-    assert(out2 == nullptr);
+    n00b_option_t(n00b_buffer_t *) out2_opt = n00b_hexdump_flush(nullptr);
+    assert(!n00b_option_is_set(out2_opt));
 
     printf("  [PASS] null input\n");
 }
@@ -226,12 +237,14 @@ test_set_width(void)
     // Feed partial data.
     uint8_t data[8];
     memset(data, 0xff, 8);
-    n00b_buffer_t *out = n00b_hexdump_feed(hd, make_buf(data, 8));
-    assert(out == nullptr); // Not complete yet.
+    n00b_option_t(n00b_buffer_t *) out_opt =
+        n00b_hexdump_feed(hd, make_buf(data, 8));
+    assert(!n00b_option_is_set(out_opt)); // Not complete yet.
 
     // Change width — should flush the partial line.
-    n00b_buffer_t *flushed = n00b_hexdump_set_width(hd, 200);
-    assert(flushed != nullptr);
+    n00b_option_t(n00b_buffer_t *) flushed_opt =
+        n00b_hexdump_set_width(hd, 200);
+    assert(n00b_option_is_set(flushed_opt));
 
     // New cpl should be larger.
     assert(hd->cpl >= 32);
@@ -252,8 +265,9 @@ test_ascii_sidebar(void)
     };
 
     n00b_buffer_t *buf = make_buf(data, 16);
-    n00b_buffer_t *out = n00b_hexdump_buf(buf, .width = 80);
-    assert(out != nullptr);
+    n00b_option_t(n00b_buffer_t *) out_opt = n00b_hexdump_buf(buf, .width = 80);
+    assert(n00b_option_is_set(out_opt));
+    n00b_buffer_t *out = n00b_option_get(out_opt);
 
     char *s = buf_to_str(out);
     // ASCII column: no pipe delimiters. Printable chars as-is, others as '.'.
@@ -274,8 +288,10 @@ test_reset_preserves_start_offset(void)
     // Feed some data and flush.
     uint8_t data[16];
     memset(data, 0xAA, 16);
-    n00b_buffer_t *out = n00b_hexdump_feed(hd, make_buf(data, 16));
-    assert(out != nullptr);
+    n00b_option_t(n00b_buffer_t *) out_opt =
+        n00b_hexdump_feed(hd, make_buf(data, 16));
+    assert(n00b_option_is_set(out_opt));
+    n00b_buffer_t *out = n00b_option_get(out_opt);
 
     char *s = buf_to_str(out);
     assert(strstr(s, "00002000") != nullptr);
@@ -285,8 +301,10 @@ test_reset_preserves_start_offset(void)
     assert(hd->display_offset == 0x2000);
 
     // Feed again — should show 0x2000 again.
-    n00b_buffer_t *out2 = n00b_hexdump_feed(hd, make_buf(data, 16));
-    assert(out2 != nullptr);
+    n00b_option_t(n00b_buffer_t *) out2_opt =
+        n00b_hexdump_feed(hd, make_buf(data, 16));
+    assert(n00b_option_is_set(out2_opt));
+    n00b_buffer_t *out2 = n00b_option_get(out2_opt);
 
     char *s2 = buf_to_str(out2);
     assert(strstr(s2, "00002000") != nullptr);

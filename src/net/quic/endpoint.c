@@ -730,10 +730,13 @@ n00b_quic_test_endpoint_quic(n00b_quic_endpoint_t *ep)
     return ep ? (struct st_picoquic_quic_t *)ep->quic : nullptr;
 }
 
-n00b_conduit_topic_base_t *
+n00b_option_t(n00b_conduit_topic_base_t *)
 n00b_quic_endpoint_accept_topic(n00b_quic_endpoint_t *ep)
 {
-    return (ep && !ep->closed) ? ep->accept_topic : nullptr;
+    if (!ep || ep->closed || !ep->accept_topic) {
+        return n00b_option_none(n00b_conduit_topic_base_t *);
+    }
+    return n00b_option_set(n00b_conduit_topic_base_t *, ep->accept_topic);
 }
 
 n00b_quic_endpoint_stats_t

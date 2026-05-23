@@ -148,11 +148,12 @@ test_empty_core_method(void)
     uint64_t *p = n00b_alloc(uint64_t);
 
     // uint64_t is registered with all-nullptr core vtable.
-    n00b_vtable_entry fn = n00b_obj_core_method(p, N00B_BI_CONSTRUCTOR);
-    assert(fn == nullptr);
+    n00b_option_t(n00b_vtable_entry) fn_opt =
+        n00b_obj_core_method(p, N00B_BI_CONSTRUCTOR);
+    assert(!n00b_option_is_set(fn_opt));
 
-    fn = n00b_obj_core_method(p, N00B_BI_FINALIZER);
-    assert(fn == nullptr);
+    fn_opt = n00b_obj_core_method(p, N00B_BI_FINALIZER);
+    assert(!n00b_option_is_set(fn_opt));
 
     printf("  [PASS] empty core method\n");
 }
@@ -270,8 +271,9 @@ test_vtable_hash_uint64(void)
     *p = 42;
 
     // Hash slot should be populated.
-    n00b_vtable_entry fn = n00b_obj_core_method(p, N00B_BI_HASH);
-    assert(fn != nullptr);
+    n00b_option_t(n00b_vtable_entry) fn_opt =
+        n00b_obj_core_method(p, N00B_BI_HASH);
+    assert(n00b_option_is_set(fn_opt));
 
     // n00b_hash with fn=nullptr should dispatch through the vtable.
     n00b_uint128_t h1 = n00b_hash(p, nullptr);
@@ -293,8 +295,9 @@ test_vtable_hash_string(void)
 {
     n00b_string_t *s = n00b_unicode_str_from_int(12345);
 
-    n00b_vtable_entry fn = n00b_obj_core_method(s, N00B_BI_HASH);
-    assert(fn != nullptr);
+    n00b_option_t(n00b_vtable_entry) fn_opt =
+        n00b_obj_core_method(s, N00B_BI_HASH);
+    assert(n00b_option_is_set(fn_opt));
 
     n00b_uint128_t h = n00b_hash(s, nullptr);
     assert(h != 0);

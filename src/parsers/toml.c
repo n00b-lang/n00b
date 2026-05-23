@@ -989,27 +989,35 @@ n00b_toml_array_get(const n00b_toml_node_t *v, size_t i)
     return n00b_list_get(((n00b_toml_node_t *)v)->array, i);
 }
 
-n00b_toml_node_t *
+n00b_option_t(n00b_toml_node_t *)
 n00b_toml_table_get(const n00b_toml_node_t *v, n00b_string_t *key)
 {
     n00b_require(v != nullptr, "n00b_toml_table_get: v");
     n00b_require(v->type == N00B_TOML_TABLE,
                  "n00b_toml_table_get: type mismatch");
-    return toml_table_lookup(v, key);
+    n00b_toml_node_t *got = toml_table_lookup(v, key);
+    if (got == nullptr) {
+        return n00b_option_none(n00b_toml_node_t *);
+    }
+    return n00b_option_set(n00b_toml_node_t *, got);
 }
 
-n00b_toml_node_t *
+n00b_option_t(n00b_toml_node_t *)
 n00b_toml_table_get_cstr(const n00b_toml_node_t *v, const char *key)
 {
     return n00b_toml_table_get(v, n00b_string_from_cstr(key));
 }
 
-n00b_toml_node_t *
+n00b_option_t(n00b_toml_node_t *)
 n00b_toml_table_array_of(const n00b_toml_node_t *v, const char *name)
 {
-    n00b_toml_node_t *got = n00b_toml_table_get_cstr(v, name);
-    if (got == nullptr) return nullptr;
+    n00b_option_t(n00b_toml_node_t *) got_opt
+        = n00b_toml_table_get_cstr(v, name);
+    if (!n00b_option_is_set(got_opt)) {
+        return n00b_option_none(n00b_toml_node_t *);
+    }
+    n00b_toml_node_t *got = n00b_option_get(got_opt);
     n00b_require(got->type == N00B_TOML_ARRAY,
                  "n00b_toml_table_array_of: not an array-of-tables");
-    return got;
+    return n00b_option_set(n00b_toml_node_t *, got);
 }

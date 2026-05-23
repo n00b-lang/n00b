@@ -74,6 +74,7 @@ struct n00b_runtime_t {
     n00b_dict_untyped_t        *sub_map;           // conduit subscription handle -> sub ptr
     n00b_conduit_t             *default_conduit;   // Default conduit for IO service.
     n00b_conduit_service_t     *default_service;   // Service thread pool (IO + signal).
+    n00b_conduit_fd_owner_t    *stdin_owner;       // Managed fd 0.
     n00b_conduit_fd_owner_t    *stdout_owner;      // Managed fd 1.
     n00b_conduit_fd_owner_t    *stderr_owner;      // Managed fd 2.
     n00b_conduit_topic_base_t  *stdout_topic;      // Typed stdout buffer topic.

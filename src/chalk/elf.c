@@ -141,8 +141,13 @@ n00b_chalk_elf_extract_buffer(n00b_buffer_t *bytes)
     if (!bytes) return n00b_result_err(n00b_chalk_extract_result_t *, 1);
     n00b_elf_binary_t *bin = parse_elf(bytes);
     if (!bin) return n00b_result_err(n00b_chalk_extract_result_t *, 2);
-    n00b_elf_section_t *sec = n00b_elf_section_by_name(bin, CHALK_SECTION_NAME);
-    if (!sec || !sec->content) {
+    n00b_option_t(n00b_elf_section_t *) sec_opt
+        = n00b_elf_section_by_name(bin, CHALK_SECTION_NAME);
+    if (!n00b_option_is_set(sec_opt)) {
+        return n00b_result_err(n00b_chalk_extract_result_t *, 3);
+    }
+    n00b_elf_section_t *sec = n00b_option_get(sec_opt);
+    if (!sec->content) {
         return n00b_result_err(n00b_chalk_extract_result_t *, 3);
     }
     // ELF section content is exact-size (no file-alignment padding

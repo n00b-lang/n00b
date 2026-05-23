@@ -31,7 +31,7 @@
 #include "net/quic/quic_types.h"
 #include "net/quic/jwt.h"
 #include "internal/net/quic/jws.h"
-#include "internal/net/quic/rsa_verify.h"
+#include "internal/net/quic/rsa_pkcs1.h"
 
 #include "uECC.h"
 
@@ -192,17 +192,17 @@ n00b_jwk_set_parse(const char *json)
     return n00b_result_ok(n00b_jwk_set_t *, set);
 }
 
-n00b_jwk_t *
+n00b_option_t(n00b_jwk_t *)
 n00b_jwk_set_lookup(n00b_jwk_set_t *set, const char *kid)
 {
-    if (!set) return nullptr;
+    if (!set) return n00b_option_none(n00b_jwk_t *);
     if (kid) {
         for (size_t i = 0; i < set->count; i++) {
             if (set->keys[i]->kid && strcmp(set->keys[i]->kid, kid) == 0) {
-                return set->keys[i];
+                return n00b_option_set(n00b_jwk_t *, set->keys[i]);
             }
         }
-        return nullptr;
+        return n00b_option_none(n00b_jwk_t *);
     }
     /* kid-less lookup.  We're strict about ambiguity: only return a
      * key when there's exactly ONE kid-less key in the set, OR when
@@ -211,7 +211,7 @@ n00b_jwk_set_lookup(n00b_jwk_set_t *set, const char *kid)
      * them is a confused-deputy risk — an attacker who can choose
      * which kid is omitted would let us validate against whichever
      * key in the set happens to come first.  Refuse instead. */
-    if (set->count == 1) return set->keys[0];
+    if (set->count == 1) return n00b_option_set(n00b_jwk_t *, set->keys[0]);
     n00b_jwk_t *kidless = nullptr;
     size_t      kidless_count = 0;
     for (size_t i = 0; i < set->count; i++) {
@@ -220,7 +220,10 @@ n00b_jwk_set_lookup(n00b_jwk_set_t *set, const char *kid)
             kidless_count++;
         }
     }
-    return (kidless_count == 1) ? kidless : nullptr;
+    if (kidless_count == 1) {
+        return n00b_option_set(n00b_jwk_t *, kidless);
+    }
+    return n00b_option_none(n00b_jwk_t *);
 }
 
 /* ===========================================================================

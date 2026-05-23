@@ -445,17 +445,19 @@ n00b_canvas_run(n00b_canvas_t *canvas) _kargs
 
             // Tab → focus next.
             if (key == N00B_KEY_TAB && !(mods & N00B_MOD_SHIFT)) {
-                n00b_focus_mgr_next(fm);
+                (void)n00b_focus_mgr_next(fm);
             }
             // Shift+Tab → focus prev.
             else if (key == N00B_KEY_TAB && (mods & N00B_MOD_SHIFT)) {
-                n00b_focus_mgr_prev(fm);
+                (void)n00b_focus_mgr_prev(fm);
             }
             // Dispatch to focused widget.
             else {
-                n00b_plane_t *focused = n00b_focus_mgr_current(fm);
-                if (focused) {
-                    n00b_widget_handle_event(focused, &event);
+                n00b_option_t(n00b_plane_t *) focused_opt =
+                    n00b_focus_mgr_current(fm);
+                if (n00b_option_is_set(focused_opt)) {
+                    n00b_widget_handle_event(n00b_option_get(focused_opt),
+                                              &event);
                 }
             }
         }

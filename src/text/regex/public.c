@@ -380,9 +380,9 @@ n00b_regex_matches(n00b_regex_t *re, n00b_string_t *input)
         panic_on_scan_err("n00b_regex_matches", err);
     }
 
-    n00b_list_t(n00b_regex_match_t) *out =
-        n00b_alloc(n00b_list_t(n00b_regex_match_t));
-    *out = n00b_list_new(n00b_regex_match_t);
+    // Canonical idiom: populate a fully scan-info-threaded lvalue
+    // first, then struct-copy into the heap-allocated return shell.
+    n00b_list_t(n00b_regex_match_t) lst = n00b_list_new(n00b_regex_match_t);
     size_t n = n00b_list_len(engine_matches);
     for (size_t i = 0; i < n; ++i) {
         Match m = n00b_list_get(engine_matches, i);
@@ -390,9 +390,13 @@ n00b_regex_matches(n00b_regex_t *re, n00b_string_t *input)
             .start = (int64_t)m.start,
             .end   = (int64_t)m.end,
         };
-        n00b_list_push(*out, pm);
+        n00b_list_push(lst, pm);
     }
     n00b_list_free(engine_matches);
+
+    n00b_list_t(n00b_regex_match_t) *out =
+        n00b_alloc(n00b_list_t(n00b_regex_match_t));
+    *out = lst;
     return out;
 }
 
@@ -491,9 +495,9 @@ n00b_regex_split(n00b_regex_t *re, n00b_string_t *input)
         panic_on_scan_err("n00b_regex_split", err);
     }
 
-    n00b_list_t(n00b_string_t *) *out =
-        n00b_alloc(n00b_list_t(n00b_string_t *));
-    *out = n00b_list_new(n00b_string_t *);
+    // Canonical idiom: populate a fully scan-info-threaded lvalue
+    // first, then struct-copy into the heap-allocated return shell.
+    n00b_list_t(n00b_string_t *) lst = n00b_list_new(n00b_string_t *);
     size_t prev_end = 0;
     size_t n        = n00b_list_len(engine_matches);
     for (size_t i = 0; i < n; ++i) {
@@ -501,15 +505,19 @@ n00b_regex_split(n00b_regex_t *re, n00b_string_t *input)
         size_t seg_len = m.start - prev_end;
         n00b_string_t *seg =
             n00b_string_from_raw(input->data + prev_end, (int64_t)seg_len);
-        n00b_list_push(*out, seg);
+        n00b_list_push(lst, seg);
         prev_end = m.end;
     }
     size_t tail_len = input->u8_bytes - prev_end;
     n00b_string_t *tail =
         n00b_string_from_raw(input->data + prev_end, (int64_t)tail_len);
-    n00b_list_push(*out, tail);
+    n00b_list_push(lst, tail);
 
     n00b_list_free(engine_matches);
+
+    n00b_list_t(n00b_string_t *) *out =
+        n00b_alloc(n00b_list_t(n00b_string_t *));
+    *out = lst;
     return out;
 }
 
@@ -573,9 +581,13 @@ n00b_regex_stream(n00b_regex_t *re, n00b_string_t *input) _kargs
             panic_on_scan_err("n00b_regex_stream",
                               (n00b_regex_engine_err_t)n00b_result_get_err(res));
         }
+        // Canonical idiom: build the list as a fully scan-info-threaded
+        // lvalue, then struct-copy into the heap-allocated return shell.
+        n00b_list_t(n00b_regex_match_t) empty_lst =
+            n00b_list_new(n00b_regex_match_t);
         n00b_list_t(n00b_regex_match_t) *empty =
             n00b_alloc(n00b_list_t(n00b_regex_match_t));
-        *empty = n00b_list_new(n00b_regex_match_t);
+        *empty = empty_lst;
         return empty;
     }
 
@@ -589,16 +601,20 @@ n00b_regex_stream(n00b_regex_t *re, n00b_string_t *input) _kargs
         panic_on_scan_err("n00b_regex_stream",
                           (n00b_regex_engine_err_t)n00b_result_get_err(res));
     }
-    n00b_list_t(n00b_regex_match_t) *out =
-        n00b_alloc(n00b_list_t(n00b_regex_match_t));
-    *out = n00b_list_new(n00b_regex_match_t);
+    // Canonical idiom: populate a fully scan-info-threaded lvalue
+    // first, then struct-copy into the heap-allocated return shell.
+    n00b_list_t(n00b_regex_match_t) lst = n00b_list_new(n00b_regex_match_t);
     size_t n = n00b_list_len(engine_matches);
     for (size_t i = 0; i < n; ++i) {
         Match m = n00b_list_get(engine_matches, i);
         n00b_regex_match_t pm = { .start = (int64_t)m.start, .end = (int64_t)m.end };
-        n00b_list_push(*out, pm);
+        n00b_list_push(lst, pm);
     }
     n00b_list_free(engine_matches);
+
+    n00b_list_t(n00b_regex_match_t) *out =
+        n00b_alloc(n00b_list_t(n00b_regex_match_t));
+    *out = lst;
     return out;
 }
 

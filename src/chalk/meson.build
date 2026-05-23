@@ -24,4 +24,34 @@ n00b_chalk_src = files(
     'elf_fallback.c',
     'zip.c',
     'pe.c',
+    'resign_pe.c',
+    'resign_identity.c',
+    'resign_macho.c',
 )
+
+# macOS-only Objective-C bridge for the Mach-O re-sign body.
+# Same pattern as src/net/quic/{acme_trust_macos,secret_keychain}.m:
+# compile the .m through the system ObjC compiler, link as a
+# static lib, fold into the top-level link_whole_libs after it
+# exists.
+n00b_chalk_link_whole_libs = []
+if target_os == 'darwin'
+    chalk_m_bridge_args = [
+        '-g',
+        '-Wno-unused-parameter',
+        '-Wno-unused-function',
+        '-Wno-unknown-pragmas',
+        '-fno-omit-frame-pointer',
+        '-fPIC',
+        '-Wno-atomic-alignment',
+        '-DN00B_HOST_OS=' + host_machine.system(),
+        '-DN00B_HOST_CPU=' + host_machine.cpu_family(),
+    ]
+    n00b_chalk_link_whole_libs += static_library('n00b_chalk_resign_macho_darwin',
+        ['resign_macho_darwin.m'],
+        include_directories: incdir,
+        dependencies: deps,
+        objc_args: chalk_m_bridge_args,
+        link_args: link_args,
+    )
+endif

@@ -76,6 +76,25 @@ n00b_json_node_t *n00b_json_string_new(const char *val);
 n00b_json_node_t *n00b_json_array_new(void);
 n00b_json_node_t *n00b_json_object_new(void);
 
+/**
+ * @brief Construct a JSON string node directly from an `n00b_string_t *`.
+ *
+ * Convenience wrapper around `n00b_json_string_new` that handles the
+ * `n00b_string_t *` -> `const char *` conversion internally: copies
+ * `s->data` into an `n00b_alloc`'d, NUL-terminated buffer under the
+ * configured allocator, then constructs the node. Eliminates the
+ * 8-call-site `n00b_alloc_array(char, …) + memcpy + n00b_json_string_new`
+ * boilerplate in `src/tools/n00b-attest.c` (W-5 from the WP-005
+ * cumulative §6.5 audit).
+ *
+ * @param s  Source string. Passing `nullptr` returns a JSON node whose
+ *           string field is `nullptr` (mirrors `n00b_json_string_new(nullptr)`).
+ *
+ * @return A newly-allocated JSON string node.
+ */
+extern n00b_json_node_t *
+n00b_json_string_new_from_n00b(n00b_string_t *s);
+
 // ============================================================================
 // Mutation
 // ============================================================================
@@ -144,12 +163,20 @@ n00b_json_node_t *n00b_json_parse(const char *input, size_t input_len,
  * @brief Encode a JSON value tree to text.
  *
  * @param val The root value to encode.
- * @kw pretty  Enable indented output (default false).
- * @kw indent  Indent width in spaces (default 2).
+ * @kw pretty     Enable indented output (default false).
+ * @kw indent     Indent width in spaces (default 2).
+ * @kw canonical  Emit object keys in lexicographic (codepoint-sort)
+ *                order so the output is byte-stable across runs and
+ *                independent of dictionary insertion order (default
+ *                false; current behavior preserved). Required by
+ *                downstream consumers that compute hashes / signatures
+ *                over the JSON wire form — e.g. libchalk's
+ *                ATTESTATION subtree round-trip through extract.
  *
  * @return NUL-terminated JSON text, or nullptr on error.
  */
 extern char *n00b_json_encode(const n00b_json_node_t *val) _kargs {
-    bool pretty = false;
-    int  indent = 2;
+    bool pretty    = false;
+    int  indent    = 2;
+    bool canonical = false;
 };

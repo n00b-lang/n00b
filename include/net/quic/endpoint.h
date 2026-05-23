@@ -350,9 +350,13 @@ n00b_quic_endpoint_stats(n00b_quic_endpoint_t *ep);
  * discover incoming streams as they arrive.
  *
  * @param ep Endpoint handle.
- * @return Topic, or nullptr if @p ep is closed or not in listen mode.
+ * @return `n00b_option_set(...)` with the topic when @p ep is in
+ *         listen mode and not closed; `n00b_option_none(...)`
+ *         otherwise. Callers MUST disambiguate via
+ *         `n00b_option_is_set` (per §5.4 — no `nullptr`-as-absent
+ *         sentinel).
  */
-extern n00b_conduit_topic_base_t *
+extern n00b_option_t(n00b_conduit_topic_base_t *)
 n00b_quic_endpoint_accept_topic(n00b_quic_endpoint_t *ep);
 
 /**

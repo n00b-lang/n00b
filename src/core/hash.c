@@ -60,10 +60,11 @@ n00b_hash(void *obj, n00b_hash_fn fn)
 
         // If the caller didn't supply a hash function, try the vtable.
         if (!fn) {
-            n00b_vtable_entry vt_fn = n00b_obj_core_method(obj, N00B_BI_HASH);
+            n00b_option_t(n00b_vtable_entry) vt_opt =
+                n00b_obj_core_method(obj, N00B_BI_HASH);
 
-            if (vt_fn) {
-                fn = (n00b_hash_fn)vt_fn;
+            if (n00b_option_is_set(vt_opt)) {
+                fn = (n00b_hash_fn)n00b_option_get(vt_opt);
             }
         }
     }

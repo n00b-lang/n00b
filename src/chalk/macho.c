@@ -120,6 +120,23 @@ n00b_chalk_macho_insert_buffer(n00b_buffer_t *bytes, n00b_chalk_mark_t *mark)
     }
     n00b_buffer_t *encoded = n00b_result_get(fin);
 
+    // Real macOS-clang Mach-O binaries carry an LC_CODE_SIGNATURE
+    // (Apple's adhoc-signing on host build). chalk_macho_add_note's
+    // contract requires the caller to strip any existing signature
+    // first (its layout-grow path assumes __LINKEDIT-end == EOF,
+    // which is violated when a signature blob sits past the chalk
+    // payload). Strip on `bin` here — note that chalk_macho_unchalked_hash
+    // strips on a CLONE, leaving `bin` untouched.
+    chalk_macho_status_t strip_st = chalk_macho_strip_signature(bin);
+    if (strip_st != CHALK_MACHO_OK
+        && strip_st != CHALK_MACHO_ERR_NO_CHALK_NOTE) {
+        // CHALK_MACHO_ERR_NO_CHALK_NOTE isn't returned from strip_signature
+        // (that's a remove_note error code); but defensively allow any
+        // "no-signature" status to fall through. Real failures (bad
+        // command structure, etc.) abort the insert.
+        return n00b_result_err(n00b_chalk_io_result_t *, 8);
+    }
+
     if (chalk_macho_add_note(bin,
                               (const uint8_t *)encoded->data,
                               (size_t)encoded->byte_len) != CHALK_MACHO_OK) {
@@ -175,6 +192,10 @@ n00b_chalk_macho_extract_buffer(n00b_buffer_t *bytes)
     if (!payload) return n00b_result_err(n00b_chalk_extract_result_t *, 4);
     n00b_buffer_t *payload_buf = n00b_buffer_from_bytes((char *)payload,
                                                          (int64_t)payload_len);
+    // n00b_buffer_from_bytes copies; we own `payload`'s lifetime
+    // and must free it explicitly to support pluggable allocators
+    // (no-op under GC; correct under arena/refcount/etc.).
+    n00b_free(payload);
     return n00b_chalk_sidecar_parse_bytes(payload_buf,
                                           N00B_CHALK_CODEC_MACHO);
 }

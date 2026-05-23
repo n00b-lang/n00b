@@ -76,9 +76,12 @@ typedef struct {
  *
  * @param bin       Parsed Mach-O binary.
  * @param out_count Receives the number of notes returned.
- * @return Array of @p *out_count notes (caller frees the array via
- *         free(); do not free .payload).  NULL if @p bin has no
- *         LC_NOTE commands or on allocation failure.
+ * @return Array of @p *out_count notes.  Caller frees via
+ *         @c n00b_free() (no-op under GC; correct under any
+ *         pluggable n00b allocator).  `.payload` is a borrowed
+ *         pointer into the binary's stream buffer; do not free
+ *         it.  NULL if @p bin has no LC_NOTE commands or on
+ *         allocation failure.
  */
 extern chalk_macho_note_t *chalk_macho_get_notes(n00b_macho_binary_t *bin,
                                                   size_t *out_count);
@@ -111,8 +114,9 @@ extern chalk_macho_sig_kind_t chalk_macho_signature_kind(n00b_macho_binary_t *bi
  *
  * @param bin      Parsed Mach-O binary.
  * @param out_size Receives the payload size in bytes.
- * @return malloc'd payload bytes (caller frees), or NULL if no chalk
- *         note is present.
+ * @return Payload bytes.  Caller frees via @c n00b_free() (no-op
+ *         under GC; correct under any pluggable n00b allocator).
+ *         NULL if no chalk note is present.
  */
 extern uint8_t *chalk_macho_get_chalk_payload(n00b_macho_binary_t *bin,
                                               size_t *out_size);

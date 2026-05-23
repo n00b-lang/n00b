@@ -204,8 +204,8 @@ test_abstract_synthetic_elf(void)
     assert(found_start);
 
     // Downcast should work.
-    assert(n00b_binary_as_elf(b) != nullptr);
-    assert(n00b_binary_as_macho(b) == nullptr);
+    assert(n00b_option_is_set(n00b_binary_as_elf(b)));
+    assert(!n00b_option_is_set(n00b_binary_as_macho(b)));
 
     printf("  [PASS] synthetic ELF via abstract layer\n");
     printf("  OK\n\n");
@@ -254,8 +254,8 @@ test_abstract_synthetic_macho(void)
     assert(n00b_binary_arch(b) == N00B_ARCH_X86_64);
 
     // Downcast should work.
-    assert(n00b_binary_as_macho(b) != nullptr);
-    assert(n00b_binary_as_elf(b) == nullptr);
+    assert(n00b_option_is_set(n00b_binary_as_macho(b)));
+    assert(!n00b_option_is_set(n00b_binary_as_elf(b)));
 
     // Symbol iteration.
     uint32_t sym_count = n00b_binary_symbol_count(b);
@@ -311,14 +311,14 @@ test_downcast(void)
     n00b_format_t fmt = n00b_binary_format(b);
 
     if (fmt == N00B_FMT_MACHO) {
-        assert(n00b_binary_as_macho(b) != nullptr);
-        assert(n00b_binary_as_macho_fat(b) != nullptr);
-        assert(n00b_binary_as_elf(b) == nullptr);
+        assert(n00b_option_is_set(n00b_binary_as_macho(b)));
+        assert(n00b_option_is_set(n00b_binary_as_macho_fat(b)));
+        assert(!n00b_option_is_set(n00b_binary_as_elf(b)));
         printf("  [PASS] MachO downcasts correct\n");
     } else if (fmt == N00B_FMT_ELF) {
-        assert(n00b_binary_as_elf(b) != nullptr);
-        assert(n00b_binary_as_macho(b) == nullptr);
-        assert(n00b_binary_as_macho_fat(b) == nullptr);
+        assert(n00b_option_is_set(n00b_binary_as_elf(b)));
+        assert(!n00b_option_is_set(n00b_binary_as_macho(b)));
+        assert(!n00b_option_is_set(n00b_binary_as_macho_fat(b)));
         printf("  [PASS] ELF downcasts correct\n");
     }
 

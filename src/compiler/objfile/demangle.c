@@ -1082,18 +1082,18 @@ n00b_demangle_itanium(const char *mangled)
     return n00b_string_from_cstr(mangled);
 }
 
-n00b_string_t *
+n00b_option_t(n00b_string_t *)
 n00b_demangle_rust(const char *mangled)
 {
-    if (!mangled) return nullptr;
+    if (!mangled) return n00b_option_none(n00b_string_t *);
 
     char *result = rust_demangle_cstr(mangled);
     if (result) {
         n00b_string_t *s = n00b_string_from_cstr(result);
         free(result);
-        return s;
+        return n00b_option_set(n00b_string_t *, s);
     }
-    return nullptr;
+    return n00b_option_none(n00b_string_t *);
 }
 
 n00b_string_t *
