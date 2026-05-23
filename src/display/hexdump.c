@@ -330,8 +330,8 @@ n00b_hexdump_set_width(n00b_hexdump_t *hd, uint32_t width)
 n00b_option_t(n00b_buffer_t *)
 n00b_hexdump_buf(n00b_buffer_t *buf)
     _kargs {
-        uint32_t width  = 0;
-        int64_t  offset = 0;
+        uint32_t width   = 0;
+        int64_t  offset  = 0;
     }
 {
     if (!buf || n00b_buffer_len(buf) == 0) {
