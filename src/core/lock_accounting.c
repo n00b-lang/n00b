@@ -39,10 +39,6 @@ n00b_lock_init_accounting(n00b_lock_base_t *lock, int type, char *loc)
     atomic_store(&lock->next_thread_lock, nullptr);
     atomic_store(&lock->prev_thread_lock, nullptr);
 
-    if (!n00b_in_heap(lock)) {
-        _n00b_gc_register_root(&lock->next_thread_lock, N00B_PTR_WORDS);
-    }
-
     lock->creation_loc = loc;
     lock->inited       = true;
     lock->allocation   = n00b_find_alloc_info(lock, .scan_for_header = true);

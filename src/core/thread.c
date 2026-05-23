@@ -167,9 +167,81 @@ n00b_thread_destroy(void)
 
     n00b_runtime_t *rt = n00b_get_runtime();
     if (rt) {
+        if (__n00b_thread_self.stack_map) {
+            n00b_mmap_unregister((void *)__n00b_thread_self.stack_map->start);
+            __n00b_thread_self.stack_map = nullptr;
+        }
+
         n00b_atomic_add(&rt->live_threads, -1);
         n00b_futex_wake((n00b_futex_t *)&rt->live_threads, true);
     }
+}
+
+bool
+n00b_current_thread_stack_contains(void *ptr)
+{
+    if (ptr == nullptr) {
+        return false;
+    }
+
+    uintptr_t        p      = (uintptr_t)ptr;
+    n00b_thread_t   *thread = n00b_thread_self();
+    n00b_mmap_info_t *map   = thread->stack_map;
+
+    if (map && p >= map->start && p < map->end) {
+        return true;
+    }
+
+#ifdef _WIN32
+    NT_TIB   *tib     = (NT_TIB *)NtCurrentTeb();
+    uintptr_t highest = (uintptr_t)tib->StackBase;
+    uintptr_t lowest  = (uintptr_t)tib->StackLimit;
+    return p >= lowest && p < highest;
+#elif defined(__APPLE__)
+    pthread_t ptid    = pthread_self();
+    uintptr_t highest = (uintptr_t)pthread_get_stackaddr_np(ptid);
+    size_t    size    = pthread_get_stacksize_np(ptid);
+    uintptr_t lowest  = highest - size;
+    return p >= lowest && p < highest;
+#elif defined(__linux__)
+    pthread_attr_t attrs;
+    void          *lowest_ptr = nullptr;
+    size_t         size       = 0;
+
+    if (pthread_getattr_np(pthread_self(), &attrs) != 0) {
+        return false;
+    }
+
+    int rc = pthread_attr_getstack(&attrs, &lowest_ptr, &size);
+    pthread_attr_destroy(&attrs);
+
+    if (rc != 0) {
+        return false;
+    }
+
+    uintptr_t lowest  = (uintptr_t)lowest_ptr;
+    uintptr_t highest = lowest + size;
+    return p >= lowest && p < highest;
+#elif defined(__FreeBSD__)
+    pthread_attr_t attrs;
+    void          *lowest_ptr = nullptr;
+    size_t         size       = 0;
+
+    if (pthread_attr_get_np(pthread_self(), &attrs) != 0) {
+        return false;
+    }
+
+    if (pthread_attr_getstackaddr(&attrs, &lowest_ptr) != 0
+        || pthread_attr_getstacksize(&attrs, &size) != 0) {
+        return false;
+    }
+
+    uintptr_t lowest  = (uintptr_t)lowest_ptr;
+    uintptr_t highest = lowest + size;
+    return p >= lowest && p < highest;
+#else
+    return false;
+#endif
 }
 
 void

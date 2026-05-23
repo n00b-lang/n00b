@@ -40,7 +40,8 @@ _n00b_condition_init(n00b_condition_t *cv, char *loc)
     n00b_allocator_t *sp = (n00b_allocator_t *)&n00b_get_runtime()->system_pool;
     cv->waiters = n00b_list_new(n00b_thread_t *, sp);
 
-    if (!n00b_in_heap(cv)) {
+    if (!n00b_in_heap(cv) && !n00b_in_stack(cv)
+        && !n00b_current_thread_stack_contains(cv)) {
         _n00b_gc_register_root(&cv->cv_param, 2);
     }
 }
@@ -54,7 +55,8 @@ n00b_condition_set_callback(n00b_condition_t            *cv,
     cv->predicate = fn;
     cv->cv_param  = param;
 
-    if (!n00b_in_heap(cv)) {
+    if (!n00b_in_heap(cv) && !n00b_in_stack(cv)
+        && !n00b_current_thread_stack_contains(cv)) {
         _n00b_gc_register_root(&cv->cv_param, 1);
     }
     n00b_condition_unlock(cv);

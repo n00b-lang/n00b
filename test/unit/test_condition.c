@@ -10,6 +10,9 @@
 #include "core/thread.h"
 #include "core/condition.h"
 #include "core/atomic.h"
+#include "core/gc.h"
+#include "core/mmaps.h"
+#include "core/stw.h"
 
 // ============================================================================
 // 1. Basic wait/notify
@@ -133,13 +136,141 @@ test_predicate_wake(void)
 }
 
 // ============================================================================
-// 3. Timeout
+// 3. Static callback root deduplication
+// ============================================================================
+
+static n00b_condition_t dedupe_cv;
+
+static bool
+dedupe_predicate(uint64_t actual_pred,
+                 uint64_t thread_pred,
+                 void    *output,
+                 void    *cv_param,
+                 void    *thread_param)
+{
+    (void)actual_pred;
+    (void)thread_pred;
+    (void)output;
+    (void)cv_param;
+    (void)thread_param;
+    return true;
+}
+
+static void
+test_static_callback_root_dedup(void)
+{
+    n00b_runtime_t *rt     = n00b_get_runtime();
+    size_t          before = n00b_list_len(rt->gc_roots);
+
+    dedupe_cv = (n00b_condition_t){};
+    n00b_condition_init(&dedupe_cv);
+
+    size_t after_init = n00b_list_len(rt->gc_roots);
+
+    n00b_condition_set_callback(&dedupe_cv, dedupe_predicate, nullptr);
+
+    size_t after_callback = n00b_list_len(rt->gc_roots);
+
+    assert(after_init >= before);
+    assert(after_callback == after_init);
+
+    printf("  [PASS] static callback root deduplication\n");
+}
+
+// ============================================================================
+// 4. Stack-backed CVs are already covered by stack scanning
+// ============================================================================
+
+static _Atomic uintptr_t stack_thread_probe;
+static _Atomic uintptr_t stack_thread_limit;
+
+static bool
+gc_root_addr_in_range(uintptr_t lo, uintptr_t hi)
+{
+    n00b_runtime_t *rt  = n00b_get_runtime();
+    size_t          len = n00b_list_len(rt->gc_roots);
+
+    for (size_t i = 0; i < len; i++) {
+        n00b_gc_root_t root = n00b_list_get(rt->gc_roots, i);
+        uintptr_t      addr = (uintptr_t)root.addr;
+
+        if (addr >= lo && addr < hi) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static void
+make_stack_condition(void)
+{
+    n00b_condition_t cv = {};
+    uintptr_t        lo = (uintptr_t)&cv;
+    uintptr_t        hi = lo + sizeof(cv);
+
+    n00b_condition_init(&cv);
+    assert(!gc_root_addr_in_range(lo, hi));
+
+    n00b_condition_set_callback(&cv, dedupe_predicate, nullptr);
+    assert(!gc_root_addr_in_range(lo, hi));
+}
+
+static void *
+stack_condition_thread(void *arg)
+{
+    (void)arg;
+    n00b_thread_init();
+
+    n00b_mmap_info_t *stack_map = n00b_thread_self()->stack_map;
+    assert(stack_map != nullptr);
+    atomic_store(&stack_thread_probe, (uintptr_t)stack_map->start);
+    atomic_store(&stack_thread_limit, (uintptr_t)stack_map->end);
+
+    make_stack_condition();
+
+    n00b_thread_destroy();
+    return nullptr;
+}
+
+static void
+test_stack_condition_roots(void)
+{
+    n00b_runtime_t *rt = n00b_get_runtime();
+
+    make_stack_condition();
+
+    atomic_store(&stack_thread_probe, 0);
+    atomic_store(&stack_thread_limit, 0);
+
+    pthread_t thread;
+    pthread_create(&thread, nullptr, stack_condition_thread, nullptr);
+    pthread_join(thread, nullptr);
+
+    uintptr_t stack_addr  = atomic_load(&stack_thread_probe);
+    uintptr_t stack_limit = atomic_load(&stack_thread_limit);
+    assert(stack_addr != 0);
+    assert(stack_limit > stack_addr);
+    assert(!gc_root_addr_in_range(stack_addr, stack_limit));
+
+    auto map_opt = n00b_mmap_by_address((void *)stack_addr);
+    assert(!n00b_option_is_set(map_opt));
+
+    n00b_stop_the_world();
+    n00b_collect(rt->default_arena);
+    n00b_restart_the_world();
+
+    printf("  [PASS] stack-backed CV root lifetime\n");
+}
+
+// ============================================================================
+// 5. Timeout
 // ============================================================================
 
 static void
 test_timeout(void)
 {
-    n00b_condition_t cv = {0};
+    n00b_condition_t cv = {};
     n00b_condition_init(&cv);
 
     // Wait with a short timeout — nobody will notify.
@@ -167,6 +298,10 @@ main(int argc, char *argv[])
     test_basic_wait_notify();
     fflush(stdout);
     test_predicate_wake();
+    fflush(stdout);
+    test_static_callback_root_dedup();
+    fflush(stdout);
+    test_stack_condition_roots();
     fflush(stdout);
     test_timeout();
     fflush(stdout);
