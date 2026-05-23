@@ -610,9 +610,7 @@ n00b_debug_memory_info(bool all)
     for (size_t i = 0; i < n00b_stack_len(results); i++) {
         auto node = results.data[i];
         n00b_mmap_data_t data = ((n00b_interval_node_t(n00b_mmap_data_t) *)node)->data;
-        if (!n00b_variant_is_type(data, n00b_mmap_info_t *)) {
-            continue;
-        }
+        assert(n00b_variant_is_type(data, n00b_mmap_info_t *));
         show_mem_info(n00b_variant_get(data, n00b_mmap_info_t *), all, &len);
     }
 

@@ -28,6 +28,7 @@
 #include "core/arena.h"
 #include "core/atomic.h"
 #include "core/thread.h"
+#include "core/lock_common.h"
 #include "core/align.h"
 #include "core/mmaps.h"
 #include "core/runtime.h"
@@ -46,6 +47,8 @@ static bool n00b_visit_possible_pointer(n00b_collect_t *ctx, uint64_t **base,
 static void n00b_collection_cleanup(n00b_collect_t *);
 static void n00b_process_finalizers(n00b_collect_t *);
 static void n00b_scan_thread_stacks(n00b_collect_t *);
+static void n00b_scan_thread_lock_chains(n00b_collect_t *ctx,
+                                         n00b_thread_record_t *rec);
 static void n00b_scan_runtime(n00b_collect_t *);
 static void n00b_scan_roots(n00b_collect_t *);
 static void n00b_add_alloc_to_worklist(n00b_alloc_info_t  ainfo,
@@ -766,7 +769,15 @@ n00b_scan_memory_range(n00b_collect_t *ctx, void *start, size_t nwords)
             auto slot_mmap_opt = n00b_mmap_by_address(slot);
 
             if (n00b_option_is_set(slot_mmap_opt)) {
-                last_page_ok = true;
+                n00b_mmap_info_t *slot_mmap = n00b_option_get(slot_mmap_opt);
+
+                if (slot_mmap->kind == n00b_mmap_stack) {
+                    n00b_mmap_perms_t perms = n00b_check_memory_perms(slot);
+                    last_page_ok            = perms != n00b_mmap_perms_no_access;
+                }
+                else {
+                    last_page_ok = true;
+                }
             }
             else {
                 n00b_mmap_perms_t perms = n00b_check_memory_perms(slot);
@@ -782,6 +793,53 @@ n00b_scan_memory_range(n00b_collect_t *ctx, void *start, size_t nwords)
         }
 
         n00b_visit_possible_pointer(ctx, base, i, true);
+    }
+}
+
+// ============================================================================
+// Thread lock-chain scanning
+// ============================================================================
+
+static inline size_t
+n00b_words_for_scan(size_t bytes)
+{
+    return (bytes + sizeof(void *) - 1) / sizeof(void *);
+}
+
+static void
+n00b_scan_thread_lock_chains(n00b_collect_t *ctx, n00b_thread_record_t *rec)
+{
+    /* Locks can live in hidden, non-moving pools.  Thread-record scanning
+     * updates the chain head, but hidden lock storage is not discoverable
+     * through the mmap registry, so scan only the active chains here instead
+     * of registering every initialized lock as a durable root. */
+    n00b_lock_base_t *lock = n00b_atomic_load(&rec->exclusive_locks);
+
+    while (lock != nullptr) {
+        n00b_scan_memory_range(ctx,
+                               lock,
+                               n00b_words_for_scan(sizeof(n00b_lock_base_t)));
+        n00b_process_worklist(ctx);
+        lock = n00b_atomic_load(&lock->next_thread_lock);
+    }
+
+    n00b_thread_read_log_t *rlog = n00b_atomic_load(&rec->read_locks);
+
+    while (rlog != nullptr) {
+        n00b_scan_memory_range(ctx,
+                               rlog,
+                               n00b_words_for_scan(sizeof(n00b_thread_read_log_t)));
+        n00b_process_worklist(ctx);
+
+        n00b_lock_base_t *read_lock = (n00b_lock_base_t *)rlog->obj;
+        if (read_lock != nullptr) {
+            n00b_scan_memory_range(ctx,
+                                   read_lock,
+                                   n00b_words_for_scan(sizeof(n00b_lock_base_t)));
+            n00b_process_worklist(ctx);
+        }
+
+        rlog = rlog->next_entry;
     }
 }
 
@@ -898,8 +956,8 @@ scan_thread_state:
         // mid-lock, after ~1000 iterations.
         n00b_scan_memory_range(ctx,
                                (void *)&rt->threads[i],
-                               sizeof(n00b_thread_record_t)
-                                   / sizeof(void *));
+                               n00b_words_for_scan(sizeof(n00b_thread_record_t)));
+        n00b_scan_thread_lock_chains(ctx, &rt->threads[i]);
     }
 }
 
@@ -951,9 +1009,26 @@ n00b_scan_roots(n00b_collect_t *ctx)
 void
 _n00b_gc_register_root(void *addr, size_t num_words)
 {
-    n00b_runtime_t *rt   = n00b_get_runtime();
-    n00b_gc_root_t  root = {.addr = addr, .num_words = num_words};
+    n00b_runtime_t *rt  = n00b_get_runtime();
+    size_t          len = n00b_list_len(rt->gc_roots);
 
+    if (addr == nullptr || num_words == 0) {
+        return;
+    }
+
+    for (size_t i = 0; i < len; i++) {
+        n00b_gc_root_t existing = n00b_list_get(rt->gc_roots, i);
+
+        if (existing.addr == addr) {
+            if (existing.num_words < num_words) {
+                existing.num_words = num_words;
+                n00b_list_set(rt->gc_roots, i, existing);
+            }
+            return;
+        }
+    }
+
+    n00b_gc_root_t root = {.addr = addr, .num_words = num_words};
     n00b_list_push(rt->gc_roots, root);
 }
 

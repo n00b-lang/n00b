@@ -33,15 +33,17 @@ typedef struct n00b_http_connection_pool   n00b_http_connection_pool_t;
 typedef struct n00b_acme_tls_state         n00b_acme_tls_state_t;
 
 /**
- * @brief Variant type for the unified mmap interval tree.
+ * @brief Variant type for mmap registry interval trees.
  *
- * Discriminates between full mmap records (page-level regions) and
- * lightweight sub-range records (headerless allocations).
+ * Mmap records and lightweight sub-range records are stored in separate
+ * trees, but share the same concrete node/data shape so back-pointers and
+ * registry helpers can stay uniform.
  */
 typedef n00b_variant_t(n00b_mmap_info_t *, n00b_alloc_range_t *) n00b_mmap_data_t;
 
 struct n00b_mmap_ctx_t {
     n00b_interval_tree_t(n00b_mmap_data_t) *mmap_tree;
+    n00b_interval_tree_t(n00b_mmap_data_t) *range_tree;
     _Atomic int64_t  tid_lock;
     n00b_pool_t      pool;
 };

@@ -94,31 +94,72 @@ mmaps_insert_raw(n00b_mmap_ctx_t     *ctx,
     return info;
 }
 
-static void
-n00b_mmaps_remove_base(n00b_mmap_ctx_t *ctx, n00b_mmap_info_t *info)
+static bool
+n00b_mmaps_detach_base(n00b_mmap_ctx_t *ctx, n00b_mmap_info_t *info)
 {
     if (info->allocator && info->allocator->hidden) {
-        return;
+        return false;
     }
 
     (void)n00b_interval_delete(ctx->mmap_tree, (mmap_node_t *)info->tree_node);
-    n00b_free(info);
+    return true;
+}
+
+static inline void
+n00b_mmap_free_registry_obj(n00b_mmap_ctx_t *ctx, void *ptr)
+{
+    n00b_allocator_t *alloc = (n00b_allocator_t *)&ctx->pool;
+
+    if (ptr != nullptr && alloc->free != nullptr) {
+        (*alloc->free)(alloc, ptr);
+    }
 }
 
 static inline void
 n00b_mmaps_remove(n00b_mmap_ctx_t *ctx, n00b_mmap_info_t *info)
 {
+    bool detached;
+
     mmap_write_lock(ctx);
-    n00b_mmaps_remove_base(ctx, info);
+    detached = n00b_mmaps_detach_base(ctx, info);
     mmap_write_unlock(ctx);
+
+    if (detached) {
+        n00b_mmap_free_registry_obj(ctx, info);
+    }
 }
 
 // ============================================================================
 // Lookup
 // ============================================================================
 
-n00b_option_t(n00b_mmap_info_t *)
-n00b_mmap_lookup(n00b_mmap_ctx_t *ctx, void *addr)
+static mmap_node_t *
+n00b_mmap_search_point(mmap_tree_t *tree, uint64_t start, uint64_t end)
+{
+    mmap_node_t *node   = tree->root;
+    mmap_node_t *result = nullptr;
+
+    n00b_data_read_lock(tree->lock);
+    while (node != nullptr) {
+        if (node->low < end && start < node->high) {
+            result = node;
+            break;
+        }
+
+        if (node->left != nullptr && node->left->maximum > start) {
+            node = node->left;
+        }
+        else {
+            node = node->right;
+        }
+    }
+    n00b_data_unlock(tree->lock);
+
+    return result;
+}
+
+static n00b_option_t(n00b_mmap_info_t *)
+n00b_mmap_lookup_unlocked(n00b_mmap_ctx_t *ctx, void *addr)
 {
     uint64_t start = (uint64_t)addr;
     uint64_t end   = start + 1;
@@ -127,49 +168,12 @@ n00b_mmap_lookup(n00b_mmap_ctx_t *ctx, void *addr)
         return n00b_option_none(n00b_mmap_info_t *);
     }
 
-    /* Walk the interval tree directly so we keep traversing past
-     * `n00b_alloc_range_t` sub-range entries until we hit the segment-
-     * level `n00b_mmap_info_t *` covering the same address.  Sub-ranges
-     * registered by headerless allocators (pools) frequently overlap the
-     * address range of arena segments after many mmap()/munmap() cycles,
-     * and `interval_search_any` would otherwise return the sub-range
-     * node and cause the lookup to incorrectly report "no mmap" for a
-     * managed segment that is still registered. */
-    mmap_tree_t      *tree   = ctx->mmap_tree;
-    n00b_mmap_info_t *result = nullptr;
+    mmap_node_t *node = n00b_mmap_search_point(ctx->mmap_tree, start, end);
 
-    mmap_read_lock(ctx);
-    n00b_data_read_lock(tree->lock);
-
-    if (tree->root != nullptr) {
-        n00b_stack_clear(tree->stack);
-        n00b_stack_push(tree->stack, (void *)tree->root);
-        while (n00b_stack_len(tree->stack) != 0) {
-            mmap_node_t *n = (mmap_node_t *)n00b_option_get(
-                n00b_stack_pop(void *, tree->stack));
-            if (n->low < end && start < n->high
-                && n00b_variant_is_type(n->data, n00b_mmap_info_t *)) {
-                result = n00b_variant_get(n->data, n00b_mmap_info_t *);
-                break;
-            }
-            if (n->left != nullptr
-                && n->left->maximum > start
-                && n->left->minimum < end) {
-                n00b_stack_push(tree->stack, (void *)n->left);
-            }
-            if (n->right != nullptr
-                && n->right->maximum > start
-                && n->right->minimum < end) {
-                n00b_stack_push(tree->stack, (void *)n->right);
-            }
-        }
-    }
-
-    n00b_data_unlock(tree->lock);
-    mmap_read_unlock(ctx);
-
-    if (result) {
-        return n00b_option_set(n00b_mmap_info_t *, result);
+    if (node != nullptr) {
+        assert(n00b_variant_is_type(node->data, n00b_mmap_info_t *));
+        return n00b_option_set(n00b_mmap_info_t *,
+                               n00b_variant_get(node->data, n00b_mmap_info_t *));
     }
     return n00b_option_none(n00b_mmap_info_t *);
 }
@@ -190,49 +194,62 @@ n00b_mmap_range_by_address(void *addr) _kargs
     }
 
     n00b_mmap_ctx_t   *ctx        = n00b_global_mem_map(runtime);
-    mmap_tree_t        *tree       = ctx->mmap_tree;
+    mmap_tree_t        *tree       = ctx->range_tree;
     n00b_alloc_range_t *result     = nullptr;
     uint64_t            result_len = UINT64_MAX;
 
     mmap_read_lock(ctx);
     n00b_data_read_lock(tree->lock);
-
     if (tree->root != nullptr) {
         n00b_stack_clear(tree->stack);
         n00b_stack_push(tree->stack, (void *)tree->root);
+
         while (n00b_stack_len(tree->stack) != 0) {
-            mmap_node_t *n = (mmap_node_t *)n00b_option_get(
+            mmap_node_t *node = (mmap_node_t *)n00b_option_get(
                 n00b_stack_pop(void *, tree->stack));
 
-            if (n->low < end && start < n->high
-                && n00b_variant_is_type(n->data, n00b_alloc_range_t *)) {
-                uint64_t len = n->high - n->low;
+            if (node->low < end && start < node->high) {
+                assert(n00b_variant_is_type(node->data, n00b_alloc_range_t *));
+                uint64_t len = node->high - node->low;
 
                 if (len < result_len) {
-                    result     = n00b_variant_get(n->data, n00b_alloc_range_t *);
+                    result     = n00b_variant_get(node->data, n00b_alloc_range_t *);
                     result_len = len;
                 }
             }
-            if (n->left != nullptr
-                && n->left->maximum > start
-                && n->left->minimum < end) {
-                n00b_stack_push(tree->stack, (void *)n->left);
+
+            if (node->left != nullptr
+                && node->left->maximum > start
+                && node->left->minimum < end) {
+                n00b_stack_push(tree->stack, (void *)node->left);
             }
-            if (n->right != nullptr
-                && n->right->maximum > start
-                && n->right->minimum < end) {
-                n00b_stack_push(tree->stack, (void *)n->right);
+
+            if (node->right != nullptr
+                && node->right->maximum > start
+                && node->right->minimum < end) {
+                n00b_stack_push(tree->stack, (void *)node->right);
             }
         }
     }
-
     n00b_data_unlock(tree->lock);
     mmap_read_unlock(ctx);
 
-    if (result) {
+    if (result != nullptr) {
         return n00b_option_set(n00b_alloc_range_t *, result);
     }
     return n00b_option_none(n00b_alloc_range_t *);
+}
+
+n00b_option_t(n00b_mmap_info_t *)
+n00b_mmap_lookup(n00b_mmap_ctx_t *ctx, void *addr)
+{
+    n00b_option_t(n00b_mmap_info_t *) result;
+
+    mmap_read_lock(ctx);
+    result = n00b_mmap_lookup_unlocked(ctx, addr);
+    mmap_read_unlock(ctx);
+
+    return result;
 }
 
 // ============================================================================
@@ -253,7 +270,9 @@ n00b_mmaps_initialize(n00b_mmap_ctx_t *ctx)
     n00b_alloc_opts_t  aopts = { .allocator = alloc };
 
     ctx->mmap_tree = n00b_alloc_with_opts(mmap_tree_t, &aopts);
-    n00b_interval_tree_init(ctx->mmap_tree, alloc);
+    n00b_interval_tree_init(ctx->mmap_tree, .allocator = alloc);
+    ctx->range_tree = n00b_alloc_with_opts(mmap_tree_t, &aopts);
+    n00b_interval_tree_init(ctx->range_tree, .allocator = alloc);
 
     n00b_load_static_ranges();
 }
@@ -262,13 +281,16 @@ n00b_mmaps_initialize(n00b_mmap_ctx_t *ctx)
 // Sub-range tracking
 // ============================================================================
 
-void
-n00b_mmap_delete_ranges(n00b_mmap_ctx_t *ctx, uint64_t start, uint64_t end)
+// Detach registry entries while holding registry/tree locks, then free
+// metadata after unlocking. n00b_free() can re-enter mmap lookup.
+static n00b_stack_t(void *)
+n00b_mmap_detach_ranges(n00b_mmap_ctx_t *ctx, uint64_t start, uint64_t end)
 {
-    n00b_allocator_t *alloc = (n00b_allocator_t *)&ctx->pool;
-    n00b_stack_t(void *) hits = n00b_stack_new(void *, alloc);
+    n00b_allocator_t    *alloc = (n00b_allocator_t *)&ctx->pool;
+    n00b_stack_t(void *) hits  = n00b_stack_new_private(void *, .allocator = alloc);
+    n00b_stack_t(void *) dead  = n00b_stack_new_private(void *, .allocator = alloc);
 
-    (void)n00b_interval_search(ctx->mmap_tree, start, end, &hits);
+    (void)n00b_interval_search(ctx->range_tree, start, end, &hits);
 
     while (n00b_stack_len(hits) > 0) {
         mmap_node_t *node = n00b_option_get(n00b_stack_pop(void *, hits));
@@ -276,10 +298,33 @@ n00b_mmap_delete_ranges(n00b_mmap_ctx_t *ctx, uint64_t start, uint64_t end)
         // Only delete sub-range entries, leave mmap records alone.
         if (n00b_variant_is_type(node->data, n00b_alloc_range_t *)) {
             n00b_alloc_range_t *range = n00b_variant_get(node->data, n00b_alloc_range_t *);
-            (void)n00b_interval_delete(ctx->mmap_tree, node);
-            n00b_free(range);
+            (void)n00b_interval_delete(ctx->range_tree, node);
+            n00b_stack_push(dead, range);
         }
     }
+
+    return dead;
+}
+
+static void
+n00b_mmap_free_detached_ranges(n00b_mmap_ctx_t *ctx, n00b_stack_t(void *) *ranges)
+{
+    while (n00b_stack_len(*ranges) > 0) {
+        void *range = n00b_option_get(n00b_stack_pop(void *, *ranges));
+        n00b_mmap_free_registry_obj(ctx, range);
+    }
+}
+
+void
+n00b_mmap_delete_ranges(n00b_mmap_ctx_t *ctx, uint64_t start, uint64_t end)
+{
+    n00b_stack_t(void *) dead;
+
+    mmap_write_lock(ctx);
+    dead = n00b_mmap_detach_ranges(ctx, start, end);
+    mmap_write_unlock(ctx);
+
+    n00b_mmap_free_detached_ranges(ctx, &dead);
 }
 
 n00b_alloc_range_t *
@@ -323,7 +368,7 @@ n00b_mmap_register_range(void *startp, void *endp, n00b_mmap_rec_kind_t kind) _k
     n00b_mmap_data_t data = n00b_variant_set(n00b_mmap_data_t, n00b_alloc_range_t *, range);
 
     mmap_write_lock(ctx);
-    auto range_r = n00b_interval_insert(ctx->mmap_tree, start, end, data);
+    auto range_r = n00b_interval_insert(ctx->range_tree, start, end, data);
     assert(n00b_result_is_ok(range_r));
     range->tree_node = n00b_result_get(range_r);
     mmap_write_unlock(ctx);
@@ -405,10 +450,9 @@ n00b_mmap_register(void *startp, void *endp, n00b_mmap_rec_kind_t kind) _kargs
     mmap_write_lock(ctx);
 
     if (!definitely_unique) {
-        mmap_node_t *existing = n00b_result_get(
-            n00b_interval_search_any(ctx->mmap_tree, start, start + 1));
-        if (existing && n00b_variant_is_type(existing->data, n00b_mmap_info_t *)) {
-            result = n00b_variant_get(existing->data, n00b_mmap_info_t *);
+        auto existing = n00b_mmap_lookup_unlocked(ctx, startp);
+        if (n00b_option_is_set(existing)) {
+            result = n00b_option_get(existing);
             assert(allocator == result->allocator || !allocator);
             mmap_write_unlock(ctx);
             return n00b_option_set(n00b_mmap_info_t *, result);
@@ -479,22 +523,32 @@ n00b_munmap(void *addr) _kargs
 }
 // clang-format on
 {
-    auto map_opt = n00b_mmap_by_address(addr, .runtime = runtime);
+    n00b_mmap_ctx_t     *ctx       = n00b_global_mem_map(runtime);
+    n00b_mmap_info_t    *map       = nullptr;
+    n00b_stack_t(void *) dead      = {};
+    void                *start     = nullptr;
+    size_t               len       = 0;
+    bool                 detached = false;
+
+    mmap_write_lock(ctx);
+    auto map_opt = n00b_mmap_lookup_unlocked(ctx, addr);
 
     if (!n00b_option_is_set(map_opt)) {
+        mmap_write_unlock(ctx);
         return n00b_result_err(int, EINVAL);
     }
 
-    n00b_mmap_info_t *map   = n00b_option_get(map_opt);
-    void             *start = (void *)map->start;
-    size_t            len   = map->end - map->start;
-
-    n00b_mmap_ctx_t *ctx = n00b_global_mem_map(runtime);
-
-    mmap_write_lock(ctx);
-    n00b_mmap_delete_ranges(ctx, map->start, map->end);
-    n00b_mmaps_remove_base(ctx, map);
+    map      = n00b_option_get(map_opt);
+    start    = (void *)map->start;
+    len      = map->end - map->start;
+    dead     = n00b_mmap_detach_ranges(ctx, map->start, map->end);
+    detached = n00b_mmaps_detach_base(ctx, map);
     mmap_write_unlock(ctx);
+
+    n00b_mmap_free_detached_ranges(ctx, &dead);
+    if (detached) {
+        n00b_mmap_free_registry_obj(ctx, map);
+    }
 
 #ifdef _WIN32
     VirtualFree(start, 0, MEM_RELEASE);
@@ -502,6 +556,38 @@ n00b_munmap(void *addr) _kargs
     munmap(start, len);
 #endif
     return n00b_result_ok(int, 0);
+}
+
+// clang-format off
+void
+n00b_mmap_unregister(void *start) _kargs
+{
+    n00b_runtime_t *runtime = n00b_get_runtime();
+}
+// clang-format on
+{
+    n00b_mmap_ctx_t     *ctx       = n00b_global_mem_map(runtime);
+    n00b_mmap_info_t    *map       = nullptr;
+    n00b_stack_t(void *) dead      = {};
+    bool                 detached = false;
+
+    mmap_write_lock(ctx);
+    auto map_opt = n00b_mmap_lookup_unlocked(ctx, start);
+
+    if (!n00b_option_is_set(map_opt)) {
+        mmap_write_unlock(ctx);
+        return;
+    }
+
+    map      = n00b_option_get(map_opt);
+    dead     = n00b_mmap_detach_ranges(ctx, map->start, map->end);
+    detached = n00b_mmaps_detach_base(ctx, map);
+    mmap_write_unlock(ctx);
+
+    n00b_mmap_free_detached_ranges(ctx, &dead);
+    if (detached) {
+        n00b_mmap_free_registry_obj(ctx, map);
+    }
 }
 
 // clang-format off
@@ -546,7 +632,7 @@ n00b_print_mmap_tree(void)
     n00b_mmap_ctx_t *ctx = n00b_global_mem_map(rt);
 
     n00b_allocator_t *alloc = (n00b_allocator_t *)&ctx->pool;
-    n00b_stack_t(void *) results = n00b_stack_new(void *, alloc);
+    n00b_stack_t(void *) results = n00b_stack_new(void *, .allocator = alloc);
 
     (void)n00b_interval_search_ordered(ctx->mmap_tree, 0, UINT64_MAX, &results);
 

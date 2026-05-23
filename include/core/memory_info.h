@@ -161,6 +161,25 @@ n00b_in_heap(void *ptr)
     return false;
 }
 
+/**
+ * @brief Check whether @p ptr is in a registered thread stack mapping.
+ *
+ * Stack memory is already scanned while the owning thread is live. It
+ * must not be registered as a durable GC root because the storage stops
+ * being valid when the stack frame or thread exits.
+ */
+static inline bool
+n00b_in_stack(void *ptr)
+{
+    auto mmap_opt = n00b_mmap_by_address(ptr);
+
+    if (!n00b_option_is_set(mmap_opt)) {
+        return false;
+    }
+
+    return n00b_option_get(mmap_opt)->kind == n00b_mmap_stack;
+}
+
 #if defined(N00B_USE_INTERNAL_API)
 extern uint64_t n00b_gc_guard;
 

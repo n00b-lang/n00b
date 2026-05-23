@@ -151,6 +151,15 @@ extern n00b_result_t(n00b_thread_t *) n00b_thread_spawn(void *(*fn)(void *), voi
  */
 extern void *n00b_thread_join(n00b_thread_t *thread);
 
+/**
+ * @brief Check whether @p ptr is inside the calling thread's stack.
+ *
+ * This is stricter than checking the global mmap registry: some
+ * platforms expose the main stack as multiple VM regions, while
+ * pthread still reports the region containing normal call frames.
+ */
+extern bool n00b_current_thread_stack_contains(void *ptr);
+
 #if defined __N00B_THREAD_INTERNAL
 /**
  * @brief Initialize the calling thread's n00b_thread_t (internal).
