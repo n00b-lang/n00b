@@ -9,6 +9,7 @@
 
 #include "n00b.h"
 #include "core/alloc.h"
+#include "adt/option.h"
 #include "adt/result.h"
 #include "compiler/objfile/types.h"
 #include "compiler/objfile/bstream.h"
@@ -121,27 +122,29 @@ extern n00b_result_t(n00b_binary_t *) n00b_parse_file(const char *path);
 
 /**
  * @brief Get the ELF-specific binary if format is ELF.
- * @return ELF binary pointer, or nullptr if not ELF.
+ * @return Some(ELF binary pointer) if ELF, none otherwise.
  */
-extern n00b_elf_binary_t *n00b_binary_as_elf(n00b_binary_t *b);
+extern n00b_option_t(n00b_elf_binary_t *) n00b_binary_as_elf(n00b_binary_t *b);
 
 /**
  * @brief Get the first MachO binary if format is MachO.
- * @return MachO binary pointer, or nullptr if not MachO.
+ * @return Some(MachO binary pointer) if MachO, none otherwise.
  */
-extern n00b_macho_binary_t *n00b_binary_as_macho(n00b_binary_t *b);
+extern n00b_option_t(n00b_macho_binary_t *)
+    n00b_binary_as_macho(n00b_binary_t *b);
 
 /**
  * @brief Get the fat container if format is MachO.
- * @return Fat container pointer, or nullptr if not MachO.
+ * @return Some(fat container pointer) if MachO, none otherwise.
  */
-extern n00b_macho_fat_t *n00b_binary_as_macho_fat(n00b_binary_t *b);
+extern n00b_option_t(n00b_macho_fat_t *)
+    n00b_binary_as_macho_fat(n00b_binary_t *b);
 
 /**
  * @brief Get the PE-specific binary if format is PE.
- * @return PE binary pointer, or nullptr if not PE.
+ * @return Some(PE binary pointer) if PE, none otherwise.
  */
-extern n00b_pe_binary_t *n00b_binary_as_pe(n00b_binary_t *b);
+extern n00b_option_t(n00b_pe_binary_t *) n00b_binary_as_pe(n00b_binary_t *b);
 
 // ============================================================================
 // DWARF debug info (abstract dispatch)

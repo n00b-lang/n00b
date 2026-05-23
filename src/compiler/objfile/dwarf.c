@@ -1152,7 +1152,7 @@ n00b_dwarf_parse_sections(const uint8_t *debug_info,   size_t info_size,
 bool
 n00b_dwarf_has_info(n00b_elf_binary_t *bin)
 {
-    return n00b_elf_section_by_name(bin, ".debug_info") != nullptr;
+    return n00b_option_is_set(n00b_elf_section_by_name(bin, ".debug_info"));
 }
 
 /// Helper: get section data pointer and size from an ELF section.
@@ -1163,8 +1163,13 @@ elf_section_data(n00b_elf_binary_t *bin, const char *name,
     *out_data = nullptr;
     *out_size = 0;
 
-    n00b_elf_section_t *sec = n00b_elf_section_by_name(bin, name);
-    if (sec && sec->content) {
+    n00b_option_t(n00b_elf_section_t *) sec_opt
+        = n00b_elf_section_by_name(bin, name);
+    if (!n00b_option_is_set(sec_opt)) {
+        return;
+    }
+    n00b_elf_section_t *sec = n00b_option_get(sec_opt);
+    if (sec->content) {
         *out_data = sec->content->data;
         *out_size = n00b_buffer_len(sec->content);
     }

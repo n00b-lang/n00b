@@ -454,50 +454,53 @@ n00b_parse_file(const char *path)
 // Downcast helpers
 // ============================================================================
 
-n00b_elf_binary_t *
+n00b_option_t(n00b_elf_binary_t *)
 n00b_binary_as_elf(n00b_binary_t *b)
 {
     if (!b || b->format != N00B_FMT_ELF) {
-        return nullptr;
+        return n00b_option_none(n00b_elf_binary_t *);
     }
 
-    return (n00b_elf_binary_t *)b->impl;
+    return n00b_option_from_nullable(n00b_elf_binary_t *,
+                                     (n00b_elf_binary_t *)b->impl);
 }
 
-n00b_macho_binary_t *
+n00b_option_t(n00b_macho_binary_t *)
 n00b_binary_as_macho(n00b_binary_t *b)
 {
     if (!b || b->format != N00B_FMT_MACHO) {
-        return nullptr;
+        return n00b_option_none(n00b_macho_binary_t *);
     }
 
     n00b_macho_fat_t *fat = (n00b_macho_fat_t *)b->impl;
 
     if (!fat || fat->count == 0) {
-        return nullptr;
+        return n00b_option_none(n00b_macho_binary_t *);
     }
 
-    return fat->binaries[0];
+    return n00b_option_from_nullable(n00b_macho_binary_t *, fat->binaries[0]);
 }
 
-n00b_macho_fat_t *
+n00b_option_t(n00b_macho_fat_t *)
 n00b_binary_as_macho_fat(n00b_binary_t *b)
 {
     if (!b || b->format != N00B_FMT_MACHO) {
-        return nullptr;
+        return n00b_option_none(n00b_macho_fat_t *);
     }
 
-    return (n00b_macho_fat_t *)b->impl;
+    return n00b_option_from_nullable(n00b_macho_fat_t *,
+                                     (n00b_macho_fat_t *)b->impl);
 }
 
-n00b_pe_binary_t *
+n00b_option_t(n00b_pe_binary_t *)
 n00b_binary_as_pe(n00b_binary_t *b)
 {
     if (!b || b->format != N00B_FMT_PE) {
-        return nullptr;
+        return n00b_option_none(n00b_pe_binary_t *);
     }
 
-    return (n00b_pe_binary_t *)b->impl;
+    return n00b_option_from_nullable(n00b_pe_binary_t *,
+                                     (n00b_pe_binary_t *)b->impl);
 }
 
 // ============================================================================
@@ -514,19 +517,20 @@ n00b_binary_dwarf(n00b_binary_t *b)
     switch (b->format) {
     case N00B_FMT_ELF:
     {
-        n00b_elf_binary_t *elf = n00b_binary_as_elf(b);
-        if (!elf) {
+        n00b_option_t(n00b_elf_binary_t *) elf_opt = n00b_binary_as_elf(b);
+        if (!n00b_option_is_set(elf_opt)) {
             return n00b_result_err(n00b_dwarf_info_t *, N00B_ERR_READ);
         }
-        return n00b_dwarf_parse_elf(elf);
+        return n00b_dwarf_parse_elf(n00b_option_get(elf_opt));
     }
     case N00B_FMT_MACHO:
     {
-        n00b_macho_binary_t *macho = n00b_binary_as_macho(b);
-        if (!macho) {
+        n00b_option_t(n00b_macho_binary_t *) macho_opt
+            = n00b_binary_as_macho(b);
+        if (!n00b_option_is_set(macho_opt)) {
             return n00b_result_err(n00b_dwarf_info_t *, N00B_ERR_READ);
         }
-        return n00b_dwarf_parse_macho(macho);
+        return n00b_dwarf_parse_macho(n00b_option_get(macho_opt));
     }
     default:
         return n00b_result_err(n00b_dwarf_info_t *, N00B_ERR_NOT_SUPPORTED);

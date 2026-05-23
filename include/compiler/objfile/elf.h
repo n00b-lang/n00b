@@ -12,6 +12,7 @@
 #include "core/alloc.h"
 #include "core/buffer.h"
 #include "core/string.h"
+#include "adt/option.h"
 #include "adt/result.h"
 #include "compiler/objfile/types.h"
 #include "compiler/objfile/bstream.h"
@@ -277,45 +278,45 @@ extern n00b_result_t(n00b_elf_binary_t *) n00b_elf_parse(n00b_bstream_t *stream)
 // Query API
 // ============================================================================
 
-/// Find a section by name, or nullptr if not found.
-extern n00b_elf_section_t  *n00b_elf_section_by_name(n00b_elf_binary_t *bin,
-                                                      const char *name);
+/// Find a section by name; none if not found.
+extern n00b_option_t(n00b_elf_section_t *)
+    n00b_elf_section_by_name(n00b_elf_binary_t *bin, const char *name);
 
-/// Find the first section with the given `sh_type`, or nullptr.
-extern n00b_elf_section_t  *n00b_elf_section_by_type(n00b_elf_binary_t *bin,
-                                                      uint32_t type);
+/// Find the first section with the given `sh_type`; none if not found.
+extern n00b_option_t(n00b_elf_section_t *)
+    n00b_elf_section_by_type(n00b_elf_binary_t *bin, uint32_t type);
 
-/// Find the section containing `addr`, or nullptr.
-extern n00b_elf_section_t  *n00b_elf_section_at_addr(n00b_elf_binary_t *bin,
-                                                      uint64_t addr);
+/// Find the section containing `addr`; none if not found.
+extern n00b_option_t(n00b_elf_section_t *)
+    n00b_elf_section_at_addr(n00b_elf_binary_t *bin, uint64_t addr);
 
-/// Find the first segment with the given `p_type`, or nullptr.
-extern n00b_elf_segment_t  *n00b_elf_segment_by_type(n00b_elf_binary_t *bin,
-                                                      uint32_t type);
+/// Find the first segment with the given `p_type`; none if not found.
+extern n00b_option_t(n00b_elf_segment_t *)
+    n00b_elf_segment_by_type(n00b_elf_binary_t *bin, uint32_t type);
 
-/// Find the segment containing `vaddr`, or nullptr.
-extern n00b_elf_segment_t  *n00b_elf_segment_at_addr(n00b_elf_binary_t *bin,
-                                                      uint64_t vaddr);
+/// Find the segment containing `vaddr`; none if not found.
+extern n00b_option_t(n00b_elf_segment_t *)
+    n00b_elf_segment_at_addr(n00b_elf_binary_t *bin, uint64_t vaddr);
 
-/// Search symtab then dynsym for a symbol by name, or nullptr.
-extern n00b_elf_symbol_t   *n00b_elf_symbol_by_name(n00b_elf_binary_t *bin,
-                                                     const char *name);
+/// Search symtab then dynsym for a symbol by name; none if not found.
+extern n00b_option_t(n00b_elf_symbol_t *)
+    n00b_elf_symbol_by_name(n00b_elf_binary_t *bin, const char *name);
 
-/// Search only `.symtab` for a symbol by name, or nullptr.
-extern n00b_elf_symbol_t   *n00b_elf_symtab_by_name(n00b_elf_binary_t *bin,
-                                                     const char *name);
+/// Search only `.symtab` for a symbol by name; none if not found.
+extern n00b_option_t(n00b_elf_symbol_t *)
+    n00b_elf_symtab_by_name(n00b_elf_binary_t *bin, const char *name);
 
-/// Search only `.dynsym` for a symbol by name, or nullptr.
-extern n00b_elf_symbol_t   *n00b_elf_dynsym_by_name(n00b_elf_binary_t *bin,
-                                                     const char *name);
+/// Search only `.dynsym` for a symbol by name; none if not found.
+extern n00b_option_t(n00b_elf_symbol_t *)
+    n00b_elf_dynsym_by_name(n00b_elf_binary_t *bin, const char *name);
 
-/// Find the first dynamic entry with the given tag, or nullptr.
-extern n00b_elf_dynamic_t  *n00b_elf_dynamic_by_tag(n00b_elf_binary_t *bin,
-                                                     int64_t tag);
+/// Find the first dynamic entry with the given tag; none if not found.
+extern n00b_option_t(n00b_elf_dynamic_t *)
+    n00b_elf_dynamic_by_tag(n00b_elf_binary_t *bin, int64_t tag);
 
-/// Find the first note with the given type, or nullptr.
-extern n00b_elf_note_t     *n00b_elf_note_by_type(n00b_elf_binary_t *bin,
-                                                   uint32_t type);
+/// Find the first note with the given type; none if not found.
+extern n00b_option_t(n00b_elf_note_t *)
+    n00b_elf_note_by_type(n00b_elf_binary_t *bin, uint32_t type);
 
 /// True if a section with the given name exists.
 extern bool                 n00b_elf_has_section(n00b_elf_binary_t *bin,
@@ -331,5 +332,6 @@ extern bool                 n00b_elf_has_interpreter(n00b_elf_binary_t *bin);
 /// True if this is a core dump (ET_CORE).
 extern bool                 n00b_elf_is_core(n00b_elf_binary_t *bin);
 
-/// Get the parsed core dump info, or nullptr if not a core dump.
-extern n00b_elf_core_info_t *n00b_elf_core_info(n00b_elf_binary_t *bin);
+/// Get the parsed core dump info; none if not a core dump.
+extern n00b_option_t(n00b_elf_core_info_t *)
+    n00b_elf_core_info(n00b_elf_binary_t *bin);

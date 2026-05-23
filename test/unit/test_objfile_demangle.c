@@ -36,8 +36,9 @@ check_itanium(const char *mangled, const char *expected, const char *label)
 static void
 check_rust(const char *mangled, const char *expected, const char *label)
 {
-    n00b_string_t *result = n00b_demangle_rust(mangled);
-    assert(result != nullptr);
+    n00b_option_t(n00b_string_t *) result_opt = n00b_demangle_rust(mangled);
+    assert(n00b_option_is_set(result_opt));
+    n00b_string_t *result = n00b_option_get(result_opt);
     assert(strcmp(result->data, expected) == 0);
     printf("  [PASS] %s: %s -> %s\n", label, mangled, result->data);
 }
@@ -471,11 +472,11 @@ test_rust_punycode(void)
     // Actually RFC 2603 punycode is: u <decimal-length> <bytes> _  <punycode-suffix>
     // For now just check it doesn't crash on identifiers starting with 'u'
     // and that the output contains the punycode marker.
-    n00b_string_t *result = n00b_demangle_rust("_RNvC5crate5u8bng_75l");
+    n00b_option_t(n00b_string_t *) result_opt
+        = n00b_demangle_rust("_RNvC5crate5u8bng_75l");
 
     // May not parse perfectly but should not crash.
-    // Just verify non-null.
-    (void)result;
+    (void)result_opt;
     printf("  [PASS] punycode did not crash\n");
 
     printf("  OK\n\n");
@@ -529,7 +530,7 @@ test_null_safety(void)
 
     assert(n00b_demangle(nullptr) == nullptr);
     assert(n00b_demangle_itanium(nullptr) == nullptr);
-    assert(n00b_demangle_rust(nullptr) == nullptr);
+    assert(!n00b_option_is_set(n00b_demangle_rust(nullptr)));
     assert(n00b_is_mangled(nullptr) == false);
 
     printf("  [PASS] all null checks\n");

@@ -1025,8 +1025,9 @@ test_abstract_pe(void)
     assert(strcmp(sec0.name->data, ".text") == 0);
     assert(sec0.addr == 0x1000);
 
-    n00b_pe_binary_t *downcast = n00b_binary_as_pe(b);
-    assert(downcast == pe);
+    n00b_option_t(n00b_pe_binary_t *) downcast_opt = n00b_binary_as_pe(b);
+    assert(n00b_option_is_set(downcast_opt));
+    assert(n00b_option_get(downcast_opt) == pe);
 
     printf("  [PASS] abstract_pe\n");
 }

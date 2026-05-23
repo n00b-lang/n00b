@@ -730,8 +730,9 @@ test_parse_real_binary(void)
     }
 
     // Query API spot-checks on real binary.
-    n00b_elf_segment_t *load = n00b_elf_segment_by_type(bin, PT_LOAD);
-    assert(load != nullptr);
+    n00b_option_t(n00b_elf_segment_t *) load_opt
+        = n00b_elf_segment_by_type(bin, PT_LOAD);
+    assert(n00b_option_is_set(load_opt));
 
     if (bin->num_symtab > 0 || bin->num_dynsym > 0) {
         printf("    symtab: %u, dynsym: %u\n",
@@ -739,8 +740,7 @@ test_parse_real_binary(void)
     }
 
     if (bin->num_dynamic > 0) {
-        n00b_elf_dynamic_t *dt_null = n00b_elf_dynamic_by_tag(bin, DT_NULL);
-        assert(dt_null != nullptr);
+        assert(n00b_option_is_set(n00b_elf_dynamic_by_tag(bin, DT_NULL)));
     }
 
     if (n00b_elf_has_interpreter(bin)) {
@@ -916,17 +916,20 @@ test_section_by_name(void)
 
     n00b_elf_binary_t *bin = n00b_result_get(r);
 
-    n00b_elf_section_t *shstrtab = n00b_elf_section_by_name(bin, ".shstrtab");
-    assert(shstrtab != nullptr);
-    assert(shstrtab->type == SHT_STRTAB);
+    n00b_option_t(n00b_elf_section_t *) shstrtab_opt
+        = n00b_elf_section_by_name(bin, ".shstrtab");
+    assert(n00b_option_is_set(shstrtab_opt));
+    assert(n00b_option_get(shstrtab_opt)->type == SHT_STRTAB);
 
-    n00b_elf_section_t *strtab = n00b_elf_section_by_name(bin, ".strtab");
-    assert(strtab != nullptr);
-    assert(strtab->type == SHT_STRTAB);
+    n00b_option_t(n00b_elf_section_t *) strtab_opt
+        = n00b_elf_section_by_name(bin, ".strtab");
+    assert(n00b_option_is_set(strtab_opt));
+    assert(n00b_option_get(strtab_opt)->type == SHT_STRTAB);
 
-    n00b_elf_section_t *symtab = n00b_elf_section_by_name(bin, ".symtab");
-    assert(symtab != nullptr);
-    assert(symtab->type == SHT_SYMTAB);
+    n00b_option_t(n00b_elf_section_t *) symtab_opt
+        = n00b_elf_section_by_name(bin, ".symtab");
+    assert(n00b_option_is_set(symtab_opt));
+    assert(n00b_option_get(symtab_opt)->type == SHT_SYMTAB);
 
     printf("  [PASS] section_by_name\n");
 }
@@ -947,13 +950,15 @@ test_section_by_type(void)
     n00b_elf_binary_t *bin = n00b_result_get(r);
 
     // First SHT_STRTAB should be .shstrtab (section 1).
-    n00b_elf_section_t *strtab = n00b_elf_section_by_type(bin, SHT_STRTAB);
-    assert(strtab != nullptr);
-    assert(strcmp(strtab->name->data, ".shstrtab") == 0);
+    n00b_option_t(n00b_elf_section_t *) strtab_opt
+        = n00b_elf_section_by_type(bin, SHT_STRTAB);
+    assert(n00b_option_is_set(strtab_opt));
+    assert(strcmp(n00b_option_get(strtab_opt)->name->data, ".shstrtab") == 0);
 
-    n00b_elf_section_t *symtab = n00b_elf_section_by_type(bin, SHT_SYMTAB);
-    assert(symtab != nullptr);
-    assert(strcmp(symtab->name->data, ".symtab") == 0);
+    n00b_option_t(n00b_elf_section_t *) symtab_opt
+        = n00b_elf_section_by_type(bin, SHT_SYMTAB);
+    assert(n00b_option_is_set(symtab_opt));
+    assert(strcmp(n00b_option_get(symtab_opt)->name->data, ".symtab") == 0);
 
     printf("  [PASS] section_by_type\n");
 }
@@ -973,11 +978,8 @@ test_segment_by_type(void)
 
     n00b_elf_binary_t *bin = n00b_result_get(r);
 
-    n00b_elf_segment_t *load = n00b_elf_segment_by_type(bin, PT_LOAD);
-    assert(load != nullptr);
-
-    n00b_elf_segment_t *dyn = n00b_elf_segment_by_type(bin, PT_DYNAMIC);
-    assert(dyn != nullptr);
+    assert(n00b_option_is_set(n00b_elf_segment_by_type(bin, PT_LOAD)));
+    assert(n00b_option_is_set(n00b_elf_segment_by_type(bin, PT_DYNAMIC)));
 
     printf("  [PASS] segment_by_type\n");
 }
@@ -997,17 +999,18 @@ test_symbol_by_name(void)
 
     n00b_elf_binary_t *bin = n00b_result_get(r);
 
-    n00b_elf_symbol_t *func = n00b_elf_symbol_by_name(bin, "my_func");
-    assert(func != nullptr);
-    assert(func->value == 0x401000);
+    n00b_option_t(n00b_elf_symbol_t *) func_opt
+        = n00b_elf_symbol_by_name(bin, "my_func");
+    assert(n00b_option_is_set(func_opt));
+    assert(n00b_option_get(func_opt)->value == 0x401000);
 
-    n00b_elf_symbol_t *var = n00b_elf_symbol_by_name(bin, "my_var");
-    assert(var != nullptr);
-    assert(var->value == 0x402000);
+    n00b_option_t(n00b_elf_symbol_t *) var_opt
+        = n00b_elf_symbol_by_name(bin, "my_var");
+    assert(n00b_option_is_set(var_opt));
+    assert(n00b_option_get(var_opt)->value == 0x402000);
 
     // Also test specific symtab-only path.
-    n00b_elf_symbol_t *func2 = n00b_elf_symtab_by_name(bin, "my_func");
-    assert(func2 != nullptr);
+    assert(n00b_option_is_set(n00b_elf_symtab_by_name(bin, "my_func")));
 
     printf("  [PASS] symbol_by_name\n");
 }
@@ -1027,12 +1030,12 @@ test_dynamic_by_tag(void)
 
     n00b_elf_binary_t *bin = n00b_result_get(r);
 
-    n00b_elf_dynamic_t *needed = n00b_elf_dynamic_by_tag(bin, DT_NEEDED);
-    assert(needed != nullptr);
-    assert(needed->value == 1);
+    n00b_option_t(n00b_elf_dynamic_t *) needed_opt
+        = n00b_elf_dynamic_by_tag(bin, DT_NEEDED);
+    assert(n00b_option_is_set(needed_opt));
+    assert(n00b_option_get(needed_opt)->value == 1);
 
-    n00b_elf_dynamic_t *strtab = n00b_elf_dynamic_by_tag(bin, DT_STRTAB);
-    assert(strtab != nullptr);
+    assert(n00b_option_is_set(n00b_elf_dynamic_by_tag(bin, DT_STRTAB)));
 
     printf("  [PASS] dynamic_by_tag\n");
 }
@@ -1052,16 +1055,16 @@ test_not_found_returns_null(void)
 
     n00b_elf_binary_t *bin = n00b_result_get(r);
 
-    assert(n00b_elf_section_by_name(bin, ".nonexistent") == nullptr);
-    assert(n00b_elf_section_by_type(bin, SHT_SYMTAB) == nullptr);
-    assert(n00b_elf_section_at_addr(bin, 0xDEADBEEF) == nullptr);
-    assert(n00b_elf_segment_by_type(bin, PT_DYNAMIC) == nullptr);
-    assert(n00b_elf_segment_at_addr(bin, 0xDEADBEEF) == nullptr);
-    assert(n00b_elf_symbol_by_name(bin, "nosuch") == nullptr);
-    assert(n00b_elf_symtab_by_name(bin, "nosuch") == nullptr);
-    assert(n00b_elf_dynsym_by_name(bin, "nosuch") == nullptr);
-    assert(n00b_elf_dynamic_by_tag(bin, DT_NEEDED) == nullptr);
-    assert(n00b_elf_note_by_type(bin, NT_GNU_ABI_TAG) == nullptr);
+    assert(!n00b_option_is_set(n00b_elf_section_by_name(bin, ".nonexistent")));
+    assert(!n00b_option_is_set(n00b_elf_section_by_type(bin, SHT_SYMTAB)));
+    assert(!n00b_option_is_set(n00b_elf_section_at_addr(bin, 0xDEADBEEF)));
+    assert(!n00b_option_is_set(n00b_elf_segment_by_type(bin, PT_DYNAMIC)));
+    assert(!n00b_option_is_set(n00b_elf_segment_at_addr(bin, 0xDEADBEEF)));
+    assert(!n00b_option_is_set(n00b_elf_symbol_by_name(bin, "nosuch")));
+    assert(!n00b_option_is_set(n00b_elf_symtab_by_name(bin, "nosuch")));
+    assert(!n00b_option_is_set(n00b_elf_dynsym_by_name(bin, "nosuch")));
+    assert(!n00b_option_is_set(n00b_elf_dynamic_by_tag(bin, DT_NEEDED)));
+    assert(!n00b_option_is_set(n00b_elf_note_by_type(bin, NT_GNU_ABI_TAG)));
 
     // Predicate forms.
     assert(!n00b_elf_has_section(bin, ".nonexistent"));
@@ -1071,8 +1074,8 @@ test_not_found_returns_null(void)
     assert(!n00b_elf_has_interpreter(bin));
 
     // nullptr bin should be safe.
-    assert(n00b_elf_section_by_name(nullptr, ".text") == nullptr);
-    assert(n00b_elf_symbol_by_name(nullptr, "foo") == nullptr);
+    assert(!n00b_option_is_set(n00b_elf_section_by_name(nullptr, ".text")));
+    assert(!n00b_option_is_set(n00b_elf_symbol_by_name(nullptr, "foo")));
     assert(!n00b_elf_has_interpreter(nullptr));
 
     printf("  [PASS] not_found_returns_null\n");
@@ -1265,8 +1268,9 @@ test_core_notes(void)
     assert(bin->num_notes == 4);
 
     // Core info should be parsed.
-    n00b_elf_core_info_t *ci = n00b_elf_core_info(bin);
-    assert(ci != nullptr);
+    n00b_option_t(n00b_elf_core_info_t *) ci_opt = n00b_elf_core_info(bin);
+    assert(n00b_option_is_set(ci_opt));
+    n00b_elf_core_info_t *ci = n00b_option_get(ci_opt);
 
     // Verify prstatus.
     assert(ci->num_prstatus == 1);
