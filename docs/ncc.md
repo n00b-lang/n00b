@@ -320,6 +320,41 @@ metadata as r-strings and array literals. Projects that exchange marshal
 streams across compatible binaries should commit a project-specific
 `.namespace.toml` rather than relying on the fallback `ncc.default` namespace.
 
+### Static Container Literals
+
+**Status: Arrays and lists supported through the static-init helper.**
+
+```c
+n00b_array_t(int) numbers = a{1, 2, 3};
+n00b_array_t(int) legacy = [4, 5, 6];
+n00b_list_t(int)  values = l{7, 8, 9};
+n00b_list_t(int) *ptr    = l{10, 11};
+```
+
+`a{...}` and bare `[...]` both initialize compatible array values. `l{...}`
+initializes `n00b_list_t(T)` values or pointers to generated static list
+objects. Arrays and lists are distinct literal targets; mismatched targets are
+compile-time errors.
+
+Nonempty array/list literals are materialized by `n00b-static-init-helper`.
+ncc sends typed C initializer records, element type metadata, target ABI facts,
+scan policy, descriptor attributes, and portable identity keys. The helper
+emits descriptor-backed static storage and returns the initializer expression.
+
+Static list literals are locked by default. The helper emits descriptor-backed
+static lock storage, and static-object registration initializes those lock
+ranges before mutation. List backing capacity follows the normal list default:
+`max(pow2(len), N00B_DEFAULT_LIST_SZ)`.
+
+Supported first-pass element values are static-initialization-safe scalars,
+pointers, rich strings, `b"..."` buffer pointers where the element type is a
+compatible buffer pointer, aggregate values with static layout, and nested
+supported arrays/lists. Dictionaries and arbitrary constructor-image object
+graphs remain future work.
+
+Block-scope mutable generated statics are rejected. Use `const` for local
+array/list literal declarations or move mutable declarations to file scope.
+
 ### `once` &mdash; Single Initialization
 
 **Status: Complete (prototype). Available but not used in this codebase.**

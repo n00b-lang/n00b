@@ -257,7 +257,37 @@ test_manual_collect(void)
 }
 
 // ============================================================================
-// 8. No-scan objects survive
+// 8. Conservative header-address false positives
+// ============================================================================
+
+static void
+test_header_address_false_positive(void)
+{
+    n00b_arena_t *arena = n00b_new_arena(.size = 4096, .use_gc = true);
+
+    test_obj_t *target = n00b_alloc_with_opts(test_obj_t, ARENA_OPTS(arena));
+    test_obj_t *holder = n00b_alloc_with_opts(test_obj_t, ARENA_OPTS(arena));
+
+    n00b_option_t(n00b_inline_hdr_t *) hdr_opt = n00b_inline_alloc_header(target);
+    assert(n00b_option_is_set(hdr_opt));
+
+    target->value = 0xFEEDFACEULL;
+    target->next  = nullptr;
+    holder->value = (uint64_t)(uintptr_t)n00b_option_get(hdr_opt);
+    holder->next  = target;
+
+    n00b_stop_the_world();
+    n00b_collect(arena);
+    n00b_restart_the_world();
+
+    assert(target->value == 0xFEEDFACEULL);
+    assert(holder->next == target);
+
+    printf("  [PASS] conservative header-address false positive\n");
+}
+
+// ============================================================================
+// 9. No-scan objects survive
 // ============================================================================
 
 #define NOSCAN_COUNT 10
@@ -287,7 +317,7 @@ test_noscan_survival(void)
 }
 
 // ============================================================================
-// 9. Allocation after collection
+// 10. Allocation after collection
 // ============================================================================
 
 static void
@@ -322,7 +352,7 @@ test_alloc_after_collection(void)
 }
 
 // ============================================================================
-// 10. Large linked list (GC fires mid-construction)
+// 11. Large linked list (GC fires mid-construction)
 // ============================================================================
 
 #define LIST_LENGTH 600
@@ -383,6 +413,7 @@ main(int argc, char **argv)
     test_unreachable_collected();
     test_multiple_collections();
     test_manual_collect();
+    test_header_address_false_positive();
     test_noscan_survival();
     test_alloc_after_collection();
     test_large_linked_list();

@@ -113,6 +113,7 @@ enum n00b_static_object_flags_t : uint32_t {
     N00B_STATIC_OBJECT_F_NONE     = 0,
     N00B_STATIC_OBJECT_F_READONLY = 1u << 0,
     N00B_STATIC_OBJECT_F_MUTABLE  = 1u << 1,
+    N00B_STATIC_OBJECT_F_INIT_RWLOCK = 1u << 2,
 };
 typedef enum n00b_static_object_flags_t n00b_static_object_flags_t;
 

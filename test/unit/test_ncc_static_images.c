@@ -5,6 +5,9 @@
 #include <string.h>
 
 #include "n00b.h"
+#include "adt/array.h"
+#include "adt/list.h"
+#include "core/alloc.h"
 #include "adt/dict_untyped.h"
 #include "core/buffer.h"
 #include "core/gc_map.h"
@@ -24,6 +27,17 @@ const n00b_buffer_t *raw_buffer =
     ncc_static_image(.raw = "raw", .length = 3, .no_lock = true);
 const n00b_buffer_t *literal_buffer =
     b"literal";
+
+static n00b_list_t(int) static_int_list =
+    l{1, 2, 3};
+typedef n00b_list_t(int) ncc_static_int_list_t;
+static ncc_static_int_list_t *static_int_list_ptr =
+    l{4, 5};
+static n00b_list_t(int) *static_direct_int_list_ptr =
+    l{13, 14};
+typedef n00b_array_t(int) ncc_static_int_array_t;
+static ncc_static_int_array_t static_int_array =
+    a{7, 8, 9};
 
 static n00b_alloc_range_t *
 range_for_address(const void *addr)
@@ -139,6 +153,61 @@ assert_static_buffer_range(const n00b_buffer_t *buf)
         payload_range,
         N00B_STATIC_IDENTITY_NCC_STATIC_IMAGE_PAYLOAD,
         "ncc-static-image-payload:");
+}
+
+static void
+assert_static_list_lock_range(n00b_rwlock_t *lock)
+{
+    assert(lock != nullptr);
+    n00b_alloc_range_t *range = range_for_address(lock);
+    assert(range->kind == n00b_mmap_static);
+    assert(range->scan_kind == N00B_GC_SCAN_KIND_NONE);
+    assert(range->flags & N00B_STATIC_OBJECT_F_MUTABLE);
+    assert(range->flags & N00B_STATIC_OBJECT_F_INIT_RWLOCK);
+}
+
+static void
+assert_static_int_list_data_range(const ncc_static_int_list_t *list)
+{
+    assert(list->data != nullptr);
+    n00b_alloc_range_t *range = range_for_address(list->data);
+    assert(range->kind == n00b_mmap_static);
+    assert(range->len == list->cap * sizeof(*list->data));
+    assert(range->scan_kind == N00B_GC_SCAN_KIND_NONE);
+    assert(range->flags & N00B_STATIC_OBJECT_F_MUTABLE);
+}
+
+static void
+assert_static_int_array_data_range(const ncc_static_int_array_t *array)
+{
+    assert(array->data != nullptr);
+    n00b_alloc_range_t *range = range_for_address(array->data);
+    assert(range->kind == n00b_mmap_static);
+    assert(range->len == array->cap * sizeof(*array->data));
+    assert(range->scan_kind == N00B_GC_SCAN_KIND_NONE);
+    assert(range->flags & N00B_STATIC_OBJECT_F_MUTABLE);
+    assert_static_image_identity(range,
+                                 N00B_STATIC_IDENTITY_NCC_ARRAY_DATA,
+                                 "ncc-array-data:");
+}
+
+static void
+assert_int_list_contents(const ncc_static_int_list_t *list,
+                         const int *expected,
+                         size_t expected_len)
+{
+    assert(list != nullptr);
+    assert(list->len == expected_len);
+    assert(list->cap == N00B_DEFAULT_LIST_SZ);
+    assert(list->lock != nullptr);
+    assert(list->allocator == nullptr);
+    assert(list->scan_kind == N00B_GC_SCAN_KIND_NONE);
+    assert(list->scan_cb == nullptr);
+    assert(list->scan_user == nullptr);
+
+    for (size_t i = 0; i < expected_len; i++) {
+        assert(list->data[i] == expected[i]);
+    }
 }
 
 static n00b_static_image_request_t
@@ -261,6 +330,81 @@ test_generated_static_image_registration(void)
     printf("  [PASS] generated static image registration\n");
 }
 
+static void
+test_generated_static_list_literals(void)
+{
+    n00b_static_objects_register_all();
+
+    int value_expected[] = {1, 2, 3};
+    assert_int_list_contents(&static_int_list,
+                             value_expected,
+                             sizeof(value_expected) / sizeof(value_expected[0]));
+    assert_static_int_list_data_range(&static_int_list);
+    assert_static_list_lock_range(static_int_list.lock);
+
+    n00b_list_push(static_int_list, 99);
+    assert(static_int_list.len == 4);
+    assert(n00b_list_get(static_int_list, 3) == 99);
+
+    int pointer_expected[] = {4, 5};
+    assert_int_list_contents(static_int_list_ptr,
+                             pointer_expected,
+                             sizeof(pointer_expected) / sizeof(pointer_expected[0]));
+    assert_static_int_list_data_range(static_int_list_ptr);
+    assert_static_list_lock_range(static_int_list_ptr->lock);
+
+    n00b_alloc_range_t *object_range = range_for_address(static_int_list_ptr);
+    assert(object_range->kind == n00b_mmap_static);
+    assert(object_range->len == sizeof(*static_int_list_ptr));
+    assert(object_range->scan_kind == N00B_GC_SCAN_KIND_CALLBACK);
+    assert(object_range->scan_cb == n00b_gc_scan_cb_struct_layout);
+    assert(object_range->flags & N00B_STATIC_OBJECT_F_MUTABLE);
+
+    n00b_list_push(*static_int_list_ptr, 6);
+    assert(static_int_list_ptr->len == 3);
+    assert(n00b_list_get(*static_int_list_ptr, 2) == 6);
+
+    int direct_expected[] = {13, 14};
+    assert_int_list_contents(
+        static_direct_int_list_ptr,
+        direct_expected,
+        sizeof(direct_expected) / sizeof(direct_expected[0]));
+    assert_static_int_list_data_range(static_direct_int_list_ptr);
+    assert_static_list_lock_range(static_direct_int_list_ptr->lock);
+
+    object_range = range_for_address(static_direct_int_list_ptr);
+    assert(object_range->kind == n00b_mmap_static);
+    assert(object_range->len == sizeof(*static_direct_int_list_ptr));
+    assert(object_range->scan_kind == N00B_GC_SCAN_KIND_CALLBACK);
+    assert(object_range->scan_cb == n00b_gc_scan_cb_struct_layout);
+    assert(object_range->flags & N00B_STATIC_OBJECT_F_MUTABLE);
+
+    printf("  [PASS] generated static list literals\n");
+}
+
+static void
+test_generated_static_array_literals(void)
+{
+    n00b_static_objects_register_all();
+
+    assert(static_int_array.len == 3);
+    assert(static_int_array.cap == 3);
+    assert(static_int_array.lock == nullptr);
+    assert(static_int_array.allocator == nullptr);
+    assert(static_int_array.scan_kind == N00B_GC_SCAN_KIND_NONE);
+    assert(static_int_array.scan_cb == nullptr);
+    assert(static_int_array.scan_user == nullptr);
+    assert(static_int_array.data[0] == 7);
+    assert(static_int_array.data[1] == 8);
+    assert(static_int_array.data[2] == 9);
+
+    assert_static_int_array_data_range(&static_int_array);
+    static_int_array.data[1] = 88;
+    assert(static_int_array.data[1] == 88);
+
+    printf("  [PASS] generated static array literals\n");
+}
+
 int
 main(int argc, char **argv)
 {
@@ -276,6 +420,8 @@ main(int argc, char **argv)
     test_static_image_request_validation();
     test_static_initializer_build_api();
     test_generated_static_image_registration();
+    test_generated_static_list_literals();
+    test_generated_static_array_literals();
     printf("All ncc static image tests passed.\n");
 
     n00b_shutdown();

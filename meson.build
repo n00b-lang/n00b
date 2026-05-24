@@ -81,7 +81,6 @@ n00b_rstr_template_plain = '({static n00b_string_t $0={.u8_bytes=$1,.data=$2,.co
 n00b_rstr_template_styled = '({$0 static n00b_string_t $1={.u8_bytes=$2,.data=$3,.codepoints=$4,.styling=$5};$16 static const n00b_static_object_desc_t $8={.start=(const void*)&$1,.len=(uint64_t)sizeof($1),.tinfo=$6,.scan_kind=$12,.scan_cb=$13,.scan_user=$14,.object_id=$10,.file=__FILE__,.identity=$17,.flags=$11};static const n00b_static_object_desc_t * const $9 $15=&$8;&$1;})'
 n00b_rstr_static_ref_template_plain = 'static n00b_string_t $0={.u8_bytes=$1,.data=$2,.codepoints=$3,.styling=((void*)0)};$14 static const n00b_static_object_desc_t $6={.start=(const void*)&$0,.len=(uint64_t)sizeof($0),.tinfo=$4,.scan_kind=$10,.scan_cb=$11,.scan_user=$12,.object_id=$8,.file=__FILE__,.identity=$15,.flags=$9};static const n00b_static_object_desc_t * const $7 $13=&$6;'
 n00b_rstr_static_ref_template_styled = '$0 static n00b_string_t $1={.u8_bytes=$2,.data=$3,.codepoints=$4,.styling=$5};$16 static const n00b_static_object_desc_t $8={.start=(const void*)&$1,.len=(uint64_t)sizeof($1),.tinfo=$6,.scan_kind=$12,.scan_cb=$13,.scan_user=$14,.object_id=$10,.file=__FILE__,.identity=$17,.flags=$11};static const n00b_static_object_desc_t * const $9 $15=&$8;'
-n00b_array_literal_data_template = '$13 static $0 $1[]={$3};$20 static const n00b_static_object_desc_t $15={.start=(const void*)$1,.len=(uint64_t)sizeof($1),.tinfo=$4,.scan_kind=$6,.scan_cb=$7,.scan_user=$8,.object_id=$17,.file=__FILE__,.identity=$21,.flags=$18};static const n00b_static_object_desc_t * const $16 $19=&$15;'
 
 c_args = [
   '--ncc-vargs-type=n00b_vargs_t',
@@ -95,8 +94,6 @@ c_args = [
   '--ncc-rstr-static-ref-template-styled=' + n00b_rstr_static_ref_template_styled,
   '--ncc-rstr-static-ref-expr-plain=&$0',
   '--ncc-rstr-static-ref-expr-styled=&$1',
-  '--ncc-array-literal-data-template=' + n00b_array_literal_data_template,
-  '--ncc-array-literal-data-expr=$1',
   '-include',
   'n00b.h',
   '-Wextra',
@@ -1327,8 +1324,13 @@ static_object_sections_test = executable('test_static_object_sections',
 test('static_object_sections', static_object_sections_test, suite: 'unit')
 
 ncc_static_objects_test = executable('test_ncc_static_objects',
-    ['test/unit/test_ncc_static_objects.c'],
-    kwargs: test_common_kwargs,
+    [
+      'test/unit/test_ncc_static_objects.c',
+      n00b_static_init_helper_ready,
+    ],
+    kwargs: test_common_kwargs + {
+        'c_args': exe_c_args + n00b_static_init_helper_flags,
+    },
 )
 test('ncc_static_objects', ncc_static_objects_test, suite: 'unit')
 

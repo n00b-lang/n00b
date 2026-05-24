@@ -196,9 +196,18 @@ const n00b_buffer_t *hex     = ncc_static_image(.hex = "6869");
 `b"..."` is shorthand for a readonly static `n00b_buffer_t` byte payload. It
 supports ordinary C string escapes and adjacent ordinary string literal
 concatenation. The generated buffer image is readonly, descriptor-backed, and
-borrowed from static payload bytes. ncc-generated rich strings, array literal
-storage, and static images carry portable static identities when descriptors
-are emitted. Unsupported registered types, mutable block-scope targets, bad
+borrowed from static payload bytes.
+
+The same build-time helper also owns static container literal images for
+nonempty arrays and lists. `a{...}` and bare `[...]` initialize compatible
+array values. `l{...}` initializes `n00b_list_t(T)` values or pointers to
+generated static list objects. ncc sends typed C initializer records and scan
+metadata; the helper emits descriptor-backed storage, dependency metadata, and
+portable identities.
+
+ncc-generated rich strings, array/list literal storage, and static images carry
+portable static identities when descriptors are emitted. Unsupported registered
+types, unsupported container element types, mutable block-scope targets, bad
 literal argument kinds, ABI mismatches, and missing static initializer vtable
 slots are rejected at build time with ncc source-positioned diagnostics.
 

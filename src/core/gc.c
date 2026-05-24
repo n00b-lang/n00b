@@ -387,20 +387,25 @@ n00b_translate_pointer(n00b_collect_t    *ctx,
     uint64_t *old_ptr = n00b_atomic_load((_Atomic(uint64_t *) *)(arr + ix));
     bool      has_oob = ctx->from_space->vtable.metadata_pool != nullptr;
 
-    assert(old_ptr);
-
-    char *old_base = n00b_user_data_base(old_alloc, has_oob);
-    char *new_base = n00b_user_data_base(fw_loc, has_oob);
-
-    ptrdiff_t offset = (char *)old_ptr - old_base;
-
-    assert(offset >= 0);
-    if (offset > old_alloc->alloc_len) {
-        return arr[ix];
+    if (!old_ptr) {
+        return nullptr;
     }
 
     assert(fw_loc);
     assert(fw_loc != old_alloc);
+
+    char *old_base = n00b_user_data_base(old_alloc, has_oob);
+    char *new_base = n00b_user_data_base(fw_loc, has_oob);
+
+    ptrdiff_t offset   = (char *)old_ptr - old_base;
+    ptrdiff_t user_len = old_alloc->alloc_len - arena_overhead(ctx->from_space);
+
+    if (offset < 0) {
+        return nullptr;
+    }
+    if (offset > user_len) {
+        return nullptr;
+    }
 
     return (void *)(new_base + offset);
 }

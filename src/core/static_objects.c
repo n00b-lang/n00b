@@ -3,6 +3,7 @@
 #include "n00b.h"
 #include "core/static_objects.h"
 #include "core/mmaps.h"
+#include "core/rwlock.h"
 
 #if defined(_WIN32)
 #include "core/platform.h"
@@ -158,6 +159,12 @@ n00b_static_object_register_desc(const n00b_static_object_desc_t *desc)
             if (range->identity == nullptr && desc->identity != nullptr) {
                 (void)n00b_static_identity_register(desc->identity, range);
             }
+            if (desc->flags & N00B_STATIC_OBJECT_F_INIT_RWLOCK) {
+                n00b_rwlock_t *lock = (n00b_rwlock_t *)desc->start;
+                if (!lock->inited) {
+                    n00b_rw_init(lock);
+                }
+            }
             return range;
         }
     }
@@ -166,16 +173,22 @@ n00b_static_object_register_desc(const n00b_static_object_desc_t *desc)
     n00b_static_object_register_pe_mapping(desc);
 #endif
 
-    return _n00b_static_object_register((void *)desc->start,
-                                        (size_t)desc->len,
-                                        desc->tinfo,
-                                        desc->file,
-                                        .scan_kind = desc->scan_kind,
-                                        .scan_cb   = desc->scan_cb,
-                                        .scan_user = desc->scan_user,
-                                        .object_id = desc->object_id,
-                                        .identity  = desc->identity,
-                                        .flags     = desc->flags);
+    n00b_alloc_range_t *range =
+        _n00b_static_object_register((void *)desc->start,
+                                     (size_t)desc->len,
+                                     desc->tinfo,
+                                     desc->file,
+                                     .scan_kind = desc->scan_kind,
+                                     .scan_cb   = desc->scan_cb,
+                                     .scan_user = desc->scan_user,
+                                     .object_id = desc->object_id,
+                                     .identity  = desc->identity,
+                                     .flags     = desc->flags);
+    if (range && (desc->flags & N00B_STATIC_OBJECT_F_INIT_RWLOCK)) {
+        n00b_rw_init((n00b_rwlock_t *)desc->start);
+    }
+
+    return range;
 }
 
 static void
