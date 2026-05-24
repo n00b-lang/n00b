@@ -266,9 +266,9 @@ runtime parsing cost.
 
 Generated static objects that need GC visibility should follow the stack-map
 and static-descriptor runtime contract in
-[`docs/gc_stack_maps.md`](gc_stack_maps.md). The current r-string transform may
-continue using its supported static representation until ncc is updated to emit
-descriptor-backed statics.
+[`docs/gc_stack_maps.md`](gc_stack_maps.md). n00b builds pass descriptor
+templates to ncc so r-string literals are emitted as descriptor-backed static
+objects with matching scan metadata.
 
 Descriptor-backed r-strings carry portable static identity for marshaled
 static pointers. See [`docs/marshal.md`](marshal.md) for the source-semantic
