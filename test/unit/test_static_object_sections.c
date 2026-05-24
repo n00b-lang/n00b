@@ -23,6 +23,8 @@
 #define STATIC_SECTION_NROOT_TINFO UINT64_C(0x5354434743000004)
 #define STATIC_SECTION_NLEAF_TINFO UINT64_C(0x5354434743000005)
 #define STATIC_SECTION_SPARSE_TINFO UINT64_C(0x5354434743000006)
+#define STATIC_SECTION_DUP_A_TINFO UINT64_C(0x5354434944000001)
+#define STATIC_SECTION_DUP_B_TINFO UINT64_C(0x5354434944000002)
 
 #define STATIC_SECTION_MUT_ID   UINT64_C(0x535443530001)
 #define STATIC_SECTION_RO_ID    UINT64_C(0x535443530002)
@@ -33,6 +35,8 @@
 #define STATIC_SECTION_NROOT_ID UINT64_C(0x535443470004)
 #define STATIC_SECTION_NLEAF_ID UINT64_C(0x535443470005)
 #define STATIC_SECTION_SPARSE_ID UINT64_C(0x535443470006)
+#define STATIC_SECTION_DUP_A_ID UINT64_C(0x535443490001)
+#define STATIC_SECTION_DUP_B_ID UINT64_C(0x535443490002)
 
 typedef struct {
     uint64_t value;
@@ -64,6 +68,29 @@ static void     *section_callback_words[4];
 static section_nested_root_t section_nested_root;
 static section_nested_leaf_t section_nested_leaf;
 static section_sparse_item_t section_sparse_items[2];
+static int section_duplicate_a = 111;
+static int section_duplicate_b = 222;
+
+static const n00b_static_identity_t section_ro_identity = {
+    .version      = N00B_STATIC_IDENTITY_VERSION,
+    .kind         = N00B_STATIC_IDENTITY_MANUAL,
+    .namespace_id = "test.static-object-sections",
+    .object_key   = "readonly-value",
+};
+
+static const n00b_static_identity_t section_missing_identity = {
+    .version      = N00B_STATIC_IDENTITY_VERSION,
+    .kind         = N00B_STATIC_IDENTITY_MANUAL,
+    .namespace_id = "test.static-object-sections",
+    .object_key   = "missing",
+};
+
+static const n00b_static_identity_t section_duplicate_identity = {
+    .version      = N00B_STATIC_IDENTITY_VERSION,
+    .kind         = N00B_STATIC_IDENTITY_MANUAL,
+    .namespace_id = "test.static-object-sections",
+    .object_key   = "duplicate",
+};
 
 static const uint64_t section_sparse_offsets[] = {0, 2};
 static n00b_gc_struct_layout_t section_sparse_layout = {
@@ -92,14 +119,15 @@ N00B_STATIC_OBJECT_DESCRIPTOR_FOR(n00b_test_static_section_mut_desc,
                                   nullptr,
                                   STATIC_SECTION_MUT_ID);
 
-N00B_STATIC_OBJECT_DESCRIPTOR_FOR(n00b_test_static_section_ro_desc,
-                                  section_readonly_value,
-                                  STATIC_SECTION_RO_TINFO,
-                                  N00B_STATIC_OBJECT_F_READONLY,
-                                  N00B_GC_SCAN_KIND_NONE,
-                                  nullptr,
-                                  nullptr,
-                                  STATIC_SECTION_RO_ID);
+N00B_STATIC_OBJECT_DESCRIPTOR_FOR_WITH_IDENTITY(n00b_test_static_section_ro_desc,
+                                               section_readonly_value,
+                                               STATIC_SECTION_RO_TINFO,
+                                               N00B_STATIC_OBJECT_F_READONLY,
+                                               N00B_GC_SCAN_KIND_NONE,
+                                               nullptr,
+                                               nullptr,
+                                               STATIC_SECTION_RO_ID,
+                                               &section_ro_identity);
 
 N00B_STATIC_OBJECT_DESCRIPTOR_FOR(n00b_test_static_section_none_desc,
                                   section_none_words,
@@ -155,6 +183,26 @@ N00B_STATIC_OBJECT_DESCRIPTOR_FOR(n00b_test_static_section_sparse_desc,
                                   &section_sparse_layout,
                                   STATIC_SECTION_SPARSE_ID);
 
+N00B_STATIC_OBJECT_DESCRIPTOR_FOR_WITH_IDENTITY(n00b_test_static_section_dup_a_desc,
+                                               section_duplicate_a,
+                                               STATIC_SECTION_DUP_A_TINFO,
+                                               N00B_STATIC_OBJECT_F_MUTABLE,
+                                               N00B_GC_SCAN_KIND_NONE,
+                                               nullptr,
+                                               nullptr,
+                                               STATIC_SECTION_DUP_A_ID,
+                                               &section_duplicate_identity);
+
+N00B_STATIC_OBJECT_DESCRIPTOR_FOR_WITH_IDENTITY(n00b_test_static_section_dup_b_desc,
+                                               section_duplicate_b,
+                                               STATIC_SECTION_DUP_B_TINFO,
+                                               N00B_STATIC_OBJECT_F_MUTABLE,
+                                               N00B_GC_SCAN_KIND_NONE,
+                                               nullptr,
+                                               nullptr,
+                                               STATIC_SECTION_DUP_B_ID,
+                                               &section_duplicate_identity);
+
 extern void *n00b_test_static_section_extra_addr(void);
 
 typedef struct {
@@ -183,6 +231,7 @@ collect_desc(const n00b_static_object_desc_t *desc, void *user)
         assert(desc->tinfo == STATIC_SECTION_RO_TINFO);
         assert(desc->flags & N00B_STATIC_OBJECT_F_READONLY);
         assert(desc->scan_kind == N00B_GC_SCAN_KIND_NONE);
+        assert(desc->identity == &section_ro_identity);
         seen->found_readonly = true;
         break;
     case STATIC_SECTION_EXTRA_ID:
@@ -350,6 +399,68 @@ test_section_range_metadata(void)
     printf("  [PASS] static_object_range_metadata\n");
 }
 
+static void
+test_static_identity_lookup(void)
+{
+    n00b_alloc_range_t *range = nullptr;
+    unsigned char expected[sizeof(section_readonly_value)];
+    memcpy(expected, &section_readonly_value, sizeof(expected));
+
+    n00b_static_identity_query_t query = {
+        .checks = N00B_STATIC_IDENTITY_CHECK_LEN
+                | N00B_STATIC_IDENTITY_CHECK_TINFO
+                | N00B_STATIC_IDENTITY_CHECK_SCAN_KIND
+                | N00B_STATIC_IDENTITY_CHECK_FLAGS
+                | N00B_STATIC_IDENTITY_CHECK_BYTES,
+        .len = sizeof(section_readonly_value),
+        .tinfo = STATIC_SECTION_RO_TINFO,
+        .scan_kind = N00B_GC_SCAN_KIND_NONE,
+        .flags_mask = N00B_STATIC_OBJECT_F_READONLY | N00B_STATIC_OBJECT_F_MUTABLE,
+        .flags_value = N00B_STATIC_OBJECT_F_READONLY,
+        .check_offset = 0,
+        .check_len = sizeof(expected),
+        .check_bytes = expected,
+    };
+
+    assert(n00b_static_identity_lookup(&section_ro_identity, &query, &range)
+           == N00B_STATIC_IDENTITY_OK);
+    assert(range == lookup_range((void *)&section_readonly_value));
+    assert(range->identity == &section_ro_identity);
+
+    n00b_static_identity_query_t bad_flags = query;
+    bad_flags.flags_value = N00B_STATIC_OBJECT_F_MUTABLE;
+    assert(n00b_static_identity_lookup(&section_ro_identity, &bad_flags, nullptr)
+           == N00B_STATIC_IDENTITY_ERR_MUTABILITY);
+
+    n00b_static_identity_query_t bad_tinfo = query;
+    bad_tinfo.tinfo = STATIC_SECTION_MUT_TINFO;
+    assert(n00b_static_identity_lookup(&section_ro_identity, &bad_tinfo, nullptr)
+           == N00B_STATIC_IDENTITY_ERR_TYPE);
+
+    n00b_static_identity_query_t bad_scan = query;
+    bad_scan.scan_kind = N00B_GC_SCAN_KIND_ALL;
+    assert(n00b_static_identity_lookup(&section_ro_identity, &bad_scan, nullptr)
+           == N00B_STATIC_IDENTITY_ERR_SCAN);
+
+    n00b_static_identity_query_t bad_len = query;
+    bad_len.len = sizeof(section_readonly_value) + 1;
+    assert(n00b_static_identity_lookup(&section_ro_identity, &bad_len, nullptr)
+           == N00B_STATIC_IDENTITY_ERR_LENGTH);
+
+    expected[0] ^= 0xff;
+    assert(n00b_static_identity_lookup(&section_ro_identity, &query, nullptr)
+           == N00B_STATIC_IDENTITY_ERR_CHECK_BYTES);
+
+    assert(n00b_static_identity_lookup(&section_missing_identity, nullptr, nullptr)
+           == N00B_STATIC_IDENTITY_ERR_MISSING);
+    assert(n00b_static_identity_lookup(&section_duplicate_identity, nullptr, nullptr)
+           == N00B_STATIC_IDENTITY_ERR_DUPLICATE);
+    assert(strcmp(n00b_static_identity_status_name(N00B_STATIC_IDENTITY_ERR_DUPLICATE),
+                  "duplicate") == 0);
+
+    printf("  [PASS] static_identity_lookup\n");
+}
+
 static __attribute__((noinline)) void
 test_section_gc_scan_policies_inner(n00b_arena_t *arena)
 {
@@ -503,6 +614,7 @@ main(int argc, char **argv)
     test_section_enumeration();
     test_auto_registration();
     test_section_range_metadata();
+    test_static_identity_lookup();
     test_section_gc_scan_policies();
 
     printf("All static object section tests passed.\n");

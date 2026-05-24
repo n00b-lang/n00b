@@ -270,6 +270,10 @@ and static-descriptor runtime contract in
 continue using its supported static representation until ncc is updated to emit
 descriptor-backed statics.
 
+Descriptor-backed r-strings carry portable static identity for marshaled
+static pointers. See [`docs/marshal.md`](marshal.md) for the source-semantic
+identity model and `.namespace.toml` metadata file format.
+
 **Supported markup:**
 
 | Tag | Meaning |
@@ -301,14 +305,20 @@ const n00b_buffer_t *lit = b"payload";
 The transform asks the n00b build-time static initializer helper to materialize
 the object as C declarations. For buffers, the helper emits descriptor-backed
 static payload bytes, a readonly `n00b_buffer_t`, scan metadata, dependency
-metadata, and response metadata. No runtime constructor is called for the
-generated static object.
+metadata, response metadata, and portable static identities for both the object
+and payload ranges. No runtime constructor is called for the generated static
+object.
 
 Arguments must currently be string, integer, or boolean literals. Mutable
 block-scope targets are rejected; block-scope uses should target `const`
 objects. `b"..."` is shorthand for a readonly static `n00b_buffer_t` byte
 payload and must target `n00b_buffer_t *`. Broader container images such as
 dictionaries remain future work.
+
+Generated static-image identities use the same `.namespace.toml` namespace
+metadata as r-strings and array literals. Projects that exchange marshal
+streams across compatible binaries should commit a project-specific
+`.namespace.toml` rather than relying on the fallback `ncc.default` namespace.
 
 ### `once` &mdash; Single Initialization
 

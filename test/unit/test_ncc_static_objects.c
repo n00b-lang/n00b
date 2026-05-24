@@ -32,6 +32,38 @@ range_for_address(const void *addr)
 }
 
 static void
+assert_generated_identity(n00b_alloc_range_t *range,
+                          n00b_static_identity_kind_t kind,
+                          const char *key_prefix)
+{
+    assert(range->identity != nullptr);
+    assert(range->identity->version == N00B_STATIC_IDENTITY_VERSION);
+    assert(range->identity->kind == kind);
+    assert(range->identity->namespace_id != nullptr);
+    assert(strcmp(range->identity->namespace_id, "n00b.tests") == 0);
+    assert(range->identity->object_key != nullptr);
+    assert(strncmp(range->identity->object_key,
+                   key_prefix,
+                   strlen(key_prefix)) == 0);
+    assert(strstr(range->identity->object_key,
+                  "test_ncc_static_objects.c:") != nullptr);
+
+    n00b_static_identity_query_t query = {
+        .checks      = N00B_STATIC_IDENTITY_CHECK_LEN
+                     | N00B_STATIC_IDENTITY_CHECK_SCAN_KIND
+                     | N00B_STATIC_IDENTITY_CHECK_FLAGS,
+        .len         = range->len,
+        .scan_kind   = range->scan_kind,
+        .flags_mask  = range->flags,
+        .flags_value = range->flags,
+    };
+    n00b_alloc_range_t *resolved = nullptr;
+    assert(n00b_static_identity_lookup(range->identity, &query, &resolved)
+           == N00B_STATIC_IDENTITY_OK);
+    assert(resolved == range);
+}
+
+static void
 test_generated_rstring_descriptors(void)
 {
     n00b_string_t *plain  = r"descriptor";
@@ -44,6 +76,9 @@ test_generated_rstring_descriptors(void)
     assert(plain_range->len == sizeof(*plain));
     assert(plain_range->scan_kind == N00B_GC_SCAN_KIND_NONE);
     assert(plain_range->flags & N00B_STATIC_OBJECT_F_MUTABLE);
+    assert_generated_identity(plain_range,
+                              N00B_STATIC_IDENTITY_NCC_RSTR,
+                              "ncc-rstr:");
     assert(plain->u8_bytes == 10);
     assert(memcmp(plain->data, "descriptor", 10) == 0);
 
@@ -52,6 +87,9 @@ test_generated_rstring_descriptors(void)
     assert(styled_range->len == sizeof(*styled));
     assert(styled_range->scan_kind == N00B_GC_SCAN_KIND_NONE);
     assert(styled_range->flags & N00B_STATIC_OBJECT_F_MUTABLE);
+    assert_generated_identity(styled_range,
+                              N00B_STATIC_IDENTITY_NCC_RSTR,
+                              "ncc-rstr:");
     assert(styled->u8_bytes == 2);
     assert(styled->styling != nullptr);
 
@@ -70,6 +108,9 @@ test_generated_scalar_array_descriptor(void)
     assert(range->len == sizeof(int) * 3);
     assert(range->scan_kind == N00B_GC_SCAN_KIND_NONE);
     assert(range->flags & N00B_STATIC_OBJECT_F_MUTABLE);
+    assert_generated_identity(range,
+                              N00B_STATIC_IDENTITY_NCC_ARRAY_DATA,
+                              "ncc-array-data:");
     assert(values.len == 3);
     assert(values.data[0] == 10);
     assert(values.data[2] == 30);
@@ -92,6 +133,9 @@ test_generated_pointer_array_descriptor(void)
     assert(range->len == sizeof(n00b_string_t *) * 2);
     assert(range->scan_kind == N00B_GC_SCAN_KIND_ALL);
     assert(range->flags & N00B_STATIC_OBJECT_F_MUTABLE);
+    assert_generated_identity(range,
+                              N00B_STATIC_IDENTITY_NCC_ARRAY_DATA,
+                              "ncc-array-data:");
     assert(words.len == 2);
     assert(words.data[0]->u8_bytes == 5);
     assert(words.data[1]->u8_bytes == 2);
@@ -105,6 +149,9 @@ test_generated_pointer_array_descriptor(void)
     assert(ptr_range->len == sizeof(generated_ptr_t) * 2);
     assert(ptr_range->scan_kind == N00B_GC_SCAN_KIND_ALL);
     assert(ptr_range->flags & N00B_STATIC_OBJECT_F_MUTABLE);
+    assert_generated_identity(ptr_range,
+                              N00B_STATIC_IDENTITY_NCC_ARRAY_DATA,
+                              "ncc-array-data:");
     assert(ptrs.len == 2);
     assert(ptrs.data[0] == nullptr);
     assert(ptrs.data[1] == nullptr);
@@ -126,6 +173,9 @@ test_generated_nested_array_descriptor(void)
     assert(range->scan_cb == n00b_gc_scan_cb_struct_field);
     assert(range->scan_user != nullptr);
     assert(range->flags & N00B_STATIC_OBJECT_F_MUTABLE);
+    assert_generated_identity(range,
+                              N00B_STATIC_IDENTITY_NCC_ARRAY_DATA,
+                              "ncc-array-data:");
     assert(rows.len == 2);
     assert(rows.data[0].len == 2);
     assert(rows.data[0].data[1] == 2);
@@ -153,6 +203,9 @@ test_generated_aggregate_array_descriptor(void)
     assert(range->scan_cb == n00b_gc_scan_cb_struct_layout);
     assert(range->scan_user != nullptr);
     assert(range->flags & N00B_STATIC_OBJECT_F_MUTABLE);
+    assert_generated_identity(range,
+                              N00B_STATIC_IDENTITY_NCC_ARRAY_DATA,
+                              "ncc-array-data:");
 
     n00b_gc_struct_layout_t *layout = range->scan_user;
     assert(layout->count == 1);

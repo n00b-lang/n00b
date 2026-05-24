@@ -278,6 +278,7 @@ n00b_mmap_register_range(void *start, void *end, n00b_mmap_rec_kind_t kind) _kar
     void                *scan_user = nullptr;
     n00b_alloc_type_info_t tinfo    = 0;
     uint64_t             object_id = 0;
+    const n00b_static_identity_t *identity = nullptr;
     uint32_t             flags     = 0;
 };
 
@@ -292,6 +293,7 @@ n00b_mmap_register_range(void *start, void *end, n00b_mmap_rec_kind_t kind) _kar
  * @kw scan_cb   Optional callback used when scan_kind == CALLBACK.
  * @kw scan_user Opaque callback data.
  * @kw object_id Stable generated-object identity, if available.
+ * @kw identity  Portable source-semantic identity, if available.
  * @kw flags     Reserved descriptor flags for generated-code contracts.
  */
 extern n00b_alloc_range_t *
@@ -304,6 +306,7 @@ _n00b_static_object_register(void *start,
     n00b_gc_scan_cb_t   scan_cb   = nullptr;
     void               *scan_user = nullptr;
     uint64_t            object_id = 0;
+    const n00b_static_identity_t *identity = nullptr;
     uint32_t            flags     = 0;
 };
 

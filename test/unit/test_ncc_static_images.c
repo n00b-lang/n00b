@@ -33,6 +33,38 @@ range_for_address(const void *addr)
     return n00b_option_get(found);
 }
 
+static void
+assert_static_image_identity(n00b_alloc_range_t *range,
+                             n00b_static_identity_kind_t kind,
+                             const char *key_prefix)
+{
+    assert(range->identity != nullptr);
+    assert(range->identity->version == N00B_STATIC_IDENTITY_VERSION);
+    assert(range->identity->kind == kind);
+    assert(range->identity->namespace_id != nullptr);
+    assert(strcmp(range->identity->namespace_id, "n00b.tests") == 0);
+    assert(range->identity->object_key != nullptr);
+    assert(strncmp(range->identity->object_key,
+                   key_prefix,
+                   strlen(key_prefix)) == 0);
+    assert(strstr(range->identity->object_key,
+                  "test_ncc_static_images.c:") != nullptr);
+
+    n00b_static_identity_query_t query = {
+        .checks      = N00B_STATIC_IDENTITY_CHECK_LEN
+                     | N00B_STATIC_IDENTITY_CHECK_SCAN_KIND
+                     | N00B_STATIC_IDENTITY_CHECK_FLAGS,
+        .len         = range->len,
+        .scan_kind   = range->scan_kind,
+        .flags_mask  = range->flags,
+        .flags_value = range->flags,
+    };
+    n00b_alloc_range_t *resolved = nullptr;
+    assert(n00b_static_identity_lookup(range->identity, &query, &resolved)
+           == N00B_STATIC_IDENTITY_OK);
+    assert(resolved == range);
+}
+
 static n00b_static_layout_info_t *
 require_layout(uint64_t type_hash)
 {
@@ -86,6 +118,10 @@ assert_static_buffer_range(const n00b_buffer_t *buf)
     assert(object_range->scan_kind == N00B_GC_SCAN_KIND_CALLBACK);
     assert(object_range->scan_cb == n00b_gc_scan_cb_struct_layout);
     assert(object_range->flags & N00B_STATIC_OBJECT_F_READONLY);
+    assert_static_image_identity(
+        object_range,
+        N00B_STATIC_IDENTITY_NCC_STATIC_IMAGE_OBJECT,
+        "ncc-static-image-object:");
 
     n00b_gc_struct_layout_t *layout = object_range->scan_user;
     assert(layout != nullptr);
@@ -99,6 +135,10 @@ assert_static_buffer_range(const n00b_buffer_t *buf)
     assert(payload_range->len == buf->alloc_len);
     assert(payload_range->scan_kind == N00B_GC_SCAN_KIND_NONE);
     assert(payload_range->flags & N00B_STATIC_OBJECT_F_READONLY);
+    assert_static_image_identity(
+        payload_range,
+        N00B_STATIC_IDENTITY_NCC_STATIC_IMAGE_PAYLOAD,
+        "ncc-static-image-payload:");
 }
 
 static n00b_static_image_request_t

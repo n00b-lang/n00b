@@ -31,6 +31,7 @@ typedef struct n00b_runtime_t n00b_runtime_t;
 typedef struct n00b_conduit_service        n00b_conduit_service_t;
 typedef struct n00b_http_connection_pool   n00b_http_connection_pool_t;
 typedef struct n00b_acme_tls_state         n00b_acme_tls_state_t;
+typedef struct n00b_static_identity_entry_t n00b_static_identity_entry_t;
 
 /**
  * @brief Variant type for mmap registry interval trees.
@@ -44,6 +45,7 @@ typedef n00b_variant_t(n00b_mmap_info_t *, n00b_alloc_range_t *) n00b_mmap_data_
 struct n00b_mmap_ctx_t {
     n00b_interval_tree_t(n00b_mmap_data_t) *mmap_tree;
     n00b_interval_tree_t(n00b_mmap_data_t) *range_tree;
+    n00b_static_identity_entry_t *static_identities;
     _Atomic int64_t  tid_lock;
     n00b_pool_t      pool;
 };

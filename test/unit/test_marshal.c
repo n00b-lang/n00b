@@ -44,6 +44,7 @@ typedef struct {
 #define TEST_MARSHAL_OP_CPATCH UINT32_C(0xe31cbab0)
 #define TEST_MARSHAL_OP_SPATCH UINT32_C(0xe41cbab0)
 #define TEST_MARSHAL_OP_STOP   UINT32_C(0xe51cbab0)
+#define TEST_MARSHAL_OP_PSPATCH UINT32_C(0xe61cbab0)
 
 typedef struct {
     uint64_t marshal_magic;
@@ -83,6 +84,128 @@ typedef struct {
     uint64_t object_id;
     uint8_t  check[16];
 } test_marshal_spatch_record_t;
+
+typedef struct {
+    uint32_t op;
+    uint32_t record_len;
+    uint64_t vaddr;
+    uint64_t object_offset;
+    uint64_t object_len;
+    uint64_t tinfo;
+    uint32_t flags_mask;
+    uint32_t flags_value;
+    uint32_t scan_kind;
+    uint32_t identity_version;
+    uint32_t identity_kind;
+    uint32_t namespace_len;
+    uint32_t key_len;
+    uint32_t check_len;
+    uint32_t reserved;
+} test_marshal_pspatch_record_t;
+
+#define TEST_PORTABLE_STATIC_TINFO UINT64_C(0x7073746174696301)
+
+static uint64_t portable_success_src[3] = {
+    UINT64_C(0x1000000000000001),
+    UINT64_C(0x1000000000000002),
+    UINT64_C(0x1000000000000003),
+};
+static uint64_t portable_success_dst[3] = {
+    UINT64_C(0x1000000000000001),
+    UINT64_C(0x1000000000000002),
+    UINT64_C(0x1000000000000003),
+};
+static const n00b_static_identity_t portable_success_identity = {
+    .version      = N00B_STATIC_IDENTITY_VERSION,
+    .kind         = N00B_STATIC_IDENTITY_MANUAL,
+    .namespace_id = "test.marshal.portable",
+    .object_key   = "success",
+};
+
+static uint64_t portable_missing_src[3] = {
+    UINT64_C(0x2000000000000001),
+    UINT64_C(0x2000000000000002),
+    UINT64_C(0x2000000000000003),
+};
+static const n00b_static_identity_t portable_missing_identity = {
+    .version      = N00B_STATIC_IDENTITY_VERSION,
+    .kind         = N00B_STATIC_IDENTITY_MANUAL,
+    .namespace_id = "test.marshal.portable",
+    .object_key   = "missing",
+};
+
+static uint64_t portable_mutability_src[3] = {
+    UINT64_C(0x3000000000000001),
+    UINT64_C(0x3000000000000002),
+    UINT64_C(0x3000000000000003),
+};
+static uint64_t portable_mutability_dst[3] = {
+    UINT64_C(0x3000000000000001),
+    UINT64_C(0x3000000000000002),
+    UINT64_C(0x3000000000000003),
+};
+static const n00b_static_identity_t portable_mutability_identity = {
+    .version      = N00B_STATIC_IDENTITY_VERSION,
+    .kind         = N00B_STATIC_IDENTITY_MANUAL,
+    .namespace_id = "test.marshal.portable",
+    .object_key   = "mutability",
+};
+
+static uint64_t portable_duplicate_src[3] = {
+    UINT64_C(0x4000000000000001),
+    UINT64_C(0x4000000000000002),
+    UINT64_C(0x4000000000000003),
+};
+static uint64_t portable_duplicate_dst_a[3] = {
+    UINT64_C(0x4000000000000001),
+    UINT64_C(0x4000000000000002),
+    UINT64_C(0x4000000000000003),
+};
+static uint64_t portable_duplicate_dst_b[3] = {
+    UINT64_C(0x4000000000000001),
+    UINT64_C(0x4000000000000002),
+    UINT64_C(0x4000000000000003),
+};
+static const n00b_static_identity_t portable_duplicate_identity = {
+    .version      = N00B_STATIC_IDENTITY_VERSION,
+    .kind         = N00B_STATIC_IDENTITY_MANUAL,
+    .namespace_id = "test.marshal.portable",
+    .object_key   = "duplicate",
+};
+
+static uint64_t portable_check_src[3] = {
+    UINT64_C(0x5000000000000001),
+    UINT64_C(0x5000000000000002),
+    UINT64_C(0x5000000000000003),
+};
+static uint64_t portable_check_dst[3] = {
+    UINT64_C(0x5000000000000001),
+    UINT64_C(0x50000000000000ff),
+    UINT64_C(0x5000000000000003),
+};
+static const n00b_static_identity_t portable_check_identity = {
+    .version      = N00B_STATIC_IDENTITY_VERSION,
+    .kind         = N00B_STATIC_IDENTITY_MANUAL,
+    .namespace_id = "test.marshal.portable",
+    .object_key   = "check-bytes",
+};
+
+static uint64_t portable_malformed_words[3] = {
+    UINT64_C(0x6000000000000001),
+    UINT64_C(0x6000000000000002),
+    UINT64_C(0x6000000000000003),
+};
+static const n00b_static_identity_t portable_malformed_identity = {
+    .version      = N00B_STATIC_IDENTITY_VERSION,
+    .kind         = N00B_STATIC_IDENTITY_MANUAL,
+    .namespace_id = "test.marshal.portable",
+    .object_key   = "malformed",
+};
+
+static uint64_t unsupported_static_words[2] = {
+    UINT64_C(0x7000000000000001),
+    UINT64_C(0x7000000000000002),
+};
 
 typedef struct {
     n00b_arena_t    *arena;
@@ -203,6 +326,11 @@ buffer_copy_mutating_record(n00b_buffer_t *buf,
             ix += sizeof(test_marshal_spatch_record_t);
             continue;
         }
+        if (op == TEST_MARSHAL_OP_PSPATCH) {
+            test_marshal_pspatch_record_t *rec = (void *)(bytes + ix);
+            ix += rec->record_len;
+            continue;
+        }
         break;
     }
 
@@ -273,6 +401,36 @@ set_ptr_words(void *obj, uint32_t ptr_words)
 
     assert(info.kind == n00b_alloc_inline);
     info.hdr.in_line->ptr_words = ptr_words;
+}
+
+static n00b_alloc_range_t *
+register_portable_words(uint64_t *words,
+                        size_t count,
+                        const n00b_static_identity_t *identity,
+                        uint32_t flags,
+                        uint64_t object_id)
+{
+    (void)n00b_mmap_register(words,
+                             words + count,
+                             n00b_mmap_static,
+                             .file              = identity->object_key,
+                             .order_id          = object_id,
+                             .definitely_unique = false);
+    return n00b_static_object_register(words,
+                                       count * sizeof(*words),
+                                       TEST_PORTABLE_STATIC_TINFO,
+                                       .scan_kind = N00B_GC_SCAN_KIND_NONE,
+                                       .object_id = object_id,
+                                       .identity  = identity,
+                                       .flags     = flags);
+}
+
+static void
+unregister_portable_words(uint64_t *words, size_t count)
+{
+    n00b_mmap_delete_ranges(n00b_global_mem_map(n00b_get_runtime()),
+                            (uint64_t)(uintptr_t)words,
+                            (uint64_t)(uintptr_t)(words + count));
 }
 
 static void
@@ -358,6 +516,19 @@ test_static_pointer_patch(void)
     assert(copy->static_ref == &static_words[1]);
     assert(*copy->static_ref == static_words[1]);
 
+    _n00b_buffer_rlock(buf);
+    int64_t v1_len = (int64_t)buf->byte_len;
+    char   *v1_bytes = n00b_alloc_array(char, (size_t)v1_len);
+    memcpy(v1_bytes, buf->data, (size_t)v1_len);
+    _n00b_buffer_unlock(buf);
+    ((test_marshal_stream_header_t *)v1_bytes)->version = 1;
+
+    n00b_buffer_t *v1_buf = n00b_buffer_from_bytes(v1_bytes, v1_len);
+    marshal_static_ref_t *v1_copy = n00b_unmarshal_one(v1_buf,
+                                                       .target_arena = arena);
+    assert(v1_copy != nullptr);
+    assert(v1_copy->static_ref == &static_words[1]);
+
     n00b_gc_register_root(copy);
     n00b_stop_the_world();
     n00b_collect(arena);
@@ -366,6 +537,137 @@ test_static_pointer_patch(void)
     n00b_gc_unregister_root(copy);
 
     printf("  [PASS] static_pointer_patch\n");
+}
+
+static n00b_buffer_t *
+marshal_portable_ref(n00b_arena_t *arena,
+                     uint64_t *words,
+                     const n00b_static_identity_t *identity,
+                     uint32_t flags,
+                     uint64_t object_id,
+                     uint32_t base_address)
+{
+    n00b_alloc_range_t *range = register_portable_words(words, 3, identity, flags, object_id);
+    auto range_opt = n00b_mmap_range_by_address(&words[1]);
+    if (!n00b_option_is_set(range_opt)) {
+        fprintf(stderr, "portable range lookup failed after registration\n");
+    }
+    assert(n00b_option_is_set(range_opt));
+    assert(n00b_option_get(range_opt) == range);
+
+    marshal_static_ref_t *src = n00b_alloc_with_opts(marshal_static_ref_t,
+                                                     ARENA_OPTS(arena));
+    src->tag        = UINT64_C(0xcafe);
+    src->static_ref = &words[1];
+
+    n00b_marshal_ctx_t *ctx = n00b_marshal_ctx_new(.base_address = base_address);
+    n00b_buffer_t *buf = n00b_marshal_incremental(ctx, src);
+    if (buf == nullptr) {
+        fprintf(stderr,
+                "portable marshal failed: status=%d error=%s\n",
+                n00b_marshal_ctx_status(ctx),
+                n00b_marshal_ctx_error(ctx));
+    }
+    assert(buf != nullptr);
+    n00b_marshal_ctx_destroy(ctx);
+    return buf;
+}
+
+static void
+test_portable_static_pointer_relocation(void)
+{
+    n00b_arena_t *arena = n00b_new_arena(.size = 4096, .use_gc = true);
+
+    n00b_buffer_t *success = marshal_portable_ref(arena,
+                                                  portable_success_src,
+                                                  &portable_success_identity,
+                                                  N00B_STATIC_OBJECT_F_READONLY,
+                                                  UINT64_C(0x70010001),
+                                                  0x13572468u);
+    unregister_portable_words(portable_success_src, 3);
+    (void)register_portable_words(portable_success_dst,
+                                  3,
+                                  &portable_success_identity,
+                                  N00B_STATIC_OBJECT_F_READONLY,
+                                  UINT64_C(0x70010002));
+    marshal_static_ref_t *copy = n00b_unmarshal_one(success, .target_arena = arena);
+    assert(copy != nullptr);
+    assert(copy->static_ref == &portable_success_dst[1]);
+    assert(*copy->static_ref == portable_success_dst[1]);
+
+    n00b_buffer_t *missing = marshal_portable_ref(arena,
+                                                  portable_missing_src,
+                                                  &portable_missing_identity,
+                                                  N00B_STATIC_OBJECT_F_READONLY,
+                                                  UINT64_C(0x70020001),
+                                                  0x13572469u);
+    unregister_portable_words(portable_missing_src, 3);
+    assert_unmarshal_status(missing, N00B_MARSHAL_ERR_STATIC_IDENTITY_MISSING);
+
+    n00b_buffer_t *mutability = marshal_portable_ref(arena,
+                                                     portable_mutability_src,
+                                                     &portable_mutability_identity,
+                                                     N00B_STATIC_OBJECT_F_READONLY,
+                                                     UINT64_C(0x70030001),
+                                                     0x1357246au);
+    unregister_portable_words(portable_mutability_src, 3);
+    (void)register_portable_words(portable_mutability_dst,
+                                  3,
+                                  &portable_mutability_identity,
+                                  N00B_STATIC_OBJECT_F_MUTABLE,
+                                  UINT64_C(0x70030002));
+    assert_unmarshal_status(mutability, N00B_MARSHAL_ERR_STATIC_IDENTITY_MUTABILITY);
+
+    n00b_buffer_t *duplicate = marshal_portable_ref(arena,
+                                                    portable_duplicate_src,
+                                                    &portable_duplicate_identity,
+                                                    N00B_STATIC_OBJECT_F_READONLY,
+                                                    UINT64_C(0x70040001),
+                                                    0x1357246bu);
+    unregister_portable_words(portable_duplicate_src, 3);
+    (void)register_portable_words(portable_duplicate_dst_a,
+                                  3,
+                                  &portable_duplicate_identity,
+                                  N00B_STATIC_OBJECT_F_READONLY,
+                                  UINT64_C(0x70040002));
+    (void)register_portable_words(portable_duplicate_dst_b,
+                                  3,
+                                  &portable_duplicate_identity,
+                                  N00B_STATIC_OBJECT_F_READONLY,
+                                  UINT64_C(0x70040003));
+    assert_unmarshal_status(duplicate, N00B_MARSHAL_ERR_STATIC_IDENTITY_DUPLICATE);
+
+    n00b_buffer_t *check_bytes = marshal_portable_ref(arena,
+                                                      portable_check_src,
+                                                      &portable_check_identity,
+                                                      N00B_STATIC_OBJECT_F_READONLY,
+                                                      UINT64_C(0x70050001),
+                                                      0x1357246cu);
+    unregister_portable_words(portable_check_src, 3);
+    (void)register_portable_words(portable_check_dst,
+                                  3,
+                                  &portable_check_identity,
+                                  N00B_STATIC_OBJECT_F_READONLY,
+                                  UINT64_C(0x70050002));
+    assert_unmarshal_status(check_bytes, N00B_MARSHAL_ERR_STATIC_IDENTITY_CHECK_BYTES);
+
+    (void)n00b_mmap_register(unsupported_static_words,
+                             unsupported_static_words + 2,
+                             n00b_mmap_static,
+                             .file              = "unsupported-static-words",
+                             .order_id          = UINT64_C(0x70060001),
+                             .definitely_unique = false);
+    marshal_static_ref_t *unsupported = n00b_alloc_with_opts(marshal_static_ref_t,
+                                                             ARENA_OPTS(arena));
+    unsupported->tag        = UINT64_C(0x70060002);
+    unsupported->static_ref = &unsupported_static_words[0];
+    n00b_marshal_ctx_t *mctx = n00b_marshal_ctx_new(.base_address = 0x1357246du);
+    assert(n00b_marshal_incremental(mctx, unsupported) == nullptr);
+    assert(n00b_marshal_ctx_status(mctx)
+           == N00B_MARSHAL_ERR_UNSUPPORTED_STATIC_POINTER);
+    n00b_marshal_ctx_destroy(mctx);
+
+    printf("  [PASS] portable_static_pointer_relocation\n");
 }
 
 static void
@@ -425,6 +727,12 @@ static void
 mutate_spatch_unaligned(void *rec)
 {
     ((test_marshal_spatch_record_t *)rec)->vaddr += 1;
+}
+
+static void
+mutate_pspatch_unaligned(void *rec)
+{
+    ((test_marshal_pspatch_record_t *)rec)->vaddr += 1;
 }
 
 static void
@@ -542,6 +850,17 @@ test_malformed_stream_hardening(void)
                                                             TEST_MARSHAL_OP_SPATCH,
                                                             mutate_spatch_unaligned);
     assert_unmarshal_status(bad_spatch, N00B_MARSHAL_ERR_BAD_STREAM);
+
+    n00b_buffer_t *pspatch_stream = marshal_portable_ref(arena,
+                                                         portable_malformed_words,
+                                                         &portable_malformed_identity,
+                                                         N00B_STATIC_OBJECT_F_READONLY,
+                                                         UINT64_C(0x70070001),
+                                                         0x56789abcu);
+    n00b_buffer_t *bad_pspatch = buffer_copy_mutating_record(pspatch_stream,
+                                                             TEST_MARSHAL_OP_PSPATCH,
+                                                             mutate_pspatch_unaligned);
+    assert_unmarshal_status(bad_pspatch, N00B_MARSHAL_ERR_BAD_STREAM);
 
     _n00b_buffer_rlock(buf);
     int64_t len   = (int64_t)buf->byte_len;
@@ -682,6 +1001,7 @@ main(int argc, char **argv)
     printf("Running marshal tests...\n");
     test_cycle_shared_and_collision();
     test_static_pointer_patch();
+    test_portable_static_pointer_relocation();
     test_ptr_words_limits_scan_extent();
     test_bad_ptr_words_rejected();
     test_callback_scan_boundary();

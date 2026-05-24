@@ -13,6 +13,7 @@
 #include "core/mmaps.h"
 #include "core/pool.h"
 #include "core/runtime.h"
+#include "core/static_objects.h"
 #include "core/stw.h"
 
 #include <stdint.h>
@@ -21,6 +22,10 @@
 #define N00B_MARSHAL_OP_CPATCH UINT32_C(0xe31cbab0)
 #define N00B_MARSHAL_OP_SPATCH UINT32_C(0xe41cbab0)
 #define N00B_MARSHAL_OP_STOP   UINT32_C(0xe51cbab0)
+#define N00B_MARSHAL_OP_PSPATCH UINT32_C(0xe61cbab0)
+
+#define N00B_MARSHAL_MIN_VERSION 1u
+#define N00B_MARSHAL_STATIC_CHECK_MAX 16u
 
 #define N00B_MARSHAL_ALLOC_F_SOURCE_INLINE     (1u << 0)
 #define N00B_MARSHAL_ALLOC_F_SOURCE_OOB        (1u << 1)
@@ -71,6 +76,24 @@ typedef struct {
 
 typedef struct {
     uint32_t op;
+    uint32_t record_len;
+    uint64_t vaddr;
+    uint64_t object_offset;
+    uint64_t object_len;
+    uint64_t tinfo;
+    uint32_t flags_mask;
+    uint32_t flags_value;
+    uint32_t scan_kind;
+    uint32_t identity_version;
+    uint32_t identity_kind;
+    uint32_t namespace_len;
+    uint32_t key_len;
+    uint32_t check_len;
+    uint32_t reserved;
+} n00b_marshal_pspatch_record_t;
+
+typedef struct {
+    uint32_t op;
     uint32_t end_of_stream;
 } n00b_marshal_stop_record_t;
 
@@ -94,6 +117,16 @@ typedef struct {
     void                       *user_ptr;
     n00b_marshal_alloc_record_t rec;
 } n00b_unmarshal_segment_t;
+
+typedef struct {
+    uint64_t                       start;
+    uint64_t                       len;
+    uint64_t                       object_id;
+    n00b_alloc_type_info_t         tinfo;
+    n00b_gc_scan_kind_t            scan_kind;
+    uint32_t                       flags;
+    const n00b_static_identity_t  *identity;
+} n00b_marshal_static_ref_t;
 
 struct n00b_marshal_ctx_t {
     n00b_pool_t             scratch;
@@ -262,6 +295,119 @@ marshal_scan_word_count(n00b_marshal_alloc_record_t *rec)
     return user_words;
 }
 
+static n00b_marshal_status_t
+marshal_status_from_static_identity(n00b_static_identity_status_t status)
+{
+    switch (status) {
+    case N00B_STATIC_IDENTITY_OK:
+        return N00B_MARSHAL_OK;
+    case N00B_STATIC_IDENTITY_ERR_MISSING:
+        return N00B_MARSHAL_ERR_STATIC_IDENTITY_MISSING;
+    case N00B_STATIC_IDENTITY_ERR_DUPLICATE:
+        return N00B_MARSHAL_ERR_STATIC_IDENTITY_DUPLICATE;
+    case N00B_STATIC_IDENTITY_ERR_MUTABILITY:
+        return N00B_MARSHAL_ERR_STATIC_IDENTITY_MUTABILITY;
+    case N00B_STATIC_IDENTITY_ERR_TYPE:
+        return N00B_MARSHAL_ERR_STATIC_IDENTITY_TYPE;
+    case N00B_STATIC_IDENTITY_ERR_SCAN:
+        return N00B_MARSHAL_ERR_STATIC_IDENTITY_SCAN;
+    case N00B_STATIC_IDENTITY_ERR_LENGTH:
+        return N00B_MARSHAL_ERR_STATIC_IDENTITY_LENGTH;
+    case N00B_STATIC_IDENTITY_ERR_CHECK_BYTES:
+        return N00B_MARSHAL_ERR_STATIC_IDENTITY_CHECK_BYTES;
+    case N00B_STATIC_IDENTITY_ERR_NULL:
+    case N00B_STATIC_IDENTITY_ERR_INVALID:
+    default:
+        return N00B_MARSHAL_ERR_BAD_STREAM;
+    }
+}
+
+static bool
+marshal_static_identity_valid(const n00b_static_identity_t *identity)
+{
+    return identity != nullptr
+        && identity->version == N00B_STATIC_IDENTITY_VERSION
+        && identity->kind != N00B_STATIC_IDENTITY_NONE
+        && identity->kind <= N00B_STATIC_IDENTITY_MANUAL
+        && identity->namespace_id != nullptr
+        && identity->namespace_id[0] != '\0'
+        && identity->object_key != nullptr
+        && identity->object_key[0] != '\0';
+}
+
+static bool
+pspatch_expected_len(uint32_t namespace_len,
+                     uint32_t key_len,
+                     uint32_t check_len,
+                     uint32_t *out_len)
+{
+    if (namespace_len == 0 || key_len == 0
+        || check_len == 0 || check_len > N00B_MARSHAL_STATIC_CHECK_MAX) {
+        return false;
+    }
+
+    uint64_t len = sizeof(n00b_marshal_pspatch_record_t);
+    len += namespace_len;
+    len += key_len;
+    len += check_len;
+    len = align8(len);
+
+    if (len > UINT32_MAX) {
+        return false;
+    }
+
+    *out_len = (uint32_t)len;
+    return true;
+}
+
+static bool
+pspatch_lengths_for_identity(const n00b_static_identity_t *identity,
+                             uint32_t check_len,
+                             uint32_t *namespace_len,
+                             uint32_t *key_len,
+                             uint32_t *record_len)
+{
+    if (!marshal_static_identity_valid(identity)) {
+        return false;
+    }
+
+    size_t ns_len = strlen(identity->namespace_id);
+    size_t obj_len = strlen(identity->object_key);
+
+    if (ns_len > UINT32_MAX || obj_len > UINT32_MAX) {
+        return false;
+    }
+
+    *namespace_len = (uint32_t)ns_len;
+    *key_len       = (uint32_t)obj_len;
+    return pspatch_expected_len(*namespace_len, *key_len, check_len, record_len);
+}
+
+static const unsigned char *
+pspatch_namespace_bytes(const n00b_marshal_pspatch_record_t *rec)
+{
+    return (const unsigned char *)rec + sizeof(*rec);
+}
+
+static const unsigned char *
+pspatch_key_bytes(const n00b_marshal_pspatch_record_t *rec)
+{
+    return pspatch_namespace_bytes(rec) + rec->namespace_len;
+}
+
+static const unsigned char *
+pspatch_check_bytes(const n00b_marshal_pspatch_record_t *rec)
+{
+    return pspatch_key_bytes(rec) + rec->key_len;
+}
+
+static bool
+pspatch_payload_has_nul(const n00b_marshal_pspatch_record_t *rec)
+{
+    return memchr(pspatch_namespace_bytes(rec), '\0', rec->namespace_len) != nullptr
+        || memchr(pspatch_key_bytes(rec), '\0', rec->key_len) != nullptr;
+}
+
 static bool
 alloc_view(n00b_alloc_info_t              info,
            void                         **user_ptr,
@@ -391,8 +537,10 @@ emit_cpatch(n00b_marshal_ctx_t *ctx, uint64_t vaddr, uint64_t value)
 }
 
 static bool
-static_ref_view(void *addr, uint64_t *start, uint64_t *len, uint64_t *object_id)
+static_ref_view(void *addr, n00b_marshal_static_ref_t *out)
 {
+    memset(out, 0, sizeof(*out));
+
     auto range_opt = n00b_mmap_range_by_address(addr);
     if (n00b_option_is_set(range_opt)) {
         n00b_alloc_range_t *range = n00b_option_get(range_opt);
@@ -402,9 +550,15 @@ static_ref_view(void *addr, uint64_t *start, uint64_t *len, uint64_t *object_id)
         if (range->kind == n00b_mmap_static
             && (uint64_t)(uintptr_t)addr >= base
             && (uint64_t)(uintptr_t)addr < end) {
-            *start     = base;
-            *len       = range->len;
-            *object_id = range->object_id;
+            *out = (n00b_marshal_static_ref_t){
+                .start     = base,
+                .len       = range->len,
+                .object_id = range->object_id,
+                .tinfo     = range->tinfo,
+                .scan_kind = range->scan_kind,
+                .flags     = range->flags,
+                .identity  = range->identity,
+            };
             return true;
         }
     }
@@ -424,32 +578,26 @@ static_ref_view(void *addr, uint64_t *start, uint64_t *len, uint64_t *object_id)
         return false;
     }
 
-    *start     = base;
-    *len       = user_len;
-    *object_id = 0;
+    *out = (n00b_marshal_static_ref_t){
+        .start     = base,
+        .len       = user_len,
+        .object_id = 0,
+        .tinfo     = ignored.tinfo,
+        .scan_kind = ignored.scan_kind,
+        .flags     = 0,
+        .identity  = nullptr,
+    };
     return true;
 }
 
 static bool
-emit_spatch(n00b_marshal_ctx_t *ctx, uint64_t vaddr, uint64_t value)
+emit_spatch(n00b_marshal_ctx_t *ctx,
+            uint64_t vaddr,
+            uint64_t value,
+            const n00b_marshal_static_ref_t *ref)
 {
-    uint64_t static_start;
-    uint64_t static_len;
-    uint64_t object_id;
-
-    if (!static_ref_view((void *)(uintptr_t)value,
-                         &static_start,
-                         &static_len,
-                         &object_id)) {
-        marshal_set_error(&ctx->status,
-                          &ctx->error,
-                          N00B_MARSHAL_ERR_UNSUPPORTED_STATIC_POINTER,
-                          "static pointer is not a registered static object");
-        return false;
-    }
-
-    uint64_t offset = value - static_start;
-    if (offset >= static_len) {
+    uint64_t offset = value - ref->start;
+    if (offset >= ref->len) {
         marshal_set_error(&ctx->status,
                           &ctx->error,
                           N00B_MARSHAL_ERR_UNSUPPORTED_STATIC_POINTER,
@@ -457,7 +605,7 @@ emit_spatch(n00b_marshal_ctx_t *ctx, uint64_t vaddr, uint64_t value)
         return false;
     }
 
-    uint64_t remain    = static_len - offset;
+    uint64_t remain    = ref->len - offset;
     uint32_t check_len = (uint32_t)(remain < sizeof(((n00b_marshal_spatch_record_t *)0)->check)
                                        ? remain
                                        : sizeof(((n00b_marshal_spatch_record_t *)0)->check));
@@ -474,14 +622,158 @@ emit_spatch(n00b_marshal_ctx_t *ctx, uint64_t vaddr, uint64_t value)
         .check_len    = check_len,
         .vaddr        = vaddr,
         .static_addr  = value,
-        .static_start = static_start,
-        .static_len   = static_len,
-        .object_id    = object_id,
+        .static_start = ref->start,
+        .static_len   = ref->len,
+        .object_id    = ref->object_id,
     };
     memcpy(rec.check, (void *)(uintptr_t)value, check_len);
 
     bytes_append(&ctx->patches, ctx->scratch_alloc, &rec, sizeof(rec));
     return true;
+}
+
+static bool
+emit_pspatch(n00b_marshal_ctx_t *ctx,
+             uint64_t vaddr,
+             uint64_t value,
+             const n00b_marshal_static_ref_t *ref)
+{
+    const n00b_static_identity_t *identity = ref->identity;
+    if (!marshal_static_identity_valid(identity)) {
+        marshal_set_error(&ctx->status,
+                          &ctx->error,
+                          N00B_MARSHAL_ERR_UNSUPPORTED_STATIC_POINTER,
+                          "static pointer identity is malformed");
+        return false;
+    }
+
+    uint64_t offset = value - ref->start;
+    if (offset >= ref->len) {
+        marshal_set_error(&ctx->status,
+                          &ctx->error,
+                          N00B_MARSHAL_ERR_UNSUPPORTED_STATIC_POINTER,
+                          "static pointer lies outside its registered object");
+        return false;
+    }
+
+    uint64_t remain    = ref->len - offset;
+    uint32_t check_len = (uint32_t)(remain < N00B_MARSHAL_STATIC_CHECK_MAX
+                                       ? remain
+                                       : N00B_MARSHAL_STATIC_CHECK_MAX);
+    if (!check_len) {
+        marshal_set_error(&ctx->status,
+                          &ctx->error,
+                          N00B_MARSHAL_ERR_UNSUPPORTED_STATIC_POINTER,
+                          "static pointer has no bytes available for validation");
+        return false;
+    }
+
+    uint32_t namespace_len;
+    uint32_t key_len;
+    uint32_t record_len;
+    if (!pspatch_lengths_for_identity(identity,
+                                      check_len,
+                                      &namespace_len,
+                                      &key_len,
+                                      &record_len)) {
+        marshal_set_error(&ctx->status,
+                          &ctx->error,
+                          N00B_MARSHAL_ERR_UNSUPPORTED_STATIC_POINTER,
+                          "static pointer identity cannot be encoded");
+        return false;
+    }
+
+    const uint32_t flags_mask = N00B_STATIC_OBJECT_F_READONLY
+                              | N00B_STATIC_OBJECT_F_MUTABLE;
+    const uint32_t flags_value = ref->flags & flags_mask;
+    const unsigned char *check = (const unsigned char *)(uintptr_t)value;
+
+    n00b_static_identity_query_t query = {
+        .checks = N00B_STATIC_IDENTITY_CHECK_LEN
+                | N00B_STATIC_IDENTITY_CHECK_TINFO
+                | N00B_STATIC_IDENTITY_CHECK_SCAN_KIND
+                | N00B_STATIC_IDENTITY_CHECK_FLAGS
+                | N00B_STATIC_IDENTITY_CHECK_BYTES,
+        .len          = ref->len,
+        .tinfo        = ref->tinfo,
+        .scan_kind    = ref->scan_kind,
+        .flags_mask   = flags_mask,
+        .flags_value  = flags_value,
+        .check_offset = offset,
+        .check_len    = check_len,
+        .check_bytes  = check,
+    };
+
+    n00b_alloc_range_t *range = nullptr;
+    n00b_static_identity_status_t lookup = n00b_static_identity_lookup(identity,
+                                                                       &query,
+                                                                       &range);
+    if (lookup != N00B_STATIC_IDENTITY_OK) {
+        marshal_set_error(&ctx->status,
+                          &ctx->error,
+                          marshal_status_from_static_identity(lookup),
+                          "portable static pointer identity failed validation");
+        return false;
+    }
+    if (range == nullptr || (uint64_t)(uintptr_t)range->start != ref->start) {
+        marshal_set_error(&ctx->status,
+                          &ctx->error,
+                          N00B_MARSHAL_ERR_STATIC_IDENTITY_DUPLICATE,
+                          "portable static pointer identity resolved to a different object");
+        return false;
+    }
+
+    n00b_marshal_pspatch_record_t rec = {
+        .op               = N00B_MARSHAL_OP_PSPATCH,
+        .record_len       = record_len,
+        .vaddr            = vaddr,
+        .object_offset    = offset,
+        .object_len       = ref->len,
+        .tinfo            = ref->tinfo,
+        .flags_mask       = flags_mask,
+        .flags_value      = flags_value,
+        .scan_kind        = ref->scan_kind,
+        .identity_version = identity->version,
+        .identity_kind    = identity->kind,
+        .namespace_len    = namespace_len,
+        .key_len          = key_len,
+        .check_len        = check_len,
+        .reserved         = 0,
+    };
+
+    bytes_append(&ctx->patches, ctx->scratch_alloc, &rec, sizeof(rec));
+    bytes_append(&ctx->patches,
+                 ctx->scratch_alloc,
+                 identity->namespace_id,
+                 namespace_len);
+    bytes_append(&ctx->patches,
+                 ctx->scratch_alloc,
+                 identity->object_key,
+                 key_len);
+    bytes_append(&ctx->patches, ctx->scratch_alloc, check, check_len);
+
+    size_t used = sizeof(rec) + namespace_len + key_len + check_len;
+    bytes_append_zero(&ctx->patches, ctx->scratch_alloc, record_len - used);
+    return true;
+}
+
+static bool
+emit_static_patch(n00b_marshal_ctx_t *ctx, uint64_t vaddr, uint64_t value)
+{
+    n00b_marshal_static_ref_t ref;
+    if (!static_ref_view((void *)(uintptr_t)value, &ref)) {
+        marshal_set_error(&ctx->status,
+                          &ctx->error,
+                          N00B_MARSHAL_ERR_UNSUPPORTED_STATIC_POINTER,
+                          "static pointer is not a registered static object");
+        return false;
+    }
+
+    if (ref.identity != nullptr) {
+        return emit_pspatch(ctx, vaddr, value, &ref);
+    }
+
+    return emit_spatch(ctx, vaddr, value, &ref);
 }
 
 static void
@@ -536,7 +828,7 @@ scan_node(n00b_marshal_ctx_t *ctx, n00b_marshal_node_t *node)
                     break;
                 }
                 case n00b_mmap_static:
-                    if (!emit_spatch(ctx, node->vaddr + i * sizeof(uint64_t), word)) {
+                    if (!emit_static_patch(ctx, node->vaddr + i * sizeof(uint64_t), word)) {
                         return;
                     }
                     words[i]  = 0;
@@ -783,7 +1075,8 @@ stream_complete(n00b_unmarshal_ctx_t *ctx)
 
     n00b_marshal_stream_header_t *hdr = (void *)ctx->in.data;
     if (hdr->marshal_magic != N00B_MARSHAL_MAGIC
-        || hdr->version != N00B_MARSHAL_VERSION) {
+        || hdr->version < N00B_MARSHAL_MIN_VERSION
+        || hdr->version > N00B_MARSHAL_VERSION) {
         marshal_set_error(&ctx->status,
                           &ctx->error,
                           N00B_MARSHAL_ERR_BAD_STREAM,
@@ -874,6 +1167,50 @@ stream_complete(n00b_unmarshal_ctx_t *ctx)
             ix += sizeof(*rec);
             break;
         }
+        case N00B_MARSHAL_OP_PSPATCH: {
+            if (ctx->in.len - ix < sizeof(n00b_marshal_pspatch_record_t)) {
+                return false;
+            }
+            n00b_marshal_pspatch_record_t *rec = (void *)(ctx->in.data + ix);
+            uint32_t expected_len;
+            const uint32_t flags_mask = N00B_STATIC_OBJECT_F_READONLY
+                                      | N00B_STATIC_OBJECT_F_MUTABLE;
+            if (hdr->version < 2
+                || !pspatch_expected_len(rec->namespace_len,
+                                          rec->key_len,
+                                          rec->check_len,
+                                          &expected_len)
+                || rec->record_len != expected_len
+                || rec->reserved != 0
+                || (rec->vaddr >> 32) != hdr->base_address
+                || rec->object_len == 0
+                || rec->object_offset >= rec->object_len
+                || rec->check_len > rec->object_len - rec->object_offset
+                || rec->identity_version != N00B_STATIC_IDENTITY_VERSION
+                || rec->identity_kind == N00B_STATIC_IDENTITY_NONE
+                || rec->identity_kind > N00B_STATIC_IDENTITY_MANUAL
+                || rec->flags_mask != flags_mask
+                || (rec->flags_value & ~rec->flags_mask) != 0
+                || rec->scan_kind > N00B_GC_SCAN_KIND_CALLBACK) {
+                marshal_set_error(&ctx->status,
+                                  &ctx->error,
+                                  N00B_MARSHAL_ERR_BAD_STREAM,
+                                  "invalid portable static patch record");
+                return false;
+            }
+            if (ctx->in.len - ix < rec->record_len) {
+                return false;
+            }
+            if (pspatch_payload_has_nul(rec)) {
+                marshal_set_error(&ctx->status,
+                                  &ctx->error,
+                                  N00B_MARSHAL_ERR_BAD_STREAM,
+                                  "portable static patch identity contains nul bytes");
+                return false;
+            }
+            ix += rec->record_len;
+            break;
+        }
         case N00B_MARSHAL_OP_STOP: {
             if (ctx->in.len - ix < sizeof(n00b_marshal_stop_record_t)) {
                 return false;
@@ -954,6 +1291,11 @@ unmarshal_allocate_records(n00b_unmarshal_ctx_t *ctx)
             ix += sizeof(n00b_marshal_spatch_record_t);
             continue;
         }
+        if (op == N00B_MARSHAL_OP_PSPATCH) {
+            n00b_marshal_pspatch_record_t *rec = (void *)(ctx->in.data + ix);
+            ix += rec->record_len;
+            continue;
+        }
 
         n00b_marshal_alloc_record_t *rec = (void *)(ctx->in.data + ix);
         ix += sizeof(*rec);
@@ -1032,17 +1374,12 @@ unmarshal_relink_records(n00b_unmarshal_ctx_t *ctx)
                 return false;
             }
 
-            uint64_t static_start;
-            uint64_t static_len;
-            uint64_t object_id;
-            if (!static_ref_view((void *)(uintptr_t)patch->static_addr,
-                                 &static_start,
-                                 &static_len,
-                                 &object_id)
-                || static_start != patch->static_start
-                || static_len != patch->static_len
-                || (patch->object_id && object_id != patch->object_id)
-                || patch->check_len > static_len - (patch->static_addr - static_start)
+            n00b_marshal_static_ref_t ref;
+            if (!static_ref_view((void *)(uintptr_t)patch->static_addr, &ref)
+                || ref.start != patch->static_start
+                || ref.len != patch->static_len
+                || (patch->object_id && ref.object_id != patch->object_id)
+                || patch->check_len > ref.len - (patch->static_addr - ref.start)
                 || memcmp((void *)(uintptr_t)patch->static_addr,
                           patch->check,
                           patch->check_len) != 0) {
@@ -1055,6 +1392,72 @@ unmarshal_relink_records(n00b_unmarshal_ctx_t *ctx)
 
             *slot = patch->static_addr;
             ix += sizeof(*patch);
+            continue;
+        }
+        if (op == N00B_MARSHAL_OP_PSPATCH) {
+            n00b_marshal_pspatch_record_t *patch = (void *)(ctx->in.data + ix);
+            uint64_t *slot = word_slot_for_vaddr(ctx, patch->vaddr);
+            if (!slot) {
+                marshal_set_error(&ctx->status,
+                                  &ctx->error,
+                                  N00B_MARSHAL_ERR_BAD_STREAM,
+                                  "portable static patch points outside a marshaled word slot");
+                return false;
+            }
+
+            char *namespace_id = marshal_scratch_alloc(ctx->scratch_alloc,
+                                                       patch->namespace_len + 1);
+            memcpy(namespace_id, pspatch_namespace_bytes(patch), patch->namespace_len);
+            namespace_id[patch->namespace_len] = '\0';
+
+            char *object_key = marshal_scratch_alloc(ctx->scratch_alloc,
+                                                     patch->key_len + 1);
+            memcpy(object_key, pspatch_key_bytes(patch), patch->key_len);
+            object_key[patch->key_len] = '\0';
+
+            n00b_static_identity_t identity = {
+                .version      = patch->identity_version,
+                .kind         = (n00b_static_identity_kind_t)patch->identity_kind,
+                .namespace_id = namespace_id,
+                .object_key   = object_key,
+            };
+            n00b_static_identity_query_t query = {
+                .checks = N00B_STATIC_IDENTITY_CHECK_LEN
+                        | N00B_STATIC_IDENTITY_CHECK_TINFO
+                        | N00B_STATIC_IDENTITY_CHECK_SCAN_KIND
+                        | N00B_STATIC_IDENTITY_CHECK_FLAGS
+                        | N00B_STATIC_IDENTITY_CHECK_BYTES,
+                .len          = patch->object_len,
+                .tinfo        = patch->tinfo,
+                .scan_kind    = (n00b_gc_scan_kind_t)patch->scan_kind,
+                .flags_mask   = patch->flags_mask,
+                .flags_value  = patch->flags_value,
+                .check_offset = patch->object_offset,
+                .check_len    = patch->check_len,
+                .check_bytes  = pspatch_check_bytes(patch),
+            };
+
+            n00b_alloc_range_t *range = nullptr;
+            n00b_static_identity_status_t lookup = n00b_static_identity_lookup(&identity,
+                                                                               &query,
+                                                                               &range);
+            if (lookup != N00B_STATIC_IDENTITY_OK) {
+                marshal_set_error(&ctx->status,
+                                  &ctx->error,
+                                  marshal_status_from_static_identity(lookup),
+                                  "portable static patch target failed validation");
+                return false;
+            }
+            if (range == nullptr) {
+                marshal_set_error(&ctx->status,
+                                  &ctx->error,
+                                  N00B_MARSHAL_ERR_STATIC_IDENTITY_MISSING,
+                                  "portable static patch target resolved to no object");
+                return false;
+            }
+
+            *slot = (uint64_t)(uintptr_t)range->start + patch->object_offset;
+            ix += patch->record_len;
             continue;
         }
 

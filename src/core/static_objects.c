@@ -141,6 +141,9 @@ n00b_static_object_register_desc(const n00b_static_object_desc_t *desc)
         n00b_alloc_range_t *range = n00b_option_get(existing);
         if (range->start == desc->start && range->len == desc->len
             && range->object_id == desc->object_id) {
+            if (range->identity == nullptr && desc->identity != nullptr) {
+                (void)n00b_static_identity_register(desc->identity, range);
+            }
             return range;
         }
     }
@@ -157,6 +160,7 @@ n00b_static_object_register_desc(const n00b_static_object_desc_t *desc)
                                         .scan_cb   = desc->scan_cb,
                                         .scan_user = desc->scan_user,
                                         .object_id = desc->object_id,
+                                        .identity  = desc->identity,
                                         .flags     = desc->flags);
 }
 

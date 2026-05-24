@@ -132,13 +132,19 @@ memory-test APIs:
 | `tinfo` | Runtime type hash, usually `typehash(T *)`. |
 | `object_id` | Stable generated-object identity for diagnostics. |
 | `file` | Source location captured by `N00B_LOC_STRING()`. |
+| `identity` | Optional portable relocation identity for marshaled static pointers. |
 | `scan_kind`, `scan_cb`, `scan_user` | GC scan shape for object contents. |
-| `flags` | Reserved for future generated-code contracts. |
+| `flags` | Static object policy bits, including readonly versus mutable. |
 
 Descriptor lookup uses `n00b_mmap_range_by_address()`. The collector scans a
 descriptor-backed static object when a root or another scanned object points
 into that object's range. A per-collection memo prevents repeated scans of the
 same descriptor.
+
+Descriptor identities are also used by the marshaler for portable static
+pointer relocation. See [`docs/marshal.md`](marshal.md) for the difference
+between same-runtime `SPATCH` relocation and cross-binary `PSPATCH`
+relocation.
 
 ## Static Scan Policy
 
@@ -190,10 +196,11 @@ const n00b_buffer_t *hex     = ncc_static_image(.hex = "6869");
 `b"..."` is shorthand for a readonly static `n00b_buffer_t` byte payload. It
 supports ordinary C string escapes and adjacent ordinary string literal
 concatenation. The generated buffer image is readonly, descriptor-backed, and
-borrowed from static payload bytes. Unsupported registered types, mutable
-block-scope targets, bad literal argument kinds, ABI mismatches, and missing
-static initializer vtable slots are rejected at build time with ncc
-source-positioned diagnostics.
+borrowed from static payload bytes. ncc-generated rich strings, array literal
+storage, and static images carry portable static identities when descriptors
+are emitted. Unsupported registered types, mutable block-scope targets, bad
+literal argument kinds, ABI mismatches, and missing static initializer vtable
+slots are rejected at build time with ncc source-positioned diagnostics.
 
 ## Unsupported Generated Statics
 

@@ -51,15 +51,16 @@ typedef void (*n00b_static_object_iter_cb)(const n00b_static_object_desc_t *desc
     static n00b_static_object_entry_t const __n00b_static_object_entry_##desc_name             \
         N00B_STATIC_OBJECT_SECTION_POST(N00B_STATIC_OBJECT_SECTION_NAME) = &(desc_name)
 
-#define N00B_STATIC_OBJECT_DESCRIPTOR(desc_name,                                                \
-                                      object_start,                                             \
-                                      object_len,                                               \
-                                      type_hash_val,                                            \
-                                      flags_val,                                                \
-                                      scan_kind_val,                                            \
-                                      scan_cb_val,                                              \
-                                      scan_user_val,                                            \
-                                      object_id_val)                                            \
+#define N00B_STATIC_OBJECT_DESCRIPTOR_EX(desc_name,                                             \
+                                         object_start,                                          \
+                                         object_len,                                            \
+                                         type_hash_val,                                         \
+                                         flags_val,                                             \
+                                         scan_kind_val,                                         \
+                                         scan_cb_val,                                           \
+                                         scan_user_val,                                         \
+                                         object_id_val,                                         \
+                                         identity_val)                                          \
     static const n00b_static_object_desc_t desc_name = {                                        \
         .start     = (const void *)(object_start),                                              \
         .len       = (uint64_t)(object_len),                                                    \
@@ -69,9 +70,51 @@ typedef void (*n00b_static_object_iter_cb)(const n00b_static_object_desc_t *desc
         .scan_user = (void *)(scan_user_val),                                                   \
         .object_id = (uint64_t)(object_id_val),                                                 \
         .file      = N00B_LOC_STRING(),                                                        \
+        .identity  = (identity_val),                                                           \
         .flags     = (uint32_t)(flags_val),                                                     \
     };                                                                                          \
     N00B_STATIC_OBJECT_LINK_DESCRIPTOR(desc_name)
+
+#define N00B_STATIC_OBJECT_DESCRIPTOR(desc_name,                                                \
+                                      object_start,                                             \
+                                      object_len,                                               \
+                                      type_hash_val,                                            \
+                                      flags_val,                                                \
+                                      scan_kind_val,                                            \
+                                      scan_cb_val,                                              \
+                                      scan_user_val,                                            \
+                                      object_id_val)                                            \
+    N00B_STATIC_OBJECT_DESCRIPTOR_EX(desc_name,                                                 \
+                                     object_start,                                              \
+                                     object_len,                                                \
+                                     type_hash_val,                                             \
+                                     flags_val,                                                 \
+                                     scan_kind_val,                                             \
+                                     scan_cb_val,                                               \
+                                     scan_user_val,                                             \
+                                     object_id_val,                                             \
+                                     nullptr)
+
+#define N00B_STATIC_OBJECT_DESCRIPTOR_WITH_IDENTITY(desc_name,                                  \
+                                                    object_start,                               \
+                                                    object_len,                                 \
+                                                    type_hash_val,                              \
+                                                    flags_val,                                  \
+                                                    scan_kind_val,                              \
+                                                    scan_cb_val,                                \
+                                                    scan_user_val,                              \
+                                                    object_id_val,                              \
+                                                    identity_val)                               \
+    N00B_STATIC_OBJECT_DESCRIPTOR_EX(desc_name,                                                 \
+                                     object_start,                                              \
+                                     object_len,                                                \
+                                     type_hash_val,                                             \
+                                     flags_val,                                                 \
+                                     scan_kind_val,                                             \
+                                     scan_cb_val,                                               \
+                                     scan_user_val,                                             \
+                                     object_id_val,                                             \
+                                     identity_val)
 
 #define N00B_STATIC_OBJECT_DESCRIPTOR_FOR(desc_name,                                            \
                                           object_name,                                          \
@@ -90,6 +133,36 @@ typedef void (*n00b_static_object_iter_cb)(const n00b_static_object_desc_t *desc
                                   scan_cb_val,                                                  \
                                   scan_user_val,                                                \
                                   object_id_val)
+
+#define N00B_STATIC_OBJECT_DESCRIPTOR_FOR_WITH_IDENTITY(desc_name,                              \
+                                                        object_name,                            \
+                                                        type_hash_val,                          \
+                                                        flags_val,                              \
+                                                        scan_kind_val,                          \
+                                                        scan_cb_val,                            \
+                                                        scan_user_val,                          \
+                                                        object_id_val,                          \
+                                                        identity_val)                           \
+    N00B_STATIC_OBJECT_DESCRIPTOR_WITH_IDENTITY(desc_name,                                      \
+                                                &(object_name),                                  \
+                                                sizeof(object_name),                             \
+                                                type_hash_val,                                   \
+                                                flags_val,                                       \
+                                                scan_kind_val,                                   \
+                                                scan_cb_val,                                     \
+                                                scan_user_val,                                   \
+                                                object_id_val,                                   \
+                                                identity_val)
+
+extern n00b_static_identity_status_t
+n00b_static_identity_register(const n00b_static_identity_t *identity,
+                              n00b_alloc_range_t *range);
+extern n00b_static_identity_status_t
+n00b_static_identity_lookup(const n00b_static_identity_t *identity,
+                            const n00b_static_identity_query_t *query,
+                            n00b_alloc_range_t **out_range);
+extern const char *
+n00b_static_identity_status_name(n00b_static_identity_status_t status);
 
 extern size_t n00b_static_objects_enumerate(n00b_static_object_iter_cb cb,
                                             void *user);

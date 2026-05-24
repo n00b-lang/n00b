@@ -15,6 +15,9 @@ typedef struct {
     uint64_t                 type_hash;
     char                    *symbol_prefix;
     char                    *entry_attr;
+    char                    *identity_namespace;
+    char                    *identity_object_key;
+    char                    *identity_payload_key;
     bool                     readonly;
     bool                     have_abi;
     n00b_static_image_abi_t  abi;
@@ -348,6 +351,18 @@ parse_request(char *input, helper_request_t *req)
             free(req->entry_attr);
             req->entry_attr = hex_decode_cstr(trim(line + 15));
         }
+        else if (strncmp(line, "identity_namespace_hex ", 23) == 0) {
+            free(req->identity_namespace);
+            req->identity_namespace = hex_decode_cstr(trim(line + 23));
+        }
+        else if (strncmp(line, "identity_object_key_hex ", 24) == 0) {
+            free(req->identity_object_key);
+            req->identity_object_key = hex_decode_cstr(trim(line + 24));
+        }
+        else if (strncmp(line, "identity_payload_key_hex ", 25) == 0) {
+            free(req->identity_payload_key);
+            req->identity_payload_key = hex_decode_cstr(trim(line + 25));
+        }
         else if (strncmp(line, "arg_count ", 10) == 0) {
             if (!parse_u64_token(trim(line + 10), &req->expected_arg_count)) {
                 return false;
@@ -376,6 +391,9 @@ free_request(helper_request_t *req)
     free(req->type_name);
     free(req->symbol_prefix);
     free(req->entry_attr);
+    free(req->identity_namespace);
+    free(req->identity_object_key);
+    free(req->identity_payload_key);
     for (uint64_t i = 0; i < req->arg_count; i++) {
         free((void *)req->args[i].name);
         if (req->args[i].kind == N00B_STATIC_INIT_ARG_BYTES) {
@@ -422,6 +440,9 @@ main(int argc, char **argv)
         .object_flags       = parsed.readonly ? N00B_STATIC_OBJECT_F_READONLY
                                                : N00B_STATIC_OBJECT_F_MUTABLE,
         .required_scan_kind = scan_kind,
+        .identity_namespace = parsed.identity_namespace,
+        .identity_object_key = parsed.identity_object_key,
+        .identity_payload_key = parsed.identity_payload_key,
     };
 
     n00b_static_image_builder_t builder;

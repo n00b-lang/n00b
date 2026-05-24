@@ -98,6 +98,70 @@ static_image_hash_cstr(const char *s)
     return h;
 }
 
+static char *
+static_image_c_string_literal(const char *s)
+{
+    size_t cap = 2;
+    for (const unsigned char *p = (const unsigned char *)(s ? s : ""); *p; p++) {
+        switch (*p) {
+        case '\\':
+        case '"':
+        case '\n':
+        case '\r':
+        case '\t':
+            cap += 2;
+            break;
+        default:
+            cap += (*p >= 0x20 && *p < 0x7f) ? 1 : 4;
+            break;
+        }
+    }
+
+    char *out = malloc(cap + 1);
+    if (!out) {
+        return nullptr;
+    }
+
+    char *w = out;
+    *w++ = '"';
+    for (const unsigned char *p = (const unsigned char *)(s ? s : ""); *p; p++) {
+        switch (*p) {
+        case '\\':
+            *w++ = '\\';
+            *w++ = '\\';
+            break;
+        case '"':
+            *w++ = '\\';
+            *w++ = '"';
+            break;
+        case '\n':
+            *w++ = '\\';
+            *w++ = 'n';
+            break;
+        case '\r':
+            *w++ = '\\';
+            *w++ = 'r';
+            break;
+        case '\t':
+            *w++ = '\\';
+            *w++ = 't';
+            break;
+        default:
+            if (*p >= 0x20 && *p < 0x7f) {
+                *w++ = (char)*p;
+            }
+            else {
+                sprintf(w, "\\%03o", (unsigned)*p);
+                w += 4;
+            }
+            break;
+        }
+    }
+    *w++ = '"';
+    *w = '\0';
+    return out;
+}
+
 static int
 hex_digit_value(unsigned char c)
 {
@@ -260,6 +324,43 @@ n00b_buffer_static_init(n00b_static_image_builder_t *builder)
 
     const char *prefix     = request->symbol_prefix;
     const char *entry_attr = request->entry_attr ? request->entry_attr : "";
+    bool have_identity = request->identity_namespace
+                      && request->identity_namespace[0]
+                      && request->identity_object_key
+                      && request->identity_object_key[0]
+                      && request->identity_payload_key
+                      && request->identity_payload_key[0];
+    char *identity_namespace_lit = have_identity
+                                 ? static_image_c_string_literal(
+                                       request->identity_namespace)
+                                 : nullptr;
+    char *identity_object_key_lit = have_identity
+                                  ? static_image_c_string_literal(
+                                        request->identity_object_key)
+                                  : nullptr;
+    char *identity_payload_key_lit = have_identity
+                                   ? static_image_c_string_literal(
+                                         request->identity_payload_key)
+                                   : nullptr;
+    if (have_identity
+        && (!identity_namespace_lit || !identity_object_key_lit
+            || !identity_payload_key_lit)) {
+        free(payload);
+        free(hex_decoded);
+        free(identity_namespace_lit);
+        free(identity_object_key_lit);
+        free(identity_payload_key_lit);
+        return n00b_static_image_builder_fail(
+            builder, N00B_STATIC_IMAGE_ERR_INITIALIZER,
+            "out of memory while building buffer static image identities");
+    }
+
+    char payload_identity_ref[128];
+    char object_identity_ref[128];
+    snprintf(payload_identity_ref, sizeof(payload_identity_ref),
+             "&%s_data_id", prefix);
+    snprintf(object_identity_ref, sizeof(object_identity_ref),
+             "&%s_obj_id", prefix);
     uint64_t payload_id = static_image_hash_cstr(prefix) ^ UINT64_C(0x7061796c6f6164);
     uint64_t object_id  = static_image_hash_cstr(prefix) ^ UINT64_C(0x627566666572);
     unsigned contract_version = (unsigned)N00B_STATIC_IMAGE_CONTRACT_VERSION;
@@ -267,6 +368,21 @@ n00b_buffer_static_init(n00b_static_image_builder_t *builder)
     unsigned borrowed_flags   = (unsigned)N00B_BUF_F_BORROWED;
 
     n00b_static_image_builder_set_expr(builder, "&%s_obj", prefix);
+
+    if (have_identity) {
+        n00b_static_image_builder_append(
+            builder,
+            "static const n00b_static_identity_t %s_data_id={"
+            ".version=1u,"
+            ".kind=N00B_STATIC_IDENTITY_NCC_STATIC_IMAGE_PAYLOAD,"
+            ".namespace_id=%s,.object_key=%s};"
+            "static const n00b_static_identity_t %s_obj_id={"
+            ".version=1u,"
+            ".kind=N00B_STATIC_IDENTITY_NCC_STATIC_IMAGE_OBJECT,"
+            ".namespace_id=%s,.object_key=%s};",
+            prefix, identity_namespace_lit, identity_payload_key_lit,
+            prefix, identity_namespace_lit, identity_object_key_lit);
+    }
 
     n00b_static_image_builder_append(
         builder,
@@ -282,6 +398,7 @@ n00b_buffer_static_init(n00b_static_image_builder_t *builder)
         ".tinfo=0,.scan_kind=N00B_GC_SCAN_KIND_NONE,"
         ".scan_cb=nullptr,.scan_user=nullptr,"
         ".object_id=%lluULL,.file=__FILE__,"
+        ".identity=%s,"
         ".flags=N00B_STATIC_OBJECT_F_READONLY};"
         "static const n00b_static_object_desc_t * const %s_data_entry %s=&%s_data_desc;"
         "static const n00b_static_image_request_t %s_request={"
@@ -296,7 +413,10 @@ n00b_buffer_static_init(n00b_static_image_builder_t *builder)
         ".size_t_bytes=(uint8_t)sizeof(size_t),.char_bits=8,"
         ".endian=%u},"
         ".object_flags=N00B_STATIC_OBJECT_F_READONLY,"
-        ".required_scan_kind=N00B_GC_SCAN_KIND_CALLBACK};"
+        ".required_scan_kind=N00B_GC_SCAN_KIND_CALLBACK,"
+        ".identity_namespace=%s,"
+        ".identity_object_key=%s,"
+        ".identity_payload_key=%s};"
         "_Static_assert((__builtin_offsetof(n00b_buffer_t,data)%%sizeof(void*))==0,"
         "\"buffer data pointer must be pointer-aligned\");"
         "_Static_assert((sizeof(n00b_buffer_t)%%sizeof(void*))==0,"
@@ -315,6 +435,7 @@ n00b_buffer_static_init(n00b_static_image_builder_t *builder)
         ".tinfo=%lluULL,.scan_kind=N00B_GC_SCAN_KIND_CALLBACK,"
         ".scan_cb=n00b_gc_scan_cb_struct_layout,.scan_user=&%s_shape,"
         ".object_id=%lluULL,.file=__FILE__,"
+        ".identity=%s,"
         ".flags=N00B_STATIC_OBJECT_F_READONLY};"
         "static const n00b_static_object_desc_t * const %s_obj_entry %s=&%s_obj_desc;"
         "static const n00b_static_image_dependency_t %s_deps[]={"
@@ -327,16 +448,21 @@ n00b_buffer_static_init(n00b_static_image_builder_t *builder)
         ".scan_user=&%s_shape,.dependencies=%s_deps,.dependency_count=1};",
         prefix, prefix, prefix,
         (unsigned long long)payload_id,
+        have_identity ? payload_identity_ref : "nullptr",
         prefix, entry_attr, prefix,
         prefix, contract_version,
         (unsigned long long)request->type_hash, prefix,
         prefix, (unsigned long long)byte_len,
         contract_version, target_endian,
+        have_identity ? identity_namespace_lit : "nullptr",
+        have_identity ? identity_object_key_lit : "nullptr",
+        have_identity ? identity_payload_key_lit : "nullptr",
         prefix, prefix, prefix,
         prefix, prefix, (unsigned long long)byte_len,
         (unsigned long long)alloc_len, borrowed_flags,
         prefix, prefix, prefix, (unsigned long long)request->type_hash,
         prefix, (unsigned long long)object_id,
+        have_identity ? object_identity_ref : "nullptr",
         prefix, entry_attr, prefix,
         prefix, prefix,
         prefix, contract_version,
@@ -344,6 +470,9 @@ n00b_buffer_static_init(n00b_static_image_builder_t *builder)
 
     free(payload);
     free(hex_decoded);
+    free(identity_namespace_lit);
+    free(identity_object_key_lit);
+    free(identity_payload_key_lit);
     return N00B_STATIC_IMAGE_OK;
 }
 

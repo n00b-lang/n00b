@@ -89,6 +89,7 @@ typedef struct {
     void                    *scan_user;
     n00b_allocator_t        *allocator;
     const char              *file;
+    const n00b_static_identity_t *identity;
     uint64_t                 object_id;
     uint64_t                 len;
     n00b_mmap_rec_kind_t     kind;

@@ -115,6 +115,59 @@ enum n00b_static_object_flags_t : uint32_t {
 };
 typedef enum n00b_static_object_flags_t n00b_static_object_flags_t;
 
+#define N00B_STATIC_IDENTITY_VERSION 1u
+
+typedef enum n00b_static_identity_kind_t : uint8_t {
+    N00B_STATIC_IDENTITY_NONE                     = 0,
+    N00B_STATIC_IDENTITY_NCC_RSTR                 = 1,
+    N00B_STATIC_IDENTITY_NCC_ARRAY_DATA           = 2,
+    N00B_STATIC_IDENTITY_NCC_STATIC_IMAGE_OBJECT  = 3,
+    N00B_STATIC_IDENTITY_NCC_STATIC_IMAGE_PAYLOAD = 4,
+    N00B_STATIC_IDENTITY_MANUAL                   = 5,
+} n00b_static_identity_kind_t;
+
+typedef enum n00b_static_identity_status_t : uint8_t {
+    N00B_STATIC_IDENTITY_OK = 0,
+    N00B_STATIC_IDENTITY_ERR_NULL,
+    N00B_STATIC_IDENTITY_ERR_INVALID,
+    N00B_STATIC_IDENTITY_ERR_MISSING,
+    N00B_STATIC_IDENTITY_ERR_DUPLICATE,
+    N00B_STATIC_IDENTITY_ERR_MUTABILITY,
+    N00B_STATIC_IDENTITY_ERR_TYPE,
+    N00B_STATIC_IDENTITY_ERR_SCAN,
+    N00B_STATIC_IDENTITY_ERR_LENGTH,
+    N00B_STATIC_IDENTITY_ERR_CHECK_BYTES,
+} n00b_static_identity_status_t;
+
+typedef enum n00b_static_identity_query_checks_t : uint32_t {
+    N00B_STATIC_IDENTITY_CHECK_NONE       = 0,
+    N00B_STATIC_IDENTITY_CHECK_LEN        = 1u << 0,
+    N00B_STATIC_IDENTITY_CHECK_TINFO      = 1u << 1,
+    N00B_STATIC_IDENTITY_CHECK_SCAN_KIND  = 1u << 2,
+    N00B_STATIC_IDENTITY_CHECK_FLAGS      = 1u << 3,
+    N00B_STATIC_IDENTITY_CHECK_BYTES      = 1u << 4,
+} n00b_static_identity_query_checks_t;
+
+typedef struct n00b_static_identity_t {
+    uint32_t                    version;
+    n00b_static_identity_kind_t kind;
+    uint8_t                     reserved[3];
+    const char                 *namespace_id;
+    const char                 *object_key;
+} n00b_static_identity_t;
+
+typedef struct n00b_static_identity_query_t {
+    uint32_t                checks;
+    uint64_t                len;
+    n00b_alloc_type_info_t  tinfo;
+    n00b_gc_scan_kind_t     scan_kind;
+    uint32_t                flags_mask;
+    uint32_t                flags_value;
+    uint64_t                check_offset;
+    uint32_t                check_len;
+    const unsigned char    *check_bytes;
+} n00b_static_identity_query_t;
+
 typedef struct n00b_static_object_desc_t {
     const void             *start;
     uint64_t                len;
@@ -124,6 +177,7 @@ typedef struct n00b_static_object_desc_t {
     void                   *scan_user;
     uint64_t                object_id;
     const char             *file;
+    const n00b_static_identity_t *identity;
     uint32_t                flags;
 } n00b_static_object_desc_t;
 
@@ -198,6 +252,9 @@ typedef struct n00b_static_image_request_t {
     n00b_static_image_abi_t          target_abi;
     uint32_t                         object_flags;
     n00b_gc_scan_kind_t              required_scan_kind;
+    const char                      *identity_namespace;
+    const char                      *identity_object_key;
+    const char                      *identity_payload_key;
 } n00b_static_image_request_t;
 
 typedef struct n00b_static_image_dependency_t {
