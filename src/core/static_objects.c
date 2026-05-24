@@ -4,6 +4,7 @@
 #include "core/static_objects.h"
 #include "core/mmaps.h"
 #include "core/rwlock.h"
+#include "util/assert.h"
 
 #if defined(_WIN32)
 #include "core/platform.h"
@@ -164,7 +165,18 @@ n00b_static_object_register_desc(const n00b_static_object_desc_t *desc)
             // cached hash, prefer the existing value (descriptor lookup
             // is idempotent and matching descriptors should agree on the
             // hash); otherwise adopt the descriptor's value, which may
-            // itself be zero (uncached).
+            // itself be zero (uncached). Defense-in-depth: if both the
+            // existing range and the new descriptor carry nonzero cached
+            // hashes, they must agree -- a mismatch would silently drop
+            // the second descriptor's value, which is a build-time
+            // correctness bug we want to surface loudly (WP-011 Phase 3a
+            // audit W1 carry-forward).
+            n00b_require(range->cached_hash == (n00b_uint128_t)0
+                             || desc->cached_hash == (n00b_uint128_t)0
+                             || range->cached_hash == desc->cached_hash,
+                         "build-time hash conflict: two static descriptors "
+                         "map to the same range with disagreeing cached_hash "
+                         "values");
             if (range->cached_hash == (n00b_uint128_t)0) {
                 range->cached_hash = desc->cached_hash;
             }

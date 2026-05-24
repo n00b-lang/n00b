@@ -273,10 +273,21 @@ test_static_image_request_validation(void)
     assert(n00b_static_image_validate_request(&req)
            == N00B_STATIC_IMAGE_ERR_UNREGISTERED_TYPE);
 
-    req.type_hash = typehash(n00b_dict_untyped_t *);
+    // WP-011 Phase 3b changed n00b_dict_untyped_t's static-layout policy
+    // from default-deny to constructor-image (with required_scan_kind =
+    // N00B_GC_SCAN_KIND_CALLBACK).  Use n00b_table_t to keep the
+    // "transient/deny" rejection path covered (table is STATIC_TRANSIENT).
+    req.type_hash = typehash(n00b_table_t *);
     req.required_scan_kind = N00B_GC_SCAN_KIND_DEFAULT;
     assert(n00b_static_image_validate_request(&req)
            == N00B_STATIC_IMAGE_ERR_UNSUPPORTED_POLICY);
+
+    // n00b_dict_untyped_t is now constructor-image, but the validation
+    // still fails on scan-kind mismatch (default vs callback).
+    req.type_hash = typehash(n00b_dict_untyped_t *);
+    req.required_scan_kind = N00B_GC_SCAN_KIND_DEFAULT;
+    assert(n00b_static_image_validate_request(&req)
+           == N00B_STATIC_IMAGE_ERR_SCAN_KIND);
 
     printf("  [PASS] static image request validation\n");
 }

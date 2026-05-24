@@ -13,6 +13,7 @@
 #include "core/alloc.h"
 #include "core/gc_map.h"
 #include "core/hash.h"
+#include "core/data_lock.h"
 
 #define N00B_DICT_UNTYPED_MIN_SIZE_LOG 4
 #define N00B_DICT_UNTYPED_MIN_SIZE     (1 << N00B_DICT_UNTYPED_MIN_SIZE_LOG)
@@ -46,7 +47,13 @@ struct n00b_dict_untyped_t {
     _Atomic uint32_t                     insertion_epoch;
     _Atomic n00b_isize_t                 wait_ct; // Waiting on migration
     _Atomic n00b_isize_t                 length;  // Items in dict
-    n00b_futex_t                         futex;
+    // `_migration_state` is the migration coordination word for the
+    // lock-free table-resize protocol, NOT a user-facing lock. The
+    // user-facing rwlock lives in the `lock` slot below (locked by
+    // default for `n00b_dict_untyped_init` with `locked = true`, nullptr
+    // when `locked = false`; static dict images default to nullptr).
+    n00b_futex_t                         _migration_state;
+    n00b_rwlock_t                       *lock;
     uint32_t                             skip_obj_hash : 1;
     // GC scan shape for the bucket-array backing store.  Buckets hold
     // key+value pointer fields, so the default is DEFAULT (legacy
@@ -148,6 +155,9 @@ _n00b_dict_untyped_cas(n00b_dict_untyped_t *d,
  * @kw allocator      Allocator for internal storage (nullptr = runtime default).
  * @kw hash           Hash function for keys (nullptr = n00b_hash_word).
  * @kw skip_obj_hash  If true, use the raw key bits instead of calling the hash function.
+ * @kw locked         If true (default), allocate a fresh rwlock for the
+ *                    `lock` slot; if false, leave `lock` nullptr (private,
+ *                    single-thread use).
  */
 extern void
 n00b_dict_untyped_init(n00b_dict_untyped_t *dict) _kargs
@@ -156,6 +166,7 @@ n00b_dict_untyped_init(n00b_dict_untyped_t *dict) _kargs
     n00b_allocator_t    *allocator      = nullptr;
     n00b_hash_fn         hash           = nullptr;
     bool                 skip_obj_hash  = false;
+    bool                 locked         = true;
     n00b_gc_scan_kind_t  scan_kind      = N00B_GC_SCAN_KIND_DEFAULT;
     n00b_gc_scan_cb_t    scan_cb        = nullptr;
     void                *scan_user      = nullptr;

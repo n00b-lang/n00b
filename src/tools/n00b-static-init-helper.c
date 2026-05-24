@@ -4,12 +4,30 @@
 #include <string.h>
 
 #include "n00b.h"
+#include "adt/dict.h"
 #include "core/rwlock.h"
 #include "core/static_image.h"
 #include "core/type_info.h"
 
 extern void n00b_init_simple(int argc, char *argv[]);
 extern void n00b_shutdown(void);
+
+// Per-pair record for `container_kind dict` requests. Mirrors the list
+// element stream's single-`cinit` shape, but carries paired key/value
+// initializer expressions plus a precomputed key hash (the helper does
+// not have access to ncc's full hash machinery for arbitrary keys, so
+// ncc -- or the test fixture in Phase 3b -- precomputes the hash and
+// passes it as 16 raw little-endian bytes per pair).  `emit_cached_hash`
+// is the per-key opt-in for emitting the cached_hash slot on the key's
+// static-object descriptor.
+typedef struct {
+    char    *key_expr;
+    char    *value_expr;
+    bool     have_hash;
+    uint64_t hash_lo;
+    uint64_t hash_hi;
+    bool     emit_cached_hash;
+} dict_pair_t;
 
 typedef struct {
     char                    *type_name;
@@ -39,6 +57,25 @@ typedef struct {
     char                   **cinit_items;
     uint64_t                 cinit_count;
     uint64_t                 cinit_cap;
+    // Dict-specific request fields. The list/array paths leave these
+    // zero-initialized and ignore them.
+    char                    *key_type_name;
+    uint64_t                 key_type_hash;
+    char                    *key_scan_kind;
+    char                    *key_scan_cb;
+    char                    *key_scan_user;
+    char                    *key_shape_decl;
+    char                    *value_type_name;
+    uint64_t                 value_type_hash;
+    char                    *value_scan_kind;
+    char                    *value_scan_cb;
+    char                    *value_scan_user;
+    char                    *value_shape_decl;
+    bool                     skip_obj_hash;
+    bool                     cached_hash_emit_default;
+    dict_pair_t             *dict_pairs;
+    uint64_t                 dict_pair_count;
+    uint64_t                 dict_pair_cap;
 } helper_request_t;
 
 static char *
@@ -240,6 +277,24 @@ append_cinit(helper_request_t *req, char *expr)
 }
 
 static bool
+append_dict_pair(helper_request_t *req, dict_pair_t pair)
+{
+    if (req->dict_pair_count == req->dict_pair_cap) {
+        uint64_t new_cap = req->dict_pair_cap ? req->dict_pair_cap * 2u : 8u;
+        dict_pair_t *new_items =
+            realloc(req->dict_pairs, (size_t)new_cap * sizeof(*new_items));
+        if (!new_items) {
+            return false;
+        }
+        req->dict_pairs    = new_items;
+        req->dict_pair_cap = new_cap;
+    }
+
+    req->dict_pairs[req->dict_pair_count++] = pair;
+    return true;
+}
+
+static bool
 parse_abi_line(char *line, helper_request_t *req)
 {
     char *p = line;
@@ -303,6 +358,107 @@ parse_arg_line(char *line, helper_request_t *req)
         }
         if (!append_cinit(req, expr)) {
             free(expr);
+            return false;
+        }
+        return true;
+    }
+
+    if (strcmp(kind, "pair") == 0) {
+        // Pair record shape:
+        //   arg <name|-> pair cinit <key_len> <key_hex> <val_len> <val_hex>
+        //       [hash <hash_lo_hex> <hash_hi_hex>] [emit_hash <0|1>]
+        // `name` is reserved for future per-pair labelling; "-" is used
+        // for unnamed pairs (the helper does not consume the name today).
+        char *subkind = next_token(&p);
+        if (!subkind || strcmp(subkind, "cinit") != 0) {
+            free((void *)arg.name);
+            return false;
+        }
+
+        uint64_t key_len = 0;
+        if (!parse_u64_token(next_token(&p), &key_len)) {
+            free((void *)arg.name);
+            return false;
+        }
+
+        char *key_hex_tok = next_token(&p);
+        if (!key_hex_tok) {
+            free((void *)arg.name);
+            return false;
+        }
+        bool  ok       = false;
+        char *key_expr = hex_decode_exact(key_hex_tok, key_len, true, &ok);
+        if (!ok) {
+            free((void *)arg.name);
+            return false;
+        }
+
+        uint64_t val_len = 0;
+        if (!parse_u64_token(next_token(&p), &val_len)) {
+            free((void *)arg.name);
+            free(key_expr);
+            return false;
+        }
+
+        char *val_hex_tok = next_token(&p);
+        if (!val_hex_tok) {
+            free((void *)arg.name);
+            free(key_expr);
+            return false;
+        }
+        ok = false;
+        char *val_expr = hex_decode_exact(val_hex_tok, val_len, true, &ok);
+        if (!ok) {
+            free((void *)arg.name);
+            free(key_expr);
+            return false;
+        }
+
+        dict_pair_t pair = {
+            .key_expr         = key_expr,
+            .value_expr       = val_expr,
+            .have_hash        = false,
+            .hash_lo          = 0,
+            .hash_hi          = 0,
+            .emit_cached_hash = req->cached_hash_emit_default,
+        };
+
+        // Optional trailing modifiers.
+        char *modifier = next_token(&p);
+        while (modifier) {
+            if (strcmp(modifier, "hash") == 0) {
+                if (!parse_u64_token(next_token(&p), &pair.hash_lo)
+                    || !parse_u64_token(next_token(&p), &pair.hash_hi)) {
+                    free((void *)arg.name);
+                    free(key_expr);
+                    free(val_expr);
+                    return false;
+                }
+                pair.have_hash = true;
+            }
+            else if (strcmp(modifier, "emit_hash") == 0) {
+                uint64_t flag = 0;
+                if (!parse_u64_token(next_token(&p), &flag)) {
+                    free((void *)arg.name);
+                    free(key_expr);
+                    free(val_expr);
+                    return false;
+                }
+                pair.emit_cached_hash = (flag != 0);
+            }
+            else {
+                free((void *)arg.name);
+                free(key_expr);
+                free(val_expr);
+                return false;
+            }
+            modifier = next_token(&p);
+        }
+
+        free((void *)arg.name);
+        if (!append_dict_pair(req, pair)) {
+            free(key_expr);
+            free(val_expr);
             return false;
         }
         return true;
@@ -576,6 +732,158 @@ parse_request(char *input, helper_request_t *req)
                 return false;
             }
         }
+        else if (strncmp(line, "key_type_hex ", 13) == 0) {
+            free(req->key_type_name);
+            req->key_type_name = hex_decode_cstr(trim(line + 13));
+            if (!req->key_type_name) {
+                fprintf(stderr, "bad request line %llu: invalid key_type_hex",
+                        (unsigned long long)line_no);
+                return false;
+            }
+        }
+        else if (strncmp(line, "key_type_hash ", 14) == 0) {
+            if (!parse_u64_token(trim(line + 14), &req->key_type_hash)) {
+                fprintf(stderr, "bad request line %llu: invalid key_type_hash",
+                        (unsigned long long)line_no);
+                return false;
+            }
+        }
+        else if (strncmp(line, "key_scan_kind ", 14) == 0) {
+            free(req->key_scan_kind);
+            req->key_scan_kind = dup_cstr(trim(line + 14));
+            if (!req->key_scan_kind) {
+                fprintf(stderr, "bad request line %llu: invalid key_scan_kind",
+                        (unsigned long long)line_no);
+                return false;
+            }
+        }
+        else if (strncmp(line, "key_scan_cb_hex ", 16) == 0) {
+            free(req->key_scan_cb);
+            req->key_scan_cb = hex_decode_cstr(trim(line + 16));
+            if (!req->key_scan_cb) {
+                fprintf(stderr, "bad request line %llu: invalid key_scan_cb_hex",
+                        (unsigned long long)line_no);
+                return false;
+            }
+        }
+        else if (strncmp(line, "key_scan_user_hex ", 18) == 0) {
+            free(req->key_scan_user);
+            req->key_scan_user = hex_decode_cstr(trim(line + 18));
+            if (!req->key_scan_user) {
+                fprintf(stderr,
+                        "bad request line %llu: invalid key_scan_user_hex",
+                        (unsigned long long)line_no);
+                return false;
+            }
+        }
+        else if (strcmp(line, "key_shape_decl_hex") == 0) {
+            free(req->key_shape_decl);
+            req->key_shape_decl = dup_cstr("");
+            if (!req->key_shape_decl) {
+                return false;
+            }
+        }
+        else if (strncmp(line, "key_shape_decl_hex ", 19) == 0) {
+            free(req->key_shape_decl);
+            req->key_shape_decl = hex_decode_cstr(trim(line + 19));
+            if (!req->key_shape_decl) {
+                fprintf(stderr,
+                        "bad request line %llu: invalid key_shape_decl_hex",
+                        (unsigned long long)line_no);
+                return false;
+            }
+        }
+        else if (strncmp(line, "value_type_hex ", 15) == 0) {
+            free(req->value_type_name);
+            req->value_type_name = hex_decode_cstr(trim(line + 15));
+            if (!req->value_type_name) {
+                fprintf(stderr,
+                        "bad request line %llu: invalid value_type_hex",
+                        (unsigned long long)line_no);
+                return false;
+            }
+        }
+        else if (strncmp(line, "value_type_hash ", 16) == 0) {
+            if (!parse_u64_token(trim(line + 16), &req->value_type_hash)) {
+                fprintf(stderr,
+                        "bad request line %llu: invalid value_type_hash",
+                        (unsigned long long)line_no);
+                return false;
+            }
+        }
+        else if (strncmp(line, "value_scan_kind ", 16) == 0) {
+            free(req->value_scan_kind);
+            req->value_scan_kind = dup_cstr(trim(line + 16));
+            if (!req->value_scan_kind) {
+                fprintf(stderr,
+                        "bad request line %llu: invalid value_scan_kind",
+                        (unsigned long long)line_no);
+                return false;
+            }
+        }
+        else if (strncmp(line, "value_scan_cb_hex ", 18) == 0) {
+            free(req->value_scan_cb);
+            req->value_scan_cb = hex_decode_cstr(trim(line + 18));
+            if (!req->value_scan_cb) {
+                fprintf(stderr,
+                        "bad request line %llu: invalid value_scan_cb_hex",
+                        (unsigned long long)line_no);
+                return false;
+            }
+        }
+        else if (strncmp(line, "value_scan_user_hex ", 20) == 0) {
+            free(req->value_scan_user);
+            req->value_scan_user = hex_decode_cstr(trim(line + 20));
+            if (!req->value_scan_user) {
+                fprintf(stderr,
+                        "bad request line %llu: invalid value_scan_user_hex",
+                        (unsigned long long)line_no);
+                return false;
+            }
+        }
+        else if (strcmp(line, "value_shape_decl_hex") == 0) {
+            free(req->value_shape_decl);
+            req->value_shape_decl = dup_cstr("");
+            if (!req->value_shape_decl) {
+                return false;
+            }
+        }
+        else if (strncmp(line, "value_shape_decl_hex ", 21) == 0) {
+            free(req->value_shape_decl);
+            req->value_shape_decl = hex_decode_cstr(trim(line + 21));
+            if (!req->value_shape_decl) {
+                fprintf(stderr,
+                        "bad request line %llu: invalid value_shape_decl_hex",
+                        (unsigned long long)line_no);
+                return false;
+            }
+        }
+        else if (strncmp(line, "skip_obj_hash ", 14) == 0) {
+            uint64_t value = 0;
+            if (!parse_u64_token(trim(line + 14), &value)) {
+                fprintf(stderr,
+                        "bad request line %llu: invalid skip_obj_hash",
+                        (unsigned long long)line_no);
+                return false;
+            }
+            req->skip_obj_hash = (value != 0);
+        }
+        else if (strncmp(line, "cached_hash_emit ", 17) == 0) {
+            const char *value = trim(line + 17);
+            if (strcmp(value, "yes") == 0) {
+                req->cached_hash_emit_default = true;
+            }
+            else if (strcmp(value, "no") == 0) {
+                req->cached_hash_emit_default = false;
+            }
+            else {
+                fprintf(stderr,
+                        "bad request line %llu: invalid cached_hash_emit "
+                        "(expected 'yes' or 'no')",
+                        (unsigned long long)line_no);
+                return false;
+            }
+        }
         else {
             fprintf(stderr, "bad request line %llu: unknown field '%s'",
                     (unsigned long long)line_no, line);
@@ -585,17 +893,20 @@ parse_request(char *input, helper_request_t *req)
         line = next;
     }
 
+    uint64_t supplied_args = req->arg_count + req->cinit_count
+                             + req->dict_pair_count;
     if (!req->type_name || req->type_hash == 0 || !req->symbol_prefix
         || !req->entry_attr || !req->have_abi
-        || req->arg_count + req->cinit_count != req->expected_arg_count) {
+        || supplied_args != req->expected_arg_count) {
         fprintf(stderr,
                 "bad request: missing required fields or arg_count mismatch "
                 "(type=%d type_hash=%llu prefix=%d entry_attr=%d abi=%d "
-                "args=%llu cinit=%llu expected=%llu)",
+                "args=%llu cinit=%llu pairs=%llu expected=%llu)",
                 req->type_name != NULL, (unsigned long long)req->type_hash,
                 req->symbol_prefix != NULL, req->entry_attr != NULL,
                 req->have_abi, (unsigned long long)req->arg_count,
                 (unsigned long long)req->cinit_count,
+                (unsigned long long)req->dict_pair_count,
                 (unsigned long long)req->expected_arg_count);
         return false;
     }
@@ -619,6 +930,16 @@ free_request(helper_request_t *req)
     free(req->identity_namespace);
     free(req->identity_object_key);
     free(req->identity_payload_key);
+    free(req->key_type_name);
+    free(req->key_scan_kind);
+    free(req->key_scan_cb);
+    free(req->key_scan_user);
+    free(req->key_shape_decl);
+    free(req->value_type_name);
+    free(req->value_scan_kind);
+    free(req->value_scan_cb);
+    free(req->value_scan_user);
+    free(req->value_shape_decl);
     for (uint64_t i = 0; i < req->arg_count; i++) {
         free((void *)req->args[i].name);
         if (req->args[i].kind == N00B_STATIC_INIT_ARG_BYTES) {
@@ -630,6 +951,11 @@ free_request(helper_request_t *req)
         free(req->cinit_items[i]);
     }
     free(req->cinit_items);
+    for (uint64_t i = 0; i < req->dict_pair_count; i++) {
+        free(req->dict_pairs[i].key_expr);
+        free(req->dict_pairs[i].value_expr);
+    }
+    free(req->dict_pairs);
 }
 
 static void
@@ -1048,6 +1374,471 @@ emit_array_image(const helper_request_t *req)
     return 0;
 }
 
+static uint64_t
+pow2_ceil_u64(uint64_t v)
+{
+    if (v <= 1) {
+        return 1;
+    }
+    uint64_t r = 1;
+    while (r < v) {
+        r <<= 1;
+    }
+    return r;
+}
+
+// Emit a static dict image. Mirrors emit_list_image()'s shape but for
+// the typed dict layout (store header + buckets + keys + values arrays).
+//
+// Lock model: static dict images are LOCKABLE but NOT locked by default
+// (per D-070, superseding D-068). The dict object's `lock` slot is a
+// `n00b_rwlock_t *` mirroring the WP-010 list precedent; the helper
+// emits `.lock = nullptr` (or omits it via C zero-fill) so the static
+// dict starts in the unlocked state. Heap dict constructors opt into a
+// lock via `n00b_dict_new` (locked) or `n00b_dict_new_private`
+// (unlocked).
+//
+// The dict also carries `_migration_state` (renamed from the legacy
+// `futex` field), the migration coordination word for the lock-free
+// table-resize protocol. This is NOT a user-facing mutex; it gates
+// writers during a store migration, not ordinary reads/writes. The
+// helper emits `._migration_state = 0`, which is the protocol's
+// "initialized, no migration in progress" state.
+static int
+emit_dict_image(const helper_request_t *req)
+{
+    if (!req->key_type_name || !req->value_type_name || !req->data_type_hash
+        || req->dict_pair_count != req->container_len) {
+        fprintf(stderr,
+                "bad n00b dict static initializer request: missing key/value "
+                "metadata or pair count mismatch");
+        return 6;
+    }
+
+    uint64_t entry_count = req->container_len;
+    uint64_t cap = pow2_ceil_u64(entry_count);
+    if (cap < (uint64_t)N00B_DICT_MIN_SIZE) {
+        cap = (uint64_t)N00B_DICT_MIN_SIZE;
+    }
+    // The caller-supplied container_cap is informational; if present, it
+    // must agree with the computed capacity to avoid silent drift.
+    if (req->container_cap != 0 && req->container_cap != cap) {
+        fprintf(stderr,
+                "bad n00b dict static initializer request: container_cap "
+                "(%llu) does not match dict capacity formula "
+                "max(pow2(len),%d)=%llu",
+                (unsigned long long)req->container_cap,
+                N00B_DICT_MIN_SIZE,
+                (unsigned long long)cap);
+        return 6;
+    }
+    uint64_t mask = cap - 1;
+    uint32_t threshold = (uint32_t)(cap - (cap >> 2) - 1);
+
+    bool pointer_target = req->container_target
+                       && strcmp(req->container_target, "pointer") == 0;
+    const char *flags = req->readonly ? "N00B_STATIC_OBJECT_F_READONLY"
+                                      : "N00B_STATIC_OBJECT_F_MUTABLE";
+    const char *obj_const = req->readonly ? "const " : "";
+
+    const char *key_scan_kind = or_default(req->key_scan_kind,
+                                           "N00B_GC_SCAN_KIND_NONE");
+    const char *key_scan_cb = or_default(req->key_scan_cb, "nullptr");
+    const char *key_scan_user = or_default(req->key_scan_user, "nullptr");
+    const char *value_scan_kind = or_default(req->value_scan_kind,
+                                             "N00B_GC_SCAN_KIND_NONE");
+    const char *value_scan_cb = or_default(req->value_scan_cb, "nullptr");
+    const char *value_scan_user = or_default(req->value_scan_user, "nullptr");
+
+    // The dict-level scan_kind reflects the user's logical scan policy
+    // (matching the runtime dict's stored scan_kind / scan_cb / scan_user
+    // which is replicated into bucket/key/value backing arrays). For the
+    // static image the dict object itself uses CALLBACK with a struct
+    // layout that finds the `store` pointer; the keys/values arrays each
+    // get their own scan policy.
+    const char *dict_logical_scan_kind = key_scan_kind;
+    if (strcmp(dict_logical_scan_kind, "N00B_GC_SCAN_KIND_NONE") == 0) {
+        dict_logical_scan_kind = value_scan_kind;
+    }
+    const char *dict_logical_scan_cb   = key_scan_cb;
+    const char *dict_logical_scan_user = key_scan_user;
+
+    uint64_t store_id = helper_hash_cstr(req->symbol_prefix)
+                      ^ UINT64_C(0x646963747374);  // 'dictst'
+    uint64_t buckets_id = helper_hash_cstr(req->symbol_prefix)
+                        ^ UINT64_C(0x646963746263);  // 'dictbc'
+    uint64_t keys_id = helper_hash_cstr(req->symbol_prefix)
+                     ^ UINT64_C(0x6469636b65);  // 'dicke'
+    uint64_t vals_id = helper_hash_cstr(req->symbol_prefix)
+                     ^ UINT64_C(0x646963766c);  // 'dicvl'
+    uint64_t obj_id = helper_hash_cstr(req->symbol_prefix)
+                    ^ UINT64_C(0x646963746f626a);  // 'dictobj'
+    unsigned contract_version = (unsigned)req->abi.version;
+    unsigned target_endian    = (unsigned)req->abi.endian;
+
+    // Slot-assign each pair by linear probing from `hash & mask`. Detect
+    // duplicate keys (same precomputed hash landing on the same probe
+    // path with the same bucket already taken).
+    int64_t *slot_to_pair = malloc((size_t)cap * sizeof(*slot_to_pair));
+    if (!slot_to_pair) {
+        fprintf(stderr, "out of memory while building dict static image");
+        return 6;
+    }
+    for (uint64_t s = 0; s < cap; s++) {
+        slot_to_pair[s] = -1;
+    }
+
+    for (uint64_t i = 0; i < entry_count; i++) {
+        const dict_pair_t *pair = &req->dict_pairs[i];
+        if (!pair->have_hash) {
+            fprintf(stderr,
+                    "bad n00b dict static initializer request: pair %llu "
+                    "is missing the precomputed key hash",
+                    (unsigned long long)i);
+            free(slot_to_pair);
+            return 6;
+        }
+
+        uint64_t start = pair->hash_lo & mask;
+        bool     placed = false;
+        for (uint64_t probe = 0; probe < cap; probe++) {
+            uint64_t s = (start + probe) & mask;
+            int64_t  occupant = slot_to_pair[s];
+            if (occupant == -1) {
+                slot_to_pair[s] = (int64_t)i;
+                placed = true;
+                break;
+            }
+            const dict_pair_t *other = &req->dict_pairs[occupant];
+            if (other->hash_lo == pair->hash_lo
+                && other->hash_hi == pair->hash_hi) {
+                fprintf(stderr,
+                        "bad n00b dict static initializer request: duplicate "
+                        "key hash at pair indices %lld and %llu (likely a "
+                        "duplicate key in the dict literal)",
+                        (long long)occupant, (unsigned long long)i);
+                free(slot_to_pair);
+                return 6;
+            }
+        }
+        if (!placed) {
+            fprintf(stderr,
+                    "bad n00b dict static initializer request: probe span "
+                    "exhausted placing pair %llu (capacity %llu, count %llu)",
+                    (unsigned long long)i, (unsigned long long)cap,
+                    (unsigned long long)entry_count);
+            free(slot_to_pair);
+            return 6;
+        }
+    }
+
+    printf("NCC_STATIC_INIT_OK ");
+    if (pointer_target) {
+        printf("&%s_obj\n", req->symbol_prefix);
+    }
+    else {
+        // Value-target initializer: a designated initializer for the
+        // user's typed dict struct. Field set matches N00B_BASE_DICT_FIELDS.
+        printf("{.store=(void *)&%s_store,"
+               ".fn=nullptr,.allocator=nullptr,"
+               ".insertion_epoch=0,.wait_ct=0,.length=(n00b_isize_t)%lluULL,"
+               "._migration_state=0,.lock=nullptr,.cache=0,.skip_obj_hash=%u,"
+               ".scan_kind=%s,.scan_cb=%s,.scan_user=%s}\n",
+               req->symbol_prefix,
+               (unsigned long long)entry_count,
+               req->skip_obj_hash ? 1u : 0u,
+               dict_logical_scan_kind, dict_logical_scan_cb,
+               dict_logical_scan_user);
+    }
+
+    emit_identity_decls(req, pointer_target);
+    printf("%s", req->key_shape_decl ? req->key_shape_decl : "");
+    printf("%s", req->value_shape_decl ? req->value_shape_decl : "");
+
+    // Buckets array. Empty slots are zero-initialized (hv = 0).
+    printf("static n00b_dict_bucket_t %s_buckets[%llu]={",
+           req->symbol_prefix, (unsigned long long)cap);
+    bool first_bucket = true;
+    for (uint64_t s = 0; s < cap; s++) {
+        if (!first_bucket) {
+            putchar(',');
+        }
+        first_bucket = false;
+        int64_t pair_idx = slot_to_pair[s];
+        if (pair_idx < 0) {
+            // Empty slot.
+            printf("{}");
+        }
+        else {
+            const dict_pair_t *pair = &req->dict_pairs[pair_idx];
+            uint32_t insert_order = (uint32_t)(pair_idx + 1);
+            printf("{.hv=((n00b_uint128_t)0x%016llxULL<<64)"
+                   "|(n00b_uint128_t)0x%016llxULL,"
+                   ".insert_order=(uint32_t)%uu,.flags=0}",
+                   (unsigned long long)pair->hash_hi,
+                   (unsigned long long)pair->hash_lo,
+                   (unsigned)insert_order);
+        }
+    }
+    printf("};");
+
+    // Keys array. Initialized at each occupied slot with the user-supplied
+    // key expression; empty slots use {} (zero-init for the key type).
+    printf("static %s %s_keys[%llu]={",
+           req->key_type_name, req->symbol_prefix,
+           (unsigned long long)cap);
+    bool first_key = true;
+    for (uint64_t s = 0; s < cap; s++) {
+        if (!first_key) {
+            putchar(',');
+        }
+        first_key = false;
+        int64_t pair_idx = slot_to_pair[s];
+        if (pair_idx < 0) {
+            printf("{}");
+        }
+        else {
+            fputs(req->dict_pairs[pair_idx].key_expr, stdout);
+        }
+    }
+    printf("};");
+
+    // Values array, same shape.
+    printf("static %s %s_values[%llu]={",
+           req->value_type_name, req->symbol_prefix,
+           (unsigned long long)cap);
+    bool first_val = true;
+    for (uint64_t s = 0; s < cap; s++) {
+        if (!first_val) {
+            putchar(',');
+        }
+        first_val = false;
+        int64_t pair_idx = slot_to_pair[s];
+        if (pair_idx < 0) {
+            printf("{}");
+        }
+        else {
+            fputs(req->dict_pairs[pair_idx].value_expr, stdout);
+        }
+    }
+    printf("};");
+
+    // Buckets descriptor (POD; scan_kind NONE; mutable so subsequent
+    // runtime puts can use it).
+    printf("static const n00b_static_object_desc_t %s_buckets_desc={"
+           ".start=(const void*)%s_buckets,"
+           ".len=(uint64_t)sizeof(%s_buckets),"
+           ".tinfo=0,.scan_kind=N00B_GC_SCAN_KIND_NONE,"
+           ".scan_cb=nullptr,.scan_user=nullptr,"
+           ".object_id=%lluULL,.file=__FILE__,.identity=nullptr,"
+           ".flags=N00B_STATIC_OBJECT_F_MUTABLE};",
+           req->symbol_prefix, req->symbol_prefix, req->symbol_prefix,
+           (unsigned long long)buckets_id);
+    printf("static const n00b_static_object_desc_t * const "
+           "%s_buckets_entry %s=&%s_buckets_desc;",
+           req->symbol_prefix, req->entry_attr ? req->entry_attr : "",
+           req->symbol_prefix);
+
+    // Keys descriptor.
+    printf("static const n00b_static_object_desc_t %s_keys_desc={"
+           ".start=(const void*)%s_keys,"
+           ".len=(uint64_t)sizeof(%s_keys),"
+           ".tinfo=0,.scan_kind=%s,.scan_cb=%s,.scan_user=%s,"
+           ".object_id=%lluULL,.file=__FILE__,.identity=nullptr,"
+           ".flags=N00B_STATIC_OBJECT_F_MUTABLE};",
+           req->symbol_prefix, req->symbol_prefix, req->symbol_prefix,
+           key_scan_kind, key_scan_cb, key_scan_user,
+           (unsigned long long)keys_id);
+    printf("static const n00b_static_object_desc_t * const "
+           "%s_keys_entry %s=&%s_keys_desc;",
+           req->symbol_prefix, req->entry_attr ? req->entry_attr : "",
+           req->symbol_prefix);
+
+    // Values descriptor.
+    printf("static const n00b_static_object_desc_t %s_values_desc={"
+           ".start=(const void*)%s_values,"
+           ".len=(uint64_t)sizeof(%s_values),"
+           ".tinfo=0,.scan_kind=%s,.scan_cb=%s,.scan_user=%s,"
+           ".object_id=%lluULL,.file=__FILE__,.identity=nullptr,"
+           ".flags=N00B_STATIC_OBJECT_F_MUTABLE};",
+           req->symbol_prefix, req->symbol_prefix, req->symbol_prefix,
+           value_scan_kind, value_scan_cb, value_scan_user,
+           (unsigned long long)vals_id);
+    printf("static const n00b_static_object_desc_t * const "
+           "%s_values_entry %s=&%s_values_desc;",
+           req->symbol_prefix, req->entry_attr ? req->entry_attr : "",
+           req->symbol_prefix);
+
+    // Dict store header. We emit it via the type-erased layout because
+    // every typed `n00b_dict_store_t(K, V)` parameterization shares the
+    // same field offsets (last_slot, threshold, used_count, buckets,
+    // keys, values are all word/pointer sized).
+    printf("static __n00b_internal_type_erased_store_t %s_store={"
+           ".last_slot=(uint32_t)%uu,.threshold=(uint32_t)%uu,"
+           ".used_count=%uu,"
+           ".buckets=%s_buckets,"
+           ".keys=(void**)%s_keys,"
+           ".values=(void**)%s_values};",
+           req->symbol_prefix,
+           (unsigned)(cap - 1u), (unsigned)threshold,
+           (unsigned)entry_count,
+           req->symbol_prefix, req->symbol_prefix, req->symbol_prefix);
+
+    // Store descriptor. The store itself contains three pointer fields
+    // (buckets, keys, values); use CALLBACK + struct_layout to point GC
+    // at them, mirroring how the heap dict's store backing alloc is
+    // tracked.
+    printf("static const uint64_t %s_store_offsets[]={"
+           "__builtin_offsetof(__n00b_internal_type_erased_store_t,buckets)"
+           "/sizeof(void*),"
+           "__builtin_offsetof(__n00b_internal_type_erased_store_t,keys)"
+           "/sizeof(void*),"
+           "__builtin_offsetof(__n00b_internal_type_erased_store_t,values)"
+           "/sizeof(void*)};",
+           req->symbol_prefix);
+    printf("static n00b_gc_struct_layout_t %s_store_shape={"
+           ".stride=(sizeof(__n00b_internal_type_erased_store_t)/sizeof(void*)),"
+           ".count=1,.offset_count=3,.offsets=%s_store_offsets};",
+           req->symbol_prefix, req->symbol_prefix);
+    printf("static const n00b_static_object_desc_t %s_store_desc={"
+           ".start=(const void*)&%s_store,"
+           ".len=(uint64_t)sizeof(%s_store),"
+           ".tinfo=%lluULL,.scan_kind=N00B_GC_SCAN_KIND_CALLBACK,"
+           ".scan_cb=n00b_gc_scan_cb_struct_layout,"
+           ".scan_user=&%s_store_shape,"
+           ".object_id=%lluULL,.file=__FILE__,.identity=",
+           req->symbol_prefix, req->symbol_prefix, req->symbol_prefix,
+           (unsigned long long)req->data_type_hash, req->symbol_prefix,
+           (unsigned long long)store_id);
+    printf("%s", has_identity(req) ? "&" : "nullptr");
+    if (has_identity(req)) {
+        printf("%s_payload_id", req->symbol_prefix);
+    }
+    printf(",.flags=N00B_STATIC_OBJECT_F_MUTABLE};");
+    printf("static const n00b_static_object_desc_t * const "
+           "%s_store_entry %s=&%s_store_desc;",
+           req->symbol_prefix, req->entry_attr ? req->entry_attr : "",
+           req->symbol_prefix);
+
+    if (pointer_target) {
+        // Pointer-target dict literal: emit a top-level static dict
+        // object whose address the user-supplied pointer is initialized
+        // to. The dict object's only GC-relevant pointer is its `store`
+        // field (offset 0).
+        printf("_Static_assert((__builtin_offsetof(%s,store)%%sizeof(void*))==0,"
+               "\"dict store pointer must be pointer-aligned\");",
+               req->type_name);
+        printf("static const uint64_t %s_obj_offsets[]={"
+               "__builtin_offsetof(%s,store)/sizeof(void*)};",
+               req->symbol_prefix, req->type_name);
+        printf("static n00b_gc_struct_layout_t %s_obj_shape={"
+               ".stride=(sizeof(%s)/sizeof(void*)),.count=1,"
+               ".offset_count=1,.offsets=%s_obj_offsets};",
+               req->symbol_prefix, req->type_name, req->symbol_prefix);
+        printf("static %s%s %s_obj={"
+               ".store=(void *)&%s_store,"
+               ".fn=nullptr,.allocator=nullptr,"
+               ".insertion_epoch=0,.wait_ct=0,.length=(n00b_isize_t)%lluULL,"
+               "._migration_state=0,.lock=nullptr,.cache=0,.skip_obj_hash=%u,"
+               ".scan_kind=%s,.scan_cb=%s,.scan_user=%s};",
+               obj_const, req->type_name, req->symbol_prefix,
+               req->symbol_prefix,
+               (unsigned long long)entry_count,
+               req->skip_obj_hash ? 1u : 0u,
+               dict_logical_scan_kind, dict_logical_scan_cb,
+               dict_logical_scan_user);
+        printf("static const n00b_static_object_desc_t %s_obj_desc={"
+               ".start=(const void*)&%s_obj,"
+               ".len=(uint64_t)sizeof(%s_obj),"
+               ".tinfo=%lluULL,.scan_kind=N00B_GC_SCAN_KIND_CALLBACK,"
+               ".scan_cb=n00b_gc_scan_cb_struct_layout,"
+               ".scan_user=&%s_obj_shape,"
+               ".object_id=%lluULL,.file=__FILE__,.identity=",
+               req->symbol_prefix, req->symbol_prefix, req->symbol_prefix,
+               (unsigned long long)req->type_hash, req->symbol_prefix,
+               (unsigned long long)obj_id);
+        printf("%s", has_identity(req) ? "&" : "nullptr");
+        if (has_identity(req)) {
+            printf("%s_obj_id", req->symbol_prefix);
+        }
+        printf(",.flags=%s};", flags);
+        printf("static const n00b_static_object_desc_t * const "
+               "%s_obj_entry %s=&%s_obj_desc;",
+               req->symbol_prefix, req->entry_attr ? req->entry_attr : "",
+               req->symbol_prefix);
+    }
+
+    // Static image request/dependencies/response for marshal/dependency
+    // tracking. The dependency list covers the store, buckets, keys,
+    // values (and, for pointer-target, the dict object itself).
+    printf("static const n00b_static_image_request_t %s_request={"
+           ".version=%u,"
+           ".type_hash=%lluULL,.type_name=",
+           req->symbol_prefix, contract_version,
+           (unsigned long long)req->type_hash);
+    emit_c_string_literal(req->type_name);
+    printf(",.symbol_prefix=");
+    emit_c_string_literal(req->symbol_prefix);
+    printf(",.entry_attr=");
+    emit_c_string_literal(req->entry_attr ? req->entry_attr : "");
+    printf(",.payload_kind=N00B_STATIC_IMAGE_PAYLOAD_NONE,"
+           ".payload=nullptr,.payload_len=0,.args=nullptr,.arg_count=0,"
+           ".target_abi={.version=%u,"
+           ".pointer_bytes=(uint8_t)sizeof(void*),"
+           ".size_t_bytes=(uint8_t)sizeof(size_t),.char_bits=8,"
+           ".endian=%u},"
+           ".object_flags=%s,.required_scan_kind=N00B_GC_SCAN_KIND_CALLBACK,",
+           contract_version, target_endian, flags);
+    emit_request_identity_fields(req);
+    printf("};");
+
+    if (pointer_target) {
+        printf("static const n00b_static_image_dependency_t %s_deps[]={"
+               "{.desc=&%s_store_desc,.relocation_offset=__builtin_offsetof(%s,store),"
+               ".role=\"store\"},"
+               "{.desc=&%s_buckets_desc,.relocation_offset=0,.role=\"buckets\"},"
+               "{.desc=&%s_keys_desc,.relocation_offset=0,.role=\"keys\"},"
+               "{.desc=&%s_values_desc,.relocation_offset=0,.role=\"values\"}};",
+               req->symbol_prefix, req->symbol_prefix, req->type_name,
+               req->symbol_prefix, req->symbol_prefix, req->symbol_prefix);
+        printf("static const n00b_static_image_response_t %s_response "
+               "__attribute__((used))={"
+               ".version=%u,"
+               ".request=&%s_request,"
+               ".object_start=(const void*)&%s_obj,"
+               ".object_len=(uint64_t)sizeof(%s_obj),"
+               ".scan_kind=N00B_GC_SCAN_KIND_CALLBACK,"
+               ".scan_cb=n00b_gc_scan_cb_struct_layout,"
+               ".scan_user=&%s_obj_shape,.dependencies=%s_deps,"
+               ".dependency_count=4};",
+               req->symbol_prefix, contract_version,
+               req->symbol_prefix, req->symbol_prefix,
+               req->symbol_prefix, req->symbol_prefix, req->symbol_prefix);
+    }
+    else {
+        printf("static const n00b_static_image_dependency_t %s_deps[]={"
+               "{.desc=&%s_store_desc,.relocation_offset=0,.role=\"store\"},"
+               "{.desc=&%s_buckets_desc,.relocation_offset=0,.role=\"buckets\"},"
+               "{.desc=&%s_keys_desc,.relocation_offset=0,.role=\"keys\"},"
+               "{.desc=&%s_values_desc,.relocation_offset=0,.role=\"values\"}};",
+               req->symbol_prefix, req->symbol_prefix, req->symbol_prefix,
+               req->symbol_prefix, req->symbol_prefix);
+        printf("static const n00b_static_image_response_t %s_response "
+               "__attribute__((used))={"
+               ".version=%u,"
+               ".request=&%s_request,"
+               ".object_start=nullptr,.object_len=0,"
+               ".scan_kind=N00B_GC_SCAN_KIND_NONE,.scan_cb=nullptr,"
+               ".scan_user=nullptr,.dependencies=%s_deps,"
+               ".dependency_count=4};",
+               req->symbol_prefix, contract_version,
+               req->symbol_prefix, req->symbol_prefix);
+    }
+
+    free(slot_to_pair);
+    return 0;
+}
+
 int
 main(int argc, char **argv)
 {
@@ -1073,6 +1864,14 @@ main(int argc, char **argv)
 
     if (parsed.container_kind && strcmp(parsed.container_kind, "list") == 0) {
         int status = emit_list_image(&parsed);
+        n00b_shutdown();
+        free(input);
+        free_request(&parsed);
+        return status;
+    }
+
+    if (parsed.container_kind && strcmp(parsed.container_kind, "dict") == 0) {
+        int status = emit_dict_image(&parsed);
         n00b_shutdown();
         free(input);
         free_request(&parsed);

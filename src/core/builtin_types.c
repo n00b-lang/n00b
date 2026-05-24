@@ -4,6 +4,7 @@
 #include "core/buffer.h"
 #include "slay/codegen_builtins.h"
 #include "core/hash.h"
+#include "adt/dict.h"
 #include "adt/dict_untyped.h"
 #include "adt/interval_tree.h"
 #include "display/render/plane.h"
@@ -161,11 +162,19 @@ n00b_register_builtin_types(void)
         N00B_CORE_METHOD(N00B_BI_TO_STRING, n00b_buffer_to_string),
     );
 
-    // n00b_dict_untyped_t — kargs constructor, lock-free.
+    // n00b_dict_untyped_t — kargs constructor, lock-free. Static dict
+    // images are produced by the build-time helper's `container_kind dict`
+    // path (paired key/value request stream); the vtable initializer
+    // exists so the type registry accepts dict static layouts and so
+    // mistakenly-routed direct static-image builds surface a clear error
+    // instead of an "unsupported policy" rejection.
     N00B_TYPE_REGISTER(n00b_dict_untyped_t,
-        N00B_TYPE_STATIC_DENY("dictionary static image policy is not implemented"),
+        N00B_TYPE_STATIC_CONSTRUCTOR_IMAGE(N00B_GC_SCAN_KIND_CALLBACK,
+                                           "dict static initializer available via container helper"),
         N00B_CORE_METHOD(N00B_BI_CONSTRUCTOR, n00b_dict_untyped_init),
         N00B_CTOR_KARGS,
+        N00B_CORE_METHOD(N00B_BI_STATIC_INITIALIZER, n00b_dict_static_init),
+        N00B_STATIC_INIT_VARGS,
     );
 
     // n00b_interval_tree_t is now a generic macro (parameterized per data type).
