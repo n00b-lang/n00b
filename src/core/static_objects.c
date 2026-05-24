@@ -159,6 +159,15 @@ n00b_static_object_register_desc(const n00b_static_object_desc_t *desc)
             if (range->identity == nullptr && desc->identity != nullptr) {
                 (void)n00b_static_identity_register(desc->identity, range);
             }
+            // Propagate the descriptor's build-time cached hash into the
+            // existing range record. If the range already has a nonzero
+            // cached hash, prefer the existing value (descriptor lookup
+            // is idempotent and matching descriptors should agree on the
+            // hash); otherwise adopt the descriptor's value, which may
+            // itself be zero (uncached).
+            if (range->cached_hash == (n00b_uint128_t)0) {
+                range->cached_hash = desc->cached_hash;
+            }
             if (desc->flags & N00B_STATIC_OBJECT_F_INIT_RWLOCK) {
                 n00b_rwlock_t *lock = (n00b_rwlock_t *)desc->start;
                 if (!lock->inited) {
@@ -184,8 +193,13 @@ n00b_static_object_register_desc(const n00b_static_object_desc_t *desc)
                                      .object_id = desc->object_id,
                                      .identity  = desc->identity,
                                      .flags     = desc->flags);
-    if (range && (desc->flags & N00B_STATIC_OBJECT_F_INIT_RWLOCK)) {
-        n00b_rw_init((n00b_rwlock_t *)desc->start);
+    if (range) {
+        // Copy the descriptor's build-time cached hash into the runtime
+        // range record. Zero remains the "uncached" sentinel.
+        range->cached_hash = desc->cached_hash;
+        if (desc->flags & N00B_STATIC_OBJECT_F_INIT_RWLOCK) {
+            n00b_rw_init((n00b_rwlock_t *)desc->start);
+        }
     }
 
     return range;

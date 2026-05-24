@@ -181,6 +181,17 @@ typedef struct n00b_static_object_desc_t {
     const char             *file;
     const n00b_static_identity_t *identity;
     uint32_t                flags;
+    // Build-time-written cached pointer-key hash. Zero = uncached. The
+    // static-init helper writes a nonzero value here for key-bearing
+    // static objects; the static-range registration path copies this
+    // into n00b_alloc_range_t.cached_hash so n00b_hash() can
+    // short-circuit on static-range hits. Placed at the end of the
+    // struct so existing descriptor emitters that don't yet supply the
+    // field zero-fill it via C's partial aggregate initializer rule.
+    // The underlying type matches the `n00b_uint128_t` typedef below;
+    // we spell it as `unsigned _BitInt(128)` directly here because the
+    // typedef is introduced later in this header.
+    unsigned _BitInt(128)   cached_hash;
 } n00b_static_object_desc_t;
 
 #define N00B_STATIC_IMAGE_CONTRACT_VERSION 1u

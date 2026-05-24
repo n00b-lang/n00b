@@ -60,6 +60,23 @@ n00b_hash(void *obj, n00b_hash_fn fn)
         }
 
     }
+    else if (ainfo.kind == n00b_alloc_static_range) {
+        // Descriptor-backed static objects carry a build-time-written
+        // cached hash in the range record (see D-066). Zero means
+        // "uncached"; fall through to recompute. Nonzero means the
+        // build-time helper (or an explicit descriptor template) has
+        // supplied a pointer-key hash; return it directly.
+        //
+        // Unlike the heap-side path below, we do NOT write back to the
+        // range's cached_hash on a recompute: the value is
+        // build-time-authoritative for static objects, and runtime
+        // recomputes for static-range hits MUST NOT mutate the slot.
+        n00b_uint128_t cached = ainfo.hdr.range->cached_hash;
+
+        if (cached) {
+            return cached;
+        }
+    }
 
     // If the caller didn't supply a hash function, try the vtable for any
     // object with type metadata. Only heap objects get their hash cached.

@@ -1314,6 +1314,12 @@ static_descriptor_test = executable('test_static_descriptor',
 )
 test('static_descriptor', static_descriptor_test, suite: 'unit')
 
+static_hash_test = executable('test_static_hash',
+    ['test/unit/test_static_hash.c'],
+    kwargs: test_common_kwargs,
+)
+test('static_hash', static_hash_test, suite: 'unit')
+
 static_object_sections_test = executable('test_static_object_sections',
     [
       'test/unit/test_static_object_sections.c',

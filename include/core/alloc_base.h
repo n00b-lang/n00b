@@ -106,4 +106,13 @@ struct n00b_alloc_range_t {
     n00b_mmap_rec_kind_t     kind;
     n00b_gc_scan_kind_t      scan_kind;
     uint32_t                 flags;
+    // Cached pointer-key hash for descriptor-backed static objects.
+    // Zero is the "uncached" sentinel; the build-time helper writes a
+    // nonzero value into the descriptor template for key-bearing static
+    // objects, and static-range registration copies it here so
+    // n00b_hash() can short-circuit on static-range hits. Runtime
+    // recompute paths must NOT write back to this slot (the value is
+    // build-time-authoritative for static objects). Placed at the end
+    // of the struct to preserve existing field layout.
+    n00b_uint128_t           cached_hash;
 };
