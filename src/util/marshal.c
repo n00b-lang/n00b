@@ -563,31 +563,7 @@ static_ref_view(void *addr, n00b_marshal_static_ref_t *out)
         }
     }
 
-    n00b_alloc_info_t info = n00b_find_alloc_info(addr, .scan_for_header = true);
-    void             *user_ptr;
-    uint64_t          user_len;
-    n00b_marshal_alloc_record_t ignored;
-
-    if (!alloc_view(info, &user_ptr, &user_len, &ignored)) {
-        return false;
-    }
-
-    uint64_t base = (uint64_t)(uintptr_t)user_ptr;
-    uint64_t end  = base + user_len;
-    if ((uint64_t)(uintptr_t)addr < base || (uint64_t)(uintptr_t)addr >= end) {
-        return false;
-    }
-
-    *out = (n00b_marshal_static_ref_t){
-        .start     = base,
-        .len       = user_len,
-        .object_id = 0,
-        .tinfo     = ignored.tinfo,
-        .scan_kind = ignored.scan_kind,
-        .flags     = 0,
-        .identity  = nullptr,
-    };
-    return true;
+    return false;
 }
 
 static bool

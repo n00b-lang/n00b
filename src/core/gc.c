@@ -157,6 +157,7 @@ arena_overhead(n00b_arena_t *arena)
 static inline n00b_inline_hdr_t *
 alloc_info_raw_hdr(n00b_alloc_info_t info)
 {
+    assert(n00b_alloc_info_is_heap(info));
     return (info.kind == n00b_alloc_oob)
                ? (n00b_inline_hdr_t *)info.hdr.oob
                : info.hdr.in_line;
@@ -541,6 +542,8 @@ n00b_add_alloc_to_worklist(n00b_alloc_info_t ainfo, n00b_collect_t *ctx)
     uint32_t           n;
     n00b_gc_scan_kind_t kind;
 
+    assert(n00b_alloc_info_is_heap(ainfo));
+
     if (ainfo.kind == n00b_alloc_oob) {
         n00b_oob_hdr_t *oob = ainfo.hdr.oob;
 #if !defined(N00B_DISABLE_PTR_WORDS)
@@ -708,19 +711,24 @@ n00b_visit_possible_pointer(n00b_collect_t *ctx,
 
     auto ainfo = n00b_find_alloc_info(word);
 
-    if (ainfo.kind != n00b_alloc_oob && ainfo.kind != n00b_alloc_inline) {
-        if (mmap->kind == n00b_mmap_static) {
-            auto range_opt = n00b_mmap_range_by_address((void *)word);
+    if (n00b_alloc_info_is_static_range(ainfo)) {
+        n00b_add_alloc_range_to_worklist(ctx, ainfo.hdr.range);
+        return false;
+    }
 
-            if (n00b_option_is_set(range_opt)) {
-                n00b_add_alloc_range_to_worklist(ctx, n00b_option_get(range_opt));
-            }
+    if (!n00b_alloc_info_is_heap(ainfo)) {
+        if (mmap->kind == n00b_mmap_static) {
             return false;
         }
 
         ainfo = n00b_find_alloc_info(word, .scan_for_header = true);
 
-        if (ainfo.kind != n00b_alloc_oob && ainfo.kind != n00b_alloc_inline) {
+        if (n00b_alloc_info_is_static_range(ainfo)) {
+            n00b_add_alloc_range_to_worklist(ctx, ainfo.hdr.range);
+            return false;
+        }
+
+        if (!n00b_alloc_info_is_heap(ainfo)) {
             auto range_opt = n00b_mmap_range_by_address((void *)word);
 
             if (n00b_option_is_set(range_opt)) {

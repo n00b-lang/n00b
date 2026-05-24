@@ -310,7 +310,8 @@ mmaps_insert_raw(n00b_mmap_ctx_t     *ctx,
                  void                *startp,
                  uint64_t             blen,
                  n00b_mmap_rec_kind_t kind,
-                 uint64_t             binary_offset)
+                 uint64_t             binary_offset,
+                 n00b_mmap_perms_t    perms)
 {
     n00b_allocator_t *alloc = (n00b_allocator_t *)&ctx->pool;
     n00b_mmap_info_t *info  = n00b_alloc_with_opts(n00b_mmap_info_t, &(n00b_alloc_opts_t){.allocator = alloc});
@@ -322,6 +323,7 @@ mmaps_insert_raw(n00b_mmap_ctx_t     *ctx,
         .end           = end,
         .kind          = kind,
         .binary_offset = binary_offset,
+        .perms         = perms,
     };
 
     n00b_mmap_data_t data = n00b_variant_set(n00b_mmap_data_t, n00b_mmap_info_t *, info);
@@ -676,6 +678,7 @@ n00b_mmap_register(void *startp, void *endp, n00b_mmap_rec_kind_t kind) _kargs
     uint64_t          binary_offset     = 0;
     intptr_t          slide             = 0;
     uint64_t          order_id          = 0;
+    n00b_mmap_perms_t perms             = n00b_mmap_perms_unknown;
     bool              definitely_unique = true;
 }
 // clang-format on
@@ -700,12 +703,16 @@ n00b_mmap_register(void *startp, void *endp, n00b_mmap_rec_kind_t kind) _kargs
         if (n00b_option_is_set(existing)) {
             result = n00b_option_get(existing);
             assert(allocator == result->allocator || !allocator);
+            if (result->perms == n00b_mmap_perms_unknown
+                && perms != n00b_mmap_perms_unknown) {
+                result->perms = perms;
+            }
             mmap_write_unlock(ctx);
             return n00b_option_set(n00b_mmap_info_t *, result);
         }
     }
 
-    result            = mmaps_insert_raw(ctx, startp, blen, kind, binary_offset);
+    result            = mmaps_insert_raw(ctx, startp, blen, kind, binary_offset, perms);
     result->allocator = allocator;
     result->file      = file;
     result->slide     = slide;
@@ -756,7 +763,8 @@ _n00b_mmap(size_t sz, char *loc) _kargs
                             ((char *)result) + sz,
                             kind,
                             .file      = loc,
-                            .allocator = allocator);
+                            .allocator = allocator,
+                            .perms     = n00b_mmap_perms_rw);
 
     return n00b_result_ok(void *, result);
 }

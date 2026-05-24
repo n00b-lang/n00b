@@ -208,9 +208,9 @@ If ncc cannot describe a static object with a correct scan policy, it should not
 emit descriptor registration for that object. The compiler should either keep an
 existing supported representation or issue a diagnostic at the literal site.
 
-The runtime descriptor model does not yet construct static dictionaries, choose
-dictionary hash policy, or remove all legacy `n00b_static_header_t` users. Those
-are follow-up migrations after the stack-map and descriptor contract is stable.
+The runtime descriptor model does not yet construct static dictionaries or
+choose dictionary hash policy. Those are follow-up migrations after the
+stack-map and descriptor contract is stable.
 
 ## Testing Requirements
 

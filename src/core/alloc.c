@@ -359,7 +359,7 @@ n00b_add_finalizer(void *obj, n00b_finalizer_t fn, void *user_data)
     // For OOB arenas, this is the n00b_oob_hdr_t* cast to n00b_inline_hdr_t*.
     // For inline-only arenas, it's the actual inline header.
     n00b_alloc_info_t ainfo = n00b_find_alloc_info(obj);
-    assert(ainfo.kind == n00b_alloc_oob || ainfo.kind == n00b_alloc_inline);
+    assert(n00b_alloc_info_is_heap(ainfo));
 
     n00b_inline_hdr_t *hdr = (ainfo.kind == n00b_alloc_oob) ? (n00b_inline_hdr_t *)ainfo.hdr.oob
                                                             : ainfo.hdr.in_line;
@@ -390,7 +390,7 @@ n00b_run_and_remove_finalizers(void *ptr)
 
     // Use the same raw header lookup as n00b_add_finalizer.
     n00b_alloc_info_t ainfo = n00b_find_alloc_info(ptr);
-    if (ainfo.kind != n00b_alloc_oob && ainfo.kind != n00b_alloc_inline) {
+    if (!n00b_alloc_info_is_heap(ainfo)) {
         goto type_cleanup;
     }
 
@@ -434,8 +434,7 @@ type_cleanup:;
         n00b_rwlock_t  *lock_val = *lock_ptr;
         if (lock_val) {
             n00b_alloc_info_t lock_info = n00b_find_alloc_info(lock_val);
-            if (lock_info.kind == n00b_alloc_oob
-                || lock_info.kind == n00b_alloc_inline) {
+            if (n00b_alloc_info_is_heap(lock_info)) {
                 n00b_free(lock_val);
             }
             *lock_ptr = nullptr;
@@ -512,30 +511,17 @@ _n00b_find_alloc_info(void *addr, n00b_alloc_info_t *result) _kargs
     n00b_mmap_info_t *mmap = n00b_option_get(mmap_opt);
     n00b_allocator_t *al   = mmap->allocator;
     switch (mmap->kind) {
-    case n00b_mmap_static:
-        if (n00b_check_memory_perms(p) == n00b_mmap_perms_no_access) {
+    case n00b_mmap_static: {
+        auto range_opt = n00b_mmap_range_by_address(addr);
+        if (!n00b_option_is_set(range_opt)) {
             break;
         }
-
-        p -= sizeof(n00b_static_header_t);
-        if (((uint64_t)p) < mmap->start) {
-            *result = (n00b_alloc_info_t){.kind = n00b_alloc_none};
-            break;
-        }
-        n00b_static_header_t *sh = (n00b_static_header_t *)p;
-
-        // STATIC magic in truly static segments, but the gc sentinel
-        // for the stack.
-
-        if (sh->static_magic != N00B_STATIC_MAGIC && sh->static_magic != n00b_gc_guard) {
-            break;
-        }
-
         *result = (n00b_alloc_info_t){
-            .kind        = n00b_alloc_inline,
-            .hdr.in_line = (n00b_inline_hdr_t *)&sh->static_magic,
+            .kind      = n00b_alloc_static_range,
+            .hdr.range = n00b_option_get(range_opt),
         };
         return;
+    }
     case n00b_mmap_pool:
     case n00b_mmap_managed_segment:
     case n00b_mmap_sys_segment:
@@ -590,6 +576,10 @@ _n00b_find_alloc_info(void *addr, n00b_alloc_info_t *result) _kargs
 n00b_option_t(n00b_inline_hdr_t *) n00b_object_header(void *p)
 {
     n00b_alloc_info_t info = n00b_find_alloc_info(p);
+
+    if (!n00b_alloc_info_is_heap(info)) {
+        return n00b_option_none(n00b_inline_hdr_t *);
+    }
 
     if (!n00b_alloc_info_is_oob(info)) {
         return n00b_alloc_info_inline(info);

@@ -48,6 +48,7 @@ typedef void (*n00b_system_finalizer_fn)(void *);
 typedef struct n00b_runtime_t        n00b_runtime_t;
 typedef struct n00b_segment_t        n00b_segment_t;
 typedef struct n00b_mmap_info_t       n00b_mmap_info_t;
+typedef struct n00b_alloc_range_t      n00b_alloc_range_t;
 typedef struct n00b_arena_t          n00b_arena_t;
 typedef uint64_t                     n00b_alloc_type_info_t;
 typedef struct n00b_inline_hdr_t     n00b_inline_hdr_t;

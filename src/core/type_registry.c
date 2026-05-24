@@ -147,6 +147,8 @@ n00b_obj_typehash(void *obj)
         return ainfo.hdr.oob->tinfo;
     case n00b_alloc_inline:
         return ainfo.hdr.in_line->tinfo;
+    case n00b_alloc_static_range:
+        return ainfo.hdr.range->tinfo;
     default:
         return 0;
     }

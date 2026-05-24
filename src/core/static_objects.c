@@ -98,6 +98,19 @@ extern n00b_static_object_entry_t const __stop_n00b_stobj[] __attribute__((weak)
 #endif
 
 #if defined(_WIN32)
+static n00b_mmap_perms_t
+n00b_static_object_perms_from_pe_protect(DWORD protect)
+{
+    if (protect & (PAGE_READWRITE | PAGE_WRITECOPY
+                   | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY)) {
+        return n00b_mmap_perms_rw;
+    }
+    if (protect & (PAGE_READONLY | PAGE_EXECUTE_READ | PAGE_EXECUTE)) {
+        return n00b_mmap_perms_ro;
+    }
+    return n00b_mmap_perms_no_access;
+}
+
 static void
 n00b_static_object_register_pe_mapping(const n00b_static_object_desc_t *desc)
 {
@@ -123,6 +136,7 @@ n00b_static_object_register_pe_mapping(const n00b_static_object_desc_t *desc)
                                  end,
                                  n00b_mmap_static,
                                  .file              = desc->file,
+                                 .perms             = n00b_static_object_perms_from_pe_protect(mbi.Protect),
                                  .definitely_unique = false);
         cursor = end;
     }

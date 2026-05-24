@@ -7,10 +7,12 @@
 #include "n00b.h"
 #include "adt/array.h"
 #include "core/alloc.h"
+#include "core/alloc_mdata.h"
 #include "core/gc_map.h"
 #include "core/mmaps.h"
 #include "core/runtime.h"
 #include "core/static_objects.h"
+#include "core/type_info.h"
 #include "text/strings/text_style.h"
 
 typedef n00b_array_t(int) generated_int_array_t;
@@ -29,6 +31,16 @@ range_for_address(const void *addr)
     auto found = n00b_mmap_range_by_address((void *)addr);
     assert(n00b_option_is_set(found));
     return n00b_option_get(found);
+}
+
+static void
+assert_static_alloc_info(const void *addr, n00b_alloc_range_t *range)
+{
+    n00b_alloc_info_t info = n00b_find_alloc_info((void *)addr);
+    assert(info.kind == n00b_alloc_static_range);
+    assert(n00b_alloc_info_is_static_range(info));
+    assert(!n00b_alloc_info_is_heap(info));
+    assert(info.hdr.range == range);
 }
 
 static void
@@ -72,6 +84,9 @@ test_generated_rstring_descriptors(void)
     n00b_static_objects_register_all();
 
     n00b_alloc_range_t *plain_range = range_for_address(plain);
+    assert_static_alloc_info(plain, plain_range);
+    assert(n00b_obj_typehash(plain) == plain_range->tinfo);
+    assert(plain_range->tinfo != 0);
     assert(plain_range->kind == n00b_mmap_static);
     assert(plain_range->len == sizeof(*plain));
     assert(plain_range->scan_kind == N00B_GC_SCAN_KIND_NONE);
@@ -83,6 +98,9 @@ test_generated_rstring_descriptors(void)
     assert(memcmp(plain->data, "descriptor", 10) == 0);
 
     n00b_alloc_range_t *styled_range = range_for_address(styled);
+    assert_static_alloc_info(styled, styled_range);
+    assert(n00b_obj_typehash(styled) == styled_range->tinfo);
+    assert(styled_range->tinfo != 0);
     assert(styled_range->kind == n00b_mmap_static);
     assert(styled_range->len == sizeof(*styled));
     assert(styled_range->scan_kind == N00B_GC_SCAN_KIND_NONE);
@@ -104,6 +122,7 @@ test_generated_scalar_array_descriptor(void)
     n00b_static_objects_register_all();
 
     n00b_alloc_range_t *range = range_for_address(values.data);
+    assert_static_alloc_info(values.data, range);
     assert(range->kind == n00b_mmap_static);
     assert(range->len == sizeof(int) * 3);
     assert(range->scan_kind == N00B_GC_SCAN_KIND_NONE);
@@ -129,6 +148,7 @@ test_generated_pointer_array_descriptor(void)
     n00b_static_objects_register_all();
 
     n00b_alloc_range_t *range = range_for_address(words.data);
+    assert_static_alloc_info(words.data, range);
     assert(range->kind == n00b_mmap_static);
     assert(range->len == sizeof(n00b_string_t *) * 2);
     assert(range->scan_kind == N00B_GC_SCAN_KIND_ALL);
@@ -145,6 +165,7 @@ test_generated_pointer_array_descriptor(void)
     assert(range_for_address(words.data[1])->scan_kind == N00B_GC_SCAN_KIND_NONE);
 
     n00b_alloc_range_t *ptr_range = range_for_address(ptrs.data);
+    assert_static_alloc_info(ptrs.data, ptr_range);
     assert(ptr_range->kind == n00b_mmap_static);
     assert(ptr_range->len == sizeof(generated_ptr_t) * 2);
     assert(ptr_range->scan_kind == N00B_GC_SCAN_KIND_ALL);
@@ -167,6 +188,7 @@ test_generated_nested_array_descriptor(void)
     n00b_static_objects_register_all();
 
     n00b_alloc_range_t *range = range_for_address(rows.data);
+    assert_static_alloc_info(rows.data, range);
     assert(range->kind == n00b_mmap_static);
     assert(range->len == sizeof(generated_int_array_t) * 2);
     assert(range->scan_kind == N00B_GC_SCAN_KIND_CALLBACK);
@@ -197,6 +219,7 @@ test_generated_aggregate_array_descriptor(void)
     n00b_static_objects_register_all();
 
     n00b_alloc_range_t *range = range_for_address(items.data);
+    assert_static_alloc_info(items.data, range);
     assert(range->kind == n00b_mmap_static);
     assert(range->len == sizeof(generated_labeled_item_t));
     assert(range->scan_kind == N00B_GC_SCAN_KIND_CALLBACK);
