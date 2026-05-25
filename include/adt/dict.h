@@ -208,7 +208,7 @@ typedef struct _n00b_dict_internal_t {
  *
  * Example:
  *     n00b_dict_foreach(my_dict, k, v, {
- *         printf("key=%lld val=%d\n", (long long)k, v);
+ *         n00b_printf("key=«#» val=«#»\n", (long long)k, v);
  *     });
  */
 #define n00b_dict_foreach(dict, kvar, vvar, body)                                                  \

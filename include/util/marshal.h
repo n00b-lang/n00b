@@ -41,6 +41,13 @@ typedef enum n00b_marshal_flags_t n00b_marshal_flags_t;
 typedef struct n00b_marshal_ctx_t   n00b_marshal_ctx_t;
 typedef struct n00b_unmarshal_ctx_t n00b_unmarshal_ctx_t;
 
+// Standalone accessor: human-readable name for a marshal status code,
+// independent of any live context.  Returns an n00b r-string literal so
+// callers can pass it straight to n00b_print / n00b_eprintf.  Use this
+// when you have a status code but no context (e.g., after the context
+// has been destroyed, or for logging enum values directly).
+extern n00b_string_t *n00b_marshal_status_name(n00b_marshal_status_t code);
+
 extern n00b_marshal_ctx_t *n00b_marshal_ctx_new() _kargs
 {
     uint32_t flags        = N00B_MARSHAL_F_NONE;

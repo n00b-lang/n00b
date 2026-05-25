@@ -414,7 +414,7 @@ alloc_view(n00b_alloc_info_t              info,
            uint64_t                      *user_len,
            n00b_marshal_alloc_record_t   *rec)
 {
-    memset(rec, 0, sizeof(*rec));
+    *rec    = (typeof(*rec)){};
     rec->op = N00B_MARSHAL_OP_ALLOC;
 
     if (info.kind == n00b_alloc_oob) {
@@ -539,7 +539,7 @@ emit_cpatch(n00b_marshal_ctx_t *ctx, uint64_t vaddr, uint64_t value)
 static bool
 static_ref_view(void *addr, n00b_marshal_static_ref_t *out)
 {
-    memset(out, 0, sizeof(*out));
+    *out = (typeof(*out)){};
 
     auto range_opt = n00b_mmap_range_by_address(addr);
     if (n00b_option_is_set(range_opt)) {
@@ -890,7 +890,7 @@ n00b_marshal_ctx_new() _kargs
 }
 {
     n00b_marshal_ctx_t *ctx = n00b_alloc(n00b_marshal_ctx_t);
-    memset(ctx, 0, sizeof(*ctx));
+    *ctx                    = (typeof(*ctx)){};
     marshal_init_scratch(&ctx->scratch, &ctx->scratch_alloc, "marshal_scratch");
     n00b_dict_untyped_init(&ctx->memos,
                            .allocator     = ctx->scratch_alloc,
@@ -923,6 +923,46 @@ n00b_marshal_status_t
 n00b_marshal_ctx_status(n00b_marshal_ctx_t *ctx)
 {
     return ctx ? ctx->status : N00B_MARSHAL_ERR_NULL_ARG;
+}
+
+n00b_string_t *
+n00b_marshal_status_name(n00b_marshal_status_t code)
+{
+    switch (code) {
+    case N00B_MARSHAL_OK:
+        return r"ok";
+    case N00B_MARSHAL_ERR_NULL_ARG:
+        return r"null-arg";
+    case N00B_MARSHAL_ERR_UNSUPPORTED_ALLOCATION:
+        return r"unsupported-allocation";
+    case N00B_MARSHAL_ERR_UNSUPPORTED_SCAN_POLICY:
+        return r"unsupported-scan-policy";
+    case N00B_MARSHAL_ERR_UNSUPPORTED_STATIC_POINTER:
+        return r"unsupported-static-pointer";
+    case N00B_MARSHAL_ERR_BAD_STREAM:
+        return r"bad-stream";
+    case N00B_MARSHAL_ERR_INCOMPLETE_STREAM:
+        return r"incomplete-stream";
+    case N00B_MARSHAL_ERR_CONTEXT_CLOSED:
+        return r"context-closed";
+    case N00B_MARSHAL_ERR_STATIC_IDENTITY_MISSING:
+        return r"static-identity-missing";
+    case N00B_MARSHAL_ERR_STATIC_IDENTITY_DUPLICATE:
+        return r"static-identity-duplicate";
+    case N00B_MARSHAL_ERR_STATIC_IDENTITY_MUTABILITY:
+        return r"static-identity-mutability";
+    case N00B_MARSHAL_ERR_STATIC_IDENTITY_TYPE:
+        return r"static-identity-type";
+    case N00B_MARSHAL_ERR_STATIC_IDENTITY_SCAN:
+        return r"static-identity-scan";
+    case N00B_MARSHAL_ERR_STATIC_IDENTITY_LENGTH:
+        return r"static-identity-length";
+    case N00B_MARSHAL_ERR_STATIC_IDENTITY_CHECK_BYTES:
+        return r"static-identity-check-bytes";
+    case N00B_MARSHAL_ERR_LIMIT:
+        return r"limit";
+    }
+    return r"unknown";
 }
 
 const char *
@@ -1512,7 +1552,7 @@ n00b_unmarshal_ctx_new() _kargs
 }
 {
     n00b_unmarshal_ctx_t *ctx = n00b_alloc(n00b_unmarshal_ctx_t);
-    memset(ctx, 0, sizeof(*ctx));
+    *ctx                      = (typeof(*ctx)){};
     marshal_init_scratch(&ctx->scratch, &ctx->scratch_alloc, "unmarshal_scratch");
     ctx->target_arena = target_arena ? target_arena : n00b_get_runtime()->default_arena;
     ctx->status       = N00B_MARSHAL_OK;

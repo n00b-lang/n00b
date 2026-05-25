@@ -26,18 +26,18 @@
 #else
 #define N00B_STATIC_OBJECT_SECTION_PRE(section_name)
 #define N00B_STATIC_OBJECT_SECTION_POST(section_name) \
-    __attribute__((section(section_name), used))
+    [[gnu::section(section_name), gnu::used]]
 #endif
 #define N00B_STATIC_OBJECT_SECTION_NAME ".n00bs$m"
 #elif defined(__APPLE__)
 #define N00B_STATIC_OBJECT_SECTION_PRE(section_name)
 #define N00B_STATIC_OBJECT_SECTION_POST(section_name) \
-    __attribute__((section(section_name), used))
+    [[gnu::section(section_name), gnu::used]]
 #define N00B_STATIC_OBJECT_SECTION_NAME "__DATA,n00b_stobj"
 #else
 #define N00B_STATIC_OBJECT_SECTION_PRE(section_name)
 #define N00B_STATIC_OBJECT_SECTION_POST(section_name) \
-    __attribute__((section(section_name), used)) N00B_STATIC_OBJECT_RETAIN
+    [[gnu::section(section_name), gnu::used]] N00B_STATIC_OBJECT_RETAIN
 #define N00B_STATIC_OBJECT_SECTION_NAME "n00b_stobj"
 #endif
 
