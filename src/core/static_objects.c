@@ -4,6 +4,8 @@
 #include "core/static_objects.h"
 #include "core/mmaps.h"
 #include "core/rwlock.h"
+#include "core/atomic.h"
+#include "core/thread.h"
 #include "util/assert.h"
 
 #if defined(_WIN32)
@@ -14,6 +16,39 @@
 #include <mach-o/dyld.h>
 #include <mach-o/loader.h>
 #endif
+
+// WP-018 / WP-016 D2: serialize the cached_hash adoption path below so
+// two concurrent `n00b_static_object_register_desc` calls cannot both
+// observe `range->cached_hash == 0` and race past the consistency check.
+// We use a TID-keyed spinlock (mirroring `mmap_lock` in mmaps.c) rather
+// than an `atomic_compare_exchange_strong` on `range->cached_hash`
+// because the field is `unsigned _BitInt(128)` and 16-byte atomic CAS is
+// not lock-free on every supported toolchain/target combination (x86_64
+// without `-mcx16` falls back to libatomic, and `_BitInt(128)` is not
+// part of any stdatomic.h guarantee). The critical section is a few
+// loads/stores so a spinlock is fine; descriptor registration is rare
+// and uncontested in practice.
+static _Atomic int64_t static_cached_hash_lock = -1;
+
+static inline void
+static_cached_hash_lock_acquire(void)
+{
+    int64_t tid      = n00b_thread_unique_id();
+    int64_t expected = -1;
+
+    do {
+        if (expected == tid) {
+            break;
+        }
+        expected = -1;
+    } while (!n00b_cas(&static_cached_hash_lock, &expected, tid));
+}
+
+static inline void
+static_cached_hash_lock_release(void)
+{
+    n00b_atomic_store(&static_cached_hash_lock, (int64_t)-1);
+}
 
 static size_t
 n00b_static_objects_enumerate_entries(n00b_static_object_entry_t const *start,
@@ -53,31 +88,60 @@ n00b_static_objects_enumerate_macho_image(const struct mach_header *hdr,
     }
 
     const struct mach_header_64 *header = (const struct mach_header_64 *)hdr;
-    const uint8_t *cursor = (const uint8_t *)&header[1];
-    size_t count = 0;
+    const uint8_t *cursor       = (const uint8_t *)&header[1];
+    // WP-018 / WP-016 D3: the load_command table is bounded by
+    // `header->sizeofcmds`. Validate every record sits inside this
+    // window and is itself well-formed (cmdsize covers at least the
+    // load_command header) before dereferencing past `lc->cmd`. The
+    // bytes come from the OS dynamic loader so this is defense-in-depth
+    // rather than untrusted-input parsing, but it costs nothing and
+    // turns a malformed image into a graceful early-out instead of an
+    // out-of-bounds read.
+    const uint8_t *const cmds_end = cursor + header->sizeofcmds;
+    size_t               count    = 0;
 
     for (uint32_t i = 0; i < header->ncmds; i++) {
+        // Need at least a full load_command header to read cmd/cmdsize.
+        if ((size_t)(cmds_end - cursor) < sizeof(struct load_command)) {
+            return count;
+        }
+
         const struct load_command *lc = (const struct load_command *)cursor;
+        // `cmdsize` must cover the load_command header itself and must
+        // not run past the end of the load-command table.
+        if (lc->cmdsize < sizeof(struct load_command)
+            || lc->cmdsize > (uint32_t)(cmds_end - cursor)) {
+            return count;
+        }
 
         if (lc->cmd == LC_SEGMENT_64) {
-            const struct segment_command_64 *seg =
-                (const struct segment_command_64 *)cursor;
-            const struct section_64 *section =
-                (const struct section_64 *)(seg + 1);
+            // For an LC_SEGMENT_64 command the cmdsize must also cover the
+            // segment header and the nsects section_64 records that follow.
+            if (lc->cmdsize >= sizeof(struct segment_command_64)) {
+                const struct segment_command_64 *seg =
+                    (const struct segment_command_64 *)cursor;
+                size_t sections_bytes =
+                    (size_t)seg->nsects * sizeof(struct section_64);
+                if (sections_bytes
+                    <= (size_t)(lc->cmdsize - sizeof(struct segment_command_64))) {
+                    const struct section_64 *section =
+                        (const struct section_64 *)(seg + 1);
 
-            for (uint32_t j = 0; j < seg->nsects; j++) {
-                if (strncmp(section[j].segname, "__DATA", 16) != 0
-                    || strncmp(section[j].sectname, "n00b_stobj", 16) != 0) {
-                    continue;
+                    for (uint32_t j = 0; j < seg->nsects; j++) {
+                        if (strncmp(section[j].segname, "__DATA", 16) != 0
+                            || strncmp(section[j].sectname, "n00b_stobj", 16) != 0) {
+                            continue;
+                        }
+
+                        uintptr_t start_addr = (uintptr_t)section[j].addr + (uintptr_t)slide;
+                        uintptr_t stop_addr  = start_addr + (uintptr_t)section[j].size;
+                        count += n00b_static_objects_enumerate_entries(
+                            (n00b_static_object_entry_t const *)start_addr,
+                            (n00b_static_object_entry_t const *)stop_addr,
+                            cb,
+                            user);
+                    }
                 }
-
-                uintptr_t start_addr = (uintptr_t)section[j].addr + (uintptr_t)slide;
-                uintptr_t stop_addr  = start_addr + (uintptr_t)section[j].size;
-                count += n00b_static_objects_enumerate_entries(
-                    (n00b_static_object_entry_t const *)start_addr,
-                    (n00b_static_object_entry_t const *)stop_addr,
-                    cb,
-                    user);
             }
         }
 
@@ -171,15 +235,26 @@ n00b_static_object_register_desc(const n00b_static_object_desc_t *desc)
             // the second descriptor's value, which is a build-time
             // correctness bug we want to surface loudly (WP-011 Phase 3a
             // audit W1 carry-forward).
-            n00b_require(range->cached_hash == (n00b_uint128_t)0
+            //
+            // WP-018 / WP-016 D2: hold the static-cached-hash spinlock
+            // across the load + consistency check + conditional store so
+            // two concurrent registrations of the same range cannot both
+            // observe `range->cached_hash == 0` and race past
+            // `n00b_require`. See the lock comment above for why we use
+            // a spinlock instead of `atomic_compare_exchange` on the
+            // `_BitInt(128)` slot.
+            static_cached_hash_lock_acquire();
+            n00b_uint128_t current = range->cached_hash;
+            n00b_require(current == (n00b_uint128_t)0
                              || desc->cached_hash == (n00b_uint128_t)0
-                             || range->cached_hash == desc->cached_hash,
+                             || current == desc->cached_hash,
                          "build-time hash conflict: two static descriptors "
                          "map to the same range with disagreeing cached_hash "
                          "values");
-            if (range->cached_hash == (n00b_uint128_t)0) {
+            if (current == (n00b_uint128_t)0) {
                 range->cached_hash = desc->cached_hash;
             }
+            static_cached_hash_lock_release();
             if (desc->flags & N00B_STATIC_OBJECT_F_INIT_RWLOCK) {
                 n00b_rwlock_t *lock = (n00b_rwlock_t *)desc->start;
                 if (!lock->inited) {

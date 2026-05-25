@@ -1416,6 +1416,21 @@ emit_dict_image(const helper_request_t *req)
     }
 
     uint64_t entry_count = req->container_len;
+    // Defense-in-depth (WP-018 / WP-016 A1): bound entry_count well below
+    // 2^63 so that pow2_ceil_u64 cannot run away (it shifts left and would
+    // loop forever once the running result drops to zero) and so the
+    // subsequent malloc(cap * sizeof(*slot_to_pair)) cannot wrap (see A2).
+    // 2^30 entries (~1 billion keys) is far beyond any plausible build-time
+    // static dict; a hostile or malformed request that exceeds it is
+    // rejected with a clear diagnostic instead of hanging the build.
+    if (entry_count > ((uint64_t)1 << 30)) {
+        fprintf(stderr,
+                "bad n00b dict static initializer request: container_len "
+                "(%llu) exceeds maximum supported static-dict capacity "
+                "(2^30 entries)",
+                (unsigned long long)entry_count);
+        return 6;
+    }
     uint64_t cap = pow2_ceil_u64(entry_count);
     if (cap < (uint64_t)N00B_DICT_MIN_SIZE) {
         cap = (uint64_t)N00B_DICT_MIN_SIZE;
@@ -1479,6 +1494,20 @@ emit_dict_image(const helper_request_t *req)
     // Slot-assign each pair by linear probing from `hash & mask`. Detect
     // duplicate keys (same precomputed hash landing on the same probe
     // path with the same bucket already taken).
+    //
+    // Defense-in-depth (WP-018 / WP-016 A2): the upstream entry_count cap
+    // (2^30) bounds `cap` at `pow2_ceil_u64(2^30) == 2^30`, so
+    // `cap * sizeof(int64_t) <= 2^33` bytes - well within size_t on any
+    // 32+ bit platform. Guard explicitly anyway in case the cap is ever
+    // relaxed; an overflow here would silently allocate a too-small
+    // buffer and turn into an OOB write.
+    if (cap > (SIZE_MAX / sizeof(int64_t))) {
+        fprintf(stderr,
+                "bad n00b dict static initializer request: dict capacity "
+                "(%llu) would overflow slot-table allocation size",
+                (unsigned long long)cap);
+        return 6;
+    }
     int64_t *slot_to_pair = malloc((size_t)cap * sizeof(*slot_to_pair));
     if (!slot_to_pair) {
         fprintf(stderr, "out of memory while building dict static image");
