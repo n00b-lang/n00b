@@ -1,7 +1,4 @@
 #define N00B_USE_INTERNAL_API
-#include <stdarg.h>
-#include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #ifndef _WIN32
 #include <sys/mman.h>
@@ -14,6 +11,8 @@
 #include "core/arena.h"
 #include "core/static_image.h"
 #include "core/string.h"
+#include "text/strings/format.h"
+#include "text/strings/string_ops.h"
 #include "util/defer.h"
 
 // ============================================================================
@@ -56,49 +55,19 @@ _buffer_create(int64_t length, n00b_allocator_t *allocator)
     return buf;
 }
 
-/*
- * snprintf into a heap buffer and wrap the result as an n00b_string_t *.
- * Used by the static-image builder helpers below to keep the existing
- * printf-style format strings while satisfying the new builder API,
- * which takes pre-formatted n00b_string_t * arguments. The libc usage
- * here is consistent with the rest of this file's static-image build
- * path; the higher-level audit will deal with this code cluster
- * separately.
- */
-[[gnu::format(printf, 1, 2)]]
-static n00b_string_t *
-static_image_cfmt(const char *fmt, ...)
-{
-    va_list ap;
-    va_start(ap, fmt);
-    va_list ap2;
-    va_copy(ap2, ap);
-    int n = vsnprintf(nullptr, 0, fmt, ap2);
-    va_end(ap2);
-    if (n < 0) {
-        va_end(ap);
-        return nullptr;
-    }
-
-    char *buf = malloc((size_t)n + 1);
-    if (!buf) {
-        va_end(ap);
-        return nullptr;
-    }
-    vsnprintf(buf, (size_t)n + 1, fmt, ap);
-    va_end(ap);
-
-    n00b_string_t *out = n00b_string_from_raw(buf, (int64_t)n);
-    free(buf);
-    return out;
-}
-
 static bool
 static_arg_is_named(const n00b_static_init_arg_t *arg, const char *name)
 {
     return arg->name && strcmp(arg->name, name) == 0;
 }
 
+/*
+ * Append a comma-separated `0xNN` list for the given byte run onto the
+ * builder's `decls` accumulator.  Uses n00b's rich-format engine via
+ * `n00b_cformat` for the per-byte hex emission — see WP-018b's
+ * static_image.c refactor for the precedent that replaced the original
+ * libc `snprintf("0x%02x", ...)` pattern.
+ */
 static void
 static_image_append_bytes(n00b_static_image_builder_t *builder,
                           const unsigned char *data, size_t len)
@@ -108,7 +77,8 @@ static_image_append_bytes(n00b_static_image_builder_t *builder,
             n00b_static_image_builder_append(builder, r",");
         }
         n00b_static_image_builder_append(
-            builder, static_image_cfmt("0x%02x", (unsigned int)data[i]));
+            builder,
+            n00b_cformat("0x[|#:02x|]", (int64_t)data[i]));
     }
 }
 
@@ -137,68 +107,71 @@ static_image_hash_cstr(const char *s)
     return h;
 }
 
-static char *
+/*
+ * Build a C source-level double-quoted string literal for @p s.
+ *
+ * Returns an `n00b_string_t *` (GC-tracked, no manual free).  Each
+ * input byte is mapped to either a 1- or 2-byte escape sequence or,
+ * for non-printable bytes, to a 4-byte `\NNN` octal escape produced
+ * by `n00b_cformat`.  Pieces are concatenated onto an `n00b_string_t *`
+ * accumulator via `n00b_unicode_str_cat` so libc `sprintf` / `malloc`
+ * stay out of the static-image build path.
+ *
+ * The single-byte pieces are built via `n00b_string_from_raw` with
+ * plain C string literals — these emit exact byte sequences without
+ * the rich-format escape interpretation that `r"..."` literals apply,
+ * which matters because the output text itself contains backslash and
+ * quote characters that we don't want re-escaped.
+ */
+static n00b_string_t *
 static_image_c_string_literal(const char *s)
 {
-    size_t cap = 2;
-    for (const unsigned char *p = (const unsigned char *)(s ? s : ""); *p; p++) {
+    const unsigned char *src = (const unsigned char *)(s ? s : "");
+
+    n00b_string_t *acc = n00b_string_from_raw("\"", 1);
+
+    for (const unsigned char *p = src; *p; p++) {
+        n00b_string_t *piece;
+
         switch (*p) {
         case '\\':
-        case '"':
-        case '\n':
-        case '\r':
-        case '\t':
-            cap += 2;
-            break;
-        default:
-            cap += (*p >= 0x20 && *p < 0x7f) ? 1 : 4;
-            break;
-        }
-    }
-
-    char *out = malloc(cap + 1);
-    if (!out) {
-        return nullptr;
-    }
-
-    char *w = out;
-    *w++ = '"';
-    for (const unsigned char *p = (const unsigned char *)(s ? s : ""); *p; p++) {
-        switch (*p) {
-        case '\\':
-            *w++ = '\\';
-            *w++ = '\\';
+            piece = n00b_string_from_raw("\\\\", 2);
             break;
         case '"':
-            *w++ = '\\';
-            *w++ = '"';
+            piece = n00b_string_from_raw("\\\"", 2);
             break;
         case '\n':
-            *w++ = '\\';
-            *w++ = 'n';
+            piece = n00b_string_from_raw("\\n", 2);
             break;
         case '\r':
-            *w++ = '\\';
-            *w++ = 'r';
+            piece = n00b_string_from_raw("\\r", 2);
             break;
         case '\t':
-            *w++ = '\\';
-            *w++ = 't';
+            piece = n00b_string_from_raw("\\t", 2);
             break;
         default:
             if (*p >= 0x20 && *p < 0x7f) {
-                *w++ = (char)*p;
+                char one[1] = {(char)*p};
+                piece = n00b_string_from_raw(one, 1);
             }
             else {
-                sprintf(w, "\\%03o", (unsigned)*p);
-                w += 4;
+                // Octal escape `\NNN`.  Build via plain raw bytes so
+                // the leading backslash isn't reinterpreted by rich
+                // formatting.  Format spec `03o` gives zero-padded
+                // width-3 octal, which we then prepend a literal `\`
+                // onto.
+                n00b_string_t *digits = n00b_cformat("[|#:03o|]",
+                                                    (int64_t)*p);
+                piece = n00b_unicode_str_cat(
+                    n00b_string_from_raw("\\", 1), digits);
             }
             break;
         }
+
+        acc = n00b_unicode_str_cat(acc, piece);
     }
-    *w++ = '"';
-    *w = '\0';
-    return out;
+
+    return n00b_unicode_str_cat(acc, n00b_string_from_raw("\"", 1));
 }
 
 static int
@@ -216,6 +189,13 @@ hex_digit_value(unsigned char c)
     return -1;
 }
 
+/*
+ * Decode the hex string carried on @p arg into a freshly allocated
+ * byte array.  Returns the decoded bytes as a GC-tracked
+ * `unsigned char *` (callers must not call libc `free` on it) and
+ * writes the byte count to @p out_len.  Failure modes set @p builder
+ * status and message via `n00b_static_image_builder_fail`.
+ */
 static n00b_static_image_status_t
 decode_hex_arg(n00b_static_image_builder_t *builder,
                const n00b_static_init_arg_t *arg,
@@ -229,19 +209,21 @@ decode_hex_arg(n00b_static_image_builder_t *builder,
     }
 
     uint64_t len = arg->bytes.len / 2;
-    unsigned char *data = calloc((size_t)(len ? len : 1), 1);
-    if (!data) {
-        return n00b_static_image_builder_fail(
-            builder, N00B_STATIC_IMAGE_ERR_INITIALIZER,
-            r"out of memory while decoding buffer .hex argument");
-    }
+    // n00b_alloc_array_with_opts gives zero-filled GC-tracked storage;
+    // when len == 0 we still allocate a 1-byte placeholder so the
+    // returned pointer is never null (matches the original calloc
+    // behaviour that callers rely on as a "valid empty payload"
+    // sentinel).
+    unsigned char *data = n00b_alloc_array_with_opts(
+        unsigned char,
+        (int64_t)(len ? len : 1),
+        &(n00b_alloc_opts_t){});
 
     const unsigned char *src = arg->bytes.data;
     for (uint64_t i = 0; i < len; i++) {
         int hi = hex_digit_value(src[i * 2]);
         int lo = hex_digit_value(src[i * 2 + 1]);
         if (hi < 0 || lo < 0) {
-            free(data);
             return n00b_static_image_builder_fail(
                 builder, N00B_STATIC_IMAGE_ERR_ARGUMENT,
                 r"buffer .hex static initializer contains a non-hex digit");
@@ -368,195 +350,228 @@ n00b_buffer_static_init(n00b_static_image_builder_t *builder)
         raw_len = have_length ? length : 0;
     }
     else if (have_length && length != raw_len) {
-        free(hex_decoded);
         return n00b_static_image_builder_fail(
             builder, N00B_STATIC_IMAGE_ERR_ARGUMENT,
             r"buffer .length must match the static raw/hex payload length");
     }
 
-    uint64_t byte_len  = raw_len;
-    uint64_t alloc_len = static_image_pow2_capacity(byte_len);
+    uint64_t byte_len    = raw_len;
+    uint64_t alloc_len   = static_image_pow2_capacity(byte_len);
     uint64_t payload_len = alloc_len;
-    unsigned char *payload = calloc((size_t)payload_len, 1);
-    if (!payload) {
-        free(hex_decoded);
-        return n00b_static_image_builder_fail(
-            builder, N00B_STATIC_IMAGE_ERR_INITIALIZER,
-            r"out of memory while building buffer static image");
-    }
+    // GC-tracked scratch payload — zero-filled, never manually freed.
+    unsigned char *payload = n00b_alloc_array_with_opts(
+        unsigned char,
+        (int64_t)(payload_len ? payload_len : 1),
+        &(n00b_alloc_opts_t){});
     if (raw && raw_len) {
         memcpy(payload, raw, (size_t)raw_len);
     }
+    // Suppress the otherwise-unused hex_decoded warning — its lifetime
+    // is owned by the GC now, and we hold a live alias via `raw`.
+    (void)hex_decoded;
 
-    const char *prefix     = request->symbol_prefix;
-    const char *entry_attr = request->entry_attr ? request->entry_attr : "";
+    // Convert C-shaped request fields into n00b_string_t * once so we
+    // can flow them through n00b_cformat substitutions throughout the
+    // emission.
+    n00b_string_t *prefix_s     = n00b_string_from_cstr(request->symbol_prefix);
+    n00b_string_t *entry_attr_s = n00b_string_from_cstr(
+        request->entry_attr ? request->entry_attr : "");
+
     bool have_identity = request->identity_namespace
                       && request->identity_namespace[0]
                       && request->identity_object_key
                       && request->identity_object_key[0]
                       && request->identity_payload_key
                       && request->identity_payload_key[0];
-    char *identity_namespace_lit = have_identity
-                                 ? static_image_c_string_literal(
-                                       request->identity_namespace)
-                                 : nullptr;
-    char *identity_object_key_lit = have_identity
-                                  ? static_image_c_string_literal(
-                                        request->identity_object_key)
-                                  : nullptr;
-    char *identity_payload_key_lit = have_identity
-                                   ? static_image_c_string_literal(
-                                         request->identity_payload_key)
-                                   : nullptr;
-    if (have_identity
-        && (!identity_namespace_lit || !identity_object_key_lit
-            || !identity_payload_key_lit)) {
-        free(payload);
-        free(hex_decoded);
-        free(identity_namespace_lit);
-        free(identity_object_key_lit);
-        free(identity_payload_key_lit);
-        return n00b_static_image_builder_fail(
-            builder, N00B_STATIC_IMAGE_ERR_INITIALIZER,
-            r"out of memory while building buffer static image identities");
+
+    n00b_string_t *ns_lit_s  = nullptr;
+    n00b_string_t *obj_lit_s = nullptr;
+    n00b_string_t *pay_lit_s = nullptr;
+    n00b_string_t *null_lit_s = n00b_string_from_cstr("nullptr");
+    if (have_identity) {
+        ns_lit_s  = static_image_c_string_literal(request->identity_namespace);
+        obj_lit_s = static_image_c_string_literal(request->identity_object_key);
+        pay_lit_s = static_image_c_string_literal(request->identity_payload_key);
     }
 
-    char payload_identity_ref[128];
-    char object_identity_ref[128];
-    snprintf(payload_identity_ref, sizeof(payload_identity_ref),
-             "&%s_data_id", prefix);
-    snprintf(object_identity_ref, sizeof(object_identity_ref),
-             "&%s_obj_id", prefix);
-    uint64_t payload_id = static_image_hash_cstr(prefix) ^ UINT64_C(0x7061796c6f6164);
-    uint64_t object_id  = static_image_hash_cstr(prefix) ^ UINT64_C(0x627566666572);
-    unsigned contract_version = (unsigned)N00B_STATIC_IMAGE_CONTRACT_VERSION;
-    unsigned target_endian    = (unsigned)request->target_abi.endian;
-    unsigned borrowed_flags   = (unsigned)N00B_BUF_F_BORROWED;
+    // Identity reference expressions used in the data_desc /
+    // obj_desc `.identity` slots — these are addresses of identity
+    // structs when identity is configured, or the literal `nullptr`
+    // otherwise.
+    n00b_string_t *payload_identity_ref = have_identity
+        ? n00b_cformat("&[|#|]_data_id", prefix_s)
+        : null_lit_s;
+    n00b_string_t *object_identity_ref = have_identity
+        ? n00b_cformat("&[|#|]_obj_id", prefix_s)
+        : null_lit_s;
+
+    n00b_string_t *namespace_field = have_identity ? ns_lit_s  : null_lit_s;
+    n00b_string_t *object_field    = have_identity ? obj_lit_s : null_lit_s;
+    n00b_string_t *payload_field   = have_identity ? pay_lit_s : null_lit_s;
+
+    uint64_t payload_id = static_image_hash_cstr(request->symbol_prefix)
+                        ^ UINT64_C(0x7061796c6f6164);
+    uint64_t object_id  = static_image_hash_cstr(request->symbol_prefix)
+                        ^ UINT64_C(0x627566666572);
+    int64_t  contract_version = (int64_t)N00B_STATIC_IMAGE_CONTRACT_VERSION;
+    int64_t  target_endian    = (int64_t)request->target_abi.endian;
+    int64_t  borrowed_flags   = (int64_t)N00B_BUF_F_BORROWED;
 
     n00b_static_image_builder_set_expr(
-        builder, static_image_cfmt("&%s_obj", prefix));
+        builder, n00b_cformat("&[|#|]_obj", prefix_s));
 
     if (have_identity) {
         n00b_static_image_builder_append(
             builder,
-            static_image_cfmt(
-            "static const n00b_static_identity_t %s_data_id={"
-            ".version=1u,"
-            ".kind=N00B_STATIC_IDENTITY_NCC_STATIC_IMAGE_PAYLOAD,"
-            ".namespace_id=%s,.object_key=%s};"
-            "static const n00b_static_identity_t %s_obj_id={"
-            ".version=1u,"
-            ".kind=N00B_STATIC_IDENTITY_NCC_STATIC_IMAGE_OBJECT,"
-            ".namespace_id=%s,.object_key=%s};",
-            prefix, identity_namespace_lit, identity_payload_key_lit,
-            prefix, identity_namespace_lit, identity_object_key_lit));
+            n00b_cformat(
+                "static const n00b_static_identity_t [|#|]_data_id={"
+                ".version=1u,"
+                ".kind=N00B_STATIC_IDENTITY_NCC_STATIC_IMAGE_PAYLOAD,"
+                ".namespace_id=[|#|],.object_key=[|#|]};"
+                "static const n00b_static_identity_t [|#|]_obj_id={"
+                ".version=1u,"
+                ".kind=N00B_STATIC_IDENTITY_NCC_STATIC_IMAGE_OBJECT,"
+                ".namespace_id=[|#|],.object_key=[|#|]};",
+                prefix_s, ns_lit_s, pay_lit_s,
+                prefix_s, ns_lit_s, obj_lit_s));
     }
 
     n00b_static_image_builder_append(
         builder,
-        static_image_cfmt(
-        "static const unsigned char %s_data[]={",
-        prefix));
+        n00b_cformat("static const unsigned char [|#|]_data[]={",
+                     prefix_s));
     static_image_append_bytes(builder, payload, (size_t)payload_len);
+
+    // Emit the data_desc block, request struct, and shape arrays.  The
+    // emission is split into smaller n00b_cformat chunks so each chunk
+    // fits within the format engine's natural substitution width and
+    // matches the WP-018b static_image.c refactor style.
     n00b_static_image_builder_append(
         builder,
-        static_image_cfmt(
-        "};"
-        "static const n00b_static_object_desc_t %s_data_desc={"
-        ".start=(const void*)%s_data,"
-        ".len=(uint64_t)sizeof(%s_data),"
-        ".tinfo=0,.scan_kind=N00B_GC_SCAN_KIND_NONE,"
-        ".scan_cb=nullptr,.scan_user=nullptr,"
-        ".object_id=%lluULL,.file=__FILE__,"
-        ".identity=%s,"
-        ".flags=N00B_STATIC_OBJECT_F_READONLY};"
-        "static const n00b_static_object_desc_t * const %s_data_entry %s=&%s_data_desc;"
-        "static const n00b_static_image_request_t %s_request={"
-        ".version=%u,"
-        ".type_hash=%lluULL,.type_name=\"n00b_buffer_t\","
-        ".symbol_prefix=\"%s\",.entry_attr=\"\","
-        ".payload_kind=N00B_STATIC_IMAGE_PAYLOAD_BYTES,"
-        ".payload=(const void*)%s_data,.payload_len=(uint64_t)%lluULL,"
-        ".args=nullptr,.arg_count=0,"
-        ".target_abi={.version=%u,"
-        ".pointer_bytes=(uint8_t)sizeof(void*),"
-        ".size_t_bytes=(uint8_t)sizeof(size_t),.char_bits=8,"
-        ".endian=%u},"
-        ".object_flags=N00B_STATIC_OBJECT_F_READONLY,"
-        ".required_scan_kind=N00B_GC_SCAN_KIND_CALLBACK,"
-        ".identity_namespace=%s,"
-        ".identity_object_key=%s,"
-        ".identity_payload_key=%s};"
-        "_Static_assert((__builtin_offsetof(n00b_buffer_t,data)%%sizeof(void*))==0,"
-        "\"buffer data pointer must be pointer-aligned\");"
-        "_Static_assert((sizeof(n00b_buffer_t)%%sizeof(void*))==0,"
-        "\"buffer static image object must be word-sized\");"
-        "static const uint64_t %s_offsets[]={"
-        "__builtin_offsetof(n00b_buffer_t,data)/sizeof(void*)};"
-        "static n00b_gc_struct_layout_t %s_shape={"
-        ".stride=(sizeof(n00b_buffer_t)/sizeof(void*)),.count=1,"
-        ".offset_count=1,.offsets=%s_offsets};"
-        "static const n00b_buffer_t %s_obj={"
-        ".data=(char*)%s_data,.byte_len=%lluULL,.alloc_len=%lluULL,"
-        ".lock=nullptr,.allocator=nullptr,.flags=%u,"
-        ".scan_kind=N00B_GC_SCAN_KIND_NONE,.scan_cb=nullptr,.scan_user=nullptr};"
-        "static const n00b_static_object_desc_t %s_obj_desc={"
-        ".start=(const void*)&%s_obj,.len=(uint64_t)sizeof(%s_obj),"
-        ".tinfo=%lluULL,.scan_kind=N00B_GC_SCAN_KIND_CALLBACK,"
-        ".scan_cb=n00b_gc_scan_cb_struct_layout,.scan_user=&%s_shape,"
-        ".object_id=%lluULL,.file=__FILE__,"
-        ".identity=%s,"
-        ".flags=N00B_STATIC_OBJECT_F_READONLY,"
-        // WP-011 Phase 3c.iii: dict-key-position buffers get the
-        // XXH3_128bits of their payload threaded through as a
-        // 128-bit literal; the runtime probe loop in
-        // n00b_register_static_object pre-populates the alloc
-        // range's cached_hash so the first lookup short-circuits
-        // n00b_buffer_hash.  Non-dict-key buffer call sites
-        // default both halves to 0 and the slot stays zero.
-        ".cached_hash=(((n00b_uint128_t)0x%016llxULL<<64)"
-        "|(n00b_uint128_t)0x%016llxULL)};"
-        "static const n00b_static_object_desc_t * const %s_obj_entry %s=&%s_obj_desc;"
-        "static const n00b_static_image_dependency_t %s_deps[]={"
-        "{.desc=&%s_data_desc,.relocation_offset=__builtin_offsetof(n00b_buffer_t,data),"
-        ".role=\"payload\"}};"
-        "static const n00b_static_image_response_t %s_response __attribute__((used))={"
-        ".version=%u,.request=&%s_request,"
-        ".object_start=(const void*)&%s_obj,.object_len=(uint64_t)sizeof(%s_obj),"
-        ".scan_kind=N00B_GC_SCAN_KIND_CALLBACK,.scan_cb=n00b_gc_scan_cb_struct_layout,"
-        ".scan_user=&%s_shape,.dependencies=%s_deps,.dependency_count=1};",
-        prefix, prefix, prefix,
-        (unsigned long long)payload_id,
-        have_identity ? payload_identity_ref : "nullptr",
-        prefix, entry_attr, prefix,
-        prefix, contract_version,
-        (unsigned long long)request->type_hash, prefix,
-        prefix, (unsigned long long)byte_len,
-        contract_version, target_endian,
-        have_identity ? identity_namespace_lit : "nullptr",
-        have_identity ? identity_object_key_lit : "nullptr",
-        have_identity ? identity_payload_key_lit : "nullptr",
-        prefix, prefix, prefix,
-        prefix, prefix, (unsigned long long)byte_len,
-        (unsigned long long)alloc_len, borrowed_flags,
-        prefix, prefix, prefix, (unsigned long long)request->type_hash,
-        prefix, (unsigned long long)object_id,
-        have_identity ? object_identity_ref : "nullptr",
-        // WP-011 Phase 3c.iii: cached_hash high/low halves for the
-        // obj descriptor's `.cached_hash` slot.  Both default to 0
-        // for non-dict-key buffer literals.
-        (unsigned long long)cached_hash_hi,
-        (unsigned long long)cached_hash_lo,
-        prefix, entry_attr, prefix,
-        prefix, prefix,
-        prefix, contract_version,
-        prefix, prefix, prefix, prefix, prefix, prefix));
+        n00b_cformat(
+            "};"
+            "static const n00b_static_object_desc_t [|#|]_data_desc={"
+            ".start=(const void*)[|#|]_data,"
+            ".len=(uint64_t)sizeof([|#|]_data),"
+            ".tinfo=0,.scan_kind=N00B_GC_SCAN_KIND_NONE,"
+            ".scan_cb=nullptr,.scan_user=nullptr,"
+            ".object_id=[|#|]ULL,.file=__FILE__,"
+            ".identity=[|#|],"
+            ".flags=N00B_STATIC_OBJECT_F_READONLY};"
+            "static const n00b_static_object_desc_t * const "
+            "[|#|]_data_entry [|#|]=&[|#|]_data_desc;",
+            prefix_s, prefix_s, prefix_s,
+            (int64_t)payload_id,
+            payload_identity_ref,
+            prefix_s, entry_attr_s, prefix_s));
 
-    free(payload);
-    free(hex_decoded);
-    free(identity_namespace_lit);
-    free(identity_object_key_lit);
-    free(identity_payload_key_lit);
+    n00b_static_image_builder_append(
+        builder,
+        n00b_cformat(
+            "static const n00b_static_image_request_t [|#|]_request={"
+            ".version=[|#|],"
+            ".type_hash=[|#|]ULL,.type_name=\"n00b_buffer_t\","
+            ".symbol_prefix=\"[|#|]\",.entry_attr=\"\","
+            ".payload_kind=N00B_STATIC_IMAGE_PAYLOAD_BYTES,"
+            ".payload=(const void*)[|#|]_data,"
+            ".payload_len=(uint64_t)[|#|]ULL,"
+            ".args=nullptr,.arg_count=0,"
+            ".target_abi={.version=[|#|],"
+            ".pointer_bytes=(uint8_t)sizeof(void*),"
+            ".size_t_bytes=(uint8_t)sizeof(size_t),.char_bits=8,"
+            ".endian=[|#|]},"
+            ".object_flags=N00B_STATIC_OBJECT_F_READONLY,"
+            ".required_scan_kind=N00B_GC_SCAN_KIND_CALLBACK,"
+            ".identity_namespace=[|#|],"
+            ".identity_object_key=[|#|],"
+            ".identity_payload_key=[|#|]};",
+            prefix_s, contract_version,
+            (int64_t)request->type_hash, prefix_s,
+            prefix_s, (int64_t)byte_len,
+            contract_version, target_endian,
+            namespace_field, object_field, payload_field));
+
+    n00b_static_image_builder_append(
+        builder,
+        n00b_cformat(
+            "_Static_assert((__builtin_offsetof(n00b_buffer_t,data)"
+            "%%sizeof(void*))==0,"
+            "\"buffer data pointer must be pointer-aligned\");"
+            "_Static_assert((sizeof(n00b_buffer_t)%%sizeof(void*))==0,"
+            "\"buffer static image object must be word-sized\");"
+            "static const uint64_t [|#|]_offsets[]={"
+            "__builtin_offsetof(n00b_buffer_t,data)/sizeof(void*)};"
+            "static n00b_gc_struct_layout_t [|#|]_shape={"
+            ".stride=(sizeof(n00b_buffer_t)/sizeof(void*)),.count=1,"
+            ".offset_count=1,.offsets=[|#|]_offsets};",
+            prefix_s, prefix_s, prefix_s));
+
+    n00b_static_image_builder_append(
+        builder,
+        n00b_cformat(
+            "static const n00b_buffer_t [|#|]_obj={"
+            ".data=(char*)[|#|]_data,"
+            ".byte_len=[|#|]ULL,"
+            ".alloc_len=[|#|]ULL,"
+            ".lock=nullptr,.allocator=nullptr,.flags=[|#|],"
+            ".scan_kind=N00B_GC_SCAN_KIND_NONE,"
+            ".scan_cb=nullptr,.scan_user=nullptr};",
+            prefix_s, prefix_s,
+            (int64_t)byte_len, (int64_t)alloc_len, borrowed_flags));
+
+    // WP-011 Phase 3c.iii: dict-key-position buffers get the
+    // XXH3_128bits of their payload threaded through as a 128-bit
+    // literal; the runtime probe loop in
+    // `n00b_register_static_object` pre-populates the alloc range's
+    // cached_hash so the first lookup short-circuits
+    // `n00b_buffer_hash`.  Non-dict-key buffer call sites default both
+    // halves to 0 and the slot stays zero.
+    n00b_static_image_builder_append(
+        builder,
+        n00b_cformat(
+            "static const n00b_static_object_desc_t [|#|]_obj_desc={"
+            ".start=(const void*)&[|#|]_obj,"
+            ".len=(uint64_t)sizeof([|#|]_obj),"
+            ".tinfo=[|#|]ULL,.scan_kind=N00B_GC_SCAN_KIND_CALLBACK,"
+            ".scan_cb=n00b_gc_scan_cb_struct_layout,"
+            ".scan_user=&[|#|]_shape,"
+            ".object_id=[|#|]ULL,.file=__FILE__,"
+            ".identity=[|#|],"
+            ".flags=N00B_STATIC_OBJECT_F_READONLY,"
+            ".cached_hash=(((n00b_uint128_t)0x[|#:016x|]ULL<<64)"
+            "|(n00b_uint128_t)0x[|#:016x|]ULL)};",
+            prefix_s, prefix_s, prefix_s,
+            (int64_t)request->type_hash,
+            prefix_s,
+            (int64_t)object_id,
+            object_identity_ref,
+            (int64_t)cached_hash_hi,
+            (int64_t)cached_hash_lo));
+
+    n00b_static_image_builder_append(
+        builder,
+        n00b_cformat(
+            "static const n00b_static_object_desc_t * const "
+            "[|#|]_obj_entry [|#|]=&[|#|]_obj_desc;"
+            "static const n00b_static_image_dependency_t [|#|]_deps[]={"
+            "{.desc=&[|#|]_data_desc,"
+            ".relocation_offset=__builtin_offsetof(n00b_buffer_t,data),"
+            ".role=\"payload\"}};"
+            "static const n00b_static_image_response_t [|#|]_response "
+            "__attribute__((used))={"
+            ".version=[|#|],.request=&[|#|]_request,"
+            ".object_start=(const void*)&[|#|]_obj,"
+            ".object_len=(uint64_t)sizeof([|#|]_obj),"
+            ".scan_kind=N00B_GC_SCAN_KIND_CALLBACK,"
+            ".scan_cb=n00b_gc_scan_cb_struct_layout,"
+            ".scan_user=&[|#|]_shape,.dependencies=[|#|]_deps,"
+            ".dependency_count=1};",
+            prefix_s, entry_attr_s, prefix_s,
+            prefix_s, prefix_s,
+            prefix_s, contract_version, prefix_s,
+            prefix_s, prefix_s,
+            prefix_s, prefix_s));
+
     return N00B_STATIC_IMAGE_OK;
 }
 
