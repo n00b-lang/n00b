@@ -11,6 +11,7 @@
 #include "adt/dict_untyped.h"
 #include "core/buffer.h"
 #include "core/gc_map.h"
+#include "core/hash.h"
 #include "core/mmaps.h"
 #include "core/runtime.h"
 #include "core/static_image.h"
@@ -27,6 +28,24 @@ const n00b_buffer_t *raw_buffer =
     ncc_static_image(.raw = "raw", .length = 3, .no_lock = true);
 const n00b_buffer_t *literal_buffer =
     b"literal";
+
+// WP-011 Phase 5f regression: two content-equal standalone `b"..."`
+// literal emissions at different call sites must populate the buffer
+// object descriptor's `.cached_hash` slot with the same XXH3_128bits
+// (matching `n00b_buffer_hash` exactly).  Before Phase 5f only the
+// dict-key buffer-emission path populated this slot; standalone
+// emissions left it at zero and the runtime `n00b_hash()` had to
+// recompute on every call, producing the same value but via a
+// different code path (vtable fallback) that elided the descriptor's
+// cached-hash short-circuit.  Post-Phase 5f the descriptor itself
+// carries the cached hash for every emission, so both lvalues see the
+// short-circuit on first lookup.
+const n00b_buffer_t *phase5f_buffer_a =
+    b"phase5f";
+const n00b_buffer_t *phase5f_buffer_b =
+    b"phase5f";
+const n00b_buffer_t *phase5f_empty_buffer =
+    b"";
 
 static n00b_list_t(int) static_int_list =
     l{1, 2, 3};
@@ -416,6 +435,55 @@ test_generated_static_array_literals(void)
     printf("  [PASS] generated static array literals\n");
 }
 
+static void
+test_phase5f_buffer_cached_hash_uniformity(void)
+{
+    n00b_static_objects_register_all();
+
+    // Sanity: both emissions point to distinct buffer descriptors
+    // (each `b"..."` produces its own static-image record) but the
+    // payload bytes are content-equal.
+    assert(phase5f_buffer_a != phase5f_buffer_b);
+    assert(phase5f_buffer_a->byte_len == 7);
+    assert(phase5f_buffer_b->byte_len == 7);
+    assert(memcmp(phase5f_buffer_a->data, "phase5f", 7) == 0);
+    assert(memcmp(phase5f_buffer_b->data, "phase5f", 7) == 0);
+
+    // The runtime contract: `n00b_hash(buffer_ptr, nullptr)` must
+    // return the same value for any two content-equal `b"..."`
+    // emissions.  Pre-Phase-5f this was already true at the algorithm
+    // level (the vtable fallback hashes raw bytes), but the
+    // descriptor's `.cached_hash` slot was zero for non-dict-key
+    // emissions, so the short-circuit in `n00b_hash` was a no-op for
+    // those sites.  Post-Phase-5f the slot is populated, so first-
+    // lookup hash returns the cached value and matches across sites.
+    n00b_uint128_t ha = n00b_hash((void *)phase5f_buffer_a, nullptr);
+    n00b_uint128_t hb = n00b_hash((void *)phase5f_buffer_b, nullptr);
+    assert(ha == hb);
+    assert(ha != 0);
+
+    // Equivalence with the direct `n00b_buffer_hash`:
+    n00b_uint128_t ref =
+        n00b_buffer_hash((n00b_buffer_t *)phase5f_buffer_a);
+    assert(ha == ref);
+
+    // Empty buffer caveat: an empty `b""` literal keeps
+    // cached_hash = 0 by design (algorithm parity with
+    // `n00b_buffer_hash`'s `n00b_hash_word(0ULL)` fallback we cannot
+    // reproduce at ncc compile time without depending on
+    // libn00b's `n00b_word_t` layout).  The runtime still returns the
+    // correct value because `n00b_hash` falls back to the vtable
+    // (recompute) when the cached slot is zero.
+    assert(phase5f_empty_buffer->byte_len == 0);
+    n00b_uint128_t empty_hash =
+        n00b_hash((void *)phase5f_empty_buffer, nullptr);
+    n00b_uint128_t empty_ref =
+        n00b_buffer_hash((n00b_buffer_t *)phase5f_empty_buffer);
+    assert(empty_hash == empty_ref);
+
+    printf("  [PASS] phase 5f buffer cached_hash uniformity\n");
+}
+
 int
 main(int argc, char **argv)
 {
@@ -433,6 +501,7 @@ main(int argc, char **argv)
     test_generated_static_image_registration();
     test_generated_static_list_literals();
     test_generated_static_array_literals();
+    test_phase5f_buffer_cached_hash_uniformity();
     printf("All ncc static image tests passed.\n");
 
     n00b_shutdown();
