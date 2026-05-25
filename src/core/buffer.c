@@ -240,6 +240,17 @@ n00b_buffer_static_init(n00b_static_image_builder_t *builder)
     bool have_hex = false;
     bool have_length = false;
     uint64_t length = 0;
+    // WP-011 Phase 3c.iii (D-066 buffer realization): dict-key-position
+    // buffer literals carry a precomputed XXH3_128bits of the buffer's
+    // payload bytes — the same value `n00b_buffer_hash` would compute
+    // at runtime — split into a low/high uint64 pair on the request
+    // wire (signed int64 underneath, see ncc's
+    // `build_buffer_literal_helper_request` for the bit-pattern
+    // reinterpretation contract).  When both halves are zero we leave
+    // the obj descriptor's `.cached_hash` slot at zero so non-key
+    // buffer literals stay bit-identical to pre-3c.iii behavior.
+    uint64_t cached_hash_lo = 0;
+    uint64_t cached_hash_hi = 0;
 
     for (uint64_t i = 0; i < request->arg_count; i++) {
         const n00b_static_init_arg_t *arg = &request->args[i];
@@ -290,6 +301,22 @@ n00b_buffer_static_init(n00b_static_image_builder_t *builder)
 
         if (static_arg_is_named(arg, "no_lock")
             && arg->kind == N00B_STATIC_INIT_ARG_BOOL) {
+            continue;
+        }
+
+        // WP-011 Phase 3c.iii: dict-key-position cached_hash inputs.
+        // The request wire transmits int64 (signed); we reinterpret
+        // the bit pattern as uint64 here.  ncc emits both halves
+        // only when the precomputed XXH3_128bits is non-zero.
+        if (static_arg_is_named(arg, "cached_hash_lo")
+            && arg->kind == N00B_STATIC_INIT_ARG_INT) {
+            cached_hash_lo = (uint64_t)arg->integer;
+            continue;
+        }
+
+        if (static_arg_is_named(arg, "cached_hash_hi")
+            && arg->kind == N00B_STATIC_INIT_ARG_INT) {
+            cached_hash_hi = (uint64_t)arg->integer;
             continue;
         }
 
@@ -436,7 +463,16 @@ n00b_buffer_static_init(n00b_static_image_builder_t *builder)
         ".scan_cb=n00b_gc_scan_cb_struct_layout,.scan_user=&%s_shape,"
         ".object_id=%lluULL,.file=__FILE__,"
         ".identity=%s,"
-        ".flags=N00B_STATIC_OBJECT_F_READONLY};"
+        ".flags=N00B_STATIC_OBJECT_F_READONLY,"
+        // WP-011 Phase 3c.iii: dict-key-position buffers get the
+        // XXH3_128bits of their payload threaded through as a
+        // 128-bit literal; the runtime probe loop in
+        // n00b_register_static_object pre-populates the alloc
+        // range's cached_hash so the first lookup short-circuits
+        // n00b_buffer_hash.  Non-dict-key buffer call sites
+        // default both halves to 0 and the slot stays zero.
+        ".cached_hash=(((n00b_uint128_t)0x%016llxULL<<64)"
+        "|(n00b_uint128_t)0x%016llxULL)};"
         "static const n00b_static_object_desc_t * const %s_obj_entry %s=&%s_obj_desc;"
         "static const n00b_static_image_dependency_t %s_deps[]={"
         "{.desc=&%s_data_desc,.relocation_offset=__builtin_offsetof(n00b_buffer_t,data),"
@@ -463,6 +499,11 @@ n00b_buffer_static_init(n00b_static_image_builder_t *builder)
         prefix, prefix, prefix, (unsigned long long)request->type_hash,
         prefix, (unsigned long long)object_id,
         have_identity ? object_identity_ref : "nullptr",
+        // WP-011 Phase 3c.iii: cached_hash high/low halves for the
+        // obj descriptor's `.cached_hash` slot.  Both default to 0
+        // for non-dict-key buffer literals.
+        (unsigned long long)cached_hash_hi,
+        (unsigned long long)cached_hash_lo,
         prefix, entry_attr, prefix,
         prefix, prefix,
         prefix, contract_version,
