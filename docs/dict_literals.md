@@ -347,6 +347,34 @@ The full library should compile with the dict literal lowering
 active. Tests that exercise the defaults should produce identical
 output to the pre-migration behavior.
 
+### Build invocation pitfalls
+
+n00b's `meson.build:15` guards against direct `meson setup` invocation
+because `build.sh` is what resolves `NCC_PATH` to the freshly-built
+workspace ncc (see `build.sh`'s `ensure_ncc` function) and invokes
+meson with `CC=$NCC_PATH`.
+
+The guard checks `get_option('using_build_script')` and aborts when
+unset. The option can be bypassed with `-Dusing_build_script=true`,
+but doing so **loses the NCC_PATH resolution** — meson auto-detects
+whatever `clang` happens to be on `PATH`, which then receives
+`--ncc-*` flags it does not understand and fails the
+`gen_unicode_lib` and vendor library compilations. This trap bit
+WP-011 Phase 5d's validation (a subagent had set up
+`build_wp011_phase3b` with `-Dusing_build_script=true` and the
+build silently used plain clang).
+
+The fix: **always use `bash build.sh <build-dir>`**. The script
+sets `using_build_script=true` AND sets `CC=$NCC_PATH` AND tracks
+NCC_PATH resolution so cold-start environments work. Bypassing it
+should be a deliberate, one-off override — not a default for fresh
+build directories.
+
+If you absolutely must bypass `build.sh` (e.g., to set up an IDE
+project that meson can read), explicitly pass `CC=<path-to-ncc>` to
+`meson setup` alongside `-Dusing_build_script=true`. Don't rely on
+`PATH` to resolve the right compiler.
+
 ### What CAN'T be migrated
 
 Files that the helper itself directly compiles into its own object

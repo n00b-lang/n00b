@@ -12,7 +12,21 @@ project(
 )
 
 if (get_option('using_build_script') != true)
-  error('Do not try to run meson directly. Run ./build.sh')
+  error('Do not try to run meson directly. Run ./build.sh.\n' +
+        '\n' +
+        'WHY: build.sh resolves NCC_PATH to the freshly-built workspace ncc\n' +
+        '     (see ensure_ncc), then invokes meson with CC=$NCC_PATH so the\n' +
+        '     n00b build uses the correct compiler. Bypassing build.sh and\n' +
+        '     setting -Dusing_build_script=true loses this resolution and\n' +
+        '     leaves meson to pick whatever clang is on PATH — which then\n' +
+        '     receives --ncc-* flags it does not understand and fails the\n' +
+        '     gen_unicode_lib / vendor library compile.\n' +
+        '\n' +
+        '     See docs/dict_literals.md ("Build invocation pitfalls").\n' +
+        '\n' +
+        'IF YOU REALLY MEAN IT: pass -Dusing_build_script=true AND set\n' +
+        '                       CC=<workspace ncc> AND understand that no\n' +
+        '                       further n00b-internal guards apply.')
 endif
 
 target_os = host_machine.system()
