@@ -622,11 +622,80 @@ endif
 
 # macOS ACME trust verifier + Keychain secret provider ObjC bridges
 # are declared in src/net/quic/meson.build (per-subdir build files).
-n00b = static_library('n00b',
+#
+# WP-011 Phase 5b: two-stage libn00b build.
+#
+# `n00b_bootstrap` is libn00b built WITHOUT the static-init helper flag.
+# The `n00b-static-init-helper` executable links against this bootstrap
+# library — it has to, because the helper is what implements `d{...}`
+# lowering and so cannot itself depend on the helper at compile time.
+#
+# `n00b` is the "full" libn00b, built WITH the helper flag (so its own
+# sources may use `d{...}` static dict literals).  Meson tracks the
+# build-order dependency on the helper through the
+# `n00b_static_init_helper_ready` custom_target appearing in the full
+# library's source list — meson treats the custom_target's generated
+# header as a build dep, so the helper exec is compiled and linked
+# before any libn00b TU that needs the helper flag.
+#
+# `n00b_dict_aware_src` is the list of libn00b sources that USE
+# `d{...}` static dict literals.  Those sources can only be compiled
+# with the helper flag (the helper must already exist), so they
+# appear in the full library but NOT in the bootstrap library.  The
+# bootstrap library only contains sources that do not need the helper.
+# Phase 5b starts with this list empty; Phase 5c (and beyond) adds
+# files to it as libn00b internals migrate to static dict literals.
+#
+# Tests and downstream consumers link `n00b` (the full library) and
+# continue to pass `n00b_static_init_helper_flags` per-test in their
+# own c_args (their own test source files also need the helper flag if
+# they use dict literals).
+n00b_dict_aware_src = []
+
+n00b_bootstrap = static_library('n00b_bootstrap',
     n00b_dll_src,
     include_directories: incdir,
     dependencies: deps + [libdl_dep, mir_dep, picoquic_dep, monocypher_dep],
     c_args: exe_c_args,
+    link_args: link_args,
+    link_whole: link_whole_libs,
+    install: false,
+)
+
+n00b_static_init_helper = executable('n00b-static-init-helper',
+    ['src/tools/n00b-static-init-helper.c'],
+    include_directories: incdir,
+    c_args: exe_c_args,
+    link_args: exe_link_args,
+    link_with: [n00b_bootstrap],
+    dependencies: [picoquic_dep, monocypher_dep],
+)
+
+n00b_static_init_helper_ready = custom_target(
+    'n00b-static-init-helper-ready',
+    output: 'n00b_static_init_helper_ready.h',
+    command: [
+        python3,
+        '-c',
+        'import pathlib, sys; pathlib.Path(sys.argv[1]).write_text("/* generated */\\n")',
+        '@OUTPUT@',
+    ],
+    depends: n00b_static_init_helper,
+)
+
+n00b_static_init_helper_flags = [
+    '--ncc-static-init-helper=' + n00b_static_init_helper.full_path(),
+]
+
+# Full libn00b, built with the helper flag.  Including
+# `n00b_static_init_helper_ready` (a custom_target) in `sources` makes
+# meson order this library's compilation after the helper executable
+# is built, even though `static_library` has no `depends` keyword.
+n00b = static_library('n00b',
+    n00b_dll_src + n00b_dict_aware_src + [n00b_static_init_helper_ready],
+    include_directories: incdir,
+    dependencies: deps + [libdl_dep, mir_dep, picoquic_dep, monocypher_dep],
+    c_args: exe_c_args + n00b_static_init_helper_flags,
     link_args: link_args,
     link_whole: link_whole_libs,
     install: true,
@@ -657,31 +726,6 @@ test_common_kwargs = {
 # Alias kept for clarity at QUIC test sites that drive picoquic
 # explicitly; structurally identical to test_common_kwargs.
 quic_test_kwargs = test_common_kwargs
-
-n00b_static_init_helper = executable('n00b-static-init-helper',
-    ['src/tools/n00b-static-init-helper.c'],
-    include_directories: incdir,
-    c_args: exe_c_args,
-    link_args: exe_link_args,
-    link_with: [n00b],
-    dependencies: [picoquic_dep, monocypher_dep],
-)
-
-n00b_static_init_helper_ready = custom_target(
-    'n00b-static-init-helper-ready',
-    output: 'n00b_static_init_helper_ready.h',
-    command: [
-        python3,
-        '-c',
-        'import pathlib, sys; pathlib.Path(sys.argv[1]).write_text("/* generated */\\n")',
-        '@OUTPUT@',
-    ],
-    depends: n00b_static_init_helper,
-)
-
-n00b_static_init_helper_flags = [
-    '--ncc-static-init-helper=' + n00b_static_init_helper.full_path(),
-]
 
 # QUIC demo executables — each lives in its own per-subdir meson.build.
 subdir('examples/quic_echo')
