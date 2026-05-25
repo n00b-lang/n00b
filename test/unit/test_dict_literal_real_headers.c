@@ -65,22 +65,16 @@ main(int argc, char **argv)
                                 memory_order_relaxed)
            == 3u);
 
-    // Lookup configuration. The dict literal helper emits the dict
-    // with `.fn=nullptr, .skip_obj_hash=0`, which routes lookups
-    // through `n00b_hash(*key, nullptr)`. That path consults the
-    // static-range descriptor's `cached_hash`, which differs across
-    // r-string occurrences (the dict-key descriptors carry the
-    // content-XXH3 that ncc precomputed; standalone `r"foo"` lvalues
-    // carry `cached_hash=0` per Phase 3c.ii.b). Configure the dict
-    // to hash query keys directly via `n00b_string_hash`, mirroring
-    // exactly what the helper used to populate `bucket.hv`. This is
-    // safe to mutate at runtime: the dict object lives in writable
-    // .data (helper emits a designated initializer for the value
-    // target), and `.skip_obj_hash + .fn` are stable for the
-    // lifetime of the dict.
-    test_dict.skip_obj_hash = 1;
-    test_dict.fn            = (n00b_hash_fn)n00b_string_hash;
-
+    // Lookup configuration. WP-011 Phase 5d landed the cached_hash
+    // population on every r-string emission (not just dict keys), so
+    // standalone `r"foo"` lvalues and the dict-key descriptors now
+    // share the same content-XXH3 in their `cached_hash` slot. With
+    // both sides matching, the default lookup path
+    // (`n00b_hash(*key, nullptr)` -> short-circuits on `cached_hash`)
+    // works without the prior `.skip_obj_hash + .fn` workaround. The
+    // dict literal helper emits `.fn=nullptr, .skip_obj_hash=0`, which
+    // is exactly what we want; no runtime mutation needed.
+    //
     // Content-based lookup via the canonical n00b_dict_get macro.
     // The macro takes `&(key)`, so the query key must be an lvalue.
     // Bind each r-string literal to a local pointer first.
