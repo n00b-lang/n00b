@@ -646,14 +646,28 @@ endif
 # Phase 5b starts with this list empty; Phase 5c (and beyond) adds
 # files to it as libn00b internals migrate to static dict literals.
 #
+# Where a dict-aware translation unit defines a symbol that is also
+# needed by the bootstrap libn00b (e.g. it sits behind a function
+# pointer or extern declaration that bootstrap-stage code references),
+# the bootstrap library uses a paired stub in `n00b_bootstrap_only_src`
+# that satisfies the symbol with a no-op or non-dict implementation.
+# That keeps both libraries link-clean without introducing duplicate
+# definitions in the full libn00b.
+#
 # Tests and downstream consumers link `n00b` (the full library) and
 # continue to pass `n00b_static_init_helper_flags` per-test in their
 # own c_args (their own test source files also need the helper flag if
 # they use dict literals).
-n00b_dict_aware_src = []
+n00b_dict_aware_src = (
+    n00b_text_strings_dict_aware_src
+)
+
+n00b_bootstrap_only_src = (
+    n00b_text_strings_bootstrap_only_src
+)
 
 n00b_bootstrap = static_library('n00b_bootstrap',
-    n00b_dll_src,
+    n00b_dll_src + n00b_bootstrap_only_src,
     include_directories: incdir,
     dependencies: deps + [libdl_dep, mir_dep, picoquic_dep, monocypher_dep],
     c_args: exe_c_args,
