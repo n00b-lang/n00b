@@ -1910,7 +1910,7 @@ main(int argc, char **argv)
         n00b_static_image_build(&request, &builder);
     if (status != N00B_STATIC_IMAGE_OK) {
         fprintf(stderr, "%s", builder.error
-                                ? builder.error
+                                ? builder.error->data
                                 : n00b_static_image_status_name(status));
         n00b_static_image_builder_destroy(&builder);
         n00b_shutdown();
@@ -1919,7 +1919,9 @@ main(int argc, char **argv)
         return 3;
     }
 
-    printf("NCC_STATIC_INIT_OK %s\n%s", builder.expr, builder.decls);
+    printf("NCC_STATIC_INIT_OK %s\n%s",
+           builder.expr ? builder.expr->data : "",
+           builder.decls ? builder.decls->data : "");
 
     n00b_static_image_builder_destroy(&builder);
     n00b_shutdown();

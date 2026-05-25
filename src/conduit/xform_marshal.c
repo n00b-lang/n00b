@@ -19,7 +19,7 @@ marshal_transform(
 
     if (!input) {
         st->status = N00B_MARSHAL_ERR_NULL_ARG;
-        st->error  = "marshal transform received a null object";
+        st->error  = r"marshal transform received a null object";
         return n00b_option_none(n00b_buffer_t *);
     }
 
@@ -93,11 +93,11 @@ n00b_conduit_marshal_status(
     return st->status;
 }
 
-const char *
+n00b_string_t *
 n00b_conduit_marshal_error(
     n00b_conduit_xform_t(n00b_marshal_object_t, n00b_buffer_t *) *xf)
 {
-    if (!xf || !xf->cookie) return "null marshal transform";
+    if (!xf || !xf->cookie) return r"null marshal transform";
 
     n00b_conduit_marshal_state_t *st = n00b_conduit_xform_cookie(
         n00b_marshal_object_t, n00b_buffer_t *, xf);
@@ -122,7 +122,7 @@ unmarshal_transform(
 
     if (!input) {
         st->status = N00B_MARSHAL_ERR_NULL_ARG;
-        st->error  = "unmarshal transform received a null buffer";
+        st->error  = r"unmarshal transform received a null buffer";
         return n00b_option_none(n00b_marshal_object_t);
     }
 
@@ -148,7 +148,7 @@ unmarshal_flush(
         n00b_buffer_t *, n00b_marshal_object_t, xf);
 
     if (st->status == N00B_MARSHAL_ERR_INCOMPLETE_STREAM && !st->error) {
-        st->error = "upstream closed with an incomplete marshal stream";
+        st->error = r"upstream closed with an incomplete marshal stream";
     }
 }
 
@@ -220,11 +220,11 @@ n00b_conduit_unmarshal_status(
     return st->status;
 }
 
-const char *
+n00b_string_t *
 n00b_conduit_unmarshal_error(
     n00b_conduit_xform_t(n00b_buffer_t *, n00b_marshal_object_t) *xf)
 {
-    if (!xf || !xf->cookie) return "null unmarshal transform";
+    if (!xf || !xf->cookie) return r"null unmarshal transform";
 
     n00b_conduit_unmarshal_state_t *st = n00b_conduit_xform_cookie(
         n00b_buffer_t *, n00b_marshal_object_t, xf);

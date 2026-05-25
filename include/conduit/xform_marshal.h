@@ -31,14 +31,14 @@ typedef struct {
     uint32_t              flags;
     uint32_t              base_address;
     n00b_marshal_status_t status;
-    const char           *error;
+    n00b_string_t        *error;
 } n00b_conduit_marshal_state_t;
 
 typedef struct {
     n00b_unmarshal_ctx_t *ctx;
     n00b_arena_t         *target_arena;
     n00b_marshal_status_t status;
-    const char           *error;
+    n00b_string_t        *error;
 } n00b_conduit_unmarshal_state_t;
 
 // ============================================================================
@@ -66,7 +66,7 @@ extern n00b_marshal_status_t
 n00b_conduit_marshal_status(
     n00b_conduit_xform_t(n00b_marshal_object_t, n00b_buffer_t *) *xf);
 
-extern const char *
+extern n00b_string_t *
 n00b_conduit_marshal_error(
     n00b_conduit_xform_t(n00b_marshal_object_t, n00b_buffer_t *) *xf);
 
@@ -74,7 +74,7 @@ extern n00b_marshal_status_t
 n00b_conduit_unmarshal_status(
     n00b_conduit_xform_t(n00b_buffer_t *, n00b_marshal_object_t) *xf);
 
-extern const char *
+extern n00b_string_t *
 n00b_conduit_unmarshal_error(
     n00b_conduit_xform_t(n00b_buffer_t *, n00b_marshal_object_t) *xf);
 

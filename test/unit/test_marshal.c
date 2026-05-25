@@ -631,10 +631,11 @@ marshal_portable_ref(n00b_arena_t *arena,
     n00b_marshal_ctx_t *ctx = n00b_marshal_ctx_new(.base_address = base_address);
     n00b_buffer_t *buf = n00b_marshal_incremental(ctx, src);
     if (buf == nullptr) {
+        n00b_string_t *err = n00b_marshal_ctx_error(ctx);
         fprintf(stderr,
                 "portable marshal failed: status=%d error=%s\n",
                 n00b_marshal_ctx_status(ctx),
-                n00b_marshal_ctx_error(ctx));
+                err ? err->data : "(null)");
     }
     assert(buf != nullptr);
     n00b_marshal_ctx_destroy(ctx);

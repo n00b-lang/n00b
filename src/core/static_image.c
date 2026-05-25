@@ -1,9 +1,6 @@
 #include "core/static_image.h"
-
-#include <stdarg.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
+#include "core/string.h"
+#include "text/strings/string_ops.h"
 
 const char *
 n00b_static_image_status_name(n00b_static_image_status_t status)
@@ -96,61 +93,6 @@ n00b_static_image_validate_request(const n00b_static_image_request_t *request)
     return N00B_STATIC_IMAGE_OK;
 }
 
-static char *
-dup_cstr(const char *s)
-{
-    if (!s) {
-        return nullptr;
-    }
-    size_t len = strlen(s);
-    char  *out = malloc(len + 1);
-    if (!out) {
-        return nullptr;
-    }
-    memcpy(out, s, len + 1);
-    return out;
-}
-
-static char *
-vformat_alloc(const char *fmt, va_list args)
-{
-    va_list copy;
-    va_copy(copy, args);
-    int n = vsnprintf(nullptr, 0, fmt, copy);
-    va_end(copy);
-    if (n < 0) {
-        return nullptr;
-    }
-
-    char *out = malloc((size_t)n + 1);
-    if (!out) {
-        return nullptr;
-    }
-    vsnprintf(out, (size_t)n + 1, fmt, args);
-    return out;
-}
-
-static void
-append_vformat(char **target, const char *fmt, va_list args)
-{
-    char *piece = vformat_alloc(fmt, args);
-    if (!piece) {
-        return;
-    }
-
-    size_t old_len = *target ? strlen(*target) : 0;
-    size_t add_len = strlen(piece);
-    char  *out     = realloc(*target, old_len + add_len + 1);
-    if (!out) {
-        free(piece);
-        return;
-    }
-
-    memcpy(out + old_len, piece, add_len + 1);
-    *target = out;
-    free(piece);
-}
-
 void
 n00b_static_image_builder_init(n00b_static_image_builder_t *builder,
                                const n00b_static_image_request_t *request)
@@ -170,60 +112,49 @@ n00b_static_image_builder_destroy(n00b_static_image_builder_t *builder)
     if (!builder) {
         return;
     }
-    free(builder->expr);
-    free(builder->decls);
-    free(builder->error);
-    *builder = (n00b_static_image_builder_t){0};
+    // n00b_string_t * fields are GC-tracked; no manual free needed.
+    // Clear the struct so a destroyed builder can't be reused
+    // accidentally.
+    *builder = (n00b_static_image_builder_t){};
 }
 
 void
 n00b_static_image_builder_set_expr(n00b_static_image_builder_t *builder,
-                                   const char *fmt, ...)
+                                   n00b_string_t              *expr)
 {
     if (!builder) {
         return;
     }
-    free(builder->expr);
-    builder->expr = nullptr;
-
-    va_list args;
-    va_start(args, fmt);
-    builder->expr = vformat_alloc(fmt, args);
-    va_end(args);
+    builder->expr = expr;
 }
 
 void
 n00b_static_image_builder_append(n00b_static_image_builder_t *builder,
-                                 const char *fmt, ...)
+                                 n00b_string_t              *chunk)
 {
-    if (!builder) {
+    if (!builder || !chunk) {
         return;
     }
 
-    va_list args;
-    va_start(args, fmt);
-    append_vformat(&builder->decls, fmt, args);
-    va_end(args);
+    if (!builder->decls) {
+        builder->decls = chunk;
+        return;
+    }
+
+    builder->decls = n00b_unicode_str_cat(builder->decls, chunk);
 }
 
 n00b_static_image_status_t
 n00b_static_image_builder_fail(n00b_static_image_builder_t *builder,
-                               n00b_static_image_status_t status,
-                               const char *fmt, ...)
+                               n00b_static_image_status_t   status,
+                               n00b_string_t               *msg)
 {
     if (!builder) {
         return status;
     }
 
-    free(builder->error);
-    builder->error  = nullptr;
     builder->status = status;
-
-    va_list args;
-    va_start(args, fmt);
-    builder->error = vformat_alloc(fmt, args);
-    va_end(args);
-
+    builder->error  = msg;
     return status;
 }
 
@@ -240,7 +171,8 @@ n00b_static_image_build(const n00b_static_image_request_t *request,
     n00b_static_image_status_t status = n00b_static_image_validate_request(request);
     if (status != N00B_STATIC_IMAGE_OK) {
         builder->status = status;
-        builder->error  = dup_cstr(n00b_static_image_status_name(status));
+        builder->error  = n00b_string_from_cstr(
+            n00b_static_image_status_name(status));
         return status;
     }
 
@@ -248,7 +180,7 @@ n00b_static_image_build(const n00b_static_image_request_t *request,
     if (!n00b_option_is_set(info_opt)) {
         return n00b_static_image_builder_fail(
             builder, N00B_STATIC_IMAGE_ERR_UNREGISTERED_TYPE,
-            "type is not registered");
+            r"type is not registered");
     }
 
     n00b_type_info_t *info = n00b_option_get(info_opt);
@@ -256,7 +188,7 @@ n00b_static_image_build(const n00b_static_image_request_t *request,
     if (!fn) {
         return n00b_static_image_builder_fail(
             builder, N00B_STATIC_IMAGE_ERR_NO_INITIALIZER,
-            "type has no static initializer");
+            r"type has no static initializer");
     }
 
     bool has_positional = false;
@@ -273,12 +205,12 @@ n00b_static_image_build(const n00b_static_image_request_t *request,
     if (has_positional && !info->static_init_takes_vargs) {
         return n00b_static_image_builder_fail(
             builder, N00B_STATIC_IMAGE_ERR_ARGUMENT,
-            "type static initializer does not accept positional arguments");
+            r"type static initializer does not accept positional arguments");
     }
     if (has_named && !info->static_init_takes_kargs) {
         return n00b_static_image_builder_fail(
             builder, N00B_STATIC_IMAGE_ERR_ARGUMENT,
-            "type static initializer does not accept keyword arguments");
+            r"type static initializer does not accept keyword arguments");
     }
 
     status = ((n00b_static_initializer_fn)fn)(builder);
@@ -286,7 +218,7 @@ n00b_static_image_build(const n00b_static_image_request_t *request,
         && (!builder->expr || !builder->decls)) {
         return n00b_static_image_builder_fail(
             builder, N00B_STATIC_IMAGE_ERR_INITIALIZER,
-            "static initializer did not produce an expression and declarations");
+            r"static initializer did not produce an expression and declarations");
     }
 
     builder->status = status;

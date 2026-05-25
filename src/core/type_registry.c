@@ -56,9 +56,11 @@ n00b_type_register(uint64_t type_hash, const n00b_type_info_t *info)
 
     *copy = *info;
 
-    copy->name                 = n00b_registry_strdup(sp, info->name);
-    copy->literal_modifier     = n00b_registry_strdup(sp, info->literal_modifier);
-    copy->static_layout.reason = n00b_registry_strdup(sp, info->static_layout.reason);
+    copy->name             = n00b_registry_strdup(sp, info->name);
+    copy->literal_modifier = n00b_registry_strdup(sp, info->literal_modifier);
+    // reason is an n00b_string_t * — typically a static r-string literal,
+    // so the pointer copy in `*copy = *info` is sufficient; no string dup
+    // is needed.
 
     // ext_vtable starts as none.
     copy->ext_vtable = n00b_option_none(n00b_array_t(n00b_method_t) *);
@@ -116,24 +118,24 @@ n00b_type_static_layout_allowed(uint64_t type_hash)
     }
 }
 
-const char *
+n00b_string_t *
 n00b_static_layout_policy_name(n00b_static_layout_policy_t policy)
 {
     switch (policy) {
     case N00B_STATIC_LAYOUT_DEFAULT_DENY:
-        return "default-deny";
+        return r"default-deny";
     case N00B_STATIC_LAYOUT_FORBIDDEN:
-        return "forbidden";
+        return r"forbidden";
     case N00B_STATIC_LAYOUT_TRANSIENT:
-        return "transient";
+        return r"transient";
     case N00B_STATIC_LAYOUT_PLAIN:
-        return "plain";
+        return r"plain";
     case N00B_STATIC_LAYOUT_FIXUP:
-        return "fixup";
+        return r"fixup";
     case N00B_STATIC_LAYOUT_CONSTRUCTOR_IMAGE:
-        return "constructor-image";
+        return r"constructor-image";
     default:
-        return "unknown";
+        return r"unknown";
     }
 }
 

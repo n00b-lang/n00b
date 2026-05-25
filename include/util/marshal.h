@@ -55,7 +55,7 @@ extern n00b_marshal_ctx_t *n00b_marshal_ctx_new() _kargs
 };
 extern void n00b_marshal_ctx_destroy(n00b_marshal_ctx_t *ctx);
 extern n00b_marshal_status_t n00b_marshal_ctx_status(n00b_marshal_ctx_t *ctx);
-extern const char *n00b_marshal_ctx_error(n00b_marshal_ctx_t *ctx);
+extern n00b_string_t *n00b_marshal_ctx_error(n00b_marshal_ctx_t *ctx);
 
 extern n00b_buffer_t *n00b_marshal_incremental(n00b_marshal_ctx_t *ctx,
                                                void               *addr) _kargs
@@ -74,7 +74,7 @@ extern n00b_unmarshal_ctx_t *n00b_unmarshal_ctx_new() _kargs
 };
 extern void n00b_unmarshal_ctx_destroy(n00b_unmarshal_ctx_t *ctx);
 extern n00b_marshal_status_t n00b_unmarshal_ctx_status(n00b_unmarshal_ctx_t *ctx);
-extern const char *n00b_unmarshal_ctx_error(n00b_unmarshal_ctx_t *ctx);
+extern n00b_string_t *n00b_unmarshal_ctx_error(n00b_unmarshal_ctx_t *ctx);
 
 extern n00b_list_t(void *) n00b_unmarshal_incremental(n00b_unmarshal_ctx_t *ctx,
                                                       n00b_buffer_t        *chunk);

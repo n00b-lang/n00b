@@ -681,8 +681,7 @@ n00b_dict_static_init(n00b_static_image_builder_t *builder)
     return n00b_static_image_builder_fail(
         builder,
         N00B_STATIC_IMAGE_ERR_UNSUPPORTED_POLICY,
-        "n00b_dict_t static images are produced by the container helper's "
-        "`container_kind dict` path, not by n00b_static_image_build()");
+        r"n00b_dict_t static images are produced by the container helper's `container_kind dict` path, not by n00b_static_image_build()");
 }
 
 /*

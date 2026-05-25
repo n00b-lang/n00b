@@ -51,7 +51,7 @@ typedef enum n00b_static_layout_policy_t : uint8_t {
 typedef struct n00b_static_layout_info_t {
     n00b_static_layout_policy_t policy;
     n00b_gc_scan_kind_t         scan_kind;
-    const char                 *reason;
+    n00b_string_t              *reason;
 } n00b_static_layout_info_t;
 
 typedef n00b_option_t(n00b_array_t(n00b_method_t) *) n00b_ext_vtable_opt_t;
@@ -131,8 +131,11 @@ extern bool n00b_type_static_layout_allowed(uint64_t type_hash);
 
 /**
  * @brief Stable policy name for diagnostics and tests.
+ *
+ * Returns an n00b r-string literal so callers can pass it straight to
+ * `n00b_print` / `n00b_eprintf` / `n00b_string_eq`.
  */
-extern const char *n00b_static_layout_policy_name(n00b_static_layout_policy_t policy);
+extern n00b_string_t *n00b_static_layout_policy_name(n00b_static_layout_policy_t policy);
 
 /**
  * @brief Get the typehash stored in an object's allocation header.

@@ -1,4 +1,5 @@
 #define N00B_USE_INTERNAL_API
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -12,6 +13,7 @@
 #include "core/data_lock.h"
 #include "core/arena.h"
 #include "core/static_image.h"
+#include "core/string.h"
 #include "util/defer.h"
 
 // ============================================================================
@@ -54,6 +56,43 @@ _buffer_create(int64_t length, n00b_allocator_t *allocator)
     return buf;
 }
 
+/*
+ * snprintf into a heap buffer and wrap the result as an n00b_string_t *.
+ * Used by the static-image builder helpers below to keep the existing
+ * printf-style format strings while satisfying the new builder API,
+ * which takes pre-formatted n00b_string_t * arguments. The libc usage
+ * here is consistent with the rest of this file's static-image build
+ * path; the higher-level audit will deal with this code cluster
+ * separately.
+ */
+[[gnu::format(printf, 1, 2)]]
+static n00b_string_t *
+static_image_cfmt(const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    va_list ap2;
+    va_copy(ap2, ap);
+    int n = vsnprintf(nullptr, 0, fmt, ap2);
+    va_end(ap2);
+    if (n < 0) {
+        va_end(ap);
+        return nullptr;
+    }
+
+    char *buf = malloc((size_t)n + 1);
+    if (!buf) {
+        va_end(ap);
+        return nullptr;
+    }
+    vsnprintf(buf, (size_t)n + 1, fmt, ap);
+    va_end(ap);
+
+    n00b_string_t *out = n00b_string_from_raw(buf, (int64_t)n);
+    free(buf);
+    return out;
+}
+
 static bool
 static_arg_is_named(const n00b_static_init_arg_t *arg, const char *name)
 {
@@ -66,10 +105,10 @@ static_image_append_bytes(n00b_static_image_builder_t *builder,
 {
     for (size_t i = 0; i < len; i++) {
         if (i != 0) {
-            n00b_static_image_builder_append(builder, ",");
+            n00b_static_image_builder_append(builder, r",");
         }
-        n00b_static_image_builder_append(builder, "0x%02x",
-                                         (unsigned int)data[i]);
+        n00b_static_image_builder_append(
+            builder, static_image_cfmt("0x%02x", (unsigned int)data[i]));
     }
 }
 
@@ -186,7 +225,7 @@ decode_hex_arg(n00b_static_image_builder_t *builder,
     if (arg->bytes.len % 2 != 0) {
         return n00b_static_image_builder_fail(
             builder, N00B_STATIC_IMAGE_ERR_ARGUMENT,
-            "buffer .hex static initializer requires an even number of hex digits");
+            r"buffer .hex static initializer requires an even number of hex digits");
     }
 
     uint64_t len = arg->bytes.len / 2;
@@ -194,7 +233,7 @@ decode_hex_arg(n00b_static_image_builder_t *builder,
     if (!data) {
         return n00b_static_image_builder_fail(
             builder, N00B_STATIC_IMAGE_ERR_INITIALIZER,
-            "out of memory while decoding buffer .hex argument");
+            r"out of memory while decoding buffer .hex argument");
     }
 
     const unsigned char *src = arg->bytes.data;
@@ -205,7 +244,7 @@ decode_hex_arg(n00b_static_image_builder_t *builder,
             free(data);
             return n00b_static_image_builder_fail(
                 builder, N00B_STATIC_IMAGE_ERR_ARGUMENT,
-                "buffer .hex static initializer contains a non-hex digit");
+                r"buffer .hex static initializer contains a non-hex digit");
         }
         data[i] = (unsigned char)((hi << 4) | lo);
     }
@@ -223,13 +262,13 @@ n00b_buffer_static_init(n00b_static_image_builder_t *builder)
     if (!request->symbol_prefix || !request->symbol_prefix[0]) {
         return n00b_static_image_builder_fail(
             builder, N00B_STATIC_IMAGE_ERR_ARGUMENT,
-            "n00b_buffer_t static initializer requires a symbol prefix");
+            r"n00b_buffer_t static initializer requires a symbol prefix");
     }
 
     if ((request->object_flags & N00B_STATIC_OBJECT_F_READONLY) == 0) {
         return n00b_static_image_builder_fail(
             builder, N00B_STATIC_IMAGE_ERR_UNSUPPORTED_POLICY,
-            "n00b_buffer_t static images are currently readonly only");
+            r"n00b_buffer_t static images are currently readonly only");
     }
 
     const unsigned char *raw = nullptr;
@@ -261,7 +300,7 @@ n00b_buffer_static_init(n00b_static_image_builder_t *builder)
             if (have_raw || have_hex) {
                 return n00b_static_image_builder_fail(
                     builder, N00B_STATIC_IMAGE_ERR_ARGUMENT,
-                    "buffer static initializer accepts only one raw or hex payload");
+                    r"buffer static initializer accepts only one raw or hex payload");
             }
             have_raw = true;
             raw = arg->bytes.data;
@@ -274,7 +313,7 @@ n00b_buffer_static_init(n00b_static_image_builder_t *builder)
             if (have_raw || have_hex) {
                 return n00b_static_image_builder_fail(
                     builder, N00B_STATIC_IMAGE_ERR_ARGUMENT,
-                    "buffer static initializer accepts only one raw or hex payload");
+                    r"buffer static initializer accepts only one raw or hex payload");
             }
             n00b_static_image_status_t status = decode_hex_arg(
                 builder, arg, &hex_decoded, &hex_decoded_len);
@@ -292,7 +331,7 @@ n00b_buffer_static_init(n00b_static_image_builder_t *builder)
             if (arg->integer < 0) {
                 return n00b_static_image_builder_fail(
                     builder, N00B_STATIC_IMAGE_ERR_ARGUMENT,
-                    "buffer .length static initializer must be non-negative");
+                    r"buffer .length static initializer must be non-negative");
             }
             have_length = true;
             length = (uint64_t)arg->integer;
@@ -322,7 +361,7 @@ n00b_buffer_static_init(n00b_static_image_builder_t *builder)
 
         return n00b_static_image_builder_fail(
             builder, N00B_STATIC_IMAGE_ERR_ARGUMENT,
-            "unsupported n00b_buffer_t static initializer argument");
+            r"unsupported n00b_buffer_t static initializer argument");
     }
 
     if (!have_raw && !have_hex) {
@@ -332,7 +371,7 @@ n00b_buffer_static_init(n00b_static_image_builder_t *builder)
         free(hex_decoded);
         return n00b_static_image_builder_fail(
             builder, N00B_STATIC_IMAGE_ERR_ARGUMENT,
-            "buffer .length must match the static raw/hex payload length");
+            r"buffer .length must match the static raw/hex payload length");
     }
 
     uint64_t byte_len  = raw_len;
@@ -343,7 +382,7 @@ n00b_buffer_static_init(n00b_static_image_builder_t *builder)
         free(hex_decoded);
         return n00b_static_image_builder_fail(
             builder, N00B_STATIC_IMAGE_ERR_INITIALIZER,
-            "out of memory while building buffer static image");
+            r"out of memory while building buffer static image");
     }
     if (raw && raw_len) {
         memcpy(payload, raw, (size_t)raw_len);
@@ -379,7 +418,7 @@ n00b_buffer_static_init(n00b_static_image_builder_t *builder)
         free(identity_payload_key_lit);
         return n00b_static_image_builder_fail(
             builder, N00B_STATIC_IMAGE_ERR_INITIALIZER,
-            "out of memory while building buffer static image identities");
+            r"out of memory while building buffer static image identities");
     }
 
     char payload_identity_ref[128];
@@ -394,11 +433,13 @@ n00b_buffer_static_init(n00b_static_image_builder_t *builder)
     unsigned target_endian    = (unsigned)request->target_abi.endian;
     unsigned borrowed_flags   = (unsigned)N00B_BUF_F_BORROWED;
 
-    n00b_static_image_builder_set_expr(builder, "&%s_obj", prefix);
+    n00b_static_image_builder_set_expr(
+        builder, static_image_cfmt("&%s_obj", prefix));
 
     if (have_identity) {
         n00b_static_image_builder_append(
             builder,
+            static_image_cfmt(
             "static const n00b_static_identity_t %s_data_id={"
             ".version=1u,"
             ".kind=N00B_STATIC_IDENTITY_NCC_STATIC_IMAGE_PAYLOAD,"
@@ -408,16 +449,18 @@ n00b_buffer_static_init(n00b_static_image_builder_t *builder)
             ".kind=N00B_STATIC_IDENTITY_NCC_STATIC_IMAGE_OBJECT,"
             ".namespace_id=%s,.object_key=%s};",
             prefix, identity_namespace_lit, identity_payload_key_lit,
-            prefix, identity_namespace_lit, identity_object_key_lit);
+            prefix, identity_namespace_lit, identity_object_key_lit));
     }
 
     n00b_static_image_builder_append(
         builder,
+        static_image_cfmt(
         "static const unsigned char %s_data[]={",
-        prefix);
+        prefix));
     static_image_append_bytes(builder, payload, (size_t)payload_len);
     n00b_static_image_builder_append(
         builder,
+        static_image_cfmt(
         "};"
         "static const n00b_static_object_desc_t %s_data_desc={"
         ".start=(const void*)%s_data,"
@@ -507,7 +550,7 @@ n00b_buffer_static_init(n00b_static_image_builder_t *builder)
         prefix, entry_attr, prefix,
         prefix, prefix,
         prefix, contract_version,
-        prefix, prefix, prefix, prefix, prefix, prefix);
+        prefix, prefix, prefix, prefix, prefix, prefix));
 
     free(payload);
     free(hex_decoded);

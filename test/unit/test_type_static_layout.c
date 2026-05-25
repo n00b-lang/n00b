@@ -10,6 +10,7 @@
 #include "core/type_info.h"
 #include "adt/dict_untyped.h"
 #include "n00b/embed_ffi.h"
+#include "text/strings/string_ops.h"
 
 typedef struct test_default_static_policy_t {
     int value;
@@ -61,7 +62,7 @@ test_builtin_static_layout_policies(void)
     assert(layout->policy == N00B_STATIC_LAYOUT_CONSTRUCTOR_IMAGE);
     assert(layout->scan_kind == N00B_GC_SCAN_KIND_CALLBACK);
     assert(layout->reason != nullptr);
-    assert(strstr(layout->reason, "buffer") != nullptr);
+    assert(n00b_unicode_str_contains(layout->reason, r"buffer"));
     assert(n00b_type_static_layout_allowed(typehash(n00b_buffer_t *)));
 
     // WP-011 Phase 3b: dict policy changed from default-deny to
@@ -72,14 +73,14 @@ test_builtin_static_layout_policies(void)
     assert(layout->policy == N00B_STATIC_LAYOUT_CONSTRUCTOR_IMAGE);
     assert(layout->scan_kind == N00B_GC_SCAN_KIND_CALLBACK);
     assert(layout->reason != nullptr);
-    assert(strstr(layout->reason, "dict") != nullptr);
+    assert(n00b_unicode_str_contains(layout->reason, r"dict"));
     assert(n00b_type_static_layout_allowed(typehash(n00b_dict_untyped_t *)));
 
     layout = require_layout(typehash(n00b_ffi_module_t *));
     assert(layout->policy == N00B_STATIC_LAYOUT_TRANSIENT);
     assert(layout->scan_kind == N00B_GC_SCAN_KIND_NONE);
     assert(layout->reason != nullptr);
-    assert(strstr(layout->reason, "ffi") != nullptr);
+    assert(n00b_unicode_str_contains(layout->reason, r"ffi"));
     assert(!n00b_type_static_layout_allowed(typehash(n00b_ffi_module_t *)));
 
 #ifndef _WIN32
@@ -87,7 +88,7 @@ test_builtin_static_layout_policies(void)
     assert(layout->policy == N00B_STATIC_LAYOUT_TRANSIENT);
     assert(layout->scan_kind == N00B_GC_SCAN_KIND_NONE);
     assert(layout->reason != nullptr);
-    assert(strstr(layout->reason, "subprocess") != nullptr);
+    assert(n00b_unicode_str_contains(layout->reason, r"subprocess"));
     assert(!n00b_type_static_layout_allowed(typehash(n00b_subproc_t *)));
 #endif
 
@@ -123,25 +124,25 @@ test_explicit_allowed_policy_macros(void)
     assert(n00b_type_static_layout_allowed(typehash(test_plain_static_policy_t *)));
 
     ok = N00B_TYPE_REGISTER(test_fixup_static_policy_t,
-        N00B_TYPE_STATIC_FIXUP(N00B_GC_SCAN_KIND_CALLBACK, "runtime pointer fixup required"),
+        N00B_TYPE_STATIC_FIXUP(N00B_GC_SCAN_KIND_CALLBACK, r"runtime pointer fixup required"),
     );
     assert(ok);
 
     layout = require_layout(typehash(test_fixup_static_policy_t *));
     assert(layout->policy == N00B_STATIC_LAYOUT_FIXUP);
     assert(layout->scan_kind == N00B_GC_SCAN_KIND_CALLBACK);
-    assert(strcmp(layout->reason, "runtime pointer fixup required") == 0);
+    assert(n00b_unicode_str_eq(layout->reason, r"runtime pointer fixup required"));
     assert(n00b_type_static_layout_allowed(typehash(test_fixup_static_policy_t *)));
 
     ok = N00B_TYPE_REGISTER(test_constructor_static_policy_t,
-        N00B_TYPE_STATIC_CONSTRUCTOR_IMAGE(N00B_GC_SCAN_KIND_ALL, "constructor image available"),
+        N00B_TYPE_STATIC_CONSTRUCTOR_IMAGE(N00B_GC_SCAN_KIND_ALL, r"constructor image available"),
     );
     assert(ok);
 
     layout = require_layout(typehash(test_constructor_static_policy_t *));
     assert(layout->policy == N00B_STATIC_LAYOUT_CONSTRUCTOR_IMAGE);
     assert(layout->scan_kind == N00B_GC_SCAN_KIND_ALL);
-    assert(strcmp(layout->reason, "constructor image available") == 0);
+    assert(n00b_unicode_str_eq(layout->reason, r"constructor image available"));
     assert(n00b_type_static_layout_allowed(typehash(test_constructor_static_policy_t *)));
 
     printf("  [PASS] explicit allowed policy macros\n");
@@ -150,7 +151,16 @@ test_explicit_allowed_policy_macros(void)
 static void
 test_denial_reason_is_deep_copied(void)
 {
+    // After WP-018, .reason is an n00b_string_t * (immutable by
+    // convention).  The registry no longer needs to deep-copy a raw
+    // C-string buffer; instead, the caller must construct an
+    // n00b_string_t whose contents are independent of any local C
+    // buffer they might mutate later.  This test confirms that
+    // mutating the original C buffer used to build the n00b string
+    // does not leak through to the stored reason.
     char reason[64] = "capability state cannot be static";
+
+    n00b_string_t *reason_str = n00b_string_from_cstr(reason);
 
     bool ok = n00b_type_register(
         typehash(test_forbidden_static_policy_t *),
@@ -160,22 +170,21 @@ test_denial_reason_is_deep_copied(void)
             .static_layout = {
                 .policy    = N00B_STATIC_LAYOUT_FORBIDDEN,
                 .scan_kind = N00B_GC_SCAN_KIND_NONE,
-                .reason    = reason,
+                .reason    = reason_str,
             },
         });
     assert(ok);
 
     n00b_static_layout_info_t *layout = require_layout(typehash(test_forbidden_static_policy_t *));
-    const char *copied_reason = layout->reason;
-    assert(copied_reason != nullptr);
-    assert(copied_reason != reason);
-    assert(strcmp(copied_reason, "capability state cannot be static") == 0);
+    n00b_string_t *stored_reason = layout->reason;
+    assert(stored_reason != nullptr);
+    assert(n00b_unicode_str_eq(stored_reason, r"capability state cannot be static"));
 
     strcpy(reason, "mutated local reason");
-    assert(strcmp(copied_reason, "capability state cannot be static") == 0);
+    assert(n00b_unicode_str_eq(stored_reason, r"capability state cannot be static"));
     assert(!n00b_type_static_layout_allowed(typehash(test_forbidden_static_policy_t *)));
 
-    printf("  [PASS] denial reason deep copy\n");
+    printf("  [PASS] denial reason isolation from caller buffer\n");
 }
 
 static void
@@ -185,13 +194,13 @@ test_unregistered_and_policy_names(void)
     assert(!n00b_option_is_set(n00b_type_static_layout(missing_hash)));
     assert(!n00b_type_static_layout_allowed(missing_hash));
 
-    assert(strcmp(n00b_static_layout_policy_name(N00B_STATIC_LAYOUT_DEFAULT_DENY), "default-deny") == 0);
-    assert(strcmp(n00b_static_layout_policy_name(N00B_STATIC_LAYOUT_FORBIDDEN), "forbidden") == 0);
-    assert(strcmp(n00b_static_layout_policy_name(N00B_STATIC_LAYOUT_TRANSIENT), "transient") == 0);
-    assert(strcmp(n00b_static_layout_policy_name(N00B_STATIC_LAYOUT_PLAIN), "plain") == 0);
-    assert(strcmp(n00b_static_layout_policy_name(N00B_STATIC_LAYOUT_FIXUP), "fixup") == 0);
-    assert(strcmp(n00b_static_layout_policy_name(N00B_STATIC_LAYOUT_CONSTRUCTOR_IMAGE), "constructor-image") == 0);
-    assert(strcmp(n00b_static_layout_policy_name((n00b_static_layout_policy_t)255), "unknown") == 0);
+    assert(n00b_unicode_str_eq(n00b_static_layout_policy_name(N00B_STATIC_LAYOUT_DEFAULT_DENY), r"default-deny"));
+    assert(n00b_unicode_str_eq(n00b_static_layout_policy_name(N00B_STATIC_LAYOUT_FORBIDDEN), r"forbidden"));
+    assert(n00b_unicode_str_eq(n00b_static_layout_policy_name(N00B_STATIC_LAYOUT_TRANSIENT), r"transient"));
+    assert(n00b_unicode_str_eq(n00b_static_layout_policy_name(N00B_STATIC_LAYOUT_PLAIN), r"plain"));
+    assert(n00b_unicode_str_eq(n00b_static_layout_policy_name(N00B_STATIC_LAYOUT_FIXUP), r"fixup"));
+    assert(n00b_unicode_str_eq(n00b_static_layout_policy_name(N00B_STATIC_LAYOUT_CONSTRUCTOR_IMAGE), r"constructor-image"));
+    assert(n00b_unicode_str_eq(n00b_static_layout_policy_name((n00b_static_layout_policy_t)255), r"unknown"));
 
     printf("  [PASS] unregistered lookup and policy names\n");
 }

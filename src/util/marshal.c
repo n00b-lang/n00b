@@ -142,7 +142,7 @@ struct n00b_marshal_ctx_t {
     uint32_t                flags;
     uint32_t                next_offset;
     n00b_marshal_status_t   status;
-    const char             *error;
+    n00b_string_t          *error;
     bool                    used;
 };
 
@@ -155,7 +155,7 @@ struct n00b_unmarshal_ctx_t {
     size_t                    segment_cap;
     n00b_arena_t             *target_arena;
     n00b_marshal_status_t     status;
-    const char               *error;
+    n00b_string_t            *error;
     bool                      closed;
 };
 
@@ -167,9 +167,9 @@ align8(uint64_t n)
 
 static void
 marshal_set_error(n00b_marshal_status_t *status,
-                  const char           **error,
+                  n00b_string_t        **error,
                   n00b_marshal_status_t  code,
-                  const char            *msg)
+                  n00b_string_t         *msg)
 {
     if (*status == N00B_MARSHAL_OK) {
         *status = code;
@@ -464,7 +464,7 @@ marshal_add_alloc(n00b_marshal_ctx_t *ctx, n00b_alloc_info_t info)
         marshal_set_error(&ctx->status,
                           &ctx->error,
                           N00B_MARSHAL_ERR_UNSUPPORTED_ALLOCATION,
-                          "unsupported or missing allocation metadata");
+                          r"unsupported or missing allocation metadata");
         return nullptr;
     }
 
@@ -472,7 +472,7 @@ marshal_add_alloc(n00b_marshal_ctx_t *ctx, n00b_alloc_info_t info)
         marshal_set_error(&ctx->status,
                           &ctx->error,
                           N00B_MARSHAL_ERR_UNSUPPORTED_SCAN_POLICY,
-                          "callback scan policy is not yet marshalable");
+                          r"callback scan policy is not yet marshalable");
         return nullptr;
     }
 
@@ -480,7 +480,7 @@ marshal_add_alloc(n00b_marshal_ctx_t *ctx, n00b_alloc_info_t info)
         marshal_set_error(&ctx->status,
                           &ctx->error,
                           N00B_MARSHAL_ERR_UNSUPPORTED_ALLOCATION,
-                          "allocation pointer-word metadata exceeds object size");
+                          r"allocation pointer-word metadata exceeds object size");
         return nullptr;
     }
 
@@ -496,7 +496,7 @@ marshal_add_alloc(n00b_marshal_ctx_t *ctx, n00b_alloc_info_t info)
         marshal_set_error(&ctx->status,
                           &ctx->error,
                           N00B_MARSHAL_ERR_LIMIT,
-                          "marshaled graph exceeds 32-bit virtual heap limit");
+                          r"marshaled graph exceeds 32-bit virtual heap limit");
         return nullptr;
     }
 
@@ -577,7 +577,7 @@ emit_spatch(n00b_marshal_ctx_t *ctx,
         marshal_set_error(&ctx->status,
                           &ctx->error,
                           N00B_MARSHAL_ERR_UNSUPPORTED_STATIC_POINTER,
-                          "static pointer lies outside its registered object");
+                          r"static pointer lies outside its registered object");
         return false;
     }
 
@@ -589,7 +589,7 @@ emit_spatch(n00b_marshal_ctx_t *ctx,
         marshal_set_error(&ctx->status,
                           &ctx->error,
                           N00B_MARSHAL_ERR_UNSUPPORTED_STATIC_POINTER,
-                          "static pointer has no bytes available for validation");
+                          r"static pointer has no bytes available for validation");
         return false;
     }
 
@@ -619,7 +619,7 @@ emit_pspatch(n00b_marshal_ctx_t *ctx,
         marshal_set_error(&ctx->status,
                           &ctx->error,
                           N00B_MARSHAL_ERR_UNSUPPORTED_STATIC_POINTER,
-                          "static pointer identity is malformed");
+                          r"static pointer identity is malformed");
         return false;
     }
 
@@ -628,7 +628,7 @@ emit_pspatch(n00b_marshal_ctx_t *ctx,
         marshal_set_error(&ctx->status,
                           &ctx->error,
                           N00B_MARSHAL_ERR_UNSUPPORTED_STATIC_POINTER,
-                          "static pointer lies outside its registered object");
+                          r"static pointer lies outside its registered object");
         return false;
     }
 
@@ -640,7 +640,7 @@ emit_pspatch(n00b_marshal_ctx_t *ctx,
         marshal_set_error(&ctx->status,
                           &ctx->error,
                           N00B_MARSHAL_ERR_UNSUPPORTED_STATIC_POINTER,
-                          "static pointer has no bytes available for validation");
+                          r"static pointer has no bytes available for validation");
         return false;
     }
 
@@ -655,7 +655,7 @@ emit_pspatch(n00b_marshal_ctx_t *ctx,
         marshal_set_error(&ctx->status,
                           &ctx->error,
                           N00B_MARSHAL_ERR_UNSUPPORTED_STATIC_POINTER,
-                          "static pointer identity cannot be encoded");
+                          r"static pointer identity cannot be encoded");
         return false;
     }
 
@@ -695,7 +695,7 @@ emit_pspatch(n00b_marshal_ctx_t *ctx,
         marshal_set_error(&ctx->status,
                           &ctx->error,
                           N00B_MARSHAL_ERR_STATIC_IDENTITY_DUPLICATE,
-                          "portable static pointer identity resolved to a different object");
+                          r"portable static pointer identity resolved to a different object");
         return false;
     }
 
@@ -741,7 +741,7 @@ emit_static_patch(n00b_marshal_ctx_t *ctx, uint64_t vaddr, uint64_t value)
         marshal_set_error(&ctx->status,
                           &ctx->error,
                           N00B_MARSHAL_ERR_UNSUPPORTED_STATIC_POINTER,
-                          "static pointer is not a registered static object");
+                          r"static pointer is not a registered static object");
         return false;
     }
 
@@ -796,7 +796,7 @@ scan_node(n00b_marshal_ctx_t *ctx, n00b_marshal_node_t *node)
                         marshal_set_error(&ctx->status,
                                           &ctx->error,
                                           N00B_MARSHAL_ERR_UNSUPPORTED_ALLOCATION,
-                                          "pointer does not resolve inside target allocation");
+                                          r"pointer does not resolve inside target allocation");
                         return;
                     }
                     words[i]  = target->vaddr + interior;
@@ -833,7 +833,7 @@ marshal_process(n00b_marshal_ctx_t *ctx, void *addr)
         marshal_set_error(&ctx->status,
                           &ctx->error,
                           N00B_MARSHAL_ERR_NULL_ARG,
-                          "cannot marshal a null root");
+                          r"cannot marshal a null root");
         return false;
     }
 
@@ -848,7 +848,7 @@ marshal_process(n00b_marshal_ctx_t *ctx, void *addr)
         marshal_set_error(&ctx->status,
                           &ctx->error,
                           N00B_MARSHAL_ERR_UNSUPPORTED_ALLOCATION,
-                          "root pointer does not resolve inside allocation");
+                          r"root pointer does not resolve inside allocation");
         return false;
     }
 
@@ -965,11 +965,11 @@ n00b_marshal_status_name(n00b_marshal_status_t code)
     return r"unknown";
 }
 
-const char *
+n00b_string_t *
 n00b_marshal_ctx_error(n00b_marshal_ctx_t *ctx)
 {
     if (!ctx) {
-        return "null marshal context";
+        return r"null marshal context";
     }
     return ctx->error;
 }
@@ -988,7 +988,7 @@ n00b_marshal_incremental(n00b_marshal_ctx_t *ctx, void *addr) _kargs
         marshal_set_error(&ctx->status,
                           &ctx->error,
                           N00B_MARSHAL_ERR_CONTEXT_CLOSED,
-                          "marshal context already emitted a root");
+                          r"marshal context already emitted a root");
         return nullptr;
     }
     ctx->used = true;
@@ -1096,7 +1096,7 @@ stream_complete(n00b_unmarshal_ctx_t *ctx)
         marshal_set_error(&ctx->status,
                           &ctx->error,
                           N00B_MARSHAL_ERR_BAD_STREAM,
-                          "invalid marshal stream header");
+                          r"invalid marshal stream header");
         return false;
     }
 
@@ -1123,14 +1123,14 @@ stream_complete(n00b_unmarshal_ctx_t *ctx)
                 marshal_set_error(&ctx->status,
                                   &ctx->error,
                                   N00B_MARSHAL_ERR_BAD_STREAM,
-                                  "invalid allocation record shape");
+                                  r"invalid allocation record shape");
                 return false;
             }
             if (rec->scan_kind == N00B_GC_SCAN_KIND_CALLBACK) {
                 marshal_set_error(&ctx->status,
                                   &ctx->error,
                                   N00B_MARSHAL_ERR_UNSUPPORTED_SCAN_POLICY,
-                                  "callback scan policy is not yet unmarshalable");
+                                  r"callback scan policy is not yet unmarshalable");
                 return false;
             }
             ix += sizeof(*rec);
@@ -1143,7 +1143,7 @@ stream_complete(n00b_unmarshal_ctx_t *ctx)
                 marshal_set_error(&ctx->status,
                                   &ctx->error,
                                   N00B_MARSHAL_ERR_LIMIT,
-                                  "marshal stream exceeds 32-bit virtual heap limit");
+                                  r"marshal stream exceeds 32-bit virtual heap limit");
                 return false;
             }
             expected_offset += (uint32_t)rec->payload_len;
@@ -1158,7 +1158,7 @@ stream_complete(n00b_unmarshal_ctx_t *ctx)
                 marshal_set_error(&ctx->status,
                                   &ctx->error,
                                   N00B_MARSHAL_ERR_BAD_STREAM,
-                                  "invalid collision patch record");
+                                  r"invalid collision patch record");
                 return false;
             }
             ix += sizeof(*rec);
@@ -1177,7 +1177,7 @@ stream_complete(n00b_unmarshal_ctx_t *ctx)
                 marshal_set_error(&ctx->status,
                                   &ctx->error,
                                   N00B_MARSHAL_ERR_BAD_STREAM,
-                                  "invalid static patch record");
+                                  r"invalid static patch record");
                 return false;
             }
             ix += sizeof(*rec);
@@ -1211,7 +1211,7 @@ stream_complete(n00b_unmarshal_ctx_t *ctx)
                 marshal_set_error(&ctx->status,
                                   &ctx->error,
                                   N00B_MARSHAL_ERR_BAD_STREAM,
-                                  "invalid portable static patch record");
+                                  r"invalid portable static patch record");
                 return false;
             }
             if (ctx->in.len - ix < rec->record_len) {
@@ -1221,7 +1221,7 @@ stream_complete(n00b_unmarshal_ctx_t *ctx)
                 marshal_set_error(&ctx->status,
                                   &ctx->error,
                                   N00B_MARSHAL_ERR_BAD_STREAM,
-                                  "portable static patch identity contains nul bytes");
+                                  r"portable static patch identity contains nul bytes");
                 return false;
             }
             ix += rec->record_len;
@@ -1236,7 +1236,7 @@ stream_complete(n00b_unmarshal_ctx_t *ctx)
                 marshal_set_error(&ctx->status,
                                   &ctx->error,
                                   N00B_MARSHAL_ERR_BAD_STREAM,
-                                  "invalid marshal stream terminator");
+                                  r"invalid marshal stream terminator");
                 return false;
             }
             return true;
@@ -1245,7 +1245,7 @@ stream_complete(n00b_unmarshal_ctx_t *ctx)
             marshal_set_error(&ctx->status,
                               &ctx->error,
                               N00B_MARSHAL_ERR_BAD_STREAM,
-                              "unknown marshal stream record");
+                              r"unknown marshal stream record");
             return false;
         }
     }
@@ -1362,7 +1362,7 @@ unmarshal_relink_records(n00b_unmarshal_ctx_t *ctx)
                 marshal_set_error(&ctx->status,
                                   &ctx->error,
                                   N00B_MARSHAL_ERR_BAD_STREAM,
-                                  "collision patch points outside a marshaled word slot");
+                                  r"collision patch points outside a marshaled word slot");
                 return false;
             }
             *slot = patch->value;
@@ -1376,7 +1376,7 @@ unmarshal_relink_records(n00b_unmarshal_ctx_t *ctx)
                 marshal_set_error(&ctx->status,
                                   &ctx->error,
                                   N00B_MARSHAL_ERR_BAD_STREAM,
-                                  "static patch points outside a marshaled word slot");
+                                  r"static patch points outside a marshaled word slot");
                 return false;
             }
 
@@ -1386,7 +1386,7 @@ unmarshal_relink_records(n00b_unmarshal_ctx_t *ctx)
                 marshal_set_error(&ctx->status,
                                   &ctx->error,
                                   N00B_MARSHAL_ERR_BAD_STREAM,
-                                  "static patch target is not mapped static memory");
+                                  r"static patch target is not mapped static memory");
                 return false;
             }
 
@@ -1402,7 +1402,7 @@ unmarshal_relink_records(n00b_unmarshal_ctx_t *ctx)
                 marshal_set_error(&ctx->status,
                                   &ctx->error,
                                   N00B_MARSHAL_ERR_BAD_STREAM,
-                                  "static patch target failed validation");
+                                  r"static patch target failed validation");
                 return false;
             }
 
@@ -1417,7 +1417,7 @@ unmarshal_relink_records(n00b_unmarshal_ctx_t *ctx)
                 marshal_set_error(&ctx->status,
                                   &ctx->error,
                                   N00B_MARSHAL_ERR_BAD_STREAM,
-                                  "portable static patch points outside a marshaled word slot");
+                                  r"portable static patch points outside a marshaled word slot");
                 return false;
             }
 
@@ -1468,7 +1468,7 @@ unmarshal_relink_records(n00b_unmarshal_ctx_t *ctx)
                 marshal_set_error(&ctx->status,
                                   &ctx->error,
                                   N00B_MARSHAL_ERR_STATIC_IDENTITY_MISSING,
-                                  "portable static patch target resolved to no object");
+                                  r"portable static patch target resolved to no object");
                 return false;
             }
 
@@ -1483,7 +1483,7 @@ unmarshal_relink_records(n00b_unmarshal_ctx_t *ctx)
             marshal_set_error(&ctx->status,
                               &ctx->error,
                               N00B_MARSHAL_ERR_BAD_STREAM,
-                              "allocation record missing virtual segment");
+                              r"allocation record missing virtual segment");
             return false;
         }
 
@@ -1502,7 +1502,7 @@ unmarshal_relink_records(n00b_unmarshal_ctx_t *ctx)
                 marshal_set_error(&ctx->status,
                                   &ctx->error,
                                   N00B_MARSHAL_ERR_BAD_STREAM,
-                                  "virtual pointer target missing");
+                                  r"virtual pointer target missing");
                 return false;
             }
             words[i] = (uint64_t)(uintptr_t)target;
@@ -1532,7 +1532,7 @@ unmarshal_process(n00b_unmarshal_ctx_t *ctx, n00b_list_t(void *) *roots)
             marshal_set_error(&ctx->status,
                               &ctx->error,
                               N00B_MARSHAL_ERR_BAD_STREAM,
-                              "root virtual address missing");
+                              r"root virtual address missing");
             ok = false;
         }
         else {
@@ -1575,11 +1575,11 @@ n00b_unmarshal_ctx_status(n00b_unmarshal_ctx_t *ctx)
     return ctx ? ctx->status : N00B_MARSHAL_ERR_NULL_ARG;
 }
 
-const char *
+n00b_string_t *
 n00b_unmarshal_ctx_error(n00b_unmarshal_ctx_t *ctx)
 {
     if (!ctx) {
-        return "null unmarshal context";
+        return r"null unmarshal context";
     }
     return ctx->error;
 }
@@ -1593,7 +1593,7 @@ n00b_unmarshal_incremental(n00b_unmarshal_ctx_t *ctx, n00b_buffer_t *chunk)
             marshal_set_error(&ctx->status,
                               &ctx->error,
                               N00B_MARSHAL_ERR_NULL_ARG,
-                              "null unmarshal argument");
+                              r"null unmarshal argument");
         }
         return roots;
     }
@@ -1601,7 +1601,7 @@ n00b_unmarshal_incremental(n00b_unmarshal_ctx_t *ctx, n00b_buffer_t *chunk)
         marshal_set_error(&ctx->status,
                           &ctx->error,
                           N00B_MARSHAL_ERR_CONTEXT_CLOSED,
-                          "unmarshal context already closed");
+                          r"unmarshal context already closed");
         return roots;
     }
 
@@ -1611,7 +1611,7 @@ n00b_unmarshal_incremental(n00b_unmarshal_ctx_t *ctx, n00b_buffer_t *chunk)
         marshal_set_error(&ctx->status,
                           &ctx->error,
                           N00B_MARSHAL_ERR_LIMIT,
-                          "marshal stream input exceeds host size limit");
+                          r"marshal stream input exceeds host size limit");
         return roots;
     }
     bytes_append(&ctx->in, ctx->scratch_alloc, chunk->data, chunk->byte_len);

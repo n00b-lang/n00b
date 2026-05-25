@@ -148,7 +148,7 @@ n00b_register_builtin_types(void)
     // n00b_buffer_t — kargs constructor, lock cleanup, vtable finalizer.
     N00B_TYPE_REGISTER(n00b_buffer_t,
         N00B_TYPE_STATIC_CONSTRUCTOR_IMAGE(N00B_GC_SCAN_KIND_CALLBACK,
-                                           "buffer static initializer available"),
+                                           r"buffer static initializer available"),
         N00B_CORE_METHOD(N00B_BI_CONSTRUCTOR, n00b_buffer_init),
         N00B_CTOR_KARGS,
         N00B_CORE_METHOD(N00B_BI_STATIC_INITIALIZER, n00b_buffer_static_init),
@@ -170,7 +170,7 @@ n00b_register_builtin_types(void)
     // instead of an "unsupported policy" rejection.
     N00B_TYPE_REGISTER(n00b_dict_untyped_t,
         N00B_TYPE_STATIC_CONSTRUCTOR_IMAGE(N00B_GC_SCAN_KIND_CALLBACK,
-                                           "dict static initializer available via container helper"),
+                                           r"dict static initializer available via container helper"),
         N00B_CORE_METHOD(N00B_BI_CONSTRUCTOR, n00b_dict_untyped_init),
         N00B_CTOR_KARGS,
         N00B_CORE_METHOD(N00B_BI_STATIC_INITIALIZER, n00b_dict_static_init),
@@ -183,19 +183,19 @@ n00b_register_builtin_types(void)
 
     // table, canvas, plane — kargs constructors, lock cleanup.
     N00B_TYPE_REGISTER(n00b_table_t,
-        N00B_TYPE_STATIC_TRANSIENT("table objects hold runtime display state"),
+        N00B_TYPE_STATIC_TRANSIENT(r"table objects hold runtime display state"),
         N00B_CORE_METHOD(N00B_BI_CONSTRUCTOR, n00b_table_init),
         N00B_CTOR_KARGS,
         N00B_LOCK_FIELD(n00b_table_t, lock),
     );
     N00B_TYPE_REGISTER(n00b_canvas_t,
-        N00B_TYPE_STATIC_TRANSIENT("canvas objects hold runtime render state"),
+        N00B_TYPE_STATIC_TRANSIENT(r"canvas objects hold runtime render state"),
         N00B_CORE_METHOD(N00B_BI_CONSTRUCTOR, n00b_canvas_init),
         N00B_CTOR_KARGS,
         N00B_LOCK_FIELD(n00b_canvas_t, lock),
     );
     N00B_TYPE_REGISTER(n00b_plane_t,
-        N00B_TYPE_STATIC_TRANSIENT("plane objects hold runtime render state"),
+        N00B_TYPE_STATIC_TRANSIENT(r"plane objects hold runtime render state"),
         N00B_CORE_METHOD(N00B_BI_CONSTRUCTOR, n00b_plane_init),
         N00B_CTOR_KARGS,
         N00B_LOCK_FIELD(n00b_plane_t, lock),
@@ -204,7 +204,7 @@ n00b_register_builtin_types(void)
 #ifndef _WIN32
     // n00b_subproc_t — kargs constructor, no lock.
     N00B_TYPE_REGISTER(n00b_subproc_t,
-        N00B_TYPE_STATIC_TRANSIENT("subprocess objects hold process and file descriptor state"),
+        N00B_TYPE_STATIC_TRANSIENT(r"subprocess objects hold process and file descriptor state"),
         N00B_CORE_METHOD(N00B_BI_CONSTRUCTOR, n00b_subproc_init),
         N00B_CTOR_KARGS,
     );
@@ -215,11 +215,11 @@ n00b_register_builtin_types(void)
 
     // Interpreter runtime types for option/result.
     N00B_TYPE_REGISTER(n00b_rt_option_t,
-        N00B_TYPE_STATIC_DENY("runtime option static image policy is not implemented"),
+        N00B_TYPE_STATIC_DENY(r"runtime option static image policy is not implemented"),
         N00B_CORE_METHOD(N00B_BI_TO_STRING, n00b_builtin_print_option),
     );
     N00B_TYPE_REGISTER(n00b_rt_result_t,
-        N00B_TYPE_STATIC_DENY("runtime result static image policy is not implemented"),
+        N00B_TYPE_STATIC_DENY(r"runtime result static image policy is not implemented"),
         N00B_CORE_METHOD(N00B_BI_TO_STRING, n00b_builtin_print_result),
     );
 

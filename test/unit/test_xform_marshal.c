@@ -213,11 +213,12 @@ wait_unmarshal_incomplete(
         usleep(100);
     }
 
+    n00b_string_t *err = n00b_conduit_unmarshal_error(xf);
     fprintf(stderr,
             "unmarshal transform did not reach incomplete status: status=%d "
             "error=%s inbox=%u running=%d\n",
             n00b_conduit_unmarshal_status(xf),
-            n00b_conduit_unmarshal_error(xf),
+            err ? err->data : "(null)",
             n00b_conduit_inbox_msg_count(n00b_buffer_t *, xf->inbox),
             n00b_atomic_load(&xf->running));
     assert(false);
@@ -363,10 +364,11 @@ test_one_shot_wrappers(void)
     if (!buf) {
         n00b_marshal_ctx_t *ctx = n00b_marshal_ctx_new(.base_address = 0x13572468u);
         (void)n00b_marshal_incremental(ctx, src);
+        n00b_string_t *err = n00b_marshal_ctx_error(ctx);
         fprintf(stderr,
                 "n00b_marshal wrapper failed: status=%d error=%s\n",
                 n00b_marshal_ctx_status(ctx),
-                n00b_marshal_ctx_error(ctx));
+                err ? err->data : "(null)");
         n00b_marshal_ctx_destroy(ctx);
     }
     assert(buf != nullptr);

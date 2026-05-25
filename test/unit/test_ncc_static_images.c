@@ -327,9 +327,9 @@ test_static_initializer_build_api(void)
     assert(status == N00B_STATIC_IMAGE_OK);
     assert(builder.expr != nullptr);
     assert(builder.decls != nullptr);
-    assert(strcmp(builder.expr, "&__manual_buffer_obj") == 0);
-    assert(strstr(builder.decls, "n00b_buffer_t __manual_buffer_obj") != nullptr);
-    assert(strstr(builder.decls, ".byte_len=6ULL") != nullptr);
+    assert(strcmp(builder.expr->data, "&__manual_buffer_obj") == 0);
+    assert(strstr(builder.decls->data, "n00b_buffer_t __manual_buffer_obj") != nullptr);
+    assert(strstr(builder.decls->data, ".byte_len=6ULL") != nullptr);
     n00b_static_image_builder_destroy(&builder);
 
     printf("  [PASS] static initializer build API\n");
