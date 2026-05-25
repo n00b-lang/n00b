@@ -47,7 +47,7 @@ typedef struct __n00b_internal_type_erased_store_t {
     void              **values;
 } __n00b_internal_type_erased_store_t;
 
-#define n00b_dict_tid(k, v) typeid("dict", k, v)
+#define n00b_dict_tid(k, v) typeid("n00b_dict", k, v)
 
 // `_migration_state` is the migration coordination word for the lock-free
 // table-resize protocol, NOT a user-facing lock. The runtime futex bits

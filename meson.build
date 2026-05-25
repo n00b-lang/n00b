@@ -1330,6 +1330,21 @@ dict_static_image_test = executable('test_dict_static_image',
 )
 test('dict_static_image', dict_static_image_test, suite: 'unit')
 
+# WP-011 Phase 5a regression: dict literals lowered against the REAL
+# `n00b_dict_t(K, V)` from include/adt/dict.h (not a private
+# re-declaration) and the REAL r-string config. Locks in the typeid
+# alignment (D-073) and the `is_rstr_element_type` widening.
+dict_literal_real_headers_test = executable('test_dict_literal_real_headers',
+    [
+      'test/unit/test_dict_literal_real_headers.c',
+      n00b_static_init_helper_ready,
+    ],
+    kwargs: test_common_kwargs + {
+        'c_args': exe_c_args + n00b_static_init_helper_flags,
+    },
+)
+test('dict_literal_real_headers', dict_literal_real_headers_test, suite: 'unit')
+
 static_hash_test = executable('test_static_hash',
     ['test/unit/test_static_hash.c'],
     kwargs: test_common_kwargs,
