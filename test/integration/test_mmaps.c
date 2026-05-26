@@ -5,8 +5,12 @@
 #include "core/alloc.h"
 #include "core/runtime.h"
 #include "core/mmaps.h"
+#include "core/memory_info.h"
 #include "adt/option.h"
 #include "adt/result.h"
+
+static uint64_t       ordinary_static_word    = UINT64_C(0x1122334455667788);
+static const uint64_t ordinary_ro_static_word = UINT64_C(0x8877665544332211);
 
 // ============================================================================
 // 1. mmap_basic — n00b_mmap returns ok result with page-aligned address
@@ -173,6 +177,73 @@ test_allocator_lookup(void)
 }
 
 // ============================================================================
+// 8. Static mapping classification — ordinary linked statics are addressable
+//    memory but not descriptor-backed n00b static objects.
+// ============================================================================
+
+static void
+test_ordinary_static_classification(void)
+{
+    auto map_opt = n00b_mmap_info_lookup(&ordinary_static_word);
+    assert(n00b_option_is_set(map_opt));
+
+    n00b_mmap_info_t *map = n00b_option_get(map_opt);
+#if !defined(_WIN32)
+    assert(map->kind == n00b_mmap_static);
+#endif
+    assert(map->kind != n00b_mmap_zero_page);
+
+    auto range_opt = n00b_mmap_range_by_address(&ordinary_static_word);
+    assert(!n00b_option_is_set(range_opt));
+
+    n00b_mmap_perms_t perms = n00b_check_memory_perms(&ordinary_static_word);
+    assert(perms == n00b_mmap_perms_ro || perms == n00b_mmap_perms_rw);
+
+    printf("  [PASS] ordinary_static_classification\n");
+}
+
+// ============================================================================
+// 9. Memory scan permissions — returned perms describe the target pointer, not
+//    the scanner cursor after it advances.
+// ============================================================================
+
+static void
+test_memory_scan_target_permissions(void)
+{
+    void *slots[] = {(void *)&ordinary_ro_static_word, nullptr};
+
+    n00b_memory_scan_t scan;
+    uint8_t scan_flags =
+#if defined(_WIN32)
+        n00b_mmap_type_mask;
+#else
+        n00b_mmap_static;
+#endif
+    bool ok = n00b_memory_scan_init(&scan,
+                                    slots,
+                                    sizeof(slots),
+                                    .cat_flags = scan_flags);
+    assert(ok);
+
+    n00b_mmap_rec_kind_t kind  = 0;
+    n00b_mmap_perms_t    perms = n00b_mmap_perms_unknown;
+    auto hit = n00b_memory_scan_next(&scan, &kind, &perms);
+    assert(n00b_option_is_set(hit));
+    assert(n00b_option_get(hit) == &slots[0]);
+#if !defined(_WIN32)
+    assert(kind == n00b_mmap_static);
+#else
+    assert(kind != n00b_mmap_zero_page);
+#endif
+    assert(perms == n00b_mmap_perms_ro);
+
+    hit = n00b_memory_scan_next(&scan, &kind, &perms);
+    assert(!n00b_option_is_set(hit));
+
+    printf("  [PASS] memory_scan_target_permissions\n");
+}
+
+// ============================================================================
 // Main
 // ============================================================================
 
@@ -191,6 +262,8 @@ main(int argc, char **argv)
     test_register_range();
     test_delete_ranges();
     test_allocator_lookup();
+    test_ordinary_static_classification();
+    test_memory_scan_target_permissions();
 
     printf("All mmaps tests passed.\n");
     return 0;

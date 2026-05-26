@@ -137,7 +137,16 @@
                 if (now >= deadline_ns) break;                                                      \
                 int64_t remain_ns = deadline_ns - now;                                             \
                 if (remain_ns <= 0) break;                                                         \
-                n00b_condition_wait(&inbox->cv, .timeout = remain_ns);                             \
+                n00b_condition_lock(&inbox->cv);                                                   \
+                if (!n00b_conduit_inbox_has_msg(T, inbox) &&                                       \
+                    !n00b_conduit_inbox_has_sys(inbox)) {                                          \
+                    n00b_condition_wait(&inbox->cv,                                                 \
+                                        .timeout     = remain_ns,                                  \
+                                        .auto_unlock = true);                                      \
+                }                                                                                  \
+                else {                                                                             \
+                    n00b_condition_unlock(&inbox->cv);                                             \
+                }                                                                                  \
             }                                                                                      \
         }                                                                                          \
         else {                                                                                     \
@@ -145,7 +154,14 @@
                 if (n00b_conduit_inbox_has_sys(inbox)) {                                           \
                     break;                                                                         \
                 }                                                                                  \
-                n00b_condition_wait(&inbox->cv);                                                   \
+                n00b_condition_lock(&inbox->cv);                                                   \
+                if (!n00b_conduit_inbox_has_msg(T, inbox) &&                                       \
+                    !n00b_conduit_inbox_has_sys(inbox)) {                                          \
+                    n00b_condition_wait(&inbox->cv, .auto_unlock = true);                          \
+                }                                                                                  \
+                else {                                                                             \
+                    n00b_condition_unlock(&inbox->cv);                                             \
+                }                                                                                  \
             }                                                                                      \
         }                                                                                          \
                                                                                                    \
@@ -359,7 +375,15 @@
                         n00b_conduit_topic_base_t *, done_inbox)) {                                \
                 if (n00b_conduit_inbox_has_sys(done_inbox))                                        \
                     break;                                                                         \
-                n00b_condition_wait(&done_inbox->cv);                                              \
+                n00b_condition_lock(&done_inbox->cv);                                              \
+                if (!n00b_conduit_inbox_has_msg(                                                    \
+                        n00b_conduit_topic_base_t *, done_inbox) &&                                \
+                    !n00b_conduit_inbox_has_sys(done_inbox)) {                                     \
+                    n00b_condition_wait(&done_inbox->cv, .auto_unlock = true);                     \
+                }                                                                                  \
+                else {                                                                             \
+                    n00b_condition_unlock(&done_inbox->cv);                                        \
+                }                                                                                  \
             }                                                                                      \
             n00b_conduit_inbox_pop_msg(                                                            \
                 n00b_conduit_topic_base_t *, done_inbox);                                          \

@@ -51,7 +51,6 @@
 #define N00B_USE_INTERNAL_API
 
 #include <time.h>
-#include <setjmp.h>
 
 #include "n00b.h"
 #include "core/runtime.h"
@@ -80,15 +79,17 @@ _n00b_stop_the_world(char *loc)
         return;
     }
 
-    int32_t expected = N00B_NO_OWNER;
+    int32_t expected;
 
     do {
-        int32_t cur = (int32_t)n00b_atomic_load(&rt->stw);
+        int32_t cur;
 
-        while (cur != N00B_NO_OWNER) {
-            cur = n00b_atomic_load(&rt->stw);
-            n00b_futex_wait(&rt->stw, cur, N00B_NO_OWNER);
+        while ((cur = (int32_t)n00b_atomic_load(&rt->stw)) != N00B_NO_OWNER) {
+            uint32_t generation = n00b_atomic_load(&rt->stw_generation);
+            n00b_futex_wait(&rt->stw_generation, generation, 1000 * 1000);
         }
+
+        expected = N00B_NO_OWNER;
     } while (!n00b_cas(&rt->stw, (uint32_t *)&expected, tid));
 
     assert(n00b_atomic_load(&rt->stw) == (uint32_t)tid);
@@ -111,9 +112,9 @@ _n00b_stop_the_world(char *loc)
 
     // Wait for every other live thread to enter a state where its
     // callee-saved registers are spilled to its scanned stack: either
-    // BLOCKING (called wait_for_stw_release, which setjmp'd) or
+    // BLOCKING (called wait_for_stw_release, which checkpointed them) or
     // SUSPEND (cooperatively suspended at a known-safe point and
-    // setjmp'd then).  Without this barrier the world isn't actually
+    // checkpointed them).  Without this barrier the world isn't actually
     // stopped — the initiator returns and the GC proceeds while other
     // threads are still running with live heap pointers in registers
     // the GC can't see.  Plain busy-wait: threads flip their bit at
@@ -121,13 +122,23 @@ _n00b_stop_the_world(char *loc)
     n = (int)rt->max_threads;
 
     while (n--) {
-        t = n00b_atomic_load(&rt->threads[n].thread);
-        if (!t || t == n00b_thread_self()) {
-            continue;
-        }
+        while (true) {
+            t = n00b_atomic_load(&rt->threads[n].thread);
+            if (!t || t == n00b_thread_self()) {
+                break;
+            }
 
-        while (!(n00b_atomic_load(&t->self_lock) & (N00B_SUSPEND | N00B_BLOCKING)))
-            ;
+            uint32_t state = n00b_atomic_load(&t->self_lock);
+            if (state & (N00B_SUSPEND | N00B_BLOCKING)) {
+                break;
+            }
+
+            // A thread can exit between the first STW marking pass and this
+            // barrier.  Reload the runtime slot each turn so we do not spin
+            // forever on a stale TLS pointer after the exiting thread clears
+            // its registration.
+            n00b_atomic_or(&t->self_lock, N00B_STW);
+        }
     }
 
     rt->stw_nesting = 1;
@@ -163,11 +174,13 @@ _n00b_restart_the_world(char *loc)
             continue;
         }
 
-        n00b_atomic_and(&t->self_lock, ~(N00B_STW | N00B_BLOCKING));
+        n00b_atomic_and(&t->self_lock, ~N00B_STW);
     }
 
     atomic_store(&rt->stw, N00B_NO_OWNER);
 
+    n00b_atomic_add(&rt->stw_generation, 1);
+    n00b_futex_wake(&rt->stw_generation, true);
     n00b_futex_wake(&rt->stw, true);
 }
 
@@ -180,17 +193,18 @@ void
 n00b_wait_for_stw_release(void)
 {
     n00b_runtime_t *rt         = n00b_get_runtime();
-    jmp_buf         save_state = {0};
+    n00b_jmp_buf_t  save_state = {};
 
     n00b_capture_stack_top(n00b_thread_self());
-    int32_t cur = n00b_atomic_load(&rt->stw);
+    int32_t  cur        = n00b_atomic_load(&rt->stw);
+    uint32_t generation = n00b_atomic_load(&rt->stw_generation);
 
     if (cur == get_tid()) {
         return;
     }
 
-    if (!setjmp(save_state)) {
-        // setjmp must capture callee-saved registers BEFORE we
+    if (!n00b_setjmp(&save_state)) {
+        // n00b_setjmp() must capture callee-saved registers BEFORE we
         // announce N00B_BLOCKING — the STW initiator uses that bit
         // to decide save_state is ready to scan.  Swapping the order
         // races: initiator sees the bit, scans an uninitialised
@@ -199,14 +213,28 @@ n00b_wait_for_stw_release(void)
 
         while (cur != N00B_NO_OWNER) {
             // Use the version that doesn't check the STW when it's
-            // signaled!
-            n00b_futex_wait_timespec(&rt->stw, cur, (void *)&stw_check_timeout);
-            cur = n00b_atomic_load(&rt->stw);
+            // signaled.  Wait on a generation futex instead of the owner
+            // word: the same owner can run consecutive STW cycles, so the
+            // owner value has an ABA shape (tid -> no-owner -> same tid).
+            n00b_futex_wait_timespec(&rt->stw_generation,
+                                     generation,
+                                     (void *)&stw_check_timeout);
+            generation = n00b_atomic_load(&rt->stw_generation);
+            cur        = n00b_atomic_load(&rt->stw);
         }
 
-        longjmp(save_state, 1);
+        n00b_longjmp(&save_state, 1);
     }
-    n00b_atomic_and(&__n00b_thread_self.self_lock, ~N00B_BLOCKING);
+    uint32_t old_state = n00b_atomic_and(&__n00b_thread_self.self_lock,
+                                         ~N00B_BLOCKING);
+    uint32_t new_state = n00b_atomic_load(&__n00b_thread_self.self_lock);
+    int32_t  owner     = n00b_atomic_load(&rt->stw);
+
+    if (((old_state | new_state) & N00B_STW)
+        && owner != N00B_NO_OWNER
+        && owner != get_tid()) {
+        n00b_thread_checkin();
+    }
 }
 
 void
@@ -220,7 +248,7 @@ n00b_thread_checkin(void)
 
     if (n00b_atomic_load(&__n00b_thread_self.self_lock) & N00B_STW) {
         // n00b_wait_for_stw_release sets N00B_BLOCKING itself, after
-        // setjmp has captured callee-saved registers.  Setting it here
+        // n00b_setjmp() has captured callee-saved registers.  Setting it here
         // first races: the STW initiator may see the bit and start
         // scanning before save_state is initialised.
         n00b_wait_for_stw_release();

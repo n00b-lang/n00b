@@ -8,6 +8,7 @@ n00b_util_src = (
         'base64.c',
         'der_encode.c',
         'errno_str.c',
+        'marshal.c',
         'path.c',
         'pkcs7.c',
         'x509_walk.c',

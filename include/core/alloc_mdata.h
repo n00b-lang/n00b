@@ -2,9 +2,9 @@
  * @file alloc_mdata.h
  * @brief Allocation metadata structures.
  *
- * Common memory layout for managed memory, whether static or dynamic.
- * Includes inline headers, out-of-band headers, allocation info queries,
- * and static-data declaration macros.
+ * Common memory layout for managed memory and descriptor-backed static
+ * objects. Includes inline headers, out-of-band headers, and allocation info
+ * queries.
  */
 #pragma once
 #include "n00b.h"
@@ -54,6 +54,7 @@ typedef enum {
     n00b_alloc_none,
     n00b_alloc_inline,
     n00b_alloc_oob,
+    n00b_alloc_static_range,
     n00b_alloc_err,
 } n00b_alloc_info_kind_t;
 
@@ -62,6 +63,7 @@ typedef struct n00b_alloc_info_t {
     union {
         n00b_oob_hdr_t    *oob;
         n00b_inline_hdr_t *in_line;
+        n00b_alloc_range_t *range;
     } hdr;
 } n00b_alloc_info_t;
 
@@ -100,54 +102,36 @@ n00b_alloc_info_is_oob(n00b_alloc_info_t info)
 }
 
 static inline bool
+n00b_alloc_info_is_inline(n00b_alloc_info_t info)
+{
+    return info.kind == n00b_alloc_inline;
+}
+
+static inline bool
+n00b_alloc_info_is_heap(n00b_alloc_info_t info)
+{
+    return info.kind == n00b_alloc_oob || info.kind == n00b_alloc_inline;
+}
+
+static inline bool
+n00b_alloc_info_is_static_range(n00b_alloc_info_t info)
+{
+    return info.kind == n00b_alloc_static_range;
+}
+
+static inline n00b_option_t(n00b_alloc_range_t *)
+n00b_alloc_info_static_range(n00b_alloc_info_t info)
+{
+    if (info.kind != n00b_alloc_static_range) {
+        return n00b_option_none(n00b_alloc_range_t *);
+    }
+    return n00b_option_set(n00b_alloc_range_t *, info.hdr.range);
+}
+
+static inline bool
 n00b_alloc_info_exists(n00b_alloc_info_t info)
 {
     return info.kind != n00b_alloc_none;
 }
 
-// "\xcc400b1e\xcc" on little endian machines (byte swapped on on big endian)
-#define N00B_STATIC_MAGIC 0xcc653162303034ccUL
-
-struct n00b_static_header_t {
-    // We need to have the static magic be the same as starting from the guard
-    // of n00b_inline_hdr_t, so there will generally be an extra word of
-    // padding after alloc_loc, since we align to 16 byte boundaries.
-    char    *alloc_loc;
-    void    *padding;
-    uint64_t static_magic;
-    n00b_core_alloc_info_fields;
-    char data[0];
-};
-
 #define N00B_ALLOC_HDR_SZ ((sizeof(n00b_inline_hdr_t) + N00B_ALIGN - 1) & ~(N00B_ALIGN - 1))
-
-#define N00B_STATIC_BASE(name, c_type, type_hash_val, ...)                                     \
-    struct {                                                                                   \
-        n00b_static_header_t hdr;                                                              \
-        c_type               obj;                                                              \
-    } __##name = {                                                         \
-        .hdr = {                                                           \
-            .alloc_loc       = N00B_LOC_STRING(),                          \
-            .static_magic    = N00B_STATIC_MAGIC,                          \
-            .tinfo           = type_hash_val,                              \
-            .alloc_len       = sizeof(n00b_inline_hdr_t) + sizeof(c_type), \
-            .ptr_words       = 0,                                          \
-            .no_scan         = false,                                      \
-            .mem_debug       = false,                                      \
-            .mem_debug_taint = false,                                      \
-            .moved           = false,                                      \
-            .cached_hash     = 0,                                          \
-        },                                                                 \
-        .obj = (c_type)__VA_ARGS__};                   \
-    c_type *const name = &__##name.obj
-
-#define N00B_STR_DECL(name, value)                                                             \
-    N00B_STATIC_BASE(name,                                                                     \
-                     n00b_string_t,                                                            \
-                     typehash(n00b_string_t *),                                                \
-                     {                                                                         \
-                         .data       = (value),                                                \
-                         .styling    = nullptr,                                                \
-                         .codepoints = (sizeof(value) - 1),                                    \
-                         .u8_bytes   = (sizeof(value) - 1),                                    \
-                     })

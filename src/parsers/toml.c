@@ -4,8 +4,8 @@
  *
  * Port of resharp-c/src/common/toml.c, types swapped at the boundary
  * to n00b's API (n00b_string_t for strings, n00b_list_t / n00b_dict_t
- * for arrays / tables, n00b_buffer_t for accumulating bytes, n00b_panic
- * for parse errors).  Internal parser state stays close to the
+ * for arrays / tables, n00b_buffer_t for accumulating bytes, and explicit
+ * parse-error propagation).  Internal parser state stays close to the
  * upstream algorithm.
  *
  * Scope: see parsers/toml.h.  This is a strict TOML subset chosen to
@@ -21,7 +21,6 @@
 #include "core/rt_access.h"
 #include "core/string.h"
 #include "util/assert.h"
-#include "util/panic.h"
 
 #include <stdarg.h>
 #include <stdint.h>
@@ -63,31 +62,9 @@ n00b_toml_last_error(void)
 // Parse-error plumbing.
 // ===========================================================================
 //
-// Internally a parser-error long-jumps out via `n00b_panic` (matches the
-// upstream "callers never NULL-check" model for non-NULL ops).  At the
-// public API boundary the caller gets `n00b_result_err(N00B_TOML_ERR_PARSE)`
-// instead — handled by jmp_buf trampolines below.
-
-#include <setjmp.h>
-
-typedef struct {
-    jmp_buf       jb;
-    bool          active;
-} toml_jmp_t;
-
-// One slot is sufficient because parsing is single-threaded per call and
-// recursion goes through the same trampoline.
-static _Thread_local toml_jmp_t toml_jmp = { .active = false };
-
-static inline void
-toml_throw_parse_error(void)
-{
-    if (toml_jmp.active) {
-        longjmp(toml_jmp.jb, 1);
-    }
-    // Top-level: no trampoline set up; degrade to panic.
-    n00b_panic("toml: parse error (no trampoline active)");
-}
+// Parser helpers set `toml_parser_t::error` and return their natural failure
+// sentinel (`nullptr`, `false`, or plain `return`).  The public API boundary
+// turns that into `n00b_result_err(N00B_TOML_ERR_PARSE)`.
 
 // ===========================================================================
 // Node constructors.
@@ -149,12 +126,17 @@ typedef struct {
     size_t      pos;   // byte offset into src
     size_t      line;  // 1-based
     size_t      col;   // 1-based
+    bool        error;
 } toml_parser_t;
 
-[[noreturn, gnu::format(printf, 2, 3)]]
+[[gnu::format(printf, 2, 3)]]
 static void
-toml_error(const toml_parser_t *p, const char *fmt, ...)
+toml_error(toml_parser_t *p, const char *fmt, ...)
 {
+    if (p->error) {
+        return;
+    }
+
     char    body[256];
     va_list ap;
     va_start(ap, fmt);
@@ -166,7 +148,7 @@ toml_error(const toml_parser_t *p, const char *fmt, ...)
              "toml: parse error at line %zu column %zu: %s",
              p->line, p->col, body);
     toml_set_last_error(n00b_string_from_raw(full, (int64_t)strlen(full)));
-    toml_throw_parse_error();
+    p->error = true;
 }
 
 // ===========================================================================
@@ -330,6 +312,7 @@ toml_read_hex(toml_parser_t *p, int n)
         int  d = toml_hex_digit(c);
         if (d < 0) {
             toml_error(p, "expected %d hex digits in escape", n);
+            return 0;
         }
         v = (v << 4) | (uint32_t)d;
         toml_advance(p);
@@ -344,9 +327,11 @@ toml_parse_basic_string(toml_parser_t *p, n00b_buffer_t *buf)
         char c = toml_peek(p);
         if (c == '\0') {
             toml_error(p, "unterminated basic string");
+            return;
         }
         if (c == '\n' || c == '\r') {
             toml_error(p, "unescaped newline in basic string");
+            return;
         }
         if (c == '"') {
             toml_advance(p);
@@ -368,14 +353,17 @@ toml_parse_basic_string(toml_parser_t *p, n00b_buffer_t *buf)
             case 'x': {
                 toml_advance(p);
                 uint32_t v = toml_read_hex(p, 2);
+                if (p->error) return;
                 buf_push_byte(buf, (unsigned char)v);
                 break;
             }
             case 'u': {
                 toml_advance(p);
                 uint32_t v = toml_read_hex(p, 4);
+                if (p->error) return;
                 if (v >= 0xD800u && v <= 0xDFFFu) {
                     toml_error(p, "surrogate code point in \\u escape");
+                    return;
                 }
                 buf_push_utf8(buf, v);
                 break;
@@ -383,17 +371,21 @@ toml_parse_basic_string(toml_parser_t *p, n00b_buffer_t *buf)
             case 'U': {
                 toml_advance(p);
                 uint32_t v = toml_read_hex(p, 8);
+                if (p->error) return;
                 if (v > 0x10FFFFu
                     || (v >= 0xD800u && v <= 0xDFFFu)) {
                     toml_error(p, "invalid code point in \\U escape");
+                    return;
                 }
                 buf_push_utf8(buf, v);
                 break;
             }
             case '\0':
                 toml_error(p, "unterminated escape sequence");
+                return;
             default:
                 toml_error(p, "unknown escape '\\%c'", esc);
+                return;
             }
             continue;
         }
@@ -409,9 +401,11 @@ toml_parse_literal_string(toml_parser_t *p, n00b_buffer_t *buf)
         char c = toml_peek(p);
         if (c == '\0') {
             toml_error(p, "unterminated literal string");
+            return;
         }
         if (c == '\n' || c == '\r') {
             toml_error(p, "unescaped newline in literal string");
+            return;
         }
         if (c == '\'') {
             toml_advance(p);
@@ -432,6 +426,7 @@ toml_parse_multiline_literal_string(toml_parser_t *p, n00b_buffer_t *buf)
         char c = toml_peek(p);
         if (c == '\0') {
             toml_error(p, "unterminated multi-line literal string");
+            return;
         }
         if (c == '\'') {
             if (toml_peek_at(p, 1) == '\'' && toml_peek_at(p, 2) == '\'') {
@@ -467,6 +462,7 @@ toml_parse_multiline_basic_string(toml_parser_t *p, n00b_buffer_t *buf)
         char c = toml_peek(p);
         if (c == '\0') {
             toml_error(p, "unterminated multi-line basic string");
+            return;
         }
         if (c == '"') {
             if (toml_peek_at(p, 1) == '"' && toml_peek_at(p, 2) == '"') {
@@ -527,14 +523,17 @@ toml_parse_multiline_basic_string(toml_parser_t *p, n00b_buffer_t *buf)
             case 'x': {
                 toml_advance(p);
                 uint32_t v = toml_read_hex(p, 2);
+                if (p->error) return;
                 buf_push_byte(buf, (unsigned char)v);
                 break;
             }
             case 'u': {
                 toml_advance(p);
                 uint32_t v = toml_read_hex(p, 4);
+                if (p->error) return;
                 if (v >= 0xD800u && v <= 0xDFFFu) {
                     toml_error(p, "surrogate code point in \\u escape");
+                    return;
                 }
                 buf_push_utf8(buf, v);
                 break;
@@ -542,17 +541,21 @@ toml_parse_multiline_basic_string(toml_parser_t *p, n00b_buffer_t *buf)
             case 'U': {
                 toml_advance(p);
                 uint32_t v = toml_read_hex(p, 8);
+                if (p->error) return;
                 if (v > 0x10FFFFu
                     || (v >= 0xD800u && v <= 0xDFFFu)) {
                     toml_error(p, "invalid code point in \\U escape");
+                    return;
                 }
                 buf_push_utf8(buf, v);
                 break;
             }
             case '\0':
                 toml_error(p, "unterminated escape sequence");
+                return;
             default:
                 toml_error(p, "unknown escape '\\%c'", esc);
+                return;
             }
             continue;
         }
@@ -582,10 +585,12 @@ toml_parse_key(toml_parser_t *p)
     if (c == '"') {
         toml_advance(p);
         toml_parse_basic_string(p, buf);
+        if (p->error) return nullptr;
     }
     else if (c == '\'') {
         toml_advance(p);
         toml_parse_literal_string(p, buf);
+        if (p->error) return nullptr;
     }
     else if (toml_is_bare_key_char(c)) {
         while (toml_is_bare_key_char(toml_peek(p))) {
@@ -595,9 +600,11 @@ toml_parse_key(toml_parser_t *p)
     }
     else {
         toml_error(p, "expected key, got '%c'", c);
+        return nullptr;
     }
     if (n00b_buffer_len(buf) == 0) {
         toml_error(p, "empty key");
+        return nullptr;
     }
     return n00b_buffer_to_string(buf);
 }
@@ -620,6 +627,7 @@ toml_parse_integer(toml_parser_t *p)
     }
     if (!(c >= '0' && c <= '9')) {
         toml_error(p, "expected digit, got '%c'", c);
+        return nullptr;
     }
 
     uint64_t acc                 = 0;
@@ -630,6 +638,7 @@ toml_parse_integer(toml_parser_t *p)
         if (d == '_') {
             if (!saw_digit || last_was_underscore) {
                 toml_error(p, "underscore must be between digits");
+                return nullptr;
             }
             last_was_underscore = true;
             toml_advance(p);
@@ -642,6 +651,7 @@ toml_parse_integer(toml_parser_t *p)
         if (acc > cap / 10ULL
             || (acc == cap / 10ULL && digit > cap % 10ULL)) {
             toml_error(p, "integer literal out of range");
+            return nullptr;
         }
         acc                 = acc * 10ULL + digit;
         saw_digit           = true;
@@ -650,9 +660,11 @@ toml_parse_integer(toml_parser_t *p)
     }
     if (!saw_digit) {
         toml_error(p, "integer literal has no digits");
+        return nullptr;
     }
     if (last_was_underscore) {
         toml_error(p, "trailing underscore in integer literal");
+        return nullptr;
     }
 
     int64_t out;
@@ -700,8 +712,10 @@ toml_parse_array(toml_parser_t *p)
         }
         if (c == '\0') {
             toml_error(p, "unterminated array");
+            return nullptr;
         }
         n00b_toml_node_t *elem = toml_parse_value(p);
+        if (p->error || elem == nullptr) return nullptr;
         n00b_list_push(arr->array, elem);
         toml_skip_ws_nl_comments(p);
         c = toml_peek(p);
@@ -714,6 +728,7 @@ toml_parse_array(toml_parser_t *p)
             return arr;
         }
         toml_error(p, "expected ',' or ']' in array, got '%c'", c);
+        return nullptr;
     }
 }
 
@@ -729,11 +744,13 @@ toml_parse_value(toml_parser_t *p)
             toml_advance(p);
             n00b_buffer_t *buf = n00b_buffer_empty();
             toml_parse_multiline_basic_string(p, buf);
+            if (p->error) return nullptr;
             return toml_new_string(n00b_buffer_to_string(buf));
         }
         toml_advance(p);
         n00b_buffer_t *buf = n00b_buffer_empty();
         toml_parse_basic_string(p, buf);
+        if (p->error) return nullptr;
         return toml_new_string(n00b_buffer_to_string(buf));
     }
     if (c == '\'') {
@@ -743,11 +760,13 @@ toml_parse_value(toml_parser_t *p)
             toml_advance(p);
             n00b_buffer_t *buf = n00b_buffer_empty();
             toml_parse_multiline_literal_string(p, buf);
+            if (p->error) return nullptr;
             return toml_new_string(n00b_buffer_to_string(buf));
         }
         toml_advance(p);
         n00b_buffer_t *buf = n00b_buffer_empty();
         toml_parse_literal_string(p, buf);
+        if (p->error) return nullptr;
         return toml_new_string(n00b_buffer_to_string(buf));
     }
     if (c == '[') {
@@ -759,6 +778,7 @@ toml_parse_value(toml_parser_t *p)
     if (c == 't' && toml_match_keyword(p, "true"))  return toml_new_bool(true);
     if (c == 'f' && toml_match_keyword(p, "false")) return toml_new_bool(false);
     toml_error(p, "expected value, got '%c'", c);
+    return nullptr;
 }
 
 // ===========================================================================
@@ -784,21 +804,26 @@ toml_table_insert(n00b_toml_node_t *tbl,
     n00b_dict_put(&tbl->table, key, val);
 }
 
-static void
+static bool
 toml_parse_assignment(toml_parser_t *p, n00b_toml_node_t *cur_tbl)
 {
     n00b_string_t *key = toml_parse_key(p);
+    if (p->error || key == nullptr) return false;
     toml_skip_ws(p);
     if (toml_peek(p) != '=') {
         toml_error(p, "expected '=' after key");
+        return false;
     }
     toml_advance(p);
     n00b_toml_node_t *val = toml_parse_value(p);
+    if (p->error || val == nullptr) return false;
     if (toml_table_lookup(cur_tbl, key) != nullptr) {
         toml_error(p, "duplicate key \"%s\"", key->data);
+        return false;
     }
     toml_table_insert(cur_tbl, key, val);
     toml_expect_eol(p);
+    return !p->error;
 }
 
 static n00b_toml_node_t *
@@ -814,18 +839,22 @@ toml_parse_header(toml_parser_t *p, n00b_toml_node_t *root)
     }
     toml_skip_ws(p);
     n00b_string_t *name = toml_parse_key(p);
+    if (p->error || name == nullptr) return nullptr;
     toml_skip_ws(p);
     if (toml_peek(p) != ']') {
         toml_error(p, "expected ']' in table header");
+        return nullptr;
     }
     toml_advance(p);
     if (is_array_of_tables) {
         if (toml_peek(p) != ']') {
             toml_error(p, "expected ']]' in array-of-tables header");
+            return nullptr;
         }
         toml_advance(p);
     }
     toml_expect_eol(p);
+    if (p->error) return nullptr;
 
     if (is_array_of_tables) {
         n00b_toml_node_t *arr = toml_table_lookup(root, name);
@@ -836,6 +865,7 @@ toml_parse_header(toml_parser_t *p, n00b_toml_node_t *root)
         else if (arr->type != N00B_TOML_ARRAY) {
             toml_error(p,
                        "[[...]] header conflicts with prior key kind");
+            return nullptr;
         }
         n00b_toml_node_t *fresh = toml_new_table();
         n00b_list_push(arr->array, fresh);
@@ -844,6 +874,7 @@ toml_parse_header(toml_parser_t *p, n00b_toml_node_t *root)
 
     if (toml_table_lookup(root, name) != nullptr) {
         toml_error(p, "duplicate table header");
+        return nullptr;
     }
     n00b_toml_node_t *fresh = toml_new_table();
     toml_table_insert(root, name, fresh);
@@ -860,18 +891,12 @@ n00b_toml_parse(n00b_string_t *src)
     n00b_require(src != nullptr, "n00b_toml_parse: src");
     toml_set_last_error(nullptr);
 
-    // Set up the parse-error trampoline.
-    toml_jmp.active = true;
-    if (setjmp(toml_jmp.jb) != 0) {
-        toml_jmp.active = false;
-        return n00b_result_err(n00b_toml_node_t *, N00B_TOML_ERR_PARSE);
-    }
-
     toml_parser_t p = {
-        .src  = (const char *)src->data,
-        .pos  = 0,
-        .line = 1,
-        .col  = 1,
+        .src   = (const char *)src->data,
+        .pos   = 0,
+        .line  = 1,
+        .col   = 1,
+        .error = false,
     };
     n00b_toml_node_t *root = toml_new_table();
     n00b_toml_node_t *cur  = root;
@@ -882,12 +907,16 @@ n00b_toml_parse(n00b_string_t *src)
         char c = toml_peek(&p);
         if (c == '[') {
             cur = toml_parse_header(&p, root);
+            if (p.error || cur == nullptr) {
+                return n00b_result_err(n00b_toml_node_t *, N00B_TOML_ERR_PARSE);
+            }
         }
         else {
-            toml_parse_assignment(&p, cur);
+            if (!toml_parse_assignment(&p, cur)) {
+                return n00b_result_err(n00b_toml_node_t *, N00B_TOML_ERR_PARSE);
+            }
         }
     }
-    toml_jmp.active = false;
     return n00b_result_ok(n00b_toml_node_t *, root);
 }
 

@@ -124,14 +124,14 @@ n00b_dict_internal_lock(_n00b_dict_internal_t *d, bool try, uint32_t *count)
         n00b_atomic_add(&d->wait_ct, 1);
     }
 
-    uint32_t v = n00b_atomic_or(&d->futex, 1UL << 31);
+    uint32_t v = n00b_atomic_or(&d->_migration_state, 1UL << 31);
 
     while (v & (1UL << 31)) {
         if (try) {
             return false;
         }
-        n00b_futex_wait_timespec(&d->futex, v, nullptr);
-        v = n00b_atomic_or(&d->futex, 1UL << 31);
+        n00b_futex_wait_timespec(&d->_migration_state, v, nullptr);
+        v = n00b_atomic_or(&d->_migration_state, 1UL << 31);
     }
 
     n00b_atomic_add(&d->wait_ct, -1);
@@ -174,10 +174,10 @@ dict_unlock_post_migrate(_n00b_dict_internal_t              *d,
                          __n00b_internal_type_erased_store_t *s)
 {
     atomic_store(&d->store, (void **)s);
-    atomic_store(&d->futex, 0);
+    atomic_store(&d->_migration_state, 0);
 
     if (n00b_atomic_load(&d->wait_ct)) {
-        n00b_futex_wake(&d->futex, true);
+        n00b_futex_wake(&d->_migration_state, true);
     }
 }
 
@@ -191,10 +191,10 @@ n00b_dict_internal_unlock_post_copy(_n00b_dict_internal_t *d)
         n00b_atomic_and(&s->buckets[i].flags, ~N00B_HT_FLAG_COPYING);
     }
 
-    atomic_store(&d->futex, 0);
+    atomic_store(&d->_migration_state, 0);
 
     if (n00b_atomic_load(&d->wait_ct)) {
-        n00b_futex_wake(&d->futex, true);
+        n00b_futex_wake(&d->_migration_state, true);
     }
 }
 
@@ -205,7 +205,7 @@ dict_migrate(_n00b_dict_internal_t *d, uint32_t ksz, uint32_t vsz)
 
     if (!n00b_dict_internal_lock(d, true, &nitems)) {
         n00b_atomic_add(&d->wait_ct, 1);
-        n00b_futex_wait_for_value(&d->futex, 0);
+        n00b_futex_wait_for_value(&d->_migration_state, 0);
         return;
     }
 
@@ -301,7 +301,7 @@ acquire_if_present(_n00b_dict_internal_t              *d,
         return nullptr;
 
 try_again:
-        n00b_futex_wait_for_value(&d->futex, 0);
+        n00b_futex_wait_for_value(&d->_migration_state, 0);
         store = (__n00b_internal_type_erased_store_t *)n00b_atomic_load(&d->store);
     } while (true);
 }
@@ -341,7 +341,7 @@ acquire_or_add(_n00b_dict_internal_t              *d,
         return nullptr;
 
 try_again:
-        n00b_futex_wait_for_value(&d->futex, 0);
+        n00b_futex_wait_for_value(&d->_migration_state, 0);
         store = (__n00b_internal_type_erased_store_t *)n00b_atomic_load(&d->store);
     } while (true);
 }
@@ -617,6 +617,7 @@ _n00b_dict_internal_init(_n00b_dict_internal_t *dict, size_t ksz, size_t vsz) _k
     uint32_t             start_capacity = N00B_DICT_MIN_SIZE;
     n00b_hash_fn         hash           = nullptr;
     bool                 skip_obj_hash  = false;
+    bool                 locked         = true;
     n00b_gc_scan_kind_t  scan_kind      = N00B_GC_SCAN_KIND_DEFAULT;
     n00b_gc_scan_cb_t    scan_cb        = nullptr;
     void                *scan_user      = nullptr;
@@ -629,16 +630,17 @@ _n00b_dict_internal_init(_n00b_dict_internal_t *dict, size_t ksz, size_t vsz) _k
     start_capacity = n00b_align_closest_pow2_ceil(start_capacity);
 
     *dict = (_n00b_dict_internal_t){
-        .fn              = hash,
-        .allocator       = allocator,
-        .insertion_epoch = 0,
-        .wait_ct         = 0,
-        .length          = 0,
-        .futex           = 0,
-        .skip_obj_hash   = skip_obj_hash,
-        .scan_kind       = scan_kind,
-        .scan_cb         = scan_cb,
-        .scan_user       = scan_user,
+        .fn               = hash,
+        .allocator        = allocator,
+        .insertion_epoch  = 0,
+        .wait_ct          = 0,
+        .length           = 0,
+        ._migration_state = 0,
+        .lock             = locked ? n00b_data_lock_new() : (n00b_rwlock_t *)nullptr,
+        .skip_obj_hash    = skip_obj_hash,
+        .scan_kind        = scan_kind,
+        .scan_cb          = scan_cb,
+        .scan_user        = scan_user,
     };
 
     __n00b_internal_type_erased_store_t *s = new_dict_store(dict, start_capacity, ksz, vsz);
@@ -663,6 +665,23 @@ _n00b_finalize_dict(_n00b_dict_internal_t *d)
         n00b_free(s->values);
         n00b_free(s);
     }
+}
+
+/*
+ * Vtable-callable static initializer stub. The real dict image is built
+ * by the `container_kind dict` path in `n00b-static-init-helper` (the
+ * helper carries typed K/V metadata that the generic request shape
+ * cannot represent). This stub keeps the type registry from rejecting
+ * dicts as "unsupported-policy" and steers any direct caller toward
+ * the right path.
+ */
+n00b_static_image_status_t
+n00b_dict_static_init(n00b_static_image_builder_t *builder)
+{
+    return n00b_static_image_builder_fail(
+        builder,
+        N00B_STATIC_IMAGE_ERR_UNSUPPORTED_POLICY,
+        r"n00b_dict_t static images are produced by the container helper's `container_kind dict` path, not by n00b_static_image_build()");
 }
 
 /*

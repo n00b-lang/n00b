@@ -29,6 +29,7 @@
 #include "core/thread.h"
 #include "core/atomic.h"
 #include "core/alloc.h"
+#include "core/gc.h"
 #include "adt/option.h"
 #include "adt/result.h"
 
@@ -179,12 +180,22 @@
                         xf->topic, mt, N00B_CONDUIT_OP_ALL);                   \
                 continue;                                                      \
             }                                                                  \
-            /* 3. Nothing: wait on inbox CV */                                 \
-            n00b_condition_wait(                                               \
-                &xf->inbox->cv, .timeout = 50000000LL);                        \
+            /* 3. Nothing: arm the wait while holding the inbox CV lock. */     \
+            n00b_condition_lock(&xf->inbox->cv);                                \
+            if (!n00b_atomic_load(&xf->stop_requested) &&                       \
+                !n00b_conduit_is_shutdown(xf->conduit) &&                       \
+                !n00b_conduit_inbox_has_msg(T_in, xf->inbox) &&                 \
+                !n00b_conduit_inbox_has_sys(xf->inbox)) {                       \
+                n00b_condition_wait(&xf->inbox->cv, .auto_unlock = true);       \
+            }                                                                  \
+            else {                                                              \
+                n00b_condition_unlock(&xf->inbox->cv);                          \
+            }                                                                  \
         }                                                                      \
         n00b_atomic_store(&xf->running, false);                               \
         if (xf->ops->teardown) xf->ops->teardown(xf);                         \
+        if (xf->cookie_size > 0)                                               \
+            _n00b_gc_unregister_root(&xf->cookie);                             \
         n00b_conduit_sub_cancel(xf->upstream_sub);                             \
         n00b_conduit_publish_yield(                                            \
             n00b_atomic_load(&xf->topic->publisher));                         \
@@ -236,6 +247,10 @@
         xf->passthrough_sys = true;                                            \
         if (cookie_size > 0) {                                                 \
             xf->cookie = n00b_alloc_array(uint8_t, cookie_size);                      \
+            _n00b_gc_register_root(&xf->cookie, 1);                            \
+        }                                                                      \
+        else {                                                                 \
+            xf->cookie = nullptr;                                              \
         }                                                                      \
         uint64_t id = n00b_atomic_add(&c->next_xform_id, 1);                  \
         xf->uri = N00B_CONDUIT_URI_XFORM(id);                                 \
@@ -244,16 +259,19 @@
             n00b_conduit_topic_get(                                            \
                 c, xf->uri,                                                    \
                 sizeof(n00b_conduit_topic_t(T_out)));                          \
-        if (n00b_result_is_err(tr))                                            \
+        if (n00b_result_is_err(tr)) {                                          \
+            if (xf->cookie_size > 0)                                           \
+                _n00b_gc_unregister_root(&xf->cookie);                         \
             return n00b_result_err(                                            \
                 n00b_conduit_xform_t(T_in, T_out) *,                           \
                 n00b_result_get_err(tr));                                      \
+        }                                                                      \
         xf->topic =                                                            \
             (n00b_conduit_topic_t(T_out) *)                                    \
                 n00b_result_get(tr);                                 \
         /* Init output topic typed fields so downstream can subscribe. */      \
         xf->topic->subscriptions =                                             \
-            n00b_list_new(n00b_conduit_subscription_t(T_out) *);              \
+            n00b_list_new(n00b_conduit_subscription_t(T_out) *, c->allocator);\
         xf->topic->inbox = nullptr;                                            \
         /* Create input inbox */                                               \
         xf->inbox = n00b_alloc_with_opts(n00b_conduit_inbox_t(T_in),           \
@@ -269,10 +287,13 @@
         n00b_atomic_store(&xf->stop_requested, false);                        \
         auto _spawn_r = n00b_thread_spawn(                                      \
             _N00B_XFORM_FN(loop, T_in, T_out), xf);                           \
-        if (n00b_result_is_err(_spawn_r))                                      \
+        if (n00b_result_is_err(_spawn_r)) {                                    \
+            if (xf->cookie_size > 0)                                           \
+                _n00b_gc_unregister_root(&xf->cookie);                         \
             return n00b_result_err(                                            \
                 n00b_conduit_xform_t(T_in, T_out) *,                           \
                 N00B_CONDUIT_ERR_ALLOC);                                       \
+        }                                                                      \
         xf->thread = n00b_result_get(_spawn_r);                               \
         return n00b_result_ok(                                                 \
             n00b_conduit_xform_t(T_in, T_out) *, xf);                         \

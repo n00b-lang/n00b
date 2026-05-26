@@ -34,15 +34,7 @@
 #define N00B_MPROT (PROT_READ | PROT_WRITE)
 #define N00B_MFLAG (MAP_PRIVATE | MAP_ANON)
 
-enum n00b_mmap_perms_t : uint8_t {
-    n00b_mmap_perms_data_not_addr = 0,
-    n00b_mmap_perms_ro            = 1,
-    n00b_mmap_perms_no_access     = 2,
-    n00b_mmap_perms_rw            = 4,
-};
-
 typedef enum n00b_mmap_rec_kind_t n00b_mmap_rec_kind_t;
-typedef enum n00b_mmap_perms_t    n00b_mmap_perms_t;
 
 /**
  * @brief Look up an mmap record by address (internal — prefer n00b_mmap_by_address).
@@ -64,6 +56,7 @@ extern n00b_option_t(n00b_mmap_info_t *) n00b_mmap_lookup(n00b_mmap_ctx_t *ctx, 
  * @kw binary_offset    Offset within a mapped binary file.
  * @kw slide            ASLR slide for the mapping.
  * @kw order_id         Insertion order identifier.
+ * @kw perms            Known mapping permissions, if authoritative.
  * @kw definitely_unique If true, skip duplicate checks on insert.
  */
 extern n00b_option_t(n00b_mmap_info_t *)
@@ -75,6 +68,7 @@ n00b_mmap_register(void *startp, void *endp, n00b_mmap_rec_kind_t kind) _kargs
     uint64_t          binary_offset     = 0;
     intptr_t          slide             = 0;
     uint64_t          order_id          = 0;
+    n00b_mmap_perms_t perms             = n00b_mmap_perms_unknown;
     bool              definitely_unique = true;
 };
 
@@ -278,6 +272,7 @@ n00b_mmap_register_range(void *start, void *end, n00b_mmap_rec_kind_t kind) _kar
     void                *scan_user = nullptr;
     n00b_alloc_type_info_t tinfo    = 0;
     uint64_t             object_id = 0;
+    const n00b_static_identity_t *identity = nullptr;
     uint32_t             flags     = 0;
 };
 
@@ -292,6 +287,7 @@ n00b_mmap_register_range(void *start, void *end, n00b_mmap_rec_kind_t kind) _kar
  * @kw scan_cb   Optional callback used when scan_kind == CALLBACK.
  * @kw scan_user Opaque callback data.
  * @kw object_id Stable generated-object identity, if available.
+ * @kw identity  Portable source-semantic identity, if available.
  * @kw flags     Reserved descriptor flags for generated-code contracts.
  */
 extern n00b_alloc_range_t *
@@ -304,6 +300,7 @@ _n00b_static_object_register(void *start,
     n00b_gc_scan_cb_t   scan_cb   = nullptr;
     void               *scan_user = nullptr;
     uint64_t            object_id = 0;
+    const n00b_static_identity_t *identity = nullptr;
     uint32_t            flags     = 0;
 };
 

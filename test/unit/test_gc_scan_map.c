@@ -344,6 +344,33 @@ test_cb_struct_field(void)
 }
 
 // ============================================================================
+// 15. cb_struct_layout — stride=5, offsets={1,4}, count=3
+//     → {1,4,6,9,11,14}
+// ============================================================================
+
+static void
+test_cb_struct_layout(void)
+{
+    MK_MAP(m, 16);
+    uint64_t offsets[] = {1, 4};
+    n00b_gc_struct_layout_t desc = {
+        .stride       = 5,
+        .count        = 3,
+        .offset_count = 2,
+        .offsets      = offsets,
+    };
+
+    n00b_gc_scan_cb_struct_layout(&m, &desc);
+
+    for (uint64_t i = 0; i < 16; i++) {
+        bool expected = i == 1 || i == 4 || i == 6 || i == 9 || i == 11 || i == 14;
+        assert(n00b_gc_map_is_set(&m, i) == expected);
+    }
+
+    printf("  [PASS] cb_struct_layout\n");
+}
+
+// ============================================================================
 // main
 // ============================================================================
 
@@ -369,6 +396,7 @@ main(int argc, char **argv)
     test_cb_none();
     test_cb_every_other();
     test_cb_struct_field();
+    test_cb_struct_layout();
 
     printf("All gc_scan_map tests passed.\n");
     return 0;

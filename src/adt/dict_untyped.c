@@ -99,14 +99,14 @@ n00b_dict_untyped_lock(n00b_dict_untyped_t *d, bool try, uint32_t *count)
         n00b_atomic_add(&d->wait_ct, 1);
     }
 
-    uint32_t v = n00b_atomic_or(&d->futex, 1UL << 31);
+    uint32_t v = n00b_atomic_or(&d->_migration_state, 1UL << 31);
 
     while (v & (1UL << 31)) {
         if (try) {
             return false;
         }
-        n00b_futex_wait_timespec(&d->futex, v, nullptr);
-        v = n00b_atomic_or(&d->futex, 1UL << 31);
+        n00b_futex_wait_timespec(&d->_migration_state, v, nullptr);
+        v = n00b_atomic_or(&d->_migration_state, 1UL << 31);
     }
 
     n00b_atomic_add(&d->wait_ct, -1);
@@ -149,10 +149,10 @@ static void
 dict_untyped_unlock_post_migrate(n00b_dict_untyped_t *d, n00b_dict_untyped_store_t *s)
 {
     atomic_store(&d->store, s);
-    atomic_store(&d->futex, 0);
+    atomic_store(&d->_migration_state, 0);
 
     if (n00b_atomic_load(&d->wait_ct)) {
-        n00b_futex_wake(&d->futex, true);
+        n00b_futex_wake(&d->_migration_state, true);
     }
 }
 
@@ -165,10 +165,10 @@ n00b_dict_untyped_unlock_post_copy(n00b_dict_untyped_t *d)
         n00b_atomic_and(&s->buckets[i].flags, ~N00B_HT_FLAG_COPYING);
     }
 
-    atomic_store(&d->futex, 0);
+    atomic_store(&d->_migration_state, 0);
 
     if (n00b_atomic_load(&d->wait_ct)) {
-        n00b_futex_wake(&d->futex, true);
+        n00b_futex_wake(&d->_migration_state, true);
     }
 }
 
@@ -181,7 +181,7 @@ n00b_dict_untyped_migrate(n00b_dict_untyped_t *d)
 
     if (!n00b_dict_untyped_lock(d, true, &nitems)) {
         n00b_atomic_add(&d->wait_ct, 1);
-        n00b_futex_wait_for_value(&d->futex, 0);
+        n00b_futex_wait_for_value(&d->_migration_state, 0);
         return;
     }
     olds = n00b_atomic_load(&d->store);
@@ -268,7 +268,7 @@ n00b_acquire_if_present(n00b_dict_untyped_t *d, n00b_dict_untyped_store_t *store
         return nullptr;
 
 try_again:
-        n00b_futex_wait_for_value(&d->futex, 0);
+        n00b_futex_wait_for_value(&d->_migration_state, 0);
         store = n00b_atomic_load(&d->store);
     } while (true);
 }
@@ -312,7 +312,7 @@ n00b_acquire_or_add(n00b_dict_untyped_t *d, n00b_dict_untyped_store_t *store, __
         return nullptr;
 
 try_again:
-        n00b_futex_wait_for_value(&d->futex, 0);
+        n00b_futex_wait_for_value(&d->_migration_state, 0);
         store = n00b_atomic_load(&d->store);
     } while (true);
 }
@@ -560,6 +560,7 @@ n00b_dict_untyped_init(n00b_dict_untyped_t *dict) _kargs
     n00b_allocator_t    *allocator      = nullptr;
     n00b_hash_fn         hash           = nullptr;
     bool                 skip_obj_hash  = false;
+    bool                 locked         = true;
     n00b_gc_scan_kind_t  scan_kind      = N00B_GC_SCAN_KIND_DEFAULT;
     n00b_gc_scan_cb_t    scan_cb        = nullptr;
     void                *scan_user      = nullptr;
@@ -574,16 +575,17 @@ n00b_dict_untyped_init(n00b_dict_untyped_t *dict) _kargs
     start_capacity = n00b_align_closest_pow2_ceil(start_capacity);
 
     *dict = (n00b_dict_untyped_t){
-        .fn              = hash,
-        .allocator       = allocator,
-        .insertion_epoch = 0,
-        .wait_ct         = 0,
-        .length          = 0,
-        .futex           = 0,
-        .skip_obj_hash   = skip_obj_hash,
-        .scan_kind       = scan_kind,
-        .scan_cb         = scan_cb,
-        .scan_user       = scan_user,
+        .fn               = hash,
+        .allocator        = allocator,
+        .insertion_epoch  = 0,
+        .wait_ct          = 0,
+        .length           = 0,
+        ._migration_state = 0,
+        .lock             = locked ? n00b_data_lock_new() : (n00b_rwlock_t *)nullptr,
+        .skip_obj_hash    = skip_obj_hash,
+        .scan_kind        = scan_kind,
+        .scan_cb          = scan_cb,
+        .scan_user        = scan_user,
     };
 
     dict->store = new_dict_untyped_store(dict, start_capacity);

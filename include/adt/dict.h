@@ -5,6 +5,8 @@
 #include "core/alloc.h"
 #include "core/gc_map.h"
 #include "core/hash.h"
+#include "core/static_image.h"
+#include "core/data_lock.h"
 
 #include <stdint.h>
 #include <assert.h>
@@ -45,9 +47,14 @@ typedef struct __n00b_internal_type_erased_store_t {
     void              **values;
 } __n00b_internal_type_erased_store_t;
 
-#define n00b_dict_tid(k, v) typeid("dict", k, v)
+#define n00b_dict_tid(k, v) typeid("n00b_dict", k, v)
 
-// The futex is only for migrations.
+// `_migration_state` is the migration coordination word for the lock-free
+// table-resize protocol, NOT a user-facing lock. The runtime futex bits
+// gate writers during a store migration; readers do not consult it. The
+// user-facing rwlock lives in the `lock` slot below and follows the
+// WP-010 list precedent (locked by default for `n00b_dict_new`, nullptr
+// for `n00b_dict_new_private`; static dict images default to nullptr).
 //
 // The `scan_kind` / `scan_cb` / `scan_user` triple is the GC scan shape
 // applied uniformly to the bucket, keys, and values backing arrays
@@ -60,9 +67,9 @@ typedef struct __n00b_internal_type_erased_store_t {
     _Atomic uint32_t     insertion_epoch;                                                      \
     _Atomic n00b_isize_t wait_ct;                                                              \
     _Atomic n00b_isize_t length;                                                               \
-    n00b_futex_t         futex;                                                                \
+    n00b_futex_t         _migration_state;                                                     \
+    n00b_rwlock_t       *lock;                                                                 \
     uint8_t              cache         : 1;                                                    \
-    uint8_t              lock          : 1;                                                    \
     uint8_t              skip_obj_hash : 1;                                                    \
     n00b_gc_scan_kind_t  scan_kind;                                                            \
     n00b_gc_scan_cb_t    scan_cb;                                                              \
@@ -93,7 +100,8 @@ typedef struct _n00b_dict_internal_t {
                   == offsetof(_n00b_dict_internal_t, wait_ct));                                  \
     static_assert(offsetof(typeof(*(dict_ptr)), length)                                        \
                   == offsetof(_n00b_dict_internal_t, length));                                   \
-    static_assert(offsetof(typeof(*(dict_ptr)), futex) == offsetof(_n00b_dict_internal_t, futex))
+    static_assert(offsetof(typeof(*(dict_ptr)), _migration_state)                              \
+                  == offsetof(_n00b_dict_internal_t, _migration_state))
 
 #define _n00b_wrap_dict_call(opname, dict_ptr, ...)                                            \
     ({                                                                                         \
@@ -106,6 +114,57 @@ typedef struct _n00b_dict_internal_t {
 
 #define _n00b_ditem_type(dict_ptr, field_name) typeof((dict_ptr)->store->field_name[0])
 #define n00b_dict_init(dict, ...) _n00b_wrap_dict_call(init, dict __VA_OPT__(, __VA_ARGS__))
+
+/**
+ * @brief Allocate and initialize a new typed dict (locked by default).
+ *
+ * Mirrors the WP-010 list-precedent call-surface pair: `n00b_dict_new`
+ * creates a locked dict (rwlock allocated and stored in the `lock`
+ * slot); `n00b_dict_new_private` creates an unlocked dict (`lock`
+ * remains nullptr). The outer `n00b_dict_t(K, V) *` heap allocation
+ * uses the caller-supplied allocator (and scan opts), then
+ * `n00b_dict_init` runs with `.locked` set and forwards the same opts
+ * so internal arrays land in the same allocator.
+ *
+ * For dict-specific kwargs (`.start_capacity`, `.hash`,
+ * `.skip_obj_hash`), call `n00b_dict_init` separately after this macro
+ * or pair with `n00b_alloc` directly. This `_new` surface accepts only
+ * fields of `n00b_alloc_opts_t`.
+ *
+ * @param K    Key type.
+ * @param V    Value type.
+ * @param ...  Optional `n00b_alloc_opts_t` fields (allocator, scan_*,
+ *             finalizer, etc.).
+ */
+#define n00b_dict_new(K, V, ...)                                                               \
+    ({                                                                                         \
+        n00b_alloc_opts_t _bl_o = (n00b_alloc_opts_t){__VA_OPT__(__VA_ARGS__)};                \
+        n00b_dict_t(K, V) *_bl_d =                                                             \
+            n00b_alloc_with_opts(n00b_dict_t(K, V), &_bl_o);                                   \
+        n00b_dict_init(_bl_d,                                                                  \
+                       .locked    = true,                                                      \
+                       .allocator = _bl_o.allocator,                                           \
+                       .scan_kind = _bl_o.scan_kind,                                           \
+                       .scan_cb   = _bl_o.scan_cb,                                             \
+                       .scan_user = _bl_o.scan_user);                                          \
+        _bl_d;                                                                                 \
+    })
+
+/// @brief Allocate and initialize a new typed dict with no rwlock (private).
+/// See `n00b_dict_new` for kwarg semantics.
+#define n00b_dict_new_private(K, V, ...)                                                       \
+    ({                                                                                         \
+        n00b_alloc_opts_t _bl_o = (n00b_alloc_opts_t){__VA_OPT__(__VA_ARGS__)};                \
+        n00b_dict_t(K, V) *_bl_d =                                                             \
+            n00b_alloc_with_opts(n00b_dict_t(K, V), &_bl_o);                                   \
+        n00b_dict_init(_bl_d,                                                                  \
+                       .locked    = false,                                                     \
+                       .allocator = _bl_o.allocator,                                           \
+                       .scan_kind = _bl_o.scan_kind,                                           \
+                       .scan_cb   = _bl_o.scan_cb,                                             \
+                       .scan_user = _bl_o.scan_user);                                          \
+        _bl_d;                                                                                 \
+    })
 
 /**
  * @brief Drop every entry in-place without reallocating the backing store.
@@ -149,7 +208,7 @@ typedef struct _n00b_dict_internal_t {
  *
  * Example:
  *     n00b_dict_foreach(my_dict, k, v, {
- *         printf("key=%lld val=%d\n", (long long)k, v);
+ *         n00b_printf("key=«#» val=«#»\n", (long long)k, v);
  *     });
  */
 #define n00b_dict_foreach(dict, kvar, vvar, body)                                                  \
@@ -185,13 +244,16 @@ extern n00b_size_t n00b_dict_internal_len(_n00b_dict_internal_t *);
 extern void       _n00b_dict_internal_clear(_n00b_dict_internal_t *);
 
 /**
- * @brief Initialize an untyped dictionary.
+ * @brief Initialize a typed dictionary.
  * @param dict Dictionary to initialize.
  *
  * @kw start_capacity Initial bucket count (default N00B_DICT_MIN_SIZE).
  * @kw allocator      Allocator for internal storage (nullptr = runtime default).
  * @kw hash           Hash function for keys (nullptr = n00b_hash_word).
  * @kw skip_obj_hash  If true, use the raw key bits instead of calling the hash function.
+ * @kw locked         If true (default), allocate a fresh rwlock for the
+ *                    `lock` slot; if false, leave `lock` nullptr (private,
+ *                    single-thread use).
  */
 extern void
 _n00b_dict_internal_init(_n00b_dict_internal_t *, size_t ksz, size_t vsz) _kargs
@@ -200,6 +262,7 @@ _n00b_dict_internal_init(_n00b_dict_internal_t *, size_t ksz, size_t vsz) _kargs
     uint32_t             start_capacity = N00B_DICT_MIN_SIZE;
     n00b_hash_fn         hash           = nullptr;
     bool                 skip_obj_hash  = false;
+    bool                 locked         = true;
     n00b_gc_scan_kind_t  scan_kind      = N00B_GC_SCAN_KIND_DEFAULT;
     n00b_gc_scan_cb_t    scan_cb        = nullptr;
     void                *scan_user      = nullptr;
@@ -239,6 +302,25 @@ _n00b_dict_internal_cas(_n00b_dict_internal_t *d,
 #define N00B_HT_FLAG_COPYING 2
 #define N00B_HT_FLAG_DELETED 4
 #define N00B_HT_FLAG_MOVING  8
+
+/**
+ * @brief Vtable-callable static initializer stub for dict types.
+ *
+ * The real dict static image is produced by the build-time helper's
+ * `container_kind dict` path, which carries typed key/value metadata
+ * (typenames, scan info, paired key/value records) that the generic
+ * `n00b_static_image_request_t` does not represent.  This stub exists
+ * so the type registry accepts dicts as constructor-image-policy types
+ * and so a mistakenly-routed direct `n00b_static_image_build()` call
+ * surfaces a targeted diagnostic instead of an `unsupported-policy`
+ * rejection.
+ *
+ * @param builder The static image builder.
+ * @return        Always fails with `N00B_STATIC_IMAGE_ERR_UNSUPPORTED_POLICY`
+ *                and a clear error message pointing at the helper path.
+ */
+extern n00b_static_image_status_t
+n00b_dict_static_init(n00b_static_image_builder_t *builder);
 
 #ifdef N00B_USE_INTERNAL_API
 /**

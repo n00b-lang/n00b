@@ -63,6 +63,244 @@ mmap_unlock(n00b_mmap_ctx_t *ctx)
 #define mmap_write_unlock(ctx) mmap_unlock(ctx)
 #define mmap_read_unlock(ctx)  mmap_unlock(ctx)
 
+struct n00b_static_identity_entry_t {
+    const n00b_static_identity_t *identity;
+    n00b_alloc_range_t           *range;
+    n00b_static_identity_entry_t *next;
+};
+
+static bool
+static_identity_valid(const n00b_static_identity_t *identity)
+{
+    if (identity == nullptr) {
+        return false;
+    }
+
+    if (identity->version != N00B_STATIC_IDENTITY_VERSION) {
+        return false;
+    }
+
+    if (identity->kind == N00B_STATIC_IDENTITY_NONE) {
+        return false;
+    }
+
+    if (identity->namespace_id == nullptr || identity->namespace_id[0] == '\0') {
+        return false;
+    }
+
+    if (identity->object_key == nullptr || identity->object_key[0] == '\0') {
+        return false;
+    }
+
+    return true;
+}
+
+static bool
+static_identity_equal(const n00b_static_identity_t *a,
+                      const n00b_static_identity_t *b)
+{
+    return a->version == b->version
+        && a->kind == b->kind
+        && strcmp(a->namespace_id, b->namespace_id) == 0
+        && strcmp(a->object_key, b->object_key) == 0;
+}
+
+static n00b_static_identity_status_t
+static_identity_validate_range(n00b_alloc_range_t                 *range,
+                               const n00b_static_identity_query_t *query)
+{
+    if (query == nullptr || query->checks == N00B_STATIC_IDENTITY_CHECK_NONE) {
+        return N00B_STATIC_IDENTITY_OK;
+    }
+
+    if ((query->checks & N00B_STATIC_IDENTITY_CHECK_LEN) != 0
+        && range->len != query->len) {
+        return N00B_STATIC_IDENTITY_ERR_LENGTH;
+    }
+
+    if ((query->checks & N00B_STATIC_IDENTITY_CHECK_TINFO) != 0
+        && range->tinfo != query->tinfo) {
+        return N00B_STATIC_IDENTITY_ERR_TYPE;
+    }
+
+    if ((query->checks & N00B_STATIC_IDENTITY_CHECK_SCAN_KIND) != 0
+        && range->scan_kind != query->scan_kind) {
+        return N00B_STATIC_IDENTITY_ERR_SCAN;
+    }
+
+    if ((query->checks & N00B_STATIC_IDENTITY_CHECK_FLAGS) != 0
+        && (range->flags & query->flags_mask) != query->flags_value) {
+        return N00B_STATIC_IDENTITY_ERR_MUTABILITY;
+    }
+
+    if ((query->checks & N00B_STATIC_IDENTITY_CHECK_BYTES) != 0) {
+        uint64_t end = query->check_offset + (uint64_t)query->check_len;
+
+        if (query->check_bytes == nullptr) {
+            return N00B_STATIC_IDENTITY_ERR_CHECK_BYTES;
+        }
+        if (end < query->check_offset || end > range->len) {
+            return N00B_STATIC_IDENTITY_ERR_LENGTH;
+        }
+        if (memcmp((const unsigned char *)range->start + query->check_offset,
+                   query->check_bytes,
+                   query->check_len) != 0) {
+            return N00B_STATIC_IDENTITY_ERR_CHECK_BYTES;
+        }
+    }
+
+    return N00B_STATIC_IDENTITY_OK;
+}
+
+static n00b_static_identity_status_t
+static_identity_register_unlocked(n00b_mmap_ctx_t                *ctx,
+                                  const n00b_static_identity_t   *identity,
+                                  n00b_alloc_range_t             *range)
+{
+    if (identity == nullptr || range == nullptr) {
+        return N00B_STATIC_IDENTITY_ERR_NULL;
+    }
+    if (!static_identity_valid(identity)) {
+        return N00B_STATIC_IDENTITY_ERR_INVALID;
+    }
+
+    uint32_t live_matches = 0;
+    for (n00b_static_identity_entry_t *entry = ctx->static_identities;
+         entry != nullptr;
+         entry = entry->next) {
+        if (entry->range != nullptr && static_identity_equal(entry->identity, identity)) {
+            if (entry->range == range) {
+                return live_matches == 0
+                    ? N00B_STATIC_IDENTITY_OK
+                    : N00B_STATIC_IDENTITY_ERR_DUPLICATE;
+            }
+            live_matches++;
+        }
+    }
+
+    n00b_allocator_t *alloc = (n00b_allocator_t *)&ctx->pool;
+    n00b_static_identity_entry_t *entry = n00b_alloc_with_opts(
+        n00b_static_identity_entry_t,
+        &(n00b_alloc_opts_t){.allocator = alloc});
+
+    *entry = (n00b_static_identity_entry_t){
+        .identity = identity,
+        .range    = range,
+        .next     = ctx->static_identities,
+    };
+    ctx->static_identities = entry;
+    range->identity        = identity;
+
+    return live_matches == 0
+        ? N00B_STATIC_IDENTITY_OK
+        : N00B_STATIC_IDENTITY_ERR_DUPLICATE;
+}
+
+static void
+static_identity_unregister_range_unlocked(n00b_mmap_ctx_t *ctx,
+                                          n00b_alloc_range_t *range)
+{
+    for (n00b_static_identity_entry_t *entry = ctx->static_identities;
+         entry != nullptr;
+         entry = entry->next) {
+        if (entry->range == range) {
+            entry->range = nullptr;
+        }
+    }
+}
+
+n00b_static_identity_status_t
+n00b_static_identity_register(const n00b_static_identity_t *identity,
+                              n00b_alloc_range_t *range)
+{
+    n00b_runtime_t  *rt  = n00b_get_runtime();
+    n00b_mmap_ctx_t *ctx = n00b_global_mem_map(rt);
+    n00b_static_identity_status_t result;
+
+    mmap_write_lock(ctx);
+    result = static_identity_register_unlocked(ctx, identity, range);
+    mmap_write_unlock(ctx);
+
+    return result;
+}
+
+n00b_static_identity_status_t
+n00b_static_identity_lookup(const n00b_static_identity_t *identity,
+                            const n00b_static_identity_query_t *query,
+                            n00b_alloc_range_t **out_range)
+{
+    if (out_range != nullptr) {
+        *out_range = nullptr;
+    }
+    if (identity == nullptr) {
+        return N00B_STATIC_IDENTITY_ERR_NULL;
+    }
+    if (!static_identity_valid(identity)) {
+        return N00B_STATIC_IDENTITY_ERR_INVALID;
+    }
+
+    n00b_runtime_t       *rt  = n00b_get_runtime();
+    n00b_mmap_ctx_t      *ctx = n00b_global_mem_map(rt);
+    n00b_alloc_range_t   *match = nullptr;
+    uint32_t              live_matches = 0;
+
+    mmap_read_lock(ctx);
+    for (n00b_static_identity_entry_t *entry = ctx->static_identities;
+         entry != nullptr;
+         entry = entry->next) {
+        if (entry->range != nullptr && static_identity_equal(entry->identity, identity)) {
+            match = entry->range;
+            live_matches++;
+        }
+    }
+
+    if (live_matches == 0) {
+        mmap_read_unlock(ctx);
+        return N00B_STATIC_IDENTITY_ERR_MISSING;
+    }
+    if (live_matches > 1) {
+        mmap_read_unlock(ctx);
+        return N00B_STATIC_IDENTITY_ERR_DUPLICATE;
+    }
+
+    n00b_static_identity_status_t result = static_identity_validate_range(match, query);
+    if (result == N00B_STATIC_IDENTITY_OK && out_range != nullptr) {
+        *out_range = match;
+    }
+    mmap_read_unlock(ctx);
+
+    return result;
+}
+
+const char *
+n00b_static_identity_status_name(n00b_static_identity_status_t status)
+{
+    switch (status) {
+    case N00B_STATIC_IDENTITY_OK:
+        return "ok";
+    case N00B_STATIC_IDENTITY_ERR_NULL:
+        return "null";
+    case N00B_STATIC_IDENTITY_ERR_INVALID:
+        return "invalid";
+    case N00B_STATIC_IDENTITY_ERR_MISSING:
+        return "missing";
+    case N00B_STATIC_IDENTITY_ERR_DUPLICATE:
+        return "duplicate";
+    case N00B_STATIC_IDENTITY_ERR_MUTABILITY:
+        return "mutability";
+    case N00B_STATIC_IDENTITY_ERR_TYPE:
+        return "type";
+    case N00B_STATIC_IDENTITY_ERR_SCAN:
+        return "scan";
+    case N00B_STATIC_IDENTITY_ERR_LENGTH:
+        return "length";
+    case N00B_STATIC_IDENTITY_ERR_CHECK_BYTES:
+        return "check-bytes";
+    default:
+        return "unknown";
+    }
+}
+
 // ============================================================================
 // Internal helpers
 // ============================================================================
@@ -72,7 +310,8 @@ mmaps_insert_raw(n00b_mmap_ctx_t     *ctx,
                  void                *startp,
                  uint64_t             blen,
                  n00b_mmap_rec_kind_t kind,
-                 uint64_t             binary_offset)
+                 uint64_t             binary_offset,
+                 n00b_mmap_perms_t    perms)
 {
     n00b_allocator_t *alloc = (n00b_allocator_t *)&ctx->pool;
     n00b_mmap_info_t *info  = n00b_alloc_with_opts(n00b_mmap_info_t, &(n00b_alloc_opts_t){.allocator = alloc});
@@ -84,6 +323,7 @@ mmaps_insert_raw(n00b_mmap_ctx_t     *ctx,
         .end           = end,
         .kind          = kind,
         .binary_offset = binary_offset,
+        .perms         = perms,
     };
 
     n00b_mmap_data_t data = n00b_variant_set(n00b_mmap_data_t, n00b_mmap_info_t *, info);
@@ -298,6 +538,7 @@ n00b_mmap_detach_ranges(n00b_mmap_ctx_t *ctx, uint64_t start, uint64_t end)
         // Only delete sub-range entries, leave mmap records alone.
         if (n00b_variant_is_type(node->data, n00b_alloc_range_t *)) {
             n00b_alloc_range_t *range = n00b_variant_get(node->data, n00b_alloc_range_t *);
+            static_identity_unregister_range_unlocked(ctx, range);
             (void)n00b_interval_delete(ctx->range_tree, node);
             n00b_stack_push(dead, range);
         }
@@ -337,6 +578,7 @@ n00b_mmap_register_range(void *startp, void *endp, n00b_mmap_rec_kind_t kind) _k
     void                  *scan_user = nullptr;
     n00b_alloc_type_info_t tinfo     = 0;
     uint64_t               object_id = 0;
+    const n00b_static_identity_t *identity = nullptr;
     uint32_t               flags     = 0;
 }
 {
@@ -358,6 +600,7 @@ n00b_mmap_register_range(void *startp, void *endp, n00b_mmap_rec_kind_t kind) _k
         .scan_user = scan_user,
         .allocator = allocator,
         .file      = file,
+        .identity  = identity,
         .object_id = object_id,
         .len       = end - start,
         .kind      = kind,
@@ -371,6 +614,9 @@ n00b_mmap_register_range(void *startp, void *endp, n00b_mmap_rec_kind_t kind) _k
     auto range_r = n00b_interval_insert(ctx->range_tree, start, end, data);
     assert(n00b_result_is_ok(range_r));
     range->tree_node = n00b_result_get(range_r);
+    if (identity != nullptr) {
+        (void)static_identity_register_unlocked(ctx, identity, range);
+    }
     mmap_write_unlock(ctx);
 
     return range;
@@ -387,6 +633,7 @@ _n00b_static_object_register(void *startp,
     n00b_gc_scan_cb_t   scan_cb   = nullptr;
     void               *scan_user = nullptr;
     uint64_t            object_id = 0;
+    const n00b_static_identity_t *identity = nullptr;
     uint32_t            flags     = 0;
 }
 // clang-format on
@@ -413,6 +660,7 @@ _n00b_static_object_register(void *startp,
                                     .scan_cb   = scan_cb,
                                     .scan_user = scan_user,
                                     .object_id = object_id,
+                                    .identity  = identity,
                                     .flags     = flags);
 }
 
@@ -430,6 +678,7 @@ n00b_mmap_register(void *startp, void *endp, n00b_mmap_rec_kind_t kind) _kargs
     uint64_t          binary_offset     = 0;
     intptr_t          slide             = 0;
     uint64_t          order_id          = 0;
+    n00b_mmap_perms_t perms             = n00b_mmap_perms_unknown;
     bool              definitely_unique = true;
 }
 // clang-format on
@@ -454,12 +703,16 @@ n00b_mmap_register(void *startp, void *endp, n00b_mmap_rec_kind_t kind) _kargs
         if (n00b_option_is_set(existing)) {
             result = n00b_option_get(existing);
             assert(allocator == result->allocator || !allocator);
+            if (result->perms == n00b_mmap_perms_unknown
+                && perms != n00b_mmap_perms_unknown) {
+                result->perms = perms;
+            }
             mmap_write_unlock(ctx);
             return n00b_option_set(n00b_mmap_info_t *, result);
         }
     }
 
-    result            = mmaps_insert_raw(ctx, startp, blen, kind, binary_offset);
+    result            = mmaps_insert_raw(ctx, startp, blen, kind, binary_offset, perms);
     result->allocator = allocator;
     result->file      = file;
     result->slide     = slide;
@@ -510,7 +763,8 @@ _n00b_mmap(size_t sz, char *loc) _kargs
                             ((char *)result) + sz,
                             kind,
                             .file      = loc,
-                            .allocator = allocator);
+                            .allocator = allocator,
+                            .perms     = n00b_mmap_perms_rw);
 
     return n00b_result_ok(void *, result);
 }

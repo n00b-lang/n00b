@@ -12,7 +12,21 @@ project(
 )
 
 if (get_option('using_build_script') != true)
-  error('Do not try to run meson directly. Run ./build.sh')
+  error('Do not try to run meson directly. Run ./build.sh.\n' +
+        '\n' +
+        'WHY: build.sh resolves NCC_PATH to the freshly-built workspace ncc\n' +
+        '     (see ensure_ncc), then invokes meson with CC=$NCC_PATH so the\n' +
+        '     n00b build uses the correct compiler. Bypassing build.sh and\n' +
+        '     setting -Dusing_build_script=true loses this resolution and\n' +
+        '     leaves meson to pick whatever clang is on PATH — which then\n' +
+        '     receives --ncc-* flags it does not understand and fails the\n' +
+        '     gen_unicode_lib / vendor library compile.\n' +
+        '\n' +
+        '     See docs/dict_literals.md ("Build invocation pitfalls").\n' +
+        '\n' +
+        'IF YOU REALLY MEAN IT: pass -Dusing_build_script=true AND set\n' +
+        '                       CC=<workspace ncc> AND understand that no\n' +
+        '                       further n00b-internal guards apply.')
 endif
 
 target_os = host_machine.system()
@@ -69,11 +83,43 @@ test(void)
 }
 '''
 
+if target_os == 'darwin'
+  n00b_static_object_entry_attr = '__attribute__((section("__DATA,n00b_stobj"),used))'
+elif target_os == 'windows'
+  n00b_static_object_entry_attr = '__attribute__((section(".n00bs$m"),used))'
+else
+  n00b_static_object_entry_attr = '__attribute__((section("n00b_stobj"),used,retain))'
+endif
+
+# WP-011 Phase 3c.ii.b: the descriptor initializer carries an explicit
+# `.cached_hash=$N` slot so the build-time precomputed XXH3_128bits of
+# the r-string content (used when the rstr serves as a dict key) is
+# threaded through to the static-range cached_hash field that D-066
+# extended for pointer-key short-circuiting in `n00b_hash()`.  For the
+# common (non-dict-key) emission ncc passes `0` for this slot and the
+# field is zero-filled — `n00b_hash()` then falls through to the
+# vtable hash, same as before.  Slot index is appended to the existing
+# layout (plain: $16; styled: $18) so existing positional bindings stay
+# stable.
+n00b_rstr_template_plain = '({static n00b_string_t $0={.u8_bytes=$1,.data=$2,.codepoints=$3,.styling=((void*)0)};$14 static const n00b_static_object_desc_t $6={.start=(const void*)&$0,.len=(uint64_t)sizeof($0),.tinfo=$4,.scan_kind=$10,.scan_cb=$11,.scan_user=$12,.object_id=$8,.file=__FILE__,.identity=$15,.flags=$9,.cached_hash=(n00b_uint128_t)$16};static const n00b_static_object_desc_t * const $7 $13=&$6;&$0;})'
+n00b_rstr_template_styled = '({$0 static n00b_string_t $1={.u8_bytes=$2,.data=$3,.codepoints=$4,.styling=$5};$16 static const n00b_static_object_desc_t $8={.start=(const void*)&$1,.len=(uint64_t)sizeof($1),.tinfo=$6,.scan_kind=$12,.scan_cb=$13,.scan_user=$14,.object_id=$10,.file=__FILE__,.identity=$17,.flags=$11,.cached_hash=(n00b_uint128_t)$18};static const n00b_static_object_desc_t * const $9 $15=&$8;&$1;})'
+n00b_rstr_static_ref_template_plain = 'static n00b_string_t $0={.u8_bytes=$1,.data=$2,.codepoints=$3,.styling=((void*)0)};$14 static const n00b_static_object_desc_t $6={.start=(const void*)&$0,.len=(uint64_t)sizeof($0),.tinfo=$4,.scan_kind=$10,.scan_cb=$11,.scan_user=$12,.object_id=$8,.file=__FILE__,.identity=$15,.flags=$9,.cached_hash=(n00b_uint128_t)$16};static const n00b_static_object_desc_t * const $7 $13=&$6;'
+n00b_rstr_static_ref_template_styled = '$0 static n00b_string_t $1={.u8_bytes=$2,.data=$3,.codepoints=$4,.styling=$5};$16 static const n00b_static_object_desc_t $8={.start=(const void*)&$1,.len=(uint64_t)sizeof($1),.tinfo=$6,.scan_kind=$12,.scan_cb=$13,.scan_user=$14,.object_id=$10,.file=__FILE__,.identity=$17,.flags=$11,.cached_hash=(n00b_uint128_t)$18};static const n00b_static_object_desc_t * const $9 $15=&$8;'
+
 c_args = [
   '--ncc-vargs-type=n00b_vargs_t',
   '--ncc-rstr-string-type=n00b_string_t',
-  '--ncc-rstr-template-plain=({static n00b_string_t $0={.u8_bytes=$1,.data=$2,.codepoints=$3,.styling=((void*)0)};&$0;})',
-  '--ncc-rstr-template-styled=({$0 static n00b_string_t $1={.u8_bytes=$2,.data=$3,.codepoints=$4,.styling=$5};&$1;})',
+  '--ncc-rstr-text-style-type=n00b_text_style_t',
+  '--ncc-rstr-style-record-type=n00b_style_record_t',
+  '--ncc-static-object-entry-attr=' + n00b_static_object_entry_attr,
+  '--ncc-rstr-template-plain=' + n00b_rstr_template_plain,
+  '--ncc-rstr-template-styled=' + n00b_rstr_template_styled,
+  '--ncc-rstr-static-ref-template-plain=' + n00b_rstr_static_ref_template_plain,
+  '--ncc-rstr-static-ref-template-styled=' + n00b_rstr_static_ref_template_styled,
+  '--ncc-rstr-static-ref-expr-plain=&$0',
+  '--ncc-rstr-static-ref-expr-styled=&$1',
+  '-include',
+  'n00b.h',
   '-Wextra',
   '-g',
   '-std=c23',
@@ -590,11 +636,94 @@ endif
 
 # macOS ACME trust verifier + Keychain secret provider ObjC bridges
 # are declared in src/net/quic/meson.build (per-subdir build files).
-n00b = static_library('n00b',
-    n00b_dll_src,
+#
+# WP-011 Phase 5b: two-stage libn00b build.
+#
+# `n00b_bootstrap` is libn00b built WITHOUT the static-init helper flag.
+# The `n00b-static-init-helper` executable links against this bootstrap
+# library — it has to, because the helper is what implements `d{...}`
+# lowering and so cannot itself depend on the helper at compile time.
+#
+# `n00b` is the "full" libn00b, built WITH the helper flag (so its own
+# sources may use `d{...}` static dict literals).  Meson tracks the
+# build-order dependency on the helper through the
+# `n00b_static_init_helper_ready` custom_target appearing in the full
+# library's source list — meson treats the custom_target's generated
+# header as a build dep, so the helper exec is compiled and linked
+# before any libn00b TU that needs the helper flag.
+#
+# `n00b_dict_aware_src` is the list of libn00b sources that USE
+# `d{...}` static dict literals.  Those sources can only be compiled
+# with the helper flag (the helper must already exist), so they
+# appear in the full library but NOT in the bootstrap library.  The
+# bootstrap library only contains sources that do not need the helper.
+# Phase 5b starts with this list empty; Phase 5c (and beyond) adds
+# files to it as libn00b internals migrate to static dict literals.
+#
+# Where a dict-aware translation unit defines a symbol that is also
+# needed by the bootstrap libn00b (e.g. it sits behind a function
+# pointer or extern declaration that bootstrap-stage code references),
+# the bootstrap library uses a paired stub in `n00b_bootstrap_only_src`
+# that satisfies the symbol with a no-op or non-dict implementation.
+# That keeps both libraries link-clean without introducing duplicate
+# definitions in the full libn00b.
+#
+# Tests and downstream consumers link `n00b` (the full library) and
+# continue to pass `n00b_static_init_helper_flags` per-test in their
+# own c_args (their own test source files also need the helper flag if
+# they use dict literals).
+n00b_dict_aware_src = (
+    n00b_text_strings_dict_aware_src
+)
+
+n00b_bootstrap_only_src = (
+    n00b_text_strings_bootstrap_only_src
+)
+
+n00b_bootstrap = static_library('n00b_bootstrap',
+    n00b_dll_src + n00b_bootstrap_only_src,
     include_directories: incdir,
     dependencies: deps + [libdl_dep, mir_dep, picoquic_dep, monocypher_dep],
     c_args: exe_c_args,
+    link_args: link_args,
+    link_whole: link_whole_libs,
+    install: false,
+)
+
+n00b_static_init_helper = executable('n00b-static-init-helper',
+    ['src/tools/n00b-static-init-helper.c'],
+    include_directories: incdir,
+    c_args: exe_c_args,
+    link_args: exe_link_args,
+    link_with: [n00b_bootstrap],
+    dependencies: [picoquic_dep, monocypher_dep],
+)
+
+n00b_static_init_helper_ready = custom_target(
+    'n00b-static-init-helper-ready',
+    output: 'n00b_static_init_helper_ready.h',
+    command: [
+        python3,
+        '-c',
+        'import pathlib, sys; pathlib.Path(sys.argv[1]).write_text("/* generated */\\n")',
+        '@OUTPUT@',
+    ],
+    depends: n00b_static_init_helper,
+)
+
+n00b_static_init_helper_flags = [
+    '--ncc-static-init-helper=' + n00b_static_init_helper.full_path(),
+]
+
+# Full libn00b, built with the helper flag.  Including
+# `n00b_static_init_helper_ready` (a custom_target) in `sources` makes
+# meson order this library's compilation after the helper executable
+# is built, even though `static_library` has no `depends` keyword.
+n00b = static_library('n00b',
+    n00b_dll_src + n00b_dict_aware_src + [n00b_static_init_helper_ready],
+    include_directories: incdir,
+    dependencies: deps + [libdl_dep, mir_dep, picoquic_dep, monocypher_dep],
+    c_args: exe_c_args + n00b_static_init_helper_flags,
     link_args: link_args,
     link_whole: link_whole_libs,
     install: true,
@@ -1253,11 +1382,77 @@ gc_stack_test = executable('test_gc_stack',
 )
 test('gc_stack', gc_stack_test, suite: 'unit')
 
+gc_stack_nonlocal_test = executable('test_gc_stack_nonlocal',
+    ['test/unit/test_gc_stack_nonlocal.c'],
+    kwargs: test_common_kwargs + {
+        'c_args': exe_c_args + ['--ncc-gc-stack-maps'],
+    },
+)
+test('gc_stack_nonlocal', gc_stack_nonlocal_test, suite: 'unit')
+
 static_descriptor_test = executable('test_static_descriptor',
     ['test/unit/test_static_descriptor.c'],
     kwargs: test_common_kwargs,
 )
 test('static_descriptor', static_descriptor_test, suite: 'unit')
+
+dict_static_image_test = executable('test_dict_static_image',
+    ['test/unit/test_dict_static_image.c'],
+    kwargs: test_common_kwargs,
+)
+test('dict_static_image', dict_static_image_test, suite: 'unit')
+
+# WP-011 Phase 5a regression: dict literals lowered against the REAL
+# `n00b_dict_t(K, V)` from include/adt/dict.h (not a private
+# re-declaration) and the REAL r-string config. Locks in the typeid
+# alignment (D-073) and the `is_rstr_element_type` widening.
+dict_literal_real_headers_test = executable('test_dict_literal_real_headers',
+    [
+      'test/unit/test_dict_literal_real_headers.c',
+      n00b_static_init_helper_ready,
+    ],
+    kwargs: test_common_kwargs + {
+        'c_args': exe_c_args + n00b_static_init_helper_flags,
+    },
+)
+test('dict_literal_real_headers', dict_literal_real_headers_test, suite: 'unit')
+
+static_hash_test = executable('test_static_hash',
+    ['test/unit/test_static_hash.c'],
+    kwargs: test_common_kwargs,
+)
+test('static_hash', static_hash_test, suite: 'unit')
+
+static_object_sections_test = executable('test_static_object_sections',
+    [
+      'test/unit/test_static_object_sections.c',
+      'test/unit/test_static_object_sections_extra.c',
+    ],
+    kwargs: test_common_kwargs,
+)
+test('static_object_sections', static_object_sections_test, suite: 'unit')
+
+ncc_static_objects_test = executable('test_ncc_static_objects',
+    [
+      'test/unit/test_ncc_static_objects.c',
+      n00b_static_init_helper_ready,
+    ],
+    kwargs: test_common_kwargs + {
+        'c_args': exe_c_args + n00b_static_init_helper_flags,
+    },
+)
+test('ncc_static_objects', ncc_static_objects_test, suite: 'unit')
+
+ncc_static_images_test = executable('test_ncc_static_images',
+    [
+      'test/unit/test_ncc_static_images.c',
+      n00b_static_init_helper_ready,
+    ],
+    kwargs: test_common_kwargs + {
+        'c_args': exe_c_args + n00b_static_init_helper_flags,
+    },
+)
+test('ncc_static_images', ncc_static_images_test, suite: 'unit')
 
 gc_selective_scan_test = executable('test_gc_selective_scan',
     ['test/unit/test_gc_selective_scan.c'],
@@ -1288,6 +1483,12 @@ buffer_test = executable('test_buffer',
     kwargs: test_common_kwargs,
 )
 test('buffer', buffer_test, suite: 'unit')
+
+marshal_test = executable('test_marshal',
+    ['test/unit/test_marshal.c'],
+    kwargs: test_common_kwargs,
+)
+test('marshal', marshal_test, suite: 'unit')
 
 file_io_test = executable('test_file_io',
     ['test/unit/test_file_io.c'],
@@ -1340,6 +1541,12 @@ type_registry_test = executable('test_type_registry',
     kwargs: test_common_kwargs,
 )
 test('type_registry', type_registry_test, suite: 'unit')
+
+type_static_layout_test = executable('test_type_static_layout',
+    ['test/unit/test_type_static_layout.c'],
+    kwargs: test_common_kwargs,
+)
+test('type_static_layout', type_static_layout_test, suite: 'unit')
 
 type_hash_test = executable('test_type_hash',
     ['test/unit/test_type_hash.c'],
@@ -1449,6 +1656,12 @@ xform_test = executable('test_xform',
     kwargs: test_common_kwargs,
 )
 test('xform', xform_test, suite: 'unit')
+
+xform_marshal_test = executable('test_xform_marshal',
+    ['test/unit/test_xform_marshal.c'],
+    kwargs: test_common_kwargs,
+)
+test('xform_marshal', xform_marshal_test, suite: 'unit')
 
 xform_linebuf_test = executable('test_xform_linebuf',
     ['test/unit/test_xform_linebuf.c'],
@@ -2969,7 +3182,9 @@ test('conduit_udp', conduit_udp_test, suite: 'unit')
 
 regex_resharp_test = executable('test_regex_resharp',
     ['test/unit/test_regex_resharp.c'],
-    kwargs: test_common_kwargs,
+    kwargs: test_common_kwargs + {
+        'c_args': exe_c_args + ['--ncc-no-gc-stack-maps'],
+    },
 )
 test('regex_resharp', regex_resharp_test,
     suite: ['unit', 'long'],

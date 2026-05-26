@@ -47,6 +47,16 @@ struct n00b_base_allocator_t {
 
 typedef enum n00b_mmap_rec_kind_t n00b_mmap_rec_kind_t;
 
+enum n00b_mmap_perms_t : uint8_t {
+    n00b_mmap_perms_unknown       = 0,
+    n00b_mmap_perms_data_not_addr = 0,
+    n00b_mmap_perms_ro            = 1,
+    n00b_mmap_perms_no_access     = 2,
+    n00b_mmap_perms_rw            = 4,
+};
+
+typedef enum n00b_mmap_perms_t n00b_mmap_perms_t;
+
 enum n00b_mmap_rec_kind_t {
     n00b_mmap_static          = 1,
     n00b_mmap_arena           = 2,
@@ -70,6 +80,7 @@ struct n00b_mmap_info_t {
     intptr_t                    slide;
     const char                 *file;
     n00b_mmap_rec_kind_t        kind;
+    n00b_mmap_perms_t           perms;
     void                       *tree_node; // back-pointer for O(1) delete (generic node ptr)
 };
 
@@ -81,7 +92,7 @@ struct n00b_mmap_info_t {
  * metadata for GC and memory-test APIs without requiring an inline allocation
  * header at the object's address.
  */
-typedef struct {
+struct n00b_alloc_range_t {
     void                    *start;
     void                    *tree_node;
     n00b_alloc_type_info_t   tinfo;
@@ -89,9 +100,19 @@ typedef struct {
     void                    *scan_user;
     n00b_allocator_t        *allocator;
     const char              *file;
+    const n00b_static_identity_t *identity;
     uint64_t                 object_id;
     uint64_t                 len;
     n00b_mmap_rec_kind_t     kind;
     n00b_gc_scan_kind_t      scan_kind;
     uint32_t                 flags;
-} n00b_alloc_range_t;
+    // Cached pointer-key hash for descriptor-backed static objects.
+    // Zero is the "uncached" sentinel; the build-time helper writes a
+    // nonzero value into the descriptor template for key-bearing static
+    // objects, and static-range registration copies it here so
+    // n00b_hash() can short-circuit on static-range hits. Runtime
+    // recompute paths must NOT write back to this slot (the value is
+    // build-time-authoritative for static objects). Placed at the end
+    // of the struct to preserve existing field layout.
+    n00b_uint128_t           cached_hash;
+};

@@ -32,6 +32,7 @@ n00b_conduit_src = files(
     'xform_hexdump.c',
     'xform_json.c',
     'xform_http.c',
+    'xform_marshal.c',
     # Print API
     'print.c',
 )

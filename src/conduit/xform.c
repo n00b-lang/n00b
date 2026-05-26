@@ -13,6 +13,9 @@ n00b_conduit_xform_stop(n00b_conduit_xform_base_t *xf)
 {
     if (!xf) return;
     n00b_atomic_store(&xf->stop_requested, true);
+    if (xf->inbox_cv) {
+        n00b_condition_notify(xf->inbox_cv, .auto_unlock = true);
+    }
 }
 
 void

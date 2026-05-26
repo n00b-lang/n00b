@@ -23,6 +23,11 @@ check_parse(const char *src, bool expect_ok, const char *label)
         }
         assert(false);
     }
+    if (!expect_ok) {
+        n00b_string_t *err = n00b_toml_last_error();
+        assert(err != nullptr);
+        assert(err->u8_bytes > 0);
+    }
     printf("PASS: %s\n", label);
 }
 

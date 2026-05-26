@@ -5,6 +5,40 @@
 #include "adt/dict_untyped.h"
 #include "core/type_info.h"
 #include "core/pool.h"
+#include "core/string.h"
+#include "text/strings/string_ops.h"
+
+// Intern the supplied registry string into the system pool. For non-null
+// inputs this deep-copies the n00b_string_t struct and its data buffer
+// directly into the system pool, avoiding kargs-mediated paths that have
+// been observed to drop the .data pointer when interacting with hidden
+// pools. The struct is hand-constructed; codepoint counting is preserved
+// from the source.
+static n00b_string_t *
+n00b_registry_intern(n00b_allocator_t *sp, n00b_string_t *s)
+{
+    if (!s) {
+        return nullptr;
+    }
+
+    size_t bytes = s->u8_bytes;
+    n00b_string_t *copy = n00b_alloc_with_opts(
+        n00b_string_t, &(n00b_alloc_opts_t){.allocator = sp});
+    char *buf = n00b_alloc_array_with_opts(
+        char, bytes + 1, &(n00b_alloc_opts_t){.allocator = sp});
+
+    if (bytes && s->data) {
+        memcpy(buf, s->data, bytes);
+    }
+    buf[bytes] = '\0';
+
+    copy->data       = buf;
+    copy->u8_bytes   = bytes;
+    copy->codepoints = s->codepoints;
+    copy->styling    = nullptr;
+
+    return copy;
+}
 
 void
 n00b_type_registry_init(void)
@@ -43,21 +77,11 @@ n00b_type_register(uint64_t type_hash, const n00b_type_info_t *info)
 
     *copy = *info;
 
-    // Intern the name string.
-    if (info->name) {
-        size_t len  = strlen(info->name);
-        char  *name = n00b_alloc_array_with_opts(char, len + 1, &(n00b_alloc_opts_t){.allocator = sp});
-        memcpy(name, info->name, len + 1);
-        copy->name = name;
-    }
-
-    // Intern literal_modifier if present.
-    if (info->literal_modifier) {
-        size_t len = strlen(info->literal_modifier);
-        char  *mod = n00b_alloc_array_with_opts(char, len + 1, &(n00b_alloc_opts_t){.allocator = sp});
-        memcpy(mod, info->literal_modifier, len + 1);
-        copy->literal_modifier = mod;
-    }
+    copy->name             = n00b_registry_intern(sp, info->name);
+    copy->literal_modifier = n00b_registry_intern(sp, info->literal_modifier);
+    // reason is an n00b_string_t * — typically a static r-string literal,
+    // so the pointer copy in `*copy = *info` is sufficient; no string dup
+    // is needed.
 
     // ext_vtable starts as none.
     copy->ext_vtable = n00b_option_none(n00b_array_t(n00b_method_t) *);
@@ -83,6 +107,59 @@ n00b_type_lookup(uint64_t type_hash)
                  : n00b_option_none(n00b_type_info_t *);
 }
 
+n00b_static_layout_opt_t
+n00b_type_static_layout(uint64_t type_hash)
+{
+    auto info_opt = n00b_type_lookup(type_hash);
+
+    if (!n00b_option_is_set(info_opt)) {
+        return n00b_option_none(n00b_static_layout_info_t *);
+    }
+
+    n00b_type_info_t *info = n00b_option_get(info_opt);
+    return n00b_option_set(n00b_static_layout_info_t *, &info->static_layout);
+}
+
+bool
+n00b_type_static_layout_allowed(uint64_t type_hash)
+{
+    auto layout_opt = n00b_type_static_layout(type_hash);
+
+    if (!n00b_option_is_set(layout_opt)) {
+        return false;
+    }
+
+    switch (n00b_option_get(layout_opt)->policy) {
+    case N00B_STATIC_LAYOUT_PLAIN:
+    case N00B_STATIC_LAYOUT_FIXUP:
+    case N00B_STATIC_LAYOUT_CONSTRUCTOR_IMAGE:
+        return true;
+    default:
+        return false;
+    }
+}
+
+n00b_string_t *
+n00b_static_layout_policy_name(n00b_static_layout_policy_t policy)
+{
+    switch (policy) {
+    case N00B_STATIC_LAYOUT_DEFAULT_DENY:
+        return r"default-deny";
+    case N00B_STATIC_LAYOUT_FORBIDDEN:
+        return r"forbidden";
+    case N00B_STATIC_LAYOUT_TRANSIENT:
+        return r"transient";
+    case N00B_STATIC_LAYOUT_PLAIN:
+        return r"plain";
+    case N00B_STATIC_LAYOUT_FIXUP:
+        return r"fixup";
+    case N00B_STATIC_LAYOUT_CONSTRUCTOR_IMAGE:
+        return r"constructor-image";
+    default:
+        return r"unknown";
+    }
+}
+
 uint64_t
 n00b_obj_typehash(void *obj)
 {
@@ -93,6 +170,8 @@ n00b_obj_typehash(void *obj)
         return ainfo.hdr.oob->tinfo;
     case n00b_alloc_inline:
         return ainfo.hdr.in_line->tinfo;
+    case n00b_alloc_static_range:
+        return ainfo.hdr.range->tinfo;
     default:
         return 0;
     }

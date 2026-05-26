@@ -21,6 +21,7 @@
 #include "core/thread.h"
 #include "core/arena.h"
 #include "core/runtime.h"
+#include "core/static_objects.h"
 #include "adt/interval_tree.h"
 #include "adt/variant.h"
 #include "text/unicode/encoding.h"
@@ -34,6 +35,39 @@
 #include <stdio.h>
 
 _Atomic uint64_t static_order_id = 1;
+
+static inline bool
+n00b_mmap_perms_known(n00b_mmap_perms_t perms)
+{
+    return perms != n00b_mmap_perms_unknown;
+}
+
+static inline n00b_mmap_perms_t
+n00b_mmap_perms_from_bits(bool readable, bool writable)
+{
+    if (writable) {
+        return n00b_mmap_perms_rw;
+    }
+    if (readable) {
+        return n00b_mmap_perms_ro;
+    }
+    return n00b_mmap_perms_no_access;
+}
+
+#if defined(_WIN32)
+static inline n00b_mmap_perms_t
+n00b_mmap_perms_from_win_protect(DWORD protect)
+{
+    if (protect & (PAGE_READWRITE | PAGE_WRITECOPY
+                   | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY)) {
+        return n00b_mmap_perms_rw;
+    }
+    if (protect & (PAGE_READONLY | PAGE_EXECUTE_READ | PAGE_EXECUTE)) {
+        return n00b_mmap_perms_ro;
+    }
+    return n00b_mmap_perms_no_access;
+}
+#endif
 
 static n00b_memperm_pipe_t *
 n00b_memperm_pipe_get(void)
@@ -71,6 +105,11 @@ n00b_extract_lib_info(struct dl_phdr_info *info, size_t size, void *unused)
         if (startp == endp) {
             continue;
         }
+        n00b_mmap_perms_t perms = startp
+                                    ? n00b_mmap_perms_from_bits(
+                                          (info->dlpi_phdr[i].p_flags & PF_R) != 0,
+                                          (info->dlpi_phdr[i].p_flags & PF_W) != 0)
+                                    : n00b_mmap_perms_no_access;
         (void)n00b_mmap_register(startp,
                                  endp,
                                  startp ? n00b_mmap_static : n00b_mmap_zero_page,
@@ -78,6 +117,7 @@ n00b_extract_lib_info(struct dl_phdr_info *info, size_t size, void *unused)
                                  .binary_offset     = info->dlpi_phdr[i].p_offset,
                                  .slide             = -(intptr_t)info->dlpi_addr,
                                  .order_id          = n00b_atomic_add(&static_order_id, 1),
+                                 .perms             = perms,
                                  .definitely_unique = false);
     }
     return 0;
@@ -96,12 +136,14 @@ void
 n00b_load_static_ranges(void)
 {
     dl_iterate_phdr(n00b_extract_lib_info, nullptr);
+    (void)n00b_static_objects_register_all();
 }
 
 #elifdef __APPLE__
 #include <dlfcn.h>         // for dladdr, Dl_info
 #include <mach-o/dyld.h>   // for _dyld_register_func_for_add_image
 #include <mach-o/loader.h> // for segment_command_64, mach_header_64, LC_...
+#include <mach/vm_prot.h>
 
 void
 n00b_on_lib_load(const struct mach_header *hdr, intptr_t slide)
@@ -123,6 +165,11 @@ n00b_on_lib_load(const struct mach_header *hdr, intptr_t slide)
         uint64_t seg_end   = seg_start + command->vmsize;
 
         if (command->cmd == LC_SEGMENT_64 && seg_start != seg_end) {
+            n00b_mmap_perms_t perms = seg_start
+                                        ? n00b_mmap_perms_from_bits(
+                                              (command->initprot & VM_PROT_READ) != 0,
+                                              (command->initprot & VM_PROT_WRITE) != 0)
+                                        : n00b_mmap_perms_no_access;
             (void)n00b_mmap_register((void *)seg_start,
                                      (void *)seg_end,
                                      seg_start ? n00b_mmap_static : n00b_mmap_zero_page,
@@ -130,6 +177,7 @@ n00b_on_lib_load(const struct mach_header *hdr, intptr_t slide)
                                      .binary_offset     = command->fileoff,
                                      .slide             = -slide,
                                      .order_id          = n00b_atomic_add(&static_order_id, 1),
+                                     .perms             = perms,
                                      .definitely_unique = false);
             assert(static_order_id != 1);
         }
@@ -137,6 +185,8 @@ n00b_on_lib_load(const struct mach_header *hdr, intptr_t slide)
         start += command->cmdsize;
         command = (void *)start;
     }
+
+    (void)n00b_static_objects_register_macho_image(hdr, slide);
 }
 
 void
@@ -149,8 +199,7 @@ n00b_load_static_ranges(void)
 void
 n00b_load_static_ranges(void)
 {
-    // TODO: Implement PE image enumeration for Windows.
-    // For now, only runtime-allocated regions are tracked.
+    (void)n00b_static_objects_register_all();
 }
 
 #else
@@ -160,7 +209,8 @@ n00b_load_static_ranges(void)
 static n00b_option_t(n00b_mmap_info_t *)
 n00b_check_kernel_page_map(const void *addr)
 {
-    char *start = n00b_align_to_page_start((void *)addr);
+    char              *start = n00b_align_to_page_start((void *)addr);
+    n00b_mmap_perms_t perms  = n00b_mmap_perms_unknown;
 
     if (!start) {
         return n00b_option_none(n00b_mmap_info_t *);
@@ -174,6 +224,7 @@ n00b_check_kernel_page_map(const void *addr)
     if (mbi.State != MEM_COMMIT) {
         return n00b_option_none(n00b_mmap_info_t *);
     }
+    perms = n00b_mmap_perms_from_win_protect(mbi.Protect);
 #else
     char status[1];
     // This cast is crucial due to different signatures across
@@ -190,6 +241,7 @@ n00b_check_kernel_page_map(const void *addr)
     return n00b_mmap_register(start,
                               start + n00b_page_size,
                               start ? n00b_mmap_unmanaged : n00b_mmap_zero_page,
+                              .perms             = start ? perms : n00b_mmap_perms_no_access,
                               .definitely_unique = false);
 }
 
@@ -252,6 +304,17 @@ n00b_find_allocator(void *val)
 n00b_mmap_perms_t
 n00b_check_memory_perms(void *ptr)
 {
+    auto map_opt = n00b_mmap_by_address(ptr);
+    if (n00b_option_is_set(map_opt)) {
+        n00b_mmap_info_t *map = n00b_option_get(map_opt);
+        if (map->kind == n00b_mmap_zero_page) {
+            return n00b_mmap_perms_no_access;
+        }
+        if (n00b_mmap_perms_known(map->perms)) {
+            return map->perms;
+        }
+    }
+
 #ifdef _WIN32
     MEMORY_BASIC_INFORMATION mbi;
     if (!VirtualQuery(ptr, &mbi, sizeof(mbi))) {
@@ -260,14 +323,7 @@ n00b_check_memory_perms(void *ptr)
     if (mbi.State != MEM_COMMIT) {
         return n00b_mmap_perms_no_access;
     }
-    if (mbi.Protect & (PAGE_READWRITE | PAGE_WRITECOPY
-                       | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY)) {
-        return n00b_mmap_perms_rw;
-    }
-    if (mbi.Protect & (PAGE_READONLY | PAGE_EXECUTE_READ | PAGE_EXECUTE)) {
-        return n00b_mmap_perms_ro;
-    }
-    return n00b_mmap_perms_no_access;
+    return n00b_mmap_perms_from_win_protect(mbi.Protect);
 #else
     bool cannot_write = false;
     bool cannot_read  = false;
@@ -455,6 +511,7 @@ n00b_memory_scan_next(n00b_memory_scan_t   *ctx,
                       n00b_mmap_perms_t    *perms)
 {
     void             *result = nullptr;
+    void             *target = nullptr;
     n00b_mmap_info_t *mmap   = nullptr;
 
     while (!result && (ctx->cur < ctx->end)) {
@@ -465,6 +522,7 @@ n00b_memory_scan_next(n00b_memory_scan_t   *ctx,
             mmap = n00b_option_get(mmap_opt);
             if (mmap->kind & ctx->flags) {
                 result   = (void *)ctx->cur;
+                target   = val;
                 ctx->cur = ctx->cur + 1;
                 break;
             }
@@ -478,7 +536,7 @@ n00b_memory_scan_next(n00b_memory_scan_t   *ctx,
     }
 
     if (perms) {
-        *perms = n00b_check_memory_perms(ctx->cur);
+        *perms = n00b_check_memory_perms(target);
     }
 
     if (tinfo) {

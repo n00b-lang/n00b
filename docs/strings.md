@@ -489,51 +489,22 @@ n00b_string_t s = n00b_cformat("pi = [|#:.2f|]", &pi);
 ### 11. Rich text literals &mdash; ncc `r"..."` syntax
 
 For strings whose markup is known at compile time, ncc provides the
-`r"..."` prefix.  The compiler parses the rich markup during compilation
+`r"..."` prefix. The compiler parses the rich markup during compilation
 and emits a static `n00b_string_t` with styling baked in &mdash; no
 runtime parsing, no cache lookup, zero overhead.
 
 ```c
-// Compile-time rich string (returns n00b_string_t *):
 n00b_string_t *greeting = r"«b»Hello«/b» world";
-
-// Bracket syntax works too:
-n00b_string_t *msg = r"[|i|]italic[|/i|] and [|b|]bold[|/b|]";
-
-// Named styles and roles:
-n00b_string_t *code = r"«@code»x = 42«/@code»";
-n00b_string_t *em   = r"«em»emphasis«/em»";
-
-// Reset:
-n00b_string_t *mixed = r"«b»«i»styled«/» plain";
+n00b_string_t *msg      = r"[|i|]italic[|/i|] and [|b|]bold[|/b|]";
+n00b_string_t *code     = r"«@code»x = 42«/@code»";
 ```
 
-**How it works:**
-
-1. **Pre-CPP prescan:** Before the C preprocessor runs, ncc scans the source
-   for `r"..."` tokens (avoiding false matches in comments and regular
-   strings) and rewrites them to `__ncc_rstr("...")`.
-2. **Semantic transform:** After parsing, the `__ncc_rstr()` call is
-   intercepted by a post-order transform on `postfix_expression`.  The
-   transform parses the rich markup at compile time, strips tags from the
-   text, builds style records, and emits a GCC statement expression
-   containing static `n00b_text_style_t`, `n00b_string_style_info_t`, and
-   `n00b_string_t` definitions.
-3. **Result:** The expression evaluates to a pointer to a static
-   `n00b_string_t` with all styling pre-computed.
-
-**Supported markup in `r"..."`:**
-
-All inline property tags (`b`, `i`, `u`, `uu`, `st`, `r`, `dim`, `blink`),
-text case tags (`upper`, `lower`, `title`, `caps`), named styles, text
-roles (`@code`, `@heading`, etc.), and reset (`«/»` / `[|/|]`).
-
-Escaping works the same as in `n00b_format()`: `\«` for a literal
-guillemet, `\\` for a literal backslash.
-
-**Not supported in `r"..."`:** Substitutions (`[|#|]`, `[|#N:spec|]`)
-require runtime arguments and are rejected at compile time.  Use
-`n00b_format()` / `n00b_cformat()` for strings that need substitutions.
+**Markup supported:** all inline property tags (`b`, `i`, `u`, `uu`, `st`,
+`r`, `dim`, `blink`), text case tags (`upper`, `lower`, `title`, `caps`),
+named styles, text roles (`@code`, `@heading`, etc.), and reset (`«/»` /
+`[|/|]`). Escape `\«` for a literal guillemet, `\\` for a literal
+backslash. Substitutions (`[|#|]`, `[|#N:spec|]`) are NOT supported in
+`r"..."` &mdash; use `n00b_format()` / `n00b_cformat()` for those.
 
 **When to use which:**
 
@@ -542,6 +513,15 @@ require runtime arguments and are rejected at compile time.  Use
 | Static styled text, no substitutions | `r"«b»hello«/b»"` |
 | Styled text with runtime values | `n00b_cformat("[|b|]count:[|/b|] [|#:,d|]", &n)` |
 | Plain text, no styling | `STR("hello")` or `n00b_string_from_raw(...)` |
+
+**Full reference:** `r"..."` is one of several ncc compile-time literal
+forms (alongside `b"..."` buffers, `[...]` / `a{...}` arrays, `l{...}`
+lists, and `d{...}` dicts). For the comprehensive user manual covering
+all forms, the build-time helper, the cached_hash perf path, the lock
+model, and the libn00b migration recipe, see
+[`ncc_static_objects.md`](ncc_static_objects.md) in this same directory.
+Dict literals also have their own focused reference at
+[`dict_literals.md`](dict_literals.md).
 
 ---
 

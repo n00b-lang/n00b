@@ -115,6 +115,35 @@ n00b_gc_stack_pop(n00b_gc_stack_frame_t *frame)
     frame->roots         = nullptr;
 }
 
+n00b_jmp_buf_t *
+n00b_gc_stack_prepare_jmp(n00b_jmp_buf_t *ctx)
+{
+    assert(ctx);
+
+    n00b_thread_t *thread = n00b_thread_self();
+    assert(thread);
+
+    ctx->n00b_thread        = thread;
+    ctx->n00b_gc_stack_top = thread->gc_stack_top;
+    return ctx;
+}
+
+void
+n00b_gc_stack_restore(n00b_gc_stack_frame_t *top)
+{
+    n00b_thread_self()->gc_stack_top = top;
+}
+
+[[noreturn]] void
+n00b_longjmp(n00b_jmp_buf_t *ctx, int value)
+{
+    assert(ctx);
+    assert(ctx->n00b_thread == n00b_thread_self());
+
+    n00b_gc_stack_restore(ctx->n00b_gc_stack_top);
+    longjmp(ctx->n00b_jmp_env, value ? value : 1);
+}
+
 // ============================================================================
 // Helpers
 // ============================================================================
@@ -128,6 +157,7 @@ arena_overhead(n00b_arena_t *arena)
 static inline n00b_inline_hdr_t *
 alloc_info_raw_hdr(n00b_alloc_info_t info)
 {
+    assert(n00b_alloc_info_is_heap(info));
     return (info.kind == n00b_alloc_oob)
                ? (n00b_inline_hdr_t *)info.hdr.oob
                : info.hdr.in_line;
@@ -357,20 +387,25 @@ n00b_translate_pointer(n00b_collect_t    *ctx,
     uint64_t *old_ptr = n00b_atomic_load((_Atomic(uint64_t *) *)(arr + ix));
     bool      has_oob = ctx->from_space->vtable.metadata_pool != nullptr;
 
-    assert(old_ptr);
-
-    char *old_base = n00b_user_data_base(old_alloc, has_oob);
-    char *new_base = n00b_user_data_base(fw_loc, has_oob);
-
-    ptrdiff_t offset = (char *)old_ptr - old_base;
-
-    assert(offset >= 0);
-    if (offset > old_alloc->alloc_len) {
-        return arr[ix];
+    if (!old_ptr) {
+        return nullptr;
     }
 
     assert(fw_loc);
     assert(fw_loc != old_alloc);
+
+    char *old_base = n00b_user_data_base(old_alloc, has_oob);
+    char *new_base = n00b_user_data_base(fw_loc, has_oob);
+
+    ptrdiff_t offset   = (char *)old_ptr - old_base;
+    ptrdiff_t user_len = old_alloc->alloc_len - arena_overhead(ctx->from_space);
+
+    if (offset < 0) {
+        return nullptr;
+    }
+    if (offset > user_len) {
+        return nullptr;
+    }
 
     return (void *)(new_base + offset);
 }
@@ -511,6 +546,8 @@ n00b_add_alloc_to_worklist(n00b_alloc_info_t ainfo, n00b_collect_t *ctx)
     void              *start;
     uint32_t           n;
     n00b_gc_scan_kind_t kind;
+
+    assert(n00b_alloc_info_is_heap(ainfo));
 
     if (ainfo.kind == n00b_alloc_oob) {
         n00b_oob_hdr_t *oob = ainfo.hdr.oob;
@@ -679,19 +716,24 @@ n00b_visit_possible_pointer(n00b_collect_t *ctx,
 
     auto ainfo = n00b_find_alloc_info(word);
 
-    if (ainfo.kind != n00b_alloc_oob && ainfo.kind != n00b_alloc_inline) {
-        if (mmap->kind == n00b_mmap_static) {
-            auto range_opt = n00b_mmap_range_by_address((void *)word);
+    if (n00b_alloc_info_is_static_range(ainfo)) {
+        n00b_add_alloc_range_to_worklist(ctx, ainfo.hdr.range);
+        return false;
+    }
 
-            if (n00b_option_is_set(range_opt)) {
-                n00b_add_alloc_range_to_worklist(ctx, n00b_option_get(range_opt));
-            }
+    if (!n00b_alloc_info_is_heap(ainfo)) {
+        if (mmap->kind == n00b_mmap_static) {
             return false;
         }
 
         ainfo = n00b_find_alloc_info(word, .scan_for_header = true);
 
-        if (ainfo.kind != n00b_alloc_oob && ainfo.kind != n00b_alloc_inline) {
+        if (n00b_alloc_info_is_static_range(ainfo)) {
+            n00b_add_alloc_range_to_worklist(ctx, ainfo.hdr.range);
+            return false;
+        }
+
+        if (!n00b_alloc_info_is_heap(ainfo)) {
             auto range_opt = n00b_mmap_range_by_address((void *)word);
 
             if (n00b_option_is_set(range_opt)) {
@@ -1288,14 +1330,14 @@ n00b_collect_internal(n00b_arena_t *arena)
 void
 n00b_collect(n00b_arena_t *arena)
 {
-    jmp_buf                            register_spill;
+    n00b_jmp_buf_t                     register_spill = {};
     [[maybe_unused]] volatile uint64_t top  = 0;
     volatile n00b_thread_t            *self = n00b_thread_self();
 
     self->stack_top = (void *)&top;
 
-    if (!setjmp(register_spill)) {
+    if (!n00b_setjmp(&register_spill)) {
         n00b_collect_internal(arena);
-        longjmp(register_spill, 1);
+        n00b_longjmp(&register_spill, 1);
     }
 }

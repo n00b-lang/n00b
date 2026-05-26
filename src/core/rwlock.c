@@ -12,8 +12,6 @@
 
 #define N00B_USE_INTERNAL_API
 
-#include <setjmp.h>
-
 #include "n00b.h"
 #include "core/runtime.h"
 #include "core/thread.h"

@@ -40,16 +40,18 @@ n00b_to_string(void *obj)
 
     // Fallback: "<typename@0xADDR>"
     auto info_opt = n00b_type_info_for(obj);
-    const char *name = "unknown";
+    n00b_string_t *tname = r"unknown";
 
     if (n00b_option_is_set(info_opt)) {
-        name = n00b_option_get(info_opt)->name;
+        n00b_string_t *registered = n00b_option_get(info_opt)->name;
+        if (registered) {
+            tname = registered;
+        }
     }
 
-    n00b_string_t *prefix = n00b_string_from_raw("<", 1);
-    n00b_string_t *tname  = n00b_string_from_raw(name, (int64_t)strlen(name));
+    n00b_string_t *prefix = r"<";
     n00b_string_t *at     = n00b_fmt_pointer(obj);
-    n00b_string_t *suffix = n00b_string_from_raw(">", 1);
+    n00b_string_t *suffix = r">";
 
     n00b_string_t *s = n00b_unicode_str_cat(prefix, tname);
     s                = n00b_unicode_str_cat(s, at);

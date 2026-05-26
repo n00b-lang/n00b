@@ -41,7 +41,8 @@ n00b_uint128_t
 n00b_hash(void *obj, n00b_hash_fn fn)
 {
     n00b_alloc_info_t ainfo = n00b_find_alloc_info(obj);
-    bool managed            = (ainfo.kind == n00b_alloc_oob || ainfo.kind == n00b_alloc_inline);
+    bool managed            = n00b_alloc_info_is_heap(ainfo);
+    bool has_type_metadata  = managed || n00b_alloc_info_is_static_range(ainfo);
 
     if (managed) {
         // Check cached hash.
@@ -58,14 +59,33 @@ n00b_hash(void *obj, n00b_hash_fn fn)
             return cached;
         }
 
-        // If the caller didn't supply a hash function, try the vtable.
-        if (!fn) {
-            n00b_option_t(n00b_vtable_entry) vt_opt =
-                n00b_obj_core_method(obj, N00B_BI_HASH);
+    }
+    else if (ainfo.kind == n00b_alloc_static_range) {
+        // Descriptor-backed static objects carry a build-time-written
+        // cached hash in the range record (see D-066). Zero means
+        // "uncached"; fall through to recompute. Nonzero means the
+        // build-time helper (or an explicit descriptor template) has
+        // supplied a pointer-key hash; return it directly.
+        //
+        // Unlike the heap-side path below, we do NOT write back to the
+        // range's cached_hash on a recompute: the value is
+        // build-time-authoritative for static objects, and runtime
+        // recomputes for static-range hits MUST NOT mutate the slot.
+        n00b_uint128_t cached = ainfo.hdr.range->cached_hash;
 
-            if (n00b_option_is_set(vt_opt)) {
-                fn = (n00b_hash_fn)n00b_option_get(vt_opt);
-            }
+        if (cached) {
+            return cached;
+        }
+    }
+
+    // If the caller didn't supply a hash function, try the vtable for any
+    // object with type metadata. Only heap objects get their hash cached.
+    if (!fn && has_type_metadata) {
+        n00b_option_t(n00b_vtable_entry) vt_opt =
+            n00b_obj_core_method(obj, N00B_BI_HASH);
+
+        if (n00b_option_is_set(vt_opt)) {
+            fn = (n00b_hash_fn)n00b_option_get(vt_opt);
         }
     }
 

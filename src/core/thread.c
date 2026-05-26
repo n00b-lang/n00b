@@ -28,6 +28,7 @@
 #include "core/rwlock.h"
 #include "core/condition.h"
 #include "core/alloc.h"
+#include "core/stw.h"
 
 thread_local n00b_thread_t __n00b_thread_self;
 
@@ -152,6 +153,7 @@ n00b_thread_destroy(void)
         }
 
         n00b_release_locks_on_thread_exit(rec);
+        n00b_atomic_or(&__n00b_thread_self.self_lock, N00B_SUSPEND);
         n00b_atomic_store(&rec->thread, nullptr);
     }
 
@@ -391,8 +393,8 @@ n00b_thread_launcher(void *raw)
     void *result   = fn(arg);
     bundle->result = result;
 
-    n00b_thread_destroy();
     n00b_free(bundle);
+    n00b_thread_destroy();
     return result;
 }
 
@@ -439,7 +441,11 @@ n00b_thread_spawn(void *(*fn)(void *), void *arg)
 
     // Wait for the child to finish n00b_thread_init.
     while (!n00b_atomic_load(&bundle->ready)) {
+        n00b_stw_suspend_ctx stw_ctx = {0};
+
+        n00b_thread_suspend(stw_ctx);
         n00b_futex_wait(&bundle->ready, 0, 100000000); // 100ms
+        n00b_thread_resume(stw_ctx);
     }
 
     // Now rt->threads[slot].thread points to the child's TLS n00b_thread_t.
@@ -460,6 +466,12 @@ n00b_thread_join(n00b_thread_t *thread)
     if (!thread) return nullptr;
 
     void *retval = nullptr;
+
+    n00b_stw_suspend_ctx stw_ctx = {0};
+
+    n00b_thread_suspend(stw_ctx);
     pthread_join(thread->pthread_id, &retval);
+    n00b_thread_resume(stw_ctx);
+
     return retval;
 }

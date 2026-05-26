@@ -42,6 +42,7 @@
 #include "adt/result.h"
 #include "core/string.h"
 #include "core/data_lock.h"
+#include "core/static_image.h"
 #include "adt/array.h"
 #include "util/utf8.h"
 
@@ -195,6 +196,9 @@ n00b_buffer_init(n00b_buffer_t *buf) _kargs
     n00b_gc_scan_cb_t    scan_cb   = nullptr;
     void                *scan_user = nullptr;
 };
+
+extern n00b_static_image_status_t
+n00b_buffer_static_init(n00b_static_image_builder_t *builder);
 
 /**
  * @brief Concatenate two buffers, returning a new buffer.

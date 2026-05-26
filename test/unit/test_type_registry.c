@@ -13,6 +13,7 @@
 #include "core/string.h"
 #include "adt/dict_untyped.h"
 #include "text/strings/string_convert.h"
+#include "text/strings/string_ops.h"
 
 // A dummy type for dynamic registration tests.
 typedef struct test_widget_t {
@@ -62,11 +63,12 @@ test_name_field(void)
 {
     auto info_opt = n00b_type_lookup(typehash(uint64_t *));
     assert(n00b_option_is_set(info_opt));
-    assert(strcmp(n00b_option_get(info_opt)->name, "uint64_t") == 0);
+    assert(n00b_unicode_str_eq(n00b_option_get(info_opt)->name, r"uint64_t"));
 
     info_opt = n00b_type_lookup(typehash(n00b_string_t *));
     assert(n00b_option_is_set(info_opt));
-    assert(strcmp(n00b_option_get(info_opt)->name, "n00b_string_t") == 0);
+    assert(n00b_unicode_str_eq(n00b_option_get(info_opt)->name,
+                               r"n00b_string_t"));
 
     printf("  [PASS] name field\n");
 }
@@ -101,7 +103,7 @@ test_dynamic_registration(void)
     auto info_opt = n00b_type_lookup(typehash(test_widget_t *));
     assert(n00b_option_is_set(info_opt));
     n00b_type_info_t *info = n00b_option_get(info_opt);
-    assert(strcmp(info->name, "test_widget_t") == 0);
+    assert(n00b_unicode_str_eq(info->name, r"test_widget_t"));
     assert(info->alloc_len == sizeof(test_widget_t));
 
     printf("  [PASS] dynamic registration\n");
@@ -133,7 +135,7 @@ test_type_info_for(void)
     uint64_t *p = n00b_alloc(uint64_t);
     auto info_opt = n00b_type_info_for(p);
     assert(n00b_option_is_set(info_opt));
-    assert(strcmp(n00b_option_get(info_opt)->name, "uint64_t") == 0);
+    assert(n00b_unicode_str_eq(n00b_option_get(info_opt)->name, r"uint64_t"));
 
     printf("  [PASS] type_info_for\n");
 }
@@ -171,7 +173,7 @@ test_core_method_set(void)
     bool ok = n00b_type_register(
         typehash(test_core_method_type_t *),
         &(n00b_type_info_t){
-            .name      = "test_core_method_type_t",
+            .name      = r"test_core_method_type_t",
             .alloc_len = sizeof(test_core_method_type_t),
             N00B_CORE_METHOD(N00B_BI_CONSTRUCTOR, test_widget_ctor),
             N00B_CORE_METHOD(N00B_BI_FINALIZER, test_widget_dtor),
@@ -434,7 +436,7 @@ test_auto_constructor_dispatch(void)
     bool ok = n00b_type_register(
         typehash(test_auto_ctor_t *),
         &(n00b_type_info_t){
-            .name      = "test_auto_ctor_t",
+            .name      = r"test_auto_ctor_t",
             .alloc_len = sizeof(test_auto_ctor_t),
             N00B_CORE_METHOD(N00B_BI_CONSTRUCTOR, test_auto_ctor_init),
         });
@@ -472,7 +474,7 @@ test_auto_finalizer_dispatch(void)
     bool ok = n00b_type_register(
         typehash(test_auto_dtor_t *),
         &(n00b_type_info_t){
-            .name      = "test_auto_dtor_t",
+            .name      = r"test_auto_dtor_t",
             .alloc_len = sizeof(test_auto_dtor_t),
             N00B_CORE_METHOD(N00B_BI_FINALIZER, test_auto_dtor_fn),
         });

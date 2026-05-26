@@ -21,6 +21,7 @@
 #include <string.h> // IWYU pragma: export
 #include <errno.h>  // IWYU pragma: export
 #include <signal.h>
+#include <setjmp.h>
 
 #if defined(_WIN32) && !defined(__CYGWIN__)
 typedef struct { int si_signo; int si_status; int si_pid; } siginfo_t;
@@ -47,11 +48,11 @@ typedef void (*n00b_system_finalizer_fn)(void *);
 typedef struct n00b_runtime_t        n00b_runtime_t;
 typedef struct n00b_segment_t        n00b_segment_t;
 typedef struct n00b_mmap_info_t       n00b_mmap_info_t;
+typedef struct n00b_alloc_range_t      n00b_alloc_range_t;
 typedef struct n00b_arena_t          n00b_arena_t;
 typedef uint64_t                     n00b_alloc_type_info_t;
 typedef struct n00b_inline_hdr_t     n00b_inline_hdr_t;
-typedef struct n00b_oob_hdr_t n00b_oob_hdr_t;
-typedef struct n00b_static_header_t  n00b_static_header_t;
+typedef struct n00b_oob_hdr_t        n00b_oob_hdr_t;
 typedef enum n00b_dt_kind_t          n00b_dt_kind_t;
 typedef struct n00b_finalizer_info_t n00b_finalizer_info_t;
 typedef struct n00b_gc_root_t        n00b_gc_root_t;
@@ -59,6 +60,249 @@ typedef struct n00b_gc_map_t         n00b_gc_map_t;
 enum n00b_gc_scan_kind_t : uint8_t;
 typedef enum n00b_gc_scan_kind_t     n00b_gc_scan_kind_t;
 typedef void (*n00b_gc_scan_cb_t)(n00b_gc_map_t *, void *);
+
+typedef enum {
+    N00B_GC_STACK_CONSERVATIVE = 0,
+    N00B_GC_STACK_EXACT_WITH_FALLBACK,
+    N00B_GC_STACK_EXACT_ONLY,
+} n00b_gc_stack_policy_t;
+
+typedef struct {
+    uint32_t root_index;
+    uint32_t num_words;
+} n00b_gc_stack_slot_t;
+
+typedef struct {
+    uint32_t                    num_roots;
+    uint32_t                    num_slots;
+    uint32_t                    flags;
+    const n00b_gc_stack_slot_t *slots;
+    const char                 *function_name;
+    const char                 *file_name;
+    uint32_t                    line;
+} n00b_gc_stack_map_t;
+
+typedef struct n00b_gc_stack_frame_t {
+    struct n00b_gc_stack_frame_t *prev;
+    const n00b_gc_stack_map_t    *map;
+    void                        **roots;
+} n00b_gc_stack_frame_t;
+
+typedef struct n00b_jmp_buf_t {
+    jmp_buf                 n00b_jmp_env;
+    struct n00b_thread_t   *n00b_thread;
+    n00b_gc_stack_frame_t  *n00b_gc_stack_top;
+} n00b_jmp_buf_t;
+
+extern n00b_gc_stack_policy_t n00b_gc_stack_get_policy(void);
+extern n00b_gc_stack_policy_t n00b_gc_stack_set_policy(n00b_gc_stack_policy_t policy);
+extern void
+n00b_gc_stack_push(n00b_gc_stack_frame_t *frame, const n00b_gc_stack_map_t *map, void **roots);
+extern void n00b_gc_stack_pop(n00b_gc_stack_frame_t *frame);
+extern n00b_jmp_buf_t *n00b_gc_stack_prepare_jmp(n00b_jmp_buf_t *ctx);
+extern void n00b_gc_stack_restore(n00b_gc_stack_frame_t *top);
+[[noreturn]] extern void n00b_longjmp(n00b_jmp_buf_t *ctx, int value);
+
+// Supported non-local-exit interface for code compiled with GC stack maps.
+// The checkpoint records the current published frame chain; the jump restores
+// it before transferring control so skipped cleanup frames are not scanned.
+// Checkpoints must be jumped to only from the same thread that created them.
+#define n00b_setjmp(ctx) setjmp(n00b_gc_stack_prepare_jmp((ctx))->n00b_jmp_env)
+
+enum n00b_static_object_flags_t : uint32_t {
+    N00B_STATIC_OBJECT_F_NONE     = 0,
+    N00B_STATIC_OBJECT_F_READONLY = 1u << 0,
+    N00B_STATIC_OBJECT_F_MUTABLE  = 1u << 1,
+    N00B_STATIC_OBJECT_F_INIT_RWLOCK = 1u << 2,
+};
+typedef enum n00b_static_object_flags_t n00b_static_object_flags_t;
+
+#define N00B_STATIC_IDENTITY_VERSION 1u
+
+typedef enum n00b_static_identity_kind_t : uint8_t {
+    N00B_STATIC_IDENTITY_NONE                     = 0,
+    N00B_STATIC_IDENTITY_NCC_RSTR                 = 1,
+    N00B_STATIC_IDENTITY_NCC_ARRAY_DATA           = 2,
+    N00B_STATIC_IDENTITY_NCC_STATIC_IMAGE_OBJECT  = 3,
+    N00B_STATIC_IDENTITY_NCC_STATIC_IMAGE_PAYLOAD = 4,
+    N00B_STATIC_IDENTITY_MANUAL                   = 5,
+} n00b_static_identity_kind_t;
+
+typedef enum n00b_static_identity_status_t : uint8_t {
+    N00B_STATIC_IDENTITY_OK = 0,
+    N00B_STATIC_IDENTITY_ERR_NULL,
+    N00B_STATIC_IDENTITY_ERR_INVALID,
+    N00B_STATIC_IDENTITY_ERR_MISSING,
+    N00B_STATIC_IDENTITY_ERR_DUPLICATE,
+    N00B_STATIC_IDENTITY_ERR_MUTABILITY,
+    N00B_STATIC_IDENTITY_ERR_TYPE,
+    N00B_STATIC_IDENTITY_ERR_SCAN,
+    N00B_STATIC_IDENTITY_ERR_LENGTH,
+    N00B_STATIC_IDENTITY_ERR_CHECK_BYTES,
+} n00b_static_identity_status_t;
+
+typedef enum n00b_static_identity_query_checks_t : uint32_t {
+    N00B_STATIC_IDENTITY_CHECK_NONE       = 0,
+    N00B_STATIC_IDENTITY_CHECK_LEN        = 1u << 0,
+    N00B_STATIC_IDENTITY_CHECK_TINFO      = 1u << 1,
+    N00B_STATIC_IDENTITY_CHECK_SCAN_KIND  = 1u << 2,
+    N00B_STATIC_IDENTITY_CHECK_FLAGS      = 1u << 3,
+    N00B_STATIC_IDENTITY_CHECK_BYTES      = 1u << 4,
+} n00b_static_identity_query_checks_t;
+
+typedef struct n00b_static_identity_t {
+    uint32_t                    version;
+    n00b_static_identity_kind_t kind;
+    uint8_t                     reserved[3];
+    const char                 *namespace_id;
+    const char                 *object_key;
+} n00b_static_identity_t;
+
+typedef struct n00b_static_identity_query_t {
+    uint32_t                checks;
+    uint64_t                len;
+    n00b_alloc_type_info_t  tinfo;
+    n00b_gc_scan_kind_t     scan_kind;
+    uint32_t                flags_mask;
+    uint32_t                flags_value;
+    uint64_t                check_offset;
+    uint32_t                check_len;
+    const unsigned char    *check_bytes;
+} n00b_static_identity_query_t;
+
+typedef struct n00b_static_object_desc_t {
+    const void             *start;
+    uint64_t                len;
+    n00b_alloc_type_info_t  tinfo;
+    n00b_gc_scan_kind_t     scan_kind;
+    n00b_gc_scan_cb_t       scan_cb;
+    void                   *scan_user;
+    uint64_t                object_id;
+    const char             *file;
+    const n00b_static_identity_t *identity;
+    uint32_t                flags;
+    // Build-time-written cached pointer-key hash. Zero = uncached. The
+    // static-init helper writes a nonzero value here for key-bearing
+    // static objects; the static-range registration path copies this
+    // into n00b_alloc_range_t.cached_hash so n00b_hash() can
+    // short-circuit on static-range hits. Placed at the end of the
+    // struct so existing descriptor emitters that don't yet supply the
+    // field zero-fill it via C's partial aggregate initializer rule.
+    // The underlying type matches the `n00b_uint128_t` typedef below;
+    // we spell it as `unsigned _BitInt(128)` directly here because the
+    // typedef is introduced later in this header.
+    unsigned _BitInt(128)   cached_hash;
+} n00b_static_object_desc_t;
+
+#define N00B_STATIC_IMAGE_CONTRACT_VERSION 1u
+
+typedef enum n00b_static_image_payload_kind_t : uint8_t {
+    N00B_STATIC_IMAGE_PAYLOAD_NONE  = 0,
+    N00B_STATIC_IMAGE_PAYLOAD_BYTES = 1,
+} n00b_static_image_payload_kind_t;
+
+typedef enum n00b_static_image_endian_t : uint8_t {
+    N00B_STATIC_IMAGE_ENDIAN_UNKNOWN = 0,
+    N00B_STATIC_IMAGE_ENDIAN_LITTLE  = 1,
+    N00B_STATIC_IMAGE_ENDIAN_BIG     = 2,
+} n00b_static_image_endian_t;
+
+#if defined(__BYTE_ORDER__) && defined(__ORDER_BIG_ENDIAN__) \
+    && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+#define N00B_STATIC_IMAGE_HOST_ENDIAN N00B_STATIC_IMAGE_ENDIAN_BIG
+#else
+#define N00B_STATIC_IMAGE_HOST_ENDIAN N00B_STATIC_IMAGE_ENDIAN_LITTLE
+#endif
+
+#define N00B_STATIC_IMAGE_ABI_INIT                                                            \
+    {                                                                                          \
+        .version       = N00B_STATIC_IMAGE_CONTRACT_VERSION,                                   \
+        .pointer_bytes = (uint8_t)sizeof(void *),                                               \
+        .size_t_bytes  = (uint8_t)sizeof(size_t),                                               \
+        .char_bits     = 8,                                                                     \
+        .endian        = N00B_STATIC_IMAGE_HOST_ENDIAN,                                        \
+    }
+
+typedef struct n00b_static_image_abi_t {
+    uint32_t version;
+    uint8_t  pointer_bytes;
+    uint8_t  size_t_bytes;
+    uint8_t  char_bits;
+    uint8_t  endian;
+} n00b_static_image_abi_t;
+
+typedef enum n00b_static_init_arg_kind_t : uint8_t {
+    N00B_STATIC_INIT_ARG_NONE  = 0,
+    N00B_STATIC_INIT_ARG_BYTES = 1,
+    N00B_STATIC_INIT_ARG_INT   = 2,
+    N00B_STATIC_INIT_ARG_BOOL  = 3,
+} n00b_static_init_arg_kind_t;
+
+typedef struct n00b_static_init_arg_t {
+    const char                    *name;
+    n00b_static_init_arg_kind_t    kind;
+    union {
+        struct {
+            const void *data;
+            uint64_t    len;
+        } bytes;
+        int64_t integer;
+        bool    boolean;
+    };
+} n00b_static_init_arg_t;
+
+typedef struct n00b_static_image_request_t {
+    uint32_t                         version;
+    uint64_t                         type_hash;
+    const char                      *type_name;
+    const char                      *symbol_prefix;
+    const char                      *entry_attr;
+    n00b_static_image_payload_kind_t payload_kind;
+    const void                      *payload;
+    uint64_t                         payload_len;
+    const n00b_static_init_arg_t    *args;
+    uint64_t                         arg_count;
+    n00b_static_image_abi_t          target_abi;
+    uint32_t                         object_flags;
+    n00b_gc_scan_kind_t              required_scan_kind;
+    const char                      *identity_namespace;
+    const char                      *identity_object_key;
+    const char                      *identity_payload_key;
+} n00b_static_image_request_t;
+
+typedef struct n00b_static_image_dependency_t {
+    const n00b_static_object_desc_t *desc;
+    uint64_t                         relocation_offset;
+    const char                      *role;
+} n00b_static_image_dependency_t;
+
+typedef struct n00b_static_image_response_t {
+    uint32_t                               version;
+    const n00b_static_image_request_t     *request;
+    const void                            *object_start;
+    uint64_t                               object_len;
+    n00b_gc_scan_kind_t                    scan_kind;
+    n00b_gc_scan_cb_t                      scan_cb;
+    void                                  *scan_user;
+    const n00b_static_image_dependency_t  *dependencies;
+    uint64_t                               dependency_count;
+} n00b_static_image_response_t;
+
+typedef struct {
+    uint64_t stride;
+    uint64_t offset;
+    uint64_t count;
+} n00b_gc_struct_array_t;
+
+typedef struct {
+    uint64_t        stride;
+    uint64_t        count;
+    uint64_t        offset_count;
+    const uint64_t *offsets;
+} n00b_gc_struct_layout_t;
+
+extern void n00b_gc_scan_cb_struct_field(n00b_gc_map_t *m, void *user);
+extern void n00b_gc_scan_cb_struct_layout(n00b_gc_map_t *m, void *user);
 // First two are for anything that is an absolute size / length and
 // should always be a natural number.
 //

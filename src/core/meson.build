@@ -6,6 +6,8 @@ n00b_core_src = files(
     'init.c',
     'thread.c',
     'mmaps.c',
+    'static_objects.c',
+    'static_image.c',
     'alloc.c',
     'arena.c',
     'pool.c',
