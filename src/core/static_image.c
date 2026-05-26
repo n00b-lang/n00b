@@ -2,35 +2,35 @@
 #include "core/string.h"
 #include "text/strings/string_ops.h"
 
-const char *
+n00b_string_t *
 n00b_static_image_status_name(n00b_static_image_status_t status)
 {
     switch (status) {
     case N00B_STATIC_IMAGE_OK:
-        return "ok";
+        return r"ok";
     case N00B_STATIC_IMAGE_ERR_NULL_REQUEST:
-        return "null-request";
+        return r"null-request";
     case N00B_STATIC_IMAGE_ERR_VERSION:
-        return "version";
+        return r"version";
     case N00B_STATIC_IMAGE_ERR_ABI:
-        return "abi";
+        return r"abi";
     case N00B_STATIC_IMAGE_ERR_PAYLOAD:
-        return "payload";
+        return r"payload";
     case N00B_STATIC_IMAGE_ERR_ARGUMENT:
-        return "argument";
+        return r"argument";
     case N00B_STATIC_IMAGE_ERR_UNREGISTERED_TYPE:
-        return "unregistered-type";
+        return r"unregistered-type";
     case N00B_STATIC_IMAGE_ERR_UNSUPPORTED_POLICY:
-        return "unsupported-policy";
+        return r"unsupported-policy";
     case N00B_STATIC_IMAGE_ERR_SCAN_KIND:
-        return "scan-kind";
+        return r"scan-kind";
     case N00B_STATIC_IMAGE_ERR_NO_INITIALIZER:
-        return "no-initializer";
+        return r"no-initializer";
     case N00B_STATIC_IMAGE_ERR_INITIALIZER:
-        return "initializer";
+        return r"initializer";
     }
 
-    return "unknown";
+    return r"unknown";
 }
 
 bool
@@ -171,8 +171,7 @@ n00b_static_image_build(const n00b_static_image_request_t *request,
     n00b_static_image_status_t status = n00b_static_image_validate_request(request);
     if (status != N00B_STATIC_IMAGE_OK) {
         builder->status = status;
-        builder->error  = n00b_string_from_cstr(
-            n00b_static_image_status_name(status));
+        builder->error  = n00b_static_image_status_name(status);
         return status;
     }
 

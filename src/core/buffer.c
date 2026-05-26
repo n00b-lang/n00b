@@ -495,9 +495,9 @@ n00b_buffer_static_init(n00b_static_image_builder_t *builder)
         builder,
         n00b_cformat(
             "_Static_assert((__builtin_offsetof(n00b_buffer_t,data)"
-            "%%sizeof(void*))==0,"
+            "%sizeof(void*))==0,"
             "\"buffer data pointer must be pointer-aligned\");"
-            "_Static_assert((sizeof(n00b_buffer_t)%%sizeof(void*))==0,"
+            "_Static_assert((sizeof(n00b_buffer_t)%sizeof(void*))==0,"
             "\"buffer static image object must be word-sized\");"
             "static const uint64_t [|#|]_offsets[]={"
             "__builtin_offsetof(n00b_buffer_t,data)/sizeof(void*)};"

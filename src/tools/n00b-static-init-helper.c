@@ -1940,7 +1940,7 @@ main(int argc, char **argv)
     if (status != N00B_STATIC_IMAGE_OK) {
         fprintf(stderr, "%s", builder.error
                                 ? builder.error->data
-                                : n00b_static_image_status_name(status));
+                                : n00b_static_image_status_name(status)->data);
         n00b_static_image_builder_destroy(&builder);
         n00b_shutdown();
         free(input);

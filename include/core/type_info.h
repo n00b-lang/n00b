@@ -76,14 +76,14 @@ typedef n00b_option_t(n00b_static_layout_info_t *) n00b_static_layout_opt_t;
  * static object layouts may be emitted for the type.
  */
 typedef struct n00b_type_info_t {
-    const char              *name;
+    n00b_string_t            *name;
     n00b_vtable_entry        core_vtable[N00B_BI_NUM_FUNCS];
     n00b_ext_vtable_opt_t    ext_vtable;
     uint32_t                 alloc_len;
     n00b_option_t(uint32_t)  lock_offset;
     n00b_static_layout_info_t static_layout;
     n00b_literal_kind_t      literal_kind;
-    const char              *literal_modifier;
+    n00b_string_t            *literal_modifier;
     bool                     ctor_takes_kargs;  /**< ctor(self, kargs) */
     bool                     ctor_takes_vargs;  /**< ctor(self, vargs, kargs) */
     bool                     static_init_takes_kargs;
@@ -196,10 +196,27 @@ static inline n00b_option_t(n00b_vtable_entry)
  * );
  * ```
  */
+/**
+ * @brief Inline-construct an `n00b_string_t *` for an ASCII identifier.
+ *
+ * The compound literal lives in the caller's automatic storage at the
+ * point of use, but `n00b_type_register` deep-copies into the system
+ * pool, so lifetime is correct for the macro context. Type names are
+ * pure ASCII identifiers (`uint64_t`, `n00b_buffer_t`, etc.), so
+ * `codepoints == u8_bytes`.
+ */
+#define N00B_TYPE_NAME_LITERAL(name_cstr)                                                      \
+    (&(n00b_string_t){                                                                         \
+        .data       = (char *)(name_cstr),                                                     \
+        .u8_bytes   = sizeof(name_cstr) - 1,                                                   \
+        .codepoints = sizeof(name_cstr) - 1,                                                   \
+        .styling    = nullptr,                                                                 \
+    })
+
 #define N00B_TYPE_REGISTER(T, ...)                                                             \
     n00b_type_register(typehash(T *),                                                          \
                        &(n00b_type_info_t){                                                    \
-                           .name      = N00B_TO_STRING(T),                                     \
+                           .name      = N00B_TYPE_NAME_LITERAL(N00B_TO_STRING(T)),             \
                            .alloc_len = sizeof(T),                                             \
                            __VA_ARGS__                                                         \
                        })

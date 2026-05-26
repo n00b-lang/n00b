@@ -165,7 +165,7 @@ test_denial_reason_is_deep_copied(void)
     bool ok = n00b_type_register(
         typehash(test_forbidden_static_policy_t *),
         &(n00b_type_info_t){
-            .name          = "test_forbidden_static_policy_t",
+            .name          = r"test_forbidden_static_policy_t",
             .alloc_len     = sizeof(test_forbidden_static_policy_t),
             .static_layout = {
                 .policy    = N00B_STATIC_LAYOUT_FORBIDDEN,

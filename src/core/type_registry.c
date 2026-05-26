@@ -5,17 +5,38 @@
 #include "adt/dict_untyped.h"
 #include "core/type_info.h"
 #include "core/pool.h"
+#include "core/string.h"
+#include "text/strings/string_ops.h"
 
-static char *
-n00b_registry_strdup(n00b_allocator_t *sp, const char *s)
+// Intern the supplied registry string into the system pool. For non-null
+// inputs this deep-copies the n00b_string_t struct and its data buffer
+// directly into the system pool, avoiding kargs-mediated paths that have
+// been observed to drop the .data pointer when interacting with hidden
+// pools. The struct is hand-constructed; codepoint counting is preserved
+// from the source.
+static n00b_string_t *
+n00b_registry_intern(n00b_allocator_t *sp, n00b_string_t *s)
 {
     if (!s) {
         return nullptr;
     }
 
-    size_t len  = strlen(s);
-    char  *copy = n00b_alloc_array_with_opts(char, len + 1, &(n00b_alloc_opts_t){.allocator = sp});
-    memcpy(copy, s, len + 1);
+    size_t bytes = s->u8_bytes;
+    n00b_string_t *copy = n00b_alloc_with_opts(
+        n00b_string_t, &(n00b_alloc_opts_t){.allocator = sp});
+    char *buf = n00b_alloc_array_with_opts(
+        char, bytes + 1, &(n00b_alloc_opts_t){.allocator = sp});
+
+    if (bytes && s->data) {
+        memcpy(buf, s->data, bytes);
+    }
+    buf[bytes] = '\0';
+
+    copy->data       = buf;
+    copy->u8_bytes   = bytes;
+    copy->codepoints = s->codepoints;
+    copy->styling    = nullptr;
+
     return copy;
 }
 
@@ -56,8 +77,8 @@ n00b_type_register(uint64_t type_hash, const n00b_type_info_t *info)
 
     *copy = *info;
 
-    copy->name             = n00b_registry_strdup(sp, info->name);
-    copy->literal_modifier = n00b_registry_strdup(sp, info->literal_modifier);
+    copy->name             = n00b_registry_intern(sp, info->name);
+    copy->literal_modifier = n00b_registry_intern(sp, info->literal_modifier);
     // reason is an n00b_string_t * — typically a static r-string literal,
     // so the pointer copy in `*copy = *info` is sufficient; no string dup
     // is needed.

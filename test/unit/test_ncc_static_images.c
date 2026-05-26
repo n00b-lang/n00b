@@ -17,6 +17,7 @@
 #include "core/static_image.h"
 #include "core/static_objects.h"
 #include "core/type_info.h"
+#include "text/strings/string_ops.h"
 
 const n00b_buffer_t *readonly_buffer =
     ncc_static_image("phase-six");
@@ -262,8 +263,8 @@ test_static_image_request_validation(void)
     assert(n00b_static_image_validate_request(nullptr)
            == N00B_STATIC_IMAGE_ERR_NULL_REQUEST);
     assert(n00b_static_image_validate_request(&req) == N00B_STATIC_IMAGE_OK);
-    assert(strcmp(n00b_static_image_status_name(N00B_STATIC_IMAGE_OK), "ok")
-           == 0);
+    assert(n00b_unicode_str_eq(n00b_static_image_status_name(N00B_STATIC_IMAGE_OK),
+                               r"ok"));
 
     req.version = 0;
     assert(n00b_static_image_validate_request(&req)

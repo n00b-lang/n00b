@@ -40,7 +40,7 @@ typedef struct n00b_static_image_builder_t {
 typedef n00b_static_image_status_t (*n00b_static_initializer_fn)(
     n00b_static_image_builder_t *);
 
-extern const char *
+extern n00b_string_t *
 n00b_static_image_status_name(n00b_static_image_status_t status);
 
 extern bool

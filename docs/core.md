@@ -547,13 +547,13 @@ initialized during `n00b_init()` and stored on the runtime.
 
 ```c
 typedef struct n00b_type_info_t {
-    const char              *name;
+    n00b_string_t           *name;
     n00b_vtable_entry        core_vtable[N00B_BI_NUM_FUNCS];
     n00b_ext_vtable_opt_t    ext_vtable;      // option: extension methods
     uint32_t                 alloc_len;
     n00b_option_t(uint32_t)  lock_offset;     // byte offset of rwlock field
     n00b_literal_kind_t      literal_kind;
-    const char              *literal_modifier;
+    n00b_string_t           *literal_modifier;
 } n00b_type_info_t;
 ```
 
