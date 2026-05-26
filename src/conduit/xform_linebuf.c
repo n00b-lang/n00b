@@ -24,6 +24,7 @@ linebuf_transform(n00b_conduit_filter_t(n00b_buffer_t *) *xf,
     char    *in_data = n00b_buffer_to_c(input, &in_len);
     if (in_len == 0) return n00b_option_none(n00b_buffer_t *);
 
+    n00b_allocator_t *alloc = xf->conduit ? xf->conduit->allocator : nullptr;
     char    *scan = in_data;
     char    *end  = in_data + in_len;
 
@@ -35,11 +36,14 @@ linebuf_transform(n00b_conduit_filter_t(n00b_buffer_t *) *xf,
             // No delimiter — accumulate remainder.
             size_t tail_len = (size_t)(end - scan);
             if (!st->partial) {
-                st->partial = n00b_buffer_from_bytes(scan, (int64_t)tail_len);
+                st->partial = n00b_buffer_from_bytes(scan, (int64_t)tail_len,
+                                                     .allocator = alloc);
             } else {
                 n00b_buffer_t *piece =
-                    n00b_buffer_from_bytes(scan, (int64_t)tail_len);
-                n00b_buffer_t *merged = n00b_buffer_add(st->partial, piece);
+                    n00b_buffer_from_bytes(scan, (int64_t)tail_len,
+                                           .allocator = alloc);
+                n00b_buffer_t *merged = n00b_buffer_add(st->partial, piece,
+                                                        .allocator = alloc);
                 st->partial = merged;
             }
             break;
@@ -53,11 +57,13 @@ linebuf_transform(n00b_conduit_filter_t(n00b_buffer_t *) *xf,
         n00b_buffer_t *line;
         if (st->partial) {
             n00b_buffer_t *piece =
-                n00b_buffer_from_bytes(scan, (int64_t)line_len);
-            line = n00b_buffer_add(st->partial, piece);
+                n00b_buffer_from_bytes(scan, (int64_t)line_len,
+                                       .allocator = alloc);
+            line = n00b_buffer_add(st->partial, piece, .allocator = alloc);
             st->partial = nullptr;
         } else {
-            line = n00b_buffer_from_bytes(scan, (int64_t)line_len);
+            line = n00b_buffer_from_bytes(scan, (int64_t)line_len,
+                                          .allocator = alloc);
         }
 
         // Apply max_line_len truncation.

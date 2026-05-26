@@ -116,6 +116,31 @@ test_fd_owner_topics(void)
     assert(rt != st);
     assert(wt != st);
 
+    n00b_conduit_topic_t(n00b_buffer_t *) *read_typed =
+        n00b_conduit_fd_read_topic_typed(owner);
+    assert(read_typed != nullptr);
+    assert(n00b_list_len(read_typed->subscriptions) == 0);
+
+    n00b_conduit_topic_t(n00b_conduit_fd_write_payload_t) *write_typed =
+        n00b_conduit_fd_write_topic_typed(owner);
+    assert(write_typed != nullptr);
+    assert(n00b_list_len(write_typed->subscriptions) == 0);
+
+    n00b_conduit_topic_t(n00b_conduit_fd_status_payload_t) *status_typed =
+        n00b_conduit_fd_status_topic_typed(owner);
+    assert(status_typed != nullptr);
+    assert(n00b_list_len(status_typed->subscriptions) == 0);
+
+    n00b_conduit_inbox_t(n00b_buffer_t *) *inbox =
+        n00b_alloc(n00b_conduit_inbox_t(n00b_buffer_t *));
+    n00b_conduit_inbox_init(n00b_buffer_t *, inbox, c,
+                            N00B_CONDUIT_BP_UNBOUNDED, 0);
+    n00b_conduit_sub_handle_t h =
+        n00b_conduit_subscribe(n00b_buffer_t *, read_typed, inbox);
+    assert(h != N00B_CONDUIT_INVALID_SUB_HANDLE);
+    assert(n00b_list_len(read_typed->subscriptions) == 1);
+    n00b_conduit_sub_cancel(h);
+
     test_fd_close(fds[0]);
     test_fd_close(fds[1]);
     n00b_conduit_io_destroy(io);

@@ -195,8 +195,9 @@ n00b_conduit_udp_dispatch(n00b_conduit_udp_t *u, uint32_t io_ops)
         }
         n00b_conduit_publisher_t *pub = n00b_result_get(pub_res);
 
-        n00b_conduit_udp_datagram_msg_t *msg =
-            n00b_alloc(n00b_conduit_udp_datagram_msg_t);
+        n00b_conduit_udp_datagram_msg_t *msg = n00b_alloc_with_opts(
+            n00b_conduit_udp_datagram_msg_t,
+            &(n00b_alloc_opts_t){.allocator = u->conduit->allocator});
 
         msg->header.type       = N00B_CONDUIT_MSG_USER;
         msg->header.topic      = topic;

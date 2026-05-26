@@ -237,8 +237,9 @@ n00b_conduit_listener_dispatch(n00b_conduit_listener_t *listener, uint32_t io_op
         }
         n00b_conduit_publisher_t *pub = n00b_result_get(pub_res);
 
-        n00b_conduit_sock_accept_msg_t *msg =
-            n00b_alloc(n00b_conduit_sock_accept_msg_t);
+        n00b_conduit_sock_accept_msg_t *msg = n00b_alloc_with_opts(
+            n00b_conduit_sock_accept_msg_t,
+            &(n00b_alloc_opts_t){.allocator = listener->conduit->allocator});
 
         msg->header.type       = N00B_CONDUIT_MSG_USER;
         msg->header.topic      = topic;
@@ -278,8 +279,9 @@ publish_conn_status(n00b_conduit_conn_t *conn,
     }
     n00b_conduit_publisher_t *pub = n00b_result_get(pub_res);
 
-    n00b_conduit_sock_status_msg_t *msg =
-        n00b_alloc(n00b_conduit_sock_status_msg_t);
+    n00b_conduit_sock_status_msg_t *msg = n00b_alloc_with_opts(
+        n00b_conduit_sock_status_msg_t,
+        &(n00b_alloc_opts_t){.allocator = conn->conduit->allocator});
 
     msg->header.type       = N00B_CONDUIT_MSG_USER;
     msg->header.topic      = topic;

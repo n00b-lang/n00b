@@ -266,15 +266,41 @@ typedef struct n00b_conduit_topic_base {
                                n00b_conduit_message_t(T)  *msg,                                \
                                uint32_t                    op_filter)                          \
     {                                                                                          \
-        n00b_list_foreach(topic->subscriptions, sp) {                                          \
-            n00b_conduit_subscription_t(T) *sub = *sp;                                         \
-            if (n00b_atomic_load(&sub->state) != N00B_CONDUIT_SUB_ACTIVE)                      \
+        extern void n00b_conduit_sub_cancel(n00b_conduit_sub_handle_t handle);                  \
+        bool _original_delivered = false;                                                       \
+        auto _subs = &topic->subscriptions;                                                     \
+        _n00b_list_write_lock(_subs);                                                           \
+        size_t _write_i = 0;                                                                    \
+        for (size_t _read_i = 0; _read_i < _subs->len; _read_i++) {                            \
+            n00b_conduit_subscription_t(T) *sub = _subs->data[_read_i];                        \
+            if (!sub)                                                                           \
                 continue;                                                                      \
-            if (op_filter != N00B_CONDUIT_OP_ALL &&                                            \
-                !(sub->operations & op_filter))                                                \
+            int _state = n00b_atomic_load(&sub->state);                                        \
+            if (_state == N00B_CONDUIT_SUB_REMOVED)                                            \
                 continue;                                                                      \
-            n00b_conduit_sub_deliver(T, sub, msg);                                             \
+            if (_state == N00B_CONDUIT_SUB_ACTIVE &&                                           \
+                (op_filter == N00B_CONDUIT_OP_ALL || (sub->operations & op_filter))) {         \
+                n00b_conduit_message_t(T) *_deliver_msg = msg;                                 \
+                if (_original_delivered) {                                                     \
+                    _deliver_msg = n00b_alloc_with_opts(                                       \
+                        n00b_conduit_message_t(T),                                             \
+                        &(n00b_alloc_opts_t){.allocator =                                      \
+                            ((n00b_conduit_topic_base_t *)topic)->conduit->allocator});        \
+                    *_deliver_msg = *msg;                                                      \
+                    _deliver_msg->header.next = nullptr;                                       \
+                }                                                                              \
+                if (n00b_conduit_sub_deliver(T, sub, _deliver_msg) && _deliver_msg == msg) {    \
+                    _original_delivered = true;                                                 \
+                }                                                                              \
+                if (n00b_atomic_load(&sub->state) == N00B_CONDUIT_SUB_REMOVED) {                \
+                    n00b_conduit_sub_cancel(sub->handle);                                      \
+                    continue;                                                                  \
+                }                                                                              \
+            }                                                                                  \
+            _subs->data[_write_i++] = sub;                                                     \
         }                                                                                      \
+        _subs->len = _write_i;                                                                 \
+        _n00b_list_unlock(_subs);                                                              \
     }                                                                                          \
                                                                                                \
     /** @brief Deliver a system message to all matching subscribers. */                        \
@@ -283,15 +309,28 @@ typedef struct n00b_conduit_topic_base {
                                    n00b_conduit_msg_type_t   type,                             \
                                    uint32_t                  op_filter)                        \
     {                                                                                          \
-        n00b_list_foreach(topic->subscriptions, sp) {                                          \
-            n00b_conduit_subscription_t(T) *sub = *sp;                                         \
-            if (n00b_atomic_load(&sub->state) != N00B_CONDUIT_SUB_ACTIVE)                      \
+        auto _subs = &topic->subscriptions;                                                     \
+        _n00b_list_write_lock(_subs);                                                           \
+        size_t _write_i = 0;                                                                    \
+        for (size_t _read_i = 0; _read_i < _subs->len; _read_i++) {                            \
+            n00b_conduit_subscription_t(T) *sub = _subs->data[_read_i];                        \
+            if (!sub)                                                                           \
+                continue;                                                                      \
+            int _state = n00b_atomic_load(&sub->state);                                        \
+            if (_state == N00B_CONDUIT_SUB_REMOVED)                                            \
+                continue;                                                                      \
+            _subs->data[_write_i++] = sub;                                                     \
+            if (_state != N00B_CONDUIT_SUB_ACTIVE)                                             \
                 continue;                                                                      \
             if (op_filter != N00B_CONDUIT_OP_ALL &&                                            \
                 !(sub->operations & op_filter))                                                \
                 continue;                                                                      \
             if (sub->sys_queue) {                                                              \
-                n00b_conduit_sys_msg_t *sys = n00b_alloc(n00b_conduit_sys_msg_t);              \
+                n00b_allocator_t *_msg_alloc =                                                  \
+                    ((n00b_conduit_topic_base_t *)topic)->conduit->allocator;                  \
+                n00b_conduit_sys_msg_t *sys = n00b_alloc_with_opts(                            \
+                    n00b_conduit_sys_msg_t,                                                     \
+                    &(n00b_alloc_opts_t){.allocator = _msg_alloc});                            \
                 sys->header.type  = type;                                                      \
                 sys->header.topic = (n00b_conduit_topic_base_t *)topic;                        \
                 n00b_conduit_sys_queue_push(sub->sys_queue, sys);                              \
@@ -300,6 +339,8 @@ typedef struct n00b_conduit_topic_base {
                 }                                                                               \
             }                                                                                  \
         }                                                                                      \
+        _subs->len = _write_i;                                                                 \
+        _n00b_list_unlock(_subs);                                                              \
     }                                                                                          \
                                                                                                \
     /** @brief Subscribe to a topic with a typed inbox. */                                     \
@@ -359,29 +400,35 @@ typedef struct n00b_conduit_topic_base {
         if (n00b_result_is_err(_tr)) return nullptr;                                           \
         n00b_conduit_topic_t(T) *_tp =                                                         \
             (n00b_conduit_topic_t(T) *)n00b_result_get(_tr);                         \
-        _tp->subscriptions =                                                                   \
-            n00b_list_new(n00b_conduit_subscription_t(T) *, c->allocator);                     \
-        _tp->inbox = nullptr;                                                                  \
+        if (!_tp->subscriptions.data) {                                                        \
+            _tp->subscriptions =                                                               \
+                n00b_list_new(n00b_conduit_subscription_t(T) *, c->allocator);                 \
+            _tp->inbox = nullptr;                                                              \
+        }                                                                                      \
                                                                                                \
         /* Create a done topic (payload = n00b_conduit_topic_base_t *). */                     \
-        static _Atomic(uint64_t) _done_id = 1;                                                \
-        uint64_t _did = n00b_atomic_add(&_done_id, 1);                                        \
-        n00b_result_t(n00b_conduit_topic_base_t *) _dtr =                                                     \
-            n00b_conduit_topic_get(c, N00B_CONDUIT_URI_DONE(_did),                             \
-                sizeof(n00b_conduit_topic_t(n00b_conduit_topic_base_t *)));                    \
-        if (n00b_result_is_ok(_dtr)) {                                                         \
-            auto *_done = (n00b_conduit_topic_t(n00b_conduit_topic_base_t *) *)                \
-                n00b_result_get(_dtr);                                               \
-            _done->subscriptions = n00b_list_new(                                              \
-                n00b_conduit_subscription_t(n00b_conduit_topic_base_t *) *, c->allocator);     \
-            _done->inbox = nullptr;                                                            \
-            /* Done topics do NOT get their own done topics. */                                \
-            n00b_conduit_topic_base_t *_done_base =                                            \
-                (n00b_conduit_topic_base_t *)_done;                                            \
-            n00b_atomic_store(&_done_base->done_topic, nullptr);                              \
-            n00b_conduit_topic_base_t *_base =                                                 \
-                (n00b_conduit_topic_base_t *)_tp;                                              \
-            n00b_atomic_store(&_base->done_topic, _done);                                     \
+        n00b_conduit_topic_base_t *_base =                                                     \
+            (n00b_conduit_topic_base_t *)_tp;                                                  \
+        if (!n00b_atomic_load(&_base->done_topic)) {                                           \
+            static _Atomic(uint64_t) _done_id = 1;                                            \
+            uint64_t _did = n00b_atomic_add(&_done_id, 1);                                    \
+            n00b_result_t(n00b_conduit_topic_base_t *) _dtr =                                                 \
+                n00b_conduit_topic_get(c, N00B_CONDUIT_URI_DONE(_did),                         \
+                    sizeof(n00b_conduit_topic_t(n00b_conduit_topic_base_t *)));                \
+            if (n00b_result_is_ok(_dtr)) {                                                     \
+                auto *_done = (n00b_conduit_topic_t(n00b_conduit_topic_base_t *) *)            \
+                    n00b_result_get(_dtr);                                           \
+                if (!_done->subscriptions.data) {                                              \
+                    _done->subscriptions = n00b_list_new(                                      \
+                        n00b_conduit_subscription_t(n00b_conduit_topic_base_t *) *, c->allocator); \
+                    _done->inbox = nullptr;                                                    \
+                }                                                                              \
+                /* Done topics do NOT get their own done topics. */                            \
+                n00b_conduit_topic_base_t *_done_base =                                        \
+                    (n00b_conduit_topic_base_t *)_done;                                        \
+                n00b_atomic_store(&_done_base->done_topic, nullptr);                          \
+                n00b_atomic_store(&_base->done_topic, _done);                                 \
+            }                                                                                  \
         }                                                                                      \
         return _tp;                                                                            \
     }

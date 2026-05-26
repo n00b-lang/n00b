@@ -165,6 +165,7 @@ n00b_conduit_topic_get(n00b_conduit_t *c, n00b_conduit_uri_t uri,
             n00b_atomic_store(&topic->pub_claim_id, (uint64_t)0);
             n00b_atomic_store(&topic->pub_waiters, (uint32_t)0);
             n00b_atomic_store(&topic->sub_list_head, (void *)nullptr);
+            n00b_atomic_store(&topic->done_topic, (void *)nullptr);
             n00b_atomic_store(&topic->state, N00B_CONDUIT_TOPIC_ACTIVE);
         }
         return n00b_result_ok(n00b_conduit_topic_base_t *, topic);
@@ -189,6 +190,12 @@ n00b_conduit_topic_get(n00b_conduit_t *c, n00b_conduit_uri_t uri,
     n00b_futex_init(&topic->pub_futex);
     n00b_atomic_store(&topic->pub_waiters, (uint32_t)0);
     n00b_atomic_store(&topic->debug_name, (const char *)nullptr);
+    n00b_atomic_store(&topic->sub_list_head, (void *)nullptr);
+    n00b_atomic_store(&topic->done_topic, (void *)nullptr);
+    topic->on_first_subscribe      = nullptr;
+    topic->on_first_subscribe_ctx  = nullptr;
+    topic->on_last_unsubscribe     = nullptr;
+    topic->on_last_unsubscribe_ctx = nullptr;
 
     _n00b_dict_untyped_put(dict, key, (void *)topic);
 
@@ -215,7 +222,9 @@ n00b_conduit_topic_close(n00b_conduit_topic_base_t *topic)
 
     if (done) {
         n00b_conduit_message_t(n00b_conduit_topic_base_t *) *dm =
-            n00b_alloc(n00b_conduit_message_t(n00b_conduit_topic_base_t *));
+            n00b_alloc_with_opts(
+                n00b_conduit_message_t(n00b_conduit_topic_base_t *),
+                &(n00b_alloc_opts_t){.allocator = topic->conduit->allocator});
         dm->header.type  = N00B_CONDUIT_MSG_USER;
         dm->header.topic = (n00b_conduit_topic_base_t *)done;
         dm->payload      = topic;

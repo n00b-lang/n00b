@@ -33,13 +33,14 @@ n00b_conduit_proc_topic(n00b_conduit_t *c, pid_t pid, uint32_t events)
     watch->next = nullptr;
 
     // Create or retrieve the topic for this pid.
-    n00b_result_t(n00b_conduit_topic_base_t *) topic_res =
-        n00b_conduit_topic_get(c, N00B_CONDUIT_URI_PROC(pid),
-                                sizeof(n00b_conduit_topic_t(n00b_conduit_proc_payload_t)));
-    if (n00b_result_is_err(topic_res)) {
-        return topic_res;
+    n00b_conduit_topic_t(n00b_conduit_proc_payload_t) *topic =
+        n00b_conduit_topic_init(n00b_conduit_proc_payload_t,
+                                c,
+                                N00B_CONDUIT_URI_PROC(pid));
+    if (!topic) {
+        return n00b_result_err(n00b_conduit_topic_base_t *, N00B_CONDUIT_ERR_ALLOC);
     }
-    watch->topic = n00b_result_get(topic_res);
+    watch->topic = (n00b_conduit_topic_base_t *)topic;
 
     // Register with I/O backend.
     if (!n00b_conduit_proc_register(c, watch)) {
@@ -132,7 +133,9 @@ n00b_conduit_proc_fire(n00b_conduit_proc_watch_t *watch,
     }
     n00b_conduit_publisher_t *pub = n00b_result_get(pub_res);
 
-    n00b_conduit_proc_msg_t *msg = n00b_alloc(n00b_conduit_proc_msg_t);
+    n00b_conduit_proc_msg_t *msg = n00b_alloc_with_opts(
+        n00b_conduit_proc_msg_t,
+        &(n00b_alloc_opts_t){.allocator = c->allocator});
 
     msg->header.type       = N00B_CONDUIT_MSG_USER;
     msg->header.topic      = watch->topic;

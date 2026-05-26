@@ -156,7 +156,9 @@ json_encode_transform(
         return n00b_option_none(n00b_buffer_t *);
 
     size_t json_len = strlen(json_text);
-    n00b_buffer_t *buf = n00b_buffer_from_bytes(json_text, (int64_t)json_len);
+    n00b_allocator_t *alloc = xf->conduit ? xf->conduit->allocator : nullptr;
+    n00b_buffer_t *buf = n00b_buffer_from_bytes(json_text, (int64_t)json_len,
+                                                .allocator = alloc);
 
     return n00b_option_set(n00b_buffer_t *, buf);
 }

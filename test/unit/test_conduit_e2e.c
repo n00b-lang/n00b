@@ -9,9 +9,18 @@
 #include <stdio.h>
 #include <assert.h>
 #include <string.h>
+#ifdef _WIN32
+#include <process.h>
+#define test_getpid _getpid
+#else
+#include <unistd.h>
+#define test_getpid getpid
+#endif
 
 #include "n00b.h"
 #include "conduit/conduit.h"
+#include "conduit/io.h"
+#include "conduit/proc_lifecycle.h"
 #include "core/alloc.h"
 #include "core/runtime.h"
 
@@ -156,6 +165,7 @@ test_multiple_subscribers(void)
 
     assert(m1 != nullptr && m1->payload.value == 99);
     assert(m2 != nullptr && m2->payload.value == 99);
+    assert(m1 != m2);
 
     n00b_conduit_sub_cancel(h1);
     n00b_conduit_sub_cancel(h2);
@@ -332,14 +342,52 @@ test_op_filter_delivery(void)
 }
 
 // ============================================================================
-// 7. Inbox backpressure — DROP_NEWEST
+// 7. One-shot subscription cleanup
+// ============================================================================
+
+static void
+test_one_shot_subscription_cleanup(void)
+{
+    n00b_conduit_t *c = make_conduit();
+    n00b_conduit_topic_t(test_payload_t) *topic = make_typed_topic(c, 206);
+
+    n00b_conduit_inbox_t(test_payload_t) *inbox =
+        n00b_alloc(n00b_conduit_inbox_t(test_payload_t));
+    n00b_conduit_inbox_init(test_payload_t, inbox, c,
+                            N00B_CONDUIT_BP_UNBOUNDED, 0);
+
+    n00b_conduit_sub_handle_t h =
+        n00b_conduit_subscribe(test_payload_t, topic, inbox,
+                               .flags = N00B_CONDUIT_SUB_F_ONE_SHOT);
+    assert(h != N00B_CONDUIT_INVALID_SUB_HANDLE);
+    assert(n00b_list_len(topic->subscriptions) == 1);
+
+    n00b_conduit_message_t(test_payload_t) *msg =
+        n00b_alloc(n00b_conduit_message_t(test_payload_t));
+    msg->header.type   = N00B_CONDUIT_MSG_READABLE;
+    msg->payload.value = 123;
+    n00b_conduit_topic_deliver_msg(test_payload_t, topic, msg,
+                                   N00B_CONDUIT_OP_ALL);
+
+    assert(n00b_conduit_sub_state(h) == N00B_CONDUIT_SUB_REMOVED);
+    assert(n00b_conduit_inbox_msg_count(test_payload_t, inbox) == 1);
+
+    n00b_conduit_sub_cancel(h);
+    assert(n00b_list_len(topic->subscriptions) == 0);
+
+    n00b_conduit_destroy(c);
+    printf("  [PASS] one-shot subscription cleanup\n");
+}
+
+// ============================================================================
+// 8. Inbox backpressure — DROP_NEWEST
 // ============================================================================
 
 static void
 test_inbox_backpressure_drop_newest(void)
 {
     n00b_conduit_t *c = make_conduit();
-    n00b_conduit_topic_t(test_payload_t) *topic = make_typed_topic(c, 206);
+    n00b_conduit_topic_t(test_payload_t) *topic = make_typed_topic(c, 207);
 
     n00b_conduit_inbox_t(test_payload_t) *inbox =
         n00b_alloc(n00b_conduit_inbox_t(test_payload_t));
@@ -376,6 +424,42 @@ test_inbox_backpressure_drop_newest(void)
 }
 
 // ============================================================================
+// 9. Process lifecycle topics initialize typed subscription storage
+// ============================================================================
+
+static void
+test_proc_topic_has_typed_subscriptions(void)
+{
+    n00b_conduit_t *c = make_conduit();
+
+    n00b_result_t(n00b_conduit_io_backend_t *) ir =
+        n00b_conduit_io_new_default(c);
+    assert(n00b_result_is_ok(ir));
+    n00b_conduit_io_backend_t *io = n00b_result_get(ir);
+
+    pid_t pid = (pid_t)test_getpid();
+    n00b_result_t(n00b_conduit_topic_base_t *) tr =
+        n00b_conduit_proc_topic(c, pid, N00B_CONDUIT_PROC_EXIT);
+    assert(n00b_result_is_ok(tr));
+
+    n00b_conduit_topic_t(n00b_conduit_proc_payload_t) *topic =
+        (n00b_conduit_topic_t(n00b_conduit_proc_payload_t) *)n00b_result_get(tr);
+    assert(topic->subscriptions.data != nullptr);
+    assert(n00b_list_len(topic->subscriptions) == 0);
+
+    n00b_conduit_proc_inbox_t *inbox = n00b_conduit_proc_inbox_new(c);
+    n00b_conduit_sub_handle_t h = n00b_conduit_proc_subscribe(topic, inbox);
+    assert(h != N00B_CONDUIT_INVALID_SUB_HANDLE);
+    assert(n00b_list_len(topic->subscriptions) == 1);
+
+    n00b_conduit_sub_cancel(h);
+    n00b_conduit_proc_unwatch(c, pid);
+    n00b_conduit_io_destroy(io);
+    n00b_conduit_destroy(c);
+    printf("  [PASS] proc topic typed subscriptions\n");
+}
+
+// ============================================================================
 // main
 // ============================================================================
 
@@ -400,7 +484,11 @@ main(int argc, char *argv[])
     fflush(stdout);
     test_op_filter_delivery();
     fflush(stdout);
+    test_one_shot_subscription_cleanup();
+    fflush(stdout);
     test_inbox_backpressure_drop_newest();
+    fflush(stdout);
+    test_proc_topic_has_typed_subscriptions();
     fflush(stdout);
 
     printf("All conduit e2e tests passed.\n");

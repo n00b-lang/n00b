@@ -265,7 +265,12 @@
         }                                                                                          \
         n00b_conduit_publisher_t *pub = n00b_result_get(pub_res);                                  \
                                                                                                    \
-        n00b_conduit_message_t(T) *msg = n00b_alloc(n00b_conduit_message_t(T));                    \
+        n00b_allocator_t *_msg_alloc = base->conduit                                              \
+            ? base->conduit->allocator                                                            \
+            : (n00b_allocator_t *)&n00b_get_runtime()->conduit_pool;                               \
+        n00b_conduit_message_t(T) *msg = n00b_alloc_with_opts(                                     \
+            n00b_conduit_message_t(T),                                                            \
+            &(n00b_alloc_opts_t){.allocator = _msg_alloc});                                       \
         msg->header.type       = N00B_CONDUIT_MSG_USER;                                            \
         msg->header.topic      = base;                                                             \
         msg->header.generation = n00b_conduit_topic_generation(base);                              \
@@ -326,6 +331,7 @@
             (n00b_conduit_topic_t(n00b_conduit_topic_base_t *) *)                                  \
                 n00b_atomic_load(&base->done_topic);                                              \
         n00b_conduit_inbox_t(n00b_conduit_topic_base_t *) *done_inbox = nullptr;                   \
+        n00b_conduit_sub_handle_t done_handle = N00B_CONDUIT_INVALID_SUB_HANDLE;                  \
                                                                                                    \
         if (done_tp) {                                                                             \
             n00b_allocator_t *_cp =                                                                \
@@ -336,7 +342,7 @@
             n00b_conduit_inbox_init(n00b_conduit_topic_base_t *,                                   \
                 done_inbox, base->conduit,                                                         \
                 N00B_CONDUIT_BP_DROP_NEWEST, 1);                                                   \
-            n00b_conduit_subscribe(n00b_conduit_topic_base_t *,                                    \
+            done_handle = n00b_conduit_subscribe(n00b_conduit_topic_base_t *,                      \
                 done_tp, done_inbox,                                                               \
                 .flags = N00B_CONDUIT_SUB_F_ONE_SHOT);                                             \
         }                                                                                          \
@@ -350,12 +356,20 @@
             pub_res = n00b_conduit_publish_try_claim(base);                                        \
         }                                                                                          \
         if (n00b_result_is_err(pub_res)) {                                                         \
+            if (done_handle != N00B_CONDUIT_INVALID_SUB_HANDLE) {                                  \
+                n00b_conduit_sub_cancel(done_handle);                                              \
+            }                                                                                      \
             return n00b_result_err(bool, n00b_result_get_err(pub_res));                             \
         }                                                                                          \
         n00b_conduit_publisher_t *pub = n00b_result_get(pub_res);                                  \
                                                                                                    \
         /* Allocate and fill the message. */                                                       \
-        n00b_conduit_message_t(T) *msg = n00b_alloc(n00b_conduit_message_t(T));                    \
+        n00b_allocator_t *_msg_alloc = base->conduit                                              \
+            ? base->conduit->allocator                                                            \
+            : (n00b_allocator_t *)&n00b_get_runtime()->conduit_pool;                               \
+        n00b_conduit_message_t(T) *msg = n00b_alloc_with_opts(                                     \
+            n00b_conduit_message_t(T),                                                            \
+            &(n00b_alloc_opts_t){.allocator = _msg_alloc});                                       \
         msg->header.type       = N00B_CONDUIT_MSG_USER;                                            \
         msg->header.topic      = base;                                                             \
         msg->header.generation = n00b_conduit_topic_generation(base);                              \
@@ -387,6 +401,9 @@
             }                                                                                      \
             n00b_conduit_inbox_pop_msg(                                                            \
                 n00b_conduit_topic_base_t *, done_inbox);                                          \
+        }                                                                                          \
+        if (done_handle != N00B_CONDUIT_INVALID_SUB_HANDLE) {                                      \
+            n00b_conduit_sub_cancel(done_handle);                                                  \
         }                                                                                          \
                                                                                                    \
         return n00b_result_ok(bool, true);                                                         \

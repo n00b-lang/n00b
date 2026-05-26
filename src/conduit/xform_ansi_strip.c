@@ -48,8 +48,10 @@ ansi_strip_transform(n00b_conduit_filter_t(n00b_buffer_t *) *xf,
         return n00b_option_none(n00b_buffer_t *);
 
     // Convert string to buffer for the output topic.
+    n00b_allocator_t *alloc = xf->conduit ? xf->conduit->allocator : nullptr;
     n00b_buffer_t *out =
-        n00b_buffer_from_bytes(stripped->data, (int64_t)stripped->u8_bytes);
+        n00b_buffer_from_bytes(stripped->data, (int64_t)stripped->u8_bytes,
+                               .allocator = alloc);
 
     return n00b_option_set(n00b_buffer_t *, out);
 }
