@@ -15,4 +15,8 @@
 @guidance Replace NULL with nullptr in all expression positions.
 
 <n00b_audit_v_null> ::= %"NULL"
+rewrite {
+    template: nullptr
+    description: NULL → nullptr (C23).
+}
 <provided_identifier> ::= <n00b_audit_v_null>

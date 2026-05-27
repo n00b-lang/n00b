@@ -284,6 +284,20 @@ test_fixture_null_json(void)
     assert(rid->string != nullptr);
     assert(strcmp(rid->string, "n00b.s2_1.null") == 0);
 
+    /* WP-007 Phase 2: the violation must carry a "rewrite" key whose
+     * value is the rewrite template ("nullptr"). The guidance_phase4
+     * fixture's rule 1 has a rewrite block in this WP. */
+    assert(json_object_has_key(v0, "rewrite"));
+    n00b_json_node_t *rwn = json_object_get(v0, "rewrite");
+    assert(rwn != nullptr);
+    assert(n00b_json_is_string(rwn));
+    assert(rwn->string != nullptr);
+    if (strcmp(rwn->string, "nullptr") != 0) {
+        fprintf(stderr,
+                "  expected rewrite=\"nullptr\"; got \"%s\"\n", rwn->string);
+    }
+    assert(strcmp(rwn->string, "nullptr") == 0);
+
     /* `summary.error_count` equals the violations-array length. */
     n00b_json_node_t *summary = json_object_get(root, "summary");
     assert(summary != nullptr);
@@ -377,6 +391,9 @@ test_fixture_nullptr_json(void)
     assert(!json_object_has_key(root, "severity"));
     assert(!json_object_has_key(summary, "severity"));
     assert(strstr(out, "\"severity\"") == nullptr);
+
+    /* Zero-violations envelope carries no "rewrite" anywhere either. */
+    assert(strstr(out, "\"rewrite\"") == nullptr);
 
     printf("  [PASS] fixture_nullptr json (exit=0, violations=0, no severity)\n");
 }

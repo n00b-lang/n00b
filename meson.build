@@ -879,6 +879,7 @@ foreach _ntest : [
     'engine_bulk',
     'cli',
     'cli_json',
+    'rewrite',
 ]
     _naudit_test_exe = executable(
         'test_naudit_' + _ntest,

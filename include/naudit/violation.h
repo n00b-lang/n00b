@@ -34,23 +34,44 @@
  *
  * Produced by `n00b_audit_engine_check_file`. Line and column are
  * 1-based and come from slay's `n00b_token_info_t.line` /
- * `.column` fields on the parse-tree's leftmost terminal leaf — never
- * invented numbers (per the cross-project numeric-claims rule).
+ * `.column` / `.endcol` fields on the parse-tree's terminal leaves
+ * (leftmost for start, rightmost for end) — never invented numbers
+ * (per the cross-project numeric-claims rule).
  *
  * Field meanings:
- *  - `file`    path to the source file the violation was found in
- *              (the same `path` `check_file` was called with).
- *  - `line`    1-based source line of the matched construct's first
- *              token.
- *  - `column`  1-based source column of the matched construct's first
- *              token.
- *  - `rule`    back-pointer to the matched rule (one of the
- *              `n00b_audit_rule_t *` entries in the guidance's
- *              `rules` list).
+ *  - `file`        path to the source file the violation was found
+ *                  in (the same `path` `check_file` was called with).
+ *  - `line`        1-based source line of the matched construct's
+ *                  first token.
+ *  - `column`      1-based source column of the matched construct's
+ *                  first token.
+ *  - `end_line`    1-based source line of the matched construct's
+ *                  last token. For Phase 2 auto-fix rules every
+ *                  match is single-token + single-line so this
+ *                  typically equals `line`.
+ *  - `end_column`  1-based source column ONE PAST the last byte of
+ *                  the matched construct (matches slay's
+ *                  `n00b_token_info_t.endcol` semantics — exclusive
+ *                  upper bound). Used by `--fix` to compute the
+ *                  byte span to splice.
+ *  - `rule`        back-pointer to the matched rule (one of the
+ *                  `n00b_audit_rule_t *` entries in the guidance's
+ *                  `rules` list).
+ *  - `rewrite`     suggested rewrite text from slay's
+ *                  `n00b_production_rewrite_text`, or nullptr when
+ *                  the matched production has no rewrite block
+ *                  attached. Rules 2/3/5/6 (malloc, attribute,
+ *                  va_list, libc_io) need human judgment, so they
+ *                  ship audit-only and leave this field nullptr;
+ *                  rules 1/4/7 (NULL, __typeof__, legacy spellings)
+ *                  populate it with the C23 standard spelling.
  */
 typedef struct {
     n00b_string_t     *file;
     int64_t            line;
     int64_t            column;
+    int64_t            end_line;
+    int64_t            end_column;
     n00b_audit_rule_t *rule;
+    n00b_string_t     *rewrite;
 } n00b_audit_violation_t;

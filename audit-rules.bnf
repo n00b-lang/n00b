@@ -24,6 +24,10 @@
 @guidance Replace NULL with nullptr in all expression positions.
 
 <n00b_audit_v_null> ::= %"NULL"
+rewrite {
+    template: nullptr
+    description: NULL → nullptr (C23).
+}
 <provided_identifier> ::= <n00b_audit_v_null>
 
 # -----------------------------------------------------------------
@@ -95,6 +99,10 @@
 @guidance Replace __typeof__ with typeof.
 
 <n00b_audit_v_typeof_legacy> ::= %"__typeof__"
+rewrite {
+    template: typeof
+    description: __typeof__ → typeof (C23).
+}
 <_kw_kw_typeof> ::= <n00b_audit_v_typeof_legacy>
 
 # -----------------------------------------------------------------
@@ -213,9 +221,25 @@
 @guidance Replace _Static_assert / __thread / __alignof__ / __alignas__ with their C23 spellings static_assert / thread_local / alignof / alignas.
 
 <n00b_audit_v_legacy_spellings> ::= %"_Static_assert"
+rewrite {
+    template: static_assert
+    description: _Static_assert → static_assert (C23).
+}
 <n00b_audit_v_legacy_spellings> ::= %"__thread"
+rewrite {
+    template: thread_local
+    description: __thread → thread_local (C23).
+}
 <n00b_audit_v_legacy_spellings> ::= %"__alignof__"
+rewrite {
+    template: alignof
+    description: __alignof__ → alignof (C23).
+}
 <n00b_audit_v_legacy_spellings> ::= %"__alignas__"
+rewrite {
+    template: alignas
+    description: __alignas__ → alignas (C23).
+}
 <_kw_kw_static_assert> ::= <n00b_audit_v_legacy_spellings>
 <_kw_kw_storage_class> ::= <n00b_audit_v_legacy_spellings>
 <provided_identifier> ::= <n00b_audit_v_legacy_spellings>

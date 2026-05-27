@@ -67,4 +67,14 @@
 
 <bnf_body> ::= <bnf_line>*
 
+# A `<bnf_line>` is either an unindented body line (`%BNF_LINE`) or
+# a continuation line that begins with whitespace (`%INDENT_LINE`).
+# Indented lines arise inside slay's leveled `rewrite { ... }` blocks
+# attached to productions (WP-007); the loader concatenates them into
+# the rule's `bnf_fragment` so slay's BNF tokenizer sees the rewrite
+# body as one contiguous span. Indented lines have their leading
+# horizontal whitespace stripped by the audit-rule-file tokenizer,
+# which is fine because slay's rewrite-block field parser also
+# strips per-field whitespace.
 <bnf_line> ::= %BNF_LINE %NEWLINE
+<bnf_line> ::= %INDENT_LINE %NEWLINE

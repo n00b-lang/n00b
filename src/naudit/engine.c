@@ -148,7 +148,9 @@
 #include "internal/slay/grammar_internal.h"
 #include "slay/n00b_parse.h"
 #include "slay/parse_tree.h"
+#include "slay/rewrite.h"
 #include "slay/token.h"
+#include "adt/tree.h"
 #include "text/strings/string_ops.h"
 #include "util/path.h"
 
@@ -409,22 +411,64 @@ n00b_audit_engine_check_file(n00b_audit_engine_t *engine,
             if (!match) {
                 continue;
             }
-            n00b_parse_tree_t *leaf = n00b_pt_first_token(match);
-            int64_t line = 0;
-            int64_t col  = 0;
-            if (leaf) {
-                n00b_token_info_t *tok = n00b_parse_node_token(leaf);
+            n00b_parse_tree_t *first_leaf = n00b_pt_first_token(match);
+            n00b_parse_tree_t *last_leaf  = n00b_pt_last_token(match);
+            int64_t line     = 0;
+            int64_t col      = 0;
+            int64_t end_line = 0;
+            int64_t end_col  = 0;
+            if (first_leaf) {
+                n00b_token_info_t *tok = n00b_parse_node_token(first_leaf);
                 if (tok) {
                     line = (int64_t)tok->line;
                     col  = (int64_t)tok->column;
                 }
             }
+            if (last_leaf) {
+                n00b_token_info_t *tok = n00b_parse_node_token(last_leaf);
+                if (tok) {
+                    end_line = (int64_t)tok->line;
+                    end_col  = (int64_t)tok->endcol;
+                }
+            }
+
+            /*
+             * WP-007 Phase 2: look up the matched node's production
+             * via the grammar; if the production carries a rewrite
+             * block, compute the suggested replacement text via
+             * slay's text-mode rewrite API.
+             *
+             * Best-effort: an err result from
+             * `n00b_production_rewrite_text` leaves `rewrite =
+             * nullptr` on the violation. The audit still emits the
+             * violation; the only loss is the `--fix` suggestion
+             * for that one match. (For Phase 2 the rules with
+             * rewrites have no captures and zero error paths in
+             * practice, so this path is defensive.)
+             */
+            n00b_string_t *rewrite_text = nullptr;
+            if (!n00b_tree_is_leaf(match)) {
+                n00b_nt_node_t *pn = &n00b_tree_node_value(match);
+                n00b_parse_rule_t *production =
+                    n00b_get_node_rule(engine->grammar, pn);
+                if (production
+                    && n00b_production_has_rewrite(production)) {
+                    n00b_result_t(n00b_string_t *) rr =
+                        n00b_production_rewrite_text(production, match);
+                    if (n00b_result_is_ok(rr)) {
+                        rewrite_text = n00b_result_get(rr);
+                    }
+                }
+            }
 
             n00b_audit_violation_t *v = n00b_alloc(n00b_audit_violation_t);
-            v->file   = path;
-            v->line   = line;
-            v->column = col;
-            v->rule   = rule;
+            v->file       = path;
+            v->line       = line;
+            v->column     = col;
+            v->end_line   = end_line;
+            v->end_column = end_col;
+            v->rule       = rule;
+            v->rewrite    = rewrite_text;
             n00b_list_push(*violations, v);
         }
     }

@@ -37,6 +37,8 @@
 
 #include "n00b.h"
 #include "core/alloc.h"
+#include "core/buffer.h"
+#include "core/file.h"
 #include "core/string.h"
 #include "adt/list.h"
 #include "adt/result.h"
@@ -95,6 +97,19 @@ build_cmdr(void)
                        n00b_string_from_cstr(
                            "Output format: 'terminal' (default) or 'json' (Phase 5+)."));
 
+    /*
+     * --fix (WP-007 Phase 2): when set, apply suggested rewrites
+     * in-place. The boolean shape uses `N00B_CMDR_TYPE_BOOL` with
+     * `takes_arg=false` — matches the slay-commander convention
+     * for valueless flags.
+     */
+    n00b_cmdr_add_flag(c, empty,
+                       n00b_string_from_cstr("--fix"),
+                       N00B_CMDR_TYPE_BOOL, false,
+                       n00b_string_from_cstr(
+                           "Apply suggested rewrites in-place "
+                           "(writes a `<file>.bak` backup first)."));
+
     n00b_cmdr_finalize(c);
     return c;
 }
@@ -140,6 +155,337 @@ build_cargv(int argc, n00b_string_t *argv[], int *argc_out)
     out[n] = nullptr;
     *argc_out = n;
     return out;
+}
+
+/* ---------------------------------------------------------------- */
+/* --fix application                                                */
+/* ---------------------------------------------------------------- */
+
+/*
+ * Compute the absolute byte offset of (line, col) in `src` (both
+ * 1-based). Returns -1 if the position is past EOF.
+ *
+ * Counts UTF-8 bytes, not code points — that matches slay's
+ * `n00b_token_info_t.column` semantics (which the c_tokenizer
+ * advances per byte, not per codepoint). For ASCII-only fixtures
+ * the distinction is moot; for non-ASCII source the column-as-byte
+ * convention is the engine's own convention and we follow it.
+ */
+static int64_t
+line_col_to_offset(const char *src, size_t src_len,
+                   int64_t line, int64_t col)
+{
+    if (line <= 0 || col <= 0) {
+        return -1;
+    }
+    int64_t cur_line = 1;
+    size_t  i        = 0;
+    while (cur_line < line && i < src_len) {
+        if (src[i] == '\n') {
+            cur_line++;
+        }
+        i++;
+    }
+    if (cur_line != line) {
+        return -1;
+    }
+    /* `col` is 1-based column on this line. Advance col-1 bytes. */
+    int64_t needed = col - 1;
+    int64_t advanced = 0;
+    while (advanced < needed && i < src_len && src[i] != '\n') {
+        i++;
+        advanced++;
+    }
+    if (advanced != needed) {
+        return -1;
+    }
+    return (int64_t)i;
+}
+
+/*
+ * One pending splice: byte span [start, end) -> `replacement`.
+ * Sort splices by `start` DESCENDING then apply so earlier offsets
+ * stay valid as we mutate from end to beginning.
+ */
+typedef struct {
+    int64_t        start;
+    int64_t        end;
+    n00b_string_t *replacement;
+} fix_splice_t;
+
+/*
+ * Simple in-place insertion sort of a fix_splice_t array, ASCENDING
+ * by `start`. n is small (per-file violation count — single digits
+ * in practice), so a quadratic sort is fine and dodges any libc-qsort
+ * dependency question.
+ */
+static void
+fix_splice_sort_asc(fix_splice_t *a, size_t n)
+{
+    for (size_t i = 1; i < n; i++) {
+        fix_splice_t key = a[i];
+        size_t       j   = i;
+        while (j > 0 && a[j - 1].start > key.start) {
+            a[j] = a[j - 1];
+            j--;
+        }
+        a[j] = key;
+    }
+}
+
+/*
+ * Read the file at `path` into a buffered string. Returns nullptr
+ * on any I/O failure. The returned buffer's `data` is GC-managed.
+ */
+static n00b_buffer_t *
+read_whole_file(n00b_string_t *path)
+{
+    auto fr = n00b_file_open(path, .kind = N00B_FILE_KIND_MMAP);
+    if (n00b_result_is_err(fr)) {
+        return nullptr;
+    }
+    n00b_file_t *f = n00b_result_get(fr);
+    auto br = n00b_file_as_buffer(f);
+    n00b_file_close(f);
+    if (n00b_result_is_err(br)) {
+        return nullptr;
+    }
+    /* Copy out so the lifetime is independent of the file handle. */
+    return n00b_buffer_copy(n00b_result_get(br));
+}
+
+/*
+ * Write `buf`'s contents to `path` (truncating). Returns true on
+ * success, false on any I/O failure.
+ */
+static bool
+write_whole_file(n00b_string_t *path, n00b_buffer_t *buf)
+{
+    auto fr = n00b_file_open(path, .mode = N00B_FILE_W,
+                              .kind = N00B_FILE_KIND_STREAM);
+    if (n00b_result_is_err(fr)) {
+        return false;
+    }
+    n00b_file_t *f  = n00b_result_get(fr);
+    size_t       n  = buf ? (size_t)buf->byte_len : 0;
+    bool         ok = true;
+    if (n > 0) {
+        auto wr = n00b_file_write(f, buf->data, n);
+        if (n00b_result_is_err(wr)) {
+            ok = false;
+        }
+    }
+    n00b_file_close(f);
+    return ok;
+}
+
+/*
+ * Apply all auto-fixable rewrites in one file. Pre-conditions:
+ *   - `violations_for_file` is a list of violations all carrying
+ *     the same `file` path.
+ *   - At least one entry has a non-null `rewrite`.
+ *
+ * Steps (matches phase2-plan.md § 5):
+ *   1. Read the source into memory.
+ *   2. Write `<file>.bak` verbatim copy.
+ *   3. Compute byte spans for each violation with a rewrite.
+ *      Skip (with stderr warning) any multi-line match — Phase 2
+ *      only handles single-line rewrites (DF-P resolution).
+ *   4. Sort by start_offset DESCENDING.
+ *   5. Splice from end to beginning.
+ *   6. Write the new content back to `file`.
+ *
+ * DF-O resolution (rewrite-application failure mode): if writing
+ * `<file>.bak` fails, abort before touching the original (clean
+ * fail). If the file write at step 6 fails after the .bak is on
+ * disk, the .bak is left in place and the function returns false;
+ * the caller emits a stderr diagnostic — the user can recover by
+ * `mv <file>.bak <file>`.
+ *
+ * Returns true on success and writes the applied count to
+ * `*applied_out`; returns false on any I/O failure.
+ */
+static bool
+apply_fixes_in_file(n00b_string_t                          *file,
+                    n00b_list_t(n00b_audit_violation_t *)  *violations_for_file,
+                    int                                   *applied_out)
+{
+    *applied_out = 0;
+
+    n00b_buffer_t *src = read_whole_file(file);
+    if (!src) {
+        return false;
+    }
+
+    /* Step 2: write <file>.bak as a verbatim copy. */
+    n00b_string_t *bak_path = n00b_cformat("«#».bak", file);
+    if (!write_whole_file(bak_path, src)) {
+        return false;
+    }
+
+    /* Step 3: compute byte spans. */
+    size_t cap_lists = (size_t)n00b_list_len(*violations_for_file);
+    fix_splice_t *splices = n00b_alloc_array(fix_splice_t, cap_lists);
+    size_t        nsplice = 0;
+
+    const char *data = src->data;
+    size_t      len  = (size_t)src->byte_len;
+
+    for (size_t i = 0; i < cap_lists; i++) {
+        n00b_audit_violation_t *v = n00b_list_get(*violations_for_file, i);
+        if (!v || !v->rewrite) {
+            continue;
+        }
+        /* DF-P: skip multi-line rewrites — Phase 2 doesn't handle
+         * them (all auto-fixable rules in the canonical guidance
+         * match single-token / single-line spans). */
+        if (v->end_line != v->line) {
+            n00b_eprintf(
+                "n00b-audit: skipping multi-line auto-fix at «#»:«#»:«#» (not supported in Phase 2)",
+                v->file, (int64_t)v->line, (int64_t)v->column);
+            continue;
+        }
+        int64_t s = line_col_to_offset(data, len, v->line, v->column);
+        int64_t e = line_col_to_offset(data, len, v->end_line, v->end_column);
+        if (s < 0 || e < 0 || e < s) {
+            n00b_eprintf(
+                "n00b-audit: skipping auto-fix at «#»:«#»:«#» (bad span)",
+                v->file, (int64_t)v->line, (int64_t)v->column);
+            continue;
+        }
+        splices[nsplice].start       = s;
+        splices[nsplice].end         = e;
+        splices[nsplice].replacement = v->rewrite;
+        nsplice++;
+    }
+
+    if (nsplice == 0) {
+        return true;
+    }
+
+    /* Step 4: sort by start ASC. The phase2-plan describes the
+     * algorithm as "sort DESC, apply end-to-start". Equivalent shape
+     * (chosen here for clarity): sort ASC, then build a fresh buffer
+     * left-to-right by walking the source, copying the unaffected
+     * runs between splices, and substituting at each splice. End
+     * result is identical. */
+    fix_splice_sort_asc(splices, nsplice);
+
+    n00b_buffer_t *out = n00b_buffer_empty();
+    int64_t cursor = 0;
+    for (size_t i = 0; i < nsplice; i++) {
+        int64_t s = splices[i].start;
+        int64_t e = splices[i].end;
+        if (s < cursor) {
+            /* Overlap — should not happen for Phase 2 rules. Skip. */
+            continue;
+        }
+        if (s > cursor) {
+            n00b_buffer_t *chunk = n00b_buffer_from_bytes(
+                (char *)(data + cursor), s - cursor);
+            n00b_buffer_concat(out, chunk);
+        }
+        n00b_buffer_t *repl = n00b_buffer_from_bytes(
+            splices[i].replacement->data,
+            (int64_t)splices[i].replacement->u8_bytes);
+        n00b_buffer_concat(out, repl);
+        cursor = e;
+    }
+    if (cursor < (int64_t)len) {
+        n00b_buffer_t *tail = n00b_buffer_from_bytes(
+            (char *)(data + cursor), (int64_t)len - cursor);
+        n00b_buffer_concat(out, tail);
+    }
+
+    /* Step 6: write back. */
+    if (!write_whole_file(file, out)) {
+        return false;
+    }
+    *applied_out = (int)nsplice;
+    return true;
+}
+
+/*
+ * Group violations by file and run `apply_fixes_in_file` per group.
+ * Emits the success report per the spec ("naudit: fixed N violation(s)
+ * in <file> (backup: <file>.bak)") to stderr. Returns ok-0 unless an
+ * I/O failure occurred (in which case the diagnostic is already
+ * emitted and we return ok-2 to mirror the W-4 internal-error path).
+ */
+static n00b_result_t(int)
+apply_fixes_dispatch(n00b_list_t(n00b_audit_violation_t *) *violations)
+{
+    size_t n = (size_t)n00b_list_len(*violations);
+    if (n == 0) {
+        return n00b_result_ok(int, 0);
+    }
+
+    /*
+     * Single-target-per-invocation CLI: Phase 2's `n00b-audit
+     * <file>` accepts exactly one positional, so every violation
+     * shares one `file` value. Group anyway (defensive — and a
+     * future multi-file invocation just works without changes).
+     */
+    n00b_list_t(n00b_string_t *) *files_seen =
+        n00b_alloc(n00b_list_t(n00b_string_t *));
+    *files_seen = n00b_list_new(n00b_string_t *);
+
+    for (size_t i = 0; i < n; i++) {
+        n00b_audit_violation_t *v = n00b_list_get(*violations, i);
+        if (!v || !v->file) {
+            continue;
+        }
+        bool   found = false;
+        size_t m     = (size_t)n00b_list_len(*files_seen);
+        for (size_t j = 0; j < m; j++) {
+            n00b_string_t *s = n00b_list_get(*files_seen, j);
+            if (s && n00b_unicode_str_eq(s, v->file)) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            n00b_list_push(*files_seen, v->file);
+        }
+    }
+
+    size_t nfiles = (size_t)n00b_list_len(*files_seen);
+    for (size_t f = 0; f < nfiles; f++) {
+        n00b_string_t *fpath = n00b_list_get(*files_seen, f);
+        if (!fpath) {
+            continue;
+        }
+        n00b_list_t(n00b_audit_violation_t *) *per_file =
+            n00b_alloc(n00b_list_t(n00b_audit_violation_t *));
+        *per_file = n00b_list_new(n00b_audit_violation_t *);
+        bool any_rewrite = false;
+        for (size_t i = 0; i < n; i++) {
+            n00b_audit_violation_t *v = n00b_list_get(*violations, i);
+            if (!v || !v->file) {
+                continue;
+            }
+            if (!n00b_unicode_str_eq(v->file, fpath)) {
+                continue;
+            }
+            n00b_list_push(*per_file, v);
+            if (v->rewrite && v->rewrite->u8_bytes > 0) {
+                any_rewrite = true;
+            }
+        }
+        if (!any_rewrite) {
+            continue;
+        }
+        int applied = 0;
+        if (!apply_fixes_in_file(fpath, per_file, &applied)) {
+            n00b_eprintf("n00b-audit: --fix failed to update «#»", fpath);
+            return n00b_result_ok(int, 2);
+        }
+        n00b_eprintf(
+            "n00b-audit: fixed «#» violation(s) in «#» (backup: «#».bak)",
+            (int64_t)applied, fpath, fpath);
+    }
+
+    return n00b_result_ok(int, 0);
 }
 
 /*
@@ -286,6 +632,20 @@ n00b_audit_run_cli(int argc, n00b_string_t *argv[])
                                  n00b_result_get_err(cr));
     }
     n00b_list_t(n00b_audit_violation_t *) *violations = n00b_result_get(cr);
+
+    /*
+     * --fix dispatch (WP-007 Phase 2). When set, skip the
+     * stdout-renderer and apply the rewrites in-place. Per the
+     * phase2-plan.md § 5 contract, --fix exits 0; the user re-runs
+     * without --fix to verify clean.
+     */
+    n00b_string_t *fix_flag = n00b_string_from_cstr("--fix");
+    bool want_fix = n00b_cmdr_flag_present(parse, fix_flag);
+    if (want_fix) {
+        n00b_result_t(int) fr = apply_fixes_dispatch(violations);
+        n00b_cmdr_result_free(parse);
+        return fr;
+    }
 
     /* Render — dispatch on `--format`. Both renderers share the
      * same return-shape contract; on err, emit a stderr diagnostic
