@@ -54,6 +54,14 @@
  *                    (nullable; nullptr means "all files").
  *  - `applies_to_exclude` file globs the rule skips
  *                    (nullable; nullptr means "no exclusions").
+ *  - `language`      (WP-009 Phase 1) list of language names the
+ *                    rule is scoped to. Populated from one or more
+ *                    `@language <name>` per-rule annotations.
+ *                    Empty / null = applies to every language
+ *                    whose grammar defines the rule's
+ *                    `violation_nt` (the engine still skips rules
+ *                    whose `violation_nt` is missing from the
+ *                    loaded grammar).
  */
 typedef struct {
     n00b_string_t                  *id;
@@ -67,4 +75,5 @@ typedef struct {
     n00b_string_t                  *guidance;
     n00b_list_t(n00b_string_t *)   *applies_to_include;
     n00b_list_t(n00b_string_t *)   *applies_to_exclude;
+    n00b_list_t(n00b_string_t *)   *language;
 } n00b_audit_rule_t;

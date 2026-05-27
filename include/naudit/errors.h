@@ -145,6 +145,19 @@
 #define N00B_AUDIT_ERR_ENGINE_BAD_ARGS         (-9105)
 
 /**
+ * @brief No language matches the audited file's extension.
+ *
+ * Returned by `n00b_audit_engine_check_file` (WP-009 Phase 1) when
+ * the engine's extension → language lookup (built-in registry +
+ * project overrides) yields no match for the file's extension.
+ * The engine cannot proceed because it has no grammar to parse
+ * against. Distinct from `TARGET_NOT_FOUND` so the caller's
+ * diagnostic does not misattribute a registry / configuration
+ * issue to a missing file.
+ */
+#define N00B_AUDIT_ERR_ENGINE_UNKNOWN_LANGUAGE (-9106)
+
+/**
  * @brief Argv parsing failed in the CLI driver.
  *
  * Returned by `n00b_audit_run_cli` when libn00b's `slay/commander.h`

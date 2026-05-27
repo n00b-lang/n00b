@@ -17,8 +17,10 @@ n00b_naudit_src = files(
     'cli.c',
     'engine.c',
     'guidance.c',
+    'languages.c',
     'module.c',
     'output.c',
     'output_json.c',
     'rule_file_tokenizer.c',
+    'tokenizer_registry.c',
 )

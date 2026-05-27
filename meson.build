@@ -872,6 +872,7 @@ naudit_test_c_args = (
 foreach _ntest : [
     'module',
     'guidance',
+    'languages',
     'reference_guidance',
     'engine',
     'engine_legacy',
