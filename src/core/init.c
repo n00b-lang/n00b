@@ -44,21 +44,30 @@ extern void n00b_mmaps_initialize(n00b_mmap_ctx_t *ctx);
 typedef n00b_option_t(n00b_runtime_t *) opt_rt_t;
 opt_rt_t n00b_default_runtime = n00b_option_none(n00b_runtime_t *);
 
+extern char **environ;
+
 static inline void
 setup_envp(n00b_runtime_t *rt, char *envp[])
 {
+    /* When the caller didn't pass envp explicitly, inherit the
+     * libc-visible environment so n00b_getenv() observes the same
+     * process state libc getenv() does. */
     if (envp == nullptr) {
-        rt->envp = n00b_array_checked_ptr(char *, 0, nullptr);
+        envp = environ;
+    }
+    if (envp == nullptr) {
+        rt->envp     = n00b_array_checked_ptr(char *, 0, nullptr);
+        rt->envp.len = 0;
         return;
     }
 
-    int   i = 0;
-    char *p = (char *)envp;
-    while (*p) {
+    int i = 0;
+    while (envp[i] != nullptr) {
         i++;
-        p++;
     }
-    rt->envp = n00b_array_checked_ptr(char *, i, envp);
+    rt->envp     = n00b_array_checked_ptr(char *, i, envp);
+    rt->envp.len = i;
+    environ      = envp;
 }
 
 #ifdef _WIN32

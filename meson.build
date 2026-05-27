@@ -768,6 +768,12 @@ array_test = executable('test_array',
 )
 test('array', array_test, suite: 'unit')
 
+env_test = executable('test_env',
+    ['test/unit/test_env.c'],
+    kwargs: test_common_kwargs,
+)
+test('env', env_test, suite: 'unit')
+
 chalk_module_test = executable('test_chalk_module',
     ['test/unit/test_chalk_module.c'],
     kwargs: test_common_kwargs,
