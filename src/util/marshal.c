@@ -688,7 +688,7 @@ emit_pspatch(n00b_marshal_ctx_t *ctx,
         marshal_set_error(&ctx->status,
                           &ctx->error,
                           marshal_status_from_static_identity(lookup),
-                          "portable static pointer identity failed validation");
+                          r"portable static pointer identity failed validation");
         return false;
     }
     if (range == nullptr || (uint64_t)(uintptr_t)range->start != ref->start) {
@@ -1461,7 +1461,7 @@ unmarshal_relink_records(n00b_unmarshal_ctx_t *ctx)
                 marshal_set_error(&ctx->status,
                                   &ctx->error,
                                   marshal_status_from_static_identity(lookup),
-                                  "portable static patch target failed validation");
+                                  r"portable static patch target failed validation");
                 return false;
             }
             if (range == nullptr) {
