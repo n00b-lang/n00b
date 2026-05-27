@@ -135,7 +135,8 @@ typedef struct n00b_http_url {
 extern n00b_result_t(n00b_http_url_t *)
 n00b_http_url_parse(n00b_string_t *url)
     _kargs {
-        n00b_allocator_t *allocator = nullptr;
+        n00b_allocator_t *allocator       = nullptr;
+        bool              allow_plain_http = false;
     };
 
 /** @brief Stable static string for a parser error code (no allocation). */

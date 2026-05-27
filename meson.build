@@ -774,6 +774,12 @@ env_test = executable('test_env',
 )
 test('env', env_test, suite: 'unit')
 
+http_client_plain_test = executable('test_http_client_plain',
+    ['test/unit/test_http_client_plain.c'],
+    kwargs: test_common_kwargs,
+)
+test('http_client_plain', http_client_plain_test, suite: 'unit')
+
 chalk_module_test = executable('test_chalk_module',
     ['test/unit/test_chalk_module.c'],
     kwargs: test_common_kwargs,
