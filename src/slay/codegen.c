@@ -142,6 +142,11 @@ static n00b_cg_val_t codegen_interface_decl(n00b_cg_session_t *s, n00b_parse_tre
 static n00b_cg_val_t codegen_callback_lit(n00b_cg_session_t *s, n00b_parse_tree_t *node);
 static n00b_cg_val_t codegen_extern_block(n00b_cg_session_t *s, n00b_parse_tree_t *node);
 static n00b_cg_val_t codegen_lock_attr_stmt(n00b_cg_session_t *s, n00b_parse_tree_t *node);
+static n00b_cg_val_t codegen_yield_stmt(n00b_cg_session_t *s, n00b_parse_tree_t *node);
+static n00b_cg_val_t codegen_expression_stmt(n00b_cg_session_t *s, n00b_parse_tree_t *node);
+static n00b_cg_val_t codegen_block_value_expr(n00b_cg_session_t *s, n00b_parse_tree_t *node);
+static n00b_cg_val_t codegen_if_value_expr(n00b_cg_session_t *s, n00b_parse_tree_t *node);
+static n00b_cg_val_t codegen_switch_value_expr(n00b_cg_session_t *s, n00b_parse_tree_t *node);
 static n00b_cg_val_t codegen_walk(n00b_cg_session_t *s, n00b_parse_tree_t *node);
 static n00b_class_layout_t *compute_class_layout(n00b_cg_session_t *s, n00b_scope_t *scope);
 static void                *n00b_builtin_obj_alloc(int64_t size);
@@ -321,6 +326,11 @@ n00b_cg_session_new(n00b_grammar_t *grammar) _kargs
         n00b_codegen_register(s, "callback-lit", codegen_callback_lit);
         n00b_codegen_register(s, "extern-block", codegen_extern_block);
         n00b_codegen_register(s, "lock-attr-stmt", codegen_lock_attr_stmt);
+        n00b_codegen_register(s, "yield-stmt", codegen_yield_stmt);
+        n00b_codegen_register(s, "expression-stmt", codegen_expression_stmt);
+        n00b_codegen_register(s, "block-value-expr", codegen_block_value_expr);
+        n00b_codegen_register(s, "if-value-expr", codegen_if_value_expr);
+        n00b_codegen_register(s, "switch-value-expr", codegen_switch_value_expr);
     }
 
     return s;
@@ -860,6 +870,49 @@ codegen_use_stmt(n00b_cg_session_t *s, n00b_parse_tree_t *node)
     (void)s;
     (void)node;
     return N00B_CG_VOID_VAL;
+}
+
+static n00b_cg_val_t
+codegen_yield_stmt(n00b_cg_session_t *s, n00b_parse_tree_t *node)
+{
+    if (s->reject_unconsumed_yield) {
+        codegen_error(s, node, "CG022", "yield value is not consumed in this context");
+        return N00B_CG_VOID_VAL;
+    }
+
+    size_t nc = n00b_pt_num_children(node);
+
+    for (size_t i = 0; i < nc; i++) {
+        n00b_parse_tree_t *child = n00b_pt_get_child(node, i);
+
+        if (child && !n00b_pt_is_token(child) && n00b_pt_is_nt(child, "expression")) {
+            return codegen_walk(s, child);
+        }
+    }
+
+    return N00B_CG_VOID_VAL;
+}
+
+static bool
+codegen_tree_contains_nt(n00b_parse_tree_t *node, const char *nt_name)
+{
+    if (!node || !nt_name || n00b_pt_is_token(node)) {
+        return false;
+    }
+
+    if (n00b_pt_is_nt(node, nt_name)) {
+        return true;
+    }
+
+    size_t nc = n00b_pt_num_children(node);
+
+    for (size_t i = 0; i < nc; i++) {
+        if (codegen_tree_contains_nt(n00b_pt_get_child(node, i), nt_name)) {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 static bool
@@ -1599,9 +1652,9 @@ codegen_parameter_block(n00b_cg_session_t *s, n00b_parse_tree_t *node)
                             .n_params    = 2);
         n00b_string_t *name     = codegen_parameter_display_name(node, local_name);
         n00b_cg_val_t  name_arg = (n00b_cg_val_t){
-            .kind     = N00B_CG_VAL_IMM,
-            .type_tag = N00B_CG_STRING,
-            .aux      = (uint64_t)(uintptr_t)name,
+             .kind     = N00B_CG_VAL_IMM,
+             .type_tag = N00B_CG_STRING,
+             .aux      = (uint64_t)(uintptr_t)name,
         };
         n00b_cg_val_t args[] = {name_arg, ok};
         n00b_cg_emit_call(s, "n00b_builtin_parameter_validate", args, 2, .ret = N00B_CG_VOID);
@@ -1781,7 +1834,7 @@ codegen_extern_block(n00b_cg_session_t *s, n00b_parse_tree_t *node)
 
     n00b_parse_tree_t *ret_tok = n00b_pt_first_token(type_nodes[n_types - 1]);
     char              *ret     = ret_tok ? codegen_dup_raw_text(n00b_pt_token_text(ret_tok),
-                                                                n00b_pt_token_text_len(ret_tok))
+                                               n00b_pt_token_text_len(ret_tok))
                                          : NULL;
 
     if (!name || !ret) {
@@ -2029,14 +2082,14 @@ typedef struct {
     bool               has_end;
 } codegen_index_info_t;
 
-static n00b_cg_val_t      codegen_branch(n00b_cg_session_t *s, n00b_cf_label_t *cf);
-static n00b_cg_val_t      codegen_loop(n00b_cg_session_t *s, n00b_cf_label_t *cf);
-static n00b_cg_val_t      codegen_jump(n00b_cg_session_t *s, n00b_cf_label_t *cf);
-static n00b_cg_val_t      codegen_assign(n00b_cg_session_t *s, n00b_cf_label_t *cf);
-static n00b_cg_val_t      codegen_varref(n00b_cg_session_t *s, n00b_cf_label_t *cf);
-static n00b_cg_val_t      codegen_switch(n00b_cg_session_t *s, n00b_cf_label_t *cf);
-static n00b_cg_val_t      codegen_unwrap_result(n00b_cg_session_t *s, n00b_cf_label_t *cf);
-static n00b_cg_val_t      codegen_call_cf(n00b_cg_session_t *s, n00b_cf_label_t *cf);
+static n00b_cg_val_t codegen_branch(n00b_cg_session_t *s, n00b_cf_label_t *cf);
+static n00b_cg_val_t codegen_loop(n00b_cg_session_t *s, n00b_cf_label_t *cf);
+static n00b_cg_val_t codegen_jump(n00b_cg_session_t *s, n00b_cf_label_t *cf);
+static n00b_cg_val_t codegen_assign(n00b_cg_session_t *s, n00b_cf_label_t *cf);
+static n00b_cg_val_t codegen_varref(n00b_cg_session_t *s, n00b_cf_label_t *cf);
+static n00b_cg_val_t codegen_switch(n00b_cg_session_t *s, n00b_cf_label_t *cf);
+static n00b_cg_val_t codegen_unwrap_result(n00b_cg_session_t *s, n00b_cf_label_t *cf);
+static n00b_cg_val_t codegen_call_cf(n00b_cg_session_t *s, n00b_cf_label_t *cf);
 static n00b_parse_tree_t *codegen_find_nt_deep(n00b_parse_tree_t *node, const char *nt_name);
 static bool               codegen_call_args_have_kwargs(n00b_parse_tree_t  *args_node,
                                                         n00b_parse_tree_t **kw_arg_out);
@@ -3403,31 +3456,816 @@ codegen_call_auto(n00b_cg_session_t *s, n00b_parse_tree_t *node, n00b_annotation
 // Control flow codegen
 // ============================================================================
 
-static n00b_cg_val_t
-codegen_branch(n00b_cg_session_t *s, n00b_cf_label_t *cf)
+static n00b_parse_tree_t *
+codegen_first_direct_nt_child(n00b_parse_tree_t *node, const char *nt_name)
 {
-    n00b_cg_val_t else_label = n00b_cg_label_new(s);
-    n00b_cg_val_t end_label  = n00b_cg_label_new(s);
+    if (!node || !nt_name || n00b_pt_is_token(node)) {
+        return NULL;
+    }
+
+    size_t nc = n00b_pt_num_children(node);
+
+    for (size_t i = 0; i < nc; i++) {
+        n00b_parse_tree_t *child = n00b_pt_get_child(node, i);
+
+        if (!child || n00b_pt_is_token(child)) {
+            continue;
+        }
+
+        if (n00b_pt_is_group(child)) {
+            n00b_parse_tree_t *found = codegen_first_direct_nt_child(child, nt_name);
+
+            if (found) {
+                return found;
+            }
+
+            continue;
+        }
+
+        if (n00b_pt_is_nt(child, nt_name)) {
+            return child;
+        }
+    }
+
+    return NULL;
+}
+
+static n00b_parse_tree_t *
+codegen_first_direct_nt_child_any(n00b_parse_tree_t *node, const char **nt_names, int n_names)
+{
+    if (!node || !nt_names || n_names <= 0 || n00b_pt_is_token(node)) {
+        return NULL;
+    }
+
+    size_t nc = n00b_pt_num_children(node);
+
+    for (size_t i = 0; i < nc; i++) {
+        n00b_parse_tree_t *child = n00b_pt_get_child(node, i);
+
+        if (!child || n00b_pt_is_token(child)) {
+            continue;
+        }
+
+        if (n00b_pt_is_group(child)) {
+            n00b_parse_tree_t *found
+                = codegen_first_direct_nt_child_any(child, nt_names, n_names);
+
+            if (found) {
+                return found;
+            }
+
+            continue;
+        }
+
+        for (int i_name = 0; i_name < n_names; i_name++) {
+            if (n00b_pt_is_nt(child, nt_names[i_name])) {
+                return child;
+            }
+        }
+    }
+
+    return NULL;
+}
+
+static bool
+codegen_is_nt_any(n00b_parse_tree_t *node, const char **nt_names, int n_names)
+{
+    if (!node || !nt_names || n_names <= 0 || n00b_pt_is_token(node)) {
+        return false;
+    }
+
+    for (int i = 0; i < n_names; i++) {
+        if (n00b_pt_is_nt(node, nt_names[i])) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static bool
+codegen_is_block_structure(n00b_parse_tree_t *node)
+{
+    if (!node || n00b_pt_is_token(node)) {
+        return false;
+    }
+
+    if (n00b_pt_is_group(node)) {
+        return true;
+    }
+
+    const char *names[] = {
+        "body",
+        "case-body",
+        "yielding-body",
+        "yielding-case-body",
+        "body-stmts",
+        "body-stmt-list",
+        "yielding-body-stmts",
+        "block-value-expr",
+    };
+
+    return codegen_is_nt_any(node, names, (int)(sizeof(names) / sizeof(names[0])));
+}
+
+static bool
+codegen_is_ignorable_block_child(n00b_parse_tree_t *node)
+{
+    if (!node || n00b_pt_is_token(node)) {
+        return true;
+    }
+
+    const char *names[] = {
+        "eos",
+        "block-start",
+        "block-end",
+    };
+
+    return codegen_is_nt_any(node, names, (int)(sizeof(names) / sizeof(names[0])));
+}
+
+static bool
+codegen_block_child_has_statement(n00b_parse_tree_t *node)
+{
+    if (!node || n00b_pt_is_token(node) || codegen_is_ignorable_block_child(node)) {
+        return false;
+    }
+
+    if (!codegen_is_block_structure(node)) {
+        return true;
+    }
+
+    size_t nc = n00b_pt_num_children(node);
+
+    for (size_t i = 0; i < nc; i++) {
+        if (codegen_block_child_has_statement(n00b_pt_get_child(node, i))) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static bool
+codegen_single_non_token_child(n00b_parse_tree_t *node,
+                               n00b_parse_tree_t **child_out,
+                               bool               *saw_token)
+{
+    if (child_out) {
+        *child_out = NULL;
+    }
+
+    if (saw_token) {
+        *saw_token = false;
+    }
+
+    if (!node || n00b_pt_is_token(node)) {
+        return false;
+    }
+
+    n00b_parse_tree_t *only = NULL;
+    size_t             nc   = n00b_pt_num_children(node);
+    int                seen = 0;
+
+    for (size_t i = 0; i < nc; i++) {
+        n00b_parse_tree_t *child = n00b_pt_get_child(node, i);
+
+        if (!child) {
+            continue;
+        }
+
+        if (n00b_pt_is_token(child)) {
+            if (saw_token) {
+                *saw_token = true;
+            }
+
+            continue;
+        }
+
+        only = child;
+        seen++;
+    }
+
+    if (seen != 1) {
+        return false;
+    }
+
+    if (child_out) {
+        *child_out = only;
+    }
+
+    return true;
+}
+
+static bool
+codegen_is_value_yield_expr(n00b_parse_tree_t *node)
+{
+    return n00b_pt_is_nt(node, "block-value-expr") || n00b_pt_is_nt(node, "if-value-expr")
+        || n00b_pt_is_nt(node, "switch-value-expr");
+}
+
+static bool
+codegen_tuple_or_paren_is_grouping(n00b_parse_tree_t *node, n00b_parse_tree_t **expr_out)
+{
+    if (expr_out) {
+        *expr_out = NULL;
+    }
+
+    if (!node || !n00b_pt_is_nt(node, "tuple-or-paren")) {
+        return false;
+    }
+
+    n00b_parse_tree_t *expr = NULL;
+    size_t             nc   = n00b_pt_num_children(node);
+
+    for (size_t i = 0; i < nc; i++) {
+        n00b_parse_tree_t *child = n00b_pt_get_child(node, i);
+
+        if (!child || n00b_pt_is_token(child)) {
+            continue;
+        }
+
+        if (n00b_pt_is_nt(child, "expr-comma-list") || n00b_pt_is_nt(child, "named-field-list")
+            || n00b_pt_is_nt(child, "type-spec")) {
+            return false;
+        }
+
+        if (n00b_pt_is_nt(child, "expression")) {
+            if (expr) {
+                return false;
+            }
+
+            expr = child;
+        }
+        else {
+            return false;
+        }
+    }
+
+    if (!expr) {
+        return false;
+    }
+
+    if (expr_out) {
+        *expr_out = expr;
+    }
+
+    return true;
+}
+
+static bool
+codegen_expression_stmt_has_direct_yield_value(n00b_parse_tree_t *node)
+{
+    n00b_parse_tree_t *cur = node;
+
+    while (cur && !n00b_pt_is_token(cur)) {
+        if (codegen_is_value_yield_expr(cur)) {
+            return true;
+        }
+
+        n00b_parse_tree_t *next = NULL;
+
+        if (codegen_tuple_or_paren_is_grouping(cur, &next)) {
+            cur = next;
+            continue;
+        }
+
+        bool saw_token = false;
+
+        if (!codegen_single_non_token_child(cur, &next, &saw_token) || saw_token) {
+            return false;
+        }
+
+        cur = next;
+    }
+
+    return false;
+}
+
+static bool
+codegen_tree_contains_statement_yield(n00b_parse_tree_t *node)
+{
+    if (!node || n00b_pt_is_token(node)) {
+        return false;
+    }
+
+    if (n00b_pt_is_nt(node, "yield-stmt")) {
+        return true;
+    }
+
+    if (n00b_pt_is_nt(node, "expression-stmt")) {
+        return codegen_expression_stmt_has_direct_yield_value(node);
+    }
+
+    if (codegen_is_value_yield_expr(node) || n00b_pt_is_nt(node, "return-stmt")
+        || n00b_pt_is_nt(node, "variable-decl") || n00b_pt_is_nt(node, "assign-stmt")
+        || n00b_pt_is_nt(node, "binop-assign-stmt") || n00b_pt_is_nt(node, "assert-stmt")) {
+        return false;
+    }
+
+    size_t nc = n00b_pt_num_children(node);
+
+    for (size_t i = 0; i < nc; i++) {
+        if (codegen_tree_contains_statement_yield(n00b_pt_get_child(node, i))) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static bool
+codegen_store_yield_value(n00b_cg_session_t  *s,
+                          n00b_parse_tree_t  *site,
+                          n00b_cg_val_t       value,
+                          n00b_cg_val_t      *result,
+                          n00b_cg_type_tag_t *result_type,
+                          bool               *have_result)
+{
+    if (value.kind == N00B_CG_VAL_VOID) {
+        return false;
+    }
+
+    if (!*have_result) {
+        *result      = n00b_cg_temp(s, value.type_tag);
+        *result_type = value.type_tag;
+        *have_result = true;
+    }
+    else if (value.type_tag != *result_type) {
+        codegen_error(s,
+                      site,
+                      "CG022",
+                      "yield arms in this block produce incompatible value types");
+        return false;
+    }
+
+    n00b_cg_store(s, *result, value);
+    return true;
+}
+
+static n00b_cg_val_t
+codegen_block_value(n00b_cg_session_t *s, n00b_parse_tree_t *block, bool *yielded);
+
+static n00b_cg_val_t
+codegen_statement_value(n00b_cg_session_t *s, n00b_parse_tree_t *node, bool *yielded)
+{
+    *yielded = false;
+
+    if (!node || n00b_pt_is_token(node)) {
+        return N00B_CG_VOID_VAL;
+    }
+
+    if (n00b_pt_is_group(node)) {
+        bool          saw_stmt     = false;
+        bool          last_yielded = false;
+        n00b_cg_val_t result       = N00B_CG_VOID_VAL;
+        size_t        nc           = n00b_pt_num_children(node);
+
+        for (size_t i = 0; i < nc; i++) {
+            bool          child_yielded = false;
+            n00b_cg_val_t child_val
+                = codegen_statement_value(s, n00b_pt_get_child(node, i), &child_yielded);
+
+            if (s->has_codegen_errors) {
+                break;
+            }
+
+            if (child_val.kind != N00B_CG_VAL_VOID) {
+                result = child_val;
+            }
+
+            if (child_yielded || child_val.kind != N00B_CG_VAL_VOID) {
+                saw_stmt     = true;
+                last_yielded = child_yielded;
+            }
+        }
+
+        *yielded = saw_stmt && last_yielded;
+        return *yielded ? result : N00B_CG_VOID_VAL;
+    }
+
+    if (n00b_pt_is_nt(node, "body-stmt")) {
+        size_t nc = n00b_pt_num_children(node);
+
+        for (size_t i = 0; i < nc; i++) {
+            n00b_parse_tree_t *child = n00b_pt_get_child(node, i);
+
+            if (!child || n00b_pt_is_token(child) || codegen_is_ignorable_block_child(child)) {
+                continue;
+            }
+
+            return codegen_statement_value(s, child, yielded);
+        }
+
+        return N00B_CG_VOID_VAL;
+    }
+
+    if (n00b_pt_is_nt(node, "yield-stmt")) {
+        n00b_cg_val_t result = codegen_walk(s, node);
+        *yielded             = result.kind != N00B_CG_VAL_VOID;
+        return result;
+    }
+
+    if (n00b_pt_is_nt(node, "expression-stmt")
+        && codegen_expression_stmt_has_direct_yield_value(node)) {
+        n00b_cg_val_t result = codegen_walk(s, node);
+        *yielded             = result.kind != N00B_CG_VAL_VOID;
+        return result;
+    }
+
+    const char *value_cf_names[] = {
+        "if-stmt",
+        "if-value-expr",
+        "switch-stmt",
+        "switch-value-expr",
+    };
+
+    if (codegen_is_nt_any(node,
+                          value_cf_names,
+                          (int)(sizeof(value_cf_names) / sizeof(value_cf_names[0])))) {
+        n00b_cg_val_t result = codegen_walk(s, node);
+        *yielded             = result.kind != N00B_CG_VAL_VOID;
+        return result;
+    }
+
+    n00b_cg_val_t result = codegen_walk(s, node);
+    *yielded             = false;
+    return result;
+}
+
+static n00b_cg_val_t
+codegen_block_sequence(n00b_cg_session_t *s,
+                       n00b_parse_tree_t *node,
+                       bool              *yielded,
+                       bool              *saw_stmt)
+{
+    *yielded  = false;
+    *saw_stmt = false;
+
+    if (!node || n00b_pt_is_token(node)) {
+        return N00B_CG_VOID_VAL;
+    }
+
+    if (!codegen_is_block_structure(node)) {
+        *saw_stmt = true;
+        return codegen_statement_value(s, node, yielded);
+    }
+
+    n00b_cg_val_t result = N00B_CG_VOID_VAL;
+    size_t        nc     = n00b_pt_num_children(node);
+    size_t        last_statement_child = SIZE_MAX;
+
+    for (size_t i = 0; i < nc; i++) {
+        if (codegen_block_child_has_statement(n00b_pt_get_child(node, i))) {
+            last_statement_child = i;
+        }
+    }
+
+    for (size_t i = 0; i < nc; i++) {
+        n00b_parse_tree_t *child = n00b_pt_get_child(node, i);
+
+        if (!child || n00b_pt_is_token(child) || codegen_is_ignorable_block_child(child)) {
+            continue;
+        }
+
+        bool          child_yielded  = false;
+        bool          child_saw_stmt = false;
+        n00b_cg_val_t child_val      = N00B_CG_VOID_VAL;
+        bool          saved_reject   = s->reject_unconsumed_yield;
+
+        if (i != last_statement_child) {
+            s->reject_unconsumed_yield = true;
+        }
+
+        if (codegen_is_block_structure(child)) {
+            child_val = codegen_block_sequence(s, child, &child_yielded, &child_saw_stmt);
+        }
+        else {
+            child_saw_stmt = true;
+            child_val      = codegen_statement_value(s, child, &child_yielded);
+        }
+
+        s->reject_unconsumed_yield = saved_reject;
+
+        if (s->has_codegen_errors) {
+            break;
+        }
+
+        if (!child_saw_stmt) {
+            continue;
+        }
+
+        *saw_stmt = true;
+        *yielded  = child_yielded;
+
+        if (child_val.kind != N00B_CG_VAL_VOID) {
+            result = child_val;
+        }
+    }
+
+    return *yielded ? result : N00B_CG_VOID_VAL;
+}
+
+static n00b_cg_val_t
+codegen_block_value(n00b_cg_session_t *s, n00b_parse_tree_t *block, bool *yielded)
+{
+    bool          saw_stmt = false;
+    n00b_cg_val_t result   = codegen_block_sequence(s, block, yielded, &saw_stmt);
+
+    if (!saw_stmt || !*yielded) {
+        *yielded = false;
+        return N00B_CG_VOID_VAL;
+    }
+
+    return result;
+}
+
+typedef struct {
+    n00b_parse_tree_t **elifs;
+    int                 n_elifs;
+    int                 elif_cap;
+    n00b_parse_tree_t *else_body;
+} codegen_elif_parts_t;
+
+static void
+codegen_elif_parts_push(codegen_elif_parts_t *parts, n00b_parse_tree_t *elif_node)
+{
+    if (parts->n_elifs >= parts->elif_cap) {
+        int new_cap = parts->elif_cap ? parts->elif_cap * 2 : 8;
+        n00b_parse_tree_t **new_elifs
+            = n00b_alloc_array(n00b_parse_tree_t *, (size_t)new_cap);
+
+        if (parts->elifs) {
+            memcpy(new_elifs, parts->elifs, sizeof(n00b_parse_tree_t *) * parts->n_elifs);
+        }
+
+        parts->elifs    = new_elifs;
+        parts->elif_cap = new_cap;
+    }
+
+    parts->elifs[parts->n_elifs++] = elif_node;
+}
+
+static n00b_parse_tree_t *
+codegen_else_clause_body(n00b_parse_tree_t *node)
+{
+    const char *body_names[] = {"body", "yielding-body"};
+
+    return codegen_first_direct_nt_child_any(node,
+                                             body_names,
+                                             (int)(sizeof(body_names) / sizeof(body_names[0])));
+}
+
+static void
+codegen_collect_elif_parts(n00b_parse_tree_t *node, codegen_elif_parts_t *parts)
+{
+    if (!node || !parts || n00b_pt_is_token(node)) {
+        return;
+    }
+
+    if (n00b_pt_is_nt(node, "elif-clause") || n00b_pt_is_nt(node, "yielding-elif-clause")) {
+        codegen_elif_parts_push(parts, node);
+        return;
+    }
+
+    if (n00b_pt_is_nt(node, "else-clause") || n00b_pt_is_nt(node, "yielding-else-clause")) {
+        parts->else_body = codegen_else_clause_body(node);
+        return;
+    }
+
+    if (!n00b_pt_is_group(node) && !n00b_pt_is_nt(node, "elif-chain")
+        && !n00b_pt_is_nt(node, "yielding-elif-chain")) {
+        return;
+    }
+
+    size_t nc = n00b_pt_num_children(node);
+
+    for (size_t i = 0; i < nc; i++) {
+        codegen_collect_elif_parts(n00b_pt_get_child(node, i), parts);
+    }
+}
+
+static n00b_cg_val_t
+codegen_elif_chain(n00b_cg_session_t *s,
+                   n00b_parse_tree_t *chain,
+                   bool              *yielded,
+                   bool               require_value)
+{
+    *yielded = false;
+
+    codegen_elif_parts_t parts = {0};
+    codegen_collect_elif_parts(chain, &parts);
+
+    if (parts.n_elifs == 0) {
+        if (parts.else_body) {
+            return codegen_block_value(s, parts.else_body, yielded);
+        }
+
+        return N00B_CG_VOID_VAL;
+    }
+
+    n00b_cg_val_t      result      = N00B_CG_VOID_VAL;
+    n00b_cg_type_tag_t result_type = N00B_CG_VOID;
+    bool               have_result = false;
+    bool               all_yield   = true;
+    n00b_cg_val_t      chain_end   = n00b_cg_label_new(s);
+
+    for (int i = 0; i < parts.n_elifs; i++) {
+        n00b_cf_label_t *cf         = n00b_codegen_cf_label(s, parts.elifs[i]);
+        n00b_cg_val_t    next_label = n00b_cg_label_new(s);
+
+        if (!cf || !cf->cond || !cf->then_body) {
+            all_yield = false;
+            continue;
+        }
+
+        n00b_cg_val_t cond = codegen_walk(s, cf->cond);
+
+        if (s->has_codegen_errors || cond.kind == N00B_CG_VAL_VOID) {
+            all_yield = false;
+            break;
+        }
+
+        n00b_cg_emit_bf(s, cond, next_label);
+
+        bool          arm_yielded = false;
+        n00b_cg_val_t arm_value   = codegen_block_value(s, cf->then_body, &arm_yielded);
+
+        if (arm_yielded) {
+            codegen_store_yield_value(s,
+                                      parts.elifs[i],
+                                      arm_value,
+                                      &result,
+                                      &result_type,
+                                      &have_result);
+        }
+        else {
+            all_yield = false;
+        }
+
+        n00b_cg_emit_jmp(s, chain_end);
+        n00b_cg_label_here(s, next_label);
+    }
+
+    if (parts.else_body) {
+        bool          else_yielded = false;
+        n00b_cg_val_t else_value   = codegen_block_value(s, parts.else_body, &else_yielded);
+
+        if (else_yielded) {
+            codegen_store_yield_value(s,
+                                      parts.else_body,
+                                      else_value,
+                                      &result,
+                                      &result_type,
+                                      &have_result);
+        }
+        else {
+            all_yield = false;
+        }
+    }
+    else {
+        all_yield = false;
+    }
+
+    n00b_cg_label_here(s, chain_end);
+
+    if (all_yield && have_result && !s->has_codegen_errors) {
+        *yielded = true;
+        return result;
+    }
+
+    if (require_value && !s->has_codegen_errors) {
+        codegen_error(s, chain, "CG022", "value-producing if does not yield on every path");
+    }
+
+    return N00B_CG_VOID_VAL;
+}
+
+static n00b_cg_val_t
+codegen_else_branch_value(n00b_cg_session_t *s,
+                          n00b_parse_tree_t *else_node,
+                          bool              *yielded,
+                          bool               require_value)
+{
+    *yielded = false;
+
+    if (!else_node) {
+        return N00B_CG_VOID_VAL;
+    }
+
+    if (n00b_pt_is_nt(else_node, "elif-chain")
+        || n00b_pt_is_nt(else_node, "yielding-elif-chain")) {
+        return codegen_elif_chain(s, else_node, yielded, require_value);
+    }
+
+    if (n00b_pt_is_nt(else_node, "else-clause")
+        || n00b_pt_is_nt(else_node, "yielding-else-clause")) {
+        n00b_parse_tree_t *body = codegen_else_clause_body(else_node);
+        return codegen_block_value(s, body, yielded);
+    }
+
+    return codegen_block_value(s, else_node, yielded);
+}
+
+static n00b_cg_val_t
+codegen_branch_common(n00b_cg_session_t *s, n00b_cf_label_t *cf, bool require_value)
+{
+    n00b_cg_val_t      else_label  = n00b_cg_label_new(s);
+    n00b_cg_val_t      end_label   = n00b_cg_label_new(s);
+    n00b_cg_val_t      result      = N00B_CG_VOID_VAL;
+    n00b_cg_type_tag_t result_type = N00B_CG_VOID;
+    bool               have_result = false;
 
     n00b_cg_val_t cond = codegen_walk(s, cf->cond);
 
+    if (s->has_codegen_errors || cond.kind == N00B_CG_VAL_VOID) {
+        return N00B_CG_VOID_VAL;
+    }
+
     n00b_cg_emit_bf(s, cond, else_label);
 
+    bool          then_yielded = false;
+    n00b_cg_val_t then_value   = N00B_CG_VOID_VAL;
+
     if (cf->then_body) {
-        codegen_walk(s, cf->then_body);
+        then_value = codegen_block_value(s, cf->then_body, &then_yielded);
+    }
+
+    if (then_yielded) {
+        codegen_store_yield_value(s,
+                                  cf->then_body,
+                                  then_value,
+                                  &result,
+                                  &result_type,
+                                  &have_result);
     }
 
     n00b_cg_emit_jmp(s, end_label);
 
     n00b_cg_label_here(s, else_label);
 
-    if (cf->else_body) {
-        codegen_walk(s, cf->else_body);
+    bool          else_yielded = false;
+    n00b_cg_val_t else_value
+        = codegen_else_branch_value(s, cf->else_body, &else_yielded, require_value);
+
+    if (else_yielded) {
+        codegen_store_yield_value(s,
+                                  cf->else_body,
+                                  else_value,
+                                  &result,
+                                  &result_type,
+                                  &have_result);
     }
 
     n00b_cg_label_here(s, end_label);
 
+    if (then_yielded && else_yielded && have_result && !s->has_codegen_errors) {
+        return result;
+    }
+
+    if (require_value && !s->has_codegen_errors) {
+        codegen_error(s, cf->self, "CG022", "value-producing if does not yield on every path");
+    }
+
     return N00B_CG_VOID_VAL;
+}
+
+static n00b_cg_val_t
+codegen_branch(n00b_cg_session_t *s, n00b_cf_label_t *cf)
+{
+    return codegen_branch_common(s, cf, false);
+}
+
+static n00b_cg_val_t
+codegen_block_value_expr(n00b_cg_session_t *s, n00b_parse_tree_t *node)
+{
+    bool          yielded = false;
+    bool          saved_reject = s->reject_unconsumed_yield;
+    s->reject_unconsumed_yield = false;
+    n00b_cg_val_t result       = codegen_block_value(s, node, &yielded);
+    s->reject_unconsumed_yield = saved_reject;
+
+    if (!yielded && !s->has_codegen_errors) {
+        codegen_error(s, node, "CG022", "block expression does not end with yield");
+    }
+
+    return result;
+}
+
+static n00b_cg_val_t
+codegen_if_value_expr(n00b_cg_session_t *s, n00b_parse_tree_t *node)
+{
+    n00b_cf_label_t *cf = n00b_codegen_cf_label(s, node);
+
+    if (!cf) {
+        return codegen_children_default(s, node);
+    }
+
+    bool          saved_reject = s->reject_unconsumed_yield;
+    s->reject_unconsumed_yield = false;
+    n00b_cg_val_t result       = codegen_branch_common(s, cf, true);
+    s->reject_unconsumed_yield = saved_reject;
+    return result;
 }
 
 // Check if a for-loop's condition is a range node (for x in start to end).
@@ -3556,6 +4394,21 @@ push_loop(n00b_cg_session_t *s, n00b_cg_val_t break_label, n00b_cg_val_t continu
     };
 }
 
+static void
+codegen_loop_body(n00b_cg_session_t *s, n00b_parse_tree_t *body)
+{
+    if (!body) {
+        return;
+    }
+
+    bool yielded = false;
+    (void)codegen_block_value(s, body, &yielded);
+
+    if (yielded && !s->has_codegen_errors) {
+        codegen_error(s, body, "CG022", "loop body cannot yield a value");
+    }
+}
+
 static n00b_cg_val_t
 codegen_loop(n00b_cg_session_t *s, n00b_cf_label_t *cf)
 {
@@ -3595,10 +4448,7 @@ codegen_loop(n00b_cg_session_t *s, n00b_cf_label_t *cf)
         n00b_cg_val_t cond = n00b_cg_emit_binop(s, N00B_CG_OP_LT, loop_var, end_tmp);
         n00b_cg_emit_bf(s, cond, break_label);
 
-        // Body.
-        if (cf->then_body) {
-            codegen_walk(s, cf->then_body);
-        }
+        codegen_loop_body(s, cf->then_body);
 
         // Continue: increment and jump to test.
         n00b_cg_label_here(s, continue_label);
@@ -3626,9 +4476,7 @@ codegen_loop(n00b_cg_session_t *s, n00b_cf_label_t *cf)
         n00b_cg_emit_bf(s, cond, break_label);
     }
 
-    if (cf->then_body) {
-        codegen_walk(s, cf->then_body);
-    }
+    codegen_loop_body(s, cf->then_body);
 
     n00b_cg_emit_jmp(s, continue_label);
 
@@ -4617,10 +5465,10 @@ codegen_call_cf(n00b_cg_session_t *s, n00b_cf_label_t *cf)
                                     .n_params    = 1);
                 n00b_cg_val_t size_arg = _n00b_cg_const_i64(s, (int64_t)layout->instance_size);
                 n00b_cg_val_t obj      = n00b_cg_emit_call(s,
-                                                           "n00b_builtin_obj_alloc",
-                                                           &size_arg,
-                                                           1,
-                                                           .ret = N00B_CG_I64);
+                                                      "n00b_builtin_obj_alloc",
+                                                      &size_arg,
+                                                      1,
+                                                      .ret = N00B_CG_I64);
                 obj.type_tag           = N00B_CG_PTR;
 
                 if (layout->has_init) {
@@ -4909,6 +5757,11 @@ codegen_typeof_case_body(n00b_cg_session_t *s, n00b_parse_tree_t *case_block)
     }
 
     if (body) {
+        if (codegen_tree_contains_statement_yield(body)) {
+            codegen_error(s, body, "CG022", "typeof case body cannot yield a value");
+            return;
+        }
+
         codegen_walk(s, body);
     }
 }
@@ -4937,31 +5790,78 @@ codegen_typeof(n00b_cg_session_t *s, n00b_cf_label_t *cf)
     return N00B_CG_VOID_VAL;
 }
 
-// Forward: walk a branch-list node recursively to emit case arms.
-static void codegen_switch_branch_list(n00b_cg_session_t *s,
-                                       n00b_parse_tree_t *branch_list,
-                                       n00b_cg_val_t      switch_val,
-                                       n00b_cg_val_t      end_label);
+typedef struct {
+    n00b_cg_val_t      result;
+    n00b_cg_type_tag_t result_type;
+    bool               have_result;
+    bool               all_yield;
+} codegen_switch_value_state_t;
 
-static void
-codegen_switch_case_block(n00b_cg_session_t *s,
-                          n00b_parse_tree_t *case_block,
-                          n00b_cg_val_t      switch_val,
-                          n00b_cg_val_t      end_label,
-                          n00b_cg_val_t      next_label)
+static n00b_parse_tree_t *
+codegen_switch_case_body(n00b_parse_tree_t *case_block)
 {
-    // <switch-case-block> ::= <case-expr-list> <case-body>
-    //                       | <case-expr-list> <body>
-    // First non-token child is the case-expr-list, second is body.
-    n00b_parse_tree_t *expr_list = switch_first_nt_child(case_block, "case-expr-list");
-    n00b_parse_tree_t *body      = switch_first_nt_child(case_block, "case-body");
+    const char *body_names[] = {
+        "case-body",
+        "body",
+        "yielding-case-body",
+        "yielding-body",
+    };
 
-    if (!body) {
-        body = switch_first_nt_child(case_block, "body");
+    return codegen_first_direct_nt_child_any(case_block,
+                                             body_names,
+                                             (int)(sizeof(body_names) / sizeof(body_names[0])));
+}
+
+static n00b_parse_tree_t *
+codegen_switch_branch_case_block(n00b_parse_tree_t *branch_list, const char *case_block_name)
+{
+    n00b_parse_tree_t *case_block = codegen_first_direct_nt_child(branch_list, case_block_name);
+
+    if (case_block) {
+        return case_block;
     }
 
-    // Evaluate case expressions and emit comparisons.
-    // Each case-expr-item may be a simple expression or a range.
+    n00b_parse_tree_t *prefix
+        = codegen_first_direct_nt_child(branch_list, "switch-value-case-prefix");
+
+    if (!prefix) {
+        return NULL;
+    }
+
+    return codegen_first_direct_nt_child(prefix, case_block_name);
+}
+
+static void
+codegen_switch_record_arm(n00b_cg_session_t            *s,
+                          n00b_parse_tree_t            *site,
+                          n00b_cg_val_t                 value,
+                          bool                          arm_yielded,
+                          codegen_switch_value_state_t *state)
+{
+    if (!arm_yielded) {
+        state->all_yield = false;
+        return;
+    }
+
+    codegen_store_yield_value(s,
+                              site,
+                              value,
+                              &state->result,
+                              &state->result_type,
+                              &state->have_result);
+}
+
+static void
+codegen_switch_case_block(n00b_cg_session_t            *s,
+                          n00b_parse_tree_t            *case_block,
+                          n00b_cg_val_t                 switch_val,
+                          n00b_cg_val_t                 end_label,
+                          n00b_cg_val_t                 next_label,
+                          codegen_switch_value_state_t *state)
+{
+    n00b_parse_tree_t *expr_list = codegen_first_direct_nt_child(case_block, "case-expr-list");
+    n00b_parse_tree_t *body      = codegen_switch_case_body(case_block);
+
     n00b_cg_val_t match_label = n00b_cg_label_new(s);
 
     if (expr_list) {
@@ -4975,40 +5875,52 @@ codegen_switch_case_block(n00b_cg_session_t *s,
     n00b_cg_label_here(s, match_label);
 
     if (body) {
-        codegen_walk(s, body);
+        bool          yielded = false;
+        n00b_cg_val_t value   = codegen_block_value(s, body, &yielded);
+        codegen_switch_record_arm(s, body, value, yielded, state);
+    }
+    else {
+        state->all_yield = false;
     }
 
     n00b_cg_emit_jmp(s, end_label);
 }
 
 static void
-codegen_switch_branch_list(n00b_cg_session_t *s,
-                           n00b_parse_tree_t *branch_list,
-                           n00b_cg_val_t      switch_val,
-                           n00b_cg_val_t      end_label)
+codegen_switch_branch_list(n00b_cg_session_t            *s,
+                           n00b_parse_tree_t            *branch_list,
+                           n00b_cg_val_t                 switch_val,
+                           n00b_cg_val_t                 end_label,
+                           const char                   *case_block_name,
+                           const char                   *branch_list_name,
+                           codegen_switch_value_state_t *state)
 {
-    // <branch-list> ::= <eos>* %"case" <switch-case-block>
-    // <branch-list> ::= <eos>* %"case" <switch-case-block> <branch-list>
-    // Children: some tokens (eos, "case"), then a <switch-case-block>,
-    // then optionally another <branch-list>.
-    n00b_parse_tree_t *case_block  = switch_first_nt_child(branch_list, "switch-case-block");
-    n00b_parse_tree_t *next_branch = switch_first_nt_child(branch_list, "branch-list");
+    n00b_parse_tree_t *case_block
+        = codegen_switch_branch_case_block(branch_list, case_block_name);
+    n00b_parse_tree_t *next_branch
+        = codegen_first_direct_nt_child(branch_list, branch_list_name);
 
     n00b_cg_val_t next_label = n00b_cg_label_new(s);
 
     if (case_block) {
-        codegen_switch_case_block(s, case_block, switch_val, end_label, next_label);
+        codegen_switch_case_block(s, case_block, switch_val, end_label, next_label, state);
     }
 
     n00b_cg_label_here(s, next_label);
 
     if (next_branch) {
-        codegen_switch_branch_list(s, next_branch, switch_val, end_label);
+        codegen_switch_branch_list(s,
+                                   next_branch,
+                                   switch_val,
+                                   end_label,
+                                   case_block_name,
+                                   branch_list_name,
+                                   state);
     }
 }
 
 static n00b_cg_val_t
-codegen_switch(n00b_cg_session_t *s, n00b_cf_label_t *cf)
+codegen_switch_common(n00b_cg_session_t *s, n00b_cf_label_t *cf, bool require_value)
 {
     if (cf->then_body && n00b_pt_is_nt(cf->then_body, "typeof-cases")) {
         return codegen_typeof(s, cf);
@@ -5021,36 +5933,92 @@ codegen_switch(n00b_cg_session_t *s, n00b_cf_label_t *cf)
         switch_val = codegen_walk(s, cf->cond);
     }
 
-    n00b_cg_val_t end_label = n00b_cg_label_new(s);
+    if (s->has_codegen_errors || switch_val.kind == N00B_CG_VAL_VOID) {
+        return N00B_CG_VOID_VAL;
+    }
+
+    n00b_cg_val_t                end_label = n00b_cg_label_new(s);
+    codegen_switch_value_state_t state     = {
+            .result      = N00B_CG_VOID_VAL,
+            .result_type = N00B_CG_VOID,
+            .all_yield   = true,
+    };
 
     if (cf->then_body) {
-        // <switch-cases> ::= <branch-list> <eos>* <case-else>?
-        n00b_parse_tree_t *branch_list = switch_first_nt_child(cf->then_body, "branch-list");
-        n00b_parse_tree_t *case_else   = switch_first_nt_child(cf->then_body, "case-else");
+        bool        value_switch = n00b_pt_is_nt(cf->then_body, "switch-value-cases");
+        const char *branch_list_name
+            = value_switch ? "switch-value-branch-list" : "branch-list";
+        const char *case_block_name
+            = value_switch ? "switch-value-case-block" : "switch-case-block";
+        const char *else_name = value_switch ? "switch-value-else" : "case-else";
+
+        n00b_parse_tree_t *branch_list
+            = codegen_first_direct_nt_child(cf->then_body, branch_list_name);
+        n00b_parse_tree_t *case_else = codegen_first_direct_nt_child(cf->then_body, else_name);
 
         if (branch_list) {
-            codegen_switch_branch_list(s, branch_list, switch_val, end_label);
+            codegen_switch_branch_list(s,
+                                       branch_list,
+                                       switch_val,
+                                       end_label,
+                                       case_block_name,
+                                       branch_list_name,
+                                       &state);
+        }
+        else {
+            state.all_yield = false;
         }
 
         if (case_else) {
-            // <case-else> ::= %"else" <case-body> | %"else" <body>
-            // Walk children, emit the body.
-            size_t enc = n00b_pt_num_children(case_else);
-
-            for (size_t i = 0; i < enc; i++) {
-                n00b_parse_tree_t *child = n00b_pt_get_child(case_else, i);
-
-                if (!n00b_pt_is_token(child)) {
-                    codegen_walk(s, child);
-                    break;
-                }
-            }
+            bool               yielded = false;
+            n00b_parse_tree_t *body    = codegen_switch_case_body(case_else);
+            n00b_cg_val_t      value   = codegen_block_value(s, body, &yielded);
+            codegen_switch_record_arm(s, body ? body : case_else, value, yielded, &state);
         }
+        else {
+            state.all_yield = false;
+        }
+    }
+    else {
+        state.all_yield = false;
     }
 
     n00b_cg_label_here(s, end_label);
 
+    if (state.all_yield && state.have_result && !s->has_codegen_errors) {
+        return state.result;
+    }
+
+    if (require_value && !s->has_codegen_errors) {
+        codegen_error(s,
+                      cf->self,
+                      "CG022",
+                      "value-producing switch does not yield on every path");
+    }
+
     return N00B_CG_VOID_VAL;
+}
+
+static n00b_cg_val_t
+codegen_switch(n00b_cg_session_t *s, n00b_cf_label_t *cf)
+{
+    return codegen_switch_common(s, cf, false);
+}
+
+static n00b_cg_val_t
+codegen_switch_value_expr(n00b_cg_session_t *s, n00b_parse_tree_t *node)
+{
+    n00b_cf_label_t *cf = n00b_codegen_cf_label(s, node);
+
+    if (!cf) {
+        return codegen_children_default(s, node);
+    }
+
+    bool          saved_reject = s->reject_unconsumed_yield;
+    s->reject_unconsumed_yield = false;
+    n00b_cg_val_t result       = codegen_switch_common(s, cf, true);
+    s->reject_unconsumed_yield = saved_reject;
+    return result;
 }
 
 // ============================================================================
@@ -6686,7 +7654,26 @@ found_mangled:;
     n00b_cg_val_t body_result = N00B_CG_VOID_VAL;
 
     if (body_node) {
-        body_result = codegen_walk(s, body_node);
+        bool body_has_yield = codegen_tree_contains_statement_yield(body_node);
+
+        if (body_has_yield) {
+            bool body_yielded = false;
+            bool saved_reject = s->reject_unconsumed_yield;
+
+            s->reject_unconsumed_yield = ret_type == N00B_CG_VOID;
+            body_result                = codegen_block_value(s, body_node, &body_yielded);
+            s->reject_unconsumed_yield = saved_reject;
+
+            if (ret_type != N00B_CG_VOID && !body_yielded && !s->has_codegen_errors) {
+                codegen_error(s,
+                              body_node,
+                              "CG022",
+                              "value-producing function does not yield on every path");
+            }
+        }
+        else {
+            body_result = codegen_walk(s, body_node);
+        }
     }
 
     if (body_result.kind != N00B_CG_VAL_VOID) {
@@ -6985,10 +7972,10 @@ codegen_postfix_index(n00b_cg_session_t *s, n00b_parse_tree_t *node)
         n00b_cg_val_t index_tag = _n00b_cg_const_i64(s, (int64_t)index.type_tag);
         n00b_cg_val_t args[]    = {container, index, index_tag};
         result                  = n00b_cg_emit_call(s,
-                                                    "n00b_builtin_dict_get_value_payload",
-                                                    args,
-                                                    3,
-                                                    .ret = N00B_CG_I64);
+                                   "n00b_builtin_dict_get_value_payload",
+                                   args,
+                                   3,
+                                   .ret = N00B_CG_I64);
     }
     else {
         n00b_cg_type_tag_t get_pt[] = {N00B_CG_STRING, N00B_CG_I64};
@@ -7027,6 +8014,28 @@ codegen_children_default(n00b_cg_session_t *s, n00b_parse_tree_t *node)
         if (val.kind != N00B_CG_VAL_VOID) {
             result = val;
         }
+    }
+
+    return result;
+}
+
+static n00b_cg_val_t
+codegen_expression_stmt(n00b_cg_session_t *s, n00b_parse_tree_t *node)
+{
+    bool saved_reject = s->reject_unconsumed_yield;
+
+    if (!saved_reject) {
+        return codegen_children_default(s, node);
+    }
+
+    s->reject_unconsumed_yield = true;
+    n00b_cg_val_t result       = codegen_children_default(s, node);
+    s->reject_unconsumed_yield = saved_reject;
+
+    if (!s->has_codegen_errors && result.kind != N00B_CG_VAL_VOID
+        && codegen_expression_stmt_has_direct_yield_value(node)) {
+        codegen_error(s, node, "CG022", "yield value is not consumed in this context");
+        return N00B_CG_VOID_VAL;
     }
 
     return result;
@@ -7786,7 +8795,10 @@ n00b_cg_emit_func_from_tree(n00b_cg_session_t *s,
 
     n00b_cg_begin_func(s, func_name, .ret = ret_type);
 
-    n00b_cg_val_t result = n00b_codegen_lower(s, tree);
+    bool saved_reject = s->reject_unconsumed_yield;
+    s->reject_unconsumed_yield = true;
+    n00b_cg_val_t result       = n00b_codegen_lower(s, tree);
+    s->reject_unconsumed_yield = saved_reject;
 
     // Report the type of the last expression to the caller.
     if (kargs->result_type) {
@@ -7983,10 +8995,10 @@ n00b_cg_session_eval_tree(n00b_cg_session_t *s, n00b_parse_tree_t *tree) _kargs
     // Emit the tree as a function.
     n00b_cg_type_tag_t last_type = N00B_CG_VOID;
     bool               emit_ok   = n00b_cg_emit_func_from_tree(s,
-                                                               tree,
-                                                               fname,
-                                                               .ret         = N00B_CG_I64,
-                                                               .result_type = &last_type);
+                                               tree,
+                                               fname,
+                                               .ret         = N00B_CG_I64,
+                                               .result_type = &last_type);
 
     if (kargs->out_type) {
         *kargs->out_type = last_type;

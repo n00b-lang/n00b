@@ -1,0 +1,12 @@
+func pick(x: int) -> int {
+  if x == 1 {
+    yield 10
+  } elif x == 2 {
+    yield 20
+  } else {
+    yield 30
+  }
+}
+
+print(pick(2))
+print(pick(3))

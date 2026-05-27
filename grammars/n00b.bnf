@@ -44,7 +44,10 @@
 # Bodies always create a nested (block) scope.
 
 <body> @scope("block") ::= <block-start> <body-stmts>? <block-end>
-<body-stmts>           ::= <body-stmt> (<eos>+ <body-stmt>)*
+<body-stmts> @infer("$0") ::= <yield-stmt>
+<body-stmts>              ::= <body-stmt-list>
+<body-stmts> @infer("$2") ::= <body-stmt-list> <eos>+ <yield-stmt>
+<body-stmt-list>          ::= <body-stmt> (<eos>+ <body-stmt>)*
 <body-stmt>            ::=  <block>
                          | <if-stmt>
                          | <for-stmt>
@@ -72,7 +75,7 @@
 # case bodies do not need to end in a block, it's fine to use C-like colon blocks.
 # ============================================================================
 
-<case-body> @scope("block") ::= %":" <eos>? <body-stmt> (<eos>+ <body-stmt>)* <eos>*
+<case-body> @scope("block") ::= %":" <eos>? <body-stmts> <eos>*
 
 # ============================================================================
 # Labeled loops
@@ -95,6 +98,20 @@
 
 <elif-clause> @branch($1, $2) ::= %"elif" <expression> <body>
 <else-clause> ::= %"else" <body>
+
+<if-value-expr> @scope("if") @branch($1, $2, $3) @infer("$1 unify $2") ::=
+       %"if" <expression> <yielding-body> <yielding-elif-chain>
+
+<yielding-body> @scope("block") @infer("$1") ::= <block-start> <yielding-body-stmts> <block-end>
+
+<yielding-body-stmts> @infer("$0") ::= <yield-stmt>
+<yielding-body-stmts> @infer("$2") ::= <body-stmt-list> <eos>+ <yield-stmt>
+
+<yielding-elif-chain> @infer("$0") ::= <yielding-else-clause>
+<yielding-elif-chain> @infer("$0 unify $1") ::= <yielding-elif-clause> <yielding-elif-chain>
+
+<yielding-elif-clause> @branch($1, $2) @infer("$1") ::= %"elif" <expression> <yielding-body>
+<yielding-else-clause> @infer("$0") ::= %"else" <yielding-body>
 
 # ============================================================================
 # For loop
@@ -181,6 +198,26 @@
 <case-else> ::= %"else" <case-body>
               | %"else" <body>
 
+<switch-value-expr> @scope("switch") @switch($1, $3) @infer("$2") ::=
+       %"switch" <expression> <block-start> <switch-value-cases> <block-end>
+
+<switch-value-cases> @infer("$0 unify $1") ::= <switch-value-branch-list> <switch-value-else>
+
+<switch-value-branch-list> @infer("$0") ::= <switch-value-case-prefix>
+<switch-value-branch-list> @infer("$0 unify $1") ::=
+       <switch-value-case-prefix> <switch-value-branch-list>
+
+<switch-value-case-prefix> @infer("$2") ::= <eos>* %"case" <switch-value-case-block>
+
+<switch-value-case-block> @infer("$1") ::= <case-expr-list> <yielding-case-body>
+<switch-value-case-block> @infer("$1") ::= <case-expr-list> <yielding-body>
+
+<switch-value-else> @infer("$2") ::= <eos>* %"else" <yielding-case-body>
+<switch-value-else> @infer("$2") ::= <eos>* %"else" <yielding-body>
+
+<yielding-case-body> @scope("block") @infer("$0") ::=
+       %":" <eos>? <yielding-body-stmts> <eos>*
+
 # ============================================================================
 # Range
 # ============================================================================
@@ -197,6 +234,7 @@
 <break-stmt> @jump("break") ::= %"break" %IDENTIFIER?
 <continue-stmt> @jump("continue") ::= %"continue" %IDENTIFIER?
 <return-stmt> @jump("return") ::= %"return" <expression>?
+<yield-stmt> @infer("$0") ::= %"yield" <expression>
 
 # ============================================================================
 # Assert
@@ -608,9 +646,14 @@
             | <callback-lit>
             | <list-lit>
             | <dict-or-set-lit>
+            | <block-value-expr>
+            | <if-value-expr>
+            | <switch-value-expr>
             | <tuple-or-paren>
 
 <primary> @varref($0) @infer("lookup($0)") ::= %IDENTIFIER
+
+<block-value-expr> @scope("block") @infer("$1") ::= <block-start> <yielding-body-stmts> <block-end>
 
 # ============================================================================
 # Literals

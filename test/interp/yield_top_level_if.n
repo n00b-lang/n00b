@@ -1,0 +1,3 @@
+if true {
+  yield 7
+}

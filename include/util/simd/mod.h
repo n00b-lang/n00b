@@ -15,10 +15,6 @@
 #include <stddef.h>
 #include <stdbool.h>
 
-#if defined(__x86_64__)
-#include <immintrin.h>
-#endif
-
 #if defined(__aarch64__)
 #include <arm_neon.h>
 #endif

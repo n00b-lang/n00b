@@ -61,10 +61,6 @@ static inline size_t simd_mul_sz(size_t a, size_t b) {
 bool n00b_simd_has_simd(void) {
 #if defined(__aarch64__)
     return true;
-#elif defined(__wasm32__) && defined(__wasm_simd128__)
-    return true;
-#elif defined(__x86_64__)
-    return __builtin_cpu_supports("avx2");
 #else
     return false;
 #endif
@@ -417,6 +413,215 @@ n00b_simd_fwd_range_search_find_fwd(const n00b_simd_FwdRangeSearch *p,
     size_t r = n00b_simd_FwdRangeSearch_find_fwd(p, haystack, haystack_len, start);
     if (r == SIZE_MAX) return n00b_option_none(size_t);
     return n00b_option_set(size_t, r);
+}
+
+#else
+
+// Backendless targets still need these symbols because regex object code
+// contains calls guarded by n00b_simd_has_simd().
+
+struct n00b_simd_ByteRange;
+
+n00b_simd_RevSearchBytes *n00b_simd_RevSearchBytes_new(n00b_list_t(uint8_t) bytes) {
+    (void)bytes;
+    return nullptr;
+}
+
+n00b_simd_RevSearchRanges *n00b_simd_RevSearchRanges_new(n00b_list_t(U8Pair) ranges) {
+    (void)ranges;
+    return nullptr;
+}
+
+const uint8_t *n00b_simd_rev_search_bytes_bytes(const n00b_simd_RevSearchBytes *s,
+                                                size_t *out_len) {
+    (void)s;
+    if (out_len) *out_len = 0;
+    return nullptr;
+}
+
+const struct n00b_simd_ByteRange *
+n00b_simd_rev_search_ranges_ranges(const n00b_simd_RevSearchRanges *s,
+                                   size_t *out_len) {
+    (void)s;
+    if (out_len) *out_len = 0;
+    return nullptr;
+}
+
+n00b_option_t(size_t)
+n00b_simd_rev_search_bytes_find_fwd(const n00b_simd_RevSearchBytes *s,
+                                    const uint8_t *haystack,
+                                    size_t hlen) {
+    (void)s;
+    (void)haystack;
+    (void)hlen;
+    return n00b_option_none(size_t);
+}
+
+n00b_option_t(size_t)
+n00b_simd_rev_search_bytes_find_rev(const n00b_simd_RevSearchBytes *s,
+                                    const uint8_t *haystack,
+                                    size_t hlen) {
+    (void)s;
+    (void)haystack;
+    (void)hlen;
+    return n00b_option_none(size_t);
+}
+
+n00b_option_t(size_t)
+n00b_simd_rev_search_ranges_find_fwd(const n00b_simd_RevSearchRanges *s,
+                                     const uint8_t *haystack,
+                                     size_t hlen) {
+    (void)s;
+    (void)haystack;
+    (void)hlen;
+    return n00b_option_none(size_t);
+}
+
+n00b_option_t(size_t)
+n00b_simd_rev_search_ranges_find_rev(const n00b_simd_RevSearchRanges *s,
+                                     const uint8_t *haystack,
+                                     size_t hlen) {
+    (void)s;
+    (void)haystack;
+    (void)hlen;
+    return n00b_option_none(size_t);
+}
+
+n00b_simd_FwdLiteralSearch *n00b_simd_FwdLiteralSearch_new(const uint8_t *needle,
+                                                           size_t nlen) {
+    (void)needle;
+    (void)nlen;
+    return nullptr;
+}
+
+uint8_t n00b_simd_FwdLiteralSearch_rare_byte(const n00b_simd_FwdLiteralSearch *self) {
+    (void)self;
+    return 0;
+}
+
+void n00b_simd_FwdLiteralSearch_free(n00b_simd_FwdLiteralSearch *p) {
+    (void)p;
+}
+
+n00b_option_t(size_t)
+n00b_simd_fwd_literal_search_find_fwd(const n00b_simd_FwdLiteralSearch *s,
+                                      const uint8_t *haystack,
+                                      size_t hlen) {
+    (void)s;
+    (void)haystack;
+    (void)hlen;
+    return n00b_option_none(size_t);
+}
+
+size_t n00b_simd_fwd_literal_search_len(const n00b_simd_FwdLiteralSearch *s) {
+    (void)s;
+    return 0;
+}
+
+void n00b_simd_fwd_literal_search_find_all_fixed(const n00b_simd_FwdLiteralSearch *s,
+                                                 const uint8_t *haystack,
+                                                 size_t hlen,
+                                                 n00b_list_t(Match) *out_matches) {
+    (void)s;
+    (void)haystack;
+    (void)hlen;
+    (void)out_matches;
+}
+
+n00b_simd_FwdPrefixSearchSimd *
+n00b_simd_FwdPrefixSearch_new(size_t total_len,
+                              const size_t *freq_order,
+                              size_t freq_order_len,
+                              const ByteVec *byte_sets,
+                              size_t bs_len,
+                              const TSet *all_sets,
+                              size_t as_len) {
+    (void)total_len;
+    (void)freq_order;
+    (void)freq_order_len;
+    (void)byte_sets;
+    (void)bs_len;
+    (void)all_sets;
+    (void)as_len;
+    return nullptr;
+}
+
+n00b_option_t(size_t)
+n00b_simd_fwd_prefix_search_simd_find_fwd(const n00b_simd_FwdPrefixSearchSimd *p,
+                                          const uint8_t *haystack,
+                                          size_t hlen,
+                                          size_t start) {
+    (void)p;
+    (void)haystack;
+    (void)hlen;
+    (void)start;
+    return n00b_option_none(size_t);
+}
+
+size_t n00b_simd_fwd_prefix_search_simd_len(const n00b_simd_FwdPrefixSearchSimd *p) {
+    (void)p;
+    return 0;
+}
+
+n00b_simd_RevTeddySearch *n00b_simd_RevTeddySearch_new(size_t num_simd,
+                                                       const ByteVec *window,
+                                                       size_t window_len,
+                                                       const TSet *all_sets,
+                                                       size_t as_len,
+                                                       size_t tail_offset) {
+    (void)num_simd;
+    (void)window;
+    (void)window_len;
+    (void)all_sets;
+    (void)as_len;
+    (void)tail_offset;
+    return nullptr;
+}
+
+n00b_option_t(size_t)
+n00b_simd_rev_prefix_search_find_rev(const n00b_simd_RevTeddySearch *s,
+                                     const uint8_t *haystack,
+                                     size_t hlen,
+                                     size_t end) {
+    (void)s;
+    (void)haystack;
+    (void)hlen;
+    (void)end;
+    return n00b_option_none(size_t);
+}
+
+n00b_simd_FwdRangeSearch *n00b_simd_FwdRangeSearch_new(size_t total_len,
+                                                       size_t anchor_pos,
+                                                       const uint8_t *lo,
+                                                       const uint8_t *hi,
+                                                       size_t ranges_len,
+                                                       const TSet *all_sets,
+                                                       size_t all_sets_len) {
+    (void)total_len;
+    (void)anchor_pos;
+    (void)lo;
+    (void)hi;
+    (void)ranges_len;
+    (void)all_sets;
+    (void)all_sets_len;
+    return nullptr;
+}
+
+n00b_option_t(size_t)
+n00b_simd_fwd_range_search_find_fwd(const n00b_simd_FwdRangeSearch *p,
+                                    const uint8_t *haystack,
+                                    size_t haystack_len,
+                                    size_t start) {
+    (void)p;
+    (void)haystack;
+    (void)haystack_len;
+    (void)start;
+    return n00b_option_none(size_t);
+}
+
+size_t n00b_simd_fwd_range_search_len(const n00b_simd_FwdRangeSearch *p) {
+    (void)p;
+    return 0;
 }
 
 #endif // __aarch64__

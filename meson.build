@@ -3637,6 +3637,14 @@ if target_arch == 'aarch64'
     endforeach
 endif
 
+if target_arch != 'aarch64'
+    exe = executable('test_regex_simd_backendless',
+        'test/unit/test_regex_simd_backendless.c',
+        kwargs: test_common_kwargs,
+    )
+    test('regex_simd_backendless', exe, suite: 'unit')
+endif
+
 # ============================================================================
 # Documentation (Doxygen)
 # ============================================================================

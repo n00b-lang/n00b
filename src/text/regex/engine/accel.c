@@ -27,11 +27,13 @@
 
 bool fwd_prefix_search_is_literal(const FwdPrefixSearch *self)
 {
+    if (!self) return false;
     return self->tag == FWD_PREFIX_SEARCH_LITERAL;
 }
 
 size_t fwd_prefix_search_len(const FwdPrefixSearch *self)
 {
+    if (!self) return 0;
     switch (self->tag) {
     case FWD_PREFIX_SEARCH_LITERAL:
         return n00b_simd_fwd_literal_search_len(self->as.literal);
@@ -59,6 +61,10 @@ n00b_option_t(size_t) fwd_prefix_search_find_fwd(const FwdPrefixSearch *self,
                                                  size_t haystack_len,
                                                  size_t start)
 {
+    if (!self) {
+        return n00b_option_none(size_t);
+    }
+
     // Guard against `start > haystack_len`: Rust's `&haystack[start..]`
     // panics in that case; the C version would silently underflow
     // `haystack_len - start` (size_t wraps near SIZE_MAX) and form an
@@ -89,6 +95,7 @@ n00b_option_t(size_t) fwd_prefix_search_find_fwd(const FwdPrefixSearch *self,
 
 const char *fwd_prefix_search_variant_name(const FwdPrefixSearch *self)
 {
+    if (!self) return "";
     switch (self->tag) {
     case FWD_PREFIX_SEARCH_LITERAL: return "Literal";
     case FWD_PREFIX_SEARCH_PREFIX:  return "Teddy";
@@ -105,6 +112,7 @@ bool fwd_prefix_search_find_all_literal(const FwdPrefixSearch *self,
                                         size_t haystack_len,
                                         n00b_list_t(Match) *matches)
 {
+    if (!self) return false;
     switch (self->tag) {
     case FWD_PREFIX_SEARCH_LITERAL:
         n00b_simd_fwd_literal_search_find_all_fixed(self->as.literal,
@@ -160,15 +168,16 @@ MintermSearchValue minterm_search_value_range(RevSearchRanges *ranges)
 // FwdPrefixSearch — polymorphic constructors / drop.
 //
 // Each constructor allocates the wrapper through n00b's typed allocator
-// and takes ownership of the variant payload pointer.  The wrapper is
-// freed via `fwd_prefix_search_free`; the SIMD module is responsible
-// for freeing the variant payload (literal / prefix / range searcher)
-// before the wrapper is dropped.
+// and takes ownership of a non-null variant payload pointer. A null
+// payload is rejected with a null wrapper result so backendless SIMD
+// stubs cannot be stored inside a live regex accelerator wrapper.
 // ===========================================================================
 
 FwdPrefixSearch *fwd_prefix_search_new_literal(FwdLiteralSearch *lit,
                                                n00b_allocator_t *allocator)
 {
+    if (!lit) return nullptr;
+
     FwdPrefixSearch *p = n00b_alloc_with_opts(
         FwdPrefixSearch, &(n00b_alloc_opts_t){.allocator = allocator});
     p->tag             = FWD_PREFIX_SEARCH_LITERAL;
@@ -179,6 +188,8 @@ FwdPrefixSearch *fwd_prefix_search_new_literal(FwdLiteralSearch *lit,
 FwdPrefixSearch *fwd_prefix_search_new_prefix(FwdPrefixSearchSimd *pf,
                                               n00b_allocator_t *allocator)
 {
+    if (!pf) return nullptr;
+
     FwdPrefixSearch *p = n00b_alloc_with_opts(
         FwdPrefixSearch, &(n00b_alloc_opts_t){.allocator = allocator});
     p->tag             = FWD_PREFIX_SEARCH_PREFIX;
@@ -189,6 +200,8 @@ FwdPrefixSearch *fwd_prefix_search_new_prefix(FwdPrefixSearchSimd *pf,
 FwdPrefixSearch *fwd_prefix_search_new_range(FwdRangeSearch *rng,
                                              n00b_allocator_t *allocator)
 {
+    if (!rng) return nullptr;
+
     FwdPrefixSearch *p = n00b_alloc_with_opts(
         FwdPrefixSearch, &(n00b_alloc_opts_t){.allocator = allocator});
     p->tag             = FWD_PREFIX_SEARCH_RANGE;

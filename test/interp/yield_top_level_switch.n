@@ -1,0 +1,4 @@
+switch 1 {
+  case 1: yield 7
+  else: yield 8
+}

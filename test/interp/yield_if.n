@@ -1,0 +1,10 @@
+func pick(flag: bool) -> int {
+  if flag {
+    yield 10
+  } else {
+    yield 20
+  }
+}
+
+print(pick(true))
+print(pick(false))

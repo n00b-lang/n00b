@@ -1,0 +1,7 @@
+func f() -> int {
+  if true {
+    yield 7
+  }
+}
+
+print(f())

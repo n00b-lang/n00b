@@ -1,0 +1,6 @@
+func g(x: int) -> int {
+  return x + 1
+}
+
+g({ yield 1 })
+print(7)

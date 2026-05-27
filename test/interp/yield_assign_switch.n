@@ -1,0 +1,11 @@
+var x = switch 3 {
+  case 1:
+    yield 10
+  case 2:
+    yield 20
+  else:
+    yield 99
+}
+
+print(x)
+0

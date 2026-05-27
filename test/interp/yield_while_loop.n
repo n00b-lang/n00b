@@ -1,0 +1,9 @@
+func f() -> int {
+  var i = 0
+  while i < 1 {
+    i = i + 1
+    yield 7
+  }
+}
+
+print(f())

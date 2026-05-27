@@ -1,0 +1,7 @@
+func f() -> int {
+  yield 7
+}
+
+var x = f()
+print(x)
+0

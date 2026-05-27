@@ -55,6 +55,7 @@ extern TSet      tset_from_bytes(const uint8_t *data, size_t len);
 
 extern FwdLiteralSearch     *n00b_simd_FwdLiteralSearch_new(const uint8_t *needle, size_t nlen);
 extern uint8_t               n00b_simd_FwdLiteralSearch_rare_byte(const FwdLiteralSearch *l);
+extern void                  n00b_simd_FwdLiteralSearch_free(FwdLiteralSearch *l);
 extern FwdPrefixSearchSimd  *n00b_simd_FwdPrefixSearch_new(size_t total_len,
                                                   const size_t *freq_order,
                                                   size_t freq_order_len,
@@ -329,8 +330,12 @@ static FwdPrefixSearch *bdfa_build_prefix_search(const ByteVec *byte_sets_raw,
         for (size_t i = 0; i < bs_len; ++i) needle[i] = byte_sets_raw[i].data[0];
         FwdLiteralSearch *lit = n00b_simd_FwdLiteralSearch_new(needle, bs_len);
         n00b_free(needle);
+        if (!lit) {
+            return nullptr;
+        }
         if ((uint16_t)n00b_simd_byte_freq(n00b_simd_FwdLiteralSearch_rare_byte(lit))
             >= RARE_BYTE_FREQ_LIMIT) {
+            n00b_simd_FwdLiteralSearch_free(lit);
             return nullptr;
         }
         return fwd_prefix_search_new_literal(lit, allocator);

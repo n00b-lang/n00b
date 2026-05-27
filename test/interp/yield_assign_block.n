@@ -1,0 +1,7 @@
+var x = {
+  var tmp = 7
+  yield tmp
+}
+
+print(x)
+0

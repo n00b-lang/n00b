@@ -1,0 +1,7 @@
+func f() -> int {
+  for i in 0 to 1 {
+    yield 7
+  }
+}
+
+print(f())
