@@ -36,4 +36,5 @@ n00b_slay_src = files(
     'codegen_mir.c',
     'codegen_builtins.c',
     'pprint.c',
+    'rewrite.c',
 )

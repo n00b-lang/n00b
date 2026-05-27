@@ -8,6 +8,7 @@
 
 #include "slay/bnf.h"
 #include "slay/pwz.h"
+#include "slay/rewrite.h"
 #include "n00b/n00b_tokenizer.h"
 #include "internal/slay/grammar_internal.h"
 #include "text/strings/string_ops.h"
@@ -200,26 +201,28 @@ bnf_join_continuations(n00b_string_t *input)
 
 // Token IDs for the BNF meta-grammar (internal, local base).
 enum {
-    BNF_TOK_BASE       = 100,
-    BNF_TOK_LANGLE     = BNF_TOK_BASE + 1,   // <
-    BNF_TOK_RANGLE     = BNF_TOK_BASE + 2,   // >
-    BNF_TOK_ASSIGN     = BNF_TOK_BASE + 3,   // ::=
-    BNF_TOK_PIPE       = BNF_TOK_BASE + 4,   // |
-    BNF_TOK_NEWLINE    = BNF_TOK_BASE + 5,   // \n
-    BNF_TOK_NAME       = BNF_TOK_BASE + 6,   // rule name
-    BNF_TOK_LITERAL    = BNF_TOK_BASE + 7,   // quoted literal
-    BNF_TOK_CLASS      = BNF_TOK_BASE + 8,   // __CLASS
-    BNF_TOK_TOKEN_TYPE = BNF_TOK_BASE + 9,   // %NAME (token type)
-    BNF_TOK_TOKEN_LIT  = BNF_TOK_BASE + 10,  // %"..." (token literal)
-    BNF_TOK_EMPTY_LIT  = BNF_TOK_BASE + 11,  // "" (empty literal)
-    BNF_TOK_QUESTION   = BNF_TOK_BASE + 12,  // ?
-    BNF_TOK_STAR       = BNF_TOK_BASE + 13,  // *
-    BNF_TOK_PLUS_OP    = BNF_TOK_BASE + 14,  // +
-    BNF_TOK_LPAREN     = BNF_TOK_BASE + 15,  // (
-    BNF_TOK_RPAREN     = BNF_TOK_BASE + 16,  // )
-    BNF_TOK_AT         = BNF_TOK_BASE + 17,  // @
-    BNF_TOK_DOLLAR     = BNF_TOK_BASE + 18,  // $N (digit in value)
-    BNF_TOK_COMMA      = BNF_TOK_BASE + 19,  // ,
+    BNF_TOK_BASE          = 100,
+    BNF_TOK_LANGLE        = BNF_TOK_BASE + 1,   // <
+    BNF_TOK_RANGLE        = BNF_TOK_BASE + 2,   // >
+    BNF_TOK_ASSIGN        = BNF_TOK_BASE + 3,   // ::=
+    BNF_TOK_PIPE          = BNF_TOK_BASE + 4,   // |
+    BNF_TOK_NEWLINE       = BNF_TOK_BASE + 5,   // \n
+    BNF_TOK_NAME          = BNF_TOK_BASE + 6,   // rule name
+    BNF_TOK_LITERAL       = BNF_TOK_BASE + 7,   // quoted literal
+    BNF_TOK_CLASS         = BNF_TOK_BASE + 8,   // __CLASS
+    BNF_TOK_TOKEN_TYPE    = BNF_TOK_BASE + 9,   // %NAME (token type)
+    BNF_TOK_TOKEN_LIT     = BNF_TOK_BASE + 10,  // %"..." (token literal)
+    BNF_TOK_EMPTY_LIT     = BNF_TOK_BASE + 11,  // "" (empty literal)
+    BNF_TOK_QUESTION      = BNF_TOK_BASE + 12,  // ?
+    BNF_TOK_STAR          = BNF_TOK_BASE + 13,  // *
+    BNF_TOK_PLUS_OP       = BNF_TOK_BASE + 14,  // +
+    BNF_TOK_LPAREN        = BNF_TOK_BASE + 15,  // (
+    BNF_TOK_RPAREN        = BNF_TOK_BASE + 16,  // )
+    BNF_TOK_AT            = BNF_TOK_BASE + 17,  // @
+    BNF_TOK_DOLLAR        = BNF_TOK_BASE + 18,  // $N (digit in value)
+    BNF_TOK_COMMA         = BNF_TOK_BASE + 19,  // ,
+    BNF_TOK_CAPTURE_DECL  = BNF_TOK_BASE + 20,  // $name: (inline capture)
+    BNF_TOK_REWRITE_BLOCK = BNF_TOK_BASE + 21,  // {=* ... =*} (rewrite body)
 };
 
 // ============================================================================
@@ -431,6 +434,72 @@ bnf_scan(n00b_scanner_t *s)
         }
 
         n00b_string_t *val = n00b_scan_extract(s);
+
+        // Contextual keyword: `rewrite { ... }` starts a rewrite block.
+        // We only swallow `rewrite` here if it is immediately followed
+        // (modulo horizontal whitespace) by `{`. Otherwise it's a
+        // regular identifier and we emit NAME as usual.
+        if (!*in_angle && val->u8_bytes == 7
+            && memcmp(val->data, "rewrite", 7) == 0) {
+            n00b_scan_skip_while(s, is_bnf_hws);
+            if (!n00b_scan_at_eof(s) && n00b_scan_peek(s, 0) == '{') {
+                // Drop the "rewrite" identifier; fall through to the
+                // brace-block handler below by skipping `{` here and
+                // running the same body-scan loop the bare `{` branch
+                // uses.
+                n00b_scan_advance(s);  // skip `{`
+
+                int level = 0;
+                while (!n00b_scan_at_eof(s)
+                       && n00b_scan_peek(s, 0) == '=') {
+                    level++;
+                    n00b_scan_advance(s);
+                }
+
+                n00b_scan_mark(s);
+
+                bool found = false;
+                while (!n00b_scan_at_eof(s)) {
+                    if (n00b_scan_peek(s, 0) == '=') {
+                        int eqs = 0;
+                        while (n00b_scan_peek(s, eqs) == '=') {
+                            eqs++;
+                        }
+                        if (eqs == level
+                            && n00b_scan_peek(s, eqs) == '}') {
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (n00b_scan_peek(s, 0) == '}' && level == 0) {
+                        found = true;
+                        break;
+                    }
+                    n00b_scan_advance(s);
+                }
+
+                n00b_string_t *body = n00b_scan_extract(s);
+
+                if (found) {
+                    for (int i = 0; i < level; i++) {
+                        n00b_scan_advance(s);
+                    }
+                    if (!n00b_scan_at_eof(s)
+                        && n00b_scan_peek(s, 0) == '}') {
+                        n00b_scan_advance(s);
+                    }
+                }
+
+                n00b_scan_emit(
+                    s, .tid     = BNF_TOK_REWRITE_BLOCK,
+                    .contents = n00b_option_set(n00b_string_t *, body));
+                return true;
+            }
+            // Not followed by `{`: fall through and emit "rewrite"
+            // as a normal NAME (so it can still appear as a rule
+            // name like `<rewrite>` or a literal identifier).
+        }
+
         n00b_scan_emit(s, .tid = BNF_TOK_NAME,
                        .contents = n00b_option_set(n00b_string_t *, val));
         return true;
@@ -451,7 +520,7 @@ bnf_scan(n00b_scanner_t *s)
     default:  break;
     }
 
-    // $N (child reference)
+    // $N (child reference, digits) | $name: (capture declaration)
     if (ch == '$') {
         n00b_codepoint_t d = n00b_scan_peek(s, 0);
 
@@ -473,7 +542,53 @@ bnf_scan(n00b_scanner_t *s)
                            .contents = n00b_option_set(n00b_string_t *, val));
             return true;
         }
+
+        // $name: capture declaration. Requires an identifier-shaped
+        // name followed by a colon. If the sequence isn't a valid
+        // capture, fall back to treating `$` as an unknown char.
+        if ((d >= 'a' && d <= 'z') || (d >= 'A' && d <= 'Z') || d == '_') {
+            n00b_scan_mark(s);  // mark start of name (after `$`)
+
+            while (!n00b_scan_at_eof(s)) {
+                n00b_codepoint_t c = n00b_scan_peek(s, 0);
+
+                if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+                      || (c >= '0' && c <= '9') || c == '_')) {
+                    break;
+                }
+
+                n00b_scan_advance(s);
+            }
+
+            n00b_string_t *name_val = n00b_scan_extract(s);
+
+            // Require the immediately-following `:` to commit.
+            if (!n00b_scan_at_eof(s) && n00b_scan_peek(s, 0) == ':') {
+                n00b_scan_advance(s);  // consume `:`
+                n00b_scan_emit(
+                    s,
+                    .tid      = BNF_TOK_CAPTURE_DECL,
+                    .contents = n00b_option_set(n00b_string_t *, name_val));
+                return true;
+            }
+
+            // Not a capture decl after all. The leading `$` is gone
+            // and so are the bytes of `name_val`; emit a NAME token
+            // for the consumed identifier so the parser sees
+            // something coherent. (This is a permissive fallback;
+            // real BNF should not contain `$identifier` outside the
+            // capture or annotation forms.)
+            n00b_scan_emit(
+                s,
+                .tid      = BNF_TOK_NAME,
+                .contents = n00b_option_set(n00b_string_t *, name_val));
+            return true;
+        }
     }
+
+    // Rewrite blocks open with the contextual keyword `rewrite` followed
+    // by `{=*[level]= ... =[level]*=}` (handled in the identifier branch
+    // above). A bare `{` in BNF text is not a rewrite block.
 
     // Unknown character — already advanced, just skip.
     return true;
@@ -660,10 +775,36 @@ bnf_walk_atom(n00b_nt_node_t *pn, void *children, void *thunk)
         result[1]              = ':';
         memcpy(result + 2, val->data, len + 1);
     }
-    else {
+    else if (pn->rule_index == 5) {
         // term -> EMPTY_LIT  ("")
         result = n00b_alloc_array(char, 3);
         result[0] = 'E'; result[1] = ':'; result[2] = '\0';
+    }
+    else {
+        // term -> CAPTURE_DECL LANGLE NAME RANGLE (rule_index 6)
+        //   kids[0] = CAPTURE_DECL token (value: capture name without `$` or `:`)
+        //   kids[1] = LANGLE
+        //   kids[2] = NAME token (NT to reference)
+        //   kids[3] = RANGLE
+        //
+        // Produce "P:capname\0ntname\0" — the resolver in
+        // resolve_term_to_matches will split on the embedded NUL,
+        // record the capture, and synthesize the NT reference.
+        n00b_token_info_t *cap_tok = (n00b_token_info_t *)kids[0];
+        n00b_token_info_t *nt_tok  = (n00b_token_info_t *)kids[2];
+        n00b_string_t     *cap_s   = tok_str_or(cap_tok, r"?");
+        n00b_string_t     *nt_s    = tok_str_or(nt_tok, r"?");
+        size_t             clen    = cap_s->u8_bytes;
+        size_t             nlen    = nt_s->u8_bytes;
+
+        // Layout: "P:" + cap + "\0" + nt + "\0"
+        result    = n00b_alloc_array(char, clen + nlen + 4);
+        result[0] = 'P';
+        result[1] = ':';
+        memcpy(result + 2, cap_s->data, clen);
+        result[2 + clen] = '\0';
+        memcpy(result + 3 + clen, nt_s->data, nlen);
+        result[3 + clen + nlen] = '\0';
     }
 
     n00b_free(kids);
@@ -1374,7 +1515,8 @@ bnf_walk_annotations(n00b_nt_node_t *pn, void *children, void *thunk)
 }
 
 // rule -> LANGLE NAME RANGLE annotations ASSIGN expression NEWLINE
-// Returns BNF_PAIR [name_string, expression_result, annotations_list].
+//                                                           [REWRITE_BLOCK NEWLINE]
+// Returns BNF_PAIR [name_string, expression_result, annotations_list, rewrite_body_string_or_null].
 static void *
 bnf_walk_rule(n00b_nt_node_t *pn, void *children, void *thunk)
 {
@@ -1387,18 +1529,22 @@ bnf_walk_rule(n00b_nt_node_t *pn, void *children, void *thunk)
 
     // All rule variants share this structure:
     //   < NAME > [NEWLINE] annotations ::= [NEWLINE] expression NEWLINE
+    //                                              [REWRITE_BLOCK NEWLINE]
     //
-    // Optional NEWLINEs shift child positions, but the layout relative
-    // to each optional NEWLINE is consistent:
-    //   - NAME is always kids[1].
-    //   - A NEWLINE after '>' pushes annotations from [3] to [4].
-    //   - A NEWLINE after '::=' pushes expression forward by one.
+    // The two existing booleans encode optional NEWLINEs after '>' and
+    // after '::='. We add a third bit (rule_index >= 4) for the
+    // optional trailing REWRITE_BLOCK form.
     //
-    // Rather than hard-coding indices, use the two boolean flags
-    // encoded in rule_index (bit 0 = NL after ::=, bit 1 = NL after >).
+    // Rule indices are packed:
+    //   bit 0 = NL after ::=
+    //   bit 1 = NL after >
+    //   bit 2 = has REWRITE_BLOCK
+    // The grammar adds rules in two layers (without, then with the
+    // trailing block); see build_bnf_grammar.
 
-    bool nl_after_rangle = (pn->rule_index >= 2);
-    bool nl_after_assign = (pn->rule_index & 1);
+    bool nl_after_rangle = (pn->rule_index & 2) != 0;
+    bool nl_after_assign = (pn->rule_index & 1) != 0;
+    bool has_rewrite     = (pn->rule_index & 4) != 0;
 
     int annots_idx = 3 + nl_after_rangle;
     int expr_idx   = annots_idx + 2 + nl_after_assign;
@@ -1409,10 +1555,24 @@ bnf_walk_rule(n00b_nt_node_t *pn, void *children, void *thunk)
 
     n00b_string_t *name_s = tok_str_or(name_tok, r"?");
 
+    // Extract the rewrite-block body (if any). The block token sits at
+    // expr_idx + 2 (skipping NEWLINE after expression).
+    n00b_string_t *rewrite_body = nullptr;
+    if (has_rewrite) {
+        n00b_token_info_t *body_tok = (n00b_token_info_t *)kids[expr_idx + 2];
+        rewrite_body                = tok_str(body_tok);
+    }
+
     bnf_list_t *triple = slist_new();
     slist_push(triple, bnf_result(BNF_NAME, name_s));
     slist_push(triple, expr_r);
     slist_push(triple, annots_r);
+    if (rewrite_body) {
+        slist_push(triple, bnf_result(BNF_NAME, rewrite_body));
+    }
+    else {
+        slist_push(triple, nullptr);
+    }
 
     n00b_free(kids);
     return bnf_result(BNF_PAIR, triple);
@@ -1607,30 +1767,79 @@ build_bnf_grammar(void)
     n00b_add_rule_v(g, syntax_id, 2,
                      (n00b_match_t[]){NT(annotation_id), N00B_TERMINAL(NEWLINE)});
 
+    int64_t CAPTURE_DECL  = BNF_TOK_CAPTURE_DECL;
+    int64_t REWRITE_BLOCK = BNF_TOK_REWRITE_BLOCK;
+
     // rule -> LANGLE NAME RANGLE annotations ASSIGN expression NEWLINE
     // Optional NEWLINE allowed after RANGLE (before annotations) and after ASSIGN.
+    //
+    // rule_index encoding (matches bnf_walk_rule):
+    //   bit 0 = NL after ::=
+    //   bit 1 = NL after >
+    //   bit 2 = trailing REWRITE_BLOCK + NEWLINE present
+    //
+    // For each of the 4 base shapes we add a no-rewrite variant
+    // (indices 0..3) followed by the rewrite-bearing variant
+    // (indices 4..7) — same RHS plus REWRITE_BLOCK NEWLINE on the end.
+
+    // Index 0: ... ASSIGN expression NEWLINE
     n00b_add_rule_v(g, rule_id, 7,
                      (n00b_match_t[]){N00B_TERMINAL(LANGLE), N00B_TERMINAL(NAME),
                                       N00B_TERMINAL(RANGLE), NT(annotations_id),
                                       N00B_TERMINAL(ASSIGN),
                                       NT(expression_id), N00B_TERMINAL(NEWLINE)});
+    // Index 1: ... ASSIGN NEWLINE expression NEWLINE
     n00b_add_rule_v(g, rule_id, 8,
                      (n00b_match_t[]){N00B_TERMINAL(LANGLE), N00B_TERMINAL(NAME),
                                       N00B_TERMINAL(RANGLE), NT(annotations_id),
                                       N00B_TERMINAL(ASSIGN), N00B_TERMINAL(NEWLINE),
                                       NT(expression_id), N00B_TERMINAL(NEWLINE)});
+    // Index 2: ... RANGLE NEWLINE annotations ASSIGN expression NEWLINE
     n00b_add_rule_v(g, rule_id, 8,
                      (n00b_match_t[]){N00B_TERMINAL(LANGLE), N00B_TERMINAL(NAME),
                                       N00B_TERMINAL(RANGLE), N00B_TERMINAL(NEWLINE),
                                       NT(annotations_id),
                                       N00B_TERMINAL(ASSIGN),
                                       NT(expression_id), N00B_TERMINAL(NEWLINE)});
+    // Index 3: ... RANGLE NEWLINE annotations ASSIGN NEWLINE expression NEWLINE
     n00b_add_rule_v(g, rule_id, 9,
                      (n00b_match_t[]){N00B_TERMINAL(LANGLE), N00B_TERMINAL(NAME),
                                       N00B_TERMINAL(RANGLE), N00B_TERMINAL(NEWLINE),
                                       NT(annotations_id),
                                       N00B_TERMINAL(ASSIGN), N00B_TERMINAL(NEWLINE),
                                       NT(expression_id), N00B_TERMINAL(NEWLINE)});
+
+    // Indices 4..7 — same as 0..3 with trailing REWRITE_BLOCK NEWLINE.
+    n00b_add_rule_v(g, rule_id, 9,
+                     (n00b_match_t[]){N00B_TERMINAL(LANGLE), N00B_TERMINAL(NAME),
+                                      N00B_TERMINAL(RANGLE), NT(annotations_id),
+                                      N00B_TERMINAL(ASSIGN),
+                                      NT(expression_id), N00B_TERMINAL(NEWLINE),
+                                      N00B_TERMINAL(REWRITE_BLOCK),
+                                      N00B_TERMINAL(NEWLINE)});
+    n00b_add_rule_v(g, rule_id, 10,
+                     (n00b_match_t[]){N00B_TERMINAL(LANGLE), N00B_TERMINAL(NAME),
+                                      N00B_TERMINAL(RANGLE), NT(annotations_id),
+                                      N00B_TERMINAL(ASSIGN), N00B_TERMINAL(NEWLINE),
+                                      NT(expression_id), N00B_TERMINAL(NEWLINE),
+                                      N00B_TERMINAL(REWRITE_BLOCK),
+                                      N00B_TERMINAL(NEWLINE)});
+    n00b_add_rule_v(g, rule_id, 10,
+                     (n00b_match_t[]){N00B_TERMINAL(LANGLE), N00B_TERMINAL(NAME),
+                                      N00B_TERMINAL(RANGLE), N00B_TERMINAL(NEWLINE),
+                                      NT(annotations_id),
+                                      N00B_TERMINAL(ASSIGN),
+                                      NT(expression_id), N00B_TERMINAL(NEWLINE),
+                                      N00B_TERMINAL(REWRITE_BLOCK),
+                                      N00B_TERMINAL(NEWLINE)});
+    n00b_add_rule_v(g, rule_id, 11,
+                     (n00b_match_t[]){N00B_TERMINAL(LANGLE), N00B_TERMINAL(NAME),
+                                      N00B_TERMINAL(RANGLE), N00B_TERMINAL(NEWLINE),
+                                      NT(annotations_id),
+                                      N00B_TERMINAL(ASSIGN), N00B_TERMINAL(NEWLINE),
+                                      NT(expression_id), N00B_TERMINAL(NEWLINE),
+                                      N00B_TERMINAL(REWRITE_BLOCK),
+                                      N00B_TERMINAL(NEWLINE)});
 
     // expression -> list | list PIPE expression
     n00b_add_rule_v(g, expression_id, 1,
@@ -1675,6 +1884,7 @@ build_bnf_grammar(void)
                                       N00B_TERMINAL(RPAREN), N00B_TERMINAL(PLUS_OP)});
 
     // atom -> LITERAL | LANGLE NAME RANGLE | CLASS | TOKEN_TYPE | TOKEN_LIT | EMPTY_LIT
+    //       | CAPTURE_DECL LANGLE NAME RANGLE   (rule 6: $name:<nt> inline capture)
     n00b_add_rule_v(g, atom_id, 1,
                      (n00b_match_t[]){N00B_TERMINAL(LITERAL)});
     n00b_add_rule_v(g, atom_id, 3,
@@ -1688,6 +1898,11 @@ build_bnf_grammar(void)
                      (n00b_match_t[]){N00B_TERMINAL(TOKEN_LIT)});
     n00b_add_rule_v(g, atom_id, 1,
                      (n00b_match_t[]){N00B_TERMINAL(EMPTY_LIT)});
+    n00b_add_rule_v(g, atom_id, 4,
+                     (n00b_match_t[]){N00B_TERMINAL(CAPTURE_DECL),
+                                      N00B_TERMINAL(LANGLE),
+                                      N00B_TERMINAL(NAME),
+                                      N00B_TERMINAL(RANGLE)});
 
     // annotations -> "" | annotation annotations
     n00b_add_rule_v(g, annotations_id, 1,
@@ -1790,15 +2005,27 @@ reserved_to_class(n00b_string_t *name, n00b_char_class_t *cc_out)
 // Counter for anonymous nonterminals generated by EBNF groups.
 static int bnf_anon_counter = 0;
 
+// Pending capture collected during term resolution. Allocated as
+// transient state by populate_grammar; attached to the rule after
+// the rule is created.
+typedef struct {
+    n00b_string_t *name;
+    int32_t        child_ix;
+} bnf_pending_capture_t;
+
 // Resolve a single tagged term string into match items appended to a
 // dynamic array.  Returns the new count; *items_p and *cap_p may be
-// reallocated.
+// reallocated. If `captures_out` is non-nullptr and the term carries
+// capture metadata ('P:' prefix), a (name, child_ix) entry is pushed
+// onto the list. `child_ix` is taken from the current value of `n`
+// (= the position this match will occupy in the rule body).
 static int
 resolve_term_to_matches(n00b_grammar_t *user_g,
                         const char     *tagged,
                         n00b_match_t  **items_p,
                         int            *cap_p,
-                        int             n)
+                        int             n,
+                        bnf_list_t     *captures_out)
 {
     if (!tagged || strlen(tagged) < 2) {
         return n;
@@ -1949,6 +2176,42 @@ resolve_term_to_matches(n00b_grammar_t *user_g,
 
         break;
     }
+    case 'P': {
+        // P:capname\0ntname\0 — inline capture declaration. Layout
+        // matches the producer in bnf_walk_atom: val[0]..nul = cap
+        // name, then nul-separated nt name, then trailing nul.
+        const char *cap_name = val;
+        size_t      cap_len  = strlen(cap_name);
+        const char *nt_name  = cap_name + cap_len + 1;
+        n00b_string_t *cap_s = n00b_string_from_raw((char *)cap_name,
+                                                     (int64_t)cap_len);
+        n00b_string_t *nt_s  = n00b_string_from_cstr(nt_name);
+
+        if (captures_out) {
+            bnf_pending_capture_t *pc = n00b_alloc(bnf_pending_capture_t);
+            pc->name     = cap_s;
+            pc->child_ix = (int32_t)n;
+            n00b_list_push(*captures_out, pc);
+        }
+
+        int64_t ref_id = n00b_nonterm(user_g, nt_s)->id;
+
+        if (n >= cap) {
+            int old_cap = cap;
+            cap = cap ? cap * 2 : 8;
+            n00b_match_t *new_items = n00b_alloc_array(n00b_match_t, (size_t)cap);
+            if (items && old_cap > 0)
+                memcpy(new_items, items, (size_t)old_cap * sizeof(n00b_match_t));
+            if (items) n00b_free(items);
+            items = new_items;
+        }
+
+        items[n++] = (n00b_match_t){
+            .kind  = N00B_MATCH_NT,
+            .nt_id = ref_id,
+        };
+        break;
+    }
     }
 
     *items_p = items;
@@ -1964,7 +2227,8 @@ resolve_terms_to_matches(n00b_grammar_t *user_g,
                          bnf_list_t  *terms,
                          n00b_match_t  **items_p,
                          int            *cap_p,
-                         int             n);
+                         int             n,
+                         bnf_list_t     *captures_out);
 
 // Resolve a BNF_GROUP into a single n00b_match_t and append it.
 static int
@@ -1995,7 +2259,7 @@ resolve_group_to_match(n00b_grammar_t    *user_g,
         int            inner_n      = 0;
 
         inner_n = resolve_terms_to_matches(
-            user_g, inner, &inner_items, &inner_cap, inner_n);
+            user_g, inner, &inner_items, &inner_cap, inner_n, nullptr);
 
         if (inner_n > 0) {
             group_match = n00b_group_match_v(
@@ -2026,7 +2290,7 @@ resolve_group_to_match(n00b_grammar_t    *user_g,
             int            alt_n      = 0;
 
             alt_n = resolve_terms_to_matches(
-                user_g, inner, &alt_items, &alt_cap, alt_n);
+                user_g, inner, &alt_items, &alt_cap, alt_n, nullptr);
 
             if (alt_n > 0) {
                 n00b_add_rule_v(user_g, anon_id, alt_n, alt_items);
@@ -2073,7 +2337,8 @@ resolve_terms_to_matches(n00b_grammar_t *user_g,
                          bnf_list_t  *terms,
                          n00b_match_t  **items_p,
                          int            *cap_p,
-                         int             n)
+                         int             n,
+                         bnf_list_t     *captures_out)
 {
     for (size_t ti = 0; ti < terms->len; ti++) {
         bnf_result_t *term_r = slist_get(terms, ti);
@@ -2084,7 +2349,8 @@ resolve_terms_to_matches(n00b_grammar_t *user_g,
         }
         else {
             n = resolve_term_to_matches(
-                user_g, (char *)term_r->data, items_p, cap_p, n);
+                user_g, (char *)term_r->data, items_p, cap_p, n,
+                captures_out);
         }
     }
 
@@ -2266,6 +2532,16 @@ populate_grammar(n00b_grammar_t *user_g, bnf_result_t *result,
 
         bnf_list_t *alternatives = (bnf_list_t *)expr_r->data;
 
+        // Optional rewrite-block body for this LHS (taken from the
+        // 4th element of the rule pair, populated by bnf_walk_rule).
+        n00b_string_t *rewrite_body = nullptr;
+        if (pair->len >= 4) {
+            bnf_result_t *rw_r = slist_get(pair, 3);
+            if (rw_r) {
+                rewrite_body = (n00b_string_t *)rw_r->data;
+            }
+        }
+
         for (size_t ai = 0; ai < alternatives->len; ai++) {
             bnf_result_t  *alt_r = slist_get(alternatives, ai);
             bnf_list_t *terms = (bnf_list_t *)alt_r->data;
@@ -2273,7 +2549,10 @@ populate_grammar(n00b_grammar_t *user_g, bnf_result_t *result,
             int            n     = 0;
             int            cap   = 0;
 
-            n = resolve_terms_to_matches(user_g, terms, &items, &cap, n);
+            bnf_list_t *pending_captures = slist_new();
+
+            n = resolve_terms_to_matches(user_g, terms, &items, &cap, n,
+                                          pending_captures);
 
             n00b_parse_rule_t  *rule_p = NULL;
 
@@ -2315,6 +2594,24 @@ populate_grammar(n00b_grammar_t *user_g, bnf_result_t *result,
                     }
                 }
             }
+
+            // Attach captures collected during term resolution.
+            if (rule_p) {
+                for (size_t ci = 0; ci < pending_captures->len; ci++) {
+                    bnf_pending_capture_t *pc = slist_get(pending_captures, ci);
+                    _n00b_production_add_capture(rule_p, pc->name, pc->child_ix);
+                }
+
+                // Attach the rewrite block (if any) to every rule for
+                // this LHS. Per design, alternatives share one rewrite.
+                if (rewrite_body && rewrite_body->u8_bytes > 0) {
+                    _n00b_production_attach_rewrite(rule_p, rewrite_body);
+                }
+            }
+
+            // pending_captures contents are now owned by the production;
+            // the list wrapper itself can be released.
+            slist_free(pending_captures);
 
             n00b_free(items);
         }
