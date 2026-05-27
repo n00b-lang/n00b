@@ -1838,6 +1838,12 @@ grammar_test = executable('test_grammar',
 )
 test('grammar', grammar_test, suite: 'unit')
 
+slay_pprint_test = executable('test_slay_pprint',
+    ['test/unit/test_slay_pprint.c'],
+    kwargs: test_common_kwargs,
+)
+test('slay_pprint', slay_pprint_test, suite: 'unit')
+
 pwz_test = executable('test_pwz',
     ['test/unit/test_pwz.c'],
     kwargs: test_common_kwargs,
