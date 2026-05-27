@@ -1,0 +1,119 @@
+#pragma once
+
+/**
+ * @file audit/engine.h
+ * @brief Grammar-composing audit engine.
+ *
+ * The engine loads the C-ncc base grammar (`c_ncc.bnf` from the
+ * vendored ncc subproject, path resolved via the
+ * `N00B_AUDIT_GRAMMAR_PATH` macro emitted at configure time by the
+ * top-level meson build), merges every rule's `bnf_fragment` into
+ * that grammar, parses target source files with slay, and emits one
+ * `n00b_audit_violation_t` per match of any rule's
+ * `violation_nt` nonterminal.
+ *
+ * The engine struct is **opaque** to consumers — only the typedef is
+ * exposed here; the full definition lives in `src/audit/engine.c`.
+ * This lets the engine's internals evolve (grammar caching, rule-
+ * name → nt-handle map, etc.) without breaking ABI.
+ *
+ * Per project DECISIONS.md D-005, the public functions below carry
+ * no `_kargs` block — n00b-audit's own exported surface does not
+ * expose `.allocator` keyword arguments.
+ *
+ * Per project DECISIONS.md D-006, this header's filename is
+ * unprefixed (`audit/engine.h`, not `audit/n00b_audit_engine.h`);
+ * symbol-level prefix discipline remains in force.
+ *
+ * Headers under `include/audit/` may be #included standalone, so this
+ * file pulls `<n00b.h>` defensively, and `adt/list.h` + `adt/result.h`
+ * explicitly because `<n00b.h>` does NOT pull those in transitively
+ * (Phase 2 surfaced this footgun — see STATUS.md).
+ */
+
+#include <n00b.h>
+#include "adt/list.h"
+#include "adt/result.h"
+
+#include "naudit/guidance.h"
+#include "naudit/violation.h"
+
+/**
+ * @brief Opaque engine handle.
+ *
+ * The struct's full layout (merged grammar pointer, guidance back-
+ * pointer, any precomputed rule indices) lives in `src/audit/engine.c`
+ * and is not part of the public ABI.
+ */
+typedef struct n00b_audit_engine n00b_audit_engine_t;
+
+/**
+ * @brief Construct an engine from a loaded guidance struct.
+ *
+ * Loads the base C-ncc grammar from `N00B_AUDIT_GRAMMAR_PATH`
+ * (emitted into `audit_paths.h` at configure time by the top-level
+ * meson build — no path string literals appear in C source per the
+ * NCC.md "Build system" rule), merges every rule's `bnf_fragment`
+ * into that grammar, and returns the constructed engine.
+ *
+ * Per project DECISIONS.md D-005, this function carries no
+ * `_kargs` block.
+ *
+ * @param guidance  Loaded guidance struct (typically from
+ *                  `n00b_audit_load_guidance`). The engine borrows
+ *                  the guidance pointer; the caller must keep it
+ *                  alive for the engine's lifetime.
+ *
+ * @return On success, `n00b_result_ok` wrapping a non-null
+ *         `n00b_audit_engine_t *`. On failure, `n00b_result_err`
+ *         carrying one of:
+ *         `N00B_AUDIT_ERR_ENGINE_BAD_ARGS` (null `guidance` or its
+ *         `rules` list),
+ *         `N00B_AUDIT_ERR_ENGINE_GRAMMAR_LOAD` (base grammar failed
+ *         to load — e.g., `c_ncc.bnf` unreachable or syntactically
+ *         invalid),
+ *         `N00B_AUDIT_ERR_ENGINE_RULE_MERGE` (one of the rule
+ *         fragments failed to compose with the base grammar — e.g.,
+ *         a malformed fragment or a conflicting production), or
+ *         `N00B_AUDIT_ERR_GUIDANCE_SCHEMA` (a rule's `@violation_nt`
+ *         does not resolve to any nonterminal in the merged grammar —
+ *         the guidance file is structurally valid but its
+ *         `@violation_nt` declarations are inconsistent with the
+ *         supplied BNF fragments).
+ *         All round-trip through `n00b_audit_err_str`.
+ */
+extern n00b_result_t(n00b_audit_engine_t *)
+n00b_audit_engine_new(n00b_audit_guidance_t *guidance);
+
+/**
+ * @brief Run the engine against one target source file.
+ *
+ * Opens `path`, parses its contents against the merged grammar,
+ * walks the resulting parse tree looking for each rule's
+ * `violation_nt` nonterminal, and emits one
+ * `n00b_audit_violation_t *` per match into a returned list.
+ *
+ * Line and column on each emitted violation come from slay's parse-
+ * tree source-location surface (the leftmost terminal leaf's
+ * `n00b_token_info_t.line` and `.column` fields) — never invented
+ * numbers (per the cross-project numeric-claims rule).
+ *
+ * Per project DECISIONS.md D-005, this function carries no
+ * `_kargs` block.
+ *
+ * @param engine  Engine built via `n00b_audit_engine_new`.
+ * @param path    Filesystem path to the target source file.
+ *
+ * @return On success, `n00b_result_ok` wrapping a non-null
+ *         `n00b_list_t(n00b_audit_violation_t *) *` (the list may be
+ *         empty — meaning "no violations"). On failure,
+ *         `n00b_result_err` carrying one of:
+ *         `N00B_AUDIT_ERR_ENGINE_TARGET_NOT_FOUND` (path can't be
+ *         opened — ENOENT, EACCES, etc.), or
+ *         `N00B_AUDIT_ERR_ENGINE_PARSE` (the file's contents do not
+ *         parse against the merged grammar). Both round-trip through
+ *         `n00b_audit_err_str`.
+ */
+extern n00b_result_t(n00b_list_t(n00b_audit_violation_t *) *)
+n00b_audit_engine_check_file(n00b_audit_engine_t *engine,
+                             n00b_string_t       *path);
