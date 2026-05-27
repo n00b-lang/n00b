@@ -341,8 +341,11 @@ win_publish_buffer(n00b_conduit_topic_t(n00b_buffer_t *) *topic,
         return;
     }
 
-    n00b_conduit_message_t(n00b_buffer_t *) *msg =
-        n00b_alloc(n00b_conduit_message_t(n00b_buffer_t *));
+    n00b_conduit_topic_base_t *base = (n00b_conduit_topic_base_t *)topic;
+    n00b_allocator_t *alloc = base->conduit ? base->conduit->allocator : nullptr;
+    n00b_conduit_message_t(n00b_buffer_t *) *msg = n00b_alloc_with_opts(
+        n00b_conduit_message_t(n00b_buffer_t *),
+        &(n00b_alloc_opts_t){.allocator = alloc});
     msg->header.type       = N00B_CONDUIT_MSG_USER;
     msg->header.topic      = (n00b_conduit_topic_base_t *)topic;
     msg->header.generation = n00b_atomic_load(&topic->generation);
@@ -362,7 +365,10 @@ win_publish_bytes(n00b_conduit_topic_t(n00b_buffer_t *) *topic,
     if (!topic || !data || n == 0) {
         return;
     }
-    win_publish_buffer(topic, n00b_buffer_from_bytes(data, (int64_t)n));
+    n00b_conduit_topic_base_t *base = (n00b_conduit_topic_base_t *)topic;
+    n00b_allocator_t *alloc = base->conduit ? base->conduit->allocator : nullptr;
+    win_publish_buffer(topic, n00b_buffer_from_bytes(data, (int64_t)n,
+                                                     .allocator = alloc));
 }
 
 static bool
@@ -777,7 +783,9 @@ win_send_stdin_bytes(n00b_subproc_t *sp, char *data, DWORD n)
         return;
     }
 
-    n00b_buffer_t *buf = n00b_buffer_from_bytes(data, (int64_t)n);
+    n00b_allocator_t *alloc = sp->conduit ? sp->conduit->allocator : nullptr;
+    n00b_buffer_t *buf = n00b_buffer_from_bytes(data, (int64_t)n,
+                                                .allocator = alloc);
     if (n00b_subproc_xforms_requested(sp->stdin_xforms)) {
         win_publish_buffer(
             (n00b_conduit_topic_t(n00b_buffer_t *) *)win_state(sp)->stdin_raw_topic,
@@ -788,7 +796,7 @@ win_send_stdin_bytes(n00b_subproc_t *sp, char *data, DWORD n)
         uint64_t written = win_write_stdin_buffer(sp, buf);
         if (written != UINT64_MAX && sp->stdin_obs_topic) {
             n00b_buffer_t *observed = n00b_buffer_from_bytes(
-                data, (int64_t)written);
+                data, (int64_t)written, .allocator = alloc);
             win_publish_buffer(sp->stdin_obs_topic, observed);
         }
     }
@@ -1595,7 +1603,8 @@ n00b_subproc_write_stdin(n00b_subproc_t *sp, n00b_buffer_t *data)
         written = win_write_stdin_buffer(sp, data);
         if (written != UINT64_MAX && sp->stdin_obs_topic) {
             n00b_buffer_t *observed = n00b_buffer_from_bytes(
-                data->data, (int64_t)written);
+                data->data, (int64_t)written,
+                .allocator = sp->conduit ? sp->conduit->allocator : nullptr);
             win_publish_buffer(sp->stdin_obs_topic, observed);
         }
     }

@@ -104,7 +104,13 @@ do_print_string(n00b_string_t *s, n00b_option_t(n00b_string_t *) end, int fd,
         return;
     }
 
-    n00b_buffer_t *buf = n00b_buffer_from_bytes(s->data, (int64_t)s->u8_bytes);
+    n00b_conduit_topic_base_t *base = (n00b_conduit_topic_base_t *)topic;
+    n00b_allocator_t          *alloc = base && base->conduit
+                                           ? base->conduit->allocator
+                                           : nullptr;
+    n00b_buffer_t *buf = n00b_buffer_from_bytes(s->data,
+                                                (int64_t)s->u8_bytes,
+                                                .allocator = alloc);
     n00b_write(n00b_buffer_t *, topic, buf, .sync = sync);
 }
 

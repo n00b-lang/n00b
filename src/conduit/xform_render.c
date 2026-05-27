@@ -58,8 +58,10 @@ render_out_transform(
     if (!captured || captured->u8_bytes == 0)
         return n00b_option_none(n00b_buffer_t *);
 
+    n00b_allocator_t *alloc = xf->conduit ? xf->conduit->allocator : nullptr;
     n00b_buffer_t *out = n00b_buffer_from_bytes(captured->data,
-                                                  (int64_t)captured->u8_bytes);
+                                                (int64_t)captured->u8_bytes,
+                                                .allocator = alloc);
     return n00b_option_set(n00b_buffer_t *, out);
 }
 

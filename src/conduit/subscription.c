@@ -96,7 +96,12 @@ sub_send_sys_message(_n00b_conduit_sub_base_t *sub, n00b_conduit_msg_type_t type
 {
     if (!sub || !sub->sys_queue) return;
 
-    n00b_conduit_sys_msg_t *msg = n00b_alloc(n00b_conduit_sys_msg_t);
+    n00b_allocator_t *msg_alloc = sub->topic && sub->topic->conduit ?
+        sub->topic->conduit->allocator :
+        (n00b_allocator_t *)&n00b_get_runtime()->conduit_pool;
+    n00b_conduit_sys_msg_t *msg = n00b_alloc_with_opts(
+        n00b_conduit_sys_msg_t,
+        &(n00b_alloc_opts_t){.allocator = msg_alloc});
     if (!msg) return;
 
     msg->header.type       = type;
@@ -175,6 +180,12 @@ n00b_conduit_sub_cancel(n00b_conduit_sub_handle_t handle)
 
     _n00b_conduit_sub_base_t *sub = sub_map_lookup(handle);
     if (!sub) return;
+
+    if (n00b_atomic_load(&sub->state) == N00B_CONDUIT_SUB_REMOVED) {
+        sub_unlink_from_topic(sub);
+        sub_map_remove(handle);
+        return;
+    }
 
     int expected = N00B_CONDUIT_SUB_ACTIVE;
     if (!n00b_atomic_cas(&sub->state, &expected, N00B_CONDUIT_SUB_CANCELING)) {

@@ -124,6 +124,15 @@ fd_owner_error_is_pipe_closed(n00b_conduit_fd_owner_t *owner, int err)
     return err == EPIPE;
 }
 
+static n00b_allocator_t *
+fd_owner_allocator(n00b_conduit_fd_owner_t *owner)
+{
+    if (owner && owner->conduit && owner->conduit->allocator) {
+        return owner->conduit->allocator;
+    }
+    return (n00b_allocator_t *)&n00b_get_runtime()->conduit_pool;
+}
+
 static void
 fd_owner_close_raw(n00b_conduit_fd_owner_t *owner)
 {
@@ -217,15 +226,14 @@ n00b_conduit_fd_manage(n00b_conduit_t *c, n00b_conduit_io_backend_t *io,
     n00b_atomic_store(&owner->read_active, false);
     n00b_atomic_store(&owner->write_active, false);
 
-    // Create the 4 topics
-    n00b_result_t(n00b_conduit_topic_base_t *) res;
-
-    res = n00b_conduit_topic_get(c, N00B_CONDUIT_URI_FD_READ(fd),
-                                sizeof(n00b_conduit_topic_t(n00b_buffer_t *)));
-    if (n00b_result_is_err(res)) {
+    // Create the 4 topics.
+    n00b_conduit_topic_t(n00b_buffer_t *) *read_topic =
+        n00b_conduit_topic_init(n00b_buffer_t *, c,
+                                N00B_CONDUIT_URI_FD_READ(fd));
+    if (!read_topic) {
         return n00b_result_err(n00b_conduit_fd_owner_t *, ENOMEM);
     }
-    owner->read_topic = n00b_result_get(res);
+    owner->read_topic = (n00b_conduit_topic_base_t *)read_topic;
 
     // Edge-triggered read activation: reads start when the first subscriber
     // registers and stop when the last subscriber is removed.
@@ -234,26 +242,29 @@ n00b_conduit_fd_manage(n00b_conduit_t *c, n00b_conduit_io_backend_t *io,
     owner->read_topic->on_last_unsubscribe     = fd_read_on_last_unsubscribe;
     owner->read_topic->on_last_unsubscribe_ctx = owner;
 
-    res = n00b_conduit_topic_get(c, N00B_CONDUIT_URI_FD_WRITE(fd),
-                                sizeof(n00b_conduit_topic_t(n00b_conduit_fd_write_payload_t)));
-    if (n00b_result_is_err(res)) {
+    n00b_conduit_topic_t(n00b_conduit_fd_write_payload_t) *write_topic =
+        n00b_conduit_topic_init(n00b_conduit_fd_write_payload_t, c,
+                                N00B_CONDUIT_URI_FD_WRITE(fd));
+    if (!write_topic) {
         return n00b_result_err(n00b_conduit_fd_owner_t *, ENOMEM);
     }
-    owner->write_topic = n00b_result_get(res);
+    owner->write_topic = (n00b_conduit_topic_base_t *)write_topic;
 
-    res = n00b_conduit_topic_get(c, N00B_CONDUIT_URI_FD_STATUS(fd),
-                                sizeof(n00b_conduit_topic_t(n00b_conduit_fd_status_payload_t)));
-    if (n00b_result_is_err(res)) {
+    n00b_conduit_topic_t(n00b_conduit_fd_status_payload_t) *status_topic =
+        n00b_conduit_topic_init(n00b_conduit_fd_status_payload_t, c,
+                                N00B_CONDUIT_URI_FD_STATUS(fd));
+    if (!status_topic) {
         return n00b_result_err(n00b_conduit_fd_owner_t *, ENOMEM);
     }
-    owner->status_topic = n00b_result_get(res);
+    owner->status_topic = (n00b_conduit_topic_base_t *)status_topic;
 
-    res = n00b_conduit_topic_get(c, N00B_CONDUIT_URI_FD_WREQ(fd),
-                                sizeof(n00b_conduit_topic_t(n00b_conduit_fd_write_req_payload_t)));
-    if (n00b_result_is_err(res)) {
+    n00b_conduit_topic_t(n00b_conduit_fd_write_req_payload_t) *wreq_topic =
+        n00b_conduit_topic_init(n00b_conduit_fd_write_req_payload_t, c,
+                                N00B_CONDUIT_URI_FD_WREQ(fd));
+    if (!wreq_topic) {
         return n00b_result_err(n00b_conduit_fd_owner_t *, ENOMEM);
     }
-    owner->wreq_topic = n00b_result_get(res);
+    owner->wreq_topic = (n00b_conduit_topic_base_t *)wreq_topic;
 
     // Write queue starts empty; write monitoring is demand-driven.
     owner->wq_head = nullptr;
@@ -412,8 +423,10 @@ publish_status(n00b_conduit_fd_owner_t *owner,
     }
     n00b_conduit_publisher_t *pub = n00b_result_get(pub_res);
 
-    n00b_conduit_fd_status_msg_t *msg =
-        n00b_alloc(n00b_conduit_fd_status_msg_t);
+    n00b_allocator_t *alloc = fd_owner_allocator(owner);
+    n00b_conduit_fd_status_msg_t *msg = n00b_alloc_with_opts(
+        n00b_conduit_fd_status_msg_t,
+        &(n00b_alloc_opts_t){.allocator = alloc});
 
     msg->header.type       = N00B_CONDUIT_MSG_USER;
     msg->header.topic      = topic;
@@ -500,10 +513,15 @@ fd_owner_do_reads(n00b_conduit_fd_owner_t *owner)
         if (n > 0) {
             n00b_atomic_add(&owner->read_pos, (uint64_t)n);
 
-            n00b_buffer_t *payload = n00b_buffer_from_bytes((char *)buf, (int64_t)n);
+            n00b_allocator_t *alloc = fd_owner_allocator(owner);
+            n00b_buffer_t *payload = n00b_buffer_from_bytes((char *)buf,
+                                                            (int64_t)n,
+                                                            .allocator = alloc);
 
             n00b_conduit_message_t(n00b_buffer_t *) *msg =
-                n00b_alloc(n00b_conduit_message_t(n00b_buffer_t *));
+                n00b_alloc_with_opts(
+                    n00b_conduit_message_t(n00b_buffer_t *),
+                    &(n00b_alloc_opts_t){.allocator = alloc});
 
             msg->header.type       = N00B_CONDUIT_MSG_USER;
             msg->header.topic      = topic;
@@ -661,8 +679,10 @@ send_write_done(n00b_conduit_fd_owner_t *owner,
         return;
     }
 
-    n00b_conduit_fd_write_done_msg_t *msg =
-        n00b_alloc(n00b_conduit_fd_write_done_msg_t);
+    n00b_allocator_t *alloc = fd_owner_allocator(owner);
+    n00b_conduit_fd_write_done_msg_t *msg = n00b_alloc_with_opts(
+        n00b_conduit_fd_write_done_msg_t,
+        &(n00b_alloc_opts_t){.allocator = alloc});
 
     msg->header.type       = N00B_CONDUIT_MSG_USER;
     msg->header.topic      = nullptr;
@@ -689,11 +709,14 @@ publish_write_done_event(n00b_conduit_fd_owner_t *owner,
     (void)pub;
 
     // Allocate immutable copy
-    void *copy = n00b_alloc_array(uint8_t, len);
+    n00b_allocator_t *alloc = fd_owner_allocator(owner);
+    void *copy = n00b_alloc_array_with_opts(uint8_t, len,
+        &(n00b_alloc_opts_t){.allocator = alloc});
     memcpy(copy, data, len);
 
-    n00b_conduit_fd_write_msg_t *msg =
-        n00b_alloc(n00b_conduit_fd_write_msg_t);
+    n00b_conduit_fd_write_msg_t *msg = n00b_alloc_with_opts(
+        n00b_conduit_fd_write_msg_t,
+        &(n00b_alloc_opts_t){.allocator = alloc});
 
     msg->header.type       = N00B_CONDUIT_MSG_USER;
     msg->header.topic      = owner->write_topic;
@@ -944,12 +967,16 @@ try_fulfill_request(n00b_conduit_stream_reader_t *reader)
 
             void *result_data = nullptr;
             if (nbytes > 0) {
-                result_data = n00b_alloc_array(uint8_t, nbytes);
+                n00b_allocator_t *alloc = fd_owner_allocator(reader->owner);
+                result_data = n00b_alloc_array_with_opts(uint8_t, nbytes,
+                    &(n00b_alloc_opts_t){.allocator = alloc});
                 memcpy(result_data, accum_data(reader), nbytes);
             }
 
-            n00b_conduit_fd_stream_msg_t *msg =
-                n00b_alloc(n00b_conduit_fd_stream_msg_t);
+            n00b_allocator_t *alloc = fd_owner_allocator(reader->owner);
+            n00b_conduit_fd_stream_msg_t *msg = n00b_alloc_with_opts(
+                n00b_conduit_fd_stream_msg_t,
+                &(n00b_alloc_opts_t){.allocator = alloc});
 
             msg->header.type       = N00B_CONDUIT_MSG_USER;
             msg->header.topic      = nullptr;
@@ -992,12 +1019,16 @@ try_fulfill_request(n00b_conduit_stream_reader_t *reader)
 
             void *result_data = nullptr;
             if (nbytes > 0) {
-                result_data = n00b_alloc_array(uint8_t, nbytes);
+                n00b_allocator_t *alloc = fd_owner_allocator(reader->owner);
+                result_data = n00b_alloc_array_with_opts(uint8_t, nbytes,
+                    &(n00b_alloc_opts_t){.allocator = alloc});
                 memcpy(result_data, accum_data(reader), nbytes);
             }
 
-            n00b_conduit_fd_stream_msg_t *msg =
-                n00b_alloc(n00b_conduit_fd_stream_msg_t);
+            n00b_allocator_t *alloc = fd_owner_allocator(reader->owner);
+            n00b_conduit_fd_stream_msg_t *msg = n00b_alloc_with_opts(
+                n00b_conduit_fd_stream_msg_t,
+                &(n00b_alloc_opts_t){.allocator = alloc});
 
             msg->header.type       = N00B_CONDUIT_MSG_USER;
             msg->header.topic      = nullptr;

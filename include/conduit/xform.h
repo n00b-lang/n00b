@@ -108,7 +108,9 @@
             xf->ops->transform(xf, in_msg->payload);                          \
         if (n00b_option_is_set(out)) {                                         \
             n00b_conduit_message_t(T_out) *om =                                \
-                n00b_alloc(n00b_conduit_message_t(T_out));                     \
+                n00b_alloc_with_opts(                                          \
+                    n00b_conduit_message_t(T_out),                             \
+                    &(n00b_alloc_opts_t){.allocator = xf->conduit->allocator});\
             om->header.type       = N00B_CONDUIT_MSG_USER;                     \
             om->header.topic      =                                            \
                 (n00b_conduit_topic_base_t *)xf->topic;                        \
@@ -129,8 +131,9 @@
                     n00b_atomic_load(&_up_base->done_topic);                   \
             if (_done_tp) {                                                    \
                 n00b_conduit_message_t(n00b_conduit_topic_base_t *) *_dm =     \
-                    n00b_alloc(                                                \
-                        n00b_conduit_message_t(n00b_conduit_topic_base_t *));  \
+                    n00b_alloc_with_opts(                                      \
+                        n00b_conduit_message_t(n00b_conduit_topic_base_t *),   \
+                        &(n00b_alloc_opts_t){.allocator = xf->conduit->allocator});\
                 _dm->header.type  = N00B_CONDUIT_MSG_USER;                     \
                 _dm->header.topic =                                            \
                     (n00b_conduit_topic_base_t *)_done_tp;                     \
@@ -246,7 +249,7 @@
         xf->cookie_size = cookie_size;                                         \
         xf->passthrough_sys = true;                                            \
         if (cookie_size > 0) {                                                 \
-            xf->cookie = n00b_alloc_array(uint8_t, cookie_size);                      \
+            xf->cookie = n00b_alloc_array(uint8_t, cookie_size);               \
             _n00b_gc_register_root(&xf->cookie, 1);                            \
         }                                                                      \
         else {                                                                 \
@@ -271,7 +274,7 @@
                 n00b_result_get(tr);                                 \
         /* Init output topic typed fields so downstream can subscribe. */      \
         xf->topic->subscriptions =                                             \
-            n00b_list_new(n00b_conduit_subscription_t(T_out) *, c->allocator);\
+            n00b_list_new(n00b_conduit_subscription_t(T_out) *, c->allocator); \
         xf->topic->inbox = nullptr;                                            \
         /* Create input inbox */                                               \
         xf->inbox = n00b_alloc_with_opts(n00b_conduit_inbox_t(T_in),           \
@@ -331,7 +334,9 @@
 #define n00b_conduit_xform_emit(T_in, T_out, xf, value)                       \
     do {                                                                       \
         n00b_conduit_message_t(T_out) *_em =                                   \
-            n00b_alloc(n00b_conduit_message_t(T_out));                         \
+            n00b_alloc_with_opts(                                              \
+                n00b_conduit_message_t(T_out),                                 \
+                &(n00b_alloc_opts_t){.allocator = (xf)->conduit->allocator});  \
         _em->header.type       = N00B_CONDUIT_MSG_USER;                        \
         _em->header.topic      =                                               \
             (n00b_conduit_topic_base_t *)(xf)->topic;                          \
