@@ -1,0 +1,70 @@
+# audit-rule-file.bnf — slay-format BNF metagrammar for n00b-audit
+# rule files (`.bnf` rule-file format v2; WP-005).
+#
+# This metagrammar describes the audit-rule-file format that
+# `src/audit/guidance.c` loads. The format is a plain-text file
+# carrying file-level `@<directive>` metadata, one or more
+# `@rule <id>` sections (each with its own per-rule directives),
+# and embedded BNF productions interspersed between `@rule`
+# markers.
+#
+# # Token shape (custom tokenizer in src/audit/rule_file_tokenizer.c)
+#
+# Lines are classified by their leading character (after any
+# leading whitespace stripping for `INDENT_LINE`):
+#
+#   RULE_MARKER  — `@rule <id>` lines; emits the rule id as the
+#                  token's text payload.
+#   DIRECTIVE    — `@<word>` lines other than `@rule`; emits the
+#                  directive name (without the `@`) as the
+#                  token's text payload.
+#   REST         — the trailing text of a `DIRECTIVE` line (the
+#                  bytes after the directive word + one space,
+#                  trimmed of trailing whitespace). Always
+#                  emitted after a DIRECTIVE, even if empty.
+#   INDENT_LINE  — a continuation line that begins with a space
+#                  or tab. Emits the line content trimmed of
+#                  the leading whitespace.
+#   BNF_LINE     — any other non-empty line. The token's text
+#                  is the entire line content (preserved
+#                  verbatim so the BNF body is reconstructable
+#                  via concatenation).
+#   NEWLINE      — physical line terminator; appended after
+#                  every line.
+#
+# Comments (`# ...`) and blank lines are skipped as trivia.
+#
+# # Two-pass loader design
+#
+# The metagrammar treats each rule's BNF body as opaque
+# `BNF_LINE` tokens. The loader walks the parse tree to extract
+# metadata + concatenates each rule's `BNF_LINE` contents into
+# the rule's `bnf_fragment` field. The engine then loads each
+# rule's `bnf_fragment` via slay's existing `n00b_bnf_load`
+# (unchanged from the prior JSON-driven pipeline) — the BNF
+# body is **never** re-parsed by this metagrammar.
+#
+# # Why this shape
+#
+# Slay's existing BNF tokenizer is incompatible with our
+# directive-line shape (`@` carries different semantics, our
+# metadata lines aren't BNF productions). So we register a
+# dedicated `"audit_rule_file"` tokenizer that emits the
+# coarse line-kind tokens above; the metagrammar below is
+# straightforward to walk in the loader.
+
+<file> ::= <file_meta> <rule_section>*
+
+<file_meta> ::= <meta_field>*
+
+<meta_field> ::= %DIRECTIVE %REST %NEWLINE <continuation>*
+
+<continuation> ::= %INDENT_LINE %NEWLINE
+
+<rule_section> ::= <rule_marker> <meta_field>* <bnf_body>
+
+<rule_marker> ::= %RULE_MARKER %NEWLINE
+
+<bnf_body> ::= <bnf_line>*
+
+<bnf_line> ::= %BNF_LINE %NEWLINE

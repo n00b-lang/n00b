@@ -522,6 +522,61 @@ subdir('src/net/http')
 # ============================================================================
 
 subdir('src/attest')
+
+# ============================================================================
+# naudit — n00b API-guidelines auditor (consolidated from the former
+# standalone n00b-audit project; see WP-008 / D-017). The engine drives
+# a slay/Earley parse of the input file against a metagrammar-merged
+# rule set loaded from a project-local `audit-rules.bnf`.
+#
+# The audit-rule-file metagrammar is itself a BNF grammar shipped in
+# `grammars/audit-rule-file.bnf`. `embed_metagrammar.py` reads the BNF
+# at configure time, C-string-escapes the bytes, and emits a header
+# (`audit_rule_file_grammar.h`) that defines a `(const char *)` macro
+# holding the BNF verbatim. The audit-rule loader hands that string to
+# slay's `n00b_bnf_load` at runtime to compose the metagrammar object.
+# Same shape as the unicode codegen above; the generated header is
+# listed as a libn00b source so meson produces it before any naudit TU
+# compiles and surfaces its containing directory on the implicit
+# include path.
+# ============================================================================
+
+# Path-constant header (`audit_paths.h`) exposing the location of
+# `c_ncc.bnf` to the naudit engine. The engine loads the base C
+# grammar from `c_ncc.bnf` at runtime and merges per-rule fragments
+# loaded from the project's `audit-rules.bnf`. Standalone-project
+# precedent: the path was emitted at configure time so no path-
+# string literals land in C source (NCC.md "Build system"); same
+# pattern in-tree, pointing at n00b's own `grammars/c_ncc.bnf`.
+ncc_grammar_path = (
+    meson.current_source_dir() / 'grammars' / 'c_ncc.bnf')
+
+audit_paths_h = configure_file(
+    output: 'audit_paths.h',
+    configuration: configuration_data({
+        'N00B_AUDIT_GRAMMAR_PATH': '"' + ncc_grammar_path + '"',
+    }),
+    install: false,
+)
+
+audit_rule_file_bnf_path = (
+    meson.current_source_dir() / 'grammars' / 'audit-rule-file.bnf')
+
+audit_rule_file_grammar_h = custom_target(
+    'audit_rule_file_grammar.h',
+    input: audit_rule_file_bnf_path,
+    output: 'audit_rule_file_grammar.h',
+    command: [
+        python3,
+        meson.current_source_dir() / 'scripts' / 'embed_metagrammar.py',
+        '@INPUT@',
+        '@OUTPUT@',
+    ],
+    install: false,
+)
+
+subdir('src/naudit')
+
 # Aggregate per-module source lists into the libn00b source set. Each
 # entry above (`subdir('src/<mod>')`) is responsible for declaring a
 # `n00b_<mod>_src` variable; we just glue them together here.
@@ -544,7 +599,9 @@ n00b_dll_src = (
     n00b_data_src +
     n00b_quic_src +
     n00b_http_src +
-    n00b_attest_src
+    n00b_attest_src +
+    n00b_naudit_src +
+    [audit_paths_h, audit_rule_file_grammar_h]
 )
 
 # Build generated unicode tables with --no-ncc (they are pure data,
@@ -785,6 +842,55 @@ chalk_module_test = executable('test_chalk_module',
     kwargs: test_common_kwargs,
 )
 test('chalk_module', chalk_module_test, suite: 'unit')
+
+# ============================================================================
+# naudit regression tests (consolidated in-tree per WP-008 / D-017).
+#
+# Most tests load fixtures from `test/fixtures/naudit/`; the build
+# bakes that path into a `-DN00B_AUDIT_TEST_FIXTURE_DIR="..."` flag
+# so the C source never carries a hardcoded path. The macro name
+# keeps the `N00B_AUDIT_` prefix per WP-008 symbol-stability — only
+# the binary + directory names changed, not the engine identity.
+#
+# `test_naudit_reference_guidance` and the three rule-driven tests
+# (`engine_malloc`, `engine_legacy`, `engine_bulk`) gate on POSIX
+# `access()` of `/Users/viega/n00b/audit-rules.bnf` inside the test
+# source and emit `[SKIP]` if the file isn't reachable, matching
+# the prior standalone project's behaviour.
+# ============================================================================
+
+naudit_fixture_dir = (
+    meson.current_source_dir() / 'test' / 'fixtures' / 'naudit')
+
+# `test_common_kwargs.c_args` is `exe_c_args`; append the fixture-dir
+# macro for the tests that load fixtures (all of them except
+# `reference_guidance`, which is fine to receive it too — the macro
+# is just unused there).
+naudit_test_c_args = (
+    exe_c_args + ['-DN00B_AUDIT_TEST_FIXTURE_DIR="' + naudit_fixture_dir + '"'])
+
+foreach _ntest : [
+    'module',
+    'guidance',
+    'reference_guidance',
+    'engine',
+    'engine_legacy',
+    'engine_malloc',
+    'engine_bulk',
+    'cli',
+    'cli_json',
+]
+    _naudit_test_exe = executable(
+        'test_naudit_' + _ntest,
+        ['test/unit/test_naudit_' + _ntest + '.c'],
+        include_directories: incdir,
+        c_args: naudit_test_c_args,
+        link_args: exe_link_args,
+        link_with: [n00b],
+        dependencies: [picoquic_dep, monocypher_dep],
+    )
+    test('naudit_' + _ntest, _naudit_test_exe, suite: 'unit')
+endforeach
 
 attest_module_test = executable('test_attest_module',
     ['test/unit/test_attest_module.c'],
@@ -2221,6 +2327,18 @@ table_tool = executable('n00b_table',
 # per DF-004 disposition (a)).
 n00b_attest_tool = executable('n00b-attest',
     ['src/tools/n00b-attest.c'],
+    kwargs: test_common_kwargs,
+    install: true,
+)
+
+# naudit — n00b API-guidelines auditor CLI (consolidated in-tree per
+# WP-008 / D-017; the engine TUs live under `src/naudit/` and are
+# absorbed into libn00b above). The CLI body lives in
+# `src/naudit/cli.c`; the thin `main()` in `src/tools/naudit.c`
+# unwraps the result from `n00b_audit_run_cli` and returns the
+# integer payload as the process exit code.
+naudit_tool = executable('naudit',
+    ['src/tools/naudit.c'],
     kwargs: test_common_kwargs,
     install: true,
 )

@@ -1,0 +1,16 @@
+@schema_version 2
+@project n00b-audit-test
+@description Fixture with @schema_version 2 -- must SCHEMA_VERSION-reject.
+@source_doc test/fixtures/audit/guidance_bad_version.bnf
+@dependencies
+
+@rule n00b.s2_1.null
+@title NULL -> nullptr
+@section section 2.1
+@violation_nt placeholder_in_phase_3
+@rationale C23 has nullptr; NULL is a legacy macro.
+@bad int *p = NULL;
+@good int *p = nullptr;
+@guidance Replace NULL with nullptr in all expression positions.
+
+<placeholder_bnf_fragment> ::= "placeholder"
