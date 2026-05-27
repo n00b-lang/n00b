@@ -1,0 +1,221 @@
+@schema_version 1
+@project n00b
+@description Reference rule set bootstrapped from n00b-api-guidelines.md
+@source_doc ~/.agents/tech/n00b-api-guidelines.md
+@dependencies
+
+# -----------------------------------------------------------------
+# Rule 1 -- WP-001 -- NULL -> nullptr (section 2.1)
+# -----------------------------------------------------------------
+@rule n00b.s2_1.null
+@title NULL -> nullptr
+@section section 2.1
+@violation_nt n00b_audit_v_null
+@rationale `nullptr` is a C23 standard keyword with type `nullptr_t`. It cannot
+    silently coerce to an integer and is type-safe in generic macros.
+    This rule is total: there is no acceptable use of `NULL` in new n00b
+    code.
+@bad n00b_allocator_t *a = NULL;
+    if (p == NULL) { ... }
+    return NULL;
+@good n00b_allocator_t *a = nullptr;
+    if (p == nullptr) { ... }
+    return nullptr;
+@guidance Replace NULL with nullptr in all expression positions.
+
+<n00b_audit_v_null> ::= %"NULL"
+<provided_identifier> ::= <n00b_audit_v_null>
+
+# -----------------------------------------------------------------
+# Rule 2 -- WP-002 -- malloc family (section 2.3)
+# -----------------------------------------------------------------
+@rule n00b.s2_3.malloc
+@title malloc family -> n00b_alloc family
+@section section 2.3
+@violation_nt n00b_audit_v_malloc_call
+@rationale The libn00b allocator family (n00b_alloc / n00b_alloc_array /
+    n00b_alloc_flex / n00b_free) zero-fills, embeds source-location and
+    type-hash metadata for the GC, and threads caller-selected arenas
+    through .allocator keyword args. libc malloc/calloc/realloc/free
+    bypass all of that.
+@bad my_thing_t *t = malloc(sizeof(*t));
+    memset(t, 0, sizeof(*t));
+    // ...
+    free(t);
+@good my_thing_t *t = n00b_alloc(my_thing_t);   // zero-filled, GC-tracked
+    // ...
+    n00b_free(t);
+@guidance Replace malloc/calloc/realloc/free (and the underscore-internal _n00b_alloc_raw) with the n00b_alloc family.
+
+<n00b_audit_v_malloc_call> ::= %"malloc"
+<n00b_audit_v_malloc_call> ::= %"calloc"
+<n00b_audit_v_malloc_call> ::= %"realloc"
+<n00b_audit_v_malloc_call> ::= %"free"
+<n00b_audit_v_malloc_call> ::= %"_n00b_alloc_raw"
+<provided_identifier> ::= <n00b_audit_v_malloc_call>
+
+# -----------------------------------------------------------------
+# Rule 3 -- WP-003 -- legacy __attribute__ spelling (section 2.5)
+# -----------------------------------------------------------------
+@rule n00b.s2_5.attribute_legacy
+@title __attribute__((...)) -> [[...]] / [[gnu::...]]
+@section section 2.5
+@violation_nt n00b_audit_v_attribute_legacy
+@rationale C23 standardized the bracket-attribute syntax. The legacy
+    __attribute__((...)) spelling is portable across older toolchains but
+    in n00b we target C23 + ncc, so the modern form is the rule. ncc has
+    an auto-modernization pass for these but new code should be written
+    in the modern form directly.
+@bad __attribute__((noreturn)) void die(void);
+    __attribute__((unused)) int x;
+    __attribute__((constructor)) static void init(void);
+    __attribute__((cleanup(close_fd))) int fd;
+@good [[noreturn]] void die(void);
+    [[maybe_unused]] int x;
+    [[gnu::constructor]] static void init(void);
+    [[gnu::cleanup(close_fd)]] int fd;
+@guidance Replace __attribute__((X)) with [[X]] (or [[gnu::X]] for non-standard attributes).
+
+<n00b_audit_v_attribute_legacy> ::= %"__attribute__"
+<_kw_kw_gcc_attribute> ::= <n00b_audit_v_attribute_legacy>
+
+# -----------------------------------------------------------------
+# Rule 4 -- WP-003 -- legacy __typeof__ spelling (section 2.6)
+# -----------------------------------------------------------------
+@rule n00b.s2_6.typeof_legacy
+@title __typeof__ -> typeof
+@section section 2.6
+@violation_nt n00b_audit_v_typeof_legacy
+@rationale C23 standardized typeof (no underscores). __typeof__ is the
+    legacy GCC spelling; same applies to typeof_unqual, _Static_assert,
+    __thread, __alignof__, __alignas__ (the last two are covered by
+    rule n00b.s13.legacy_spellings).
+@bad __typeof__(x) tmp = x;
+@good typeof(x) tmp = x;
+@guidance Replace __typeof__ with typeof.
+
+<n00b_audit_v_typeof_legacy> ::= %"__typeof__"
+<_kw_kw_typeof> ::= <n00b_audit_v_typeof_legacy>
+
+# -----------------------------------------------------------------
+# Rule 5 -- WP-003 -- legacy va_list usage (section 2.8)
+# -----------------------------------------------------------------
+@rule n00b.s2_8.va_list_legacy
+@title va_list / stdarg.h -> ncc's checked variadics
+@section section 2.8
+@violation_nt n00b_audit_v_va_list_legacy
+@rationale stdarg.h is explicitly banned (NCC.md "NO LIBC ALLOWED"). Use
+    ncc's `+` checked variadic syntax, which gives compile-time type
+    checking at call sites that the legacy va_list / va_start / va_arg /
+    va_end machinery does not. va_list itself is not flagged because
+    flagging it breaks parsing of legitimate-looking `va_list ap;`
+    declarations (see DF-G); the va_start / va_arg / va_end companions
+    catch any actual usage.
+@bad #include <stdarg.h>
+    void my_log(const char *fmt, ...) {
+        va_list ap;
+        va_start(ap, fmt);
+        vfprintf(stderr, fmt, ap);
+        va_end(ap);
+    }
+@good void my_log(n00b_string_t *fmt, +);
+
+    void
+    my_log(n00b_string_t *fmt, +)
+    {
+        // `vargs` is auto-supplied as `n00b_vargs_t *`.
+        for (unsigned int i = 0; i < vargs->nargs; i++) {
+            void *arg = vargs->args[i];
+            // ...
+        }
+    }
+@guidance Replace va_list / va_start / va_arg / va_end with ncc's `+` checked variadic syntax.
+
+<n00b_audit_v_va_list_legacy> ::= %"va_start"
+<n00b_audit_v_va_list_legacy> ::= %"va_arg"
+<n00b_audit_v_va_list_legacy> ::= %"va_end"
+<provided_identifier> ::= <n00b_audit_v_va_list_legacy>
+
+# -----------------------------------------------------------------
+# Rule 6 -- WP-003 -- libc I/O ban (section 2.10)
+# -----------------------------------------------------------------
+@rule n00b.s2_10.libc_io
+@title libc I/O -> conduit / file substrate
+@section section 2.10
+@violation_nt n00b_audit_v_libc_io
+@rationale <stdio.h> linkage and POSIX open/read/write/close are banned
+    (NCC.md "NO LIBC ALLOWED"). Replacements live under include/conduit/
+    and include/text/. Header-only libc (memcpy, strlen, memmove) is
+    acceptable inside .c files for raw byte work, per NCC.md, but only
+    when no libn00b wrapper exists -- and there almost always is one.
+@bad FILE *f = fopen("/path", "r");
+    fprintf(stderr, "boom\n");
+    printf("hello\n");
+    puts(msg);
+    read(fd, buf, n);
+    write(fd, buf, n);
+@good auto r = n00b_conduit_file_open(c, io, "/path", N00B_CONDUIT_FILE_R);
+    n00b_eprintf("boom\n");
+    n00b_printf("hello\n");
+    n00b_print(msg);
+    // conduit read pipeline (see section 7)
+    n00b_print(buf, .fd = fd);
+@guidance Replace libc I/O calls with the corresponding conduit / n00b_print / n00b_printf surface.
+
+<n00b_audit_v_libc_io> ::= %"printf"
+<n00b_audit_v_libc_io> ::= %"fprintf"
+<n00b_audit_v_libc_io> ::= %"sprintf"
+<n00b_audit_v_libc_io> ::= %"snprintf"
+<n00b_audit_v_libc_io> ::= %"vfprintf"
+<n00b_audit_v_libc_io> ::= %"puts"
+<n00b_audit_v_libc_io> ::= %"fputs"
+<n00b_audit_v_libc_io> ::= %"fopen"
+<n00b_audit_v_libc_io> ::= %"fclose"
+<n00b_audit_v_libc_io> ::= %"fread"
+<n00b_audit_v_libc_io> ::= %"fwrite"
+<n00b_audit_v_libc_io> ::= %"getc"
+<n00b_audit_v_libc_io> ::= %"putc"
+<n00b_audit_v_libc_io> ::= %"open"
+<n00b_audit_v_libc_io> ::= %"read"
+<n00b_audit_v_libc_io> ::= %"write"
+<n00b_audit_v_libc_io> ::= %"close"
+<n00b_audit_v_libc_io> ::= %"lseek"
+<n00b_audit_v_libc_io> ::= %"dup"
+<n00b_audit_v_libc_io> ::= %"dup2"
+<n00b_audit_v_libc_io> ::= %"pipe"
+<n00b_audit_v_libc_io> ::= %"socket"
+<n00b_audit_v_libc_io> ::= %"connect"
+<n00b_audit_v_libc_io> ::= %"bind"
+<n00b_audit_v_libc_io> ::= %"listen"
+<n00b_audit_v_libc_io> ::= %"accept"
+<provided_identifier> ::= <n00b_audit_v_libc_io>
+
+# -----------------------------------------------------------------
+# Rule 7 -- WP-004 -- legacy spellings (section 13)
+# -----------------------------------------------------------------
+@rule n00b.s13.legacy_spellings
+@title legacy spellings -> C23 spellings
+@section section 13
+@violation_nt n00b_audit_v_legacy_spellings
+@rationale C23 standardized the modern spellings of these identifiers:
+    `static_assert` (replaces `_Static_assert`), `thread_local` (replaces
+    `__thread`), `alignof` (replaces `__alignof__`), `alignas` (replaces
+    `__alignas__`). The legacy spellings work but are GCC-isms; n00b
+    targets C23 + ncc so the modern spellings are the rule.
+@bad _Static_assert(sizeof(int) == 4, "int must be 32 bits");
+    __thread int per_thread_counter;
+    size_t a = __alignof__(double);
+    __alignas__(16) char buf[64];
+@good static_assert(sizeof(int) == 4, "int must be 32 bits");
+    thread_local int per_thread_counter;
+    size_t a = alignof(double);
+    alignas(16) char buf[64];
+@guidance Replace _Static_assert / __thread / __alignof__ / __alignas__ with their C23 spellings static_assert / thread_local / alignof / alignas.
+
+<n00b_audit_v_legacy_spellings> ::= %"_Static_assert"
+<n00b_audit_v_legacy_spellings> ::= %"__thread"
+<n00b_audit_v_legacy_spellings> ::= %"__alignof__"
+<n00b_audit_v_legacy_spellings> ::= %"__alignas__"
+<_kw_kw_static_assert> ::= <n00b_audit_v_legacy_spellings>
+<_kw_kw_storage_class> ::= <n00b_audit_v_legacy_spellings>
+<provided_identifier> ::= <n00b_audit_v_legacy_spellings>
