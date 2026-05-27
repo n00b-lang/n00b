@@ -1844,6 +1844,12 @@ slay_pprint_test = executable('test_slay_pprint',
 )
 test('slay_pprint', slay_pprint_test, suite: 'unit')
 
+slay_rewrite_test = executable('test_slay_rewrite',
+    ['test/unit/test_slay_rewrite.c'],
+    kwargs: test_common_kwargs,
+)
+test('slay_rewrite', slay_rewrite_test, suite: 'unit')
+
 pwz_test = executable('test_pwz',
     ['test/unit/test_pwz.c'],
     kwargs: test_common_kwargs,

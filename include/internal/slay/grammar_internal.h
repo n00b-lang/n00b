@@ -44,6 +44,21 @@ struct n00b_parse_rule_t {
     bool                                  penalty_rule;
     bool                                  first_has_any;
     void                                 *thunk;
+    /**
+     * @internal
+     * Sidecar: rewrite-block metadata (`n00b_rewrite_info_t *` from
+     * `src/slay/rewrite.c`), or nullptr if this production has no
+     * rewrite. Storage decision DF-L: sidecar-by-pointer keeps the
+     * core struct flat and zero-cost for rules without rewrites.
+     */
+    void                                 *rewrite;
+    /**
+     * @internal
+     * Sidecar: capture-name table (`n00b_capture_table_t *` from
+     * `src/slay/rewrite.c`), or nullptr if this production declares
+     * no `$name:<nt>` captures.
+     */
+    void                                 *captures;
 };
 
 struct n00b_rule_group_t {
