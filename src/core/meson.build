@@ -4,6 +4,7 @@
 n00b_core_src = files(
     'exit.c',
     'init.c',
+    'env.c',
     'thread.c',
     'mmaps.c',
     'static_objects.c',
