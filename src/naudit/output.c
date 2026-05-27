@@ -167,6 +167,18 @@ n00b_audit_print_terminal(n00b_list_t(n00b_audit_violation_t *) *violations,
         if (!emit_good_example_block(v->rule)) {
             return n00b_result_err(int, N00B_AUDIT_ERR_CLI_RENDER);
         }
+        /*
+         * WP-007 Phase 2: when the violation carries a suggested
+         * rewrite (only rules with a `rewrite { template: ... }`
+         * block in the guidance file populate this — rules 1, 4,
+         * and 7 of the canonical guidance), emit a single
+         * "suggested fix: <text>" line indented to match the
+         * `  | ` block above. The text is the bytes slay's
+         * `n00b_production_rewrite_text` produced, verbatim.
+         */
+        if (v->rewrite && v->rewrite->u8_bytes > 0) {
+            n00b_printf("  suggested fix: «#»", v->rewrite);
+        }
     }
 
     return n00b_result_ok(int, (int)n);

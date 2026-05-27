@@ -39,6 +39,7 @@
 #include <fcntl.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include "n00b.h"
@@ -232,6 +233,17 @@ test_fixture_null(void)
     }
     assert(found_prefix);
 
+    /* WP-007 Phase 2: the terminal renderer must emit a "suggested
+     * fix: nullptr" line for the n00b.s2_1.null rule (the
+     * guidance_phase4.bnf fixture carries a rewrite block on this
+     * rule). */
+    if (strstr(out, "suggested fix: nullptr") == nullptr) {
+        fprintf(stderr,
+                "  expected `suggested fix: nullptr` in stdout; got:\n%s\n",
+                out);
+    }
+    assert(strstr(out, "suggested fix: nullptr") != nullptr);
+
     printf("  [PASS] fixture_null (exit=1, stdout=%zu bytes)\n",
            strlen(out));
 }
@@ -355,6 +367,177 @@ test_err_str_cli_codes(void)
     printf("  [PASS] err_str CLI codes\n");
 }
 
+/* ------------------------------------------------------------ */
+/* WP-007 Phase 2 — --fix CLI flag end-to-end.                 */
+/* ------------------------------------------------------------ */
+
+static n00b_string_t **
+build_argv5(n00b_string_t *prog, n00b_string_t *g_flag, n00b_string_t *g_val,
+            n00b_string_t *fix_flag, n00b_string_t *positional,
+            int *argc_out)
+{
+    n00b_string_t **argv = (n00b_string_t **)n00b_alloc_array(
+        n00b_string_t *, 6);
+    argv[0] = prog;
+    argv[1] = g_flag;
+    argv[2] = g_val;
+    argv[3] = fix_flag;
+    argv[4] = positional;
+    argv[5] = nullptr;
+    *argc_out = 5;
+    return argv;
+}
+
+/* Copy a file via POSIX read/write (the relaxed test-file convention
+ * permits libc here). Returns 0 on success. */
+static int
+copy_file(const char *src, const char *dst)
+{
+    int sfd = open(src, O_RDONLY);
+    if (sfd < 0) {
+        return -1;
+    }
+    int dfd = open(dst, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (dfd < 0) {
+        close(sfd);
+        return -1;
+    }
+    char    buf[8192];
+    ssize_t n;
+    while ((n = read(sfd, buf, sizeof(buf))) > 0) {
+        ssize_t off = 0;
+        while (off < n) {
+            ssize_t w = write(dfd, buf + off, (size_t)(n - off));
+            if (w <= 0) {
+                close(sfd); close(dfd);
+                return -1;
+            }
+            off += w;
+        }
+    }
+    close(sfd);
+    close(dfd);
+    return (int)n;
+}
+
+/* Slurp a file into a function-local static buffer; sets *out_len.
+ * NUL-terminated. Not reentrant — successive calls overwrite the
+ * same backing storage, so the caller must consume the result
+ * (asserts, memcmp, etc.) before calling slurp() again. */
+static char *
+slurp(const char *path, size_t *out_len)
+{
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) {
+        return nullptr;
+    }
+    static char buf[64 * 1024];
+    size_t      off = 0;
+    ssize_t     n;
+    while ((n = read(fd, buf + off, sizeof(buf) - 1 - off)) > 0) {
+        off += (size_t)n;
+        if (off >= sizeof(buf) - 1) break;
+    }
+    close(fd);
+    buf[off]  = '\0';
+    *out_len  = off;
+    return buf;
+}
+
+static void
+test_fix_flag(void)
+{
+    /*
+     * Copy fixture_null.c into /tmp/n00b_audit_fix_smoke.c and invoke
+     * naudit --fix against the copy. Asserts:
+     *   - exit code 0,
+     *   - <copy>.bak exists with the original content,
+     *   - <copy> now contains the rewrite (NULL → nullptr),
+     *   - re-running audit without --fix produces zero violations.
+     */
+    const char *tmp_path     = "/tmp/n00b_audit_fix_smoke.c";
+    const char *bak_path     = "/tmp/n00b_audit_fix_smoke.c.bak";
+    unlink(tmp_path);
+    unlink(bak_path);
+
+    /* Materialize the source-of-truth fixture path through fixture_path. */
+    n00b_string_t *fixture_src = fixture_path("fixture_null.c");
+    int rc = copy_file(fixture_src->data, tmp_path);
+    assert(rc == 0);
+
+    int argc = 0;
+    n00b_string_t **argv = build_argv5(
+        n00b_string_from_cstr("n00b-audit"),
+        n00b_string_from_cstr("--guidance"),
+        fixture_path("guidance_phase4.bnf"),
+        n00b_string_from_cstr("--fix"),
+        n00b_string_from_cstr(tmp_path),
+        &argc);
+
+    capture_t cap;
+    capture_begin(&cap);
+    n00b_result_t(int) r = n00b_audit_run_cli(argc, argv);
+    static char out[CAPTURE_BUF_SIZE];
+    static char err[CAPTURE_BUF_SIZE];
+    capture_end(&cap, out, sizeof(out), err, sizeof(err));
+
+    if (n00b_result_is_err(r)) {
+        fprintf(stderr,
+                "  --fix run_cli returned err code=%d\n  stderr: %s\n",
+                n00b_result_get_err(r), err);
+    }
+    assert(n00b_result_is_ok(r));
+    int code = n00b_result_get(r);
+    if (code != 0) {
+        fprintf(stderr, "  expected exit-int 0, got %d\n  stderr: %s\n",
+                code, err);
+    }
+    assert(code == 0);
+
+    /* `.bak` exists with the original NULL content. */
+    size_t bak_len = 0;
+    char  *bak     = slurp(bak_path, &bak_len);
+    assert(bak != nullptr);
+    assert(strstr(bak, "= NULL;") != nullptr);
+    /* Updated file has nullptr now. */
+    size_t fix_len = 0;
+    char  *fix     = slurp(tmp_path, &fix_len);
+    assert(fix != nullptr);
+    assert(strstr(fix, "= nullptr;") != nullptr);
+    assert(strstr(fix, "= NULL;") == nullptr);
+
+    /* Re-run without --fix; expect clean (exit 0, empty stdout). */
+    int argc2 = 0;
+    n00b_string_t **argv2 = build_argv4(
+        n00b_string_from_cstr("n00b-audit"),
+        n00b_string_from_cstr("--guidance"),
+        fixture_path("guidance_phase4.bnf"),
+        n00b_string_from_cstr(tmp_path),
+        &argc2);
+    capture_t cap2;
+    capture_begin(&cap2);
+    n00b_result_t(int) r2 = n00b_audit_run_cli(argc2, argv2);
+    static char out2[CAPTURE_BUF_SIZE];
+    static char err2[CAPTURE_BUF_SIZE];
+    capture_end(&cap2, out2, sizeof(out2), err2, sizeof(err2));
+
+    assert(n00b_result_is_ok(r2));
+    int code2 = n00b_result_get(r2);
+    if (code2 != 0) {
+        fprintf(stderr,
+                "  re-run after --fix: expected exit 0, got %d\n"
+                "  stdout: %s\n  stderr: %s\n",
+                code2, out2, err2);
+    }
+    assert(code2 == 0);
+
+    /* Cleanup. */
+    unlink(tmp_path);
+    unlink(bak_path);
+
+    printf("  [PASS] --fix end-to-end (file updated, .bak created, re-run clean)\n");
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -365,6 +548,7 @@ main(int argc, char *argv[])
     test_fixture_nullptr();
     test_missing_target();
     test_dangling_violation_nt();
+    test_fix_flag();
 
     printf("All n00b-audit Phase 4 CLI regression checks passed.\n");
     return 0;

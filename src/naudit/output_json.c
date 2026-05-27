@@ -137,6 +137,19 @@ build_violation_obj(n00b_audit_violation_t *v)
     n00b_json_object_put(obj, "good_example",
                          n00b_json_string_new_from_n00b(rule->good_example));
 
+    /*
+     * WP-007 Phase 2: optional `rewrite` field. The key is only
+     * emitted when the violation carries a non-empty rewrite
+     * suggestion from slay's `n00b_production_rewrite_text` (rules
+     * 1, 4, 7 of the canonical guidance populate this; rules
+     * needing structural transforms leave it nullptr). v1 schema's
+     * forward-compat contract treats new keys as additive.
+     */
+    if (v->rewrite && v->rewrite->u8_bytes > 0) {
+        n00b_json_object_put(obj, "rewrite",
+                             n00b_json_string_new_from_n00b(v->rewrite));
+    }
+
     return obj;
 }
 
