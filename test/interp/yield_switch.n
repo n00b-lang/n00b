@@ -1,0 +1,14 @@
+func classify(x: int) -> int {
+  switch x {
+    case 1:
+      yield 10
+    case 2:
+      yield 20
+    else:
+      yield 99
+  }
+}
+
+print(classify(1))
+print(classify(2))
+print(classify(3))

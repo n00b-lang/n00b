@@ -1,0 +1,8 @@
+var x = if false {
+  yield 10
+} else {
+  yield 20
+}
+
+print(x)
+0

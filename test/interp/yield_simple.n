@@ -1,0 +1,5 @@
+func f() -> int {
+  yield 7
+}
+
+print(f())

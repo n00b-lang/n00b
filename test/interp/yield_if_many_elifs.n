@@ -1,0 +1,75 @@
+func pick(x: int) -> int {
+  if x == 0 {
+    yield 0
+  } elif x == 1 {
+    yield 1
+  } elif x == 2 {
+    yield 2
+  } elif x == 3 {
+    yield 3
+  } elif x == 4 {
+    yield 4
+  } elif x == 5 {
+    yield 5
+  } elif x == 6 {
+    yield 6
+  } elif x == 7 {
+    yield 7
+  } elif x == 8 {
+    yield 8
+  } elif x == 9 {
+    yield 9
+  } elif x == 10 {
+    yield 10
+  } elif x == 11 {
+    yield 11
+  } elif x == 12 {
+    yield 12
+  } elif x == 13 {
+    yield 13
+  } elif x == 14 {
+    yield 14
+  } elif x == 15 {
+    yield 15
+  } elif x == 16 {
+    yield 16
+  } elif x == 17 {
+    yield 17
+  } elif x == 18 {
+    yield 18
+  } elif x == 19 {
+    yield 19
+  } elif x == 20 {
+    yield 20
+  } elif x == 21 {
+    yield 21
+  } elif x == 22 {
+    yield 22
+  } elif x == 23 {
+    yield 23
+  } elif x == 24 {
+    yield 24
+  } elif x == 25 {
+    yield 25
+  } elif x == 26 {
+    yield 26
+  } elif x == 27 {
+    yield 27
+  } elif x == 28 {
+    yield 28
+  } elif x == 29 {
+    yield 29
+  } elif x == 30 {
+    yield 30
+  } elif x == 31 {
+    yield 31
+  } elif x == 32 {
+    yield 32
+  } elif x == 33 {
+    yield 33
+  } else {
+    yield 999
+  }
+}
+
+print(pick(999))

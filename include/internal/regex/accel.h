@@ -184,16 +184,16 @@ bool fwd_prefix_search_find_all_literal(const FwdPrefixSearch *self,
                                         size_t haystack_len,
                                         n00b_list_t(Match) *matches);
 
-/** @brief Construct the `LITERAL` variant; takes ownership of @p lit.
+/** @brief Construct the `LITERAL` variant; takes ownership of non-null @p lit.
  *  @param allocator  Routes wrapper allocation; nullptr → runtime default. */
 FwdPrefixSearch *fwd_prefix_search_new_literal(FwdLiteralSearch *lit,
                                                n00b_allocator_t *allocator);
 
-/** @brief Construct the `PREFIX` (Teddy) variant; takes ownership of @p pf. */
+/** @brief Construct the `PREFIX` variant; takes ownership of non-null @p pf. */
 FwdPrefixSearch *fwd_prefix_search_new_prefix(FwdPrefixSearchSimd *pf,
                                               n00b_allocator_t *allocator);
 
-/** @brief Construct the `RANGE` variant; takes ownership of @p rng. */
+/** @brief Construct the `RANGE` variant; takes ownership of non-null @p rng. */
 FwdPrefixSearch *fwd_prefix_search_new_range(FwdRangeSearch *rng,
                                              n00b_allocator_t *allocator);
 

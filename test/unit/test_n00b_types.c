@@ -227,6 +227,26 @@ is_param(n00b_tc_type_t *t, const char *ctor_name)
         && memcmp(param.name->data, ctor_name, param.name->u8_bytes) == 0;
 }
 
+static bool
+is_param_arg_prim(n00b_tc_type_t *t, const char *ctor_name, const char *arg_name)
+{
+    n00b_tc_type_t *r = resolve_type(t);
+    if (!r) return false;
+    if (!n00b_variant_is_type(r->kind, n00b_tc_param_t)) return false;
+
+    auto param = n00b_variant_get(r->kind, n00b_tc_param_t);
+    if (!param.name || param.name->u8_bytes != strlen(ctor_name)
+        || memcmp(param.name->data, ctor_name, param.name->u8_bytes) != 0) {
+        return false;
+    }
+
+    if (!param.params || n00b_list_len(*param.params) < 1) {
+        return false;
+    }
+
+    return is_prim(n00b_list_get(*param.params, 0), arg_name);
+}
+
 // Check that a type resolves to a function type.
 static bool
 is_fn(n00b_tc_type_t *t)
@@ -1212,6 +1232,62 @@ test_unwrap_result(void)
     printf("  [PASS] unwrap_result\n");
 }
 
+// Section 18: Yield value propagation
+
+static void
+test_yield_block_value_type(void)
+{
+    test_result_t r = run_pipeline(
+        "var x = {\n"
+        "  var tmp = 7\n"
+        "  yield tmp\n"
+        "}\n");
+    assert_pipeline(&r, "yield_block_value_type");
+
+    n00b_sym_entry_t *x = lookup_sym(r.annot, "x");
+    assert(x != NULL);
+    assert(x->type_var != NULL);
+    assert(is_prim(x->type_var, "int"));
+
+    printf("  [PASS] yield_block_value_type\n");
+}
+
+static void
+test_yield_switch_value_type(void)
+{
+    test_result_t r = run_pipeline(
+        "var x = switch 3 {\n"
+        "  case 1: yield 10\n"
+        "  else: yield 99\n"
+        "}\n");
+    assert_pipeline(&r, "yield_switch_value_type");
+
+    n00b_sym_entry_t *x = lookup_sym(r.annot, "x");
+    assert(x != NULL);
+    assert(x->type_var != NULL);
+    assert(is_prim(x->type_var, "int"));
+
+    printf("  [PASS] yield_switch_value_type\n");
+}
+
+static void
+test_yield_switch_list_value_type(void)
+{
+    test_result_t r = run_pipeline(
+        "var xs = switch 1 {\n"
+        "  case 1: yield [1]\n"
+        "  else: yield [2]\n"
+        "}\n");
+    assert_pipeline(&r, "yield_switch_list_value_type");
+
+    n00b_sym_entry_t *xs = lookup_sym(r.annot, "xs");
+    assert(xs != NULL);
+    assert(xs->type_var != NULL);
+    assert(is_param_arg_prim(xs->type_var, "list", "int"));
+
+    printf("  [PASS] yield_switch_list_value_type\n");
+}
+
 // ============================================================================
 // main
 // ============================================================================
@@ -1316,6 +1392,11 @@ main(int argc, char **argv)
 
     // Section 17: Result unwrap (!)
     test_unwrap_result();
+
+    // Section 18: Yield value propagation
+    test_yield_block_value_type();
+    test_yield_switch_value_type();
+    test_yield_switch_list_value_type();
 
     printf("\nAll n00b_types tests passed.\n");
     return 0;

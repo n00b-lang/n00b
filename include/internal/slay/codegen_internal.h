@@ -178,6 +178,7 @@ struct n00b_cg_session_t {
     uint64_t           current_once_key;
     n00b_cg_type_tag_t current_func_ret_type;
     bool               current_attr_lock_on_write;
+    bool               reject_unconsumed_yield;
 
     // Diagnostics
     n00b_diag_ctx_t *diag;

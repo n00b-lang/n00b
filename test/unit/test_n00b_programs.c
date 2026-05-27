@@ -91,7 +91,7 @@ load_n00b_grammar(void)
     n00b_grammar_set_error_recovery(g, false);
 
     n00b_diag_ctx_t *bnf_diag = n00b_diag_ctx_new();
-    bool ok = n00b_bnf_load(bnf_text, r"module", g, .diag = bnf_diag);
+    bool             ok       = n00b_bnf_load(bnf_text, r"module", g, .diag = bnf_diag);
 
     if (!ok) {
         fprintf(stderr, "  [FAIL] n00b_bnf_load failed for n00b.bnf\n");
@@ -127,10 +127,8 @@ run_pipeline(const char *src)
 {
     pipeline_result_t r = {0};
 
-    n00b_buffer_t       *buf     = n00b_buffer_from_bytes((char *)src,
-                                                           (int64_t)strlen(src));
-    n00b_scanner_t      *scanner = n00b_scanner_new(buf, n00b_lang_tokenize,
-                                                       shared_grammar);
+    n00b_buffer_t       *buf     = n00b_buffer_from_bytes((char *)src, (int64_t)strlen(src));
+    n00b_scanner_t      *scanner = n00b_scanner_new(buf, n00b_lang_tokenize, shared_grammar);
     n00b_token_stream_t *ts      = n00b_token_stream_new(scanner);
 
     r.pr = n00b_grammar_parse(shared_grammar, ts, N00B_PARSE_MODE_DEFAULT);
@@ -138,8 +136,12 @@ run_pipeline(const char *src)
     if (!n00b_parse_result_ok(r.pr)) {
         r.parsed = false;
         r.diag   = n00b_diag_ctx_new();
-        n00b_diag_push(r.diag, N00B_DIAG_ERROR, N00B_STAGE_PARSE,
-                      r"P001", r"parse failed", (n00b_diag_span_t){0});
+        n00b_diag_push(r.diag,
+                       N00B_DIAG_ERROR,
+                       N00B_STAGE_PARSE,
+                       r"P001",
+                       r"parse failed",
+                       (n00b_diag_span_t){0});
         return r;
     }
 
@@ -149,9 +151,12 @@ run_pipeline(const char *src)
     r.diag   = n00b_diag_ctx_new();
 
     if (!r.annot) {
-        n00b_diag_push(r.diag, N00B_DIAG_ERROR, N00B_STAGE_ANNOT,
-                      r"A001", r"annotation walk failed",
-                      (n00b_diag_span_t){0});
+        n00b_diag_push(r.diag,
+                       N00B_DIAG_ERROR,
+                       N00B_STAGE_ANNOT,
+                       r"A001",
+                       r"annotation walk failed",
+                       (n00b_diag_span_t){0});
         return r;
     }
 
@@ -162,14 +167,12 @@ run_pipeline(const char *src)
 
     // Build CFG.
     if (r.annot->cf_labels) {
-        r.cfg = n00b_build_cfg(r.annot->cf_labels, r.tree, r"module",
-                               r.annot->symtab);
+        r.cfg = n00b_build_cfg(r.annot->cf_labels, r.tree, r"module", r.annot->symtab);
     }
 
     // Build DFG.
     if (r.cfg) {
-        r.dfg = n00b_build_dfg(r.cfg, r.annot->cf_labels,
-                               shared_grammar, r.annot);
+        r.dfg = n00b_build_dfg(r.cfg, r.annot->cf_labels, shared_grammar, r.annot);
     }
 
     // Run analysis.
@@ -253,8 +256,7 @@ assert_parse_fails(const char *src, const char *test_name)
     pipeline_result_t r = run_pipeline(src);
 
     if (r.parsed) {
-        fprintf(stderr, "  [FAIL] %s: expected parse failure but succeeded\n",
-                test_name);
+        fprintf(stderr, "  [FAIL] %s: expected parse failure but succeeded\n", test_name);
     }
 
     assert(!r.parsed);
@@ -284,8 +286,7 @@ test_var_decl_simple(void)
     // Simple untyped with initializer.
     pipeline_result_t r = assert_parses("var x = 42\n", "var_decl_simple");
 
-    n00b_sym_entry_t *x = n00b_symtab_lookup_all(r.annot->symtab,
-                                                   r"", r"x");
+    n00b_sym_entry_t *x = n00b_symtab_lookup_all(r.annot->symtab, r"", r"x");
     assert(x != NULL);
     assert(x->kind == N00B_SYM_VARIABLE);
     pipeline_free(&r);
@@ -298,8 +299,7 @@ test_var_decl_typed(void)
     // Typed with initializer.
     pipeline_result_t r = assert_parses("var x: int = 42\n", "var_decl_typed");
 
-    n00b_sym_entry_t *x = n00b_symtab_lookup_all(r.annot->symtab,
-                                                   r"", r"x");
+    n00b_sym_entry_t *x = n00b_symtab_lookup_all(r.annot->symtab, r"", r"x");
     assert(x != NULL);
     assert(x->type_var != NULL);
     pipeline_free(&r);
@@ -312,8 +312,7 @@ test_var_decl_typed_no_init(void)
     // Typed without initializer.
     pipeline_result_t r = assert_parses("var x: int\n", "var_decl_typed_no_init");
 
-    n00b_sym_entry_t *x = n00b_symtab_lookup_all(r.annot->symtab,
-                                                   r"", r"x");
+    n00b_sym_entry_t *x = n00b_symtab_lookup_all(r.annot->symtab, r"", r"x");
     assert(x != NULL);
     pipeline_free(&r);
     printf("  [PASS] var_decl_typed_no_init\n");
@@ -333,8 +332,7 @@ test_var_decl_qualifiers(void)
     pipeline_free(&r3);
 
     // Combined qualifiers.
-    pipeline_result_t r4 = assert_parses("global const x = 42\n",
-                                          "global_const_decl");
+    pipeline_result_t r4 = assert_parses("global const x = 42\n", "global_const_decl");
     pipeline_free(&r4);
 
     printf("  [PASS] var_decl_qualifiers\n");
@@ -353,8 +351,7 @@ static void
 test_var_decl_multi_typed(void)
 {
     // Multiple typed declarations separated by comma.
-    pipeline_result_t r = assert_parses("var x: int, y: int = 1\n",
-                                         "var_decl_multi_typed");
+    pipeline_result_t r = assert_parses("var x: int, y: int = 1\n", "var_decl_multi_typed");
     pipeline_free(&r);
     printf("  [PASS] var_decl_multi_typed\n");
 }
@@ -366,14 +363,13 @@ test_var_decl_multi_typed(void)
 static void
 test_func_simple(void)
 {
-    const char *src =
-        "func f() {\n"
-        "}\n";
+    const char *src
+        = "func f() {\n"
+          "}\n";
 
     pipeline_result_t r = assert_parses(src, "func_simple");
 
-    n00b_sym_entry_t *f = n00b_symtab_lookup_all(r.annot->symtab,
-                                                   r"", r"f");
+    n00b_sym_entry_t *f = n00b_symtab_lookup_all(r.annot->symtab, r"", r"f");
     assert(f != NULL);
     assert(f->kind == N00B_SYM_FUNCTION);
     pipeline_free(&r);
@@ -383,15 +379,14 @@ test_func_simple(void)
 static void
 test_func_params(void)
 {
-    const char *src =
-        "func add(x: int, y: int) {\n"
-        "    var z = x\n"
-        "}\n";
+    const char *src
+        = "func add(x: int, y: int) {\n"
+          "    var z = x\n"
+          "}\n";
 
     pipeline_result_t r = assert_parses(src, "func_params");
 
-    n00b_sym_entry_t *f = n00b_symtab_lookup_all(r.annot->symtab,
-                                                   r"", r"add");
+    n00b_sym_entry_t *f = n00b_symtab_lookup_all(r.annot->symtab, r"", r"add");
     assert(f != NULL);
     assert(f->kind == N00B_SYM_FUNCTION);
 
@@ -406,10 +401,10 @@ test_func_params(void)
 static void
 test_func_return_type(void)
 {
-    const char *src =
-        "func double(x: int) -> int {\n"
-        "    return x\n"
-        "}\n";
+    const char *src
+        = "func double(x: int) -> int {\n"
+          "    return x\n"
+          "}\n";
 
     pipeline_result_t r = assert_parses(src, "func_return_type");
     pipeline_free(&r);
@@ -419,14 +414,13 @@ test_func_return_type(void)
 static void
 test_func_private(void)
 {
-    const char *src =
-        "private func secret() {\n"
-        "}\n";
+    const char *src
+        = "private func secret() {\n"
+          "}\n";
 
     pipeline_result_t r = assert_parses(src, "func_private");
 
-    n00b_sym_entry_t *f = n00b_symtab_lookup_all(r.annot->symtab,
-                                                   r"", r"secret");
+    n00b_sym_entry_t *f = n00b_symtab_lookup_all(r.annot->symtab, r"", r"secret");
     assert(f != NULL);
     assert(f->kind == N00B_SYM_FUNCTION);
 
@@ -441,9 +435,9 @@ test_func_private(void)
 static void
 test_func_once(void)
 {
-    const char *src =
-        "once func init() {\n"
-        "}\n";
+    const char *src
+        = "once func init() {\n"
+          "}\n";
 
     pipeline_result_t r = assert_parses(src, "func_once");
     assert(!has_diag_code(r.diag, "W001"));
@@ -455,9 +449,9 @@ test_func_once(void)
 static void
 test_func_private_once(void)
 {
-    const char *src =
-        "private once func init_internal() {\n"
-        "}\n";
+    const char *src
+        = "private once func init_internal() {\n"
+          "}\n";
 
     pipeline_result_t r = assert_parses(src, "func_private_once");
     assert(!has_diag_code(r.diag, "W001"));
@@ -469,9 +463,9 @@ test_func_private_once(void)
 static void
 test_func_varargs(void)
 {
-    const char *src =
-        "func variadic(x: int, *rest: int) {\n"
-        "}\n";
+    const char *src
+        = "func variadic(x: int, *rest: int) {\n"
+          "}\n";
 
     pipeline_result_t r = assert_parses(src, "func_varargs");
     pipeline_free(&r);
@@ -481,9 +475,9 @@ test_func_varargs(void)
 static void
 test_func_kwargs(void)
 {
-    const char *src =
-        "func with_kw(timeout: int = 30) {\n"
-        "}\n";
+    const char *src
+        = "func with_kw(timeout: int = 30) {\n"
+          "}\n";
 
     pipeline_result_t r = assert_parses(src, "func_kwargs");
     pipeline_free(&r);
@@ -494,16 +488,16 @@ static void
 test_func_multiple(void)
 {
     // Multiple functions — tests per-function CFG scoping.
-    const char *src =
-        "func first() {\n"
-        "    var x = 1\n"
-        "}\n"
-        "func second() {\n"
-        "    var y = 2\n"
-        "}\n"
-        "func third() {\n"
-        "    var z = 3\n"
-        "}\n";
+    const char *src
+        = "func first() {\n"
+          "    var x = 1\n"
+          "}\n"
+          "func second() {\n"
+          "    var y = 2\n"
+          "}\n"
+          "func third() {\n"
+          "    var z = 3\n"
+          "}\n";
 
     pipeline_result_t r = assert_parses(src, "func_multiple");
 
@@ -522,9 +516,9 @@ test_func_multiple(void)
 static void
 test_func_method(void)
 {
-    const char *src =
-        "method get_name() {\n"
-        "}\n";
+    const char *src
+        = "method get_name() {\n"
+          "}\n";
 
     pipeline_result_t r = assert_parses(src, "func_method");
     pipeline_free(&r);
@@ -538,11 +532,11 @@ test_func_method(void)
 static void
 test_if_simple(void)
 {
-    const char *src =
-        "var x = 42\n"
-        "if x {\n"
-        "    var y = 1\n"
-        "}\n";
+    const char *src
+        = "var x = 42\n"
+          "if x {\n"
+          "    var y = 1\n"
+          "}\n";
 
     pipeline_result_t r = assert_parses(src, "if_simple");
     pipeline_free(&r);
@@ -552,13 +546,13 @@ test_if_simple(void)
 static void
 test_if_else(void)
 {
-    const char *src =
-        "var x = 42\n"
-        "if x {\n"
-        "    var y = 1\n"
-        "} else {\n"
-        "    var y = 2\n"
-        "}\n";
+    const char *src
+        = "var x = 42\n"
+          "if x {\n"
+          "    var y = 1\n"
+          "} else {\n"
+          "    var y = 2\n"
+          "}\n";
 
     pipeline_result_t r = assert_parses(src, "if_else");
     pipeline_free(&r);
@@ -568,17 +562,17 @@ test_if_else(void)
 static void
 test_if_elif_else(void)
 {
-    const char *src =
-        "var x = 42\n"
-        "if x == 1 {\n"
-        "    var y = 1\n"
-        "} elif x == 2 {\n"
-        "    var y = 2\n"
-        "} elif x == 3 {\n"
-        "    var y = 3\n"
-        "} else {\n"
-        "    var y = 0\n"
-        "}\n";
+    const char *src
+        = "var x = 42\n"
+          "if x == 1 {\n"
+          "    var y = 1\n"
+          "} elif x == 2 {\n"
+          "    var y = 2\n"
+          "} elif x == 3 {\n"
+          "    var y = 3\n"
+          "} else {\n"
+          "    var y = 0\n"
+          "}\n";
 
     pipeline_result_t r = assert_parses(src, "if_elif_else");
     pipeline_free(&r);
@@ -588,11 +582,11 @@ test_if_elif_else(void)
 static void
 test_while_loop(void)
 {
-    const char *src =
-        "var x = 10\n"
-        "while x {\n"
-        "    x = x - 1\n"
-        "}\n";
+    const char *src
+        = "var x = 10\n"
+          "while x {\n"
+          "    x = x - 1\n"
+          "}\n";
 
     pipeline_result_t r = assert_parses(src, "while_loop");
     pipeline_free(&r);
@@ -602,11 +596,11 @@ test_while_loop(void)
 static void
 test_for_in(void)
 {
-    const char *src =
-        "var items = [1, 2, 3]\n"
-        "for x in items {\n"
-        "    var y = x\n"
-        "}\n";
+    const char *src
+        = "var items = [1, 2, 3]\n"
+          "for x in items {\n"
+          "    var y = x\n"
+          "}\n";
 
     pipeline_result_t r = assert_parses(src, "for_in");
     pipeline_free(&r);
@@ -616,10 +610,10 @@ test_for_in(void)
 static void
 test_for_range(void)
 {
-    const char *src =
-        "for x in 0 to 10 {\n"
-        "    var y = x\n"
-        "}\n";
+    const char *src
+        = "for x in 0 to 10 {\n"
+          "    var y = x\n"
+          "}\n";
 
     pipeline_result_t r = assert_parses(src, "for_range");
     pipeline_free(&r);
@@ -629,10 +623,10 @@ test_for_range(void)
 static void
 test_for_from_range(void)
 {
-    const char *src =
-        "for x from 1 to 100 {\n"
-        "    var y = x\n"
-        "}\n";
+    const char *src
+        = "for x from 1 to 100 {\n"
+          "    var y = x\n"
+          "}\n";
 
     pipeline_result_t r = assert_parses(src, "for_from_range");
     pipeline_free(&r);
@@ -642,11 +636,11 @@ test_for_from_range(void)
 static void
 test_for_multi_var(void)
 {
-    const char *src =
-        "var items = {1: \"a\", 2: \"b\"}\n"
-        "for k, v in items {\n"
-        "    var z = k\n"
-        "}\n";
+    const char *src
+        = "var items = {1: \"a\", 2: \"b\"}\n"
+          "for k, v in items {\n"
+          "    var z = k\n"
+          "}\n";
 
     pipeline_result_t r = assert_parses(src, "for_multi_var");
     pipeline_free(&r);
@@ -656,10 +650,10 @@ test_for_multi_var(void)
 static void
 test_labeled_while(void)
 {
-    const char *src =
-        "outer: while true {\n"
-        "    break outer\n"
-        "}\n";
+    const char *src
+        = "outer: while true {\n"
+          "    break outer\n"
+          "}\n";
 
     pipeline_result_t r = assert_parses(src, "labeled_while");
     pipeline_free(&r);
@@ -669,10 +663,10 @@ test_labeled_while(void)
 static void
 test_labeled_for(void)
 {
-    const char *src =
-        "outer: for x in 0 to 10 {\n"
-        "    continue outer\n"
-        "}\n";
+    const char *src
+        = "outer: for x in 0 to 10 {\n"
+          "    continue outer\n"
+          "}\n";
 
     pipeline_result_t r = assert_parses(src, "labeled_for");
     pipeline_free(&r);
@@ -682,18 +676,18 @@ test_labeled_for(void)
 static void
 test_break_continue(void)
 {
-    const char *src =
-        "while true {\n"
-        "    break\n"
-        "}\n";
+    const char *src
+        = "while true {\n"
+          "    break\n"
+          "}\n";
 
     pipeline_result_t r1 = assert_parses(src, "break");
     pipeline_free(&r1);
 
-    const char *src2 =
-        "while true {\n"
-        "    continue\n"
-        "}\n";
+    const char *src2
+        = "while true {\n"
+          "    continue\n"
+          "}\n";
 
     pipeline_result_t r2 = assert_parses(src2, "continue");
     pipeline_free(&r2);
@@ -703,23 +697,123 @@ test_break_continue(void)
 static void
 test_return(void)
 {
-    const char *src =
-        "func f() {\n"
-        "    return 42\n"
-        "}\n";
+    const char *src
+        = "func f() {\n"
+          "    return 42\n"
+          "}\n";
 
     pipeline_result_t r = assert_parses(src, "return");
     pipeline_free(&r);
 
     // Return without value.
-    const char *src2 =
-        "func g() {\n"
-        "    return\n"
-        "}\n";
+    const char *src2
+        = "func g() {\n"
+          "    return\n"
+          "}\n";
 
     pipeline_result_t r2 = assert_parses(src2, "return_void");
     pipeline_free(&r2);
     printf("  [PASS] return\n");
+}
+
+static void
+test_yield_statement(void)
+{
+    const char *direct
+        = "func f() -> int {\n"
+          "    yield 1\n"
+          "}\n";
+    pipeline_result_t r1 = assert_parses(direct, "yield_direct");
+    pipeline_free(&r1);
+
+    const char *non_final
+        = "func f() -> int {\n"
+          "    yield 1\n"
+          "    var x = 2\n"
+          "}\n";
+    pipeline_result_t r2 = assert_parse_fails(non_final, "yield_non_final");
+    pipeline_free(&r2);
+
+    pipeline_result_t r3 = assert_parse_fails("yield 1\n", "yield_top_level");
+    pipeline_free(&r3);
+
+    const char *if_yield
+        = "func f(x: bool) -> int {\n"
+          "    if x {\n"
+          "        yield 10\n"
+          "    } else {\n"
+          "        yield 20\n"
+          "    }\n"
+          "}\n";
+    pipeline_result_t r4 = assert_parses(if_yield, "yield_if_arms");
+    pipeline_free(&r4);
+
+    const char *switch_yield
+        = "func f(x: int) -> int {\n"
+          "    switch x {\n"
+          "        case 1: yield 10\n"
+          "        else: yield 20\n"
+          "    }\n"
+          "}\n";
+    pipeline_result_t r5 = assert_parses(switch_yield, "yield_switch_arms");
+    pipeline_free(&r5);
+
+    const char *local_yield
+        = "func f() -> int {\n"
+          "    var x = 7\n"
+          "    yield x\n"
+          "}\n";
+    pipeline_result_t r6 = assert_parses(local_yield, "yield_local_variable");
+    pipeline_free(&r6);
+
+    const char *block_assign
+        = "var x = {\n"
+          "    var tmp = 7\n"
+          "    yield tmp\n"
+          "}\n";
+    pipeline_result_t r7 = assert_parses(block_assign, "yield_assign_block");
+    pipeline_free(&r7);
+
+    const char *if_assign
+        = "var x = if true {\n"
+          "    yield 10\n"
+          "} else {\n"
+          "    yield 20\n"
+          "}\n";
+    pipeline_result_t r8 = assert_parses(if_assign, "yield_assign_if");
+    pipeline_free(&r8);
+
+    const char *switch_assign
+        = "var x = switch 3 {\n"
+          "    case 1: yield 10\n"
+          "    else: yield 99\n"
+          "}\n";
+    pipeline_result_t r9 = assert_parses(switch_assign, "yield_assign_switch");
+    pipeline_free(&r9);
+
+    const char *func_assign
+        = "func f() -> int {\n"
+          "    yield 7\n"
+          "}\n"
+          "var x = f()\n";
+    pipeline_result_t r10 = assert_parses(func_assign, "yield_func_assign");
+    pipeline_free(&r10);
+
+    const char *incomplete_if
+        = "var x = if true {\n"
+          "    yield 10\n"
+          "}\n";
+    pipeline_result_t r11 = assert_parse_fails(incomplete_if, "yield_incomplete_if");
+    pipeline_free(&r11);
+
+    const char *incomplete_switch
+        = "var x = switch 3 {\n"
+          "    case 1: yield 10\n"
+          "}\n";
+    pipeline_result_t r12 = assert_parse_fails(incomplete_switch, "yield_incomplete_switch");
+    pipeline_free(&r12);
+
+    printf("  [PASS] yield_statement\n");
 }
 
 // ============================================================================
@@ -729,13 +823,13 @@ test_return(void)
 static void
 test_switch_basic(void)
 {
-    const char *src =
-        "var x = 42\n"
-        "switch x {\n"
-        "    case 1: var y = 1\n"
-        "    case 2: var y = 2\n"
-        "    else: var y = 0\n"
-        "}\n";
+    const char *src
+        = "var x = 42\n"
+          "switch x {\n"
+          "    case 1: var y = 1\n"
+          "    case 2: var y = 2\n"
+          "    else: var y = 0\n"
+          "}\n";
 
     pipeline_result_t r = assert_parses(src, "switch_basic");
     pipeline_free(&r);
@@ -745,19 +839,19 @@ test_switch_basic(void)
 static void
 test_switch_body_blocks(void)
 {
-    const char *src =
-        "var x = 42\n"
-        "switch x {\n"
-        "    case 1 {\n"
-        "        var y = 1\n"
-        "    }\n"
-        "    case 2 {\n"
-        "        var y = 2\n"
-        "    }\n"
-        "    else {\n"
-        "        var y = 0\n"
-        "    }\n"
-        "}\n";
+    const char *src
+        = "var x = 42\n"
+          "switch x {\n"
+          "    case 1 {\n"
+          "        var y = 1\n"
+          "    }\n"
+          "    case 2 {\n"
+          "        var y = 2\n"
+          "    }\n"
+          "    else {\n"
+          "        var y = 0\n"
+          "    }\n"
+          "}\n";
 
     pipeline_result_t r = assert_parses(src, "switch_body_blocks");
     pipeline_free(&r);
@@ -767,12 +861,12 @@ test_switch_body_blocks(void)
 static void
 test_switch_multi_case(void)
 {
-    const char *src =
-        "var x = 42\n"
-        "switch x {\n"
-        "    case 1, 2, 3: var y = 1\n"
-        "    else: var y = 0\n"
-        "}\n";
+    const char *src
+        = "var x = 42\n"
+          "switch x {\n"
+          "    case 1, 2, 3: var y = 1\n"
+          "    else: var y = 0\n"
+          "}\n";
 
     pipeline_result_t r = assert_parses(src, "switch_multi_case");
     pipeline_free(&r);
@@ -782,12 +876,12 @@ test_switch_multi_case(void)
 static void
 test_switch_range_case(void)
 {
-    const char *src =
-        "var x = 42\n"
-        "switch x {\n"
-        "    case 1 to 10: var y = 1\n"
-        "    else: var y = 0\n"
-        "}\n";
+    const char *src
+        = "var x = 42\n"
+          "switch x {\n"
+          "    case 1 to 10: var y = 1\n"
+          "    else: var y = 0\n"
+          "}\n";
 
     pipeline_result_t r = assert_parses(src, "switch_range_case");
     pipeline_free(&r);
@@ -801,12 +895,12 @@ test_switch_range_case(void)
 static void
 test_typeof_basic(void)
 {
-    const char *src =
-        "var x = 42\n"
-        "typeof x {\n"
-        "    case int: var y = 1\n"
-        "    case string: var y = 2\n"
-        "}\n";
+    const char *src
+        = "var x = 42\n"
+          "typeof x {\n"
+          "    case int: var y = 1\n"
+          "    case string: var y = 2\n"
+          "}\n";
 
     pipeline_result_t r = assert_parses(src, "typeof_basic");
     pipeline_free(&r);
@@ -816,12 +910,12 @@ test_typeof_basic(void)
 static void
 test_typeof_multi_type(void)
 {
-    const char *src =
-        "var x = 42\n"
-        "typeof x {\n"
-        "    case int, i32: var y = 1\n"
-        "    else: var y = 0\n"
-        "}\n";
+    const char *src
+        = "var x = 42\n"
+          "typeof x {\n"
+          "    case int, i32: var y = 1\n"
+          "    else: var y = 0\n"
+          "}\n";
 
     pipeline_result_t r = assert_parses(src, "typeof_multi_type");
     pipeline_free(&r);
@@ -836,8 +930,7 @@ static void
 test_expr_arithmetic(void)
 {
     // Arithmetic operators.
-    pipeline_result_t r = assert_parses("var x = 1 + 2 * 3 - 4 / 2\n",
-                                         "expr_arithmetic");
+    pipeline_result_t r = assert_parses("var x = 1 + 2 * 3 - 4 / 2\n", "expr_arithmetic");
     pipeline_free(&r);
 
     // Modulo.
@@ -874,12 +967,10 @@ test_expr_comparison(void)
 static void
 test_expr_logical(void)
 {
-    pipeline_result_t r = assert_parses("var x = true and false\n",
-                                         "expr_and");
+    pipeline_result_t r = assert_parses("var x = true and false\n", "expr_and");
     pipeline_free(&r);
 
-    pipeline_result_t r2 = assert_parses("var x = true or false\n",
-                                          "expr_or");
+    pipeline_result_t r2 = assert_parses("var x = true or false\n", "expr_or");
     pipeline_free(&r2);
 
     printf("  [PASS] expr_logical\n");
@@ -936,9 +1027,7 @@ test_expr_postfix(void)
     pipeline_free(&r2);
 
     // Function call.
-    pipeline_result_t r3 = assert_parses(
-        "var x = foo(1, 2)\n",
-        "expr_call");
+    pipeline_result_t r3 = assert_parses("var x = foo(1, 2)\n", "expr_call");
     pipeline_free(&r3);
 
     printf("  [PASS] expr_postfix\n");
@@ -1018,8 +1107,7 @@ test_literal_float(void)
 static void
 test_literal_string(void)
 {
-    pipeline_result_t r = assert_parses("var x = \"hello world\"\n",
-                                         "literal_string");
+    pipeline_result_t r = assert_parses("var x = \"hello world\"\n", "literal_string");
     pipeline_free(&r);
     printf("  [PASS] literal_string\n");
 }
@@ -1056,33 +1144,27 @@ static void
 test_literal_with_modifier(void)
 {
     // Int with modifier
-    pipeline_result_t r = assert_parses("var x = 42'u8\n",
-                                         "literal_int_mod");
+    pipeline_result_t r = assert_parses("var x = 42'u8\n", "literal_int_mod");
     pipeline_free(&r);
 
     // Float with modifier
-    pipeline_result_t r2 = assert_parses("var x = 3.14'f32\n",
-                                          "literal_float_mod");
+    pipeline_result_t r2 = assert_parses("var x = 3.14'f32\n", "literal_float_mod");
     pipeline_free(&r2);
 
     // Hex with modifier
-    pipeline_result_t r3 = assert_parses("var x = 0xFF'u32\n",
-                                          "literal_hex_mod");
+    pipeline_result_t r3 = assert_parses("var x = 0xFF'u32\n", "literal_hex_mod");
     pipeline_free(&r3);
 
     // String with modifier
-    pipeline_result_t r4 = assert_parses("var x = \"hello\"'utf8\n",
-                                          "literal_string_mod");
+    pipeline_result_t r4 = assert_parses("var x = \"hello\"'utf8\n", "literal_string_mod");
     pipeline_free(&r4);
 
     // Int with full type name modifier
-    pipeline_result_t r6 = assert_parses("var x = 100'int\n",
-                                          "literal_int_typename_mod");
+    pipeline_result_t r6 = assert_parses("var x = 100'int\n", "literal_int_typename_mod");
     pipeline_free(&r6);
 
     // Hex with i64
-    pipeline_result_t r7 = assert_parses("var x = 0xDEAD'i64\n",
-                                          "literal_hex_i64_mod");
+    pipeline_result_t r7 = assert_parses("var x = 0xDEAD'i64\n", "literal_hex_i64_mod");
     pipeline_free(&r7);
 
     printf("  [PASS] literal_with_modifier\n");
@@ -1108,8 +1190,7 @@ test_list_literal(void)
 static void
 test_dict_literal(void)
 {
-    pipeline_result_t r = assert_parses(
-        "var x = {\"a\": 1, \"b\": 2}\n", "dict_lit");
+    pipeline_result_t r = assert_parses("var x = {\"a\": 1, \"b\": 2}\n", "dict_lit");
     pipeline_free(&r);
 
     // Empty dict.
@@ -1142,9 +1223,9 @@ test_tuple_literal(void)
 static void
 test_assign_equals(void)
 {
-    const char *src =
-        "var x = 1\n"
-        "x = 42\n";
+    const char *src
+        = "var x = 1\n"
+          "x = 42\n";
 
     pipeline_result_t r = assert_parses(src, "assign_equals");
     pipeline_free(&r);
@@ -1154,13 +1235,13 @@ test_assign_equals(void)
 static void
 test_binop_assign(void)
 {
-    const char *src =
-        "var x = 10\n"
-        "x += 5\n"
-        "x -= 3\n"
-        "x *= 2\n"
-        "x /= 4\n"
-        "x %= 3\n";
+    const char *src
+        = "var x = 10\n"
+          "x += 5\n"
+          "x -= 3\n"
+          "x *= 2\n"
+          "x /= 4\n"
+          "x %= 3\n";
 
     pipeline_result_t r = assert_parses(src, "binop_assign");
     pipeline_free(&r);
@@ -1170,13 +1251,13 @@ test_binop_assign(void)
 static void
 test_bitwise_assign(void)
 {
-    const char *src =
-        "var x = 0xff\n"
-        "x &= 0x0f\n"
-        "x |= 0xf0\n"
-        "x ^= 0x01\n"
-        "x <<= 2\n"
-        "x >>= 1\n";
+    const char *src
+        = "var x = 0xff\n"
+          "x &= 0x0f\n"
+          "x |= 0xf0\n"
+          "x ^= 0x01\n"
+          "x <<= 2\n"
+          "x >>= 1\n";
 
     pipeline_result_t r = assert_parses(src, "bitwise_assign");
     pipeline_free(&r);
@@ -1212,8 +1293,7 @@ test_use_stmt(void)
     pipeline_result_t r2 = assert_parses("use foo.bar\n", "use_chain");
     pipeline_free(&r2);
 
-    pipeline_result_t r3 = assert_parses(
-        "use foo from \"path/to/lib\"\n", "use_from");
+    pipeline_result_t r3 = assert_parses("use foo from \"path/to/lib\"\n", "use_from");
     pipeline_free(&r3);
 
     printf("  [PASS] use_stmt\n");
@@ -1226,12 +1306,12 @@ test_use_stmt(void)
 static void
 test_enum_basic(void)
 {
-    const char *src =
-        "enum Color {\n"
-        "    Red,\n"
-        "    Green,\n"
-        "    Blue,\n"
-        "}\n";
+    const char *src
+        = "enum Color {\n"
+          "    Red,\n"
+          "    Green,\n"
+          "    Blue,\n"
+          "}\n";
 
     pipeline_result_t r = assert_parses(src, "enum_basic");
     pipeline_free(&r);
@@ -1241,12 +1321,12 @@ test_enum_basic(void)
 static void
 test_enum_with_values(void)
 {
-    const char *src =
-        "enum Priority {\n"
-        "    Low = 1,\n"
-        "    Medium = 2,\n"
-        "    High = 3,\n"
-        "}\n";
+    const char *src
+        = "enum Priority {\n"
+          "    Low = 1,\n"
+          "    Medium = 2,\n"
+          "    High = 3,\n"
+          "}\n";
 
     pipeline_result_t r = assert_parses(src, "enum_with_values");
     pipeline_free(&r);
@@ -1256,11 +1336,11 @@ test_enum_with_values(void)
 static void
 test_enum_private(void)
 {
-    const char *src =
-        "private enum Internal {\n"
-        "    A,\n"
-        "    B,\n"
-        "}\n";
+    const char *src
+        = "private enum Internal {\n"
+          "    A,\n"
+          "    B,\n"
+          "}\n";
 
     pipeline_result_t r = assert_parses(src, "enum_private");
     pipeline_free(&r);
@@ -1270,11 +1350,11 @@ test_enum_private(void)
 static void
 test_enum_anonymous(void)
 {
-    const char *src =
-        "enum {\n"
-        "    X,\n"
-        "    Y,\n"
-        "}\n";
+    const char *src
+        = "enum {\n"
+          "    X,\n"
+          "    Y,\n"
+          "}\n";
 
     pipeline_result_t r = assert_parses(src, "enum_anonymous");
     pipeline_free(&r);
@@ -1288,11 +1368,11 @@ test_enum_anonymous(void)
 static void
 test_class_basic(void)
 {
-    const char *src =
-        "class Point {\n"
-        "    x: int\n"
-        "    y: int\n"
-        "}\n";
+    const char *src
+        = "class Point {\n"
+          "    x: int\n"
+          "    y: int\n"
+          "}\n";
 
     pipeline_result_t r = assert_parses(src, "class_basic");
     pipeline_free(&r);
@@ -1302,11 +1382,11 @@ test_class_basic(void)
 static void
 test_class_untyped_fields(void)
 {
-    const char *src =
-        "class Config {\n"
-        "    name\n"
-        "    value\n"
-        "}\n";
+    const char *src
+        = "class Config {\n"
+          "    name\n"
+          "    value\n"
+          "}\n";
 
     pipeline_result_t r = assert_parses(src, "class_untyped_fields");
     pipeline_free(&r);
@@ -1316,10 +1396,10 @@ test_class_untyped_fields(void)
 static void
 test_class_atomic(void)
 {
-    const char *src =
-        "atomic class Counter {\n"
-        "    value: int\n"
-        "}\n";
+    const char *src
+        = "atomic class Counter {\n"
+          "    value: int\n"
+          "}\n";
 
     pipeline_result_t r = assert_parses(src, "class_atomic");
     pipeline_free(&r);
@@ -1342,50 +1422,44 @@ static void
 test_type_spec_parameterized(void)
 {
     // Simple parameterized: list[int]
-    pipeline_result_t r = assert_parses("var x: list[int] = []\n",
-                                         "tspec_param_list_int");
+    pipeline_result_t r = assert_parses("var x: list[int] = []\n", "tspec_param_list_int");
     pipeline_free(&r);
 
     // Two-param: dict[string, int]
-    pipeline_result_t r2 = assert_parses(
-        "var x: dict[string, int] = {}\n", "tspec_param_dict");
+    pipeline_result_t r2 = assert_parses("var x: dict[string, int] = {}\n", "tspec_param_dict");
     pipeline_free(&r2);
 
     // Nested: list[list[int]]
-    pipeline_result_t r3 = assert_parses(
-        "var x: list[list[int]] = []\n", "tspec_param_nested");
+    pipeline_result_t r3 = assert_parses("var x: list[list[int]] = []\n", "tspec_param_nested");
     pipeline_free(&r3);
 
     // Deeply nested: list[list[list[string]]]
-    pipeline_result_t r4 = assert_parses(
-        "var x: list[list[list[string]]] = []\n", "tspec_param_deep");
+    pipeline_result_t r4
+        = assert_parses("var x: list[list[list[string]]] = []\n", "tspec_param_deep");
     pipeline_free(&r4);
 
     // Dict with parameterized value: dict[string, list[int]]
-    pipeline_result_t r5 = assert_parses(
-        "var x: dict[string, list[int]] = {}\n", "tspec_dict_list_val");
+    pipeline_result_t r5
+        = assert_parses("var x: dict[string, list[int]] = {}\n", "tspec_dict_list_val");
     pipeline_free(&r5);
 
     // Dict with parameterized key: dict[list[int], string]
-    pipeline_result_t r6 = assert_parses(
-        "var x: dict[list[int], string] = {}\n", "tspec_dict_list_key");
+    pipeline_result_t r6
+        = assert_parses("var x: dict[list[int], string] = {}\n", "tspec_dict_list_key");
     pipeline_free(&r6);
 
     // Both key and value parameterized: dict[list[int], set[string]]
-    pipeline_result_t r7 = assert_parses(
-        "var x: dict[list[int], set[string]] = {}\n",
-        "tspec_dict_both_param");
+    pipeline_result_t r7
+        = assert_parses("var x: dict[list[int], set[string]] = {}\n", "tspec_dict_both_param");
     pipeline_free(&r7);
 
     // set[T] parameterized
-    pipeline_result_t r8 = assert_parses(
-        "var x: set[int] = {}\n", "tspec_set_int");
+    pipeline_result_t r8 = assert_parses("var x: set[int] = {}\n", "tspec_set_int");
     pipeline_free(&r8);
 
     // tuple with multiple params: tuple[int, string, bool]
-    pipeline_result_t r9 = assert_parses(
-        "var x: tuple[int, string, bool] = (1, \"a\", true)\n",
-        "tspec_tuple_multi");
+    pipeline_result_t r9 = assert_parses("var x: tuple[int, string, bool] = (1, \"a\", true)\n",
+                                         "tspec_tuple_multi");
     pipeline_free(&r9);
 
     printf("  [PASS] type_spec_parameterized\n");
@@ -1399,23 +1473,19 @@ test_type_spec_tvar(void)
     pipeline_free(&r);
 
     // Type variable in container: list[`T]
-    pipeline_result_t r2 = assert_parses(
-        "var x: list[`T] = []\n", "tspec_tvar_in_list");
+    pipeline_result_t r2 = assert_parses("var x: list[`T] = []\n", "tspec_tvar_in_list");
     pipeline_free(&r2);
 
     // Multiple tvars: dict[`K, `V]
-    pipeline_result_t r3 = assert_parses(
-        "var x: dict[`K, `V] = {}\n", "tspec_tvar_dict");
+    pipeline_result_t r3 = assert_parses("var x: dict[`K, `V] = {}\n", "tspec_tvar_dict");
     pipeline_free(&r3);
 
     // Mixed concrete and tvar: dict[string, `V]
-    pipeline_result_t r4 = assert_parses(
-        "var x: dict[string, `V] = {}\n", "tspec_tvar_mixed");
+    pipeline_result_t r4 = assert_parses("var x: dict[string, `V] = {}\n", "tspec_tvar_mixed");
     pipeline_free(&r4);
 
     // Nested tvar: list[list[`T]]
-    pipeline_result_t r5 = assert_parses(
-        "var x: list[list[`T]] = []\n", "tspec_tvar_nested");
+    pipeline_result_t r5 = assert_parses("var x: list[list[`T]] = []\n", "tspec_tvar_nested");
     pipeline_free(&r5);
 
     printf("  [PASS] type_spec_tvar\n");
@@ -1425,67 +1495,60 @@ static void
 test_type_spec_func(void)
 {
     // Basic function type: (int, int) -> int
-    pipeline_result_t r = assert_parses(
-        "var f: (int, int) -> int = nil\n", "tspec_func_basic");
+    pipeline_result_t r = assert_parses("var f: (int, int) -> int = nil\n", "tspec_func_basic");
     pipeline_free(&r);
 
     // No params: () -> int
-    pipeline_result_t r2 = assert_parses(
-        "var f: () -> int = nil\n", "tspec_func_no_params");
+    pipeline_result_t r2 = assert_parses("var f: () -> int = nil\n", "tspec_func_no_params");
     pipeline_free(&r2);
 
     // No return type: (int) -> void
-    pipeline_result_t r3 = assert_parses(
-        "var f: (int) -> void = nil\n", "tspec_func_void_ret");
+    pipeline_result_t r3 = assert_parses("var f: (int) -> void = nil\n", "tspec_func_void_ret");
     pipeline_free(&r3);
 
     // Single param: (string) -> int
-    pipeline_result_t r4 = assert_parses(
-        "var f: (string) -> int = nil\n", "tspec_func_single_param");
+    pipeline_result_t r4
+        = assert_parses("var f: (string) -> int = nil\n", "tspec_func_single_param");
     pipeline_free(&r4);
 
     // Func type with vargs: (int, *string) -> void
-    pipeline_result_t r5 = assert_parses(
-        "var f: (int, *string) -> void = nil\n", "tspec_func_vargs");
+    pipeline_result_t r5
+        = assert_parses("var f: (int, *string) -> void = nil\n", "tspec_func_vargs");
     pipeline_free(&r5);
 
     // Func type with kargs: (**name: string) -> void
-    pipeline_result_t r6 = assert_parses(
-        "var f: (**name: string) -> void = nil\n", "tspec_func_kargs");
+    pipeline_result_t r6
+        = assert_parses("var f: (**name: string) -> void = nil\n", "tspec_func_kargs");
     pipeline_free(&r6);
 
     // Func type with vargs and kargs: (int, *string, **name: int) -> void
-    pipeline_result_t r7 = assert_parses(
-        "var f: (int, *string, **name: int) -> void = nil\n",
-        "tspec_func_vargs_kargs");
+    pipeline_result_t r7 = assert_parses("var f: (int, *string, **name: int) -> void = nil\n",
+                                         "tspec_func_vargs_kargs");
     pipeline_free(&r7);
 
     // Func type with parameterized params: (list[int]) -> dict[string, int]
-    pipeline_result_t r8 = assert_parses(
-        "var f: (list[int]) -> dict[string, int] = nil\n",
-        "tspec_func_param_types");
+    pipeline_result_t r8 = assert_parses("var f: (list[int]) -> dict[string, int] = nil\n",
+                                         "tspec_func_param_types");
     pipeline_free(&r8);
 
     // Func type with tvar params: (`T) -> `T
-    pipeline_result_t r9 = assert_parses(
-        "var f: (`T) -> `T = nil\n", "tspec_func_tvar");
+    pipeline_result_t r9 = assert_parses("var f: (`T) -> `T = nil\n", "tspec_func_tvar");
     pipeline_free(&r9);
 
     // Higher-order: ((int) -> int) -> int
-    pipeline_result_t r10 = assert_parses(
-        "var f: ((int) -> int) -> int = nil\n", "tspec_func_higher_order");
+    pipeline_result_t r10
+        = assert_parses("var f: ((int) -> int) -> int = nil\n", "tspec_func_higher_order");
     pipeline_free(&r10);
 
     // Func returning func: (int) -> (int) -> int
-    pipeline_result_t r11 = assert_parses(
-        "var f: (int) -> (int) -> int = nil\n", "tspec_func_ret_func");
+    pipeline_result_t r11
+        = assert_parses("var f: (int) -> (int) -> int = nil\n", "tspec_func_ret_func");
     pipeline_free(&r11);
 
     // Multiple kargs fields: (**name: string, age: int) -> void
     // In type-spec syntax, ** prefixes the group, then comma-separated fields.
-    pipeline_result_t r12 = assert_parses(
-        "var f: (**name: string, age: int) -> void = nil\n",
-        "tspec_func_multi_kargs");
+    pipeline_result_t r12 = assert_parses("var f: (**name: string, age: int) -> void = nil\n",
+                                          "tspec_func_multi_kargs");
     pipeline_free(&r12);
 
     printf("  [PASS] type_spec_func\n");
@@ -1495,18 +1558,15 @@ static void
 test_type_spec_ref(void)
 {
     // Simple ref
-    pipeline_result_t r = assert_parses(
-        "var x: ref[int] = nil\n", "tspec_ref_int");
+    pipeline_result_t r = assert_parses("var x: ref[int] = nil\n", "tspec_ref_int");
     pipeline_free(&r);
 
     // Ref to parameterized type: ref[list[int]]
-    pipeline_result_t r2 = assert_parses(
-        "var x: ref[list[int]] = nil\n", "tspec_ref_list");
+    pipeline_result_t r2 = assert_parses("var x: ref[list[int]] = nil\n", "tspec_ref_list");
     pipeline_free(&r2);
 
     // Ref to tvar: ref[`T]
-    pipeline_result_t r3 = assert_parses(
-        "var x: ref[`T] = nil\n", "tspec_ref_tvar");
+    pipeline_result_t r3 = assert_parses("var x: ref[`T] = nil\n", "tspec_ref_tvar");
     pipeline_free(&r3);
 
     printf("  [PASS] type_spec_ref\n");
@@ -1517,30 +1577,27 @@ test_type_spec_containers_with_tvars(void)
 {
     // Container of containers with tvars
     // dict[`K, list[`V]]
-    pipeline_result_t r1 = assert_parses(
-        "var x: dict[`K, list[`V]] = {}\n", "tspec_dict_tvar_list");
+    pipeline_result_t r1
+        = assert_parses("var x: dict[`K, list[`V]] = {}\n", "tspec_dict_tvar_list");
     pipeline_free(&r1);
 
     // set[list[`T]]
-    pipeline_result_t r2 = assert_parses(
-        "var x: set[list[`T]] = {}\n", "tspec_set_list_tvar");
+    pipeline_result_t r2 = assert_parses("var x: set[list[`T]] = {}\n", "tspec_set_list_tvar");
     pipeline_free(&r2);
 
     // list[dict[`K, `V]]
-    pipeline_result_t r3 = assert_parses(
-        "var x: list[dict[`K, `V]] = []\n", "tspec_list_dict_tvar");
+    pipeline_result_t r3
+        = assert_parses("var x: list[dict[`K, `V]] = []\n", "tspec_list_dict_tvar");
     pipeline_free(&r3);
 
     // ref[dict[string, list[`T]]]
-    pipeline_result_t r4 = assert_parses(
-        "var x: ref[dict[string, list[`T]]] = nil\n",
-        "tspec_ref_dict_list_tvar");
+    pipeline_result_t r4 = assert_parses("var x: ref[dict[string, list[`T]]] = nil\n",
+                                         "tspec_ref_dict_list_tvar");
     pipeline_free(&r4);
 
     // tuple[`A, list[`B], dict[`C, `D]]
-    pipeline_result_t r5 = assert_parses(
-        "var x: tuple[`A, list[`B], dict[`C, `D]] = nil\n",
-        "tspec_tuple_mixed_tvars");
+    pipeline_result_t r5 = assert_parses("var x: tuple[`A, list[`B], dict[`C, `D]] = nil\n",
+                                         "tspec_tuple_mixed_tvars");
     pipeline_free(&r5);
 
     printf("  [PASS] type_spec_containers_with_tvars\n");
@@ -1551,33 +1608,30 @@ test_type_spec_func_with_containers(void)
 {
     // Func taking container, returning container
     // (list[int], dict[string, int]) -> set[string]
-    pipeline_result_t r1 = assert_parses(
-        "var f: (list[int], dict[string, int]) -> set[string] = nil\n",
-        "tspec_func_containers");
+    pipeline_result_t r1
+        = assert_parses("var f: (list[int], dict[string, int]) -> set[string] = nil\n",
+                        "tspec_func_containers");
     pipeline_free(&r1);
 
     // Func taking tvar container: (list[`T]) -> `T
-    pipeline_result_t r2 = assert_parses(
-        "var f: (list[`T]) -> `T = nil\n", "tspec_func_list_tvar");
+    pipeline_result_t r2
+        = assert_parses("var f: (list[`T]) -> `T = nil\n", "tspec_func_list_tvar");
     pipeline_free(&r2);
 
     // Func taking func that takes container:
     // ((list[int]) -> int) -> list[int]
-    pipeline_result_t r3 = assert_parses(
-        "var f: ((list[int]) -> int) -> list[int] = nil\n",
-        "tspec_func_higher_container");
+    pipeline_result_t r3 = assert_parses("var f: ((list[int]) -> int) -> list[int] = nil\n",
+                                         "tspec_func_higher_container");
     pipeline_free(&r3);
 
     // Func with vargs of container type: (*list[int]) -> void
-    pipeline_result_t r4 = assert_parses(
-        "var f: (*list[int]) -> void = nil\n",
-        "tspec_func_vargs_container");
+    pipeline_result_t r4
+        = assert_parses("var f: (*list[int]) -> void = nil\n", "tspec_func_vargs_container");
     pipeline_free(&r4);
 
     // Func with kargs of container type: (**items: list[int]) -> void
-    pipeline_result_t r5 = assert_parses(
-        "var f: (**items: list[int]) -> void = nil\n",
-        "tspec_func_kargs_container");
+    pipeline_result_t r5 = assert_parses("var f: (**items: list[int]) -> void = nil\n",
+                                         "tspec_func_kargs_container");
     pipeline_free(&r5);
 
     printf("  [PASS] type_spec_func_with_containers\n");
@@ -1588,20 +1642,19 @@ test_type_spec_in_var_decls(void)
 {
     // Typed var decls with complex type specs
     // list[list[dict[string, int]]]
-    pipeline_result_t r1 = assert_parses(
-        "var x: list[list[dict[string, int]]] = []\n",
-        "tspec_var_deep_nested");
+    pipeline_result_t r1
+        = assert_parses("var x: list[list[dict[string, int]]] = []\n", "tspec_var_deep_nested");
     pipeline_free(&r1);
 
     // Function-typed variable with full signature
-    pipeline_result_t r2 = assert_parses(
-        "var f: (list[`T], ((`T) -> bool)) -> list[`T] = nil\n",
-        "tspec_var_filter_sig");
+    pipeline_result_t r2
+        = assert_parses("var f: (list[`T], ((`T) -> bool)) -> list[`T] = nil\n",
+                        "tspec_var_filter_sig");
     pipeline_free(&r2);
 
     // ref to function type
-    pipeline_result_t r3 = assert_parses(
-        "var f: ref[(int) -> int] = nil\n", "tspec_var_ref_func");
+    pipeline_result_t r3
+        = assert_parses("var f: ref[(int) -> int] = nil\n", "tspec_var_ref_func");
     pipeline_free(&r3);
 
     printf("  [PASS] type_spec_in_var_decls\n");
@@ -1611,42 +1664,42 @@ static void
 test_type_spec_in_func_params(void)
 {
     // Function with parameterized param types
-    const char *src1 =
-        "func process(items: list[int], lookup: dict[string, int]) {\n"
-        "    var x = 1\n"
-        "}\n";
+    const char *src1
+        = "func process(items: list[int], lookup: dict[string, int]) {\n"
+          "    var x = 1\n"
+          "}\n";
     pipeline_result_t r1 = assert_parses(src1, "tspec_func_param_containers");
     pipeline_free(&r1);
 
     // Function with tvar param types
-    const char *src2 =
-        "func identity(x: `T) -> `T {\n"
-        "    return x\n"
-        "}\n";
+    const char *src2
+        = "func identity(x: `T) -> `T {\n"
+          "    return x\n"
+          "}\n";
     pipeline_result_t r2 = assert_parses(src2, "tspec_func_param_tvar");
     pipeline_free(&r2);
 
     // Function with callback param that has container types
-    const char *src3 =
-        "func apply(items: list[`T], f: (`T) -> `U) -> list[`U] {\n"
-        "    return []\n"
-        "}\n";
+    const char *src3
+        = "func apply(items: list[`T], f: (`T) -> `U) -> list[`U] {\n"
+          "    return []\n"
+          "}\n";
     pipeline_result_t r3 = assert_parses(src3, "tspec_func_param_map_sig");
     pipeline_free(&r3);
 
     // Function with ref param
-    const char *src4 =
-        "func swap(a: ref[int], b: ref[int]) {\n"
-        "    var x = 1\n"
-        "}\n";
+    const char *src4
+        = "func swap(a: ref[int], b: ref[int]) {\n"
+          "    var x = 1\n"
+          "}\n";
     pipeline_result_t r4 = assert_parses(src4, "tspec_func_param_ref");
     pipeline_free(&r4);
 
     // Function returning parameterized type
-    const char *src5 =
-        "func make_pair(a: `A, b: `B) -> tuple[`A, `B] {\n"
-        "    return (a, b)\n"
-        "}\n";
+    const char *src5
+        = "func make_pair(a: `A, b: `B) -> tuple[`A, `B] {\n"
+          "    return (a, b)\n"
+          "}\n";
     pipeline_result_t r5 = assert_parses(src5, "tspec_func_ret_tuple_tvar");
     pipeline_free(&r5);
 
@@ -1657,30 +1710,30 @@ static void
 test_type_spec_in_class_fields(void)
 {
     // Class with parameterized field types
-    const char *src1 =
-        "class Container {\n"
-        "    items: list[int]\n"
-        "    lookup: dict[string, list[int]]\n"
-        "}\n";
+    const char *src1
+        = "class Container {\n"
+          "    items: list[int]\n"
+          "    lookup: dict[string, list[int]]\n"
+          "}\n";
     pipeline_result_t r1 = assert_parses(src1, "tspec_class_container_fields");
     pipeline_free(&r1);
 
     // Class with tvar fields
-    const char *src2 =
-        "class Pair {\n"
-        "    first: `A\n"
-        "    second: `B\n"
-        "}\n";
+    const char *src2
+        = "class Pair {\n"
+          "    first: `A\n"
+          "    second: `B\n"
+          "}\n";
     pipeline_result_t r2 = assert_parses(src2, "tspec_class_tvar_fields");
     pipeline_free(&r2);
 
     // Class with function-typed field
     // Note: "callback" is a keyword; use a different name.
-    const char *src3 =
-        "class Handler {\n"
-        "    on_event: (int) -> void\n"
-        "    transform: (`T) -> list[`T]\n"
-        "}\n";
+    const char *src3
+        = "class Handler {\n"
+          "    on_event: (int) -> void\n"
+          "    transform: (`T) -> list[`T]\n"
+          "}\n";
     pipeline_result_t r3 = assert_parses(src3, "tspec_class_func_fields");
     pipeline_free(&r3);
 
@@ -1691,59 +1744,53 @@ static void
 test_type_spec_litmod_with_types(void)
 {
     // Litmod with parameterized type on int literal
-    pipeline_result_t r1 = assert_parses(
-        "var x = 42'list[int]\n", "tspec_litmod_param");
+    pipeline_result_t r1 = assert_parses("var x = 42'list[int]\n", "tspec_litmod_param");
     pipeline_free(&r1);
 
     // Litmod with tvar on int literal
-    pipeline_result_t r2 = assert_parses(
-        "var x = 42'`T\n", "tspec_litmod_tvar");
+    pipeline_result_t r2 = assert_parses("var x = 42'`T\n", "tspec_litmod_tvar");
     pipeline_free(&r2);
 
     // Litmod with function type on string literal
-    pipeline_result_t r3 = assert_parses(
-        "var x = \"handler\"'(int) -> void\n", "tspec_litmod_func");
+    pipeline_result_t r3
+        = assert_parses("var x = \"handler\"'(int) -> void\n", "tspec_litmod_func");
     pipeline_free(&r3);
 
     // Litmod on list literal
-    pipeline_result_t r4 = assert_parses(
-        "var x = [1, 2, 3]'list[int]\n", "tspec_litmod_list");
+    pipeline_result_t r4 = assert_parses("var x = [1, 2, 3]'list[int]\n", "tspec_litmod_list");
     pipeline_free(&r4);
 
     // Litmod on empty list
-    pipeline_result_t r5 = assert_parses(
-        "var x = []'list[string]\n", "tspec_litmod_empty_list");
+    pipeline_result_t r5
+        = assert_parses("var x = []'list[string]\n", "tspec_litmod_empty_list");
     pipeline_free(&r5);
 
     // Litmod on dict literal
-    pipeline_result_t r6 = assert_parses(
-        "var x = {\"a\": 1}'dict[string, int]\n", "tspec_litmod_dict");
+    pipeline_result_t r6
+        = assert_parses("var x = {\"a\": 1}'dict[string, int]\n", "tspec_litmod_dict");
     pipeline_free(&r6);
 
     // Litmod on empty dict/set
-    pipeline_result_t r7 = assert_parses(
-        "var x = {}'set[int]\n", "tspec_litmod_empty_set");
+    pipeline_result_t r7 = assert_parses("var x = {}'set[int]\n", "tspec_litmod_empty_set");
     pipeline_free(&r7);
 
     // Litmod on set literal
-    pipeline_result_t r8 = assert_parses(
-        "var x = {1, 2, 3}'set[int]\n", "tspec_litmod_set");
+    pipeline_result_t r8 = assert_parses("var x = {1, 2, 3}'set[int]\n", "tspec_litmod_set");
     pipeline_free(&r8);
 
     // Litmod on tuple literal
-    pipeline_result_t r9 = assert_parses(
-        "var x = (1, \"a\")'tuple[int, string]\n", "tspec_litmod_tuple");
+    pipeline_result_t r9
+        = assert_parses("var x = (1, \"a\")'tuple[int, string]\n", "tspec_litmod_tuple");
     pipeline_free(&r9);
 
     // Litmod on list with tvar
-    pipeline_result_t r10 = assert_parses(
-        "var x = [1, 2]'list[`T]\n", "tspec_litmod_list_tvar");
+    pipeline_result_t r10
+        = assert_parses("var x = [1, 2]'list[`T]\n", "tspec_litmod_list_tvar");
     pipeline_free(&r10);
 
     // Litmod on dict with nested container type
-    pipeline_result_t r11 = assert_parses(
-        "var x = {}'dict[string, list[int]]\n",
-        "tspec_litmod_dict_nested");
+    pipeline_result_t r11
+        = assert_parses("var x = {}'dict[string, list[int]]\n", "tspec_litmod_dict_nested");
     pipeline_free(&r11);
 
     printf("  [PASS] type_spec_litmod_with_types\n");
@@ -1757,8 +1804,7 @@ static void
 test_union_type_basic(void)
 {
     // Upper tier (after :) requires parens for union types.
-    pipeline_result_t r = assert_parses(
-        "var x: (int | string)\n", "union_type_basic");
+    pipeline_result_t r = assert_parses("var x: (int | string)\n", "union_type_basic");
     pipeline_free(&r);
     printf("  [PASS] union_type_basic\n");
 }
@@ -1766,8 +1812,7 @@ test_union_type_basic(void)
 static void
 test_union_type_triple(void)
 {
-    pipeline_result_t r = assert_parses(
-        "var x: (int | string | nil)\n", "union_type_triple");
+    pipeline_result_t r = assert_parses("var x: (int | string | nil)\n", "union_type_triple");
     pipeline_free(&r);
     printf("  [PASS] union_type_triple\n");
 }
@@ -1775,8 +1820,7 @@ test_union_type_triple(void)
 static void
 test_union_in_list(void)
 {
-    pipeline_result_t r = assert_parses(
-        "var x: list[int | string]\n", "union_in_list");
+    pipeline_result_t r = assert_parses("var x: list[int | string]\n", "union_in_list");
     pipeline_free(&r);
     printf("  [PASS] union_in_list\n");
 }
@@ -1784,8 +1828,7 @@ test_union_in_list(void)
 static void
 test_union_in_dict(void)
 {
-    pipeline_result_t r = assert_parses(
-        "var x: dict[string, int | nil]\n", "union_in_dict");
+    pipeline_result_t r = assert_parses("var x: dict[string, int | nil]\n", "union_in_dict");
     pipeline_free(&r);
     printf("  [PASS] union_in_dict\n");
 }
@@ -1797,7 +1840,8 @@ test_union_in_func_param(void)
     pipeline_result_t r = assert_parses(
         "func f(x: (int | string)) {\n"
         "    var y = x\n"
-        "}\n", "union_in_func_param");
+        "}\n",
+        "union_in_func_param");
     pipeline_free(&r);
     printf("  [PASS] union_in_func_param\n");
 }
@@ -1810,7 +1854,8 @@ test_union_in_return(void)
     pipeline_result_t r = assert_parses(
         "func f() -> int | nil {\n"
         "    return nil\n"
-        "}\n", "union_in_return");
+        "}\n",
+        "union_in_return");
     pipeline_free(&r);
     printf("  [PASS] union_in_return\n");
 }
@@ -1819,8 +1864,7 @@ static void
 test_union_with_tvar(void)
 {
     // Upper tier requires parens.
-    pipeline_result_t r = assert_parses(
-        "var x: (`T | nil)\n", "union_with_tvar");
+    pipeline_result_t r = assert_parses("var x: (`T | nil)\n", "union_with_tvar");
     pipeline_free(&r);
     printf("  [PASS] union_with_tvar\n");
 }
@@ -1829,8 +1873,7 @@ static void
 test_union_nested_param(void)
 {
     // Upper tier requires parens.
-    pipeline_result_t r = assert_parses(
-        "var x: (list[int] | nil)\n", "union_nested_param");
+    pipeline_result_t r = assert_parses("var x: (list[int] | nil)\n", "union_nested_param");
     pipeline_free(&r);
     printf("  [PASS] union_nested_param\n");
 }
@@ -1838,8 +1881,7 @@ test_union_nested_param(void)
 static void
 test_where_basic(void)
 {
-    pipeline_result_t r = assert_parses(
-        "var x: `T [`T: Numeric]\n", "where_basic");
+    pipeline_result_t r = assert_parses("var x: `T [`T: Numeric]\n", "where_basic");
     pipeline_free(&r);
     printf("  [PASS] where_basic\n");
 }
@@ -1847,9 +1889,8 @@ test_where_basic(void)
 static void
 test_where_multi_constraint(void)
 {
-    pipeline_result_t r = assert_parses(
-        "var x: `T [`T: Numeric + Comparable]\n",
-        "where_multi_constraint");
+    pipeline_result_t r
+        = assert_parses("var x: `T [`T: Numeric + Comparable]\n", "where_multi_constraint");
     pipeline_free(&r);
     printf("  [PASS] where_multi_constraint\n");
 }
@@ -1857,8 +1898,7 @@ test_where_multi_constraint(void)
 static void
 test_where_exclusion(void)
 {
-    pipeline_result_t r = assert_parses(
-        "var x: `T [`T: != nil]\n", "where_exclusion");
+    pipeline_result_t r = assert_parses("var x: `T [`T: != nil]\n", "where_exclusion");
     pipeline_free(&r);
     printf("  [PASS] where_exclusion\n");
 }
@@ -1869,7 +1909,8 @@ test_where_multi_var(void)
     pipeline_result_t r = assert_parses(
         "func f(a: `T, b: `U) [`T: Hashable, `U: Printable] -> `T {\n"
         "    return a\n"
-        "}\n", "where_multi_var");
+        "}\n",
+        "where_multi_var");
     pipeline_free(&r);
     printf("  [PASS] where_multi_var\n");
 }
@@ -1877,8 +1918,7 @@ test_where_multi_var(void)
 static void
 test_where_mixed(void)
 {
-    pipeline_result_t r = assert_parses(
-        "var x: `T [`T: Numeric + != nil]\n", "where_mixed");
+    pipeline_result_t r = assert_parses("var x: `T [`T: Numeric + != nil]\n", "where_mixed");
     pipeline_free(&r);
     printf("  [PASS] where_mixed\n");
 }
@@ -1890,10 +1930,10 @@ test_where_mixed(void)
 static void
 test_parameter_block(void)
 {
-    const char *src =
-        "parameter var debug {\n"
-        "    kind: default\n"
-        "}\n";
+    const char *src
+        = "parameter var debug {\n"
+          "    kind: default\n"
+          "}\n";
 
     pipeline_result_t r = assert_parses(src, "parameter_block");
     pipeline_free(&r);
@@ -1925,20 +1965,19 @@ test_expr_stmt(void)
 static void
 test_nested_scopes(void)
 {
-    const char *src =
-        "var x = 1\n"
-        "if x {\n"
-        "    var y = 2\n"
-        "    if y {\n"
-        "        var z = 3\n"
-        "    }\n"
-        "}\n";
+    const char *src
+        = "var x = 1\n"
+          "if x {\n"
+          "    var y = 2\n"
+          "    if y {\n"
+          "        var z = 3\n"
+          "    }\n"
+          "}\n";
 
     pipeline_result_t r = assert_parses(src, "nested_scopes");
 
     // Module-level x should exist.
-    n00b_sym_entry_t *x = n00b_symtab_lookup_all(r.annot->symtab,
-                                                   r"", r"x");
+    n00b_sym_entry_t *x = n00b_symtab_lookup_all(r.annot->symtab, r"", r"x");
     assert(x != NULL);
 
     pipeline_free(&r);
@@ -1952,25 +1991,24 @@ test_nested_scopes(void)
 static void
 test_complex_function(void)
 {
-    const char *src =
-        "func fibonacci(n: int) -> int {\n"
-        "    if n <= 1 {\n"
-        "        return n\n"
-        "    }\n"
-        "    var a = 0\n"
-        "    var b = 1\n"
-        "    for i in 2 to n {\n"
-        "        var tmp = b\n"
-        "        b = a + b\n"
-        "        a = tmp\n"
-        "    }\n"
-        "    return b\n"
-        "}\n";
+    const char *src
+        = "func fibonacci(n: int) -> int {\n"
+          "    if n <= 1 {\n"
+          "        return n\n"
+          "    }\n"
+          "    var a = 0\n"
+          "    var b = 1\n"
+          "    for i in 2 to n {\n"
+          "        var tmp = b\n"
+          "        b = a + b\n"
+          "        a = tmp\n"
+          "    }\n"
+          "    return b\n"
+          "}\n";
 
     pipeline_result_t r = assert_parses(src, "complex_function");
 
-    n00b_sym_entry_t *f = n00b_symtab_lookup_all(r.annot->symtab,
-                                                   r"", r"fibonacci");
+    n00b_sym_entry_t *f = n00b_symtab_lookup_all(r.annot->symtab, r"", r"fibonacci");
     assert(f != NULL);
     assert(f->kind == N00B_SYM_FUNCTION);
     assert(f->cfg != NULL);
@@ -1982,24 +2020,23 @@ test_complex_function(void)
 static void
 test_mixed_declarations(void)
 {
-    const char *src =
-        "var counter = 0\n"
-        "const MAX = 100\n"
-        "\n"
-        "func increment() {\n"
-        "    counter += 1\n"
-        "}\n"
-        "\n"
-        "func reset() {\n"
-        "    counter = 0\n"
-        "}\n";
+    const char *src
+        = "var counter = 0\n"
+          "const MAX = 100\n"
+          "\n"
+          "func increment() {\n"
+          "    counter += 1\n"
+          "}\n"
+          "\n"
+          "func reset() {\n"
+          "    counter = 0\n"
+          "}\n";
 
     pipeline_result_t r = assert_parses(src, "mixed_declarations");
 
     assert(n00b_symtab_lookup_all(r.annot->symtab, r"", r"counter") != NULL);
     assert(n00b_symtab_lookup_all(r.annot->symtab, r"", r"MAX") != NULL);
-    assert(n00b_symtab_lookup_all(r.annot->symtab,
-                                   r"", r"increment") != NULL);
+    assert(n00b_symtab_lookup_all(r.annot->symtab, r"", r"increment") != NULL);
     assert(n00b_symtab_lookup_all(r.annot->symtab, r"", r"reset") != NULL);
 
     pipeline_free(&r);
@@ -2009,21 +2046,21 @@ test_mixed_declarations(void)
 static void
 test_all_loop_types(void)
 {
-    const char *src =
-        "var items = [1, 2, 3]\n"
-        "var total = 0\n"
-        "\n"
-        "for x in items {\n"
-        "    total += x\n"
-        "}\n"
-        "\n"
-        "while total > 0 {\n"
-        "    total -= 1\n"
-        "}\n"
-        "\n"
-        "for i in 0 to 10 {\n"
-        "    total += i\n"
-        "}\n";
+    const char *src
+        = "var items = [1, 2, 3]\n"
+          "var total = 0\n"
+          "\n"
+          "for x in items {\n"
+          "    total += x\n"
+          "}\n"
+          "\n"
+          "while total > 0 {\n"
+          "    total -= 1\n"
+          "}\n"
+          "\n"
+          "for i in 0 to 10 {\n"
+          "    total += i\n"
+          "}\n";
 
     pipeline_result_t r = assert_parses(src, "all_loop_types");
     pipeline_free(&r);
@@ -2037,8 +2074,7 @@ test_all_loop_types(void)
 static void
 test_semicolons(void)
 {
-    pipeline_result_t r = assert_parses("var x = 1; var y = 2\n",
-                                         "semicolons");
+    pipeline_result_t r = assert_parses("var x = 1; var y = 2\n", "semicolons");
     pipeline_free(&r);
     printf("  [PASS] semicolons\n");
 }
@@ -2050,12 +2086,11 @@ test_semicolons(void)
 static void
 test_callback_lit(void)
 {
-    pipeline_result_t r = assert_parses(
-        "var cb = func handler\n", "callback_lit");
+    pipeline_result_t r = assert_parses("var cb = func handler\n", "callback_lit");
     pipeline_free(&r);
 
-    pipeline_result_t r2 = assert_parses(
-        "var cb = func handler (int, int) -> bool\n", "callback_lit_typed");
+    pipeline_result_t r2
+        = assert_parses("var cb = func handler (int, int) -> bool\n", "callback_lit_typed");
     pipeline_free(&r2);
 
     printf("  [PASS] callback_lit\n");
@@ -2096,8 +2131,7 @@ static void
 test_parse_error_bad_expression(void)
 {
     // Unbalanced parens.
-    pipeline_result_t r = assert_parse_fails(
-        "var x = (1 + 2\n", "bad_expression");
+    pipeline_result_t r = assert_parse_fails("var x = (1 + 2\n", "bad_expression");
     pipeline_free(&r);
     printf("  [PASS] parse_error_bad_expression\n");
 }
@@ -2110,38 +2144,35 @@ static void
 test_embed_literal(void)
 {
     // Basic embed: single = level
-    pipeline_result_t r1 = assert_parses(
-        "var x = [=[hello world]=]\n", "embed_basic");
+    pipeline_result_t r1 = assert_parses("var x = [=[hello world]=]\n", "embed_basic");
     pipeline_free(&r1);
 
     // Embed with encoder tag
-    pipeline_result_t r2 = assert_parses(
-        "var x = [=html[<b>bold</b>]=]\n", "embed_encoder");
+    pipeline_result_t r2 = assert_parses("var x = [=html[<b>bold</b>]=]\n", "embed_encoder");
     pipeline_free(&r2);
 
     // Embed with double = level
-    pipeline_result_t r3 = assert_parses(
-        "var x = [==[contains ]=] inside]==]\n", "embed_level2");
+    pipeline_result_t r3
+        = assert_parses("var x = [==[contains ]=] inside]==]\n", "embed_level2");
     pipeline_free(&r3);
 
     // Embed with litmod
-    pipeline_result_t r4 = assert_parses(
-        "var x = [=[some data]=]'bytes\n", "embed_litmod");
+    pipeline_result_t r4 = assert_parses("var x = [=[some data]=]'bytes\n", "embed_litmod");
     pipeline_free(&r4);
 
     // Embed with encoder + litmod
-    pipeline_result_t r5 = assert_parses(
-        "var x = [=json[{\"key\": 1}]=]'string\n", "embed_encoder_litmod");
+    pipeline_result_t r5
+        = assert_parses("var x = [=json[{\"key\": 1}]=]'string\n", "embed_encoder_litmod");
     pipeline_free(&r5);
 
     // Embed with parameterized litmod
-    pipeline_result_t r6 = assert_parses(
-        "var x = [=[data]=]'list[int]\n", "embed_litmod_param");
+    pipeline_result_t r6
+        = assert_parses("var x = [=[data]=]'list[int]\n", "embed_litmod_param");
     pipeline_free(&r6);
 
     // Embed containing newlines
-    pipeline_result_t r7 = assert_parses(
-        "var x = [=[line one\nline two]=]\n", "embed_multiline");
+    pipeline_result_t r7
+        = assert_parses("var x = [=[line one\nline two]=]\n", "embed_multiline");
     pipeline_free(&r7);
 
     printf("  [PASS] embed_literal\n");
@@ -2154,18 +2185,18 @@ test_embed_literal(void)
 static void
 test_nested_control_flow(void)
 {
-    const char *src =
-        "func process(items: list[int]) {\n"
-        "    var total = 0\n"
-        "    for x in items {\n"
-        "        if x > 0 {\n"
-        "            total += x\n"
-        "        } else {\n"
-        "            continue\n"
-        "        }\n"
-        "    }\n"
-        "    return total\n"
-        "}\n";
+    const char *src
+        = "func process(items: list[int]) {\n"
+          "    var total = 0\n"
+          "    for x in items {\n"
+          "        if x > 0 {\n"
+          "            total += x\n"
+          "        } else {\n"
+          "            continue\n"
+          "        }\n"
+          "    }\n"
+          "    return total\n"
+          "}\n";
 
     pipeline_result_t r = assert_parses(src, "nested_control_flow");
     pipeline_free(&r);
@@ -2195,8 +2226,7 @@ test_empty_body(void)
 static void
 test_member_chain(void)
 {
-    pipeline_result_t r = assert_parses(
-        "var x = a.b.c.d\n", "member_chain");
+    pipeline_result_t r = assert_parses("var x = a.b.c.d\n", "member_chain");
     pipeline_free(&r);
     printf("  [PASS] member_chain\n");
 }
@@ -2239,17 +2269,15 @@ test_robustness(void)
 static void
 test_varref_annotation(void)
 {
-    const char *src =
-        "var x = 42\n"
-        "var y = x\n";
+    const char *src
+        = "var x = 42\n"
+          "var y = x\n";
 
     pipeline_result_t r = assert_parses(src, "varref_annotation");
 
     // Both x and y should be in the symbol table.
-    n00b_sym_entry_t *x = n00b_symtab_lookup_all(r.annot->symtab,
-                                                   r"", r"x");
-    n00b_sym_entry_t *y = n00b_symtab_lookup_all(r.annot->symtab,
-                                                   r"", r"y");
+    n00b_sym_entry_t *x = n00b_symtab_lookup_all(r.annot->symtab, r"", r"x");
+    n00b_sym_entry_t *y = n00b_symtab_lookup_all(r.annot->symtab, r"", r"y");
     assert(x != NULL);
     assert(y != NULL);
 
@@ -2264,16 +2292,16 @@ test_varref_annotation(void)
 static void
 test_func_return_no_false_warnings(void)
 {
-    const char *src =
-        "func first() -> int {\n"
-        "    return 1\n"
-        "}\n"
-        "func second() -> int {\n"
-        "    return 2\n"
-        "}\n"
-        "func third() -> int {\n"
-        "    return 3\n"
-        "}\n";
+    const char *src
+        = "func first() -> int {\n"
+          "    return 1\n"
+          "}\n"
+          "func second() -> int {\n"
+          "    return 2\n"
+          "}\n"
+          "func third() -> int {\n"
+          "    return 3\n"
+          "}\n";
 
     pipeline_result_t r = assert_parses(src, "func_return_no_false_warnings");
 
@@ -2294,8 +2322,8 @@ test_func_return_no_false_warnings(void)
 static void
 test_triple_quoted_string(void)
 {
-    pipeline_result_t r = assert_parses(
-        "var x = \"\"\"hello\nworld\"\"\"\n", "triple_quoted_string");
+    pipeline_result_t r
+        = assert_parses("var x = \"\"\"hello\nworld\"\"\"\n", "triple_quoted_string");
     pipeline_free(&r);
     printf("  [PASS] triple_quoted_string\n");
 }
@@ -2341,11 +2369,11 @@ test_enum_qualifier_variants(void)
 static void
 test_enum_colon_values(void)
 {
-    const char *src =
-        "enum Status {\n"
-        "    Active : 1,\n"
-        "    Inactive : 0,\n"
-        "}\n";
+    const char *src
+        = "enum Status {\n"
+          "    Active : 1,\n"
+          "    Inactive : 0,\n"
+          "}\n";
 
     pipeline_result_t r = assert_parses(src, "enum_colon_values");
     pipeline_free(&r);
@@ -2359,11 +2387,11 @@ test_enum_colon_values(void)
 static void
 test_labeled_typeof(void)
 {
-    const char *src =
-        "var x = 42\n"
-        "dispatch: typeof x {\n"
-        "    case int: var y = 1\n"
-        "}\n";
+    const char *src
+        = "var x = 42\n"
+          "dispatch: typeof x {\n"
+          "    case int: var y = 1\n"
+          "}\n";
 
     pipeline_result_t r = assert_parses(src, "labeled_typeof");
     pipeline_free(&r);
@@ -2373,12 +2401,12 @@ test_labeled_typeof(void)
 static void
 test_labeled_switch(void)
 {
-    const char *src =
-        "var x = 42\n"
-        "matcher: switch x {\n"
-        "    case 1: var y = 1\n"
-        "    else: var y = 0\n"
-        "}\n";
+    const char *src
+        = "var x = 42\n"
+          "matcher: switch x {\n"
+          "    case 1: var y = 1\n"
+          "    else: var y = 0\n"
+          "}\n";
 
     pipeline_result_t r = assert_parses(src, "labeled_switch");
     pipeline_free(&r);
@@ -2392,19 +2420,19 @@ test_labeled_switch(void)
 static void
 test_typeof_body_blocks(void)
 {
-    const char *src =
-        "var x = 42\n"
-        "typeof x {\n"
-        "    case int {\n"
-        "        var y = 1\n"
-        "    }\n"
-        "    case string {\n"
-        "        var y = 2\n"
-        "    }\n"
-        "    else {\n"
-        "        var y = 0\n"
-        "    }\n"
-        "}\n";
+    const char *src
+        = "var x = 42\n"
+          "typeof x {\n"
+          "    case int {\n"
+          "        var y = 1\n"
+          "    }\n"
+          "    case string {\n"
+          "        var y = 2\n"
+          "    }\n"
+          "    else {\n"
+          "        var y = 0\n"
+          "    }\n"
+          "}\n";
 
     pipeline_result_t r = assert_parses(src, "typeof_body_blocks");
     pipeline_free(&r);
@@ -2419,18 +2447,15 @@ static void
 test_chained_postfix(void)
 {
     // Method call chain.
-    pipeline_result_t r1 = assert_parses(
-        "var x = a.b.c(1).d[0]\n", "chained_postfix");
+    pipeline_result_t r1 = assert_parses("var x = a.b.c(1).d[0]\n", "chained_postfix");
     pipeline_free(&r1);
 
     // Nested calls.
-    pipeline_result_t r2 = assert_parses(
-        "var x = f(g(h(1)))\n", "nested_calls");
+    pipeline_result_t r2 = assert_parses("var x = f(g(h(1)))\n", "nested_calls");
     pipeline_free(&r2);
 
     // Indexing into call result.
-    pipeline_result_t r3 = assert_parses(
-        "var x = f()[0]\n", "index_call_result");
+    pipeline_result_t r3 = assert_parses("var x = f()[0]\n", "index_call_result");
     pipeline_free(&r3);
 
     printf("  [PASS] chained_postfix\n");
@@ -2443,20 +2468,18 @@ test_chained_postfix(void)
 static void
 test_string_escapes(void)
 {
-    pipeline_result_t r = assert_parses(
-        "var x = \"hello\\nworld\"\n", "string_newline_escape");
+    pipeline_result_t r = assert_parses("var x = \"hello\\nworld\"\n", "string_newline_escape");
     pipeline_free(&r);
 
-    pipeline_result_t r2 = assert_parses(
-        "var x = \"tab\\there\"\n", "string_tab_escape");
+    pipeline_result_t r2 = assert_parses("var x = \"tab\\there\"\n", "string_tab_escape");
     pipeline_free(&r2);
 
-    pipeline_result_t r3 = assert_parses(
-        "var x = \"back\\\\slash\"\n", "string_backslash_escape");
+    pipeline_result_t r3
+        = assert_parses("var x = \"back\\\\slash\"\n", "string_backslash_escape");
     pipeline_free(&r3);
 
-    pipeline_result_t r4 = assert_parses(
-        "var x = \"quote\\\"inside\"\n", "string_quote_escape");
+    pipeline_result_t r4
+        = assert_parses("var x = \"quote\\\"inside\"\n", "string_quote_escape");
     pipeline_free(&r4);
 
     printf("  [PASS] string_escapes\n");
@@ -2470,18 +2493,16 @@ static void
 test_nested_collections(void)
 {
     // Nested lists.
-    pipeline_result_t r1 = assert_parses(
-        "var x = [[1, 2], [3, 4]]\n", "nested_lists");
+    pipeline_result_t r1 = assert_parses("var x = [[1, 2], [3, 4]]\n", "nested_lists");
     pipeline_free(&r1);
 
     // Dict with list values.
-    pipeline_result_t r2 = assert_parses(
-        "var x = {\"a\": [1, 2], \"b\": [3, 4]}\n", "dict_list_values");
+    pipeline_result_t r2
+        = assert_parses("var x = {\"a\": [1, 2], \"b\": [3, 4]}\n", "dict_list_values");
     pipeline_free(&r2);
 
     // List of tuples.
-    pipeline_result_t r3 = assert_parses(
-        "var x = [(1, 2), (3, 4)]\n", "list_of_tuples");
+    pipeline_result_t r3 = assert_parses("var x = [(1, 2), (3, 4)]\n", "list_of_tuples");
     pipeline_free(&r3);
 
     printf("  [PASS] nested_collections\n");
@@ -2494,14 +2515,14 @@ test_nested_collections(void)
 static void
 test_multi_stmt_case_body(void)
 {
-    const char *src =
-        "var x = 42\n"
-        "switch x {\n"
-        "    case 1:\n"
-        "        var y = 1\n"
-        "        var z = 2\n"
-        "    case 2: var w = 3\n"
-        "}\n";
+    const char *src
+        = "var x = 42\n"
+          "switch x {\n"
+          "    case 1:\n"
+          "        var y = 1\n"
+          "        var z = 2\n"
+          "    case 2: var w = 3\n"
+          "}\n";
 
     pipeline_result_t r = assert_parses(src, "multi_stmt_case_body");
     pipeline_free(&r);
@@ -2515,9 +2536,9 @@ test_multi_stmt_case_body(void)
 static void
 test_func_varargs_kwargs(void)
 {
-    const char *src =
-        "func f(x: int, *rest: int, kw: int = 0) {\n"
-        "}\n";
+    const char *src
+        = "func f(x: int, *rest: int, kw: int = 0) {\n"
+          "}\n";
 
     pipeline_result_t r = assert_parses(src, "func_varargs_kwargs");
     pipeline_free(&r);
@@ -2531,9 +2552,9 @@ test_func_varargs_kwargs(void)
 static void
 test_func_multi_kwargs(void)
 {
-    const char *src =
-        "func f(a: int = 1, b: int = 2) {\n"
-        "}\n";
+    const char *src
+        = "func f(a: int = 1, b: int = 2) {\n"
+          "}\n";
 
     pipeline_result_t r = assert_parses(src, "func_multi_kwargs");
     pipeline_free(&r);
@@ -2547,8 +2568,7 @@ test_func_multi_kwargs(void)
 static void
 test_parameter_no_body(void)
 {
-    pipeline_result_t r = assert_parses(
-        "parameter var debug\n", "parameter_no_body");
+    pipeline_result_t r = assert_parses("parameter var debug\n", "parameter_no_body");
     pipeline_free(&r);
     printf("  [PASS] parameter_no_body\n");
 }
@@ -2560,12 +2580,12 @@ test_parameter_no_body(void)
 static void
 test_class_mixed_fields(void)
 {
-    const char *src =
-        "class Record {\n"
-        "    id: int\n"
-        "    name\n"
-        "    score: f64\n"
-        "}\n";
+    const char *src
+        = "class Record {\n"
+          "    id: int\n"
+          "    name\n"
+          "    score: f64\n"
+          "}\n";
 
     pipeline_result_t r = assert_parses(src, "class_mixed_fields");
     pipeline_free(&r);
@@ -2583,7 +2603,8 @@ test_class_type_params(void)
     pipeline_result_t r1 = assert_parses(
         "class Box[`T] {\n"
         "    value: `T\n"
-        "}\n", "class_type_param_basic");
+        "}\n",
+        "class_type_param_basic");
     pipeline_free(&r1);
 
     // Multiple type parameters
@@ -2591,28 +2612,32 @@ test_class_type_params(void)
         "class Pair[`A, `B] {\n"
         "    first: `A\n"
         "    second: `B\n"
-        "}\n", "class_type_param_multi");
+        "}\n",
+        "class_type_param_multi");
     pipeline_free(&r2);
 
     // Type params with where clause
     pipeline_result_t r3 = assert_parses(
         "class SortedList[`T] [`T: Comparable] {\n"
         "    items: list[`T]\n"
-        "}\n", "class_type_param_where");
+        "}\n",
+        "class_type_param_where");
     pipeline_free(&r3);
 
     // Type params with multi-constraint where clause
     pipeline_result_t r4 = assert_parses(
         "class Cache[`K, `V] [`K: Hashable + Comparable, `V: Printable] {\n"
         "    data: dict[`K, `V]\n"
-        "}\n", "class_type_param_where_multi");
+        "}\n",
+        "class_type_param_where_multi");
     pipeline_free(&r4);
 
     // Atomic class with type params
     pipeline_result_t r5 = assert_parses(
         "atomic class SharedRef[`T] {\n"
         "    value: `T\n"
-        "}\n", "class_type_param_atomic");
+        "}\n",
+        "class_type_param_atomic");
     pipeline_free(&r5);
 
     printf("  [PASS] class_type_params\n");
@@ -2625,12 +2650,12 @@ test_class_type_params(void)
 static void
 test_comments_in_code(void)
 {
-    const char *src =
-        "# This is a line comment\n"
-        "var x = 42\n"
-        "// C-style line comment\n"
-        "var y = x\n"
-        "/* block comment */ var z = y\n";
+    const char *src
+        = "# This is a line comment\n"
+          "var x = 42\n"
+          "// C-style line comment\n"
+          "var y = x\n"
+          "/* block comment */ var z = y\n";
 
     pipeline_result_t r = assert_parses(src, "comments_in_code");
     pipeline_free(&r);
@@ -2644,14 +2669,14 @@ test_comments_in_code(void)
 static void
 test_switch_else_body_block(void)
 {
-    const char *src =
-        "var x = 42\n"
-        "switch x {\n"
-        "    case 1: var y = 1\n"
-        "    else {\n"
-        "        var y = 0\n"
-        "    }\n"
-        "}\n";
+    const char *src
+        = "var x = 42\n"
+          "switch x {\n"
+          "    case 1: var y = 1\n"
+          "    else {\n"
+          "        var y = 0\n"
+          "    }\n"
+          "}\n";
 
     pipeline_result_t r = assert_parses(src, "switch_else_body_block");
     pipeline_free(&r);
@@ -2665,10 +2690,10 @@ test_switch_else_body_block(void)
 static void
 test_func_untyped_params(void)
 {
-    const char *src =
-        "func f(x, y) {\n"
-        "    var z = x\n"
-        "}\n";
+    const char *src
+        = "func f(x, y) {\n"
+          "    var z = x\n"
+          "}\n";
 
     pipeline_result_t r = assert_parses(src, "func_untyped_params");
     pipeline_free(&r);
@@ -2682,9 +2707,9 @@ test_func_untyped_params(void)
 static void
 test_func_multi_name_params(void)
 {
-    const char *src =
-        "func f(x, y: int, z: string) {\n"
-        "}\n";
+    const char *src
+        = "func f(x, y: int, z: string) {\n"
+          "}\n";
 
     pipeline_result_t r = assert_parses(src, "func_multi_name_params");
     pipeline_free(&r);
@@ -2698,11 +2723,11 @@ test_func_multi_name_params(void)
 static void
 test_typeof_member_chain(void)
 {
-    const char *src =
-        "var x = 42\n"
-        "typeof x {\n"
-        "    case int: var y = 1\n"
-        "}\n";
+    const char *src
+        = "var x = 42\n"
+          "typeof x {\n"
+          "    case int: var y = 1\n"
+          "}\n";
 
     pipeline_result_t r = assert_parses(src, "typeof_member_chain");
     pipeline_free(&r);
@@ -2712,7 +2737,6 @@ test_typeof_member_chain(void)
 // ============================================================================
 // Test 49: Complex type specs
 // ============================================================================
-
 
 // ============================================================================
 // Test 50: Empty programs
@@ -2748,8 +2772,7 @@ test_var_decl_bare(void)
 {
     pipeline_result_t r = assert_parses("var x\n", "var_decl_bare");
 
-    n00b_sym_entry_t *x = n00b_symtab_lookup_all(r.annot->symtab,
-                                                   r"", r"x");
+    n00b_sym_entry_t *x = n00b_symtab_lookup_all(r.annot->symtab, r"", r"x");
     assert(x != NULL);
     pipeline_free(&r);
     printf("  [PASS] var_decl_bare\n");
@@ -2762,15 +2785,15 @@ test_var_decl_bare(void)
 static void
 test_switch_mixed_case_styles(void)
 {
-    const char *src =
-        "var x = 42\n"
-        "switch x {\n"
-        "    case 1: var y = 1\n"
-        "    case 2 {\n"
-        "        var y = 2\n"
-        "    }\n"
-        "    else: var y = 0\n"
-        "}\n";
+    const char *src
+        = "var x = 42\n"
+          "switch x {\n"
+          "    case 1: var y = 1\n"
+          "    case 2 {\n"
+          "        var y = 2\n"
+          "    }\n"
+          "    else: var y = 0\n"
+          "}\n";
 
     pipeline_result_t r = assert_parses(src, "switch_mixed_case_styles");
     pipeline_free(&r);
@@ -2804,9 +2827,9 @@ test_operator_precedence(void)
 static void
 test_func_untyped_varargs(void)
 {
-    const char *src =
-        "func f(*args) {\n"
-        "}\n";
+    const char *src
+        = "func f(*args) {\n"
+          "}\n";
 
     pipeline_result_t r = assert_parses(src, "func_untyped_varargs");
     pipeline_free(&r);
@@ -2820,9 +2843,9 @@ test_func_untyped_varargs(void)
 static void
 test_func_untyped_kwargs(void)
 {
-    const char *src =
-        "func f(kw = 0) {\n"
-        "}\n";
+    const char *src
+        = "func f(kw = 0) {\n"
+          "}\n";
 
     pipeline_result_t r = assert_parses(src, "func_untyped_kwargs");
     pipeline_free(&r);
@@ -2836,8 +2859,7 @@ test_func_untyped_kwargs(void)
 static void
 test_parse_error_incomplete_func(void)
 {
-    pipeline_result_t r = assert_parse_fails(
-        "func\n", "error_incomplete_func");
+    pipeline_result_t r = assert_parse_fails("func\n", "error_incomplete_func");
     pipeline_free(&r);
     printf("  [PASS] parse_error_incomplete_func\n");
 }
@@ -2846,8 +2868,7 @@ static void
 test_parse_error_bad_enum(void)
 {
     // Enum without braces.
-    pipeline_result_t r = assert_parse_fails(
-        "enum Color\n", "error_bad_enum");
+    pipeline_result_t r = assert_parse_fails("enum Color\n", "error_bad_enum");
     pipeline_free(&r);
     printf("  [PASS] parse_error_bad_enum\n");
 }
@@ -2915,6 +2936,7 @@ main(int argc, char **argv)
     test_labeled_switch();
     test_break_continue();
     test_return();
+    test_yield_statement();
 
     // Switch.
     test_switch_basic();

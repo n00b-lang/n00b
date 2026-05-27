@@ -8,8 +8,8 @@
  * the n00b language. Handles:
  *
  * - All n00b keywords (`if`, `elif`, `else`, `for`, `while`, `from`, `to`,
- *   `break`, `continue`, `return`, `switch`, `case`, `func`, `var`, `global`,
- *   `const`, `let`, `once`, `private`, `enum`, `object`, `typeof`, `in`,
+ *   `break`, `continue`, `return`, `yield`, `switch`, `case`, `func`, `var`,
+ *   `global`, `const`, `let`, `once`, `private`, `enum`, `object`, `typeof`, `in`,
  *   `lock`, `and`, `or`, `true`, `false`, `nil`)
  * - Operators: arithmetic, comparison, logical, bitwise, assignment
  * - Compound assignment (`+=`, `-=`, `*=`, `/=`, `%=`, `&=`, `|=`, `^=`,

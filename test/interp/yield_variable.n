@@ -1,0 +1,6 @@
+func f() -> int {
+  var x = 7
+  yield x
+}
+
+print(f())

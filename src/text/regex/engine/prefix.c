@@ -1003,6 +1003,12 @@ build_strict_literal_prefix(RegexBuilder *self, NodeId node)
     FwdLiteralSearch *lit = n00b_simd_FwdLiteralSearch_new(needle, sets.len);
     n00b_free(needle);
 
+    if (!lit) {
+        n00b_free(byte_sets);
+        tset_id_vec_free(&sets);
+        return n00b_result_ok(OptFwdPrefix, out);
+    }
+
     if ((uint16_t)n00b_simd_BYTE_FREQ[n00b_simd_FwdLiteralSearch_rare_byte(lit)] >= RARE_BYTE_FREQ_LIMIT) {
         // Free `lit` explicitly to match upstream Rust's `Drop` semantics —
         // `lit` owns SIMD tables that would otherwise accumulate per
@@ -1014,8 +1020,16 @@ build_strict_literal_prefix(RegexBuilder *self, NodeId node)
         return n00b_result_ok(OptFwdPrefix, out);
     }
 
+    FwdPrefixSearch *search = fwd_prefix_search_new_literal(lit, regex_builder_allocator(self));
+    if (!search) {
+        n00b_simd_FwdLiteralSearch_free(lit);
+        n00b_free(byte_sets);
+        tset_id_vec_free(&sets);
+        return n00b_result_ok(OptFwdPrefix, out);
+    }
+
     out.has_value = true;
-    out.value     = fwd_prefix_search_new_literal(lit, regex_builder_allocator(self));
+    out.value     = search;
 
     n00b_free(byte_sets);
     tset_id_vec_free(&sets);
@@ -1142,8 +1156,11 @@ static ResultFwdRangePair try_build_fwd_range_prefix(const ByteVec *byte_sets_ra
     FwdRangeSearch *rs = n00b_simd_FwdRangeSearch_new(byte_sets_len, anchor_pos,
                                                  use_lo, use_hi, use_len,
                                                  all_sets, byte_sets_len);
-    r.has_search = true;
-    r.search     = fwd_prefix_search_new_range(rs, allocator);
+    FwdPrefixSearch *search = fwd_prefix_search_new_range(rs, allocator);
+    if (search) {
+        r.has_search = true;
+        r.search     = search;
+    }
 
     if (used_coarse) {
         n00b_free(coarse_lo);
@@ -1176,11 +1193,21 @@ try_build_fwd_search_raw(const ByteVec *byte_sets_raw, size_t byte_sets_len,
         FwdLiteralSearch *lit = n00b_simd_FwdLiteralSearch_new(needle, lit_len);
         n00b_free(needle);
 
+        if (!lit) {
+            return n00b_result_ok(OptFwdPrefix, r);
+        }
+
         if (lit_len == byte_sets_len
             || (uint16_t)n00b_simd_BYTE_FREQ[n00b_simd_FwdLiteralSearch_rare_byte(lit)]
                    < RARE_BYTE_FREQ_LIMIT) {
-            r.has_value = true;
-            r.value     = fwd_prefix_search_new_literal(lit, allocator);
+            FwdPrefixSearch *search = fwd_prefix_search_new_literal(lit, allocator);
+            if (search) {
+                r.has_value = true;
+                r.value     = search;
+            }
+            else {
+                n00b_simd_FwdLiteralSearch_free(lit);
+            }
             return n00b_result_ok(OptFwdPrefix, r);
         }
         // Free `lit` explicitly to match upstream Rust's `Drop` semantics —
@@ -1300,8 +1327,11 @@ try_build_fwd_search_raw(const ByteVec *byte_sets_raw, size_t byte_sets_len,
     n00b_free(freq_order);
     n00b_free(all_sets);
 
-    r.has_value = true;
-    r.value     = fwd_prefix_search_new_prefix(ps, allocator);
+    FwdPrefixSearch *search = fwd_prefix_search_new_prefix(ps, allocator);
+    if (search) {
+        r.has_value = true;
+        r.value     = search;
+    }
     return n00b_result_ok(OptFwdPrefix, r);
 }
 
