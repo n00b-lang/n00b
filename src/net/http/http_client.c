@@ -19,6 +19,27 @@
 #include <string.h>
 #include <strings.h>
 
+#ifdef _WIN32
+#  include <winsock2.h>
+#  include <ws2tcpip.h>
+#  define N00B_HTTP_PLAIN_SOCK_T   SOCKET
+#  define N00B_HTTP_PLAIN_BAD_SOCK INVALID_SOCKET
+#  define N00B_HTTP_PLAIN_CLOSE(s) closesocket((SOCKET)(s))
+#else
+#  include <arpa/inet.h>
+#  include <errno.h>
+#  include <fcntl.h>
+#  include <netdb.h>
+#  include <netinet/in.h>
+#  include <sys/socket.h>
+#  include <sys/types.h>
+#  include <sys/select.h>
+#  include <unistd.h>
+#  define N00B_HTTP_PLAIN_SOCK_T   int
+#  define N00B_HTTP_PLAIN_BAD_SOCK (-1)
+#  define N00B_HTTP_PLAIN_CLOSE(s) close(s)
+#endif
+
 #include "n00b.h"
 #include "core/alloc.h"
 #include "core/runtime.h"
@@ -329,6 +350,269 @@ build_from_h3(n00b_h3_response_t *h3,
             (int64_t)h3->headers[i].value_len, .allocator = a);
     }
     return r;
+}
+
+/* Forward declarations used by the plain-HTTP path below.  These
+ * are defined further down for the https / dispatcher path. */
+static const char *method_cstr(n00b_string_t *method);
+static const char *content_type_cstr(n00b_string_t *ct);
+
+/* ===========================================================================
+ * § 3.5  Plain HTTP (one-shot, no TLS, no pool)
+ *
+ * Used only when the caller passes `allow_plain_http = true` and the
+ * URL scheme is `http://`.  Intended for local-development loopback
+ * callers (same-host CLIs, local backing stores) that legitimately
+ * need a plain TCP HTTP/1.1 path because TLS is not configured.
+ *
+ * Each request opens a fresh socket and closes it after the response
+ * is fully received.  No connection pool, no redirect handling, no
+ * cookie jar, no TLS / mTLS / H3 — those are all https-only
+ * concerns.  Request building and response parsing reuse the
+ * existing `n00b_http_h1_request_build` / `n00b_http_h1_response_parse`
+ * helpers so the HTTP/1.1 wire format stays in one place.
+ * =========================================================================== */
+
+static int
+plain_tcp_connect(const char *host,
+                  uint16_t    port,
+                  int32_t     timeout_ms,
+                  N00B_HTTP_PLAIN_SOCK_T *out_fd)
+{
+    *out_fd = N00B_HTTP_PLAIN_BAD_SOCK;
+
+#ifdef _WIN32
+    static bool winsock_started = false;
+    if (!winsock_started) {
+        WSADATA wsa;
+        if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
+            return N00B_HTTP_ERR_INVALID_URL;
+        }
+        winsock_started = true;
+    }
+#endif
+
+    char port_str[8];
+    int  n = snprintf(port_str, sizeof(port_str), "%u", (unsigned)port);
+    if (n <= 0) {
+        return N00B_HTTP_ERR_INVALID_URL;
+    }
+
+    struct addrinfo  hints = {0};
+    struct addrinfo *res   = nullptr;
+    hints.ai_family   = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    if (getaddrinfo(host, port_str, &hints, &res) != 0 || res == nullptr) {
+        return N00B_HTTP_ERR_INVALID_URL;
+    }
+
+    N00B_HTTP_PLAIN_SOCK_T fd = N00B_HTTP_PLAIN_BAD_SOCK;
+    for (struct addrinfo *ai = res; ai; ai = ai->ai_next) {
+        fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+        if (fd == N00B_HTTP_PLAIN_BAD_SOCK) {
+            continue;
+        }
+        if (connect(fd, ai->ai_addr, (socklen_t)ai->ai_addrlen) == 0) {
+            break;
+        }
+        N00B_HTTP_PLAIN_CLOSE(fd);
+        fd = N00B_HTTP_PLAIN_BAD_SOCK;
+    }
+    freeaddrinfo(res);
+
+    if (fd == N00B_HTTP_PLAIN_BAD_SOCK) {
+        return N00B_HTTP_ERR_INVALID_URL;
+    }
+
+#ifndef _WIN32
+    /* Apply a recv timeout if the caller asked for one.  Sends use
+     * the same timeout via SO_SNDTIMEO. */
+    if (timeout_ms > 0) {
+        struct timeval tv;
+        tv.tv_sec  = timeout_ms / 1000;
+        tv.tv_usec = (timeout_ms % 1000) * 1000;
+        (void)setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+        (void)setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+    }
+#else
+    if (timeout_ms > 0) {
+        DWORD ms = (DWORD)timeout_ms;
+        (void)setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO,
+                         (const char *)&ms, sizeof(ms));
+        (void)setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO,
+                         (const char *)&ms, sizeof(ms));
+    }
+#endif
+
+    *out_fd = fd;
+    return 0;
+}
+
+static int
+plain_tcp_send_all(N00B_HTTP_PLAIN_SOCK_T fd,
+                   const char            *bytes,
+                   size_t                 len)
+{
+    size_t off = 0;
+    while (off < len) {
+#ifdef _WIN32
+        int chunk = (len - off) > INT_MAX ? INT_MAX : (int)(len - off);
+        int rc = send(fd, bytes + off, chunk, 0);
+#else
+        ssize_t rc = send(fd, bytes + off, len - off, 0);
+#endif
+        if (rc <= 0) {
+            return N00B_HTTP_ERR_BAD_RESPONSE;
+        }
+        off += (size_t)rc;
+    }
+    return 0;
+}
+
+static int
+plain_tcp_recv_all(N00B_HTTP_PLAIN_SOCK_T  fd,
+                   uint64_t                max_body_size,
+                   n00b_allocator_t       *a,
+                   n00b_buffer_t         **out_bytes)
+{
+    n00b_buffer_t *buf = n00b_buffer_empty(.allocator = a);
+    char           chunk[8192];
+
+    while (true) {
+#ifdef _WIN32
+        int rc = recv(fd, chunk, (int)sizeof(chunk), 0);
+#else
+        ssize_t rc = recv(fd, chunk, sizeof(chunk), 0);
+#endif
+        if (rc == 0) {
+            break;
+        }
+        if (rc < 0) {
+            return N00B_HTTP_ERR_BAD_RESPONSE;
+        }
+        if (max_body_size > 0
+            && (uint64_t)buf->byte_len + (uint64_t)rc > max_body_size) {
+            return N00B_HTTP_ERR_RESPONSE_TOO_LARGE;
+        }
+        n00b_buffer_concat(buf,
+                            n00b_buffer_from_bytes(chunk,
+                                                   (int64_t)rc,
+                                                   .allocator = a));
+    }
+
+    *out_bytes = buf;
+    return 0;
+}
+
+static n00b_result_t(n00b_http_response_t *)
+plain_http_request_sync(n00b_string_t           *url,
+                        n00b_string_t           *method,
+                        n00b_buffer_t           *body,
+                        n00b_string_t           *content_type,
+                        n00b_http_h1_headers_t  *extra,
+                        n00b_string_t           *body_encoding,
+                        bool                     auto_decompress,
+                        int32_t                  timeout_ms,
+                        uint64_t                 max_body_size,
+                        n00b_allocator_t        *a)
+{
+    /* Compress the request body if the caller asked (mirrors the
+     * https path's pre-loop compression). */
+    if (body_encoding && body_encoding->u8_bytes > 0 && body) {
+        auto cr = n00b_http_compress(body, body_encoding->data,
+                                       .allocator = a);
+        if (n00b_result_is_err(cr)) {
+            return n00b_result_err(n00b_http_response_t *,
+                                    n00b_result_get_err(cr));
+        }
+        body = n00b_result_get(cr);
+    }
+
+    auto ur = n00b_http_url_parse(url,
+                                   .allocator = a,
+                                   .allow_plain_http = true);
+    if (n00b_result_is_err(ur)) {
+        return n00b_result_err(n00b_http_response_t *,
+                                n00b_result_get_err(ur));
+    }
+    n00b_http_url_t *u = n00b_result_get(ur);
+
+    /* Build the H1 request bytes.  The plain path always sends
+     * Connection: close — no idle connection is pooled. */
+    n00b_http_h1_headers_t *headers = extra;
+    if (auto_decompress) {
+        if (!headers) {
+            headers = n00b_http_h1_headers_new(.allocator = a);
+        }
+        n00b_string_t *ae = n00b_http_accept_encoding_header(.allocator = a);
+        if (ae) {
+            n00b_http_h1_headers_set(headers, "Accept-Encoding", ae->data);
+        }
+    }
+    if (extra && extra != headers) {
+        /* Caller's extras override our auto headers. */
+        size_t n = n00b_http_h1_headers_len(extra);
+        for (size_t i = 0; i < n; i++) {
+            const char *name;
+            const char *value;
+            if (n00b_http_h1_headers_at(extra, i, &name, &value)) {
+                n00b_http_h1_headers_set(headers, name, value);
+            }
+        }
+    }
+
+    n00b_buffer_t *request = n00b_http_h1_request_build(
+        u,
+        .method       = method_cstr(method),
+        .body         = body,
+        .content_type = content_type ? content_type->data : nullptr,
+        .extra        = headers,
+        .keep_alive   = false,
+        .allocator    = a);
+
+    /* One-shot socket: connect, send, recv, close. */
+    N00B_HTTP_PLAIN_SOCK_T fd = N00B_HTTP_PLAIN_BAD_SOCK;
+    int rc = plain_tcp_connect(u->host->data,
+                                u->port,
+                                timeout_ms,
+                                &fd);
+    if (rc != 0) {
+        return n00b_result_err(n00b_http_response_t *, rc);
+    }
+
+    rc = plain_tcp_send_all(fd, request->data, request->byte_len);
+    if (rc != 0) {
+        N00B_HTTP_PLAIN_CLOSE(fd);
+        return n00b_result_err(n00b_http_response_t *, rc);
+    }
+
+    n00b_buffer_t *raw = nullptr;
+    rc = plain_tcp_recv_all(fd, max_body_size, a, &raw);
+    N00B_HTTP_PLAIN_CLOSE(fd);
+    if (rc != 0) {
+        return n00b_result_err(n00b_http_response_t *, rc);
+    }
+
+    auto pr = n00b_http_h1_response_parse(raw, .allocator = a);
+    if (n00b_result_is_err(pr)) {
+        return n00b_result_err(n00b_http_response_t *,
+                                n00b_result_get_err(pr));
+    }
+    n00b_http_h1_response_t *h1 = n00b_result_get(pr);
+
+    /* Optional response-body decompression (mirrors the https path). */
+    if (auto_decompress) {
+        const char *enc = n00b_http_h1_headers_get_cstr(h1->headers,
+                                                         "Content-Encoding");
+        if (enc && enc[0] && h1->body && h1->body->byte_len > 0) {
+            auto dr = n00b_http_decompress(h1->body, enc, .allocator = a);
+            if (n00b_result_is_ok(dr)) {
+                h1->body = n00b_result_get(dr);
+            }
+        }
+    }
+
+    return n00b_result_ok(n00b_http_response_t *, build_from_h1(h1, a));
 }
 
 /* ===========================================================================
@@ -855,6 +1139,7 @@ n00b_http_request_sync(n00b_string_t *url)
         n00b_http_connection_pool_t *pool         = nullptr;
         uint64_t                max_body_size     = 0;
         n00b_list_t(n00b_string_t *) *redirect_host_allowlist = nullptr;
+        bool                    allow_plain_http  = false;
         n00b_allocator_t       *allocator         = nullptr;
     }
 {
@@ -865,6 +1150,24 @@ n00b_http_request_sync(n00b_string_t *url)
     n00b_allocator_t *a = allocator
         ? allocator
         : (n00b_allocator_t *)&n00b_get_runtime()->conduit_pool;
+
+    /* The plain-HTTP path is a one-shot socket; it never touches
+     * the connection pool, redirect loop, cookie jar, or TLS auth
+     * helpers (which are all https-only concerns).  Branch early
+     * so the rest of this function stays focused on the https
+     * dispatcher. */
+    if (allow_plain_http) {
+        return plain_http_request_sync(url,
+                                        method,
+                                        body,
+                                        content_type,
+                                        extra,
+                                        body_encoding,
+                                        auto_decompress,
+                                        timeout_ms,
+                                        max_body_size,
+                                        a);
+    }
 
     /* Default to the per-runtime connection pool when the caller
      * did not pass an explicit one. */

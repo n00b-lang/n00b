@@ -269,6 +269,25 @@ typedef struct n00b_http_connection_pool n00b_http_connection_pool_t;
  *                   `follow_redirects = true`; when redirect-follow
  *                   is off, 3xx responses pass through to the
  *                   caller as-is (no allowlist check).
+ * @kw allow_plain_http  When true, `http://` URLs are accepted and
+ *                   sent over a one-shot plain TCP HTTP/1.1 round
+ *                   trip (no TLS, no H3, no connection pool, no
+ *                   redirect handling).  Default false — only
+ *                   `https://` is accepted, which is the production
+ *                   posture.  Intended for local-development
+ *                   loopback callers (CLIs talking to a same-host
+ *                   service, adapters talking to a local backing
+ *                   store) where TLS is not configured.  Each
+ *                   request opens a fresh socket and closes it on
+ *                   the response; no idle connection is ever pooled
+ *                   under the plain-HTTP path.  Most other kwargs
+ *                   (`prefer_h3`, `trust`, `pool`, `auth`,
+ *                   `cookie_jar`, `follow_redirects`) are ignored
+ *                   when this path is taken — they're TLS / H3 /
+ *                   pooling concerns.  `extra`, `body`,
+ *                   `content_type`, `method`, `auto_decompress`,
+ *                   `body_encoding`, `timeout_ms`, and
+ *                   `max_body_size` still apply.
  * @kw allocator     Default per-runtime conduit pool.
  *
  * @return  Result with the populated response, or err carrying
@@ -297,6 +316,7 @@ n00b_http_request_sync(n00b_string_t *url)
         n00b_http_connection_pool_t *pool         = nullptr;
         uint64_t                max_body_size     = 0;
         n00b_list_t(n00b_string_t *) *redirect_host_allowlist = nullptr;
+        bool                    allow_plain_http  = false;
         n00b_allocator_t       *allocator         = nullptr;
     };
 

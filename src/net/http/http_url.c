@@ -126,14 +126,20 @@ build_origin(n00b_string_t    *host,
              bool              is_ipv6_literal,
              uint16_t          port,
              bool              has_explicit_port,
+             bool              is_http_scheme,
              n00b_allocator_t *allocator)
 {
-    /* "https://" + maybe-bracketed host + optional :port — kept as
-     * one buffer + final string copy; cheaper than n00b_string_concat
-     * for a hot path the dispatcher will hit on every request. */
+    /* "<scheme>://" + maybe-bracketed host + optional :port — kept
+     * as one buffer + final string copy; cheaper than
+     * n00b_string_concat for a hot path the dispatcher will hit on
+     * every request. */
+    const char *scheme_prefix     = is_http_scheme ? "http://" : "https://";
+    size_t      scheme_prefix_len = is_http_scheme ? 7         : 8;
+    uint16_t    default_port      = is_http_scheme ? 80        : 443;
+
     char   scratch[128];
     char  *out;
-    bool   omit_port = !has_explicit_port || port == 443;
+    bool   omit_port = !has_explicit_port || port == default_port;
     size_t brackets  = is_ipv6_literal ? 2 : 0;
     size_t port_len  = 0;
     char   port_buf[8];
@@ -142,7 +148,7 @@ build_origin(n00b_string_t    *host,
                          (unsigned)port);
         port_len = (n > 0) ? (size_t)n : 0;
     }
-    size_t need = 8 /* "https://" */
+    size_t need = scheme_prefix_len
                 + brackets
                 + host->u8_bytes
                 + port_len;
@@ -153,8 +159,8 @@ build_origin(n00b_string_t    *host,
         out = n00b_alloc_array(char, need, .allocator = allocator);
     }
     size_t off = 0;
-    memcpy(out + off, "https://", 8);
-    off += 8;
+    memcpy(out + off, scheme_prefix, scheme_prefix_len);
+    off += scheme_prefix_len;
     if (is_ipv6_literal) {
         out[off++] = '[';
     }
@@ -177,7 +183,8 @@ build_origin(n00b_string_t    *host,
 n00b_result_t(n00b_http_url_t *)
 n00b_http_url_parse(n00b_string_t *url)
     _kargs {
-        n00b_allocator_t *allocator = nullptr;
+        n00b_allocator_t *allocator       = nullptr;
+        bool              allow_plain_http = false;
     }
 {
     if (!url || !url->data) {
@@ -188,23 +195,45 @@ n00b_http_url_parse(n00b_string_t *url)
     const char *p   = url->data;
     const char *end = p + url->u8_bytes;
 
-    /* Scheme: "https://" (case-insensitive). */
-    static const char SCHEME[] = "https://";
-    const size_t      slen     = sizeof(SCHEME) - 1;
-    if ((size_t)(end - p) < slen) {
-        return n00b_result_err(n00b_http_url_t *,
-                               N00B_HTTP_ERR_UNSUPPORTED_SCHEME);
-    }
-    for (size_t i = 0; i < slen; i++) {
-        char want = SCHEME[i];
-        char have = p[i];
-        if (have >= 'A' && have <= 'Z') have = (char)(have + ('a' - 'A'));
-        if (have != want) {
-            return n00b_result_err(n00b_http_url_t *,
-                                   N00B_HTTP_ERR_UNSUPPORTED_SCHEME);
+    /* Scheme: "https://" (case-insensitive), or "http://" when the
+     * caller opted in via `allow_plain_http = true`. */
+    bool             is_http_scheme  = false;
+    static const char HTTPS_SCHEME[] = "https://";
+    static const char HTTP_SCHEME[]  = "http://";
+    const size_t      hsl            = sizeof(HTTPS_SCHEME) - 1;
+    const size_t      hl             = sizeof(HTTP_SCHEME)  - 1;
+
+    if ((size_t)(end - p) >= hsl) {
+        bool matches_https = true;
+        for (size_t i = 0; i < hsl; i++) {
+            char want = HTTPS_SCHEME[i];
+            char have = p[i];
+            if (have >= 'A' && have <= 'Z') have = (char)(have + ('a' - 'A'));
+            if (have != want) { matches_https = false; break; }
+        }
+        if (matches_https) {
+            p += hsl;
+            goto scheme_done;
         }
     }
-    p += slen;
+    if (allow_plain_http && (size_t)(end - p) >= hl) {
+        bool matches_http = true;
+        for (size_t i = 0; i < hl; i++) {
+            char want = HTTP_SCHEME[i];
+            char have = p[i];
+            if (have >= 'A' && have <= 'Z') have = (char)(have + ('a' - 'A'));
+            if (have != want) { matches_http = false; break; }
+        }
+        if (matches_http) {
+            is_http_scheme = true;
+            p += hl;
+            goto scheme_done;
+        }
+    }
+    return n00b_result_err(n00b_http_url_t *,
+                           N00B_HTTP_ERR_UNSUPPORTED_SCHEME);
+
+scheme_done:;
 
     /* Strip fragment up front: HTTP requests never send `#…` and we
      * do not want it appearing in path/query bytes. */
@@ -271,8 +300,10 @@ n00b_http_url_parse(n00b_string_t *url)
                                N00B_HTTP_ERR_HOST_EMPTY);
     }
 
-    /* Optional :PORT. */
-    uint16_t port              = 443;
+    /* Optional :PORT.  Default depends on scheme: 443 for https, 80
+     * for http (only reachable when the caller passes
+     * `allow_plain_http = true`). */
+    uint16_t port              = is_http_scheme ? 80 : 443;
     bool     has_explicit_port = false;
     if (p < auth_end && *p == ':') {
         p++;                     /* consume `:` */
@@ -344,7 +375,9 @@ n00b_http_url_parse(n00b_string_t *url)
     /* Build result. */
     n00b_http_url_t *u = n00b_alloc(n00b_http_url_t,
                                     .allocator = allocator);
-    u->scheme            = lowercase_ascii_slice("https", 5, allocator);
+    u->scheme            = is_http_scheme
+                              ? lowercase_ascii_slice("http", 4, allocator)
+                              : lowercase_ascii_slice("https", 5, allocator);
     u->host              = host_str;
     u->is_ipv6_literal   = is_ipv6;
     u->port              = port;
@@ -357,6 +390,7 @@ n00b_http_url_parse(n00b_string_t *url)
                                         is_ipv6,
                                         port,
                                         has_explicit_port,
+                                        is_http_scheme,
                                         allocator);
     return n00b_result_ok(n00b_http_url_t *, u);
 }
