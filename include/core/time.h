@@ -140,3 +140,16 @@ n00b_timestamp_diff(struct timespec *t1,
         result->tv_sec -= 1;
     }
 }
+
+/**
+ * @brief Format a wall-clock timestamp as RFC-3339 / ISO-8601 UTC.
+ *
+ * Format is `YYYY-MM-DDTHH:MM:SSZ` (second precision). The `tv_nsec`
+ * field of @p t is ignored — extend the API when a consumer needs
+ * sub-second precision.
+ *
+ * @param t  Wall-clock timestamp (as produced by
+ *           `n00b_capture_timestamp`). Must not be NULL.
+ * @return   A newly-allocated n00b string. Never NULL.
+ */
+extern n00b_string_t *n00b_iso8601_utc(n00b_duration_t *t);

@@ -598,6 +598,13 @@ audit_rule_file_grammar_h = custom_target(
 
 subdir('src/naudit')
 
+# ============================================================================
+# ClickHouse HTTP substrate (D-062 amended 2026-05-27 — libn00b_clickhouse
+# lives in libn00b as a pure-C bundled module; no separate library, no
+# opt-in option, since it depends only on n00b_http_request_sync).
+# ============================================================================
+
+subdir('src/clickhouse')
 # Aggregate per-module source lists into the libn00b source set. Each
 # entry above (`subdir('src/<mod>')`) is responsible for declaring a
 # `n00b_<mod>_src` variable; we just glue them together here.
@@ -622,8 +629,91 @@ n00b_dll_src = (
     n00b_http_src +
     n00b_attest_src +
     n00b_naudit_src +
+    n00b_clickhouse_src +
     [audit_paths_h, audit_rule_file_grammar_h]
 )
+
+# ============================================================================
+# libn00b_aws — optional AWS substrate (D-062 amended 2026-05-27)
+# ============================================================================
+# Pure-C wrap of the aws-sdk-rust shim (`n00b-aws-shim`). The shim is a
+# Rust cdylib that exports each AWS operation as `extern "C"`; we run
+# `~/slop/bin/demangle` against it at build time to generate a C header
+# with dlsym-lazy wrappers, then put an n00b-idiomatic surface on top.
+#
+# No C++ language anywhere in this build. No libc++ at runtime. The
+# shim's Rust runtime (Tokio) is loaded only by executables that link
+# libn00b_aws.
+
+conf_enable_aws  = get_option('enable_aws')
+aws_shim_prefix  = get_option('aws_shim_prefix')
+
+if conf_enable_aws
+  fs           = import('fs')
+  cc           = meson.get_compiler('c')
+
+  # The Rust-shim path uses cbindgen — it reads the crate's source
+  # and emits a clean C header using `<stdint.h>` types. demangle
+  # was the original plan but segfaults on aws-sdk-rust's DWARF
+  # (the type-mapping fix I landed upstream is still right for any
+  # C++ library someone wraps later; see
+  # [[project_n00b_aws_via_rust_shim]] for the why).
+  cbindgen_bin = find_program('cbindgen', required: true)
+
+  if aws_shim_prefix == ''
+    # Development path: the shim builds under the in-repo Rust crate at
+    # `subprojects/n00b-aws-shim`. Production installs come from a
+    # Homebrew tap / apt PPA / vcpkg port that drops the cdylib at a
+    # platform-conventional prefix; users point at it via
+    # `-Daws_shim_prefix=...` or `N00B_AWS_SHIM_PREFIX=...`.
+    aws_shim_prefix = meson.project_source_root() / 'subprojects' / 'n00b-aws-shim'
+  endif
+
+  if target_os == 'darwin'
+    shim_lib_name = 'libn00b_aws_shim.dylib'
+  elif target_os == 'windows'
+    shim_lib_name = 'n00b_aws_shim.dll'
+  else
+    shim_lib_name = 'libn00b_aws_shim.so'
+  endif
+
+  # Locate the prebuilt shim dylib + its library directory. Two layouts
+  # are supported:
+  #   * Installed:  `<prefix>/lib/<name>` (brew / apt / vcpkg).
+  #   * Dev (cargo): `<prefix>/target/release/<name>`.
+  # meson picks the first one that exists.
+  shim_dylib_installed = aws_shim_prefix / 'lib' / shim_lib_name
+  shim_dylib_devel     = aws_shim_prefix / 'target' / 'release' / shim_lib_name
+
+  if fs.exists(shim_dylib_installed)
+    aws_shim_dylib   = shim_dylib_installed
+    aws_shim_lib_dir = aws_shim_prefix / 'lib'
+  elif fs.exists(shim_dylib_devel)
+    aws_shim_dylib   = shim_dylib_devel
+    aws_shim_lib_dir = aws_shim_prefix / 'target' / 'release'
+  else
+    error('n00b-aws-shim dylib not found. Either install the prebuilt' +
+          ' shim and pass `-Daws_shim_prefix=<prefix>`, or build the' +
+          ' in-repo crate via `cargo build --release` in' +
+          ' subprojects/n00b-aws-shim/.')
+  endif
+
+  # Compile-time link dependency: downstream consumers link against the
+  # shim cdylib via its standard library name (`-ln00b_aws_shim`).
+  aws_shim_lib_dep = cc.find_library('n00b_aws_shim',
+                                     dirs: [aws_shim_lib_dir],
+                                     required: true)
+
+  # cbindgen reads the crate source, so we need to point it at the
+  # in-repo path even when the prebuilt dylib lives elsewhere. End
+  # consumers who install the prebuilt dylib also get a pre-generated
+  # C header alongside it (we run cbindgen once at publish time).
+  aws_shim_crate_root = meson.project_source_root() / 'subprojects' / 'n00b-aws-shim'
+
+  subdir('src/aws')
+else
+  n00b_aws_dep = disabler()
+endif
 
 # Build generated unicode tables with --no-ncc (they are pure data,
 # no ncc extensions, and parsing them is extremely expensive).
@@ -929,6 +1019,24 @@ attest_module_test = executable('test_attest_module',
     kwargs: test_common_kwargs,
 )
 test('attest_module', attest_module_test, suite: 'unit')
+
+clickhouse_module_test = executable('test_clickhouse_module',
+    ['test/unit/test_clickhouse_module.c'],
+    kwargs: test_common_kwargs,
+)
+test('clickhouse_module', clickhouse_module_test, suite: 'unit')
+
+if conf_enable_aws
+  aws_sts_test = executable('test_aws_sts',
+      ['test/unit/test_aws_sts.c'],
+      include_directories: incdir,
+      c_args:    exe_c_args,
+      link_args: exe_link_args,
+      link_with: [n00b],
+      dependencies: [picoquic_dep, monocypher_dep, n00b_aws_dep],
+  )
+  test('aws_sts', aws_sts_test, suite: 'unit')
+endif
 
 attest_statement_roundtrip_test = executable('test_attest_statement_roundtrip',
     ['test/unit/test_attest_statement_roundtrip.c'],

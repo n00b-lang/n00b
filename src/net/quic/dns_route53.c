@@ -145,10 +145,17 @@ sigv4_sign(const r53_state_t *st,
            size_t             body_len,
            sigv4_t           *out)
 {
-    /* 1. Timestamp + scope. */
-    time_t now = (time_t)(n00b_us_timestamp() / N00B_USEC_PER_SEC);
+    /* 1. Timestamp + scope. The compact SigV4 date formats
+     * (`%Y%m%d` / `%Y%m%dT%H%M%SZ`) don't fit `n00b_iso8601_utc`'s
+     * RFC-3339 output — funnel the timestamp capture through
+     * `n00b_duration_t` so every libn00b consumer pulls wall-clock
+     * via the same primitive. A future broken-down-UTC helper
+     * (e.g. `n00b_gmtime`) can subsume the `gmtime_r` call too. */
+    n00b_duration_t now = {};
+    n00b_capture_timestamp(&now);
+    time_t now_sec = (time_t)now.tv_sec;
     struct tm utc;
-    gmtime_r(&now, &utc);
+    gmtime_r(&now_sec, &utc);
     char date_only[16];
     strftime(date_only, sizeof(date_only), "%Y%m%d", &utc);
     strftime(out->amz_date, sizeof(out->amz_date), "%Y%m%dT%H%M%SZ", &utc);

@@ -97,3 +97,35 @@ option('attest_backend',
               'aws_sm', 'gcp_sm', 'az_kv'],
     value: 'none',
     description: 'n00b_attest signer backend (no-op placeholder; WP-001 reserves the option name, WP-002 wires the first real value).')
+
+# ----------------------------------------------------------------------
+# libn00b_aws — optional AWS substrate over the n00b-aws-shim cdylib
+# ----------------------------------------------------------------------
+# When enabled, builds libn00b_aws as a pure-C wrap of `n00b-aws-shim`,
+# a Rust cdylib that re-exports aws-sdk-rust operations as `extern "C"`.
+# At build time we run `~/slop/bin/demangle` against the shim to
+# generate the C header that libn00b_aws includes; at runtime the C
+# code dlsyms the shim symbols. No libc++ in this loop — only Tokio
+# (loaded via the shim's own dependencies).
+#
+# Per D-062 amended 2026-05-27 (see [[project_n00b_aws_via_rust_shim]]
+# in auto-memory).
+#
+# Requires the prebuilt shim. macOS: `brew install n00b-aws-rust`
+# (forthcoming tap); Linux: apt PPA; Windows: vcpkg port. During
+# development the in-repo Rust crate at subprojects/n00b-aws-shim/
+# satisfies the dependency without external install.
+option('enable_aws',
+    type: 'boolean',
+    value: false,
+    description: 'Build libn00b_aws (requires the n00b-aws-shim cdylib).')
+
+option('aws_shim_prefix',
+    type: 'string',
+    value: '',
+    description: 'Optional explicit n00b-aws-shim install prefix. Leave empty to fall back to the in-repo subprojects/n00b-aws-shim/ cargo build.')
+
+option('demangle_bin',
+    type: 'string',
+    value: '',
+    description: 'Optional explicit path to the demangle utility. Leave empty to look up `demangle` on PATH (falling back to ~/slop/bin/demangle when present).')
