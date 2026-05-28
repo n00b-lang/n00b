@@ -63,7 +63,9 @@
 #include "slay/rewrite.h"
 #include "slay/token.h"
 #include "adt/tree.h"
+#include "text/strings/format.h"
 #include "text/strings/string_ops.h"
+#include "conduit/print.h"
 #include "util/path.h"
 
 #include "naudit/engine.h"
@@ -123,6 +125,23 @@ struct n00b_audit_engine {
      * Tracks the `--ignore-baseline` CLI flag. Defaults to false.
      */
     bool                                                       ignore_baseline;
+    /*
+     * WP-012: when set, the exemption + baseline verification gate
+     * accepts unsigned / bad-signature / unknown-signer records with
+     * a stderr warning instead of dropping them. Tracks the
+     * `--allow-unsigned` CLI flag. Defaults to false.
+     */
+    bool                                                       allow_unsigned;
+    /*
+     * WP-012: idempotency flag for the signature verification gate.
+     * The gate walks `guidance->exemptions` + `guidance->baseline`
+     * once on first `check_file` invocation, drops records that
+     * don't verify (unless `allow_unsigned`), and sets this flag so
+     * subsequent `check_file` calls skip the (expensive) subprocess
+     * sweep. Per-engine caching, not per-process — a fresh engine
+     * re-verifies.
+     */
+    bool                                                       signatures_applied;
 };
 
 /* ---------------------------------------------------------------- */
@@ -352,6 +371,8 @@ n00b_audit_engine_new(n00b_audit_guidance_t *guidance)
     e->compiled_filters   = nullptr;
     e->filter_compile_err = 0;
     e->ignore_baseline    = false;
+    e->allow_unsigned     = false;
+    e->signatures_applied = false;
 
     return n00b_result_ok(n00b_audit_engine_t *, e);
 }
@@ -369,6 +390,24 @@ n00b_audit_engine_set_ignore_baseline(n00b_audit_engine_t *engine,
         return;
     }
     engine->ignore_baseline = ignore;
+}
+
+/*
+ * WP-012: setter for the engine's `allow_unsigned` policy flag.
+ * Default false; the CLI calls this when `--allow-unsigned` was
+ * passed. When set, the exemption / baseline signature gate
+ * downgrades verification failure from "drop the record" to
+ * "warn + keep the record" — matching the WP-012 prompt's
+ * policy contract.
+ */
+void
+n00b_audit_engine_set_allow_unsigned(n00b_audit_engine_t *engine,
+                                      bool                 allow)
+{
+    if (!engine) {
+        return;
+    }
+    engine->allow_unsigned = allow;
 }
 
 /* ---------------------------------------------------------------- */
@@ -545,6 +584,156 @@ bind_captures(n00b_audit_rule_t   *rule,
     }
 }
 
+/*
+ * WP-012 — apply the signature verification gate to the loaded
+ * exemption + baseline lists. Walks each record, calls
+ * `n00b_audit_exemption_verify` against the roster, and either
+ * drops or keeps the record per the engine's `allow_unsigned`
+ * policy. Idempotent via `engine->signatures_applied`.
+ *
+ * Rebuilds the suppression lists in place: records that fail
+ * verification are filtered out (unless allow_unsigned), records
+ * that pass are kept. The list-of-void-pointer cast pattern is the
+ * same one used by the existing suppression loop below.
+ *
+ * Behavior in the corner cases:
+ *   - guidance->allowed_signers_path is null  → no roster on disk:
+ *       * allow_unsigned: keep all records + emit ONE roster-
+ *         missing warning to stderr (not per-record).
+ *       * else: drop all records + emit ONE roster-missing
+ *         refusal to stderr.
+ *   - roster present, individual record fails verify:
+ *       * allow_unsigned: keep record + per-record warning.
+ *       * else: drop record + per-record warning.
+ *
+ * All warnings go to stderr via `n00b_eprintf`; no return code
+ * (the gate is advisory — the affected records simply disappear
+ * from the suppression list in the strict path).
+ */
+static void
+apply_signature_gate(n00b_audit_engine_t *engine)
+{
+    if (!engine || engine->signatures_applied) {
+        return;
+    }
+    engine->signatures_applied = true;
+
+    n00b_audit_guidance_t *g = engine->guidance;
+    if (!g) {
+        return;
+    }
+
+    /* Combined view of "do we have anything to verify?" */
+    bool have_exemptions = (g->exemptions
+                            && n00b_list_len(*g->exemptions) > 0);
+    bool have_baseline   = (g->baseline
+                            && n00b_list_len(*g->baseline) > 0);
+    if (!have_exemptions && !have_baseline) {
+        return;
+    }
+
+    /*
+     * Roster discovery behavior (WP-012 documented contract):
+     *   - roster absent + --allow-unsigned: warn once, accept-all.
+     *   - roster absent + strict mode: warn once, refuse-all (clear
+     *     the suppression lists).
+     *   - roster present: verify per-record below.
+     */
+    if (!g->allowed_signers_path
+        || g->allowed_signers_path->u8_bytes == 0) {
+        if (engine->allow_unsigned) {
+            n00b_eprintf(
+                "n00b-audit: no audit/allowed_signers roster found; --allow-unsigned: accepting all exemption + baseline records");
+            return;
+        }
+        n00b_eprintf(
+            "n00b-audit: no audit/allowed_signers roster found; refusing all exemption + baseline records (pass --allow-unsigned to accept)");
+        if (have_exemptions) {
+            *g->exemptions = n00b_list_new(void *);
+        }
+        if (have_baseline) {
+            *g->baseline = n00b_list_new(void *);
+        }
+        return;
+    }
+
+    /*
+     * Per-list verification. We walk each loaded record, attempt
+     * to verify its source file against the roster, and either
+     * keep the record (verify ok OR allow_unsigned warn-and-keep)
+     * or drop it (verify failed under strict mode).
+     *
+     * Two list shapes — exemptions and baseline — but identical
+     * structure. The helper lambda-ish pattern in C: a small
+     * walker writing to a fresh list of the same type.
+     */
+    n00b_list_t(void *) *both[2];
+    both[0] = have_exemptions ? g->exemptions : nullptr;
+    both[1] = have_baseline ? g->baseline : nullptr;
+    const char *labels[2] = {"exemption", "baseline"};
+
+    for (int side = 0; side < 2; side++) {
+        n00b_list_t(void *) *src = both[side];
+        if (!src) {
+            continue;
+        }
+        n00b_list_t(void *) *keep = n00b_alloc(n00b_list_t(void *));
+        *keep = n00b_list_new(void *);
+        int64_t n = n00b_list_len(*src);
+        for (int64_t i = 0; i < n; i++) {
+            n00b_audit_exemption_t *ex =
+                (n00b_audit_exemption_t *)n00b_list_get(*src, i);
+            if (!ex || !ex->source_file) {
+                continue;
+            }
+            n00b_string_t *signer = ex->signer_id;
+            /*
+             * Records baselined under WP-011 carry an empty
+             * `signer_id`. The verify helper would treat an empty
+             * principal as "no name supplied" — ssh-keygen rejects
+             * that. Treat empty as missing-signature so the policy
+             * decision is the same: drop in strict mode, warn-and-
+             * keep in allow_unsigned mode.
+             */
+            int err = 0;
+            if (!signer || signer->u8_bytes == 0) {
+                err = N00B_AUDIT_ERR_EXEMPTION_NO_SIGNATURE;
+            }
+            else {
+                auto vr = n00b_audit_exemption_verify(
+                    ex->source_file, g->allowed_signers_path, signer);
+                if (n00b_result_is_err(vr)) {
+                    err = n00b_result_get_err(vr);
+                }
+            }
+
+            if (err == 0) {
+                n00b_list_push(*keep, (void *)ex);
+                continue;
+            }
+
+            /* Failure path — differentiate diagnostic on err. */
+            n00b_string_t *reason = n00b_audit_err_str(err);
+            if (engine->allow_unsigned) {
+                n00b_eprintf(
+                    "n00b-audit: --allow-unsigned: keeping «#» «#» despite signature failure: «#»",
+                    n00b_string_from_cstr(labels[side]),
+                    ex->source_file,
+                    reason);
+                n00b_list_push(*keep, (void *)ex);
+            }
+            else {
+                n00b_eprintf(
+                    "n00b-audit: refusing «#» «#»: «#»",
+                    n00b_string_from_cstr(labels[side]),
+                    ex->source_file,
+                    reason);
+            }
+        }
+        *src = *keep;
+    }
+}
+
 n00b_result_t(n00b_list_t(n00b_audit_violation_t *) *)
 n00b_audit_engine_check_file(n00b_audit_engine_t *engine,
                              n00b_string_t       *path)
@@ -553,6 +742,16 @@ n00b_audit_engine_check_file(n00b_audit_engine_t *engine,
         return n00b_result_err(n00b_list_t(n00b_audit_violation_t *) *,
                                N00B_AUDIT_ERR_ENGINE_BAD_ARGS);
     }
+
+    /*
+     * WP-012: apply the signature verification gate before the per-
+     * file audit pass. Idempotent — runs once per engine lifetime.
+     * Records that fail verification under strict mode are dropped
+     * from `guidance->exemptions` / `guidance->baseline` before the
+     * suppression loop below ever sees them; records that pass (or
+     * that --allow-unsigned re-admits with a warning) survive.
+     */
+    apply_signature_gate(engine);
 
     /* Canonicalize the source-file path: cwd-independent
      * diagnostics + downstream I/O regardless of caller cwd. */

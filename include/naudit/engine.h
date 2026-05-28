@@ -133,3 +133,22 @@ n00b_audit_engine_check_file(n00b_audit_engine_t *engine,
 extern void
 n00b_audit_engine_set_ignore_baseline(n00b_audit_engine_t *engine,
                                        bool                 ignore);
+
+/**
+ * @brief WP-012 — toggle the unsigned-exemption acceptance policy.
+ *
+ * When @p allow is true, the engine instructs the exemption / baseline
+ * verification gate to warn-and-accept records whose detached signature
+ * is missing, invalid, or whose signer is not present in
+ * `audit/allowed_signers`. The default (false) drops those records
+ * from the suppression set, causing the underlying findings to fire.
+ *
+ * Mirrors the `--allow-unsigned` CLI flag.
+ *
+ * @param engine  Engine to configure.
+ * @param allow   True to bypass signature verification; false
+ *                (default) to enforce.
+ */
+extern void
+n00b_audit_engine_set_allow_unsigned(n00b_audit_engine_t *engine,
+                                      bool                 allow);

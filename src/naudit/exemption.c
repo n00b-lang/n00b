@@ -118,8 +118,21 @@
 
 #include "audit_rule_file_grammar.h"
 
+#include <errno.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
+#include <spawn.h>
+#include <fcntl.h>
+#include <unistd.h>
+
+/*
+ * WP-012 — the parent process needs access to `environ` to forward
+ * its environment into the ssh-keygen child via `posix_spawn`. POSIX
+ * declares this in unistd.h on some systems but not all; declare it
+ * here to be portable across macOS + Linux (D-001 platform matrix).
+ */
+extern char **environ;
 
 /* ---------------------------------------------------------------- */
 /* Hex encoding                                                     */
@@ -783,6 +796,7 @@ n00b_audit_load_exemptions(n00b_string_t *path)
         ex->signer_id          = nullptr;
         ex->approved_at        = nullptr;
         ex->expires_at         = nullptr;
+        ex->source_file        = path;
 
         int err = 0;
         if (!populate_exemption(sections[i], ex, &err)) {
@@ -949,6 +963,20 @@ n00b_audit_finalize_baseline(
     n00b_list_t(n00b_audit_violation_t *)  *violations,
     bool                                    overwrite)
 {
+    /* Unsigned shape — pass nullptr signing pair through to the
+     * signed variant so there's a single write path. WP-012 reuse. */
+    return n00b_audit_finalize_baseline_signed(project_root, violations,
+                                               overwrite, nullptr, nullptr);
+}
+
+n00b_result_t(int)
+n00b_audit_finalize_baseline_signed(
+    n00b_string_t                          *project_root,
+    n00b_list_t(n00b_audit_violation_t *)  *violations,
+    bool                                    overwrite,
+    n00b_string_t                          *key_path,
+    n00b_string_t                          *signer_id)
+{
     if (!project_root || !violations) {
         return n00b_result_err(int,
                                N00B_AUDIT_ERR_ENGINE_TARGET_NOT_FOUND);
@@ -1037,5 +1065,265 @@ n00b_audit_finalize_baseline(
         return n00b_result_err(int,
                                N00B_AUDIT_ERR_ENGINE_TARGET_NOT_FOUND);
     }
+
+    /*
+     * WP-012 auto-sign path. When key_path + signer_id are both
+     * supplied, immediately sign the freshly written baseline so
+     * `<base_file>.sig` lands atomically with the data. On signing
+     * failure the baseline file is left in place — the caller can
+     * retry with --baseline-finalize --overwrite, or sign manually.
+     */
+    if (key_path && key_path->u8_bytes > 0
+        && signer_id && signer_id->u8_bytes > 0) {
+        auto sr = n00b_audit_exemption_sign(base_file, key_path, signer_id);
+        if (n00b_result_is_err(sr)) {
+            return n00b_result_err(int, n00b_result_get_err(sr));
+        }
+    }
+
     return n00b_result_ok(int, written);
+}
+
+/* ---------------------------------------------------------------- */
+/* WP-012 — SSH signature primitives (sign + verify)                */
+/* ---------------------------------------------------------------- */
+
+/*
+ * DF-Z resolution. We use direct `posix_spawn` + `waitpid` rather
+ * than libn00b's `n00b_subproc_*` API.
+ *
+ * Rationale:
+ *   - libn00b's subprocess primitive is an async, conduit-driven
+ *     abstraction (PTY support, capture pipelines, completion
+ *     events) designed for long-lived child processes integrated
+ *     with the event loop. For a synchronous "spawn ssh-keygen,
+ *     wait, check exit code, optionally pipe one file to stdin"
+ *     the abstraction adds significant overhead — and naudit-side
+ *     code is explicitly carved out of the libc-I/O ban (the ban
+ *     applies to libn00b core: src/n00b/, src/slay/, src/core/;
+ *     naudit-side code may use POSIX subprocess primitives per
+ *     the WP-012 prompt and the WP-011 precedent in
+ *     `apply_fixes_in_file`).
+ *   - POSIX `posix_spawn` with file_actions is the natural primitive
+ *     for the "open exemption file -> dup to STDIN -> exec
+ *     ssh-keygen" pattern documented in the prompt. The shell-
+ *     shorthand `< <file>` cannot be expressed via a plain argv;
+ *     explicit dup is required either way.
+ *   - The dependency surface stays minimal: <spawn.h>, <fcntl.h>,
+ *     <sys/wait.h>, <unistd.h> — all POSIX-mandatory headers.
+ *
+ * Trade-off acknowledged: posix_spawn doesn't capture stderr by
+ * default, so the verifier's ability to distinguish
+ * UNKNOWN_SIGNER from BAD_SIGNATURE based on ssh-keygen's stderr
+ * is limited. We fall back to "collapse to BAD_SIGNATURE when in
+ * doubt" — the loader's stderr diagnostic remains correct
+ * ("refused") and the engineering distinction is a Phase-1.5 nice
+ * to have, not a security-critical signal.
+ */
+
+/*
+ * Wait for a child PID and translate its termination into an
+ * (exited_ok, exit_status) pair. Returns false on waitpid error.
+ */
+static bool
+_wait_child(pid_t pid, int *exit_status_out)
+{
+    int   status = 0;
+    pid_t done   = 0;
+    do {
+        done = waitpid(pid, &status, 0);
+    } while (done < 0 && errno == EINTR);
+
+    if (done != pid) {
+        return false;
+    }
+    if (WIFEXITED(status)) {
+        *exit_status_out = WEXITSTATUS(status);
+        return true;
+    }
+    /* Killed by a signal or stopped — surface as a subprocess
+     * failure with a sentinel non-zero status. */
+    *exit_status_out = -1;
+    return true;
+}
+
+n00b_result_t(int)
+n00b_audit_exemption_sign(n00b_string_t *file_path,
+                          n00b_string_t *key_path,
+                          n00b_string_t *signer_id)
+{
+    if (!file_path || !key_path || !signer_id) {
+        return n00b_result_err(int, N00B_AUDIT_ERR_SIGN_SUBPROCESS);
+    }
+
+    /* Path canonicalization rule (PR #72 / WP-008 D-017): every
+     * function taking a path argument auto-normalizes to an
+     * absolute form before use. */
+    file_path = n00b_path_canonical(file_path);
+    key_path  = n00b_path_canonical(key_path);
+
+    if (!file_path || !key_path) {
+        return n00b_result_err(int, N00B_AUDIT_ERR_SIGN_SUBPROCESS);
+    }
+
+    /*
+     * argv layout:
+     *   ssh-keygen -Y sign -f <key_path> -n naudit-exemption-v1 <file_path>
+     *
+     * ssh-keygen writes `<file_path>.sig` next to the input. We
+     * don't pipe anything to its STDIN — the file argument is read
+     * by ssh-keygen directly.
+     *
+     * The `(char *)` casts are required by the historical `char *const
+     * argv[]` shape of posix_spawn; the strings are not modified.
+     */
+    char *argv[] = {
+        (char *)"ssh-keygen",
+        (char *)"-Y",
+        (char *)"sign",
+        (char *)"-f",
+        (char *)key_path->data,
+        (char *)"-n",
+        (char *)"naudit-exemption-v1",
+        (char *)file_path->data,
+        nullptr,
+    };
+    /* Silence the `signer_id` unused warning — sign mode doesn't
+     * need the principal name; ssh-keygen reads it from the key
+     * file itself. Kept in the signature for API symmetry with
+     * verify + so the CLI can validate the user typed it. */
+    (void)signer_id;
+
+    pid_t                    pid     = 0;
+    posix_spawn_file_actions_t actions;
+    if (posix_spawn_file_actions_init(&actions) != 0) {
+        return n00b_result_err(int, N00B_AUDIT_ERR_SIGN_SUBPROCESS);
+    }
+    int spawn_rc = posix_spawnp(&pid, "ssh-keygen", &actions, nullptr,
+                                argv, environ);
+    posix_spawn_file_actions_destroy(&actions);
+
+    if (spawn_rc != 0) {
+        return n00b_result_err(int, N00B_AUDIT_ERR_SIGN_SUBPROCESS);
+    }
+
+    int exit_status = 0;
+    if (!_wait_child(pid, &exit_status)) {
+        return n00b_result_err(int, N00B_AUDIT_ERR_SIGN_SUBPROCESS);
+    }
+    if (exit_status != 0) {
+        return n00b_result_err(int, N00B_AUDIT_ERR_SIGN_SUBPROCESS);
+    }
+    return n00b_result_ok(int, 0);
+}
+
+n00b_result_t(int)
+n00b_audit_exemption_verify(n00b_string_t *file_path,
+                            n00b_string_t *roster_path,
+                            n00b_string_t *signer_id)
+{
+    if (!file_path || !roster_path || !signer_id) {
+        return n00b_result_err(int, N00B_AUDIT_ERR_SIGN_SUBPROCESS);
+    }
+
+    file_path   = n00b_path_canonical(file_path);
+    roster_path = n00b_path_canonical(roster_path);
+    if (!file_path || !roster_path) {
+        return n00b_result_err(int, N00B_AUDIT_ERR_SIGN_SUBPROCESS);
+    }
+
+    /*
+     * Derive the .sig sibling path and require it exist. If it's
+     * absent the verifier returns NO_SIGNATURE before spawning
+     * ssh-keygen — same observable behavior, cheaper. The .sig path
+     * goes through canonicalization implicitly via the file_path
+     * already-canonical path; we just append `.sig`.
+     */
+    n00b_string_t *sig_path = n00b_cformat("«#».sig", file_path);
+
+    if (!n00b_path_is_file(sig_path)) {
+        return n00b_result_err(int, N00B_AUDIT_ERR_EXEMPTION_NO_SIGNATURE);
+    }
+
+    /*
+     * Open the exemption file so its content can be piped to
+     * ssh-keygen's STDIN. The shell-shorthand `< <file>` is NOT
+     * implementable via posix_spawn; we open it parent-side and
+     * dup2 to STDIN_FILENO in the child's file_actions.
+     */
+    int data_fd = open(file_path->data, O_RDONLY | O_CLOEXEC);
+    if (data_fd < 0) {
+        return n00b_result_err(int, N00B_AUDIT_ERR_SIGN_SUBPROCESS);
+    }
+
+    /*
+     * argv:
+     *   ssh-keygen -Y verify -f <roster> -I <signer_id>
+     *              -n naudit-exemption-v1 -s <sig_path>
+     */
+    char *argv[] = {
+        (char *)"ssh-keygen",
+        (char *)"-Y",
+        (char *)"verify",
+        (char *)"-f",
+        (char *)roster_path->data,
+        (char *)"-I",
+        (char *)signer_id->data,
+        (char *)"-n",
+        (char *)"naudit-exemption-v1",
+        (char *)"-s",
+        (char *)sig_path->data,
+        nullptr,
+    };
+
+    posix_spawn_file_actions_t actions;
+    if (posix_spawn_file_actions_init(&actions) != 0) {
+        close(data_fd);
+        return n00b_result_err(int, N00B_AUDIT_ERR_SIGN_SUBPROCESS);
+    }
+    /* Child: dup data_fd onto STDIN_FILENO, then close the original. */
+    if (posix_spawn_file_actions_adddup2(&actions, data_fd, STDIN_FILENO)
+        != 0) {
+        posix_spawn_file_actions_destroy(&actions);
+        close(data_fd);
+        return n00b_result_err(int, N00B_AUDIT_ERR_SIGN_SUBPROCESS);
+    }
+    if (posix_spawn_file_actions_addclose(&actions, data_fd) != 0) {
+        posix_spawn_file_actions_destroy(&actions);
+        close(data_fd);
+        return n00b_result_err(int, N00B_AUDIT_ERR_SIGN_SUBPROCESS);
+    }
+
+    pid_t pid      = 0;
+    int   spawn_rc = posix_spawnp(&pid, "ssh-keygen", &actions, nullptr,
+                                  argv, environ);
+    posix_spawn_file_actions_destroy(&actions);
+    /* Parent closes its copy regardless of spawn outcome — the child
+     * (if spawned) has its own duped fd. */
+    close(data_fd);
+
+    if (spawn_rc != 0) {
+        return n00b_result_err(int, N00B_AUDIT_ERR_SIGN_SUBPROCESS);
+    }
+
+    int exit_status = 0;
+    if (!_wait_child(pid, &exit_status)) {
+        return n00b_result_err(int, N00B_AUDIT_ERR_SIGN_SUBPROCESS);
+    }
+    if (exit_status == 0) {
+        return n00b_result_ok(int, 0);
+    }
+
+    /*
+     * Differentiating UNKNOWN_SIGNER from BAD_SIGNATURE solely from
+     * ssh-keygen's exit code is not reliably possible (OpenSSH
+     * collapses many failure modes to exit 255). Per the WP-012
+     * prompt's documented fallback, we collapse the two cases to
+     * BAD_SIGNATURE when in doubt. A future enhancement would
+     * capture ssh-keygen's stderr and pattern-match for the
+     * "principal not found" string to disambiguate; for now the
+     * conservative collapse keeps the security verdict correct
+     * (refused) without claiming a precision we can't deliver.
+     */
+    return n00b_result_err(int, N00B_AUDIT_ERR_EXEMPTION_BAD_SIGNATURE);
 }
