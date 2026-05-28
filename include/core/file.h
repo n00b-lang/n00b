@@ -26,9 +26,10 @@
  * `n00b_file_get_kind` for callers that need to know.
  *
  * Async-read semantics: STREAM forwards to `n00b_conduit_read_async`
- * on the FD's read_topic. MMAP performs the read synchronously and
- * pushes the result to the caller's inbox before returning (the
- * "async contract" is the inbox delivery, not deferred work).
+ * when the stream is conduit-managed; fd-backed regular STREAM files
+ * and MMAP perform the read synchronously and push the result to the
+ * caller's inbox before returning (the "async contract" is the inbox
+ * delivery, not deferred work).
  */
 #pragma once
 
@@ -196,8 +197,9 @@ extern n00b_result_t(n00b_buffer_t *) n00b_file_as_buffer(n00b_file_t *f);
  * @brief Subscribe-style read.
  *
  * STREAM: forwards to `n00b_conduit_read_async` on the FD's
- * read_topic; the returned inbox+handle observe future arrivals as
- * the IO thread reads them.
+ * read_topic when the file has a conduit-managed read topic; fd-backed
+ * regular STREAM files synchronously read up to `max_n` bytes and
+ * push the result to `inbox`, returning Ok({inbox, INVALID_HANDLE}).
  *
  * MMAP: synchronously reads up to `max_n` bytes (as for
  * `n00b_file_read`), pushes a message carrying the buffer to

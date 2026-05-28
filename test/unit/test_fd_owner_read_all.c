@@ -177,7 +177,12 @@ test_multi_chunk_payload(void)
         payload[i] = (char)(i & 0xff);
     }
 
-    // Write in one syscall (pipe buffer is large enough on Linux/macOS).
+    auto manage_r = n00b_conduit_fd_manage(c, io, fds[0], true);
+    assert(n00b_result_is_ok(manage_r));
+    n00b_conduit_fd_owner_t *owner = n00b_result_get(manage_r);
+
+    // Let the managed read side drain concurrently so this test is
+    // independent of the kernel's current pipe capacity.
     ssize_t total = 0;
     while (total < (ssize_t)PAYLOAD_LEN) {
         ssize_t w = test_fd_write(fds[1], payload + total,
@@ -186,10 +191,6 @@ test_multi_chunk_payload(void)
         total += w;
     }
     test_fd_close(fds[1]);
-
-    auto manage_r = n00b_conduit_fd_manage(c, io, fds[0], true);
-    assert(n00b_result_is_ok(manage_r));
-    n00b_conduit_fd_owner_t *owner = n00b_result_get(manage_r);
 
     auto r = n00b_fd_owner_read_all(owner);
     assert(n00b_result_is_ok(r));

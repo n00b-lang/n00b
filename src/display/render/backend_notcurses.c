@@ -21,9 +21,13 @@
 #include "display/render/cell.h"
 #include "display/render/draw_cmd.h"
 #include "display/event.h"
+#include "text/strings/theme.h"
 #include "text/strings/text_style.h"
+#include "text/strings/string_style.h"
 #include "display/render/composite.h"
 #include "core/string.h"
+#include "internal/display/diagnostics.h"
+#include "internal/display/terminal_input.h"
 
 #if N00B_HAVE_FREETYPE
 #include <ft2build.h>
@@ -229,6 +233,14 @@ typedef struct {
     struct ncplane  **entry_planes;
     unsigned int      entry_planes_count;  // allocated slots
     unsigned int      entry_planes_used;   // slots used this frame
+    unsigned int      cache_cell_pixel_w;  // geometry used by plane_cache
+    unsigned int      cache_cell_pixel_h;
+
+    // Persistent compositing grid for cell fallback rendering.
+    n00b_rcell_t     *comp_grid;
+    n00b_isize_t      comp_grid_rows;
+    n00b_isize_t      comp_grid_cols;
+    n00b_composite_style_pool_t style_pool;
 
     // Plane blit cache: skip re-blitting planes whose content hasn't changed.
     // Open-addressing hash table keyed on n00b_plane_t pointer.
@@ -240,6 +252,18 @@ typedef struct {
         uint32_t         render_gen;  // generation when last rendered
         int32_t          abs_x;       // position when last rendered
         int32_t          abs_y;
+        int32_t          cell_x;      // ncplane cell-space placement/size
+        int32_t          cell_y;
+        int32_t          cell_w;
+        int32_t          cell_h;
+        int32_t          pxoff_x;     // ncvisual pixel offsets within cell
+        int32_t          pxoff_y;
+        int32_t          width;       // content geometry fingerprint
+        int32_t          height;
+        int32_t          scroll_x;
+        int32_t          scroll_y;
+        n00b_box_props_t *box;
+        n00b_widget_state_t state;
     } plane_cache[NC_PLANE_CACHE_SIZE];
 
     // Resize callback.
@@ -250,11 +274,8 @@ typedef struct {
     unsigned int      last_rows;
     unsigned int      last_cols;
 
-    // Debug log (written to /tmp/nc_backend.log).
-    FILE             *debug_log;
-
     // Mouse drag detection state.
-    bool              mouse_button_down;
+    n00b_terminal_input_state_t input_state;
 } nc_ctx_t;
 
 // ====================================================================
@@ -504,11 +525,21 @@ ft_render_text(nc_ctx_t    *ctx,
         return nullptr;
     }
 
-    int height   = max_ascent + max_descent + 2;
+    int height   = max_ascent + max_descent;
     if (height < pixel_height) {
         height = pixel_height;
     }
-    int baseline = max_ascent + 1;
+    if (height < 1) {
+        height = 1;
+    }
+
+    int baseline = max_ascent;
+    if (baseline < 0) {
+        baseline = 0;
+    }
+    if (baseline >= height) {
+        baseline = height - 1;
+    }
 
     // Allocate RGBA buffer.
     uint8_t *rgba = calloc(1, (size_t)(total_width * height * 4));
@@ -651,7 +682,7 @@ destroy_entry_planes(nc_ctx_t *ctx)
     // Destroy all cached ncplanes (the plane cache is the source of truth).
     for (unsigned int i = 0; i < NC_PLANE_CACHE_SIZE; i++) {
         if (ctx->plane_cache[i].ncp) {
-            ncplane_destroy(ctx->plane_cache[i].ncp);
+            ncplane_family_destroy(ctx->plane_cache[i].ncp);
             ctx->plane_cache[i].ncp   = nullptr;
             ctx->plane_cache[i].plane = nullptr;
         }
@@ -705,23 +736,67 @@ typedef struct {
 } pixel_metrics_t;
 
 // Compare two cell styles for run-grouping purposes.
+static uint32_t style_bg_color(const n00b_text_style_t *style, uint32_t fallback);
+static uint32_t style_fg_color(const n00b_text_style_t *style, uint32_t fallback);
+
 static bool
 styles_match(const n00b_text_style_t *a, const n00b_text_style_t *b)
 {
+    uint32_t a_fg = 0;
+    uint32_t a_bg = 0;
+    uint32_t b_fg = 0;
+    uint32_t b_bg = 0;
+
     if (a == b) {
         return true;
     }
     if (!a || !b) {
         return false;
     }
-    return a->fg_rgb          == b->fg_rgb
-        && a->bg_rgb          == b->bg_rgb
+
+    a_fg = style_fg_color(a, 0);
+    a_bg = style_bg_color(a, 0);
+    b_fg = style_fg_color(b, 0);
+    b_bg = style_bg_color(b, 0);
+
+    return a_fg              == b_fg
+        && a_bg              == b_bg
         && a->bold           == b->bold
         && a->italic         == b->italic
         && a->underline      == b->underline
+        && a->double_underline == b->double_underline
         && a->strikethrough  == b->strikethrough
+        && a->reverse        == b->reverse
+        && a->dim            == b->dim
         && a->font_hint      == b->font_hint
         && a->font_size      == b->font_size;
+}
+
+static bool
+style_resolve_color(const n00b_text_style_t *style, bool foreground, uint32_t *out)
+{
+    if (!style || !out) {
+        return false;
+    }
+
+    n00b_color_t rgb = foreground ? style->fg_rgb : style->bg_rgb;
+    int8_t       ix  = foreground ? style->fg_palette_ix : style->bg_palette_ix;
+
+    if (n00b_color_is_set(rgb)) {
+        *out = (uint32_t)n00b_color_rgb(rgb);
+        return true;
+    }
+
+    if (ix >= 0 && ix < N00B_PAL_SIZE) {
+        n00b_color_t resolved = n00b_theme_resolve_color(ix);
+
+        if (n00b_color_is_set(resolved)) {
+            *out = (uint32_t)n00b_color_rgb(resolved);
+            return true;
+        }
+    }
+
+    return false;
 }
 
 // Extract style properties into local variables.
@@ -739,12 +814,8 @@ extract_style(const n00b_text_style_t *style,
     *font_size = 0;
 
     if (style) {
-        if (n00b_color_is_set(style->fg_rgb)) {
-            *fg = (uint32_t)n00b_color_rgb(style->fg_rgb);
-        }
-        if (n00b_color_is_set(style->bg_rgb)) {
-            *bg = (uint32_t)n00b_color_rgb(style->bg_rgb);
-        }
+        (void)style_resolve_color(style, true, fg);
+        (void)style_resolve_color(style, false, bg);
         *bold      = (style->bold == N00B_TRI_YES);
         *uline     = (style->underline == N00B_TRI_YES);
         *strike    = (style->strikethrough == N00B_TRI_YES);
@@ -754,6 +825,95 @@ extract_style(const n00b_text_style_t *style,
     }
 }
 
+// Resolve the face for a style's font hint, with fallback to default.
+static FT_Face
+resolve_style_face(nc_ctx_t *ctx, uint8_t hint)
+{
+    if (hint >= NC_NUM_FONT_HINTS) {
+        hint = N00B_FONT_DEFAULT;
+    }
+
+    FT_Face face = ctx->ft_faces[hint];
+    if (!face) {
+        face = ctx->ft_faces[0];
+    }
+
+    return face;
+}
+
+// Style font size follows the existing backend convention:
+// scale the base cell pixel height by font_size/14.
+// If unset, fall back to the backend's cell pixel height.
+static int
+style_pixel_height(nc_ctx_t *ctx, int16_t font_size)
+{
+    int pixel_h = (int)ctx->cell_pixel_h;
+
+    if (font_size > 0) {
+        pixel_h = pixel_h * (int)font_size / 14;
+    }
+
+    if (pixel_h < 1) {
+        pixel_h = 1;
+    }
+
+    return pixel_h;
+}
+
+// Apply a pixel size to a face and return that request size while
+// exposing derived ascent/descent/line height for layout consistency.
+static int
+fit_face_pixel_size(FT_Face face,
+                    int     target_line_h,
+                    int    *out_ascent,
+                    int    *out_descent,
+                    int    *out_line_h)
+{
+    if (target_line_h < 1) {
+        target_line_h = 1;
+    }
+
+    if (!face) {
+        if (out_ascent) {
+            *out_ascent = target_line_h;
+        }
+        if (out_descent) {
+            *out_descent = 0;
+        }
+        if (out_line_h) {
+            *out_line_h = target_line_h;
+        }
+        return target_line_h;
+    }
+
+    int req     = target_line_h;
+    int ascent  = 0;
+    int descent = 0;
+    int line_h  = target_line_h;
+
+    FT_Set_Pixel_Sizes(face, 0, (FT_UInt)req);
+
+    ascent  = (int)(face->size->metrics.ascender >> 6);
+    descent = (int)(-face->size->metrics.descender >> 6);
+    line_h  = ascent + descent;
+
+    if (line_h < 1) {
+        line_h = req;
+    }
+
+    if (out_ascent) {
+        *out_ascent = ascent;
+    }
+    if (out_descent) {
+        *out_descent = descent;
+    }
+    if (out_line_h) {
+        *out_line_h = line_h;
+    }
+
+    return req;
+}
+
 // Maximum bytes for a style run's text buffer.
 #define RUN_TEXT_MAX 1024
 
@@ -761,8 +921,10 @@ extract_style(const n00b_text_style_t *style,
 static uint32_t
 style_bg_color(const n00b_text_style_t *style, uint32_t fallback)
 {
-    if (style && n00b_color_is_set(style->bg_rgb)) {
-        return (uint32_t)n00b_color_rgb(style->bg_rgb);
+    uint32_t resolved = fallback;
+
+    if (style_resolve_color(style, false, &resolved)) {
+        return resolved;
     }
     return fallback;
 }
@@ -770,10 +932,73 @@ style_bg_color(const n00b_text_style_t *style, uint32_t fallback)
 static uint32_t
 style_fg_color(const n00b_text_style_t *style, uint32_t fallback)
 {
-    if (style && n00b_color_is_set(style->fg_rgb)) {
-        return (uint32_t)n00b_color_rgb(style->fg_rgb);
+    uint32_t resolved = fallback;
+
+    if (style_resolve_color(style, true, &resolved)) {
+        return resolved;
     }
     return fallback;
+}
+
+static size_t
+text_next_style_boundary(n00b_string_t *text, size_t byte_pos)
+{
+    size_t boundary;
+
+    if (!text) {
+        return 0;
+    }
+
+    boundary = text->u8_bytes;
+
+    auto info_opt = n00b_str_get_style_info(text);
+    if (!n00b_option_is_set(info_opt)) {
+        return boundary;
+    }
+
+    n00b_string_style_info_t *info = n00b_option_get(info_opt);
+
+    for (int64_t i = 0; i < info->num_styles; i++) {
+        n00b_style_record_t *rec = &info->styles[i];
+
+        if (rec->start > byte_pos && rec->start < boundary) {
+            boundary = rec->start;
+        }
+
+        if (n00b_option_is_set(rec->end)) {
+            size_t end = n00b_option_get(rec->end);
+
+            if (end > byte_pos && end < boundary) {
+                boundary = end;
+            }
+        }
+    }
+
+    return boundary;
+}
+
+static n00b_text_style_t *
+text_resolve_effective_style(n00b_string_t      *text,
+                             n00b_text_style_t  *fallback_style,
+                             size_t              byte_pos)
+{
+    auto info_opt = n00b_str_get_style_info(text);
+
+    if (!n00b_option_is_set(info_opt)) {
+        return fallback_style;
+    }
+
+    n00b_text_style_t *resolved = n00b_str_resolve_style_at(text, byte_pos);
+    n00b_text_style_t *merged;
+
+    if (!fallback_style) {
+        return resolved;
+    }
+
+    merged = n00b_str_style_merge(fallback_style, resolved);
+    n00b_free(resolved);
+
+    return merged;
 }
 
 // Fill a rectangle in an RGBA buffer with a solid color.
@@ -1128,83 +1353,117 @@ nc_render_entry(nc_ctx_t                     *ctx,
         switch (cmd->type) {
         case N00B_DRAW_TEXT: {
             n00b_string_t *text = cmd->text.text;
+            bool           has_string_style;
+            size_t         run_start = 0;
+            int            run_px;
             if (!text || text->u8_bytes == 0) {
                 break;
             }
 
-            const n00b_text_style_t *run_style = cmd->text.style
-                                                    ? cmd->text.style
-                                                    : info.text_style;
+            n00b_text_style_t *base_style = cmd->text.style
+                                              ? cmd->text.style
+                                              : info.text_style;
+            has_string_style = n00b_option_is_set(n00b_str_get_style_info(text));
 
             // Pixel position within the RGBA buffer.
             // Draw commands are already in pixel coordinates.
             int px = content_ox + cmd->text.x - plane->scroll_x;
             int py = content_oy + cmd->text.y - plane->scroll_y;
+            run_px = px;
 
-            // Fill text background.
-            uint32_t text_bg = style_bg_color(run_style,
-                                   style_bg_color(info.text_style, fill_bg));
-            // We'll use the rendered text box dimensions for the bg fill
-            // after rendering, since we don't know the exact width yet.
+            while (run_start < text->u8_bytes) {
+                size_t run_end = has_string_style
+                                   ? text_next_style_boundary(text, run_start)
+                                   : text->u8_bytes;
+                n00b_text_style_t *run_style = has_string_style
+                                                 ? text_resolve_effective_style(text,
+                                                                                base_style,
+                                                                                run_start)
+                                                 : base_style;
+                n00b_string_t *run_text = run_start == 0 && run_end == text->u8_bytes
+                                            ? text
+                                            : n00b_string_from_raw(text->data + run_start,
+                                                                   (int64_t)(run_end - run_start));
+                uint32_t text_bg = style_bg_color(run_style,
+                                       style_bg_color(info.text_style, fill_bg));
+                uint32_t fg, bg;
+                bool     is_bold, is_uline, is_strike;
+                uint8_t  hint;
+                int16_t  font_size;
 
-            // Extract style attributes.
-            uint32_t fg, bg;
-            bool     is_bold, is_uline, is_strike;
-            uint8_t  hint;
-            int16_t  font_size;
-            extract_style(run_style, &fg, &bg, &is_bold,
-                           &is_uline, &is_strike, &hint, &font_size);
-
-            FT_Face face = ctx->ft_faces[hint];
-            if (!face) {
-                face = ctx->ft_faces[0];
-            }
-
-            int render_ph = pm->pixel_h;
-            if (font_size > 0) {
-                render_ph = pm->pixel_h * font_size / 14;
-                if (render_ph < 1) render_ph = 1;
-                int max_ph = pm->pixel_h * 4;
-                if (render_ph > max_ph) render_ph = max_ph;
-            }
-
-            int box_w = 0, box_h = 0;
-            uint8_t *box = ft_render_text(ctx, face, text->data, render_ph,
-                                           fg, text_bg, is_bold, &box_w, &box_h);
-            if (!box) {
-                break;
-            }
-
-            // Vertically center within a cell row if text is shorter.
-            int y_off = (cph > box_h) ? (cph - box_h) / 2 : 0;
-
-            // Fill background behind the text area.
-            if (box_w > 0 && cph > 0 && px >= 0 && py >= 0) {
-                rgba_fill_rect(rgba, outer_w, outer_h, px, py, box_w, cph, text_bg);
-            }
-
-            rgba_blit(rgba, outer_w, box, box_w, box_h,
-                      px, py + y_off, outer_w, outer_h);
-            free(box);
-
-            // Decorations.
-            if (is_uline || is_strike) {
-                int dec_end = px + box_w;
-                if (dec_end > outer_w) dec_end = outer_w;
-
-                uint8_t fg_r = (fg >> 16) & 0xFF;
-                uint8_t fg_g = (fg >> 8) & 0xFF;
-                uint8_t fg_b = fg & 0xFF;
-
-                if (is_uline) {
-                    ft_draw_hline(rgba, outer_w, outer_h,
-                                  py + cph - 2,
-                                  px, dec_end, fg_r, fg_g, fg_b);
+                if (run_end <= run_start) {
+                    break;
                 }
-                if (is_strike) {
-                    ft_draw_hline(rgba, outer_w, outer_h,
-                                  py + cph / 2,
-                                  px, dec_end, fg_r, fg_g, fg_b);
+
+                extract_style(run_style, &fg, &bg, &is_bold,
+                               &is_uline, &is_strike, &hint, &font_size);
+
+                FT_Face face = resolve_style_face(ctx, hint);
+
+                int target_h = style_pixel_height(ctx, font_size);
+                int max_h = pm->pixel_h * 4;
+                if (target_h > max_h) {
+                    target_h = max_h;
+                }
+
+                int ascent_px = target_h;
+                int descent_px = 0;
+                int line_h_px = target_h;
+                int render_ph = fit_face_pixel_size(face,
+                                                    target_h,
+                                                    &ascent_px,
+                                                    &descent_px,
+                                                    &line_h_px);
+
+                int box_w = 0, box_h = 0;
+                uint8_t *box = ft_render_text(ctx, face, run_text->data, render_ph,
+                                               fg, text_bg, is_bold, &box_w, &box_h);
+                if (!box) {
+                    if (has_string_style) {
+                        n00b_free(run_style);
+                    }
+                    break;
+                }
+
+                // Vertically center within the style's effective line height.
+                int draw_h = line_h_px > 0 ? line_h_px : cph;
+                int y_off = (draw_h > box_h) ? (draw_h - box_h) / 2 : 0;
+
+                // Fill background behind the text area.
+                if (box_w > 0 && draw_h > 0 && run_px >= 0 && py >= 0) {
+                    rgba_fill_rect(rgba, outer_w, outer_h,
+                                   run_px, py, box_w, draw_h, text_bg);
+                }
+
+                rgba_blit(rgba, outer_w, box, box_w, box_h,
+                          run_px, py + y_off, outer_w, outer_h);
+                free(box);
+
+                if (is_uline || is_strike) {
+                    int dec_end = run_px + box_w;
+                    if (dec_end > outer_w) dec_end = outer_w;
+
+                    uint8_t fg_r = (fg >> 16) & 0xFF;
+                    uint8_t fg_g = (fg >> 8) & 0xFF;
+                    uint8_t fg_b = fg & 0xFF;
+
+                    if (is_uline) {
+                        ft_draw_hline(rgba, outer_w, outer_h,
+                                      py + draw_h - 2,
+                                      run_px, dec_end, fg_r, fg_g, fg_b);
+                    }
+                    if (is_strike) {
+                        ft_draw_hline(rgba, outer_w, outer_h,
+                                      py + draw_h / 2,
+                                      run_px, dec_end, fg_r, fg_g, fg_b);
+                    }
+                }
+
+                run_px += box_w;
+                run_start = run_end;
+
+                if (has_string_style) {
+                    n00b_free(run_style);
                 }
             }
             break;
@@ -1255,17 +1514,32 @@ nc_render_entry(nc_ctx_t                     *ctx,
             extract_style(glyph_style, &fg, &bg, &is_bold,
                            &is_uline, &is_strike, &hint, &font_size);
 
-            FT_Face face = ctx->ft_faces[hint];
-            if (!face) face = ctx->ft_faces[0];
+            FT_Face face = resolve_style_face(ctx, hint);
+
+            int target_h = style_pixel_height(ctx, font_size);
+            int max_h = pm->pixel_h * 4;
+            if (target_h > max_h) {
+                target_h = max_h;
+            }
+
+            int ascent_px = target_h;
+            int descent_px = 0;
+            int line_h_px = target_h;
+            int render_ph = fit_face_pixel_size(face,
+                                                target_h,
+                                                &ascent_px,
+                                                &descent_px,
+                                                &line_h_px);
 
             uint32_t glyph_bg = style_bg_color(glyph_style,
                                      style_bg_color(info.text_style, fill_bg));
 
             int box_w = 0, box_h = 0;
-            uint8_t *box = ft_render_text(ctx, face, cp_buf, pm->pixel_h,
+            uint8_t *box = ft_render_text(ctx, face, cp_buf, render_ph,
                                            fg, glyph_bg, is_bold, &box_w, &box_h);
             if (box) {
-                int y_off = (cph > box_h) ? (cph - box_h) / 2 : 0;
+                int draw_h = line_h_px > 0 ? line_h_px : cph;
+                int y_off = (draw_h > box_h) ? (draw_h - box_h) / 2 : 0;
                 rgba_blit(rgba, outer_w, box, box_w, box_h,
                           px, py + y_off, outer_w, outer_h);
                 free(box);
@@ -1329,13 +1603,24 @@ nc_render_entry(nc_ctx_t                     *ctx,
                 extract_style(fill_style, &fg, &dummy_bg, &is_bold,
                                &is_uline, &is_strike, &hint, &font_size);
 
-                FT_Face face = ctx->ft_faces[hint];
-                if (!face) face = ctx->ft_faces[0];
+                FT_Face face = resolve_style_face(ctx, hint);
+
+                int target_h = style_pixel_height(ctx, font_size);
+                int max_h = pm->pixel_h * 4;
+                if (target_h > max_h) {
+                    target_h = max_h;
+                }
+
+                int render_ph = fit_face_pixel_size(face,
+                                                    target_h,
+                                                    nullptr,
+                                                    nullptr,
+                                                    nullptr);
 
                 // Render a single glyph, tile it across the rect.
                 int gbox_w = 0, gbox_h = 0;
                 uint8_t *gbox = ft_render_text(ctx, face, fill_buf,
-                                                pm->pixel_h, fg, rect_bg,
+                                                render_ph, fg, rect_bg,
                                                 is_bold, &gbox_w, &gbox_h);
                 if (gbox && gbox_w > 0 && gbox_h > 0) {
                     for (int ty = py; ty < py + ph; ty += gbox_h) {
@@ -1352,34 +1637,27 @@ nc_render_entry(nc_ctx_t                     *ctx,
         }
     }
 
-    // Position/size in cell coordinates.
-    int plane_cell_y = info.outer_y / cph;
-    int plane_cell_x = info.outer_x / cpw;
-    int plane_cell_h = (outer_h + cph - 1) / cph;
-    int plane_cell_w = (outer_w + cpw - 1) / cpw;
+    // Position/size in cell coordinates. Preserve sub-cell pixel offsets so
+    // visual placement stays aligned with pixel-space hit-testing/layout.
+    int plane_pxoff_y = info.outer_y % cph;
+    int plane_pxoff_x = info.outer_x % cpw;
+    if (plane_pxoff_y < 0) plane_pxoff_y += cph;
+    if (plane_pxoff_x < 0) plane_pxoff_x += cpw;
+
+    int plane_cell_y = (info.outer_y - plane_pxoff_y) / cph;
+    int plane_cell_x = (info.outer_x - plane_pxoff_x) / cpw;
+    int plane_cell_h = (outer_h + plane_pxoff_y + cph - 1) / cph;
+    int plane_cell_w = (outer_w + plane_pxoff_x + cpw - 1) / cpw;
     if (plane_cell_h < 1) plane_cell_h = 1;
     if (plane_cell_w < 1) plane_cell_w = 1;
 
-    // Always destroy+recreate the ncplane.  Tests show this pattern
-    // does not cause pixel jumping (unlike the reuse path).
+    // Always destroy+recreate the visual plane on cache miss.
     if (reuse_ncp) {
-        ncplane_destroy(reuse_ncp);
-    }
-
-    struct ncplane_options popts = {
-        .y    = plane_cell_y,
-        .x    = plane_cell_x,
-        .rows = (unsigned)plane_cell_h,
-        .cols = (unsigned)plane_cell_w,
-    };
-    struct ncplane *ncp = ncplane_create(ctx->stdplane, &popts);
-    if (!ncp) {
-        free(rgba);
-        return nullptr;
+        ncplane_family_destroy(reuse_ncp);
     }
 
     // Log content summary.
-    if (ctx->debug_log) {
+    if (n00b_display_diag_would_log(N00B_DISPLAY_DIAG_TRACE)) {
         // Collect sample text from draw commands.
         char sample[128] = {0};
         int slen = 0;
@@ -1409,30 +1687,37 @@ nc_render_entry(nc_ctx_t                     *ctx,
         }
         sample[slen] = '\0';
 
-        fprintf(ctx->debug_log,
-                "  entry z=%d outer=%dx%d vp=%ux%u "
-                "draw_cmds=%u (text=%d glyph=%d fill=%d) "
-                "content_ofs=%d,%d text=\"%s\"\n",
-                entry->abs_z, outer_w, outer_h,
-                (unsigned)(plane->width / cpw),
-                (unsigned)(plane->height / cph),
-                (unsigned)plane->draw_list.count,
-                text_cmds, glyph_cmds, fill_cmds,
-                content_ox, content_oy, sample);
+        n00b_display_diag_log(N00B_DISPLAY_DIAG_TRACE,
+                               "backend_notcurses",
+                               "entry z=%d outer=%dx%d vp=%ux%u draw_cmds=%u (text=%d glyph=%d fill=%d) content_ofs=%d,%d text=\"%s\"",
+                               entry->abs_z,
+                               outer_w,
+                               outer_h,
+                               (unsigned)(plane->width / cpw),
+                               (unsigned)(plane->height / cph),
+                               (unsigned)plane->draw_list.count,
+                               text_cmds,
+                               glyph_cmds,
+                               fill_cmds,
+                               content_ox,
+                               content_oy,
+                               sample);
 
         // Dump each draw command's coordinates.
         for (n00b_isize_t c = 0; c < plane->draw_list.count; c++) {
             const n00b_draw_cmd_t *cmd = &plane->draw_list.cmds[c];
             if (cmd->type == N00B_DRAW_TEXT && cmd->text.text) {
-                fprintf(ctx->debug_log,
-                        "    cmd[%d] TEXT x=%d y=%d style=%p '%.*s'\n",
-                        (int)c, cmd->text.x, cmd->text.y,
-                        (void *)cmd->text.style,
-                        (int)cmd->text.text->u8_bytes,
-                        cmd->text.text->data);
+                n00b_display_diag_log(N00B_DISPLAY_DIAG_TRACE,
+                                       "backend_notcurses",
+                                       "cmd[%d] TEXT x=%d y=%d style=%p '%.*s'",
+                                       (int)c,
+                                       cmd->text.x,
+                                       cmd->text.y,
+                                       (void *)cmd->text.style,
+                                       (int)cmd->text.text->u8_bytes,
+                                       cmd->text.text->data);
             }
         }
-        fflush(ctx->debug_log);
     }
 
     struct ncvisual *visual =
@@ -1440,32 +1725,35 @@ nc_render_entry(nc_ctx_t                     *ctx,
     free(rgba);
 
     if (!visual) {
-        ncplane_destroy(ncp);
         return nullptr;
     }
 
     struct ncvisual_options vopts = {
-        .n       = ncp,
+        .n       = ctx->stdplane,
         .scaling = NCSCALE_NONE,
-        .y       = 0,
-        .x       = 0,
+        .y       = plane_cell_y,
+        .x       = plane_cell_x,
         .blitter = NCBLIT_PIXEL,
-        .flags   = 0,
+        .pxoffy  = (unsigned)plane_pxoff_y,
+        .pxoffx  = (unsigned)plane_pxoff_x,
+        // Ensure ncvisual_blit returns the real drawable child plane that
+        // we can cache/move/destroy directly in subsequent frames.
+        .flags   = NCVISUAL_OPTION_CHILDPLANE,
     };
 
     struct ncplane *blit_plane = ncvisual_blit(ctx->nc, visual, &vopts);
 
-    if (ctx->debug_log) {
-        fprintf(ctx->debug_log,
-                "    blit %s @cell(%d,%d) %dx%d cells\n",
-                blit_plane ? "OK" : "FAIL",
-                plane_cell_x, plane_cell_y,
-                plane_cell_w, plane_cell_h);
-        fflush(ctx->debug_log);
-    }
+    n00b_display_diag_log(N00B_DISPLAY_DIAG_TRACE,
+                           "backend_notcurses",
+                           "blit %s @cell(%d,%d) %dx%d cells",
+                           blit_plane ? "OK" : "FAIL",
+                           plane_cell_x,
+                           plane_cell_y,
+                           plane_cell_w,
+                           plane_cell_h);
 
     ncvisual_destroy(visual);
-    return ncp;
+    return blit_plane;
 }
 
 #endif /* N00B_HAVE_FREETYPE */
@@ -1506,8 +1794,6 @@ nc_init(n00b_conduit_topic_t(n00b_buffer_t *) *output)
         return nullptr;
     }
 
-    ctx->debug_log = fopen("/tmp/nc_backend.log", "w");
-
     // The n00b runtime owns fatal-signal handlers and their alternate
     // signal stack.  If notcurses also installs fatal handlers it
     // allocates its own sigaltstack; on notcurses_stop() it tries to
@@ -1526,10 +1812,9 @@ nc_init(n00b_conduit_topic_t(n00b_buffer_t *) *output)
 
     ctx->nc = notcurses_init(&opts, nullptr);
     if (!ctx->nc) {
-        if (ctx->debug_log) {
-            fprintf(ctx->debug_log, "notcurses_init FAILED\n");
-            fclose(ctx->debug_log);
-        }
+        n00b_display_diag_log(N00B_DISPLAY_DIAG_ERROR,
+                               "backend_notcurses",
+                               "notcurses_init failed");
         free(ctx);
         return nullptr;
     }
@@ -1555,8 +1840,9 @@ nc_init(n00b_conduit_topic_t(n00b_buffer_t *) *output)
     unsigned int pix_y = 0, pix_x = 0;
     ncplane_pixel_geom(ctx->stdplane, nullptr, nullptr,
                        &pix_y, &pix_x, nullptr, nullptr);
-    ctx->cell_pixel_h = pix_y;
-    ctx->cell_pixel_w = pix_x;
+    ctx->cell_pixel_h = pix_y > 0 ? pix_y : 1;
+    ctx->cell_pixel_w = pix_x > 0 ? pix_x : 1;
+    n00b_terminal_input_reset(&ctx->input_state);
 
     // Detect pixel support.
     ctx->has_pixel = (notcurses_check_pixel_support(ctx->nc) > 0);
@@ -1568,20 +1854,20 @@ nc_init(n00b_conduit_topic_t(n00b_buffer_t *) *output)
     }
 #endif
 
-    if (ctx->debug_log) {
-        fprintf(ctx->debug_log,
-                "nc_init: %ux%u cells, cell_pixel=%ux%u, "
-                "has_pixel=%d, has_freetype=%d\n",
-                cols, rows, pix_x, pix_y,
-                ctx->has_pixel,
+    n00b_display_diag_log(N00B_DISPLAY_DIAG_INFO,
+                           "backend_notcurses",
+                           "init cells=%ux%u cell_pixel=%ux%u has_pixel=%d has_freetype=%d",
+                           cols,
+                           rows,
+                           pix_x,
+                           pix_y,
+                           ctx->has_pixel,
 #if N00B_HAVE_FREETYPE
-                ctx->has_freetype
+                           ctx->has_freetype
 #else
-                0
+                           0
 #endif
-                );
-        fflush(ctx->debug_log);
-    }
+                           );
 
     return ctx;
 }
@@ -1594,6 +1880,12 @@ nc_destroy(void *vctx)
         return;
     }
 
+    if (ctx->comp_grid) {
+        n00b_free(ctx->comp_grid);
+        ctx->comp_grid = nullptr;
+    }
+    n00b_composite_style_pool_destroy(&ctx->style_pool);
+
 #if N00B_HAVE_FREETYPE
     glyph_cache_destroy(ctx->glyph_cache);
     ctx->glyph_cache = NULL;
@@ -1604,12 +1896,9 @@ nc_destroy(void *vctx)
     free(ctx->entry_planes);
     ctx->entry_planes       = nullptr;
     ctx->entry_planes_count = 0;
-
-    if (ctx->debug_log) {
-        fprintf(ctx->debug_log, "nc_destroy\n");
-        fclose(ctx->debug_log);
-        ctx->debug_log = nullptr;
-    }
+    n00b_display_diag_log(N00B_DISPLAY_DIAG_TRACE,
+                           "backend_notcurses",
+                           "destroy");
 
     if (ctx->nc) {
         notcurses_stop(ctx->nc);
@@ -1659,8 +1948,21 @@ nc_get_size(void *vctx)
     unsigned int total_py = 0, total_px = 0;
     ncplane_pixel_geom(ctx->stdplane, &total_py, &total_px,
                        &pix_y, &pix_x, nullptr, nullptr);
+    if (pix_y == 0) {
+        pix_y = ctx->cell_pixel_h > 0 ? ctx->cell_pixel_h : 1;
+    }
+    if (pix_x == 0) {
+        pix_x = ctx->cell_pixel_w > 0 ? ctx->cell_pixel_w : 1;
+    }
     ctx->cell_pixel_h = pix_y;
     ctx->cell_pixel_w = pix_x;
+
+    if (total_py == 0) {
+        total_py = rows * pix_y;
+    }
+    if (total_px == 0) {
+        total_px = cols * pix_x;
+    }
 
     return (n00b_render_size_t){
         .cols         = (n00b_isize_t)cols,
@@ -1673,18 +1975,98 @@ nc_get_size(void *vctx)
 }
 
 static void
+nc_style_to_notcurses(const n00b_text_style_t *style,
+                      uint64_t                *channels_out,
+                      unsigned                *styles_out)
+{
+    uint64_t channels = 0;
+    unsigned styles   = NCSTYLE_NONE;
+
+    ncchannels_set_fg_default(&channels);
+    ncchannels_set_bg_default(&channels);
+    ncchannels_set_fg_alpha(&channels, NCALPHA_OPAQUE);
+    ncchannels_set_bg_alpha(&channels, NCALPHA_OPAQUE);
+
+    if (style) {
+        uint32_t fg = 0;
+        uint32_t bg = 0;
+
+        if (style_resolve_color(style, true, &fg)) {
+            ncchannels_set_fg_rgb(&channels, fg);
+        }
+        if (style_resolve_color(style, false, &bg)) {
+            ncchannels_set_bg_rgb(&channels, bg);
+        }
+        if (style->bold == N00B_TRI_YES) {
+            styles |= NCSTYLE_BOLD;
+        }
+        if (style->italic == N00B_TRI_YES) {
+            styles |= NCSTYLE_ITALIC;
+        }
+        if (style->underline == N00B_TRI_YES
+            || style->double_underline == N00B_TRI_YES) {
+            styles |= NCSTYLE_UNDERLINE;
+        }
+        if (style->strikethrough == N00B_TRI_YES) {
+            styles |= NCSTYLE_STRUCK;
+        }
+    }
+
+    *channels_out = channels;
+    *styles_out   = styles;
+}
+
+static void
 nc_render_frame(void         *vctx,
                 n00b_rcell_t *cells,
                 n00b_isize_t  rows,
                 n00b_isize_t  cols,
                 n00b_rcell_t *prev_cells)
 {
-    // Cell-grid rendering is no longer used — all rendering goes
-    // through nc_render_planes which works directly in pixel space.
-    (void)vctx;
-    (void)cells;
-    (void)rows;
-    (void)cols;
+    nc_ctx_t *ctx = vctx;
+    if (!ctx || !ctx->stdplane || !cells || rows <= 0 || cols <= 0) {
+        return;
+    }
+
+    // Full repaint for now; this path is used when pixel rendering is
+    // unavailable and keeps behavior deterministic across terminals.
+    ncplane_erase(ctx->stdplane);
+
+    uint64_t last_channels = 0;
+    unsigned last_styles   = NCSTYLE_NONE;
+    bool     have_style    = false;
+
+    for (n00b_isize_t r = 0; r < rows; r++) {
+        for (n00b_isize_t c = 0; c < cols; c++) {
+            n00b_rcell_t *cell = &cells[r * cols + c];
+
+            if (cell->flags & N00B_CELL_WIDE_CONT) {
+                continue;
+            }
+
+            uint64_t channels = 0;
+            unsigned styles   = NCSTYLE_NONE;
+            nc_style_to_notcurses(cell->style, &channels, &styles);
+
+            if (!have_style || channels != last_channels) {
+                ncplane_set_channels(ctx->stdplane, channels);
+                last_channels = channels;
+            }
+            if (!have_style || styles != last_styles) {
+                ncplane_set_styles(ctx->stdplane, styles);
+                last_styles = styles;
+            }
+            have_style = true;
+
+            if ((cell->flags & N00B_CELL_OCCUPIED) && cell->grapheme_len > 0) {
+                ncplane_putstr_yx(ctx->stdplane, (int)r, (int)c, cell->grapheme);
+            }
+            else {
+                ncplane_putchar_yx(ctx->stdplane, (int)r, (int)c, ' ');
+            }
+        }
+    }
+
     (void)prev_cells;
 }
 
@@ -1693,10 +2075,10 @@ nc_flush(void *vctx)
 {
     nc_ctx_t *ctx = vctx;
     int rc = notcurses_render(ctx->nc);
-    if (ctx->debug_log) {
-        fprintf(ctx->debug_log, "nc_flush: notcurses_render=%d\n", rc);
-        fflush(ctx->debug_log);
-    }
+    n00b_display_diag_log(N00B_DISPLAY_DIAG_TRACE,
+                           "backend_notcurses",
+                           "flush render=%d",
+                           rc);
     check_resize(ctx);
 }
 
@@ -1760,44 +2142,6 @@ nc_prepare_gui(void *vctx, n00b_plane_t **planes, n00b_isize_t n)
 // Input polling
 // ====================================================================
 
-static uint32_t
-nc_map_key(uint32_t nc_id)
-{
-    switch (nc_id) {
-    case NCKEY_UP:        return N00B_KEY_UP;
-    case NCKEY_DOWN:      return N00B_KEY_DOWN;
-    case NCKEY_LEFT:      return N00B_KEY_LEFT;
-    case NCKEY_RIGHT:     return N00B_KEY_RIGHT;
-    case NCKEY_HOME:      return N00B_KEY_HOME;
-    case NCKEY_END:       return N00B_KEY_END;
-    case NCKEY_PGUP:      return N00B_KEY_PAGE_UP;
-    case NCKEY_PGDOWN:    return N00B_KEY_PAGE_DOWN;
-    case NCKEY_INS:       return N00B_KEY_INSERT;
-    case NCKEY_DEL:       return N00B_KEY_DELETE;
-    case NCKEY_BACKSPACE: return N00B_KEY_BACKSPACE;
-    case 0x7F:            return N00B_KEY_BACKSPACE; // Raw DEL.
-    case 0x08:            return N00B_KEY_BACKSPACE; // Raw BS.
-    case NCKEY_TAB:       return N00B_KEY_TAB;
-    case NCKEY_ENTER:     return N00B_KEY_ENTER;
-    case '\r':            return N00B_KEY_ENTER;  // Raw CR.
-    case '\n':            return N00B_KEY_ENTER;  // Raw LF.
-    case NCKEY_ESC:       return N00B_KEY_ESCAPE;
-    case NCKEY_F01:       return N00B_KEY_F1;
-    case NCKEY_F02:       return N00B_KEY_F2;
-    case NCKEY_F03:       return N00B_KEY_F3;
-    case NCKEY_F04:       return N00B_KEY_F4;
-    case NCKEY_F05:       return N00B_KEY_F5;
-    case NCKEY_F06:       return N00B_KEY_F6;
-    case NCKEY_F07:       return N00B_KEY_F7;
-    case NCKEY_F08:       return N00B_KEY_F8;
-    case NCKEY_F09:       return N00B_KEY_F9;
-    case NCKEY_F10:       return N00B_KEY_F10;
-    case NCKEY_F11:       return N00B_KEY_F11;
-    case NCKEY_F12:       return N00B_KEY_F12;
-    default:              return nc_id; // Unicode codepoint.
-    }
-}
-
 static bool
 nc_poll_event(void *vctx, int32_t timeout_ms, n00b_event_t *out)
 {
@@ -1820,13 +2164,15 @@ nc_poll_event(void *vctx, int32_t timeout_ms, n00b_event_t *out)
         return false;
     }
 
-    if (ctx->debug_log) {
-        fprintf(ctx->debug_log,
-                "nc_poll: id=0x%x evtype=%d ctrl=%d shift=%d alt=%d eff_text[0]=0x%x\n",
-                ni.id, ni.evtype, ni.ctrl, ni.shift, ni.alt,
-                (unsigned)ni.eff_text[0]);
-        fflush(ctx->debug_log);
-    }
+    n00b_display_diag_log(N00B_DISPLAY_DIAG_TRACE,
+                           "backend_notcurses",
+                           "poll id=0x%x evtype=%d ctrl=%d shift=%d alt=%d eff_text[0]=0x%x",
+                           ni.id,
+                           ni.evtype,
+                           ni.ctrl,
+                           ni.shift,
+                           ni.alt,
+                           (unsigned)ni.eff_text[0]);
 
     // Resize event.
     if (ni.id == NCKEY_RESIZE) {
@@ -1840,131 +2186,24 @@ nc_poll_event(void *vctx, int32_t timeout_ms, n00b_event_t *out)
         return true;
     }
 
-    // Mouse events: buttons, scroll, motion.
-    if (ni.id >= NCKEY_BUTTON1 && ni.id <= NCKEY_BUTTON3) {
-        out->type = N00B_EVENT_MOUSE;
-        out->mouse.x = (int32_t)ni.x * (int32_t)ctx->cell_pixel_w;
-        out->mouse.y = (int32_t)ni.y * (int32_t)ctx->cell_pixel_h;
+    n00b_terminal_ncinput_view_t view = {
+        .id        = ni.id,
+        .evtype    = (uint32_t)ni.evtype,
+        .x         = ni.x,
+        .y         = ni.y,
+        .xpx       = ni.xpx,
+        .ypx       = ni.ypx,
+        .shift     = ni.shift,
+        .ctrl      = ni.ctrl,
+        .alt       = ni.alt,
+        .eff_text0 = (uint32_t)ni.eff_text[0],
+    };
 
-        switch (ni.id) {
-        case NCKEY_BUTTON1: out->mouse.button = N00B_MOUSE_LEFT;   break;
-        case NCKEY_BUTTON2: out->mouse.button = N00B_MOUSE_MIDDLE; break;
-        case NCKEY_BUTTON3: out->mouse.button = N00B_MOUSE_RIGHT;  break;
-        default:            out->mouse.button = N00B_MOUSE_NONE;   break;
-        }
-
-        out->mouse.mods = N00B_MOD_NONE;
-        if (ni.shift) out->mouse.mods |= N00B_MOD_SHIFT;
-        if (ni.ctrl)  out->mouse.mods |= N00B_MOD_CTRL;
-        if (ni.alt)   out->mouse.mods |= N00B_MOD_ALT;
-
-        if (ni.evtype == NCTYPE_RELEASE) {
-            out->mouse.action      = N00B_MOUSE_RELEASE;
-            ctx->mouse_button_down = false;
-        }
-        else if (ctx->mouse_button_down) {
-            out->mouse.action = N00B_MOUSE_DRAG;
-        }
-        else {
-            out->mouse.action      = N00B_MOUSE_PRESS;
-            ctx->mouse_button_down = true;
-        }
-        return true;
-    }
-    if (ni.id == NCKEY_SCROLL_UP || ni.id == NCKEY_SCROLL_DOWN) {
-        out->type         = N00B_EVENT_MOUSE;
-        out->mouse.x      = (int32_t)ni.x * (int32_t)ctx->cell_pixel_w;
-        out->mouse.y      = (int32_t)ni.y * (int32_t)ctx->cell_pixel_h;
-        out->mouse.button = (ni.id == NCKEY_SCROLL_UP) ? N00B_MOUSE_SCROLL_UP
-                                                        : N00B_MOUSE_SCROLL_DOWN;
-        out->mouse.action = N00B_MOUSE_PRESS;
-        out->mouse.mods   = N00B_MOD_NONE;
-        if (ni.shift) out->mouse.mods |= N00B_MOD_SHIFT;
-        if (ni.ctrl)  out->mouse.mods |= N00B_MOD_CTRL;
-        if (ni.alt)   out->mouse.mods |= N00B_MOD_ALT;
-        return true;
-    }
-    if (ni.id == NCKEY_MOTION) {
-        out->type         = N00B_EVENT_MOUSE;
-        out->mouse.x      = (int32_t)ni.x * (int32_t)ctx->cell_pixel_w;
-        out->mouse.y      = (int32_t)ni.y * (int32_t)ctx->cell_pixel_h;
-        out->mouse.button = N00B_MOUSE_NONE;
-        out->mouse.mods   = N00B_MOD_NONE;
-        if (ctx->mouse_button_down) {
-            out->mouse.action = N00B_MOUSE_DRAG;
-        }
-        else {
-            out->mouse.action = N00B_MOUSE_MOVE;
-        }
-        return true;
-    }
-
-    // Filter key-release events (can arrive at startup from the
-    // Enter that launched the program).  Accept PRESS, REPEAT, and
-    // UNKNOWN.
-    if (ni.evtype == NCTYPE_RELEASE) {
-        return false;
-    }
-
-    // Filter synthesized keys above the Unicode range that we
-    // don't handle (invalid / unrecognized notcurses keys).
-    if (ni.id >= NCKEY_INVALID) {
-        uint32_t mapped = nc_map_key(ni.id);
-        if (mapped == ni.id) {
-            // nc_map_key didn't recognize it — drop.
-            return false;
-        }
-    }
-
-    // Build modifier flags.
-    n00b_key_mod_t mods = N00B_MOD_NONE;
-    if (ni.shift) {
-        mods |= N00B_MOD_SHIFT;
-    }
-    if (ni.ctrl) {
-        mods |= N00B_MOD_CTRL;
-    }
-    if (ni.alt) {
-        mods |= N00B_MOD_ALT;
-    }
-
-    out->type     = N00B_EVENT_KEY;
-    out->key.mods = mods;
-
-    // Try recognized special keys first (Enter, Tab, arrows, etc.).
-    uint32_t mapped = nc_map_key(ni.id);
-    if (mapped != ni.id) {
-        out->key.key = mapped;
-        return true;
-    }
-
-    // Raw control characters (bytes 1–26): map to Ctrl+letter,
-    // matching the ANSI backend's convention.  This ensures e.g.
-    // byte 3 → key='c' + CTRL regardless of what notcurses reports
-    // in ni.ctrl / ni.eff_text.
-    if (ni.id >= 1 && ni.id <= 26) {
-        out->key.key  = ni.id + 'a' - 1;
-        out->key.mods |= N00B_MOD_CTRL;
-        return true;
-    }
-
-    // Printable character — prefer eff_text (has modifiers applied,
-    // e.g. Shift+' → ").  Fall back to ni.id.
-    if (ni.eff_text[0] != 0) {
-        out->key.key = ni.eff_text[0];
-    }
-    else {
-        out->key.key = ni.id;
-    }
-
-    // Reject null or bare escape fragments from broken SGR mouse
-    // sequences (notcurses issue #2904).
-    if (out->key.key == 0) {
-        out->type = N00B_EVENT_NONE;
-        return false;
-    }
-
-    return true;
+    return n00b_terminal_translate_notcurses(&view,
+                                              &ctx->input_state,
+                                              ctx->cell_pixel_w,
+                                              ctx->cell_pixel_h,
+                                              out);
 }
 
 // ====================================================================
@@ -1985,24 +2224,76 @@ nc_render_planes(void                         *vctx,
                  n00b_render_cap_t             caps)
 {
     nc_ctx_t *ctx = vctx;
-    (void)total_rows;
-    (void)total_cols;
-    (void)caps;
-
+    bool use_pixel = false;
 #if N00B_HAVE_FREETYPE
-    if (!ctx->has_freetype || !ctx->has_pixel) {
-        if (ctx->debug_log) {
-            fprintf(ctx->debug_log,
-                    "nc_render_planes: no pixel/freetype — skipping\n");
-            fflush(ctx->debug_log);
+    use_pixel = ctx->has_freetype && ctx->has_pixel;
+#endif
+
+    if (!use_pixel) {
+        n00b_isize_t cell_px_w = ctx->cell_pixel_w > 0
+                               ? (n00b_isize_t)ctx->cell_pixel_w
+                               : 1;
+        n00b_isize_t cell_px_h = ctx->cell_pixel_h > 0
+                               ? (n00b_isize_t)ctx->cell_pixel_h
+                               : 1;
+        n00b_isize_t cell_rows = total_rows / cell_px_h;
+        n00b_isize_t cell_cols = total_cols / cell_px_w;
+
+        if (cell_rows <= 0 || cell_cols <= 0) {
+            return;
         }
+
+        if (cell_rows != ctx->comp_grid_rows
+            || cell_cols != ctx->comp_grid_cols) {
+            size_t total = (size_t)cell_rows * (size_t)cell_cols;
+            n00b_rcell_t *new_grid = n00b_alloc_array(n00b_rcell_t, total);
+
+            if (ctx->comp_grid) {
+                n00b_free(ctx->comp_grid);
+            }
+            ctx->comp_grid      = new_grid;
+            ctx->comp_grid_rows = cell_rows;
+            ctx->comp_grid_cols = cell_cols;
+        }
+
+        n00b_composite_style_pool_clear(&ctx->style_pool);
+        n00b_composite_commands_to_grid(entries,
+                                         count,
+                                         ctx->comp_grid,
+                                         cell_rows,
+                                         cell_cols,
+                                         (int32_t)cell_px_w,
+                                         (int32_t)cell_px_h,
+                                         default_style,
+                                         caps,
+                                         &ctx->style_pool);
+        nc_render_frame(ctx,
+                        ctx->comp_grid,
+                        cell_rows,
+                        cell_cols,
+                        nullptr);
+
+        n00b_display_diag_log(N00B_DISPLAY_DIAG_TRACE,
+                               "backend_notcurses",
+                               "render_planes cell fallback rows=%d cols=%d (no pixel/freetype)",
+                               (int)cell_rows,
+                               (int)cell_cols);
         return;
     }
+
+#if N00B_HAVE_FREETYPE
 
     int pixel_h = (int)ctx->cell_pixel_h;
     int pixel_w = (int)ctx->cell_pixel_w;
     if (pixel_h <= 0 || pixel_w <= 0 || !ctx->ft_faces[0]) {
         return;
+    }
+
+    if (ctx->cache_cell_pixel_w != (unsigned)pixel_w
+        || ctx->cache_cell_pixel_h != (unsigned)pixel_h) {
+        destroy_entry_planes(ctx);
+        ctx->cache_cell_pixel_w = (unsigned)pixel_w;
+        ctx->cache_cell_pixel_h = (unsigned)pixel_h;
     }
 
     // Compute font metrics once per frame.
@@ -2030,12 +2321,12 @@ nc_render_planes(void                         *vctx,
         .baseline = ascent + ((pixel_h > line_h) ? (pixel_h - line_h) / 2 : 0),
     };
 
-    if (ctx->debug_log) {
-        fprintf(ctx->debug_log,
-                "nc_render_planes: %u entries, cell_px=%dx%d\n",
-                (unsigned)count, pixel_w, pixel_h);
-        fflush(ctx->debug_log);
-    }
+    n00b_display_diag_log(N00B_DISPLAY_DIAG_TRACE,
+                           "backend_notcurses",
+                           "render_planes entries=%u cell_px=%dx%d",
+                           (unsigned)count,
+                           pixel_w,
+                           pixel_h);
 
     // Destroy orphaned cached ncplanes (planes no longer in this frame's
     // entry list).  Build a "seen" set by marking cache slots, then destroy
@@ -2049,6 +2340,10 @@ nc_render_planes(void                         *vctx,
     ensure_entry_plane_slots(ctx, (unsigned)count);
     unsigned int used = 0;
 
+    // If any entry would miss cache this frame, rebuild all entries together.
+    // Mixing stale cached sprixels with freshly blitted sprixels has caused
+    // persistent vertical drift/artifacts on some terminals.
+    bool force_rebuild = false;
     for (n00b_isize_t i = 0; i < count; i++) {
         const n00b_composite_entry_t *entry = &entries[i];
         n00b_plane_t *plane = entry->plane;
@@ -2057,28 +2352,113 @@ nc_render_planes(void                         *vctx,
             continue;
         }
 
-        // Look up in plane cache.
-        uint32_t h = (uint32_t)((uintptr_t)plane >> 4);
-        h ^= h >> 16;
         int cache_slot = -1;
+        for (unsigned int slot = 0; slot < NC_PLANE_CACHE_SIZE; slot++) {
+            if (ctx->plane_cache[slot].plane == plane) {
+                cache_slot = (int)slot;
+                break;
+            }
+        }
 
-        for (unsigned int probe = 0; probe < 8; probe++) {
-            unsigned int slot = (h + probe) & NC_PLANE_CACHE_MASK;
+        n00b_entry_info_t hit_info;
+        n00b_composite_entry_info(entry, &hit_info, pixel_w, pixel_h);
+        int expected_pxoff_y = hit_info.outer_y % pixel_h;
+        int expected_pxoff_x = hit_info.outer_x % pixel_w;
+        if (expected_pxoff_y < 0) expected_pxoff_y += pixel_h;
+        if (expected_pxoff_x < 0) expected_pxoff_x += pixel_w;
+        int expected_cell_y = (hit_info.outer_y - expected_pxoff_y) / pixel_h;
+        int expected_cell_x = (hit_info.outer_x - expected_pxoff_x) / pixel_w;
+        int expected_cell_h = ((int)hit_info.outer_rows + expected_pxoff_y + pixel_h - 1) / pixel_h;
+        int expected_cell_w = ((int)hit_info.outer_cols + expected_pxoff_x + pixel_w - 1) / pixel_w;
+        if (expected_cell_h < 1) expected_cell_h = 1;
+        if (expected_cell_w < 1) expected_cell_w = 1;
+
+        bool cache_hit = cache_slot >= 0
+            && ctx->plane_cache[cache_slot].ncp != nullptr
+            && ctx->plane_cache[cache_slot].render_gen == plane->render_gen
+            && ctx->plane_cache[cache_slot].abs_x == entry->abs_x
+            && ctx->plane_cache[cache_slot].abs_y == entry->abs_y
+            && ctx->plane_cache[cache_slot].cell_x == expected_cell_x
+            && ctx->plane_cache[cache_slot].cell_y == expected_cell_y
+            && ctx->plane_cache[cache_slot].cell_w == expected_cell_w
+            && ctx->plane_cache[cache_slot].cell_h == expected_cell_h
+            && ctx->plane_cache[cache_slot].pxoff_x == expected_pxoff_x
+            && ctx->plane_cache[cache_slot].pxoff_y == expected_pxoff_y
+            && ctx->plane_cache[cache_slot].width == plane->width
+            && ctx->plane_cache[cache_slot].height == plane->height
+            && ctx->plane_cache[cache_slot].scroll_x == plane->scroll_x
+            && ctx->plane_cache[cache_slot].scroll_y == plane->scroll_y
+            && ctx->plane_cache[cache_slot].box == plane->box
+            && ctx->plane_cache[cache_slot].state == plane->widget_state;
+
+        if (!cache_hit) {
+            force_rebuild = true;
+            break;
+        }
+    }
+
+    if (force_rebuild) {
+        destroy_entry_planes(ctx);
+    }
+
+    for (n00b_isize_t i = 0; i < count; i++) {
+        const n00b_composite_entry_t *entry = &entries[i];
+        n00b_plane_t *plane = entry->plane;
+
+        if (!(plane->flags & N00B_PLANE_VISIBLE)) {
+            continue;
+        }
+
+        // Look up in plane cache. Use full-table scan for robustness:
+        // the previous limited-probe hash path could miss insert/find and
+        // leave stale ncplanes alive.
+        int cache_slot = -1;
+        int free_slot = -1;
+
+        // Compute expected ncplane cell-space bounds for this entry.
+        n00b_entry_info_t hit_info;
+        n00b_composite_entry_info(entry, &hit_info, pixel_w, pixel_h);
+        int expected_pxoff_y = hit_info.outer_y % pixel_h;
+        int expected_pxoff_x = hit_info.outer_x % pixel_w;
+        if (expected_pxoff_y < 0) expected_pxoff_y += pixel_h;
+        if (expected_pxoff_x < 0) expected_pxoff_x += pixel_w;
+
+        int expected_cell_y = (hit_info.outer_y - expected_pxoff_y) / pixel_h;
+        int expected_cell_x = (hit_info.outer_x - expected_pxoff_x) / pixel_w;
+        int expected_cell_h = ((int)hit_info.outer_rows + expected_pxoff_y + pixel_h - 1) / pixel_h;
+        int expected_cell_w = ((int)hit_info.outer_cols + expected_pxoff_x + pixel_w - 1) / pixel_w;
+        if (expected_cell_h < 1) expected_cell_h = 1;
+        if (expected_cell_w < 1) expected_cell_w = 1;
+
+        for (unsigned int slot = 0; slot < NC_PLANE_CACHE_SIZE; slot++) {
             if (ctx->plane_cache[slot].plane == plane) {
                 cache_slot = (int)slot;
                 seen[slot] = true;
                 break;
             }
-            if (ctx->plane_cache[slot].plane == nullptr) {
-                break;
+            if (free_slot < 0 && ctx->plane_cache[slot].plane == nullptr) {
+                free_slot = (int)slot;
             }
         }
 
         // Cache hit — content and position unchanged.
         if (cache_slot >= 0
+            && ctx->plane_cache[cache_slot].ncp != nullptr
             && ctx->plane_cache[cache_slot].render_gen == plane->render_gen
             && ctx->plane_cache[cache_slot].abs_x == entry->abs_x
-            && ctx->plane_cache[cache_slot].abs_y == entry->abs_y) {
+            && ctx->plane_cache[cache_slot].abs_y == entry->abs_y
+            && ctx->plane_cache[cache_slot].cell_x == expected_cell_x
+            && ctx->plane_cache[cache_slot].cell_y == expected_cell_y
+            && ctx->plane_cache[cache_slot].cell_w == expected_cell_w
+            && ctx->plane_cache[cache_slot].cell_h == expected_cell_h
+            && ctx->plane_cache[cache_slot].pxoff_x == expected_pxoff_x
+            && ctx->plane_cache[cache_slot].pxoff_y == expected_pxoff_y
+            && ctx->plane_cache[cache_slot].width == plane->width
+            && ctx->plane_cache[cache_slot].height == plane->height
+            && ctx->plane_cache[cache_slot].scroll_x == plane->scroll_x
+            && ctx->plane_cache[cache_slot].scroll_y == plane->scroll_y
+            && ctx->plane_cache[cache_slot].box == plane->box
+            && ctx->plane_cache[cache_slot].state == plane->widget_state) {
             ctx->entry_planes[used++] = ctx->plane_cache[cache_slot].ncp;
             continue;
         }
@@ -2103,26 +2483,63 @@ nc_render_planes(void                         *vctx,
                 ctx->plane_cache[cache_slot].render_gen  = plane->render_gen;
                 ctx->plane_cache[cache_slot].abs_x       = entry->abs_x;
                 ctx->plane_cache[cache_slot].abs_y       = entry->abs_y;
+                ctx->plane_cache[cache_slot].cell_x      = expected_cell_x;
+                ctx->plane_cache[cache_slot].cell_y      = expected_cell_y;
+                ctx->plane_cache[cache_slot].cell_w      = expected_cell_w;
+                ctx->plane_cache[cache_slot].cell_h      = expected_cell_h;
+                ctx->plane_cache[cache_slot].pxoff_x     = expected_pxoff_x;
+                ctx->plane_cache[cache_slot].pxoff_y     = expected_pxoff_y;
+                ctx->plane_cache[cache_slot].width       = plane->width;
+                ctx->plane_cache[cache_slot].height      = plane->height;
+                ctx->plane_cache[cache_slot].scroll_x    = plane->scroll_x;
+                ctx->plane_cache[cache_slot].scroll_y    = plane->scroll_y;
+                ctx->plane_cache[cache_slot].box         = plane->box;
+                ctx->plane_cache[cache_slot].state       = plane->widget_state;
             }
             else {
-                // Insert into a free slot.
-                for (unsigned int probe = 0; probe < 8; probe++) {
-                    unsigned int slot = (h + probe) & NC_PLANE_CACHE_MASK;
-                    if (ctx->plane_cache[slot].plane == nullptr) {
-                        ctx->plane_cache[slot].plane      = plane;
-                        ctx->plane_cache[slot].ncp         = ncp;
-                        ctx->plane_cache[slot].render_gen  = plane->render_gen;
-                        ctx->plane_cache[slot].abs_x       = entry->abs_x;
-                        ctx->plane_cache[slot].abs_y       = entry->abs_y;
-                        seen[slot] = true;
-                        break;
+                int insert_slot = free_slot;
+                if (insert_slot < 0) {
+                    // Cache saturated: evict an unseen slot (not referenced
+                    // by this frame so far). Fallback to slot 0 if needed.
+                    for (unsigned int slot = 0; slot < NC_PLANE_CACHE_SIZE; slot++) {
+                        if (!seen[slot]) {
+                            insert_slot = (int)slot;
+                            break;
+                        }
                     }
+                    if (insert_slot < 0) {
+                        insert_slot = 0;
+                    }
+                    if (ctx->plane_cache[insert_slot].ncp) {
+                        ncplane_family_destroy(ctx->plane_cache[insert_slot].ncp);
+                    }
+                    ctx->plane_cache[insert_slot].plane = nullptr;
+                    ctx->plane_cache[insert_slot].ncp   = nullptr;
                 }
+
+                ctx->plane_cache[insert_slot].plane      = plane;
+                ctx->plane_cache[insert_slot].ncp         = ncp;
+                ctx->plane_cache[insert_slot].render_gen  = plane->render_gen;
+                ctx->plane_cache[insert_slot].abs_x       = entry->abs_x;
+                ctx->plane_cache[insert_slot].abs_y       = entry->abs_y;
+                ctx->plane_cache[insert_slot].cell_x      = expected_cell_x;
+                ctx->plane_cache[insert_slot].cell_y      = expected_cell_y;
+                ctx->plane_cache[insert_slot].cell_w      = expected_cell_w;
+                ctx->plane_cache[insert_slot].cell_h      = expected_cell_h;
+                ctx->plane_cache[insert_slot].pxoff_x     = expected_pxoff_x;
+                ctx->plane_cache[insert_slot].pxoff_y     = expected_pxoff_y;
+                ctx->plane_cache[insert_slot].width       = plane->width;
+                ctx->plane_cache[insert_slot].height      = plane->height;
+                ctx->plane_cache[insert_slot].scroll_x    = plane->scroll_x;
+                ctx->plane_cache[insert_slot].scroll_y    = plane->scroll_y;
+                ctx->plane_cache[insert_slot].box         = plane->box;
+                ctx->plane_cache[insert_slot].state       = plane->widget_state;
+                seen[insert_slot] = true;
             }
         }
         else if (reuse_ncp) {
             // Render failed — destroy the old ncplane we pulled out.
-            ncplane_destroy(reuse_ncp);
+            ncplane_family_destroy(reuse_ncp);
         }
     }
     ctx->entry_planes_used = used;
@@ -2131,17 +2548,24 @@ nc_render_planes(void                         *vctx,
     for (unsigned int s = 0; s < NC_PLANE_CACHE_SIZE; s++) {
         if (ctx->plane_cache[s].plane && !seen[s]) {
             if (ctx->plane_cache[s].ncp) {
-                ncplane_destroy(ctx->plane_cache[s].ncp);
+                ncplane_family_destroy(ctx->plane_cache[s].ncp);
             }
             ctx->plane_cache[s].plane = nullptr;
             ctx->plane_cache[s].ncp   = nullptr;
         }
     }
 
-#else
-    (void)entries;
-    (void)count;
-    (void)default_style;
+    // Reassert z-order every frame. Cache hits keep existing ncplanes in
+    // whatever stack position they previously had, while rerendered planes
+    // are recreated at the top; this can cause focus/interaction jitter when
+    // adjacent planes overlap after cell rounding. Moving every live plane to
+    // top in composite order yields a stable bottom->top stack.
+    for (unsigned int i = 0; i < used; i++) {
+        struct ncplane *ncp = ctx->entry_planes[i];
+        if (ncp) {
+            ncplane_move_family_top(ncp);
+        }
+    }
 #endif
 }
 
@@ -2161,33 +2585,16 @@ nc_fm_text_width(void *vctx, n00b_string_t *text, n00b_text_style_t *style)
         return 0;
     }
 
-    uint8_t hint = N00B_FONT_DEFAULT;
-    int16_t font_size = 0;
+    uint8_t hint = style ? (uint8_t)style->font_hint : N00B_FONT_DEFAULT;
+    int16_t font_size = style ? style->font_size : 0;
 
-    if (style) {
-        hint = style->font_hint;
-        font_size = style->font_size;
-    }
-
-    if (hint >= NC_NUM_FONT_HINTS) {
-        hint = N00B_FONT_DEFAULT;
-    }
-
-    FT_Face face = ctx->ft_faces[hint];
-    if (!face) {
-        face = ctx->ft_faces[0];
-    }
+    FT_Face face = resolve_style_face(ctx, hint);
     if (!face) {
         return 0;
     }
 
-    int pixel_h = (int)ctx->cell_pixel_h;
-    if (font_size > 0) {
-        pixel_h = pixel_h * font_size / 14;
-        if (pixel_h < 1) pixel_h = 1;
-    }
-
-    FT_Set_Pixel_Sizes(face, 0, (FT_UInt)pixel_h);
+    int target_h = style_pixel_height(ctx, font_size);
+    (void)fit_face_pixel_size(face, target_h, nullptr, nullptr, nullptr);
 
     int total_width = 0;
     const char *p = text->data;
@@ -2214,46 +2621,35 @@ static int32_t
 nc_fm_line_height(void *vctx, n00b_text_style_t *style)
 {
     nc_ctx_t *ctx = vctx;
-    int pixel_h = (int)ctx->cell_pixel_h;
+    uint8_t hint = style ? (uint8_t)style->font_hint : N00B_FONT_DEFAULT;
+    int16_t font_size = style ? style->font_size : 0;
 
-    if (style && style->font_size > 0) {
-        pixel_h = pixel_h * style->font_size / 14;
-        if (pixel_h < 1) pixel_h = 1;
-    }
+    FT_Face face = resolve_style_face(ctx, hint);
+    int target_h = style_pixel_height(ctx, font_size);
+    int line_h = target_h;
 
-    return (int32_t)pixel_h;
+    (void)fit_face_pixel_size(face, target_h, nullptr, nullptr, &line_h);
+
+    return (int32_t)line_h;
 }
 
 static int32_t
 nc_fm_ascent(void *vctx, n00b_text_style_t *style)
 {
     nc_ctx_t *ctx = vctx;
+    uint8_t hint = style ? (uint8_t)style->font_hint : N00B_FONT_DEFAULT;
+    int16_t font_size = style ? style->font_size : 0;
 
-    uint8_t hint = N00B_FONT_DEFAULT;
-    if (style) {
-        hint = style->font_hint;
-    }
-    if (hint >= NC_NUM_FONT_HINTS) {
-        hint = N00B_FONT_DEFAULT;
-    }
-
-    FT_Face face = ctx->ft_faces[hint];
-    if (!face) {
-        face = ctx->ft_faces[0];
-    }
+    FT_Face face = resolve_style_face(ctx, hint);
     if (!face) {
         return (int32_t)ctx->cell_pixel_h;
     }
 
-    int pixel_h = (int)ctx->cell_pixel_h;
-    if (style && style->font_size > 0) {
-        pixel_h = pixel_h * style->font_size / 14;
-        if (pixel_h < 1) pixel_h = 1;
-    }
+    int target_h = style_pixel_height(ctx, font_size);
+    int ascent = target_h;
+    (void)fit_face_pixel_size(face, target_h, &ascent, nullptr, nullptr);
 
-    FT_Set_Pixel_Sizes(face, 0, (FT_UInt)pixel_h);
-
-    return (int32_t)(face->size->metrics.ascender >> 6);
+    return (int32_t)ascent;
 }
 
 static n00b_font_metrics_provider_t

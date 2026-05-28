@@ -92,7 +92,6 @@ run_one_case(const test_case_t *tc)
     assert(got != nullptr);
 
     size_t got_len = n00b_list_len(*got);
-
     // Sorted-descending invariant.
     for (size_t i = 1; i < got_len; ++i) {
         size_t prev = n00b_list_get(*got, i - 1);
@@ -101,9 +100,31 @@ run_one_case(const test_case_t *tc)
     }
 
     // Byte-for-byte equality with the oracle.
+    if (got_len != tc->rev_nulls_len) {
+        fprintf(stderr,
+                "rev_nulls length mismatch: case=%s pattern=%s expected=%zu got=%zu actual=[",
+                tc->name,
+                tc->pattern,
+                tc->rev_nulls_len,
+                got_len);
+        for (size_t i = 0; i < got_len; ++i) {
+            fprintf(stderr, "%s%zu", i == 0 ? "" : ", ",
+                    n00b_list_get(*got, i));
+        }
+        fprintf(stderr, "]\n");
+    }
     assert(got_len == tc->rev_nulls_len);
     for (size_t i = 0; i < got_len; ++i) {
         size_t v = n00b_list_get(*got, i);
+        if (v != tc->rev_nulls[i]) {
+            fprintf(stderr,
+                    "rev_nulls value mismatch: case=%s pattern=%s index=%zu expected=%zu got=%zu\n",
+                    tc->name,
+                    tc->pattern,
+                    i,
+                    tc->rev_nulls[i],
+                    v);
+        }
         assert(v == tc->rev_nulls[i]);
     }
 

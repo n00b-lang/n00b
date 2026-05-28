@@ -15,6 +15,7 @@
 #include "display/widgets/checkbox.h"
 #include "display/widgets/selectionlist.h"
 #include "display/event.h"
+#include "internal/display/widget_primitives.h"
 #include "text/unicode/properties.h"
 #include "text/strings/text_style.h"
 #include "text/strings/string_style.h"
@@ -103,14 +104,11 @@ sellist_render(n00b_plane_t *plane, void *data)
         return;
     }
 
-    int32_t cpw = n00b_plane_text_width(plane, n00b_string_from_cstr("M"), nullptr);
-    if (cpw <= 0) cpw = 1;
+    int32_t cpw = n00b_widget_cell_px_width(plane);
 
-    int32_t lh = n00b_plane_line_height(plane, nullptr);
-    if (lh <= 0) lh = 1;
+    int32_t lh = n00b_widget_line_px_height(plane);
 
-    bool focused = (n00b_plane_get_state(plane) == N00B_WSTATE_FOCUSED
-                    || n00b_plane_get_state(plane) == N00B_WSTATE_ACTIVE);
+    bool focused = n00b_widget_state_is_focused_or_active(plane);
 
     // Visible row count derived from pixel height and line height.
     n00b_isize_t visible = content_h / lh;
@@ -209,10 +207,8 @@ sellist_handle_event(n00b_plane_t *plane, void *data, const n00b_event_t *event)
 
     // Mouse left-click toggles.
     if (event->type == N00B_EVENT_MOUSE) {
-        if (event->mouse.button == N00B_MOUSE_LEFT
-            && event->mouse.action == N00B_MOUSE_PRESS) {
-            int line_h = n00b_plane_line_height(plane, nullptr);
-            if (line_h < 1) line_h = 1;
+        if (n00b_widget_event_is_left_press(event)) {
+            int line_h = n00b_widget_line_px_height(plane);
             int row = event->mouse.y / line_h;
             int item_idx = sl->scroll_offset + row;
             if (item_idx >= 0 && item_idx < (int)sl->count) {
@@ -252,7 +248,7 @@ sellist_handle_event(n00b_plane_t *plane, void *data, const n00b_event_t *event)
     }
 
     // Space or Enter toggles current item.
-    if (key == ' ' || key == N00B_KEY_ENTER) {
+    if (n00b_widget_event_is_keyboard_activate(event)) {
         if (sl->cursor >= 0 && sl->cursor < count) {
             sl->items[sl->cursor].selected = !sl->items[sl->cursor].selected;
             n00b_plane_mark_dirty(plane);
@@ -305,11 +301,9 @@ sellist_measure(n00b_plane_t *plane, void *data,
 {
     n00b_selectionlist_t *sl = (n00b_selectionlist_t *)data;
 
-    int32_t lh = n00b_plane_line_height(plane, nullptr);
-    if (lh <= 0) lh = 1;
+    int32_t lh = n00b_widget_line_px_height(plane);
 
-    int32_t cpw = n00b_plane_text_width(plane, n00b_string_from_cstr("M"), nullptr);
-    if (cpw <= 0) cpw = 1;
+    int32_t cpw = n00b_widget_cell_px_width(plane);
 
     int32_t max_w = 0;
     uint8_t ind_w = 1;
@@ -426,11 +420,12 @@ n00b_selectionlist_new(n00b_string_t **labels,
 void
 n00b_selectionlist_toggle(n00b_plane_t *plane, int index)
 {
-    if (!plane || plane->widget_vtable != &n00b_widget_selectionlist) {
+    n00b_selectionlist_t *sl =
+        n00b_widget_data_if_kind(plane, &n00b_widget_selectionlist);
+    if (!sl) {
         return;
     }
 
-    n00b_selectionlist_t *sl = (n00b_selectionlist_t *)plane->widget_data;
     if (index < 0 || index >= (int)sl->count) {
         return;
     }
@@ -442,11 +437,12 @@ n00b_selectionlist_toggle(n00b_plane_t *plane, int index)
 void
 n00b_selectionlist_select_all(n00b_plane_t *plane)
 {
-    if (!plane || plane->widget_vtable != &n00b_widget_selectionlist) {
+    n00b_selectionlist_t *sl =
+        n00b_widget_data_if_kind(plane, &n00b_widget_selectionlist);
+    if (!sl) {
         return;
     }
 
-    n00b_selectionlist_t *sl = (n00b_selectionlist_t *)plane->widget_data;
     for (n00b_isize_t i = 0; i < sl->count; i++) {
         sl->items[i].selected = true;
     }
@@ -456,11 +452,12 @@ n00b_selectionlist_select_all(n00b_plane_t *plane)
 void
 n00b_selectionlist_select_none(n00b_plane_t *plane)
 {
-    if (!plane || plane->widget_vtable != &n00b_widget_selectionlist) {
+    n00b_selectionlist_t *sl =
+        n00b_widget_data_if_kind(plane, &n00b_widget_selectionlist);
+    if (!sl) {
         return;
     }
 
-    n00b_selectionlist_t *sl = (n00b_selectionlist_t *)plane->widget_data;
     for (n00b_isize_t i = 0; i < sl->count; i++) {
         sl->items[i].selected = false;
     }
@@ -470,11 +467,12 @@ n00b_selectionlist_select_none(n00b_plane_t *plane)
 bool
 n00b_selectionlist_is_selected(n00b_plane_t *plane, int index)
 {
-    if (!plane || plane->widget_vtable != &n00b_widget_selectionlist) {
+    n00b_selectionlist_t *sl =
+        n00b_widget_data_if_kind(plane, &n00b_widget_selectionlist);
+    if (!sl) {
         return false;
     }
 
-    n00b_selectionlist_t *sl = (n00b_selectionlist_t *)plane->widget_data;
     if (index < 0 || index >= (int)sl->count) {
         return false;
     }
@@ -485,11 +483,12 @@ n00b_selectionlist_is_selected(n00b_plane_t *plane, int index)
 int
 n00b_selectionlist_selected_count(n00b_plane_t *plane)
 {
-    if (!plane || plane->widget_vtable != &n00b_widget_selectionlist) {
+    n00b_selectionlist_t *sl =
+        n00b_widget_data_if_kind(plane, &n00b_widget_selectionlist);
+    if (!sl) {
         return 0;
     }
 
-    n00b_selectionlist_t *sl = (n00b_selectionlist_t *)plane->widget_data;
     int count = 0;
     for (n00b_isize_t i = 0; i < sl->count; i++) {
         if (sl->items[i].selected) {
@@ -504,11 +503,11 @@ n00b_selectionlist_add_item(n00b_plane_t  *plane,
                              n00b_string_t *label,
                              void          *user_data)
 {
-    if (!plane || plane->widget_vtable != &n00b_widget_selectionlist) {
+    n00b_selectionlist_t *sl =
+        n00b_widget_data_if_kind(plane, &n00b_widget_selectionlist);
+    if (!sl) {
         return;
     }
-
-    n00b_selectionlist_t *sl = (n00b_selectionlist_t *)plane->widget_data;
 
     if (sl->count >= sl->capacity) {
         n00b_isize_t new_cap = sl->capacity * 2;
@@ -531,11 +530,12 @@ n00b_selectionlist_add_item(n00b_plane_t  *plane,
 void
 n00b_selectionlist_clear(n00b_plane_t *plane)
 {
-    if (!plane || plane->widget_vtable != &n00b_widget_selectionlist) {
+    n00b_selectionlist_t *sl =
+        n00b_widget_data_if_kind(plane, &n00b_widget_selectionlist);
+    if (!sl) {
         return;
     }
 
-    n00b_selectionlist_t *sl = (n00b_selectionlist_t *)plane->widget_data;
     sl->count         = 0;
     sl->cursor        = 0;
     sl->scroll_offset = 0;

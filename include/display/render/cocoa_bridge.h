@@ -28,6 +28,7 @@
 typedef uint32_t n00b_isize_t;
 typedef int32_t  n00b_color_t;
 typedef uint32_t n00b_codepoint_t;
+typedef struct n00b_string_t n00b_string_t;
 
 // ====================================================================
 // Color macros (from text/strings/text_style.h)
@@ -86,6 +87,18 @@ typedef struct n00b_text_style_t {
 } n00b_text_style_t;
 
 // ====================================================================
+// Font metrics provider (from display/render/font_metrics.h)
+// ====================================================================
+
+typedef struct n00b_font_metrics_provider_t {
+    int32_t (*text_width)(void *ctx, n00b_string_t *text,
+                          n00b_text_style_t *style);
+    int32_t (*line_height)(void *ctx, n00b_text_style_t *style);
+    int32_t (*ascent)(void *ctx, n00b_text_style_t *style);
+    void    *ctx;
+} n00b_font_metrics_provider_t;
+
+// ====================================================================
 // Palette (from text/strings/theme.h)
 // ====================================================================
 
@@ -121,7 +134,27 @@ n00b_rcell_equal(const n00b_rcell_t *a, const n00b_rcell_t *b)
 {
     if (a->grapheme_len != b->grapheme_len) return false;
     if (a->display_width != b->display_width) return false;
-    if (a->style != b->style) return false;
+    if (a->style != b->style) {
+        if (!a->style || !b->style) return false;
+        if (a->style->bold != b->style->bold
+            || a->style->italic != b->style->italic
+            || a->style->underline != b->style->underline
+            || a->style->double_underline != b->style->double_underline
+            || a->style->strikethrough != b->style->strikethrough
+            || a->style->reverse != b->style->reverse
+            || a->style->dim != b->style->dim
+            || a->style->blink != b->style->blink
+            || a->style->text_case != b->style->text_case
+            || a->style->font_hint != b->style->font_hint
+            || a->style->font_index != b->style->font_index
+            || a->style->fg_palette_ix != b->style->fg_palette_ix
+            || a->style->bg_palette_ix != b->style->bg_palette_ix
+            || a->style->fg_rgb != b->style->fg_rgb
+            || a->style->bg_rgb != b->style->bg_rgb
+            || a->style->font_size != b->style->font_size) {
+            return false;
+        }
+    }
     if (a->grapheme_len > 0
         && memcmp(a->grapheme, b->grapheme, a->grapheme_len) != 0) {
         return false;
@@ -180,7 +213,7 @@ typedef struct n00b_render_size_t {
     n00b_isize_t cell_pixel_h;
 } n00b_render_size_t;
 
-#define N00B_RENDERER_ABI_VERSION 3
+#define N00B_RENDERER_ABI_VERSION 4
 
 // ====================================================================
 // Event types (from display/event.h)
@@ -283,6 +316,12 @@ typedef struct n00b_composite_entry_t {
     int32_t       clip_h;
 } n00b_composite_entry_t;
 
+typedef struct n00b_composite_style_pool_t {
+    n00b_text_style_t **items;
+    n00b_isize_t        count;
+    n00b_isize_t        capacity;
+} n00b_composite_style_pool_t;
+
 // ====================================================================
 // Compositing helpers (from display/render/composite.h)
 // ====================================================================
@@ -296,7 +335,26 @@ n00b_composite_commands_to_grid(const n00b_composite_entry_t *entries,
                                  int32_t                       cell_px_w,
                                  int32_t                       cell_px_h,
                                  n00b_text_style_t            *default_style,
-                                 n00b_render_cap_t             caps);
+                                 n00b_render_cap_t             caps,
+                                 n00b_composite_style_pool_t  *style_pool);
+
+extern void
+n00b_composite_style_pool_clear(n00b_composite_style_pool_t *pool);
+
+extern void
+n00b_composite_style_pool_destroy(n00b_composite_style_pool_t *pool);
+
+// ====================================================================
+// Memory (from core/alloc.h)
+//
+// `n00b_free` is a plain C function and is declared directly.  The
+// GC-typed array allocator `n00b_alloc_array` is an ncc macro that
+// Apple clang cannot expand, so the ObjC backend allocates rcell
+// arrays through the ncc-compiled bridge in cocoa_init_bridge.c.
+// ====================================================================
+
+extern void          n00b_free(void *ptr);
+extern n00b_rcell_t *n00b_cocoa_bridge_alloc_rcells(n00b_isize_t count);
 
 // ====================================================================
 // Renderer vtable (from display/render/backend.h)
@@ -328,6 +386,7 @@ typedef struct n00b_renderer_vtable_t {
                                        n00b_text_style_t            *default_style,
                                        n00b_render_cap_t             caps);
 
+    bool (*clipboard_copy)(void *ctx, const char *utf8, size_t len);
     void (*cursor_set_visible)(void *ctx, bool visible);
     void (*cursor_move)(void *ctx, n00b_isize_t row, n00b_isize_t col);
     void (*alt_screen_enter)(void *ctx);
@@ -336,6 +395,9 @@ typedef struct n00b_renderer_vtable_t {
                       void (*cb)(n00b_isize_t, n00b_isize_t, void *),
                       void *user_ctx);
     void (*prepare_gui)(void *ctx, n00b_plane_t **planes, n00b_isize_t n);
+
+    n00b_font_metrics_provider_t (*get_font_metrics)(void *ctx);
+
     bool (*poll_event)(void *ctx, int32_t timeout_ms, n00b_event_t *out);
 } n00b_renderer_vtable_t;
 

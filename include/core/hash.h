@@ -32,6 +32,22 @@ extern n00b_uint128_t n00b_hash_cstring(void *value);
 extern n00b_uint128_t n00b_hash(void *obj, n00b_hash_fn fn);
 
 /**
+ * @brief Low-level XXH3 64-bit helper used by parser/string caches.
+ * @param data Pointer to input bytes.
+ * @param len  Number of input bytes.
+ * @return     64-bit XXH3 hash.
+ */
+extern uint64_t n00b_xxh3_64bits_raw(const void *data, size_t len);
+
+/**
+ * @brief Low-level XXH3 128-bit helper used by runtime hash functions.
+ * @param data Pointer to input bytes.
+ * @param len  Number of input bytes.
+ * @return     128-bit XXH3 hash.
+ */
+extern n00b_uint128_t n00b_xxh3_128bits_raw(const void *data, size_t len);
+
+/**
  * @brief Hash a raw byte buffer of known length.
  * @param data Pointer to the bytes.
  * @param len  Number of bytes to hash.

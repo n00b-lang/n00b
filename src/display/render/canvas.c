@@ -2,13 +2,19 @@
  * Canvas: compositing surface with pluggable renderer backend.
  */
 
+#include <errno.h>
+
 #include "n00b.h"
 #include "core/alloc.h"
 #include "core/data_lock.h"
 #include "core/arena.h"
+#include "display/mouse.h"
 #include "display/render/canvas.h"
-#include "display/render/composite.h"
-#include "display/widget.h"
+#include "display/render/backend_registry.h"
+#include "internal/display/backend_services.h"
+#include "internal/display/diagnostics.h"
+#include "internal/display/plane_tree.h"
+#include "internal/display/scene_contracts.h"
 
 // -------------------------------------------------------------------
 // Internal helpers
@@ -26,6 +32,113 @@ canvas_unlock(n00b_canvas_t *c)
     n00b_data_unlock(c->lock);
 }
 
+static inline n00b_isize_t
+canvas_size_in_pixels(n00b_isize_t pixels,
+                      n00b_isize_t cells,
+                      n00b_isize_t cell_px)
+{
+    if (pixels > 0) {
+        return pixels;
+    }
+
+    if (cells > 0 && cell_px > 0) {
+        return cells * cell_px;
+    }
+
+    return 0;
+}
+
+static const char *
+safe_name(n00b_string_t *name)
+{
+    if (!name || !name->data || !name->data[0]) {
+        return "<null>";
+    }
+    return name->data;
+}
+
+static const char *
+safe_vtable_name(const n00b_renderer_vtable_t *vtable)
+{
+    if (!vtable || !vtable->name || !vtable->name[0]) {
+        return "<unknown>";
+    }
+    return vtable->name;
+}
+
+static bool
+canvas_bind_backend(n00b_canvas_t                *c,
+                    const n00b_renderer_vtable_t *vtable,
+                    void                         *backend_ctx)
+{
+    if (!c || !vtable || !backend_ctx) {
+        return false;
+    }
+
+    c->vtable     = vtable;
+    c->backend_ctx = backend_ctx;
+    c->backend_error = 0;
+    c->caps       = n00b_display_backend_caps(c);
+
+    // Get initial size from backend (cells) and convert to pixels.
+    n00b_render_size_t sz = n00b_display_backend_get_size(c);
+    c->cell_px_w          = sz.cell_pixel_w > 0 ? sz.cell_pixel_w : 1;
+    c->cell_px_h          = sz.cell_pixel_h > 0 ? sz.cell_pixel_h : 1;
+    c->frame_rows         = canvas_size_in_pixels(sz.pixel_h, sz.rows, c->cell_px_h);
+    c->frame_cols         = canvas_size_in_pixels(sz.pixel_w, sz.cols, c->cell_px_w);
+
+    // Initialize font metrics: use backend metrics only when explicitly
+    // advertised; otherwise use deterministic cell fallback metrics.
+    if (vtable->get_font_metrics && (c->caps & N00B_RCAP_FONT_METRICS)) {
+        c->metrics = vtable->get_font_metrics(c->backend_ctx);
+    }
+    else {
+        c->metrics = n00b_font_metrics_fallback((int32_t)c->cell_px_w,
+                                                (int32_t)c->cell_px_h);
+    }
+
+    c->needs_full_redraw = true;
+    return true;
+}
+
+static bool
+canvas_try_vtable(n00b_canvas_t                       *c,
+                  const n00b_renderer_vtable_t        *vtable,
+                  n00b_conduit_topic_t(n00b_buffer_t *) *output,
+                  int                                 *out_err)
+{
+    if (!vtable || !vtable->init) {
+        if (out_err) {
+            *out_err = EINVAL;
+        }
+        return false;
+    }
+
+    errno = 0;
+    void *backend_ctx = vtable->init(output);
+    if (!backend_ctx) {
+        if (out_err) {
+            *out_err = errno ? errno : ENODEV;
+        }
+        return false;
+    }
+
+    if (canvas_bind_backend(c, vtable, backend_ctx)) {
+        if (out_err) {
+            *out_err = 0;
+        }
+        return true;
+    }
+
+    if (vtable->destroy) {
+        vtable->destroy(backend_ctx);
+    }
+    if (out_err) {
+        *out_err = EINVAL;
+    }
+    return false;
+}
+
 // -------------------------------------------------------------------
 // Lifecycle
 // -------------------------------------------------------------------
@@ -34,37 +147,183 @@ void
 n00b_canvas_init(n00b_canvas_t *c) _kargs
 {
     const n00b_renderer_vtable_t           *vtable    = nullptr;
+    n00b_string_t                          *backend_name = nullptr;
+    bool                                    backend_allow_fallback = true;
+    bool                                    backend_allow_dynamic_load = false;
+    bool                                    backend_allow_env_override = false;
     n00b_allocator_t                       *allocator = nullptr;
     n00b_conduit_topic_t(n00b_buffer_t *)  *output    = nullptr;
 }
 {
-    assert(vtable);
-
-    c->lock      = n00b_data_lock_new();
-    c->vtable    = vtable;
-    c->allocator = allocator;
-
-    // Initialize backend, passing the output topic.
-    c->backend_ctx = vtable->init(output);
-    c->caps        = vtable->capabilities(c->backend_ctx);
-
-    // Get initial size from backend (cells) and convert to pixels.
-    n00b_render_size_t sz = vtable->get_size(c->backend_ctx);
-    c->cell_px_w          = sz.cell_pixel_w > 0 ? sz.cell_pixel_w : 1;
-    c->cell_px_h          = sz.cell_pixel_h > 0 ? sz.cell_pixel_h : 1;
-    c->frame_rows         = sz.rows * c->cell_px_h;
-    c->frame_cols         = sz.cols * c->cell_px_w;
-
-    // Initialize font metrics: ask backend first, fall back to cell metrics.
-    if (vtable->get_font_metrics) {
-        c->metrics = vtable->get_font_metrics(c->backend_ctx);
-    }
-    else {
-        c->metrics = n00b_font_metrics_fallback((int32_t)c->cell_px_w,
-                                                  (int32_t)c->cell_px_h);
+    if (!c) {
+        return;
     }
 
+    *c = (n00b_canvas_t){
+        .allocator = allocator,
+        .backend_error = 0,
+    };
+
+    c->lock              = n00b_data_lock_new();
+    c->caps              = N00B_RCAP_NONE;
+    c->cell_px_w         = 1;
+    c->cell_px_h         = 1;
+    c->metrics           = n00b_font_metrics_fallback(1, 1);
     c->needs_full_redraw = true;
+
+    if (vtable) {
+        int init_err = 0;
+        if (!canvas_try_vtable(c, vtable, output, &init_err)) {
+            c->backend_error = init_err ? init_err : ENODEV;
+            n00b_display_diag_log(N00B_DISPLAY_DIAG_ERROR,
+                                  "canvas",
+                                  "backend init failed for direct vtable '%s' err=%d",
+                                  safe_vtable_name(vtable),
+                                  c->backend_error);
+        }
+        return;
+    }
+
+    n00b_string_t *requested = backend_name ? backend_name : r"auto";
+    n00b_list_t(n00b_string_t *) candidates =
+        n00b_renderer_candidate_names(requested,
+                                       .allow_fallback     = backend_allow_fallback,
+                                       .allow_env_override = backend_allow_env_override);
+    int last_err = ENOENT;
+    n00b_string_t *first_failed_candidate = nullptr;
+    int first_failed_err = 0;
+
+    for (size_t i = 0; i < candidates.len; i++) {
+        n00b_string_t *candidate_name = n00b_list_get(candidates, i);
+        n00b_result_t(n00b_renderer_vtable_ptr_t) resolved =
+            n00b_renderer_resolve_exact(candidate_name,
+                                        .allow_dynamic_load = backend_allow_dynamic_load);
+        if (!n00b_result_is_ok(resolved)) {
+            last_err = n00b_result_get_err(resolved);
+            if (!first_failed_candidate) {
+                first_failed_candidate = candidate_name;
+                first_failed_err       = last_err ? last_err : ENOENT;
+            }
+            n00b_display_diag_log(N00B_DISPLAY_DIAG_TRACE,
+                                  "canvas",
+                                  "backend candidate unresolved: requested=%s candidate=%s err=%d",
+                                  safe_name(requested),
+                                  safe_name(candidate_name),
+                                  last_err);
+            continue;
+        }
+
+        const n00b_renderer_vtable_t *candidate_vtable = n00b_result_get(resolved);
+        if (!candidate_vtable) {
+            last_err = ENODEV;
+            if (!first_failed_candidate) {
+                first_failed_candidate = candidate_name;
+                first_failed_err       = last_err;
+            }
+            continue;
+        }
+
+        int init_err = 0;
+        if (canvas_try_vtable(c, candidate_vtable, output, &init_err)) {
+            bool used_fallback = i != 0;
+            if (used_fallback && first_failed_candidate && first_failed_err) {
+                n00b_display_diag_log(N00B_DISPLAY_DIAG_INFO,
+                                      "canvas",
+                                      "backend selected: requested=%s selected=%s fallback=true failed_candidate=%s failed_err=%d",
+                                      safe_name(requested),
+                                      safe_vtable_name(candidate_vtable),
+                                      safe_name(first_failed_candidate),
+                                      first_failed_err);
+            }
+            else {
+                n00b_display_diag_log(N00B_DISPLAY_DIAG_INFO,
+                                      "canvas",
+                                      "backend selected: requested=%s selected=%s fallback=%s",
+                                      safe_name(requested),
+                                      safe_vtable_name(candidate_vtable),
+                                      used_fallback ? "true" : "false");
+            }
+            return;
+        }
+
+        last_err = init_err ? init_err : ENODEV;
+        if (!first_failed_candidate) {
+            first_failed_candidate = candidate_name;
+            first_failed_err       = last_err;
+        }
+        n00b_display_diag_log(N00B_DISPLAY_DIAG_TRACE,
+                              "canvas",
+                              "backend candidate init failed: requested=%s candidate=%s err=%d",
+                              safe_name(requested),
+                              safe_vtable_name(candidate_vtable),
+                              last_err);
+    }
+
+    c->backend_error = last_err ? last_err : ENODEV;
+    n00b_display_diag_log(N00B_DISPLAY_DIAG_ERROR,
+                          "canvas",
+                          "backend selection failed: requested=%s candidates=%zu err=%d",
+                          safe_name(requested),
+                          candidates.len,
+                          c->backend_error);
+}
+
+bool
+n00b_canvas_backend_ready(const n00b_canvas_t *c)
+{
+    return c
+        && c->backend_error == 0
+        && c->vtable
+        && c->backend_ctx;
+}
+
+int
+n00b_canvas_backend_error(const n00b_canvas_t *c)
+{
+    if (n00b_canvas_backend_ready(c)) {
+        return 0;
+    }
+
+    if (!c) {
+        return EINVAL;
+    }
+
+    return c->backend_error ? c->backend_error : ENODEV;
+}
+
+void
+n00b_canvas_deinit(n00b_canvas_t *c)
+{
+    if (!c) {
+        return;
+    }
+
+    if (c->vtable && c->vtable->destroy && c->backend_ctx) {
+        c->vtable->destroy(c->backend_ctx);
+    }
+
+    if (c->planes.data) {
+        n00b_list_free(c->planes);
+    }
+    if (c->lock) {
+        n00b_finalize_data_lock(c->lock);
+    }
+
+    c->vtable            = nullptr;
+    c->backend_ctx       = nullptr;
+    c->caps              = N00B_RCAP_NONE;
+    c->frame_rows        = 0;
+    c->frame_cols        = 0;
+    c->default_style     = nullptr;
+    c->cell_px_w         = 1;
+    c->cell_px_h         = 1;
+    c->metrics           = n00b_font_metrics_fallback(1, 1);
+    c->needs_full_redraw = true;
+    c->size_set          = false;
+    c->lock              = nullptr;
+    c->allocator         = nullptr;
+    c->focus             = nullptr;
+    c->mouse_capture     = nullptr;
 }
 
 void
@@ -74,14 +333,7 @@ n00b_canvas_destroy(n00b_canvas_t *c)
         return;
     }
 
-    if (c->vtable && c->vtable->destroy) {
-        c->vtable->destroy(c->backend_ctx);
-    }
-
-    if (c->planes.data) {
-        n00b_list_free(c->planes);
-    }
-
+    n00b_canvas_deinit(c);
     n00b_free(c);
 }
 
@@ -132,8 +384,11 @@ n00b_canvas_remove_plane(n00b_canvas_t *c, n00b_plane_t *p)
     size_t n = c->planes.len;
     for (size_t i = 0; i < n; i++) {
         if (n00b_list_get(c->planes, i) == p) {
+            if (n00b_plane_tree_contains(p, c->mouse_capture)) {
+                n00b_canvas_cancel_mouse_capture(c);
+            }
             (void)n00b_list_delete(c->planes, i);
-            p->canvas = nullptr;
+            propagate_canvas(p, nullptr);
             canvas_unlock(c);
             return true;
         }
@@ -144,72 +399,63 @@ n00b_canvas_remove_plane(n00b_canvas_t *c, n00b_plane_t *p)
 }
 
 // -------------------------------------------------------------------
-// Re-render dirty widgets (so draw commands reflect current metrics)
-// -------------------------------------------------------------------
-
-static void
-rerender_plane_tree(n00b_plane_t *plane)
-{
-    if (!plane) {
-        return;
-    }
-
-    if ((plane->flags & N00B_PLANE_DIRTY) && plane->widget_vtable) {
-        n00b_widget_render(plane);
-        plane->flags &= ~N00B_PLANE_DIRTY;
-    }
-
-    if (plane->children.data) {
-        for (size_t i = 0; i < plane->children.len; i++) {
-            n00b_plane_t *child = plane->children.data[i];
-            if (child) {
-                rerender_plane_tree(child);
-            }
-        }
-    }
-}
-
-static void
-canvas_rerender_dirty(n00b_canvas_t *c)
-{
-    if (!c->planes.data) {
-        return;
-    }
-    for (size_t i = 0; i < c->planes.len; i++) {
-        n00b_plane_t *p = c->planes.data[i];
-        if (p) {
-            rerender_plane_tree(p);
-        }
-    }
-}
-
-// -------------------------------------------------------------------
 // Rendering
 // -------------------------------------------------------------------
 
 void
 n00b_canvas_render(n00b_canvas_t *c)
 {
+    if (!c || !c->lock) {
+        return;
+    }
+
     canvas_lock(c);
+
+    if (!n00b_canvas_backend_ready(c)) {
+        n00b_display_diag_log(N00B_DISPLAY_DIAG_ERROR,
+                              "canvas",
+                              "render skipped: backend not ready err=%d",
+                              n00b_canvas_backend_error(c));
+        canvas_unlock(c);
+        return;
+    }
 
     // Refresh size from backend (cells → pixels), unless the caller
     // has set an explicit size via canvas_resize() (size_set == true).
     if (!c->size_set) {
-        n00b_render_size_t sz = c->vtable->get_size(c->backend_ctx);
+        n00b_isize_t prev_cell_w = c->cell_px_w;
+        n00b_isize_t prev_cell_h = c->cell_px_h;
+        n00b_isize_t prev_rows   = c->frame_rows;
+        n00b_isize_t prev_cols   = c->frame_cols;
+
+        n00b_render_size_t sz = n00b_display_backend_get_size(c);
         c->cell_px_w = sz.cell_pixel_w > 0 ? sz.cell_pixel_w : 1;
         c->cell_px_h = sz.cell_pixel_h > 0 ? sz.cell_pixel_h : 1;
-        n00b_isize_t px_rows = sz.rows * c->cell_px_h;
-        n00b_isize_t px_cols = sz.cols * c->cell_px_w;
-        if (px_rows != c->frame_rows || px_cols != c->frame_cols) {
+        n00b_isize_t px_rows = canvas_size_in_pixels(sz.pixel_h, sz.rows, c->cell_px_h);
+        n00b_isize_t px_cols = canvas_size_in_pixels(sz.pixel_w, sz.cols, c->cell_px_w);
+        bool size_changed = (px_rows != prev_rows || px_cols != prev_cols);
+        bool cell_changed = (c->cell_px_w != prev_cell_w
+                             || c->cell_px_h != prev_cell_h);
+        if (size_changed) {
             c->frame_rows = px_rows;
             c->frame_cols = px_cols;
             c->needs_full_redraw = true;
         }
 
-        // Refresh fallback metrics if backend doesn't provide its own.
-        if (!c->vtable->get_font_metrics) {
+        if (c->vtable->get_font_metrics && (c->caps & N00B_RCAP_FONT_METRICS)) {
+            c->metrics = c->vtable->get_font_metrics(c->backend_ctx);
+        }
+        else {
             c->metrics = n00b_font_metrics_fallback((int32_t)c->cell_px_w,
-                                                      (int32_t)c->cell_px_h);
+                                                    (int32_t)c->cell_px_h);
+        }
+
+        // If backend cell metrics changed (even without a resize event),
+        // existing pixel-layout assignments are stale. Re-run layout now.
+        if (cell_changed) {
+            n00b_display_scene_run_layout(c);
+            n00b_display_scene_mark_all_dirty(c);
+            c->needs_full_redraw = true;
         }
     }
 
@@ -220,7 +466,7 @@ n00b_canvas_render(n00b_canvas_t *c)
 
     // Re-render any dirty widget planes so draw commands reflect
     // current viewport sizes and font metrics.
-    canvas_rerender_dirty(c);
+    n00b_display_scene_rerender_dirty(c);
 
     // GUI prepare hook.
     n00b_isize_t n_planes = (n00b_isize_t)c->planes.len;
@@ -230,9 +476,7 @@ n00b_canvas_render(n00b_canvas_t *c)
     }
 
     // Flatten plane hierarchy (pixel coordinates).
-    n00b_array_t(n00b_composite_entry_t) flat
-        = n00b_composite_flatten(c->planes.data, n_planes,
-                                  c->cell_px_w, c->cell_px_h);
+    n00b_array_t(n00b_composite_entry_t) flat = n00b_display_scene_build(c);
 
     // Dispatch to backend's plane-based renderer.
     c->vtable->render_planes(c->backend_ctx,
@@ -244,7 +488,7 @@ n00b_canvas_render(n00b_canvas_t *c)
     c->needs_full_redraw = false;
 
     if (flat.data) {
-        n00b_array_free(flat);
+        n00b_display_scene_free(flat);
     }
 
     canvas_unlock(c);
@@ -253,7 +497,9 @@ n00b_canvas_render(n00b_canvas_t *c)
 void
 n00b_canvas_invalidate(n00b_canvas_t *c)
 {
-    c->needs_full_redraw = true;
+    if (c) {
+        c->needs_full_redraw = true;
+    }
 }
 
 void
@@ -273,15 +519,32 @@ n00b_canvas_resize(n00b_canvas_t *c, n00b_isize_t rows, n00b_isize_t cols)
 void
 n00b_canvas_flush(n00b_canvas_t *c)
 {
-    if (c->vtable && c->vtable->flush) {
+    if (n00b_canvas_backend_ready(c) && c->vtable->flush) {
         c->vtable->flush(c->backend_ctx);
     }
+}
+
+bool
+n00b_canvas_clipboard_copy(n00b_canvas_t *c, n00b_string_t *text)
+{
+    if (!c || !text) {
+        return false;
+    }
+
+    if (!n00b_display_backend_copy_text(c,
+                                        text->data ? text->data : "",
+                                        (size_t)text->u8_bytes)) {
+        return false;
+    }
+
+    n00b_canvas_flush(c);
+    return true;
 }
 
 void
 n00b_canvas_alt_screen_enter(n00b_canvas_t *c)
 {
-    if (c->vtable && c->vtable->alt_screen_enter) {
+    if (n00b_canvas_backend_ready(c) && c->vtable->alt_screen_enter) {
         c->vtable->alt_screen_enter(c->backend_ctx);
     }
 }
@@ -289,7 +552,7 @@ n00b_canvas_alt_screen_enter(n00b_canvas_t *c)
 void
 n00b_canvas_alt_screen_leave(n00b_canvas_t *c)
 {
-    if (c->vtable && c->vtable->alt_screen_leave) {
+    if (n00b_canvas_backend_ready(c) && c->vtable->alt_screen_leave) {
         c->vtable->alt_screen_leave(c->backend_ctx);
     }
 }

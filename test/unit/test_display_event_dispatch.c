@@ -1,0 +1,432 @@
+#include <assert.h>
+#include <stdio.h>
+
+#include "n00b.h"
+#include "core/runtime.h"
+#include "display/focus.h"
+#include "display/backend_stream_internal.h"
+#include "display/render/backend.h"
+#include "display/render/box.h"
+#include "display/render/canvas.h"
+#include "display/render/plane.h"
+#include "display/widget.h"
+#include "display/widgets/box.h"
+#include "display/widgets/button.h"
+#include "display/widgets/text.h"
+#include "internal/display/event_dispatch.h"
+#include "internal/display/scene_contracts.h"
+#include "text/strings/string_ops.h"
+
+typedef struct {
+    int  key_events;
+    bool consume;
+} widget_state_t;
+
+static void
+dispatch_render(n00b_plane_t *plane, void *data)
+{
+    (void)plane;
+    (void)data;
+}
+
+static bool
+dispatch_handle_event(n00b_plane_t *plane, void *data, const n00b_event_t *event)
+{
+    (void)plane;
+    widget_state_t *state = data;
+    if (event->type == N00B_EVENT_KEY) {
+        state->key_events++;
+    }
+    return state->consume;
+}
+
+static bool
+dispatch_can_focus(n00b_plane_t *plane, void *data)
+{
+    (void)plane;
+    (void)data;
+    return true;
+}
+
+static const n00b_widget_vtable_t dispatch_widget = {
+    .kind         = "dispatch_dummy",
+    .render       = dispatch_render,
+    .handle_event = dispatch_handle_event,
+    .can_focus    = dispatch_can_focus,
+};
+
+static void
+test_event_dispatch_contracts(void)
+{
+    n00b_canvas_t *canvas = n00b_new_kargs(n00b_canvas_t, canvas,
+                                            .vtable = &n00b_renderer_stream);
+    n00b_stream_backend_set_size(canvas->backend_ctx, 6, 40);
+    n00b_canvas_resize(canvas, 6, 40);
+
+    n00b_plane_t *root = n00b_new_kargs(n00b_plane_t, plane);
+    root->width  = 40;
+    root->height = 6;
+
+    widget_state_t s1 = {.consume = true};
+    widget_state_t s2 = {.consume = false};
+
+    n00b_plane_t *p1 = n00b_new_kargs(n00b_plane_t, plane);
+    p1->width        = 8;
+    p1->height       = 1;
+    n00b_widget_attach(p1, &dispatch_widget, &s1);
+
+    n00b_plane_t *p2 = n00b_new_kargs(n00b_plane_t, plane);
+    p2->width        = 8;
+    p2->height       = 1;
+    n00b_widget_attach(p2, &dispatch_widget, &s2);
+
+    n00b_plane_add_child(root, p1, 1, 1);
+    n00b_plane_add_child(root, p2, 12, 1);
+    n00b_canvas_add_plane(canvas, root);
+
+    n00b_focus_mgr_t *fm = n00b_focus_mgr_new(canvas);
+    assert(n00b_focus_mgr_current_plane(fm) == p1);
+
+    n00b_event_t tab = {
+        .type = N00B_EVENT_KEY,
+        .key = {.key = N00B_KEY_TAB, .mods = N00B_MOD_NONE},
+    };
+    n00b_display_dispatch_result_t r = n00b_display_dispatch_event(canvas, fm, &tab);
+    assert(r.handled);
+    assert(r.focus_changed);
+    assert(!r.should_stop);
+    assert(n00b_focus_mgr_current_plane(fm) == p2);
+
+    n00b_event_t shift_tab = {
+        .type = N00B_EVENT_KEY,
+        .key = {.key = N00B_KEY_TAB, .mods = N00B_MOD_SHIFT},
+    };
+    r = n00b_display_dispatch_event(canvas, fm, &shift_tab);
+    assert(r.handled);
+    assert(r.focus_changed);
+    assert(n00b_focus_mgr_current_plane(fm) == p1);
+
+    n00b_event_t key_x = {
+        .type = N00B_EVENT_KEY,
+        .key = {.key = 'x', .mods = N00B_MOD_NONE},
+    };
+    r = n00b_display_dispatch_event(canvas, fm, &key_x);
+    assert(r.handled);
+    assert(s1.key_events == 1);
+
+    n00b_event_t ctrl_c = {
+        .type = N00B_EVENT_KEY,
+        .key = {.key = 'c', .mods = N00B_MOD_CTRL},
+    };
+    r = n00b_display_dispatch_event(canvas, fm, &ctrl_c);
+    assert(r.handled);
+    assert(!r.should_stop);
+    assert(s1.key_events == 2);
+
+    assert(n00b_focus_mgr_set(fm, p1));
+    n00b_event_t click = {
+        .type = N00B_EVENT_MOUSE,
+        .mouse = {
+            .x = 12,
+            .y = 1,
+            .button = N00B_MOUSE_LEFT,
+            .action = N00B_MOUSE_PRESS,
+            .mods = N00B_MOD_NONE,
+        },
+    };
+    r = n00b_display_dispatch_event(canvas, fm, &click);
+    assert(r.handled);
+    assert(r.focus_changed);
+    assert(n00b_focus_mgr_current_plane(fm) == p2);
+
+    r = n00b_display_dispatch_event(canvas, fm, &ctrl_c);
+    assert(r.handled);
+    assert(r.should_stop);
+    assert(s2.key_events == 1);
+
+    n00b_focus_mgr_destroy(fm);
+    n00b_canvas_remove_plane(canvas, root);
+    n00b_plane_remove_child(root, p1);
+    n00b_plane_remove_child(root, p2);
+    n00b_widget_detach(p1);
+    n00b_widget_detach(p2);
+    n00b_plane_destroy(p1);
+    n00b_plane_destroy(p2);
+    n00b_plane_destroy(root);
+    n00b_canvas_destroy(canvas);
+
+    printf("  [PASS] event dispatch key/mouse/stop\n");
+}
+
+static void
+test_button_border_click_focuses(void)
+{
+    n00b_canvas_t *canvas = n00b_new_kargs(n00b_canvas_t, canvas,
+                                            .vtable = &n00b_renderer_stream);
+    n00b_stream_backend_set_size(canvas->backend_ctx, 20, 80);
+    n00b_canvas_resize(canvas, 20, 80);
+
+    n00b_plane_t *root = n00b_box_new(.canvas = canvas,
+                                        .direction = N00B_FLEX_COLUMN,
+                                        .gap = 1);
+    root->width  = 80;
+    root->height = 20;
+    n00b_canvas_add_plane(canvas, root);
+
+    n00b_plane_t *btn1 = n00b_button_new(n00b_string_from_cstr("One"),
+                                           .canvas = canvas);
+    n00b_plane_t *btn2 = n00b_button_new(n00b_string_from_cstr("Two"),
+                                           .canvas = canvas);
+    n00b_plane_add_child(root, btn1, 0, 0);
+    n00b_plane_add_child(root, btn2, 0, 0);
+
+    n00b_display_scene_run_layout(canvas);
+    n00b_display_scene_mark_all_dirty(canvas);
+    n00b_display_scene_rerender_dirty(canvas);
+
+    int32_t cpw = (int32_t)canvas->cell_px_w;
+    int32_t cph = (int32_t)canvas->cell_px_h;
+    int32_t it = 0;
+    n00b_box_insets_px(btn2->box, cpw, cph, &it, nullptr, nullptr, nullptr);
+
+    // Click exactly on the left border cell (outside content area).
+    n00b_event_t click = {
+        .type = N00B_EVENT_MOUSE,
+        .mouse = {
+            .x = btn2->x,
+            .y = btn2->y + (it > 0 ? it : 0),
+            .button = N00B_MOUSE_LEFT,
+            .action = N00B_MOUSE_PRESS,
+            .mods = N00B_MOD_NONE,
+        },
+    };
+
+    n00b_focus_mgr_t *fm = n00b_focus_mgr_new(canvas);
+    assert(n00b_focus_mgr_set(fm, btn1));
+    assert(n00b_focus_mgr_current_plane(fm) == btn1);
+
+    n00b_display_dispatch_result_t r = n00b_display_dispatch_event(canvas, fm, &click);
+    assert(r.handled);
+    assert(n00b_focus_mgr_current_plane(fm) == btn2);
+
+    n00b_focus_mgr_destroy(fm);
+    n00b_canvas_remove_plane(canvas, root);
+    n00b_plane_remove_child(root, btn1);
+    n00b_plane_remove_child(root, btn2);
+    n00b_widget_detach(btn1);
+    n00b_widget_detach(btn2);
+    n00b_plane_destroy(btn1);
+    n00b_plane_destroy(btn2);
+    n00b_widget_detach(root);
+    n00b_plane_destroy(root);
+    n00b_canvas_destroy(canvas);
+
+    printf("  [PASS] button border click focuses button\n");
+}
+
+static void
+test_text_ctrl_c_falls_back_to_stop_when_copy_is_unsupported(void)
+{
+    n00b_canvas_t *canvas = n00b_new_kargs(n00b_canvas_t, canvas,
+                                           .vtable = &n00b_renderer_dumb);
+    n00b_plane_t *text = n00b_text_new(
+        n00b_string_from_cstr("Athens text"),
+        .selectable = true,
+        .copy_on_release = false,
+        .canvas = canvas);
+    n00b_focus_mgr_t *fm;
+    n00b_text_t *state;
+    n00b_event_t ctrl_c = {
+        .type = N00B_EVENT_KEY,
+        .key = {
+            .key  = 'c',
+            .mods = N00B_MOD_CTRL,
+        },
+    };
+    n00b_display_dispatch_result_t r;
+
+    n00b_canvas_resize(canvas, 6, 40);
+    n00b_canvas_add_plane(canvas, text);
+    n00b_widget_layout(text,
+                       (n00b_rect_t){
+                           .x      = 0,
+                           .y      = 0,
+                           .width  = 16,
+                           .height = 2,
+                       });
+
+    state = (n00b_text_t *)text->widget_data;
+    state->selection.active     = true;
+    state->selection.start_line = 0;
+    state->selection.start_col  = 0;
+    state->selection.end_line   = 0;
+    state->selection.end_col    = 6;
+
+    fm = n00b_focus_mgr_new(canvas);
+    assert(n00b_focus_mgr_current_plane(fm) == text);
+
+    r = n00b_display_dispatch_event(canvas, fm, &ctrl_c);
+    assert(r.handled);
+    assert(r.should_stop);
+
+    n00b_focus_mgr_destroy(fm);
+    n00b_canvas_remove_plane(canvas, text);
+    n00b_widget_detach(text);
+    n00b_plane_destroy(text);
+    n00b_canvas_destroy(canvas);
+
+    printf("  [PASS] text ctrl-c falls back to stop when copy is unsupported\n");
+}
+
+static void
+test_text_ctrl_c_does_not_stop_when_copy_succeeds(void)
+{
+    n00b_canvas_t *canvas = n00b_new_kargs(n00b_canvas_t, canvas,
+                                           .vtable = &n00b_renderer_stream);
+    n00b_plane_t *text = n00b_text_new(
+        n00b_string_from_cstr("Athens text"),
+        .selectable = true,
+        .copy_on_release = false,
+        .canvas = canvas);
+    n00b_focus_mgr_t *fm;
+    n00b_text_t *state;
+    n00b_event_t ctrl_c = {
+        .type = N00B_EVENT_KEY,
+        .key = {
+            .key  = 'c',
+            .mods = N00B_MOD_CTRL,
+        },
+    };
+    n00b_display_dispatch_result_t r;
+    n00b_string_t *clipboard;
+    n00b_string_t *expected;
+
+    n00b_stream_backend_set_size(canvas->backend_ctx, 6, 40);
+    n00b_canvas_resize(canvas, 6, 40);
+    n00b_canvas_add_plane(canvas, text);
+    n00b_widget_layout(text,
+                       (n00b_rect_t){
+                           .x      = 0,
+                           .y      = 0,
+                           .width  = 16,
+                           .height = 2,
+                       });
+
+    state = (n00b_text_t *)text->widget_data;
+    state->selection.active     = true;
+    state->selection.start_line = 0;
+    state->selection.start_col  = 0;
+    state->selection.end_line   = 0;
+    state->selection.end_col    = 6;
+
+    fm = n00b_focus_mgr_new(canvas);
+    assert(n00b_focus_mgr_current_plane(fm) == text);
+
+    r = n00b_display_dispatch_event(canvas, fm, &ctrl_c);
+    assert(r.handled);
+    assert(!r.should_stop);
+
+    clipboard = n00b_stream_backend_get_clipboard(canvas->backend_ctx);
+    expected = n00b_string_from_cstr("Athens");
+    assert(clipboard != nullptr);
+    assert(n00b_unicode_str_eq(clipboard, expected));
+
+    n00b_focus_mgr_destroy(fm);
+    n00b_canvas_remove_plane(canvas, text);
+    n00b_widget_detach(text);
+    n00b_plane_destroy(text);
+    n00b_canvas_destroy(canvas);
+
+    printf("  [PASS] text ctrl-c copies without stopping when supported\n");
+}
+
+static void
+test_mouse_dispatch_uses_pixel_coordinates(void)
+{
+    n00b_canvas_t *canvas = n00b_new_kargs(n00b_canvas_t, canvas,
+                                           .vtable = &n00b_renderer_stream);
+    canvas->cell_px_w = 8;
+    canvas->cell_px_h = 16;
+    n00b_stream_backend_set_size(canvas->backend_ctx, 6, 40);
+    n00b_canvas_resize(canvas, 6 * canvas->cell_px_h, 40 * canvas->cell_px_w);
+
+    n00b_plane_t *root = n00b_new_kargs(n00b_plane_t, plane);
+    root->width  = canvas->frame_cols;
+    root->height = canvas->frame_rows;
+
+    widget_state_t s1 = {.consume = true};
+    widget_state_t s2 = {.consume = true};
+
+    n00b_plane_t *p1 = n00b_new_kargs(n00b_plane_t, plane);
+    p1->width        = 8 * canvas->cell_px_w;
+    p1->height       = 1 * canvas->cell_px_h;
+    n00b_widget_attach(p1, &dispatch_widget, &s1);
+
+    n00b_plane_t *p2 = n00b_new_kargs(n00b_plane_t, plane);
+    p2->width        = 8 * canvas->cell_px_w;
+    p2->height       = 1 * canvas->cell_px_h;
+    n00b_widget_attach(p2, &dispatch_widget, &s2);
+
+    n00b_plane_add_child(root, p1, 1 * canvas->cell_px_w, 1 * canvas->cell_px_h);
+    n00b_plane_add_child(root, p2, 12 * canvas->cell_px_w, 1 * canvas->cell_px_h);
+    n00b_canvas_add_plane(canvas, root);
+
+    n00b_focus_mgr_t *fm = n00b_focus_mgr_new(canvas);
+    assert(n00b_focus_mgr_set(fm, p1));
+
+    n00b_event_t pixel_click = {
+        .type = N00B_EVENT_MOUSE,
+        .mouse = {
+            .x = p2->x + 1,
+            .y = p2->y + 1,
+            .button = N00B_MOUSE_LEFT,
+            .action = N00B_MOUSE_PRESS,
+            .mods = N00B_MOD_NONE,
+        },
+    };
+    n00b_display_dispatch_result_t r =
+        n00b_display_dispatch_event(canvas, fm, &pixel_click);
+    assert(r.handled);
+    assert(r.focus_changed);
+    assert(n00b_focus_mgr_current_plane(fm) == p2);
+
+    assert(n00b_focus_mgr_set(fm, p1));
+    n00b_event_t cell_scaled_click = pixel_click;
+    cell_scaled_click.mouse.x /= canvas->cell_px_w;
+    cell_scaled_click.mouse.y /= canvas->cell_px_h;
+
+    r = n00b_display_dispatch_event(canvas, fm, &cell_scaled_click);
+    assert(!r.focus_changed);
+    assert(n00b_focus_mgr_current_plane(fm) == p1);
+
+    n00b_focus_mgr_destroy(fm);
+    n00b_canvas_remove_plane(canvas, root);
+    n00b_plane_remove_child(root, p1);
+    n00b_plane_remove_child(root, p2);
+    n00b_widget_detach(p1);
+    n00b_widget_detach(p2);
+    n00b_plane_destroy(p1);
+    n00b_plane_destroy(p2);
+    n00b_plane_destroy(root);
+    n00b_canvas_destroy(canvas);
+
+    printf("  [PASS] mouse dispatch expects pixel coordinates\n");
+}
+
+int
+main(int argc, char **argv)
+{
+    n00b_runtime_t runtime;
+    n00b_init(&runtime, argc, argv);
+
+    printf("Running display event-dispatch tests...\n");
+    test_event_dispatch_contracts();
+    test_button_border_click_focuses();
+    test_text_ctrl_c_falls_back_to_stop_when_copy_is_unsupported();
+    test_text_ctrl_c_does_not_stop_when_copy_succeeds();
+    test_mouse_dispatch_uses_pixel_coordinates();
+
+    printf("Display event-dispatch tests passed.\n");
+    n00b_shutdown();
+    return 0;
+}

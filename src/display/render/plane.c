@@ -8,9 +8,12 @@
 #include "core/arena.h"
 #include "core/string.h"
 #include "adt/list.h"
+#include "display/mouse.h"
 #include "display/render/plane.h"
 #include "display/render/canvas.h"
 #include "display/render/font_metrics.h"
+#include "internal/display/plane_geometry.h"
+#include "internal/display/plane_tree.h"
 #include "text/unicode/properties.h"
 
 // -------------------------------------------------------------------
@@ -33,6 +36,94 @@ static inline void
 plane_mark_dirty(n00b_plane_t *p)
 {
     p->flags |= N00B_PLANE_DIRTY;
+}
+
+static void
+plane_assign_canvas_recursive(n00b_plane_t *plane, n00b_canvas_t *canvas)
+{
+    if (!plane) {
+        return;
+    }
+
+    plane->canvas = canvas;
+    plane_mark_dirty(plane);
+
+    if (plane->children.data) {
+        for (size_t i = 0; i < plane->children.len; i++) {
+            n00b_plane_t *child = plane->children.data[i];
+            if (child) {
+                plane_assign_canvas_recursive(child, canvas);
+            }
+        }
+    }
+}
+
+static void
+plane_clear_canvas_recursive(n00b_plane_t *plane)
+{
+    if (!plane) {
+        return;
+    }
+
+    plane->canvas = nullptr;
+    plane_mark_dirty(plane);
+
+    if (plane->children.data) {
+        for (size_t i = 0; i < plane->children.len; i++) {
+            n00b_plane_t *child = plane->children.data[i];
+            if (child) {
+                plane_clear_canvas_recursive(child);
+            }
+        }
+    }
+}
+
+static void
+plane_translate_layout_subtree(n00b_plane_t *plane, int32_t dx, int32_t dy)
+{
+    if (!plane || (dx == 0 && dy == 0)) {
+        return;
+    }
+
+    if (n00b_plane_has_layout_bounds(plane)) {
+        plane->bounds.x += dx;
+        plane->bounds.y += dy;
+    }
+
+    plane_mark_dirty(plane);
+
+    if (plane->children.data) {
+        for (size_t i = 0; i < plane->children.len; i++) {
+            n00b_plane_t *child = plane->children.data[i];
+            if (child) {
+                plane_translate_layout_subtree(child, dx, dy);
+            }
+        }
+    }
+}
+
+bool
+n00b_plane_tree_contains(const n00b_plane_t *root, const n00b_plane_t *target)
+{
+    if (!root || !target) {
+        return false;
+    }
+
+    if (root == target) {
+        return true;
+    }
+
+    if (!root->children.data) {
+        return false;
+    }
+
+    for (size_t i = 0; i < root->children.len; i++) {
+        if (n00b_plane_tree_contains(root->children.data[i], target)) {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 // -------------------------------------------------------------------
@@ -101,8 +192,7 @@ n00b_plane_add_child(n00b_plane_t *parent, n00b_plane_t *child,
     child->x      = x;
     child->y      = y;
 
-    // Propagate canvas back-pointer.
-    child->canvas = parent->canvas;
+    plane_assign_canvas_recursive(child, parent->canvas);
 
     plane_lock(parent);
 
@@ -119,18 +209,24 @@ n00b_plane_add_child(n00b_plane_t *parent, n00b_plane_t *child,
 bool
 n00b_plane_remove_child(n00b_plane_t *parent, n00b_plane_t *child)
 {
+    n00b_canvas_t *canvas;
+
     if (!parent || !child || child->parent != parent) {
         return false;
     }
 
     plane_lock(parent);
+    canvas = parent->canvas;
 
     size_t n = parent->children.len;
     for (size_t i = 0; i < n; i++) {
         if (n00b_list_get(parent->children, i) == child) {
+            if (canvas && n00b_plane_tree_contains(child, canvas->mouse_capture)) {
+                n00b_canvas_cancel_mouse_capture(canvas);
+            }
             (void)n00b_list_delete(parent->children, i);
             child->parent = nullptr;
-            child->canvas = nullptr;
+            plane_clear_canvas_recursive(child);
             plane_unlock(parent);
             plane_mark_dirty(parent);
             return true;
@@ -303,8 +399,23 @@ n00b_plane_scroll_to(n00b_plane_t *p, int32_t x, int32_t y)
 void
 n00b_plane_move(n00b_plane_t *p, int32_t x, int32_t y)
 {
+    int32_t old_x = p->x;
+    int32_t old_y = p->y;
+    int32_t dx = 0;
+    int32_t dy = 0;
+
+    if (n00b_plane_has_layout_bounds(p)) {
+        old_x = p->bounds.x;
+        old_y = p->bounds.y;
+    }
+
+    dx = x - old_x;
+    dy = y - old_y;
+
     p->x = x;
     p->y = y;
+
+    plane_translate_layout_subtree(p, dx, dy);
     plane_mark_dirty(p);
 }
 

@@ -569,101 +569,96 @@ n00b_string_t *
 n00b_gai_str(int rc)
 {
     // `getaddrinfo` sign conventions vary across libcs (BSD/macOS
-    // uses positive small ints; glibc historically uses negatives).
-    // Fold the sign so a single accessor serves both conventions.
-    if (rc < 0) {
-        rc = -rc;
-    }
-
-    switch (rc) {
-    case 0:
+    // uses positive small ints; glibc historically uses negatives).  Do not
+    // normalize the sign before comparing because the platform EAI_* macros
+    // themselves may be negative.
+    if (rc == 0) {
         return r"no error";
+    }
 
     // ---- POSIX.1 EAI_* core -----------------------------------
 #if defined(EAI_BADFLAGS)
-    case EAI_BADFLAGS:
+    if (rc == EAI_BADFLAGS || rc == -EAI_BADFLAGS)
         return r"invalid value for ai_flags";
 #endif
 #if defined(EAI_NONAME)
-    case EAI_NONAME:
+    if (rc == EAI_NONAME || rc == -EAI_NONAME)
         return r"host or service not known";
 #endif
 #if defined(EAI_AGAIN)
-    case EAI_AGAIN:
+    if (rc == EAI_AGAIN || rc == -EAI_AGAIN)
         return r"temporary failure in name resolution";
 #endif
 #if defined(EAI_FAIL)
-    case EAI_FAIL:
+    if (rc == EAI_FAIL || rc == -EAI_FAIL)
         return r"non-recoverable failure in name resolution";
 #endif
 #if defined(EAI_FAMILY)
-    case EAI_FAMILY:
+    if (rc == EAI_FAMILY || rc == -EAI_FAMILY)
         return r"address family not supported";
 #endif
 #if defined(EAI_SOCKTYPE)
-    case EAI_SOCKTYPE:
+    if (rc == EAI_SOCKTYPE || rc == -EAI_SOCKTYPE)
         return r"socket type not supported";
 #endif
 #if defined(EAI_SERVICE)
-    case EAI_SERVICE:
+    if (rc == EAI_SERVICE || rc == -EAI_SERVICE)
         return r"service not supported for socket type";
 #endif
 #if defined(EAI_MEMORY)
-    case EAI_MEMORY:
+    if (rc == EAI_MEMORY || rc == -EAI_MEMORY)
         return r"memory allocation failure";
 #endif
 #if defined(EAI_SYSTEM)
-    case EAI_SYSTEM:
+    if (rc == EAI_SYSTEM || rc == -EAI_SYSTEM)
         return r"system error (see errno)";
 #endif
 #if defined(EAI_OVERFLOW)
-    case EAI_OVERFLOW:
+    if (rc == EAI_OVERFLOW || rc == -EAI_OVERFLOW)
         return r"argument buffer overflow";
 #endif
 
     // ---- BSD / GNU extensions ---------------------------------
 #if defined(EAI_NODATA) && (!defined(EAI_NONAME) || EAI_NODATA != EAI_NONAME)
-    case EAI_NODATA:
+    if (rc == EAI_NODATA || rc == -EAI_NODATA)
         return r"no address associated with host";
 #endif
 #if defined(EAI_ADDRFAMILY)
-    case EAI_ADDRFAMILY:
+    if (rc == EAI_ADDRFAMILY || rc == -EAI_ADDRFAMILY)
         return r"address family for host not supported";
 #endif
 #if defined(EAI_BADHINTS)
-    case EAI_BADHINTS:
+    if (rc == EAI_BADHINTS || rc == -EAI_BADHINTS)
         return r"invalid value for hints";
 #endif
 #if defined(EAI_PROTOCOL)
-    case EAI_PROTOCOL:
+    if (rc == EAI_PROTOCOL || rc == -EAI_PROTOCOL)
         return r"resolved protocol is unknown";
 #endif
 #if defined(EAI_INPROGRESS)
-    case EAI_INPROGRESS:
+    if (rc == EAI_INPROGRESS || rc == -EAI_INPROGRESS)
         return r"processing request in progress";
 #endif
 #if defined(EAI_CANCELED)
-    case EAI_CANCELED:
+    if (rc == EAI_CANCELED || rc == -EAI_CANCELED)
         return r"request canceled";
 #endif
 #if defined(EAI_NOTCANCELED)
-    case EAI_NOTCANCELED:
+    if (rc == EAI_NOTCANCELED || rc == -EAI_NOTCANCELED)
         return r"request not canceled";
 #endif
 #if defined(EAI_ALLDONE)
-    case EAI_ALLDONE:
+    if (rc == EAI_ALLDONE || rc == -EAI_ALLDONE)
         return r"all requests done";
 #endif
 #if defined(EAI_INTR)
-    case EAI_INTR:
+    if (rc == EAI_INTR || rc == -EAI_INTR)
         return r"interrupted by a signal";
 #endif
 #if defined(EAI_IDN_ENCODE)
-    case EAI_IDN_ENCODE:
+    if (rc == EAI_IDN_ENCODE || rc == -EAI_IDN_ENCODE)
         return r"parameter string not correctly encoded";
 #endif
 
-    default:
-        return r"unknown getaddrinfo error";
-    }
+    return r"unknown getaddrinfo error";
 }

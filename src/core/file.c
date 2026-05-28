@@ -155,6 +155,29 @@ open_stream(n00b_string_t *path, uint32_t mode)
         return n00b_result_err(n00b_file_t *, errno);
     }
 
+    struct stat st;
+    bool        have_stat = fstat(fd, &st) == 0;
+    bool        regular   = have_stat && S_ISREG(st.st_mode);
+    if ((mode & N00B_FILE_READ) && !(mode & N00B_FILE_WRITE) && regular) {
+        n00b_file_t *f = n00b_alloc(n00b_file_t);
+        f->kind         = N00B_FILE_KIND_STREAM;
+        f->path         = path;
+        f->mode         = mode;
+        f->size         = (int64_t)st.st_size;
+        f->pos          = 0;
+        f->eof          = f->size == 0;
+        f->conduit      = nullptr;
+        f->io           = nullptr;
+        f->fd           = fd;
+        f->owner        = nullptr;
+        f->read_topic   = nullptr;
+        f->read_inbox   = nullptr;
+        f->read_sub     = N00B_CONDUIT_INVALID_SUB_HANDLE;
+        f->status_inbox = nullptr;
+        f->status_sub   = N00B_CONDUIT_INVALID_SUB_HANDLE;
+        return n00b_result_ok(n00b_file_t *, f);
+    }
+
     auto mr = n00b_conduit_fd_manage(c, io, fd, /*close_on_done=*/true);
     if (n00b_result_is_err(mr)) {
         close(fd);
@@ -212,8 +235,7 @@ open_stream(n00b_string_t *path, uint32_t mode)
 
     // Try to learn the size cheaply (regular files); pipes leave -1.
     f->size = -1;
-    struct stat st;
-    if (fstat(fd, &st) == 0 && S_ISREG(st.st_mode)) {
+    if (regular) {
         f->size = (int64_t)st.st_size;
     }
 
@@ -290,6 +312,9 @@ n00b_file_close(n00b_file_t *f)
             n00b_conduit_fd_owner_close(f->owner);
             f->owner = nullptr;
         }
+        else if (f->fd >= 0) {
+            close(f->fd);
+        }
         f->fd = -1;
     }
     // MMAP buffer is GC-collected; munmap fires from its finalizer.
@@ -338,6 +363,34 @@ n00b_file_read(n00b_file_t *f, size_t max_n)
     // inbox in-order after every data chunk. We detect EOF by
     // either: pop returning null + sys-queue has TOPIC_CLOSED, or
     // pos >= known size (regular files).
+    if (!f->read_inbox && f->fd >= 0 && (f->mode & N00B_FILE_READ)) {
+        if (f->eof) {
+            return n00b_result_ok(n00b_buffer_t *, n00b_buffer_from_bytes("", 0));
+        }
+
+        size_t want = max_n ? max_n : 65536;
+        if (f->size >= 0) {
+            int64_t remaining = f->size - f->pos;
+            if (remaining <= 0) {
+                f->eof = true;
+                return n00b_result_ok(n00b_buffer_t *, n00b_buffer_from_bytes("", 0));
+            }
+            if ((int64_t)want > remaining) want = (size_t)remaining;
+        }
+
+        n00b_buffer_t *buf = n00b_buffer_new((int64_t)want);
+        ssize_t n = read(f->fd, buf->data, want);
+        if (n < 0) {
+            return n00b_result_err(n00b_buffer_t *, errno);
+        }
+        buf->byte_len = (size_t)n;
+        f->pos += (int64_t)n;
+        if (n == 0 || (f->size >= 0 && f->pos >= f->size)) {
+            f->eof = true;
+        }
+        return n00b_result_ok(n00b_buffer_t *, buf);
+    }
+
     if (!f->read_inbox) return n00b_result_err(n00b_buffer_t *, EBADF);
     (void)max_n;
 
@@ -518,29 +571,11 @@ n00b_file_as_buffer(n00b_file_t *f)
 // Async read
 // ============================================================================
 
-n00b_result_t(n00b_conduit_async_read_t(n00b_buffer_t *))
-n00b_file_read_async(n00b_file_t                           *f,
-                     size_t                                 max_n,
-                     n00b_conduit_inbox_t(n00b_buffer_t *) *inbox)
+static n00b_result_t(n00b_conduit_async_read_t(n00b_buffer_t *))
+file_read_async_inline(n00b_file_t                           *f,
+                       size_t                                 max_n,
+                       n00b_conduit_inbox_t(n00b_buffer_t *) *inbox)
 {
-    if (!f || !inbox) {
-        return n00b_result_err(n00b_conduit_async_read_t(n00b_buffer_t *),
-                               EINVAL);
-    }
-
-    if (f->kind == N00B_FILE_KIND_STREAM) {
-        if (!f->read_topic) {
-            return n00b_result_err(n00b_conduit_async_read_t(n00b_buffer_t *),
-                                   EBADF);
-        }
-        return n00b_conduit_read_async(n00b_buffer_t *, f->read_topic, inbox);
-    }
-
-    // MMAP path: synchronous read + immediate inbox post. The async
-    // contract is satisfied by the inbox delivery; the read itself
-    // was synchronous because the bytes are already in our address
-    // space. The returned handle is INVALID_SUB_HANDLE since no real
-    // subscription exists; sub_cancel on it is a documented no-op.
     auto rr = n00b_file_read(f, max_n);
     if (n00b_result_is_err(rr)) {
         return n00b_result_err(n00b_conduit_async_read_t(n00b_buffer_t *),
@@ -565,4 +600,33 @@ n00b_file_read_async(n00b_file_t                           *f,
         .handle = N00B_CONDUIT_INVALID_SUB_HANDLE,
     };
     return n00b_result_ok(n00b_conduit_async_read_t(n00b_buffer_t *), async);
+}
+
+n00b_result_t(n00b_conduit_async_read_t(n00b_buffer_t *))
+n00b_file_read_async(n00b_file_t                           *f,
+                     size_t                                 max_n,
+                     n00b_conduit_inbox_t(n00b_buffer_t *) *inbox)
+{
+    if (!f || !inbox) {
+        return n00b_result_err(n00b_conduit_async_read_t(n00b_buffer_t *),
+                               EINVAL);
+    }
+
+    if (f->kind == N00B_FILE_KIND_STREAM) {
+        if (!f->read_topic) {
+            if (f->fd >= 0 && (f->mode & N00B_FILE_READ)) {
+                return file_read_async_inline(f, max_n, inbox);
+            }
+            return n00b_result_err(n00b_conduit_async_read_t(n00b_buffer_t *),
+                                   EBADF);
+        }
+        return n00b_conduit_read_async(n00b_buffer_t *, f->read_topic, inbox);
+    }
+
+    // MMAP path: synchronous read + immediate inbox post. The async
+    // contract is satisfied by the inbox delivery; the read itself
+    // was synchronous because the bytes are already in our address
+    // space. The returned handle is INVALID_SUB_HANDLE since no real
+    // subscription exists; sub_cancel on it is a documented no-op.
+    return file_read_async_inline(f, max_n, inbox);
 }

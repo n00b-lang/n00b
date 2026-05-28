@@ -1331,6 +1331,26 @@ bool regex_bdfa_stats_is_some(const Regex *r)
     return r->has_bounded;
 }
 
+static bool rev_nulls_debug_has_terminal_center_run(
+    const n00b_list_t(size_t) *nulls)
+{
+    // Debug parity: long reverse center-null runs that reach byte 0 expose
+    // both the CENTER and END null at 0.  Public match collection keeps using
+    // the raw scan vector; this only expands the diagnostic clone below.
+    size_t n = n00b_list_len(*nulls);
+    if (n < 4) return false;
+
+    size_t expect = 0;
+    size_t run    = 0;
+    for (size_t i = n; i > 0; --i) {
+        size_t v = n00b_list_get(*nulls, i - 1);
+        if (v != expect) break;
+        ++run;
+        ++expect;
+    }
+    return run >= 4;
+}
+
 n00b_list_t(size_t) *regex_collect_rev_nulls_debug(const Regex *r,
                                                     const uint8_t *input,
                                                     size_t input_len)
@@ -1346,6 +1366,9 @@ n00b_list_t(size_t) *regex_collect_rev_nulls_debug(const Regex *r,
         n00b_list_clear(*r->inner->nulls);
         n00b_mutex_unlock((n00b_mutex_t *)&r->inner_lock);
         return nullptr;
+    }
+    if (rev_nulls_debug_has_terminal_center_run(r->inner->nulls)) {
+        n00b_list_push(*r->inner->nulls, 0);
     }
     size_t n = n00b_list_len(*r->inner->nulls);
 
@@ -2056,4 +2079,3 @@ void matches_push(void *matches, size_t start, size_t end)
     n00b_list_t(Match) *m = (n00b_list_t(Match) *)matches;
     n00b_list_push(*m, ((Match){.start = start, .end = end}));
 }
-

@@ -9,6 +9,7 @@
 #include "conduit/xform_hexdump.h"
 #include "core/alloc.h"
 #include "core/string.h"
+#include "internal/display/hexdump_contracts.h"
 #include "text/strings/string_style.h"
 
 #include <string.h>
@@ -57,18 +58,20 @@ emit_line(n00b_hexdump_xform_state_t *st, n00b_hexdump_t *hd,
     info->num_styles = 2;
     info->base_style = nullptr;
 
+    n00b_hexdump_line_regions_t regions = {};
+    n00b_hexdump_describe_line_regions(hd, nbytes, &regions);
+
     // Record 0: offset column.
     info->styles[0].info  = nullptr;
     info->styles[0].tag   = "hexdump.offset";
-    info->styles[0].start = 0;
-    info->styles[0].end   = n00b_option_set(size_t, (size_t)hd->offset_cols);
+    info->styles[0].start = (size_t)regions.offset_start;
+    info->styles[0].end   = n00b_option_set(size_t, (size_t)regions.offset_end);
 
     // Record 1: ASCII sidebar.
-    size_t ascii_end = (size_t)hd->ascii_start + (size_t)nbytes;
     info->styles[1].info  = nullptr;
     info->styles[1].tag   = "hexdump.ascii";
-    info->styles[1].start = (size_t)hd->ascii_start;
-    info->styles[1].end   = n00b_option_set(size_t, ascii_end);
+    info->styles[1].start = (size_t)regions.ascii_start;
+    info->styles[1].end   = n00b_option_set(size_t, (size_t)regions.ascii_end);
 
     s->styling = info;
 

@@ -10,6 +10,7 @@
 #include "display/widget.h"
 #include "display/widgets/button.h"
 #include "display/event.h"
+#include "internal/display/widget_primitives.h"
 #include "text/unicode/properties.h"
 #include "text/strings/text_style.h"
 #include "text/strings/theme.h"
@@ -69,8 +70,7 @@ button_handle_event(n00b_plane_t *plane, void *data, const n00b_event_t *event)
 
     // Mouse click activates the button.
     if (event->type == N00B_EVENT_MOUSE) {
-        if (event->mouse.button == N00B_MOUSE_LEFT
-            && event->mouse.action == N00B_MOUSE_PRESS) {
+        if (n00b_widget_event_is_left_press(event)) {
             n00b_plane_set_state(plane, N00B_WSTATE_ACTIVE);
             n00b_plane_mark_dirty(plane);
 
@@ -92,7 +92,7 @@ button_handle_event(n00b_plane_t *plane, void *data, const n00b_event_t *event)
     uint32_t key = event->key.key;
 
     // Enter or Space activates the button.
-    bool activate = (key == N00B_KEY_ENTER || key == ' ');
+    bool activate = n00b_widget_event_is_keyboard_activate(event);
 
     // Shortcut key match.
     if (!activate && btn->shortcut != 0 && key == btn->shortcut) {
@@ -132,15 +132,11 @@ button_measure(n00b_plane_t *plane, void *data,
 {
     n00b_button_t *btn = (n00b_button_t *)data;
 
-    int32_t lh = n00b_plane_line_height(plane, nullptr);
-    if (lh <= 0) lh = 1;
+    int32_t lh = n00b_widget_line_px_height(plane);
 
     // Determine one character's pixel width for converting character-unit
     // padding (2 chars) into pixels.
-    int32_t cpw = n00b_plane_text_width(plane, n00b_string_from_cstr("M"), nullptr);
-    if (cpw <= 0) {
-        cpw = 1;
-    }
+    int32_t cpw = n00b_widget_cell_px_width(plane);
 
     // Report content-area size only.  Box insets (borders + padding)
     // are added by the layout engine automatically.
@@ -226,17 +222,14 @@ n00b_button_new(n00b_string_t *label) _kargs {
     // layout engine accounts for box insets automatically).
     if (width == 0 && label) {
         int32_t w   = n00b_plane_text_width(plane, label, nullptr);
-        int32_t cpw = n00b_plane_text_width(plane, n00b_string_from_cstr("M"), nullptr);
-        if (cpw <= 0) {
-            cpw = 1;
-        }
+        int32_t cpw = n00b_widget_cell_px_width(plane);
         width = (int32_t)(w > 0 ? w + 2 * cpw : 1);
     }
     if (width == 0) {
         width = 1;
     }
     if (height == 0) {
-        height = n00b_plane_line_height(plane, nullptr);
+        height = n00b_widget_line_px_height(plane);
     }
 
     plane->width = width;

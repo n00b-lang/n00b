@@ -1,5 +1,7 @@
 #include <stdio.h>
 #include <assert.h>
+#include <stdlib.h>
+#include <string.h>
 #include "n00b.h"
 #include "core/alloc.h"
 #include "adt/array.h"
@@ -9,18 +11,15 @@
 #include "display/render/canvas.h"
 #include "display/render/plane.h"
 #include "display/render/draw_cmd.h"
+#include "display/backend_stream_internal.h"
 #include "display/render/box.h"
 #include "display/render/composite.h"
 #include "display/render/types.h"
+#include "display/widget.h"
+#include "text/strings/string_style.h"
+#include "text/strings/theme.h"
 #include "text/strings/text_style.h"
 #include "text/strings/string_ops.h"
-
-// Stream backend test helpers (defined in backend_stream.c).
-extern n00b_string_t *n00b_stream_backend_get_buffer(void *ctx);
-extern size_t        n00b_stream_backend_get_length(void *ctx);
-extern void          n00b_stream_backend_set_size(void *ctx,
-                                                   n00b_isize_t rows,
-                                                   n00b_isize_t cols);
 
 // ====================================================================
 // Tests
@@ -37,6 +36,25 @@ test_canvas_new_destroy(void)
 
     n00b_canvas_destroy(c);
     printf("  [PASS] canvas new and destroy\n");
+}
+
+static void
+test_canvas_init_caller_owned_storage(void)
+{
+    n00b_canvas_t canvas;
+    memset(&canvas, 0xA5, sizeof(canvas));
+
+    n00b_canvas_init(&canvas, .vtable = &n00b_renderer_stream);
+
+    assert(canvas.vtable == &n00b_renderer_stream);
+    assert(canvas.backend_ctx != nullptr);
+    assert(canvas.cell_px_w == 1);
+    assert(canvas.cell_px_h == 1);
+    assert(canvas.frame_rows == 25);
+    assert(canvas.frame_cols == 80);
+
+    n00b_canvas_destroy(&canvas);
+    printf("  [PASS] canvas init resets caller-owned storage\n");
 }
 
 static void
@@ -177,6 +195,170 @@ test_canvas_invalidate(void)
     printf("  [PASS] canvas invalidate\n");
 }
 
+typedef struct {
+    int render_count;
+} metrics_refresh_backend_ctx_t;
+
+static int32_t
+metrics_refresh_backend_text_width(void *ctx,
+                                   n00b_string_t *text,
+                                   n00b_text_style_t *style)
+{
+    (void)ctx;
+    (void)text;
+    (void)style;
+    return 777;
+}
+
+static int32_t
+metrics_refresh_backend_line_height(void *ctx, n00b_text_style_t *style)
+{
+    (void)ctx;
+    (void)style;
+    return 99;
+}
+
+static int32_t
+metrics_refresh_backend_ascent(void *ctx, n00b_text_style_t *style)
+{
+    (void)ctx;
+    (void)style;
+    return 88;
+}
+
+static void *
+metrics_refresh_backend_init(n00b_conduit_topic_t(n00b_buffer_t *) *output)
+{
+    (void)output;
+    metrics_refresh_backend_ctx_t *ctx = calloc(1, sizeof(*ctx));
+    assert(ctx != nullptr);
+    return ctx;
+}
+
+static void
+metrics_refresh_backend_destroy(void *vctx)
+{
+    free(vctx);
+}
+
+static n00b_render_cap_t
+metrics_refresh_backend_caps(void *vctx)
+{
+    (void)vctx;
+    return N00B_RCAP_NONE;
+}
+
+static n00b_render_size_t
+metrics_refresh_backend_get_size(void *vctx)
+{
+    metrics_refresh_backend_ctx_t *ctx = vctx;
+    if (ctx->render_count == 0) {
+        return (n00b_render_size_t){
+            .rows = 6,
+            .cols = 8,
+            .cell_pixel_w = 1,
+            .cell_pixel_h = 1,
+        };
+    }
+
+    return (n00b_render_size_t){
+        .rows = 6,
+        .cols = 8,
+        .cell_pixel_w = 2,
+        .cell_pixel_h = 3,
+    };
+}
+
+static void
+metrics_refresh_backend_render_frame(void *vctx,
+                                     n00b_rcell_t *cells,
+                                     n00b_isize_t rows,
+                                     n00b_isize_t cols,
+                                     n00b_rcell_t *prev_cells)
+{
+    (void)vctx;
+    (void)cells;
+    (void)rows;
+    (void)cols;
+    (void)prev_cells;
+}
+
+static void
+metrics_refresh_backend_flush(void *vctx)
+{
+    (void)vctx;
+}
+
+static void
+metrics_refresh_backend_render_planes(void *vctx,
+                                      const n00b_composite_entry_t *entries,
+                                      n00b_isize_t count,
+                                      n00b_isize_t total_rows,
+                                      n00b_isize_t total_cols,
+                                      n00b_text_style_t *default_style,
+                                      n00b_render_cap_t caps)
+{
+    metrics_refresh_backend_ctx_t *ctx = vctx;
+    (void)entries;
+    (void)count;
+    (void)total_rows;
+    (void)total_cols;
+    (void)default_style;
+    (void)caps;
+    ctx->render_count++;
+}
+
+static n00b_font_metrics_provider_t
+metrics_refresh_backend_get_font_metrics(void *vctx)
+{
+    return (n00b_font_metrics_provider_t){
+        .text_width = metrics_refresh_backend_text_width,
+        .line_height = metrics_refresh_backend_line_height,
+        .ascent = metrics_refresh_backend_ascent,
+        .ctx = vctx,
+    };
+}
+
+static const n00b_renderer_vtable_t metrics_refresh_backend = {
+    .name = "metrics_refresh_backend",
+    .version = N00B_RENDERER_ABI_VERSION,
+    .init = metrics_refresh_backend_init,
+    .destroy = metrics_refresh_backend_destroy,
+    .capabilities = metrics_refresh_backend_caps,
+    .get_size = metrics_refresh_backend_get_size,
+    .render_frame = metrics_refresh_backend_render_frame,
+    .flush = metrics_refresh_backend_flush,
+    .render_planes = metrics_refresh_backend_render_planes,
+    .get_font_metrics = metrics_refresh_backend_get_font_metrics,
+};
+
+static void
+test_canvas_refreshes_fallback_metrics_when_font_metrics_cap_absent(void)
+{
+    n00b_canvas_t *canvas = n00b_new_kargs(n00b_canvas_t,
+                                           canvas,
+                                           .vtable = &metrics_refresh_backend);
+
+    assert(canvas->metrics.line_height(canvas->metrics.ctx, nullptr) == 1);
+    assert(canvas->metrics.text_width(canvas->metrics.ctx,
+                                      n00b_string_from_cstr("ab"),
+                                      nullptr) == 2);
+
+    n00b_canvas_render(canvas);
+    assert(canvas->metrics.line_height(canvas->metrics.ctx, nullptr) == 1);
+
+    n00b_canvas_render(canvas);
+    assert(canvas->cell_px_w == 2);
+    assert(canvas->cell_px_h == 3);
+    assert(canvas->metrics.line_height(canvas->metrics.ctx, nullptr) == 3);
+    assert(canvas->metrics.text_width(canvas->metrics.ctx,
+                                      n00b_string_from_cstr("ab"),
+                                      nullptr) == 4);
+
+    n00b_canvas_destroy(canvas);
+    printf("  [PASS] canvas refreshes fallback metrics without font metrics cap\n");
+}
+
 static void
 test_composite_flatten(void)
 {
@@ -243,6 +425,185 @@ test_canvas_widget_state_styling(void)
     n00b_plane_destroy(p);
     n00b_canvas_destroy(c);
     printf("  [PASS] canvas widget state styling\n");
+}
+
+static void
+test_composite_honors_string_style_ranges(void)
+{
+    n00b_plane_t *plane = n00b_new_kargs(n00b_plane_t, plane);
+    n00b_plane_t *planes[] = { plane };
+    n00b_array_t(n00b_composite_entry_t) entries;
+    n00b_composite_style_pool_t style_pool = {};
+    n00b_text_style_t default_style = {};
+    n00b_text_style_t base_style = {
+        .font_index = -1,
+        .fg_palette_ix = -1,
+        .bg_palette_ix = -1,
+        .fg_rgb = n00b_color_make(0x112233),
+    };
+    n00b_text_style_t selection_style = {
+        .font_index = -1,
+        .fg_palette_ix = N00B_PAL_SELECTION_FG,
+        .bg_palette_ix = N00B_PAL_SELECTION_BG,
+    };
+    n00b_string_t *text = n00b_string_from_cstr("AB");
+    n00b_rcell_t   frame[2] = {};
+
+    plane->width = 2;
+    plane->height = 1;
+
+    text = n00b_str_set_base_style(text, &base_style);
+    text = n00b_str_add_style(text,
+                              &selection_style,
+                              1,
+                              n00b_option_set(size_t, 2));
+    n00b_plane_draw_text(plane, 0, 0, text);
+
+    entries = n00b_composite_flatten(planes, 1, 1, 1);
+    n00b_composite_commands_to_grid(entries.data,
+                                    (n00b_isize_t)entries.len,
+                                    frame,
+                                    1,
+                                    2,
+                                    1,
+                                    1,
+                                    &default_style,
+                                    N00B_RCAP_UNICODE,
+                                    &style_pool);
+
+    assert(frame[0].style != nullptr);
+    assert(frame[1].style != nullptr);
+    assert(frame[0].style->fg_rgb == base_style.fg_rgb);
+    assert(frame[0].style->bg_palette_ix == -1);
+    assert(frame[1].style->fg_palette_ix == N00B_PAL_SELECTION_FG);
+    assert(frame[1].style->bg_palette_ix == N00B_PAL_SELECTION_BG);
+
+    n00b_composite_style_pool_destroy(&style_pool);
+    n00b_array_free(entries);
+    n00b_plane_destroy(plane);
+    printf("  [PASS] composite honors string style ranges\n");
+}
+
+static void
+test_composite_equal_cells_ignore_style_pointer_identity(void)
+{
+    n00b_plane_t *plane = n00b_new_kargs(n00b_plane_t, plane);
+    n00b_plane_t *planes[] = { plane };
+    n00b_array_t(n00b_composite_entry_t) entries;
+    n00b_composite_style_pool_t pool_a = {};
+    n00b_composite_style_pool_t pool_b = {};
+    n00b_text_style_t default_style = {};
+    n00b_text_style_t base_style = {
+        .font_index    = -1,
+        .fg_palette_ix = -1,
+        .bg_palette_ix = -1,
+        .fg_rgb        = n00b_color_make(0x112233),
+    };
+    n00b_text_style_t accent_style = {
+        .font_index    = -1,
+        .fg_palette_ix = -1,
+        .bg_palette_ix = -1,
+        .fg_rgb        = n00b_color_make(0x99aa55),
+    };
+    n00b_string_t *text = n00b_string_from_cstr("AB");
+    n00b_rcell_t frame_a[2] = {};
+    n00b_rcell_t frame_b[2] = {};
+
+    plane->width = 2;
+    plane->height = 1;
+
+    text = n00b_str_set_base_style(text, &base_style);
+    text = n00b_str_add_style(text,
+                              &accent_style,
+                              1,
+                              n00b_option_set(size_t, 2));
+    n00b_plane_draw_text(plane, 0, 0, text);
+
+    entries = n00b_composite_flatten(planes, 1, 1, 1);
+    n00b_composite_commands_to_grid(entries.data,
+                                    (n00b_isize_t)entries.len,
+                                    frame_a,
+                                    1,
+                                    2,
+                                    1,
+                                    1,
+                                    &default_style,
+                                    N00B_RCAP_UNICODE,
+                                    &pool_a);
+    n00b_composite_commands_to_grid(entries.data,
+                                    (n00b_isize_t)entries.len,
+                                    frame_b,
+                                    1,
+                                    2,
+                                    1,
+                                    1,
+                                    &default_style,
+                                    N00B_RCAP_UNICODE,
+                                    &pool_b);
+
+    assert(frame_a[0].style != nullptr);
+    assert(frame_b[0].style != nullptr);
+    assert(frame_a[0].style != frame_b[0].style);
+    assert(frame_a[1].style != nullptr);
+    assert(frame_b[1].style != nullptr);
+    assert(frame_a[1].style != frame_b[1].style);
+    assert(n00b_rcell_equal(&frame_a[0], &frame_b[0]));
+    assert(n00b_rcell_equal(&frame_a[1], &frame_b[1]));
+
+    n00b_composite_style_pool_destroy(&pool_a);
+    n00b_composite_style_pool_destroy(&pool_b);
+    n00b_array_free(entries);
+    n00b_plane_destroy(plane);
+    printf("  [PASS] composite equal cells ignore style pointer identity\n");
+}
+
+static void
+test_stream_backend_style_pool_does_not_accumulate_across_frames(void)
+{
+    n00b_canvas_t *canvas = n00b_new_kargs(n00b_canvas_t, canvas,
+                                           .vtable = &n00b_renderer_stream);
+    n00b_text_style_t base_style = {
+        .font_index    = -1,
+        .fg_palette_ix = -1,
+        .bg_palette_ix = -1,
+        .fg_rgb        = n00b_color_make(0x112233),
+    };
+    n00b_text_style_t accent_style = {
+        .font_index    = -1,
+        .fg_palette_ix = -1,
+        .bg_palette_ix = -1,
+        .fg_rgb        = n00b_color_make(0x99aa55),
+    };
+    n00b_string_t *text = n00b_string_from_cstr("AB");
+    n00b_plane_t *plane = n00b_new_kargs(n00b_plane_t, plane);
+    size_t first_count;
+    size_t second_count;
+
+    n00b_stream_backend_set_size(canvas->backend_ctx, 1, 2);
+    n00b_canvas_resize(canvas, 1, 2);
+
+    plane->width = 2;
+    plane->height = 1;
+    text = n00b_str_set_base_style(text, &base_style);
+    text = n00b_str_add_style(text,
+                              &accent_style,
+                              1,
+                              n00b_option_set(size_t, 2));
+    n00b_plane_draw_text(plane, 0, 0, text);
+    n00b_canvas_add_plane(canvas, plane);
+
+    n00b_canvas_render(canvas);
+    first_count = n00b_stream_backend_get_style_pool_count(canvas->backend_ctx);
+    assert(first_count > 0);
+
+    n00b_canvas_invalidate(canvas);
+    n00b_canvas_render(canvas);
+    second_count = n00b_stream_backend_get_style_pool_count(canvas->backend_ctx);
+    assert(second_count == first_count);
+
+    n00b_plane_destroy(plane);
+    n00b_canvas_destroy(canvas);
+    printf("  [PASS] stream backend style pool does not accumulate across frames\n");
 }
 
 static void
@@ -398,6 +759,145 @@ test_composite_flatten_nested(void)
     printf("  [PASS] composite flatten nested with absolute coords\n");
 }
 
+static void
+test_composite_commands_quantize_partial_cells(void)
+{
+    n00b_plane_t *plane = n00b_new_kargs(n00b_plane_t, plane);
+    plane->width = 2;
+    plane->height = 2;
+    n00b_plane_move(plane, 0, 5);
+    n00b_plane_fill_rect(plane, 0, 0, 2, 2, .cp = '#');
+
+    n00b_plane_t *planes[] = { plane };
+    n00b_array_t(n00b_composite_entry_t) entries =
+        n00b_composite_flatten(planes, 1, 2, 2);
+    n00b_composite_style_pool_t style_pool = {};
+
+    n00b_rcell_t frame[24];
+    memset(frame, 0, sizeof(frame));
+    n00b_text_style_t default_style = {0};
+
+    n00b_composite_commands_to_grid(entries.data,
+                                    (n00b_isize_t)entries.len,
+                                    frame,
+                                    6,
+                                    4,
+                                    2,
+                                    2,
+                                    &default_style,
+                                    N00B_RCAP_NONE,
+                                    &style_pool);
+
+    assert(frame[2 * 4].grapheme[0] == '#');
+    assert(frame[3 * 4].grapheme[0] == '#');
+
+    n00b_composite_style_pool_destroy(&style_pool);
+    n00b_array_free(entries);
+    n00b_plane_destroy(plane);
+    printf("  [PASS] composite commands quantize partial cells\n");
+}
+
+static void
+test_canvas_layout_move_updates_descendant_render_origin(void)
+{
+    n00b_canvas_t *c = n00b_new_kargs(n00b_canvas_t, canvas,
+                                      .vtable = &n00b_renderer_stream);
+    n00b_stream_backend_set_size(c->backend_ctx, 6, 12);
+    n00b_canvas_resize(c, 6, 12);
+
+    n00b_plane_t *parent = n00b_new_kargs(n00b_plane_t, plane);
+    n00b_plane_t *child = n00b_new_kargs(n00b_plane_t, plane);
+
+    n00b_plane_draw_glyph(child, 0, 0, 'X');
+    n00b_plane_add_child(parent, child, 0, 0);
+
+    n00b_widget_layout(parent,
+                       (n00b_rect_t){
+                           .x = 0,
+                           .y = 0,
+                           .width = 8,
+                           .height = 4,
+                       });
+    n00b_widget_layout(child,
+                       (n00b_rect_t){
+                           .x = 2,
+                           .y = 1,
+                           .width = 1,
+                           .height = 1,
+                       });
+    n00b_plane_move(parent, 4, 2);
+
+    n00b_plane_t *planes[] = { parent };
+    n00b_array_t(n00b_composite_entry_t) entries =
+        n00b_composite_flatten(planes, 1, 1, 1);
+
+    assert(entries.len == 2);
+    assert(entries.data[1].plane == child);
+    assert(entries.data[1].abs_x == 6);
+    assert(entries.data[1].abs_y == 3);
+
+    n00b_canvas_add_plane(c, parent);
+    n00b_canvas_render(c);
+
+    n00b_string_t *buf = n00b_stream_backend_get_buffer(c->backend_ctx);
+    assert(buf->data != nullptr);
+    assert(n00b_unicode_str_contains(buf, r"X"));
+
+    n00b_array_free(entries);
+    n00b_plane_destroy(child);
+    n00b_plane_destroy(parent);
+    n00b_canvas_destroy(c);
+    printf("  [PASS] canvas layout move updates descendant render origin\n");
+}
+
+static void
+test_canvas_descendant_z_can_overlay_later_sibling(void)
+{
+    n00b_canvas_t *c = n00b_new_kargs(n00b_canvas_t, canvas,
+                                      .vtable = &n00b_renderer_stream);
+    n00b_stream_backend_set_size(c->backend_ctx, 5, 10);
+    n00b_canvas_resize(c, 5, 10);
+
+    n00b_plane_t *parent = n00b_new_kargs(n00b_plane_t, plane);
+    parent->width = 10;
+    parent->height = 5;
+
+    n00b_plane_t *high_branch = n00b_new_kargs(n00b_plane_t, plane);
+    high_branch->width = 10;
+    high_branch->height = 5;
+    n00b_plane_t *high_wrap = n00b_new_kargs(n00b_plane_t, plane);
+    high_wrap->width = 10;
+    high_wrap->height = 5;
+    n00b_plane_t *high_leaf = n00b_new_kargs(n00b_plane_t, plane, .z = 10);
+    high_leaf->width = 10;
+    high_leaf->height = 5;
+    n00b_plane_draw_glyph(high_leaf, 0, 0, 'H');
+    n00b_plane_add_child(high_wrap, high_leaf, 0, 0);
+    n00b_plane_add_child(high_branch, high_wrap, 0, 0);
+
+    n00b_plane_t *low_branch = n00b_new_kargs(n00b_plane_t, plane, .z = 1);
+    low_branch->width = 10;
+    low_branch->height = 5;
+    n00b_plane_draw_glyph(low_branch, 0, 0, 'L');
+
+    n00b_plane_add_child(parent, high_branch, 0, 0);
+    n00b_plane_add_child(parent, low_branch, 0, 0);
+
+    n00b_canvas_add_plane(c, parent);
+    n00b_canvas_render(c);
+
+    n00b_string_t *buf = n00b_stream_backend_get_buffer(c->backend_ctx);
+    assert(buf->data[0] == 'H');
+
+    n00b_plane_destroy(high_leaf);
+    n00b_plane_destroy(high_wrap);
+    n00b_plane_destroy(high_branch);
+    n00b_plane_destroy(low_branch);
+    n00b_plane_destroy(parent);
+    n00b_canvas_destroy(c);
+    printf("  [PASS] canvas descendant z can overlay later sibling\n");
+}
+
 // ====================================================================
 // Main
 // ====================================================================
@@ -410,6 +910,7 @@ main(int argc, char **argv)
 
     printf("Running render canvas tests...\n");
 
+    test_canvas_init_caller_owned_storage();
     test_canvas_new_destroy();
     test_canvas_add_remove_plane();
     test_canvas_render_empty();
@@ -417,12 +918,19 @@ main(int argc, char **argv)
     test_canvas_z_order();
     test_canvas_plane_offset();
     test_canvas_invalidate();
+    test_canvas_refreshes_fallback_metrics_when_font_metrics_cap_absent();
     test_composite_flatten();
     test_canvas_widget_state_styling();
+    test_composite_honors_string_style_ranges();
+    test_composite_equal_cells_ignore_style_pointer_identity();
+    test_stream_backend_style_pool_does_not_accumulate_across_frames();
     test_canvas_nested_planes();
     test_canvas_nested_z_order();
     test_canvas_child_clipping();
     test_composite_flatten_nested();
+    test_composite_commands_quantize_partial_cells();
+    test_canvas_layout_move_updates_descendant_render_origin();
+    test_canvas_descendant_z_can_overlay_later_sibling();
 
     printf("All render canvas tests passed.\n");
     n00b_shutdown();

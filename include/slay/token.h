@@ -35,9 +35,6 @@
 // Hash-based token ID helpers
 // ============================================================================
 
-#define XXH_INLINE_ALL
-#include "vendor/xxhash.h"
-
 /**
  * @brief Compute a fixed-text terminal ID from its text.
  *
@@ -47,11 +44,7 @@
  * Grammar registration and scanner emission independently produce the
  * same ID for the same text — no coordination needed.
  */
-static inline int64_t
-n00b_token_id_from_text(const char *text, size_t len)
-{
-    return (int64_t)(XXH3_64bits(text, len) | (1ULL << 63));
-}
+extern int64_t n00b_token_id_from_text(const char *text, size_t len);
 
 /**
  * @brief True if a token ID is a hash-based fixed-text terminal.

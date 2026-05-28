@@ -903,29 +903,27 @@ prefix_sets_compute_internal(RegexBuilder *self, NodeId node, NodeId rev_start)
         n00b_result_t(NodeId) body_r = regex_builder_strip_lb(self, node);
         if (n00b_result_is_ok(body_r)) {
             NodeId body = n00b_result_get(body_r);
-            if (body.v != node.v) {
-                n00b_result_t(NodeId) body_rev_r =
-                    regex_builder_reverse(self, body);
-                if (n00b_result_is_ok(body_rev_r)) {
-                    NodeId body_rev = n00b_result_get(body_rev_r);
-                    n00b_result_t(NodeId) bare_r =
-                        regex_builder_strip_lb(self, body_rev);
-                    if (n00b_result_is_ok(bare_r)) {
-                        NodeId bare = n00b_result_get(bare_r);
-                        n00b_result_t(TSetIdVec) alt =
-                            calc_potential_start(self, bare, 16, 64, false);
-                        if (n00b_result_is_ok(alt)) {
-                            tset_id_vec_free(&rev_pot_v);
-                            rev_pot_v = n00b_result_get(alt);
-                        }
-                        else {
-                            n00b_err_t e = n00b_result_get_err(alt);
-                            tset_id_vec_free(&fwd_pot_v);
-                            tset_id_vec_free(&fwd_pot_str_v);
-                            tset_id_vec_free(&rev_anc_v);
-                            tset_id_vec_free(&rev_pot_v);
-                            return n00b_result_err(PrefixSets, e);
-                        }
+            n00b_result_t(NodeId) body_rev_r =
+                regex_builder_reverse(self, body);
+            if (n00b_result_is_ok(body_rev_r)) {
+                NodeId body_rev = n00b_result_get(body_rev_r);
+                n00b_result_t(NodeId) bare_r =
+                    regex_builder_strip_lb(self, body_rev);
+                if (n00b_result_is_ok(bare_r)) {
+                    NodeId bare = n00b_result_get(bare_r);
+                    n00b_result_t(TSetIdVec) alt =
+                        calc_potential_start(self, bare, 16, 64, false);
+                    if (n00b_result_is_ok(alt)) {
+                        tset_id_vec_free(&rev_pot_v);
+                        rev_pot_v = n00b_result_get(alt);
+                    }
+                    else {
+                        n00b_err_t e = n00b_result_get_err(alt);
+                        tset_id_vec_free(&fwd_pot_v);
+                        tset_id_vec_free(&fwd_pot_str_v);
+                        tset_id_vec_free(&rev_anc_v);
+                        tset_id_vec_free(&rev_pot_v);
+                        return n00b_result_err(PrefixSets, e);
                     }
                 }
             }
@@ -1760,6 +1758,25 @@ select_prefix_simd(RegexBuilder *self,
                 return n00b_result_ok(PrefixSelect, out);
             }
         }
+
+        n00b_result_t(PrefixSets) ps_r =
+            prefix_sets_compute_internal(self, node, rev_start);
+        if (n00b_result_is_err(ps_r)) {
+            return n00b_result_err(PrefixSelect, n00b_result_get_err(ps_r));
+        }
+        PrefixSets ps = n00b_result_get(ps_r);
+        bool rev_usable =
+            regex_builder_get_nulls_id(self, rev_start).v == NULLS_ID_EMPTY.v
+            && (ps.rev_anchored.sets.len > 0
+                || ps.rev_potential.sets.len > 0);
+        bool filled = try_rev_fill(&out, self, &ps, rev_usable);
+        prefix_set_free(&ps.fwd_potential);
+        prefix_set_free(&ps.fwd_potential_stripped);
+        prefix_set_free(&ps.rev_anchored);
+        prefix_set_free(&ps.rev_potential);
+        if (filled) {
+            return n00b_result_ok(PrefixSelect, out);
+        }
         return n00b_result_ok(PrefixSelect, out);
     }
 
@@ -1891,12 +1908,6 @@ select_prefix(RegexBuilder *self,
               bool          no_fwd_prefix)
 {
     (void)max_cap;     // only used under upstream `feature = "convergence_prefix"`.
-    PrefixSelect empty = (PrefixSelect){.has_kind = false,
-                                        .kind     = (PrefixKind){},
-                                        .has_skip = false,
-                                        .skip     = nullptr};
-    if (!n00b_simd_has_simd()) return n00b_result_ok(PrefixSelect, empty);
-
     return select_prefix_simd(self, node, rev_start, has_look, min_len,
                               no_fwd_prefix);
     // NOTE: the upstream `convergence_prefix` cargo-feature path is

@@ -9,6 +9,7 @@
 #include "conduit/timer.h"
 #include "conduit/signal.h"
 #include "conduit/user_event.h"
+#include "conduit/proc_lifecycle_internal.h"
 #include "core/stw.h"
 
 #ifndef _WIN32
@@ -860,15 +861,7 @@ poll_process_procs(poll_ctx_t *ctx)
         int ret = syscall(SYS_waitid, P_PIDFD, pp->pidfd, &info,
                           WEXITED | WNOHANG, nullptr);
         if (ret == 0 && info.si_pid != 0) {
-            // waitid's si_status is the raw exit code or signal,
-            // not in waitpid(2) format.  Encode it so downstream
-            // WIFEXITED / WEXITSTATUS macros work correctly.
-            if (info.si_code == CLD_EXITED) {
-                exit_status = info.si_status << 8;
-            }
-            else {
-                exit_status = info.si_status & 0x7f;
-            }
+            exit_status = n00b_conduit_proc_wait_status_from_siginfo(&info);
         }
 
         n00b_conduit_proc_fire(pp->watch, N00B_CONDUIT_PROC_EXIT, exit_status);

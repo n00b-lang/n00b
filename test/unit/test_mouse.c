@@ -21,6 +21,11 @@
 #include "display/event.h"
 #include "display/mouse.h"
 #include "display/focus.h"
+#include "display/backend_stream_internal.h"
+
+extern void n00b_stream_backend_set_size(void        *ctx,
+                                          n00b_isize_t rows,
+                                          n00b_isize_t cols);
 
 // -------------------------------------------------------------------
 // Helpers
@@ -38,6 +43,85 @@ make_plane(int32_t x, int32_t y, n00b_isize_t cols, n00b_isize_t rows)
     return p;
 }
 
+typedef struct {
+    int32_t x;
+    int32_t y;
+    int calls;
+} mouse_capture_widget_t;
+
+static bool
+capture_widget_handle_event(n00b_plane_t *plane,
+                            void *data,
+                            const n00b_event_t *event)
+{
+    (void)plane;
+    mouse_capture_widget_t *capture = data;
+    if (event->type != N00B_EVENT_MOUSE) {
+        return false;
+    }
+
+    capture->x = event->mouse.x;
+    capture->y = event->mouse.y;
+    capture->calls++;
+    return true;
+}
+
+static const n00b_widget_vtable_t capture_widget_vtable = {
+    .kind = "capture_widget",
+    .handle_event = capture_widget_handle_event,
+};
+
+typedef struct {
+    bool    consume;
+    int     press_count;
+    int32_t last_x;
+    int32_t last_y;
+} mouse_record_t;
+
+static void
+record_render(n00b_plane_t *plane, void *data)
+{
+    (void)plane;
+    (void)data;
+}
+
+static bool
+record_handle_event(n00b_plane_t *plane, void *data, const n00b_event_t *event)
+{
+    (void)plane;
+
+    mouse_record_t *record = data;
+    if (!record || !event || event->type != N00B_EVENT_MOUSE) {
+        return false;
+    }
+
+    if (event->mouse.button == N00B_MOUSE_LEFT
+        && event->mouse.action == N00B_MOUSE_PRESS) {
+        record->press_count++;
+        record->last_x = event->mouse.x;
+        record->last_y = event->mouse.y;
+        return record->consume;
+    }
+
+    return false;
+}
+
+static const n00b_widget_vtable_t record_widget = {
+    .kind         = "mouse_record",
+    .render       = record_render,
+    .handle_event = record_handle_event,
+};
+
+static n00b_canvas_t *
+make_stream_canvas(n00b_isize_t rows, n00b_isize_t cols)
+{
+    n00b_canvas_t *canvas = n00b_new_kargs(n00b_canvas_t, canvas,
+                                            .vtable = &n00b_renderer_stream);
+    n00b_stream_backend_set_size(canvas->backend_ctx, rows, cols);
+    n00b_canvas_resize(canvas, rows, cols);
+
+    return canvas;
+}
 // -------------------------------------------------------------------
 // Test 1: Hit test — basic
 // -------------------------------------------------------------------
@@ -143,6 +227,235 @@ test_hit_test_invisible(void)
 }
 
 // -------------------------------------------------------------------
+// Test 4b: Terminal quantized hit-test aligns to cell grid
+// -------------------------------------------------------------------
+
+static void
+test_hit_test_terminal_quantized(void)
+{
+    n00b_canvas_t canvas;
+    memset(&canvas, 0, sizeof(canvas));
+    canvas.caps = N00B_RCAP_MANAGES_TTY;
+
+    // Plane starts mid-cell in pixel space. Terminal rendering snaps this
+    // to the cell grid; hit-testing should do the same for managed TTY
+    // backends.
+    n00b_plane_t *plane = make_plane(0, 35, 20, 19);
+    plane->canvas = &canvas;
+
+    // cph=16 => snapped top is 32. A click on row 32 should still hit.
+    n00b_option_t(n00b_plane_t *) hit_opt =
+        n00b_mouse_hit_test(plane, 2, 32, 8, 16);
+    assert(n00b_option_is_set(hit_opt));
+    assert(n00b_option_get(hit_opt) == plane);
+
+    // One full cell above snapped top should miss.
+    hit_opt = n00b_mouse_hit_test(plane, 2, 15, 8, 16);
+    assert(!n00b_option_is_set(hit_opt));
+
+    n00b_plane_destroy(plane);
+    printf("  PASS: hit_test_terminal_quantized\n");
+}
+
+static void
+test_hit_test_terminal_pixel_coords_preserved(void)
+{
+    n00b_canvas_t *canvas = n00b_new_kargs(n00b_canvas_t,
+                                           canvas,
+                                           .vtable = &n00b_renderer_stream);
+    canvas->caps = N00B_RCAP_MANAGES_TTY | N00B_RCAP_PIXEL_COORDS;
+
+    n00b_plane_t *plane = make_plane(5, 35, 2, 19);
+    n00b_canvas_add_plane(canvas, plane);
+
+    n00b_option_t(n00b_plane_t *) hit_opt =
+        n00b_mouse_hit_test(plane, 1, 40, 8, 16);
+    assert(!n00b_option_is_set(hit_opt));
+
+    hit_opt = n00b_mouse_hit_test(plane, 5, 35, 8, 16);
+    assert(n00b_option_is_set(hit_opt));
+    assert(n00b_option_get(hit_opt) == plane);
+
+    n00b_plane_destroy(plane);
+    n00b_canvas_destroy(canvas);
+    printf("  PASS: hit_test_terminal_pixel_coords_preserved\n");
+}
+
+static void
+test_hit_test_terminal_nested_uses_absolute_quantization(void)
+{
+    n00b_canvas_t *canvas = n00b_new_kargs(n00b_canvas_t,
+                                           canvas,
+                                           .vtable = &n00b_renderer_stream);
+    canvas->caps = N00B_RCAP_MANAGES_TTY;
+
+    n00b_plane_t *parent = make_plane(5, 0, 16, 8);
+    n00b_plane_t *child = make_plane(0, 0, 2, 8);
+    n00b_plane_add_child(parent, child, 5, 0);
+    n00b_canvas_add_plane(canvas, parent);
+
+    n00b_option_t(n00b_plane_t *) hit_opt =
+        n00b_mouse_hit_test(parent, 1, 1, 8, 8);
+    assert(n00b_option_is_set(hit_opt));
+    assert(n00b_option_get(hit_opt) == parent);
+
+    hit_opt = n00b_mouse_hit_test(parent, 11, 1, 8, 8);
+    assert(n00b_option_is_set(hit_opt));
+    assert(n00b_option_get(hit_opt) == child);
+
+    n00b_plane_destroy(child);
+    n00b_plane_destroy(parent);
+    n00b_canvas_destroy(canvas);
+    printf("  PASS: hit_test_terminal_nested_uses_absolute_quantization\n");
+}
+
+static void
+test_route_event_terminal_preserves_true_local_coords(void)
+{
+    n00b_canvas_t *canvas = n00b_new_kargs(n00b_canvas_t,
+                                           canvas,
+                                           .vtable = &n00b_renderer_stream);
+    canvas->caps = N00B_RCAP_MANAGES_TTY;
+    canvas->cell_px_w = 8;
+    canvas->cell_px_h = 8;
+
+    n00b_plane_t *plane = make_plane(35, 0, 8, 8);
+    mouse_capture_widget_t capture = {0};
+    n00b_widget_attach(plane, &capture_widget_vtable, &capture);
+    n00b_canvas_add_plane(canvas, plane);
+
+    n00b_event_t event = {
+        .type = N00B_EVENT_MOUSE,
+        .mouse = {
+            .x = 35,
+            .y = 0,
+            .button = N00B_MOUSE_LEFT,
+            .action = N00B_MOUSE_PRESS,
+            .mods = N00B_MOD_NONE,
+        },
+    };
+
+    n00b_mouse_route_event(canvas, nullptr, &event);
+    assert(capture.calls == 1);
+    assert(capture.x == 0);
+    assert(capture.y == 0);
+
+    n00b_widget_detach(plane);
+    n00b_plane_destroy(plane);
+    n00b_canvas_destroy(canvas);
+    printf("  PASS: route_event_terminal_preserves_true_local_coords\n");
+}
+
+static void
+test_route_event_uses_visual_z_order_for_top_level_planes(void)
+{
+    n00b_canvas_t *canvas = n00b_new_kargs(n00b_canvas_t,
+                                           canvas,
+                                           .vtable = &n00b_renderer_stream);
+    n00b_stream_backend_set_size(canvas->backend_ctx, 5, 10);
+    n00b_canvas_resize(canvas, 5, 10);
+
+    n00b_plane_t *front = make_plane(0, 0, 10, 5);
+    n00b_plane_t *back = make_plane(0, 0, 10, 5);
+    mouse_capture_widget_t front_capture = {0};
+    mouse_capture_widget_t back_capture = {0};
+
+    front->z = 1;
+    n00b_plane_draw_glyph(front, 0, 0, 'F');
+    n00b_widget_attach(front, &capture_widget_vtable, &front_capture);
+
+    n00b_plane_draw_glyph(back, 0, 0, 'B');
+    n00b_widget_attach(back, &capture_widget_vtable, &back_capture);
+
+    n00b_canvas_add_plane(canvas, front);
+    n00b_canvas_add_plane(canvas, back);
+    n00b_canvas_render(canvas);
+
+    n00b_string_t *buf = n00b_stream_backend_get_buffer(canvas->backend_ctx);
+    assert(buf->data[0] == 'F');
+
+    n00b_event_t event = {
+        .type = N00B_EVENT_MOUSE,
+        .mouse = {
+            .x = 0,
+            .y = 0,
+            .button = N00B_MOUSE_LEFT,
+            .action = N00B_MOUSE_PRESS,
+            .mods = N00B_MOD_NONE,
+        },
+    };
+
+    n00b_mouse_route_event(canvas, nullptr, &event);
+    assert(front_capture.calls == 1);
+    assert(back_capture.calls == 0);
+
+    n00b_widget_detach(back);
+    n00b_widget_detach(front);
+    n00b_plane_destroy(back);
+    n00b_plane_destroy(front);
+    n00b_canvas_destroy(canvas);
+    printf("  PASS: route_event_uses_visual_z_order_for_top_level_planes\n");
+}
+
+static void
+test_route_event_tracks_manual_move_after_layout(void)
+{
+    n00b_canvas_t *canvas = n00b_new_kargs(n00b_canvas_t,
+                                           canvas,
+                                           .vtable = &n00b_renderer_stream);
+    n00b_stream_backend_set_size(canvas->backend_ctx, 20, 20);
+    n00b_canvas_resize(canvas, 20, 20);
+
+    n00b_plane_t *parent = make_plane(0, 0, 10, 10);
+    n00b_plane_t *child = make_plane(0, 0, 4, 3);
+    mouse_capture_widget_t capture = {0};
+
+    n00b_widget_attach(child, &capture_widget_vtable, &capture);
+    n00b_plane_add_child(parent, child, 0, 0);
+    n00b_widget_layout(parent,
+                       (n00b_rect_t){
+                           .x = 0,
+                           .y = 0,
+                           .width = 10,
+                           .height = 10,
+                       });
+    n00b_widget_layout(child,
+                       (n00b_rect_t){
+                           .x = 2,
+                           .y = 1,
+                           .width = 4,
+                           .height = 3,
+                       });
+    n00b_plane_move(parent, 5, 4);
+
+    n00b_canvas_add_plane(canvas, parent);
+
+    n00b_event_t event = {
+        .type = N00B_EVENT_MOUSE,
+        .mouse = {
+            .x = 8,
+            .y = 6,
+            .button = N00B_MOUSE_LEFT,
+            .action = N00B_MOUSE_PRESS,
+            .mods = N00B_MOD_NONE,
+        },
+    };
+
+    n00b_mouse_route_event(canvas, nullptr, &event);
+    assert(capture.calls == 1);
+    assert(capture.x == 1);
+    assert(capture.y == 1);
+
+    n00b_canvas_remove_plane(canvas, parent);
+    n00b_plane_remove_child(parent, child);
+    n00b_widget_detach(child);
+    n00b_plane_destroy(child);
+    n00b_plane_destroy(parent);
+    n00b_canvas_destroy(canvas);
+    printf("  PASS: route_event_tracks_manual_move_after_layout\n");
+}
+
+// -------------------------------------------------------------------
 // Test 5: Mouse capture
 // -------------------------------------------------------------------
 
@@ -167,6 +480,54 @@ test_capture(void)
 
     n00b_plane_destroy(plane);
     printf("  PASS: capture\n");
+}
+
+// -------------------------------------------------------------------
+// Test 5b: Bubbled events re-localize to each parent plane
+// -------------------------------------------------------------------
+
+static void
+test_bubble_parent_receives_parent_local_coords(void)
+{
+    n00b_canvas_t *canvas = make_stream_canvas(20, 40);
+    n00b_plane_t  *parent = make_plane(10, 4, 20, 10);
+    n00b_plane_t  *child  = make_plane(0, 0, 6, 4);
+    mouse_record_t parent_record = {};
+    mouse_record_t child_record = {};
+    n00b_event_t click = {
+        .type = N00B_EVENT_MOUSE,
+        .mouse = {
+            .x = 17,
+            .y = 12,
+            .button = N00B_MOUSE_LEFT,
+            .action = N00B_MOUSE_PRESS,
+            .mods = N00B_MOD_NONE,
+        },
+    };
+
+    n00b_widget_attach(parent, &record_widget, &parent_record);
+    n00b_widget_attach(child, &record_widget, &child_record);
+    n00b_plane_add_child(parent, child, 5, 6);
+    n00b_canvas_add_plane(canvas, parent);
+
+    n00b_mouse_route_event(canvas, nullptr, &click);
+
+    assert(child_record.press_count == 1);
+    assert(child_record.last_x == 2);
+    assert(child_record.last_y == 2);
+    assert(parent_record.press_count == 1);
+    assert(parent_record.last_x == 7);
+    assert(parent_record.last_y == 8);
+
+    assert(n00b_canvas_remove_plane(canvas, parent));
+    assert(n00b_plane_remove_child(parent, child));
+    n00b_widget_detach(child);
+    n00b_widget_detach(parent);
+    n00b_plane_destroy(child);
+    n00b_plane_destroy(parent);
+    n00b_canvas_destroy(canvas);
+
+    printf("  PASS: bubble_parent_receives_parent_local_coords\n");
 }
 
 // -------------------------------------------------------------------
@@ -290,7 +651,14 @@ main(int argc, char **argv)
     test_hit_test_depth();
     test_hit_test_miss();
     test_hit_test_invisible();
+    test_hit_test_terminal_quantized();
+    test_hit_test_terminal_pixel_coords_preserved();
+    test_hit_test_terminal_nested_uses_absolute_quantization();
+    test_route_event_terminal_preserves_true_local_coords();
+    test_route_event_uses_visual_z_order_for_top_level_planes();
+    test_route_event_tracks_manual_move_after_layout();
     test_capture();
+    test_bubble_parent_receives_parent_local_coords();
     test_button_mouse_click();
     test_sgr_encoding();
     printf("All mouse tests passed.\n");

@@ -10,6 +10,11 @@ n00b_display_src = files(
     # Top-level display sources (not inside render/, widgets/, or table/)
     'layout.c',
     'hexdump.c',
+    'hexdump_contracts.c',
+    'diagnostics.c',
+    'scene_contracts.c',
+    'event_dispatch.c',
+    'terminal_lifecycle.c',
     'widget.c',
     'focus.c',
     'event_loop.c',

@@ -12,6 +12,7 @@
 #include "display/widget.h"
 #include "display/widgets/link.h"
 #include "display/event.h"
+#include "internal/display/widget_primitives.h"
 #include "text/strings/text_style.h"
 #include "text/strings/string_style.h"
 #include "text/strings/theme.h"
@@ -97,8 +98,7 @@ link_render(n00b_plane_t *plane, void *data)
         return;
     }
 
-    bool focused = (n00b_plane_get_state(plane) == N00B_WSTATE_FOCUSED
-                    || n00b_plane_get_state(plane) == N00B_WSTATE_ACTIVE);
+    bool focused = n00b_widget_state_is_focused_or_active(plane);
 
     // Build styled text.
     n00b_text_style_t *s = n00b_alloc(n00b_text_style_t);
@@ -132,8 +132,7 @@ link_handle_event(n00b_plane_t *plane, void *data, const n00b_event_t *event)
 
     // Mouse left-click activates.
     if (event->type == N00B_EVENT_MOUSE) {
-        if (event->mouse.button == N00B_MOUSE_LEFT
-            && event->mouse.action == N00B_MOUSE_PRESS) {
+        if (n00b_widget_event_is_left_press(event)) {
             link_do_activate(plane, lk);
             return true;
         }
@@ -144,10 +143,8 @@ link_handle_event(n00b_plane_t *plane, void *data, const n00b_event_t *event)
         return false;
     }
 
-    uint32_t key = event->key.key;
-
     // Enter or Space activates.
-    if (key == N00B_KEY_ENTER || key == ' ') {
+    if (n00b_widget_event_is_keyboard_activate(event)) {
         link_do_activate(plane, lk);
         return true;
     }
@@ -256,22 +253,22 @@ n00b_link_new(n00b_string_t *text) _kargs {
 void
 n00b_link_activate(n00b_plane_t *plane)
 {
-    if (!plane || plane->widget_vtable != &n00b_widget_link) {
+    n00b_link_t *lk = n00b_widget_data_if_kind(plane, &n00b_widget_link);
+    if (!lk) {
         return;
     }
 
-    n00b_link_t *lk = (n00b_link_t *)plane->widget_data;
     link_do_activate(plane, lk);
 }
 
 void
 n00b_link_set_text(n00b_plane_t *plane, n00b_string_t *text)
 {
-    if (!plane || plane->widget_vtable != &n00b_widget_link) {
+    n00b_link_t *lk = n00b_widget_data_if_kind(plane, &n00b_widget_link);
+    if (!lk) {
         return;
     }
 
-    n00b_link_t *lk = (n00b_link_t *)plane->widget_data;
     lk->text = text;
     n00b_plane_mark_dirty(plane);
 }
@@ -279,22 +276,22 @@ n00b_link_set_text(n00b_plane_t *plane, n00b_string_t *text)
 void
 n00b_link_set_url(n00b_plane_t *plane, n00b_string_t *url)
 {
-    if (!plane || plane->widget_vtable != &n00b_widget_link) {
+    n00b_link_t *lk = n00b_widget_data_if_kind(plane, &n00b_widget_link);
+    if (!lk) {
         return;
     }
 
-    n00b_link_t *lk = (n00b_link_t *)plane->widget_data;
     lk->url = url;
 }
 
 void
 n00b_link_reset_visited(n00b_plane_t *plane)
 {
-    if (!plane || plane->widget_vtable != &n00b_widget_link) {
+    n00b_link_t *lk = n00b_widget_data_if_kind(plane, &n00b_widget_link);
+    if (!lk) {
         return;
     }
 
-    n00b_link_t *lk = (n00b_link_t *)plane->widget_data;
     lk->visited = false;
     n00b_plane_mark_dirty(plane);
 }

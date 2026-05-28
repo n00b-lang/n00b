@@ -17,6 +17,7 @@
 #include "core/buffer.h"
 #include "display/render/backend.h"
 #include "display/render/composite.h"
+#include "display/backend_stream_internal.h"
 
 // -------------------------------------------------------------------
 // Stream backend context
@@ -26,6 +27,8 @@ typedef struct {
     char        *buffer;
     size_t       buf_size;
     size_t       buf_used;
+    char        *clipboard;
+    size_t       clipboard_len;
     n00b_isize_t rows;
     n00b_isize_t cols;
 
@@ -33,6 +36,7 @@ typedef struct {
     n00b_rcell_t *comp_grid;
     n00b_isize_t  comp_grid_rows;
     n00b_isize_t  comp_grid_cols;
+    n00b_composite_style_pool_t style_pool;
 } stream_ctx_t;
 
 #define STREAM_DEFAULT_ROWS 25
@@ -63,6 +67,10 @@ stream_destroy(void *vctx)
     if (ctx) {
         if (ctx->comp_grid) {
             n00b_free(ctx->comp_grid);
+        }
+        n00b_composite_style_pool_destroy(&ctx->style_pool);
+        if (ctx->clipboard) {
+            n00b_free(ctx->clipboard);
         }
         n00b_free(ctx->buffer);
         n00b_free(ctx);
@@ -166,6 +174,33 @@ stream_flush(void *vctx)
     // Nothing to flush for buffer mode.
 }
 
+static bool
+stream_clipboard_copy(void *vctx, const char *utf8, size_t len)
+{
+    stream_ctx_t *ctx = vctx;
+    char         *copy;
+
+    if (!ctx || !utf8) {
+        return false;
+    }
+
+    copy = n00b_alloc_array_with_opts(char,
+                                      len + 1,
+                                      &(n00b_alloc_opts_t){.no_scan = true});
+    if (len > 0) {
+        memcpy(copy, utf8, len);
+    }
+    copy[len] = '\0';
+
+    if (ctx->clipboard) {
+        n00b_free(ctx->clipboard);
+    }
+
+    ctx->clipboard     = copy;
+    ctx->clipboard_len = len;
+    return true;
+}
+
 // -------------------------------------------------------------------
 // Plane-based rendering
 // -------------------------------------------------------------------
@@ -187,17 +222,17 @@ stream_render_planes(void                         *vctx,
             n00b_free(ctx->comp_grid);
         }
         size_t total = (size_t)total_rows * total_cols;
-        ctx->comp_grid = n00b_alloc_array_with_opts(
-            n00b_rcell_t, total,
-            &(n00b_alloc_opts_t){.no_scan = true});
+        ctx->comp_grid = n00b_alloc_array(n00b_rcell_t, total);
         ctx->comp_grid_rows = total_rows;
         ctx->comp_grid_cols = total_cols;
     }
 
+    n00b_composite_style_pool_clear(&ctx->style_pool);
     n00b_composite_commands_to_grid(entries, count, ctx->comp_grid,
                                      total_rows, total_cols,
                                      1, 1,
-                                     default_style, caps);
+                                     default_style, caps,
+                                     &ctx->style_pool);
 
     stream_render_frame(vctx, ctx->comp_grid, total_rows, total_cols,
                          nullptr);
@@ -217,21 +252,30 @@ const n00b_renderer_vtable_t n00b_renderer_stream = {
     .render_frame  = stream_render_frame,
     .flush         = stream_flush,
     .render_planes = stream_render_planes,
+    .clipboard_copy = stream_clipboard_copy,
 };
 
 // -------------------------------------------------------------------
 // Stream-specific helpers (for testing)
 // -------------------------------------------------------------------
 
-/*
- * Get the stream backend's internal buffer as a string.
- * Only valid when the backend is the stream backend.
- */
 n00b_string_t *
 n00b_stream_backend_get_buffer(void *ctx)
 {
     stream_ctx_t *sctx = ctx;
     return n00b_string_from_raw(sctx->buffer, (int64_t)sctx->buf_used);
+}
+
+n00b_string_t *
+n00b_stream_backend_get_clipboard(void *ctx)
+{
+    stream_ctx_t *sctx = ctx;
+
+    if (!sctx || !sctx->clipboard) {
+        return nullptr;
+    }
+
+    return n00b_string_from_raw(sctx->clipboard, (int64_t)sctx->clipboard_len);
 }
 
 /*
@@ -244,9 +288,13 @@ n00b_stream_backend_get_length(void *ctx)
     return sctx->buf_used;
 }
 
-/*
- * Set the virtual terminal size for the stream backend.
- */
+size_t
+n00b_stream_backend_get_style_pool_count(void *ctx)
+{
+    stream_ctx_t *sctx = ctx;
+    return sctx ? (size_t)sctx->style_pool.count : 0;
+}
+
 void
 n00b_stream_backend_set_size(void *ctx, n00b_isize_t rows, n00b_isize_t cols)
 {

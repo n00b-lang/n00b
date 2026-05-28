@@ -15,6 +15,7 @@
 #import <QuartzCore/QuartzCore.h>
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <pthread.h>
 
@@ -22,6 +23,8 @@
 // compiler can't parse.  cocoa_bridge.h provides standalone
 // redeclarations of the types we need.
 #include "display/render/cocoa_bridge.h"
+#include "internal/display/cocoa_bridge_contracts.h"
+#include "internal/display/cocoa_input.h"
 
 // ====================================================================
 // Constants
@@ -71,6 +74,7 @@ typedef struct {
     n00b_rcell_t        *staging;
     n00b_isize_t         staging_rows;
     n00b_isize_t         staging_cols;
+    n00b_composite_style_pool_t style_pool;
 
     // Cursor state.
     n00b_isize_t         cursor_row;
@@ -117,8 +121,13 @@ typedef struct {
 
 static void           cocoa_enqueue_event(cocoa_ctx_t *ctx, const n00b_event_t *ev);
 static bool           cocoa_dequeue_event(cocoa_ctx_t *ctx, n00b_event_t *out);
-static n00b_key_mod_t cocoa_translate_modifiers(NSEventModifierFlags flags);
-static uint32_t       cocoa_translate_function_key(unichar ch);
+static uint32_t       cocoa_modifier_mask(NSEventModifierFlags flags);
+static void           cocoa_enqueue_mouse_event(cocoa_ctx_t          *ctx,
+                                                NSView               *view,
+                                                NSEvent              *event,
+                                                n00b_mouse_button_t   button,
+                                                n00b_mouse_action_t   action);
+static bool           cocoa_validate_bridge_layout(void);
 
 // ====================================================================
 // CG border drawing for N00B_CELL_BORDER cells
@@ -624,57 +633,17 @@ draw_border_cell(CGContextRef cg,
     cocoa_ctx_t *ctx = self.ctx;
     if (!ctx) return;
 
-    NSEventModifierFlags flags = [event modifierFlags];
-    n00b_key_mod_t       mods  = cocoa_translate_modifiers(flags);
-
     NSString *chars = [event charactersIgnoringModifiers];
     if (!chars || [chars length] == 0) {
         return;
     }
 
-    unichar ch = [chars characterAtIndex:0];
-    uint32_t key = N00B_KEY_NONE;
-
-    // Check for function/special keys first.
-    if (ch >= 0xF700 && ch <= 0xF8FF) {
-        key = cocoa_translate_function_key(ch);
-        if (key == N00B_KEY_NONE) {
-            return;  // Unknown function key.
-        }
+    n00b_event_t ev = {};
+    if (!n00b_cocoa_input_translate_key((uint32_t)[chars characterAtIndex:0],
+                                         cocoa_modifier_mask([event modifierFlags]),
+                                         &ev)) {
+        return;
     }
-    else {
-        switch (ch) {
-        case '\r':
-        case '\n':
-            key = N00B_KEY_ENTER;
-            break;
-        case '\t':
-            key = N00B_KEY_TAB;
-            break;
-        case 0x19:  // NSBacktabCharacter — macOS sends this for Shift+Tab.
-            key  = N00B_KEY_TAB;
-            mods |= N00B_MOD_SHIFT;
-            break;
-        case 0x1B:
-            key = N00B_KEY_ESCAPE;
-            break;
-        case 0x7F:  // macOS sends 0x7F for Backspace key.
-            key = N00B_KEY_BACKSPACE;
-            break;
-        default:
-            // Unicode codepoint.  For BMP characters the unichar value
-            // is the codepoint.  Surrogate pairs (rare in keyboard input)
-            // are not handled here.
-            key = (uint32_t)ch;
-            break;
-        }
-    }
-
-    n00b_event_t ev = {
-        .type    = N00B_EVENT_KEY,
-        .key.key  = key,
-        .key.mods = mods,
-    };
     cocoa_enqueue_event(ctx, &ev);
 }
 
@@ -687,16 +656,7 @@ draw_border_cell(CGContextRef cg,
     cocoa_ctx_t *ctx = self.ctx;
     if (!ctx) return;
 
-    NSPoint loc = [self convertPoint:[event locationInWindow] fromView:nil];
-    n00b_event_t ev = {
-        .type         = N00B_EVENT_MOUSE,
-        .mouse.x      = (int32_t)(loc.x / ctx->cell_w),
-        .mouse.y      = (int32_t)(loc.y / ctx->cell_h),  // isFlipped=YES, y=0 at top.
-        .mouse.button = N00B_MOUSE_LEFT,
-        .mouse.action = N00B_MOUSE_PRESS,
-        .mouse.mods   = cocoa_translate_modifiers([event modifierFlags]),
-    };
-    cocoa_enqueue_event(ctx, &ev);
+    cocoa_enqueue_mouse_event(ctx, self, event, N00B_MOUSE_LEFT, N00B_MOUSE_PRESS);
 }
 
 - (void)mouseUp:(NSEvent *)event
@@ -704,16 +664,7 @@ draw_border_cell(CGContextRef cg,
     cocoa_ctx_t *ctx = self.ctx;
     if (!ctx) return;
 
-    NSPoint loc = [self convertPoint:[event locationInWindow] fromView:nil];
-    n00b_event_t ev = {
-        .type         = N00B_EVENT_MOUSE,
-        .mouse.x      = (int32_t)(loc.x / ctx->cell_w),
-        .mouse.y      = (int32_t)(loc.y / ctx->cell_h),
-        .mouse.button = N00B_MOUSE_LEFT,
-        .mouse.action = N00B_MOUSE_RELEASE,
-        .mouse.mods   = cocoa_translate_modifiers([event modifierFlags]),
-    };
-    cocoa_enqueue_event(ctx, &ev);
+    cocoa_enqueue_mouse_event(ctx, self, event, N00B_MOUSE_LEFT, N00B_MOUSE_RELEASE);
 }
 
 - (void)rightMouseDown:(NSEvent *)event
@@ -721,16 +672,7 @@ draw_border_cell(CGContextRef cg,
     cocoa_ctx_t *ctx = self.ctx;
     if (!ctx) return;
 
-    NSPoint loc = [self convertPoint:[event locationInWindow] fromView:nil];
-    n00b_event_t ev = {
-        .type         = N00B_EVENT_MOUSE,
-        .mouse.x      = (int32_t)(loc.x / ctx->cell_w),
-        .mouse.y      = (int32_t)(loc.y / ctx->cell_h),
-        .mouse.button = N00B_MOUSE_RIGHT,
-        .mouse.action = N00B_MOUSE_PRESS,
-        .mouse.mods   = cocoa_translate_modifiers([event modifierFlags]),
-    };
-    cocoa_enqueue_event(ctx, &ev);
+    cocoa_enqueue_mouse_event(ctx, self, event, N00B_MOUSE_RIGHT, N00B_MOUSE_PRESS);
 }
 
 - (void)rightMouseUp:(NSEvent *)event
@@ -738,16 +680,7 @@ draw_border_cell(CGContextRef cg,
     cocoa_ctx_t *ctx = self.ctx;
     if (!ctx) return;
 
-    NSPoint loc = [self convertPoint:[event locationInWindow] fromView:nil];
-    n00b_event_t ev = {
-        .type         = N00B_EVENT_MOUSE,
-        .mouse.x      = (int32_t)(loc.x / ctx->cell_w),
-        .mouse.y      = (int32_t)(loc.y / ctx->cell_h),
-        .mouse.button = N00B_MOUSE_RIGHT,
-        .mouse.action = N00B_MOUSE_RELEASE,
-        .mouse.mods   = cocoa_translate_modifiers([event modifierFlags]),
-    };
-    cocoa_enqueue_event(ctx, &ev);
+    cocoa_enqueue_mouse_event(ctx, self, event, N00B_MOUSE_RIGHT, N00B_MOUSE_RELEASE);
 }
 
 - (void)otherMouseDown:(NSEvent *)event
@@ -755,16 +688,7 @@ draw_border_cell(CGContextRef cg,
     cocoa_ctx_t *ctx = self.ctx;
     if (!ctx) return;
 
-    NSPoint loc = [self convertPoint:[event locationInWindow] fromView:nil];
-    n00b_event_t ev = {
-        .type         = N00B_EVENT_MOUSE,
-        .mouse.x      = (int32_t)(loc.x / ctx->cell_w),
-        .mouse.y      = (int32_t)(loc.y / ctx->cell_h),
-        .mouse.button = N00B_MOUSE_MIDDLE,
-        .mouse.action = N00B_MOUSE_PRESS,
-        .mouse.mods   = cocoa_translate_modifiers([event modifierFlags]),
-    };
-    cocoa_enqueue_event(ctx, &ev);
+    cocoa_enqueue_mouse_event(ctx, self, event, N00B_MOUSE_MIDDLE, N00B_MOUSE_PRESS);
 }
 
 - (void)otherMouseUp:(NSEvent *)event
@@ -772,16 +696,7 @@ draw_border_cell(CGContextRef cg,
     cocoa_ctx_t *ctx = self.ctx;
     if (!ctx) return;
 
-    NSPoint loc = [self convertPoint:[event locationInWindow] fromView:nil];
-    n00b_event_t ev = {
-        .type         = N00B_EVENT_MOUSE,
-        .mouse.x      = (int32_t)(loc.x / ctx->cell_w),
-        .mouse.y      = (int32_t)(loc.y / ctx->cell_h),
-        .mouse.button = N00B_MOUSE_MIDDLE,
-        .mouse.action = N00B_MOUSE_RELEASE,
-        .mouse.mods   = cocoa_translate_modifiers([event modifierFlags]),
-    };
-    cocoa_enqueue_event(ctx, &ev);
+    cocoa_enqueue_mouse_event(ctx, self, event, N00B_MOUSE_MIDDLE, N00B_MOUSE_RELEASE);
 }
 
 - (void)mouseMoved:(NSEvent *)event
@@ -789,16 +704,7 @@ draw_border_cell(CGContextRef cg,
     cocoa_ctx_t *ctx = self.ctx;
     if (!ctx) return;
 
-    NSPoint loc = [self convertPoint:[event locationInWindow] fromView:nil];
-    n00b_event_t ev = {
-        .type         = N00B_EVENT_MOUSE,
-        .mouse.x      = (int32_t)(loc.x / ctx->cell_w),
-        .mouse.y      = (int32_t)(loc.y / ctx->cell_h),
-        .mouse.button = N00B_MOUSE_NONE,
-        .mouse.action = N00B_MOUSE_MOVE,
-        .mouse.mods   = cocoa_translate_modifiers([event modifierFlags]),
-    };
-    cocoa_enqueue_event(ctx, &ev);
+    cocoa_enqueue_mouse_event(ctx, self, event, N00B_MOUSE_NONE, N00B_MOUSE_MOVE);
 }
 
 - (void)mouseDragged:(NSEvent *)event
@@ -806,16 +712,7 @@ draw_border_cell(CGContextRef cg,
     cocoa_ctx_t *ctx = self.ctx;
     if (!ctx) return;
 
-    NSPoint loc = [self convertPoint:[event locationInWindow] fromView:nil];
-    n00b_event_t ev = {
-        .type         = N00B_EVENT_MOUSE,
-        .mouse.x      = (int32_t)(loc.x / ctx->cell_w),
-        .mouse.y      = (int32_t)(loc.y / ctx->cell_h),
-        .mouse.button = N00B_MOUSE_LEFT,
-        .mouse.action = N00B_MOUSE_DRAG,
-        .mouse.mods   = cocoa_translate_modifiers([event modifierFlags]),
-    };
-    cocoa_enqueue_event(ctx, &ev);
+    cocoa_enqueue_mouse_event(ctx, self, event, N00B_MOUSE_LEFT, N00B_MOUSE_DRAG);
 }
 
 - (void)rightMouseDragged:(NSEvent *)event
@@ -823,16 +720,7 @@ draw_border_cell(CGContextRef cg,
     cocoa_ctx_t *ctx = self.ctx;
     if (!ctx) return;
 
-    NSPoint loc = [self convertPoint:[event locationInWindow] fromView:nil];
-    n00b_event_t ev = {
-        .type         = N00B_EVENT_MOUSE,
-        .mouse.x      = (int32_t)(loc.x / ctx->cell_w),
-        .mouse.y      = (int32_t)(loc.y / ctx->cell_h),
-        .mouse.button = N00B_MOUSE_RIGHT,
-        .mouse.action = N00B_MOUSE_DRAG,
-        .mouse.mods   = cocoa_translate_modifiers([event modifierFlags]),
-    };
-    cocoa_enqueue_event(ctx, &ev);
+    cocoa_enqueue_mouse_event(ctx, self, event, N00B_MOUSE_RIGHT, N00B_MOUSE_DRAG);
 }
 
 - (void)scrollWheel:(NSEvent *)event
@@ -843,16 +731,8 @@ draw_border_cell(CGContextRef cg,
     CGFloat dy = [event scrollingDeltaY];
     if (dy == 0.0) return;
 
-    NSPoint loc = [self convertPoint:[event locationInWindow] fromView:nil];
-    n00b_event_t ev = {
-        .type         = N00B_EVENT_MOUSE,
-        .mouse.x      = (int32_t)(loc.x / ctx->cell_w),
-        .mouse.y      = (int32_t)(loc.y / ctx->cell_h),
-        .mouse.button = (dy > 0.0) ? N00B_MOUSE_SCROLL_UP : N00B_MOUSE_SCROLL_DOWN,
-        .mouse.action = N00B_MOUSE_PRESS,
-        .mouse.mods   = cocoa_translate_modifiers([event modifierFlags]),
-    };
-    cocoa_enqueue_event(ctx, &ev);
+    n00b_mouse_button_t button = dy > 0.0 ? N00B_MOUSE_SCROLL_UP : N00B_MOUSE_SCROLL_DOWN;
+    cocoa_enqueue_mouse_event(ctx, self, event, button, N00B_MOUSE_PRESS);
 }
 
 @end
@@ -891,6 +771,41 @@ dispatch_to_main_sync(dispatch_block_t block)
     }
 }
 
+static bool
+cocoa_clipboard_copy(void *vctx, const char *utf8, size_t len)
+{
+    __block bool ok = false;
+
+    (void)vctx;
+
+    if (!utf8) {
+        return false;
+    }
+
+    dispatch_to_main_sync(^{
+        @autoreleasepool {
+            NSString *string = [[NSString alloc] initWithBytes:utf8
+                                                        length:len
+                                                      encoding:NSUTF8StringEncoding];
+            NSPasteboard *pasteboard;
+
+            if (!string) {
+                return;
+            }
+
+            pasteboard = [NSPasteboard generalPasteboard];
+            if (!pasteboard) {
+                return;
+            }
+
+            [pasteboard clearContents];
+            ok = [pasteboard setString:string forType:NSPasteboardTypeString];
+        }
+    });
+
+    return ok;
+}
+
 // ====================================================================
 // Event queue helpers
 // ====================================================================
@@ -918,49 +833,65 @@ cocoa_dequeue_event(cocoa_ctx_t *ctx, n00b_event_t *out)
     return true;
 }
 
-// ====================================================================
-// NSEvent → n00b_event_t key mapping (implementations)
-// ====================================================================
-
-static n00b_key_mod_t
-cocoa_translate_modifiers(NSEventModifierFlags flags)
+static uint32_t
+cocoa_modifier_mask(NSEventModifierFlags flags)
 {
-    n00b_key_mod_t mods = N00B_MOD_NONE;
-    if (flags & NSEventModifierFlagShift)   mods |= N00B_MOD_SHIFT;
-    if (flags & NSEventModifierFlagControl) mods |= N00B_MOD_CTRL;
-    if (flags & NSEventModifierFlagOption)  mods |= N00B_MOD_ALT;
-    if (flags & NSEventModifierFlagCommand) mods |= N00B_MOD_ALT;
+    uint32_t mods = 0;
+    if (flags & NSEventModifierFlagShift) {
+        mods |= N00B_COCOA_MOD_SHIFT;
+    }
+    if (flags & NSEventModifierFlagControl) {
+        mods |= N00B_COCOA_MOD_CTRL;
+    }
+    if (flags & NSEventModifierFlagOption) {
+        mods |= N00B_COCOA_MOD_ALT;
+    }
+    if (flags & NSEventModifierFlagCommand) {
+        mods |= N00B_COCOA_MOD_CMD;
+    }
     return mods;
 }
 
-static uint32_t
-cocoa_translate_function_key(unichar ch)
+static void
+cocoa_enqueue_mouse_event(cocoa_ctx_t        *ctx,
+                          NSView             *view,
+                          NSEvent            *event,
+                          n00b_mouse_button_t button,
+                          n00b_mouse_action_t action)
 {
-    switch (ch) {
-    case NSUpArrowFunctionKey:    return N00B_KEY_UP;
-    case NSDownArrowFunctionKey:  return N00B_KEY_DOWN;
-    case NSLeftArrowFunctionKey:  return N00B_KEY_LEFT;
-    case NSRightArrowFunctionKey: return N00B_KEY_RIGHT;
-    case NSHomeFunctionKey:       return N00B_KEY_HOME;
-    case NSEndFunctionKey:        return N00B_KEY_END;
-    case NSPageUpFunctionKey:     return N00B_KEY_PAGE_UP;
-    case NSPageDownFunctionKey:   return N00B_KEY_PAGE_DOWN;
-    case NSInsertFunctionKey:     return N00B_KEY_INSERT;
-    case NSDeleteFunctionKey:     return N00B_KEY_DELETE;
-    case NSF1FunctionKey:         return N00B_KEY_F1;
-    case NSF2FunctionKey:         return N00B_KEY_F2;
-    case NSF3FunctionKey:         return N00B_KEY_F3;
-    case NSF4FunctionKey:         return N00B_KEY_F4;
-    case NSF5FunctionKey:         return N00B_KEY_F5;
-    case NSF6FunctionKey:         return N00B_KEY_F6;
-    case NSF7FunctionKey:         return N00B_KEY_F7;
-    case NSF8FunctionKey:         return N00B_KEY_F8;
-    case NSF9FunctionKey:         return N00B_KEY_F9;
-    case NSF10FunctionKey:        return N00B_KEY_F10;
-    case NSF11FunctionKey:        return N00B_KEY_F11;
-    case NSF12FunctionKey:        return N00B_KEY_F12;
-    default:                      return N00B_KEY_NONE;
+    if (!ctx || !view || !event) {
+        return;
     }
+
+    NSPoint loc = [view convertPoint:[event locationInWindow] fromView:nil];
+    n00b_event_t ev = {};
+    n00b_cocoa_input_translate_mouse_point(loc.x,
+                                           loc.y,
+                                           (n00b_isize_t)ctx->cell_w,
+                                           (n00b_isize_t)ctx->cell_h,
+                                           button,
+                                           action,
+                                           cocoa_modifier_mask([event modifierFlags]),
+                                           &ev);
+    cocoa_enqueue_event(ctx, &ev);
+}
+
+static bool
+cocoa_validate_bridge_layout(void)
+{
+    n00b_cocoa_bridge_layout_t canonical = n00b_cocoa_bridge_layout_canonical();
+    n00b_cocoa_bridge_layout_t bridge    = n00b_cocoa_bridge_layout_bridge();
+    const char                *mismatch  = NULL;
+
+    if (n00b_cocoa_bridge_layout_match(&canonical, &bridge, &mismatch)) {
+        return true;
+    }
+
+    fprintf(stderr,
+            "cocoa backend bridge layout mismatch at '%s'; "
+            "update include/display/render/cocoa_bridge.h to match canonical headers.\n",
+            mismatch ? mismatch : "unknown");
+    return false;
 }
 
 // ====================================================================
@@ -1132,6 +1063,11 @@ cocoa_init(void *output)
     ctx->output = output;
     ctx->cursor_blink_on = true;
 
+    if (!cocoa_validate_bridge_layout()) {
+        free(ctx);
+        return NULL;
+    }
+
     // --- NSApplication setup ---
     // We always initialize NSApp but never call [NSApp run] ourselves.
     // The caller is responsible for pumping the run loop (e.g. via
@@ -1270,9 +1206,10 @@ cocoa_destroy(void *vctx)
 
     // Free staging buffer.
     if (ctx->staging) {
-        free(ctx->staging);
+        n00b_free(ctx->staging);
         ctx->staging = NULL;
     }
+    n00b_composite_style_pool_destroy(&ctx->style_pool);
 
     // Free GUI cache.
     if (ctx->gui_cache) {
@@ -1350,8 +1287,10 @@ cocoa_render_frame(void         *vctx,
 
     // Reallocate staging if dimensions changed.
     if (ctx->staging_rows != rows || ctx->staging_cols != cols) {
-        free(ctx->staging);
-        ctx->staging = malloc(bytes);
+        if (ctx->staging) {
+            n00b_free(ctx->staging);
+        }
+        ctx->staging = n00b_cocoa_bridge_alloc_rcells(total);
         ctx->staging_rows = rows;
         ctx->staging_cols = cols;
     }
@@ -1698,16 +1637,20 @@ cocoa_render_planes(void                         *vctx,
     // Use the staging buffer directly as our compositing target.
     // Reallocate if size changed.
     if (ctx->staging_rows != cell_rows || ctx->staging_cols != cell_cols) {
-        free(ctx->staging);
-        ctx->staging      = calloc(total, sizeof(n00b_rcell_t));
+        if (ctx->staging) {
+            n00b_free(ctx->staging);
+        }
+        ctx->staging      = n00b_cocoa_bridge_alloc_rcells(total);
         ctx->staging_rows = cell_rows;
         ctx->staging_cols = cell_cols;
     }
 
+    n00b_composite_style_pool_clear(&ctx->style_pool);
     n00b_composite_commands_to_grid(entries, count, ctx->staging,
                                      cell_rows, cell_cols,
                                      cpw, cph,
-                                     default_style, caps);
+                                     default_style, caps,
+                                     &ctx->style_pool);
 
     // Route through existing render_frame (which copies staging and
     // invalidates the dirty region for drawRect:).
@@ -1728,9 +1671,11 @@ const n00b_renderer_vtable_t n00b_renderer_cocoa = {
     .render_frame       = cocoa_render_frame,
     .flush              = cocoa_flush,
     .render_planes      = cocoa_render_planes,
+    .clipboard_copy     = cocoa_clipboard_copy,
     .cursor_set_visible = cocoa_cursor_set_visible,
     .cursor_move        = cocoa_cursor_move,
     .on_resize          = cocoa_on_resize,
     .prepare_gui        = cocoa_prepare_gui,
+    .get_font_metrics   = NULL,
     .poll_event         = cocoa_poll_event,
 };

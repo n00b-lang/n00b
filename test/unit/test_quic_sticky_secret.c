@@ -271,6 +271,10 @@ test_endpoint_consumes_sticky_secret(void)
                                      .alpn      = "n00b-stickytest/1",
                                      .stateless_reset_secret     = ssb,
                                      .stateless_reset_secret_len = len);
+    if (n00b_result_is_err(er)) {
+        fprintf(stderr, "quic endpoint creation failed: err=%d\n",
+                n00b_result_get_err(er));
+    }
     assert(n00b_result_is_ok(er));
     n00b_quic_endpoint_t *ep = n00b_result_get(er);
 

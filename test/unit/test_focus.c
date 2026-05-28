@@ -109,7 +109,7 @@ test_focus_empty(void)
     assert(!n00b_option_is_set(n00b_focus_mgr_prev(fm)));
 
     n00b_focus_mgr_destroy(fm);
-    n00b_canvas_destroy(&canvas);
+    n00b_canvas_deinit(&canvas);
 
     printf("  [PASS] empty canvas focus\n");
 }
@@ -183,7 +183,7 @@ test_focus_tab_cycle(void)
     assert(f3->widget_state == N00B_WSTATE_NORMAL);
 
     n00b_focus_mgr_destroy(fm);
-    n00b_canvas_destroy(&canvas);
+    n00b_canvas_deinit(&canvas);
 
     printf("  [PASS] tab cycle\n");
 }
@@ -235,7 +235,7 @@ test_focus_shift_tab(void)
     assert(n00b_option_get(prev_opt) == f1);
 
     n00b_focus_mgr_destroy(fm);
-    n00b_canvas_destroy(&canvas);
+    n00b_canvas_deinit(&canvas);
 
     printf("  [PASS] shift-tab\n");
 }
@@ -288,10 +288,87 @@ test_focus_set(void)
     assert(n00b_option_get(cur_opt) == f2);
 
     n00b_focus_mgr_destroy(fm);
-    n00b_canvas_destroy(&canvas);
+    n00b_canvas_deinit(&canvas);
     n00b_plane_destroy(nf);
 
     printf("  [PASS] focus set\n");
+}
+
+// -------------------------------------------------------------------
+// Test 5: focus manager owns canvas registration lifecycle
+// -------------------------------------------------------------------
+
+static void
+test_focus_mgr_registers_with_canvas(void)
+{
+    n00b_runtime_t *rt = n00b_get_runtime();
+    auto *stdout_topic =
+        (n00b_conduit_topic_t(n00b_buffer_t *) *)rt->stdout_topic;
+
+    n00b_canvas_t canvas;
+    memset(&canvas, 0, sizeof(canvas));
+    n00b_canvas_init(&canvas,
+                      .vtable = &n00b_renderer_stream,
+                      .output = stdout_topic);
+
+    assert(canvas.focus == nullptr);
+
+    n00b_focus_mgr_t *fm = n00b_focus_mgr_new(&canvas);
+    assert(canvas.focus == fm);
+
+    n00b_focus_mgr_destroy(fm);
+    assert(canvas.focus == nullptr);
+
+    n00b_canvas_deinit(&canvas);
+
+    printf("  [PASS] focus manager registers with canvas\n");
+}
+
+// -------------------------------------------------------------------
+// Test 6: rebuild blurs focus that drops out of the visible tree
+// -------------------------------------------------------------------
+
+static void
+test_focus_rebuild_blurs_hidden_plane(void)
+{
+    n00b_runtime_t *rt = n00b_get_runtime();
+    auto *stdout_topic =
+        (n00b_conduit_topic_t(n00b_buffer_t *) *)rt->stdout_topic;
+
+    n00b_canvas_t canvas;
+    memset(&canvas, 0, sizeof(canvas));
+    n00b_canvas_init(&canvas,
+                      .vtable = &n00b_renderer_stream,
+                      .output = stdout_topic);
+
+    n00b_plane_t *root = n00b_new_kargs(n00b_plane_t, plane);
+    n00b_plane_t *f1 = make_focusable_plane("f1");
+    n00b_plane_t *f2 = make_focusable_plane("f2");
+
+    root->width = 80;
+    root->height = 25;
+
+    n00b_plane_add_child(root, f1, 0, 0);
+    n00b_plane_add_child(root, f2, 0, 1);
+    n00b_canvas_add_plane(&canvas, root);
+
+    n00b_focus_mgr_t *fm = n00b_focus_mgr_new(&canvas);
+    assert(n00b_focus_mgr_current_plane(fm) == f1);
+    assert(n00b_focus_mgr_set(fm, f2));
+    assert(n00b_focus_mgr_current_plane(fm) == f2);
+    assert(f2->widget_state == N00B_WSTATE_FOCUSED);
+
+    n00b_plane_set_visible(f2, false);
+    n00b_focus_mgr_rebuild(fm);
+
+    assert(n00b_focus_mgr_current_plane(fm) == f1);
+    assert(f1->widget_state == N00B_WSTATE_FOCUSED);
+    assert(f2->widget_state == N00B_WSTATE_NORMAL);
+
+    n00b_focus_mgr_destroy(fm);
+    n00b_canvas_deinit(&canvas);
+
+    printf("  [PASS] focus rebuild blurs hidden plane\n");
 }
 
 // -------------------------------------------------------------------
@@ -310,6 +387,8 @@ main(int argc, char **argv)
     test_focus_tab_cycle();
     test_focus_shift_tab();
     test_focus_set();
+    test_focus_mgr_registers_with_canvas();
+    test_focus_rebuild_blurs_hidden_plane();
 
     printf("All focus tests passed.\n");
 

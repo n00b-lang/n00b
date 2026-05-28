@@ -1,11 +1,9 @@
-#define XXH_INLINE_ALL
 #include "text/strings/rich_desc.h"
 #include "text/strings/text_style.h"
 #include "adt/dict_untyped.h"
 #include "core/gc.h"
 #include "core/hash.h"
 #include "core/runtime.h"
-#include "vendor/xxhash.h"
 #include <string.h>
 #include <ctype.h>
 #include <stddef.h>
@@ -402,7 +400,7 @@ n00b_rich_desc_parse(const char *desc, int32_t desc_len)
     }
 
     // Hash-based cache lookup.
-    uint64_t hash = XXH3_64bits(desc, (size_t)desc_len);
+    uint64_t hash = n00b_xxh3_64bits_raw(desc, (size_t)desc_len);
 
     bool  found;
     void *cached = _n00b_dict_untyped_get(rich_desc_cache,

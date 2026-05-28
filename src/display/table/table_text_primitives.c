@@ -1,0 +1,125 @@
+#include "n00b.h"
+#include "core/alloc.h"
+#include "core/string.h"
+#include "internal/display/table_text_primitives.h"
+#include "text/strings/string_ops.h"
+#include "text/unicode/properties.h"
+
+static int32_t
+longest_line_width(n00b_string_t *text)
+{
+    if (!text || text->u8_bytes == 0) {
+        return 0;
+    }
+
+    n00b_array_t(n00b_string_t *) lines = n00b_unicode_str_split_lines(text);
+    int32_t max_w = 0;
+
+    n00b_array_foreach(lines, lp) {
+        int32_t w = n00b_unicode_display_width(*lp);
+        if (w > max_w) {
+            max_w = w;
+        }
+    }
+
+    n00b_array_free(lines);
+    return max_w;
+}
+
+static int32_t
+longest_word_width(n00b_string_t *text)
+{
+    if (!text || text->u8_bytes == 0) {
+        return 0;
+    }
+
+    n00b_string_t *space = n00b_string_from_raw(" ", 1);
+    n00b_array_t(n00b_string_t *) lines = n00b_unicode_str_split_lines(text);
+    int32_t max_w = 0;
+
+    n00b_array_foreach(lines, lp) {
+        n00b_array_t(n00b_string_t *) words =
+            n00b_unicode_str_split(*lp, space);
+
+        n00b_array_foreach(words, wp) {
+            int32_t w = n00b_unicode_display_width(*wp);
+            if (w > max_w) {
+                max_w = w;
+            }
+        }
+
+        n00b_array_free(words);
+    }
+
+    n00b_array_free(lines);
+    return max_w;
+}
+
+n00b_table_text_metrics_t
+n00b_table_text_measure(n00b_string_t *text)
+{
+    return (n00b_table_text_metrics_t){
+        .longest_line = longest_line_width(text),
+        .longest_word = longest_word_width(text),
+    };
+}
+
+n00b_array_t(n00b_string_t *)
+n00b_table_text_lines_for_width(n00b_string_t *text,
+                                 int32_t width,
+    bool wrap)
+{
+    if (!text || text->u8_bytes == 0) {
+        n00b_array_t(n00b_string_t *) empty = {};
+        return empty;
+    }
+
+    if (width < 1) {
+        width = 1;
+    }
+
+    if (wrap) {
+        return n00b_unicode_str_wrap(text, .width = width);
+    }
+
+    n00b_array_t(n00b_string_t *) hard_lines = n00b_unicode_str_split_lines(text);
+    n00b_isize_t n_hard = n00b_array_len(hard_lines);
+    size_t cap = n_hard > 0 ? (size_t)n_hard : 1;
+
+    n00b_array_t(n00b_string_t *) lines = {};
+    lines.cap = cap;
+    lines.data = n00b_alloc_size(cap, sizeof(n00b_string_t *));
+
+    for (n00b_isize_t i = 0; i < n_hard; i++) {
+        n00b_string_t *raw = n00b_array_get(hard_lines, i);
+        n00b_string_t *trunc = n00b_unicode_str_truncate(raw, width);
+        n00b_array_set(lines, i, trunc);
+    }
+
+    n00b_array_free(hard_lines);
+    return lines;
+}
+
+n00b_string_t *
+n00b_table_text_align_line(n00b_string_t *line,
+                            int32_t width,
+                            n00b_alignment_t alignment)
+{
+    if (!line) {
+        line = n00b_string_from_cstr("");
+    }
+
+    if (width < 1) {
+        width = 1;
+    }
+
+    if (alignment & N00B_ALIGN_CENTER) {
+        return n00b_unicode_str_center(line, width);
+    }
+
+    if (alignment & N00B_ALIGN_RIGHT) {
+        return n00b_unicode_str_pad_left(line, width);
+    }
+
+    return n00b_unicode_str_pad_right(line, width);
+}

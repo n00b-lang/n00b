@@ -10,7 +10,7 @@
  *
  * 1. Poll backend for events (with timeout).
  * 2. Tab → focus next, Shift+Tab → focus prev.
- * 3. Ctrl+C → quit.
+ * 3. Ctrl+C → dispatch to the focused widget, then quit only if unhandled.
  * 4. Other events → dispatch to focused widget.
  * 5. If any plane is dirty → re-render canvas.
  */
@@ -39,8 +39,8 @@ typedef void (*n00b_resize_cb_t)(n00b_canvas_t *canvas, void *data);
 /**
  * @brief Run the interactive event loop.
  *
- * Blocks until Ctrl+C is pressed or `n00b_canvas_run_stop()` is
- * called from an event handler.
+ * Blocks until an unhandled Ctrl+C is pressed or `n00b_canvas_run_stop()`
+ * is called from an event handler.
  *
  * @param canvas The canvas to run.
  *

@@ -118,6 +118,10 @@ start_service(void)
 {
     n00b_http_service_t *svc = n00b_http_service_new(.bind_port = 0);
     auto sr = n00b_http_service_start(svc);
+    if (n00b_result_is_err(sr)) {
+        fprintf(stderr, "http service start failed: err=%d\n",
+                n00b_result_get_err(sr));
+    }
     assert(n00b_result_is_ok(sr));
     assert(n00b_http_service_port(svc) != 0);
     return svc;

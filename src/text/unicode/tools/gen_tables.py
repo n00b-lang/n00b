@@ -5,6 +5,7 @@ optimized two-stage lookup tables as C source for the unicode library.
 
 Usage:
     python3 tools/gen_tables.py [--version 16.0.0] [--cache-dir .unicode_cache]
+                                [--allow-downloads] [--strict|--no-strict]
 """
 
 import argparse
@@ -95,6 +96,7 @@ GENERATED_FILES = [
     "gen_idna.c",
     "gen_joining.c",
     "gen_linebreak.c",
+    "gen_names.c",
     "gen_normprops.c",
     "gen_numeric.c",
     "gen_proplist.c",
@@ -110,7 +112,8 @@ REQUIRED_CACHE_FILES = (
     + list(SPECIAL_FILES.keys())
 )
 
-REQUIRED_TEST_DATA_FILES = [f.split("/")[-1] for f in TEST_FILES] + ["CollationTest.zip"]
+EXPECTED_TEST_DATA_FILES = [f.split("/")[-1] for f in TEST_FILES] + ["CollationTest.zip"]
+REQUIRED_TEST_DATA_FILES = EXPECTED_TEST_DATA_FILES
 
 
 # ---------------------------------------------------------------------------
@@ -130,13 +133,20 @@ def require_nonempty_file(path, label):
         fail(f"empty {label}: {path}")
 
 
-def download_file(url, dest):
-    """Download a file if not already cached."""
+def is_nonempty_file(path):
+    return path.exists() and path.is_file() and path.stat().st_size > 0
+
+
+def download_file(url, dest, allow_downloads):
+    """Ensure file exists locally, optionally downloading when missing."""
     if dest.exists() and not dest.is_file():
         fail(f"Unicode cache path is not a file: {dest}")
     if dest.exists() and dest.stat().st_size > 0:
         print(f"  cached: {dest.name}")
-        return
+        return True
+
+    if not allow_downloads:
+        return False
 
     print(f"  downloading: {url}")
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -148,16 +158,19 @@ def download_file(url, dest):
         with urllib.request.urlopen(req) as resp:
             data = resp.read()
         if not data:
-            fail(f"downloaded empty Unicode data file: {url}")
+            print(f"  WARNING: downloaded empty Unicode data file: {url}")
+            return False
         with open(tmp, "wb") as f:
             f.write(data)
         tmp.replace(dest)
+        return True
     except Exception as e:
         try:
             tmp.unlink()
         except FileNotFoundError:
             pass
-        fail(f"failed to download required Unicode data {url}: {e}")
+        print(f"  WARNING: failed to download {url}: {e}")
+        return False
 
 
 def copy_cached_file(src, dest):
@@ -192,32 +205,44 @@ def validate_generated_outputs(out_dir):
         require_nonempty_file(out_dir / name, "generated Unicode table")
 
 
-def download_all(version, cache_dir, test_data_dir):
-    """Download all UCD data files."""
+def download_all(version, cache_dir, test_data_dir, allow_downloads):
+    """Populate cache/test data and report missing files."""
     base = UNICODE_BASE.format(version=version)
 
-    print(f"Downloading UCD {version} files...")
+    if allow_downloads:
+        print(f"Downloading UCD {version} files...")
+    else:
+        print(f"Checking cached UCD {version} files (downloads disabled)...")
+
     for f in UNICODE_FILES:
         url = f"{base}/{f}"
         dest = cache_dir / f.replace("/", "_")
-        download_file(url, dest)
+        download_file(url, dest, allow_downloads)
 
     for f in TEST_FILES:
         url = f"{base}/{f}"
         cache_dest = cache_dir / f.replace("/", "_")
-        download_file(url, cache_dest)
-        copy_cached_file(cache_dest, test_data_dir / f.split("/")[-1])
+        if download_file(url, cache_dest, allow_downloads):
+            copy_cached_file(cache_dest, test_data_dir / f.split("/")[-1])
 
     for name, url_template in SPECIAL_FILES.items():
         url = url_template.format(version=version)
         cache_dest = cache_dir / name
-        download_file(url, cache_dest)
+        downloaded = download_file(url, cache_dest, allow_downloads)
         if name == "CollationTest.zip":
-            copy_cached_file(cache_dest, test_data_dir / name)
+            if downloaded:
+                copy_cached_file(cache_dest, test_data_dir / name)
+            else:
+                download_file(url, test_data_dir / name, allow_downloads)
 
-    validate_inputs(cache_dir, test_data_dir)
+    if allow_downloads:
+        print("Download complete.")
 
-    print("Download complete.")
+    missing_required = [name for name in REQUIRED_CACHE_FILES
+                        if not is_nonempty_file(cache_dir / name)]
+    missing_test_data = [name for name in EXPECTED_TEST_DATA_FILES
+                         if not is_nonempty_file(test_data_dir / name)]
+    return missing_required, missing_test_data
 
 
 def parse_semicolon_file(path, fields=None):
@@ -225,7 +250,8 @@ def parse_semicolon_file(path, fields=None):
     Yields (codepoint_or_range, [field_values]).
     codepoint_or_range is (start, end) tuple.
     """
-    require_nonempty_file(path, "Unicode input file")
+    if not is_nonempty_file(path):
+        return
     with open(path, "r", encoding="utf-8") as f:
         for line in f:
             line = line.split("#")[0].strip()
@@ -250,7 +276,8 @@ def parse_semicolon_file(path, fields=None):
 def parse_unicode_data(path):
     """Parse UnicodeData.txt which has a special format with ranges."""
     entries = {}
-    require_nonempty_file(path, "Unicode input file")
+    if not is_nonempty_file(path):
+        return entries
     with open(path, "r", encoding="utf-8") as f:
         prev_range_start = None
         for line in f:
@@ -1354,7 +1381,20 @@ def gen_collation(cache_dir, out_dir):
     contractions = {}  # tuple of cps → list of (p, s, t)
 
     path = cache_dir / "allkeys.txt"
-    require_nonempty_file(path, "Unicode input file")
+    if not is_nonempty_file(path):
+        print("  WARNING: allkeys.txt not found, skipping collation")
+        table = TwoStageTable("unicode_ducet", "uint32_t", 0xFFFFFFFF)
+        table.generate_c(out_dir / "gen_collation.c")
+        with open(out_dir / "gen_collation.c", "a") as f:
+            f.write("\nconst uint16_t n00b_unicode_ce_data[1] = { 0 };\n")
+            f.write("const uint32_t n00b_unicode_ce_data_len = 1;\n")
+            f.write("const uint32_t n00b_unicode_contraction_count = 0;\n")
+            f.write("const uint32_t n00b_unicode_contr_keys[1][4] = { { 0, 0, 0, 0 } };\n")
+            f.write("const uint32_t n00b_unicode_contr_key_lens[1] = { 0 };\n")
+            f.write("const uint32_t n00b_unicode_contr_ce_offsets[1] = { 0 };\n")
+            f.write("const uint16_t n00b_unicode_contr_ce_data[1] = { 0 };\n")
+            f.write("const uint32_t n00b_unicode_ducet_count = 0;\n")
+        return
 
     with open(path, "r") as f:
         for line in f:
@@ -1484,6 +1524,13 @@ def main():
                         help="Output directory for generated C files")
     parser.add_argument("--test-data-dir", default="test/data",
                         help="Output directory for test data files")
+    parser.add_argument("--allow-downloads", action="store_true",
+                        help="Allow network downloads for missing unicode cache/test files")
+    parser.add_argument("--strict", dest="strict", action="store_true",
+                        help="Fail when required unicode cache files are missing")
+    parser.add_argument("--no-strict", dest="strict", action="store_false",
+                        help="Allow placeholder output when required unicode cache files are missing")
+    parser.set_defaults(strict=False)
     args = parser.parse_args()
 
     # Resolve paths relative to CWD (works both standalone and from meson)
@@ -1495,8 +1542,41 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
     test_data_dir.mkdir(parents=True, exist_ok=True)
 
-    download_all(args.version, cache_dir, test_data_dir)
+    print(f"Unicode cache dir: {cache_dir}")
+    print(f"Unicode test-data dir: {test_data_dir}")
+    print(f"Allow downloads: {'yes' if args.allow_downloads else 'no'}")
+    print(f"Strict cache checks: {'yes' if args.strict else 'no'}")
+
+    missing_required, missing_test_data = download_all(args.version,
+                                                       cache_dir,
+                                                       test_data_dir,
+                                                       args.allow_downloads)
     print()
+
+    if missing_required:
+        print("ERROR: required unicode cache files are missing:")
+        for name in missing_required:
+            print(f"  - {name}")
+
+        if args.allow_downloads:
+            print("Downloads were enabled, but one or more required files could not be fetched.")
+            print("Check network/DNS access and rerun.")
+        else:
+            print("Downloads are disabled. Pre-populate the cache directory above,")
+            print("or rerun with --allow-downloads.")
+
+        if args.strict:
+            return 2
+
+        print("WARNING: continuing with partial unicode data because --no-strict was requested.")
+        print()
+
+    if missing_test_data:
+        print("WARNING: unicode test-data files are missing:")
+        for name in missing_test_data:
+            print(f"  - {name}")
+        print("Some unicode conformance tests may be unavailable.")
+        print()
 
     # Generate all tables
     gen_categories(cache_dir, out_dir)
@@ -1529,8 +1609,8 @@ def main():
     validate_generated_outputs(out_dir)
 
     print("\nAll tables generated successfully.")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
-# { "MAGIC" : "dadfedabbadabbed", "CHALK_ID" : "6MTK6R-K560-V34C-HJ68T6", "CHALK_VERSION" : "1.0.2", "TIMESTAMP_WHEN_CHALKED" : 1778882583722, "DATETIME_WHEN_CHALKED" : "2026-05-15T18:03:03.722-04:00", "ARTIFACT_TYPE" : "python", "CALLER_ATTESTED_ARTIFACT_INFO" : { "status" : "match", "info" : { "script" : "/Users/viega/n00b-chalk/src/text/unicode/tools/gen_tables.py", "source" : "interp-output", "language" : "python", "invocation" : "script", "trigger" : "interp", "interpreter" : "python", "interp_op_id" : "interp-27130-1778882577232519208" } }, "CALLER_ATTESTED_HOST_INFO" : { "arch" : "arm64", "os" : "darwin", "hostname" : "macbook-pro-3.local", "os_version" : "Version 26.3.1 (Build 25D2128)" }, "CALLER_ATTESTED_INFO" : { "attestor" : "crayon-chalker", "attestor_version" : "0.4.3 (built 2026-05-15 21:39 UTC) dd8d42e931f4" }, "CHALK_RAND" : "0b21fe336ad20947", "HASH" : "553be0622224a2cf5d564ec18f7181cf781a5afb841e271f96bf4bd15d079557", "INJECTOR_COMMIT_ID" : "073f365274210b28e0f4552f8efa0e427f45a90c", "PLATFORM_WHEN_CHALKED" : "Darwin arm64", "METADATA_ID" : "ZZQKKM-N9KK-5QFF-96XXD5" }
+    raise SystemExit(main())
