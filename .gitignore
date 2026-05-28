@@ -9,6 +9,11 @@
 # Allow those back in.
 !subprojects/*/lib/
 !subprojects/*/lib/**
+# n00b's own stdlib lives at top-level `lib/std/` and is loaded at
+# runtime by the embedded-eval session (`src/n00b/eval.c` via
+# `N00B_BUILTINS_PATH`) and by the REPL.
+!/lib/
+!/lib/**
 
 # Compiled objects (shouldn't appear outside build/ but just in case)
 *.o

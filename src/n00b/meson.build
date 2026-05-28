@@ -9,6 +9,7 @@ n00b_compiler_src = files(
     'n00b_type_map.c',
     'embed.c',
     'embed_ffi.c',
+    'eval.c',
     'n00b_objfile_emit.c',
     'n00b_compile_link.c',
 )
