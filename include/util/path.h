@@ -228,6 +228,47 @@ extern n00b_string_t *n00b_app_path(void);
 extern n00b_string_t *n00b_path_trim_trailing_slashes(n00b_string_t *s);
 extern n00b_result_t(n00b_string_t *) n00b_new_temp_dir(n00b_string_t *prefix,
                                                         n00b_string_t *suffix);
+/**
+ * @brief Build a fresh path under the temp root without creating anything.
+ *
+ * Returns a path of the form `<TMPDIR>/<prefix><hex><suffix>` where the
+ * hex component is a 64-bit random value. The path is *not* checked for
+ * existence or created on disk — callers that need a created file or
+ * directory should use `n00b_new_temp_dir` or follow this with their own
+ * `open(O_CREAT|O_EXCL)` / `bind`. Useful for tests, AF_UNIX socket
+ * paths, scratch sidecar files, etc.
+ *
+ * @param prefix Optional prefix; may be `nullptr` to omit.
+ * @param suffix Optional suffix; may be `nullptr` to omit.
+ *
+ * @kw allocator Allocator for the returned string. `nullptr` uses the
+ *               default heap allocator.
+ *
+ * @return Fresh path string under the temp root. The filesystem entry
+ *         is not created.
+ */
+extern n00b_string_t *
+_n00b_new_temp_path(n00b_string_t *prefix, n00b_string_t *suffix) _kargs {
+    n00b_allocator_t *allocator = nullptr;
+};
+
+#define n00b_new_temp_path(p, s, ...) \
+    _n00b_new_temp_path((p), (s) __VA_OPT__(, ) __VA_ARGS__)
+
+/**
+ * @brief Return the POSIX permission bits (mode & 07777) of @p path.
+ *
+ * Thin libn00b wrapper around `stat(2)` for the case where the caller
+ * needs to inspect mode bits without doing the syscall directly.
+ *
+ * @param path Path to inspect.
+ *
+ * @return `Ok(mode)` where @c mode is the low twelve bits of
+ *         @c st.st_mode (suid/sgid/sticky + permissions).
+ *         `Err(<errno>)` if @c stat fails.
+ */
+extern n00b_result_t(uint32_t)
+n00b_path_get_mode(n00b_string_t *path);
 extern n00b_string_t *n00b_get_temp_root(void);
 extern n00b_string_t *n00b_filename_from_path(n00b_string_t *s);
 

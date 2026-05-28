@@ -3,6 +3,7 @@
 #include "adt/array.h"
 #include "text/strings/string_ops.h"
 #include "text/strings/format.h"
+#include "text/strings/fmt_numbers.h"
 #include "core/random.h"
 #include "core/gc.h"
 #include "adt/result.h"
@@ -136,19 +137,23 @@ acquire_base_tmp_dir(void)
     return base_tmp_dir;
 }
 
-static inline n00b_string_t *
-construct_random_name(n00b_string_t *prefix, n00b_string_t *suffix)
+n00b_string_t *
+_n00b_new_temp_path(n00b_string_t *prefix, n00b_string_t *suffix) _kargs
+{
+    n00b_allocator_t *allocator = nullptr;
+}
 {
     n00b_string_t *tmpdir = acquire_base_tmp_dir();
-    uint64_t       bytes  = n00b_rand64();
-    char           hex[17];
-
-    snprintf(hex, sizeof(hex), "%016llx", (unsigned long long)bytes);
-    n00b_string_t *random_string = n00b_string_from_cstr(hex);
+    n00b_string_t *random_string = n00b_fmt_hex(n00b_rand64(),
+                                                 .allocator = allocator);
 
     if (prefix || suffix) {
-        if (!prefix) prefix = n00b_string_empty();
-        if (!suffix) suffix = n00b_string_empty();
+        if (!prefix) prefix = n00b_string_empty(.allocator = allocator);
+        if (!suffix) suffix = n00b_string_empty(.allocator = allocator);
+        // n00b_cformat does not currently take .allocator; the cat
+        // result lands in the default allocator. This is an n00b-side
+        // gap, not introduced here — threading is best-effort for the
+        // leaf calls above.
         random_string = n00b_cformat("«#»«#»«#»",
                                       prefix, random_string, suffix);
     }
@@ -159,13 +164,23 @@ construct_random_name(n00b_string_t *prefix, n00b_string_t *suffix)
 n00b_result_t(n00b_string_t *)
 n00b_new_temp_dir(n00b_string_t *prefix, n00b_string_t *suffix)
 {
-    n00b_string_t *dirname = construct_random_name(prefix, suffix);
+    n00b_string_t *dirname = n00b_new_temp_path(prefix, suffix);
 
     if (mkdir(dirname->data, 0774)) {
         return n00b_result_err(n00b_string_t *, errno);
     }
 
     return n00b_result_ok(n00b_string_t *, dirname);
+}
+
+n00b_result_t(uint32_t)
+n00b_path_get_mode(n00b_string_t *path)
+{
+    struct stat st;
+    if (stat(path->data, &st) != 0) {
+        return n00b_result_err(uint32_t, errno);
+    }
+    return n00b_result_ok(uint32_t, (uint32_t)(st.st_mode & 07777));
 }
 
 n00b_string_t *
