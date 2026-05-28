@@ -1,7 +1,7 @@
 @schema_version 1
 @project n00b-audit-test
-@description Fixture with BNF body absent -- loader must SCHEMA-reject.
-@source_doc test/fixtures/audit/guidance_missing_field.bnf
+@description Fixture with a required per-rule field absent -- loader must SCHEMA-reject. Pre-WP-009-Phase-2 this fixture omitted the bnf_fragment block (which used to be required); WP-009 Phase 2 made bnf_fragment OPTIONAL (query-mode rules ship without one), so the fixture now omits a different required field (@guidance) instead. The rule body below also has no <...> productions so it doubles as evidence the loader is happy with an empty bnf_body when the only remaining problem is the missing @guidance directive.
+@source_doc test/fixtures/naudit/guidance_missing_field.bnf
 @dependencies
 
 @rule n00b.s2_1.null
@@ -11,4 +11,3 @@
 @rationale C23 has nullptr; NULL is a legacy macro.
 @bad int *p = NULL;
 @good int *p = nullptr;
-@guidance Replace NULL with nullptr in all expression positions.

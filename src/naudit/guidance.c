@@ -847,13 +847,31 @@ n00b_audit_load_guidance(n00b_string_t *path)
             return n00b_result_err(n00b_audit_guidance_t *, code);
         }
 
-        /* Assemble the rule's BNF body. */
+        /*
+         * Assemble the rule's BNF body.
+         *
+         * WP-009 Phase 2: `bnf_fragment` is OPTIONAL. A rule with
+         * zero BNF lines is a query-mode rule — the engine queries
+         * the base-language grammar directly for the named
+         * `violation_nt`. Normalise an empty assembled body to
+         * `nullptr` so the engine's fragment-merge loop in
+         * `engine.c::get_or_load_grammar` (which skips on
+         * `!rule->bnf_fragment`) does the right thing without
+         * carrying around a zero-length sentinel string.
+         */
         rule->bnf_fragment = assemble_bnf_body(sec);
+        if (rule->bnf_fragment && rule->bnf_fragment->u8_bytes == 0) {
+            rule->bnf_fragment = nullptr;
+        }
 
         /*
-         * Schema check: required fields must be non-empty. Match
-         * the Phase 2 loader's per-rule required set + add
-         * violation_nt + bnf_fragment.
+         * Schema check: required fields must be non-empty.
+         *
+         * `bnf_fragment` is intentionally absent from this check
+         * (WP-009 Phase 2): a query-mode rule legitimately has no
+         * fragment and must load cleanly. `violation_nt` remains
+         * required — query-mode rules still need an NT to match
+         * against the base grammar's tree.
          */
         if (rule->title->u8_bytes == 0
             || rule->section->u8_bytes == 0
@@ -861,8 +879,7 @@ n00b_audit_load_guidance(n00b_string_t *path)
             || rule->rationale->u8_bytes == 0
             || rule->bad_example->u8_bytes == 0
             || rule->good_example->u8_bytes == 0
-            || rule->guidance->u8_bytes == 0
-            || rule->bnf_fragment->u8_bytes == 0) {
+            || rule->guidance->u8_bytes == 0) {
             n00b_parse_result_free(pr);
             n00b_grammar_free(meta_g);
             return n00b_result_err(n00b_audit_guidance_t *,

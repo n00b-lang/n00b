@@ -1,0 +1,15 @@
+@schema_version 1
+@project naudit_query_mode_test
+@description Test fixture for WP-009 Phase 2 query-mode rules. The rule below ships NO bnf_fragment block; the engine must locate the named violation_nt in the base C grammar (c_ncc.bnf) directly and report one violation per match.
+@source_doc test/fixtures/naudit/guidance_query_mode.bnf
+@dependencies
+
+@rule naudit.test.query_mode
+@language c
+@title query-mode function_definition match (test only)
+@section test
+@violation_nt function_definition
+@rationale Phase 2 test rule: every <function_definition> match in the audited source file should become a violation. No bnf_fragment is provided; the engine should find the NT in c_ncc.bnf directly.
+@bad (any function definition)
+@good (none)
+@guidance Query-mode rule with no BNF fragment.

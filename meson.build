@@ -878,6 +878,7 @@ foreach _ntest : [
     'engine_legacy',
     'engine_malloc',
     'engine_bulk',
+    'engine_query_mode',
     'cli',
     'cli_json',
     'rewrite',
