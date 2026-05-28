@@ -254,6 +254,20 @@ build_cmdr(void)
                        n00b_string_from_cstr(
                            "Sign the supplied audit-rules.bnf path "
                            "(requires --key + --signer)."));
+    /*
+     * WP-017: pass-through args to `cc -E` for the preprocessor
+     * pre-pass on C files. Typical usage:
+     *   --cpp-args="-I /path/to/n00b/include -DFOO"
+     * Required when auditing real n00b source that includes
+     * project headers — without it the preprocessor fails on
+     * `#include "n00b.h"`.
+     */
+    n00b_cmdr_add_flag(c, empty,
+                       n00b_string_from_cstr("--cpp-args"),
+                       N00B_CMDR_TYPE_WORD, true,
+                       n00b_string_from_cstr(
+                           "Extra arguments to pass to cc -E for the "
+                           "C preprocessor pre-pass (e.g. \"-I path\")."));
 
     n00b_cmdr_finalize(c);
     return c;
@@ -1111,6 +1125,19 @@ n00b_audit_run_cli(int argc, n00b_string_t *argv[])
     n00b_string_t *rp_flag = n00b_string_from_cstr("--repo-protected");
     if (n00b_cmdr_flag_present(parse, rp_flag)) {
         n00b_audit_engine_set_repo_protected(engine, true);
+    }
+
+    /*
+     * WP-017: forward --cpp-args to the engine. Required when
+     * auditing real n00b source that needs project headers in
+     * scope for preprocessor expansion.
+     */
+    n00b_string_t *cpp_flag = n00b_string_from_cstr("--cpp-args");
+    if (n00b_cmdr_flag_present(parse, cpp_flag)) {
+        n00b_string_t *val = n00b_cmdr_flag_str(parse, cpp_flag);
+        if (val) {
+            n00b_audit_engine_set_cpp_args(engine, val);
+        }
     }
 
     /* Check the target. */

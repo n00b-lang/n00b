@@ -2813,11 +2813,13 @@ n00b_bnf_load(n00b_string_t  *bnf_text,
     n00b_token_stream_t *parse_ts
         = n00b_token_stream_from_array(raw_ptrs, bnf_n);
 
-    // Build the BNF meta-grammar and parse using DEFAULT mode
-    // (PWZ fast path, Earley fallback with full diagnostics).
+    // Build the BNF meta-grammar and parse. WP-017: use PWZ_ONLY —
+    // the BNF metagrammar is unambiguous; falling back to Earley
+    // here is a perf trap that hides genuine BNF errors behind
+    // hours of Earley-chart grinding.
     n00b_grammar_t      *meta_g = build_bnf_grammar();
     n00b_parse_result_t *pr     = n00b_parse(meta_g, parse_ts,
-                                              N00B_PARSE_MODE_DEFAULT,
+                                              N00B_PARSE_MODE_PWZ_ONLY,
                                               (n00b_parse_opts_t){0});
 
     if (!n00b_parse_result_ok(pr)) {
