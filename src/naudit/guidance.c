@@ -723,6 +723,23 @@ file_field_handler(n00b_string_t *name, n00b_string_t *value, void *carry)
         g->source_doc = value;
         return true;
     }
+    if (str_eq_cstr(name, "blame_similarity")) {
+        /*
+         * WP-013: top-level integer override for libgit2's blame
+         * similarity threshold (white paper §§ 4.6 / 13.1).
+         * Default (50) is set above at allocation time; this
+         * directive overrides. Out-of-range values produce
+         * `N00B_AUDIT_ERR_GUIDANCE_SCHEMA` (libgit2's field is a
+         * `uint16_t`; reject anything that wouldn't fit).
+         */
+        int64_t v = 0;
+        if (!parse_int64(value, &v) || v < 0 || v > UINT16_MAX) {
+            ctx->err_code = N00B_AUDIT_ERR_GUIDANCE_SCHEMA;
+            return false;
+        }
+        g->blame_similarity_threshold = (int)v;
+        return true;
+    }
     if (str_eq_cstr(name, "filter_def")) {
         /*
          * WP-009 Phase 4: top-level filter definition. The
@@ -1067,9 +1084,15 @@ n00b_audit_load_guidance(n00b_string_t *path)
     g->project     = n00b_string_empty();
     g->description = n00b_string_empty();
     g->source_doc  = n00b_string_empty();
-    g->exemptions          = nullptr;
-    g->baseline            = nullptr;
-    g->allowed_signers_path = nullptr;
+    g->exemptions              = nullptr;
+    g->baseline                = nullptr;
+    g->allowed_signers_path    = nullptr;
+    /*
+     * WP-013: white paper § 13.1 — blame similarity threshold,
+     * documented default 50. The `@blame_similarity` top-level
+     * directive overrides this.
+     */
+    g->blame_similarity_threshold = 50;
     /*
      * WP-011: stash the directory of the loaded guidance file so the
      * loader can discover `audit/exemptions/(*).bnf` and

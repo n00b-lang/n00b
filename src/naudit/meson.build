@@ -14,6 +14,7 @@
 # include path.
 
 n00b_naudit_src = files(
+    'blame.c',
     'cli.c',
     'engine.c',
     'exemption.c',

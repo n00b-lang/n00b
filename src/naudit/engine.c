@@ -979,11 +979,23 @@ n00b_audit_engine_check_file(n00b_audit_engine_t *engine,
                 region_bytes ? region_bytes : n00b_string_empty());
 
             /*
-             * WP-011: apply the suppression engine. Baseline first
-             * (unless `--ignore-baseline` is set), then per-record
-             * exemptions. A matching entry drops the violation
-             * before it ever reaches the result list.
+             * WP-011 + WP-013: apply the suppression engine. The
+             * matcher takes a `repo_root` argument so blame can
+             * derive the signing commit from VCS history per the
+             * white paper § 5.2 rule (the signing commit is NEVER
+             * stored in the exemption record). We pass
+             * `guidance->project_root` — `git_repository_discover`
+             * inside `n00b_audit_blame_signing_commit` walks up
+             * from there to find `.git/`, so subdirectory
+             * project_roots are handled correctly. If naudit is
+             * invoked outside a git repo, the signing-commit
+             * lookup returns a "none" option and the matcher
+             * takes the pre-commit fingerprint-only fallback
+             * (degradation documented in `naudit/exemption.h`).
              */
+            n00b_string_t *repo_root = engine->guidance->project_root;
+            int            sim       =
+                engine->guidance->blame_similarity_threshold;
             bool suppressed = false;
             if (!engine->ignore_baseline && engine->guidance->baseline) {
                 int64_t nb = n00b_list_len(*engine->guidance->baseline);
@@ -991,7 +1003,8 @@ n00b_audit_engine_check_file(n00b_audit_engine_t *engine,
                     n00b_audit_exemption_t *ex =
                         (n00b_audit_exemption_t *)
                             n00b_list_get(*engine->guidance->baseline, k);
-                    if (n00b_audit_exemption_match(ex, v)) {
+                    if (n00b_audit_exemption_match(ex, v, repo_root,
+                                                    sim)) {
                         suppressed = true;
                     }
                 }
@@ -1003,7 +1016,8 @@ n00b_audit_engine_check_file(n00b_audit_engine_t *engine,
                     n00b_audit_exemption_t *ex =
                         (n00b_audit_exemption_t *)
                             n00b_list_get(*engine->guidance->exemptions, k);
-                    if (n00b_audit_exemption_match(ex, v)) {
+                    if (n00b_audit_exemption_match(ex, v, repo_root,
+                                                    sim)) {
                         suppressed = true;
                     }
                 }
