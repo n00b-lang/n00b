@@ -117,3 +117,19 @@ n00b_audit_engine_new(n00b_audit_guidance_t *guidance);
 extern n00b_result_t(n00b_list_t(n00b_audit_violation_t *) *)
 n00b_audit_engine_check_file(n00b_audit_engine_t *engine,
                              n00b_string_t       *path);
+
+/**
+ * @brief WP-011 — toggle baseline suppression on the engine.
+ *
+ * When @p ignore is true, `n00b_audit_engine_check_file` skips the
+ * `guidance->baseline` suppression check (per-record exemptions in
+ * `guidance->exemptions` still apply). The default is false; the
+ * `--ignore-baseline` CLI flag drives this setter.
+ *
+ * @param engine  Engine to configure.
+ * @param ignore  True to bypass the baseline; false (default) to
+ *                honor it.
+ */
+extern void
+n00b_audit_engine_set_ignore_baseline(n00b_audit_engine_t *engine,
+                                       bool                 ignore);

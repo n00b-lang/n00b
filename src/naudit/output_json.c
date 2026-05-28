@@ -150,6 +150,25 @@ build_violation_obj(n00b_audit_violation_t *v)
                              n00b_json_string_new_from_n00b(v->rewrite));
     }
 
+    /*
+     * WP-011: emit the rule's content hash and the violation's
+     * region fingerprint so JSON consumers (CI surfaces, IDE
+     * integrations) can craft exemption records keyed off the
+     * same primitives the suppression engine matches against.
+     * Both fields are additive per the v1 schema's forward-compat
+     * contract.
+     */
+    if (rule->content_hash) {
+        n00b_json_object_put(obj, "rule_content_hash",
+                             n00b_json_string_new_from_n00b(
+                                 rule->content_hash));
+    }
+    if (v->region_fingerprint) {
+        n00b_json_object_put(obj, "region_fingerprint",
+                             n00b_json_string_new_from_n00b(
+                                 v->region_fingerprint));
+    }
+
     return obj;
 }
 

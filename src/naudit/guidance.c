@@ -55,6 +55,7 @@
 #include "naudit/rule.h"
 #include "naudit/languages.h"
 #include "naudit/errors.h"
+#include "naudit/exemption.h"
 #include "internal/naudit/_naudit_internal.h"
 
 #include "audit_rule_file_grammar.h"
@@ -1066,6 +1067,37 @@ n00b_audit_load_guidance(n00b_string_t *path)
     g->project     = n00b_string_empty();
     g->description = n00b_string_empty();
     g->source_doc  = n00b_string_empty();
+    g->exemptions  = nullptr;
+    g->baseline    = nullptr;
+    /*
+     * WP-011: stash the directory of the loaded guidance file so the
+     * loader can discover `audit/exemptions/(*).bnf` and
+     * `audit/baseline/baseline.bnf` relative to it. `path` is
+     * already canonicalized to an absolute form above; slice off the
+     * trailing file component (everything after the last `/`).
+     * `n00b_path_parts` is the wrong primitive here — it splits the
+     * filename into name + extension, producing a 3-element list
+     * incompatible with the parent_dir reduction shape used by the
+     * discovery walk.
+     */
+    {
+        size_t end = path->u8_bytes;
+        while (end > 0 && path->data[end - 1] != '/') {
+            end--;
+        }
+        /* Trim the trailing slash unless we're at the filesystem root. */
+        size_t trim = end;
+        if (trim > 1) {
+            trim--;
+        }
+        if (trim == 0) {
+            g->project_root = n00b_string_from_cstr("/");
+        }
+        else {
+            g->project_root = n00b_string_from_raw(path->data,
+                                                    (int64_t)trim);
+        }
+    }
 
     /*
      * Step 6: walk file-level <file_meta> directives. The tree
@@ -1132,6 +1164,7 @@ n00b_audit_load_guidance(n00b_string_t *path)
         rule->language           = nullptr;
         rule->filter_name        = nullptr;
         rule->captures           = nullptr;
+        rule->content_hash       = nullptr;
 
         rule_field_ctx_t rctx = {.rule = rule, .err_code = 0};
         if (!walk_meta_fields(sec, rule_field_handler, &rctx)) {
@@ -1158,6 +1191,16 @@ n00b_audit_load_guidance(n00b_string_t *path)
         if (rule->bnf_fragment && rule->bnf_fragment->u8_bytes == 0) {
             rule->bnf_fragment = nullptr;
         }
+
+        /*
+         * WP-011 (D-X3): compute the rule's content hash from its
+         * canonical BNF text. Hex-encoded XXH3-128. Query-mode
+         * rules (nullptr bnf_fragment) still get a stable hash —
+         * `n00b_audit_compute_rule_content_hash` handles the empty
+         * input case deterministically.
+         */
+        rule->content_hash = n00b_audit_compute_rule_content_hash(
+            rule->bnf_fragment);
 
         /*
          * Schema check: required fields must be non-empty.
@@ -1271,6 +1314,57 @@ n00b_audit_load_guidance(n00b_string_t *path)
         n00b_grammar_free(meta_g);
         return n00b_result_err(n00b_audit_guidance_t *,
                                N00B_AUDIT_ERR_GUIDANCE_DEPS_UNIMPLEMENTED);
+    }
+
+    /*
+     * Step 9 (WP-011): discover and load exemption + baseline files
+     * rooted at the guidance file's directory. Both are
+     * silently-empty when the corresponding directory / file is
+     * absent — only a malformed file surfaces an error.
+     */
+    {
+        auto ex_res = n00b_audit_discover_exemptions(g->project_root);
+        if (n00b_result_is_err(ex_res)) {
+            n00b_parse_result_free(pr);
+            n00b_grammar_free(meta_g);
+            return n00b_result_err(n00b_audit_guidance_t *,
+                                   n00b_result_get_err(ex_res));
+        }
+        n00b_list_t(n00b_audit_exemption_t *) *exlist =
+            n00b_result_get(ex_res);
+        if (exlist && n00b_list_len(*exlist) > 0) {
+            g->exemptions = n00b_alloc(n00b_list_t(void *));
+            *g->exemptions = n00b_list_new(void *);
+            int64_t nex = n00b_list_len(*exlist);
+            for (int64_t i = 0; i < nex; i++) {
+                n00b_list_push(*g->exemptions,
+                               (void *)n00b_list_get(*exlist, i));
+            }
+        }
+
+        n00b_string_t *base_path = n00b_path_simple_join(
+            g->project_root,
+            n00b_string_from_cstr("audit/baseline/baseline.bnf"));
+        if (n00b_path_is_file(base_path)) {
+            auto br = n00b_audit_load_exemptions(base_path);
+            if (n00b_result_is_err(br)) {
+                n00b_parse_result_free(pr);
+                n00b_grammar_free(meta_g);
+                return n00b_result_err(n00b_audit_guidance_t *,
+                                       n00b_result_get_err(br));
+            }
+            n00b_list_t(n00b_audit_exemption_t *) *blist =
+                n00b_result_get(br);
+            if (blist && n00b_list_len(*blist) > 0) {
+                g->baseline = n00b_alloc(n00b_list_t(void *));
+                *g->baseline = n00b_list_new(void *);
+                int64_t nb = n00b_list_len(*blist);
+                for (int64_t i = 0; i < nb; i++) {
+                    n00b_list_push(*g->baseline,
+                                   (void *)n00b_list_get(*blist, i));
+                }
+            }
+        }
     }
 
     n00b_parse_result_free(pr);

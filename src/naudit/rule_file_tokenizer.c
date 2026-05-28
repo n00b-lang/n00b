@@ -307,15 +307,37 @@ classify_line_start(n00b_scanner_t *s, rule_file_scanner_state_t *st)
         n00b_string_t *rest = nullptr;
         split_directive_line(line, &name, &rest);
 
+        /*
+         * Section markers: `@rule <id>` for guidance files and
+         * `@exemption <id>` for WP-011 exemption / baseline files.
+         * Both emit a RULE_MARKER token carrying the id text so the
+         * shared metagrammar's `<rule_section>` reduction succeeds
+         * against either kind of file. The loader downstream knows
+         * which kind of file it's parsing from context (which entry
+         * function was invoked) and interprets the section's
+         * `<meta_field>` children accordingly.
+         */
+        bool is_section_marker = false;
         if (name && name->u8_bytes == 4 && name->data[0] == 'r'
             && name->data[1] == 'u' && name->data[2] == 'l'
             && name->data[3] == 'e') {
+            is_section_marker = true;
+        }
+        else if (name && name->u8_bytes == 9
+                 && name->data[0] == 'e' && name->data[1] == 'x'
+                 && name->data[2] == 'e' && name->data[3] == 'm'
+                 && name->data[4] == 'p' && name->data[5] == 't'
+                 && name->data[6] == 'i' && name->data[7] == 'o'
+                 && name->data[8] == 'n') {
+            is_section_marker = true;
+        }
+        if (is_section_marker) {
             /*
-             * `@rule <id>` — emit RULE_MARKER carrying the id. The
-             * REST text becomes the token's text payload (so the
-             * loader's tree walk pulls it off the RULE_MARKER node
-             * directly rather than waiting for a separate REST
-             * token).
+             * `@rule <id>` or `@exemption <id>` — emit RULE_MARKER
+             * carrying the id. The REST text becomes the token's
+             * text payload (so the loader's tree walk pulls it off
+             * the RULE_MARKER node directly rather than waiting for
+             * a separate REST token).
              */
             st->state = RULE_FILE_STATE_EMIT_NEWLINE;
             n00b_scan_emit(s, .token_type = "RULE_MARKER",

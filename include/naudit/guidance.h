@@ -92,6 +92,15 @@ typedef struct {
     n00b_string_t *description;
 } n00b_audit_filter_t;
 
+/*
+ * Per WP-011, the guidance struct carries loaded exemption + baseline
+ * lists. The element type lives in `naudit/exemption.h`; we store
+ * the lists as `n00b_list_t(void *) *` here so this header stays
+ * acyclic against the exemption surface, and the loader / engine
+ * cast back to `n00b_audit_exemption_t *` on access. The cast is
+ * sound because every element in the list is an exemption struct
+ * pointer (the loader is the sole producer).
+ */
 typedef struct {
     int64_t                              schema_version;
     n00b_string_t                       *project;
@@ -103,6 +112,28 @@ typedef struct {
                 n00b_string_t *)        *extension_overrides;
     n00b_dict_t(n00b_string_t *,
                 n00b_audit_filter_t *)  *filters;
+    /*
+     * WP-011: loaded exemption records from `audit/exemptions/(*).bnf`
+     * relative to the guidance file's directory. nullptr when the
+     * directory is absent or empty; otherwise a non-empty list of
+     * `n00b_audit_exemption_t *` (cast through `void *` to keep
+     * this header acyclic with `naudit/exemption.h`).
+     */
+    n00b_list_t(void *)                 *exemptions;
+    /*
+     * WP-011: loaded baseline records from
+     * `audit/baseline/baseline.bnf`. nullptr when absent. Same
+     * `void *` shape as `exemptions` for the same reason. The
+     * `--ignore-baseline` CLI flag skips this list at suppression
+     * time.
+     */
+    n00b_list_t(void *)                 *baseline;
+    /*
+     * WP-011: directory of the loaded guidance file (the project
+     * root for exemption + baseline discovery). nullptr until the
+     * loader sets it.
+     */
+    n00b_string_t                       *project_root;
 } n00b_audit_guidance_t;
 
 /**

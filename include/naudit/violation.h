@@ -66,6 +66,15 @@
  *                  rules 1/4/7 (NULL, __typeof__, legacy spellings)
  *                  populate it with the C23 standard spelling.
  */
+/*
+ * `region_fingerprint` (WP-011, D-X5 substitute) — XXH3-128 hex
+ * digest of the matched span's canonicalized bytes, computed by
+ * the engine at violation-emission time. Phase 1 keys exemption
+ * matching off this field; WP-013 demotes it to a fallback once
+ * blame-lineage matching lands. nullptr until set by the engine
+ * — pre-engine consumers (the baseline writer reads it AFTER the
+ * engine produces it) see a populated value.
+ */
 typedef struct {
     n00b_string_t     *file;
     int64_t            line;
@@ -74,4 +83,5 @@ typedef struct {
     int64_t            end_column;
     n00b_audit_rule_t *rule;
     n00b_string_t     *rewrite;
+    n00b_string_t     *region_fingerprint;
 } n00b_audit_violation_t;
