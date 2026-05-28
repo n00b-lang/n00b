@@ -370,6 +370,33 @@ n00b_naudit_match_starts_with(n00b_naudit_match_t *self, n00b_string_t *prefix)
     return n00b_unicode_str_starts_with(text, prefix);
 }
 
+/*
+ * `arg.text_contains(needle)` — bool result; true iff the match's
+ * `.text` contains `needle` as a substring. Byte-exact search; null /
+ * empty / oversized-needle inputs return false. Added for rules that
+ * need to check the full body of the matched node for the presence
+ * (or absence) of a particular token, e.g., the path-canonicalization
+ * rule which checks whether a function body contains both
+ * `n00b_file_open` AND `n00b_path_canonical`.
+ */
+static bool
+n00b_naudit_match_text_contains(n00b_naudit_match_t *self,
+                                n00b_string_t       *needle)
+{
+    if (!self || !needle || needle->u8_bytes == 0) {
+        return false;
+    }
+
+    n00b_string_t *text = n00b_naudit_match_text(self);
+    if (!text || text->u8_bytes < needle->u8_bytes) {
+        return false;
+    }
+
+    return memmem(text->data, (size_t)text->u8_bytes,
+                  needle->data, (size_t)needle->u8_bytes)
+           != nullptr;
+}
+
 /**
  * `arg.is_call()` — bool result; true iff the matched parse-tree
  * node is a `<postfix_expression>` of call form
@@ -542,6 +569,15 @@ n00b_naudit_match_type_register(void)
     n00b_type_add_method(th, &(n00b_method_t){
         .fn          = (n00b_vtable_entry)n00b_naudit_match_starts_with,
         .name        = "starts_with",
+        .return_type = {
+            .type_hash = typehash(bool),
+            .type_name = "bool",
+        },
+    });
+
+    n00b_type_add_method(th, &(n00b_method_t){
+        .fn          = (n00b_vtable_entry)n00b_naudit_match_text_contains,
+        .name        = "text_contains",
         .return_type = {
             .type_hash = typehash(bool),
             .type_name = "bool",

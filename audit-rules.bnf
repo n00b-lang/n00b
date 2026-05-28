@@ -254,7 +254,50 @@ rewrite {
 <provided_identifier> ::= <n00b_audit_v_legacy_spellings>
 
 # -----------------------------------------------------------------
-# Rule 8 -- WP-009 Phase 4 -- public function-call prefix
+# Rule 8 -- WP-012 -- path canonicalization on n00b_file_open
+#
+# Per the cross-project memory rule
+# `feedback_path_handling.md`: any libn00b/naudit function taking
+# a path argument must call `n00b_path_canonical` internally
+# before using the path. Detecting this directly (function-body
+# flow analysis) is harder than the current rule engine
+# supports; as a useful approximation, we flag EVERY call to
+# `n00b_file_open` and rely on the WP-011 exemption / baseline
+# mechanism to absorb confirmed-correct call sites. New
+# `n00b_file_open` call sites must either be on already-
+# canonical paths (with a signed exemption documenting that
+# fact) or wrapped with `n00b_path_canonical`.
+#
+# Future enhancement: extend to other path-taking entry points
+# (`n00b_path_walk`, `n00b_path_is_directory`, the read/write
+# family). Adding entries is a one-line BNF graft each.
+# -----------------------------------------------------------------
+@rule n00b.path.file_open_canonical
+@title n00b_file_open calls must be on canonicalized paths
+@section path handling (memory: feedback_path_handling.md)
+@language c
+@violation_nt n00b_audit_v_file_open_call
+@rationale Every libn00b/naudit function taking a path argument should
+    call `n00b_path_canonical` internally before using it. Relative
+    paths bind to the caller's cwd at the moment of use, which makes
+    behavior non-portable across nested contexts and silently breaks
+    when the cwd changes between calls. Canonicalizing at the API
+    boundary makes the function's behavior cwd-independent and
+    eliminates a class of subtle bugs. This rule fires on every
+    call site; sites where the path is documented to be already
+    canonical (e.g., produced by another canonicalizing primitive)
+    can be exempted with a signed exemption record once WP-012
+    ships signatures.
+@bad auto fr = n00b_file_open(path, .kind = N00B_FILE_KIND_MMAP);
+@good path = n00b_path_canonical(path);
+    auto fr = n00b_file_open(path, .kind = N00B_FILE_KIND_MMAP);
+@guidance Wrap path arguments in `n00b_path_canonical` at function entry, before passing to `n00b_file_open`.
+
+<n00b_audit_v_file_open_call> ::= %"n00b_file_open"
+<provided_identifier> ::= <n00b_audit_v_file_open_call>
+
+# -----------------------------------------------------------------
+# Rule 9 -- WP-009 Phase 4 -- public function-call prefix
 #
 # DEFERRED OUT OF THE MAIN RULE SET (see flagged_for_orchestrator
 # in the Phase 4 sub-agent return). The canonical filter+capture
