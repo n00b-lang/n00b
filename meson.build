@@ -1001,6 +1001,8 @@ foreach _ntest : [
     'rewrite',
     'filter',
     'filter_e2e',
+    'exemption',
+    'baseline',
 ]
     _naudit_test_exe = executable(
         'test_naudit_' + _ntest,
@@ -1017,7 +1019,14 @@ foreach _ntest : [
         # branch that complicates the foreach.
         dependencies: [picoquic_dep, monocypher_dep, mir_dep],
     )
-    test('naudit_' + _ntest, _naudit_test_exe, suite: 'unit')
+    # WP-011 bumps the default naudit-test timeout from meson's
+    # global 30s to 180s. Several tests (cli, baseline, filter)
+    # drive the full guidance-load + grammar-merge + parse pipeline
+    # on every iteration and routinely sit close to the prior cap
+    # under the sanitizer-instrumented test harness. The bump is
+    # uniform across the foreach to keep the spec readable.
+    test('naudit_' + _ntest, _naudit_test_exe, suite: 'unit',
+         timeout: 180)
 endforeach
 
 attest_module_test = executable('test_attest_module',

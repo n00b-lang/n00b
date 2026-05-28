@@ -1,0 +1,14 @@
+@schema_version 1
+
+# WP-011: hand-crafted exemption fixture whose rule_id +
+# region_fingerprint are intentionally garbage so the matching
+# predicate returns false against any real violation.
+
+@exemption mismatch_0001
+@version 1
+@rule_id ffffffffffffffffffffffffffffffff
+@rule_name n00b.test.nonexistent
+@region_fingerprint 11111111111111111111111111111111
+@rationale Intentional mismatch — should never suppress.
+@signer_id placeholder
+@approved_at 1970-01-01T00:00:00Z

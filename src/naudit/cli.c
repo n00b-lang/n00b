@@ -51,6 +51,7 @@
 #include "naudit/naudit.h"
 #include "naudit/engine.h"
 #include "naudit/errors.h"
+#include "naudit/exemption.h"
 #include "naudit/guidance.h"
 #include "naudit/output.h"
 #include "naudit/violation.h"
@@ -109,6 +110,44 @@ build_cmdr(void)
                        n00b_string_from_cstr(
                            "Apply suggested rewrites in-place "
                            "(writes a `<file>.bak` backup first)."));
+
+    /*
+     * WP-011: `--ignore-baseline` skips the loaded
+     * `audit/baseline/baseline.bnf` suppression set so the user can
+     * re-surface baselined findings for selective review. Per-record
+     * exemptions in `audit/exemptions/` still apply.
+     */
+    n00b_cmdr_add_flag(c, empty,
+                       n00b_string_from_cstr("--ignore-baseline"),
+                       N00B_CMDR_TYPE_BOOL, false,
+                       n00b_string_from_cstr(
+                           "Skip baseline suppression — re-surface "
+                           "baselined findings."));
+
+    /*
+     * WP-011: `--baseline-finalize` switches the standard
+     * `naudit <file>` invocation into the baseline-bootstrap path
+     * (per D-X6): run the audit, capture every finding into
+     * `audit/baseline/baseline.bnf`, no signature in Phase 1
+     * (WP-012 wires that). `--overwrite` permits clobbering an
+     * existing baseline file. Per the prompt, the surface is the
+     * `baseline` conceptual subcommand; we implement it as a
+     * top-level flag on the existing `naudit <file>` parse shape so
+     * the commander spec stays minimal — same UX, identical
+     * semantics.
+     */
+    n00b_cmdr_add_flag(c, empty,
+                       n00b_string_from_cstr("--baseline-finalize"),
+                       N00B_CMDR_TYPE_BOOL, false,
+                       n00b_string_from_cstr(
+                           "Run the audit and write every finding to "
+                           "audit/baseline/baseline.bnf (D-X6 bootstrap)."));
+    n00b_cmdr_add_flag(c, empty,
+                       n00b_string_from_cstr("--overwrite"),
+                       N00B_CMDR_TYPE_BOOL, false,
+                       n00b_string_from_cstr(
+                           "Clobber an existing baseline.bnf when "
+                           "--baseline-finalize is set."));
 
     n00b_cmdr_finalize(c);
     return c;
@@ -624,6 +663,24 @@ n00b_audit_run_cli(int argc, n00b_string_t *argv[])
     }
     n00b_audit_engine_t *engine = n00b_result_get(er);
 
+    /*
+     * WP-011: per-invocation toggles. `--ignore-baseline` skips the
+     * baseline suppression set; `--baseline-finalize` enables the
+     * bootstrap path (we must also disable baseline suppression
+     * during the bootstrap run itself — otherwise the findings we
+     * want to baseline would already be suppressed if a baseline
+     * happened to exist).
+     */
+    n00b_string_t *ib_flag = n00b_string_from_cstr("--ignore-baseline");
+    n00b_string_t *bf_flag = n00b_string_from_cstr("--baseline-finalize");
+    n00b_string_t *ow_flag = n00b_string_from_cstr("--overwrite");
+    bool want_ignore_baseline = n00b_cmdr_flag_present(parse, ib_flag);
+    bool want_baseline_final  = n00b_cmdr_flag_present(parse, bf_flag);
+    bool want_overwrite       = n00b_cmdr_flag_present(parse, ow_flag);
+    if (want_ignore_baseline || want_baseline_final) {
+        n00b_audit_engine_set_ignore_baseline(engine, true);
+    }
+
     /* Check the target. */
     auto cr = n00b_audit_engine_check_file(engine, target);
     if (n00b_result_is_err(cr)) {
@@ -645,6 +702,45 @@ n00b_audit_run_cli(int argc, n00b_string_t *argv[])
         n00b_result_t(int) fr = apply_fixes_dispatch(violations);
         n00b_cmdr_result_free(parse);
         return fr;
+    }
+
+    /*
+     * WP-011: --baseline-finalize dispatch. Write every current
+     * finding into `<project_root>/audit/baseline/baseline.bnf` and
+     * return ok-0. Per D-X6 the bulk baseline is bounded to one
+     * moment (project adoption); refuse to clobber an existing file
+     * without `--overwrite`.
+     */
+    if (want_baseline_final) {
+        n00b_string_t *root = guidance->project_root;
+        if (!root) {
+            n00b_eprintf(
+                "n00b-audit: --baseline-finalize: guidance has no project root");
+            n00b_cmdr_result_free(parse);
+            return n00b_result_ok(int, 2);
+        }
+        n00b_result_t(int) bfr = n00b_audit_finalize_baseline(
+            root, violations, want_overwrite);
+        if (n00b_result_is_err(bfr)) {
+            int code = n00b_result_get_err(bfr);
+            if (code == N00B_AUDIT_ERR_GUIDANCE_SCHEMA) {
+                n00b_eprintf(
+                    "n00b-audit: baseline.bnf already exists; pass --overwrite to clobber");
+            }
+            else {
+                n00b_eprintf(
+                    "n00b-audit: --baseline-finalize failed: «#»",
+                    n00b_audit_err_str(code));
+            }
+            n00b_cmdr_result_free(parse);
+            return n00b_result_ok(int, 2);
+        }
+        int written = n00b_result_get(bfr);
+        n00b_eprintf(
+            "n00b-audit: baselined «#» finding(s) to «#»/audit/baseline/baseline.bnf",
+            (int64_t)written, root);
+        n00b_cmdr_result_free(parse);
+        return n00b_result_ok(int, 0);
     }
 
     /* Render — dispatch on `--format`. Both renderers share the

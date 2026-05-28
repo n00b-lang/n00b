@@ -94,6 +94,13 @@ typedef struct {
     n00b_string_t *nt;
 } n00b_audit_capture_decl_t;
 
+/*
+ * `content_hash` (WP-011, D-X3) — XXH3-128 hex digest of the rule's
+ * canonical BNF text. Populated by `n00b_audit_load_guidance` at load
+ * time via `n00b_audit_compute_rule_content_hash`; surfaces in
+ * violation output alongside the human-readable `id`. Exemption
+ * records key off this field (see `naudit/exemption.h`).
+ */
 typedef struct {
     n00b_string_t                                  *id;
     n00b_string_t                                  *title;
@@ -109,4 +116,5 @@ typedef struct {
     n00b_list_t(n00b_string_t *)                   *language;
     n00b_string_t                                  *filter_name;
     n00b_list_t(n00b_audit_capture_decl_t *)       *captures;
+    n00b_string_t                                  *content_hash;
 } n00b_audit_rule_t;

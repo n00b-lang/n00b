@@ -89,15 +89,31 @@ render_header(n00b_audit_violation_t *v, n00b_audit_guidance_t *guidance)
                                     ? guidance->source_doc
                                     : n00b_string_from_cstr("");
 
+    /*
+     * WP-011 (D-X3): include the rule's content hash + the region
+     * fingerprint in the violation header so audit consumers can
+     * craft exemption records by copy-paste. The hash is the value
+     * exemptions key off (per D-X3); the fingerprint is the WP-011
+     * substitute for the WP-013 blame anchor.
+     */
+    n00b_string_t *content_hash = rule->content_hash
+                                      ? rule->content_hash
+                                      : n00b_string_from_cstr("");
+    n00b_string_t *region_fp = v->region_fingerprint
+                                   ? v->region_fingerprint
+                                   : n00b_string_from_cstr("");
+
     return n00b_cformat(
-        "«#»:«#»:«#»: «#»: «#» («#» «#»)",
+        "«#»:«#»:«#»: «#» [hash=«#»]: «#» («#» «#») [region=«#»]",
         v->file,
         (int64_t)v->line,
         (int64_t)v->column,
         rule->id,
+        content_hash,
         rule->title,
         source_doc,
-        rule->section);
+        rule->section,
+        region_fp);
 }
 
 /*

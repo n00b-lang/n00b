@@ -71,6 +71,7 @@
 #include "naudit/rule.h"
 #include "naudit/violation.h"
 #include "naudit/errors.h"
+#include "naudit/exemption.h"
 #include "naudit/languages.h"
 #include "naudit/tokenizer_registry.h"
 #include "naudit/filter.h"
@@ -116,6 +117,12 @@ struct n00b_audit_engine {
     n00b_eval_session_t                                       *eval_session;
     n00b_dict_t(n00b_string_t *, n00b_eval_predicate_fn_t)    *compiled_filters;
     int                                                        filter_compile_err;
+    /*
+     * WP-011: when set, `n00b_audit_engine_check_file` skips the
+     * baseline-suppression check (still applies the exemption list).
+     * Tracks the `--ignore-baseline` CLI flag. Defaults to false.
+     */
+    bool                                                       ignore_baseline;
 };
 
 /* ---------------------------------------------------------------- */
@@ -344,8 +351,24 @@ n00b_audit_engine_new(n00b_audit_guidance_t *guidance)
     e->eval_session       = nullptr;
     e->compiled_filters   = nullptr;
     e->filter_compile_err = 0;
+    e->ignore_baseline    = false;
 
     return n00b_result_ok(n00b_audit_engine_t *, e);
+}
+
+/*
+ * WP-011: setter for the engine's per-invocation `ignore_baseline`
+ * flag. The CLI calls this when `--ignore-baseline` was passed; the
+ * default (false) leaves the baseline as a bulk suppression source.
+ */
+void
+n00b_audit_engine_set_ignore_baseline(n00b_audit_engine_t *engine,
+                                       bool                 ignore)
+{
+    if (!engine) {
+        return;
+    }
+    engine->ignore_baseline = ignore;
 }
 
 /* ---------------------------------------------------------------- */
@@ -744,6 +767,52 @@ n00b_audit_engine_check_file(n00b_audit_engine_t *engine,
             v->end_column = end_col;
             v->rule       = rule;
             v->rewrite    = rewrite_text;
+            /*
+             * WP-011: compute the region fingerprint from the
+             * matched span's source bytes (the locator is already
+             * resolved above). The fingerprint becomes part of the
+             * violation record and is the matching primitive for
+             * exemption + baseline suppression below.
+             */
+            n00b_string_t *region_bytes = n00b_audit_extract_region_bytes(
+                path, line, col, end_line, end_col);
+            v->region_fingerprint = n00b_audit_compute_region_fingerprint(
+                region_bytes ? region_bytes : n00b_string_empty());
+
+            /*
+             * WP-011: apply the suppression engine. Baseline first
+             * (unless `--ignore-baseline` is set), then per-record
+             * exemptions. A matching entry drops the violation
+             * before it ever reaches the result list.
+             */
+            bool suppressed = false;
+            if (!engine->ignore_baseline && engine->guidance->baseline) {
+                int64_t nb = n00b_list_len(*engine->guidance->baseline);
+                for (int64_t k = 0; k < nb && !suppressed; k++) {
+                    n00b_audit_exemption_t *ex =
+                        (n00b_audit_exemption_t *)
+                            n00b_list_get(*engine->guidance->baseline, k);
+                    if (n00b_audit_exemption_match(ex, v)) {
+                        suppressed = true;
+                    }
+                }
+            }
+            if (!suppressed && engine->guidance->exemptions) {
+                int64_t ne =
+                    n00b_list_len(*engine->guidance->exemptions);
+                for (int64_t k = 0; k < ne && !suppressed; k++) {
+                    n00b_audit_exemption_t *ex =
+                        (n00b_audit_exemption_t *)
+                            n00b_list_get(*engine->guidance->exemptions, k);
+                    if (n00b_audit_exemption_match(ex, v)) {
+                        suppressed = true;
+                    }
+                }
+            }
+            if (suppressed) {
+                continue;
+            }
+
             n00b_list_push(*violations, v);
         }
     }

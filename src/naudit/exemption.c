@@ -1,0 +1,1041 @@
+/*
+ * WP-011 — exemption + baseline record schema, hashing, loader,
+ * matcher, and baseline writer.
+ *
+ * # DF-Y resolution — canonicalization shapes
+ *
+ * Two distinct canonicalizations live in this file: one for rule BNF
+ * content hashing, one for matched-region fingerprinting. Both feed
+ * `n00b_hash_raw` (XXH3-128 — the same primitive backing
+ * `n00b_string_t.cached_hash`; per `src/core/hash.c::n00b_string_hash`
+ * + `n00b_hash_raw`) and produce a lowercase 32-character hex string.
+ *
+ * ## Rule BNF canonicalization
+ *
+ * Per the WP-011 prompt step 2, the canonical-form spec must be
+ * trivial-reformat-robust but production-edit-sensitive. The
+ * canonicalization:
+ *
+ *   1. Walk the BNF text line-by-line (split on `\n`).
+ *   2. Drop lines whose first non-whitespace byte is `#` (comments).
+ *   3. Trim trailing whitespace (spaces, tabs, `\r`) from each line.
+ *   4. Trim leading whitespace from each line. Indentation in BNF
+ *      bodies has no semantic meaning per the slay BNF loader —
+ *      see `src/slay/bnf.c` strip rules — so stripping it is safe.
+ *   5. Drop fully-blank lines after the trim.
+ *   6. Join surviving lines with a single `\n` separator (no
+ *      trailing newline).
+ *
+ * This makes the hash stable across:
+ *   - comment-only edits inside the rule's BNF body;
+ *   - leading-indent reformatting;
+ *   - trailing-whitespace tweaks;
+ *   - extra blank lines;
+ *   - CR/LF normalization (the trim removes `\r`).
+ *
+ * And it changes whenever any production text byte changes
+ * (token name, terminal text, rewrite template, etc.).
+ *
+ * ## Region fingerprint canonicalization
+ *
+ * Per the WP-011 prompt step 3 (and preflight risk 2), region
+ * fingerprinting is the matching primitive for Phase 1; whitespace-
+ * only changes inside the matched span must NOT change the
+ * fingerprint, but token-text changes must. The canonicalization:
+ *
+ *   1. Walk byte-by-byte; normalize CR/LF endings to `\n`.
+ *   2. Split on `\n`.
+ *   3. Per line: strip leading + trailing whitespace; collapse
+ *      internal whitespace (` `, `\t`) runs to a single space.
+ *   4. Drop fully-blank lines.
+ *   5. Join surviving lines with a single `\n` (no trailing
+ *      newline).
+ *
+ * Examples (region bytes -> canonical bytes):
+ *
+ *   "  int *p = NULL;\n"          -> "int *p = NULL;"
+ *   "  int  *p\t=\tNULL;\n  "     -> "int * p = NULL;"
+ *   "int *p = NULL;\n\n\n"        -> "int *p = NULL;"
+ *
+ * # Exemption file format
+ *
+ * Per the prompt's "Decision points" + § 8 of the white paper,
+ * Phase 1 supports **both** layouts via the same loader:
+ *
+ *   1. `audit/exemptions/<id>.bnf` — one file per record. Better
+ *      merge-conflict surface (the paper's recommendation).
+ *   2. `audit/baseline/baseline.bnf` — a single file with many
+ *      `@exemption <id>` sections.
+ *
+ * The loader sees both as "one or more `@exemption` sections in a
+ * single file" and returns one struct per section. Per-file or
+ * multi-section is the writer's choice.
+ *
+ * # Tokenizer + metagrammar reuse
+ *
+ * The exemption file format reuses the existing `audit_rule_file`
+ * tokenizer + `audit-rule-file.bnf` metagrammar. The only difference
+ * from a guidance file is that exemption sections open with
+ * `@exemption <id>` instead of `@rule <id>`. The tokenizer's
+ * special-case for `@rule` is extended to recognize `@exemption`
+ * symmetrically (both emit a RULE_MARKER token); the metagrammar's
+ * `<rule_section>` shape (`<rule_marker> <meta_field>* <bnf_body>`)
+ * accommodates exemption sections naturally because exemption files
+ * carry no BNF productions — the empty `<bnf_body>` reduction
+ * succeeds against zero `<bnf_line>` children.
+ *
+ * Per project DECISIONS.md D-005, this file's public functions
+ * carry no `_kargs` block. Per D-008, null guards use the `!ptr`
+ * idiom.
+ */
+
+#include "n00b.h"
+#include "core/alloc.h"
+#include "core/buffer.h"
+#include "core/file.h"
+#include "core/hash.h"
+#include "core/string.h"
+#include "adt/dict.h"
+#include "adt/list.h"
+#include "adt/result.h"
+#include "parsers/scanner.h"
+#include "parsers/token_stream.h"
+#include "slay/bnf.h"
+#include "slay/grammar.h"
+#include "slay/n00b_parse.h"
+#include "slay/parse_tree.h"
+#include "slay/token.h"
+#include "text/strings/format.h"
+#include "text/strings/string_ops.h"
+#include "util/path.h"
+
+#include "naudit/errors.h"
+#include "naudit/exemption.h"
+#include "naudit/guidance.h"
+#include "naudit/rule.h"
+#include "naudit/violation.h"
+#include "internal/naudit/_naudit_internal.h"
+
+#include "audit_rule_file_grammar.h"
+
+#include <string.h>
+#include <sys/stat.h>
+
+/* ---------------------------------------------------------------- */
+/* Hex encoding                                                     */
+/* ---------------------------------------------------------------- */
+
+/*
+ * Lowercase hex-encode a 128-bit value as a 32-character
+ * n00b_string_t. The byte order is the natural memory layout of the
+ * `n00b_uint128_t` (the XXH3-128 result interpreted as a u128 — see
+ * `n00b_xxh_convert` in `src/core/hash.c`). Order stability is
+ * guaranteed by the convert routine: same input bytes -> same u128
+ * pattern -> same hex digits.
+ */
+static n00b_string_t *
+hex_encode_u128(n00b_uint128_t hv)
+{
+    static const char digits[] = "0123456789abcdef";
+    /*
+     * Treat the 128-bit value as 16 raw bytes. Reading via a typed
+     * pointer to unsigned char is the standard C aliasing-safe path.
+     */
+    const unsigned char *bytes = (const unsigned char *)&hv;
+    char                 buf[32];
+    for (int i = 0; i < 16; i++) {
+        buf[2 * i + 0] = digits[(bytes[i] >> 4) & 0xF];
+        buf[2 * i + 1] = digits[(bytes[i] >> 0) & 0xF];
+    }
+    return n00b_string_from_raw(buf, 32);
+}
+
+/* ---------------------------------------------------------------- */
+/* BNF canonicalization (DF-Y)                                      */
+/* ---------------------------------------------------------------- */
+
+/*
+ * Trim leading whitespace (spaces, tabs) from a byte slice.
+ * Returns the new start offset.
+ */
+static size_t
+skip_leading_ws(const char *buf, size_t start, size_t end)
+{
+    size_t i = start;
+    while (i < end && (buf[i] == ' ' || buf[i] == '\t')) {
+        i++;
+    }
+    return i;
+}
+
+/*
+ * Trim trailing whitespace + CR (spaces, tabs, `\r`) from a byte
+ * slice. Returns the new end offset (exclusive).
+ */
+static size_t
+trim_trailing_ws(const char *buf, size_t start, size_t end)
+{
+    while (end > start
+           && (buf[end - 1] == ' ' || buf[end - 1] == '\t'
+               || buf[end - 1] == '\r')) {
+        end--;
+    }
+    return end;
+}
+
+n00b_string_t *
+n00b_audit_compute_rule_content_hash(n00b_string_t *bnf_fragment)
+{
+    /*
+     * Step 0: empty / null fragment → hash of the empty canonical
+     * string. We still go through `n00b_hash_raw(nullptr, 0)`-equivalent
+     * by passing a zero-length data pointer; XXH3-128 of empty input
+     * is well-defined.
+     */
+    const char *src = (bnf_fragment && bnf_fragment->u8_bytes > 0)
+                          ? bnf_fragment->data
+                          : "";
+    size_t      n   = (bnf_fragment && bnf_fragment->u8_bytes > 0)
+                          ? bnf_fragment->u8_bytes
+                          : 0;
+
+    n00b_buffer_t *acc = n00b_buffer_empty();
+
+    /* Walk line by line. */
+    size_t i = 0;
+    bool   need_sep = false;
+    while (i < n) {
+        /* Find end of line. */
+        size_t lstart = i;
+        while (i < n && src[i] != '\n') {
+            i++;
+        }
+        size_t lend = i;
+        if (i < n) {
+            i++; /* skip the '\n' */
+        }
+
+        /* Trim trailing whitespace + CR. */
+        lend = trim_trailing_ws(src, lstart, lend);
+        /* Trim leading whitespace. */
+        size_t s = skip_leading_ws(src, lstart, lend);
+
+        /* Drop empty lines. */
+        if (s >= lend) {
+            continue;
+        }
+        /* Drop comment lines (first non-ws byte is `#`). */
+        if (src[s] == '#') {
+            continue;
+        }
+
+        if (need_sep) {
+            n00b_buffer_t *nl = n00b_buffer_from_bytes((char *)"\n", 1);
+            n00b_buffer_concat(acc, nl);
+        }
+        n00b_buffer_t *line = n00b_buffer_from_bytes(
+            (char *)(src + s), (int64_t)(lend - s));
+        n00b_buffer_concat(acc, line);
+        need_sep = true;
+    }
+
+    /*
+     * Hash the canonicalized bytes. Empty input: XXH3-128 of zero
+     * bytes — well-defined per the xxHash spec and deterministic.
+     */
+    const void *data = acc->byte_len > 0 ? (const void *)acc->data
+                                          : (const void *)"";
+    size_t      len  = acc->byte_len > 0 ? (size_t)acc->byte_len : 0;
+    n00b_uint128_t hv = n00b_hash_raw(data, len);
+    return hex_encode_u128(hv);
+}
+
+/* ---------------------------------------------------------------- */
+/* Region fingerprint canonicalization (DF-Y)                       */
+/* ---------------------------------------------------------------- */
+
+n00b_string_t *
+n00b_audit_compute_region_fingerprint(n00b_string_t *region_bytes)
+{
+    const char *src = (region_bytes && region_bytes->u8_bytes > 0)
+                          ? region_bytes->data
+                          : "";
+    size_t      n   = (region_bytes && region_bytes->u8_bytes > 0)
+                          ? region_bytes->u8_bytes
+                          : 0;
+
+    n00b_buffer_t *acc = n00b_buffer_empty();
+
+    size_t i        = 0;
+    bool   need_sep = false;
+    while (i < n) {
+        /* Find end of line (treat \r\n and \r as line terminators too). */
+        size_t lstart = i;
+        while (i < n && src[i] != '\n' && src[i] != '\r') {
+            i++;
+        }
+        size_t lend = i;
+        if (i < n && src[i] == '\r') {
+            i++;
+            if (i < n && src[i] == '\n') {
+                i++;
+            }
+        }
+        else if (i < n && src[i] == '\n') {
+            i++;
+        }
+
+        /* Trim leading + trailing whitespace. */
+        size_t s = skip_leading_ws(src, lstart, lend);
+        size_t e = trim_trailing_ws(src, s, lend);
+        if (s >= e) {
+            continue;
+        }
+
+        /*
+         * Collapse runs of internal whitespace (` `, `\t`) into a
+         * single space. Walk the [s, e) slice into a per-line
+         * buffer.
+         */
+        n00b_buffer_t *lb       = n00b_buffer_empty();
+        bool           prev_ws  = false;
+        for (size_t j = s; j < e; j++) {
+            char c = src[j];
+            if (c == ' ' || c == '\t') {
+                if (!prev_ws) {
+                    n00b_buffer_t *sp = n00b_buffer_from_bytes(
+                        (char *)" ", 1);
+                    n00b_buffer_concat(lb, sp);
+                    prev_ws = true;
+                }
+            }
+            else {
+                n00b_buffer_t *ch = n00b_buffer_from_bytes(
+                    (char *)&src[j], 1);
+                n00b_buffer_concat(lb, ch);
+                prev_ws = false;
+            }
+        }
+
+        if (lb->byte_len == 0) {
+            continue;
+        }
+
+        if (need_sep) {
+            n00b_buffer_t *nl = n00b_buffer_from_bytes((char *)"\n", 1);
+            n00b_buffer_concat(acc, nl);
+        }
+        n00b_buffer_concat(acc, lb);
+        need_sep = true;
+    }
+
+    const void *data = acc->byte_len > 0 ? (const void *)acc->data
+                                          : (const void *)"";
+    size_t      len  = acc->byte_len > 0 ? (size_t)acc->byte_len : 0;
+    n00b_uint128_t hv = n00b_hash_raw(data, len);
+    return hex_encode_u128(hv);
+}
+
+/* ---------------------------------------------------------------- */
+/* Matching predicate                                               */
+/* ---------------------------------------------------------------- */
+
+bool
+n00b_audit_exemption_match(n00b_audit_exemption_t  *exemption,
+                            n00b_audit_violation_t  *violation)
+{
+    if (!exemption || !violation || !violation->rule) {
+        return false;
+    }
+    if (!exemption->rule_id || !violation->rule->content_hash) {
+        return false;
+    }
+    if (!exemption->region_fingerprint || !violation->region_fingerprint) {
+        return false;
+    }
+    if (!n00b_unicode_str_eq(exemption->rule_id,
+                              violation->rule->content_hash)) {
+        return false;
+    }
+    if (!n00b_unicode_str_eq(exemption->region_fingerprint,
+                              violation->region_fingerprint)) {
+        return false;
+    }
+    return true;
+}
+
+/* ---------------------------------------------------------------- */
+/* Region byte extraction                                           */
+/* ---------------------------------------------------------------- */
+
+/*
+ * Compute the byte offset corresponding to a (line, col) tuple in the
+ * source buffer. 1-based line and column on entry; column is treated
+ * as a byte count from the line start (matches slay's
+ * `n00b_token_info_t.column` semantics — same as `cli.c`'s
+ * `line_col_to_offset`). Returns -1 if the position is past EOF.
+ */
+static int64_t
+line_col_to_offset(const char *src, size_t src_len,
+                   int64_t line, int64_t col)
+{
+    if (line <= 0 || col <= 0) {
+        return -1;
+    }
+    int64_t cur_line = 1;
+    size_t  i        = 0;
+    while (cur_line < line && i < src_len) {
+        if (src[i] == '\n') {
+            cur_line++;
+        }
+        i++;
+    }
+    if (cur_line != line) {
+        return -1;
+    }
+    int64_t needed   = col - 1;
+    int64_t advanced = 0;
+    while (advanced < needed && i < src_len && src[i] != '\n') {
+        i++;
+        advanced++;
+    }
+    if (advanced != needed) {
+        return -1;
+    }
+    return (int64_t)i;
+}
+
+n00b_string_t *
+n00b_audit_extract_region_bytes(n00b_string_t *file_path,
+                                int64_t        line,
+                                int64_t        column,
+                                int64_t        end_line,
+                                int64_t        end_column)
+{
+    if (!file_path) {
+        return nullptr;
+    }
+    file_path = n00b_path_canonical(file_path);
+    auto fr   = n00b_file_open(file_path, .kind = N00B_FILE_KIND_MMAP);
+    if (n00b_result_is_err(fr)) {
+        return nullptr;
+    }
+    n00b_file_t *f  = n00b_result_get(fr);
+    auto         br = n00b_file_as_buffer(f);
+    n00b_file_close(f);
+    if (n00b_result_is_err(br)) {
+        return nullptr;
+    }
+    n00b_buffer_t *buf = n00b_result_get(br);
+    const char    *src = buf->data;
+    size_t         n   = (size_t)buf->byte_len;
+    int64_t        s   = line_col_to_offset(src, n, line, column);
+    int64_t        e   = line_col_to_offset(src, n, end_line, end_column);
+    if (s < 0 || e < 0 || e < s) {
+        return nullptr;
+    }
+    n00b_string_t *region = n00b_string_from_raw(src + s,
+                                                  (int64_t)(e - s));
+    /* Return the canonicalized form so callers can hash it AND emit
+     * it (the loader stashes the raw bytes; consumers reuse). */
+    return region;
+}
+
+/* ---------------------------------------------------------------- */
+/* Loader — reuses the audit-rule-file tokenizer + metagrammar      */
+/* ---------------------------------------------------------------- */
+
+/*
+ * Compare an n00b_string_t to a C-string literal — byte-wise; suitable
+ * for the directive-name ASCII keys.
+ */
+static bool
+str_eq_cstr(n00b_string_t *s, const char *expected)
+{
+    if (!s || !expected) {
+        return false;
+    }
+    size_t elen = 0;
+    while (expected[elen]) {
+        elen++;
+    }
+    if (s->u8_bytes != elen) {
+        return false;
+    }
+    for (size_t i = 0; i < elen; i++) {
+        if (s->data[i] != expected[i]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/*
+ * Parse a decimal integer string into int64_t. Returns true on
+ * success. Mirrors guidance.c's `parse_int64`.
+ */
+static bool
+parse_int64_field(n00b_string_t *s, int64_t *out)
+{
+    if (!s || s->u8_bytes == 0) {
+        *out = 0;
+        return false;
+    }
+    int64_t     v   = 0;
+    size_t      n   = s->u8_bytes;
+    const char *buf = s->data;
+    size_t      i   = 0;
+    bool        neg = false;
+    if (buf[0] == '-') {
+        neg = true;
+        i   = 1;
+    }
+    if (i >= n) {
+        return false;
+    }
+    for (; i < n; i++) {
+        char c = buf[i];
+        if (c < '0' || c > '9') {
+            return false;
+        }
+        v = v * 10 + (int64_t)(c - '0');
+    }
+    *out = neg ? -v : v;
+    return true;
+}
+
+static n00b_token_info_t *
+nth_token_child(n00b_parse_tree_t *node, int idx)
+{
+    if (!node) {
+        return nullptr;
+    }
+    size_t n = n00b_pt_num_children(node);
+    if (idx < 0 || (size_t)idx >= n) {
+        return nullptr;
+    }
+    n00b_parse_tree_t *child = n00b_pt_get_child(node, (size_t)idx);
+    if (!child) {
+        return nullptr;
+    }
+    while (!n00b_pt_is_token(child)) {
+        size_t nc = n00b_pt_num_children(child);
+        if (nc != 1) {
+            return nullptr;
+        }
+        child = n00b_pt_get_child(child, 0);
+        if (!child) {
+            return nullptr;
+        }
+    }
+    return n00b_parse_node_token(child);
+}
+
+static n00b_string_t *
+token_text(n00b_token_info_t *tok)
+{
+    if (!tok) {
+        return nullptr;
+    }
+    if (!n00b_option_is_set(tok->value)) {
+        return nullptr;
+    }
+    return n00b_option_get(tok->value);
+}
+
+/*
+ * Assemble a meta-field value (REST + continuation lines joined by
+ * `\n`). Mirrors guidance.c's `assemble_field_value` exactly; copied
+ * here to keep exemption.c independent of guidance.c's static
+ * helpers.
+ */
+static n00b_string_t *
+assemble_field_value(n00b_parse_tree_t *meta_field_node)
+{
+    n00b_token_info_t *rest_tok = nth_token_child(meta_field_node, 1);
+    n00b_string_t     *rest     = token_text(rest_tok);
+    if (!rest) {
+        rest = n00b_string_empty();
+    }
+
+    enum { MAX_CONT = 1024 };
+    n00b_parse_tree_t *conts[MAX_CONT];
+    int n_cont = n00b_pt_collect_nt_deep(meta_field_node, "continuation",
+                                         conts, MAX_CONT);
+    if (n_cont == 0) {
+        return rest;
+    }
+
+    n00b_buffer_t *acc = n00b_buffer_empty();
+    if (rest->u8_bytes > 0) {
+        n00b_buffer_t *r = n00b_buffer_from_bytes(rest->data,
+                                                  (int64_t)rest->u8_bytes);
+        n00b_buffer_concat(acc, r);
+    }
+    bool need_sep = (rest->u8_bytes > 0);
+    for (int i = 0; i < n_cont; i++) {
+        n00b_token_info_t *line_tok = nth_token_child(conts[i], 0);
+        n00b_string_t     *line     = token_text(line_tok);
+        if (!line) {
+            line = n00b_string_empty();
+        }
+        if (need_sep) {
+            n00b_buffer_t *nl = n00b_buffer_from_bytes((char *)"\n", 1);
+            n00b_buffer_concat(acc, nl);
+        }
+        n00b_buffer_t *lb = n00b_buffer_from_bytes(line->data,
+                                                   (int64_t)line->u8_bytes);
+        n00b_buffer_concat(acc, lb);
+        need_sep = true;
+    }
+
+    return n00b_string_from_raw(acc->data, (int64_t)acc->byte_len);
+}
+
+/*
+ * Walk one `<rule_section>` (which, in an exemption file, is an
+ * `@exemption` section thanks to the tokenizer's symmetric marker
+ * handling) and populate the exemption struct from its `<meta_field>`
+ * children. Returns false on a schema error.
+ */
+static bool
+populate_exemption(n00b_parse_tree_t      *sec,
+                   n00b_audit_exemption_t *ex,
+                   int                    *err_code)
+{
+    enum { MAX_FIELDS = 4096 };
+    n00b_parse_tree_t *fields[MAX_FIELDS];
+    int n = n00b_pt_collect_nt_deep(sec, "meta_field",
+                                    fields, MAX_FIELDS);
+    for (int i = 0; i < n; i++) {
+        n00b_token_info_t *name_tok = nth_token_child(fields[i], 0);
+        n00b_string_t     *name     = token_text(name_tok);
+        if (!name) {
+            continue;
+        }
+        n00b_string_t *value = assemble_field_value(fields[i]);
+        if (str_eq_cstr(name, "version")) {
+            int64_t v = 0;
+            if (!parse_int64_field(value, &v)) {
+                *err_code = N00B_AUDIT_ERR_GUIDANCE_SCHEMA;
+                return false;
+            }
+            ex->version = v;
+            if (v != 1) {
+                *err_code = N00B_AUDIT_ERR_GUIDANCE_SCHEMA_VERSION;
+                return false;
+            }
+        }
+        else if (str_eq_cstr(name, "rule_id")) {
+            ex->rule_id = value;
+        }
+        else if (str_eq_cstr(name, "rule_name")) {
+            ex->rule_name = value;
+        }
+        else if (str_eq_cstr(name, "file_path")) {
+            ex->file_path = value;
+        }
+        else if (str_eq_cstr(name, "locator_line")) {
+            int64_t v = 0;
+            (void)parse_int64_field(value, &v);
+            ex->locator_line = v;
+        }
+        else if (str_eq_cstr(name, "locator_col")) {
+            int64_t v = 0;
+            (void)parse_int64_field(value, &v);
+            ex->locator_col = v;
+        }
+        else if (str_eq_cstr(name, "locator_end_line")) {
+            int64_t v = 0;
+            (void)parse_int64_field(value, &v);
+            ex->locator_end_line = v;
+        }
+        else if (str_eq_cstr(name, "locator_end_col")) {
+            int64_t v = 0;
+            (void)parse_int64_field(value, &v);
+            ex->locator_end_col = v;
+        }
+        else if (str_eq_cstr(name, "region_fingerprint")) {
+            ex->region_fingerprint = value;
+        }
+        else if (str_eq_cstr(name, "rationale")) {
+            ex->rationale = value;
+        }
+        else if (str_eq_cstr(name, "signer_id")) {
+            ex->signer_id = value;
+        }
+        else if (str_eq_cstr(name, "approved_at")) {
+            ex->approved_at = value;
+        }
+        else if (str_eq_cstr(name, "expires_at")) {
+            ex->expires_at = value;
+        }
+        /* Unknown directives tolerated silently — forward-compat. */
+    }
+
+    /*
+     * Required fields per the v1 schema: `version`, `rule_id`,
+     * `region_fingerprint`. Everything else is optional /
+     * informational in Phase 1 (signatures + blame land in WP-012 /
+     * WP-013).
+     */
+    if (!ex->rule_id || ex->rule_id->u8_bytes == 0
+        || !ex->region_fingerprint
+        || ex->region_fingerprint->u8_bytes == 0
+        || ex->version != 1) {
+        *err_code = N00B_AUDIT_ERR_GUIDANCE_SCHEMA;
+        return false;
+    }
+    return true;
+}
+
+/*
+ * Build the metagrammar grammar object. Mirrors guidance.c's
+ * `build_metagrammar`.
+ */
+static n00b_grammar_t *
+build_metagrammar(void)
+{
+    n00b_grammar_t *g = n00b_grammar_new();
+    n00b_string_t  *text =
+        n00b_string_from_cstr(N00B_AUDIT_RULE_FILE_METAGRAMMAR);
+    bool ok = n00b_bnf_load(text, r"file", g);
+    if (!ok) {
+        n00b_grammar_free(g);
+        return nullptr;
+    }
+    return g;
+}
+
+n00b_result_t(n00b_list_t(n00b_audit_exemption_t *) *)
+n00b_audit_load_exemptions(n00b_string_t *path)
+{
+    if (!path) {
+        return n00b_result_err(
+            n00b_list_t(n00b_audit_exemption_t *) *,
+            N00B_AUDIT_ERR_GUIDANCE_NOT_FOUND);
+    }
+
+    path = n00b_path_canonical(path);
+
+    auto fr = n00b_file_open(path, .kind = N00B_FILE_KIND_MMAP);
+    if (n00b_result_is_err(fr)) {
+        return n00b_result_err(
+            n00b_list_t(n00b_audit_exemption_t *) *,
+            N00B_AUDIT_ERR_GUIDANCE_NOT_FOUND);
+    }
+    n00b_file_t *f  = n00b_result_get(fr);
+    auto         br = n00b_file_as_buffer(f);
+    n00b_file_close(f);
+    if (n00b_result_is_err(br)) {
+        return n00b_result_err(
+            n00b_list_t(n00b_audit_exemption_t *) *,
+            N00B_AUDIT_ERR_GUIDANCE_NOT_FOUND);
+    }
+    n00b_buffer_t *src_buf = n00b_result_get(br);
+
+    n00b_grammar_t *meta_g = build_metagrammar();
+    if (!meta_g) {
+        return n00b_result_err(
+            n00b_list_t(n00b_audit_exemption_t *) *,
+            N00B_AUDIT_ERR_GUIDANCE_PARSE);
+    }
+
+    void *st = _n00b_audit_rule_file_scanner_state_new();
+    n00b_scanner_t *sc = n00b_scanner_new(
+        src_buf, _n00b_audit_rule_file_scan_cb(), meta_g,
+        .state    = st,
+        .reset_cb = _n00b_audit_rule_file_reset_cb());
+    n00b_token_stream_t *ts = n00b_token_stream_new(sc);
+
+    n00b_parse_result_t *pr = n00b_grammar_parse(meta_g, ts,
+                                                 N00B_PARSE_MODE_DEFAULT);
+    if (!n00b_parse_result_ok(pr)) {
+        n00b_parse_result_free(pr);
+        n00b_grammar_free(meta_g);
+        return n00b_result_err(
+            n00b_list_t(n00b_audit_exemption_t *) *,
+            N00B_AUDIT_ERR_GUIDANCE_PARSE);
+    }
+
+    n00b_parse_tree_t *tree = n00b_parse_result_tree(pr);
+
+    n00b_list_t(n00b_audit_exemption_t *) *out = n00b_alloc(
+        n00b_list_t(n00b_audit_exemption_t *));
+    *out = n00b_list_new(n00b_audit_exemption_t *);
+
+    enum { MAX_SECTIONS = 65536 };
+    n00b_parse_tree_t *sections[MAX_SECTIONS];
+    int n_sections = n00b_pt_collect_nt_deep(tree, "rule_section",
+                                             sections, MAX_SECTIONS);
+    for (int i = 0; i < n_sections; i++) {
+        n00b_audit_exemption_t *ex = n00b_alloc(n00b_audit_exemption_t);
+        ex->version            = 0;
+        ex->rule_id            = nullptr;
+        ex->rule_name          = nullptr;
+        ex->file_path          = nullptr;
+        ex->locator_line       = 0;
+        ex->locator_col        = 0;
+        ex->locator_end_line   = 0;
+        ex->locator_end_col    = 0;
+        ex->region_fingerprint = nullptr;
+        ex->rationale          = nullptr;
+        ex->signer_id          = nullptr;
+        ex->approved_at        = nullptr;
+        ex->expires_at         = nullptr;
+
+        int err = 0;
+        if (!populate_exemption(sections[i], ex, &err)) {
+            n00b_parse_result_free(pr);
+            n00b_grammar_free(meta_g);
+            return n00b_result_err(
+                n00b_list_t(n00b_audit_exemption_t *) *,
+                err ? err : N00B_AUDIT_ERR_GUIDANCE_SCHEMA);
+        }
+        n00b_list_push(*out, ex);
+    }
+
+    n00b_parse_result_free(pr);
+    n00b_grammar_free(meta_g);
+    return n00b_result_ok(n00b_list_t(n00b_audit_exemption_t *) *, out);
+}
+
+n00b_result_t(n00b_list_t(n00b_audit_exemption_t *) *)
+n00b_audit_discover_exemptions(n00b_string_t *project_root)
+{
+    n00b_list_t(n00b_audit_exemption_t *) *out = n00b_alloc(
+        n00b_list_t(n00b_audit_exemption_t *));
+    *out = n00b_list_new(n00b_audit_exemption_t *);
+
+    if (!project_root) {
+        return n00b_result_ok(
+            n00b_list_t(n00b_audit_exemption_t *) *, out);
+    }
+
+    project_root = n00b_path_canonical(project_root);
+
+    n00b_string_t *ex_dir = n00b_path_simple_join(
+        project_root, n00b_string_from_cstr("audit/exemptions"));
+    if (!n00b_path_is_directory(ex_dir)) {
+        return n00b_result_ok(
+            n00b_list_t(n00b_audit_exemption_t *) *, out);
+    }
+
+    n00b_list_t(n00b_string_t *) *entries = n00b_list_directory(
+        ex_dir,
+        .extension = n00b_string_from_cstr(".bnf"),
+        .full_path = true);
+    if (!entries) {
+        return n00b_result_ok(
+            n00b_list_t(n00b_audit_exemption_t *) *, out);
+    }
+
+    int64_t n = n00b_list_len(*entries);
+    for (int64_t i = 0; i < n; i++) {
+        n00b_string_t *p = n00b_list_get(*entries, i);
+        if (!p) {
+            continue;
+        }
+        auto lr = n00b_audit_load_exemptions(p);
+        if (n00b_result_is_err(lr)) {
+            return n00b_result_err(
+                n00b_list_t(n00b_audit_exemption_t *) *,
+                n00b_result_get_err(lr));
+        }
+        n00b_list_t(n00b_audit_exemption_t *) *batch = n00b_result_get(lr);
+        int64_t bn = n00b_list_len(*batch);
+        for (int64_t j = 0; j < bn; j++) {
+            n00b_list_push(*out, n00b_list_get(*batch, j));
+        }
+    }
+    return n00b_result_ok(n00b_list_t(n00b_audit_exemption_t *) *, out);
+}
+
+/* ---------------------------------------------------------------- */
+/* Baseline writer                                                  */
+/* ---------------------------------------------------------------- */
+
+/*
+ * Create a directory at `path` (POSIX mkdir(0755)). Returns true on
+ * success OR when the directory already exists. Distinct from
+ * n00b's vfs surface — naudit's I/O surface is libc-direct (matches
+ * `cli.c`'s pattern + `src/util/path.c::n00b_new_temp_dir`).
+ */
+static bool
+ensure_directory(n00b_string_t *path)
+{
+    if (!path) {
+        return false;
+    }
+    if (n00b_path_is_directory(path)) {
+        return true;
+    }
+    if (mkdir(path->data, 0755) == 0) {
+        return true;
+    }
+    return n00b_path_is_directory(path);
+}
+
+/*
+ * Write a string to a file at `path`, truncating any existing content.
+ * Mirrors cli.c's `write_whole_file` minus the n00b_buffer_t wrapper.
+ */
+static bool
+write_text_file(n00b_string_t *path, n00b_string_t *content)
+{
+    if (!path || !content) {
+        return false;
+    }
+    auto fr = n00b_file_open(path, .mode = N00B_FILE_W,
+                              .kind = N00B_FILE_KIND_STREAM);
+    if (n00b_result_is_err(fr)) {
+        return false;
+    }
+    n00b_file_t *f  = n00b_result_get(fr);
+    bool         ok = true;
+    if (content->u8_bytes > 0) {
+        auto wr = n00b_file_write(f, content->data,
+                                   (size_t)content->u8_bytes);
+        if (n00b_result_is_err(wr)) {
+            ok = false;
+        }
+    }
+    n00b_file_close(f);
+    return ok;
+}
+
+/*
+ * Append a single line "@<directive> <value>\n" to the accumulator.
+ * The `value` may contain newlines — the rule-file metaformat handles
+ * multi-line values via continuation lines indented one space deep;
+ * we serialize accordingly.
+ */
+static void
+emit_directive(n00b_buffer_t *acc,
+               const char    *directive,
+               n00b_string_t *value)
+{
+    n00b_buffer_t *at = n00b_buffer_from_bytes((char *)"@", 1);
+    n00b_buffer_concat(acc, at);
+    n00b_buffer_t *dn = n00b_buffer_from_bytes((char *)directive,
+                                                (int64_t)strlen(directive));
+    n00b_buffer_concat(acc, dn);
+    if (value && value->u8_bytes > 0) {
+        n00b_buffer_t *sp = n00b_buffer_from_bytes((char *)" ", 1);
+        n00b_buffer_concat(acc, sp);
+        /* Single-line emission; rationale + region_fingerprint
+         * are short enough that we don't need continuation lines
+         * in Phase 1's baseline output. */
+        n00b_buffer_t *vb = n00b_buffer_from_bytes(
+            value->data, (int64_t)value->u8_bytes);
+        n00b_buffer_concat(acc, vb);
+    }
+    n00b_buffer_t *nl = n00b_buffer_from_bytes((char *)"\n", 1);
+    n00b_buffer_concat(acc, nl);
+}
+
+static void
+emit_directive_int(n00b_buffer_t *acc,
+                   const char    *directive,
+                   int64_t        value)
+{
+    n00b_string_t *s = n00b_cformat("«#»", value);
+    emit_directive(acc, directive, s);
+}
+
+n00b_result_t(int)
+n00b_audit_finalize_baseline(
+    n00b_string_t                          *project_root,
+    n00b_list_t(n00b_audit_violation_t *)  *violations,
+    bool                                    overwrite)
+{
+    if (!project_root || !violations) {
+        return n00b_result_err(int,
+                               N00B_AUDIT_ERR_ENGINE_TARGET_NOT_FOUND);
+    }
+
+    project_root = n00b_path_canonical(project_root);
+
+    /* Ensure `<project_root>/audit/baseline/` exists. */
+    n00b_string_t *audit_dir = n00b_path_simple_join(
+        project_root, n00b_string_from_cstr("audit"));
+    if (!ensure_directory(audit_dir)) {
+        return n00b_result_err(int,
+                               N00B_AUDIT_ERR_ENGINE_TARGET_NOT_FOUND);
+    }
+    n00b_string_t *base_dir = n00b_path_simple_join(
+        audit_dir, n00b_string_from_cstr("baseline"));
+    if (!ensure_directory(base_dir)) {
+        return n00b_result_err(int,
+                               N00B_AUDIT_ERR_ENGINE_TARGET_NOT_FOUND);
+    }
+    n00b_string_t *base_file = n00b_path_simple_join(
+        base_dir, n00b_string_from_cstr("baseline.bnf"));
+
+    if (!overwrite && n00b_path_is_file(base_file)) {
+        return n00b_result_err(int, N00B_AUDIT_ERR_GUIDANCE_SCHEMA);
+    }
+
+    /*
+     * Build the file body. Format reuses the rule-file metaformat:
+     *   @schema_version 1
+     *   <blank line>
+     *   @exemption baseline_NNNN
+     *   @version 1
+     *   @rule_id <hex>
+     *   ...
+     */
+    n00b_buffer_t *acc = n00b_buffer_empty();
+    {
+        n00b_buffer_t *hdr = n00b_buffer_from_bytes(
+            (char *)"@schema_version 1\n\n",
+            (int64_t)strlen("@schema_version 1\n\n"));
+        n00b_buffer_concat(acc, hdr);
+    }
+
+    int64_t n = n00b_list_len(*violations);
+    int     written = 0;
+    for (int64_t i = 0; i < n; i++) {
+        n00b_audit_violation_t *v = n00b_list_get(*violations, i);
+        if (!v || !v->rule || !v->rule->content_hash
+            || !v->region_fingerprint) {
+            continue;
+        }
+        n00b_string_t *id = n00b_cformat("baseline_«#»", (int64_t)i);
+        n00b_string_t *marker = n00b_cformat("@exemption «#»\n", id);
+        n00b_buffer_t *mb = n00b_buffer_from_bytes(
+            marker->data, (int64_t)marker->u8_bytes);
+        n00b_buffer_concat(acc, mb);
+
+        emit_directive_int(acc, "version", 1);
+        emit_directive(acc, "rule_id", v->rule->content_hash);
+        if (v->rule->id) {
+            emit_directive(acc, "rule_name", v->rule->id);
+        }
+        if (v->file) {
+            emit_directive(acc, "file_path", v->file);
+        }
+        emit_directive_int(acc, "locator_line", v->line);
+        emit_directive_int(acc, "locator_col", v->column);
+        emit_directive_int(acc, "locator_end_line", v->end_line);
+        emit_directive_int(acc, "locator_end_col", v->end_column);
+        emit_directive(acc, "region_fingerprint", v->region_fingerprint);
+        emit_directive(acc, "rationale",
+                       r"baselined at project adoption");
+        /* WP-012 placeholder; current writer leaves empty value. */
+        emit_directive(acc, "signer_id", n00b_string_empty());
+        emit_directive(acc, "approved_at", n00b_string_empty());
+
+        n00b_buffer_t *nl = n00b_buffer_from_bytes((char *)"\n", 1);
+        n00b_buffer_concat(acc, nl);
+        written++;
+    }
+
+    n00b_string_t *body = n00b_string_from_raw(acc->data,
+                                                (int64_t)acc->byte_len);
+    if (!write_text_file(base_file, body)) {
+        return n00b_result_err(int,
+                               N00B_AUDIT_ERR_ENGINE_TARGET_NOT_FOUND);
+    }
+    return n00b_result_ok(int, written);
+}
