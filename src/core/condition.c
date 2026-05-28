@@ -295,7 +295,7 @@ void *
 _n00b_condition_wait(n00b_condition_t *cv, char *loc) _kargs
 {
     int64_t predicate   = ~0LL;
-    int64_t timeout     = 0;
+    int64_t timeout_ms  = 0;
     bool    auto_unlock = false;
     void   *wake_param  = nullptr;
 }
@@ -309,7 +309,21 @@ _n00b_condition_wait(n00b_condition_t *cv, char *loc) _kargs
     rec->cv_info.thread_param   = wake_param;
     rec->cv_info.wait_loc       = loc;
 
-    result = base_wait(cv, thread, timeout, auto_unlock, loc);
+    /* base_wait takes nanoseconds; the public kwarg is ms. Convert
+     * with saturation so a caller-visible "10s" stays "10s" rather
+     * than overflowing int64_t in pathological cases. */
+    int64_t timeout_ns;
+    if (timeout_ms <= 0) {
+        timeout_ns = 0;
+    }
+    else if (timeout_ms > INT64_MAX / N00B_NS_PER_MS) {
+        timeout_ns = INT64_MAX;
+    }
+    else {
+        timeout_ns = timeout_ms * N00B_NS_PER_MS;
+    }
+
+    result = base_wait(cv, thread, timeout_ns, auto_unlock, loc);
 
     return result;
 }

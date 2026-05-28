@@ -65,7 +65,7 @@ worker_thread_loop(void *raw)
             /* 500ms safety net so a stop request that races with the
              * predicate check still wakes the worker reasonably soon. */
             n00b_condition_wait(&svc->job_cv,
-                                .timeout = 500 * 1000 * 1000LL);
+                                .timeout_ms = 500);
         }
         if (n00b_atomic_load(&st->stop)
             || n00b_conduit_is_shutdown(st->conduit)) {

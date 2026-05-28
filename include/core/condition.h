@@ -82,7 +82,9 @@ n00b_condition_set_callback(n00b_condition_t *, n00b_condition_predicate_fn, voi
  * @param loc Source location (auto-filled by macro).
  *
  * @kw predicate   Predicate value to match (default: N00B_CV_ANY = match anything).
- * @kw timeout     Timeout in nanoseconds (0 = no timeout).
+ * @kw timeout_ms  Timeout in milliseconds (0 = no timeout). Resolution
+ *                 is the underlying futex/CV wait, which is ms-effective
+ *                 on most platforms; sub-ms timeouts are not portable.
  * @kw auto_unlock If true, automatically unlock the CV after waking.
  * @kw wake_param  Per-thread parameter passed to predicate callback.
  *
@@ -92,7 +94,7 @@ extern void *
 _n00b_condition_wait(n00b_condition_t *cv, char *loc) _kargs
 {
     int64_t predicate   = ~0LL;
-    int64_t timeout     = 0;
+    int64_t timeout_ms  = 0;
     bool    auto_unlock = false;
     void   *wake_param  = nullptr;
 };
