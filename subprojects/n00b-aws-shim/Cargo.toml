@@ -1,0 +1,82 @@
+# n00b-aws-shim — Rust cdylib that re-exports aws-sdk-rust operations
+# under a stable `extern "C"` ABI consumed by libn00b_aws.
+#
+# Per [[project_n00b_aws_via_rust_shim]] in the SKP auto-memory. The
+# shim's job is purely the FFI surface — we own the per-operation
+# `#[no_mangle] extern "C"` wrappers. Service work itself is
+# aws-sdk-rust's responsibility.
+#
+# Build: `cargo build --release` produces
+# `target/release/libn00b_aws_shim.{dylib,so,dll}`. On macOS follow
+# with `dsymutil target/release/libn00b_aws_shim.dylib` so the .dSYM
+# bundle exists alongside; demangle reads DWARF type info from it.
+# meson does both steps automatically when `-Denable_aws=true` is
+# configured and the in-repo crate is the resolved shim location.
+#
+# Distribute: brew tap / apt PPA / vcpkg port drops the prebuilt
+# dylib (and its .dSYM on macOS) at a platform-conventional install
+# prefix; consumers point at it via `-Daws_shim_prefix=<prefix>`.
+
+[package]
+name        = "n00b_aws_shim"
+version     = "0.1.0"
+edition     = "2021"
+license     = "MIT"
+description = "C ABI shim over aws-sdk-rust for libn00b_aws"
+
+[lib]
+name        = "n00b_aws_shim"
+# `cdylib` is the right shape for link-time consumers (libn00b_aws
+# links against it via `-ln00b_aws_shim`) and dlsym consumers (any
+# future plugin-style loader). We deliberately skip `staticlib` to
+# avoid baking aws-sdk-rust + Tokio into every n00b_aws consumer.
+crate-type  = ["cdylib"]
+
+# Release-mode tuning — `lto = "fat"` collapses the SDK + tokio call
+# graph aggressively so the produced cdylib stays as small as cargo
+# can manage. `panic = "abort"` removes unwind tables (smaller binary;
+# any panic in our extern "C" code is already a soundness violation
+# we can't recover from across the FFI boundary).
+[profile.release]
+opt-level       = 3
+lto             = "fat"
+codegen-units   = 1
+# Keep DWARF in the dylib so `dsymutil` + demangle can derive C type
+# names for every `extern "C"` entry point. Without this we'd ship
+# `extern void f(void *)` for everything (Apple linker emits a
+# debug-map by default; dsymutil packages it into `.dSYM`).
+debug           = 2
+strip           = "none"
+panic           = "abort"
+overflow-checks = false
+
+[dependencies]
+# Tokio runs the SDK's async calls. We use the multi-thread runtime
+# because AWS SDK clients are designed for parallel use; the runtime
+# is process-global and lazy-initialised inside the shim.
+tokio       = { version = "1", features = ["rt-multi-thread", "macros"] }
+
+# `once_cell` gives us a thread-safe lazy global for the Tokio
+# runtime. The standard-library `std::sync::OnceLock` works too but
+# we already depend on once_cell transitively through aws-sdk-rust,
+# so this doesn't add anything.
+once_cell   = "1"
+
+# AWS Smithy runtime + region + credentials chain. `aws-config` is
+# the entry point for "build me a `SdkConfig` using the standard
+# environment / profile / IRSA / IMDS lookup chain".
+aws-config  = { version = "1", features = ["behavior-version-latest"] }
+
+# Service crates — every aws-sdk-rust crate libn00b_aws wraps. The
+# build takes longer with each new service added (the SDK is large
+# and LTO collapses across all of it), but the produced cdylib is a
+# single artifact consumers link against.
+aws-sdk-sts = { version = "1" }
+aws-sdk-sns = { version = "1" }
+aws-sdk-sqs = { version = "1" }
+aws-sdk-s3  = { version = "1" }
+
+# `aws-smithy-runtime-api` exposes the generic `SdkError` variant
+# enum that all service crates re-export. We import it once for the
+# shared classify helper in `ffi_util.rs`.
+aws-smithy-runtime-api = { version = "1" }

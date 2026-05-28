@@ -26,6 +26,7 @@ n00b_core_src = files(
     'mutex.c',
     'rwlock.c',
     'condition.c',
+    'time.c',
     'type_registry.c',
     'builtin_types.c',
     'sha256.c',

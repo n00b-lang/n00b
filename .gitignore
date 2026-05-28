@@ -72,6 +72,9 @@ docker/_linux_logs/
 /subprojects/mir/
 /subprojects/ncc/
 
+# Rust cargo build output for the n00b-aws-shim subproject.
+/subprojects/n00b-aws-shim/target/
+
 AGENTS.md
 .agents/
 .inspector-gadget/

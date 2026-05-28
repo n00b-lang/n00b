@@ -204,35 +204,43 @@ function all_options {
     local s="-Dusing_build_script=true"
 
     if [[ ${N00B_BUILD_DEBUG:-0} -ne 0 ]] ; then
-        s=${s} -Denable_debug=true
+        s="${s} -Denable_debug=true"
     fi
 
     if [[ ${N00B_BUILD_DEV:-0} -ne 0 ]] ; then
-        s=${s} -Ddev_mode=true
+        s="${s} -Ddev_mode=true"
     fi
 
     if [[ ${N00B_BUILD_LTO:-0} -ne 0 ]] ; then
-        s=${s} -Denable_lto=true
+        s="${s} -Denable_lto=true"
     fi
 
     if [[ ${N00B_BUILD_GC_STATS:-0} -ne 0 ]] ; then
-        s=${s} -Dshow_gc_stats=true
+        s="${s} -Dshow_gc_stats=true"
     fi
 
     if [[ ${N00B_BUILD_MEMCHECK:-0} -ne 0 ]] ; then
-        s=${s} -Duse_memcheck=true
+        s="${s} -Duse_memcheck=true"
     fi
 
     if [[ ${N00B_BUILD_ASAN:-0} -ne 0 ]] ; then
-        s=${s} -Duse_asan
+        s="${s} -Duse_asan=enabled"
     fi
 
     if [[ ${N00B_BUILD_UBSAN:-0} -ne 0 ]] ; then
-        s=${s} -Duse_ubsan
+        s="${s} -Duse_ubsan=enabled"
     fi
 
     if [[ ${N00B_BUILD_MUSL:-0} -ne 0 ]] ; then
-        s=${s} -Dusing_musl=true
+        s="${s} -Dusing_musl=true"
+    fi
+
+    if [[ ${N00B_BUILD_AWS:-0} -ne 0 ]] ; then
+        s="${s} -Denable_aws=true"
+    fi
+
+    if [[ -n "${N00B_AWS_SHIM_PREFIX:-}" ]] ; then
+        s="${s} -Daws_shim_prefix=${N00B_AWS_SHIM_PREFIX}"
     fi
 
     echo $s
