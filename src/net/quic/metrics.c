@@ -496,8 +496,10 @@ n00b_quic_metrics_listener_open(n00b_quic_metric_registry_t *r,
         return n00b_result_err(n00b_quic_metric_listener_t *,
                                N00B_QUIC_ERR_NULL_ARG);
     }
-    const char *host_cstr = bind_host ? (const char *)bind_host->data : "::1";
-    auto lr = n00b_conduit_listen_tcp(c, io, host_cstr, bind_port, 16);
+    n00b_string_t *host_str = bind_host
+        ? n00b_string_from_cstr((const char *)bind_host->data)
+        : n00b_string_from_cstr("::1");
+    auto lr = n00b_conduit_listen_tcp(c, io, host_str, bind_port, 16);
     if (!n00b_result_is_ok(lr)) {
         return n00b_result_err(n00b_quic_metric_listener_t *,
                                N00B_QUIC_ERR_BIND_FAILED);
