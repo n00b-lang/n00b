@@ -213,11 +213,16 @@ struct n00b_conduit_conn {
  * @param host    Host to bind (nullptr for INADDR_ANY).
  * @param port    Port number.
  * @param backlog Listen backlog size.
+ * @kw allocator  Allocator for the new listener and its internal
+ *                topics. nullptr means use @c c->allocator.
  * @return Ok(listener) on success, or Err(errno) on failure.
  */
 extern n00b_result_t(n00b_conduit_listener_t *)
 n00b_conduit_listen_tcp(n00b_conduit_t *c, n00b_conduit_io_backend_t *io,
-                        const char *host, uint16_t port, int backlog);
+                        n00b_string_t *host, uint16_t port, int backlog)
+    _kargs {
+        n00b_allocator_t *allocator = nullptr;
+    };
 
 /**
  * @brief Get the accept topic for subscribing.
@@ -230,6 +235,52 @@ n00b_conduit_listener_accept_topic(n00b_conduit_listener_t *listener);
  */
 extern void
 n00b_conduit_listener_close(n00b_conduit_listener_t *listener);
+
+/**
+ * @brief Create an AF_UNIX listener at @p socket_path.
+ *
+ * Mirrors @ref n00b_conduit_listen_tcp for Unix-domain sockets.
+ * The listener publishes accept events on its accept topic exactly
+ * the same way; @c struct sockaddr_storage in
+ * @ref n00b_conduit_sock_accept_payload_t is large enough to hold
+ * the resulting @c sockaddr_un, so existing accept-event consumers
+ * work without changes.
+ *
+ * Path-length handling: if @p socket_path exceeds the platform's
+ * @c sun_path capacity minus one, this returns @c ENAMETOOLONG.
+ * No silent truncation.
+ *
+ * @param c           Conduit instance.
+ * @param io          I/O backend.
+ * @param socket_path Absolute or relative path for the socket file.
+ * @param backlog     Listen backlog size; 0 means use 128.
+ *
+ * @kw unlink_stale   If true, attempt @c unlink(socket_path) before
+ *                    @c bind to remove a leftover socket file. ENOENT
+ *                    from unlink is treated as success. Off by
+ *                    default — the caller should know what it is
+ *                    about to overwrite.
+ * @kw mode           If non-zero, @c chmod(socket_path, mode) after
+ *                    successful bind. Zero leaves the kernel default
+ *                    in place.
+ * @kw allocator      Allocator for the new listener and its internal
+ *                    topics. nullptr means use @c c->allocator.
+ *
+ * @return Ok(listener) on success, or Err(errno) on failure.
+ *
+ * @note POSIX only. On Windows this returns
+ *       @c N00B_CONDUIT_ERR_NOT_SUPPORTED.
+ */
+extern n00b_result_t(n00b_conduit_listener_t *)
+n00b_conduit_listen_unix(n00b_conduit_t            *c,
+                         n00b_conduit_io_backend_t *io,
+                         n00b_string_t             *socket_path,
+                         int                        backlog)
+    _kargs {
+        bool              unlink_stale = false;
+        int               mode         = 0;
+        n00b_allocator_t *allocator    = nullptr;
+    };
 
 /**
  * @internal Dispatch readiness event to listener.
@@ -258,11 +309,16 @@ n00b_conduit_conn_from_fd(n00b_conduit_t *c, n00b_conduit_io_backend_t *io,
 
 /**
  * @brief Initiate outbound TCP connection (non-blocking connect).
+ * @kw allocator  Allocator for the new conn and its internal
+ *                topics. nullptr means use @c c->allocator.
  * @return Ok(conn) on success, or Err(errno) on failure.
  */
 extern n00b_result_t(n00b_conduit_conn_t *)
 n00b_conduit_conn_tcp(n00b_conduit_t *c, n00b_conduit_io_backend_t *io,
-                      const char *host, uint16_t port);
+                      n00b_string_t *host, uint16_t port)
+    _kargs {
+        n00b_allocator_t *allocator = nullptr;
+    };
 
 /**
  * @brief Get connection status topic.
@@ -281,3 +337,34 @@ n00b_conduit_conn_fd_owner(n00b_conduit_conn_t *conn);
  */
 extern void
 n00b_conduit_conn_close(n00b_conduit_conn_t *conn);
+
+/**
+ * @brief Initiate an outbound AF_UNIX connection to @p socket_path.
+ *
+ * Mirrors @ref n00b_conduit_conn_tcp for Unix-domain sockets. Returns
+ * a non-blocking connection wired into the same status-topic /
+ * fd_owner machinery; on immediate success the status topic
+ * publishes @c N00B_CONDUIT_CONN_CONNECTED synchronously, otherwise
+ * the @c connect_completion_hook fires on first writable to publish
+ * the eventual status (CONNECTED / REFUSED / TIMEOUT / ERROR).
+ *
+ * @param c           Conduit instance.
+ * @param io          I/O backend.
+ * @param socket_path Path of the listener.
+ *
+ * @kw allocator      Allocator for the new conn and its internal
+ *                    topics. nullptr means use @c c->allocator.
+ *
+ * @return Ok(conn) on success, or Err(errno) on failure. ENOENT or
+ *         ECONNREFUSED indicate no listener at the path.
+ *
+ * @note POSIX only. On Windows this returns
+ *       @c N00B_CONDUIT_ERR_NOT_SUPPORTED.
+ */
+extern n00b_result_t(n00b_conduit_conn_t *)
+n00b_conduit_conn_unix(n00b_conduit_t            *c,
+                       n00b_conduit_io_backend_t *io,
+                       n00b_string_t             *socket_path)
+    _kargs {
+        n00b_allocator_t *allocator = nullptr;
+    };

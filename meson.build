@@ -936,6 +936,12 @@ array_test = executable('test_array',
 )
 test('array', array_test, suite: 'unit')
 
+conduit_unix_socket_test = executable('test_conduit_unix_socket',
+    ['test/unit/test_conduit_unix_socket.c'],
+    kwargs: test_common_kwargs,
+)
+test('conduit_unix_socket', conduit_unix_socket_test, suite: 'unit')
+
 env_test = executable('test_env',
     ['test/unit/test_env.c'],
     kwargs: test_common_kwargs,
