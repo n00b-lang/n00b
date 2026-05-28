@@ -144,6 +144,16 @@ typedef struct {
      * roster path (`/etc/naudit/allowed_signers`) per D-X1.
      */
     n00b_string_t                       *allowed_signers_path;
+    /*
+     * WP-013: libgit2 blame engine similarity threshold (white
+     * paper §§ 4.6 / 13.1). Plumbed into
+     * `git_blame_options.min_match_characters` (uint16_t) at audit
+     * time. Default 50; project rule files override via the
+     * top-level `@blame_similarity <int>` directive. A value of 0
+     * is treated as "let libgit2's default apply" per the blame
+     * module's contract.
+     */
+    int                                  blame_similarity_threshold;
 } n00b_audit_guidance_t;
 
 /**

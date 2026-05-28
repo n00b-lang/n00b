@@ -152,25 +152,48 @@ n00b_audit_compute_region_fingerprint(n00b_string_t *region_bytes);
 /**
  * @brief Test whether `exemption` matches the candidate violation.
  *
- * Matching key (Phase 1 substitute for D-X5's full
+ * Matching key (WP-013 final form, per D-X5
  * `(rule_content_hash, blame_anchor)`):
- *   - `exemption->rule_id == violation->rule->content_hash`
- *     (string equality on the hex-encoded hash); AND
- *   - `exemption->region_fingerprint == violation->region_fingerprint`
- *     (string equality on the hex-encoded fingerprint).
+ *
+ *   1. `exemption->rule_id == violation->rule->content_hash` —
+ *      always required.
+ *   2. Blame anchor (WP-013 — this revision):
+ *      - When `repo_root` is non-null AND
+ *        `n00b_audit_blame_signing_commit` resolves a signing
+ *        commit for the exemption file: call
+ *        `n00b_audit_blame_traces_to` to verify every line in the
+ *        finding's range traces back to the exempted range at
+ *        the signing commit. BOTH the blame trace AND the
+ *        fingerprint must match (the fingerprint becomes a
+ *        cross-check per § 4.4 — guards against libgit2's
+ *        heuristic accepting drift the developer didn't intend).
+ *      - When `repo_root` is null OR the signing commit lookup
+ *        returns a "none" option (pre-commit case: exemption file
+ *        signed locally but not yet committed): fall back to the
+ *        pure-fingerprint match (the WP-011 behavior). The
+ *        fingerprint becomes a redundant after the next commit
+ *        per § 4.4 last paragraph.
  *
  * Returns `false` immediately if either side is nullptr or carries
  * a null required field; the caller treats false as "not exempted"
  * (the safe default).
  *
- * @param exemption   The exemption record to test against.
- * @param violation   The candidate violation.
+ * @param exemption             The exemption record to test against.
+ * @param violation             The candidate violation.
+ * @param repo_root             Repository root for blame lookup.
+ *                              May be nullptr — in that case the
+ *                              function takes the pre-commit
+ *                              fallback path (pure fingerprint).
+ * @param similarity_threshold  libgit2 `min_match_characters` knob;
+ *                              0 leaves libgit2's default in place.
  *
  * @return `true` iff the exemption suppresses this finding.
  */
 extern bool
 n00b_audit_exemption_match(n00b_audit_exemption_t  *exemption,
-                            n00b_audit_violation_t  *violation);
+                            n00b_audit_violation_t  *violation,
+                            n00b_string_t           *repo_root,
+                            int                      similarity_threshold);
 
 /**
  * @brief Load all exemption records from a single file.

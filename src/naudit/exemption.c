@@ -109,6 +109,7 @@
 #include "text/strings/string_ops.h"
 #include "util/path.h"
 
+#include "naudit/blame.h"
 #include "naudit/errors.h"
 #include "naudit/exemption.h"
 #include "naudit/guidance.h"
@@ -355,7 +356,9 @@ n00b_audit_compute_region_fingerprint(n00b_string_t *region_bytes)
 
 bool
 n00b_audit_exemption_match(n00b_audit_exemption_t  *exemption,
-                            n00b_audit_violation_t  *violation)
+                            n00b_audit_violation_t  *violation,
+                            n00b_string_t           *repo_root,
+                            int                      similarity_threshold)
 {
     if (!exemption || !violation || !violation->rule) {
         return false;
@@ -366,10 +369,61 @@ n00b_audit_exemption_match(n00b_audit_exemption_t  *exemption,
     if (!exemption->region_fingerprint || !violation->region_fingerprint) {
         return false;
     }
+    /*
+     * Step 1 (always): rule identity. The content-hash equality
+     * is the D-X3 dual-identity gate — exemptions never cross
+     * rules, regardless of the rule's human-name churn.
+     */
     if (!n00b_unicode_str_eq(exemption->rule_id,
                               violation->rule->content_hash)) {
         return false;
     }
+    /*
+     * Step 2: blame anchor (WP-013) — post-commit path. We derive
+     * the signing commit from VCS history every time per § 5.2:
+     * it is NOT stored in the exemption record. If the record's
+     * `source_file` is null (loader skipped populating it) OR
+     * `repo_root` is null (engine running outside a git repo) OR
+     * the signing-commit lookup fails (exemption file not yet
+     * committed — the pre-commit case from § 4.4), we fall back
+     * to the pure-fingerprint match (WP-011 behavior) below.
+     */
+    if (repo_root && exemption->source_file
+        && exemption->source_file->u8_bytes > 0) {
+        n00b_option_t(n00b_string_t *) signing_opt =
+            n00b_audit_blame_signing_commit(repo_root,
+                                            exemption->source_file);
+        if (n00b_option_is_set(signing_opt)) {
+            n00b_string_t *signing = n00b_option_get(signing_opt);
+            /*
+             * Post-commit path: BOTH blame trace AND fingerprint
+             * must match. The fingerprint is the cross-check per
+             * § 4.4 — it catches drift that libgit2's blame
+             * heuristic accepts but the developer didn't intend.
+             */
+            if (!n00b_unicode_str_eq(exemption->region_fingerprint,
+                                     violation->region_fingerprint)) {
+                return false;
+            }
+            return n00b_audit_blame_traces_to(
+                repo_root,
+                violation->file,
+                violation->line,
+                violation->end_line,
+                signing,
+                exemption->locator_line,
+                exemption->locator_end_line,
+                similarity_threshold);
+        }
+        /* fall through to fingerprint-only fallback */
+    }
+    /*
+     * Step 2 fallback (pre-commit case, OR no-repo case): pure
+     * fingerprint. White paper § 4.4 last paragraph — once the
+     * exemption file is committed, the post-commit path takes
+     * over and the fingerprint becomes redundant (we keep it
+     * around as belt-and-suspenders).
+     */
     if (!n00b_unicode_str_eq(exemption->region_fingerprint,
                               violation->region_fingerprint)) {
         return false;

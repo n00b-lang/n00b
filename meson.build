@@ -368,6 +368,37 @@ picoquic_dep  = picoquic_proj.get_variable('picoquic_core_dep')
 monocypher_proj = subproject('monocypher')
 monocypher_dep  = monocypher_proj.get_variable('monocypher_dep')
 
+# libgit2 (system, via pkg-config) — WP-013 blame-lineage anchor.
+# naudit's `src/naudit/blame.c` consumes the blame API to verify
+# exemption locality via VCS line lineage. The specific entry
+# points called are:
+#   - `git_repository_discover` + `git_repository_open` (repo
+#     discovery from a working-tree subdirectory);
+#   - `git_blame_options_init` (the most-recently-added API call;
+#     it determines the meson floor — see below);
+#   - `git_blame_file` (HEAD-only blame; the base for the overlay);
+#   - `git_blame_buffer` (overlays the base with working-tree
+#     bytes for DF-AA);
+#   - `git_blame_hunkcount` / `git_blame_hunk_byindex` /
+#     `git_blame_hunk_byline` / `git_blame_free` (hunk walking);
+#   - `git_commit_lookup` / `git_commit_time` /
+#     `git_commit_free` (committer-timestamp lookup for the
+#     oldest-hunk pick in `n00b_audit_blame_signing_commit`);
+#   - `git_oid_fromstr` / `git_oid_tostr` / `git_oid_cmp` (OID
+#     hex formatting + comparison).
+# `git_blame_file` and `git_blame_buffer` have been part of
+# libgit2 since well before 1.0. The `>=1.7.0` floor is set by
+# `git_blame_options_init` — earlier libgit2 releases initialized
+# the blame_options struct via `GIT_BLAME_OPTIONS_INIT` only and
+# didn't expose the `_init` runtime entry point that we call to
+# tolerate options-struct ABI churn.
+# Required on the dev matrix (macOS Homebrew 1.9.x; Linux distro
+# packages). The include is added to `deps` so libn00b's link
+# line carries `-lgit2` and every consumer (libn00b proper, every
+# test, the `naudit` binary) sees the header path.
+libgit2_dep = dependency('libgit2', version: '>=1.7.0', required: true)
+deps = deps + [libgit2_dep]
+
 # zlib for HTTP/1.1 + H3 Content-Encoding decompression (gzip/deflate).
 # brotli + zstd are dlopen'd at runtime in src/net/http/http_compression.c.
 if target_os == 'darwin'
@@ -1004,6 +1035,7 @@ foreach _ntest : [
     'exemption',
     'baseline',
     'signing',
+    'blame',
 ]
     _naudit_test_exe = executable(
         'test_naudit_' + _ntest,
@@ -1018,7 +1050,14 @@ foreach _ntest : [
         # naudit test is harmless for the non-filter tests (they
         # never include `mir.h`); the alternative is a per-test
         # branch that complicates the foreach.
-        dependencies: [picoquic_dep, monocypher_dep, mir_dep],
+        #
+        # WP-013: `test_naudit_blame` includes `<git2.h>` directly
+        # (the test harness drives libgit2's repo_init/index/commit
+        # primitives to build fixtures); adding `libgit2_dep` to
+        # every test in the foreach gives that one test access to
+        # the libgit2 include path while remaining harmless for the
+        # others (they don't include `<git2.h>`).
+        dependencies: [picoquic_dep, monocypher_dep, mir_dep, libgit2_dep],
     )
     # WP-011 bumps the default naudit-test timeout from meson's
     # global 30s to 180s. Several tests (cli, baseline, filter)

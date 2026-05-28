@@ -231,20 +231,27 @@ test_load_exemption_match(void)
     v->rewrite    = nullptr;
     v->region_fingerprint = fp;
 
-    assert(n00b_audit_exemption_match(ex, v));
+    /*
+     * WP-013: matcher now takes a repo_root + similarity_threshold.
+     * For these pre-commit tests we pass `nullptr` for repo_root so
+     * the matcher takes the fingerprint-only fallback (white paper
+     * § 4.4) — that's the WP-011 behavior these tests originally
+     * covered.
+     */
+    assert(n00b_audit_exemption_match(ex, v, nullptr, 0));
     printf("  [PASS] load_exemption_match (rule_id + fp align)\n");
 
     /* Mismatched hash → no match. */
     n00b_string_t *bad_hash = n00b_string_from_cstr(
         "ffffffffffffffffffffffffffffffff");
     rule->content_hash = bad_hash;
-    assert(!n00b_audit_exemption_match(ex, v));
+    assert(!n00b_audit_exemption_match(ex, v, nullptr, 0));
 
     /* Restore hash; mismatched fingerprint → no match. */
     rule->content_hash    = hash;
     v->region_fingerprint = n00b_string_from_cstr(
         "00000000000000000000000000000000");
-    assert(!n00b_audit_exemption_match(ex, v));
+    assert(!n00b_audit_exemption_match(ex, v, nullptr, 0));
     printf("  [PASS] load_exemption_no_match (hash / fp mismatch)\n");
 
     /* Cleanup. */
@@ -278,7 +285,7 @@ test_load_exemption_mismatch_fixture(void)
     v->region_fingerprint = n00b_string_from_cstr(
         "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
 
-    assert(!n00b_audit_exemption_match(ex, v));
+    assert(!n00b_audit_exemption_match(ex, v, nullptr, 0));
     printf("  [PASS] load_exemption_mismatch_fixture (no match)\n");
 }
 
