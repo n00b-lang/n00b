@@ -174,6 +174,16 @@ struct n00b_cg_session_t {
     n00b_dict_untyped_t *comptime_vars;
     bool                 in_comptime;
 
+    // Side-table mapping a `(kind, id)` packed key for a `n00b_cg_val_t`
+    // to a typehash for registry-driven extension-method dispatch.
+    // Populated only at the small set of sites that *know* the
+    // user-defined opaque typehash (function params, class ctors,
+    // postfix-`.` method results). All other values miss this lookup
+    // and the dispatch falls back to the hardcoded primitive switch
+    // in `type_tag_to_hash`. Keyed by uint64_t = (kind << 56) | id;
+    // value is the typehash stored as a void* (uintptr_t cast).
+    n00b_dict_untyped_t *value_typehashes;
+
     // Active function context used while lowering bodies.
     uint64_t           current_once_key;
     n00b_cg_type_tag_t current_func_ret_type;

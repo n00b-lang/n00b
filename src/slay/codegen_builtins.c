@@ -21,6 +21,12 @@
 
 // ============================================================================
 // Type tag → type hash mapping for vtable dispatch.
+//
+// The side-table lookup in `n00b_codegen_method_dispatch` consults the
+// per-session side-table first via `n00b_cg_val_get_type_hash`. The
+// hardcoded primitive switch below is the fallback for values whose
+// typehash was never recorded (numerics, generic temps, etc.). Adding
+// LIST/DICT etc. here requires registering their type info first.
 // ============================================================================
 
 static uint64_t
@@ -37,6 +43,53 @@ type_tag_to_hash(n00b_cg_type_tag_t tag)
     default:
         return 0;
     }
+}
+
+// Maps a `n00b_method_param_t.type_name` C spelling to a codegen type
+// tag for the MIR ABI. Recognises the same primitive spellings as
+// `n00b_tc_type_from_c_name`; unknown names default to `N00B_CG_I64`
+// which shares the MIR_T_I64 layout used by every pointer-like type
+// (string, ptr, registered opaques). The mapping mirrors the table
+// in `src/n00b/n00b_type_map.c`.
+static n00b_cg_type_tag_t
+method_ret_type_to_tag(const char *type_name)
+{
+    if (!type_name) {
+        return N00B_CG_I64;
+    }
+
+    struct {
+        const char        *c_name;
+        n00b_cg_type_tag_t tag;
+    } table[] = {
+        { "void",           N00B_CG_VOID   },
+        { "bool",           N00B_CG_BOOL   },
+        { "i8",             N00B_CG_I8     },
+        { "i16",            N00B_CG_I16    },
+        { "i32",            N00B_CG_I32    },
+        { "i64",            N00B_CG_I64    },
+        { "int",            N00B_CG_I64    },
+        { "u8",             N00B_CG_U8     },
+        { "u16",            N00B_CG_U16    },
+        { "u32",            N00B_CG_U32    },
+        { "u64",            N00B_CG_U64    },
+        { "f32",            N00B_CG_F32    },
+        { "f64",            N00B_CG_F64    },
+        { "string",         N00B_CG_STRING },
+        { "n00b_string_t *", N00B_CG_STRING },
+        { "n00b_string_t*",  N00B_CG_STRING },
+        { "nil",            N00B_CG_NIL    },
+    };
+
+    for (size_t i = 0; i < sizeof(table) / sizeof(table[0]); i++) {
+        if (strcmp(type_name, table[i].c_name) == 0) {
+            return table[i].tag;
+        }
+    }
+
+    // Unknown — likely a registered opaque or pointer. MIR_T_I64
+    // is the right ABI; the side-table carries the precise typehash.
+    return N00B_CG_I64;
 }
 
 static uint64_t
@@ -1805,19 +1858,34 @@ n00b_codegen_method_dispatch(n00b_cg_session_t *s,
         return false;
     }
 
-    uint64_t hash = type_tag_to_hash(args[0].type_tag);
+    // Side-table first: registered user-defined opaques carry their
+    // typehash out-of-band so the hardcoded `type_tag_to_hash` switch
+    // doesn't need to know about every type the runtime cares about.
+    uint64_t hash = n00b_cg_val_get_type_hash(s, args[0]);
+
+    if (!hash) {
+        hash = type_tag_to_hash(args[0].type_tag);
+    }
 
     if (!hash) {
         return false;
     }
 
-    n00b_option_t(n00b_vtable_entry) method_opt = n00b_type_method_lookup(hash, method_name);
+    // Look up the full method record so we can propagate the real
+    // return-type tag. Falling back to `n00b_type_method_lookup` would
+    // give us only the function pointer; the JIT would then tag the
+    // result as `i64` and downstream operators would see the wrong
+    // semantic type.
+    n00b_option_t(n00b_method_t *) method_opt
+        = n00b_type_method_lookup_full(hash, method_name);
 
     if (!n00b_option_is_set(method_opt)) {
         return false;
     }
 
-    n00b_vtable_entry fn = n00b_option_get(method_opt);
+    n00b_method_t     *method = n00b_option_get(method_opt);
+    n00b_vtable_entry  fn     = method->fn;
+    n00b_cg_type_tag_t ret_tag = method_ret_type_to_tag(method->return_type.type_name);
 
     // Build a unique import name. Sanitize '?' → 'Q' since MIR
     // identifiers don't allow '?'.
@@ -1833,14 +1901,30 @@ n00b_codegen_method_dispatch(n00b_cg_session_t *s,
         }
     }
 
+    // Use the I64 ABI for the MIR import (every pointer-like tag is
+    // backed by MIR_T_I64). Tag the returned value with the method's
+    // real semantic type so downstream operators dispatch correctly.
+    n00b_cg_type_tag_t mir_ret = (ret_tag == N00B_CG_VOID) ? N00B_CG_VOID
+                                                           : N00B_CG_I64;
     n00b_cg_type_tag_t pt[] = {N00B_CG_I64};
     n00b_cg_import_func(s,
                         import_name,
                         (void *)fn,
-                        .ret         = N00B_CG_I64,
+                        .ret         = mir_ret,
                         .param_types = pt,
                         .n_params    = 1);
 
-    *out = n00b_cg_emit_call(s, import_name, args, 1, .ret = N00B_CG_I64);
+    n00b_cg_val_t result = n00b_cg_emit_call(s, import_name, args, 1, .ret = mir_ret);
+
+    if (ret_tag != N00B_CG_VOID) {
+        result.type_tag = ret_tag;
+    }
+
+    // If the method's declared return type is a registered opaque
+    // whose typehash we can extract, stamp the side-table so chained
+    // calls (e.g., `arg.parent.name`) keep working. Currently the
+    // bridge only knows primitive C names; opaque chaining stays
+    // out of WP-010 scope per the preflight.
+    *out = result;
     return true;
 }

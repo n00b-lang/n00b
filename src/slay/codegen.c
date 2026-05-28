@@ -411,6 +411,87 @@ n00b_codegen_free(n00b_codegen_t *cg)
 }
 
 // ============================================================================
+// Side-table: per-value typehash for registry-driven method dispatch
+// ============================================================================
+//
+// Why a side-table (D-021 design): `n00b_cg_val_t` is exactly 16 bytes and
+// shares its layout with `n00b_embed_result_t` (the embed-handler ABI).
+// Two `_Static_assert(sizeof(val) == sizeof(result))` sites enforce this:
+// one in `codegen.c` at the embed-dispatch return site, one in
+// `embed_ffi.c` at the FFI module literal. Widening the struct would break
+// both assertions and the public embed-handler ABI, so we keep typehashes
+// out-of-band.
+//
+// Key encoding: `(kind << 56) | id`. The `id` field is a 32-bit MIR
+// register or label index; `kind` fits in 8 bits. The two together
+// uniquely identify a value within the active function. The side-table
+// is keyed by `uint64_t` (FNV-1a hashed via `n00b_hash_word`), the same
+// scheme used for `comptime_vars` on the session. Values are stored as
+// `void *` (uintptr_t cast of the typehash); a missing entry returns 0.
+
+static inline uint64_t
+cg_val_typehash_key(n00b_cg_val_t v)
+{
+    return ((uint64_t)v.kind << 56) | (uint64_t)v.id;
+}
+
+static void
+ensure_value_typehashes(n00b_cg_session_t *s, n00b_allocator_t *allocator)
+{
+    if (s->value_typehashes) {
+        return;
+    }
+
+    s->value_typehashes = n00b_alloc(n00b_dict_untyped_t,
+                                     .allocator = allocator);
+    n00b_dict_untyped_init(s->value_typehashes,
+                           .hash          = n00b_hash_word,
+                           .skip_obj_hash = true,
+                           .allocator     = allocator);
+}
+
+void
+n00b_cg_val_set_type_hash(n00b_cg_session_t *s, n00b_cg_val_t v, uint64_t type_hash) _kargs
+{
+    n00b_allocator_t *allocator = nullptr;
+}
+{
+    if (!s || type_hash == 0) {
+        return;
+    }
+
+    // Only kinds with stable `(kind, id)` identity are recorded. IMM and
+    // LABEL kinds reuse `id` across different semantic values, so we keep
+    // them out to avoid cross-contamination.
+    if (v.kind != N00B_CG_VAL_REG && v.kind != N00B_CG_VAL_MEM) {
+        return;
+    }
+
+    ensure_value_typehashes(s, allocator);
+
+    uint64_t key = cg_val_typehash_key(v);
+    n00b_dict_untyped_put(s->value_typehashes, key, (void *)(uintptr_t)type_hash);
+}
+
+uint64_t
+n00b_cg_val_get_type_hash(n00b_cg_session_t *s, n00b_cg_val_t v)
+{
+    if (!s || !s->value_typehashes) {
+        return 0;
+    }
+
+    if (v.kind != N00B_CG_VAL_REG && v.kind != N00B_CG_VAL_MEM) {
+        return 0;
+    }
+
+    uint64_t key   = cg_val_typehash_key(v);
+    bool     found = false;
+    void    *val   = n00b_dict_untyped_get(s->value_typehashes, key, &found);
+
+    return found ? (uint64_t)(uintptr_t)val : 0;
+}
+
+// ============================================================================
 // Module lifecycle
 // ============================================================================
 
@@ -2112,6 +2193,14 @@ typedef struct {
     const char          *name;
     codegen_param_kind_t kind;
     n00b_cg_type_tag_t   type;
+    /**
+     * Registered-type-registry typehash for the parameter type, or 0
+     * for primitives / unregistered shapes. Used to stamp the codegen
+     * side-table so postfix-`.` extension-method dispatch can resolve
+     * the receiver's registry entry. Populated in `codegen_func_meta_new`
+     * by mapping the tc-type's prim name through `n00b_type_name_to_hash`.
+     */
+    uint64_t             type_hash;
     n00b_parse_tree_t   *default_expr;
     bool                 has_callback_sig;
     n00b_cg_type_tag_t   callback_ret_type;
@@ -2477,6 +2566,47 @@ codegen_func_meta_new(n00b_cg_session_t *s,
 
         codegen_fill_callback_param_signature(s, dst, param_type);
         codegen_fill_callback_param_signature_from_tokens(param, dst);
+
+        // Resolve the parameter's runtime typehash for registry-driven
+        // extension-method dispatch on the receiver. Two paths:
+        //
+        // (a) The tc-type path: for parameters whose annotation walk
+        //     resolved their type to a prim, take the prim's name.
+        // (b) The parse-tree path: when the tc-type still reads as a
+        //     fresh variable (the annotation walk hasn't unified the
+        //     parameter declaration with its type-spec yet), fall back
+        //     to extracting the identifier text from the `type-spec`
+        //     parse node. This still finds registered user-defined
+        //     opaques whose name matches the BNF `<one-tspec>`
+        //     identifier exactly.
+        dst->type_hash = 0;
+        n00b_tc_type_t *resolved_pt = param_type ? n00b_tc_find(param_type) : nullptr;
+
+        if (resolved_pt && n00b_variant_is_type(resolved_pt->kind, n00b_tc_prim_t)) {
+            n00b_tc_prim_t prim = n00b_variant_get(resolved_pt->kind, n00b_tc_prim_t);
+
+            if (prim.name && prim.name->u8_bytes > 0 && prim.name->data) {
+                char *cname = n00b_alloc_size(1, prim.name->u8_bytes + 1);
+                memcpy(cname, prim.name->data, prim.name->u8_bytes);
+                cname[prim.name->u8_bytes] = '\0';
+                dst->type_hash             = n00b_type_name_to_hash(cname);
+            }
+        }
+
+        if (!dst->type_hash && type_node) {
+            // Parse-tree fallback: pull the first IDENTIFIER token
+            // out of the type-spec subtree and use that as the
+            // registered-type name.
+            n00b_parse_tree_t *id_tok = codegen_first_name_token(type_node);
+
+            if (id_tok) {
+                char *id_text = codegen_dup_token_text(id_tok);
+
+                if (id_text) {
+                    dst->type_hash = n00b_type_name_to_hash(id_text);
+                }
+            }
+        }
 
         if (dst->type == N00B_CG_PTR && dst->kind != CODEGEN_PARAM_VARGS) {
             dst->type = N00B_CG_I64;
@@ -7625,6 +7755,25 @@ found_mangled:;
         codegen_store_local_type(s, param_names[i], param_types[i]);
     }
 
+    // Stamp each parameter's MIR register with its registered-type
+    // typehash so postfix-`.` extension-method dispatch (codegen.c
+    // fallback + `n00b_codegen_method_dispatch`) can find the method
+    // on the receiver's type at runtime. The implicit `self` parameter
+    // for method declarations does not flow through `meta->params`
+    // (it lives at param index 0 when `is_method_def` is true); we
+    // skip it here since class instances are dispatched through their
+    // existing class-layout machinery.
+    {
+        int32_t self_offset = is_method_def ? 1 : 0;
+
+        for (int32_t i = 0; i < meta->n_params; i++) {
+            if (meta->params[i].type_hash) {
+                n00b_cg_val_t pv = n00b_cg_param(s, i + self_offset);
+                n00b_cg_val_set_type_hash(s, pv, meta->params[i].type_hash);
+            }
+        }
+    }
+
     uint64_t           saved_once_key = s->current_once_key;
     n00b_cg_type_tag_t saved_ret_type = s->current_func_ret_type;
     s->current_func_ret_type          = ret_type;
@@ -8368,6 +8517,41 @@ codegen_walk(n00b_cg_session_t *s, n00b_parse_tree_t *node)
                                                      get_args,
                                                      2,
                                                      .ret = N00B_CG_I64);
+                        }
+                    }
+
+                    // Third try: property-style extension method dispatch
+                    // (`obj.foo` with no parens). After the enum and
+                    // class-field paths have failed, ask the type
+                    // registry whether the receiver's type has an
+                    // extension method matching `rhs_name`. If found,
+                    // emit an indirect call to the registered function
+                    // pointer with the receiver as the sole argument and
+                    // tag the result with the method's declared return
+                    // type. This is the WP-010 hook.
+                    {
+                        uint64_t recv_hash
+                            = n00b_cg_val_get_type_hash(s, obj_val);
+
+                        if (recv_hash) {
+                            // Null-terminate the identifier so the C-string
+                            // lookup against the registry's interned names
+                            // succeeds. `rhs_name` points into the token
+                            // text and is not guaranteed terminated.
+                            char *mname = n00b_alloc_size(1, rhs_len + 1);
+                            memcpy(mname, rhs_name, rhs_len);
+                            mname[rhs_len] = '\0';
+
+                            n00b_cg_val_t method_args[1] = {obj_val};
+                            n00b_cg_val_t method_result;
+
+                            if (n00b_codegen_method_dispatch(s,
+                                                             mname,
+                                                             method_args,
+                                                             1,
+                                                             &method_result)) {
+                                return method_result;
+                            }
                         }
                     }
                 }

@@ -1,3 +1,4 @@
+#define N00B_USE_INTERNAL_API
 #include "n00b.h"
 #include "core/alloc.h"
 #include "core/alloc_mdata.h"
@@ -189,6 +190,61 @@ n00b_type_info_for(void *obj)
     return n00b_type_lookup(hash);
 }
 
+uint64_t
+n00b_type_name_to_hash(const char *name)
+{
+    if (!name) {
+        return 0;
+    }
+
+    n00b_runtime_t *rt = n00b_get_runtime();
+
+    if (!rt || !rt->type_registry) {
+        return 0;
+    }
+
+    // The registry is keyed by typehash → type_info, so a name-based
+    // lookup requires a bucket scan. The registry holds a few dozen
+    // entries at most; the scan is cheap and only runs on the
+    // codegen / inference fallback paths that have already exhausted
+    // their primary lookups. The atomic store snapshot is the same
+    // pattern used by `n00b_dict_untyped_len`.
+    size_t                     name_len = strlen(name);
+    n00b_dict_untyped_store_t *store    = n00b_atomic_load(&rt->type_registry->store);
+
+    if (!store) {
+        return 0;
+    }
+
+    uint32_t cap = store->last_slot + 1;
+
+    for (uint32_t i = 0; i < cap; i++) {
+        n00b_dict_untyped_bucket_t *b = &store->buckets[i];
+
+        if ((int)b->hv == 0) {
+            // Empty slot.
+            continue;
+        }
+
+        if (n00b_atomic_load(&b->flags) & N00B_HT_FLAG_DELETED) {
+            continue;
+        }
+
+        n00b_type_info_t *info = (n00b_type_info_t *)b->value;
+
+        if (!info || !info->name) {
+            continue;
+        }
+
+        if (info->name->u8_bytes == name_len
+            && memcmp(info->name->data, name, name_len) == 0) {
+            return (uint64_t)(uintptr_t)b->key;
+        }
+    }
+
+    return 0;
+}
+
 n00b_option_t(n00b_vtable_entry)
 n00b_type_method_lookup(uint64_t type_hash, const char *method_name)
 {
@@ -214,6 +270,33 @@ n00b_type_method_lookup(uint64_t type_hash, const char *method_name)
     }
 
     return n00b_option_none(n00b_vtable_entry);
+}
+
+n00b_option_t(n00b_method_t *)
+n00b_type_method_lookup_full(uint64_t type_hash, const char *method_name)
+{
+    auto info_opt = n00b_type_lookup(type_hash);
+
+    if (!n00b_option_is_set(info_opt)) {
+        return n00b_option_none(n00b_method_t *);
+    }
+
+    n00b_type_info_t *info = n00b_option_get(info_opt);
+
+    if (!n00b_option_is_set(info->ext_vtable)) {
+        return n00b_option_none(n00b_method_t *);
+    }
+
+    n00b_array_t(n00b_method_t) *methods = n00b_option_get(info->ext_vtable);
+
+    for (size_t i = 0; i < methods->len; i++) {
+        if (methods->data[i].name
+            && strcmp(methods->data[i].name, method_name) == 0) {
+            return n00b_option_set(n00b_method_t *, &methods->data[i]);
+        }
+    }
+
+    return n00b_option_none(n00b_method_t *);
 }
 
 bool

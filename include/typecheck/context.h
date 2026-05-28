@@ -196,3 +196,24 @@ extern bool n00b_tc_promotes_to(n00b_tc_ctx_t *ctx,
 extern n00b_tc_type_t *n00b_tc_lookup_prim(n00b_tc_ctx_t *ctx,
                                               n00b_string_t *name);
 
+/**
+ * @brief Translate a C-string type name to a cached primitive `tc_type_t`.
+ *
+ * Bridges the registry's `n00b_method_param_t.type_name` (a C string
+ * spelling such as `"i64"`, `"string"`, `"bool"`) into the type-checker's
+ * primitive cache so the type-inference walk can propagate an extension
+ * method's return type without re-parsing a type spec.
+ *
+ * Recognised names: `"i8"`-`"i64"`, `"u8"`-`"u64"`, `"int"`, `"f32"`,
+ * `"f64"`, `"bool"`, `"string"` (also `"n00b_string_t *"` for the C
+ * spelling), `"nil"`, `"void"`. Unknown names (including registered
+ * user opaque types not directly representable as a primitive) return
+ * `nullptr` so callers can fall back to a fresh type variable.
+ *
+ * @param ctx        Type-checking context.
+ * @param type_name  C string spelling of the type (may be NULL).
+ * @return           Cached primitive `tc_type_t`, or `nullptr` on miss.
+ */
+extern n00b_tc_type_t *n00b_tc_type_from_c_name(n00b_tc_ctx_t *ctx,
+                                                const char    *type_name);
+

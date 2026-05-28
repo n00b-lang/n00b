@@ -38,7 +38,10 @@
 #include "slay/token.h"
 #include "internal/slay/grammar_internal.h"
 #include "core/alloc.h"
+#include "core/type_info.h"
+#include "core/vtable.h"
 #include "adt/list.h"
+#include "adt/option.h"
 #include "text/strings/string_ops.h"
 
 #include "typecheck/types.h"
@@ -253,6 +256,82 @@ node_contains_slice_range(n00b_parse_tree_t *node)
     }
 
     return false;
+}
+
+// ============================================================================
+// Registry bridge: tc_type ↔ typehash, plus extension-method propagation
+// ============================================================================
+
+// Resolve a `tc_type_t` to its registered typehash by mapping the prim
+// name through the registry. Returns 0 when the type is not a registered
+// opaque (built-in primitives have their own metadata path and don't
+// need an extension-vtable lookup). The caller has already chased the
+// union-find link.
+static uint64_t
+infer_resolve_typehash(n00b_tc_type_t *type)
+{
+    if (!type) {
+        return 0;
+    }
+
+    if (!n00b_variant_is_type(type->kind, n00b_tc_prim_t)) {
+        return 0;
+    }
+
+    n00b_tc_prim_t prim = n00b_variant_get(type->kind, n00b_tc_prim_t);
+
+    if (!prim.name || prim.name->u8_bytes == 0 || !prim.name->data) {
+        return 0;
+    }
+
+    char *cname = n00b_alloc_size(1, prim.name->u8_bytes + 1);
+    memcpy(cname, prim.name->data, prim.name->u8_bytes);
+    cname[prim.name->u8_bytes] = '\0';
+
+    return n00b_type_name_to_hash(cname);
+}
+
+// Look up an extension method on the receiver type's typehash and
+// translate the method's declared `return_type.type_name` into a
+// `tc_type_t` so the caller can return it as the inferred type for
+// the postfix-`.` expression. Returns `nullptr` on any miss.
+static n00b_tc_type_t *
+infer_method_return_for(infer_ctx_t   *ctx,
+                        n00b_tc_type_t *recv,
+                        n00b_string_t  *method_name)
+{
+    if (!recv || !method_name || method_name->u8_bytes == 0) {
+        return nullptr;
+    }
+
+    // Chase union-find to the canonical representative.
+    while (recv->forward) {
+        recv = recv->forward;
+    }
+
+    uint64_t hash = infer_resolve_typehash(recv);
+
+    if (!hash) {
+        return nullptr;
+    }
+
+    // Need a NUL-terminated identifier for the C-name based registry
+    // lookup.
+    char *mname = n00b_alloc_size(1, method_name->u8_bytes + 1);
+    memcpy(mname, method_name->data, method_name->u8_bytes);
+    mname[method_name->u8_bytes] = '\0';
+
+    n00b_option_t(n00b_method_t *) m_opt = n00b_type_method_lookup_full(hash, mname);
+
+    if (!n00b_option_is_set(m_opt)) {
+        return nullptr;
+    }
+
+    n00b_method_t *m = n00b_option_get(m_opt);
+
+    n00b_tc_type_t *ret = n00b_tc_type_from_c_name(ctx->tc_ctx,
+                                                    m->return_type.type_name);
+    return ret;
 }
 
 // ============================================================================
@@ -663,6 +742,22 @@ parse_type_primary(infer_ctx_t *ctx)
                                 }
                             }
                         }
+
+                        // Registry fallback (WP-010): if the receiver
+                        // is a registered user-defined opaque with an
+                        // extension method matching this call name,
+                        // propagate the method's declared return type
+                        // through the C-name → tc_type bridge. This
+                        // catches `obj.foo(args)` where `obj.foo` is
+                        // both the property *and* the callable; the
+                        // outer `return_of` would otherwise not see a
+                        // Fn type and fall through to a fresh var.
+                        n00b_tc_type_t *reg_ret
+                            = infer_method_return_for(ctx, rr, method_name);
+
+                        if (reg_ret) {
+                            return reg_ret;
+                        }
                     }
                 }
             }
@@ -755,6 +850,123 @@ parse_type_primary(infer_ctx_t *ctx)
         n00b_tc_unify(ctx->tc_ctx, operand_type, result_type);
 
         return t_var;
+    }
+
+    // method_return($N) — return type of an extension method on a
+    // registered user-defined type.
+    //
+    // Drives type inference for the bare property-access form
+    // `obj.IDENT` (no parens). The grammar annotation at
+    // `grammars/n00b.bnf:622` is `@infer("method_return($0)")`; the
+    // `$N` argument is the *whole* postfix-expression node, whose
+    // children include the receiver subtree, the literal `.`, and the
+    // identifier token. We extract those here.
+    //
+    // Resolution:
+    //   1. Walk the postfix-expr node, find the `.` token, the receiver
+    //      child, and the identifier text.
+    //   2. Resolve the receiver's type via union-find.
+    //   3. Map the receiver type's prim name to a registry typehash.
+    //   4. Look up the extension method by name.
+    //   5. Translate `method->return_type.type_name` to a tc_type via
+    //      `n00b_tc_type_from_c_name`.
+    //
+    // Misses at any stage return a fresh type variable so the
+    // historical behaviour of `@infer("\`t")` is preserved for
+    // unregistered receivers.
+    if (match_kw(ctx, "method_return")) {
+        if (!match_char(ctx, '(') || !match_char(ctx, '$')) {
+            ctx->error = true;
+            return nullptr;
+        }
+
+        int32_t index = parse_int(ctx);
+
+        if (ctx->error || !match_char(ctx, ')')) {
+            ctx->error = true;
+            return nullptr;
+        }
+
+        // The conventional `$0` form passes the entire postfix-expr
+        // node (kind: postfix-expr), but the infer-eval loop also
+        // exposes the receiver as an NT child of the current node.
+        // We try both: first treat `$index` as an NT-child resolution
+        // (the receiver), then fall back to walking the current node
+        // directly if needed.
+        n00b_parse_tree_t *target_node
+            = n00b_tree_get_nth_nt_child(ctx->node, index);
+
+        if (!target_node && ctx->node && index >= 0
+            && (size_t)index < n00b_tree_num_children(ctx->node)) {
+            target_node = n00b_tree_child(ctx->node, index);
+        }
+
+        // For the postfix-`.` rule the receiver is the first child
+        // of the current node. Walk the current node's children
+        // looking for the `.` token + identifier; the receiver type
+        // lives in `node_types` keyed by the receiver subtree.
+        n00b_parse_tree_t *receiver_node = nullptr;
+        n00b_string_t     *method_name   = nullptr;
+
+        if (ctx->node) {
+            size_t nc        = n00b_tree_num_children(ctx->node);
+            bool   found_dot = false;
+
+            for (size_t ci = 0; ci < nc; ci++) {
+                n00b_parse_tree_t *cc = n00b_tree_child(ctx->node, ci);
+
+                if (n00b_tree_is_leaf(cc)) {
+                    n00b_token_info_t *ti = n00b_parse_node_token(cc);
+
+                    if (ti && n00b_option_is_set(ti->value)) {
+                        n00b_string_t *tv = n00b_option_get(ti->value);
+
+                        if (tv->u8_bytes == 1 && tv->data[0] == '.') {
+                            found_dot = true;
+                        }
+                        else if (found_dot && !method_name) {
+                            method_name = tv;
+                        }
+                    }
+                }
+                else if (!found_dot && !receiver_node) {
+                    receiver_node = cc;
+                }
+            }
+        }
+
+        n00b_tc_type_t *recv_type = nullptr;
+
+        if (receiver_node && ctx->node_types) {
+            bool      rf = false;
+            uintptr_t rk = (uintptr_t)receiver_node;
+            recv_type    = n00b_dict_get(ctx->node_types, rk, &rf);
+
+            if (!rf) {
+                recv_type = nullptr;
+            }
+        }
+
+        if (!recv_type && target_node && ctx->node_types) {
+            bool      tf = false;
+            uintptr_t tk = (uintptr_t)target_node;
+            recv_type    = n00b_dict_get(ctx->node_types, tk, &tf);
+
+            if (!tf) {
+                recv_type = nullptr;
+            }
+        }
+
+        if (recv_type && method_name) {
+            n00b_tc_type_t *ret = infer_method_return_for(ctx, recv_type, method_name);
+
+            if (ret) {
+                return ret;
+            }
+        }
+
+        // Miss: preserve the historical fresh-var behaviour.
+        return n00b_tc_fresh_var(ctx->tc_ctx);
     }
 
     // element_of($N) — element type of a parameterized container.

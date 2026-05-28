@@ -2111,6 +2111,19 @@ infer_expr_test = executable('test_infer_expr',
 )
 test('infer_expr', infer_expr_test, suite: 'unit', workdir: meson.project_source_root())
 
+n00b_extension_methods_test = executable('test_n00b_extension_methods',
+    ['test/unit/test_n00b_extension_methods.c'],
+    include_directories: incdir,
+    c_args: exe_c_args,
+    link_args: exe_link_args,
+    link_with: [n00b],
+    dependencies: [picoquic_dep, monocypher_dep, mir_dep],
+)
+test('n00b_extension_methods',
+    n00b_extension_methods_test,
+    suite: 'unit',
+    workdir: meson.project_source_root())
+
 # ============================================================================
 # ============================================================================
 # Render / layout tests
