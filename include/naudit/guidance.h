@@ -30,6 +30,7 @@
 #include "adt/result.h"
 
 #include "naudit/rule.h"
+#include "naudit/trust_root.h"
 
 /**
  * @brief Parsed contents of an audit-rule file (v1 schema).
@@ -145,6 +146,19 @@ typedef struct {
      */
     n00b_string_t                       *allowed_signers_path;
     /*
+     * WP-015: which slot of the 3-slot roster-lookup chain
+     * (ENV > SYSTEM > REPO) produced `allowed_signers_path`. Set
+     * by the loader from the same single chain walk that
+     * resolves the path; the engine reads this directly rather
+     * than re-walking the chain (a second walk could observe
+     * different env-var state and produce an inconsistent
+     * answer — see `n00b_audit_resolve_roster`).
+     *
+     * Defaults to `N00B_AUDIT_ROSTER_SOURCE_NONE` when no roster
+     * is available.
+     */
+    n00b_audit_roster_source_t           allowed_signers_source;
+    /*
      * WP-013: libgit2 blame engine similarity threshold (white
      * paper §§ 4.6 / 13.1). Plumbed into
      * `git_blame_options.min_match_characters` (uint16_t) at audit
@@ -154,6 +168,19 @@ typedef struct {
      * module's contract.
      */
     int                                  blame_similarity_threshold;
+    /*
+     * WP-015: trust-root fingerprint binding (white paper § 9.1).
+     * 64-character lowercase-hex SHA-256 of the roster the project
+     * expects to be in use. Populated from the optional top-level
+     * `@expected_roster_sha256 <hex>` directive in
+     * `audit-rules.bnf` (DF-CA — directive-in-rules-file
+     * resolution; see `naudit/trust_root.h`). The engine compares
+     * this against the actual on-disk roster's SHA-256 when the
+     * SYSTEM slot of the roster-lookup chain is in use; mismatch
+     * refuses the audit. `nullptr` when the directive is absent
+     * (binding-disabled mode).
+     */
+    n00b_string_t                       *expected_roster_sha256;
 } n00b_audit_guidance_t;
 
 /**

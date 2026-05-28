@@ -152,3 +152,29 @@ n00b_audit_engine_set_ignore_baseline(n00b_audit_engine_t *engine,
 extern void
 n00b_audit_engine_set_allow_unsigned(n00b_audit_engine_t *engine,
                                       bool                 allow);
+
+/**
+ * @brief WP-015 — assert the running environment is a protected
+ *        CI / pre-commit context (not an agent-writable working
+ *        tree).
+ *
+ * When @p protected_ is true, two diagnostics downgrade from
+ * prominent to informational:
+ *
+ *   1. The REPO-source-roster warning (the trust roster lives at
+ *      `<project_root>/audit/allowed_signers` — only safe if commit
+ *      signing is enforced via CI per white paper § 9.2).
+ *   2. The unsigned-rule-file warning (`audit-rules.bnf.sig`
+ *      absent — only safe if rule-file changes are themselves
+ *      gated by CI / pre-commit per § 6.3).
+ *
+ * Mirrors the `--repo-protected` CLI flag. Default false (the
+ * conservative agent-writable assumption).
+ *
+ * @param engine      Engine to configure.
+ * @param protected_  True to downgrade warnings; false (default)
+ *                    to emit prominent warnings.
+ */
+extern void
+n00b_audit_engine_set_repo_protected(n00b_audit_engine_t *engine,
+                                      bool                 protected_);

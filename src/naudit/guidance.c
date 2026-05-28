@@ -56,6 +56,7 @@
 #include "naudit/languages.h"
 #include "naudit/errors.h"
 #include "naudit/exemption.h"
+#include "naudit/trust_root.h"
 #include "internal/naudit/_naudit_internal.h"
 
 #include "audit_rule_file_grammar.h"
@@ -723,6 +724,40 @@ file_field_handler(n00b_string_t *name, n00b_string_t *value, void *carry)
         g->source_doc = value;
         return true;
     }
+    if (str_eq_cstr(name, "expected_roster_sha256")) {
+        /*
+         * WP-015 (DF-CA): top-level trust-root fingerprint
+         * binding directive. The value is a 64-character
+         * lowercase-hex SHA-256 of the trust roster the project
+         * expects to be in use. The engine compares this against
+         * the on-disk SYSTEM-slot roster's hash at audit time
+         * (`engine.c::apply_signature_gate`'s WP-015 extension);
+         * mismatch refuses the audit with a clear error.
+         *
+         * Schema validation: 64 hex characters (case-insensitive
+         * on read; the directive parser accepts uppercase). The
+         * directive is OPTIONAL — when absent,
+         * `expected_roster_sha256` stays nullptr and the engine
+         * skips the binding check (the operator chose not to bind
+         * the repo to a specific trust root).
+         */
+        if (!value || value->u8_bytes != 64) {
+            ctx->err_code = N00B_AUDIT_ERR_GUIDANCE_SCHEMA;
+            return false;
+        }
+        for (size_t i = 0; i < 64; i++) {
+            char c = value->data[i];
+            bool is_digit = (c >= '0' && c <= '9');
+            bool is_lower = (c >= 'a' && c <= 'f');
+            bool is_upper = (c >= 'A' && c <= 'F');
+            if (!is_digit && !is_lower && !is_upper) {
+                ctx->err_code = N00B_AUDIT_ERR_GUIDANCE_SCHEMA;
+                return false;
+            }
+        }
+        g->expected_roster_sha256 = value;
+        return true;
+    }
     if (str_eq_cstr(name, "blame_similarity")) {
         /*
          * WP-013: top-level integer override for libgit2's blame
@@ -1087,6 +1122,8 @@ n00b_audit_load_guidance(n00b_string_t *path)
     g->exemptions              = nullptr;
     g->baseline                = nullptr;
     g->allowed_signers_path    = nullptr;
+    g->allowed_signers_source  = N00B_AUDIT_ROSTER_SOURCE_NONE;
+    g->expected_roster_sha256  = nullptr;
     /*
      * WP-013: white paper § 13.1 — blame similarity threshold,
      * documented default 50. The `@blame_similarity` top-level
@@ -1353,13 +1390,24 @@ n00b_audit_load_guidance(n00b_string_t *path)
      * then applies the documented "warn + accept-all under
      * --allow-unsigned, else refuse-all" policy.
      */
+    /*
+     * WP-015: replace the WP-012 repo-only roster discovery with
+     * the 3-slot trust-root chain (ENV > SYSTEM > REPO; first
+     * existing path wins). See `naudit/trust_root.h` for the
+     * full design rationale + DF-CA / DF-CB / DF-CC resolutions.
+     */
     {
-        n00b_string_t *roster_path = n00b_path_simple_join(
-            g->project_root,
-            n00b_string_from_cstr("audit/allowed_signers"));
-        if (n00b_path_is_file(roster_path)) {
-            g->allowed_signers_path = roster_path;
-        }
+        /*
+         * Single chain walk: cache BOTH the path and the source
+         * discriminator so the engine doesn't re-walk the chain
+         * later (a second walk could see different env-var state
+         * and disagree with the path we stored here — see W1 in
+         * the WP-015 code audit).
+         */
+        n00b_audit_roster_resolution_t rr =
+            n00b_audit_resolve_roster(g->project_root);
+        g->allowed_signers_path   = rr.path;
+        g->allowed_signers_source = rr.source;
     }
     {
         auto ex_res = n00b_audit_discover_exemptions(g->project_root);

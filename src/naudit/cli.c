@@ -55,6 +55,7 @@
 #include "naudit/guidance.h"
 #include "naudit/output.h"
 #include "naudit/signing_ux.h"
+#include "naudit/trust_root.h"
 #include "naudit/violation.h"
 
 #include <unistd.h>
@@ -229,6 +230,30 @@ build_cmdr(void)
                            "Bulk-sign every pending proposal with the "
                            "standardized 'preexisting' rationale + 90-day "
                            "expiration. Use ONCE at project adoption."));
+
+    /*
+     * WP-015: trust-root + rule-file signature flags.
+     *
+     *  - `--repo-protected` (boolean): assert that the running
+     *    environment is a protected CI / pre-commit context.
+     *    Downgrades repo-roster + unsigned-rule-file warnings.
+     *  - `--sign-rules` (path): sign `audit-rules.bnf` (or the
+     *    supplied path) with `--key` + `--signer`, mirroring the
+     *    WP-012 `--sign` flag pattern (DF-CC resolution).
+     */
+    n00b_cmdr_add_flag(c, empty,
+                       n00b_string_from_cstr("--repo-protected"),
+                       N00B_CMDR_TYPE_BOOL, false,
+                       n00b_string_from_cstr(
+                           "Assert that the running environment is a "
+                           "protected CI / pre-commit context (downgrades "
+                           "repo-roster + unsigned-rule warnings to info)."));
+    n00b_cmdr_add_flag(c, empty,
+                       n00b_string_from_cstr("--sign-rules"),
+                       N00B_CMDR_TYPE_WORD, true,
+                       n00b_string_from_cstr(
+                           "Sign the supplied audit-rules.bnf path "
+                           "(requires --key + --signer)."));
 
     n00b_cmdr_finalize(c);
     return c;
@@ -786,6 +811,41 @@ n00b_audit_run_cli(int argc, n00b_string_t *argv[])
     }
 
     /*
+     * WP-015: --sign-rules dispatch. Short-circuits the audit
+     * pipeline like --sign / --verify; signs the supplied
+     * audit-rules.bnf via `n00b_audit_sign_rules` (which delegates
+     * to the WP-012 signing primitive).
+     */
+    n00b_string_t *sign_rules_flag = n00b_string_from_cstr("--sign-rules");
+    if (n00b_cmdr_flag_present(parse, sign_rules_flag)) {
+        n00b_string_t *rules_path = n00b_cmdr_flag_str(parse, sign_rules_flag);
+        n00b_string_t *key = n00b_cmdr_flag_present(parse, key_flag)
+                                 ? n00b_cmdr_flag_str(parse, key_flag)
+                                 : nullptr;
+        n00b_string_t *signer = n00b_cmdr_flag_present(parse, signer_flag)
+                                    ? n00b_cmdr_flag_str(parse, signer_flag)
+                                    : nullptr;
+        if (!rules_path || rules_path->u8_bytes == 0
+            || !key || key->u8_bytes == 0
+            || !signer || signer->u8_bytes == 0) {
+            n00b_eprintf(
+                "n00b-audit: --sign-rules requires <path> + --key <path> + --signer <id>");
+            n00b_cmdr_result_free(parse);
+            return n00b_result_err(int, N00B_AUDIT_ERR_CLI_ARGS);
+        }
+        auto sr = n00b_audit_sign_rules(rules_path, key, signer);
+        n00b_cmdr_result_free(parse);
+        if (n00b_result_is_err(sr)) {
+            n00b_eprintf("n00b-audit: --sign-rules failed: «#»",
+                         n00b_audit_err_str(n00b_result_get_err(sr)));
+            return n00b_result_ok(int, 2);
+        }
+        n00b_eprintf("n00b-audit: signed rules «#» (-> «#».sig)",
+                     rules_path, rules_path);
+        return n00b_result_ok(int, 0);
+    }
+
+    /*
      * WP-014: --sign-pending / --initial-adoption dispatch. Like
      * --sign / --verify, these short-circuit the audit pipeline.
      * Both modes need `--key` + `--signer` and discover the project
@@ -1041,6 +1101,16 @@ n00b_audit_run_cli(int argc, n00b_string_t *argv[])
      */
     if (n00b_cmdr_flag_present(parse, allow_uns_flag) || want_baseline_final) {
         n00b_audit_engine_set_allow_unsigned(engine, true);
+    }
+
+    /*
+     * WP-015: forward --repo-protected to the engine so the
+     * trust-root checks downgrade their REPO-source and
+     * unsigned-rule-file warnings from prominent to informational.
+     */
+    n00b_string_t *rp_flag = n00b_string_from_cstr("--repo-protected");
+    if (n00b_cmdr_flag_present(parse, rp_flag)) {
+        n00b_audit_engine_set_repo_protected(engine, true);
     }
 
     /* Check the target. */

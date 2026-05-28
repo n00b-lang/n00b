@@ -1037,6 +1037,7 @@ foreach _ntest : [
     'signing',
     'signing_ux',
     'blame',
+    'trust_root',
 ]
     _naudit_test_exe = executable(
         'test_naudit_' + _ntest,
