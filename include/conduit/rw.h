@@ -127,21 +127,21 @@
         n00b_conduit_message_t(T) *msg = nullptr;                                                  \
                                                                                                    \
         if (timeout_ms > 0) {                                                                      \
-            int64_t deadline_ns = n00b_ns_timestamp()                                              \
-                                + (int64_t)timeout_ms * N00B_NS_PER_MS;                            \
+            int64_t deadline_ms = (int64_t)(n00b_ns_timestamp() / N00B_NS_PER_MS)                  \
+                                + (int64_t)timeout_ms;                                              \
             while (!n00b_conduit_inbox_has_msg(T, inbox)) {                                        \
                 if (n00b_conduit_inbox_has_sys(inbox)) {                                           \
                     break;                                                                         \
                 }                                                                                  \
-                int64_t now = n00b_ns_timestamp();                                                 \
-                if (now >= deadline_ns) break;                                                      \
-                int64_t remain_ns = deadline_ns - now;                                             \
-                if (remain_ns <= 0) break;                                                         \
+                int64_t now_ms = (int64_t)(n00b_ns_timestamp() / N00B_NS_PER_MS);                  \
+                if (now_ms >= deadline_ms) break;                                                   \
+                int64_t remain_ms = deadline_ms - now_ms;                                           \
+                if (remain_ms <= 0) break;                                                         \
                 n00b_condition_lock(&inbox->cv);                                                   \
                 if (!n00b_conduit_inbox_has_msg(T, inbox) &&                                       \
                     !n00b_conduit_inbox_has_sys(inbox)) {                                          \
                     n00b_condition_wait(&inbox->cv,                                                 \
-                                        .timeout     = remain_ns,                                  \
+                                        .timeout_ms  = remain_ms,                                  \
                                         .auto_unlock = true);                                      \
                 }                                                                                  \
                 else {                                                                             \

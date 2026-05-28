@@ -274,7 +274,7 @@ test_timeout(void)
     n00b_condition_init(&cv);
 
     // Wait with a short timeout — nobody will notify.
-    void *result = n00b_condition_wait(&cv, .timeout = 10000000); // 10ms
+    void *result = n00b_condition_wait(&cv, .timeout_ms = 10);
     n00b_condition_unlock(&cv);
 
     // Timeout returns ~0ULL.

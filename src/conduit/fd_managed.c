@@ -1343,7 +1343,7 @@ fd_owner_read_all_core(n00b_conduit_fd_owner_t *owner,
         // `.auto_unlock = true` releases the CV mutex on wakeup so
         // the IO thread can re-acquire it for the next notify.
         n00b_condition_wait(&inbox->cv,
-                            .timeout = 50000000,
+                            .timeout_ms = 50,
                             .auto_unlock = true);
     }
 
@@ -1404,7 +1404,7 @@ n00b_fd_owner_write(n00b_conduit_fd_owner_t *owner,
         done = n00b_conduit_fd_write_done_inbox_pop(done_inbox);
         if (!done) {
             // Brief wait for FD writability.
-            n00b_condition_wait(&done_inbox->cv, .timeout = 10000000); // 10ms
+            n00b_condition_wait(&done_inbox->cv, .timeout_ms = 10);
         }
     }
 

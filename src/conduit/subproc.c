@@ -1396,7 +1396,7 @@ n00b_subproc_wait(n00b_subproc_t *sp) _kargs
         else if (sp->done_inbox) {
             // No IO backend — wait on the done_inbox CV instead.
             n00b_condition_wait(&sp->done_inbox->cv,
-                                .timeout     = 10000000LL,
+                                .timeout_ms  = 10,
                                 .auto_unlock = true);
         }
         else {

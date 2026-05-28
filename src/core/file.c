@@ -403,7 +403,7 @@ n00b_file_read(n00b_file_t *f, size_t max_n)
         // held — and the IO thread's topic_close → notify path on
         // the same CV would block forever.
         n00b_condition_wait(&f->read_inbox->cv,
-                            .timeout = 50000000,
+                            .timeout_ms = 50,
                             .auto_unlock = true);
     }
 }
