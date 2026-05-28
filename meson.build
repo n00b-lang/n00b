@@ -904,6 +904,7 @@ foreach _ntest : [
     'cli_json',
     'rewrite',
     'filter',
+    'filter_e2e',
 ]
     _naudit_test_exe = executable(
         'test_naudit_' + _ntest,

@@ -252,3 +252,36 @@ rewrite {
 <_kw_kw_static_assert> ::= <n00b_audit_v_legacy_spellings>
 <_kw_kw_storage_class> ::= <n00b_audit_v_legacy_spellings>
 <provided_identifier> ::= <n00b_audit_v_legacy_spellings>
+
+# -----------------------------------------------------------------
+# Rule 8 -- WP-009 Phase 4 -- public function-call prefix
+#
+# DEFERRED OUT OF THE MAIN RULE SET (see flagged_for_orchestrator
+# in the Phase 4 sub-agent return). The canonical filter+capture
+# demonstration ships as a standalone fixture rule file at
+# `test/fixtures/naudit/guidance_filter_e2e.bnf`, kept identical
+# in shape so the canonical-form text stays reviewable, but is
+# NOT merged into this top-level audit-rules.bnf.
+#
+# Why deferred. The audit-rules.bnf file carries 7 graft-mode
+# rules (Rules 1-7) that each extend `<provided_identifier>`,
+# `<_kw_kw_*>`, etc. with a new alternative production. Merging a
+# query-mode rule whose `@violation_nt` is `postfix_expression`
+# into the same grammar introduces a quadratic-or-worse parser
+# ambiguity exploration: every keyword-text match plays against
+# every postfix_expression position, and the slay parser exhausts
+# multiple GB of RAM on a single small fixture (>100s, OOM).
+# The standalone guidance_filter_e2e.bnf file (Rule 8 by itself)
+# parses cleanly in ~3 seconds because it carries no graft rules
+# to combine with.
+#
+# Resolution path. This belongs in a separate follow-up that
+# either (a) profiles + fixes the slay parser's combined-grammar
+# behavior or (b) introduces ambiguity-pruning hints in the
+# audit-rule-file metaformat so query-mode rules can opt out of
+# the merged-grammar ambiguity tree. Either is out of WP-009
+# Phase 4 scope; the Phase 4 deliverable (filter + capture +
+# canonical rule demonstrating both) is shipped via the standalone
+# fixture + the test_naudit_filter_e2e regression test.
+# -----------------------------------------------------------------
+

@@ -264,6 +264,250 @@ typedef struct {
     bool                   saw_schema_version;
 } file_field_ctx_t;
 
+/* ---------------------------------------------------------------- */
+/* @filter_def parsing (WP-009 Phase 4)                             */
+/* ---------------------------------------------------------------- */
+
+/*
+ * Lazily allocate `g->filters` as a name->filter dict on first use.
+ * The field stays nullptr when the rule file declares no
+ * `@filter_def` blocks.
+ */
+static void
+ensure_filters(n00b_audit_guidance_t *g)
+{
+    if (g->filters) {
+        return;
+    }
+    g->filters = n00b_alloc(
+        n00b_dict_t(n00b_string_t *, n00b_audit_filter_t *));
+    n00b_dict_init(g->filters,
+                   .hash          = n00b_string_hash,
+                   .skip_obj_hash = true);
+}
+
+/*
+ * Parse one `key: value` line out of the body of an `@filter_def`
+ * value. Returns true on a recognized key, false otherwise. The
+ * filter struct's `expr` / `description` fields are populated
+ * directly. Whitespace around the colon separator is stripped.
+ *
+ * Unknown keys are tolerated silently (forward-compat with future
+ * `references:` / `severity:` etc.).
+ */
+static bool
+parse_filter_def_line(n00b_string_t       *line,
+                      n00b_audit_filter_t *filter)
+{
+    if (!line || line->u8_bytes == 0 || !filter) {
+        return false;
+    }
+    const char *buf = line->data;
+    size_t      n   = line->u8_bytes;
+
+    size_t i = 0;
+    while (i < n && (buf[i] == ' ' || buf[i] == '\t')) {
+        i++;
+    }
+    if (i == n) {
+        return false;
+    }
+    size_t key_start = i;
+    while (i < n && buf[i] != ':') {
+        i++;
+    }
+    if (i == n) {
+        return false;
+    }
+    size_t key_end = i;
+    while (key_end > key_start
+           && (buf[key_end - 1] == ' ' || buf[key_end - 1] == '\t')) {
+        key_end--;
+    }
+
+    i++; /* past ':' */
+    while (i < n && (buf[i] == ' ' || buf[i] == '\t')) {
+        i++;
+    }
+    n00b_string_t *value = n00b_string_from_raw(buf + i,
+                                                 (int64_t)(n - i));
+
+    size_t klen = key_end - key_start;
+    if (klen == 4 && buf[key_start + 0] == 'e'
+        && buf[key_start + 1] == 'x'
+        && buf[key_start + 2] == 'p'
+        && buf[key_start + 3] == 'r') {
+        filter->expr = value;
+        return true;
+    }
+    if (klen == 11 && buf[key_start + 0] == 'd'
+        && buf[key_start + 1] == 'e'
+        && buf[key_start + 2] == 's'
+        && buf[key_start + 3] == 'c'
+        && buf[key_start + 4] == 'r'
+        && buf[key_start + 5] == 'i'
+        && buf[key_start + 6] == 'p'
+        && buf[key_start + 7] == 't'
+        && buf[key_start + 8] == 'i'
+        && buf[key_start + 9] == 'o'
+        && buf[key_start + 10] == 'n') {
+        filter->description = value;
+        return true;
+    }
+    /* Unknown key tolerated. */
+    return true;
+}
+
+/*
+ * Parse the body of a `@filter_def <name>` directive. The REST text
+ * carries the filter name; continuation lines carry `key: value`
+ * pairs. The body is `value`'s text WITHOUT the name (the loader
+ * strips the name out of REST and stashes it as `filter->name`).
+ *
+ * Returns false on syntactic errors (no name, no `expr:` key in the
+ * body). Caller turns this into N00B_AUDIT_ERR_GUIDANCE_SCHEMA.
+ *
+ * The full value string layout is:
+ *
+ *     <name>\n<line1>\n<line2>\n...
+ *
+ * where each continuation line is the trimmed body of the
+ * indented `<line>` from the rule file. The loader's
+ * `assemble_field_value` joins REST + each continuation with `\n`
+ * before this parser sees it.
+ */
+static bool
+parse_filter_def_value(n00b_string_t         *value,
+                       n00b_audit_guidance_t *g)
+{
+    if (!value || value->u8_bytes == 0) {
+        return false;
+    }
+
+    /* Split off the first line (REST = the filter name). */
+    const char *buf = value->data;
+    size_t      n   = value->u8_bytes;
+    size_t      i   = 0;
+    while (i < n && buf[i] != '\n') {
+        i++;
+    }
+    size_t name_end = i;
+    while (name_end > 0
+           && (buf[name_end - 1] == ' ' || buf[name_end - 1] == '\t')) {
+        name_end--;
+    }
+    if (name_end == 0) {
+        return false;
+    }
+    n00b_string_t *name = n00b_string_from_raw(buf, (int64_t)name_end);
+
+    n00b_audit_filter_t *filter = n00b_alloc(n00b_audit_filter_t);
+    filter->name        = name;
+    filter->expr        = n00b_string_empty();
+    filter->description = n00b_string_empty();
+
+    /* Walk remaining lines. */
+    size_t line = (i < n) ? i + 1 : i;
+    while (line < n) {
+        size_t end = line;
+        while (end < n && buf[end] != '\n') {
+            end++;
+        }
+        n00b_string_t *one = n00b_string_from_raw(buf + line,
+                                                   (int64_t)(end - line));
+        (void)parse_filter_def_line(one, filter);
+        line = (end < n) ? end + 1 : end;
+    }
+
+    if (filter->expr->u8_bytes == 0) {
+        return false;
+    }
+
+    ensure_filters(g);
+    n00b_dict_put(g->filters, filter->name, filter);
+    return true;
+}
+
+/*
+ * Parse one `@captures $name:<NT>` directive value, append the
+ * decl to the rule. The value is a single line "$name:<nt>" (with
+ * the leading `@captures` directive name already stripped by the
+ * tokenizer's split_directive_line helper). Returns false on
+ * malformed input.
+ */
+static bool
+parse_captures_value(n00b_string_t     *value,
+                     n00b_audit_rule_t *rule)
+{
+    if (!value || value->u8_bytes == 0 || !rule) {
+        return false;
+    }
+    const char *buf = value->data;
+    size_t      n   = value->u8_bytes;
+
+    size_t i = 0;
+    while (i < n && (buf[i] == ' ' || buf[i] == '\t')) {
+        i++;
+    }
+    if (i >= n || buf[i] != '$') {
+        return false;
+    }
+    i++; /* past '$' */
+    size_t name_start = i;
+    while (i < n && buf[i] != ':') {
+        i++;
+    }
+    if (i >= n) {
+        return false;
+    }
+    size_t name_end = i;
+    while (name_end > name_start
+           && (buf[name_end - 1] == ' ' || buf[name_end - 1] == '\t')) {
+        name_end--;
+    }
+    if (name_end == name_start) {
+        return false;
+    }
+    i++; /* past ':' */
+    while (i < n && (buf[i] == ' ' || buf[i] == '\t')) {
+        i++;
+    }
+    /*
+     * The NT name may be wrapped in `<...>` brackets per the
+     * audit-rule-file convention; strip them if present so the
+     * stored NT name is the bare identifier.
+     */
+    size_t nt_start = i;
+    size_t nt_end   = n;
+    while (nt_end > nt_start
+           && (buf[nt_end - 1] == ' ' || buf[nt_end - 1] == '\t')) {
+        nt_end--;
+    }
+    if (nt_end > nt_start && buf[nt_start] == '<'
+        && buf[nt_end - 1] == '>') {
+        nt_start++;
+        nt_end--;
+    }
+    if (nt_end <= nt_start) {
+        return false;
+    }
+
+    n00b_audit_capture_decl_t *decl =
+        n00b_alloc(n00b_audit_capture_decl_t);
+    decl->name = n00b_string_from_raw(buf + name_start,
+                                       (int64_t)(name_end - name_start));
+    decl->nt   = n00b_string_from_raw(buf + nt_start,
+                                       (int64_t)(nt_end - nt_start));
+
+    if (!rule->captures) {
+        rule->captures = n00b_alloc(
+            n00b_list_t(n00b_audit_capture_decl_t *));
+        *rule->captures = n00b_list_new(n00b_audit_capture_decl_t *);
+    }
+    n00b_list_push(*rule->captures, decl);
+    return true;
+}
+
 /*
  * Parse a decimal integer string into int64_t. Returns true on
  * success, false on empty input or non-digit characters.
@@ -478,6 +722,30 @@ file_field_handler(n00b_string_t *name, n00b_string_t *value, void *carry)
         g->source_doc = value;
         return true;
     }
+    if (str_eq_cstr(name, "filter_def")) {
+        /*
+         * WP-009 Phase 4: top-level filter definition. The
+         * directive form `@filter_def <name>` opens the block,
+         * indented `expr:` / `description:` lines follow. The
+         * existing `<meta_field>` machinery delivers the joined
+         * body (REST + continuations) to this handler; the
+         * loader splits the first line (the name) and parses
+         * remaining lines as `key: value` pairs.
+         *
+         * Per WP-009 Phase 4 design rationale (auditor-flagged):
+         * this matches the `@extensions` precedent (D-019) by
+         * staying inside the existing DIRECTIVE/REST/INDENT_LINE
+         * tokens — no metagrammar or tokenizer change needed.
+         * The user-visible block syntax `filter NAME { ... }`
+         * from the WP-009 spec is conceptually equivalent; the
+         * directive form ships with zero infrastructure churn.
+         */
+        if (!parse_filter_def_value(value, g)) {
+            ctx->err_code = N00B_AUDIT_ERR_GUIDANCE_SCHEMA;
+            return false;
+        }
+        return true;
+    }
     if (str_eq_cstr(name, "extensions")) {
         /*
          * WP-009 Phase 1: project-level file-extension overrides
@@ -594,6 +862,31 @@ rule_field_handler(n00b_string_t *name, n00b_string_t *value, void *carry)
         }
         if (value && value->u8_bytes > 0) {
             n00b_list_push(*r->language, value);
+        }
+        return true;
+    }
+    if (str_eq_cstr(name, "filter")) {
+        /*
+         * WP-009 Phase 4: per-rule filter reference. Stored
+         * verbatim; resolved against `guidance->filters` at the
+         * end of the load walk (parallel with the `@language`
+         * validation pass).
+         */
+        r->filter_name = value;
+        return true;
+    }
+    if (str_eq_cstr(name, "captures")) {
+        /*
+         * WP-009 Phase 4: per-rule capture declaration in the
+         * DF-T-resolved form `@captures $name:<NT>`. One
+         * declaration per `@captures` line; multiple lines on
+         * a rule append to the captures list. The engine binds
+         * each declaration to a descendant of the matched node
+         * in document order at violation emission time (DF-U).
+         */
+        if (!parse_captures_value(value, r)) {
+            ctx->err_code = N00B_AUDIT_ERR_GUIDANCE_SCHEMA;
+            return false;
         }
         return true;
     }
@@ -837,6 +1130,8 @@ n00b_audit_load_guidance(n00b_string_t *path)
         rule->applies_to_include = nullptr;
         rule->applies_to_exclude = nullptr;
         rule->language           = nullptr;
+        rule->filter_name        = nullptr;
+        rule->captures           = nullptr;
 
         rule_field_ctx_t rctx = {.rule = rule, .err_code = 0};
         if (!walk_meta_fields(sec, rule_field_handler, &rctx)) {
@@ -934,6 +1229,31 @@ n00b_audit_load_guidance(n00b_string_t *path)
                 }
             });
             if (!ext_ok) {
+                n00b_parse_result_free(pr);
+                n00b_grammar_free(meta_g);
+                return n00b_result_err(n00b_audit_guidance_t *,
+                                       N00B_AUDIT_ERR_GUIDANCE_SCHEMA);
+            }
+        }
+    }
+
+    /*
+     * Step 7.6 (WP-009 Phase 4): validate every per-rule
+     * `@filter <name>` resolves to a defined `@filter_def <name>`
+     * block. Dangling names are GUIDANCE_SCHEMA errors per the
+     * D-017 dangling-violation_nt precedent. No-filter rules
+     * (filter_name == nullptr) skip this check naturally.
+     */
+    {
+        int64_t nrules = n00b_list_len(*g->rules);
+        for (int64_t i = 0; i < nrules; i++) {
+            n00b_audit_rule_t *rule = n00b_list_get(*g->rules, i);
+            if (!rule || !rule->filter_name
+                || rule->filter_name->u8_bytes == 0) {
+                continue;
+            }
+            if (!g->filters
+                || !n00b_dict_contains(g->filters, rule->filter_name)) {
                 n00b_parse_result_free(pr);
                 n00b_grammar_free(meta_g);
                 return n00b_result_err(n00b_audit_guidance_t *,
