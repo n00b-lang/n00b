@@ -68,6 +68,30 @@
  *                      surface as `N00B_AUDIT_ERR_GUIDANCE_SCHEMA`
  *                      (DF-W resolution from the WP-009 spec).
  */
+/**
+ * @brief One top-level `@filter_def <name>` block (WP-009 Phase 4).
+ *
+ * Filter blocks declare reusable n00b predicates that rules opt into
+ * via the per-rule `@filter <name>` annotation. The engine compiles
+ * each referenced filter's `expr` text to a JIT'd predicate via
+ * `n00b_naudit_filter_compile` on first audit invocation and invokes
+ * it once per match.
+ *
+ * Field meanings:
+ *  - `name`        filter name (declared after the `@filter_def`
+ *                  directive on the same line).
+ *  - `expr`        n00b source expression returning bool. References
+ *                  the bound match handle as `arg` (e.g.,
+ *                  `arg.capture("callee").starts_with("n00b_")`).
+ *  - `description` optional human-readable prose. May be the empty
+ *                  string when the rule file omits it.
+ */
+typedef struct {
+    n00b_string_t *name;
+    n00b_string_t *expr;
+    n00b_string_t *description;
+} n00b_audit_filter_t;
+
 typedef struct {
     int64_t                              schema_version;
     n00b_string_t                       *project;
@@ -77,6 +101,8 @@ typedef struct {
     n00b_list_t(n00b_audit_rule_t *)    *rules;
     n00b_dict_t(n00b_string_t *,
                 n00b_string_t *)        *extension_overrides;
+    n00b_dict_t(n00b_string_t *,
+                n00b_audit_filter_t *)  *filters;
 } n00b_audit_guidance_t;
 
 /**

@@ -62,18 +62,51 @@
  *                    `violation_nt` (the engine still skips rules
  *                    whose `violation_nt` is missing from the
  *                    loaded grammar).
+ *  - `filter_name`   (WP-009 Phase 4) optional name referencing a
+ *                    top-level `@filter_def <name>` block. When
+ *                    set, the engine compiles the filter's n00b
+ *                    expression to a JIT'd predicate and invokes
+ *                    it once per match; only matches where the
+ *                    predicate returns true become violations.
+ *                    `nullptr` means "no filter — every match is
+ *                    a violation."
+ *  - `captures`      (WP-009 Phase 4) list of capture declarations.
+ *                    Each entry pairs a capture name (without the
+ *                    leading `$`) with an NT name. The engine binds
+ *                    each declaration to a descendant of the match
+ *                    in document order at violation-emission time
+ *                    so the filter expression (and future rewrite
+ *                    expansion) can reference the captured nodes
+ *                    via `arg.capture("name")`.
+ */
+
+/**
+ * @brief One `@captures $name:<nt>` declaration on a rule.
+ *
+ * Parsed from the rule's `@captures` directive(s). `name` is the
+ * capture identifier (without the leading `$`); `nt` is the NT name
+ * (without angle brackets). The engine binds captures by walking the
+ * matched node's descendants in document order (pre-order DFS); the
+ * Nth declaration with NT X binds to the Nth descendant matching X.
  */
 typedef struct {
-    n00b_string_t                  *id;
-    n00b_string_t                  *title;
-    n00b_string_t                  *section;
-    n00b_string_t                  *bnf_fragment;
-    n00b_string_t                  *violation_nt;
-    n00b_string_t                  *rationale;
-    n00b_string_t                  *bad_example;
-    n00b_string_t                  *good_example;
-    n00b_string_t                  *guidance;
-    n00b_list_t(n00b_string_t *)   *applies_to_include;
-    n00b_list_t(n00b_string_t *)   *applies_to_exclude;
-    n00b_list_t(n00b_string_t *)   *language;
+    n00b_string_t *name;
+    n00b_string_t *nt;
+} n00b_audit_capture_decl_t;
+
+typedef struct {
+    n00b_string_t                                  *id;
+    n00b_string_t                                  *title;
+    n00b_string_t                                  *section;
+    n00b_string_t                                  *bnf_fragment;
+    n00b_string_t                                  *violation_nt;
+    n00b_string_t                                  *rationale;
+    n00b_string_t                                  *bad_example;
+    n00b_string_t                                  *good_example;
+    n00b_string_t                                  *guidance;
+    n00b_list_t(n00b_string_t *)                   *applies_to_include;
+    n00b_list_t(n00b_string_t *)                   *applies_to_exclude;
+    n00b_list_t(n00b_string_t *)                   *language;
+    n00b_string_t                                  *filter_name;
+    n00b_list_t(n00b_audit_capture_decl_t *)       *captures;
 } n00b_audit_rule_t;

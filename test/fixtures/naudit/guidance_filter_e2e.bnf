@@ -1,0 +1,23 @@
+@schema_version 1
+@project naudit_filter_e2e_test
+@description Test fixture for WP-009 Phase 4 filter blocks + captures end-to-end. One filter, one query-mode rule referencing the filter via @filter, one $callee:<identifier> capture. The rule targets <postfix_expression> per D-020 (function calls are NOT a c_ncc.bnf NT in their own right); the filter narrows with arg.is_call().
+@source_doc test/fixtures/naudit/guidance_filter_e2e.bnf
+@dependencies
+
+@filter_def requires_n00b_prefix
+    expr: arg.is_call() and !arg.capture("callee").starts_with("n00b_")
+    description: External-visible function calls must use the n00b_ prefix.
+
+@rule n00b.s_naming.public_call_prefix
+@language c
+@title External-visible function calls require n00b_ prefix
+@section section 3 (naming)
+@violation_nt postfix_expression
+@captures $callee:<identifier>
+@filter requires_n00b_prefix
+@rationale Per the n00b API guidelines, externally-visible symbols use the `n00b_` prefix to keep the public namespace consistent. The canonical Phase 4 example: any function call whose callee identifier does not begin with `n00b_` is flagged. The filter narrows the violation_nt over-fire (postfix_expression matches subscripts + member access + ++/--; see D-020) by structural is_call() check on the matched node.
+@bad bar(x, y);
+    baz();
+@good n00b_bar(x, y);
+    n00b_baz();
+@guidance Replace the call with the n00b_-prefixed equivalent, or add the function to the namespace if it is genuinely a public API addition.

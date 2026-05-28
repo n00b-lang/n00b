@@ -1904,27 +1904,62 @@ n00b_codegen_method_dispatch(n00b_cg_session_t *s,
     // Use the I64 ABI for the MIR import (every pointer-like tag is
     // backed by MIR_T_I64). Tag the returned value with the method's
     // real semantic type so downstream operators dispatch correctly.
+    //
+    // WP-009 Phase 4 enabling: pass through all `n_args` (receiver +
+    // user-supplied operands) rather than truncating to the
+    // receiver alone. Every argument lowers to the I64 ABI per the
+    // pointer-like ABI used throughout the codegen; user-defined
+    // opaque receivers + n00b string operands share that
+    // representation. The previous (n_params = 1) truncation
+    // worked for the WP-010 smoke tests (`arg.value`-style zero-arg
+    // methods) but discarded operands on multi-arg methods like
+    // `arg.starts_with(prefix)`. Cap at 32 args defensively — the
+    // existing surface never declares methods anywhere near that
+    // wide.
     n00b_cg_type_tag_t mir_ret = (ret_tag == N00B_CG_VOID) ? N00B_CG_VOID
                                                            : N00B_CG_I64;
-    n00b_cg_type_tag_t pt[] = {N00B_CG_I64};
+    enum { N00B_CG_METHOD_MAX_ARGS = 32 };
+    n00b_cg_type_tag_t pt[N00B_CG_METHOD_MAX_ARGS];
+    int32_t            cap_args = (n_args > N00B_CG_METHOD_MAX_ARGS)
+                                       ? N00B_CG_METHOD_MAX_ARGS
+                                       : n_args;
+    for (int32_t i = 0; i < cap_args; i++) {
+        pt[i] = N00B_CG_I64;
+    }
     n00b_cg_import_func(s,
                         import_name,
                         (void *)fn,
                         .ret         = mir_ret,
                         .param_types = pt,
-                        .n_params    = 1);
+                        .n_params    = cap_args);
 
-    n00b_cg_val_t result = n00b_cg_emit_call(s, import_name, args, 1, .ret = mir_ret);
+    n00b_cg_val_t result = n00b_cg_emit_call(s, import_name, args, cap_args,
+                                             .ret = mir_ret);
 
     if (ret_tag != N00B_CG_VOID) {
         result.type_tag = ret_tag;
     }
 
-    // If the method's declared return type is a registered opaque
-    // whose typehash we can extract, stamp the side-table so chained
-    // calls (e.g., `arg.parent.name`) keep working. Currently the
-    // bridge only knows primitive C names; opaque chaining stays
-    // out of WP-010 scope per the preflight.
+    // WP-009 Phase 4: if the method's declared return type is a
+    // registered user-defined opaque (recognized by name in the type
+    // registry), stamp the typehash side-table on the result. This
+    // lets chained calls (e.g.,
+    // `arg.capture("callee").starts_with("n00b_")`) dispatch the
+    // outer method against the right typehash. Without this the
+    // outer call falls through to `type_tag_to_hash(I64)` → 0 and
+    // method_dispatch returns false, so `.starts_with` is silently
+    // skipped by the JIT's fall-through path. The bridge is name-
+    // based: `n00b_type_name_to_hash` scans the registry by the
+    // `return_type.type_name` C string. Primitives (bool, i64, ...)
+    // don't have registry entries and return 0 — the side-table
+    // stays clean, preserving the WP-010 behavior for primitive
+    // returns.
+    if (ret_tag == N00B_CG_I64 && method->return_type.type_name) {
+        uint64_t ret_hash = n00b_type_name_to_hash(method->return_type.type_name);
+        if (ret_hash) {
+            n00b_cg_val_set_type_hash(s, result, ret_hash);
+        }
+    }
     *out = result;
     return true;
 }

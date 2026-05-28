@@ -73,6 +73,8 @@
 #include "naudit/errors.h"
 #include "naudit/languages.h"
 #include "naudit/tokenizer_registry.h"
+#include "naudit/filter.h"
+#include "n00b/eval.h"
 
 /* ---------------------------------------------------------------- */
 /* Engine struct                                                    */
@@ -100,6 +102,20 @@
 struct n00b_audit_engine {
     n00b_audit_guidance_t                          *guidance;
     n00b_dict_t(n00b_string_t *, n00b_grammar_t *) *grammars;
+    /*
+     * WP-009 Phase 4 — per-engine embedded-eval session, lazily
+     * allocated on the first audit invocation that touches a rule
+     * with a filter. The compiled-filter cache maps filter name →
+     * JIT'd predicate; populated on first reference so re-runs
+     * of the same engine skip recompilation.
+     *
+     * `filter_compile_failed` short-circuits future audit calls
+     * after a previously-failed compile so each subsequent file
+     * gets the same propagation rather than a silent retry.
+     */
+    n00b_eval_session_t                                       *eval_session;
+    n00b_dict_t(n00b_string_t *, n00b_eval_predicate_fn_t)    *compiled_filters;
+    int                                                        filter_compile_err;
 };
 
 /* ---------------------------------------------------------------- */
@@ -325,7 +341,185 @@ n00b_audit_engine_new(n00b_audit_guidance_t *guidance)
                    .hash          = n00b_string_hash,
                    .skip_obj_hash = true);
 
+    e->eval_session       = nullptr;
+    e->compiled_filters   = nullptr;
+    e->filter_compile_err = 0;
+
     return n00b_result_ok(n00b_audit_engine_t *, e);
+}
+
+/* ---------------------------------------------------------------- */
+/* Filter compilation (WP-009 Phase 4)                              */
+/* ---------------------------------------------------------------- */
+
+/*
+ * Lazily allocate the per-engine eval session + compiled-filter
+ * cache. Returns 0 on success or an N00B_AUDIT_ERR_* code that the
+ * caller propagates back to check_file's caller.
+ *
+ * Per the WP-009 Phase 4 design decision documented in
+ * `key_findings`, filter compilation happens lazily on the first
+ * audit invocation that touches a filter-bearing rule (rather than
+ * eagerly in `n00b_audit_engine_new`). Rationale: rule files
+ * without filters pay zero startup cost; rule files with filters
+ * front-load the JIT setup once, then per-match invocation is a
+ * native call.
+ */
+static int
+ensure_eval_session(n00b_audit_engine_t *engine)
+{
+    if (engine->eval_session) {
+        return 0;
+    }
+    if (engine->filter_compile_err) {
+        return engine->filter_compile_err;
+    }
+
+    auto sr = n00b_naudit_filter_session_new();
+    if (n00b_result_is_err(sr)) {
+        engine->filter_compile_err = N00B_AUDIT_ERR_GUIDANCE_SCHEMA;
+        return engine->filter_compile_err;
+    }
+    engine->eval_session = n00b_result_get(sr);
+
+    engine->compiled_filters = n00b_alloc(
+        n00b_dict_t(n00b_string_t *, n00b_eval_predicate_fn_t));
+    n00b_dict_init(engine->compiled_filters,
+                   .hash          = n00b_string_hash,
+                   .skip_obj_hash = true);
+    return 0;
+}
+
+/*
+ * Look up (or compile + cache) a filter's JIT'd predicate by name.
+ * Returns nullptr + sets `*err` on failure; the caller treats a
+ * failed-compile as N00B_AUDIT_ERR_GUIDANCE_SCHEMA so the diagnostic
+ * surface stays consistent with the dangling-name path.
+ */
+static n00b_eval_predicate_fn_t
+get_or_compile_filter(n00b_audit_engine_t *engine,
+                      n00b_string_t       *filter_name,
+                      int                 *err)
+{
+    *err = 0;
+    if (!filter_name || filter_name->u8_bytes == 0) {
+        return nullptr;
+    }
+    if (engine->filter_compile_err) {
+        *err = engine->filter_compile_err;
+        return nullptr;
+    }
+    int session_err = ensure_eval_session(engine);
+    if (session_err) {
+        *err = session_err;
+        return nullptr;
+    }
+
+    bool found = false;
+    n00b_eval_predicate_fn_t cached =
+        n00b_dict_get(engine->compiled_filters, filter_name, &found);
+    if (found && cached) {
+        return cached;
+    }
+
+    if (!engine->guidance->filters) {
+        engine->filter_compile_err = N00B_AUDIT_ERR_GUIDANCE_SCHEMA;
+        *err = engine->filter_compile_err;
+        return nullptr;
+    }
+    bool filter_present = false;
+    n00b_audit_filter_t *filter = n00b_dict_get(engine->guidance->filters,
+                                                 filter_name,
+                                                 &filter_present);
+    if (!filter_present || !filter || !filter->expr) {
+        engine->filter_compile_err = N00B_AUDIT_ERR_GUIDANCE_SCHEMA;
+        *err = engine->filter_compile_err;
+        return nullptr;
+    }
+
+    auto cr = n00b_naudit_filter_compile(engine->eval_session,
+                                         filter_name, filter->expr);
+    if (n00b_result_is_err(cr)) {
+        engine->filter_compile_err = N00B_AUDIT_ERR_GUIDANCE_SCHEMA;
+        *err = engine->filter_compile_err;
+        return nullptr;
+    }
+    n00b_eval_predicate_fn_t fn = n00b_result_get(cr);
+    n00b_dict_put(engine->compiled_filters, filter_name, fn);
+    return fn;
+}
+
+/* ---------------------------------------------------------------- */
+/* Capture binding (WP-009 Phase 4)                                 */
+/* ---------------------------------------------------------------- */
+
+/*
+ * Bind each `$name:<NT>` capture declared on the rule to the
+ * appropriate descendant of @p match in document order (pre-order
+ * DFS — `n00b_pt_search_by_nt`'s documented contract; see
+ * `include/slay/parse_tree.h` line 261).
+ *
+ * Per the WP-009 Phase 4 DF-U resolution: the Nth `$name<I>:<NT>`
+ * declaration (in the rule's source-order capture list) binds to
+ * the Nth descendant of @p match whose NT matches `<NT>`.
+ * Declarations sharing a `<NT>` name resolve positionally; declarations with distinct NT names bind independently (each
+ * uses its own zero-th descendant of that NT).
+ *
+ * Captures whose declared NT has fewer than the requested ordinal
+ * of matches in the subtree are left unbound — the filter
+ * expression's `arg.capture(name)` then returns nullptr, which
+ * the JIT exposes as a falsy value the predicate can detect.
+ *
+ * The 4096 cap on per-NT match lookups matches
+ * `n00b_audit_engine_check_file`'s per-rule cap so the budgets
+ * stay aligned.
+ */
+static void
+bind_captures(n00b_audit_rule_t   *rule,
+              n00b_parse_tree_t   *match,
+              n00b_naudit_match_t *handle)
+{
+    if (!rule || !rule->captures || !match || !handle) {
+        return;
+    }
+    /*
+     * Per-NT counter for declaration-order binding. We rebuild
+     * this for every match (matches are independent); within a
+     * single match's capture list, the Nth declaration of an NT
+     * binds to the Nth descendant.
+     */
+    int64_t ndecls = n00b_list_len(*rule->captures);
+    for (int64_t i = 0; i < ndecls; i++) {
+        n00b_audit_capture_decl_t *decl = n00b_list_get(*rule->captures,
+                                                         i);
+        if (!decl || !decl->name || !decl->nt
+            || decl->nt->u8_bytes == 0) {
+            continue;
+        }
+        /*
+         * Count how many prior declarations share this NT — that
+         * gives us the ordinal of the descendant we want for the
+         * current declaration.
+         */
+        int64_t ordinal = 0;
+        for (int64_t j = 0; j < i; j++) {
+            n00b_audit_capture_decl_t *prev = n00b_list_get(*rule->captures,
+                                                             j);
+            if (prev && prev->nt
+                && n00b_unicode_str_eq(prev->nt, decl->nt)) {
+                ordinal++;
+            }
+        }
+
+        enum { N00B_AUDIT_ENGINE_MAX_CAPTURE_MATCHES = 4096 };
+        n00b_parse_tree_t *cands[N00B_AUDIT_ENGINE_MAX_CAPTURE_MATCHES];
+        int n_cands = n00b_pt_search_by_nt(match, decl->nt->data, cands,
+                                           N00B_AUDIT_ENGINE_MAX_CAPTURE_MATCHES);
+        if (ordinal < n_cands) {
+            n00b_naudit_match_bind_capture(handle, decl->name,
+                                           cands[ordinal]);
+        }
+    }
 }
 
 n00b_result_t(n00b_list_t(n00b_audit_violation_t *) *)
@@ -401,6 +595,14 @@ n00b_audit_engine_check_file(n00b_audit_engine_t *engine,
                                N00B_AUDIT_ERR_ENGINE_TARGET_NOT_FOUND);
     }
     n00b_buffer_t *src_buf = n00b_result_get(br);
+    /*
+     * Materialize the file's full source text once per audit
+     * invocation; the match handle's `.text` accessor + the Phase 4
+     * `arg.starts_with(...)` predicate need it. We pass the same
+     * string into every match handle constructed for this file.
+     */
+    n00b_string_t *src_text = n00b_string_from_raw(
+        src_buf->data, (int64_t)src_buf->byte_len);
 
     /* Step 2: set up the tokenizer + token stream via the
      * registry's per-language triple. */
@@ -454,11 +656,45 @@ n00b_audit_engine_check_file(n00b_audit_engine_t *engine,
         int n_matches = n00b_pt_search_by_nt(tree, nt_cstr, matches,
                                              N00B_AUDIT_ENGINE_MAX_MATCHES_PER_RULE);
 
+        /*
+         * WP-009 Phase 4: resolve the filter predicate once per
+         * (rule, file). The predicate is engine-cached so subsequent
+         * files audited by the same engine reuse the JIT'd
+         * function pointer.
+         */
+        n00b_eval_predicate_fn_t filter_fn = nullptr;
+        if (rule->filter_name && rule->filter_name->u8_bytes > 0) {
+            int ferr = 0;
+            filter_fn = get_or_compile_filter(engine, rule->filter_name,
+                                              &ferr);
+            if (ferr) {
+                return n00b_result_err(
+                    n00b_list_t(n00b_audit_violation_t *) *, ferr);
+            }
+        }
+
         for (int m = 0; m < n_matches; m++) {
             n00b_parse_tree_t *match = matches[m];
             if (!match) {
                 continue;
             }
+
+            /*
+             * WP-009 Phase 4: bind captures + apply the filter
+             * BEFORE computing the rest of the violation record.
+             * Suppressed matches contribute no list entries.
+             */
+            if (filter_fn) {
+                n00b_naudit_match_t *handle = n00b_naudit_match_new(
+                    match, src_text);
+                bind_captures(rule, match, handle);
+                bool keep = n00b_naudit_filter_apply_handle(filter_fn,
+                                                            handle);
+                if (!keep) {
+                    continue;
+                }
+            }
+
             n00b_parse_tree_t *first_leaf = n00b_pt_first_token(match);
             n00b_parse_tree_t *last_leaf  = n00b_pt_last_token(match);
             int64_t line     = 0;
