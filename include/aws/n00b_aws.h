@@ -53,5 +53,6 @@ typedef struct n00b_aws_config_t n00b_aws_config_t;
 #endif
 
 #include "aws/n00b_aws_config.h"
+#include "aws/n00b_aws_sns.h"
 #include "aws/n00b_aws_sqs.h"
 #include "aws/n00b_aws_sts.h"

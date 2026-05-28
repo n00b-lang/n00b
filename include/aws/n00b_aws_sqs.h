@@ -107,6 +107,18 @@ n00b_aws_sqs_get_queue_url(n00b_aws_config_t *cfg,
 };
 
 /**
+ * @brief Create (or discover existing) SQS queue by name.
+ *
+ * Calls SQS `CreateQueue` — idempotent: if a queue with that name
+ * already exists with the same attributes, the existing URL is
+ * returned without error. Workers that follow the Crayon
+ * "auto-provision-on-startup" pattern use this at boot.
+ */
+extern n00b_result_t(n00b_string_t *)
+n00b_aws_sqs_create_queue(n00b_aws_config_t *cfg,
+                          n00b_string_t     *queue_name);
+
+/**
  * @brief Read queue attributes.
  *
  * Returns a flat alternating-key-value list:
@@ -120,6 +132,19 @@ n00b_aws_sqs_get_queue_attributes(n00b_aws_config_t *cfg,
                                   n00b_string_t     *queue_url) _kargs {
     n00b_list_t(n00b_string_t *) *attribute_names = nullptr;
 };
+
+/**
+ * @brief Set queue attributes from a flat alternating-key-value list:
+ *   [key0, value0, key1, value1, ...]
+ *
+ * Used to install the SNS-delivery policy on a queue subscribed via
+ * SNS fan-out. The Crayon worker pattern composes a JSON `Policy`
+ * value here that allows the topic's ARN to `sqs:SendMessage`.
+ */
+extern n00b_aws_status_t
+n00b_aws_sqs_set_queue_attributes(n00b_aws_config_t            *cfg,
+                                  n00b_string_t                *queue_url,
+                                  n00b_list_t(n00b_string_t *) *attributes);
 
 /* ------------------------------------------------------------------
  * Broker-neutral queue factory
