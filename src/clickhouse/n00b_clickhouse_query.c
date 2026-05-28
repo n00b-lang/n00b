@@ -18,16 +18,67 @@
 #include "net/http/http_client.h"
 #include "text/strings/format.h"
 
+/* Percent-encode every byte that isn't an "unreserved" URI character per
+ * RFC 3986 §2.3. The set is intentionally narrow — ClickHouse passwords
+ * tend to contain `+`, `&`, and `=`, all of which are valid inside an
+ * unreserved-set-only encoder but lethal in a raw query string.
+ *
+ * Mirrors the `url_encode` helper in `src/attest/oci/registry.c`: same
+ * raw-byte loop, same `alloc_for_call` threading idiom (D-045). Both
+ * could share an `n00b_uri_percent_encode` helper at some point — for
+ * now they intentionally stay narrow and per-module. */
+static n00b_string_t *
+percent_encode(const n00b_string_t *raw, n00b_allocator_t *alloc_for_call)
+{
+    if (!raw || raw->u8_bytes == 0) {
+        return n00b_string_empty(.allocator = alloc_for_call);
+    }
+    static const char    hex[] = "0123456789ABCDEF";
+    const unsigned char *src   = (const unsigned char *)raw->data;
+    size_t               n     = raw->u8_bytes;
+    char                *buf   = n00b_alloc_array_with_opts(
+        char,
+        n * 3 + 1,
+        &(n00b_alloc_opts_t){.allocator = alloc_for_call});
+    size_t out = 0;
+    for (size_t i = 0; i < n; i++) {
+        unsigned char c          = src[i];
+        bool          unreserved = (c >= 'A' && c <= 'Z')
+                       || (c >= 'a' && c <= 'z')
+                       || (c >= '0' && c <= '9')
+                       || c == '-' || c == '.' || c == '_' || c == '~';
+        if (unreserved) {
+            buf[out++] = (char)c;
+        }
+        else {
+            buf[out++] = '%';
+            buf[out++] = hex[c >> 4];
+            buf[out++] = hex[c & 0x0F];
+        }
+    }
+    buf[out] = '\0';
+    return n00b_string_from_raw(buf, (int64_t)out, .allocator = alloc_for_call);
+}
+
 static n00b_string_t *
 build_endpoint(const n00b_clickhouse_client_t *client)
 {
-    n00b_string_t *scheme = client->https
-                                ? n00b_string_from_cstr("https")
-                                : n00b_string_from_cstr("http");
-    return n00b_cformat("[|#|]://[|#|]:[|#|]/",
-                        scheme,
-                        client->host,
-                        (int64_t)client->port);
+    n00b_allocator_t *alloc_for_call = client->allocator;
+    n00b_string_t    *scheme = client->https
+                                   ? n00b_string_from_cstr("https",
+                                                           .allocator = alloc_for_call)
+                                   : n00b_string_from_cstr("http",
+                                                           .allocator = alloc_for_call);
+    n00b_string_t    *base   = n00b_cformat("[|#|]://[|#|]:[|#|]/",
+                                       scheme,
+                                       client->host,
+                                       (int64_t)client->port);
+    if (!client->username || !client->password) {
+        return base;
+    }
+    n00b_string_t *user = percent_encode(client->username, alloc_for_call);
+    n00b_string_t *pass = percent_encode(client->password, alloc_for_call);
+    return n00b_cformat("[|#|]?user=[|#|]&password=[|#|]", base, user, pass);
 }
 
 static n00b_clickhouse_status_t
