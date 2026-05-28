@@ -1,0 +1,11 @@
+comptime {
+    ffi_mod = [=[
+        print : (ptr) -> void = n00b_print
+          kw topic : ptr = null
+          kw end : option = null
+          kw fd : i32 = 1
+          kw sync : bool = true
+    ]=]'ffi
+
+    ffi_mod.install()
+}

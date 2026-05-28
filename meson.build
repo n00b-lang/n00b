@@ -548,13 +548,34 @@ subdir('src/attest')
 # precedent: the path was emitted at configure time so no path-
 # string literals land in C source (NCC.md "Build system"); same
 # pattern in-tree, pointing at n00b's own `grammars/c_ncc.bnf`.
+#
+# WP-009 Phase 3 extends this header with two more constants
+# consumed by the libn00b `n00b_eval_*` surface
+# (`src/n00b/eval.c`):
+#
+#   * `N00B_N00B_GRAMMAR_PATH` — the path to `grammars/n00b.bnf`,
+#     loaded by `n00b_eval_session_new` to compile filter
+#     expressions against the n00b language grammar.
+#   * `N00B_BUILTINS_PATH` — the path to `lib/std/builtins.n`,
+#     the stdlib loaded onto each fresh eval session (the load is
+#     best-effort: if the file is missing at runtime the session
+#     still builds, but predicates referencing stdlib symbols
+#     such as `print` will fail to compile).
 ncc_grammar_path = (
     meson.current_source_dir() / 'grammars' / 'c_ncc.bnf')
+
+n00b_grammar_path = (
+    meson.current_source_dir() / 'grammars' / 'n00b.bnf')
+
+n00b_builtins_path = (
+    meson.current_source_dir() / 'lib' / 'std' / 'builtins.n')
 
 audit_paths_h = configure_file(
     output: 'audit_paths.h',
     configuration: configuration_data({
         'N00B_AUDIT_GRAMMAR_PATH': '"' + ncc_grammar_path + '"',
+        'N00B_N00B_GRAMMAR_PATH':  '"' + n00b_grammar_path + '"',
+        'N00B_BUILTINS_PATH':      '"' + n00b_builtins_path + '"',
     }),
     install: false,
 )
@@ -882,6 +903,7 @@ foreach _ntest : [
     'cli',
     'cli_json',
     'rewrite',
+    'filter',
 ]
     _naudit_test_exe = executable(
         'test_naudit_' + _ntest,
@@ -890,7 +912,13 @@ foreach _ntest : [
         c_args: naudit_test_c_args,
         link_args: exe_link_args,
         link_with: [n00b],
-        dependencies: [picoquic_dep, monocypher_dep],
+        # WP-009 Phase 3: `naudit/filter.h` pulls in `n00b/eval.h`,
+        # which transitively includes `slay/codegen.h` and so needs
+        # `mir.h` on the include path. Adding `mir_dep` to every
+        # naudit test is harmless for the non-filter tests (they
+        # never include `mir.h`); the alternative is a per-test
+        # branch that complicates the foreach.
+        dependencies: [picoquic_dep, monocypher_dep, mir_dep],
     )
     test('naudit_' + _ntest, _naudit_test_exe, suite: 'unit')
 endforeach
@@ -2121,6 +2149,23 @@ n00b_extension_methods_test = executable('test_n00b_extension_methods',
 )
 test('n00b_extension_methods',
     n00b_extension_methods_test,
+    suite: 'unit',
+    workdir: meson.project_source_root())
+
+# WP-009 Phase 3 — libn00b embedded-eval API smoke. Exercises
+# `n00b_eval_session_new` + `n00b_eval_compile_predicate` against
+# trivial true/false predicates and an FFI-bound C function call,
+# covering the public surface at `include/n00b/eval.h`.
+n00b_eval_test = executable('test_n00b_eval',
+    ['test/unit/test_n00b_eval.c'],
+    include_directories: incdir,
+    c_args: exe_c_args,
+    link_args: exe_link_args,
+    link_with: [n00b],
+    dependencies: [picoquic_dep, monocypher_dep, mir_dep],
+)
+test('n00b_eval',
+    n00b_eval_test,
     suite: 'unit',
     workdir: meson.project_source_root())
 

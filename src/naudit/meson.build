@@ -16,6 +16,7 @@
 n00b_naudit_src = files(
     'cli.c',
     'engine.c',
+    'filter.c',
     'guidance.c',
     'languages.c',
     'module.c',
