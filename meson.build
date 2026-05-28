@@ -1003,6 +1003,7 @@ foreach _ntest : [
     'filter_e2e',
     'exemption',
     'baseline',
+    'signing',
 ]
     _naudit_test_exe = executable(
         'test_naudit_' + _ntest,

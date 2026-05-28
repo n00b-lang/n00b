@@ -1067,8 +1067,9 @@ n00b_audit_load_guidance(n00b_string_t *path)
     g->project     = n00b_string_empty();
     g->description = n00b_string_empty();
     g->source_doc  = n00b_string_empty();
-    g->exemptions  = nullptr;
-    g->baseline    = nullptr;
+    g->exemptions          = nullptr;
+    g->baseline            = nullptr;
+    g->allowed_signers_path = nullptr;
     /*
      * WP-011: stash the directory of the loaded guidance file so the
      * loader can discover `audit/exemptions/(*).bnf` and
@@ -1317,11 +1318,26 @@ n00b_audit_load_guidance(n00b_string_t *path)
     }
 
     /*
-     * Step 9 (WP-011): discover and load exemption + baseline files
-     * rooted at the guidance file's directory. Both are
-     * silently-empty when the corresponding directory / file is
+     * Step 9 (WP-011 + WP-012): discover and load exemption +
+     * baseline files rooted at the guidance file's directory. Both
+     * are silently-empty when the corresponding directory / file is
      * absent — only a malformed file surfaces an error.
+     *
+     * WP-012 adds roster discovery: if
+     * `<project_root>/audit/allowed_signers` exists, record its
+     * path on the guidance struct so the engine's signature gate
+     * can use it. When absent the field stays nullptr; the engine
+     * then applies the documented "warn + accept-all under
+     * --allow-unsigned, else refuse-all" policy.
      */
+    {
+        n00b_string_t *roster_path = n00b_path_simple_join(
+            g->project_root,
+            n00b_string_from_cstr("audit/allowed_signers"));
+        if (n00b_path_is_file(roster_path)) {
+            g->allowed_signers_path = roster_path;
+        }
+    }
     {
         auto ex_res = n00b_audit_discover_exemptions(g->project_root);
         if (n00b_result_is_err(ex_res)) {
@@ -1475,6 +1491,14 @@ n00b_audit_err_str(int code)
         return r"required argument to n00b_audit_run_cli was null or out-of-shape";
     case N00B_AUDIT_ERR_CLI_RENDER:
         return r"output renderer could not produce a violation block (missing required rule field)";
+    case N00B_AUDIT_ERR_EXEMPTION_NO_SIGNATURE:
+        return r"exemption / baseline record carries no detached signature";
+    case N00B_AUDIT_ERR_EXEMPTION_BAD_SIGNATURE:
+        return r"exemption / baseline signature failed verification";
+    case N00B_AUDIT_ERR_EXEMPTION_UNKNOWN_SIGNER:
+        return r"exemption signer is not present in audit/allowed_signers";
+    case N00B_AUDIT_ERR_SIGN_SUBPROCESS:
+        return r"sign / verify subprocess (ssh-keygen) could not be spawned or failed at the OS level";
     default:
         return r"(unknown n00b-audit error code)";
     }

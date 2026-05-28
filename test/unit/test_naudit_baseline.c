@@ -189,6 +189,14 @@ audit_fixture(n00b_audit_guidance_t *g, n00b_string_t *root,
     assert(n00b_result_is_ok(er));
     n00b_audit_engine_t *engine = n00b_result_get(er);
     n00b_audit_engine_set_ignore_baseline(engine, ignore_baseline);
+    /*
+     * WP-012: the baseline test workspace ships no roster and no
+     * signed exemption files (the test pre-dates the signature
+     * gate). Set `allow_unsigned` so the gate downgrades the
+     * missing-signature verdict to a warning + keep — which is
+     * the WP-011 behavior the test was written against.
+     */
+    n00b_audit_engine_set_allow_unsigned(engine, true);
 
     char buf[1280];
     snprintf(buf, sizeof(buf), "%s/fixture_null.c", root->data);

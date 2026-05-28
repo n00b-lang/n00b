@@ -79,10 +79,17 @@ build_cmdr(void)
 
     n00b_string_t *empty = n00b_string_from_cstr("");
 
-    /* One positional `file`, min=1, max=1 — exactly one target. */
+    /*
+     * Positional `file`, min=0, max=1 — exactly one target normally,
+     * but `--sign <file>` / `--verify <file>` carry the file as the
+     * flag's argument so no positional is needed in those modes.
+     * WP-012 widens this from min=1 to min=0; the run_cli body
+     * enforces "positional required" in audit mode (the default
+     * path) where the validation rejects argv without a file.
+     */
     n00b_cmdr_add_positional(c, empty,
                              n00b_string_from_cstr("file"),
-                             N00B_CMDR_TYPE_WORD, 1, 1);
+                             N00B_CMDR_TYPE_WORD, 0, 1);
 
     /* --guidance <path> */
     n00b_cmdr_add_flag(c, empty,
@@ -148,6 +155,45 @@ build_cmdr(void)
                        n00b_string_from_cstr(
                            "Clobber an existing baseline.bnf when "
                            "--baseline-finalize is set."));
+
+    /*
+     * WP-012: signature-related flags.
+     *
+     * Per the prompt (item 5), sign + verify are implemented as
+     * flags rather than subcommands so they follow the existing
+     * `--baseline-finalize` precedent (D-024 W-4). Each flag takes
+     * an argument carrying the exemption-file path.
+     */
+    n00b_cmdr_add_flag(c, empty,
+                       n00b_string_from_cstr("--sign"),
+                       N00B_CMDR_TYPE_WORD, true,
+                       n00b_string_from_cstr(
+                           "Sign mode: sign the supplied exemption file "
+                           "(requires --key + --signer)."));
+    n00b_cmdr_add_flag(c, empty,
+                       n00b_string_from_cstr("--verify"),
+                       N00B_CMDR_TYPE_WORD, true,
+                       n00b_string_from_cstr(
+                           "Verify mode: verify the supplied exemption "
+                           "file's detached signature."));
+    n00b_cmdr_add_flag(c, empty,
+                       n00b_string_from_cstr("--key"),
+                       N00B_CMDR_TYPE_WORD, true,
+                       n00b_string_from_cstr(
+                           "Path to the SSH private key used for "
+                           "--sign / --baseline-finalize signing."));
+    n00b_cmdr_add_flag(c, empty,
+                       n00b_string_from_cstr("--signer"),
+                       N00B_CMDR_TYPE_WORD, true,
+                       n00b_string_from_cstr(
+                           "Principal identifier embedded in the "
+                           "signature record (matches a roster entry)."));
+    n00b_cmdr_add_flag(c, empty,
+                       n00b_string_from_cstr("--allow-unsigned"),
+                       N00B_CMDR_TYPE_BOOL, false,
+                       n00b_string_from_cstr(
+                           "Warn-and-accept exemption + baseline records "
+                           "that fail signature verification (default: drop)."));
 
     n00b_cmdr_finalize(c);
     return c;
@@ -584,9 +630,130 @@ n00b_audit_run_cli(int argc, n00b_string_t *argv[])
         return n00b_result_err(int, N00B_AUDIT_ERR_CLI_ARGS);
     }
 
-    /* Positional `file` is required (min=1) so the parser would have
-     * rejected the argv if it were absent. Defensive guard anyway. */
+    /*
+     * WP-012: detect sign / verify mode early. These short-circuit
+     * the audit pipeline — no guidance load, no engine, no
+     * positional required.
+     */
+    n00b_string_t *sign_flag      = n00b_string_from_cstr("--sign");
+    n00b_string_t *verify_flag    = n00b_string_from_cstr("--verify");
+    n00b_string_t *key_flag       = n00b_string_from_cstr("--key");
+    n00b_string_t *signer_flag    = n00b_string_from_cstr("--signer");
+    n00b_string_t *allow_uns_flag = n00b_string_from_cstr("--allow-unsigned");
+
+    bool want_sign   = n00b_cmdr_flag_present(parse, sign_flag);
+    bool want_verify = n00b_cmdr_flag_present(parse, verify_flag);
+
+    if (want_sign && want_verify) {
+        n00b_eprintf(
+            "n00b-audit: --sign and --verify are mutually exclusive");
+        n00b_cmdr_result_free(parse);
+        return n00b_result_err(int, N00B_AUDIT_ERR_CLI_ARGS);
+    }
+
+    if (want_sign) {
+        n00b_string_t *file = n00b_cmdr_flag_str(parse, sign_flag);
+        n00b_string_t *key  = n00b_cmdr_flag_present(parse, key_flag)
+                                  ? n00b_cmdr_flag_str(parse, key_flag)
+                                  : nullptr;
+        n00b_string_t *signer = n00b_cmdr_flag_present(parse, signer_flag)
+                                    ? n00b_cmdr_flag_str(parse, signer_flag)
+                                    : nullptr;
+        if (!file || file->u8_bytes == 0
+            || !key || key->u8_bytes == 0
+            || !signer || signer->u8_bytes == 0) {
+            n00b_eprintf(
+                "n00b-audit: --sign requires --key <path> and --signer <id>");
+            n00b_cmdr_result_free(parse);
+            return n00b_result_err(int, N00B_AUDIT_ERR_CLI_ARGS);
+        }
+        auto sr = n00b_audit_exemption_sign(file, key, signer);
+        n00b_cmdr_result_free(parse);
+        if (n00b_result_is_err(sr)) {
+            n00b_eprintf("n00b-audit: --sign failed: «#»",
+                         n00b_audit_err_str(n00b_result_get_err(sr)));
+            return n00b_result_ok(int, 2);
+        }
+        n00b_eprintf("n00b-audit: signed «#» (-> «#».sig)", file, file);
+        return n00b_result_ok(int, 0);
+    }
+
+    if (want_verify) {
+        n00b_string_t *file = n00b_cmdr_flag_str(parse, verify_flag);
+        if (!file || file->u8_bytes == 0) {
+            n00b_eprintf(
+                "n00b-audit: --verify requires an exemption file path");
+            n00b_cmdr_result_free(parse);
+            return n00b_result_err(int, N00B_AUDIT_ERR_CLI_ARGS);
+        }
+        /*
+         * The verifier needs both the roster + the signer id; the
+         * signer id is recorded in the exemption record (the
+         * `@signer_id` directive). Parse just that one field via
+         * the existing loader, then verify. Roster comes from the
+         * guidance discovery walk so the user doesn't have to pass
+         * it explicitly.
+         */
+        auto lr = n00b_audit_load_exemptions(file);
+        if (n00b_result_is_err(lr)) {
+            n00b_eprintf("n00b-audit: --verify: load failed: «#»",
+                         n00b_audit_err_str(n00b_result_get_err(lr)));
+            n00b_cmdr_result_free(parse);
+            return n00b_result_ok(int, 2);
+        }
+        n00b_list_t(n00b_audit_exemption_t *) *list = n00b_result_get(lr);
+        if (!list || n00b_list_len(*list) < 1) {
+            n00b_eprintf(
+                "n00b-audit: --verify: «#» carries no exemption records",
+                file);
+            n00b_cmdr_result_free(parse);
+            return n00b_result_ok(int, 2);
+        }
+        n00b_audit_exemption_t *ex0 = n00b_list_get(*list, 0);
+        if (!ex0 || !ex0->signer_id || ex0->signer_id->u8_bytes == 0) {
+            n00b_eprintf(
+                "n00b-audit: --verify: «#» has no @signer_id field",
+                file);
+            n00b_cmdr_result_free(parse);
+            return n00b_result_ok(int, 2);
+        }
+        /*
+         * Roster path: walk parents from the file's directory
+         * looking for `audit/allowed_signers`. Falls back to the
+         * cwd-based guidance discovery shape used elsewhere.
+         */
+        n00b_string_t *cwd = n00b_get_current_directory();
+        n00b_string_t *roster = nullptr;
+        if (cwd) {
+            n00b_string_t *candidate = n00b_path_simple_join(
+                cwd,
+                n00b_string_from_cstr("audit/allowed_signers"));
+            if (n00b_path_is_file(candidate)) {
+                roster = candidate;
+            }
+        }
+        if (!roster) {
+            n00b_eprintf(
+                "n00b-audit: --verify: no audit/allowed_signers roster found in cwd; cannot verify");
+            n00b_cmdr_result_free(parse);
+            return n00b_result_ok(int, 2);
+        }
+        auto vr = n00b_audit_exemption_verify(file, roster, ex0->signer_id);
+        n00b_cmdr_result_free(parse);
+        if (n00b_result_is_err(vr)) {
+            n00b_eprintf("n00b-audit: --verify: «#» — «#»",
+                         file,
+                         n00b_audit_err_str(n00b_result_get_err(vr)));
+            return n00b_result_ok(int, 1);
+        }
+        n00b_eprintf("n00b-audit: --verify: «#» — ok", file);
+        return n00b_result_ok(int, 0);
+    }
+
+    /* Positional `file` is required for audit mode. */
     if (n00b_cmdr_arg_count(parse) < 1) {
+        n00b_eprintf(
+            "n00b-audit: missing positional <file> (use --sign / --verify for non-audit modes)");
         n00b_cmdr_result_free(parse);
         return n00b_result_err(int, N00B_AUDIT_ERR_CLI_ARGS);
     }
@@ -681,6 +848,19 @@ n00b_audit_run_cli(int argc, n00b_string_t *argv[])
         n00b_audit_engine_set_ignore_baseline(engine, true);
     }
 
+    /*
+     * WP-012: forward the --allow-unsigned flag to the engine so
+     * the signature gate downgrades verification failures from
+     * "drop" to "warn-and-keep". During --baseline-finalize we
+     * also allow-unsigned implicitly: there's no signature on the
+     * just-created baseline yet, and the engine should not refuse
+     * pre-existing exemption records when the user is bootstrapping
+     * the baseline.
+     */
+    if (n00b_cmdr_flag_present(parse, allow_uns_flag) || want_baseline_final) {
+        n00b_audit_engine_set_allow_unsigned(engine, true);
+    }
+
     /* Check the target. */
     auto cr = n00b_audit_engine_check_file(engine, target);
     if (n00b_result_is_err(cr)) {
@@ -719,8 +899,25 @@ n00b_audit_run_cli(int argc, n00b_string_t *argv[])
             n00b_cmdr_result_free(parse);
             return n00b_result_ok(int, 2);
         }
-        n00b_result_t(int) bfr = n00b_audit_finalize_baseline(
-            root, violations, want_overwrite);
+        /*
+         * WP-012: if --key + --signer are present, auto-sign the
+         * baseline file after writing. Without them, write the
+         * baseline file unsigned and emit a stderr warning that
+         * the audit verifier will refuse it absent --allow-unsigned.
+         */
+        n00b_string_t *bf_key = n00b_cmdr_flag_present(parse, key_flag)
+                                    ? n00b_cmdr_flag_str(parse, key_flag)
+                                    : nullptr;
+        n00b_string_t *bf_signer = n00b_cmdr_flag_present(parse, signer_flag)
+                                       ? n00b_cmdr_flag_str(parse, signer_flag)
+                                       : nullptr;
+        bool will_sign = bf_key && bf_key->u8_bytes > 0
+                          && bf_signer && bf_signer->u8_bytes > 0;
+
+        n00b_result_t(int) bfr = n00b_audit_finalize_baseline_signed(
+            root, violations, want_overwrite,
+            will_sign ? bf_key : nullptr,
+            will_sign ? bf_signer : nullptr);
         if (n00b_result_is_err(bfr)) {
             int code = n00b_result_get_err(bfr);
             if (code == N00B_AUDIT_ERR_GUIDANCE_SCHEMA) {
@@ -739,6 +936,14 @@ n00b_audit_run_cli(int argc, n00b_string_t *argv[])
         n00b_eprintf(
             "n00b-audit: baselined «#» finding(s) to «#»/audit/baseline/baseline.bnf",
             (int64_t)written, root);
+        if (will_sign) {
+            n00b_eprintf(
+                "n00b-audit: baseline signed (-> baseline.bnf.sig)");
+        }
+        else {
+            n00b_eprintf(
+                "n00b-audit: baseline written WITHOUT a signature; subsequent audits will refuse it absent --allow-unsigned (pass --key + --signer to auto-sign)");
+        }
         n00b_cmdr_result_free(parse);
         return n00b_result_ok(int, 0);
     }

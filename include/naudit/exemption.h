@@ -84,6 +84,14 @@ typedef struct {
     n00b_string_t *signer_id;
     n00b_string_t *approved_at;
     n00b_string_t *expires_at;
+    /*
+     * WP-012: filesystem path of the file this exemption was loaded
+     * from. The signature verification gate uses this to locate
+     * the corresponding `<source_file>.sig` and to feed the file's
+     * bytes to ssh-keygen via STDIN. Populated by the loader; never
+     * appears as an `@directive` field in the record itself.
+     */
+    n00b_string_t *source_file;
 } n00b_audit_exemption_t;
 
 /**
@@ -248,6 +256,43 @@ n00b_audit_finalize_baseline(
     bool                                    overwrite);
 
 /**
+ * @brief WP-012 — write the baseline file and immediately sign it.
+ *
+ * Same shape as `n00b_audit_finalize_baseline` plus an optional
+ * signing pass. When `key_path` + `signer_id` are both non-null and
+ * non-empty, after the baseline file is written this helper invokes
+ * `n00b_audit_exemption_sign` on the produced path to drop
+ * `<baseline>.sig` next to it. When either is null/empty, the
+ * baseline file is written but no signature is produced — the caller
+ * is responsible for emitting a "baseline is unsigned" stderr
+ * warning per the CLI contract.
+ *
+ * Failure to sign after a successful write leaves the baseline file
+ * in place + returns `N00B_AUDIT_ERR_SIGN_SUBPROCESS` so the caller
+ * can retry or sign manually.
+ *
+ * @param project_root  Directory rooted at the project.
+ * @param violations    The findings to baseline.
+ * @param overwrite     When false, refuses to clobber an existing
+ *                      baseline file.
+ * @param key_path      Optional SSH private key path; when set,
+ *                      auto-signs after writing.
+ * @param signer_id     Optional principal id; required alongside
+ *                      `key_path`.
+ *
+ * @return Same shape as `n00b_audit_finalize_baseline`. Additional
+ *         possible error: `N00B_AUDIT_ERR_SIGN_SUBPROCESS` on
+ *         signing failure (file is left in place).
+ */
+extern n00b_result_t(int)
+n00b_audit_finalize_baseline_signed(
+    n00b_string_t                          *project_root,
+    n00b_list_t(n00b_audit_violation_t *)  *violations,
+    bool                                    overwrite,
+    n00b_string_t                          *key_path,
+    n00b_string_t                          *signer_id);
+
+/**
  * @brief Compute the canonical region bytes for a finding from the
  *        violation's source span.
  *
@@ -276,3 +321,85 @@ n00b_audit_extract_region_bytes(n00b_string_t *file_path,
                                 int64_t        column,
                                 int64_t        end_line,
                                 int64_t        end_column);
+
+/**
+ * @brief WP-012 — sign an exemption (or baseline) file with the
+ *        configured SSH key.
+ *
+ * Invokes `ssh-keygen -Y sign -f <key_path> -n naudit-exemption-v1
+ * <file_path>` as a subprocess. On success, ssh-keygen writes
+ * `<file_path>.sig` next to the input. The namespace string
+ * (`naudit-exemption-v1`) is fixed per the white paper § 7.1; it
+ * prevents cross-protocol reuse of the same SSH key against commit
+ * signing or any other SSH-signed artifact.
+ *
+ * Both path arguments are canonicalized via `n00b_path_canonical`
+ * before the subprocess is spawned (per the path-handling rule
+ * shipped in PR #72).
+ *
+ * Per project DECISIONS.md D-005, this function carries no `_kargs`
+ * block. Per D-006 / WP-008 naudit headers under `include/naudit/`
+ * are unprefixed.
+ *
+ * @param file_path  Path to the exemption / baseline file to sign.
+ * @param key_path   Path to the SSH private key (`-f` argument).
+ * @param signer_id  Identifier embedded in the signature record so
+ *                   the verifier knows which roster entry to look up.
+ *
+ * @return On success, `n00b_result_ok` wrapping `0`. On failure,
+ *         `n00b_result_err` carrying
+ *         `N00B_AUDIT_ERR_SIGN_SUBPROCESS` (spawn / waitpid / non-
+ *         zero exit). The caller emits the user-facing diagnostic
+ *         via `n00b_audit_err_str`.
+ */
+extern n00b_result_t(int)
+n00b_audit_exemption_sign(n00b_string_t *file_path,
+                          n00b_string_t *key_path,
+                          n00b_string_t *signer_id);
+
+/**
+ * @brief WP-012 — verify the detached signature of an exemption
+ *        (or baseline) file against a trust roster.
+ *
+ * Invokes `ssh-keygen -Y verify -f <roster_path> -I <signer_id>
+ * -n naudit-exemption-v1 -s <file_path>.sig`. The data to verify is
+ * piped to ssh-keygen's STDIN — this function opens the exemption
+ * file, dups its file descriptor to STDIN_FILENO in the child's
+ * file_actions, and closes the parent-side copy after the spawn.
+ * (The shell-shorthand `< <file>` is NOT implementable verbatim via
+ * `posix_spawn`; explicit pipe/dup is required.)
+ *
+ * Both path arguments are canonicalized via `n00b_path_canonical`
+ * before use.
+ *
+ * Distinct error codes let the loader produce differentiated stderr
+ * diagnostics:
+ *   - `N00B_AUDIT_ERR_EXEMPTION_NO_SIGNATURE`     missing `.sig`.
+ *   - `N00B_AUDIT_ERR_EXEMPTION_BAD_SIGNATURE`    tampered content
+ *                                                 or wrong key.
+ *   - `N00B_AUDIT_ERR_EXEMPTION_UNKNOWN_SIGNER`   signer not in
+ *                                                 roster; collapses
+ *                                                 to BAD_SIGNATURE
+ *                                                 when ssh-keygen's
+ *                                                 output doesn't
+ *                                                 allow the
+ *                                                 distinction.
+ *   - `N00B_AUDIT_ERR_SIGN_SUBPROCESS`            OS-level failure.
+ *
+ * @param file_path    Path to the exemption / baseline file. The
+ *                     `.sig` sibling is derived as
+ *                     `<file_path>.sig`.
+ * @param roster_path  Path to an OpenSSH `allowed_signers` file
+ *                     listing trusted principals + their public
+ *                     keys.
+ * @param signer_id    Principal identifier (`-I` argument). Must
+ *                     match the value the file was signed with.
+ *
+ * @return On success, `n00b_result_ok` wrapping `0`. On failure,
+ *         `n00b_result_err` carrying one of the error codes
+ *         described above.
+ */
+extern n00b_result_t(int)
+n00b_audit_exemption_verify(n00b_string_t *file_path,
+                            n00b_string_t *roster_path,
+                            n00b_string_t *signer_id);

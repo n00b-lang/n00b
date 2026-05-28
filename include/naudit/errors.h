@@ -195,6 +195,68 @@
 #define N00B_AUDIT_ERR_CLI_RENDER              (-9203)
 
 /**
+ * @brief An exemption record carries no detached signature.
+ *
+ * Returned by `n00b_audit_exemption_verify` when the corresponding
+ * `<exemption-file>.sig` file is absent. In normal audit operation
+ * the exemption loader downgrades this to "drop the exemption with a
+ * stderr warning" — unless `--allow-unsigned` is set, in which case
+ * the exemption is kept and a warning is still emitted. The error
+ * code itself is the primitive returned by the verify helper; the
+ * loader applies the policy.
+ *
+ * WP-012.
+ */
+#define N00B_AUDIT_ERR_EXEMPTION_NO_SIGNATURE  (-9301)
+
+/**
+ * @brief An exemption record's detached signature exists, but
+ *        `ssh-keygen -Y verify` rejected it.
+ *
+ * Returned by `n00b_audit_exemption_verify` when the `.sig` file is
+ * present but verification fails — the exemption content was modified
+ * after signing, the signature was forged, or the signing key was
+ * different from any key in the trust roster but the loader couldn't
+ * cleanly distinguish UNKNOWN_SIGNER from a regular bad-sig (see the
+ * note on N00B_AUDIT_ERR_EXEMPTION_UNKNOWN_SIGNER).
+ *
+ * WP-012.
+ */
+#define N00B_AUDIT_ERR_EXEMPTION_BAD_SIGNATURE (-9302)
+
+/**
+ * @brief The signer named in the exemption record is not present in
+ *        the trust roster (`audit/allowed_signers`).
+ *
+ * Returned by `n00b_audit_exemption_verify` when `ssh-keygen -Y
+ * verify` reports the principal as unknown. The distinction between
+ * BAD_SIGNATURE and UNKNOWN_SIGNER is best-effort: when ssh-keygen's
+ * exit code or stderr does not let us cleanly separate the two cases,
+ * verify collapses both into BAD_SIGNATURE and documents the
+ * conservative choice — the caller's diagnostic remains correct
+ * ("refused").
+ *
+ * WP-012.
+ */
+#define N00B_AUDIT_ERR_EXEMPTION_UNKNOWN_SIGNER (-9303)
+
+/**
+ * @brief Sign/verify subprocess could not be spawned, did not return,
+ *        or failed for an OS-level reason unrelated to signature
+ *        correctness.
+ *
+ * Returned by `n00b_audit_exemption_sign` and
+ * `n00b_audit_exemption_verify` when `posix_spawn`, `waitpid`, or
+ * `pipe`/`dup2` setup fails. Distinct from BAD_SIGNATURE so the
+ * caller's diagnostic does not misattribute an OS failure (e.g.,
+ * ssh-keygen not installed, no permission to spawn) to a security
+ * verdict.
+ *
+ * WP-012.
+ */
+#define N00B_AUDIT_ERR_SIGN_SUBPROCESS          (-9304)
+
+/**
  * @brief Return a human-readable description of a n00b-audit error
  *        code.
  *

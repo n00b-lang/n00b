@@ -134,6 +134,16 @@ typedef struct {
      * loader sets it.
      */
     n00b_string_t                       *project_root;
+    /*
+     * WP-012: path to the in-repo OpenSSH `allowed_signers` trust
+     * roster (`<project_root>/audit/allowed_signers`) when the
+     * file exists. nullptr when the roster is absent — the
+     * exemption loader treats that case according to the
+     * `--allow-unsigned` flag (warn + accept-all when set,
+     * refuse-all otherwise). WP-015 will add the system-installed
+     * roster path (`/etc/naudit/allowed_signers`) per D-X1.
+     */
+    n00b_string_t                       *allowed_signers_path;
 } n00b_audit_guidance_t;
 
 /**
