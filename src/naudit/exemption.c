@@ -125,6 +125,7 @@
 #include <sys/wait.h>
 #include <spawn.h>
 #include <fcntl.h>
+#include <time.h>
 #include <unistd.h>
 
 /*
@@ -354,6 +355,128 @@ n00b_audit_compute_region_fingerprint(n00b_string_t *region_bytes)
 /* Matching predicate                                               */
 /* ---------------------------------------------------------------- */
 
+/* ---------------------------------------------------------------- */
+/* WP-014 — expiration enforcement helper                           */
+/* ---------------------------------------------------------------- */
+
+/*
+ * Format the current UTC time as ISO-8601 `YYYY-MM-DDTHH:MM:SSZ`.
+ * Used at the top of `n00b_audit_exemption_match` to drive the
+ * expiration check without modifying the WP-013 match signature
+ * (which is a D-024-preserved schema function — a `now` parameter
+ * on `_match` would be visible to every caller). Lexicographic
+ * comparison against an exemption's `expires_at` (which may be a
+ * shorter `YYYY-MM-DD` form) is well-defined: the calendar-only
+ * form sorts as if the trailing instant fields were all zero, so
+ * an exemption with `expires_at = "2026-01-01"` is "expired" the
+ * instant the wall clock crosses `"2026-01-01T00:00:01Z"`, which
+ * matches the intuitive calendar semantics.
+ */
+static n00b_string_t *
+current_iso8601_utc(void)
+{
+    time_t    now = time(nullptr);
+    struct tm tm_buf;
+    /*
+     * gmtime_r is POSIX; naudit-side may use libc primitives (the
+     * libc carveout). On rare clock-failure (now == -1 on a
+     * misconfigured embedded system) we return the empty string;
+     * the caller's lex-compare against any sane `expires_at` then
+     * returns "not expired" (empty < anything non-empty), which is
+     * the safe default (don't drop exemptions on clock failure).
+     */
+    if (now == (time_t)-1) {
+        return n00b_string_empty();
+    }
+    if (!gmtime_r(&now, &tm_buf)) {
+        return n00b_string_empty();
+    }
+    /*
+     * Hand-format rather than strftime: the format is fixed, the
+     * fields are bounded, and we avoid locale-dependent surprises.
+     * tm_year is years since 1900; tm_mon is 0-based.
+     */
+    int year  = tm_buf.tm_year + 1900;
+    int mon   = tm_buf.tm_mon  + 1;
+    int day   = tm_buf.tm_mday;
+    int hour  = tm_buf.tm_hour;
+    int minute = tm_buf.tm_min;
+    int second = tm_buf.tm_sec;
+    /* Clamp seconds: POSIX permits 60 for leap seconds; we cap at 59
+     * for lexicographic monotonicity at the second boundary. */
+    if (second > 59) {
+        second = 59;
+    }
+    /*
+     * Use n00b_cformat per the libn00b API surface — the «#:NNd»
+     * spec syntax delegates to format_spec.c's printf-flag parser
+     * (`0` flag + width digits) for zero-padded fixed-width.
+     */
+    return n00b_cformat(
+        "«#:04d»-«#:02d»-«#:02d»T«#:02d»:«#:02d»:«#:02d»Z",
+        (int64_t)year, (int64_t)mon, (int64_t)day,
+        (int64_t)hour, (int64_t)minute, (int64_t)second);
+}
+
+bool
+n00b_audit_exemption_is_expired(n00b_audit_exemption_t *exemption,
+                                 n00b_string_t          *now_iso8601)
+{
+    if (!exemption || !now_iso8601 || now_iso8601->u8_bytes == 0) {
+        return false;
+    }
+    n00b_string_t *exp = exemption->expires_at;
+    if (!exp || exp->u8_bytes == 0) {
+        /* No expiration field => never expires. */
+        return false;
+    }
+    /*
+     * Lexicographic byte compare. The expires_at field may be
+     * `YYYY-MM-DD` or the full `YYYY-MM-DDTHH:MM:SSZ`; in both
+     * cases left-to-right byte order matches chronological order
+     * because ISO-8601's most-significant-field-first layout is
+     * intentional. The shorter calendar form compares against the
+     * longer instant form correctly because '\0' (end of string)
+     * sorts as less than any byte in the longer string's tail —
+     * which means an exemption with `expires_at = "2026-01-01"`
+     * is treated as "expired" the moment `now_iso8601` becomes
+     * `"2026-01-01T00:00:00Z"` (the calendar form's missing tail
+     * is treated as the lowest possible value; the instant
+     * `"2026-01-01T00:00:00Z"` then compares greater).
+     *
+     * For correctness, do a manual byte-by-byte compare since we
+     * can't rely on libc strcmp behavior with the n00b_string_t's
+     * pre-NUL-terminated buffer.
+     */
+    size_t la = exp->u8_bytes;
+    size_t lb = now_iso8601->u8_bytes;
+    size_t mn = la < lb ? la : lb;
+    for (size_t i = 0; i < mn; i++) {
+        unsigned char ca = (unsigned char)exp->data[i];
+        unsigned char cb = (unsigned char)now_iso8601->data[i];
+        if (ca < cb) {
+            return true;  /* expires_at < now → expired */
+        }
+        if (ca > cb) {
+            return false; /* expires_at > now → not expired */
+        }
+    }
+    /* Common prefix matched; whichever is shorter sorts less. */
+    if (la < lb) {
+        return true;  /* expires_at is the shorter prefix => "<" => expired */
+    }
+    return false;     /* equal or now is shorter => not expired */
+}
+
+void
+n00b_audit_exemption_blank_rationale(n00b_audit_exemption_t *exemption)
+{
+    if (!exemption) {
+        return;
+    }
+    exemption->rationale = n00b_string_empty();
+}
+
 bool
 n00b_audit_exemption_match(n00b_audit_exemption_t  *exemption,
                             n00b_audit_violation_t  *violation,
@@ -368,6 +491,24 @@ n00b_audit_exemption_match(n00b_audit_exemption_t  *exemption,
     }
     if (!exemption->region_fingerprint || !violation->region_fingerprint) {
         return false;
+    }
+    /*
+     * WP-014 expiration enforcement — runs BEFORE the blame /
+     * fingerprint check per D-026 ordering. An exemption whose
+     * `expires_at` is in the past does NOT suppress, even with a
+     * valid signature and a clean blame trace (white paper § 11.4:
+     * "exemptions must expire and be re-reviewed").
+     *
+     * The current time is fetched here rather than on the public
+     * surface so the WP-013 four-argument signature stays
+     * unchanged (D-024 preserves the matcher signature for
+     * schema-compatibility callers).
+     */
+    {
+        n00b_string_t *now = current_iso8601_utc();
+        if (n00b_audit_exemption_is_expired(exemption, now)) {
+            return false;
+        }
     }
     /*
      * Step 1 (always): rule identity. The content-hash equality

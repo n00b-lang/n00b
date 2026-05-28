@@ -426,3 +426,62 @@ extern n00b_result_t(int)
 n00b_audit_exemption_verify(n00b_string_t *file_path,
                             n00b_string_t *roster_path,
                             n00b_string_t *signer_id);
+
+/**
+ * @brief WP-014 — clear an exemption record's `rationale` field
+ *        in-place.
+ *
+ * Sets `exemption->rationale` to `n00b_string_empty()` (an empty
+ * `n00b_string_t *`, NOT nullptr — matches the established idiom
+ * in `exemption.c` so downstream string operations don't have to
+ * special-case null). Idempotent: calling on an already-blanked
+ * record is a no-op.
+ *
+ * Used by the WP-014 signing ceremony before each prompt so the
+ * developer's input is not pre-filled by the agent's authored
+ * rationale text (white paper § 11.2 — the rationale is the human
+ * judgment artifact; pre-filling it from agent text would
+ * compromise the discipline's premise).
+ *
+ * Per project DECISIONS.md D-005, this function carries no
+ * `_kargs` block.
+ *
+ * @param exemption  Exemption record whose rationale to clear.
+ *                   No-op when `exemption` is null (defensive).
+ */
+extern void
+n00b_audit_exemption_blank_rationale(n00b_audit_exemption_t *exemption);
+
+/**
+ * @brief WP-014 — test whether an exemption has expired as of the
+ *        supplied ISO-8601 time string.
+ *
+ * Returns `true` iff:
+ *
+ *   1. `exemption->expires_at` is non-null and non-empty AND
+ *   2. `exemption->expires_at` is lexicographically less than
+ *      `now_iso8601`.
+ *
+ * Lexicographic comparison is correct for both the calendar form
+ * (`YYYY-MM-DD`) and the full ISO-8601 instant form
+ * (`YYYY-MM-DDTHH:MM:SSZ`) since each more-precise field is
+ * subordinate to the less-precise one in left-to-right order.
+ *
+ * An exemption with no `expires_at` field never expires; the
+ * signing ceremony (WP-014) requires the field, but the engine
+ * tolerates absence (the WP-011 record schema marked it optional).
+ *
+ * Pure function — easy to unit-test in isolation. The non-pure
+ * "obtain the current time" step lives inside
+ * `n00b_audit_exemption_match` so that the WP-013 signature of
+ * `_match` (a D-024-preserved schema function) need not change.
+ *
+ * @param exemption    Exemption record to test. Must be non-null.
+ * @param now_iso8601  Current time as an ISO-8601 string. Must be
+ *                     non-null and non-empty.
+ *
+ * @return `true` iff the exemption has expired as of `now_iso8601`.
+ */
+extern bool
+n00b_audit_exemption_is_expired(n00b_audit_exemption_t *exemption,
+                                 n00b_string_t          *now_iso8601);

@@ -1035,6 +1035,7 @@ foreach _ntest : [
     'exemption',
     'baseline',
     'signing',
+    'signing_ux',
     'blame',
 ]
     _naudit_test_exe = executable(

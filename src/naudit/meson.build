@@ -25,5 +25,6 @@ n00b_naudit_src = files(
     'output.c',
     'output_json.c',
     'rule_file_tokenizer.c',
+    'signing_ux.c',
     'tokenizer_registry.c',
 )
