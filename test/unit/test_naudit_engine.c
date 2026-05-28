@@ -46,10 +46,13 @@
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "n00b.h"
 #include "core/runtime.h"
 #include "core/string.h"
+#include "adt/dict.h"
+#include "text/strings/string_ops.h"
 
 #include "naudit/naudit.h"
 #include "naudit/engine.h"
@@ -196,7 +199,7 @@ static void
 test_err_str_engine_codes(void)
 {
     /*
-     * Round-trip the five engine error codes through err_str — per
+     * Round-trip the engine error codes through err_str — per
      * n00b-api-guidelines § 5.5, every declared code must round-trip
      * to a non-null rich-literal description.
      */
@@ -205,7 +208,120 @@ test_err_str_engine_codes(void)
     assert(n00b_audit_err_str(N00B_AUDIT_ERR_ENGINE_PARSE)            != nullptr);
     assert(n00b_audit_err_str(N00B_AUDIT_ERR_ENGINE_TARGET_NOT_FOUND) != nullptr);
     assert(n00b_audit_err_str(N00B_AUDIT_ERR_ENGINE_BAD_ARGS)         != nullptr);
+    assert(n00b_audit_err_str(N00B_AUDIT_ERR_ENGINE_UNKNOWN_LANGUAGE) != nullptr);
     printf("  [PASS] err_str engine codes\n");
+}
+
+/*
+ * WP-009 Phase 1: auditing a `.h` file must route through the
+ * built-in language registry's default `.h` -> `c` mapping and
+ * fire the same NULL rule. `fixture_legacy.h` declares
+ * `static int *a_null_pointer = NULL;` on its only non-comment
+ * line.
+ */
+static void
+test_check_fixture_legacy_h(n00b_audit_engine_t *engine,
+                            n00b_audit_guidance_t *guidance)
+{
+    n00b_string_t *path = fixture_path("fixture_legacy.h");
+    auto r = n00b_audit_engine_check_file(engine, path);
+    if (n00b_result_is_err(r)) {
+        fprintf(stderr,
+                "  fixture_legacy.h check failed: code=%d (%.*s)\n",
+                n00b_result_get_err(r),
+                (int)n00b_audit_err_str(n00b_result_get_err(r))->u8_bytes,
+                n00b_audit_err_str(n00b_result_get_err(r))->data);
+    }
+    assert(n00b_result_is_ok(r));
+    n00b_list_t(n00b_audit_violation_t *) *violations = n00b_result_get(r);
+    assert(!!violations);
+    int64_t n = n00b_list_len(*violations);
+    assert(n >= 1);
+    n00b_audit_violation_t *v0 = n00b_list_get(*violations, 0);
+    assert(!!v0);
+    assert(v0->rule == n00b_list_get(*guidance->rules, 0));
+    assert(!!v0->file);
+    assert(v0->line > 0);
+    printf("  [PASS] check_fixture_legacy_h (.h -> c dispatch, n=%lld)\n",
+           (long long)n);
+}
+
+/*
+ * WP-009 Phase 1: project-override case. The guidance struct
+ * carries an `extension_overrides` dict mapping `.cc` to `c`;
+ * auditing a `.cc` copy of the NULL fixture must fire the rule.
+ *
+ * The fixture file is created on the fly so the test does not
+ * require a checked-in `.cc` source.
+ */
+static void
+test_check_extension_override(n00b_audit_guidance_t *guidance)
+{
+    /*
+     * Mutate the loaded guidance to add a `.cc` override pointing
+     * at the C language. The test is the sole consumer; the
+     * mutation is a permissible test-fixture pattern (the loader
+     * also writes to this field on the happy path).
+     */
+    guidance->extension_overrides = n00b_alloc(
+        n00b_dict_t(n00b_string_t *, n00b_string_t *));
+    n00b_dict_init(guidance->extension_overrides,
+                   .hash          = n00b_string_hash,
+                   .skip_obj_hash = true);
+    n00b_string_t *ext  = r".cc";
+    n00b_string_t *lang = r"c";
+    n00b_dict_put(guidance->extension_overrides, ext, lang);
+
+    /*
+     * Spin up a fresh engine against the now-mutated guidance.
+     * The engine struct caches grammars by language name, so we
+     * need a new engine to pick up the new override mapping — the
+     * existing one already has a `c` entry but its grammar was
+     * loaded without reference to overrides (overrides only
+     * matter to the extension lookup, not to grammar load), so
+     * conceptually re-using it would be fine; a fresh engine
+     * keeps the test deterministic.
+     */
+    auto er = n00b_audit_engine_new(guidance);
+    assert(n00b_result_is_ok(er));
+    n00b_audit_engine_t *engine = n00b_result_get(er);
+    assert(!!engine);
+
+    /*
+     * Create a `.cc` fixture next to the existing `.c` fixture.
+     * We write the same content as `fixture_null.c` so the rule
+     * fires identically.
+     */
+    n00b_string_t *cc_path = fixture_path("fixture_null_override.cc");
+    FILE *fp = fopen(cc_path->data, "w");
+    assert(!!fp);
+    fprintf(fp, "/* WP-009 Phase 1 on-the-fly .cc fixture. */\n");
+    fprintf(fp, "int\n");
+    fprintf(fp, "main(void)\n");
+    fprintf(fp, "{\n");
+    fprintf(fp, "    int *p = NULL;\n");
+    fprintf(fp, "    return p == NULL ? 0 : 1;\n");
+    fprintf(fp, "}\n");
+    fclose(fp);
+
+    auto r = n00b_audit_engine_check_file(engine, cc_path);
+    if (n00b_result_is_err(r)) {
+        fprintf(stderr,
+                "  fixture_null_override.cc check failed: code=%d (%.*s)\n",
+                n00b_result_get_err(r),
+                (int)n00b_audit_err_str(n00b_result_get_err(r))->u8_bytes,
+                n00b_audit_err_str(n00b_result_get_err(r))->data);
+    }
+    assert(n00b_result_is_ok(r));
+    n00b_list_t(n00b_audit_violation_t *) *violations = n00b_result_get(r);
+    assert(!!violations);
+    int64_t n = n00b_list_len(*violations);
+    assert(n >= 1);
+    printf("  [PASS] check_extension_override (.cc -> c via @extensions, n=%lld)\n",
+           (long long)n);
+
+    /* Cleanup. */
+    unlink(cc_path->data);
 }
 
 int
@@ -220,7 +336,9 @@ main(int argc, char *argv[])
     test_check_fixture_null(engine, guidance);
     test_check_fixture_nullptr(engine);
     test_check_missing_target(engine);
+    test_check_fixture_legacy_h(engine, guidance);
     test_err_str_engine_codes();
+    test_check_extension_override(guidance);
 
     printf("All n00b-audit Phase 3 regression checks passed.\n");
     return 0;

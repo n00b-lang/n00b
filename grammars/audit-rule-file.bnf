@@ -52,6 +52,37 @@
 # dedicated `"audit_rule_file"` tokenizer that emits the
 # coarse line-kind tokens above; the metagrammar below is
 # straightforward to walk in the loader.
+#
+# # WP-009 Phase 1 extensions
+#
+# Two new conceptual additions, both expressed via the existing
+# `DIRECTIVE` / `REST` / continuation tokens — no new token kinds
+# were required:
+#
+#   - File-level `@extensions` directive carrying the project's
+#     extension → language overrides:
+#         @extensions
+#             c: .c, .h
+#             cpp: .cc, .cpp
+#     The directive's value (REST + continuation lines joined
+#     by `\n`) is parsed inside `src/naudit/guidance.c` into the
+#     `extension_overrides` field of `n00b_audit_guidance_t`.
+#     A naive single-line form (`@extensions c: .c, .h`) also
+#     works for single-language declarations.
+#   - Per-rule `@language <name>` annotation scoping a rule to
+#     one (or, if repeated, several) registered languages. The
+#     directive parses through the existing per-rule meta_field
+#     machinery; the loader appends each `@language` value to
+#     the rule's `language` list. Omitting `@language` means
+#     "apply to every registered language" (the engine still
+#     skips rules whose `violation_nt` is missing from a given
+#     language's loaded grammar).
+#
+# Neither addition requires a metagrammar production change —
+# both fit the existing `<meta_field>` shape (DIRECTIVE + REST
+# + optional continuations). The `extensions` and `language`
+# directive NAMES are interpreted by the loader; the
+# metagrammar is unchanged.
 
 <file> ::= <file_meta> <rule_section>*
 

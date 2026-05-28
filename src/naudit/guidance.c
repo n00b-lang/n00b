@@ -53,6 +53,7 @@
 
 #include "naudit/guidance.h"
 #include "naudit/rule.h"
+#include "naudit/languages.h"
 #include "naudit/errors.h"
 #include "internal/naudit/_naudit_internal.h"
 
@@ -254,7 +255,7 @@ walk_meta_fields(n00b_parse_tree_t   *parent,
 }
 
 /* ---------------------------------------------------------------- */
-/* File-level field handler                                         */
+/* File-level handler context + helpers                             */
 /* ---------------------------------------------------------------- */
 
 typedef struct {
@@ -296,6 +297,155 @@ parse_int64(n00b_string_t *s, int64_t *out)
     return true;
 }
 
+/* ---------------------------------------------------------------- */
+/* @extensions parsing (WP-009 Phase 1)                             */
+/* ---------------------------------------------------------------- */
+
+/*
+ * Lazily allocate `g->extension_overrides` as a string->string
+ * locked dict on first use. Per WP-009 Phase 1 spec, the field
+ * stays nullptr when the rule file declares no `@extensions`
+ * directive — so allocation is deferred to the first
+ * extension-override write.
+ */
+static void
+ensure_extension_overrides(n00b_audit_guidance_t *g)
+{
+    if (g->extension_overrides) {
+        return;
+    }
+    g->extension_overrides = n00b_alloc(
+        n00b_dict_t(n00b_string_t *, n00b_string_t *));
+    n00b_dict_init(g->extension_overrides,
+                   .hash          = n00b_string_hash,
+                   .skip_obj_hash = true);
+}
+
+/*
+ * Parse one line of `@extensions` body. Expected shape:
+ *
+ *     <lang-name>: <ext1>, <ext2>, ...
+ *
+ * Where `<lang-name>` is a registered language and each `<extN>`
+ * carries the leading `.`. Returns false on syntactic errors (the
+ * caller turns this into `N00B_AUDIT_ERR_GUIDANCE_SCHEMA`).
+ *
+ * Whitespace around the `:` and `,` separators is stripped. Blank
+ * lines (after trim) are tolerated as a no-op.
+ */
+static bool
+parse_extensions_line(n00b_string_t         *line,
+                      n00b_audit_guidance_t *g)
+{
+    if (!line || line->u8_bytes == 0) {
+        return true;
+    }
+    const char *buf = line->data;
+    size_t      n   = line->u8_bytes;
+
+    /* Skip leading whitespace. */
+    size_t i = 0;
+    while (i < n && (buf[i] == ' ' || buf[i] == '\t')) {
+        i++;
+    }
+    if (i == n) {
+        return true;
+    }
+
+    /* Read the language name up to ':'. */
+    size_t name_start = i;
+    while (i < n && buf[i] != ':') {
+        i++;
+    }
+    if (i == n) {
+        /* No colon — malformed. */
+        return false;
+    }
+    size_t name_end = i;
+    /* Trim trailing whitespace from the name. */
+    while (name_end > name_start
+           && (buf[name_end - 1] == ' ' || buf[name_end - 1] == '\t')) {
+        name_end--;
+    }
+    if (name_end == name_start) {
+        return false;
+    }
+    n00b_string_t *lang = n00b_string_from_raw(buf + name_start,
+                                                (int64_t)(name_end
+                                                          - name_start));
+
+    /* Skip the colon and any whitespace after it. */
+    i++; /* past the ':' */
+    while (i < n && (buf[i] == ' ' || buf[i] == '\t')) {
+        i++;
+    }
+
+    /* Parse comma-separated extensions. */
+    bool saw_any = false;
+    while (i < n) {
+        size_t ext_start = i;
+        while (i < n && buf[i] != ',') {
+            i++;
+        }
+        size_t ext_end = i;
+        while (ext_end > ext_start
+               && (buf[ext_end - 1] == ' '
+                   || buf[ext_end - 1] == '\t')) {
+            ext_end--;
+        }
+        if (ext_end > ext_start) {
+            n00b_string_t *ext =
+                n00b_string_from_raw(buf + ext_start,
+                                      (int64_t)(ext_end - ext_start));
+            ensure_extension_overrides(g);
+            n00b_dict_put(g->extension_overrides, ext, lang);
+            saw_any = true;
+        }
+        if (i < n && buf[i] == ',') {
+            i++;
+            while (i < n && (buf[i] == ' ' || buf[i] == '\t')) {
+                i++;
+            }
+        }
+    }
+    return saw_any;
+}
+
+/*
+ * Parse the full `@extensions` directive value. The value text is
+ * already assembled (REST + each continuation line joined by
+ * `\n`); split it on `\n` and apply `parse_extensions_line` per
+ * line. Returns false on malformed body.
+ */
+static bool
+parse_extensions_value(n00b_string_t         *value,
+                       n00b_audit_guidance_t *g)
+{
+    if (!value || value->u8_bytes == 0) {
+        return true;
+    }
+    const char *buf  = value->data;
+    size_t      n    = value->u8_bytes;
+    size_t      line = 0;
+    while (line < n) {
+        size_t end = line;
+        while (end < n && buf[end] != '\n') {
+            end++;
+        }
+        n00b_string_t *one = n00b_string_from_raw(buf + line,
+                                                   (int64_t)(end - line));
+        if (!parse_extensions_line(one, g)) {
+            return false;
+        }
+        line = (end < n) ? end + 1 : end;
+    }
+    return true;
+}
+
+/* ---------------------------------------------------------------- */
+/* File-level field handler                                         */
+/* ---------------------------------------------------------------- */
+
 static bool
 file_field_handler(n00b_string_t *name, n00b_string_t *value, void *carry)
 {
@@ -326,6 +476,24 @@ file_field_handler(n00b_string_t *name, n00b_string_t *value, void *carry)
     }
     if (str_eq_cstr(name, "source_doc")) {
         g->source_doc = value;
+        return true;
+    }
+    if (str_eq_cstr(name, "extensions")) {
+        /*
+         * WP-009 Phase 1: project-level file-extension overrides
+         * for the built-in language registry. The value is a
+         * multi-line body — one line per language — assembled by
+         * the metagrammar walker via the standard
+         * REST + continuation mechanism. The parser populates
+         * `g->extension_overrides`; validation of language names
+         * against the built-in registry happens after the full
+         * walk completes (so the canonical "language unknown"
+         * diagnostic is emitted once with full context).
+         */
+        if (!parse_extensions_value(value, g)) {
+            ctx->err_code = N00B_AUDIT_ERR_GUIDANCE_SCHEMA;
+            return false;
+        }
         return true;
     }
     if (str_eq_cstr(name, "dependencies")) {
@@ -402,6 +570,31 @@ rule_field_handler(n00b_string_t *name, n00b_string_t *value, void *carry)
     }
     if (str_eq_cstr(name, "guidance")) {
         r->guidance = value;
+        return true;
+    }
+    if (str_eq_cstr(name, "language")) {
+        /*
+         * WP-009 Phase 1: per-rule language scoping. Multiple
+         * `@language <name>` annotations may appear on a single
+         * rule (the rule then applies to all listed languages);
+         * each new annotation appends to the per-rule list. Empty
+         * list (no `@language` present) means "apply to every
+         * language whose grammar defines the rule's violation_nt"
+         * — semantically the engine's responsibility, not the
+         * loader's.
+         *
+         * Validation of language names against the built-in
+         * registry happens after the full walk completes (so the
+         * canonical "language unknown" diagnostic carries the
+         * rule id).
+         */
+        if (!r->language) {
+            r->language = n00b_alloc(n00b_list_t(n00b_string_t *));
+            *r->language = n00b_list_new(n00b_string_t *);
+        }
+        if (value && value->u8_bytes > 0) {
+            n00b_list_push(*r->language, value);
+        }
         return true;
     }
     if (str_eq_cstr(name, "applies_to.include")) {
@@ -643,6 +836,7 @@ n00b_audit_load_guidance(n00b_string_t *path)
         rule->guidance          = n00b_string_empty();
         rule->applies_to_include = nullptr;
         rule->applies_to_exclude = nullptr;
+        rule->language           = nullptr;
 
         rule_field_ctx_t rctx = {.rule = rule, .err_code = 0};
         if (!walk_meta_fields(sec, rule_field_handler, &rctx)) {
@@ -676,6 +870,59 @@ n00b_audit_load_guidance(n00b_string_t *path)
         }
 
         n00b_list_push(*g->rules, rule);
+    }
+
+    /*
+     * Step 7.5 (WP-009 Phase 1): validate language references
+     * against the built-in language registry. Two sources:
+     *
+     *   (a) per-rule `@language <name>` annotations on each
+     *       loaded rule.
+     *   (b) every value in the file-level `@extensions` block's
+     *       extension → language-name map.
+     *
+     * Either source naming an unknown language is a schema
+     * error — return N00B_AUDIT_ERR_GUIDANCE_SCHEMA. This is the
+     * DF-W resolution per the WP-009 Phase 1 spec: validate at
+     * guidance-load time so dangling-language references fail
+     * fast with the same precedent shape as the D-017
+     * dangling-violation_nt validation in `engine.c`.
+     */
+    {
+        int64_t nrules = n00b_list_len(*g->rules);
+        for (int64_t i = 0; i < nrules; i++) {
+            n00b_audit_rule_t *rule = n00b_list_get(*g->rules, i);
+            if (!rule || !rule->language) {
+                continue;
+            }
+            int64_t nlangs = n00b_list_len(*rule->language);
+            for (int64_t j = 0; j < nlangs; j++) {
+                n00b_string_t *lname = n00b_list_get(*rule->language, j);
+                if (!lname
+                    || !n00b_naudit_lookup_language_by_name(lname)) {
+                    n00b_parse_result_free(pr);
+                    n00b_grammar_free(meta_g);
+                    return n00b_result_err(n00b_audit_guidance_t *,
+                                           N00B_AUDIT_ERR_GUIDANCE_SCHEMA);
+                }
+            }
+        }
+        if (g->extension_overrides) {
+            bool ext_ok = true;
+            n00b_dict_foreach(g->extension_overrides, _ext_key, _lang_val, {
+                (void)_ext_key;
+                if (!_lang_val
+                    || !n00b_naudit_lookup_language_by_name(_lang_val)) {
+                    ext_ok = false;
+                }
+            });
+            if (!ext_ok) {
+                n00b_parse_result_free(pr);
+                n00b_grammar_free(meta_g);
+                return n00b_result_err(n00b_audit_guidance_t *,
+                                       N00B_AUDIT_ERR_GUIDANCE_SCHEMA);
+            }
+        }
     }
 
     /*
@@ -789,6 +1036,8 @@ n00b_audit_err_str(int code)
         return r"target source file not found or unreadable";
     case N00B_AUDIT_ERR_ENGINE_BAD_ARGS:
         return r"required engine argument was null or uninitialized";
+    case N00B_AUDIT_ERR_ENGINE_UNKNOWN_LANGUAGE:
+        return r"audited file's extension does not map to any registered language";
     case N00B_AUDIT_ERR_CLI_ARGS:
         return r"CLI argument parsing failed (unknown flag, missing positional, or bad value)";
     case N00B_AUDIT_ERR_CLI_BAD_ARGS:

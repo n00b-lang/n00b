@@ -26,6 +26,7 @@
 
 #include <n00b.h>
 #include "adt/list.h"
+#include "adt/dict.h"
 #include "adt/result.h"
 
 #include "naudit/rule.h"
@@ -54,6 +55,18 @@
  *                      (DF-B; WP-002+ work).
  *  - `rules`           rules declared directly by this file (may be
  *                      empty).
+ *  - `extension_overrides` (WP-009 Phase 1) optional project-level
+ *                      overrides mapping a file extension string
+ *                      (with leading `.`) to a registered language
+ *                      name. Populated from the `@extensions`
+ *                      top-level directive. May be `nullptr` when
+ *                      the rule file declares no overrides; in
+ *                      that case the engine uses each registered
+ *                      language's default-extensions list from
+ *                      `naudit/languages.h`. Validated at
+ *                      guidance-load time — unknown language names
+ *                      surface as `N00B_AUDIT_ERR_GUIDANCE_SCHEMA`
+ *                      (DF-W resolution from the WP-009 spec).
  */
 typedef struct {
     int64_t                              schema_version;
@@ -62,6 +75,8 @@ typedef struct {
     n00b_string_t                       *source_doc;
     n00b_list_t(n00b_string_t *)        *dependencies;
     n00b_list_t(n00b_audit_rule_t *)    *rules;
+    n00b_dict_t(n00b_string_t *,
+                n00b_string_t *)        *extension_overrides;
 } n00b_audit_guidance_t;
 
 /**

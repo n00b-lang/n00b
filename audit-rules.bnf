@@ -3,6 +3,8 @@
 @description Reference rule set bootstrapped from n00b-api-guidelines.md
 @source_doc ~/.agents/tech/n00b-api-guidelines.md
 @dependencies
+@extensions
+    c: .c, .h
 
 # -----------------------------------------------------------------
 # Rule 1 -- WP-001 -- NULL -> nullptr (section 2.1)
@@ -10,6 +12,7 @@
 @rule n00b.s2_1.null
 @title NULL -> nullptr
 @section section 2.1
+@language c
 @violation_nt n00b_audit_v_null
 @rationale `nullptr` is a C23 standard keyword with type `nullptr_t`. It cannot
     silently coerce to an integer and is type-safe in generic macros.
@@ -36,6 +39,7 @@ rewrite {
 @rule n00b.s2_3.malloc
 @title malloc family -> n00b_alloc family
 @section section 2.3
+@language c
 @violation_nt n00b_audit_v_malloc_call
 @rationale The libn00b allocator family (n00b_alloc / n00b_alloc_array /
     n00b_alloc_flex / n00b_free) zero-fills, embeds source-location and
@@ -64,6 +68,7 @@ rewrite {
 @rule n00b.s2_5.attribute_legacy
 @title __attribute__((...)) -> [[...]] / [[gnu::...]]
 @section section 2.5
+@language c
 @violation_nt n00b_audit_v_attribute_legacy
 @rationale C23 standardized the bracket-attribute syntax. The legacy
     __attribute__((...)) spelling is portable across older toolchains but
@@ -89,6 +94,7 @@ rewrite {
 @rule n00b.s2_6.typeof_legacy
 @title __typeof__ -> typeof
 @section section 2.6
+@language c
 @violation_nt n00b_audit_v_typeof_legacy
 @rationale C23 standardized typeof (no underscores). __typeof__ is the
     legacy GCC spelling; same applies to typeof_unqual, _Static_assert,
@@ -111,6 +117,7 @@ rewrite {
 @rule n00b.s2_8.va_list_legacy
 @title va_list / stdarg.h -> ncc's checked variadics
 @section section 2.8
+@language c
 @violation_nt n00b_audit_v_va_list_legacy
 @rationale stdarg.h is explicitly banned (NCC.md "NO LIBC ALLOWED"). Use
     ncc's `+` checked variadic syntax, which gives compile-time type
@@ -150,6 +157,7 @@ rewrite {
 @rule n00b.s2_10.libc_io
 @title libc I/O -> conduit / file substrate
 @section section 2.10
+@language c
 @violation_nt n00b_audit_v_libc_io
 @rationale <stdio.h> linkage and POSIX open/read/write/close are banned
     (NCC.md "NO LIBC ALLOWED"). Replacements live under include/conduit/
@@ -204,6 +212,7 @@ rewrite {
 @rule n00b.s13.legacy_spellings
 @title legacy spellings -> C23 spellings
 @section section 13
+@language c
 @violation_nt n00b_audit_v_legacy_spellings
 @rationale C23 standardized the modern spellings of these identifiers:
     `static_assert` (replaces `_Static_assert`), `thread_local` (replaces
