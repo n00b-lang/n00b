@@ -99,7 +99,8 @@ test_exact_line(void)
     char *s = buf_to_str(out);
     // Should have exactly one newline.
     int nl_count = 0;
-    for (char *p = s; *p; p++) {
+    char *p;
+    for (p = s; *p; p++) {
         if (*p == '\n') nl_count++;
     }
     assert(nl_count == 1);
@@ -129,7 +130,8 @@ test_multi_line(void)
 
     char *s = buf_to_str(out);
     int nl_count = 0;
-    for (char *p = s; *p; p++) {
+    char *p;
+    for (p = s; *p; p++) {
         if (*p == '\n') nl_count++;
     }
     assert(nl_count == 3);
@@ -170,7 +172,8 @@ test_streaming(void)
     char *s2 = buf_to_str(out2);
     // Should have exactly 1 complete line.
     int nl = 0;
-    for (char *p = s2; *p; p++) {
+    char *p;
+    for (p = s2; *p; p++) {
         if (*p == '\n') nl++;
     }
     assert(nl == 1);

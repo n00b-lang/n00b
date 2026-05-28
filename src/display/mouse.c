@@ -141,7 +141,8 @@ n00b_mouse_route_event(n00b_canvas_t          *canvas,
     // target widget.  Walk up the parent chain to compute the absolute
     // pixel position, then subtract box insets (border + padding in pixels).
     int32_t abs_x = 0, abs_y = 0;
-    for (n00b_plane_t *p = target; p; p = p->parent) {
+    n00b_plane_t *p;
+    for (p = target; p; p = p->parent) {
         abs_x += p->x;
         abs_y += p->y;
     }

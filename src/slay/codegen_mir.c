@@ -1120,8 +1120,9 @@ n00b_cg_find_func(n00b_cg_session_t *s, const char *name)
     n00b_cg_module_t *m = s->active_module;
 
     if (m) {
-        for (MIR_item_t item = DLIST_HEAD(MIR_item_t, m->mir_module->items); item != NULL;
-             item            = DLIST_NEXT(MIR_item_t, item)) {
+        MIR_item_t item;
+        for (item = DLIST_HEAD(MIR_item_t, m->mir_module->items); item != NULL;
+             item = DLIST_NEXT(MIR_item_t, item)) {
             if (item->item_type == MIR_func_item && strcmp(item->u.func->name, name) == 0) {
                 return item;
             }
@@ -1136,8 +1137,9 @@ n00b_cg_find_func(n00b_cg_session_t *s, const char *name)
             continue;
         }
 
-        for (MIR_item_t item = DLIST_HEAD(MIR_item_t, mod->mir_module->items); item != NULL;
-             item            = DLIST_NEXT(MIR_item_t, item)) {
+        MIR_item_t item;
+        for (item = DLIST_HEAD(MIR_item_t, mod->mir_module->items); item != NULL;
+             item = DLIST_NEXT(MIR_item_t, item)) {
             if (item->item_type == MIR_func_item && strcmp(item->u.func->name, name) == 0) {
                 if (n00b_cg_module_func_is_private(mod, name)) {
                     continue;

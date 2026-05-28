@@ -101,7 +101,8 @@ annot_phase_symtab(n00b_annot_walk_ctx_t *ctx, annot_node_ctx_t *nc)
                             for (int32_t si = 0; si < ns->all_count; si++) {
                                 n00b_scope_t *sc = ns->all_scopes[si];
 
-                                for (n00b_sym_entry_t *e = sc->first_in_scope;
+                                n00b_sym_entry_t *e;
+                                for (e = sc->first_in_scope;
                                      e; e = e->next_in_scope) {
                                     if (e->kind == N00B_SYM_TYPEDEF
                                         && e->exposed_scope
@@ -151,7 +152,8 @@ annot_phase_symtab(n00b_annot_walk_ctx_t *ctx, annot_node_ctx_t *nc)
                                     for (int32_t si = 0; si < ns->all_count; si++) {
                                         n00b_scope_t *sc = ns->all_scopes[si];
 
-                                        for (n00b_sym_entry_t *e = sc->first_in_scope;
+                                        n00b_sym_entry_t *e;
+                                        for (e = sc->first_in_scope;
                                              e; e = e->next_in_scope) {
                                             if (e->kind == N00B_SYM_TYPEDEF
                                                 && e->exposed_scope

@@ -62,7 +62,8 @@ n00b_static_objects_enumerate_entries(n00b_static_object_entry_t const *start,
 
     size_t count = 0;
 
-    for (n00b_static_object_entry_t const *entry = start; entry < stop; entry++) {
+    n00b_static_object_entry_t const *entry;
+    for (entry = start; entry < stop; entry++) {
         const n00b_static_object_desc_t *desc = *entry;
         if (!desc || !desc->start || desc->len == 0) {
             continue;

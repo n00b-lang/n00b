@@ -407,7 +407,8 @@ plain_tcp_connect(const char *host,
     }
 
     N00B_HTTP_PLAIN_SOCK_T fd = N00B_HTTP_PLAIN_BAD_SOCK;
-    for (struct addrinfo *ai = res; ai; ai = ai->ai_next) {
+    struct addrinfo *ai;
+    for (ai = res; ai; ai = ai->ai_next) {
         fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
         if (fd == N00B_HTTP_PLAIN_BAD_SOCK) {
             continue;

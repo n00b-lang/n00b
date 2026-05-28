@@ -281,7 +281,8 @@ tcp_connect(const char *host, uint16_t port, int32_t timeout_ms,
     int     fd       = -1;
     int     rc       = N00B_QUIC_ERR_BIND_FAILED;
 
-    for (struct addrinfo *ai = res; ai; ai = ai->ai_next) {
+    struct addrinfo *ai;
+    for (ai = res; ai; ai = ai->ai_next) {
         fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
         if (fd < 0) {
             continue;

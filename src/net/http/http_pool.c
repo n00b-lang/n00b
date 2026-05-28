@@ -148,14 +148,15 @@ find_or_create_bucket(n00b_http_connection_pool_t *p, n00b_string_t *key, bool c
 {
     uint32_t        idx = hash_str(key->data, key->u8_bytes) & (POOL_BUCKETS - 1);
     pool_bucket_t **slot = &p->buckets[idx];
-    for (pool_bucket_t *b = *slot; b; b = b->map_next) {
+    pool_bucket_t  *b;
+    for (b = *slot; b; b = b->map_next) {
         if (b->key->u8_bytes == key->u8_bytes
             && memcmp(b->key->data, key->data, key->u8_bytes) == 0) {
             return b;
         }
     }
     if (!create) return nullptr;
-    pool_bucket_t *b = n00b_alloc_with_opts(
+    b = n00b_alloc_with_opts(
         pool_bucket_t,
         &(n00b_alloc_opts_t){.allocator = p->allocator});
     b->key      = key;

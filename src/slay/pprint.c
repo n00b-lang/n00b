@@ -298,7 +298,8 @@ typedef struct {
 static void
 pp_emit_trivia(n00b_pp_emit_ctx_t *ctx, n00b_trivia_t *trivia)
 {
-    for (n00b_trivia_t *t = trivia; t; t = t->next) {
+    n00b_trivia_t *t;
+    for (t = trivia; t; t = t->next) {
         if (t->text && t->text->u8_bytes > 0) {
             pp_emit(ctx->ds, ctx->allocator, N00B_PP_DOC_TEXT, t->text);
         }

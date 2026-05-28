@@ -521,7 +521,8 @@ parse_request(char *input, helper_request_t *req)
 {
     uint64_t line_no = 0;
 
-    for (char *line = input; line;) {
+    char *line;
+    for (line = input; line;) {
         char *next = strchr(line, '\n');
         if (next) {
             *next++ = '\0';
@@ -962,7 +963,8 @@ static void
 emit_c_string_literal(const char *s)
 {
     putchar('"');
-    for (const unsigned char *p = (const unsigned char *)(s ? s : ""); *p; p++) {
+    const unsigned char *p;
+    for (p = (const unsigned char *)(s ? s : ""); *p; p++) {
         switch (*p) {
         case '\\':
             fputs("\\\\", stdout);

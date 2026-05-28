@@ -370,7 +370,8 @@ bucket_find(n00b_http_alt_svc_cache_t *cache,
 {
     uint32_t        idx  = hash_origin(origin) & (ALT_SVC_BUCKETS - 1);
     cache_entry_t **slot = &cache->buckets[idx];
-    for (cache_entry_t *e = *slot; e; slot = &e->next, e = e->next) {
+    cache_entry_t  *e;
+    for (e = *slot; e; slot = &e->next, e = e->next) {
         if (e->origin->u8_bytes == origin->u8_bytes
             && memcmp(e->origin->data, origin->data,
                       origin->u8_bytes) == 0) {

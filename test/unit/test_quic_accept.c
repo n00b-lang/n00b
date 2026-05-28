@@ -205,7 +205,8 @@ test_multi_accept_and_unlink(void)
     /* All N_CLIENTS conns should be linked into the endpoint's
      * accepted list. */
     int linked = 0;
-    for (n00b_quic_conn_t *c2 = server->accepted; c2;
+    n00b_quic_conn_t *c2;
+    for (c2 = server->accepted; c2;
          c2 = c2->next_in_endpoint) {
         linked++;
     }
@@ -227,7 +228,7 @@ test_multi_accept_and_unlink(void)
         n00b_quic_endpoint_run_once(server, 5);
 
         int still_linked = 0;
-        for (n00b_quic_conn_t *c2 = server->accepted; c2;
+        for (c2 = server->accepted; c2;
              c2 = c2->next_in_endpoint) {
             still_linked++;
         }
@@ -235,7 +236,7 @@ test_multi_accept_and_unlink(void)
     }
 
     int still_linked = 0;
-    for (n00b_quic_conn_t *c2 = server->accepted; c2;
+    for (c2 = server->accepted; c2;
          c2 = c2->next_in_endpoint) {
         still_linked++;
     }

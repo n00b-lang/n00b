@@ -56,7 +56,8 @@ buf_append_help_escaped(n00b_buffer_t *b, const char *s)
 {
     /* Per spec: HELP escapes `\` → `\\` and newline → `\n` only. */
     if (!s) return;
-    for (const char *p = s; *p; p++) {
+    const char *p;
+    for (p = s; *p; p++) {
         char c = *p;
         if (c == '\\') {
             buf_append_bytes(b, "\\\\", 2);

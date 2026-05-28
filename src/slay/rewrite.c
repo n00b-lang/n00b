@@ -558,7 +558,8 @@ rewrite_emit_token_bytes(n00b_parse_tree_t *t, n00b_buffer_t *out,
             return;
         }
         if (*emitted_first && tok->leading_trivia) {
-            for (n00b_trivia_t *tv = tok->leading_trivia; tv; tv = tv->next) {
+            n00b_trivia_t *tv;
+            for (tv = tok->leading_trivia; tv; tv = tv->next) {
                 if (tv->text && tv->text->u8_bytes > 0) {
                     n00b_buffer_t *piece = n00b_buffer_from_bytes(
                         tv->text->data, (int64_t)tv->text->u8_bytes,

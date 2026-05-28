@@ -73,7 +73,8 @@ load_n00b_grammar(const char *grammar_file)
 
         const char *srcroot = getenv("MESON_SOURCE_ROOT");
 
-        for (const char **p = paths; *p; p++) {
+        const char **p;
+        for (p = paths; *p; p++) {
             f = fopen(*p, "r");
 
             if (f) {

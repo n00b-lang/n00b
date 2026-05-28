@@ -267,8 +267,9 @@ typedef struct {
 static FT_Face
 ft_load_from_paths(FT_Library lib, const char **paths)
 {
-    FT_Face face = nullptr;
-    for (const char **p = paths; *p; p++) {
+    FT_Face      face = nullptr;
+    const char **p;
+    for (p = paths; *p; p++) {
         FILE *f = fopen(*p, "rb");
         if (f) {
             fclose(f);

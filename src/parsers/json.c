@@ -692,7 +692,8 @@ encode_string(json_encoder_t *e, const char *s)
     enc_char(e, '"');
     if (!s) { enc_char(e, '"'); return; }
 
-    for (const char *p = s; *p; p++) {
+    const char *p;
+    for (p = s; *p; p++) {
         unsigned char c = (unsigned char)*p;
         switch (c) {
         case '"':  enc_write(e, esc_quote, 2);     break;

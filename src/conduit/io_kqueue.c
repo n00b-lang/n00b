@@ -676,7 +676,8 @@ kqueue_user_event_trigger(void *vctx, n00b_conduit_user_event_t *event)
 
     // Find the registered event to preserve udata pointer
     n00b_conduit_user_event_t *real = nullptr;
-    for (n00b_conduit_user_event_t *e = ctx->user_events; e; e = e->next) {
+    n00b_conduit_user_event_t *e;
+    for (e = ctx->user_events; e; e = e->next) {
         if (e->event_id == event->event_id) {
             real = e;
             break;

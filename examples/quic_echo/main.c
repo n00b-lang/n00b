@@ -120,7 +120,8 @@ echo_one_chan(n00b_quic_chan_t *chan)
 static void
 echo_walk(n00b_quic_conn_t *conn)
 {
-    for (n00b_quic_chan_t *c = n00b_quic_conn_first_chan(conn);
+    n00b_quic_chan_t *c;
+    for (c = n00b_quic_conn_first_chan(conn);
          c != NULL;
          c = n00b_quic_chan_next_in_conn(c)) {
         echo_one_chan(c);

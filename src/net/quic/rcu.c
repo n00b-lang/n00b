@@ -79,7 +79,8 @@ n00b_rcu_for_each_view(n00b_rcu_t *r,
     if (cur) {
         cb(cur, ctx);
     }
-    for (n00b_rcu_node_t *n = r->graveyard; n; n = n->next) {
+    n00b_rcu_node_t *n;
+    for (n = r->graveyard; n; n = n->next) {
         if (n->view) {
             cb(n->view, ctx);
         }

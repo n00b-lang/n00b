@@ -165,7 +165,8 @@ static_identity_register_unlocked(n00b_mmap_ctx_t                *ctx,
     }
 
     uint32_t live_matches = 0;
-    for (n00b_static_identity_entry_t *entry = ctx->static_identities;
+    n00b_static_identity_entry_t *entry;
+    for (entry = ctx->static_identities;
          entry != nullptr;
          entry = entry->next) {
         if (entry->range != nullptr && static_identity_equal(entry->identity, identity)) {
@@ -179,7 +180,7 @@ static_identity_register_unlocked(n00b_mmap_ctx_t                *ctx,
     }
 
     n00b_allocator_t *alloc = (n00b_allocator_t *)&ctx->pool;
-    n00b_static_identity_entry_t *entry = n00b_alloc_with_opts(
+    entry = n00b_alloc_with_opts(
         n00b_static_identity_entry_t,
         &(n00b_alloc_opts_t){.allocator = alloc});
 
@@ -200,7 +201,8 @@ static void
 static_identity_unregister_range_unlocked(n00b_mmap_ctx_t *ctx,
                                           n00b_alloc_range_t *range)
 {
-    for (n00b_static_identity_entry_t *entry = ctx->static_identities;
+    n00b_static_identity_entry_t *entry;
+    for (entry = ctx->static_identities;
          entry != nullptr;
          entry = entry->next) {
         if (entry->range == range) {
@@ -245,7 +247,8 @@ n00b_static_identity_lookup(const n00b_static_identity_t *identity,
     uint32_t              live_matches = 0;
 
     mmap_read_lock(ctx);
-    for (n00b_static_identity_entry_t *entry = ctx->static_identities;
+    n00b_static_identity_entry_t *entry;
+    for (entry = ctx->static_identities;
          entry != nullptr;
          entry = entry->next) {
         if (entry->range != nullptr && static_identity_equal(entry->identity, identity)) {

@@ -352,9 +352,9 @@
  */
 #define n00b_tree_foreach_child(t, var)                                                        \
     for (size_t _i = 0, _n = n00b_tree_num_children(t); _i < _n; ++_i)                         \
-        for (typeof((t)->node.children[0]) var = (t)->node.children[_i], *_once = (void *)1;   \
-             _once;                                                                            \
-             _once = nullptr)
+        for (int _once = 1; _once;)                                                            \
+            for (typeof((t)->node.children[0]) var = (t)->node.children[_i]; _once;            \
+                 _once = 0)
 
 /**
  * @brief Free a single tree node (does not recurse into children).

@@ -883,7 +883,7 @@ n00b_bootstrap = static_library('n00b_bootstrap',
     n00b_dll_src + n00b_bootstrap_only_src,
     include_directories: incdir,
     dependencies: deps + [libdl_dep, mir_dep, picoquic_dep, monocypher_dep],
-    c_args: exe_c_args,
+    c_args: exe_c_args + ['--ncc-no-gc-stack-maps'],
     link_args: link_args,
     link_whole: link_whole_libs,
     install: false,
@@ -892,7 +892,7 @@ n00b_bootstrap = static_library('n00b_bootstrap',
 n00b_static_init_helper = executable('n00b-static-init-helper',
     ['src/tools/n00b-static-init-helper.c'],
     include_directories: incdir,
-    c_args: exe_c_args,
+    c_args: exe_c_args + ['--ncc-no-gc-stack-maps'],
     link_args: exe_link_args,
     link_with: [n00b_bootstrap],
     dependencies: [picoquic_dep, monocypher_dep],
@@ -1693,15 +1693,15 @@ test('gc_scan_map', gc_scan_map_test, suite: 'unit')
 
 gc_stack_test = executable('test_gc_stack',
     ['test/unit/test_gc_stack.c'],
-    kwargs: test_common_kwargs,
+    kwargs: test_common_kwargs + {
+        'c_args': exe_c_args + ['--ncc-no-gc-stack-maps'],
+    },
 )
 test('gc_stack', gc_stack_test, suite: 'unit')
 
 gc_stack_nonlocal_test = executable('test_gc_stack_nonlocal',
     ['test/unit/test_gc_stack_nonlocal.c'],
-    kwargs: test_common_kwargs + {
-        'c_args': exe_c_args + ['--ncc-gc-stack-maps'],
-    },
+    kwargs: test_common_kwargs,
 )
 test('gc_stack_nonlocal', gc_stack_nonlocal_test, suite: 'unit')
 
@@ -1789,7 +1789,19 @@ test('finalizer', finalizer_test, suite: 'unit')
 
 current_allocator_test = executable('test_current_allocator',
     ['test/unit/test_current_allocator.c'],
-    kwargs: test_common_kwargs,
+    kwargs: test_common_kwargs + {
+        # The n00b_with_allocator() macro declares an
+        # n00b_allocator_scope_t in for-init using a [[gnu::cleanup]]
+        # attribute.  That struct has a pointer field (previous), so
+        # the gc-stack-maps transform sees it as an aggregate root in
+        # an unsupported statement context (for-init has no
+        # block_item insertion point).  Relaxed mode tells the
+        # transform to silently skip such cases instead of erroring.
+        # The macro's lifetime is bounded by the for-statement, so
+        # the missing tracking is bounded the same way; restoration
+        # still happens via the cleanup attribute.
+        'c_args': exe_c_args + ['--ncc-gc-stack-maps-relaxed'],
+    },
 )
 test('current_allocator', current_allocator_test, suite: 'unit')
 
@@ -2731,9 +2743,22 @@ unicode_test_names = [
 ]
 
 foreach name : unicode_test_names
+    test_kwargs = unicode_test_kwargs
+    # The n00b_unicode_foreach_{cp,grapheme,word,sentence} macros declare
+    # their iterator state (incl. a pointer-bearing aggregate guarded with
+    # [[gnu::cleanup]]) in for-init.  The gc-stack-maps transform can't
+    # insert a tracking frame around a for-init declaration, so this test
+    # opts into relaxed mode (skip-instead-of-error for unsupported
+    # statement contexts).  The cleanup attribute still runs, so the
+    # iterator is correctly torn down on every exit path.
+    if name == 'iter'
+        test_kwargs = unicode_test_kwargs + {
+            'c_args': exe_c_args + ['--ncc-gc-stack-maps-relaxed'],
+        }
+    endif
     exe = executable('test_unicode_' + name,
         'test/unit/test_unicode_' + name + '.c',
-        kwargs: unicode_test_kwargs,
+        kwargs: test_kwargs,
     )
     test('unicode_' + name, exe, suite: 'unit')
 endforeach

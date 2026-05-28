@@ -57,7 +57,8 @@ load_n00b_grammar(void)
     const char *srcroot = getenv("MESON_SOURCE_ROOT");
     FILE       *f       = NULL;
 
-    for (const char **p = paths; *p; p++) {
+    const char **p;
+    for (p = paths; *p; p++) {
         f = fopen(*p, "r");
 
         if (f) {
@@ -2252,7 +2253,8 @@ test_robustness(void)
         NULL,
     };
 
-    for (const char **p = inputs; *p; p++) {
+    const char **p;
+    for (p = inputs; *p; p++) {
         pipeline_result_t r = run_pipeline(*p);
         // Just verify no crashes.
         assert(r.diag != NULL);

@@ -379,7 +379,8 @@ check_external_argv(finding_buf_t                          *fb,
         bool found = false;
         char *path_copy = pf_strdup(path_env);
         char *saveptr   = nullptr;
-        for (char *dir = strtok_r(path_copy, ":", &saveptr); dir;
+        char *dir;
+        for (dir = strtok_r(path_copy, ":", &saveptr); dir;
              dir = strtok_r(nullptr, ":", &saveptr)) {
             char candidate[1024];
             snprintf(candidate, sizeof(candidate), "%s/%s", dir, cmd);

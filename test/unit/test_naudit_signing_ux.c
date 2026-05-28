@@ -151,7 +151,8 @@ write_roster(const char *roster_path,
         *nl = '\0';
     }
     int spaces = 0;
-    for (char *p = pub; *p; p++) {
+    char *p;
+    for (p = pub; *p; p++) {
         if (*p == ' ') {
             spaces++;
         }

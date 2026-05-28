@@ -188,7 +188,8 @@ static n00b_confspec_state_t *confspec_states;
 static n00b_confspec_state_t *
 n00b_confspec_state(uint64_t namespace_key, bool create)
 {
-    for (n00b_confspec_state_t *state = confspec_states; state; state = state->next) {
+    n00b_confspec_state_t *state;
+    for (state = confspec_states; state; state = state->next) {
         if (state->namespace_key == namespace_key) {
             return state;
         }
@@ -198,7 +199,7 @@ n00b_confspec_state(uint64_t namespace_key, bool create)
         return NULL;
     }
 
-    n00b_confspec_state_t *state = n00b_alloc(n00b_confspec_state_t);
+    state                        = n00b_alloc(n00b_confspec_state_t);
     state->namespace_key         = namespace_key;
     state->next                  = confspec_states;
     confspec_states              = state;
@@ -988,7 +989,8 @@ static n00b_once_slot_t *once_slots;
 static n00b_once_slot_t *
 n00b_once_slot(uint64_t key, bool create)
 {
-    for (n00b_once_slot_t *slot = once_slots; slot; slot = slot->next) {
+    n00b_once_slot_t *slot;
+    for (slot = once_slots; slot; slot = slot->next) {
         if (slot->key == key) {
             return slot;
         }
@@ -998,7 +1000,7 @@ n00b_once_slot(uint64_t key, bool create)
         return NULL;
     }
 
-    n00b_once_slot_t *slot = n00b_alloc(n00b_once_slot_t);
+    slot                   = n00b_alloc(n00b_once_slot_t);
     slot->key              = key;
     slot->next             = once_slots;
     once_slots             = slot;
@@ -1895,7 +1897,8 @@ n00b_codegen_method_dispatch(n00b_cg_session_t *s,
 
     snprintf(import_name, name_len + 1, "_vtm_%s_%llu", method_name, (unsigned long long)hash);
 
-    for (char *p = import_name; *p; p++) {
+    char *p;
+    for (p = import_name; *p; p++) {
         if (*p == '?') {
             *p = 'Q';
         }

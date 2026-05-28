@@ -222,7 +222,8 @@ _n00b_quic_conn_find_chan(n00b_quic_conn_t *conn, uint64_t stream_id)
     if (!conn) {
         return nullptr;
     }
-    for (n00b_quic_chan_t *c = conn->channels; c != nullptr; c = c->next_in_conn) {
+    n00b_quic_chan_t *c;
+    for (c = conn->channels; c != nullptr; c = c->next_in_conn) {
         if (c->stream_id == stream_id) {
             return c;
         }
@@ -530,7 +531,8 @@ n00b_quic_conn_stats(n00b_quic_conn_t *conn)
     /* Channel counters: walk our intrusive list. */
     uint64_t chans_open  = 0;
     uint64_t chans_total = 0;
-    for (n00b_quic_chan_t *c = conn->channels; c; c = c->next_in_conn) {
+    n00b_quic_chan_t *c;
+    for (c = conn->channels; c; c = c->next_in_conn) {
         chans_total++;
         n00b_quic_chan_state_t cst = c->state;
         if (cst == N00B_QUIC_CHAN_STATE_OPEN ||

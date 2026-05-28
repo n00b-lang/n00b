@@ -559,7 +559,8 @@ load_n00b_grammar(n00b_string_t *grammar_file)
             NULL,
         };
 
-        for (n00b_string_t **p = try_paths; *p; p++) {
+        n00b_string_t **p;
+        for (p = try_paths; *p; p++) {
             f = fopen((*p)->data, "r");
 
             if (f) {

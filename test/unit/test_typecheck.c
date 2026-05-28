@@ -825,7 +825,8 @@ load_n00b_grammar(void)
     const char *srcroot = getenv("MESON_SOURCE_ROOT");
     FILE       *f       = NULL;
 
-    for (const char **p = paths; *p; p++) {
+    const char **p;
+    for (p = paths; *p; p++) {
         f = fopen(*p, "r");
 
         if (f) {
@@ -1093,7 +1094,8 @@ test_tick_after_int_emits_token(void)
     int64_t tick_tid = n00b_token_id_from_text("'", 1);
     bool    found_tick = false;
 
-    n00b_stream_foreach(ts, tok) {
+    n00b_token_info_t *tok;
+    while ((tok = n00b_stream_next(ts)) != NULL) {
         if (tok->tid == tick_tid) {
             found_tick = true;
         }

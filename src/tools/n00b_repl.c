@@ -53,7 +53,8 @@ n00b_load_builtins(n00b_grammar_t *g, n00b_cg_session_t *session)
         NULL,
     };
 
-    for (const char **p = try_paths; *p; p++) {
+    const char **p;
+    for (p = try_paths; *p; p++) {
         f = fopen(*p, "r");
 
         if (f) {

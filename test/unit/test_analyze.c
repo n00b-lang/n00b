@@ -56,7 +56,8 @@ load_n00b_grammar(void)
     const char *srcroot = getenv("MESON_SOURCE_ROOT");
     FILE       *f       = NULL;
 
-    for (const char **p = paths; *p; p++) {
+    const char **p;
+    for (p = paths; *p; p++) {
         f = fopen(*p, "r");
 
         if (f) {
@@ -450,7 +451,8 @@ test_pipeline_robustness(void)
         NULL,
     };
 
-    for (const char **p = inputs; *p; p++) {
+    const char **p;
+    for (p = inputs; *p; p++) {
         n00b_diag_ctx_t *ctx = analyze_source(*p);
 
         // Just verify we got a valid context back.
