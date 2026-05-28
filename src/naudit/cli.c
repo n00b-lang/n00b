@@ -54,7 +54,10 @@
 #include "naudit/exemption.h"
 #include "naudit/guidance.h"
 #include "naudit/output.h"
+#include "naudit/signing_ux.h"
 #include "naudit/violation.h"
+
+#include <unistd.h>
 
 /* ---------------------------------------------------------------- */
 /* Helpers                                                          */
@@ -194,6 +197,38 @@ build_cmdr(void)
                        n00b_string_from_cstr(
                            "Warn-and-accept exemption + baseline records "
                            "that fail signature verification (default: drop)."));
+
+    /*
+     * WP-014: interactive signing ceremony flags.
+     *
+     * `--sign-pending` enters the interactive ceremony — walks
+     * pending proposals (per the white paper § 11) one at a time.
+     * Implemented as a separate flag from the WP-012 `--sign <file>`
+     * because the two modes have different semantics:
+     *   - `--sign <file>`     single-file non-interactive sign
+     *                         (the WP-012 surface).
+     *   - `--sign-pending`    interactive walk through every
+     *                         `<project>/audit/exemptions/*.bnf`
+     *                         lacking a `.sig`.
+     *
+     * `--initial-adoption` bulk-signs every pending proposal with a
+     * standardized rationale + 90-day expiry. The friction the white
+     * paper would have spread across the team's day-1 schedule is
+     * moved to the 90-day expiration boundary.
+     */
+    n00b_cmdr_add_flag(c, empty,
+                       n00b_string_from_cstr("--sign-pending"),
+                       N00B_CMDR_TYPE_BOOL, false,
+                       n00b_string_from_cstr(
+                           "Interactive signing ceremony: walk pending "
+                           "exemption proposals one at a time."));
+    n00b_cmdr_add_flag(c, empty,
+                       n00b_string_from_cstr("--initial-adoption"),
+                       N00B_CMDR_TYPE_BOOL, false,
+                       n00b_string_from_cstr(
+                           "Bulk-sign every pending proposal with the "
+                           "standardized 'preexisting' rationale + 90-day "
+                           "expiration. Use ONCE at project adoption."));
 
     n00b_cmdr_finalize(c);
     return c;
@@ -747,6 +782,153 @@ n00b_audit_run_cli(int argc, n00b_string_t *argv[])
             return n00b_result_ok(int, 1);
         }
         n00b_eprintf("n00b-audit: --verify: «#» — ok", file);
+        return n00b_result_ok(int, 0);
+    }
+
+    /*
+     * WP-014: --sign-pending / --initial-adoption dispatch. Like
+     * --sign / --verify, these short-circuit the audit pipeline.
+     * Both modes need `--key` + `--signer` and discover the project
+     * root from the guidance discovery walk (same as a normal audit
+     * run). The positional `<file>` is NOT required.
+     */
+    n00b_string_t *sp_flag = n00b_string_from_cstr("--sign-pending");
+    n00b_string_t *ia_flag = n00b_string_from_cstr("--initial-adoption");
+    bool want_sign_pending     = n00b_cmdr_flag_present(parse, sp_flag);
+    bool want_initial_adoption = n00b_cmdr_flag_present(parse, ia_flag);
+    if (want_sign_pending && want_initial_adoption) {
+        n00b_eprintf(
+            "n00b-audit: --sign-pending and --initial-adoption are mutually exclusive");
+        n00b_cmdr_result_free(parse);
+        return n00b_result_err(int, N00B_AUDIT_ERR_CLI_ARGS);
+    }
+    if (want_sign_pending || want_initial_adoption) {
+        n00b_string_t *key = n00b_cmdr_flag_present(parse, key_flag)
+                                 ? n00b_cmdr_flag_str(parse, key_flag)
+                                 : nullptr;
+        n00b_string_t *signer = n00b_cmdr_flag_present(parse, signer_flag)
+                                    ? n00b_cmdr_flag_str(parse, signer_flag)
+                                    : nullptr;
+        if (!key || key->u8_bytes == 0
+            || !signer || signer->u8_bytes == 0) {
+            n00b_eprintf(
+                "n00b-audit: --sign-pending / --initial-adoption require --key <path> + --signer <id>");
+            n00b_cmdr_result_free(parse);
+            return n00b_result_err(int, N00B_AUDIT_ERR_CLI_ARGS);
+        }
+        /*
+         * Resolve the project root: walk up from cwd looking for
+         * `audit-rules.bnf`, then take that file's parent directory.
+         */
+        n00b_string_t *cwd = n00b_get_current_directory();
+        if (!cwd) {
+            n00b_eprintf("n00b-audit: cwd lookup failed");
+            n00b_cmdr_result_free(parse);
+            return n00b_result_ok(int, 2);
+        }
+        auto disc = n00b_audit_find_guidance_file(cwd);
+        if (n00b_result_is_err(disc)) {
+            n00b_eprintf(
+                "n00b-audit: could not locate audit-rules.bnf — run from inside a naudit-configured project");
+            n00b_cmdr_result_free(parse);
+            return n00b_result_ok(int, 2);
+        }
+        n00b_string_t *rules_path = n00b_result_get(disc);
+        /* Project root = directory containing audit-rules.bnf. */
+        n00b_string_t *project_root = nullptr;
+        if (rules_path) {
+            int64_t n = (int64_t)rules_path->u8_bytes;
+            int64_t last = -1;
+            for (int64_t i = n - 1; i >= 0; i--) {
+                if (rules_path->data[i] == '/') {
+                    last = i;
+                    break;
+                }
+            }
+            if (last > 0) {
+                project_root = n00b_string_from_raw(rules_path->data,
+                                                    last);
+            }
+            else if (last == 0) {
+                project_root = n00b_string_from_cstr("/");
+            }
+        }
+        if (!project_root) {
+            n00b_eprintf(
+                "n00b-audit: could not derive project root from rules path");
+            n00b_cmdr_result_free(parse);
+            return n00b_result_ok(int, 2);
+        }
+
+        if (want_initial_adoption) {
+            /* Bulk path: 90-day expiry per the white paper § 11.3. */
+            n00b_eprintf(
+                "n00b-audit: --initial-adoption: bulk-signing pending proposals");
+            auto br = n00b_audit_sign_initial_adoption_bulk(
+                project_root, key, signer, 90);
+            n00b_cmdr_result_free(parse);
+            if (n00b_result_is_err(br)) {
+                n00b_eprintf(
+                    "n00b-audit: --initial-adoption failed: «#»",
+                    n00b_audit_err_str(n00b_result_get_err(br)));
+                return n00b_result_ok(int, 2);
+            }
+            n00b_eprintf(
+                "n00b-audit: --initial-adoption: signed «#» proposal(s)",
+                (int64_t)n00b_result_get(br));
+            return n00b_result_ok(int, 0);
+        }
+
+        /* Interactive ceremony. */
+        auto dr = n00b_audit_discover_proposals(project_root);
+        if (n00b_result_is_err(dr)) {
+            n00b_eprintf(
+                "n00b-audit: --sign-pending: proposal discovery failed: «#»",
+                n00b_audit_err_str(n00b_result_get_err(dr)));
+            n00b_cmdr_result_free(parse);
+            return n00b_result_ok(int, 2);
+        }
+        n00b_list_t(n00b_string_t *) *proposals = n00b_result_get(dr);
+        int64_t np = n00b_list_len(*proposals);
+        if (np == 0) {
+            n00b_eprintf(
+                "n00b-audit: --sign-pending: no pending proposals to sign");
+            n00b_cmdr_result_free(parse);
+            return n00b_result_ok(int, 0);
+        }
+        n00b_eprintf(
+            "n00b-audit: --sign-pending: walking «#» pending proposal(s)",
+            (int64_t)np);
+        n00b_naudit_input_source_t *src =
+            n00b_naudit_input_from_fd(STDIN_FILENO);
+        int signed_count   = 0;
+        int declined_count = 0;
+        for (int64_t i = 0; i < np; i++) {
+            n00b_string_t *p = n00b_list_get(*proposals, i);
+            if (!p) {
+                continue;
+            }
+            auto rr = n00b_audit_sign_proposal_interactive(
+                p, key, signer, src, 365);
+            if (n00b_result_is_err(rr)) {
+                n00b_eprintf(
+                    "n00b-audit: --sign-pending: «#» failed: «#»",
+                    p,
+                    n00b_audit_err_str(n00b_result_get_err(rr)));
+                continue;
+            }
+            int rc = n00b_result_get(rr);
+            if (rc == 0) {
+                signed_count++;
+            }
+            else {
+                declined_count++;
+            }
+        }
+        n00b_eprintf(
+            "n00b-audit: --sign-pending: signed «#», declined «#»",
+            (int64_t)signed_count, (int64_t)declined_count);
+        n00b_cmdr_result_free(parse);
         return n00b_result_ok(int, 0);
     }
 
