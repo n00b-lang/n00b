@@ -37,6 +37,8 @@ aws_generated_header = custom_target(
     aws_shim_crate_root / 'src' / 'runtime.rs',
     aws_shim_crate_root / 'src' / 'config.rs',
     aws_shim_crate_root / 'src' / 'sts.rs',
+    aws_shim_crate_root / 'src' / 'sqs.rs',
+    aws_shim_crate_root / 'src' / 'sns.rs',
   ],
   build_by_default: true,
 )
@@ -51,6 +53,9 @@ if fs.exists(meson.current_source_dir() / 'n00b_aws_sts.c')
 endif
 if fs.exists(meson.current_source_dir() / 'n00b_aws_sqs.c')
   n00b_aws_src += files('n00b_aws_sqs.c')
+endif
+if fs.exists(meson.current_source_dir() / 'n00b_aws_sns.c')
+  n00b_aws_src += files('n00b_aws_sns.c')
 endif
 
 if n00b_aws_src.length() > 0

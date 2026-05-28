@@ -280,6 +280,82 @@ n00b_aws_sqs_get_queue_attributes(n00b_aws_config_t *cfg,
     return n00b_result_ok(n00b_list_t(n00b_string_t *) *, out);
 }
 
+n00b_result_t(n00b_string_t *)
+n00b_aws_sqs_create_queue(n00b_aws_config_t *cfg,
+                          n00b_string_t     *queue_name)
+{
+    if (!cfg || !cfg->shim
+        || !queue_name || queue_name->u8_bytes == 0) {
+        return n00b_result_err(n00b_string_t *, N00B_AWS_ERR_INVALID_ARG);
+    }
+
+    n00b_aws_shim_sqs_create_queue_input_t input = {
+        .queue_name       = queue_name->data,
+        .attribute_keys   = nullptr,
+        .attribute_values = nullptr,
+        .attributes_count = 0,
+        .tag_keys         = nullptr,
+        .tag_values       = nullptr,
+        .tags_count       = 0,
+    };
+    n00b_aws_shim_sqs_create_queue_output_t *raw = nullptr;
+    int rc;
+    {
+        n00b_stw_suspend_ctx stw_ctx;
+        n00b_thread_suspend(stw_ctx);
+        rc = n00b_aws_shim_sqs_create_queue(cfg->shim, &input, &raw);
+        n00b_thread_resume(stw_ctx);
+    }
+    if (rc != N00B_AWS_OK || !raw) {
+        return n00b_result_err(n00b_string_t *, rc);
+    }
+    n00b_string_t *url = n00b_string_from_cstr(raw->queue_url
+                                                   ? raw->queue_url
+                                                   : "");
+    n00b_aws_shim_sqs_create_queue_free(raw);
+    return n00b_result_ok(n00b_string_t *, url);
+}
+
+n00b_aws_status_t
+n00b_aws_sqs_set_queue_attributes(n00b_aws_config_t            *cfg,
+                                  n00b_string_t                *queue_url,
+                                  n00b_list_t(n00b_string_t *) *attributes)
+{
+    if (!cfg || !cfg->shim
+        || !queue_url || queue_url->u8_bytes == 0
+        || !attributes) {
+        return N00B_AWS_ERR_INVALID_ARG;
+    }
+
+    /* attributes is an alternating-kv list; split into parallel arrays. */
+    int total = n00b_list_len(*attributes);
+    if (total <= 0 || (total & 1) != 0) {
+        return N00B_AWS_ERR_INVALID_ARG;
+    }
+    size_t       count = (size_t)(total / 2);
+    const char **keys  = n00b_alloc_array(const char *, count);
+    const char **vals  = n00b_alloc_array(const char *, count);
+    for (size_t i = 0; i < count; i++) {
+        n00b_string_t *k = n00b_list_get(*attributes, (int)(2 * i));
+        n00b_string_t *v = n00b_list_get(*attributes, (int)(2 * i + 1));
+        keys[i] = k ? k->data : "";
+        vals[i] = v ? v->data : "";
+    }
+
+    int rc;
+    {
+        n00b_stw_suspend_ctx stw_ctx;
+        n00b_thread_suspend(stw_ctx);
+        rc = n00b_aws_shim_sqs_set_queue_attributes(cfg->shim,
+                                                    queue_url->data,
+                                                    keys,
+                                                    vals,
+                                                    count);
+        n00b_thread_resume(stw_ctx);
+    }
+    return (n00b_aws_status_t)rc;
+}
+
 /* =========================================================================
  * Broker-neutral queue (n00b_queue_t) backend over SQS
  * ========================================================================= */
