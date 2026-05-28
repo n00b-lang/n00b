@@ -7,13 +7,57 @@
     c: .c, .h
 
 # -----------------------------------------------------------------
+# WP-016 — filter definitions.
+#
+# Each `@filter_def` block declares a named predicate referenced by
+# one or more `@rule` blocks via `@filter <name>`. With the WP-016
+# fragment-skip guard, rules query NTs already in the base c_ncc.bnf
+# grammar instead of grafting a synthetic NT, so the filter narrows
+# the base NT (e.g. `<provided_identifier>`) to the specific tokens
+# the rule cares about via `arg.text_equals("…")`.
+# -----------------------------------------------------------------
+
+@filter_def is_null_keyword
+    expr: arg.text_equals("NULL")
+    description: Matches the literal identifier `NULL`.
+
+@filter_def is_malloc_family
+    expr: arg.text_equals("malloc") or arg.text_equals("calloc") or arg.text_equals("realloc") or arg.text_equals("free") or arg.text_equals("_n00b_alloc_raw")
+    description: Matches any of the libc malloc-family identifiers plus _n00b_alloc_raw.
+
+@filter_def is_attribute_legacy_keyword
+    expr: arg.text_equals("__attribute__")
+    description: Matches the legacy GCC `__attribute__` spelling.
+
+@filter_def is_typeof_legacy_keyword
+    expr: arg.text_equals("__typeof__")
+    description: Matches the legacy GCC `__typeof__` spelling.
+
+@filter_def is_va_list_legacy_companion
+    expr: arg.text_equals("va_start") or arg.text_equals("va_arg") or arg.text_equals("va_end")
+    description: Matches va_start/va_arg/va_end. va_list itself excluded (DF-G).
+
+@filter_def is_libc_io_identifier
+    expr: arg.text_equals("printf") or arg.text_equals("fprintf") or arg.text_equals("sprintf") or arg.text_equals("snprintf") or arg.text_equals("vfprintf") or arg.text_equals("puts") or arg.text_equals("fputs") or arg.text_equals("fopen") or arg.text_equals("fclose") or arg.text_equals("fread") or arg.text_equals("fwrite") or arg.text_equals("getc") or arg.text_equals("putc") or arg.text_equals("open") or arg.text_equals("read") or arg.text_equals("write") or arg.text_equals("close") or arg.text_equals("lseek") or arg.text_equals("dup") or arg.text_equals("dup2") or arg.text_equals("pipe") or arg.text_equals("socket") or arg.text_equals("connect") or arg.text_equals("bind") or arg.text_equals("listen") or arg.text_equals("accept")
+    description: Matches any of the 26 banned libc I/O identifiers.
+
+@filter_def is_legacy_alignment_identifier
+    expr: arg.text_equals("__alignof__") or arg.text_equals("__alignas__")
+    description: Matches __alignof__ / __alignas__. _Static_assert / __thread covered separately if needed.
+
+@filter_def is_file_open_call
+    expr: arg.text_equals("n00b_file_open")
+    description: Matches the n00b_file_open identifier.
+
+# -----------------------------------------------------------------
 # Rule 1 -- WP-001 -- NULL -> nullptr (section 2.1)
 # -----------------------------------------------------------------
 @rule n00b.s2_1.null
 @title NULL -> nullptr
 @section section 2.1
 @language c
-@violation_nt n00b_audit_v_null
+@violation_nt provided_identifier
+@filter is_null_keyword
 @rationale `nullptr` is a C23 standard keyword with type `nullptr_t`. It cannot
     silently coerce to an integer and is type-safe in generic macros.
     This rule is total: there is no acceptable use of `NULL` in new n00b
@@ -26,13 +70,6 @@
     return nullptr;
 @guidance Replace NULL with nullptr in all expression positions.
 
-<n00b_audit_v_null> ::= %"NULL"
-rewrite {
-    template: nullptr
-    description: NULL → nullptr (C23).
-}
-<provided_identifier> ::= <n00b_audit_v_null>
-
 # -----------------------------------------------------------------
 # Rule 2 -- WP-002 -- malloc family (section 2.3)
 # -----------------------------------------------------------------
@@ -40,7 +77,8 @@ rewrite {
 @title malloc family -> n00b_alloc family
 @section section 2.3
 @language c
-@violation_nt n00b_audit_v_malloc_call
+@violation_nt provided_identifier
+@filter is_malloc_family
 @rationale The libn00b allocator family (n00b_alloc / n00b_alloc_array /
     n00b_alloc_flex / n00b_free) zero-fills, embeds source-location and
     type-hash metadata for the GC, and threads caller-selected arenas
@@ -55,13 +93,6 @@ rewrite {
     n00b_free(t);
 @guidance Replace malloc/calloc/realloc/free (and the underscore-internal _n00b_alloc_raw) with the n00b_alloc family.
 
-<n00b_audit_v_malloc_call> ::= %"malloc"
-<n00b_audit_v_malloc_call> ::= %"calloc"
-<n00b_audit_v_malloc_call> ::= %"realloc"
-<n00b_audit_v_malloc_call> ::= %"free"
-<n00b_audit_v_malloc_call> ::= %"_n00b_alloc_raw"
-<provided_identifier> ::= <n00b_audit_v_malloc_call>
-
 # -----------------------------------------------------------------
 # Rule 3 -- WP-003 -- legacy __attribute__ spelling (section 2.5)
 # -----------------------------------------------------------------
@@ -69,7 +100,8 @@ rewrite {
 @title __attribute__((...)) -> [[...]] / [[gnu::...]]
 @section section 2.5
 @language c
-@violation_nt n00b_audit_v_attribute_legacy
+@violation_nt _kw_kw_gcc_attribute
+@filter is_attribute_legacy_keyword
 @rationale C23 standardized the bracket-attribute syntax. The legacy
     __attribute__((...)) spelling is portable across older toolchains but
     in n00b we target C23 + ncc, so the modern form is the rule. ncc has
@@ -85,9 +117,6 @@ rewrite {
     [[gnu::cleanup(close_fd)]] int fd;
 @guidance Replace __attribute__((X)) with [[X]] (or [[gnu::X]] for non-standard attributes).
 
-<n00b_audit_v_attribute_legacy> ::= %"__attribute__"
-<_kw_kw_gcc_attribute> ::= <n00b_audit_v_attribute_legacy>
-
 # -----------------------------------------------------------------
 # Rule 4 -- WP-003 -- legacy __typeof__ spelling (section 2.6)
 # -----------------------------------------------------------------
@@ -95,7 +124,8 @@ rewrite {
 @title __typeof__ -> typeof
 @section section 2.6
 @language c
-@violation_nt n00b_audit_v_typeof_legacy
+@violation_nt _kw_kw_typeof
+@filter is_typeof_legacy_keyword
 @rationale C23 standardized typeof (no underscores). __typeof__ is the
     legacy GCC spelling; same applies to typeof_unqual, _Static_assert,
     __thread, __alignof__, __alignas__ (the last two are covered by
@@ -104,13 +134,6 @@ rewrite {
 @good typeof(x) tmp = x;
 @guidance Replace __typeof__ with typeof.
 
-<n00b_audit_v_typeof_legacy> ::= %"__typeof__"
-rewrite {
-    template: typeof
-    description: __typeof__ → typeof (C23).
-}
-<_kw_kw_typeof> ::= <n00b_audit_v_typeof_legacy>
-
 # -----------------------------------------------------------------
 # Rule 5 -- WP-003 -- legacy va_list usage (section 2.8)
 # -----------------------------------------------------------------
@@ -118,7 +141,8 @@ rewrite {
 @title va_list / stdarg.h -> ncc's checked variadics
 @section section 2.8
 @language c
-@violation_nt n00b_audit_v_va_list_legacy
+@violation_nt provided_identifier
+@filter is_va_list_legacy_companion
 @rationale stdarg.h is explicitly banned (NCC.md "NO LIBC ALLOWED"). Use
     ncc's `+` checked variadic syntax, which gives compile-time type
     checking at call sites that the legacy va_list / va_start / va_arg /
@@ -146,11 +170,6 @@ rewrite {
     }
 @guidance Replace va_list / va_start / va_arg / va_end with ncc's `+` checked variadic syntax.
 
-<n00b_audit_v_va_list_legacy> ::= %"va_start"
-<n00b_audit_v_va_list_legacy> ::= %"va_arg"
-<n00b_audit_v_va_list_legacy> ::= %"va_end"
-<provided_identifier> ::= <n00b_audit_v_va_list_legacy>
-
 # -----------------------------------------------------------------
 # Rule 6 -- WP-003 -- libc I/O ban (section 2.10)
 # -----------------------------------------------------------------
@@ -158,7 +177,8 @@ rewrite {
 @title libc I/O -> conduit / file substrate
 @section section 2.10
 @language c
-@violation_nt n00b_audit_v_libc_io
+@violation_nt provided_identifier
+@filter is_libc_io_identifier
 @rationale <stdio.h> linkage and POSIX open/read/write/close are banned
     (NCC.md "NO LIBC ALLOWED"). Replacements live under include/conduit/
     and include/text/. Header-only libc (memcpy, strlen, memmove) is
@@ -178,34 +198,6 @@ rewrite {
     n00b_print(buf, .fd = fd);
 @guidance Replace libc I/O calls with the corresponding conduit / n00b_print / n00b_printf surface.
 
-<n00b_audit_v_libc_io> ::= %"printf"
-<n00b_audit_v_libc_io> ::= %"fprintf"
-<n00b_audit_v_libc_io> ::= %"sprintf"
-<n00b_audit_v_libc_io> ::= %"snprintf"
-<n00b_audit_v_libc_io> ::= %"vfprintf"
-<n00b_audit_v_libc_io> ::= %"puts"
-<n00b_audit_v_libc_io> ::= %"fputs"
-<n00b_audit_v_libc_io> ::= %"fopen"
-<n00b_audit_v_libc_io> ::= %"fclose"
-<n00b_audit_v_libc_io> ::= %"fread"
-<n00b_audit_v_libc_io> ::= %"fwrite"
-<n00b_audit_v_libc_io> ::= %"getc"
-<n00b_audit_v_libc_io> ::= %"putc"
-<n00b_audit_v_libc_io> ::= %"open"
-<n00b_audit_v_libc_io> ::= %"read"
-<n00b_audit_v_libc_io> ::= %"write"
-<n00b_audit_v_libc_io> ::= %"close"
-<n00b_audit_v_libc_io> ::= %"lseek"
-<n00b_audit_v_libc_io> ::= %"dup"
-<n00b_audit_v_libc_io> ::= %"dup2"
-<n00b_audit_v_libc_io> ::= %"pipe"
-<n00b_audit_v_libc_io> ::= %"socket"
-<n00b_audit_v_libc_io> ::= %"connect"
-<n00b_audit_v_libc_io> ::= %"bind"
-<n00b_audit_v_libc_io> ::= %"listen"
-<n00b_audit_v_libc_io> ::= %"accept"
-<provided_identifier> ::= <n00b_audit_v_libc_io>
-
 # -----------------------------------------------------------------
 # Rule 7 -- WP-004 -- legacy spellings (section 13)
 # -----------------------------------------------------------------
@@ -213,7 +205,8 @@ rewrite {
 @title legacy spellings -> C23 spellings
 @section section 13
 @language c
-@violation_nt n00b_audit_v_legacy_spellings
+@violation_nt provided_identifier
+@filter is_legacy_alignment_identifier
 @rationale C23 standardized the modern spellings of these identifiers:
     `static_assert` (replaces `_Static_assert`), `thread_local` (replaces
     `__thread`), `alignof` (replaces `__alignof__`), `alignas` (replaces
@@ -228,30 +221,6 @@ rewrite {
     size_t a = alignof(double);
     alignas(16) char buf[64];
 @guidance Replace _Static_assert / __thread / __alignof__ / __alignas__ with their C23 spellings static_assert / thread_local / alignof / alignas.
-
-<n00b_audit_v_legacy_spellings> ::= %"_Static_assert"
-rewrite {
-    template: static_assert
-    description: _Static_assert → static_assert (C23).
-}
-<n00b_audit_v_legacy_spellings> ::= %"__thread"
-rewrite {
-    template: thread_local
-    description: __thread → thread_local (C23).
-}
-<n00b_audit_v_legacy_spellings> ::= %"__alignof__"
-rewrite {
-    template: alignof
-    description: __alignof__ → alignof (C23).
-}
-<n00b_audit_v_legacy_spellings> ::= %"__alignas__"
-rewrite {
-    template: alignas
-    description: __alignas__ → alignas (C23).
-}
-<_kw_kw_static_assert> ::= <n00b_audit_v_legacy_spellings>
-<_kw_kw_storage_class> ::= <n00b_audit_v_legacy_spellings>
-<provided_identifier> ::= <n00b_audit_v_legacy_spellings>
 
 # -----------------------------------------------------------------
 # Rule 8 -- WP-012 -- path canonicalization on n00b_file_open
@@ -276,7 +245,8 @@ rewrite {
 @title n00b_file_open calls must be on canonicalized paths
 @section path handling (memory: feedback_path_handling.md)
 @language c
-@violation_nt n00b_audit_v_file_open_call
+@violation_nt provided_identifier
+@filter is_file_open_call
 @rationale Every libn00b/naudit function taking a path argument should
     call `n00b_path_canonical` internally before using it. Relative
     paths bind to the caller's cwd at the moment of use, which makes
@@ -292,9 +262,6 @@ rewrite {
 @good path = n00b_path_canonical(path);
     auto fr = n00b_file_open(path, .kind = N00B_FILE_KIND_MMAP);
 @guidance Wrap path arguments in `n00b_path_canonical` at function entry, before passing to `n00b_file_open`.
-
-<n00b_audit_v_file_open_call> ::= %"n00b_file_open"
-<provided_identifier> ::= <n00b_audit_v_file_open_call>
 
 # -----------------------------------------------------------------
 # Rule 9 -- WP-009 Phase 4 -- public function-call prefix

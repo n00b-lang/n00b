@@ -290,25 +290,38 @@ get_or_load_grammar(n00b_audit_engine_t *engine,
 
     /*
      * Step 3: append each applicable rule's fragment to the
-     * combined text. A rule applies to this language if it has
-     * no `@language` annotation (applies to all) or if its
-     * `@language` list contains this language's name.
+     * combined text — ONLY for unknown languages.
      *
-     * Phase 1 keeps the existing bnf_fragment shape; future
-     * phases will allow rules without fragments (query-mode).
+     * WP-016: for KNOWN languages (those with a registered
+     * grammar_path, e.g. c → c_ncc.bnf), the base grammar is
+     * used as-is and rules query the resulting parse tree.
+     * Appending each rule's fragment onto a complete C grammar
+     * extended existing NTs with alternative productions and
+     * exploded parse-time ambiguity (Rule 1's
+     * `<provided_identifier> ::= <n00b_audit_v_null>` made every
+     * identifier 2-way ambiguous, etc.). For known languages
+     * rules must instead point `@violation_nt` at an existing
+     * base-grammar NT and narrow via `@filter`.
+     *
+     * For UNKNOWN languages (`grammar_path == nullptr`) — none
+     * currently registered — the fragment-build path remains
+     * available so a tiny grammar can be assembled from rule
+     * fragments alone.
      */
     size_t nrules = n00b_list_len(*engine->guidance->rules);
-    for (size_t i = 0; i < nrules; i++) {
-        n00b_audit_rule_t *rule = n00b_list_get(*engine->guidance->rules,
-                                                i);
-        if (!rule || !rule->bnf_fragment
-            || rule->bnf_fragment->u8_bytes == 0) {
-            continue;
+    if (!lang->grammar_path) {
+        for (size_t i = 0; i < nrules; i++) {
+            n00b_audit_rule_t *rule = n00b_list_get(*engine->guidance->rules,
+                                                    i);
+            if (!rule || !rule->bnf_fragment
+                || rule->bnf_fragment->u8_bytes == 0) {
+                continue;
+            }
+            if (!rule_applies_to_language(rule, lang->name)) {
+                continue;
+            }
+            append_fragment(combined, rule->bnf_fragment);
         }
-        if (!rule_applies_to_language(rule, lang->name)) {
-            continue;
-        }
-        append_fragment(combined, rule->bnf_fragment);
     }
 
     /* Step 4: load the merged grammar. */
@@ -340,6 +353,14 @@ get_or_load_grammar(n00b_audit_engine_t *engine,
             continue;
         }
         if (!n00b_dict_contains(grammar->nt_map, rule->violation_nt)) {
+            n00b_eprintf(
+                "n00b-audit: rule '«#»': @violation_nt '«#»' does "
+                "not resolve to an NT in the «#» base grammar. "
+                "For known languages, @violation_nt must name an "
+                "existing base-grammar NT; use @filter to narrow.",
+                rule->id ? rule->id : n00b_string_empty(),
+                rule->violation_nt,
+                lang->name);
             n00b_grammar_free(grammar);
             *err_out = N00B_AUDIT_ERR_GUIDANCE_SCHEMA;
             return nullptr;
@@ -1156,9 +1177,12 @@ n00b_audit_engine_check_file(n00b_audit_engine_t *engine,
         .reset_cb = tok->reset_cb);
     n00b_token_stream_t *ts = n00b_token_stream_new(sc);
 
-    /* Step 3: parse. */
+    /* Step 3: parse. PWZ_ONLY — Earley fallback is never useful for
+     * this use case (c_ncc.bnf is unambiguous in practice); falling
+     * back grinds for hours on real input. If PWZ fails, it's a real
+     * parse error to report, not a signal to keep trying. */
     n00b_parse_result_t *pr = n00b_grammar_parse(grammar, ts,
-                                                 N00B_PARSE_MODE_DEFAULT);
+                                                 N00B_PARSE_MODE_PWZ_ONLY);
     if (!n00b_parse_result_ok(pr)) {
         n00b_parse_result_free(pr);
         return n00b_result_err(n00b_list_t(n00b_audit_violation_t *) *,

@@ -371,6 +371,29 @@ n00b_naudit_match_starts_with(n00b_naudit_match_t *self, n00b_string_t *prefix)
 }
 
 /*
+ * `arg.text_equals(needle)` — bool result; true iff the match's
+ * `.text` equals `needle` exactly (byte-exact). WP-016 added this
+ * for the tree-query rule rewrites: filters narrow base-grammar
+ * NTs (e.g., `<provided_identifier>`, which matches every C
+ * identifier) to specific tokens like "NULL" or "malloc". Equality
+ * is the right semantic here — `text_contains("NULL")` would also
+ * hit identifiers like `IS_NULL_TERMINATED`.
+ */
+static bool
+n00b_naudit_match_text_equals(n00b_naudit_match_t *self,
+                              n00b_string_t       *needle)
+{
+    if (!self || !needle) {
+        return false;
+    }
+    n00b_string_t *text = n00b_naudit_match_text(self);
+    if (!text) {
+        return false;
+    }
+    return n00b_unicode_str_eq(text, needle);
+}
+
+/*
  * `arg.text_contains(needle)` — bool result; true iff the match's
  * `.text` contains `needle` as a substring. Byte-exact search; null /
  * empty / oversized-needle inputs return false. Added for rules that
@@ -569,6 +592,15 @@ n00b_naudit_match_type_register(void)
     n00b_type_add_method(th, &(n00b_method_t){
         .fn          = (n00b_vtable_entry)n00b_naudit_match_starts_with,
         .name        = "starts_with",
+        .return_type = {
+            .type_hash = typehash(bool),
+            .type_name = "bool",
+        },
+    });
+
+    n00b_type_add_method(th, &(n00b_method_t){
+        .fn          = (n00b_vtable_entry)n00b_naudit_match_text_equals,
+        .name        = "text_equals",
         .return_type = {
             .type_hash = typehash(bool),
             .type_name = "bool",
