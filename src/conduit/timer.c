@@ -23,14 +23,25 @@ timer_alloc(n00b_conduit_t *c, uint32_t interval_ms, bool repeating)
     timer->cancelled   = false;
     timer->next        = nullptr;
 
-    // Create topic for this timer
-    n00b_result_t(n00b_conduit_topic_base_t *) topic_res =
-        n00b_conduit_topic_get(c, N00B_CONDUIT_URI_TIMER(timer->id),
-                                sizeof(n00b_conduit_topic_t(n00b_conduit_timer_payload_t)));
-    if (n00b_result_is_err(topic_res)) {
+    /* Create + fully initialize the topic for this timer. We have to
+     * go through n00b_conduit_topic_init (the typed init macro)
+     * rather than just n00b_conduit_topic_get, because topic_get only
+     * sets up the base struct — it explicitly leaves
+     * `topic->subscriptions` uninitialized for the caller (see the
+     * comment block in conduit.c above n00b_conduit_topic_get).
+     * Without the typed init, topic->subscriptions.data is null and
+     * the first subscribe push / first deliver walk dereferences
+     * garbage (crashes EXC_BAD_ACCESS in
+     * _N00B_TOPIC_FN(deliver, n00b_conduit_timer_payload_t) under
+     * load — observed in wax raw-gateway crash report
+     * 2026-05-28-162937). */
+    n00b_conduit_topic_t(n00b_conduit_timer_payload_t) *typed_topic =
+        n00b_conduit_topic_init(n00b_conduit_timer_payload_t, c,
+                                N00B_CONDUIT_URI_TIMER(timer->id));
+    if (typed_topic == nullptr) {
         return nullptr;
     }
-    timer->topic = n00b_result_get(topic_res);
+    timer->topic = (n00b_conduit_topic_base_t *)typed_topic;
 
     return timer;
 }
