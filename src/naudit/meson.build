@@ -27,4 +27,5 @@ n00b_naudit_src = files(
     'rule_file_tokenizer.c',
     'signing_ux.c',
     'tokenizer_registry.c',
+    'trust_root.c',
 )

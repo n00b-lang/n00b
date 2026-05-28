@@ -77,6 +77,7 @@
 #include "naudit/languages.h"
 #include "naudit/tokenizer_registry.h"
 #include "naudit/filter.h"
+#include "naudit/trust_root.h"
 #include "n00b/eval.h"
 
 /* ---------------------------------------------------------------- */
@@ -142,6 +143,23 @@ struct n00b_audit_engine {
      * re-verifies.
      */
     bool                                                       signatures_applied;
+    /*
+     * WP-015: `--repo-protected` policy flag. When set, the
+     * REPO-source-roster warning and the unsigned-rule-file warning
+     * downgrade from prominent to informational (per white paper
+     * § 9.2 + § 6.3 — the running environment has asserted that
+     * agent-write access is mediated by CI / pre-commit).
+     */
+    bool                                                       repo_protected;
+    /*
+     * WP-015: track whether the trust-root binding fingerprint
+     * mismatched. Set by `apply_signature_gate` when the on-disk
+     * SYSTEM-slot roster's SHA-256 doesn't match the directive
+     * in `audit-rules.bnf`. When set, `check_file` short-circuits
+     * with `N00B_AUDIT_ERR_ENGINE_BAD_ARGS` — the audit refuses
+     * to proceed.
+     */
+    bool                                                       trust_root_failed;
 };
 
 /* ---------------------------------------------------------------- */
@@ -373,6 +391,8 @@ n00b_audit_engine_new(n00b_audit_guidance_t *guidance)
     e->ignore_baseline    = false;
     e->allow_unsigned     = false;
     e->signatures_applied = false;
+    e->repo_protected     = false;
+    e->trust_root_failed  = false;
 
     return n00b_result_ok(n00b_audit_engine_t *, e);
 }
@@ -408,6 +428,23 @@ n00b_audit_engine_set_allow_unsigned(n00b_audit_engine_t *engine,
         return;
     }
     engine->allow_unsigned = allow;
+}
+
+/*
+ * WP-015: setter for the engine's `repo_protected` policy. When
+ * set, the REPO-source-roster + unsigned-rule-file warnings
+ * downgrade from prominent to informational. Default false (the
+ * agent-writable working tree is the conservative assumption per
+ * white paper § 9.2 + § 6.3).
+ */
+void
+n00b_audit_engine_set_repo_protected(n00b_audit_engine_t *engine,
+                                      bool                 protected_)
+{
+    if (!engine) {
+        return;
+    }
+    engine->repo_protected = protected_;
 }
 
 /* ---------------------------------------------------------------- */
@@ -610,6 +647,268 @@ bind_captures(n00b_audit_rule_t   *rule,
  * (the gate is advisory — the affected records simply disappear
  * from the suppression list in the strict path).
  */
+/*
+ * WP-015 — Trust-root checks (run once per engine, ahead of the
+ * per-record signature gate).
+ *
+ *   1. Roster-source kind:
+ *        - REPO: warn (prominent without --repo-protected;
+ *                informational with).
+ *        - SYSTEM / ENV / NONE: no warning.
+ *   2. Fingerprint binding (§ 9.1): when the SYSTEM slot is the
+ *      source AND `guidance->expected_roster_sha256` is set:
+ *        - Hash the on-disk roster.
+ *        - Compare to the directive value.
+ *        - Mismatch → set `engine->trust_root_failed`; the
+ *          subsequent `check_file` short-circuits with
+ *          `N00B_AUDIT_ERR_ENGINE_BAD_ARGS`.
+ *      (ENV-source rosters skip binding by design — the user/CI
+ *      override is taken as an intentional bypass of the system
+ *      trust-root mechanism for one-off audits.)
+ *   3. Rule-file signature (§ 6.3): when the roster is available:
+ *        - Look for `<audit-rules.bnf>.sig`.
+ *        - 0: silent accept.
+ *        - 1 (unsigned): warn (prominent without --repo-protected;
+ *               informational with).
+ *        - 2 (bad signature / non-roster signer): refuse — sets
+ *               `engine->trust_root_failed`.
+ */
+static void
+apply_trust_root_checks(n00b_audit_engine_t *engine)
+{
+    n00b_audit_guidance_t *g = engine->guidance;
+    if (!g) {
+        return;
+    }
+
+    n00b_string_t *project_root = g->project_root;
+    /*
+     * Read the source kind from the guidance struct rather than
+     * re-walking the chain via `n00b_audit_roster_source_kind`.
+     * The loader cached both `allowed_signers_path` and
+     * `allowed_signers_source` from a single chain walk; doing a
+     * second walk here could observe different env-var state and
+     * desynchronize the path/kind pair (e.g., path came from ENV
+     * but the second walk would now return SYSTEM, triggering
+     * fingerprint binding against the wrong path). See WP-015
+     * code audit W1.
+     */
+    n00b_audit_roster_source_t kind = g->allowed_signers_source;
+
+    /* (1) repo-source warning. */
+    if (kind == N00B_AUDIT_ROSTER_SOURCE_REPO) {
+        if (engine->repo_protected) {
+            n00b_eprintf(
+                "n00b-audit: info: trust roster is at repo path "
+                "<project_root>/audit/allowed_signers — --repo-protected "
+                "asserted; verifier proceeding");
+        }
+        else {
+            n00b_eprintf(
+                "n00b-audit: warning: trust roster lives in the repo "
+                "(audit/allowed_signers); commits modifying it must be "
+                "commit-signed by a previously-trusted signer for this "
+                "audit to be trustworthy (white paper § 9.2). Use "
+                "--repo-protected to acknowledge a protected CI / "
+                "pre-commit context");
+        }
+    }
+
+    /* (2) fingerprint binding — SYSTEM slot only. */
+    if (kind == N00B_AUDIT_ROSTER_SOURCE_SYSTEM
+        && g->allowed_signers_path
+        && g->expected_roster_sha256
+        && g->expected_roster_sha256->u8_bytes > 0) {
+        auto vr = n00b_audit_verify_roster_fingerprint(
+            g->allowed_signers_path, g->expected_roster_sha256);
+        if (n00b_result_is_err(vr)) {
+            n00b_eprintf(
+                "n00b-audit: error: could not hash trust roster at «#»: «#»",
+                g->allowed_signers_path,
+                n00b_audit_err_str(n00b_result_get_err(vr)));
+            engine->trust_root_failed = true;
+            return;
+        }
+        int matched = n00b_result_get(vr);
+        if (matched != 0) {
+            auto hr = n00b_audit_roster_sha256(g->allowed_signers_path);
+            n00b_string_t *actual = n00b_result_is_ok(hr)
+                                        ? n00b_result_get(hr)
+                                        : r"(unknown)";
+            n00b_eprintf(
+                "n00b-audit: error: trust-root fingerprint mismatch — "
+                "@expected_roster_sha256 says «#» but on-disk roster «#» "
+                "hashes to «#»; refusing audit (white paper § 9.1). "
+                "Update the directive after auditing the trust roster, "
+                "or point NAUDIT_ROSTER at a different roster",
+                g->expected_roster_sha256,
+                g->allowed_signers_path,
+                actual);
+            engine->trust_root_failed = true;
+            return;
+        }
+    }
+
+    /* (3) Rule-file signature (§ 6.3). */
+    if (g->allowed_signers_path && project_root) {
+        n00b_string_t *rules_path = n00b_path_simple_join(
+            project_root, r"audit-rules.bnf");
+        rules_path = n00b_path_canonical(rules_path);
+        if (n00b_path_is_file(rules_path)) {
+            /*
+             * Without an explicit signer-id hint the engine cannot
+             * call `ssh-keygen -Y verify -I <id>`; we walk the
+             * roster's principals and try each one until one
+             * succeeds. That keeps the rule-file-signature flow
+             * compatible with multi-signer rosters without
+             * requiring a separate `@rules_signer_id` directive.
+             * For a single-signer roster (the common case) this
+             * loop runs once.
+             *
+             * The roster file is small (a few entries at most);
+             * reading + parsing the principal column inline keeps
+             * the diff focused.
+             */
+            auto fr = n00b_file_open(g->allowed_signers_path,
+                                     .kind = N00B_FILE_KIND_MMAP);
+            if (n00b_result_is_err(fr)) {
+                /*
+                 * The chain walk above confirmed the roster path
+                 * exists (n00b_path_is_file true at resolution
+                 * time), so an open failure here is a TOCTOU /
+                 * permission anomaly. Treat as a trust-root
+                 * failure rather than silently skipping the
+                 * rule-file signature gate — a silent skip would
+                 * let a hostile process race the roster and bypass
+                 * the § 6.3 check.
+                 */
+                n00b_eprintf(
+                    "n00b-audit: error: could not open trust roster "
+                    "at «#» for rule-file signature verification: «#»; "
+                    "refusing audit (white paper § 6.3)",
+                    g->allowed_signers_path,
+                    n00b_audit_err_str(n00b_result_get_err(fr)));
+                engine->trust_root_failed = true;
+            }
+            else {
+                n00b_file_t *f  = n00b_result_get(fr);
+                auto         br = n00b_file_as_buffer(f);
+                n00b_file_close(f);
+                if (n00b_result_is_err(br)) {
+                    /* Same rationale as the open-failure branch
+                     * above: a buffered-read failure on a roster
+                     * that just opened is anomalous; surface it. */
+                    n00b_eprintf(
+                        "n00b-audit: error: could not read trust roster "
+                        "at «#» for rule-file signature verification: «#»; "
+                        "refusing audit (white paper § 6.3)",
+                        g->allowed_signers_path,
+                        n00b_audit_err_str(n00b_result_get_err(br)));
+                    engine->trust_root_failed = true;
+                }
+                else {
+                    n00b_buffer_t *buf = n00b_result_get(br);
+                    const char *d   = buf->data;
+                    int64_t     n   = buf->byte_len;
+                    int64_t     i   = 0;
+                    int         verdict = 1; /* default: unsigned */
+                    bool        any_signer_tried = false;
+                    while (i < n && verdict != 0) {
+                        /* Read one line. */
+                        int64_t ls = i;
+                        while (i < n && d[i] != '\n') {
+                            i++;
+                        }
+                        int64_t le = i;
+                        if (i < n) {
+                            i++;
+                        }
+                        /* Skip leading whitespace + comments. */
+                        int64_t s = ls;
+                        while (s < le && (d[s] == ' ' || d[s] == '\t')) {
+                            s++;
+                        }
+                        if (s >= le || d[s] == '#') {
+                            continue;
+                        }
+                        /*
+                         * First whitespace-bounded field is the
+                         * principal id.
+                         */
+                        int64_t pe = s;
+                        while (pe < le && d[pe] != ' ' && d[pe] != '\t') {
+                            pe++;
+                        }
+                        if (pe == s) {
+                            continue;
+                        }
+                        n00b_string_t *principal = n00b_string_from_raw(
+                            d + s, (int64_t)(pe - s));
+                        any_signer_tried = true;
+                        auto sv = n00b_audit_rules_verify_signature(
+                            rules_path, g->allowed_signers_path,
+                            principal);
+                        if (n00b_result_is_ok(sv)) {
+                            int v = n00b_result_get(sv);
+                            /* Once any principal accepts, we're done. */
+                            if (v == 0) {
+                                verdict = 0;
+                                break;
+                            }
+                            /*
+                             * If at least one principal returns 2
+                             * (bad sig / non-roster) and none has
+                             * returned 0, keep trying — another
+                             * principal in the roster might
+                             * succeed. If all signers fail, the
+                             * final verdict is 2.
+                             */
+                            if (v == 2) {
+                                verdict = 2;
+                            }
+                            /* v == 1 (unsigned) sticks. */
+                        }
+                    }
+                    if (!any_signer_tried) {
+                        /* Roster has no principals — treat as
+                         * "no signer to verify against"; the rule
+                         * file is effectively unverifiable. */
+                        verdict = 1;
+                    }
+                    if (verdict == 0) {
+                        /* Silent accept. */
+                    }
+                    else if (verdict == 1) {
+                        if (engine->repo_protected) {
+                            n00b_eprintf(
+                                "n00b-audit: info: audit-rules.bnf is "
+                                "unsigned; --repo-protected asserted");
+                        }
+                        else {
+                            n00b_eprintf(
+                                "n00b-audit: warning: audit-rules.bnf "
+                                "is unsigned — agent or attacker writes "
+                                "to it are not detectable by this audit "
+                                "(white paper § 6.3). Sign with "
+                                "`naudit --sign-rules <path> --key ... "
+                                "--signer ...` or pass --repo-protected "
+                                "to acknowledge a protected context");
+                        }
+                    }
+                    else { /* verdict == 2 */
+                        n00b_eprintf(
+                            "n00b-audit: error: audit-rules.bnf signature "
+                            "did not verify against any roster principal; "
+                            "refusing audit (white paper § 6.3)");
+                        engine->trust_root_failed = true;
+                    }
+                }
+            }
+        }
+    }
+}
+
+
 static void
 apply_signature_gate(n00b_audit_engine_t *engine)
 {
@@ -617,6 +916,17 @@ apply_signature_gate(n00b_audit_engine_t *engine)
         return;
     }
     engine->signatures_applied = true;
+
+    /*
+     * WP-015: run the trust-root checks ahead of the per-record
+     * signature gate. The two are sequenced (trust root must be
+     * verified before we trust any signature against the roster);
+     * a trust-root failure short-circuits the per-record gate.
+     */
+    apply_trust_root_checks(engine);
+    if (engine->trust_root_failed) {
+        return;
+    }
 
     n00b_audit_guidance_t *g = engine->guidance;
     if (!g) {
@@ -750,8 +1060,19 @@ n00b_audit_engine_check_file(n00b_audit_engine_t *engine,
      * from `guidance->exemptions` / `guidance->baseline` before the
      * suppression loop below ever sees them; records that pass (or
      * that --allow-unsigned re-admits with a warning) survive.
+     *
+     * WP-015: the gate now also runs the trust-root checks
+     * (roster-source warning, fingerprint binding, rule-file
+     * signature). A trust-root failure refuses the audit
+     * unconditionally — `--allow-unsigned` does not bypass it
+     * (the trust-root failure means we can't trust ANY signature
+     * against the roster, including a putative bypass).
      */
     apply_signature_gate(engine);
+    if (engine->trust_root_failed) {
+        return n00b_result_err(n00b_list_t(n00b_audit_violation_t *) *,
+                               N00B_AUDIT_ERR_ENGINE_BAD_ARGS);
+    }
 
     /* Canonicalize the source-file path: cwd-independent
      * diagnostics + downstream I/O regardless of caller cwd. */
