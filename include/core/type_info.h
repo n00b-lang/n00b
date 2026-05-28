@@ -304,6 +304,41 @@ extern n00b_option_t(n00b_vtable_entry)
 n00b_type_method_lookup(uint64_t type_hash, const char *method_name);
 
 /**
+ * @brief Look up the typehash of a registered type by its declared name.
+ *
+ * Linear-scans the registry for the first registered type whose
+ * `n00b_type_info_t.name` equals @p name (case-sensitive). Returns 0
+ * when no match is found. The registry is small (a few dozen entries
+ * in practice) so the scan is cheap; the lookup is meant for the rare
+ * codegen and inference fallback paths that have only the type's name
+ * spelling (e.g., from a `tc_prim_t` or a `n00b_method_param_t.type_name`).
+ *
+ * @param name  Type name to search for (must be non-NULL).
+ * @return      The typehash, or 0 if not registered.
+ */
+extern uint64_t n00b_type_name_to_hash(const char *name);
+
+/**
+ * @brief Look up the full extension method record by type hash and name.
+ *
+ * Sibling of `n00b_type_method_lookup` that returns a pointer to the
+ * registry's `n00b_method_t` so callers can inspect the method's full
+ * signature (return type, parameter types). The type-checker uses this
+ * to propagate the method's return type into `tc_type_t` during
+ * inference; codegen continues to use the lighter `n00b_type_method_lookup`
+ * helper when it only needs the bare function pointer.
+ *
+ * The returned pointer aliases the registry's deep-copied `ext_vtable`
+ * array. Callers must not mutate the underlying method.
+ *
+ * @param type_hash   typehash(T) of the type to query.
+ * @param method_name Method name to look up.
+ * @return            Pointer to the method, or none if not found.
+ */
+extern n00b_option_t(n00b_method_t *)
+n00b_type_method_lookup_full(uint64_t type_hash, const char *method_name);
+
+/**
  * @brief Register all built-in types (called by n00b_type_registry_init).
  */
 extern void n00b_register_builtin_types(void);

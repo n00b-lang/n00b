@@ -368,3 +368,55 @@ n00b_tc_lookup_prim(n00b_tc_ctx_t *ctx, n00b_string_t *name)
     return nullptr;
 }
 
+// ============================================================================
+// Primitive lookup by C name (extension-method return-type bridge)
+// ============================================================================
+//
+// Maps `n00b_method_param_t.type_name` (C string spelling) to the cached
+// primitive in the type-checker context. Supports the spellings naudit
+// and other libn00b consumers actually use in their `n00b_type_add_method`
+// calls. Unknown or user-defined opaque names return `nullptr` so the
+// caller can fall back to a fresh type variable; supporting full opaque
+// receiver-returns-opaque chaining is out of WP-010 scope.
+
+n00b_tc_type_t *
+n00b_tc_type_from_c_name(n00b_tc_ctx_t *ctx, const char *type_name)
+{
+    if (!ctx || !type_name) {
+        return nullptr;
+    }
+
+    // Two-table lookup keeps each entry compact and the function
+    // small enough to inline-friendly inspect during diagnostics.
+    struct {
+        const char     *c_name;
+        n00b_tc_type_t *type;
+    } table[] = {
+        { "int",            ctx->t_int    },
+        { "i8",             ctx->t_i8     },
+        { "i16",            ctx->t_i16    },
+        { "i32",            ctx->t_i32    },
+        { "i64",            ctx->t_i64    },
+        { "u8",             ctx->t_u8     },
+        { "u16",            ctx->t_u16    },
+        { "u32",            ctx->t_u32    },
+        { "u64",            ctx->t_u64    },
+        { "f32",            ctx->t_f32    },
+        { "f64",            ctx->t_f64    },
+        { "bool",           ctx->t_bool   },
+        { "string",         ctx->t_string },
+        { "n00b_string_t *", ctx->t_string },
+        { "n00b_string_t*",  ctx->t_string },
+        { "nil",            ctx->t_nil    },
+        { "void",           ctx->t_void   },
+    };
+
+    for (size_t i = 0; i < sizeof(table) / sizeof(table[0]); i++) {
+        if (strcmp(type_name, table[i].c_name) == 0) {
+            return table[i].type;
+        }
+    }
+
+    return nullptr;
+}
+

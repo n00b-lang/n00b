@@ -799,6 +799,46 @@ n00b_sym_entry_t *n00b_cg_module_lookup(n00b_cg_module_t *m, const char *name);
 n00b_cg_module_t *n00b_cg_session_find_module(n00b_cg_session_t *s, const char *fqn);
 
 // ============================================================================
+// Side-table: per-value typehash for registry-driven method dispatch
+// ============================================================================
+
+/**
+ * @brief Record the runtime typehash for a codegen value.
+ *
+ * Stores the typehash in a per-session side-table keyed by the value's
+ * `(kind, id)` pair so it can be retrieved later for extension-method
+ * dispatch via the type registry. Callers should invoke this only at
+ * sites that *know* the user-defined typehash (function parameters,
+ * class constructor results, postfix-`.` method results).
+ *
+ * @param session    Codegen session.
+ * @param val        The codegen value whose typehash is being recorded.
+ * @param type_hash  The typehash (0 is treated as a no-op).
+ *
+ * @kw allocator  Allocator used on the (lazy) first-call side-table
+ *                allocation. nullptr = runtime default. (default: nullptr)
+ */
+extern void n00b_cg_val_set_type_hash(n00b_cg_session_t *session,
+                                     n00b_cg_val_t      val,
+                                     uint64_t           type_hash) _kargs {
+    n00b_allocator_t *allocator = nullptr;
+};
+
+/**
+ * @brief Look up the recorded typehash for a codegen value.
+ *
+ * Returns 0 when no typehash has been recorded for this value. The
+ * dispatch code falls back to `type_tag_to_hash(val.type_tag)` for
+ * primitives in that case.
+ *
+ * @param session  Codegen session.
+ * @param val      The codegen value to look up.
+ * @return         The recorded typehash, or 0 if none.
+ */
+extern uint64_t n00b_cg_val_get_type_hash(n00b_cg_session_t *session,
+                                         n00b_cg_val_t      val);
+
+// ============================================================================
 // Session debug/dump
 // ============================================================================
 

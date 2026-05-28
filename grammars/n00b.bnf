@@ -619,7 +619,7 @@
 <unary-expr> @infer("ref[$0]")  ::= %"ref" <unary-expr>
 <unary-expr>                    ::= <postfix-expr>
 
-<postfix-expr> @infer("`t")             ::= <postfix-expr> %"." %IDENTIFIER
+<postfix-expr> @infer("method_return($0)") ::= <postfix-expr> %"." %IDENTIFIER
 <postfix-expr> @infer("element_of($0)") ::= <postfix-expr> %"[" <index-contents> %"]"
 <postfix-expr> @infer("return_of($0)") @call($0, $2) ::= <postfix-expr> %"(" <call-args> %")"
 <postfix-expr> @infer("return_of($0)") @call($0)     ::= <postfix-expr> %"(" %")"
