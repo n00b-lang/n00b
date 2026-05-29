@@ -239,8 +239,12 @@ poll_events_to_ops(short revents)
 static bool
 poll_is_internal_fd(poll_ctx_t *ctx, int fd)
 {
-    // Check if it's a pidfd
-    for (poll_proc_t *pp = ctx->procs; pp; pp = pp->next) {
+    // Check if it's a pidfd. The for-init declaration form trips ncc's
+    // GC stack-map analysis (it only tracks roots declared as block
+    // items, not in for-init statement contexts), so the GC-tracked
+    // pointers are hoisted to block scope.
+    poll_proc_t *pp;
+    for (pp = ctx->procs; pp; pp = pp->next) {
         if (pp->pidfd == fd) {
             return true;
         }
@@ -252,7 +256,8 @@ poll_is_internal_fd(poll_ctx_t *ctx, int fd)
     }
 
     // Check if it's an eventfd
-    for (poll_user_event_t *pe = ctx->user_events; pe; pe = pe->next) {
+    poll_user_event_t *pe;
+    for (pe = ctx->user_events; pe; pe = pe->next) {
         if (pe->efd == fd) {
             return true;
         }
@@ -317,15 +322,18 @@ poll_cleanup(void *vctx)
         ctx->inotify_fd = -1;
     }
 
-    // Close all pidfds
-    for (poll_proc_t *pp = ctx->procs; pp; pp = pp->next) {
+    // Close all pidfds — pointers hoisted out of the for-init to satisfy
+    // ncc's GC stack-map analysis (see poll_is_internal_fd).
+    poll_proc_t *pp;
+    for (pp = ctx->procs; pp; pp = pp->next) {
         if (pp->pidfd >= 0) {
             close(pp->pidfd);
         }
     }
 
     // Close all eventfds
-    for (poll_user_event_t *pe = ctx->user_events; pe; pe = pe->next) {
+    poll_user_event_t *pe;
+    for (pe = ctx->user_events; pe; pe = pe->next) {
         if (pe->efd >= 0) {
             close(pe->efd);
         }
@@ -836,7 +844,8 @@ poll_proc_remove(void *vctx, n00b_conduit_proc_watch_t *watch)
 static void
 poll_process_procs(poll_ctx_t *ctx)
 {
-    for (poll_proc_t *pp = ctx->procs; pp; pp = pp->next) {
+    poll_proc_t *pp;
+    for (pp = ctx->procs; pp; pp = pp->next) {
         int idx = poll_find_fd(ctx, pp->pidfd);
         if (idx < 0 || !(ctx->fds[idx].revents & (POLLIN | POLLHUP | POLLERR))) {
             continue;
@@ -1004,7 +1013,8 @@ poll_process_vnodes(poll_ctx_t *ctx)
         struct inotify_event *event = (struct inotify_event *)ptr;
 
         // Find matching vnode watch
-        for (poll_vnode_t *pv = ctx->vnodes; pv; pv = pv->next) {
+        poll_vnode_t *pv;
+        for (pv = ctx->vnodes; pv; pv = pv->next) {
             if (pv->wd == event->wd) {
                 // Map inotify mask back to conduit ops
                 uint32_t ops = 0;
@@ -1110,7 +1120,8 @@ poll_user_event_trigger(void *vctx, n00b_conduit_user_event_t *event)
     }
 
     // Find the user event by event_id (may be a temporary struct)
-    for (poll_user_event_t *pe = ctx->user_events; pe; pe = pe->next) {
+    poll_user_event_t *pe;
+    for (pe = ctx->user_events; pe; pe = pe->next) {
         if (pe->event->event_id == event->event_id) {
             uint64_t val = 1;
             (void)write(pe->efd, &val, sizeof(val));
@@ -1125,7 +1136,8 @@ poll_user_event_trigger(void *vctx, n00b_conduit_user_event_t *event)
 static void
 poll_process_user_events(poll_ctx_t *ctx)
 {
-    for (poll_user_event_t *pe = ctx->user_events; pe; pe = pe->next) {
+    poll_user_event_t *pe;
+    for (pe = ctx->user_events; pe; pe = pe->next) {
         int idx = poll_find_fd(ctx, pe->efd);
         if (idx < 0 || !(ctx->fds[idx].revents & POLLIN)) {
             continue;
