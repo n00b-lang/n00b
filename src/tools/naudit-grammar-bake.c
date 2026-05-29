@@ -81,15 +81,13 @@ main(int argc, char **argv)
                                            : "__naudit_static_grammar";
     const char *grammar_name  = (argc > 5) ? argv[5] : start_nt;
 
-    // The baked grammar is for PWZ-only consumers (naudit). PWZ never
-    // reads the LR0 tables and tolerates absent first-sets, and naudit's
-    // runtime sets this same gate — so skip the heavy (and, on
-    // c_ncc.bnf, multi-minute) first-set / left-corner / LR0 analysis in
-    // finalize. The reconstructed grammar finalizes under the same gate,
-    // keeping the build-time and runtime structures identical (WP-018
-    // DF-EB / DF-EC).
-    setenv("N00B_SLAY_SKIP_FINALIZE_ANALYSIS", "1", 1);
-
+    // The baked grammar is for PWZ-only consumers (naudit). finalize no
+    // longer computes the heavy (multi-minute on c_ncc.bnf) first-set /
+    // left-corner / LR0 analysis at all — that is Earley-only and now runs
+    // lazily in n00b_earley_new — so load + finalize here are already
+    // cheap with no flag. The reconstructed runtime grammar finalizes the
+    // same way, keeping build-time and runtime structures identical
+    // (WP-018 DF-EB / DF-EC).
     long  bnf_len = 0;
     char *bnf_src = slurp_file(bnf_path, &bnf_len);
     if (!bnf_src) {

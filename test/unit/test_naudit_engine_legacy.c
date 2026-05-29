@@ -100,8 +100,16 @@
 #error "N00B_AUDIT_TEST_FIXTURE_DIR must be set by the build (see test/meson.build)"
 #endif
 
+/*
+ * The canonical rule set lives in the n00b-audit repo itself
+ * (`<repo>/audit-rules.bnf`), reached relative to the baked fixture
+ * dir. Earlier this hardcoded the default jj workspace path
+ * (`/Users/viega/n00b/audit-rules.bnf`), which coupled the test to a
+ * sibling workspace's working copy — fragile (passed only because both
+ * were at the same change) and outside this workspace's edit scope.
+ */
 #define N00B_AUDIT_REFERENCE_GUIDANCE_PATH \
-    "/Users/viega/n00b/audit-rules.bnf"
+    N00B_AUDIT_TEST_FIXTURE_DIR "/../../../audit-rules.bnf"
 
 /*
  * Pin the line numbers from the fixture files. fixture_legacy_spellings.c

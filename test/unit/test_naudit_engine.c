@@ -93,7 +93,18 @@ fixture_path(const char *fname)
 static n00b_audit_guidance_t *
 load_phase3_guidance(void)
 {
-    n00b_string_t *p = fixture_path("guidance_ok.bnf");
+    /*
+     * WP-016: the NULL rule is filter-based — it queries the existing
+     * `<provided_identifier>` NT in the base c_ncc.bnf grammar and
+     * narrows to the literal `NULL` via the `is_null_keyword`
+     * text-predicate filter, rather than grafting a synthetic
+     * `<n00b_audit_v_null>` NT onto a complete C grammar (which
+     * exploded parse-time ambiguity — see engine.c get_or_load_grammar
+     * and DECISIONS D-033). `guidance_preprocess_null.bnf` carries
+     * exactly that rule + filter, isolated to one rule, mirroring the
+     * canonical `audit-rules.bnf` `n00b.s2_1.null` rule verbatim.
+     */
+    n00b_string_t *p = fixture_path("guidance_preprocess_null.bnf");
     auto r = n00b_audit_load_guidance(p);
     assert(n00b_result_is_ok(r));
 
@@ -104,19 +115,8 @@ load_phase3_guidance(void)
 
     n00b_audit_rule_t *rule = n00b_list_get(*g->rules, 0);
     assert(rule != nullptr);
-
-    /*
-     * Inject the DF-C / DF-D-resolved values. The fragment registers
-     * `NULL` as a keyword terminal and adds a new alternative on
-     * `<provided_identifier>` whose RHS is that keyword. Match the
-     * recorded values in src/audit/engine.c's `## Notes` block
-     * verbatim — Phase 6's reference guidance file will use the
-     * same strings.
-     */
-    rule->bnf_fragment = n00b_string_from_cstr(
-        "<n00b_audit_v_null> ::= %\"NULL\"\n"
-        "<provided_identifier> ::= <n00b_audit_v_null>\n");
-    rule->violation_nt = n00b_string_from_cstr("n00b_audit_v_null");
+    assert(!!rule->violation_nt);
+    assert(!!rule->filter_name);
 
     return g;
 }

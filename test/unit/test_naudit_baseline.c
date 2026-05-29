@@ -118,8 +118,11 @@ make_project_root(const char *suffix)
     n00b_string_t *root = n00b_string_from_cstr(buf);
 
     /* Write audit-rules.bnf — the canonical NULL rule from
-     * audit-rules.bnf, simplified to the minimal NULL-only form
-     * so the bnf_fragment is deterministic. */
+     * audit-rules.bnf, isolated to the minimal NULL-only form so the
+     * violation count is deterministic. WP-016: the rule queries the
+     * existing `<provided_identifier>` NT and narrows to `NULL` via the
+     * `is_null_keyword` text-predicate filter (no synthetic grafted NT
+     * — see engine.c get_or_load_grammar / DECISIONS D-033). */
     n00b_string_t *rules_path = fixture_path("../../audit-rules.bnf");
     (void)rules_path;
     char rules_target[1280];
@@ -134,18 +137,20 @@ make_project_root(const char *suffix)
                "@extensions\n"
                "    c: .c, .h\n"
                "\n"
+               "@filter_def is_null_keyword\n"
+               "    expr: arg.text_equals(\"NULL\")\n"
+               "    description: Matches the literal identifier `NULL`.\n"
+               "\n"
                "@rule n00b.s2_1.null\n"
                "@title NULL -> nullptr\n"
                "@section section 2.1\n"
                "@language c\n"
-               "@violation_nt n00b_audit_v_null\n"
+               "@violation_nt provided_identifier\n"
+               "@filter is_null_keyword\n"
                "@rationale C23 has nullptr.\n"
                "@bad int *p = NULL;\n"
                "@good int *p = nullptr;\n"
-               "@guidance Replace NULL with nullptr.\n"
-               "\n"
-               "<n00b_audit_v_null> ::= %\"NULL\"\n"
-               "<provided_identifier> ::= <n00b_audit_v_null>\n");
+               "@guidance Replace NULL with nullptr.\n");
 
     /* Copy fixture_null.c verbatim. */
     char fixture_target[1280];

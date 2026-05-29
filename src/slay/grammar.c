@@ -1549,10 +1549,7 @@ lr0_compute_predict_states(n00b_grammar_t *g)
 // ============================================================================
 
 void
-n00b_grammar_finalize(n00b_grammar_t *g) _kargs
-{
-    bool skip_analysis = false;
-}
+n00b_grammar_finalize(n00b_grammar_t *g)
 {
     if (g->finalized) {
         return;
@@ -1627,38 +1624,23 @@ n00b_grammar_finalize(n00b_grammar_t *g) _kargs
         n00b_dict_put(g->valid_tokens, i, true_val);
     }
 
-    /* WP-017: first-set / left-corner / LR0 computation is a
-     * ~5-6 second cost on big grammars (e.g., c_ncc.bnf) driven
-     * by dict allocation churn triggering GC. Naudit's single-
-     * file workflow doesn't amortize this. Callers skip it via the
-     * explicit `.skip_analysis = true` kwarg (the baked-grammar
-     * reconstruction path uses this). The
-     * N00B_SLAY_SKIP_FINALIZE_ANALYSIS=1 environment variable
-     * remains an independent override for other consumers. PWZ
-     * still works without the analysis (nt_first_matches returns
-     * true when first_set is null, so PWZ explores without
-     * pruning). Earley REQUIRES first sets and won't work; that's
-     * fine because the user directive (2026-05-28) was 'Earley
-     * should never get called'.
+    /* First-sets and left-corners are computed HERE: PWZ uses them to
+     * prune (pwz.c nt_first_matches consults nt->first_set; a null
+     * first_set means "matches everything", i.e. no pruning, which makes
+     * PWZ explore pathologically on complex grammars). The Earley-only
+     * LR0 tables (lr0_items / lr0_states / predict_states) are NOT
+     * computed here — they are derived lazily by
+     * n00b_grammar_compute_earley_analysis() the first time Earley runs
+     * (n00b_earley_new), so PWZ-only consumers (naudit, the eval JIT,
+     * baked grammars) skip that Earley-specific cost.
      *
-     * The env gate is read via the LIBC `getenv()` rather than
-     * `n00b_getenv()`: `n00b_putenv()` rebinds the libc `environ`
-     * pointer to a `system_pool`-allocated slot array, which a
-     * subsequent libc `getenv()` walk faults on. No code in this
-     * tree writes the variable any longer (WP-018 removed the
-     * `setenv` writer in grammar_image.c in favor of the kwarg), so
-     * this read only observes an externally-set environment. */
-    const char *env_skip = getenv("N00B_SLAY_SKIP_FINALIZE_ANALYSIS");
-    bool        do_skip  = skip_analysis
-                    || (env_skip && env_skip[0] == '1');
-    if (!do_skip) {
-        compute_all_first_sets(g);
-        compute_left_corners(g);
-
-        compute_lr0_items(g);
-        build_lr0_states(g);
-        lr0_compute_predict_states(g);
-    }
+     * (Historical note: a `N00B_SLAY_SKIP_FINALIZE_ANALYSIS` env var once
+     * gated all of this here via libc `getenv()`, which faulted after any
+     * `n00b_putenv()` rebinding of `environ`. The env var and the later
+     * `skip_analysis` kwarg are gone; the Earley-only part now lives
+     * behind the Earley entry point.) */
+    compute_all_first_sets(g);
+    compute_left_corners(g);
 
     // Check if the grammar has group NTs (BSR reconstruction doesn't
     // handle multi-match groups yet, so BSR emission is skipped).
@@ -1678,6 +1660,32 @@ n00b_grammar_finalize(n00b_grammar_t *g) _kargs
     }
 
     g->finalized = true;
+}
+
+// ============================================================================
+// Earley analysis (lazy)
+// ============================================================================
+
+// Compute the Earley-only LR0 tables (items / states / predict states).
+// These are NOT needed by PWZ, so they are intentionally NOT part of
+// n00b_grammar_finalize() (which DOES compute the first-sets/left-corners
+// PWZ prunes with) and run only when Earley is actually invoked (see
+// n00b_earley_new). Idempotent and independent of `finalized`. The grammar
+// MUST already be finalized — the LR0 construction relies on the first-set
+// / valid-token / nullability state finalize builds; n00b_earley_new
+// guarantees finalize ran first.
+void
+n00b_grammar_compute_earley_analysis(n00b_grammar_t *g)
+{
+    if (!g || g->earley_analysis_done) {
+        return;
+    }
+
+    compute_lr0_items(g);
+    build_lr0_states(g);
+    lr0_compute_predict_states(g);
+
+    g->earley_analysis_done = true;
 }
 
 // ============================================================================

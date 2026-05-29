@@ -66,6 +66,13 @@ option('using_build_script',
     type: 'boolean',
     value: false)
 
+option('skip_vcs_check',
+    type: 'boolean',
+    value: false,
+    description: 'Skip the jj-workspace / main-up-to-date guard (e.g. for ' +
+                 'release tarballs or CI checkouts with no .jj). Only set ' +
+                 'this when you knowingly build outside a synced jj workspace.')
+
 option('enable_cocoa',
     type: 'boolean',
     value: true,

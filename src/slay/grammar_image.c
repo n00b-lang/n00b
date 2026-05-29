@@ -164,12 +164,11 @@ n00b_grammar_image_finish(n00b_grammar_t *g,
     g->max_penalty = max_penalty;
 
     // A baked grammar is captured WITHOUT first-set / left-corner / LR0
-    // analysis (it was finalized with `.skip_analysis = true` at bake
-    // time, and PWZ — the only consumer — does not need that derived
-    // state). Request the same skip here so reconstruction stays fast and
-    // structurally identical regardless of the consumer's environment,
-    // then finalize to rebuild nullability + valid_tokens.
-    n00b_grammar_finalize(g, .skip_analysis = true);
+    // analysis (PWZ — the only consumer — does not need that derived
+    // state). finalize no longer computes that analysis at all (it is
+    // Earley-only and now lazy in n00b_earley_new), so this just rebuilds
+    // nullability + valid_tokens and stays fast + structurally identical.
+    n00b_grammar_finalize(g);
 }
 
 // ============================================================================

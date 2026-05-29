@@ -1442,8 +1442,19 @@ n00b_audit_engine_check_file(n00b_audit_engine_t *engine,
              * violation record and is the matching primitive for
              * exemption + baseline suppression below.
              */
-            n00b_string_t *region_bytes = n00b_audit_extract_region_bytes(
-                path, line, col, end_line, end_col);
+            /*
+             * WP-021 / task #14: slice the region bytes from the SAME
+             * parsed buffer (`src_text`) the token coordinates index,
+             * NOT the raw on-disk file. With preprocessing on, the
+             * preprocessor reflows whitespace (`int *p` → `int * p`),
+             * so re-reading `path` with preprocessed coordinates sliced
+             * the wrong span and gave two identical NULL tokens
+             * distinct fingerprints — breaking exemption/baseline
+             * suppression.
+             */
+            n00b_string_t *region_bytes
+                = n00b_audit_extract_region_bytes_from_text(
+                    src_text, line, col, end_line, end_col);
             v->region_fingerprint = n00b_audit_compute_region_fingerprint(
                 region_bytes ? region_bytes : n00b_string_empty());
 

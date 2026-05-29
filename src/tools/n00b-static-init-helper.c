@@ -1951,12 +1951,12 @@ emit_grammar_image(const helper_request_t *req)
     fclose(f);
     bnf_src[got] = '\0';
 
-    // Skip the heavy first-set / left-corner / LR0 analysis in finalize:
-    // the baked grammar is PWZ-only and captured structurally without it
-    // (WP-018 DF-EB / DF-EC). Matches the bake tool and the runtime
-    // reconstruction in n00b_grammar_image_finish.
-    setenv("N00B_SLAY_SKIP_FINALIZE_ANALYSIS", "1", 1);
-
+    // The baked grammar is PWZ-only and captured structurally without the
+    // first-set / left-corner / LR0 analysis (WP-018 DF-EB / DF-EC).
+    // finalize no longer computes that analysis (it is Earley-only and now
+    // lazy in n00b_earley_new), so load + finalize are already cheap with
+    // no flag, matching the bake tool and the runtime reconstruction in
+    // n00b_grammar_image_finish.
     n00b_string_t  *bnf_text = n00b_string_from_raw(bnf_src, (int64_t)got);
     n00b_string_t  *start_s  = n00b_string_from_cstr(req->start_nt);
     n00b_grammar_t *g        = n00b_grammar_new();

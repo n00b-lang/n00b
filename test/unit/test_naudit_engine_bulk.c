@@ -3,15 +3,18 @@
  *
  * Exercises the engine's grammar-compose + parse-forest-walk pipeline
  * against the canonical multi-rule guidance file in the n00b repo,
- * which (post-WP-004) carries 7 rules total: WP-001's
+ * which carries 10 rules total: WP-001's
  * `n00b.s2_1.null`, WP-002's `n00b.s2_3.malloc`, WP-003's four
  * (`n00b.s2_5.attribute_legacy`, `n00b.s2_6.typeof_legacy`,
- * `n00b.s2_8.va_list_legacy`, `n00b.s2_10.libc_io`), and WP-004's
- * `n00b.s13.legacy_spellings`. This bulk test pins the WP-003 set
- * specifically; the legacy-spellings rule has its own regression
- * in test_audit_engine_legacy.c. The rule-count assertion below
- * is bumped to 7 to track the canonical file's exact size as of
- * WP-004 close (will be updated by future WPs that add more rules).
+ * `n00b.s2_8.va_list_legacy`, `n00b.s2_10.libc_io`), WP-004's
+ * legacy-spellings set split three ways under WP-016
+ * (`n00b.s13.legacy_spellings`, `n00b.s13.legacy_thread`,
+ * `n00b.s13.legacy_alignment`), and the path rule
+ * `n00b.path.file_open_canonical`. This bulk test pins the WP-003 set
+ * specifically; the legacy-spellings rules have their own regression
+ * in test_naudit_engine_legacy.c. The rule-count assertion below
+ * is pinned to 10 to track the canonical file's exact size (will be
+ * updated by future WPs that add more rules).
  *
  * Setup. The Phase 2 loader is invoked against the canonical file at
  * /Users/viega/n00b/audit-rules.bnf (in n00b's tree, not
@@ -140,8 +143,14 @@
 #error "N00B_AUDIT_TEST_FIXTURE_DIR must be set by the build (see test/meson.build)"
 #endif
 
+/*
+ * The canonical rule set lives in the n00b-audit repo itself
+ * (`<repo>/audit-rules.bnf`), reached relative to the baked fixture
+ * dir — no longer the default jj workspace path (which coupled the test
+ * to a sibling workspace's working copy).
+ */
 #define N00B_AUDIT_REFERENCE_GUIDANCE_PATH \
-    "/Users/viega/n00b/audit-rules.bnf"
+    N00B_AUDIT_TEST_FIXTURE_DIR "/../../../audit-rules.bnf"
 
 /*
  * Compare a libn00b string against a C string. Mirrors the helper in
@@ -180,10 +189,11 @@ fixture_path(const char *fname)
 }
 
 /*
- * Load the canonical multi-rule guidance file. Asserts the 7-rule
- * count (2 prior + 4 from WP-003 + 1 from WP-004) and that each
- * WP-003 rule id is present (WP-004's rule id is asserted by
- * test_audit_engine_legacy.c).
+ * Load the canonical multi-rule guidance file. Asserts the 10-rule
+ * count (2 prior + 4 from WP-003 + WP-004's legacy-spellings set split
+ * 3 ways under WP-016 + 1 path rule) and that each WP-003 rule id is
+ * present (the legacy-spellings rule ids are asserted by
+ * test_naudit_engine_legacy.c).
  */
 static n00b_audit_guidance_t *
 load_canonical_guidance(void)
@@ -197,7 +207,7 @@ load_canonical_guidance(void)
     assert(!!g);
     assert(g->schema_version == 1);
     assert(!!g->rules);
-    assert(n00b_list_len(*g->rules) == 7);
+    assert(n00b_list_len(*g->rules) == 10);
 
     bool    saw_null      = false;
     bool    saw_malloc    = false;
@@ -205,6 +215,8 @@ load_canonical_guidance(void)
     bool    saw_typeof    = false;
     bool    saw_va_list   = false;
     bool    saw_libc_io   = false;
+    bool    saw_legacy    = false;
+    bool    saw_file_open = false;
     int64_t nrules        = n00b_list_len(*g->rules);
     for (int64_t i = 0; i < nrules; i++) {
         n00b_audit_rule_t *rule = n00b_list_get(*g->rules, i);
@@ -227,6 +239,12 @@ load_canonical_guidance(void)
         if (n00b_string_eq_cstr(rule->id, "n00b.s2_10.libc_io")) {
             saw_libc_io = true;
         }
+        if (n00b_string_eq_cstr(rule->id, "n00b.s13.legacy_spellings")) {
+            saw_legacy = true;
+        }
+        if (n00b_string_eq_cstr(rule->id, "n00b.path.file_open_canonical")) {
+            saw_file_open = true;
+        }
     }
     assert(saw_null);
     assert(saw_malloc);
@@ -234,8 +252,10 @@ load_canonical_guidance(void)
     assert(saw_typeof);
     assert(saw_va_list);
     assert(saw_libc_io);
+    assert(saw_legacy);
+    assert(saw_file_open);
 
-    printf("  [PASS] canonical guidance loads (7 rules)\n");
+    printf("  [PASS] canonical guidance loads (10 rules)\n");
     return g;
 }
 
@@ -254,7 +274,7 @@ engine_new_ok(n00b_audit_engine_t **out_engine,
     assert(n00b_result_is_ok(r));
     *out_engine = n00b_result_get(r);
     assert(!!*out_engine);
-    printf("  [PASS] engine_new (7-rule grammar compose)\n");
+    printf("  [PASS] engine_new (10-rule grammar compose)\n");
 }
 
 /*

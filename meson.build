@@ -29,6 +29,50 @@ if (get_option('using_build_script') != true)
         '                       further n00b-internal guards apply.')
 endif
 
+# ── VCS-state guard ──────────────────────────────────────────────────────────
+# Configuring from a bad VCS state silently produces stale/wrong builds. This
+# has burned us repeatedly: building a checkout that is NOT a jj workspace, or
+# whose main is behind origin/main (e.g. building #96 while trunk was #97).
+# Refuse to configure in either case. Override only deliberately with
+# -Dskip_vcs_check=true (release tarballs / CI checkouts with no .jj).
+if get_option('skip_vcs_check') != true
+  jj_prog = find_program('jj', required: false)
+  if not jj_prog.found()
+    error('VCS guard: jj not found. n00b must be built from a jj workspace.\n' +
+          '  Override (e.g. tarball build): -Dskip_vcs_check=true')
+  endif
+  # 1. Must be inside a jj workspace.
+  _ws = run_command(jj_prog, 'workspace', 'root',
+                    '--ignore-working-copy', check: false)
+  if _ws.returncode() != 0
+    error('VCS guard: not inside a jj workspace — refusing to configure (this\n' +
+          '  would build an unsynced/stale checkout). cd into a jj workspace,\n' +
+          '  or override with -Dskip_vcs_check=true')
+  endif
+  # 2. Local main must NOT be behind origin/main (i.e. the repo is synced with
+  #    remote trunk). Revset = commits in origin/main not reachable from local
+  #    main; non-empty => behind. Uses the last-fetched origin state (run
+  #    `jj git fetch` first to be sure it is current).
+  _behind = run_command(jj_prog, 'log', '-r', 'main@origin ~ ::main',
+                        '--no-graph', '--ignore-working-copy',
+                        '-T', 'change_id ++ "\n"', check: false)
+  if _behind.returncode() != 0
+    # The revset failed — almost always because `main@origin` doesn't exist
+    # yet (a fresh clone that has never run `jj git fetch`, or a remote not
+    # named `origin`). Don't silently treat that as "up to date": warn so
+    # the developer knows the behind-check did NOT actually run.
+    warning('VCS guard: could not evaluate main@origin (no fetched remote ' +
+            'trunk?). Skipping the behind-origin check. Run `jj git fetch` ' +
+            'to enable it, or set -Dskip_vcs_check=true to silence this.')
+  elif _behind.stdout().strip() != ''
+    error('VCS guard: local main is BEHIND origin/main (stale trunk).\n' +
+          '  Run:  jj git fetch  then rebase your work onto main and reconfigure.\n' +
+          '  Override with -Dskip_vcs_check=true')
+  else
+    message('VCS guard: in a jj workspace; local main is up to date with origin/main.')
+  endif
+endif
+
 target_os = host_machine.system()
 target_arch = host_machine.cpu_family()
 macos_sdk = ''
@@ -1014,9 +1058,10 @@ test('chalk_module', chalk_module_test, suite: 'unit')
 #
 # `test_naudit_reference_guidance` and the three rule-driven tests
 # (`engine_malloc`, `engine_legacy`, `engine_bulk`) gate on POSIX
-# `access()` of `/Users/viega/n00b/audit-rules.bnf` inside the test
-# source and emit `[SKIP]` if the file isn't reachable, matching
-# the prior standalone project's behaviour.
+# `access()` of the repo-local canonical rules file — reached via
+# `N00B_AUDIT_TEST_FIXTURE_DIR "/../../../audit-rules.bnf"` (i.e.
+# `<repo>/audit-rules.bnf`), no longer a hardcoded sibling-workspace
+# path — and emit `[SKIP]` if it isn't reachable.
 # ============================================================================
 
 naudit_fixture_dir = (

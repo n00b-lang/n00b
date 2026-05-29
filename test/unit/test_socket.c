@@ -63,7 +63,7 @@ test_socket_listener(void)
     n00b_conduit_io_backend_t *io = n00b_result_get(ir);
 
     // Create a TCP listener on port 0 (OS picks free port).
-    auto listen_r = n00b_conduit_listen_tcp(c, io, "127.0.0.1", 0, 5);
+    auto listen_r = n00b_conduit_listen_tcp(c, io, r"127.0.0.1", 0, 5);
 
     if (n00b_result_is_err(listen_r)) {
         test_skip_or_fail("socket listener (bind/listen failed)");
@@ -100,7 +100,7 @@ test_socket_connect_accept(void)
     assert(n00b_result_is_ok(ir));
     n00b_conduit_io_backend_t *io = n00b_result_get(ir);
 
-    auto listen_r = n00b_conduit_listen_tcp(c, io, "127.0.0.1", 0, 5);
+    auto listen_r = n00b_conduit_listen_tcp(c, io, r"127.0.0.1", 0, 5);
 
     if (n00b_result_is_err(listen_r)) {
         test_skip_or_fail("socket connect/accept (bind/listen failed)");

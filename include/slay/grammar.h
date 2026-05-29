@@ -22,27 +22,32 @@ void            n00b_grammar_set_error_recovery(n00b_grammar_t *g, bool enable);
 void            n00b_grammar_set_max_penalty(n00b_grammar_t *g, uint32_t max);
 /**
  * @brief Finalize a grammar: distribute annotations, compute nullability,
- *        build the valid-token set, and (unless skipped) compute the
- *        first-sets / left-corners / LR0 tables.
+ *        build the valid-token set, and compute first-sets / left-corners.
  *
  * Idempotent: a grammar that is already finalized returns immediately.
  *
+ * First-sets and left-corners ARE computed here because PWZ uses them to
+ * prune. The Earley-only LR0 tables (items / states / predict states) are
+ * NOT — they are expensive and useless to PWZ, so they are computed lazily
+ * by `n00b_grammar_compute_earley_analysis()` the first time Earley is
+ * invoked (`n00b_earley_new`). PWZ-only consumers never pay for the LR0
+ * construction.
+ *
  * @param g  The grammar to finalize.
- * @kw skip_analysis  When `true`, skip the first-set / left-corner / LR0
- *                    analysis (the expensive, ~5-6s-on-big-grammars
- *                    portion). Nullability and the valid-token set are
- *                    still built. Defaults to `false`, so every existing
- *                    caller keeps the full-analysis behavior. PWZ parsing
- *                    works without the analysis (it explores without
- *                    first-set pruning); Earley parsing REQUIRES it. The
- *                    `N00B_SLAY_SKIP_FINALIZE_ANALYSIS=1` environment
- *                    variable remains an independent override that forces
- *                    the skip for any caller.
  */
-void            n00b_grammar_finalize(n00b_grammar_t *g) _kargs
-{
-    bool skip_analysis = false;
-};
+void            n00b_grammar_finalize(n00b_grammar_t *g);
+
+/**
+ * @brief Compute the Earley-only LR0 tables (items / states / predict
+ *        states).
+ *
+ * Called by `n00b_earley_new` the first time Earley parses a grammar.
+ * Idempotent and independent of finalize state; the grammar must already
+ * be finalized (the Earley constructor guarantees this — the LR0 build
+ * relies on the first-sets finalize computes). PWZ never calls it, so
+ * PWZ-only workflows (naudit, the eval JIT, baked grammars) skip the cost.
+ */
+void            n00b_grammar_compute_earley_analysis(n00b_grammar_t *g);
 
 // ============================================================================
 // Registration

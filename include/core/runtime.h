@@ -189,3 +189,22 @@ n00b_slab_allocator(void)
     assert(rt);
     return (n00b_allocator_t *)&rt->slab_allocator;
 }
+
+/**
+ * @brief Get the runtime's system pool allocator.
+ *
+ * The system pool is non-arena, non-GC-scanned, never moved, and never
+ * freed. Use it for objects whose addresses must stay valid outside the
+ * GC's view — e.g. environment slots (`core/env.c`) or heap literals
+ * baked into JIT-generated code as raw immediates (`slay/codegen.c`).
+ *
+ * @return Pointer to the system pool allocator.
+ */
+static inline n00b_allocator_t *
+n00b_system_allocator(void)
+{
+    n00b_runtime_t *rt = n00b_get_runtime();
+
+    assert(rt);
+    return (n00b_allocator_t *)&rt->system_pool;
+}
