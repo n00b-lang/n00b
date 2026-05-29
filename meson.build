@@ -1028,6 +1028,7 @@ foreach _ntest : [
     'engine_bulk',
     'engine_query_mode',
     'parse_string',
+    'preprocess',
     'cli',
     'cli_json',
     'rewrite',

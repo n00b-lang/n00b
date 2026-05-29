@@ -1193,12 +1193,8 @@ n00b_audit_engine_check_file(n00b_audit_engine_t *engine,
      * an expression. Shell out to `cc -E` for languages whose
      * registry entry sets the preprocess flag (currently: C only).
      * The output replaces the raw source for tokenization +
-     * parse purposes, while the original `src_text` is still used
-     * by match handles for `.text` reporting so violation
-     * messages quote the pre-preprocessor source the user wrote.
+     * parse purposes.
      */
-    n00b_string_t *src_text = n00b_string_from_raw(
-        src_buf->data, (int64_t)src_buf->byte_len);
     /* WP-017: N00B_NAUDIT_SKIP_PREPROCESS=1 disables the ncc -E
      * pre-pass, useful for testing already-preprocessed input. */
     const char *skip_pp = getenv("N00B_NAUDIT_SKIP_PREPROCESS");
@@ -1211,6 +1207,24 @@ n00b_audit_engine_check_file(n00b_audit_engine_t *engine,
         }
         src_buf = n00b_result_get(pr_buf);
     }
+
+    /*
+     * WP-021: `src_text` MUST be derived from the SAME buffer that is
+     * tokenized + parsed below (the post-preprocess `src_buf`), not
+     * the raw on-disk source. Filter match handles resolve a match's
+     * `.text` by walking `src_text` using the parse tree's token
+     * line/column coordinates (see `n00b_naudit_match_text` in
+     * filter.c). The preprocessor reflows whitespace (e.g. `int *p`
+     * → `int * p`), so a match's column in the preprocessed parse
+     * tree does NOT index the same byte in the raw source. Building
+     * `src_text` from the raw source while parsing the preprocessed
+     * buffer made `.text` resolve to the wrong (or empty) slice, so
+     * text-predicate filters (e.g. the NULL rule's `text_contains
+     * "NULL"`) silently dropped real violations whenever
+     * preprocessing was on — a false-negative for a standards tool.
+     */
+    n00b_string_t *src_text = n00b_string_from_raw(
+        src_buf->data, (int64_t)src_buf->byte_len);
 
     /* Step 2: set up the tokenizer + token stream via the
      * registry's per-language triple. */

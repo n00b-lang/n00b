@@ -1,0 +1,31 @@
+# WP-021 regression-test guidance: the canonical NULL rule plus its
+# text-predicate filter, isolated to a single rule so the test can
+# assert violation counts deterministically.
+#
+# This mirrors the `n00b.s2_1.null` rule + `is_null_keyword` filter
+# from the canonical `audit-rules.bnf` verbatim. The rule's filter
+# resolves a match's `.text` by walking the engine's `src_text` using
+# the parse tree's token line/column coordinates; under the C
+# preprocessor pre-pass that buffer must be the post-preprocess source
+# (WP-021), or text-predicate filters silently drop real violations.
+
+@schema_version 1
+@project naudit_preprocess_test
+@description WP-021 regression fixture: the canonical NULL rule plus its is_null_keyword text-predicate filter, isolated so the test can assert deterministic violation counts under preprocessing ON and OFF.
+@source_doc test/fixtures/naudit/guidance_preprocess_null.bnf
+@dependencies
+
+@filter_def is_null_keyword
+    expr: arg.text_equals("NULL")
+    description: Matches the literal identifier `NULL`.
+
+@rule n00b.s2_1.null
+@title NULL -> nullptr
+@section section 2.1
+@language c
+@violation_nt provided_identifier
+@filter is_null_keyword
+@rationale `nullptr` is a C23 standard keyword; `NULL` is banned.
+@bad return NULL;
+@good return nullptr;
+@guidance Replace NULL with nullptr in all expression positions.
