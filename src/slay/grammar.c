@@ -1624,12 +1624,25 @@ n00b_grammar_finalize(n00b_grammar_t *g)
         n00b_dict_put(g->valid_tokens, i, true_val);
     }
 
-    compute_all_first_sets(g);
-    compute_left_corners(g);
+    /* WP-017: first-set / left-corner / LR0 computation is a
+     * ~5-6 second cost on big grammars (e.g., c_ncc.bnf) driven
+     * by dict allocation churn triggering GC. Naudit's single-
+     * file workflow doesn't amortize this. Skip when
+     * N00B_SLAY_SKIP_FINALIZE_ANALYSIS=1 — PWZ still works
+     * (nt_first_matches returns true when first_set is null,
+     * so PWZ explores without pruning). Earley REQUIRES first
+     * sets and won't work; that's fine because the user
+     * directive (2026-05-28) was 'Earley should never get
+     * called'. */
+    const char *skip_analysis = getenv("N00B_SLAY_SKIP_FINALIZE_ANALYSIS");
+    if (!skip_analysis || skip_analysis[0] != '1') {
+        compute_all_first_sets(g);
+        compute_left_corners(g);
 
-    compute_lr0_items(g);
-    build_lr0_states(g);
-    lr0_compute_predict_states(g);
+        compute_lr0_items(g);
+        build_lr0_states(g);
+        lr0_compute_predict_states(g);
+    }
 
     // Check if the grammar has group NTs (BSR reconstruction doesn't
     // handle multi-match groups yet, so BSR emission is skipped).

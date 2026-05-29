@@ -178,3 +178,17 @@ n00b_audit_engine_set_allow_unsigned(n00b_audit_engine_t *engine,
 extern void
 n00b_audit_engine_set_repo_protected(n00b_audit_engine_t *engine,
                                       bool                 protected_);
+
+/**
+ * @brief WP-017: set the extra args passed to `cc -E` for the
+ * preprocessor pre-pass. Used by languages whose registry entry
+ * sets `preprocess = true` (currently: C).
+ *
+ * @param engine     Engine handle (must be non-null).
+ * @param cpp_args   Whitespace-separated arguments to forward to
+ *                   the preprocessor (e.g. `r"-I /path -DFOO"`).
+ *                   nullptr or empty means: no extra args.
+ */
+extern void
+n00b_audit_engine_set_cpp_args(n00b_audit_engine_t *engine,
+                                n00b_string_t       *cpp_args);

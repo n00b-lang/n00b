@@ -34,13 +34,36 @@ get_token(n00b_pwz_parser_t *p, int32_t pos)
 }
 
 // ============================================================================
-// Per-parse allocation helpers (GC-managed)
+// Per-parse allocation helpers
+//
+// WP-017: pwz_mem_t / pwz_cxt_t / pwz_cxt_node_t and result
+// pwz_exp_t live in a per-parser hidden n00b_pool_t pool — they
+// never outlive the parser, and GC scanning them every cycle was
+// the dominant parse-time cost on real input. Pool initialized
+// lazily on first allocation, destroyed by n00b_pwz_free. Mirrors
+// ncc's per-parse arena algorithmically; uses n00b's supported
+// pool API.
 // ============================================================================
+
+static inline void
+ensure_pool(n00b_pwz_parser_t *p)
+{
+    if (!p->pool_initialized) {
+        /* HIDDEN pool — GC doesn't walk its pages. Safe because
+         * pool memory only points to other pool memory and to
+         * grammar exps held alive via p->all_exps. */
+        p->parse_allocator = n00b_pool_init(&p->parse_pool,
+                                            .name   = "pwz-parse",
+                                            .hidden = true);
+        p->pool_initialized = true;
+    }
+}
 
 static pwz_mem_t *
 alloc_mem(n00b_pwz_parser_t *p)
 {
-    pwz_mem_t *m = n00b_alloc(pwz_mem_t);
+    ensure_pool(p);
+    pwz_mem_t *m = n00b_alloc(pwz_mem_t, .allocator = p->parse_allocator);
 
     m->start_pos = PWZ_POS_BOTTOM;
     m->end_pos   = PWZ_POS_BOTTOM;
@@ -52,15 +75,16 @@ alloc_mem(n00b_pwz_parser_t *p)
 static pwz_cxt_t *
 alloc_cxt(n00b_pwz_parser_t *p)
 {
-    (void)p;
-    return n00b_alloc(pwz_cxt_t);
+    ensure_pool(p);
+    return n00b_alloc(pwz_cxt_t, .allocator = p->parse_allocator);
 }
 
 static pwz_cxt_node_t *
 alloc_cxt_node(n00b_pwz_parser_t *p, pwz_cxt_t *cxt, pwz_cxt_node_t *next)
 {
-    (void)p;
-    pwz_cxt_node_t *n = n00b_alloc(pwz_cxt_node_t);
+    ensure_pool(p);
+    pwz_cxt_node_t *n = n00b_alloc(pwz_cxt_node_t,
+                                   .allocator = p->parse_allocator);
 
     n->cxt  = cxt;
     n->next = next;
@@ -71,8 +95,12 @@ alloc_cxt_node(n00b_pwz_parser_t *p, pwz_cxt_t *cxt, pwz_cxt_node_t *next)
 static pwz_exp_t *
 alloc_result_exp(n00b_pwz_parser_t *p)
 {
-    (void)p;
-    return n00b_alloc(pwz_exp_t);
+    /* Result exps are converted to n00b_parse_tree_t via
+     * convert_exp_to_tree at parse-end; the conversion COPIES
+     * into fresh parse-tree nodes (separate type). So result
+     * exps don't outlive n00b_pwz_free → safe to pool. */
+    ensure_pool(p);
+    return n00b_alloc(pwz_exp_t, .allocator = p->parse_allocator);
 }
 
 // ============================================================================
@@ -594,9 +622,15 @@ d_d_prime(n00b_pwz_parser_t *p,
         if (tok && exp->alt.nt_id >= 0) {
             n00b_nonterm_t *nt = n00b_get_nonterm(p->grammar, exp->alt.nt_id);
 
-            // Don't filter by per-rule FIRST sets when the NT can derive
-            // empty (first_has_any is set for nullable NTs by finalize).
-            if (nt && !nt->group_nt && !nt->first_has_any) {
+            /* WP-017: port ncc filter — filter per-rule even when
+             * the outer NT has first_has_any. Without this, for
+             * any nullable outer NT, n00b would skip the per-rule
+             * filter and explore ALL alternatives, leading to
+             * exponential blow-up on ambiguous grammars like C.
+             * ncc's nt_first_matches already short-circuits true
+             * when first_has_any, but the per-rule filter on
+             * each alt's rule still prunes meaningfully. */
+            if (nt && !nt->group_nt) {
                 can_filter_alts = true;
             }
         }
@@ -690,23 +724,21 @@ d_u_prime(n00b_pwz_parser_t *p, int32_t pos, pwz_exp_t *result, pwz_cxt_t *cxt)
         break;
 
     case PWZ_CXT_SEQ: {
+        /* WP-017: children / new_left arrays go to the per-parse
+         * pool (matching ncc's arena). Previously they went to GC
+         * arena, which is why this code had 10 GC root register /
+         * unregister operations per token-step. Now: zero. */
+        ensure_pool(p);
         if (cxt->seq.nright == 0) {
-            int32_t        total      = cxt->seq.nleft + 1;
-            pwz_exp_ptr_t *children   = NULL;
-            pwz_exp_t     *seq_result = NULL;
-
-            n00b_gc_register_root(p);
-            n00b_gc_register_root(result);
-            n00b_gc_register_root(cxt);
-            n00b_gc_register_root(children);
-            n00b_gc_register_root(seq_result);
-            children = n00b_alloc_array(pwz_exp_ptr_t, total);
+            int32_t        total    = cxt->seq.nleft + 1;
+            pwz_exp_ptr_t *children = n00b_alloc_array(pwz_exp_ptr_t, total,
+                                                        .allocator = p->parse_allocator);
             for (int32_t i = 0; i < cxt->seq.nleft; i++) {
                 children[i] = cxt->seq.left[i];
             }
             children[cxt->seq.nleft] = result;
 
-            seq_result                = alloc_result_exp(p);
+            pwz_exp_t *seq_result     = alloc_result_exp(p);
             seq_result->kind          = PWZ_SEQ;
             seq_result->seq.name      = cxt->seq.name;
             seq_result->seq.nt_id     = cxt->seq.nt_id;
@@ -714,23 +746,12 @@ d_u_prime(n00b_pwz_parser_t *p, int32_t pos, pwz_exp_t *result, pwz_cxt_t *cxt)
             seq_result->seq.children  = children;
             seq_result->seq.nchildren = total;
             d_u(p, pos, seq_result, cxt->seq.mem);
-            n00b_gc_unregister_root(seq_result);
-            n00b_gc_unregister_root(children);
-            n00b_gc_unregister_root(cxt);
-            n00b_gc_unregister_root(result);
-            n00b_gc_unregister_root(p);
         }
         else {
-            int32_t        new_nleft   = cxt->seq.nleft + 1;
-            pwz_exp_ptr_t *new_left    = NULL;
-            pwz_cxt_t     *new_seq_cxt = NULL;
-
-            n00b_gc_register_root(p);
-            n00b_gc_register_root(result);
-            n00b_gc_register_root(cxt);
-            n00b_gc_register_root(new_left);
-            n00b_gc_register_root(new_seq_cxt);
-            new_left = n00b_alloc_array(pwz_exp_ptr_t, new_nleft);
+            int32_t        new_nleft = cxt->seq.nleft + 1;
+            pwz_exp_ptr_t *new_left  = n00b_alloc_array(pwz_exp_ptr_t,
+                                                        new_nleft,
+                                                        .allocator = p->parse_allocator);
 
             for (int32_t i = 0; i < cxt->seq.nleft; i++) {
                 new_left[i] = cxt->seq.left[i];
@@ -738,7 +759,7 @@ d_u_prime(n00b_pwz_parser_t *p, int32_t pos, pwz_exp_t *result, pwz_cxt_t *cxt)
 
             new_left[cxt->seq.nleft] = result;
 
-            new_seq_cxt = alloc_cxt(p);
+            pwz_cxt_t *new_seq_cxt   = alloc_cxt(p);
 
             new_seq_cxt->kind        = PWZ_CXT_SEQ;
             new_seq_cxt->seq.mem     = cxt->seq.mem;
@@ -750,11 +771,6 @@ d_u_prime(n00b_pwz_parser_t *p, int32_t pos, pwz_exp_t *result, pwz_cxt_t *cxt)
             new_seq_cxt->seq.right   = cxt->seq.right + 1;
             new_seq_cxt->seq.nright  = cxt->seq.nright - 1;
             d_d(p, pos, get_token(p, pos), new_seq_cxt, cxt->seq.right[0]);
-            n00b_gc_unregister_root(new_seq_cxt);
-            n00b_gc_unregister_root(new_left);
-            n00b_gc_unregister_root(cxt);
-            n00b_gc_unregister_root(result);
-            n00b_gc_unregister_root(p);
         }
 
         break;
@@ -1192,6 +1208,15 @@ n00b_pwz_free(n00b_pwz_parser_t *p)
 
     if (p->result_trees.data) {
         n00b_array_free(p->result_trees);
+    }
+
+    /* WP-017: destroy the per-parser pool, freeing all the
+     * intermediate pwz_mem_t / pwz_cxt_t / pwz_cxt_node_t /
+     * pwz_exp_t state in one bulk operation. Mirrors ncc's
+     * parse_arena teardown. */
+    if (p->pool_initialized) {
+        n00b_allocator_destroy(p->parse_allocator);
+        p->pool_initialized = false;
     }
 
     n00b_free(p);

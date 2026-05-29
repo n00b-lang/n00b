@@ -78,6 +78,7 @@
 #include "naudit/tokenizer_registry.h"
 #include "naudit/filter.h"
 #include "naudit/trust_root.h"
+#include "naudit/preprocess.h"
 #include "n00b/eval.h"
 
 /* ---------------------------------------------------------------- */
@@ -160,6 +161,13 @@ struct n00b_audit_engine {
      * to proceed.
      */
     bool                                                       trust_root_failed;
+    /*
+     * WP-017: extra args passed through to `cc -E` when the
+     * language's `preprocess` flag is set. Currently driven by the
+     * `--cpp-args` CLI flag. Pass e.g. `-I /path -DFOO` to bring
+     * project headers into scope. nullptr or empty string is fine.
+     */
+    n00b_string_t                                             *cpp_args;
 };
 
 /* ---------------------------------------------------------------- */
@@ -466,6 +474,22 @@ n00b_audit_engine_set_repo_protected(n00b_audit_engine_t *engine,
         return;
     }
     engine->repo_protected = protected_;
+}
+
+/*
+ * WP-017: setter for the engine's preprocessor extra-args. Driven
+ * by the CLI's `--cpp-args` flag. Empty/null means: invoke `cc -E`
+ * with only its default flags; expect failures on any source that
+ * includes project-specific headers.
+ */
+void
+n00b_audit_engine_set_cpp_args(n00b_audit_engine_t *engine,
+                                n00b_string_t       *cpp_args)
+{
+    if (!engine) {
+        return;
+    }
+    engine->cpp_args = cpp_args;
 }
 
 /* ---------------------------------------------------------------- */
@@ -1159,14 +1183,34 @@ n00b_audit_engine_check_file(n00b_audit_engine_t *engine,
                                N00B_AUDIT_ERR_ENGINE_TARGET_NOT_FOUND);
     }
     n00b_buffer_t *src_buf = n00b_result_get(br);
+
     /*
-     * Materialize the file's full source text once per audit
-     * invocation; the match handle's `.text` accessor + the Phase 4
-     * `arg.starts_with(...)` predicate need it. We pass the same
-     * string into every match handle constructed for this file.
+     * WP-017: C preprocessor pre-pass. Real n00b C code uses
+     * type-as-macro-argument patterns (`n00b_alloc(T)`,
+     * `n00b_alloc_array_with_opts(T, n, opts)`, `typehash(T)`,
+     * etc.) that the grammar can't parse as raw C — the type name
+     * is a keyword or identifier in a position the grammar wants
+     * an expression. Shell out to `cc -E` for languages whose
+     * registry entry sets the preprocess flag (currently: C only).
+     * The output replaces the raw source for tokenization +
+     * parse purposes, while the original `src_text` is still used
+     * by match handles for `.text` reporting so violation
+     * messages quote the pre-preprocessor source the user wrote.
      */
     n00b_string_t *src_text = n00b_string_from_raw(
         src_buf->data, (int64_t)src_buf->byte_len);
+    /* WP-017: N00B_NAUDIT_SKIP_PREPROCESS=1 disables the ncc -E
+     * pre-pass, useful for testing already-preprocessed input. */
+    const char *skip_pp = getenv("N00B_NAUDIT_SKIP_PREPROCESS");
+    bool        skip    = skip_pp && skip_pp[0] == '1';
+    if (lang->preprocess && !skip) {
+        auto pr_buf = n00b_audit_preprocess_c(path, engine->cpp_args);
+        if (n00b_result_is_err(pr_buf)) {
+            return n00b_result_err(n00b_list_t(n00b_audit_violation_t *) *,
+                                   N00B_AUDIT_ERR_ENGINE_PARSE);
+        }
+        src_buf = n00b_result_get(pr_buf);
+    }
 
     /* Step 2: set up the tokenizer + token stream via the
      * registry's per-language triple. */

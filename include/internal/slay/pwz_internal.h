@@ -9,6 +9,7 @@
 #include "slay/pwz.h"
 #include "slay/annotation.h"
 #include "parsers/token_stream.h"
+#include "core/pool.h"
 
 // ============================================================================
 // PWZ expression graph (built once from grammar)
@@ -134,4 +135,22 @@ struct n00b_pwz_parser_t {
 
     pwz_mem_t                   *mem_bottom;
     pwz_exp_t                   *exp_bottom;
+
+    /*
+     * WP-017: per-parser pool for the high-churn intermediate
+     * state (pwz_mem_t / pwz_cxt_t / pwz_cxt_node_t / pwz_exp_t
+     * result-exps + the per-step child / new_left arrays).
+     * Previously GC-managed; the GC walked these every cycle for
+     * nothing, and on real input that dominated parse cost.
+     * Pool is HIDDEN from GC (the only outbound pointers from
+     * pool memory go to other pool memory or to the grammar exp
+     * graph, which is reachable via p->all_exps independently).
+     * Lazily initialized via ensure_pool() on first allocation
+     * so contexts that just want the grammar graph don't pay
+     * the cost. Destroyed by n00b_pwz_free. Mirrors ncc's
+     * per-parse arena algorithmically but uses n00b's pool API.
+     */
+    n00b_pool_t                  parse_pool;
+    n00b_allocator_t            *parse_allocator;
+    bool                         pool_initialized;
 };

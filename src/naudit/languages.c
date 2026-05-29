@@ -84,6 +84,7 @@ build_c_row(void)
     row->name           = r"c";
     row->grammar_path   = n00b_string_from_cstr(N00B_AUDIT_GRAMMAR_PATH);
     row->tokenizer_name = r"c";
+    row->preprocess     = true;  /* WP-017: run cc -E before parse. */
 
     n00b_list_t(n00b_string_t *) *exts = n00b_alloc(
         n00b_list_t(n00b_string_t *));

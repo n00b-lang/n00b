@@ -62,6 +62,15 @@ typedef struct {
     n00b_string_t                *grammar_path;
     n00b_string_t                *tokenizer_name;
     n00b_list_t(n00b_string_t *) *default_extensions;
+    /*
+     * WP-017: when true, the engine runs `cc -E` over the source
+     * before tokenizing. Real n00b C code uses type-as-macro-
+     * argument patterns that the grammar can't parse without
+     * preprocessor expansion. Per-language flag so other
+     * tokenizer/grammar pairs that don't need preprocessing don't
+     * pay the subprocess cost.
+     */
+    bool                          preprocess;
 } n00b_naudit_language_info_t;
 
 /**
