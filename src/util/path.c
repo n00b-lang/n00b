@@ -37,8 +37,6 @@ ensure_cached(void)
     if (!cached_slash) {
         cached_slash  = n00b_string_from_cstr("/");
         cached_period = n00b_string_from_cstr(".");
-        n00b_gc_register_root(cached_slash);
-        n00b_gc_register_root(cached_period);
     }
 }
 
@@ -133,7 +131,6 @@ acquire_base_tmp_dir(void)
         base_tmp_dir = n00b_string_from_cstr("/tmp/");
     }
 
-    n00b_gc_register_root(base_tmp_dir);
     return base_tmp_dir;
 }
 

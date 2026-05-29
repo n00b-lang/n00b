@@ -108,16 +108,6 @@ init_registry(void)
     if (registry_initialized) {
         return;
     }
-    /*
-     * Register the static pointer as a GC root BEFORE allocating
-     * — once the alloc runs, the GC may move objects and we need
-     * the static slot scanned so the cached list survives across
-     * collections. The unprefixed `n00b_gc_register_root` macro
-     * takes the variable's address + a word count derived from
-     * its size; same shape as the precedent uses in
-     * `src/slay/pwz.c`.
-     */
-    n00b_gc_register_root(all_languages);
 
     all_languages = n00b_alloc(
         n00b_list_t(n00b_naudit_language_info_t *));

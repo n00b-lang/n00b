@@ -67,9 +67,6 @@ n00b_str_registry_init(void)
     style_dict = new_string_dict();
     role_dict  = new_string_dict();
 
-    n00b_gc_register_root(style_dict);
-    n00b_gc_register_root(role_dict);
-
     n00b_str_registry_install_defaults();
     n00b_rich_desc_cache_init();
 }
