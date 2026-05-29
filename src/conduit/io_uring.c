@@ -183,7 +183,8 @@ uring_cleanup(void *vctx)
         return;
 
     // Close all backing FDs
-    for (uring_entry_t *e = ctx->entries; e; e = e->next) {
+    uring_entry_t *e;
+    for (e = ctx->entries; e; e = e->next) {
         if (e->backing_fd >= 0) {
             close(e->backing_fd);
             e->backing_fd = -1;
@@ -244,7 +245,8 @@ uring_modify(void *vctx, int fd, n00b_conduit_io_op_t ops,
 
     // Find existing entry
     uring_entry_t *entry = nullptr;
-    for (uring_entry_t *e = ctx->entries; e; e = e->next) {
+    uring_entry_t *e;
+    for (e = ctx->entries; e; e = e->next) {
         if (e->type == URING_ENTRY_FD_POLL && e->user_fd == fd) {
             entry = e;
             break;
@@ -274,7 +276,8 @@ uring_remove(void *vctx, int fd)
         return false;
 
     uring_entry_t *entry = nullptr;
-    for (uring_entry_t *e = ctx->entries; e; e = e->next) {
+    uring_entry_t *e;
+    for (e = ctx->entries; e; e = e->next) {
         if (e->type == URING_ENTRY_FD_POLL && e->user_fd == fd) {
             entry = e;
             break;
@@ -435,13 +438,13 @@ uring_wait(void *vctx, n00b_conduit_io_event_t *events, int max_events,
                     __attribute__((aligned(__alignof__(struct inotify_event))));
                 ssize_t len;
                 while ((len = read(ctx->inotify_fd, buf, sizeof(buf))) > 0) {
-                    char *ptr = buf;
-                    while (ptr < buf + len) {
+                    char *ptr;
+                    for (ptr = buf; ptr < buf + len;) {
                         struct inotify_event *ev =
                             (struct inotify_event *)ptr;
                         // Find watch by wd
-                        for (uring_entry_t *ve = ctx->entries; ve;
-                             ve                = ve->next) {
+                        uring_entry_t *ve;
+                        for (ve = ctx->entries; ve; ve = ve->next) {
                             if (ve->type == URING_ENTRY_VNODE
                                 && ve->user_fd == ev->wd) {
                                 uint32_t vops =
@@ -546,7 +549,8 @@ uring_timer_remove(void *vctx, n00b_conduit_timer_t *timer)
     if (!ctx || !timer)
         return;
 
-    for (uring_entry_t *e = ctx->entries; e; e = e->next) {
+    uring_entry_t *e;
+    for (e = ctx->entries; e; e = e->next) {
         if (e->type == URING_ENTRY_TIMER && e->timer == timer) {
             uring_cancel_entry(ctx, e);
             if (e->backing_fd >= 0) {
@@ -610,7 +614,8 @@ uring_signal_remove(void *vctx, n00b_conduit_signal_watch_t *watch)
     if (!ctx || !watch)
         return;
 
-    for (uring_entry_t *e = ctx->entries; e; e = e->next) {
+    uring_entry_t *e;
+    for (e = ctx->entries; e; e = e->next) {
         if (e->type == URING_ENTRY_SIGNAL && e->signal_watch == watch) {
             uring_cancel_entry(ctx, e);
             if (e->backing_fd >= 0) {
@@ -671,7 +676,8 @@ uring_proc_remove(void *vctx, n00b_conduit_proc_watch_t *watch)
     if (!ctx || !watch)
         return;
 
-    for (uring_entry_t *e = ctx->entries; e; e = e->next) {
+    uring_entry_t *e;
+    for (e = ctx->entries; e; e = e->next) {
         if (e->type == URING_ENTRY_PROC && e->proc_watch == watch) {
             uring_cancel_entry(ctx, e);
             if (e->backing_fd >= 0) {
@@ -761,7 +767,8 @@ uring_vnode_remove(void *vctx, n00b_conduit_vnode_watch_t *watch)
     if (!ctx || !watch)
         return;
 
-    for (uring_entry_t *e = ctx->entries; e; e = e->next) {
+    uring_entry_t *e;
+    for (e = ctx->entries; e; e = e->next) {
         if (e->type == URING_ENTRY_VNODE && e->vnode_watch == watch) {
             if (ctx->inotify_fd >= 0 && e->user_fd >= 0) {
                 inotify_rm_watch(ctx->inotify_fd, e->user_fd);
@@ -814,7 +821,8 @@ uring_user_event_remove(void *vctx, n00b_conduit_user_event_t *event)
     if (!ctx || !event)
         return;
 
-    for (uring_entry_t *e = ctx->entries; e; e = e->next) {
+    uring_entry_t *e;
+    for (e = ctx->entries; e; e = e->next) {
         if (e->type == URING_ENTRY_USER_EVENT && e->user_event == event) {
             uring_cancel_entry(ctx, e);
             if (e->backing_fd >= 0) {
@@ -834,7 +842,8 @@ uring_user_event_trigger(void *vctx, n00b_conduit_user_event_t *event)
     if (!ctx || !event)
         return;
 
-    for (uring_entry_t *e = ctx->entries; e; e = e->next) {
+    uring_entry_t *e;
+    for (e = ctx->entries; e; e = e->next) {
         if (e->type == URING_ENTRY_USER_EVENT && e->user_event
             && e->user_event->event_id == event->event_id) {
             uint64_t val = 1;

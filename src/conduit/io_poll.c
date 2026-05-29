@@ -999,8 +999,12 @@ poll_process_vnodes(poll_ctx_t *ctx)
         return;
     }
 
-    // Process each event
-    for (char *ptr = buf; ptr < buf + len;) {
+    // Process each event. The pointer is hoisted out of the for-init
+    // because ncc's stack-map analysis flags every pointer-typed root
+    // declared in a statement context, even ones (like this) that
+    // point into a stack buffer rather than the GC heap.
+    char *ptr;
+    for (ptr = buf; ptr < buf + len;) {
         struct inotify_event *event = (struct inotify_event *)ptr;
 
         // Find matching vnode watch

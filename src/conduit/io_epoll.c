@@ -186,7 +186,8 @@ epoll_io_cleanup(void *vctx)
         return;
 
     // Close all backing FDs
-    for (epoll_entry_t *e = ctx->entries; e; e = e->next) {
+    epoll_entry_t *e;
+    for (e = ctx->entries; e; e = e->next) {
         if (e->backing_fd >= 0) {
             close(e->backing_fd);
             e->backing_fd = -1;
@@ -243,7 +244,8 @@ epoll_io_modify(void *vctx, int fd, n00b_conduit_io_op_t ops,
         return false;
 
     epoll_entry_t *entry = nullptr;
-    for (epoll_entry_t *e = ctx->entries; e; e = e->next) {
+    epoll_entry_t *e;
+    for (e = ctx->entries; e; e = e->next) {
         if (e->type == EPOLL_ENTRY_FD_POLL && e->user_fd == fd) {
             entry = e;
             break;
@@ -269,7 +271,8 @@ epoll_io_remove(void *vctx, int fd)
         return false;
 
     epoll_entry_t *entry = nullptr;
-    for (epoll_entry_t *e = ctx->entries; e; e = e->next) {
+    epoll_entry_t *e;
+    for (e = ctx->entries; e; e = e->next) {
         if (e->type == EPOLL_ENTRY_FD_POLL && e->user_fd == fd) {
             entry = e;
             break;
@@ -402,8 +405,8 @@ epoll_io_wait(void *vctx, n00b_conduit_io_event_t *events, int max_events,
                     char *ptr = buf;
                     while (ptr < buf + len) {
                         struct inotify_event *ev = (struct inotify_event *)ptr;
-                        for (epoll_entry_t *ve = ctx->entries; ve;
-                             ve                = ve->next) {
+                        epoll_entry_t *ve;
+                        for (ve = ctx->entries; ve; ve = ve->next) {
                             if (ve->type == EPOLL_ENTRY_VNODE
                                 && ve->user_fd == ev->wd) {
                                 uint32_t vops =
@@ -500,7 +503,8 @@ epoll_timer_remove(void *vctx, n00b_conduit_timer_t *timer)
     if (!ctx || !timer)
         return;
 
-    for (epoll_entry_t *e = ctx->entries; e; e = e->next) {
+    epoll_entry_t *e;
+    for (e = ctx->entries; e; e = e->next) {
         if (e->type == EPOLL_ENTRY_TIMER && e->timer == timer) {
             if (e->backing_fd >= 0) {
                 epoll_ctl(ctx->epfd, EPOLL_CTL_DEL, e->backing_fd, nullptr);
@@ -564,7 +568,8 @@ epoll_signal_remove(void *vctx, n00b_conduit_signal_watch_t *watch)
     if (!ctx || !watch)
         return;
 
-    for (epoll_entry_t *e = ctx->entries; e; e = e->next) {
+    epoll_entry_t *e;
+    for (e = ctx->entries; e; e = e->next) {
         if (e->type == EPOLL_ENTRY_SIGNAL && e->signal_watch == watch) {
             if (e->backing_fd >= 0) {
                 epoll_ctl(ctx->epfd, EPOLL_CTL_DEL, e->backing_fd, nullptr);
@@ -625,7 +630,8 @@ epoll_proc_remove(void *vctx, n00b_conduit_proc_watch_t *watch)
     if (!ctx || !watch)
         return;
 
-    for (epoll_entry_t *e = ctx->entries; e; e = e->next) {
+    epoll_entry_t *e;
+    for (e = ctx->entries; e; e = e->next) {
         if (e->type == EPOLL_ENTRY_PROC && e->proc_watch == watch) {
             if (e->backing_fd >= 0) {
                 epoll_ctl(ctx->epfd, EPOLL_CTL_DEL, e->backing_fd, nullptr);
@@ -715,7 +721,8 @@ epoll_vnode_remove(void *vctx, n00b_conduit_vnode_watch_t *watch)
     if (!ctx || !watch)
         return;
 
-    for (epoll_entry_t *e = ctx->entries; e; e = e->next) {
+    epoll_entry_t *e;
+    for (e = ctx->entries; e; e = e->next) {
         if (e->type == EPOLL_ENTRY_VNODE && e->vnode_watch == watch) {
             if (ctx->inotify_fd >= 0 && e->user_fd >= 0) {
                 inotify_rm_watch(ctx->inotify_fd, e->user_fd);
@@ -768,7 +775,8 @@ epoll_user_event_remove(void *vctx, n00b_conduit_user_event_t *event)
     if (!ctx || !event)
         return;
 
-    for (epoll_entry_t *e = ctx->entries; e; e = e->next) {
+    epoll_entry_t *e;
+    for (e = ctx->entries; e; e = e->next) {
         if (e->type == EPOLL_ENTRY_USER_EVENT && e->user_event == event) {
             if (e->backing_fd >= 0) {
                 epoll_ctl(ctx->epfd, EPOLL_CTL_DEL, e->backing_fd, nullptr);
@@ -788,7 +796,8 @@ epoll_user_event_trigger(void *vctx, n00b_conduit_user_event_t *event)
     if (!ctx || !event)
         return;
 
-    for (epoll_entry_t *e = ctx->entries; e; e = e->next) {
+    epoll_entry_t *e;
+    for (e = ctx->entries; e; e = e->next) {
         if (e->type == EPOLL_ENTRY_USER_EVENT && e->user_event
             && e->user_event->event_id == event->event_id) {
             uint64_t val = 1;
