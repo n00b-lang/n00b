@@ -1,6 +1,8 @@
 #include "core/static_image.h"
 #include "core/string.h"
+#include "core/gc.h"
 #include "text/strings/string_ops.h"
+#include <string.h>
 
 n00b_string_t *
 n00b_static_image_status_name(n00b_static_image_status_t status)
@@ -222,4 +224,94 @@ n00b_static_image_build(const n00b_static_image_request_t *request,
 
     builder->status = status;
     return status;
+}
+
+// ============================================================================
+// Static grammar images (WP-018)
+// ============================================================================
+//
+// Registration happens from `[[gnu::constructor]]` functions in baked
+// grammar-image translation units, which run BEFORE the n00b runtime is
+// initialized. The registry therefore cannot use any n00b allocation,
+// dict, or string primitive at registration time — it is a plain
+// fixed-capacity C table populated with the (name, builder) pairs and the
+// lazily-materialized grammar pointer. Materialization (which DOES use
+// the runtime) is deferred to the first `n00b_static_grammar_lookup`,
+// long after `n00b_init`/`n00b_init_simple` has run.
+
+#define N00B_STATIC_GRAMMAR_MAX 32
+
+typedef struct {
+    const char                     *name;
+    n00b_static_grammar_builder_fn  builder;
+    n00b_grammar_t                 *materialized;
+} n00b_static_grammar_slot_t;
+
+static n00b_static_grammar_slot_t n00b_static_grammar_table[N00B_STATIC_GRAMMAR_MAX];
+static int                        n00b_static_grammar_count = 0;
+
+void
+n00b_static_grammar_register(const char                    *name,
+                             n00b_static_grammar_builder_fn builder)
+{
+    if (!name || !builder) {
+        return;
+    }
+
+    // Replace an existing registration of the same name.
+    for (int i = 0; i < n00b_static_grammar_count; i++) {
+        if (strcmp(n00b_static_grammar_table[i].name, name) == 0) {
+            n00b_static_grammar_table[i].builder      = builder;
+            n00b_static_grammar_table[i].materialized = nullptr;
+            return;
+        }
+    }
+
+    if (n00b_static_grammar_count >= N00B_STATIC_GRAMMAR_MAX) {
+        // Out of slots: silently drop. A lookup for this name will miss
+        // and the consumer falls back to a runtime parse. Raising here
+        // is not an option (we are pre-runtime in a constructor).
+        return;
+    }
+
+    n00b_static_grammar_slot_t *slot
+        = &n00b_static_grammar_table[n00b_static_grammar_count++];
+    slot->name         = name;
+    slot->builder      = builder;
+    slot->materialized = nullptr;
+}
+
+n00b_grammar_t *
+n00b_static_grammar_lookup(const char *name)
+{
+    if (!name) {
+        return nullptr;
+    }
+
+    // The table holds `materialized` grammar pointers that live on the
+    // GC heap. Register the table as a GC root on first use so those
+    // grammars are scanned and not collected between calls. This can
+    // only happen here (lazily, post-runtime-init), never at
+    // registration time — registration runs in `[[gnu::constructor]]`s
+    // before the runtime exists.
+    static bool root_registered = false;
+    if (!root_registered) {
+        _n00b_gc_register_root(&n00b_static_grammar_table,
+                               sizeof(n00b_static_grammar_table)
+                                   / sizeof(void *));
+        root_registered = true;
+    }
+
+    for (int i = 0; i < n00b_static_grammar_count; i++) {
+        n00b_static_grammar_slot_t *slot = &n00b_static_grammar_table[i];
+        if (strcmp(slot->name, name) != 0) {
+            continue;
+        }
+        if (!slot->materialized) {
+            slot->materialized = slot->builder();
+        }
+        return slot->materialized;
+    }
+
+    return nullptr;
 }
