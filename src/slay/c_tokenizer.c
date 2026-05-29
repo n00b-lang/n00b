@@ -242,14 +242,22 @@ restart:
 
     if (cp == '"' && pfx >= 0) {
         n00b_option_t(n00b_string_t *) val = n00b_scan_string_double(s);
-        n00b_scan_emit(s, .token_type = "STRING_LIT", .contents = val);
+        // The C grammar (grammars/c_ncc.bnf) declares the string
+        // literal type as %STRING (not %STRING_LIT, which is the
+        // n00b-language grammar's spelling). Emitting the wrong
+        // type name makes n00b_scan_emit return BAD_TYPE_NAME and
+        // silently drop the token, so any C construct containing a
+        // string literal (notably gcc asm-labels: `int x __asm("y");`)
+        // fails to parse against the merged grammar.
+        n00b_scan_emit(s, .token_type = "STRING", .contents = val);
         return true;
     }
 
     // Character literals (with optional encoding prefix).
     if (cp == '\'' && pfx >= 0) {
         n00b_option_t(n00b_string_t *) val = n00b_scan_string_single(s);
-        n00b_scan_emit(s, .token_type = "CHAR_LIT", .contents = val);
+        // Likewise %CHAR, not %CHAR_LIT — see the STRING note above.
+        n00b_scan_emit(s, .token_type = "CHAR", .contents = val);
         return true;
     }
 

@@ -1027,6 +1027,7 @@ foreach _ntest : [
     'engine_malloc',
     'engine_bulk',
     'engine_query_mode',
+    'parse_string',
     'cli',
     'cli_json',
     'rewrite',
