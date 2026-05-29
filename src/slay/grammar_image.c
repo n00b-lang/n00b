@@ -21,12 +21,6 @@
 #include "text/strings/format.h"
 #include "util/assert.h"
 
-// libc <stdlib.h> is needed for `setenv` (see the note in
-// n00b_grammar_image_finish on why the n00b env primitive cannot be used
-// here). n00b-api-guidelines § 7.4 normally bans this; the deviation is
-// documented at the call site and flagged for the orchestrator.
-#include <stdlib.h>
-
 // ============================================================================
 // Reconstruction primitives
 // ============================================================================
@@ -170,32 +164,12 @@ n00b_grammar_image_finish(n00b_grammar_t *g,
     g->max_penalty = max_penalty;
 
     // A baked grammar is captured WITHOUT first-set / left-corner / LR0
-    // analysis (it was finalized under N00B_SLAY_SKIP_FINALIZE_ANALYSIS
-    // at bake time, and PWZ — the only consumer — does not need that
-    // derived state). Force the same gate here so reconstruction stays
-    // fast and structurally identical regardless of the consumer's
-    // environment, then finalize to rebuild nullability + valid_tokens.
-    //
-    // §7.4 / W-4 DEVIATION (flagged for orchestrator): this gate is read
-    // by `n00b_grammar_finalize()` (src/slay/grammar.c) via the LIBC
-    // `getenv()`, not `n00b_getenv()`. The guideline-blessed n00b
-    // primitive `n00b_putenv()` rebinds the libc `environ` pointer to a
-    // `system_pool`-allocated slot array; a subsequent libc `getenv()`
-    // walk of that rebound array faults non-deterministically
-    // (EXC_BAD_ACCESS in libc `__findenv_locked`, reproducible ~50% of
-    // runs under MALLOC_PERTURB_). That is a libn00b core
-    // env.c/`n00b_putenv`↔libc-`getenv` interaction issue, NOT WP-018
-    // code. The two in-guidelines ways to remove this `setenv` both
-    // require out-of-scope changes: (a) make the slay
-    // `n00b_grammar_finalize()` API read the skip-analysis intent as an
-    // explicit parameter (the slay grammar API must not change in this
-    // WP — W-1), or (b) make slay/grammar.c read via `n00b_getenv()` and
-    // fix the `n00b_putenv` libc-visibility crash (both libn00b core).
-    // Until one of those lands, libc `setenv` is the only mechanism that
-    // is observable by the libc `getenv()` consumer AND does not crash.
-    setenv("N00B_SLAY_SKIP_FINALIZE_ANALYSIS", "1", 1);
-
-    n00b_grammar_finalize(g);
+    // analysis (it was finalized with `.skip_analysis = true` at bake
+    // time, and PWZ — the only consumer — does not need that derived
+    // state). Request the same skip here so reconstruction stays fast and
+    // structurally identical regardless of the consumer's environment,
+    // then finalize to rebuild nullability + valid_tokens.
+    n00b_grammar_finalize(g, .skip_analysis = true);
 }
 
 // ============================================================================

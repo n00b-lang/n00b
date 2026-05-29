@@ -251,6 +251,15 @@ typedef struct {
 static n00b_static_grammar_slot_t n00b_static_grammar_table[N00B_STATIC_GRAMMAR_MAX];
 static int                        n00b_static_grammar_count = 0;
 
+// PRE-RUNTIME C-ABI ENTRY POINT (n00b-api-guidelines § 11.4). The
+// `const char *name` is the C-ABI boundary: this runs from a
+// `[[gnu::constructor]]` before `n00b_init`, so `n00b_string_t *` cannot
+// be constructed yet. The matching reader (`n00b_static_grammar_lookup`,
+// below) takes `n00b_string_t *` per § 2.2 and compares against the
+// stored C string. Writer and reader share one module-static table by
+// design, so this boundary is annotated in place rather than relocated to
+// a dedicated shim file (accepted via project DECISIONS — see the header
+// @note for the full rationale).
 void
 n00b_static_grammar_register(const char                    *name,
                              n00b_static_grammar_builder_fn builder)

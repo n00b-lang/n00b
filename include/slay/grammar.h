@@ -20,7 +20,29 @@ void            n00b_grammar_set_start_id(n00b_grammar_t *g, n00b_nt_id_t nt_id)
     n00b_grammar_set_start_id((g), n00b_nonterm_id(nt))
 void            n00b_grammar_set_error_recovery(n00b_grammar_t *g, bool enable);
 void            n00b_grammar_set_max_penalty(n00b_grammar_t *g, uint32_t max);
-void            n00b_grammar_finalize(n00b_grammar_t *g);
+/**
+ * @brief Finalize a grammar: distribute annotations, compute nullability,
+ *        build the valid-token set, and (unless skipped) compute the
+ *        first-sets / left-corners / LR0 tables.
+ *
+ * Idempotent: a grammar that is already finalized returns immediately.
+ *
+ * @param g  The grammar to finalize.
+ * @kw skip_analysis  When `true`, skip the first-set / left-corner / LR0
+ *                    analysis (the expensive, ~5-6s-on-big-grammars
+ *                    portion). Nullability and the valid-token set are
+ *                    still built. Defaults to `false`, so every existing
+ *                    caller keeps the full-analysis behavior. PWZ parsing
+ *                    works without the analysis (it explores without
+ *                    first-set pruning); Earley parsing REQUIRES it. The
+ *                    `N00B_SLAY_SKIP_FINALIZE_ANALYSIS=1` environment
+ *                    variable remains an independent override that forces
+ *                    the skip for any caller.
+ */
+void            n00b_grammar_finalize(n00b_grammar_t *g) _kargs
+{
+    bool skip_analysis = false;
+};
 
 // ============================================================================
 // Registration
