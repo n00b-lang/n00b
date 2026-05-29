@@ -38,10 +38,24 @@
  */
 
 #include "slay/grammar.h"
+#include "core/alloc.h"
+#include "adt/result.h"
 
 // ============================================================================
 // Reconstruction primitives (called by emitted C source at runtime)
 // ============================================================================
+//
+// Allocator threading (n00b-api-guidelines § 4.1): every reconstruction
+// primitive that allocates accepts an optional `.allocator` kwarg
+// (default `nullptr` ⇒ runtime default). Where these primitives call the
+// slay grammar builder API (`n00b_grammar_new`, `n00b_nonterm`,
+// `n00b_register_terminal`, `n00b_register_literal_type`,
+// `n00b_grammar_set_terminal_category`, `n00b_grammar_finalize`), that
+// API does NOT yet expose `.allocator`, so the kwarg cannot be forwarded
+// there from this WP (changing the slay grammar API is out of scope for
+// WP-018). It IS forwarded to every allocation these primitives make
+// directly — notably the private match list in `n00b_grammar_image_add_rule`.
+// See the per-function notes below.
 
 /**
  * @brief Begin reconstructing a baked grammar.
@@ -50,8 +64,16 @@
  * generation so the subsequent `n00b_grammar_finalize()` does not
  * re-inject error rules on top of the ones already baked into the
  * image. Returns the grammar the rest of the primitives populate.
+ *
+ * @kw allocator  Optional allocator (nullptr = runtime default). NOTE:
+ *                the grammar itself is allocated by the slay
+ *                `n00b_grammar_new()`, which does not yet accept
+ *                `.allocator`; the kwarg is accepted for API consistency
+ *                and future forwarding but cannot thread through to the
+ *                grammar allocation until the slay API gains the kwarg.
  */
-extern n00b_grammar_t *n00b_grammar_image_begin(void);
+extern n00b_grammar_t *n00b_grammar_image_begin()
+    _kargs { n00b_allocator_t *allocator = nullptr; };
 
 /**
  * @brief Create the next non-terminal during reconstruction.
@@ -66,21 +88,32 @@ extern n00b_grammar_t *n00b_grammar_image_begin(void);
  * @param name         NT name (empty string ⇒ anonymous).
  * @param group_nt     True for synthetic EBNF group NTs.
  * @param start_nt     True if this NT is the grammar start symbol.
+ * @kw allocator       Optional allocator (nullptr = runtime default).
+ *                     The NT is allocated by the slay `n00b_nonterm()`,
+ *                     which does not yet accept `.allocator`; accepted
+ *                     for API consistency, cannot forward until the slay
+ *                     API gains the kwarg.
  */
 extern void n00b_grammar_image_add_nt(n00b_grammar_t *g,
                                       int64_t         expected_id,
                                       n00b_string_t  *name,
                                       bool            group_nt,
-                                      bool            start_nt);
+                                      bool            start_nt)
+    _kargs { n00b_allocator_t *allocator = nullptr; };
 
 /**
  * @brief Register a fixed-text terminal during reconstruction.
  *
  * Mirrors `n00b_register_terminal`; the returned id is hash-derived
  * from @p name so it matches the source grammar without being stored.
+ *
+ * @kw allocator  Optional allocator (nullptr = runtime default).
+ *                Forwarding blocked: the underlying slay
+ *                `n00b_register_terminal()` does not accept `.allocator`.
  */
 extern void n00b_grammar_image_add_terminal(n00b_grammar_t *g,
-                                            n00b_string_t  *name);
+                                            n00b_string_t  *name)
+    _kargs { n00b_allocator_t *allocator = nullptr; };
 
 /**
  * @brief Register a named literal type during reconstruction.
@@ -88,18 +121,30 @@ extern void n00b_grammar_image_add_terminal(n00b_grammar_t *g,
  * Mirrors `n00b_register_literal_type`; literal-type ids are dense and
  * assigned in registration order, so types must be replayed in the same
  * order they appear in the source grammar's `literal_type_map`.
+ *
+ * @kw allocator  Optional allocator (nullptr = runtime default).
+ *                Forwarding blocked: the underlying slay
+ *                `n00b_register_literal_type()` does not accept
+ *                `.allocator`.
  */
 extern void n00b_grammar_image_add_literal_type(n00b_grammar_t *g,
-                                                n00b_string_t  *name);
+                                                n00b_string_t  *name)
+    _kargs { n00b_allocator_t *allocator = nullptr; };
 
 /**
  * @brief Attach a terminal category during reconstruction.
  *
  * Mirrors `n00b_grammar_set_terminal_category`.
+ *
+ * @kw allocator  Optional allocator (nullptr = runtime default).
+ *                Forwarding blocked: the underlying slay
+ *                `n00b_grammar_set_terminal_category()` does not accept
+ *                `.allocator`.
  */
 extern void n00b_grammar_image_add_terminal_category(n00b_grammar_t *g,
                                                      int64_t         terminal_id,
-                                                     n00b_string_t  *category);
+                                                     n00b_string_t  *category)
+    _kargs { n00b_allocator_t *allocator = nullptr; };
 
 /**
  * @brief Append the next rule during reconstruction.
@@ -116,6 +161,11 @@ extern void n00b_grammar_image_add_terminal_category(n00b_grammar_t *g,
  * @param link_ix    Penalty link index (-1 when not a penalty rule).
  * @param n          Number of match items.
  * @param items      Match items (copied).
+ * @kw allocator     Optional allocator (nullptr = runtime default).
+ *                   Forwarded to the private match-contents list this
+ *                   function allocates directly. (The owning NT's
+ *                   `rule_ids` push goes through the slay grammar API,
+ *                   which does not yet accept `.allocator`.)
  */
 extern void n00b_grammar_image_add_rule(n00b_grammar_t *g,
                                         n00b_nt_id_t    nt_id,
@@ -123,7 +173,8 @@ extern void n00b_grammar_image_add_rule(n00b_grammar_t *g,
                                         bool            penalty,
                                         int32_t         link_ix,
                                         int             n,
-                                        n00b_match_t   *items);
+                                        n00b_match_t   *items)
+    _kargs { n00b_allocator_t *allocator = nullptr; };
 
 /**
  * @brief Build a `N00B_MATCH_GROUP` match item during reconstruction.
@@ -132,11 +183,16 @@ extern void n00b_grammar_image_add_rule(n00b_grammar_t *g,
  * bounds and contents NT id, mirroring `n00b_group_match_v` without
  * creating a fresh group NT (the NT already exists from the baked
  * `n00b_grammar_image_add_nt` calls).
+ *
+ * @kw allocator  Optional allocator (nullptr = runtime default).
+ *                Forwarded to the `n00b_alloc` of the backing
+ *                `n00b_rule_group_t`.
  */
 extern n00b_match_t n00b_grammar_image_group(int32_t min,
                                              int32_t max,
                                              int32_t gid,
-                                             int64_t contents_id);
+                                             int64_t contents_id)
+    _kargs { n00b_allocator_t *allocator = nullptr; };
 
 /**
  * @brief Finish reconstruction: set the tokenizer and finalize.
@@ -146,14 +202,39 @@ extern n00b_match_t n00b_grammar_image_group(int32_t min,
  * does, then finalizes the grammar so derived analysis state is
  * recomputed. After this call the grammar is ready for
  * `n00b_grammar_parse`.
+ *
+ * @kw allocator  Optional allocator (nullptr = runtime default).
+ *                Forwarding blocked: the underlying slay
+ *                `n00b_grammar_finalize()` does not accept `.allocator`.
  */
 extern void n00b_grammar_image_finish(n00b_grammar_t *g,
                                       n00b_string_t  *tokenizer_name,
-                                      uint32_t        max_penalty);
+                                      uint32_t        max_penalty)
+    _kargs { n00b_allocator_t *allocator = nullptr; };
 
 // ============================================================================
 // Emitter (build-time)
 // ============================================================================
+
+/**
+ * @brief Error codes for `n00b_grammar_image_emit`.
+ *
+ * Negative to avoid collision with `errno` (n00b-api-guidelines § 5.1).
+ */
+typedef enum {
+    N00B_GRAMMAR_IMAGE_OK            = 0,
+    N00B_GRAMMAR_IMAGE_ERR_NULL_ARG  = -1, ///< A required argument was null.
+    N00B_GRAMMAR_IMAGE_ERR_NOT_FINAL = -2, ///< @p g was not finalized.
+} n00b_grammar_image_err_t;
+
+/**
+ * @brief Human-readable description for a `n00b_grammar_image_emit` error.
+ *
+ * @param err  An `n00b_grammar_image_err_t` value (passed as the generic
+ *             `n00b_err_t` carried by `n00b_result_t`).
+ * @return A static description string (never null).
+ */
+extern n00b_string_t *n00b_grammar_image_emit_err_str(n00b_err_t err);
 
 /**
  * @brief Emit C source reconstructing @p g.
@@ -168,9 +249,21 @@ extern void n00b_grammar_image_finish(n00b_grammar_t *g,
  * @param g              Finalized grammar to bake.
  * @param symbol_prefix  C identifier prefix for emitted symbols.
  * @param grammar_name   Lookup name registered with the runtime.
- * @return The emitted C source as a freshly-allocated n00b string, or
- *         nullptr on failure (e.g. @p g not finalized).
+ * @kw allocator         Optional allocator (nullptr = runtime default).
+ *                       Forwarded to the internal `n00b_list_new_private`
+ *                       parts accumulator and the `n00b_string_from_cstr`
+ *                       fragments this emitter allocates. (`n00b_cformat`
+ *                       uses checked variadics and has no `.allocator`
+ *                       kwarg, so its allocations use the runtime
+ *                       default; this is a slay/string-API limit, not an
+ *                       omission.)
+ * @return `n00b_result_ok` wrapping the emitted C source as a
+ *         freshly-allocated n00b string, or `n00b_result_err` with a
+ *         `n00b_grammar_image_err_t` code on failure (e.g. @p g not
+ *         finalized or a required argument is null).
  */
-extern n00b_string_t *n00b_grammar_image_emit(n00b_grammar_t *g,
-                                              n00b_string_t  *symbol_prefix,
-                                              n00b_string_t  *grammar_name);
+extern n00b_result_t(n00b_string_t *)
+n00b_grammar_image_emit(n00b_grammar_t *g,
+                        n00b_string_t  *symbol_prefix,
+                        n00b_string_t  *grammar_name)
+    _kargs { n00b_allocator_t *allocator = nullptr; };

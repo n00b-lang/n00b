@@ -338,12 +338,23 @@ get_or_load_grammar(n00b_audit_engine_t *engine,
      * the static image is a fast path, not a hard dependency.
      */
     if (lang->static_grammar_name && lang->grammar_path) {
-        n00b_grammar_t *baked = n00b_static_grammar_lookup(
-            lang->static_grammar_name->data);
-        if (baked) {
+        auto baked_opt = n00b_static_grammar_lookup(lang->static_grammar_name);
+        if (n00b_option_is_set(baked_opt)) {
+            n00b_grammar_t *baked = n00b_option_get(baked_opt);
             if (!validate_violation_nts(engine, lang, baked, err_out)) {
                 return nullptr;
             }
+            /*
+             * The materialized grammar is immutable once
+             * `n00b_static_grammar_lookup` has finalized it (the
+             * static-image registry memoizes a single instance and only
+             * ever hands back that pointer; nothing mutates it after
+             * finalize). It is therefore safe to cache the same pointer
+             * in this per-engine dict and to share it across engines —
+             * unlike the runtime-parse path below, which owns a freshly
+             * parsed grammar per engine and must free it on validation
+             * failure.
+             */
             n00b_dict_put(engine->grammars, lang->name, baked);
             return baked;
         }

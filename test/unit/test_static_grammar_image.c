@@ -58,7 +58,18 @@
 // The build-time-baked c_ncc grammar registers itself via a
 // [[gnu::constructor]] in the linked-in c_grammar_image.c under this
 // name (see the meson `c_grammar_image` custom_target).
-#define C_NCC_IMAGE_NAME "c_ncc"
+#define C_NCC_IMAGE_NAME r"c_ncc"
+
+// Test convenience: unwrap the `n00b_option_t(n00b_grammar_t *)` returned
+// by `n00b_static_grammar_lookup` to a bare pointer (nullptr when the
+// name is unregistered) so the assertions below can keep the
+// `img && ...` idiom.
+static n00b_grammar_t *
+lookup_static_grammar(n00b_string_t *name)
+{
+    auto opt = n00b_static_grammar_lookup(name);
+    return n00b_option_is_set(opt) ? n00b_option_get(opt) : nullptr;
+}
 
 // A tiny self-contained grammar used by Test 1. Char-level (default
 // tokenizer) so the bake tool needs no language tokenizer.
@@ -284,7 +295,7 @@ test_bake_roundtrip(void)
 static void
 test_grammar_structure_equivalence(void)
 {
-    n00b_grammar_t *img = n00b_static_grammar_lookup(C_NCC_IMAGE_NAME);
+    n00b_grammar_t *img = lookup_static_grammar(C_NCC_IMAGE_NAME);
     assert(img && "the build-time-baked c_ncc image must be registered");
 
     n00b_grammar_t *fresh = fresh_c_grammar();
@@ -336,7 +347,7 @@ test_grammar_structure_equivalence(void)
 static void
 test_c_ncc_real_parse(void)
 {
-    n00b_grammar_t *img = n00b_static_grammar_lookup(C_NCC_IMAGE_NAME);
+    n00b_grammar_t *img = lookup_static_grammar(C_NCC_IMAGE_NAME);
     assert(img);
 
     n00b_parse_tree_t *t_img = parse_c_file(img, NAUDIT_C_FIXTURE_PATH);
@@ -404,7 +415,7 @@ test_perf(void)
     // build-linked image: first lookup forces materialization.
     struct timespec t1;
     clock_gettime(CLOCK_MONOTONIC, &t1);
-    n00b_grammar_t *img = n00b_static_grammar_lookup(C_NCC_IMAGE_NAME);
+    n00b_grammar_t *img = lookup_static_grammar(C_NCC_IMAGE_NAME);
     double load_s = seconds_since(t1);
     assert(img);
 

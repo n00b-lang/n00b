@@ -1971,17 +1971,22 @@ emit_grammar_image(const helper_request_t *req)
 
     // The grammar lookup name defaults to the start NT (matches the
     // bake tool's default); the symbol prefix is request-supplied.
-    n00b_string_t *emitted = n00b_grammar_image_emit(
+    n00b_result_t(n00b_string_t *) emit_r = n00b_grammar_image_emit(
         g,
         n00b_string_from_cstr(req->symbol_prefix),
         start_s);
 
     free(bnf_src);
 
-    if (!emitted) {
-        fprintf(stderr, "grammar image emit failed for '%s'", req->bnf_path);
+    if (n00b_result_is_err(emit_r)) {
+        n00b_string_t *why = n00b_grammar_image_emit_err_str(
+            n00b_result_get_err(emit_r));
+        fprintf(stderr, "grammar image emit failed for '%s': %s",
+                req->bnf_path, why->data);
         return 5;
     }
+
+    n00b_string_t *emitted = n00b_result_get(emit_r);
 
     printf("NCC_STATIC_INIT_OK n00b_static_grammar_lookup(\"%s\")\n%s",
            req->start_nt, emitted->data);

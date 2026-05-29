@@ -14,8 +14,6 @@
 // bytes the emitted C source must contain verbatim
 // (n00b-api-guidelines § 2.11 — plain format strings, not raw).
 
-#include <stdlib.h>
-
 #include "slay/grammar_image.h"
 #include "internal/slay/grammar_internal.h"
 #include "core/string.h"
@@ -23,13 +21,24 @@
 #include "text/strings/format.h"
 #include "util/assert.h"
 
+// libc <stdlib.h> is needed for `setenv` (see the note in
+// n00b_grammar_image_finish on why the n00b env primitive cannot be used
+// here). n00b-api-guidelines § 7.4 normally bans this; the deviation is
+// documented at the call site and flagged for the orchestrator.
+#include <stdlib.h>
+
 // ============================================================================
 // Reconstruction primitives
 // ============================================================================
 
 n00b_grammar_t *
-n00b_grammar_image_begin(void)
+n00b_grammar_image_begin()
+    _kargs { n00b_allocator_t *allocator = nullptr; }
 {
+    // NOTE: `allocator` is accepted for API consistency (§ 4.1) but
+    // cannot thread into the grammar allocation here — the slay
+    // `n00b_grammar_new()` does not (yet) accept `.allocator`. It will be
+    // forwarded once the slay grammar API gains the kwarg (W-1).
     n00b_grammar_t *g = n00b_grammar_new();
 
     // The baked image already contains every rule the source grammar's
@@ -47,7 +56,10 @@ n00b_grammar_image_add_nt(n00b_grammar_t *g,
                           n00b_string_t  *name,
                           bool            group_nt,
                           bool            start_nt)
+    _kargs { n00b_allocator_t *allocator = nullptr; }
 {
+    // `allocator` cannot thread into the slay `n00b_nonterm()` allocation
+    // (no `.allocator` kwarg there yet — W-1).
     // Anonymous NTs are stored with a null name; the emitter passes the
     // empty string to mean "anonymous".
     n00b_string_t *use_name = (name && name->u8_bytes) ? name : nullptr;
@@ -66,13 +78,19 @@ n00b_grammar_image_add_nt(n00b_grammar_t *g,
 
 void
 n00b_grammar_image_add_terminal(n00b_grammar_t *g, n00b_string_t *name)
+    _kargs { n00b_allocator_t *allocator = nullptr; }
 {
+    // `allocator` cannot forward: slay `n00b_register_terminal()` has no
+    // `.allocator` kwarg yet (W-1).
     n00b_register_terminal(g, name);
 }
 
 void
 n00b_grammar_image_add_literal_type(n00b_grammar_t *g, n00b_string_t *name)
+    _kargs { n00b_allocator_t *allocator = nullptr; }
 {
+    // `allocator` cannot forward: slay `n00b_register_literal_type()` has
+    // no `.allocator` kwarg yet (W-1).
     n00b_register_literal_type(g, name);
 }
 
@@ -80,7 +98,11 @@ void
 n00b_grammar_image_add_terminal_category(n00b_grammar_t *g,
                                          int64_t         terminal_id,
                                          n00b_string_t  *category)
+    _kargs { n00b_allocator_t *allocator = nullptr; }
 {
+    // `allocator` cannot forward: slay
+    // `n00b_grammar_set_terminal_category()` has no `.allocator` kwarg
+    // yet (W-1).
     n00b_grammar_set_terminal_category(g, terminal_id, category);
 }
 
@@ -92,17 +114,19 @@ n00b_grammar_image_add_rule(n00b_grammar_t *g,
                             int32_t         link_ix,
                             int             n,
                             n00b_match_t   *items)
+    _kargs { n00b_allocator_t *allocator = nullptr; }
 {
     n00b_nonterm_t *nt = n00b_get_nonterm(g, nt_id);
     n00b_require(nt != nullptr,
                  "grammar image: rule references unknown non-terminal");
 
-    n00b_list_t(n00b_match_t) contents = n00b_list_new_private(n00b_match_t);
+    n00b_list_t(n00b_match_t) contents
+        = n00b_list_new_private(n00b_match_t, .allocator = allocator);
     for (int i = 0; i < n; i++) {
         n00b_list_push(contents, items[i]);
     }
 
-    n00b_parse_rule_t rule = {0};
+    n00b_parse_rule_t rule = {};
     rule.nt_id        = nt_id;
     rule.contents     = contents;
     rule.cost         = cost;
@@ -118,8 +142,10 @@ n00b_grammar_image_add_rule(n00b_grammar_t *g,
 n00b_match_t
 n00b_grammar_image_group(int32_t min, int32_t max, int32_t gid,
                          int64_t contents_id)
+    _kargs { n00b_allocator_t *allocator = nullptr; }
 {
-    n00b_rule_group_t *group = n00b_alloc(n00b_rule_group_t);
+    n00b_rule_group_t *group = n00b_alloc(n00b_rule_group_t,
+                                          .allocator = allocator);
 
     group->gid         = gid;
     group->min         = min;
@@ -133,7 +159,10 @@ void
 n00b_grammar_image_finish(n00b_grammar_t *g,
                           n00b_string_t  *tokenizer_name,
                           uint32_t        max_penalty)
+    _kargs { n00b_allocator_t *allocator = nullptr; }
 {
+    // `allocator` cannot thread into `n00b_grammar_finalize()` (no
+    // `.allocator` kwarg in the slay grammar API yet — W-1).
     if (tokenizer_name && tokenizer_name->u8_bytes) {
         g->tokenizer_name = tokenizer_name;
     }
@@ -146,6 +175,24 @@ n00b_grammar_image_finish(n00b_grammar_t *g,
     // derived state). Force the same gate here so reconstruction stays
     // fast and structurally identical regardless of the consumer's
     // environment, then finalize to rebuild nullability + valid_tokens.
+    //
+    // §7.4 / W-4 DEVIATION (flagged for orchestrator): this gate is read
+    // by `n00b_grammar_finalize()` (src/slay/grammar.c) via the LIBC
+    // `getenv()`, not `n00b_getenv()`. The guideline-blessed n00b
+    // primitive `n00b_putenv()` rebinds the libc `environ` pointer to a
+    // `system_pool`-allocated slot array; a subsequent libc `getenv()`
+    // walk of that rebound array faults non-deterministically
+    // (EXC_BAD_ACCESS in libc `__findenv_locked`, reproducible ~50% of
+    // runs under MALLOC_PERTURB_). That is a libn00b core
+    // env.c/`n00b_putenv`↔libc-`getenv` interaction issue, NOT WP-018
+    // code. The two in-guidelines ways to remove this `setenv` both
+    // require out-of-scope changes: (a) make the slay
+    // `n00b_grammar_finalize()` API read the skip-analysis intent as an
+    // explicit parameter (the slay grammar API must not change in this
+    // WP — W-1), or (b) make slay/grammar.c read via `n00b_getenv()` and
+    // fix the `n00b_putenv` libc-visibility crash (both libn00b core).
+    // Until one of those lands, libc `setenv` is the only mechanism that
+    // is observable by the libc `getenv()` consumer AND does not crash.
     setenv("N00B_SLAY_SKIP_FINALIZE_ANALYSIS", "1", 1);
 
     n00b_grammar_finalize(g);
@@ -160,10 +207,19 @@ n00b_grammar_image_finish(n00b_grammar_t *g,
 // rather than repeatedly `n00b_unicode_str_cat`-ing onto a growing
 // string (which would be O(n²) — copying the whole buffer per append).
 
+// Internal emitter helpers: `allocator` is the value threaded down from
+// `n00b_grammar_image_emit`'s `.allocator` kwarg (nullptr = runtime
+// default). It is forwarded to every `n00b_string_from_cstr` /
+// `n00b_string_from_raw` / `n00b_list_new_private` allocation these
+// helpers make so the whole emitted-source byte graph lives in the
+// caller's chosen arena (§ 4.2).
+
 static inline void
-emit(n00b_list_t(n00b_string_t *) *parts, const char *s)
+emit(n00b_list_t(n00b_string_t *) *parts,
+     const char                   *s,
+     n00b_allocator_t             *allocator)
 {
-    n00b_list_push(*parts, n00b_string_from_cstr(s));
+    n00b_list_push(*parts, n00b_string_from_cstr(s, .allocator = allocator));
 }
 
 static inline void
@@ -176,14 +232,15 @@ emit_str(n00b_list_t(n00b_string_t *) *parts, n00b_string_t *s)
 // the bytes of `s` (or "" for null), escaping whatever the C lexer cares
 // about so the result is valid regardless of the name's contents.
 static n00b_string_t *
-c_quoted(n00b_string_t *s)
+c_quoted(n00b_string_t *s, n00b_allocator_t *allocator)
 {
     const char *data  = (s && s->data) ? s->data : "";
     int64_t     bytes = (s && s->data) ? s->u8_bytes : 0;
 
     // Worst case is 4 output bytes per input byte (\\ooo), plus the two
     // surrounding quotes and a terminator.
-    char  *buf = n00b_alloc_array(char, (size_t)bytes * 4 + 3);
+    char  *buf = n00b_alloc_array(char, (size_t)bytes * 4 + 3,
+                                  .allocator = allocator);
     size_t k   = 0;
 
     buf[k++] = '"';
@@ -211,7 +268,7 @@ c_quoted(n00b_string_t *s)
     buf[k++] = '"';
     buf[k]   = '\0';
 
-    return n00b_string_from_raw(buf, (int64_t)k);
+    return n00b_string_from_raw(buf, (int64_t)k, .allocator = allocator);
 }
 
 // Push an `n00b_string_t *`-producing expression for `s`:
@@ -220,11 +277,15 @@ c_quoted(n00b_string_t *s)
 // (and a hash-of-garbage crash at runtime); the wrapper materializes a
 // real n00b string at reconstruction time.
 static void
-emit_n00b_string(n00b_list_t(n00b_string_t *) *parts, n00b_string_t *s)
+emit_n00b_string(n00b_list_t(n00b_string_t *) *parts,
+                 n00b_string_t                *s,
+                 n00b_allocator_t             *allocator)
 {
-    n00b_list_push(*parts, n00b_string_from_cstr("n00b_string_from_cstr("));
-    n00b_list_push(*parts, c_quoted(s));
-    n00b_list_push(*parts, n00b_string_from_cstr(")"));
+    n00b_list_push(*parts,
+                   n00b_string_from_cstr("n00b_string_from_cstr(",
+                                         .allocator = allocator));
+    n00b_list_push(*parts, c_quoted(s, allocator));
+    n00b_list_push(*parts, n00b_string_from_cstr(")", .allocator = allocator));
 }
 
 // Push a bare quoted C string literal (a `const char *`), used where the
@@ -232,18 +293,22 @@ emit_n00b_string(n00b_list_t(n00b_string_t *) *parts, n00b_string_t *s)
 // which runs in a `[[gnu::constructor]]` BEFORE the n00b runtime is up
 // and therefore must NOT call `n00b_string_from_cstr`.
 static void
-emit_c_quoted(n00b_list_t(n00b_string_t *) *parts, n00b_string_t *s)
+emit_c_quoted(n00b_list_t(n00b_string_t *) *parts,
+              n00b_string_t                *s,
+              n00b_allocator_t             *allocator)
 {
-    n00b_list_push(*parts, c_quoted(s));
+    n00b_list_push(*parts, c_quoted(s, allocator));
 }
 
 // Push a single match item as a C compound-literal `n00b_match_t`.
 static void
-emit_match_item(n00b_list_t(n00b_string_t *) *parts, n00b_match_t *m)
+emit_match_item(n00b_list_t(n00b_string_t *) *parts,
+                n00b_match_t                 *m,
+                n00b_allocator_t             *allocator)
 {
     switch (m->kind) {
     case N00B_MATCH_EMPTY:
-        emit(parts, "(n00b_match_t){.kind = N00B_MATCH_EMPTY}");
+        emit(parts, "(n00b_match_t){.kind = N00B_MATCH_EMPTY}", allocator);
         return;
     case N00B_MATCH_NT:
         emit_str(parts,
@@ -258,7 +323,7 @@ emit_match_item(n00b_list_t(n00b_string_t *) *parts, n00b_match_t *m)
                               (int64_t)m->terminal_id));
         return;
     case N00B_MATCH_ANY:
-        emit(parts, "(n00b_match_t){.kind = N00B_MATCH_ANY}");
+        emit(parts, "(n00b_match_t){.kind = N00B_MATCH_ANY}", allocator);
         return;
     case N00B_MATCH_CLASS:
         emit_str(parts,
@@ -271,7 +336,7 @@ emit_match_item(n00b_list_t(n00b_string_t *) *parts, n00b_match_t *m)
         // set_items); the BNF loader does not emit it for c_ncc.bnf.
         // Bake it as an EMPTY item to preserve item count without
         // attempting to serialize the unused set_items pointer graph.
-        emit(parts, "(n00b_match_t){.kind = N00B_MATCH_EMPTY}");
+        emit(parts, "(n00b_match_t){.kind = N00B_MATCH_EMPTY}", allocator);
         return;
     case N00B_MATCH_GROUP: {
         n00b_rule_group_t *grp = (n00b_rule_group_t *)m->group;
@@ -283,31 +348,55 @@ emit_match_item(n00b_list_t(n00b_string_t *) *parts, n00b_match_t *m)
     }
     }
 
-    emit(parts, "(n00b_match_t){.kind = N00B_MATCH_EMPTY}");
+    emit(parts, "(n00b_match_t){.kind = N00B_MATCH_EMPTY}", allocator);
 }
 
 n00b_string_t *
+n00b_grammar_image_emit_err_str(n00b_err_t err)
+{
+    switch ((n00b_grammar_image_err_t)err) {
+    case N00B_GRAMMAR_IMAGE_OK:
+        return r"ok";
+    case N00B_GRAMMAR_IMAGE_ERR_NULL_ARG:
+        return r"a required argument (grammar, symbol prefix, or grammar name) was null";
+    case N00B_GRAMMAR_IMAGE_ERR_NOT_FINAL:
+        return r"grammar is not finalized";
+    }
+
+    return r"unknown grammar-image error";
+}
+
+n00b_result_t(n00b_string_t *)
 n00b_grammar_image_emit(n00b_grammar_t *g,
                         n00b_string_t  *symbol_prefix,
                         n00b_string_t  *grammar_name)
+    _kargs { n00b_allocator_t *allocator = nullptr; }
 {
-    if (!g || !g->finalized || !symbol_prefix || !grammar_name) {
-        return nullptr;
+    if (!g || !symbol_prefix || !grammar_name) {
+        return n00b_result_err(n00b_string_t *,
+                               N00B_GRAMMAR_IMAGE_ERR_NULL_ARG);
+    }
+    if (!g->finalized) {
+        return n00b_result_err(n00b_string_t *,
+                               N00B_GRAMMAR_IMAGE_ERR_NOT_FINAL);
     }
 
-    n00b_list_t(n00b_string_t *) parts = n00b_list_new_private(n00b_string_t *);
+    n00b_list_t(n00b_string_t *) parts
+        = n00b_list_new_private(n00b_string_t *, .allocator = allocator);
 
     emit(&parts,
          "/* Generated by n00b_grammar_image_emit (WP-018). "
-         "Do not edit. */\n");
-    emit(&parts, "#include \"n00b.h\"\n");
-    emit(&parts, "#include \"slay/grammar_image.h\"\n");
-    emit(&parts, "#include \"core/static_image.h\"\n\n");
+         "Do not edit. */\n",
+         allocator);
+    emit(&parts, "#include \"n00b.h\"\n", allocator);
+    emit(&parts, "#include \"slay/grammar_image.h\"\n", allocator);
+    emit(&parts, "#include \"core/static_image.h\"\n\n", allocator);
 
     emit_str(&parts,
              n00b_cformat("static n00b_grammar_t *\n«#»_build(void)\n{\n",
                           symbol_prefix));
-    emit(&parts, "    n00b_grammar_t *g = n00b_grammar_image_begin();\n\n");
+    emit(&parts, "    n00b_grammar_t *g = n00b_grammar_image_begin();\n\n",
+         allocator);
 
     // --- Non-terminals (ascending id order; nt_list is already in id
     //     order because n00b_nonterm assigns id == nt_list.len). ---
@@ -318,7 +407,7 @@ n00b_grammar_image_emit(n00b_grammar_t *g,
         emit_str(&parts,
                  n00b_cformat("    n00b_grammar_image_add_nt(g, «#», ",
                               (int64_t)nt->id));
-        emit_n00b_string(&parts, nt->name);
+        emit_n00b_string(&parts, nt->name, allocator);
         emit_str(&parts,
                  n00b_cformat(", «#», «#»);\n",
                               n00b_string_from_cstr(nt->group_nt ? "true"
@@ -326,23 +415,23 @@ n00b_grammar_image_emit(n00b_grammar_t *g,
                               n00b_string_from_cstr(nt->start_nt ? "true"
                                                                  : "false")));
     }
-    emit(&parts, "\n");
+    emit(&parts, "\n", allocator);
 
     // --- Terminals (hash-derived ids; order-independent). ---
     n00b_dict_foreach(g->terminal_map, tname, tid, {
         (void)tid;
-        emit(&parts, "    n00b_grammar_image_add_terminal(g, ");
-        emit_n00b_string(&parts, tname);
-        emit(&parts, ");\n");
+        emit(&parts, "    n00b_grammar_image_add_terminal(g, ", allocator);
+        emit_n00b_string(&parts, tname, allocator);
+        emit(&parts, ");\n", allocator);
     });
-    emit(&parts, "\n");
+    emit(&parts, "\n", allocator);
 
     // --- Literal types (dense ids: must be replayed in id order). ---
     if (g->next_literal_type_id > 0) {
         n00b_list_t(n00b_string_t *) lit_by_id
-            = n00b_list_new_private(n00b_string_t *);
+            = n00b_list_new_private(n00b_string_t *, .allocator = allocator);
         for (int64_t i = 0; i < g->next_literal_type_id; i++) {
-            n00b_list_push(lit_by_id, n00b_string_empty());
+            n00b_list_push(lit_by_id, n00b_string_empty(.allocator = allocator));
         }
         n00b_dict_foreach(g->literal_type_map, lname, lid, {
             if (lid >= 0 && lid < g->next_literal_type_id) {
@@ -350,11 +439,12 @@ n00b_grammar_image_emit(n00b_grammar_t *g,
             }
         });
         for (int64_t i = 0; i < g->next_literal_type_id; i++) {
-            emit(&parts, "    n00b_grammar_image_add_literal_type(g, ");
-            emit_n00b_string(&parts, n00b_list_get(lit_by_id, i));
-            emit(&parts, ");\n");
+            emit(&parts, "    n00b_grammar_image_add_literal_type(g, ",
+                 allocator);
+            emit_n00b_string(&parts, n00b_list_get(lit_by_id, i), allocator);
+            emit(&parts, ");\n", allocator);
         }
-        emit(&parts, "\n");
+        emit(&parts, "\n", allocator);
     }
 
     // --- Terminal categories (keyed by id; order-independent). ---
@@ -364,10 +454,10 @@ n00b_grammar_image_emit(n00b_grammar_t *g,
                      n00b_cformat(
                          "    n00b_grammar_image_add_terminal_category(g, «#»LL, ",
                          (int64_t)cat_id));
-            emit_n00b_string(&parts, cat_name);
-            emit(&parts, ");\n");
+            emit_n00b_string(&parts, cat_name, allocator);
+            emit(&parts, ");\n", allocator);
         });
-        emit(&parts, "\n");
+        emit(&parts, "\n", allocator);
     }
 
     // --- Rules (global order). ---
@@ -382,13 +472,13 @@ n00b_grammar_image_emit(n00b_grammar_t *g,
             continue;
         }
 
-        emit(&parts, "    {\n        n00b_match_t items[] = {\n");
+        emit(&parts, "    {\n        n00b_match_t items[] = {\n", allocator);
         for (size_t j = 0; j < nitems; j++) {
-            emit(&parts, "            ");
-            emit_match_item(&parts, &r->contents.data[j]);
-            emit(&parts, ",\n");
+            emit(&parts, "            ", allocator);
+            emit_match_item(&parts, &r->contents.data[j], allocator);
+            emit(&parts, ",\n", allocator);
         }
-        emit(&parts, "        };\n");
+        emit(&parts, "        };\n", allocator);
         emit_str(&parts,
                  n00b_cformat("        n00b_grammar_image_add_rule(g, «#», «#», "
                               "«#», «#», «#», items);\n    }\n",
@@ -397,11 +487,11 @@ n00b_grammar_image_emit(n00b_grammar_t *g,
                                                                     : "false"),
                               (int64_t)r->link_ix, (int64_t)nitems));
     }
-    emit(&parts, "\n");
+    emit(&parts, "\n", allocator);
 
     // --- Finalize. ---
-    emit(&parts, "    n00b_grammar_image_finish(g, ");
-    emit_n00b_string(&parts, g->tokenizer_name);
+    emit(&parts, "    n00b_grammar_image_finish(g, ", allocator);
+    emit_n00b_string(&parts, g->tokenizer_name, allocator);
     emit_str(&parts,
              n00b_cformat(", «#»u);\n    return g;\n}\n\n",
                           (int64_t)g->max_penalty));
@@ -412,10 +502,13 @@ n00b_grammar_image_emit(n00b_grammar_t *g,
                           "«#»_register(void)\n"
                           "{\n    n00b_static_grammar_register(",
                           symbol_prefix));
-    emit_c_quoted(&parts, grammar_name);
+    emit_c_quoted(&parts, grammar_name, allocator);
     emit_str(&parts,
              n00b_cformat(", «#»_build);\n}\n", symbol_prefix));
 
-    return n00b_unicode_str_join(n00b_string_empty(),
-                                 n00b_list_to_array(n00b_string_t *, parts));
+    n00b_string_t *source
+        = n00b_unicode_str_join(n00b_string_empty(.allocator = allocator),
+                                n00b_list_to_array(n00b_string_t *, parts));
+
+    return n00b_result_ok(n00b_string_t *, source);
 }

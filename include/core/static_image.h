@@ -123,6 +123,18 @@ typedef n00b_grammar_t *(*n00b_static_grammar_builder_fn)(void);
  * is not yet initialized at constructor time). A second registration of
  * the same @p name replaces the prior builder.
  *
+ * @note @p name is a plain `const char *` rather than the n00b-canonical
+ *       `n00b_string_t *` (n00b-api-guidelines § 2.2) ON PURPOSE: this
+ *       function is invoked from a `[[gnu::constructor]]` in the emitted
+ *       grammar-image source, which runs BEFORE `n00b_init` / the n00b
+ *       runtime is initialized. `n00b_string_t *` construction requires
+ *       the runtime (allocator, type metadata), so it is genuinely
+ *       unavailable here; the registry stores the raw process-lifetime
+ *       string literal and only converts to `n00b_string_t *` at lookup
+ *       time (post-runtime-init). The *lookup* side
+ *       (`n00b_static_grammar_lookup`) uses `n00b_string_t *` per the
+ *       guideline; only this pre-runtime registration path is exempt.
+ *
  * @param name     Lookup name (process-lifetime C string literal).
  * @param builder  Function that reconstructs and finalizes the grammar.
  */
@@ -138,8 +150,13 @@ n00b_static_grammar_register(const char                     *name,
  * materialized grammar lives on the GC heap, exactly like a
  * runtime-parsed grammar (WP-018 DF-ED).
  *
- * @param name  The name passed to `n00b_static_grammar_register`.
- * @return The materialized grammar, or nullptr if @p name is unknown.
+ * @param name  The name passed to `n00b_static_grammar_register` (as an
+ *              `n00b_string_t *`; matched by byte value against the
+ *              registered C-string name).
+ * @return `n00b_option_set` wrapping the materialized grammar when
+ *         @p name is registered, or `n00b_option_none` when @p name is
+ *         unknown (a normal, non-error outcome — the static image is a
+ *         fast path, not a hard dependency).
  */
-extern n00b_grammar_t *
-n00b_static_grammar_lookup(const char *name);
+extern n00b_option_t(n00b_grammar_t *)
+n00b_static_grammar_lookup(n00b_string_t *name);

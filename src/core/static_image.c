@@ -1,6 +1,7 @@
 #include "core/static_image.h"
 #include "core/string.h"
 #include "core/gc.h"
+#include "core/atomic.h"
 #include "text/strings/string_ops.h"
 #include <string.h>
 
@@ -281,11 +282,11 @@ n00b_static_grammar_register(const char                    *name,
     slot->materialized = nullptr;
 }
 
-n00b_grammar_t *
-n00b_static_grammar_lookup(const char *name)
+n00b_option_t(n00b_grammar_t *)
+n00b_static_grammar_lookup(n00b_string_t *name)
 {
-    if (!name) {
-        return nullptr;
+    if (!name || !name->data) {
+        return n00b_option_none(n00b_grammar_t *);
     }
 
     // The table holds `materialized` grammar pointers that live on the
@@ -294,24 +295,31 @@ n00b_static_grammar_lookup(const char *name)
     // only happen here (lazily, post-runtime-init), never at
     // registration time — registration runs in `[[gnu::constructor]]`s
     // before the runtime exists.
-    static bool root_registered = false;
-    if (!root_registered) {
-        _n00b_gc_register_root(&n00b_static_grammar_table,
-                               sizeof(n00b_static_grammar_table)
-                                   / sizeof(void *));
-        root_registered = true;
+    //
+    // `root_registered` is atomic so the once-only registration is safe
+    // if two threads race the first lookup. The acquire/release exchange
+    // ensures exactly one thread registers the root and the loser
+    // observes the registration as already done; the slot->materialized
+    // memoization below is benign-racy (idempotent rebuild) and is not
+    // guarded here.
+    static _Atomic bool root_registered = false;
+    if (!n00b_atomic_read_then_set(&root_registered, true)) {
+        // Prior value was false ⇒ this thread won the race; register the
+        // table exactly once. Other threads see the swapped-in `true` and
+        // skip.
+        n00b_gc_register_root(n00b_static_grammar_table);
     }
 
     for (int i = 0; i < n00b_static_grammar_count; i++) {
         n00b_static_grammar_slot_t *slot = &n00b_static_grammar_table[i];
-        if (strcmp(slot->name, name) != 0) {
+        if (strcmp(slot->name, name->data) != 0) {
             continue;
         }
         if (!slot->materialized) {
             slot->materialized = slot->builder();
         }
-        return slot->materialized;
+        return n00b_option_set(n00b_grammar_t *, slot->materialized);
     }
 
-    return nullptr;
+    return n00b_option_none(n00b_grammar_t *);
 }
