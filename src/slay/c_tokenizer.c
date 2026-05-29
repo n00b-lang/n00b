@@ -401,8 +401,15 @@ restart:
     n00b_token_err_t err = n00b_scan_emit(s);
 
     if (err != N00B_TOK_OK) {
-        // Not in grammar — emit as generic OTHER token.
-        n00b_scan_emit(s, .token_type = "OTHER");
+        // Not in grammar — emit the generic OTHER token by token-id,
+        // matching the other tokenizers (lisp/json/shell). Using
+        // `.token_type = "OTHER"` is wrong: "OTHER" is not a
+        // grammar-declared type name, so n00b_scan_emit returns
+        // BAD_TYPE_NAME and the token is silently DROPPED — letting an
+        // unknown byte vanish so a garbage file can parse clean (e.g. a
+        // stray U+00A0). `.tid = N00B_TOK_OTHER` emits a real token the
+        // grammar has no rule for, so the parse fails loudly instead.
+        n00b_scan_emit(s, .tid = N00B_TOK_OTHER);
     }
 
     return true;
