@@ -3,7 +3,6 @@
 #include "core/gc.h"
 #include "core/atomic.h"
 #include "text/strings/string_ops.h"
-#include <string.h>
 
 n00b_string_t *
 n00b_static_image_status_name(n00b_static_image_status_t status)
@@ -243,7 +242,7 @@ n00b_static_image_build(const n00b_static_image_request_t *request,
 #define N00B_STATIC_GRAMMAR_MAX 32
 
 typedef struct {
-    const char                     *name;
+    n00b_string_t                  *name;
     n00b_static_grammar_builder_fn  builder;
     n00b_grammar_t                 *materialized;
 } n00b_static_grammar_slot_t;
@@ -251,17 +250,12 @@ typedef struct {
 static n00b_static_grammar_slot_t n00b_static_grammar_table[N00B_STATIC_GRAMMAR_MAX];
 static int                        n00b_static_grammar_count = 0;
 
-// PRE-RUNTIME C-ABI ENTRY POINT (n00b-api-guidelines § 11.4). The
-// `const char *name` is the C-ABI boundary: this runs from a
-// `[[gnu::constructor]]` before `n00b_init`, so `n00b_string_t *` cannot
-// be constructed yet. The matching reader (`n00b_static_grammar_lookup`,
-// below) takes `n00b_string_t *` per § 2.2 and compares against the
-// stored C string. Writer and reader share one module-static table by
-// design, so this boundary is annotated in place rather than relocated to
-// a dedicated shim file (accepted via project DECISIONS — see the header
-// @note for the full rationale).
+// Registered from a `[[gnu::constructor]]` before `n00b_init`. The name is
+// passed as an r-string (`r"..."`) — a static `n00b_string_t` emitted by
+// ncc and fully available pre-runtime — so no C-ABI `const char *`
+// boundary is required; § 2.2 is satisfied directly.
 void
-n00b_static_grammar_register(const char                    *name,
+n00b_static_grammar_register(n00b_string_t                 *name,
                              n00b_static_grammar_builder_fn builder)
 {
     if (!name || !builder) {
@@ -270,7 +264,7 @@ n00b_static_grammar_register(const char                    *name,
 
     // Replace an existing registration of the same name.
     for (int i = 0; i < n00b_static_grammar_count; i++) {
-        if (strcmp(n00b_static_grammar_table[i].name, name) == 0) {
+        if (n00b_unicode_str_eq(n00b_static_grammar_table[i].name, name)) {
             n00b_static_grammar_table[i].builder      = builder;
             n00b_static_grammar_table[i].materialized = nullptr;
             return;
@@ -321,7 +315,7 @@ n00b_static_grammar_lookup(n00b_string_t *name)
 
     for (int i = 0; i < n00b_static_grammar_count; i++) {
         n00b_static_grammar_slot_t *slot = &n00b_static_grammar_table[i];
-        if (strcmp(slot->name, name->data) != 0) {
+        if (!n00b_unicode_str_eq(slot->name, name)) {
             continue;
         }
         if (!slot->materialized) {

@@ -123,38 +123,19 @@ typedef n00b_grammar_t *(*n00b_static_grammar_builder_fn)(void);
  * is not yet initialized at constructor time). A second registration of
  * the same @p name replaces the prior builder.
  *
- * @note PRE-RUNTIME C-ABI ENTRY POINT (n00b-api-guidelines § 11.4).
- *       @p name is a plain `const char *` rather than the n00b-canonical
- *       `n00b_string_t *` (§ 2.2) ON PURPOSE: this function is invoked
- *       from a `[[gnu::constructor]]` in the emitted grammar-image source,
- *       which runs BEFORE `n00b_init` / the n00b runtime is initialized.
- *       `n00b_string_t *` construction requires the runtime (allocator,
- *       type metadata), so it is genuinely unavailable here; the registry
- *       stores the raw process-lifetime string literal and only converts
- *       to `n00b_string_t *` at lookup time (post-runtime-init). The
- *       *lookup* side (`n00b_static_grammar_lookup`) uses `n00b_string_t *`
- *       per the guideline; only this pre-runtime registration path is the
- *       C-ABI boundary.
+ * @note Invoked from a `[[gnu::constructor]]` in the emitted
+ *       grammar-image source, BEFORE `n00b_init`. The emitter passes
+ *       @p name as an r-string (`r"..."`) — a static `n00b_string_t`
+ *       emitted by ncc and fully available pre-runtime — so this takes
+ *       `n00b_string_t *` directly. No `const char *` C-ABI boundary is
+ *       needed; § 2.2 is satisfied. The matching reader
+ *       (`n00b_static_grammar_lookup`) compares via `n00b_unicode_str_eq`.
  *
- *       § 11.4 prescribes relocating such a boundary symbol into a
- *       dedicated shim file. That is deliberately NOT done here: the
- *       writer (this function) and the reader (`n00b_static_grammar_lookup`)
- *       share one module-static fixed-capacity table whose slot struct
- *       holds the `const char *name` the reader compares against — the
- *       two halves are co-located by design (pre-runtime writer +
- *       post-runtime reader, one table). Splitting them into a shim file
- *       would force the static table, count, and slot struct across a
- *       header and would NOT eliminate the `const char *` (the slot field
- *       the reader needs stays plain-C). The localized, lower-risk
- *       resolution is this in-place C-ABI-boundary annotation; the `const
- *       char *` is accepted via a project DECISIONS entry rather than
- *       relocated.
- *
- * @param name     Lookup name (process-lifetime C string literal).
+ * @param name     Lookup name (an r-string `n00b_string_t *`).
  * @param builder  Function that reconstructs and finalizes the grammar.
  */
 extern void
-n00b_static_grammar_register(const char                     *name,
+n00b_static_grammar_register(n00b_string_t                  *name,
                              n00b_static_grammar_builder_fn  builder);
 
 /**
@@ -165,9 +146,9 @@ n00b_static_grammar_register(const char                     *name,
  * materialized grammar lives on the GC heap, exactly like a
  * runtime-parsed grammar (WP-018 DF-ED).
  *
- * @param name  The name passed to `n00b_static_grammar_register` (as an
- *              `n00b_string_t *`; matched by byte value against the
- *              registered C-string name).
+ * @param name  The name passed to `n00b_static_grammar_register`
+ *              (`n00b_string_t *`; matched via `n00b_unicode_str_eq`
+ *              against the registered r-string name).
  * @return `n00b_option_set` wrapping the materialized grammar when
  *         @p name is registered, or `n00b_option_none` when @p name is
  *         unknown (a normal, non-error outcome — the static image is a

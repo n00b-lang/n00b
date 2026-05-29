@@ -262,10 +262,12 @@ emit_n00b_string(n00b_list_t(n00b_string_t *) *parts,
     n00b_list_push(*parts, n00b_string_from_cstr(")", .allocator = allocator));
 }
 
-// Push a bare quoted C string literal (a `const char *`), used where the
-// callee wants a plain C string — notably `n00b_static_grammar_register`,
-// which runs in a `[[gnu::constructor]]` BEFORE the n00b runtime is up
-// and therefore must NOT call `n00b_string_from_cstr`.
+// Push a bare double-quoted string literal body. Used to form the body of
+// an r-string (`r"..."`) for the `n00b_static_grammar_register` call, which
+// runs in a `[[gnu::constructor]]` BEFORE the n00b runtime: the r-string is
+// a static `n00b_string_t` available pre-runtime, so register takes
+// `n00b_string_t *` (no `const char *` C-ABI boundary). Grammar names are
+// plain identifiers, so the C-escaped body equals the raw r-string body.
 static void
 emit_c_quoted(n00b_list_t(n00b_string_t *) *parts,
               n00b_string_t                *s,
@@ -476,6 +478,9 @@ n00b_grammar_image_emit(n00b_grammar_t *g,
                           "«#»_register(void)\n"
                           "{\n    n00b_static_grammar_register(",
                           symbol_prefix));
+    // Emit the name as an r-string (`r"..."`): a static n00b_string_t,
+    // available pre-runtime, so register takes n00b_string_t *.
+    emit(&parts, "r", allocator);
     emit_c_quoted(&parts, grammar_name, allocator);
     emit_str(&parts,
              n00b_cformat(", «#»_build);\n}\n", symbol_prefix));
