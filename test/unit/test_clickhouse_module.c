@@ -126,6 +126,39 @@ test_qualify_table(void)
     printf("  [PASS] qualify_table\n");
 }
 
+static void
+test_client_credentials(void)
+{
+    /* No credentials → constructor succeeds, no creds stored on the
+     * handle (callers can't see them directly, but the constructor
+     * returning non-null is the observable contract). */
+    n00b_clickhouse_client_t *c = n00b_clickhouse_client(
+        n00b_string_from_cstr("http://host"),
+        n00b_string_from_cstr("skp"));
+    assert(c != nullptr);
+
+    /* Both credentials set → constructor succeeds. */
+    c = n00b_clickhouse_client(
+        n00b_string_from_cstr("https://host"),
+        n00b_string_from_cstr("skp"),
+        .username = n00b_string_from_cstr("default"),
+        .password = n00b_string_from_cstr("p@ss w&rd+1=2"));
+    assert(c != nullptr);
+
+    /* Half credentials → constructor returns nullptr. */
+    assert(n00b_clickhouse_client(
+               n00b_string_from_cstr("https://host"),
+               n00b_string_from_cstr("skp"),
+               .username = n00b_string_from_cstr("default"))
+           == nullptr);
+    assert(n00b_clickhouse_client(
+               n00b_string_from_cstr("https://host"),
+               n00b_string_from_cstr("skp"),
+               .password = n00b_string_from_cstr("secret"))
+           == nullptr);
+    printf("  [PASS] client_credentials\n");
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -138,6 +171,7 @@ main(int argc, char *argv[])
     test_client_url_explicit_port();
     test_client_invalid_inputs();
     test_qualify_table();
+    test_client_credentials();
 
     n00b_clickhouse_module_shutdown();
     printf("All libn00b_clickhouse skeleton tests passed.\n");

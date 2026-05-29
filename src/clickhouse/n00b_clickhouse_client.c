@@ -138,9 +138,17 @@ parse_url(n00b_string_t                    *url,
 n00b_clickhouse_client_t *
 n00b_clickhouse_client(n00b_string_t *url, n00b_string_t *database) _kargs {
     n00b_allocator_t *allocator = nullptr;
+    n00b_string_t    *username  = nullptr;
+    n00b_string_t    *password  = nullptr;
 }
 {
     if (!database || !n00b_clickhouse_identifier_ok(database)) {
+        return nullptr;
+    }
+    /* Both creds together or neither — half-credentials are always a
+     * caller bug and silently dropping one half would mask config
+     * mistakes that fail at the ClickHouse 401 layer. */
+    if ((username == nullptr) != (password == nullptr)) {
         return nullptr;
     }
     n00b_clickhouse_client_t *c = n00b_alloc(n00b_clickhouse_client_t,
@@ -151,7 +159,10 @@ n00b_clickhouse_client(n00b_string_t *url, n00b_string_t *database) _kargs {
     if (parse_url(url, c) != N00B_CLICKHOUSE_OK) {
         return nullptr;
     }
-    c->database = database;
+    c->database  = database;
+    c->username  = username;
+    c->password  = password;
+    c->allocator = allocator;
     return c;
 }
 

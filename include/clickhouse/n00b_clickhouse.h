@@ -57,6 +57,11 @@ extern const char *n00b_clickhouse_status_str(n00b_clickhouse_status_t status);
  *                  produces a `nullptr` return.
  * @kw allocator    Override n00b's default allocator. `nullptr` keeps
  *                  the default arena.
+ * @kw username     ClickHouse user. When provided alongside @kw password
+ *                  the client appends `?user=…&password=…` to every
+ *                  request URL. Both must be set or both must be left
+ *                  null — passing only one returns `nullptr`.
+ * @kw password     ClickHouse password for @kw username.
  * @return          New client, or `nullptr` on URL/identifier
  *                  validation failure. The client lives in the n00b
  *                  GC heap.
@@ -64,6 +69,8 @@ extern const char *n00b_clickhouse_status_str(n00b_clickhouse_status_t status);
 extern n00b_clickhouse_client_t *
 n00b_clickhouse_client(n00b_string_t *url, n00b_string_t *database) _kargs {
     n00b_allocator_t *allocator = nullptr;
+    n00b_string_t    *username  = nullptr;
+    n00b_string_t    *password  = nullptr;
 };
 
 /**
