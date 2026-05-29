@@ -8,6 +8,9 @@
 #include "core/rwlock.h"
 #include "core/static_image.h"
 #include "core/type_info.h"
+#include "slay/grammar.h"
+#include "slay/bnf.h"
+#include "slay/grammar_image.h"
 
 extern void n00b_init_simple(int argc, char *argv[]);
 extern void n00b_shutdown(void);
@@ -76,6 +79,10 @@ typedef struct {
     dict_pair_t             *dict_pairs;
     uint64_t                 dict_pair_count;
     uint64_t                 dict_pair_cap;
+    // Grammar-specific request fields (WP-018, `container_kind grammar`).
+    // The other container kinds leave these null and ignore them.
+    char                    *bnf_path;
+    char                    *start_nt;
 } helper_request_t;
 
 static char *
@@ -570,6 +577,24 @@ parse_request(char *input, helper_request_t *req)
                 return false;
             }
         }
+        else if (strncmp(line, "bnf_path ", 9) == 0) {
+            free(req->bnf_path);
+            req->bnf_path = dup_cstr(trim(line + 9));
+            if (!req->bnf_path) {
+                fprintf(stderr, "bad request line %llu: invalid bnf_path",
+                        (unsigned long long)line_no);
+                return false;
+            }
+        }
+        else if (strncmp(line, "start_nt ", 9) == 0) {
+            free(req->start_nt);
+            req->start_nt = dup_cstr(trim(line + 9));
+            if (!req->start_nt) {
+                fprintf(stderr, "bad request line %llu: invalid start_nt",
+                        (unsigned long long)line_no);
+                return false;
+            }
+        }
         else if (strncmp(line, "container_target ", 17) == 0) {
             free(req->container_target);
             req->container_target = dup_cstr(trim(line + 17));
@@ -894,6 +919,24 @@ parse_request(char *input, helper_request_t *req)
         line = next;
     }
 
+    // `container_kind grammar` (WP-018) uses a distinct request shape:
+    // it carries bnf_path/start_nt/symbol_prefix and reconstructs the
+    // grammar via the builder primitives, so it does NOT supply
+    // type_name/type_hash/entry_attr/abi or argument streams. Validate
+    // its own required fields and skip the container-literal checks.
+    if (req->container_kind && strcmp(req->container_kind, "grammar") == 0) {
+        if (!req->bnf_path || !req->start_nt || !req->symbol_prefix) {
+            fprintf(stderr,
+                    "bad request: container_kind grammar requires bnf_path, "
+                    "start_nt, and symbol_prefix (bnf_path=%d start_nt=%d "
+                    "prefix=%d)",
+                    req->bnf_path != NULL, req->start_nt != NULL,
+                    req->symbol_prefix != NULL);
+            return false;
+        }
+        return true;
+    }
+
     uint64_t supplied_args = req->arg_count + req->cinit_count
                              + req->dict_pair_count;
     if (!req->type_name || req->type_hash == 0 || !req->symbol_prefix
@@ -957,6 +1000,8 @@ free_request(helper_request_t *req)
         free(req->dict_pairs[i].value_expr);
     }
     free(req->dict_pairs);
+    free(req->bnf_path);
+    free(req->start_nt);
 }
 
 static void
@@ -1870,6 +1915,84 @@ emit_dict_image(const helper_request_t *req)
     return 0;
 }
 
+// WP-018: emit a baked static-image for `container_kind grammar`.
+//
+// Reads the .bnf at req->bnf_path, parses it with the BNF metagrammar
+// (the cost this whole feature exists to move to build time), finalizes,
+// and emits reconstruction C source via n00b_grammar_image_emit(). The
+// response is the standard NCC_STATIC_INIT_OK shape; the grammar
+// registers itself via a [[gnu::constructor]] in the emitted source, so
+// the object-expression is the lookup name (a comment expression — the
+// grammar literal form has no in-place value, unlike a dict literal).
+static int
+emit_grammar_image(const helper_request_t *req)
+{
+    char  *bnf_src = NULL;
+    long   bnf_len = 0;
+    FILE  *f       = fopen(req->bnf_path, "rb");
+
+    if (!f) {
+        fprintf(stderr, "cannot read bnf_path '%s'", req->bnf_path);
+        return 4;
+    }
+    if (fseek(f, 0, SEEK_END) != 0 || (bnf_len = ftell(f)) < 0) {
+        fclose(f);
+        fprintf(stderr, "cannot size bnf_path '%s'", req->bnf_path);
+        return 4;
+    }
+    rewind(f);
+    bnf_src = malloc((size_t)bnf_len + 1);
+    if (!bnf_src) {
+        fclose(f);
+        fprintf(stderr, "out of memory reading '%s'", req->bnf_path);
+        return 4;
+    }
+    size_t got = fread(bnf_src, 1, (size_t)bnf_len, f);
+    fclose(f);
+    bnf_src[got] = '\0';
+
+    // Skip the heavy first-set / left-corner / LR0 analysis in finalize:
+    // the baked grammar is PWZ-only and captured structurally without it
+    // (WP-018 DF-EB / DF-EC). Matches the bake tool and the runtime
+    // reconstruction in n00b_grammar_image_finish.
+    setenv("N00B_SLAY_SKIP_FINALIZE_ANALYSIS", "1", 1);
+
+    n00b_string_t  *bnf_text = n00b_string_from_raw(bnf_src, (int64_t)got);
+    n00b_string_t  *start_s  = n00b_string_from_cstr(req->start_nt);
+    n00b_grammar_t *g        = n00b_grammar_new();
+
+    if (!n00b_bnf_load(bnf_text, start_s, g)) {
+        free(bnf_src);
+        fprintf(stderr, "failed to parse grammar '%s'", req->bnf_path);
+        return 4;
+    }
+
+    n00b_grammar_finalize(g);
+
+    // The grammar lookup name defaults to the start NT (matches the
+    // bake tool's default); the symbol prefix is request-supplied.
+    n00b_result_t(n00b_string_t *) emit_r = n00b_grammar_image_emit(
+        g,
+        n00b_string_from_cstr(req->symbol_prefix),
+        start_s);
+
+    free(bnf_src);
+
+    if (n00b_result_is_err(emit_r)) {
+        n00b_string_t *why = n00b_grammar_image_emit_err_str(
+            n00b_result_get_err(emit_r));
+        fprintf(stderr, "grammar image emit failed for '%s': %s",
+                req->bnf_path, why->data);
+        return 5;
+    }
+
+    n00b_string_t *emitted = n00b_result_get(emit_r);
+
+    printf("NCC_STATIC_INIT_OK n00b_static_grammar_lookup(\"%s\")\n%s",
+           req->start_nt, emitted->data);
+    return 0;
+}
+
 int
 main(int argc, char **argv)
 {
@@ -1903,6 +2026,15 @@ main(int argc, char **argv)
 
     if (parsed.container_kind && strcmp(parsed.container_kind, "dict") == 0) {
         int status = emit_dict_image(&parsed);
+        n00b_shutdown();
+        free(input);
+        free_request(&parsed);
+        return status;
+    }
+
+    if (parsed.container_kind
+        && strcmp(parsed.container_kind, "grammar") == 0) {
+        int status = emit_grammar_image(&parsed);
         n00b_shutdown();
         free(input);
         free_request(&parsed);

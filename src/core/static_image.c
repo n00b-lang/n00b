@@ -1,5 +1,7 @@
 #include "core/static_image.h"
 #include "core/string.h"
+#include "core/gc.h"
+#include "core/atomic.h"
 #include "text/strings/string_ops.h"
 
 n00b_string_t *
@@ -222,4 +224,105 @@ n00b_static_image_build(const n00b_static_image_request_t *request,
 
     builder->status = status;
     return status;
+}
+
+// ============================================================================
+// Static grammar images (WP-018)
+// ============================================================================
+//
+// Registration happens from `[[gnu::constructor]]` functions in baked
+// grammar-image translation units, which run BEFORE the n00b runtime is
+// initialized. The registry therefore cannot use any n00b allocation,
+// dict, or string primitive at registration time — it is a plain
+// fixed-capacity C table populated with the (name, builder) pairs and the
+// lazily-materialized grammar pointer. Materialization (which DOES use
+// the runtime) is deferred to the first `n00b_static_grammar_lookup`,
+// long after `n00b_init`/`n00b_init_simple` has run.
+
+#define N00B_STATIC_GRAMMAR_MAX 32
+
+typedef struct {
+    n00b_string_t                  *name;
+    n00b_static_grammar_builder_fn  builder;
+    n00b_grammar_t                 *materialized;
+} n00b_static_grammar_slot_t;
+
+static n00b_static_grammar_slot_t n00b_static_grammar_table[N00B_STATIC_GRAMMAR_MAX];
+static int                        n00b_static_grammar_count = 0;
+
+// Registered from a `[[gnu::constructor]]` before `n00b_init`. The name is
+// passed as an r-string (`r"..."`) — a static `n00b_string_t` emitted by
+// ncc and fully available pre-runtime — so no C-ABI `const char *`
+// boundary is required; § 2.2 is satisfied directly.
+void
+n00b_static_grammar_register(n00b_string_t                 *name,
+                             n00b_static_grammar_builder_fn builder)
+{
+    if (!name || !builder) {
+        return;
+    }
+
+    // Replace an existing registration of the same name.
+    for (int i = 0; i < n00b_static_grammar_count; i++) {
+        if (n00b_unicode_str_eq(n00b_static_grammar_table[i].name, name)) {
+            n00b_static_grammar_table[i].builder      = builder;
+            n00b_static_grammar_table[i].materialized = nullptr;
+            return;
+        }
+    }
+
+    if (n00b_static_grammar_count >= N00B_STATIC_GRAMMAR_MAX) {
+        // Out of slots: silently drop. A lookup for this name will miss
+        // and the consumer falls back to a runtime parse. Raising here
+        // is not an option (we are pre-runtime in a constructor).
+        return;
+    }
+
+    n00b_static_grammar_slot_t *slot
+        = &n00b_static_grammar_table[n00b_static_grammar_count++];
+    slot->name         = name;
+    slot->builder      = builder;
+    slot->materialized = nullptr;
+}
+
+n00b_option_t(n00b_grammar_t *)
+n00b_static_grammar_lookup(n00b_string_t *name)
+{
+    if (!name || !name->data) {
+        return n00b_option_none(n00b_grammar_t *);
+    }
+
+    // The table holds `materialized` grammar pointers that live on the
+    // GC heap. Register the table as a GC root on first use so those
+    // grammars are scanned and not collected between calls. This can
+    // only happen here (lazily, post-runtime-init), never at
+    // registration time — registration runs in `[[gnu::constructor]]`s
+    // before the runtime exists.
+    //
+    // `root_registered` is atomic so the once-only registration is safe
+    // if two threads race the first lookup. The acquire/release exchange
+    // ensures exactly one thread registers the root and the loser
+    // observes the registration as already done; the slot->materialized
+    // memoization below is benign-racy (idempotent rebuild) and is not
+    // guarded here.
+    static _Atomic bool root_registered = false;
+    if (!n00b_atomic_read_then_set(&root_registered, true)) {
+        // Prior value was false ⇒ this thread won the race; register the
+        // table exactly once. Other threads see the swapped-in `true` and
+        // skip.
+        n00b_gc_register_root(n00b_static_grammar_table);
+    }
+
+    for (int i = 0; i < n00b_static_grammar_count; i++) {
+        n00b_static_grammar_slot_t *slot = &n00b_static_grammar_table[i];
+        if (!n00b_unicode_str_eq(slot->name, name)) {
+            continue;
+        }
+        if (!slot->materialized) {
+            slot->materialized = slot->builder();
+        }
+        return n00b_option_set(n00b_grammar_t *, slot->materialized);
+    }
+
+    return n00b_option_none(n00b_grammar_t *);
 }

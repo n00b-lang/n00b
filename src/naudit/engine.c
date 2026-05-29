@@ -50,6 +50,7 @@
 #include "core/buffer.h"
 #include "core/string.h"
 #include "core/alloc.h"
+#include "core/static_image.h"
 #include "adt/result.h"
 #include "adt/list.h"
 #include "adt/dict.h"
@@ -262,6 +263,51 @@ rule_applies_to_language(n00b_audit_rule_t *rule,
  * Returns the grammar pointer on success; sets `*err_out` to an
  * `N00B_AUDIT_ERR_*` code and returns nullptr on failure.
  */
+/*
+ * D-017 dangling-`@violation_nt` validation. For every rule applicable
+ * to `lang`, confirm its `@violation_nt` resolves to an NT in `grammar`.
+ * A dangling `@violation_nt` sends the parser into pathological
+ * behavior on every input, so this fails fast with the canonical
+ * schema-error code. Returns true on success; on failure sets
+ * `*err_out` to N00B_AUDIT_ERR_GUIDANCE_SCHEMA and returns false.
+ *
+ * Shared by both the static-image short-circuit and the runtime BNF
+ * parse path so the contract is identical regardless of how the
+ * grammar was obtained.
+ */
+static bool
+validate_violation_nts(n00b_audit_engine_t         *engine,
+                       n00b_naudit_language_info_t *lang,
+                       n00b_grammar_t              *grammar,
+                       int                         *err_out)
+{
+    size_t nrules = n00b_list_len(*engine->guidance->rules);
+    for (size_t i = 0; i < nrules; i++) {
+        n00b_audit_rule_t *rule = n00b_list_get(*engine->guidance->rules,
+                                                i);
+        if (!rule || !rule->violation_nt
+            || rule->violation_nt->u8_bytes == 0) {
+            continue;
+        }
+        if (!rule_applies_to_language(rule, lang->name)) {
+            continue;
+        }
+        if (!n00b_dict_contains(grammar->nt_map, rule->violation_nt)) {
+            n00b_eprintf(
+                "n00b-audit: rule '«#»': @violation_nt '«#»' does "
+                "not resolve to an NT in the «#» base grammar. "
+                "For known languages, @violation_nt must name an "
+                "existing base-grammar NT; use @filter to narrow.",
+                rule->id ? rule->id : n00b_string_empty(),
+                rule->violation_nt,
+                lang->name);
+            *err_out = N00B_AUDIT_ERR_GUIDANCE_SCHEMA;
+            return false;
+        }
+    }
+    return true;
+}
+
 static n00b_grammar_t *
 get_or_load_grammar(n00b_audit_engine_t *engine,
                     n00b_naudit_language_info_t *lang,
@@ -274,6 +320,44 @@ get_or_load_grammar(n00b_audit_engine_t *engine,
                                               lang->name, &found);
     if (found && cached) {
         return cached;
+    }
+
+    /*
+     * WP-018 static-image short-circuit. For a KNOWN language (one with
+     * a `grammar_path`, so the rule-fragment append path below is never
+     * taken) that also has a pre-compiled grammar image baked into the
+     * binary, resolve the grammar via `n00b_static_grammar_lookup` and
+     * skip the ~1.5s runtime BNF parse + finalize entirely. The lookup
+     * materializes the grammar lazily on first call (post-runtime-init)
+     * and caches it. We still run the D-017 `@violation_nt` validation
+     * and the per-engine cache insert so a cache hit means the same
+     * thing on both paths.
+     *
+     * If the lookup returns nullptr (image not linked into this binary,
+     * or an unexpected name), fall through to the runtime parse path —
+     * the static image is a fast path, not a hard dependency.
+     */
+    if (lang->static_grammar_name && lang->grammar_path) {
+        auto baked_opt = n00b_static_grammar_lookup(lang->static_grammar_name);
+        if (n00b_option_is_set(baked_opt)) {
+            n00b_grammar_t *baked = n00b_option_get(baked_opt);
+            if (!validate_violation_nts(engine, lang, baked, err_out)) {
+                return nullptr;
+            }
+            /*
+             * The materialized grammar is immutable once
+             * `n00b_static_grammar_lookup` has finalized it (the
+             * static-image registry memoizes a single instance and only
+             * ever hands back that pointer; nothing mutates it after
+             * finalize). It is therefore safe to cache the same pointer
+             * in this per-engine dict and to share it across engines —
+             * unlike the runtime-parse path below, which owns a freshly
+             * parsed grammar per engine and must free it on validation
+             * failure.
+             */
+            n00b_dict_put(engine->grammars, lang->name, baked);
+            return baked;
+        }
     }
 
     /* Step 1: read the language's base grammar. */
@@ -348,31 +432,13 @@ get_or_load_grammar(n00b_audit_engine_t *engine,
      * resolves to an NT in the merged grammar. A dangling
      * `@violation_nt` sends the parser into pathological
      * behavior on every input — fail fast with the canonical
-     * schema-error code (D-017 contract).
+     * schema-error code (D-017 contract). On failure the
+     * just-parsed grammar is freed (unlike the static-image path,
+     * which shares a cached image and must not free it).
      */
-    for (size_t i = 0; i < nrules; i++) {
-        n00b_audit_rule_t *rule = n00b_list_get(*engine->guidance->rules,
-                                                i);
-        if (!rule || !rule->violation_nt
-            || rule->violation_nt->u8_bytes == 0) {
-            continue;
-        }
-        if (!rule_applies_to_language(rule, lang->name)) {
-            continue;
-        }
-        if (!n00b_dict_contains(grammar->nt_map, rule->violation_nt)) {
-            n00b_eprintf(
-                "n00b-audit: rule '«#»': @violation_nt '«#»' does "
-                "not resolve to an NT in the «#» base grammar. "
-                "For known languages, @violation_nt must name an "
-                "existing base-grammar NT; use @filter to narrow.",
-                rule->id ? rule->id : n00b_string_empty(),
-                rule->violation_nt,
-                lang->name);
-            n00b_grammar_free(grammar);
-            *err_out = N00B_AUDIT_ERR_GUIDANCE_SCHEMA;
-            return nullptr;
-        }
+    if (!validate_violation_nts(engine, lang, grammar, err_out)) {
+        n00b_grammar_free(grammar);
+        return nullptr;
     }
 
     /*

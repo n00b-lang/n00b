@@ -1549,7 +1549,10 @@ lr0_compute_predict_states(n00b_grammar_t *g)
 // ============================================================================
 
 void
-n00b_grammar_finalize(n00b_grammar_t *g)
+n00b_grammar_finalize(n00b_grammar_t *g) _kargs
+{
+    bool skip_analysis = false;
+}
 {
     if (g->finalized) {
         return;
@@ -1627,15 +1630,28 @@ n00b_grammar_finalize(n00b_grammar_t *g)
     /* WP-017: first-set / left-corner / LR0 computation is a
      * ~5-6 second cost on big grammars (e.g., c_ncc.bnf) driven
      * by dict allocation churn triggering GC. Naudit's single-
-     * file workflow doesn't amortize this. Skip when
-     * N00B_SLAY_SKIP_FINALIZE_ANALYSIS=1 — PWZ still works
-     * (nt_first_matches returns true when first_set is null,
-     * so PWZ explores without pruning). Earley REQUIRES first
-     * sets and won't work; that's fine because the user
-     * directive (2026-05-28) was 'Earley should never get
-     * called'. */
-    const char *skip_analysis = getenv("N00B_SLAY_SKIP_FINALIZE_ANALYSIS");
-    if (!skip_analysis || skip_analysis[0] != '1') {
+     * file workflow doesn't amortize this. Callers skip it via the
+     * explicit `.skip_analysis = true` kwarg (the baked-grammar
+     * reconstruction path uses this). The
+     * N00B_SLAY_SKIP_FINALIZE_ANALYSIS=1 environment variable
+     * remains an independent override for other consumers. PWZ
+     * still works without the analysis (nt_first_matches returns
+     * true when first_set is null, so PWZ explores without
+     * pruning). Earley REQUIRES first sets and won't work; that's
+     * fine because the user directive (2026-05-28) was 'Earley
+     * should never get called'.
+     *
+     * The env gate is read via the LIBC `getenv()` rather than
+     * `n00b_getenv()`: `n00b_putenv()` rebinds the libc `environ`
+     * pointer to a `system_pool`-allocated slot array, which a
+     * subsequent libc `getenv()` walk faults on. No code in this
+     * tree writes the variable any longer (WP-018 removed the
+     * `setenv` writer in grammar_image.c in favor of the kwarg), so
+     * this read only observes an externally-set environment. */
+    const char *env_skip = getenv("N00B_SLAY_SKIP_FINALIZE_ANALYSIS");
+    bool        do_skip  = skip_analysis
+                    || (env_skip && env_skip[0] == '1');
+    if (!do_skip) {
         compute_all_first_sets(g);
         compute_left_corners(g);
 

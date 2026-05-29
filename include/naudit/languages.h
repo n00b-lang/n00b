@@ -51,6 +51,19 @@
  *                          `naudit/tokenizer_registry.h`); same
  *                          string as `name` when the language and
  *                          tokenizer share a name.
+ *  - `static_grammar_name` WP-018: lookup name of the pre-compiled
+ *                          (build-time-baked) grammar image for this
+ *                          language, registered via
+ *                          `n00b_static_grammar_register` from the
+ *                          baked image's `[[gnu::constructor]]`. When
+ *                          non-null the engine resolves the grammar
+ *                          with `n00b_static_grammar_lookup` and skips
+ *                          the runtime BNF parse. `nullptr` for
+ *                          languages without a baked image (the engine
+ *                          falls back to parsing `grammar_path`). For C
+ *                          this is `r"c_ncc"`, matching the name passed
+ *                          to the `c_grammar_image` bake step in the
+ *                          meson build.
  *  - `default_extensions`  file extensions associated with this
  *                          language out of the box, each carrying
  *                          the leading `.` (e.g. `r".c"`, `r".h"`
@@ -61,6 +74,7 @@ typedef struct {
     n00b_string_t                *name;
     n00b_string_t                *grammar_path;
     n00b_string_t                *tokenizer_name;
+    n00b_string_t                *static_grammar_name;
     n00b_list_t(n00b_string_t *) *default_extensions;
     /*
      * WP-017: when true, the engine runs `cc -E` over the source

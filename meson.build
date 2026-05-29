@@ -898,6 +898,18 @@ n00b_static_init_helper = executable('n00b-static-init-helper',
     dependencies: [picoquic_dep, monocypher_dep],
 )
 
+# WP-018: build-time grammar baking tool. Links the bootstrap libn00b
+# (same as the static-init helper) and emits reconstruction C source for
+# a parsed grammar. Used by the `c_grammar_image` custom_target below.
+naudit_grammar_bake = executable('naudit-grammar-bake',
+    ['src/tools/naudit-grammar-bake.c'],
+    include_directories: incdir,
+    c_args: exe_c_args,
+    link_args: exe_link_args,
+    link_with: [n00b_bootstrap],
+    dependencies: [picoquic_dep, monocypher_dep],
+)
+
 n00b_static_init_helper_ready = custom_target(
     'n00b-static-init-helper-ready',
     output: 'n00b_static_init_helper_ready.h',
@@ -1072,6 +1084,49 @@ foreach _ntest : [
     test('naudit_' + _ntest, _naudit_test_exe, suite: 'unit',
          timeout: 180)
 endforeach
+
+# WP-018: bake c_ncc.bnf into a static-image C source at build time, then
+# link it into the static-grammar-image test. This is the Phase-1
+# stand-in for an ncc literal form (deferred to a follow-up ncc PR per
+# DF-EA): the bake step is wired explicitly here rather than triggered by
+# a source-level `bnf"..."` literal. Phase 2 wires the same image into
+# the `naudit` binary itself.
+c_grammar_image = custom_target(
+    'c_grammar_image',
+    input: 'grammars/c_ncc.bnf',
+    output: 'c_grammar_image.c',
+    command: [
+        naudit_grammar_bake,
+        '@INPUT@',
+        'translation_unit',
+        '@OUTPUT@',
+        '__naudit_c_grammar',
+        'c_ncc',
+    ],
+)
+
+# The static-grammar-image test drives the bake tool as a subprocess
+# (Test 1 + Test 4) and exercises the build-time-baked c_ncc image linked
+# in via c_grammar_image (Test 2 + Test 3). It needs both the bake-tool
+# path and the c_ncc.bnf path at compile time.
+test_static_grammar_image_exe = executable(
+    'test_static_grammar_image',
+    ['test/unit/test_static_grammar_image.c', c_grammar_image],
+    include_directories: incdir,
+    c_args: exe_c_args + [
+        '-DNAUDIT_GRAMMAR_BAKE_PATH="' + naudit_grammar_bake.full_path() + '"',
+        '-DNAUDIT_C_NCC_BNF_PATH="'
+            + (meson.current_source_dir() / 'grammars' / 'c_ncc.bnf') + '"',
+        '-DNAUDIT_C_FIXTURE_PATH="'
+            + (meson.current_source_dir() / 'test' / 'fixtures' / 'naudit'
+               / 'fixture_null.c') + '"',
+    ],
+    link_args: exe_link_args,
+    link_with: [n00b],
+    dependencies: [picoquic_dep, monocypher_dep, mir_dep, libgit2_dep],
+)
+test('static_grammar_image', test_static_grammar_image_exe, suite: 'unit',
+     timeout: 180)
 
 attest_module_test = executable('test_attest_module',
     ['test/unit/test_attest_module.c'],
@@ -2621,8 +2676,14 @@ n00b_attest_tool = executable('n00b-attest',
 # `src/naudit/cli.c`; the thin `main()` in `src/tools/naudit.c`
 # unwraps the result from `n00b_audit_run_cli` and returns the
 # integer payload as the process exit code.
+# WP-018 Phase 2: link the build-time-baked c_ncc grammar image
+# (`c_grammar_image` custom_target) into the naudit binary. The image's
+# `[[gnu::constructor]]` registers a lazy materializer under the name
+# `c_ncc` with `n00b_static_grammar_register`; the engine's
+# `get_or_load_grammar` resolves it via `n00b_static_grammar_lookup`,
+# skipping the ~1.5s runtime BNF parse for the C language.
 naudit_tool = executable('naudit',
-    ['src/tools/naudit.c'],
+    ['src/tools/naudit.c', c_grammar_image],
     kwargs: test_common_kwargs,
     install: true,
 )
