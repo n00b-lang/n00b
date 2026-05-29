@@ -75,6 +75,11 @@ big_mmap(n00b_pool_t *pool, uint64_t sz)
     n00b_pool_entry_t *entry = new_page_entry(pool, &sz);
     entry->list_index        = N00B_NUM_FREE_LISTS;
 
+    /* Diagnostics: account for big-mmap allocations symmetrically
+     * with delete_one_page_entry below so callers can verify the
+     * fast path is balanced. */
+    atomic_fetch_add(&pool->big_map_count, 1);
+
     return entry;
 }
 
@@ -107,6 +112,7 @@ delete_one_page_entry(n00b_pool_t *pool, n00b_pool_page_t *entry)
      * allocation observed the slot count drop but RSS keep climbing. */
     if (mapped != 0) {
         n00b_safe_munmap((void *)entry, mapped);
+        atomic_fetch_add(&pool->big_unmap_count, 1);
     }
 }
 
@@ -228,6 +234,34 @@ pool_alloc(n00b_pool_t *pool, uint64_t request, void *ignore)
 
     assert(!(((uint64_t)p) & (N00B_ALIGN - 1)));
     return p;
+}
+
+uint64_t
+n00b_pool_mapped_bytes(n00b_pool_t *pool)
+{
+    if (pool == nullptr) {
+        return 0;
+    }
+    uint64_t          total = 0;
+    n00b_pool_page_t *p;
+    pool_lock(pool);
+    for (p = pool->page_table; p != nullptr; p = p->next) {
+        total += (uint64_t)p->mapped_size;
+    }
+    pool_unlock(pool);
+    return total;
+}
+
+uint64_t
+n00b_pool_big_map_count(n00b_pool_t *pool)
+{
+    return pool == nullptr ? 0 : atomic_load(&pool->big_map_count);
+}
+
+uint64_t
+n00b_pool_big_unmap_count(n00b_pool_t *pool)
+{
+    return pool == nullptr ? 0 : atomic_load(&pool->big_unmap_count);
 }
 
 n00b_allocator_t *

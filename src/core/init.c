@@ -265,6 +265,11 @@ n00b_init(n00b_runtime_t *rt, int argc, char *argv[]) _kargs
     rt->gc_roots            = n00b_list_new(n00b_gc_root_t, rpool);
     rt->finalizers          = n00b_list_new_private(n00b_finalizer_info_t *, rpool);
     rt->scannable_pools     = n00b_list_new(n00b_allocator_t *, rpool);
+    /* See runtime.h: every external_metadata pool registers here so
+     * the GC mark phase can walk per-alloc metadata directly. */
+    rt->metadata_pools      = n00b_list_new(n00b_allocator_t *, rpool);
+    n00b_atomic_store(&rt->gc_current_epoch, 0);
+    n00b_atomic_store(&rt->debug_leak_detect, false);
 
     // Flush any GC root registrations parked by `n00b_gc_register_roots`
     // during dynamic loader `[[gnu::constructor]]` phase (WP-003 / D-036,
@@ -291,9 +296,26 @@ n00b_init(n00b_runtime_t *rt, int argc, char *argv[]) _kargs
     // Conduit infrastructure pool: hidden from GC so the copying
     // collector never scans or relocates conduit objects.  Objects
     // that need GC tracing are registered as roots explicitly.
+    //
+    // external_metadata is deliberately OFF here: the hot path
+    // does many allocs/frees per second, and per-alloc OOB+dict
+    // bookkeeping is unaffordable at that rate. Opt back in only
+    // when a leak hunt requires it.
     n00b_pool_init(&rt->conduit_pool,
                    .hidden = true,
                    .name   = "conduit_pool");
+
+    // Application-level "user_pool": hidden + non-GC like
+    // conduit_pool, but with external_metadata so each alloc gets
+    // an OOB record (alive bit + gc_epoch + callsite file_name).
+    // Application code that opts in by allocating here is then
+    // visible to n00b_debug_find_leaks — handy for leak hunts on
+    // long-running daemons.  Not for hot-path traffic; reach for
+    // conduit_pool or system_pool there.
+    n00b_pool_init(&rt->user_pool,
+                   .hidden            = true,
+                   .external_metadata = true,
+                   .name              = "user_pool");
 
     rt->sub_map = n00b_alloc(n00b_dict_untyped_t);
     n00b_dict_untyped_init(rt->sub_map,

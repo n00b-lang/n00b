@@ -22,6 +22,7 @@
 #include "util/assert.h"
 #include "core/gc.h"
 #include "core/gc_stack.h"
+#include "core/stw.h"
 #include "core/alloc_mdata.h"
 #include "core/alloc.h"
 #include "core/memory_info.h"
@@ -48,6 +49,8 @@ static bool n00b_visit_possible_pointer(n00b_collect_t *ctx, uint64_t **base,
                                          size_t i, bool base_checked);
 static void n00b_collection_cleanup(n00b_collect_t *);
 static void n00b_process_finalizers(n00b_collect_t *);
+static void n00b_scan_metadata_pools(n00b_collect_t *);
+static void n00b_sweep_metadata_pool_leaks(n00b_collect_t *);
 static void n00b_scan_thread_stacks(n00b_collect_t *);
 static void n00b_scan_thread_lock_chains(n00b_collect_t *ctx,
                                          n00b_thread_record_t *rec);
@@ -762,6 +765,13 @@ n00b_visit_possible_pointer(n00b_collect_t *ctx,
 
     old_hdr = alloc_info_raw_hdr(ainfo);
 
+    /* Stamp the GC epoch onto the OOB record so the post-mark
+     * sweep can tell "reached this round" from "stale, leak". Done
+     * every visit, not just first — cheap and idempotent. */
+    if (ainfo.kind == n00b_alloc_oob) {
+        ainfo.hdr.oob->gc_epoch = ctx->current_epoch;
+    }
+
     bool in_from_space = mmap->allocator == (n00b_allocator_t *)ctx->from_space;
 
     if (n00b_is_first_visit(ctx, old_hdr, &fw_hdr)) {
@@ -1305,6 +1315,195 @@ n00b_finalizer_in_from_space(n00b_finalizer_info_t *entry, n00b_collect_t *ctx)
     return n00b_addr_in_arena(entry->alloc_info, ctx->from_space);
 }
 
+// ============================================================================
+// Metadata-bearing pool walk + leak sweep.
+//
+// Every pool initialised with external_metadata=true registers in
+// rt->metadata_pools at construction. n00b_scan_metadata_pools walks
+// each pool's metadata dict, finds buckets whose OOB record carries
+// alive=1, stamps the current epoch on the record, and adds the
+// alloc to the worklist so its outbound pointers get traced — the
+// pool walk thereby substitutes for the older "register pool struct
+// as a GC root" workaround.
+//
+// n00b_sweep_metadata_pool_leaks runs after the worklist has
+// drained.  Any alive alloc whose gc_epoch is still stale was not
+// reachable from real roots and is by definition a leak: the sweep
+// frees it back to the pool. When rt->debug_leak_detect is set,
+// each leak is printed with its tinfo + alloc_len + file_name so
+// callers using n00b_debug_find_leaks() get a precise origin.
+// ============================================================================
+
+static void
+n00b_scan_one_alive_alloc_oob(n00b_collect_t *ctx, n00b_oob_hdr_t *oob)
+{
+    /* Stamp the epoch — the alloc is reachable in this collection
+     * by virtue of being an alive pool slot, regardless of whether
+     * any real root pointed at it. The post-mark sweep treats
+     * "alive && epoch stale" as leak; this prevents the pool walk
+     * itself from manufacturing false-positive leaks. */
+    oob->gc_epoch = ctx->current_epoch;
+
+    /* For no_scan / SCAN_KIND_NONE allocs we still want the epoch
+     * stamp (above) but nothing to follow. */
+    n00b_gc_scan_kind_t kind = (n00b_gc_scan_kind_t)oob->scan_kind;
+    if (oob->no_scan || kind == N00B_GC_SCAN_KIND_NONE) {
+        return;
+    }
+
+    void    *start;
+    uint32_t n;
+    start = oob->user_ptr;
+#if !defined(N00B_DISABLE_PTR_WORDS)
+    n = oob->ptr_words;
+    if (!n)
+#endif
+    {
+        /* Pool allocs are not in any arena, so the arena_overhead
+         * subtraction n00b_add_alloc_to_worklist applies doesn't
+         * apply here: alloc_len is the bare user request. */
+        n = oob->alloc_len / sizeof(void *);
+    }
+
+    if (kind == N00B_GC_SCAN_KIND_EVERY_OTHER) {
+        n00b_add_range_strided_to_worklist(start, n, 2, 0, ctx);
+        return;
+    }
+
+    if (kind == N00B_GC_SCAN_KIND_CALLBACK) {
+        n00b_add_scan_range_to_worklist(ctx, start, n,
+                                        kind,
+                                        oob->scan_cb,
+                                        oob->scan_user);
+        return;
+    }
+
+    /* DEFAULT / fallback: conservative scan every word. */
+    n00b_add_range_to_worklist(start, n, ctx);
+}
+
+static void
+n00b_scan_metadata_pools(n00b_collect_t *ctx)
+{
+    n00b_runtime_t *rt = n00b_get_runtime();
+    if (!rt || rt->metadata_pools.data == nullptr) {
+        return;
+    }
+
+    size_t npools = n00b_list_len(rt->metadata_pools);
+    for (size_t pi = 0; pi < npools; pi++) {
+        n00b_allocator_t *allocator = n00b_list_get(rt->metadata_pools, pi);
+        if (allocator == nullptr || allocator->metadata == nullptr) {
+            continue;
+        }
+
+        /* Walk the dict store's bucket array directly. We can't use
+         * the public get/put API to iterate, but the bucket layout
+         * is stable: occupied = key != nullptr && !(flags & DELETED). */
+        n00b_dict_untyped_store_t *store =
+            n00b_atomic_load(&allocator->metadata->store);
+        if (store == nullptr) {
+            continue;
+        }
+        uint32_t slots = store->last_slot + 1;
+        for (uint32_t bi = 0; bi < slots; bi++) {
+            n00b_dict_untyped_bucket_t *b = &store->buckets[bi];
+            if (b->key == nullptr) {
+                continue;
+            }
+            if (n00b_atomic_load(&b->flags) & N00B_HT_FLAG_DELETED) {
+                continue;
+            }
+            n00b_oob_hdr_t *oob = (n00b_oob_hdr_t *)b->value;
+            if (oob == nullptr || !oob->alive) {
+                continue;
+            }
+            n00b_scan_one_alive_alloc_oob(ctx, oob);
+        }
+    }
+}
+
+static void
+n00b_sweep_metadata_pool_leaks(n00b_collect_t *ctx)
+{
+    n00b_runtime_t *rt = n00b_get_runtime();
+    if (!rt || rt->metadata_pools.data == nullptr) {
+        return;
+    }
+
+    bool debug = n00b_atomic_load(&rt->debug_leak_detect);
+
+    size_t npools = n00b_list_len(rt->metadata_pools);
+    for (size_t pi = 0; pi < npools; pi++) {
+        n00b_allocator_t *allocator = n00b_list_get(rt->metadata_pools, pi);
+        if (allocator == nullptr || allocator->metadata == nullptr) {
+            continue;
+        }
+
+        n00b_dict_untyped_store_t *store =
+            n00b_atomic_load(&allocator->metadata->store);
+        if (store == nullptr) {
+            continue;
+        }
+        uint32_t slots = store->last_slot + 1;
+
+        for (uint32_t bi = 0; bi < slots; bi++) {
+            n00b_dict_untyped_bucket_t *b = &store->buckets[bi];
+            if (b->key == nullptr) {
+                continue;
+            }
+            if (n00b_atomic_load(&b->flags) & N00B_HT_FLAG_DELETED) {
+                continue;
+            }
+            n00b_oob_hdr_t *oob = (n00b_oob_hdr_t *)b->value;
+            if (oob == nullptr || !oob->alive) {
+                continue;
+            }
+            if (oob->gc_epoch == ctx->current_epoch) {
+                /* Reached by this collection — alive and traced,
+                 * not a leak. */
+                continue;
+            }
+
+            /* Stale-epoch alive alloc — leak. Two policies:
+             *
+             *   debug=true   → print the callsite. Do NOT reclaim:
+             *                  the false-positive case (e.g. live
+             *                  state reachable only through a
+             *                  non-scannable container) would
+             *                  otherwise turn into use-after-free.
+             *                  Bumping gc_epoch keeps the same
+             *                  alloc from being reported every
+             *                  collection.
+             *   debug=false  → silent reclaim path, the original
+             *                  "auto-return-to-pool" design.
+             */
+            if (debug) {
+                fprintf(stderr,
+                        "n00b leak: pool=%s alloc_len=%u tinfo=%llu "
+                        "at %s ptr=%p\n",
+                        allocator->debug_name ? allocator->debug_name : "?",
+                        (unsigned)oob->alloc_len,
+                        (unsigned long long)oob->tinfo,
+                        oob->file_name ? oob->file_name : "?",
+                        oob->user_ptr);
+                oob->gc_epoch = ctx->current_epoch;
+                continue;
+            }
+
+            /* Mark dead, then return to pool. n00b_free runs
+             * finalizers + the allocator's free routine — same
+             * teardown the caller would have done had they
+             * remembered to. */
+            void *user_ptr  = oob->user_ptr;
+            oob->alive      = 0;
+            if (user_ptr) {
+                n00b_free(user_ptr);
+            }
+        }
+    }
+}
+
 static void
 n00b_process_finalizers(n00b_collect_t *ctx)
 {
@@ -1320,6 +1519,14 @@ n00b_process_finalizers(n00b_collect_t *ctx)
         n00b_finalizer_info_t *entry = n00b_list_get(rt->finalizers, i - 1);
         bool                   found;
         n00b_inline_hdr_t     *fw;
+
+        // alloc_info is null for entries tied to allocators without
+        // GC metadata (e.g. system_pool). Such allocations are never
+        // in a from_space, so the sweep has nothing to do — release
+        // happens via the n00b_free path instead.
+        if (entry->alloc_info == nullptr) {
+            continue;
+        }
 
         fw = n00b_dict_untyped_get(&ctx->memos, entry->alloc_info, &found);
 
@@ -1354,6 +1561,22 @@ n00b_collect_setup(n00b_collect_t *ctx, n00b_arena_t *from_space)
 {
     ctx->from_space = from_space;
     ctx->to_space   = n00b_create_destination_arena(from_space);
+
+    /* Bump the runtime's GC epoch counter and snapshot it onto the
+     * collection context. The mark phase stamps this value onto
+     * every metadata-bearing alloc it reaches (via the OOB record's
+     * gc_epoch field). After mark, alloc records still flagged
+     * `alive` whose epoch is stale = handed out + not reached =
+     * leaks; the metadata-pool sweep returns them to their pool. */
+    {
+        n00b_runtime_t *rt = n00b_get_runtime();
+        if (rt) {
+            ctx->current_epoch = n00b_atomic_add(&rt->gc_current_epoch, 1) + 1;
+        }
+        else {
+            ctx->current_epoch = 0;
+        }
+    }
 
     // clang-format off
     n00b_pool_init(&ctx->work_pool,
@@ -1499,7 +1722,33 @@ n00b_collect_internal(n00b_arena_t *arena)
 
     n00b_scan_thread_stacks(&ctx);
     n00b_process_worklist(&ctx);
+
+    /* Pool walk as roots: every metadata-bearing pool gives up
+     * each of its alive allocs as a root for this mark pass.  This
+     * replaces "register the pool's owning struct as a root"
+     * callers and is more precise — only the actually-live slots
+     * get scanned. The visit path stamps gc_epoch on each alloc
+     * reached.
+     *
+     * In leak-detect mode the runtime caller skips this step: the
+     * point of leak detection is precisely to test reachability
+     * from the **real** roots only, so that allocations whose only
+     * inbound pointer is "they live in a pool" still get classified
+     * as leaks. */
+    {
+        n00b_runtime_t *rt = n00b_get_runtime();
+        if (!rt || !n00b_atomic_load(&rt->debug_leak_detect)) {
+            n00b_scan_metadata_pools(&ctx);
+            n00b_process_worklist(&ctx);
+        }
+    }
+
     assert(!n00b_list_len(ctx.worklist));
+
+    /* Sweep stale-epoch alive allocs back to their pools — that
+     * set is the leak diagnostic the runtime exposes. */
+    n00b_sweep_metadata_pool_leaks(&ctx);
+
     n00b_process_finalizers(&ctx);
 
     n00b_collection_cleanup(&ctx);
@@ -1518,4 +1767,29 @@ n00b_collect(n00b_arena_t *arena)
         n00b_collect_internal(arena);
         n00b_longjmp(&register_spill, 1);
     }
+}
+
+void
+n00b_debug_find_leaks(void)
+{
+    n00b_runtime_t *rt = n00b_get_runtime();
+    if (!rt) {
+        return;
+    }
+
+    n00b_arena_t *arena = rt->default_arena;
+    if (!arena) {
+        return;
+    }
+
+    /* Toggle the runtime flag that turns the standard sweep into
+     * "print, then reclaim" mode for the duration of one
+     * collection. The collect itself drives STW; that handshake is
+     * what makes the metadata-pool walk + sweep safe to do without
+     * additional locking. */
+    n00b_atomic_store(&rt->debug_leak_detect, true);
+    n00b_stop_the_world();
+    n00b_collect(arena);
+    n00b_restart_the_world();
+    n00b_atomic_store(&rt->debug_leak_detect, false);
 }

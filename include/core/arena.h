@@ -116,16 +116,27 @@ n00b_initialize_arena(n00b_arena_t *arena) _kargs
 
 /**
  * @brief Register a finalizer to run when @p obj is collected or freed.
- * @param obj       Object to attach the finalizer to.
+ * @param obj       Object to attach the finalizer to. May be from any
+ *                  allocator that flows through n00b_free or GC sweep;
+ *                  the registry keys on @p obj directly, so allocators
+ *                  without alloc metadata (e.g. the hidden system pool)
+ *                  participate just as well as GC-tracked arenas.
  * @param fn        Finalizer callback.
  * @param user_data Opaque pointer passed to @p fn when invoked.
- * @pre @p obj must be a managed heap allocation.
  */
 extern void n00b_add_finalizer(void *obj, n00b_finalizer_t fn, void *user_data);
 
 struct n00b_finalizer_info_t {
     n00b_finalizer_t   funcptr;
-    n00b_inline_hdr_t *alloc_info;
+    void              *key;        // User pointer; primary lookup key
+                                   // for n00b_free-driven release.
+    n00b_inline_hdr_t *alloc_info; // GC tracking key for forwarding
+                                   // during collection. Null when the
+                                   // owning allocator has no alloc
+                                   // metadata (e.g. system_pool); such
+                                   // entries are never in any GC-
+                                   // managed arena, so the GC sweep
+                                   // skips them.
     void              *user_ptr;
 };
 
