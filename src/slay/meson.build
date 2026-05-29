@@ -37,4 +37,5 @@ n00b_slay_src = files(
     'codegen_builtins.c',
     'pprint.c',
     'rewrite.c',
+    'grammar_image.c',
 )

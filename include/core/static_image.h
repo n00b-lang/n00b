@@ -7,6 +7,11 @@
 #include "n00b.h"
 #include "core/type_info.h"
 
+// Forward declaration: the static-grammar API (WP-018) traffics only in
+// `n00b_grammar_t *`, so the full slay grammar header is not pulled in
+// here (it is not part of the `n00b.h` umbrella).
+typedef struct n00b_grammar_t n00b_grammar_t;
+
 typedef enum n00b_static_image_status_t : uint8_t {
     N00B_STATIC_IMAGE_OK = 0,
     N00B_STATIC_IMAGE_ERR_NULL_REQUEST,
@@ -92,3 +97,49 @@ n00b_static_image_builder_fail(n00b_static_image_builder_t *builder,
 extern n00b_static_image_status_t
 n00b_static_image_build(const n00b_static_image_request_t *request,
                         n00b_static_image_builder_t *builder);
+
+// ============================================================================
+// Static grammar images (WP-018)
+// ============================================================================
+
+/**
+ * @brief Builder for a baked grammar image.
+ *
+ * Emitted grammar-image C source (see `slay/grammar_image.h`) defines a
+ * function of this shape that reconstructs the grammar by replaying the
+ * `n00b_grammar_image_*` primitives. It is registered — not invoked — at
+ * static-constructor time; the grammar is materialized lazily on the
+ * first `n00b_static_grammar_lookup`, after the n00b runtime is up.
+ */
+typedef n00b_grammar_t *(*n00b_static_grammar_builder_fn)(void);
+
+/**
+ * @brief Register a baked grammar image under @p name.
+ *
+ * Records the (name, builder) pair so a later
+ * `n00b_static_grammar_lookup(name)` can materialize the grammar. Safe
+ * to call from a `[[gnu::constructor]]`: it only stores the pair in a
+ * fixed-capacity table and does not allocate via the n00b runtime (which
+ * is not yet initialized at constructor time). A second registration of
+ * the same @p name replaces the prior builder.
+ *
+ * @param name     Lookup name (process-lifetime C string literal).
+ * @param builder  Function that reconstructs and finalizes the grammar.
+ */
+extern void
+n00b_static_grammar_register(const char                     *name,
+                             n00b_static_grammar_builder_fn  builder);
+
+/**
+ * @brief Look up (and lazily materialize) a baked grammar by name.
+ *
+ * On the first lookup for a given name the registered builder runs and
+ * its result is cached; subsequent lookups return the same pointer. The
+ * materialized grammar lives on the GC heap, exactly like a
+ * runtime-parsed grammar (WP-018 DF-ED).
+ *
+ * @param name  The name passed to `n00b_static_grammar_register`.
+ * @return The materialized grammar, or nullptr if @p name is unknown.
+ */
+extern n00b_grammar_t *
+n00b_static_grammar_lookup(const char *name);
