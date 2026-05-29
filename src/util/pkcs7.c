@@ -370,7 +370,8 @@ n00b_pkcs7_signed_data_serialize(n00b_pkcs7_signed_data_t *sd)
             n00b_buffer_t *, (int64_t)sd->n_certs,
             .allocator = allocator);
         size_t i = 0;
-        for (cert_node_t *c = sd->certs_head; c != nullptr; c = c->next) {
+        cert_node_t *c;
+        for (c = sd->certs_head; c != nullptr; c = c->next) {
             cert_elements[i++] = c->cert_der;
         }
         /* CertificateSet is a SET of Certificate per RFC 5652. */
@@ -395,7 +396,8 @@ n00b_pkcs7_signed_data_serialize(n00b_pkcs7_signed_data_t *sd)
         n00b_buffer_t *, (int64_t)sd->n_signers, .allocator = allocator);
     {
         size_t i = 0;
-        for (signer_node_t *s = sd->signers_head; s != nullptr; s = s->next) {
+        signer_node_t *s;
+        for (s = sd->signers_head; s != nullptr; s = s->next) {
             /* IssuerAndSerialNumber. */
             n00b_buffer_t *serial_tlv;
             {

@@ -62,15 +62,18 @@ n00b_thread_init() _kargs
     n00b_thread_record_t *rec = &runtime->threads[acquired_slot];
     uint32_t gen = rec->generation++;
 
-    __n00b_thread_self = (n00b_thread_t){
-	.pthread_id    = pthread_self(),
-	.pthread_attrs = attrs,
-	.record        = rec,
-	.id_info.parts = {
-	    .id         = acquired_slot,
-	    .generation = gen,
-	},
-    };
+    /* Field-by-field assignment, NOT a struct-literal overwrite.
+     * Bulk-assigning a designated-initializer struct literal would
+     * zero every unspecified field — including `gc_stack_top` and
+     * any other state already populated on the current thread (for
+     * the main thread, callers' GC-stack-map frames are live during
+     * this init). Field-by-field preserves whatever the caller's
+     * transform-emitted bookkeeping has placed in `__n00b_thread_self`. */
+    __n00b_thread_self.pthread_id          = pthread_self();
+    __n00b_thread_self.pthread_attrs       = attrs;
+    __n00b_thread_self.record              = rec;
+    __n00b_thread_self.id_info.parts.id    = acquired_slot;
+    __n00b_thread_self.id_info.parts.generation = gen;
 
     // Store the thread pointer into the slot record so that the spawner
     // (or anyone else) can find us via rt->threads[slot].thread.

@@ -146,7 +146,8 @@ gnu_hash(const char *name)
 {
     uint32_t h = 5381;
 
-    for (const uint8_t *p = (const uint8_t *)name; *p; p++) {
+    const uint8_t *p;
+    for (p = (const uint8_t *)name; *p; p++) {
         h = (h << 5) + h + *p;
     }
 

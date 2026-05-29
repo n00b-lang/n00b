@@ -639,7 +639,8 @@ extern chalk_st_status_t chalk_st_set_chalk(chalk_st_t *st,
         // Detect whether the inner object is empty (only whitespace
         // between '{' and '}').
         bool empty = true;
-        for (const char *q = mv_start + 1; q < mv_end - 1; q++) {
+        const char *q;
+        for (q = mv_start + 1; q < mv_end - 1; q++) {
             if (*q != ' ' && *q != '\t' && *q != '\n' && *q != '\r') {
                 empty = false;
                 break;

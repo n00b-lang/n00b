@@ -99,7 +99,8 @@ resolve_host(n00b_http_url_t        *url,
     }
     /* Prefer IPv4 if present (see header comment). */
     struct addrinfo *pick = nullptr;
-    for (struct addrinfo *p = res; p; p = p->ai_next) {
+    struct addrinfo *p;
+    for (p = res; p; p = p->ai_next) {
         if (p->ai_family == AF_INET) { pick = p; break; }
     }
     if (!pick) pick = res;

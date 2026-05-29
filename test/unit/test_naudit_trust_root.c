@@ -158,7 +158,8 @@ write_roster(const char *roster_path,
      * <key>`; we drop everything after the second space.
      */
     int spaces = 0;
-    for (char *p = pub; *p; p++) {
+    char *p;
+    for (p = pub; *p; p++) {
         if (*p == ' ') {
             spaces++;
         }

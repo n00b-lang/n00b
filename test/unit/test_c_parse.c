@@ -165,7 +165,8 @@ restart:
         "<<=", ">>=", "...", NULL,
     };
 
-    for (const char **op = ops3; *op; op++) {
+    const char **op;
+    for (op = ops3; *op; op++) {
         if (n00b_scan_peek_byte(s, 0) == (uint8_t)(*op)[0]
             && n00b_scan_peek_byte(s, 1) == (uint8_t)(*op)[1]
             && n00b_scan_peek_byte(s, 2) == (uint8_t)(*op)[2]) {
@@ -193,7 +194,7 @@ restart:
         "|=", "::", NULL,
     };
 
-    for (const char **op = ops2; *op; op++) {
+    for (op = ops2; *op; op++) {
         if (n00b_scan_peek_byte(s, 0) == (uint8_t)(*op)[0]
             && n00b_scan_peek_byte(s, 1) == (uint8_t)(*op)[1]) {
             size_t   save_cur = s->cursor;
@@ -247,7 +248,8 @@ load_c_grammar(void)
 
     FILE *f = NULL;
 
-    for (const char **p = paths; *p; p++) {
+    const char **p;
+    for (p = paths; *p; p++) {
         f = fopen(*p, "r");
 
         if (f) {
@@ -858,7 +860,8 @@ main(int argc, char **argv)
 
     const char *src_dir = NULL;
 
-    for (const char **p = src_dirs; *p; p++) {
+    const char **p;
+    for (p = src_dirs; *p; p++) {
         DIR *d = opendir(*p);
 
         if (d) {

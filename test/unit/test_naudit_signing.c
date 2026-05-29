@@ -173,7 +173,8 @@ write_roster(const char *roster_path,
      * Strip optional trailing " comment" by finding the last
      * space and truncating. ed25519 blobs don't contain spaces. */
     int spaces = 0;
-    for (char *p = pub; *p; p++) {
+    char *p;
+    for (p = pub; *p; p++) {
         if (*p == ' ') {
             spaces++;
         }

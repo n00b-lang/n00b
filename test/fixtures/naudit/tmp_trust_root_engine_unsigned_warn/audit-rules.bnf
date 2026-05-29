@@ -1,0 +1,21 @@
+@schema_version 1
+@project demo
+@description engine-level unsigned-rule warning
+@source_doc test
+@dependencies
+
+@rule n00b.s2_1.null
+@title NULL -> nullptr
+@section section 2.1
+@violation_nt n00b_audit_v_null
+@rationale Test rationale.
+@bad int *p = NULL;
+@good int *p = nullptr;
+@guidance Replace NULL with nullptr.
+
+<n00b_audit_v_null> ::= %"NULL"
+rewrite {
+    template: nullptr
+    description: NULL -> nullptr (C23).
+}
+<provided_identifier> ::= <n00b_audit_v_null>

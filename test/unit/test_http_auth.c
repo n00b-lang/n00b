@@ -93,7 +93,8 @@ test_dpop_only(void)
     /* DPoP proof is a JWS — header.body.sig — three base64url
      * segments separated by `.`. */
     int dots = 0;
-    for (const char *p = dpop; *p; p++) if (*p == '.') dots++;
+    const char *p;
+    for (p = dpop; *p; p++) if (*p == '.') dots++;
     assert(dots == 2);
     /* No Authorization header. */
     assert(n00b_http_h1_headers_get_cstr(h, "authorization") == nullptr);

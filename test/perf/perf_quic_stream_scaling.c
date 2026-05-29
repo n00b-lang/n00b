@@ -84,7 +84,8 @@ rss_bytes(void)
 static void
 server_echo_walk(n00b_quic_conn_t *conn)
 {
-    for (n00b_quic_chan_t *c = n00b_quic_conn_first_chan(conn);
+    n00b_quic_chan_t *c;
+    for (c = n00b_quic_conn_first_chan(conn);
          c != NULL;
          c = n00b_quic_chan_next_in_conn(c)) {
         if (!n00b_quic_chan_has_data(c) && !n00b_quic_chan_recv_fin(c)) continue;

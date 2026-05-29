@@ -130,7 +130,8 @@ static_image_c_string_literal(const char *s)
 
     n00b_string_t *acc = n00b_string_from_raw("\"", 1);
 
-    for (const unsigned char *p = src; *p; p++) {
+    const unsigned char *p;
+    for (p = src; *p; p++) {
         n00b_string_t *piece;
 
         switch (*p) {

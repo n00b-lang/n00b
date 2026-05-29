@@ -75,7 +75,8 @@ poll_signal_handler(int signum)
         g_signal_pending[signum] = 1;
     }
     // Find the watch and write to its pipe
-    for (poll_signal_t *ps = g_signal_watches; ps; ps = ps->global_next) {
+    poll_signal_t *ps;
+    for (ps = g_signal_watches; ps; ps = ps->global_next) {
         if (ps->watch && ps->watch->signum == signum && ps->pipe_fd[1] >= 0) {
             char c = 1;
             (void)write(ps->pipe_fd[1], &c, 1);
@@ -644,7 +645,8 @@ poll_wait_with_timers(void *vctx, n00b_conduit_io_event_t *events,
 static void
 poll_process_signals(poll_ctx_t *ctx)
 {
-    for (poll_signal_t *ps = ctx->signals; ps; ps = ps->next) {
+    poll_signal_t *ps;
+    for (ps = ctx->signals; ps; ps = ps->next) {
         if (!ps->watch)
             continue;
 

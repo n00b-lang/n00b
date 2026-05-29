@@ -877,7 +877,8 @@ n00b_attest_oci_url_parse(n00b_string_t *image_ref)
         // the last colon AFTER the last slash in body.
         const char *body_end = data + body_len;
         const char *last_slash_in_body = nullptr;
-        for (const char *p = body_end - 1; p >= data; p--) {
+        const char *p;
+        for (p = body_end - 1; p >= data; p--) {
             if (*p == '/') {
                 last_slash_in_body = p;
                 break;
@@ -887,9 +888,10 @@ n00b_attest_oci_url_parse(n00b_string_t *image_ref)
                                            ? last_slash_in_body + 1
                                            : data;
         const char *colon_in_last = nullptr;
-        for (const char *p = body_end - 1; p >= tag_search_start; p--) {
-            if (*p == ':') {
-                colon_in_last = p;
+        const char *cp;
+        for (cp = body_end - 1; cp >= tag_search_start; cp--) {
+            if (*cp == ':') {
+                colon_in_last = cp;
                 break;
             }
         }

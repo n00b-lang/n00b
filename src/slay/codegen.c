@@ -689,8 +689,9 @@ n00b_cg_module_compile_traced(n00b_cg_module_t *m, const char *entry_func, FILE 
     // Find the entry function in this module.
     MIR_item_t func = NULL;
 
-    for (MIR_item_t item = DLIST_HEAD(MIR_item_t, m->mir_module->items); item != NULL;
-         item            = DLIST_NEXT(MIR_item_t, item)) {
+    MIR_item_t item;
+    for (item = DLIST_HEAD(MIR_item_t, m->mir_module->items); item != NULL;
+         item = DLIST_NEXT(MIR_item_t, item)) {
         if (item->item_type == MIR_func_item && strcmp(item->u.func->name, entry_func) == 0) {
             func = item;
             break;
@@ -2625,8 +2626,9 @@ codegen_module_has_func(n00b_cg_module_t *m, const char *name, bool include_priv
         return false;
     }
 
-    for (MIR_item_t item = DLIST_HEAD(MIR_item_t, m->mir_module->items); item != NULL;
-         item            = DLIST_NEXT(MIR_item_t, item)) {
+    MIR_item_t item;
+    for (item = DLIST_HEAD(MIR_item_t, m->mir_module->items); item != NULL;
+         item = DLIST_NEXT(MIR_item_t, item)) {
         if (item->item_type == MIR_func_item && strcmp(item->u.func->name, name) == 0) {
             return include_private || !n00b_cg_module_func_is_private(m, name);
         }
@@ -6601,7 +6603,8 @@ compute_class_layout(n00b_cg_session_t *s, n00b_scope_t *scope)
     // (which has exposed_scope set or matches the scope name).
     int32_t n_fields = 0;
 
-    for (n00b_sym_entry_t *e = scope->first_in_scope; e; e = e->next_in_scope) {
+    n00b_sym_entry_t *e;
+    for (e = scope->first_in_scope; e; e = e->next_in_scope) {
         if (e->kind != N00B_SYM_VARIABLE && e->kind != N00B_SYM_PARAM) {
             continue;
         }
@@ -6629,7 +6632,7 @@ compute_class_layout(n00b_cg_session_t *s, n00b_scope_t *scope)
     n00b_sym_entry_t *field_entries[n_fields];
     int32_t           fe_count = 0;
 
-    for (n00b_sym_entry_t *e = scope->first_in_scope; e; e = e->next_in_scope) {
+    for (e = scope->first_in_scope; e; e = e->next_in_scope) {
         if (e->kind != N00B_SYM_VARIABLE && e->kind != N00B_SYM_PARAM) {
             continue;
         }
@@ -6669,7 +6672,7 @@ compute_class_layout(n00b_cg_session_t *s, n00b_scope_t *scope)
     // Collect methods (N00B_SYM_FUNCTION with is_method).
     int32_t n_methods = 0;
 
-    for (n00b_sym_entry_t *e = scope->first_in_scope; e; e = e->next_in_scope) {
+    for (e = scope->first_in_scope; e; e = e->next_in_scope) {
         if (e->kind == N00B_SYM_FUNCTION && e->is_method) {
             n_methods++;
         }
@@ -6686,7 +6689,7 @@ compute_class_layout(n00b_cg_session_t *s, n00b_scope_t *scope)
 
         int32_t mi = 0;
 
-        for (n00b_sym_entry_t *e = scope->first_in_scope; e; e = e->next_in_scope) {
+        for (e = scope->first_in_scope; e; e = e->next_in_scope) {
             if (e->kind != N00B_SYM_FUNCTION || !e->is_method) {
                 continue;
             }
@@ -6811,8 +6814,9 @@ n00b_field_lock_find(void *obj, int64_t offset)
     uint64_t bucket
         = n00b_field_lock_hash(obj, offset) % (uint64_t)n00b_field_lock_bucket_count;
 
-    for (n00b_field_lock_entry_t *entry = n00b_field_lock_buckets[bucket]; entry;
-         entry                          = entry->next) {
+    n00b_field_lock_entry_t *entry;
+    for (entry = n00b_field_lock_buckets[bucket]; entry;
+         entry = entry->next) {
         if (entry->obj == obj && entry->offset == offset) {
             return true;
         }
@@ -7682,10 +7686,11 @@ codegen_func_def(n00b_cg_session_t *s, n00b_parse_tree_t *node)
             size_t            fn_len = strlen(func_name);
             n00b_namespace_t *ns     = &ar->symtab->namespaces[0]; // default ns
 
+            n00b_sym_entry_t *e;
             for (int32_t si = 0; si < ns->all_count; si++) {
                 n00b_scope_t *sc = ns->all_scopes[si];
 
-                for (n00b_sym_entry_t *e = sc->first_in_scope; e; e = e->next_in_scope) {
+                for (e = sc->first_in_scope; e; e = e->next_in_scope) {
                     if (e->kind == N00B_SYM_FUNCTION && e->is_method && e->name
                         && e->name->u8_bytes > fn_len + 1) {
                         const char *d = memchr(e->name->data, '$', e->name->u8_bytes);
@@ -7708,7 +7713,8 @@ found_mangled:;
     // Check if this is a method (mangled name contains '$').
     bool is_method_def = false;
 
-    for (const char *p = func_name; *p; p++) {
+    const char *p;
+    for (p = func_name; *p; p++) {
         if (*p == '$') {
             is_method_def = true;
             break;
@@ -8365,8 +8371,9 @@ codegen_walk(n00b_cg_session_t *s, n00b_parse_tree_t *node)
                                 = n00b_string_from_raw(rhs_name, (int64_t)rhs_len);
                             n00b_sym_entry_t *member = NULL;
 
-                            for (n00b_sym_entry_t *e = sym->exposed_scope->first_in_scope; e;
-                                 e                   = e->next_in_scope) {
+                            n00b_sym_entry_t *e;
+                            for (e = sym->exposed_scope->first_in_scope; e;
+                                 e = e->next_in_scope) {
                                 if (e->name && e->name->u8_bytes == rhs_str->u8_bytes
                                     && memcmp(e->name->data, rhs_str->data, rhs_str->u8_bytes)
                                            == 0) {
@@ -9081,7 +9088,8 @@ n00b_cg_session_merge_module(n00b_cg_session_t *s, n00b_cg_module_t *m)
             continue;
         }
 
-        for (n00b_sym_entry_t *sym = scope->first_in_scope; sym; sym = sym->next_in_scope) {
+        n00b_sym_entry_t *sym;
+        for (sym = scope->first_in_scope; sym; sym = sym->next_in_scope) {
             if (sym->kind != N00B_SYM_FUNCTION) {
                 continue;
             }
@@ -9443,8 +9451,9 @@ n00b_cg_session_compile_module(n00b_cg_session_t *s, n00b_parse_tree_t *tree) _k
     // machine code during MIR_link().
     size_t func_count = 0;
 
-    for (MIR_item_t item = DLIST_HEAD(MIR_item_t, m->mir_module->items); item != NULL;
-         item            = DLIST_NEXT(MIR_item_t, item)) {
+    MIR_item_t item;
+    for (item = DLIST_HEAD(MIR_item_t, m->mir_module->items); item != NULL;
+         item = DLIST_NEXT(MIR_item_t, item)) {
         if (item->item_type == MIR_func_item) {
             func_count++;
         }
@@ -9472,8 +9481,8 @@ n00b_cg_session_compile_module(n00b_cg_session_t *s, n00b_parse_tree_t *tree) _k
     const char **import_names = NULL;
     void       **import_addrs = NULL;
 
-    for (MIR_item_t item = DLIST_HEAD(MIR_item_t, m->mir_module->items); item != NULL;
-         item            = DLIST_NEXT(MIR_item_t, item)) {
+    for (item = DLIST_HEAD(MIR_item_t, m->mir_module->items); item != NULL;
+         item = DLIST_NEXT(MIR_item_t, item)) {
         if (item->item_type == MIR_import_item) {
             import_count++;
         }
@@ -9484,8 +9493,8 @@ n00b_cg_session_compile_module(n00b_cg_session_t *s, n00b_parse_tree_t *tree) _k
         import_addrs = calloc(import_count, sizeof(void *));
         size_t idx   = 0;
 
-        for (MIR_item_t item = DLIST_HEAD(MIR_item_t, m->mir_module->items); item != NULL;
-             item            = DLIST_NEXT(MIR_item_t, item)) {
+        for (item = DLIST_HEAD(MIR_item_t, m->mir_module->items); item != NULL;
+             item = DLIST_NEXT(MIR_item_t, item)) {
             if (item->item_type == MIR_import_item) {
                 import_names[idx] = item->u.import_id;
                 import_addrs[idx] = item->addr;
@@ -9504,8 +9513,8 @@ n00b_cg_session_compile_module(n00b_cg_session_t *s, n00b_parse_tree_t *tree) _k
     // Extract machine code and relocations for each generated function.
     size_t fi = 0;
 
-    for (MIR_item_t item = DLIST_HEAD(MIR_item_t, m->mir_module->items); item != NULL;
-         item            = DLIST_NEXT(MIR_item_t, item)) {
+    for (item = DLIST_HEAD(MIR_item_t, m->mir_module->items); item != NULL;
+         item = DLIST_NEXT(MIR_item_t, item)) {
         if (item->item_type != MIR_func_item) {
             continue;
         }
@@ -9594,7 +9603,8 @@ n00b_cg_collect_exports(void)
         return table;
     }
 
-    for (const n00b_cg_import_entry_t *e = start; e < stop; e++) {
+    const n00b_cg_import_entry_t *e;
+    for (e = start; e < stop; e++) {
         if (e->name && e->addr) {
             n00b_cg_import_table_add(table, *e);
         }

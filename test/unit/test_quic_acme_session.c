@@ -59,7 +59,8 @@ hex_to_fp(const char *hex, uint8_t out[32])
 {
     int oi = 0;
     int hi = -1;
-    for (const char *p = hex; *p; p++) {
+    const char *p;
+    for (p = hex; *p; p++) {
         char c = *p;
         if (c == ':' || c == ' ') {
             continue;

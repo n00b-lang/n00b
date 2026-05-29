@@ -1405,7 +1405,8 @@ n00b_result_t(n00b_string_t *) n00b_unicode_str_unescape(n00b_string_t *s) _karg
 
     // Quick check: if no backslash, return as-is.
     bool has_backslash = false;
-    for (const uint8_t *scan = p; scan < end; scan++) {
+    const uint8_t *scan;
+    for (scan = p; scan < end; scan++) {
         if (*scan == '\\') {
             has_backslash = true;
             break;

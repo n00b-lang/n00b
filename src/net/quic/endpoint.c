@@ -123,7 +123,8 @@ default_stream_cb(picoquic_cnx_t              *cnx,
      * of live conns; linear scan is fine.  Promote to a dict if we
      * ever exceed 1k. */
     n00b_quic_conn_t *conn = nullptr;
-    for (n00b_quic_conn_t *c = ep->accepted; c != nullptr;
+    n00b_quic_conn_t *c;
+    for (c = ep->accepted; c != nullptr;
          c = c->next_in_endpoint) {
         if (c->cnx == cnx) {
             conn = c;

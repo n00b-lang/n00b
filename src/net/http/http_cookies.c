@@ -105,7 +105,8 @@ builtin_is_suffix(const char *domain)
     if (!domain || !*domain) return true;
     /* Count dots. */
     size_t dots = 0;
-    for (const char *p = domain; *p; p++) if (*p == '.') dots++;
+    const char *p;
+    for (p = domain; *p; p++) if (*p == '.') dots++;
     if (dots == 0) return true;            /* "com", "org", … */
     /* Match a few common two-label public suffixes. */
     static const char *common[] = {
@@ -550,7 +551,8 @@ n00b_http_cookie_jar_size(n00b_http_cookie_jar_t *jar)
     /* Count live (non-expired) cookies. */
     int64_t now = jar_now(jar);
     size_t  n = 0;
-    for (jar_node_t *p = jar->head; p; p = p->next) {
+    jar_node_t *p;
+    for (p = jar->head; p; p = p->next) {
         if (p->cookie->expires_ms == 0
             || p->cookie->expires_ms > now) {
             n++;
@@ -574,7 +576,8 @@ n00b_http_cookie_jar_set_now_for_test(n00b_http_cookie_jar_t *jar,
 static jar_node_t **
 jar_find_slot(n00b_http_cookie_jar_t *jar, n00b_http_cookie_t *c)
 {
-    for (jar_node_t **slot = &jar->head; *slot; slot = &(*slot)->next) {
+    jar_node_t **slot;
+    for (slot = &jar->head; *slot; slot = &(*slot)->next) {
         n00b_http_cookie_t *existing = (*slot)->cookie;
         if (nstr_eq_ci(existing->name, c->name)
             && nstr_eq_ci(existing->domain, c->domain)
@@ -612,7 +615,8 @@ jar_insert(n00b_http_cookie_jar_t *jar, n00b_http_cookie_t *c)
     if (jar->count >= jar->max_cookies) {
         jar_node_t **oldest_slot  = nullptr;
         int64_t      oldest_stamp = INT64_MAX;
-        for (jar_node_t **p = &jar->head; *p; p = &(*p)->next) {
+        jar_node_t **p;
+        for (p = &jar->head; *p; p = &(*p)->next) {
             if ((*p)->last_access_ms < oldest_stamp) {
                 oldest_stamp = (*p)->last_access_ms;
                 oldest_slot  = p;
@@ -666,7 +670,8 @@ n00b_http_cookie_jar_header_for(n00b_http_cookie_jar_t *jar,
     char  scratch[2048];
     size_t off = 0;
 
-    for (jar_node_t *p = jar->head; p; p = p->next) {
+    jar_node_t *p;
+    for (p = jar->head; p; p = p->next) {
         n00b_http_cookie_t *c = p->cookie;
         if (c->expires_ms != 0 && c->expires_ms <= now) continue;
         /* Domain match. */

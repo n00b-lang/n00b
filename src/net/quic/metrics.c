@@ -78,7 +78,8 @@ valid_prom_name(const char *n)
     if (!((c0 >= 'a' && c0 <= 'z') || (c0 >= 'A' && c0 <= 'Z') || c0 == '_')) {
         return false;
     }
-    for (const char *p = n + 1; *p; p++) {
+    const char *p;
+    for (p = n + 1; *p; p++) {
         char c = *p;
         if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
               || (c >= '0' && c <= '9') || c == '_')) {

@@ -19,7 +19,8 @@ test_setup_envp_len(void)
      * non-zero len on any host with at least one env entry.  This is
      * the regression bait for the long-standing bytewise-walk bug. */
     int posix_count = 0;
-    for (char **p = environ; *p; p++) {
+    char **p;
+    for (p = environ; *p; p++) {
         posix_count++;
     }
     assert((int)rt->envp.len == posix_count);
@@ -82,7 +83,8 @@ test_putenv_grows_and_libc_sees_it(void)
 
     /* environ should still be null-terminated after the grow. */
     int seen = 0;
-    for (char **p = environ; *p; p++) {
+    char **p;
+    for (p = environ; *p; p++) {
         seen++;
     }
     assert((size_t)seen == rt->envp.len);

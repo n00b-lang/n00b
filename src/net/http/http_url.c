@@ -245,7 +245,8 @@ scheme_done:;
     /* Authority extends to first `/`, `?`, or end (we already
      * trimmed `#`). */
     const char *auth_end = end;
-    for (const char *q = p; q < end; q++) {
+    const char *q;
+    for (q = p; q < end; q++) {
         if (*q == '/' || *q == '?') {
             auth_end = q;
             break;
@@ -280,8 +281,9 @@ scheme_done:;
                                    N00B_HTTP_ERR_HOST_INVALID);
         }
         host_end = rb;
-        for (const char *q = host_start; q < host_end; q++) {
-            if (!is_ipv6_byte((unsigned char)*q)) {
+        const char *hq;
+        for (hq = host_start; hq < host_end; hq++) {
+            if (!is_ipv6_byte((unsigned char)*hq)) {
                 return n00b_result_err(n00b_http_url_t *,
                                        N00B_HTTP_ERR_HOST_INVALID);
             }
