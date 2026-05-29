@@ -81,10 +81,19 @@ build_c_row(void)
 {
     n00b_naudit_language_info_t *row =
         n00b_alloc(n00b_naudit_language_info_t);
-    row->name           = r"c";
-    row->grammar_path   = n00b_string_from_cstr(N00B_AUDIT_GRAMMAR_PATH);
-    row->tokenizer_name = r"c";
-    row->preprocess     = true;  /* WP-017: run cc -E before parse. */
+    row->name                = r"c";
+    row->grammar_path        = n00b_string_from_cstr(N00B_AUDIT_GRAMMAR_PATH);
+    row->tokenizer_name      = r"c";
+    /*
+     * WP-018: the C grammar is baked into the naudit binary at build
+     * time (`c_grammar_image` custom_target → `naudit-grammar-bake`),
+     * registered under `c_ncc`. The engine resolves it via
+     * `n00b_static_grammar_lookup(r"c_ncc")` and skips the runtime BNF
+     * parse. `grammar_path` is retained as the fallback source and for
+     * the probe-load path on unknown-language fragment builds.
+     */
+    row->static_grammar_name = r"c_ncc";
+    row->preprocess          = true;  /* WP-017: run cc -E before parse. */
 
     n00b_list_t(n00b_string_t *) *exts = n00b_alloc(
         n00b_list_t(n00b_string_t *));
