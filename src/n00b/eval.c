@@ -40,6 +40,7 @@
 #include "slay/parse_tree.h"
 #include "internal/slay/codegen_internal.h"
 #include "core/alloc.h"
+#include "core/static_image.h"
 #include "core/buffer.h"
 #include "core/file.h"
 #include "core/string.h"
@@ -136,6 +137,48 @@ read_file_as_string(const char *abs_path)
 static n00b_grammar_t *
 load_n00b_grammar(n00b_eval_err_t *out_err)
 {
+    // WP-020 fast path (CURRENTLY GATED OFF — see below): the n00b
+    // grammar is baked into this binary at build time. The
+    // `n00b_grammar_image` meson custom_target registers a lazy
+    // materializer under the name `n00b` via a `[[gnu::constructor]]`;
+    // `n00b_static_grammar_lookup(r"n00b")` returns it. The bake now
+    // ROUND-TRIPS the @infer/@scope/@declares/… annotations the eval/JIT
+    // codegen reads (WP-018's emitter dropped them — the documented
+    // blocker — now fixed and regression-guarded by
+    // test_static_grammar_image Test 5: 210 annotations round-trip
+    // byte-identically). The baked grammar is structurally identical to a
+    // fresh parse+finalize (NT/rule/match/annotation equivalence proven).
+    //
+    // DEFERRAL — the baked grammar cannot yet be consumed here: feeding
+    // it to the predicate-compile path exposes a SEPARATE, pre-existing
+    // GC-rootedness heisenbug in the MIR codegen (the in-flight
+    // n00b_cg_session_t / cg_module pointers are not GC roots under
+    // `--ncc-no-gc-stack-maps`, so an `n00b_collect()` triggered mid-
+    // codegen moves/frees `active_module`, and `n00b_cg_emit_ret` then
+    // dereferences a stale `cur_func` → `MIR_append_insn` aborts on
+    // `func_item != NULL`). It is allocation-timing-sensitive: the baked
+    // path skips the ~runtime BNF parse, changing arena fill timing so a
+    // collection lands in the codegen window; the runtime-parse fallback
+    // happens not to. A fresh runtime grammar finalized with
+    // `.skip_analysis = true` (no baked image) compiles cleanly, proving
+    // the trigger is allocation profile, not the grammar contents or the
+    // skipped analysis. This is a libn00b-core GC bug (relates to the
+    // gc-auto-roots work), out of grammar_image scope. Until it is fixed,
+    // use the runtime fallback so the eval session stays correct (no
+    // regression). Flip `use_baked_grammar` to true to take the baked
+    // path once the codegen session/module is GC-rooted across MIR
+    // emission.
+    static const bool use_baked_grammar = false;
+
+    if (use_baked_grammar) {
+        auto baked_opt = n00b_static_grammar_lookup(r"n00b");
+        if (n00b_option_is_set(baked_opt)) {
+            n00b_grammar_t *baked = n00b_option_get(baked_opt);
+            n00b_grammar_set_error_recovery(baked, false);
+            return baked;
+        }
+    }
+
     n00b_string_t *bnf_text = read_file_as_string(N00B_N00B_GRAMMAR_PATH);
 
     if (!bnf_text) {

@@ -38,6 +38,7 @@
  */
 
 #include "slay/grammar.h"
+#include "slay/annotation.h"
 #include "core/alloc.h"
 #include "adt/result.h"
 
@@ -174,6 +175,63 @@ extern void n00b_grammar_image_add_rule(n00b_grammar_t *g,
                                         int32_t         link_ix,
                                         int             n,
                                         n00b_match_t   *items)
+    _kargs { n00b_allocator_t *allocator = nullptr; };
+
+/**
+ * @brief Re-attach a baked semantic annotation to a reconstructed rule.
+ *
+ * Rebuilds an `n00b_annotation_t` from its flattened components and
+ * appends it to rule @p rule_ix's annotation list via
+ * `n00b_rule_annotate`, faithfully reproducing the per-rule annotation
+ * state the BNF loader produces (the loader attaches annotations
+ * directly to rules — `attach_annot_to_rule` → `n00b_rule_annotate` —
+ * so the round-trip is rule-level, not NT-pending-level: a fresh
+ * parse+finalize leaves `pending_annotations` empty and the annotations
+ * live only on the rules, and finalize redistributes nothing).
+ *
+ * The five `n00b_child_ref_t` arguments and the seven `n00b_string_t *`
+ * fields are passed by value / pointer exactly as the source annotation
+ * carried them (absent strings are `nullptr`, preserving the null-vs-
+ * empty distinction); the emitter renders child-refs as the
+ * `N00B_CHILD_IX` / `N00B_CHILD_NT` compound-literal macros.
+ *
+ * @param g                Grammar under reconstruction.
+ * @param rule_ix          Global rule index the annotation attaches to.
+ * @param kind             Annotation kind.
+ * @param name_ref         `name_ref` child reference.
+ * @param type_ref         `type_ref` child reference.
+ * @param value_ref        `value_ref` child reference.
+ * @param notrivia_ref     `notrivia_ref` child reference.
+ * @param adt_keyword_ref  `adt_keyword_ref` child reference.
+ * @param scope_tag        `scope_tag` (nullptr if absent).
+ * @param type_spec        `type_spec` (nullptr if absent).
+ * @param infer_expr       `infer_expr` (nullptr if absent).
+ * @param adt_kind         `adt_kind` (nullptr if absent).
+ * @param visibility_spec  `visibility_spec` (nullptr if absent).
+ * @param op_kind          `op_kind` (nullptr if absent).
+ * @param sym_kind         `sym_kind` (nullptr if absent).
+ * @param capture_by_tag   `capture_by_tag` flag.
+ * @kw allocator           Optional allocator (nullptr = runtime default).
+ *                         Forwarding blocked: the underlying
+ *                         `n00b_rule_annotate()` allocates the annotation
+ *                         copy itself and does not accept `.allocator`.
+ */
+extern void n00b_grammar_image_add_annotation(n00b_grammar_t   *g,
+                                              int32_t           rule_ix,
+                                              n00b_annot_kind_t kind,
+                                              n00b_child_ref_t  name_ref,
+                                              n00b_child_ref_t  type_ref,
+                                              n00b_child_ref_t  value_ref,
+                                              n00b_child_ref_t  notrivia_ref,
+                                              n00b_child_ref_t  adt_keyword_ref,
+                                              n00b_string_t    *scope_tag,
+                                              n00b_string_t    *type_spec,
+                                              n00b_string_t    *infer_expr,
+                                              n00b_string_t    *adt_kind,
+                                              n00b_string_t    *visibility_spec,
+                                              n00b_string_t    *op_kind,
+                                              n00b_string_t    *sym_kind,
+                                              bool              capture_by_tag)
     _kargs { n00b_allocator_t *allocator = nullptr; };
 
 /**

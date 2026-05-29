@@ -54,11 +54,20 @@
 #ifndef NAUDIT_C_FIXTURE_PATH
 #error "NAUDIT_C_FIXTURE_PATH must be defined by the build"
 #endif
+#ifndef NAUDIT_N00B_BNF_PATH
+#error "NAUDIT_N00B_BNF_PATH must be defined by the build"
+#endif
+
+#include "slay/annotation.h"
 
 // The build-time-baked c_ncc grammar registers itself via a
 // [[gnu::constructor]] in the linked-in c_grammar_image.c under this
 // name (see the meson `c_grammar_image` custom_target).
 #define C_NCC_IMAGE_NAME r"c_ncc"
+
+// The build-time-baked n00b grammar registers itself under this name via
+// the `n00b_grammar_image` custom_target (WP-020).
+#define N00B_IMAGE_NAME r"n00b"
 
 // Test convenience: unwrap the `n00b_option_t(n00b_grammar_t *)` returned
 // by `n00b_static_grammar_lookup` to a bare pointer (nullptr when the
@@ -213,6 +222,71 @@ fresh_c_grammar(void)
     assert(ok);
     n00b_grammar_finalize(g);
     return g;
+}
+
+// Fresh runtime parse of n00b.bnf → finalized grammar.
+static n00b_grammar_t *
+fresh_n00b_grammar(void)
+{
+    long  len = 0;
+    char *src = read_whole(NAUDIT_N00B_BNF_PATH, &len);
+    assert(src);
+    n00b_string_t  *text = n00b_string_from_raw(src, (int64_t)len);
+    n00b_grammar_t *g    = n00b_grammar_new();
+    bool            ok   = n00b_bnf_load(text, n00b_string_from_cstr("module"),
+                                         g);
+    assert(ok);
+    n00b_grammar_finalize(g);
+    return g;
+}
+
+// Two n00b_string_t * are "the same" for annotation comparison when both
+// are null, or both non-null with identical bytes.
+static bool
+opt_str_eq(n00b_string_t *a, n00b_string_t *b)
+{
+    if (!a && !b) {
+        return true;
+    }
+    if (!a || !b) {
+        return false;
+    }
+    return a->u8_bytes == b->u8_bytes
+        && memcmp(a->data, b->data, (size_t)a->u8_bytes) == 0;
+}
+
+// Child references match when kind matches and the discriminated payload
+// (index or name) matches.
+static bool
+child_ref_eq(n00b_child_ref_t a, n00b_child_ref_t b)
+{
+    if (a.kind != b.kind) {
+        return false;
+    }
+    if (a.kind == N00B_ROLE_BY_NAME) {
+        return opt_str_eq(a.name, b.name);
+    }
+    return a.index == b.index;
+}
+
+// A single annotation round-trips iff every field matches.
+static bool
+annot_eq(n00b_annotation_t *a, n00b_annotation_t *b)
+{
+    return a->kind == b->kind
+        && a->capture_by_tag == b->capture_by_tag
+        && child_ref_eq(a->name_ref, b->name_ref)
+        && child_ref_eq(a->type_ref, b->type_ref)
+        && child_ref_eq(a->value_ref, b->value_ref)
+        && child_ref_eq(a->notrivia_ref, b->notrivia_ref)
+        && child_ref_eq(a->adt_keyword_ref, b->adt_keyword_ref)
+        && opt_str_eq(a->scope_tag, b->scope_tag)
+        && opt_str_eq(a->type_spec, b->type_spec)
+        && opt_str_eq(a->infer_expr, b->infer_expr)
+        && opt_str_eq(a->adt_kind, b->adt_kind)
+        && opt_str_eq(a->visibility_spec, b->visibility_spec)
+        && opt_str_eq(a->op_kind, b->op_kind)
+        && opt_str_eq(a->sym_kind, b->sym_kind);
 }
 
 // Parse a C source file with the given (already-finalized) grammar using
@@ -432,6 +506,99 @@ test_perf(void)
     printf("  [PASS] Test 4: perf (informational)\n");
 }
 
+// ---------------------------------------------------------------------------
+// Test 5 — annotation round-trip (WP-020): the baked n00b grammar carries
+//          the same per-rule semantic annotations as a fresh runtime
+//          parse. This is the regression guard for the WP-018 blocker:
+//          grammar_image previously dropped n00b_annotation_t, so the
+//          baked n00b.bnf lost the @infer/@scope/@declares/… metadata the
+//          eval/JIT codegen reads, and the predicate JIT failed (-9).
+// ---------------------------------------------------------------------------
+
+static void
+test_n00b_annotation_roundtrip(void)
+{
+    n00b_grammar_t *img = lookup_static_grammar(N00B_IMAGE_NAME);
+    assert(img && "the build-time-baked n00b image must be registered");
+
+    n00b_grammar_t *fresh = fresh_n00b_grammar();
+
+    assert(img->nt_list.len == fresh->nt_list.len
+           && "n00b NT count must match");
+    assert(img->rules.len == fresh->rules.len
+           && "n00b rule count must match");
+
+    // Match-item shape must match id-for-id (the n00b grammar exercises
+    // match kinds c_ncc.bnf may not — e.g. SET / CLASS / ANY / groups).
+    for (size_t i = 0; i < fresh->rules.len; i++) {
+        n00b_parse_rule_t *ri = &img->rules.data[i];
+        n00b_parse_rule_t *rf = &fresh->rules.data[i];
+        assert(ri->nt_id == rf->nt_id && "n00b rule NT id must match");
+        if (ri->contents.len != rf->contents.len) {
+            fprintf(stderr, "[diag] rule %zu item count img=%zu fresh=%zu\n",
+                    i, (size_t)ri->contents.len, (size_t)rf->contents.len);
+        }
+        assert(ri->contents.len == rf->contents.len
+               && "n00b rule item count must match");
+        for (size_t j = 0; j < rf->contents.len; j++) {
+            if (ri->contents.data[j].kind != rf->contents.data[j].kind) {
+                fprintf(stderr,
+                        "[diag] rule %zu item %zu kind img=%d fresh=%d\n",
+                        i, j, (int)ri->contents.data[j].kind,
+                        (int)rf->contents.data[j].kind);
+            }
+            assert(ri->contents.data[j].kind == rf->contents.data[j].kind
+                   && "n00b match-item kind must match");
+        }
+    }
+
+    // Per-rule annotation lists must match id-for-id, in order. The BNF
+    // loader attaches annotations to rules (n00b_rule_annotate); finalize
+    // distributes the (empty) NT-pending lists, so a fresh parse carries
+    // annotations only on the rules — and so must the image.
+    size_t total_annots = 0;
+    for (size_t i = 0; i < fresh->rules.len; i++) {
+        n00b_parse_rule_t *ri = &img->rules.data[i];
+        n00b_parse_rule_t *rf = &fresh->rules.data[i];
+
+        size_t ni = ri->annotations.data
+                        ? n00b_list_len(ri->annotations)
+                        : 0;
+        size_t nf = rf->annotations.data
+                        ? n00b_list_len(rf->annotations)
+                        : 0;
+
+        if (ni != nf) {
+            fprintf(stderr,
+                    "[diag] rule %zu (nt %lld): image %zu annots, "
+                    "fresh %zu annots\n",
+                    i, (long long)rf->nt_id, ni, nf);
+        }
+        assert(ni == nf && "per-rule annotation count must match");
+
+        for (size_t ai = 0; ai < nf; ai++) {
+            n00b_annotation_t *ai_img   = n00b_list_get(ri->annotations, ai);
+            n00b_annotation_t *ai_fresh = n00b_list_get(rf->annotations, ai);
+            if (!annot_eq(ai_img, ai_fresh)) {
+                fprintf(stderr,
+                        "[diag] rule %zu annot %zu mismatch "
+                        "(kind img=%d fresh=%d)\n",
+                        i, ai, (int)ai_img->kind, (int)ai_fresh->kind);
+            }
+            assert(annot_eq(ai_img, ai_fresh)
+                   && "annotation fields must round-trip identically");
+            total_annots++;
+        }
+    }
+
+    assert(total_annots > 0
+           && "n00b.bnf must carry annotations (else the test is vacuous)");
+
+    printf("  [PASS] Test 5: n00b annotation round-trip "
+           "(%zu rules, %zu annotations identical)\n",
+           (size_t)fresh->rules.len, total_annots);
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -445,6 +612,8 @@ main(int argc, char *argv[])
     test_c_ncc_real_parse();
     fprintf(stderr, "[trace] start test 4\n");
     test_perf();
+    fprintf(stderr, "[trace] start test 5\n");
+    test_n00b_annotation_roundtrip();
 
     printf("All WP-018 static-grammar-image tests passed.\n");
     return 0;

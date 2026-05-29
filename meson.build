@@ -1105,18 +1105,43 @@ c_grammar_image = custom_target(
     ],
 )
 
+# WP-020: bake n00b.bnf into a static-image C source at build time and
+# link it into the eval-session consumers (test_n00b_eval, naudit). The
+# image's `[[gnu::constructor]]` registers a lazy materializer under the
+# name `n00b`; `eval.c`'s `load_n00b_grammar` resolves it via
+# `n00b_static_grammar_lookup` first, skipping the runtime BNF parse, and
+# falls back to `n00b_bnf_load` on a miss. The bake now round-trips the
+# `@infer`/`@scope`/`@declares`/… annotations the eval/JIT codegen reads
+# (WP-018's emitter dropped them; the predicate JIT then failed -9).
+n00b_grammar_image = custom_target(
+    'n00b_grammar_image',
+    input: 'grammars/n00b.bnf',
+    output: 'n00b_grammar_image.c',
+    command: [
+        naudit_grammar_bake,
+        '@INPUT@',
+        'module',
+        '@OUTPUT@',
+        '__naudit_n00b_grammar',
+        'n00b',
+    ],
+)
+
 # The static-grammar-image test drives the bake tool as a subprocess
 # (Test 1 + Test 4) and exercises the build-time-baked c_ncc image linked
 # in via c_grammar_image (Test 2 + Test 3). It needs both the bake-tool
 # path and the c_ncc.bnf path at compile time.
 test_static_grammar_image_exe = executable(
     'test_static_grammar_image',
-    ['test/unit/test_static_grammar_image.c', c_grammar_image],
+    ['test/unit/test_static_grammar_image.c', c_grammar_image,
+     n00b_grammar_image],
     include_directories: incdir,
     c_args: exe_c_args + [
         '-DNAUDIT_GRAMMAR_BAKE_PATH="' + naudit_grammar_bake.full_path() + '"',
         '-DNAUDIT_C_NCC_BNF_PATH="'
             + (meson.current_source_dir() / 'grammars' / 'c_ncc.bnf') + '"',
+        '-DNAUDIT_N00B_BNF_PATH="'
+            + (meson.current_source_dir() / 'grammars' / 'n00b.bnf') + '"',
         '-DNAUDIT_C_FIXTURE_PATH="'
             + (meson.current_source_dir() / 'test' / 'fixtures' / 'naudit'
                / 'fixture_null.c') + '"',
@@ -2435,7 +2460,7 @@ test('n00b_extension_methods',
 # trivial true/false predicates and an FFI-bound C function call,
 # covering the public surface at `include/n00b/eval.h`.
 n00b_eval_test = executable('test_n00b_eval',
-    ['test/unit/test_n00b_eval.c'],
+    ['test/unit/test_n00b_eval.c', n00b_grammar_image],
     include_directories: incdir,
     c_args: exe_c_args,
     link_args: exe_link_args,
@@ -2683,7 +2708,7 @@ n00b_attest_tool = executable('n00b-attest',
 # `get_or_load_grammar` resolves it via `n00b_static_grammar_lookup`,
 # skipping the ~1.5s runtime BNF parse for the C language.
 naudit_tool = executable('naudit',
-    ['src/tools/naudit.c', c_grammar_image],
+    ['src/tools/naudit.c', c_grammar_image, n00b_grammar_image],
     kwargs: test_common_kwargs,
     install: true,
 )

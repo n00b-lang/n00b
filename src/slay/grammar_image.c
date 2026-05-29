@@ -133,6 +133,52 @@ n00b_grammar_image_add_rule(n00b_grammar_t *g,
     n00b_list_push(nt->rule_ids, ix);
 }
 
+void
+n00b_grammar_image_add_annotation(n00b_grammar_t   *g,
+                                  int32_t           rule_ix,
+                                  n00b_annot_kind_t kind,
+                                  n00b_child_ref_t  name_ref,
+                                  n00b_child_ref_t  type_ref,
+                                  n00b_child_ref_t  value_ref,
+                                  n00b_child_ref_t  notrivia_ref,
+                                  n00b_child_ref_t  adt_keyword_ref,
+                                  n00b_string_t    *scope_tag,
+                                  n00b_string_t    *type_spec,
+                                  n00b_string_t    *infer_expr,
+                                  n00b_string_t    *adt_kind,
+                                  n00b_string_t    *visibility_spec,
+                                  n00b_string_t    *op_kind,
+                                  n00b_string_t    *sym_kind,
+                                  bool              capture_by_tag)
+    _kargs { n00b_allocator_t *allocator = nullptr; }
+{
+    // `allocator` cannot forward: `n00b_rule_annotate()` heap-allocates
+    // the annotation copy itself and has no `.allocator` kwarg (W-1).
+    (void)allocator;
+
+    n00b_parse_rule_t *rule = n00b_get_rule(g, rule_ix);
+    n00b_require(rule != nullptr,
+                 "grammar image: annotation references unknown rule");
+
+    n00b_annotation_t annot = {};
+    annot.kind            = kind;
+    annot.name_ref        = name_ref;
+    annot.type_ref        = type_ref;
+    annot.value_ref       = value_ref;
+    annot.notrivia_ref    = notrivia_ref;
+    annot.adt_keyword_ref = adt_keyword_ref;
+    annot.scope_tag       = scope_tag;
+    annot.type_spec       = type_spec;
+    annot.infer_expr      = infer_expr;
+    annot.adt_kind        = adt_kind;
+    annot.visibility_spec = visibility_spec;
+    annot.op_kind         = op_kind;
+    annot.sym_kind        = sym_kind;
+    annot.capture_by_tag  = capture_by_tag;
+
+    n00b_rule_annotate(rule, annot);
+}
+
 n00b_match_t
 n00b_grammar_image_group(int32_t min, int32_t max, int32_t gid,
                          int64_t contents_id)
@@ -274,6 +320,53 @@ emit_c_quoted(n00b_list_t(n00b_string_t *) *parts,
               n00b_allocator_t             *allocator)
 {
     n00b_list_push(*parts, c_quoted(s, allocator));
+}
+
+// Push an `n00b_string_t *`-producing expression for an *optional*
+// string field: the same `n00b_string_from_cstr("...")` wrapper as
+// `emit_n00b_string` for a present value, but the bare token `nullptr`
+// when `s` is null. Annotation string fields (scope_tag, infer_expr,
+// type_spec, …) are frequently absent, and the source distinguishes
+// "absent" (nullptr) from "present-but-empty"; preserving that keeps the
+// reconstructed annotation byte-identical to a fresh parse.
+//
+// Plain `n00b_string_from_cstr` (C-escaped literal) rather than an
+// r-string is used deliberately: infer-expression / type-spec bodies can
+// contain backslashes and quotes that ncc would reinterpret as r-string
+// markup, corrupting the baked bytes (same rationale as the file-header
+// note on the code templates). The bytes round-trip verbatim via
+// `c_quoted`.
+static void
+emit_n00b_string_or_null(n00b_list_t(n00b_string_t *) *parts,
+                         n00b_string_t                *s,
+                         n00b_allocator_t             *allocator)
+{
+    if (!s) {
+        emit(parts, "nullptr", allocator);
+        return;
+    }
+    emit_n00b_string(parts, s, allocator);
+}
+
+// Push an `n00b_child_ref_t` compound literal: `N00B_CHILD_IX(<n>)` for
+// a by-index ref (the common case, including N00B_CHILD_NONE == IX(-1))
+// or `N00B_CHILD_NT(n00b_string_from_cstr("..."))` for a by-name ref.
+static void
+emit_child_ref(n00b_list_t(n00b_string_t *) *parts,
+               n00b_child_ref_t              ref,
+               n00b_allocator_t             *allocator)
+{
+    if (ref.kind == N00B_ROLE_BY_NAME) {
+        emit(parts, "N00B_CHILD_NT(", allocator);
+        // A by-name ref's string is part of the grammar's static data;
+        // round-trip its bytes the same way NT names are.
+        emit_n00b_string(parts, ref.name, allocator);
+        emit(parts, ")", allocator);
+        return;
+    }
+
+    emit_str(parts,
+             n00b_cformat("N00B_CHILD_IX(«#»)", (int64_t)ref.index));
 }
 
 // Push a single match item as a C compound-literal `n00b_match_t`.
@@ -437,7 +530,17 @@ n00b_grammar_image_emit(n00b_grammar_t *g,
     }
 
     // --- Rules (global order). ---
-    size_t nrules = g->rules.len;
+    //
+    // `emitted_ix` is the index a rule receives in the *reconstructed*
+    // grammar: each emitted `n00b_grammar_image_add_rule` pushes exactly
+    // one rule onto `g->rules` in order, so the reconstructed index is
+    // the running count of emitted rules — which equals the source `i`
+    // only as long as no rule is skipped. The empty-production skip below
+    // is defensive (add_rule_internal forbids empties), but tracking the
+    // emitted index explicitly keeps annotation re-attachment correct
+    // even if a rule were ever skipped.
+    size_t  nrules     = g->rules.len;
+    int32_t emitted_ix = 0;
     for (size_t i = 0; i < nrules; i++) {
         n00b_parse_rule_t *r      = &g->rules.data[i];
         size_t             nitems = r->contents.len;
@@ -457,11 +560,59 @@ n00b_grammar_image_emit(n00b_grammar_t *g,
         emit(&parts, "        };\n", allocator);
         emit_str(&parts,
                  n00b_cformat("        n00b_grammar_image_add_rule(g, «#», «#», "
-                              "«#», «#», «#», items);\n    }\n",
+                              "«#», «#», «#», items);\n",
                               (int64_t)r->nt_id, (int64_t)r->cost,
                               n00b_string_from_cstr(r->penalty_rule ? "true"
                                                                     : "false"),
                               (int64_t)r->link_ix, (int64_t)nitems));
+
+        // Re-attach this rule's annotations. The BNF loader stages
+        // annotations directly on the rule (n00b_rule_annotate), so a
+        // fresh parse+finalize carries them per-rule (pending_annotations
+        // stays empty; finalize redistributes nothing). Emit them in
+        // list order so the reconstructed annotation list matches.
+        size_t nannots = r->annotations.data
+                             ? n00b_list_len(r->annotations)
+                             : 0;
+        for (size_t ai = 0; ai < nannots; ai++) {
+            n00b_annotation_t *a = n00b_list_get(r->annotations, ai);
+            emit_str(&parts,
+                     n00b_cformat("        n00b_grammar_image_add_annotation(g, "
+                                  "«#», «#», ",
+                                  (int64_t)emitted_ix,
+                                  (int64_t)a->kind));
+            emit_child_ref(&parts, a->name_ref, allocator);
+            emit(&parts, ", ", allocator);
+            emit_child_ref(&parts, a->type_ref, allocator);
+            emit(&parts, ", ", allocator);
+            emit_child_ref(&parts, a->value_ref, allocator);
+            emit(&parts, ", ", allocator);
+            emit_child_ref(&parts, a->notrivia_ref, allocator);
+            emit(&parts, ", ", allocator);
+            emit_child_ref(&parts, a->adt_keyword_ref, allocator);
+            emit(&parts, ", ", allocator);
+            emit_n00b_string_or_null(&parts, a->scope_tag, allocator);
+            emit(&parts, ", ", allocator);
+            emit_n00b_string_or_null(&parts, a->type_spec, allocator);
+            emit(&parts, ", ", allocator);
+            emit_n00b_string_or_null(&parts, a->infer_expr, allocator);
+            emit(&parts, ", ", allocator);
+            emit_n00b_string_or_null(&parts, a->adt_kind, allocator);
+            emit(&parts, ", ", allocator);
+            emit_n00b_string_or_null(&parts, a->visibility_spec, allocator);
+            emit(&parts, ", ", allocator);
+            emit_n00b_string_or_null(&parts, a->op_kind, allocator);
+            emit(&parts, ", ", allocator);
+            emit_n00b_string_or_null(&parts, a->sym_kind, allocator);
+            emit_str(&parts,
+                     n00b_cformat(", «#»);\n",
+                                  n00b_string_from_cstr(a->capture_by_tag
+                                                            ? "true"
+                                                            : "false")));
+        }
+
+        emit(&parts, "    }\n", allocator);
+        emitted_ix++;
     }
     emit(&parts, "\n", allocator);
 
