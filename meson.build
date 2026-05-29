@@ -2676,8 +2676,14 @@ n00b_attest_tool = executable('n00b-attest',
 # `src/naudit/cli.c`; the thin `main()` in `src/tools/naudit.c`
 # unwraps the result from `n00b_audit_run_cli` and returns the
 # integer payload as the process exit code.
+# WP-018 Phase 2: link the build-time-baked c_ncc grammar image
+# (`c_grammar_image` custom_target) into the naudit binary. The image's
+# `[[gnu::constructor]]` registers a lazy materializer under the name
+# `c_ncc` with `n00b_static_grammar_register`; the engine's
+# `get_or_load_grammar` resolves it via `n00b_static_grammar_lookup`,
+# skipping the ~1.5s runtime BNF parse for the C language.
 naudit_tool = executable('naudit',
-    ['src/tools/naudit.c'],
+    ['src/tools/naudit.c', c_grammar_image],
     kwargs: test_common_kwargs,
     install: true,
 )
