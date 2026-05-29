@@ -143,9 +143,10 @@ n00b_audit_preprocess_c(n00b_string_t *file_path, n00b_string_t *cpp_args)
     char **extra_argv = nullptr;
     int    n_extra    = split_cpp_args(cpp_args, &extra_argv);
 
-    /* Fixed prefix: ncc -E -P -x c (5 entries), then extra args,
+    /* Fixed prefix: ncc -E -P --ncc-no-gc-stack-maps
+     * --ncc-no-auto-gc-roots -x c (7 entries), then extra args,
      * then the file path, then nullptr terminator. */
-    int    fixed = 5;
+    int    fixed = 7;
     int    argc  = fixed + n_extra + 1;
     char **argv  = (char **)n00b_alloc_array(uintptr_t,
                                              (int64_t)(argc + 1));
@@ -155,8 +156,17 @@ n00b_audit_preprocess_c(n00b_string_t *file_path, n00b_string_t *cpp_args)
                                  n00b's c_tokenizer doesn't have ncc's
                                  handle_line_marker yet, so the
                                  markers cause parse failures. */
-    argv[3] = (char *)"-x";
-    argv[4] = (char *)"c";
+    /* Disable ncc's gc-stack-maps / auto-gc-roots transforms for the
+     * preprocess pass. These default ON in current ncc and, even in
+     * `-E` mode, inject instrumentation (`n00b_gc_stack_*` decls +
+     * `__attribute__((cleanup(...)))`) into the output. naudit would
+     * then parse that injected code and emit spurious violations
+     * (e.g. a bogus s2_5.attribute_legacy) at shifted line numbers.
+     * We only want plain preprocessed C here. */
+    argv[3] = (char *)"--ncc-no-gc-stack-maps";
+    argv[4] = (char *)"--ncc-no-auto-gc-roots";
+    argv[5] = (char *)"-x";
+    argv[6] = (char *)"c";
     for (int i = 0; i < n_extra; i++) {
         argv[fixed + i] = extra_argv[i];
     }
