@@ -13,6 +13,7 @@
 #include "clickhouse/n00b_clickhouse.h"
 #include "internal/clickhouse/client.h"
 
+#include "conduit/print.h"
 #include "core/buffer.h"
 #include "core/string.h"
 #include "net/http/http_client.h"
@@ -107,9 +108,22 @@ post_query(const n00b_clickhouse_client_t *client,
         .method           = method,
         .body             = body,
         .content_type     = content_type,
+        /* ClickHouse's HTTP API is HTTP/1.1 only — neither ClickHouse
+         * Cloud nor self-hosted setups advertise h3 on the HTTP API
+         * port, so letting n00b's default `prefer_h3` win burns ~1.5s
+         * per request on a doomed handshake and has been observed to
+         * leave stale entries in the connection pool that fail every
+         * subsequent call once the server closes its keep-alive. */
+        .prefer_h3        = false,
         .allow_plain_http = !client->https);
 
     if (n00b_result_is_err(request_result)) {
+        /* Surface the actual transport error so callers can see
+         * the difference between "TLS failed", "connection refused",
+         * "DNS failed", etc. without a separate logging pass. */
+        n00b_eprintf("[clickhouse] HTTP transport error [|#|] for [|#|]",
+                     (int64_t)n00b_result_get_err(request_result),
+                     url);
         return N00B_CLICKHOUSE_ERR_HTTP;
     }
 
@@ -124,6 +138,8 @@ post_query(const n00b_clickhouse_client_t *client,
     }
 
     if (status == 0) {
+        n00b_eprintf("[clickhouse] HTTP response had status 0 for [|#|]",
+                     url);
         return N00B_CLICKHOUSE_ERR_HTTP;
     }
     if (status < 200 || status >= 300) {
