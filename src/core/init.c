@@ -266,6 +266,14 @@ n00b_init(n00b_runtime_t *rt, int argc, char *argv[]) _kargs
     rt->finalizers          = n00b_list_new_private(n00b_finalizer_info_t *, rpool);
     rt->scannable_pools     = n00b_list_new(n00b_allocator_t *, rpool);
 
+    // Flush any GC root registrations parked by `n00b_gc_register_roots`
+    // during dynamic loader `[[gnu::constructor]]` phase (WP-003 / D-036,
+    // F-4). Must happen after `rt->gc_roots` exists AND
+    // `n00b_default_runtime` is set (the latter happened above).
+    // Constructor-phase entries land first; subsequent
+    // `n00b_gc_register_roots` calls bypass the defer queue.
+    _n00b_gc_flush_deferred_roots();
+
     setup_threads(rt, max_threads);
 
     if (allocator) {

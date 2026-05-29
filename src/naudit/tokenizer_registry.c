@@ -77,12 +77,6 @@ init_registry(void)
     if (registry_initialized) {
         return;
     }
-    /*
-     * Register the static pointer as a GC root before allocating
-     * — see the parallel comment in `languages.c::init_registry`
-     * for the precedent rationale.
-     */
-    n00b_gc_register_root(all_tokenizers);
 
     all_tokenizers = n00b_alloc(
         n00b_list_t(n00b_naudit_tokenizer_info_t *));

@@ -35,7 +35,6 @@ n00b_rich_desc_cache_init(void)
                                 .hash           = n00b_hash_word,
                                 .skip_obj_hash  = true,
                                 .allocator      = allocator);
-        n00b_gc_register_root(rich_desc_cache);
     }
 }
 

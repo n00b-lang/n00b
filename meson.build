@@ -1686,6 +1686,27 @@ gc_test = executable('test_gc',
 )
 test('gc', gc_test, suite: 'unit')
 
+gc_register_roots_api_test = executable('test_gc_register_roots_api',
+    ['test/unit/test_gc_register_roots_api.c'],
+    kwargs: test_common_kwargs,
+)
+test('gc_register_roots_api', gc_register_roots_api_test, suite: 'unit')
+
+# WP-003 Phase 4 / D-029 / § 6.5b: load-bearing end-to-end regression
+# test for the auto-roots feature. Declares a TU-scope
+# `static T *managed_singleton;` that ncc's `--ncc-auto-gc-roots`
+# transform (default-on per D-031) auto-registers via
+# `n00b_gc_register_roots` (Phase 2 batch API). After a forced GC, the
+# managed object reached through the auto-registered slot must survive
+# with its magic word intact. A `[[n00b::nomap]]` sibling decl provides
+# the negative control (slot is not visited by the collector). This
+# test must NOT be opted out of auto-roots: default c_args only.
+gc_auto_roots_e2e_test = executable('test_gc_auto_roots_e2e',
+    ['test/unit/test_gc_auto_roots_e2e.c'],
+    kwargs: test_common_kwargs,
+)
+test('gc_auto_roots_e2e', gc_auto_roots_e2e_test, suite: 'unit')
+
 gc_scan_map_test = executable('test_gc_scan_map',
     ['test/unit/test_gc_scan_map.c'],
     kwargs: test_common_kwargs,
@@ -1702,7 +1723,17 @@ test('gc_stack', gc_stack_test, suite: 'unit')
 
 gc_stack_nonlocal_test = executable('test_gc_stack_nonlocal',
     ['test/unit/test_gc_stack_nonlocal.c'],
-    kwargs: test_common_kwargs,
+    kwargs: test_common_kwargs + {
+        # WP-003 / D-036 (F-5): the test owns a TU-scope
+        # `static n00b_runtime_t test_runtime;` whose fields include
+        # `_Atomic(T *)` members. ncc's auto-roots transform now
+        # handles `_Atomic(T *)` correctly at the top-level decl (F-3),
+        # but the test additionally exercises GC stack-map / nonlocal-
+        # exit semantics rather than auto-roots semantics, and a
+        # whole-test opt-out keeps that focus clean. Mirrors the
+        # `--ncc-no-gc-stack-maps` opt-out used for `test_gc_stack`.
+        'c_args': exe_c_args + ['--ncc-no-auto-gc-roots'],
+    },
 )
 test('gc_stack_nonlocal', gc_stack_nonlocal_test, suite: 'unit')
 
@@ -1744,7 +1775,19 @@ static_object_sections_test = executable('test_static_object_sections',
       'test/unit/test_static_object_sections.c',
       'test/unit/test_static_object_sections_extra.c',
     ],
-    kwargs: test_common_kwargs,
+    kwargs: test_common_kwargs + {
+        # WP-003 / D-036 (F-5 extension): the test owns TU-scope
+        # pointer arrays (e.g., `section_callback_words[4]`) that
+        # the auto-roots transform would register as plain pointer-
+        # array roots. The test asserts on bespoke section-callback
+        # GC scan policies (custom callbacks, none-scan, all-scan,
+        # nested layouts) and depends on the GC NOT seeing those
+        # words as standard roots. Auto-roots interferes; opt out
+        # at the test level. Mirrors the `--ncc-no-gc-stack-maps`
+        # opt-out used for `test_gc_stack` and the F-5 opt-out used
+        # for `test_gc_stack_nonlocal`.
+        'c_args': exe_c_args + ['--ncc-no-auto-gc-roots'],
+    },
 )
 test('static_object_sections', static_object_sections_test, suite: 'unit')
 

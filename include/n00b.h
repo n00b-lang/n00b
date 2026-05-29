@@ -55,7 +55,18 @@ typedef struct n00b_inline_hdr_t     n00b_inline_hdr_t;
 typedef struct n00b_oob_hdr_t        n00b_oob_hdr_t;
 typedef enum n00b_dt_kind_t          n00b_dt_kind_t;
 typedef struct n00b_finalizer_info_t n00b_finalizer_info_t;
-typedef struct n00b_gc_root_t        n00b_gc_root_t;
+/* Defined in full here (not forward-declared) because ncc's
+ * `--ncc-auto-gc-roots` transform emits a `static n00b_gc_root_t[]`
+ * table into arbitrary translation units that only include `n00b.h`.
+ * The full struct layout must therefore be visible from this header
+ * alone, matching the precedent set by `n00b_static_object_desc_t`
+ * (which the static-image transform emits similarly). The public GC
+ * API (`n00b_gc_register_roots` declaration, `n00b_gc_register_root`
+ * macro, `n00b_collect`, etc.) still lives in `include/core/gc.h`. */
+typedef struct n00b_gc_root_t {
+    void  *addr;      /**< Start of the scannable region. */
+    size_t num_words; /**< Number of pointer-sized words to scan. */
+} n00b_gc_root_t;
 typedef struct n00b_gc_map_t         n00b_gc_map_t;
 enum n00b_gc_scan_kind_t : uint8_t;
 typedef enum n00b_gc_scan_kind_t     n00b_gc_scan_kind_t;
@@ -101,6 +112,14 @@ n00b_gc_stack_push(n00b_gc_stack_frame_t *frame, const n00b_gc_stack_map_t *map,
 extern void n00b_gc_stack_pop(n00b_gc_stack_frame_t *frame);
 extern n00b_jmp_buf_t *n00b_gc_stack_prepare_jmp(n00b_jmp_buf_t *ctx);
 extern void n00b_gc_stack_restore(n00b_gc_stack_frame_t *top);
+
+/* Declared here (in addition to `include/core/gc.h`) because ncc's
+ * `--ncc-auto-gc-roots` transform emits `[[gnu::constructor]]` calls
+ * to this symbol from arbitrary TUs that only include `n00b.h`. The
+ * authoritative Doxygen for the API lives on the declaration in
+ * `include/core/gc.h`. */
+extern void n00b_gc_register_roots(const n00b_gc_root_t *roots,
+                                   size_t                count);
 [[noreturn]] extern void n00b_longjmp(n00b_jmp_buf_t *ctx, int value);
 
 // Supported non-local-exit interface for code compiled with GC stack maps.
