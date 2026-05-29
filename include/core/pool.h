@@ -18,6 +18,15 @@
 typedef struct n00b_pool_page_t {
     struct n00b_pool_page_t *prev;
     struct n00b_pool_page_t *next;
+    /* Page-aligned size of the underlying mmap, captured by
+     * new_page_entry so pool_free's big-alloc path can munmap the
+     * page when its single entry is freed. Without this, big-alloc
+     * pool_free was only unlinking the page from page_table — the
+     * memory stayed mapped until pool_destroy. Observed leak: any
+     * pool client that n00b_free's a >N00B_NUM_FREE_LISTS-class
+     * allocation gave back its slot in the free list but the page
+     * remained mapped. */
+    size_t                   mapped_size;
 } n00b_pool_page_t;
 
 typedef struct {

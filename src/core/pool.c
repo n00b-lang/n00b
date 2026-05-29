@@ -54,6 +54,7 @@ new_page_entry(n00b_pool_t *pool, uint64_t *sz_ptr)
     n00b_pool_page_t *cur = n00b_result_get(mmap_r);
 
     *sz_ptr   = n00b_page_align(sz) - hdr_sz;
+    cur->mapped_size = n00b_page_align(sz);
     void *res = (void *)cur + hdr_sz;
 
     pool_lock(pool);
@@ -94,7 +95,19 @@ delete_one_page_entry(n00b_pool_t *pool, n00b_pool_page_t *entry)
         entry->next->prev = entry->prev;
     }
 
+    /* Capture mapped_size while we still hold the lock; the munmap
+     * itself is fine to do unlocked once the page is unlinked. */
+    size_t mapped = entry->mapped_size;
+
     pool_unlock(pool);
+
+    /* Big-alloc free path: actually release the page back to the OS.
+     * Without this the page stayed mapped until pool_destroy — any
+     * pool client n00b_free-ing a >N00B_NUM_FREE_LISTS-class
+     * allocation observed the slot count drop but RSS keep climbing. */
+    if (mapped != 0) {
+        n00b_safe_munmap((void *)entry, mapped);
+    }
 }
 
 static inline void *
@@ -144,7 +157,11 @@ pool_destroy(n00b_pool_t *pool)
 
     while (entry) {
         next = entry->next;
-        n00b_safe_munmap(entry, n00b_page_size);
+        /* Big-alloc pages can be larger than n00b_page_size — use the
+         * captured mapped_size so we unmap the right region length. */
+        size_t mapped = entry->mapped_size != 0 ? entry->mapped_size
+                                                : n00b_page_size;
+        n00b_safe_munmap(entry, mapped);
         entry = next;
     }
 }
