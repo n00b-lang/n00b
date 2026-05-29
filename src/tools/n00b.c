@@ -189,7 +189,8 @@ compile_spawn_wait(const char **argv)
             q = true;
         }
         else {
-            for (const char *p = arg; *p; p++) {
+            const char *p;
+            for (p = arg; *p; p++) {
                 if (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r' || *p == '"') {
                     q = true;
                     break;
