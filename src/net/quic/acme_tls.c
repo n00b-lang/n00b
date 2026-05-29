@@ -274,17 +274,28 @@ tcp_connect(const char *host, uint16_t port, int32_t timeout_ms,
     struct addrinfo *res = nullptr;
     int              gai = getaddrinfo(host, port_str, &hints, &res);
     if (gai != 0 || !res) {
+        /* gai_strerror is reentrant-safe per POSIX; stderr write here
+         * exists purely so the BIND_FAILED return code has a paper
+         * trail in the per-pod logs instead of being indistinguishable
+         * from a connect-level failure. */
+        fprintf(stderr,
+                "[acme_tls] getaddrinfo(%s:%u) failed: gai=%d (%s)\n",
+                host, (unsigned)port, gai, gai_strerror(gai));
         return N00B_QUIC_ERR_BIND_FAILED;
     }
 
     int64_t deadline = now_ms() + timeout_ms;
     int     fd       = -1;
     int     rc       = N00B_QUIC_ERR_BIND_FAILED;
+    int     last_errno  = 0;     /* errno snapshot from the last attempt */
+    const char *last_phase = "init";
 
     struct addrinfo *ai;
     for (ai = res; ai; ai = ai->ai_next) {
         fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
         if (fd < 0) {
+            last_errno = errno;
+            last_phase = "socket";
             continue;
         }
         int flags = fcntl(fd, F_GETFL, 0);
@@ -296,6 +307,8 @@ tcp_connect(const char *host, uint16_t port, int32_t timeout_ms,
             break;
         }
         if (errno != EINPROGRESS) {
+            last_errno = errno;
+            last_phase = "connect";
             close(fd);
             fd = -1;
             continue;
@@ -306,11 +319,14 @@ tcp_connect(const char *host, uint16_t port, int32_t timeout_ms,
             close(fd);
             fd = -1;
             rc = N00B_QUIC_ERR_TIMEOUT;
+            last_phase = "deadline";
             continue;
         }
         struct pollfd pfd = {.fd = fd, .events = POLLOUT};
         int           pr  = poll(&pfd, 1, (int)(deadline - now));
         if (pr <= 0) {
+            if (pr < 0) last_errno = errno;
+            last_phase = (pr == 0) ? "poll-timeout" : "poll-error";
             close(fd);
             fd = -1;
             rc = (pr == 0) ? N00B_QUIC_ERR_TIMEOUT
@@ -321,6 +337,8 @@ tcp_connect(const char *host, uint16_t port, int32_t timeout_ms,
         socklen_t err_len = sizeof(err);
         if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &err_len) < 0
             || err != 0) {
+            last_errno = err ? err : errno;
+            last_phase = "post-poll-so_error";
             close(fd);
             fd = -1;
             rc = N00B_QUIC_ERR_BIND_FAILED;
@@ -334,6 +352,12 @@ tcp_connect(const char *host, uint16_t port, int32_t timeout_ms,
 
     if (rc == N00B_QUIC_OK) {
         *sock_out = fd;
+    }
+    else {
+        fprintf(stderr,
+                "[acme_tls] connect(%s:%u) failed: rc=%d phase=%s errno=%d (%s)\n",
+                host, (unsigned)port, rc, last_phase,
+                last_errno, last_errno ? strerror(last_errno) : "n/a");
     }
     return rc;
 }
