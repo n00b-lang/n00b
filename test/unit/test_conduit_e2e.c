@@ -424,6 +424,60 @@ test_inbox_backpressure_drop_newest(void)
 }
 
 // ============================================================================
+// 8b. Inbox backpressure — DROP_OLDEST
+// ============================================================================
+//
+// Producer-side push must NOT touch head/tail-when-solo — that's MPSC
+// consumer territory. When over limit + DROP_OLDEST, push bumps a
+// `drop_credits` counter; the consumer pop drains credits (discarding
+// head entries) before returning a real message. Net effect: keep the
+// newest `limit` entries.
+
+static void
+test_inbox_backpressure_drop_oldest(void)
+{
+    n00b_conduit_t *c = make_conduit();
+    n00b_conduit_topic_t(test_payload_t) *topic = make_typed_topic(c, 208);
+
+    n00b_conduit_inbox_t(test_payload_t) *inbox =
+        n00b_alloc(n00b_conduit_inbox_t(test_payload_t));
+    n00b_conduit_inbox_init(test_payload_t, inbox, c,
+                            N00B_CONDUIT_BP_DROP_OLDEST, 3);
+
+    n00b_conduit_sub_handle_t h =
+        n00b_conduit_subscribe(test_payload_t, topic, inbox);
+
+    // Push 5 messages. Oldest 2 (values 1, 2) must be dropped; the
+    // consumer should observe 3, 4, 5 in order.
+    for (int i = 0; i < 5; i++) {
+        n00b_conduit_message_t(test_payload_t) *msg =
+            n00b_alloc(n00b_conduit_message_t(test_payload_t));
+        msg->header.type   = N00B_CONDUIT_MSG_READABLE;
+        msg->payload.value = i + 1;
+        n00b_conduit_topic_deliver_msg(test_payload_t, topic, msg,
+                                       N00B_CONDUIT_OP_ALL);
+    }
+
+    n00b_conduit_message_t(test_payload_t) *m3 =
+        n00b_conduit_inbox_pop_msg(test_payload_t, inbox);
+    assert(m3 != nullptr);
+    assert(m3->payload.value == 3);
+    n00b_conduit_message_t(test_payload_t) *m4 =
+        n00b_conduit_inbox_pop_msg(test_payload_t, inbox);
+    assert(m4 != nullptr);
+    assert(m4->payload.value == 4);
+    n00b_conduit_message_t(test_payload_t) *m5 =
+        n00b_conduit_inbox_pop_msg(test_payload_t, inbox);
+    assert(m5 != nullptr);
+    assert(m5->payload.value == 5);
+    assert(n00b_conduit_inbox_pop_msg(test_payload_t, inbox) == nullptr);
+
+    n00b_conduit_sub_cancel(h);
+    n00b_conduit_destroy(c);
+    printf("  [PASS] inbox backpressure DROP_OLDEST\n");
+}
+
+// ============================================================================
 // 9. Process lifecycle topics initialize typed subscription storage
 // ============================================================================
 
@@ -487,6 +541,8 @@ main(int argc, char *argv[])
     test_one_shot_subscription_cleanup();
     fflush(stdout);
     test_inbox_backpressure_drop_newest();
+    fflush(stdout);
+    test_inbox_backpressure_drop_oldest();
     fflush(stdout);
     test_proc_topic_has_typed_subscriptions();
     fflush(stdout);

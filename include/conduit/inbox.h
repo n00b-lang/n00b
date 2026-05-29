@@ -136,6 +136,13 @@ n00b_conduit_sys_queue_count(n00b_conduit_sys_queue_t *q)
         n00b_conduit_backpressure_t          backpressure;                                     \
         uint32_t                             limit;                                            \
         _Atomic(uint32_t)                    count;                                            \
+        /* DROP_OLDEST defers head mutation to the consumer. Producer */                       \
+        /* push atomically bumps drop_credits when over limit; the    */                       \
+        /* consumer pop drains credits (discarding head entries) on   */                       \
+        /* its next call. Without this, producer-side pop from push   */                       \
+        /* would race the consumer's pop on the same head and starve  */                       \
+        /* the CAS loser in the head->next spin loop.                  */                      \
+        _Atomic(uint32_t)                    drop_credits;                                     \
         /* System message queue */                                                             \
         n00b_conduit_sys_queue_t             sys_queue;                                        \
         /* Notification */                                                                     \
@@ -155,16 +162,19 @@ n00b_conduit_sys_queue_count(n00b_conduit_sys_queue_t *q)
         inbox->backpressure = bp;                                                              \
         inbox->limit = lim;                                                                    \
         n00b_atomic_store(&inbox->count, 0);                                                   \
+        n00b_atomic_store(&inbox->drop_credits, 0);                                            \
         n00b_conduit_sys_queue_init(&inbox->sys_queue);                                        \
         n00b_condition_init(&inbox->cv);                                                        \
         inbox->conduit = c;                                                                    \
         inbox->name = nullptr;                                                                 \
     }                                                                                          \
                                                                                                \
+    /* Head-mutating dequeue. Consumer-only: pop is MPSC, the head    */                       \
+    /* recovery here assumes the consumer is the sole owner of head/  */                       \
+    /* tail-when-solo. Producers must NEVER call this directly.        */                      \
     static inline n00b_conduit_message_t(T) *                                                  \
-    _N00B_INBOX_FN(pop, T)(n00b_conduit_inbox_t(T) *inbox)                                     \
+    _N00B_INBOX_FN(pop_raw, T)(n00b_conduit_inbox_t(T) *inbox)                                 \
     {                                                                                          \
-        if (!inbox) return nullptr;                                                            \
         n00b_conduit_message_t(T) *head = n00b_atomic_load(&inbox->head);                      \
         if (!head) return nullptr;                                                             \
         /* Pair with the release fence in push so the plain         */                         \
@@ -204,6 +214,26 @@ n00b_conduit_sys_queue_count(n00b_conduit_sys_queue_t *q)
         return head;                                                                           \
     }                                                                                          \
                                                                                                \
+    /* Public consumer entry point. Drains any DROP_OLDEST credits    */                       \
+    /* deferred by producer-side push before returning a real         */                       \
+    /* message. Single-consumer; do not call from multiple threads.    */                      \
+    static inline n00b_conduit_message_t(T) *                                                  \
+    _N00B_INBOX_FN(pop, T)(n00b_conduit_inbox_t(T) *inbox)                                     \
+    {                                                                                          \
+        if (!inbox) return nullptr;                                                            \
+        while (n00b_atomic_load(&inbox->drop_credits) > 0) {                                   \
+            n00b_conduit_message_t(T) *discard =                                               \
+                _N00B_INBOX_FN(pop_raw, T)(inbox);                                             \
+            if (discard == nullptr) {                                                          \
+                /* Queue genuinely empty; remaining credits will be    */                      \
+                /* applied to the next pushes.                          */                     \
+                break;                                                                         \
+            }                                                                                  \
+            n00b_atomic_add(&inbox->drop_credits, (uint32_t)-1);                               \
+        }                                                                                      \
+        return _N00B_INBOX_FN(pop_raw, T)(inbox);                                              \
+    }                                                                                          \
+                                                                                               \
     static inline bool                                                                         \
     _N00B_INBOX_FN(push, T)(n00b_conduit_inbox_t(T)      *inbox,                               \
                             n00b_conduit_message_t(T) *msg)                                    \
@@ -217,8 +247,12 @@ n00b_conduit_sys_queue_count(n00b_conduit_sys_queue_t *q)
                     inbox->backpressure == N00B_CONDUIT_BP_SIGNAL) {                           \
                     return false;                                                              \
                 }                                                                              \
+                /* DROP_OLDEST: defer the head mutation to the         */                      \
+                /* consumer. Producer must NOT call pop_raw directly — */                      \
+                /* that would race the consumer's pop on the same head */                      \
+                /* and starve the CAS-loser in head->next's spin loop. */                      \
                 if (inbox->backpressure == N00B_CONDUIT_BP_DROP_OLDEST) {                      \
-                    _N00B_INBOX_FN(pop, T)(inbox);                                             \
+                    n00b_atomic_add(&inbox->drop_credits, 1);                                  \
                 }                                                                              \
             }                                                                                  \
         }                                                                                      \
