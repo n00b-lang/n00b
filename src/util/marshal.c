@@ -37,6 +37,11 @@ typedef enum : uint32_t {
     N00B_MARSHAL_SCAN_CB_TAG_EVERY_OTHER  = 2,
     N00B_MARSHAL_SCAN_CB_TAG_STRUCT_FIELD = 3,
     N00B_MARSHAL_SCAN_CB_TAG_STRUCT_LAYOUT = 4,
+    // D-049: the link-time type->GC-map callback. Its scan_user descriptor is
+    // NOT serialized (uses_user stays false) — it is re-derived on unmarshal
+    // from the object's tinfo via n00b_gc_type_map_lookup, so no identity
+    // payload is needed.
+    N00B_MARSHAL_SCAN_CB_TAG_TYPE_LAYOUT  = 5,
     N00B_MARSHAL_SCAN_CB_TAG_LIMIT,
 } n00b_marshal_scan_cb_tag_t;
 
@@ -46,10 +51,12 @@ typedef enum : uint32_t {
 #define N00B_MARSHAL_ALLOC_F_SOURCE_INLINE     (1u << 0)
 #define N00B_MARSHAL_ALLOC_F_SOURCE_OOB        (1u << 1)
 #define N00B_MARSHAL_ALLOC_F_SOURCE_HEADERLESS (1u << 2)
+#define N00B_MARSHAL_ALLOC_F_PTR_WORDS_KNOWN   (1u << 3)
 #define N00B_MARSHAL_ALLOC_F_KNOWN             \
     (N00B_MARSHAL_ALLOC_F_SOURCE_INLINE        \
      | N00B_MARSHAL_ALLOC_F_SOURCE_OOB         \
-     | N00B_MARSHAL_ALLOC_F_SOURCE_HEADERLESS)
+     | N00B_MARSHAL_ALLOC_F_SOURCE_HEADERLESS  \
+     | N00B_MARSHAL_ALLOC_F_PTR_WORDS_KNOWN)
 
 typedef struct {
     uint64_t marshal_magic;
@@ -361,6 +368,7 @@ marshal_scan_cb_to_tag(n00b_gc_scan_cb_t cb, n00b_marshal_scan_cb_tag_t *out)
         {n00b_gc_scan_cb_every_other, N00B_MARSHAL_SCAN_CB_TAG_EVERY_OTHER},
         {n00b_gc_scan_cb_struct_field, N00B_MARSHAL_SCAN_CB_TAG_STRUCT_FIELD},
         {n00b_gc_scan_cb_struct_layout, N00B_MARSHAL_SCAN_CB_TAG_STRUCT_LAYOUT},
+        {n00b_gc_scan_cb_type_layout, N00B_MARSHAL_SCAN_CB_TAG_TYPE_LAYOUT},
     };
 
     for (size_t i = 0; i < sizeof(table) / sizeof(table[0]); i++) {
@@ -392,6 +400,9 @@ marshal_tag_to_scan_cb(n00b_marshal_scan_cb_tag_t tag, n00b_gc_scan_cb_t *out)
     case N00B_MARSHAL_SCAN_CB_TAG_STRUCT_LAYOUT:
         *out = n00b_gc_scan_cb_struct_layout;
         return true;
+    case N00B_MARSHAL_SCAN_CB_TAG_TYPE_LAYOUT:
+        *out = n00b_gc_scan_cb_type_layout;
+        return true;
     case N00B_MARSHAL_SCAN_CB_TAG_LIMIT:
     default:
         return false;
@@ -400,7 +411,8 @@ marshal_tag_to_scan_cb(n00b_marshal_scan_cb_tag_t tag, n00b_gc_scan_cb_t *out)
 
 // A scan_cb_tag carries a scan_user descriptor (and thus an identity
 // payload) only for the struct-field / struct-layout callbacks
-// (D-040 OQ-5). all/none/every_other take no user data.
+// (D-040 OQ-5). all/none/every_other take no user data; TYPE_LAYOUT
+// re-derives scan_user from the allocation's tinfo on unmarshal.
 static bool
 marshal_scan_cb_tag_uses_user(n00b_marshal_scan_cb_tag_t tag)
 {
@@ -413,7 +425,8 @@ marshal_scan_word_count(n00b_marshal_alloc_record_t *rec)
 {
     uint64_t user_words = rec->user_len / sizeof(uint64_t);
 
-    if (rec->ptr_words && rec->ptr_words < user_words) {
+    if ((rec->flags & N00B_MARSHAL_ALLOC_F_PTR_WORDS_KNOWN) != 0
+        && rec->ptr_words < user_words) {
         return rec->ptr_words;
     }
 
@@ -630,6 +643,9 @@ alloc_view(n00b_alloc_info_t              info,
         }
         rec->tinfo     = oob->tinfo;
         rec->ptr_words = oob->ptr_words;
+        if (oob->ptr_words_known) {
+            rec->flags |= N00B_MARSHAL_ALLOC_F_PTR_WORDS_KNOWN;
+        }
         rec->scan_kind = oob->scan_kind;
         rec->no_scan   = oob->no_scan;
         rec->is_array  = oob->is_array;
@@ -648,6 +664,9 @@ alloc_view(n00b_alloc_info_t              info,
         rec->flags            = N00B_MARSHAL_ALLOC_F_SOURCE_INLINE;
         rec->tinfo            = hdr->tinfo;
         rec->ptr_words        = hdr->ptr_words;
+        if (hdr->ptr_words_known) {
+            rec->flags |= N00B_MARSHAL_ALLOC_F_PTR_WORDS_KNOWN;
+        }
         rec->scan_kind        = hdr->scan_kind;
         rec->no_scan          = hdr->no_scan;
         rec->is_array         = hdr->is_array;
@@ -696,6 +715,16 @@ marshal_add_alloc(n00b_marshal_ctx_t *ctx, n00b_alloc_info_t info)
                               N00B_MARSHAL_ERR_UNSUPPORTED_SCAN_CALLBACK,
                               r"struct-layout scan callback is missing its scan_user descriptor");
             return nullptr;
+        }
+        if (scan_cb_tag == N00B_MARSHAL_SCAN_CB_TAG_TYPE_LAYOUT && rec.tinfo == 0) {
+            rec.tinfo = n00b_gc_type_map_hash_for_layout(scan_user);
+            if (rec.tinfo == 0) {
+                marshal_set_error(&ctx->status,
+                                  &ctx->error,
+                                  N00B_MARSHAL_ERR_UNSUPPORTED_SCAN_CALLBACK,
+                                  r"type-layout scan callback is missing its type hash");
+                return nullptr;
+            }
         }
         is_callback = true;
     }
@@ -991,6 +1020,15 @@ emit_alloc(n00b_marshal_ctx_t *ctx, n00b_marshal_node_t *node)
                  (size_t)node->rec.payload_len);
 }
 
+static bool
+marshal_interior_in_bounds(uint64_t interior, uint64_t user_len)
+{
+    if (user_len == 0) {
+        return interior == 0;
+    }
+    return interior < user_len;
+}
+
 // Build the precise per-word pointer bitmap for a CALLBACK node by
 // invoking its built-in scan_cb into a private scratch n00b_gc_map_t
 // (D-040 OQ-3: the bitmap is computed once and stored on the node).
@@ -1010,7 +1048,7 @@ compute_callback_bitmap(n00b_marshal_ctx_t *ctx, n00b_marshal_node_t *node)
         return false;
     }
 
-    uint64_t num_words = node->rec.user_len / sizeof(uint64_t);
+    uint64_t num_words = marshal_scan_word_count(&node->rec);
     uint64_t map_words = n00b_gc_map_word_count(num_words);
     if (map_words == 0) {
         map_words = 1;
@@ -1212,7 +1250,7 @@ scan_node(n00b_marshal_ctx_t *ctx, n00b_marshal_node_t *node)
         if (!compute_callback_bitmap(ctx, node)) {
             return;
         }
-        nwords = node->rec.user_len / sizeof(uint64_t);
+        nwords = marshal_scan_word_count(&node->rec);
     }
     else {
         nwords = marshal_scan_word_count(&node->rec);
@@ -1247,7 +1285,7 @@ scan_node(n00b_marshal_ctx_t *ctx, n00b_marshal_node_t *node)
                         return;
                     }
                     uint64_t interior = word - (uint64_t)(uintptr_t)target->user_ptr;
-                    if (interior >= target->rec.user_len) {
+                    if (!marshal_interior_in_bounds(interior, target->rec.user_len)) {
                         marshal_set_error(&ctx->status,
                                           &ctx->error,
                                           N00B_MARSHAL_ERR_UNSUPPORTED_ALLOCATION,
@@ -1308,7 +1346,7 @@ marshal_process(n00b_marshal_ctx_t *ctx, void *addr)
     }
 
     uint64_t interior = (uint64_t)(uintptr_t)addr - (uint64_t)(uintptr_t)root->user_ptr;
-    if (interior >= root->rec.user_len) {
+    if (!marshal_interior_in_bounds(interior, root->rec.user_len)) {
         marshal_set_error(&ctx->status,
                           &ctx->error,
                           N00B_MARSHAL_ERR_UNSUPPORTED_ALLOCATION,
@@ -1509,7 +1547,8 @@ segment_for_vaddr(n00b_unmarshal_ctx_t *ctx, uint64_t vaddr)
 {
     for (size_t i = 0; i < ctx->segment_len; i++) {
         n00b_unmarshal_segment_t *seg = ctx->segments[i];
-        if (vaddr >= seg->vaddr && vaddr < seg->vaddr + seg->user_len) {
+        if (vaddr >= seg->vaddr
+            && marshal_interior_in_bounds(vaddr - seg->vaddr, seg->user_len)) {
             return seg;
         }
     }
@@ -1535,7 +1574,7 @@ addr_for_vaddr_span(n00b_unmarshal_ctx_t *ctx, uint64_t vaddr, uint64_t len)
 static void *
 addr_for_vaddr(n00b_unmarshal_ctx_t *ctx, uint64_t vaddr)
 {
-    return addr_for_vaddr_span(ctx, vaddr, 1);
+    return addr_for_vaddr_span(ctx, vaddr, 0);
 }
 
 static uint64_t *
@@ -1837,6 +1876,7 @@ stream_complete(n00b_unmarshal_ctx_t *ctx)
 static bool
 cbscan_resolve(n00b_unmarshal_ctx_t                *ctx,
                const n00b_marshal_cbscan_record_t  *rec,
+               uint64_t                             owner_tinfo,
                n00b_gc_scan_cb_t                   *out_scan_cb,
                void                               **out_scan_user)
 {
@@ -1853,6 +1893,18 @@ cbscan_resolve(n00b_unmarshal_ctx_t                *ctx,
     *out_scan_user = nullptr;
 
     if (!rec->has_identity) {
+        if (rec->scan_cb_tag == N00B_MARSHAL_SCAN_CB_TAG_TYPE_LAYOUT) {
+            const n00b_gc_struct_layout_t *layout =
+                n00b_gc_type_map_lookup(owner_tinfo);
+            if (layout == nullptr) {
+                marshal_set_error(&ctx->status,
+                                  &ctx->error,
+                                  N00B_MARSHAL_ERR_UNSUPPORTED_SCAN_CALLBACK,
+                                  r"callback-scan TYPE_LAYOUT descriptor is missing for allocation tinfo");
+                return false;
+            }
+            *out_scan_user = (void *)layout;
+        }
         return true;
     }
 
@@ -1922,7 +1974,7 @@ unmarshal_store_callback_bitmap(n00b_unmarshal_ctx_t     *ctx,
                                 n00b_gc_scan_cb_t         scan_cb,
                                 void                     *scan_user)
 {
-    uint64_t num_words = seg->user_len / sizeof(uint64_t);
+    uint64_t num_words = marshal_scan_word_count(&seg->rec);
     uint64_t map_words = n00b_gc_map_word_count(num_words);
     if (map_words == 0) {
         map_words = 1;
@@ -1957,33 +2009,39 @@ patch_alloc_metadata(void              *user_ptr,
     n00b_alloc_info_t info = n00b_find_alloc_info(user_ptr);
     if (info.kind == n00b_alloc_oob) {
         n00b_oob_hdr_t *oob = info.hdr.oob;
+        bool            ptr_words_known =
+            (rec->flags & N00B_MARSHAL_ALLOC_F_PTR_WORDS_KNOWN) != 0;
         oob->tinfo          = rec->tinfo;
         oob->ptr_words      = rec->ptr_words;
+        oob->ptr_words_known = ptr_words_known;
         oob->is_array       = rec->is_array != 0;
         oob->no_scan        = rec->no_scan != 0;
         oob->scan_kind      = rec->scan_kind;
         oob->scan_cb        = scan_cb;
         oob->scan_user      = scan_user;
         if (oob->hcur) {
-            oob->hcur->tinfo     = rec->tinfo;
-            oob->hcur->ptr_words = rec->ptr_words;
-            oob->hcur->is_array  = rec->is_array != 0;
-            oob->hcur->no_scan   = rec->no_scan != 0;
-            oob->hcur->scan_kind = rec->scan_kind;
-            oob->hcur->scan_cb   = scan_cb;
-            oob->hcur->scan_user = scan_user;
+            oob->hcur->tinfo           = rec->tinfo;
+            oob->hcur->ptr_words       = rec->ptr_words;
+            oob->hcur->ptr_words_known = ptr_words_known;
+            oob->hcur->is_array        = rec->is_array != 0;
+            oob->hcur->no_scan         = rec->no_scan != 0;
+            oob->hcur->scan_kind       = rec->scan_kind;
+            oob->hcur->scan_cb         = scan_cb;
+            oob->hcur->scan_user       = scan_user;
         }
         return;
     }
     if (info.kind == n00b_alloc_inline) {
         n00b_inline_hdr_t *hdr = info.hdr.in_line;
-        hdr->tinfo            = rec->tinfo;
-        hdr->ptr_words        = rec->ptr_words;
-        hdr->is_array         = rec->is_array != 0;
-        hdr->no_scan          = rec->no_scan != 0;
-        hdr->scan_kind        = rec->scan_kind;
-        hdr->scan_cb          = scan_cb;
-        hdr->scan_user        = scan_user;
+        hdr->tinfo           = rec->tinfo;
+        hdr->ptr_words       = rec->ptr_words;
+        hdr->ptr_words_known =
+            (rec->flags & N00B_MARSHAL_ALLOC_F_PTR_WORDS_KNOWN) != 0;
+        hdr->is_array        = rec->is_array != 0;
+        hdr->no_scan         = rec->no_scan != 0;
+        hdr->scan_kind       = rec->scan_kind;
+        hdr->scan_cb         = scan_cb;
+        hdr->scan_user       = scan_user;
     }
 }
 
@@ -2029,7 +2087,7 @@ unmarshal_allocate_records(n00b_unmarshal_ctx_t *ctx)
         if (rec->scan_kind == N00B_GC_SCAN_KIND_CALLBACK) {
             is_callback = true;
             cbscan      = (void *)(ctx->in.data + ix + (size_t)rec->payload_len);
-            if (!cbscan_resolve(ctx, cbscan, &scan_cb, &scan_user)) {
+            if (!cbscan_resolve(ctx, cbscan, rec->tinfo, &scan_cb, &scan_user)) {
                 return false;
             }
             // W-4: the CALLBACK => OOB path asserts inside the alloc

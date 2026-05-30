@@ -289,6 +289,15 @@ n00b_grammar_new(void)
 {
     n00b_grammar_t *g = n00b_alloc(n00b_grammar_t);
 
+    // D-049: create the grammar's element lists via n00b_list_new(T) (not
+    // zero-init + push) so each backing captures the link-time GC pointer-map
+    // for its element type, making the grammar precisely scannable and thus
+    // marshalable. n00b_nonterm_t / n00b_parse_rule_t have mixed pointer/scalar
+    // fields; a conservative DEFAULT scan mis-reads a scalar word as a static
+    // pointer and breaks marshaling.
+    g->nt_list = n00b_list_new_private(n00b_nonterm_t);
+    g->rules   = n00b_list_new_private(n00b_parse_rule_t);
+
     g->error_rules           = true;
     g->max_penalty           = N00B_DEFAULT_MAX_PENALTY;
     g->hide_penalty_rewrites = true;
@@ -312,7 +321,8 @@ n00b_grammar_new(void)
     g->valid_tokens = n00b_alloc(n00b_dict_t(int64_t, bool));
     n00b_dict_init(g->valid_tokens,
                    .hash = n00b_hash_word,
-                   .skip_obj_hash = true);
+                   .skip_obj_hash = true,
+                   .scan_kind = N00B_GC_SCAN_KIND_NONE);
 
     g->terminal_by_id = n00b_alloc(n00b_dict_t(int64_t, n00b_string_t *));
     n00b_dict_init(g->terminal_by_id,
@@ -450,6 +460,11 @@ n00b_nonterm(n00b_grammar_t *g, n00b_string_t *name)
 
     nt.name = name;
     nt.id   = (int64_t)g->nt_list.len;
+    // `rule_ids` stores int32_t scalars. If the zero-initialized list grows
+    // on first push, the default scanner treats packed scalar pairs as
+    // pointers, which makes finalized grammars unmarshalable.
+    nt.rule_ids = n00b_list_new_private(int32_t,
+                                        .scan_kind = N00B_GC_SCAN_KIND_NONE);
 
     n00b_list_push(g->nt_list, nt);
 
@@ -693,7 +708,8 @@ update_rule_first(n00b_grammar_t *g, n00b_parse_rule_t *rule, bool *first_nullab
         rule->first_set = n00b_alloc(n00b_dict_t(int64_t, bool));
         n00b_dict_init(rule->first_set,
                        .hash = n00b_hash_word,
-                       .skip_obj_hash = true);
+                       .skip_obj_hash = true,
+                       .scan_kind = N00B_GC_SCAN_KIND_NONE);
     }
 
     n00b_isize_t old_len     = rule->first_set->length;
@@ -809,7 +825,8 @@ compute_all_first_sets(n00b_grammar_t *g)
         nt->first_set = n00b_alloc(n00b_dict_t(int64_t, bool));
         n00b_dict_init(nt->first_set,
                        .hash = n00b_hash_word,
-                       .skip_obj_hash = true);
+                       .skip_obj_hash = true,
+                       .scan_kind = N00B_GC_SCAN_KIND_NONE);
         nt->first_has_any = false;
     }
 
@@ -819,7 +836,8 @@ compute_all_first_sets(n00b_grammar_t *g)
         rule->first_set = n00b_alloc(n00b_dict_t(int64_t, bool));
         n00b_dict_init(rule->first_set,
                        .hash = n00b_hash_word,
-                       .skip_obj_hash = true);
+                       .skip_obj_hash = true,
+                       .scan_kind = N00B_GC_SCAN_KIND_NONE);
         rule->first_has_any = false;
     }
 
@@ -887,7 +905,10 @@ compute_left_corners(n00b_grammar_t *g)
     int32_t words = (int32_t)((n_nts + 63) / 64);
 
     g->lc_words_per_nt  = words;
-    g->left_corner_sets = n00b_alloc_array(uint64_t, n_nts * (size_t)words);
+    g->left_corner_sets = n00b_alloc_array_with_opts(
+        uint64_t,
+        n_nts * (size_t)words,
+        &(n00b_alloc_opts_t){.scan_kind = N00B_GC_SCAN_KIND_NONE});
 
     // Each NT includes itself.
     for (size_t i = 0; i < n_nts; i++) {

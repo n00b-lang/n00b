@@ -7,6 +7,7 @@
  * into the collector in later steps.
  */
 #include "core/gc_map.h"
+#include "util/assert.h"
 #include <string.h>
 
 /// Mask of the in-range bits of the bitmap's last uint64_t.  When
@@ -149,7 +150,7 @@ n00b_gc_map_mark_struct_field(n00b_gc_map_t *m,
 void
 n00b_gc_map_mark_struct_layout(n00b_gc_map_t *m, const n00b_gc_struct_layout_t *layout)
 {
-    if (!layout || layout->count == 0 || layout->offset_count == 0) {
+    if (layout == nullptr || layout->count == 0 || layout->offset_count == 0) {
         return;
     }
 
@@ -164,6 +165,43 @@ n00b_gc_map_mark_struct_layout(n00b_gc_map_t *m, const n00b_gc_struct_layout_t *
 
             assert(offset < layout->stride);
             assert(base + offset < m->num_words);
+            n00b_gc_map_mark(m, base + offset);
+        }
+    }
+}
+
+// Length-derived variant of mark_struct_layout: the element COUNT is
+// computed from the allocation's word count (num_words / stride) rather
+// than read from the descriptor. One shared per-type descriptor (stride
+// + pointer offsets) thus serves an allocation of any element count — a
+// single object (count == 1) or an array of N. This is what the
+// link-time type->GC-map dictionary (D-049) needs: it keys one
+// descriptor by object type, and the element count is known only at the
+// allocation site (num_words). `layout->count` is ignored here.
+void
+n00b_gc_map_mark_type_layout(n00b_gc_map_t *m, const n00b_gc_struct_layout_t *layout)
+{
+    if (layout == nullptr || layout->offset_count == 0 || layout->stride == 0) {
+        return;
+    }
+
+    n00b_require(layout->offsets != nullptr,
+                 "TYPE_LAYOUT scan descriptor has no offset table");
+    n00b_require((m->num_words % layout->stride) == 0,
+                 "TYPE_LAYOUT scan allocation length is not a whole number of elements");
+
+    uint64_t count = m->num_words / layout->stride;
+
+    for (uint64_t i = 0; i < count; i++) {
+        uint64_t base = i * layout->stride;
+
+        for (uint64_t j = 0; j < layout->offset_count; j++) {
+            uint64_t offset = layout->offsets[j];
+
+            n00b_require(offset < layout->stride,
+                         "TYPE_LAYOUT scan offset exceeds descriptor stride");
+            n00b_require(base + offset < m->num_words,
+                         "TYPE_LAYOUT scan offset exceeds allocation bounds");
             n00b_gc_map_mark(m, base + offset);
         }
     }
@@ -207,4 +245,10 @@ void
 n00b_gc_scan_cb_struct_layout(n00b_gc_map_t *m, void *user)
 {
     n00b_gc_map_mark_struct_layout(m, (const n00b_gc_struct_layout_t *)user);
+}
+
+void
+n00b_gc_scan_cb_type_layout(n00b_gc_map_t *m, void *user)
+{
+    n00b_gc_map_mark_type_layout(m, (const n00b_gc_struct_layout_t *)user);
 }

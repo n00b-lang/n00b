@@ -942,29 +942,43 @@ n00b_static_init_helper = executable('n00b-static-init-helper',
     dependencies: [picoquic_dep, monocypher_dep],
 )
 
-# WP-018: build-time grammar baking tool. Links the bootstrap libn00b
-# (same as the static-init helper) and emits reconstruction C source for
-# a parsed grammar. Used by the `c_grammar_image` custom_target below.
-naudit_grammar_bake = executable('naudit-grammar-bake',
-    ['src/tools/naudit-grammar-bake.c'],
-    include_directories: incdir,
-    c_args: exe_c_args,
-    link_args: exe_link_args,
-    link_with: [n00b_bootstrap],
-    dependencies: [picoquic_dep, monocypher_dep],
-)
+if target_os != 'windows'
+  n00b_gcmap_index = executable('n00b-gcmap-index',
+      ['src/tools/n00b-gcmap-index.c'],
+      include_directories: incdir,
+      c_args: exe_c_args + ['--no-ncc', '-UN00B_NCC_GLIBC_ASSERT_SHIM'],
+      link_args: exe_link_args,
+      install: false,
+  )
+endif
 
-n00b_static_init_helper_ready = custom_target(
-    'n00b-static-init-helper-ready',
-    output: 'n00b_static_init_helper_ready.h',
-    command: [
-        python3,
-        '-c',
-        'import pathlib, sys; pathlib.Path(sys.argv[1]).write_text("/* generated */\\n")',
-        '@OUTPUT@',
-    ],
-    depends: n00b_static_init_helper,
-)
+if target_os != 'windows'
+  n00b_static_init_helper_ready = custom_target(
+      'n00b-static-init-helper-ready',
+      output: 'n00b_static_init_helper_ready.h',
+      command: [
+          python3,
+          '-c',
+          'import pathlib, subprocess, sys; subprocess.check_call([sys.argv[2], sys.argv[3]]); pathlib.Path(sys.argv[1]).write_text("/* generated */\\n")',
+          '@OUTPUT@',
+          n00b_gcmap_index.full_path(),
+          n00b_static_init_helper.full_path(),
+      ],
+      depends: [n00b_static_init_helper, n00b_gcmap_index],
+  )
+else
+  n00b_static_init_helper_ready = custom_target(
+      'n00b-static-init-helper-ready',
+      output: 'n00b_static_init_helper_ready.h',
+      command: [
+          python3,
+          '-c',
+          'import pathlib, sys; pathlib.Path(sys.argv[1]).write_text("/* generated */\\n")',
+          '@OUTPUT@',
+      ],
+      depends: n00b_static_init_helper,
+  )
+endif
 
 n00b_static_init_helper_flags = [
     '--ncc-static-init-helper=' + n00b_static_init_helper.full_path(),
@@ -983,6 +997,48 @@ n00b = static_library('n00b',
     link_whole: link_whole_libs,
     install: true,
 )
+
+# The bootstrap static-init helper cannot marshal grammar images itself: it is
+# built before the full TYPE_LAYOUT-enabled libn00b exists. Keep it as the
+# ncc-facing helper, but delegate `container_kind grammar` requests to this
+# sibling executable once the full library has been built.
+n00b_static_grammar_helper = executable('n00b-static-grammar-helper',
+    ['src/tools/n00b-static-init-helper.c'],
+    include_directories: incdir,
+    c_args: exe_c_args + ['-DN00B_STATIC_GRAMMAR_HELPER=1'],
+    link_args: exe_link_args,
+    link_with: [n00b],
+    dependencies: [picoquic_dep, monocypher_dep, mir_dep, libgit2_dep],
+    install: false,
+)
+
+if target_os != 'windows'
+  n00b_static_grammar_helper_ready = custom_target(
+      'n00b-static-grammar-helper-ready',
+      output: 'n00b_static_grammar_helper_ready.h',
+      command: [
+          python3,
+          '-c',
+          'import pathlib, subprocess, sys; subprocess.check_call([sys.argv[2], sys.argv[3]]); pathlib.Path(sys.argv[1]).write_text("/* generated */\\n")',
+          '@OUTPUT@',
+          n00b_gcmap_index.full_path(),
+          n00b_static_grammar_helper.full_path(),
+      ],
+      depends: [n00b_static_grammar_helper, n00b_gcmap_index],
+  )
+else
+  n00b_static_grammar_helper_ready = custom_target(
+      'n00b-static-grammar-helper-ready',
+      output: 'n00b_static_grammar_helper_ready.h',
+      command: [
+          python3,
+          '-c',
+          'import pathlib, sys; pathlib.Path(sys.argv[1]).write_text("/* generated */\\n")',
+          '@OUTPUT@',
+      ],
+      depends: n00b_static_grammar_helper,
+  )
+endif
 
 test_common_kwargs = {
     'include_directories': incdir,
@@ -1005,6 +1061,18 @@ test_common_kwargs = {
     # attest_monocypher_smoke test calls those primitives directly.
     'dependencies': [picoquic_dep, monocypher_dep],
 }
+
+# WP-018/WP-020: build-time grammar baking tool. This now links the full
+# libn00b, not the bootstrap library, because marshal-backed baking depends on
+# the same precise TYPE_LAYOUT path validated by the WP-020 feature tests.
+naudit_grammar_bake = executable('naudit-grammar-bake',
+    ['src/tools/naudit-grammar-bake.c'],
+    include_directories: incdir,
+    c_args: exe_c_args,
+    link_args: exe_link_args,
+    link_with: [n00b],
+    dependencies: [picoquic_dep, monocypher_dep, mir_dep, libgit2_dep],
+)
 
 # Alias kept for clarity at QUIC test sites that drive picoquic
 # explicitly; structurally identical to test_common_kwargs.
@@ -1130,24 +1198,39 @@ foreach _ntest : [
          timeout: 180)
 endforeach
 
-# WP-018: bake c_ncc.bnf into a static-image C source at build time, then
-# link it into the static-grammar-image test. This is the Phase-1
+# WP-018/WP-020: bake c_ncc.bnf into a marshal-backed static-image C source at
+# build time, then link it into the static-grammar-image test. This is the Phase-1
 # stand-in for an ncc literal form (deferred to a follow-up ncc PR per
 # DF-EA): the bake step is wired explicitly here rather than triggered by
 # a source-level `bnf"..."` literal. Phase 2 wires the same image into
 # the `naudit` binary itself.
+c_grammar_image_command = [
+    naudit_grammar_bake,
+    '@INPUT@',
+    'translation_unit',
+    '@OUTPUT@',
+    '__naudit_c_grammar',
+    'c_ncc',
+]
+if target_os != 'windows'
+  c_grammar_image_command = [
+      n00b_gcmap_index,
+      '--exec',
+      naudit_grammar_bake.full_path(),
+      '@INPUT@',
+      'translation_unit',
+      '@OUTPUT@',
+      '__naudit_c_grammar',
+      'c_ncc',
+  ]
+endif
+
 c_grammar_image = custom_target(
     'c_grammar_image',
     input: 'grammars/c_ncc.bnf',
     output: 'c_grammar_image.c',
-    command: [
-        naudit_grammar_bake,
-        '@INPUT@',
-        'translation_unit',
-        '@OUTPUT@',
-        '__naudit_c_grammar',
-        'c_ncc',
-    ],
+    command: c_grammar_image_command,
+    depends: [naudit_grammar_bake],
 )
 
 # The static-grammar-image test drives the bake tool as a subprocess
@@ -1156,7 +1239,9 @@ c_grammar_image = custom_target(
 # path and the c_ncc.bnf path at compile time.
 test_static_grammar_image_exe = executable(
     'test_static_grammar_image',
-    ['test/unit/test_static_grammar_image.c', c_grammar_image],
+    ['test/unit/test_static_grammar_image.c',
+     c_grammar_image,
+     n00b_static_grammar_helper_ready],
     include_directories: incdir,
     c_args: exe_c_args + [
         '-DNAUDIT_GRAMMAR_BAKE_PATH="' + naudit_grammar_bake.full_path() + '"',
@@ -1170,8 +1255,44 @@ test_static_grammar_image_exe = executable(
     link_with: [n00b],
     dependencies: [picoquic_dep, monocypher_dep, mir_dep, libgit2_dep],
 )
-test('static_grammar_image', test_static_grammar_image_exe, suite: 'unit',
-     timeout: 180)
+if target_os != 'windows'
+  test('static_grammar_image', n00b_gcmap_index,
+       args: ['--exec', test_static_grammar_image_exe.full_path()],
+       depends: [test_static_grammar_image_exe],
+       suite: 'unit',
+       timeout: 180)
+else
+  test('static_grammar_image', test_static_grammar_image_exe, suite: 'unit',
+       timeout: 180)
+endif
+
+# WP-020 Phase 5 production-path coverage: reuse the naudit filter e2e test
+# source, but link the baked c_ncc grammar image into this executable so the
+# engine takes `n00b_static_grammar_lookup(r"c_ncc")` instead of the runtime BNF
+# fallback. This catches static-image parse-tree/capture/filter drift that the
+# ordinary naudit tests cannot see.
+test_naudit_filter_static_grammar_exe = executable(
+    'test_naudit_filter_static_grammar',
+    ['test/unit/test_naudit_filter_e2e.c', c_grammar_image],
+    include_directories: incdir,
+    c_args: naudit_test_c_args,
+    link_args: exe_link_args,
+    link_with: [n00b],
+    dependencies: [picoquic_dep, monocypher_dep, mir_dep, libgit2_dep],
+)
+
+if target_os != 'windows'
+  test('naudit_filter_static_grammar_e2e', n00b_gcmap_index,
+       args: ['--exec', test_naudit_filter_static_grammar_exe.full_path()],
+       depends: [test_naudit_filter_static_grammar_exe],
+       suite: 'unit',
+       timeout: 180)
+else
+  test('naudit_filter_static_grammar_e2e',
+       test_naudit_filter_static_grammar_exe,
+       suite: 'unit',
+       timeout: 180)
+endif
 
 attest_module_test = executable('test_attest_module',
     ['test/unit/test_attest_module.c'],
@@ -1961,6 +2082,28 @@ marshal_test = executable('test_marshal',
     kwargs: test_common_kwargs,
 )
 test('marshal', marshal_test, suite: 'unit')
+
+marshal_type_layout_test = executable('test_marshal_type_layout',
+    ['test/unit/test_marshal_type_layout.c'],
+    kwargs: test_common_kwargs,
+)
+if target_os != 'windows'
+  test('marshal_type_layout', n00b_gcmap_index,
+       args: ['--exec', marshal_type_layout_test.full_path()],
+       depends: [marshal_type_layout_test],
+       suite: 'unit')
+endif
+
+grammar_marshal_roundtrip_test = executable('test_grammar_marshal_roundtrip',
+    ['test/unit/test_grammar_marshal_roundtrip.c'],
+    kwargs: test_common_kwargs,
+)
+if target_os != 'windows'
+  test('grammar_marshal_roundtrip', n00b_gcmap_index,
+       args: ['--exec', grammar_marshal_roundtrip_test.full_path()],
+       depends: [grammar_marshal_roundtrip_test],
+       suite: 'unit', timeout: 120)
+endif
 
 file_io_test = executable('test_file_io',
     ['test/unit/test_file_io.c'],

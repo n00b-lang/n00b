@@ -301,16 +301,26 @@ n00b_forward_alloc(n00b_collect_t *ctx, n00b_inline_hdr_t *old)
         scan_start = ((n00b_oob_hdr_t *)result)->user_ptr;
         no_scan    = old_oob->no_scan;
         scan_kind  = (n00b_gc_scan_kind_t)old_oob->scan_kind;
-        nwords     = (old_oob->alloc_len - arena_overhead(ctx->from_space))
+        if (old_oob->ptr_words_known) {
+            nwords = old_oob->ptr_words;
+        }
+        else {
+            nwords = (old_oob->alloc_len - arena_overhead(ctx->from_space))
                          / sizeof(void *);
+        }
     }
     else {
         result     = n00b_forward_inline(ctx, old, new);
         scan_start = (char *)new + arena_overhead(ctx->to_space);
         no_scan    = new->no_scan;
         scan_kind  = (n00b_gc_scan_kind_t)new->scan_kind;
-        nwords     = (old->alloc_len - arena_overhead(ctx->from_space))
+        if (new->ptr_words_known) {
+            nwords = new->ptr_words;
+        }
+        else {
+            nwords = (old->alloc_len - arena_overhead(ctx->from_space))
                          / sizeof(void *);
+        }
     }
 
 #if defined(N00B_DISABLE_NOSCAN)
@@ -554,8 +564,10 @@ n00b_add_alloc_to_worklist(n00b_alloc_info_t ainfo, n00b_collect_t *ctx)
     if (ainfo.kind == n00b_alloc_oob) {
         n00b_oob_hdr_t *oob = ainfo.hdr.oob;
 #if !defined(N00B_DISABLE_PTR_WORDS)
-        n = oob->ptr_words;
-        if (!n)
+        if (oob->ptr_words_known) {
+            n = oob->ptr_words;
+        }
+        else
 #endif
         {
             n = (oob->alloc_len - arena_overhead(ctx->from_space))
@@ -567,8 +579,10 @@ n00b_add_alloc_to_worklist(n00b_alloc_info_t ainfo, n00b_collect_t *ctx)
     else {
         n00b_inline_hdr_t *hdr = ainfo.hdr.in_line;
 #if !defined(N00B_DISABLE_PTR_WORDS)
-        n = hdr->ptr_words;
-        if (!n)
+        if (hdr->ptr_words_known) {
+            n = hdr->ptr_words;
+        }
+        else
 #endif
         {
             n = (hdr->alloc_len - arena_overhead(ctx->from_space))

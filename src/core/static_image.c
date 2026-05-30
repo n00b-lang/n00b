@@ -321,6 +321,9 @@ n00b_static_grammar_lookup(n00b_string_t *name)
         if (!slot->materialized) {
             slot->materialized = slot->builder();
         }
+        if (!slot->materialized) {
+            return n00b_option_none(n00b_grammar_t *);
+        }
         return n00b_option_set(n00b_grammar_t *, slot->materialized);
     }
 

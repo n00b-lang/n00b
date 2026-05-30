@@ -95,6 +95,8 @@ extern void n00b_gc_map_mark_stride(n00b_gc_map_t *m, uint64_t start, uint64_t s
 extern void n00b_gc_map_mark_every_other(n00b_gc_map_t *m, uint64_t start_offset);
 extern void n00b_gc_map_mark_struct_field(n00b_gc_map_t *m, uint64_t base, uint64_t stride, uint64_t offset, uint64_t count);
 extern void n00b_gc_map_mark_struct_layout(n00b_gc_map_t *m, const n00b_gc_struct_layout_t *layout);
+// Length-derived: element count = m->num_words / layout->stride (layout->count ignored).
+extern void n00b_gc_map_mark_type_layout(n00b_gc_map_t *m, const n00b_gc_struct_layout_t *layout);
 
 /// Built-in scan callbacks.  Prefer the matching fixed `scan_kind`
 /// enum value when it is sufficient — it lets the GC skip the
@@ -106,3 +108,17 @@ extern void n00b_gc_scan_cb_every_other(n00b_gc_map_t *m, void *user);
 /// n00b_gc_scan_cb_struct_field is declared in n00b.h because generated
 /// static descriptor code may reference it through the umbrella header only.
 /// n00b_gc_scan_cb_struct_layout is declared in n00b.h for the same reason.
+/// n00b_gc_scan_cb_type_layout (length-derived) is likewise declared in n00b.h.
+
+// D-049 link-time type->GC-map dictionary (STATIC, post-link table). ncc emits
+// per-TU pointer-bearing `n00b_gc_type_map_entry_t` records into `n00b_gcmap`
+// and no-pointer index records into `n00b_gcidx`; a post-link pass fills/sorts
+// only the index. `_n00b_alloc_raw` calls `n00b_gc_type_map_lookup`, which
+// BINARY-SEARCHES that self-located index to upgrade DEFAULT-scanned typed
+// allocations to a precise CALLBACK scan. No runtime table is built. A
+// missing/empty/unindexed table degrades safely to nullptr -> DEFAULT scan.
+// The descriptor's `count` is ignored (the scan derives it from alloc length).
+extern const n00b_gc_struct_layout_t *n00b_gc_type_map_lookup(uint64_t type_hash);
+extern uint64_t n00b_gc_type_map_hash_for_layout(const n00b_gc_struct_layout_t *layout);
+// N00B_GC_TYPE_MAP_SECTION (the section attribute used to emit entries) is
+// defined in the umbrella n00b.h so ncc-generated code can reference it there.

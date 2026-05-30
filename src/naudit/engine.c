@@ -471,14 +471,18 @@ n00b_audit_engine_new(n00b_audit_guidance_t *guidance)
      * grammar there. `engine_new` only stashes the guidance
      * pointer and initializes the per-language caches.
      */
-    struct n00b_audit_engine *e = n00b_alloc(struct n00b_audit_engine);
+    struct n00b_audit_engine *e = n00b_alloc_with_opts(
+        struct n00b_audit_engine,
+        &(n00b_alloc_opts_t){.scan_kind = N00B_GC_SCAN_KIND_ALL});
     e->guidance = guidance;
 
-    e->grammars = n00b_alloc(
-        n00b_dict_t(n00b_string_t *, n00b_grammar_t *));
+    e->grammars = n00b_alloc_with_opts(
+        n00b_dict_t(n00b_string_t *, n00b_grammar_t *),
+        &(n00b_alloc_opts_t){.scan_kind = N00B_GC_SCAN_KIND_ALL});
     n00b_dict_init(e->grammars,
                    .hash          = n00b_string_hash,
-                   .skip_obj_hash = true);
+                   .skip_obj_hash = true,
+                   .scan_kind     = N00B_GC_SCAN_KIND_ALL);
 
     e->eval_session       = nullptr;
     e->compiled_filters   = nullptr;

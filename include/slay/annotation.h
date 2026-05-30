@@ -63,13 +63,16 @@ typedef enum {
     N00B_ROLE_BY_NAME,
 } n00b_role_kind_t;
 
-/** @brief Reference to a child node in an annotation. */
+/** @brief Reference to a child node in an annotation.
+ *
+ * Keep pointer and scalar payloads in separate words so generated static
+ * GC maps can scan `name` precisely without ever scanning an integer `index`
+ * sentinel as a pointer.
+ */
 typedef struct {
     n00b_role_kind_t kind;
-    union {
-        int32_t       index;
-        n00b_string_t *name;
-    };
+    int32_t          index;
+    n00b_string_t   *name;
 } n00b_child_ref_t;
 
 #define N00B_CHILD_IX(i)   ((n00b_child_ref_t){.kind = N00B_ROLE_BY_INDEX, .index = (i)})

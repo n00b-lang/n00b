@@ -322,6 +322,39 @@ typedef struct {
 
 extern void n00b_gc_scan_cb_struct_field(n00b_gc_map_t *m, void *user);
 extern void n00b_gc_scan_cb_struct_layout(n00b_gc_map_t *m, void *user);
+// Length-derived layout scan (element count from allocation size); used by
+// the link-time type->GC-map dictionary so one descriptor serves any count.
+extern void n00b_gc_scan_cb_type_layout(n00b_gc_map_t *m, void *user);
+
+// D-049 link-time type->GC-map dictionary entry. ncc emits, per TU, a static
+// const array of these (one per pointer-bearing aggregate type) into a linker
+// section (the static table — laid out by the linker, no runtime assembly).
+// The runtime reads the section directly; nothing is built dynamically.
+typedef struct n00b_gc_type_map_entry_t {
+    uint64_t                       type_hash;  // typehash(T *)
+    const n00b_gc_struct_layout_t *layout;     // per-element pointer offsets
+} n00b_gc_type_map_entry_t;
+
+// Post-link index entry for n00b_gcmap. This section intentionally carries no
+// pointers so a post-link pass can sort/fill it without moving chained-fixup
+// metadata on Mach-O.
+typedef struct n00b_gc_type_map_index_entry_t {
+    uint64_t type_hash;   // typehash(T *)
+    uint64_t entry_index; // index into n00b_gcmap
+} n00b_gc_type_map_index_entry_t;
+
+// Section attribute for emitting gc-map entries. Defined in the umbrella
+// header because ncc-generated code references it through n00b.h only.
+#if defined(__APPLE__)
+#define N00B_GC_TYPE_MAP_SECTION [[gnu::section("__DATA,n00b_gcmap"), gnu::used]]
+#define N00B_GC_TYPE_MAP_INDEX_SECTION [[gnu::section("__DATA,n00b_gcidx"), gnu::used]]
+#elif defined(_WIN32)
+#define N00B_GC_TYPE_MAP_SECTION [[gnu::section("n00bg$m"), gnu::used]]
+#define N00B_GC_TYPE_MAP_INDEX_SECTION [[gnu::section("n00bi$m"), gnu::used]]
+#else
+#define N00B_GC_TYPE_MAP_SECTION [[gnu::section("n00b_gcmap"), gnu::used]]
+#define N00B_GC_TYPE_MAP_INDEX_SECTION [[gnu::section("n00b_gcidx"), gnu::used]]
+#endif
 // First two are for anything that is an absolute size / length and
 // should always be a natural number.
 //

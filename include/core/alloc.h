@@ -344,10 +344,13 @@ static inline n00b_option_t(n00b_inline_hdr_t *) n00b_inline_alloc_header(void *
                     N00B_LOC_STRING(),                                                         \
                     opts __VA_OPT__(, __VA_ARGS__))
 
+/* Flex allocations are not exact T1 objects: the tail can carry additional
+ * words with a different shape. Keep them out of the typehash->layout upgrade
+ * until there is a descriptor that models the flexible tail. */
 #define n00b_alloc_flex_with_opts(T1, T2, N2, opts, ...)                                       \
     _n00b_alloc_raw(1,                                                                         \
                     (sizeof(T1) + sizeof(T2) * (N2)),                                          \
-                    typehash(T1 *),                                                            \
+                    0,                                                                         \
                     N00B_LOC_STRING(),                                                         \
                     opts __VA_OPT__(, __VA_ARGS__))
 

@@ -281,11 +281,15 @@ ensure_filters(n00b_audit_guidance_t *g)
     if (g->filters) {
         return;
     }
-    g->filters = n00b_alloc(
-        n00b_dict_t(n00b_string_t *, n00b_audit_filter_t *));
+    // Runtime-only guidance state: keep the dict object and backing arrays
+    // scanned so static-grammar materialization GC cannot stale its values.
+    g->filters = n00b_alloc_with_opts(
+        n00b_dict_t(n00b_string_t *, n00b_audit_filter_t *),
+        &(n00b_alloc_opts_t){.scan_kind = N00B_GC_SCAN_KIND_ALL});
     n00b_dict_init(g->filters,
                    .hash          = n00b_string_hash,
-                   .skip_obj_hash = true);
+                   .skip_obj_hash = true,
+                   .scan_kind     = N00B_GC_SCAN_KIND_ALL);
 }
 
 /*
@@ -403,7 +407,11 @@ parse_filter_def_value(n00b_string_t         *value,
     }
     n00b_string_t *name = n00b_string_from_raw(buf, (int64_t)name_end);
 
-    n00b_audit_filter_t *filter = n00b_alloc(n00b_audit_filter_t);
+    // All fields are pointers; make the scan policy explicit so large
+    // static-grammar materialization GCs cannot stale the filter payload.
+    n00b_audit_filter_t *filter = n00b_alloc_with_opts(
+        n00b_audit_filter_t,
+        &(n00b_alloc_opts_t){.scan_kind = N00B_GC_SCAN_KIND_ALL});
     filter->name        = name;
     filter->expr        = n00b_string_empty();
     filter->description = n00b_string_empty();
@@ -494,17 +502,23 @@ parse_captures_value(n00b_string_t     *value,
         return false;
     }
 
-    n00b_audit_capture_decl_t *decl =
-        n00b_alloc(n00b_audit_capture_decl_t);
+    // Runtime guidance payloads are pointer-bearing and long-lived across
+    // static-grammar materialization GCs; scan them conservatively.
+    n00b_audit_capture_decl_t *decl = n00b_alloc_with_opts(
+        n00b_audit_capture_decl_t,
+        &(n00b_alloc_opts_t){.scan_kind = N00B_GC_SCAN_KIND_ALL});
     decl->name = n00b_string_from_raw(buf + name_start,
                                        (int64_t)(name_end - name_start));
     decl->nt   = n00b_string_from_raw(buf + nt_start,
                                        (int64_t)(nt_end - nt_start));
 
     if (!rule->captures) {
-        rule->captures = n00b_alloc(
-            n00b_list_t(n00b_audit_capture_decl_t *));
-        *rule->captures = n00b_list_new(n00b_audit_capture_decl_t *);
+        rule->captures = n00b_alloc_with_opts(
+            n00b_list_t(n00b_audit_capture_decl_t *),
+            &(n00b_alloc_opts_t){.scan_kind = N00B_GC_SCAN_KIND_ALL});
+        *rule->captures = n00b_list_new(
+            n00b_audit_capture_decl_t *,
+            .scan_kind = N00B_GC_SCAN_KIND_ALL);
     }
     n00b_list_push(*rule->captures, decl);
     return true;
@@ -560,11 +574,13 @@ ensure_extension_overrides(n00b_audit_guidance_t *g)
     if (g->extension_overrides) {
         return;
     }
-    g->extension_overrides = n00b_alloc(
-        n00b_dict_t(n00b_string_t *, n00b_string_t *));
+    g->extension_overrides = n00b_alloc_with_opts(
+        n00b_dict_t(n00b_string_t *, n00b_string_t *),
+        &(n00b_alloc_opts_t){.scan_kind = N00B_GC_SCAN_KIND_ALL});
     n00b_dict_init(g->extension_overrides,
                    .hash          = n00b_string_hash,
-                   .skip_obj_hash = true);
+                   .skip_obj_hash = true,
+                   .scan_kind     = N00B_GC_SCAN_KIND_ALL);
 }
 
 /*
@@ -1106,16 +1122,26 @@ n00b_audit_load_guidance(n00b_string_t *path)
     n00b_parse_tree_t *tree = n00b_parse_result_tree(pr);
 
     /*
-     * Step 5: allocate the guidance struct. n00b_alloc zero-fills
+     * Step 5: allocate the guidance struct. n00b allocation zero-fills
      * the struct; we initialize the list fields explicitly to
      * non-null empty lists so the schema's contract holds (every
      * list field is always-non-null on success).
      */
-    n00b_audit_guidance_t *g = n00b_alloc(n00b_audit_guidance_t);
-    g->dependencies = n00b_alloc(n00b_list_t(n00b_string_t *));
-    *g->dependencies = n00b_list_new(n00b_string_t *);
-    g->rules = n00b_alloc(n00b_list_t(n00b_audit_rule_t *));
-    *g->rules = n00b_list_new(n00b_audit_rule_t *);
+    // Mixed scalar/pointer runtime state; conservative scanning avoids stale
+    // guidance edges when static grammar unmarshalling triggers GC.
+    n00b_audit_guidance_t *g = n00b_alloc_with_opts(
+        n00b_audit_guidance_t,
+        &(n00b_alloc_opts_t){.scan_kind = N00B_GC_SCAN_KIND_ALL});
+    g->dependencies = n00b_alloc_with_opts(
+        n00b_list_t(n00b_string_t *),
+        &(n00b_alloc_opts_t){.scan_kind = N00B_GC_SCAN_KIND_ALL});
+    *g->dependencies = n00b_list_new(n00b_string_t *,
+                                     .scan_kind = N00B_GC_SCAN_KIND_ALL);
+    g->rules = n00b_alloc_with_opts(
+        n00b_list_t(n00b_audit_rule_t *),
+        &(n00b_alloc_opts_t){.scan_kind = N00B_GC_SCAN_KIND_ALL});
+    *g->rules = n00b_list_new(n00b_audit_rule_t *,
+                              .scan_kind = N00B_GC_SCAN_KIND_ALL);
     g->project     = n00b_string_empty();
     g->description = n00b_string_empty();
     g->source_doc  = n00b_string_empty();
@@ -1210,7 +1236,9 @@ n00b_audit_load_guidance(n00b_string_t *path)
                                    N00B_AUDIT_ERR_GUIDANCE_SCHEMA);
         }
 
-        n00b_audit_rule_t *rule = n00b_alloc(n00b_audit_rule_t);
+        n00b_audit_rule_t *rule = n00b_alloc_with_opts(
+            n00b_audit_rule_t,
+            &(n00b_alloc_opts_t){.scan_kind = N00B_GC_SCAN_KIND_ALL});
         rule->id                = id;
         rule->title             = n00b_string_empty();
         rule->section           = n00b_string_empty();

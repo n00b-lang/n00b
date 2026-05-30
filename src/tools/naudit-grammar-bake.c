@@ -4,9 +4,8 @@
 //     naudit-grammar-bake <bnf_path> <start_nt> <output.c>
 //                         [<symbol_prefix> [<grammar_name>]]
 //
-// Parses <bnf_path> with the BNF metagrammar (the same ~1.5s PWZ parse
-// naudit pays at runtime today), finalizes the resulting grammar, then
-// emits C source to <output.c> that reconstructs an identical grammar at
+// Parses <bnf_path> with the BNF metagrammar, finalizes the resulting grammar,
+// then emits C source to <output.c> that unmarshals an identical grammar at
 // program startup WITHOUT re-parsing — see `slay/grammar_image.h`.
 //
 // This tool is the Phase-1 stand-in for an ncc literal form (e.g.
