@@ -16,11 +16,14 @@
  *            c_ncc image (linked in) materializes a grammar whose NT /
  *            rule / match structure matches a fresh runtime parse.
  *   Test 3 — c_ncc round-trip on real C: parse fixture_null.c with both
- *            the static-image grammar and a fresh runtime grammar; both
- *            succeed and yield structurally-identical parse trees.
- *   Test 4 — perf (informational): build-time bake and runtime
- *            materialization timings are collected without making this
- *            correctness test depend on local machine load.
+ *            the static-image grammar and the same fresh runtime grammar;
+ *            both succeed and yield structurally-identical parse trees.
+ *
+ * The c_ncc fresh parse is intentionally shared between Test 2 and Test 3:
+ * the build already bakes c_ncc.bnf once as the `c_grammar_image`
+ * custom_target, and Test 1 already exercises the bake-tool subprocess
+ * contract. Re-baking/re-parsing the full C grammar inside this correctness
+ * test added tens of seconds without covering a distinct behavior.
  *
  * The subprocess helpers below are a narrow POSIX test harness boundary for
  * build tools whose contract is argv/stdin/stdout. File contents are still
@@ -37,7 +40,6 @@
 #include "core/file.h"
 #include "core/runtime.h"
 #include "core/static_image.h"
-#include "core/time.h"
 #include "slay/grammar.h"
 #include "slay/bnf.h"
 #include "slay/grammar_image.h"
@@ -104,12 +106,6 @@ static const char *k_tiny_bnf =
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
-
-static double
-seconds_since(int64_t start_ns)
-{
-    return (double)(n00b_ns_timestamp() - start_ns) / (double)N00B_NSEC_PER_SEC;
-}
 
 // D-056 C-ABI test harness boundary. The bake/helper programs are external
 // executables whose contracts are POSIX argv/stdin/stdout and NUL-terminated
@@ -427,12 +423,10 @@ test_static_init_helper_grammar_path(void)
 // ---------------------------------------------------------------------------
 
 static void
-test_grammar_structure_equivalence(void)
+test_grammar_structure_equivalence(n00b_grammar_t *img, n00b_grammar_t *fresh)
 {
-    n00b_grammar_t *img = lookup_static_grammar(C_NCC_IMAGE_NAME);
     CHECK(img != nullptr);
-
-    n00b_grammar_t *fresh = fresh_c_grammar();
+    CHECK(fresh != nullptr);
 
     CHECK(img->nt_list.len == fresh->nt_list.len);
     CHECK(img->rules.len == fresh->rules.len);
@@ -467,15 +461,14 @@ test_grammar_structure_equivalence(void)
 // ---------------------------------------------------------------------------
 
 static void
-test_c_ncc_real_parse(void)
+test_c_ncc_real_parse(n00b_grammar_t *img, n00b_grammar_t *fresh)
 {
-    n00b_grammar_t *img = lookup_static_grammar(C_NCC_IMAGE_NAME);
     CHECK(img != nullptr);
+    CHECK(fresh != nullptr);
 
     n00b_parse_tree_t *t_img = parse_c_file(img, NAUDIT_C_FIXTURE_PATH);
     CHECK(t_img != nullptr);
 
-    n00b_grammar_t    *fresh = fresh_c_grammar();
     n00b_parse_tree_t *t_fresh = parse_c_file(fresh, NAUDIT_C_FIXTURE_PATH);
     CHECK(t_fresh != nullptr);
 
@@ -491,50 +484,6 @@ test_c_ncc_real_parse(void)
 
 }
 
-// ---------------------------------------------------------------------------
-// Test 4 — perf (informational)
-// ---------------------------------------------------------------------------
-
-static void
-test_perf(void)
-{
-    // Build-time bake on c_ncc.bnf. This is an informational timing smoke:
-    // the feature test must prove the bake works, not gate correctness on a
-    // fixed wall-clock budget from a debug build.
-    char *out_path = write_temp("c_image.c", nullptr);
-    char *const argv[] = {
-        (char *)NAUDIT_GRAMMAR_BAKE_PATH,
-        (char *)NAUDIT_C_NCC_BNF_PATH,
-        (char *)"translation_unit",
-        out_path,
-        (char *)"__naudit_c_grammar_perf",
-        (char *)"c_ncc_perf",
-        nullptr,
-    };
-    int64_t t0 = n00b_ns_timestamp();
-    int     rc = run_argv(argv);
-    double bake_s = seconds_since(t0);
-    CHECK(rc == 0);
-    CHECK(bake_s > 0.0);
-
-    // Runtime materialization from the image vs a fresh runtime parse.
-    // (Use the perf-name image to avoid the cached lookup of Test 2/3.)
-    // n00b_static_grammar_lookup only knows build-time-registered names,
-    // so measure the image build function indirectly via the already
-    // build-linked image: first lookup forces materialization.
-    int64_t t1  = n00b_ns_timestamp();
-    n00b_grammar_t *img = lookup_static_grammar(C_NCC_IMAGE_NAME);
-    double load_s = seconds_since(t1);
-    CHECK(img != nullptr);
-
-    int64_t t2 = n00b_ns_timestamp();
-    n00b_grammar_t *fresh = fresh_c_grammar();
-    double parse_s = seconds_since(t2);
-    CHECK(fresh != nullptr);
-
-    CHECK(parse_s > 0.0 && load_s >= 0.0);
-}
-
 int
 main(int argc, char *argv[])
 {
@@ -542,9 +491,12 @@ main(int argc, char *argv[])
 
     test_bake_roundtrip();
     test_static_init_helper_grammar_path();
-    test_grammar_structure_equivalence();
-    test_c_ncc_real_parse();
-    test_perf();
+
+    n00b_grammar_t *img   = lookup_static_grammar(C_NCC_IMAGE_NAME);
+    n00b_grammar_t *fresh = fresh_c_grammar();
+
+    test_grammar_structure_equivalence(img, fresh);
+    test_c_ncc_real_parse(img, fresh);
 
     return 0;
 }
