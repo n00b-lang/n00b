@@ -45,16 +45,47 @@ new_page_entry(n00b_pool_t *pool, uint64_t *sz_ptr)
     uint64_t hdr_sz = n00b_align(sizeof(n00b_pool_page_t));
     sz += hdr_sz;
 
-    char *name    = (char *)(((n00b_allocator_t *)pool)->debug_name);
-    auto  mmap_r  = n00b_mmap(n00b_page_align(sz),
-                              .allocator = (n00b_allocator_t *)pool,
-                              .name      = name,
-                              .kind      = n00b_mmap_pool);
+    n00b_allocator_t *alloc      = (n00b_allocator_t *)pool;
+    char             *name       = (char *)alloc->debug_name;
+    uint64_t          aligned_sz = n00b_page_align(sz);
+    /* skip_register=true puts the page back under pool control —
+     * the matching @ref n00b_mmap_register_pool_page below decides
+     * whether (and how) this page enters the global mmap tree.
+     * The pool side wants this control so the unregister at free
+     * time strictly precedes munmap (avoiding a window where a
+     * concurrent GC mark scan can dereference a tree entry whose
+     * backing page is no longer mapped). */
+    auto mmap_r = n00b_mmap(aligned_sz,
+                            .allocator     = alloc,
+                            .name          = name,
+                            .kind          = n00b_mmap_pool,
+                            .skip_register = true);
     assert(n00b_result_is_ok(mmap_r));
     n00b_pool_page_t *cur = n00b_result_get(mmap_r);
 
-    *sz_ptr   = n00b_page_align(sz) - hdr_sz;
-    cur->mapped_size = n00b_page_align(sz);
+    /* Register the page with the allocator so @ref n00b_mem_get_allocator
+     * can resolve in-page pointers back to this pool, which is what
+     * makes n00b_free → pool_free work (the address-to-allocator
+     * lookup goes through the mmap tree).
+     *
+     * Skip @c __system pools — those are bootstrap-critical
+     * allocators (the mmap context's own backing @c ctx->pool, and
+     * @c rt->system_pool for runtime bookkeeping). Registering
+     * @c ctx->pool's pages here would recurse infinitely:
+     * register_pool_page → mmaps_insert_raw → _n00b_alloc_raw →
+     * pool_alloc on ctx->pool → new_page_entry → back here. Other
+     * @c __system pools (system_pool) don't recurse, but they
+     * also don't need n00b_free symmetry — their allocations are
+     * long-lived runtime infrastructure with no manual lifecycle. */
+    if (!alloc->__system) {
+        (void)n00b_mmap_register_pool_page((void *)cur,
+                                            (char *)cur + aligned_sz,
+                                            alloc,
+                                            name);
+    }
+
+    *sz_ptr   = aligned_sz - hdr_sz;
+    cur->mapped_size = aligned_sz;
     void *res = (void *)cur + hdr_sz;
 
     pool_lock(pool);
@@ -105,6 +136,18 @@ delete_one_page_entry(n00b_pool_t *pool, n00b_pool_page_t *entry)
     size_t mapped = entry->mapped_size;
 
     pool_unlock(pool);
+
+    /* Symmetric counterpart to new_page_entry's optional
+     * @ref n00b_mmap_register_pool_page: pull the tree entry
+     * BEFORE munmap so a concurrent GC mark pass can't follow a
+     * stale interval-tree node into a no-longer-mapped page and
+     * SIGBUS. The unregister is a no-op when the page was never
+     * registered (the @c __system bootstrap pools), so the check
+     * here mirrors the register-side gate verbatim. */
+    n00b_allocator_t *alloc = (n00b_allocator_t *)pool;
+    if (!alloc->__system) {
+        n00b_mmap_unregister((void *)entry);
+    }
 
     /* Big-alloc free path: actually release the page back to the OS.
      * Without this the page stayed mapped until pool_destroy — any

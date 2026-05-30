@@ -73,6 +73,35 @@ n00b_mmap_register(void *startp, void *endp, n00b_mmap_rec_kind_t kind) _kargs
 };
 
 /**
+ * @brief Register a page that backs an @ref n00b_pool_t allocator.
+ *
+ * @param startp    Start address of the page.
+ * @param endp      End address of the page (exclusive).
+ * @param allocator Owning pool allocator.
+ * @param file      Caller location for diagnostics.
+ *
+ * Narrow internal entry point intended only for @ref new_page_entry
+ * in pool.c. Unlike @ref n00b_mmap_register this does NOT short-
+ * circuit when @c allocator->hidden is set — that's the point.
+ * @ref n00b_mem_get_allocator can then resolve a pointer in the
+ * page back to the owning hidden pool, which is what makes
+ * @ref n00b_free work for hidden+metadata pools (rt->user_pool in
+ * particular).
+ *
+ * The GC-scan path is unaffected: @ref n00b_mmap_is_gc_scannable
+ * still keys off @c allocator->hidden / @c metadata_pool, so a
+ * hidden pool's pages remain opaque to conservative scanning;
+ * registering them here only enables address-to-allocator lookup.
+ *
+ * Kind is fixed at @c n00b_mmap_pool.
+ */
+extern n00b_option_t(n00b_mmap_info_t *)
+n00b_mmap_register_pool_page(void *startp,
+                              void *endp,
+                              n00b_allocator_t *allocator,
+                              const char *file);
+
+/**
  * @brief Unregister an mmap'd region.
  * @param start Start address of the mapping to remove.
  *
@@ -100,9 +129,18 @@ n00b_mmap_unregister(void *start) _kargs
 extern n00b_result_t(void *)
 _n00b_mmap(size_t sz, char *loc) _kargs
 {
-    n00b_allocator_t    *allocator = nullptr;
-    n00b_mmap_rec_kind_t kind      = n00b_mmap_api_mmap;
-    char                *name      = nullptr;
+    n00b_allocator_t    *allocator     = nullptr;
+    n00b_mmap_rec_kind_t kind          = n00b_mmap_api_mmap;
+    char                *name          = nullptr;
+    /* When true, allocate the page but don't enter it in the mmap
+     * tree. The caller is then responsible for registering (and
+     * unregistering) the page itself — currently only @c pool.c
+     * does so, via @ref n00b_mmap_register_pool_page paired with
+     * @ref n00b_mmap_unregister at free time. The skip avoids the
+     * implicit @ref n00b_mmap_register that would otherwise filter
+     * by @c allocator->hidden, leaving the caller in full control
+     * of which pages are visible to @ref n00b_mem_get_allocator. */
+    bool                 skip_register = false;
 };
 // clang-format on
 

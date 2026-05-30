@@ -340,10 +340,14 @@ mmaps_insert_raw(n00b_mmap_ctx_t     *ctx,
 static bool
 n00b_mmaps_detach_base(n00b_mmap_ctx_t *ctx, n00b_mmap_info_t *info)
 {
-    if (info->allocator && info->allocator->hidden) {
-        return false;
-    }
-
+    /* The hidden filter that used to live here was dead code under
+     * the original register path (hidden allocators' pages never
+     * entered the tree, so this detach was never reached for them).
+     * @ref n00b_mmap_register_pool_page does put hidden+metadata
+     * pool pages in the tree on purpose so n00b_free can resolve
+     * them, and those pages MUST be removed here when the pool
+     * unmaps them — otherwise the tree grows monotonically as the
+     * pool churns. The check is therefore unconditional now. */
     (void)n00b_interval_delete(ctx->mmap_tree, (mmap_node_t *)info->tree_node);
     return true;
 }
@@ -726,13 +730,59 @@ n00b_mmap_register(void *startp, void *endp, n00b_mmap_rec_kind_t kind) _kargs
     return n00b_option_set(n00b_mmap_info_t *, result);
 }
 
+/* Narrow internal entry point for n00b_pool_t. n00b_mmap_register
+ * deliberately skips hidden allocators (so the GC can't discover
+ * their pages); that's correct for callers that want hidden
+ * semantics end-to-end, but it leaves n00b_free unable to resolve a
+ * hidden-pool pointer back to its allocator. Pool clients that need
+ * n00b_free to route to pool_free (i.e. hidden+metadata pools like
+ * @c rt->user_pool) call this from new_page_entry to put the page
+ * in the mmap tree unconditionally, while keeping every other
+ * hidden allocator opaque to the tree.
+ *
+ * Kind is fixed at @c n00b_mmap_pool. The GC-scan path's hidden
+ * filter in @ref n00b_mmap_is_gc_scannable still skips these pages
+ * (the allocator pointer carries the hidden flag), so registering
+ * here doesn't expose them to GC scanning — it only enables
+ * @ref n00b_mem_get_allocator to find the owning allocator. */
+n00b_option_t(n00b_mmap_info_t *)
+n00b_mmap_register_pool_page(void *startp,
+                              void *endp,
+                              n00b_allocator_t *allocator,
+                              const char *file)
+{
+    n00b_runtime_t   *runtime = n00b_get_runtime();
+    n00b_mmap_info_t *result;
+    n00b_mmap_ctx_t  *ctx   = n00b_global_mem_map(runtime);
+    uint64_t          start = (uint64_t)startp;
+    uint64_t          end   = (uint64_t)endp;
+    uint64_t          blen  = end - start;
+
+    assert(ctx);
+    assert(end > start);
+
+    mmap_write_lock(ctx);
+    result = mmaps_insert_raw(ctx,
+                               startp,
+                               blen,
+                               n00b_mmap_pool,
+                               0,
+                               n00b_mmap_perms_unknown);
+    result->allocator = allocator;
+    result->file      = file;
+    mmap_write_unlock(ctx);
+
+    return n00b_option_set(n00b_mmap_info_t *, result);
+}
+
 // clang-format off
 n00b_result_t(void *)
 _n00b_mmap(size_t sz, char *loc) _kargs
 {
-    n00b_allocator_t    *allocator = nullptr;
-    n00b_mmap_rec_kind_t kind      = n00b_mmap_api_mmap;
-    char                *name      = nullptr;
+    n00b_allocator_t    *allocator     = nullptr;
+    n00b_mmap_rec_kind_t kind          = n00b_mmap_api_mmap;
+    char                *name          = nullptr;
+    bool                 skip_register = false;
 }
 // clang-format on
 {
@@ -762,12 +812,19 @@ _n00b_mmap(size_t sz, char *loc) _kargs
 
     void *result = n00b_result_get(mmap_r);
 
-    (void)n00b_mmap_register(result,
-                            ((char *)result) + sz,
-                            kind,
-                            .file      = loc,
-                            .allocator = allocator,
-                            .perms     = n00b_mmap_perms_rw);
+    /* Skip the implicit register entirely when the caller asks —
+     * pool.c does this so it can drive the register/unregister
+     * pair itself (so the unregister happens BEFORE munmap and
+     * concurrent GC mark passes never see a stale tree entry
+     * pointing into a no-longer-mapped page). */
+    if (!skip_register) {
+        (void)n00b_mmap_register(result,
+                                ((char *)result) + sz,
+                                kind,
+                                .file      = loc,
+                                .allocator = allocator,
+                                .perms     = n00b_mmap_perms_rw);
+    }
 
     return n00b_result_ok(void *, result);
 }

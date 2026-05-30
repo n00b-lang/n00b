@@ -387,6 +387,25 @@ n00b_allocator_setup(n00b_allocator_t *allocator, n00b_calloc_fn alloc) _kargs
 void
 n00b_free(void *ptr)
 {
+    /* STW handshake at the top: if a collect is in flight (some
+     * other thread called n00b_stop_the_world), block here before
+     * touching any allocator state. Without this, a foreign thread
+     * (e.g. an XPC / libdispatch worker that attached to the
+     * runtime via n00b_thread_init but didn't pass through
+     * n00b_thread_checkin on the way in) can walk into pool_free /
+     * delete_one_page_entry while the GC mark phase is reading the
+     * mmap tree, then mutate the tree or munmap the page
+     * underneath the mark scanner. The free hot path on
+     * hidden+metadata pools doesn't go through _n00b_alloc_raw's
+     * checkin, so this is the one chokepoint that catches every
+     * external-thread free.
+     *
+     * Cheap when no STW is in flight (one atomic load on
+     * self_lock; checkin short-circuits on 0). Safe to call before
+     * any ptr / allocator validation below — n00b_thread_checkin
+     * doesn't touch ptr. */
+    n00b_thread_checkin();
+
     n00b_run_and_remove_finalizers(ptr);
 
     n00b_allocator_opt_t alloc_opt = n00b_mem_get_allocator(ptr);
