@@ -5,9 +5,9 @@
 #include "internal/text/unicode/raw.h"
 #include "core/alloc.h"
 #include "core/memory_info.h"
+#include "core/string.h"
 #include "core/type_info.h"
 #include <string.h>
-#include <assert.h>
 
 // ===================================================================
 // Style stack
@@ -438,6 +438,14 @@ n00b_format(n00b_string_t *desc, +)
 n00b_string_t *
 n00b_cformat(const char *desc, +)
 {
-    int32_t len = (int32_t)strlen(desc);
-    return _n00b_format_impl(desc, len, vargs);
+    int32_t             len      = (int32_t)strlen(desc);
+    n00b_allocator_t   *resolved = nullptr;
+    n00b_string_scope_t scope    = n00b_string_scope_enter(&resolved);
+    /* Push allocator override so every inner alloc inside
+     * _n00b_format_impl that doesn't pass an explicit allocator
+     * routes through the scratch (or override) we just resolved. */
+    n00b_allocator_t   *prev     = n00b_push_current_allocator(resolved);
+    n00b_string_t      *result   = _n00b_format_impl(desc, len, vargs);
+    n00b_restore_current_allocator(prev);
+    return n00b_string_scope_exit(&scope, result);
 }

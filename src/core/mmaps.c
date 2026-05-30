@@ -14,6 +14,7 @@
 #include "core/runtime.h"
 #include "adt/interval_tree.h"
 #include "adt/variant.h"
+#include "conduit/print.h"
 
 // TODO: fix this
 // #include "conduit/print.h"
@@ -62,6 +63,34 @@ mmap_unlock(n00b_mmap_ctx_t *ctx)
 #define mmap_read_lock(ctx)    mmap_lock(ctx)
 #define mmap_write_unlock(ctx) mmap_unlock(ctx)
 #define mmap_read_unlock(ctx)  mmap_unlock(ctx)
+
+/* Async-signal-handler-callable lookup: pulls fields out of the
+ * existing mmap registry for a candidate faulting address.  No
+ * @ref n00b_eprintf, no n00b_string_t allocation — only the tree's
+ * read lock, which is just an atomic spin.
+ *
+ * In a healthy process the lock contention risk is real; the only
+ * intended caller is a SIGBUS handler in a process that is already
+ * crashing, so a stuck spinlock just means we get reaped by the
+ * kernel a few milliseconds later. */
+void *
+n00b_mmap_handler_lookup(uintptr_t addr,
+                         uint64_t *out_start,
+                         uint64_t *out_end,
+                         uint32_t *out_kind,
+                         const char **out_file)
+{
+    auto opt = n00b_mmap_by_address((void *)addr);
+    if (!n00b_option_is_set(opt)) {
+        return NULL;
+    }
+    n00b_mmap_info_t *info = n00b_option_get(opt);
+    if (out_start) *out_start = info->start;
+    if (out_end)   *out_end   = info->end;
+    if (out_kind)  *out_kind  = (uint32_t)info->kind;
+    if (out_file)  *out_file  = info->file;
+    return info;
+}
 
 struct n00b_static_identity_entry_t {
     const n00b_static_identity_t *identity;

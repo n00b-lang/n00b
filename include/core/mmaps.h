@@ -102,6 +102,20 @@ n00b_mmap_register_pool_page(void *startp,
                               const char *file);
 
 /**
+ * @brief Async-signal-handler-safe lookup for SIGBUS / SIGSEGV
+ *        handlers.  Pulls registry fields for a candidate faulting
+ *        address without allocating or calling any n00b string /
+ *        print machinery.
+ */
+extern void *
+n00b_mmap_handler_lookup(uintptr_t addr,
+                         uint64_t *out_start,
+                         uint64_t *out_end,
+                         uint32_t *out_kind,
+                         const char **out_file);
+
+
+/**
  * @brief Unregister an mmap'd region.
  * @param start Start address of the mapping to remove.
  *

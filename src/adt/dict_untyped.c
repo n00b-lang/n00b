@@ -244,6 +244,17 @@ n00b_acquire_if_present(n00b_dict_untyped_t *d, n00b_dict_untyped_store_t *store
             do {
                 flags = n00b_atomic_or(&cur->flags, N00B_HT_FLAG_MUTEX);
                 if (flags & N00B_HT_FLAG_MOVING) {
+                    // If pre-OR had no MUTEX, we just took it; clear
+                    // it before parking on the migration futex.  A
+                    // migration thread may have pre-recorded this
+                    // bucket in its [first_active, last_active] range
+                    // (because a prior reader briefly held MUTEX
+                    // pre-migration-OR), and is busy-waiting for the
+                    // MUTEX to clear.  Leaving it set deadlocks us
+                    // against migration.
+                    if (!(flags & N00B_HT_FLAG_MUTEX)) {
+                        n00b_atomic_and(&cur->flags, ~N00B_HT_FLAG_MUTEX);
+                    }
                     goto try_again;
                 }
             } while (flags & N00B_HT_FLAG_MUTEX);
@@ -291,6 +302,12 @@ n00b_acquire_or_add(n00b_dict_untyped_t *d, n00b_dict_untyped_store_t *store, __
             do {
                 flags = n00b_atomic_or(&cur->flags, N00B_HT_FLAG_MUTEX);
                 if (flags & (N00B_HT_FLAG_COPYING)) {
+                    // See sibling note in acquire_if_present: clear
+                    // MUTEX before parking on the migration futex, or
+                    // we deadlock the migration's bucket busy-wait.
+                    if (!(flags & N00B_HT_FLAG_MUTEX)) {
+                        n00b_atomic_and(&cur->flags, ~N00B_HT_FLAG_MUTEX);
+                    }
                     goto try_again;
                 }
             } while (flags & N00B_HT_FLAG_MUTEX);

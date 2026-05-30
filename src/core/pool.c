@@ -68,16 +68,23 @@ new_page_entry(n00b_pool_t *pool, uint64_t *sz_ptr)
      * makes n00b_free → pool_free work (the address-to-allocator
      * lookup goes through the mmap tree).
      *
-     * Skip @c __system pools — those are bootstrap-critical
-     * allocators (the mmap context's own backing @c ctx->pool, and
-     * @c rt->system_pool for runtime bookkeeping). Registering
-     * @c ctx->pool's pages here would recurse infinitely:
-     * register_pool_page → mmaps_insert_raw → _n00b_alloc_raw →
-     * pool_alloc on ctx->pool → new_page_entry → back here. Other
-     * @c __system pools (system_pool) don't recurse, but they
-     * also don't need n00b_free symmetry — their allocations are
-     * long-lived runtime infrastructure with no manual lifecycle. */
-    if (!alloc->__system) {
+     * Only register hidden pools that have @c external_metadata.
+     * Two distinct exclusions:
+     *
+     *  - @c __system pools (the mmap context's own backing @c ctx->pool
+     *    and @c rt->system_pool) are bootstrap-critical: registering
+     *    @c ctx->pool's pages here recurses infinitely
+     *    (register_pool_page → mmaps_insert_raw → _n00b_alloc_raw →
+     *    pool_alloc on ctx->pool → new_page_entry → back here).
+     *
+     *  - Non-metadata hidden pools (@c conduit_pool, per-thread
+     *    @c ctx->pool, etc.) are libn00b-internal and exclusively use
+     *    the @c pool_free fast path; their pages do not need
+     *    address-to-allocator resolution.  Putting them in the global
+     *    mmap tree adds GC-scan tree traversal load and a race window
+     *    (concurrent @c pool_free → unregister → munmap vs GC mark
+     *    iterator) for no benefit. */
+    if (!alloc->__system && alloc->metadata_pool != nullptr) {
         (void)n00b_mmap_register_pool_page((void *)cur,
                                             (char *)cur + aligned_sz,
                                             alloc,
@@ -142,10 +149,11 @@ delete_one_page_entry(n00b_pool_t *pool, n00b_pool_page_t *entry)
      * BEFORE munmap so a concurrent GC mark pass can't follow a
      * stale interval-tree node into a no-longer-mapped page and
      * SIGBUS. The unregister is a no-op when the page was never
-     * registered (the @c __system bootstrap pools), so the check
-     * here mirrors the register-side gate verbatim. */
+     * registered, so the check here mirrors the register-side gate
+     * verbatim (skip @c __system bootstrap pools and skip pools
+     * without @c external_metadata). */
     n00b_allocator_t *alloc = (n00b_allocator_t *)pool;
-    if (!alloc->__system) {
+    if (!alloc->__system && alloc->metadata_pool != nullptr) {
         n00b_mmap_unregister((void *)entry);
     }
 

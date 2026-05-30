@@ -566,6 +566,10 @@ n00b_add_alloc_to_worklist(n00b_alloc_info_t ainfo, n00b_collect_t *ctx)
 
     if (ainfo.kind == n00b_alloc_oob) {
         n00b_oob_hdr_t *oob = ainfo.hdr.oob;
+        /* Skip mid-allocation / freed-but-dict-stale OOBs. */
+        if (oob->alive == 0) {
+            return;
+        }
 #if !defined(N00B_DISABLE_PTR_WORDS)
         if (oob->ptr_words_known) {
             n = oob->ptr_words;
@@ -573,8 +577,19 @@ n00b_add_alloc_to_worklist(n00b_alloc_info_t ainfo, n00b_collect_t *ctx)
         else
 #endif
         {
-            n = (oob->alloc_len - arena_overhead(ctx->from_space))
-                    / sizeof(void *);
+            /* OOB records live on metadata-bearing pools (per the
+             * @c external_metadata=true path in @c n00b_allocator_setup);
+             * those pools do not add an inline header to user
+             * allocations, so @c alloc_len here is the bare user-request
+             * byte count.  Subtracting @c arena_overhead would underflow
+             * for any allocation smaller than @c sizeof(n00b_inline_hdr_t)
+             * and yield @c n ~ 0x1FFFFFFC words, walking the scan into
+             * dyld shared-cache __DATA and SIGBUSing under macOS COW
+             * pressure.  Mirror the bare-divide used in
+             * @ref n00b_scan_one_alive_alloc_oob (gc.c, pool-walk-as-roots
+             * path) which already noted the same constraint in its
+             * comment. */
+            n = (uint32_t)((uint64_t)oob->alloc_len / sizeof(void *));
         }
         start = oob->user_ptr;
         kind  = (n00b_gc_scan_kind_t)oob->scan_kind;
@@ -715,12 +730,27 @@ n00b_visit_possible_pointer(n00b_collect_t *ctx,
     switch (mmap->kind) {
     case n00b_mmap_managed_segment:
     case n00b_mmap_sys_segment:
-    case n00b_mmap_static:
     case n00b_mmap_pool:
     case n00b_mmap_internal:
         break;
     case n00b_mmap_stack:
         return false; // We will scan this separately.
+    case n00b_mmap_static:
+        /* A candidate pointer whose VALUE lands inside a dyld
+         * library segment (our binary + every system dylib) cannot
+         * reach any of our heap roots — those libraries don't hold
+         * pointers back into our managed arenas.  Worse, the
+         * subsequent @ref n00b_find_alloc_info deref below would
+         * read the candidate's bytes as an alloc header.  Under
+         * macOS burst load the kernel compresses out shared-cache
+         * pages that the perms probe just brought in; that deref
+         * then SIGBUSes (verified by crash report: fault inside
+         * visit_possible_pointer with si_addr in libobjc.A.dylib's
+         * __OBJC_RO / libc++.1.dylib's __TEXT).  Our own binary's
+         * TU-scope globals are scanned via @c rt->gc_roots, so we
+         * lose nothing by skipping the candidate-into-static
+         * follow. */
+        return false;
     case n00b_mmap_zero_page:
     case n00b_mmap_api_mmap:
     case n00b_mmap_arena:
@@ -844,6 +874,18 @@ n00b_scan_memory_range(n00b_collect_t *ctx, void *start, size_t nwords)
                     last_page_ok            = perms != n00b_mmap_perms_no_access;
                 }
                 else {
+                    /* Trust the registry for non-stack kinds. Static
+                     * pages from our binary (where g_endpoint and
+                     * other ncc-registered roots live) MUST be
+                     * scannable — otherwise scan_roots can never
+                     * forward pointer fields like @c events.data when
+                     * the GC moves the backing array, and downstream
+                     * code derefs an unmapped pointer. Dyld __DATA
+                     * pages that may COW-fault to SIGBUS are handled
+                     * defensively in @ref n00b_visit_possible_pointer
+                     * via the @c case n00b_mmap_static @c return false
+                     * (the candidate-follow path), not by refusing the
+                     * slot read here. */
                     last_page_ok = true;
                 }
             }
