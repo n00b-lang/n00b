@@ -110,6 +110,21 @@ Produces a string literal encoding the type. Mirrors `typeid()` but returns a
 `const char *` instead of an identifier. Useful for runtime type introspection
 and error messages.
 
+### `typehash()` GC Type Maps
+
+**Status: Complete for supported n00b allocation layouts.**
+
+ncc lowers `typehash(T *)` to a stable integer literal. In n00b-integrated
+builds, eligible `typehash(T *)` sites also cause ncc to emit link-time GC
+layout metadata for `T`. n00b allocation macros use that same hash, so
+`n00b_alloc(T)` and `n00b_alloc_array(T, N)` can be upgraded from conservative
+default scanning to exact callback scanning after the final binary is indexed.
+
+The post-link command is `n00b-gcmap-index`. See
+[`docs/gc_type_maps.md`](gc_type_maps.md) for the n00b build and runtime
+contract, and `docs/gc_typemaps.md` in the ncc repository for ncc's eligibility
+rules.
+
 ### `constexpr_eval()` / `constexpr_max()` / `constexpr_min()`
 
 **Status: Complete.**

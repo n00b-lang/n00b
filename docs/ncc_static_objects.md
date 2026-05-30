@@ -18,6 +18,9 @@ For the corresponding ncc compiler manual (language extensions, build
 invocation, helper protocol), see
 `docs/static_objects_pipeline.md` in the ncc repository.
 
+For heap allocation type maps emitted from `typehash(T *)` and the post-link
+`n00b-gcmap-index` command, see [`docs/gc_type_maps.md`](gc_type_maps.md).
+
 ---
 
 # Part 1 — User Guide

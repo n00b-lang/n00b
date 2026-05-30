@@ -10,6 +10,14 @@ Pointers stay pointers semantically. The marshaler does not turn a pointer into
 an application-level id or ask the pointee's constructor to run during
 unmarshal.
 
+Heap objects whose GC shape is `CALLBACK` can be marshaled only when the
+callback is one of n00b's built-in layout callbacks and the stream can preserve
+or rederive the layout metadata. For ordinary `n00b_alloc(T)` and
+`n00b_alloc_array(T, N)` objects, that metadata comes from the linked
+`typehash(T *)` GC type map. Build or run those binaries through
+[`n00b-gcmap-index`](gc_type_maps.md) before relying on marshal round-trips of
+typed heap objects.
+
 ## Static Pointers
 
 Pointers may also refer to registered static objects, such as ncc-generated
