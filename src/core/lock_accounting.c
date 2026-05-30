@@ -41,6 +41,19 @@ n00b_lock_init_accounting(n00b_lock_base_t *lock, int type, char *loc)
 
     lock->creation_loc = loc;
     lock->inited       = true;
+    /* Default debug lock-log OFF. Each acquire/release otherwise
+     * appends a `n00b_lock_log_t` to `lock->logs` from system_pool
+     * (lock_accounting.c:86, :210). For long-lived locks (e.g. the
+     * rwlock embedded in every n00b_list_t / created by
+     * n00b_data_lock_new), the chain grows unbounded — observed
+     * ~6.5 MB/s system_pool growth under sustained ES burst load,
+     * directly traced to this site. Mutexes already opt out via
+     * mutex.c:33; do the same for rwlocks and CVs here so all
+     * default-constructed locks are non-leaking. Callers needing
+     * lock-op tracing can flip `lock->no_log = false` per-lock
+     * after init, or wire a build flag if a global debug switch
+     * is wanted. */
+    lock->no_log       = true;
     lock->allocation   = n00b_find_alloc_info(lock, .scan_for_header = true);
 }
 
