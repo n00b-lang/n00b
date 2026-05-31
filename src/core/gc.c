@@ -98,6 +98,25 @@ n00b_gc_stack_push(n00b_gc_stack_frame_t *frame, const n00b_gc_stack_map_t *map,
 
     n00b_thread_t *thread = n00b_thread_self();
 
+    // During a worker thread's pre-registration init window (after it
+    // starts but before n00b_thread_init publishes its stack bounds, so
+    // n00b_thread_self() cannot yet resolve it — D-004/D-014/D-019), the
+    // thread is not yet a GC participant and has no per-thread frame chain
+    // to maintain.  The codegen still emits a frame push in those early
+    // prologues; with no owning n00b_thread_t there is nowhere to thread
+    // it, so initialize the frame's links to empty and skip publishing.
+    // The frame's roots remain live C-stack locals (conservatively
+    // scannable) until the thread registers; this restores the
+    // always-resolvable invariant the former thread_local self provided.
+    if (thread == nullptr) {
+        *frame = (n00b_gc_stack_frame_t){
+            .prev  = nullptr,
+            .map   = map,
+            .roots = roots,
+        };
+        return;
+    }
+
     *frame = (n00b_gc_stack_frame_t){
         .prev  = thread->gc_stack_top,
         .map   = map,
@@ -112,6 +131,16 @@ n00b_gc_stack_pop(n00b_gc_stack_frame_t *frame)
     assert(frame);
 
     n00b_thread_t *thread = n00b_thread_self();
+
+    // Pre-registration worker window (see n00b_gc_stack_push): the matching
+    // push did not publish this frame into any thread's chain, so there is
+    // nothing to unlink — just clear the frame.
+    if (thread == nullptr) {
+        frame->prev  = nullptr;
+        frame->map   = nullptr;
+        frame->roots = nullptr;
+        return;
+    }
 
     assert(thread->gc_stack_top == frame);
     thread->gc_stack_top = frame->prev;
@@ -136,7 +165,14 @@ n00b_gc_stack_prepare_jmp(n00b_jmp_buf_t *ctx)
 void
 n00b_gc_stack_restore(n00b_gc_stack_frame_t *top)
 {
-    n00b_thread_self()->gc_stack_top = top;
+    // Pre-registration worker window (see n00b_gc_stack_push): no owning
+    // n00b_thread_t to restore into.  A pre-registration thread has no
+    // frame chain, so there is nothing to restore.
+    n00b_thread_t *thread = n00b_thread_self();
+    if (thread == nullptr) {
+        return;
+    }
+    thread->gc_stack_top = top;
 }
 
 [[noreturn]] void
@@ -1010,6 +1046,26 @@ n00b_scan_thread_stacks(n00b_collect_t *ctx)
         if (stack_policy == N00B_GC_STACK_EXACT_ONLY
             || (stack_policy == N00B_GC_STACK_EXACT_WITH_FALLBACK
                 && exact_stack_scanned)) {
+            goto scan_thread_state;
+        }
+
+        // ISOLATION (WP-002 Phase 5, D-025 Q1).  An isolated worker is
+        // EXCLUDED from the conservative C-stack range scan below: it has
+        // declared (by setting `.isolation` on n00b_thread_spawn) that the
+        // GC must NOT treat its raw C stack as a root source — the worker
+        // self-registers (via n00b_gc_register_root / an explicit GC stack
+        // map) any heap memory it wants kept alive.  This is a NARROW change
+        // to the scan-set INCLUSION TEST only; it does not alter the D-007
+        // exact-vs-conservative scan model (above) or the shadow-stack
+        // push/pop.  The thread struct, its n00b_thread_record_t, and its
+        // lock chains are STILL scanned (the `scan_thread_state` block below)
+        // so the GC's view of the worker's locks is never corrupted — only
+        // the conservative range scan over the worker's own C stack is
+        // skipped.  SAFETY: excluding the C-stack scan while a worker holds
+        // the only reference to a heap object on that stack loses that root
+        // → use-after-free under collection; honoring the self-registration
+        // contract is the isolated worker's responsibility.
+        if (t->gc_isolated) {
             goto scan_thread_state;
         }
 

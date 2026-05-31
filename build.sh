@@ -203,10 +203,18 @@ function ensure_ncc {
         fi
     fi
 
-    # 3. System ncc in PATH (opt-in via N00B_USE_SYSTEM_NCC=1, or fallback
-    #    when the in-tree build hasn't been produced yet).
+    # 3. System ncc (opt-in via N00B_USE_SYSTEM_NCC=1, or fallback when the
+    #    in-tree build hasn't been produced yet).  Prefer the stable
+    #    /usr/local/bin/ncc over a bare `which ncc`: PATH may place an
+    #    in-development ncc (e.g. ~/.local/bin/ncc) ahead of the installed
+    #    one, which would compile the tree with an unreleased compiler.  Set
+    #    NCC_PATH explicitly to override this default.
     local system_ncc
-    system_ncc=$(which ncc 2>/dev/null || true)
+    if [[ -x /usr/local/bin/ncc ]] ; then
+        system_ncc=/usr/local/bin/ncc
+    else
+        system_ncc=$(which ncc 2>/dev/null || true)
+    fi
     if [[ -n "${system_ncc}" ]] ; then
         export NCC_PATH="${system_ncc}"
         return 0
