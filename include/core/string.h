@@ -105,3 +105,48 @@ extern n00b_string_t *n00b_string_from_cstr(const char *src)
  */
 extern n00b_string_t *n00b_string_empty()
     _kargs { n00b_allocator_t *allocator = nullptr; };
+
+/* ----------------------------------------------------------------
+ * Thread-local string-scratch scope.
+ *
+ * String-builder functions that allocate intermediate buffers
+ * (@ref n00b_string_from_cstr / @ref n00b_string_from_raw /
+ * @ref n00b_cformat ...) call @ref n00b_string_scope_enter at the
+ * top and @ref n00b_string_scope_exit at the bottom.
+ *
+ * If the caller passed an explicit @c .allocator kwarg or has an
+ * active @ref n00b_with_allocator scope, the builder uses that
+ * allocator and the scope is a no-op.
+ *
+ * Otherwise, the outermost builder call stands up a thread-local
+ * scratch pool, lets inner allocations land in it, then on exit
+ * deep-copies the result string into the runtime default allocator
+ * and tears the scratch down.  Nested builder calls share the
+ * outer scratch (no inner re-create).
+ *
+ * Effect: per-event temp strings (the dominant GC heap pressure
+ * source under burst load) never enter the default arena and are
+ * not in the GC's scan set.
+ * ---------------------------------------------------------------- */
+
+typedef struct {
+    bool created;
+} n00b_string_scope_t;
+
+/**
+ * @brief Begin a string-builder scope.
+ * @param resolved In/out: caller's resolved allocator pointer.
+ *                 Updated to point at the appropriate allocator
+ *                 (explicit / override / scratch) when @c *resolved
+ *                 is initially null.
+ * @return Scope token; pass to @ref n00b_string_scope_exit.
+ */
+extern n00b_string_scope_t
+n00b_string_scope_enter(n00b_allocator_t **resolved);
+
+/**
+ * @brief End a string-builder scope.  Returns the (possibly
+ *        deep-copied-to-durable-storage) result.
+ */
+extern n00b_string_t *
+n00b_string_scope_exit(n00b_string_scope_t *scope, n00b_string_t *result);

@@ -40,6 +40,13 @@ struct n00b_pool_t {
     n00b_llstack_t        free_lists[N00B_NUM_FREE_LISTS];
     n00b_pool_page_t     *page_table;
     _Atomic uint32_t      lock;
+    /* Diagnostics counters. Map = successful big_mmap (page table
+     * grew), unmap = delete_one_page_entry's munmap. Used by callers
+     * that need to verify alloc/free symmetry on the big-mmap fast
+     * path. Always-on accounting so users don't need to recompile
+     * libn00b to inspect them. */
+    _Atomic uint64_t      big_map_count;
+    _Atomic uint64_t      big_unmap_count;
 };
 
 typedef struct n00b_pool_t n00b_pool_t;
@@ -67,3 +74,36 @@ n00b_pool_init(n00b_pool_t *pool) _kargs
     bool        hidden            = false;
     const char *name              = "pool";
 };
+
+/**
+ * @brief Total bytes the pool has currently mapped from the kernel.
+ *
+ * Walks the pool's page_table under the pool lock, summing every page
+ * entry's `mapped_size`. This counts every mmap region the pool owns
+ * — both the small-slab pages backing the size-class freelists and
+ * the per-allocation big-mmap pages handed out for requests larger
+ * than the freelist classes — regardless of how many of the slots in
+ * those pages are currently in use.
+ *
+ * Intended for diagnostics: pair with phys_footprint sampling to
+ * attribute resident memory to specific pools. Cheap-ish but not
+ * free; the lock is contended on the alloc/free fast path.
+ */
+extern uint64_t n00b_pool_mapped_bytes(n00b_pool_t *pool);
+
+/**
+ * @brief Cumulative count of big-mmap pages this pool has released
+ *        back to the kernel (i.e. n00b_safe_munmap calls in
+ *        @ref delete_one_page_entry).
+ *
+ * Pair with the corresponding alloc counter to verify that the
+ * big-mmap fast path is symmetric — every allocation eventually
+ * paired with a release.
+ */
+extern uint64_t n00b_pool_big_unmap_count(n00b_pool_t *pool);
+
+/**
+ * @brief Cumulative count of big-mmap pages this pool has mapped
+ *        from the kernel (i.e. successful @ref big_mmap calls).
+ */
+extern uint64_t n00b_pool_big_map_count(n00b_pool_t *pool);

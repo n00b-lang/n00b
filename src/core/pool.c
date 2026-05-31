@@ -45,16 +45,54 @@ new_page_entry(n00b_pool_t *pool, uint64_t *sz_ptr)
     uint64_t hdr_sz = n00b_align(sizeof(n00b_pool_page_t));
     sz += hdr_sz;
 
-    char *name    = (char *)(((n00b_allocator_t *)pool)->debug_name);
-    auto  mmap_r  = n00b_mmap(n00b_page_align(sz),
-                              .allocator = (n00b_allocator_t *)pool,
-                              .name      = name,
-                              .kind      = n00b_mmap_pool);
+    n00b_allocator_t *alloc      = (n00b_allocator_t *)pool;
+    char             *name       = (char *)alloc->debug_name;
+    uint64_t          aligned_sz = n00b_page_align(sz);
+    /* skip_register=true puts the page back under pool control —
+     * the matching @ref n00b_mmap_register_pool_page below decides
+     * whether (and how) this page enters the global mmap tree.
+     * The pool side wants this control so the unregister at free
+     * time strictly precedes munmap (avoiding a window where a
+     * concurrent GC mark scan can dereference a tree entry whose
+     * backing page is no longer mapped). */
+    auto mmap_r = n00b_mmap(aligned_sz,
+                            .allocator     = alloc,
+                            .name          = name,
+                            .kind          = n00b_mmap_pool,
+                            .skip_register = true);
     assert(n00b_result_is_ok(mmap_r));
     n00b_pool_page_t *cur = n00b_result_get(mmap_r);
 
-    *sz_ptr   = n00b_page_align(sz) - hdr_sz;
-    cur->mapped_size = n00b_page_align(sz);
+    /* Register the page with the allocator so @ref n00b_mem_get_allocator
+     * can resolve in-page pointers back to this pool, which is what
+     * makes n00b_free → pool_free work (the address-to-allocator
+     * lookup goes through the mmap tree).
+     *
+     * Only register hidden pools that have @c external_metadata.
+     * Two distinct exclusions:
+     *
+     *  - @c __system pools (the mmap context's own backing @c ctx->pool
+     *    and @c rt->system_pool) are bootstrap-critical: registering
+     *    @c ctx->pool's pages here recurses infinitely
+     *    (register_pool_page → mmaps_insert_raw → _n00b_alloc_raw →
+     *    pool_alloc on ctx->pool → new_page_entry → back here).
+     *
+     *  - Non-metadata hidden pools (@c conduit_pool, per-thread
+     *    @c ctx->pool, etc.) are libn00b-internal and exclusively use
+     *    the @c pool_free fast path; their pages do not need
+     *    address-to-allocator resolution.  Putting them in the global
+     *    mmap tree adds GC-scan tree traversal load and a race window
+     *    (concurrent @c pool_free → unregister → munmap vs GC mark
+     *    iterator) for no benefit. */
+    if (!alloc->__system && alloc->metadata_pool != nullptr) {
+        (void)n00b_mmap_register_pool_page((void *)cur,
+                                            (char *)cur + aligned_sz,
+                                            alloc,
+                                            name);
+    }
+
+    *sz_ptr   = aligned_sz - hdr_sz;
+    cur->mapped_size = aligned_sz;
     void *res = (void *)cur + hdr_sz;
 
     pool_lock(pool);
@@ -74,6 +112,11 @@ big_mmap(n00b_pool_t *pool, uint64_t sz)
 {
     n00b_pool_entry_t *entry = new_page_entry(pool, &sz);
     entry->list_index        = N00B_NUM_FREE_LISTS;
+
+    /* Diagnostics: account for big-mmap allocations symmetrically
+     * with delete_one_page_entry below so callers can verify the
+     * fast path is balanced. */
+    atomic_fetch_add(&pool->big_map_count, 1);
 
     return entry;
 }
@@ -101,12 +144,26 @@ delete_one_page_entry(n00b_pool_t *pool, n00b_pool_page_t *entry)
 
     pool_unlock(pool);
 
+    /* Symmetric counterpart to new_page_entry's optional
+     * @ref n00b_mmap_register_pool_page: pull the tree entry
+     * BEFORE munmap so a concurrent GC mark pass can't follow a
+     * stale interval-tree node into a no-longer-mapped page and
+     * SIGBUS. The unregister is a no-op when the page was never
+     * registered, so the check here mirrors the register-side gate
+     * verbatim (skip @c __system bootstrap pools and skip pools
+     * without @c external_metadata). */
+    n00b_allocator_t *alloc = (n00b_allocator_t *)pool;
+    if (!alloc->__system && alloc->metadata_pool != nullptr) {
+        n00b_mmap_unregister((void *)entry);
+    }
+
     /* Big-alloc free path: actually release the page back to the OS.
      * Without this the page stayed mapped until pool_destroy — any
      * pool client n00b_free-ing a >N00B_NUM_FREE_LISTS-class
      * allocation observed the slot count drop but RSS keep climbing. */
     if (mapped != 0) {
         n00b_safe_munmap((void *)entry, mapped);
+        atomic_fetch_add(&pool->big_unmap_count, 1);
     }
 }
 
@@ -228,6 +285,34 @@ pool_alloc(n00b_pool_t *pool, uint64_t request, void *ignore)
 
     assert(!(((uint64_t)p) & (N00B_ALIGN - 1)));
     return p;
+}
+
+uint64_t
+n00b_pool_mapped_bytes(n00b_pool_t *pool)
+{
+    if (pool == nullptr) {
+        return 0;
+    }
+    uint64_t          total = 0;
+    n00b_pool_page_t *p;
+    pool_lock(pool);
+    for (p = pool->page_table; p != nullptr; p = p->next) {
+        total += (uint64_t)p->mapped_size;
+    }
+    pool_unlock(pool);
+    return total;
+}
+
+uint64_t
+n00b_pool_big_map_count(n00b_pool_t *pool)
+{
+    return pool == nullptr ? 0 : atomic_load(&pool->big_map_count);
+}
+
+uint64_t
+n00b_pool_big_unmap_count(n00b_pool_t *pool)
+{
+    return pool == nullptr ? 0 : atomic_load(&pool->big_unmap_count);
 }
 
 n00b_allocator_t *

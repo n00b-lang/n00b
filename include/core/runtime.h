@@ -72,9 +72,45 @@ struct n00b_runtime_t {
      * default arena get traced/forwarded.  Hidden pools are NOT in
      * this list.  Backed by system_pool. */
     n00b_list_t(n00b_allocator_t *) scannable_pools;
-    n00b_list_t(n00b_finalizer_info_t *) finalizers; // Global finalizer list (system_pool-backed).
+    /* Legacy fallback registry kept for callers that attach a
+     * finalizer to an allocation from a pool without per-alloc
+     * metadata. The OOB-backed fast path (the finalizer slot on
+     * n00b_oob_hdr_t) is the preferred one — callers that need
+     * finalizers MUST allocate from a metadata-bearing pool.
+     * This list grows under the legacy path and is O(N) walked
+     * on n00b_free, so it must stay small. */
+    n00b_list_t(n00b_finalizer_info_t *) finalizers;
+    /* Every pool created with @c external_metadata=true registers
+     * itself here so the GC mark phase can iterate its metadata dict
+     * directly. Each metadata-bearing alloc with @c alive set is a
+     * root for the mark pass; entries reached during mark get
+     * stamped with @c gc_current_epoch on their OOB header. Entries
+     * still @c alive after mark whose epoch is stale are leaks —
+     * the sweep returns them to the pool.  System_pool and the
+     * hidden no-metadata pools sit outside this list and continue
+     * to use the global rt->finalizers fallback. */
+    n00b_list_t(n00b_allocator_t *) metadata_pools;
+    /* Monotonic counter incremented at the start of every GC. Used
+     * by the metadata-pool sweep above to detect leaks (stale
+     * epoch = handed-out but never reached). */
+    _Atomic(uint64_t)           gc_current_epoch;
+    /* When set, the next collection prints file_name + tinfo +
+     * alloc_len for each metadata-pool leak it finds before
+     * returning the slot to its pool. Toggled by
+     * n00b_debug_find_leaks. */
+    _Atomic(bool)               debug_leak_detect;
     n00b_dict_untyped_t        *type_registry;     // typehash -> n00b_type_info_t *
     n00b_pool_t                 conduit_pool;      // Pool for conduit infra (registered as GC root).
+    /* User-space pool for application allocations that want
+     * leak-tracking. Initialised with external_metadata=true so
+     * every alloc carries an OOB record (alive bit + gc_epoch +
+     * file_name + tinfo) and participates in
+     * n00b_debug_find_leaks. NOT for hot-path traffic — the
+     * per-alloc dict+OOB bookkeeping makes this pool more
+     * expensive than system_pool or conduit_pool. Use it for
+     * client allocations whose lifecycle the application owns
+     * and that need to be auditable for leaks. */
+    n00b_pool_t                 user_pool;
     n00b_dict_untyped_t        *sub_map;           // conduit subscription handle -> sub ptr
     n00b_conduit_t             *default_conduit;   // Default conduit for IO service.
     n00b_conduit_service_t     *default_service;   // Service thread pool (IO + signal).

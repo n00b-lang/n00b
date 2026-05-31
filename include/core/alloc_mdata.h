@@ -48,6 +48,34 @@ struct n00b_oob_hdr_t {
     n00b_core_alloc_info_fields;  // Authoritative data.
     n00b_inline_hdr_t *hcur;      // Pointer to the guard / inline info.
     const char        *file_name; // file and line info.
+    // Per-allocation finalizer slot. Lives only in the OOB record
+    // — the inline header stays tight because it doubles as the
+    // marshal payload and any new field there would break the
+    // serialised format. n00b_add_finalizer uses this storage when
+    // n00b_find_alloc_info returns an OOB record (i.e. the pool was
+    // initialised with external_metadata=true). Pools without OOB
+    // records fall back to rt->finalizers list keyed on the user
+    // pointer.
+    n00b_finalizer_t   finalizer;
+    void              *finalizer_user;
+    // Per-allocation liveness + GC epoch tracking.
+    //
+    // `alive` is set by the alloc path and cleared in the free path;
+    // it is the source of truth for "this pool slot is currently
+    // handed out". The GC mark walks every metadata-bearing pool's
+    // metadata dict, treats every alive alloc as a root, and stamps
+    // `gc_epoch` to the current runtime epoch on each alloc it
+    // reaches. After mark, a second pass over the dict checks
+    // `alive && gc_epoch != current` — those are leaks: handed out,
+    // never reached. They are returned to the pool (alive cleared,
+    // memory released); if the runtime's debug-leak flag is set the
+    // file_name + tinfo + alloc_len are printed first.
+    //
+    // The bitfield reserves room for future per-OOB scratch flags
+    // without needing another header edit.
+    uint64_t           gc_epoch;
+    uint8_t            alive    : 1;
+    uint8_t            reserved : 7;
 };
 
 // n00b_alloc_err means we couldn't find a record, but did find the allocator.

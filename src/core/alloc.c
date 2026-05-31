@@ -185,6 +185,19 @@ _n00b_alloc_raw(size_t             n,
         n00b_alloc_opts_t md_opts = {.allocator = opts->allocator->metadata_pool};
         map_item                  = n00b_alloc_with_opts(n00b_oob_hdr_t, &md_opts);
 
+        /* Seed the OOB liveness state. `alive` flags this slot as
+         * handed out so the GC mark/sweep treats it as a root and a
+         * non-leak. The epoch is stamped to the runtime's current
+         * value so a collection running between this alloc and the
+         * caller's first use cannot misclassify it as stale. */
+        uint64_t epoch_now = 0;
+        {
+            n00b_runtime_t *rt = n00b_get_runtime();
+            if (rt) {
+                epoch_now = n00b_atomic_load(&rt->gc_current_epoch);
+            }
+        }
+
         *map_item = (n00b_oob_hdr_t){
             .user_ptr        = r,
             .tinfo           = type_hash,
@@ -200,6 +213,8 @@ _n00b_alloc_raw(size_t             n,
             .scan_user       = opts->scan_user,
             .hcur            = hdr,
             .file_name       = location,
+            .gc_epoch        = epoch_now,
+            .alive           = 1,
         };
 
         n00b_dict_untyped_put(opts->allocator->metadata, r, map_item);
@@ -272,22 +287,29 @@ _n00b_alloc_raw(size_t             n,
     if (opts->finalizer) {
         n00b_runtime_t *rt = n00b_get_runtime();
         if (rt) {
-            // The raw header key must match what the GC uses in ctx->memos:
-            // - OOB arenas: (n00b_inline_hdr_t *)map_item (the OOB record)
-            // - Inline-only: hdr (the actual inline header)
-            n00b_inline_hdr_t *alloc_key = (opts->allocator->metadata_pool != nullptr)
-                                             ? (n00b_inline_hdr_t *)map_item
-                                             : hdr;
+            // Prefer the OOB record when this pool has one
+            // (external_metadata = true). The inline header is
+            // intentionally not used for finalizer storage — see
+            // n00b_add_finalizer for the rationale.
+            n00b_oob_hdr_t *meta_oob =
+                (opts->allocator->metadata_pool != nullptr) ? map_item : nullptr;
 
-            n00b_alloc_opts_t     md_opts = {.allocator = (n00b_allocator_t *)&rt->system_pool};
-            n00b_finalizer_info_t *info  = n00b_alloc_with_opts(n00b_finalizer_info_t, &md_opts);
+            if (meta_oob != nullptr) {
+                meta_oob->finalizer      = opts->finalizer;
+                meta_oob->finalizer_user = opts->finalizer_data;
+            }
+            else {
+                n00b_alloc_opts_t     md_opts = {.allocator = (n00b_allocator_t *)&rt->system_pool};
+                n00b_finalizer_info_t *info  = n00b_alloc_with_opts(n00b_finalizer_info_t, &md_opts);
 
-            *info = (n00b_finalizer_info_t){
-                .funcptr    = opts->finalizer,
-                .alloc_info = alloc_key,
-                .user_ptr   = opts->finalizer_data,
-            };
-            n00b_list_push(rt->finalizers, info);
+                *info = (n00b_finalizer_info_t){
+                    .funcptr    = opts->finalizer,
+                    .key        = r,
+                    .alloc_info = nullptr,
+                    .user_ptr   = opts->finalizer_data,
+                };
+                n00b_list_push(rt->finalizers, info);
+            }
         }
     }
 
@@ -348,12 +370,42 @@ n00b_allocator_setup(n00b_allocator_t *allocator, n00b_calloc_fn alloc) _kargs
                                .allocator      = allocator->metadata_pool,
                                .hash           = n00b_hash_word,
                                .skip_obj_hash  = true);
+
+        /* Register with the runtime so the GC mark phase walks this
+         * pool's per-alloc metadata. Skip md_pool allocators (their
+         * own backing storage); the metadata dict for those is the
+         * pool we'd be registering, which would close a cycle. */
+        if (!__is_md_pool) {
+            n00b_runtime_t *rt = n00b_get_runtime();
+            if (rt && rt->metadata_pools.data) {
+                n00b_list_push(rt->metadata_pools, allocator);
+            }
+        }
     }
 }
 
 void
 n00b_free(void *ptr)
 {
+    /* STW handshake at the top: if a collect is in flight (some
+     * other thread called n00b_stop_the_world), block here before
+     * touching any allocator state. Without this, a foreign thread
+     * (e.g. an XPC / libdispatch worker that attached to the
+     * runtime via n00b_thread_init but didn't pass through
+     * n00b_thread_checkin on the way in) can walk into pool_free /
+     * delete_one_page_entry while the GC mark phase is reading the
+     * mmap tree, then mutate the tree or munmap the page
+     * underneath the mark scanner. The free hot path on
+     * hidden+metadata pools doesn't go through _n00b_alloc_raw's
+     * checkin, so this is the one chokepoint that catches every
+     * external-thread free.
+     *
+     * Cheap when no STW is in flight (one atomic load on
+     * self_lock; checkin short-circuits on 0). Safe to call before
+     * any ptr / allocator validation below — n00b_thread_checkin
+     * doesn't touch ptr. */
+    n00b_thread_checkin();
+
     n00b_run_and_remove_finalizers(ptr);
 
     n00b_allocator_opt_t alloc_opt = n00b_mem_get_allocator(ptr);
@@ -377,6 +429,40 @@ n00b_free(void *ptr)
         n00b_mmap_delete_ranges(mctx, (uint64_t)ptr, (uint64_t)ptr + 1);
     }
 
+    /* Tear down the OOB metadata for this allocation before we
+     * hand the memory back to the allocator. Three things have to
+     * happen, in order, atomically with respect to the GC mark/
+     * sweep:
+     *
+     *   1. clear @c alive — the source of truth for the GC's
+     *      "this slot is handed out" view; the metadata-pool sweep
+     *      depends on it for leak classification.
+     *   2. clear @c finalizer — defangs the order-dependent free
+     *      chain that the leak detector's per-bucket sweep can
+     *      trigger when both halves of an owned pair (e.g. the wax
+     *      payload msg + buffer) are flagged as leaks in the same
+     *      pass. Without this, processing the msg's slot would
+     *      call its finalizer (= n00b_free(buffer)) on an already-
+     *      reclaimed buffer.
+     *   3. remove the dict entry and free the OOB record itself.
+     *      Otherwise the metadata dict and its md_pool slots leak
+     *      monotonically — n00b_free returns the user allocation
+     *      but the per-allocation bookkeeping accumulates forever,
+     *      which masks bona-fide leak fixes.
+     */
+    if (allocator->metadata_pool != nullptr) {
+        n00b_oob_hdr_t *oob = n00b_dict_untyped_get(allocator->metadata,
+                                                   ptr,
+                                                   nullptr);
+        if (oob) {
+            oob->alive          = 0;
+            oob->finalizer      = nullptr;
+            oob->finalizer_user = nullptr;
+            (void)n00b_dict_untyped_remove(allocator->metadata, ptr);
+            n00b_free(oob);
+        }
+    }
+
     if (allocator->add_inline_header) {
         ptr = (char *)ptr - N00B_ALLOC_HDR_SZ;
     }
@@ -390,21 +476,35 @@ n00b_add_finalizer(void *obj, n00b_finalizer_t fn, void *user_data)
     n00b_runtime_t *rt = n00b_get_runtime();
     assert(rt);
 
-    // Use the same raw header key that the GC stores in its memos dict.
-    // For OOB arenas, this is the n00b_oob_hdr_t* cast to n00b_inline_hdr_t*.
-    // For inline-only arenas, it's the actual inline header.
+    // Primary storage: write the finalizer directly into the
+    // allocation's out-of-band record (when one exists). The OOB
+    // record is the authoritative dynamic metadata and not on the
+    // marshal path, so it's the safe place to attach runtime state
+    // like this. n00b_run_and_remove_finalizers does a single
+    // pointer dereference to read it back — O(1), no global walk.
+    //
+    // Inline-only allocations deliberately stay on the fallback
+    // path; the inline header doubles as the marshal payload and
+    // must stay tight.
     n00b_alloc_info_t ainfo = n00b_find_alloc_info(obj);
-    assert(n00b_alloc_info_is_heap(ainfo));
+    if (ainfo.kind == n00b_alloc_oob) {
+        ainfo.hdr.oob->finalizer      = fn;
+        ainfo.hdr.oob->finalizer_user = user_data;
+        return;
+    }
 
-    n00b_inline_hdr_t *hdr = (ainfo.kind == n00b_alloc_oob) ? (n00b_inline_hdr_t *)ainfo.hdr.oob
-                                                            : ainfo.hdr.in_line;
-
+    // Fallback: allocations from pools without metadata records
+    // (e.g. the hidden system_pool, which is intentionally minimal)
+    // register in the global list keyed on the user pointer. Slower
+    // O(N) lookup, but rare — system_pool allocations are GC infra,
+    // not application data.
     n00b_allocator_t      *sp   = (n00b_allocator_t *)&rt->system_pool;
     n00b_finalizer_info_t *info = n00b_alloc_with_opts(n00b_finalizer_info_t, &(n00b_alloc_opts_t){.allocator = sp});
 
     *info = (n00b_finalizer_info_t){
         .funcptr    = fn,
-        .alloc_info = hdr,
+        .key        = obj,
+        .alloc_info = nullptr,
         .user_ptr   = user_data,
     };
 
@@ -419,28 +519,43 @@ n00b_run_and_remove_finalizers(void *ptr)
     }
 
     n00b_runtime_t *rt = n00b_get_runtime();
-    if (!rt || !rt->finalizers.data) {
+    if (!rt) {
         goto type_cleanup;
     }
 
-    // Use the same raw header lookup as n00b_add_finalizer.
-    n00b_alloc_info_t ainfo = n00b_find_alloc_info(ptr);
-    if (!n00b_alloc_info_is_heap(ainfo)) {
-        goto type_cleanup;
-    }
-
+    // Fast path: read the finalizer slot from the allocation's
+    // out-of-band record. Clear the slot before invoking so a
+    // finalizer that frees other memory cannot trigger a recursive
+    // run against the same allocation. OOB-bearing allocations
+    // cannot ALSO have a global list entry (n00b_add_finalizer
+    // chooses one path or the other), so this path is complete.
     {
-        n00b_inline_hdr_t *hdr = (ainfo.kind == n00b_alloc_oob)
-                                   ? (n00b_inline_hdr_t *)ainfo.hdr.oob
-                                   : ainfo.hdr.in_line;
+        n00b_alloc_info_t ainfo = n00b_find_alloc_info(ptr);
+        if (ainfo.kind == n00b_alloc_oob) {
+            n00b_finalizer_t fn           = ainfo.hdr.oob->finalizer;
+            void            *user         = ainfo.hdr.oob->finalizer_user;
+            ainfo.hdr.oob->finalizer      = nullptr;
+            ainfo.hdr.oob->finalizer_user = nullptr;
+            if (fn) {
+                fn(user);
+            }
+            goto type_cleanup;
+        }
+    }
 
+    // Fallback: walk the global list for allocations from pools
+    // without metadata records (system_pool). Match by user pointer.
+    if (!rt->finalizers.data) {
+        goto type_cleanup;
+    }
+    {
         // Walk backwards for safe removal via n00b_list_delete.
         size_t len = n00b_list_len(rt->finalizers);
 
         for (size_t i = len; i > 0; i--) {
             n00b_finalizer_info_t *entry = n00b_list_get(rt->finalizers, i - 1);
 
-            if (entry->alloc_info == hdr) {
+            if (entry->key == ptr) {
                 entry->funcptr(entry->user_ptr);
                 (void)n00b_list_delete(rt->finalizers, i - 1);
                 n00b_free(entry);

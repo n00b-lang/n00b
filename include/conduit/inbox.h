@@ -22,6 +22,7 @@
 #pragma once
 
 #include "conduit/message.h"
+#include "core/alloc.h"
 #include "core/atomic.h"
 #include "core/condition.h"
 
@@ -217,6 +218,14 @@ n00b_conduit_sys_queue_count(n00b_conduit_sys_queue_t *q)
     /* Public consumer entry point. Drains any DROP_OLDEST credits    */                       \
     /* deferred by producer-side push before returning a real         */                       \
     /* message. Single-consumer; do not call from multiple threads.    */                      \
+    /*                                                                  */                     \
+    /* Each discarded slot is passed through n00b_free so that any      */                     \
+    /* finalizer the producer registered on the message (for example   */                     \
+    /* one that frees a payload buffer the msg points at) runs and the */                     \
+    /* slot returns to its allocator. Without this the DROP_OLDEST     */                     \
+    /* drain silently leaked both the msg and anything reachable only  */                     \
+    /* through it — the producer never sees the dropped slot, so there */                     \
+    /* is no other place this cleanup can happen.                      */                     \
     static inline n00b_conduit_message_t(T) *                                                  \
     _N00B_INBOX_FN(pop, T)(n00b_conduit_inbox_t(T) *inbox)                                     \
     {                                                                                          \
@@ -230,6 +239,7 @@ n00b_conduit_sys_queue_count(n00b_conduit_sys_queue_t *q)
                 break;                                                                         \
             }                                                                                  \
             n00b_atomic_add(&inbox->drop_credits, (uint32_t)-1);                               \
+            n00b_free(discard);                                                                \
         }                                                                                      \
         return _N00B_INBOX_FN(pop_raw, T)(inbox);                                              \
     }                                                                                          \

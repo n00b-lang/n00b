@@ -54,6 +54,22 @@
 extern void n00b_collect(n00b_arena_t *arena);
 
 /**
+ * @brief Stop-the-world GC pass with leak-detection diagnostics
+ *        enabled.
+ *
+ * Runs the normal collection cycle with @c rt->debug_leak_detect
+ * temporarily set; any alive allocation in a metadata-bearing
+ * pool whose @c gc_epoch is still stale after the mark phase is
+ * a leak — the routine prints its @c file_name + @c tinfo +
+ * @c alloc_len on stderr before returning the slot to its pool.
+ *
+ * Useful as an on-demand debug knob (e.g. wired into a daemon's
+ * periodic health tick) to pinpoint the origin of pool
+ * allocations that never get freed.
+ */
+extern void n00b_debug_find_leaks(void);
+
+/**
  * @brief Register a memory range as a GC root.
  *
  * The collector will scan @p num_words pointer-sized words starting
@@ -191,6 +207,12 @@ typedef struct {
     n00b_pool_t                       work_pool;
     n00b_list_t(n00b_gc_wl_item_t *)  worklist;
     n00b_dict_untyped_t               memos;
+    /* The runtime's gc_current_epoch value snapshotted at
+     * collection start. The mark phase stamps this onto every
+     * metadata-bearing alloc it reaches via the OOB record's
+     * gc_epoch field; the post-mark sweep compares it back to
+     * detect leaks (alloc still alive with a stale epoch). */
+    uint64_t                          current_epoch;
 } n00b_collect_t;
 
 // ============================================================================
