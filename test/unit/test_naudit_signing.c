@@ -450,18 +450,20 @@ make_signing_project(const char *suffix)
                "@extensions\n"
                "    c: .c, .h\n"
                "\n"
+               "@filter_def is_null_keyword\n"
+               "    expr: arg.text_equals(\"NULL\")\n"
+               "    description: Matches the literal identifier `NULL`.\n"
+               "\n"
                "@rule n00b.s2_1.null\n"
                "@title NULL -> nullptr\n"
                "@section section 2.1\n"
                "@language c\n"
-               "@violation_nt n00b_audit_v_null\n"
+               "@violation_nt provided_identifier\n"
+               "@filter is_null_keyword\n"
                "@rationale C23 has nullptr.\n"
                "@bad int *p = NULL;\n"
                "@good int *p = nullptr;\n"
-               "@guidance Replace NULL with nullptr.\n"
-               "\n"
-               "<n00b_audit_v_null> ::= %\"NULL\"\n"
-               "<provided_identifier> ::= <n00b_audit_v_null>\n");
+               "@guidance Replace NULL with nullptr.\n");
 
     /* fixture_null.c — same body as the baseline test. */
     char fix_target[2200];

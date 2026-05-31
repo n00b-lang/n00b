@@ -11,6 +11,7 @@
 #include "core/runtime.h"
 #include "core/type_info.h"
 #include "core/data_lock.h"
+#include "util/assert.h"
 
 #ifndef N00B_METADATA_START_ENTRIES
 #define N00B_METADATA_START_ENTRIES 1 << 12
@@ -59,6 +60,8 @@ n00b_allocator_scope_exit(n00b_allocator_scope_t *scope)
 static inline void
 n00b_alloc_add_inline_header(n00b_inline_hdr_t **hdrp,
                              size_t              alloc_len,
+                             uint32_t            ptr_words,
+                             bool                ptr_words_known,
                              uint64_t            type_hash,
                              bool                is_array,
                              bool                no_scan,
@@ -72,6 +75,8 @@ n00b_alloc_add_inline_header(n00b_inline_hdr_t **hdrp,
         .guard           = n00b_gc_guard,
         .tinfo           = type_hash,
         .alloc_len       = alloc_len,
+        .ptr_words       = ptr_words,
+        .ptr_words_known = ptr_words_known,
         .is_array        = is_array,
         .no_scan         = no_scan,
         .mem_debug       = mem_debug,
@@ -104,6 +109,28 @@ _n00b_alloc_raw(size_t             n,
         n00b_thread_checkin();
     }
 
+    /* D-049: upgrade a DEFAULT-scanned typed allocation to a precise
+     * CALLBACK scan when a link-time GC-map descriptor is registered for
+     * its type. Only when the caller specified no scan policy of its own
+     * (DEFAULT + no scan_cb) and the allocator carries OOB metadata —
+     * CALLBACK needs the metadata path to survive compaction (see the
+     * assert below); allocators without it keep the conservative DEFAULT
+     * scan, which is correct for the GC and only those metadata-backed
+     * objects are ever marshaled. The descriptor's element count is
+     * derived from the allocation length by n00b_gc_scan_cb_type_layout,
+     * so one shared per-type descriptor serves both n (=1) and arrays. */
+    if (opts->scan_kind == N00B_GC_SCAN_KIND_DEFAULT
+        && opts->scan_cb == nullptr
+        && type_hash != 0
+        && opts->allocator->metadata_pool != nullptr) {
+        const n00b_gc_struct_layout_t *layout = n00b_gc_type_map_lookup(type_hash);
+        if (layout != nullptr) {
+            opts->scan_kind = N00B_GC_SCAN_KIND_CALLBACK;
+            opts->scan_cb   = n00b_gc_scan_cb_type_layout;
+            opts->scan_user = (void *)layout;
+        }
+    }
+
     /* Map scan_kind == NONE onto the legacy no_scan switch so the GC's
      * worklist add-path (which checks no_scan) skips scanning this
      * allocation. */
@@ -120,6 +147,10 @@ _n00b_alloc_raw(size_t             n,
     }
 
     uint64_t request  = n * sz;
+    uint64_t user_words = request / sizeof(void *);
+    n00b_require(user_words <= UINT32_MAX,
+                 "allocation logical pointer words exceed metadata capacity");
+    uint32_t ptr_words = (uint32_t)user_words;
     bool     is_array = n > 1;
 
     if (opts->allocator->add_inline_header) {
@@ -141,6 +172,8 @@ _n00b_alloc_raw(size_t             n,
 
         n00b_alloc_add_inline_header((n00b_inline_hdr_t **)&r,
                                      request,
+                                     ptr_words,
+                                     true,
                                      type_hash,
                                      n > 1,
                                      opts->no_scan,
@@ -156,6 +189,8 @@ _n00b_alloc_raw(size_t             n,
             .user_ptr        = r,
             .tinfo           = type_hash,
             .alloc_len       = request,
+            .ptr_words       = ptr_words,
+            .ptr_words_known = true,
             .is_array        = n > 1,
             .no_scan         = opts->no_scan,
             .mem_debug       = opts->mem_debug,

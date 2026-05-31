@@ -43,7 +43,15 @@
 
 @filter_def is_legacy_alignment_identifier
     expr: arg.text_equals("__alignof__") or arg.text_equals("__alignas__")
-    description: Matches __alignof__ / __alignas__. _Static_assert / __thread covered separately if needed.
+    description: Matches __alignof__ / __alignas__ (lexed as identifiers).
+
+@filter_def is_legacy_static_assert_keyword
+    expr: arg.text_equals("_Static_assert")
+    description: Matches the legacy C11 `_Static_assert` spelling (a keyword).
+
+@filter_def is_legacy_thread_keyword
+    expr: arg.text_equals("__thread")
+    description: Matches the legacy GCC `__thread` storage-class spelling (a keyword).
 
 @filter_def is_file_open_call
     expr: arg.text_equals("n00b_file_open")
@@ -201,26 +209,58 @@
 # -----------------------------------------------------------------
 # Rule 7 -- WP-004 -- legacy spellings (section 13)
 # -----------------------------------------------------------------
+# The four legacy spellings live in three distinct base-grammar NTs,
+# and a rule carries a single @violation_nt, so this section is split
+# into three filter-based rules (WP-016): `_Static_assert` is matched
+# via the keyword NT <_kw_kw_static_assert>; `__thread` via the
+# storage-class keyword NT <_kw_kw_storage_class>; and `__alignof__` /
+# `__alignas__`, which c_ncc.bnf lexes as ordinary identifiers, via
+# <provided_identifier>. (Pre-WP-016 a single grafted synthetic NT
+# covered all four; that path is gone for known languages.)
+
 @rule n00b.s13.legacy_spellings
-@title legacy spellings -> C23 spellings
+@title _Static_assert -> static_assert (C23)
+@section section 13
+@language c
+@violation_nt _kw_kw_static_assert
+@filter is_legacy_static_assert_keyword
+@rationale C23 standardized `static_assert` as the spelling of the
+    `_Static_assert` keyword. The legacy spelling works but is a
+    pre-C23-ism; n00b targets C23 + ncc so the modern spelling is the
+    rule.
+@bad _Static_assert(sizeof(int) == 4, "int must be 32 bits");
+@good static_assert(sizeof(int) == 4, "int must be 32 bits");
+@guidance Replace _Static_assert with static_assert.
+
+@rule n00b.s13.legacy_thread
+@title __thread -> thread_local (C23)
+@section section 13
+@language c
+@violation_nt _kw_kw_storage_class
+@filter is_legacy_thread_keyword
+@rationale C23 standardized `thread_local` as the spelling of the
+    thread-storage-duration specifier. The GCC `__thread` spelling
+    works but is a GCC-ism; n00b targets C23 + ncc so the modern
+    spelling is the rule.
+@bad __thread int per_thread_counter;
+@good thread_local int per_thread_counter;
+@guidance Replace __thread with thread_local.
+
+@rule n00b.s13.legacy_alignment
+@title __alignof__ / __alignas__ -> alignof / alignas (C23)
 @section section 13
 @language c
 @violation_nt provided_identifier
 @filter is_legacy_alignment_identifier
-@rationale C23 standardized the modern spellings of these identifiers:
-    `static_assert` (replaces `_Static_assert`), `thread_local` (replaces
-    `__thread`), `alignof` (replaces `__alignof__`), `alignas` (replaces
-    `__alignas__`). The legacy spellings work but are GCC-isms; n00b
-    targets C23 + ncc so the modern spellings are the rule.
-@bad _Static_assert(sizeof(int) == 4, "int must be 32 bits");
-    __thread int per_thread_counter;
-    size_t a = __alignof__(double);
+@rationale C23 standardized `alignof` / `alignas` as the spellings of
+    the alignment operators. The GCC `__alignof__` / `__alignas__`
+    spellings work but are GCC-isms; n00b targets C23 + ncc so the
+    modern spellings are the rule.
+@bad size_t a = __alignof__(double);
     __alignas__(16) char buf[64];
-@good static_assert(sizeof(int) == 4, "int must be 32 bits");
-    thread_local int per_thread_counter;
-    size_t a = alignof(double);
+@good size_t a = alignof(double);
     alignas(16) char buf[64];
-@guidance Replace _Static_assert / __thread / __alignof__ / __alignas__ with their C23 spellings static_assert / thread_local / alignof / alignas.
+@guidance Replace __alignof__ / __alignas__ with alignof / alignas.
 
 # -----------------------------------------------------------------
 # Rule 8 -- WP-012 -- path canonicalization on n00b_file_open

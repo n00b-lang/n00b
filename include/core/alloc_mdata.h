@@ -18,7 +18,8 @@ typedef uint64_t n00b_alloc_type_info_t;
 #define n00b_core_alloc_info_fields                                                            \
     n00b_alloc_type_info_t tinfo;                                                              \
     uint32_t               alloc_len;                                                          \
-    uint32_t               ptr_words       : 20;                                               \
+    uint32_t               ptr_words;                                                          \
+    uint32_t               ptr_words_known : 1;                                                \
     uint32_t               is_array        : 1;                                                \
     uint32_t               no_scan         : 1;                                                \
     uint32_t               mem_debug       : 1;                                                \

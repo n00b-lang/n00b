@@ -1483,6 +1483,10 @@ n00b_earley_parser_t *
 n00b_earley_new(n00b_grammar_t *g)
 {
     n00b_grammar_finalize(g);
+    // finalize computes first-sets/left-corners (PWZ needs them); the
+    // Earley-only LR0 tables are not built there. Derive them here,
+    // lazily, the first time Earley runs on this grammar.
+    n00b_grammar_compute_earley_analysis(g);
 
     n00b_earley_parser_t *p = n00b_alloc(n00b_earley_parser_t);
     memset(p, 0, sizeof(n00b_earley_parser_t));

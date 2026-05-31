@@ -49,8 +49,14 @@
 #include "naudit/guidance.h"
 #include "naudit/rule.h"
 
+/*
+ * The canonical rule set lives in the n00b-audit repo itself
+ * (`<repo>/audit-rules.bnf`), reached relative to the baked fixture
+ * dir — no longer the default jj workspace path (which coupled the test
+ * to a sibling workspace's working copy).
+ */
 #define N00B_AUDIT_REFERENCE_GUIDANCE_PATH \
-    "/Users/viega/n00b/audit-rules.bnf"
+    N00B_AUDIT_TEST_FIXTURE_DIR "/../../../audit-rules.bnf"
 
 /*
  * Compare a libn00b string against a C string. Mirrors the helper
@@ -115,9 +121,15 @@ main(int argc, char *argv[])
     assert(n00b_string_eq_cstr(rule->id, "n00b.s2_1.null"));
     printf("  [PASS] rules[0].id == \"n00b.s2_1.null\"\n");
 
-    assert(!!rule->bnf_fragment);
-    assert(rule->bnf_fragment->u8_bytes > 0);
-    printf("  [PASS] rules[0].bnf_fragment non-empty\n");
+    // WP-016: `n00b.s2_1.null` is a filter-based rule — it queries a base
+    // grammar NT via `@violation_nt` + `@filter` rather than appending a
+    // synthetic BNF fragment, so `bnf_fragment` is legitimately null and
+    // `filter_name` carries the predicate name. (Pre-WP-016 this rule shipped
+    // a grafted BNF fragment; that contract is gone — see DECISIONS D-033.)
+    assert(!rule->bnf_fragment);
+    assert(!!rule->filter_name);
+    assert(rule->filter_name->u8_bytes > 0);
+    printf("  [PASS] rules[0] is filter-based (null bnf_fragment, filter set)\n");
 
     assert(!!rule->violation_nt);
     assert(rule->violation_nt->u8_bytes > 0);

@@ -8,6 +8,11 @@ The default collector behavior remains conservative. Exact stack maps and static
 object descriptors are opt-in runtime metadata that make generated code more
 precise without removing the conservative fallback path.
 
+For heap allocation type maps keyed by `typehash(T *)`, including the
+post-link `n00b-gcmap-index` command, see
+[`docs/gc_type_maps.md`](gc_type_maps.md). This page covers stack roots and
+static object descriptors.
+
 ## Root Sources
 
 The collector scans these roots for every collection:

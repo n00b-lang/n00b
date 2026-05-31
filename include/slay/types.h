@@ -109,15 +109,34 @@ typedef enum {
 // Match item
 // ============================================================================
 
-/** @brief A grammar match item (tagged union for rule RHS elements). */
+/** @brief A grammar match item (tagged union for rule RHS elements).
+ *
+ * WP-020 (D-039): the payload is split into TWO anonymous unions — a
+ * pointer union (`set_items`/`group`) and a non-pointer union
+ * (`nt_id`/`terminal_id`/`char_class`) — instead of one union overlapping
+ * ints and pointers. ncc generates a precise GC pointer map per struct by
+ * computing which fields are pointers (struct-layout offsets); a single
+ * union overlapping an int and a pointer forces that word to be marked a
+ * pointer unconditionally, so an int payload holding a pointer-shaped
+ * value (e.g. `nt_id`/`terminal_id`, or a packed `{min,max}` like
+ * `0x100000000`) is scanned as a pointer — which made `n00b_grammar_t`
+ * unmarshalable. Splitting the union gives the pointer payload its own
+ * dedicated word, so the generated map marks exactly that word and never
+ * the int payloads. Field names are unchanged (kind-dispatched access and
+ * designated-initializer construction both work regardless of declaration
+ * order); the unused union is zero-filled by designated init.
+ */
 typedef struct n00b_match_t {
+    union {
+        void *set_items;
+        void *group;
+    };
     n00b_match_kind_t kind;
+    // Non-pointer payloads (NT / TERMINAL / CLASS). Never a pointer.
     union {
         int64_t           nt_id;
         int64_t           terminal_id;
         n00b_char_class_t char_class;
-        void             *set_items;
-        void             *group;
     };
 } n00b_match_t;
 

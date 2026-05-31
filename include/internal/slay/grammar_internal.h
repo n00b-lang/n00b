@@ -113,6 +113,18 @@ struct n00b_grammar_t {
     uint32_t                       max_penalty;
     bool                           error_rules;
     bool                           finalized;
+    // Earley-only LR0 tables (items/states/predict) are computed lazily
+    // by n00b_grammar_compute_earley_analysis() the first time Earley is
+    // invoked on this grammar (never by n00b_grammar_finalize, which does
+    // compute the first-sets/left-corners PWZ prunes with). This guards
+    // that one-time LR0 computation.
+    //
+    // FOOTGUN: this flag is independent of `finalized` and is NOT reset on
+    // grammar mutation. Grammars here are build-then-freeze, so it never
+    // matters today; but any future path that mutates a grammar after the
+    // LR0 tables exist MUST clear this (and re-run the analysis) or Earley
+    // will use stale tables.
+    bool                           earley_analysis_done;
     bool                           has_groups;
     bool                           hide_penalty_rewrites;
     bool                           hide_groups;

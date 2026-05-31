@@ -2,36 +2,42 @@
  * WP-018 Phase 1 — static-image grammar caching acceptance tests.
  *
  * Validates that a parsed `n00b_grammar_t` can be baked into emitted C
- * source at build time and reconstructed at runtime, producing a grammar
+ * source at build time and unmarshaled at runtime, producing a grammar
  * structurally identical to a fresh `n00b_bnf_load` parse — without the
- * ~1.5s BNF-metagrammar parse on every program start.
+ * BNF-metagrammar parse on every program start.
  *
  *   Test 1 — bake-tool round-trip: spawn `naudit-grammar-bake` on a
- *            small fixture .bnf, confirm it emits the reconstruction
- *            source, and compile that source standalone with ncc.
+ *            small fixture .bnf and confirm it emits marshal-backed source
+ *            without the removed replay-builder API.
+ *   Test 1b — static-init-helper grammar path: feed the helper a
+ *            `container_kind grammar` request and confirm it emits the
+ *            same marshal-backed source shape.
  *   Test 2 — grammar-structure equivalence: the build-time-baked
- *            c_ncc image (linked in) reconstructs a grammar whose NT /
+ *            c_ncc image (linked in) materializes a grammar whose NT /
  *            rule / match structure matches a fresh runtime parse.
  *   Test 3 — c_ncc round-trip on real C: parse fixture_null.c with both
- *            the static-image grammar and a fresh runtime grammar; both
- *            succeed and yield structurally-identical parse trees.
- *   Test 4 — perf (informational): build-time bake < 30s; runtime
- *            materialization from the image << a fresh runtime parse.
+ *            the static-image grammar and the same fresh runtime grammar;
+ *            both succeed and yield structurally-identical parse trees.
  *
- * Test files use the n00b-api-guidelines relaxed test convention (libc
- * <assert.h>/<stdio.h> for harness scaffolding), per the
- * test_naudit_module.c precedent.
+ * The c_ncc fresh parse is intentionally shared between Test 2 and Test 3:
+ * the build already bakes c_ncc.bnf once as the `c_grammar_image`
+ * custom_target, and Test 1 already exercises the bake-tool subprocess
+ * contract. Re-baking/re-parsing the full C grammar inside this correctness
+ * test added tens of seconds without covering a distinct behavior.
+ *
+ * The subprocess helpers below are a narrow POSIX test harness boundary for
+ * build tools whose contract is argv/stdin/stdout. File contents are still
+ * read and written through n00b_file_*.
  */
 
-#include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/wait.h>
-#include <time.h>
 #include <unistd.h>
 
 #include "n00b.h"
+#include "core/file.h"
 #include "core/runtime.h"
 #include "core/static_image.h"
 #include "slay/grammar.h"
@@ -43,6 +49,7 @@
 #include "parsers/scanner.h"
 #include "parsers/token_stream.h"
 #include "text/strings/string_ops.h"
+#include "util/assert.h"
 #include "naudit/tokenizer_registry.h"
 
 #ifndef NAUDIT_GRAMMAR_BAKE_PATH
@@ -60,15 +67,32 @@
 // name (see the meson `c_grammar_image` custom_target).
 #define C_NCC_IMAGE_NAME r"c_ncc"
 
+#define CHECK(expr)                                                            \
+    do {                                                                       \
+        n00b_require((expr), "test check failed: " #expr);                     \
+    } while (0)
+
 // Test convenience: unwrap the `n00b_option_t(n00b_grammar_t *)` returned
 // by `n00b_static_grammar_lookup` to a bare pointer (nullptr when the
-// name is unregistered) so the assertions below can keep the
-// `img && ...` idiom.
+// name is unregistered).
 static n00b_grammar_t *
 lookup_static_grammar(n00b_string_t *name)
 {
     auto opt = n00b_static_grammar_lookup(name);
     return n00b_option_is_set(opt) ? n00b_option_get(opt) : nullptr;
+}
+
+static void
+assert_no_replay_helpers(n00b_string_t *gen)
+{
+    CHECK(!n00b_unicode_str_contains(gen, r"n00b_grammar_image_begin",
+                                     .normalize = false));
+    CHECK(!n00b_unicode_str_contains(gen, r"n00b_grammar_image_add_rule",
+                                     .normalize = false));
+    CHECK(!n00b_unicode_str_contains(gen, r"n00b_grammar_image_group",
+                                     .normalize = false));
+    CHECK(!n00b_unicode_str_contains(gen, r"n00b_grammar_image_finish",
+                                     .normalize = false));
 }
 
 // A tiny self-contained grammar used by Test 1. Char-level (default
@@ -83,47 +107,97 @@ static const char *k_tiny_bnf =
 // helpers
 // ---------------------------------------------------------------------------
 
-static double
-seconds_since(struct timespec start)
-{
-    struct timespec now;
-    clock_gettime(CLOCK_MONOTONIC, &now);
-    return (double)(now.tv_sec - start.tv_sec)
-         + (double)(now.tv_nsec - start.tv_nsec) / 1e9;
-}
-
+// D-056 C-ABI test harness boundary. The bake/helper programs are external
+// executables whose contracts are POSIX argv/stdin/stdout and NUL-terminated
+// file paths. Keep char* construction, snprintf, fork/execv/waitpid, and
+// freopen confined to this helper block; the test assertions and file
+// contents stay on n00b APIs.
 static char *
-write_temp(const char *suffix, const char *contents)
+write_temp(const char *suffix, n00b_string_t *contents)
 {
-    char *path = malloc(256);
+    char *path = n00b_alloc_array(char, 256);
     snprintf(path, 256, "/tmp/naudit_wp018_%d_%s", (int)getpid(), suffix);
-    FILE *f = fopen(path, "wb");
-    assert(f);
-    if (contents) {
-        fwrite(contents, 1, strlen(contents), f);
+    auto fr = n00b_file_open(n00b_string_from_cstr(path),
+                             .mode = N00B_FILE_W,
+                             .kind = N00B_FILE_KIND_STREAM);
+    CHECK(n00b_result_is_ok(fr));
+    n00b_file_t *f = n00b_result_get(fr);
+    if (contents != nullptr) {
+        auto wr = n00b_file_write(f, contents->data, (size_t)contents->u8_bytes);
+        CHECK(n00b_result_is_ok(wr));
+        CHECK(n00b_result_get(wr) == (size_t)contents->u8_bytes);
     }
-    fclose(f);
+    n00b_file_close(f);
     return path;
 }
 
 static char *
-read_whole(const char *path, long *len_out)
+write_helper_request(const char *bnf_path)
 {
-    FILE *f = fopen(path, "rb");
-    if (!f) {
-        return NULL;
+    char *request = n00b_alloc_array(char, 1024);
+    int   request_len = snprintf(request, 1024,
+                                 "NCC_STATIC_INIT 1\n"
+                                 "container_kind grammar\n"
+                                 "bnf_path %s\n"
+                                 "start_nt expr\n"
+                                 "prefix __naudit_helper_tiny_grammar\n"
+                                 "end\n",
+                                 bnf_path);
+    CHECK(request_len > 0 && request_len < 1024);
+    return write_temp("helper_request.txt",
+                      n00b_string_from_raw(request, request_len));
+}
+
+static n00b_buffer_t *
+read_whole_buffer(const char *path)
+{
+    auto fr = n00b_file_open(n00b_string_from_cstr(path),
+                             .kind = N00B_FILE_KIND_MMAP);
+    if (n00b_result_is_err(fr)) {
+        return nullptr;
     }
-    fseek(f, 0, SEEK_END);
-    long len = ftell(f);
-    rewind(f);
-    char *buf = malloc((size_t)len + 1);
-    size_t got = fread(buf, 1, (size_t)len, f);
-    fclose(f);
-    buf[got] = '\0';
-    if (len_out) {
-        *len_out = (long)got;
+    n00b_file_t *f  = n00b_result_get(fr);
+    auto         br = n00b_file_as_buffer(f);
+    if (n00b_result_is_err(br)) {
+        n00b_file_close(f);
+        return nullptr;
     }
+    n00b_buffer_t *buf = n00b_buffer_copy(n00b_result_get(br));
+    n00b_file_close(f);
     return buf;
+}
+
+static n00b_string_t *
+read_whole_text(const char *path, long *len_out)
+{
+    n00b_buffer_t *buf = read_whole_buffer(path);
+    if (buf == nullptr) {
+        return nullptr;
+    }
+    if (len_out != nullptr) {
+        *len_out = (long)n00b_buffer_len(buf);
+    }
+    return n00b_buffer_to_string(buf);
+}
+
+static char *
+sibling_tool_path(const char *path, const char *name)
+{
+    const char *slash = strrchr(path, '/');
+    if (slash == nullptr) {
+        size_t name_len = strlen(name);
+        char  *out      = n00b_alloc_array(char, name_len + 1);
+        memcpy(out, name, name_len + 1);
+        return out;
+    }
+
+    size_t dir_len = (size_t)(slash - path + 1);
+    size_t name_len = strlen(name);
+    char  *out = n00b_alloc_array(char, dir_len + name_len + 1);
+    CHECK(out != nullptr);
+    memcpy(out, path, dir_len);
+    memcpy(out + dir_len, name, name_len + 1);
+    return out;
 }
 
 static int
@@ -139,6 +213,27 @@ run_argv(char *const argv[])
     return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
 }
 
+static int
+run_argv_with_io(char *const argv[], const char *stdin_path,
+                 const char *stdout_path)
+{
+    pid_t pid = fork();
+    if (pid == 0) {
+        if (stdin_path != nullptr && freopen(stdin_path, "rb", stdin) == nullptr) {
+            _exit(126);
+        }
+        if (stdout_path != nullptr && freopen(stdout_path, "wb", stdout) == nullptr) {
+            _exit(126);
+        }
+        execv(argv[0], argv);
+        _exit(127);
+    }
+    int status = 0;
+    waitpid(pid, &status, 0);
+    return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+}
+// End D-056 C-ABI test harness boundary.
+
 // Canonicalize an NT node name for structural comparison. Synthetic
 // EBNF group / anonymous NTs are named `$$group_<N>` / `$$bnf_anon_<N>`
 // where <N> is a *global* counter that advances across every grammar
@@ -149,14 +244,13 @@ run_argv(char *const argv[])
 static n00b_string_t *
 canon_name(n00b_string_t *name)
 {
-    if (!name || !name->data) {
+    if (name == nullptr || name->data == nullptr) {
         return n00b_string_from_cstr("?");
     }
-    const char *d = name->data;
-    if (strncmp(d, "$$group_", 8) == 0) {
+    if (n00b_unicode_str_starts_with(name, r"$$group_")) {
         return n00b_string_from_cstr("$$group");
     }
-    if (strncmp(d, "$$bnf_anon_", 11) == 0) {
+    if (n00b_unicode_str_starts_with(name, r"$$bnf_anon_")) {
         return n00b_string_from_cstr("$$bnf_anon");
     }
     return name;
@@ -169,7 +263,7 @@ canon_name(n00b_string_t *name)
 static void
 tree_sig(n00b_parse_tree_t *t, n00b_list_t(n00b_string_t *) *out)
 {
-    if (!t) {
+    if (t == nullptr) {
         n00b_list_push(*out, n00b_string_from_cstr("<nil>"));
         return;
     }
@@ -204,13 +298,11 @@ tree_signature(n00b_parse_tree_t *t)
 static n00b_grammar_t *
 fresh_c_grammar(void)
 {
-    long  len = 0;
-    char *src = read_whole(NAUDIT_C_NCC_BNF_PATH, &len);
-    assert(src);
-    n00b_string_t  *text  = n00b_string_from_raw(src, (int64_t)len);
-    n00b_grammar_t *g     = n00b_grammar_new();
-    bool            ok    = n00b_bnf_load(text, n00b_string_from_cstr("translation_unit"), g);
-    assert(ok);
+    n00b_string_t  *text = read_whole_text(NAUDIT_C_NCC_BNF_PATH, nullptr);
+    CHECK(text != nullptr);
+    n00b_grammar_t *g  = n00b_grammar_new();
+    bool            ok = n00b_bnf_load(text, n00b_string_from_cstr("translation_unit"), g);
+    CHECK(ok);
     n00b_grammar_finalize(g);
     return g;
 }
@@ -221,14 +313,12 @@ fresh_c_grammar(void)
 static n00b_parse_tree_t *
 parse_c_file(n00b_grammar_t *g, const char *path)
 {
-    long  len = 0;
-    char *src = read_whole(path, &len);
-    assert(src);
-    n00b_buffer_t *buf = n00b_buffer_from_bytes(src, (int64_t)len);
+    n00b_buffer_t *buf = read_whole_buffer(path);
+    CHECK(buf != nullptr);
 
     n00b_naudit_tokenizer_info_t *tok =
         n00b_naudit_lookup_tokenizer(n00b_string_from_cstr("c"));
-    assert(tok && tok->scan_cb && tok->state_new);
+    CHECK(tok != nullptr && tok->scan_cb != nullptr && tok->state_new != nullptr);
 
     void *st = tok->state_new();
     n00b_scanner_t *sc = n00b_scanner_new(buf, tok->scan_cb, g,
@@ -238,8 +328,8 @@ parse_c_file(n00b_grammar_t *g, const char *path)
 
     n00b_parse_result_t *pr = n00b_grammar_parse(g, ts,
                                                  N00B_PARSE_MODE_PWZ_ONLY);
-    if (!n00b_parse_result_ok(pr)) {
-        return NULL;
+    if (n00b_parse_result_ok(pr) == false) {
+        return nullptr;
     }
     return n00b_parse_result_tree(pr);
 }
@@ -251,8 +341,8 @@ parse_c_file(n00b_grammar_t *g, const char *path)
 static void
 test_bake_roundtrip(void)
 {
-    char *bnf_path = write_temp("tiny.bnf", k_tiny_bnf);
-    char *out_path = write_temp("tiny_image.c", NULL);
+    char *bnf_path = write_temp("tiny.bnf", n00b_string_from_cstr(k_tiny_bnf));
+    char *out_path = write_temp("tiny_image.c", nullptr);
 
     char *const argv[] = {
         (char *)NAUDIT_GRAMMAR_BAKE_PATH,
@@ -261,20 +351,25 @@ test_bake_roundtrip(void)
         out_path,
         (char *)"__naudit_tiny_grammar",
         (char *)"tiny",
-        NULL,
+        nullptr,
     };
     int rc = run_argv(argv);
-    assert(rc == 0 && "bake tool must exit 0 on a valid grammar");
+    CHECK(rc == 0);
 
     long  glen = 0;
-    char *gen  = read_whole(out_path, &glen);
-    assert(gen && glen > 0 && "bake tool must emit non-empty source");
-    assert(strstr(gen, "__naudit_tiny_grammar_build")
-           && "emitted source must define the build function");
-    assert(strstr(gen, "n00b_static_grammar_register")
-           && "emitted source must register the grammar");
-    assert(strstr(gen, "n00b_grammar_image_begin")
-           && "emitted source must call the reconstruction primitives");
+    n00b_string_t *gen = read_whole_text(out_path, &glen);
+    CHECK(gen != nullptr && glen > 0);
+    CHECK(n00b_unicode_str_contains(gen, r"__naudit_tiny_grammar_build",
+                                    .normalize = false));
+    CHECK(n00b_unicode_str_contains(gen, r"n00b_static_grammar_register",
+                                    .normalize = false));
+    CHECK(n00b_unicode_str_contains(gen, r"n00b_base64_decode",
+                                    .normalize = false));
+    CHECK(n00b_unicode_str_contains(gen, r"n00b_unmarshal_one",
+                                    .normalize = false));
+    CHECK(n00b_unicode_str_contains(gen, r"n00b_grammar_image_repair",
+                                    .normalize = false));
+    assert_no_replay_helpers(gen);
 
     // Compile-validity of emitted grammar-image source is covered by the
     // build itself: the meson `c_grammar_image` custom_target bakes
@@ -284,8 +379,43 @@ test_bake_roundtrip(void)
     // image here would be, and avoids depending on the full ncc
     // include/flag set inside the test process.
 
-    printf("  [PASS] Test 1: bake round-trip "
-           "(emitted source well-formed; compile covered by build link)\n");
+}
+
+// ---------------------------------------------------------------------------
+// Test 1b — n00b-static-init-helper grammar request path
+// ---------------------------------------------------------------------------
+
+static void
+test_static_init_helper_grammar_path(void)
+{
+    char *bnf_path = write_temp("helper_tiny.bnf",
+                                n00b_string_from_cstr(k_tiny_bnf));
+    char *out_path = write_temp("helper_image.c", nullptr);
+    char *req_path = write_helper_request(bnf_path);
+
+    char *helper_path = sibling_tool_path(NAUDIT_GRAMMAR_BAKE_PATH,
+                                          "n00b-static-init-helper");
+    char *const argv[] = { helper_path, nullptr };
+    int rc = run_argv_with_io(argv, req_path, out_path);
+    CHECK(rc == 0);
+
+    long  glen = 0;
+    n00b_string_t *gen = read_whole_text(out_path, &glen);
+    CHECK(gen != nullptr && glen > 0);
+    CHECK(n00b_unicode_str_contains(
+        gen,
+        r"NCC_STATIC_INIT_OK n00b_static_grammar_lookup(\"expr\")",
+        .normalize = false));
+    CHECK(n00b_unicode_str_contains(gen, r"__naudit_helper_tiny_grammar_build",
+                                    .normalize = false));
+    CHECK(n00b_unicode_str_contains(gen, r"n00b_base64_decode",
+                                    .normalize = false));
+    CHECK(n00b_unicode_str_contains(gen, r"n00b_unmarshal_one",
+                                    .normalize = false));
+    CHECK(n00b_unicode_str_contains(gen, r"n00b_grammar_image_repair",
+                                    .normalize = false));
+    assert_no_replay_helpers(gen);
+
 }
 
 // ---------------------------------------------------------------------------
@@ -293,32 +423,24 @@ test_bake_roundtrip(void)
 // ---------------------------------------------------------------------------
 
 static void
-test_grammar_structure_equivalence(void)
+test_grammar_structure_equivalence(n00b_grammar_t *img, n00b_grammar_t *fresh)
 {
-    n00b_grammar_t *img = lookup_static_grammar(C_NCC_IMAGE_NAME);
-    assert(img && "the build-time-baked c_ncc image must be registered");
+    CHECK(img != nullptr);
+    CHECK(fresh != nullptr);
 
-    n00b_grammar_t *fresh = fresh_c_grammar();
-
-    assert(img->nt_list.len == fresh->nt_list.len
-           && "NT count must match");
-    assert(img->rules.len == fresh->rules.len
-           && "rule count must match");
-    assert(img->default_start == fresh->default_start
-           && "start NT must match");
-    assert(img->next_literal_type_id == fresh->next_literal_type_id
-           && "literal-type count must match");
+    CHECK(img->nt_list.len == fresh->nt_list.len);
+    CHECK(img->rules.len == fresh->rules.len);
+    CHECK(img->default_start == fresh->default_start);
+    CHECK(img->next_literal_type_id == fresh->next_literal_type_id);
 
     // Per-rule contents shape must match id-for-id.
     for (size_t i = 0; i < fresh->rules.len; i++) {
         n00b_parse_rule_t *ri = &img->rules.data[i];
         n00b_parse_rule_t *rf = &fresh->rules.data[i];
-        assert(ri->nt_id == rf->nt_id && "rule NT id must match");
-        assert(ri->contents.len == rf->contents.len
-               && "rule item count must match");
+        CHECK(ri->nt_id == rf->nt_id);
+        CHECK(ri->contents.len == rf->contents.len);
         for (size_t j = 0; j < rf->contents.len; j++) {
-            assert(ri->contents.data[j].kind == rf->contents.data[j].kind
-                   && "match-item kind must match");
+            CHECK(ri->contents.data[j].kind == rf->contents.data[j].kind);
         }
     }
 
@@ -326,18 +448,12 @@ test_grammar_structure_equivalence(void)
     for (size_t i = 0; i < fresh->nt_list.len; i++) {
         n00b_nonterm_t *ni = &img->nt_list.data[i];
         n00b_nonterm_t *nf = &fresh->nt_list.data[i];
-        assert(ni->group_nt == nf->group_nt && "group_nt flag must match");
-        if (nf->name && ni->name) {
-            assert(nf->name->u8_bytes == ni->name->u8_bytes
-                   && memcmp(nf->name->data, ni->name->data,
-                             (size_t)nf->name->u8_bytes) == 0
-                   && "NT name must match");
+        CHECK(ni->group_nt == nf->group_nt);
+        if (nf->name != nullptr && ni->name != nullptr) {
+            CHECK(n00b_unicode_str_eq(nf->name, ni->name));
         }
     }
 
-    printf("  [PASS] Test 2: grammar-structure equivalence "
-           "(%zu NTs, %zu rules)\n",
-           (size_t)fresh->nt_list.len, (size_t)fresh->rules.len);
 }
 
 // ---------------------------------------------------------------------------
@@ -345,91 +461,27 @@ test_grammar_structure_equivalence(void)
 // ---------------------------------------------------------------------------
 
 static void
-test_c_ncc_real_parse(void)
+test_c_ncc_real_parse(n00b_grammar_t *img, n00b_grammar_t *fresh)
 {
-    n00b_grammar_t *img = lookup_static_grammar(C_NCC_IMAGE_NAME);
-    assert(img);
+    CHECK(img != nullptr);
+    CHECK(fresh != nullptr);
 
     n00b_parse_tree_t *t_img = parse_c_file(img, NAUDIT_C_FIXTURE_PATH);
-    assert(t_img && "static-image grammar must parse fixture_null.c");
+    CHECK(t_img != nullptr);
 
-    n00b_grammar_t    *fresh = fresh_c_grammar();
     n00b_parse_tree_t *t_fresh = parse_c_file(fresh, NAUDIT_C_FIXTURE_PATH);
-    assert(t_fresh && "fresh runtime grammar must parse fixture_null.c");
+    CHECK(t_fresh != nullptr);
 
     n00b_string_t *sig_img   = tree_signature(t_img);
     n00b_string_t *sig_fresh = tree_signature(t_fresh);
 
-    if (sig_img->u8_bytes != sig_fresh->u8_bytes
-        || memcmp(sig_img->data, sig_fresh->data,
-                  (size_t)sig_img->u8_bytes) != 0) {
-        fprintf(stderr, "[diag] sig_img  (%lld): %.400s\n",
-                (long long)sig_img->u8_bytes, sig_img->data);
-        fprintf(stderr, "[diag] sig_fresh(%lld): %.400s\n",
-                (long long)sig_fresh->u8_bytes, sig_fresh->data);
+    if (!n00b_unicode_str_eq(sig_img, sig_fresh)) {
+        CHECK(false);
     }
 
-    assert(sig_img->u8_bytes > 0 && "image parse tree must be non-empty");
-    assert(sig_img->u8_bytes == sig_fresh->u8_bytes
-           && memcmp(sig_img->data, sig_fresh->data,
-                     (size_t)sig_img->u8_bytes) == 0
-           && "image and fresh parse trees must be structurally identical");
+    CHECK(sig_img->u8_bytes > 0);
+    CHECK(n00b_unicode_str_eq(sig_img, sig_fresh));
 
-    printf("  [PASS] Test 3: c_ncc round-trip on fixture_null.c "
-           "(tree sig %lld bytes, identical)\n",
-           (long long)sig_img->u8_bytes);
-}
-
-// ---------------------------------------------------------------------------
-// Test 4 — perf (informational)
-// ---------------------------------------------------------------------------
-
-static void
-test_perf(void)
-{
-    // Build-time bake on c_ncc.bnf < 30s.
-    char *out_path = write_temp("c_image.c", NULL);
-    char *const argv[] = {
-        (char *)NAUDIT_GRAMMAR_BAKE_PATH,
-        (char *)NAUDIT_C_NCC_BNF_PATH,
-        (char *)"translation_unit",
-        out_path,
-        (char *)"__naudit_c_grammar_perf",
-        (char *)"c_ncc_perf",
-        NULL,
-    };
-    struct timespec t0;
-    clock_gettime(CLOCK_MONOTONIC, &t0);
-    int rc = run_argv(argv);
-    double bake_s = seconds_since(t0);
-    assert(rc == 0 && "bake on c_ncc.bnf must succeed");
-    printf("  [INFO] Test 4: bake c_ncc.bnf = %.2fs\n", bake_s);
-    if (bake_s >= 30.0) {
-        printf("  [WARN] Test 4: bake exceeded 30s target (%.2fs)\n", bake_s);
-    }
-
-    // Runtime materialization from the image vs a fresh runtime parse.
-    // (Use the perf-name image to avoid the cached lookup of Test 2/3.)
-    // n00b_static_grammar_lookup only knows build-time-registered names,
-    // so measure the image build function indirectly via the already
-    // build-linked image: first lookup forces materialization.
-    struct timespec t1;
-    clock_gettime(CLOCK_MONOTONIC, &t1);
-    n00b_grammar_t *img = lookup_static_grammar(C_NCC_IMAGE_NAME);
-    double load_s = seconds_since(t1);
-    assert(img);
-
-    struct timespec t2;
-    clock_gettime(CLOCK_MONOTONIC, &t2);
-    n00b_grammar_t *fresh = fresh_c_grammar();
-    double parse_s = seconds_since(t2);
-    assert(fresh);
-
-    printf("  [INFO] Test 4: image load = %.4fs, fresh runtime parse = "
-           "%.4fs (%.1fx faster)\n",
-           load_s, parse_s, parse_s > 0 ? parse_s / (load_s + 1e-9) : 0.0);
-
-    printf("  [PASS] Test 4: perf (informational)\n");
 }
 
 int
@@ -437,15 +489,14 @@ main(int argc, char *argv[])
 {
     n00b_init_simple(argc, argv);
 
-    fprintf(stderr, "[trace] start test 1\n");
     test_bake_roundtrip();
-    fprintf(stderr, "[trace] start test 2\n");
-    test_grammar_structure_equivalence();
-    fprintf(stderr, "[trace] start test 3\n");
-    test_c_ncc_real_parse();
-    fprintf(stderr, "[trace] start test 4\n");
-    test_perf();
+    test_static_init_helper_grammar_path();
 
-    printf("All WP-018 static-grammar-image tests passed.\n");
+    n00b_grammar_t *img   = lookup_static_grammar(C_NCC_IMAGE_NAME);
+    n00b_grammar_t *fresh = fresh_c_grammar();
+
+    test_grammar_structure_equivalence(img, fresh);
+    test_c_ncc_real_parse(img, fresh);
+
     return 0;
 }

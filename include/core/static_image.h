@@ -106,10 +106,10 @@ n00b_static_image_build(const n00b_static_image_request_t *request,
  * @brief Builder for a baked grammar image.
  *
  * Emitted grammar-image C source (see `slay/grammar_image.h`) defines a
- * function of this shape that reconstructs the grammar by replaying the
- * `n00b_grammar_image_*` primitives. It is registered — not invoked — at
- * static-constructor time; the grammar is materialized lazily on the
- * first `n00b_static_grammar_lookup`, after the n00b runtime is up.
+ * function of this shape that materializes the grammar from a static marshal
+ * blob. It is registered — not invoked — at static-constructor time; the
+ * grammar is materialized lazily on the first `n00b_static_grammar_lookup`,
+ * after the n00b runtime is up.
  */
 typedef n00b_grammar_t *(*n00b_static_grammar_builder_fn)(void);
 
@@ -132,7 +132,7 @@ typedef n00b_grammar_t *(*n00b_static_grammar_builder_fn)(void);
  *       (`n00b_static_grammar_lookup`) compares via `n00b_unicode_str_eq`.
  *
  * @param name     Lookup name (an r-string `n00b_string_t *`).
- * @param builder  Function that reconstructs and finalizes the grammar.
+ * @param builder  Function that materializes the grammar.
  */
 extern void
 n00b_static_grammar_register(n00b_string_t                  *name,

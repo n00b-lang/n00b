@@ -1,7 +1,10 @@
 #include <ctype.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 #include "n00b.h"
 #include "adt/dict.h"
@@ -123,6 +126,96 @@ dup_cstr(const char *s)
     }
     memcpy(out, s, len + 1);
     return out;
+}
+
+static char *
+sibling_tool_path(const char *argv0, const char *name)
+{
+    const char *slash = strrchr(argv0, '/');
+    if (!slash) {
+        return dup_cstr(name);
+    }
+
+    size_t dir_len  = (size_t)(slash - argv0 + 1);
+    size_t name_len = strlen(name);
+    char  *out      = malloc(dir_len + name_len + 1);
+    if (!out) {
+        return NULL;
+    }
+    memcpy(out, argv0, dir_len);
+    memcpy(out + dir_len, name, name_len + 1);
+    return out;
+}
+
+static int
+write_all(int fd, const char *buf, size_t len)
+{
+    while (len > 0) {
+        ssize_t n = write(fd, buf, len);
+        if (n <= 0) {
+            return -1;
+        }
+        buf += n;
+        len -= (size_t)n;
+    }
+    return 0;
+}
+
+static int
+delegate_grammar_request(const char *argv0, const char *input)
+{
+    char *helper = sibling_tool_path(argv0, "n00b-static-grammar-helper");
+    if (!helper) {
+        fprintf(stderr, "out of memory finding n00b-static-grammar-helper");
+        return 5;
+    }
+
+    int in_pipe[2];
+    if (pipe(in_pipe) != 0) {
+        fprintf(stderr, "cannot create pipe for n00b-static-grammar-helper");
+        free(helper);
+        return 5;
+    }
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        fprintf(stderr, "cannot fork n00b-static-grammar-helper");
+        close(in_pipe[0]);
+        close(in_pipe[1]);
+        free(helper);
+        return 5;
+    }
+
+    if (pid == 0) {
+        close(in_pipe[1]);
+        if (dup2(in_pipe[0], STDIN_FILENO) < 0) {
+            _exit(126);
+        }
+        close(in_pipe[0]);
+        execl(helper, helper, (char *)NULL);
+        _exit(127);
+    }
+
+    close(in_pipe[0]);
+    int write_status = write_all(in_pipe[1], input, strlen(input));
+    close(in_pipe[1]);
+
+    int status = 0;
+    while (waitpid(pid, &status, 0) < 0) {
+        if (errno != EINTR) {
+            free(helper);
+            return 5;
+        }
+    }
+    free(helper);
+
+    if (write_status != 0) {
+        return 5;
+    }
+    if (!WIFEXITED(status)) {
+        return 5;
+    }
+    return WEXITSTATUS(status);
 }
 
 static char *
@@ -919,9 +1012,9 @@ parse_request(char *input, helper_request_t *req)
         line = next;
     }
 
-    // `container_kind grammar` (WP-018) uses a distinct request shape:
-    // it carries bnf_path/start_nt/symbol_prefix and reconstructs the
-    // grammar via the builder primitives, so it does NOT supply
+    // `container_kind grammar` (WP-018/WP-020) uses a distinct request shape:
+    // it carries bnf_path/start_nt/symbol_prefix and emits a marshal-backed
+    // grammar materializer, so it does NOT supply
     // type_name/type_hash/entry_attr/abi or argument streams. Validate
     // its own required fields and skip the container-literal checks.
     if (req->container_kind && strcmp(req->container_kind, "grammar") == 0) {
@@ -1919,7 +2012,7 @@ emit_dict_image(const helper_request_t *req)
 //
 // Reads the .bnf at req->bnf_path, parses it with the BNF metagrammar
 // (the cost this whole feature exists to move to build time), finalizes,
-// and emits reconstruction C source via n00b_grammar_image_emit(). The
+// and emits marshal-backed C source via n00b_grammar_image_emit(). The
 // response is the standard NCC_STATIC_INIT_OK shape; the grammar
 // registers itself via a [[gnu::constructor]] in the emitted source, so
 // the object-expression is the lookup name (a comment expression — the
@@ -1951,12 +2044,11 @@ emit_grammar_image(const helper_request_t *req)
     fclose(f);
     bnf_src[got] = '\0';
 
-    // Skip the heavy first-set / left-corner / LR0 analysis in finalize:
-    // the baked grammar is PWZ-only and captured structurally without it
-    // (WP-018 DF-EB / DF-EC). Matches the bake tool and the runtime
-    // reconstruction in n00b_grammar_image_finish.
-    setenv("N00B_SLAY_SKIP_FINALIZE_ANALYSIS", "1", 1);
-
+    // The baked grammar is PWZ-only and captured structurally without the
+    // first-set / left-corner / LR0 analysis (WP-018 DF-EB / DF-EC).
+    // finalize no longer computes that analysis (it is Earley-only and now
+    // lazy in n00b_earley_new), so load + finalize are already cheap with
+    // no flag, matching the bake tool and the generated grammar materializer.
     n00b_string_t  *bnf_text = n00b_string_from_raw(bnf_src, (int64_t)got);
     n00b_string_t  *start_s  = n00b_string_from_cstr(req->start_nt);
     n00b_grammar_t *g        = n00b_grammar_new();
@@ -1996,11 +2088,13 @@ emit_grammar_image(const helper_request_t *req)
 int
 main(int argc, char **argv)
 {
-    char *input = read_stdin();
+    char *input     = read_stdin();
+    char *raw_input = input ? dup_cstr(input) : NULL;
     helper_request_t parsed = {0};
 
-    if (!input || !parse_request(input, &parsed)) {
+    if (!input || !raw_input || !parse_request(input, &parsed)) {
         fprintf(stderr, "bad n00b static initializer helper request");
+        free(raw_input);
         free(input);
         free_request(&parsed);
         return 2;
@@ -2011,6 +2105,7 @@ main(int argc, char **argv)
     if (parsed.container_kind && strcmp(parsed.container_kind, "array") == 0) {
         int status = emit_array_image(&parsed);
         n00b_shutdown();
+        free(raw_input);
         free(input);
         free_request(&parsed);
         return status;
@@ -2019,6 +2114,7 @@ main(int argc, char **argv)
     if (parsed.container_kind && strcmp(parsed.container_kind, "list") == 0) {
         int status = emit_list_image(&parsed);
         n00b_shutdown();
+        free(raw_input);
         free(input);
         free_request(&parsed);
         return status;
@@ -2027,6 +2123,7 @@ main(int argc, char **argv)
     if (parsed.container_kind && strcmp(parsed.container_kind, "dict") == 0) {
         int status = emit_dict_image(&parsed);
         n00b_shutdown();
+        free(raw_input);
         free(input);
         free_request(&parsed);
         return status;
@@ -2034,8 +2131,13 @@ main(int argc, char **argv)
 
     if (parsed.container_kind
         && strcmp(parsed.container_kind, "grammar") == 0) {
+#ifdef N00B_STATIC_GRAMMAR_HELPER
         int status = emit_grammar_image(&parsed);
+#else
+        int status = delegate_grammar_request(argv[0], raw_input);
+#endif
         n00b_shutdown();
+        free(raw_input);
         free(input);
         free_request(&parsed);
         return status;
@@ -2077,6 +2179,7 @@ main(int argc, char **argv)
                                 : n00b_static_image_status_name(status)->data);
         n00b_static_image_builder_destroy(&builder);
         n00b_shutdown();
+        free(raw_input);
         free(input);
         free_request(&parsed);
         return 3;
@@ -2088,6 +2191,7 @@ main(int argc, char **argv)
 
     n00b_static_image_builder_destroy(&builder);
     n00b_shutdown();
+    free(raw_input);
     free(input);
     free_request(&parsed);
     return 0;

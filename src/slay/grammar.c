@@ -289,6 +289,15 @@ n00b_grammar_new(void)
 {
     n00b_grammar_t *g = n00b_alloc(n00b_grammar_t);
 
+    // D-049: create the grammar's element lists via n00b_list_new(T) (not
+    // zero-init + push) so each backing captures the link-time GC pointer-map
+    // for its element type, making the grammar precisely scannable and thus
+    // marshalable. n00b_nonterm_t / n00b_parse_rule_t have mixed pointer/scalar
+    // fields; a conservative DEFAULT scan mis-reads a scalar word as a static
+    // pointer and breaks marshaling.
+    g->nt_list = n00b_list_new_private(n00b_nonterm_t);
+    g->rules   = n00b_list_new_private(n00b_parse_rule_t);
+
     g->error_rules           = true;
     g->max_penalty           = N00B_DEFAULT_MAX_PENALTY;
     g->hide_penalty_rewrites = true;
@@ -312,7 +321,8 @@ n00b_grammar_new(void)
     g->valid_tokens = n00b_alloc(n00b_dict_t(int64_t, bool));
     n00b_dict_init(g->valid_tokens,
                    .hash = n00b_hash_word,
-                   .skip_obj_hash = true);
+                   .skip_obj_hash = true,
+                   .scan_kind = N00B_GC_SCAN_KIND_NONE);
 
     g->terminal_by_id = n00b_alloc(n00b_dict_t(int64_t, n00b_string_t *));
     n00b_dict_init(g->terminal_by_id,
@@ -450,6 +460,11 @@ n00b_nonterm(n00b_grammar_t *g, n00b_string_t *name)
 
     nt.name = name;
     nt.id   = (int64_t)g->nt_list.len;
+    // `rule_ids` stores int32_t scalars. If the zero-initialized list grows
+    // on first push, the default scanner treats packed scalar pairs as
+    // pointers, which makes finalized grammars unmarshalable.
+    nt.rule_ids = n00b_list_new_private(int32_t,
+                                        .scan_kind = N00B_GC_SCAN_KIND_NONE);
 
     n00b_list_push(g->nt_list, nt);
 
@@ -693,7 +708,8 @@ update_rule_first(n00b_grammar_t *g, n00b_parse_rule_t *rule, bool *first_nullab
         rule->first_set = n00b_alloc(n00b_dict_t(int64_t, bool));
         n00b_dict_init(rule->first_set,
                        .hash = n00b_hash_word,
-                       .skip_obj_hash = true);
+                       .skip_obj_hash = true,
+                       .scan_kind = N00B_GC_SCAN_KIND_NONE);
     }
 
     n00b_isize_t old_len     = rule->first_set->length;
@@ -809,7 +825,8 @@ compute_all_first_sets(n00b_grammar_t *g)
         nt->first_set = n00b_alloc(n00b_dict_t(int64_t, bool));
         n00b_dict_init(nt->first_set,
                        .hash = n00b_hash_word,
-                       .skip_obj_hash = true);
+                       .skip_obj_hash = true,
+                       .scan_kind = N00B_GC_SCAN_KIND_NONE);
         nt->first_has_any = false;
     }
 
@@ -819,7 +836,8 @@ compute_all_first_sets(n00b_grammar_t *g)
         rule->first_set = n00b_alloc(n00b_dict_t(int64_t, bool));
         n00b_dict_init(rule->first_set,
                        .hash = n00b_hash_word,
-                       .skip_obj_hash = true);
+                       .skip_obj_hash = true,
+                       .scan_kind = N00B_GC_SCAN_KIND_NONE);
         rule->first_has_any = false;
     }
 
@@ -887,7 +905,10 @@ compute_left_corners(n00b_grammar_t *g)
     int32_t words = (int32_t)((n_nts + 63) / 64);
 
     g->lc_words_per_nt  = words;
-    g->left_corner_sets = n00b_alloc_array(uint64_t, n_nts * (size_t)words);
+    g->left_corner_sets = n00b_alloc_array_with_opts(
+        uint64_t,
+        n_nts * (size_t)words,
+        &(n00b_alloc_opts_t){.scan_kind = N00B_GC_SCAN_KIND_NONE});
 
     // Each NT includes itself.
     for (size_t i = 0; i < n_nts; i++) {
@@ -1549,10 +1570,7 @@ lr0_compute_predict_states(n00b_grammar_t *g)
 // ============================================================================
 
 void
-n00b_grammar_finalize(n00b_grammar_t *g) _kargs
-{
-    bool skip_analysis = false;
-}
+n00b_grammar_finalize(n00b_grammar_t *g)
 {
     if (g->finalized) {
         return;
@@ -1627,38 +1645,23 @@ n00b_grammar_finalize(n00b_grammar_t *g) _kargs
         n00b_dict_put(g->valid_tokens, i, true_val);
     }
 
-    /* WP-017: first-set / left-corner / LR0 computation is a
-     * ~5-6 second cost on big grammars (e.g., c_ncc.bnf) driven
-     * by dict allocation churn triggering GC. Naudit's single-
-     * file workflow doesn't amortize this. Callers skip it via the
-     * explicit `.skip_analysis = true` kwarg (the baked-grammar
-     * reconstruction path uses this). The
-     * N00B_SLAY_SKIP_FINALIZE_ANALYSIS=1 environment variable
-     * remains an independent override for other consumers. PWZ
-     * still works without the analysis (nt_first_matches returns
-     * true when first_set is null, so PWZ explores without
-     * pruning). Earley REQUIRES first sets and won't work; that's
-     * fine because the user directive (2026-05-28) was 'Earley
-     * should never get called'.
+    /* First-sets and left-corners are computed HERE: PWZ uses them to
+     * prune (pwz.c nt_first_matches consults nt->first_set; a null
+     * first_set means "matches everything", i.e. no pruning, which makes
+     * PWZ explore pathologically on complex grammars). The Earley-only
+     * LR0 tables (lr0_items / lr0_states / predict_states) are NOT
+     * computed here — they are derived lazily by
+     * n00b_grammar_compute_earley_analysis() the first time Earley runs
+     * (n00b_earley_new), so PWZ-only consumers (naudit, the eval JIT,
+     * baked grammars) skip that Earley-specific cost.
      *
-     * The env gate is read via the LIBC `getenv()` rather than
-     * `n00b_getenv()`: `n00b_putenv()` rebinds the libc `environ`
-     * pointer to a `system_pool`-allocated slot array, which a
-     * subsequent libc `getenv()` walk faults on. No code in this
-     * tree writes the variable any longer (WP-018 removed the
-     * `setenv` writer in grammar_image.c in favor of the kwarg), so
-     * this read only observes an externally-set environment. */
-    const char *env_skip = getenv("N00B_SLAY_SKIP_FINALIZE_ANALYSIS");
-    bool        do_skip  = skip_analysis
-                    || (env_skip && env_skip[0] == '1');
-    if (!do_skip) {
-        compute_all_first_sets(g);
-        compute_left_corners(g);
-
-        compute_lr0_items(g);
-        build_lr0_states(g);
-        lr0_compute_predict_states(g);
-    }
+     * (Historical note: a `N00B_SLAY_SKIP_FINALIZE_ANALYSIS` env var once
+     * gated all of this here via libc `getenv()`, which faulted after any
+     * `n00b_putenv()` rebinding of `environ`. The env var and the later
+     * `skip_analysis` kwarg are gone; the Earley-only part now lives
+     * behind the Earley entry point.) */
+    compute_all_first_sets(g);
+    compute_left_corners(g);
 
     // Check if the grammar has group NTs (BSR reconstruction doesn't
     // handle multi-match groups yet, so BSR emission is skipped).
@@ -1678,6 +1681,32 @@ n00b_grammar_finalize(n00b_grammar_t *g) _kargs
     }
 
     g->finalized = true;
+}
+
+// ============================================================================
+// Earley analysis (lazy)
+// ============================================================================
+
+// Compute the Earley-only LR0 tables (items / states / predict states).
+// These are NOT needed by PWZ, so they are intentionally NOT part of
+// n00b_grammar_finalize() (which DOES compute the first-sets/left-corners
+// PWZ prunes with) and run only when Earley is actually invoked (see
+// n00b_earley_new). Idempotent and independent of `finalized`. The grammar
+// MUST already be finalized — the LR0 construction relies on the first-set
+// / valid-token / nullability state finalize builds; n00b_earley_new
+// guarantees finalize ran first.
+void
+n00b_grammar_compute_earley_analysis(n00b_grammar_t *g)
+{
+    if (!g || g->earley_analysis_done) {
+        return;
+    }
+
+    compute_lr0_items(g);
+    build_lr0_states(g);
+    lr0_compute_predict_states(g);
+
+    g->earley_analysis_done = true;
 }
 
 // ============================================================================

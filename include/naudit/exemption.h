@@ -346,6 +346,34 @@ n00b_audit_extract_region_bytes(n00b_string_t *file_path,
                                 int64_t        end_column);
 
 /**
+ * @brief Slice a violation's region bytes from an in-memory source
+ *        buffer (WP-021 / task #14).
+ *
+ * Identical span semantics to `n00b_audit_extract_region_bytes` but
+ * operates on the already-parsed `src_text` rather than re-reading the
+ * file. The engine MUST use this for preprocessed languages: the
+ * parse-tree token coordinates index the post-preprocess buffer, which
+ * the C preprocessor reflows relative to the on-disk source (e.g.
+ * `int *p` → `int * p`), so slicing the raw file with preprocessed
+ * coordinates yields the wrong bytes and a spurious per-location
+ * fingerprint.
+ *
+ * @param src_text    The source buffer the parse tree was built from.
+ * @param line        1-based start line.
+ * @param column      1-based start column.
+ * @param end_line    1-based end line.
+ * @param end_column  1-based exclusive end column.
+ *
+ * @return Raw region bytes, or nullptr on out-of-range locator.
+ */
+extern n00b_string_t *
+n00b_audit_extract_region_bytes_from_text(n00b_string_t *src_text,
+                                          int64_t        line,
+                                          int64_t        column,
+                                          int64_t        end_line,
+                                          int64_t        end_column);
+
+/**
  * @brief WP-012 — sign an exemption (or baseline) file with the
  *        configured SSH key.
  *

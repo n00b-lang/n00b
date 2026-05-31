@@ -681,9 +681,10 @@ test_engine_unsigned_rule_warning(void)
 {
     setup_workspace("engine_unsigned_warn");
 
-    /* audit-rules.bnf with one valid rule the engine can compose
-     * against the C grammar (mirrors guidance_phase4.bnf shape so
-     * the engine doesn't reject for an empty grammar fragment). */
+    /* audit-rules.bnf with one valid filter-based rule the engine can
+     * compose against the C grammar (WP-016: queries <provided_identifier>
+     * and narrows to NULL via the is_null_keyword filter, so the engine
+     * doesn't reject a grafted synthetic NT). */
     char rules_path[2400];
     snprintf(rules_path, sizeof(rules_path),
              "%s/audit-rules.bnf", workspace_root);
@@ -693,22 +694,23 @@ test_engine_unsigned_rule_warning(void)
                "@description engine-level unsigned-rule warning\n"
                "@source_doc test\n"
                "@dependencies\n"
+               "@extensions\n"
+               "    c: .c, .h\n"
+               "\n"
+               "@filter_def is_null_keyword\n"
+               "    expr: arg.text_equals(\"NULL\")\n"
+               "    description: Matches the literal identifier `NULL`.\n"
                "\n"
                "@rule n00b.s2_1.null\n"
                "@title NULL -> nullptr\n"
                "@section section 2.1\n"
-               "@violation_nt n00b_audit_v_null\n"
+               "@language c\n"
+               "@violation_nt provided_identifier\n"
+               "@filter is_null_keyword\n"
                "@rationale Test rationale.\n"
                "@bad int *p = NULL;\n"
                "@good int *p = nullptr;\n"
-               "@guidance Replace NULL with nullptr.\n"
-               "\n"
-               "<n00b_audit_v_null> ::= %\"NULL\"\n"
-               "rewrite {\n"
-               "    template: nullptr\n"
-               "    description: NULL -> nullptr (C23).\n"
-               "}\n"
-               "<provided_identifier> ::= <n00b_audit_v_null>\n");
+               "@guidance Replace NULL with nullptr.\n");
 
     /* REPO-slot roster: <project_root>/audit/allowed_signers. */
     char audit_dir[2400];

@@ -123,6 +123,10 @@ All allocation macros accept keyword arguments:
 | `.debug_taint` | `false` | Enable taint tracking |
 
 Every allocation embeds `__FILE__:__LINE__` via `N00B_LOC_STRING()`.
+Typed allocations also pass `typehash(T *)` to the allocator. When ncc emits a
+matching GC type map and the executable has been processed with
+[`n00b-gcmap-index`](gc_type_maps.md), default-scanned allocations are upgraded
+to exact callback scans automatically.
 
 **Example:**
 

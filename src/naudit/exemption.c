@@ -614,6 +614,28 @@ line_col_to_offset(const char *src, size_t src_len,
 }
 
 n00b_string_t *
+n00b_audit_extract_region_bytes_from_text(n00b_string_t *src_text,
+                                          int64_t        line,
+                                          int64_t        column,
+                                          int64_t        end_line,
+                                          int64_t        end_column)
+{
+    if (!src_text) {
+        return nullptr;
+    }
+    const char *src = src_text->data;
+    size_t      n   = (size_t)src_text->u8_bytes;
+    int64_t     s   = line_col_to_offset(src, n, line, column);
+    int64_t     e   = line_col_to_offset(src, n, end_line, end_column);
+    if (s < 0 || e < 0 || e < s) {
+        return nullptr;
+    }
+    /* Return the raw span bytes; the caller canonicalizes via
+     * n00b_audit_compute_region_fingerprint before hashing. */
+    return n00b_string_from_raw(src + s, (int64_t)(e - s));
+}
+
+n00b_string_t *
 n00b_audit_extract_region_bytes(n00b_string_t *file_path,
                                 int64_t        line,
                                 int64_t        column,
@@ -635,18 +657,19 @@ n00b_audit_extract_region_bytes(n00b_string_t *file_path,
         return nullptr;
     }
     n00b_buffer_t *buf = n00b_result_get(br);
-    const char    *src = buf->data;
-    size_t         n   = (size_t)buf->byte_len;
-    int64_t        s   = line_col_to_offset(src, n, line, column);
-    int64_t        e   = line_col_to_offset(src, n, end_line, end_column);
-    if (s < 0 || e < 0 || e < s) {
-        return nullptr;
-    }
-    n00b_string_t *region = n00b_string_from_raw(src + s,
-                                                  (int64_t)(e - s));
-    /* Return the canonicalized form so callers can hash it AND emit
-     * it (the loader stashes the raw bytes; consumers reuse). */
-    return region;
+    n00b_string_t *src = n00b_string_from_raw(buf->data,
+                                              (int64_t)buf->byte_len);
+    /*
+     * WP-021 / task #14: this raw-file path is correct ONLY when the
+     * parse-tree coordinates were produced from the same on-disk bytes
+     * (i.e. preprocessing OFF). For preprocessed languages the
+     * coordinates index the reflowed post-preprocess buffer, so the
+     * engine must use `..._from_text` against the parsed `src_text`
+     * instead — re-reading the raw file here would slice the wrong
+     * span (e.g. `int *p`→`int * p` shifts a NULL token by one column).
+     */
+    return n00b_audit_extract_region_bytes_from_text(src, line, column,
+                                                     end_line, end_column);
 }
 
 /* ---------------------------------------------------------------- */

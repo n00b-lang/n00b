@@ -96,6 +96,13 @@
         size_t _bl_need = (needed);                                                            \
         if (_bl_need > (xptr)->cap) {                                                          \
             size_t               _bl_nc = n00b_align_closest_pow2_ceil(_bl_need);              \
+            /* D-049: reuse the list's stored scan_kind/scan_cb/scan_user so a     \
+             * grown backing keeps the SAME (possibly precise CALLBACK) GC scan    \
+             * the list captured at construction. n00b_list_new(T) captures the    \
+             * link-time GC-map upgrade for the concrete element type T (ncc       \
+             * can't resolve typehash(typeof(*data)*) here — it hashes the         \
+             * expression text, not the type — so the type is captured where T     \
+             * is statically named, i.e. at construction). */                       \
             typeof((xptr)->data) _bl_nd = n00b_alloc_size_with_opts(                           \
                 _bl_nc, sizeof(*(xptr)->data),                                                 \
                 &(n00b_alloc_opts_t){                                                          \

@@ -257,6 +257,39 @@ static uint64_t unsupported_static_words[2] = {
     UINT64_C(0x7000000000000002),
 };
 
+// Synthetic mixed pointer/scalar struct for the CALLBACK struct_layout
+// round-trip test. Word layout (one element, stride 4):
+//   word 0: packed-int scalar equal to 0x100000000 (aliases the static
+//           address range) -- must NOT be treated as a pointer.
+//   word 1: a real heap pointer -- relinked.
+//   word 2: scalar tail.
+//   word 3: scalar/padding.
+typedef struct {
+    uint64_t        packed_alias; // 0x100000000
+    marshal_node_t *real_ptr;
+    uint64_t        scalar_tail;
+    uint64_t        pad;
+} marshal_struct_layout_t;
+
+// struct_layout descriptor: the single pointer word sits at offset 1.
+// Both the offsets array and the descriptor are file-scope statics so
+// they can be registered as static objects (the descriptor additionally
+// gets a static identity, which marshal round-trips for scan_user).
+static const uint64_t cbscan_layout_offsets[1] = {1};
+static const n00b_gc_struct_layout_t cbscan_layout_desc = {
+    .stride       = 4,
+    .count        = 1,
+    .offset_count = 1,
+    .offsets      = cbscan_layout_offsets,
+};
+#define CBSCAN_LAYOUT_TINFO UINT64_C(0x6362736361746e01)
+static const n00b_static_identity_t cbscan_layout_identity = {
+    .version      = N00B_STATIC_IDENTITY_VERSION,
+    .kind         = N00B_STATIC_IDENTITY_MANUAL,
+    .namespace_id = "test.marshal.cbscan",
+    .object_key   = "struct-layout-desc",
+};
+
 typedef struct {
     n00b_arena_t    *arena;
     _Atomic uint32_t run;
@@ -884,11 +917,52 @@ test_callback_scan_boundary(void)
     src->tag = 0xcbcb;
     src->ptr = nullptr;
 
+    // D-039 guard (V-1): a CUSTOM (non-built-in) scan_cb is never
+    // marshalable. This MUST remain an error; under WP-022 the code is
+    // the dedicated N00B_MARSHAL_ERR_UNSUPPORTED_SCAN_CALLBACK.
     n00b_marshal_ctx_t *mctx = n00b_marshal_ctx_new();
     assert(n00b_marshal_incremental(mctx, src) == nullptr);
-    assert(n00b_marshal_ctx_status(mctx) == N00B_MARSHAL_ERR_UNSUPPORTED_SCAN_POLICY);
+    assert(n00b_marshal_ctx_status(mctx) == N00B_MARSHAL_ERR_UNSUPPORTED_SCAN_CALLBACK);
     n00b_marshal_ctx_destroy(mctx);
 
+    // A built-in scan_cb (every_other, no scan_user) now marshals
+    // successfully and round-trips (success case added alongside the
+    // retained custom-cb error case).
+    // every_other marks word 0 (the tag word) as a pointer candidate;
+    // keep it null so it is left verbatim, and carry a real pointer in
+    // the unmarked ptr slot to confirm unmarked words round-trip too.
+    marshal_node_t *cb_target = n00b_alloc_with_opts(marshal_node_t, ARENA_OPTS(arena));
+    cb_target->tag = 0x9e9e;
+
+    marshal_callback_ref_t *builtin = n00b_alloc_size_with_opts(
+        1,
+        sizeof(marshal_callback_ref_t),
+        &(n00b_alloc_opts_t){
+            .allocator = (n00b_allocator_t *)arena,
+            .scan_kind = N00B_GC_SCAN_KIND_CALLBACK,
+            .scan_cb   = n00b_gc_scan_cb_every_other,
+        });
+    builtin->tag = 0;
+    builtin->ptr = (uint64_t *)cb_target;
+
+    n00b_buffer_t *ok = n00b_marshal(builtin, .base_address = 0x5a5a5a5au);
+    assert(ok != nullptr);
+    marshal_callback_ref_t *builtin_copy = n00b_unmarshal_one(ok, .target_arena = arena);
+    assert(builtin_copy != nullptr);
+    assert(builtin_copy != builtin);
+    assert(builtin_copy->tag == 0);
+    // ptr is at word 1, which every_other does NOT mark, so it stays a
+    // verbatim scalar (not relinked) -- it equals the original address.
+    assert(builtin_copy->ptr == (uint64_t *)cb_target);
+    n00b_alloc_info_t bc_info = n00b_find_alloc_info(builtin_copy);
+    assert(bc_info.kind == n00b_alloc_oob);
+    assert(bc_info.hdr.oob->scan_kind == N00B_GC_SCAN_KIND_CALLBACK);
+    assert(bc_info.hdr.oob->scan_cb == n00b_gc_scan_cb_every_other);
+    assert(bc_info.hdr.oob->scan_user == nullptr);
+
+    // A plain node whose ALLOC record is mutated to scan_kind=CALLBACK
+    // carries no CBSCAN extension; v3 unmarshal rejects the orphaned
+    // CALLBACK record cleanly.
     marshal_node_t *plain = n00b_alloc_with_opts(marshal_node_t, ARENA_OPTS(arena));
     plain->tag            = 0xeeee;
     plain->scalar         = 7;
@@ -898,9 +972,220 @@ test_callback_scan_boundary(void)
     n00b_buffer_t *buf = n00b_marshal(plain, .base_address = 0x456789abu);
     assert(buf != nullptr);
     n00b_buffer_t *bad = buffer_copy_mutating_alloc(buf, mutate_callback_scan);
-    assert_unmarshal_status(bad, N00B_MARSHAL_ERR_UNSUPPORTED_SCAN_POLICY);
+    assert_unmarshal_status(bad, N00B_MARSHAL_ERR_BAD_STREAM);
 
     printf("  [PASS] callback_scan_boundary\n");
+}
+
+// Register the synthetic struct_layout descriptor as a static object
+// with an identity so marshal can round-trip it as scan_user (mirrors
+// register_portable_words). The descriptor and its offsets array are
+// file-scope statics.
+static void
+register_cbscan_layout_desc(void)
+{
+    (void)n00b_mmap_register((void *)&cbscan_layout_desc,
+                             (void *)((char *)&cbscan_layout_desc
+                                      + sizeof(cbscan_layout_desc)),
+                             n00b_mmap_static,
+                             .file              = "test_marshal_cbscan_layout_desc",
+                             .order_id          = UINT64_C(0x80010001),
+                             .definitely_unique = false);
+    // Surface a failed static-object registration as a clear setup error
+    // (it returns the descriptor range, non-null on success) rather than
+    // letting a later cbscan_resolve fail with an opaque identity-missing
+    // error.
+    n00b_alloc_range_t *desc_range = n00b_static_object_register(
+        (void *)&cbscan_layout_desc,
+        sizeof(cbscan_layout_desc),
+        CBSCAN_LAYOUT_TINFO,
+        .scan_kind = N00B_GC_SCAN_KIND_NONE,
+        .object_id = UINT64_C(0x80010002),
+        .identity  = &cbscan_layout_identity,
+        .flags     = N00B_STATIC_OBJECT_F_READONLY);
+    assert(desc_range != nullptr);
+}
+
+// Mirror register_cbscan_layout_desc's teardown (cf. unregister_portable_words):
+// drop the registered static mmap range so the synthetic identity does not
+// leak into later tests sharing the identity namespace.
+static void
+unregister_cbscan_layout_desc(void)
+{
+    n00b_mmap_delete_ranges(
+        n00b_global_mem_map(n00b_get_runtime()),
+        (uint64_t)(uintptr_t)&cbscan_layout_desc,
+        (uint64_t)(uintptr_t)((char *)&cbscan_layout_desc
+                              + sizeof(cbscan_layout_desc)));
+}
+
+static void
+test_callback_struct_layout_round_trip(void)
+{
+    register_cbscan_layout_desc();
+
+    n00b_arena_t *arena = n00b_new_arena(.size = 4096, .use_gc = true);
+
+    marshal_node_t *target = n00b_alloc_with_opts(marshal_node_t, ARENA_OPTS(arena));
+    target->tag    = 0x7a7a;
+    target->scalar = 0x1234;
+    target->next   = nullptr;
+    target->alias  = nullptr;
+
+    marshal_struct_layout_t *src = n00b_alloc_size_with_opts(
+        1,
+        sizeof(marshal_struct_layout_t),
+        &(n00b_alloc_opts_t){
+            .allocator = (n00b_allocator_t *)arena,
+            .scan_kind = N00B_GC_SCAN_KIND_CALLBACK,
+            .scan_cb   = n00b_gc_scan_cb_struct_layout,
+            .scan_user = (void *)&cbscan_layout_desc,
+        });
+    src->packed_alias = UINT64_C(0x100000000);
+    src->real_ptr     = target;
+    src->scalar_tail  = UINT64_C(0xfeedface);
+    src->pad          = 0;
+
+    // Snapshot the live source bytes; emit must not mutate them (W-6).
+    marshal_struct_layout_t snapshot = *src;
+
+    n00b_buffer_t *buf = n00b_marshal(src, .base_address = 0x11223344u);
+    assert(buf != nullptr);
+    assert(memcmp(&snapshot, src, sizeof(snapshot)) == 0);
+    assert(src->packed_alias == UINT64_C(0x100000000));
+    assert(src->real_ptr == target);
+
+    marshal_struct_layout_t *copy = n00b_unmarshal_one(buf, .target_arena = arena);
+    assert(copy != nullptr);
+    assert(copy != src);
+    // The packed-int word aliases the static range but is a scalar; it
+    // must survive verbatim (not relinked).
+    assert(copy->packed_alias == UINT64_C(0x100000000));
+    assert(copy->scalar_tail == UINT64_C(0xfeedface));
+    // The real pointer is relocated to the unmarshaled copy of target.
+    assert(copy->real_ptr != nullptr);
+    assert(copy->real_ptr != target);
+    assert(copy->real_ptr->tag == 0x7a7a);
+    assert(copy->real_ptr->scalar == 0x1234);
+
+    n00b_alloc_info_t info = n00b_find_alloc_info(copy);
+    assert(info.kind == n00b_alloc_oob);
+    assert(info.hdr.oob->scan_kind == N00B_GC_SCAN_KIND_CALLBACK);
+    assert(info.hdr.oob->scan_cb == n00b_gc_scan_cb_struct_layout);
+    assert(info.hdr.oob->scan_user == (void *)&cbscan_layout_desc);
+
+    // The restored object survives a collection with its pointer intact.
+    n00b_gc_register_root(copy);
+    n00b_stop_the_world();
+    n00b_collect(arena);
+    n00b_restart_the_world();
+    assert(copy->packed_alias == UINT64_C(0x100000000));
+    assert(copy->real_ptr->tag == 0x7a7a);
+    n00b_gc_unregister_root(copy);
+
+    unregister_cbscan_layout_desc();
+    printf("  [PASS] callback_struct_layout_round_trip\n");
+}
+
+static void
+round_trip_null_scan_user(n00b_arena_t      *arena,
+                          n00b_gc_scan_cb_t  cb,
+                          uint32_t           base_address)
+{
+    marshal_callback_ref_t *src = n00b_alloc_size_with_opts(
+        1,
+        sizeof(marshal_callback_ref_t),
+        &(n00b_alloc_opts_t){
+            .allocator = (n00b_allocator_t *)arena,
+            .scan_kind = N00B_GC_SCAN_KIND_CALLBACK,
+            .scan_cb   = cb,
+        });
+    // Keep both words null so that whichever the callback marks is left
+    // verbatim (the focus here is round-tripping the scan policy, not
+    // pointer relink); all/every_other mark word 0, none marks nothing.
+    src->tag = 0;
+    src->ptr = nullptr;
+
+    n00b_buffer_t *buf = n00b_marshal(src, .base_address = base_address);
+    assert(buf != nullptr);
+
+    marshal_callback_ref_t *copy = n00b_unmarshal_one(buf, .target_arena = arena);
+    assert(copy != nullptr);
+    assert(copy != src);
+    assert(copy->tag == 0);
+
+    n00b_alloc_info_t info = n00b_find_alloc_info(copy);
+    assert(info.kind == n00b_alloc_oob);
+    assert(info.hdr.oob->scan_kind == N00B_GC_SCAN_KIND_CALLBACK);
+    assert(info.hdr.oob->scan_cb == cb);
+    assert(info.hdr.oob->scan_user == nullptr);
+}
+
+static void
+test_callback_null_scan_user_round_trip(void)
+{
+    n00b_arena_t *arena = n00b_new_arena(.size = 4096, .use_gc = true);
+
+    round_trip_null_scan_user(arena, n00b_gc_scan_cb_all, 0x21212121u);
+    round_trip_null_scan_user(arena, n00b_gc_scan_cb_none, 0x22222222u);
+    round_trip_null_scan_user(arena, n00b_gc_scan_cb_every_other, 0x23232323u);
+
+    printf("  [PASS] callback_null_scan_user_round_trip\n");
+}
+
+static void
+mutate_header_version_v2(void *bytes)
+{
+    ((test_marshal_stream_header_t *)bytes)->version = 2;
+}
+
+static void
+mutate_header_version_v4(void *bytes)
+{
+    ((test_marshal_stream_header_t *)bytes)->version = 4;
+}
+
+static n00b_buffer_t *
+buffer_copy_mutating_header(n00b_buffer_t *buf, void (*mutate)(void *bytes))
+{
+    _n00b_buffer_rlock(buf);
+    int64_t len   = (int64_t)buf->byte_len;
+    char   *bytes = n00b_alloc_array(char, (size_t)len);
+    memcpy(bytes, buf->data, (size_t)len);
+    _n00b_buffer_unlock(buf);
+    mutate(bytes);
+    return n00b_buffer_from_bytes(bytes, len);
+}
+
+static void
+test_callback_version_mismatch(void)
+{
+    n00b_arena_t *arena = n00b_new_arena(.size = 4096, .use_gc = true);
+
+    marshal_callback_ref_t *src = n00b_alloc_size_with_opts(
+        1,
+        sizeof(marshal_callback_ref_t),
+        &(n00b_alloc_opts_t){
+            .allocator = (n00b_allocator_t *)arena,
+            .scan_kind = N00B_GC_SCAN_KIND_CALLBACK,
+            .scan_cb   = n00b_gc_scan_cb_none,
+        });
+    src->tag = 0x5151;
+    src->ptr = nullptr;
+
+    n00b_buffer_t *buf = n00b_marshal(src, .base_address = 0x31313131u);
+    assert(buf != nullptr);
+
+    // A v3 CALLBACK stream presented as version 2 is rejected: the
+    // CALLBACK ALLOC record is illegal below v3.
+    n00b_buffer_t *as_v2 = buffer_copy_mutating_header(buf, mutate_header_version_v2);
+    assert_unmarshal_status(as_v2, N00B_MARSHAL_ERR_BAD_STREAM);
+
+    // A version above the supported maximum is rejected by the header gate.
+    n00b_buffer_t *as_v4 = buffer_copy_mutating_header(buf, mutate_header_version_v4);
+    assert_unmarshal_status(as_v4, N00B_MARSHAL_ERR_BAD_STREAM);
+
+    printf("  [PASS] callback_version_mismatch\n");
 }
 
 static void
@@ -1120,6 +1405,9 @@ main(int argc, char **argv)
     test_ptr_words_limits_scan_extent();
     test_bad_ptr_words_rejected();
     test_callback_scan_boundary();
+    test_callback_struct_layout_round_trip();
+    test_callback_null_scan_user_round_trip();
+    test_callback_version_mismatch();
     test_malformed_stream_hardening();
     test_single_root_context_boundary();
     test_gc_pressure_during_round_trip();

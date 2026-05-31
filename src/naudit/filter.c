@@ -54,6 +54,18 @@ struct n00b_naudit_match {
     n00b_dict_t(n00b_string_t *, n00b_parse_tree_t *) *captures;
 };
 
+static n00b_naudit_match_t *
+alloc_match_handle(n00b_parse_tree_t *node, n00b_string_t *src_text)
+{
+    n00b_naudit_match_t *h = n00b_alloc_with_opts(
+        n00b_naudit_match_t,
+        &(n00b_alloc_opts_t){.scan_kind = N00B_GC_SCAN_KIND_ALL});
+    h->node     = node;
+    h->src_text = src_text;
+    h->captures = nullptr;
+    return h;
+}
+
 // ============================================================================
 // Accessor C functions
 //
@@ -284,10 +296,7 @@ n00b_naudit_match_child_named(n00b_naudit_match_t *self, n00b_string_t *name)
         return nullptr;
     }
 
-    n00b_naudit_match_t *out = n00b_alloc(n00b_naudit_match_t);
-    out->node     = child;
-    out->src_text = self->src_text;
-    return out;
+    return alloc_match_handle(child, self->src_text);
 }
 
 /**
@@ -336,11 +345,7 @@ n00b_naudit_match_capture(n00b_naudit_match_t *self, n00b_string_t *name)
         return nullptr;
     }
 
-    n00b_naudit_match_t *out = n00b_alloc(n00b_naudit_match_t);
-    out->node     = bound;
-    out->src_text = self->src_text;
-    out->captures = nullptr;
-    return out;
+    return alloc_match_handle(bound, self->src_text);
 }
 
 /**
@@ -728,11 +733,7 @@ n00b_naudit_filter_apply(n00b_eval_predicate_fn_t  fn,
 n00b_naudit_match_t *
 n00b_naudit_match_new(n00b_parse_tree_t *node, n00b_string_t *src_text)
 {
-    n00b_naudit_match_t *h = n00b_alloc(n00b_naudit_match_t);
-    h->node     = node;
-    h->src_text = src_text;
-    h->captures = nullptr;
-    return h;
+    return alloc_match_handle(node, src_text);
 }
 
 void
@@ -744,11 +745,13 @@ n00b_naudit_match_bind_capture(n00b_naudit_match_t *handle,
         return;
     }
     if (!handle->captures) {
-        handle->captures = n00b_alloc(
-            n00b_dict_t(n00b_string_t *, n00b_parse_tree_t *));
+        handle->captures = n00b_alloc_with_opts(
+            n00b_dict_t(n00b_string_t *, n00b_parse_tree_t *),
+            &(n00b_alloc_opts_t){.scan_kind = N00B_GC_SCAN_KIND_ALL});
         n00b_dict_init(handle->captures,
                        .hash          = n00b_string_hash,
-                       .skip_obj_hash = true);
+                       .skip_obj_hash = true,
+                       .scan_kind     = N00B_GC_SCAN_KIND_ALL);
     }
     n00b_dict_put(handle->captures, name, node);
 }

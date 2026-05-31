@@ -32,6 +32,12 @@ n00b_string_t *n00b_bnf_trim_lines(n00b_string_t *input);
  * @kw diag        Optional diagnostic context.  When provided, detailed
  *                 error messages are pushed here instead of (or in addition
  *                 to) being printed to stderr.
+ *
+ * Note: the internal `n00b_grammar_finalize()` computes first-sets /
+ * left-corners (PWZ needs them) but NOT the Earley-only LR0 tables; those
+ * are built lazily by `n00b_grammar_compute_earley_analysis()` when Earley
+ * first runs. So a PWZ-only load (naudit, the eval JIT, baked grammars)
+ * skips the LR0 cost with no caller flag needed.
  */
 bool n00b_bnf_load(n00b_string_t  *bnf_text,
                     n00b_string_t  *start_symbol,

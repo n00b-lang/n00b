@@ -23,6 +23,27 @@
 #define N00B_MARSHAL_OP_SPATCH UINT32_C(0xe41cbab0)
 #define N00B_MARSHAL_OP_STOP   UINT32_C(0xe51cbab0)
 #define N00B_MARSHAL_OP_PSPATCH UINT32_C(0xe61cbab0)
+#define N00B_MARSHAL_OP_CBSCAN UINT32_C(0xe71cbab0)
+
+// scan_cb round-trips as a small enum tag over the closed set of
+// built-in scan callbacks (D-039: custom callbacks are an explicit
+// error, never a marshaled code pointer). A CBSCAN ext record always
+// carries one of these tags; STRUCT_FIELD / STRUCT_LAYOUT additionally
+// carry a PSPATCH-style scan_user identity payload (the descriptor),
+// while ALL / NONE / EVERY_OTHER carry no identity payload.
+typedef enum : uint32_t {
+    N00B_MARSHAL_SCAN_CB_TAG_ALL          = 0,
+    N00B_MARSHAL_SCAN_CB_TAG_NONE         = 1,
+    N00B_MARSHAL_SCAN_CB_TAG_EVERY_OTHER  = 2,
+    N00B_MARSHAL_SCAN_CB_TAG_STRUCT_FIELD = 3,
+    N00B_MARSHAL_SCAN_CB_TAG_STRUCT_LAYOUT = 4,
+    // D-049: the link-time type->GC-map callback. Its scan_user descriptor is
+    // NOT serialized (uses_user stays false) — it is re-derived on unmarshal
+    // from the object's tinfo via n00b_gc_type_map_lookup, so no identity
+    // payload is needed.
+    N00B_MARSHAL_SCAN_CB_TAG_TYPE_LAYOUT  = 5,
+    N00B_MARSHAL_SCAN_CB_TAG_LIMIT,
+} n00b_marshal_scan_cb_tag_t;
 
 #define N00B_MARSHAL_MIN_VERSION 1u
 #define N00B_MARSHAL_STATIC_CHECK_MAX 16u
@@ -30,10 +51,12 @@
 #define N00B_MARSHAL_ALLOC_F_SOURCE_INLINE     (1u << 0)
 #define N00B_MARSHAL_ALLOC_F_SOURCE_OOB        (1u << 1)
 #define N00B_MARSHAL_ALLOC_F_SOURCE_HEADERLESS (1u << 2)
+#define N00B_MARSHAL_ALLOC_F_PTR_WORDS_KNOWN   (1u << 3)
 #define N00B_MARSHAL_ALLOC_F_KNOWN             \
     (N00B_MARSHAL_ALLOC_F_SOURCE_INLINE        \
      | N00B_MARSHAL_ALLOC_F_SOURCE_OOB         \
-     | N00B_MARSHAL_ALLOC_F_SOURCE_HEADERLESS)
+     | N00B_MARSHAL_ALLOC_F_SOURCE_HEADERLESS  \
+     | N00B_MARSHAL_ALLOC_F_PTR_WORDS_KNOWN)
 
 typedef struct {
     uint64_t marshal_magic;
@@ -92,6 +115,36 @@ typedef struct {
     uint32_t reserved;
 } n00b_marshal_pspatch_record_t;
 
+// CALLBACK-scan extension record. Emitted immediately after an ALLOC
+// record's payload when (and only when) that record's scan_kind is
+// CALLBACK. Non-CALLBACK ALLOC records never emit this, so their wire
+// bytes are byte-identical to v2. record_len covers the fixed struct
+// plus the variable-length identity payload (namespace/key/check bytes,
+// PSPATCH-style), 8-byte aligned. When has_identity == 0 (scan_user is
+// null: all/none/every_other), the identity fields are all zero and no
+// payload bytes follow the fixed struct.
+typedef struct {
+    uint32_t op;
+    uint32_t record_len;
+    uint64_t vaddr;          // ALLOC record's vaddr; binds the ext to its object.
+    uint32_t scan_cb_tag;    // n00b_marshal_scan_cb_tag_t
+    uint32_t has_identity;   // 0 (null scan_user) or 1 (descriptor present)
+    // Identity payload (mirrors n00b_marshal_pspatch_record_t), only
+    // meaningful when has_identity != 0.
+    uint64_t object_offset;
+    uint64_t object_len;
+    uint64_t tinfo;
+    uint32_t flags_mask;
+    uint32_t flags_value;
+    uint32_t scan_kind;      // scan_kind of the scan_user descriptor object
+    uint32_t identity_version;
+    uint32_t identity_kind;
+    uint32_t namespace_len;
+    uint32_t key_len;
+    uint32_t check_len;
+    uint32_t reserved;
+} n00b_marshal_cbscan_record_t;
+
 typedef struct {
     uint32_t op;
     uint32_t end_of_stream;
@@ -109,6 +162,17 @@ typedef struct n00b_marshal_node_t {
     n00b_marshal_alloc_record_t   rec;
     char                         *payload;
     bool                          scanned;
+    // CALLBACK-scan support. is_callback is set when the source object
+    // was allocated SCAN_KIND_CALLBACK; scan_cb_tag/scan_user capture the
+    // resolved built-in tag and the (static) scan_user descriptor; bitmap
+    // is the precise per-word pointer oracle computed once at scan time
+    // (D-040 OQ-3: stored, not re-derived) and drives scan_node instead
+    // of scan_word_for_policy. bitmap_words is its length in uint64_t.
+    bool                          is_callback;
+    n00b_marshal_scan_cb_tag_t    scan_cb_tag;
+    void                         *scan_user;
+    uint64_t                     *bitmap;
+    uint64_t                      bitmap_words;
 } n00b_marshal_node_t;
 
 typedef struct {
@@ -116,6 +180,11 @@ typedef struct {
     uint64_t                    user_len;
     void                       *user_ptr;
     n00b_marshal_alloc_record_t rec;
+    // CALLBACK-scan support: the stored pointer bitmap drives relink for
+    // CALLBACK segments (scan_word_for_policy returns false for CALLBACK).
+    bool                        is_callback;
+    uint64_t                   *bitmap;
+    uint64_t                    bitmap_words;
 } n00b_unmarshal_segment_t;
 
 typedef struct {
@@ -283,12 +352,81 @@ scan_word_for_policy(n00b_marshal_alloc_record_t *rec, uint64_t i)
     }
 }
 
+// Resolve a scan callback function pointer to its built-in tag.
+// Returns false for a custom (non-built-in) callback (D-039): the caller
+// raises N00B_MARSHAL_ERR_UNSUPPORTED_SCAN_CALLBACK. The address->tag
+// table lives here (D-040 OQ-1); the built-in set is closed.
+static bool
+marshal_scan_cb_to_tag(n00b_gc_scan_cb_t cb, n00b_marshal_scan_cb_tag_t *out)
+{
+    static const struct {
+        n00b_gc_scan_cb_t          cb;
+        n00b_marshal_scan_cb_tag_t tag;
+    } table[] = {
+        {n00b_gc_scan_cb_all, N00B_MARSHAL_SCAN_CB_TAG_ALL},
+        {n00b_gc_scan_cb_none, N00B_MARSHAL_SCAN_CB_TAG_NONE},
+        {n00b_gc_scan_cb_every_other, N00B_MARSHAL_SCAN_CB_TAG_EVERY_OTHER},
+        {n00b_gc_scan_cb_struct_field, N00B_MARSHAL_SCAN_CB_TAG_STRUCT_FIELD},
+        {n00b_gc_scan_cb_struct_layout, N00B_MARSHAL_SCAN_CB_TAG_STRUCT_LAYOUT},
+        {n00b_gc_scan_cb_type_layout, N00B_MARSHAL_SCAN_CB_TAG_TYPE_LAYOUT},
+    };
+
+    for (size_t i = 0; i < sizeof(table) / sizeof(table[0]); i++) {
+        if (table[i].cb == cb) {
+            *out = table[i].tag;
+            return true;
+        }
+    }
+    return false;
+}
+
+// Reverse of marshal_scan_cb_to_tag: tag -> built-in callback address.
+static bool
+marshal_tag_to_scan_cb(n00b_marshal_scan_cb_tag_t tag, n00b_gc_scan_cb_t *out)
+{
+    switch (tag) {
+    case N00B_MARSHAL_SCAN_CB_TAG_ALL:
+        *out = n00b_gc_scan_cb_all;
+        return true;
+    case N00B_MARSHAL_SCAN_CB_TAG_NONE:
+        *out = n00b_gc_scan_cb_none;
+        return true;
+    case N00B_MARSHAL_SCAN_CB_TAG_EVERY_OTHER:
+        *out = n00b_gc_scan_cb_every_other;
+        return true;
+    case N00B_MARSHAL_SCAN_CB_TAG_STRUCT_FIELD:
+        *out = n00b_gc_scan_cb_struct_field;
+        return true;
+    case N00B_MARSHAL_SCAN_CB_TAG_STRUCT_LAYOUT:
+        *out = n00b_gc_scan_cb_struct_layout;
+        return true;
+    case N00B_MARSHAL_SCAN_CB_TAG_TYPE_LAYOUT:
+        *out = n00b_gc_scan_cb_type_layout;
+        return true;
+    case N00B_MARSHAL_SCAN_CB_TAG_LIMIT:
+    default:
+        return false;
+    }
+}
+
+// A scan_cb_tag carries a scan_user descriptor (and thus an identity
+// payload) only for the struct-field / struct-layout callbacks
+// (D-040 OQ-5). all/none/every_other take no user data; TYPE_LAYOUT
+// re-derives scan_user from the allocation's tinfo on unmarshal.
+static bool
+marshal_scan_cb_tag_uses_user(n00b_marshal_scan_cb_tag_t tag)
+{
+    return tag == N00B_MARSHAL_SCAN_CB_TAG_STRUCT_FIELD
+        || tag == N00B_MARSHAL_SCAN_CB_TAG_STRUCT_LAYOUT;
+}
+
 static uint64_t
 marshal_scan_word_count(n00b_marshal_alloc_record_t *rec)
 {
     uint64_t user_words = rec->user_len / sizeof(uint64_t);
 
-    if (rec->ptr_words && rec->ptr_words < user_words) {
+    if ((rec->flags & N00B_MARSHAL_ALLOC_F_PTR_WORDS_KNOWN) != 0
+        && rec->ptr_words < user_words) {
         return rec->ptr_words;
     }
 
@@ -408,14 +546,88 @@ pspatch_payload_has_nul(const n00b_marshal_pspatch_record_t *rec)
         || memchr(pspatch_key_bytes(rec), '\0', rec->key_len) != nullptr;
 }
 
+// CBSCAN identity-payload accessors and length helper. The identity
+// payload bytes follow the fixed n00b_marshal_cbscan_record_t in the
+// same order as PSPATCH (namespace, key, check), but only when
+// has_identity != 0.
+static const unsigned char *
+cbscan_namespace_bytes(const n00b_marshal_cbscan_record_t *rec)
+{
+    return (const unsigned char *)rec + sizeof(*rec);
+}
+
+static const unsigned char *
+cbscan_key_bytes(const n00b_marshal_cbscan_record_t *rec)
+{
+    return cbscan_namespace_bytes(rec) + rec->namespace_len;
+}
+
+static const unsigned char *
+cbscan_check_bytes(const n00b_marshal_cbscan_record_t *rec)
+{
+    return cbscan_key_bytes(rec) + rec->key_len;
+}
+
+static bool
+cbscan_payload_has_nul(const n00b_marshal_cbscan_record_t *rec)
+{
+    return memchr(cbscan_namespace_bytes(rec), '\0', rec->namespace_len) != nullptr
+        || memchr(cbscan_key_bytes(rec), '\0', rec->key_len) != nullptr;
+}
+
+// Expected total CBSCAN record length (fixed struct + identity payload).
+// When has_identity == 0, the identity fields must all be zero and the
+// record is exactly the fixed struct, 8-byte aligned.
+static bool
+cbscan_expected_len(uint32_t has_identity,
+                    uint32_t namespace_len,
+                    uint32_t key_len,
+                    uint32_t check_len,
+                    uint32_t *out_len)
+{
+    if (!has_identity) {
+        if (namespace_len != 0 || key_len != 0 || check_len != 0) {
+            return false;
+        }
+        uint64_t len = align8(sizeof(n00b_marshal_cbscan_record_t));
+        if (len > UINT32_MAX) {
+            return false;
+        }
+        *out_len = (uint32_t)len;
+        return true;
+    }
+
+    if (namespace_len == 0 || key_len == 0
+        || check_len == 0 || check_len > N00B_MARSHAL_STATIC_CHECK_MAX) {
+        return false;
+    }
+
+    uint64_t len = sizeof(n00b_marshal_cbscan_record_t);
+    len += namespace_len;
+    len += key_len;
+    len += check_len;
+    len = align8(len);
+
+    if (len > UINT32_MAX) {
+        return false;
+    }
+
+    *out_len = (uint32_t)len;
+    return true;
+}
+
 static bool
 alloc_view(n00b_alloc_info_t              info,
            void                         **user_ptr,
            uint64_t                      *user_len,
-           n00b_marshal_alloc_record_t   *rec)
+           n00b_marshal_alloc_record_t   *rec,
+           n00b_gc_scan_cb_t             *scan_cb,
+           void                         **scan_user)
 {
-    *rec    = (typeof(*rec)){};
-    rec->op = N00B_MARSHAL_OP_ALLOC;
+    *rec       = (typeof(*rec)){};
+    rec->op    = N00B_MARSHAL_OP_ALLOC;
+    *scan_cb   = nullptr;
+    *scan_user = nullptr;
 
     if (info.kind == n00b_alloc_oob) {
         n00b_oob_hdr_t *oob = info.hdr.oob;
@@ -431,9 +643,17 @@ alloc_view(n00b_alloc_info_t              info,
         }
         rec->tinfo     = oob->tinfo;
         rec->ptr_words = oob->ptr_words;
+        if (oob->ptr_words_known) {
+            rec->flags |= N00B_MARSHAL_ALLOC_F_PTR_WORDS_KNOWN;
+        }
         rec->scan_kind = oob->scan_kind;
         rec->no_scan   = oob->no_scan;
         rec->is_array  = oob->is_array;
+        // The OOB header is the authoritative carrier for CALLBACK
+        // scan_cb / scan_user (W-1); CALLBACK allocations are runtime-
+        // forced onto this path (alloc.c:113-120).
+        *scan_cb   = oob->scan_cb;
+        *scan_user = oob->scan_user;
         return true;
     }
 
@@ -444,9 +664,14 @@ alloc_view(n00b_alloc_info_t              info,
         rec->flags            = N00B_MARSHAL_ALLOC_F_SOURCE_INLINE;
         rec->tinfo            = hdr->tinfo;
         rec->ptr_words        = hdr->ptr_words;
+        if (hdr->ptr_words_known) {
+            rec->flags |= N00B_MARSHAL_ALLOC_F_PTR_WORDS_KNOWN;
+        }
         rec->scan_kind        = hdr->scan_kind;
         rec->no_scan          = hdr->no_scan;
         rec->is_array         = hdr->is_array;
+        *scan_cb              = hdr->scan_cb;
+        *scan_user            = hdr->scan_user;
         return true;
     }
 
@@ -459,8 +684,10 @@ marshal_add_alloc(n00b_marshal_ctx_t *ctx, n00b_alloc_info_t info)
     void                       *user_ptr = nullptr;
     uint64_t                    user_len = 0;
     n00b_marshal_alloc_record_t rec;
+    n00b_gc_scan_cb_t           scan_cb   = nullptr;
+    void                       *scan_user = nullptr;
 
-    if (!alloc_view(info, &user_ptr, &user_len, &rec)) {
+    if (!alloc_view(info, &user_ptr, &user_len, &rec, &scan_cb, &scan_user)) {
         marshal_set_error(&ctx->status,
                           &ctx->error,
                           N00B_MARSHAL_ERR_UNSUPPORTED_ALLOCATION,
@@ -468,12 +695,38 @@ marshal_add_alloc(n00b_marshal_ctx_t *ctx, n00b_alloc_info_t info)
         return nullptr;
     }
 
+    // CALLBACK objects round-trip via a built-in scan_cb tag plus, for
+    // struct_field / struct_layout, a static-identity scan_user payload
+    // (D-038/D-039). A custom (non-built-in) scan_cb is an explicit error.
+    bool                       is_callback = false;
+    n00b_marshal_scan_cb_tag_t scan_cb_tag = N00B_MARSHAL_SCAN_CB_TAG_LIMIT;
+
     if (rec.scan_kind == N00B_GC_SCAN_KIND_CALLBACK) {
-        marshal_set_error(&ctx->status,
-                          &ctx->error,
-                          N00B_MARSHAL_ERR_UNSUPPORTED_SCAN_POLICY,
-                          r"callback scan policy is not yet marshalable");
-        return nullptr;
+        if (!marshal_scan_cb_to_tag(scan_cb, &scan_cb_tag)) {
+            marshal_set_error(&ctx->status,
+                              &ctx->error,
+                              N00B_MARSHAL_ERR_UNSUPPORTED_SCAN_CALLBACK,
+                              r"callback scan policy uses a non-built-in scan_cb");
+            return nullptr;
+        }
+        if (marshal_scan_cb_tag_uses_user(scan_cb_tag) && scan_user == nullptr) {
+            marshal_set_error(&ctx->status,
+                              &ctx->error,
+                              N00B_MARSHAL_ERR_UNSUPPORTED_SCAN_CALLBACK,
+                              r"struct-layout scan callback is missing its scan_user descriptor");
+            return nullptr;
+        }
+        if (scan_cb_tag == N00B_MARSHAL_SCAN_CB_TAG_TYPE_LAYOUT && rec.tinfo == 0) {
+            rec.tinfo = n00b_gc_type_map_hash_for_layout(scan_user);
+            if (rec.tinfo == 0) {
+                marshal_set_error(&ctx->status,
+                                  &ctx->error,
+                                  N00B_MARSHAL_ERR_UNSUPPORTED_SCAN_CALLBACK,
+                                  r"type-layout scan callback is missing its type hash");
+                return nullptr;
+            }
+        }
+        is_callback = true;
     }
 
     if (rec.ptr_words > (user_len / sizeof(uint64_t))) {
@@ -500,12 +753,17 @@ marshal_add_alloc(n00b_marshal_ctx_t *ctx, n00b_alloc_info_t info)
         return nullptr;
     }
 
-    node           = marshal_scratch_alloc(ctx->scratch_alloc, sizeof(*node));
-    node->user_ptr = user_ptr;
-    node->vaddr    = ((uint64_t)ctx->base_address << 32) | ctx->next_offset;
-    node->rec      = rec;
-    node->payload  = marshal_scratch_alloc(ctx->scratch_alloc, payload_len);
-    node->scanned  = false;
+    node              = marshal_scratch_alloc(ctx->scratch_alloc, sizeof(*node));
+    node->user_ptr    = user_ptr;
+    node->vaddr       = ((uint64_t)ctx->base_address << 32) | ctx->next_offset;
+    node->rec         = rec;
+    node->payload     = marshal_scratch_alloc(ctx->scratch_alloc, payload_len);
+    node->scanned     = false;
+    node->is_callback = is_callback;
+    node->scan_cb_tag = scan_cb_tag;
+    node->scan_user   = scan_user;
+    node->bitmap      = nullptr;
+    node->bitmap_words = 0;
 
     node->rec.vaddr       = node->vaddr;
     node->rec.user_len    = user_len;
@@ -762,6 +1020,219 @@ emit_alloc(n00b_marshal_ctx_t *ctx, n00b_marshal_node_t *node)
                  (size_t)node->rec.payload_len);
 }
 
+static bool
+marshal_interior_in_bounds(uint64_t interior, uint64_t user_len)
+{
+    if (user_len == 0) {
+        return interior == 0;
+    }
+    return interior < user_len;
+}
+
+// Build the precise per-word pointer bitmap for a CALLBACK node by
+// invoking its built-in scan_cb into a private scratch n00b_gc_map_t
+// (D-040 OQ-3: the bitmap is computed once and stored on the node).
+// The map's user_ptr is the LIVE source object: the built-in callbacks
+// only READ num_words/user to set bits and never mutate the object
+// (W-6), so this is side-effect-free on the live graph. The bitmap and
+// the map's backing storage are private scratch allocations.
+static bool
+compute_callback_bitmap(n00b_marshal_ctx_t *ctx, n00b_marshal_node_t *node)
+{
+    n00b_gc_scan_cb_t cb = nullptr;
+    if (!marshal_tag_to_scan_cb(node->scan_cb_tag, &cb)) {
+        marshal_set_error(&ctx->status,
+                          &ctx->error,
+                          N00B_MARSHAL_ERR_UNSUPPORTED_SCAN_CALLBACK,
+                          r"callback scan policy uses a non-built-in scan_cb");
+        return false;
+    }
+
+    uint64_t num_words = marshal_scan_word_count(&node->rec);
+    uint64_t map_words = n00b_gc_map_word_count(num_words);
+    if (map_words == 0) {
+        map_words = 1;
+    }
+
+    uint64_t *bitmap = marshal_scratch_alloc(ctx->scratch_alloc,
+                                             map_words * sizeof(uint64_t));
+    memset(bitmap, 0, map_words * sizeof(uint64_t));
+
+    n00b_gc_map_t map = {
+        .user_ptr  = node->user_ptr,
+        .num_words = num_words,
+        .bitmap    = bitmap,
+    };
+    cb(&map, node->scan_user);
+
+    node->bitmap       = bitmap;
+    node->bitmap_words = map_words;
+    return true;
+}
+
+// Emit the CALLBACK-scan extension record for a node immediately after
+// its ALLOC record + payload. Carries the built-in scan_cb tag and, for
+// struct_field / struct_layout, the scan_user descriptor as a PSPATCH-
+// style static identity (resolved/validated exactly like emit_pspatch).
+static bool
+emit_cbscan(n00b_marshal_ctx_t *ctx, n00b_marshal_node_t *node)
+{
+    if (!marshal_scan_cb_tag_uses_user(node->scan_cb_tag)) {
+        // all / none / every_other: no scan_user, no identity payload.
+        uint32_t record_len;
+        if (!cbscan_expected_len(0, 0, 0, 0, &record_len)) {
+            marshal_set_error(&ctx->status,
+                              &ctx->error,
+                              N00B_MARSHAL_ERR_UNSUPPORTED_SCAN_CALLBACK,
+                              r"callback-scan record cannot be encoded");
+            return false;
+        }
+        n00b_marshal_cbscan_record_t rec = {
+            .op          = N00B_MARSHAL_OP_CBSCAN,
+            .record_len  = record_len,
+            .vaddr       = node->vaddr,
+            .scan_cb_tag = node->scan_cb_tag,
+        };
+        bytes_append(&ctx->out, ctx->scratch_alloc, &rec, sizeof(rec));
+        bytes_append_zero(&ctx->out, ctx->scratch_alloc, record_len - sizeof(rec));
+        return true;
+    }
+
+    // struct_field / struct_layout: the scan_user descriptor must be a
+    // registered static object with an identity (W-2 / D-040 OQ-2).
+    n00b_marshal_static_ref_t ref;
+    if (!static_ref_view(node->scan_user, &ref) || ref.identity == nullptr) {
+        marshal_set_error(&ctx->status,
+                          &ctx->error,
+                          N00B_MARSHAL_ERR_UNSUPPORTED_SCAN_CALLBACK,
+                          r"callback scan_user descriptor is not a registered static identity");
+        return false;
+    }
+
+    const n00b_static_identity_t *identity = ref.identity;
+    if (!marshal_static_identity_valid(identity)) {
+        marshal_set_error(&ctx->status,
+                          &ctx->error,
+                          N00B_MARSHAL_ERR_UNSUPPORTED_SCAN_CALLBACK,
+                          r"callback scan_user identity is malformed");
+        return false;
+    }
+
+    uint64_t offset = (uint64_t)(uintptr_t)node->scan_user - ref.start;
+    if (offset >= ref.len) {
+        marshal_set_error(&ctx->status,
+                          &ctx->error,
+                          N00B_MARSHAL_ERR_UNSUPPORTED_SCAN_CALLBACK,
+                          r"callback scan_user lies outside its registered object");
+        return false;
+    }
+
+    uint64_t remain    = ref.len - offset;
+    uint32_t check_len = (uint32_t)(remain < N00B_MARSHAL_STATIC_CHECK_MAX
+                                       ? remain
+                                       : N00B_MARSHAL_STATIC_CHECK_MAX);
+    if (!check_len) {
+        marshal_set_error(&ctx->status,
+                          &ctx->error,
+                          N00B_MARSHAL_ERR_UNSUPPORTED_SCAN_CALLBACK,
+                          r"callback scan_user has no bytes available for validation");
+        return false;
+    }
+
+    uint32_t namespace_len;
+    uint32_t key_len;
+    uint32_t identity_len;
+    if (!pspatch_lengths_for_identity(identity,
+                                      check_len,
+                                      &namespace_len,
+                                      &key_len,
+                                      &identity_len)) {
+        marshal_set_error(&ctx->status,
+                          &ctx->error,
+                          N00B_MARSHAL_ERR_UNSUPPORTED_SCAN_CALLBACK,
+                          r"callback scan_user identity cannot be encoded");
+        return false;
+    }
+
+    const uint32_t flags_mask  = N00B_STATIC_OBJECT_F_READONLY
+                               | N00B_STATIC_OBJECT_F_MUTABLE;
+    const uint32_t flags_value = ref.flags & flags_mask;
+    const unsigned char *check = (const unsigned char *)(uintptr_t)node->scan_user;
+
+    n00b_static_identity_query_t query = {
+        .checks = N00B_STATIC_IDENTITY_CHECK_LEN
+                | N00B_STATIC_IDENTITY_CHECK_TINFO
+                | N00B_STATIC_IDENTITY_CHECK_SCAN_KIND
+                | N00B_STATIC_IDENTITY_CHECK_FLAGS
+                | N00B_STATIC_IDENTITY_CHECK_BYTES,
+        .len          = ref.len,
+        .tinfo        = ref.tinfo,
+        .scan_kind    = ref.scan_kind,
+        .flags_mask   = flags_mask,
+        .flags_value  = flags_value,
+        .check_offset = offset,
+        .check_len    = check_len,
+        .check_bytes  = check,
+    };
+
+    n00b_alloc_range_t *range = nullptr;
+    n00b_static_identity_status_t lookup = n00b_static_identity_lookup(identity,
+                                                                       &query,
+                                                                       &range);
+    if (lookup != N00B_STATIC_IDENTITY_OK) {
+        marshal_set_error(&ctx->status,
+                          &ctx->error,
+                          marshal_status_from_static_identity(lookup),
+                          r"callback scan_user identity failed validation");
+        return false;
+    }
+    if (range == nullptr || (uint64_t)(uintptr_t)range->start != ref.start) {
+        marshal_set_error(&ctx->status,
+                          &ctx->error,
+                          N00B_MARSHAL_ERR_STATIC_IDENTITY_DUPLICATE,
+                          r"callback scan_user identity resolved to a different object");
+        return false;
+    }
+
+    uint32_t record_len;
+    if (!cbscan_expected_len(1, namespace_len, key_len, check_len, &record_len)) {
+        marshal_set_error(&ctx->status,
+                          &ctx->error,
+                          N00B_MARSHAL_ERR_UNSUPPORTED_SCAN_CALLBACK,
+                          r"callback-scan record cannot be encoded");
+        return false;
+    }
+
+    n00b_marshal_cbscan_record_t rec = {
+        .op               = N00B_MARSHAL_OP_CBSCAN,
+        .record_len       = record_len,
+        .vaddr            = node->vaddr,
+        .scan_cb_tag      = node->scan_cb_tag,
+        .has_identity     = 1,
+        .object_offset    = offset,
+        .object_len       = ref.len,
+        .tinfo            = ref.tinfo,
+        .flags_mask       = flags_mask,
+        .flags_value      = flags_value,
+        .scan_kind        = ref.scan_kind,
+        .identity_version = identity->version,
+        .identity_kind    = identity->kind,
+        .namespace_len    = namespace_len,
+        .key_len          = key_len,
+        .check_len        = check_len,
+        .reserved         = 0,
+    };
+
+    bytes_append(&ctx->out, ctx->scratch_alloc, &rec, sizeof(rec));
+    bytes_append(&ctx->out, ctx->scratch_alloc, identity->namespace_id, namespace_len);
+    bytes_append(&ctx->out, ctx->scratch_alloc, identity->object_key, key_len);
+    bytes_append(&ctx->out, ctx->scratch_alloc, check, check_len);
+
+    size_t used = sizeof(rec) + namespace_len + key_len + check_len;
+    bytes_append_zero(&ctx->out, ctx->scratch_alloc, record_len - used);
+    return true;
+}
+
 static void
 scan_node(n00b_marshal_ctx_t *ctx, n00b_marshal_node_t *node)
 {
@@ -770,14 +1241,36 @@ scan_node(n00b_marshal_ctx_t *ctx, n00b_marshal_node_t *node)
     }
 
     node->scanned = true;
-    uint64_t nwords = marshal_scan_word_count(&node->rec);
+
+    // For CALLBACK nodes the bitmap (not scan_word_for_policy) is the
+    // per-word pointer oracle (D-040 OQ-3); compute it once before the
+    // scan loop and walk every user word so the bitmap decides each.
+    uint64_t nwords;
+    if (node->is_callback) {
+        if (!compute_callback_bitmap(ctx, node)) {
+            return;
+        }
+        nwords = marshal_scan_word_count(&node->rec);
+    }
+    else {
+        nwords = marshal_scan_word_count(&node->rec);
+    }
     uint64_t *words = (uint64_t *)node->payload;
 
     for (uint64_t i = 0; i < nwords; i++) {
         uint64_t word      = words[i];
         bool     rewritten = false;
 
-        if (scan_word_for_policy(&node->rec, i) && word) {
+        bool is_ptr;
+        if (node->is_callback) {
+            is_ptr = (i < node->bitmap_words * 64)
+                  && n00b_gc_map_is_set(&(n00b_gc_map_t){.bitmap = node->bitmap}, i);
+        }
+        else {
+            is_ptr = scan_word_for_policy(&node->rec, i);
+        }
+
+        if (is_ptr && word) {
             auto mmap_opt = n00b_mmap_by_address((void *)(uintptr_t)word);
             if (n00b_option_is_set(mmap_opt)) {
                 n00b_mmap_info_t *map = n00b_option_get(mmap_opt);
@@ -792,7 +1285,7 @@ scan_node(n00b_marshal_ctx_t *ctx, n00b_marshal_node_t *node)
                         return;
                     }
                     uint64_t interior = word - (uint64_t)(uintptr_t)target->user_ptr;
-                    if (interior >= target->rec.user_len) {
+                    if (!marshal_interior_in_bounds(interior, target->rec.user_len)) {
                         marshal_set_error(&ctx->status,
                                           &ctx->error,
                                           N00B_MARSHAL_ERR_UNSUPPORTED_ALLOCATION,
@@ -824,6 +1317,15 @@ scan_node(n00b_marshal_ctx_t *ctx, n00b_marshal_node_t *node)
     }
 
     emit_alloc(ctx, node);
+
+    if (node->is_callback) {
+        // The CBSCAN ext record immediately follows this node's ALLOC
+        // record + payload on the wire (v3); non-CALLBACK nodes emit
+        // nothing here, so their bytes stay identical to v2.
+        if (!emit_cbscan(ctx, node)) {
+            return;
+        }
+    }
 }
 
 static bool
@@ -844,7 +1346,7 @@ marshal_process(n00b_marshal_ctx_t *ctx, void *addr)
     }
 
     uint64_t interior = (uint64_t)(uintptr_t)addr - (uint64_t)(uintptr_t)root->user_ptr;
-    if (interior >= root->rec.user_len) {
+    if (!marshal_interior_in_bounds(interior, root->rec.user_len)) {
         marshal_set_error(&ctx->status,
                           &ctx->error,
                           N00B_MARSHAL_ERR_UNSUPPORTED_ALLOCATION,
@@ -937,6 +1439,8 @@ n00b_marshal_status_name(n00b_marshal_status_t code)
         return r"unsupported-allocation";
     case N00B_MARSHAL_ERR_UNSUPPORTED_SCAN_POLICY:
         return r"unsupported-scan-policy";
+    case N00B_MARSHAL_ERR_UNSUPPORTED_SCAN_CALLBACK:
+        return r"unsupported-scan-callback";
     case N00B_MARSHAL_ERR_UNSUPPORTED_STATIC_POINTER:
         return r"unsupported-static-pointer";
     case N00B_MARSHAL_ERR_BAD_STREAM:
@@ -1043,7 +1547,8 @@ segment_for_vaddr(n00b_unmarshal_ctx_t *ctx, uint64_t vaddr)
 {
     for (size_t i = 0; i < ctx->segment_len; i++) {
         n00b_unmarshal_segment_t *seg = ctx->segments[i];
-        if (vaddr >= seg->vaddr && vaddr < seg->vaddr + seg->user_len) {
+        if (vaddr >= seg->vaddr
+            && marshal_interior_in_bounds(vaddr - seg->vaddr, seg->user_len)) {
             return seg;
         }
     }
@@ -1069,7 +1574,7 @@ addr_for_vaddr_span(n00b_unmarshal_ctx_t *ctx, uint64_t vaddr, uint64_t len)
 static void *
 addr_for_vaddr(n00b_unmarshal_ctx_t *ctx, uint64_t vaddr)
 {
-    return addr_for_vaddr_span(ctx, vaddr, 1);
+    return addr_for_vaddr_span(ctx, vaddr, 0);
 }
 
 static uint64_t *
@@ -1102,11 +1607,22 @@ stream_complete(n00b_unmarshal_ctx_t *ctx)
 
     uint32_t expected_offset = 0;
     size_t   ix              = sizeof(*hdr);
+    // When a CALLBACK ALLOC record is parsed, the very next record must
+    // be its CBSCAN extension (v3). These track that obligation.
+    bool     expect_cbscan       = false;
+    uint64_t expect_cbscan_vaddr = 0;
     while (ix < ctx->in.len) {
         if (ctx->in.len - ix < sizeof(uint32_t)) {
             return false;
         }
         uint32_t op = *(uint32_t *)(ctx->in.data + ix);
+        if (expect_cbscan && op != N00B_MARSHAL_OP_CBSCAN) {
+            marshal_set_error(&ctx->status,
+                              &ctx->error,
+                              N00B_MARSHAL_ERR_BAD_STREAM,
+                              r"callback allocation record missing its scan extension");
+            return false;
+        }
         switch (op) {
         case N00B_MARSHAL_OP_ALLOC: {
             if (ctx->in.len - ix < sizeof(n00b_marshal_alloc_record_t)) {
@@ -1127,11 +1643,17 @@ stream_complete(n00b_unmarshal_ctx_t *ctx)
                 return false;
             }
             if (rec->scan_kind == N00B_GC_SCAN_KIND_CALLBACK) {
-                marshal_set_error(&ctx->status,
-                                  &ctx->error,
-                                  N00B_MARSHAL_ERR_UNSUPPORTED_SCAN_POLICY,
-                                  r"callback scan policy is not yet unmarshalable");
-                return false;
+                // CALLBACK records are a v3 feature; a CALLBACK record in
+                // a stream claiming version < 3 is malformed (D-040 OQ-4).
+                if (hdr->version < 3) {
+                    marshal_set_error(&ctx->status,
+                                      &ctx->error,
+                                      N00B_MARSHAL_ERR_BAD_STREAM,
+                                      r"callback allocation record requires marshal stream version 3");
+                    return false;
+                }
+                expect_cbscan       = true;
+                expect_cbscan_vaddr = rec->vaddr;
             }
             ix += sizeof(*rec);
             if (rec->payload_len > SIZE_MAX || ctx->in.len - ix < rec->payload_len) {
@@ -1227,6 +1749,99 @@ stream_complete(n00b_unmarshal_ctx_t *ctx)
             ix += rec->record_len;
             break;
         }
+        case N00B_MARSHAL_OP_CBSCAN: {
+            if (ctx->in.len - ix < sizeof(n00b_marshal_cbscan_record_t)) {
+                return false;
+            }
+            n00b_marshal_cbscan_record_t *rec = (void *)(ctx->in.data + ix);
+            // A CBSCAN record is only legal immediately after a CALLBACK
+            // ALLOC record carrying the matching vaddr (v3 only).
+            if (!expect_cbscan
+                || hdr->version < 3
+                || rec->vaddr != expect_cbscan_vaddr
+                || rec->scan_cb_tag >= N00B_MARSHAL_SCAN_CB_TAG_LIMIT
+                || rec->has_identity > 1) {
+                marshal_set_error(&ctx->status,
+                                  &ctx->error,
+                                  N00B_MARSHAL_ERR_BAD_STREAM,
+                                  r"invalid callback-scan record placement");
+                return false;
+            }
+
+            bool tag_uses_user = (rec->scan_cb_tag
+                                  == N00B_MARSHAL_SCAN_CB_TAG_STRUCT_FIELD)
+                              || (rec->scan_cb_tag
+                                  == N00B_MARSHAL_SCAN_CB_TAG_STRUCT_LAYOUT);
+            if ((bool)rec->has_identity != tag_uses_user) {
+                marshal_set_error(&ctx->status,
+                                  &ctx->error,
+                                  N00B_MARSHAL_ERR_BAD_STREAM,
+                                  r"callback-scan identity presence disagrees with scan_cb tag");
+                return false;
+            }
+
+            uint32_t expected_len;
+            if (!cbscan_expected_len(rec->has_identity,
+                                     rec->namespace_len,
+                                     rec->key_len,
+                                     rec->check_len,
+                                     &expected_len)
+                || rec->record_len != expected_len
+                || rec->reserved != 0) {
+                marshal_set_error(&ctx->status,
+                                  &ctx->error,
+                                  N00B_MARSHAL_ERR_BAD_STREAM,
+                                  r"invalid callback-scan record shape");
+                return false;
+            }
+
+            if (rec->has_identity) {
+                const uint32_t flags_mask = N00B_STATIC_OBJECT_F_READONLY
+                                          | N00B_STATIC_OBJECT_F_MUTABLE;
+                if (rec->object_len == 0
+                    || rec->object_offset >= rec->object_len
+                    || rec->check_len > rec->object_len - rec->object_offset
+                    || rec->identity_version != N00B_STATIC_IDENTITY_VERSION
+                    || rec->identity_kind == N00B_STATIC_IDENTITY_NONE
+                    || rec->identity_kind > N00B_STATIC_IDENTITY_MANUAL
+                    || rec->flags_mask != flags_mask
+                    || (rec->flags_value & ~rec->flags_mask) != 0
+                    || rec->scan_kind > N00B_GC_SCAN_KIND_CALLBACK) {
+                    marshal_set_error(&ctx->status,
+                                      &ctx->error,
+                                      N00B_MARSHAL_ERR_BAD_STREAM,
+                                      r"invalid callback-scan identity payload");
+                    return false;
+                }
+            }
+            else {
+                // No identity: every identity field must be zero.
+                if (rec->object_offset != 0 || rec->object_len != 0
+                    || rec->tinfo != 0 || rec->flags_mask != 0
+                    || rec->flags_value != 0 || rec->scan_kind != 0
+                    || rec->identity_version != 0 || rec->identity_kind != 0) {
+                    marshal_set_error(&ctx->status,
+                                      &ctx->error,
+                                      N00B_MARSHAL_ERR_BAD_STREAM,
+                                      r"callback-scan record carries unexpected identity payload");
+                    return false;
+                }
+            }
+
+            if (ctx->in.len - ix < rec->record_len) {
+                return false;
+            }
+            if (rec->has_identity && cbscan_payload_has_nul(rec)) {
+                marshal_set_error(&ctx->status,
+                                  &ctx->error,
+                                  N00B_MARSHAL_ERR_BAD_STREAM,
+                                  r"callback-scan identity contains nul bytes");
+                return false;
+            }
+            expect_cbscan = false;
+            ix += rec->record_len;
+            break;
+        }
         case N00B_MARSHAL_OP_STOP: {
             if (ctx->in.len - ix < sizeof(n00b_marshal_stop_record_t)) {
                 return false;
@@ -1253,39 +1868,180 @@ stream_complete(n00b_unmarshal_ctx_t *ctx)
     return false;
 }
 
-static void
-patch_alloc_metadata(void *user_ptr, n00b_marshal_alloc_record_t *rec)
+// Resolve a validated CBSCAN ext record into the built-in scan_cb and
+// (for struct_field / struct_layout) the scan_user descriptor address,
+// using the same static-identity lookup the PSPATCH relink uses. On a
+// successful return, *out_scan_cb / *out_scan_user are the values to
+// restore on the reconstructed object.
+static bool
+cbscan_resolve(n00b_unmarshal_ctx_t                *ctx,
+               const n00b_marshal_cbscan_record_t  *rec,
+               uint64_t                             owner_tinfo,
+               n00b_gc_scan_cb_t                   *out_scan_cb,
+               void                               **out_scan_user)
 {
+    n00b_gc_scan_cb_t cb = nullptr;
+    if (!marshal_tag_to_scan_cb((n00b_marshal_scan_cb_tag_t)rec->scan_cb_tag, &cb)) {
+        marshal_set_error(&ctx->status,
+                          &ctx->error,
+                          N00B_MARSHAL_ERR_BAD_STREAM,
+                          r"callback-scan record carries an unknown scan_cb tag");
+        return false;
+    }
+
+    *out_scan_cb   = cb;
+    *out_scan_user = nullptr;
+
+    if (!rec->has_identity) {
+        if (rec->scan_cb_tag == N00B_MARSHAL_SCAN_CB_TAG_TYPE_LAYOUT) {
+            const n00b_gc_struct_layout_t *layout =
+                n00b_gc_type_map_lookup(owner_tinfo);
+            if (layout == nullptr) {
+                marshal_set_error(&ctx->status,
+                                  &ctx->error,
+                                  N00B_MARSHAL_ERR_UNSUPPORTED_SCAN_CALLBACK,
+                                  r"callback-scan TYPE_LAYOUT descriptor is missing for allocation tinfo");
+                return false;
+            }
+            *out_scan_user = (void *)layout;
+        }
+        return true;
+    }
+
+    char *namespace_id = marshal_scratch_alloc(ctx->scratch_alloc,
+                                               rec->namespace_len + 1);
+    memcpy(namespace_id, cbscan_namespace_bytes(rec), rec->namespace_len);
+    namespace_id[rec->namespace_len] = '\0';
+
+    char *object_key = marshal_scratch_alloc(ctx->scratch_alloc,
+                                             rec->key_len + 1);
+    memcpy(object_key, cbscan_key_bytes(rec), rec->key_len);
+    object_key[rec->key_len] = '\0';
+
+    n00b_static_identity_t identity = {
+        .version      = rec->identity_version,
+        .kind         = (n00b_static_identity_kind_t)rec->identity_kind,
+        .namespace_id = namespace_id,
+        .object_key   = object_key,
+    };
+    n00b_static_identity_query_t query = {
+        .checks = N00B_STATIC_IDENTITY_CHECK_LEN
+                | N00B_STATIC_IDENTITY_CHECK_TINFO
+                | N00B_STATIC_IDENTITY_CHECK_SCAN_KIND
+                | N00B_STATIC_IDENTITY_CHECK_FLAGS
+                | N00B_STATIC_IDENTITY_CHECK_BYTES,
+        .len          = rec->object_len,
+        .tinfo        = rec->tinfo,
+        .scan_kind    = (n00b_gc_scan_kind_t)rec->scan_kind,
+        .flags_mask   = rec->flags_mask,
+        .flags_value  = rec->flags_value,
+        .check_offset = rec->object_offset,
+        .check_len    = rec->check_len,
+        .check_bytes  = cbscan_check_bytes(rec),
+    };
+
+    n00b_alloc_range_t *range = nullptr;
+    n00b_static_identity_status_t lookup = n00b_static_identity_lookup(&identity,
+                                                                       &query,
+                                                                       &range);
+    if (lookup != N00B_STATIC_IDENTITY_OK) {
+        marshal_set_error(&ctx->status,
+                          &ctx->error,
+                          marshal_status_from_static_identity(lookup),
+                          r"callback scan_user identity failed validation");
+        return false;
+    }
+    if (range == nullptr) {
+        marshal_set_error(&ctx->status,
+                          &ctx->error,
+                          N00B_MARSHAL_ERR_STATIC_IDENTITY_MISSING,
+                          r"callback scan_user identity resolved to no object");
+        return false;
+    }
+
+    *out_scan_user = (void *)((char *)range->start + rec->object_offset);
+    return true;
+}
+
+// Reconstruct the per-word pointer bitmap for an unmarshaled CALLBACK
+// segment by invoking the resolved built-in scan_cb over the (already
+// allocated, not-yet-relinked) object. Stored on the segment so relink
+// reads it instead of re-invoking scan_cb (D-040 OQ-3). The bitmap and
+// the map storage are private scratch allocations.
+static bool
+unmarshal_store_callback_bitmap(n00b_unmarshal_ctx_t     *ctx,
+                                n00b_unmarshal_segment_t *seg,
+                                n00b_gc_scan_cb_t         scan_cb,
+                                void                     *scan_user)
+{
+    uint64_t num_words = marshal_scan_word_count(&seg->rec);
+    uint64_t map_words = n00b_gc_map_word_count(num_words);
+    if (map_words == 0) {
+        map_words = 1;
+    }
+
+    uint64_t *bitmap = marshal_scratch_alloc(ctx->scratch_alloc,
+                                             map_words * sizeof(uint64_t));
+    memset(bitmap, 0, map_words * sizeof(uint64_t));
+
+    n00b_gc_map_t map = {
+        .user_ptr  = seg->user_ptr,
+        .num_words = num_words,
+        .bitmap    = bitmap,
+    };
+    scan_cb(&map, scan_user);
+
+    seg->is_callback  = true;
+    seg->bitmap       = bitmap;
+    seg->bitmap_words = map_words;
+    return true;
+}
+
+static void
+patch_alloc_metadata(void              *user_ptr,
+                     n00b_marshal_alloc_record_t *rec,
+                     n00b_gc_scan_cb_t  scan_cb,
+                     void              *scan_user)
+{
+    // For CALLBACK records, scan_cb / scan_user are restored from the
+    // CBSCAN ext (resolved tag + identity); for all other records they
+    // are null, matching the pre-v3 behavior.
     n00b_alloc_info_t info = n00b_find_alloc_info(user_ptr);
     if (info.kind == n00b_alloc_oob) {
         n00b_oob_hdr_t *oob = info.hdr.oob;
+        bool            ptr_words_known =
+            (rec->flags & N00B_MARSHAL_ALLOC_F_PTR_WORDS_KNOWN) != 0;
         oob->tinfo          = rec->tinfo;
         oob->ptr_words      = rec->ptr_words;
+        oob->ptr_words_known = ptr_words_known;
         oob->is_array       = rec->is_array != 0;
         oob->no_scan        = rec->no_scan != 0;
         oob->scan_kind      = rec->scan_kind;
-        oob->scan_cb        = nullptr;
-        oob->scan_user      = nullptr;
+        oob->scan_cb        = scan_cb;
+        oob->scan_user      = scan_user;
         if (oob->hcur) {
-            oob->hcur->tinfo     = rec->tinfo;
-            oob->hcur->ptr_words = rec->ptr_words;
-            oob->hcur->is_array  = rec->is_array != 0;
-            oob->hcur->no_scan   = rec->no_scan != 0;
-            oob->hcur->scan_kind = rec->scan_kind;
-            oob->hcur->scan_cb   = nullptr;
-            oob->hcur->scan_user = nullptr;
+            oob->hcur->tinfo           = rec->tinfo;
+            oob->hcur->ptr_words       = rec->ptr_words;
+            oob->hcur->ptr_words_known = ptr_words_known;
+            oob->hcur->is_array        = rec->is_array != 0;
+            oob->hcur->no_scan         = rec->no_scan != 0;
+            oob->hcur->scan_kind       = rec->scan_kind;
+            oob->hcur->scan_cb         = scan_cb;
+            oob->hcur->scan_user       = scan_user;
         }
         return;
     }
     if (info.kind == n00b_alloc_inline) {
         n00b_inline_hdr_t *hdr = info.hdr.in_line;
-        hdr->tinfo            = rec->tinfo;
-        hdr->ptr_words        = rec->ptr_words;
-        hdr->is_array         = rec->is_array != 0;
-        hdr->no_scan          = rec->no_scan != 0;
-        hdr->scan_kind        = rec->scan_kind;
-        hdr->scan_cb          = nullptr;
-        hdr->scan_user        = nullptr;
+        hdr->tinfo           = rec->tinfo;
+        hdr->ptr_words       = rec->ptr_words;
+        hdr->ptr_words_known =
+            (rec->flags & N00B_MARSHAL_ALLOC_F_PTR_WORDS_KNOWN) != 0;
+        hdr->is_array        = rec->is_array != 0;
+        hdr->no_scan         = rec->no_scan != 0;
+        hdr->scan_kind       = rec->scan_kind;
+        hdr->scan_cb         = scan_cb;
+        hdr->scan_user       = scan_user;
     }
 }
 
@@ -1312,14 +2068,49 @@ unmarshal_allocate_records(n00b_unmarshal_ctx_t *ctx)
             ix += rec->record_len;
             continue;
         }
+        if (op == N00B_MARSHAL_OP_CBSCAN) {
+            // Consumed alongside its preceding CALLBACK ALLOC record below.
+            n00b_marshal_cbscan_record_t *rec = (void *)(ctx->in.data + ix);
+            ix += rec->record_len;
+            continue;
+        }
 
         n00b_marshal_alloc_record_t *rec = (void *)(ctx->in.data + ix);
         ix += sizeof(*rec);
 
+        // For a CALLBACK record, resolve scan_cb / scan_user from the
+        // CBSCAN ext that stream_complete guaranteed follows the payload.
+        bool                          is_callback = false;
+        n00b_gc_scan_cb_t             scan_cb     = nullptr;
+        void                         *scan_user   = nullptr;
+        n00b_marshal_cbscan_record_t *cbscan      = nullptr;
+        if (rec->scan_kind == N00B_GC_SCAN_KIND_CALLBACK) {
+            is_callback = true;
+            cbscan      = (void *)(ctx->in.data + ix + (size_t)rec->payload_len);
+            if (!cbscan_resolve(ctx, cbscan, rec->tinfo, &scan_cb, &scan_user)) {
+                return false;
+            }
+            // W-4: the CALLBACK => OOB path asserts inside the alloc
+            // primitive (alloc.c:118) when the allocator has no metadata
+            // pool. Pre-check here and surface a clean marshal error.
+            n00b_allocator_t *allocator = (n00b_allocator_t *)ctx->target_arena;
+            if (allocator->metadata_pool == nullptr) {
+                marshal_set_error(&ctx->status,
+                                  &ctx->error,
+                                  N00B_MARSHAL_ERR_UNSUPPORTED_ALLOCATION,
+                                  r"callback-scanned object requires a target arena with out-of-band metadata");
+                return false;
+            }
+        }
+
+        // W-5: extend the EXISTING unmarshal opts feeding the EXISTING
+        // _n00b_alloc_raw call; no new raw-alloc site is introduced.
         n00b_alloc_opts_t opts = {
             .allocator = (n00b_allocator_t *)ctx->target_arena,
             .no_scan   = rec->no_scan != 0,
             .scan_kind = rec->scan_kind,
+            .scan_cb   = scan_cb,
+            .scan_user = scan_user,
         };
         void *obj = _n00b_alloc_raw(1,
                                     rec->user_len ? rec->user_len : 1,
@@ -1327,7 +2118,7 @@ unmarshal_allocate_records(n00b_unmarshal_ctx_t *ctx)
                                     "*unmarshal*",
                                     &opts);
         memcpy(obj, ctx->in.data + ix, (size_t)rec->user_len);
-        patch_alloc_metadata(obj, rec);
+        patch_alloc_metadata(obj, rec, scan_cb, scan_user);
 
         n00b_unmarshal_segment_t *seg = marshal_scratch_alloc(ctx->scratch_alloc,
                                                               sizeof(*seg));
@@ -1337,6 +2128,9 @@ unmarshal_allocate_records(n00b_unmarshal_ctx_t *ctx)
             .user_ptr = obj,
             .rec      = *rec,
         };
+        if (is_callback) {
+            unmarshal_store_callback_bitmap(ctx, seg, scan_cb, scan_user);
+        }
         segments_push(ctx, seg);
 
         ix += (size_t)rec->payload_len;
@@ -1476,6 +2270,11 @@ unmarshal_relink_records(n00b_unmarshal_ctx_t *ctx)
             ix += patch->record_len;
             continue;
         }
+        if (op == N00B_MARSHAL_OP_CBSCAN) {
+            n00b_marshal_cbscan_record_t *patch = (void *)(ctx->in.data + ix);
+            ix += patch->record_len;
+            continue;
+        }
 
         n00b_marshal_alloc_record_t *rec = (void *)(ctx->in.data + ix);
         n00b_unmarshal_segment_t *seg = segment_for_vaddr(ctx, rec->vaddr);
@@ -1487,10 +2286,27 @@ unmarshal_relink_records(n00b_unmarshal_ctx_t *ctx)
             return false;
         }
 
-        uint64_t nwords = marshal_scan_word_count(rec);
+        // CALLBACK segments relink off the stored bitmap (D-040 OQ-3);
+        // scan_word_for_policy returns false for CALLBACK, so for those
+        // segments the bitmap is the sole per-word pointer oracle.
+        uint64_t nwords;
+        if (seg->is_callback) {
+            nwords = seg->user_len / sizeof(uint64_t);
+        }
+        else {
+            nwords = marshal_scan_word_count(rec);
+        }
         uint64_t *words = (uint64_t *)seg->user_ptr;
         for (uint64_t i = 0; i < nwords; i++) {
-            if (!scan_word_for_policy(rec, i)) {
+            bool is_ptr;
+            if (seg->is_callback) {
+                is_ptr = (i < seg->bitmap_words * 64)
+                      && n00b_gc_map_is_set(&(n00b_gc_map_t){.bitmap = seg->bitmap}, i);
+            }
+            else {
+                is_ptr = scan_word_for_policy(rec, i);
+            }
+            if (!is_ptr) {
                 continue;
             }
             uint64_t word = words[i];

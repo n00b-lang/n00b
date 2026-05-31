@@ -331,7 +331,7 @@
     | %"{" <balanced_token_sequence>? %"}"
     | <non_bracket_token>
 
-<balanced_token_sequence> ::= <balanced_token>+
+<balanced_token_sequence> @concat ::= <balanced_token>+
 
 <block_item> ::= <declaration>
     | <label>
@@ -347,16 +347,16 @@
 
 <compound_literal> ::= %"(" <storage_class_specifiers>? <type_name> %")" <braced_initializer>
 
-<compound_statement> ::= %"{" <block_item_list>? %"}"
+<compound_statement> @scope("") ::= %"{" <block_item_list>? %"}"
 
-<conditional_expression> ::= <logical_OR_expression> %"?" <expression> %":" <conditional_expression>
+<conditional_expression> @branch($0, $2, $4) ::= <logical_OR_expression> %"?" <expression> %":" <conditional_expression>
 <conditional_expression> ::= <logical_OR_expression>
 
 <constant_expression> ::= <conditional_expression>
 
 <constant_range_expression> ::= <constant_expression> %"..." <constant_expression>
 
-<declaration> ::= <attribute_specifier_sequence> <declaration_specifiers> <init_declarator_list> %";"
+<declaration> @declares(init_declarator_list, declaration_specifiers) ::= <attribute_specifier_sequence> <declaration_specifiers> <init_declarator_list> %";"
     | <declaration_specifiers> <init_declarator_list>? %";"
 <declaration> ::= <static_assert_declaration>
     | <attribute_declaration>
@@ -396,7 +396,7 @@
     | %TYPEDEF_NAME <attribute_specifier_sequence>?
     | <synthetic_identifier> <attribute_specifier_sequence>?
 
-<enum_specifier> ::= %"enum" <attribute_specifier_sequence>? <tag_name>? <enum_type_specifier>? %"{" <enumerator_list> %"}"
+<enum_specifier> @adt("enum", tag_name) ::= %"enum" <attribute_specifier_sequence>? <tag_name>? <enum_type_specifier>? %"{" <enumerator_list> %"}"
     | %"enum" <attribute_specifier_sequence>? <tag_name>? <enum_type_specifier>? %"{" <enumerator_list> %"," %"}"
     | %"enum" <tag_name> <enum_type_specifier>?
 
@@ -404,7 +404,7 @@
 
 <enumeration_constant> ::= <identifier>
 
-<enumerator> ::= <enumeration_constant> <attribute_specifier_sequence>? %"=" <constant_expression>
+<enumerator> @field(enumeration_constant) ::= <enumeration_constant> <attribute_specifier_sequence>? %"=" <constant_expression>
     | <enumeration_constant> <attribute_specifier_sequence>?
 
 <enumerator_list> ::= <enumerator> (%"," <enumerator>)*
@@ -434,7 +434,7 @@
 
 <function_declarator> ::= <direct_declarator> %"(" <parameter_type_list>? %")"
 
-<function_definition> ::= <attribute_specifier_sequence>? <declaration_specifiers> <declarator> <keyword_clause> <function_body>
+<function_definition> @scope("", declarator) ::= <attribute_specifier_sequence>? <declaration_specifiers> <declarator> <keyword_clause> <function_body>
     | <attribute_specifier_sequence>? <declaration_specifiers> <declarator> <rpc_clause> <function_body>
     | <attribute_specifier_sequence>? <declaration_specifiers> <declarator> <keyword_clause> <rpc_clause> <function_body>
     | <attribute_specifier_sequence>? <declaration_specifiers> <declarator> <rpc_clause> <keyword_clause> <function_body>
@@ -487,12 +487,12 @@
 
 <initializer_list> ::= <designation>? <initializer> (%"," <designation>? <initializer>)*
 
-<iteration_statement> ::= %"while" %"(" <expression> %")" <secondary_block>
-<iteration_statement> ::= %"do" <secondary_block> %"while" %"(" <expression> %")" %";"
-<iteration_statement> ::= %"for" %"(" <expression>? %";" <expression>? %";" <expression>? %")" <secondary_block>
-    | %"for" %"(" <declaration> <expression>? %";" <expression>? %")" <secondary_block>
+<iteration_statement> @loop(expression, secondary_block) ::= %"while" %"(" <expression> %")" <secondary_block>
+<iteration_statement> @loop($4, $1) ::= %"do" <secondary_block> %"while" %"(" <expression> %")" %";"
+<iteration_statement> @loop($4, $8) ::= %"for" %"(" <expression>? %";" <expression>? %";" <expression>? %")" <secondary_block>
+<iteration_statement> @loop($3, $7) ::= %"for" %"(" <declaration> <expression>? %";" <expression>? %")" <secondary_block>
 
-<jump_statement> ::= %"goto" <identifier> %";"
+<jump_statement> @jump ::= %"goto" <identifier> %";"
     | %"continue" <identifier> %";"
     | %"continue" %";"
     | %"break" <identifier> %";"
@@ -534,7 +534,7 @@
 
 <member_declaration_list> ::= <member_declaration>+
 
-<member_declarator> ::= <declarator>? %":" <constant_expression>
+<member_declarator> @field(declarator) ::= <declarator>? %":" <constant_expression>
     | <declarator>
 
 <member_declarator_list> ::= <member_declarator> (%"," <member_declarator>)*
@@ -620,9 +620,9 @@
     | <declaration> <expression>
     | <expression>
 
-<selection_statement> ::= %"if" %"(" <selection_header> %")" <secondary_block> %"else" <secondary_block>
+<selection_statement> @branch(selection_header, $4, $6) ::= %"if" %"(" <selection_header> %")" <secondary_block> %"else" <secondary_block>
     | %"if" %"(" <selection_header> %")" <secondary_block>
-<selection_statement> ::= %"switch" %"(" <selection_header> %")" <secondary_block>
+<selection_statement> @switch(selection_header, $4) ::= %"switch" %"(" <selection_header> %")" <secondary_block>
 
 <shift_expression> ::= <shift_expression> %"<<" <additive_expression>
     | <shift_expression> %">>" <additive_expression>
@@ -666,7 +666,7 @@
 
 <_kw_generic_struct> ::= %"_generic_struct"
 
-<struct_or_union_specifier> ::= <_kw_kw_struct_or_union> <attribute_specifier_sequence>? <tag_name>? %"{" <member_declaration_list> %"}"
+<struct_or_union_specifier> @adt("struct_or_union", tag_name) ::= <_kw_kw_struct_or_union> <attribute_specifier_sequence>? <tag_name>? %"{" <member_declaration_list> %"}"
     | <_kw_kw_struct_or_union> <attribute_specifier_sequence>? <tag_name>? %"{" %"}"
     | <_kw_kw_struct_or_union> <attribute_specifier_sequence>? <tag_name>
     | <_kw_generic_struct> <attribute_specifier_sequence>? <tag_name> %"{" <member_declaration_list> %"}"

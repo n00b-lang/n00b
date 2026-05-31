@@ -8,6 +8,9 @@
  */
 
 #include "n00b.h"
+// For n00b_get_runtime()->system_pool — the non-moving, permanent pool
+// JIT string literals are allocated from (see default_literal_parser).
+#include "core/runtime.h"
 #include "internal/slay/codegen_internal.h"
 #include "n00b/n00b_compile_binary.h"
 #include "n00b/embed.h"
@@ -2123,8 +2126,19 @@ default_literal_parser(n00b_cg_session_t *s,
             str_len -= 2;
         }
 
-        // Create an n00b_string_t so the value is a managed object.
-        n00b_string_t *str_obj = n00b_string_from_raw(str_data, (int64_t)str_len);
+        // Create an n00b_string_t for the literal. The pointer is baked
+        // into generated code as a raw immediate the GC cannot see, so
+        // it MUST NOT live on the moving GC heap: a compaction would
+        // relocate the object and leave the immediate dangling (the
+        // crash a multi-fixture audit hit once a collection fired).
+        // Allocate it (struct + .data) from the runtime `system_pool`,
+        // which is non-arena, non-GC-scanned and never moved or freed —
+        // the runtime analogue of the pinned static objects ncc emits
+        // for AOT string literals.
+        n00b_string_t *str_obj = n00b_string_from_raw(
+            str_data,
+            (int64_t)str_len,
+            .allocator = n00b_system_allocator());
 
         return (n00b_cg_val_t){
             .kind     = N00B_CG_VAL_IMM,

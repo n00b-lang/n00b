@@ -100,6 +100,23 @@ if [[ -z "${CC}" ]] && [[ -x /usr/local/bin/clang ]] ; then
     export CC=/usr/local/bin/clang
 fi
 
+# n00b sources MUST be compiled with ncc. clang links but the resulting
+# binary is wrong at runtime (it lacks the gc-stack-maps / auto-gc-roots
+# transforms), and clang also silently accepts n00b-dialect mismatches
+# that ncc rejects. Resolve ncc robustly here so that no shell missing
+# NCC_PATH can silently fall back to clang, and fail loudly if ncc is
+# absent rather than producing a broken build.
+if [[ -z "${NCC_PATH}" ]] ; then
+    NCC_PATH=$(command -v ncc || true)
+fi
+if [[ -z "${NCC_PATH}" || ! -x "${NCC_PATH}" ]] ; then
+    echo "ERROR: ncc not found. n00b must be built with ncc, not clang." >&2
+    echo "       Put ncc on PATH, or set NCC_PATH=/abs/path/to/ncc." >&2
+    exit 1
+fi
+export NCC_PATH
+echo "build.sh: compiling n00b with ncc at ${NCC_PATH}"
+
 # Ensure the macOS SDK root is set so the linker can find libSystem.
 if [[ "$(uname -s)" == "Darwin" ]] && [[ -z "${SDKROOT}" ]] && command -v xcrun &>/dev/null; then
     export SDKROOT=$(xcrun --show-sdk-path 2>/dev/null)
