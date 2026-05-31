@@ -453,6 +453,9 @@ typedef struct n00b_subproc                  n00b_subproc_t;
 typedef struct n00b_tc_type_s                n00b_tc_type_t;
 typedef struct n00b_tc_ctx_s                 n00b_tc_ctx_t;
 
+// Fallback helper for untransformed r"..." literals that survive macro expansion.
+extern n00b_string_t *n00b_ncc_rstr(const char *src);
+
 typedef n00b_hash_value_t (*n00b_hash_fn)(void *);
 typedef n00b_string_t *(*n00b_repr_fn)(void *);
 typedef void (*n00b_finalizer_t)(void *);

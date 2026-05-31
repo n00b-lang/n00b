@@ -481,6 +481,19 @@ test_seek_fwd_rev_cursor(void)
         Match m = n00b_list_get(sm, i - 1);
         n00b_list_push(want_starts, m.start);
     }
+    if (!usize_list_equal(&rev, &want_starts)) {
+        fprintf(stderr, "seek_rev starts mismatch: got=[");
+        for (size_t i = 0; i < n00b_list_len(rev); ++i) {
+            fprintf(stderr, "%s%zu", i == 0 ? "" : ", ",
+                    n00b_list_get(rev, i));
+        }
+        fprintf(stderr, "] expected=[");
+        for (size_t i = 0; i < n00b_list_len(want_starts); ++i) {
+            fprintf(stderr, "%s%zu", i == 0 ? "" : ", ",
+                    n00b_list_get(want_starts, i));
+        }
+        fprintf(stderr, "]\n");
+    }
     assert(usize_list_equal(&rev, &want_starts));
 
     n00b_list_free(fwd);

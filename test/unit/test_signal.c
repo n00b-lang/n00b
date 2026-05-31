@@ -5,6 +5,9 @@
 #include <stdio.h>
 #include <assert.h>
 #include <signal.h>
+#ifdef __linux__
+#include <pthread.h>
+#endif
 #ifndef _WIN32
 #include <unistd.h>
 #endif
@@ -144,13 +147,15 @@ test_signal_delivery(void)
                                       .operations = N00B_CONDUIT_OP_ALL);
     assert(handle != N00B_CONDUIT_INVALID_SUB_HANDLE);
 
-    // kill(getpid(), ...) instead of raise() because raise() targets
-    // the calling thread (POSIX equiv: pthread_kill(pthread_self())).
-    // macOS kqueue's EVFILT_SIGNAL only fires on process-level signal
-    // delivery; a thread-directed signal whose disposition is SIG_IGN
-    // never reaches that point. kill(getpid()) delivers to the
-    // process and works uniformly across kqueue/epoll/poll backends.
+    // Linux epoll/io_uring backends use signalfd, which receives only
+    // signals blocked on the polling thread.  Send the test signal to this
+    // thread so another runtime thread cannot take the default SIGUSR1 action.
+    // Non-Linux backends keep process-directed delivery for kqueue/poll.
+#ifdef __linux__
+    assert(pthread_kill(pthread_self(), N00B_TEST_SIGNAL_ONE) == 0);
+#else
     kill(getpid(), N00B_TEST_SIGNAL_ONE);
+#endif
 
     bool got_message = false;
     for (int attempts = 0; attempts < 50; attempts++) {

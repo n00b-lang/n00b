@@ -945,7 +945,9 @@ n00b_result_t(int) regex_seek_rev(Regex *r, const uint8_t *input, size_t len,
     if (state == REGEX_SEEK_INITIAL) state = rev_initial_state;
     bool transitioned = false;
     while (pos > 0) {
-        uint8_t sid = (state < dfa->skip_ids.len)
+        bool prefix_placeholder =
+            dfa->prefix_skip.present && state == (uint32_t)dfa->pruned;
+        uint8_t sid = (!prefix_placeholder && state < dfa->skip_ids.len)
                           ? dfa->skip_ids.data[state]
                           : 0;
         if (sid != 0) {

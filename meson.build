@@ -94,6 +94,7 @@ endif
 
 conf_notcurses = get_option('enable_notcurses')
 conf_freetype  = get_option('enable_freetype')
+conf_x11       = get_option('enable_x11') and target_os != 'windows'
 
 conf_release_build = get_option('buildtype') == 'release'
 conf_asan = get_option('use_asan').enabled()
@@ -371,6 +372,11 @@ if conf_notcurses
   conf_notcurses = notcurses_dep.found()
 endif
 
+if conf_x11
+  x11_dep = dependency('x11', required: false)
+  conf_x11 = x11_dep.found()
+endif
+
 if conf_freetype
   freetype_dep = dependency('freetype2', required: false)
   conf_freetype = freetype_dep.found()
@@ -383,6 +389,10 @@ endif
 if conf_freetype
   exe_c_args = exe_c_args + ['-DN00B_HAVE_FREETYPE=1']
   deps += freetype_dep
+endif
+if conf_x11
+  exe_c_args = exe_c_args + ['-DN00B_HAVE_X11=1']
+  deps += x11_dep
 endif
 
 mir_proj = subproject('mir')
@@ -463,6 +473,8 @@ subdir('src/util')
 subdir('src/adt')
 
 python3 = find_program('python3')
+unicode_allow_downloads = get_option('unicode_allow_downloads')
+unicode_strict_cache = get_option('unicode_strict_cache')
 
 gen_unicode_file_names = [
     'gen_age.c',
@@ -493,15 +505,27 @@ gen_unicode_file_names = [
     'gen_wordbreak.c',
 ]
 
+gen_unicode_cmd = [
+    python3,
+    meson.project_source_root() / 'src' / 'text' / 'unicode' / 'tools' / 'gen_tables.py',
+    '--out-dir', '@OUTDIR@',
+    '--cache-dir', meson.project_source_root() / 'src' / 'text' / 'unicode' / '.unicode_cache',
+    '--test-data-dir', meson.project_source_root() / 'test' / 'data',
+]
+
+if unicode_allow_downloads
+    gen_unicode_cmd += ['--allow-downloads']
+endif
+
+if unicode_strict_cache
+    gen_unicode_cmd += ['--strict']
+else
+    gen_unicode_cmd += ['--no-strict']
+endif
+
 gen_unicode_tables = custom_target('gen_unicode_tables',
     output: gen_unicode_file_names,
-    command: [
-        python3,
-        meson.project_source_root() / 'src' / 'text' / 'unicode' / 'tools' / 'gen_tables.py',
-        '--out-dir', '@OUTDIR@',
-        '--cache-dir', meson.project_source_root() / 'src' / 'text' / 'unicode' / '.unicode_cache',
-        '--test-data-dir', meson.project_source_root() / 'test' / 'data',
-    ],
+    command: gen_unicode_cmd,
     depend_files: files('src/text/unicode/tools/gen_tables.py'),
 )
 
@@ -789,6 +813,10 @@ if conf_enable_aws
 else
   n00b_aws_dep = disabler()
 endif
+n00b_no_ncc_src = [
+    'src/core/xxhash_wrap.c',
+    'src/slay/token_id_hash.c',
+]
 
 # Build generated unicode tables with --no-ncc (they are pure data,
 # no ncc extensions, and parsing them is extremely expensive).
@@ -817,7 +845,14 @@ n00b_vendor_lib = static_library('n00b_vendor',
     link_args: link_args,
 )
 
-link_whole_libs = [gen_unicode_lib, n00b_vendor_lib]
+n00b_no_ncc_lib = static_library('n00b_no_ncc',
+    n00b_no_ncc_src,
+    include_directories: incdir,
+    c_args: exe_c_args + ['--no-ncc'],
+    link_args: link_args,
+)
+
+link_whole_libs = [gen_unicode_lib, n00b_vendor_lib, n00b_no_ncc_lib]
 
 # QUIC's macOS ObjC bridges (ACME trust verifier, Keychain secret provider)
 # are declared in src/net/quic/meson.build and exposed via the array below;
@@ -854,7 +889,10 @@ if conf_cocoa
   endif
 
   n00b_cocoa_lib = static_library('n00b_cocoa',
-      ['src/display/render/backend_cocoa.m'],
+      [
+        'src/display/render/backend_cocoa.m',
+        'src/display/render/cocoa_bridge_layout.m',
+      ],
       include_directories: incdir,
       dependencies: deps,
       objc_args: cocoa_objc_args,
@@ -2447,7 +2485,7 @@ xform_json_test = executable('test_xform_json',
     ['test/unit/test_xform_json.c'],
     kwargs: test_common_kwargs,
 )
-test('xform_json', xform_json_test, suite: 'unit')
+test('xform_json', xform_json_test, suite: 'unit', timeout: 120)
 
 xform_http_test = executable('test_xform_http',
     ['test/unit/test_xform_http.c'],
@@ -2578,7 +2616,11 @@ cf_label_test = executable('test_cf_label',
     ['test/unit/test_cf_label.c'],
     kwargs: test_common_kwargs,
 )
-test('cf_label', cf_label_test, suite: 'unit', workdir: meson.project_source_root())
+test('cf_label',
+     cf_label_test,
+     suite: 'unit',
+     workdir: meson.project_source_root(),
+     env: ['MALLOC_PERTURB_=0'])
 
 cfg_test = executable('test_cfg',
     ['test/unit/test_cfg.c'],
@@ -2792,6 +2834,42 @@ selectionlist_test = executable('test_selectionlist',
 )
 test('selectionlist', selectionlist_test, suite: 'unit')
 
+grid_test = executable('test_grid',
+    ['test/unit/test_grid.c'],
+    kwargs: test_common_kwargs,
+)
+test('grid', grid_test, suite: 'unit')
+
+split_test = executable('test_split',
+    ['test/unit/test_split.c'],
+    kwargs: test_common_kwargs,
+)
+test('split', split_test, suite: 'unit')
+
+scroll_test = executable('test_scroll',
+    ['test/unit/test_scroll.c'],
+    kwargs: test_common_kwargs,
+)
+test('scroll', scroll_test, suite: 'unit')
+
+tabs_test = executable('test_tabs',
+    ['test/unit/test_tabs.c'],
+    kwargs: test_common_kwargs,
+)
+test('tabs', tabs_test, suite: 'unit')
+
+text_test = executable('test_text',
+    ['test/unit/test_text.c'],
+    kwargs: test_common_kwargs,
+)
+test('text', text_test, suite: 'unit')
+
+zstack_test = executable('test_zstack',
+    ['test/unit/test_zstack.c'],
+    kwargs: test_common_kwargs,
+)
+test('zstack', zstack_test, suite: 'unit')
+
 draw_cmd_test = executable('test_draw_cmd',
     ['test/unit/test_draw_cmd.c'],
     kwargs: test_common_kwargs,
@@ -2857,6 +2935,151 @@ ml_test = executable('test_ml',
 )
 test('ml', ml_test, suite: 'unit')
 
+widget_demo_tools_inc = include_directories('src/tools')
+
+display_diagnostics_test = executable('test_display_diagnostics',
+    ['test/unit/test_display_diagnostics.c'],
+    kwargs: test_common_kwargs,
+)
+test('display_diagnostics', display_diagnostics_test, suite: 'unit')
+
+display_scene_contracts_test = executable('test_display_scene_contracts',
+    ['test/unit/test_display_scene_contracts.c'],
+    kwargs: test_common_kwargs,
+)
+test('display_scene_contracts', display_scene_contracts_test, suite: 'unit')
+
+widget_demo_tools_inc = include_directories('src/tools')
+
+display_backend_registry_test = executable('test_display_backend_registry',
+    ['test/unit/test_display_backend_registry.c'],
+    kwargs: test_common_kwargs,
+)
+test('display_backend_registry', display_backend_registry_test, suite: 'unit')
+
+display_backend_selection_test = executable('test_display_backend_selection',
+    ['test/unit/test_display_backend_selection.c'],
+    kwargs: test_common_kwargs,
+)
+test('display_backend_selection', display_backend_selection_test, suite: 'unit')
+
+# Loadable renderer plugin: dlopen'd into a host process that already
+# links libn00b, so it deliberately does NOT link libn00b itself. With
+# GC stack-maps default-on, ncc emits references to the GC runtime
+# (n00b_gc_register_roots / n00b_gc_stack_push / n00b_gc_stack_pop) into
+# this TU; those resolve from the host at load time. Allow them to be
+# left undefined at link time (dynamic_lookup on macOS; ELF .so already
+# permits undefined symbols).
+m5_renderer_plugin_link_args = []
+if host_machine.system() == 'darwin'
+  m5_renderer_plugin_link_args += ['-Wl,-undefined,dynamic_lookup']
+endif
+m5_renderer_plugin_fixture = shared_library('n00b_render_m5_test',
+    ['test/fixtures/display/renderers/m5_test_renderer.c'],
+    include_directories: incdir,
+    c_args: exe_c_args,
+    dependencies: deps,
+    link_args: m5_renderer_plugin_link_args,
+    install: false,
+)
+
+display_backend_plugin_test = executable('test_display_backend_plugin',
+    ['test/unit/test_display_backend_plugin.c'],
+    kwargs: test_common_kwargs,
+)
+test('display_backend_plugin',
+     display_backend_plugin_test,
+     suite: 'unit',
+     env: ['N00B_RENDERER_PATH=' + meson.current_build_dir()],
+     depends: [m5_renderer_plugin_fixture])
+
+display_event_dispatch_test = executable('test_display_event_dispatch',
+    ['test/unit/test_display_event_dispatch.c'],
+    kwargs: test_common_kwargs,
+)
+test('display_event_dispatch', display_event_dispatch_test, suite: 'unit')
+
+# This test mocks libc terminal syscalls (isatty/tcgetattr/tcsetattr/
+# write) via GNU-ld `--wrap`, which Apple's ld64 does not support, so it
+# only builds on linkers that have `--wrap` (GNU ld / lld on Linux/BSD).
+# macOS coverage would require porting the mocks to dyld interposing.
+if host_machine.system() != 'darwin' and host_machine.system() != 'windows'
+  display_terminal_lifecycle_link_args = exe_link_args + [
+    '-Wl,--wrap=isatty',
+    '-Wl,--wrap=tcgetattr',
+    '-Wl,--wrap=tcsetattr',
+    '-Wl,--wrap=write',
+  ]
+
+  display_terminal_lifecycle_test = executable('test_display_terminal_lifecycle',
+      ['test/unit/test_display_terminal_lifecycle.c'],
+      include_directories: incdir,
+      c_args: exe_c_args,
+      link_args: display_terminal_lifecycle_link_args,
+      link_with: [n00b],
+      dependencies: [picoquic_dep, monocypher_dep],
+  )
+  test('display_terminal_lifecycle', display_terminal_lifecycle_test, suite: 'unit')
+endif
+
+display_canvas_lifecycle_test = executable('test_display_canvas_lifecycle',
+    ['test/unit/test_display_canvas_lifecycle.c'],
+    kwargs: test_common_kwargs,
+)
+test('display_canvas_lifecycle', display_canvas_lifecycle_test, suite: 'unit')
+
+display_ansi_sgr_test = executable('test_display_ansi_sgr',
+    ['test/unit/test_display_ansi_sgr.c'],
+    kwargs: test_common_kwargs,
+)
+test('display_ansi_sgr', display_ansi_sgr_test, suite: 'unit')
+
+# test_display_terminal_input.c includes <notcurses/notcurses.h> under
+# `#if N00B_HAVE_NOTCURSES` (defined in exe_c_args when the backend is
+# enabled), so it needs notcurses_dep's include path in that case.
+# test_common_kwargs intentionally carries only the always-on deps.
+ti_test_kwargs = test_common_kwargs
+if conf_notcurses
+  ti_test_kwargs = test_common_kwargs + {
+    'dependencies': test_common_kwargs['dependencies'] + [notcurses_dep],
+  }
+endif
+display_terminal_input_test = executable('test_display_terminal_input',
+    ['test/unit/test_display_terminal_input.c'],
+    kwargs: ti_test_kwargs,
+)
+test('display_terminal_input', display_terminal_input_test, suite: 'unit')
+
+display_cocoa_input_test = executable('test_display_cocoa_input',
+    ['test/unit/test_display_cocoa_input.c'],
+    kwargs: test_common_kwargs,
+)
+test('display_cocoa_input', display_cocoa_input_test, suite: 'unit')
+
+display_baseline_contract_test = executable('test_display_baseline_contract',
+    ['test/unit/test_display_baseline_contract.c'],
+    kwargs: test_common_kwargs,
+)
+test('display_baseline_contract', display_baseline_contract_test, suite: 'unit')
+
+display_widget_primitives_test = executable('test_display_widget_primitives',
+    ['test/unit/test_display_widget_primitives.c'],
+    kwargs: test_common_kwargs,
+)
+test('display_widget_primitives', display_widget_primitives_test, suite: 'unit')
+
+display_table_text_primitives_test = executable('test_display_table_text_primitives',
+    ['test/unit/test_display_table_text_primitives.c'],
+    kwargs: test_common_kwargs,
+)
+test('display_table_text_primitives', display_table_text_primitives_test, suite: 'unit')
+
+display_hexdump_contracts_test = executable('test_display_hexdump_contracts',
+    ['test/unit/test_display_hexdump_contracts.c'],
+    kwargs: test_common_kwargs,
+)
+test('display_hexdump_contracts', display_hexdump_contracts_test, suite: 'unit')
+
 if conf_cocoa
   cocoa_test = executable('test_cocoa_backend',
       ['test/unit/test_cocoa_backend.m'],
@@ -2864,13 +3087,41 @@ if conf_cocoa
       objc_args: cocoa_objc_args,
       link_with: [n00b],
   )
+  test('cocoa_backend', cocoa_test, suite: 'unit')
+
+  cocoa_bridge_contracts_test = executable('test_display_cocoa_bridge_contracts',
+      ['test/unit/test_display_cocoa_bridge_contracts.m'],
+      include_directories: incdir,
+      objc_args: cocoa_objc_args,
+      link_with: [n00b],
+  )
+  test('display_cocoa_bridge_contracts', cocoa_bridge_contracts_test, suite: 'unit')
 endif
 
 if conf_notcurses
   notcurses_test = executable('test_notcurses_backend',
       ['test/unit/test_notcurses_backend.c'],
-      kwargs: test_common_kwargs,
+      kwargs: ti_test_kwargs,
   )
+endif
+
+if conf_x11
+  # These tests include <X11/*.h> directly, so they need x11_dep's
+  # include path (test_common_kwargs carries only the always-on deps).
+  x11_test_kwargs = test_common_kwargs + {
+    'dependencies': test_common_kwargs['dependencies'] + [x11_dep],
+  }
+  display_x11_contracts_test = executable('test_display_x11_contracts',
+      ['test/unit/test_display_x11_contracts.c'],
+      kwargs: x11_test_kwargs,
+  )
+  test('display_x11_contracts', display_x11_contracts_test, suite: 'unit')
+
+  x11_test = executable('test_x11_backend',
+      ['test/unit/test_x11_backend.c'],
+      kwargs: x11_test_kwargs,
+  )
+  test('x11_backend', x11_test, suite: 'unit')
 endif
 
 # Table CLI tool
@@ -2910,6 +3161,54 @@ naudit_tool = executable('naudit',
 # Widget visual demo tool
 widget_demo = executable('widget_demo',
     ['src/tools/widget_demo.c'],
+    include_directories: incdir + [widget_demo_tools_inc],
+    c_args: exe_c_args,
+    link_with: [n00b],
+    install: false,
+)
+
+display_baseline_capture = executable('display_baseline_capture',
+    ['src/tools/display_baseline_capture.c', 'src/tools/display_demo_scene.c'],
+    kwargs: test_common_kwargs,
+    install: false,
+)
+
+display_scene_inspect = executable('display_scene_inspect',
+    ['src/tools/display_scene_inspect.c', 'src/tools/display_demo_scene.c'],
+    kwargs: test_common_kwargs,
+    install: false,
+)
+
+display_m4_showcase = executable('display_m4_showcase',
+    ['src/tools/display_m4_showcase.c', 'src/tools/display_m4_showcase_fixture.c'],
+    include_directories: incdir + [widget_demo_tools_inc],
+    c_args: exe_c_args,
+    link_with: [n00b],
+    install: false,
+)
+
+display_terminal_replay = executable('display_terminal_replay',
+    ['src/tools/display_terminal_replay.c', 'src/tools/display_terminal_replay_fixture.c'],
+    kwargs: test_common_kwargs,
+    install: false,
+)
+
+display_gui_parity_report = executable('display_gui_parity_report',
+    ['src/tools/display_gui_parity_report.c', 'src/tools/display_m3_parity_fixture.c'],
+    include_directories: incdir + [widget_demo_tools_inc],
+    c_args: exe_c_args,
+    link_with: [n00b],
+    install: false,
+)
+
+display_backend_selection_report = executable('display_backend_selection_report',
+    ['src/tools/display_backend_selection_report.c'],
+    kwargs: test_common_kwargs,
+    install: false,
+)
+
+display_m6_cutover_report = executable('display_m6_cutover_report',
+    ['src/tools/display_m6_cutover_report.c', 'src/tools/display_startup_probe.c'],
     kwargs: test_common_kwargs,
     install: false,
 )
@@ -3015,6 +3314,136 @@ alloc_metadata_test = executable('test_alloc_metadata',
     kwargs: test_common_kwargs,
 )
 test('alloc_metadata', alloc_metadata_test, suite: 'integration')
+
+display_baseline_flow_test = executable('test_display_baseline_flow',
+    ['test/integration/test_display_baseline_flow.c'],
+    kwargs: test_common_kwargs,
+)
+test('display_baseline_flow', display_baseline_flow_test, suite: 'integration')
+
+sh_prog = find_program('sh')
+test('display_baseline_artifacts',
+    sh_prog,
+    args: [
+        files('test/integration/test_display_baseline_artifacts.sh'),
+        display_baseline_capture,
+        meson.project_source_root(),
+    ],
+    suite: 'integration',
+)
+
+test('display_scene_inspect_artifacts',
+    sh_prog,
+    args: [
+        files('test/integration/test_display_scene_inspect_artifacts.sh'),
+        display_scene_inspect,
+        meson.project_source_root(),
+    ],
+    suite: 'integration',
+)
+
+test('display_scene_inspect_errors',
+    sh_prog,
+    args: [
+        files('test/integration/test_display_scene_inspect_errors.sh'),
+        display_scene_inspect,
+    ],
+    suite: 'integration',
+)
+
+test('display_terminal_replay_artifacts',
+    sh_prog,
+    args: [
+        files('test/integration/test_display_terminal_replay_artifacts.sh'),
+        display_baseline_capture,
+        display_terminal_replay,
+        meson.project_source_root(),
+    ],
+    suite: 'integration',
+)
+
+test('display_m4_artifacts',
+    sh_prog,
+    args: [
+        files('test/integration/test_display_m4_artifacts.sh'),
+        display_baseline_capture,
+        display_scene_inspect,
+        display_m4_showcase,
+        table_tool,
+        meson.project_source_root(),
+    ],
+    suite: 'integration',
+)
+
+test('display_m5_artifacts',
+    sh_prog,
+    args: [
+        files('test/integration/test_display_m5_artifacts.sh'),
+        display_baseline_capture,
+        display_scene_inspect,
+        display_backend_selection_report,
+        widget_demo,
+        meson.project_source_root(),
+    ],
+    suite: 'integration',
+)
+
+test('display_m6_artifacts',
+    sh_prog,
+    args: [
+        files('test/integration/test_display_m6_artifacts.sh'),
+        display_baseline_capture,
+        display_scene_inspect,
+        display_backend_selection_report,
+        display_gui_parity_report,
+        display_m6_cutover_report,
+        meson.project_source_root(),
+    ],
+    suite: 'integration',
+)
+
+display_m1_compat_test = executable('test_display_m1_compat',
+    ['test/integration/test_display_m1_compat.c'],
+    kwargs: test_common_kwargs,
+)
+test('display_m1_compat', display_m1_compat_test, suite: 'integration')
+
+display_terminal_replay_fixture_inc = include_directories('src/tools')
+display_m2_terminal_flow_test = executable('test_display_m2_terminal_flow',
+    ['test/integration/test_display_m2_terminal_flow.c', 'src/tools/display_terminal_replay_fixture.c'],
+    include_directories: incdir + [display_terminal_replay_fixture_inc],
+    c_args: exe_c_args,
+    link_with: [n00b],
+)
+test('display_m2_terminal_flow', display_m2_terminal_flow_test, suite: 'integration')
+
+display_m3_backend_parity_test = executable('test_display_m3_backend_parity',
+    ['test/integration/test_display_m3_backend_parity.c', 'src/tools/display_m3_parity_fixture.c'],
+    include_directories: incdir + [widget_demo_tools_inc],
+    c_args: exe_c_args,
+    link_with: [n00b],
+)
+test('display_m3_backend_parity', display_m3_backend_parity_test, suite: 'integration')
+
+display_m4_widget_table_flow_test = executable('test_display_m4_widget_table_flow',
+    ['test/integration/test_display_m4_widget_table_flow.c', 'src/tools/display_m4_showcase_fixture.c'],
+    include_directories: incdir + [widget_demo_tools_inc],
+    c_args: exe_c_args,
+    link_with: [n00b],
+)
+test('display_m4_widget_table_flow', display_m4_widget_table_flow_test, suite: 'integration')
+
+display_m5_runtime_selection_test = executable('test_display_m5_runtime_selection',
+    ['test/integration/test_display_m5_runtime_selection.c'],
+    kwargs: test_common_kwargs,
+)
+test('display_m5_runtime_selection', display_m5_runtime_selection_test, suite: 'integration')
+
+display_m6_cutover_matrix_test = executable('test_display_m6_cutover_matrix',
+    ['test/integration/test_display_m6_cutover_matrix.c', 'src/tools/display_startup_probe.c'],
+    kwargs: test_common_kwargs,
+)
+test('display_m6_cutover_matrix', display_m6_cutover_matrix_test, suite: 'integration')
 
 # ============================================================================
 # VFS tests

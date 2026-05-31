@@ -5,6 +5,8 @@
 #include "adt/option.h"
 #include "core/runtime.h"
 #include "core/string.h"
+#include "display/render/backend.h"
+#include "display/render/canvas.h"
 #include "display/render/plane.h"
 #include "display/render/draw_cmd.h"
 #include "display/render/box.h"
@@ -299,6 +301,41 @@ test_plane_add_remove_child(void)
     printf("  [PASS] plane add/remove child\n");
 }
 
+static void
+test_plane_canvas_propagates_to_subtree(void)
+{
+    n00b_canvas_t *canvas = n00b_new_kargs(n00b_canvas_t, canvas,
+                                            .vtable = &n00b_renderer_stream);
+    n00b_plane_t *root       = n00b_new_kargs(n00b_plane_t, plane);
+    n00b_plane_t *child      = n00b_new_kargs(n00b_plane_t, plane);
+    n00b_plane_t *grandchild = n00b_new_kargs(n00b_plane_t, plane);
+
+    n00b_plane_add_child(child, grandchild, 0, 0);
+    assert(child->canvas == nullptr);
+    assert(grandchild->canvas == nullptr);
+
+    n00b_canvas_add_plane(canvas, root);
+    assert(root->canvas == canvas);
+
+    n00b_plane_add_child(root, child, 1, 1);
+    assert(child->canvas == canvas);
+    assert(grandchild->canvas == canvas);
+
+    assert(n00b_plane_remove_child(root, child));
+    assert(child->parent == nullptr);
+    assert(child->canvas == nullptr);
+    assert(grandchild->canvas == nullptr);
+
+    assert(n00b_canvas_remove_plane(canvas, root));
+    assert(root->canvas == nullptr);
+
+    n00b_plane_destroy(grandchild);
+    n00b_plane_destroy(child);
+    n00b_plane_destroy(root);
+    n00b_canvas_destroy(canvas);
+    printf("  [PASS] plane subtree canvas propagation\n");
+}
+
 // ====================================================================
 // Main
 // ====================================================================
@@ -326,6 +363,7 @@ main(int argc, char **argv)
     test_plane_draw_glyph_with_style();
     test_plane_multiple_draw_commands();
     test_plane_add_remove_child();
+    test_plane_canvas_propagates_to_subtree();
 
     printf("All render plane tests passed.\n");
     n00b_shutdown();

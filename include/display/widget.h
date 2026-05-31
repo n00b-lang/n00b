@@ -87,6 +87,19 @@ typedef struct n00b_widget_vtable_t {
     bool (*can_focus)(n00b_plane_t *plane, void *data);
 
     /**
+     * @brief Reset widget-local drag state during forced capture cancel.
+     *
+     * This is called by `n00b_canvas_cancel_mouse_capture()` before the
+     * shared capture pointer is cleared. Implementations must reset only
+     * widget-local state and must not mutate `canvas->mouse_capture`
+     * directly.
+     *
+     * @param plane The widget's plane.
+     * @param data  Widget-specific data.
+     */
+    void (*cancel_mouse_capture)(n00b_plane_t *plane, void *data);
+
+    /**
      * @brief Position and size the widget within the given pixel bounds.
      *
      * Container widgets override this to recursively lay out children.

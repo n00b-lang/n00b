@@ -582,5 +582,6 @@ main(int argc, char **argv)
     test_matches_for_rule();
 
     printf("All ML tests passed.\n");
+    n00b_shutdown();
     return 0;
 }

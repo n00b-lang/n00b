@@ -86,6 +86,63 @@ extern n00b_option_t(n00b_renderer_vtable_ptr_t)
 extern n00b_list_t(n00b_string_t *) n00b_renderer_list(void);
 
 // ====================================================================
+// Selection policy
+// ====================================================================
+
+/**
+ * @brief Build ordered backend candidates for a runtime backend request.
+ *
+ * Alias normalization:
+ * - `tui` -> `ansi`
+ * - `nc`  -> `notcurses`
+ *
+ * Request handling:
+ * - `nullptr` or `auto` expands to deterministic auto candidates.
+ * - Explicit names are tried first; optional fallback can append auto
+ *   candidates after the explicit request.
+ *
+ * Environment override:
+ * - When explicitly enabled, `$N00B_RENDERER_BACKEND` is treated as the
+ *   default candidate only for `auto` / implicit requests.
+ */
+extern n00b_list_t(n00b_string_t *)
+n00b_renderer_candidate_names(n00b_string_t *requested) _kargs
+{
+    bool allow_fallback     = true;
+    bool allow_env_override = false;
+};
+
+/**
+ * @brief Report whether a successful backend selection used fallback.
+ *
+ * Returns true only when the selected backend first appears at a later
+ * candidate index than the primary candidate produced by
+ * `n00b_renderer_candidate_names()`. Alias-backed selections such as
+ * `gui -> x11` or `gui -> cocoa` therefore do not count as fallback.
+ */
+extern bool
+n00b_renderer_selection_uses_fallback(n00b_string_t                *requested,
+                                      const n00b_renderer_vtable_t *selected) _kargs
+{
+    bool allow_fallback     = true;
+    bool allow_dynamic_load = false;
+    bool allow_env_override = false;
+};
+
+/**
+ * @brief Resolve one exact backend candidate name.
+ *
+ * Resolution is registry-first. If the name is not already registered
+ * and dynamic loading is explicitly allowed, this function attempts to
+ * load the backend using `n00b_renderer_load_by_name(name)`.
+ */
+extern n00b_result_t(n00b_renderer_vtable_ptr_t)
+n00b_renderer_resolve_exact(n00b_string_t *name) _kargs
+{
+    bool allow_dynamic_load = false;
+};
+
+// ====================================================================
 // Dynamic loading
 // ====================================================================
 
@@ -116,7 +173,10 @@ extern n00b_result_t(n00b_renderer_vtable_ptr_t)
 /**
  * @brief Initialize the backend registry with built-in backends.
  *
- * Called automatically during `n00b_init()`.  Registers ansi, dumb,
- * and stream backends.
+ * Called automatically during `n00b_init()`. Registers `stream`,
+ * `ansi`, and `dumb`, plus platform backends (`cocoa` and/or
+ * `x11`/`notcurses`) when built. Also registers `gui` as a portable
+ * alias for a true windowed GUI backend: `cocoa` on macOS, `x11`
+ * on Linux/Unix when available.
  */
 extern void n00b_renderer_registry_init(void);

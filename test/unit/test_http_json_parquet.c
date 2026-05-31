@@ -257,6 +257,10 @@ start_landing_service(landing_state_t *state)
                                       state);
     assert(n00b_result_is_ok(rr));
     auto sr = n00b_http_service_start(svc);
+    if (n00b_result_is_err(sr)) {
+        fprintf(stderr, "http service start failed: err=%d\n",
+                n00b_result_get_err(sr));
+    }
     assert(n00b_result_is_ok(sr));
     return svc;
 }

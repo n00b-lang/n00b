@@ -83,6 +83,11 @@ option('enable_notcurses',
     value: true,
     description: 'Build the notcurses rendering backend (requires notcurses >= 3.0.10).')
 
+option('enable_x11',
+    type: 'boolean',
+    value: true,
+    description: 'Build the X11 rendering backend (Linux/Unix GUI window backend).')
+
 option('enable_freetype',
     type: 'boolean',
     value: true,
@@ -136,3 +141,12 @@ option('demangle_bin',
     type: 'string',
     value: '',
     description: 'Optional explicit path to the demangle utility. Leave empty to look up `demangle` on PATH (falling back to ~/slop/bin/demangle when present).')
+option('unicode_allow_downloads',
+    type: 'boolean',
+    value: false,
+    description: 'Allow Unicode table generator to download missing cache files.')
+
+option('unicode_strict_cache',
+    type: 'boolean',
+    value: false,
+    description: 'Fail Unicode table generation when required cache files are missing.')

@@ -82,8 +82,13 @@ n00b_focus_mgr_t *
 n00b_focus_mgr_new(n00b_canvas_t *canvas)
 {
     n00b_focus_mgr_t *fm = n00b_alloc(n00b_focus_mgr_t);
-    fm->canvas  = canvas;
-    fm->current = fm->count; // No focus yet.
+    *fm = (n00b_focus_mgr_t){
+        .canvas = canvas,
+    };
+
+    if (canvas) {
+        canvas->focus = fm;
+    }
 
     n00b_focus_mgr_rebuild(fm);
 
@@ -96,6 +101,9 @@ n00b_focus_mgr_destroy(n00b_focus_mgr_t *fm)
     if (!fm) {
         return;
     }
+    if (fm->canvas && fm->canvas->focus == fm) {
+        fm->canvas->focus = nullptr;
+    }
     if (fm->focusable) {
         n00b_free(fm->focusable);
     }
@@ -105,7 +113,10 @@ n00b_focus_mgr_destroy(n00b_focus_mgr_t *fm)
 void
 n00b_focus_mgr_rebuild(n00b_focus_mgr_t *fm)
 {
-    // Remember the old focused plane.
+    if (!fm) {
+        return;
+    }
+
     n00b_plane_t *old_focused = nullptr;
     if (fm->current < fm->count) {
         old_focused = fm->focusable[fm->current];
@@ -113,8 +124,7 @@ n00b_focus_mgr_rebuild(n00b_focus_mgr_t *fm)
 
     fm->count = 0;
 
-    // Walk all top-level planes.
-    if (fm->canvas->planes.data) {
+    if (fm->canvas && fm->canvas->planes.data) {
         for (size_t i = 0; i < fm->canvas->planes.len; i++) {
             n00b_plane_t *p = fm->canvas->planes.data[i];
             if (p) {
@@ -123,8 +133,7 @@ n00b_focus_mgr_rebuild(n00b_focus_mgr_t *fm)
         }
     }
 
-    // Try to preserve focus on the same plane.
-    fm->current = fm->count; // No focus.
+    fm->current = fm->count;
     if (old_focused) {
         for (n00b_isize_t i = 0; i < fm->count; i++) {
             if (fm->focusable[i] == old_focused) {
@@ -134,7 +143,13 @@ n00b_focus_mgr_rebuild(n00b_focus_mgr_t *fm)
         }
     }
 
-    // If old focus was lost and there are focusable widgets, focus first.
+    if (fm->current >= fm->count) {
+        if (old_focused) {
+            n00b_plane_set_state(old_focused, N00B_WSTATE_NORMAL);
+            n00b_plane_mark_dirty(old_focused);
+        }
+    }
+
     if (fm->current >= fm->count && fm->count > 0) {
         fm->current = 0;
         focus_current(fm);
@@ -159,6 +174,15 @@ n00b_focus_mgr_next(n00b_focus_mgr_t *fm)
     return n00b_option_set(n00b_plane_t *, fm->focusable[fm->current]);
 }
 
+n00b_plane_t *
+n00b_focus_mgr_next_plane(n00b_focus_mgr_t *fm)
+{
+    if (!fm) {
+        return nullptr;
+    }
+    return n00b_option_get_or_else(n00b_focus_mgr_next(fm), nullptr);
+}
+
 n00b_option_t(n00b_plane_t *)
 n00b_focus_mgr_prev(n00b_focus_mgr_t *fm)
 {
@@ -179,6 +203,15 @@ n00b_focus_mgr_prev(n00b_focus_mgr_t *fm)
     return n00b_option_set(n00b_plane_t *, fm->focusable[fm->current]);
 }
 
+n00b_plane_t *
+n00b_focus_mgr_prev_plane(n00b_focus_mgr_t *fm)
+{
+    if (!fm) {
+        return nullptr;
+    }
+    return n00b_option_get_or_else(n00b_focus_mgr_prev(fm), nullptr);
+}
+
 bool
 n00b_focus_mgr_set(n00b_focus_mgr_t *fm, n00b_plane_t *plane)
 {
@@ -196,8 +229,15 @@ n00b_focus_mgr_set(n00b_focus_mgr_t *fm, n00b_plane_t *plane)
 n00b_option_t(n00b_plane_t *)
 n00b_focus_mgr_current(n00b_focus_mgr_t *fm)
 {
-    if (fm->current < fm->count) {
-        return n00b_option_set(n00b_plane_t *, fm->focusable[fm->current]);
+    return n00b_option_from_nullable(n00b_plane_t *,
+                                     n00b_focus_mgr_current_plane(fm));
+}
+
+n00b_plane_t *
+n00b_focus_mgr_current_plane(n00b_focus_mgr_t *fm)
+{
+    if (fm && fm->current < fm->count) {
+        return fm->focusable[fm->current];
     }
-    return n00b_option_none(n00b_plane_t *);
+    return nullptr;
 }

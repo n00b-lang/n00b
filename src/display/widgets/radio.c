@@ -13,6 +13,7 @@
 #include "display/widget.h"
 #include "display/widgets/radio.h"
 #include "display/event.h"
+#include "internal/display/widget_primitives.h"
 #include "text/unicode/properties.h"
 #include "text/strings/text_style.h"
 #include "text/strings/string_style.h"
@@ -87,14 +88,14 @@ radio_group_select(n00b_radio_group_t *group, int index)
 
     group->selected = index;
 
-    // Re-render the previously selected radio.
+    // Mark the previously selected radio dirty so the event loop rerenders.
     if (prev >= 0 && prev < (int)group->count) {
-        n00b_widget_render(group->radios[prev]);
+        n00b_plane_mark_dirty(group->radios[prev]);
     }
 
-    // Re-render the newly selected radio.
+    // Mark the newly selected radio dirty so the event loop rerenders.
     if (index >= 0 && index < (int)group->count) {
-        n00b_widget_render(group->radios[index]);
+        n00b_plane_mark_dirty(group->radios[index]);
     }
 
     if (group->on_change) {
@@ -133,15 +134,13 @@ radio_render(n00b_plane_t *plane, void *data)
         return;
     }
 
-    bool focused = (n00b_plane_get_state(plane) == N00B_WSTATE_FOCUSED
-                    || n00b_plane_get_state(plane) == N00B_WSTATE_ACTIVE);
+    bool focused = n00b_widget_state_is_focused_or_active(plane);
     bool is_selected = (radio->group && radio->group->selected == radio->index);
 
     const n00b_radio_glyphs_t *g = &radio->glyphs;
     int32_t col = 0;
 
-    int32_t cpw = n00b_plane_text_width(plane, n00b_string_from_cstr("M"), nullptr);
-    if (cpw <= 0) cpw = 1;
+    int32_t cpw = n00b_widget_cell_px_width(plane);
 
     // For multi-row planes, center the indicator vertically.
     int32_t ind_row = content_h > 1 ? content_h / 2 : 0;
@@ -202,8 +201,7 @@ radio_handle_event(n00b_plane_t *plane, void *data, const n00b_event_t *event)
 
     // Mouse left-click selects.
     if (event->type == N00B_EVENT_MOUSE) {
-        if (event->mouse.button == N00B_MOUSE_LEFT
-            && event->mouse.action == N00B_MOUSE_PRESS) {
+        if (n00b_widget_event_is_left_press(event)) {
             radio_group_select(radio->group, radio->index);
             return true;
         }
@@ -214,10 +212,8 @@ radio_handle_event(n00b_plane_t *plane, void *data, const n00b_event_t *event)
         return false;
     }
 
-    uint32_t key = event->key.key;
-
     // Space or Enter selects.
-    if (key == ' ' || key == N00B_KEY_ENTER) {
+    if (n00b_widget_event_is_keyboard_activate(event)) {
         radio_group_select(radio->group, radio->index);
         return true;
     }
@@ -240,11 +236,9 @@ radio_measure(n00b_plane_t *plane, void *data,
 {
     n00b_radio_t *radio = (n00b_radio_t *)data;
 
-    int32_t lh = n00b_plane_line_height(plane, nullptr);
-    if (lh <= 0) lh = 1;
+    int32_t lh = n00b_widget_line_px_height(plane);
 
-    int32_t cpw = n00b_plane_text_width(plane, n00b_string_from_cstr("M"), nullptr);
-    if (cpw <= 0) cpw = 1;
+    int32_t cpw = n00b_widget_cell_px_width(plane);
 
     int32_t label_w = 0;
     if (radio && radio->label) {
@@ -314,12 +308,7 @@ n00b_radio_new(n00b_string_t *label) _kargs {
         if (label) {
             label_w = n00b_plane_text_width(plane, label, nullptr);
         }
-        int32_t cell_w = n00b_plane_text_width(plane,
-                                                n00b_string_from_cstr("M"),
-                                                nullptr);
-        if (cell_w < 1) {
-            cell_w = 1;
-        }
+        int32_t cell_w = n00b_widget_cell_px_width(plane);
         int32_t overhead = (int32_t)(g->focus_width + g->indicator_width + 1);
         width = (int32_t)(overhead * cell_w + (label_w > 0 ? label_w : 0));
     }
@@ -327,7 +316,7 @@ n00b_radio_new(n00b_string_t *label) _kargs {
         width = (int32_t)(g->focus_width + g->indicator_width);
     }
     if (height == 0) {
-        height = n00b_plane_line_height(plane, nullptr);
+        height = n00b_widget_line_px_height(plane);
     }
 
     plane->width  = width;
@@ -376,11 +365,11 @@ n00b_radio_group_set_selected(n00b_radio_group_t *group, int index)
 bool
 n00b_radio_is_selected(n00b_plane_t *plane)
 {
-    if (!plane || plane->widget_vtable != &n00b_widget_radio) {
+    n00b_radio_t *radio = n00b_widget_data_if_kind(plane, &n00b_widget_radio);
+    if (!radio) {
         return false;
     }
 
-    n00b_radio_t *radio = (n00b_radio_t *)plane->widget_data;
     return (radio->group && radio->group->selected == radio->index);
 }
 

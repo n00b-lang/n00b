@@ -31,6 +31,7 @@
 #include "util/panic.h"
 
 #include "internal/regex/ids.h"      // TSet (real definition).
+#include "internal/regex/solver.h"   // TSet_contains_byte.
 #include "internal/regex/accel.h"    // Match (n00b_list_t(Match) wire type).
 #include "internal/regex/engine.h"   // U8Pair, ByteRange typedef alignment.
 #include "internal/regex/prefix.h"   // ByteVec (engine-side growable byte buffer).
@@ -418,9 +419,17 @@ n00b_simd_fwd_range_search_find_fwd(const n00b_simd_FwdRangeSearch *p,
 #else
 
 // Backendless targets still need these symbols because regex object code
-// contains calls guarded by n00b_simd_has_simd().
+// contains calls guarded by n00b_simd_has_simd().  Reverse prefix search is
+// also used as a scalar fallback so boundary-stripped reverse accelerators
+// continue to work without hardware SIMD.
 
 struct n00b_simd_ByteRange;
+
+struct n00b_simd_RevTeddySearch {
+    size_t len;
+    size_t tail_offset;
+    TSet   sets[3];
+};
 
 n00b_simd_RevSearchBytes *n00b_simd_RevSearchBytes_new(n00b_list_t(uint8_t) bytes) {
     (void)bytes;
@@ -572,10 +581,15 @@ n00b_simd_RevTeddySearch *n00b_simd_RevTeddySearch_new(size_t num_simd,
     (void)num_simd;
     (void)window;
     (void)window_len;
-    (void)all_sets;
-    (void)as_len;
-    (void)tail_offset;
-    return nullptr;
+    if (!all_sets || as_len < 1 || as_len > 3) return nullptr;
+
+    n00b_simd_RevTeddySearch *s = n00b_alloc(n00b_simd_RevTeddySearch);
+    s->len         = as_len;
+    s->tail_offset = tail_offset;
+    for (size_t i = 0; i < as_len; ++i) {
+        s->sets[i] = all_sets[i];
+    }
+    return s;
 }
 
 n00b_option_t(size_t)
@@ -583,10 +597,31 @@ n00b_simd_rev_prefix_search_find_rev(const n00b_simd_RevTeddySearch *s,
                                      const uint8_t *haystack,
                                      size_t hlen,
                                      size_t end) {
-    (void)s;
-    (void)haystack;
-    (void)hlen;
-    (void)end;
+    if (!s || !haystack || hlen == 0 || s->len == 0) {
+        return n00b_option_none(size_t);
+    }
+
+    size_t hsat = hlen - 1;
+    if (end > hsat) end = hsat;
+    if (end < s->tail_offset) return n00b_option_none(size_t);
+
+    size_t pos     = end - s->tail_offset;
+    size_t min_pos = s->len - 1;
+    if (pos < min_pos) return n00b_option_none(size_t);
+
+    for (;;) {
+        bool ok = true;
+        for (size_t i = 0; i < s->len; ++i) {
+            if (!TSet_contains_byte(&s->sets[i], haystack[pos - i])) {
+                ok = false;
+                break;
+            }
+        }
+        if (ok) return n00b_option_set(size_t, pos + s->tail_offset);
+        if (pos == min_pos) break;
+        --pos;
+    }
+
     return n00b_option_none(size_t);
 }
 

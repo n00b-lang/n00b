@@ -73,7 +73,7 @@ typedef struct n00b_render_size_t {
 // ABI version
 // ====================================================================
 
-#define N00B_RENDERER_ABI_VERSION 3
+#define N00B_RENDERER_ABI_VERSION 4
 
 // ====================================================================
 // Forward declarations
@@ -122,12 +122,12 @@ typedef struct n00b_renderer_vtable_t {
     /**
      * @brief Plane-based rendering (required).
      *
-     * Receives z-sorted composite entries (planes with absolute
-     * pixel positions and clip rects) and renders each plane.
+     * Receives ordered composite entries (planes with absolute pixel
+     * positions and clip rects) and renders each plane.
      * The canvas always dispatches here.
      *
      * @param ctx           Backend context.
-     * @param entries       Z-sorted composite entries (low-z first, pixel coords).
+     * @param entries       Back-to-front composite entries (pixel coords).
      * @param count         Number of entries.
      * @param total_rows    Frame height in pixels.
      * @param total_cols    Frame width in pixels.
@@ -143,6 +143,7 @@ typedef struct n00b_renderer_vtable_t {
                                        n00b_render_cap_t             caps);
 
     // Optional.
+    bool (*clipboard_copy)(void *ctx, const char *utf8, size_t len);
     void (*cursor_set_visible)(void *ctx, bool visible);
     void (*cursor_move)(void *ctx, n00b_isize_t row, n00b_isize_t col);
     void (*alt_screen_enter)(void *ctx);
@@ -191,6 +192,9 @@ extern const n00b_renderer_vtable_t n00b_renderer_dumb;
 /** Buffer-capture backend for testing (no terminal output). */
 extern const n00b_renderer_vtable_t n00b_renderer_stream;
 
+/** Stream-backend clipboard helper for tests. */
+extern n00b_string_t *n00b_stream_backend_get_clipboard(void *ctx);
+
 #if defined(__APPLE__)
 /** Native Cocoa/macOS backend with Core Text rendering. */
 extern const n00b_renderer_vtable_t n00b_renderer_cocoa;
@@ -199,4 +203,9 @@ extern const n00b_renderer_vtable_t n00b_renderer_cocoa;
 #if defined(N00B_HAVE_NOTCURSES)
 /** Notcurses backend with optional FreeType pixel rendering. */
 extern const n00b_renderer_vtable_t n00b_renderer_notcurses;
+#endif
+
+#if defined(N00B_HAVE_X11)
+/** Native X11 backend (Linux/Unix GUI window). */
+extern const n00b_renderer_vtable_t n00b_renderer_x11;
 #endif

@@ -4,6 +4,7 @@
 
 #include "conduit/conduit.h"
 #include "conduit/proc_lifecycle.h"
+#include "conduit/proc_lifecycle_internal.h"
 #include "conduit/io.h"
 #ifndef _WIN32
 #include <sys/wait.h>
@@ -12,6 +13,30 @@
 // ============================================================================
 // Process Watch Creation
 // ============================================================================
+
+int
+n00b_conduit_proc_wait_status_from_siginfo(const siginfo_t *info)
+{
+    if (!info) {
+        return 0;
+    }
+
+    switch (info->si_code) {
+    case CLD_EXITED:
+        return (info->si_status & 0xff) << 8;
+
+    case CLD_KILLED:
+        return info->si_status & 0x7f;
+
+#ifdef CLD_DUMPED
+    case CLD_DUMPED:
+        return (info->si_status & 0x7f) | 0x80;
+#endif
+
+    default:
+        return 0;
+    }
+}
 
 n00b_result_t(n00b_conduit_topic_base_t *)
 n00b_conduit_proc_topic(n00b_conduit_t *c, pid_t pid, uint32_t events)

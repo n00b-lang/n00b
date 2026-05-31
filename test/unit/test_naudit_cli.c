@@ -39,6 +39,7 @@
 #include <fcntl.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -184,6 +185,53 @@ build_argv4(n00b_string_t *prog, n00b_string_t *flag, n00b_string_t *val,
 }
 
 static void
+join_path(char *out, size_t out_cap, const char *dir, const char *name)
+{
+    int n = snprintf(out, out_cap, "%s/%s", dir, name);
+    assert(n > 0 && (size_t)n < out_cap);
+}
+
+static void
+write_text_file(const char *path, const char *text)
+{
+    FILE *fp = fopen(path, "w");
+    assert(fp != nullptr);
+    assert(fputs(text, fp) >= 0);
+    assert(fclose(fp) == 0);
+}
+
+static int
+run_cli_from_dir(const char *cwd,
+                 const char *guidance,
+                 const char *target,
+                 char       *out,
+                 size_t      out_cap,
+                 char       *err,
+                 size_t      err_cap)
+{
+    char saved_cwd[1024];
+    assert(getcwd(saved_cwd, sizeof(saved_cwd)) != nullptr);
+    assert(chdir(cwd) == 0);
+
+    int argc = 0;
+    n00b_string_t **argv = build_argv4(
+        n00b_string_from_cstr("n00b-audit"),
+        n00b_string_from_cstr("--guidance"),
+        n00b_string_from_cstr(guidance),
+        n00b_string_from_cstr(target),
+        &argc);
+
+    capture_t cap;
+    capture_begin(&cap);
+    n00b_result_t(int) r = n00b_audit_run_cli(argc, argv);
+    capture_end(&cap, out, out_cap, err, err_cap);
+
+    assert(chdir(saved_cwd) == 0);
+    assert(n00b_result_is_ok(r));
+    return n00b_result_get(r);
+}
+
+static void
 test_fixture_null(void)
 {
     int argc = 0;
@@ -284,6 +332,122 @@ test_fixture_nullptr(void)
     assert(strlen(out) == 0);
 
     printf("  [PASS] fixture_nullptr (exit=0, stdout empty)\n");
+}
+
+static void
+test_relative_guidance_path_loads_current_directory_rules(void)
+{
+    char root_template[] = "/tmp/n00b-naudit-cache-XXXXXX";
+    char *root = mkdtemp(root_template);
+    assert(root != nullptr);
+
+    char dir1[1024];
+    char dir2[1024];
+    join_path(dir1, sizeof(dir1), root, "one");
+    join_path(dir2, sizeof(dir2), root, "two");
+    assert(mkdir(dir1, 0700) == 0);
+    assert(mkdir(dir2, 0700) == 0);
+
+    char path[1024];
+    join_path(path, sizeof(path), dir1, "audit-rules.bnf");
+    write_text_file(path,
+        "@schema_version 1\n"
+        "@project cache-one\n"
+        "@description first relative-path cache fixture\n"
+        "@source_doc cache-one\n"
+        "@dependencies\n"
+        "\n"
+        "@rule cache.first.null\n"
+        "@title first guidance\n"
+        "@section cache\n"
+        "@violation_nt cache_v_null\n"
+        "@rationale first\n"
+        "@bad int *p = NULL;\n"
+        "@good int *p = nullptr;\n"
+        "@guidance first\n"
+        "\n"
+        "<cache_v_null> ::= %\"NULL\"\n"
+        "<provided_identifier> ::= <cache_v_null>\n");
+    join_path(path, sizeof(path), dir1, "target.c");
+    write_text_file(path,
+        "int\n"
+        "main(void)\n"
+        "{\n"
+        "    int *p = NULL;\n"
+        "    return p == NULL ? 0 : 1;\n"
+        "}\n");
+
+    join_path(path, sizeof(path), dir2, "audit-rules.bnf");
+    write_text_file(path,
+        "@schema_version 1\n"
+        "@project cache-two\n"
+        "@description second relative-path cache fixture\n"
+        "@source_doc cache-two\n"
+        "@dependencies\n"
+        "\n"
+        "@rule cache.second.nullptr\n"
+        "@title second guidance\n"
+        "@section cache\n"
+        "@violation_nt cache_v_nullptr\n"
+        "@rationale second\n"
+        "@bad int *p = nullptr;\n"
+        "@good int *p = 0;\n"
+        "@guidance second\n"
+        "\n"
+        "<cache_v_nullptr> ::= %\"nullptr\"\n"
+        "<provided_identifier> ::= <cache_v_nullptr>\n");
+    join_path(path, sizeof(path), dir2, "target.c");
+    write_text_file(path,
+        "int\n"
+        "main(void)\n"
+        "{\n"
+        "    int *p = nullptr;\n"
+        "    return p == nullptr ? 0 : 1;\n"
+        "}\n");
+
+    static char out[CAPTURE_BUF_SIZE];
+    static char err[CAPTURE_BUF_SIZE];
+    int code = run_cli_from_dir(dir1,
+                                "audit-rules.bnf",
+                                "target.c",
+                                out,
+                                sizeof(out),
+                                err,
+                                sizeof(err));
+    assert(code == 1);
+    assert(strstr(out, "cache.first.null") != nullptr);
+
+    code = run_cli_from_dir(dir2,
+                            "audit-rules.bnf",
+                            "target.c",
+                            out,
+                            sizeof(out),
+                            err,
+                            sizeof(err));
+    if (code != 1 || strstr(out, "cache.second.nullptr") == nullptr) {
+        fprintf(stderr,
+                "  expected second relative guidance rule; code=%d stdout=%s stderr=%s\n",
+                code,
+                out,
+                err);
+    }
+    assert(code == 1);
+    assert(strstr(out, "cache.second.nullptr") != nullptr);
+
+    char file[1024];
+    join_path(file, sizeof(file), dir1, "audit-rules.bnf");
+    unlink(file);
+    join_path(file, sizeof(file), dir1, "target.c");
+    unlink(file);
+    join_path(file, sizeof(file), dir2, "audit-rules.bnf");
+    unlink(file);
+    join_path(file, sizeof(file), dir2, "target.c");
+    unlink(file);
+    rmdir(dir1);
+    rmdir(dir2);
+    rmdir(root);
+
+    printf("  [PASS] relative guidance path loads current directory rules\n");
 }
 
 static void
@@ -546,6 +710,7 @@ main(int argc, char *argv[])
     test_err_str_cli_codes();
     test_fixture_null();
     test_fixture_nullptr();
+    test_relative_guidance_path_loads_current_directory_rules();
     test_missing_target();
     test_dangling_violation_nt();
     test_fix_flag();

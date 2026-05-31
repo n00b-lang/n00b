@@ -30,12 +30,13 @@
 /**
  * @brief Find the deepest visible plane containing pixel (x, y).
  *
- * Walks `plane` and its children recursively in reverse child order
- * (topmost/highest-z first).  Skips planes without `N00B_PLANE_VISIBLE`.
+ * Flattens `plane` using the compositor's ordering rules, then walks the
+ * resulting entries from front to back. Skips planes without
+ * `N00B_PLANE_VISIBLE`.
  *
  * @param plane     Root plane to test.
- * @param x         Pixel column in the plane's parent coordinate space.
- * @param y         Pixel row in the plane's parent coordinate space.
+ * @param x         Absolute pixel column in the frame.
+ * @param y         Absolute pixel row in the frame.
  * @param cell_px_w Pixels per cell column.
  * @param cell_px_h Pixels per cell row.
  * @return          Some(deepest hit plane), or None if no hit.
@@ -55,9 +56,10 @@ n00b_mouse_hit_test(n00b_plane_t *plane,
  * @brief Route a mouse event through the canvas plane tree.
  *
  * 1. If `canvas->mouse_capture` is set, route directly to that plane.
- * 2. Otherwise, iterate top-level planes in reverse order calling
- *    `n00b_mouse_hit_test()`.
- * 3. If the hit plane is focusable and action is PRESS, focus it.
+ * 2. Otherwise, flatten the top-level plane tree and hit-test the same
+ *    ordered entries the renderer used.
+ * 3. If action is PRESS, focus the nearest focusable ancestor of the
+ *    hit plane, if any.
  * 4. Dispatch via `n00b_widget_handle_event()`.
  * 5. If not consumed, bubble to `target->parent` until consumed or root.
  *
@@ -87,8 +89,19 @@ extern void n00b_canvas_capture_mouse(n00b_canvas_t *c, n00b_plane_t *plane);
 extern void n00b_canvas_release_mouse(n00b_canvas_t *c);
 
 /**
+ * @brief Cancel mouse capture outside the normal mouse-release path.
+ * @param c Canvas.
+ *
+ * Unlike `n00b_canvas_release_mouse()`, this also resets any widget-local
+ * drag state associated with the captured plane via the widget vtable's
+ * optional `cancel_mouse_capture` callback before clearing capture.
+ */
+extern void n00b_canvas_cancel_mouse_capture(n00b_canvas_t *c);
+
+/**
  * @brief Get the plane currently capturing mouse events.
  * @param c Canvas.
  * @return  Some(capturing plane), or None if no capture is active.
  */
 extern n00b_option_t(n00b_plane_t *) n00b_canvas_get_mouse_capture(n00b_canvas_t *c);
+extern n00b_plane_t *n00b_canvas_get_mouse_capture_plane(n00b_canvas_t *c);

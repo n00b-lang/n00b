@@ -12,6 +12,8 @@ N00B_DOCS=${N00B_DOCS:-0}
 N00B_CROSS=${N00B_CROSS:-}
 N00B_JOBS=${N00B_JOBS:-}
 N00B_NATIVE=${N00B_NATIVE:-0}
+N00B_UNICODE_ALLOW_DOWNLOADS=${N00B_UNICODE_ALLOW_DOWNLOADS:-0}
+N00B_UNICODE_STRICT_CACHE=${N00B_UNICODE_STRICT_CACHE:-0}
 N00B_BUILD_ARGS=()
 
 function fail {
@@ -95,10 +97,29 @@ function test_suite_requested {
 
 parse_args "$@"
 
-# Default to a C23-capable compiler if CC is not set.
-if [[ -z "${CC}" ]] && [[ -x /usr/local/bin/clang ]] ; then
-    export CC=/usr/local/bin/clang
-fi
+function select_bootstrap_compiler {
+    if [[ -n "${CC:-}" ]] ; then
+        export CC
+        return
+    fi
+
+    if command -v clang &>/dev/null ; then
+        export CC=$(command -v clang)
+        return
+    fi
+
+    if command -v cc &>/dev/null && cc --version 2>/dev/null | head -n 1 | grep -qi 'clang' ; then
+        export CC=$(command -v cc)
+        echo "Using cc because it resolves to a clang-compatible compiler."
+        return
+    fi
+
+    echo "No clang-compatible bootstrap compiler found." >&2
+    echo "Install clang or rerun with CC=/path/to/clang-compatible-compiler." >&2
+    exit 1
+}
+
+select_bootstrap_compiler
 
 # n00b sources MUST be compiled with ncc. clang links but the resulting
 # binary is wrong at runtime (it lacks the gc-stack-maps / auto-gc-roots
@@ -233,11 +254,11 @@ function all_options {
     fi
 
     if [[ ${N00B_BUILD_GC_STATS:-0} -ne 0 ]] ; then
-        s="${s} -Dshow_gc_stats=true"
+        s="${s} -Dshow_gc_stats=enabled"
     fi
 
     if [[ ${N00B_BUILD_MEMCHECK:-0} -ne 0 ]] ; then
-        s="${s} -Duse_memcheck=true"
+        s="${s} -Duse_memcheck=on"
     fi
 
     if [[ ${N00B_BUILD_ASAN:-0} -ne 0 ]] ; then
@@ -260,7 +281,15 @@ function all_options {
         s="${s} -Daws_shim_prefix=${N00B_AWS_SHIM_PREFIX}"
     fi
 
-    echo $s
+    if [[ ${N00B_UNICODE_ALLOW_DOWNLOADS} -ne 0 ]] ; then
+        s="${s} -Dunicode_allow_downloads=true"
+    fi
+
+    if [[ ${N00B_UNICODE_STRICT_CACHE} -ne 0 ]] ; then
+        s="${s} -Dunicode_strict_cache=true"
+    fi
+
+    echo "${s}"
 }
 
 function build_n00b {

@@ -48,7 +48,8 @@ typedef struct n00b_focus_mgr_t {
 /**
  * @brief Create a new focus manager for a canvas.
  *
- * Performs an initial rebuild of the focusable plane list.
+ * Performs an initial rebuild of the focusable plane list and, when
+ * @p canvas is non-null, registers itself on `canvas->focus`.
  *
  * @param canvas The canvas to manage focus for.
  * @return       A heap-allocated focus manager.
@@ -57,6 +58,9 @@ extern n00b_focus_mgr_t *n00b_focus_mgr_new(n00b_canvas_t *canvas);
 
 /**
  * @brief Destroy a focus manager and free its resources.
+ *
+ * If the manager is still the active `canvas->focus` owner, this also
+ * clears that backpointer.
  */
 extern void n00b_focus_mgr_destroy(n00b_focus_mgr_t *fm);
 
@@ -67,7 +71,9 @@ extern void n00b_focus_mgr_destroy(n00b_focus_mgr_t *fm);
 /**
  * @brief Rebuild the focusable plane list from the canvas tree.
  *
- * Call after adding/removing planes or changing can_focus results.
+ * Call after adding/removing planes, changing visibility, or changing
+ * can-focus results. If the previously focused plane drops out of the
+ * visible focus tree, this blurs it before focusing the fallback plane.
  */
 extern void n00b_focus_mgr_rebuild(n00b_focus_mgr_t *fm);
 
@@ -76,12 +82,14 @@ extern void n00b_focus_mgr_rebuild(n00b_focus_mgr_t *fm);
  * @return Some(newly focused plane), or None if no focusable widgets.
  */
 extern n00b_option_t(n00b_plane_t *) n00b_focus_mgr_next(n00b_focus_mgr_t *fm);
+extern n00b_plane_t *n00b_focus_mgr_next_plane(n00b_focus_mgr_t *fm);
 
 /**
  * @brief Move focus to the previous focusable widget (Shift+Tab).
  * @return Some(newly focused plane), or None if no focusable widgets.
  */
 extern n00b_option_t(n00b_plane_t *) n00b_focus_mgr_prev(n00b_focus_mgr_t *fm);
+extern n00b_plane_t *n00b_focus_mgr_prev_plane(n00b_focus_mgr_t *fm);
 
 /**
  * @brief Set focus to a specific plane.
@@ -94,3 +102,4 @@ extern bool n00b_focus_mgr_set(n00b_focus_mgr_t *fm, n00b_plane_t *plane);
  * @return Some(focused plane), or None if no plane is focused.
  */
 extern n00b_option_t(n00b_plane_t *) n00b_focus_mgr_current(n00b_focus_mgr_t *fm);
+extern n00b_plane_t *n00b_focus_mgr_current_plane(n00b_focus_mgr_t *fm);

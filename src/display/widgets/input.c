@@ -11,6 +11,7 @@
 #include "display/widgets/input.h"
 #include "display/event.h"
 #include "display/render/box.h"
+#include "internal/display/widget_primitives.h"
 #include "text/unicode/properties.h"
 #include "text/strings/text_style.h"
 #include "text/strings/string_style.h"
@@ -346,10 +347,7 @@ input_render(n00b_plane_t *plane, void *data)
 
     // Character pixel width — used for cursor positioning and single-char
     // width fallback when n00b_plane_text_width returns 0.
-    int32_t cpw = n00b_plane_text_width(plane, n00b_string_from_cstr("M"), nullptr);
-    if (cpw <= 0) {
-        cpw = 1;
-    }
+    int32_t cpw = n00b_widget_cell_px_width(plane);
 
     n00b_isize_t text_len = input_text_len(inp);
     bool         focused  = (plane->widget_state == N00B_WSTATE_FOCUSED);
@@ -547,7 +545,7 @@ input_handle_event(n00b_plane_t *plane, void *data, const n00b_event_t *event)
 
     // Mouse click: convert clicked pixel x to a codepoint index.
     if (event->type == N00B_EVENT_MOUSE) {
-        if (event->mouse.button == N00B_MOUSE_LEFT && event->mouse.action == N00B_MOUSE_PRESS) {
+        if (n00b_widget_event_is_left_press(event)) {
             int32_t content_w;
             int32_t content_h;
             n00b_plane_content_size(plane, &content_w, &content_h);
@@ -571,10 +569,7 @@ input_handle_event(n00b_plane_t *plane, void *data, const n00b_event_t *event)
                 display_text = n00b_string_from_cstr(mask);
             }
 
-            int32_t cpw = n00b_plane_text_width(plane, n00b_string_from_cstr("M"), nullptr);
-            if (cpw <= 0) {
-                cpw = 1;
-            }
+            int32_t cpw = n00b_widget_cell_px_width(plane);
 
             const char  *p           = display_text->data;
             n00b_isize_t total_bytes = (n00b_isize_t)display_text->u8_bytes;
@@ -719,15 +714,9 @@ input_measure(n00b_plane_t *plane,
 {
     (void)data;
 
-    int32_t lh = n00b_plane_line_height(plane, nullptr);
-    if (lh <= 0) {
-        lh = 1;
-    }
+    int32_t lh = n00b_widget_line_px_height(plane);
 
-    int32_t cpw = n00b_plane_text_width(plane, n00b_string_from_cstr("M"), nullptr);
-    if (cpw <= 0) {
-        cpw = 1;
-    }
+    int32_t cpw = n00b_widget_cell_px_width(plane);
 
     *pref_w = 20 * cpw;
     *pref_h = lh;
@@ -792,19 +781,13 @@ n00b_input_new() _kargs
 
     // Default width: 20 character columns scaled by char pixel width.
     if (width <= 0) {
-        int32_t char_w = n00b_plane_text_width(plane, n00b_string_from_cstr("M"), nullptr);
-        if (char_w <= 0) {
-            char_w = 1;
-        }
+        int32_t char_w = n00b_widget_cell_px_width(plane);
         width = 20 * char_w;
     }
 
     // Default height: one line.
     if (height <= 0) {
-        height = n00b_plane_line_height(plane, nullptr);
-        if (height <= 0) {
-            height = 1;
-        }
+        height = n00b_widget_line_px_height(plane);
     }
 
     plane->width  = width;
@@ -831,11 +814,11 @@ n00b_input_new() _kargs
 void
 n00b_input_set_text(n00b_plane_t *plane, n00b_string_t *text)
 {
-    if (!plane || plane->widget_vtable != &n00b_widget_input) {
+    n00b_input_t *inp = n00b_widget_data_if_kind(plane, &n00b_widget_input);
+    if (!inp) {
         return;
     }
 
-    n00b_input_t *inp  = (n00b_input_t *)plane->widget_data;
     inp->text          = text ? text : n00b_string_from_cstr("");
     inp->cursor_pos    = (n00b_isize_t)(inp->text->codepoints);
     inp->scroll_offset = 0;
@@ -845,10 +828,10 @@ n00b_input_set_text(n00b_plane_t *plane, n00b_string_t *text)
 n00b_string_t *
 n00b_input_get_text(n00b_plane_t *plane)
 {
-    if (!plane || plane->widget_vtable != &n00b_widget_input) {
+    n00b_input_t *inp = n00b_widget_data_if_kind(plane, &n00b_widget_input);
+    if (!inp) {
         return nullptr;
     }
 
-    n00b_input_t *inp = (n00b_input_t *)plane->widget_data;
     return inp->text;
 }

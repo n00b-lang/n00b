@@ -121,6 +121,29 @@ load_phase3_guidance(void)
     return g;
 }
 
+static n00b_audit_guidance_t *
+load_structural_poison_guidance(void)
+{
+    n00b_string_t *p = fixture_path("guidance_ok.bnf");
+    auto r = n00b_audit_load_guidance(p);
+    assert(n00b_result_is_ok(r));
+
+    n00b_audit_guidance_t *g = n00b_result_get(r);
+    assert(g != nullptr);
+    assert(g->rules != nullptr);
+    assert(n00b_list_len(*g->rules) == 1);
+
+    n00b_audit_rule_t *rule = n00b_list_get(*g->rules, 0);
+    assert(rule != nullptr);
+
+    rule->bnf_fragment = n00b_string_from_cstr(
+        "<n00b_audit_coll014_unrelated_literal> ::= %\"NEVER_PRESENT_COLL014\"\n"
+        "<n00b_audit_coll014_jump> ::= <jump_statement>\n");
+    rule->violation_nt = n00b_string_from_cstr("jump_statement");
+
+    return g;
+}
+
 static void
 test_engine_new_ok(n00b_audit_engine_t **out_engine,
                    n00b_audit_guidance_t *guidance)
@@ -183,6 +206,41 @@ test_check_fixture_nullptr(n00b_audit_engine_t *engine)
     assert(n00b_list_len(*violations) == 0);
 
     printf("  [PASS] check_fixture_nullptr (n=0)\n");
+}
+
+static void
+test_structural_rule_with_absent_literal(void)
+{
+    n00b_audit_guidance_t *guidance = load_structural_poison_guidance();
+    n00b_audit_engine_t   *engine   = nullptr;
+
+    test_engine_new_ok(&engine, guidance);
+
+    n00b_string_t *path = fixture_path("fixture_null.c");
+    auto r = n00b_audit_engine_check_file(engine, path);
+    if (n00b_result_is_err(r)) {
+        fprintf(stderr,
+                "  structural absent-literal check failed: code=%d (%.*s)\n",
+                n00b_result_get_err(r),
+                (int)n00b_audit_err_str(n00b_result_get_err(r))->u8_bytes,
+                n00b_audit_err_str(n00b_result_get_err(r))->data);
+    }
+    assert(n00b_result_is_ok(r));
+
+    n00b_list_t(n00b_audit_violation_t *) *violations = n00b_result_get(r);
+    assert(violations != nullptr);
+    int64_t n = n00b_list_len(*violations);
+    assert(n >= 1);
+
+    n00b_audit_violation_t *v0 = n00b_list_get(*violations, 0);
+    assert(v0 != nullptr);
+    assert(v0->rule != nullptr);
+    assert(v0->rule == n00b_list_get(*guidance->rules, 0));
+    assert(v0->line > 0);
+    assert(v0->column > 0);
+
+    printf("  [PASS] structural_rule_with_absent_literal (n=%lld)\n",
+           (long long)n);
 }
 
 static void
@@ -335,6 +393,7 @@ main(int argc, char *argv[])
     test_engine_new_ok(&engine, guidance);
     test_check_fixture_null(engine, guidance);
     test_check_fixture_nullptr(engine);
+    test_structural_rule_with_absent_literal();
     test_check_missing_target(engine);
     test_check_fixture_legacy_h(engine, guidance);
     test_err_str_engine_codes();

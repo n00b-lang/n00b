@@ -370,6 +370,43 @@ test_async_read_mmap_inline(void)
     fflush(stdout); printf("  [PASS] async_read_mmap_inline\n");
 }
 
+static void
+test_async_read_stream_regular_inline(void)
+{
+    const char payload[] = "async-stream-regular-inline";
+    n00b_string_t *p     = write_temp_file(payload, strlen(payload));
+
+    auto fr = n00b_file_open(p, .kind = N00B_FILE_KIND_STREAM);
+    assert(n00b_result_is_ok(fr));
+    n00b_file_t *f = n00b_result_get(fr);
+    assert(n00b_file_get_kind(f) == N00B_FILE_KIND_STREAM);
+
+    n00b_conduit_t *c = n00b_get_runtime()->default_conduit;
+    n00b_conduit_inbox_t(n00b_buffer_t *) *inbox =
+        n00b_alloc(n00b_conduit_inbox_t(n00b_buffer_t *));
+    n00b_conduit_inbox_init(n00b_buffer_t *, inbox, c,
+                             N00B_CONDUIT_BP_UNBOUNDED, 0);
+
+    auto ar = n00b_file_read_async(f, 0, inbox);
+    assert(n00b_result_is_ok(ar));
+    auto async = n00b_result_get(ar);
+    assert(async.handle == N00B_CONDUIT_INVALID_SUB_HANDLE);
+
+    assert(n00b_conduit_inbox_has_msg(n00b_buffer_t *, inbox));
+    n00b_conduit_message_t(n00b_buffer_t *) *msg =
+        n00b_conduit_inbox_pop_msg(n00b_buffer_t *, inbox);
+    assert(msg != nullptr);
+    assert(msg->payload->byte_len == strlen(payload));
+    assert(memcmp(msg->payload->data, payload, strlen(payload)) == 0);
+    assert(n00b_file_at_eof(f));
+
+    n00b_conduit_sub_cancel(async.handle);
+
+    n00b_file_close(f);
+    unlink_path(p);
+    fflush(stdout); printf("  [PASS] async_read_stream_regular_inline\n");
+}
+
 // ----------------------------------------------------------------------
 // main
 // ----------------------------------------------------------------------
@@ -390,6 +427,7 @@ main(int argc, char **argv)
     test_file_auto_resolution();
     test_hash_stream_vs_mmap();
     test_async_read_mmap_inline();
+    test_async_read_stream_regular_inline();
 
     printf("All file_io tests passed.\n");
     fflush(stdout);

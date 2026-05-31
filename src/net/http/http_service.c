@@ -238,6 +238,21 @@ str_is_empty(n00b_string_t *s)
     return s == nullptr || s->u8_bytes == 0;
 }
 
+static const char *
+string_to_cstr(n00b_string_t *s, const char *fallback)
+{
+    if (s == nullptr || s->data == nullptr) {
+        return fallback;
+    }
+
+    char *result = n00b_alloc_array(char, s->u8_bytes + 1);
+    if (s->u8_bytes != 0) {
+        memcpy(result, s->data, s->u8_bytes);
+    }
+    result[s->u8_bytes] = '\0';
+    return result;
+}
+
 static n00b_string_t **
 copy_string_ptr_array(n00b_string_t **src, size_t n)
 {
@@ -1164,7 +1179,8 @@ wake_listener(n00b_http_service_t *svc)
     struct sockaddr_in addr = {};
     addr.sin_family = AF_INET;
     addr.sin_port   = htons(svc->actual_port);
-    if (inet_pton(AF_INET, svc->bind_host->data, &addr.sin_addr) == 1) {
+    const char *host = string_to_cstr(svc->bind_host, "127.0.0.1");
+    if (inet_pton(AF_INET, host, &addr.sin_addr) == 1) {
         (void)connect(fd, (struct sockaddr *)&addr, sizeof(addr));
     }
     N00B_HTTP_CLOSE(fd);
@@ -1466,7 +1482,8 @@ n00b_http_service_start(n00b_http_service_t *svc)
     struct sockaddr_in addr = {};
     addr.sin_family = AF_INET;
     addr.sin_port   = htons(svc->bind_port);
-    if (inet_pton(AF_INET, svc->bind_host->data, &addr.sin_addr) != 1) {
+    const char *host = string_to_cstr(svc->bind_host, "127.0.0.1");
+    if (inet_pton(AF_INET, host, &addr.sin_addr) != 1) {
         N00B_HTTP_CLOSE(fd);
         return n00b_result_err(bool, EINVAL);
     }

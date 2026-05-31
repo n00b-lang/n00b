@@ -22,6 +22,7 @@
 
 #include "n00b.h"
 #include "display/render/types.h"
+#include "text/strings/style_ops.h"
 
 // ====================================================================
 // Cell flags
@@ -147,7 +148,8 @@ n00b_rcell_equal(const n00b_rcell_t *a, const n00b_rcell_t *b)
     if (a->display_width != b->display_width) {
         return false;
     }
-    if (a->style != b->style) {
+    if (a->style != b->style
+        && !n00b_str_style_eq(a->style, b->style)) {
         return false;
     }
     if (a->grapheme_len > 0 && memcmp(a->grapheme, b->grapheme, a->grapheme_len) != 0) {

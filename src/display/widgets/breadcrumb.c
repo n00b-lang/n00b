@@ -15,6 +15,7 @@
 #include "display/widget.h"
 #include "display/widgets/breadcrumb.h"
 #include "display/event.h"
+#include "internal/display/widget_primitives.h"
 #include "text/unicode/properties.h"
 #include "text/strings/text_style.h"
 #include "text/strings/string_style.h"
@@ -116,11 +117,7 @@ breadcrumb_render(n00b_plane_t *plane, void *data)
         return;
     }
 
-    bool widget_focused = (n00b_plane_get_state(plane) == N00B_WSTATE_FOCUSED
-                           || n00b_plane_get_state(plane) == N00B_WSTATE_ACTIVE);
-
-    int32_t cpw = n00b_plane_text_width(plane, n00b_string_from_cstr("M"), nullptr);
-    if (cpw <= 0) cpw = 1;
+    bool widget_focused = n00b_widget_state_is_focused_or_active(plane);
 
     bc_recompute_positions(plane, bc);
     bc_clamp_focus(bc);
@@ -189,8 +186,7 @@ breadcrumb_handle_event(n00b_plane_t *plane, void *data,
 
     // Mouse click: hit-test segments.
     if (event->type == N00B_EVENT_MOUSE) {
-        if (event->mouse.button == N00B_MOUSE_LEFT
-            && event->mouse.action == N00B_MOUSE_PRESS) {
+        if (n00b_widget_event_is_left_press(event)) {
             bc_recompute_positions(plane, bc);
             int32_t click_col = event->mouse.x;
 
@@ -242,7 +238,7 @@ breadcrumb_handle_event(n00b_plane_t *plane, void *data,
     }
 
     // Enter/Space activates focused segment (not last).
-    if (key == N00B_KEY_ENTER || key == ' ') {
+    if (n00b_widget_event_is_keyboard_activate(event)) {
         if (bc->count > 1 && bc->focused_index < bc->count - 1) {
             if (bc->on_click) {
                 bc->on_click(plane, bc->focused_index, bc->on_click_data);
@@ -269,11 +265,7 @@ breadcrumb_measure(n00b_plane_t *plane, void *data,
 {
     n00b_breadcrumb_t *bc = (n00b_breadcrumb_t *)data;
 
-    int32_t lh = n00b_plane_line_height(plane, nullptr);
-    if (lh <= 0) lh = 1;
-
-    int32_t cpw = n00b_plane_text_width(plane, n00b_string_from_cstr("M"), nullptr);
-    if (cpw <= 0) cpw = 1;
+    int32_t lh = n00b_widget_line_px_height(plane);
 
     int32_t total_w = 0;
     if (bc && bc->count > 0) {
@@ -394,11 +386,12 @@ n00b_breadcrumb_push(n00b_plane_t  *plane,
                       n00b_string_t *label,
                       void          *data)
 {
-    if (!plane || plane->widget_vtable != &n00b_widget_breadcrumb) {
+    n00b_breadcrumb_t *bc =
+        n00b_widget_data_if_kind(plane, &n00b_widget_breadcrumb);
+    if (!bc) {
         return;
     }
 
-    n00b_breadcrumb_t *bc = (n00b_breadcrumb_t *)plane->widget_data;
     bc_ensure_capacity(bc, bc->count + 1);
 
     bc->segments[bc->count].label = label;
@@ -412,11 +405,12 @@ n00b_breadcrumb_push(n00b_plane_t  *plane,
 void
 n00b_breadcrumb_pop(n00b_plane_t *plane)
 {
-    if (!plane || plane->widget_vtable != &n00b_widget_breadcrumb) {
+    n00b_breadcrumb_t *bc =
+        n00b_widget_data_if_kind(plane, &n00b_widget_breadcrumb);
+    if (!bc) {
         return;
     }
 
-    n00b_breadcrumb_t *bc = (n00b_breadcrumb_t *)plane->widget_data;
     if (bc->count > 0) {
         bc->count--;
         bc_clamp_focus(bc);
@@ -427,11 +421,12 @@ n00b_breadcrumb_pop(n00b_plane_t *plane)
 void
 n00b_breadcrumb_clear(n00b_plane_t *plane)
 {
-    if (!plane || plane->widget_vtable != &n00b_widget_breadcrumb) {
+    n00b_breadcrumb_t *bc =
+        n00b_widget_data_if_kind(plane, &n00b_widget_breadcrumb);
+    if (!bc) {
         return;
     }
 
-    n00b_breadcrumb_t *bc = (n00b_breadcrumb_t *)plane->widget_data;
     bc->count         = 0;
     bc->focused_index = 0;
     n00b_plane_mark_dirty(plane);
@@ -440,11 +435,12 @@ n00b_breadcrumb_clear(n00b_plane_t *plane)
 n00b_isize_t
 n00b_breadcrumb_count(n00b_plane_t *plane)
 {
-    if (!plane || plane->widget_vtable != &n00b_widget_breadcrumb) {
+    n00b_breadcrumb_t *bc =
+        n00b_widget_data_if_kind(plane, &n00b_widget_breadcrumb);
+    if (!bc) {
         return 0;
     }
 
-    n00b_breadcrumb_t *bc = (n00b_breadcrumb_t *)plane->widget_data;
     return bc->count;
 }
 
@@ -453,11 +449,12 @@ n00b_breadcrumb_set_path(n00b_plane_t   *plane,
                           n00b_string_t **labels,
                           n00b_isize_t    count)
 {
-    if (!plane || plane->widget_vtable != &n00b_widget_breadcrumb) {
+    n00b_breadcrumb_t *bc =
+        n00b_widget_data_if_kind(plane, &n00b_widget_breadcrumb);
+    if (!bc) {
         return;
     }
 
-    n00b_breadcrumb_t *bc = (n00b_breadcrumb_t *)plane->widget_data;
     bc_ensure_capacity(bc, count);
 
     bc->count = count;
