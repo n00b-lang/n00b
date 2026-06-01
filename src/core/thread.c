@@ -218,7 +218,20 @@ n00b_thread_init() _kargs
     // addresses (not the thread struct), and gc_stack_top is copied into
     // the permanent struct at the handoff.
     n00b_thread_t init_self = {};
-    init_self.gc_stack_top    = _n00b_bootstrap_thread.gc_stack_top;
+    // Only the MAIN thread continues the bootstrap struct's frame chain: it
+    // ran on _n00b_bootstrap_thread (n00b_thread_self() -> bootstrap) during
+    // early n00b_init before attaching here, so its pre-attach frames live on
+    // bootstrap.gc_stack_top and must carry over.  A WORKER or FOREIGN
+    // (libdispatch/XPC) thread never used the bootstrap struct as its self —
+    // its pre-attach prologue pushes were null-self no-ops (see
+    // n00b_gc_stack_push) — so it must start with an EMPTY frame chain.
+    // Inheriting bootstrap.gc_stack_top for such a thread would root its chain
+    // in MAIN's stale stack frames, which then faults when the chain is walked
+    // (n00b_gc_stack_pop / the GC stack-root scan).  The main thread is the
+    // first to init, when live_threads is still 0.
+    bool is_main              = (n00b_atomic_load(&runtime->live_threads) == 0);
+    init_self.gc_stack_top    = is_main ? _n00b_bootstrap_thread.gc_stack_top
+                                        : nullptr;
     init_self.gc_stack_policy = _n00b_bootstrap_thread.gc_stack_policy;
     // Record the worker's callstack on the init-scoped struct BEFORE the
     // first allocation: n00b_thread_self()'s worker-masking branch back-verifies the
@@ -250,6 +263,13 @@ n00b_thread_init() _kargs
     // writes rec->stack_lo/hi (stack_hi first, stack_lo last as the gate).
     n00b_capture_stack_base(&init_self, runtime);
     n00b_capture_stack_top(&init_self);
+
+    // Publish this slot in the live-slot bitmap AFTER its bounds are set
+    // (capture_stack_base above), so n00b_thread_self()'s bounds scan only
+    // ever sees a set bit paired with a valid [stack_lo, stack_hi).  The bit
+    // is cleared first in n00b_thread_exit, before the bounds are torn down.
+    n00b_atomic_or(&runtime->live_slot_bits[acquired_slot >> 6],
+                   (uint64_t)1 << (acquired_slot & 63u));
 
     // Now n00b_thread_self() resolves to &init_self; allocate the permanent
     // struct from the GC-VISIBLE, non-moving runtime_obj_pool (WP-3a / D-034;
@@ -363,6 +383,22 @@ n00b_thread_destroy(void)
         // advertising that range (with rec->thread now null), the scan would
         // match the dead slot first and resolve n00b_thread_self() to null for the new
         // worker — crashing it (n00b_capture_stack_top on a null self).
+        // Retire this slot from the live-slot bitmap FIRST, before tearing
+        // down the bounds/thread the scan reads.  The bit is the authoritative
+        // "this slot's bounds are valid" gate, so clearing it here makes
+        // n00b_thread_self()'s bounds scan stop matching this slot the moment
+        // teardown begins — preventing a recycled stack range from resolving
+        // to this dead slot.  This covers FOREIGN threads too, whose bounds
+        // are NOT cleared by the callstack-only stack_lo/hi clear below.
+        {
+            n00b_runtime_t *exit_rt = n00b_get_runtime();
+            if (exit_rt != nullptr && exit_rt->live_slot_bits != nullptr) {
+                uint32_t exit_slot = (uint32_t)self->id_info.parts.id;
+                n00b_atomic_and(&exit_rt->live_slot_bits[exit_slot >> 6],
+                                ~((uint64_t)1 << (exit_slot & 63u)));
+            }
+        }
+
         // Clear stack_lo first (it is the release gate the scan loads first;
         // a null gate makes the scan skip this slot), then stack_hi.
         if (self->callstack != nullptr) {
@@ -567,22 +603,48 @@ n00b_capture_stack_base(n00b_thread_t *thread, n00b_runtime_t *runtime)
 #endif
     }
     else {
-        // After WP-001 Phase 3 every worker runs on an n00b callstack and
-        // is handled by the `thread->callstack != nullptr` early-return
-        // above, so this branch is reached only by a non-main, non-callstack
-        // thread — which the n00b thread lifecycle no longer creates (raw
-        // creation replaced pthread_create; the residual VFS frontend
-        // pthreads run OUTSIDE this lifecycle and never call
-        // n00b_capture_stack_base).  The old Phase-2 transitional pthread
-        // stack query (pthread_getattr_np / pthread_attr_getstack /
-        // pthread_self / pthread_get_stackaddr_np) lived here and was deleted
-        // with the WP-001 pthread excision (D-002/D-009): main-thread
-        // discovery is OS-native (above) and workers self-describe via their
-        // callstack.  Leaving the bounds zeroed is the correct behaviour for
-        // an unexpected caller; there is no pthread fallback by design.
+        // Non-main, non-callstack thread.  n00b's own thread lifecycle no
+        // longer creates such threads (raw creation replaced pthread_create;
+        // workers self-describe via their callstack and return above).  But a
+        // FOREIGN thread — a libdispatch/XPC worker that the embedding app
+        // attaches via n00b_thread_init (e.g. the Crayon gateway's upstream
+        // reply threads, which deliver events on dispatch queues) —
+        // legitimately reaches here.  It runs on an OS-managed stack, so
+        // discover that stack's real bounds the same OS-native way the macOS
+        // main thread does just above: mach_vm_region_recurse on an anchor in
+        // THIS thread's own frame (a local) returns its stack mapping.  Prior
+        // to this the bounds were left zeroed on the assumption no foreign
+        // caller existed, and the n00b_mmap_register below then tripped its
+        // (end > start) assertion (mmaps.c) — the live gateway crash.
+#ifdef __APPLE__
+        char              anchor;
+        mach_vm_address_t region_addr = (mach_vm_address_t)(uintptr_t)&anchor;
+        mach_vm_size_t    region_size = 0;
+        natural_t                       depth      = 0;
+        vm_region_submap_info_data_64_t info;
+        mach_msg_type_number_t          info_count = VM_REGION_SUBMAP_INFO_COUNT_64;
+        kern_return_t                   kr;
+        kr = mach_vm_region_recurse(mach_task_self(), &region_addr,
+                                    &region_size, &depth,
+                                    (vm_region_recurse_info_t)&info,
+                                    &info_count);
+        if (kr == KERN_SUCCESS) {
+            lowest  = (char *)(uintptr_t)region_addr;
+            highest = lowest + region_size;
+            size    = region_size;
+        }
+        else {
+            lowest  = nullptr;
+            highest = nullptr;
+            size    = 0;
+        }
+#else
+        // No OS-native foreign-thread stack discovery wired up off macOS yet;
+        // leave the bounds zeroed (the register below is guarded).
         lowest  = nullptr;
         highest = nullptr;
         size    = 0;
+#endif
     }
 #endif
     (void)size; // consumed only to compute `highest` in the branches above.
@@ -601,8 +663,16 @@ n00b_capture_stack_base(n00b_thread_t *thread, n00b_runtime_t *runtime)
         n00b_atomic_store(&thread->record->stack_lo, (void *)lowest);
     }
 
-    thread->stack_map = n00b_option_get(
-        n00b_mmap_register(lowest, highest, n00b_mmap_stack));
+    // Only register a real region.  Foreign-thread stack discovery can fail
+    // (off-macOS, or a mach_vm error), leaving zeroed bounds; registering
+    // those would trip n00b_mmap_register's (end > start) assertion.  With
+    // bounds zeroed the thread's published stack_lo stays null, so the
+    // n00b_thread_self() bounds scan simply skips its slot (resolves null)
+    // rather than crashing — a degraded but safe outcome.
+    if (highest > lowest) {
+        thread->stack_map = n00b_option_get(
+            n00b_mmap_register(lowest, highest, n00b_mmap_stack));
+    }
 }
 
 // ============================================================================

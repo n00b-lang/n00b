@@ -149,11 +149,30 @@ n00b_gc_stack_pop(n00b_gc_stack_frame_t *frame)
         return;
     }
 
-    assert(thread->gc_stack_top == frame);
-    thread->gc_stack_top = frame->prev;
-    frame->prev          = nullptr;
-    frame->map           = nullptr;
-    frame->roots         = nullptr;
+    if (thread->gc_stack_top == frame) {
+        thread->gc_stack_top = frame->prev;
+        frame->prev          = nullptr;
+        frame->map           = nullptr;
+        frame->roots         = nullptr;
+        return;
+    }
+
+    // gc_stack_top != frame.  The sound way this happens is a FOREIGN thread
+    // that attached (n00b_thread_init) MID-FRAME: every framed function
+    // already on its C stack ran its prologue push while n00b_thread_self()
+    // was still null — a no-op that never chained the frame (see
+    // n00b_gc_stack_push) — but runs its epilogue pop now that the thread is
+    // attached and self() resolves.  E.g. the Crayon gateway's libdispatch
+    // entry points are gc-framed and call raw_gateway_ensure_thread_attached
+    // (-> n00b_thread_init) from inside, so their own frame is pushed
+    // pre-attach and popped post-attach.  Such a frame was never on this
+    // thread's chain, so leave gc_stack_top alone and just clear the frame.
+    // We do NOT walk the chain to "verify" it: the common-path equality check
+    // above enforces LIFO for chained frames, and walking here would risk
+    // dereferencing an unrelated chain on this rare attach-boundary path.
+    frame->prev  = nullptr;
+    frame->map   = nullptr;
+    frame->roots = nullptr;
 }
 
 n00b_jmp_buf_t *

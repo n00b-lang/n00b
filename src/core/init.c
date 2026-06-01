@@ -123,6 +123,29 @@ setup_threads(n00b_runtime_t *rt, unsigned int max_threads)
     memset(rt->threads, 0,
            sizeof(n00b_thread_record_t) * (size_t)max_threads);
 
+    /* Live-slot bitmap for n00b_thread_self()'s foreign-safe bounds scan
+     * (see runtime.h).  One bit per slot, from system_pool, zeroed.  Must
+     * exist before n00b_thread_init below so the main thread can set its
+     * bit. */
+    uint64_t nwords    = ((uint64_t)max_threads + 63u) / 64u;
+    rt->live_slot_bits = n00b_alloc_array_with_opts(
+        _Atomic uint64_t, (int64_t)nwords,
+        &(n00b_alloc_opts_t){.allocator = rpool, .no_scan = true});
+    memset(rt->live_slot_bits, 0, sizeof(uint64_t) * (size_t)nwords);
+
+    /* Callstack-region base set for n00b_thread_self()'s O(1) worker fast
+     * path (see runtime.h).  Power-of-two sized at >= 4x max_threads so the
+     * load factor stays low (~1 probe); from system_pool, zeroed. */
+    uint64_t set_sz = 256;
+    while (set_sz < 4ull * (uint64_t)max_threads) {
+        set_sz <<= 1;
+    }
+    rt->callstack_base_set_mask = (uint32_t)(set_sz - 1);
+    rt->callstack_base_set      = n00b_alloc_array_with_opts(
+        _Atomic(uintptr_t), (int64_t)set_sz,
+        &(n00b_alloc_opts_t){.allocator = rpool, .no_scan = true});
+    memset(rt->callstack_base_set, 0, sizeof(uintptr_t) * (size_t)set_sz);
+
     rt->next_thread_slot = 0;
     n00b_thread_init(.runtime = rt);
 }
