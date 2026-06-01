@@ -3649,7 +3649,7 @@ endforeach
 objfile_test_names = [
     'types', 'bstream', 'writer', 'detect', 'elf', 'elf_build',
     'macho', 'macho_build', 'pe', 'pe_build', 'demangle',
-    'abstract', 'dwarf',
+    'abstract', 'dwarf', 'elf_known_answers',
 ]
 
 foreach name : objfile_test_names
@@ -3659,6 +3659,15 @@ foreach name : objfile_test_names
     )
     test('objfile_' + name, exe, suite: 'unit')
 endforeach
+
+objfile_elf_oracle_test = executable('test_objfile_elf_oracle',
+    'test/unit/test_objfile_elf_oracle.c',
+    kwargs: test_common_kwargs,
+)
+test('objfile_elf_oracle', objfile_elf_oracle_test,
+     suite: ['elf_oracle', 'long'],
+     timeout: 120,
+     workdir: meson.project_source_root())
 
 # Crayon ObjC/libxpc examples (Mac-only) live on the ML sibling branch
 # along with examples/crayon_shared/.  They re-land with that branch.
