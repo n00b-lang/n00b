@@ -24,8 +24,17 @@
  * The pool struct lives in thread-local storage; pool_destroy on
  * scope exit munmaps the page table but leaves the struct
  * zeroed-by-pool_init-ready for the next outermost entry. */
-static thread_local n00b_pool_t __n00b_string_scratch_storage;
-static thread_local n00b_pool_t *__n00b_string_scratch_pool = nullptr;
+/* The scratch pool STRUCT must not live in BSS: a file-scope `static
+ * n00b_pool_t` is registered as a GC root by ncc's --ncc-auto-gc-roots
+ * transform, so the collector scans the struct and follows its
+ * page_table / free_list pointers into the (hidden) pool pages — which
+ * `hidden=true` was supposed to keep off the GC's plate. Allocate the
+ * struct from the system pool instead (non-GC-scanned, pinned, no_scan):
+ * it is never a root and its internals are never traced. A thread_local
+ * POINTER to it is fine — the pointer is scanned, but it points into the
+ * non-scanned system pool, so nothing in the struct is followed. */
+static thread_local n00b_pool_t *__n00b_string_scratch_storage = nullptr;
+static thread_local n00b_pool_t *__n00b_string_scratch_pool    = nullptr;
 
 n00b_string_scope_t
 n00b_string_scope_enter(n00b_allocator_t **resolved)
@@ -57,13 +66,22 @@ n00b_string_scope_enter(n00b_allocator_t **resolved)
     if (rt == nullptr) {
         return (n00b_string_scope_t){.created = false};
     }
-    /* Outermost: stand up a fresh scratch.  hidden + no external
-     * metadata so the GC's metadata-pool walk doesn't pick it up
-     * (the whole point is to keep this off the GC's plate). */
-    n00b_pool_init(&__n00b_string_scratch_storage,
+    /* Outermost: stand up a fresh scratch.  The control struct is
+     * allocated once per thread from the system pool (non-GC-scanned,
+     * pinned, no_scan) and reused for the thread's life — NOT from BSS,
+     * which would make it a scanned GC root (see the declaration note).
+     * pool_init is hidden + no external metadata so the GC's
+     * metadata-pool walk doesn't pick up the pages either. */
+    if (__n00b_string_scratch_storage == nullptr) {
+        __n00b_string_scratch_storage = n00b_alloc_with_opts(
+            n00b_pool_t,
+            &(n00b_alloc_opts_t){.allocator = (n00b_allocator_t *)&rt->system_pool,
+                                 .no_scan   = true});
+    }
+    n00b_pool_init(__n00b_string_scratch_storage,
                    .hidden = true,
                    .name   = "n00b_string_scratch");
-    __n00b_string_scratch_pool = &__n00b_string_scratch_storage;
+    __n00b_string_scratch_pool = __n00b_string_scratch_storage;
     *resolved = (n00b_allocator_t *)__n00b_string_scratch_pool;
     return (n00b_string_scope_t){.created = true};
 }
