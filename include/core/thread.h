@@ -243,6 +243,8 @@ typedef struct {
 typedef void (*n00b_thread_crash_handler_t)(n00b_thread_t *thread,
                                             void          *data);
 
+struct n00b_pool_t; // Folded-in string scratch (D-005/D-012 cont.); pointer only.
+
 struct n00b_thread_t {
     union {
         struct {
@@ -273,6 +275,8 @@ struct n00b_thread_t {
     n00b_allocator_t     *current_allocator; ///< Scoped allocator override (was __n00b_current_allocator).
     n00b_string_t        *dl_last_error;     ///< Last dynamic-lib error (was dynamic_lib.c t_last_error).
     uint32_t              regex_nulls_last;  ///< Nulls cache scratch slot (was nulls.c `last`; NullsId-shaped).
+    struct n00b_pool_t   *string_scratch_storage; ///< Per-thread string-builder scratch pool control struct (was string.c thread_local __n00b_string_scratch_storage). system_pool-allocated (non-GC-scanned, pinned), allocated once and reused for the thread's life; nullptr until first use.
+    struct n00b_pool_t   *string_scratch_pool;    ///< Active scratch marker (was string.c thread_local __n00b_string_scratch_pool): == string_scratch_storage while a string scope is open, nullptr otherwise.
     uint64_t              aba_ctr;           ///< Per-thread monotonic counter feeding _n00b_aba_tag() (lock-free-stack ABA tags). Per-thread (NOT per-CPU) to avoid the userspace thread-migration race that retired the per-processor STW plan (D-003); thread-local so the increment needs no atomic.
 
     /* Native (non-pthread) join state (WP-001 Phase 3, DF #4).  A raw OS

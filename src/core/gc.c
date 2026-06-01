@@ -37,6 +37,16 @@
 #include "core/rt_access.h"
 #include "adt/option.h"
 #include "adt/dict_untyped.h"
+#include "adt/dict.h"
+
+/* Diagnostic: per-allocation-site live census. file-static; only gc.c
+ * recompiles. Active only during a debug_leak_detect collect. Typed dict
+ * (O(1)) keyed by the OOB site pointer bits as uint64_t (ncc typeid does
+ * not normalize `const char *`); lives in a discardable NON-GC scratch
+ * arena. TODO: gate via a libn00b meson option (gc_site_census). */
+typedef n00b_dict_t(uint64_t, int64_t) n00b_site_census_dict_t;
+static n00b_site_census_dict_t *g_site_census       = nullptr;
+static n00b_arena_t            *g_site_census_arena = nullptr;
 
 // ============================================================================
 // Forward declarations
@@ -826,6 +836,16 @@ n00b_visit_possible_pointer(n00b_collect_t *ctx, uint64_t **base, size_t i, bool
      * every visit, not just first — cheap and idempotent. */
     if (ainfo.kind == n00b_alloc_oob) {
         ainfo.hdr.oob->gc_epoch = ctx->current_epoch;
+        /* Diagnostic site census (debug_leak_detect collects only): count
+         * live allocations per origin site. Keyed by the file_name pointer
+         * bits; reported + torn down in n00b_collect_internal. */
+        if (g_site_census != nullptr && ainfo.hdr.oob->file_name != nullptr) {
+            uint64_t ck = (uint64_t)(uintptr_t)ainfo.hdr.oob->file_name;
+            bool     cf = false;
+            int64_t  cc = n00b_dict_get(g_site_census, ck, &cf);
+            int64_t  nv = cc + 1;
+            n00b_dict_put(g_site_census, ck, nv);
+        }
     }
 
     bool in_from_space = mmap->allocator == (n00b_allocator_t *)ctx->from_space;
@@ -1788,6 +1808,24 @@ n00b_collect_internal(n00b_arena_t *arena)
     n00b_collect_setup(&ctx, arena);
     arena->alloc_count = 0;
 
+    /* Diagnostic site census: only during a debug_leak_detect collect.
+     * Lives in a discardable non-GC scratch arena; populated as live OOB
+     * allocs are visited (see n00b_add_alloc_to_worklist), reported and
+     * torn down at the end of this collect. */
+    g_site_census       = nullptr;
+    g_site_census_arena = nullptr;
+    {
+        n00b_runtime_t *crt = n00b_get_runtime();
+        if (crt && n00b_atomic_load(&crt->debug_leak_detect)) {
+            g_site_census_arena = n00b_new_arena(.size   = (1 << 22),
+                                                 .use_gc = false,
+                                                 .no_map = true,
+                                                 .name   = "gc_site_census");
+            g_site_census = n00b_dict_new_private(uint64_t, int64_t,
+                                .allocator = (n00b_allocator_t *)g_site_census_arena);
+        }
+    }
+
     n00b_scan_roots(&ctx);
 
     n00b_scan_runtime(&ctx);
@@ -1823,6 +1861,46 @@ n00b_collect_internal(n00b_arena_t *arena)
     n00b_sweep_metadata_pool_leaks(&ctx);
 
     n00b_process_finalizers(&ctx);
+
+    /* Report + tear down the diagnostic site census (top-40 sites by live
+     * count) accumulated during this debug_leak_detect collect. */
+    if (g_site_census != nullptr) {
+        n00b_allocator_t *ca = (n00b_allocator_t *)g_site_census_arena;
+        size_t            cn = (size_t)n00b_dict_internal_len(
+            (_n00b_dict_internal_t *)g_site_census);
+        if (cn) {
+            uint64_t *ks = n00b_alloc_array(uint64_t, cn, .allocator = ca);
+            int64_t  *vs = n00b_alloc_array(int64_t, cn, .allocator = ca);
+            size_t    ci = 0;
+            n00b_dict_foreach(g_site_census, ck, cv, {
+                if (ci < cn) {
+                    ks[ci] = ck;
+                    vs[ci] = cv;
+                    ci++;
+                }
+            });
+            for (size_t a = 0; a < ci; a++) {
+                size_t best = a;
+                for (size_t b = a + 1; b < ci; b++) {
+                    if (vs[b] > vs[best]) {
+                        best = b;
+                    }
+                }
+                if (best != a) {
+                    int64_t  tv = vs[a];  vs[a] = vs[best];  vs[best] = tv;
+                    uint64_t tk = ks[a];  ks[a] = ks[best];  ks[best] = tk;
+                }
+            }
+            size_t reportn = ci < 40 ? ci : 40;
+            for (size_t a = 0; a < reportn; a++) {
+                fprintf(stderr, "n00b census: %lld %s\n",
+                        (long long)vs[a], (const char *)(uintptr_t)ks[a]);
+            }
+        }
+        n00b_allocator_destroy((n00b_allocator_t *)g_site_census_arena);
+        g_site_census       = nullptr;
+        g_site_census_arena = nullptr;
+    }
 
     n00b_collection_cleanup(&ctx);
 }
