@@ -26,6 +26,7 @@ main(int argc, char **argv)
 
 #else
 
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -39,6 +40,20 @@ env_is_one(const char *name)
 {
     const char *value = getenv(name);
     return value != nullptr && strcmp(value, "1") == 0;
+}
+
+static bool
+path_join(char *out, size_t out_len, const char *base, const char *suffix)
+{
+    int n = snprintf(out, out_len, "%s/%s", base, suffix);
+    return n >= 0 && (size_t)n < out_len;
+}
+
+static bool
+file_exists(const char *path)
+{
+    struct stat st;
+    return stat(path, &st) == 0 && S_ISREG(st.st_mode);
 }
 
 static bool
@@ -116,7 +131,7 @@ write_fixture_file(const n00b_test_elf_case_t *test_case,
 }
 
 static oracle_run_result_t
-run_oracle(const char *oracle_bin, const char *mode, const char *fixture_path)
+run_argv(char *const argv[])
 {
     oracle_run_result_t result = {
         .exit_status = 127,
@@ -144,12 +159,7 @@ run_oracle(const char *oracle_bin, const char *mode, const char *fixture_path)
         dup2(fds[1], STDERR_FILENO);
         close(fds[1]);
 
-        execl(oracle_bin,
-              oracle_bin,
-              "--mode",
-              mode,
-              fixture_path,
-              (char *)nullptr);
+        execvp(argv[0], argv);
         _exit(127);
     }
 
@@ -182,6 +192,173 @@ run_oracle(const char *oracle_bin, const char *mode, const char *fixture_path)
     }
 
     return result;
+}
+
+static oracle_run_result_t
+run_oracle(const char *oracle_bin, const char *mode, const char *fixture_path)
+{
+    char *const argv[] = {
+        (char *)oracle_bin,
+        (char *)"--mode",
+        (char *)mode,
+        (char *)fixture_path,
+        nullptr,
+    };
+
+    return run_argv(argv);
+}
+
+static void
+remove_auto_oracle_files(const char *bin, const char *dir)
+{
+    if (bin != nullptr && bin[0] != '\0') {
+        unlink(bin);
+    }
+
+    if (dir != nullptr && dir[0] != '\0') {
+        rmdir(dir);
+    }
+}
+
+#if defined(__linux__) && defined(__x86_64__)
+static bool
+build_oracle_from_root(const char *root,
+                       char       *out_bin,
+                       size_t      out_bin_len,
+                       char       *out_dir,
+                       size_t      out_dir_len)
+{
+    char zerocool_dir[512];
+    char read_target_c[512];
+    char interval_tree_c[512];
+    char zerocool_c[512];
+
+    if (!path_join(zerocool_dir, sizeof(zerocool_dir), root, "zerocool") ||
+        !path_join(read_target_c,
+                   sizeof(read_target_c),
+                   zerocool_dir,
+                   "read_target_elf.c") ||
+        !path_join(interval_tree_c,
+                   sizeof(interval_tree_c),
+                   zerocool_dir,
+                   "interval_tree.c") ||
+        !path_join(zerocool_c, sizeof(zerocool_c), zerocool_dir, "zerocool.c")) {
+        printf("  [FAIL] N00B_ELF_ORACLE_ROOT path is too long.\n");
+        return false;
+    }
+
+    if (!file_exists(read_target_c) ||
+        !file_exists(interval_tree_c) ||
+        !file_exists(zerocool_c)) {
+        printf("  [FAIL] N00B_ELF_ORACLE_ROOT does not look like Brandon's "
+               "packager root: %s\n",
+               root);
+        return false;
+    }
+
+    const char *tmpdir = getenv("TMPDIR");
+    if (tmpdir == nullptr || tmpdir[0] == '\0') {
+        tmpdir = "/tmp";
+    }
+
+    int n = snprintf(out_dir,
+                     out_dir_len,
+                     "%s/n00b_elf_oracle_build_XXXXXX",
+                     tmpdir);
+    if (n < 0 || (size_t)n >= out_dir_len) {
+        printf("  [FAIL] oracle build directory path is too long.\n");
+        return false;
+    }
+
+    if (mkdtemp(out_dir) == nullptr) {
+        printf("  [FAIL] could not create oracle build directory %s: %s\n",
+               out_dir,
+               strerror(errno));
+        out_dir[0] = '\0';
+        return false;
+    }
+
+    if (!path_join(out_bin, out_bin_len, out_dir, "brandon_read_target_oracle")) {
+        printf("  [FAIL] oracle binary path is too long.\n");
+        remove_auto_oracle_files(nullptr, out_dir);
+        out_dir[0] = '\0';
+        return false;
+    }
+
+    char include_arg[640];
+    n = snprintf(include_arg, sizeof(include_arg), "-I%s", zerocool_dir);
+    if (n < 0 || (size_t)n >= sizeof(include_arg)) {
+        printf("  [FAIL] oracle include path is too long.\n");
+        remove_auto_oracle_files(out_bin, out_dir);
+        out_bin[0] = '\0';
+        out_dir[0] = '\0';
+        return false;
+    }
+
+    const char *cc = getenv("CC");
+    if (cc == nullptr || cc[0] == '\0') {
+        cc = "cc";
+    }
+
+    char *const argv[] = {
+        (char *)cc,
+        (char *)"-std=gnu99",
+        (char *)"-Wall",
+        (char *)"-Wextra",
+        (char *)"-Wno-unused-parameter",
+        include_arg,
+        (char *)"test/fixtures/elf/oracle/brandon_read_target_oracle.c",
+        read_target_c,
+        interval_tree_c,
+        zerocool_c,
+        (char *)"-o",
+        out_bin,
+        nullptr,
+    };
+
+    oracle_run_result_t build = run_argv(argv);
+    if (build.exit_status != 0) {
+        printf("  [FAIL] could not build Brandon oracle helper "
+               "(exit %d):\n%s\n",
+               build.exit_status,
+               build.output);
+        remove_auto_oracle_files(out_bin, out_dir);
+        out_bin[0] = '\0';
+        out_dir[0] = '\0';
+        return false;
+    }
+
+    return true;
+}
+#else
+static bool
+build_oracle_from_root(const char *root,
+                       char       *out_bin,
+                       size_t      out_bin_len,
+                       char       *out_dir,
+                       size_t      out_dir_len)
+{
+    (void)root;
+    (void)out_bin;
+    (void)out_bin_len;
+    (void)out_dir;
+    (void)out_dir_len;
+
+    printf("  [FAIL] N00B_ELF_ORACLE_ROOT auto-build is Linux/x86-64 only; "
+           "set N00B_ELF_ORACLE_BIN to a prebuilt helper on this host.\n");
+    return false;
+}
+#endif
+
+static void
+cleanup_auto_oracle(const char *bin, const char *dir)
+{
+    if (env_is_one("N00B_ELF_ORACLE_KEEP_TMP")) {
+        printf("  [INFO] kept oracle helper %s\n", bin);
+        return;
+    }
+
+    remove_auto_oracle_files(bin, dir);
 }
 
 static bool
@@ -289,21 +466,37 @@ main(int argc, char **argv)
     }
 
     const char *oracle_bin = getenv("N00B_ELF_ORACLE_BIN");
+    bool        auto_built = false;
+    char        auto_bin[512];
+    char        auto_dir[512];
+
     if (oracle_bin == nullptr || oracle_bin[0] == '\0') {
-        if (getenv("N00B_ELF_ORACLE_ROOT") != nullptr) {
-            printf("  [SKIP] N00B_ELF_ORACLE_ROOT auto-build is not implemented yet; "
-                   "set N00B_ELF_ORACLE_BIN.\n");
+        const char *root = getenv("N00B_ELF_ORACLE_ROOT");
+        if (root == nullptr || root[0] == '\0') {
+            printf("  [FAIL] N00B_TEST_ELF_ORACLE=1 but neither "
+                   "N00B_ELF_ORACLE_BIN nor N00B_ELF_ORACLE_ROOT is set.\n");
+            return 1;
         }
-        else {
-            printf("  [SKIP] N00B_ELF_ORACLE_BIN is not set.\n");
+
+        if (!build_oracle_from_root(root,
+                                    auto_bin,
+                                    sizeof(auto_bin),
+                                    auto_dir,
+                                    sizeof(auto_dir))) {
+            return 1;
         }
-        return 0;
+
+        oracle_bin = auto_bin;
+        auto_built = true;
     }
 
     if (access(oracle_bin, X_OK) != 0) {
-        printf("  [SKIP] N00B_ELF_ORACLE_BIN is not executable: %s\n",
+        printf("  [FAIL] N00B_ELF_ORACLE_BIN is not executable: %s\n",
                oracle_bin);
-        return 0;
+        if (auto_built) {
+            cleanup_auto_oracle(auto_bin, auto_dir);
+        }
+        return 1;
     }
 
     const char *filter = getenv("N00B_ELF_ORACLE_CASE");
@@ -326,6 +519,9 @@ main(int argc, char **argv)
         }
 
         if (!run_oracle_case(oracle_bin, test_case)) {
+            if (auto_built) {
+                cleanup_auto_oracle(auto_bin, auto_dir);
+            }
             return 1;
         }
         ran++;
@@ -334,10 +530,17 @@ main(int argc, char **argv)
     if (filter != nullptr && filter[0] != '\0' && ran == 0) {
         fprintf(stderr, "No oracle cases matched N00B_ELF_ORACLE_CASE=%s\n",
                 filter);
+        if (auto_built) {
+            cleanup_auto_oracle(auto_bin, auto_dir);
+        }
         return 1;
     }
 
     printf("ELF oracle checks passed (%zu cases).\n", ran);
+    if (auto_built) {
+        cleanup_auto_oracle(auto_bin, auto_dir);
+    }
+
     return 0;
 }
 
