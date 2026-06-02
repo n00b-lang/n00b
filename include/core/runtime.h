@@ -193,6 +193,12 @@ struct n00b_runtime_t {
     uint32_t                    callstack_pool_count;
     struct n00b_thread_t       *reap_pending;
     _Atomic uint32_t            reap_lock;
+    /* Serializes the slot-scanning FOREIGN reaper (_n00b_reap_foreign_sweep).
+     * Foreign (libdispatch/XPC) threads never self-destroy, so that reaper
+     * must clear their slot itself; the lock ensures only one sweep does the
+     * per-slot clear-then-CAS at a time (no concurrent sweep can clear a
+     * slot's bits after another sweep freed it and a new thread reacquired). */
+    _Atomic uint32_t            foreign_reap_lock;
     n00b_base_allocator_t       slab_allocator;
     n00b_futex_t                stw;
     n00b_futex_t                stw_generation;
@@ -230,6 +236,18 @@ struct n00b_runtime_t {
  * @post `n00b_get_runtime()` returns a valid pointer. The calling
  *       thread is registered with the STW subsystem.
  */
+/**
+ * @brief Bring up just the memory subsystem (page size, mmap registry,
+ *        system / runtime-object pools, core runtime lists).
+ *
+ * Idempotent.  Runs from a high-priority `[[gnu::constructor]]` so arenas
+ * and n00b lists are usable from constructor context (per-TU GC-root /
+ * `@rpc` registrars).  `n00b_init` also calls it defensively for
+ * link/embedding modes that don't run constructors.  Operates on the
+ * process-singleton runtime.
+ */
+extern void n00b_early_init(void);
+
 extern void
 n00b_init(n00b_runtime_t *rt, int argc, char *argv[]) _kargs
 {

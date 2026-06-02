@@ -971,4 +971,33 @@ extern void n00b_capture_stack_base(n00b_thread_t *thread, n00b_runtime_t *runti
  */
 extern void n00b_thread_reap_pending(void);
 
+/**
+ * @brief Reclaim dead FOREIGN-thread records (collector-only, internal).
+ *
+ * Foreign (libdispatch/XPC) threads attach via n00b_thread_init but never call
+ * n00b_thread_destroy — libdispatch recycles them silently — so their slot,
+ * n00b_thread_t, stack-bounds advertisement, mmap-tree node and Mach port name
+ * leak (and eventually exhaust the slot table).  This scans the slot table for
+ * foreign records whose OS thread is confirmed dead (dead Mach port) and tears
+ * each down exactly like n00b_thread_destroy.  MUST be called by the collector
+ * with the world stopped (from n00b_collect_internal, after mark+sweep): the
+ * teardown mutates CV-waiter/lock chains and the mmap interval tree, unsafe to
+ * touch concurrently.  macOS only; a no-op elsewhere.
+ */
+extern void n00b_reap_dead_foreign_threads(void);
+
+/**
+ * @brief Sound foreign-thread attach (reclaim-on-attach), macOS only.
+ *
+ * Call at every foreign (libdispatch/XPC) entry into the n00b runtime, before
+ * any other n00b work.  Ensures the calling thread resolves n00b_thread_self()
+ * to a record IT owns: if it instead resolved to a dead thread's stale record
+ * (its SP fell inside that dead thread's still-advertised stack bounds after a
+ * libdispatch stack reuse), this detaches from the stale record and attaches a
+ * fresh slot.  Idempotent (cheap no-op once the thread owns its record).
+ * Returns the thread's own n00b_thread_t.  See the definition for the full
+ * rationale (this session's stale-bounds identity crash).
+ */
+extern n00b_thread_t *n00b_thread_attach_foreign(void);
+
 #endif
