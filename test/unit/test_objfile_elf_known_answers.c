@@ -9,8 +9,12 @@
 #include "compiler/objfile/bstream.h"
 #include "compiler/objfile/elf.h"
 #include "compiler/objfile/elf_layout.h"
+#include "compiler/objfile/elf_rewrite_admit.h"
+#include "util/assert.h"
 
 #include "objfile_elf_casegen.h"
+
+#define N00B_TEST_REQUIRE(expr) n00b_require((expr), #expr)
 
 static bool
 parse_succeeds(n00b_buffer_t *buf, n00b_elf_binary_t **out)
@@ -168,6 +172,109 @@ require_file_gap(n00b_elf_layout_t *layout,
     return n00b_option_get(gap_opt);
 }
 
+static n00b_elf_rewrite_admit_metadata_request_t
+admission_request_make(n00b_test_elf_admission_request_t request)
+{
+    n00b_elf_rewrite_admit_metadata_request_t admission = {
+        .section_name    = r".n00b.test",
+        .payload_size    = 16,
+        .file_alignment  = 8,
+        .section_type    = SHT_PROGBITS,
+        .section_flags   = 0,
+        .policy          = {
+            .flags = N00B_ELF_REWRITE_ADMIT_POLICY_PRESERVE_OVERLAY,
+        },
+    };
+
+    switch (request) {
+    case N00B_TEST_ELF_ADMISSION_STRICT_EOF:
+        admission.policy.flags |=
+            N00B_ELF_REWRITE_ADMIT_POLICY_STRICT_LOADER_PRESERVATION;
+        break;
+    case N00B_TEST_ELF_ADMISSION_RELAXED_PREFERRED_GAP:
+        admission.preferred_file_offset = n00b_option_set(uint64_t, 288);
+        admission.file_alignment        = 16;
+        break;
+    case N00B_TEST_ELF_ADMISSION_RELAXED_OVERLAY_APPEND:
+        admission.policy.flags |=
+            N00B_ELF_REWRITE_ADMIT_POLICY_APPEND_AFTER_OVERLAY;
+        break;
+    case N00B_TEST_ELF_ADMISSION_NONE:
+    case N00B_TEST_ELF_ADMISSION_RELAXED_EOF:
+    case N00B_TEST_ELF_ADMISSION_RELAXED_OVERLAY_PRESERVE:
+        break;
+    }
+
+    return admission;
+}
+
+static void
+check_admission_case(const n00b_test_elf_case_t *test_case,
+                     bool                       *saw_phtab_outside_load,
+                     bool                       *saw_entry_outside_load,
+                     bool                       *saw_entry_memory_only,
+                     bool                       *saw_pt_phdr_inconsistent,
+                     bool                       *saw_overlay_policy,
+                     bool                       *saw_nonzero_gap,
+                     bool                       *saw_accepted_placement)
+{
+    n00b_buffer_t *buf = n00b_test_elf_case_generate(test_case);
+    N00B_TEST_REQUIRE(buf != nullptr);
+
+    n00b_elf_binary_t *bin = nullptr;
+    N00B_TEST_REQUIRE(parse_succeeds(buf, &bin));
+    N00B_TEST_REQUIRE(bin != nullptr);
+
+    n00b_elf_rewrite_admit_metadata_request_t request =
+        admission_request_make(test_case->admission_request);
+    auto result = n00b_elf_rewrite_admit_metadata_insert(bin, &request);
+    N00B_TEST_REQUIRE(n00b_result_is_ok(result));
+
+    n00b_elf_rewrite_admit_result_t admit = n00b_result_get(result);
+    N00B_TEST_REQUIRE(admit.outcome == test_case->admission_outcome);
+    N00B_TEST_REQUIRE(admit.rejection_reason == test_case->admission_reason);
+
+    n00b_elf_rewrite_admit_placement_kind_t placement_kind =
+        N00B_ELF_REWRITE_ADMIT_PLACEMENT_NONE;
+    if (n00b_option_is_set(admit.placement)) {
+        n00b_elf_rewrite_admit_placement_t placement =
+            n00b_option_get(admit.placement);
+        placement_kind = placement.kind;
+    }
+
+    N00B_TEST_REQUIRE(placement_kind == test_case->admission_placement);
+
+    switch (test_case->admission_reason) {
+    case N00B_ELF_REWRITE_ADMIT_REJECT_PHTAB_OUTSIDE_LOAD:
+        *saw_phtab_outside_load = true;
+        break;
+    case N00B_ELF_REWRITE_ADMIT_REJECT_ENTRY_OUTSIDE_LOAD:
+        *saw_entry_outside_load = true;
+        break;
+    case N00B_ELF_REWRITE_ADMIT_REJECT_ENTRY_MEMORY_ONLY:
+        *saw_entry_memory_only = true;
+        break;
+    case N00B_ELF_REWRITE_ADMIT_REJECT_PT_PHDR_INCONSISTENT:
+        *saw_pt_phdr_inconsistent = true;
+        break;
+    case N00B_ELF_REWRITE_ADMIT_REJECT_OVERLAY_POLICY:
+        *saw_overlay_policy = true;
+        break;
+    case N00B_ELF_REWRITE_ADMIT_REJECT_UNKNOWN_NONZERO_BYTES:
+        *saw_nonzero_gap = true;
+        break;
+    case N00B_ELF_REWRITE_ADMIT_REJECT_NONE:
+        N00B_TEST_REQUIRE(
+            admit.outcome == N00B_ELF_REWRITE_ADMIT_OUTCOME_ACCEPTED);
+        N00B_TEST_REQUIRE(test_case->admission_placement
+                          != N00B_ELF_REWRITE_ADMIT_PLACEMENT_NONE);
+        *saw_accepted_placement = true;
+        break;
+    default:
+        break;
+    }
+}
+
 static void
 test_layout_known_answers(void)
 {
@@ -223,6 +330,47 @@ test_layout_known_answers(void)
 }
 
 static void
+test_admission_known_answers(void)
+{
+    bool saw_phtab_outside_load = false;
+    bool saw_entry_outside_load = false;
+    bool saw_entry_memory_only = false;
+    bool saw_pt_phdr_inconsistent = false;
+    bool saw_overlay_policy = false;
+    bool saw_nonzero_gap = false;
+    bool saw_accepted_placement = false;
+    size_t count = 0;
+
+    for (size_t i = 0; i < n00b_test_elf_case_count; i++) {
+        const n00b_test_elf_case_t *test_case = &n00b_test_elf_cases[i];
+
+        if (!n00b_test_elf_case_has_admission(test_case)) {
+            continue;
+        }
+
+        N00B_TEST_REQUIRE(test_case->expect_parse == N00B_TEST_ELF_PARSE_OK);
+        check_admission_case(test_case,
+                             &saw_phtab_outside_load,
+                             &saw_entry_outside_load,
+                             &saw_entry_memory_only,
+                             &saw_pt_phdr_inconsistent,
+                             &saw_overlay_policy,
+                             &saw_nonzero_gap,
+                             &saw_accepted_placement);
+        count++;
+    }
+
+    N00B_TEST_REQUIRE(count > 0);
+    N00B_TEST_REQUIRE(saw_phtab_outside_load);
+    N00B_TEST_REQUIRE(saw_entry_outside_load);
+    N00B_TEST_REQUIRE(saw_entry_memory_only);
+    N00B_TEST_REQUIRE(saw_pt_phdr_inconsistent);
+    N00B_TEST_REQUIRE(saw_overlay_policy);
+    N00B_TEST_REQUIRE(saw_nonzero_gap);
+    N00B_TEST_REQUIRE(saw_accepted_placement);
+}
+
+static void
 test_known_answers(void)
 {
     size_t count = 0;
@@ -251,6 +399,7 @@ main(int argc, char **argv)
     test_known_answers();
     test_divergence_classification_metadata();
     test_layout_known_answers();
+    test_admission_known_answers();
     printf("All ELF known-answer tests passed.\n");
     return 0;
 }

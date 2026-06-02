@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "n00b.h"
+#include "conduit/print.h"
 #include "core/buffer.h"
 #include "core/runtime.h"
 #include "adt/option.h"
@@ -12,6 +13,7 @@
 #include "compiler/objfile/bstream.h"
 #include "compiler/objfile/elf.h"
 #include "compiler/objfile/elf_layout.h"
+#include "compiler/objfile/elf_rewrite_admit.h"
 
 #include "objfile_elf_casegen.h"
 
@@ -98,6 +100,126 @@ parse_succeeds(n00b_buffer_t *buf)
     auto            result = n00b_elf_parse(stream);
 
     return n00b_result_is_ok(result);
+}
+
+static n00b_string_t *
+admission_request_name(n00b_test_elf_admission_request_t request)
+{
+    switch (request) {
+    case N00B_TEST_ELF_ADMISSION_NONE:
+        return r"none";
+    case N00B_TEST_ELF_ADMISSION_RELAXED_EOF:
+        return r"relaxed-eof";
+    case N00B_TEST_ELF_ADMISSION_STRICT_EOF:
+        return r"strict-eof";
+    case N00B_TEST_ELF_ADMISSION_RELAXED_PREFERRED_GAP:
+        return r"relaxed-preferred-gap";
+    case N00B_TEST_ELF_ADMISSION_RELAXED_OVERLAY_PRESERVE:
+        return r"relaxed-overlay-preserve";
+    case N00B_TEST_ELF_ADMISSION_RELAXED_OVERLAY_APPEND:
+        return r"relaxed-overlay-append";
+    }
+
+    return r"none";
+}
+
+static n00b_elf_rewrite_admit_metadata_request_t
+admission_request_make(n00b_test_elf_admission_request_t request)
+{
+    n00b_elf_rewrite_admit_metadata_request_t admission = {
+        .section_name    = r".n00b.test",
+        .payload_size    = 16,
+        .file_alignment  = 8,
+        .section_type    = SHT_PROGBITS,
+        .section_flags   = 0,
+        .policy          = {
+            .flags = N00B_ELF_REWRITE_ADMIT_POLICY_PRESERVE_OVERLAY,
+        },
+    };
+
+    switch (request) {
+    case N00B_TEST_ELF_ADMISSION_STRICT_EOF:
+        admission.policy.flags |=
+            N00B_ELF_REWRITE_ADMIT_POLICY_STRICT_LOADER_PRESERVATION;
+        break;
+    case N00B_TEST_ELF_ADMISSION_RELAXED_PREFERRED_GAP:
+        admission.preferred_file_offset = n00b_option_set(uint64_t, 288);
+        admission.file_alignment        = 16;
+        break;
+    case N00B_TEST_ELF_ADMISSION_RELAXED_OVERLAY_APPEND:
+        admission.policy.flags |=
+            N00B_ELF_REWRITE_ADMIT_POLICY_APPEND_AFTER_OVERLAY;
+        break;
+    case N00B_TEST_ELF_ADMISSION_NONE:
+    case N00B_TEST_ELF_ADMISSION_RELAXED_EOF:
+    case N00B_TEST_ELF_ADMISSION_RELAXED_OVERLAY_PRESERVE:
+        break;
+    }
+
+    return admission;
+}
+
+static void
+print_admission_facts(const n00b_test_elf_case_t *test_case,
+                      n00b_buffer_t              *buf)
+{
+    if (!n00b_test_elf_case_has_admission(test_case)) {
+        return;
+    }
+
+    n00b_bstream_t *stream = n00b_bstream_new(buf);
+    auto            parsed = n00b_elf_parse(stream);
+
+    if (n00b_result_is_err(parsed)) {
+        n00b_printf("    n00b_admission=side-by-side parse-error "
+                    "request=«#» expected_outcome=«#» expected_reason=«#»",
+                    admission_request_name(test_case->admission_request),
+                    n00b_elf_rewrite_admit_outcome_str(
+                        test_case->admission_outcome),
+                    n00b_elf_rewrite_admit_rejection_reason_str(
+                        test_case->admission_reason));
+        return;
+    }
+
+    n00b_elf_rewrite_admit_metadata_request_t request =
+        admission_request_make(test_case->admission_request);
+    auto result = n00b_elf_rewrite_admit_metadata_insert(n00b_result_get(parsed),
+                                                         &request);
+    if (n00b_result_is_err(result)) {
+        n00b_printf("    n00b_admission=side-by-side api-error=«#» "
+                    "request=«#» expected_outcome=«#» expected_reason=«#»",
+                    n00b_elf_rewrite_admit_err_str(n00b_result_get_err(result)),
+                    admission_request_name(test_case->admission_request),
+                    n00b_elf_rewrite_admit_outcome_str(
+                        test_case->admission_outcome),
+                    n00b_elf_rewrite_admit_rejection_reason_str(
+                        test_case->admission_reason));
+        return;
+    }
+
+    n00b_elf_rewrite_admit_result_t admit = n00b_result_get(result);
+    n00b_elf_rewrite_admit_placement_kind_t placement_kind =
+        N00B_ELF_REWRITE_ADMIT_PLACEMENT_NONE;
+    if (n00b_option_is_set(admit.placement)) {
+        n00b_elf_rewrite_admit_placement_t placement =
+            n00b_option_get(admit.placement);
+        placement_kind = placement.kind;
+    }
+
+    n00b_printf("    n00b_admission=side-by-side request=«#» outcome=«#» "
+                "reason=«#» placement=«#» expected_outcome=«#» "
+                "expected_reason=«#» expected_placement=«#»",
+                admission_request_name(test_case->admission_request),
+                n00b_elf_rewrite_admit_outcome_str(admit.outcome),
+                n00b_elf_rewrite_admit_rejection_reason_str(
+                    admit.rejection_reason),
+                n00b_elf_rewrite_admit_placement_kind_str(placement_kind),
+                n00b_elf_rewrite_admit_outcome_str(
+                    test_case->admission_outcome),
+                n00b_elf_rewrite_admit_rejection_reason_str(
+                    test_case->admission_reason),
+                n00b_elf_rewrite_admit_placement_kind_str(
+                    test_case->admission_placement));
 }
 
 static void
@@ -521,6 +643,7 @@ run_oracle_case(const char *oracle_bin, const n00b_test_elf_case_t *test_case)
            verdict,
            n00b_test_elf_case_state_name(test_case->state),
            n00b_test_elf_divergence_name(test_case->divergence));
+    print_admission_facts(test_case, buf);
     print_layout_facts(test_case, buf);
     return true;
 }

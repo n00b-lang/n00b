@@ -13,6 +13,7 @@ n00b_objfile_src = files(
     'elf_helpers.c',
     'elf_build.c',
     'elf_layout.c',
+    'elf_rewrite_admit.c',
     'macho.c',
     'macho_query.c',
     'macho_helpers.c',

@@ -19,6 +19,7 @@
 
 #include "n00b.h"
 #include "core/buffer.h"
+#include "compiler/objfile/elf_rewrite_admit.h"
 #include "compiler/objfile/elf_types.h"
 
 typedef enum {
@@ -52,6 +53,15 @@ typedef enum {
 } n00b_test_elf_divergence_t;
 
 typedef enum {
+    N00B_TEST_ELF_ADMISSION_NONE,
+    N00B_TEST_ELF_ADMISSION_RELAXED_EOF,
+    N00B_TEST_ELF_ADMISSION_STRICT_EOF,
+    N00B_TEST_ELF_ADMISSION_RELAXED_PREFERRED_GAP,
+    N00B_TEST_ELF_ADMISSION_RELAXED_OVERLAY_PRESERVE,
+    N00B_TEST_ELF_ADMISSION_RELAXED_OVERLAY_APPEND,
+} n00b_test_elf_admission_request_t;
+
+typedef enum {
     N00B_TEST_ELF_GEN_VALID_MINIMAL_EXEC,
     N00B_TEST_ELF_GEN_BAD_MAGIC,
     N00B_TEST_ELF_GEN_ELF32_INPUT,
@@ -75,6 +85,10 @@ typedef struct {
     n00b_test_elf_oracle_mode_t     oracle_mode;
     n00b_test_elf_oracle_expect_t   oracle_expect;
     n00b_test_elf_divergence_t      divergence;
+    n00b_test_elf_admission_request_t admission_request;
+    n00b_elf_rewrite_admit_outcome_t  admission_outcome;
+    n00b_elf_rewrite_admit_rejection_reason_t admission_reason;
+    n00b_elf_rewrite_admit_placement_kind_t admission_placement;
     const char                     *description;
 } n00b_test_elf_case_t;
 
@@ -88,6 +102,10 @@ static const n00b_test_elf_case_t n00b_test_elf_cases[] = {
         .oracle_mode   = N00B_TEST_ELF_ORACLE_READ_TARGET,
         .oracle_expect = N00B_TEST_ELF_ORACLE_VALID_TARGET,
         .divergence    = N00B_TEST_ELF_DIVERGENCE_SHARED_SCOPE,
+        .admission_request = N00B_TEST_ELF_ADMISSION_RELAXED_EOF,
+        .admission_outcome = N00B_ELF_REWRITE_ADMIT_OUTCOME_ACCEPTED,
+        .admission_reason = N00B_ELF_REWRITE_ADMIT_REJECT_NONE,
+        .admission_placement = N00B_ELF_REWRITE_ADMIT_PLACEMENT_EOF_TAIL,
         .description   = "Minimal ELF64 executable satisfying Brandon's reader.",
     },
     {
@@ -125,46 +143,62 @@ static const n00b_test_elf_case_t n00b_test_elf_cases[] = {
     },
     {
         .name          = "phtab_not_in_load",
-        .state         = N00B_TEST_ELF_CASE_EXPLORE,
+        .state         = N00B_TEST_ELF_CASE_KNOWN,
         .generator     = N00B_TEST_ELF_GEN_PHTAB_NOT_IN_LOAD,
         .expect_parse  = N00B_TEST_ELF_PARSE_OK,
-        .expect_reason = "no_admission_api",
+        .expect_reason = "phtab-outside-load",
         .oracle_mode   = N00B_TEST_ELF_ORACLE_READ_TARGET,
         .oracle_expect = N00B_TEST_ELF_ORACLE_INVALID_TARGET,
         .divergence    = N00B_TEST_ELF_DIVERGENCE_N00B_BROADER,
+        .admission_request = N00B_TEST_ELF_ADMISSION_STRICT_EOF,
+        .admission_outcome = N00B_ELF_REWRITE_ADMIT_OUTCOME_REJECTED,
+        .admission_reason = N00B_ELF_REWRITE_ADMIT_REJECT_PHTAB_OUTSIDE_LOAD,
+        .admission_placement = N00B_ELF_REWRITE_ADMIT_PLACEMENT_NONE,
         .description   = "PHTAB is present but outside all PT_LOAD ranges.",
     },
     {
         .name          = "entry_outside_load",
-        .state         = N00B_TEST_ELF_CASE_EXPLORE,
+        .state         = N00B_TEST_ELF_CASE_KNOWN,
         .generator     = N00B_TEST_ELF_GEN_ENTRY_OUTSIDE_LOAD,
         .expect_parse  = N00B_TEST_ELF_PARSE_OK,
-        .expect_reason = "no_admission_api",
+        .expect_reason = "entry-outside-load",
         .oracle_mode   = N00B_TEST_ELF_ORACLE_READ_TARGET,
         .oracle_expect = N00B_TEST_ELF_ORACLE_INVALID_TARGET,
         .divergence    = N00B_TEST_ELF_DIVERGENCE_N00B_BROADER,
+        .admission_request = N00B_TEST_ELF_ADMISSION_STRICT_EOF,
+        .admission_outcome = N00B_ELF_REWRITE_ADMIT_OUTCOME_REJECTED,
+        .admission_reason = N00B_ELF_REWRITE_ADMIT_REJECT_ENTRY_OUTSIDE_LOAD,
+        .admission_placement = N00B_ELF_REWRITE_ADMIT_PLACEMENT_NONE,
         .description   = "Entrypoint address is outside all PT_LOAD ranges.",
     },
     {
         .name          = "entry_in_mem_not_file",
-        .state         = N00B_TEST_ELF_CASE_EXPLORE,
+        .state         = N00B_TEST_ELF_CASE_KNOWN,
         .generator     = N00B_TEST_ELF_GEN_ENTRY_IN_MEM_NOT_FILE,
         .expect_parse  = N00B_TEST_ELF_PARSE_OK,
-        .expect_reason = "no_admission_api",
+        .expect_reason = "entry-memory-only",
         .oracle_mode   = N00B_TEST_ELF_ORACLE_READ_TARGET,
         .oracle_expect = N00B_TEST_ELF_ORACLE_INVALID_TARGET,
         .divergence    = N00B_TEST_ELF_DIVERGENCE_N00B_BROADER,
+        .admission_request = N00B_TEST_ELF_ADMISSION_STRICT_EOF,
+        .admission_outcome = N00B_ELF_REWRITE_ADMIT_OUTCOME_REJECTED,
+        .admission_reason = N00B_ELF_REWRITE_ADMIT_REJECT_ENTRY_MEMORY_ONLY,
+        .admission_placement = N00B_ELF_REWRITE_ADMIT_PLACEMENT_NONE,
         .description   = "Entrypoint is inside p_memsz but outside file bytes.",
     },
     {
         .name          = "pt_phdr_bad_size",
-        .state         = N00B_TEST_ELF_CASE_EXPLORE,
+        .state         = N00B_TEST_ELF_CASE_KNOWN,
         .generator     = N00B_TEST_ELF_GEN_PT_PHDR_BAD_SIZE,
         .expect_parse  = N00B_TEST_ELF_PARSE_OK,
-        .expect_reason = "no_admission_api",
+        .expect_reason = "pt-phdr-inconsistent",
         .oracle_mode   = N00B_TEST_ELF_ORACLE_READ_TARGET,
         .oracle_expect = N00B_TEST_ELF_ORACLE_INVALID_TARGET,
         .divergence    = N00B_TEST_ELF_DIVERGENCE_N00B_BROADER,
+        .admission_request = N00B_TEST_ELF_ADMISSION_STRICT_EOF,
+        .admission_outcome = N00B_ELF_REWRITE_ADMIT_OUTCOME_REJECTED,
+        .admission_reason = N00B_ELF_REWRITE_ADMIT_REJECT_PT_PHDR_INCONSISTENT,
+        .admission_placement = N00B_ELF_REWRITE_ADMIT_PLACEMENT_NONE,
         .description   = "PT_PHDR exists but does not match PHTAB size.",
     },
     {
@@ -180,35 +214,47 @@ static const n00b_test_elf_case_t n00b_test_elf_cases[] = {
     },
     {
         .name          = "overlay_after_segments",
-        .state         = N00B_TEST_ELF_CASE_PENDING,
+        .state         = N00B_TEST_ELF_CASE_KNOWN,
         .generator     = N00B_TEST_ELF_GEN_OVERLAY_AFTER_SEGMENTS,
         .expect_parse  = N00B_TEST_ELF_PARSE_OK,
-        .expect_reason = "ok",
+        .expect_reason = "overlay-policy",
         .oracle_mode   = N00B_TEST_ELF_ORACLE_NONE,
         .oracle_expect = N00B_TEST_ELF_ORACLE_VALID_TARGET,
         .divergence    = N00B_TEST_ELF_DIVERGENCE_DIAGNOSTIC_ONLY,
+        .admission_request = N00B_TEST_ELF_ADMISSION_RELAXED_OVERLAY_PRESERVE,
+        .admission_outcome = N00B_ELF_REWRITE_ADMIT_OUTCOME_REJECTED,
+        .admission_reason = N00B_ELF_REWRITE_ADMIT_REJECT_OVERLAY_POLICY,
+        .admission_placement = N00B_ELF_REWRITE_ADMIT_PLACEMENT_NONE,
         .description   = "Extra bytes appear after all modeled ELF ranges.",
     },
     {
         .name          = "layout_classification",
-        .state         = N00B_TEST_ELF_CASE_PENDING,
+        .state         = N00B_TEST_ELF_CASE_KNOWN,
         .generator     = N00B_TEST_ELF_GEN_LAYOUT_CLASSIFICATION,
         .expect_parse  = N00B_TEST_ELF_PARSE_OK,
-        .expect_reason = "layout_phase_2_only",
+        .expect_reason = "file-gap-placement",
         .oracle_mode   = N00B_TEST_ELF_ORACLE_NONE,
         .oracle_expect = N00B_TEST_ELF_ORACLE_VALID_TARGET,
         .divergence    = N00B_TEST_ELF_DIVERGENCE_DIAGNOSTIC_ONLY,
+        .admission_request = N00B_TEST_ELF_ADMISSION_RELAXED_PREFERRED_GAP,
+        .admission_outcome = N00B_ELF_REWRITE_ADMIT_OUTCOME_ACCEPTED,
+        .admission_reason = N00B_ELF_REWRITE_ADMIT_REJECT_NONE,
+        .admission_placement = N00B_ELF_REWRITE_ADMIT_PLACEMENT_FILE_GAP,
         .description   = "ELF with string tables, interpreter, note, and NOBITS.",
     },
     {
         .name          = "layout_nonzero_unknown",
-        .state         = N00B_TEST_ELF_CASE_PENDING,
+        .state         = N00B_TEST_ELF_CASE_KNOWN,
         .generator     = N00B_TEST_ELF_GEN_LAYOUT_NONZERO_UNKNOWN,
         .expect_parse  = N00B_TEST_ELF_PARSE_OK,
-        .expect_reason = "layout_phase_2_only",
+        .expect_reason = "unknown-nonzero-bytes",
         .oracle_mode   = N00B_TEST_ELF_ORACLE_NONE,
         .oracle_expect = N00B_TEST_ELF_ORACLE_VALID_TARGET,
         .divergence    = N00B_TEST_ELF_DIVERGENCE_DIAGNOSTIC_ONLY,
+        .admission_request = N00B_TEST_ELF_ADMISSION_RELAXED_PREFERRED_GAP,
+        .admission_outcome = N00B_ELF_REWRITE_ADMIT_OUTCOME_REJECTED,
+        .admission_reason = N00B_ELF_REWRITE_ADMIT_REJECT_UNKNOWN_NONZERO_BYTES,
+        .admission_placement = N00B_ELF_REWRITE_ADMIT_PLACEMENT_NONE,
         .description   = "Layout fixture with a nonzero unmodeled byte gap.",
     },
 };
@@ -276,6 +322,12 @@ n00b_test_elf_divergence_name(n00b_test_elf_divergence_t divergence)
     }
 
     return "diagnostic-only";
+}
+
+static inline bool
+n00b_test_elf_case_has_admission(const n00b_test_elf_case_t *test_case)
+{
+    return test_case->admission_request != N00B_TEST_ELF_ADMISSION_NONE;
 }
 
 static inline const n00b_test_elf_case_t *
@@ -708,10 +760,10 @@ n00b_test_elf_case_generate(const n00b_test_elf_case_t *test_case)
                                           false, false, true, false);
     case N00B_TEST_ELF_GEN_ENTRY_OUTSIDE_LOAD:
         return n00b_test_elf_minimal_exec(0x500000, 0, 0x400000, 512, 512,
-                                          false, false, true, false);
+                                          true, false, true, false);
     case N00B_TEST_ELF_GEN_ENTRY_IN_MEM_NOT_FILE:
         return n00b_test_elf_minimal_exec(0x400101, 0, 0x400000, 0x100, 0x2000,
-                                          false, false, true, false);
+                                          true, false, true, false);
     case N00B_TEST_ELF_GEN_PT_PHDR_BAD_SIZE:
         return n00b_test_elf_minimal_exec(0x400080, 0, 0x400000, 512, 512,
                                           true, true, true, false);
