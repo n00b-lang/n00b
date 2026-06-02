@@ -245,7 +245,13 @@ _n00b_alloc_raw(size_t             n,
     // If the allocator has no headers and no metadata but is visible to
     // the GC (non-hidden), register the allocation in the range tree so
     // the collector's fallback path can discover and scan it.
+    //
+    // gc_root pools are excluded: they are scanned page-by-page via GC
+    // roots (registered in pool.c new_page_entry), so per-alloc range
+    // registration would be pure overhead — and on a high-churn pool it
+    // grows the range tree without bound for the life of the pool.
     if (!opts->allocator->hidden && !opts->allocator->add_inline_header
+        && !opts->allocator->gc_root
         && opts->allocator->metadata_pool == nullptr
         && n00b_option_is_set(n00b_default_runtime)) {
         n00b_mmap_register_range(r,
@@ -352,6 +358,8 @@ n00b_allocator_setup(n00b_allocator_t *allocator, n00b_calloc_fn alloc) _kargs
     // DO NOT USE for custom allocators. Skips STW check.
     bool                      __system          = false;
     bool                      __is_md_pool      = false;
+    // Register each mapped page as a GC root (see alloc_base.h).
+    bool                      gc_root           = false;
 }
 {
     (void)__nomap;
@@ -380,6 +388,7 @@ n00b_allocator_setup(n00b_allocator_t *allocator, n00b_calloc_fn alloc) _kargs
         .add_inline_header = inline_headers,
         .__system          = __system,
         .hidden            = hidden,
+        .gc_root           = gc_root,
         .metadata_pool     = md_pool,
         .metadata          = md,
     };
@@ -716,6 +725,26 @@ _n00b_find_alloc_info(void *addr, n00b_alloc_info_t *result) _kargs
                 .kind    = n00b_alloc_oob,
                 .hdr.oob = oob,
             };
+            return;
+        }
+
+        // No inline header and no OOB metadata: the allocation's extent
+        // is recorded in the interval (range) tree by _n00b_alloc_raw for
+        // headerless, non-hidden pools. Resolve it there instead of
+        // dereferencing a nonexistent inline-header guard (which returned
+        // n00b_alloc_err, so the GC could trace pointers INTO such a pool
+        // but never scanned the record's own fields → outbound pointers
+        // into moving arenas dangled across a collection).
+        if (!al->add_inline_header) {
+            auto range_opt = n00b_mmap_range_by_address(addr);
+            if (n00b_option_is_set(range_opt)) {
+                *result = (n00b_alloc_info_t){
+                    .kind      = n00b_alloc_static_range,
+                    .hdr.range = n00b_option_get(range_opt),
+                };
+                return;
+            }
+            *result = (n00b_alloc_info_t){.kind = n00b_alloc_err};
             return;
         }
 

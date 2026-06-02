@@ -38,7 +38,7 @@ _n00b_condition_init(n00b_condition_t *cv, char *loc)
     n00b_atomic_store(&cv->wakes_remaining, 0);
 
     n00b_allocator_t *sp = (n00b_allocator_t *)&n00b_get_runtime()->system_pool;
-    cv->waiters = n00b_list_new(n00b_thread_t *, sp);
+    cv->waiters = n00b_list_new(n00b_thread_t *, .allocator = sp);
 
     if (!n00b_in_heap(cv) && !n00b_in_stack(cv)
         && !n00b_current_thread_stack_contains(cv)) {

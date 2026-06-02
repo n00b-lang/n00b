@@ -90,6 +90,14 @@ using_macos = host_machine.system() == 'darwin'
 conf_cocoa = get_option('enable_cocoa') and target_os == 'darwin'
 if conf_cocoa
   add_languages('objc', required: true, native: false)
+  # The ObjC link step (Xcode's clang, selected for any target that links the
+  # ObjC cocoa backend) needs the SDK sysroot to resolve the implicit
+  # `-lSystem`.  meson passes `-isysroot` to the ObjC *compile* step
+  # (cocoa_objc_args) but not to the link, so cocoa tests and the display
+  # demos that link n00b_cocoa otherwise fail at link time with
+  # `ld: library 'System' not found` unless SDKROOT happens to be set in the
+  # environment.  Pin it here so the build is self-contained.
+  add_project_link_arguments('-isysroot', macos_sdk, language: 'objc')
 endif
 
 conf_notcurses = get_option('enable_notcurses')
@@ -1147,6 +1155,18 @@ thread_spawn_raw_test = executable('test_thread_spawn_raw',
     kwargs: test_common_kwargs,
 )
 test('thread_spawn_raw', thread_spawn_raw_test, suite: 'unit')
+
+string_scratch_raw_worker_test = executable('test_string_scratch_raw_worker',
+    ['test/unit/test_string_scratch_raw_worker.c'],
+    kwargs: test_common_kwargs,
+)
+test('string_scratch_raw_worker', string_scratch_raw_worker_test, suite: 'unit')
+
+shutdown_gc_stack_test = executable('test_shutdown_gc_stack',
+    ['test/unit/test_shutdown_gc_stack.c'],
+    kwargs: test_common_kwargs,
+)
+test('shutdown_gc_stack', shutdown_gc_stack_test, suite: 'unit')
 
 thread_spawn_kwargs_test = executable('test_thread_spawn_kwargs',
     ['test/unit/test_thread_spawn_kwargs.c'],

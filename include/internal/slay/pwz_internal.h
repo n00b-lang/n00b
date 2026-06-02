@@ -120,8 +120,17 @@ typedef n00b_parse_tree_t *n00b_parse_tree_ptr_t;
 struct n00b_pwz_parser_t {
     n00b_grammar_t              *grammar;
     pwz_exp_t                   *start_exp;
-    pwz_exp_ptr_t               *nt_exps;     // n00b_alloc_array, indexed by NT id
+    pwz_exp_ptr_t               *nt_exps;     // grammar-pool array, indexed by NT id
     n00b_list_t(pwz_exp_ptr_t)   all_exps;    // all grammar exp nodes (for memo reset)
+
+    /* Allocator for the grammar exp graph (nodes, SEQ children arrays,
+     * nt_exps, sentinels).  Points at the runtime's non-moving,
+     * GC-scanned runtime_obj_pool so the grammar never relocates: the
+     * parse zippers hold interior pointers into it (cxt->seq.right =
+     * exp->seq.children + k), so if it moved those aliases would dangle.
+     * Being non-moving means the per-parse pool need not be scanned at
+     * all (it can stay hidden) — only this graph is. */
+    n00b_allocator_t            *grammar_allocator;
 
     // Per-parse state (GC-managed, cleared on reset)
     n00b_list_t(pwz_zipper_t)    worklist;
@@ -142,9 +151,11 @@ struct n00b_pwz_parser_t {
      * result-exps + the per-step child / new_left arrays).
      * Previously GC-managed; the GC walked these every cycle for
      * nothing, and on real input that dominated parse cost.
-     * Pool is HIDDEN from GC (the only outbound pointers from
-     * pool memory go to other pool memory or to the grammar exp
-     * graph, which is reachable via p->all_exps independently).
+     * HIDDEN from the GC: pool memory's only outbound pointers go to
+     * other pool memory or to the grammar exp graph, and the graph is
+     * non-moving (grammar_allocator), so the interior pointers the
+     * zippers hold into it never need forwarding.  Keeping it hidden
+     * avoids rescanning this huge, high-churn pool every collection.
      * Lazily initialized via ensure_pool() on first allocation
      * so contexts that just want the grammar graph don't pay
      * the cost. Destroyed by n00b_pwz_free. Mirrors ncc's

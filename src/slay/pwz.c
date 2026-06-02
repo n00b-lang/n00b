@@ -15,6 +15,7 @@
 #include "text/unicode/encoding.h"
 #include "core/alloc.h"
 #include "core/gc.h"
+#include "core/runtime.h"
 #include "adt/array.h"
 #include "adt/list.h"
 #include "text/strings/string_ops.h"
@@ -49,9 +50,14 @@ static inline void
 ensure_pool(n00b_pwz_parser_t *p)
 {
     if (!p->pool_initialized) {
-        /* HIDDEN pool — GC doesn't walk its pages. Safe because
-         * pool memory only points to other pool memory and to
-         * grammar exps held alive via p->all_exps. */
+        /* HIDDEN pool — the GC does not scan its pages.  The only
+         * outbound pointers from pool memory go to other pool memory or
+         * to the grammar exp graph, and that graph is non-moving (it
+         * lives in p->grammar_allocator = runtime_obj_pool), so the
+         * interior pointers the zippers hold into it (cxt->seq.right =
+         * exp->seq.children + k) never need forwarding.  This is what
+         * lets this huge, high-churn pool stay unscanned (fast) while
+         * staying correct.  Destroyed by n00b_pwz_free. */
         p->parse_allocator = n00b_pool_init(&p->parse_pool,
                                             .name   = "pwz-parse",
                                             .hidden = true);
@@ -113,6 +119,27 @@ register_exp(n00b_pwz_parser_t *p, pwz_exp_t *e)
     n00b_list_push(p->all_exps, e);
 }
 
+/* Copy a grammar nonterm name into the non-moving grammar pool. seq.name
+ * is a raw `const char *` into a grammar n00b_string's data buffer, which
+ * lives in the MOVING arena; it is copied into result exps (in the hidden,
+ * unscanned parse pool) during the parse, so a raw pointer would dangle
+ * once the GC relocates that string. Interning into the non-moving grammar
+ * pool keeps every seq.name (grammar and result) valid for the parser's
+ * life — see convert_exp_to_tree / make_group_node. */
+static const char *
+intern_name(n00b_pwz_parser_t *p, const char *name)
+{
+    if (!name) {
+        return NULL;
+    }
+
+    size_t len  = strlen(name) + 1;
+    char  *copy = n00b_alloc_array_with_opts(char, len,
+                                        N00B_ALLOC_OPTS(p->grammar_allocator));
+    memcpy(copy, name, len);
+    return copy;
+}
+
 // ============================================================================
 // Grammar -> Exp conversion
 // ============================================================================
@@ -120,7 +147,8 @@ register_exp(n00b_pwz_parser_t *p, pwz_exp_t *e)
 static pwz_exp_t *
 make_tok_exp(n00b_pwz_parser_t *p, int64_t tid)
 {
-    pwz_exp_t *e = n00b_alloc(pwz_exp_t);
+    pwz_exp_t *e = n00b_alloc_with_opts(pwz_exp_t,
+                                        N00B_ALLOC_OPTS(p->grammar_allocator));
 
     e->kind    = PWZ_TOK;
     e->tok.tid = tid;
@@ -132,7 +160,8 @@ make_tok_exp(n00b_pwz_parser_t *p, int64_t tid)
 static pwz_exp_t *
 make_class_exp(n00b_pwz_parser_t *p, n00b_char_class_t cc)
 {
-    pwz_exp_t *e = n00b_alloc(pwz_exp_t);
+    pwz_exp_t *e = n00b_alloc_with_opts(pwz_exp_t,
+                                        N00B_ALLOC_OPTS(p->grammar_allocator));
 
     e->kind   = PWZ_CLASS;
     e->cls.cc = cc;
@@ -144,7 +173,8 @@ make_class_exp(n00b_pwz_parser_t *p, n00b_char_class_t cc)
 static pwz_exp_t *
 make_any_exp(n00b_pwz_parser_t *p)
 {
-    pwz_exp_t *e = n00b_alloc(pwz_exp_t);
+    pwz_exp_t *e = n00b_alloc_with_opts(pwz_exp_t,
+                                        N00B_ALLOC_OPTS(p->grammar_allocator));
 
     e->kind = PWZ_ANY;
 
@@ -160,10 +190,11 @@ make_seq_exp(n00b_pwz_parser_t *p,
              pwz_exp_ptr_t     *children,
              int32_t            nchildren)
 {
-    pwz_exp_t *e = n00b_alloc(pwz_exp_t);
+    pwz_exp_t *e = n00b_alloc_with_opts(pwz_exp_t,
+                                        N00B_ALLOC_OPTS(p->grammar_allocator));
 
     e->kind          = PWZ_SEQ;
-    e->seq.name      = name;
+    e->seq.name      = intern_name(p, name);
     e->seq.nt_id     = nt_id;
     e->seq.rule_ix   = rule_ix;
     e->seq.children  = children;
@@ -176,7 +207,8 @@ make_seq_exp(n00b_pwz_parser_t *p,
 static pwz_exp_t *
 make_alt_exp(n00b_pwz_parser_t *p, int64_t nt_id)
 {
-    pwz_exp_t *e = n00b_alloc(pwz_exp_t);
+    pwz_exp_t *e = n00b_alloc_with_opts(pwz_exp_t,
+                                        N00B_ALLOC_OPTS(p->grammar_allocator));
 
     e->kind      = PWZ_ALT;
     e->alt.nt_id = nt_id;
@@ -219,7 +251,8 @@ build_seq_children(n00b_pwz_parser_t *p,
         return;
     }
 
-    pwz_exp_ptr_t *children = n00b_alloc_array(pwz_exp_ptr_t, count);
+    pwz_exp_ptr_t *children = n00b_alloc_array_with_opts(pwz_exp_ptr_t, count,
+                                        N00B_ALLOC_OPTS(p->grammar_allocator));
     int32_t        ix       = 0;
 
     for (size_t i = 0; i < n; i++) {
@@ -353,7 +386,9 @@ expand_group_nt(n00b_pwz_parser_t *p, n00b_grammar_t *g, int64_t nt_id)
             int32_t    nc       = body_seq->seq.nchildren;
             int32_t    new_nc   = nc + 1;
 
-            pwz_exp_ptr_t *new_children = n00b_alloc_array(pwz_exp_ptr_t, new_nc);
+            pwz_exp_ptr_t *new_children = n00b_alloc_array_with_opts(pwz_exp_ptr_t,
+                                        new_nc,
+                                        N00B_ALLOC_OPTS(p->grammar_allocator));
             new_children[0] = alt; // self-reference (left-recursive)
             memcpy(new_children + 1, body_seq->seq.children,
                    (size_t)nc * sizeof(pwz_exp_ptr_t));
@@ -373,7 +408,9 @@ expand_group_nt(n00b_pwz_parser_t *p, n00b_grammar_t *g, int64_t nt_id)
             int32_t    nc       = body_seq->seq.nchildren;
             int32_t    new_nc   = nc + 1;
 
-            pwz_exp_ptr_t *new_children = n00b_alloc_array(pwz_exp_ptr_t, new_nc);
+            pwz_exp_ptr_t *new_children = n00b_alloc_array_with_opts(pwz_exp_ptr_t,
+                                        new_nc,
+                                        N00B_ALLOC_OPTS(p->grammar_allocator));
             new_children[0] = alt; // self-reference (left-recursive)
             memcpy(new_children + 1, body_seq->seq.children,
                    (size_t)nc * sizeof(pwz_exp_ptr_t));
@@ -402,7 +439,8 @@ build_exp_graph(n00b_pwz_parser_t *p, n00b_grammar_t *g)
 {
     int32_t num_nts = (int32_t)n00b_list_len(g->nt_list);
 
-    p->nt_exps = n00b_alloc_array(pwz_exp_ptr_t, num_nts);
+    p->nt_exps = n00b_alloc_array_with_opts(pwz_exp_ptr_t, num_nts,
+                                        N00B_ALLOC_OPTS(p->grammar_allocator));
 
     // Phase 1: Create one Alt node per NT (handles forward refs / cycles).
     for (int32_t i = 0; i < num_nts; i++) {
@@ -685,7 +723,12 @@ d_u(n00b_pwz_parser_t *p, int32_t pos, pwz_exp_t *result, pwz_mem_t *mem)
 
                 existing->kind      = PWZ_ALT;
                 existing->alt.nt_id = -1;
-                existing->alt.alts  = n00b_list_new_private(pwz_exp_ptr_t);
+                /* Allocate this result-exp alt list from the (non-moving)
+                 * parse pool, NOT the moving arena: it lives on a hidden,
+                 * unscanned result exp, so an arena-backed list would
+                 * dangle when the GC relocated it. */
+                existing->alt.alts = n00b_list_new_private(pwz_exp_ptr_t,
+                                        .allocator = p->parse_allocator);
                 n00b_list_push(existing->alt.alts, copy);
                 n00b_list_push(existing->alt.alts, result);
             }
@@ -1152,19 +1195,36 @@ n00b_pwz_new(n00b_grammar_t *g)
 {
     n00b_grammar_finalize(g);
 
-    n00b_pwz_parser_t *p = n00b_alloc(n00b_pwz_parser_t);
+    /* Allocate the parser AND its grammar exp graph from the runtime's
+     * non-moving, GC-scanned runtime_obj_pool:
+     *   - The parser embeds its per-parse pool (p->parse_pool); pinning
+     *     p keeps &p->parse_pool / p->parse_allocator stable across a
+     *     collection (precise stack maps let the GC relocate p otherwise).
+     *   - The grammar exp graph must not move: the parse zippers hold
+     *     interior pointers into it (cxt->seq.right = exp->seq.children
+     *     + k).  Non-moving means the (hidden) per-parse pool need not
+     *     be scanned at all.  runtime_obj_pool is external-metadata, so
+     *     the graph IS scanned — its alt.alts lists (in the moving arena)
+     *     still get forwarded — and supports per-alloc n00b_free. */
+    n00b_runtime_t    *rt = n00b_get_runtime();
+    n00b_allocator_t  *gpool = (n00b_allocator_t *)&rt->runtime_obj_pool;
+    n00b_pwz_parser_t *p     = n00b_alloc_with_opts(n00b_pwz_parser_t,
+                                                    N00B_ALLOC_OPTS(gpool));
 
-    p->grammar       = g;
+    p->grammar           = g;
+    p->grammar_allocator = gpool;
     p->all_exps      = n00b_list_new_private(pwz_exp_ptr_t);
     p->worklist      = n00b_list_new_private(pwz_zipper_t);
     p->worklist_swap = n00b_list_new_private(pwz_zipper_t);
     p->tops          = n00b_list_new_private(pwz_exp_ptr_t);
 
-    // Sentinel nodes.
-    p->exp_bottom       = n00b_alloc(pwz_exp_t);
+    // Sentinel nodes (in the non-moving grammar pool).
+    p->exp_bottom       = n00b_alloc_with_opts(pwz_exp_t,
+                                        N00B_ALLOC_OPTS(p->grammar_allocator));
     p->exp_bottom->kind = PWZ_SEQ;
 
-    p->mem_bottom            = n00b_alloc(pwz_mem_t);
+    p->mem_bottom            = n00b_alloc_with_opts(pwz_mem_t,
+                                        N00B_ALLOC_OPTS(p->grammar_allocator));
     p->mem_bottom->start_pos = PWZ_POS_BOTTOM;
     p->mem_bottom->end_pos   = PWZ_POS_BOTTOM;
 

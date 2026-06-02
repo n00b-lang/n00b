@@ -36,6 +36,14 @@ struct n00b_base_allocator_t {
     uint8_t                   add_inline_header : 1;
     uint8_t                   __system          : 1; // no STW check
     uint8_t                   hidden            : 1; // GC must consider it data.
+    /* When set, every page this (non-moving) pool maps is registered as
+     * a GC root for the duration it is mapped, so the collector scans
+     * the pool's records (which may hold pointers into the moving arena)
+     * page-by-page instead of per-allocation.  Pages are deregistered on
+     * free / pool destroy.  Used for high-churn, no-metadata pools (e.g.
+     * the pwz per-parse pool) where per-alloc range registration would
+     * blow up.  Mutually independent of metadata_pool / mmap-tree reg. */
+    uint8_t                   gc_root           : 1;
     n00b_allocator_t         *metadata_pool;
     n00b_dict_untyped_t      *metadata;
 };

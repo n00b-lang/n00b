@@ -13,6 +13,7 @@
 #include "core/alloc.h"
 #include "core/memory_info.h"
 #include "core/mmaps.h"
+#include "core/gc.h"
 #include "core/atomic.h"
 
 /* Forward decl to avoid pulling in lock_common.h (and its
@@ -91,6 +92,18 @@ new_page_entry(n00b_pool_t *pool, uint64_t *sz_ptr)
                                             name);
     }
 
+    /* gc_root pools (e.g. the pwz per-parse pool) are non-moving and
+     * GC-visible but carry no per-alloc metadata.  Register each mapped
+     * page as a GC root so the collector scans the whole page for
+     * pointers into the moving arena — page-granular, no per-alloc
+     * range-tree churn.  Deregistered in delete_one_page_entry /
+     * pool_destroy.  The page's own n00b_pool_page_t header + free-list
+     * links only point within pools (not in the mmap tree), so scanning
+     * them conservatively is harmless. */
+    if (alloc->gc_root) {
+        _n00b_gc_register_root((void *)cur, aligned_sz / sizeof(void *));
+    }
+
     *sz_ptr   = aligned_sz - hdr_sz;
     cur->mapped_size = aligned_sz;
     void *res = (void *)cur + hdr_sz;
@@ -157,6 +170,13 @@ delete_one_page_entry(n00b_pool_t *pool, n00b_pool_page_t *entry)
         n00b_mmap_unregister((void *)entry);
     }
 
+    /* Mirror of new_page_entry's GC-root registration: drop the page
+     * root BEFORE munmap so a concurrent GC mark pass can't scan a
+     * no-longer-mapped page. */
+    if (alloc->gc_root) {
+        _n00b_gc_unregister_root((void *)entry);
+    }
+
     /* Big-alloc free path: actually release the page back to the OS.
      * Without this the page stayed mapped until pool_destroy — any
      * pool client n00b_free-ing a >N00B_NUM_FREE_LISTS-class
@@ -212,12 +232,24 @@ pool_destroy(n00b_pool_t *pool)
         scrub = scrub->next;
     }
 
+    /* gc_root pools registered each page as a GC root (new_page_entry);
+     * drop those roots BEFORE munmap so a later GC can't scan a freed
+     * page.  Metadata pools likewise unregister their mmap-tree entry. */
+    n00b_allocator_t *alloc = (n00b_allocator_t *)pool;
+    bool              has_mmap_reg = !alloc->__system && alloc->metadata_pool != nullptr;
+
     while (entry) {
         next = entry->next;
         /* Big-alloc pages can be larger than n00b_page_size — use the
          * captured mapped_size so we unmap the right region length. */
         size_t mapped = entry->mapped_size != 0 ? entry->mapped_size
                                                 : n00b_page_size;
+        if (alloc->gc_root) {
+            _n00b_gc_unregister_root((void *)entry);
+        }
+        if (has_mmap_reg) {
+            n00b_mmap_unregister((void *)entry);
+        }
         n00b_safe_munmap(entry, mapped);
         entry = next;
     }
@@ -322,6 +354,7 @@ n00b_pool_init(n00b_pool_t *pool) _kargs
     bool        inline_headers    = false;
     bool        external_metadata = false;
     bool        hidden            = false;
+    bool        gc_root           = false;
     const char *name              = "pool";
 }
 {
@@ -333,6 +366,7 @@ n00b_pool_init(n00b_pool_t *pool) _kargs
                          .inline_headers    = inline_headers,
                          .external_metadata = external_metadata,
                          .hidden            = hidden,
+                         .gc_root           = gc_root,
                          .__system          = __system);
 
     pool->lock       = 0;

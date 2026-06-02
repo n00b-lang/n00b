@@ -88,7 +88,6 @@ docker/_linux_logs/
 AGENTS.md
 .agents/
 .inspector-gadget/
-plans/
 # Sub-directories of test/data/resharp/ that hold large generated corpora;
 # the test/data/resharp/tests/*.toml fixtures the regex_resharp test reads
 # are tracked.

@@ -103,7 +103,7 @@ init_object_topic(n00b_conduit_topic_t(n00b_marshal_object_t) *topic)
 {
     topic->subscriptions =
         n00b_list_new(n00b_conduit_subscription_t(n00b_marshal_object_t) *,
-                      topic->conduit->allocator);
+                      .allocator = topic->conduit->allocator);
     topic->inbox = nullptr;
 }
 
@@ -112,7 +112,7 @@ init_buffer_topic(n00b_conduit_topic_t(n00b_buffer_t *) *topic)
 {
     topic->subscriptions =
         n00b_list_new(n00b_conduit_subscription_t(n00b_buffer_t *) *,
-                      topic->conduit->allocator);
+                      .allocator = topic->conduit->allocator);
     topic->inbox = nullptr;
 }
 

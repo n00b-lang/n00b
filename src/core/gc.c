@@ -776,10 +776,55 @@ n00b_process_worklist(n00b_collect_t *ctx)
         }
         else {
             /* Strided scan: visit slots at indices offset, offset+stride,
-             * offset+2*stride, ... while in [0, num_words). */
-            uint64_t **base = (uint64_t **)item->start;
+             * offset+2*stride, ... while in [0, num_words).
+             *
+             * Use the SAME per-page readability gate as
+             * n00b_scan_memory_range and pass base_checked=true.  The
+             * base_checked=false path in n00b_visit_possible_pointer
+             * resolves the base through n00b_mmap_by_address and HARD-BAILS
+             * on a registry miss; a freshly-forwarded to-space copy is not
+             * always in that registry yet (it is readable, just not indexed),
+             * so relying on the base check silently dropped every slot of a
+             * strided (EVERY_OTHER / CALLBACK) scan over a forwarded alloc —
+             * the to-space copy the mutator then reads kept its stale,
+             * un-forwarded pointers.  Mirroring scan_memory_range (trust the
+             * registry for non-stack kinds, else probe perms) fixes the
+             * forward while keeping the SIGBUS-safety the perms probe gives. */
+            uint64_t **base            = (uint64_t **)item->start;
+            size_t     page_size       = n00b_page_size;
+            uintptr_t  page_mask       = ~(uintptr_t)(page_size - 1);
+            uintptr_t  last_page       = 0;
+            bool       last_page_ok    = false;
+            bool       last_page_valid = false;
+
             for (uint64_t i = item->offset; i < item->num_words; i += item->stride) {
-                n00b_visit_possible_pointer(ctx, base, i, false);
+                void     *slot = (void *)(base + i);
+                uintptr_t page = ((uintptr_t)slot) & page_mask;
+
+                if (!last_page_valid || page != last_page) {
+                    auto slot_mmap_opt = n00b_mmap_by_address(slot);
+                    if (n00b_option_is_set(slot_mmap_opt)) {
+                        n00b_mmap_info_t *slot_mmap = n00b_option_get(slot_mmap_opt);
+                        if (slot_mmap->kind == n00b_mmap_stack) {
+                            last_page_ok = n00b_check_memory_perms(slot)
+                                           != n00b_mmap_perms_no_access;
+                        }
+                        else {
+                            last_page_ok = true;
+                        }
+                    }
+                    else {
+                        last_page_ok = n00b_check_memory_perms(slot)
+                                       != n00b_mmap_perms_no_access;
+                    }
+                    last_page       = page;
+                    last_page_valid = true;
+                }
+
+                if (!last_page_ok) {
+                    continue;
+                }
+                n00b_visit_possible_pointer(ctx, base, i, true);
             }
         }
         n00b_free(item);
@@ -1249,15 +1294,107 @@ n00b_scan_roots(n00b_collect_t *ctx)
 //
 // Defer queue for pre-init callers (WP-003 / D-036, fix F-4).
 //
-// ncc's `--ncc-auto-gc-roots` transform emits a `[[gnu::constructor]]`
-// gc-root registrar in every libn00b TU with TU-scope pointer-bearing
-// decls. Those run during dynamic-loader init, and on Mach-O the
-// `__init_offsets` table runs in LINK order (not constructor-priority
-// order), so such a registrar can be the very first initializer to run —
-// before `n00b_init`. `n00b_gc_register_roots` therefore calls the
-// idempotent `n00b_early_init` first; it stands up the memory subsystem
-// and `runtime->gc_roots`, after which registration is always direct.
-// (This replaces the former pre-init defer-and-replay queue, D-036.)
+// ncc's `--ncc-auto-gc-roots` transform emits a
+// `[[gnu::constructor]]` function in every libn00b TU that has
+// TU-scope pointer-bearing decls. Those constructors run during
+// dynamic loader init — BEFORE `n00b_init()` builds the runtime and
+// allocates `runtime->gc_roots`. Calling the lock-free runtime-
+// resident path (`_n00b_gc_register_root` / the public
+// `n00b_gc_register_roots` chain) from that context would deref a
+// null `n00b_get_runtime()` and assert.
+//
+// Disposition (D-036): when no runtime exists yet, batch-API calls
+// park their entries in a TU-local linked list of chunks.
+// `n00b_init` flushes the queue after the runtime is set up and
+// `runtime->gc_roots` exists, then frees the chunks.
+//
+// Allocator choice: the queue MUST work before the n00b allocator is
+// available, so chunk allocation uses libc `calloc` directly. This
+// is the same approach used by `src/net/quic/rpc.c`'s
+// `defer_register` (deferred RPC registrations), and it is the only
+// option for a defer queue that exists by definition before any n00b
+// pool/allocator. The `__ncc_` prefix on the static head pointer
+// ensures the auto-roots transform itself does not try to register
+// the queue head as a root (spec § 2.2 row 3).
+//
+// Concurrency: dynamic loader `[[gnu::constructor]]` chains run
+// sequentially on a single thread before `main()`, so writes to the
+// queue during ctor phase are inherently single-threaded. The flush
+// runs once from `n00b_init` (also single-threaded). After the
+// flush, runtime-resident callers go through `_n00b_gc_register_root`
+// directly — the queue is empty and untouched. No lock required at
+// any point. Matches D-025's lock-free init-time-only discipline.
+//
+// The single-entry `_n00b_gc_register_root` does NOT need defer
+// logic: it is only called from runtime-resident code (libn00b's
+// own `n00b_gc_register_root` macro callers, used during normal
+// initialization sequenced after `n00b_init`), never from a
+// pre-init constructor. The auto-roots transform emits batch-API
+// calls exclusively (D-005). Asserting on runtime-presence in the
+// single-entry path stays as the existing implicit precondition.
+
+typedef struct __ncc_gc_root_defer_chunk_t {
+    struct __ncc_gc_root_defer_chunk_t *next;
+    size_t                              count;
+    size_t                              capacity;
+    n00b_gc_root_t                      entries[];
+} __ncc_gc_root_defer_chunk_t;
+
+// `__ncc_` prefix per spec § 2.2 row 3: the auto-roots transform
+// must not try to auto-register the queue head pointer as a root.
+static __ncc_gc_root_defer_chunk_t *__ncc_gc_root_defer_head = nullptr;
+
+#define N00B_GC_ROOT_DEFER_CHUNK_CAP 64u
+
+static void
+defer_register_roots(const n00b_gc_root_t *roots, size_t count)
+{
+    // Single-threaded during dynamic loader ctor phase; no lock.
+    size_t i = 0;
+    while (i < count) {
+        __ncc_gc_root_defer_chunk_t *head = __ncc_gc_root_defer_head;
+        if (!head || head->count == head->capacity) {
+            size_t cap   = N00B_GC_ROOT_DEFER_CHUNK_CAP;
+            size_t bytes = sizeof(__ncc_gc_root_defer_chunk_t) + cap * sizeof(n00b_gc_root_t);
+            __ncc_gc_root_defer_chunk_t *fresh
+                = (__ncc_gc_root_defer_chunk_t *)calloc(1, bytes);
+            if (!fresh) {
+                // Calloc failure during pre-init root registration:
+                // the loader cannot proceed. There is no n00b panic
+                // primitive yet (the runtime isn't up), so abort
+                // here. Matches the policy in
+                // `src/net/quic/rpc.c::defer_register` (which
+                // silently drops on calloc failure but is non-load-
+                // bearing); GC roots are load-bearing, so abort.
+                abort();
+            }
+            fresh->next              = __ncc_gc_root_defer_head;
+            fresh->count             = 0;
+            fresh->capacity          = cap;
+            __ncc_gc_root_defer_head = fresh;
+            head                     = fresh;
+        }
+        size_t take = head->capacity - head->count;
+        if (take > count - i) {
+            take = count - i;
+        }
+        for (size_t j = 0; j < take; j++) {
+            head->entries[head->count + j] = roots[i + j];
+        }
+        head->count += take;
+        i += take;
+    }
+}
+
+// True iff the runtime has been built (i.e., `n00b_init` populated
+// the `n00b_default_runtime` option). Constructor-time callers see
+// `false`; runtime-resident callers see `true`. Mirrors the
+// `runtime_ready()` pattern in `src/net/quic/rpc.c`.
+static bool
+_n00b_gc_runtime_ready(void)
+{
+    return n00b_option_is_set(n00b_default_runtime);
+}
 
 void
 _n00b_gc_register_root(void *addr, size_t num_words)
@@ -1292,17 +1429,52 @@ n00b_gc_register_roots(const n00b_gc_root_t *roots, size_t count)
         return;
     }
 
-    // We may be the very first [[gnu::constructor]] to run (see note
-    // above): bring the memory subsystem up ourselves so the direct path
-    // below — and any allocator it touches — has page size, the mmap
-    // registry, the system pool, and `runtime->gc_roots`. Idempotent.
-    n00b_early_init();
+    // Pre-init: park entries in the defer queue. `n00b_init` flushes
+    // them via `_n00b_gc_flush_deferred_roots` after the runtime is
+    // ready (F-4 / D-036).
+    if (!_n00b_gc_runtime_ready()) {
+        defer_register_roots(roots, count);
+        return;
+    }
 
-    // Delegate to the single-entry helper so dedup semantics (address
-    // match + num_words update) and the lock-free init-time-only
-    // discipline live in one place (D-005 / D-025).
+    // Runtime-resident path: delegate to the single-entry helper so
+    // dedup semantics (address match + num_words update) and the
+    // lock-free init-time-only discipline live in one place
+    // (D-005 / D-025).
     for (size_t i = 0; i < count; i++) {
         _n00b_gc_register_root(roots[i].addr, roots[i].num_words);
+    }
+}
+
+void
+_n00b_gc_flush_deferred_roots(void)
+{
+    // Called once from `n00b_init` after `runtime->gc_roots` exists
+    // and the runtime is publicly visible via `n00b_default_runtime`.
+    // Replays parked entries in registration order (chunks form a
+    // LIFO; reverse so the earliest registrations land first), then
+    // frees each chunk. After this returns the queue is empty for
+    // the lifetime of the process — runtime-resident callers go
+    // through the direct path in `n00b_gc_register_roots`.
+    __ncc_gc_root_defer_chunk_t *head = __ncc_gc_root_defer_head;
+    __ncc_gc_root_defer_head          = nullptr;
+
+    // Reverse the list so earlier-registered entries flush first.
+    __ncc_gc_root_defer_chunk_t *prev = nullptr;
+    while (head) {
+        __ncc_gc_root_defer_chunk_t *next = head->next;
+        head->next                        = prev;
+        prev                              = head;
+        head                              = next;
+    }
+
+    while (prev) {
+        for (size_t i = 0; i < prev->count; i++) {
+            _n00b_gc_register_root(prev->entries[i].addr, prev->entries[i].num_words);
+        }
+        __ncc_gc_root_defer_chunk_t *next = prev->next;
+        free(prev);
+        prev = next;
     }
 }
 
@@ -1626,7 +1798,7 @@ n00b_collect_setup(n00b_collect_t *ctx, n00b_arena_t *from_space)
     n00b_allocator_t *wa = (n00b_allocator_t *)&ctx->work_pool;
 
     ctx->worklist = n00b_list_new_cap(n00b_gc_wl_item_t *,
-                                      N00B_GC_WL_START_SIZE, wa);
+                                      N00B_GC_WL_START_SIZE, .allocator = wa);
 
     n00b_dict_untyped_init(&ctx->memos,
                            .start_capacity = N00B_GC_WL_START_SIZE,

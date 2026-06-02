@@ -236,18 +236,6 @@ struct n00b_runtime_t {
  * @post `n00b_get_runtime()` returns a valid pointer. The calling
  *       thread is registered with the STW subsystem.
  */
-/**
- * @brief Bring up just the memory subsystem (page size, mmap registry,
- *        system / runtime-object pools, core runtime lists).
- *
- * Idempotent.  Runs from a high-priority `[[gnu::constructor]]` so arenas
- * and n00b lists are usable from constructor context (per-TU GC-root /
- * `@rpc` registrars).  `n00b_init` also calls it defensively for
- * link/embedding modes that don't run constructors.  Operates on the
- * process-singleton runtime.
- */
-extern void n00b_early_init(void);
-
 extern void
 n00b_init(n00b_runtime_t *rt, int argc, char *argv[]) _kargs
 {
@@ -268,11 +256,29 @@ n00b_init(n00b_runtime_t *rt, int argc, char *argv[]) _kargs
 extern void n00b_init_simple(int argc, char *argv[]);
 
 /**
+ * @brief Plain-C wrapper for n00b_shutdown() with default kargs.
+ *
+ * Callable from code not compiled through ncc (e.g. the AOT startup
+ * shim), which cannot expand the _kargs form.  Shuts down the default
+ * runtime.
+ */
+extern void n00b_shutdown_simple(void);
+
+/**
  * @brief Shut down the runtime, stopping all service threads.
  * @pre  Must be called from the main thread before returning from main().
  * @post All conduit IO threads have exited.
+ *
+ * @kw runtime  Runtime to shut down (default: the active default runtime
+ *              via n00b_get_runtime()).  Pass an explicit handle when the
+ *              caller still holds the live runtime and must not rely on
+ *              the global (e.g. a stack-local runtime in the CLI pattern).
  */
-extern void n00b_shutdown(void);
+extern void
+n00b_shutdown() _kargs
+{
+    n00b_runtime_t *runtime = nullptr;
+};
 
 /**
  * @brief Shut down the runtime and terminate the process.
