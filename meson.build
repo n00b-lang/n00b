@@ -3647,7 +3647,7 @@ endforeach
 # ============================================================================
 
 objfile_test_names = [
-    'types', 'bstream', 'writer', 'detect', 'elf', 'elf_build',
+    'types', 'bstream', 'writer', 'detect', 'elf', 'elf_build', 'elf_layout',
     'macho', 'macho_build', 'pe', 'pe_build', 'demangle',
     'abstract', 'dwarf', 'elf_known_answers',
 ]
@@ -4667,7 +4667,7 @@ endforeach
 # ============================================================================
 
 objfile_test_names = [
-    'types', 'bstream', 'writer', 'detect', 'elf', 'elf_build',
+    'types', 'bstream', 'writer', 'detect', 'elf', 'elf_build', 'elf_layout',
     'macho', 'macho_build', 'pe', 'pe_build', 'demangle',
     'abstract', 'dwarf',
 ]

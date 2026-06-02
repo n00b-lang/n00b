@@ -7,8 +7,11 @@
 #include "n00b.h"
 #include "core/buffer.h"
 #include "core/runtime.h"
+#include "adt/option.h"
+#include "adt/result.h"
 #include "compiler/objfile/bstream.h"
 #include "compiler/objfile/elf.h"
+#include "compiler/objfile/elf_layout.h"
 
 #include "objfile_elf_casegen.h"
 
@@ -95,6 +98,72 @@ parse_succeeds(n00b_buffer_t *buf)
     auto            result = n00b_elf_parse(stream);
 
     return n00b_result_is_ok(result);
+}
+
+static void
+print_layout_facts(const n00b_test_elf_case_t *test_case, n00b_buffer_t *buf)
+{
+    n00b_bstream_t *stream = n00b_bstream_new(buf);
+    auto            parsed = n00b_elf_parse(stream);
+
+    if (n00b_result_is_err(parsed)) {
+        printf("    n00b_layout=parse-error\n");
+        return;
+    }
+
+    auto layout_res = n00b_elf_layout_build(n00b_result_get(parsed));
+    if (n00b_result_is_err(layout_res)) {
+        printf("    n00b_layout=layout-error:%d\n",
+               n00b_result_get_err(layout_res));
+        return;
+    }
+
+    n00b_elf_layout_t *layout = n00b_result_get(layout_res);
+    printf("    n00b_layout=file_size=%llu file_intervals=%llu "
+           "vaddr_intervals=%llu coverage=%llu\n",
+           (unsigned long long)layout->file_size,
+           (unsigned long long)layout->file_interval_count,
+           (unsigned long long)layout->vaddr_interval_count,
+           (unsigned long long)layout->coverage_count);
+
+    if (strcmp(test_case->name, "phtab_not_in_load") == 0) {
+        auto collision = n00b_elf_layout_file_collision(layout, 64, 120);
+        if (n00b_result_is_ok(collision)) {
+            n00b_elf_layout_collision_t c = n00b_result_get(collision);
+            printf("    n00b_fact=phtab_file_collision_count:%llu\n",
+                   (unsigned long long)c.interval_count);
+        }
+    }
+    else if (strcmp(test_case->name, "entry_in_mem_not_file") == 0) {
+        auto file = n00b_elf_layout_file_overlap(layout, 0x101, 0x102);
+        auto mem  = n00b_elf_layout_vaddr_overlap(layout, 0x400101, 0x400102);
+
+        if (n00b_result_is_ok(file) && n00b_result_is_ok(mem)) {
+            n00b_option_t(n00b_elf_layout_interval_node_t *) file_opt =
+                n00b_result_get(file);
+            n00b_option_t(n00b_elf_layout_interval_node_t *) mem_opt =
+                n00b_result_get(mem);
+            printf("    n00b_fact=entry_file_backed:%s entry_memory_mapped:%s\n",
+                   n00b_option_is_set(file_opt) ? "yes" : "no",
+                   n00b_option_is_set(mem_opt) ? "yes" : "no");
+        }
+    }
+    else if (strcmp(test_case->name, "pt_phdr_bad_size") == 0) {
+        auto collision = n00b_elf_layout_file_collision(layout, 64, 176);
+        if (n00b_result_is_ok(collision)) {
+            n00b_elf_layout_collision_t c = n00b_result_get(collision);
+            printf("    n00b_fact=pt_phdr_probe_collision_count:%llu\n",
+                   (unsigned long long)c.interval_count);
+        }
+    }
+    else if (strcmp(test_case->name, "shstrtab_not_terminated") == 0) {
+        auto overlaps = n00b_elf_layout_file_overlaps(layout, 384, 394);
+        if (n00b_result_is_ok(overlaps)) {
+            n00b_elf_layout_interval_list_t list = n00b_result_get(overlaps);
+            printf("    n00b_fact=shstrtab_interval_count:%llu\n",
+                   (unsigned long long)list.count);
+        }
+    }
 }
 
 static bool
@@ -446,11 +515,13 @@ run_oracle_case(const char *oracle_bin, const n00b_test_elf_case_t *test_case)
         return false;
     }
 
-    printf("  [PASS] %s n00b_parse=%s oracle=%s state=%s\n",
+    printf("  [PASS] %s n00b_parse=%s oracle=%s state=%s divergence=%s\n",
            test_case->name,
            n00b_parse_ok ? "ok" : "reject",
            verdict,
-           n00b_test_elf_case_state_name(test_case->state));
+           n00b_test_elf_case_state_name(test_case->state),
+           n00b_test_elf_divergence_name(test_case->divergence));
+    print_layout_facts(test_case, buf);
     return true;
 }
 
