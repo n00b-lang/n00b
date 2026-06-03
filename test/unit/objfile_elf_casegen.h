@@ -20,7 +20,24 @@
 #include "n00b.h"
 #include "core/buffer.h"
 #include "compiler/objfile/elf_rewrite_admit.h"
+#include "compiler/objfile/elf_rewrite.h"
 #include "compiler/objfile/elf_types.h"
+
+#define N00B_TEST_ELF_E_PHOFF        32
+#define N00B_TEST_ELF_E_SHOFF        40
+#define N00B_TEST_ELF_E_EHSIZE       52
+#define N00B_TEST_ELF_E_PHENTSIZE    54
+#define N00B_TEST_ELF_E_PHNUM        56
+#define N00B_TEST_ELF_E_SHENTSIZE    58
+#define N00B_TEST_ELF_E_SHNUM        60
+#define N00B_TEST_ELF_E_SHSTRNDX     62
+#define N00B_TEST_ELF_SH_NAME        0
+#define N00B_TEST_ELF_SH_TYPE        4
+#define N00B_TEST_ELF_SH_OFFSET      24
+#define N00B_TEST_ELF_SH_SIZE        32
+#define N00B_TEST_ELF_SHSTRTAB_SH    320
+#define N00B_TEST_ELF_SHN_LORESERVE  0xff00u
+#define N00B_TEST_ELF_PN_XNUM        0xffffu
 
 typedef enum {
     N00B_TEST_ELF_CASE_KNOWN,
@@ -62,6 +79,41 @@ typedef enum {
 } n00b_test_elf_admission_request_t;
 
 typedef enum {
+    N00B_TEST_ELF_TARGET_MUTATION_NONE,
+    N00B_TEST_ELF_TARGET_MUTATION_INVALID_EHSIZE,
+    N00B_TEST_ELF_TARGET_MUTATION_INVALID_SHENTSIZE,
+    N00B_TEST_ELF_TARGET_MUTATION_INVALID_PHENTSIZE,
+    N00B_TEST_ELF_TARGET_MUTATION_SHNUM_ZERO,
+    N00B_TEST_ELF_TARGET_MUTATION_SHNUM_ONE,
+    N00B_TEST_ELF_TARGET_MUTATION_SHNUM_LORESERVE,
+    N00B_TEST_ELF_TARGET_MUTATION_SHNUM_XINDEX,
+    N00B_TEST_ELF_TARGET_MUTATION_SHOFF_ZERO,
+    N00B_TEST_ELF_TARGET_MUTATION_SHOFF_OUT_OF_BOUNDS,
+    N00B_TEST_ELF_TARGET_MUTATION_SHOFF_WRAP,
+    N00B_TEST_ELF_TARGET_MUTATION_SHSTRNDX_ZERO,
+    N00B_TEST_ELF_TARGET_MUTATION_SHSTRNDX_LORESERVE,
+    N00B_TEST_ELF_TARGET_MUTATION_SHSTRNDX_XINDEX,
+    N00B_TEST_ELF_TARGET_MUTATION_SHSTRNDX_OUT_OF_RANGE,
+    N00B_TEST_ELF_TARGET_MUTATION_SHSTRTAB_WRONG_TYPE,
+    N00B_TEST_ELF_TARGET_MUTATION_SHSTRTAB_INVALID_SIZE,
+    N00B_TEST_ELF_TARGET_MUTATION_SHSTRTAB_OFFSET_WRAP,
+    N00B_TEST_ELF_TARGET_MUTATION_SECTION_NAME_INDEX,
+    N00B_TEST_ELF_TARGET_MUTATION_PHNUM_ZERO,
+    N00B_TEST_ELF_TARGET_MUTATION_PHNUM_XNUM,
+    N00B_TEST_ELF_TARGET_MUTATION_PHOFF_WRAP,
+    N00B_TEST_ELF_TARGET_MUTATION_EXISTING_RESERVED_SECTION_NAME,
+} n00b_test_elf_target_mutation_t;
+
+typedef enum {
+    N00B_TEST_ELF_REWRITE_NONE,
+    N00B_TEST_ELF_REWRITE_RELAXED_EOF,
+    N00B_TEST_ELF_REWRITE_RELAXED_PREFERRED_GAP,
+    N00B_TEST_ELF_REWRITE_RELAXED_OVERLAY_PRESERVE,
+    N00B_TEST_ELF_REWRITE_RELAXED_OVERLAY_APPEND,
+    N00B_TEST_ELF_REWRITE_RESERVED_REQUESTED_NAME,
+} n00b_test_elf_rewrite_request_t;
+
+typedef enum {
     N00B_TEST_ELF_GEN_VALID_MINIMAL_EXEC,
     N00B_TEST_ELF_GEN_BAD_MAGIC,
     N00B_TEST_ELF_GEN_ELF32_INPUT,
@@ -84,13 +136,44 @@ typedef struct {
     const char                     *expect_reason;
     n00b_test_elf_oracle_mode_t     oracle_mode;
     n00b_test_elf_oracle_expect_t   oracle_expect;
+    bool                            has_oracle_code;
+    int                             oracle_expected_code;
     n00b_test_elf_divergence_t      divergence;
+    n00b_test_elf_target_mutation_t target_mutation;
+    bool                            has_target_profile;
+    n00b_elf_rewrite_target_profile_reason_t target_profile_reason;
+    int                             target_profile_packager_errcode;
     n00b_test_elf_admission_request_t admission_request;
     n00b_elf_rewrite_admit_outcome_t  admission_outcome;
     n00b_elf_rewrite_admit_rejection_reason_t admission_reason;
     n00b_elf_rewrite_admit_placement_kind_t admission_placement;
+    n00b_test_elf_rewrite_request_t rewrite_request;
+    n00b_elf_rewrite_plan_outcome_t rewrite_outcome;
+    n00b_elf_rewrite_rejection_reason_t rewrite_reason;
+    n00b_elf_rewrite_admit_rejection_reason_t rewrite_admission_reason;
+    n00b_elf_rewrite_admit_placement_kind_t rewrite_admission_placement;
+    n00b_elf_rewrite_table_strategy_t rewrite_table_strategy;
     const char                     *description;
 } n00b_test_elf_case_t;
+
+#define N00B_TEST_ELF_PROFILE_CASE(case_name, reason_name, mutation_value, profile_reason, errcode, text) \
+    {                                                                                                    \
+        .name          = case_name,                                                                     \
+        .state         = N00B_TEST_ELF_CASE_KNOWN,                                                      \
+        .generator     = N00B_TEST_ELF_GEN_VALID_MINIMAL_EXEC,                                          \
+        .expect_parse  = N00B_TEST_ELF_PARSE_OK,                                                        \
+        .expect_reason = reason_name,                                                                   \
+        .oracle_mode   = N00B_TEST_ELF_ORACLE_READ_TARGET,                                              \
+        .oracle_expect = N00B_TEST_ELF_ORACLE_INVALID_TARGET,                                           \
+        .has_oracle_code = true,                                                                        \
+        .oracle_expected_code = errcode,                                                                \
+        .divergence    = N00B_TEST_ELF_DIVERGENCE_SHARED_SCOPE,                                         \
+        .target_mutation = mutation_value,                                                              \
+        .has_target_profile = true,                                                                     \
+        .target_profile_reason = profile_reason,                                                        \
+        .target_profile_packager_errcode = errcode,                                                     \
+        .description   = text,                                                                          \
+    }
 
 static const n00b_test_elf_case_t n00b_test_elf_cases[] = {
     {
@@ -106,6 +189,12 @@ static const n00b_test_elf_case_t n00b_test_elf_cases[] = {
         .admission_outcome = N00B_ELF_REWRITE_ADMIT_OUTCOME_ACCEPTED,
         .admission_reason = N00B_ELF_REWRITE_ADMIT_REJECT_NONE,
         .admission_placement = N00B_ELF_REWRITE_ADMIT_PLACEMENT_EOF_TAIL,
+        .rewrite_request = N00B_TEST_ELF_REWRITE_RELAXED_EOF,
+        .rewrite_outcome = N00B_ELF_REWRITE_PLAN_ACCEPTED,
+        .rewrite_reason = N00B_ELF_REWRITE_REJECT_NONE,
+        .rewrite_admission_reason = N00B_ELF_REWRITE_ADMIT_REJECT_NONE,
+        .rewrite_admission_placement = N00B_ELF_REWRITE_ADMIT_PLACEMENT_EOF_TAIL,
+        .rewrite_table_strategy = N00B_ELF_REWRITE_TABLE_STRATEGY_EOF_REPLACEMENT,
         .description   = "Minimal ELF64 executable satisfying Brandon's reader.",
     },
     {
@@ -225,7 +314,34 @@ static const n00b_test_elf_case_t n00b_test_elf_cases[] = {
         .admission_outcome = N00B_ELF_REWRITE_ADMIT_OUTCOME_REJECTED,
         .admission_reason = N00B_ELF_REWRITE_ADMIT_REJECT_OVERLAY_POLICY,
         .admission_placement = N00B_ELF_REWRITE_ADMIT_PLACEMENT_NONE,
+        .rewrite_request = N00B_TEST_ELF_REWRITE_RELAXED_OVERLAY_PRESERVE,
+        .rewrite_outcome = N00B_ELF_REWRITE_PLAN_REJECTED,
+        .rewrite_reason = N00B_ELF_REWRITE_REJECT_ADMISSION,
+        .rewrite_admission_reason = N00B_ELF_REWRITE_ADMIT_REJECT_OVERLAY_POLICY,
+        .rewrite_admission_placement = N00B_ELF_REWRITE_ADMIT_PLACEMENT_NONE,
+        .rewrite_table_strategy = N00B_ELF_REWRITE_TABLE_STRATEGY_NONE,
         .description   = "Extra bytes appear after all modeled ELF ranges.",
+    },
+    {
+        .name          = "overlay_after_segments_append",
+        .state         = N00B_TEST_ELF_CASE_KNOWN,
+        .generator     = N00B_TEST_ELF_GEN_OVERLAY_AFTER_SEGMENTS,
+        .expect_parse  = N00B_TEST_ELF_PARSE_OK,
+        .expect_reason = "overlay-append",
+        .oracle_mode   = N00B_TEST_ELF_ORACLE_NONE,
+        .oracle_expect = N00B_TEST_ELF_ORACLE_VALID_TARGET,
+        .divergence    = N00B_TEST_ELF_DIVERGENCE_DIAGNOSTIC_ONLY,
+        .admission_request = N00B_TEST_ELF_ADMISSION_RELAXED_OVERLAY_APPEND,
+        .admission_outcome = N00B_ELF_REWRITE_ADMIT_OUTCOME_ACCEPTED,
+        .admission_reason = N00B_ELF_REWRITE_ADMIT_REJECT_NONE,
+        .admission_placement = N00B_ELF_REWRITE_ADMIT_PLACEMENT_AFTER_OVERLAY,
+        .rewrite_request = N00B_TEST_ELF_REWRITE_RELAXED_OVERLAY_APPEND,
+        .rewrite_outcome = N00B_ELF_REWRITE_PLAN_ACCEPTED,
+        .rewrite_reason = N00B_ELF_REWRITE_REJECT_NONE,
+        .rewrite_admission_reason = N00B_ELF_REWRITE_ADMIT_REJECT_NONE,
+        .rewrite_admission_placement = N00B_ELF_REWRITE_ADMIT_PLACEMENT_AFTER_OVERLAY,
+        .rewrite_table_strategy = N00B_ELF_REWRITE_TABLE_STRATEGY_AFTER_OVERLAY_REPLACEMENT,
+        .description   = "Overlay-preserving append is accepted only with append policy.",
     },
     {
         .name          = "layout_classification",
@@ -240,6 +356,12 @@ static const n00b_test_elf_case_t n00b_test_elf_cases[] = {
         .admission_outcome = N00B_ELF_REWRITE_ADMIT_OUTCOME_ACCEPTED,
         .admission_reason = N00B_ELF_REWRITE_ADMIT_REJECT_NONE,
         .admission_placement = N00B_ELF_REWRITE_ADMIT_PLACEMENT_FILE_GAP,
+        .rewrite_request = N00B_TEST_ELF_REWRITE_RELAXED_PREFERRED_GAP,
+        .rewrite_outcome = N00B_ELF_REWRITE_PLAN_ACCEPTED,
+        .rewrite_reason = N00B_ELF_REWRITE_REJECT_NONE,
+        .rewrite_admission_reason = N00B_ELF_REWRITE_ADMIT_REJECT_NONE,
+        .rewrite_admission_placement = N00B_ELF_REWRITE_ADMIT_PLACEMENT_FILE_GAP,
+        .rewrite_table_strategy = N00B_ELF_REWRITE_TABLE_STRATEGY_EOF_REPLACEMENT,
         .description   = "ELF with string tables, interpreter, note, and NOBITS.",
     },
     {
@@ -257,7 +379,191 @@ static const n00b_test_elf_case_t n00b_test_elf_cases[] = {
         .admission_placement = N00B_ELF_REWRITE_ADMIT_PLACEMENT_NONE,
         .description   = "Layout fixture with a nonzero unmodeled byte gap.",
     },
+    {
+        .name          = "reserved_requested_metadata_name",
+        .state         = N00B_TEST_ELF_CASE_KNOWN,
+        .generator     = N00B_TEST_ELF_GEN_VALID_MINIMAL_EXEC,
+        .expect_parse  = N00B_TEST_ELF_PARSE_OK,
+        .expect_reason = "reserved-requested-name",
+        .oracle_mode   = N00B_TEST_ELF_ORACLE_NONE,
+        .oracle_expect = N00B_TEST_ELF_ORACLE_VALID_TARGET,
+        .divergence    = N00B_TEST_ELF_DIVERGENCE_DIAGNOSTIC_ONLY,
+        .rewrite_request = N00B_TEST_ELF_REWRITE_RESERVED_REQUESTED_NAME,
+        .rewrite_outcome = N00B_ELF_REWRITE_PLAN_REJECTED,
+        .rewrite_reason = N00B_ELF_REWRITE_REJECT_ADMISSION,
+        .rewrite_admission_reason = N00B_ELF_REWRITE_ADMIT_REJECT_RESERVED_SECTION_NAME,
+        .rewrite_admission_placement = N00B_ELF_REWRITE_ADMIT_PLACEMENT_NONE,
+        .rewrite_table_strategy = N00B_ELF_REWRITE_TABLE_STRATEGY_NONE,
+        .description   = "Reserved metadata section names are rejected.",
+    },
+    {
+        .name          = "existing_reserved_metadata_section",
+        .state         = N00B_TEST_ELF_CASE_KNOWN,
+        .generator     = N00B_TEST_ELF_GEN_VALID_MINIMAL_EXEC,
+        .expect_parse  = N00B_TEST_ELF_PARSE_OK,
+        .expect_reason = "existing-reserved-section",
+        .oracle_mode   = N00B_TEST_ELF_ORACLE_NONE,
+        .oracle_expect = N00B_TEST_ELF_ORACLE_VALID_TARGET,
+        .divergence    = N00B_TEST_ELF_DIVERGENCE_DIAGNOSTIC_ONLY,
+        .target_mutation = N00B_TEST_ELF_TARGET_MUTATION_EXISTING_RESERVED_SECTION_NAME,
+        .rewrite_request = N00B_TEST_ELF_REWRITE_RELAXED_EOF,
+        .rewrite_outcome = N00B_ELF_REWRITE_PLAN_REJECTED,
+        .rewrite_reason = N00B_ELF_REWRITE_REJECT_ADMISSION,
+        .rewrite_admission_reason = N00B_ELF_REWRITE_ADMIT_REJECT_RESERVED_SECTION_NAME,
+        .rewrite_admission_placement = N00B_ELF_REWRITE_ADMIT_PLACEMENT_NONE,
+        .rewrite_table_strategy = N00B_ELF_REWRITE_TABLE_STRATEGY_NONE,
+        .description   = "Targets that already carry reserved metadata sections are rejected.",
+    },
+    N00B_TEST_ELF_PROFILE_CASE(
+        "profile_invalid_ehsize",
+        "invalid-ehsize",
+        N00B_TEST_ELF_TARGET_MUTATION_INVALID_EHSIZE,
+        N00B_ELF_REWRITE_PROFILE_INVALID_EHSIZE,
+        11,
+        "Packager parity: e_ehsize must match Elf64_Ehdr."),
+    N00B_TEST_ELF_PROFILE_CASE(
+        "profile_invalid_shentsize",
+        "invalid-shentsize",
+        N00B_TEST_ELF_TARGET_MUTATION_INVALID_SHENTSIZE,
+        N00B_ELF_REWRITE_PROFILE_INVALID_SHENTSIZE,
+        15,
+        "Packager parity: section-header entry size."),
+    N00B_TEST_ELF_PROFILE_CASE(
+        "profile_invalid_phentsize",
+        "invalid-phentsize",
+        N00B_TEST_ELF_TARGET_MUTATION_INVALID_PHENTSIZE,
+        N00B_ELF_REWRITE_PROFILE_INVALID_PHENTSIZE,
+        16,
+        "Packager parity: program-header entry size."),
+    N00B_TEST_ELF_PROFILE_CASE(
+        "profile_shnum_zero",
+        "shnum-zero",
+        N00B_TEST_ELF_TARGET_MUTATION_SHNUM_ZERO,
+        N00B_ELF_REWRITE_PROFILE_SHTAB_SIZE,
+        18,
+        "Packager parity: e_shnum zero rejects."),
+    N00B_TEST_ELF_PROFILE_CASE(
+        "profile_shnum_one",
+        "shnum-one",
+        N00B_TEST_ELF_TARGET_MUTATION_SHNUM_ONE,
+        N00B_ELF_REWRITE_PROFILE_SHTAB_SIZE,
+        18,
+        "Packager parity: e_shnum one rejects."),
+    N00B_TEST_ELF_PROFILE_CASE(
+        "profile_shnum_loreserve",
+        "shnum-loreserve",
+        N00B_TEST_ELF_TARGET_MUTATION_SHNUM_LORESERVE,
+        N00B_ELF_REWRITE_PROFILE_UNSUPPORTED_SHNLO,
+        17,
+        "Packager parity: e_shnum at SHN_LORESERVE rejects."),
+    N00B_TEST_ELF_PROFILE_CASE(
+        "profile_shnum_xindex",
+        "shnum-xindex",
+        N00B_TEST_ELF_TARGET_MUTATION_SHNUM_XINDEX,
+        N00B_ELF_REWRITE_PROFILE_UNSUPPORTED_SHNLO,
+        17,
+        "Packager parity: SHN_XINDEX section-count form rejects."),
+    N00B_TEST_ELF_PROFILE_CASE(
+        "profile_shoff_zero",
+        "shoff-zero",
+        N00B_TEST_ELF_TARGET_MUTATION_SHOFF_ZERO,
+        N00B_ELF_REWRITE_PROFILE_SHTAB_SIZE,
+        18,
+        "Packager parity: zero section-header offset rejects."),
+    N00B_TEST_ELF_PROFILE_CASE(
+        "profile_shoff_out_of_bounds",
+        "shoff-out-of-bounds",
+        N00B_TEST_ELF_TARGET_MUTATION_SHOFF_OUT_OF_BOUNDS,
+        N00B_ELF_REWRITE_PROFILE_INVALID_SHTAB_BOUNDS,
+        19,
+        "Packager parity: SHTAB outside file rejects."),
+    N00B_TEST_ELF_PROFILE_CASE(
+        "profile_shoff_wrap",
+        "shoff-wrap",
+        N00B_TEST_ELF_TARGET_MUTATION_SHOFF_WRAP,
+        N00B_ELF_REWRITE_PROFILE_INVALID_SHTAB_BOUNDS,
+        19,
+        "Packager parity: SHTAB offset overflow rejects."),
+    N00B_TEST_ELF_PROFILE_CASE(
+        "profile_shstrndx_zero",
+        "shstrndx-zero",
+        N00B_TEST_ELF_TARGET_MUTATION_SHSTRNDX_ZERO,
+        N00B_ELF_REWRITE_PROFILE_NO_STRTAB,
+        24,
+        "Packager parity: no section-name string table rejects."),
+    N00B_TEST_ELF_PROFILE_CASE(
+        "profile_shstrndx_loreserve",
+        "shstrndx-loreserve",
+        N00B_TEST_ELF_TARGET_MUTATION_SHSTRNDX_LORESERVE,
+        N00B_ELF_REWRITE_PROFILE_UNSUPPORTED_STRTAB_SHNLO,
+        26,
+        "Packager parity: e_shstrndx at SHN_LORESERVE rejects."),
+    N00B_TEST_ELF_PROFILE_CASE(
+        "profile_shstrndx_xindex",
+        "shstrndx-xindex",
+        N00B_TEST_ELF_TARGET_MUTATION_SHSTRNDX_XINDEX,
+        N00B_ELF_REWRITE_PROFILE_UNSUPPORTED_STRTAB_SHNLO,
+        26,
+        "Packager parity: SHN_XINDEX section-name table form rejects."),
+    N00B_TEST_ELF_PROFILE_CASE(
+        "profile_shstrndx_out_of_range",
+        "shstrndx-out-of-range",
+        N00B_TEST_ELF_TARGET_MUTATION_SHSTRNDX_OUT_OF_RANGE,
+        N00B_ELF_REWRITE_PROFILE_INVALID_STRTAB_INDEX,
+        27,
+        "Packager parity: e_shstrndx beyond section count rejects."),
+    N00B_TEST_ELF_PROFILE_CASE(
+        "profile_shstrtab_wrong_type",
+        "shstrtab-wrong-type",
+        N00B_TEST_ELF_TARGET_MUTATION_SHSTRTAB_WRONG_TYPE,
+        N00B_ELF_REWRITE_PROFILE_INVALID_STRTAB_TYPE,
+        28,
+        "Packager parity: .shstrtab must be SHT_STRTAB."),
+    N00B_TEST_ELF_PROFILE_CASE(
+        "profile_shstrtab_invalid_size",
+        "shstrtab-size",
+        N00B_TEST_ELF_TARGET_MUTATION_SHSTRTAB_INVALID_SIZE,
+        N00B_ELF_REWRITE_PROFILE_STRTAB_SIZE,
+        29,
+        "Packager parity: .shstrtab bounds reject."),
+    N00B_TEST_ELF_PROFILE_CASE(
+        "profile_shstrtab_offset_wrap",
+        "shstrtab-offset-wrap",
+        N00B_TEST_ELF_TARGET_MUTATION_SHSTRTAB_OFFSET_WRAP,
+        N00B_ELF_REWRITE_PROFILE_STRTAB_SIZE,
+        29,
+        "Packager parity: .shstrtab offset overflow rejects."),
+    N00B_TEST_ELF_PROFILE_CASE(
+        "profile_section_name_index",
+        "section-name-index",
+        N00B_TEST_ELF_TARGET_MUTATION_SECTION_NAME_INDEX,
+        N00B_ELF_REWRITE_PROFILE_SECTION_NAME_INDEX,
+        35,
+        "Packager parity: section names must fit in reported strtab size."),
+    N00B_TEST_ELF_PROFILE_CASE(
+        "profile_phnum_zero",
+        "phnum-zero",
+        N00B_TEST_ELF_TARGET_MUTATION_PHNUM_ZERO,
+        N00B_ELF_REWRITE_PROFILE_ZERO_PHNUM,
+        20,
+        "Packager parity: e_phnum zero rejects."),
+    N00B_TEST_ELF_PROFILE_CASE(
+        "profile_phnum_xnum",
+        "phnum-xnum",
+        N00B_TEST_ELF_TARGET_MUTATION_PHNUM_XNUM,
+        N00B_ELF_REWRITE_PROFILE_UNSUPPORTED_PXNUM,
+        21,
+        "Packager parity: PN_XNUM program-header form rejects."),
+    N00B_TEST_ELF_PROFILE_CASE(
+        "profile_phoff_wrap",
+        "phoff-wrap",
+        N00B_TEST_ELF_TARGET_MUTATION_PHOFF_WRAP,
+        N00B_ELF_REWRITE_PROFILE_INVALID_PHTAB_BOUNDS,
+        23,
+        "Packager parity: PHTAB offset overflow rejects."),
 };
+
+#undef N00B_TEST_ELF_PROFILE_CASE
 
 static const size_t n00b_test_elf_case_count =
     sizeof(n00b_test_elf_cases) / sizeof(n00b_test_elf_cases[0]);
@@ -330,6 +636,24 @@ n00b_test_elf_case_has_admission(const n00b_test_elf_case_t *test_case)
     return test_case->admission_request != N00B_TEST_ELF_ADMISSION_NONE;
 }
 
+static inline bool
+n00b_test_elf_case_has_target_profile(const n00b_test_elf_case_t *test_case)
+{
+    return test_case->has_target_profile;
+}
+
+static inline bool
+n00b_test_elf_case_has_rewrite(const n00b_test_elf_case_t *test_case)
+{
+    return test_case->rewrite_request != N00B_TEST_ELF_REWRITE_NONE;
+}
+
+static inline bool
+n00b_test_elf_case_has_oracle_code(const n00b_test_elf_case_t *test_case)
+{
+    return test_case->has_oracle_code;
+}
+
 static inline const n00b_test_elf_case_t *
 n00b_test_elf_case_by_name(const char *name)
 {
@@ -340,6 +664,27 @@ n00b_test_elf_case_by_name(const char *name)
     }
 
     return nullptr;
+}
+
+static inline const char *
+n00b_test_elf_rewrite_request_name(n00b_test_elf_rewrite_request_t request)
+{
+    switch (request) {
+    case N00B_TEST_ELF_REWRITE_NONE:
+        return "none";
+    case N00B_TEST_ELF_REWRITE_RELAXED_EOF:
+        return "relaxed-eof";
+    case N00B_TEST_ELF_REWRITE_RELAXED_PREFERRED_GAP:
+        return "relaxed-preferred-gap";
+    case N00B_TEST_ELF_REWRITE_RELAXED_OVERLAY_PRESERVE:
+        return "relaxed-overlay-preserve";
+    case N00B_TEST_ELF_REWRITE_RELAXED_OVERLAY_APPEND:
+        return "relaxed-overlay-append";
+    case N00B_TEST_ELF_REWRITE_RESERVED_REQUESTED_NAME:
+        return "reserved-requested-name";
+    }
+
+    return "none";
 }
 
 static void
@@ -719,21 +1064,121 @@ n00b_test_elf_layout_classification(bool nonzero_unknown)
     return buf;
 }
 
+static void
+n00b_test_elf_apply_target_mutation(n00b_buffer_t *buf,
+                                    n00b_test_elf_target_mutation_t mutation)
+{
+    uint8_t *p = (uint8_t *)buf->data;
+
+    switch (mutation) {
+    case N00B_TEST_ELF_TARGET_MUTATION_NONE:
+        break;
+    case N00B_TEST_ELF_TARGET_MUTATION_INVALID_EHSIZE:
+        n00b_test_elf_put16(p + N00B_TEST_ELF_E_EHSIZE, 65);
+        break;
+    case N00B_TEST_ELF_TARGET_MUTATION_INVALID_SHENTSIZE:
+        n00b_test_elf_put16(p + N00B_TEST_ELF_E_SHENTSIZE, 65);
+        break;
+    case N00B_TEST_ELF_TARGET_MUTATION_INVALID_PHENTSIZE:
+        n00b_test_elf_put16(p + N00B_TEST_ELF_E_PHENTSIZE, 57);
+        break;
+    case N00B_TEST_ELF_TARGET_MUTATION_SHNUM_ZERO:
+        n00b_test_elf_put16(p + N00B_TEST_ELF_E_SHNUM, 0);
+        break;
+    case N00B_TEST_ELF_TARGET_MUTATION_SHNUM_ONE:
+        n00b_test_elf_put16(p + N00B_TEST_ELF_E_SHNUM, 1);
+        break;
+    case N00B_TEST_ELF_TARGET_MUTATION_SHNUM_LORESERVE:
+        n00b_test_elf_put16(p + N00B_TEST_ELF_E_SHNUM,
+                            N00B_TEST_ELF_SHN_LORESERVE);
+        break;
+    case N00B_TEST_ELF_TARGET_MUTATION_SHNUM_XINDEX:
+        n00b_test_elf_put16(p + N00B_TEST_ELF_E_SHNUM, SHN_XINDEX);
+        break;
+    case N00B_TEST_ELF_TARGET_MUTATION_SHOFF_ZERO:
+        n00b_test_elf_put64(p + N00B_TEST_ELF_E_SHOFF, 0);
+        break;
+    case N00B_TEST_ELF_TARGET_MUTATION_SHOFF_OUT_OF_BOUNDS:
+        n00b_test_elf_put64(p + N00B_TEST_ELF_E_SHOFF, buf->byte_len);
+        break;
+    case N00B_TEST_ELF_TARGET_MUTATION_SHOFF_WRAP:
+        n00b_test_elf_put64(p + N00B_TEST_ELF_E_SHOFF, UINT64_MAX - 32);
+        break;
+    case N00B_TEST_ELF_TARGET_MUTATION_SHSTRNDX_ZERO:
+        n00b_test_elf_put16(p + N00B_TEST_ELF_E_SHSTRNDX, 0);
+        break;
+    case N00B_TEST_ELF_TARGET_MUTATION_SHSTRNDX_LORESERVE:
+        n00b_test_elf_put16(p + N00B_TEST_ELF_E_SHSTRNDX,
+                            N00B_TEST_ELF_SHN_LORESERVE);
+        break;
+    case N00B_TEST_ELF_TARGET_MUTATION_SHSTRNDX_XINDEX:
+        n00b_test_elf_put16(p + N00B_TEST_ELF_E_SHSTRNDX, SHN_XINDEX);
+        break;
+    case N00B_TEST_ELF_TARGET_MUTATION_SHSTRNDX_OUT_OF_RANGE:
+        n00b_test_elf_put16(p + N00B_TEST_ELF_E_SHSTRNDX, 2);
+        break;
+    case N00B_TEST_ELF_TARGET_MUTATION_SHSTRTAB_WRONG_TYPE:
+        n00b_test_elf_put32(p + N00B_TEST_ELF_SHSTRTAB_SH
+                              + N00B_TEST_ELF_SH_TYPE,
+                            SHT_PROGBITS);
+        break;
+    case N00B_TEST_ELF_TARGET_MUTATION_SHSTRTAB_INVALID_SIZE:
+        n00b_test_elf_put64(p + N00B_TEST_ELF_SHSTRTAB_SH
+                              + N00B_TEST_ELF_SH_SIZE,
+                            1024);
+        break;
+    case N00B_TEST_ELF_TARGET_MUTATION_SHSTRTAB_OFFSET_WRAP:
+        n00b_test_elf_put64(p + N00B_TEST_ELF_SHSTRTAB_SH
+                              + N00B_TEST_ELF_SH_OFFSET,
+                            UINT64_MAX - 4);
+        n00b_test_elf_put64(p + N00B_TEST_ELF_SHSTRTAB_SH
+                              + N00B_TEST_ELF_SH_SIZE,
+                            16);
+        break;
+    case N00B_TEST_ELF_TARGET_MUTATION_SECTION_NAME_INDEX:
+        n00b_test_elf_put32(p + N00B_TEST_ELF_SHSTRTAB_SH
+                              + N00B_TEST_ELF_SH_NAME,
+                            11);
+        break;
+    case N00B_TEST_ELF_TARGET_MUTATION_PHNUM_ZERO:
+        n00b_test_elf_put16(p + N00B_TEST_ELF_E_PHNUM, 0);
+        break;
+    case N00B_TEST_ELF_TARGET_MUTATION_PHNUM_XNUM:
+        n00b_test_elf_put16(p + N00B_TEST_ELF_E_PHNUM, N00B_TEST_ELF_PN_XNUM);
+        break;
+    case N00B_TEST_ELF_TARGET_MUTATION_PHOFF_WRAP:
+        n00b_test_elf_put64(p + N00B_TEST_ELF_E_PHOFF, UINT64_MAX - 16);
+        break;
+    case N00B_TEST_ELF_TARGET_MUTATION_EXISTING_RESERVED_SECTION_NAME:
+        memcpy(p + 384 + 11, ".chalk.mark", sizeof(".chalk.mark"));
+        n00b_test_elf_put32(p + N00B_TEST_ELF_SHSTRTAB_SH
+                              + N00B_TEST_ELF_SH_NAME,
+                            11);
+        n00b_test_elf_put64(p + N00B_TEST_ELF_SHSTRTAB_SH
+                              + N00B_TEST_ELF_SH_SIZE,
+                            23);
+        break;
+    }
+}
+
 static n00b_buffer_t *
 n00b_test_elf_case_generate(const n00b_test_elf_case_t *test_case)
 {
+    n00b_buffer_t *buf = nullptr;
+
     switch (test_case->generator) {
     case N00B_TEST_ELF_GEN_VALID_MINIMAL_EXEC:
-        return n00b_test_elf_minimal_exec(0x400080, 0, 0x400000, 512, 512,
-                                          false, false, true, false);
+        buf = n00b_test_elf_minimal_exec(0x400080, 0, 0x400000, 512, 512,
+                                         false, false, true, false);
+        break;
     case N00B_TEST_ELF_GEN_BAD_MAGIC: {
-        n00b_buffer_t *buf = n00b_test_elf_new_zeroed(64);
+        buf = n00b_test_elf_new_zeroed(64);
         memcpy(buf->data, "NOPE", 4);
-        return buf;
+        break;
     }
     case N00B_TEST_ELF_GEN_ELF32_INPUT: {
-        n00b_buffer_t *buf = n00b_test_elf_new_zeroed(64);
-        uint8_t       *p   = (uint8_t *)buf->data;
+        buf = n00b_test_elf_new_zeroed(64);
+        uint8_t *p = (uint8_t *)buf->data;
         p[0] = 0x7f;
         p[1] = 'E';
         p[2] = 'L';
@@ -741,11 +1186,11 @@ n00b_test_elf_case_generate(const n00b_test_elf_case_t *test_case)
         p[EI_CLASS]   = ELFCLASS32;
         p[EI_DATA]    = ELFDATA2LSB;
         p[EI_VERSION] = EV_CURRENT;
-        return buf;
+        break;
     }
     case N00B_TEST_ELF_GEN_TRUNCATED_HEADER: {
-        n00b_buffer_t *buf = n00b_test_elf_new_zeroed(16);
-        uint8_t       *p   = (uint8_t *)buf->data;
+        buf = n00b_test_elf_new_zeroed(16);
+        uint8_t *p = (uint8_t *)buf->data;
         p[0] = 0x7f;
         p[1] = 'E';
         p[2] = 'L';
@@ -753,31 +1198,43 @@ n00b_test_elf_case_generate(const n00b_test_elf_case_t *test_case)
         p[EI_CLASS]   = ELFCLASS64;
         p[EI_DATA]    = ELFDATA2LSB;
         p[EI_VERSION] = EV_CURRENT;
-        return buf;
+        break;
     }
     case N00B_TEST_ELF_GEN_PHTAB_NOT_IN_LOAD:
-        return n00b_test_elf_minimal_exec(0x400000, 128, 0x400000, 384, 384,
-                                          false, false, true, false);
+        buf = n00b_test_elf_minimal_exec(0x400000, 128, 0x400000, 384, 384,
+                                         false, false, true, false);
+        break;
     case N00B_TEST_ELF_GEN_ENTRY_OUTSIDE_LOAD:
-        return n00b_test_elf_minimal_exec(0x500000, 0, 0x400000, 512, 512,
-                                          true, false, true, false);
+        buf = n00b_test_elf_minimal_exec(0x500000, 0, 0x400000, 512, 512,
+                                         true, false, true, false);
+        break;
     case N00B_TEST_ELF_GEN_ENTRY_IN_MEM_NOT_FILE:
-        return n00b_test_elf_minimal_exec(0x400101, 0, 0x400000, 0x100, 0x2000,
-                                          true, false, true, false);
+        buf = n00b_test_elf_minimal_exec(0x400101, 0, 0x400000, 0x100, 0x2000,
+                                         true, false, true, false);
+        break;
     case N00B_TEST_ELF_GEN_PT_PHDR_BAD_SIZE:
-        return n00b_test_elf_minimal_exec(0x400080, 0, 0x400000, 512, 512,
-                                          true, true, true, false);
+        buf = n00b_test_elf_minimal_exec(0x400080, 0, 0x400000, 512, 512,
+                                         true, true, true, false);
+        break;
     case N00B_TEST_ELF_GEN_SHSTRTAB_NOT_TERMINATED:
-        return n00b_test_elf_minimal_exec(0x400080, 0, 0x400000, 512, 512,
-                                          false, false, false, false);
+        buf = n00b_test_elf_minimal_exec(0x400080, 0, 0x400000, 512, 512,
+                                         false, false, false, false);
+        break;
     case N00B_TEST_ELF_GEN_OVERLAY_AFTER_SEGMENTS:
-        return n00b_test_elf_minimal_exec(0x400080, 0, 0x400000, 512, 512,
-                                          false, false, true, true);
+        buf = n00b_test_elf_minimal_exec(0x400080, 0, 0x400000, 512, 512,
+                                         false, false, true, true);
+        break;
     case N00B_TEST_ELF_GEN_LAYOUT_CLASSIFICATION:
-        return n00b_test_elf_layout_classification(false);
+        buf = n00b_test_elf_layout_classification(false);
+        break;
     case N00B_TEST_ELF_GEN_LAYOUT_NONZERO_UNKNOWN:
-        return n00b_test_elf_layout_classification(true);
+        buf = n00b_test_elf_layout_classification(true);
+        break;
     }
 
-    return nullptr;
+    if (buf != nullptr) {
+        n00b_test_elf_apply_target_mutation(buf, test_case->target_mutation);
+    }
+
+    return buf;
 }

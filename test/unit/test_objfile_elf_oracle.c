@@ -1,6 +1,7 @@
 #include <assert.h>
 #include <errno.h>
 #include <stdio.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -577,6 +578,39 @@ extract_verdict(const char *output, char *verdict, size_t verdict_len)
 }
 
 static bool
+extract_numeric_code(const char *output, int *out_code)
+{
+    const char *p = strstr(output, "code=");
+    if (p == nullptr) {
+        return false;
+    }
+
+    p += strlen("code=");
+    if (*p < '0' || *p > '9') {
+        return false;
+    }
+
+    int code = 0;
+    while (*p >= '0' && *p <= '9') {
+        int digit = *p - '0';
+
+        if (code > (INT32_MAX - digit) / 10) {
+            return false;
+        }
+
+        code = code * 10 + digit;
+        p++;
+    }
+
+    if (*p != '\0' && *p != '\n' && *p != '\r') {
+        return false;
+    }
+
+    *out_code = code;
+    return true;
+}
+
+static bool
 run_oracle_case(const char *oracle_bin, const n00b_test_elf_case_t *test_case)
 {
     if (test_case->oracle_mode == N00B_TEST_ELF_ORACLE_NONE) {
@@ -635,6 +669,28 @@ run_oracle_case(const char *oracle_bin, const n00b_test_elf_case_t *test_case)
                 verdict,
                 oracle.output);
         return false;
+    }
+
+    if (n00b_test_elf_case_has_oracle_code(test_case)) {
+        int code = 0;
+
+        if (!extract_numeric_code(oracle.output, &code)) {
+            fprintf(stderr,
+                    "Oracle output for %s did not contain numeric code=...:\n%s\n",
+                    test_case->name,
+                    oracle.output);
+            return false;
+        }
+
+        if (code != test_case->oracle_expected_code) {
+            fprintf(stderr,
+                    "Oracle code mismatch for %s: expected %d, got %d\n%s\n",
+                    test_case->name,
+                    test_case->oracle_expected_code,
+                    code,
+                    oracle.output);
+            return false;
+        }
     }
 
     printf("  [PASS] %s n00b_parse=%s oracle=%s state=%s divergence=%s\n",
