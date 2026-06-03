@@ -391,16 +391,18 @@ n00b_allocator_setup(n00b_allocator_t *allocator, n00b_calloc_fn alloc) _kargs
                                .hash           = n00b_hash_word,
                                .skip_obj_hash  = true);
 
-        /* Register with the runtime so the GC mark phase walks this
-         * pool's per-alloc metadata. Skip md_pool allocators (their
-         * own backing storage); the metadata dict for those is the
-         * pool we'd be registering, which would close a cycle. */
-        if (!__is_md_pool) {
-            n00b_runtime_t *rt = n00b_get_runtime();
-            if (rt && rt->metadata_pools.data) {
-                n00b_list_push(rt->metadata_pools, allocator);
-            }
-        }
+        /* NOTE: external_metadata allocators are deliberately NOT
+         * auto-registered in rt->metadata_pools. That list means
+         * "treat every alive record as a GC root" (n00b_scan_metadata_pools)
+         * — appropriate only for the never-collected "array" pools, of
+         * which there are currently none. Registering every
+         * external_metadata allocator here pinned GC ARENAS' allocations
+         * as roots, defeating arena collection (a moving arena kept ~60%
+         * of dead allocs alive; with the metadata-pool root pass skipped
+         * it collected to zero). Nothing is registered by default; an
+         * array pool that needs root semantics must opt in explicitly.
+         * (void)__is_md_pool keeps the parameter live. */
+        (void)__is_md_pool;
     }
 }
 

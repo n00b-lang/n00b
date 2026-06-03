@@ -62,6 +62,7 @@ static void n00b_process_finalizers(n00b_collect_t *);
 static void n00b_scan_metadata_pools(n00b_collect_t *);
 static void n00b_sweep_metadata_pool_leaks(n00b_collect_t *);
 static void n00b_debug_pool_census(uint64_t live_epoch);
+static void n00b_debug_arena_census(n00b_collect_t *ctx);
 static void n00b_scan_thread_stacks(n00b_collect_t *);
 static void n00b_scan_thread_lock_chains(n00b_collect_t *ctx, n00b_thread_record_t *rec);
 static void n00b_scan_runtime(n00b_collect_t *);
@@ -1985,6 +1986,9 @@ n00b_collect_internal(n00b_arena_t *arena)
         n00b_runtime_t *crt = n00b_get_runtime();
         if (crt && n00b_atomic_load(&crt->debug_leak_detect)) {
             n00b_debug_pool_census(ctx.current_epoch);
+            // The to-space OOB dict is the live (forwarded) set after
+            // mark; census it by origin site + validate OOB migration.
+            n00b_debug_arena_census(&ctx);
         }
     }
 
@@ -2202,6 +2206,123 @@ n00b_debug_pool_census(uint64_t live_epoch)
                     (const char *)(uintptr_t)ks[a]);
         }
     }
+    n00b_allocator_destroy(ca);
+}
+
+// Census the to-space OOB metadata right after mark. For a GC arena the
+// to-space dict holds exactly the live (forwarded) set — one record per
+// surviving allocation — so this tallies the *retained* set by origin
+// site (an over-retained arena shows which call sites kept allocations
+// alive) and validates OOB migration: the record count MUST equal the
+// forwarder's alloc_count. Leak-detect collects only; the to-space dict
+// is still intact here (the segment swap / teardown runs later).
+static void
+n00b_debug_arena_census(n00b_collect_t *ctx)
+{
+    n00b_dict_untyped_t *md = ctx->to_space->vtable.metadata;
+    if (md == nullptr) {
+        return; // inline-only arena: no OOB dict to walk.
+    }
+
+    n00b_dict_untyped_store_t *store = n00b_atomic_load(&md->store);
+    if (store == nullptr) {
+        return;
+    }
+
+    n00b_arena_t            *ar = n00b_new_arena(.size   = (1 << 22),
+                                                 .use_gc = false,
+                                                 .no_map = true,
+                                                 .name   = "arena_census");
+    n00b_allocator_t        *ca = (n00b_allocator_t *)ar;
+    n00b_site_census_dict_t *site_c
+        = n00b_dict_new_private(uint64_t, int64_t, .allocator = ca);
+    n00b_site_census_dict_t *site_b
+        = n00b_dict_new_private(uint64_t, int64_t, .allocator = ca);
+
+    uint64_t rec_count = 0, total_bytes = 0;
+    uint32_t slots = store->last_slot + 1;
+
+    for (uint32_t bi = 0; bi < slots; bi++) {
+        n00b_dict_untyped_bucket_t *b = &store->buckets[bi];
+
+        if (b->key == nullptr) {
+            continue;
+        }
+        if (n00b_atomic_load(&b->flags) & N00B_HT_FLAG_DELETED) {
+            continue;
+        }
+
+        n00b_oob_hdr_t *oob = (n00b_oob_hdr_t *)b->value;
+        if (oob == nullptr) {
+            continue;
+        }
+
+        rec_count++;
+        total_bytes += oob->alloc_len;
+
+        uint64_t ck = (uint64_t)(uintptr_t)(oob->file_name ? oob->file_name : "?");
+        bool     f;
+        int64_t  c  = n00b_dict_get(site_c, ck, &f);
+        int64_t  nc = (f ? c : 0) + 1;
+        n00b_dict_put(site_c, ck, nc);
+        int64_t bs = n00b_dict_get(site_b, ck, &f);
+        int64_t nb = (f ? bs : 0) + (int64_t)oob->alloc_len;
+        n00b_dict_put(site_b, ck, nb);
+    }
+
+    uint64_t fwd = ctx->to_space->alloc_count;
+    fprintf(stderr,
+            "n00b arena-census [%s]: LIVE %llu records / %llu bytes ; "
+            "forwarder alloc_count=%llu => %s\n",
+            ctx->from_space->vtable.debug_name
+                ? ctx->from_space->vtable.debug_name
+                : "?",
+            (unsigned long long)rec_count,
+            (unsigned long long)total_bytes,
+            (unsigned long long)fwd,
+            rec_count == fwd ? "MIGRATION OK"
+                             : "*** MIGRATION COUNT MISMATCH ***");
+
+    size_t cn = (size_t)n00b_dict_internal_len((_n00b_dict_internal_t *)site_b);
+    if (cn) {
+        uint64_t *ks = n00b_alloc_array(uint64_t, cn, .allocator = ca);
+        int64_t  *vb = n00b_alloc_array(int64_t, cn, .allocator = ca);
+        int64_t  *vc = n00b_alloc_array(int64_t, cn, .allocator = ca);
+        size_t    ci = 0;
+
+        n00b_dict_foreach(site_b, ck, cv, {
+            if (ci < cn) {
+                bool f;
+                ks[ci] = ck;
+                vb[ci] = cv;
+                vc[ci] = n00b_dict_get(site_c, ck, &f);
+                ci++;
+            }
+        });
+
+        for (size_t a = 0; a < ci; a++) {
+            size_t best = a;
+            for (size_t b = a + 1; b < ci; b++) {
+                if (vb[b] > vb[best]) {
+                    best = b;
+                }
+            }
+            if (best != a) {
+                int64_t  tb = vb[a]; vb[a] = vb[best]; vb[best] = tb;
+                int64_t  tc = vc[a]; vc[a] = vc[best]; vc[best] = tc;
+                uint64_t tk = ks[a]; ks[a] = ks[best]; ks[best] = tk;
+            }
+        }
+
+        size_t reportn = ci < 40 ? ci : 40;
+        for (size_t a = 0; a < reportn; a++) {
+            fprintf(stderr,
+                    "n00b arena-census LIVE: %lld bytes  %lld allocs  %s\n",
+                    (long long)vb[a], (long long)vc[a],
+                    (const char *)(uintptr_t)ks[a]);
+        }
+    }
+
     n00b_allocator_destroy(ca);
 }
 
