@@ -621,6 +621,26 @@ n00b_capture_stack_top(n00b_thread_t *thread)
 }
 
 /**
+ * @brief Is @p t the main thread?
+ *
+ * The main thread is the first to register and owns the reserved slot
+ * @ref N00B_MAIN_THREAD_SLOT (D-014); `n00b_thread_self()`'s O(1) range
+ * check already relies on that invariant.  This is the canonical "is
+ * main" test.  It replaces the former `os_thread_port == 0` heuristic,
+ * which stopped identifying main once the main thread was given a real OS
+ * control handle so it can be preemptively suspended for STW like any
+ * other thread (WP-001 / WP-4, D-040).
+ *
+ * @param t Thread to test (nullptr → false).
+ * @return true iff @p t is the main thread.
+ */
+static inline bool
+n00b_thread_is_main(n00b_thread_t *t)
+{
+    return t != nullptr && t->id_info.parts.id == (int32_t)N00B_MAIN_THREAD_SLOT;
+}
+
+/**
  * @brief Get the unique (slot + generation) 64-bit thread ID.
  * @return The calling thread's `id_info.unique_id`, or 0 if unregistered.
  *

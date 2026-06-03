@@ -228,6 +228,76 @@ test_stw_cycle_resumes_all_workers(void)
     printf("  [PASS] STW/restart cycle resumes all raw workers\n");
 }
 
+// ----------------------------------------------------------------------------
+// WP-001 Phase 1: a NON-main thread can preemptively stop + resume the MAIN
+// thread.  Pre-Phase-1 the main thread had os_thread_port == 0, so
+// _n00b_preempt_suspend_capture(main) returned false and a worker-initiated STW
+// fell back to the cooperative path — which spins forever when main is RUNNING
+// and never checking in.  Now main carries a real control handle, so the worker
+// preemptively suspends it (gc_preempt_suspended set) and resumes it cleanly.
+// ----------------------------------------------------------------------------
+typedef struct {
+    n00b_thread_t   *main_thread;
+    _Atomic uint32_t main_ready;   // main has entered its no-checkin spin
+    _Atomic uint32_t release;      // worker tells main to leave the spin
+    bool             saw_main_preempted; // main->gc_preempt_suspended seen under STW
+} stop_main_io_t;
+
+static void *
+stop_main_worker_fn(void *raw)
+{
+    stop_main_io_t *io = (stop_main_io_t *)raw;
+
+    // Wait until main is RUNNING in its tight no-checkin loop.
+    while (atomic_load(&io->main_ready) == 0) {
+    }
+
+    // Stop the world from a NON-main thread.  This must PREEMPTIVELY suspend
+    // main (it is running and never checks in); pre-Phase-1 it would hang here.
+    n00b_stop_the_world();
+
+    // With the world stopped, main must be preemptively suspended with its
+    // registers captured.
+    io->saw_main_preempted = n00b_atomic_load(&io->main_thread->gc_preempt_suspended);
+
+    // Let main leave its spin once resumed (it cannot observe this while
+    // suspended).
+    atomic_store(&io->release, 1);
+
+    n00b_restart_the_world();
+    return n00b_thread_self();
+}
+
+static void
+test_worker_stops_main(void)
+{
+    stop_main_io_t io = {};
+    io.main_thread    = n00b_thread_self();
+    assert(io.main_thread != nullptr);
+
+    auto r = n00b_thread_spawn(stop_main_worker_fn, &io);
+    assert(n00b_result_is_ok(r));
+    n00b_thread_t *worker = n00b_result_get(r);
+    assert(worker != nullptr);
+
+    // Enter a tight RUNNING loop with NO checkin, so the only way the worker's
+    // STW can stop us is the preemptive suspend+capture added in Phase 1.
+    atomic_store(&io.main_ready, 1);
+    while (atomic_load(&io.release) == 0) {
+        // Deliberately no n00b_thread_checkin() here.
+    }
+
+    void *ret = n00b_thread_join(worker);
+    assert(ret == worker);
+
+    // The worker observed main preemptively suspended under STW, and main's
+    // flag is cleared again now that the world restarted.
+    assert(io.saw_main_preempted);
+    assert(!n00b_atomic_load(&io.main_thread->gc_preempt_suspended));
+
+    printf("  [PASS] a worker preemptively stops + resumes the main thread\n");
+}
+
 int
 main(int argc, char **argv)
 {
@@ -238,6 +308,7 @@ main(int argc, char **argv)
 
     test_per_thread_lock_accounting();
     test_stw_cycle_resumes_all_workers();
+    test_worker_stops_main();
 
     printf("All thread_self_migration tests passed.\n");
     n00b_shutdown();

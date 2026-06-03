@@ -306,6 +306,24 @@ n00b_thread_init() _kargs
     }
 #endif
 
+    // WP-001 / WP-4 (D-040): the MAIN thread must be preemptible like every
+    // other thread — a worker that triggers GC has to be able to stop main and
+    // capture its registers.  So main carries a real OS control handle, just as
+    // a launched worker does (n00b_thread_launcher sets these for workers).
+    // main never goes through the launcher, so set them here, on the permanent
+    // struct, before it is published.  main is never reaped, so the macOS +1
+    // send right from mach_thread_self() is simply held for the process
+    // lifetime (no reaper ever deallocates it — every reaper skips main).
+    if (is_main) {
+#if defined(__APPLE__)
+        self->os_thread_port = (uint32_t)mach_thread_self();
+#elif defined(__linux__)
+        self->os_tid = (uint32_t)syscall(SYS_gettid);
+#elif defined(_WIN32)
+        self->os_tid = (uint32_t)GetCurrentThreadId();
+#endif
+    }
+
     // Repoint the slot at the permanent struct.  After this store, n00b_thread_self()
     // resolves (main: range check; worker: bounds scan) to `self`.
     n00b_atomic_store(&rec->thread, self);
@@ -346,13 +364,15 @@ n00b_thread_attach_foreign(void)
         // are subject to stack-reuse aliasing.  Two records are NOT:
         //   - n00b WORKERS (callstack != null): resolve via their callstack
         //     region, never aliasable;
-        //   - the MAIN thread (os_thread_port == 0, callstack == null): resolves
-        //     via the O(1) main-slot range check, never gets a foreign port.
-        // CRITICAL: without the os_thread_port==0 guard, main (port 0) fails the
-        // port-equality test below, gets misclassified as a stale alias, and has
-        // its slot bit + stack_lo CLEARED on every entry — which breaks main's
-        // range-check self() and thrashes its identity into a spin/hang.
-        if (self->callstack != nullptr || self->os_thread_port == 0) {
+        //   - the MAIN thread: owns the reserved main slot and resolves via the
+        //     O(1) main-slot range check, so it is never a foreign alias.
+        // CRITICAL: main now carries a REAL Mach control port (WP-001/WP-4 —
+        // so a worker can preemptively suspend it), so the old
+        // `os_thread_port == 0` test no longer identifies main.  Use the
+        // slot-based n00b_thread_is_main() instead; skipping main here keeps the
+        // port-equality test below from ever clearing main's slot bit / stack_lo
+        // and thrashing its identity into a spin/hang.
+        if (self->callstack != nullptr || n00b_thread_is_main(self)) {
             return self;
         }
         // Foreign record is OURS only if its captured Mach control port equals
@@ -1413,9 +1433,15 @@ _n00b_reap_enqueue(n00b_runtime_t *rt, n00b_thread_t *self)
 static bool
 _n00b_reap_worker_is_dead(n00b_thread_t *t)
 {
+    // main never dies during the run and is never a reap candidate; never
+    // report it dead.  (main now carries a real control handle — WP-001/WP-4 —
+    // so the old `os_thread_port == 0` main-exclusion no longer applies.)
+    if (n00b_thread_is_main(t)) {
+        return false;
+    }
 #if defined(__APPLE__)
     if (t->os_thread_port == 0) {
-        // No port recorded (e.g. main thread shouldn't be here); treat as
+        // No control port recorded yet (pre-registration transient); treat as
         // not-yet-confirmed rather than reclaiming blind.
         return false;
     }
@@ -1498,8 +1524,9 @@ n00b_diag_foreign_self_check(void)
         }
     }
 
-    // Foreign = no callstack + a recorded Mach port.
-    if (self->callstack != nullptr || self->os_thread_port == 0 || srec == nullptr) {
+    // Foreign = no callstack + not the main thread.  (main now carries a real
+    // Mach port too — WP-001/WP-4 — so it is identified by slot, not port==0.)
+    if (self->callstack != nullptr || n00b_thread_is_main(self) || srec == nullptr) {
         return;
     }
 
