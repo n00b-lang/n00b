@@ -67,13 +67,32 @@ mmap_lock(n00b_mmap_ctx_t *ctx)
 static inline void
 mmap_unlock(n00b_mmap_ctx_t *ctx)
 {
-    /* Symmetric with mmap_lock's STW short-circuit: under STW we never took
-     * the lock, so don't clear it (clearing it would stomp a lock that a
-     * thread held when STW began). */
-    if (n00b_world_is_stopped()) {
+    /* Release the lock IFF we actually hold it.  This is deliberately NOT
+     * gated on n00b_world_is_stopped() (WP-001 Phase 3): a world_is_stopped()
+     * gate is racy and leaks the lock — a thread can mmap_lock() while the
+     * world is running (acquiring tid_lock), the world can then stop before its
+     * mmap_unlock(), and the gated unlock would skip the release, stranding
+     * tid_lock forever (observed: a thread spinning in mmap_lock at shutdown
+     * while the holder had long exited).
+     *
+     * Checking ownership instead is both correct and as cheap as the old gate
+     * on the hot path:
+     *   - The collector under STW short-circuited mmap_lock (never acquired),
+     *     so tid_lock is either -1 (the common case during a collection: every
+     *     mutator is parked and not mid-tree-op) → one atomic load + return, no
+     *     n00b_thread_unique_id(); or it is held by a mutator that was frozen
+     *     mid-tree-op when STW began → not our id, so we leave it (exactly the
+     *     "don't stomp a held lock" property the old gate provided), and that
+     *     mutator releases it when it resumes.
+     *   - A thread that DID acquire releases here regardless of whether the
+     *     world has since stopped — closing the leak. */
+    int64_t held = n00b_atomic_load(&ctx->tid_lock);
+    if (held == -1) {
         return;
     }
-    n00b_atomic_store(&ctx->tid_lock, -1);
+    if (held == n00b_thread_unique_id()) {
+        n00b_atomic_store(&ctx->tid_lock, -1);
+    }
 }
 
 #define mmap_write_lock(ctx)   mmap_lock(ctx)
