@@ -945,6 +945,13 @@ extern bool n00b_current_thread_stack_contains(void *ptr);
  *                   from the callstack region (a raw worker self-describes its
  *                   bounds; no OS stack query is needed) and recorded on the
  *                   thread so the n00b_thread_self() worker-masking back-check resolves.
+ * @kw os_thread_port macOS only: the worker's Mach control port (the
+ *                   thread_create port the spawner holds, identical to the
+ *                   reaper's death-edge port).  Set on the thread BEFORE it is
+ *                   published as a STW participant so the pure-preemptive STW can
+ *                   suspend it from the instant it appears (WP-001 Phase 2).  0
+ *                   (default) for the main thread and on Linux/Windows, which
+ *                   use os_tid (read from the running thread during init).
  *
  * @pre Runtime must be initialized.
  * @post The calling thread is registered in the runtime's thread table
@@ -956,6 +963,7 @@ n00b_thread_init() _kargs
     n00b_runtime_t *runtime            = n00b_get_runtime();
     uint32_t acquired_slot             = 0;
     struct n00b_callstack_t *callstack = nullptr;
+    uint32_t os_thread_port            = 0;
 };
 
 /**

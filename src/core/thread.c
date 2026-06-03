@@ -195,6 +195,7 @@ n00b_thread_init() _kargs
     n00b_runtime_t *runtime            = n00b_get_runtime();
     uint32_t acquired_slot             = 0;
     struct n00b_callstack_t *callstack = nullptr;
+    uint32_t os_thread_port            = 0;
 }
 {
     // n00b_thread_self() must be resolvable for the calling thread BEFORE the first
@@ -240,6 +241,41 @@ n00b_thread_init() _kargs
     // GC-stack push around the permanent-struct alloc below).  Null for the
     // main thread, which resolves via the range check instead.
     init_self.callstack = (n00b_callstack_t *)callstack;
+
+    // ORDERING (WP-001 Phase 2): a WORKER initialises concurrently with a live
+    // runtime, so the instant it is published into rt->threads[] (the
+    // slot-acquire below) a stop-the-world pass on another thread can observe
+    // it.  For the pure-preemptive STW (no cooperative fallback) the worker must
+    // therefore already be SUSPENDABLE (a real OS control handle) and SCANNABLE
+    // (stack map + stack top) BEFORE it is published — otherwise STW would find
+    // a participant it can neither suspend nor safely scan, and the worker's
+    // first allocation (the permanent struct below) could run while the world is
+    // "stopped".  Everything needed is knowable here, pre-publication:
+    //   - stack_map / stack_base: the worker's callstack region (already
+    //     registered as n00b_mmap_stack by n00b_callstack_alloc);
+    //   - stack_top: captured now;
+    //   - control handle: macOS uses the thread_create port the spawner passed
+    //     in via os_thread_port (kept identical to the reaper's death-edge
+    //     port); Linux/Windows read the running thread's own tid here.
+    // The rec->stack_lo/hi pair (used ONLY by n00b_thread_self() resolution, not
+    // by the GC scan) is still published by n00b_capture_stack_base after the
+    // slot is known, before the first alloc.  The MAIN thread needs none of this
+    // ordering: it initialises while live_threads == 0 (single-threaded), so no
+    // concurrent STW can observe it mid-init.
+    if (callstack != nullptr) {
+        n00b_callstack_t *cs = (n00b_callstack_t *)callstack;
+        init_self.stack_map  = cs->stack_map;
+        init_self.stack_base = (void *)cs->stack_high;
+        n00b_capture_stack_top(&init_self);
+        // macOS: the spawner's thread_create port.  Linux/Windows leave this 0
+        // (unused there) and set os_tid from the running thread instead.
+        init_self.os_thread_port = os_thread_port;
+#if defined(__linux__)
+        init_self.os_tid = (uint32_t)syscall(SYS_gettid);
+#elif defined(_WIN32)
+        init_self.os_tid = (uint32_t)GetCurrentThreadId();
+#endif
+    }
 
     if (!acquired_slot) {
         acquired_slot = n00b_thread_slot_acquire(runtime, &init_self);
@@ -1839,9 +1875,10 @@ n00b_thread_launcher(void *raw)
     // first allocation in n00b_thread_init) resolves to this thread.
     _n00b_worker_write_id_word(bundle->callstack, bundle->tid);
 
-    n00b_thread_init(.runtime       = rt,
-                     .acquired_slot = bundle->tid,
-                     .callstack     = bundle->callstack);
+    n00b_thread_init(.runtime        = rt,
+                     .acquired_slot  = bundle->tid,
+                     .callstack      = bundle->callstack,
+                     .os_thread_port = bundle->os_thread_port);
 
     n00b_thread_t *self = n00b_thread_self();
     n00b_capture_stack_top(self);
@@ -1861,20 +1898,18 @@ n00b_thread_launcher(void *raw)
     // (written by the kernel at true exit) is the unambiguous death signal; the
     // clone() ctid argument already points at self->child_tid (set by the
     // spawner before create).
-    self->os_thread_port = bundle->os_thread_port;
+    // The worker's STW control handle (os_thread_port on macOS, os_tid on
+    // Linux/Windows) is now set INSIDE n00b_thread_init, BEFORE the worker is
+    // published as a STW participant (WP-001 Phase 2 ordering), so it is not set
+    // again here.  Only the Linux CLONE_CHILD_CLEARTID death-edge word — which
+    // is the reaper's liveness primitive, distinct from the STW handle — remains
+    // launcher-specific (it points into the stable per-spawn bundle, known only
+    // here).
 #if defined(__linux__)
     // Record the address of the CLONE_CHILD_CLEARTID word (in the stable
     // bundle) so the reaper can observe the kernel's exit-time 0 store via
     // self.  Written-complete; Docker-verified later (D-026/D-028).
     self->child_tid_word = &bundle->child_tid;
-    // WP-4 (D-040): record this worker's OS tid (resolves to the caller's own
-    // tid here, on the worker) so the STW initiator can tgkill the preemptive
-    // suspend signal at it.  Raw SYS_gettid — no libc wrapper.
-    self->os_tid = (uint32_t)syscall(SYS_gettid);
-#elif defined(_WIN32)
-    // WP-4 (D-040): record this worker's Windows thread id so the STW initiator
-    // can OpenThread + SuspendThread it.
-    self->os_tid = (uint32_t)GetCurrentThreadId();
 #endif
 
     // Copy the spawn attributes (WP-002) onto the published struct, on the

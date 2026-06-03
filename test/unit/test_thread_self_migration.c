@@ -298,6 +298,56 @@ test_worker_stops_main(void)
     printf("  [PASS] a worker preemptively stops + resumes the main thread\n");
 }
 
+// ----------------------------------------------------------------------------
+// WP-001 Phase 2: spawn churn overlapping STW cycles, exercising the launch
+// window — a freshly-published worker must be suspendable (control handle) and
+// scannable (stack map + top) BEFORE its first allocation.  The init reorder
+// sets all of that on the worker before it is published into rt->threads[].
+// (Pre-cut the cooperative path still backstops the window; this guards the
+// reorder against regressions and seeds the post-cut load test.)
+// ----------------------------------------------------------------------------
+static void *
+churn_worker_fn(void *raw)
+{
+    (void)raw;
+    // A little work + checkins so init/early-run overlaps the STW cycles.
+    volatile uint64_t acc = 0;
+    for (int i = 0; i < 64; i++) {
+        acc += (uint64_t)i;
+        n00b_thread_checkin();
+    }
+    (void)acc;
+    return n00b_thread_self();
+}
+
+static void
+test_spawn_churn_under_stw(void)
+{
+    enum { ROUNDS = 20, KIDS = 8 };
+
+    for (int round = 0; round < ROUNDS; round++) {
+        n00b_thread_t *kids[KIDS] = {};
+
+        for (int i = 0; i < KIDS; i++) {
+            auto r = n00b_thread_spawn(churn_worker_fn, nullptr);
+            assert(n00b_result_is_ok(r));
+            kids[i] = n00b_result_get(r);
+            assert(kids[i] != nullptr);
+        }
+
+        // Hammer a STW cycle while the just-spawned workers are still
+        // initialising / early-running — this is the launch window.
+        n00b_stop_the_world();
+        n00b_restart_the_world();
+
+        for (int i = 0; i < KIDS; i++) {
+            assert(n00b_thread_join(kids[i]) == kids[i]);
+        }
+    }
+
+    printf("  [PASS] spawn churn under STW cycles (launch window)\n");
+}
+
 int
 main(int argc, char **argv)
 {
@@ -309,6 +359,7 @@ main(int argc, char **argv)
     test_per_thread_lock_accounting();
     test_stw_cycle_resumes_all_workers();
     test_worker_stops_main();
+    test_spawn_churn_under_stw();
 
     printf("All thread_self_migration tests passed.\n");
     n00b_shutdown();
