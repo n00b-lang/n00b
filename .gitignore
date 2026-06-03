@@ -104,3 +104,5 @@ test/fixtures/naudit/tmp_signing/id_test
 test/fixtures/naudit/tmp_signing/id_test.pub
 test/fixtures/naudit/tmp_signing/allowed_signers
 docker/_linux_build/
+# Linux dev-env: jj-tracked ncc upstream clone + its Linux build (WP-001 Phase 0).
+docker/_linux_ncc/
