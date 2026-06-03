@@ -1,3 +1,0 @@
-widget_demo_tui_manual=PASS
-sequence=Tab,Tab,Space,Ctrl-C
-observed=focus advanced twice, activation fired, clean exit

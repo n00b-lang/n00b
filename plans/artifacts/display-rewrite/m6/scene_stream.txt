@@ -1,8 +1,0 @@
-
-  Display Baseline Scene
-
-  Status: baseline-ready
-
-  +--------------+
-  |   Execute    |
-  +--------------+
