@@ -241,10 +241,28 @@ _n00b_preempt_suspend_capture(n00b_thread_t *t)
         != 0) {
         return false; // delivery failed (e.g. the thread just exited)
     }
-    // Wait for the handler to acknowledge it has parked + captured.  DF-4 means
-    // we only signal RUNNING threads, which take the signal promptly; a short
-    // spin is the handshake (the handler does not wake a futex on this flag).
-    while (!n00b_atomic_load(&t->gc_preempt_suspended)) {
+    // Wait for the handler to acknowledge it has parked + captured.  A RUNNING
+    // thread takes the signal promptly, but the target may STOP being suspendable
+    // before its handler acks — and the spin must not hang on that (WP-001
+    // Phase 3; observed at shutdown under load):
+    //   - it EXITED before the handler ran (caught running by the stop pass,
+    //     then reached its final exit): once it is in the kernel exit path it
+    //     never takes the signal.  tgkill(sig 0) reports ESRCH once it is gone.
+    //   - it went GC-safe on its OWN (teardown / n00b_run_blocking set SUSPEND
+    //     after we signalled it): no need to preempt it anymore.
+    // In both cases bail with false so the caller reloads the slot and either
+    // breaks on null (exited) or honors SUSPEND (skips it) — mirroring the macOS
+    // dead-port bail.  A still-running target is re-signalled on the caller's
+    // retry.
+    for (uint64_t spins = 0; !n00b_atomic_load(&t->gc_preempt_suspended); spins++) {
+        if (n00b_atomic_load(&t->self_lock) & N00B_SUSPEND) {
+            return false;
+        }
+        if ((spins & 0xffffu) == 0xffffu) {
+            if (syscall(SYS_tgkill, tgid, (long)(int32_t)t->os_tid, 0) != 0) {
+                return false; // target gone — it will never ack
+            }
+        }
     }
     return true;
 #elif defined(_WIN32)
