@@ -1236,6 +1236,12 @@ chalk_module_test = executable('test_chalk_module',
 )
 test('chalk_module', chalk_module_test, suite: 'unit')
 
+chalk_elf_rewrite_test = executable('test_chalk_elf_rewrite',
+    ['test/unit/test_chalk_elf_rewrite.c'],
+    kwargs: test_common_kwargs,
+)
+test('chalk_elf_rewrite', chalk_elf_rewrite_test, suite: 'unit')
+
 # ============================================================================
 # naudit regression tests (consolidated in-tree per WP-008 / D-017).
 #

@@ -35,11 +35,19 @@
 #define N00B_ELF_REWRITE_ERR_UNSUPPORTED_PLAN  (-3611)
 #define N00B_ELF_REWRITE_ERR_APPLY             (-3612)
 #define N00B_ELF_REWRITE_ERR_PARSE_AFTER_APPLY (-3613)
+#define N00B_ELF_REWRITE_ERR_MARK_NOT_FOUND    (-3614)
+#define N00B_ELF_REWRITE_ERR_TRUSTED_NAME      (-3615)
 
 typedef enum {
     N00B_ELF_REWRITE_PLAN_ACCEPTED,
     N00B_ELF_REWRITE_PLAN_REJECTED,
 } n00b_elf_rewrite_plan_outcome_t;
+
+typedef enum {
+    N00B_ELF_REWRITE_OPERATION_METADATA_INSERT,
+    N00B_ELF_REWRITE_OPERATION_CHALK_MARK_DELETE,
+    N00B_ELF_REWRITE_OPERATION_CHALK_MARK_REPLACE,
+} n00b_elf_rewrite_operation_t;
 
 typedef enum {
     N00B_ELF_REWRITE_REJECT_NONE,
@@ -48,6 +56,9 @@ typedef enum {
     N00B_ELF_REWRITE_REJECT_TABLE_PLACEMENT,
     N00B_ELF_REWRITE_REJECT_SECTION_COUNT_PROMOTION,
     N00B_ELF_REWRITE_REJECT_OVERFLOW,
+    N00B_ELF_REWRITE_REJECT_CHALK_MARK_NOT_FOUND,
+    N00B_ELF_REWRITE_REJECT_CHALK_MARK_UNSUPPORTED,
+    N00B_ELF_REWRITE_REJECT_TRUSTED_NAME,
 } n00b_elf_rewrite_rejection_reason_t;
 
 typedef enum {
@@ -86,6 +97,7 @@ typedef enum {
     N00B_ELF_REWRITE_PATCH_SECTION_HEADER_TABLE,
     N00B_ELF_REWRITE_PATCH_TABLE_TAIL,
     N00B_ELF_REWRITE_PATCH_APPENDED_TABLES,
+    N00B_ELF_REWRITE_PATCH_STALE_PAYLOAD,
 } n00b_elf_rewrite_patch_kind_t;
 
 typedef struct n00b_elf_rewrite_metadata_request {
@@ -119,6 +131,7 @@ typedef struct n00b_elf_rewrite_patch {
 } n00b_elf_rewrite_patch_t;
 
 typedef struct n00b_elf_rewrite_plan {
+    n00b_elf_rewrite_operation_t                 operation;
     n00b_elf_rewrite_plan_outcome_t             outcome;
     n00b_elf_rewrite_rejection_reason_t         rejection_reason;
     n00b_elf_rewrite_target_profile_t           target_profile;
@@ -133,6 +146,10 @@ typedef struct n00b_elf_rewrite_plan {
     uint64_t                                    file_size;
     uint64_t                                    original_section_count;
     uint64_t                                    new_section_count;
+    uint64_t                                    removed_section_index;
+    uint64_t                                    removed_payload_offset;
+    uint64_t                                    removed_payload_end;
+    uint16_t                                    new_shstrndx;
     uint64_t                                    payload_offset;
     uint64_t                                    payload_end;
 } n00b_elf_rewrite_plan_t;
@@ -164,12 +181,86 @@ n00b_elf_rewrite_plan_metadata_insert(
 };
 
 /**
+ * @brief Plan trusted insertion of Chalk's exact `.chalk.mark` section.
+ *
+ * This is the narrow reserved-name affordance needed by Chalk. It admits only
+ * an exact `.chalk.mark` request for non-loadable metadata insertion; any other
+ * requested name is rejected. The ordinary
+ * @ref n00b_elf_rewrite_plan_metadata_insert path continues to reject
+ * `.chalk.mark`, arbitrary `.chalk.*`, `.0c001.*`, and targets with existing
+ * reserved metadata sections.
+ *
+ * @param bin Parsed ELF object from @ref n00b_elf_parse.
+ * @param request Metadata-section insertion request whose name is exactly
+ *                `.chalk.mark`.
+ * @kw allocator Defaults to `nullptr`, meaning the current runtime allocator.
+ *
+ * @return Ok(plan) for accepted or rejected plans, or Err(N00B_ELF_REWRITE_ERR_*).
+ *
+ * @pre `bin`, `request`, `request->section_name`, and `request->payload` are non-null.
+ * @pre `request->payload->byte_len` is nonzero.
+ * @post `bin`, its stream, and its parsed section and segment arrays are not modified.
+ */
+extern n00b_result_t(n00b_elf_rewrite_plan_t *)
+n00b_elf_rewrite_plan_chalk_mark_insert(
+    n00b_elf_binary_t                   *bin,
+    n00b_elf_rewrite_metadata_request_t *request) _kargs {
+    n00b_allocator_t *allocator = nullptr;
+};
+
+/**
+ * @brief Plan surgical deletion of one live non-loadable `.chalk.mark`.
+ *
+ * Accepted plans append replacement section-name and section-header tables,
+ * update the ELF header to point at them, and mark the old mark payload range
+ * as `N00B_ELF_REWRITE_PATCH_STALE_PAYLOAD` so application can zero it.
+ *
+ * @param bin Parsed ELF object from @ref n00b_elf_parse.
+ * @kw allocator Defaults to `nullptr`, meaning the current runtime allocator.
+ *
+ * @return Ok(plan) for accepted or rejected plans, or Err(N00B_ELF_REWRITE_ERR_*).
+ *
+ * @pre `bin`, `bin->stream`, and `bin->stream->buf` are non-null.
+ * @post `bin`, its stream, and its parsed section and segment arrays are not modified.
+ */
+extern n00b_result_t(n00b_elf_rewrite_plan_t *)
+n00b_elf_rewrite_plan_chalk_mark_delete(
+    n00b_elf_binary_t *bin) _kargs {
+    n00b_allocator_t *allocator = nullptr;
+};
+
+/**
+ * @brief Plan surgical replacement of one live non-loadable `.chalk.mark`.
+ *
+ * Replacement removes the old live section table entry, excludes the old
+ * payload bytes by zeroing their range at apply time, and emits exactly one
+ * live `.chalk.mark` entry for the supplied payload.
+ *
+ * @param bin Parsed ELF object from @ref n00b_elf_parse.
+ * @param request Replacement request whose section name is exactly `.chalk.mark`.
+ * @kw allocator Defaults to `nullptr`, meaning the current runtime allocator.
+ *
+ * @return Ok(plan) for accepted or rejected plans, or Err(N00B_ELF_REWRITE_ERR_*).
+ *
+ * @pre `bin`, `request`, `request->section_name`, and `request->payload` are non-null.
+ * @pre `request->payload->byte_len` is nonzero.
+ * @post `bin`, its stream, and its parsed section and segment arrays are not modified.
+ */
+extern n00b_result_t(n00b_elf_rewrite_plan_t *)
+n00b_elf_rewrite_plan_chalk_mark_replace(
+    n00b_elf_binary_t                   *bin,
+    n00b_elf_rewrite_metadata_request_t *request) _kargs {
+    n00b_allocator_t *allocator = nullptr;
+};
+
+/**
  * @brief Apply an accepted metadata-insert rewrite plan to bytes.
  *
- * The plan must come from @ref n00b_elf_rewrite_plan_metadata_insert for the
- * same parsed binary. Accepted plans borrow the metadata name, payload, type,
- * flags, and alignment from the original request so this plan-first API does
- * not need the request again.
+ * The plan must come from @ref n00b_elf_rewrite_plan_metadata_insert or
+ * @ref n00b_elf_rewrite_plan_chalk_mark_insert for the same parsed binary.
+ * Accepted plans borrow the metadata name, payload, type, flags, and alignment
+ * from the original request so this plan-first API does not need the request
+ * again.
  *
  * Accepted plans may place metadata payload bytes at EOF, in an admitted
  * zero-padding file gap, or after a preserved overlay when policy permits
@@ -197,6 +288,28 @@ n00b_elf_rewrite_apply_metadata_insert_plan(
 };
 
 /**
+ * @brief Apply an accepted Chalk mark delete or replace plan to bytes.
+ *
+ * @param bin Parsed ELF object whose stream supplies the original bytes.
+ * @param plan Accepted plan from @ref n00b_elf_rewrite_plan_chalk_mark_delete
+ *             or @ref n00b_elf_rewrite_plan_chalk_mark_replace.
+ * @kw allocator Defaults to `nullptr`, meaning the current runtime allocator.
+ *
+ * @return Ok(buffer) containing the rewritten ELF bytes, or
+ *         Err(N00B_ELF_REWRITE_ERR_*).
+ *
+ * @pre `bin`, `bin->stream`, `bin->stream->buf`, and `plan` are non-null.
+ * @pre `plan->outcome == N00B_ELF_REWRITE_PLAN_ACCEPTED`.
+ * @post The returned buffer reparses successfully with @ref n00b_elf_parse.
+ */
+extern n00b_result_t(n00b_buffer_t *)
+n00b_elf_rewrite_apply_chalk_mark_plan(
+    n00b_elf_binary_t       *bin,
+    n00b_elf_rewrite_plan_t *plan) _kargs {
+    n00b_allocator_t *allocator = nullptr;
+};
+
+/**
  * @brief Convenience wrapper that plans and applies a metadata insertion.
  *
  * This is a request-level shortcut over
@@ -216,6 +329,38 @@ n00b_elf_rewrite_apply_metadata_insert_plan(
  */
 extern n00b_result_t(n00b_buffer_t *)
 n00b_elf_rewrite_apply_metadata_insert(
+    n00b_elf_binary_t                   *bin,
+    n00b_elf_rewrite_metadata_request_t *request) _kargs {
+    n00b_allocator_t *allocator = nullptr;
+};
+
+/**
+ * @brief Convenience wrapper that plans and applies `.chalk.mark` deletion.
+ *
+ * @param bin Parsed ELF object from @ref n00b_elf_parse.
+ * @kw allocator Defaults to `nullptr`, meaning the current runtime allocator.
+ *
+ * @return Ok(buffer), Err(N00B_ELF_REWRITE_ERR_*), or
+ *         Err(N00B_ELF_REWRITE_ERR_PLAN_REJECTED) when planning rejects.
+ */
+extern n00b_result_t(n00b_buffer_t *)
+n00b_elf_rewrite_apply_chalk_mark_delete(
+    n00b_elf_binary_t *bin) _kargs {
+    n00b_allocator_t *allocator = nullptr;
+};
+
+/**
+ * @brief Convenience wrapper that plans and applies `.chalk.mark` replacement.
+ *
+ * @param bin Parsed ELF object from @ref n00b_elf_parse.
+ * @param request Replacement request whose section name is exactly `.chalk.mark`.
+ * @kw allocator Defaults to `nullptr`, meaning the current runtime allocator.
+ *
+ * @return Ok(buffer), Err(N00B_ELF_REWRITE_ERR_*), or
+ *         Err(N00B_ELF_REWRITE_ERR_PLAN_REJECTED) when planning rejects.
+ */
+extern n00b_result_t(n00b_buffer_t *)
+n00b_elf_rewrite_apply_chalk_mark_replace(
     n00b_elf_binary_t                   *bin,
     n00b_elf_rewrite_metadata_request_t *request) _kargs {
     n00b_allocator_t *allocator = nullptr;

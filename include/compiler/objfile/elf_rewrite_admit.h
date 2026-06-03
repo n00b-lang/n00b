@@ -147,6 +147,32 @@ n00b_elf_rewrite_admit_metadata_insert(
 };
 
 /**
+ * @brief Admit trusted Chalk-owned `.chalk.mark` metadata insertion.
+ *
+ * This is the reserved-name exception used by the lower-level rewrite layer
+ * for Chalk. It accepts only an exact `.chalk.mark` request and only when the
+ * target has no live reserved metadata section. All ordinary metadata,
+ * placement, overlay, and loader-preservation checks still apply.
+ *
+ * @param bin Parsed ELF object from @ref n00b_elf_parse.
+ * @param request Metadata-section insertion request.
+ * @kw allocator Defaults to `nullptr`, meaning the current runtime allocator.
+ *
+ * @return Ok(result) or Err(N00B_ELF_REWRITE_ADMIT_ERR_*).
+ *
+ * @pre `bin`, `request`, and `request->section_name` are non-null.
+ * @pre `request->payload_size` is nonzero.
+ * @post `bin` and its parsed sections, segments, stream, and overlay pointers
+ *       are not modified.
+ */
+extern n00b_result_t(n00b_elf_rewrite_admit_result_t)
+n00b_elf_rewrite_admit_chalk_mark_insert(
+    n00b_elf_binary_t                         *bin,
+    n00b_elf_rewrite_admit_metadata_request_t *request) _kargs {
+    n00b_allocator_t *allocator = nullptr;
+};
+
+/**
  * @brief Look up a human-readable string for an admission error code.
  *
  * @param err Error code returned by the ELF rewrite admission API.

@@ -3,20 +3,43 @@
 #include <string.h>
 
 #include "compiler/objfile/elf_layout.h"
+#include "text/strings/string_ops.h"
 
 #define N00B_ELF_SHN_LORESERVE 0xff00u
 #define N00B_ELF_PN_XNUM       0xffffu
 #define N00B_ELF64_EHDR_SIZE   64u
 #define N00B_ELF64_PHDR_SIZE   56u
 #define N00B_ELF64_SHDR_SIZE   64u
-#define N00B_ELF_REWRITE_MAX_PATCHES 6u
+#define N00B_ELF_REWRITE_MAX_PATCHES 8u
 
 typedef struct raw_shdr {
     uint32_t name;
     uint32_t type;
+    uint64_t flags;
+    uint64_t addr;
     uint64_t offset;
     uint64_t size;
+    uint32_t link;
+    uint32_t info;
+    uint64_t addralign;
+    uint64_t entsize;
 } raw_shdr_t;
+
+typedef struct chalk_mark_shape {
+    uint64_t target_index;
+    uint32_t target_name_index;
+    uint64_t removed_name_start;
+    uint64_t removed_name_end;
+    uint64_t removed_name_size;
+    uint64_t compact_strtab_size;
+    uint64_t new_strtab_size;
+    uint64_t new_shtab_size;
+    uint32_t replacement_name_index;
+    uint16_t new_shstrndx;
+} chalk_mark_shape_t;
+
+static bool
+section_name_write_size(n00b_string_t *section_name, uint64_t *out);
 
 static bool
 checked_add_u64(uint64_t a, uint64_t b, uint64_t *out)
@@ -160,10 +183,16 @@ read_raw_shdr(n00b_elf_binary_t *bin,
 
     const uint8_t *p = (const uint8_t *)buf->data + off;
     *out = (raw_shdr_t){
-        .name   = raw_u32(p + 0, big),
-        .type   = raw_u32(p + 4, big),
-        .offset = raw_u64(p + 24, big),
-        .size   = raw_u64(p + 32, big),
+        .name      = raw_u32(p + 0, big),
+        .type      = raw_u32(p + 4, big),
+        .flags     = raw_u64(p + 8, big),
+        .addr      = raw_u64(p + 16, big),
+        .offset    = raw_u64(p + 24, big),
+        .size      = raw_u64(p + 32, big),
+        .link      = raw_u32(p + 40, big),
+        .info      = raw_u32(p + 44, big),
+        .addralign = raw_u64(p + 48, big),
+        .entsize   = raw_u64(p + 56, big),
     };
     return true;
 }
@@ -197,6 +226,14 @@ zero_padding_gap_covers(n00b_elf_layout_t *layout, uint64_t start, uint64_t end)
     return gap.kind == N00B_ELF_LAYOUT_GAP_ZERO_PADDING
         && gap.start == start
         && gap.end >= end;
+}
+
+static n00b_err_t
+layout_err_to_rewrite_err(n00b_err_t err)
+{
+    return err == N00B_ELF_LAYOUT_ERR_OVERFLOW
+        ? N00B_ELF_REWRITE_ERR_OVERFLOW
+        : N00B_ELF_REWRITE_ERR_ADMISSION;
 }
 
 static bool
@@ -280,6 +317,253 @@ new_zero_buffer(uint64_t size, n00b_allocator_t *allocator)
     memset(buf->data, 0, (size_t)size);
     buf->byte_len = (size_t)size;
     return buf;
+}
+
+static bool
+section_name_is_chalk_mark(n00b_string_t *name)
+{
+    return name != nullptr && n00b_unicode_str_eq(name, r".chalk.mark");
+}
+
+static bool
+section_is_metadata_chalk_mark(n00b_elf_section_t *sec)
+{
+    if (sec == nullptr || !section_name_is_chalk_mark(sec->name)
+        || sec->flags != 0) {
+        return false;
+    }
+
+    return sec->type == SHT_PROGBITS || sec->type == SHT_NOTE;
+}
+
+static bool
+find_single_chalk_mark(n00b_elf_binary_t *bin, uint64_t *index_out)
+{
+    bool     found = false;
+    uint64_t found_index = 0;
+
+    for (uint32_t i = 0; i < bin->num_sections; i++) {
+        if (!section_name_is_chalk_mark(bin->sections[i].name)) {
+            continue;
+        }
+
+        if (found) {
+            return false;
+        }
+
+        found = true;
+        found_index = i;
+    }
+
+    if (!found) {
+        return false;
+    }
+
+    *index_out = found_index;
+    return true;
+}
+
+static bool
+find_nul_in_strtab(n00b_elf_binary_t                 *bin,
+                   n00b_elf_rewrite_target_profile_t *profile,
+                   uint64_t                           start,
+                   uint64_t                          *end_out)
+{
+    if (start >= profile->shstrtab_complete_size) {
+        return false;
+    }
+
+    uint64_t raw_end;
+    if (!checked_add_u64(profile->shstrtab_offset,
+                         profile->shstrtab_reported_size,
+                         &raw_end)
+        || raw_end > bin->stream->buf->byte_len) {
+        return false;
+    }
+
+    const uint8_t *bytes =
+        (const uint8_t *)bin->stream->buf->data + profile->shstrtab_offset;
+    for (uint64_t i = start; i < profile->shstrtab_reported_size; i++) {
+        if (bytes[i] == 0) {
+            *end_out = i;
+            return true;
+        }
+    }
+
+    if (profile->shstrtab_requires_terminator
+        && profile->shstrtab_reported_size == profile->shstrtab_complete_size - 1
+        && start <= profile->shstrtab_reported_size) {
+        *end_out = profile->shstrtab_reported_size;
+        return true;
+    }
+
+    return false;
+}
+
+static bool
+name_index_survives_removed_span(uint32_t index, chalk_mark_shape_t *shape)
+{
+    if ((uint64_t)index < shape->removed_name_start) {
+        return true;
+    }
+
+    return (uint64_t)index >= shape->removed_name_end;
+}
+
+static n00b_result_t(bool)
+chalk_mark_payload_range_is_exclusive(n00b_elf_binary_t  *bin,
+                                      n00b_elf_section_t *old_mark,
+                                      chalk_mark_shape_t *shape,
+                                      uint64_t            old_payload_end,
+                                      n00b_allocator_t   *allocator)
+{
+    auto layout_result = n00b_elf_layout_build(bin, .allocator = allocator);
+    if (n00b_result_is_err(layout_result)) {
+        return n00b_result_err(bool,
+                               layout_err_to_rewrite_err(
+                                   n00b_result_get_err(layout_result)));
+    }
+
+    n00b_elf_layout_t *layout = n00b_result_get(layout_result);
+    auto collision_result =
+        n00b_elf_layout_file_collision(layout,
+                                       old_mark->offset,
+                                       old_payload_end,
+                                       .allocator = allocator);
+    if (n00b_result_is_err(collision_result)) {
+        return n00b_result_err(bool,
+                               layout_err_to_rewrite_err(
+                                   n00b_result_get_err(collision_result)));
+    }
+
+    n00b_elf_layout_collision_t collision =
+        n00b_result_get(collision_result);
+    bool saw_mark_section = false;
+
+    for (uint64_t i = 0; i < collision.interval_count; i++) {
+        n00b_elf_layout_interval_t *interval = &collision.intervals[i];
+        bool same_section = interval->index == shape->target_index
+                         && interval->start == old_mark->offset
+                         && interval->end == old_payload_end;
+
+        if (same_section
+            && interval->kind == N00B_ELF_LAYOUT_INTERVAL_SECTION_FILE) {
+            saw_mark_section = true;
+            continue;
+        }
+
+        if (same_section
+            && old_mark->type == SHT_NOTE
+            && interval->kind == N00B_ELF_LAYOUT_INTERVAL_NOTE_FILE) {
+            continue;
+        }
+
+        return n00b_result_ok(bool, false);
+    }
+
+    return n00b_result_ok(bool, saw_mark_section);
+}
+
+static uint32_t
+adjusted_name_index(uint32_t index, chalk_mark_shape_t *shape)
+{
+    if ((uint64_t)index < shape->removed_name_end) {
+        return index;
+    }
+
+    return (uint32_t)((uint64_t)index - shape->removed_name_size);
+}
+
+static bool
+compute_chalk_mark_shape(n00b_elf_binary_t                 *bin,
+                         n00b_elf_rewrite_target_profile_t *profile,
+                         bool                               replacement,
+                         chalk_mark_shape_t                *shape)
+{
+    uint64_t target_index;
+    uint64_t name_end;
+    uint64_t name_bytes;
+
+    if (bin == nullptr || profile == nullptr || shape == nullptr
+        || bin->stream == nullptr || bin->stream->buf == nullptr
+        || !find_single_chalk_mark(bin, &target_index)
+        || target_index == bin->header.shstrndx
+        || target_index >= profile->section_count
+        || !section_is_metadata_chalk_mark(&bin->sections[target_index])) {
+        return false;
+    }
+
+    raw_shdr_t target_shdr;
+    if (!read_raw_shdr(bin, target_index, &target_shdr)
+        || !find_nul_in_strtab(bin, profile, target_shdr.name, &name_end)
+        || !checked_add_u64(name_end, 1, &name_end)
+        || name_end <= target_shdr.name) {
+        return false;
+    }
+
+    if (!section_name_write_size(r".chalk.mark", &name_bytes)) {
+        return false;
+    }
+
+    *shape = (chalk_mark_shape_t){
+        .target_index       = target_index,
+        .target_name_index  = target_shdr.name,
+        .removed_name_start = target_shdr.name,
+        .removed_name_end   = name_end,
+        .removed_name_size  = name_end - target_shdr.name,
+    };
+
+    if (profile->shstrtab_complete_size < shape->removed_name_size) {
+        return false;
+    }
+
+    shape->compact_strtab_size =
+        profile->shstrtab_complete_size - shape->removed_name_size;
+    shape->new_strtab_size = shape->compact_strtab_size;
+    if (replacement) {
+        if (!checked_add_u64(shape->compact_strtab_size,
+                             name_bytes,
+                             &shape->new_strtab_size)
+            || shape->compact_strtab_size > UINT32_MAX) {
+            return false;
+        }
+        shape->replacement_name_index = (uint32_t)shape->compact_strtab_size;
+    }
+
+    uint64_t new_section_count =
+        profile->section_count - 1 + (replacement ? 1u : 0u);
+    if (new_section_count > UINT16_MAX
+        || !checked_mul_u64(new_section_count,
+                            N00B_ELF64_SHDR_SIZE,
+                            &shape->new_shtab_size)) {
+        return false;
+    }
+
+    uint64_t new_shstrndx = bin->header.shstrndx;
+    if (target_index < bin->header.shstrndx) {
+        new_shstrndx--;
+    }
+    if (new_shstrndx > UINT16_MAX) {
+        return false;
+    }
+    shape->new_shstrndx = (uint16_t)new_shstrndx;
+
+    for (uint64_t i = 0; i < profile->section_count; i++) {
+        raw_shdr_t shdr;
+        if (!read_raw_shdr(bin, i, &shdr)) {
+            return false;
+        }
+
+        if (i == target_index) {
+            continue;
+        }
+
+        if (!name_index_survives_removed_span(shdr.name, shape)) {
+            return false;
+        }
+    }
+
+    return true;
 }
 
 n00b_result_t(n00b_elf_rewrite_target_profile_t)
@@ -484,6 +768,7 @@ rejected_plan(n00b_allocator_t                         *allocator,
 {
     n00b_elf_rewrite_plan_t *plan = new_plan(allocator);
 
+    plan->operation              = N00B_ELF_REWRITE_OPERATION_METADATA_INSERT;
     plan->outcome                = N00B_ELF_REWRITE_PLAN_REJECTED;
     plan->rejection_reason       = reason;
     plan->target_profile         = profile;
@@ -491,6 +776,7 @@ rejected_plan(n00b_allocator_t                         *allocator,
     plan->file_size              = profile.file_size;
     plan->original_section_count = profile.section_count;
     plan->new_section_count      = profile.section_count;
+    plan->new_shstrndx           = 0;
     if (admission != nullptr) {
         plan->admission = *admission;
         plan->file_size = admission->file_size;
@@ -1044,6 +1330,7 @@ accepted_plan(n00b_allocator_t                         *allocator,
     patches.len = count;
 
     n00b_elf_rewrite_plan_t *plan = new_plan(allocator);
+    plan->operation              = N00B_ELF_REWRITE_OPERATION_METADATA_INSERT;
     plan->outcome                = N00B_ELF_REWRITE_PLAN_ACCEPTED;
     plan->rejection_reason       = N00B_ELF_REWRITE_REJECT_NONE;
     plan->target_profile         = profile;
@@ -1059,19 +1346,19 @@ accepted_plan(n00b_allocator_t                         *allocator,
     plan->file_size              = admission.file_size;
     plan->original_section_count = profile.section_count;
     plan->new_section_count      = profile.section_count + 1;
+    plan->new_shstrndx           = bin->header.shstrndx;
     plan->payload_offset         = placement.file_offset;
     plan->payload_end            = placement.file_end;
 
     return n00b_result_ok(n00b_elf_rewrite_plan_t *, plan);
 }
 
-n00b_result_t(n00b_elf_rewrite_plan_t *)
-n00b_elf_rewrite_plan_metadata_insert(
+static n00b_result_t(n00b_elf_rewrite_plan_t *)
+plan_metadata_insert_impl(
     n00b_elf_binary_t                   *bin,
-    n00b_elf_rewrite_metadata_request_t *request) _kargs
-{
-    n00b_allocator_t *allocator = nullptr;
-}
+    n00b_elf_rewrite_metadata_request_t *request,
+    bool                                 trusted_chalk_mark,
+    n00b_allocator_t                    *allocator)
 {
     if (bin == nullptr) {
         return n00b_result_err(n00b_elf_rewrite_plan_t *,
@@ -1130,10 +1417,13 @@ n00b_elf_rewrite_plan_metadata_insert(
         .policy                = request->policy,
     };
 
-    auto admission_result =
-        n00b_elf_rewrite_admit_metadata_insert(bin,
-                                               &admission_request,
-                                               .allocator = allocator);
+    auto admission_result = trusted_chalk_mark
+        ? n00b_elf_rewrite_admit_chalk_mark_insert(bin,
+                                                   &admission_request,
+                                                   .allocator = allocator)
+        : n00b_elf_rewrite_admit_metadata_insert(bin,
+                                                 &admission_request,
+                                                 .allocator = allocator);
     if (n00b_result_is_err(admission_result)) {
         return n00b_result_err(n00b_elf_rewrite_plan_t *,
                                N00B_ELF_REWRITE_ERR_ADMISSION);
@@ -1159,6 +1449,273 @@ n00b_elf_rewrite_plan_metadata_insert(
                          profile,
                          admission,
                          n00b_option_get(admission.placement));
+}
+
+n00b_result_t(n00b_elf_rewrite_plan_t *)
+n00b_elf_rewrite_plan_metadata_insert(
+    n00b_elf_binary_t                   *bin,
+    n00b_elf_rewrite_metadata_request_t *request) _kargs
+{
+    n00b_allocator_t *allocator = nullptr;
+}
+{
+    return plan_metadata_insert_impl(bin, request, false, allocator);
+}
+
+n00b_result_t(n00b_elf_rewrite_plan_t *)
+n00b_elf_rewrite_plan_chalk_mark_insert(
+    n00b_elf_binary_t                   *bin,
+    n00b_elf_rewrite_metadata_request_t *request) _kargs
+{
+    n00b_allocator_t *allocator = nullptr;
+}
+{
+    return plan_metadata_insert_impl(bin, request, true, allocator);
+}
+
+static bool
+request_is_nonloadable_metadata(n00b_elf_rewrite_metadata_request_t *request)
+{
+    if (request->section_flags != 0) {
+        return false;
+    }
+
+    return request->section_type == SHT_PROGBITS
+        || request->section_type == SHT_NOTE;
+}
+
+static n00b_result_t(n00b_elf_rewrite_plan_t *)
+plan_chalk_mark_delete_or_replace(
+    n00b_elf_binary_t                   *bin,
+    n00b_elf_rewrite_metadata_request_t *request,
+    bool                                 replacement,
+    n00b_allocator_t                    *allocator)
+{
+    if (bin == nullptr || bin->stream == nullptr || bin->stream->buf == nullptr) {
+        return n00b_result_err(n00b_elf_rewrite_plan_t *,
+                               N00B_ELF_REWRITE_ERR_NULL_BINARY);
+    }
+
+    if (replacement) {
+        if (request == nullptr) {
+            return n00b_result_err(n00b_elf_rewrite_plan_t *,
+                                   N00B_ELF_REWRITE_ERR_NULL_REQUEST);
+        }
+
+        if (request->section_name == nullptr) {
+            return n00b_result_err(n00b_elf_rewrite_plan_t *,
+                                   N00B_ELF_REWRITE_ERR_NULL_SECTION_NAME);
+        }
+
+        if (request->payload == nullptr) {
+            return n00b_result_err(n00b_elf_rewrite_plan_t *,
+                                   N00B_ELF_REWRITE_ERR_NULL_PAYLOAD);
+        }
+
+        if (request->payload->byte_len == 0) {
+            return n00b_result_err(n00b_elf_rewrite_plan_t *,
+                                   N00B_ELF_REWRITE_ERR_ZERO_PAYLOAD_SIZE);
+        }
+    }
+
+    auto profile_result = n00b_elf_rewrite_target_profile(bin);
+    if (n00b_result_is_err(profile_result)) {
+        return n00b_result_err(n00b_elf_rewrite_plan_t *,
+                               n00b_result_get_err(profile_result));
+    }
+
+    n00b_elf_rewrite_target_profile_t profile =
+        n00b_result_get(profile_result);
+    if (profile.reason != N00B_ELF_REWRITE_PROFILE_OK) {
+        return rejected_plan(allocator,
+                             N00B_ELF_REWRITE_REJECT_TARGET_PROFILE,
+                             profile,
+                             nullptr);
+    }
+
+    if (replacement
+        && (!section_name_is_chalk_mark(request->section_name)
+            || !request_is_nonloadable_metadata(request))) {
+        return rejected_plan(allocator,
+                             N00B_ELF_REWRITE_REJECT_TRUSTED_NAME,
+                             profile,
+                             nullptr);
+    }
+
+    chalk_mark_shape_t shape = {};
+    if (!compute_chalk_mark_shape(bin, &profile, replacement, &shape)) {
+        return rejected_plan(allocator,
+                             N00B_ELF_REWRITE_REJECT_CHALK_MARK_NOT_FOUND,
+                             profile,
+                             nullptr);
+    }
+
+    n00b_elf_section_t *old_mark = &bin->sections[shape.target_index];
+    uint64_t old_payload_end;
+    if (!checked_add_u64(old_mark->offset, old_mark->size, &old_payload_end)
+        || old_payload_end > profile.file_size
+        || old_mark->size > (uint64_t)SIZE_MAX) {
+        return rejected_plan(allocator,
+                             N00B_ELF_REWRITE_REJECT_CHALK_MARK_UNSUPPORTED,
+                             profile,
+                             nullptr);
+    }
+
+    auto exclusive_result =
+        chalk_mark_payload_range_is_exclusive(bin,
+                                              old_mark,
+                                              &shape,
+                                              old_payload_end,
+                                              allocator);
+    if (n00b_result_is_err(exclusive_result)) {
+        return n00b_result_err(n00b_elf_rewrite_plan_t *,
+                               n00b_result_get_err(exclusive_result));
+    }
+    if (!n00b_result_get(exclusive_result)) {
+        return rejected_plan(allocator,
+                             N00B_ELF_REWRITE_REJECT_CHALK_MARK_UNSUPPORTED,
+                             profile,
+                             nullptr);
+    }
+
+    uint64_t new_payload_offset = 0;
+    uint64_t new_payload_end    = 0;
+    uint64_t tables_start       = profile.file_size;
+    if (replacement) {
+        new_payload_offset = profile.file_size;
+        if (!checked_add_u64(new_payload_offset,
+                             request->payload->byte_len,
+                             &new_payload_end)) {
+            return n00b_result_err(n00b_elf_rewrite_plan_t *,
+                                   N00B_ELF_REWRITE_ERR_OVERFLOW);
+        }
+        tables_start = new_payload_end;
+    }
+
+    uint64_t tables_size;
+    uint64_t tables_end;
+    if (!checked_add_u64(shape.new_strtab_size,
+                         shape.new_shtab_size,
+                         &tables_size)
+        || !checked_add_u64(tables_start, tables_size, &tables_end)) {
+        return n00b_result_err(n00b_elf_rewrite_plan_t *,
+                               N00B_ELF_REWRITE_ERR_OVERFLOW);
+    }
+
+    n00b_elf_rewrite_patch_t local[N00B_ELF_REWRITE_MAX_PATCHES] = {};
+    uint64_t count = 0;
+    bool patch_ok =
+        append_patch(local,
+                     N00B_ELF_REWRITE_MAX_PATCHES,
+                     &count,
+                     (n00b_elf_rewrite_patch_t){
+                         .kind                 = N00B_ELF_REWRITE_PATCH_ELF_HEADER,
+                         .file_offset          = 0,
+                         .file_end             = N00B_ELF64_EHDR_SIZE,
+                         .original_file_offset = 0,
+                         .original_file_end    = N00B_ELF64_EHDR_SIZE,
+                     })
+        && append_patch(local,
+                        N00B_ELF_REWRITE_MAX_PATCHES,
+                        &count,
+                        (n00b_elf_rewrite_patch_t){
+                            .kind                 = N00B_ELF_REWRITE_PATCH_STALE_PAYLOAD,
+                            .file_offset          = old_mark->offset,
+                            .file_end             = old_payload_end,
+                            .original_file_offset = old_mark->offset,
+                            .original_file_end    = old_payload_end,
+                        });
+
+    if (replacement) {
+        patch_ok =
+            patch_ok
+            && append_patch(local,
+                            N00B_ELF_REWRITE_MAX_PATCHES,
+                            &count,
+                            (n00b_elf_rewrite_patch_t){
+                                .kind                 = N00B_ELF_REWRITE_PATCH_PAYLOAD,
+                                .file_offset          = new_payload_offset,
+                                .file_end             = new_payload_end,
+                                .original_file_offset = new_payload_offset,
+                                .original_file_end    = new_payload_offset,
+                            });
+    }
+
+    patch_ok =
+        patch_ok
+        && append_patch(local,
+                        N00B_ELF_REWRITE_MAX_PATCHES,
+                        &count,
+                        (n00b_elf_rewrite_patch_t){
+                            .kind                 = N00B_ELF_REWRITE_PATCH_APPENDED_TABLES,
+                            .file_offset          = tables_start,
+                            .file_end             = tables_end,
+                            .original_file_offset = tables_start,
+                            .original_file_end    = tables_start,
+                        });
+
+    if (!patch_ok) {
+        return rejected_plan(allocator,
+                             N00B_ELF_REWRITE_REJECT_CHALK_MARK_UNSUPPORTED,
+                             profile,
+                             nullptr);
+    }
+
+    n00b_array_t(n00b_elf_rewrite_patch_t) patches =
+        n00b_array_new(n00b_elf_rewrite_patch_t,
+                       count,
+                       .allocator = allocator);
+    memcpy(patches.data, local, count * sizeof(n00b_elf_rewrite_patch_t));
+    patches.len = count;
+
+    n00b_elf_rewrite_plan_t *plan = new_plan(allocator);
+    plan->operation = replacement
+        ? N00B_ELF_REWRITE_OPERATION_CHALK_MARK_REPLACE
+        : N00B_ELF_REWRITE_OPERATION_CHALK_MARK_DELETE;
+    plan->outcome                = N00B_ELF_REWRITE_PLAN_ACCEPTED;
+    plan->rejection_reason       = N00B_ELF_REWRITE_REJECT_NONE;
+    plan->target_profile         = profile;
+    plan->table_strategy         = N00B_ELF_REWRITE_TABLE_STRATEGY_EOF_REPLACEMENT;
+    plan->patches                = patches;
+    plan->section_name           = r".chalk.mark";
+    plan->payload                = replacement ? request->payload : nullptr;
+    plan->section_alignment      =
+        replacement ? effective_section_alignment(request->file_alignment) : 1;
+    plan->section_type           = replacement ? request->section_type : 0;
+    plan->section_flags          = replacement ? request->section_flags : 0;
+    plan->file_size              = profile.file_size;
+    plan->original_section_count = profile.section_count;
+    plan->new_section_count      = profile.section_count - 1
+                                 + (replacement ? 1u : 0u);
+    plan->removed_section_index  = shape.target_index;
+    plan->removed_payload_offset = old_mark->offset;
+    plan->removed_payload_end    = old_payload_end;
+    plan->new_shstrndx           = shape.new_shstrndx;
+    plan->payload_offset         = new_payload_offset;
+    plan->payload_end            = new_payload_end;
+
+    return n00b_result_ok(n00b_elf_rewrite_plan_t *, plan);
+}
+
+n00b_result_t(n00b_elf_rewrite_plan_t *)
+n00b_elf_rewrite_plan_chalk_mark_delete(
+    n00b_elf_binary_t *bin) _kargs
+{
+    n00b_allocator_t *allocator = nullptr;
+}
+{
+    return plan_chalk_mark_delete_or_replace(bin, nullptr, false, allocator);
+}
+
+n00b_result_t(n00b_elf_rewrite_plan_t *)
+n00b_elf_rewrite_plan_chalk_mark_replace(
+    n00b_elf_binary_t                   *bin,
+    n00b_elf_rewrite_metadata_request_t *request) _kargs
+{
+    n00b_allocator_t *allocator = nullptr;
+}
+{
+    return plan_chalk_mark_delete_or_replace(bin, request, true, allocator);
 }
 
 static n00b_elf_rewrite_patch_t *
@@ -1305,6 +1862,136 @@ build_rewrite_shtab(n00b_elf_binary_t       *bin,
     return shtab;
 }
 
+static void
+write_raw_shdr(uint8_t *p, raw_shdr_t *shdr, bool big)
+{
+    write_u32(p + 0, shdr->name, big);
+    write_u32(p + 4, shdr->type, big);
+    write_u64(p + 8, shdr->flags, big);
+    write_u64(p + 16, shdr->addr, big);
+    write_u64(p + 24, shdr->offset, big);
+    write_u64(p + 32, shdr->size, big);
+    write_u32(p + 40, shdr->link, big);
+    write_u32(p + 44, shdr->info, big);
+    write_u64(p + 48, shdr->addralign, big);
+    write_u64(p + 56, shdr->entsize, big);
+}
+
+static n00b_buffer_t *
+build_chalk_mark_shstrtab(n00b_elf_binary_t       *bin,
+                          n00b_elf_rewrite_plan_t *plan,
+                          chalk_mark_shape_t      *shape,
+                          n00b_allocator_t        *allocator)
+{
+    n00b_buffer_t *old_strtab =
+        new_zero_buffer(plan->target_profile.shstrtab_complete_size,
+                        allocator);
+    n00b_buffer_t *new_strtab =
+        new_zero_buffer(shape->new_strtab_size, allocator);
+
+    if (old_strtab == nullptr || new_strtab == nullptr) {
+        return nullptr;
+    }
+
+    uint64_t raw_end;
+    if (!checked_add_u64(plan->target_profile.shstrtab_offset,
+                         plan->target_profile.shstrtab_reported_size,
+                         &raw_end)
+        || raw_end > bin->stream->buf->byte_len) {
+        return nullptr;
+    }
+
+    memcpy(old_strtab->data,
+           bin->stream->buf->data + plan->target_profile.shstrtab_offset,
+           (size_t)plan->target_profile.shstrtab_reported_size);
+
+    if (plan->target_profile.shstrtab_requires_terminator) {
+        old_strtab->data[plan->target_profile.shstrtab_reported_size] = '\0';
+    }
+
+    memcpy(new_strtab->data,
+           old_strtab->data,
+           (size_t)shape->removed_name_start);
+    memcpy(new_strtab->data + shape->removed_name_start,
+           old_strtab->data + shape->removed_name_end,
+           (size_t)(plan->target_profile.shstrtab_complete_size
+                    - shape->removed_name_end));
+
+    if (plan->operation == N00B_ELF_REWRITE_OPERATION_CHALK_MARK_REPLACE) {
+        memcpy(new_strtab->data + shape->replacement_name_index,
+               plan->section_name->data,
+               plan->section_name->u8_bytes);
+        new_strtab->data[shape->replacement_name_index
+                         + plan->section_name->u8_bytes] = '\0';
+    }
+
+    return new_strtab;
+}
+
+static n00b_buffer_t *
+build_chalk_mark_shtab(n00b_elf_binary_t       *bin,
+                       n00b_elf_rewrite_plan_t *plan,
+                       chalk_mark_shape_t      *shape,
+                       uint64_t                 shstrtab_offset,
+                       uint64_t                 shstrtab_size,
+                       n00b_allocator_t        *allocator)
+{
+    n00b_buffer_t *shtab = new_zero_buffer(shape->new_shtab_size, allocator);
+    if (shtab == nullptr) {
+        return nullptr;
+    }
+
+    bool     big = is_big_endian(bin);
+    uint64_t out_index = 0;
+    for (uint64_t i = 0; i < plan->original_section_count; i++) {
+        if (i == shape->target_index) {
+            continue;
+        }
+
+        raw_shdr_t shdr;
+        if (!read_raw_shdr(bin, i, &shdr)
+            || !name_index_survives_removed_span(shdr.name, shape)) {
+            return nullptr;
+        }
+
+        shdr.name = adjusted_name_index(shdr.name, shape);
+        if (i == bin->header.shstrndx) {
+            shdr.offset = shstrtab_offset;
+            shdr.size   = shstrtab_size;
+        }
+
+        write_raw_shdr((uint8_t *)shtab->data + out_index * N00B_ELF64_SHDR_SIZE,
+                       &shdr,
+                       big);
+        out_index++;
+    }
+
+    if (plan->operation == N00B_ELF_REWRITE_OPERATION_CHALK_MARK_REPLACE) {
+        raw_shdr_t shdr = {
+            .name      = shape->replacement_name_index,
+            .type      = plan->section_type,
+            .flags     = plan->section_flags,
+            .addr      = 0,
+            .offset    = plan->payload_offset,
+            .size      = plan->payload->byte_len,
+            .link      = 0,
+            .info      = 0,
+            .addralign = effective_section_alignment(plan->section_alignment),
+            .entsize   = 0,
+        };
+        write_raw_shdr((uint8_t *)shtab->data + out_index * N00B_ELF64_SHDR_SIZE,
+                       &shdr,
+                       big);
+        out_index++;
+    }
+
+    if (out_index != plan->new_section_count) {
+        return nullptr;
+    }
+
+    return shtab;
+}
+
 static bool
 plan_output_size(n00b_elf_binary_t       *bin,
                  n00b_elf_rewrite_plan_t *plan,
@@ -1371,7 +2058,7 @@ patch_output_header(n00b_buffer_t           *out,
 {
     if (out->byte_len < N00B_ELF64_EHDR_SIZE
         || plan->new_section_count > UINT16_MAX
-        || bin->header.shstrndx > UINT16_MAX) {
+        || plan->new_shstrndx > UINT16_MAX) {
         return false;
     }
 
@@ -1380,7 +2067,7 @@ patch_output_header(n00b_buffer_t           *out,
 
     write_u64(p + 40, shtab_offset, big);
     write_u16(p + 60, (uint16_t)plan->new_section_count, big);
-    write_u16(p + 62, bin->header.shstrndx, big);
+    write_u16(p + 62, plan->new_shstrndx, big);
     return true;
 }
 
@@ -1532,6 +2219,7 @@ n00b_elf_rewrite_apply_metadata_insert_plan(
         || plan->payload == nullptr
         || plan->patches.data == nullptr
         || plan->patches.len == 0
+        || plan->operation != N00B_ELF_REWRITE_OPERATION_METADATA_INSERT
         || plan->admission.outcome != N00B_ELF_REWRITE_ADMIT_OUTCOME_ACCEPTED
         || !n00b_option_is_set(plan->admission.placement)) {
         return n00b_result_err(n00b_buffer_t *, N00B_ELF_REWRITE_ERR_APPLY);
@@ -1680,6 +2368,154 @@ n00b_elf_rewrite_apply_metadata_insert_plan(
 }
 
 n00b_result_t(n00b_buffer_t *)
+n00b_elf_rewrite_apply_chalk_mark_plan(
+    n00b_elf_binary_t       *bin,
+    n00b_elf_rewrite_plan_t *plan) _kargs
+{
+    n00b_allocator_t *allocator = nullptr;
+}
+{
+    if (bin == nullptr || bin->stream == nullptr || bin->stream->buf == nullptr) {
+        return n00b_result_err(n00b_buffer_t *,
+                               N00B_ELF_REWRITE_ERR_NULL_BINARY);
+    }
+
+    if (plan == nullptr) {
+        return n00b_result_err(n00b_buffer_t *,
+                               N00B_ELF_REWRITE_ERR_NULL_PLAN);
+    }
+
+    if (plan->outcome != N00B_ELF_REWRITE_PLAN_ACCEPTED) {
+        return n00b_result_err(n00b_buffer_t *,
+                               N00B_ELF_REWRITE_ERR_PLAN_REJECTED);
+    }
+
+    bool replacement =
+        plan->operation == N00B_ELF_REWRITE_OPERATION_CHALK_MARK_REPLACE;
+    if (plan->operation != N00B_ELF_REWRITE_OPERATION_CHALK_MARK_DELETE
+        && !replacement) {
+        return n00b_result_err(n00b_buffer_t *,
+                               N00B_ELF_REWRITE_ERR_UNSUPPORTED_PLAN);
+    }
+
+    if (plan->patches.data == nullptr || plan->patches.len == 0
+        || plan->section_name == nullptr
+        || !section_name_is_chalk_mark(plan->section_name)
+        || (replacement && plan->payload == nullptr)) {
+        return n00b_result_err(n00b_buffer_t *, N00B_ELF_REWRITE_ERR_APPLY);
+    }
+
+    chalk_mark_shape_t shape = {};
+    if (!compute_chalk_mark_shape(bin,
+                                  &plan->target_profile,
+                                  replacement,
+                                  &shape)
+        || shape.target_index != plan->removed_section_index
+        || shape.new_shstrndx != plan->new_shstrndx
+        || plan->new_section_count
+               != plan->original_section_count - 1 + (replacement ? 1u : 0u)) {
+        return n00b_result_err(n00b_buffer_t *,
+                               N00B_ELF_REWRITE_ERR_UNSUPPORTED_PLAN);
+    }
+
+    n00b_elf_rewrite_patch_t *header =
+        find_plan_patch(plan, N00B_ELF_REWRITE_PATCH_ELF_HEADER);
+    n00b_elf_rewrite_patch_t *stale =
+        find_plan_patch(plan, N00B_ELF_REWRITE_PATCH_STALE_PAYLOAD);
+    n00b_elf_rewrite_patch_t *tables_patch =
+        find_plan_patch(plan, N00B_ELF_REWRITE_PATCH_APPENDED_TABLES);
+
+    if (header == nullptr || stale == nullptr || tables_patch == nullptr
+        || header->file_offset != 0
+        || header->file_end != N00B_ELF64_EHDR_SIZE
+        || stale->file_offset != plan->removed_payload_offset
+        || stale->file_end != plan->removed_payload_end) {
+        return n00b_result_err(n00b_buffer_t *, N00B_ELF_REWRITE_ERR_APPLY);
+    }
+
+    n00b_elf_rewrite_patch_t *payload =
+        find_plan_patch(plan, N00B_ELF_REWRITE_PATCH_PAYLOAD);
+    if (replacement
+        && (payload == nullptr
+            || payload->file_offset != plan->payload_offset
+            || payload->file_end != plan->payload_end
+            || payload->original_file_offset != payload->file_offset
+            || payload->original_file_end != payload->file_offset)) {
+        return n00b_result_err(n00b_buffer_t *, N00B_ELF_REWRITE_ERR_APPLY);
+    }
+
+    if (!replacement && payload != nullptr) {
+        return n00b_result_err(n00b_buffer_t *, N00B_ELF_REWRITE_ERR_APPLY);
+    }
+
+    uint64_t output_size;
+    if (!plan_output_size(bin, plan, &output_size)) {
+        return n00b_result_err(n00b_buffer_t *, N00B_ELF_REWRITE_ERR_APPLY);
+    }
+
+    n00b_buffer_t *strtab =
+        build_chalk_mark_shstrtab(bin, plan, &shape, allocator);
+    if (strtab == nullptr) {
+        return n00b_result_err(n00b_buffer_t *, N00B_ELF_REWRITE_ERR_APPLY);
+    }
+
+    uint64_t shstrtab_offset = tables_patch->file_offset;
+    uint64_t shtab_offset;
+    if (!checked_add_u64(shstrtab_offset, strtab->byte_len, &shtab_offset)) {
+        return n00b_result_err(n00b_buffer_t *, N00B_ELF_REWRITE_ERR_OVERFLOW);
+    }
+
+    n00b_buffer_t *shtab = build_chalk_mark_shtab(bin,
+                                                  plan,
+                                                  &shape,
+                                                  shstrtab_offset,
+                                                  strtab->byte_len,
+                                                  allocator);
+    n00b_buffer_t *tables = nullptr;
+    if (shtab != nullptr) {
+        tables = combine_replacement_tables(strtab, shtab, allocator);
+    }
+    uint64_t tables_end;
+    if (shtab == nullptr || tables == nullptr
+        || !checked_add_u64(tables_patch->file_offset,
+                            tables->byte_len,
+                            &tables_end)
+        || tables_patch->file_end != tables_end) {
+        return n00b_result_err(n00b_buffer_t *, N00B_ELF_REWRITE_ERR_APPLY);
+    }
+
+    n00b_buffer_t *out = new_zero_buffer(output_size, allocator);
+    if (out == nullptr) {
+        return n00b_result_err(n00b_buffer_t *, N00B_ELF_REWRITE_ERR_OVERFLOW);
+    }
+
+    memcpy(out->data, bin->stream->buf->data, bin->stream->buf->byte_len);
+
+    if (!zero_output_range(out, stale->file_offset, stale->file_end)
+        || (replacement
+            && !write_output_bytes(out,
+                                   payload->file_offset,
+                                   plan->payload->data,
+                                   plan->payload->byte_len))
+        || !patch_output_header(out, bin, plan, shtab_offset)
+        || !write_output_bytes(out,
+                               tables_patch->file_offset,
+                               tables->data,
+                               tables->byte_len)) {
+        return n00b_result_err(n00b_buffer_t *, N00B_ELF_REWRITE_ERR_APPLY);
+    }
+
+    n00b_bstream_t *stream = n00b_bstream_new(out);
+    auto            parsed = n00b_elf_parse(stream);
+    if (n00b_result_is_err(parsed)) {
+        return n00b_result_err(n00b_buffer_t *,
+                               N00B_ELF_REWRITE_ERR_PARSE_AFTER_APPLY);
+    }
+
+    return n00b_result_ok(n00b_buffer_t *, out);
+}
+
+n00b_result_t(n00b_buffer_t *)
 n00b_elf_rewrite_apply_metadata_insert(
     n00b_elf_binary_t                   *bin,
     n00b_elf_rewrite_metadata_request_t *request) _kargs
@@ -1706,6 +2542,59 @@ n00b_elf_rewrite_apply_metadata_insert(
                                                        .allocator = allocator);
 }
 
+n00b_result_t(n00b_buffer_t *)
+n00b_elf_rewrite_apply_chalk_mark_delete(
+    n00b_elf_binary_t *bin) _kargs
+{
+    n00b_allocator_t *allocator = nullptr;
+}
+{
+    auto plan_result = n00b_elf_rewrite_plan_chalk_mark_delete(bin,
+                                                               .allocator = allocator);
+    if (n00b_result_is_err(plan_result)) {
+        return n00b_result_err(n00b_buffer_t *,
+                               n00b_result_get_err(plan_result));
+    }
+
+    n00b_elf_rewrite_plan_t *plan = n00b_result_get(plan_result);
+    if (plan->outcome != N00B_ELF_REWRITE_PLAN_ACCEPTED) {
+        return n00b_result_err(n00b_buffer_t *,
+                               N00B_ELF_REWRITE_ERR_PLAN_REJECTED);
+    }
+
+    return n00b_elf_rewrite_apply_chalk_mark_plan(bin,
+                                                  plan,
+                                                  .allocator = allocator);
+}
+
+n00b_result_t(n00b_buffer_t *)
+n00b_elf_rewrite_apply_chalk_mark_replace(
+    n00b_elf_binary_t                   *bin,
+    n00b_elf_rewrite_metadata_request_t *request) _kargs
+{
+    n00b_allocator_t *allocator = nullptr;
+}
+{
+    auto plan_result = n00b_elf_rewrite_plan_chalk_mark_replace(
+        bin,
+        request,
+        .allocator = allocator);
+    if (n00b_result_is_err(plan_result)) {
+        return n00b_result_err(n00b_buffer_t *,
+                               n00b_result_get_err(plan_result));
+    }
+
+    n00b_elf_rewrite_plan_t *plan = n00b_result_get(plan_result);
+    if (plan->outcome != N00B_ELF_REWRITE_PLAN_ACCEPTED) {
+        return n00b_result_err(n00b_buffer_t *,
+                               N00B_ELF_REWRITE_ERR_PLAN_REJECTED);
+    }
+
+    return n00b_elf_rewrite_apply_chalk_mark_plan(bin,
+                                                  plan,
+                                                  .allocator = allocator);
+}
+
 n00b_string_t *
 n00b_elf_rewrite_err_str(n00b_err_t err)
 {
@@ -1724,6 +2613,8 @@ n00b_elf_rewrite_err_str(n00b_err_t err)
     case N00B_ELF_REWRITE_ERR_UNSUPPORTED_PLAN:       return r"ELF rewrite: unsupported plan";
     case N00B_ELF_REWRITE_ERR_APPLY:                  return r"ELF rewrite: apply error";
     case N00B_ELF_REWRITE_ERR_PARSE_AFTER_APPLY:      return r"ELF rewrite: output parse failed";
+    case N00B_ELF_REWRITE_ERR_MARK_NOT_FOUND:         return r"ELF rewrite: mark not found";
+    case N00B_ELF_REWRITE_ERR_TRUSTED_NAME:           return r"ELF rewrite: trusted name mismatch";
     default:                                          return r"ELF rewrite: unknown error code";
     }
 }
@@ -1750,6 +2641,9 @@ n00b_elf_rewrite_rejection_reason_str(
     case N00B_ELF_REWRITE_REJECT_TABLE_PLACEMENT:         return r"table-placement";
     case N00B_ELF_REWRITE_REJECT_SECTION_COUNT_PROMOTION: return r"section-count-promotion";
     case N00B_ELF_REWRITE_REJECT_OVERFLOW:                return r"overflow";
+    case N00B_ELF_REWRITE_REJECT_CHALK_MARK_NOT_FOUND:    return r"chalk-mark-not-found";
+    case N00B_ELF_REWRITE_REJECT_CHALK_MARK_UNSUPPORTED:  return r"chalk-mark-unsupported";
+    case N00B_ELF_REWRITE_REJECT_TRUSTED_NAME:            return r"trusted-name";
     }
 
     return r"unknown-elf-rewrite-rejection-reason";
@@ -1810,6 +2704,7 @@ n00b_elf_rewrite_patch_kind_str(n00b_elf_rewrite_patch_kind_t kind)
     case N00B_ELF_REWRITE_PATCH_SECTION_HEADER_TABLE: return r"section-header-table";
     case N00B_ELF_REWRITE_PATCH_TABLE_TAIL:           return r"table-tail";
     case N00B_ELF_REWRITE_PATCH_APPENDED_TABLES:      return r"appended-tables";
+    case N00B_ELF_REWRITE_PATCH_STALE_PAYLOAD:        return r"stale-payload";
     }
 
     return r"unknown-elf-rewrite-patch-kind";

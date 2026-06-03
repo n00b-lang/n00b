@@ -123,15 +123,17 @@ rejected(n00b_elf_layout_t                         *layout,
 static bool
 section_name_is_reserved(n00b_string_t *name)
 {
-    if (n00b_unicode_str_eq(name, r".chalk.mark")) {
-        return true;
-    }
-
-    if (n00b_unicode_str_eq(name, r".chalk.free")) {
+    if (n00b_unicode_str_starts_with(name, r".chalk.")) {
         return true;
     }
 
     return n00b_unicode_str_starts_with(name, r".0c001.");
+}
+
+static bool
+section_name_is_chalk_mark(n00b_string_t *name)
+{
+    return n00b_unicode_str_eq(name, r".chalk.mark");
 }
 
 static bool
@@ -560,13 +562,12 @@ admit_eof_placement(n00b_elf_binary_t                         *bin,
                                          alignment));
 }
 
-n00b_result_t(n00b_elf_rewrite_admit_result_t)
-n00b_elf_rewrite_admit_metadata_insert(
+static n00b_result_t(n00b_elf_rewrite_admit_result_t)
+admit_metadata_insert_impl(
     n00b_elf_binary_t                         *bin,
-    n00b_elf_rewrite_admit_metadata_request_t *request) _kargs
-{
-    n00b_allocator_t *allocator = nullptr;
-}
+    n00b_elf_rewrite_admit_metadata_request_t *request,
+    bool                                       trusted_chalk_mark,
+    n00b_allocator_t                          *allocator)
 {
     if (bin == nullptr) {
         return n00b_result_err(n00b_elf_rewrite_admit_result_t,
@@ -599,7 +600,12 @@ n00b_elf_rewrite_admit_metadata_insert(
 
     n00b_elf_layout_t *layout = n00b_result_get(layout_result);
 
-    if (section_name_is_reserved(request->section_name)
+    bool requested_reserved = section_name_is_reserved(request->section_name);
+    if ((requested_reserved
+         && (!trusted_chalk_mark
+             || !section_name_is_chalk_mark(request->section_name)))
+        || (trusted_chalk_mark
+            && !section_name_is_chalk_mark(request->section_name))
         || target_has_reserved_section(bin)) {
         return rejected(layout,
                         request,
@@ -638,6 +644,28 @@ n00b_elf_rewrite_admit_metadata_insert(
     }
 
     return admit_eof_placement(bin, layout, request, alignment);
+}
+
+n00b_result_t(n00b_elf_rewrite_admit_result_t)
+n00b_elf_rewrite_admit_metadata_insert(
+    n00b_elf_binary_t                         *bin,
+    n00b_elf_rewrite_admit_metadata_request_t *request) _kargs
+{
+    n00b_allocator_t *allocator = nullptr;
+}
+{
+    return admit_metadata_insert_impl(bin, request, false, allocator);
+}
+
+n00b_result_t(n00b_elf_rewrite_admit_result_t)
+n00b_elf_rewrite_admit_chalk_mark_insert(
+    n00b_elf_binary_t                         *bin,
+    n00b_elf_rewrite_admit_metadata_request_t *request) _kargs
+{
+    n00b_allocator_t *allocator = nullptr;
+}
+{
+    return admit_metadata_insert_impl(bin, request, true, allocator);
 }
 
 n00b_string_t *

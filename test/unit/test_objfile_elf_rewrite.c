@@ -310,6 +310,35 @@ default_request(void)
     };
 }
 
+static n00b_elf_rewrite_metadata_request_t
+chalk_mark_request(uint8_t fill, size_t len)
+{
+    n00b_elf_rewrite_metadata_request_t request = default_request();
+
+    request.section_name = r".chalk.mark";
+    request.payload = payload_new(fill, len);
+    request.file_alignment = 8;
+    request.section_type = SHT_PROGBITS;
+    request.section_flags = 0;
+    return request;
+}
+
+static n00b_elf_rewrite_admit_metadata_request_t
+chalk_mark_admit_request(size_t len)
+{
+    return (n00b_elf_rewrite_admit_metadata_request_t){
+        .section_name    = r".chalk.mark",
+        .payload_size    = len,
+        .file_alignment  = 8,
+        .section_type    = SHT_PROGBITS,
+        .section_flags   = 0,
+        .policy          = {
+            .flags = N00B_ELF_REWRITE_ADMIT_POLICY_STRICT_LOADER_PRESERVATION
+                   | N00B_ELF_REWRITE_ADMIT_POLICY_PRESERVE_OVERLAY,
+        },
+    };
+}
+
 static n00b_elf_rewrite_plan_t *
 require_accepted_plan(n00b_buffer_t *buf,
                       n00b_elf_rewrite_metadata_request_t *request)
@@ -504,6 +533,17 @@ assert_overlay_bytes_preserved(n00b_buffer_t     *before,
                              (size_t)overlay_size) == 0);
 }
 
+static void
+assert_range_zeroed(n00b_buffer_t *buf, uint64_t start, uint64_t end)
+{
+    N00B_TEST_REQUIRE(start <= end);
+    N00B_TEST_REQUIRE(end <= buf->byte_len);
+
+    for (uint64_t i = start; i < end; i++) {
+        N00B_TEST_REQUIRE(buf->data[i] == 0);
+    }
+}
+
 static n00b_elf_section_t *
 require_section_named(n00b_elf_binary_t *bin, n00b_string_t *name)
 {
@@ -516,6 +556,41 @@ require_section_named(n00b_elf_binary_t *bin, n00b_string_t *name)
 
     N00B_TEST_REQUIRE(false);
     return nullptr;
+}
+
+static uint32_t
+require_section_index_named(n00b_elf_binary_t *bin, n00b_string_t *name)
+{
+    for (uint32_t i = 0; i < bin->num_sections; i++) {
+        if (bin->sections[i].name != nullptr
+            && n00b_unicode_str_eq(bin->sections[i].name, name)) {
+            return i;
+        }
+    }
+
+    N00B_TEST_REQUIRE(false);
+    return 0;
+}
+
+static uint64_t
+count_sections_named(n00b_elf_binary_t *bin, n00b_string_t *name)
+{
+    uint64_t count = 0;
+
+    for (uint32_t i = 0; i < bin->num_sections; i++) {
+        if (bin->sections[i].name != nullptr
+            && n00b_unicode_str_eq(bin->sections[i].name, name)) {
+            count++;
+        }
+    }
+
+    return count;
+}
+
+static void
+assert_no_section_named(n00b_elf_binary_t *bin, n00b_string_t *name)
+{
+    N00B_TEST_REQUIRE(count_sections_named(bin, name) == 0);
 }
 
 static n00b_buffer_t *
@@ -533,6 +608,55 @@ apply_plan_and_parse(n00b_buffer_t *input,
     input_snapshot->byte_len = input->byte_len;
 
     auto applied = n00b_elf_rewrite_apply_metadata_insert_plan(bin, plan);
+    N00B_TEST_REQUIRE(n00b_result_is_ok(applied));
+
+    n00b_buffer_t *output = n00b_result_get(applied);
+    n00b_bstream_t *stream = n00b_bstream_new(output);
+    auto parsed = n00b_elf_parse(stream);
+
+    N00B_TEST_REQUIRE(n00b_result_is_ok(parsed));
+    *parsed_out = n00b_result_get(parsed);
+    N00B_TEST_REQUIRE(input->byte_len == input_snapshot->byte_len);
+    N00B_TEST_REQUIRE(memcmp(input->data,
+                             input_snapshot->data,
+                             input_snapshot->byte_len) == 0);
+    N00B_TEST_REQUIRE(memcmp(bin->header.ident,
+                             header_snapshot.ident,
+                             sizeof(header_snapshot.ident)) == 0);
+    N00B_TEST_REQUIRE(bin->header.type == header_snapshot.type);
+    N00B_TEST_REQUIRE(bin->header.machine == header_snapshot.machine);
+    N00B_TEST_REQUIRE(bin->header.version == header_snapshot.version);
+    N00B_TEST_REQUIRE(bin->header.entry == header_snapshot.entry);
+    N00B_TEST_REQUIRE(bin->header.phoff == header_snapshot.phoff);
+    N00B_TEST_REQUIRE(bin->header.shoff == header_snapshot.shoff);
+    N00B_TEST_REQUIRE(bin->header.flags == header_snapshot.flags);
+    N00B_TEST_REQUIRE(bin->header.ehsize == header_snapshot.ehsize);
+    N00B_TEST_REQUIRE(bin->header.phentsize == header_snapshot.phentsize);
+    N00B_TEST_REQUIRE(bin->header.phnum == header_snapshot.phnum);
+    N00B_TEST_REQUIRE(bin->header.shentsize == header_snapshot.shentsize);
+    N00B_TEST_REQUIRE(bin->header.shnum == header_snapshot.shnum);
+    N00B_TEST_REQUIRE(bin->header.shstrndx == header_snapshot.shstrndx);
+    N00B_TEST_REQUIRE(bin->num_sections == num_sections_snapshot);
+    N00B_TEST_REQUIRE(bin->num_segments == num_segments_snapshot);
+    assert_unplanned_original_bytes_preserved(input_snapshot, output, plan);
+    return output;
+}
+
+static n00b_buffer_t *
+apply_chalk_plan_and_parse(n00b_buffer_t *input,
+                           n00b_elf_binary_t *bin,
+                           n00b_elf_rewrite_plan_t *plan,
+                           n00b_elf_binary_t **parsed_out)
+{
+    n00b_buffer_t *input_snapshot = n00b_buffer_new((int64_t)input->byte_len);
+    n00b_elf_header_t header_snapshot = bin->header;
+    uint32_t num_sections_snapshot = bin->num_sections;
+    uint32_t num_segments_snapshot = bin->num_segments;
+
+    memcpy(input_snapshot->data, input->data, input->byte_len);
+    input_snapshot->byte_len = input->byte_len;
+
+    auto applied = n00b_elf_rewrite_apply_chalk_mark_plan(bin, plan);
     N00B_TEST_REQUIRE(n00b_result_is_ok(applied));
 
     n00b_buffer_t *output = n00b_result_get(applied);
@@ -1333,6 +1457,318 @@ test_admission_rejection_propagates(void)
                       == N00B_ELF_REWRITE_ADMIT_OUTCOME_REJECTED);
     N00B_TEST_REQUIRE(plan->admission.rejection_reason
                       == N00B_ELF_REWRITE_ADMIT_REJECT_RESERVED_SECTION_NAME);
+
+    request = default_request();
+    request.section_name = r".chalk.any";
+    plan = require_rejected_plan(valid_target_buffer(),
+                                 &request,
+                                 N00B_ELF_REWRITE_REJECT_ADMISSION);
+    N00B_TEST_REQUIRE(plan->admission.rejection_reason
+                      == N00B_ELF_REWRITE_ADMIT_REJECT_RESERVED_SECTION_NAME);
+
+    request = default_request();
+    request.section_name = r".0c001.any";
+    plan = require_rejected_plan(valid_target_buffer(),
+                                 &request,
+                                 N00B_ELF_REWRITE_REJECT_ADMISSION);
+    N00B_TEST_REQUIRE(plan->admission.rejection_reason
+                      == N00B_ELF_REWRITE_ADMIT_REJECT_RESERVED_SECTION_NAME);
+}
+
+static n00b_buffer_t *
+trusted_marked_buffer(uint8_t fill,
+                      size_t len,
+                      n00b_elf_rewrite_plan_t **plan_out)
+{
+    n00b_buffer_t *buf = valid_target_buffer();
+    n00b_elf_binary_t *bin = parse_buffer(buf);
+    n00b_elf_rewrite_metadata_request_t request =
+        chalk_mark_request(fill, len);
+
+    auto plan_result = n00b_elf_rewrite_plan_chalk_mark_insert(bin, &request);
+    N00B_TEST_REQUIRE(n00b_result_is_ok(plan_result));
+
+    n00b_elf_rewrite_plan_t *plan = n00b_result_get(plan_result);
+    N00B_TEST_REQUIRE(plan->outcome == N00B_ELF_REWRITE_PLAN_ACCEPTED);
+    N00B_TEST_REQUIRE(plan->operation
+                      == N00B_ELF_REWRITE_OPERATION_METADATA_INSERT);
+    N00B_TEST_REQUIRE(plan->section_name == request.section_name);
+    assert_patches_ordered(plan);
+
+    n00b_elf_binary_t *marked = nullptr;
+    n00b_buffer_t *out = apply_plan_and_parse(buf, bin, plan, &marked);
+
+    assert_inserted_section(marked, plan, &request);
+    N00B_TEST_REQUIRE(count_sections_named(marked, r".chalk.mark") == 1);
+
+    if (plan_out != nullptr) {
+        *plan_out = plan;
+    }
+    return out;
+}
+
+static void
+test_direct_trusted_chalk_mark_admit_public_api(void)
+{
+    n00b_buffer_t *buf = valid_target_buffer();
+    n00b_elf_binary_t *bin = parse_buffer(buf);
+    n00b_elf_rewrite_admit_metadata_request_t request =
+        chalk_mark_admit_request(24);
+
+    auto admit_result = n00b_elf_rewrite_admit_chalk_mark_insert(bin,
+                                                                 &request);
+    N00B_TEST_REQUIRE(n00b_result_is_ok(admit_result));
+    n00b_elf_rewrite_admit_result_t admit = n00b_result_get(admit_result);
+
+    N00B_TEST_REQUIRE(admit.outcome
+                      == N00B_ELF_REWRITE_ADMIT_OUTCOME_ACCEPTED);
+    N00B_TEST_REQUIRE(admit.rejection_reason
+                      == N00B_ELF_REWRITE_ADMIT_REJECT_NONE);
+    N00B_TEST_REQUIRE(n00b_option_is_set(admit.placement));
+
+    n00b_string_t *bad_names[] = {
+        r".chalk.free",
+        r".chalk.any",
+        r".0c001.any",
+        r".n00b.test",
+    };
+
+    for (size_t i = 0; i < sizeof(bad_names) / sizeof(bad_names[0]); i++) {
+        request = chalk_mark_admit_request(16);
+        request.section_name = bad_names[i];
+
+        admit_result = n00b_elf_rewrite_admit_chalk_mark_insert(bin,
+                                                                &request);
+        N00B_TEST_REQUIRE(n00b_result_is_ok(admit_result));
+        admit = n00b_result_get(admit_result);
+        N00B_TEST_REQUIRE(admit.outcome
+                          == N00B_ELF_REWRITE_ADMIT_OUTCOME_REJECTED);
+        N00B_TEST_REQUIRE(admit.rejection_reason
+                          == N00B_ELF_REWRITE_ADMIT_REJECT_RESERVED_SECTION_NAME);
+    }
+}
+
+static void
+test_trusted_chalk_mark_insert_policy(void)
+{
+    n00b_buffer_t *buf = valid_target_buffer();
+    n00b_elf_binary_t *bin = parse_buffer(buf);
+    n00b_elf_rewrite_metadata_request_t request =
+        chalk_mark_request(0x43, 24);
+
+    auto plan_result = n00b_elf_rewrite_plan_chalk_mark_insert(bin,
+                                                               &request);
+    N00B_TEST_REQUIRE(n00b_result_is_ok(plan_result));
+    n00b_elf_rewrite_plan_t *plan = n00b_result_get(plan_result);
+    N00B_TEST_REQUIRE(plan->outcome == N00B_ELF_REWRITE_PLAN_ACCEPTED);
+    N00B_TEST_REQUIRE(plan->admission.outcome
+                      == N00B_ELF_REWRITE_ADMIT_OUTCOME_ACCEPTED);
+    assert_patches_ordered(plan);
+
+    n00b_elf_binary_t *rewritten = nullptr;
+    (void)apply_plan_and_parse(buf, bin, plan, &rewritten);
+    assert_inserted_section(rewritten, plan, &request);
+    N00B_TEST_REQUIRE(count_sections_named(rewritten, r".chalk.mark") == 1);
+
+    n00b_string_t *bad_names[] = {
+        r".chalk.free",
+        r".chalk.any",
+        r".0c001.any",
+        r".n00b.test",
+    };
+
+    for (size_t i = 0; i < sizeof(bad_names) / sizeof(bad_names[0]); i++) {
+        request = chalk_mark_request(0x44, 16);
+        request.section_name = bad_names[i];
+
+        plan_result = n00b_elf_rewrite_plan_chalk_mark_insert(bin,
+                                                              &request);
+        N00B_TEST_REQUIRE(n00b_result_is_ok(plan_result));
+        plan = n00b_result_get(plan_result);
+        N00B_TEST_REQUIRE(plan->outcome == N00B_ELF_REWRITE_PLAN_REJECTED);
+        N00B_TEST_REQUIRE(plan->rejection_reason
+                          == N00B_ELF_REWRITE_REJECT_ADMISSION);
+        N00B_TEST_REQUIRE(plan->admission.rejection_reason
+                          == N00B_ELF_REWRITE_ADMIT_REJECT_RESERVED_SECTION_NAME);
+    }
+}
+
+static void
+test_apply_chalk_mark_delete_wrapper_public_api(void)
+{
+    n00b_buffer_t *marked_bytes = trusted_marked_buffer(0x65, 32, nullptr);
+    n00b_elf_binary_t *marked = parse_buffer(marked_bytes);
+    n00b_elf_section_t *old_mark =
+        require_section_named(marked, r".chalk.mark");
+    uint64_t old_payload_offset = old_mark->offset;
+    uint64_t old_payload_end = old_mark->offset + old_mark->size;
+
+    auto applied = n00b_elf_rewrite_apply_chalk_mark_delete(marked);
+    N00B_TEST_REQUIRE(n00b_result_is_ok(applied));
+
+    n00b_buffer_t *out = n00b_result_get(applied);
+    n00b_elf_binary_t *unchalked = parse_buffer(out);
+
+    assert_no_section_named(unchalked, r".chalk.mark");
+    assert_range_zeroed(out, old_payload_offset, old_payload_end);
+}
+
+static void
+test_chalk_mark_delete_removes_live_section_and_zeroes_payload(void)
+{
+    n00b_buffer_t *marked_bytes = trusted_marked_buffer(0x5a, 32, nullptr);
+    n00b_elf_binary_t *marked = parse_buffer(marked_bytes);
+    n00b_elf_section_t *old_mark =
+        require_section_named(marked, r".chalk.mark");
+
+    auto plan_result = n00b_elf_rewrite_plan_chalk_mark_delete(marked);
+    N00B_TEST_REQUIRE(n00b_result_is_ok(plan_result));
+    n00b_elf_rewrite_plan_t *plan = n00b_result_get(plan_result);
+
+    N00B_TEST_REQUIRE(plan->outcome == N00B_ELF_REWRITE_PLAN_ACCEPTED);
+    N00B_TEST_REQUIRE(plan->operation
+                      == N00B_ELF_REWRITE_OPERATION_CHALK_MARK_DELETE);
+    N00B_TEST_REQUIRE(plan->new_section_count
+                      == plan->original_section_count - 1);
+    N00B_TEST_REQUIRE(plan->removed_payload_offset == old_mark->offset);
+    N00B_TEST_REQUIRE(plan->removed_payload_end
+                      == old_mark->offset + old_mark->size);
+    N00B_TEST_REQUIRE(find_patch(plan, N00B_ELF_REWRITE_PATCH_STALE_PAYLOAD)
+                      != nullptr);
+    assert_patches_ordered(plan);
+
+    n00b_elf_binary_t *unchalked = nullptr;
+    n00b_buffer_t *out =
+        apply_chalk_plan_and_parse(marked_bytes, marked, plan, &unchalked);
+
+    assert_no_section_named(unchalked, r".chalk.mark");
+    N00B_TEST_REQUIRE(unchalked->header.shnum == plan->new_section_count);
+    assert_range_zeroed(out,
+                        plan->removed_payload_offset,
+                        plan->removed_payload_end);
+}
+
+static void
+test_chalk_mark_delete_replace_reject_colliding_payload(void)
+{
+    n00b_buffer_t *marked_bytes = trusted_marked_buffer(0x71, 32, nullptr);
+    n00b_elf_binary_t *marked = parse_buffer(marked_bytes);
+    uint32_t mark_index = require_section_index_named(marked, r".chalk.mark");
+    uint64_t shdr_offset = marked->header.shoff
+                         + (uint64_t)mark_index * marked->header.shentsize;
+
+    N00B_TEST_REQUIRE(shdr_offset + SH_OFFSET + 8 <= marked_bytes->byte_len);
+    n00b_test_elf_put64((uint8_t *)marked_bytes->data
+                            + shdr_offset
+                            + SH_OFFSET,
+                        0);
+
+    marked = parse_buffer(marked_bytes);
+    n00b_elf_section_t *old_mark =
+        require_section_named(marked, r".chalk.mark");
+    N00B_TEST_REQUIRE(old_mark->offset == 0);
+
+    auto delete_plan = n00b_elf_rewrite_plan_chalk_mark_delete(marked);
+    N00B_TEST_REQUIRE(n00b_result_is_ok(delete_plan));
+    n00b_elf_rewrite_plan_t *plan = n00b_result_get(delete_plan);
+    N00B_TEST_REQUIRE(plan->outcome == N00B_ELF_REWRITE_PLAN_REJECTED);
+    N00B_TEST_REQUIRE(plan->rejection_reason
+                      == N00B_ELF_REWRITE_REJECT_CHALK_MARK_UNSUPPORTED);
+    assert_buffer_err(n00b_elf_rewrite_apply_chalk_mark_delete(marked),
+                      N00B_ELF_REWRITE_ERR_PLAN_REJECTED);
+
+    n00b_elf_rewrite_metadata_request_t request =
+        chalk_mark_request(0x72, 24);
+    auto replace_plan = n00b_elf_rewrite_plan_chalk_mark_replace(marked,
+                                                                 &request);
+    N00B_TEST_REQUIRE(n00b_result_is_ok(replace_plan));
+    plan = n00b_result_get(replace_plan);
+    N00B_TEST_REQUIRE(plan->outcome == N00B_ELF_REWRITE_PLAN_REJECTED);
+    N00B_TEST_REQUIRE(plan->rejection_reason
+                      == N00B_ELF_REWRITE_REJECT_CHALK_MARK_UNSUPPORTED);
+    assert_buffer_err(n00b_elf_rewrite_apply_chalk_mark_replace(marked,
+                                                                &request),
+                      N00B_ELF_REWRITE_ERR_PLAN_REJECTED);
+}
+
+static void
+test_apply_chalk_mark_replace_wrapper_public_api(void)
+{
+    n00b_buffer_t *marked_bytes = trusted_marked_buffer(0x6d, 20, nullptr);
+    n00b_elf_binary_t *marked = parse_buffer(marked_bytes);
+    n00b_elf_section_t *old_mark =
+        require_section_named(marked, r".chalk.mark");
+    uint64_t old_payload_offset = old_mark->offset;
+    uint64_t old_payload_end = old_mark->offset + old_mark->size;
+    n00b_elf_rewrite_metadata_request_t request =
+        chalk_mark_request(0x7d, 28);
+
+    auto applied = n00b_elf_rewrite_apply_chalk_mark_replace(marked,
+                                                             &request);
+    N00B_TEST_REQUIRE(n00b_result_is_ok(applied));
+
+    n00b_buffer_t *out = n00b_result_get(applied);
+    n00b_elf_binary_t *remarked = parse_buffer(out);
+    n00b_elf_section_t *new_mark =
+        require_section_named(remarked, r".chalk.mark");
+
+    N00B_TEST_REQUIRE(count_sections_named(remarked, r".chalk.mark") == 1);
+    N00B_TEST_REQUIRE(new_mark->size == request.payload->byte_len);
+    N00B_TEST_REQUIRE(new_mark->content != nullptr);
+    N00B_TEST_REQUIRE(memcmp(new_mark->content->data,
+                             request.payload->data,
+                             request.payload->byte_len) == 0);
+    assert_range_zeroed(out, old_payload_offset, old_payload_end);
+}
+
+static void
+test_chalk_mark_replace_produces_one_live_mark(void)
+{
+    n00b_buffer_t *marked_bytes = trusted_marked_buffer(0x61, 20, nullptr);
+    n00b_elf_binary_t *marked = parse_buffer(marked_bytes);
+    n00b_elf_section_t *old_mark =
+        require_section_named(marked, r".chalk.mark");
+    n00b_elf_rewrite_metadata_request_t request =
+        chalk_mark_request(0x7c, 28);
+
+    auto plan_result = n00b_elf_rewrite_plan_chalk_mark_replace(marked,
+                                                                &request);
+    N00B_TEST_REQUIRE(n00b_result_is_ok(plan_result));
+    n00b_elf_rewrite_plan_t *plan = n00b_result_get(plan_result);
+
+    N00B_TEST_REQUIRE(plan->outcome == N00B_ELF_REWRITE_PLAN_ACCEPTED);
+    N00B_TEST_REQUIRE(plan->operation
+                      == N00B_ELF_REWRITE_OPERATION_CHALK_MARK_REPLACE);
+    N00B_TEST_REQUIRE(plan->new_section_count
+                      == plan->original_section_count);
+    N00B_TEST_REQUIRE(plan->removed_payload_offset == old_mark->offset);
+    N00B_TEST_REQUIRE(plan->removed_payload_end
+                      == old_mark->offset + old_mark->size);
+    N00B_TEST_REQUIRE(find_patch(plan, N00B_ELF_REWRITE_PATCH_STALE_PAYLOAD)
+                      != nullptr);
+    N00B_TEST_REQUIRE(find_patch(plan, N00B_ELF_REWRITE_PATCH_PAYLOAD)
+                      != nullptr);
+    assert_patches_ordered(plan);
+
+    n00b_elf_binary_t *remarked = nullptr;
+    n00b_buffer_t *out =
+        apply_chalk_plan_and_parse(marked_bytes, marked, plan, &remarked);
+    n00b_elf_section_t *new_mark =
+        require_section_named(remarked, r".chalk.mark");
+
+    N00B_TEST_REQUIRE(count_sections_named(remarked, r".chalk.mark") == 1);
+    N00B_TEST_REQUIRE(new_mark->offset == plan->payload_offset);
+    N00B_TEST_REQUIRE(new_mark->size == request.payload->byte_len);
+    N00B_TEST_REQUIRE(new_mark->content != nullptr);
+    N00B_TEST_REQUIRE(memcmp(new_mark->content->data,
+                             request.payload->data,
+                             request.payload->byte_len) == 0);
+    assert_range_zeroed(out,
+                        plan->removed_payload_offset,
+                        plan->removed_payload_end);
+    N00B_TEST_REQUIRE(memcmp(out->data + plan->payload_offset,
+                             request.payload->data,
+                             request.payload->byte_len) == 0);
 }
 
 static void
@@ -1496,16 +1932,22 @@ test_stringifiers(void)
                           N00B_ELF_REWRITE_ERR_NULL_BINARY)->u8_bytes != 0);
     N00B_TEST_REQUIRE(n00b_elf_rewrite_err_str(
                           N00B_ELF_REWRITE_ERR_UNSUPPORTED_PLAN)->u8_bytes != 0);
+    N00B_TEST_REQUIRE(n00b_elf_rewrite_err_str(
+                          N00B_ELF_REWRITE_ERR_TRUSTED_NAME)->u8_bytes != 0);
     N00B_TEST_REQUIRE(n00b_elf_rewrite_plan_outcome_str(
                           N00B_ELF_REWRITE_PLAN_ACCEPTED)->u8_bytes != 0);
     N00B_TEST_REQUIRE(n00b_elf_rewrite_rejection_reason_str(
                           N00B_ELF_REWRITE_REJECT_TABLE_PLACEMENT)->u8_bytes != 0);
+    N00B_TEST_REQUIRE(n00b_elf_rewrite_rejection_reason_str(
+                          N00B_ELF_REWRITE_REJECT_CHALK_MARK_UNSUPPORTED)->u8_bytes != 0);
     N00B_TEST_REQUIRE(n00b_elf_rewrite_target_profile_reason_str(
                           N00B_ELF_REWRITE_PROFILE_INVALID_SHENTSIZE)->u8_bytes != 0);
     N00B_TEST_REQUIRE(n00b_elf_rewrite_table_strategy_str(
                           N00B_ELF_REWRITE_TABLE_STRATEGY_EOF_REPLACEMENT)->u8_bytes != 0);
     N00B_TEST_REQUIRE(n00b_elf_rewrite_patch_kind_str(
                           N00B_ELF_REWRITE_PATCH_PAYLOAD)->u8_bytes != 0);
+    N00B_TEST_REQUIRE(n00b_elf_rewrite_patch_kind_str(
+                          N00B_ELF_REWRITE_PATCH_STALE_PAYLOAD)->u8_bytes != 0);
 }
 
 int
@@ -1535,6 +1977,13 @@ main(int argc, char **argv)
     test_apply_eof_replacement_fallback();
     test_preferred_gap_rejects_nonzero_unknown();
     test_admission_rejection_propagates();
+    test_direct_trusted_chalk_mark_admit_public_api();
+    test_trusted_chalk_mark_insert_policy();
+    test_apply_chalk_mark_delete_wrapper_public_api();
+    test_chalk_mark_delete_removes_live_section_and_zeroes_payload();
+    test_chalk_mark_delete_replace_reject_colliding_payload();
+    test_apply_chalk_mark_replace_wrapper_public_api();
+    test_chalk_mark_replace_produces_one_live_mark();
     test_packager_profile_matrix();
     test_unterminated_shstrtab_is_profile_ok();
     test_section_count_promotion_rejects();
