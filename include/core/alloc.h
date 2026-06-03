@@ -26,7 +26,6 @@ struct n00b_allocator_t {
     uint8_t                   add_inline_header : 1;
     uint8_t                   __system          : 1; // no STW check
     uint8_t                   hidden            : 1; // GC-invisible; see below.
-    uint8_t                   gc_root           : 1; // pages registered as GC roots
     n00b_allocator_t         *metadata_pool;
     n00b_dict_untyped_t      *metadata;
     void                     *opaque[];
@@ -301,8 +300,6 @@ n00b_allocator_setup(n00b_allocator_t *allocator, n00b_calloc_fn alloc) _kargs
     // DO NOT USE for custom allocators. Skips STW check.
     bool                      __system          = false;
     bool                      __is_md_pool      = false;
-    // Register each mapped page as a GC root (see alloc_base.h gc_root).
-    bool                      gc_root           = false;
 };
 
 /**

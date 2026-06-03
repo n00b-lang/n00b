@@ -72,7 +72,6 @@ n00b_pool_init(n00b_pool_t *pool) _kargs
     bool        inline_headers    = false;
     bool        external_metadata = false;
     bool        hidden            = false;
-    bool        gc_root           = false;
     const char *name              = "pool";
 };
 
