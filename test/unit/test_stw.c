@@ -103,7 +103,7 @@ worker_checkin_during_stw(void *arg)
 }
 
 static void
-test_stw_checkin_sets_and_clears_blocking(void)
+test_stw_preempts_checkin_worker(void)
 {
     atomic_store(&worker_blocking_stage, WORKER_BLOCKING_INIT);
     atomic_store(&worker_blocking_bits, UINT32_MAX);
@@ -119,21 +119,23 @@ test_stw_checkin_sets_and_clears_blocking(void)
 
     n00b_stop_the_world();
 
-    uint32_t bits = n00b_atomic_load(&thread->self_lock);
-    atomic_store(&worker_blocking_bits, bits);
-
-    assert(bits & N00B_STW);
-    assert(bits & N00B_BLOCKING);
+    // Pure-preemptive STW (WP-001 Phase 3): n00b_thread_checkin() no longer
+    // parks, so the worker keeps running and the initiator suspends it
+    // preemptively, capturing its register file.
+    assert(n00b_atomic_load(&thread->gc_preempt_suspended));
 
     atomic_store(&worker_blocking_stage, WORKER_BLOCKING_RELEASE);
     n00b_restart_the_world();
 
     n00b_thread_join(thread);
 
-    bits = atomic_load(&worker_blocking_after_bits);
+    // Cleanly resumed: the preempt flag is cleared and no cooperative bits
+    // were ever set on the worker.
+    uint32_t bits = atomic_load(&worker_blocking_after_bits);
     assert((bits & (N00B_STW | N00B_BLOCKING | N00B_SUSPEND)) == 0);
+    assert(!n00b_atomic_load(&thread->gc_preempt_suspended));
 
-    printf("  [PASS] STW checkin sets and clears BLOCKING\n");
+    printf("  [PASS] STW preemptively stops a checkin-looping worker\n");
 }
 
 static void *
@@ -238,7 +240,7 @@ main(int argc, char **argv)
     test_suspend_resume_clears_suspend();
     test_stw_owner_not_left_suspended();
     test_wait_for_stw_release_clears_blocking_without_owner();
-    test_stw_checkin_sets_and_clears_blocking();
+    test_stw_preempts_checkin_worker();
     test_spawned_thread_resume_clears_suspend();
     test_preemptive_stw_stops_compute_spinner();
     printf("All STW tests passed.\n");

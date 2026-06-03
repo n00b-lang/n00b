@@ -344,9 +344,8 @@ _n00b_preempt_resume(n00b_thread_t *t)
 void
 _n00b_stop_the_world(char *loc)
 {
+    (void)loc;
     n00b_runtime_t *rt = n00b_get_runtime();
-
-    _n00b_thread_suspend(loc);
 
     int32_t tid   = get_tid();
     int32_t owner = n00b_atomic_load(&rt->stw);
@@ -356,6 +355,10 @@ _n00b_stop_the_world(char *loc)
         return;
     }
 
+    // Acquire the STW lock (owner futex).  The initiator does NOT self-suspend
+    // (the pure-preemptive design, WP-001 Phase 3): it stays running and stops
+    // every OTHER thread below.  Its own stack is captured by the collector's
+    // own setjmp in n00b_collect.
     int32_t expected;
 
     do {
@@ -371,68 +374,58 @@ _n00b_stop_the_world(char *loc)
 
     assert(n00b_atomic_load(&rt->stw) == (uint32_t)tid);
 
-    int n = (int)rt->max_threads;
-
-    // Loop through every single thread and add the STW bit to their
-    // state, which will alert them to go wait on the STW.
-
+    // PURE PREEMPTIVE STOP (WP-001 Phase 3 — the cut).  Bring every OTHER live
+    // thread to a GC-safe stop by suspending it and capturing its register file.
+    // There is NO cooperative safepoint: a thread does not self-park, and the
+    // initiator does not mark a per-thread STW bit and wait.  Prereqs 1 + 2
+    // guarantee that every thread published into rt->threads[] already carries an
+    // OS control handle (main: WP-001 Phase 1; workers: handle-before-publish,
+    // WP-001 Phase 2), so _n00b_preempt_suspend_capture can fail only
+    // TRANSIENTLY — a thread mid-exit whose handle is dying, or (macOS) a foreign
+    // thread in its brief pre-handle attach window (DF-5).  In both cases we
+    // reload the slot and retry; the `!t` check breaks once the slot clears
+    // (the thread finished exiting).
+    int            n    = (int)rt->max_threads;
+    n00b_thread_t *self = n00b_thread_self();
     n00b_thread_t *t;
-
-    while (n--) {
-        t = n00b_atomic_load(&rt->threads[n].thread);
-        if (!t || t == n00b_thread_self()) {
-            continue;
-        }
-
-        n00b_atomic_or(&t->self_lock, N00B_STW);
-    }
-
-    // Bring every other live thread to a GC-safe stop.  A thread is safe once
-    // its live heap pointers are visible to the GC: either it self-parked with
-    // registers spilled (BLOCKING = checkpointed in wait_for_stw_release; or
-    // SUSPEND = parked in a blocking syscall via n00b_run_blocking), OR — WP-4 —
-    // the initiator PREEMPTIVELY suspends it and captures its register file.
-    // Preemption is what lets STW reclaim a pure-compute thread that never
-    // reaches a cooperative checkin (the case the old cooperative-only barrier
-    // could hang on forever).
-    n = (int)rt->max_threads;
 
     while (n--) {
         while (true) {
             t = n00b_atomic_load(&rt->threads[n].thread);
-            if (!t || t == n00b_thread_self()) {
+            if (!t || t == self) {
                 break;
             }
 
-            uint32_t state = n00b_atomic_load(&t->self_lock);
-            // DF-4: a thread already parked in a blocking syscall (SUSPEND) or at
-            // a checkin (BLOCKING) is GC-safe with registers spilled — leave it;
-            // do not preemptively suspend it (sidesteps EINTR for the I/O drivers).
-            if (state & (N00B_SUSPEND | N00B_BLOCKING)) {
+            // A thread advertising SUSPEND has voluntarily made itself GC-safe
+            // (registers spilled onto its own, conservatively-scanned stack) and
+            // asked NOT to be preempted.  Two callers set it: n00b_run_blocking
+            // (parked in a blocking syscall — signalling it would only EINTR the
+            // call) and n00b_thread_destroy (tearing down; it sets SUSPEND BEFORE
+            // it clears its rt->threads[] slot).  Honor it on EVERY platform:
+            // preempting a teardown that then de-registers its slot would strand
+            // the thread Mach-suspended forever, since _n00b_restart_the_world
+            // resumes via the slot table and would no longer find it.
+            if (n00b_atomic_load(&t->self_lock) & N00B_SUSPEND) {
                 break;
             }
 
-            // RUNNING thread: preemptively suspend + capture its registers
-            // (WP-4 / D-040; safe because the GC holds only the STW lock — D-041).
-            // On success the world is genuinely stopped for it without waiting on
-            // a cooperative checkin.
             if (_n00b_preempt_suspend_capture(t)) {
+                // Race close: a thread can set SUSPEND and de-register between the
+                // pre-check above and this freeze.  Now that it is frozen its
+                // self_lock is final — re-read it; if it went SUSPEND
+                // (teardown / run_blocking), release it.  It has made itself
+                // GC-safe and may already have cleared its slot, which restart
+                // would miss, leaving it stranded.
+                if (n00b_atomic_load(&t->self_lock) & N00B_SUSPEND) {
+                    _n00b_preempt_resume(t);
+                }
                 break;
             }
-
-            // Preemption unavailable (no control port yet, or a platform whose
-            // preemptive backend has not landed — Linux/Windows): fall back to the
-            // cooperative path — mark STW and re-loop until it self-parks.  A
-            // thread can also exit between the marking pass and here, so reload
-            // the slot each turn (the `!t` check above breaks once it clears its
-            // registration) to avoid spinning on a stale pointer.
-            n00b_atomic_or(&t->self_lock, N00B_STW);
+            // Transient failure (exiting / mid-attach): reload + retry.
         }
     }
 
     rt->stw_nesting = 1;
-
-    _n00b_thread_resume(loc);
 }
 
 void
@@ -453,34 +446,29 @@ _n00b_restart_the_world(char *loc)
     }
 
     n00b_barrier();
-    int n = (int)rt->max_threads;
 
+    n00b_thread_t *self = n00b_thread_self();
     n00b_thread_t *t;
 
-    while (n--) {
-        t = n00b_atomic_load(&rt->threads[n].thread);
-        if (!t || t == n00b_thread_self()) {
-            continue;
-        }
-
-        n00b_atomic_and(&t->self_lock, ~N00B_STW);
-    }
-
+    // Release the STW lock FIRST, then wake.  On Linux the parked suspend-signal
+    // handler self-resumes once it observes rt->stw == N00B_NO_OWNER (woken via
+    // the stw_generation futex); on macOS/Windows the handler does not exist and
+    // _n00b_preempt_resume below issues the thread_resume.  The stw / stw_generation
+    // wakes also release any other initiator blocked acquiring the STW lock.
     atomic_store(&rt->stw, N00B_NO_OWNER);
-
     n00b_atomic_add(&rt->stw_generation, 1);
     n00b_futex_wake(&rt->stw_generation, true);
     n00b_futex_wake(&rt->stw, true);
 
-    // WP-4: resume threads we PREEMPTIVELY suspended (vs. those that self-parked
-    // on the futex, woken above).  Done AFTER rt->stw is released + bits cleared
-    // so a resumed thread that immediately hits a checkin sees a clean state.  A
-    // preempted thread resumes at its interrupted PC (not a checkin), so this is
-    // the only thing that unblocks it.
-    n = (int)rt->max_threads;
+    // Resume every thread we preemptively suspended.  _n00b_preempt_resume clears
+    // gc_preempt_suspended (and zeroes the captured registers so a later
+    // collection does not re-root stale values) before the thread_resume, so a
+    // later scan never trusts stale captured state.  A preempted thread resumes
+    // at its interrupted PC.
+    int n = (int)rt->max_threads;
     while (n--) {
         t = n00b_atomic_load(&rt->threads[n].thread);
-        if (!t || t == n00b_thread_self()) {
+        if (!t || t == self) {
             continue;
         }
         _n00b_preempt_resume(t);

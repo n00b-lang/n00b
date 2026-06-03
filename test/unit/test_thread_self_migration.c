@@ -204,11 +204,14 @@ test_stw_cycle_resumes_all_workers(void)
 
     n00b_stop_the_world();
 
-    // Every worker must observe the STW bit (and be parked BLOCKING).
+    // Pure-preemptive STW (WP-001 Phase 3): the workers spin in a checkin loop
+    // that no longer parks, so the initiator suspends each one and captures its
+    // registers.  Each worker is therefore preemptively stopped — this is the
+    // assertion that used to be `& N00B_BLOCKING` and failed under parallel load
+    // (workers were RUNNING when STW checked them, so they were preempted, never
+    // cooperatively parked).
     for (int i = 0; i < N_WORKERS; i++) {
-        uint32_t bits = n00b_atomic_load(&children[i]->self_lock);
-        assert(bits & N00B_STW);
-        assert(bits & N00B_BLOCKING);
+        assert(n00b_atomic_load(&children[i]->gc_preempt_suspended));
     }
 
     // Release the loops and restart the world.
