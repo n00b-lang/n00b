@@ -11,8 +11,10 @@
 #include "core.h"
 #include "errcode.h"
 #include "read_target_elf.h"
+#include "phtab_adjustment.h"
 
 #include <errno.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -141,9 +143,54 @@ zcl_syscall_exit(int exit_code)
 static int
 usage(char *argv0)
 {
-    fprintf(stderr, "usage: %s --mode read-target <elf>\n", argv0);
+    fprintf(stderr, "usage: %s --mode read-target|phtab-adjustment <elf>\n",
+            argv0);
     printf("verdict=oracle-error\ncode=usage\ndetail=bad-arguments\n");
     return 2;
+}
+
+static int
+read_target(char *path, zcl_allocator *allocator, zcl_target_elf *elf)
+{
+    int err = 0;
+    int rc  = zcl_read_target_elf(path, allocator, elf, &err);
+
+    if (rc == 0) {
+        printf("verdict=valid-target\ncode=0\ndetail=ok\n");
+    }
+    else {
+        printf("verdict=invalid-target\ncode=%d\ndetail=read-target\n", err);
+    }
+
+    return 0;
+}
+
+static int
+phtab_adjustment(char *path, zcl_allocator *allocator, zcl_target_elf *elf)
+{
+    uint64_t offset = 0;
+    uint64_t size   = 0;
+    int      err    = 0;
+    int      rc     = zcl_read_target_elf(path, allocator, elf, &err);
+
+    if (rc != 0) {
+        printf("verdict=phtab-not-adjustable\ncode=%d\ndetail=read-target\n",
+               err);
+        return 0;
+    }
+
+    rc = zcl_is_phtab_adjustable(elf, &offset, &size, &err);
+    if (rc == 0) {
+        printf("verdict=phtab-adjustable\ncode=0\noffset=%llu\nsize=%llu\n",
+               (unsigned long long)offset,
+               (unsigned long long)size);
+    }
+    else {
+        printf("verdict=phtab-not-adjustable\ncode=%d\ndetail=adjustment\n",
+               err);
+    }
+
+    return 0;
 }
 
 int
@@ -153,7 +200,10 @@ main(int argc, char **argv)
         return usage(argv[0]);
     }
 
-    if (strcmp(argv[2], "read-target") != 0) {
+    bool read_target_mode = strcmp(argv[2], "read-target") == 0;
+    bool phtab_mode       = strcmp(argv[2], "phtab-adjustment") == 0;
+
+    if (!read_target_mode && !phtab_mode) {
         printf("verdict=unsupported\ncode=unsupported-mode\ndetail=%s\n",
                argv[2]);
         return 0;
@@ -169,14 +219,11 @@ main(int argc, char **argv)
     }
 
     zcl_target_elf elf;
-    int            err = 0;
-    int            rc  = zcl_read_target_elf(argv[3], &allocator, &elf, &err);
-
-    if (rc == 0) {
-        printf("verdict=valid-target\ncode=0\ndetail=ok\n");
+    if (read_target_mode) {
+        read_target(argv[3], &allocator, &elf);
     }
     else {
-        printf("verdict=invalid-target\ncode=%d\ndetail=read-target\n", err);
+        phtab_adjustment(argv[3], &allocator, &elf);
     }
 
     zcl_unmap_all_memory(&allocator);

@@ -10,6 +10,7 @@
 #define N00B_ELF64_EHDR_SIZE   64u
 #define N00B_ELF64_PHDR_SIZE   56u
 #define N00B_ELF64_SHDR_SIZE   64u
+#define N00B_ELF_LOAD_PAGE_SIZE 0x1000u
 #define N00B_ELF_REWRITE_MAX_PATCHES 8u
 
 typedef struct raw_shdr {
@@ -37,6 +38,26 @@ typedef struct chalk_mark_shape {
     uint32_t replacement_name_index;
     uint16_t new_shstrndx;
 } chalk_mark_shape_t;
+
+typedef struct loadable_profile {
+    uint32_t pt_phdr_index;
+    uint32_t containing_load_index;
+    uint64_t phtab_offset;
+    uint64_t phtab_size;
+    uint64_t phtab_end;
+    uint64_t phtab_vaddr;
+    uint64_t highest_load_end;
+} loadable_profile_t;
+
+typedef struct loadable_segment_facts {
+    uint64_t offset;
+    uint64_t vaddr;
+    uint64_t paddr;
+    uint64_t filesz;
+    uint64_t memsz;
+    uint64_t align;
+    uint32_t flags;
+} loadable_segment_facts_t;
 
 static bool
 section_name_write_size(n00b_string_t *section_name, uint64_t *out);
@@ -262,6 +283,28 @@ effective_section_alignment(uint64_t requested)
     return requested == 0 ? 1 : requested;
 }
 
+static uint64_t
+max_u64(uint64_t a, uint64_t b)
+{
+    return a > b ? a : b;
+}
+
+static bool
+align_up_u64(uint64_t value, uint64_t alignment, uint64_t *out)
+{
+    if (alignment == 0) {
+        alignment = 1;
+    }
+
+    uint64_t rem = value % alignment;
+    if (rem == 0) {
+        *out = value;
+        return true;
+    }
+
+    return checked_add_u64(value, alignment - rem, out);
+}
+
 static void
 write_u16(uint8_t *p, uint16_t value, bool big_endian)
 {
@@ -305,6 +348,14 @@ write_u64(uint8_t *p, uint64_t value, bool big_endian)
     write_u32(p + 4, (uint32_t)(value >> 32), false);
 }
 
+static void
+zero_byte_range(uint8_t *p, uint64_t len)
+{
+    for (uint64_t i = 0; i < len; i++) {
+        p[i] = 0;
+    }
+}
+
 static n00b_buffer_t *
 new_zero_buffer(uint64_t size, n00b_allocator_t *allocator)
 {
@@ -314,7 +365,7 @@ new_zero_buffer(uint64_t size, n00b_allocator_t *allocator)
 
     n00b_buffer_t *buf = n00b_buffer_new((int64_t)size,
                                          .allocator = allocator);
-    memset(buf->data, 0, (size_t)size);
+    zero_byte_range((uint8_t *)buf->data, size);
     buf->byte_len = (size_t)size;
     return buf;
 }
@@ -760,6 +811,52 @@ new_plan(n00b_allocator_t *allocator)
         &(n00b_alloc_opts_t){.allocator = allocator});
 }
 
+static n00b_elf_rewrite_loadable_plan_t *
+new_loadable_plan(n00b_allocator_t *allocator)
+{
+    return n00b_alloc_with_opts(
+        n00b_elf_rewrite_loadable_plan_t,
+        &(n00b_alloc_opts_t){.allocator = allocator});
+}
+
+static n00b_elf_rewrite_loadable_relocation_t
+no_loadable_relocation(void)
+{
+    return (n00b_elf_rewrite_loadable_relocation_t){
+        .status                = N00B_ELF_REWRITE_LOADABLE_RELOCATION_NONE,
+        .rejection_reason      = N00B_ELF_REWRITE_REJECT_NONE,
+        .source_in_place_rejection = N00B_ELF_REWRITE_ADMIT_REJECT_NONE,
+        .pt_phdr_index         = N00B_ELF_LAYOUT_NO_INDEX,
+        .new_pt_load_index     = N00B_ELF_LAYOUT_NO_INDEX,
+    };
+}
+
+static n00b_elf_rewrite_loadable_phtab_adjustment_t
+no_phtab_adjustment(void)
+{
+    return (n00b_elf_rewrite_loadable_phtab_adjustment_t){
+        .status                = N00B_ELF_REWRITE_LOADABLE_PHTAB_ADJUST_NONE,
+        .rejection_reason      = N00B_ELF_REWRITE_ADMIT_REJECT_NONE,
+        .containing_load_index = N00B_ELF_LAYOUT_NO_INDEX,
+        .pt_phdr_index         = N00B_ELF_LAYOUT_NO_INDEX,
+    };
+}
+
+static n00b_elf_rewrite_loadable_relocation_t
+rejected_loadable_relocation(
+    n00b_elf_rewrite_rejection_reason_t       reason,
+    n00b_elf_rewrite_admit_rejection_reason_t source_in_place_rejection)
+{
+    n00b_elf_rewrite_loadable_relocation_t facts =
+        no_loadable_relocation();
+
+    facts.status                    =
+        N00B_ELF_REWRITE_LOADABLE_RELOCATION_REJECTED;
+    facts.rejection_reason          = reason;
+    facts.source_in_place_rejection = source_in_place_rejection;
+    return facts;
+}
+
 static n00b_result_t(n00b_elf_rewrite_plan_t *)
 rejected_plan(n00b_allocator_t                         *allocator,
               n00b_elf_rewrite_rejection_reason_t      reason,
@@ -783,6 +880,50 @@ rejected_plan(n00b_allocator_t                         *allocator,
     }
 
     return n00b_result_ok(n00b_elf_rewrite_plan_t *, plan);
+}
+
+static n00b_result_t(n00b_elf_rewrite_loadable_plan_t *)
+rejected_loadable_plan(
+    n00b_allocator_t                         *allocator,
+    n00b_elf_rewrite_rejection_reason_t       reason,
+    n00b_elf_rewrite_target_profile_t         profile,
+    n00b_elf_rewrite_admit_loadable_result_t *admission)
+{
+    n00b_elf_rewrite_loadable_plan_t *plan = new_loadable_plan(allocator);
+
+    plan->outcome                = N00B_ELF_REWRITE_PLAN_REJECTED;
+    plan->rejection_reason       = reason;
+    plan->target_profile         = profile;
+    plan->file_size              = profile.file_size;
+    plan->original_segment_count = profile.segment_count;
+    plan->new_segment_count      = profile.segment_count;
+    plan->phtab_strategy         = N00B_ELF_REWRITE_LOADABLE_PHTAB_STRATEGY_NONE;
+    plan->payload_placement      = (n00b_elf_rewrite_loadable_placement_t){
+        .kind = N00B_ELF_REWRITE_LOADABLE_PLACEMENT_NONE,
+    };
+    plan->phtab_placement        = (n00b_elf_rewrite_loadable_placement_t){
+        .kind = N00B_ELF_REWRITE_LOADABLE_PLACEMENT_NONE,
+    };
+    plan->phtab_relocation       = no_loadable_relocation();
+
+    if (admission != nullptr) {
+        plan->admission                  = *admission;
+        plan->file_size                  = admission->file_size;
+        plan->original_segment_count     = admission->original_segment_count;
+        plan->new_segment_count          = admission->new_segment_count;
+        plan->phtab_strategy             = admission->phtab_strategy;
+        plan->payload_placement          = admission->payload_placement;
+        plan->phtab_placement            = admission->phtab_placement;
+        plan->phtab_adjustment           = admission->phtab_adjustment;
+        plan->p_memsz                    = admission->p_memsz;
+        plan->file_alignment             = admission->effective_file_alignment;
+        plan->vaddr_alignment            = admission->effective_vaddr_alignment;
+        plan->segment_flags              = admission->segment_flags;
+        plan->entrypoint_policy_deferred =
+            admission->entrypoint_policy_deferred;
+    }
+
+    return n00b_result_ok(n00b_elf_rewrite_loadable_plan_t *, plan);
 }
 
 static bool
@@ -1071,6 +1212,19 @@ append_patch(n00b_elf_rewrite_patch_t *patches,
     patches[insert_at] = patch;
     *count += 1;
     return true;
+}
+
+static bool
+append_patch_if_nonempty(n00b_elf_rewrite_patch_t *patches,
+                         uint64_t                  capacity,
+                         uint64_t                 *count,
+                         n00b_elf_rewrite_patch_t  patch)
+{
+    if (patch.file_offset == patch.file_end) {
+        return true;
+    }
+
+    return append_patch(patches, capacity, count, patch);
 }
 
 static bool
@@ -1471,6 +1625,879 @@ n00b_elf_rewrite_plan_chalk_mark_insert(
 }
 {
     return plan_metadata_insert_impl(bin, request, true, allocator);
+}
+
+static bool
+loadable_in_place_rejection_allows_relocation(
+    n00b_elf_rewrite_loadable_phtab_adjustment_t *adjustment)
+{
+    return adjustment->status
+        == N00B_ELF_REWRITE_LOADABLE_PHTAB_ADJUST_REJECTED_RELOCATABLE;
+}
+
+static n00b_result_t(bool)
+loadable_profile_for_relocation(n00b_elf_binary_t *bin,
+                                loadable_profile_t *profile)
+{
+    uint64_t phtab_size;
+    uint64_t phtab_end;
+
+    if (bin == nullptr || profile == nullptr) {
+        return n00b_result_err(bool, N00B_ELF_REWRITE_ERR_NULL_BINARY);
+    }
+
+    *profile = (loadable_profile_t){
+        .pt_phdr_index         = N00B_ELF_LAYOUT_NO_INDEX,
+        .containing_load_index = N00B_ELF_LAYOUT_NO_INDEX,
+    };
+
+    if (!checked_mul_u64(bin->header.phnum,
+                         N00B_ELF64_PHDR_SIZE,
+                         &phtab_size)
+        || !checked_add_u64(bin->header.phoff, phtab_size, &phtab_end)) {
+        return n00b_result_err(bool, N00B_ELF_REWRITE_ERR_OVERFLOW);
+    }
+
+    profile->phtab_offset = bin->header.phoff;
+    profile->phtab_size   = phtab_size;
+    profile->phtab_end    = phtab_end;
+
+    bool saw_load = false;
+    for (uint32_t i = 0; i < bin->num_segments; i++) {
+        n00b_elf_segment_t *seg = &bin->segments[i];
+
+        if (seg->type != PT_LOAD) {
+            continue;
+        }
+
+        uint64_t load_end;
+        if (!checked_add_u64(seg->vaddr, seg->memsz, &load_end)) {
+            return n00b_result_err(bool, N00B_ELF_REWRITE_ERR_OVERFLOW);
+        }
+
+        if (!(seg->offset == 0 && seg->memsz == 0)) {
+            saw_load = true;
+            if (load_end > profile->highest_load_end) {
+                profile->highest_load_end = load_end;
+            }
+        }
+
+        if (bin->header.phoff < seg->offset) {
+            continue;
+        }
+
+        uint64_t seg_file_end;
+        if (!checked_add_u64(seg->offset, seg->filesz, &seg_file_end)) {
+            return n00b_result_err(bool, N00B_ELF_REWRITE_ERR_OVERFLOW);
+        }
+
+        if (phtab_end > seg_file_end) {
+            continue;
+        }
+
+        uint64_t delta = bin->header.phoff - seg->offset;
+        uint64_t vaddr;
+        if (!checked_add_u64(seg->vaddr, delta, &vaddr)) {
+            return n00b_result_err(bool, N00B_ELF_REWRITE_ERR_OVERFLOW);
+        }
+
+        profile->containing_load_index = i;
+        profile->phtab_vaddr          = vaddr;
+    }
+
+    if (!saw_load
+        || profile->containing_load_index == N00B_ELF_LAYOUT_NO_INDEX) {
+        return n00b_result_ok(bool, false);
+    }
+
+    bool saw_pt_phdr = false;
+    for (uint32_t i = 0; i < bin->num_segments; i++) {
+        n00b_elf_segment_t *seg = &bin->segments[i];
+
+        if (seg->type != PT_PHDR) {
+            continue;
+        }
+
+        if (saw_pt_phdr || seg->offset != bin->header.phoff
+            || seg->filesz != phtab_size || seg->memsz != phtab_size
+            || seg->vaddr != profile->phtab_vaddr) {
+            return n00b_result_ok(bool, false);
+        }
+
+        profile->pt_phdr_index = i;
+        saw_pt_phdr            = true;
+    }
+
+    return n00b_result_ok(bool, saw_pt_phdr);
+}
+
+static n00b_result_t(n00b_elf_rewrite_loadable_plan_t *)
+rejected_relocated_loadable_plan(
+    n00b_allocator_t                         *allocator,
+    n00b_elf_rewrite_rejection_reason_t       reason,
+    n00b_elf_rewrite_target_profile_t         profile,
+    n00b_elf_rewrite_admit_loadable_result_t *admission,
+    n00b_elf_rewrite_loadable_phtab_adjustment_t source_adjustment)
+{
+    auto rejected = rejected_loadable_plan(allocator, reason, profile, admission);
+    if (n00b_result_is_err(rejected)) {
+        return rejected;
+    }
+
+    n00b_elf_rewrite_loadable_plan_t *plan = n00b_result_get(rejected);
+    plan->phtab_strategy             =
+        N00B_ELF_REWRITE_LOADABLE_PHTAB_STRATEGY_RELOCATE;
+    plan->phtab_adjustment           = source_adjustment;
+    plan->phtab_relocation           = rejected_loadable_relocation(
+        reason,
+        source_adjustment.rejection_reason);
+    return n00b_result_ok(n00b_elf_rewrite_loadable_plan_t *, plan);
+}
+
+static n00b_result_t(n00b_elf_rewrite_loadable_plan_t *)
+plan_relocated_loadable(
+    n00b_allocator_t                         *allocator,
+    n00b_elf_binary_t                        *bin,
+    n00b_elf_rewrite_loadable_request_t      *request,
+    n00b_elf_rewrite_target_profile_t         profile,
+    n00b_elf_rewrite_admit_loadable_result_t  admission,
+    n00b_elf_rewrite_loadable_phtab_adjustment_t source_adjustment)
+{
+    if (bin->overlay != nullptr
+        && !policy_allows_append_after_overlay(request->policy)) {
+        return rejected_relocated_loadable_plan(
+            allocator,
+            N00B_ELF_REWRITE_REJECT_LOADABLE_PLACEMENT,
+            profile,
+            &admission,
+            source_adjustment);
+    }
+
+    loadable_profile_t loadable = {};
+    auto profile_ok = loadable_profile_for_relocation(bin, &loadable);
+    if (n00b_result_is_err(profile_ok)) {
+        return n00b_result_err(n00b_elf_rewrite_loadable_plan_t *,
+                               n00b_result_get_err(profile_ok));
+    }
+
+    if (!n00b_result_get(profile_ok)) {
+        return rejected_relocated_loadable_plan(
+            allocator,
+            N00B_ELF_REWRITE_REJECT_ADMISSION,
+            profile,
+            &admission,
+            source_adjustment);
+    }
+
+    uint64_t segment_align = max_u64(N00B_ELF_LOAD_PAGE_SIZE,
+                                     admission.effective_vaddr_alignment);
+    uint64_t new_phtab_size;
+    uint64_t segment_offset;
+    uint64_t relocated_phtab_end;
+    uint64_t payload_offset;
+    uint64_t payload_end;
+    if (!checked_mul_u64(admission.new_segment_count,
+                         N00B_ELF64_PHDR_SIZE,
+                         &new_phtab_size)
+        || !align_up_u64(admission.file_size, segment_align, &segment_offset)
+        || !checked_add_u64(segment_offset,
+                            new_phtab_size,
+                            &relocated_phtab_end)
+        || !align_up_u64(relocated_phtab_end,
+                         admission.effective_file_alignment,
+                         &payload_offset)
+        || !checked_add_u64(payload_offset,
+                            (uint64_t)request->payload->byte_len,
+                            &payload_end)) {
+        return rejected_relocated_loadable_plan(
+            allocator,
+            N00B_ELF_REWRITE_REJECT_LOADABLE_PLACEMENT,
+            profile,
+            &admission,
+            source_adjustment);
+    }
+
+    uint64_t payload_delta = payload_offset - segment_offset;
+    uint64_t segment_filesz = payload_end - segment_offset;
+    uint64_t segment_memsz;
+    if (!checked_add_u64(payload_delta, admission.p_memsz, &segment_memsz)) {
+        return rejected_relocated_loadable_plan(
+            allocator,
+            N00B_ELF_REWRITE_REJECT_LOADABLE_PLACEMENT,
+            profile,
+            &admission,
+            source_adjustment);
+    }
+
+    uint64_t segment_vaddr;
+    uint64_t relocated_phtab_vaddr_end;
+    uint64_t payload_vaddr;
+    uint64_t payload_vaddr_end;
+    if (!align_up_u64(loadable.highest_load_end,
+                      segment_align,
+                      &segment_vaddr)
+        || !checked_add_u64(segment_vaddr,
+                            new_phtab_size,
+                            &relocated_phtab_vaddr_end)
+        || !checked_add_u64(segment_vaddr, payload_delta, &payload_vaddr)
+        || !checked_add_u64(payload_vaddr,
+                            admission.p_memsz,
+                            &payload_vaddr_end)) {
+        return rejected_relocated_loadable_plan(
+            allocator,
+            N00B_ELF_REWRITE_REJECT_LOADABLE_ADDRESS,
+            profile,
+            &admission,
+            source_adjustment);
+    }
+
+    uint64_t pt_phdr_delta;
+    uint64_t pt_phdr_entry_offset;
+    uint64_t pt_phdr_entry_end;
+    uint64_t new_pt_load_delta;
+    uint64_t new_pt_load_entry_offset;
+    uint64_t new_pt_load_entry_end;
+    if (!checked_mul_u64(loadable.pt_phdr_index,
+                         N00B_ELF64_PHDR_SIZE,
+                         &pt_phdr_delta)
+        || !checked_add_u64(segment_offset,
+                            pt_phdr_delta,
+                            &pt_phdr_entry_offset)
+        || !checked_add_u64(pt_phdr_entry_offset,
+                            N00B_ELF64_PHDR_SIZE,
+                            &pt_phdr_entry_end)
+        || !checked_mul_u64(admission.original_segment_count,
+                            N00B_ELF64_PHDR_SIZE,
+                            &new_pt_load_delta)
+        || !checked_add_u64(segment_offset,
+                            new_pt_load_delta,
+                            &new_pt_load_entry_offset)
+        || !checked_add_u64(new_pt_load_entry_offset,
+                            N00B_ELF64_PHDR_SIZE,
+                            &new_pt_load_entry_end)) {
+        return rejected_relocated_loadable_plan(
+            allocator,
+            N00B_ELF_REWRITE_REJECT_LOADABLE_PLACEMENT,
+            profile,
+            &admission,
+            source_adjustment);
+    }
+
+    n00b_elf_rewrite_patch_t local[N00B_ELF_REWRITE_MAX_PATCHES] = {};
+    uint64_t                 count = 0;
+    if (!append_patch(local,
+                      N00B_ELF_REWRITE_MAX_PATCHES,
+                      &count,
+                      (n00b_elf_rewrite_patch_t){
+                          .kind                 = N00B_ELF_REWRITE_PATCH_ELF_HEADER,
+                          .file_offset          = 0,
+                          .file_end             = N00B_ELF64_EHDR_SIZE,
+                          .original_file_offset = 0,
+                          .original_file_end    = N00B_ELF64_EHDR_SIZE,
+                      })
+        || !append_patch_if_nonempty(
+            local,
+            N00B_ELF_REWRITE_MAX_PATCHES,
+            &count,
+            (n00b_elf_rewrite_patch_t){
+                .kind                 = N00B_ELF_REWRITE_PATCH_LOADABLE_PADDING,
+                .file_offset          = admission.file_size,
+                .file_end             = segment_offset,
+                .original_file_offset = admission.file_size,
+                .original_file_end    = admission.file_size,
+            })
+        || !append_patch_if_nonempty(
+            local,
+            N00B_ELF_REWRITE_MAX_PATCHES,
+            &count,
+            (n00b_elf_rewrite_patch_t){
+                .kind                 = N00B_ELF_REWRITE_PATCH_RELOCATED_PHTAB,
+                .file_offset          = segment_offset,
+                .file_end             = pt_phdr_entry_offset,
+                .original_file_offset = segment_offset,
+                .original_file_end    = segment_offset,
+            })
+        || !append_patch(local,
+                         N00B_ELF_REWRITE_MAX_PATCHES,
+                         &count,
+                         (n00b_elf_rewrite_patch_t){
+                             .kind                 = N00B_ELF_REWRITE_PATCH_RELOCATED_PT_PHDR,
+                             .file_offset          = pt_phdr_entry_offset,
+                             .file_end             = pt_phdr_entry_end,
+                             .original_file_offset = pt_phdr_entry_offset,
+                             .original_file_end    = pt_phdr_entry_offset,
+                         })
+        || !append_patch_if_nonempty(
+            local,
+            N00B_ELF_REWRITE_MAX_PATCHES,
+            &count,
+            (n00b_elf_rewrite_patch_t){
+                .kind                 = N00B_ELF_REWRITE_PATCH_RELOCATED_PHTAB,
+                .file_offset          = pt_phdr_entry_end,
+                .file_end             = new_pt_load_entry_offset,
+                .original_file_offset = pt_phdr_entry_end,
+                .original_file_end    = pt_phdr_entry_end,
+            })
+        || !append_patch(local,
+                         N00B_ELF_REWRITE_MAX_PATCHES,
+                         &count,
+                         (n00b_elf_rewrite_patch_t){
+                             .kind                 = N00B_ELF_REWRITE_PATCH_NEW_PT_LOAD,
+                             .file_offset          = new_pt_load_entry_offset,
+                             .file_end             = new_pt_load_entry_end,
+                             .original_file_offset = new_pt_load_entry_offset,
+                             .original_file_end    = new_pt_load_entry_offset,
+                         })
+        || !append_patch_if_nonempty(
+            local,
+            N00B_ELF_REWRITE_MAX_PATCHES,
+            &count,
+            (n00b_elf_rewrite_patch_t){
+                .kind                 = N00B_ELF_REWRITE_PATCH_LOADABLE_PADDING,
+                .file_offset          = relocated_phtab_end,
+                .file_end             = payload_offset,
+                .original_file_offset = relocated_phtab_end,
+                .original_file_end    = relocated_phtab_end,
+            })
+        || !append_patch(local,
+                         N00B_ELF_REWRITE_MAX_PATCHES,
+                         &count,
+                         (n00b_elf_rewrite_patch_t){
+                             .kind                 = N00B_ELF_REWRITE_PATCH_LOADABLE_PAYLOAD,
+                             .file_offset          = payload_offset,
+                             .file_end             = payload_end,
+                             .original_file_offset = payload_offset,
+                             .original_file_end    = payload_offset,
+                         })) {
+        return n00b_result_err(n00b_elf_rewrite_loadable_plan_t *,
+                               N00B_ELF_REWRITE_ERR_OVERFLOW);
+    }
+
+    n00b_array_t(n00b_elf_rewrite_patch_t) patches =
+        n00b_array_new(n00b_elf_rewrite_patch_t,
+                       count,
+                       .allocator = allocator);
+    memcpy(patches.data, local, count * sizeof(n00b_elf_rewrite_patch_t));
+    patches.len = count;
+
+    n00b_elf_rewrite_loadable_relocation_t relocation =
+        no_loadable_relocation();
+    relocation.status                    =
+        N00B_ELF_REWRITE_LOADABLE_RELOCATION_ACCEPTED;
+    relocation.source_in_place_rejection =
+        source_adjustment.rejection_reason;
+    relocation.elf_header_patch_offset   = 0;
+    relocation.elf_header_patch_end      = N00B_ELF64_EHDR_SIZE;
+    relocation.elf_header_new_phoff      = segment_offset;
+    relocation.elf_header_new_phnum      = admission.new_segment_count;
+    relocation.elf_header_entry          = bin->header.entry;
+    relocation.original_phtab_offset     = loadable.phtab_offset;
+    relocation.original_phtab_size       = loadable.phtab_size;
+    relocation.original_phtab_end        = loadable.phtab_end;
+    relocation.original_phtab_vaddr      = loadable.phtab_vaddr;
+    relocation.relocated_phtab_offset    = segment_offset;
+    relocation.relocated_phtab_size      = new_phtab_size;
+    relocation.relocated_phtab_end       = relocated_phtab_end;
+    relocation.relocated_phtab_vaddr     = segment_vaddr;
+    relocation.relocated_phtab_vaddr_end = relocated_phtab_vaddr_end;
+    relocation.pt_phdr_present           = true;
+    relocation.pt_phdr_index             = loadable.pt_phdr_index;
+    relocation.pt_phdr_entry_offset      = pt_phdr_entry_offset;
+    relocation.pt_phdr_new_offset        = segment_offset;
+    relocation.pt_phdr_new_filesz        = new_phtab_size;
+    relocation.pt_phdr_new_memsz         = new_phtab_size;
+    relocation.pt_phdr_new_vaddr         = segment_vaddr;
+    relocation.pt_phdr_new_paddr         = segment_vaddr;
+    relocation.new_pt_load_index         = (uint32_t)admission.original_segment_count;
+    relocation.new_pt_load_entry_offset  = new_pt_load_entry_offset;
+    relocation.new_pt_load_offset        = segment_offset;
+    relocation.new_pt_load_vaddr         = segment_vaddr;
+    relocation.new_pt_load_paddr         = segment_vaddr;
+    relocation.new_pt_load_filesz        = segment_filesz;
+    relocation.new_pt_load_memsz         = segment_memsz;
+    relocation.new_pt_load_flags         = admission.segment_flags;
+    relocation.new_pt_load_align         = segment_align;
+    relocation.payload_offset            = payload_offset;
+    relocation.payload_end               = payload_end;
+    relocation.payload_vaddr             = payload_vaddr;
+    relocation.payload_vaddr_end         = payload_vaddr_end;
+
+    n00b_elf_rewrite_loadable_placement_t phtab_placement = {
+        .kind        = N00B_ELF_REWRITE_LOADABLE_PLACEMENT_RELOCATED_PHTAB,
+        .file_offset = segment_offset,
+        .file_end    = relocated_phtab_end,
+        .vaddr       = segment_vaddr,
+        .vaddr_end   = relocated_phtab_vaddr_end,
+        .alignment   = segment_align,
+    };
+    n00b_elf_rewrite_loadable_placement_t payload_placement = {
+        .kind        = N00B_ELF_REWRITE_LOADABLE_PLACEMENT_LOADABLE_PAYLOAD,
+        .file_offset = payload_offset,
+        .file_end    = payload_end,
+        .vaddr       = payload_vaddr,
+        .vaddr_end   = payload_vaddr_end,
+        .alignment   = admission.effective_file_alignment,
+    };
+
+    n00b_elf_rewrite_loadable_plan_t *plan = new_loadable_plan(allocator);
+    plan->outcome                    = N00B_ELF_REWRITE_PLAN_ACCEPTED;
+    plan->rejection_reason           = N00B_ELF_REWRITE_REJECT_NONE;
+    plan->target_profile             = profile;
+    plan->admission                  = admission;
+    plan->patches                    = patches;
+    plan->phtab_strategy             =
+        N00B_ELF_REWRITE_LOADABLE_PHTAB_STRATEGY_RELOCATE;
+    plan->payload_placement          = payload_placement;
+    plan->phtab_placement            = phtab_placement;
+    plan->phtab_adjustment           = source_adjustment;
+    plan->phtab_relocation           = relocation;
+    plan->source_binary              = bin;
+    plan->payload                    = request->payload;
+    plan->file_size                  = admission.file_size;
+    plan->original_segment_count     = admission.original_segment_count;
+    plan->new_segment_count          = admission.new_segment_count;
+    plan->p_memsz                    = admission.p_memsz;
+    plan->file_alignment             = admission.effective_file_alignment;
+    plan->vaddr_alignment            = admission.effective_vaddr_alignment;
+    plan->segment_flags              = admission.segment_flags;
+    plan->entrypoint_policy_deferred =
+        admission.entrypoint_policy_deferred;
+
+    return n00b_result_ok(n00b_elf_rewrite_loadable_plan_t *, plan);
+}
+
+static n00b_result_t(loadable_segment_facts_t)
+plan_loadable_payload_segment(n00b_elf_binary_t *bin,
+                              uint64_t           file_start,
+                              uint64_t           vaddr_start,
+                              n00b_elf_rewrite_admit_loadable_result_t admission,
+                              n00b_buffer_t     *payload)
+{
+    uint64_t segment_align = max_u64(N00B_ELF_LOAD_PAGE_SIZE,
+                                     admission.effective_vaddr_alignment);
+    uint64_t payload_offset;
+    uint64_t payload_vaddr;
+    uint64_t payload_end;
+    uint64_t payload_vaddr_end;
+
+    if (bin == nullptr || payload == nullptr
+        || !align_up_u64(file_start, segment_align, &payload_offset)
+        || !align_up_u64(vaddr_start, segment_align, &payload_vaddr)
+        || !checked_add_u64(payload_offset,
+                            (uint64_t)payload->byte_len,
+                            &payload_end)
+        || !checked_add_u64(payload_vaddr,
+                            admission.p_memsz,
+                            &payload_vaddr_end)) {
+        return n00b_result_err(loadable_segment_facts_t,
+                               N00B_ELF_REWRITE_ERR_OVERFLOW);
+    }
+
+    loadable_segment_facts_t facts = {
+        .offset = payload_offset,
+        .vaddr  = payload_vaddr,
+        .paddr  = payload_vaddr,
+        .filesz = (uint64_t)payload->byte_len,
+        .memsz  = admission.p_memsz,
+        .align  = segment_align,
+        .flags  = admission.segment_flags,
+    };
+
+    return n00b_result_ok(loadable_segment_facts_t, facts);
+}
+
+static n00b_result_t(n00b_elf_rewrite_loadable_plan_t *)
+plan_in_place_loadable(
+    n00b_allocator_t                         *allocator,
+    n00b_elf_binary_t                        *bin,
+    n00b_elf_rewrite_loadable_request_t      *request,
+    n00b_elf_rewrite_target_profile_t         profile,
+    n00b_elf_rewrite_admit_loadable_result_t  admission)
+{
+    n00b_elf_rewrite_loadable_phtab_adjustment_t adj =
+        admission.phtab_adjustment;
+
+    if (adj.status != N00B_ELF_REWRITE_LOADABLE_PHTAB_ADJUST_ACCEPTED
+        || adj.containing_load_index >= bin->num_segments
+        || adj.pt_phdr_index >= bin->header.phnum
+        || admission.new_segment_count != admission.original_segment_count + 1) {
+        return n00b_result_err(n00b_elf_rewrite_loadable_plan_t *,
+                               N00B_ELF_REWRITE_ERR_APPLY);
+    }
+
+    uint64_t phtab_end;
+    uint64_t pt_phdr_delta;
+    uint64_t pt_phdr_entry_offset;
+    uint64_t pt_phdr_entry_end;
+    uint64_t new_pt_load_delta;
+    uint64_t new_pt_load_entry_offset;
+    uint64_t new_pt_load_entry_end;
+    if (!checked_add_u64(adj.adjusted_phtab_offset,
+                         adj.adjusted_phtab_size,
+                         &phtab_end)
+        || !checked_mul_u64(adj.pt_phdr_index,
+                            N00B_ELF64_PHDR_SIZE,
+                            &pt_phdr_delta)
+        || !checked_add_u64(adj.adjusted_phtab_offset,
+                            pt_phdr_delta,
+                            &pt_phdr_entry_offset)
+        || !checked_add_u64(pt_phdr_entry_offset,
+                            N00B_ELF64_PHDR_SIZE,
+                            &pt_phdr_entry_end)
+        || !checked_mul_u64(admission.original_segment_count,
+                            N00B_ELF64_PHDR_SIZE,
+                            &new_pt_load_delta)
+        || !checked_add_u64(adj.adjusted_phtab_offset,
+                            new_pt_load_delta,
+                            &new_pt_load_entry_offset)
+        || !checked_add_u64(new_pt_load_entry_offset,
+                            N00B_ELF64_PHDR_SIZE,
+                            &new_pt_load_entry_end)
+        || pt_phdr_entry_end > new_pt_load_entry_offset
+        || new_pt_load_entry_end != phtab_end) {
+        return n00b_result_err(n00b_elf_rewrite_loadable_plan_t *,
+                               N00B_ELF_REWRITE_ERR_OVERFLOW);
+    }
+
+    n00b_elf_segment_t *containing_load =
+        &bin->segments[adj.containing_load_index];
+    uint64_t extended_load_memsz;
+    uint64_t extended_load_vaddr_end;
+    if (!checked_add_u64(containing_load->memsz,
+                         adj.required_memory_extension,
+                         &extended_load_memsz)
+        || !checked_add_u64(containing_load->vaddr,
+                            extended_load_memsz,
+                            &extended_load_vaddr_end)) {
+        return n00b_result_err(n00b_elf_rewrite_loadable_plan_t *,
+                               N00B_ELF_REWRITE_ERR_OVERFLOW);
+    }
+
+    uint64_t highest_load_end = extended_load_vaddr_end;
+    for (uint32_t i = 0; i < bin->num_segments; i++) {
+        n00b_elf_segment_t *seg = &bin->segments[i];
+        if (seg->type != PT_LOAD) {
+            continue;
+        }
+
+        uint64_t load_end;
+        if (i == adj.containing_load_index) {
+            load_end = extended_load_vaddr_end;
+        } else if (!checked_add_u64(seg->vaddr, seg->memsz, &load_end)) {
+            return n00b_result_err(n00b_elf_rewrite_loadable_plan_t *,
+                                   N00B_ELF_REWRITE_ERR_OVERFLOW);
+        }
+
+        if (load_end > highest_load_end) {
+            highest_load_end = load_end;
+        }
+    }
+
+    uint64_t payload_file_start = max_u64(admission.file_size, phtab_end);
+    auto segment_result =
+        plan_loadable_payload_segment(bin,
+                                      payload_file_start,
+                                      highest_load_end,
+                                      admission,
+                                      request->payload);
+    if (n00b_result_is_err(segment_result)) {
+        return n00b_result_err(n00b_elf_rewrite_loadable_plan_t *,
+                               n00b_result_get_err(segment_result));
+    }
+    loadable_segment_facts_t segment = n00b_result_get(segment_result);
+
+    uint64_t payload_end;
+    uint64_t payload_vaddr_end;
+    if (!checked_add_u64(segment.offset,
+                         (uint64_t)request->payload->byte_len,
+                         &payload_end)
+        || !checked_add_u64(segment.vaddr,
+                            admission.p_memsz,
+                            &payload_vaddr_end)) {
+        return n00b_result_err(n00b_elf_rewrite_loadable_plan_t *,
+                               N00B_ELF_REWRITE_ERR_OVERFLOW);
+    }
+
+    n00b_elf_rewrite_patch_t local[N00B_ELF_REWRITE_MAX_PATCHES] = {};
+    uint64_t                 count = 0;
+    if (!append_patch(local,
+                      N00B_ELF_REWRITE_MAX_PATCHES,
+                      &count,
+                      (n00b_elf_rewrite_patch_t){
+                          .kind                 = N00B_ELF_REWRITE_PATCH_ELF_HEADER,
+                          .file_offset          = 0,
+                          .file_end             = N00B_ELF64_EHDR_SIZE,
+                          .original_file_offset = 0,
+                          .original_file_end    = N00B_ELF64_EHDR_SIZE,
+                      })
+        || !append_patch_if_nonempty(
+            local,
+            N00B_ELF_REWRITE_MAX_PATCHES,
+            &count,
+            (n00b_elf_rewrite_patch_t){
+                .kind                 = N00B_ELF_REWRITE_PATCH_LOADABLE_PADDING,
+                .file_offset          = adj.containing_load_file_end,
+                .file_end             = adj.adjusted_phtab_offset,
+                .original_file_offset = adj.containing_load_file_end,
+                .original_file_end    = adj.containing_load_file_end,
+            })
+        || !append_patch_if_nonempty(
+            local,
+            N00B_ELF_REWRITE_MAX_PATCHES,
+            &count,
+            (n00b_elf_rewrite_patch_t){
+                .kind                 = N00B_ELF_REWRITE_PATCH_ADJUSTED_PHTAB,
+                .file_offset          = adj.adjusted_phtab_offset,
+                .file_end             = pt_phdr_entry_offset,
+                .original_file_offset = adj.adjusted_phtab_offset,
+                .original_file_end    = adj.adjusted_phtab_offset,
+            })
+        || !append_patch(local,
+                         N00B_ELF_REWRITE_MAX_PATCHES,
+                         &count,
+                         (n00b_elf_rewrite_patch_t){
+                             .kind                 = N00B_ELF_REWRITE_PATCH_ADJUSTED_PT_PHDR,
+                             .file_offset          = pt_phdr_entry_offset,
+                             .file_end             = pt_phdr_entry_end,
+                             .original_file_offset = pt_phdr_entry_offset,
+                             .original_file_end    = pt_phdr_entry_offset,
+                         })
+        || !append_patch_if_nonempty(
+            local,
+            N00B_ELF_REWRITE_MAX_PATCHES,
+            &count,
+            (n00b_elf_rewrite_patch_t){
+                .kind                 = N00B_ELF_REWRITE_PATCH_ADJUSTED_PHTAB,
+                .file_offset          = pt_phdr_entry_end,
+                .file_end             = new_pt_load_entry_offset,
+                .original_file_offset = pt_phdr_entry_end,
+                .original_file_end    = pt_phdr_entry_end,
+            })
+        || !append_patch(local,
+                         N00B_ELF_REWRITE_MAX_PATCHES,
+                         &count,
+                         (n00b_elf_rewrite_patch_t){
+                             .kind                 = N00B_ELF_REWRITE_PATCH_NEW_PT_LOAD,
+                             .file_offset          = new_pt_load_entry_offset,
+                             .file_end             = new_pt_load_entry_end,
+                             .original_file_offset = new_pt_load_entry_offset,
+                             .original_file_end    = new_pt_load_entry_offset,
+                         })
+        || !append_patch_if_nonempty(
+            local,
+            N00B_ELF_REWRITE_MAX_PATCHES,
+            &count,
+            (n00b_elf_rewrite_patch_t){
+                .kind                 = N00B_ELF_REWRITE_PATCH_LOADABLE_PADDING,
+                .file_offset          = admission.file_size,
+                .file_end             = segment.offset,
+                .original_file_offset = admission.file_size,
+                .original_file_end    = admission.file_size,
+            })
+        || !append_patch(local,
+                         N00B_ELF_REWRITE_MAX_PATCHES,
+                         &count,
+                         (n00b_elf_rewrite_patch_t){
+                             .kind                 = N00B_ELF_REWRITE_PATCH_LOADABLE_PAYLOAD,
+                             .file_offset          = segment.offset,
+                             .file_end             = payload_end,
+                             .original_file_offset = segment.offset,
+                             .original_file_end    = segment.offset,
+                         })) {
+        return n00b_result_err(n00b_elf_rewrite_loadable_plan_t *,
+                               N00B_ELF_REWRITE_ERR_OVERFLOW);
+    }
+
+    n00b_array_t(n00b_elf_rewrite_patch_t) patches =
+        n00b_array_new(n00b_elf_rewrite_patch_t,
+                       count,
+                       .allocator = allocator);
+    memcpy(patches.data, local, count * sizeof(n00b_elf_rewrite_patch_t));
+    patches.len = count;
+
+    n00b_elf_rewrite_loadable_placement_t payload_placement = {
+        .kind        = N00B_ELF_REWRITE_LOADABLE_PLACEMENT_LOADABLE_PAYLOAD,
+        .file_offset = segment.offset,
+        .file_end    = payload_end,
+        .vaddr       = segment.vaddr,
+        .vaddr_end   = payload_vaddr_end,
+        .alignment   = segment.align,
+    };
+
+    n00b_elf_rewrite_loadable_plan_t *plan = new_loadable_plan(allocator);
+    plan->outcome                    = N00B_ELF_REWRITE_PLAN_ACCEPTED;
+    plan->rejection_reason           = N00B_ELF_REWRITE_REJECT_NONE;
+    plan->target_profile             = profile;
+    plan->admission                  = admission;
+    plan->patches                    = patches;
+    plan->phtab_strategy             =
+        N00B_ELF_REWRITE_LOADABLE_PHTAB_STRATEGY_IN_PLACE_ADJUST;
+    plan->payload_placement          = payload_placement;
+    plan->phtab_placement            = admission.phtab_placement;
+    plan->phtab_adjustment           = adj;
+    plan->phtab_relocation           = no_loadable_relocation();
+    plan->source_binary              = bin;
+    plan->payload                    = request->payload;
+    plan->file_size                  = admission.file_size;
+    plan->original_segment_count     = admission.original_segment_count;
+    plan->new_segment_count          = admission.new_segment_count;
+    plan->p_memsz                    = admission.p_memsz;
+    plan->file_alignment             = admission.effective_file_alignment;
+    plan->vaddr_alignment            = admission.effective_vaddr_alignment;
+    plan->segment_flags              = admission.segment_flags;
+    plan->entrypoint_policy_deferred =
+        admission.entrypoint_policy_deferred;
+
+    return n00b_result_ok(n00b_elf_rewrite_loadable_plan_t *, plan);
+}
+
+n00b_result_t(n00b_elf_rewrite_loadable_plan_t *)
+n00b_elf_rewrite_plan_loadable_insert(
+    n00b_elf_binary_t                   *bin,
+    n00b_elf_rewrite_loadable_request_t *request) _kargs
+{
+    n00b_allocator_t *allocator = nullptr;
+}
+{
+    if (bin == nullptr) {
+        return n00b_result_err(n00b_elf_rewrite_loadable_plan_t *,
+                               N00B_ELF_REWRITE_ERR_NULL_BINARY);
+    }
+
+    if (request == nullptr) {
+        return n00b_result_err(n00b_elf_rewrite_loadable_plan_t *,
+                               N00B_ELF_REWRITE_ERR_NULL_REQUEST);
+    }
+
+    if (request->payload == nullptr) {
+        return n00b_result_err(n00b_elf_rewrite_loadable_plan_t *,
+                               N00B_ELF_REWRITE_ERR_NULL_PAYLOAD);
+    }
+
+    if (request->payload->byte_len == 0) {
+        return n00b_result_err(n00b_elf_rewrite_loadable_plan_t *,
+                               N00B_ELF_REWRITE_ERR_ZERO_PAYLOAD_SIZE);
+    }
+
+    auto profile_result = n00b_elf_rewrite_target_profile(bin);
+    if (n00b_result_is_err(profile_result)) {
+        return n00b_result_err(n00b_elf_rewrite_loadable_plan_t *,
+                               n00b_result_get_err(profile_result));
+    }
+
+    n00b_elf_rewrite_target_profile_t profile =
+        n00b_result_get(profile_result);
+    if (profile.reason != N00B_ELF_REWRITE_PROFILE_OK) {
+        return rejected_loadable_plan(allocator,
+                                      N00B_ELF_REWRITE_REJECT_TARGET_PROFILE,
+                                      profile,
+                                      nullptr);
+    }
+
+    n00b_elf_rewrite_admit_loadable_request_t admission_request = {
+        .payload_size     = request->payload->byte_len,
+        .segment_flags    = request->segment_flags,
+        .file_alignment   = request->file_alignment,
+        .vaddr_alignment  = request->vaddr_alignment,
+        .p_memsz          = request->p_memsz,
+        .phtab_strategy   = request->phtab_strategy,
+        .policy           = request->policy,
+    };
+
+    auto admission_result =
+        n00b_elf_rewrite_admit_loadable_insert(bin,
+                                               &admission_request,
+                                               .allocator = allocator);
+    if (n00b_result_is_err(admission_result)) {
+        return n00b_result_err(n00b_elf_rewrite_loadable_plan_t *,
+                               N00B_ELF_REWRITE_ERR_ADMISSION);
+    }
+
+    n00b_elf_rewrite_admit_loadable_result_t admission =
+        n00b_result_get(admission_result);
+    if (admission.outcome == N00B_ELF_REWRITE_ADMIT_OUTCOME_REJECTED) {
+        if (request->phtab_strategy
+                == N00B_ELF_REWRITE_LOADABLE_PHTAB_STRATEGY_IN_PLACE_ADJUST
+            && loadable_in_place_rejection_allows_relocation(
+                   &admission.phtab_adjustment)) {
+            n00b_elf_rewrite_loadable_phtab_adjustment_t source_adjustment =
+                admission.phtab_adjustment;
+            n00b_elf_rewrite_admit_loadable_request_t relocate_request =
+                admission_request;
+            relocate_request.phtab_strategy =
+                N00B_ELF_REWRITE_LOADABLE_PHTAB_STRATEGY_RELOCATE;
+
+            admission_result =
+                n00b_elf_rewrite_admit_loadable_insert(
+                    bin,
+                    &relocate_request,
+                    .allocator = allocator);
+            if (n00b_result_is_err(admission_result)) {
+                return n00b_result_err(n00b_elf_rewrite_loadable_plan_t *,
+                                       N00B_ELF_REWRITE_ERR_ADMISSION);
+            }
+
+            admission = n00b_result_get(admission_result);
+            if (admission.outcome
+                == N00B_ELF_REWRITE_ADMIT_OUTCOME_ACCEPTED) {
+                return plan_relocated_loadable(allocator,
+                                               bin,
+                                               request,
+                                               profile,
+                                               admission,
+                                               source_adjustment);
+            }
+        }
+
+        return rejected_loadable_plan(allocator,
+                                      N00B_ELF_REWRITE_REJECT_ADMISSION,
+                                      profile,
+                                      &admission);
+    }
+
+    if (request->phtab_strategy
+        == N00B_ELF_REWRITE_LOADABLE_PHTAB_STRATEGY_RELOCATE) {
+        return plan_relocated_loadable(allocator,
+                                       bin,
+                                       request,
+                                       profile,
+                                       admission,
+                                       no_phtab_adjustment());
+    }
+
+    if (request->phtab_strategy
+        == N00B_ELF_REWRITE_LOADABLE_PHTAB_STRATEGY_IN_PLACE_ADJUST) {
+        return plan_in_place_loadable(allocator,
+                                      bin,
+                                      request,
+                                      profile,
+                                      admission);
+    }
+
+    n00b_elf_rewrite_loadable_plan_t *plan = new_loadable_plan(allocator);
+    plan->outcome                    = N00B_ELF_REWRITE_PLAN_ACCEPTED;
+    plan->rejection_reason           = N00B_ELF_REWRITE_REJECT_NONE;
+    plan->target_profile             = profile;
+    plan->admission                  = admission;
+    plan->patches                    = (n00b_array_t(n00b_elf_rewrite_patch_t)){};
+    plan->phtab_strategy             = admission.phtab_strategy;
+    plan->payload_placement          = admission.payload_placement;
+    plan->phtab_placement            = admission.phtab_placement;
+    plan->phtab_adjustment           = admission.phtab_adjustment;
+    plan->phtab_relocation           = no_loadable_relocation();
+    plan->source_binary              = bin;
+    plan->payload                    = request->payload;
+    plan->file_size                  = admission.file_size;
+    plan->original_segment_count     = admission.original_segment_count;
+    plan->new_segment_count          = admission.new_segment_count;
+    plan->p_memsz                    = admission.p_memsz;
+    plan->file_alignment             = admission.effective_file_alignment;
+    plan->vaddr_alignment            = admission.effective_vaddr_alignment;
+    plan->segment_flags              = admission.segment_flags;
+    plan->entrypoint_policy_deferred =
+        admission.entrypoint_policy_deferred;
+
+    return n00b_result_ok(n00b_elf_rewrite_loadable_plan_t *, plan);
 }
 
 static bool
@@ -2037,6 +3064,28 @@ write_output_bytes(n00b_buffer_t *out,
     return true;
 }
 
+static void
+write_phdr(uint8_t *p,
+           uint32_t type,
+           uint32_t flags,
+           uint64_t offset,
+           uint64_t vaddr,
+           uint64_t paddr,
+           uint64_t filesz,
+           uint64_t memsz,
+           uint64_t align,
+           bool     big)
+{
+    write_u32(p + 0, type, big);
+    write_u32(p + 4, flags, big);
+    write_u64(p + 8, offset, big);
+    write_u64(p + 16, vaddr, big);
+    write_u64(p + 24, paddr, big);
+    write_u64(p + 32, filesz, big);
+    write_u64(p + 40, memsz, big);
+    write_u64(p + 48, align, big);
+}
+
 static bool
 zero_output_range(n00b_buffer_t *out, uint64_t offset, uint64_t end)
 {
@@ -2046,7 +3095,7 @@ zero_output_range(n00b_buffer_t *out, uint64_t offset, uint64_t end)
         return false;
     }
 
-    memset(out->data + offset, 0, (size_t)(end - offset));
+    zero_byte_range((uint8_t *)out->data + offset, end - offset);
     return true;
 }
 
@@ -2190,6 +3239,885 @@ apply_supports_overlay_shape(n00b_elf_binary_t                  *bin,
     return append_after_overlay
         && plan->table_strategy
                == N00B_ELF_REWRITE_TABLE_STRATEGY_AFTER_OVERLAY_REPLACEMENT;
+}
+
+static n00b_elf_rewrite_patch_t *
+find_loadable_plan_patch(n00b_elf_rewrite_loadable_plan_t *plan,
+                         n00b_elf_rewrite_patch_kind_t     kind)
+{
+    for (uint64_t i = 0; i < plan->patches.len; i++) {
+        if (plan->patches.data[i].kind == kind) {
+            return &plan->patches.data[i];
+        }
+    }
+
+    return nullptr;
+}
+
+static bool
+loadable_plan_output_size(n00b_elf_binary_t                  *bin,
+                          n00b_elf_rewrite_loadable_plan_t   *plan,
+                          uint64_t                           *size_out)
+{
+    uint64_t output_size = bin->stream->buf->byte_len;
+
+    for (uint64_t i = 0; i < plan->patches.len; i++) {
+        n00b_elf_rewrite_patch_t *patch = &plan->patches.data[i];
+        if (patch->file_offset > patch->file_end) {
+            return false;
+        }
+
+        if (patch->file_end > output_size) {
+            output_size = patch->file_end;
+        }
+    }
+
+    *size_out = output_size;
+    return true;
+}
+
+static bool
+loadable_patch_is_header(n00b_elf_rewrite_patch_t *patch)
+{
+    return patch->kind == N00B_ELF_REWRITE_PATCH_ELF_HEADER
+        && patch->file_offset == 0
+        && patch->file_end == N00B_ELF64_EHDR_SIZE
+        && patch->original_file_offset == 0
+        && patch->original_file_end == N00B_ELF64_EHDR_SIZE;
+}
+
+static bool
+loadable_patch_is_insert(n00b_elf_rewrite_patch_t *patch,
+                         n00b_elf_rewrite_patch_kind_t kind,
+                         uint64_t start,
+                         uint64_t end)
+{
+    return patch->kind == kind
+        && patch->file_offset == start
+        && patch->file_end == end
+        && patch->original_file_offset == start
+        && patch->original_file_end == start
+        && start < end;
+}
+
+static bool
+loadable_validate_patch_coverage(uint64_t *covered, uint64_t start, uint64_t end)
+{
+    uint64_t len;
+
+    if (start >= end || !checked_add_u64(*covered, end - start, &len)) {
+        return false;
+    }
+
+    *covered = len;
+    return true;
+}
+
+static bool
+loadable_patch_matches_optional_padding(n00b_elf_rewrite_patch_t *patch,
+                                        uint64_t start,
+                                        uint64_t end,
+                                        bool    *seen)
+{
+    if (start == end) {
+        return false;
+    }
+
+    if (!*seen
+        && loadable_patch_is_insert(patch,
+                                    N00B_ELF_REWRITE_PATCH_LOADABLE_PADDING,
+                                    start,
+                                    end)) {
+        *seen = true;
+        return true;
+    }
+
+    return false;
+}
+
+static bool
+loadable_patch_matches_optional_phtab(n00b_elf_rewrite_patch_t *patch,
+                                      n00b_elf_rewrite_patch_kind_t kind,
+                                      uint64_t start,
+                                      uint64_t end,
+                                      bool    *seen)
+{
+    if (start == end) {
+        return false;
+    }
+
+    if (!*seen && loadable_patch_is_insert(patch, kind, start, end)) {
+        *seen = true;
+        return true;
+    }
+
+    return false;
+}
+
+static bool
+validate_loadable_patch_set(n00b_elf_rewrite_loadable_plan_t *plan,
+                            bool relocated,
+                            uint64_t live_phtab_offset,
+                            uint64_t live_phtab_end,
+                            uint64_t pt_phdr_entry_offset,
+                            uint64_t new_pt_load_entry_offset,
+                            uint64_t first_padding_offset,
+                            uint64_t first_padding_end,
+                            uint64_t second_padding_offset,
+                            uint64_t second_padding_end)
+{
+    uint64_t phtab_covered = 0;
+    bool     saw_header    = false;
+    bool     saw_payload   = false;
+    bool     saw_pt_phdr   = false;
+    bool     saw_new_load  = false;
+    bool     saw_first_pad = first_padding_offset == first_padding_end;
+    bool     saw_second_pad = second_padding_offset == second_padding_end;
+    uint64_t pt_phdr_entry_end;
+    uint64_t new_pt_load_entry_end;
+    bool     saw_first_phtab;
+    bool     saw_second_phtab;
+    n00b_elf_rewrite_patch_kind_t phtab_kind =
+        relocated
+            ? N00B_ELF_REWRITE_PATCH_RELOCATED_PHTAB
+            : N00B_ELF_REWRITE_PATCH_ADJUSTED_PHTAB;
+
+    if (plan->patches.data == nullptr || plan->patches.len == 0
+        || !checked_add_u64(pt_phdr_entry_offset,
+                            N00B_ELF64_PHDR_SIZE,
+                            &pt_phdr_entry_end)
+        || !checked_add_u64(new_pt_load_entry_offset,
+                            N00B_ELF64_PHDR_SIZE,
+                            &new_pt_load_entry_end)
+        || live_phtab_offset >= live_phtab_end
+        || pt_phdr_entry_offset < live_phtab_offset
+        || pt_phdr_entry_end > live_phtab_end
+        || new_pt_load_entry_offset < live_phtab_offset
+        || new_pt_load_entry_end > live_phtab_end) {
+        return false;
+    }
+
+    saw_first_phtab = live_phtab_offset == pt_phdr_entry_offset;
+    saw_second_phtab = pt_phdr_entry_end == new_pt_load_entry_offset;
+
+    for (uint64_t i = 0; i < plan->patches.len; i++) {
+        n00b_elf_rewrite_patch_t *patch = &plan->patches.data[i];
+
+        if (patch->file_offset >= patch->file_end
+            || patch->original_file_offset > patch->original_file_end
+            || (i != 0
+                && plan->patches.data[i - 1].file_end
+                       > patch->file_offset)) {
+            return false;
+        }
+
+        switch (patch->kind) {
+        case N00B_ELF_REWRITE_PATCH_ELF_HEADER:
+            if (saw_header || !loadable_patch_is_header(patch)) {
+                return false;
+            }
+            saw_header = true;
+            break;
+        case N00B_ELF_REWRITE_PATCH_LOADABLE_PAYLOAD:
+            if (saw_payload
+                || !loadable_patch_is_insert(
+                    patch,
+                    N00B_ELF_REWRITE_PATCH_LOADABLE_PAYLOAD,
+                    plan->payload_placement.file_offset,
+                    plan->payload_placement.file_end)) {
+                return false;
+            }
+            saw_payload = true;
+            break;
+        case N00B_ELF_REWRITE_PATCH_LOADABLE_PADDING:
+            if (!loadable_patch_matches_optional_padding(patch,
+                                                         first_padding_offset,
+                                                         first_padding_end,
+                                                         &saw_first_pad)
+                && !loadable_patch_matches_optional_padding(
+                    patch,
+                    second_padding_offset,
+                    second_padding_end,
+                    &saw_second_pad)) {
+                return false;
+            }
+            break;
+        case N00B_ELF_REWRITE_PATCH_ADJUSTED_PHTAB:
+            if (relocated
+                || (!loadable_patch_matches_optional_phtab(
+                        patch,
+                        phtab_kind,
+                        live_phtab_offset,
+                        pt_phdr_entry_offset,
+                        &saw_first_phtab)
+                    && !loadable_patch_matches_optional_phtab(
+                        patch,
+                        phtab_kind,
+                        pt_phdr_entry_end,
+                        new_pt_load_entry_offset,
+                        &saw_second_phtab))
+                || !loadable_validate_patch_coverage(&phtab_covered,
+                                                     patch->file_offset,
+                                                     patch->file_end)) {
+                return false;
+            }
+            break;
+        case N00B_ELF_REWRITE_PATCH_ADJUSTED_PT_PHDR:
+            if (relocated || saw_pt_phdr
+                || !loadable_patch_is_insert(
+                    patch,
+                    N00B_ELF_REWRITE_PATCH_ADJUSTED_PT_PHDR,
+                    pt_phdr_entry_offset,
+                    pt_phdr_entry_end)
+                || !loadable_validate_patch_coverage(&phtab_covered,
+                                                     patch->file_offset,
+                                                     patch->file_end)) {
+                return false;
+            }
+            saw_pt_phdr = true;
+            break;
+        case N00B_ELF_REWRITE_PATCH_RELOCATED_PHTAB:
+            if (!relocated
+                || (!loadable_patch_matches_optional_phtab(
+                        patch,
+                        phtab_kind,
+                        live_phtab_offset,
+                        pt_phdr_entry_offset,
+                        &saw_first_phtab)
+                    && !loadable_patch_matches_optional_phtab(
+                        patch,
+                        phtab_kind,
+                        pt_phdr_entry_end,
+                        new_pt_load_entry_offset,
+                        &saw_second_phtab))
+                || !loadable_validate_patch_coverage(&phtab_covered,
+                                                     patch->file_offset,
+                                                     patch->file_end)) {
+                return false;
+            }
+            break;
+        case N00B_ELF_REWRITE_PATCH_RELOCATED_PT_PHDR:
+            if (!relocated || saw_pt_phdr
+                || !loadable_patch_is_insert(
+                    patch,
+                    N00B_ELF_REWRITE_PATCH_RELOCATED_PT_PHDR,
+                    pt_phdr_entry_offset,
+                    pt_phdr_entry_end)
+                || !loadable_validate_patch_coverage(&phtab_covered,
+                                                     patch->file_offset,
+                                                     patch->file_end)) {
+                return false;
+            }
+            saw_pt_phdr = true;
+            break;
+        case N00B_ELF_REWRITE_PATCH_NEW_PT_LOAD:
+            if (saw_new_load
+                || !loadable_patch_is_insert(
+                    patch,
+                    N00B_ELF_REWRITE_PATCH_NEW_PT_LOAD,
+                    new_pt_load_entry_offset,
+                    new_pt_load_entry_end)
+                || !loadable_validate_patch_coverage(&phtab_covered,
+                                                     patch->file_offset,
+                                                     patch->file_end)) {
+                return false;
+            }
+            saw_new_load = true;
+            break;
+        case N00B_ELF_REWRITE_PATCH_PAYLOAD:
+        case N00B_ELF_REWRITE_PATCH_SECTION_NAME_STRTAB:
+        case N00B_ELF_REWRITE_PATCH_SECTION_HEADER_TABLE:
+        case N00B_ELF_REWRITE_PATCH_TABLE_TAIL:
+        case N00B_ELF_REWRITE_PATCH_APPENDED_TABLES:
+        case N00B_ELF_REWRITE_PATCH_STALE_PAYLOAD:
+            return false;
+        }
+    }
+
+    return saw_header
+        && saw_payload
+        && saw_pt_phdr
+        && saw_new_load
+        && saw_first_pad
+        && saw_second_pad
+        && saw_first_phtab
+        && saw_second_phtab
+        && phtab_covered == live_phtab_end - live_phtab_offset;
+}
+
+static bool
+patch_output_loadable_header(n00b_buffer_t     *out,
+                             n00b_elf_binary_t *bin,
+                             uint64_t           phoff,
+                             uint64_t           phnum)
+{
+    if (out->byte_len < N00B_ELF64_EHDR_SIZE || phnum > UINT16_MAX) {
+        return false;
+    }
+
+    bool     big = is_big_endian(bin);
+    uint8_t *p   = (uint8_t *)out->data;
+
+    write_u64(p + 32, phoff, big);
+    write_u16(p + 56, (uint16_t)phnum, big);
+    return true;
+}
+
+static bool
+loadable_phtab_patch_coverage(n00b_elf_rewrite_loadable_plan_t *plan,
+                              uint64_t                          start,
+                              uint64_t                          end,
+                              bool                              relocated,
+                              uint64_t                         *covered_out)
+{
+    uint64_t covered = 0;
+
+    for (uint64_t i = 0; i < plan->patches.len; i++) {
+        n00b_elf_rewrite_patch_t *patch = &plan->patches.data[i];
+
+        if (patch->file_offset < start || patch->file_end > end) {
+            continue;
+        }
+
+        bool covers_phtab = false;
+        switch (patch->kind) {
+        case N00B_ELF_REWRITE_PATCH_ADJUSTED_PHTAB:
+        case N00B_ELF_REWRITE_PATCH_ADJUSTED_PT_PHDR:
+            covers_phtab = !relocated;
+            break;
+        case N00B_ELF_REWRITE_PATCH_RELOCATED_PHTAB:
+        case N00B_ELF_REWRITE_PATCH_RELOCATED_PT_PHDR:
+            covers_phtab = relocated;
+            break;
+        case N00B_ELF_REWRITE_PATCH_NEW_PT_LOAD:
+            covers_phtab = true;
+            break;
+        default:
+            covers_phtab = false;
+            break;
+        }
+
+        if (!covers_phtab
+            || !checked_add_u64(covered,
+                                patch->file_end - patch->file_offset,
+                                &covered)) {
+            return false;
+        }
+    }
+
+    *covered_out = covered;
+    return true;
+}
+
+static n00b_buffer_t *
+build_in_place_phtab(n00b_elf_binary_t                  *bin,
+                     n00b_elf_rewrite_loadable_plan_t   *plan,
+                     n00b_allocator_t                   *allocator)
+{
+    n00b_elf_rewrite_loadable_phtab_adjustment_t *adj =
+        &plan->phtab_adjustment;
+    bool big = is_big_endian(bin);
+    uint64_t original_phtab_end;
+
+    if (adj->adjusted_phtab_size > (uint64_t)SIZE_MAX
+        || adj->original_phtab_offset > (uint64_t)SIZE_MAX
+        || adj->original_phtab_size > (uint64_t)SIZE_MAX
+        || !checked_add_u64(adj->original_phtab_offset,
+                            adj->original_phtab_size,
+                            &original_phtab_end)
+        || original_phtab_end > bin->stream->buf->byte_len
+        || adj->containing_load_index >= bin->num_segments
+        || adj->pt_phdr_index >= plan->original_segment_count) {
+        return nullptr;
+    }
+
+    n00b_buffer_t *phtab = new_zero_buffer(adj->adjusted_phtab_size,
+                                           allocator);
+    if (phtab == nullptr) {
+        return nullptr;
+    }
+
+    memcpy(phtab->data,
+           bin->stream->buf->data + adj->original_phtab_offset,
+           (size_t)adj->original_phtab_size);
+
+    n00b_elf_segment_t *containing_load =
+        &bin->segments[adj->containing_load_index];
+    uint64_t containing_entry_offset =
+        (uint64_t)adj->containing_load_index * N00B_ELF64_PHDR_SIZE;
+    uint64_t pt_phdr_entry_offset =
+        (uint64_t)adj->pt_phdr_index * N00B_ELF64_PHDR_SIZE;
+    uint64_t new_pt_load_entry_offset =
+        plan->original_segment_count * N00B_ELF64_PHDR_SIZE;
+    uint64_t containing_entry_end;
+    uint64_t pt_phdr_entry_end;
+    uint64_t new_pt_load_entry_end;
+    uint64_t new_containing_filesz;
+    uint64_t new_containing_memsz;
+
+    if (!checked_add_u64(containing_load->filesz,
+                         adj->required_file_extension,
+                         &new_containing_filesz)
+        || !checked_add_u64(containing_load->memsz,
+                            adj->required_memory_extension,
+                            &new_containing_memsz)
+        || !checked_add_u64(containing_entry_offset,
+                            N00B_ELF64_PHDR_SIZE,
+                            &containing_entry_end)
+        || !checked_add_u64(pt_phdr_entry_offset,
+                            N00B_ELF64_PHDR_SIZE,
+                            &pt_phdr_entry_end)
+        || !checked_add_u64(new_pt_load_entry_offset,
+                            N00B_ELF64_PHDR_SIZE,
+                            &new_pt_load_entry_end)
+        || containing_entry_end > phtab->byte_len
+        || pt_phdr_entry_end > phtab->byte_len
+        || new_pt_load_entry_end > phtab->byte_len) {
+        return nullptr;
+    }
+
+    uint8_t *containing_entry = (uint8_t *)phtab->data + containing_entry_offset;
+    write_u64(containing_entry + 32, new_containing_filesz, big);
+    write_u64(containing_entry + 40, new_containing_memsz, big);
+
+    uint8_t *pt_phdr = (uint8_t *)phtab->data + pt_phdr_entry_offset;
+    write_u64(pt_phdr + 8, adj->pt_phdr_new_offset, big);
+    write_u64(pt_phdr + 16, adj->pt_phdr_new_vaddr, big);
+    write_u64(pt_phdr + 24, adj->pt_phdr_new_vaddr, big);
+    write_u64(pt_phdr + 32, adj->pt_phdr_new_filesz, big);
+    write_u64(pt_phdr + 40, adj->pt_phdr_new_memsz, big);
+
+    uint8_t *new_load = (uint8_t *)phtab->data + new_pt_load_entry_offset;
+    write_phdr(new_load,
+               PT_LOAD,
+               plan->segment_flags,
+               plan->payload_placement.file_offset,
+               plan->payload_placement.vaddr,
+               plan->payload_placement.vaddr,
+               plan->payload->byte_len,
+               plan->p_memsz,
+               plan->payload_placement.alignment,
+               big);
+
+    return phtab;
+}
+
+static n00b_buffer_t *
+build_relocated_phtab(n00b_elf_binary_t                  *bin,
+                      n00b_elf_rewrite_loadable_plan_t   *plan,
+                      n00b_allocator_t                   *allocator)
+{
+    n00b_elf_rewrite_loadable_relocation_t *rel =
+        &plan->phtab_relocation;
+    bool big = is_big_endian(bin);
+    uint64_t original_phtab_end;
+
+    if (rel->relocated_phtab_size > (uint64_t)SIZE_MAX
+        || rel->original_phtab_offset > (uint64_t)SIZE_MAX
+        || rel->original_phtab_size > (uint64_t)SIZE_MAX
+        || !checked_add_u64(rel->original_phtab_offset,
+                            rel->original_phtab_size,
+                            &original_phtab_end)
+        || original_phtab_end > bin->stream->buf->byte_len
+        || rel->pt_phdr_index >= plan->original_segment_count
+        || rel->new_pt_load_index != plan->original_segment_count) {
+        return nullptr;
+    }
+
+    n00b_buffer_t *phtab = new_zero_buffer(rel->relocated_phtab_size,
+                                           allocator);
+    if (phtab == nullptr) {
+        return nullptr;
+    }
+
+    memcpy(phtab->data,
+           bin->stream->buf->data + rel->original_phtab_offset,
+           (size_t)rel->original_phtab_size);
+
+    uint64_t pt_phdr_entry_offset =
+        (uint64_t)rel->pt_phdr_index * N00B_ELF64_PHDR_SIZE;
+    uint64_t new_pt_load_entry_offset =
+        (uint64_t)rel->new_pt_load_index * N00B_ELF64_PHDR_SIZE;
+    uint64_t pt_phdr_entry_end;
+    uint64_t new_pt_load_entry_end;
+    if (!checked_add_u64(pt_phdr_entry_offset,
+                         N00B_ELF64_PHDR_SIZE,
+                         &pt_phdr_entry_end)
+        || !checked_add_u64(new_pt_load_entry_offset,
+                            N00B_ELF64_PHDR_SIZE,
+                            &new_pt_load_entry_end)
+        || pt_phdr_entry_end > phtab->byte_len
+        || new_pt_load_entry_end > phtab->byte_len) {
+        return nullptr;
+    }
+
+    uint8_t *pt_phdr = (uint8_t *)phtab->data + pt_phdr_entry_offset;
+    write_u64(pt_phdr + 8, rel->pt_phdr_new_offset, big);
+    write_u64(pt_phdr + 16, rel->pt_phdr_new_vaddr, big);
+    write_u64(pt_phdr + 24, rel->pt_phdr_new_paddr, big);
+    write_u64(pt_phdr + 32, rel->pt_phdr_new_filesz, big);
+    write_u64(pt_phdr + 40, rel->pt_phdr_new_memsz, big);
+
+    uint8_t *new_load = (uint8_t *)phtab->data + new_pt_load_entry_offset;
+    write_phdr(new_load,
+               PT_LOAD,
+               rel->new_pt_load_flags,
+               rel->new_pt_load_offset,
+               rel->new_pt_load_vaddr,
+               rel->new_pt_load_paddr,
+               rel->new_pt_load_filesz,
+               rel->new_pt_load_memsz,
+               rel->new_pt_load_align,
+               big);
+
+    return phtab;
+}
+
+static bool
+loadable_source_matches_in_place(n00b_elf_binary_t *bin,
+                                 n00b_elf_rewrite_loadable_plan_t *plan,
+                                 uint64_t phtab_size,
+                                 uint64_t phtab_end)
+{
+    n00b_elf_rewrite_loadable_phtab_adjustment_t *adj =
+        &plan->phtab_adjustment;
+    uint64_t original_phtab_end;
+    uint64_t load_file_end;
+    uint64_t load_memory_end;
+    uint64_t adjusted_delta;
+    uint64_t adjusted_vaddr;
+
+    if (!checked_add_u64(adj->original_phtab_offset,
+                         adj->original_phtab_size,
+                         &original_phtab_end)
+        || adj->status != N00B_ELF_REWRITE_LOADABLE_PHTAB_ADJUST_ACCEPTED
+        || !adj->pt_phdr_present
+        || adj->original_phtab_offset != bin->header.phoff
+        || adj->original_phtab_size != phtab_size
+        || original_phtab_end != phtab_end
+        || adj->containing_load_index >= bin->num_segments
+        || adj->pt_phdr_index >= bin->num_segments) {
+        return false;
+    }
+
+    n00b_elf_segment_t *load = &bin->segments[adj->containing_load_index];
+    n00b_elf_segment_t *phdr = &bin->segments[adj->pt_phdr_index];
+
+    if (adj->adjusted_phtab_offset < load->offset
+        || !checked_add_u64(load->offset, load->filesz, &load_file_end)
+        || !checked_add_u64(load->vaddr, load->memsz, &load_memory_end)
+        || !checked_add_u64(load->vaddr,
+                            adj->adjusted_phtab_offset - load->offset,
+                            &adjusted_vaddr)) {
+        return false;
+    }
+
+    adjusted_delta = adjusted_vaddr - load->vaddr;
+    return load->type == PT_LOAD
+        && phdr->type == PT_PHDR
+        && phdr->offset == bin->header.phoff
+        && phdr->filesz == phtab_size
+        && phdr->memsz == phtab_size
+        && load_file_end == adj->containing_load_file_end
+        && load_memory_end == adj->containing_load_memory_end
+        && adjusted_delta == adj->adjusted_phtab_offset - load->offset
+        && adjusted_vaddr == adj->adjusted_phtab_vaddr;
+}
+
+static bool
+loadable_source_matches_relocated(n00b_elf_binary_t *bin,
+                                  n00b_elf_rewrite_loadable_plan_t *plan,
+                                  uint64_t phtab_size,
+                                  uint64_t phtab_end)
+{
+    n00b_elf_rewrite_loadable_relocation_t *rel =
+        &plan->phtab_relocation;
+
+    if (rel->status != N00B_ELF_REWRITE_LOADABLE_RELOCATION_ACCEPTED
+        || !rel->pt_phdr_present
+        || rel->original_phtab_offset != bin->header.phoff
+        || rel->original_phtab_size != phtab_size
+        || rel->original_phtab_end != phtab_end
+        || rel->elf_header_entry != bin->header.entry
+        || rel->pt_phdr_index >= bin->num_segments) {
+        return false;
+    }
+
+    n00b_elf_segment_t *phdr = &bin->segments[rel->pt_phdr_index];
+    return phdr->type == PT_PHDR
+        && phdr->offset == rel->original_phtab_offset
+        && phdr->filesz == rel->original_phtab_size
+        && phdr->memsz == rel->original_phtab_size
+        && phdr->vaddr == rel->original_phtab_vaddr;
+}
+
+static bool
+loadable_source_binary_matches(n00b_elf_binary_t *bin,
+                               n00b_elf_rewrite_loadable_plan_t *plan)
+{
+    uint64_t phtab_size;
+    uint64_t phtab_end;
+
+    if (plan->source_binary != bin
+        || bin->stream == nullptr
+        || bin->stream->buf == nullptr
+        || bin->stream->buf->byte_len != plan->file_size
+        || plan->target_profile.reason != N00B_ELF_REWRITE_PROFILE_OK
+        || plan->target_profile.file_size != plan->file_size
+        || plan->target_profile.segment_count
+               != plan->original_segment_count
+        || plan->admission.file_size != plan->file_size
+        || plan->admission.original_segment_count
+               != plan->original_segment_count
+        || plan->admission.new_segment_count != plan->new_segment_count
+        || bin->num_segments != plan->original_segment_count
+        || bin->header.phnum != plan->original_segment_count
+        || bin->header.phentsize != N00B_ELF64_PHDR_SIZE
+        || !checked_mul_u64(bin->header.phnum,
+                            N00B_ELF64_PHDR_SIZE,
+                            &phtab_size)
+        || !checked_add_u64(bin->header.phoff, phtab_size, &phtab_end)
+        || phtab_end > bin->stream->buf->byte_len) {
+        return false;
+    }
+
+    switch (plan->phtab_strategy) {
+    case N00B_ELF_REWRITE_LOADABLE_PHTAB_STRATEGY_IN_PLACE_ADJUST:
+        return loadable_source_matches_in_place(bin,
+                                                plan,
+                                                phtab_size,
+                                                phtab_end);
+    case N00B_ELF_REWRITE_LOADABLE_PHTAB_STRATEGY_RELOCATE:
+        return loadable_source_matches_relocated(bin,
+                                                 plan,
+                                                 phtab_size,
+                                                 phtab_end);
+    case N00B_ELF_REWRITE_LOADABLE_PHTAB_STRATEGY_NONE:
+    case N00B_ELF_REWRITE_LOADABLE_PHTAB_STRATEGY_DEFERRED:
+        return false;
+    }
+
+    return false;
+}
+
+n00b_result_t(n00b_buffer_t *)
+n00b_elf_rewrite_apply_loadable_insert_plan(
+    n00b_elf_binary_t                  *bin,
+    n00b_elf_rewrite_loadable_plan_t   *plan) _kargs
+{
+    n00b_allocator_t *allocator = nullptr;
+}
+{
+    if (bin == nullptr || bin->stream == nullptr || bin->stream->buf == nullptr) {
+        return n00b_result_err(n00b_buffer_t *,
+                               N00B_ELF_REWRITE_ERR_NULL_BINARY);
+    }
+
+    if (plan == nullptr) {
+        return n00b_result_err(n00b_buffer_t *,
+                               N00B_ELF_REWRITE_ERR_NULL_PLAN);
+    }
+
+    if (plan->outcome != N00B_ELF_REWRITE_PLAN_ACCEPTED) {
+        return n00b_result_err(n00b_buffer_t *,
+                               N00B_ELF_REWRITE_ERR_PLAN_REJECTED);
+    }
+
+    if (plan->phtab_strategy == N00B_ELF_REWRITE_LOADABLE_PHTAB_STRATEGY_NONE
+        || plan->phtab_strategy
+               == N00B_ELF_REWRITE_LOADABLE_PHTAB_STRATEGY_DEFERRED) {
+        return n00b_result_err(n00b_buffer_t *,
+                               N00B_ELF_REWRITE_ERR_UNSUPPORTED_PLAN);
+    }
+
+    if (plan->payload == nullptr || plan->payload->byte_len == 0
+        || plan->patches.data == nullptr || plan->patches.len == 0
+        || plan->admission.outcome != N00B_ELF_REWRITE_ADMIT_OUTCOME_ACCEPTED
+        || plan->new_segment_count != plan->original_segment_count + 1
+        || bin->header.phnum != plan->original_segment_count
+        || plan->payload_placement.kind
+               != N00B_ELF_REWRITE_LOADABLE_PLACEMENT_LOADABLE_PAYLOAD) {
+        return n00b_result_err(n00b_buffer_t *, N00B_ELF_REWRITE_ERR_APPLY);
+    }
+
+    if (!loadable_source_binary_matches(bin, plan)) {
+        return n00b_result_err(n00b_buffer_t *, N00B_ELF_REWRITE_ERR_APPLY);
+    }
+
+    n00b_elf_rewrite_patch_t *header =
+        find_loadable_plan_patch(plan, N00B_ELF_REWRITE_PATCH_ELF_HEADER);
+    n00b_elf_rewrite_patch_t *payload =
+        find_loadable_plan_patch(plan, N00B_ELF_REWRITE_PATCH_LOADABLE_PAYLOAD);
+    if (header == nullptr || payload == nullptr
+        || header->file_offset != 0
+        || header->file_end != N00B_ELF64_EHDR_SIZE
+        || payload->file_offset != plan->payload_placement.file_offset
+        || payload->file_end != plan->payload_placement.file_end
+        || payload->original_file_offset != payload->file_offset
+        || payload->original_file_end != payload->file_offset
+        || payload->file_end - payload->file_offset
+               != (uint64_t)plan->payload->byte_len) {
+        return n00b_result_err(n00b_buffer_t *, N00B_ELF_REWRITE_ERR_APPLY);
+    }
+
+    bool           relocated = false;
+    uint64_t       live_phtab_offset;
+    uint64_t       live_phtab_end;
+    uint64_t       live_phtab_size;
+    uint64_t       pt_phdr_entry_offset = 0;
+    uint64_t       new_pt_load_entry_offset = 0;
+    uint64_t       first_padding_offset = 0;
+    uint64_t       first_padding_end = 0;
+    uint64_t       second_padding_offset = 0;
+    uint64_t       second_padding_end = 0;
+    n00b_buffer_t *phtab = nullptr;
+
+    switch (plan->phtab_strategy) {
+    case N00B_ELF_REWRITE_LOADABLE_PHTAB_STRATEGY_IN_PLACE_ADJUST:
+        {
+        uint64_t adjusted_phtab_end;
+        uint64_t pt_phdr_delta;
+        uint64_t new_pt_load_delta;
+        if (!checked_add_u64(plan->phtab_adjustment.adjusted_phtab_offset,
+                             plan->phtab_adjustment.adjusted_phtab_size,
+                             &adjusted_phtab_end)
+            || !checked_mul_u64(plan->phtab_adjustment.pt_phdr_index,
+                                N00B_ELF64_PHDR_SIZE,
+                                &pt_phdr_delta)
+            || !checked_add_u64(plan->phtab_adjustment.adjusted_phtab_offset,
+                                pt_phdr_delta,
+                                &pt_phdr_entry_offset)
+            || !checked_mul_u64(plan->original_segment_count,
+                                N00B_ELF64_PHDR_SIZE,
+                                &new_pt_load_delta)
+            || !checked_add_u64(plan->phtab_adjustment.adjusted_phtab_offset,
+                                new_pt_load_delta,
+                                &new_pt_load_entry_offset)) {
+            return n00b_result_err(n00b_buffer_t *,
+                                   N00B_ELF_REWRITE_ERR_OVERFLOW);
+        }
+        if (plan->phtab_adjustment.status
+                != N00B_ELF_REWRITE_LOADABLE_PHTAB_ADJUST_ACCEPTED
+            || plan->phtab_placement.kind
+                   != N00B_ELF_REWRITE_LOADABLE_PLACEMENT_IN_PLACE_PHTAB
+            || plan->phtab_placement.file_offset
+                   != plan->phtab_adjustment.adjusted_phtab_offset
+            || plan->phtab_placement.file_end != adjusted_phtab_end) {
+            return n00b_result_err(n00b_buffer_t *,
+                                   N00B_ELF_REWRITE_ERR_APPLY);
+        }
+        live_phtab_offset = plan->phtab_adjustment.adjusted_phtab_offset;
+        live_phtab_size   = plan->phtab_adjustment.adjusted_phtab_size;
+        live_phtab_end    = plan->phtab_placement.file_end;
+        first_padding_offset =
+            plan->phtab_adjustment.containing_load_file_end;
+        first_padding_end = plan->phtab_adjustment.adjusted_phtab_offset;
+        second_padding_offset = plan->file_size;
+        second_padding_end    = plan->payload_placement.file_offset;
+        phtab             = build_in_place_phtab(bin, plan, allocator);
+        break;
+        }
+    case N00B_ELF_REWRITE_LOADABLE_PHTAB_STRATEGY_RELOCATE:
+        relocated = true;
+        if (plan->phtab_relocation.status
+                != N00B_ELF_REWRITE_LOADABLE_RELOCATION_ACCEPTED
+            || plan->phtab_placement.kind
+                   != N00B_ELF_REWRITE_LOADABLE_PLACEMENT_RELOCATED_PHTAB
+            || plan->phtab_placement.file_offset
+                   != plan->phtab_relocation.relocated_phtab_offset
+            || plan->phtab_placement.file_end
+                   != plan->phtab_relocation.relocated_phtab_end) {
+            return n00b_result_err(n00b_buffer_t *,
+                                   N00B_ELF_REWRITE_ERR_APPLY);
+        }
+        live_phtab_offset = plan->phtab_relocation.relocated_phtab_offset;
+        live_phtab_size   = plan->phtab_relocation.relocated_phtab_size;
+        live_phtab_end    = plan->phtab_relocation.relocated_phtab_end;
+        pt_phdr_entry_offset =
+            plan->phtab_relocation.pt_phdr_entry_offset;
+        new_pt_load_entry_offset =
+            plan->phtab_relocation.new_pt_load_entry_offset;
+        first_padding_offset = plan->file_size;
+        first_padding_end    = plan->phtab_relocation.new_pt_load_offset;
+        second_padding_offset = plan->phtab_relocation.relocated_phtab_end;
+        second_padding_end    = plan->phtab_relocation.payload_offset;
+        phtab             = build_relocated_phtab(bin, plan, allocator);
+        break;
+    case N00B_ELF_REWRITE_LOADABLE_PHTAB_STRATEGY_NONE:
+    case N00B_ELF_REWRITE_LOADABLE_PHTAB_STRATEGY_DEFERRED:
+        return n00b_result_err(n00b_buffer_t *,
+                               N00B_ELF_REWRITE_ERR_UNSUPPORTED_PLAN);
+    }
+
+    uint64_t covered;
+    if (phtab == nullptr
+        || phtab->byte_len != live_phtab_size
+        || live_phtab_end != live_phtab_offset + live_phtab_size
+        || first_padding_offset > first_padding_end
+        || second_padding_offset > second_padding_end
+        || !validate_loadable_patch_set(plan,
+                                        relocated,
+                                        live_phtab_offset,
+                                        live_phtab_end,
+                                        pt_phdr_entry_offset,
+                                        new_pt_load_entry_offset,
+                                        first_padding_offset,
+                                        first_padding_end,
+                                        second_padding_offset,
+                                        second_padding_end)
+        || !loadable_phtab_patch_coverage(plan,
+                                          live_phtab_offset,
+                                          live_phtab_end,
+                                          relocated,
+                                          &covered)
+        || covered != live_phtab_size) {
+        return n00b_result_err(n00b_buffer_t *, N00B_ELF_REWRITE_ERR_APPLY);
+    }
+
+    uint64_t output_size;
+    if (!loadable_plan_output_size(bin, plan, &output_size)) {
+        return n00b_result_err(n00b_buffer_t *, N00B_ELF_REWRITE_ERR_APPLY);
+    }
+
+    n00b_buffer_t *out = new_zero_buffer(output_size, allocator);
+    if (out == nullptr) {
+        return n00b_result_err(n00b_buffer_t *, N00B_ELF_REWRITE_ERR_OVERFLOW);
+    }
+
+    memcpy(out->data, bin->stream->buf->data, bin->stream->buf->byte_len);
+
+    for (uint64_t i = 0; i < plan->patches.len; i++) {
+        n00b_elf_rewrite_patch_t *patch = &plan->patches.data[i];
+        if (patch->kind == N00B_ELF_REWRITE_PATCH_LOADABLE_PADDING
+            && !zero_output_range(out, patch->file_offset, patch->file_end)) {
+            return n00b_result_err(n00b_buffer_t *,
+                                   N00B_ELF_REWRITE_ERR_APPLY);
+        }
+    }
+
+    if (!write_output_bytes(out,
+                            live_phtab_offset,
+                            phtab->data,
+                            phtab->byte_len)
+        || !write_output_bytes(out,
+                               payload->file_offset,
+                               plan->payload->data,
+                               plan->payload->byte_len)
+        || !patch_output_loadable_header(out,
+                                         bin,
+                                         live_phtab_offset,
+                                         plan->new_segment_count)) {
+        return n00b_result_err(n00b_buffer_t *, N00B_ELF_REWRITE_ERR_APPLY);
+    }
+
+    n00b_bstream_t *stream = n00b_bstream_new(out);
+    auto            parsed = n00b_elf_parse(stream);
+    if (n00b_result_is_err(parsed)) {
+        return n00b_result_err(n00b_buffer_t *,
+                               N00B_ELF_REWRITE_ERR_PARSE_AFTER_APPLY);
+    }
+
+    return n00b_result_ok(n00b_buffer_t *, out);
 }
 
 n00b_result_t(n00b_buffer_t *)
@@ -2644,6 +4572,8 @@ n00b_elf_rewrite_rejection_reason_str(
     case N00B_ELF_REWRITE_REJECT_CHALK_MARK_NOT_FOUND:    return r"chalk-mark-not-found";
     case N00B_ELF_REWRITE_REJECT_CHALK_MARK_UNSUPPORTED:  return r"chalk-mark-unsupported";
     case N00B_ELF_REWRITE_REJECT_TRUSTED_NAME:            return r"trusted-name";
+    case N00B_ELF_REWRITE_REJECT_LOADABLE_PLACEMENT:      return r"loadable-placement";
+    case N00B_ELF_REWRITE_REJECT_LOADABLE_ADDRESS:        return r"loadable-address";
     }
 
     return r"unknown-elf-rewrite-rejection-reason";
@@ -2705,7 +4635,30 @@ n00b_elf_rewrite_patch_kind_str(n00b_elf_rewrite_patch_kind_t kind)
     case N00B_ELF_REWRITE_PATCH_TABLE_TAIL:           return r"table-tail";
     case N00B_ELF_REWRITE_PATCH_APPENDED_TABLES:      return r"appended-tables";
     case N00B_ELF_REWRITE_PATCH_STALE_PAYLOAD:        return r"stale-payload";
+    case N00B_ELF_REWRITE_PATCH_ADJUSTED_PHTAB:       return r"adjusted-phtab";
+    case N00B_ELF_REWRITE_PATCH_ADJUSTED_PT_PHDR:     return r"adjusted-pt-phdr";
+    case N00B_ELF_REWRITE_PATCH_LOADABLE_PADDING:     return r"loadable-padding";
+    case N00B_ELF_REWRITE_PATCH_RELOCATED_PHTAB:      return r"relocated-phtab";
+    case N00B_ELF_REWRITE_PATCH_RELOCATED_PT_PHDR:    return r"relocated-pt-phdr";
+    case N00B_ELF_REWRITE_PATCH_NEW_PT_LOAD:          return r"new-pt-load";
+    case N00B_ELF_REWRITE_PATCH_LOADABLE_PAYLOAD:     return r"loadable-payload";
     }
 
     return r"unknown-elf-rewrite-patch-kind";
+}
+
+n00b_string_t *
+n00b_elf_rewrite_loadable_relocation_status_str(
+    n00b_elf_rewrite_loadable_relocation_status_t status)
+{
+    switch (status) {
+    case N00B_ELF_REWRITE_LOADABLE_RELOCATION_NONE:
+        return r"none";
+    case N00B_ELF_REWRITE_LOADABLE_RELOCATION_ACCEPTED:
+        return r"accepted";
+    case N00B_ELF_REWRITE_LOADABLE_RELOCATION_REJECTED:
+        return r"rejected";
+    }
+
+    return r"unknown-elf-rewrite-loadable-relocation-status";
 }

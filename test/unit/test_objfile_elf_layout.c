@@ -563,6 +563,67 @@ test_vaddr_gap_queries(void)
 }
 
 static void
+test_phtab_adjustment_layout_helpers(void)
+{
+    n00b_elf_binary_t *bin = parse_case("phtab_adjust_accepted");
+    n00b_elf_layout_t *layout = layout_for_case("phtab_adjust_accepted");
+
+    auto next = n00b_elf_layout_next_file_interval(layout, 200);
+    assert(n00b_result_is_ok(next));
+    n00b_option_t(n00b_elf_layout_interval_t) next_opt =
+        n00b_result_get(next);
+    assert(n00b_option_is_set(next_opt));
+    n00b_elf_layout_interval_t interval = n00b_option_get(next_opt);
+    assert(interval.start == 512);
+    assert(interval.kind == N00B_ELF_LAYOUT_INTERVAL_SHTAB);
+
+    auto collision = n00b_elf_layout_page_load_vaddr_collision(bin,
+                                                               0x4000c8,
+                                                               0x400170,
+                                                               0x1000);
+    assert(n00b_result_is_ok(collision));
+    assert(n00b_result_get(collision).interval_count == 0);
+
+    bin = parse_case("phtab_adjust_memory_collision");
+    collision = n00b_elf_layout_page_load_vaddr_collision(bin,
+                                                          0x4000f0,
+                                                          0x4001d0,
+                                                          0x1000);
+    assert(n00b_result_is_ok(collision));
+    n00b_elf_layout_collision_t facts = n00b_result_get(collision);
+    assert(facts.interval_count == 1);
+    assert(facts.intervals[0].index == 2);
+    assert(facts.intervals[0].start == 0x400000);
+    assert(facts.intervals[0].end == 0x400880);
+
+    bin = parse_case("phtab_adjust_accepted");
+    bin->num_segments       = 1;
+    bin->segments[0].type   = PT_LOAD;
+    bin->segments[0].offset = 0x20;
+    bin->segments[0].vaddr  = 0x401123;
+    bin->segments[0].memsz  = 0;
+    collision = n00b_elf_layout_page_load_vaddr_collision(bin,
+                                                          0x401000,
+                                                          0x401124,
+                                                          0x1000);
+    assert(n00b_result_is_ok(collision));
+    facts = n00b_result_get(collision);
+    assert(facts.interval_count == 1);
+    assert(facts.intervals[0].start == 0x401000);
+    assert(facts.intervals[0].end == 0x401123);
+
+    bin->segments[0].offset = 0;
+    collision = n00b_elf_layout_page_load_vaddr_collision(bin,
+                                                          0x401000,
+                                                          0x401124,
+                                                          0x1000);
+    assert(n00b_result_is_ok(collision));
+    assert(n00b_result_get(collision).interval_count == 0);
+
+    printf("  [PASS] phtab_adjustment_layout_helpers\n");
+}
+
+static void
 test_overflow_failure_is_deterministic(void)
 {
     n00b_elf_binary_t *bin = parse_case("valid_minimal_exec");
@@ -617,6 +678,7 @@ main(int argc, char **argv)
     test_ordered_overlaps_and_collisions();
     test_file_gap_queries();
     test_vaddr_gap_queries();
+    test_phtab_adjustment_layout_helpers();
     test_overflow_failure_is_deterministic();
     test_layout_error_strings();
     printf("All ELF layout tests passed.\n");

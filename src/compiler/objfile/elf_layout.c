@@ -185,6 +185,16 @@ align_up_u64(uint64_t value, uint64_t alignment, uint64_t *out)
     return checked_add_u64(value, alignment - rem, out);
 }
 
+static uint64_t
+align_down_u64(uint64_t value, uint64_t alignment)
+{
+    if (alignment == 0) {
+        alignment = 1;
+    }
+
+    return value - (value % alignment);
+}
+
 static n00b_elf_layout_gap_kind_t
 gap_kind_from_coverage(n00b_elf_layout_coverage_kind_t kind)
 {
@@ -803,6 +813,108 @@ n00b_elf_layout_vaddr_collision(n00b_elf_layout_t *layout,
         .intervals      = list.items,
         .interval_count = list.count,
     };
+    return n00b_result_ok(n00b_elf_layout_collision_t, collision);
+}
+
+n00b_result_t(n00b_option_t(n00b_elf_layout_interval_t))
+n00b_elf_layout_next_file_interval(n00b_elf_layout_t *layout,
+                                   uint64_t           start)
+{
+    if (layout == nullptr || layout->file_intervals == nullptr) {
+        return n00b_result_err(n00b_option_t(n00b_elf_layout_interval_t),
+                               N00B_ELF_LAYOUT_ERR_INVALID);
+    }
+
+    auto next = n00b_interval_next_low(layout->file_intervals, start);
+    if (n00b_result_is_err(next)) {
+        return n00b_result_err(n00b_option_t(n00b_elf_layout_interval_t),
+                               N00B_ELF_LAYOUT_ERR_INTERVAL);
+    }
+
+    n00b_elf_layout_interval_node_t *node =
+        (n00b_elf_layout_interval_node_t *)n00b_result_get(next);
+    if (node == nullptr) {
+        return n00b_result_ok(n00b_option_t(n00b_elf_layout_interval_t),
+                              n00b_option_none(n00b_elf_layout_interval_t));
+    }
+
+    return n00b_result_ok(n00b_option_t(n00b_elf_layout_interval_t),
+                          n00b_option_set(n00b_elf_layout_interval_t,
+                                          node->data));
+}
+
+n00b_result_t(n00b_elf_layout_collision_t)
+n00b_elf_layout_page_load_vaddr_collision(n00b_elf_binary_t *bin,
+                                          uint64_t           start,
+                                          uint64_t           end,
+                                          uint64_t           page_size) _kargs
+{
+    n00b_allocator_t *allocator = nullptr;
+}
+{
+    n00b_elf_layout_collision_t collision = {
+        .start = start,
+        .end   = end,
+    };
+
+    if (bin == nullptr || start > end || page_size == 0) {
+        return n00b_result_err(n00b_elf_layout_collision_t,
+                               N00B_ELF_LAYOUT_ERR_INVALID);
+    }
+
+    if (start == end) {
+        return n00b_result_ok(n00b_elf_layout_collision_t, collision);
+    }
+
+    n00b_elf_layout_interval_tree_t *tree = n00b_alloc_with_opts(
+        n00b_elf_layout_interval_tree_t,
+        &(n00b_alloc_opts_t){.allocator = allocator});
+    n00b_interval_tree_init(tree, .allocator = allocator);
+
+    for (uint32_t i = 0; i < bin->num_segments; i++) {
+        n00b_elf_segment_t *seg = &bin->segments[i];
+
+        if (seg->type != PT_LOAD
+            || (seg->offset == 0 && seg->memsz == 0)) {
+            continue;
+        }
+
+        uint64_t high;
+        if (!checked_add_u64(seg->vaddr, seg->memsz, &high)) {
+            return n00b_result_err(n00b_elf_layout_collision_t,
+                                   N00B_ELF_LAYOUT_ERR_OVERFLOW);
+        }
+
+        n00b_elf_layout_interval_t interval = {
+            .kind  = N00B_ELF_LAYOUT_INTERVAL_SEGMENT_MEMORY,
+            .start = align_down_u64(seg->vaddr, page_size),
+            .end   = high,
+            .index = i,
+            .flags = seg->flags,
+        };
+        if (interval.start == interval.end) {
+            continue;
+        }
+
+        auto insert = n00b_interval_insert(tree,
+                                           interval.start,
+                                           interval.end,
+                                           interval);
+        if (n00b_result_is_err(insert)) {
+            return n00b_result_err(n00b_elf_layout_collision_t,
+                                   N00B_ELF_LAYOUT_ERR_INTERVAL);
+        }
+    }
+
+    auto overlaps = collect_overlaps(tree, start, end, allocator);
+    if (n00b_result_is_err(overlaps)) {
+        return n00b_result_err(n00b_elf_layout_collision_t,
+                               n00b_result_get_err(overlaps));
+    }
+
+    n00b_elf_layout_interval_list_t list = n00b_result_get(overlaps);
+    collision.intervals      = list.items;
+    collision.interval_count = list.count;
     return n00b_result_ok(n00b_elf_layout_collision_t, collision);
 }
 

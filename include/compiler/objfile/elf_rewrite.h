@@ -1,11 +1,10 @@
 /**
  * @file elf_rewrite.h
- * @brief Surgical ELF metadata-rewrite planning and apply API.
+ * @brief Surgical ELF rewrite planning and apply API.
  *
- * This layer turns strict metadata-rewrite admission facts into an explicit
- * patch plan, then applies accepted plans to a new in-memory byte buffer.
- * Planning and application never mutate the parsed ELF object or its original
- * byte stream.
+ * This layer turns strict rewrite admission facts into explicit patch plans,
+ * then applies accepted plans to new in-memory byte buffers. Planning and
+ * application never mutate the parsed ELF object or its original byte stream.
  */
 #pragma once
 
@@ -47,6 +46,7 @@ typedef enum {
     N00B_ELF_REWRITE_OPERATION_METADATA_INSERT,
     N00B_ELF_REWRITE_OPERATION_CHALK_MARK_DELETE,
     N00B_ELF_REWRITE_OPERATION_CHALK_MARK_REPLACE,
+    N00B_ELF_REWRITE_OPERATION_LOADABLE_INSERT,
 } n00b_elf_rewrite_operation_t;
 
 typedef enum {
@@ -59,6 +59,8 @@ typedef enum {
     N00B_ELF_REWRITE_REJECT_CHALK_MARK_NOT_FOUND,
     N00B_ELF_REWRITE_REJECT_CHALK_MARK_UNSUPPORTED,
     N00B_ELF_REWRITE_REJECT_TRUSTED_NAME,
+    N00B_ELF_REWRITE_REJECT_LOADABLE_PLACEMENT,
+    N00B_ELF_REWRITE_REJECT_LOADABLE_ADDRESS,
 } n00b_elf_rewrite_rejection_reason_t;
 
 typedef enum {
@@ -98,7 +100,20 @@ typedef enum {
     N00B_ELF_REWRITE_PATCH_TABLE_TAIL,
     N00B_ELF_REWRITE_PATCH_APPENDED_TABLES,
     N00B_ELF_REWRITE_PATCH_STALE_PAYLOAD,
+    N00B_ELF_REWRITE_PATCH_ADJUSTED_PHTAB,
+    N00B_ELF_REWRITE_PATCH_ADJUSTED_PT_PHDR,
+    N00B_ELF_REWRITE_PATCH_LOADABLE_PADDING,
+    N00B_ELF_REWRITE_PATCH_RELOCATED_PHTAB,
+    N00B_ELF_REWRITE_PATCH_RELOCATED_PT_PHDR,
+    N00B_ELF_REWRITE_PATCH_NEW_PT_LOAD,
+    N00B_ELF_REWRITE_PATCH_LOADABLE_PAYLOAD,
 } n00b_elf_rewrite_patch_kind_t;
+
+typedef enum {
+    N00B_ELF_REWRITE_LOADABLE_RELOCATION_NONE,
+    N00B_ELF_REWRITE_LOADABLE_RELOCATION_ACCEPTED,
+    N00B_ELF_REWRITE_LOADABLE_RELOCATION_REJECTED,
+} n00b_elf_rewrite_loadable_relocation_status_t;
 
 typedef struct n00b_elf_rewrite_metadata_request {
     n00b_string_t                  *section_name;
@@ -109,6 +124,23 @@ typedef struct n00b_elf_rewrite_metadata_request {
     n00b_option_t(uint64_t)         preferred_file_offset;
     n00b_elf_rewrite_admit_policy_t policy;
 } n00b_elf_rewrite_metadata_request_t;
+
+/**
+ * @brief Byte-bearing request for planning one ELF64 `PT_LOAD`.
+ *
+ * The request borrows `payload`; callers retain ownership. Planning validates
+ * generic segment facts and either leaves placement deferred or records the
+ * concrete in-place / relocated PHTAB and payload facts needed by apply.
+ */
+typedef struct n00b_elf_rewrite_loadable_request {
+    n00b_buffer_t                                *payload;
+    uint32_t                                      segment_flags;
+    uint64_t                                      file_alignment;
+    uint64_t                                      vaddr_alignment;
+    uint64_t                                      p_memsz;
+    n00b_elf_rewrite_loadable_phtab_strategy_t   phtab_strategy;
+    n00b_elf_rewrite_admit_policy_t              policy;
+} n00b_elf_rewrite_loadable_request_t;
 
 typedef struct n00b_elf_rewrite_target_profile {
     n00b_elf_rewrite_target_profile_reason_t reason;
@@ -129,6 +161,55 @@ typedef struct n00b_elf_rewrite_patch {
     uint64_t                      original_file_offset;
     uint64_t                      original_file_end;
 } n00b_elf_rewrite_patch_t;
+
+/**
+ * @brief Relocated-PHTAB loadable planning facts.
+ *
+ * Accepted facts describe the future live PHTAB, header update, updated
+ * `PT_PHDR`, appended `PT_LOAD`, and payload placement. They are not apply
+ * instructions by themselves; top-level changed byte ranges are carried in the
+ * loadable plan's patch array.
+ */
+typedef struct n00b_elf_rewrite_loadable_relocation {
+    n00b_elf_rewrite_loadable_relocation_status_t status;
+    n00b_elf_rewrite_rejection_reason_t           rejection_reason;
+    n00b_elf_rewrite_admit_rejection_reason_t     source_in_place_rejection;
+    uint64_t                                      elf_header_patch_offset;
+    uint64_t                                      elf_header_patch_end;
+    uint64_t                                      elf_header_new_phoff;
+    uint64_t                                      elf_header_new_phnum;
+    uint64_t                                      elf_header_entry;
+    uint64_t                                      original_phtab_offset;
+    uint64_t                                      original_phtab_size;
+    uint64_t                                      original_phtab_end;
+    uint64_t                                      original_phtab_vaddr;
+    uint64_t                                      relocated_phtab_offset;
+    uint64_t                                      relocated_phtab_size;
+    uint64_t                                      relocated_phtab_end;
+    uint64_t                                      relocated_phtab_vaddr;
+    uint64_t                                      relocated_phtab_vaddr_end;
+    bool                                          pt_phdr_present;
+    uint32_t                                      pt_phdr_index;
+    uint64_t                                      pt_phdr_entry_offset;
+    uint64_t                                      pt_phdr_new_offset;
+    uint64_t                                      pt_phdr_new_filesz;
+    uint64_t                                      pt_phdr_new_memsz;
+    uint64_t                                      pt_phdr_new_vaddr;
+    uint64_t                                      pt_phdr_new_paddr;
+    uint32_t                                      new_pt_load_index;
+    uint64_t                                      new_pt_load_entry_offset;
+    uint64_t                                      new_pt_load_offset;
+    uint64_t                                      new_pt_load_vaddr;
+    uint64_t                                      new_pt_load_paddr;
+    uint64_t                                      new_pt_load_filesz;
+    uint64_t                                      new_pt_load_memsz;
+    uint32_t                                      new_pt_load_flags;
+    uint64_t                                      new_pt_load_align;
+    uint64_t                                      payload_offset;
+    uint64_t                                      payload_end;
+    uint64_t                                      payload_vaddr;
+    uint64_t                                      payload_vaddr_end;
+} n00b_elf_rewrite_loadable_relocation_t;
 
 typedef struct n00b_elf_rewrite_plan {
     n00b_elf_rewrite_operation_t                 operation;
@@ -153,6 +234,38 @@ typedef struct n00b_elf_rewrite_plan {
     uint64_t                                    payload_offset;
     uint64_t                                    payload_end;
 } n00b_elf_rewrite_plan_t;
+
+/**
+ * @brief Loadable-segment rewrite plan.
+ *
+ * Accepted deferred plans carry validation facts only. Accepted in-place PHTAB
+ * adjustment and relocated-PHTAB plans carry concrete, non-overlapping patch
+ * ranges and are consumable by @ref n00b_elf_rewrite_apply_loadable_insert_plan.
+ * Plans borrow the parsed binary that produced them so apply can enforce the
+ * same-binary precondition.
+ */
+typedef struct n00b_elf_rewrite_loadable_plan {
+    n00b_elf_rewrite_plan_outcome_t              outcome;
+    n00b_elf_rewrite_rejection_reason_t          rejection_reason;
+    n00b_elf_rewrite_target_profile_t            target_profile;
+    n00b_elf_rewrite_admit_loadable_result_t     admission;
+    n00b_array_t(n00b_elf_rewrite_patch_t)        patches;
+    n00b_elf_rewrite_loadable_phtab_strategy_t   phtab_strategy;
+    n00b_elf_rewrite_loadable_placement_t        payload_placement;
+    n00b_elf_rewrite_loadable_placement_t        phtab_placement;
+    n00b_elf_rewrite_loadable_phtab_adjustment_t phtab_adjustment;
+    n00b_elf_rewrite_loadable_relocation_t       phtab_relocation;
+    n00b_elf_binary_t                            *source_binary;
+    n00b_buffer_t                               *payload;
+    uint64_t                                     file_size;
+    uint64_t                                     original_segment_count;
+    uint64_t                                     new_segment_count;
+    uint64_t                                     p_memsz;
+    uint64_t                                     file_alignment;
+    uint64_t                                     vaddr_alignment;
+    uint32_t                                     segment_flags;
+    bool                                         entrypoint_policy_deferred;
+} n00b_elf_rewrite_loadable_plan_t;
 
 /**
  * @brief Plan insertion of a non-loadable ELF metadata section.
@@ -250,6 +363,65 @@ extern n00b_result_t(n00b_elf_rewrite_plan_t *)
 n00b_elf_rewrite_plan_chalk_mark_replace(
     n00b_elf_binary_t                   *bin,
     n00b_elf_rewrite_metadata_request_t *request) _kargs {
+    n00b_allocator_t *allocator = nullptr;
+};
+
+/**
+ * @brief Plan insertion of one ELF64 loadable segment without emitting bytes.
+ *
+ * Accepted plans expose stable facts for request validation, target profile,
+ * PHTAB strategy, segment count, payload placement, PHTAB placement, concrete
+ * patch ranges for in-place / relocated PHTAB strategies, and deferred generic
+ * entrypoint policy. Deferred-strategy plans are validation-only and are not
+ * accepted by apply.
+ *
+ * @param bin Parsed ELF object from @ref n00b_elf_parse.
+ * @param request Loadable-segment insertion request.
+ * @kw allocator Defaults to `nullptr`, meaning the current runtime allocator.
+ *               Owns the returned plan.
+ *
+ * @return Ok(plan) for accepted or rejected plans, or Err(N00B_ELF_REWRITE_ERR_*).
+ *
+ * @pre `bin`, `request`, and `request->payload` are non-null.
+ * @pre `request->payload->byte_len` is nonzero.
+ * @post `bin`, its stream, and its parsed section and segment arrays are not modified.
+ */
+extern n00b_result_t(n00b_elf_rewrite_loadable_plan_t *)
+n00b_elf_rewrite_plan_loadable_insert(
+    n00b_elf_binary_t                   *bin,
+    n00b_elf_rewrite_loadable_request_t *request) _kargs {
+    n00b_allocator_t *allocator = nullptr;
+};
+
+/**
+ * @brief Apply an accepted loadable-segment rewrite plan to bytes.
+ *
+ * The plan must come from @ref n00b_elf_rewrite_plan_loadable_insert for the
+ * same parsed binary. Accepted in-place PHTAB-adjustment plans move the live
+ * PHTAB to the planned adjusted offset, update `e_phoff` / `e_phnum`, update
+ * the copied `PT_PHDR`, extend the containing `PT_LOAD`, append one new
+ * `PT_LOAD`, and write the payload bytes. Accepted relocated-PHTAB plans write
+ * the relocated live PHTAB, leave the original PHTAB bytes as shadow bytes,
+ * update `PT_PHDR`, append the new `PT_LOAD`, zero planned padding, and write
+ * the payload bytes.
+ *
+ * @param bin Parsed ELF object whose stream supplies the original bytes.
+ * @param plan Accepted loadable plan.
+ * @kw allocator Defaults to `nullptr`, meaning the current runtime allocator.
+ *               Owns the returned output buffer.
+ *
+ * @return Ok(buffer) containing the rewritten ELF bytes, or
+ *         Err(N00B_ELF_REWRITE_ERR_*).
+ *
+ * @pre `bin`, `bin->stream`, `bin->stream->buf`, and `plan` are non-null.
+ * @pre `plan->outcome == N00B_ELF_REWRITE_PLAN_ACCEPTED`.
+ * @post `bin`, its stream buffer, and parsed arrays are not modified.
+ * @post The returned buffer reparses successfully with @ref n00b_elf_parse.
+ */
+extern n00b_result_t(n00b_buffer_t *)
+n00b_elf_rewrite_apply_loadable_insert_plan(
+    n00b_elf_binary_t                  *bin,
+    n00b_elf_rewrite_loadable_plan_t   *plan) _kargs {
     n00b_allocator_t *allocator = nullptr;
 };
 
@@ -420,3 +592,10 @@ extern n00b_string_t *n00b_elf_rewrite_table_strategy_str(
  */
 extern n00b_string_t *n00b_elf_rewrite_patch_kind_str(
     n00b_elf_rewrite_patch_kind_t kind);
+
+/**
+ * @param status Relocated-PHTAB planning status.
+ * @return Stable process-lifetime enum-name string.
+ */
+extern n00b_string_t *n00b_elf_rewrite_loadable_relocation_status_str(
+    n00b_elf_rewrite_loadable_relocation_status_t status);

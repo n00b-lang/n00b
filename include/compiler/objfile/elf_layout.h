@@ -240,6 +240,47 @@ n00b_elf_layout_vaddr_collision(n00b_elf_layout_t *layout,
 };
 
 /**
+ * @brief Return the first file interval whose low offset is at or after `start`.
+ *
+ * This is a factual interval query; callers decide whether the next modeled
+ * object makes a rewrite placement safe.
+ *
+ * @param layout Layout returned by @ref n00b_elf_layout_build.
+ * @param start Inclusive lower-bound search offset.
+ *
+ * @return Ok(some(interval)), Ok(none), or Err(N00B_ELF_LAYOUT_ERR_*).
+ */
+extern n00b_result_t(n00b_option_t(n00b_elf_layout_interval_t))
+n00b_elf_layout_next_file_interval(n00b_elf_layout_t *layout,
+                                   uint64_t           start);
+
+/**
+ * @brief Summarize `PT_LOAD` memory collisions using page-rounded low bounds.
+ *
+ * Each `PT_LOAD` interval starts at `p_vaddr` rounded down to `page_size` and
+ * ends at `p_vaddr + p_memsz` without rounding the high address. This matches
+ * loader-style mapping pressure checks where implied page space before a
+ * segment is occupied but tail slack after `p_memsz` may be usable.
+ *
+ * @param bin Parsed ELF object from @ref n00b_elf_parse.
+ * @param start Inclusive virtual address.
+ * @param end Exclusive virtual address.
+ * @param page_size Page size used for low-bound rounding; must be nonzero.
+ * @kw allocator Defaults to `nullptr`, meaning the current runtime allocator.
+ *               Owns the returned `intervals` array when
+ *               `interval_count > 0`.
+ *
+ * @return Ok(summary) or Err(N00B_ELF_LAYOUT_ERR_*).
+ */
+extern n00b_result_t(n00b_elf_layout_collision_t)
+n00b_elf_layout_page_load_vaddr_collision(n00b_elf_binary_t *bin,
+                                          uint64_t           start,
+                                          uint64_t           end,
+                                          uint64_t           page_size) _kargs {
+    n00b_allocator_t *allocator = nullptr;
+};
+
+/**
  * @brief Find the first aligned non-modeled file range in `[start, end)`.
  *
  * `min_size` must be nonzero. `alignment == 0` is treated as byte alignment.

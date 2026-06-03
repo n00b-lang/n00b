@@ -36,6 +36,7 @@
 #define N00B_TEST_ELF_SH_OFFSET      24
 #define N00B_TEST_ELF_SH_SIZE        32
 #define N00B_TEST_ELF_SHSTRTAB_SH    320
+#define N00B_TEST_ELF_PHDR_P_MEMSZ   40
 #define N00B_TEST_ELF_SHN_LORESERVE  0xff00u
 #define N00B_TEST_ELF_PN_XNUM        0xffffu
 
@@ -55,11 +56,14 @@ typedef enum {
 typedef enum {
     N00B_TEST_ELF_ORACLE_NONE,
     N00B_TEST_ELF_ORACLE_READ_TARGET,
+    N00B_TEST_ELF_ORACLE_PHTAB_ADJUSTMENT,
 } n00b_test_elf_oracle_mode_t;
 
 typedef enum {
     N00B_TEST_ELF_ORACLE_VALID_TARGET,
     N00B_TEST_ELF_ORACLE_INVALID_TARGET,
+    N00B_TEST_ELF_ORACLE_PHTAB_ADJUSTABLE,
+    N00B_TEST_ELF_ORACLE_PHTAB_NOT_ADJUSTABLE,
 } n00b_test_elf_oracle_expect_t;
 
 typedef enum {
@@ -114,6 +118,18 @@ typedef enum {
 } n00b_test_elf_rewrite_request_t;
 
 typedef enum {
+    N00B_TEST_ELF_LOADABLE_NONE,
+    N00B_TEST_ELF_LOADABLE_DEFERRED,
+    N00B_TEST_ELF_LOADABLE_IN_PLACE,
+    N00B_TEST_ELF_LOADABLE_RELOCATE,
+} n00b_test_elf_loadable_request_t;
+
+#define N00B_TEST_ELF_ORACLE_CODE_PHTAB_ADJUST_MEMORY 43
+#define N00B_TEST_ELF_ORACLE_CODE_PHTAB_ADJUST_FILE 44
+#define N00B_TEST_ELF_ORACLE_CODE_PHTAB_ADJUST_EOF 56
+#define N00B_TEST_ELF_ORACLE_CODE_PHTAB_ADJUST_NONZERO_SLACK 47
+
+typedef enum {
     N00B_TEST_ELF_GEN_VALID_MINIMAL_EXEC,
     N00B_TEST_ELF_GEN_BAD_MAGIC,
     N00B_TEST_ELF_GEN_ELF32_INPUT,
@@ -126,6 +142,15 @@ typedef enum {
     N00B_TEST_ELF_GEN_OVERLAY_AFTER_SEGMENTS,
     N00B_TEST_ELF_GEN_LAYOUT_CLASSIFICATION,
     N00B_TEST_ELF_GEN_LAYOUT_NONZERO_UNKNOWN,
+    N00B_TEST_ELF_GEN_PHTAB_ADJUST_ACCEPTED,
+    N00B_TEST_ELF_GEN_PHTAB_ADJUST_MEMORY_TAIL,
+    N00B_TEST_ELF_GEN_PHTAB_ADJUST_MEMORY_COLLISION,
+    N00B_TEST_ELF_GEN_PHTAB_ADJUST_FILE_COLLISION,
+    N00B_TEST_ELF_GEN_PHTAB_ADJUST_NONZERO_SLACK,
+    N00B_TEST_ELF_GEN_PHTAB_ADJUST_AT_EOF,
+    N00B_TEST_ELF_GEN_LOADABLE_RELOCATE_DIRECT,
+    N00B_TEST_ELF_GEN_LOADABLE_RELOCATE_OVERLAY,
+    N00B_TEST_ELF_GEN_LOADABLE_RELOCATE_ADDRESS_OVERFLOW,
 } n00b_test_elf_generator_t;
 
 typedef struct {
@@ -153,6 +178,16 @@ typedef struct {
     n00b_elf_rewrite_admit_rejection_reason_t rewrite_admission_reason;
     n00b_elf_rewrite_admit_placement_kind_t rewrite_admission_placement;
     n00b_elf_rewrite_table_strategy_t rewrite_table_strategy;
+    n00b_test_elf_loadable_request_t loadable_request;
+    n00b_elf_rewrite_plan_outcome_t loadable_outcome;
+    n00b_elf_rewrite_rejection_reason_t loadable_reason;
+    n00b_elf_rewrite_admit_rejection_reason_t loadable_admission_reason;
+    n00b_elf_rewrite_loadable_phtab_strategy_t loadable_phtab_strategy;
+    n00b_elf_rewrite_loadable_phtab_adjust_status_t loadable_phtab_adjust_status;
+    n00b_elf_rewrite_admit_rejection_reason_t loadable_phtab_adjust_reason;
+    n00b_elf_rewrite_loadable_relocation_status_t loadable_relocation_status;
+    n00b_elf_rewrite_rejection_reason_t loadable_relocation_reason;
+    bool                            loadable_apply_reparse;
     const char                     *description;
 } n00b_test_elf_case_t;
 
@@ -177,6 +212,214 @@ typedef struct {
 
 static const n00b_test_elf_case_t n00b_test_elf_cases[] = {
     {
+        .name          = "phtab_adjust_accepted",
+        .state         = N00B_TEST_ELF_CASE_KNOWN,
+        .generator     = N00B_TEST_ELF_GEN_PHTAB_ADJUST_ACCEPTED,
+        .expect_parse  = N00B_TEST_ELF_PARSE_OK,
+        .expect_reason = "phtab-adjust-accepted",
+        .oracle_mode   = N00B_TEST_ELF_ORACLE_PHTAB_ADJUSTMENT,
+        .oracle_expect = N00B_TEST_ELF_ORACLE_PHTAB_ADJUSTABLE,
+        .has_oracle_code = true,
+        .oracle_expected_code = 0,
+        .divergence    = N00B_TEST_ELF_DIVERGENCE_DIAGNOSTIC_ONLY,
+        .loadable_request = N00B_TEST_ELF_LOADABLE_IN_PLACE,
+        .loadable_outcome = N00B_ELF_REWRITE_PLAN_ACCEPTED,
+        .loadable_reason = N00B_ELF_REWRITE_REJECT_NONE,
+        .loadable_admission_reason = N00B_ELF_REWRITE_ADMIT_REJECT_NONE,
+        .loadable_phtab_strategy =
+            N00B_ELF_REWRITE_LOADABLE_PHTAB_STRATEGY_IN_PLACE_ADJUST,
+        .loadable_phtab_adjust_status =
+            N00B_ELF_REWRITE_LOADABLE_PHTAB_ADJUST_ACCEPTED,
+        .loadable_apply_reparse = true,
+        .description   = "In-place PHTAB growth fits before the next object.",
+    },
+    {
+        .name          = "phtab_adjust_memory_tail",
+        .state         = N00B_TEST_ELF_CASE_KNOWN,
+        .generator     = N00B_TEST_ELF_GEN_PHTAB_ADJUST_MEMORY_TAIL,
+        .expect_parse  = N00B_TEST_ELF_PARSE_OK,
+        .expect_reason = "phtab-adjust-memory-tail",
+        .oracle_mode   = N00B_TEST_ELF_ORACLE_PHTAB_ADJUSTMENT,
+        .oracle_expect = N00B_TEST_ELF_ORACLE_PHTAB_ADJUSTABLE,
+        .has_oracle_code = true,
+        .oracle_expected_code = 0,
+        .divergence    = N00B_TEST_ELF_DIVERGENCE_DIAGNOSTIC_ONLY,
+        .loadable_request = N00B_TEST_ELF_LOADABLE_IN_PLACE,
+        .loadable_outcome = N00B_ELF_REWRITE_PLAN_ACCEPTED,
+        .loadable_reason = N00B_ELF_REWRITE_REJECT_NONE,
+        .loadable_admission_reason = N00B_ELF_REWRITE_ADMIT_REJECT_NONE,
+        .loadable_phtab_strategy =
+            N00B_ELF_REWRITE_LOADABLE_PHTAB_STRATEGY_IN_PLACE_ADJUST,
+        .loadable_phtab_adjust_status =
+            N00B_ELF_REWRITE_LOADABLE_PHTAB_ADJUST_ACCEPTED,
+        .description   = "In-place PHTAB growth preserves a memory-only tail.",
+    },
+    {
+        .name          = "phtab_adjust_memory_collision",
+        .state         = N00B_TEST_ELF_CASE_KNOWN,
+        .generator     = N00B_TEST_ELF_GEN_PHTAB_ADJUST_MEMORY_COLLISION,
+        .expect_parse  = N00B_TEST_ELF_PARSE_OK,
+        .expect_reason = "phtab-adjust-memory-collision",
+        .oracle_mode   = N00B_TEST_ELF_ORACLE_PHTAB_ADJUSTMENT,
+        .oracle_expect = N00B_TEST_ELF_ORACLE_PHTAB_NOT_ADJUSTABLE,
+        .has_oracle_code = true,
+        .oracle_expected_code = N00B_TEST_ELF_ORACLE_CODE_PHTAB_ADJUST_MEMORY,
+        .divergence    = N00B_TEST_ELF_DIVERGENCE_DIAGNOSTIC_ONLY,
+        .loadable_request = N00B_TEST_ELF_LOADABLE_IN_PLACE,
+        .loadable_outcome = N00B_ELF_REWRITE_PLAN_ACCEPTED,
+        .loadable_reason = N00B_ELF_REWRITE_REJECT_NONE,
+        .loadable_admission_reason = N00B_ELF_REWRITE_ADMIT_REJECT_NONE,
+        .loadable_phtab_strategy =
+            N00B_ELF_REWRITE_LOADABLE_PHTAB_STRATEGY_RELOCATE,
+        .loadable_phtab_adjust_status =
+            N00B_ELF_REWRITE_LOADABLE_PHTAB_ADJUST_REJECTED_RELOCATABLE,
+        .loadable_phtab_adjust_reason =
+            N00B_ELF_REWRITE_ADMIT_REJECT_PHTAB_ADJUST_MEMORY_COLLISION,
+        .loadable_relocation_status =
+            N00B_ELF_REWRITE_LOADABLE_RELOCATION_ACCEPTED,
+        .loadable_relocation_reason = N00B_ELF_REWRITE_REJECT_NONE,
+        .description   = "Address collision blocks in-place growth; relocation is safe.",
+    },
+    {
+        .name          = "phtab_adjust_file_collision",
+        .state         = N00B_TEST_ELF_CASE_KNOWN,
+        .generator     = N00B_TEST_ELF_GEN_PHTAB_ADJUST_FILE_COLLISION,
+        .expect_parse  = N00B_TEST_ELF_PARSE_OK,
+        .expect_reason = "phtab-adjust-file-collision",
+        .oracle_mode   = N00B_TEST_ELF_ORACLE_PHTAB_ADJUSTMENT,
+        .oracle_expect = N00B_TEST_ELF_ORACLE_PHTAB_NOT_ADJUSTABLE,
+        .has_oracle_code = true,
+        .oracle_expected_code = N00B_TEST_ELF_ORACLE_CODE_PHTAB_ADJUST_FILE,
+        .divergence    = N00B_TEST_ELF_DIVERGENCE_DIAGNOSTIC_ONLY,
+        .loadable_request = N00B_TEST_ELF_LOADABLE_IN_PLACE,
+        .loadable_outcome = N00B_ELF_REWRITE_PLAN_ACCEPTED,
+        .loadable_reason = N00B_ELF_REWRITE_REJECT_NONE,
+        .loadable_admission_reason = N00B_ELF_REWRITE_ADMIT_REJECT_NONE,
+        .loadable_phtab_strategy =
+            N00B_ELF_REWRITE_LOADABLE_PHTAB_STRATEGY_RELOCATE,
+        .loadable_phtab_adjust_status =
+            N00B_ELF_REWRITE_LOADABLE_PHTAB_ADJUST_REJECTED_RELOCATABLE,
+        .loadable_phtab_adjust_reason =
+            N00B_ELF_REWRITE_ADMIT_REJECT_PHTAB_ADJUST_FILE_COLLISION,
+        .loadable_relocation_status =
+            N00B_ELF_REWRITE_LOADABLE_RELOCATION_ACCEPTED,
+        .loadable_relocation_reason = N00B_ELF_REWRITE_REJECT_NONE,
+        .description   = "File collision blocks in-place growth; relocation is safe.",
+    },
+    {
+        .name          = "phtab_adjust_nonzero_slack",
+        .state         = N00B_TEST_ELF_CASE_KNOWN,
+        .generator     = N00B_TEST_ELF_GEN_PHTAB_ADJUST_NONZERO_SLACK,
+        .expect_parse  = N00B_TEST_ELF_PARSE_OK,
+        .expect_reason = "phtab-adjust-nonzero-slack",
+        .oracle_mode   = N00B_TEST_ELF_ORACLE_PHTAB_ADJUSTMENT,
+        .oracle_expect = N00B_TEST_ELF_ORACLE_PHTAB_NOT_ADJUSTABLE,
+        .has_oracle_code = true,
+        .oracle_expected_code = N00B_TEST_ELF_ORACLE_CODE_PHTAB_ADJUST_NONZERO_SLACK,
+        .divergence    = N00B_TEST_ELF_DIVERGENCE_DIAGNOSTIC_ONLY,
+        .loadable_request = N00B_TEST_ELF_LOADABLE_IN_PLACE,
+        .loadable_outcome = N00B_ELF_REWRITE_PLAN_ACCEPTED,
+        .loadable_reason = N00B_ELF_REWRITE_REJECT_NONE,
+        .loadable_admission_reason = N00B_ELF_REWRITE_ADMIT_REJECT_NONE,
+        .loadable_phtab_strategy =
+            N00B_ELF_REWRITE_LOADABLE_PHTAB_STRATEGY_RELOCATE,
+        .loadable_phtab_adjust_status =
+            N00B_ELF_REWRITE_LOADABLE_PHTAB_ADJUST_REJECTED_RELOCATABLE,
+        .loadable_phtab_adjust_reason =
+            N00B_ELF_REWRITE_ADMIT_REJECT_PHTAB_ADJUST_NONZERO_SLACK,
+        .loadable_relocation_status =
+            N00B_ELF_REWRITE_LOADABLE_RELOCATION_ACCEPTED,
+        .loadable_relocation_reason = N00B_ELF_REWRITE_REJECT_NONE,
+        .description   = "Nonzero slack blocks in-place growth; relocation is safe.",
+    },
+    {
+        .name          = "phtab_adjust_at_eof",
+        .state         = N00B_TEST_ELF_CASE_KNOWN,
+        .generator     = N00B_TEST_ELF_GEN_PHTAB_ADJUST_AT_EOF,
+        .expect_parse  = N00B_TEST_ELF_PARSE_OK,
+        .expect_reason = "phtab-adjust-at-eof",
+        .oracle_mode   = N00B_TEST_ELF_ORACLE_PHTAB_ADJUSTMENT,
+        .oracle_expect = N00B_TEST_ELF_ORACLE_PHTAB_NOT_ADJUSTABLE,
+        .has_oracle_code = true,
+        .oracle_expected_code = N00B_TEST_ELF_ORACLE_CODE_PHTAB_ADJUST_EOF,
+        .divergence    = N00B_TEST_ELF_DIVERGENCE_DIAGNOSTIC_ONLY,
+        .loadable_request = N00B_TEST_ELF_LOADABLE_IN_PLACE,
+        .loadable_outcome = N00B_ELF_REWRITE_PLAN_REJECTED,
+        .loadable_reason = N00B_ELF_REWRITE_REJECT_ADMISSION,
+        .loadable_admission_reason =
+            N00B_ELF_REWRITE_ADMIT_REJECT_PHTAB_ADJUST_AT_EOF,
+        .loadable_phtab_strategy =
+            N00B_ELF_REWRITE_LOADABLE_PHTAB_STRATEGY_IN_PLACE_ADJUST,
+        .loadable_phtab_adjust_status =
+            N00B_ELF_REWRITE_LOADABLE_PHTAB_ADJUST_REJECTED_HARD,
+        .loadable_phtab_adjust_reason =
+            N00B_ELF_REWRITE_ADMIT_REJECT_PHTAB_ADJUST_AT_EOF,
+        .description   = "Containing load file range already ends at EOF.",
+    },
+    {
+        .name          = "loadable_relocate_direct",
+        .state         = N00B_TEST_ELF_CASE_KNOWN,
+        .generator     = N00B_TEST_ELF_GEN_LOADABLE_RELOCATE_DIRECT,
+        .expect_parse  = N00B_TEST_ELF_PARSE_OK,
+        .expect_reason = "loadable-relocate-direct",
+        .oracle_mode   = N00B_TEST_ELF_ORACLE_NONE,
+        .oracle_expect = N00B_TEST_ELF_ORACLE_VALID_TARGET,
+        .divergence    = N00B_TEST_ELF_DIVERGENCE_DIAGNOSTIC_ONLY,
+        .loadable_request = N00B_TEST_ELF_LOADABLE_RELOCATE,
+        .loadable_outcome = N00B_ELF_REWRITE_PLAN_ACCEPTED,
+        .loadable_reason = N00B_ELF_REWRITE_REJECT_NONE,
+        .loadable_admission_reason = N00B_ELF_REWRITE_ADMIT_REJECT_NONE,
+        .loadable_phtab_strategy =
+            N00B_ELF_REWRITE_LOADABLE_PHTAB_STRATEGY_RELOCATE,
+        .loadable_relocation_status =
+            N00B_ELF_REWRITE_LOADABLE_RELOCATION_ACCEPTED,
+        .loadable_relocation_reason = N00B_ELF_REWRITE_REJECT_NONE,
+        .loadable_apply_reparse = true,
+        .description   = "Direct relocated-PHTAB planning succeeds.",
+    },
+    {
+        .name          = "loadable_relocate_overlay_rejected",
+        .state         = N00B_TEST_ELF_CASE_KNOWN,
+        .generator     = N00B_TEST_ELF_GEN_LOADABLE_RELOCATE_OVERLAY,
+        .expect_parse  = N00B_TEST_ELF_PARSE_OK,
+        .expect_reason = "loadable-relocate-overlay-rejected",
+        .oracle_mode   = N00B_TEST_ELF_ORACLE_NONE,
+        .oracle_expect = N00B_TEST_ELF_ORACLE_VALID_TARGET,
+        .divergence    = N00B_TEST_ELF_DIVERGENCE_DIAGNOSTIC_ONLY,
+        .loadable_request = N00B_TEST_ELF_LOADABLE_RELOCATE,
+        .loadable_outcome = N00B_ELF_REWRITE_PLAN_REJECTED,
+        .loadable_reason = N00B_ELF_REWRITE_REJECT_LOADABLE_PLACEMENT,
+        .loadable_admission_reason = N00B_ELF_REWRITE_ADMIT_REJECT_NONE,
+        .loadable_phtab_strategy =
+            N00B_ELF_REWRITE_LOADABLE_PHTAB_STRATEGY_RELOCATE,
+        .loadable_relocation_status =
+            N00B_ELF_REWRITE_LOADABLE_RELOCATION_REJECTED,
+        .loadable_relocation_reason =
+            N00B_ELF_REWRITE_REJECT_LOADABLE_PLACEMENT,
+        .description   = "Relocated-PHTAB planning rejects preserved overlay.",
+    },
+    {
+        .name          = "loadable_relocate_address_overflow",
+        .state         = N00B_TEST_ELF_CASE_KNOWN,
+        .generator     = N00B_TEST_ELF_GEN_LOADABLE_RELOCATE_ADDRESS_OVERFLOW,
+        .expect_parse  = N00B_TEST_ELF_PARSE_OK,
+        .expect_reason = "loadable-relocate-address-overflow",
+        .oracle_mode   = N00B_TEST_ELF_ORACLE_NONE,
+        .oracle_expect = N00B_TEST_ELF_ORACLE_VALID_TARGET,
+        .divergence    = N00B_TEST_ELF_DIVERGENCE_DIAGNOSTIC_ONLY,
+        .loadable_request = N00B_TEST_ELF_LOADABLE_RELOCATE,
+        .loadable_outcome = N00B_ELF_REWRITE_PLAN_REJECTED,
+        .loadable_reason = N00B_ELF_REWRITE_REJECT_LOADABLE_ADDRESS,
+        .loadable_admission_reason = N00B_ELF_REWRITE_ADMIT_REJECT_NONE,
+        .loadable_phtab_strategy =
+            N00B_ELF_REWRITE_LOADABLE_PHTAB_STRATEGY_RELOCATE,
+        .loadable_relocation_status =
+            N00B_ELF_REWRITE_LOADABLE_RELOCATION_REJECTED,
+        .loadable_relocation_reason =
+            N00B_ELF_REWRITE_REJECT_LOADABLE_ADDRESS,
+        .description   = "After-highest-load address placement overflows.",
+    },
+    {
         .name          = "valid_minimal_exec",
         .state         = N00B_TEST_ELF_CASE_KNOWN,
         .generator     = N00B_TEST_ELF_GEN_VALID_MINIMAL_EXEC,
@@ -195,6 +438,12 @@ static const n00b_test_elf_case_t n00b_test_elf_cases[] = {
         .rewrite_admission_reason = N00B_ELF_REWRITE_ADMIT_REJECT_NONE,
         .rewrite_admission_placement = N00B_ELF_REWRITE_ADMIT_PLACEMENT_EOF_TAIL,
         .rewrite_table_strategy = N00B_ELF_REWRITE_TABLE_STRATEGY_EOF_REPLACEMENT,
+        .loadable_request = N00B_TEST_ELF_LOADABLE_DEFERRED,
+        .loadable_outcome = N00B_ELF_REWRITE_PLAN_REJECTED,
+        .loadable_reason = N00B_ELF_REWRITE_REJECT_ADMISSION,
+        .loadable_admission_reason =
+            N00B_ELF_REWRITE_ADMIT_REJECT_PT_PHDR_MISSING,
+        .loadable_phtab_strategy = N00B_ELF_REWRITE_LOADABLE_PHTAB_STRATEGY_DEFERRED,
         .description   = "Minimal ELF64 executable satisfying Brandon's reader.",
     },
     {
@@ -288,6 +537,17 @@ static const n00b_test_elf_case_t n00b_test_elf_cases[] = {
         .admission_outcome = N00B_ELF_REWRITE_ADMIT_OUTCOME_REJECTED,
         .admission_reason = N00B_ELF_REWRITE_ADMIT_REJECT_PT_PHDR_INCONSISTENT,
         .admission_placement = N00B_ELF_REWRITE_ADMIT_PLACEMENT_NONE,
+        .loadable_request = N00B_TEST_ELF_LOADABLE_IN_PLACE,
+        .loadable_outcome = N00B_ELF_REWRITE_PLAN_REJECTED,
+        .loadable_reason = N00B_ELF_REWRITE_REJECT_ADMISSION,
+        .loadable_admission_reason =
+            N00B_ELF_REWRITE_ADMIT_REJECT_PT_PHDR_INCONSISTENT,
+        .loadable_phtab_strategy =
+            N00B_ELF_REWRITE_LOADABLE_PHTAB_STRATEGY_IN_PLACE_ADJUST,
+        .loadable_phtab_adjust_status =
+            N00B_ELF_REWRITE_LOADABLE_PHTAB_ADJUST_REJECTED_HARD,
+        .loadable_phtab_adjust_reason =
+            N00B_ELF_REWRITE_ADMIT_REJECT_PT_PHDR_INCONSISTENT,
         .description   = "PT_PHDR exists but does not match PHTAB size.",
     },
     {
@@ -413,6 +673,27 @@ static const n00b_test_elf_case_t n00b_test_elf_cases[] = {
         .rewrite_admission_placement = N00B_ELF_REWRITE_ADMIT_PLACEMENT_NONE,
         .rewrite_table_strategy = N00B_ELF_REWRITE_TABLE_STRATEGY_NONE,
         .description   = "Targets that already carry reserved metadata sections are rejected.",
+    },
+    {
+        .name          = "loadable_phnum_xnum",
+        .state         = N00B_TEST_ELF_CASE_KNOWN,
+        .generator     = N00B_TEST_ELF_GEN_VALID_MINIMAL_EXEC,
+        .expect_parse  = N00B_TEST_ELF_PARSE_OK,
+        .expect_reason = "loadable-phnum-xnum",
+        .oracle_mode   = N00B_TEST_ELF_ORACLE_NONE,
+        .oracle_expect = N00B_TEST_ELF_ORACLE_VALID_TARGET,
+        .divergence    = N00B_TEST_ELF_DIVERGENCE_DIAGNOSTIC_ONLY,
+        .target_mutation = N00B_TEST_ELF_TARGET_MUTATION_PHNUM_XNUM,
+        .has_target_profile = true,
+        .target_profile_reason = N00B_ELF_REWRITE_PROFILE_UNSUPPORTED_PXNUM,
+        .target_profile_packager_errcode = 21,
+        .loadable_request = N00B_TEST_ELF_LOADABLE_DEFERRED,
+        .loadable_outcome = N00B_ELF_REWRITE_PLAN_REJECTED,
+        .loadable_reason = N00B_ELF_REWRITE_REJECT_TARGET_PROFILE,
+        .loadable_admission_reason = N00B_ELF_REWRITE_ADMIT_REJECT_NONE,
+        .loadable_phtab_strategy =
+            N00B_ELF_REWRITE_LOADABLE_PHTAB_STRATEGY_NONE,
+        .description   = "Loadable insertion rejects PN_XNUM target profile.",
     },
     N00B_TEST_ELF_PROFILE_CASE(
         "profile_invalid_ehsize",
@@ -595,6 +876,8 @@ n00b_test_elf_oracle_mode_arg(n00b_test_elf_oracle_mode_t mode)
         return "none";
     case N00B_TEST_ELF_ORACLE_READ_TARGET:
         return "read-target";
+    case N00B_TEST_ELF_ORACLE_PHTAB_ADJUSTMENT:
+        return "phtab-adjustment";
     }
 
     return "none";
@@ -608,6 +891,10 @@ n00b_test_elf_oracle_expect_name(n00b_test_elf_oracle_expect_t expect)
         return "valid-target";
     case N00B_TEST_ELF_ORACLE_INVALID_TARGET:
         return "invalid-target";
+    case N00B_TEST_ELF_ORACLE_PHTAB_ADJUSTABLE:
+        return "phtab-adjustable";
+    case N00B_TEST_ELF_ORACLE_PHTAB_NOT_ADJUSTABLE:
+        return "phtab-not-adjustable";
     }
 
     return "oracle-error";
@@ -646,6 +933,12 @@ static inline bool
 n00b_test_elf_case_has_rewrite(const n00b_test_elf_case_t *test_case)
 {
     return test_case->rewrite_request != N00B_TEST_ELF_REWRITE_NONE;
+}
+
+static inline bool
+n00b_test_elf_case_has_loadable(const n00b_test_elf_case_t *test_case)
+{
+    return test_case->loadable_request != N00B_TEST_ELF_LOADABLE_NONE;
 }
 
 static inline bool
@@ -709,7 +1002,9 @@ static n00b_buffer_t *
 n00b_test_elf_new_zeroed(size_t size)
 {
     n00b_buffer_t *buf = n00b_buffer_new((int64_t)size);
-    memset(buf->data, 0, size);
+    for (size_t i = 0; i < size; i++) {
+        buf->data[i] = 0;
+    }
     buf->byte_len = size;
     return buf;
 }
@@ -1064,6 +1359,143 @@ n00b_test_elf_layout_classification(bool nonzero_unknown)
     return buf;
 }
 
+static n00b_buffer_t *
+n00b_test_elf_phtab_adjustment(bool memory_collision,
+                               bool file_collision,
+                               bool nonzero_slack,
+                               bool at_eof,
+                               bool extra_data_before_eof)
+{
+    const size_t total_size = extra_data_before_eof ? 800 : 768;
+    const size_t phoff      = 64;
+    const bool   second_load = memory_collision || file_collision
+                            || nonzero_slack;
+    const size_t phnum      = second_load ? 3 : 2;
+    const size_t load_filesz = at_eof ? 768 : (second_load ? 240 : 200);
+    const size_t load_memsz  = load_filesz;
+    const size_t shoff      = file_collision ? 320 : 512;
+    const size_t shnum      = 2;
+    const size_t shstr_off  = 704;
+    const size_t shstr_size = 11;
+
+    n00b_buffer_t *buf = n00b_test_elf_new_zeroed(total_size);
+    uint8_t       *p   = (uint8_t *)buf->data;
+
+    n00b_test_elf_write_header(p, ET_EXEC, 0x400080, phoff, (uint16_t)phnum,
+                               shoff, (uint16_t)shnum, 1);
+    n00b_test_elf_write_phdr(p + phoff,
+                             PT_LOAD,
+                             PF_R | PF_X,
+                             0,
+                             0x400000,
+                             load_filesz,
+                             load_memsz,
+                             0x1000);
+    n00b_test_elf_write_phdr(p + phoff + 56,
+                             PT_PHDR,
+                             PF_R,
+                             phoff,
+                             0x400000 + phoff,
+                             phnum * 56,
+                             phnum * 56,
+                             8);
+
+    if (memory_collision) {
+        n00b_test_elf_write_phdr(p + phoff + 112,
+                                 PT_LOAD,
+                                 PF_R,
+                                 640,
+                                 0x400800,
+                                 total_size - 640,
+                                 total_size - 640,
+                                 0x1000);
+    } else if (file_collision) {
+        n00b_test_elf_write_phdr(p + phoff + 112,
+                                 PT_LOAD,
+                                 PF_R,
+                                 240,
+                                 0x500000,
+                                 total_size - 240,
+                                 total_size - 240,
+                                 0x1000);
+    } else if (nonzero_slack) {
+        n00b_test_elf_write_phdr(p + phoff + 112,
+                                 PT_LOAD,
+                                 PF_R,
+                                 512,
+                                 0x500000,
+                                 total_size - 512,
+                                 total_size - 512,
+                                 0x1000);
+    }
+
+    n00b_test_elf_write_shdr(p + shoff + 64,
+                             1,
+                             SHT_STRTAB,
+                             0,
+                             0,
+                             shstr_off,
+                             shstr_size,
+                             0,
+                             0,
+                             1,
+                             0);
+    n00b_test_elf_write_shstrtab(p, shstr_off, true);
+
+    if (nonzero_slack) {
+        p[248] = 0xcc;
+    }
+
+    return buf;
+}
+
+static n00b_buffer_t *
+n00b_test_elf_loadable_relocate_address_overflow(void)
+{
+    const size_t total_size = 511;
+    const size_t phoff      = 64;
+    const size_t phnum      = 2;
+    const size_t shoff      = 256;
+    const size_t shnum      = 2;
+    const size_t shstr_off  = 384;
+    uint64_t high_vaddr     = UINT64_MAX - (uint64_t)total_size;
+
+    n00b_buffer_t *buf = n00b_test_elf_new_zeroed(total_size);
+    uint8_t       *p   = (uint8_t *)buf->data;
+
+    n00b_test_elf_write_header(p, ET_EXEC, 0, phoff, (uint16_t)phnum,
+                               shoff, (uint16_t)shnum, 1);
+    n00b_test_elf_write_phdr(p + phoff,
+                             PT_LOAD,
+                             PF_R | PF_X,
+                             0,
+                             high_vaddr,
+                             total_size,
+                             total_size,
+                             0x1000);
+    n00b_test_elf_write_phdr(p + phoff + 56,
+                             PT_PHDR,
+                             PF_R,
+                             phoff,
+                             high_vaddr + phoff,
+                             phnum * 56,
+                             phnum * 56,
+                             8);
+    n00b_test_elf_write_shdr(p + shoff + 64,
+                             1,
+                             SHT_STRTAB,
+                             0,
+                             0,
+                             shstr_off,
+                             11,
+                             0,
+                             0,
+                             1,
+                             0);
+    n00b_test_elf_write_shstrtab(p, shstr_off, true);
+    return buf;
+}
+
 static void
 n00b_test_elf_apply_target_mutation(n00b_buffer_t *buf,
                                     n00b_test_elf_target_mutation_t mutation)
@@ -1229,6 +1661,39 @@ n00b_test_elf_case_generate(const n00b_test_elf_case_t *test_case)
         break;
     case N00B_TEST_ELF_GEN_LAYOUT_NONZERO_UNKNOWN:
         buf = n00b_test_elf_layout_classification(true);
+        break;
+    case N00B_TEST_ELF_GEN_PHTAB_ADJUST_ACCEPTED:
+        buf = n00b_test_elf_phtab_adjustment(false, false, false, false, false);
+        break;
+    case N00B_TEST_ELF_GEN_PHTAB_ADJUST_MEMORY_TAIL:
+        buf = n00b_test_elf_phtab_adjustment(false, false, false, false, false);
+        n00b_test_elf_put64((uint8_t *)buf->data
+                                + 64
+                                + N00B_TEST_ELF_PHDR_P_MEMSZ,
+                            256);
+        break;
+    case N00B_TEST_ELF_GEN_PHTAB_ADJUST_MEMORY_COLLISION:
+        buf = n00b_test_elf_phtab_adjustment(true, false, false, false, false);
+        break;
+    case N00B_TEST_ELF_GEN_PHTAB_ADJUST_FILE_COLLISION:
+        buf = n00b_test_elf_phtab_adjustment(false, true, false, false, false);
+        break;
+    case N00B_TEST_ELF_GEN_PHTAB_ADJUST_NONZERO_SLACK:
+        buf = n00b_test_elf_phtab_adjustment(false, false, true, false, false);
+        break;
+    case N00B_TEST_ELF_GEN_PHTAB_ADJUST_AT_EOF:
+        buf = n00b_test_elf_phtab_adjustment(false, false, false, true, false);
+        break;
+    case N00B_TEST_ELF_GEN_LOADABLE_RELOCATE_DIRECT:
+        buf = n00b_test_elf_minimal_exec(0x400080, 0, 0x400000, 512, 512,
+                                         true, false, true, false);
+        break;
+    case N00B_TEST_ELF_GEN_LOADABLE_RELOCATE_OVERLAY:
+        buf = n00b_test_elf_minimal_exec(0x400080, 0, 0x400000, 512, 512,
+                                         true, false, true, true);
+        break;
+    case N00B_TEST_ELF_GEN_LOADABLE_RELOCATE_ADDRESS_OVERFLOW:
+        buf = n00b_test_elf_loadable_relocate_address_overflow();
         break;
     }
 

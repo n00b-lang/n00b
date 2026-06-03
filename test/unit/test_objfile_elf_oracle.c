@@ -422,6 +422,8 @@ build_oracle_from_root(const char *root,
 {
     char zerocool_dir[512];
     char read_target_c[512];
+    char phtab_adjustment_c[512];
+    char patch_x86_64_c[512];
     char interval_tree_c[512];
     char zerocool_c[512];
 
@@ -430,6 +432,14 @@ build_oracle_from_root(const char *root,
                    sizeof(read_target_c),
                    zerocool_dir,
                    "read_target_elf.c") ||
+        !path_join(phtab_adjustment_c,
+                   sizeof(phtab_adjustment_c),
+                   zerocool_dir,
+                   "phtab_adjustment.c") ||
+        !path_join(patch_x86_64_c,
+                   sizeof(patch_x86_64_c),
+                   zerocool_dir,
+                   "patch_x86_64.c") ||
         !path_join(interval_tree_c,
                    sizeof(interval_tree_c),
                    zerocool_dir,
@@ -440,6 +450,8 @@ build_oracle_from_root(const char *root,
     }
 
     if (!file_exists(read_target_c) ||
+        !file_exists(phtab_adjustment_c) ||
+        !file_exists(patch_x86_64_c) ||
         !file_exists(interval_tree_c) ||
         !file_exists(zerocool_c)) {
         printf("  [FAIL] N00B_ELF_ORACLE_ROOT does not look like Brandon's "
@@ -501,6 +513,8 @@ build_oracle_from_root(const char *root,
         include_arg,
         (char *)"test/fixtures/elf/oracle/brandon_read_target_oracle.c",
         read_target_c,
+        phtab_adjustment_c,
+        patch_x86_64_c,
         interval_tree_c,
         zerocool_c,
         (char *)"-o",

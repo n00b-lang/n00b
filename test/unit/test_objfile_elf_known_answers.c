@@ -1,5 +1,6 @@
 #include <assert.h>
 #include <stdio.h>
+#include <string.h>
 
 #include "n00b.h"
 #include "core/buffer.h"
@@ -204,6 +205,98 @@ count_vaddr_kind(n00b_elf_layout_t              *layout,
     return count;
 }
 
+static bool
+offset_is_planned_loadable_change(n00b_elf_rewrite_loadable_plan_t *plan,
+                                  uint64_t                          offset)
+{
+    for (uint64_t i = 0; i < plan->patches.len; i++) {
+        if (offset >= plan->patches.data[i].file_offset
+            && offset < plan->patches.data[i].file_end) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static void
+assert_unplanned_original_loadable_bytes_preserved(
+    n00b_buffer_t *before,
+    n00b_buffer_t *after,
+    n00b_elf_rewrite_loadable_plan_t *plan)
+{
+    N00B_TEST_REQUIRE(after->byte_len >= before->byte_len);
+
+    for (uint64_t i = 0; i < before->byte_len; i++) {
+        if (offset_is_planned_loadable_change(plan, i)) {
+            continue;
+        }
+
+        N00B_TEST_REQUIRE(before->data[i] == after->data[i]);
+    }
+}
+
+static void
+assert_loadable_padding_zeroed(n00b_buffer_t *out,
+                               n00b_elf_rewrite_loadable_plan_t *plan)
+{
+    for (uint64_t i = 0; i < plan->patches.len; i++) {
+        n00b_elf_rewrite_patch_t *patch = &plan->patches.data[i];
+
+        if (patch->kind != N00B_ELF_REWRITE_PATCH_LOADABLE_PADDING) {
+            continue;
+        }
+
+        N00B_TEST_REQUIRE(patch->file_offset <= patch->file_end);
+        N00B_TEST_REQUIRE(patch->file_end <= out->byte_len);
+        for (uint64_t j = patch->file_offset; j < patch->file_end; j++) {
+            N00B_TEST_REQUIRE(out->data[j] == 0);
+        }
+    }
+}
+
+static void
+assert_rewritten_loadable_payload(n00b_buffer_t *out,
+                                  n00b_elf_rewrite_loadable_plan_t *plan,
+                                  n00b_buffer_t *payload)
+{
+    N00B_TEST_REQUIRE(plan->payload_placement.kind
+                      == N00B_ELF_REWRITE_LOADABLE_PLACEMENT_LOADABLE_PAYLOAD);
+    N00B_TEST_REQUIRE(plan->payload_placement.file_end
+                      == plan->payload_placement.file_offset
+                       + payload->byte_len);
+    N00B_TEST_REQUIRE(plan->payload_placement.file_end <= out->byte_len);
+    N00B_TEST_REQUIRE(memcmp(out->data + plan->payload_placement.file_offset,
+                             payload->data,
+                             payload->byte_len) == 0);
+}
+
+static void
+assert_rewritten_new_pt_load(n00b_elf_binary_t *rewritten,
+                             n00b_elf_rewrite_loadable_plan_t *plan,
+                             uint64_t offset,
+                             uint64_t vaddr,
+                             uint64_t paddr,
+                             uint64_t filesz,
+                             uint64_t memsz,
+                             uint64_t align)
+{
+    N00B_TEST_REQUIRE(rewritten->num_segments == plan->new_segment_count);
+    N00B_TEST_REQUIRE(plan->new_segment_count
+                      == plan->original_segment_count + 1);
+
+    n00b_elf_segment_t *seg =
+        &rewritten->segments[plan->original_segment_count];
+    N00B_TEST_REQUIRE(seg->type == PT_LOAD);
+    N00B_TEST_REQUIRE(seg->flags == plan->segment_flags);
+    N00B_TEST_REQUIRE(seg->offset == offset);
+    N00B_TEST_REQUIRE(seg->vaddr == vaddr);
+    N00B_TEST_REQUIRE(seg->paddr == paddr);
+    N00B_TEST_REQUIRE(seg->filesz == filesz);
+    N00B_TEST_REQUIRE(seg->memsz == memsz);
+    N00B_TEST_REQUIRE(seg->align == align);
+}
+
 static n00b_elf_layout_gap_t
 require_file_gap(n00b_elf_layout_t *layout,
                  uint64_t           start,
@@ -290,6 +383,39 @@ rewrite_request_make(n00b_test_elf_rewrite_request_t request)
     }
 
     return rewrite;
+}
+
+static n00b_elf_rewrite_loadable_request_t
+loadable_request_make(n00b_test_elf_loadable_request_t request)
+{
+    n00b_elf_rewrite_loadable_request_t loadable = {
+        .payload          = payload_new(0x90, 32),
+        .segment_flags    = PF_R | PF_X,
+        .file_alignment   = 8,
+        .vaddr_alignment  = 0x1000,
+        .p_memsz          = 32,
+        .phtab_strategy   = N00B_ELF_REWRITE_LOADABLE_PHTAB_STRATEGY_DEFERRED,
+        .policy           = {
+            .flags = N00B_ELF_REWRITE_ADMIT_POLICY_STRICT_LOADER_PRESERVATION
+                   | N00B_ELF_REWRITE_ADMIT_POLICY_PRESERVE_OVERLAY,
+        },
+    };
+
+    switch (request) {
+    case N00B_TEST_ELF_LOADABLE_IN_PLACE:
+        loadable.phtab_strategy =
+            N00B_ELF_REWRITE_LOADABLE_PHTAB_STRATEGY_IN_PLACE_ADJUST;
+        break;
+    case N00B_TEST_ELF_LOADABLE_RELOCATE:
+        loadable.phtab_strategy =
+            N00B_ELF_REWRITE_LOADABLE_PHTAB_STRATEGY_RELOCATE;
+        break;
+    case N00B_TEST_ELF_LOADABLE_NONE:
+    case N00B_TEST_ELF_LOADABLE_DEFERRED:
+        break;
+    }
+
+    return loadable;
 }
 
 static void
@@ -624,6 +750,131 @@ check_rewrite_case(const n00b_test_elf_case_t *test_case)
 }
 
 static void
+check_loadable_case(const n00b_test_elf_case_t *test_case)
+{
+    n00b_buffer_t *buf = n00b_test_elf_case_generate(test_case);
+    N00B_TEST_REQUIRE(buf != nullptr);
+
+    n00b_elf_binary_t *bin = nullptr;
+    N00B_TEST_REQUIRE(parse_succeeds(buf, &bin));
+    N00B_TEST_REQUIRE(bin != nullptr);
+
+    n00b_elf_rewrite_loadable_request_t request =
+        loadable_request_make(test_case->loadable_request);
+    auto plan_result = n00b_elf_rewrite_plan_loadable_insert(bin, &request);
+    N00B_TEST_REQUIRE(n00b_result_is_ok(plan_result));
+
+    n00b_elf_rewrite_loadable_plan_t *plan = n00b_result_get(plan_result);
+    N00B_TEST_REQUIRE(plan->outcome == test_case->loadable_outcome);
+    N00B_TEST_REQUIRE(plan->rejection_reason == test_case->loadable_reason);
+    N00B_TEST_REQUIRE(plan->admission.rejection_reason
+                      == test_case->loadable_admission_reason);
+    if (plan->phtab_strategy != test_case->loadable_phtab_strategy) {
+        fprintf(stderr,
+                "loadable phtab strategy mismatch: case=%s expected=%d got=%d\n",
+                test_case->name,
+                (int)test_case->loadable_phtab_strategy,
+                (int)plan->phtab_strategy);
+        N00B_TEST_REQUIRE(false);
+    }
+    N00B_TEST_REQUIRE(plan->phtab_adjustment.status
+                      == test_case->loadable_phtab_adjust_status);
+    N00B_TEST_REQUIRE(plan->phtab_adjustment.rejection_reason
+                      == test_case->loadable_phtab_adjust_reason);
+    N00B_TEST_REQUIRE(plan->phtab_relocation.status
+                      == test_case->loadable_relocation_status);
+    N00B_TEST_REQUIRE(plan->phtab_relocation.rejection_reason
+                      == test_case->loadable_relocation_reason);
+
+    if (plan->phtab_relocation.status
+        == N00B_ELF_REWRITE_LOADABLE_RELOCATION_ACCEPTED) {
+        N00B_TEST_REQUIRE(plan->phtab_placement.kind
+                          == N00B_ELF_REWRITE_LOADABLE_PLACEMENT_RELOCATED_PHTAB);
+        N00B_TEST_REQUIRE(plan->payload_placement.kind
+                          == N00B_ELF_REWRITE_LOADABLE_PLACEMENT_LOADABLE_PAYLOAD);
+        N00B_TEST_REQUIRE(plan->patches.len >= 3);
+    }
+
+    if (test_case->loadable_apply_reparse) {
+        auto applied = n00b_elf_rewrite_apply_loadable_insert_plan(bin, plan);
+        N00B_TEST_REQUIRE(n00b_result_is_ok(applied));
+
+        n00b_buffer_t *out = n00b_result_get(applied);
+        n00b_elf_binary_t *rewritten = nullptr;
+        N00B_TEST_REQUIRE(parse_succeeds(out, &rewritten));
+        N00B_TEST_REQUIRE(rewritten != nullptr);
+        N00B_TEST_REQUIRE(rewritten->header.phnum == bin->header.phnum + 1);
+        N00B_TEST_REQUIRE(rewritten->header.entry == bin->header.entry);
+        N00B_TEST_REQUIRE(rewritten->header.shoff == bin->header.shoff);
+        N00B_TEST_REQUIRE(rewritten->num_segments == bin->num_segments + 1);
+        assert_rewritten_loadable_payload(out, plan, request.payload);
+        assert_loadable_padding_zeroed(out, plan);
+        assert_unplanned_original_loadable_bytes_preserved(buf, out, plan);
+
+        if (plan->phtab_strategy
+            == N00B_ELF_REWRITE_LOADABLE_PHTAB_STRATEGY_IN_PLACE_ADJUST) {
+            n00b_elf_rewrite_loadable_phtab_adjustment_t *adj =
+                &plan->phtab_adjustment;
+            n00b_elf_segment_t *old_load =
+                &bin->segments[adj->containing_load_index];
+            n00b_elf_segment_t *new_load =
+                &rewritten->segments[adj->containing_load_index];
+            n00b_elf_segment_t *pt_phdr =
+                &rewritten->segments[adj->pt_phdr_index];
+
+            N00B_TEST_REQUIRE(rewritten->header.phoff
+                              == adj->adjusted_phtab_offset);
+            N00B_TEST_REQUIRE(new_load->filesz
+                              == old_load->filesz
+                               + adj->required_file_extension);
+            N00B_TEST_REQUIRE(new_load->memsz
+                              == old_load->memsz
+                               + adj->required_memory_extension);
+            N00B_TEST_REQUIRE(pt_phdr->type == PT_PHDR);
+            N00B_TEST_REQUIRE(pt_phdr->offset == adj->pt_phdr_new_offset);
+            N00B_TEST_REQUIRE(pt_phdr->filesz == adj->pt_phdr_new_filesz);
+            N00B_TEST_REQUIRE(pt_phdr->memsz == adj->pt_phdr_new_memsz);
+            N00B_TEST_REQUIRE(pt_phdr->vaddr == adj->pt_phdr_new_vaddr);
+            N00B_TEST_REQUIRE(pt_phdr->paddr == adj->pt_phdr_new_vaddr);
+
+            assert_rewritten_new_pt_load(rewritten,
+                                         plan,
+                                         plan->payload_placement.file_offset,
+                                         plan->payload_placement.vaddr,
+                                         plan->payload_placement.vaddr,
+                                         request.payload->byte_len,
+                                         plan->p_memsz,
+                                         plan->payload_placement.alignment);
+        }
+        else if (plan->phtab_strategy
+                 == N00B_ELF_REWRITE_LOADABLE_PHTAB_STRATEGY_RELOCATE) {
+            n00b_elf_rewrite_loadable_relocation_t *rel =
+                &plan->phtab_relocation;
+            n00b_elf_segment_t *pt_phdr =
+                &rewritten->segments[rel->pt_phdr_index];
+
+            N00B_TEST_REQUIRE(rewritten->header.phoff
+                              == rel->relocated_phtab_offset);
+            N00B_TEST_REQUIRE(pt_phdr->type == PT_PHDR);
+            N00B_TEST_REQUIRE(pt_phdr->offset == rel->pt_phdr_new_offset);
+            N00B_TEST_REQUIRE(pt_phdr->filesz == rel->pt_phdr_new_filesz);
+            N00B_TEST_REQUIRE(pt_phdr->memsz == rel->pt_phdr_new_memsz);
+            N00B_TEST_REQUIRE(pt_phdr->vaddr == rel->pt_phdr_new_vaddr);
+            N00B_TEST_REQUIRE(pt_phdr->paddr == rel->pt_phdr_new_paddr);
+
+            assert_rewritten_new_pt_load(rewritten,
+                                         plan,
+                                         rel->new_pt_load_offset,
+                                         rel->new_pt_load_vaddr,
+                                         rel->new_pt_load_paddr,
+                                         rel->new_pt_load_filesz,
+                                         rel->new_pt_load_memsz,
+                                         rel->new_pt_load_align);
+        }
+    }
+}
+
+static void
 test_target_profile_known_answers(void)
 {
     bool saw[N00B_TEST_ELF_TARGET_MUTATION_EXISTING_RESERVED_SECTION_NAME + 1] = {0};
@@ -725,6 +976,146 @@ test_rewrite_known_answers(void)
 }
 
 static void
+test_loadable_known_answers(void)
+{
+    bool saw_in_place_accept = false;
+    bool saw_memory_collision = false;
+    bool saw_file_collision = false;
+    bool saw_nonzero_slack = false;
+    bool saw_at_eof = false;
+    bool saw_pn_xnum = false;
+    bool saw_missing_pt_phdr = false;
+    bool saw_inconsistent_pt_phdr = false;
+    bool saw_direct_relocation = false;
+    bool saw_fallback_relocation = false;
+    bool saw_placement_reject = false;
+    bool saw_address_reject = false;
+    bool saw_in_place_apply = false;
+    bool saw_relocated_apply = false;
+    size_t count = 0;
+
+    for (size_t i = 0; i < n00b_test_elf_case_count; i++) {
+        const n00b_test_elf_case_t *test_case = &n00b_test_elf_cases[i];
+
+        if (!n00b_test_elf_case_has_loadable(test_case)) {
+            continue;
+        }
+
+        check_loadable_case(test_case);
+
+        switch (test_case->loadable_phtab_adjust_reason) {
+        case N00B_ELF_REWRITE_ADMIT_REJECT_NONE:
+            if (test_case->loadable_phtab_strategy
+                == N00B_ELF_REWRITE_LOADABLE_PHTAB_STRATEGY_IN_PLACE_ADJUST) {
+                saw_in_place_accept = true;
+            }
+            break;
+        case N00B_ELF_REWRITE_ADMIT_REJECT_PHTAB_ADJUST_MEMORY_COLLISION:
+            saw_memory_collision = true;
+            break;
+        case N00B_ELF_REWRITE_ADMIT_REJECT_PHTAB_ADJUST_FILE_COLLISION:
+            saw_file_collision = true;
+            break;
+        case N00B_ELF_REWRITE_ADMIT_REJECT_PHTAB_ADJUST_NONZERO_SLACK:
+            saw_nonzero_slack = true;
+            break;
+        case N00B_ELF_REWRITE_ADMIT_REJECT_PHTAB_ADJUST_AT_EOF:
+            saw_at_eof = true;
+            break;
+        default:
+            break;
+        }
+        switch (test_case->loadable_admission_reason) {
+        case N00B_ELF_REWRITE_ADMIT_REJECT_PT_PHDR_MISSING:
+            saw_missing_pt_phdr = true;
+            break;
+        case N00B_ELF_REWRITE_ADMIT_REJECT_PT_PHDR_INCONSISTENT:
+            saw_inconsistent_pt_phdr = true;
+            break;
+        default:
+            break;
+        }
+        if (test_case->target_profile_reason
+                == N00B_ELF_REWRITE_PROFILE_UNSUPPORTED_PXNUM
+            && test_case->loadable_reason
+                   == N00B_ELF_REWRITE_REJECT_TARGET_PROFILE) {
+            saw_pn_xnum = true;
+        }
+        if (test_case->loadable_request == N00B_TEST_ELF_LOADABLE_RELOCATE
+            && test_case->loadable_relocation_status
+                   == N00B_ELF_REWRITE_LOADABLE_RELOCATION_ACCEPTED) {
+            saw_direct_relocation = true;
+        }
+        if (test_case->loadable_request == N00B_TEST_ELF_LOADABLE_IN_PLACE
+            && test_case->loadable_relocation_status
+                   == N00B_ELF_REWRITE_LOADABLE_RELOCATION_ACCEPTED) {
+            saw_fallback_relocation = true;
+        }
+        if (test_case->loadable_reason
+            == N00B_ELF_REWRITE_REJECT_LOADABLE_PLACEMENT) {
+            saw_placement_reject = true;
+        }
+        if (test_case->loadable_reason
+            == N00B_ELF_REWRITE_REJECT_LOADABLE_ADDRESS) {
+            saw_address_reject = true;
+        }
+        if (test_case->loadable_apply_reparse
+            && test_case->loadable_phtab_strategy
+                   == N00B_ELF_REWRITE_LOADABLE_PHTAB_STRATEGY_IN_PLACE_ADJUST) {
+            saw_in_place_apply = true;
+        }
+        if (test_case->loadable_apply_reparse
+            && test_case->loadable_phtab_strategy
+                   == N00B_ELF_REWRITE_LOADABLE_PHTAB_STRATEGY_RELOCATE) {
+            saw_relocated_apply = true;
+        }
+        count++;
+    }
+
+    N00B_TEST_REQUIRE(count > 0);
+    N00B_TEST_REQUIRE(saw_in_place_accept);
+    N00B_TEST_REQUIRE(saw_memory_collision);
+    N00B_TEST_REQUIRE(saw_file_collision);
+    N00B_TEST_REQUIRE(saw_nonzero_slack);
+    N00B_TEST_REQUIRE(saw_at_eof);
+    N00B_TEST_REQUIRE(saw_pn_xnum);
+    N00B_TEST_REQUIRE(saw_missing_pt_phdr);
+    N00B_TEST_REQUIRE(saw_inconsistent_pt_phdr);
+    N00B_TEST_REQUIRE(saw_direct_relocation);
+    N00B_TEST_REQUIRE(saw_fallback_relocation);
+    N00B_TEST_REQUIRE(saw_placement_reject);
+    N00B_TEST_REQUIRE(saw_address_reject);
+    N00B_TEST_REQUIRE(saw_in_place_apply);
+    N00B_TEST_REQUIRE(saw_relocated_apply);
+}
+
+static void
+test_oracle_mode_metadata(void)
+{
+    N00B_TEST_REQUIRE(strcmp(n00b_test_elf_oracle_mode_arg(
+                                 N00B_TEST_ELF_ORACLE_PHTAB_ADJUSTMENT),
+                             "phtab-adjustment") == 0);
+    N00B_TEST_REQUIRE(strcmp(n00b_test_elf_oracle_expect_name(
+                                 N00B_TEST_ELF_ORACLE_PHTAB_ADJUSTABLE),
+                             "phtab-adjustable") == 0);
+    N00B_TEST_REQUIRE(strcmp(n00b_test_elf_oracle_expect_name(
+                                 N00B_TEST_ELF_ORACLE_PHTAB_NOT_ADJUSTABLE),
+                             "phtab-not-adjustable") == 0);
+
+    bool saw_phtab_mode = false;
+    for (size_t i = 0; i < n00b_test_elf_case_count; i++) {
+        if (n00b_test_elf_cases[i].oracle_mode
+            == N00B_TEST_ELF_ORACLE_PHTAB_ADJUSTMENT) {
+            saw_phtab_mode = true;
+            N00B_TEST_REQUIRE(n00b_test_elf_cases[i].loadable_request
+                              != N00B_TEST_ELF_LOADABLE_NONE);
+        }
+    }
+
+    N00B_TEST_REQUIRE(saw_phtab_mode);
+}
+
+static void
 test_known_answers(void)
 {
     size_t count = 0;
@@ -760,6 +1151,8 @@ main(int argc, char **argv)
     test_admission_known_answers();
     test_target_profile_known_answers();
     test_rewrite_known_answers();
+    test_loadable_known_answers();
+    test_oracle_mode_metadata();
     printf("All ELF known-answer tests passed.\n");
     return 0;
 }
