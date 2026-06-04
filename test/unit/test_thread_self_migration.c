@@ -170,8 +170,9 @@ stw_worker_fn(void *raw)
 
     atomic_store(&io->stage, STAGE_READY);
 
+    // Pure-preemptive STW (WP-001): a tight RUNNING spin with NO checkin.  The
+    // STW initiator preempts this thread; there is no cooperative park.
     while (atomic_load(&io->stage) == STAGE_READY) {
-        n00b_thread_checkin();
     }
 
     atomic_store(&io->resume_bits,
@@ -224,8 +225,11 @@ test_stw_cycle_resumes_all_workers(void)
     for (int i = 0; i < N_WORKERS; i++) {
         void *ret = n00b_thread_join(children[i]);
         assert(ret == children[i]);
+        // self_lock carries no STW/BLOCKING/SUSPEND state under pure-preemptive
+        // STW (those cooperative bits are gone); the worker resuming cleanly and
+        // returning its own handle is the resume proof.
         uint32_t bits = atomic_load(&ios[i].resume_bits);
-        assert((bits & (N00B_STW | N00B_BLOCKING | N00B_SUSPEND)) == 0);
+        assert(bits == 0);
     }
 
     printf("  [PASS] STW/restart cycle resumes all raw workers\n");
@@ -313,11 +317,12 @@ static void *
 churn_worker_fn(void *raw)
 {
     (void)raw;
-    // A little work + checkins so init/early-run overlaps the STW cycles.
+    // A little work so init/early-run overlaps the STW cycles.  No checkin
+    // (WP-001): a worker is preempted by the STW initiator, not cooperatively
+    // parked.
     volatile uint64_t acc = 0;
     for (int i = 0; i < 64; i++) {
         acc += (uint64_t)i;
-        n00b_thread_checkin();
     }
     (void)acc;
     return n00b_thread_self();

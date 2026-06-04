@@ -1,52 +1,25 @@
-// The global lock only needs to run at times where it's important
-// that all threads are stopped / synchronized.
+// Pure-preemptive stop-the-world (WP-001).
 //
-// This is mainly (but not exclusively) when we need to do garbage
-// collection; we don't want threads to be mucking w/ memory while we
-// are copying data.
+// Stopping the world means: no other thread is running n00b code while the
+// collector works.  We achieve that by PREEMPTION, not cooperation.
 //
-// We generally would like to avoid contention and cache
-// synchronization, so instead of one global lock, the STW works like
-// this:
+// The single `critical_execution` gate (a re-entrant n00b mutex in the runtime)
+// is held by any thread doing "critical execution": mmap/munmap, an mmap
+// interval-tree mutation, or a thread's whole init / whole destroy.  To stop the
+// world the initiator ACQUIRES `critical_execution` — once held it is guaranteed
+// no other thread is mid-critical-section — then walks the registered-thread
+// table and preemptively suspends every OTHER thread, capturing its register
+// file (macOS Mach thread_suspend; Linux RT-signal handler; Windows
+// SuspendThread).  It then sets `rt->stw_active`.
 //
-// There is one 'stop the world' mutex that must be acquired before
-// you can actually begin the process. Then, when you have the mutex,
-// you iterate through the global list of threads, and set the STW
-// bit in their self-lock futex. Every thread that checks in or.
-
-// 'self-lock' futex to the value 0xffffffff.
+// While `stw_active` is set, every n00b lock acquire/release short-circuits to a
+// no-op (the collector is the sole runner, so all locks are uncontended and it
+// must never block on a lock a suspended thread holds).  `stw_active` is set
+// AFTER `critical_execution` is acquired, so that acquire is a real one.
 //
-// Every time a thread is about to call a function that will suspend
-// it, any time it uses memory management routines, and every loop
-// through the interpreter, the thread will store ~0 into
-// thread->wait_futex to indicate it's in the 'self-futex'. If the
-// sentinel has been added to the futex by the STW, then that thread
-// will block until the STW finishes the stop the world process.
-//
-// After the STW runs through all threads once, it effectively
-// busy-waits.  It keeps iterating through all threads, looking to see
-// if they're suspended on their own futex, or otherwise waiting.
-//
-// For waiting threads, they also ensure wait on their self-lock when
-// they resume, so once the STW thread has placed the lock, as long as
-// the thread is still in a wait state, all is good.
-//
-// At that point, the STW thread proceeds, until it is time to restart
-// the world.
-//
-// When it comes time to do that, it goes back through and resets
-// the self-lock for each thread to its expected value.
-//
-// For any thread that was blocked on their self-lock, they then
-// ensure that the STW is unlocked before proceeding.
-//
-// We could use a RW lock for the STW instead; that may end up just as
-// good; yes, there'd be a lot more reading of the same memory
-// address, but it wouldn't often be modified (on stop-the-world,
-// suspend and resume), so probably not much of an issue.
-//
-// Still, this is simple enough, and doesn't allow nesting of suspends
-// / resumes, which I prefer. I might not change it.
+// Restarting clears `stw_active`, resumes every suspended thread, then releases
+// `critical_execution` (a real release, since the flag is already clear).  STW
+// nesting is handled by `critical_execution`'s own owner+nesting recursion.
 
 #define N00B_USE_INTERNAL_API
 
@@ -94,26 +67,15 @@
 #include <windows.h>
 #endif
 
-static inline int32_t
-get_tid()
-{
-    // Migrated off the former thread_local __n00b_thread_self to the
-    // runtime-owned struct via n00b_thread_self() (WP-001 Phase 2).  This
-    // is an access-pattern migration only; the STW algorithm is unchanged
-    // (its redesign is WP-004).
-    n00b_thread_t *self = n00b_thread_self();
-    return self == nullptr ? -1 : self->id_info.parts.id;
-}
-
 #if defined(__linux__)
 // WP-4 (D-040) Linux suspend-signal handler.  Runs IN SIGNAL CONTEXT on the
 // TARGET thread (delivered by the STW initiator via tgkill), on the target's
 // NORMAL stack (not an altstack) — so n00b_thread_self(), and thus this
 // function's ncc gc_stack_push prologue, resolve correctly.  It captures the
 // interrupted register file from the ucontext for the GC's conservative
-// top-frame scan (D-007/D-031), publishes "parked", then spins until the world
-// restarts.  Async-signal-safe: ucontext reads, atomic stores, and a RAW futex
-// wait (NOT n00b_futex_wait — that calls n00b_thread_checkin) — no alloc/lock.
+// top-frame scan (D-007/D-031), publishes "parked", then polls until the world
+// restarts.  Async-signal-safe: ucontext reads, atomic stores, and a raw
+// nanosleep poll on rt->stw_active — no alloc, no lock, no n00b_futex_wait.
 // [Host-verified later — D-026/D-028.]
 static void
 _n00b_stw_suspend_handler(int sig, siginfo_t *si, void *uctx)
@@ -157,13 +119,14 @@ _n00b_stw_suspend_handler(int sig, siginfo_t *si, void *uctx)
 
     n00b_atomic_store(&self->gc_preempt_suspended, true);
 
-    // Park until _n00b_restart_the_world clears rt->stw (+ futex-wakes
-    // stw_generation).  Raw futex wait only — the regs are already captured, and
-    // n00b_futex_wait's embedded checkin must NOT run in signal context.
-    while (n00b_atomic_load(&rt->stw) != N00B_NO_OWNER) {
-        uint32_t        gen  = n00b_atomic_load(&rt->stw_generation);
+    // Park until _n00b_restart_the_world clears rt->stw_active.  Poll the flag
+    // with a short async-signal-safe nanosleep (NOT a futex wait on the bool:
+    // stw_active is a 1-byte _Atomic bool, not a 32-bit futex word; and we must
+    // do no alloc / lock in signal context).  The regs are already captured, so
+    // this thread contributes nothing but its parked state.
+    while (n00b_atomic_load(&rt->stw_active)) {
         struct timespec tout = {.tv_sec = 0, .tv_nsec = 1000 * 1000};
-        (void)n00b_futex_wait_timespec(&rt->stw_generation, gen, &tout);
+        (void)nanosleep(&tout, nullptr);
     }
 
     n00b_atomic_store(&self->gc_preempt_suspended, false);
@@ -242,22 +205,16 @@ _n00b_preempt_suspend_capture(n00b_thread_t *t)
         return false; // delivery failed (e.g. the thread just exited)
     }
     // Wait for the handler to acknowledge it has parked + captured.  A RUNNING
-    // thread takes the signal promptly, but the target may STOP being suspendable
-    // before its handler acks — and the spin must not hang on that (WP-001
-    // Phase 3; observed at shutdown under load):
-    //   - it EXITED before the handler ran (caught running by the stop pass,
-    //     then reached its final exit): once it is in the kernel exit path it
-    //     never takes the signal.  tgkill(sig 0) reports ESRCH once it is gone.
-    //   - it went GC-safe on its OWN (teardown / n00b_run_blocking set SUSPEND
-    //     after we signalled it): no need to preempt it anymore.
-    // In both cases bail with false so the caller reloads the slot and either
-    // breaks on null (exited) or honors SUSPEND (skips it) — mirroring the macOS
+    // thread takes the signal promptly, but the target may EXIT before its
+    // handler acks (caught running by the stop pass, then reached its final exit
+    // in the kernel exit path, where it never takes the signal).  Detect that
+    // with a periodic tgkill(sig 0) (ESRCH once it is gone) and bail with false
+    // so the caller reloads the slot and breaks on null — mirroring the macOS
     // dead-port bail.  A still-running target is re-signalled on the caller's
-    // retry.
+    // retry.  There is no cooperative SUSPEND self-park to honor anymore: a
+    // thread tearing down holds critical_execution, which the initiator already
+    // holds, so no thread can be mid-destroy concurrently.
     for (uint64_t spins = 0; !n00b_atomic_load(&t->gc_preempt_suspended); spins++) {
-        if (n00b_atomic_load(&t->self_lock) & N00B_SUSPEND) {
-            return false;
-        }
         if ((spins & 0xffffu) == 0xffffu) {
             if (syscall(SYS_tgkill, tgid, (long)(int32_t)t->os_tid, 0) != 0) {
                 return false; // target gone — it will never ack
@@ -334,11 +291,11 @@ _n00b_preempt_resume(n00b_thread_t *t)
         (void)thread_resume((mach_port_t)t->os_thread_port);
     }
 #elif defined(__linux__)
-    // The target's signal handler self-resumes: it spins until rt->stw ==
-    // N00B_NO_OWNER, which _n00b_restart_the_world set + futex-woke
-    // (stw_generation) BEFORE this resume loop runs.  The handler then clears its
-    // own gc_preempt_suspended (and the captured regs go stale but are re-stamped
-    // on the next suspend) and returns to the interrupted PC.  Nothing to do here.
+    // The target's signal handler self-resumes: it polls rt->stw_active, which
+    // _n00b_restart_the_world cleared BEFORE this resume loop runs.  The handler
+    // then clears its own gc_preempt_suspended (and the captured regs go stale
+    // but are re-stamped on the next suspend) and returns to the interrupted PC.
+    // Nothing to do here.
     (void)t;
 #elif defined(_WIN32)
     // Synchronous resume (like macOS): clear the flag + captured regs, then
@@ -359,85 +316,37 @@ _n00b_preempt_resume(n00b_thread_t *t)
 #endif
 }
 
-// Can't-STW barrier "reader" entry (WP-001; see stw.h).  Blocks while a
-// stop-the-world owner is set; the post-increment re-check closes the race with
-// an owner that appears between the wait and the increment.  Must NOT be called
-// by the STW owner — the mmap fast paths gate it behind n00b_stw_in_exclusive().
-void
-n00b_stw_barrier_enter(void)
-{
-    n00b_runtime_t *rt = n00b_get_runtime();
-
-    while (true) {
-        while (n00b_atomic_load(&rt->stw) != (uint32_t)N00B_NO_OWNER) {
-            uint32_t generation = n00b_atomic_load(&rt->stw_generation);
-            n00b_futex_wait(&rt->stw_generation, generation, 1000 * 1000);
-        }
-        n00b_atomic_add(&rt->stw_barrier_count, 1);
-        if (n00b_atomic_load(&rt->stw) == (uint32_t)N00B_NO_OWNER) {
-            return;
-        }
-        // An owner appeared after our wait; back out and retry so the drain in
-        // _n00b_stop_the_world cannot deadlock waiting on us.
-        n00b_atomic_add(&rt->stw_barrier_count, -1);
-    }
-}
-
 void
 _n00b_stop_the_world(char *loc)
 {
     (void)loc;
     n00b_runtime_t *rt = n00b_get_runtime();
 
-    int32_t tid   = get_tid();
-    int32_t owner = n00b_atomic_load(&rt->stw);
+    // Acquire the single STW gate.  This is the only lock STW takes.  Acquiring
+    // it guarantees no other thread is mid-critical-section (mmap mutation,
+    // init, destroy), so once held the mmap interval tree and the thread table
+    // are stable.  On the OUTERMOST stop this is a REAL acquire (stw_active is
+    // still clear, so the lock short-circuit is off); a NESTED stop by the same
+    // (sole-running) initiator short-circuits to a no-op — the gate is already
+    // held, which is exactly what we want.
+    n00b_mutex_lock(&rt->critical_execution);
 
-    if (owner == tid) {
-        rt->stw_nesting++;
+    // Nesting: only the outermost stop suspends.  The gate's own nesting cannot
+    // track this (a nested acquire short-circuits while stw_active is set), so a
+    // dedicated initiator-owned counter does.  n00b_atomic_add returns the OLD
+    // value: nonzero means a stop is already in effect → just return.
+    if (n00b_atomic_add(&rt->stw_nesting, 1) != 0) {
         return;
     }
 
-    // Acquire the STW lock (owner futex).  The initiator does NOT self-suspend
-    // (the pure-preemptive design, WP-001 Phase 3): it stays running and stops
-    // every OTHER thread below.  Its own stack is captured by the collector's
-    // own setjmp in n00b_collect.
-    int32_t expected;
-
-    do {
-        int32_t cur;
-
-        while ((cur = (int32_t)n00b_atomic_load(&rt->stw)) != N00B_NO_OWNER) {
-            uint32_t generation = n00b_atomic_load(&rt->stw_generation);
-            n00b_futex_wait(&rt->stw_generation, generation, 1000 * 1000);
-        }
-
-        expected = N00B_NO_OWNER;
-    } while (!n00b_cas(&rt->stw, (uint32_t *)&expected, tid));
-
-    assert(n00b_atomic_load(&rt->stw) == (uint32_t)tid);
-
-    // DRAIN the can't-STW barrier (WP-001).  The owner is set now, so new
-    // n00b_stw_barrier_enter() callers block; wait for in-flight critical
-    // sections (mmap interval-tree mutations) to leave.  This guarantees that
-    // when we suspend threads below, none is frozen mid-tree-op — so the
-    // collector's lock-free tree walk sees a consistent structure (without this,
-    // a preempted mid-mutation thread corrupts the tree: overlap-insert abort or
-    // a stranded tid_lock spin).  The holders are still running (not yet
-    // suspended) and their sections are short, so this is a brief spin.
-    while (n00b_atomic_load(&rt->stw_barrier_count) != 0) {
-    }
-
-    // PURE PREEMPTIVE STOP (WP-001 Phase 3 — the cut).  Bring every OTHER live
-    // thread to a GC-safe stop by suspending it and capturing its register file.
-    // There is NO cooperative safepoint: a thread does not self-park, and the
-    // initiator does not mark a per-thread STW bit and wait.  Prereqs 1 + 2
-    // guarantee that every thread published into rt->threads[] already carries an
-    // OS control handle (main: WP-001 Phase 1; workers: handle-before-publish,
-    // WP-001 Phase 2), so _n00b_preempt_suspend_capture can fail only
-    // TRANSIENTLY — a thread mid-exit whose handle is dying, or (macOS) a foreign
-    // thread in its brief pre-handle attach window (DF-5).  In both cases we
-    // reload the slot and retry; the `!t` check breaks once the slot clears
-    // (the thread finished exiting).
+    // PURE PREEMPTIVE STOP.  Bring every OTHER live thread to a GC-safe stop by
+    // suspending it and capturing its register file.  There is NO cooperative
+    // safepoint.  Every thread published into rt->threads[] already carries an OS
+    // control handle (handle-before-publish, WP-001 Phase 2), so
+    // _n00b_preempt_suspend_capture can fail only TRANSIENTLY — a thread mid-exit
+    // whose handle is dying, or (macOS) a foreign thread in its brief pre-handle
+    // attach window.  In those cases we reload the slot and retry; the `!t` check
+    // breaks once the slot clears (the thread finished exiting).
     int            n    = (int)rt->max_threads;
     n00b_thread_t *self = n00b_thread_self();
     n00b_thread_t *t;
@@ -449,27 +358,13 @@ _n00b_stop_the_world(char *loc)
                 break;
             }
 
-            // A thread advertising SUSPEND has voluntarily made itself GC-safe
-            // (registers spilled onto its own, conservatively-scanned stack) and
-            // asked NOT to be preempted.  Two callers set it: n00b_run_blocking
-            // (parked in a blocking syscall — signalling it would only EINTR the
-            // call) and n00b_thread_destroy (tearing down; it sets SUSPEND BEFORE
-            // it clears its rt->threads[] slot).  Honor it on EVERY platform:
-            // preempting a teardown that then de-registers its slot would strand
-            // the thread Mach-suspended forever, since _n00b_restart_the_world
-            // resumes via the slot table and would no longer find it.
-            if (n00b_atomic_load(&t->self_lock) & N00B_SUSPEND) {
-                break;
-            }
-
             if (_n00b_preempt_suspend_capture(t)) {
-                // Race close: a thread can set SUSPEND and de-register between the
-                // pre-check above and this freeze.  Now that it is frozen its
-                // self_lock is final — re-read it; if it went SUSPEND
-                // (teardown / run_blocking), release it.  It has made itself
-                // GC-safe and may already have cleared its slot, which restart
-                // would miss, leaving it stranded.
-                if (n00b_atomic_load(&t->self_lock) & N00B_SUSPEND) {
+                // A thread can de-register (clear its slot) between our load and
+                // this freeze.  Now that it is frozen, re-read the slot: if it is
+                // no longer this thread, it de-registered — resume it so the
+                // restart pass (which walks the slot table) does not strand it
+                // Mach-suspended forever.
+                if (n00b_atomic_load(&rt->threads[n].thread) != t) {
                     _n00b_preempt_resume(t);
                 }
                 break;
@@ -478,59 +373,50 @@ _n00b_stop_the_world(char *loc)
         }
     }
 
-    // Barrier drained + every other thread suspended: the collector is the sole
-    // runner.  Mark the exclusive phase so the mmap fast paths skip the barrier
-    // and the tree mutex (one atomic load, no n00b_thread_self()).  Cleared in
-    // _n00b_restart_the_world before anything is resumed.
-    n00b_atomic_store(&rt->stw_exclusive, true);
-
-    rt->stw_nesting = 1;
+    // Every other thread is suspended and the gate is held: the collector is now
+    // the sole runner.  Publish stw_active so every n00b lock acquire/release
+    // short-circuits to a no-op (no lock can block on a suspended holder).
+    n00b_atomic_store(&rt->stw_active, true);
 }
 
 void
 _n00b_restart_the_world(char *loc)
 {
-    int32_t         tid   = get_tid();
-    n00b_runtime_t *rt    = n00b_get_runtime();
-    int32_t         owner = n00b_atomic_load(&rt->stw);
+    (void)loc;
+    n00b_runtime_t *rt = n00b_get_runtime();
 
-    if (owner != tid) {
+    // Only the initiator (the gate owner) may restart.  The outer acquire set
+    // owner to its OS thread id; nested acquires short-circuited but left the
+    // owner unchanged, so this holds across all nesting levels.
+    n00b_core_lock_info_t info = n00b_atomic_load(&rt->critical_execution.data);
+    if (info.owner != n00b_os_thread_id()) {
         abort();
     }
 
-    assert(rt->stw_nesting > 0);
-
-    if (--rt->stw_nesting) {
+    // Nesting: n00b_atomic_add returns the OLD value.  If it was not 1 we are
+    // unwinding a nested stop — the world stays stopped; just unwind the gate
+    // (a no-op while stw_active is set) and return.
+    if (n00b_atomic_add(&rt->stw_nesting, -1) != 1) {
+        n00b_mutex_unlock(&rt->critical_execution);
         return;
     }
 
+    // Clear stw_active FIRST, while we are still the sole runner.  This both
+    // re-enables the n00b locks and releases the Linux suspend handlers (they
+    // poll the flag).  It must precede the gate release below so that release is
+    // a REAL unlock (the lock short-circuit is already off).
+    n00b_atomic_store(&rt->stw_active, false);
+
     n00b_barrier();
-
-    // End the collector's exclusive phase BEFORE anything is resumed or the
-    // barrier reopens (the owner release below).  Safe: the collector is still
-    // the sole runner here and the restart path itself performs no mmap-tree
-    // ops, so no n00b_stw_barrier_enter() can race this clear.
-    n00b_atomic_store(&rt->stw_exclusive, false);
-
-    n00b_thread_t *self = n00b_thread_self();
-    n00b_thread_t *t;
-
-    // Release the STW lock FIRST, then wake.  On Linux the parked suspend-signal
-    // handler self-resumes once it observes rt->stw == N00B_NO_OWNER (woken via
-    // the stw_generation futex); on macOS/Windows the handler does not exist and
-    // _n00b_preempt_resume below issues the thread_resume.  The stw / stw_generation
-    // wakes also release any other initiator blocked acquiring the STW lock.
-    atomic_store(&rt->stw, N00B_NO_OWNER);
-    n00b_atomic_add(&rt->stw_generation, 1);
-    n00b_futex_wake(&rt->stw_generation, true);
-    n00b_futex_wake(&rt->stw, true);
 
     // Resume every thread we preemptively suspended.  _n00b_preempt_resume clears
     // gc_preempt_suspended (and zeroes the captured registers so a later
     // collection does not re-root stale values) before the thread_resume, so a
     // later scan never trusts stale captured state.  A preempted thread resumes
     // at its interrupted PC.
-    int n = (int)rt->max_threads;
+    n00b_thread_t *self = n00b_thread_self();
+    n00b_thread_t *t;
+    int            n = (int)rt->max_threads;
     while (n--) {
         t = n00b_atomic_load(&rt->threads[n].thread);
         if (!t || t == self) {
@@ -538,149 +424,7 @@ _n00b_restart_the_world(char *loc)
         }
         _n00b_preempt_resume(t);
     }
-}
 
-const struct timespec stw_check_timeout = {
-    .tv_sec  = 0,
-    .tv_nsec = 10000,
-};
-
-void
-n00b_wait_for_stw_release(void)
-{
-    n00b_runtime_t *rt         = n00b_get_runtime();
-    n00b_jmp_buf_t  save_state = {};
-    n00b_thread_t  *self       = n00b_thread_self();
-
-    // self() is nullable now (the pre-registration window, D-004/D-014): a
-    // thread that has not yet published its stack bounds is not a STW
-    // participant, so there is nothing to wait on.  Guard only — the STW
-    // algorithm is unchanged (its redesign is WP-004).
-    if (self == nullptr) {
-        return;
-    }
-
-    n00b_capture_stack_top(self);
-    int32_t  cur        = n00b_atomic_load(&rt->stw);
-    uint32_t generation = n00b_atomic_load(&rt->stw_generation);
-
-    if (cur == get_tid()) {
-        return;
-    }
-
-    if (!n00b_setjmp(&save_state)) {
-        // n00b_setjmp() must capture callee-saved registers BEFORE we
-        // announce N00B_BLOCKING — the STW initiator uses that bit
-        // to decide save_state is ready to scan.  Swapping the order
-        // races: initiator sees the bit, scans an uninitialised
-        // save_state.
-        n00b_atomic_or(&self->self_lock, N00B_BLOCKING);
-
-        while (cur != N00B_NO_OWNER) {
-            // Use the version that doesn't check the STW when it's
-            // signaled.  Wait on a generation futex instead of the owner
-            // word: the same owner can run consecutive STW cycles, so the
-            // owner value has an ABA shape (tid -> no-owner -> same tid).
-            n00b_futex_wait_timespec(&rt->stw_generation,
-                                     generation,
-                                     (void *)&stw_check_timeout);
-            generation = n00b_atomic_load(&rt->stw_generation);
-            cur        = n00b_atomic_load(&rt->stw);
-        }
-
-        n00b_longjmp(&save_state, 1);
-    }
-    uint32_t old_state = n00b_atomic_and(&self->self_lock,
-                                         ~N00B_BLOCKING);
-    uint32_t       new_state = n00b_atomic_load(&self->self_lock);
-    int32_t  owner     = n00b_atomic_load(&rt->stw);
-
-    if (((old_state | new_state) & N00B_STW)
-        && owner != N00B_NO_OWNER
-        && owner != get_tid()) {
-        n00b_thread_checkin();
-    }
-}
-
-void
-n00b_thread_checkin(void)
-{
-    n00b_thread_t *self = n00b_thread_self();
-
-    // self() is nullable in the pre-registration window (D-004/D-014); an
-    // unregistered thread is not a STW participant and has no self_lock to
-    // check.  Guard only — STW semantics unchanged (WP-004).
-    if (self == nullptr) {
-        return;
-    }
-
-    int val = n00b_atomic_load(&self->self_lock);
-
-    if (!val) {
-        return;
-    }
-
-    if (n00b_atomic_load(&self->self_lock) & N00B_STW) {
-        // n00b_wait_for_stw_release sets N00B_BLOCKING itself, after
-        // n00b_setjmp() has captured callee-saved registers.  Setting it here
-        // first races: the STW initiator may see the bit and start
-        // scanning before save_state is initialised.
-        n00b_wait_for_stw_release();
-    }
-}
-
-// 'suspend' means we are about to go into some kind of state where we
-// might not check in (at least not soon). We actually can still keep
-// running, but we promise that we are not doing ANYTHING in scope for
-// a STW. So we cannot be using heap memory or locks, etc.
-//
-// The intent here is we call this, then call sleep(), poll() or
-// any other potentially blocking call we need to make, then call
-// n00b_thread_resume() immediately on getting woken.
-void
-_n00b_thread_suspend(char *loc)
-{
-    n00b_thread_t *self = n00b_thread_self();
-
-    // self() is nullable in the pre-registration window (D-004/D-014); an
-    // unregistered thread has no self_lock to set.  Guard only.
-    if (self == nullptr) {
-        return;
-    }
-
-    n00b_atomic_or(&self->self_lock, N00B_SUSPEND);
-}
-
-void
-_n00b_thread_resume(char *loc)
-{
-    (void)loc;
-
-    // Threads can try to resume during a STW. We should go ahead and
-    // turn off 'SUSPEND', but then we will hit the STW when we do the
-    // check-in at the end.
-    //
-    // However, the STW thread should quick-return; it shouldn't have
-    // any contention, unless it is trying to access a resource that's
-    // already locked at the time of the STW, which should be a no-no.
-    //
-    // If that happens, the system will deadlock.
-    n00b_runtime_t *rt   = n00b_get_runtime();
-    n00b_thread_t  *self = n00b_thread_self();
-
-    // self() is nullable in the pre-registration window (D-004/D-014); an
-    // unregistered thread has no self_lock to clear and is not a STW
-    // participant, so there is nothing to resume.  Guard only.
-    if (self == nullptr) {
-        return;
-    }
-
-    n00b_atomic_and(&self->self_lock, ~N00B_SUSPEND);
-
-    int val = n00b_atomic_load(&rt->stw);
-    if (val == get_tid()) {
-        return;
-    }
-
-    n00b_thread_checkin();
+    // Release the gate (a real release: stw_active is already clear).
+    n00b_mutex_unlock(&rt->critical_execution);
 }

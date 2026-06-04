@@ -19,6 +19,7 @@
 #include "core/thread.h"
 #include "core/condition.h"
 #include "core/mutex.h"
+#include "core/futex.h"
 #include "core/stw.h"
 #include "core/atomic.h"
 #include "core/memory_info.h"

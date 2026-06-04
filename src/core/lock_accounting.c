@@ -83,7 +83,19 @@ n00b_lock_acquire_accounting(n00b_lock_base_t *lock,
     // (the pre/post-registration window — a thread holding critical_execution
     // during init/destroy), skip the chain link but still set owner+nesting
     // from the OS id.
-    n00b_thread_record_t *rec = (thread != nullptr) ? thread->record : nullptr;
+    //
+    // The critical_execution STW gate is NEVER linked into the chain: a thread
+    // holds it across its WHOLE destroy, and n00b_release_locks_on_thread_exit
+    // (run mid-destroy) force-releases every chained lock — which would drop the
+    // gate out from under the rest of teardown and then double-free it at the
+    // explicit unlock.  The gate's lifecycle is managed explicitly by the
+    // init/destroy bracket and stop/restart, not by the chain.
+    n00b_runtime_t       *acc_rt = n00b_get_runtime();
+    bool                  is_gate =
+        (acc_rt != nullptr
+         && lock == (n00b_lock_base_t *)&acc_rt->critical_execution);
+    n00b_thread_record_t *rec =
+        (thread != nullptr && !is_gate) ? thread->record : nullptr;
 
     if (info.owner == tid) {
         ++info.nesting;

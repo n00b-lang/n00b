@@ -220,6 +220,17 @@ n00b_thread_init() _kargs
     uint32_t os_thread_port            = 0;
 }
 {
+    // WP-001: a thread's WHOLE init is critical execution.  Hold the single STW
+    // gate across all of it — slot acquire, stack registration (which locks the
+    // mmap registry, re-acquiring the gate reentrantly — intended), the first
+    // GC-visible allocation, and slot publication.  A stop-the-world initiator
+    // must acquire this gate before it suspends anyone, so it can never freeze a
+    // thread that is mid-init (a participant it could neither safely scan nor
+    // cleanly suspend).  Keyed on the OS thread id, so it works even though
+    // n00b_thread_self() is not yet resolvable here.  Released at the very end,
+    // once the thread is fully registered + suspendable.
+    n00b_mutex_lock(&runtime->critical_execution);
+
     // n00b_thread_self() must be resolvable for the calling thread BEFORE the first
     // GC-pushing allocation below (the codegen wraps every alloc in a GC
     // stack-frame push that calls n00b_thread_self()).  The main thread is covered by
@@ -404,6 +415,9 @@ n00b_thread_init() _kargs
 
     n00b_atomic_add(&runtime->live_threads, 1);
     n00b_futex_wake((n00b_futex_t *)&rec->thread, true);
+
+    // Fully registered + suspendable: end the critical-execution window.
+    n00b_mutex_unlock(&runtime->critical_execution);
 }
 
 #if defined(__APPLE__)
@@ -546,6 +560,17 @@ n00b_thread_destroy(void)
         return;
     }
 
+    // WP-001: a thread's WHOLE destroy is critical execution.  Hold the single
+    // STW gate across all of it.  Teardown nulls rec->thread and frees the
+    // stack registration, after which n00b_thread_self() no longer resolves —
+    // but the gate is keyed on the OS thread id, so it stays valid throughout.
+    // Holding it means a stop-the-world initiator (which must acquire the gate
+    // before suspending anyone) can never freeze a thread mid-teardown, so the
+    // collector never scans a stack being dismantled.  The nested mmap
+    // unregister below re-acquires the gate reentrantly — intended.
+    n00b_runtime_t *destroy_gate_rt = n00b_get_runtime();
+    n00b_mutex_lock(&destroy_gate_rt->critical_execution);
+
     n00b_thread_record_t *rec = self->record;
 
     if (rec) {
@@ -558,12 +583,12 @@ n00b_thread_destroy(void)
 
         // Unregister this thread's stack from the mmap tree NOW, while the
         // thread is still fully self-resolvable (live bit set, bounds + record
-        // intact) and still a normal RUNNING thread.  The registry lock (the
-        // re-entrant spinlock) needs n00b_thread_self(); the identity teardown
-        // below clears the live-slot bit and rec->thread, after which self()
-        // returns null and the lock would null-deref.  It is also done before
-        // the N00B_SUSPEND mark below so the unregister takes the lock as a
-        // normal mutator (barrier-protected), not during a GC-safe window.
+        // intact).  The registry lock (the re-entrant spinlock) needs
+        // n00b_thread_self(); the identity teardown below clears the live-slot
+        // bit and rec->thread, after which self() returns null and the lock
+        // would null-deref.  The whole teardown runs under critical_execution
+        // (held at the top), so this registry mutation just nests the gate
+        // reentrantly — no stop-the-world can race it.
         //
         // Only a thread that OWNS its stack registration unregisters it: a raw
         // WORKER's self->stack_map aliases its callstack's registration
@@ -619,15 +644,14 @@ n00b_thread_destroy(void)
         }
 
         // Exclude this thread from the collector's scan set (rec->thread is the
-        // atomic n00b_scan_thread_stacks reads) BEFORE marking it GC-safe.  A
-        // SUSPEND-marked thread is skipped by the STW suspend pass, so it is NOT
-        // frozen — if it stayed in the scan set the collector would scan a stack
-        // the still-running thread is dismantling / about to munmap (TOCTOU).
-        // Clearing rec->thread first makes the collector ignore it; its lock
-        // chain was already emptied by n00b_release_locks_on_thread_exit, so
-        // skipping it loses no root.
+        // atomic n00b_scan_thread_stacks reads).  We hold critical_execution, so
+        // no stop-the-world can be in progress right now; clearing rec->thread
+        // ensures that the NEXT collection ignores this slot rather than scanning
+        // a stack this thread is dismantling / about to munmap (TOCTOU).  Its
+        // lock chain was already emptied by n00b_release_locks_on_thread_exit, so
+        // skipping it loses no root.  (No cooperative SUSPEND self-mark anymore —
+        // the gate, not a self_lock bit, is what keeps the collector off us.)
         n00b_atomic_store(&rec->thread, nullptr);
-        n00b_atomic_or(&self->self_lock, N00B_SUSPEND);
     }
 
     if (self->memperm_pipe.ready) {
@@ -647,6 +671,9 @@ n00b_thread_destroy(void)
         n00b_atomic_add(&rt->live_threads, -1);
         n00b_futex_wake((n00b_futex_t *)&rt->live_threads, true);
     }
+
+    // End the critical-execution window: teardown is complete.
+    n00b_mutex_unlock(&destroy_gate_rt->critical_execution);
 }
 
 bool
@@ -1895,7 +1922,9 @@ n00b_reap_dead_foreign_threads(void)
 
         // 2. Release any locks the dead thread still held.
         n00b_release_locks_on_thread_exit(rec);
-        n00b_atomic_or(&t->self_lock, N00B_SUSPEND);
+        // (No cooperative SUSPEND self-mark — the self_lock GC-safe bit is gone
+        // with the pure-preemptive STW redesign; this reaper already runs with
+        // the world stopped.)
 
         // 3. Retire the stack-bounds advertisement (live bit first, then bounds).
         n00b_atomic_and(&rt->live_slot_bits[i >> 6],
@@ -2578,13 +2607,11 @@ n00b_thread_spawn(void *(*fn)(void *), void *arg) _kargs
     }
 
     // Wait for the child to finish n00b_thread_init (so n00b_thread_self()/the slot
-    // resolves before we return its n00b_thread_t * to the caller).
+    // resolves before we return its n00b_thread_t * to the caller).  No
+    // cooperative self-park around the wait (WP-001): a thread blocked in a
+    // futex wait is preempted by the STW initiator, not self-parked.
     while (!n00b_atomic_load(&bundle->ready)) {
-        n00b_stw_suspend_ctx stw_ctx = {0};
-
-        n00b_thread_suspend(stw_ctx);
         n00b_futex_wait(&bundle->ready, 0, 100000000); // 100ms
-        n00b_thread_resume(stw_ctx);
     }
 
     // Read the child handle the worker published into the bundle (the bundle
@@ -2603,20 +2630,16 @@ n00b_thread_join(n00b_thread_t *thread)
     if (!thread) return nullptr;
 
     // Native (non-pthread) join: wait for the worker to publish "done"
-    // into join_futex, then read its result.  Keep the STW suspend/resume
-    // bracketing so the blocking wait composes with the (not-yet-
-    // redesigned) cooperative STW — a joiner parked in n00b_futex_wait
-    // must look suspended to a stop-the-world initiator.
-    n00b_stw_suspend_ctx stw_ctx = {0};
-
-    n00b_thread_suspend(stw_ctx);
+    // into join_futex, then read its result.  No cooperative self-park around
+    // the wait (WP-001): a joiner blocked in a futex wait is preempted by the
+    // STW initiator, not self-parked.
+    //
     // wait-then-recheck against the publish-then-wake on the worker side:
     // if the worker already stored 1 before we waited, n00b_futex_wait
     // returns immediately (value mismatch); otherwise we block until woken.
     while (n00b_atomic_load(&thread->join_futex) == 0) {
         n00b_futex_wait(&thread->join_futex, 0, 100000000); // 100ms
     }
-    n00b_thread_resume(stw_ctx);
 
     void *retval = n00b_atomic_load(&thread->join_result);
 

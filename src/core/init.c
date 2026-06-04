@@ -296,12 +296,23 @@ n00b_init(n00b_runtime_t *rt, int argc, char *argv[]) _kargs
     }
 
     assert(rt);
-    *rt = (n00b_runtime_t){
-        .stw            = N00B_NO_OWNER,
-        .stw_generation = 0,
-        .stw_nesting    = 0,
-    };
+    *rt = (n00b_runtime_t){};
 
+    // Pure-preemptive STW gate (WP-001): a real, re-entrant n00b mutex.  Use the
+    // system-mutex initializer (no lock-op logging, no GC alloc-info probe) — it
+    // is runtime infrastructure embedded in the runtime struct, taken during
+    // thread init/destroy before the GC allocators it would probe are up.
+    // n00b_sys_mutex_init memsets the lock, leaving the accounting owner at 0;
+    // stamp it to N00B_NO_OWNER (-1) so the first real acquire is recognized as
+    // "unlocked" rather than "owned by tid 0" (which would abort the accounting).
+    n00b_sys_mutex_init(&rt->critical_execution, N00B_LOC_STRING());
+    n00b_core_lock_info_t ce_info = {
+        .owner    = N00B_NO_OWNER,
+        .type     = N00B_NLT_MUTEX,
+        .nesting  = 0,
+        .reserved = 0,
+    };
+    n00b_atomic_store(&rt->critical_execution.data, ce_info);
     n00b_atomic_store(&rt->stw_active, false);
 
     if (!n00b_option_is_set(n00b_default_runtime)) {

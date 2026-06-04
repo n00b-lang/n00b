@@ -1198,15 +1198,16 @@ n00b_scan_thread_stacks(n00b_collect_t *ctx)
         // targeting), so the "top" will be the smaller address, and
         // the one we want to start with in the scan.
 
-        // A thread that has begun teardown nulls its stack_map (and
-        // unregisters its stack) before it sets N00B_SUSPEND — see
-        // n00b_thread_destroy.  Such a thread is not preempt-suspended (it
-        // self-marked GC-safe), but rec->thread is still non-null here, so it
-        // reaches this loop.  Its raw C stack is being dismantled (and, for a
-        // foreign thread, about to be munmap'd), so do NOT conservatively scan
-        // it — a null stack_map is the signal.  Its struct/record/lock chains
-        // are still scanned below (the locks were already released at
-        // teardown, so the chains are empty/safe).
+        // The world is stopped here: every other thread is frozen (preemptively
+        // suspended with its registers captured).  A teardown can never be in
+        // flight concurrently — n00b_thread_destroy runs its WHOLE teardown
+        // under critical_execution, which the STW initiator had to acquire
+        // before it stopped the world.  A null stack_map is the residue of a
+        // teardown that has already nulled its map (and unregistered its stack)
+        // but not yet cleared its slot; its raw C stack is gone, so do NOT
+        // conservatively scan it — a null stack_map is the signal.  Its
+        // struct/record/lock chains are still scanned below (the locks were
+        // already released at teardown, so the chains are empty/safe).
         if (t->stack_map == nullptr) {
             goto scan_thread_state;
         }

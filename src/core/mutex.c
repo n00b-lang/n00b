@@ -12,6 +12,7 @@
 #include "core/runtime.h"
 #include "core/thread.h"
 #include "core/mutex.h"
+#include "core/futex.h"
 #include "core/stw.h"
 #include "core/atomic.h"
 

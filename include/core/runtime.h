@@ -24,6 +24,7 @@
 #include "adt/interval_tree.h"
 #include "core/pool.h"
 #include "core/spinlock.h"
+#include "core/mutex.h"
 #include "conduit/conduit_types.h"
 
 typedef struct n00b_runtime_t n00b_runtime_t;
@@ -208,30 +209,29 @@ struct n00b_runtime_t {
      * slot's bits after another sweep freed it and a new thread reacquired). */
     _Atomic uint32_t            foreign_reap_lock;
     n00b_base_allocator_t       slab_allocator;
-    n00b_futex_t                stw;
-    n00b_futex_t                stw_generation;
-    uint32_t                    stw_nesting;
-    /* Can't-STW barrier (WP-001): a thread inside an STW-unsafe critical
-     * section (the mmap interval-tree mutation, whose collector side reads it
-     * lock-free under STW) increments stw_barrier_count.  _n00b_stop_the_world
-     * acquires the owner (rt->stw), then DRAINS the barrier (waits for
-     * stw_barrier_count == 0; new entries block while an owner is set) BEFORE it
-     * suspends any thread — so no thread is ever frozen mid-tree-op and the
-     * collector's lock-free walk sees a consistent tree.  stw_exclusive is set
-     * once drained + everyone is suspended (the collector is then the sole
-     * runner); the mmap fast paths short-circuit on it (one atomic load, no
-     * self()) instead of taking the barrier/tree-mutex. */
-    _Atomic uint32_t            stw_barrier_count;
-    _Atomic bool                stw_exclusive;
-    /* Pure-preemptive stop-the-world (WP-001).  `stw_active` is set once the
-     * world is fully stopped (the single critical_execution gate held + every
-     * other thread suspended); while it is set every n00b lock acquire and
-     * release short-circuits to a no-op (the collector is the sole runner, so
-     * all locks are uncontended and must never block on a suspended holder).
-     * The `critical_execution` mutex itself is added with the STW-core rewrite
-     * (Phase 2), which also removes the cooperative stw/stw_generation/etc.
-     * fields above. */
+    /* Pure-preemptive stop-the-world (WP-001).  `critical_execution` is the
+     * single gate: a thread holds it during critical execution — mmap/munmap,
+     * mmap interval-tree mutation, and a thread's WHOLE init / WHOLE destroy.
+     * To stop the world the initiator ACQUIRES it (guaranteeing no other thread
+     * is mid-critical-section), then preemptively suspends every other
+     * registered thread.  It is a real, re-entrant n00b mutex (owner+nesting
+     * keyed on the OS thread id), so a thread in init (holding it) can nest an
+     * mmap mutation (re-acquire) without deadlock.  `stw_active` is set once the
+     * world is fully stopped (lock held + everyone suspended); while it is set
+     * every n00b lock acquire and release short-circuits to a no-op (the
+     * collector is the sole runner, so all locks are uncontended and must never
+     * block on a lock a suspended thread holds). */
+    n00b_mutex_t                critical_execution;
     _Atomic bool                stw_active;
+    /* Stop-the-world nesting depth, owned exclusively by the (single) STW
+     * initiator.  The gate's own owner+nesting recursion cannot track this
+     * once stw_active is set, because at that point every lock op — including a
+     * nested critical_execution acquire by the initiator — short-circuits to a
+     * no-op.  So nested stop/restart is tracked here: only the outermost stop
+     * suspends and the outermost restart resumes.  Only the initiator touches
+     * it (everyone else is suspended), but it is _Atomic for clean visibility
+     * across the suspend/resume boundary. */
+    _Atomic uint32_t            stw_nesting;
     const char                 *theme_name;    // Active theme name (set during init).
     n00b_unicode_ctx_t         *unicode_ctx;   // Phase 4.5 unicode subsystem state.
     n00b_regex_ctx_t           *regex_ctx;     // Regex port-side caches.

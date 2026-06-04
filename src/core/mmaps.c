@@ -50,16 +50,23 @@
 //     (letting another thread mutate concurrently → cyclic tree → infinite
 //     loop in n00b_mmap_search_point).
 //
-//   * Non-parking.  It is held inside the can't-STW barrier; a parked holder
-//     would stall the stop-the-world drain forever (see core/spinlock.h).
+//   * Non-parking.  It is held inside the critical_execution gate; a parked
+//     holder would stall a stop-the-world initiator forever (see
+//     core/spinlock.h).
 //
-// The collector short-circuits (n00b_stw_in_exclusive): during the STW
-// exclusive phase it is the SOLE runner (the barrier drained, every mutator
-// suspended), the tree is immutable, and the per-word mark must not pay a
-// lock.  This MUST gate on stw_exclusive, NOT n00b_world_is_stopped(): the
-// latter is already true during the drain/suspend window while mutators still
-// run, and one short-circuiting there would mutate the tree lock-free,
-// invisible to the drain, then be frozen mid-op.
+// A registry op is CRITICAL EXECUTION (WP-001): mutating the mmap interval tree
+// while a stop-the-world initiator suspended us mid-op would corrupt the tree
+// for the collector's lock-free walk.  So the outermost acquire also holds
+// rt->critical_execution — the single STW gate — for the duration of the op.
+// A stop-the-world initiator must ACQUIRE that gate before it suspends anyone,
+// so it can never freeze a thread mid-registry-mutation.
+//
+// The collector short-circuits on rt->stw_active: once the world is stopped it
+// is the SOLE runner (every mutator suspended), the tree is immutable, and the
+// per-word mark must not pay a lock.  It gates on stw_active (set only AFTER the
+// gate is held and everyone is suspended), NOT on "is a stop in progress": a
+// mutator that reached this code is, by definition, holding the gate, so no
+// stop can be in progress underneath it.
 //
 // Both "read" and "write" registry locks take the spinlock EXCLUSIVELY: the
 // interval-tree search/lookup paths mutate a SHARED, non-reentrant per-tree
@@ -68,24 +75,24 @@
 // that.
 //
 // Early init (before startup_complete) is single-threaded — no other thread,
-// no GC — so the lock and barrier are skipped entirely there.
+// no GC — so the lock and gate are skipped entirely there.
 // ============================================================================
 
 static inline void
 mmap_lock(n00b_mmap_ctx_t *ctx)
 {
-    if (n00b_stw_in_exclusive()) {
+    if (n00b_atomic_load(&n00b_get_runtime()->stw_active)) {
         return; // sole-runner collector: tree immutable, no lock needed.
     }
     if (!n00b_atomic_load(&n00b_get_runtime()->startup_complete)) {
         return; // single-threaded init.
     }
-    /* MUTATOR.  Enter the can't-STW barrier on the OUTERMOST acquire only, so a
-     * stop-the-world cannot freeze us mid-tree-mutation; a nested acquire is
-     * already covered by the outer barrier entry (and re-entering would
-     * unbalance the drain count). */
+    /* MUTATOR.  Hold the critical_execution gate on the OUTERMOST acquire only,
+     * so a stop-the-world cannot freeze us mid-tree-mutation; a nested acquire
+     * is already covered by the outer gate hold (and re-acquiring it nests the
+     * mutex reentrantly, which the matching unlock would have to unwind). */
     if (!n00b_lock_already_owner((n00b_lock_base_t *)&ctx->lock)) {
-        n00b_stw_barrier_enter();
+        n00b_mutex_lock(&n00b_get_runtime()->critical_execution);
     }
     n00b_spinlock_lock(&ctx->lock);
 }
@@ -93,16 +100,16 @@ mmap_lock(n00b_mmap_ctx_t *ctx)
 static inline void
 mmap_unlock(n00b_mmap_ctx_t *ctx)
 {
-    if (n00b_stw_in_exclusive()) {
+    if (n00b_atomic_load(&n00b_get_runtime()->stw_active)) {
         return;
     }
     if (!n00b_atomic_load(&n00b_get_runtime()->startup_complete)) {
         return;
     }
-    /* Only the OUTERMOST unlock (spinlock fully released) leaves the barrier; a
+    /* Only the OUTERMOST unlock (spinlock fully released) releases the gate; a
      * nested unlock just unwinds the spinlock's nesting count. */
     if (n00b_spinlock_unlock(&ctx->lock)) {
-        n00b_stw_barrier_leave();
+        n00b_mutex_unlock(&n00b_get_runtime()->critical_execution);
     }
 }
 
