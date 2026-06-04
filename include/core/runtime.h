@@ -23,6 +23,7 @@
 #include "adt/variant.h"
 #include "adt/interval_tree.h"
 #include "core/pool.h"
+#include "core/spinlock.h"
 #include "conduit/conduit_types.h"
 
 typedef struct n00b_runtime_t n00b_runtime_t;
@@ -46,7 +47,14 @@ struct n00b_mmap_ctx_t {
     n00b_interval_tree_t(n00b_mmap_data_t) *mmap_tree;
     n00b_interval_tree_t(n00b_mmap_data_t) *range_tree;
     n00b_static_identity_entry_t *static_identities;
-    _Atomic int64_t  tid_lock;
+    /* Mmap-registry lock (WP-001): the re-entrant, non-parking spinlock.
+     * A tree mutation can nest a lookup (mmaps_insert_raw -> n00b_free ->
+     * finalizer -> n00b_mmap_by_address), and this lock's owner+nesting
+     * accounting lets the same thread re-acquire without self-deadlock and
+     * without a nested unlock dropping the lock the outer mutation holds.
+     * It must NOT park (it is held inside the can't-STW barrier), which is
+     * why it is the spinlock class and not n00b_mutex_t. */
+    n00b_spin_lock_t lock;
     n00b_pool_t      pool;
 };
 

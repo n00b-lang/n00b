@@ -37,60 +37,73 @@
 #define mmap_node_t n00b_interval_node_t(n00b_mmap_data_t)
 
 // ============================================================================
-// Locking (reentrant TID-based spinlock, unchanged from treap version)
+// Locking (WP-001)
+//
+// The mmap registry is guarded by ctx->lock, the re-entrant non-parking
+// spinlock (n00b_spin_lock_t).  Two properties matter here:
+//
+//   * Re-entrant.  A tree mutation can nest a lookup (mmaps_insert_raw ->
+//     n00b_free -> finalizer -> n00b_mmap_by_address).  The spinlock tracks
+//     owner+nesting, so the same thread re-acquiring just bumps the nesting
+//     count, and only the OUTERMOST unlock releases — fixing the old tid_lock
+//     bug where a nested unlock dropped the lock the outer mutation still held
+//     (letting another thread mutate concurrently → cyclic tree → infinite
+//     loop in n00b_mmap_search_point).
+//
+//   * Non-parking.  It is held inside the can't-STW barrier; a parked holder
+//     would stall the stop-the-world drain forever (see core/spinlock.h).
+//
+// The collector short-circuits (n00b_stw_in_exclusive): during the STW
+// exclusive phase it is the SOLE runner (the barrier drained, every mutator
+// suspended), the tree is immutable, and the per-word mark must not pay a
+// lock.  This MUST gate on stw_exclusive, NOT n00b_world_is_stopped(): the
+// latter is already true during the drain/suspend window while mutators still
+// run, and one short-circuiting there would mutate the tree lock-free,
+// invisible to the drain, then be frozen mid-op.
+//
+// Both "read" and "write" registry locks take the spinlock EXCLUSIVELY: the
+// interval-tree search/lookup paths mutate a SHARED, non-reentrant per-tree
+// descent stack (see adt/interval_tree.h), so two concurrent readers would
+// clobber it — the original tid_lock serialized every registry op, and we keep
+// that.
+//
+// Early init (before startup_complete) is single-threaded — no other thread,
+// no GC — so the lock and barrier are skipped entirely there.
 // ============================================================================
 
 static inline void
 mmap_lock(n00b_mmap_ctx_t *ctx)
 {
-    /* COLLECTOR short-circuit (WP-001): during the STW exclusive phase the
-     * collector is the SOLE runner (the can't-STW barrier was drained and every
-     * mutator suspended — see _n00b_stop_the_world), so the tree is immutable
-     * and no lock is needed.  Crucially the conservative mark must NOT pay
-     * n00b_thread_unique_id() (-> n00b_thread_self()) + a CAS on EVERY scanned
-     * word; n00b_stw_in_exclusive() is a single atomic load.
-     *
-     * This MUST gate on stw_exclusive, NOT n00b_world_is_stopped(): the latter
-     * is true from the moment the owner is acquired, including the drain/suspend
-     * window during which mutators are still RUNNING — and a mutator that
-     * short-circuited there would mutate the tree lock-free, invisible to the
-     * drain, then be frozen mid-op.  A mutator therefore always takes the
-     * barrier + mutex below; only the (sole-runner) collector skips them. */
     if (n00b_stw_in_exclusive()) {
-        return;
+        return; // sole-runner collector: tree immutable, no lock needed.
     }
-    /* MUTATOR: enter the can't-STW barrier FIRST so a stop-the-world cannot
-     * freeze us mid-tree-mutation (which would corrupt the collector's
-     * lock-free walk), then take the tree mutex. */
-    n00b_stw_barrier_enter();
-
-    int64_t tid      = n00b_thread_unique_id();
-    int64_t expected = -1;
-
-    do {
-        if (expected == tid) {
-            break;
-        }
-        expected = -1;
-    } while (!n00b_cas(&ctx->tid_lock, &expected, tid));
+    if (!n00b_atomic_load(&n00b_get_runtime()->startup_complete)) {
+        return; // single-threaded init.
+    }
+    /* MUTATOR.  Enter the can't-STW barrier on the OUTERMOST acquire only, so a
+     * stop-the-world cannot freeze us mid-tree-mutation; a nested acquire is
+     * already covered by the outer barrier entry (and re-entering would
+     * unbalance the drain count). */
+    if (!n00b_lock_already_owner((n00b_lock_base_t *)&ctx->lock)) {
+        n00b_stw_barrier_enter();
+    }
+    n00b_spinlock_lock(&ctx->lock);
 }
 
 static inline void
 mmap_unlock(n00b_mmap_ctx_t *ctx)
 {
-    /* COLLECTOR short-circuit, symmetric with mmap_lock: it never acquired, so
-     * there is nothing to release and no barrier to leave. */
     if (n00b_stw_in_exclusive()) {
         return;
     }
-    /* MUTATOR: release the tree mutex, then leave the can't-STW barrier.  The
-     * barrier guarantees no thread is ever frozen holding tid_lock (the STW
-     * drain waits for all holders to leave before suspending), so a plain
-     * release is safe and never stomps another thread's lock — and because the
-     * mutator's whole critical section stays OUT of the STW exclusive phase,
-     * this unlock always runs (no world_is_stopped() skip → no leak). */
-    n00b_atomic_store(&ctx->tid_lock, -1);
-    n00b_stw_barrier_leave();
+    if (!n00b_atomic_load(&n00b_get_runtime()->startup_complete)) {
+        return;
+    }
+    /* Only the OUTERMOST unlock (spinlock fully released) leaves the barrier; a
+     * nested unlock just unwinds the spinlock's nesting count. */
+    if (n00b_spinlock_unlock(&ctx->lock)) {
+        n00b_stw_barrier_leave();
+    }
 }
 
 #define mmap_write_lock(ctx)   mmap_lock(ctx)
@@ -572,7 +585,8 @@ extern void n00b_load_static_ranges();
 void
 n00b_mmaps_initialize(n00b_mmap_ctx_t *ctx)
 {
-    *ctx = (n00b_mmap_ctx_t){ .tid_lock = -1 };
+    *ctx = (n00b_mmap_ctx_t){0};
+    n00b_spinlock_init(&ctx->lock);
 
     n00b_pool_init(&ctx->pool, .__system = true, .hidden = true, .name = "mmaps");
 

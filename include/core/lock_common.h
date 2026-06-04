@@ -51,6 +51,7 @@ enum {
     N00B_NLT_MUTEX = 1,
     N00B_NLT_RW    = 2,
     N00B_NLT_CV    = 3,
+    N00B_NLT_SPIN  = 4,
 };
 
 #define N00B_SPIN_LIMIT 16

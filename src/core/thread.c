@@ -467,6 +467,12 @@ n00b_release_locks_on_thread_exit(n00b_thread_record_t *rec)
             n00b_atomic_and(&rw->futex, ~N00B_RW_W_LOCK);
             n00b_futex_wake(&rw->futex, true);
         }
+        else if (info.type == N00B_NLT_SPIN) {
+            // Non-parking spinlock: just clear the lock word.  No waiter to
+            // wake — spinners re-test it directly.
+            n00b_spin_lock_t *s = (n00b_spin_lock_t *)lock;
+            atomic_store(&s->spin, 0);
+        }
 
         lock = next;
     }

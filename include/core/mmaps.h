@@ -370,19 +370,4 @@ _n00b_static_object_register(void *start,
  */
 extern void n00b_mmap_delete_ranges(n00b_mmap_ctx_t *ctx, uint64_t start, uint64_t end);
 
-/**
- * @brief Drop the registry write-lock if it is held by @p holder_id.
- *
- * @param ctx       The mmap registry context.
- * @param holder_id The n00b_thread_unique_id() of a thread that is losing its
- *                  identity (clean exit or OS-killed reap).
- *
- * Releases the spinlock ONLY if `tid_lock == holder_id`; a no-op otherwise.
- * Used by thread teardown / the foreign reaper so a lock stranded by a thread
- * that died (or lost its `self`) between mmap_lock and mmap_unlock cannot spin
- * every later acquirer forever.
- */
-extern void n00b_mmap_release_lock_held_by(n00b_mmap_ctx_t *ctx,
-                                           int64_t          holder_id);
-
 #define n00b_global_mem_map(rt) (&(rt->mmaps))
