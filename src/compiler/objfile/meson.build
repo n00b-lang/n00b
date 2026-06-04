@@ -4,6 +4,7 @@
 n00b_objfile_src = files(
     'bstream.c',
     'writer.c',
+    'obj_bundle.c',
     'abstract.c',
     'md5.c',
     'demangle.c',
