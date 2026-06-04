@@ -13,6 +13,7 @@
 #include <mach/thread_act.h>
 #include <mach/thread_policy.h>
 #include <sys/syscall.h>
+#include <pthread.h> // pthread_get_stackaddr_np / pthread_get_stacksize_np
 #endif
 
 #if defined(__linux__)
@@ -793,23 +794,27 @@ n00b_capture_stack_base(n00b_thread_t *thread, n00b_runtime_t *runtime)
         // caller existed, and the n00b_mmap_register below then tripped its
         // (end > start) assertion (mmaps.c) — the live gateway crash.
 #ifdef __APPLE__
-        char              anchor;
-        mach_vm_address_t region_addr = (mach_vm_address_t)(uintptr_t)&anchor;
-        mach_vm_size_t    region_size = 0;
-        natural_t                       depth      = 0;
-        vm_region_submap_info_data_64_t info;
-        mach_msg_type_number_t          info_count = VM_REGION_SUBMAP_INFO_COUNT_64;
-        kern_return_t                   kr;
-        kr = mach_vm_region_recurse(mach_task_self(), &region_addr,
-                                    &region_size, &depth,
-                                    (vm_region_recurse_info_t)&info,
-                                    &info_count);
-        if (kr == KERN_SUCCESS) {
-            lowest  = (char *)(uintptr_t)region_addr;
-            highest = lowest + region_size;
-            size    = region_size;
-        }
-        else {
+        // Use the pthread stack APIs, NOT mach_vm_region_recurse.  For a
+        // SECONDARY (foreign) thread these are exact and reliable:
+        // pthread_get_stackaddr_np returns the stack base (highest address,
+        // stacks grow down) and pthread_get_stacksize_np the usable size.
+        // mach_vm_region_recurse is only correct for MAIN (above); for a
+        // foreign thread it can return the NEXT region ABOVE the anchor when
+        // the SP's page isn't the region start — yielding bounds that do NOT
+        // contain the thread's stack (observed: stack_map->start > the real
+        // stack_top), so the GC later scans an unrelated, partly-unmapped
+        // region and faults (hidden_pool_stw SIGSEGV).
+        char   anchor;
+        char  *st_base = (char *)pthread_get_stackaddr_np(pthread_self());
+        size_t st_size = pthread_get_stacksize_np(pthread_self());
+        highest        = st_base;
+        lowest         = st_base - st_size;
+        size           = st_size;
+        // Validate the SP actually falls inside the reported bounds; if not,
+        // leave them zeroed (the register below is guarded) rather than
+        // register a wrong region — degraded (this thread's stack is not a GC
+        // root source) but never a crash.
+        if (!((char *)&anchor >= lowest && (char *)&anchor < highest)) {
             lowest  = nullptr;
             highest = nullptr;
             size    = 0;
