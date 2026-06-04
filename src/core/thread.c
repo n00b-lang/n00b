@@ -294,9 +294,31 @@ n00b_thread_init() _kargs
     init_self.id_info.parts.id         = (int32_t)acquired_slot;
     init_self.id_info.parts.generation = (int32_t)gen;
 
+    // Foreign (libdispatch/XPC) thread: capture its OS control handle — its
+    // suspend identity — NOW, before n00b_capture_stack_base registers its
+    // stack (that registration locks the mmap registry) and before its
+    // live-slot bit is published.  A foreign thread becomes collector-visible
+    // the moment its bit is set; it MUST already be suspendable by then, or a
+    // collection landing in that window spins forever trying to suspend a
+    // handle-less thread.  Workers carry the launcher's port (set in the
+    // callstack block above); main captures below while still single-threaded.
+    // macOS: the +1 mach_thread_self() send right is dropped by the foreign
+    // reaper (this capture simply moved earlier than the permanent struct).
+    if (!is_main && callstack == nullptr) {
+#if defined(__APPLE__)
+        init_self.os_thread_port = (uint32_t)mach_thread_self();
+#elif defined(__linux__)
+        init_self.os_tid = (uint32_t)syscall(SYS_gettid);
+#elif defined(_WIN32)
+        init_self.os_tid = (uint32_t)GetCurrentThreadId();
+#endif
+    }
+
     // Publish bounds + the init self pointer so n00b_thread_self() resolves for this
     // thread during the permanent-struct allocation below.  capture_base
-    // writes rec->stack_lo/hi (stack_hi first, stack_lo last as the gate).
+    // writes rec->stack_lo/hi (stack_hi first, stack_lo last as the gate) and,
+    // for a foreign thread, publishes the live-slot bit before it registers its
+    // stack (so n00b_thread_self() resolves for that registration's lock).
     n00b_capture_stack_base(&init_self, runtime);
     n00b_capture_stack_top(&init_self);
 
@@ -326,21 +348,15 @@ n00b_thread_init() _kargs
     // through n00b_thread_self() to be exact).
     self->gc_stack_top = init_self.gc_stack_top;
 
-#if defined(__APPLE__)
-    // Foreign-thread reclamation (D-034 extension).  A thread we attach that is
-    // NOT main and carries NO callstack is a FOREIGN (libdispatch/XPC) thread:
-    // it will never call n00b_thread_destroy (libdispatch kills it silently),
-    // so without this its slot + n00b_thread_t leak forever and the slot table
-    // eventually exhausts (n00b_thread_slot_acquire spins).  Record its Mach
-    // thread port so the slot-scanning foreign reaper (_n00b_reap_foreign_sweep)
-    // can detect its OS death and reclaim the slot.  Workers already carry
-    // os_thread_port from the launcher (and have a callstack, so they skip
-    // here); main never dies.  mach_thread_self() yields a +1 send right that
-    // the reaper drops via mach_port_deallocate.
-    if (!is_main && callstack == nullptr && self->os_thread_port == 0) {
-        self->os_thread_port = (uint32_t)mach_thread_self();
-    }
-#endif
+    // Foreign-thread reclamation (D-034 extension): a NOT-main, NO-callstack
+    // thread is a FOREIGN (libdispatch/XPC) thread that never calls
+    // n00b_thread_destroy, so the slot-scanning foreign reaper
+    // (_n00b_reap_foreign_sweep) needs its Mach thread port to detect OS death
+    // and reclaim the slot.  That port is now captured EARLY (into init_self,
+    // before the live-slot bit is published — see above) so the thread is
+    // suspendable the instant it becomes collector-visible; it rides onto
+    // `self` via the *self = init_self copy.  The +1 mach_thread_self() send
+    // right is dropped by the reaper via mach_port_deallocate.
 
     // WP-001 / WP-4 (D-040): the MAIN thread must be preemptible like every
     // other thread — a worker that triggers GC has to be able to stop main and
@@ -518,6 +534,29 @@ n00b_thread_destroy(void)
             rec->cv_info.current_cv = nullptr;
         }
 
+        // Unregister this thread's stack from the mmap tree NOW, while the
+        // thread is still fully self-resolvable (live bit set, bounds + record
+        // intact) and still a normal RUNNING thread.  The registry lock (the
+        // re-entrant spinlock) needs n00b_thread_self(); the identity teardown
+        // below clears the live-slot bit and rec->thread, after which self()
+        // returns null and the lock would null-deref.  It is also done before
+        // the N00B_SUSPEND mark below so the unregister takes the lock as a
+        // normal mutator (barrier-protected), not during a GC-safe window.
+        //
+        // Only a thread that OWNS its stack registration unregisters it: a raw
+        // WORKER's self->stack_map aliases its callstack's registration
+        // (cs->stack_map), owned by the callstack reclamation path the reaper
+        // drives at OS-confirmed death — unregistering it here too would
+        // double-delete the node and corrupt the tree.  A worker carries a
+        // callstack; skip it (the reaper reclaims).  Main + FOREIGN threads
+        // carry no callstack and own their registration, so they unregister.
+        n00b_runtime_t *destroy_rt = n00b_get_runtime();
+        if (destroy_rt != nullptr && self->stack_map != nullptr
+            && self->callstack == nullptr) {
+            n00b_mmap_unregister((void *)self->stack_map->start);
+            self->stack_map = nullptr;
+        }
+
         n00b_release_locks_on_thread_exit(rec);
         n00b_atomic_or(&self->self_lock, N00B_SUSPEND);
 
@@ -567,23 +606,8 @@ n00b_thread_destroy(void)
 
     n00b_runtime_t *rt = n00b_get_runtime();
     if (rt) {
-        // Unregister the stack region from the mmap tree.  For the MAIN
-        // thread, self->stack_map is its own registration (made in
-        // n00b_capture_stack_base) and this is the only place it is torn
-        // down.  For a raw WORKER, self->stack_map aliases its callstack's
-        // registration (cs->stack_map) — owned by the callstack reclamation
-        // path (n00b_callstack_pool_return / n00b_callstack_free), which the
-        // REAPER drives at OS-confirmed death (WP-3a Phase 2 / D-034 — NOT the
-        // joiner, which under D-034 frees nothing) — so unregistering it here
-        // too would double-delete the same interval-tree node and corrupt the
-        // tree (surfaces as an n00b_mmaps_detach_base / detach_ranges assert at
-        // shutdown).  A worker is identified by carrying a callstack; skip the
-        // unregister for it and leave the region to the reaper.
-        if (self->stack_map && self->callstack == nullptr) {
-            n00b_mmap_unregister((void *)self->stack_map->start);
-            self->stack_map = nullptr;
-        }
-
+        // The stack-region unregister happens earlier (top of teardown, while
+        // the thread is still self-resolvable for the registry lock).
         n00b_atomic_add(&rt->live_threads, -1);
         n00b_futex_wake((n00b_futex_t *)&rt->live_threads, true);
     }
@@ -807,6 +831,23 @@ n00b_capture_stack_base(n00b_thread_t *thread, n00b_runtime_t *runtime)
     if (thread->record != nullptr) {
         n00b_atomic_store(&thread->record->stack_hi, (void *)highest);
         n00b_atomic_store(&thread->record->stack_lo, (void *)lowest);
+    }
+
+    // Publish the live-slot bit NOW — before the stack registration below locks
+    // the mmap registry — so a foreign thread (which resolves n00b_thread_self()
+    // via the live-slot scan, not a range check or callstack fast path) is
+    // self-resolvable for that lock's owner/accounting.  Its OS control handle
+    // was already captured in n00b_thread_init, so becoming collector-visible
+    // here is safe (it is suspendable).  Bounds were published just above (the
+    // bit's invariant: a set bit implies a valid [stack_lo, stack_hi)).
+    // Idempotent with the (re)publish in n00b_thread_init.  Workers never reach
+    // here (they early-return on their callstack region) and resolve via the
+    // O(1) callstack fast path, so they need no early bit.
+    if (thread->record != nullptr && runtime != nullptr
+        && runtime->live_slot_bits != nullptr) {
+        uint32_t slot = (uint32_t)thread->id_info.parts.id;
+        n00b_atomic_or(&runtime->live_slot_bits[slot >> 6],
+                       (uint64_t)1 << (slot & 63u));
     }
 
     // Only register a real region.  Foreign-thread stack discovery can fail

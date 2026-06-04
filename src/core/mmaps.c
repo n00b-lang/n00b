@@ -524,12 +524,18 @@ n00b_mmap_range_by_address(void *addr) _kargs
     mmap_read_lock(ctx);
     n00b_data_read_lock(tree->lock);
     if (tree->root != nullptr) {
-        n00b_stack_clear(tree->stack);
-        n00b_stack_push(tree->stack, (void *)tree->root);
+        // Per-call private descent stack (WP-001), matching the interval-tree
+        // macros: never the shared tree stack, which a nested/concurrent walk
+        // would clobber.  Cap 256 >= AVL depth bound, so it never grows.
+        n00b_stack_t(void *) descent = n00b_stack_new_cap(void *,
+                                                          256,
+                                                          false,
+                                                          .allocator = tree->allocator);
+        n00b_stack_push(descent, (void *)tree->root);
 
-        while (n00b_stack_len(tree->stack) != 0) {
+        while (n00b_stack_len(descent) != 0) {
             mmap_node_t *node = (mmap_node_t *)n00b_option_get(
-                n00b_stack_pop(void *, tree->stack));
+                n00b_stack_pop(void *, descent));
 
             if (node->low < end && start < node->high) {
                 assert(n00b_variant_is_type(node->data, n00b_alloc_range_t *));
@@ -544,15 +550,16 @@ n00b_mmap_range_by_address(void *addr) _kargs
             if (node->left != nullptr
                 && node->left->maximum > start
                 && node->left->minimum < end) {
-                n00b_stack_push(tree->stack, (void *)node->left);
+                n00b_stack_push(descent, (void *)node->left);
             }
 
             if (node->right != nullptr
                 && node->right->maximum > start
                 && node->right->minimum < end) {
-                n00b_stack_push(tree->stack, (void *)node->right);
+                n00b_stack_push(descent, (void *)node->right);
             }
         }
+        n00b_stack_free(descent);
     }
     n00b_data_unlock(tree->lock);
     mmap_read_unlock(ctx);
