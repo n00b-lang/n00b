@@ -1198,6 +1198,19 @@ n00b_scan_thread_stacks(n00b_collect_t *ctx)
         // targeting), so the "top" will be the smaller address, and
         // the one we want to start with in the scan.
 
+        // A thread that has begun teardown nulls its stack_map (and
+        // unregisters its stack) before it sets N00B_SUSPEND — see
+        // n00b_thread_destroy.  Such a thread is not preempt-suspended (it
+        // self-marked GC-safe), but rec->thread is still non-null here, so it
+        // reaches this loop.  Its raw C stack is being dismantled (and, for a
+        // foreign thread, about to be munmap'd), so do NOT conservatively scan
+        // it — a null stack_map is the signal.  Its struct/record/lock chains
+        // are still scanned below (the locks were already released at
+        // teardown, so the chains are empty/safe).
+        if (t->stack_map == nullptr) {
+            goto scan_thread_state;
+        }
+
         uint64_t *top  = (uint64_t *)t->stack_top;
         uint64_t *base = (uint64_t *)t->stack_map->end;
 

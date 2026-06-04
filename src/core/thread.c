@@ -553,8 +553,14 @@ n00b_thread_destroy(void)
         n00b_runtime_t *destroy_rt = n00b_get_runtime();
         if (destroy_rt != nullptr && self->stack_map != nullptr
             && self->callstack == nullptr) {
-            n00b_mmap_unregister((void *)self->stack_map->start);
-            self->stack_map = nullptr;
+            // Null stack_map FIRST, then unregister (which frees the registry
+            // object).  The collector reads t->stack_map for the conservative
+            // stack scan and skips a null one; clearing it before the free
+            // means it never observes a dangling (freed) pointer — it sees the
+            // valid map (still-mapped stack) or null (skip), never freed.
+            void *stack_start  = (void *)self->stack_map->start;
+            self->stack_map    = nullptr;
+            n00b_mmap_unregister(stack_start);
         }
 
         n00b_release_locks_on_thread_exit(rec);
