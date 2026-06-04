@@ -565,7 +565,6 @@ n00b_thread_destroy(void)
         }
 
         n00b_release_locks_on_thread_exit(rec);
-        n00b_atomic_or(&self->self_lock, N00B_SUSPEND);
 
         // Retire this worker's stack-bounds advertisement BEFORE clearing
         // the slot.  n00b_thread_self()'s worker bounds-scan matches an SP
@@ -598,7 +597,16 @@ n00b_thread_destroy(void)
             n00b_atomic_store(&rec->stack_hi, (void *)nullptr);
         }
 
+        // Exclude this thread from the collector's scan set (rec->thread is the
+        // atomic n00b_scan_thread_stacks reads) BEFORE marking it GC-safe.  A
+        // SUSPEND-marked thread is skipped by the STW suspend pass, so it is NOT
+        // frozen — if it stayed in the scan set the collector would scan a stack
+        // the still-running thread is dismantling / about to munmap (TOCTOU).
+        // Clearing rec->thread first makes the collector ignore it; its lock
+        // chain was already emptied by n00b_release_locks_on_thread_exit, so
+        // skipping it loses no root.
         n00b_atomic_store(&rec->thread, nullptr);
+        n00b_atomic_or(&self->self_lock, N00B_SUSPEND);
     }
 
     if (self->memperm_pipe.ready) {
