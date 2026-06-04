@@ -121,14 +121,22 @@ foreign_worker(void *arg)
 {
     (void)arg;
     /* The raw pthread is initially unknown to n00b: __n00b_thread_self
-     * is uninitialised until we call n00b_thread_init. */
-    n00b_thread_init();
+     * is uninitialised until we call n00b_thread_init.  The runtime does NOT
+     * discover a foreign thread's stack bounds (no libc/pthread inside n00b);
+     * the embedding app supplies them.  THIS test harness IS the embedding app,
+     * so it queries its own pthread stack and passes [low, high) explicitly. */
+    char  *hi  = (char *)pthread_get_stackaddr_np(pthread_self());
+    size_t sz  = pthread_get_stacksize_np(pthread_self());
+    char  *lo  = hi - sz;
+    n00b_thread_init(.foreign_stack_low = lo, .foreign_stack_high = hi);
 
     while (!atomic_load(&g_stop)) {
         churn_one_round();
         atomic_fetch_add(&g_foreign_thread_ops, 1);
     }
 
+    /* Foreign threads MUST explicitly deregister so n00b drops their slot and
+     * stops tracking/scanning their stack. */
     n00b_thread_destroy();
     return nullptr;
 }

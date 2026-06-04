@@ -13,7 +13,6 @@
 #include <mach/thread_act.h>
 #include <mach/thread_policy.h>
 #include <sys/syscall.h>
-#include <pthread.h> // pthread_get_stackaddr_np / pthread_get_stacksize_np
 #endif
 
 #if defined(__linux__)
@@ -144,9 +143,7 @@ n00b_os_thread_id(void)
     // here).
     return (int64_t)(uint32_t)tsd[3];
 #elif defined(__APPLE__)
-    uint64_t tid = 0;
-    pthread_threadid_np(nullptr, &tid);
-    return (int64_t)tid;
+#error "n00b_os_thread_id: macOS non-arm64 needs a no-libc TSD read (x86-64: %gs-relative slot 3); pthread_threadid_np is banned (libc-removal mandate)."
 #elif defined(_WIN32)
     return (int64_t)GetCurrentThreadId();
 #else
@@ -239,6 +236,15 @@ n00b_thread_init() _kargs
     uint32_t acquired_slot             = 0;
     struct n00b_callstack_t *callstack = nullptr;
     uint32_t os_thread_port            = 0;
+    // FOREIGN threads (no n00b callstack) must supply their own stack bounds —
+    // the runtime does NOT discover them (no libc/pthread, and Mach's VM region
+    // is too coarse to bound the live stack).  The embedding app knows its
+    // stack; it passes [foreign_stack_low, foreign_stack_high).  Omitted (both
+    // null) => this thread's C stack is NOT a GC root source (not scanned); such
+    // a thread must self-register any roots.  A foreign thread MUST explicitly
+    // n00b_thread_destroy to drop the registration.
+    void    *foreign_stack_low         = nullptr;
+    void    *foreign_stack_high        = nullptr;
 }
 {
     // WP-001: a thread's WHOLE init is critical execution.  Hold the single STW
@@ -373,7 +379,7 @@ n00b_thread_init() _kargs
     // writes rec->stack_lo/hi (stack_hi first, stack_lo last as the gate) and,
     // for a foreign thread, publishes the live-slot bit before it registers its
     // stack (so n00b_thread_self() resolves for that registration's lock).
-    n00b_capture_stack_base(&init_self, runtime);
+    n00b_capture_stack_base(&init_self, runtime, foreign_stack_low, foreign_stack_high);
     n00b_capture_stack_top(&init_self);
 
     // Publish this slot in the live-slot bitmap AFTER its bounds are set
@@ -739,7 +745,10 @@ n00b_current_thread_stack_contains(void *ptr)
 }
 
 void
-n00b_capture_stack_base(n00b_thread_t *thread, n00b_runtime_t *runtime)
+n00b_capture_stack_base(n00b_thread_t *thread,
+                        n00b_runtime_t *runtime,
+                        void           *foreign_stack_low,
+                        void           *foreign_stack_high)
 {
     size_t size;
     char  *highest;
@@ -857,52 +866,30 @@ n00b_capture_stack_base(n00b_thread_t *thread, n00b_runtime_t *runtime)
 #endif
     }
     else {
-        // Non-main, non-callstack thread.  n00b's own thread lifecycle no
-        // longer creates such threads (raw creation replaced pthread_create;
-        // workers self-describe via their callstack and return above).  But a
-        // FOREIGN thread — a libdispatch/XPC worker that the embedding app
-        // attaches via n00b_thread_init (e.g. the Crayon gateway's upstream
-        // reply threads, which deliver events on dispatch queues) —
-        // legitimately reaches here.  It runs on an OS-managed stack, so
-        // discover that stack's real bounds the same OS-native way the macOS
-        // main thread does just above: mach_vm_region_recurse on an anchor in
-        // THIS thread's own frame (a local) returns its stack mapping.  Prior
-        // to this the bounds were left zeroed on the assumption no foreign
-        // caller existed, and the n00b_mmap_register below then tripped its
-        // (end > start) assertion (mmaps.c) — the live gateway crash.
-#ifdef __APPLE__
-        // Use the pthread stack APIs, NOT mach_vm_region_recurse.  For a
-        // SECONDARY (foreign) thread these are exact and reliable:
-        // pthread_get_stackaddr_np returns the stack base (highest address,
-        // stacks grow down) and pthread_get_stacksize_np the usable size.
-        // mach_vm_region_recurse is only correct for MAIN (above); for a
-        // foreign thread it can return the NEXT region ABOVE the anchor when
-        // the SP's page isn't the region start — yielding bounds that do NOT
-        // contain the thread's stack (observed: stack_map->start > the real
-        // stack_top), so the GC later scans an unrelated, partly-unmapped
-        // region and faults (hidden_pool_stw SIGSEGV).
-        char   anchor;
-        char  *st_base = (char *)pthread_get_stackaddr_np(pthread_self());
-        size_t st_size = pthread_get_stacksize_np(pthread_self());
-        highest        = st_base;
-        lowest         = st_base - st_size;
-        size           = st_size;
-        // Validate the SP actually falls inside the reported bounds; if not,
-        // leave them zeroed (the register below is guarded) rather than
-        // register a wrong region — degraded (this thread's stack is not a GC
-        // root source) but never a crash.
-        if (!((char *)&anchor >= lowest && (char *)&anchor < highest)) {
+        // FOREIGN thread (non-main, no n00b callstack): a raw pthread /
+        // libdispatch / XPC worker the embedding app attached via
+        // n00b_thread_init.  The runtime does NOT discover its stack bounds —
+        // there is no libc/pthread to ask (project mandate), and Mach's VM
+        // region is too coarse to bound the live stack (it spans guard pages /
+        // adjacent mappings, so a conservative scan walks off the committed
+        // stack and faults).  The embedding app KNOWS its stack and passes
+        // [foreign_stack_low, foreign_stack_high) explicitly; we register
+        // exactly that.  If it passed nothing (both null) — or a degenerate
+        // range — this thread's C stack is simply not a GC root source: bounds
+        // stay zeroed (the register below is guarded), so it is never scanned.
+        // Such a thread must self-register any roots and MUST explicitly
+        // n00b_thread_destroy to drop its slot.
+        if (foreign_stack_low != nullptr && foreign_stack_high != nullptr
+            && (char *)foreign_stack_high > (char *)foreign_stack_low) {
+            lowest  = (char *)foreign_stack_low;
+            highest = (char *)foreign_stack_high;
+            size    = (size_t)(highest - lowest);
+        }
+        else {
             lowest  = nullptr;
             highest = nullptr;
             size    = 0;
         }
-#else
-        // No OS-native foreign-thread stack discovery wired up off macOS yet;
-        // leave the bounds zeroed (the register below is guarded).
-        lowest  = nullptr;
-        highest = nullptr;
-        size    = 0;
-#endif
     }
 #endif
     (void)size; // consumed only to compute `highest` in the branches above.

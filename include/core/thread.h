@@ -977,6 +977,11 @@ n00b_thread_init() _kargs
     uint32_t acquired_slot             = 0;
     struct n00b_callstack_t *callstack = nullptr;
     uint32_t os_thread_port            = 0;
+    // FOREIGN threads (no n00b callstack) MUST pass their real stack bounds
+    // here — the runtime does not discover them.  Omitted => the C stack is not
+    // GC-scanned (self-register roots).  A foreign thread MUST n00b_thread_destroy.
+    void    *foreign_stack_low         = nullptr;
+    void    *foreign_stack_high        = nullptr;
 };
 
 /**
@@ -995,7 +1000,10 @@ extern void n00b_thread_destroy(void);
  * @param thread  Thread to update.
  * @param runtime Runtime owning the thread.
  */
-extern void n00b_capture_stack_base(n00b_thread_t *thread, n00b_runtime_t *runtime);
+extern void n00b_capture_stack_base(n00b_thread_t *thread,
+                                    n00b_runtime_t *runtime,
+                                    void           *foreign_stack_low,
+                                    void           *foreign_stack_high);
 
 /**
  * @brief Reaper backstop: reclaim OS-confirmed-dead workers (internal).
